@@ -14,6 +14,7 @@
 @include theme.css
 @include page.css
 @include frrs.css
+@include notes.css
 @include location.css
 @include gnss.css
 @include adsb.css
@@ -32,6 +33,7 @@
 @include frrs.js
 @include evidence.js
 @include bundle.js
+@include notes.js
 @include app.js
 @include location.js
 @include gnss.js
@@ -611,6 +613,8 @@
       <div class="hscroll" id="frrs-hist-box"><div class="frhrow dhead" id="frrs-hist-head"></div>
       <ol class="lst" id="frrs-hist"></ol></div>
     </section>
+    <!-- The alert's links to anomalies and the candidates (web/ui/notes.js). -->
+    <section class="panel" id="notes-alert" hidden aria-label="related anomalies"></section>
     <section class="row2">
       <div class="panel" id="ad-what">
         <div class="label">what it is</div>
@@ -931,9 +935,37 @@
     <canvas class="heat" id="dr-week" aria-label="share of weeks present by local hour, Monday first"></canvas>
     <div class="label">anomalies</div>
     <div class="cards" id="dr-anoms"></div>
+    <div id="notes-drawer"></div>
     <div id="frrs-drawer"></div>
     <div id="loc-drawer" hidden></div>
   </aside>
+  <!-- An anomaly's triage, notes and links (web/ui/notes.js): the same
+       states, note bound and write route as an alert's triage panel. -->
+  <dialog class="notes" id="notes-dlg" aria-label="anomaly triage">
+    <div class="dr-hd">
+      <span class="d-dim">anomaly triage</span>
+      <b id="notes-title" class="d-normal">-</b>
+      <button type="button" id="notes-close">close</button>
+    </div>
+    <div class="sub" id="notes-desc"></div>
+    <div id="notes-cur"></div>
+    <div class="tri-btns tri-always" id="notes-btns"></div>
+    <div class="controls tri-form">
+      <label>note <input type="text" id="notes-note" maxlength="240" spellcheck="false" autocomplete="off" placeholder="optional, kept with the change or the link"> <span class="sub" id="notes-note-n"></span></label>
+    </div>
+    <div class="sub tri-msg" id="notes-msg"></div>
+    <div class="label">every change, newest first <span class="sub" id="notes-hist-note"></span></div>
+    <ol class="lst" id="notes-hist"></ol>
+    <div class="label">linked by the operator</div>
+    <div class="sub" id="notes-rel-note"></div>
+    <ol class="lst" id="notes-links"></ol>
+    <div class="label">possibly related</div>
+    <ol class="lst" id="notes-sugg"></ol>
+    <div class="controls tri-form">
+      <label>link to <input type="text" id="notes-to" maxlength="47" spellcheck="false" autocomplete="off" placeholder="an alert id (d12), an anomaly id or a MAC"></label>
+      <button type="button" id="notes-add">link</button>
+    </div>
+  </dialog>
   <aside class="drawer" id="bdrawer" hidden aria-label="ble advertiser">
     <div class="dr-hd">
       <span class="d-dim">BLE advertiser</span>

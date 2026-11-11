@@ -1157,8 +1157,9 @@ static void test_size_cap(void) {
     WT_ASSERT(g_body_len <= capb && g_body_len < full);
     WT_HAS(answer(), ",\"device\":{\"available\":false,\"reason\":\"too_large\",\"cap_bytes\":");
     /* The triage history after it (the FRRS slice's) has no room left
-     * either, nor the location stamp after that. */
-    WT_HAS(answer(), "\"truncated_sections\":[\"device\",\"triage\",\"location\"]");
+     * either, nor the location stamp after that, nor the links after
+     * that (web_relate.c). */
+    WT_HAS(answer(), "\"truncated_sections\":[\"device\",\"triage\",\"location\",\"related\"]");
     char cap[64];
     snprintf(cap, sizeof(cap), "\"limits\":{\"hard_cap_bytes\":%zu,", capb);
     WT_HAS(answer(), cap);

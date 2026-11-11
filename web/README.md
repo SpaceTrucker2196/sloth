@@ -360,7 +360,7 @@ Read this before exposing slothweb to anything but your own loopback.
   whatever is added. Prefer `ssh -L` to either.
 - **GET and HEAD, and POST to slothweb's own state only.** Every other
   method is `405` on every path, and POST is `405` everywhere but the
-  six triage and TACDB write routes ([Triage and the FRRS
+  seven triage, link and TACDB write routes ([Triage and the FRRS
   record](#triage-and-the-frrs-record)), which write slothweb's own
   store and nothing else: no endpoint changes anything in sloth,
   sloth.db, the host or the network. A write must carry an `Origin`
@@ -375,7 +375,8 @@ Read this before exposing slothweb to anything but your own loopback.
   what an admitted peer may do.
 - **No authentication.** Whoever can reach the port reads everything
   slothweb serves: every device, name, SSID, flow and alert, and,
-  unless `--web-read-only`, can triage alerts and edit the TACDB. There
+  unless `--web-read-only`, can triage alerts and anomalies, link
+  them and edit the TACDB. There
   are no accounts and no token; the allow list is the only gate. A
   triage row records the peer's address and whatever name the operator
   typed ("by"): neither is an identity.
@@ -1449,13 +1450,18 @@ state (`baseline`, `baseline_cell`, `episode`, `fanout`, `reported`;
   own version stamp, so a failed step leaves the file at the version it
   last reached, with the step's own changes rolled back. A new file is
   stamped v0 first and takes the same chain, so the chain runs on every
-  first start. Today the chain is five steps: v0 to v1 creates the four
+  first start. The chain's first five steps: v0 to v1 creates the four
   tables, v1 to v2 indexes each tier on `t`, v2 to v3 creates the five
   analysis tables, v3 to v4 creates `passive_ptr` and its index (M4),
   v4 to v5 creates `chmix` and its index (the WiFi view's channel mix,
   [below](#the-channel-mix-slothwebdb-v5); plain `CREATE TABLE` and
   `CREATE INDEX`: a name already taken fails the step rather than being
-  adopted).
+  adopted). Then v5 to v6 creates the triage and TACDB tables
+  ([Triage and the FRRS record](#triage-and-the-frrs-record)), v6 to v7
+  the BLE tables ([below](#the-ble-tables-slothwebdb-v7)) and v7 to v8
+  the anomaly subjects and the operator's links
+  ([below](#anomaly-triage-and-links-slothwebdb-v8)): eight steps, v8
+  what this build writes.
 - **No column can hold a credential**: `web/tests/test_store.c` keeps
   sloth's `test_db.c` guardrail (no column named for a password, a
   community, a nonce, a key or a token may be TEXT or BLOB), and scans
@@ -1858,9 +1864,14 @@ of it in memory, says so at start and on `/api/health`
 {"now":1792684660,"since":1792681060,"anomalies":[
   {"id":2,"rule":"A1","kind":"rate","metric":"host.conns","key":"10.0.0.5",
    "score":100,"peak":100,"evidence":"host.conns[10.0.0.5] z=195.0 value=200 baseline=5±1",
-   "first_seen":1792684620,"last_seen":1792684800,"state":"open","open":true}],
+   "first_seen":1792684620,"last_seen":1792684800,"tid":"add57a348de83bda4",
+   "state":"open","open":true}],
  "more":false,"omitted":0}
 ```
+
+(`tid` is the id the episode's triage and links are filed under, the
+same for every episode of that rule, metric and key:
+[Anomaly triage and links](#anomaly-triage-and-links).)
 
 open episodes first, highest score first, then those closed at or after
 `since` (default an hour ago, never earlier than the 24 h kept), newest
@@ -2210,6 +2221,34 @@ leaves its batch dirty for the next flush (`ble.redirtied`). The BLE
 Devices view's class mix is not in these tables: it is `chmix` rows of
 kind 3 under `b:` keys ([The channel mix](#the-channel-mix-slothwebdb-v5)),
 and a row's class is derived from its fields when asked, never stored.
+
+### Anomaly triage and links: slothweb.db v8
+
+`v7 -> v8` (owner request 2026-11-11) adds `anom_subject` and
+`relation` with the links' two indexes (`relation_pair`, unique on both
+ends; `relation_to`), in one additive `BEGIN IMMEDIATE` step like the
+others: plain `CREATE`, so a name already taken fails the step and
+leaves the file at v7. `web/tests/test_store.c` builds a v7 file as the
+BLE slice writes it (two triage rows, a TACDB platform and a BLE
+finding in it) and holds both the migration, which leaves every row and
+the `triage` table's columns as they were, and that failure (a v7 file
+already holding the name `relation_to`: still v7, none of the step's
+three other objects left behind; seen red with the migration's
+`ROLLBACK` made `COMMIT`). The `triage` table is not touched: an
+anomaly's decisions are rows in it beside the alerts', under a subject
+of their own (`a` and sixteen hex digits, type `-1`), so the cap, the
+folding and the history are one mechanism
+([Anomaly triage and links](#anomaly-triage-and-links)).
+
+| Table | Columns | Holds |
+|---|---|---|
+| `anom_subject` | `subject` (PK), `rule`, `metric`, `key`, `ts` | what an anomaly's id names: the rule's name (`A3`), the metric's catalogue name (or `''`) and the canonical key, exactly what `episode` already stores of it. Written once, when the anomaly is first triaged or linked; at most 8,192 (`507 anomaly_subjects_full` past it). The engine forgets an episode after a day; this is why a note still says what it was written on, and how a hash collision is caught |
+| `relation` | `id` (PK), `a_kind`, `a_id`, `a_label`, `b_kind`, `b_id`, `b_label`, `note`, `who`, `peer`, `ts` | one link the operator made, from `a` to `b`: kind 0 an alert (id its triage subject, `d<rowid>` of the finding's first sloth.db row or the stream handle), 1 an anomaly (its id), 2 a device (a canonical MAC); each label slothweb's own words (`PORT_SCAN 203.0.113.50`, `A7 fanout 203.0.113.50`), kept so a link whose end is gone still says what it pointed at; `note` (240 bytes) and `who` (32) operator text from the validated POST body, `peer` the connection's address. At most 8,192 rows and 32 naming one finding. A candidate is never a row |
+
+No column can hold a credential and nothing in either is a stream
+string: an alert's label is its type's name and the address its
+descriptor names, never its key's text (`test_notes.c` links a
+cleartext-credential alert and scans the file for the username).
 
 ### /api/devices, /api/device/{mac}, /api/lookup
 
@@ -3539,11 +3578,12 @@ owner's open questions are in
 
 ### The write surface
 
-slothweb's first. Six paths take POST, and nothing else does:
+slothweb's first. Seven paths take POST, and nothing else does:
 
 | Path | Body | Effect |
 |---|---|---|
-| `/api/frrs/triage` | `{"id":"d1234","state":"noise","note":"…","by":"…"}`; `state` one of `untriaged`, `false`, `noise`, `incident`, `known`, `recommended` | appends a row; `recommended` takes the assessment's state, `409 no_recommendation` when it names none |
+| `/api/frrs/triage` | `{"id":"d1234","state":"noise","note":"…","by":"…"}`; `id` an alert's or an anomaly's (`a` and sixteen hex digits, the `tid` of `/api/anomalies`); `state` one of `untriaged`, `false`, `noise`, `incident`, `known`, `recommended` | appends a row; `recommended` takes the assessment's state, `409 no_recommendation` when it names none (always, for an anomaly: no assessment judges an anomaly rule) |
+| `/api/frrs/relate` | `{"op":"add","from":"a…","to":"d1234"\|"a…"\|"aa:bb:cc:dd:ee:ff","note":"…","by":"…"}`, `{"op":"remove","from":"<either end>","link":7}` | a link from an anomaly ([Anomaly triage and links](#anomaly-triage-and-links)); answers the `from` end's `/api/frrs/related` |
 | `/api/frrs/tacdb/unit` | `{"op":"create","name":"home","kind":"site","parent":null,"note":"…"}`, `{"op":"update","id":1,…}`, `{"op":"delete"\|"restore","id":1}` | |
 | `/api/frrs/tacdb/platform` | `{"op":"create","nomenclature":"work laptop","class":"laptop","unit":1,"vendor":"…","note":"…","emitter_kind":"sta","emitter_addr":"…"}`, `update`, `delete`, `restore`, `{"op":"confirm","suggest":"<token>","unit":1}` | |
 | `/api/frrs/tacdb/emitter` | `{"op":"add"\|"move"\|"remove"\|"restore","platform":1,"kind":"sta"\|"bssid"\|"ble","addr":"aa:bb:cc:dd:ee:ff[/type]","role":"primary","label":"…"}` | a live `(kind, addr)` belongs to one platform: `409 emitter_owned` |
@@ -3664,7 +3704,7 @@ mid-merge rolls the whole file back.
 
 | Path | Parameters | Answer |
 |---|---|---|
-| `/api/frrs/states` | `ids=` 1..16 alert ids, comma-separated | `{"store":"open","triage":{"<id>":{"state","ts","via","history_n","prev_state","note","by","basis","peer","finding"}},"types":{"<id>":"PORT_SCAN"},"untriaged":[…],"missing":[…],"writes":true}` |
+| `/api/frrs/states` | `ids=` 1..16 alert or anomaly ids, comma-separated | `{"store":"open","triage":{"<id>":{"state","ts","via","history_n","prev_state","note","by","basis","peer","finding"}},"types":{"<id>":"PORT_SCAN"},"untriaged":[…],"missing":[…],"writes":true}` |
 | `/api/frrs/history` | `id=` | the subject (`d<rowid>` of the finding's first sloth.db row, or the stream handle until sloth has written it), its descriptor (`type`, `addr`, `port`, `first_seen`: what an export re-attaches by), `current`, `recommend` and every row newest first |
 | `/api/frrs/summary` | none | `{"store","writes","read_only","recommendations":"dir"\|"none","open":{"total","untriaged","false","noise","incident","known","out"},"rows","cap","near_cap"}`: the open incidents the tile counts, by their triage, in the request's scope, and how full the triage table is |
 | `/api/frrs/recommend` | `type=` a name or number | `{"type","state":"noise"\|null,"basis","source","why_none":null\|"no_automatic_triage"\|"no_assessment","file","front_matter":{…}\|null}` |
@@ -3673,7 +3713,8 @@ mid-merge rolls the whole file back.
 | `/api/frrs/tacdb` | `unit=`, `q=`, `deleted=0\|1`, `limit=` 1..200, `offset=` | `{"note","writes","units":[{id,parent,name,kind,note,depth,platforms,deleted}],"platforms":[{id,nomenclature,class,vendor,note,unit,unit_path,confirmed,origin,updated,deleted,emitters:[{kind,addr,role,label,origin,deleted,last_seen,scopes}]}],"matched","more","counts":{…,"caps":{…}}}` |
 | `/api/frrs/tacdb/view` | `id=` | one platform, deleted emitters included |
 | `/api/frrs/suggest` | `limit=` | `{"note","suggestions":[{token,rule,rule_name,kind,a,b,role_b,class,confidence,last_seen,nomenclature,evidence}]}` |
-| `/api/frrs/export` | none | `slothweb-tacdb.jsonl` (attachment, the import's format above): a header line, every live unit (parents first), platform and emitter, every dismissal, every triage row by its descriptor, an `end` line counting the lines and saying `complete`; deleted rows stay on this sensor; `507 export_too_large` past 8 MiB |
+| `/api/frrs/related` | `id=` an alert's id, an anomaly's or a MAC | `{"id","kind":"alert"\|"anomaly"\|"device","label","held","store","writes","window_s":600,"links_cap":32,"links":[{"link","dir":"to"\|"from","kind","id","label","held","note","by","peer","ts","triage":{…}\|null}],"links_more","suggest":[{"kind","id","label","basis","first_seen","last_seen"}],"suggest_note","alerts_reached"}` and, for a device, `"anomalies":[{"id","label","anomaly":{…},"triage"}]` ([Anomaly triage and links](#anomaly-triage-and-links)) |
+| `/api/frrs/export` | none | `slothweb-tacdb.jsonl` (attachment, the import's format above): a header line, every live unit (parents first), platform and emitter, every dismissal, every alert's triage row by its descriptor (an anomaly's rows and the links stay on this sensor), an `end` line counting the lines and saying `complete`; deleted rows stay on this sensor; `507 export_too_large` past 8 MiB |
 
 `/api/alerts` takes `triage=any|untriaged|triaged|out|false|noise|incident|known`
 (`out` is `false`, `noise` or `known`)
@@ -3709,6 +3750,140 @@ assessments judge a rule, not an alert, so
 `incident`; the page shows both beside the buttons (open question Q3).
 Under `--web-read-only` a page loaded before the restart says
 "read-only" for the server's plain `405`.
+
+### Anomaly triage and links
+
+Owner request 2026-11-11: "add ability to add triage notes like we have
+on alerts for anomalies. allow them to be related where possible".
+
+**One mechanism.** An anomaly (slothweb's own finding,
+[Baselines and anomalies](#baselines-and-anomalies-m3)) is triaged by
+the alert's route, states, note bound, history, folding and cap: the
+same `POST /api/frrs/triage`, the same rows in `triage`, read by the
+same `/api/frrs/states` and `/api/frrs/history`. What differs is the
+subject. Every episode's JSON carries `tid`, `a` and sixteen hex
+digits, the FNV-1a 64 of the rule's name, the metric's name and the
+key. It names the **finding**, every episode of that rule, metric and
+key, exactly as an alert's triage names every incident of its key
+(`d<rowid>` is the finding, reopens included): a device marked
+`known` for being present at an unusual hour stays known when it does
+it again, as a triaged-out alert stays triaged out when it reopens. An
+episode's own `id` could not do this (it restarts at 1 once every saved
+episode has aged out). What an anomaly adds, because its episodes are
+further apart than an alert's incidents: every row records the episode
+it was written on (`"episode"`, that episode's `first_seen`), and when
+the episode held now is another one the state is shown as
+`"carried":true` ("earlier episode" beside the chip, "decided on an
+earlier episode, not on this one" in the panel, the card not dimmed);
+saying the state again makes it this episode's (a row, even with no
+new note). So a note never reads as if it had been written about a
+later episode.
+
+The id is a hash of values the answer already shows, so it discloses
+nothing, but FNV is not collision-proof against a chosen key (a MAC is
+chosen by its sender). The store therefore keeps the rule, metric and
+key beside the id (`anom_subject`), and an id whose episode in the
+engine is not that descriptor is refused on every route, `409
+id_collision`, never joined to the other's notes. An id neither the
+engine nor the store holds is `404 no_such_anomaly`: a note cannot be
+written on an anomaly that does not exist. Once the engine lets an
+episode go (a day after it closes) the id still resolves from the
+store: `/api/frrs/history` answers its notes with
+`"anomaly":{…,"held":false}`.
+
+Nothing is ever recommended for an anomaly (`"recommend":null`,
+`409 no_recommendation`): the assessments judge sloth's alert rules.
+The TACDB export carries alerts' triage only; an anomaly is this
+sensor's own baseline's finding and its rows stay here. `/api/health`
+`frrs.triage_rows` counts both kinds (they share the cap), and gains
+`anomaly_subjects` and `links`.
+
+**The page.** Every anomaly card (the Overview's top five, the
+Anomalies view, the drawer's, an alert page's) carries its state chip
+and a *triage* (or *notes*) button, which opens the anomaly's panel:
+the four state buttons and *clear*, the note (counted in bytes against
+the same 240), every change newest first with the episode it was made
+on, the links, the candidates, and "link to" (an alert id, an anomaly
+id or a MAC). The "by" name is the one kept for alert triage
+(`frrs.by`). An alert's page gains *related anomalies* under its triage
+panel, and the device drawer *anomalies linked to this device*. One
+module, `web/ui/notes.js` (`SlothNotes`), four guarded calls in
+`app.js`; its writes go through `frrs.js`'s own `post()`. The table
+form of the Anomalies view and the presence strip's episode marks do
+not carry the chip.
+
+**Links.** `POST /api/frrs/relate` `add` makes a link from one finding
+to another, at least one of them an anomaly: anomaly to alert, to
+another anomaly, or to a device (a MAC). Both ends are resolved against
+what exists first (`404 no_such_alert`, `no_such_anomaly`,
+`no_such_device`: a device is one sloth.db, sloth's latest pass, the
+ledger or an anomaly's key holds; `400 bad_id`; `400 bad_pair` for a
+link with no anomaly in it or to itself), the same pair again in either
+direction answers the link that is there (`"unchanged":true`), and a
+finding past 32 links or the table past 8,192 is `507 links_full` (a
+link is never dropped to make room). `remove` names the link's number
+and one of its ends (`404 no_such_link` otherwise). A link is listed
+from both ends by `/api/frrs/related`, with the other end's label, its
+current triage, and `"held"`: `false` when the alert is no longer in
+sloth.db (retention, `--db-compact-alerts`, a rebuilt file) or the
+anomaly no longer in the engine, when what is left is the label the
+link kept and the page says "no longer held" with no *open* button;
+such a link can still be removed, and a new link to something gone is
+refused.
+
+**Candidates** ("possibly related"). Never automatic and never stored:
+`/api/frrs/related` offers, for a finding held now, the findings on the
+**same MAC or the same IP address** whose `[first_seen, last_seen]`
+span overlaps its own or lies within **600 s** of it, both edges
+inclusive. Ten minutes is the longest any anomaly rule looks back
+before it can fire (A7's window and A8's DNS window; A1 needs three
+minutes), so an episode's `first_seen` can trail its cause by that much
+and no more. An anomaly is offered the other anomalies on its key, the
+stream's incidents and sloth.db's alerts naming it (the newest 32 read,
+inside the request's 250 ms budget; `alerts_reached` says how far back
+when the budget stopped the walk); an alert is offered the anomalies on
+the address it names. At most eight. A finding's span is the
+finding's: an alert reopened over a week overlaps everything on its
+address in that week. No anomaly rule is keyed by an SSID and a BSSID
+is a MAC, so those two subjects are the ones there are; A10 (the
+sensor) and A2's or A4's burst episode have no key and get no
+candidates. The words are a fact about the two rows, "same device,
+overlapping in time", "same address, within 10 minutes", with the
+sentence "possibly related, not established: these share a subject and
+a time; a passive sensor corroborates, it does not confirm"; never a
+cause. One press of *link* accepts one (the same `add`); until then
+nothing is written. On the suite's 30,000-row alerts table the read
+took 9.5 to 14.5 ms over six runs on the reference host, loaded
+(`test_suggestions_stay_inside_the_budget` prints it).
+
+**The same guards.** Both writes are paths of `web_http.c`'s one POST
+list and pass `web_frrs_gate()` before a body byte is read, as the
+alert's does: Origin, `Sec-Fetch-Site`, the rate bucket, Content-Type,
+the 4,096-byte body, `--web-read-only`. A note is at most 240 bytes of
+valid UTF-8 with no control byte and no bidirectional control, refused
+whole when it is not, stored as typed, served through the JSON writer's
+escape and drawn with `textContent`; nothing in the page turns text
+into markup or a link.
+
+**The evidence bundle** ([Copy JSON](#copy-json-the-analysis-bundle))
+gains `alert.related` and `device.related`, `/api/frrs/related`'s
+answer: the links, each linked anomaly's triage, a device's own
+anomalies' triage, and the candidates marked in the glossary as not
+stored.
+
+`web/tests/test_notes.c` holds it, the alert triage tests of
+`test_frrs.c` again on an anomaly's id (the round trip and its escape,
+the states, the cross-origin, body, over-limit and GET refusals, the
+credential scan, the unchanged write, the folding history, the cap),
+then what is new: the decision across a closed store and a re-detected
+episode, carried on a later one, kept with none held; the collision
+refused; alert and anomaly rows apart and the export alerts-only; links
+from both ends, their guards and bound, a dangling end; the
+candidates' subject and both edges of the window to the second, nothing
+stored until accepted; the read on the large table; the bundle; the
+link's write over a socket; and `notes.js` with its drawing and writing
+functions pinned whole. `test_store.c` holds the v7 to v8 migration and
+its failure.
 
 `web/tests/test_frrs.c` holds it: hand-built requests through the
 router and over loopback sockets (a cross-origin, doubled-Origin,
@@ -4882,7 +5057,7 @@ Monitor rows, on `--mon-bg` (`#303030` dark, `#c5c2ba` light):
 The [Security](#security) section above is the summary; this is the
 same list as code facts.
 
-- No write but to slothweb's own store: POST only on the six triage and
+- No write but to slothweb's own store: POST only on the seven triage, link and
   TACDB routes, same-origin, bounded, rate limited; none under
   `--web-read-only`, where every other method stays `405` as before.
 - No name resolution of any kind, including its own bind address.
@@ -4957,6 +5132,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_vendorkb.c` | the vendor research table against `web/data/vendors/` and the registry: every `.md` an entry and every entry a file named for its name, every `[n]` resolving and every cited field carrying one, the name, each alias and each affiliate exact `Organization Name` strings of the committed CSVs (a dead entry is red), the lookup folding case, white space and punctuation, matching no prefix and flagging an affiliate, the drawer and Lookup carrying `"vendor_research"` for a researched vendor (without the entry's country, parent and founded for an affiliate) and `{found:false}` for one without and for an IP, the page drawing it through one function with no `href` and no markup sink, the generator refusing each defect the format names (fixtures run through the built `vendorkb`), and `data/vendors/COVERAGE.md` against `REFERENCE_HOST.txt`, the registry and the entries, its count line included |
 | `test_alertkb.c` | the alert knowledge table against its sources: an entry per `.def` row in order with its technique, a trigger, sources and steps for each, plain text, and every remediation source a corpus document that cites the type |
 | `test_alerts.c` | the Alerts page and an alert's page over a generated sloth.db and a fed stream: the collapse (sloth.db's rows and the stream's incidents, a key once), the order, every filter, paging, every `400`/`404`/`405`, the six sections, runs, the device by MAC and by address, no key, username, community or sloth `incident_id` in any body, every type's page within the buffer, the 20,000-row bound on 30,000 rows (500,000 with `SLOTHWEB_ALERTS_BENCH`), filters, History's figures and the drawer reaching past it, and the tiles against their views on the demo's data; the page's views and links |
+| `test_notes.c` | anomaly triage and the links ([Anomaly triage and links](#anomaly-triage-and-links)): `test_frrs.c`'s alert triage tests again on an anomaly's id, the decision across a reopened store and a re-detected, a later and a forgotten episode, an id collision refused, alert and anomaly rows apart, links from both ends with their guards, a dangling end, the candidates' subject and both window edges, the candidate read on a 30,000-row alerts table, the bundle's `related` sections, the link's write over a socket, and `notes.js` with its functions pinned whole |
 | `test_readme.c` | this file: every message the start-up path can print, scraped from `web/src/`, quoted in Troubleshooting; the Security section's points; every screenshot this file shows present under `docs/assets/slothweb/` and under the size bound |
 | `test_tui_colors.c` | the data colours against the TUI itself ([Design](#design)): `src/tui.c`'s ANSI backend linked in and captured, every byte of an address, an SSID, a host name and an info string compared with the page's colour for it (its functions pinned as served, a C port of them over the served `SLOTH_PALETTE`, the served custom properties); the cross-panel bold and the page's `IP_SRC` bits held to `IP_SRC_*`, an alert counted by its `match_ip` alone; the alert-hot override against `tui_alert_hot_set()` (severity, bold from WARN, the TTL's edge, promotion, the full table) and its TTL and cap against `src/tui.c`; the phosphor, heat, alert-hot and monitor-row pairs; `MON_TYPES` against the record types `src/jsonl.c` emits from the monitor radio |
 | `test_glyph.c` | the glyph layer's geometry ([the glyph layer](#the-glyph-layer)): a C port of `web/ui/glyph.js` with the JS pinned verbatim out of the served page, so a change on either side fails. For G1, G5 and G6: empty, warming, one point, four points as dots (R6), a gap (R5), in band, out of band (and in again once the band is widened), G1's line graded as `draw_sparkline_at()` grades it (ruling 1), min and max dots only without a band (R7), a scale that grows and never shrinks (R11), the window rule and its words (R4), the caption grammar and the three states in it (R9), the presence cells from the server's hex, the ruler's midnight and now ticks in a shifted zone (F10), the first-seen mark (F15), an anomaly episode's underline clipped to the strip, the bullet's ranges, threshold tick and severity, the count bar's shared scale, and each glyph's list read with every token flattened to one grey (R10); each glyph's TUI form named in the README (R12). Nineteen mutations, each naming the test it reddened. V2: G2's states (the dash, one sample as its dot alone, dots under five, a gap), its fixed −95 to −20 dBm scale and the −67 dBm rule, a reading off the scale clamped and counted, the whisker only when there is one and in order, the four kinds in one grey (R10); G2's words bold only by sloth's `approaching` and naming sloth's band and trend glyph, never a slope of their own; the new mark and G5's first-seen cell (F15); every placement of G2 and G6 and the card's rounded bar gone (R8) |
@@ -5045,6 +5221,7 @@ web/
     web_alerts.c   /api/alerts, /api/alert: the Alerts page, an alert's page
     web_bundle.c   /api/bundle: a detail view's answers spliced into one document
     web_alertdb.c  sloth.db's alerts: groups by key, a key's incidents, its device
+    web_relate.c   an anomaly's triage subject; /api/frrs/related, /api/frrs/relate
     web_alertfmt.c the types whose alert detail is shown, audited
     web_loc.c      sloth's location stamp: range-checked, from the stream or sloth.db
     web_positions.c /api/positions: JSON, GeoJSON, GPX
@@ -5064,7 +5241,8 @@ web/
   ui/              the page sources (index.html, theme.css, page.css, app.js,
                    glyph.js, facts.js, rf.js and air.js: the glyphs' placements,
                    evidence.js, bundle.js the copy-JSON
-                   control, location.js and location.css: where
+                   control, notes.js and notes.css: anomaly triage and
+                   the links, location.js and location.css: where
                    the sensor was, gnss.js and gnss.css: the GPS Sat
                    tab, bledev.js and bledev.css: the BLE Devices
                    waterfall, and radar.js and radar.css: the Radar tab's

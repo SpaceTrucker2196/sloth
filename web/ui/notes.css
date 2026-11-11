@@ -1,0 +1,8 @@
+/* Anomaly triage and the links between findings (web/ui/notes.js). Its
+ * own file, so the slices changing page.css in parallel do not meet it.
+ * Only the page's tokens and frrs.css's triage classes: no new colour. */
+.notes-line { display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: center; min-width: 0; font-size: 11px; margin-top: 4px; }
+dialog.notes { width: min(640px, 100vw); max-height: 90vh; overflow: auto; background: var(--panel); color: inherit; border: 1px solid var(--brass-edge); padding: 16px; }
+dialog.notes::backdrop { background: rgba(0, 0, 0, 0.55); }
+.notes-row { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; font-size: 12px; border-top: 1px dotted var(--rule); padding: 2px 0; overflow-wrap: anywhere; }
+dialog.notes .tri-form input[type=text] { width: 30ch; max-width: 100%; }

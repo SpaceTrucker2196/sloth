@@ -257,6 +257,8 @@ Rules A2, A4, A5, A6, A9 are lookups against `sloth.db` and the lookup module. R
 
 Every rule has a seeded-state test in `web/tests/test_anomaly.c`, following the `tests/test_alerts.c` pattern.
 
+**Triage and links (added 2026-11-11, owner request).** An anomaly is triaged exactly as an alert is (`docs/web-frrs-spec.md` §15): the same states (`untriaged`, `false`, `noise`, `incident`, `known`), the same optional 240-byte note, the same append-only history, through the same write route and its guards. Its subject is the finding, `tid` = `a` + FNV-1a 64 of (rule name, metric name, key), every episode of it, as an alert's is every incident of its key; each row records the episode (`first_seen`) it was made on and a state from an earlier episode is marked *carried*. An anomaly can be linked by the operator to an alert, another anomaly or a device, the link read from both ends; findings on the same MAC or IP address within 10 minutes are offered as "possibly related" and stored only when accepted. slothweb.db v8 (`anom_subject`, `relation`).
+
 ## 7. HTTP API
 
 All routes are `GET`. Any other method returns `405`. Responses are JSON unless stated. Query times are Unix seconds. Bind is `127.0.0.1:8770` unless `--web-bind` says otherwise.
@@ -269,7 +271,8 @@ All routes are `GET`. Any other method returns `405`. Responses are JSON unless 
 | `/api/live` | the current in-memory snapshot: devices, hosts, alerts, channels (what the TUI shows) |
 | `/api/series?metric=&key=&from=&to=&tier=` | buckets `[t, avg, min, max, n]` plus the baseline band for the same range |
 | `/api/baseline?metric=&key=` | the 168 cells, for the hour-of-week heatmap |
-| `/api/anomalies?since=&kind=` | open and recent anomaly episodes |
+| `/api/anomalies?since=&kind=` | open and recent anomaly episodes, each with `tid`, the id its triage and links are filed under (2026-11-11) |
+| `/api/frrs/related?id=` | an alert's, an anomaly's or a device's links, the other end's triage, and the candidates (2026-11-11); `POST /api/frrs/relate` adds or removes a link (the write surface is `docs/web-frrs-spec.md` §5.2 and §15) |
 | `/api/devices?q=&sort=&limit=&offset=` | joined view of `devices`, `pnl_clients`, `arp`, `dhcp_leases`, vendor lookup, name lookup |
 | `/api/device/{mac}` | one device with everything known: PNL SSIDs, assocs, probe history, presence heatmap, anomalies, alerts that name it |
 | `/api/host/{ip}` | one host: flows, DNS it asked, TLS SNI it used, ports seen, presence heatmap |
@@ -419,6 +422,8 @@ The device database. Data comes from `sloth.db` joined with `slothweb` lookups.
 ### 8.7 View: Anomalies
 
 Open episodes first, then closed ones in the selected window. Each card: kind glyph, key, score bar in the heat ramp, evidence text, sparkline of the metric that fired, first and last seen. Filter chips by kind. A click opens the device or host drawer.
+
+**Triage on the card (2026-11-11).** Every card, here and wherever else one is drawn (the Overview's top five, the drawer, an alert's page), carries the anomaly's triage chip and a *triage* / *notes* button (`web/ui/notes.js`, one guarded call in `card()`). The button opens the anomaly's panel, a `<dialog>`: the state buttons and *clear*, the note with its byte counter, every change newest first with the episode it was made on, the operator's links (each with *open* and *remove*, or "no longer held"), the candidates ("possibly related", each with its basis and one *link* button) and a "link to" field. A triaged-out card (`false`, `noise`, `known`) is dimmed, never hidden, unless the state is carried from an earlier episode. The table form of this view and the presence strip's episode marks do not carry the chip.
 
 ### 8.8 View: WiFi
 

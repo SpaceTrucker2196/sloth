@@ -29,9 +29,28 @@
  *            the card and the air both heard) and confirmed by the
  *            operator; exported and imported as JSON Lines, so another
  *            sensor shares it.
+ *   Anomalies  (owner request 2026-11-11) slothweb's own findings
+ *            (web_anomaly.h) are triaged by the same rows, routes and
+ *            states: an anomaly is named "a" and sixteen hex digits
+ *            (web_anomaly_tid(): its rule, metric and key), which like
+ *            an alert's subject names the finding, every episode of it,
+ *            so a decision outlives the episode it was made on as an
+ *            alert's outlives the incident. Each row records the
+ *            episode it was written on (its first_seen), and the
+ *            answer says "carried" when the state shown was decided on
+ *            an earlier episode than the one held now, so it never
+ *            attaches to a later episode unsaid. No assessment judges
+ *            an anomaly rule, so nothing is ever recommended.
+ *   Links    (web_relate.c) the operator's own links from an anomaly
+ *            to an alert, another anomaly or a device, read from both
+ *            ends, removable; and candidates slothweb offers and never
+ *            stores: findings on the same MAC or IP whose times overlap
+ *            or lie within WEB_REL_WINDOW_S, worded as what they are
+ *            ("same device, within 10 minutes": a passive sensor
+ *            corroborates, it does not confirm).
  *
  * The write surface is slothweb's first (every other route is GET or
- * HEAD) and is deliberately narrow: POST only, to the six paths
+ * HEAD) and is deliberately narrow: POST only, to the seven paths
  * web_http_post_path() names, which answer nothing else (a GET there is
  * 405 Allow: POST); JSON bodies of at most WEB_POST_MAX bytes
  * (WEB_IMPORT_MAX for the import); Content-Type checked; the Origin
@@ -144,6 +163,24 @@
 #define WEB_FRRS_IMPORTED_CAP  (WEB_FRRS_TRIAGE_CAP / 2)
 /* The export, one JSON Lines file, and so also what one import takes. */
 #define WEB_FRRS_EXPORT_MAX   WEB_IMPORT_MAX
+/* Anomaly triage and the links (web_relate.c). The subjects slothweb
+ * remembers the descriptor of, the links in all and those naming one
+ * finding (a write past either is refused, 507: a link is the
+ * operator's, never folded), a link's label, how many candidates one
+ * answer offers and how many of sloth.db's alerts it reads for them. */
+#define WEB_FRRS_ANOM_SUBJECTS 8192
+#define WEB_REL_CAP           8192
+#define WEB_REL_PER           32
+#define WEB_REL_LABEL_MAX     96
+#define WEB_REL_SUGGEST       8
+#define WEB_REL_ALERT_SCAN    32
+/* Two findings on one subject are offered as possibly related when
+ * their [first_seen, last_seen] spans overlap or lie within this of
+ * each other. Ten minutes is the longest any anomaly rule looks back
+ * before it can fire (A7's window, WEB_ANOM_A7_WINDOW_S; A8's is the
+ * same ten minutes of DNS, A1 needs three), so an episode's first_seen
+ * can trail what caused it by that much and no more. */
+#define WEB_REL_WINDOW_S      600
 
 /* known (4): known good, expected traffic from a friendly or neutral
  * emitter (the FRRS/EW affiliation sense: friend, or neutral per
@@ -174,6 +211,11 @@ typedef struct {
      * peer is the importer's). */
     char      claim_by[WEB_FRRS_BY_MAX + 1];
     char      claim_peer[WEB_PEER_MAX];
+    /* An anomaly's (anom 1): the first_seen of the episode the row was
+     * written on (0: none was held), and whether that is another
+     * episode than the one held now. */
+    int       anom, carried;
+    long long episode;
 } web_tri_t;
 
 /* What names one alert to the triage join: its id as the alert routes
@@ -200,6 +242,7 @@ typedef struct {
     unsigned long refused_origin, refused_ctype, refused_body, refused_size;
     unsigned long triage_folded, triage_unchanged, ledger_evictions;
     unsigned long imports, exports;
+    unsigned long links_made, links_removed;
 } web_frrs_stats_t;
 
 struct web_frrs_led;

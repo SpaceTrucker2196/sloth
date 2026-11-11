@@ -2105,6 +2105,7 @@
       c.addEventListener("click", function () { openDrawer(a.key); });
       c.tabIndex = 0;
     }
+    if (window.SlothNotes) SlothNotes.card(c, a);
     return c;
   }
 
@@ -2963,6 +2964,7 @@
       if (!j.anomalies || !j.anomalies.length) an.appendChild(el("div", "sub", "none"));
       (j.anomalies || []).forEach(function (a) { an.appendChild(card(a)); });
       if (window.SlothFrrs) SlothFrrs.mountDrawer(mac, j);
+      if (window.SlothNotes) SlothNotes.drawer(mac);
     }).catch(function (e) { if (gen === DR.gen) set("dr-note", errText(e.message)); });
   }
 
@@ -5017,6 +5019,7 @@
     // (g) the device it names
     alertDevice(j);
     if (window.SlothFrrs) SlothFrrs.mountAlert(j);
+    if (window.SlothNotes) SlothNotes.alert(j);
     // (h) where the sensor was (location.js)
     if (window.SlothLocation) window.SlothLocation.alert(j);
     // (i) the proof: evidence, assessment, capture (web/ui/evidence.js)
@@ -5711,6 +5714,10 @@
   if (window.SlothFrrs) SlothFrrs.init({ el: el, getJSON: getJSON, DataTable: DataTable,
     prefGet: prefGet, prefSet: prefSet, stamp: stamp, shortStamp: shortStamp, go: go, show: show,
     openDrawer: openDrawer, alertsReload: function () { alertsLoad(true); } });
+
+  // Anomaly triage and the links (web/ui/notes.js): the page's helpers, lent once.
+  if (window.SlothNotes) SlothNotes.init({ el: el, getJSON: getJSON, prefGet: prefGet, stamp: stamp,
+    shortStamp: shortStamp, go: go, openDrawer: openDrawer });
 
   // The BLE Devices waterfall (web/ui/bledev.js): the page's helpers, lent once.
   if (window.SlothBleDev) SlothBleDev.init({ el: el, set: set, getJSON: getJSON, theme: theme,

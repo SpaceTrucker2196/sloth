@@ -1931,8 +1931,37 @@ int web_anomaly_restore(web_anomaly_t *a, long long now_s) {
 
 /* ── readers ─────────────────────────────────────────────────────────── */
 
+void web_anomaly_tid(int rule, int metric, const char *key,
+                     char out[WEB_ANOM_TID_MAX + 1]) {
+    char s[WEB_KEY_MAX + 96];
+    snprintf(s, sizeof(s), "%s\x1f%s\x1f%s", web_anomaly_rule(rule),
+             metric >= 0 && metric < WM_COUNT ? web_metric_defs[metric].name : "",
+             key ? key : "");
+    out[0] = 'a';
+    web_ble_key_hash(s, out + 1);
+}
+
+int web_anomaly_tid_find(web_anomaly_t *a, const char *tid, web_anom_ep_t *out) {
+    int found = 0;
+    pthread_mutex_lock(&a->mu);
+    for (int i = 0; i < a->cap; i++) {
+        const web_anom_ep_t *e = &a->ep[i];
+        if (e->state != WEB_EP_OPEN && e->state != WEB_EP_CLOSED) continue;
+        char t[WEB_ANOM_TID_MAX + 1];
+        web_anomaly_tid(e->rule, e->metric, e->key, t);
+        if (strcmp(t, tid)) continue;
+        if (found && out->state == WEB_EP_OPEN) continue;
+        if (!found || e->state == WEB_EP_OPEN || e->last_seen > out->last_seen) *out = *e;
+        found = 1;
+    }
+    pthread_mutex_unlock(&a->mu);
+    return found;
+}
+
 void web_anomaly_ep_json(web_jw_t *w, const web_anom_ep_t *e) {
     static const char *const STATE[] = { "free", "building", "open", "closed" };
+    char tid[WEB_ANOM_TID_MAX + 1];
+    web_anomaly_tid(e->rule, e->metric, e->key, tid);
     web_jw_raw(w, "{\"id\":");          web_jw_int(w, e->id);
     web_jw_raw(w, ",\"rule\":\"");       web_jw_raw(w, web_anomaly_rule(e->rule));
     web_jw_raw(w, "\",\"kind\":\"");     web_jw_raw(w, web_anomaly_kind(e->rule));
@@ -1950,7 +1979,8 @@ void web_anomaly_ep_json(web_jw_t *w, const web_anom_ep_t *e) {
     web_jw_raw(w, ",\"evidence\":");     web_jw_str(w, e->evidence);
     web_jw_raw(w, ",\"first_seen\":");   web_jw_int(w, e->first_seen);
     web_jw_raw(w, ",\"last_seen\":");    web_jw_int(w, e->last_seen);
-    web_jw_raw(w, ",\"state\":\"");
+    web_jw_raw(w, ",\"tid\":\"");       web_jw_raw(w, tid);
+    web_jw_raw(w, "\",\"state\":\"");
     web_jw_raw(w, e->state >= 0 && e->state <= 3 ? STATE[e->state] : "?");
     web_jw_raw(w, "\",\"open\":");       web_jw_raw(w, e->state == WEB_EP_OPEN ? "true" : "false");
     web_jw_raw(w, "}");

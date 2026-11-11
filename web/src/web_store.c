@@ -343,6 +343,52 @@ static const char STEP_V7_SQL[] =
     ") WITHOUT ROWID;\n"
     "CREATE INDEX ble_alert_last ON ble_alert (last_ts);\n";
 
+/* v7 -> v8 (owner request 2026-11-11): triage notes on slothweb's own
+ * anomalies, and the operator's links between findings. An anomaly's
+ * triage rows go in the triage table v6 made, beside the alerts', under
+ * a subject of their own ("a" and sixteen hex digits, web_anomaly_tid();
+ * type -1, which no alert has), so that table is not touched here.
+ * anom_subject says what such a subject names, its rule, metric and key
+ * as the episode table already holds them (a rule name, a catalogue
+ * name and a canonical key), written when an anomaly is first triaged
+ * or linked: the engine forgets an episode after a day, and a note has
+ * to say what it was written on for longer than that. relation is one
+ * link the operator made, from one finding to another: each end a kind
+ * (0 an alert, 1 an anomaly, 2 a device), the id the routes name it by
+ * (an alert's triage subject, an anomaly's id, a canonical MAC) and a
+ * label of slothweb's own words (an alert type's name and address, an
+ * anomaly's rule and key), kept so a link whose end has aged out of
+ * sloth.db or the engine still says what it pointed at; note and who
+ * are operator text from the validated POST body, peer the
+ * connection's address. A suggested link is never stored: only what
+ * the operator accepted is here. Additive: two new tables and their
+ * indexes, nothing that exists is changed. Plain CREATE, as every
+ * step: a file already holding one of these names fails the step and
+ * stays at v7. */
+static const char STEP_V8_SQL[] =
+    "CREATE TABLE anom_subject (\n"
+    "  subject TEXT PRIMARY KEY,\n"
+    "  rule    TEXT NOT NULL,\n"
+    "  metric  TEXT NOT NULL,\n"
+    "  key     TEXT NOT NULL,\n"
+    "  ts      INTEGER NOT NULL\n"
+    ") WITHOUT ROWID;\n"
+    "CREATE TABLE relation (\n"
+    "  id      INTEGER PRIMARY KEY,\n"
+    "  a_kind  INTEGER NOT NULL,\n"
+    "  a_id    TEXT NOT NULL,\n"
+    "  a_label TEXT NOT NULL DEFAULT '',\n"
+    "  b_kind  INTEGER NOT NULL,\n"
+    "  b_id    TEXT NOT NULL,\n"
+    "  b_label TEXT NOT NULL DEFAULT '',\n"
+    "  note    TEXT NOT NULL DEFAULT '',\n"
+    "  who     TEXT NOT NULL DEFAULT '',\n"
+    "  peer    TEXT NOT NULL DEFAULT '',\n"
+    "  ts      INTEGER NOT NULL\n"
+    ");\n"
+    "CREATE UNIQUE INDEX relation_pair ON relation (a_kind, a_id, b_kind, b_id);\n"
+    "CREATE INDEX relation_to ON relation (b_kind, b_id);\n";
+
 typedef struct {
     int         from;
     const char *sql;
@@ -359,6 +405,7 @@ static const web_step_t STEPS[] = {
     { 5, STEP_V6_SQL, "created triage, tacdb_unit, tacdb_platform, "
                       "tacdb_emitter and tacdb_dismiss" },
     { 6, STEP_V7_SQL, "created ble_device and ble_alert" },
+    { 7, STEP_V8_SQL, "created anom_subject and relation" },
 };
 #define STEP_N ((int)(sizeof(STEPS) / sizeof(STEPS[0])))
 
