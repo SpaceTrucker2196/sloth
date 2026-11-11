@@ -36,7 +36,7 @@ const char *web_fa_verdict_word(int v) {
 static const char *const BSTATE_WORD[WEB_FA_B_NSTATE] = {
     "not_compared", "heard", "should_have_heard", "outside_coverage", "heard_later",
     "pending", "answer_cut", "not_receiving", "no_position", "no_altitude",
-    "no_coverage", "reporter",
+    "no_coverage", "reporter", "no_site_altitude",
 };
 
 const char *web_fa_bstate_word(int s) {
@@ -69,17 +69,42 @@ double web_fa_horizon_m(double h1_m, double h2_m) {
     return 4120.0 * (sqrt(h1_m) + sqrt(h2_m));
 }
 
-int web_fa_cov_add(web_fa_cov_t *c, double rx_lat, double rx_lon, double lat, double lon) {
+int web_fa_cov_add(web_fa_covacc_t *a, double rx_lat, double rx_lon, double lat, double lon,
+                   int hour) {
     if (!isfinite(lat) || !isfinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180)
         return 0;
     double d = web_fleet_dist_m(rx_lat, rx_lon, lat, lon);
     if (!isfinite(d) || d > web_fa_horizon_m(WEB_FA_RX_AGL_M, WEB_FA_ALT_CEIL_M)) return 0;
     int s = web_fa_sector(web_fa_bearing(rx_lat, rx_lon, lat, lon));
-    if (d > c->sec_m[s]) c->sec_m[s] = d;
-    if (d > c->max_m) c->max_m = d;
-    c->sec_n[s]++;
-    c->n++;
+    if (hour < 0) hour = 0;
+    if (hour >= WEB_FA_COV_HOURS) hour = WEB_FA_COV_HOURS - 1;
+    if (d > a->hr_m[s][hour]) a->hr_m[s][hour] = d;
+    if (d > a->c.max_m) a->c.max_m = d;
+    a->c.sec_n[s]++;
+    a->c.n++;
     return 1;
+}
+
+static int by_double(const void *pa, const void *pb) {
+    double a = *(const double *)pa, b = *(const double *)pb;
+    return a < b ? -1 : a > b;
+}
+
+/* Each sector's reach: the lower median of its hourly farthest, over the
+ * hours it held a position - so one bad decode, or a few hours of
+ * anomalous propagation, cannot stretch it. */
+void web_fa_cov_finish(const web_fa_covacc_t *a, web_fa_cov_t *out) {
+    *out = a->c;
+    for (int s = 0; s < WEB_FA_SECTORS; s++) {
+        double v[WEB_FA_COV_HOURS];
+        int m = 0;
+        for (int h = 0; h < WEB_FA_COV_HOURS; h++)
+            if (a->hr_m[s][h] > 0) v[m++] = a->hr_m[s][h];
+        out->sec_m[s] = 0;
+        if (!m) continue;
+        qsort(v, (size_t)m, sizeof(v[0]), by_double);
+        out->sec_m[s] = v[(m - 1) / 2];
+    }
 }
 
 /* ── the receiver's figures, for the export ────────────────────────── */
@@ -133,13 +158,17 @@ void web_fa_rx_read(struct web_adsb *a, web_fa_rx_t *o) {
 }
 
 typedef struct {
-    web_fa_cov_t *c;
-    double        lat, lon;
+    web_fa_covacc_t a;
+    double          lat, lon;
+    long long       now;
 } covx_t;
 
 static int cov_one(void *ctx, const web_sdb_apos_t *p) {
     covx_t *x = ctx;
-    web_fa_cov_add(x->c, x->lat, x->lon, p->lat, p->lon);
+    long long age = x->now - p->ts;
+    web_fa_cov_add(&x->a, x->lat, x->lon, p->lat, p->lon,
+                   age < 0 ? 0 : (int)(age / 3600 < WEB_FA_COV_HOURS ? age / 3600
+                                                                     : WEB_FA_COV_HOURS - 1));
     return 0;
 }
 
@@ -147,15 +176,27 @@ void web_fa_cov_read(web_sdb_conn_t *c, double rx_lat, double rx_lon, long long 
                      web_fa_cov_t *o) {
     memset(o, 0, sizeof(*o));
     if (!c || !isfinite(rx_lat) || !isfinite(rx_lon)) return;
-    covx_t x = { o, rx_lat, rx_lon };
-    int r = web_sdb_adsb_positions(c, now_s - WEB_FA_COV_WINDOW_S, WEB_FA_COV_ROWS, cov_one, &x);
+    covx_t *x = calloc(1, sizeof(*x));
+    if (!x) return;
+    x->lat = rx_lat;
+    x->lon = rx_lon;
+    x->now = now_s;
+    int r = web_sdb_adsb_positions(c, now_s - WEB_FA_COV_WINDOW_S, WEB_FA_COV_ROWS, cov_one, x);
+    web_fa_cov_finish(&x->a, o);
     o->complete = r >= 0 && r < WEB_FA_COV_ROWS && !c->timed_out;
+    free(x);
 }
 
 /* ── the comparison ────────────────────────────────────────────────── */
 
 static int overlaps(long long a0, long long a1, long long b0, long long b1) {
     return a0 <= b1 && b0 <= a1;
+}
+
+/* A position's time: within [pos_prev, pos_ts] (web_slothdb.h); with no
+ * lower bound, a heartbeat before. */
+static long long pos_lo(const web_fa_obs_t *o) {
+    return o->pos_prev > 0 && o->pos_prev <= o->pos_ts ? o->pos_prev : o->pos_ts - WEB_FA_HB_S;
 }
 
 /* Heard at overlapping times: each [visit start, last seen + heartbeat]
@@ -189,7 +230,11 @@ void web_fa_classify(const web_fa_site_t *sites, int n, const web_fa_obs_t *obs,
         for (int j = i + 1; j < n; j++) {
             const web_fa_obs_t *a = &obs[i], *b = &obs[j];
             if (!a->present || !b->present || !a->has_pos || !b->has_pos) continue;
-            long long dt = a->pos_ts > b->pos_ts ? a->pos_ts - b->pos_ts : b->pos_ts - a->pos_ts;
+            /* The longest the two positions' times can lie apart: each is
+             * only known within its [pos_prev, pos_ts]. */
+            long long hi = a->pos_ts > b->pos_ts ? a->pos_ts : b->pos_ts;
+            long long lo = pos_lo(a) < pos_lo(b) ? pos_lo(a) : pos_lo(b);
+            long long dt = hi - lo;
             if (dt > WEB_FA_PAIR_DT_S) continue;
             double v = WEB_FA_VMAX_MS;
             if (a->has_gs || b->has_gs) {
@@ -253,7 +298,9 @@ void web_fa_classify(const web_fa_site_t *sites, int n, const web_fa_obs_t *obs,
         out->why = why;
         return;
     }
-    long long t = R->pos_ts, t0 = t - WEB_FA_WINDOW_S, t1 = t + WEB_FA_WINDOW_S;
+    /* The window: about the whole span the position's time may lie in. */
+    long long tl = pos_lo(R), t = R->pos_ts;
+    long long t0 = tl - WEB_FA_WINDOW_S, t1 = t + WEB_FA_WINDOW_S;
     int any_should = 0, any_out = 0, first_why = 0;
     for (int i = 0; i < n; i++) {
         if (i == ref || !sites[i].receiver) continue;
@@ -263,7 +310,10 @@ void web_fa_classify(const web_fa_site_t *sites, int n, const web_fa_obs_t *obs,
         if (o->present && o->last >= t0 - WEB_FA_HB_S) st = WEB_FA_B_LATER;
         else if (B->through < t1) st = WEB_FA_B_PENDING;
         else if (B->cut_at >= t0 - WEB_FA_HB_S) st = WEB_FA_B_CUT;
-        else if (active(B, t0, t1) < WEB_FA_HEALTH_MIN) st = WEB_FA_B_QUIET;
+        /* Receiving others at each end of that span, not merely within it. */
+        else if (active(B, t0, tl + WEB_FA_WINDOW_S) < WEB_FA_HEALTH_MIN ||
+                 active(B, t - WEB_FA_WINDOW_S, t1) < WEB_FA_HEALTH_MIN)
+            st = WEB_FA_B_QUIET;
         else if (!B->has_pos) st = WEB_FA_B_NOPOS;
         else {
             double d = web_fleet_dist_m(B->lat, B->lon, R->lat, R->lon);
@@ -272,9 +322,15 @@ void web_fa_classify(const web_fa_site_t *sites, int n, const web_fa_obs_t *obs,
             out->sec_max_m[i] = B->cov.sec_m[s];
             if (!R->has_alt) {
                 st = WEB_FA_B_NOALT;
+            } else if (!B->has_alt) {
+                /* Taking the site at sea level would overstate the
+                 * aircraft's height above it, and the horizon with it. */
+                st = WEB_FA_B_NOSITEALT;
             } else {
-                double h_ac = R->alt_ft * FT_M - (B->has_alt ? B->alt_m : 0);
-                double hz = web_fa_horizon_m(WEB_FA_RX_AGL_M, h_ac);
+                /* No antenna height is credited: a higher one only
+                 * lengthens the horizon, toward a false "should have". */
+                double h_ac = R->alt_ft * FT_M - B->alt_m;
+                double hz = web_fa_horizon_m(0, h_ac);
                 out->horizon_m[i] = hz;
                 if (B->cov.sec_n[s] < WEB_FA_SECTOR_MIN)
                     st = WEB_FA_B_NOCOV;
@@ -365,6 +421,7 @@ static int self_row(void *ctx, const web_sdb_acf_t *a) {
         e->o.lat = a->lat;
         e->o.lon = a->lon;
         e->o.pos_ts = a->pos_ts;
+        e->o.pos_prev = a->pos_prev;
     }
     int alt_has = a->has_pos ? a->pos_alt_has : a->has_alt;
     int alt = a->has_pos ? a->pos_alt : a->alt;
@@ -490,7 +547,11 @@ static void peer_rows(actx_t *x, web_store_t *st, long long now_s) {
         sqlite3_bind_text(ac, 1, g->name, -1, SQLITE_TRANSIENT);
         sqlite3_bind_int64(ac, 2, now_s + g->skew - WEB_FA_LIST_S);
         sqlite3_bind_int(ac, 3, WEB_FA_ROWS_PER_PEER);
+        int nrow = 0;
         while (sqlite3_step(ac) == SQLITE_ROW) {
+            /* A full read may have left this peer's older rows out: read
+             * as a cut answer now, never as silence. */
+            if (++nrow >= WEB_FA_ROWS_PER_PEER) g->s.cut_at = now_s;
             const unsigned char *k = sqlite3_column_text(ac, 0);
             if (!k || !hex_ok((const char *)k)) continue;
             ent_t *e = ent_new(x, i, (const char *)k);
@@ -514,6 +575,8 @@ static void peer_rows(actx_t *x, web_store_t *st, long long now_s) {
                 e->o.lat = la;
                 e->o.lon = lo;
                 e->o.pos_ts = (long long)d - g->skew;
+                if (jnum_in(rec, "pos_prev", 1, 4102444800.0, &d))
+                    e->o.pos_prev = (long long)d - g->skew;
                 if (jnum_in(rec, "pos_alt", -2000, 100000, &d)) { e->o.has_alt = 1; e->o.alt_ft = (int)d; }
             } else if (jnum_in(rec, "alt", -2000, 100000, &d)) {
                 e->o.has_alt = 1;
@@ -628,6 +691,10 @@ static int build(web_fleet_t *f, const web_fleet_src_t *src, long long now_s, ac
         g->s.act_a = g->act_a;
         g->s.act_b = g->act_b;
     }
+    /* Rows left out for want of room: every site's silence is then
+     * unknown. */
+    if (x->partial)
+        for (int i = 0; i < x->n; i++) x->site[i].s.cut_at = now_s;
     for (int i = 0; i < x->n; i++) if (x->site[i].s.receiver) x->nrx++;
     return 0;
 }
@@ -898,7 +965,7 @@ int web_fleet_aircraft_route(web_fleet_t *f, const web_fleet_src_t *src, const c
     web_jw_raw(&w, ",\"list_s\":");          web_jw_int(&w, WEB_FA_LIST_S);
     web_jw_raw(&w, ",\"cov_window_s\":");    web_jw_int(&w, WEB_FA_COV_WINDOW_S);
     web_jw_raw(&w, ",\"k\":");               jnum(&w, 1, WEB_FA_COV_K, 2);
-    web_jw_raw(&w, ",\"rx_agl_m\":");        jnum(&w, 1, WEB_FA_RX_AGL_M, 0);
+    web_jw_raw(&w, ",\"rx_agl_m\":");        jnum(&w, 1, 0, 0);
     web_jw_raw(&w, ",\"sector_min\":");      web_jw_int(&w, WEB_FA_SECTOR_MIN);
     web_jw_raw(&w, ",\"health_min\":");      web_jw_int(&w, WEB_FA_HEALTH_MIN);
     web_jw_raw(&w, ",\"sites\":[");
@@ -931,15 +998,18 @@ int web_fleet_aircraft_route(web_fleet_t *f, const web_fleet_src_t *src, const c
                    "further apart than the aircraft could fly in the time between them.");
     web_jw_raw(&w, ",\"horizon\":");
     web_jw_str(&w, "d = 4.12 (sqrt h1 + sqrt h2) km, h in metres, the 4/3-earth radio "
-                   "horizon (research/adsb/multi-receiver-verification.md); the antenna "
-                   "is taken at 10 m and the aircraft's height as its altitude less the "
-                   "site's: both choices.");
+                   "horizon (research/adsb/multi-receiver-verification.md); no antenna "
+                   "height is credited and the aircraft's height is its altitude less the "
+                   "site's (a site with no altitude decides nothing): both choices, each "
+                   "toward the shorter horizon.");
     web_jw_raw(&w, ",\"thresholds\":");
-    web_jw_str(&w, "Choices, no source: 0.8 of the sector's farthest position and of the "
-                   "horizon, at least 10 positions in the sector over 24 h, 30-degree "
-                   "sectors, at least 2 other aircraft heard in the window, a 120 s "
-                   "window plus sloth's 300 s write heartbeat, 2 km and ground speed x "
-                   "1.25 + 30 m/s for the mobility check.");
+    web_jw_str(&w, "Choices, no source: 0.8 of the sector's reach (the median of its "
+                   "hourly farthest position over 24 h) and of the horizon, at least 10 "
+                   "positions in the sector, 30-degree sectors, at least 2 other aircraft "
+                   "heard at each end of the window, a 120 s window about the span the "
+                   "position's time may lie in plus sloth's 300 s write heartbeat, 2 km "
+                   "and ground speed x 1.25 + 30 m/s over the longest the two positions' "
+                   "times may lie apart for the mobility check.");
     web_jw_raw(&w, "}}\n");
     free(g);
     ctx_free(x);

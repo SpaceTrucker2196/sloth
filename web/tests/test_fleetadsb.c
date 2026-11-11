@@ -31,29 +31,39 @@ static void test_geometry(void) {
     /* 4.12 km x (sqrt 10 + sqrt 10000) = 425,028 m; nothing negative or
      * not finite reaches the root. */
     WT_ASSERT(fabs(web_fa_horizon_m(10, 10000) - 425028.4) < 1);
+    WT_ASSERT(fabs(web_fa_horizon_m(0, 3048) - 227459.8) < 1);
     WT_ASSERT(fabs(web_fa_horizon_m(100, 0) - 41200) < 1e-6);
     WT_EQ(web_fa_horizon_m(-5, NAN) == 0, 1);
     WT_ASSERT(isfinite(web_fa_bearing(NAN, 0, 0, 0)));
 }
 
-/* Each position into its sector as the farthest heard there; one beyond
- * the horizon of an aircraft at 50,000 ft (521 km from a 10 m antenna)
- * and one not finite are not counted. */
+/* Each sector's reach is the lower median of its hourly farthest: one
+ * stray decode at 400 km in one hour moves the plain farthest (max_m)
+ * but not the reach. One beyond the horizon of an aircraft at 50,000 ft
+ * (521 km from a 10 m antenna) and one not finite are not counted. Seen
+ * red with web_fa_cov_finish() taking the hourly maximum instead: the
+ * north reach then read 400 km. */
 static void test_coverage(void) {
+    static web_fa_covacc_t a;
     web_fa_cov_t c;
-    memset(&c, 0, sizeof(c));
-    WT_EQ(web_fa_cov_add(&c, B_LAT, B_LON, B_LAT + 20000 / M_DEG, B_LON), 1);
-    WT_EQ(web_fa_cov_add(&c, B_LAT, B_LON, B_LAT + 50000 / M_DEG, B_LON), 1);
-    WT_EQ(web_fa_cov_add(&c, B_LAT, B_LON, B_LAT - 30000 / M_DEG, B_LON), 1);
-    WT_EQ(web_fa_cov_add(&c, B_LAT, B_LON, B_LAT + 600000 / M_DEG, B_LON), 0);
-    WT_EQ(web_fa_cov_add(&c, B_LAT, B_LON, NAN, B_LON), 0);
-    WT_EQ(web_fa_cov_add(&c, B_LAT, B_LON, B_LAT, INFINITY), 0);
-    WT_EQ(c.n, 3);
-    WT_EQ(c.sec_n[0], 2);
+    memset(&a, 0, sizeof(a));
+    for (int h = 0; h < 5; h++)
+        WT_EQ(web_fa_cov_add(&a, B_LAT, B_LON, B_LAT + (40000 + h * 2500) / M_DEG, B_LON, h), 1);
+    WT_EQ(web_fa_cov_add(&a, B_LAT, B_LON, B_LAT + 20000 / M_DEG, B_LON, 2), 1);
+    WT_EQ(web_fa_cov_add(&a, B_LAT, B_LON, B_LAT + 400000 / M_DEG, B_LON, 7), 1);
+    WT_EQ(web_fa_cov_add(&a, B_LAT, B_LON, B_LAT - 30000 / M_DEG, B_LON, 99), 1);
+    WT_EQ(web_fa_cov_add(&a, B_LAT, B_LON, B_LAT + 600000 / M_DEG, B_LON, 0), 0);
+    WT_EQ(web_fa_cov_add(&a, B_LAT, B_LON, NAN, B_LON, 0), 0);
+    WT_EQ(web_fa_cov_add(&a, B_LAT, B_LON, B_LAT, INFINITY, 0), 0);
+    web_fa_cov_finish(&a, &c);
+    WT_EQ(c.n, 8);
+    WT_EQ(c.sec_n[0], 7);
     WT_EQ(c.sec_n[6], 1);
-    WT_ASSERT(fabs(c.sec_m[0] - 50000) < 5);
+    /* Hours 0..4 at 40, 42.5, 45, 47.5, 50 km and hour 7 at 400 km: the
+     * lower median of six is the third, 45 km. */
+    WT_ASSERT(fabs(c.sec_m[0] - 45000) < 5);
     WT_ASSERT(fabs(c.sec_m[6] - 30000) < 5);
-    WT_ASSERT(fabs(c.max_m - 50000) < 5);
+    WT_ASSERT(fabs(c.max_m - 400000) < 50);
     for (int k = 0; k < WEB_FA_SECTORS; k++) WT_ASSERT(isfinite(c.sec_m[k]));
 }
 
@@ -72,6 +82,8 @@ static void two(web_fa_site_t s[2], web_fa_obs_t o[2], double north_m, int alt_f
         s[i].lat = B_LAT + i * 0.00015;
         s[i].lon = B_LON;
         s[i].through = T0 + 3600;
+        s[i].has_alt = 1;
+        s[i].alt_m = 0;
     }
     s[1].cov.n = 20;
     s[1].cov.sec_n[0] = 20;
@@ -88,6 +100,7 @@ static void two(web_fa_site_t s[2], web_fa_obs_t o[2], double north_m, int alt_f
     o[0].lat = B_LAT + north_m / M_DEG;
     o[0].lon = B_LON;
     o[0].pos_ts = T0;
+    o[0].pos_prev = T0 - 20;
     o[0].has_alt = 1;
     o[0].alt_ft = alt_ft;
 }
@@ -131,7 +144,7 @@ static void test_unconfirmed(void) {
     WT_EQ(v.bstate[1], WEB_FA_B_SHOULD);
     WT_ASSERT(fabs(v.dist_m[1] - 20000) < 30);
     WT_ASSERT(fabs(v.sec_max_m[1] - 50000) < 1e-6);
-    WT_ASSERT(fabs(v.horizon_m[1] - 240488.4) < 1);   /* 10,000 ft */
+    WT_ASSERT(fabs(v.horizon_m[1] - 227459.8) < 1);   /* 10,000 ft, no antenna height */
     /* B heard it long before the window: still unheard now. */
     o[1].present = 1;
     o[1].first = o[1].visit_first = T0 - 5000;
@@ -151,11 +164,19 @@ static void test_out_of_coverage(void) {
     web_fa_classify(s, 2, o, &v);
     WT_EQ(v.verdict, WEB_FA_OUT_OF_COVERAGE);
     WT_EQ(v.bstate[1], WEB_FA_B_OUTSIDE);
-    /* 0 ft: 4.12 x sqrt 10 = 13.0 km, 0.8 of it 10.4 km < 20 km. */
-    two(s, o, 20000, 0);
+    /* 1,000 ft over a site at 0 m: 4.12 x sqrt 304.8 = 71.9 km, 0.8 of
+     * it 57.5 km; at 60 km, inside the sector's reach of 100 km but past
+     * that. */
+    two(s, o, 60000, 1000);
+    s[1].cov.sec_m[0] = 100000;
     web_fa_classify(s, 2, o, &v);
     WT_EQ(v.verdict, WEB_FA_OUT_OF_COVERAGE);
-    WT_ASSERT(fabs(v.horizon_m[1] - 13028.6) < 1);
+    WT_ASSERT(fabs(v.horizon_m[1] - 71929.1) < 1);
+    /* The same aircraft, B 300 m up: 4.12 x sqrt 4.8 = 9.0 km. */
+    two(s, o, 20000, 1000);
+    s[1].alt_m = 300;
+    web_fa_classify(s, 2, o, &v);
+    WT_EQ(v.verdict, WEB_FA_OUT_OF_COVERAGE);
     /* 9 positions in the sector: not demonstrated. */
     two(s, o, 20000, 10000);
     s[1].cov.sec_n[0] = WEB_FA_SECTOR_MIN - 1;
@@ -224,6 +245,31 @@ static void test_undetermined_never_unconfirmed(void) {
     o[0].on_ground = 1;
     web_fa_classify(s, 2, o, &v);
     WT_EQ(v.verdict, WEB_FA_UNDETERMINED);
+    /* B's own altitude unknown: taken as sea level it could put a low
+     * aircraft above a hill site's horizon. Seen red (unconfirmed) with
+     * the !B->has_alt branch removed. */
+    two(s, o, 20000, 10000);
+    s[1].has_alt = 0;
+    web_fa_classify(s, 2, o, &v);
+    WT_EQ(v.verdict, WEB_FA_UNDETERMINED);
+    WT_EQ(v.why, WEB_FA_B_NOSITEALT);
+}
+
+/* The reporter's position held from long before its newest sighting
+ * (sloth rewrites a stale one each heartbeat): B receiving others only
+ * at the span's end is not shown receiving through it. Seen red
+ * (unconfirmed) with the window anchored on pos_ts alone. */
+static void test_stale_position_span(void) {
+    web_fa_site_t s[2];
+    web_fa_obs_t o[2];
+    web_fa_verdict_t v;
+    /* B's others all heard from T0 - 60 only. */
+    two(s, o, 20000, 10000);
+    o[0].pos_prev = T0 - 900;
+    for (int i = 0; i < 3; i++) g_aa[i] = T0 - 60;
+    web_fa_classify(s, 2, o, &v);
+    WT_EQ(v.verdict, WEB_FA_UNDETERMINED);
+    WT_EQ(v.why, WEB_FA_B_QUIET);
 }
 
 /* Two receivers' positions for one address 100 km apart a minute apart
@@ -236,8 +282,9 @@ static void test_inconsistent(void) {
     two(s, o, 20000, 10000);
     o[0].has_gs = 1;
     o[0].gs_kt = 450;
+    o[0].pos_prev = T0;
     o[1] = o[0];
-    o[1].pos_ts = T0 - 60;
+    o[1].pos_ts = o[1].pos_prev = T0 - 60;
     o[1].lat = o[0].lat + 100000 / M_DEG;
     web_fa_classify(s, 2, o, &v);
     WT_EQ(v.verdict, WEB_FA_CONFIRMED);
@@ -249,7 +296,14 @@ static void test_inconsistent(void) {
     WT_EQ(v.inconsistent, 0);
     /* Further apart in time than WEB_FA_PAIR_DT_S: not compared. */
     o[1].lat = o[0].lat + 100000 / M_DEG;
-    o[1].pos_ts = T0 - WEB_FA_PAIR_DT_S - 1;
+    o[1].pos_ts = o[1].pos_prev = T0 - WEB_FA_PAIR_DT_S - 1;
+    web_fa_classify(s, 2, o, &v);
+    WT_EQ(v.inconsistent, 0);
+    /* A position that may be up to 400 s older than its sighting: the
+     * gap is up to 460 s, and 100 km is within what it could fly. Seen
+     * red with the gap taken between the two pos_ts. */
+    o[1].pos_ts = T0 - 60;
+    o[1].pos_prev = T0 - 460;
     web_fa_classify(s, 2, o, &v);
     WT_EQ(v.inconsistent, 0);
 }
@@ -262,5 +316,6 @@ void run_fleetadsb_tests(void) {
     WT_RUN(test_unconfirmed);
     WT_RUN(test_out_of_coverage);
     WT_RUN(test_undetermined_never_unconfirmed);
+    WT_RUN(test_stale_position_span);
     WT_RUN(test_inconsistent);
 }

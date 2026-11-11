@@ -2,7 +2,7 @@
 source_url: https://arxiv.org/abs/1307.3664
 retrieved: 2026-11-11
 topics: [adsb, mode-s, spoofing, ghost-injection, plausibility, multilateration, data-fusion, coverage, radio-horizon, fleet]
-citation: Strohmeier, Lenders & Martinovic, "On the Security of the Automatic Dependent Surveillance-Broadcast Protocol", arXiv:1307.3664v2 (2014), section V-F; Wikipedia, "Line-of-sight propagation", section "Atmospheric refraction"
+citation: Strohmeier, Lenders & Martinovic, "On the Security of the Automatic Dependent Surveillance-Broadcast Protocol", arXiv:1307.3664v2 (2014), section V-F; the radio horizon derived here from the 4/3 effective-earth radius (no first-hand propagation source read)
 ---
 # ADS-B position claims checked against a second receiver
 
@@ -30,7 +30,8 @@ messages with a software-defined radio.
 M. Strohmeier, V. Lenders and I. Martinovic, "On the Security of the
 Automatic Dependent Surveillance-Broadcast Protocol", arXiv:1307.3664v2
 [cs.CR], 15 Apr 2014 (University of Oxford; armasuisse), read from the
-arXiv PDF:
+arXiv PDF (each quotation below re-checked against the PDF's text on
+2026-11-11 in review):
 
 - The attack table names "Ghost Injection / Flooding" against both a
   ground station and an aircraft target, an application-layer message
@@ -41,8 +42,13 @@ arXiv PDF:
   verify location claims made by aircraft via ADS-B." ... "Such models
   can provide hints about non-matching location claims of a message send
   by an aircraft."
-- The same section lists simple red flags, citing Leinmuller, Schoch and
-  Kargl (IEEE Wireless Communications 13(5), 2006; **not read**):
+  The map the survey has in mind is a heat map of received signal
+  strength (its Figure 21); the cross-check's per-sector reach is a
+  cruder map of the same kind, distance only.
+- The same section lists simple red flags, citing (its reference [115])
+  Leinmuller, Schoch and Kargl, "Position verification approaches for
+  vehicular ad-hoc networks" (IEEE Wireless Communications 13(5),
+  pp. 16-21, Oct. 2006; **not read**):
   "Investigating airplanes which suddenly appear well within the maximum
   communication range of a receiver"; "Dropping aircraft which are
   violating a given acceptance range threshold, producing impossible
@@ -63,7 +69,9 @@ What follows for the cross-check:
   receiver's demonstrated range, which the second, receiving other
   aircraft, did not hear. "Demonstrated range" is the survey's per-station
   map in its simplest form: the farthest position the receiver itself
-  decoded in each bearing sector over a day.
+  decoded in each bearing sector over a day, taken as the median of the
+  sector's hourly farthest so one bad decode or a few hours of ducting
+  cannot stretch it.
 - **inconsistent**: the survey's mobility threshold applied across two
   receivers: positions for one address further apart than the aircraft
   could fly in the time between them.
@@ -74,30 +82,47 @@ What follows for the cross-check:
 
 ## The radio horizon
 
-Wikipedia, "Line-of-sight propagation"
-(https://en.wikipedia.org/wiki/Line-of-sight_propagation), section
-"Atmospheric refraction", subsection "Refracted distance to horizon",
-read 2026-11-11: under normal conditions the effective-earth factor "k is
-usually chosen to be 4/3", giving "d ≈ 4.12 · √h for h in metres and d
-in kilometres"; and "The radio horizon of the transmitting and receiving
-antennas can be added together to increase the effective communication
-range."
+No first-hand propagation source is in the corpus (no ITU-R P.453,
+P.526 or P.1546, no radio handbook), so the horizon is stated as the
+standard derivation, not as a cited result.
 
-What follows: d = 4.12 (√h_rx + √h_ac) km, the line-of-sight limit
-between a receiving antenna and an aircraft over a smooth 4/3 earth. A
-position beyond it was not decoded over a line of sight. The ITU-R
-recommendations that define the effective-earth model were **not read**.
+Over a smooth sphere of radius R, the tangent from a height h meets
+the surface at d = sqrt(2 R h + h^2) ~ sqrt(2 R h) for h << R.
+Atmospheric refraction under a standard (linearly decreasing)
+refractivity gradient bends radio rays toward the earth; the usual
+model keeps rays straight and enlarges the earth instead, R_eff = k R,
+with k = 4/3 the conventional value for a standard atmosphere. With R =
+6,371 km:
+
+d = sqrt(2 x 4/3 x 6,371,000 m x h) = 4,122 sqrt(h) m, h in metres,
+
+i.e. d ~ 4.12 sqrt(h) km. Two antennas see each other over the smooth
+earth while the distance between them is at most the sum of their two
+horizons, d = 4.12 (sqrt h1 + sqrt h2) km.
+
+What follows: the line-of-sight limit between a receiver on the ground
+and an aircraft at height h above it is 4.12 sqrt(h) km; a position
+beyond it was not decoded over a line of sight. The model is
+deliberately simple: k varies with the weather (ducting raises it far
+above 4/3 for hours at a time, which is why the cross-check's reach is
+a median of hours), terrain is ignored, and an aircraft's reported
+altitude is barometric (pressure altitude), not its height above the
+site. Wikipedia's "Line-of-sight propagation" (section "Atmospheric
+refraction") gives the same 4/3 and 4.12 figures and was used only as a
+cross-check of the arithmetic, not as the basis.
 
 ## What this document does not establish
 
 - **No threshold.** "Well within" is unquantified in the survey. The
-  cross-check's 0.8 of the sector's farthest position and of the horizon,
+  cross-check's 0.8 of the sector's reach and of the horizon,
   its 30-degree sectors, its minimum of 10 positions in a sector, its 2
   other aircraft heard, its 120 s window and its mobility allowance
   (ground speed x 1.25 + 30 m/s, plus 2 km) are choices.
 - **No antenna height.** The horizon needs the antenna's height above
-  the terrain, which sloth does not know; 10 m is a choice, and the
-  aircraft's height is its reported altitude less the site's.
+  the terrain, which sloth does not know; the cross-check credits none
+  (0 m), the choice that can only shorten the horizon, and takes the
+  aircraft's height as its reported altitude less the site's own (a
+  site with no altitude decides nothing).
 - **No timing.** Multilateration needs receive timestamps synchronised
   across receivers; a decoder's JSON and sloth's records carry none.
 

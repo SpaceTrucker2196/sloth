@@ -481,8 +481,9 @@
   }
 
   // Aircraft across the sites: a card per receiver with its coverage
-  // drawn north up (each sector's farthest decoded position, scaled to
-  // the farthest of all; rings at a third, two thirds and the whole),
+  // drawn north up and clockwise (each sector's reach, the median of its
+  // hourly farthest decode, scaled to the farthest single decode, the
+  // outer ring; rings at a third, two thirds and the whole),
   // and a row per aircraft.
   function polar(s) {
     var svg = svgEl("svg", "fleet-polar");
@@ -554,7 +555,7 @@
       row.appendChild(v);
       row.appendChild(H.el("span", "", a.peers.map(function (p) {
         return siteName(p.site) + ": " + p.state.replace(/_/g, " ") + (num(p.dist_m) ? " at " + dist(p.dist_m) +
-               (num(p.sector_max_m) ? " (heard to " + dist(p.sector_max_m) + " there)" : "") : "");
+               (num(p.sector_max_m) ? " (reaches " + dist(p.sector_max_m) + " there)" : "") : "");
       }).join("; ") || "no other receiver"));
       box.appendChild(row);
     });

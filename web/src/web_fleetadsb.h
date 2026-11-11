@@ -11,10 +11,12 @@
  *                            messages/s between two summaries, and its
  *                            demonstrated coverage: every airborne
  *                            position sloth.db holds from the last
- *                            WEB_FA_COV_WINDOW_S, as the most distant per
- *                            30-degree bearing sector from the site's own
- *                            position (the header's) and overall; r000 ..
- *                            r330 metres, n000 .. n330 positions.
+ *                            WEB_FA_COV_WINDOW_S, per 30-degree bearing
+ *                            sector from the site's own position (the
+ *                            header's), as the sector's reach (the median
+ *                            of its hourly farthest, web_fa_cov_t) and the
+ *                            farthest overall; r000 .. r330 metres, n000
+ *                            .. n330 positions.
  *   {"type":"aircraft",...}  each adsb_aircraft row last seen at or after
  *                            max(since, now - WEB_FA_EXPORT_S), newest
  *                            first, at most WEB_FA_CAP_AIRCRAFT: the ICAO
@@ -22,10 +24,14 @@
  *                            category, emergency, the newest altitude,
  *                            ground speed, track, RSSI and messages, the
  *                            newest position of the current visit with
- *                            its time, and first seen, the visit's start
- *                            and last seen.
+ *                            the bounds of its time (pos_prev, pos_ts:
+ *                            web_sdb_acf_t), and first seen, the visit's
+ *                            start and last seen.
  *
- * The end line then counts "aircraft" and says "truncated_aircraft". No
+ * The end line then counts "aircraft" and says "truncated_aircraft",
+ * which is true whenever the aircraft were not all read - cut, out of
+ * budget, or not read at all (no sloth.db): an empty list is never
+ * passed off as a complete one. No
  * cursor and no backfill: rows past the cap are older than the ones sent,
  * and the comparison needs the last WEB_FA_LIST_S only; a cut answer
  * makes its site undetermined over the time it covered instead.
@@ -44,27 +50,33 @@
  *                        within the window of the other's);
  *   unconfirmed          the reporting site's newest position lies inside
  *                        another receiver B's demonstrated coverage
- *                        (within WEB_FA_COV_K of B's farthest position in
- *                        that bearing sector, the sector held at least
+ *                        (within WEB_FA_COV_K of B's reach in that
+ *                        bearing sector, the sector held at least
  *                        WEB_FA_SECTOR_MIN positions) and inside
  *                        WEB_FA_COV_K of the radio horizon between B's
- *                        antenna and the aircraft's altitude, while B
- *                        was answering (its data complete past the
- *                        window), not cut, and receiving other aircraft
- *                        (at least WEB_FA_HEALTH_MIN within the window),
- *                        and B had not heard the address since before
- *                        the window less its heartbeat;
+ *                        ground (no antenna height credited, B's own
+ *                        altitude known) and the aircraft's altitude,
+ *                        while B was answering (its data complete past
+ *                        the window), not cut, and receiving other
+ *                        aircraft (at least WEB_FA_HEALTH_MIN at each
+ *                        end of the window), and B had not heard the
+ *                        address since before the window less its
+ *                        heartbeat. The window is WEB_FA_WINDOW_S about
+ *                        the whole span [pos_prev, pos_ts] the
+ *                        position's time may lie in;
  *   out_of_peer_coverage the same, but outside every B's coverage;
  *   undetermined         anything else, with the reason: one receiver
  *                        (single_receiver), no position, on the ground,
  *                        no altitude, B pending, cut, not receiving, B
- *                        heard it later, B with no position.
+ *                        heard it later, B with no position or no
+ *                        altitude, B's rows cut short by a cap.
  * Never a false unconfirmed by construction: every reason B might have
  * heard it and the data not show it makes the address undetermined.
  * Separately, two receivers' positions for one address within
  * WEB_FA_PAIR_DT_S of each other that are further apart than the
- * aircraft could fly between them (its reported ground speed x 1.25 +
- * 30 m/s, else WEB_FA_VMAX_MS, times the gap, plus WEB_FA_POS_TOL_M) are
+ * aircraft could fly between them (its reported ground speed, knots, x
+ * 1.25 + 30 m/s, else WEB_FA_VMAX_MS, times the longest the two times may
+ * lie apart given each [pos_prev, pos_ts], plus WEB_FA_POS_TOL_M) are
  * flagged inconsistent. */
 #ifndef SLOTHWEB_FLEETADSB_H
 #define SLOTHWEB_FLEETADSB_H
@@ -77,6 +89,7 @@
 #define WEB_FA_SECTOR_DEG    30
 #define WEB_FA_COV_WINDOW_S  86400
 #define WEB_FA_COV_ROWS      100000
+#define WEB_FA_COV_HOURS     (WEB_FA_COV_WINDOW_S / 3600)
 #define WEB_FA_EXPORT_S      (6 * 3600)
 #define WEB_FA_CAP_AIRCRAFT  1000
 #define WEB_FA_LIST_S        7200
@@ -86,7 +99,7 @@
 #define WEB_FA_HEALTH_MIN    2
 #define WEB_FA_SECTOR_MIN    10
 #define WEB_FA_COV_K         0.8
-#define WEB_FA_RX_AGL_M      10.0
+#define WEB_FA_RX_AGL_M      10.0       /* the coverage filter only; the comparison credits none */
 #define WEB_FA_ALT_CEIL_M    15240.0    /* 50,000 ft */
 #define WEB_FA_POS_TOL_M     2000.0
 #define WEB_FA_VMAX_MS       340.0
@@ -106,7 +119,7 @@ enum { WEB_FA_UNDETERMINED = 0, WEB_FA_CONFIRMED, WEB_FA_UNCONFIRMED,
 enum { WEB_FA_B_NONE = 0, WEB_FA_B_HEARD, WEB_FA_B_SHOULD, WEB_FA_B_OUTSIDE,
        WEB_FA_B_LATER, WEB_FA_B_PENDING, WEB_FA_B_CUT, WEB_FA_B_QUIET,
        WEB_FA_B_NOPOS, WEB_FA_B_NOALT, WEB_FA_B_NOCOV, WEB_FA_B_REPORTER,
-       WEB_FA_B_NSTATE };
+       WEB_FA_B_NOSITEALT, WEB_FA_B_NSTATE };
 
 const char *web_fa_verdict_word(int v);
 const char *web_fa_bstate_word(int s);
@@ -119,7 +132,12 @@ double web_fa_bearing(double lat1, double lon1, double lat2, double lon2);
 int    web_fa_sector(double bearing_deg);
 double web_fa_horizon_m(double h1_m, double h2_m);
 
-/* A receiver's demonstrated coverage. */
+/* A receiver's demonstrated coverage. sec_m is each sector's reach: the
+ * lower median, over the hours of the window that held a position in the
+ * sector, of that hour's farthest - robust to a lone bad decode and to a
+ * few hours of anomalous (ducted) propagation, either of which would
+ * stretch a plain farthest and with it the reach a silence is judged
+ * against. max_m is the plain farthest, for the plot's scale only. */
 typedef struct {
     long long n;                       /* positions counted */
     int       complete;                /* the read ran to its end */
@@ -127,10 +145,17 @@ typedef struct {
     double    sec_m[WEB_FA_SECTORS];
     long long sec_n[WEB_FA_SECTORS];
 } web_fa_cov_t;
-/* One position heard from a receiver at (rx_lat, rx_lon): counted into
- * its sector, unless not finite or beyond the horizon of an aircraft at
+typedef struct {
+    web_fa_cov_t c;                    /* n, sec_n, max_m as counted */
+    double       hr_m[WEB_FA_SECTORS][WEB_FA_COV_HOURS];
+} web_fa_covacc_t;
+/* One position heard from a receiver at (rx_lat, rx_lon) `hour` hours
+ * ago (clamped into the window): counted into its sector and hour,
+ * unless not finite or beyond the horizon of an aircraft at
  * WEB_FA_ALT_CEIL_M (a decode no receiver could make). 1 counted. */
-int  web_fa_cov_add(web_fa_cov_t *c, double rx_lat, double rx_lon, double lat, double lon);
+int  web_fa_cov_add(web_fa_covacc_t *a, double rx_lat, double rx_lon, double lat, double lon,
+                    int hour);
+void web_fa_cov_finish(const web_fa_covacc_t *a, web_fa_cov_t *out);
 
 /* One site's view of one address, in this site's clock. */
 typedef struct {
@@ -138,7 +163,7 @@ typedef struct {
     long long first, visit_first, last;
     int       has_pos;
     double    lat, lon;
-    long long pos_ts;
+    long long pos_ts, pos_prev;        /* the position is from [pos_prev, pos_ts] */
     int       has_alt, alt_ft, on_ground;
     int       has_gs;
     double    gs_kt;

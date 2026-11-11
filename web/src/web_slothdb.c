@@ -3425,17 +3425,28 @@ int web_sdb_adsb_fleet(web_sdb_conn_t *c, long long from, long long pos_from,
     if (!have_all(c, "adsb_aircraft", ka) || !have_all(c, "adsb_sightings", k)) return 0;
     sqlite3_stmt *st = NULL;
     if (sqlite3_prepare_v2(c->db,
-            "SELECT a.hex, a.first_seen, a.last_seen, a.visit_first, a.flight, a.squawk,"
-            " a.category, a.messages,"
+            /* sloth writes a sighting on a change of cell or once a
+             * heartbeat, each with the position the decoder last held,
+             * however old: the newest position's own time is only known
+             * to lie after the newest sighting that held another one
+             * (brk) and at or before the first that held it (c22). */
+            "SELECT *, (SELECT min(q.last_seen) FROM adsb_sightings q WHERE q.hex = c0 AND"
+            "  q.last_seen > coalesce(c21, -1) AND q.last_seen <= c16) AS c22 FROM ("
+            "SELECT a.hex AS c0, a.first_seen, a.last_seen AS c2, a.visit_first, a.flight,"
+            " a.squawk, a.category, a.messages,"
             " s.emergency, s.on_ground, s.alt_baro, s.alt_geom, s.gs, s.track, s.rssi,"
-            " s.messages, p.last_seen, p.lat, p.lon, p.alt_baro, p.alt_geom"
+            " s.messages, p.last_seen AS c16, p.lat, p.lon, p.alt_baro, p.alt_geom,"
+            " (SELECT r.last_seen FROM adsb_sightings r WHERE r.hex = a.hex AND"
+            "   r.last_seen < p.last_seen AND (r.lat IS NULL OR r.lon IS NULL OR"
+            "   r.lat <> p.lat OR r.lon <> p.lon) ORDER BY r.last_seen DESC LIMIT 1) AS c21"
             " FROM adsb_aircraft a"
             " LEFT JOIN adsb_sightings s ON s.hex = a.hex AND s.last_seen ="
             "  (SELECT max(last_seen) FROM adsb_sightings WHERE hex = a.hex)"
             " LEFT JOIN adsb_sightings p ON p.hex = a.hex AND p.last_seen ="
             "  (SELECT max(last_seen) FROM adsb_sightings WHERE hex = a.hex AND"
             "   last_seen >= max(?3, a.visit_first) AND lat IS NOT NULL AND lon IS NOT NULL)"
-            " WHERE a.last_seen >= ?1 ORDER BY a.last_seen DESC, a.hex LIMIT ?2",
+            " WHERE a.last_seen >= ?1 ORDER BY a.last_seen DESC, a.hex LIMIT ?2"
+            ") ORDER BY c2 DESC, c0",
             -1, &st, NULL) != SQLITE_OK)
         return -1;
     sqlite3_bind_int64(st, 1, from);
@@ -3476,7 +3487,13 @@ int web_sdb_adsb_fleet(web_sdb_conn_t *c, long long from, long long pos_from,
             sqlite3_column_type(st, 17) != SQLITE_NULL &&
             sqlite3_column_type(st, 18) != SQLITE_NULL) {
             a.has_pos = 1;
-            a.pos_ts = sqlite3_column_int64(st, 16);
+            /* The position's time: (pos_prev, pos_ts], within the visit. */
+            a.pos_ts = sqlite3_column_type(st, 22) != SQLITE_NULL
+                     ? sqlite3_column_int64(st, 22) : sqlite3_column_int64(st, 16);
+            a.pos_prev = sqlite3_column_type(st, 21) != SQLITE_NULL
+                       ? sqlite3_column_int64(st, 21) : a.visit_first;
+            if (a.pos_prev < a.visit_first) a.pos_prev = a.visit_first;
+            if (a.pos_prev > a.pos_ts) a.pos_prev = a.pos_ts;
             a.lat = sqlite3_column_double(st, 17);
             a.lon = sqlite3_column_double(st, 18);
             int ac = sqlite3_column_type(st, 19) != SQLITE_NULL ? 19

@@ -795,7 +795,11 @@ int  web_sdb_adsb_track(web_sdb_conn_t *c, const char *hex, long long from,
  * row last seen at or after `from`, newest first, at most limit, with
  * its current visit's start, the figures of its newest sighting and the
  * newest sighting of the current visit that held a position (and at or
- * after pos_from). */
+ * after pos_from). sloth writes a sighting on a change of cell or once a
+ * heartbeat with the position the decoder last held, so that position's
+ * own time is bounded only by the sightings around it: after the newest
+ * that held another (or the visit's start), at or before the first that
+ * held it, the [pos_prev, pos_ts] pair. */
 typedef struct {
     char      hex[8];
     long long first_seen, last_seen, visit_first;
@@ -807,7 +811,7 @@ typedef struct {
     long long messages;
     int       has_pos, pos_alt_has, pos_alt;
     double    lat, lon;
-    long long pos_ts;
+    long long pos_ts, pos_prev;          /* the position is from (pos_prev, pos_ts] */
 } web_sdb_acf_t;
 typedef int (*web_sdb_acf_fn)(void *ctx, const web_sdb_acf_t *a);
 int  web_sdb_adsb_fleet(web_sdb_conn_t *c, long long from, long long pos_from,

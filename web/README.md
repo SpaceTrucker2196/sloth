@@ -4306,14 +4306,17 @@ sloth.db, a peer from its `adsb_rx` line): the decoder's `source` kind
 and `state`, `aircraft_now`, `msg_rate`, `through_age_s` (how old its
 data is), `cut_age_s`, and its coverage over 24 h from its own position,
 `positions`, `range_max_m` and twelve 30-degree `sectors`
-(`{from, max_m, n}`). `aircraft` over the last two hours, unconfirmed
+(`{from, max_m, n}`, `max_m` the sector's reach: the median of its
+hourly farthest). `aircraft` over the last two hours, unconfirmed
 first: the address, callsign, squawk, category, emergency, altitude,
 speed, track, the tested position (`ref`, `lat`, `lon`, `pos_ts`),
 `seen` per site, `verdict` (`confirmed`: two receivers heard it at
 overlapping times; `unconfirmed`: within 0.8 of another receiver's
-farthest in that sector and of the 4/3-earth radio horizon while that
+reach in that sector and of the 4/3-earth radio horizon from its ground
+(no antenna height credited, its own altitude known) while that
 receiver answered past the window, was not cut and heard two other
-aircraft, and did not hear it; `out_of_peer_coverage`; `undetermined`
+aircraft at each end of the span the position's time may lie in, and
+did not hear it; `out_of_peer_coverage`; `undetermined`
 with `why`, `single_receiver` while the fleet has one receiver), `peers`
 (each other receiver's `state`, `dist_m`, `sector_max_m`, `horizon_m`),
 and `inconsistent` (two receivers' positions further apart than it could
@@ -4324,8 +4327,10 @@ the thresholds that are choices). `/api/fleet/overview` gains
 The export's `adsb=1` (#192 I7) adds one `adsb_rx` line (the receiver's
 summary and coverage, `r000`..`r330` metres, `n000`..`n330` positions)
 and an `aircraft` line per sloth.db `adsb_aircraft` row changed since
-`since` within 6 h (at most 1,000, newest first; the end line's
-`aircraft` and `truncated_aircraft`). An I6 export refuses it; the
+`since` within 6 h (at most 1,000, newest first, each position with
+`pos_prev` and `pos_ts` bounding its time; the end line's `aircraft`
+and `truncated_aircraft`, true whenever the aircraft were not all read,
+including not read at all). An I6 export refuses it; the
 puller asks again with `gnss=1` and not with `adsb=1` for the hour.
 
 **The Fleet tab** (after TACDB, `web/ui/fleet.js`): the sites on an SVG

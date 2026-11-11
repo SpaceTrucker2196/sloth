@@ -529,7 +529,29 @@ static void test_fleet_page(void) {
               "    t.x.baseVal.appendItem(svgLen(c)); t.y.baseVal.appendItem(svgLen(POLAR - 2));\n"
               "    t.textContent = max ? \"outer ring \" + dist(max) : \"no position decoded\";\n"
               "    svg.appendChild(t);\n"
-              "    return svg;\n");
+              "    return svg;\n"
+              "  }\n");
+    WT_HAS(mod,
+              "  function acCards(j) {\n"
+              "    var box = $(\"fleet-ac-sites\");\n"
+              "    while (box.firstChild) box.removeChild(box.firstChild);\n"
+              "    j.sites.forEach(function (s) {\n"
+              "      if (!s.receiver) return;\n"
+              "      var c = H.el(\"div\", \"fleet-card\");\n"
+              "      c.appendChild(H.el(\"div\", \"fleet-card-h\", siteName(s.site)));\n"
+              "      var dl = H.el(\"dl\");\n"
+              "      kv(dl, \"decoder\", s.state ? (s.source || \"-\") + \", \" + s.state + (num(s.summary_age_s) ? \", \" + age(s.summary_age_s) : \"\")\n"
+              "         : \"no summary\", !s.fresh);\n"
+              "      kv(dl, \"now\", num(s.aircraft_now) ? s.aircraft_now + \" aircraft\" + (num(s.msg_rate) ? \", \" + s.msg_rate + \" msg/s\" : \"\") : \"-\");\n"
+              "      kv(dl, \"coverage\", s.positions + \" positions over \" + Math.round(j.cov_window_s / 3600) + \" h\" +\n"
+              "         (num(s.range_max_m) ? \", farthest \" + dist(s.range_max_m) : \"\") + (s.cov_complete ? \"\" : \" (partial)\"));\n"
+              "      kv(dl, \"data to\", num(s.through_age_s) ? age(s.through_age_s) : \"never\", !num(s.through_age_s) || s.through_age_s > 300);\n"
+              "      c.appendChild(dl);\n"
+              "      c.appendChild(polar(s));\n"
+              "      box.appendChild(c);\n"
+              "    });\n"
+              "    if (!box.firstChild) box.appendChild(H.el(\"div\", \"sub\", \"no site has an ADS-B receiver (sloth --adsb)\"));\n"
+              "  }\n");
     WT_HAS(mod,
               "  function acRows(j) {\n"
               "    var box = $(\"fleet-ac-rows\");\n"
@@ -548,7 +570,7 @@ static void test_fleet_page(void) {
               "      row.appendChild(v);\n"
               "      row.appendChild(H.el(\"span\", \"\", a.peers.map(function (p) {\n"
               "        return siteName(p.site) + \": \" + p.state.replace(/_/g, \" \") + (num(p.dist_m) ? \" at \" + dist(p.dist_m) +\n"
-              "               (num(p.sector_max_m) ? \" (heard to \" + dist(p.sector_max_m) + \" there)\" : \"\") : \"\");\n"
+              "               (num(p.sector_max_m) ? \" (reaches \" + dist(p.sector_max_m) + \" there)\" : \"\") : \"\");\n"
               "      }).join(\"; \") || \"no other receiver\"));\n"
               "      box.appendChild(row);\n"
               "    });\n");
@@ -3058,7 +3080,7 @@ static void test_adsb_export(void) {
         WT_HAS(b, "{\"type\":\"adsb_rx\",\"source\":\"file\",\"state\":\"live\",\"ts\":");
         WT_HAS(b, ",\"aircraft\":13,\"messages\":2247900,\"msg_rate\":30.0,\"window_s\":86400,"
                   "\"positions\":14,\"cov_complete\":true,\"range_max_m\":30000,"
-                  "\"r000\":30000,\"r030\":null,");
+                  "\"r000\":25000,\"r030\":null,");
         WT_HAS(b, ",\"n000\":14,\"n030\":0,");
         WT_LACKS(b, "/run/readsb");
         char want[640];
@@ -3066,11 +3088,12 @@ static void test_adsb_export(void) {
             "{\"type\":\"aircraft\",\"hex\":\"a00001\",\"flight\":\"SWA4754\",\"squawk\":\"4175\","
             "\"category\":\"A3\",\"emergency\":\"none\",\"alt\":9000,\"on_ground\":false,"
             "\"gs\":280.0,\"track\":136.0,\"rssi\":-20.1,\"messages\":300,\"lat\":33.50896,"
-            "\"lon\":-111.86995,\"pos_ts\":%lld,\"pos_alt\":8875,\"first_seen\":%lld,"
-            "\"visit_first\":%lld,\"last_seen\":%lld}\n", T - 500, T - 5000, T - 900, T - 100);
+            "\"lon\":-111.86995,\"pos_ts\":%lld,\"pos_prev\":%lld,\"pos_alt\":8875,"
+            "\"first_seen\":%lld,\"visit_first\":%lld,\"last_seen\":%lld}\n",
+            T - 500, T - 900, T - 5000, T - 900, T - 100);
         WT_HAS(b, want);
         WT_HAS(b, "{\"type\":\"aircraft\",\"hex\":\"a00002\",\"flight\":\"SKW6344\"");
-        WT_HAS(b, "\"lat\":null,\"lon\":null,\"pos_ts\":null,\"pos_alt\":null,");
+        WT_HAS(b, "\"lat\":null,\"lon\":null,\"pos_ts\":null,\"pos_prev\":null,\"pos_alt\":null,");
         WT_HAS(b, "{\"type\":\"aircraft\",\"hex\":\"a00004\",\"flight\":\"ASI72\"");
         WT_HAS(b, "\"gs\":null");
         WT_LACKS(b, "a0000f");
@@ -3089,12 +3112,15 @@ static void test_adsb_export(void) {
         WT_LACKS(b, "truncated_aircraft");
         free(b);
     }
-    /* No receiver summary and no sloth.db: no adsb_rx line at all. */
+    /* No receiver summary and no sloth.db: no adsb_rx line at all, and
+     * the aircraft, not read, are cut - never an empty list the
+     * comparison would take as "heard none" (seen red, false, with the
+     * !ac_read clause removed from the export). */
     web_fleet_src_t none = { NULL, NULL, NULL, NULL, NULL, NULL };
     b = export_q(&none, "since=0&adsb=1");
     if (b) {
         WT_LACKS(b, "adsb_rx");
-        WT_HAS(b, ",\"aircraft\":0,\"truncated_aircraft\":false,");
+        WT_HAS(b, ",\"aircraft\":0,\"truncated_aircraft\":true,");
         free(b);
     }
     /* A row the importer would refuse. */
@@ -3119,7 +3145,8 @@ static const char AC_LINE[] =
     "{\"type\":\"aircraft\",\"hex\":\"a00001\",\"flight\":\"SWA4754\",\"squawk\":\"4175\","
     "\"category\":\"A3\",\"emergency\":\"none\",\"alt\":9000,\"on_ground\":false,"
     "\"gs\":280.0,\"track\":136.0,\"rssi\":-20.1,\"messages\":300,\"lat\":33.50897,"
-    "\"lon\":-111.86995,\"pos_ts\":1792626500,\"pos_alt\":8875,\"first_seen\":1792622000,"
+    "\"lon\":-111.86995,\"pos_ts\":1792626500,\"pos_prev\":1792626400,\"pos_alt\":8875,"
+    "\"first_seen\":1792622000,"
     "\"visit_first\":1792626100,\"last_seen\":1792626900}\n";
 #define END_AC(n, cut) "{\"type\":\"fleet_end\",\"rows\":0,\"wifi\":0,\"ble\":0,\"ap\":0," \
     "\"probe\":0,\"alert\":0,\"verdict\":0,\"truncated_wifi\":false,\"truncated_ble\":false," \
@@ -3129,7 +3156,9 @@ static const char AC_LINE[] =
 
 /* The importer's checks on the new lines, each refusing the whole
  * answer and writing nothing: an upper-case address, a squawk not four
- * octal digits, a position without its time, an altitude out of range,
+ * octal digits, a position without its time or the time's lower bound,
+ * a lower bound past the time, a position time past the row's last
+ * seen, an altitude out of range,
  * an infinite RSSI, a member the type may not carry, a count that is not
  * the lines sent, aircraft lines with no count, a cut without a count,
  * a receiver line's sector out of range. Then the good answer is stored
@@ -3141,6 +3170,9 @@ static void test_adsb_import_refusals(void) {
         { "\"hex\":\"a00001\"", "\"hex\":\"A00001\"", END_AC(1, false) },
         { "\"squawk\":\"4175\"", "\"squawk\":\"8888\"", END_AC(1, false) },
         { "\"pos_ts\":1792626500", "\"pos_ts\":null", END_AC(1, false) },
+        { "\"pos_prev\":1792626400", "\"pos_prev\":null", END_AC(1, false) },
+        { "\"pos_prev\":1792626400", "\"pos_prev\":1792626501", END_AC(1, false) },
+        { "\"pos_ts\":1792626500", "\"pos_ts\":1792626901", END_AC(1, false) },
         { "\"alt\":9000", "\"alt\":200000", END_AC(1, false) },
         { "\"rssi\":-20.1", "\"rssi\":1e999", END_AC(1, false) },
         { "\"track\":136.0", "\"track\":136.0,\"x\":1", END_AC(1, false) },
@@ -3198,7 +3230,7 @@ static void test_adsb_import_refusals(void) {
                       " key='a00001' AND label='SWA4754' AND vendor='A3' AND rssi=-20 AND"
                       " first_seen=1792622000 AND last_seen=1792626900 AND"
                       " extra LIKE '{\"visit_first\":1792626100,\"squawk\":\"4175\",%'"
-                      " AND extra LIKE '%\"pos_ts\":1792626500,\"pos_alt\":8875}'"), 1);
+                      " AND extra LIKE '%\"pos_ts\":1792626500,\"pos_prev\":1792626400,\"pos_alt\":8875}'"), 1);
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='adsb' AND"
                       " key='receiver' AND label='live' AND vendor='file' AND"
                       " last_seen=1792626990 AND extra LIKE '%\"r000\":30000,\"n000\":12,%'"), 1);
@@ -3406,6 +3438,25 @@ static void test_adsb_route(void) {
     WT_EQ(st, 200);
     WT_HAS(ov, ",\"aircraft\":{\"receivers\":2,\"single_receiver\":false,\"aircraft\":16,");
     WT_HAS(ov, "\"unconfirmed\":1,");
+    /* A peer's read filled to its cap: its older rows may be left out,
+     * so its silence reads as a cut answer, never as "did not hear"
+     * (seen red, beta's cut_age_s null, with peer_rows()'s cap test
+     * removed). */
+    char ins[512];
+    snprintf(ins, sizeof(ins), "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n"
+             " WHERE i < %d) INSERT INTO peer_sightings (peer,kind,key,first_seen,last_seen)"
+             " SELECT 'beta', 'aircraft', printf('b%%05x', i), %lld, %lld FROM n",
+             WEB_FA_ROWS_PER_PEER, T + 100, T + 100);
+    WT_EQ(sql_on(g_here_web, ins), 0);
+    b = aircraft_get(&src, "limit=1");
+    WT_ASSERT(b != NULL);
+    if (b) {
+        const char *bs = strstr(b, "{\"site\":\"beta\"");
+        WT_ASSERT(bs != NULL);
+        const char *ce = bs ? strstr(bs, "\"cut_age_s\":") : NULL;
+        WT_ASSERT(ce != NULL && !strncmp(ce, "\"cut_age_s\":0,", 14));
+        free(b);
+    }
     /* The limit's bounds. */
     char *e = NULL;
     size_t el = 0;

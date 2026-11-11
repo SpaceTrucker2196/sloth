@@ -138,7 +138,7 @@ static const char *const M_ADSBRX[] = {
 static const char *const M_AIRCRAFT[] = {
     "aircraft", "hex", "flight", "squawk", "category", "emergency", "alt",
     "on_ground", "gs", "track", "rssi", "messages", "lat", "lon", "pos_ts",
-    "pos_alt", "first_seen", "visit_first", "last_seen", NULL };
+    "pos_prev", "pos_alt", "first_seen", "visit_first", "last_seen", NULL };
 
 const char *const *const web_fleet_members[] = {
     M_HDR, M_GNSS, M_WIFI, M_BLE, M_AP, M_PROBE, M_ALERT, M_VERDICT, M_END, M_GEV,
@@ -761,6 +761,8 @@ static int xp_ac(void *ctx, const web_sdb_acf_t *a) {
     if (pos) jfix(w, a->lon, 5); else web_jw_raw(w, "null");
     jk(w, M_AIRCRAFT, "pos_ts");
     if (pos) web_jw_int(w, a->pos_ts); else web_jw_raw(w, "null");
+    jk(w, M_AIRCRAFT, "pos_prev");
+    if (pos) web_jw_int(w, a->pos_prev); else web_jw_raw(w, "null");
     jk(w, M_AIRCRAFT, "pos_alt");
     if (pos && a->pos_alt_has) web_jw_int(w, a->pos_alt); else web_jw_raw(w, "null");
     jk(w, M_AIRCRAFT, "first_seen");  web_jw_int(w, a->first_seen);
@@ -991,6 +993,7 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
         else web_jw_raw(&w, "\n");
     }
     int fault = w.overflow;
+    int ac_read = 0;                 /* the aircraft read ran (adsb=1) */
 
     /* A page reads its one kind after the cursor; the whole export
      * reads every kind from the top. */
@@ -1059,6 +1062,7 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
          * export only, the rows changed since `since` within the last
          * WEB_FA_EXPORT_S. */
         if (all && xq.adsb && !c.timed_out && !w.overflow) {
+            ac_read = 1;
             if (xp_adsb_rx(&x, src->adsb, &c, &loc, now_s) != 0) fault = 1;
             long long from = now_s - WEB_FA_EXPORT_S;
             if (since > from) from = since;
@@ -1075,6 +1079,11 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
         }
     }
     if (have_c) web_slothdb_close(&c);
+    /* Aircraft asked for and not read (no sloth.db, its budget spent or
+     * the body full before them): cut, never an empty list that reads
+     * as "heard none" - the comparison takes a receiver's silence from
+     * an uncut answer. */
+    if (all && xq.adsb && !ac_read) x.ac_cut = 1;
     /* No sloth.db: the receiver's summary alone, no coverage. */
     if (!have_c && all && xq.adsb && !fault && xp_adsb_rx(&x, src->adsb, NULL, &loc, now_s) != 0)
         fault = 1;
@@ -1552,7 +1561,7 @@ static int put_num(web_jw_t *w, int *fst, const char *k, int g, double v, int dp
 static int ac_row(const web_jrec_t *r, frow_t *o, web_jw_t *w, int *fst) {
     o->kind = -3;
     char hex[16], fl[16], sq[16], cat[16], em[16];
-    long long alt = 0, pts = 0, palt = 0, msgs = 0, vf = 0;
+    long long alt = 0, pts = 0, ppv = 0, palt = 0, msgs = 0, vf = 0;
     double gs, trk, rssi, lat, lon;
     int ground = 0;
     if (v_str(r, "hex", 7, hex, sizeof(hex)) != 1 || !icao_ok(hex) ||
@@ -1577,10 +1586,14 @@ static int ac_row(const web_jrec_t *r, frow_t *o, web_jw_t *w, int *fst) {
     int gms = v_int(r, "messages", 0, 1LL << 50, &msgs);
     int gla = v_num(r, "lat", -90, 90, &lat), glo = v_num(r, "lon", -180, 180, &lon);
     int gpt = v_int(r, "pos_ts", 1, T_MAX, &pts), gpa = v_int(r, "pos_alt", -2000, 100000, &palt);
+    int gpp = v_int(r, "pos_prev", 0, T_MAX, &ppv);
     int gvf = v_int(r, "visit_first", 0, T_MAX, &vf);
+    /* A position comes with both bounds of its time, in order, and no
+     * later than the row's last seen. */
     if (galt < 0 || ggs < 0 || gtr < 0 || grs < 0 || gms < 0 || gla < 0 || glo < 0 ||
-        gpt < 0 || gpa < 0 || gvf < 0 || gla != glo || gla != gpt || (gpa == 1 && gla != 1) ||
-        (gvf == 1 && vf > o->last))
+        gpt < 0 || gpp < 0 || gpa < 0 || gvf < 0 || gla != glo || gla != gpt || gla != gpp ||
+        (gpa == 1 && gla != 1) || (gvf == 1 && vf > o->last) ||
+        (gla == 1 && (ppv > pts || pts > o->last)))
         return -1;
     snprintf(o->key, sizeof(o->key), "%s", hex);
     snprintf(o->label, sizeof(o->label), "%s", fl);
@@ -1603,6 +1616,7 @@ static int ac_row(const web_jrec_t *r, frow_t *o, web_jw_t *w, int *fst) {
         ex_key(w, fst, "lat");    jfix(w, lat, 5);
         ex_key(w, fst, "lon");    jfix(w, lon, 5);
         ex_key(w, fst, "pos_ts"); web_jw_int(w, pts);
+        ex_key(w, fst, "pos_prev"); web_jw_int(w, ppv);
         if (gpa == 1) { ex_key(w, fst, "pos_alt"); web_jw_int(w, palt); }
     }
     return 0;

@@ -506,8 +506,8 @@ the tab shows its scope note. Full description in
 
 Across the owner's sensors (#192 I7, [[fleet]] "Aircraft across the
 sites"), each slothweb exports its receiver's summary, its demonstrated
-coverage (the farthest position decoded in each 30-degree sector over a
-day) and the aircraft it heard, and `/api/fleet/aircraft` classifies
+coverage (each 30-degree sector's reach over a day, the median of its
+hourly farthest decoded position) and the aircraft it heard, and `/api/fleet/aircraft` classifies
 each aircraft as confirmed by two receivers, unconfirmed (inside a
 second receiver's demonstrated coverage and horizon while it heard
 others, yet never heard), out of that receiver's coverage, or
