@@ -182,6 +182,79 @@ static void test_parameters(void) {
     bad("metric=host.rx_rate&from=1792627000&to=1792713606", 0, "to_in_future");
 }
 
+/* The parameters under a few thousand generated query strings, from a
+ * fixed seed: the route's names and others, values of every kind the
+ * decoder meets (empty, the longest a number may be and one digit
+ * more, escapes whole, cut and not hex, a byte over 0x7f, a value past
+ * WEB_PARAM_MAX), '=' and '&' left out and doubled. The string is in a
+ * block of exactly its length. A query that is taken is one the answer
+ * can be built from without another check (the range not empty and no
+ * longer than the buckets an answer reads, the cells no more than
+ * cols); one that is not says why in a word of the route's own. What
+ * it found on 2026-11-11: nothing. */
+static void test_parameters_generated(void) {
+    static const char *const NAMES[] = { "metric", "tier", "from", "to", "cols", "after",
+                                         "key", "Metric", "", "scope" };
+    static const char *const VALS[] = {
+        "host.rx_rate", "dev.frames", "conns.total", "alerts.fired", "nope",
+        "fine", "minute", "hour", "0", "8", "240", "480", "481", "1000", "87400",
+        "99999999999", "100000000000", "-1", "1e3", "+5", "", "%", "%3", "%zz", "%00", "%3C",
+        "aa%3Abb%3Acc%3Add%3Aee%3Aff", "10.0.0.1", "\x80\xff", "a b",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    };
+    uint32_t x = 0xa11ce75;
+    int taken = 0;
+#define NEXT() (x = x * 1664525u + 1013904223u, x >> 8)
+    for (int it = 0; it < 6000; it++) {
+        char qs[1024];
+        size_t o = 0;
+        /* Most begin as a query the route takes, so both sides are reached. */
+        if (NEXT() % 3) o += (size_t)snprintf(qs, sizeof(qs), "metric=%s",
+                                              VALS[NEXT() % 4]);
+        for (int k = 0, n = (int)(NEXT() % 5); k < n; k++) {
+            const char *nm = NAMES[NEXT() % (sizeof(NAMES) / sizeof(NAMES[0]))];
+            const char *v = VALS[NEXT() % (sizeof(VALS) / sizeof(VALS[0]))];
+            unsigned shape = NEXT() % 16;
+            o += (size_t)snprintf(qs + o, sizeof(qs) - o, "%s%s%s%s",
+                                  o && shape != 0 ? "&" : "", shape == 1 ? "&" : "", nm,
+                                  shape == 2 ? "" : shape == 3 ? "==" : "=");
+            o += (size_t)snprintf(qs + o, sizeof(qs) - o, "%s", v);
+        }
+        qs[o] = '\0';
+        char *q = malloc(o + 1);
+        WT_ASSERT(q != NULL);
+        if (!q) return;
+        memcpy(q, qs, o + 1);
+        int store_on = (int)(NEXT() % 2);
+        web_allkeys_q_t s;
+        char why[48] = "";
+        int rc = web_allkeys_parse(q, T + 5, store_on, &s, why, sizeof(why));
+        WT_ASSERT(rc == 0 || rc == -1);
+        if (rc == 0) {
+            taken++;
+            long long step = web_tier_step(s.tier), cs = 0;
+            int nc = 0;
+            WT_ASSERT(s.metric >= 0 && s.metric < WM_COUNT);
+            WT_ASSERT(s.tier >= 0 && s.tier < WEB_TIER_COUNT);
+            WT_ASSERT(s.tier == WEB_TIER_FINE || store_on);
+            WT_ASSERT(s.from >= 0 && s.from < s.to && s.to <= T + 5 + 86400);
+            WT_ASSERT(s.to - s.from <= (long long)WEB_ALLKEYS_BUCKETS * step);
+            WT_ASSERT(s.cols >= WEB_ALLKEYS_COLS_MIN && s.cols <= WEB_ALLKEYS_COLS_MAX);
+            WT_ASSERT(s.has_after == 0 || s.has_after == 1);
+            WT_ASSERT(memchr(s.after, '\0', sizeof(s.after)) != NULL);
+            WT_ASSERT(s.has_after || !s.after[0]);
+            web_allkeys_cells(s.tier, s.from, s.to, s.cols, &cs, &nc);
+            WT_ASSERT(nc >= 1 && nc <= s.cols && cs >= step && cs % step == 0);
+            WT_ASSERT(cs * nc >= s.to - s.from);
+        } else {
+            WT_ASSERT(why[0] != '\0' && strspn(why, "abcdefghijklmnopqrstuvwxyz_") == strlen(why));
+        }
+        free(q);
+    }
+#undef NEXT
+    WT_ASSERT(taken > 300);            /* the generator does reach the accepting side */
+}
+
 /* A cell is a whole number of buckets, the least that fits cols. */
 static void test_cells(void) {
     long long cs;
@@ -2238,6 +2311,7 @@ static void test_legend(void) {
 
 void run_allkeys_tests(void) {
     WT_RUN(test_parameters);
+    WT_RUN(test_parameters_generated);
     WT_RUN(test_cells);
     WT_RUN(test_answer_shape);
     WT_RUN(test_paging);

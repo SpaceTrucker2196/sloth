@@ -737,7 +737,7 @@ static void scan_usb(sys_snapshot_t *sn) {
         snprintf(h->kind, sizeof(h->kind), "%.19s", e->kind);
         snprintf(h->bus, sizeof(h->bus), "usb");
         snprintf(h->id, sizeof(h->id), "%.31s:%.31s", vid, pid);
-        snprintf(h->desc, sizeof(h->desc), "%.31s", e->name);
+        snprintf(h->desc, sizeof(h->desc), "%s", e->name);
         h->known = 1;
         snprintf(path, sizeof(path), "/sys/bus/usb/devices/%.31s/manufacturer", names[i]);
         rd_str(path, h->vendor, (int)sizeof(h->vendor));

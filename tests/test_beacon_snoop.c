@@ -3824,6 +3824,34 @@ static void test_recall_a_full_table_eviction_is_a_return(void) {
     beacon_clear();
 }
 
+/* The memory is of the name, not of a digest of it. The transmitter
+ * chooses its SSID, and a second name with the same 32-bit FNV-1a as
+ * the one it means to copy is seconds of arithmetic: beaconed once and
+ * left to age out, it made the copied name a "return" five minutes
+ * later, which is the alibi the name is in the key to refuse. The two
+ * names below have the same FNV-1a 32 (0xcbee4f7f).
+ *
+ * Seen red (2026-11-11) with the memory keyed on recall_fnv(ssid):
+ * the second row read RETURN. */
+static void test_recall_is_of_the_name_not_its_hash(void) {
+    static sloth_state_t s;
+    const uint8_t x[6] = { 0x02, 0x9a, 0x3c, 0x71, 0x5e, 0x09 };
+
+    rc_start();
+    rc_hear(x, "net-948199");
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_NEW);
+    rc_age_out(&s);
+    rc_hear(x, "net-1123634");
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_NEW);
+    /* And the name it did carry is still a return. */
+    rc_age_out(&s);
+    rc_hear(x, "net-948199");
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_RETURN);
+
+    sloth_clock_test_set(NULL, NULL);
+    beacon_clear();
+}
+
 /* The memory is a ring of BEACON_RECALL_MAX (4096). While it has lost
  * nothing, "not found" is "never heard". Once it has overwritten a
  * live memory it can no longer say that, and an entry it does not know
@@ -4164,6 +4192,7 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_reg_envelope_does_not_survive_slot_reuse);
     RUN_TEST(test_recall_a_dropped_bssid_is_a_return);
     RUN_TEST(test_recall_a_full_table_eviction_is_a_return);
+    RUN_TEST(test_recall_is_of_the_name_not_its_hash);
     RUN_TEST(test_recall_overflow_fails_quiet);
     RUN_TEST(test_parse_ssid_control_octets_stored_as_marks);
     RUN_TEST(test_parse_ssid_high_octets_kept);

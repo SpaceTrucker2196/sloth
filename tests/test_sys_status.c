@@ -802,6 +802,164 @@ static void test_receiver_inventory(void) {
     done();
 }
 
+/* A receiver's row says the table's name for it, whole. scan_usb()
+ * wrote it through "%.31s", so the five names longer than that lost
+ * their ends ("Realtek RTL2832U DVB-T (RTL-SDR" without its bracket,
+ * "Cambridge Silicon Radio Bluetoo"), while the same device reached
+ * through a class directory's uevent kept it. Seen red with that
+ * format: this test, for each of the five. */
+static void test_receiver_name_is_the_tables_whole(void) {
+    TEST_STATE(s);
+    int longer = 0;
+    for (int i = 0; i < sys_usb_table_count; i++) {
+        const sys_usb_id_t *e = &sys_usb_table[i];
+        char v[8], p[8];
+        fresh(&s);
+        snprintf(v, sizeof(v), "%04x\n", (unsigned)e->vid);
+        snprintf(p, sizeof(p), "%04x\n", (unsigned)e->pid);
+        fake_sys_put(USB "1-1/idVendor", v);
+        fake_sys_put(USB "1-1/idProduct", p);
+        tick(&s, 0);
+        const sys_hw_t *h = hw_by_key("usb:1-1");
+        ASSERT(h != NULL);
+        if (h) {
+            ASSERT_STR(h->desc, e->name);
+            ASSERT_STR(h->kind, e->kind);
+        }
+        longer += strlen(e->name) > 31;
+    }
+    ASSERT_GT(longer, 0);          /* the table still has a name that long */
+}
+
+/* The /proc and /sys text parsers and the two lookups under generated
+ * input, from a fixed seed: real files' text with bytes flipped, cut
+ * and spliced, and plain noise, every length from none to past any
+ * buffer here, NUL and bytes over 0x7f included. The text is handed in
+ * a block of exactly its length (no terminator: none is promised) and
+ * every output goes into a block of exactly its capacity, so a read or
+ * a write past either is the sanitizer's to report; what is asserted
+ * is what a caller relies on when a parser says yes. What it found on
+ * 2026-11-11: nothing. */
+static void test_parsers_under_generated_text(void) {
+    static const char *const REAL[] = {
+        "cpu  4705 150 1120 16250 520 0 30 0 0 0\ncpu0 1 2 3 4 5 6 7 8 9 10\n",
+        "0.42 0.36 0.30 1/345 12345\n",
+        "MemTotal:        3884388 kB\nMemFree:          112340 kB\n"
+        "MemAvailable:    2011420 kB\n",
+        "350735.47 1388860.38\n",
+        "48312\n", "-1500\n", "1\n",
+        "DRIVER=iwlwifi\nPCI_CLASS=28000\nPCI_ID=8086:2723\nPCI_SLOT_NAME=0000:00:14.3\n",
+        "PRODUCT=bda/8812/0\nDRIVER=rtl88XXau\n", "SDIO_ID=02D0:A9A6\n",
+        "0bda\n", "Realtek Semiconductor Corp.\n",
+        "18446744073709551615 99999999999999999999 1e308 -0 +5 0x10\n",
+    };
+    static const char NOISE[] = "0123456789 .\n\t-=:/abcdefxMemTotalcpuDRIVERPCI_ID\0\x01\x7f\x80\xff";
+    uint32_t x = 0x5107b0a7;
+    int yes = 0;
+#define NEXT() (x = x * 1664525u + 1013904223u, x >> 8)
+    for (int it = 0; it < 6000; it++) {
+        char src[400];
+        int len = 0;
+        const char *r = REAL[NEXT() % (sizeof(REAL) / sizeof(REAL[0]))];
+        int rl = (int)strlen(r);
+        switch (NEXT() % 4) {
+        case 0:                                 /* a real file, cut anywhere */
+            len = (int)(NEXT() % (unsigned)(rl + 1));
+            memcpy(src, r, (size_t)len);
+            break;
+        case 1:                                 /* a real file, a few bytes flipped */
+            len = rl;
+            memcpy(src, r, (size_t)len);
+            for (int k = 0, n = 1 + (int)(NEXT() % 4); k < n && len; k++) {
+                unsigned at = NEXT() % (unsigned)len;
+                src[at] = NOISE[NEXT() % (sizeof(NOISE) - 1)];
+            }
+            break;
+        case 2:                                 /* two real files end to end */
+            len = rl;
+            memcpy(src, r, (size_t)len);
+            r = REAL[NEXT() % (sizeof(REAL) / sizeof(REAL[0]))];
+            rl = (int)strlen(r);
+            memcpy(src + len, r, (size_t)rl);
+            len += rl;
+            break;
+        default:                                /* noise, none to 300 bytes */
+            len = (int)(NEXT() % 301);
+            for (int k = 0; k < len; k++) src[k] = NOISE[NEXT() % (sizeof(NOISE) - 1)];
+        }
+        char *t = malloc(len ? (size_t)len : 1);
+        ASSERT(t != NULL);
+        if (!t) return;
+        memcpy(t, src, (size_t)len);
+
+        sys_cpu_t c = { 0, 0, 0 };
+        if (sys_parse_cpu(t, len, &c) == 0) { yes++; ASSERT(c.idle <= c.total && c.iowait <= c.total); }
+        double l1 = -1, l5 = -1, l15 = -1;
+        if (sys_parse_loadavg(t, len, &l1, &l5, &l15) == 0) { yes++; ASSERT(l1 >= 0 && l5 >= 0 && l15 >= 0); }
+        long long mt = -1, ma = -1, up = -1, iv = 0;
+        if (sys_parse_meminfo(t, len, &mt, &ma) == 0) { yes++; ASSERT(mt > 0 && ma >= 0 && ma <= mt); }
+        if (sys_parse_uptime(t, len, &up) == 0) { yes++; ASSERT(up >= 0 && up <= 1000000000000LL); }
+        if (sys_parse_int(t, len, -100000, 250000, &iv) == 0) { yes++; ASSERT(iv >= -100000 && iv <= 250000); }
+        char h4[5] = "zzzz";
+        if (sys_parse_hex4(t, len, h4) == 0) {
+            yes++;
+            ASSERT_EQ(strlen(h4), 4u);
+            ASSERT_EQ(strspn(h4, "0123456789abcdef"), 4u);
+        }
+        static const char *const KEYS[] = { "DRIVER", "PCI_ID", "PRODUCT", "SDIO_ID", "" };
+        int cap = 1 + (int)(NEXT() % 40);
+        char *o = malloc((size_t)cap);
+        ASSERT(o != NULL);
+        if (!o) { free(t); return; }
+        for (size_t k = 0; k < sizeof(KEYS) / sizeof(KEYS[0]); k++) {
+            memset(o, 'Z', (size_t)cap);
+            if (sys_parse_uevent(t, len, KEYS[k], o, cap) == 0) {
+                yes++;
+                ASSERT(o[0] != '\0' && memchr(o, '\0', (size_t)cap) != NULL);
+            }
+        }
+        memset(o, 'Z', (size_t)cap);
+        sys_clean_str(t, len, o, cap);
+        const char *e = memchr(o, '\0', (size_t)cap);
+        ASSERT(e != NULL);
+        for (const char *q = o; e && q < e; q++) ASSERT(*q >= 0x20 && *q <= 0x7e);
+        free(o);
+        free(t);
+
+        /* The receiver table: an ID is found exactly when a row has it. */
+        unsigned vid = NEXT() & 0x1ffffu, pid = NEXT() & 0x1ffffu;
+        if (NEXT() % 3 == 0) {
+            const sys_usb_id_t *row = &sys_usb_table[NEXT() % (unsigned)sys_usb_table_count];
+            vid = row->vid; pid = row->pid;
+            if (NEXT() % 4 == 0) vid |= 0x10000u;       /* past sixteen bits: no row's */
+        }
+        const sys_usb_id_t *hit = sys_usb_lookup(vid, pid);
+        int in_table = 0;
+        for (int k = 0; k < sys_usb_table_count; k++)
+            in_table |= sys_usb_table[k].vid == vid && sys_usb_table[k].pid == pid;
+        ASSERT_EQ(hit != NULL, in_table);
+        if (hit) ASSERT(hit->vid == vid && hit->pid == pid);
+
+        /* The path guard: what it lets through is under one of the two
+         * trees and has no ".." component. */
+        static const char *const PARTS[] = { "/proc", "/sys", "/", "..", ".", "/..", "/../",
+                                             "class", "/etc/passwd", "/dev/ttyUSB0", "...", "/.../" };
+        char path[128] = "";
+        for (int k = 0, n = (int)(NEXT() % 6); k < n; k++) {
+            const char *part = PARTS[NEXT() % (sizeof(PARTS) / sizeof(PARTS[0]))];
+            if (strlen(path) + strlen(part) < sizeof(path)) strcat(path, part);
+        }
+        if (sys_path_ok(path)) {
+            size_t pl = strlen(path);
+            ASSERT(!strncmp(path, "/proc/", 6) || !strncmp(path, "/sys/", 5));
+            ASSERT(strstr(path, "/../") == NULL);
+            ASSERT(pl < 3 || strcmp(path + pl - 3, "/..") != 0);
+        }
+    }
+#undef NEXT
+    ASSERT_GT(yes, 500);            /* the generator does reach the accepting side */
+}
+
 /* Two interfaces of one PCI chip are one receiver; two chips are two. */
 static void test_class_rows_merge_by_device(void) {
     TEST_STATE(s);
@@ -1258,6 +1416,8 @@ void run_sys_status_tests(void) {
     RUN_TEST(test_hostile_sensor_text_is_absent);
     RUN_TEST(test_power_supply);
     RUN_TEST(test_receiver_inventory);
+    RUN_TEST(test_receiver_name_is_the_tables_whole);
+    RUN_TEST(test_parsers_under_generated_text);
     RUN_TEST(test_class_rows_merge_by_device);
     RUN_TEST(test_hostile_device_strings);
     RUN_TEST(test_source_states);
