@@ -155,4 +155,7 @@ void web_gnss_health_json(web_gnss_t *g, web_jw_t *w);
  * lock: the fleet export's site block (web_fleet.h). */
 void web_gnss_site(web_gnss_t *g, web_loc_t *loc, web_gnss_sh_t *sh);
 
+/* Does the table hold a row of this satellite now (web_notes.h)? */
+int  web_gnss_has(web_gnss_t *g, int gnssid, int prn);
+
 #endif /* SLOTHWEB_GNSS_H */

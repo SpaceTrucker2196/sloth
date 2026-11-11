@@ -255,8 +255,14 @@ void frrs_anom_json(web_jw_t *w, const frrs_anom_t *a);
 int  frrs_related_get(const web_m4_t *m, web_live_t *live, const char *query,
                       long long now_s, char *body, size_t cap, size_t *len, int *status);
 int  frrs_relate_post(const web_m4_t *m, web_live_t *live, const web_jrec_t *r,
-                      const char *peer, long long now_s, char *body, size_t cap,
+                      const char *peer, int via, long long now_s, char *body, size_t cap,
                       size_t *len, int *status);
+/* Is mac a device anything here holds (an anomaly keyed by it, the
+ * stream's latest pass, the ledger, sloth.db over c or NULL), and does
+ * the ledger hold the BLE advertiser id ("addr/type")? For a note's
+ * subject (web_notes.c). */
+int  frrs_device_held(const web_m4_t *m, web_live_t *live, web_sdb_conn_t *c, const char *mac);
+int  frrs_ble_held(const web_m4_t *m, const char *id);
 
 /* A member check: every member of r is in allowed (a NULL-ended list)
  * and none is a nested value; else *bad names the first that is not. */

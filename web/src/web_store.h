@@ -46,8 +46,9 @@
  * queries come only from the HTTP thread, over a second, read-only
  * connection, with every parameter bound. WAL lets the two run side by
  * side. The one exception since v6 is the operator's own state (the
- * triage and TACDB tables, and since v9 the anomaly subjects and the
- * links between findings, web_frrs.h): the HTTP thread writes those
+ * triage and TACDB tables, since v9 the anomaly subjects and the links
+ * between findings and since v10 the notes (web_notes.h), web_frrs.h):
+ * the HTTP thread writes those
  * over a third, read-write connection of its own, one short transaction
  * per request, serialised against the store thread by SQLite's lock and
  * a busy timeout; the two never share a connection or a statement.
@@ -70,7 +71,7 @@
 #include "web_rollup.h"
 
 /* The version this build writes. */
-#define WEB_STORE_SCHEMA   9
+#define WEB_STORE_SCHEMA   10
 #define WEB_STORE_ERR_MAX  320
 #define WEB_DEFAULT_STORE  "./slothweb.db"
 /* --web-max-mb: the ceiling on the store's used pages. */

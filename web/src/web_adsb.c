@@ -481,3 +481,12 @@ void web_adsb_health_json(web_adsb_t *a, web_jw_t *w) {
     web_jw_raw(w, "}");
     pthread_mutex_unlock(&a->mu);
 }
+
+int web_adsb_has(web_adsb_t *a, const char *hex) {
+    int has = 0;
+    pthread_mutex_lock(&a->mu);
+    for (int i = 0; i < WEB_ADSB_ROWS && !has; i++)
+        has = a->rows[i].used && !strcmp(a->rows[i].hex, hex);
+    pthread_mutex_unlock(&a->mu);
+    return has;
+}

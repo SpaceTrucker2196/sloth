@@ -1199,8 +1199,31 @@ cause.
 
 - The TACDB export and import carry alerts' triage only.
 - Alert-to-alert and device-to-device links.
-- SSIDs and hosts (an IP address with no MAC) as link ends.
+- SSIDs and hosts (an IP address with no MAC) as link ends (an SSID
+  takes a plain note since 15.5; it is still no link end).
 - The capture scope does not filter candidates or links (operator
   state, like the TACDB).
 - Triage chips on the presence strip's episode marks (the Anomalies
   view's table form has them since the follow-up of 2026-11-11).
+
+### 15.5 Plain notes (2026-11-11, as built)
+
+Owner request 2026-11-11 ("an openclaw agent will need to read the
+data thru an mcp and add notes to anomalies, devices, and other
+observations and devices"). A finding's note is its triage note
+(15.1); a plain note (`web_notes.h`) is for the subjects that are not
+findings: a device, a BLE advertiser, an SSID, a GNSS satellite, an
+aircraft, an APRS station. It has no state. It is a row (kind,
+subject, text, who, peer, via, ts) in `note` (slothweb.db v10), never
+changed; a retraction is another row naming it, as a clear is a row.
+A subject's id is validated whole to its kind's format and the
+subject must be held when a note is added. Bounds: 64 rows a subject,
+20,000 in all; only retracted notes fold; `507 notes_full` otherwise.
+The write is `POST /api/frrs/note`, the eighth path of 5.2, behind
+5.3's checks unchanged.
+
+`via` gains a fourth value, `agent` (3), recorded on triage rows,
+links (`relation.via`, v10) and notes alike. It is decided by the
+write path's gate from the request's authentication and never from
+its body ([[slothweb-mcp]] has the design).
+

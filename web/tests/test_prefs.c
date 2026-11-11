@@ -146,6 +146,10 @@ static const char *const NOT_KEPT[] = {
     /* web/ui/notes.js's panel: the note of one change or link and the
      * id to link to, emptied once written */
     "notes-note", "notes-to", "notes-alert-to", "notes-dev-to", "notes-ble-to",
+    /* web/ui/subnotes.js's forms: the text of one note, emptied once
+     * written */
+    "subnotes-dev-text", "subnotes-ble-text", "subnotes-ssid-text", "subnotes-gnss-text",
+    "subnotes-adsb-text", "subnotes-aprs-text",
 };
 
 static int listed(const char *id, const char *const *l, size_t n) {

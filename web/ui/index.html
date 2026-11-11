@@ -15,6 +15,7 @@
 @include page.css
 @include frrs.css
 @include notes.css
+@include subnotes.css
 @include location.css
 @include gnss.css
 @include adsb.css
@@ -40,6 +41,7 @@
 @include evidence.js
 @include bundle.js
 @include notes.js
+@include subnotes.js
 @include app.js
 @include location.js
 @include gnss.js
@@ -369,6 +371,16 @@
     <section class="panel" id="gnss-detail" hidden>
       <div class="label">satellite <span class="sub" id="gnss-detail-name"></span> <button type="button" id="gnss-detail-close">close</button></div>
       <dl class="gnss-kv" id="gnss-detail-kv"></dl>
+      <!-- Plain notes on the satellite (web/ui/subnotes.js). -->
+      <div class="subnotes" id="subnotes-gnss" hidden>
+        <div class="label">notes <span class="sub" id="subnotes-gnss-note"></span></div>
+        <ol class="lst" id="subnotes-gnss-list"></ol>
+        <div class="controls tri-form notes-form">
+          <label>note <input type="text" id="subnotes-gnss-text" maxlength="240" spellcheck="false" autocomplete="off" placeholder="what you know about it"> <span class="sub" id="subnotes-gnss-n"></span></label>
+          <button type="button" id="subnotes-gnss-add">add note</button>
+        </div>
+        <div class="sub tri-msg" id="subnotes-gnss-msg"></div>
+      </div>
     </section>
     <section class="panel" id="gnss-hist" hidden>
       <div class="label">satellite history <span class="sub" id="gnss-hist-name"></span> <button type="button" id="gnss-hist-close">close</button></div>
@@ -403,6 +415,16 @@
     <section class="panel" id="adsb-detail" hidden>
       <div class="label">aircraft <span class="sub" id="adsb-detail-name"></span> <button type="button" id="adsb-detail-close">close</button></div>
       <dl class="adsb-kv" id="adsb-detail-kv"></dl>
+      <!-- Plain notes on the aircraft (web/ui/subnotes.js). -->
+      <div class="subnotes" id="subnotes-adsb" hidden>
+        <div class="label">notes <span class="sub" id="subnotes-adsb-note"></span></div>
+        <ol class="lst" id="subnotes-adsb-list"></ol>
+        <div class="controls tri-form notes-form">
+          <label>note <input type="text" id="subnotes-adsb-text" maxlength="240" spellcheck="false" autocomplete="off" placeholder="what you know about it"> <span class="sub" id="subnotes-adsb-n"></span></label>
+          <button type="button" id="subnotes-adsb-add">add note</button>
+        </div>
+        <div class="sub tri-msg" id="subnotes-adsb-msg"></div>
+      </div>
       <div class="label">history <span class="sub" id="adsb-hist-note"></span></div>
       <dl class="adsb-kv" id="adsb-hist-kv"></dl>
       <canvas id="adsb-prof" class="heat" aria-label="the aircraft's altitude over its recorded sightings"></canvas>
@@ -438,6 +460,16 @@
     <section class="panel" id="aprs-detail" hidden>
       <div class="label">station <span class="sub" id="aprs-detail-name"></span> <button type="button" id="aprs-detail-close">close</button></div>
       <dl class="aprs-kv" id="aprs-detail-kv"></dl>
+      <!-- Plain notes on the APRS station (web/ui/subnotes.js). -->
+      <div class="subnotes" id="subnotes-aprs" hidden>
+        <div class="label">notes <span class="sub" id="subnotes-aprs-note"></span></div>
+        <ol class="lst" id="subnotes-aprs-list"></ol>
+        <div class="controls tri-form notes-form">
+          <label>note <input type="text" id="subnotes-aprs-text" maxlength="240" spellcheck="false" autocomplete="off" placeholder="what you know about it"> <span class="sub" id="subnotes-aprs-n"></span></label>
+          <button type="button" id="subnotes-aprs-add">add note</button>
+        </div>
+        <div class="sub tri-msg" id="subnotes-aprs-msg"></div>
+      </div>
       <div class="label">recent packets <span class="sub" id="aprs-recent-note"></span></div>
       <div class="hscroll"><div id="aprs-recent"></div></div>
       <div class="label">history <span class="sub" id="aprs-hist-note"></span></div>
@@ -1054,6 +1086,16 @@
         <button type="button" id="notes-dev-add">link</button>
       </div>
     </div>
+    <!-- Plain notes on the device (web/ui/subnotes.js). -->
+    <div class="subnotes" id="subnotes-dev" hidden>
+      <div class="label">notes <span class="sub" id="subnotes-dev-note"></span></div>
+      <ol class="lst" id="subnotes-dev-list"></ol>
+      <div class="controls tri-form notes-form">
+        <label>note <input type="text" id="subnotes-dev-text" maxlength="240" spellcheck="false" autocomplete="off" placeholder="what you know about it"> <span class="sub" id="subnotes-dev-n"></span></label>
+        <button type="button" id="subnotes-dev-add">add note</button>
+      </div>
+      <div class="sub tri-msg" id="subnotes-dev-msg"></div>
+    </div>
     <div id="frrs-drawer"></div>
     <div id="loc-drawer" hidden></div>
     <div id="dr-vendor"></div>
@@ -1112,6 +1154,16 @@
         <button type="button" id="notes-ble-add">link</button>
       </div>
     </div>
+    <!-- Plain notes on the BLE advertiser (web/ui/subnotes.js). -->
+    <div class="subnotes" id="subnotes-ble" hidden>
+      <div class="label">notes <span class="sub" id="subnotes-ble-note"></span></div>
+      <ol class="lst" id="subnotes-ble-list"></ol>
+      <div class="controls tri-form notes-form">
+        <label>note <input type="text" id="subnotes-ble-text" maxlength="240" spellcheck="false" autocomplete="off" placeholder="what you know about it"> <span class="sub" id="subnotes-ble-n"></span></label>
+        <button type="button" id="subnotes-ble-add">add note</button>
+      </div>
+      <div class="sub tri-msg" id="subnotes-ble-msg"></div>
+    </div>
   </aside>
   <aside class="drawer" id="sdrawer" hidden aria-label="ssid">
     <div class="dr-hd">
@@ -1125,6 +1177,16 @@
     <canvas class="strip" id="sdr-strip" aria-label="presence of this SSID's access points over the last 24 hours"></canvas>
     <div class="sub" id="sdr-strip-note"></div>
     <div id="sdr-lists"></div>
+    <!-- Plain notes on the SSID (web/ui/subnotes.js). -->
+    <div class="subnotes" id="subnotes-ssid" hidden>
+      <div class="label">notes <span class="sub" id="subnotes-ssid-note"></span></div>
+      <ol class="lst" id="subnotes-ssid-list"></ol>
+      <div class="controls tri-form notes-form">
+        <label>note <input type="text" id="subnotes-ssid-text" maxlength="240" spellcheck="false" autocomplete="off" placeholder="what you know about it"> <span class="sub" id="subnotes-ssid-n"></span></label>
+        <button type="button" id="subnotes-ssid-add">add note</button>
+      </div>
+      <div class="sub tri-msg" id="subnotes-ssid-msg"></div>
+    </div>
   </aside>
   <footer class="foot" aria-label="slothweb">
     <span>sock <b id="sock">-</b></span>

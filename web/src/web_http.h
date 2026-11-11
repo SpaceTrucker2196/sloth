@@ -50,6 +50,9 @@
  * refused as not application/json. */
 #define WEB_CTYPE_MAX  80
 #define WEB_FETCH_MAX  24
+/* X-Slothweb-Agent's value (web_agent.h): 64 hex digits; a longer one
+ * is not kept (agent_long) and is refused. */
+#define WEB_AGENT_HDR_MAX 80
 #define WEB_PEER_MAX   48
 
 /* Not an HTTP status: "well-formed GET or HEAD, route it". */
@@ -81,6 +84,10 @@ typedef struct {
     int  origin_count, origin_long;
     char fetch_site[WEB_FETCH_MAX];
     int  fetch_site_long;
+    /* X-Slothweb-Agent (web_agent.h): the first line's value and how
+     * many lines there were. None on a browser's write. */
+    char agent[WEB_AGENT_HDR_MAX];
+    int  agent_count, agent_long;
     size_t hdr_len;           /* bytes of the header block, its empty line
                                  included: where a body starts */
     /* Set by the server after the parse, for the router: the body read

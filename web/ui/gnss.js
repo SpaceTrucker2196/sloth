@@ -180,6 +180,7 @@
     var cls = s.health === 2 ? "d-dim" : s.used ? "d-bright" : "d-normal";
     var r = el("div", "gnssrow dt-row " + cls + (on ? " on" : ""));
     r.appendChild(cell("c-id", s.id || "-"));
+    if (window.SlothSubNotes) window.SlothSubNotes.mark(r.firstChild, "gnss", s.gnssid + "." + s.prn);
     r.appendChild(gnssCell(s));
     r.appendChild(cell("c-nm", vname(s) || "-"));
     r.appendChild(cell("c-sv n", num(s.svid) ? s.svid : "-"));
@@ -223,6 +224,7 @@
     var v = s.veh;
     set("gnss-detail-name", (s.id || s.gnss + " PRN " + s.prn) + (v ? " " + v.name : ""));
     var kv = clear($("gnss-detail-kv"));
+    if (window.SlothSubNotes) window.SlothSubNotes.show("gnss", "gnss", s.gnssid + "." + s.prn);
     [["satellite ID", s.id ? s.id + " (RINEX: system letter and number)" : "-"],
      ["vehicle", v ? v.name + (v.block ? " (" + v.block + ")" : "") : (s.gnss === "SBAS" ? "- (SBAS is not in the IGS metadata)" : "- (not in the IGS metadata)")],
      ["NORAD catalog #", v && v.norad ? String(v.norad) : null],

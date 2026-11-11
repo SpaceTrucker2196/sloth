@@ -137,6 +137,12 @@ const char *web_bundle_nested_reason(int status, const char *body);
  * router). On 0 *body is a malloc'd JSON body of *len bytes (the
  * caller frees it) and *status its status: 200, or 400/404/413/503
  * with {"error":...}. -1 when memory ran out. */
+/* /api/glossary: the bundle's glossary alone, every field and unit
+ * the routes use, for a reader that has no bundle to hand (an agent
+ * through slothweb-mcp). Constant text of slothweb's own. Its length,
+ * or 0 when it did not fit. */
+size_t web_bundle_glossary_json(char *body, size_t cap);
+
 int web_bundle_route(const web_health_t *h, const char *query,
                      char **body, size_t *len, int *status);
 

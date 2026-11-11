@@ -28,6 +28,8 @@ sloth-research-mcp
 # slothweb (#157). Built on demand via `make web` / `make web-test`.
 /slothweb
 /slothweb_test
+# slothweb-mcp (web/mcp/). Built on demand via `make web-mcp`.
+/slothweb-mcp
 
 # The passive-scan helper (src/ble_scan/), built by `make` on Linux.
 /sloth-ble-scan

@@ -143,4 +143,7 @@ size_t web_aprs_out_of_scope_json(char *body, size_t cap);
 /* The /api/health member: counts only. */
 void web_aprs_health_json(web_aprs_t *a, web_jw_t *w);
 
+/* Does the table hold this station now, live or gone (web_notes.h)? */
+int  web_aprs_has(web_aprs_t *a, const char *call);
+
 #endif /* SLOTHWEB_APRS_H */

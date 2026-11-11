@@ -2785,6 +2785,7 @@
     if (r.nw) r.cells["c-mac"].insertBefore(r.nw, r.sw);
     r.macText.className = d.random ? "rnd d-dim" : "d-dim";
     r.macText.textContent = (d.random ? "~" : "") + r.mac;
+    if (window.SlothSubNotes) SlothSubNotes.mark(r.cells["c-mac"], "device", r.mac);
     r.cells["c-ven"].className = "c-ven " + (d.vendor === null ? "d-dim" : "d-bright");
     r.cells["c-ven"].textContent = d.vendor === null ? "?" : String(d.vendor);
     put(r.cells["c-ip"], isIP(d.ip) ? ipSpan(d.ip, IP_SRC.dev)
@@ -3102,6 +3103,7 @@
       (j.anomalies || []).forEach(function (a) { an.appendChild(card(a)); });
       if (window.SlothFrrs) SlothFrrs.mountDrawer(mac, j);
       if (window.SlothNotes) SlothNotes.drawer(mac);
+      if (window.SlothSubNotes) SlothSubNotes.show("dev", "device", mac);
       // The vendor research last (owner request 2026-11-11): under the
       // device's own record, strip, signal, week, anomalies and FRRS
       // record, in the drawer's last container, not between its
@@ -3544,6 +3546,8 @@
     // the squares after it, at the heat the TUI warns at.
     var ss = el("span", "c-ssid");
     ss.appendChild(a.ssid === null ? ssidHidden("(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
+    if (window.SlothSubNotes && window.SlothSsid && a.ssid !== null)
+      SlothSubNotes.mark(ss, "ssid", SlothSsid.param(String(a.ssid)));
     // §6.3: the SSID count as a row of small squares after the SSID, one
     // each (eight, then a plus), not "+3 ssids" in words; the count in
     // words in its title.
@@ -5412,6 +5416,7 @@
     var cls = d.hid || d.watch_category ? "d-bright" : "d-normal";
     var row = el("div", "blerow dt-row " + cls + (sel ? " on" : ""));
     row.appendChild(el("span", "c-ad", d.addr));
+    if (window.SlothSubNotes) SlothSubNotes.mark(row.firstChild, "ble", String(d.addr) + "/" + String(d.addr_type));
     var ty = el("span", "c-ty", d.type);
     ty.title = d.addr_kind;
     row.appendChild(ty);
@@ -5649,6 +5654,7 @@
     var bb = $("bundle-btn-ble");
     if (bb && window.SlothBundle && SlothBundle.mount) SlothBundle.mount(bb, "ble", addr, scoped);
     if (window.SlothNotes) SlothNotes.ble(addr, type);
+    if (window.SlothSubNotes) SlothSubNotes.show("ble", "ble", String(addr) + "/" + String(type));
     set("bdr-note", "loading");
     var p = "/api/ble/" + encodeURIComponent(addr) + "?type=" + encodeURIComponent(String(type)) +
             "&iface=" + encodeURIComponent(String(iface));
@@ -5877,6 +5883,9 @@
   // Anomaly triage and the links (web/ui/notes.js): the page's helpers, lent once.
   if (window.SlothNotes) SlothNotes.init({ el: el, getJSON: getJSON, prefGet: prefGet, stamp: stamp,
     shortStamp: shortStamp, go: go, openDrawer: openDrawer, openBleDrawer: openBleDrawer });
+  // Plain notes on devices and the rest (web/ui/subnotes.js): the page's helpers, lent once.
+  if (window.SlothSubNotes) SlothSubNotes.init({ el: el, getJSON: getJSON, prefGet: prefGet,
+    shortStamp: shortStamp });
   // One SSID's detail (web/ui/ssid.js): the page's helpers, lent once.
   if (window.SlothSsid) SlothSsid.init({ el: el, getJSON: getJSON, errText: errText, keyColor: keyColor,
     stamp: stamp, shortStamp: shortStamp, kvList: kvList, drawStrip: drawStrip, ssidPlain: ssidText,

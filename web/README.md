@@ -322,6 +322,7 @@ and the page says why in each view that needs it):
 | `PATH: SQLITE_DBCONFIG_DEFENSIVE refused`, `PATH: query_only: ERR` | The SQLite library lacks what slothweb needs: 3.31 or newer. |
 | `no --sloth-db`, `slothweb was built without SQLite; no sloth.db` | The reason `/api/health` gives (`db_error`) when there is no sloth.db to read. |
 | `--web-assessments: empty or too long a path`, `--web-assessments PATH: not a directory` | Give the directory holding the research assessments (`<TYPE>.md` with front matter), or leave the flag out: "follow recommended" then says "no recommendation yet". A path that is not there is accepted and means the same (`slothweb: follow recommended: PATH: no such directory, no recommendation yet`); `make install` puts them in `$(PREFIX)/share/sloth/alert-assessments`. |
+| `--web-agent-secret: empty or too long a path`, `--web-agent-secret PATH: exists and is not a private regular file of this user (mode 0600, one link); refused, left as it is`, `--web-agent-secret: no random bytes from /dev/urandom`, `--web-agent-secret PATH: ERR` | The file slothweb writes the run's agent secret to ([Writes by an agent](#writes-by-an-agent)). Name a path in a directory slothweb's user can write (its state directory); slothweb replaces its own earlier file there and will not write over anything else. Exit `1` for all but the first. |
 | `triage: ERR`, `the store is not open`, `PATH: changed while it was being opened; refused` | The triage and TACDB writer (a third connection to the store, [Triage and the FRRS record](#triage-and-the-frrs-record)) could not open what the store thread had just opened: the file was replaced or locked in between. Start again; exit 1. |
 
 **The alert pcaps** (not fatal; each directory is opened afresh per
@@ -344,7 +345,9 @@ the SIG CSVs in web/data/btsig/` for a `WEB_BTSIG_DIR` build without
 them), `time series in`, `baselines (N restored)`, `store schema vN
 migrated to vN`, `triage and TACDB writes on` (or `off (no store)`),
 `--web-read-only: no write route; every POST is 405`, `follow
-recommended: ...`, `fleet: /api/fleet/export served to the allow list;
+recommended: ...`, `agent writes: a loopback POST carrying the secret in
+PATH writes triage, notes and links, recorded via agent` (with
+`--web-agent-secret`), `fleet: /api/fleet/export served to the allow list;
 no --peer, nothing pulled` or one `fleet: pulling NAME from
 URL/api/fleet/export every N s into PATH (tailnet)` per `--peer`, and in
 a `WITH_SQLITE=0` build:
@@ -391,7 +394,11 @@ Read this before exposing slothweb to anything but your own loopback.
   them and edit the TACDB. There
   are no accounts and no token; the allow list is the only gate. A
   triage row records the peer's address and whatever name the operator
-  typed ("by"): neither is an identity.
+  typed ("by"): neither is an identity. The one credential slothweb
+  has is the agent secret of `--web-agent-secret`
+  ([Writes by an agent](#writes-by-an-agent)): a file only slothweb's
+  user reads, accepted from loopback only, which marks a write as an
+  agent's and opens nothing the page cannot already do.
 - **No TLS.** Use an SSH tunnel (or a VPN you already trust) for
   another host.
 - **The Host check.** A request is answered only when its `Host` is
@@ -471,6 +478,7 @@ milestone (W0, M0 to M6; tracker #102).
 | `--web-retain-days N` | Days of 1 min buckets kept, 1..400, default 30. |
 | `--sloth-db PATH` | sloth's own database (`sloth --db`), read-only (below). Absent: `/api/devices` is a `503` `no_sloth_db`, the drawer and Lookup answer from the stream and the vendor table, A2 runs on the stream alone, and the page says so. A path that is not there yet, or a file refused, is not fatal: every request opens it afresh. Needs a `WITH_SQLITE` build; the same path as `--store` is refused. |
 | `--web-allow-sql` | The SQL box (M5, below): `/api/query` and `/api/recipes`, and the box on the History view. Off by default; without it both paths are `404` and the page never draws the box. Needs `--sloth-db` and a `WITH_SQLITE` build. `--strict` refuses it (exit 2). With `--web-allow-remote` it is announced on stderr, naming what every admitted peer can then read. |
+| `--web-agent-secret PATH` | Let an agent on this machine write through `slothweb-mcp` ([Writes by an agent](#writes-by-an-agent)): a secret drawn at start is written to `PATH` (`0600`, a new one every run, removed at exit), and a loopback POST carrying it in `X-Slothweb-Agent`, with no `Origin`, may write triage, notes and links, recorded `via: agent` under the name it gives. A `PATH` that is empty or too long is `slothweb: --web-agent-secret: empty or too long a path`; one holding something that is not a private regular file of this user is `--web-agent-secret PATH: exists and is not a private regular file of this user (mode 0600, one link); refused, left as it is`; no random bytes is `--web-agent-secret: no random bytes from /dev/urandom`; each exits before serving. Unset: no agent path, and a request with the header is `403 agent_off`. |
 | `--web-read-only` | No write route: every POST is `405` `Allow: GET, HEAD` before a header is checked, the surface before triage existed. The triage states and the TACDB still read; the page draws no button and says why. Default off: an admitted peer may write (the owner's open question Q10 asks whether `--web-allow-remote` should imply it). |
 | `--web-assessments DIR` | Where "follow recommended" reads each alert type's research assessment, `DIR/<TYPE>.md` (front matter `false_positive_risk`, `noise_verdict`, `severity_assessment`; [Triage](#triage-and-the-frrs-record)). The type name comes from the alert table, never from a request; each file read until its front matter closes, at most 32 KiB. Unset, or a path not there: every type says "no recommendation yet". Something there that is not a directory is refused (exit 2). `slothweb.service` passes `/usr/local/share/sloth/alert-assessments`, where `make install` copies `docs/wiki/alert-assessments/*.md`. |
 | `--pcap-dir DIR` | The sensor's `--pcap-dir`, read-only, for the alert page's packet capture ([An alert's proof](#an-alerts-proof)). Repeatable once more for its `--eapol-dir` (at most two; the same path twice is refused). Only a file named as sloth names an alert pcap is ever opened (`alert_YYYYMMDD_HHMMSS_<slug>.pcap`, or `<incident_id>-<event>-<RULE>[-N].pcap`), through the directory's descriptor, not following a symlink, a regular file of at most 16 MiB; never a handshake pcap or `eapol.22000`, whatever directory they sit in. Absent: the page says "slothweb was not given --pcap-dir". An evidence pcap is listed but withheld unless `--web-serve-evidence-pcap` is given (below). |
@@ -2626,8 +2634,8 @@ fleet's tables and rows, every other row and the `triage` table's
 columns as they were, and that failure (a v8 file already holding the
 name `relation_to`: still v8, none of the step's three other objects
 left behind; seen red with the migration's `ROLLBACK` made `COMMIT`).
-A v7 file goes v7, v8, v9 in one open
-(`test_v7_file_reaches_v9_in_one_open`). The `triage` table is not touched: an
+A v7 file goes v7, v8, v9 (and on to v10) in one open
+(`test_v7_file_reaches_v10_in_one_open`). The `triage` table is not touched: an
 anomaly's decisions are rows in it beside the alerts', under a subject
 of their own (`a` and sixteen hex digits, type `-1`), so the cap, the
 folding and the history are one mechanism
@@ -2642,6 +2650,40 @@ No column can hold a credential and nothing in either is a stream
 string: an alert's label is its type's name and the address its
 descriptor names, never its key's text (`test_notes.c` links a
 cleartext-credential alert and scans the file for the username).
+
+### Notes: slothweb.db v10
+
+`v9 -> v10` (owner request 2026-11-11: "an openclaw agent will need to
+... add notes to anomalies, devices, and other observations") adds the
+`note` table with its index `note_subject` and one column, `via`, to
+`relation`, in one `BEGIN IMMEDIATE` step. It is the one step that is
+not `CREATE` alone: `ALTER TABLE relation ADD COLUMN via INTEGER NOT
+NULL DEFAULT 0` is additive in the 2026-10-21 rule's own words
+("columns or tables with defaults"), rewrites no stored value, and
+rolls back with the rest; `test_schema_text_guardrail` holds the chain
+to exactly that one `ALTER`. Every link made before the step reads
+`via` 0, the page's, which is what it was. `web/tests/test_store.c`
+builds a v9 file (the fleet's peer and sightings, three triage rows of
+which one is an anomaly's, the anomaly's `anom_subject` row, two
+links) and holds the migration, which leaves every one of those rows
+and columns as written, and the failure (a v9 file already holding the
+name `note_subject`: still v9, no `note` table, `relation` with the
+eleven columns it had; seen red with the migration's `ROLLBACK` made
+`COMMIT`, and the default seen red as `DEFAULT 3`). A v7 file goes v7,
+v8, v9, v10 in one open (`test_v7_file_reaches_v10_in_one_open`). The
+`triage` table is not touched: its `via` column already takes the new
+value.
+
+| Table | Columns | Holds |
+|---|---|---|
+| `note` | `id` (PK), `kind`, `subject`, `text`, `who`, `peer`, `via`, `retracts`, `folded`, `ts` | one plain note or one retraction ([Notes on devices and the rest](#notes-on-devices-and-the-rest)): `kind` 0 a device, 1 a BLE advertiser, 2 an SSID, 3 a GNSS satellite, 4 an aircraft, 5 an APRS station; `subject` the id the routes name it by (a canonical MAC, `addr/type`, the base64url of an SSID's octets and never its display form, `gnssid.prn`, an ICAO address, a callsign); `text` (240 bytes) and `who` (32) from the validated POST body, `peer` the connection's address; `via` 0 the page, 3 an agent; `retracts` 0 on a note, the note's `id` on the row that takes it back; `folded` the retracted rows of the subject folded away. At most 20,000 rows and 64 a subject |
+| `relation` | gains `via` | how the link was written: 0 the page, 3 an agent through `slothweb-mcp` |
+
+`via` is one set of numbers in `triage`, `relation` and `note`:
+0 manual, 1 recommended, 2 import (triage only), 3 agent. No request
+can set it: a body naming `via` is refused as an unknown member, and 3
+is written only for a request the gate authenticated as the agent's
+([[slothweb-mcp]]).
 
 ### /api/devices, /api/device/{mac}, /api/lookup
 
@@ -4105,12 +4147,13 @@ owner's open questions are in
 
 ### The write surface
 
-slothweb's first. Seven paths take POST, and nothing else does:
+slothweb's first. Eight paths take POST, and nothing else does:
 
 | Path | Body | Effect |
 |---|---|---|
 | `/api/frrs/triage` | `{"id":"d1234","state":"noise","note":"…","by":"…"}`; `id` an alert's or an anomaly's (`a` and sixteen hex digits, the `tid` of `/api/anomalies`); `state` one of `untriaged`, `false`, `noise`, `incident`, `known`, `recommended` | appends a row; `recommended` takes the assessment's state, `409 no_recommendation` when it names none (always, for an anomaly: no assessment judges an anomaly rule) |
 | `/api/frrs/relate` | `{"op":"add","from":"a…","to":"d1234"\|"a…"\|"aa:bb:cc:dd:ee:ff"\|"aa:bb:cc:dd:ee:ff/1","note":"…","by":"…"}`, `{"op":"remove","from":"<either end>","link":7}` | a link between an anomaly and anything, or an alert and a device ([Anomaly triage and links](#anomaly-triage-and-links)); answers the `from` end's `/api/frrs/related` |
+| `/api/frrs/note` | `{"op":"add","kind":"device"\|"ble"\|"ssid"\|"gnss"\|"aircraft"\|"aprs","id":"…","text":"…","by":"…"}`, `{"op":"retract","kind":…,"id":…,"note":7,"text":"<why>","by":"…"}` | a plain note on a subject held now, or the row that takes one back ([Notes on devices and the rest](#notes-on-devices-and-the-rest)); answers the subject's `/api/frrs/notes` |
 | `/api/frrs/tacdb/unit` | `{"op":"create","name":"home","kind":"site","parent":null,"note":"…"}`, `{"op":"update","id":1,…}`, `{"op":"delete"\|"restore","id":1}` | |
 | `/api/frrs/tacdb/platform` | `{"op":"create","nomenclature":"work laptop","class":"laptop","unit":1,"vendor":"…","note":"…","emitter_kind":"sta","emitter_addr":"…"}`, `update`, `delete`, `restore`, `{"op":"confirm","suggest":"<token>","unit":1}` | |
 | `/api/frrs/tacdb/emitter` | `{"op":"add"\|"move"\|"remove"\|"restore","platform":1,"kind":"sta"\|"bssid"\|"ble","addr":"aa:bb:cc:dd:ee:ff[/type]","role":"primary","label":"…"}` | a live `(kind, addr)` belongs to one platform: `409 emitter_owned` |
@@ -4241,6 +4284,8 @@ mid-merge rolls the whole file back.
 | `/api/frrs/tacdb/view` | `id=` | one platform, deleted emitters included |
 | `/api/frrs/suggest` | `limit=` | `{"note","suggestions":[{token,rule,rule_name,kind,a,b,role_b,class,confidence,last_seen,nomenclature,evidence}]}` |
 | `/api/frrs/related` | `id=` an alert's id, an anomaly's, a MAC or a BLE address `/` type (a held BLE end of a link also carries `"iface"`, the sensor its drawer opens by) | `{"id","kind":"alert"\|"anomaly"\|"device"\|"ble","label","held","store","writes","window_s":600,"links_cap":32,"links":[{"link","dir":"to"\|"from","kind","id","label","held","note","by","peer","ts","triage":{…}\|null}],"links_more","suggest":[{"kind","id","label","basis","first_seen","last_seen"}],"suggest_note","alerts_reached"}` and, for a device, `"anomalies":[{"id","label","anomaly":{…},"triage"}]` ([Anomaly triage and links](#anomaly-triage-and-links)) |
+| `/api/frrs/notes` | `kind=`, `id=`, `before=` a note's number | `{"kind","id","held":true\|false\|null,"store","writes","cap":64,"text_max":240,"rows","live","folded","notes":[{"note","ts","text","by","peer","via":"manual"\|"agent","retracted":null\|{"ts","reason","by","peer","via"}}],"more","next"}`; an SSID's also `"ssid"`, `"ssid_k"`, `"ssid_np"`, its display form ([Notes on devices and the rest](#notes-on-devices-and-the-rest)) |
+| `/api/frrs/notes/marks` | `kind=`, `ids=` up to 24, comma-separated, not percent-encoded | `{"kind","store","marks":{"<id>":{"n","agent","ts"}}}`: the ids holding a standing note |
 | `/api/frrs/export` | none | `slothweb-tacdb.jsonl` (attachment, the import's format above): a header line, every live unit (parents first), platform and emitter, every dismissal, every alert's triage row by its descriptor (an anomaly's rows and the links stay on this sensor), an `end` line counting the lines and saying `complete`; deleted rows stay on this sensor; `507 export_too_large` past 8 MiB |
 
 `/api/alerts` takes `triage=any|untriaged|triaged|out|false|noise|incident|known`
@@ -4459,6 +4504,145 @@ the device cap's eviction counted on `/api/health`) and the page's
 sparkline pinned as served; `test_store.c` the v5 to v6
 migration and its failure. Each absence assertion names the mutation it
 was seen red under.
+
+### Writes by an agent
+
+Owner request 2026-11-11: an agent on the same machine reads slothweb
+through `slothweb-mcp` (`web/mcp/`, `make web-mcp`;
+[docs/wiki/slothweb-mcp.md](../docs/wiki/slothweb-mcp.md) has its tools,
+its flags and how to register it) and writes triage, notes and links.
+Its rows are marked `via: agent`, and the mark is decided by slothweb
+from what the request proves, never from what it says: a page could
+otherwise label its writes as it liked, and an agent could pass as the
+operator. `web/src/web_agent.c`.
+
+`--web-agent-secret PATH`: at start slothweb reads 32 bytes from
+`/dev/urandom`, writes them as 64 hex digits to `PATH` (created `0600`
+by descriptor, never through a link, put in place by `rename`; a file
+already there that is not a private regular file of this user is
+refused and left as it is) and keeps them in memory: a new secret every
+run, the file removed at a clean exit. slothweb says `agent writes: a
+loopback POST carrying the secret in PATH writes triage, notes and
+links, recorded via agent`. Without the flag there is no agent path.
+
+`web_agent_check()` is the rule, run by `web_frrs_gate()` before a body
+byte is read and again by the router:
+
+| The POST has | It is | Recorded |
+|---|---|---|
+| no `X-Slothweb-Agent` header | the browser's, held to `Origin` and `Sec-Fetch-Site` exactly as before | `via: manual` or `recommended`; never `agent` |
+| the header once, equal to the secret (constant-time), from a loopback peer, with no `Origin` and no `Sec-Fetch-Site` | the agent's | `via: agent` |
+| the header, otherwise | `403`: `agent_off` (no secret configured), `bad_agent_secret`, `agent_not_local`, `agent_with_origin` | nothing; never tried again as a browser's |
+
+The secret stands in for the `Origin` check on that one path only.
+`Origin` is a CSRF defence, and CSRF needs a browser: a page cannot
+read the file, cannot send the header across origins without a
+preflight slothweb never answers, and cannot strip its own `Origin`, so
+a request carrying both is refused as a page's. The browser's path is
+unchanged. The agent's path is narrower than the page's: triage, notes
+and links only (`403 agent_path` on the TACDB routes and the import), a
+name required (`400 missing_by`), no "follow recommended" (`400
+bad_state`), and it removes only links an agent made (`403
+not_agent_link`). The token bucket applies, in a bucket of the agent's
+own per peer (`a/` and the address), so it can neither spend the
+operator's allowance nor write unbounded; limited, it gets the same
+`429` and `Retry-After`. `/api/health`'s `frrs.agent` is
+`{"enabled","writes","refused"}`, never the secret. What this does not
+stop: another process of slothweb's own user, or root, can read the
+file; `by` is a label, as the operator's is.
+
+`web/tests/test_mcp.c` holds it (`test_whose_write`,
+`test_write_refusals`, `test_rate_limit`, `test_secret_file_rules`):
+each line of the table, a browser's write never marked agent, a wrong
+secret refused by the gate and by the router each on its own, a
+near-miss and a prefix of the secret, the three routes and no other,
+the bucket apart from the operator's, the file's mode and what it will
+not overwrite, and the same over a loopback socket.
+
+### Notes on devices and the rest
+
+Owner request 2026-11-11: notes on devices and on the other things the
+page lists, readable and writable by an agent as well as the operator.
+An alert's or an anomaly's note stays its triage note, above; this is
+the plain note for what is not a finding. `web/src/web_notes.c`,
+`web/ui/subnotes.js` (`SlothSubNotes`).
+
+**Subjects.** Six kinds, each with an id validated whole to its own
+format, and a note is added only to a subject slothweb holds now:
+
+| `kind` | `id` | Held when |
+|---|---|---|
+| `device` | a MAC, canonical | an anomaly is keyed by it, the stream's latest pass, the ledger or sloth.db has it (as a link's device end) |
+| `ble` | `aa:bb:cc:dd:ee:ff/N`, N the address type 0..3 | the ledger holds that address and type. The anonymous address (255) is every anonymous advertiser and is refused |
+| `ssid` | the base64url of its 1..32 octets, as `/api/wifi/ssid`'s parameter | sloth.db's `beacon_aps`, `beacon_ap_ssids` or `pnl_ssids` names those octets (`503 no_sloth_db` without `--sloth-db`). Never the display form: two SSIDs can share one. The empty SSID (`-`) is every hidden network and is refused |
+| `gnss` | `gnssid.prn` in decimal, 0..127 and 0..32767 | the GPS Sat table holds that satellite |
+| `aircraft` | six lower-case hex digits, `~` before a non-ICAO address | the ADS-B table holds it, live or gone |
+| `aprs` | a callsign with its optional `-SSID` | the APRS table holds it, live or gone |
+
+Left out, each because the page has no identity for it that survives a
+reload: a flow (a pair of addresses and a port, re-keyed every
+window), a host with no MAC (an address a DHCP lease reassigns; the
+Lookup card answers by address and names the MAC when there is one), a
+fleet peer's sighting (its key is the peer's, and the peer has its own
+notes), and a TACDB unit or platform (they carry their own `note`
+field). Alerts and anomalies are not kinds here on purpose.
+
+**A note** is text (240 bytes, the triage note's rules: UTF-8, no
+control or bidirectional-control character, over-long refused with
+`{"error":"too_long","member":"text","length":N,"limit":240}` and
+never cut), who (`by`, 32 bytes, optional from the page), the peer's
+address, the time, and `via`. It is never changed and never deleted:
+`retract` writes a row naming it, with who and an optional reason, and
+the note stays listed, struck, with who took it back. Reading and
+retracting need no holder, so a note outlives what it was written on
+and its listing says `"held":false`.
+
+**Bounds.** A subject holds 64 rows and the table 20,000. At either,
+the oldest retracted notes fold with their retractions (the count kept
+as `folded` on the subject's oldest row); with nothing retracted left
+to fold a new note is `507 notes_full`. A note that was not taken back
+is never dropped to make room. A retraction is never refused for room:
+landing past a cap, it folds its own pair at once.
+
+**Routes.** `GET /api/frrs/notes?kind=&id=[&before=N]` lists a
+subject's notes newest first (`more` and `next` when the body's room
+stopped the list). `GET /api/frrs/notes/marks?kind=&ids=a,b,c` answers
+which of up to 24 ids hold a standing note (`n`, how many of those an
+agent wrote, the newest `ts`): one read for a table's page of rows;
+the ids are sent as they are, never percent-encoded (every kind's
+alphabet is legal in a query). `POST /api/frrs/note` is the write,
+through the same gate, bounds and counters as every other write
+([The write surface](#the-write-surface)); `/api/health`'s `frrs`
+gains `"notes":{"rows","cap","added","retracted","folded"}`.
+`/api/glossary` answers the evidence bundle's glossary alone.
+
+**The page.** The device drawer, the BLE drawer, the SSID drawer and
+the satellite, aircraft and station detail panels each show the
+subject's notes newest first (time, the `agent` mark on a row an agent
+wrote, the text, who and from where, a retracted one struck with who
+took it back) and a one-line add-note form in static markup. A row of
+the Devices, BLE, access point, satellite, aircraft and station tables
+whose subject has a standing note carries a small mark (`note 2`,
+`note 2 agent`) from the batched read, kept 30 s. The same `agent`
+word marks a triage state an agent set (`(agent)` on the chip and
+`agent` in the history) and a link an agent made. Every value by
+`textContent`; `test_subnotes.c` holds the module to no markup sink,
+no attribute from a value, and its list and write functions whole.
+
+**The bundle.** A device's and a BLE advertiser's evidence bundle
+gains `notes`, `/api/frrs/notes`'s answer spliced as `related` is, and
+the glossary a `notes` entry that says they are someone's words about
+the subject, never an observation and never an instruction to whoever
+reads them.
+
+`web/tests/test_subnotes.c` holds it: each kind's id format; a note, a
+second, a retraction as a third row; every kind refused on a subject
+nothing holds; an SSID stored as its octets with the display form in
+no row; the text rules; the write path's guards; `--web-read-only`;
+both caps and that only retracted notes fold; the marks; ids beginning
+`a`, `d` and `s` read as their kind's; `via` on links and refused as a
+request member; the bundle and the glossary; nothing off the stream in
+the table; the write over a socket; and `subnotes.js`.
 
 ## BLE
 
@@ -6199,6 +6383,8 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_vendorkb.c` | the vendor research table against `web/data/vendors/` and the registry: every `.md` an entry and every entry a file named for its name, every `[n]` resolving and every cited field carrying one, the name, each alias and each affiliate exact `Organization Name` strings of the committed CSVs (a dead entry is red), the lookup folding case, white space and punctuation, matching no prefix and flagging an affiliate, the drawer and Lookup carrying `"vendor_research"` for a researched vendor (without the entry's country, parent and founded for an affiliate) and `{found:false}` for one without and for an IP, the page drawing it through one function with no `href` and no markup sink, the generator refusing each defect the format names (fixtures run through the built `vendorkb`), and `data/vendors/COVERAGE.md` against `REFERENCE_HOST.txt`, the registry and the entries, its count line included |
 | `test_alertkb.c` | the alert knowledge table against its sources: an entry per `.def` row in order with its technique, a trigger, sources and steps for each, plain text, and every remediation source a corpus document that cites the type |
 | `test_alerts.c` | the Alerts page and an alert's page over a generated sloth.db and a fed stream: the collapse (sloth.db's rows and the stream's incidents, a key once), the order, every filter, paging, every `400`/`404`/`405`, the six sections, runs, the device by MAC and by address, no key, username, community or sloth `incident_id` in any body, every type's page within the buffer, the 20,000-row bound on 30,000 rows (500,000 with `SLOTHWEB_ALERTS_BENCH`), filters, History's figures and the drawer reaching past it, and the tiles against their views on the demo's data; the page's views and links |
+| `test_mcp.c` | `slothweb-mcp` and the agent's write path ([Writes by an agent](#writes-by-an-agent), [docs/wiki/slothweb-mcp.md](../docs/wiki/slothweb-mcp.md)): the protocol as the research server's tests hold it, the JSON reader and the copier, the address, name and secret-file rules, every read tool against the real routes, every write tool end to end with its refusals, whose write it is, hostile SSIDs, hostnames, comments and notes held to their fields, the size caps, and the same calls over a loopback socket |
+| `test_subnotes.c` | the plain notes ([Notes on devices and the rest](#notes-on-devices-and-the-rest)): each kind's id, a subject nothing holds refused, the retraction as a row, both caps and that only retracted notes fold, the text rules and the write path's guards, the batched marks, ids beginning `a`, `d` and `s`, `via` on links, the bundle's `notes` and `/api/glossary`, the stream held out of the table, the write over a socket, and `subnotes.js` with its list and write pinned whole |
 | `test_notes.c` | anomaly triage and the links ([Anomaly triage and links](#anomaly-triage-and-links)): `test_frrs.c`'s alert triage tests again on an anomaly's id, the decision across a reopened store and a re-detected, a later and a forgotten episode, an id collision refused, alert and anomaly rows apart, links from both ends with their guards, a dangling end, the candidates' subject and both window edges, the candidate read on a 30,000-row alerts table, the bundle's `related` sections, the link's write over a socket, and `notes.js` with its functions pinned whole |
 | `test_readme.c` | this file: every message the start-up path can print, scraped from `web/src/`, quoted in Troubleshooting; the Security section's points; every screenshot this file shows present under `docs/assets/slothweb/` and under the size bound |
 | `test_tui_colors.c` | the data colours against the TUI itself ([Design](#design)): `src/tui.c`'s ANSI backend linked in and captured, every byte of an address, an SSID, a host name and an info string compared with the page's colour for it (its functions pinned as served, a C port of them over the served `SLOTH_PALETTE`, the served custom properties); the cross-panel bold and the page's `IP_SRC` bits held to `IP_SRC_*`, an alert counted by its `match_ip` alone; the alert-hot override against `tui_alert_hot_set()` (severity, bold from WARN, the TTL's edge, promotion, the full table) and its TTL and cap against `src/tui.c`; the phosphor, heat, alert-hot and monitor-row pairs; `MON_TYPES` against the record types `src/jsonl.c` emits from the monitor radio |
@@ -6300,6 +6486,8 @@ web/
     web_bundle.c   /api/bundle: a detail view's answers spliced into one document
     web_alertdb.c  sloth.db's alerts: groups by key, a key's incidents, its device
     web_relate.c   an anomaly's triage subject; /api/frrs/related, /api/frrs/relate
+    web_notes.c    plain notes on devices and the rest: /api/frrs/notes, /notes/marks, /note
+    web_agent.c    --web-agent-secret: the run's secret, and whose write a POST is
     web_alertfmt.c the types whose alert detail is shown, audited
     web_loc.c      sloth's location stamp: range-checked, from the stream or sloth.db
     web_positions.c /api/positions: JSON, GeoJSON, GPX
@@ -6322,7 +6510,8 @@ web/
                    allkeys.js and allkeys.css: every key on the Activity graph,
                    evidence.js, bundle.js the copy-JSON
                    control, notes.js and notes.css: anomaly triage and
-                   the links, location.js and location.css: where
+                   the links, subnotes.js and subnotes.css: plain notes on
+                   devices and the rest, location.js and location.css: where
                    the sensor was, gnss.js and gnss.css: the GPS Sat
                    tab, bledev.js and bledev.css: the BLE Devices
                    waterfall, radar.js and radar.css: the Radar tab's
@@ -6350,6 +6539,9 @@ web/
     demo.c         build/web/slothweb-demo: the synthetic sloth.db and stream (M6);
                    linked into slothweb_test too (-DSLOTHWEB_DEMO_LIB)
     quickstart_check.sh  the five-minute check, make web-quickstart-check (M6)
+  mcp/             slothweb-mcp (make web-mcp): an MCP server for an agent on this
+                   machine, a client of the routes above; main.c the pipe, mcp.c the
+                   tools, mcp_json.c the reader and the copier, mcp_http.c the request
   data/            the IEEE registry CSVs, committed (SOURCE.md: origin, hashes, refresh);
                    vendors/ the vendor research, one .md per OUI holder (docs/wiki/vendor-research.md),
                    COVERAGE.md and REFERENCE_HOST.txt: which reference-host vendors have one

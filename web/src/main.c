@@ -11,6 +11,9 @@
 #include <string.h>
 #include <time.h>
 
+#include <unistd.h>
+
+#include "web_agent.h"
 #include "web_anomaly.h"
 #include "web_baseline.h"
 #include "web_ble.h"
@@ -197,6 +200,23 @@ int main(int argc, char **argv) {
     }
     g_m4.frrs = &g_frrs;
     g_m4.chain = &g_chain;
+    /* The agent's path (web_agent.h): only when asked for, a secret of
+     * this run's alone, in a file only this user reads. */
+    if (cfg.agent_secret_path[0]) {
+        char secret[WEB_AGENT_SECRET_LEN + 1];
+        if (web_agent_secret_make(cfg.agent_secret_path, secret, err, sizeof(err)) != 0) {
+            fprintf(stderr, "slothweb: %s\n", err);
+            web_frrs_destroy(&g_frrs);
+            web_store_close(&g_store);
+            web_server_close(&g_srv);
+            return 1;
+        }
+        web_frrs_set_agent(&g_frrs, secret);
+        fprintf(stderr, "slothweb: agent writes: a loopback POST carrying the secret in %s "
+                        "writes triage, notes and links, recorded via agent%s\n",
+                cfg.agent_secret_path,
+                cfg.read_only ? " (none now: --web-read-only)" : "");
+    }
     /* The owner's fleet (web_fleet.h): the export is served whatever
      * the flags say (it is a read, to the allow list); a pull only to
      * the peers --peer names, on a thread and a store connection of its
@@ -204,6 +224,11 @@ int main(int argc, char **argv) {
     web_fleet_init(&g_fleet, cfg.peer, cfg.npeer, cfg.peer_interval_s, cfg.peer_outside,
                    have_store ? &g_store : NULL);
     g_m4.fleet = &g_fleet;
+    /* A note on a satellite, an aircraft or a station is checked
+     * against the panel that holds it (web_notes.h). */
+    g_m4.gnss = &g_gnss;
+    g_m4.adsb = &g_adsb;
+    g_m4.aprs = &g_aprs;
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -392,6 +417,8 @@ int main(int argc, char **argv) {
     web_chmix_destroy(&g_chmix);
     web_chmix_destroy(&g_blemix);
     web_ble_destroy(&g_ble);
+    /* The run is over and so is its secret. */
+    if (cfg.agent_secret_path[0]) unlink(cfg.agent_secret_path);
     web_gnss_destroy(&g_gnss);
     web_adsb_destroy(&g_adsb);
     web_aprs_destroy(&g_aprs);

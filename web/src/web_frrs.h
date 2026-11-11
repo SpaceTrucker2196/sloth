@@ -50,7 +50,7 @@
  *            corroborates, it does not confirm).
  *
  * The write surface is slothweb's first (every other route is GET or
- * HEAD) and is deliberately narrow: POST only, to the seven paths
+ * HEAD) and is deliberately narrow: POST only, to the eight paths
  * web_http_post_path() names, which answer nothing else (a GET there is
  * 405 Allow: POST); JSON bodies of at most WEB_POST_MAX bytes
  * (WEB_IMPORT_MAX for the import); Content-Type checked; the Origin
@@ -188,7 +188,12 @@
  * incident. Appended, so 0..3 keep their stored values. */
 enum { WEB_TRI_UNTRIAGED = 0, WEB_TRI_FALSE, WEB_TRI_NOISE, WEB_TRI_INCIDENT,
        WEB_TRI_KNOWN, WEB_TRI_COUNT };
-enum { WEB_TRI_VIA_MANUAL = 0, WEB_TRI_VIA_RECOMMENDED, WEB_TRI_VIA_IMPORT };
+/* How a row was written. agent (3): through slothweb-mcp, with the
+ * run's agent secret (web_agent.h); never from a request's own say-so.
+ * Appended, so 0..2 keep their stored values; notes and links record
+ * the same numbers (0 or 3). */
+enum { WEB_TRI_VIA_MANUAL = 0, WEB_TRI_VIA_RECOMMENDED, WEB_TRI_VIA_IMPORT,
+       WEB_TRI_VIA_AGENT, WEB_TRI_VIA_COUNT };
 /* The triage= filter of /api/alerts (§5.4): the five states, and three
  * groups: any (every row, each carrying its triage), triaged (the four
  * decided states) and out (false, noise or known: what the tile counts
@@ -243,6 +248,8 @@ typedef struct {
     unsigned long triage_folded, triage_unchanged, ledger_evictions;
     unsigned long imports, exports;
     unsigned long links_made, links_removed;
+    unsigned long notes_added, notes_retracted, notes_folded;
+    unsigned long refused_agent, agent_writes;
 } web_frrs_stats_t;
 
 struct web_frrs_led;
@@ -253,6 +260,10 @@ typedef struct web_frrs {
     char                 assess_dir[4096];   /* --web-assessments, "" unset */
     int                  writes;      /* 0 under --web-read-only */
     long long            triage_cap;  /* WEB_FRRS_TRIAGE_CAP; the tests lower it */
+    long long            note_cap;    /* WEB_NOTE_CAP; the tests lower it */
+    int                  note_per;    /* WEB_NOTE_PER; the tests lower it */
+    /* The run's agent secret (web_agent.h), "" none: no agent path. */
+    char                 agent_secret[65];
     unsigned             nonce;       /* the suggestion tokens' */
     web_frrs_bucket_t    bucket[WEB_FRRS_PEERS];
     pthread_mutex_t      lmu;         /* the ledger's and the stats' */
@@ -335,8 +346,9 @@ int  web_frrs_route(const web_m4_t *m, web_live_t *live, const web_req_t *rq,
                     char **big, size_t *biglen);
 
 /* The write path's header checks (§5.3 steps 4-6), before a body byte
- * is read: Origin, Sec-Fetch-Site, the peer's token bucket, the
- * Content-Type. 0 to go on, else the status with the reason word in why
+ * is read: whose write it is (web_agent.h: the browser's, held to
+ * Origin and Sec-Fetch-Site, or the agent's, held to the run's secret),
+ * the peer's token bucket (an agent's its own), the Content-Type. 0 to go on, else the status with the reason word in why
  * (and "Retry-After: N\r\n" in extra for a 429). f may be NULL (no
  * module: 503 no_store). Counted. */
 int  web_frrs_gate(web_frrs_t *f, const web_req_t *rq, long long now_ms,
@@ -344,6 +356,10 @@ int  web_frrs_gate(web_frrs_t *f, const web_req_t *rq, long long now_ms,
 /* A refusal's JSON answer, headers and all, into out. Its length. */
 size_t web_frrs_refusal(int status, const char *why, const char *extra,
                         char *out, size_t outsz);
+
+/* The run's agent secret, from --web-agent-secret (web_agent.h); NULL
+ * or "" for none. Before the server runs. */
+void web_frrs_set_agent(web_frrs_t *f, const char *secret);
 
 /* The triage of one alert for the alert routes' triage= join. c is an
  * open sloth.db connection or NULL. 1 with *out filled, 0 untriaged

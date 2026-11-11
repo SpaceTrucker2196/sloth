@@ -58,6 +58,9 @@ typedef struct {
      * <TYPE>.md's front matter, "" unset. */
     int      read_only;            /* --web-read-only */
     char     assess_dir[4096];     /* --web-assessments */
+    /* Where the run's agent secret is written (web_agent.h); "" not
+     * given: no agent path. */
+    char     agent_secret_path[4096];   /* --web-agent-secret */
     /* The alert page's packet capture (web_pcapdir.h): the sensor's
      * --pcap-dir and, optionally, its --eapol-dir. None by default. */
     char     pcap_dir[WEB_PCAP_DIRS][4096];   /* --pcap-dir, repeatable */

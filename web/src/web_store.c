@@ -439,6 +439,45 @@ static const char STEP_V9_SQL[] =
     "CREATE UNIQUE INDEX relation_pair ON relation (a_kind, a_id, b_kind, b_id);\n"
     "CREATE INDEX relation_to ON relation (b_kind, b_id);\n";
 
+/* v9 -> v10 (owner request 2026-11-11: "an openclaw agent will need to
+ * ... add notes to anomalies, devices, and other observations"): a
+ * plain note on the things the page lists that are not findings, and
+ * how a link was written. note is one row per note or retraction,
+ * append-only: the kind of subject (0 a device, 1 a BLE advertiser, 2
+ * an SSID, 3 a GNSS satellite, 4 an aircraft, 5 an APRS station: a
+ * number, so a kind added later is a value, not a step), the subject's
+ * id as the routes name it (a canonical MAC, a BLE address and its
+ * type, the base64url of an SSID's octets and never its display form,
+ * "gnssid.prn", an ICAO address, a callsign), the text, who, from
+ * where, and how it was written (via: 0 the page, 3 an agent through
+ * slothweb-mcp; the triage table's own values); retracts is 0 on a
+ * note and the id of the note taken back on a retraction, which is a
+ * row as a triage clear is and never a delete; folded counts the
+ * retracted rows of the subject folded away at a cap (web_notes.h). An
+ * alert's or an anomaly's note stays its triage row: this table holds
+ * none. relation gains via, the same values, default 0: every link
+ * made before this step was the page's, which is what 0 says. The one
+ * step that is not CREATE alone: ADD COLUMN with a default is additive
+ * (the 2026-10-21 rule's own words, "columns or tables with
+ * defaults"), rewrites no stored value and rolls back with the rest. A
+ * file already holding the name note_subject fails the step at its
+ * last statement and stays at v9, relation as it was. */
+static const char STEP_V10_SQL[] =
+    "CREATE TABLE note (\n"
+    "  id       INTEGER PRIMARY KEY,\n"
+    "  kind     INTEGER NOT NULL,\n"
+    "  subject  TEXT NOT NULL,\n"
+    "  text     TEXT NOT NULL DEFAULT '',\n"
+    "  who      TEXT NOT NULL DEFAULT '',\n"
+    "  peer     TEXT NOT NULL DEFAULT '',\n"
+    "  via      INTEGER NOT NULL DEFAULT 0,\n"
+    "  retracts INTEGER NOT NULL DEFAULT 0,\n"
+    "  folded   INTEGER NOT NULL DEFAULT 0,\n"
+    "  ts       INTEGER NOT NULL\n"
+    ");\n"
+    "ALTER TABLE relation ADD COLUMN via INTEGER NOT NULL DEFAULT 0;\n"
+    "CREATE INDEX note_subject ON note (kind, subject, id);\n";
+
 typedef struct {
     int         from;
     const char *sql;
@@ -457,6 +496,7 @@ static const web_step_t STEPS[] = {
     { 6, STEP_V7_SQL, "created ble_device and ble_alert" },
     { 7, STEP_V8_SQL, "created peer_sites and peer_sightings" },
     { 8, STEP_V9_SQL, "created anom_subject and relation" },
+    { 9, STEP_V10_SQL, "created note and added relation.via" },
 };
 #define STEP_N ((int)(sizeof(STEPS) / sizeof(STEPS[0])))
 

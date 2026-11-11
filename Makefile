@@ -888,6 +888,20 @@ web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $
 	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) $(WEB_VERSION_DEF) -Iweb/src -iquote src -o slothweb $(WEB_MAIN) \
 	      $(WEB_SRCS) $(WEB_CORE_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDFLAGS) $(WEB_LDLIBS)
 
+# slothweb-mcp (owner request 2026-11-11): an MCP server for an agent on
+# the same machine, a thin client of slothweb's HTTP API on loopback
+# (web/mcp/mcp.h, docs/wiki/slothweb-mcp.md). A separate binary on
+# purpose, as sloth-research-mcp is: slothweb itself never grows a
+# JSON-RPC surface, and this links nothing of slothweb's, no SQLite and
+# no sloth source: libc alone. Built on demand; not in `all`, `web` or
+# the install. Its dispatcher, JSON and HTTP halves are also linked
+# into slothweb_test, which runs them against the real routes.
+WEB_MCP_LIB_SRCS = web/mcp/mcp.c web/mcp/mcp_json.c web/mcp/mcp_http.c
+WEB_MCP_SRCS     = web/mcp/main.c $(WEB_MCP_LIB_SRCS)
+.PHONY: web-mcp
+web-mcp:
+	$(CC) $(CFLAGS) $(WEB_VERSION_DEF) -Iweb/mcp -o slothweb-mcp $(WEB_MCP_SRCS) $(WEB_LDFLAGS)
+
 # The demo data (M6, #164): build/web/slothweb-demo writes a synthetic
 # sloth.db from sloth's own DDL and serves a generated JSONL stream on a
 # unix socket, so slothweb runs without a sensor (web/README.md's
@@ -916,14 +930,14 @@ web-quickstart-check:
 # 127.0.0.1 and ::1. The test links the embedder's
 # SHA-256 to recompute the page's CSP hashes; slothweb does not.
 web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C) $(WEB_ASMGEN) $(WEB_GNSS_C)
-	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) $(WEB_VERSION_DEF) -DSLOTHWEB_DEMO_LIB -Iweb/src -Iweb/tests -Iweb/tools \
+	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) $(WEB_VERSION_DEF) -DSLOTHWEB_DEMO_LIB -Iweb/src -Iweb/tests -Iweb/tools -Iweb/mcp \
 	      -Iinclude -iquote web/tools -iquote src -iquote research -DWEB_OUI_EXPECT='"$(if $(WEB_OUI_CSVS),ieee,sloth)"' \
 	      -DWEB_OUI_DATA='"$(WEB_OUI_DIR)"' \
 	      -DWEB_BTSIG_EXPECT='"$(if $(WEB_BTSIG_CSVS),sig,none)"' \
 	      -DWEB_BTSIG_DATA='"$(WEB_BTSIG_DIR)"' -DWEB_VKBGEN_BIN='"$(WEB_VKBGEN)"' \
 	      -DWEB_GNSS_EXPECT='"$(if $(WEB_GNSS_SNX),igs,none)"' \
 	      -DWEB_ASMGEN='"$(WEB_ASMGEN)"' -o slothweb_test \
-	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_CORE_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDLIBS)
+	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_MCP_LIB_SRCS) $(WEB_CORE_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDLIBS)
 	@$(call TEST_IN_TMPDIR,./slothweb_test)
 
 # Refresh web/data/ from /usr/share/ieee-data, or from the IEEE when that
@@ -1448,7 +1462,7 @@ mutate:
 clean:
 	rm -rf build
 	rm -f $(TARGET) $(TEST_BIN) $(NOFLAGS_BIN) research_ingest sloth-research-mcp
-	rm -f slothweb slothweb_test sloth-ble-scan
+	rm -f slothweb slothweb_test slothweb-mcp sloth-ble-scan
 	rm -f sloth_test_pcap   # the pre-#116 capture-path binary
 	rm -f $(patsubst %.c,%.o,$(CORE_SRCS_ALL) $(APP_SRCS) $(TEST_ONLY_SRCS) $(wildcard tests/*.c))
 

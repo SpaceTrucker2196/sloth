@@ -58,7 +58,7 @@ static void keep_path(web_req_t *rq, const char *t, size_t n) {
 static const char *const POST_PATHS[] = {
     "/api/frrs/triage", "/api/frrs/tacdb/unit", "/api/frrs/tacdb/platform",
     "/api/frrs/tacdb/emitter", "/api/frrs/tacdb/dismiss", "/api/frrs/import",
-    "/api/frrs/relate",
+    "/api/frrs/relate", "/api/frrs/note",
     NULL
 };
 
@@ -159,8 +159,14 @@ static void keep_post_headers(web_req_t *rq, const char *s, size_t n) {
             keep_text(v, vl, rq->origin, sizeof(rq->origin), &rq->origin_long);
         return;
     }
-    if ((v = header_value(s, n, "sec-fetch-site:", &vl)) != NULL)
+    if ((v = header_value(s, n, "sec-fetch-site:", &vl)) != NULL) {
         keep_text(v, vl, rq->fetch_site, sizeof(rq->fetch_site), &rq->fetch_site_long);
+        return;
+    }
+    if ((v = header_value(s, n, "x-slothweb-agent:", &vl)) != NULL) {
+        if (rq->agent_count++ == 0)
+            keep_text(v, vl, rq->agent, sizeof(rq->agent), &rq->agent_long);
+    }
 }
 
 /* RFC 9112 §5: field-name ":" ... with no whitespace before the colon,
