@@ -6804,6 +6804,13 @@ no longer for a `--known-mac` device, which was being described as the
 sensor's own radio. `ATTACK_PATH` has no self tag yet: the sensor keeps
 no record of its own IP addresses. [[alerts]].
 
+That left a rostered device passing repeatedly at full WARN. Owner
+ruling 2a: `RECURRING_TRANSIT` demotes a `--known-mac` device one step
+and tags it "rostered device", in its own words; "self" wins for an
+address on both rosters, and the key is unchanged. `PM_FORGE` and
+`BLOCKACK_ATTACK` are not softened by the roster: the station they
+name may be the one under attack.
+
 ## 2026-11-11 — `EVIL_TWIN`: one device's own radios are not a pair (#188)
 
 Every CRIT row on a field sensor over six days was the 2.4 and 5 GHz

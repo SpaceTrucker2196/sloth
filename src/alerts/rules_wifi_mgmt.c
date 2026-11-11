@@ -1037,7 +1037,17 @@ void rule_my_network_recon(const sloth_state_t *s, time_t now) {
  * Severity is WARN, not CRIT: a delivery van on a round, or a neighbour
  * with a short commute, produces this honestly. It is a lead, not a
  * conclusion, and the detail line carries the pass count and closest
- * approach so the operator can judge. */
+ * approach so the operator can judge.
+ *
+ * A device on the operator's --known-mac roster drops one step and is
+ * tagged "rostered device" (#183, owner ruling 2a): the subject here is
+ * the device doing the passing, and one the operator wrote down coming
+ * and going is the expected case, not a lead. That reasoning is this
+ * rule's alone. In PM_FORGE and BLOCKACK_ATTACK the station named is
+ * the one being attacked, so the roster must not soften them. "self"
+ * wins when an address is on both rosters: it is the narrower claim,
+ * and the two tags are one step each, never two. The tag and severity
+ * stay out of the key, so a device is one incident either way. */
 void rule_recurring_transit(const sloth_state_t *s, time_t now) {
     const long window = tune_val(TUNE_TRANSIT_WINDOW_SECS);
     const int  thresh = (int)tune_val(TUNE_TRANSIT_RECUR_THRESH);
@@ -1054,6 +1064,7 @@ void rule_recurring_transit(const sloth_state_t *s, time_t now) {
         char mac_buf[20];
         mac_to_str(d->mac, mac_buf, sizeof(mac_buf));
         int self = ownership_is_self_mac(d->mac);
+        int rostered = !self && ownership_is_known_device(d->mac);
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
         snprintf(key, sizeof(key), "transit:%s", mac_buf);
@@ -1062,9 +1073,11 @@ void rule_recurring_transit(const sloth_state_t *s, time_t now) {
         snprintf(detail, sizeof(detail),
                  "%s passed %d times in %ldm (closest %ddBm) - circling%s",
                  mac_buf, passes, span / 60, (int)d->best_rssi,
-                 self ? " - self (the sensor's own radio)" : "");
+                 self ? " - self (the sensor's own radio)"
+                      : rostered ? " - rostered device" : "");
         fire(ALERT_TYPE_RECURRING_TRANSIT,
-             self ? sev_demote_one(ALERT_SEV_WARN) : ALERT_SEV_WARN,
+             (self || rostered) ? sev_demote_one(ALERT_SEV_WARN)
+                                : ALERT_SEV_WARN,
              "RECURRING_TRANSIT", detail, key, NULL, 0, now);
     }
 }
