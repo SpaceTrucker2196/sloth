@@ -39,6 +39,9 @@
  *                 the distances between them (the Fleet tab)
  *   /api/fleet/shared JSON: ?kind=&limit=, keys seen here and at a peer,
  *                 GET only; a heap body
+ *   /api/fleet/locate JSON: ?kind=wifi|ap|ble&limit=, emitters two or
+ *                 more sites heard, located (web_locate.h); GET only;
+ *                 a heap body
  *   /events       Server-Sent Events: tick, record, anomaly, ping
  *   anything else 404
  *

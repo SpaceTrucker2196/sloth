@@ -243,7 +243,7 @@ static char *slurp(const char *path) {
     return buf;
 }
 
-/* The edges are sloth's model's (src/rf_distance.h and .c, read here so
+/* The edges are sloth's model's (src/rf_model.h and .c, src/rf_distance.h and .c, read here so
  * a change there fails this): P_tx 0 dBm assumed for BLE, 2440 MHz,
  * L(d0) = 20 log10(f) - 28, N 2.8, bands at 1, 3, 10, 30 m. A reading
  * exactly at an edge is the farther band, as rf_band_of()'s m < edge. */
@@ -263,13 +263,19 @@ static void test_proximity_edges(void) {
     WT_EQ(web_ble_prox_band(-81.2), WEB_BLE_BAND_FAR);
     WT_EQ(web_ble_prox_band(-127), WEB_BLE_BAND_FAR);
     WT_EQ(web_ble_prox_band(web_ble_prox_edge(3.0)), WEB_BLE_BAND_ROOM);
+    /* The coefficients live in rf_model.h since #192 I5 (the leaf the
+     * fleet's location links too); the bands stay in rf_distance.h. */
+    const char *mh = slurp("src/rf_model.h");
+    WT_ASSERT(mh != NULL);
+    if (mh) {
+        char want[64];
+        WT_HAS(mh, "#define RF_PTX_BLE_ASSUMED   0\n");
+        snprintf(want, sizeof(want), "#define RF_N_2G_X10        %d\n", WEB_BLE_PROX_N_X10);
+        WT_HAS(mh, want);
+    }
     const char *h = slurp("src/rf_distance.h");
     WT_ASSERT(h != NULL);
     if (h) {
-        char want[64];
-        WT_HAS(h, "#define RF_PTX_BLE_ASSUMED   0\n");
-        snprintf(want, sizeof(want), "#define RF_N_2G_X10        %d\n", WEB_BLE_PROX_N_X10);
-        WT_HAS(h, want);
         WT_HAS(h, "#define RF_BAND_IMMEDIATE_M  1.0\n");
         WT_HAS(h, "#define RF_BAND_NEAR_M       3.0\n");
         WT_HAS(h, "#define RF_BAND_ROOM_M      10.0\n");
@@ -279,9 +285,11 @@ static void test_proximity_edges(void) {
     WT_ASSERT(c != NULL);
     if (c) {
         WT_HAS(c, "    c->freq_mhz = 2440;\n");
-        WT_HAS(c, "    return 20.0 * log10((double)freq_mhz) - 28.0;\n");
         WT_HAS(c, "    if (m < RF_BAND_IMMEDIATE_M) return RF_DIST_IMMEDIATE;\n");
     }
+    const char *mc = slurp("src/rf_model.c");
+    WT_ASSERT(mc != NULL);
+    if (mc) WT_HAS(mc, "    return 20.0 * log10((double)freq_mhz) - 28.0;\n");
     WT_EQ(WEB_BLE_PROX_FREQ_MHZ, 2440);
     WT_EQ(WEB_BLE_PROX_PTX_DBM, 0);
 }

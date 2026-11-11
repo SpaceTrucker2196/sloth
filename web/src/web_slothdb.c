@@ -2015,9 +2015,10 @@ int web_sdb_seen(web_sdb_conn_t *c, int what, const char *key, const char *key2,
         if (!have_all(c, "devices", w)) return 0;
         sql = "SELECT signal_dbm, first_seen, last_seen FROM devices WHERE mac = ?1";
     } else if (what == WEB_SEEN_AP) {
-        static const char *const w[] = { "bssid", "signal_dbm", "first_seen", "last_seen", NULL };
+        static const char *const w[] = { "bssid", "signal_dbm", "first_seen", "last_seen",
+                                         "channel", NULL };
         if (!have_all(c, "beacon_aps", w)) return 0;
-        sql = "SELECT signal_dbm, first_seen, last_seen FROM beacon_aps WHERE bssid = ?1";
+        sql = "SELECT signal_dbm, first_seen, last_seen, channel FROM beacon_aps WHERE bssid = ?1";
     } else if (what == WEB_SEEN_PNL) {
         if (!(c->feats & WEB_QF_PNL) || !key2) return 0;
         sql = "SELECT NULL, first_seen, last_seen FROM pnl_ssids WHERE mac = ?1"
@@ -2031,14 +2032,40 @@ int web_sdb_seen(web_sdb_conn_t *c, int what, const char *key, const char *key2,
     if (what == WEB_SEEN_PNL) sqlite3_bind_text(st, 2, key2, -1, SQLITE_TRANSIENT);
     int rc = sqlite3_step(st), found = 0;
     if (rc == SQLITE_ROW) {
-        out->has_n3 = sqlite3_column_type(st, 0) != SQLITE_NULL;
-        out->n3 = sqlite3_column_int64(st, 0);
+        /* 0 is sloth's "never heard on the air", not 0 dBm. */
+        out->has_n3 = sqlite3_column_type(st, 0) != SQLITE_NULL &&
+                      sqlite3_column_int64(st, 0) < 0;
+        out->n3 = out->has_n3 ? sqlite3_column_int64(st, 0) : 0;
         out->first_seen = sqlite3_column_int64(st, 1);
         out->last_seen = sqlite3_column_int64(st, 2);
+        out->n2 = out->has_n3 ? out->last_seen : 0;
+        if (what == WEB_SEEN_AP && sqlite3_column_type(st, 3) != SQLITE_NULL)
+            out->n1 = sqlite3_column_int64(st, 3);
         found = 1;
     }
     sqlite3_finalize(st);
-    return rc == SQLITE_ROW || rc == SQLITE_DONE ? found : -1;
+    if (rc != SQLITE_ROW && rc != SQLITE_DONE) return -1;
+    if (found && what == WEB_SEEN_DEVICE && !out->has_n3) {
+        /* The device row holds no radio reading (it came from ARP or
+         * DHCP); the monitor's reading of the station, if it probed. */
+        static const char *const w[] = { "mac", "signal_dbm", "channel", "last_seen", NULL };
+        if (!have_all(c, "probe_clients", w)) return found;
+        if (sqlite3_prepare_v2(c->db, "SELECT signal_dbm, channel, last_seen FROM"
+                               " probe_clients WHERE mac = ?1 AND signal_dbm < 0",
+                               -1, &st, NULL) != SQLITE_OK)
+            return -1;
+        sqlite3_bind_text(st, 1, key, -1, SQLITE_TRANSIENT);
+        rc = sqlite3_step(st);
+        if (rc == SQLITE_ROW) {
+            out->has_n3 = 1;
+            out->n3 = sqlite3_column_int64(st, 0);
+            out->n1 = sqlite3_column_int64(st, 1);
+            out->n2 = sqlite3_column_int64(st, 2);
+        }
+        sqlite3_finalize(st);
+        if (rc != SQLITE_ROW && rc != SQLITE_DONE) return -1;
+    }
+    return found;
 }
 
 int web_sdb_card_aps(web_sdb_conn_t *c, long long limit, web_sdb_card_ap_fn fn,

@@ -22,7 +22,10 @@ column allow-list, every member name is held to `web_secret.h`, and a
 test seeds each one and holds it out. Slice F1 of #192 is the plumbing;
 F2 is the Fleet tab (the sites on a map, each peer's health, what was
 seen at more than one site) and the backfill of a kind an answer cut at
-its cap; the inferences across sites (F3, F4) come next.
+its cap. I5 locates an emitter two or more sites hear, from each site's
+signal strength (`/api/fleet/locate`, the map's located emitters), with
+each receiver calibrated by another site's own radio when it hears one;
+the other inferences across sites (F3, the rest of F4) come next.
 
 **Sources**: `web/src/web_fleet.h`, `web/src/web_fleet.c` (the export,
 the member allow-list, the HTTP/1.1 client, the ingest and its checks,
@@ -34,13 +37,18 @@ health member), `web/src/web_frrs.c` (`web_frrs_verdicts()`),
 `web/src/web_gnss.c` (`web_gnss_site()`), `web/src/web_secret.h`,
 `web/src/web_slothdb.c` (`web_sdb_devices_after()`, `web_sdb_aps_after()`,
 `web_sdb_seen()`), `web/ui/fleet.js`, `web/ui/fleet.css`,
-`web/tests/test_fleet.c`, `web/tests/test_store.c`
+`web/src/web_locate.h`, `web/src/web_locate.c` (I5), `src/rf_model.h`,
+`src/rf_model.c` (the path-loss model both sloth and slothweb link),
+`web/tests/test_fleet.c`, `web/tests/test_locate.c`, `web/tests/test_store.c`
 (`test_v7_file_is_migrated`), `web/README.md` ("Fleet"),
 [ADR 0008](adr/0008-own-fleet.md), [ADR 0006](adr/0006-sharing-is-opt-in.md),
 issue #192; RFC 9112 (HTTP/1.1 message syntax), RFC 6598 (the
-100.64.0.0/10 shared address space Tailscale numbers its nodes from).
+100.64.0.0/10 shared address space Tailscale numbers its nodes from);
+ITU-R P.1238-10 eq. (1), Tables 2 and 4, through
+`research/papers/rssi-distance-estimation.md` (I5's model, exponent and
+error).
 
-**Last updated**: 2026-11-11 (#192 F2 review: the alert backfill past the reader's 20,000-row scan, an F1 peer pulled without `next=1`, the shared list's verdicts in one pass); 2026-11-11 (#192 F2: the Fleet tab, `/api/fleet/overview`, `/api/fleet/shared`, the backfill); 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
+**Last updated**: 2026-11-11 (#192 I5: locating emitters from two or more sites' signal strength, `/api/fleet/locate`, the own-radio calibration and `own=1`, the overview's `calibration`, the map's located emitters and metre scale; a stored 0 dBm is no reading, and an ARP-only device takes its probe reading); 2026-11-11 (#192 F2 review: the alert backfill past the reader's 20,000-row scan, an F1 peer pulled without `next=1`, the shared list's verdicts in one pass); 2026-11-11 (#192 F2: the Fleet tab, `/api/fleet/overview`, `/api/fleet/shared`, the backfill); 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
 
 ## What travels, and what never does
 
@@ -266,6 +274,122 @@ ran out (checked between the lookups, which are each too short for the
 reader's own progress check); `scanned`, `keys` and `looked_up` say how far it got, and `local`
 whether `sloth.db` was read (`open`, `none`, `unavailable`, `ble`).
 
+## Locating emitters (I5)
+
+Each site that hears an emitter has a range to it from its signal
+strength, by sloth's own model (`src/rf_model.h`, linked by sloth and
+slothweb alike so the two cannot disagree; [[rf-distance]]):
+
+    d = 10 ^ ((P_tx - RSSI - (20 log10 f - 28) - offset) / N)
+
+ITU-R P.1238-10 eq. (1) on one floor, `N` from its Table 2 (2.8 at
+2.4 GHz and for BLE, 3.0 at 5 and 6 GHz), the shadow-fading sigma from
+its Table 4 (8 dB at 2.4 GHz, 12 dB above). The sources, read first-hand,
+are in `research/papers/rssi-distance-estimation.md`, whose section
+"Two or more sensors" covers this use. `P_tx` is assumed (a Wi-Fi client
+15 dBm, an AP 20, BLE 0, sloth's defaults): slothweb sees no TPC Report
+or TX Power element. A client's frequency is 2437 MHz unless its row
+names a channel (sloth's choice; across 2.4 GHz the term moves 0.2 dB).
+
+**The band.** One sigma, in quadrature: shadow fading, 6 dB for the
+assumed power, and 6 dB more for a receiver that is not calibrated (its
+antenna and receive chain unknown: W9FJC's 9 dBi panel is such a
+term). At 2.4 GHz that is 11.7 dB uncalibrated, a factor of 2.6 in
+distance each way, and 10 dB calibrated, 2.3. A "17 m" range is 7-38 m.
+
+**Calibration.** Each slothweb reads its host's own radios (the
+physical interfaces under `/sys/class/net`, at start) and names them to
+a peer that asks with `own=1` (the header's `own_macs`). A receiver
+that hears another site's own radio has one link of known length: the
+haversine between the two sites. Its offset is the measured path loss
+less the model's at that length, `rf_ref_offset_db()` as the sensor's
+`--my-bssid` calibration computes it, bounded by +/-20 dB; the median of
+a receiver's accepted links is its offset. One length fixes the offset,
+not the exponent: `N` stays P.1238's. The offset is a 2.4 GHz Wi-Fi
+receiver's, applied to 2.4 GHz Wi-Fi rows only, never to 5/6 GHz or
+BLE (`rf_distance.h` keeps its calibration per radio for the same
+reason). An offset past the bound is reported as `refused` with its
+value: a wall or a receiver far from the model, not a gain to correct.
+A link at most a day old counts.
+
+**Pairing in time.** A peer's value is its last RSSI as of its
+`last_seen`. Every site used for a key has `last_seen` within 120 s
+of the newest (two default pull intervals), on this site's clock (a
+peer's less its measured skew), and the newest is within 15 minutes of
+now; `unpaired` and `stale` count the keys left out. A Wi-Fi device's
+time is its row's `last_seen`, which an ARP or DHCP sighting also moves,
+so the pairing is no tighter than that.
+
+**Geometry**, on a plane tangent at the sites' centroid (east and north
+metres, equirectangular on the IUGG mean radius: well under a metre of
+error at a few kilometres):
+
+- two sites: the two range circles' crossings, 0, 1 (tangent) or 2
+  candidates, each with a radius of the two bands' half-widths combined
+  over the sine of the crossing angle (never below 0.25, so a tangent
+  crossing is spread along the line);
+- three or more: a weighted least-squares fix (Gauss-Newton, each range
+  weighted by its band), its rms residual and the fix's one-sigma from
+  the normal equations; collinear sites with the emitter on their line
+  give no fix;
+- always `nearest`: the site with the least path loss after each
+  receiver's offset, and by how many dB. When the circles do not cross,
+  this is the whole answer.
+
+A site with no other within 2 km shares no emitter and is not paired
+(`too_far`). Metres are quantised as sloth quantises a third party's
+proximity (0.5 m below 10 m, 1 m below 100 m, 10 m above).
+
+**What it is worth.** At W9FJC and beta-site, 16.8 m apart, a band of
++/-15 to 30 m is wider than the baseline, and the row says `coarse`:
+the candidates are not a position, only a side. What two sensors that
+close can say honestly is which one an emitter is nearer and by how
+many dB, and roughly how far; a point needs more sites, a longer
+baseline, or both. Three sites give a least-squares fix whose residual
+shows how far the ranges disagree.
+
+The live link (measured 2026-11-11): W9FJC's monitor hears beta-site's
+managed card at -52 dBm on probe requests, an offset of -7 dB (about its
+9 dBi antenna); beta-site hears W9FJC's card at -84 to -92 dBm, about
++29 dB, past the bound, so beta-site stays uncalibrated. Path loss is
+reciprocal, so a 36 dB asymmetry between the two directions is the two
+cards' powers and the two receivers' gains, not the path; beta-site
+reads APs both sites hear about 20 dB weaker than W9FJC does.
+
+**`GET /api/fleet/locate?kind=wifi|ap|ble&limit=N`** (50, 1..200; GET
+only): the newest 5,000 peer rows of the kind with a reading, grouped by
+key, each looked up at this site within the overview's budget as
+`/api/fleet/shared` does. `sites`: each site with a position, its plane
+coordinates, `too_far`, and its receiver's `calibration` (`state`
+`calibrated`, `refused` or `none`, `offset_db`, `exponent_x10`, and each
+`link`: `from`, `mac`, `rssi`, `dist_m`, `offset_db`, `accepted`,
+`age_s`). `rows`, newest first: `key`, `label`, `age_s`, `freq_mhz`,
+`ptx_dbm`, `ptx` (`assumed`), `exponent_x10`, `sites` (each `site`,
+`rssi`, `seen`, `range_m`, `lo_m`, `hi_m`, `sigma_db`, `calibrated`),
+`nearest` (`site`, `by_db`, `than`), `candidates` (`lat`, `lon`, `e`,
+`n`, `radius_m`), `method` (`two_circles`, `least_squares`),
+`residual_m`, `baseline_m`, `band_m` and `coarse`. Then `scanned`,
+`keys`, `looked_up`, `unpaired`, `stale`, `partial`. The overview gains
+`calibration`: each site, its count of own radios, and its receiver's
+state as above.
+
+**A stored 0 is no reading.** sloth stores 0 in a Wi-Fi row's signal
+for "never heard on the air" (an ARP- or DHCP-only device). F1 and F2
+sent and showed it as 0 dBm; from I5 the export sends none, the shared
+list shows none (a peer still on F2 included), and a device row without
+a reading takes `probe_clients`' reading of the same MAC, where sloth
+keeps the monitor's signal of a station heard probing. That is how a
+sensor's own managed card, whose `devices` row comes from ARP, has a
+signal at the other site.
+
+On the map: each located emitter's candidates as translucent circles of
+their radius, the key on hover or tap, the two-site range circles as
+dashed arcs for the row picked in the table, and a metre scale bar; the
+map fits the sites and the candidates, so at a 17 m baseline it is
+drawn in metres. A table under the map lists each located emitter: key,
+the sites with their ranges, the nearer site by dB, the method, and
+"coarse" when the band exceeds the baseline.
+
 ## The store: slothweb.db v8
 
 `peer_sites` is one row per peer name: its URL, the last attempt and
@@ -290,6 +414,7 @@ probing for the other's network (I2), one site's own SSID or BSSID at
 the other (I3), the same attack tool at both (I4), an emitter both hear
 (I5), a GNSS event regional or local (I6), an ADS-B cross-check (I7),
 verdicts shared (I8) and peer health (I9). F1 stores what they need;
+I5 is built (above);
 each inference is a slothweb fleet finding, not a sloth alert, and is
 held to the cited-basis rule when it lands.
 
@@ -299,6 +424,7 @@ held to the cited-basis rule when it lands.
 - [ADR 0006 — sharing is opt-in and sanitised](adr/0006-sharing-is-opt-in.md)
 - [[slothweb]] — the dashboard this runs in, the Fleet tab among its tabs.
 - [[location]] — the sensor positions the site block carries.
+- [[rf-distance]] — the single-sensor RSSI distance whose model I5 uses.
 - [[gnss]] — the receiver summary.
 - [[data-socket-exposure]] — the other network surface and its rules.
 - [[threat-model]]

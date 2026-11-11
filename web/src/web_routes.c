@@ -11,6 +11,7 @@
 #include "web_bledev.h"
 #include "web_evidence.h"
 #include "web_fleet.h"
+#include "web_locate.h"
 #include "web_bundle.h"
 #include "web_flows.h"
 #include "web_frrs.h"
@@ -1300,6 +1301,7 @@ static int route_fleet_export(const web_req_t *rq, const web_health_t *h, char *
     }
     web_fleet_src_t src = {
         h->m4 ? h->m4->sdb : NULL, h->ble, h->gnss, h->m4 ? h->m4->frrs : NULL,
+        h->m4 && h->m4->fleet ? h->m4->fleet->own_csv : NULL,
     };
     char *body = NULL;
     size_t bl = 0;
@@ -1364,6 +1366,7 @@ static int route_fleet_overview(const web_req_t *rq, const web_health_t *h, char
     int status = 200;
     web_fleet_src_t src = {
         h->m4 ? h->m4->sdb : NULL, h->ble, h->gnss, h->m4 ? h->m4->frrs : NULL,
+        h->m4 && h->m4->fleet ? h->m4->fleet->own_csv : NULL,
     };
     if (qlong(rq)) {
         status = 400;
@@ -1381,9 +1384,13 @@ static int route_fleet_overview(const web_req_t *rq, const web_health_t *h, char
 }
 
 /* /api/fleet/shared (web_fleet.h, F2): keys seen at this site and at a
- * peer. GET only, a heap body as /api/fleet/export's. */
-static int route_fleet_shared(const web_req_t *rq, const web_health_t *h, char *out,
-                              size_t outsz, web_resp_t *r) {
+ * peer; /api/fleet/locate (web_locate.h, #192 I5): the emitters two or
+ * more sites heard, located. GET only, a heap body as /api/fleet/export's. */
+typedef int (*fleet_heap_fn)(web_fleet_t *f, const web_fleet_src_t *src, const char *query,
+                             long long now_s, char **body, size_t *len, int *status);
+
+static int route_fleet_heap(const web_req_t *rq, const web_health_t *h, char *out,
+                            size_t outsz, web_resp_t *r, fleet_heap_fn fn) {
     if (rq->is_head) {
         r->status = 405;
         return fit(snprintf(out, outsz,
@@ -1405,12 +1412,13 @@ static int route_fleet_shared(const web_req_t *rq, const web_health_t *h, char *
     }
     web_fleet_src_t src = {
         h->m4 ? h->m4->sdb : NULL, h->ble, h->gnss, h->m4 ? h->m4->frrs : NULL,
+        h->m4 && h->m4->fleet ? h->m4->fleet->own_csv : NULL,
     };
     char *body = NULL;
     size_t bl = 0;
     int status = 200;
-    if (web_fleet_shared_route(h->m4 ? h->m4->fleet : NULL, &src, rq->query, h->wall_s,
-                               &body, &bl, &status) != 0 || !body || bl == 0) {
+    if (fn(h->m4 ? h->m4->fleet : NULL, &src, rq->query, h->wall_s,
+           &body, &bl, &status) != 0 || !body || bl == 0) {
         free(body);
         r->status = 503;
         r->out_len = web_http_response(503, 0, out, outsz);
@@ -1703,7 +1711,9 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
         if (!strcmp(rq->path, "/api/fleet/overview"))
             return route_fleet_overview(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/fleet/shared"))
-            return route_fleet_shared(rq, h, out, outsz, r);
+            return route_fleet_heap(rq, h, out, outsz, r, web_fleet_shared_route);
+        if (!strcmp(rq->path, "/api/fleet/locate"))
+            return route_fleet_heap(rq, h, out, outsz, r, web_fleet_locate_route);
         /* Without --web-allow-sql neither exists: a 404 like any path. */
         if (h->sql && h->sql->enabled) {
             if (!strcmp(rq->path, "/api/query"))

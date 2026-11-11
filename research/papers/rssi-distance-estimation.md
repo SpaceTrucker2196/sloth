@@ -1,7 +1,7 @@
 ---
 source_url: https://www.itu.int/rec/R-REC-P.1238/en
 retrieved: 2026-10-26
-topics: [rssi, distance, path-loss, log-distance, indoor-propagation, tx-power, tpc, ble, proximity, data-point]
+topics: [rssi, distance, path-loss, log-distance, indoor-propagation, tx-power, tpc, ble, proximity, data-point, multilateration, fleet]
 citation: ITU-R P.1238-10 (08/2019) eq. (1), Tables 2 and 4; ITU-R P.1238-13 (09/2025) §3.1 Table 2; Bluetooth Core Specification Supplement v11 Part A §1.5 (TX Power Level); Bluetooth Core v6.0 Vol 4 Part E §7.7.65.13 (LE Extended Advertising Report, TX_Power); IEEE 802.11-2020 §9.4.2.16 (TPC Report) and §9.4.2.8 (Country); Leith & Farrell, arXiv:2006.06822 (2020); Zafari, Gkelias & Leung, arXiv:1709.01015
 ---
 # Estimating distance from received signal strength
@@ -245,6 +245,47 @@ power. It is not applied to BLE, whose controller is a different
 receiver. One reference point corrects the offset, not `N`, and not the
 walls between the sensor and anyone else.
 
+## Two or more sensors (slothweb, #192 I5)
+
+slothweb's fleet location (`web/src/web_locate.c`, `docs/wiki/fleet.md`)
+takes the same model, coefficients and sigmas from `src/rf_model.h`
+(the leaf both programs link) and applies it at each of the owner's
+sensors that heard an emitter. Nothing in it needs a source beyond the
+ones above; what follows is what the sources above imply for it, and
+which parts are sloth's choices.
+
+- **The error is multiplicative.** The shadow-fading term is
+  log-normal in dB (P.1238-10 Table 4), so a one-sigma band of `s` dB is
+  a factor `10^(s/10N)` in range each way: the band grows with the
+  range. Two ranges of 17 m at sigma 10-12 dB are each roughly 7-40 m.
+  At the 2026-11 fleet's 16.8 m baseline that band is wider than the
+  baseline, and the location is reported as a side ("nearer A by X dB"),
+  not a point. This is arithmetic on P.1238's figures, not a separate
+  finding.
+- **Calibration by a known link.** A sensor's own radio at another
+  site's known position is the multi-sensor form of the `--my-bssid`
+  reference above: one link of known length gives the receiver's
+  offset, bounded at +/-20 dB as there, and the same caveat holds: one
+  length corrects the offset, not `N`, and not the walls between the
+  receiver and anyone else.
+- **Reciprocity.** Path loss between two antennas is the same in both
+  directions (the received level differs by the two transmit powers and
+  the two receive gains only), so a large asymmetry between the two
+  directions of an own-radio link is evidence about the radios, not the
+  path. On 2026-11-11 W9FJC heard beta-site's card at -52 dBm and
+  beta-site heard W9FJC's at -84 to -92 dBm.
+- **sloth's choices, uncited:** the extra 6 dB for an uncalibrated
+  receiver (the same size as the assumed-power term); pairing readings
+  within 120 s; the candidate radius as the bands' half-widths over the
+  sine of the crossing angle, floored at 0.25; the 2 km cut-off between
+  sites; weighted Gauss-Newton least squares for three or more sites.
+
+Not read and not cited: Rappaport (as above), and the RSS-localisation
+literature on the Cramer-Rao bound for this setting (for example
+Patwari et al., "Locating the Nodes", IEEE Signal Processing Magazine,
+2005), which a later pass should read before any of the above is
+tightened.
+
 ## Privacy
 
 This is an estimate of a third party's physical proximity. sloth emits
@@ -255,6 +296,8 @@ exported, persisted or derived beyond that.
 ## Related
 
 - `docs/wiki/rf-distance.md` — the operator-facing page.
+- `docs/wiki/fleet.md` — locating an emitter from two or more of the
+  owner's sensors (#192 I5).
 - `research/ieee/802.11-2020-11.8-spectrum-management.md` — TPC Report
   and Power Constraint.
 - `research/ieee/802.11d-country-element.md` — the Country element.

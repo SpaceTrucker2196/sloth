@@ -440,7 +440,15 @@ int  web_sdb_aps_after(web_sdb_conn_t *c, long long after_ts, const char *after_
  * it: a device by MAC (devices), an AP by BSSID (beacon_aps), a probed
  * SSID by MAC and SSID (pnl_ssids, key2; no signal). The key as stored
  * (sloth writes canonical lower-case MACs). 1 found, 0 none (or no such
- * table), -1. The fleet's local side (web_fleet.h). */
+ * table), -1. The fleet's local side (web_fleet.h).
+ *
+ * The signal is a radio reading or nothing: sloth stores 0 for "never
+ * heard on the air" (an ARP- or DHCP-only device, docs/wiki/rf-distance.md),
+ * so 0 or above is no signal (#192 I5: it was shown as 0 dBm). A device
+ * whose row holds none takes probe_clients' reading of the same MAC,
+ * where sloth keeps the monitor's signal of a station heard probing. n2
+ * is the time of the reading the signal came from (that row's
+ * last_seen; 0 with no signal), n1 its channel when the row has one. */
 enum { WEB_SEEN_DEVICE = 0, WEB_SEEN_AP, WEB_SEEN_PNL };
 int  web_sdb_seen(web_sdb_conn_t *c, int what, const char *key, const char *key2,
                   web_sdb_item_t *out);
