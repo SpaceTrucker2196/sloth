@@ -244,7 +244,7 @@
         <div class="vrows" id="d-rows"></div>
       </div>
       </div>
-      <div class="sub">src: A arp, D dhcp, P probe, B beacon, S station; name: D dhcp, m mdns, N nbns, h sloth's hostname, p PTR seen on the wire; ~ a randomised (locally administered) mac. Click a row for everything known. A column header sorts (the server picks the rows, by mac, vendor, ip, ssid, dBm, src, risk, first or last); drag, arrow or double-click its right edge to resize.</div>
+      <div class="sub">src: A arp, D dhcp, P probe, B beacon, S station; name: D dhcp, m mdns, N nbns, h sloth's hostname, p PTR seen on the wire; ~ a randomised (locally administered) mac. Click a row for everything known. A column header sorts (the server picks the rows, by mac, vendor, ip, ssid, dBm, src, risk, first or last); drag, arrow or double-click its right edge to resize. The dBm column is an S-meter: the lit run is the last reading, the number beside it its S reading and dBm. <span class="smkey"></span></div>
     </section>
    </div>
    <div id="v-lookup" hidden>
@@ -338,7 +338,7 @@
     <section class="panel">
       <div class="label">satellites in view <span class="sub" id="gnss-count"></span> <span class="dt-tools" id="gnss-tools"></span></div>
       <div class="hscroll" id="gnss-box"><div class="gnssrow dhead" id="gnss-thead"></div><div id="gnss-rows"></div></div>
-      <div class="sub">one row per satellite as the receiver lists it, sorted by C/N0 (the TUI's [#] order); a column header sorts, drag its right edge to resize. Bright rows are in the solution, dim rows unhealthy, as the TUI draws them; the signal cell is heat-graded over 50 dB-Hz with the TUI's thresholds; the trail is the row's last records (change-only: a point per band change or 300 s heartbeat). Click a row for its figures.</div>
+      <div class="sub">one row per satellite as the receiver lists it, sorted by C/N0 (the TUI's [#] order); a column header sorts, drag its right edge to resize. Bright rows are in the solution, dim rows unhealthy, as the TUI draws them; the C/N0 number is heat-graded over 50 dB-Hz with the TUI's thresholds; the signal cell is a meter of ten 5 dB-Hz segments over 0..50 dB-Hz (C/N0 is dB-Hz, not dBm, so it has no S-units), lit to the row's C/N0 now, its two ticks the least and greatest of the row's last records (change-only: a record per band change or 300 s heartbeat). Click a row for its figures.</div>
     </section>
     <section class="panel gnss-two">
       <div>
@@ -380,7 +380,7 @@
     <section class="panel">
       <div class="label">aircraft <span class="sub" id="adsb-count"></span> <span class="dt-tools" id="adsb-tools"></span></div>
       <div class="hscroll" id="adsb-box"><div class="adsbrow dhead" id="adsb-thead"></div><div id="adsb-rows"></div></div>
-      <div class="sub">one row per address the decoder lists; an emergency first, then live before gone, the most recently heard first. A column header sorts, drag its right edge to resize. Bright rows have a position, dim rows are gone (kept 10 minutes); altitude is heat-graded over 45,000 ft and RSSI over -50..0 dBFS. The emergency status and the reserved squawks 7500 / 7600 / 7700 show in the peak colour as the decoder reports them. Click a row for its figures.</div>
+      <div class="sub">one row per address the decoder lists; an emergency first, then live before gone, the most recently heard first. A column header sorts, drag its right edge to resize. Bright rows have a position, dim rows are gone (kept 10 minutes); altitude is heat-graded over 45,000 ft and RSSI over -50..0 dBFS; the signal cell is a meter of ten 5 dB segments over the same -50..0 dBFS (the decoder's level against its own full scale, not dBm, so it has no S-units). The emergency status and the reserved squawks 7500 / 7600 / 7700 show in the peak colour as the decoder reports them. Click a row for its figures.</div>
     </section>
     <section class="panel">
       <div class="label">positions <span class="sub" id="adsb-plot-note"></span></div>
@@ -526,7 +526,7 @@
       <div class="aprow dhead" id="w-aps-head"></div>
       <div id="w-aps"></div>
       </div>
-      <div class="sub">nearest first by default (sloth.db's last signal); a square after the SSID for each SSID the BSSID has beaconed, in the warning colour above one (KARMA, multi-VAP), with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers</div>
+      <div class="sub">nearest first by default (sloth.db's last signal); a square after the SSID for each SSID the BSSID has beaconed, in the warning colour above one (KARMA, multi-VAP), with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers. The dBm column is an S-meter: the lit run is the last reading, the number beside it its S reading and dBm. <span class="smkey"></span></div>
     </section>
     <section class="panel">
       <div class="label">chains <span class="sub" id="w-ch-note"></span></div>
@@ -544,7 +544,7 @@
       <div class="dhead" id="w-cl-head"></div>
       <div id="w-cl"></div>
       </div>
-      <div class="sub">sloth.db's devices with a probe_clients row last seen in the window, nearest first: the dBm column on the fixed scale with sloth's own distance words, and the 24 h presence; click a row for its drawer</div>
+      <div class="sub">sloth.db's devices with a probe_clients row last seen in the window, nearest first: the dBm column with sloth's own distance words, and the 24 h presence; click a row for its drawer. The dBm column is an S-meter: the lit run is the last reading, the number beside it its S reading and dBm. <span class="smkey"></span></div>
     </section>
    </div>
    <div id="v-alerts" hidden>
@@ -948,7 +948,7 @@
     <div class="label">advertising rate <span class="sub" id="bdr-rate-note"></span></div>
     <canvas class="spark" id="bdr-rate" aria-label="advertisements per second between this row's records"></canvas>
     <div class="label">signal over the waterfall's window <span class="sub" id="bledev-rssi-note"></span></div>
-    <canvas class="spark bledev-rssi" id="bledev-rssi" aria-label="this address's signal over the BLE waterfall's window, coloured by the proximity grade"></canvas>
+    <canvas class="spark bledev-rssi" id="bledev-rssi" role="img" aria-label="this address's signal strength as an S-meter: the last sample, and the window's least and greatest"></canvas>
     <div class="sub" id="bledev-class"></div>
     <div class="sub" id="bledev-chans" hidden></div>
     <div class="label">ble alerts naming it</div>

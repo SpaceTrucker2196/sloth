@@ -146,7 +146,6 @@
     { k: "us", label: "USED", w: 5, min: 3, type: "text", val: function (s) { return s.used ? "yes" : "-"; } },
     { k: "hl", label: "HLTH", w: 5, min: 3, type: "text", val: function (s) { return num(s.health) ? HEALTH[s.health] || "?" : "?"; } },
     { k: "sg", label: "SIGNAL", w: 12, min: 6, type: "num", val: val("cn0") },
-    { k: "tr", label: "TRAIL", w: 13, min: 6, type: "none" },
     { k: "ag", label: "AGE", w: 5, min: 3, type: "time", val: val("ts") }
   ];
   function table() {
@@ -156,29 +155,26 @@
     return T;
   }
   function cell(cls, text) { var c = el("span", cls); if (text !== undefined) c.textContent = String(text); return c; }
-  function trail(c, pts) {
-    var dpr = window.devicePixelRatio || 1, W = 96, H = 14;
-    c.width = W * dpr; c.height = H * dpr;
-    var g = c.getContext("2d");
-    if (!g) return;
-    g.scale(dpr, dpr);
-    g.clearRect(0, 0, W, H);
-    if (!pts || pts.length < 1) return;
-    var t0 = pts[0][0], t1 = pts[pts.length - 1][0], span = Math.max(1, t1 - t0);
-    g.lineWidth = 1.5;
-    var px = 0, py = 0;
-    for (var i = 0; i < pts.length; i++) {
-      var x = pts.length === 1 ? W - 2 : 1 + (pts[i][0] - t0) / span * (W - 3);
-      var y = H - 1 - Math.min(1, pts[i][1] / SPAN_DBHZ) * (H - 2);
-      g.strokeStyle = heatColor(pts[i][1] / SPAN_DBHZ);
-      if (i) { g.beginPath(); g.moveTo(px, py); g.lineTo(x, y); g.stroke(); }
-      g.fillStyle = g.strokeStyle;
-      g.fillRect(x - 1, y - 1, 2, 2);
-      px = x; py = y;
-    }
+  // The signal cell (owner ruling 2026-11-11: every signal graphic is
+  // the meter, glyph.sm): C/N0 is dB-Hz, not dBm, so no S-units, the
+  // same segmented face over 0..SPAN_DBHZ in ten equal segments. The lit
+  // run is the row's C/N0 now; the two ticks are the least and greatest
+  // of the row's last records, which is what the trail column's line
+  // said about movement before the meter took its place. A satellite
+  // not tracked (no C/N0, or 0) is the dash and no segment.
+  var SM_DBHZ = glyph.smScale(0, SPAN_DBHZ, SPAN_DBHZ / 10, 10, 0);
+  function sigCell(s) {
+    var sig = cell("c-sg"), cn = num(s.cn0) && s.cn0 > 0 ? s.cn0 : null;
+    var r = cn === null ? null : glyph.smRange(s.points);
+    var words = cn === null ? "C/N0: not tracked"
+      : "C/N0 " + cn.toFixed(1) + " dB-Hz on a 0 to " + SPAN_DBHZ + " dB-Hz meter" +
+        (r && r[1] > r[0] ? "; the row's last records " + r[0].toFixed(1) + " to " + r[1].toFixed(1) : "");
+    sig.title = words;
+    if (window.SlothRf) window.SlothRf.meter(sig, cn, { scale: SM_DBHZ, lo: r ? r[0] : null, hi: r ? r[1] : null }, words);
+    return sig;
   }
   // A row under the columns: bright when in the solution, dim when
-  // unhealthy, the TUI's; the signal cell heat-graded over 50 dB-Hz.
+  // unhealthy, the TUI's; the C/N0 number heat-graded over 50 dB-Hz.
   function row(s, now, j) {
     var on = sel && sel.gnssid === s.gnssid && sel.prn === s.prn;
     var cls = s.health === 2 ? "d-dim" : s.used ? "d-bright" : "d-normal";
@@ -193,16 +189,7 @@
     r.appendChild(cell("c-cn n " + (num(s.cn0) ? heatClass(s.cn0 / SPAN_DBHZ) : "d-dim"), fx(s.cn0, 1)));
     r.appendChild(cell("c-us", s.used ? "yes" : "-"));
     r.appendChild(cell("c-hl", num(s.health) ? HEALTH[s.health] || "?" : "?"));
-    var sig = cell("c-sg " + (num(s.cn0) ? heatClass(s.cn0 / SPAN_DBHZ) : ""));
-    var bar = el("span", "gnss-bar");
-    bar.style.width = (num(s.cn0) ? Math.round(Math.min(1, s.cn0 / SPAN_DBHZ) * 100) : 0) + "%";
-    sig.appendChild(bar);
-    r.appendChild(sig);
-    var tc = cell("c-tr");
-    var c = el("canvas", "trail");
-    c.title = "C/N0 over the row's last records";
-    tc.appendChild(c);
-    r.appendChild(tc);
+    r.appendChild(sigCell(s));
     r.appendChild(cell("c-ag d-dim", age(s.ts, now)));
     r.tabIndex = 0;
     function pick() {
@@ -212,7 +199,6 @@
     }
     r.addEventListener("click", pick);
     r.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
-    r._trail = [c, s.points];
     void j;
     return r;
   }
@@ -223,9 +209,7 @@
     var ordered = t ? t.sort(rows, true) : rows.slice();
     var body = clear($("gnss-rows"));
     set("gnss-count", rows.length + (j.sky && j.sky.overflow ? " (+" + j.sky.overflow + " more than sloth's table holds)" : ""));
-    var drawn = [];
-    ordered.forEach(function (s) { var r = row(s, now, j); body.appendChild(r); drawn.push(r); });
-    drawn.forEach(function (r) { trail(r._trail[0], r._trail[1]); });
+    ordered.forEach(function (s) { body.appendChild(row(s, now, j)); });
   }
   function tableLoad(j) {
     rows = (j.sats || []).slice();

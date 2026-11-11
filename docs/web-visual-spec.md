@@ -16,6 +16,16 @@
 > | 4. Flows first mode (F11) | **Matrix first**, chord second |
 > | 5. Overview tile order (§6.1) | **Urgency first**: open alerts, open anomalies, sensor health, throughput, devices, records |
 
+> **Owner rulings, 2026-11-11** (these win over the body below and over ruling 3 above):
+>
+> | Subject | Ruling |
+> |---|---|
+> | Every signal graphic | "make all signal graphs a s-meter style bar". **G2's range sparkline is replaced by the S-meter** (§5 G2, rewritten below) in every place the page draws a signal's strength: the DBM columns, the drawer, the Lookup card, the emitter report (as text), the BLE drawer, and on their own units the GNSS C/N0 cell (the per-row C/N0 trail goes with it) and the ADS-B signal cell. Where this document says G2 in §4, §6, §7 and §10 it now means the meter |
+> | The scale | **Confirmed**: 6 dB per S-unit, S1 = -95 dBm and S9 = -47 dBm at 2.4 GHz. A display scale, not the IARU reference (S9 = -93 dBm above 30 MHz), which would pin nearly every 802.11 reading past S9 |
+> | The S reading | "yes add S+ numbers for wifi". **Required** beside every 802.11 meter, with the dBm number kept: `S1` to `S9`, then `S9+10` and `S9+20`, stepped in tens as the face's segments are (the exact figure is the dBm number). BLE RSSI carries the same reading |
+> | The band | "make the s-meter appropriate for the band". **The scale is the band's**: one table (`SM_BANDS`, `web/ui/glyph.js`) gives each band's S9, the 5 and 6 GHz rows lower than 2.4 GHz by the extra free-space path loss. **This amends R3** for the meter: an RSSI glyph is on its band's scale, not one fixed scale, and every table says so once with each band's S9; the dBm number beside the meter is the raw value on every band |
+> | Ruling 3 (the -67 dBm line) | **Dropped from the glyph.** The meter carries two peak-hold ticks; a third tick for -67 dBm does not read at 72 px. -67 dBm is S5 at 2.4 GHz |
+
 ## 0. What this document is
 
 This is a review of the slothweb page and a specification for a small set of graphics that the page should use. The graphics follow the rules Edward Tufte sets out in *The Visual Display of Quantitative Information*, *Envisioning Information* and *Beautiful Evidence*, and the later work that tested those rules (Cleveland on aspect ratio, Heer on horizon graphs, Few on bullet graphs). The review is written from two seats: a security researcher who watches a local network, and an intelligence analyst who must keep situational awareness of the local RF environment.
@@ -220,9 +230,43 @@ Answers: *what is the value now, and is it normal.*
 - **Colour:** one ink. Heat only out of band. No level grading (F7).
 - **TUI form:** the existing `▁▂▃▄▅▆▇█` sparkline in `CP_NORMAL`, with the last cell in `CP_HEAT_*` when out of band. The band is the `±` number after it.
 
-### G2. Range sparkline (RSSI)
+### G2. S-meter (signal strength)
 
-Answers: *how near is this emitter, and is it moving.*
+Answers: *how near is this emitter, and how much has it moved.*
+
+Owner rulings of 2026-11-11 (the header). A receiver's S-meter: a horizontal bar of segments lit up to the reading.
+
+```
+   ▮▮▮▮▮▮▮▯▯ ▯▯   S7 -58  room ↘     ← lit to the last value; the S reading, the dBm, sloth's words
+       ╵   ╵                         ← two peak-hold ticks: the window's least and greatest
+   S 1 2 3 4 5 6 7 8 9  +10 +20      ← the face, drawn once per table with every band's S9
+```
+
+- **Data:** unchanged: the row's `"rf"` member (`rf.rssi.bssid`, `rf.rssi.sta`, §7 as built), `rf.rssi.ble` in the BLE drawer, the report's `series_rssi`.
+- **The face:** nine segments S1 to S9, 6 dB apart, then two segments 10 dB apart (`+10`, `+20`), to 27 dB over S9. A segment is lit when the value has reached its edge. Whole-pixel segments 1 px apart, 3 px at the S9 boundary.
+- **The scale is the band's** (this amends R3):
+
+| Band | Middle used | S9 | S1 | Top of the face | Reasoning |
+|---|---|---|---|---|---|
+| 2.4 GHz (and BLE) | 2442 MHz | -47 dBm | -95 dBm | -20 dBm | S1 is the floor of the range R3 gave every RSSI glyph, eight 6 dB units under S9; the top is that range's top |
+| 5 GHz | 5500 MHz | -54 dBm | -102 dBm | -27 dBm | 20 log10(5500 / 2442) = 7.05 dB more free-space path loss than 2.4 GHz, so the whole scale is 7 dB lower |
+| 6 GHz | 6535 MHz | -56 dBm | -104 dBm | -29 dBm | 20 log10(6535 / 2442) = 8.55 dB, rounded to 9 |
+| unknown | - | the 2.4 GHz row | | | a reading whose row names no band reads on the 2.4 GHz row and its label says `band unknown: 2.4 GHz scale`; a band is never guessed |
+
+  The band is the one the row's own record names: sloth's band label where there is one (the `"rf"` member's `radio`, from the latest beacon's or probe_client's channel and a beacon's `channel_source`; the report's BEI band), else the row's channel number as `ap_band_label()` reads one. A probe has no `channel_source`, so a 6 GHz channel number in one reads as the 2.4 or 5 GHz number it shares. The step is 6 dB on every band. Sloth reports no dBm for a ham or aviation band (ADS-B's RSSI is dBFS; APRS carries none), so the IARU reference is used nowhere.
+- **Marks:** the lit run (`--tui-normal` to S9, `--heat-3` past it), an unlit segment as a 2 px `--rule` line, and two `--ink` ticks at the window's least and greatest reading, full height, on the same band's row. The ticks are what the sparkline's line said about movement; they are drawn only where the window moved. No -67 dBm rule.
+- **Words:** the S reading (`S7`, `S9+10`: stepped as the face is) and the dBm number, always both. The number is bold when sloth's own trend says approaching, and sloth's band and trend glyph follow, as before. The canvas's label says the reading, the range and the scale in words.
+- **Size:** 72 by 14 px in a table cell, as G2 was; 18 px tall at a drawer's width.
+- **States:** no reading is the `--faint` dash and no segment; one reading is the lit run alone; a reading past either end is drawn at the end and counted (`glyph.smClamped()`).
+- **Greyscale (R10):** lit against unlit is height as well as tone; the S9 boundary is the wider gap; the ticks are the only full-height marks.
+- **Other units:** a strength that is not dBm has no S-units. GNSS C/N0 is the same face over 0 to 50 dB-Hz in ten equal segments, ADS-B's RSSI over -50 to 0 dBFS in ten, neither with a second run or labels.
+- **TUI form:** the character cells the emitter report prints, `███████▁▁ ▁▁  S7`, a full block a lit segment and `▁` an unlit one, a space at S9; the TUI's Devices Enter detail does not draw it yet.
+
+#### G2 as first specified: the range sparkline (superseded 2026-11-11)
+
+Kept for the record; `glyph.g2()` is still in `web/ui/glyph.js` with its tests and has no caller.
+
+Answered: *how near is this emitter, and is it moving.*
 
 ```
    -40 ┤          ╭─●  -45   ← last value and the number, bold if climbing 10 dB in 10 min
@@ -433,7 +477,7 @@ These are the operational rules every glyph and panel follows. A review of a slo
 
 - **R1. One ink.** A line is `--tui-normal`. The band is `--data` at 12 percent. Grey (`--rule`, `--faint`, `--muted`) carries structure. Colour carries only out of band (the heat ramp), severity (the `--sev-*` tokens, on alerts and chain bars only), identity (the hash hues on addresses and SSIDs, as ruled), and the one accent (`--signal`, once per panel).
 - **R2. Fixed heights, data-driven widths.** A glyph's height is set by the text line it sits in (14 px in a table, 18 px in a tile). Its width follows the container. Never the other way round.
-- **R3. Shared scales inside a set.** Small multiples share a y-scale by default and say so. `own scale` is a toggle and prints each cell's maximum. RSSI is always on the fixed -95 to -20 dBm scale.
+- **R3. Shared scales inside a set.** Small multiples share a y-scale by default and say so. `own scale` is a toggle and prints each cell's maximum. RSSI is always on the fixed -95 to -20 dBm scale. *Amended 2026-11-11 for the S-meter: an RSSI meter is on the scale of the band it was heard on (§5 G2's table; -95 to -20 dBm is the 2.4 GHz row), the table says so once, and the dBm number beside it is the raw value.*
 - **R4. Honest windows.** When data covers less than a tenth of the window, the glyph shrinks the window to the data and the caption says `6 min of 24 h`. A band chart carries at least three time labels and a now mark.
 - **R5. Three empty states.** `no data` (a `--faint` dash), `warming` (the line without the band, the word in the caption), and a gap (a break in the line). They never look alike. An empty panel collapses to its caption.
 - **R6. Fewer than five points draw dots.** A line through three buckets claims a shape the data does not have.
@@ -470,6 +514,7 @@ One child issue per slice, in the dark-factory style, each green on its own.
 | V2 | **Done** (#171 V2). `ap.rssi` and `sta.rssi` as the existing `rf.rssi.bssid` and `rf.rssi.sta` (§7, as built); G2 on the Devices and AP tables' DBM columns, the drawer and the Lookup card (F9, F20), its words and bold from sloth's distance band and trend; the `new` mark and G5's first-seen cell (F15); G6 on risk, karma (on `karma_candidates.score`, the TUI's 1 to 7 `[y]` score, tick at 3, the least a corroborated candidate scores; F17's `karma 82` was a mockup), the anomaly score (cards and table) and the anom and flow total counts (F17). Left: G2's TUI half (the Devices Enter trail on the fixed scale, R12), the Flows `counts` column (several numbers a cell), G4's 56 by 28 form on the Lookup card (§6.8), G2 on the managed card's tables (no series: another receiver) and on the WiFi Clients panel (V3's layout). | V0 |
 | V3 | **Done** (#171 V3). G3 horizon strips with absolute scales on the WiFi view (F8): `/api/wifi/channels` rows carry `scale` (`absolute` with the channel's own 30 d `max`, or `z`) and `ctrl_total`'s `z` per cell against the hour-of-week baseline, the second band at the slider's k, rows every channel seen in 30 d; the stacked top-5 drill-in per column beside the strips (ruling: both), the stacked grid one control away; G7 on History (F12: the route already counted per column) and as the chains panel's deauth rug (F16: collapses to its caption); the four-panel layout (§6.3), emitters nearest first with the SSID count as `▪`, clients rows with G2 and G5. Left: the probe-flood rug (needs the alert type table on the page), per-severity alert ticks on History's rug, the TUI forms of G3 and G7 (R12). | V1, V2 |
 | V4 | **Done** (#171 V4). G8 in `glyph.js` (F14): four lanes in the chain's order (deauth, twin, assoc, karma), deauth frames and associations as ticks on one scale, each DEAUTH_FLOOD, EVIL_TWIN and KARMA_AP incident a bar in the severity it reached with its word in the lane's label, the links sloth made (the deauth taint, the attribution) as `--faint` connectors with their reasons, from `/api/wifi/chain` (§7, as built); placed on the WiFi chains panel (one G8 per BSSID with more than one stage, the rest the G7 rug), on the alert page for the BSSID its key names, and in the drawer for a BSSID with more than one stage (§6.3, §6.8). The Flows matrix first and the chord second (ruling 4, F11, §6.6), each cell a G6 count bar on the matrix's one scale with its count and its protocols as letters, SMB1 in the critical colour. Left: G8's TUI form (R12); the matrix's TUI form (G6's exists, the layout does not); a BSSID with no deauth key in the window is not a candidate on the WiFi panel (its alert page and drawer still draw it); the probe-flood rug (V3's, still owed). | V3 |
+| S-meter | **Done** (2026-11-11, owner request; the header's rulings). `glyph.sm()` and its scale, band, word and text helpers as new functions in `glyph.js` beside G2's, which stays with no caller; placed by `web/ui/rf.js` in the Devices, AP and clients DBM columns (the S reading beside the dBm, the column 46 px wider for it), the drawer and the Lookup card; the emitter report's line as character cells; the BLE drawer on the 2.4 GHz row; the GNSS signal cell on 0 to 50 dB-Hz (the trail column removed) and the ADS-B signal cell on -50 to 0 dBFS. The `"rf"` member gains `radio`, the band the latest record was heard on. Left: the TUI form (R12); a 6 GHz probe's band (no `channel_source` on a probe_client); the BLE waterfall, the GNSS history plot and the map's dots, which grade signal by colour over time or place and are not level meters. | V2 |
 | Radar | **Done** (2026-11-06, owner request). Not a glyph of §5 but a view: one orthographic half-dome centred on the sensor (`web/ui/radar.js`, `docs/web-ui-spec.md` §8.14) placing GNSS satellites at az/el, aircraft and APRS stations at their true bearing and elevation angle with the range on a log scale (0.3 m to 300 km), and the Wi-Fi and BLE distance bands as counted rings from the new `/api/radar` census; drag, tilt, zoom, pick, a side panel with a way into each family's tab; the camera kept as `radar.*`. Exempt from R12 by the ruling recorded under it; meets R1, R8, R9, R10. The sensor's position came first as `sensor_health`'s `loc_*` and `/api/gnss` `loc`. | the GPS Sat, ADS-B, APRS and BLE tabs |
 
 V0 and V1 are the MVP of this spec: after them every number on the Overview has its comparison. V2 is the RF half. V3 and V4 are the analyst's projection layer.

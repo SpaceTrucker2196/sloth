@@ -9,8 +9,6 @@
 .gnssrow.on { border-left-color: var(--signal); }
 .gnssrow:focus-visible { outline-offset: -1px; }
 .gnssrow > span { color: inherit; }
-.gnssrow canvas.trail { width: 96px; height: 14px; display: inline-block; vertical-align: middle; }
-.gnss-bar { display: inline-block; height: 8px; vertical-align: middle; background: currentColor; max-width: 100%; }
 /* The constellation swatch and the sky's key (gnssColor(), --k-0..7). */
 .gnss-sw { display: inline-block; width: 8px; height: 8px; margin-right: 4px; vertical-align: baseline; border-radius: 1px; }
 .gnss-legend { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 4px; }

@@ -448,6 +448,149 @@ static g2w_t gl_g2_words(int have_last, double last, const char *band, const cha
     else snprintf(o.nearw, sizeof(o.nearw), "%s", *b ? b : t);
     return o;
 }
+/* ── the S-meter, ported (owner rulings 2026-11-11) ─────────────── */
+
+/* glyph.js's sm*(): the face, the band table, the level, the words,
+ * the geometry and the mark list, line for line. A reading is `have`
+ * and a value, as the other ports take a number-or-null. */
+#define GL_SM_DB       6
+#define GL_SM_UNITS    9
+#define GL_SM_OVER_DB  10
+#define GL_SM_OVER_TOP 27
+#define GL_SM_EDGES    24
+static const struct { const char *band; double mhz; int s9; } GL_SM_BANDS[] = {
+    { "2.4 GHz", 2442, -47 },
+    { "5 GHz", 5500, -54 },
+    { "6 GHz", 6535, -56 },
+};
+#define GL_SM_NBANDS ((int)(sizeof(GL_SM_BANDS) / sizeof(GL_SM_BANDS[0])))
+#define GL_SM_DEFAULT "2.4 GHz"
+typedef struct {
+    double lo, hi, edges[GL_SM_EDGES], over;
+    int n, knee, unknown;
+    const char *band;
+} smsc_t;
+static smsc_t gl_sm_scale(double lo, double hi, double step, int units, double over) {
+    smsc_t sc;
+    memset(&sc, 0, sizeof(sc));
+    for (int i = 0; i < units && sc.n < GL_SM_EDGES; i++) sc.edges[sc.n++] = lo + i * step;
+    for (double v = lo + (units - 1) * step + over; over > 0 && v < hi && sc.n < GL_SM_EDGES; v += over)
+        sc.edges[sc.n++] = v;
+    sc.lo = lo; sc.hi = hi; sc.knee = units; sc.over = over; sc.band = ""; sc.unknown = 0;
+    return sc;
+}
+static int gl_sm_band_row(const char *band) {
+    for (int i = 0; band && i < GL_SM_NBANDS; i++) if (!strcmp(band, GL_SM_BANDS[i].band)) return i;
+    return -1;
+}
+static const char *gl_sm_band(int have_ch, double ch, const char *label) {
+    if (gl_sm_band_row(label) >= 0) return GL_SM_BANDS[gl_sm_band_row(label)].band;
+    if (have_ch && ch >= 1 && ch <= 14) return "2.4 GHz";
+    if (have_ch && ch >= 32 && ch <= 177) return "5 GHz";
+    return "";
+}
+static smsc_t gl_sm_dbm(const char *band) {
+    int known = gl_sm_band_row(band) >= 0;
+    int s9 = GL_SM_BANDS[gl_sm_band_row(known ? band : GL_SM_DEFAULT)].s9;
+    smsc_t sc = gl_sm_scale(s9 - (GL_SM_UNITS - 1) * GL_SM_DB, s9 + GL_SM_OVER_TOP, GL_SM_DB,
+                            GL_SM_UNITS, GL_SM_OVER_DB);
+    sc.band = known ? GL_SM_BANDS[gl_sm_band_row(band)].band : GL_SM_DEFAULT;
+    sc.unknown = !known;
+    return sc;
+}
+static int gl_sm_level(int have, double v, const smsc_t *sc) {
+    if (!have) return 0;
+    double c = v < sc->lo ? sc->lo : v > sc->hi ? sc->hi : v;
+    int n = 0;
+    for (int i = 0; i < sc->n; i++) if (c >= sc->edges[i]) n++;
+    return n;
+}
+static int gl_sm_clamped(const double (*pts)[2], int n, const smsc_t *sc) {
+    int c = 0;
+    for (int i = 0; i < n; i++) if (pts[i][1] > sc->hi || pts[i][1] < sc->lo) c++;
+    return c;
+}
+static void gl_sm_word(int have, double v, const smsc_t *sc, char *out, size_t sz) {
+    int n = gl_sm_level(have, v, sc);
+    if (!n) { snprintf(out, sz, "-"); return; }
+    if (n <= sc->knee) snprintf(out, sz, "S%d", n);
+    else snprintf(out, sz, "S%d+%d", sc->knee, (int)((n - sc->knee) * sc->over));
+}
+static void gl_sm_label(const smsc_t *sc, int i, char *out, size_t sz) {
+    if (i < sc->knee) snprintf(out, sz, "%d", i + 1);
+    else snprintf(out, sz, "+%d", (int)((i - sc->knee + 1) * sc->over));
+}
+static void gl_sm_note(char *out, size_t sz) {
+    size_t at = 0;
+    out[0] = '\0';
+    for (int i = 0; i < GL_SM_NBANDS && at < sz; i++)
+        at += (size_t)snprintf(out + at, sz - at, "%s%s%d%s at %s", i ? ", " : "", i ? "" : "S9 = ",
+                               GL_SM_BANDS[i].s9, i ? "" : " dBm", GL_SM_BANDS[i].band);
+    if (at < sz)
+        snprintf(out + at, sz - at, ", %d dB per S-unit, by the band heard on; "
+                 "a display scale, not the IARU reference", GL_SM_DB);
+}
+static int gl_sm_range(const double (*pts)[2], int n, double *lo, double *hi) {
+    int have = 0;
+    for (int i = 0; i < n; i++) {
+        if (!have || pts[i][1] < *lo) *lo = pts[i][1];
+        if (!have || pts[i][1] > *hi) *hi = pts[i][1];
+        have = 1;
+    }
+    return have;
+}
+#define GL_SM_GAP  1
+#define GL_SM_KNEE 3
+typedef struct { int n, k; double sw; } smgeo_t;
+static smgeo_t gl_sm_geo(const smsc_t *sc, double w) {
+    smgeo_t ge;
+    ge.n = sc->n;
+    ge.k = sc->knee < sc->n ? GL_SM_KNEE - GL_SM_GAP : 0;
+    ge.sw = floor((w - (ge.n - 1) * GL_SM_GAP - ge.k) / ge.n);
+    if (ge.sw < 1) ge.sw = 1;
+    return ge;
+}
+static double gl_sm_seg_x(int i, const smsc_t *sc, const smgeo_t *ge) {
+    return i * (ge->sw + GL_SM_GAP) + (i >= sc->knee ? ge->k : 0);
+}
+static double gl_sm_x(double v, const smsc_t *sc, double w) {
+    smgeo_t ge = gl_sm_geo(sc, w);
+    int i = gl_sm_level(1, v, sc) - 1;
+    if (i < 0) i = 0;
+    double c = v < sc->lo ? sc->lo : v > sc->hi ? sc->hi : v;
+    double top = i + 1 < ge.n ? sc->edges[i + 1] : sc->hi;
+    double f = top > sc->edges[i] ? (c - sc->edges[i]) / (top - sc->edges[i]) : 0;
+    if (f < 0) f = 0;
+    double in = floor(f * ge.sw);
+    return gl_sm_seg_x(i, sc, &ge) + (in < ge.sw - 1 ? in : ge.sw - 1);
+}
+/* have_r 0: no window range (the JS's lo and hi null). */
+static void gl_sm(int have, double v, double w, double h, const smsc_t *scale,
+                  int have_r, double lo, double hi, gmarks_t *g) {
+    memset(g, 0, sizeof(*g));
+    smsc_t dflt = gl_sm_dbm("");
+    const smsc_t *sc = scale ? scale : &dflt;
+    if (!have) { gl_dash(g, w, h); return; }
+    smgeo_t ge = gl_sm_geo(sc, w);
+    int lit = gl_sm_level(have, v, sc);
+    for (int i = 0; i < ge.n; i++) {
+        if (i < lit)
+            gm_push(g, "seg", gl_sm_seg_x(i, sc, &ge), h * 0.25, ge.sw, h * 0.5,
+                    i < sc->knee ? "--tui-normal" : "--heat-3");
+        else gm_push(g, "off", gl_sm_seg_x(i, sc, &ge), h / 2 - 1, ge.sw, 2, "--rule");
+    }
+    if (have_r && hi > lo) {
+        gm_push(g, "pklo", gl_sm_x(lo, sc, w), 0, 1, h, "--ink");
+        gm_push(g, "pkhi", gl_sm_x(hi, sc, w), 0, 1, h, "--ink");
+    }
+}
+static int gl_sm_cells(int have, double v, const smsc_t *sc, const char **out) {
+    int lit = gl_sm_level(have, v, sc), n = 0;
+    for (int i = 0; lit && i < sc->n; i++)
+        out[n++] = i >= lit ? "--tui-dim" : i < sc->knee ? "--tui-normal" : "--heat-3";
+    return n;
+}
+
 /* F15: new inside the window, and G5's first-seen cell. */
 static int gl_is_new(int have, double first, double from) { return have && first >= from; }
 static int gl_first_cell(int have, double first, double from, double cell_s, int n) {
@@ -1760,9 +1903,9 @@ static void test_new_mark_and_first_cell(void) {
  * red with its line taken out of the page. */
 static void test_v2_wiring(void) {
     const char *p = page();
-    WT_HAS(p, "window.SlothRf = { init: function (h) { H = h; }, cell: cell, block: block, bullet: bullet,");
+    WT_HAS(p, "window.SlothRf = { init: function (h) { H = h; keys(); }, cell: cell, block: block, bullet: bullet,");
     WT_HAS(p, "    SlothRf.cell(r.cells[\"c-sig\"], d.rf, num(d.signal) ? d.signal : null);");
-    WT_HAS(p, "    SlothRf.cell(sg, a.rf, num(a.signal) ? a.signal : null);");
+    WT_HAS(p, "    SlothRf.cell(sg, a.rf, num(a.signal) ? a.signal : null, a.channel);");
     WT_HAS(p, "      drf.appendChild(SlothRf.block(j.rf, mac));");
     WT_HAS(p, "        box.appendChild(SlothRf.block(j.rf, j.mac));");
     WT_HAS(p, "<div id=\"dr-rf\"></div>");
@@ -1785,13 +1928,689 @@ static void test_v2_wiring(void) {
     WT_HAS(p, "      return glyph.g6(num(v) ? v : null, { w: w, h: h, max: max, count: true });");
     WT_LACKS(p, "var bar = el(\"div\", \"bar\");");
     WT_LACKS(p, ".bar { height: 4px;");
-    /* A table's G2 draws the whole hour in every row (P4); the block's
-     * caption says the rule is a rule of thumb (ruling 3). */
+    /* A table's cell reads the whole hour in every row (P4). The block's
+     * caption named the -67 dBm rule (ruling 3) until the S-meter took
+     * G2's place (owner ruling 2026-11-11): the meter draws no rule. */
     WT_HAS(p, "    var n = rf && rf.cells && rf.cells.length ? rf.cells.length : 60;");
-    WT_HAS(p, "\" dBm, a field rule of thumb, not a standard\"");
     /* The member's cells are web_rf.h's: the page's fallback is the same
      * count. */
     WT_EQ(WEB_RF_CELLS, 60);
+}
+
+/* ── the S-meter (owner rulings 2026-11-11) ─────────────────────── */
+
+static int sm_is(int have, double v, const smsc_t *sc, const char *want) {
+    char w[16];
+    gl_sm_word(have, v, sc, w, sizeof(w));
+    if (strcmp(w, want)) fprintf(stderr, "    %g reads %s, not %s\n", v, w, want);
+    return !strcmp(w, want);
+}
+
+/* The face and the band table: 6 dB an S-unit, nine of them, then
+ * 10 dB segments to 27 dB over S9, on every band; the 2.4 GHz row is
+ * the ruled scale (S1 -95, S9 -47, the top -20 dBm, which is R3's old
+ * range); the 5 and 6 GHz rows sit lower by the free-space path loss
+ * against 2442 MHz at the band's middle, rounded to a whole dB (7 and
+ * 9). Seen red with the 5 GHz row's s9 made -47 in the port. */
+static void test_sm_constants_and_band_table(void) {
+    WT_EQ(GL_SM_DB, 6);
+    WT_EQ(GL_SM_UNITS, 9);
+    WT_EQ(GL_SM_OVER_DB, 10);
+    WT_EQ(GL_SM_OVER_TOP, 27);
+    WT_EQ(GL_SM_NBANDS, 3);
+    static const int S9[3] = { -47, -54, -56 }, S1[3] = { -95, -102, -104 }, TOP[3] = { -20, -27, -29 };
+    for (int i = 0; i < GL_SM_NBANDS; i++) {
+        int off = (int)floor(20 * log10(GL_SM_BANDS[i].mhz / 2442.0) + 0.5);
+        WT_EQ(GL_SM_BANDS[i].s9, -47 - off);
+        WT_EQ(GL_SM_BANDS[i].s9, S9[i]);
+        smsc_t sc = gl_sm_dbm(GL_SM_BANDS[i].band);
+        WT_EQ(sc.unknown, 0);
+        WT_ASSERT(!strcmp(sc.band, GL_SM_BANDS[i].band));
+        WT_EQ(sc.n, 11);
+        WT_EQ(sc.knee, 9);
+        WT_ASSERT(near(sc.lo, S1[i]) && near(sc.edges[0], S1[i]));
+        WT_ASSERT(near(sc.edges[8], S9[i]));
+        WT_ASSERT(near(sc.edges[9], S9[i] + 10) && near(sc.edges[10], S9[i] + 20));
+        WT_ASSERT(near(sc.hi, TOP[i]));
+        for (int k = 1; k < 9; k++) WT_ASSERT(near(sc.edges[k] - sc.edges[k - 1], 6));
+        /* Each row's S1 and S9 at the edge, and a hair under S9. */
+        WT_ASSERT(sm_is(1, S1[i], &sc, "S1"));
+        WT_ASSERT(sm_is(1, S9[i], &sc, "S9"));
+        WT_ASSERT(sm_is(1, S9[i] - 0.01, &sc, "S8"));
+        WT_ASSERT(sm_is(1, S9[i] + 10, &sc, "S9+10"));
+    }
+    WT_ASSERT(near(GL_SM_BANDS[0].mhz, 2442) && near(GL_SM_BANDS[1].mhz, 5500) &&
+              near(GL_SM_BANDS[2].mhz, 6535));
+}
+
+/* The reading at every boundary of the 2.4 GHz row: a segment lights
+ * when the value has reached its edge, so exactly on an edge is that
+ * S-unit, a hundredth under it the one below, a hundredth over it the
+ * same. Past S9 the word steps in tens as the face does: -46 is still
+ * S9, -37 is S9+10, -27 and the top S9+20. Both ends clamp as g2Y
+ * clamps and are counted. Seen red with the port's c >= edge made
+ * c > edge (every edge read one S-unit low, -95 read "-"). */
+static void test_sm_boundaries_and_readout(void) {
+    smsc_t sc = gl_sm_dbm("2.4 GHz");
+    for (int k = 1; k <= 9; k++) {
+        double e = -95 + (k - 1) * 6;
+        char want[8], below[8];
+        snprintf(want, sizeof(want), "S%d", k);
+        snprintf(below, sizeof(below), "S%d", k > 1 ? k - 1 : 1);
+        WT_EQ(gl_sm_level(1, e, &sc), k);
+        WT_ASSERT(sm_is(1, e, &sc, want));
+        WT_ASSERT(sm_is(1, e + 0.01, &sc, want));
+        WT_ASSERT(sm_is(1, e - 0.01, &sc, below));
+    }
+    WT_ASSERT(sm_is(1, -95, &sc, "S1"));
+    WT_ASSERT(sm_is(1, -47, &sc, "S9"));
+    WT_ASSERT(sm_is(1, -46, &sc, "S9"));
+    WT_ASSERT(sm_is(1, -37.01, &sc, "S9"));
+    WT_ASSERT(sm_is(1, -37, &sc, "S9+10"));
+    WT_ASSERT(sm_is(1, -36, &sc, "S9+10"));
+    WT_ASSERT(sm_is(1, -27.01, &sc, "S9+10"));
+    WT_ASSERT(sm_is(1, -27, &sc, "S9+20"));
+    WT_ASSERT(sm_is(1, -20, &sc, "S9+20"));
+    /* The clamps: under S1 is S1, over the top the last segment. */
+    WT_ASSERT(sm_is(1, -96, &sc, "S1"));
+    WT_ASSERT(sm_is(1, -120, &sc, "S1"));
+    WT_ASSERT(sm_is(1, -19, &sc, "S9+20"));
+    WT_ASSERT(sm_is(1, -5, &sc, "S9+20"));
+    WT_EQ(gl_sm_level(1, -120, &sc), 1);
+    WT_EQ(gl_sm_level(1, -5, &sc), 11);
+    /* No reading has no word but the dash's. */
+    WT_ASSERT(sm_is(0, 0, &sc, "-"));
+    WT_EQ(gl_sm_level(0, -50, &sc), 0);
+    /* Counted the way g2Clamped() counts: past either end, not on it. */
+    double p[6][2] = {{0, -120}, {1, -95}, {2, -60}, {3, -20}, {4, -19.5}, {5, -5}};
+    WT_EQ(gl_sm_clamped(p, 6, &sc), 3);
+    WT_EQ(gl_sm_clamped(p + 1, 3, &sc), 0);
+    /* The same count on another band's row is that row's ends. */
+    smsc_t s5 = gl_sm_dbm("5 GHz");
+    double q[3][2] = {{0, -100}, {1, -24}, {2, -103}};
+    WT_EQ(gl_sm_clamped(q, 3, &s5), 2);
+    WT_EQ(gl_sm_clamped(q, 3, &sc), 2);
+    double r[1][2] = {{0, -100}};
+    WT_EQ(gl_sm_clamped(r, 1, &s5), 0);
+    WT_EQ(gl_sm_clamped(r, 1, &sc), 1);
+}
+
+/* The band lookup is live: one reading is a different S on each band's
+ * row, the row comes from the row's own words (sloth's band label, else
+ * its channel number as ap_band_label() reads one), and a row with
+ * neither reads on the 2.4 GHz row and says unknown. Seen red with
+ * gl_sm_dbm() forced onto the 2.4 GHz row whatever it was asked (the
+ * three bands read alike, and nothing was unknown). */
+static void test_sm_reads_on_its_band(void) {
+    smsc_t s2 = gl_sm_dbm("2.4 GHz"), s5 = gl_sm_dbm("5 GHz"), s6 = gl_sm_dbm("6 GHz");
+    WT_ASSERT(sm_is(1, -55, &s2, "S7"));
+    WT_ASSERT(sm_is(1, -55, &s5, "S8"));
+    WT_ASSERT(sm_is(1, -55, &s6, "S9"));
+    WT_ASSERT(sm_is(1, -47, &s2, "S9"));
+    WT_ASSERT(sm_is(1, -47, &s5, "S9"));
+    WT_ASSERT(sm_is(1, -44, &s5, "S9+10"));
+    WT_ASSERT(sm_is(1, -44, &s2, "S9"));
+    WT_ASSERT(sm_is(1, -100, &s6, "S1"));
+    WT_ASSERT(sm_is(1, -98, &s6, "S2"));
+    WT_ASSERT(sm_is(1, -98, &s5, "S1"));
+    /* The band from the row. */
+    WT_ASSERT(!strcmp(gl_sm_band(1, 1, NULL), "2.4 GHz"));
+    WT_ASSERT(!strcmp(gl_sm_band(1, 14, NULL), "2.4 GHz"));
+    WT_ASSERT(!strcmp(gl_sm_band(1, 32, NULL), "5 GHz"));
+    WT_ASSERT(!strcmp(gl_sm_band(1, 36, NULL), "5 GHz"));
+    WT_ASSERT(!strcmp(gl_sm_band(1, 177, NULL), "5 GHz"));
+    WT_ASSERT(!strcmp(gl_sm_band(1, 0, NULL), ""));
+    WT_ASSERT(!strcmp(gl_sm_band(1, 15, NULL), ""));
+    WT_ASSERT(!strcmp(gl_sm_band(1, 31, NULL), ""));
+    WT_ASSERT(!strcmp(gl_sm_band(1, 178, NULL), ""));
+    WT_ASSERT(!strcmp(gl_sm_band(0, 36, NULL), ""));
+    /* sloth's own label wins over the number: 6 GHz channel 37 is also
+     * a 5 GHz number. A word that is no row's is not a band. */
+    WT_ASSERT(!strcmp(gl_sm_band(1, 37, "6 GHz"), "6 GHz"));
+    WT_ASSERT(!strcmp(gl_sm_band(0, 0, "5 GHz"), "5 GHz"));
+    WT_ASSERT(!strcmp(gl_sm_band(1, 6, "60 GHz"), "2.4 GHz"));
+    WT_ASSERT(!strcmp(gl_sm_band(0, 0, "?"), ""));
+    /* Unknown: the 2.4 GHz row, and said. */
+    smsc_t u = gl_sm_dbm("");
+    WT_EQ(u.unknown, 1);
+    WT_ASSERT(!strcmp(u.band, "2.4 GHz"));
+    WT_ASSERT(near(u.edges[8], -47));
+    WT_ASSERT(sm_is(1, -55, &u, "S7"));
+    WT_EQ(gl_sm_dbm("900 MHz").unknown, 1);
+    WT_EQ(gl_sm_dbm(NULL).unknown, 1);
+    WT_EQ(s5.unknown, 0);
+    /* The page prints it, in the cell's title, the canvas's label and
+     * the report's line. */
+    const char *p = page();
+    WT_HAS(p, "    return \"S-meter, \" + (sc.unknown ? \"band unknown: 2.4 GHz scale\" : sc.band + \" scale\") +");
+    WT_HAS(p, "           (sc.unknown ? \"; band unknown: 2.4 GHz scale\" : \"; \" + sc.band + \" scale\");");
+    WT_HAS(p, "(sc.unknown ? \"band unknown: 2.4 GHz scale\" : sc.band + \" scale\") +\n"
+              "                     \", S9 = \" + glyph.SM_BANDS[sc.band].s9 + \" dBm, \" + glyph.SM_DB +");
+}
+
+/* The mark list: no reading is R5's dash and no segment at all, lit or
+ * unlit; one reading is the eleven segments and no tick; a window that
+ * moved adds the two peak-hold ticks. The lit run is --tui-normal to S9
+ * and --heat-3 past it, an unlit segment --rule. The absence with no
+ * reading was seen red with the port's early return taken out (eleven
+ * unlit segments were drawn under the dash), and the no-tick case with
+ * hi > lo made hi >= lo (a flat window drew two ticks). */
+static void test_sm_states(void) {
+    gmarks_t g;
+    smsc_t sc = gl_sm_dbm("2.4 GHz");
+    gl_sm(0, 0, 72, 14, &sc, 0, 0, 0, &g);
+    WT_EQ(g.n, 1);
+    WT_EQ(gm_count(&g, "dash"), 1);
+    WT_EQ(gm_count(&g, "seg"), 0);
+    WT_EQ(gm_count(&g, "off"), 0);
+    /* No reading but a window given: still nothing lit, no tick. */
+    gl_sm(0, 0, 72, 14, &sc, 1, -70, -40, &g);
+    WT_EQ(g.n, 1);
+    WT_EQ(gm_count(&g, "seg") + gm_count(&g, "off") + gm_count(&g, "pklo") + gm_count(&g, "pkhi"), 0);
+    /* One reading: the run alone. -62 is S6. */
+    gl_sm(1, -62, 72, 14, &sc, 0, 0, 0, &g);
+    WT_EQ(g.n, 11);
+    WT_EQ(gm_count(&g, "seg"), 6);
+    WT_EQ(gm_count(&g, "off"), 5);
+    WT_EQ(gm_count(&g, "pklo") + gm_count(&g, "pkhi"), 0);
+    for (int i = 0; i < g.n; i++)
+        WT_ASSERT(!strcmp(g.m[i].tok, i < 6 ? "--tui-normal" : "--rule"));
+    /* A window of one value (lo == hi) is still the run alone. */
+    gl_sm(1, -62, 72, 14, &sc, 1, -62, -62, &g);
+    WT_EQ(gm_count(&g, "pklo") + gm_count(&g, "pkhi"), 0);
+    /* The scale it is given none is the unknown-band row. */
+    gl_sm(1, -62, 72, 14, NULL, 0, 0, 0, &g);
+    WT_EQ(gm_count(&g, "seg"), 6);
+    /* Past S9 the run is the heat's peak, and only past it. */
+    gl_sm(1, -30, 72, 14, &sc, 0, 0, 0, &g);
+    WT_EQ(gm_count(&g, "seg"), 10);
+    for (int i = 0; i < g.n; i++)
+        WT_ASSERT(!strcmp(g.m[i].tok, i < 9 ? "--tui-normal" : i < 10 ? "--heat-3" : "--rule"));
+    gl_sm(1, -20, 72, 14, &sc, 0, 0, 0, &g);
+    WT_EQ(gm_count(&g, "seg"), 11);
+    WT_EQ(gm_count(&g, "off"), 0);
+    gl_sm(1, -47, 72, 14, &sc, 0, 0, 0, &g);
+    WT_EQ(gm_count(&g, "seg"), 9);
+    for (int i = 0; i < g.n; i++) WT_ASSERT(strcmp(g.m[i].tok, "--heat-3") != 0);
+    /* Clamped at both ends, drawn at the edge. */
+    gl_sm(1, -130, 72, 14, &sc, 0, 0, 0, &g);
+    WT_EQ(gm_count(&g, "seg"), 1);
+    gl_sm(1, 5, 72, 14, &sc, 0, 0, 0, &g);
+    WT_EQ(gm_count(&g, "seg"), 11);
+}
+
+/* The geometry at the table's 72 by 14: whole-pixel segments 5 wide a
+ * pixel apart, three at the S9 boundary, inside the canvas; and the
+ * peak-hold ticks, which are what G2's line said about movement: the
+ * window's least and greatest, each inside the segment that value
+ * would light last, full height, in --ink, on the same band's row as
+ * the run. Seen red with the knee's gap made the plain one. */
+static void test_sm_geometry_and_ticks(void) {
+    gmarks_t g;
+    smsc_t sc = gl_sm_dbm("2.4 GHz");
+    gl_sm(1, -62, 72, 14, &sc, 1, -70, -40, &g);
+    WT_EQ(g.n, 13);
+    for (int i = 0; i < 11; i++) {
+        WT_ASSERT(near(g.m[i].w, 5));
+        WT_ASSERT(near(g.m[i].x, i * 6 + (i >= 9 ? 2 : 0)));
+        if (i) WT_ASSERT(near(g.m[i].x - (g.m[i - 1].x + g.m[i - 1].w), i == 9 ? 3 : 1));
+    }
+    WT_ASSERT(g.m[10].x + g.m[10].w <= 72);
+    /* A lit segment is half the height and centred; an unlit one 2 px. */
+    WT_ASSERT(near(g.m[0].y, 3.5) && near(g.m[0].h, 7));
+    WT_ASSERT(near(g.m[10].y, 6) && near(g.m[10].h, 2));
+    gmark_t lo = gm_get(&g, "pklo"), hi = gm_get(&g, "pkhi");
+    WT_EQ(gm_count(&g, "pklo"), 1);
+    WT_EQ(gm_count(&g, "pkhi"), 1);
+    /* -70 is a sixth into S5 (-71..-65): the fifth segment, at 24. */
+    WT_ASSERT(near(lo.x, 24));
+    /* -40 is 7 of 10 dB into S9's segment (-47..-37): 48 + floor(3.5). */
+    WT_ASSERT(near(hi.x, 51));
+    WT_ASSERT(near(lo.y, 0) && near(lo.h, 14) && near(lo.w, 1));
+    WT_ASSERT(near(hi.y, 0) && near(hi.h, 14) && near(hi.w, 1));
+    WT_ASSERT(!strcmp(lo.tok, "--ink") && !strcmp(hi.tok, "--ink"));
+    /* The same window on the 5 GHz row is 7 dB further up the face. */
+    smsc_t s5 = gl_sm_dbm("5 GHz");
+    gl_sm(1, -62, 72, 14, &s5, 1, -70, -40, &g);
+    WT_EQ(gm_count(&g, "seg"), 7);
+    WT_ASSERT(near(gm_get(&g, "pklo").x, 31));     /* S6 (-72..-66), 2 of 6 dB in */
+    WT_ASSERT(near(gm_get(&g, "pkhi").x, 58));     /* +10 (-44..-34), 4 of 10 dB in */
+    /* A tick at either clamp stays inside its segment, on the canvas. */
+    WT_ASSERT(near(gl_sm_x(-130, &sc, 72), 0));
+    WT_ASSERT(near(gl_sm_x(-95, &sc, 72), 0));
+    WT_ASSERT(near(gl_sm_x(-20, &sc, 72), 66));
+    WT_ASSERT(near(gl_sm_x(5, &sc, 72), 66));
+    /* Wider, the segments grow and the gaps do not. */
+    gl_sm(1, -62, 300, 18, &sc, 0, 0, 0, &g);
+    WT_ASSERT(near(g.m[0].w, 26));
+    WT_ASSERT(near(g.m[9].x - (g.m[8].x + g.m[8].w), 3));
+    WT_ASSERT(g.m[10].x + g.m[10].w <= 300);
+}
+
+/* R10: in one grey the meter still reads. Lit and unlit are two kinds
+ * of two heights, the S9 boundary is the wider gap, and the ticks are
+ * the only marks of the full height. */
+static void test_sm_reads_in_greyscale(void) {
+    gmarks_t g;
+    smsc_t sc = gl_sm_dbm("2.4 GHz");
+    gl_sm(1, -30, 72, 14, &sc, 1, -80, -30, &g);
+    gm_grey(&g);
+    WT_ASSERT(gm_all_grey(&g));
+    WT_EQ(gm_count(&g, "seg"), 10);
+    WT_EQ(gm_count(&g, "off"), 1);
+    WT_ASSERT(gm_get(&g, "seg").h > gm_get(&g, "off").h);
+    WT_ASSERT(g.m[9].x - (g.m[8].x + g.m[8].w) > g.m[8].x - (g.m[7].x + g.m[7].w));
+    WT_ASSERT(gm_get(&g, "pklo").h > gm_get(&g, "seg").h);
+    WT_ASSERT(gm_get(&g, "pklo").x < gm_get(&g, "pkhi").x);
+}
+
+/* A strength that is not dBm has no S-units: GNSS C/N0 over 0 to 50
+ * dB-Hz and ADS-B's RSSI over -50 to 0 dBFS are the same face in ten
+ * equal segments with no second run, so no heat colour and no wider
+ * gap. Seen red with the port's edge test made c > edge (a C/N0 on an
+ * edge lit one segment fewer). */
+static void test_sm_other_units(void) {
+    gmarks_t g;
+    smsc_t hz = gl_sm_scale(0, 50, 50 / 10.0, 10, 0);
+    WT_EQ(hz.n, 10);
+    WT_EQ(hz.knee, 10);
+    WT_ASSERT(near(hz.edges[0], 0) && near(hz.edges[9], 45));
+    WT_EQ(gl_sm_level(1, 23, &hz), 5);
+    WT_EQ(gl_sm_level(1, 25, &hz), 6);
+    WT_EQ(gl_sm_level(1, 24.99, &hz), 5);
+    WT_EQ(gl_sm_level(1, 45, &hz), 10);
+    WT_EQ(gl_sm_level(1, 50, &hz), 10);
+    WT_EQ(gl_sm_level(1, 70, &hz), 10);
+    WT_EQ(gl_sm_level(1, 0.1, &hz), 1);
+    gl_sm(1, 50, 72, 14, &hz, 1, 18, 31, &g);
+    WT_EQ(gm_count(&g, "seg"), 10);
+    for (int i = 0; i < 10; i++) {
+        WT_ASSERT(!strcmp(g.m[i].tok, "--tui-normal"));
+        WT_ASSERT(near(g.m[i].w, 6));
+        if (i) WT_ASSERT(near(g.m[i].x - (g.m[i - 1].x + g.m[i - 1].w), 1));
+    }
+    /* 18 is 3 of 5 into the fourth segment (15..20), 31 a fifth into
+     * the seventh (30..35). */
+    WT_ASSERT(near(gm_get(&g, "pklo").x, 3 * 7 + 3));
+    WT_ASSERT(near(gm_get(&g, "pkhi").x, 6 * 7 + 1));
+    gl_sm(0, 0, 72, 14, &hz, 0, 0, 0, &g);
+    WT_EQ(g.n, 1);
+    WT_EQ(gm_count(&g, "dash"), 1);
+    smsc_t fs = gl_sm_scale(-50, 0, 50 / 10.0, 10, 0);
+    WT_EQ(fs.n, 10);
+    WT_EQ(gl_sm_level(1, -50, &fs), 1);
+    WT_EQ(gl_sm_level(1, -12.3, &fs), 8);
+    WT_EQ(gl_sm_level(1, 0, &fs), 10);
+    /* The page builds both from its own constants, and a satellite with
+     * no C/N0 (or 0: not tracked) is no reading. */
+    const char *p = page();
+    WT_HAS(p, "  var SM_DBHZ = glyph.smScale(0, SPAN_DBHZ, SPAN_DBHZ / 10, 10, 0);");
+    WT_HAS(p, "  var POLL_MS = 5000, SPAN_DBHZ = 50;");
+    WT_HAS(p, "  var SM_DBFS = glyph.smScale(RSSI_LO, 0, -RSSI_LO / 10, 10, 0);");
+    WT_HAS(p, "  var POLL_MS = 5000, ALT_SPAN = 45000, RSSI_LO = -50;");
+}
+
+/* The words: a legend's label for each segment, the scale said once
+ * per table with every band's S9, and the report's character cells: a
+ * token a segment, none with no reading. Seen red with the port's
+ * cells returned for no reading (eleven unlit cells). */
+static void test_sm_words_and_text(void) {
+    smsc_t sc = gl_sm_dbm("");
+    static const char *const LAB[11] = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "+10", "+20" };
+    for (int i = 0; i < sc.n; i++) {
+        char l[8];
+        gl_sm_label(&sc, i, l, sizeof(l));
+        WT_ASSERT(!strcmp(l, LAB[i]));
+    }
+    char note[200];
+    gl_sm_note(note, sizeof(note));
+    WT_ASSERT(!strcmp(note, "S9 = -47 dBm at 2.4 GHz, -54 at 5 GHz, -56 at 6 GHz, 6 dB per S-unit, "
+                            "by the band heard on; a display scale, not the IARU reference"));
+    const char *c[GL_SM_EDGES];
+    WT_EQ(gl_sm_cells(0, 0, &sc, c), 0);
+    WT_EQ(gl_sm_cells(1, -30, &sc, c), 11);
+    for (int i = 0; i < 11; i++)
+        WT_ASSERT(!strcmp(c[i], i < 9 ? "--tui-normal" : i < 10 ? "--heat-3" : "--tui-dim"));
+    WT_EQ(gl_sm_cells(1, -90, &sc, c), 11);
+    WT_ASSERT(!strcmp(c[0], "--tui-normal") && !strcmp(c[1], "--tui-dim"));
+    /* The same reading on the 6 GHz row lights more of the line. */
+    smsc_t s6 = gl_sm_dbm("6 GHz");
+    WT_EQ(gl_sm_cells(1, -55, &s6, c), 11);
+    WT_ASSERT(!strcmp(c[8], "--tui-normal") && !strcmp(c[9], "--tui-dim"));
+    WT_EQ(gl_sm_cells(1, -55, &sc, c), 11);
+    WT_ASSERT(!strcmp(c[6], "--tui-normal") && !strcmp(c[7], "--tui-dim"));
+    /* A window's range. */
+    double p[4][2] = {{0, -70}, {60, -52}, {120, -81}, {180, -60}};
+    double lo = 0, hi = 0;
+    WT_EQ(gl_sm_range(p, 4, &lo, &hi), 1);
+    WT_ASSERT(near(lo, -81) && near(hi, -52));
+    WT_EQ(gl_sm_range(p, 0, &lo, &hi), 0);
+}
+
+/* The page carries the S-meter's JS whole, as the port above reads it,
+ * and every place a signal's strength was a graphic now calls it: the
+ * three DBM columns and the drawer's and Lookup card's block through
+ * rf.js, the emitter report's line, the BLE drawer, and the GNSS and
+ * ADS-B signal cells on their own units. G2's function stays in
+ * glyph.js with no caller. Seen red with one character changed in
+ * smLevel()'s edge test in web/ui/glyph.js (>= made >), and each
+ * absence with its string put back into the page. */
+static void test_sm_page_and_wiring(void) {
+    const char *p = page();
+    /* glyph.js: the face, the band table and every sm*() whole. */
+    WT_HAS(p, "  var SM_DB = 6, SM_UNITS = 9, SM_OVER_DB = 10, SM_OVER_TOP = 27;\n"
+              "  var SM_BANDS = {\n"
+              "    \"2.4 GHz\": { mhz: 2442, s9: -47 },\n"
+              "    \"5 GHz\": { mhz: 5500, s9: -54 },\n"
+              "    \"6 GHz\": { mhz: 6535, s9: -56 }\n"
+              "  };\n"
+              "  var SM_DEFAULT = \"2.4 GHz\";\n");
+    WT_HAS(p, "  function smScale(lo, hi, step, units, over) {\n"
+              "    var e = [], i, v;\n"
+              "    for (i = 0; i < units; i++) e.push(lo + i * step);\n"
+              "    for (v = lo + (units - 1) * step + over; over > 0 && v < hi; v += over) e.push(v);\n"
+              "    return { lo: lo, hi: hi, edges: e, knee: units, over: over, band: \"\", unknown: false };\n"
+              "  }\n");
+    WT_HAS(p, "  function smBand(ch, label) {\n"
+              "    if (typeof label === \"string\" && Object.prototype.hasOwnProperty.call(SM_BANDS, label)) return label;\n"
+              "    if (gnum(ch) && ch >= 1 && ch <= 14) return \"2.4 GHz\";\n"
+              "    if (gnum(ch) && ch >= 32 && ch <= 177) return \"5 GHz\";\n"
+              "    return \"\";\n"
+              "  }\n"
+              "  function smDbm(band) {\n"
+              "    var known = typeof band === \"string\" && Object.prototype.hasOwnProperty.call(SM_BANDS, band);\n"
+              "    var s9 = SM_BANDS[known ? band : SM_DEFAULT].s9;\n"
+              "    var sc = smScale(s9 - (SM_UNITS - 1) * SM_DB, s9 + SM_OVER_TOP, SM_DB, SM_UNITS, SM_OVER_DB);\n"
+              "    sc.band = known ? band : SM_DEFAULT;\n"
+              "    sc.unknown = !known;\n"
+              "    return sc;\n"
+              "  }\n");
+    WT_HAS(p, "  function smLevel(v, sc) {\n"
+              "    if (!gnum(v)) return 0;\n"
+              "    var c = v < sc.lo ? sc.lo : v > sc.hi ? sc.hi : v, n = 0;\n"
+              "    for (var i = 0; i < sc.edges.length; i++) if (c >= sc.edges[i]) n++;\n"
+              "    return n;\n"
+              "  }\n"
+              "  function smClamped(pts, sc) {\n"
+              "    var n = 0;\n"
+              "    for (var i = 0; pts && i < pts.length; i++)\n"
+              "      if (pts[i][1] > sc.hi || pts[i][1] < sc.lo) n++;\n"
+              "    return n;\n"
+              "  }\n");
+    WT_HAS(p, "  function smWord(v, sc) {\n"
+              "    var n = smLevel(v, sc);\n"
+              "    if (!n) return \"-\";\n"
+              "    return n <= sc.knee ? \"S\" + n : \"S\" + sc.knee + \"+\" + (n - sc.knee) * sc.over;\n"
+              "  }\n");
+    WT_HAS(p, "  function smLabels(sc) {\n"
+              "    var out = [];\n"
+              "    for (var i = 0; i < sc.edges.length; i++)\n"
+              "      out.push(i < sc.knee ? String(i + 1) : \"+\" + (i - sc.knee + 1) * sc.over);\n"
+              "    return out;\n"
+              "  }\n");
+    WT_HAS(p, "  function smNote() {\n"
+              "    var p = [];\n"
+              "    for (var b in SM_BANDS)\n"
+              "      if (Object.prototype.hasOwnProperty.call(SM_BANDS, b))\n"
+              "        p.push((p.length ? \"\" : \"S9 = \") + SM_BANDS[b].s9 + (p.length ? \"\" : \" dBm\") + \" at \" + b);\n"
+              "    return p.join(\", \") + \", \" + SM_DB + \" dB per S-unit, by the band heard on; \" +\n"
+              "           \"a display scale, not the IARU reference\";\n"
+              "  }\n");
+    WT_HAS(p, "  function smRange(pts) {\n"
+              "    var lo = null, hi = null;\n"
+              "    for (var i = 0; pts && i < pts.length; i++) {\n"
+              "      if (!gnum(pts[i][1])) continue;\n"
+              "      if (lo === null || pts[i][1] < lo) lo = pts[i][1];\n"
+              "      if (hi === null || pts[i][1] > hi) hi = pts[i][1];\n"
+              "    }\n"
+              "    return lo === null ? null : [lo, hi];\n"
+              "  }\n");
+    WT_HAS(p, "  var SM_GAP = 1, SM_KNEE = 3;\n"
+              "  function smGeo(sc, w) {\n"
+              "    var n = sc.edges.length, k = sc.knee < n ? SM_KNEE - SM_GAP : 0;\n"
+              "    return { n: n, k: k, sw: Math.max(1, Math.floor((w - (n - 1) * SM_GAP - k) / n)) };\n"
+              "  }\n"
+              "  function smSegX(i, sc, ge) { return i * (ge.sw + SM_GAP) + (i >= sc.knee ? ge.k : 0); }\n");
+    WT_HAS(p, "  function smX(v, sc, w) {\n"
+              "    var ge = smGeo(sc, w), i = Math.max(0, smLevel(v, sc) - 1);\n"
+              "    var c = v < sc.lo ? sc.lo : v > sc.hi ? sc.hi : v;\n"
+              "    var top = i + 1 < ge.n ? sc.edges[i + 1] : sc.hi;\n"
+              "    var f = top > sc.edges[i] ? Math.max(0, (c - sc.edges[i]) / (top - sc.edges[i])) : 0;\n"
+              "    return smSegX(i, sc, ge) + Math.min(ge.sw - 1, Math.floor(f * ge.sw));\n"
+              "  }\n");
+    WT_HAS(p, "  function sm(v, opt) {\n"
+              "    var m = [], w = opt.w, h = opt.h, sc = opt.scale || smDbm(\"\"), i;\n"
+              "    if (!gnum(v)) { m.push(dash(w, h)); return m; }\n"
+              "    var ge = smGeo(sc, w), lit = smLevel(v, sc);\n"
+              "    for (i = 0; i < ge.n; i++) {\n"
+              "      if (i < lit)\n"
+              "        m.push([\"seg\", smSegX(i, sc, ge), h * 0.25, ge.sw, h * 0.5,\n"
+              "                i < sc.knee ? \"--tui-normal\" : \"--heat-3\"]);\n"
+              "      else m.push([\"off\", smSegX(i, sc, ge), h / 2 - 1, ge.sw, 2, \"--rule\"]);\n"
+              "    }\n"
+              "    if (gnum(opt.lo) && gnum(opt.hi) && opt.hi > opt.lo) {\n"
+              "      m.push([\"pklo\", smX(opt.lo, sc, w), 0, 1, h, \"--ink\"]);\n"
+              "      m.push([\"pkhi\", smX(opt.hi, sc, w), 0, 1, h, \"--ink\"]);\n"
+              "    }\n"
+              "    return m;\n"
+              "  }\n");
+    WT_HAS(p, "  function smCells(v, sc) {\n");
+    WT_HAS(p, "  function smCells(v, sc) {\n"
+              "    var out = [], lit = smLevel(v, sc);\n"
+              "    for (var i = 0; lit && i < sc.edges.length; i++)\n"
+              "      out.push(i >= lit ? \"--tui-dim\" : i < sc.knee ? \"--tui-normal\" : \"--heat-3\");\n"
+              "    return out;\n"
+              "  }\n");
+    WT_HAS(p, "           sm: sm, smScale: smScale, smDbm: smDbm, smBand: smBand, smLevel: smLevel,\n"
+              "           smWord: smWord, smLabels: smLabels, smNote: smNote, smRange: smRange,\n"
+              "           smClamped: smClamped, smCells: smCells, smX: smX, SM_BANDS: SM_BANDS,\n"
+              "           SM_DB: SM_DB,\n");
+    /* rf.js: the cell, the block, the generic meter, the legend. */
+    WT_HAS(p, "  function smMarks(v, sc, r) {\n"
+              "    return function (w, h) {\n"
+              "      return glyph.sm(num(v) ? v : null, { w: w, h: h, scale: sc, lo: r ? r[0] : null,\n"
+              "                                           hi: r ? r[1] : null });\n"
+              "    };\n"
+              "  }\n");
+    WT_HAS(p, "  function scaleText(sc) {\n"
+              "    return \"S-meter, \" + (sc.unknown ? \"band unknown: 2.4 GHz scale\" : sc.band + \" scale\") +\n"
+              "           \", S9 = \" + glyph.SM_BANDS[sc.band].s9 + \" dBm\";\n"
+              "  }\n");
+    WT_HAS(p, "  function say(v, sc, r) {\n"
+              "    if (!num(v)) return \"signal strength: no reading\";\n"
+              "    return \"signal strength \" + glyph.smWord(v, sc) + \", \" + Math.round(v) + \" dBm\" +\n"
+              "           (r && r[1] > r[0] ? \"; over the last hour from \" + glyph.smWord(r[0], sc) + \" to \" +\n"
+              "                               glyph.smWord(r[1], sc) + \", \" + Math.round(r[0]) + \" to \" +\n"
+              "                               Math.round(r[1]) + \" dBm\" : \"\") +\n"
+              "           (sc.unknown ? \"; band unknown: 2.4 GHz scale\" : \"; \" + sc.band + \" scale\");\n"
+              "  }\n");
+    WT_HAS(p, "  function meter(c, v, o, words) {\n"
+              "    var cv = el(\"canvas\", \"g2\");\n"
+              "    cv.role = \"img\";\n"
+              "    cv.ariaLabel = words;\n"
+              "    c.appendChild(cv);\n"
+              "    later(cv, smMarks(v, o.scale, num(o.lo) && num(o.hi) ? [o.lo, o.hi] : null));\n"
+              "    return cv;\n"
+              "  }\n");
+    WT_HAS(p, "  function legend() {\n"
+              "    var d = el(\"span\", \"smleg\"), sc = glyph.smDbm(\"\"), lab = glyph.smLabels(sc);\n"
+              "    d.appendChild(el(\"span\", \"d-dim\", \"S \"));\n"
+              "    for (var i = 0; i < lab.length; i++)\n"
+              "      d.appendChild(el(\"span\", i < sc.knee ? \"d-normal\" : \"h3\",\n"
+              "                       (i === sc.knee ? \" \" : \"\") + \"\\u2588\" + lab[i] + \" \"));\n"
+              "    d.appendChild(el(\"span\", \"\", glyph.smNote() + \"; ticks: the hour's least and greatest\"));\n"
+              "    return d;\n"
+              "  }\n");
+    WT_HAS(p, "  function cell(c, rf, dbm, ch) {\n"
+              "    clear(c);\n"
+              "    var p = pts(rf), last = p.length ? p[p.length - 1][1] : dbm;\n"
+              "    var w = glyph.g2Words(last, rf ? rf.band : null, rf ? rf.trend : null);\n"
+              "    var sc = glyph.smDbm(glyph.smBand(ch, rf ? rf.radio : null)), r = glyph.smRange(p);\n"
+              "    var cv = el(\"canvas\", \"g2\");\n"
+              "    cv.role = \"img\";\n"
+              "    cv.ariaLabel = say(last, sc, r);\n"
+              "    c.appendChild(cv);\n"
+              "    if (num(last)) c.appendChild(el(\"span\", \"sms\", glyph.smWord(last, sc) + \" \"));\n"
+              "    c.appendChild(el(\"span\", w.bold ? \"g2n near\" : \"g2n\", w.text));\n"
+              "    if (w.near) c.appendChild(el(\"span\", \"g2e\", \" \" + w.near));\n"
+              "    c.title = (rf ? rf.metric + \", 1 h, fine, n=\" + (num(rf.n) ? rf.n : 0) : \"no signal series\") +\n"
+              "              \"; \" + scaleText(sc) + \"; \" + estText(rf);\n"
+              "    later(cv, smMarks(last, sc, r));\n"
+              "    return w.bold;\n"
+              "  }\n");
+    WT_HAS(p, "  function block(rf, mac, ch) {\n"
+              "    var box = el(\"div\", \"g2b\");\n"
+              "    box.appendChild(el(\"div\", \"label\", \"signal, the last hour\"));\n"
+              "    if (!rf) {\n"
+              "      box.appendChild(el(\"div\", \"sub\", \"no signal series: rf.rssi.* are the monitor radio's, \" +\n"
+              "                         \"not shown under this scope, or this slothweb keeps no series\"));\n"
+              "      return box;\n"
+              "    }\n"
+              "    var p = pts(rf), sp = span(rf), gw = glyph.win(p, sp.from, sp.to);\n"
+              "    var sc = glyph.smDbm(glyph.smBand(ch, rf ? rf.radio : null)), r = glyph.smRange(p);\n"
+              "    var scale = sc.lo + \" to \" + sc.hi + \" dBm\";\n"
+              "    if (!p.length) {\n"
+              "      box.appendChild(el(\"div\", \"sub\", glyph.caption({ source: rf.metric + \" \" + mac,\n"
+              "        window: \"1 h\", tier: \"fine\", scale: scale,\n"
+              "        n: 0, state: \"no data\" }) + \"; \" + estText(rf)));\n"
+              "      return box;\n"
+              "    }\n"
+              "    var last = p[p.length - 1][1];\n"
+              "    var cv = el(\"canvas\", \"smw\");\n"
+              "    cv.role = \"img\";\n"
+              "    cv.ariaLabel = say(last, sc, r);\n"
+              "    box.appendChild(cv);\n"
+              "    var w = glyph.g2Words(last, rf.band, rf.trend);\n"
+              "    var cl = glyph.smClamped(p, sc);\n"
+              "    var note = el(\"div\", \"sub\");\n"
+              "    note.appendChild(el(\"span\", \"sms\", glyph.smWord(last, sc) + \" \"));\n"
+              "    note.appendChild(el(\"span\", w.bold ? \"g2n near\" : \"g2n\", w.text + \" dBm\"));\n"
+              "    note.appendChild(document.createTextNode((w.near ? \" \" + w.near : \"\") + \"; \" +\n"
+              "      (r[1] > r[0] ? \"the hour \" + glyph.smWord(r[0], sc) + \" to \" + glyph.smWord(r[1], sc) +\n"
+              "                     \", \" + Math.round(r[0]) + \" to \" + Math.round(r[1]) + \" dBm; \" : \"\") +\n"
+              "      glyph.caption({ source: rf.metric + \" \" + mac, window: \"1 h\",\n"
+              "        tier: \"fine\", scale: scale,\n"
+              "        n: rf.n, state: gw.shrunk ? gw.text : \"\" }) +\n"
+              "      (cl ? \", \" + cl + \" clamped\" : \"\") + \"; \" + scaleText(sc) +\n"
+              "      \"; \" + estText(rf)));\n"
+              "    box.appendChild(note);\n"
+              "    box.appendChild(el(\"div\", \"sub\")).appendChild(legend());\n"
+              "    later(cv, smMarks(last, sc, r));\n"
+              "    return box;\n"
+              "  }\n");
+    WT_HAS(p, "  function keys() {\n"
+              "    var k = document.querySelectorAll(\".smkey\");\n"
+              "    for (var i = 0; i < k.length; i++) { clear(k[i]); k[i].appendChild(legend()); }\n"
+              "  }\n"
+              "\n"
+              "  window.SlothRf = { init: function (h) { H = h; keys(); }, cell: cell, block: block, bullet: bullet,\n"
+              "                     count: count, colMax: colMax, newMark: newMark, pts: pts,\n"
+              "                     meter: meter, legend: legend };\n");
+    /* gnss.js and adsb.js: the non-dBm meters. */
+    WT_HAS(p, "  var SM_DBHZ = glyph.smScale(0, SPAN_DBHZ, SPAN_DBHZ / 10, 10, 0);\n"
+              "  function sigCell(s) {\n"
+              "    var sig = cell(\"c-sg\"), cn = num(s.cn0) && s.cn0 > 0 ? s.cn0 : null;\n"
+              "    var r = cn === null ? null : glyph.smRange(s.points);\n"
+              "    var words = cn === null ? \"C/N0: not tracked\"\n"
+              "      : \"C/N0 \" + cn.toFixed(1) + \" dB-Hz on a 0 to \" + SPAN_DBHZ + \" dB-Hz meter\" +\n"
+              "        (r && r[1] > r[0] ? \"; the row's last records \" + r[0].toFixed(1) + \" to \" + r[1].toFixed(1) : \"\");\n"
+              "    sig.title = words;\n"
+              "    if (window.SlothRf) window.SlothRf.meter(sig, cn, { scale: SM_DBHZ, lo: r ? r[0] : null, hi: r ? r[1] : null }, words);\n"
+              "    return sig;\n"
+              "  }\n");
+    WT_HAS(p, "    r.appendChild(sigCell(s));\n");
+    WT_HAS(p, "    ordered.forEach(function (s) { body.appendChild(row(s, now, j)); });\n");
+    WT_HAS(p, "  var SM_DBFS = glyph.smScale(RSSI_LO, 0, -RSSI_LO / 10, 10, 0);\n"
+              "  function sigCell(a) {\n"
+              "    var sig = cell(\"c-sg\"), v = num(a.rssi) ? a.rssi : null;\n"
+              "    var words = v === null ? \"RSSI: no reading\"\n"
+              "      : \"RSSI \" + v.toFixed(1) + \" dBFS on a \" + RSSI_LO + \" to 0 dBFS meter\";\n"
+              "    sig.title = words;\n"
+              "    if (window.SlothRf) window.SlothRf.meter(sig, v, { scale: SM_DBFS }, words);\n"
+              "    return sig;\n"
+              "  }\n");
+    WT_HAS(p, "    r.appendChild(sigCell(a));\n");
+    /* frrs.js: the text meter and the band it reads on. */
+    WT_HAS(p, "  var BAND = \"\";\n"
+              "  function rssiSpark(s) {\n"
+              "    var v = el(\"span\", \"v fr-spark\", \"\");\n"
+              "    var cells = Array.isArray(s.cells) ? s.cells : [], i;\n"
+              "    var sc = glyph.smDbm(BAND), tk = glyph.smCells(num(s.last_dbm) ? s.last_dbm : null, sc);\n"
+              "    var sw = function (x) { return num(x) ? x + \" (\" + glyph.smWord(x, sc) + \")\" : \"-\"; };\n"
+              "    var line = el(\"span\", \"fr-spark-g\", \"\");\n"
+              "    for (i = 0; i < tk.length; i++)\n"
+              "      line.appendChild(el(\"span\", SPARK_CLS[tk[i]] || \"d-normal\",\n"
+              "                          (i === sc.knee ? \" \" : \"\") + SPARK[tk[i] === \"--tui-dim\" ? 1 : 8]));\n"
+              "    if (!tk.length) line.appendChild(el(\"span\", \"d-dim\", SPARK[0]));\n"
+              "    v.appendChild(line);\n"
+              "    var span = num(s.from) && num(s.to) && s.to > s.from ? Math.round((s.to - s.from) / 3600) + \" h\" : \"24 h\";\n"
+              "    v.appendChild(el(\"span\", \"d-bright\", \"  \" + glyph.smWord(num(s.last_dbm) ? s.last_dbm : null, sc) +\n"
+              "                     \" · last \" + (num(s.last_dbm) ? s.last_dbm : \"-\") + \" dBm\" +\n"
+              "                     \" · min \" + sw(s.min_dbm) + \" · max \" + sw(s.max_dbm) + \" dBm\"));\n"
+              "    v.appendChild(el(\"span\", \"d-dim\",\n"
+              "                     (num(s.last_t) && s.last_t > 0 ? \" · last at \" + H.shortStamp(s.last_t) : \"\") +\n"
+              "                     \" · n=\" + (num(s.samples) ? s.samples : 0) + \" · \" + span + \" in \" + cells.length +\n"
+              "                     \" cells · \" + (sc.unknown ? \"band unknown: 2.4 GHz scale\" : sc.band + \" scale\") +\n"
+              "                     \", S9 = \" + glyph.SM_BANDS[sc.band].s9 + \" dBm, \" + glyph.SM_DB +\n"
+              "                     \" dB per S-unit; a display scale, not the IARU reference\" +\n"
+              "                     \" · a sloth gauge, not a calibrated measurement\" +\n"
+              "                     (typeof s.history === \"string\" ? \" · the minute tier: \" + s.history : \"\")));\n"
+              "    return v;\n"
+              "  }\n");
+    WT_HAS(p, "    BAND = e.kind === \"ble\" ? \"2.4 GHz\"\n"
+              "         : r.bei && r.bei.band && typeof r.bei.band.v === \"string\" ? r.bei.band.v : \"\";\n");
+    /* bledev.js: the drawer's meter, on the 2.4 GHz row. */
+    WT_HAS(p, "  function rssiChart(pts) {\n"
+              "    var c = $(\"bledev-rssi\"), sc = glyph.smDbm(\"2.4 GHz\"), r = glyph.smRange(pts);\n"
+              "    var last = pts.length ? pts[pts.length - 1][1] : null;\n"
+              "    glyph.paint(c, glyph.sm(last, { w: c.clientWidth, h: c.clientHeight, scale: sc,\n"
+              "                                    lo: r ? r[0] : null, hi: r ? r[1] : null }), H.css);\n"
+              "    var words = last === null ? \"no reading\"\n"
+              "      : glyph.smWord(last, sc) + \" \" + Math.round(last) + \" dBm\" +\n"
+              "        (r[1] > r[0] ? \", the window \" + glyph.smWord(r[0], sc) + \" to \" + glyph.smWord(r[1], sc) +\n"
+              "                       \" (\" + Math.round(r[0]) + \" to \" + Math.round(r[1]) + \" dBm)\" : \"\");\n"
+              "    c.ariaLabel = \"this address's signal strength: \" + words;\n"
+              "    return words;\n"
+              "  }\n");
+    WT_HAS(p, "      var words = rssiChart(pts);\n"
+              "      H.set(\"bledev-rssi-note\", pts.length\n"
+              "        ? words + \"; rf.rssi.ble, \" + (r.win >= 86400 ? Math.round(r.win / 86400) + \" d\" : Math.round(r.win / 3600) + \" h\") + \", \" + tier +\n"
+              "          \" tier, n=\" + pts.length + \"; ticks: the window's least and greatest; 2.4 GHz scale: \" + glyph.smNote()\n"
+              "        : \"no data: no signal sample of this address in the window\");\n");
+    /* The call sites app.js keeps: Devices and the clients pass the row's
+     * "rf" (whose "radio" is the band), the AP table its channel too. */
+    WT_HAS(p, "    SlothRf.cell(r.cells[\"c-sig\"], d.rf, num(d.signal) ? d.signal : null);");
+    WT_HAS(p, "    SlothRf.cell(sg, a.rf, num(a.signal) ? a.signal : null, a.channel);");
+    WT_HAS(p, "      SlothRf.cell(row.appendChild(el(\"span\", \"c-sig d-dim\")), d.rf, num(d.signal) ? d.signal : null);");
+    WT_HAS(p, "      drf.appendChild(SlothRf.block(j.rf, mac));");
+    WT_HAS(p, "        box.appendChild(SlothRf.block(j.rf, j.mac));");
+    /* The row is the height it was and the meter the width G2 had; the
+     * column is wider by the S reading the owner asked for beside it. */
+    WT_HAS(p, "canvas.g2, .drow canvas.g2 { display: inline-block; vertical-align: middle; "
+              "width: 72px; height: 14px; margin-right: 4px; border-radius: 0; }");
+    WT_HAS(p, "canvas.smw { display: block; width: 100%; height: 18px; }");
+    WT_HAS(p, "#bdrawer canvas.spark.bledev-rssi { height: 18px; }");
+    WT_HAS(p, "{ k: \"sig\", label: \"dBm\", px: 196, min: 3, num: true, type: \"num\", srv: \"signal\", val: dv(\"signal\") },");
+    WT_HAS(p, "{ k: \"sig\", label: \"dBm\", px: 196, min: 3, type: \"num\", srv: \"signal\", val: av(\"signal\") },");
+    WT_HAS(p, "{ k: \"sig\", label: \"dBm\", px: 196, min: 3, type: \"num\", val: av(\"signal\") },");
+    /* The scale is said once per table: a legend placeholder in each of
+     * the three tables' caption lines, filled at init. */
+    int keys = 0;
+    for (const char *q = strstr(p, "<span class=\"smkey\"></span>"); q; q = strstr(q + 1, "<span class=\"smkey\"></span>")) keys++;
+    WT_EQ(keys, 3);
+    WT_HAS(p, "(C/N0 is dB-Hz, not dBm, so it has no S-units)");
+    WT_HAS(p, "(the decoder's level against its own full scale, not dBm, so it has no S-units)");
+    /* What the meter replaced is gone from the page, and g2 has no
+     * caller left. */
+    WT_HAS(p, "  function g2(pts, opt) {\n");
+    WT_LACKS(p, "glyph.g2(");
+    WT_LACKS(p, "gnss-bar");
+    WT_LACKS(p, "adsb-bar");
+    WT_LACKS(p, "el(\"canvas\", \"trail\")");
+    WT_LACKS(p, "label: \"TRAIL\"");
+    WT_LACKS(p, "RSSI_FLOOR");
+    WT_LACKS(p, "glyph.level(lift(");
+    WT_LACKS(p, "proxColor(proxBand(pts[i][1], E))");
 }
 
 /* ── the TUI forms (R12) ────────────────────────────────────────── */
@@ -1822,9 +2641,21 @@ static void test_every_glyph_names_its_tui_form(void) {
                 "\xe2\x96\x85\xe2\x96\x86\xe2\x96\x87\xe2\x96\x88`");
     WT_HAS(doc, "\xe2\x96\xae");          /* G5's present cell */
     WT_HAS(doc, "\xe2\x96\x90\xe2\x96\x88");  /* G6's bullet */
-    /* V2: G2's row, its form on the fixed scale with sloth's own
-     * distance cell for the words. Seen red with the row removed. */
-    WT_HAS(doc, "| G2 range sparkline (RSSI) |");
+    /* G2's row: the S-meter since the owner's ruling of 2026-11-11, its
+     * character-cell form the report's, with sloth's own distance cell
+     * for the words; the range sparkline's row kept and marked. Seen
+     * red with the row removed. And the band table the README prints is
+     * glyph.js's. */
+    WT_HAS(doc, "| G2 S-meter (signal strength) |");
+    WT_HAS(doc, "| G2 as first built: the range sparkline (superseded 2026-11-11;");
+    WT_HAS(doc, "#### The S-meter (2026-11-11)");
+    for (int i = 0; i < GL_SM_NBANDS; i++) {
+        char row[96];
+        snprintf(row, sizeof(row), "| %s%s | %d MHz | %d dBm | %d dBm | %d dBm |", GL_SM_BANDS[i].band,
+                 i ? "" : " (and BLE)", (int)GL_SM_BANDS[i].mhz, GL_SM_BANDS[i].s9,
+                 GL_SM_BANDS[i].s9 - (GL_SM_UNITS - 1) * GL_SM_DB, GL_SM_BANDS[i].s9 + GL_SM_OVER_TOP);
+        WT_HAS(doc, row);
+    }
     WT_HAS(doc, "`rf_dist_cell()`");
     /* V4: G8's row, its spec form named and its TUI half said to be
      * owed. Seen red with the row removed. */
@@ -2681,6 +3512,15 @@ void run_glyph_tests(void) {
     WT_RUN(test_g2_words_are_sloths);
     WT_RUN(test_new_mark_and_first_cell);
     WT_RUN(test_v2_wiring);
+    WT_RUN(test_sm_constants_and_band_table);
+    WT_RUN(test_sm_boundaries_and_readout);
+    WT_RUN(test_sm_reads_on_its_band);
+    WT_RUN(test_sm_states);
+    WT_RUN(test_sm_geometry_and_ticks);
+    WT_RUN(test_sm_reads_in_greyscale);
+    WT_RUN(test_sm_other_units);
+    WT_RUN(test_sm_words_and_text);
+    WT_RUN(test_sm_page_and_wiring);
     WT_RUN(test_the_page_carries_v3s_js);
     WT_RUN(test_g3_states);
     WT_RUN(test_g3_out_of_band_only_on_z);
