@@ -6780,3 +6780,55 @@ its excess over the receiver's gap and over the interval, nothing when
 they disagree in sign). Residual, stated in the rule and the assessment:
 a reader falling behind on the very pair where the receiver dropped an
 epoch is not seen, since at 1 Hz that gap is a whole-second step's.
+
+## 2026-11-11 — device risk: anonymity counts once, own devices exempt (#191)
+
+`device_risk_score()` put 97% of a field sensor's devices in HIGH,
+because four near-collinear anonymity signals (randomised MAC, unknown
+vendor, no hostname, probe-only) summed to three. They are now one point
+between them, so anonymity stops at MED and HIGH takes an evidence
+signal (a cleartext credential or an alert naming the device's IP), CRIT
+both. Bit 64 (`SELF`) marks the sensor's own interfaces and rostered
+devices, which record no anonymity signal. `00:c0:ca` resolves to ALFA.
+slothweb scores from `risk_signals` in every scope and no longer reads
+the stored `risk_level`, so rows stored under the old sums read at the
+new level. The replay golden file's three probe-only device rows move
+from HIGH to MED. [[devices]], [[posture-report]], [[capture-scope]],
+[[slothweb]].
+
+## 2026-11-11 — the "self" tag is the sensor's own interfaces only (#183)
+
+`PM_FORGE`, `RECURRING_TRANSIT` and `BLOCKACK_ATTACK` tag a finding
+"self" and demote it one step only for an address on the self roster,
+no longer for a `--known-mac` device, which was being described as the
+sensor's own radio. `ATTACK_PATH` has no self tag yet: the sensor keeps
+no record of its own IP addresses. [[alerts]].
+
+## 2026-11-11 — `EVIL_TWIN`: one device's own radios are not a pair (#188)
+
+Every CRIT row on a field sensor over six days was the 2.4 and 5 GHz
+radios of one box. A pair whose BSSIDs differ in at most two bytes, on
+different bands, first heard within 10 s of each other is one device.
+A locally administered BSSID has no OUI to compare, vendor-IE hashes are
+compared within a band only, a steer from a sibling address is not a
+hard signal, and a soft-signal CRIT needs 50% confidence. Known limit: a
+rogue on a locally administered address now reaches WARN at most without
+a hard signal. [[alerts]], [[twins]], [[evil-twin-reproducer]],
+[[action-frames]].
+
+## 2026-11-11 — `EVIL_TWIN_PROXIMITY` needs a twin (#189)
+
+The rule fired on any BSSID with a 15 dBm swing in 60 s; 254 of 300
+firing BSSIDs had no same-SSID twin. It now fires only for half of a
+candidate pair, with the window's minimum above -92 dBm, and not while
+a GNSS fix in the last 60 s shows the sensor moving. [[alerts]],
+[[twins]].
+
+## 2026-11-11 — posture report while running, one record per session (#190)
+
+`--report-interval SECS` writes `report.live.*` beside the report path;
+`--report-history` keeps `report.<UTC session start>.*` at exit so a
+restart no longer replaces the last session's record. A killed session's
+live file is set aside as `.unclean`. `SIGUSR1` forces a live write and
+is blocked in the worker threads. Nothing prunes the per-session files.
+[[posture-report]], [[cli-reference]], [[deployment]], [[retention]].

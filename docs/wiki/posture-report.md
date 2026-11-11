@@ -1,12 +1,13 @@
 ---
 name: posture-report
-description: --report / --report-json write a session summary at exit
+description: --report / --report-json write a session summary at exit, optionally a live copy while running and one record per session
 ---
 
 # Posture report export
 
 **Skill**: post-hoc summary of everything sloth observed during a
-session. Not a live view — one file at shutdown.
+session. One signed-off file at shutdown; optionally a live file while
+running and one record per session (#190).
 
 ## Flags
 
@@ -14,6 +15,19 @@ session. Not a live view — one file at shutdown.
 - `--report-json FILE.json` — JSON, for SIEM diff / CI compare.
 
 Both can be set at the same time.
+
+- `--report-interval SECS` — also write the report every SECS seconds
+  (0..86400, default 0 = off) to `report.live.md` / `report.live.json`
+  beside the report path. The live file is the same rollup, marked as
+  still running, written to a temporary sibling and renamed into place.
+- `--report-history` — on exit, also keep this session's report as
+  `report.<UTC session start>.md` (and `.json`), created 0600 and never
+  over an existing name, so a restart does not replace an earlier
+  session's record. sloth does not prune these.
+
+A session that is killed never signs off, so its live file is its only
+record. A later session sets it aside as `report.<UTC mtime>.unclean.md`
+before reusing the live name.
 
 The report names credential exposures and high-risk devices, so it is
 written **0600** whatever the umask (#87). An existing file at the path

@@ -369,6 +369,7 @@ operator deletes them:
 | EAPOL / PMKID export | `--eapol-dir DIR` + `--collect-handshakes` | **7 days** by default — see §2c. The one managed artifact outside the database, because it is the one that is offline-crackable |
 | Per-handshake pcaps | `--eapol-dir DIR` + `--collect-handshakes` | **7 days** by default (§2c) |
 | Posture reports | `--report`, `--report-json` | **none** — overwritten per run at the path you name, never aged |
+| Live, per-session and unclean reports (#190) | `--report-interval`, `--report-history` | **none** — `report.live.*` is replaced in place; `report.<UTC>.*` and `report.<UTC>.unclean.*` accumulate, one small file per session per format, never pruned |
 | Packets-view manual export | `w` key | **none** |
 | Wi-Fi AP snapshot | `--snapshot-out FILE` | **none** — overwritten per run at the path you name |
 | SQLite WAL / SHM | `--db` | not measured by the size guard; checkpointed by SQLite, not by sloth |
