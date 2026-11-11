@@ -2973,33 +2973,54 @@ static void test_evil_twin_diff_oui_no_signals_stays_warn(void) {
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
 }
 
-/* ── Evil-twin Phase 3: RSSI-step proximity ─────────────────── */
+/* ── Evil-twin Phase 3: RSSI-step proximity ───────────────────
+ *
+ * Since #189 the swing is reported only for a BSSID that has a twin
+ * candidate, so the threshold tests below seed a pair: a second
+ * transmitter under the same name with a different globally
+ * administered OUI, which rule_evil_twin reports at WARN. */
+
+static const uint8_t PROX_REAL[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
+static const uint8_t PROX_ROGUE[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+
+/* Index 0 is the original, index 1 the candidate copy. */
+static void prox_pair(sloth_state_t *s, const char *ssid) {
+    add_beacon(s, ssid, PROX_REAL,  "WPA2");
+    add_beacon(s, ssid, PROX_ROGUE, "WPA2");
+}
+
+static int prox_count(const sloth_state_t *s) {
+    int n = 0;
+    for (int k = 0; k < s->alert_count; k++)
+        if (s->alerts[k].type == ALERT_TYPE_EVIL_TWIN_PROXIMITY) n++;
+    return n;
+}
 
 /* 15 dBm delta fires WARN — boundary of the threshold. */
 static void test_evil_twin_proximity_fires_at_threshold(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t bssid[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
-    add_beacon(&s, "Roving", bssid, "WPA2");
-    s.beacon_aps[0].rssi_min_60s = -80;
-    s.beacon_aps[0].rssi_max_60s = -65;   /* swing = 15 */
+    prox_pair(&s, "Roving");
+    s.beacon_aps[1].rssi_min_60s = -80;
+    s.beacon_aps[1].rssi_max_60s = -65;   /* swing = 15 */
     alerts_update(&s);
     int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY);
     ASSERT(idx >= 0);
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
-    ASSERT(strstr(s.alerts[idx].detail, "a8:bb:cc:01:02:03") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "3c:52:a1:01:02:03") != NULL);
     ASSERT(strstr(s.alerts[idx].detail, "15 dBm") != NULL);
-    ASSERT(strstr(s.alerts[idx].key, "twin-prox:a8:bb:cc:01:02:03") != NULL);
+    ASSERT(strstr(s.alerts[idx].key, "twin-prox:3c:52:a1:01:02:03") != NULL);
+    /* The corroborated row is there to be read beside it. */
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN) >= 0);
 }
 
 /* 14 dBm delta — one below threshold — no fire. */
 static void test_evil_twin_proximity_below_threshold_no_fire(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t bssid[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
-    add_beacon(&s, "Stable", bssid, "WPA2");
-    s.beacon_aps[0].rssi_min_60s = -79;
-    s.beacon_aps[0].rssi_max_60s = -65;   /* swing = 14 */
+    prox_pair(&s, "Stable");
+    s.beacon_aps[1].rssi_min_60s = -79;
+    s.beacon_aps[1].rssi_max_60s = -65;   /* swing = 14 */
     alerts_update(&s);
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
 }
@@ -3009,10 +3030,9 @@ static void test_evil_twin_proximity_below_threshold_no_fire(void) {
 static void test_evil_twin_proximity_large_swing_fires(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t bssid[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
-    add_beacon(&s, "Pineapple-Mimic", bssid, "WPA2");
-    s.beacon_aps[0].rssi_min_60s = -85;
-    s.beacon_aps[0].rssi_max_60s = -50;   /* swing = 35 */
+    prox_pair(&s, "Pineapple-Mimic");
+    s.beacon_aps[1].rssi_min_60s = -85;
+    s.beacon_aps[1].rssi_max_60s = -50;   /* swing = 35 */
     alerts_update(&s);
     int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY);
     ASSERT(idx >= 0);
@@ -3025,10 +3045,9 @@ static void test_evil_twin_proximity_large_swing_fires(void) {
 static void test_evil_twin_proximity_unseen_min_no_fire(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t bssid[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
-    add_beacon(&s, "Bootstrap", bssid, "WPA2");
-    s.beacon_aps[0].rssi_min_60s = 0;      /* sentinel: unseen */
-    s.beacon_aps[0].rssi_max_60s = -50;
+    prox_pair(&s, "Bootstrap");
+    s.beacon_aps[1].rssi_min_60s = 0;      /* sentinel: unseen */
+    s.beacon_aps[1].rssi_max_60s = -50;
     alerts_update(&s);
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
 }
@@ -3037,30 +3056,200 @@ static void test_evil_twin_proximity_unseen_min_no_fire(void) {
 static void test_evil_twin_proximity_unseen_max_no_fire(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t bssid[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
-    add_beacon(&s, "Bootstrap", bssid, "WPA2");
-    s.beacon_aps[0].rssi_min_60s = -90;
-    s.beacon_aps[0].rssi_max_60s = 0;
+    prox_pair(&s, "Bootstrap");
+    s.beacon_aps[1].rssi_min_60s = -90;
+    s.beacon_aps[1].rssi_max_60s = 0;
     alerts_update(&s);
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
 }
 
-/* Per-BSSID dedup — two distinct APs both swinging produce two alerts. */
+/* Per-BSSID dedup — both halves of a pair swinging produce two alerts,
+ * one key each. Either half qualifies: an unattributed pair has no
+ * accused side to prefer. */
 static void test_evil_twin_proximity_per_bssid(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xa8,0xbb,0xcc,0x00,0x00,0x01};
-    uint8_t b[6] = {0x11,0x22,0x33,0x00,0x00,0x02};
-    add_beacon(&s, "A", a, "WPA2");
-    add_beacon(&s, "B", b, "WPA2");
+    prox_pair(&s, "A");
     s.beacon_aps[0].rssi_min_60s = -80; s.beacon_aps[0].rssi_max_60s = -60;
     s.beacon_aps[1].rssi_min_60s = -85; s.beacon_aps[1].rssi_max_60s = -60;
     alerts_update(&s);
-    int count = 0;
-    for (int k = 0; k < s.alert_count; k++) {
-        if (s.alerts[k].type == ALERT_TYPE_EVIL_TWIN_PROXIMITY) count++;
-    }
-    ASSERT_EQ(count, 2);
+    ASSERT_EQ(prox_count(&s), 2);
+}
+
+/* #189, the headline: 254 of the 300 BSSIDs that fired on a field
+ * sensor had no twin. A lone BSSID with a 30 dBm swing is a path that
+ * changed, and says nothing about impersonation.
+ *
+ * Three shapes of "no twin": nothing else in the table, another network
+ * entirely, and the same network's own second BSSID with no evidence
+ * against it (same globally administered OUI, nothing else), which is
+ * what a legitimate multi-AP deployment looks like.
+ *
+ * Mutation (2026-11-11): with the twin_has_candidate() check removed
+ * from rule_evil_twin_proximity all three assertions went red. */
+static void test_evil_twin_proximity_lone_bssid_no_fire(void) {
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "Printer", PROX_ROGUE, "WPA2");
+    s.beacon_aps[0].rssi_min_60s = -80;
+    s.beacon_aps[0].rssi_max_60s = -50;   /* swing = 30 */
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+
+    alerts_clear();
+    add_beacon(&s, "SomeoneElse", PROX_REAL, "WPA2");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+
+    alerts_clear();
+    static sloth_state_t t; seed_state(&t);
+    uint8_t ap1[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+    uint8_t ap2[6] = {0x3c,0x52,0xa1,0x0a,0x0b,0x0c};
+    add_beacon(&t, "Office", ap1, "WPA2");
+    add_beacon(&t, "Office", ap2, "WPA2");
+    t.beacon_aps[0].rssi_min_60s = -80;
+    t.beacon_aps[0].rssi_max_60s = -50;
+    alerts_update(&t);
+    ASSERT_EQ(find_alert(&t, ALERT_TYPE_EVIL_TWIN), -1);
+    ASSERT_EQ(find_alert(&t, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+}
+
+/* The other branch of the pair definition: an OPEN copy beside a
+ * protected original is a candidate too, from either side. */
+static void test_evil_twin_proximity_fires_on_a_weak_strong_pair(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", PROX_REAL,  "WPA2");
+    add_beacon(&s, "CorpWiFi", PROX_ROGUE, "OPEN");
+    s.beacon_aps[1].rssi_min_60s = -80;
+    s.beacon_aps[1].rssi_max_60s = -50;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].key, "twin-prox:3c:52:a1:01:02:03") != NULL);
+}
+
+/* One device's 2.4 and 5 GHz radios are not a twin pair (#188), so
+ * neither radio has a candidate and a swing on one is not reported.
+ * The steer from an unrelated address is what would make them a pair
+ * if the sibling test were absent; without it the U/L and band rules
+ * already leave this pair evidence-free and the test would prove
+ * nothing about siblings.
+ *
+ * Mutation (2026-11-11): twin_pair_is_sibling() returning 0; the
+ * assertion below went red. The control after it moves the second
+ * radio's first sighting a minute later, where it is a pair again. */
+static void test_evil_twin_proximity_sibling_radio_is_no_candidate(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t r24[6]  = {0x28,0x25,0x5f,0x10,0x20,0x14};
+    uint8_t r5[6]   = {0x28,0x25,0x5f,0x10,0x20,0x1c};
+    uint8_t mesh[6] = {0x64,0x67,0x72,0x01,0x02,0x03};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "HomeNet", r24, "WPA2");
+    add_beacon(&s, "HomeNet", r5,  "WPA2");
+    s.beacon_aps[0].channel = 6;   s.beacon_aps[0].first_seen = t0;
+    s.beacon_aps[1].channel = 157; s.beacon_aps[1].first_seen = t0 + 2;
+    s.beacon_aps[1].rssi_min_60s = -80;
+    s.beacon_aps[1].rssi_max_60s = -50;
+    btm_steer_t *st = &s.btm_steers[s.btm_steer_count++];
+    memset(st, 0, sizeof(*st));
+    memcpy(st->bssid, mesh, 6);
+    st->req_count = 1;
+    st->imminent_count = 3;
+    memcpy(st->candidates[0], r5, 6);
+    st->candidate_count = 1;
+    st->first_seen = st->last_seen = time(NULL);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+
+    alerts_clear();
+    s.beacon_aps[1].first_seen = t0 + 60;
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+}
+
+/* A swing anchored at the noise floor. -100 → -80 is the typical lone
+ * row of the issue: an AP at the edge of earshot whose weakest beacon
+ * happened to decode, not a transmitter that came 20 dB closer. On a
+ * real twin pair it is still not reported.
+ *
+ * Mutation (2026-11-11): the TWIN_PROX_FLOOR_DBM check removed; the
+ * first two assertions went red. The third is the boundary from the
+ * other side: one dBm above the floor fires. */
+static void test_evil_twin_proximity_noise_floor_swing_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    prox_pair(&s, "Edge");
+    s.beacon_aps[1].rssi_min_60s = -100;
+    s.beacon_aps[1].rssi_max_60s = -80;   /* swing = 20 */
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+
+    alerts_clear();
+    s.beacon_aps[1].rssi_min_60s = -92;   /* at the floor: still out */
+    s.beacon_aps[1].rssi_max_60s = -60;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+
+    alerts_clear();
+    s.beacon_aps[1].rssi_min_60s = -91;
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+}
+
+/* One positioned fix in the per-poll GNSS history, hand-built: the ring
+ * the GNSS rules read through s->gnss_hist. */
+static void prox_gnss_fix(gnss_hist_t *h, time_t ts, int has_speed,
+                          double speed_mps) {
+    memset(h, 0, sizeof(*h));
+    h->fixes[0].ts        = ts;
+    h->fixes[0].mode      = 3;
+    h->fixes[0].has_speed = has_speed;
+    h->fixes[0].speed     = speed_mps;
+    h->fix_n    = 1;
+    h->fix_head = 1;
+}
+
+/* A sensor that is itself moving swings every AP it passes, twin or
+ * not, so a swing measured while it moved corroborates nothing. Read
+ * from the fix history over the same 60 s the RSSI window covers.
+ *
+ * Mutation (2026-11-11): the twin_sensor_moving() check removed; the
+ * first assertion went red. The three after it are the cases that must
+ * NOT suppress: a parked sensor's jitter, a drive that ended before the
+ * window began, and a fix that carries no speed at all. */
+static void test_evil_twin_proximity_quiet_while_the_sensor_moves(void) {
+    time_t now = time(NULL);
+    static gnss_hist_t h;
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    prox_pair(&s, "Roadside");
+    s.beacon_aps[1].rssi_min_60s = -80;
+    s.beacon_aps[1].rssi_max_60s = -50;
+    prox_gnss_fix(&h, now - 5, 1, 12.0);          /* about 43 km/h */
+    s.gnss_hist = &h;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+    /* The pair itself is not withheld: only its corroborator is. */
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN) >= 0);
+
+    alerts_clear();
+    prox_gnss_fix(&h, now - 5, 1, 0.3);           /* parked, jitter */
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+
+    alerts_clear();
+    prox_gnss_fix(&h, now - 300, 1, 12.0);        /* stopped long ago */
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+
+    alerts_clear();
+    prox_gnss_fix(&h, now - 5, 0, 12.0);          /* no speed reported */
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
 }
 
 /* ── Evil-twin Phase 4: attack-chain correlation ──────────── */
@@ -11517,6 +11706,11 @@ void run_alerts_tests(void) {
     RUN_TEST(test_evil_twin_proximity_unseen_min_no_fire);
     RUN_TEST(test_evil_twin_proximity_unseen_max_no_fire);
     RUN_TEST(test_evil_twin_proximity_per_bssid);
+    RUN_TEST(test_evil_twin_proximity_lone_bssid_no_fire);
+    RUN_TEST(test_evil_twin_proximity_fires_on_a_weak_strong_pair);
+    RUN_TEST(test_evil_twin_proximity_sibling_radio_is_no_candidate);
+    RUN_TEST(test_evil_twin_proximity_noise_floor_swing_no_fire);
+    RUN_TEST(test_evil_twin_proximity_quiet_while_the_sensor_moves);
     RUN_TEST(test_evil_twin_attack_chain_fires_crit);
     RUN_TEST(test_evil_twin_attack_chain_stale_deauth_no_fire);
     RUN_TEST(test_evil_twin_attack_chain_no_twin_no_fire);

@@ -223,7 +223,7 @@ omitted.
 | `SNMP_COMMUNITY_BRUTE` | CRIT | T1110.001 | SNMPv1/v2c fan-out with rotating community strings | src / 161 |
 | `MQTT_BROKER_BRUTE` | CRIT | T1110.001 | MQTT CONNECT/CONNACK-fail burst (Mirai-class sweep) | src / 1883 |
 | `ROGUE_RA` | CRIT | T1557     | unexpected IPv6 Router Advertisement | src / 0 |
-| `EVIL_TWIN_PROXIMITY` | WARN | T1557     | evil-twin candidate at similar RSSI to the real AP | — (L2 only) |
+| `EVIL_TWIN_PROXIMITY` | WARN | T1557     | a BSSID that is half of an `EVIL_TWIN` candidate pair and whose RSSI moved at least `twin.proximity_dbm` (15) inside 60 s: the suspected copy being switched on or carried closer. A corroborator for the `EVIL_TWIN` row on the same pair, never a finding of its own. Since #189 it fires **only when the BSSID has a twin candidate** (the pair definition `EVIL_TWIN` uses, either half; one device's radios on two bands are not a pair) - on a field sensor 254 of 300 firing BSSIDs had no twin at all. Two more conditions: the swing's minimum must be above -92 dBm, because a reading at the receiver's noise floor is "barely heard", not "came closer"; and the rule is silent while a GNSS fix in the last 60 s shows the sensor itself moving at 1 m/s or more, when every AP it passes swings. **Benign trigger:** a person or vehicle moving between the sensor and either half of a mixed-vendor pair that is itself benign | — (L2 only) |
 
 ### BEACONING cap (#148)
 

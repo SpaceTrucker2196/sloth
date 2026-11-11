@@ -1839,17 +1839,93 @@ void rule_ssid_confusion(const sloth_state_t *s, time_t now) {
     }
 }
 
-/* Evil-twin proximity — Phase 3. A single BSSID whose RSSI jumps
- * ≥15 dBm within the 60s sliding window (no roam — same BSSID, same
- * channel) is a strong tell for either (a) an attacker AP moving
- * closer/being switched on nearby, or (b) signal-level deception. We
- * fire at WARN: it's noisy on its own (mobile devices roaming past
- * the sniffer also cause big swings), but combined with a twin-fp
- * alert it's a strong attack-in-progress signal that Phase 4 will
- * correlate. */
+/* Evil-twin proximity — Phase 3. A BSSID that is half of a twin
+ * candidate pair and whose RSSI moved ≥15 dBm inside the 60 s sliding
+ * window (no roam — same BSSID, same channel): the suspected copy being
+ * switched on nearby or carried closer. WARN, and a corroborator for
+ * the EVIL_TWIN row on the same pair, never a finding of its own.
+ *
+ * It used to fire on the swing alone. On a field sensor 254 of the 300
+ * BSSIDs that fired in a week had no same-SSID twin at all (#189):
+ * printers, cameras and vehicle hotspots drifting between -100 and
+ * -80 dBm. A swing measured at sloth's own antenna says the path
+ * changed, and nothing about impersonation, so three things now have
+ * to hold before it is reported.
+ *
+ *   1. The BSSID has a twin candidate, by the definition rule_evil_twin
+ *      itself uses (twin_pair_is_candidate). Either half qualifies: an
+ *      unattributed pair has no accused half to prefer, and the
+ *      original getting louder beside a copy is still worth a row.
+ *   2. The low end of the swing is above TWIN_PROX_FLOOR_DBM.
+ *   3. The sensor has not itself moved during the window. */
 #define EVIL_TWIN_PROXIMITY_DBM ((int)tune_val(TUNE_EVIL_TWIN_PROXIMITY_DBM))
 
+/* A swing has to start from a reading that means something. Thermal
+ * noise in a 20 MHz channel is -101 dBm (kTB, -174 dBm/Hz + 73 dB) and
+ * a typical receiver adds 6-7 dB, so its floor is about -95 dBm; a
+ * beacon at the lowest rates needs a few dB above that to decode at
+ * all. At -92 or below, whether a given beacon is received is decided
+ * by fading, and "min" is the weakest one that happened to get through
+ * rather than a level the AP sat at. -92 is the issue's figure and it
+ * is where that margin runs out. A window whose minimum is at or under
+ * it is "barely heard", not "came closer". */
+#define TWIN_PROX_FLOOR_DBM (-92)
+
+/* Sensor speed, in m/s, from which every AP's RSSI is expected to
+ * swing. Twice the 0.5 m/s under which src/gps.c's own speed band calls
+ * a receiver stationary, so position jitter on a parked sensor does not
+ * flap the rule, and under walking pace (about 1.4 m/s), because a
+ * sensor carried past an AP changes its path loss as surely as one
+ * driven past. */
+#define TWIN_PROX_MOVING_MPS 1.0
+
+/* Did the sensor move while the RSSI window was filling? Read from the
+ * per-poll GNSS fix history (s->gnss_hist, the snapshot the GNSS rules
+ * read), not from the newest fix alone: the window is 60 s long, so a
+ * car that stopped ten seconds ago still holds the swing it drove
+ * through. No GNSS, no speed in the fix, or no fix inside the window
+ * is "not known to be moving" and suppresses nothing. */
+static int twin_sensor_moving(const sloth_state_t *s, time_t now) {
+    const gnss_hist_t *h = s->gnss_hist;
+    if (!h) return 0;
+    for (int i = 0; i < h->fix_n && i < GNSS_FIX_HIST; i++) {
+        const gnss_fix_pt_t *f =
+            &h->fixes[(h->fix_head - h->fix_n + i + 2 * GNSS_FIX_HIST) %
+                      GNSS_FIX_HIST];
+        if (!f->has_speed || f->speed < TWIN_PROX_MOVING_MPS) continue;
+        if (f->ts > now || now - f->ts > RSSI_WIN_SECS) continue;
+        return 1;
+    }
+    return 0;
+}
+
+/* Would rule_evil_twin report this pair? Its two branches, as one
+ * predicate: a weak/strong split under one SSID, or the same non-OPEN
+ * security with positive evidence. The second goes through
+ * twin_evidence_score, so one device's radios on two bands (#188) are
+ * not a candidate here either. */
+static int twin_pair_is_candidate(const sloth_state_t *s, const beacon_ap_t *a,
+                                  const beacon_ap_t *b, time_t now) {
+    if (!a->ssid[0] || strcmp(a->ssid, b->ssid) != 0) return 0;
+    if (memcmp(a->bssid, b->bssid, 6) == 0) return 0;
+    if ((enc_is_weak(a->enc) && enc_is_strong(b->enc)) ||
+        (enc_is_weak(b->enc) && enc_is_strong(a->enc)))
+        return 1;
+    if (!a->enc[0] || strcmp(a->enc, "OPEN") == 0) return 0;
+    if (strcmp(a->enc, b->enc) != 0) return 0;
+    return twin_evidence_score(s, a, b, now, NULL);
+}
+
+static int twin_has_candidate(const sloth_state_t *s, int i, time_t now) {
+    for (int j = 0; j < s->beacon_count; j++)
+        if (j != i && twin_pair_is_candidate(s, &s->beacon_aps[i],
+                                             &s->beacon_aps[j], now))
+            return 1;
+    return 0;
+}
+
 void rule_evil_twin_proximity(const sloth_state_t *s, time_t now) {
+    if (twin_sensor_moving(s, now)) return;
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
         /* 0 in either bound means "no signal yet" — the ring hasn't
@@ -1857,6 +1933,10 @@ void rule_evil_twin_proximity(const sloth_state_t *s, time_t now) {
         if (a->rssi_min_60s == 0 || a->rssi_max_60s == 0) continue;
         int delta = a->rssi_max_60s - a->rssi_min_60s;
         if (delta < EVIL_TWIN_PROXIMITY_DBM) continue;
+        if (a->rssi_min_60s <= TWIN_PROX_FLOOR_DBM) continue;
+        /* Last: the pair walk is the expensive test, and few BSSIDs
+         * reach it. */
+        if (!twin_has_candidate(s, i, now)) continue;
 
         char bssid[20];
         fmt_bssid(bssid, a->bssid);

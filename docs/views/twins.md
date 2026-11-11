@@ -202,8 +202,9 @@ the rows where sloth had none.
   vendor-IE-driven attack surfaces.
 - **High RSSI swing on the twin** — a rogue being switched on / moved
   closer mid-capture (Pineapple in a backpack, ESP32 booting). Phase 3
-  fires `EVIL_TWIN_PROXIMITY` independently when the swing crosses
-  15 dBm.
+  fires `EVIL_TWIN_PROXIMITY` when the swing crosses 15 dBm on a BSSID
+  that is half of a candidate pair (#189), its minimum is above
+  -92 dBm, and the sensor is not itself moving.
 
 ## See also
 
