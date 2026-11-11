@@ -354,8 +354,10 @@ static const char STEP_V7_SQL[] =
  * or linked: the engine forgets an episode after a day, and a note has
  * to say what it was written on for longer than that. relation is one
  * link the operator made, from one finding to another: each end a kind
- * (0 an alert, 1 an anomaly, 2 a device), the id the routes name it by
- * (an alert's triage subject, an anomaly's id, a canonical MAC) and a
+ * (0 an alert, 1 an anomaly, 2 a device, 3 a BLE advertiser: a number,
+ * so a kind added later is a value, not a step), the id the routes
+ * name it by (an alert's triage subject, an anomaly's id, a canonical
+ * MAC, a BLE address and its type) and a
  * label of slothweb's own words (an alert type's name and address, an
  * anomaly's rule and key), kept so a link whose end has aged out of
  * sloth.db or the engine still says what it pointed at; note and who

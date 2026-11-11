@@ -1621,13 +1621,18 @@ model is `docs/web-frrs-spec.md` §15.
   nothing durable. Each row records the episode it was written on, and
   a state decided on an earlier episode than the one held now is shown
   as **carried**, never as if it had been said of this one; saying it
-  again makes it this episode's. The store keeps the rule, metric and
+  again makes it this episode's. A triaged-out state dims the card
+  either way, the mark kept on it (owner ruling 2026-11-11); a carried
+  incident never dims. The store keeps the rule, metric and
   key beside the id (`anom_subject`), so a note outlives the day the
   engine keeps an episode, and so an id that hashes to another
   anomaly's is refused (`409 id_collision`) instead of joined. No
   assessment judges an anomaly rule: nothing is recommended.
-- **Links** are the operator's, from an anomaly to an alert, another
-  anomaly or a device, stored in `relation` with each end's kind, id
+- **Links** are the operator's: an anomaly to an alert, another
+  anomaly, a device or a BLE advertiser (`addr/type`, as the TACDB
+  names one; a rotated address reads "no longer held"), or an alert to
+  a device or a BLE advertiser; never alert to alert or device to
+  device. Stored in `relation` with each end's kind, id
   and a label of slothweb's own words; listed from both ends
   (`/api/frrs/related`), removable from either, at most 32 a finding.
   Both ends must exist when the link is made. An end that has since
@@ -1644,7 +1649,8 @@ model is `docs/web-frrs-spec.md` §15.
   an additive step with its migration test on a v7 file and the failure
   that leaves it unchanged. `triage` itself is untouched.
 - **The page**: `web/ui/notes.js` (`SlothNotes`), one hook in `card()`,
-  one each in the drawer and the alert page, one `init`; the anomaly's
+  one in the Anomalies table's rows, one each in the device drawer, the
+  BLE drawer and the alert page, one `init`; the anomaly's
   panel is a `<dialog>`; every value by `textContent`.
 - **Export**: the evidence bundle's `alert.related` and
   `device.related`; the TACDB JSON Lines export stays alerts-only.

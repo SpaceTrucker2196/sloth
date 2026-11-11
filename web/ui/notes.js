@@ -7,10 +7,14 @@
 //                       Overview's top five, the Anomalies view, the
 //                       drawer's, an alert page's): its state chip and
 //                       the button that opens its triage
+//   anomTable()         SlothNotes.card(row, a)   the same on every row of
+//                       the Anomalies view's table form
 //   openDrawer(mac)     SlothNotes.drawer(mac)    notes-drawer: the links
 //                       naming the device
+//   openBleDrawer(..)   SlothNotes.ble(addr, type)   notes-bdrawer: the
+//                       links naming the BLE advertiser
 //   alertPage(j)        SlothNotes.alert(j)       notes-alert: the alert's
-//                       links to anomalies, and the candidates
+//                       links, and the candidates
 //   main()              SlothNotes.init({...})    the page's helpers
 //
 // An anomaly is triaged exactly as an alert is: the same route
@@ -36,14 +40,19 @@ var SlothNotes = (function () {
   var TID_RE = /^a[0-9a-f]{16}$/;
   var ALERT_RE = /^[sd][0-9A-Za-z]{1,24}$/;
   var MAC_RE = /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/;
-  var REF_RE = /^(a[0-9a-f]{16}|[sd][0-9A-Za-z]{1,24}|[0-9a-f]{2}(:[0-9a-f]{2}){5})$/;
+  // A BLE advertiser as the server names one: its address and type.
+  var BLE_RE = /^[0-9a-f]{2}(:[0-9a-f]{2}){5}\/[0-3]$/;
+  var REF_RE = /^(a[0-9a-f]{16}|[sd][0-9A-Za-z]{1,24}|[0-9a-f]{2}(:[0-9a-f]{2}){5}(\/[0-3])?)$/;
   var STATES = ["false", "noise", "incident", "known"];
   var CLS = { "false": "sev1", "noise": "sev0", "incident": "sev2", "known": "tri-known" };
   var S = {
     st: {},     // anomaly id -> its current triage, as the server said
     reg: {},    // anomaly id -> the cards it is drawn on
     seen: {},   // anomaly id -> when its state was last asked
-    writes: false, queue: [], qt: 0, open: "", gen: 0, agen: 0, dgen: 0
+    writes: false, queue: [], qt: 0, open: "", gen: 0, agen: 0, dgen: 0, bgen: 0,
+    sub: {},    // panel ("alert", "dev", "ble") -> the id its form links from
+    read: {},   // panel -> the function that reads its list again
+    msg: {}     // panel -> its outcome line
   };
 
   function el(tag, cls, text) { return H.el(tag, cls, text); }
@@ -61,7 +70,10 @@ var SlothNotes = (function () {
 
   // ── a card's chip and button ──────────────────────────────────────
   // The state shown on a card is the finding's: decided on this episode,
-  // or carried from an earlier one, and then it says so.
+  // or carried from an earlier one, and then it says so. A triaged-out
+  // state dims the card either way (owner ruling 2026-11-11: a nightly
+  // recurrence marked known stays quiet); the mark stays on the dimmed
+  // card, and an incident is never dimmed.
   function chipOf(st) {
     var c = F.chip(st);
     if (st && st.carried && st.state !== "untriaged") c.appendChild(el("span", "d-dim", " (earlier episode)"));
@@ -77,7 +89,7 @@ var SlothNotes = (function () {
       clear(p.line);
       if (st.state !== "untriaged") p.line.appendChild(chipOf(st));
       p.line.appendChild(btn(st.state === "untriaged" ? "triage" : "notes", "", function () { open(id); }));
-      p.card.classList.toggle("tri-out", out(st.state) && !st.carried);
+      p.card.classList.toggle("tri-out", out(st.state));
     });
   }
   function flush() {
@@ -108,9 +120,13 @@ var SlothNotes = (function () {
   }
 
   // ── links and candidates, wherever they are listed ───────────────
-  function follow(kind, id) {
+  function follow(kind, id, iface) {
     if (kind === "alert" && ALERT_RE.test(id)) { close(); H.go("alert", { id: id }); }
     else if (kind === "device" && MAC_RE.test(id)) { close(); H.openDrawer(id); }
+    else if (kind === "ble" && BLE_RE.test(id) && typeof iface === "string") {
+      close();
+      H.openBleDrawer(id.slice(0, 17), Number(id.slice(18)), iface);
+    }
     else if (kind === "anomaly" && TID_RE.test(id)) open(id);
   }
   function relate(body, msg, then) {
@@ -125,9 +141,10 @@ var SlothNotes = (function () {
   var WHY = {
     "no_such_anomaly": "that anomaly is not held and was never triaged or linked",
     "no_such_device": "no device of that address is held",
+    "no_such_ble": "no BLE advertiser of that address and type is held (aa:bb:cc:dd:ee:ff/1)",
     "no_such_link": "that link is gone",
-    "bad_pair": "a link is from an anomaly: to an alert, another anomaly or a device, never to itself",
-    "bad_id": "not an alert id, an anomaly id or a MAC",
+    "bad_pair": "a link joins an anomaly to anything, or an alert to a device or a BLE advertiser; never a thing to itself",
+    "bad_id": "not an alert id, an anomaly id, a MAC or a BLE address with its type (aa:bb:cc:dd:ee:ff/1)",
     "links_full": "this finding has its 32 links, or the store its 8,192; remove one first",
     "anomaly_subjects_full": "the store holds 8,192 triaged or linked anomalies; no more",
     "id_collision": "refused: that id names a different anomaly in the store"
@@ -147,7 +164,7 @@ var SlothNotes = (function () {
       if (l.triage && l.triage.state !== "untriaged") li.appendChild(chipOf(l.triage));
       if (l.note) li.appendChild(el("span", "d-normal", l.note));
       li.appendChild(el("span", "d-dim", (l.by || "-") + " · from " + (l.peer || "?") + " · " + H.shortStamp(l.ts)));
-      if (l.held) li.appendChild(btn("open", "", function () { follow(l.kind, l.id); }));
+      if (l.held && (l.kind !== "ble" || l.iface)) li.appendChild(btn("open", "", function () { follow(l.kind, l.id, l.iface); }));
       if (rel.writes) li.appendChild(btn("remove", "", function () {
         relate({ op: "remove", from: from, link: l.link }, msg, redraw);
       }));
@@ -309,7 +326,13 @@ var SlothNotes = (function () {
   }
 
   // ── the links on an alert's page and in a device's drawer ────────
-  function panel(box, title, id, gen, cur, withSugg) {
+  // What the operator typed into a "link to" field, as an id: a MAC or
+  // a BLE address folded to lower case, an alert id as it is.
+  function typed(inp) {
+    var raw = inp.value.trim(), low = raw.toLowerCase().replace(/-/g, ":");
+    return MAC_RE.test(low) || BLE_RE.test(low) ? low : raw;
+  }
+  function panel(which, box, title, id, gen, cur, withSugg) {
     clear(box);
     box.appendChild(el("div", "label", title));
     var note = el("div", "sub", "loading"), msg = el("div", "sub tri-msg", "");
@@ -328,20 +351,47 @@ var SlothNotes = (function () {
         if (gen === cur()) note.textContent = WHY[e && e.message] || F.why(e);
       });
     };
+    S.sub[which] = id;
+    S.read[which] = read;
+    S.msg[which] = msg;
     read();
   }
+  // A panel's "link to" form (static markup: the field and its button):
+  // one link from the panel's subject to what was typed.
+  function wire(which, inp, add) {
+    if (!$(inp) || !$(add)) return;
+    $(add).addEventListener("click", function () {
+      var from = S.sub[which], to = typed($(inp)), msg = S.msg[which];
+      if (!from || !msg) return;
+      if (!REF_RE.test(to)) { msg.textContent = WHY.bad_id; return; }
+      var b = { op: "add", from: from, to: to };
+      if (by()) b.by = by();
+      relate(b, msg, function () { $(inp).value = ""; if (S.read[which]) S.read[which](); });
+    });
+  }
   function alert(j) {
-    var box = $("notes-alert");
-    if (!H || !F || !box || !j || typeof j.id !== "string" || !ALERT_RE.test(j.id)) return;
+    var sec = $("notes-alert"), box = $("notes-alert-list");
+    if (!H || !F || !sec || !box || !j || typeof j.id !== "string" || !ALERT_RE.test(j.id)) return;
     var gen = ++S.agen;
-    box.hidden = false;
-    panel(box, "related anomalies", j.id, gen, function () { return S.agen; }, true);
+    sec.hidden = false;
+    panel("alert", box, "linked anomalies and devices", j.id, gen, function () { return S.agen; }, true);
   }
   function drawer(mac) {
-    var box = $("notes-drawer");
-    if (!H || !F || !box || typeof mac !== "string" || !MAC_RE.test(mac)) return;
+    var sec = $("notes-drawer"), box = $("notes-drawer-list");
+    if (!H || !F || !sec || !box || typeof mac !== "string" || !MAC_RE.test(mac)) return;
     var gen = ++S.dgen;
-    panel(box, "anomalies linked to this device", mac, gen, function () { return S.dgen; }, false);
+    sec.hidden = false;
+    panel("dev", box, "anomalies and alerts linked to this device", mac, gen, function () { return S.dgen; }, false);
+  }
+  // A BLE advertiser is its address and type, whichever sensor's row
+  // the drawer was opened on.
+  function ble(addr, type) {
+    var sec = $("notes-bdrawer"), box = $("notes-bdrawer-list");
+    var id = String(addr) + "/" + String(type);
+    if (!H || !F || !sec || !box || !BLE_RE.test(id)) { if (sec) sec.hidden = true; return; }
+    var gen = ++S.bgen;
+    sec.hidden = false;
+    panel("ble", box, "anomalies and alerts linked to this advertiser", id, gen, function () { return S.bgen; }, false);
   }
 
   function init(h) {
@@ -352,10 +402,8 @@ var SlothNotes = (function () {
     $("notes-dlg").addEventListener("close", function () { S.open = ""; });
     $("notes-note").addEventListener("input", noteCount);
     $("notes-add").addEventListener("click", function () {
-      var id = S.open, to = $("notes-to").value.trim().toLowerCase().replace(/-/g, ":");
+      var id = S.open, to = typed($("notes-to"));
       if (!id) return;
-      // An alert id keeps its case; only a MAC is folded.
-      if (!MAC_RE.test(to)) to = $("notes-to").value.trim();
       if (!REF_RE.test(to)) { $("notes-msg").textContent = WHY.bad_id; return; }
       var b = { op: "add", from: id, to: to }, note = $("notes-note").value.trim();
       if (note) b.note = note;
@@ -367,7 +415,10 @@ var SlothNotes = (function () {
         drawRelated(id, r);
       });
     });
+    wire("alert", "notes-alert-to", "notes-alert-add");
+    wire("dev", "notes-dev-to", "notes-dev-add");
+    wire("ble", "notes-ble-to", "notes-ble-add");
   }
 
-  return { init: init, card: card, alert: alert, drawer: drawer, open: open };
+  return { init: init, card: card, alert: alert, drawer: drawer, ble: ble, open: open };
 })();

@@ -2152,6 +2152,7 @@
         row.tabIndex = 0;
         row.addEventListener("click", function () { openDrawer(a.key); });
       }
+      if (window.SlothNotes) SlothNotes.card(row, a);
       box.appendChild(row);
     });
     if (!N.list.length) box.appendChild(el("div", "sub", "nothing in this window"));
@@ -5592,6 +5593,7 @@
     // when that module is not loaded.
     var bb = $("bundle-btn-ble");
     if (bb && window.SlothBundle && SlothBundle.mount) SlothBundle.mount(bb, "ble", addr, scoped);
+    if (window.SlothNotes) SlothNotes.ble(addr, type);
     set("bdr-note", "loading");
     var p = "/api/ble/" + encodeURIComponent(addr) + "?type=" + encodeURIComponent(String(type)) +
             "&iface=" + encodeURIComponent(String(iface));
@@ -5819,7 +5821,7 @@
 
   // Anomaly triage and the links (web/ui/notes.js): the page's helpers, lent once.
   if (window.SlothNotes) SlothNotes.init({ el: el, getJSON: getJSON, prefGet: prefGet, stamp: stamp,
-    shortStamp: shortStamp, go: go, openDrawer: openDrawer });
+    shortStamp: shortStamp, go: go, openDrawer: openDrawer, openBleDrawer: openBleDrawer });
 
   // The BLE Devices waterfall (web/ui/bledev.js): the page's helpers, lent once.
   if (window.SlothBleDev) SlothBleDev.init({ el: el, set: set, getJSON: getJSON, theme: theme,

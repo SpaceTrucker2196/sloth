@@ -2382,7 +2382,7 @@ folding and the history are one mechanism
 | Table | Columns | Holds |
 |---|---|---|
 | `anom_subject` | `subject` (PK), `rule`, `metric`, `key`, `ts` | what an anomaly's id names: the rule's name (`A3`), the metric's catalogue name (or `''`) and the canonical key, exactly what `episode` already stores of it. Written once, when the anomaly is first triaged or linked; at most 8,192 (`507 anomaly_subjects_full` past it). The engine forgets an episode after a day; this is why a note still says what it was written on, and how a hash collision is caught |
-| `relation` | `id` (PK), `a_kind`, `a_id`, `a_label`, `b_kind`, `b_id`, `b_label`, `note`, `who`, `peer`, `ts` | one link the operator made, from `a` to `b`: kind 0 an alert (id its triage subject, `d<rowid>` of the finding's first sloth.db row or the stream handle), 1 an anomaly (its id), 2 a device (a canonical MAC); each label slothweb's own words (`PORT_SCAN 203.0.113.50`, `A7 fanout 203.0.113.50`), kept so a link whose end is gone still says what it pointed at; `note` (240 bytes) and `who` (32) operator text from the validated POST body, `peer` the connection's address. At most 8,192 rows and 32 naming one finding. A candidate is never a row |
+| `relation` | `id` (PK), `a_kind`, `a_id`, `a_label`, `b_kind`, `b_id`, `b_label`, `note`, `who`, `peer`, `ts` | one link the operator made, from `a` to `b`: kind 0 an alert (id its triage subject, `d<rowid>` of the finding's first sloth.db row or the stream handle), 1 an anomaly (its id), 2 a device (a canonical MAC), 3 a BLE advertiser (`addr/type`; a kind is a number, so adding it was no schema step); each label slothweb's own words (`PORT_SCAN 203.0.113.50`, `A7 fanout 203.0.113.50`), kept so a link whose end is gone still says what it pointed at; `note` (240 bytes) and `who` (32) operator text from the validated POST body, `peer` the connection's address. At most 8,192 rows and 32 naming one finding. A candidate is never a row |
 
 No column can hold a credential and nothing in either is a stream
 string: an alert's label is its type's name and the address its
@@ -3737,7 +3737,7 @@ slothweb's first. Seven paths take POST, and nothing else does:
 | Path | Body | Effect |
 |---|---|---|
 | `/api/frrs/triage` | `{"id":"d1234","state":"noise","note":"…","by":"…"}`; `id` an alert's or an anomaly's (`a` and sixteen hex digits, the `tid` of `/api/anomalies`); `state` one of `untriaged`, `false`, `noise`, `incident`, `known`, `recommended` | appends a row; `recommended` takes the assessment's state, `409 no_recommendation` when it names none (always, for an anomaly: no assessment judges an anomaly rule) |
-| `/api/frrs/relate` | `{"op":"add","from":"a…","to":"d1234"\|"a…"\|"aa:bb:cc:dd:ee:ff","note":"…","by":"…"}`, `{"op":"remove","from":"<either end>","link":7}` | a link from an anomaly ([Anomaly triage and links](#anomaly-triage-and-links)); answers the `from` end's `/api/frrs/related` |
+| `/api/frrs/relate` | `{"op":"add","from":"a…","to":"d1234"\|"a…"\|"aa:bb:cc:dd:ee:ff"\|"aa:bb:cc:dd:ee:ff/1","note":"…","by":"…"}`, `{"op":"remove","from":"<either end>","link":7}` | a link between an anomaly and anything, or an alert and a device ([Anomaly triage and links](#anomaly-triage-and-links)); answers the `from` end's `/api/frrs/related` |
 | `/api/frrs/tacdb/unit` | `{"op":"create","name":"home","kind":"site","parent":null,"note":"…"}`, `{"op":"update","id":1,…}`, `{"op":"delete"\|"restore","id":1}` | |
 | `/api/frrs/tacdb/platform` | `{"op":"create","nomenclature":"work laptop","class":"laptop","unit":1,"vendor":"…","note":"…","emitter_kind":"sta","emitter_addr":"…"}`, `update`, `delete`, `restore`, `{"op":"confirm","suggest":"<token>","unit":1}` | |
 | `/api/frrs/tacdb/emitter` | `{"op":"add"\|"move"\|"remove"\|"restore","platform":1,"kind":"sta"\|"bssid"\|"ble","addr":"aa:bb:cc:dd:ee:ff[/type]","role":"primary","label":"…"}` | a live `(kind, addr)` belongs to one platform: `409 emitter_owned` |
@@ -3867,7 +3867,7 @@ mid-merge rolls the whole file back.
 | `/api/frrs/tacdb` | `unit=`, `q=`, `deleted=0\|1`, `limit=` 1..200, `offset=` | `{"note","writes","units":[{id,parent,name,kind,note,depth,platforms,deleted}],"platforms":[{id,nomenclature,class,vendor,note,unit,unit_path,confirmed,origin,updated,deleted,emitters:[{kind,addr,role,label,origin,deleted,last_seen,scopes}]}],"matched","more","counts":{…,"caps":{…}}}` |
 | `/api/frrs/tacdb/view` | `id=` | one platform, deleted emitters included |
 | `/api/frrs/suggest` | `limit=` | `{"note","suggestions":[{token,rule,rule_name,kind,a,b,role_b,class,confidence,last_seen,nomenclature,evidence}]}` |
-| `/api/frrs/related` | `id=` an alert's id, an anomaly's or a MAC | `{"id","kind":"alert"\|"anomaly"\|"device","label","held","store","writes","window_s":600,"links_cap":32,"links":[{"link","dir":"to"\|"from","kind","id","label","held","note","by","peer","ts","triage":{…}\|null}],"links_more","suggest":[{"kind","id","label","basis","first_seen","last_seen"}],"suggest_note","alerts_reached"}` and, for a device, `"anomalies":[{"id","label","anomaly":{…},"triage"}]` ([Anomaly triage and links](#anomaly-triage-and-links)) |
+| `/api/frrs/related` | `id=` an alert's id, an anomaly's, a MAC or a BLE address `/` type (a held BLE end of a link also carries `"iface"`, the sensor its drawer opens by) | `{"id","kind":"alert"\|"anomaly"\|"device"\|"ble","label","held","store","writes","window_s":600,"links_cap":32,"links":[{"link","dir":"to"\|"from","kind","id","label","held","note","by","peer","ts","triage":{…}\|null}],"links_more","suggest":[{"kind","id","label","basis","first_seen","last_seen"}],"suggest_note","alerts_reached"}` and, for a device, `"anomalies":[{"id","label","anomaly":{…},"triage"}]` ([Anomaly triage and links](#anomaly-triage-and-links)) |
 | `/api/frrs/export` | none | `slothweb-tacdb.jsonl` (attachment, the import's format above): a header line, every live unit (parents first), platform and emitter, every dismissal, every alert's triage row by its descriptor (an anomaly's rows and the links stay on this sensor), an `end` line counting the lines and saying `complete`; deleted rows stay on this sensor; `507 export_too_large` past 8 MiB |
 
 `/api/alerts` takes `triage=any|untriaged|triaged|out|false|noise|incident|known`
@@ -3928,9 +3928,12 @@ further apart than an alert's incidents: every row records the episode
 it was written on (`"episode"`, that episode's `first_seen`), and when
 the episode held now is another one the state is shown as
 `"carried":true` ("earlier episode" beside the chip, "decided on an
-earlier episode, not on this one" in the panel, the card not dimmed);
-saying the state again makes it this episode's (a row, even with no
-new note). So a note never reads as if it had been written about a
+earlier episode, not on this one" in the panel). A triaged-out state
+(`false`, `noise`, `known`) dims the card whether it is this episode's
+or carried, the "earlier episode" mark still on the dimmed card (owner
+ruling 2026-11-11: the point of marking a nightly recurrence known is
+that it stays quiet); a carried `incident` is never dimmed. Saying the
+state again makes it this episode's (a row, even with no new note). So a note never reads as if it had been written about a
 later episode.
 
 The id is a hash of values the answer already shows, so it discloses
@@ -3958,21 +3961,37 @@ and a *triage* (or *notes*) button, which opens the anomaly's panel:
 the four state buttons and *clear*, the note (counted in bytes against
 the same 240), every change newest first with the episode it was made
 on, the links, the candidates, and "link to" (an alert id, an anomaly
-id or a MAC). The "by" name is the one kept for alert triage
-(`frrs.by`). An alert's page gains *related anomalies* under its triage
-panel, and the device drawer *anomalies linked to this device*. One
-module, `web/ui/notes.js` (`SlothNotes`), four guarded calls in
-`app.js`; its writes go through `frrs.js`'s own `post()`. The table
-form of the Anomalies view and the presence strip's episode marks do
-not carry the chip.
+id, a MAC or a BLE address with its type). The "by" name is the one
+kept for alert triage (`frrs.by`). The table form of the Anomalies view
+carries the same chip and button on every row, so every place an
+anomaly is listed can be triaged; the presence strip's episode marks
+do not. An alert's page gains *linked anomalies and devices* under its
+triage panel, the device drawer *anomalies and alerts linked to this
+device* and the BLE drawer the same for the advertiser, each with a
+"link to" field. One module, `web/ui/notes.js` (`SlothNotes`), six
+guarded calls in `app.js`; its writes go through `frrs.js`'s own
+`post()`.
 
-**Links.** `POST /api/frrs/relate` `add` makes a link from one finding
-to another, at least one of them an anomaly: anomaly to alert, to
-another anomaly, or to a device (a MAC). Both ends are resolved against
-what exists first (`404 no_such_alert`, `no_such_anomaly`,
-`no_such_device`: a device is one sloth.db, sloth's latest pass, the
-ledger or an anomaly's key holds; `400 bad_id`; `400 bad_pair` for a
-link with no anomaly in it or to itself), the same pair again in either
+**Links.** `POST /api/frrs/relate` `add` makes a link between two
+things, in either order: an anomaly to an alert, another anomaly, a
+device (a MAC) or a BLE advertiser; or an alert to a device or a BLE
+advertiser with no anomaly in it (owner ruling 2026-11-11). Alert to
+alert and device to device stay refused (an alert's page already lists
+its other alerts by the device they name, and no view lists a device's
+devices), as does a thing to itself: `400 bad_pair`. A BLE advertiser
+is named as the TACDB names one, `aa:bb:cc:dd:ee:ff/N`, its address and
+address type (0 to 3; the anonymous address, type 255, is every
+anonymous advertiser and is `400 bad_id`): the BLE view's row is that
+plus the sensor that heard it, and one advertiser two sensors hear is
+one end. That is all the identity an advertiser has: a private address
+rotates, and its link then reads "no longer held". No name of it is
+stored; its label is empty and the id is what is shown. Both ends are
+resolved against what exists first (`404 no_such_alert`,
+`no_such_anomaly`, `no_such_device`, `no_such_ble`: a device is one
+sloth.db, sloth's latest pass, the ledger or an anomaly's key holds; a
+BLE advertiser one the ledger holds, which is memory refilled from the
+stream, so after a restart it is not held until heard again; `400
+bad_id`), the same pair again in either
 direction answers the link that is there (`"unchanged":true`), and a
 finding past 32 links or the table past 8,192 is `507 links_full` (a
 link is never dropped to make room). `remove` names the link's number
