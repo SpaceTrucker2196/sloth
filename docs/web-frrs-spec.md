@@ -1090,3 +1090,112 @@ claims nothing sloth did not record, and widens no surface.
 | 6.1 | "follow recommended" | "no automatic triage: <risk>" when an assessment does not meet §3.1's bar; at 480 px and under the button's label is the short one ("no rec. yet", "no auto: low"), and the Alerts page's button line is held inside the table's scroll box (`100vw - 72px`), so at 393 px no button is cut off (re-screenshot 2026-11-02: the line wraps, "no auto: medium" whole) | The long label ran off a phone's screen, and the line, held to `100vw - 48px`, ran under the scroll box's clip. |
 | 10 | absence assertions and their mutations | as listed in `web/tests/test_frrs.c` and `test_store.c`, each seen red in a copy of the tree with the source compared by hash afterwards | |
 
+## 15. Anomaly triage and links (2026-11-11)
+
+The owner's words: "add ability to add triage notes like we have on
+alerts for anomalies. allow them to be related where possible".
+
+### 15.1 One mechanism, a second kind of subject
+
+An anomaly (`web_anomaly.h`: slothweb's own finding, rules A1 to A10)
+is triaged by §3.1's rows and §5's routes, generalised rather than
+copied: `POST /api/frrs/triage`, `/api/frrs/states` and
+`/api/frrs/history` take an anomaly's id where they took an alert's,
+and `web_frrs.c`'s lookup, write, folding, cap and history code runs
+unchanged on it. A separate table and route for anomalies was the
+alternative; it would have been a second write path to keep as narrow
+as the first, a second cap, and two histories that drift. Nothing in
+the `triage` table had to change (slothweb.db's steps are `CREATE`
+only, and none was needed).
+
+| | Alert | Anomaly |
+|---|---|---|
+| id on the wire | `d<rowid>` / `s<handle>` | `a` + 16 hex digits (`tid` in the episode's JSON) |
+| `subject` | `d<first rowid>` (or the handle) | the id |
+| `finding` | the rowid once resolved | NULL |
+| `type` | the alert type, 0 or more | -1 |
+| `addr` | the finding's address | the id again |
+| `port` | the finding's | 0 |
+| `first_seen` | the finding's first row's | the `first_seen` of the episode the row was written on (0: none held) |
+
+`type` -1 keeps the two apart: §3.1's descriptor match wants a type of
+0 or more, so an alert's read never returns an anomaly's row or the
+reverse, and the id in `addr` keeps two anomalies whose episodes began
+in the same second (the minute pass stamps every candidate alike) from
+reading as one descriptor to the retention's "superseded" test.
+
+**What the id names.** The **finding**: every episode of one (rule,
+metric, key), by FNV-1a 64 of the rule's name, the metric's name and
+the key. §3.1 attaches an alert's triage to its finding, which is every
+incident of its key, reopens included (`web_alertdb.h`); this mirrors
+that deliberately, so a device marked `known` stays known the next time
+the same rule fires on it. The episode's own `id` is not usable (it
+restarts at 1 once every saved episode has aged out), and (kind, metric,
+key, episode start) would lose every decision at each new episode,
+which the alert side does not do. Because anomaly episodes are further
+apart than an alert's incidents, a row also records its episode, and
+the read marks the current state `carried` when it was decided on
+another episode than the one held now; the page says so and does not
+dim the card; a write of the same state then is a row, not "unchanged".
+
+**Collisions.** The hash is unsalted (its inputs are in the answer
+anyway) and FNV is invertible, so a sender who picks its MAC could aim
+an id at another anomaly's. `anom_subject` keeps (rule, metric, key)
+per id, written at the first triage or link; an id whose engine episode
+disagrees with it is `409 id_collision` on every route.
+
+**Not held.** The engine keeps a closed episode 24 h. After that the id
+resolves from `anom_subject` (`"held":false`): the history is read and
+can still be cleared. An id in neither is `404 no_such_anomaly`.
+
+**No recommendation.** The assessments judge sloth's alert rules;
+`"recommend":null`, and `state:"recommended"` is `409
+no_recommendation`.
+
+### 15.2 Links
+
+`relation(id, a_kind, a_id, a_label, b_kind, b_id, b_label, note, who,
+peer, ts)`, unique on `(a_kind, a_id, b_kind, b_id)`, indexed on the
+`b` end. Kinds: 0 alert (id its subject), 1 anomaly, 2 device (a
+canonical MAC). At least one end is an anomaly. `POST /api/frrs/relate`
+`{"op":"add","from","to","note","by"}` resolves both ends against what
+exists (the alert routes' own resolution; an anomaly in the engine or
+in `anom_subject`; a device sloth.db, the latest pass, the ledger or an
+anomaly's key holds) and writes one row, or answers the row that is
+there when the pair exists in either direction; `{"op":"remove","from",
+"link"}` deletes one, only when `from` is one of its ends. Bounds:
+8,192 rows, 32 naming one finding, `507 links_full` past either. The
+labels are slothweb's words (an alert type's name and its descriptor's
+address, never its key; an anomaly's rule, kind and key), kept so a
+link outlives its ends: `GET /api/frrs/related?id=` lists a finding's
+links from either end with `"held"` false for an end that has left
+sloth.db or the engine.
+
+### 15.3 Candidates
+
+Never automatic, never stored. For a finding held now and about a MAC
+or an IP address, `/api/frrs/related` offers up to eight others about
+the same MAC or address whose `[first_seen, last_seen]` overlaps its
+own or lies within `WEB_REL_WINDOW_S` 600 s, edges inclusive: ten
+minutes is the longest look-back of any anomaly rule (A7, A8), so an
+episode can trail its cause by that much. Sources: the engine's
+episodes by key; the stream's incidents (a MAC in the key, or
+`match_ip`); `web_sdb_alerts()`'s newest 32 for the MAC or address,
+under the request's budget. A candidate is resolved to its finding
+before it is offered, so the stream's and sloth.db's names of one alert
+are one candidate and a linked one is not offered again. Wording: "same
+device" or "same address", "overlapping in time" or "within 10
+minutes", and one fixed sentence that it is not established; no word of
+cause.
+
+### 15.4 What was not built
+
+- The TACDB export and import carry alerts' triage only.
+- A link between an alert and a device with no anomaly in it (§4's
+  record already joins those).
+- BLE addresses, SSIDs and hosts (an IP address with no MAC) as link
+  ends; a device is a MAC.
+- The capture scope does not filter candidates or links (operator
+  state, like the TACDB).
+- Triage chips on the Anomalies view's table form and on the presence
+  strip.

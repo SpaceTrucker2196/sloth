@@ -339,7 +339,7 @@ void web_usage(FILE *out) {
         "/api/alerts, /api/alert, /api/pcap/frames and /api/pcap (GET\n"
         "only),\n"
         "/events (Server-Sent Events); with --web-allow-sql, /api/query\n"
-        "(GET only) and /api/recipes. POST only to the six /api/frrs\n"
+        "(GET only) and /api/recipes. POST only to the seven /api/frrs\n"
         "write routes, same-origin, unless --web-read-only. Any other\n"
         "path is 404; any other method is 405; a Host that is not localhost or an IP\n"
         "literal is 421; a header block over 8 KB is 431.\n");

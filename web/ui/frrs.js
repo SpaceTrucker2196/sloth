@@ -1076,6 +1076,9 @@ var SlothFrrs = (function () {
     setInterval(function () { if (!document.hidden) summary(); }, 10000);
   }
 
+  // post, why, chip and bytes are lent to notes.js: an anomaly's triage
+  // goes through this file's one write path and draws this file's chip.
   return { init: init, link: link, cell: cell, q: q, show: show, mountAlert: mountAlert,
-           mountDrawer: mountDrawer, mountBundle: mountBundle, tacdb: tacdb, record: record };
+           mountDrawer: mountDrawer, mountBundle: mountBundle, tacdb: tacdb, record: record,
+           post: post, why: why, chip: chip, bytes: bytes };
 })();

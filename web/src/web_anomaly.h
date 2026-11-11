@@ -243,7 +243,10 @@ enum { WEB_EP_FREE = 0, WEB_EP_BUILDING, WEB_EP_OPEN, WEB_EP_CLOSED };
 /* The largest one episode can render to (web_anomaly_json): every byte
  * of the evidence and the key at WEB_JW_EXPAND, the rest fixed. */
 #define WEB_ANOM_EP_JSON_MAX \
-    ((WEB_ANOM_EVIDENCE_MAX + WEB_KEY_MAX) * WEB_JW_EXPAND + 320)
+    ((WEB_ANOM_EVIDENCE_MAX + WEB_KEY_MAX) * WEB_JW_EXPAND + 352)
+/* The id an anomaly's triage and links are filed under (web_frrs.h):
+ * "a" and sixteen hex digits. */
+#define WEB_ANOM_TID_MAX        17
 
 typedef struct {
     long long id;
@@ -355,6 +358,22 @@ size_t web_anomaly_json_scoped(web_anomaly_t *a, long long now_s,
                                char *out, size_t cap);
 int    web_anomaly_ep_tag(const web_anom_ep_t *e, const web_scope_ctx_t *sc,
                           web_rollup_t *ru);
+
+/* The triage id of an anomaly: "a" and the FNV-1a 64 of its rule's
+ * name, its metric's name and its key. It names the finding, every
+ * episode of that (rule, metric, key), as an alert's triage names every
+ * incident of its key (web_alertdb.h); it is the same after a restart
+ * and a re-detection, where an episode's own id is not (next_id starts
+ * again at 1 once every saved episode has aged out). Every input is
+ * already in the episode's JSON, so the hash discloses nothing; it is
+ * not collision-proof against a chosen key, which is why the triage
+ * store keeps the three beside the id and refuses a mismatch
+ * (web_relate.c). */
+void   web_anomaly_tid(int rule, int metric, const char *key,
+                       char out[WEB_ANOM_TID_MAX + 1]);
+/* The episode of that id to show: an open one, else the closed one seen
+ * last. 1 with *out, 0 when the engine holds none. */
+int    web_anomaly_tid_find(web_anomaly_t *a, const char *tid, web_anom_ep_t *out);
 
 /* One episode as JSON (the SSE "anomaly" event's data). */
 void   web_anomaly_ep_json(web_jw_t *w, const web_anom_ep_t *e);

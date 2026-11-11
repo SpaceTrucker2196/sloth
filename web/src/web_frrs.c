@@ -799,6 +799,7 @@ static void stat_inc(web_frrs_t *f, unsigned long *c) {
     (*c)++;
     pthread_mutex_unlock(&f->lmu);
 }
+void frrs_stat_inc(web_frrs_t *f, unsigned long *c) { stat_inc(f, c); }
 
 int web_frrs_gate(web_frrs_t *f, const web_req_t *rq, long long now_ms,
                   const char **why, char *extra, size_t extracap) {
@@ -987,16 +988,7 @@ static void recommend_json(const web_frrs_t *f, int type, web_jw_t *w) {
 
 /* ── the triage store ───────────────────────────────────────────────── */
 
-/* One finding as a request names it: the subject the row is filed
- * under, the finding's sloth.db rowid when known, the descriptor. */
-typedef struct {
-    char      subject[40];
-    char      alt[40];              /* the stream handle, when the id was one */
-    long long finding;
-    int       type, port;
-    char      addr[WEB_FRRS_ADDR_MAX + 1];
-    long long first;
-} tri_subj_t;
+/* One finding as a request names it: tri_subj_t (web_frrs_int.h). */
 
 static void desc_addr(const char *ip, const char *key, char *out) {
     char k[WEB_KEY_MAX + 1], m[18];
@@ -1044,7 +1036,8 @@ static int tri_lookup(web_frrs_t *f, const tri_subj_t *q, web_tri_t *out) {
         "SELECT state, prev_state, via, ts, finding, note, who, basis, peer,"
         " (SELECT COUNT(*) FROM triage u WHERE" TRI_MATCH("u.") "),"
         " claim_by, claim_peer,"
-        " (SELECT TOTAL(folded) FROM triage u WHERE" TRI_MATCH("u.") ")"
+        " (SELECT TOTAL(folded) FROM triage u WHERE" TRI_MATCH("u.") "),"
+        " first_seen"
         " FROM triage t WHERE" TRI_MATCH("t.") "ORDER BY t.id DESC LIMIT 1";
     if (sqlite3_prepare_v2(f->wr, SQL, -1, &s, NULL) != SQLITE_OK) {
         sqlite3_finalize(s);
@@ -1067,6 +1060,13 @@ static int tri_lookup(web_frrs_t *f, const tri_subj_t *q, web_tri_t *out) {
         col_text(s, 10, out->claim_by, sizeof(out->claim_by));
         col_text(s, 11, out->claim_peer, sizeof(out->claim_peer));
         out->folded = (long long)sqlite3_column_double(s, 12);
+        /* An anomaly's row: the episode it was written on, and whether
+         * the one held now is another. */
+        if (q->anom) {
+            out->anom = 1;
+            out->episode = sqlite3_column_int64(s, 13);
+            out->carried = q->first > 0 && out->episode != q->first;
+        }
         found = 1;
     }
     sqlite3_finalize(s);
@@ -1151,22 +1151,27 @@ int web_frrs_triage_find(web_frrs_t *f, web_sdb_conn_t *c, const web_tri_q_t *q,
  * do: a stream incident by its handle (its key a predicate on
  * sloth.db), a sloth.db row by its rowid. 1, 0 no such alert, -1. *inc
  * set when it is a stream incident (type from it). */
-static int resolve_id(const web_m4_t *m, web_live_t *live, const char *id, long long now_s,
-                      tri_subj_t *s) {
+int frrs_resolve_alert(const web_m4_t *m, web_live_t *live, web_sdb_conn_t *cin,
+                       const char *id, long long now_s, tri_subj_t *s, long long *last) {
     memset(s, 0, sizeof(*s));
+    if (last) *last = 0;
     if (!id || (id[0] != 's' && id[0] != 'd') || strlen(id) < 2 || strlen(id) > 25) return 0;
     for (const char *p = id + 1; *p; p++) if (!isalnum((unsigned char)*p)) return 0;
-    web_sdb_conn_t c;
-    int have_c = 0;
+    web_sdb_conn_t own;
+    web_sdb_conn_t *cp = cin;
+    int have_c = cin != NULL, opened = 0;
     char err[200];
-    if (m && m->sdb && m->sdb->configured &&
-        web_slothdb_open(m->sdb, &c, WEB_SDB_HTTP_MS, now_s, err, sizeof(err)) == 0)
-        have_c = 1;
+    if (!cin && m && m->sdb && m->sdb->configured &&
+        web_slothdb_open(m->sdb, &own, WEB_SDB_HTTP_MS, now_s, err, sizeof(err)) == 0) {
+        have_c = opened = 1;
+        cp = &own;
+    }
     int rc = 0;
     if (id[0] == 's') {
         web_live_inc_t *e = calloc(1, sizeof(*e));
-        if (!e) { if (have_c) web_slothdb_close(&c); return -1; }
+        if (!e) { if (opened) web_slothdb_close(cp); return -1; }
         if (live && web_live_incident(live, id + 1, e)) {
+            if (last) *last = e->last_ts;
             /* The earliest first_ts of the key's incidents in the
              * stream: the descriptor a stream-only row keeps. */
             long long first = e->first_ts;
@@ -1179,7 +1184,7 @@ static int resolve_id(const web_m4_t *m, web_live_t *live, const char *id, long 
             free(all);
             web_tri_q_t q = { id, e->key[0] ? e->key : NULL, 0, e->type, e->match_port,
                               e->match_ip, first };
-            rc = subj_of_q(have_c ? &c : NULL, &q, s) == 0 ? 1 : -1;
+            rc = subj_of_q(have_c ? cp : NULL, &q, s) == 0 ? 1 : -1;
         }
         free(e);
     } else {
@@ -1187,23 +1192,54 @@ static int resolve_id(const web_m4_t *m, web_live_t *live, const char *id, long 
         long long rid = strtoll(id + 1, &end, 10);
         if (end && !*end && rid > 0 && have_c) {
             web_adb_finding_t fd;
-            int g = web_adb_finding(&c, rid, NULL, &fd);
+            int g = web_adb_finding(cp, rid, NULL, &fd);
             if (g > 0) {
                 web_tri_q_t q = { id, NULL, rid, fd.type, fd.port, fd.ip, fd.first_seen };
-                rc = subj_of_q(&c, &q, s) == 0 ? 1 : -1;
+                rc = subj_of_q(cp, &q, s) == 0 ? 1 : -1;
                 /* A Wi-Fi finding with no address: the MAC its key names. */
                 if (rc == 1 && !s->addr[0]) {
                     char mac[18];
-                    if (web_adb_device(&c, rid, NULL, NULL, mac) > 0)
+                    if (web_adb_device(cp, rid, NULL, NULL, mac) > 0)
                         snprintf(s->addr, sizeof(s->addr), "%s", mac);
                 }
+                /* The finding's newest last_seen: its newest row's. */
+                web_adb_totals_t tt;
+                web_adb_row_t *row = last ? calloc(1, sizeof(*row)) : NULL;
+                if (rc == 1 && row && web_adb_key_totals(cp, rid, NULL, &tt) > 0 &&
+                    web_adb_row(cp, tt.newest_rid, row) > 0)
+                    *last = row->last_seen;
+                free(row);
             } else if (g < 0) {
                 rc = -1;
             }
         }
     }
-    if (have_c) web_slothdb_close(&c);
+    if (opened) web_slothdb_close(cp);
     return rc;
+}
+
+static int resolve_id(const web_m4_t *m, web_live_t *live, const char *id, long long now_s,
+                      tri_subj_t *s) {
+    return frrs_resolve_alert(m, live, NULL, id, now_s, s, NULL);
+}
+
+/* An id of either kind, as the triage routes take it: an alert's, or an
+ * anomaly's ("a" and sixteen hex digits), whose descriptor is then in
+ * *an. 1, 0 no such finding, -1, -2 (an anomaly id whose stored
+ * descriptor is not the engine's: frrs_anom_resolve()). */
+static int resolve_any(const web_m4_t *m, web_live_t *live, const char *id, long long now_s,
+                       tri_subj_t *s, frrs_anom_t *an) {
+    memset(an, 0, sizeof(*an));
+    if (!frrs_anom_id_ok(id)) return resolve_id(m, live, id, now_s, s);
+    memset(s, 0, sizeof(*s));
+    int r = frrs_anom_resolve(m, id, an);
+    if (r == 1) frrs_anom_subj(an, s);
+    return r;
+}
+
+int frrs_tri_current(web_frrs_t *f, const tri_subj_t *s, web_tri_t *out) {
+    memset(out, 0, sizeof(*out));
+    return f ? tri_lookup(f, s, out) : 0;
 }
 
 static void tri_json(web_jw_t *w, const web_tri_t *t, int full) {
@@ -1237,12 +1273,19 @@ static void tri_json(web_jw_t *w, const web_tri_t *t, int full) {
             web_jw_raw(w, "null");
         }
     }
+    if (t->anom) {
+        web_jw_raw(w, ",\"episode\":");
+        web_jw_int(w, t->episode);
+        web_jw_raw(w, ",\"carried\":");
+        web_jw_raw(w, t->carried ? "true" : "false");
+    }
     web_jw_raw(w, "}");
 }
+void frrs_tri_json(web_jw_t *w, const web_tri_t *t, int full) { tri_json(w, t, full); }
 
 /* ── the triage routes ──────────────────────────────────────────────── */
 
-/* ids=a,b,c (a comma or %2C between), each an alert id. */
+/* ids=a,b,c (a comma or %2C between), each an alert id or an anomaly's. */
 static int parse_ids(const char *query, char ids[][32], int *n, const char **why) {
     *n = 0;
     if (strncmp(query, "ids=", 4) || strchr(query, '&')) { *why = "bad_ids"; return -1; }
@@ -1255,7 +1298,8 @@ static int parse_ids(const char *query, char ids[][32], int *n, const char **why
             id[o++] = *p++;
         }
         id[o] = '\0';
-        if (o < 2 || (id[0] != 's' && id[0] != 'd') || *n >= WEB_FRRS_IDS_MAX) {
+        if (o < 2 || (id[0] != 's' && id[0] != 'd' && !frrs_anom_id_ok(id)) ||
+            *n >= WEB_FRRS_IDS_MAX) {
             *why = "bad_ids";
             return -1;
         }
@@ -1290,10 +1334,11 @@ static int route_states(const web_m4_t *m, web_live_t *live, const char *query, 
         tri_subj_t s;
         /* Resolved whatever the store holds: the type names the row's
          * "follow recommended" (the page asks /api/frrs/recommend). */
-        int r = resolve_id(m, live, ids[i], now_s, &s);
-        if (r < 0) return frrs_error(503, "read_failed", NULL, body, cap, len, status);
+        frrs_anom_t an;
+        int r = resolve_any(m, live, ids[i], now_s, &s, &an);
+        if (r == -1) return frrs_error(503, "read_failed", NULL, body, cap, len, status);
         type[i] = r > 0 ? s.type : -1;
-        if (r == 0) { memcpy(gone[ngone++], ids[i], 32); continue; }
+        if (r <= 0) { memcpy(gone[ngone++], ids[i], 32); continue; }
         if (any) got = tri_lookup(f, &s, &t);
         if (got < 0) return frrs_error(500, "store_error", NULL, body, cap, len, status);
         if (got > 0 && t.state != WEB_TRI_UNTRIAGED) {
@@ -1336,7 +1381,8 @@ static int route_states(const web_m4_t *m, web_live_t *live, const char *query, 
 static void history_rows(web_frrs_t *f, const tri_subj_t *s, web_jw_t *w, size_t cap) {
     sqlite3_stmt *st = NULL;
     static const char SQL[] =
-        "SELECT state, prev_state, via, basis, note, who, peer, ts, claim_by, claim_peer, folded"
+        "SELECT state, prev_state, via, basis, note, who, peer, ts, claim_by, claim_peer, folded,"
+        " first_seen"
         " FROM triage t WHERE" TRI_MATCH("t.") "ORDER BY t.id DESC LIMIT 64";
     web_jw_raw(w, "[");
     if (f->wr && sqlite3_prepare_v2(f->wr, SQL, -1, &st, NULL) == SQLITE_OK) {
@@ -1369,6 +1415,11 @@ static void history_rows(web_frrs_t *f, const tri_subj_t *s, web_jw_t *w, size_t
             }
             web_jw_raw(w, ",\"folded\":");
             web_jw_int(w, sqlite3_column_int64(st, 10));
+            /* An anomaly's row: the episode it was written on. */
+            if (s->anom) {
+                web_jw_raw(w, ",\"episode\":");
+                web_jw_int(w, sqlite3_column_int64(st, 11));
+            }
             web_jw_raw(w, "}");
         }
     }
@@ -1390,14 +1441,18 @@ static int route_history(const web_m4_t *m, web_live_t *live, const char *query,
         return frrs_error(400, err, NULL, body, cap, len, status);
     if (!ps[0].seen) return frrs_error(400, "missing_id", NULL, body, cap, len, status);
     tri_subj_t s;
-    int r = resolve_id(m, live, ps[0].val, now_s, &s);
+    frrs_anom_t an;
+    int r = resolve_any(m, live, ps[0].val, now_s, &s, &an);
+    if (r == -2) return frrs_error(409, "id_collision", NULL, body, cap, len, status);
     if (r < 0) return frrs_error(503, "read_failed", NULL, body, cap, len, status);
-    if (r == 0) return frrs_error(404, "no_such_alert", NULL, body, cap, len, status);
+    if (r == 0)
+        return frrs_error(404, frrs_anom_id_ok(ps[0].val) ? "no_such_anomaly" : "no_such_alert",
+                          NULL, body, cap, len, status);
     web_frrs_t *f = m->frrs;
     web_tri_t t;
     int got = f ? tri_lookup(f, &s, &t) : 0;
     if (got < 0) return frrs_error(500, "store_error", NULL, body, cap, len, status);
-    const web_akb_t *k = web_akb_get(s.type);
+    const web_akb_t *k = s.anom ? NULL : web_akb_get(s.type);
     web_jw_t w;
     web_jw_init(&w, body, cap);
     web_jw_raw(&w, "{\"id\":");       web_jw_str(&w, ps[0].val);
@@ -1410,12 +1465,20 @@ static int route_history(const web_m4_t *m, web_live_t *live, const char *query,
     } else {
         web_jw_raw(&w, "null");
     }
+    if (s.anom) {
+        /* What the id names, and the episode of it held now (held false:
+         * the engine has let it go, the descriptor is the store's). */
+        web_jw_raw(&w, ",\"anomaly\":");
+        frrs_anom_json(&w, &an);
+        web_jw_raw(&w, ",\"store\":");
+    } else {
     web_jw_raw(&w, ",\"descriptor\":{\"type\":");
     frrs_str_or_null(&w, k ? k->name : NULL);
     web_jw_raw(&w, ",\"addr\":");       web_jw_str(&w, s.addr);
     web_jw_raw(&w, ",\"port\":");       web_jw_int(&w, s.port);
     web_jw_raw(&w, ",\"first_seen\":"); web_jw_int(&w, s.first);
     web_jw_raw(&w, "},\"store\":");
+    }
     web_jw_str(&w, f && f->wr ? "open" : "none");
     web_jw_raw(&w, ",\"writes\":");
     web_jw_raw(&w, f && f->wr && f->writes ? "true" : "false");
@@ -1426,8 +1489,10 @@ static int route_history(const web_m4_t *m, web_live_t *live, const char *query,
     web_jw_int(&w, WEB_FRRS_HIST_PER);
     web_jw_raw(&w, ",\"folded\":");
     web_jw_int(&w, got > 0 ? t.folded : 0);
+    /* No assessment judges an anomaly rule: nothing to recommend. */
     web_jw_raw(&w, ",\"recommend\":");
-    recommend_json(f, s.type, &w);
+    if (s.anom) web_jw_raw(&w, "null");
+    else recommend_json(f, s.type, &w);
     web_jw_raw(&w, ",\"rows\":");
     if (f) history_rows(f, &s, &w, cap);
     else web_jw_raw(&w, "[]");
@@ -1921,8 +1986,8 @@ void frrs_tri_end(frrs_tri_ctx_t *x, int committed) { (void)x; (void)committed; 
  * long: N of M" from these, and a browser's maxlength counts UTF-16
  * units, so a note of 230 characters with a few accents in it can pass
  * the field and still be over. The text itself is never echoed. */
-static int text_refused(const web_jrec_t *r, const char *member, size_t max, const char *why,
-                        char *body, size_t cap, size_t *len, int *status) {
+int frrs_text_refused(const web_jrec_t *r, const char *member, size_t max, const char *why,
+                      char *body, size_t cap, size_t *len, int *status) {
     const web_jfield_t *f = web_jl_get(r, member);
     if (strcmp(why, "too_long") != 0 || !f)
         return frrs_error(400, why, member, body, cap, len, status);
@@ -1952,20 +2017,26 @@ static int post_triage(const web_m4_t *m, web_live_t *live, const web_jrec_t *r,
     if (!frrs_text(r, "state", 12, sw, &why))
         return frrs_error(400, why, "state", body, cap, len, status);
     if (!frrs_text(r, "note", WEB_FRRS_NOTE_MAX, note, &why))
-        return text_refused(r, "note", WEB_FRRS_NOTE_MAX, why, body, cap, len, status);
+        return frrs_text_refused(r, "note", WEB_FRRS_NOTE_MAX, why, body, cap, len, status);
     if (!frrs_text(r, "by", WEB_FRRS_BY_MAX, by, &why))
-        return text_refused(r, "by", WEB_FRRS_BY_MAX, why, body, cap, len, status);
+        return frrs_text_refused(r, "by", WEB_FRRS_BY_MAX, why, body, cap, len, status);
     if (!id[0]) return frrs_error(400, "missing_id", "id", body, cap, len, status);
     int state = -1, via = WEB_TRI_VIA_MANUAL;
     for (int s = 0; s < WEB_TRI_COUNT; s++) if (!strcmp(sw, STATE_WORD[s])) state = s;
     if (!strcmp(sw, "recommended")) state = 100;
     if (state < 0) return frrs_error(400, "bad_state", "state", body, cap, len, status);
     tri_subj_t s;
-    int rr = resolve_id(m, live, id, now_s, &s);
+    frrs_anom_t an;
+    int rr = resolve_any(m, live, id, now_s, &s, &an);
+    if (rr == -2) return frrs_error(409, "id_collision", "id", body, cap, len, status);
     if (rr < 0) return frrs_error(503, "read_failed", NULL, body, cap, len, status);
-    if (rr == 0) return frrs_error(404, "no_such_alert", "id", body, cap, len, status);
+    if (rr == 0)
+        return frrs_error(404, frrs_anom_id_ok(id) ? "no_such_anomaly" : "no_such_alert", "id",
+                          body, cap, len, status);
     web_frrs_t *f = m->frrs;
     char basis[WEB_FRRS_BASIS_MAX + 1] = "";
+    if (state == 100 && s.anom)
+        return frrs_error(409, "no_recommendation", NULL, body, cap, len, status);
     if (state == 100) {
         state = web_frrs_recommend(f, s.type, basis, sizeof(basis), NULL);
         if (state == WEB_TRI_UNTRIAGED)
@@ -1978,9 +2049,19 @@ static int post_triage(const web_m4_t *m, web_live_t *live, const web_jrec_t *r,
      * record, so no row (a double click, or a clear of an untriaged
      * alert, never spends its history). */
     int unchanged = state == cur.state && (!note[0] || !strcmp(note, cur.note));
+    /* An anomaly's decided state carried from an earlier episode is not
+     * this episode's until it is said again: saying it is a row. */
+    if (unchanged && cur.carried && cur.state != WEB_TRI_UNTRIAGED) unchanged = 0;
     if (unchanged) {
         stat_inc(f, &f->st.triage_unchanged);
     } else {
+        /* What an anomaly's id names is kept beside its first row: the
+         * engine forgets the episode after a day, the note stays. */
+        if (s.anom) {
+            int g = frrs_anom_register(f, &an, now_s, &why);
+            if (g != 0)
+                return frrs_error(g > 0 ? 507 : 500, why, NULL, body, cap, len, status);
+        }
         int w = tri_write(f, &s, state, cur.state, via, basis, note, by, peer, now_s, &why);
         if (w != 0)
             return frrs_error(w > 0 ? 507 : !strcmp(why, "store_busy") ? 503 : 500, why, NULL,
@@ -2014,7 +2095,11 @@ void frrs_triage_export(web_frrs_t *f, web_jw_t *w, long long *rows) {
     if (!f->wr || sqlite3_prepare_v2(f->wr,
             "SELECT type, addr, port, first_seen, state, prev_state, via, basis, note,"
             " CASE WHEN via = 2 THEN claim_by ELSE who END,"
-            " CASE WHEN via = 2 THEN claim_peer ELSE peer END, ts FROM triage ORDER BY id",
+            " CASE WHEN via = 2 THEN claim_peer ELSE peer END, ts FROM triage"
+            /* Alerts only: an anomaly's rows (type -1) are this
+             * sensor's own baselines' findings, and the file's lines
+             * are filed by an alert's descriptor. */
+            " WHERE type >= 0 ORDER BY id",
             -1, &s, NULL) != SQLITE_OK) {
         sqlite3_finalize(s);
         return;
@@ -2257,7 +2342,7 @@ static int route_report_alert(const web_m4_t *m, web_live_t *live, const char *q
 static const char *const GET_PATHS[] = {
     "/api/frrs/states", "/api/frrs/history", "/api/frrs/summary", "/api/frrs/recommend",
     "/api/frrs/report", "/api/frrs/report/alert", "/api/frrs/tacdb", "/api/frrs/tacdb/view",
-    "/api/frrs/suggest", "/api/frrs/export", NULL,
+    "/api/frrs/suggest", "/api/frrs/export", "/api/frrs/related", NULL,
 };
 
 int web_frrs_path(const char *path) {
@@ -2296,6 +2381,8 @@ int web_frrs_route(const web_m4_t *m, web_live_t *live, const web_req_t *rq,
         if (!strcmp(p, "/api/frrs/tacdb")) return frrs_tacdb_get(m, q, now_s, body, cap, len, status);
         if (!strcmp(p, "/api/frrs/tacdb/view")) return frrs_tacdb_view(m, q, now_s, body, cap, len, status);
         if (!strcmp(p, "/api/frrs/suggest")) return frrs_suggest_get(m, q, now_s, body, cap, len, status);
+        if (!strcmp(p, "/api/frrs/related"))
+            return frrs_related_get(m, live, q, now_s, body, cap, len, status);
         if (!strcmp(p, "/api/frrs/export")) {
             if (q[0]) return frrs_error(400, "unknown_parameter", NULL, body, cap, len, status);
             int rc = frrs_export(m, now_s, big, biglen, body, cap, len, status);
@@ -2335,6 +2422,8 @@ int web_frrs_route(const web_m4_t *m, web_live_t *live, const web_req_t *rq,
     int rc;
     if (!strcmp(rq->path, "/api/frrs/triage"))
         rc = post_triage(m, live, r, rq->peer, now_s, body, cap, len, status);
+    else if (!strcmp(rq->path, "/api/frrs/relate"))
+        rc = frrs_relate_post(m, live, r, rq->peer, now_s, body, cap, len, status);
     else
         rc = frrs_tacdb_post(m, rq->path, r, rq->peer, now_s, body, cap, len, status);
     free(r);
@@ -2434,5 +2523,10 @@ void web_frrs_health(web_frrs_t *f, web_jw_t *w) {
     web_jw_raw(w, ",\"exports\":");    web_jw_int(w, (long long)s.exports);
     web_jw_raw(w, ",\"recommendations\":");
     web_jw_str(w, f->assess_dir[0] ? "dir" : "none");
+    /* Anomaly triage and the links (web_relate.c): additive, last. */
+    web_jw_raw(w, ",\"anomaly_subjects\":");
+    jw_count(w, q_count(f, "SELECT COUNT(*) FROM anom_subject"));
+    web_jw_raw(w, ",\"links\":");
+    jw_count(w, q_count(f, "SELECT COUNT(*) FROM relation"));
     web_jw_raw(w, "}");
 }

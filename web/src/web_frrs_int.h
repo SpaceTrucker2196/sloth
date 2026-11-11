@@ -5,6 +5,7 @@
 #define SLOTHWEB_FRRS_INT_H
 
 #include "web_frrs.h"
+#include "web_anomaly.h"
 
 /* A distance estimate as the record carried it (jsonl-schema.md,
  * "Distance estimate fields"): all four or none. */
@@ -194,6 +195,69 @@ void frrs_tri_end(frrs_tri_ctx_t *x, int committed);
 int  frrs_triage_import(web_frrs_t *f, frrs_tri_ctx_t *x, const web_jrec_t *r, int write,
                         long long now_s, const char *peer, const char **why);
 
+/* One finding as a request names it: the subject the row is filed
+ * under, the finding's sloth.db rowid when known, the descriptor. An
+ * anomaly's (anom 1) is its id as subject and as addr, type -1 (no
+ * alert has it, so the descriptor clause of the triage match, which
+ * wants a type of 0 or more, never joins an alert's rows to an
+ * anomaly's or the reverse), port 0, and first the first_seen of the
+ * episode held now (0 none): the id in addr keeps two anomalies whose
+ * episodes began in the same second from reading as one descriptor to
+ * the retention's "superseded" test. */
+typedef struct {
+    char      subject[40];
+    char      alt[40];              /* the stream handle, when the id was one */
+    long long finding;
+    int       type, port;
+    char      addr[WEB_FRRS_ADDR_MAX + 1];
+    long long first;
+    int       anom;
+} tri_subj_t;
+
+/* An alert id resolved to its subject (web_frrs.c), over c when the
+ * caller has sloth.db open (NULL: it has none). *last, when not NULL,
+ * gets the finding's newest last_seen (0 unknown). 1, 0 no such alert,
+ * -1. */
+int  frrs_resolve_alert(const web_m4_t *m, web_live_t *live, web_sdb_conn_t *c,
+                        const char *id, long long now_s, tri_subj_t *s, long long *last);
+/* The current triage of a subject: 1 with *out, 0 none, -1. */
+int  frrs_tri_current(web_frrs_t *f, const tri_subj_t *s, web_tri_t *out);
+void frrs_tri_json(web_jw_t *w, const web_tri_t *t, int full);
+/* The module's counters, under its lock. */
+void frrs_stat_inc(web_frrs_t *f, unsigned long *c);
+
+/* ── anomalies and links (web_relate.c) ───────────────────────────── */
+
+#define FRRS_METRIC_MAX 47
+/* An anomaly a request names: what its id stands for, and the episode
+ * of it the engine holds now, if any. */
+typedef struct {
+    char      id[WEB_ANOM_TID_MAX + 1];
+    char      rule[8], metric[FRRS_METRIC_MAX + 1], key[WEB_KEY_MAX + 1];
+    int       held, open;
+    long long first, last;           /* the held episode's; 0 when none */
+} frrs_anom_t;
+/* "a" and sixteen lower-case hex digits. */
+int  frrs_anom_id_ok(const char *id);
+/* 1 resolved (from the engine, else from the store's anom_subject), 0
+ * neither holds it, -1 a store error, -2 the engine's episode and the
+ * store's row of that id disagree on what it names (a hash collision:
+ * refused, never joined). */
+int  frrs_anom_resolve(const web_m4_t *m, const char *id, frrs_anom_t *a);
+/* Its descriptor kept in the store, once. 0, 1 refused (*why), -1. */
+int  frrs_anom_register(web_frrs_t *f, const frrs_anom_t *a, long long now_s,
+                        const char **why);
+void frrs_anom_subj(const frrs_anom_t *a, tri_subj_t *s);
+/* {"rule":..,"kind":..,"metric":..,"key":..,"held":..,"open":..,
+ * "first_seen":..,"last_seen":..} */
+void frrs_anom_json(web_jw_t *w, const frrs_anom_t *a);
+/* GET /api/frrs/related and POST /api/frrs/relate. */
+int  frrs_related_get(const web_m4_t *m, web_live_t *live, const char *query,
+                      long long now_s, char *body, size_t cap, size_t *len, int *status);
+int  frrs_relate_post(const web_m4_t *m, web_live_t *live, const web_jrec_t *r,
+                      const char *peer, long long now_s, char *body, size_t cap,
+                      size_t *len, int *status);
+
 /* A member check: every member of r is in allowed (a NULL-ended list)
  * and none is a nested value; else *bad names the first that is not. */
 int  frrs_members_ok(const web_jrec_t *r, const char *const *allowed, const char **bad);
@@ -202,5 +266,9 @@ int  frrs_members_ok(const web_jrec_t *r, const char *const *allowed, const char
  * embedding or isolate control, or not a string). */
 int  frrs_text(const web_jrec_t *r, const char *name, size_t max, char *out,
                const char **why);
+/* The answer to a text member frrs_text() refused: for "too_long" the
+ * member, the length sent and the limit, in bytes of UTF-8. */
+int  frrs_text_refused(const web_jrec_t *r, const char *member, size_t max, const char *why,
+                       char *body, size_t cap, size_t *len, int *status);
 
 #endif
