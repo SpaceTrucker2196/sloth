@@ -32,6 +32,7 @@ void web_config_defaults(web_config_t *c) {
     c->max_keys    = WEB_DEFAULT_MAX_KEYS;
     c->max_mb      = WEB_DEFAULT_MAX_MB;
     c->retain_days = WEB_DEFAULT_RETAIN_DAYS;
+    c->peer_interval_s = WEB_FLEET_INTERVAL_DEF;
 }
 
 /* A decimal in [lo, hi], digits only. */
@@ -134,6 +135,21 @@ long long web_config_store_min_mb(int max_keys) {
 }
 
 int web_config_check(const web_config_t *c, char *err, size_t errsz) {
+    /* The fleet (web_fleet.h): pulling is a network service, which
+     * --strict refuses as it refuses a routable --socket; and a peer
+     * outside the tailnet only when forced, so a typo in a peer's
+     * address is not a pull across the internet. */
+    if (c->npeer && c->strict) {
+        snprintf(err, errsz, "slothweb: --strict refuses --peer.\n");
+        return -1;
+    }
+    for (int i = 0; i < c->npeer; i++) {
+        char why[160];
+        if (web_fleet_check_peer(&c->peer[i], c->peer_outside, why, sizeof(why)) != 0) {
+            snprintf(err, errsz, "slothweb: --peer %s: %s\n", c->peer[i].name, why);
+            return -1;
+        }
+    }
     /* sloth.db is read, the store written: one path for both would
      * have slothweb refuse its own store at best. */
     if (c->sloth_db[0] && !strcmp(c->sloth_db, c->store_path)) {
@@ -255,7 +271,9 @@ void web_usage(FILE *out) {
         "                [--web-retain-days N] [--sloth-db PATH]\n"
         "                [--web-allow-sql] [--web-read-only]\n"
         "                [--web-assessments DIR] [--pcap-dir DIR]...\n"
-        "                [--web-serve-evidence-pcap[=remote]] [--help]\n"
+        "                [--web-serve-evidence-pcap[=remote]]\n"
+        "                [--peer NAME=URL]... [--peer-interval-secs N]\n"
+        "                [--peer-allow-outside-tailnet] [--help]\n"
         "\n"
         "  --socket SPEC         sloth's data socket to read: unix:PATH or\n"
         "                        tcp:A.B.C.D:PORT / tcp:[V6]:PORT, literal\n"
@@ -325,6 +343,18 @@ void web_usage(FILE *out) {
         "                        serve evidence pcaps too; announced on\n"
         "                        stderr. With --web-allow-remote it is\n"
         "                        refused unless given as =remote.\n"
+        "  --peer NAME=URL       pull another of the operator's slothwebs\n"
+        "                        (repeatable, at most 8): URL is\n"
+        "                        http://A.B.C.D[:PORT], a literal address in\n"
+        "                        the tailnet (100.64.0.0/10), read from its\n"
+        "                        /api/fleet/export into the store. Off by\n"
+        "                        default; each peer announced on stderr.\n"
+        "  --peer-interval-secs N  seconds between pulls (default 60,\n"
+        "                        10..3600).\n"
+        "  --peer-allow-outside-tailnet\n"
+        "                        allow a --peer address outside\n"
+        "                        100.64.0.0/10 (no TLS: only over a link\n"
+        "                        you trust); announced on stderr.\n"
         "  --help                this text.\n"
         "\n"
         "Routes (GET and HEAD): / (the page), /api/health, /api/live,\n"
@@ -336,8 +366,8 @@ void web_usage(FILE *out) {
         "/api/history/flows, /api/sessions, /api/sessions/new (JSON),\n"
         "/api/frrs/* (triage, the FRRS record, the TACDB), /api/ble,\n"
         "/api/ble/alerts, /api/ble/ADDR (the BLE view),\n"
-        "/api/alerts, /api/alert, /api/pcap/frames and /api/pcap (GET\n"
-        "only),\n"
+        "/api/alerts, /api/alert, /api/pcap/frames, /api/pcap and\n"
+        "/api/fleet/export (GET only), /api/fleet/peers,\n"
         "/events (Server-Sent Events); with --web-allow-sql, /api/query\n"
         "(GET only) and /api/recipes. POST only to the six /api/frrs\n"
         "write routes, same-origin, unless --web-read-only. Any other\n"
@@ -388,6 +418,48 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
                 return -1;
             }
             snprintf(c->assess_dir, sizeof(c->assess_dir), "%s", v);
+        } else if (!strcmp(a, "--peer-allow-outside-tailnet")) {
+            c->peer_outside = 1;
+        } else if (!strcmp(a, "--peer")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (!web_store_available()) {
+                fprintf(err, "slothweb: --peer needs SQLite; this slothweb was "
+                             "built with WITH_SQLITE=0\n");
+                return -1;
+            }
+            if (c->npeer >= WEB_FLEET_PEERS) {
+                fprintf(err, "slothweb: --peer: at most %d peers\n", WEB_FLEET_PEERS);
+                return -1;
+            }
+            web_fleet_peer_cfg_t pc;
+            if (web_fleet_parse_peer(v, &pc, msg, sizeof(msg)) != 0) {
+                fprintf(err, "slothweb: --peer %s: %s\n", v, msg);
+                return -1;
+            }
+            for (int k = 0; k < c->npeer; k++)
+                if (!strcmp(c->peer[k].name, pc.name) || !strcmp(c->peer[k].url, pc.url)) {
+                    fprintf(err, "slothweb: --peer %s: that name or address is "
+                                 "given twice\n", v);
+                    return -1;
+                }
+            c->peer[c->npeer++] = pc;
+        } else if (!strcmp(a, "--peer-interval-secs")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (parse_count(v, WEB_FLEET_INTERVAL_MIN, WEB_FLEET_INTERVAL_MAX,
+                            &c->peer_interval_s) != 0) {
+                fprintf(err, "slothweb: --peer-interval-secs %s: want a whole number "
+                             "from %d to %d\n", v, WEB_FLEET_INTERVAL_MIN,
+                        WEB_FLEET_INTERVAL_MAX);
+                return -1;
+            }
         } else if (!strcmp(a, "--web-serve-evidence-pcap")) {
             c->serve_evidence_pcap = 1;
         } else if (!strcmp(a, "--web-serve-evidence-pcap=remote")) {
@@ -555,6 +627,14 @@ void web_config_announce(const web_config_t *c, FILE *err) {
                          "--web-allow-remote: every peer\n"
                          "  the allow list admits can download them, with no "
                          "authentication and no TLS.\n");
+    }
+    for (int i = 0; i < c->npeer; i++) {
+        if (web_fleet_in_tailnet(c->peer[i].addr)) continue;
+        fprintf(err, "slothweb: WARNING: --peer %s at %s is outside the tailnet "
+                     "(--peer-allow-outside-tailnet).\n"
+                     "  The pull and the export it reads travel with no TLS; "
+                     "only the link you chose protects them.\n",
+                c->peer[i].name, c->peer[i].url);
     }
     if (c->sock.kind && !web_sockspec_is_local(&c->sock)) {
         char sp[INET6_ADDRSTRLEN + 16];

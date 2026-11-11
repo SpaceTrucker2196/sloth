@@ -343,6 +343,53 @@ static const char STEP_V7_SQL[] =
     ") WITHOUT ROWID;\n"
     "CREATE INDEX ble_alert_last ON ble_alert (last_ts);\n";
 
+/* v7 -> v8: the owner's fleet (#192 F1, web_fleet.h, ADR 0008). The
+ * peers slothweb pulls, and what each one reported. peer_sites is one
+ * row per --peer name: its URL, the last attempt and the last good pull
+ * (slothweb's clock), the last refusal in slothweb's own words, the
+ * site's label, position and build as the peer reported them, the
+ * peer's own clock at that answer (the next pull's since) and the rows
+ * it held. peer_sightings is one row per (peer, kind, key): a device,
+ * BLE advertiser, AP, probed SSID, alert or verdict the peer reported,
+ * its first and last seen widened by every pull, its label, vendor and
+ * signal as last reported, and the rest of the row as JSON slothweb
+ * writes itself from validated members. A rowid table, so the per-peer
+ * bound deletes by rowid; indexed on (peer, last_seen), which the
+ * bound and the age limit select on. Additive: two new tables and an
+ * index, nothing that exists is changed. Plain CREATE, as every step: a
+ * file already holding one of these names fails the step and stays at
+ * v7. */
+static const char STEP_V8_SQL[] =
+    "CREATE TABLE peer_sites (\n"
+    "  peer           TEXT PRIMARY KEY,\n"
+    "  url            TEXT NOT NULL,\n"
+    "  label          TEXT NOT NULL DEFAULT '',\n"
+    "  last_attempt   INTEGER NOT NULL DEFAULT 0,\n"
+    "  last_ok        INTEGER NOT NULL DEFAULT 0,\n"
+    "  last_error     TEXT NOT NULL DEFAULT '',\n"
+    "  lat            REAL,\n"
+    "  lon            REAL,\n"
+    "  alt            REAL,\n"
+    "  pos_source     TEXT NOT NULL DEFAULT '',\n"
+    "  pos_ts         INTEGER NOT NULL DEFAULT 0,\n"
+    "  remote_version TEXT NOT NULL DEFAULT '',\n"
+    "  remote_ts      INTEGER NOT NULL DEFAULT 0,\n"
+    "  rows_last      INTEGER NOT NULL DEFAULT 0\n"
+    ");\n"
+    "CREATE TABLE peer_sightings (\n"
+    "  peer       TEXT NOT NULL,\n"
+    "  kind       TEXT NOT NULL,\n"
+    "  key        TEXT NOT NULL,\n"
+    "  label      TEXT NOT NULL DEFAULT '',\n"
+    "  vendor     TEXT NOT NULL DEFAULT '',\n"
+    "  rssi       INTEGER,\n"
+    "  first_seen INTEGER NOT NULL,\n"
+    "  last_seen  INTEGER NOT NULL,\n"
+    "  extra      TEXT NOT NULL DEFAULT '{}',\n"
+    "  PRIMARY KEY (peer, kind, key)\n"
+    ");\n"
+    "CREATE INDEX peer_sightings_last ON peer_sightings (peer, last_seen);\n";
+
 typedef struct {
     int         from;
     const char *sql;
@@ -359,6 +406,7 @@ static const web_step_t STEPS[] = {
     { 5, STEP_V6_SQL, "created triage, tacdb_unit, tacdb_platform, "
                       "tacdb_emitter and tacdb_dismiss" },
     { 6, STEP_V7_SQL, "created ble_device and ble_alert" },
+    { 7, STEP_V8_SQL, "created peer_sites and peer_sightings" },
 };
 #define STEP_N ((int)(sizeof(STEPS) / sizeof(STEPS[0])))
 

@@ -31,6 +31,10 @@
  *                 (web_radar.h); out_of_scope under Local
  *   /api/bundle   JSON: a detail view's whole answer for the page's
  *                 "copy JSON" (web_bundle.h), GET only; a heap body
+ *   /api/fleet/export JSON Lines: what this sensor has seen since
+ *                 ?since=, for the owner's other slothwebs (web_fleet.h),
+ *                 GET only; a heap body
+ *   /api/fleet/peers JSON: the peers --peer pulls and what each reported
  *   /events       Server-Sent Events: tick, record, anomaly, ping
  *   anything else 404
  *
