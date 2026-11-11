@@ -20,6 +20,7 @@
 @include aprs.css
 @include bledev.css
 @include radar.css
+@include ssid.css
 </style>
 <script>
 @include palette.js
@@ -39,6 +40,7 @@
 @include aprs.js
 @include bledev.js
 @include radar.js
+@include ssid.js
 </script>
 </head>
 <body>
@@ -526,7 +528,7 @@
       <div class="aprow dhead" id="w-aps-head"></div>
       <div id="w-aps"></div>
       </div>
-      <div class="sub">nearest first by default (sloth.db's last signal); a square after the SSID for each SSID the BSSID has beaconed, in the warning colour above one (KARMA, multi-VAP), with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers</div>
+      <div class="sub">an SSID anywhere on the page is selectable: a click, or Enter on it, opens its detail (its access points, the clients on it and asking for it, its presence, alerts and twin and karma findings). Nearest first by default (sloth.db's last signal); a square after the SSID for each SSID the BSSID has beaconed, in the warning colour above one (KARMA, multi-VAP), with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers</div>
     </section>
     <section class="panel">
       <div class="label">chains <span class="sub" id="w-ch-note"></span></div>
@@ -954,6 +956,19 @@
     <div class="sub" id="bledev-chans" hidden></div>
     <div class="label">ble alerts naming it</div>
     <div id="bdr-alerts"></div>
+  </aside>
+  <aside class="drawer" id="sdrawer" hidden aria-label="ssid">
+    <div class="dr-hd">
+      <span class="d-dim">SSID</span>
+      <b id="sdr-name">-</b>
+      <span class="sub" id="sdr-note"></span>
+      <button type="button" id="sdr-close">close</button>
+    </div>
+    <div id="sdr-body"></div>
+    <div class="label">24 h presence, 10 min cells</div>
+    <canvas class="strip" id="sdr-strip" aria-label="presence of this SSID's access points over the last 24 hours"></canvas>
+    <div class="sub" id="sdr-strip-note"></div>
+    <div id="sdr-lists"></div>
   </aside>
   <footer class="foot" aria-label="slothweb">
     <span>sock <b id="sock">-</b></span>

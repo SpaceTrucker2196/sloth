@@ -19,7 +19,7 @@ row's a `text_m` line).
 `src/device_risk.c`, `include/sloth.h` (`DEV_SRC_*`, `CAM_SIG_*`),
 `include/sloth_alerts.def`, owner request 2026-10-26.
 
-**Last updated**: 2026-11-06 (the Radar tab under Local: satellites only, said in its header). 2026-11-03 (the four GNSS alerts in every scope, as their records are). 2026-11-01 (the BLE view: Monitor's and Hybrid's,
+**Last updated**: 2026-11-11 (an SSID's detail: Monitor's, out of scope under Local). 2026-11-06 (the Radar tab under Local: satellites only, said in its header). 2026-11-03 (the four GNSS alerts in every scope, as their records are). 2026-11-01 (the BLE view: Monitor's and Hybrid's,
 `out_of_scope` under Local), 2026-10-27 (the verify pass: top hosts, `THREAT_IP`,
 `BEACONING` and `host.*` from the `/proc` socket table stay Local on a
 radio, `/api/metrics` counts a scope's own keys, Records and Health drop
@@ -188,6 +188,7 @@ Local, `pass:latest` is the latest pass's devices of the scope.
 | Devices, drawer, Lookup | as above; Lookup of an IP says Monitor holds no addresses | as above |
 | Anomalies | A2, A1 on Monitor metrics, A3/A4 where the MAC has Monitor presence, A10 | A5-A9, A1 on Local metrics, A3/A4 with Local presence, A10 |
 | WiFi | the radio's channels, deauths, probe clients and APs | the managed card's own scan (`wifi_aps`) and link (`wifi_stas`), from `/api/wifi/local`; the radio's panels not drawn, saying why |
+| An SSID's detail | its access points, associations, askers, presence, findings and alerts (`/api/wifi/ssid`): all the monitor radio's | nothing: the route answers `out_of_scope` and the drawer says why |
 | Flows | empty, saying why | all of it |
 | BLE | the Bluetooth receivers' advertisers and findings (`/api/ble`, `/api/ble/alerts`, `/api/ble/{addr}`; `--bt-monitor`, `--bt-capture`: passive radio), `/api/live`'s `ble` member | empty, saying why; the routes answer `out_of_scope`, `/api/live`'s `ble` is `null` |
 | History | the scope's devices by its own first seen, its alerts; no flows | the same, with flows |

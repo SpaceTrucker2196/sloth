@@ -488,6 +488,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/wifi/chain?from=&to=&cols=&bssid=` | `200` JSON, G8's attack chain per BSSID: the deauth timeline's rows (or the one `bssid`) with the EVIL_TWIN, KARMA_AP and association stages sloth.db holds against each and the links the stream's `twin_episode` made (#171 V4, below); out of scope under Local; `400` for a parameter that does not pass (`bad_bssid`); `503` with no time series |
    | `GET /api/wifi/aps?sort=&dir=&limit=&offset=` | `200` JSON, a page of sloth.db's beacon_aps; `400`; `503` with no `--sloth-db` or sloth.db unreadable |
    | `GET /api/wifi/local?limit=` | `200` JSON, the managed Wi-Fi card's own scan (sloth.db `wifi_aps`, newest first, at most 100) and link (`wifi_stas`, at most 32); out of scope under Monitor; `400`; `503` as above |
+   | `GET /api/wifi/ssid?ssid=` | `200` JSON, one SSID's detail ([An SSID's detail](#an-ssids-detail)): its access points now and once, the stations associated to it and asking for it, its 24 h presence, its KARMA and twin findings and the alerts naming it; `ssid` is the base64url of its octets, or `-` for the hidden (empty) SSID; out of scope under Local; `400` `missing_ssid`, `bad_ssid`; `503` as above |
    | `GET /api/history/overview`, `/api/history/devices`, `/api/history/alerts`, `/api/history/flows` (`?from=&to=` and their own) | `200` JSON, the History view's reads of sloth.db; `400`; `503` as above |
    | `GET /api/sessions`, `/api/sessions/new?id=` | `200` JSON, the survey sessions and one's "new since the previous session"; `404` for a session sloth.db does not have |
    | `GET /api/flows?proto=&from=&to=&ip=&sort=&dir=&limit=&offset=` | `200` JSON, one protocol table of sloth.db (M6, below); `400` for a parameter that does not pass, `proto=mqtt` included (`proto_withheld`); `503` as above |
@@ -2569,6 +2570,115 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   canonical BSSID, and never in a result column or a body.
 - **Probe clients** is `/api/series` and `/api/baseline` for
   `wifi.probe_clients`, drawn as every time chart is, over its M3 band.
+
+### An SSID's detail
+
+Owner request 2026-11-11: "on the wifi tab we should be able to select
+any ssid and get a detail view just like we do for a client"
+(`web/src/web_ssidview.h`, `web/ui/ssid.js`).
+
+**Every SSID the page writes is selectable.** `ssidSpan()` is the one
+function a name is written through, and it hands its span to
+`SlothSsid.link()`: a dotted rule under the name, `tabIndex` 0, a click
+or Enter or Space (the page's one keydown handler) opens the detail. On
+the WiFi view that is the AP table's SSID and each name of its SSID
+history, the `(hidden)` word of a BSSID that beacons no name, the
+card's scan, and the channel mix's list, where the row is already a
+button that brings the AP into view, so the detail is a small `ssid`
+button after it. The device drawer's last SSID, PNL SSIDs and
+associations are the same span, so a client's probed networks open
+from there; so are the Devices table's SSID column and History's
+lists. The WiFi view's clients table has no SSID column, and the
+chains, the deauth rug and the channel strips draw BSSIDs and
+channels, not names.
+
+**How a name travels.** An SSID is 0 to 32 octets, not text, and a
+route parameter is 1 to 63 bytes of printable ASCII. The page has each
+name in its display form (printable UTF-8 as it is, any other octet as
+`\xNN`, a backslash doubled), which reads back to one octet string
+only; `octets()` reads it back and `param()` spells the octets as
+base64url without padding (RFC 4648 section 5), 1 to 43 characters, or
+`-` for none. The server takes exactly one spelling of an octet string
+(`web_ssid_param()`: leftover bits must be zero, no padding, no NUL, at
+most 32 octets), binds it as a parameter and compares it with `=`. It
+is never a LIKE pattern and never part of a statement's text, so
+`Home%` and `Home_et` are their own networks and not `HomeNet`'s
+(`test_ssidview.c`). A name the stream carried with lost octets
+(U+FFFD, three octets where one was) can be more than 32 octets: the
+drawer then says it is not an SSID sloth.db can hold, and asks nothing.
+
+```
+GET /api/wifi/ssid?ssid=SG9tZU5ldA
+{"ssid":"HomeNet","ssid_k":3,"ssid_np":false,"hidden":false,"octets":7,
+ "now":1792627200,"db":"open","db_schema":13,"designated":null,
+ "first_seen":1791849600,"last_seen":1792627140,
+ "bssids":[{"bssid":"0a:00:00:00:00:01","current":true,"vendor":"Acme",
+   "channel":6,"enc":"WPA3","akm":"PSK,SAE","akm_names":["PSK","SAE"],
+   "mfp_word":"capable","signal":-50,"first_seen":1791849600,
+   "last_seen":1792627140,"karma":null,
+   "twins":[{"real":"0a:00:00:00:00:01","twin":"0a:00:00:00:00:02",
+     "attributed":true,"tainted":true,"confidence":80,
+     "first_seen":1792626300,"last_seen":1792626300}]}],
+ "bssids_total":2,"bssids_more":false,
+ "assocs":[{"mac":"00:03:93:00:00:03","random":false,"vendor":"Apple",
+   "bssid":"0a:00:00:00:00:01","channel":6,"signal":-52,
+   "first_seen":1792454400,"last_seen":1792626900}],"assocs_total":2,
+ "probers":[{"mac":"da:a1:19:00:00:01","random":true,"vendor":null,
+   "first_seen":1791763200,"last_seen":1792623600}],"probers_total":1,
+ "alerts":[{"title":"Deauth flood","type":7,"sev":2,"count":40,
+   "incidents":1,"id":"d12","first_seen":1792623600,
+   "last_seen":1792626600}],"alerts_more":false,"alerts_read":true,
+ "alerts_reached":null,"alerts_days":30,
+ "presence":"000000000000000000000000000000000002",
+ "presence_from":1792541400,"presence_bssids":2}
+```
+
+- **`bssids`**: sloth.db's `beacon_aps` rows whose SSID is exactly this
+  one (`current`), the 48 last seen, then the BSSIDs `beacon_ap_ssids`
+  says beaconed it once and beacon another name now (`current` false,
+  their times those of this name). Each with sloth's vendor, channel
+  (`beacon_aps.channel` carries no band, so a 6 GHz channel is its
+  number alone, as in the AP table), `enc`, `akm` and the AKM bits by
+  name, MFP as a word, the last signal, its KARMA score from
+  `karma_candidates`, and the twin pairs the stream's `twin_episode`
+  made with it since slothweb started (`web_chain.h`; sloth.db keeps
+  none the page may read). The hidden SSID is the rows whose SSID is
+  NULL or empty.
+- **`assocs`**: `assocs` rows that carried this SSID or are to one of
+  its current BSSIDs, the 24 newest with the whole count. **`probers`**:
+  `pnl_ssids` rows of this name, the same; none for the hidden SSID,
+  since a wildcard probe names no network.
+- **`presence`**: G5's 144 cells of 10 minutes: a cell is set when any
+  current BSSID was present in it (`dev.present`, as a Devices row's
+  strip).
+- **`alerts`**: the 12 newest findings whose key names a current BSSID
+  or the SSID itself (the component `src/alert_key.c` `akey_remote()`
+  writes for an SSID: its sanitised first 32 octets and the FNV-1a of
+  all of it), by the alert page's opaque id. The key is in the WHERE
+  and the GROUP BY only, never in the answer. `instr()` over every
+  recent key once a BSSID is the cost and no index helps it, so the
+  walk is bounded by work, not by a clock: at most 320,000 / (8 +
+  BSSIDs) alert rows, the newest of the last 30 days, found through
+  `idx_alerts_last_seen` before the walk begins; `alerts_reached` says
+  how far back that was, `null` for the whole window.
+- **`designated`** is always `null`: sloth's `--my-ssid` is its own
+  configuration and reaches neither sloth.db nor the stream, so the
+  page cannot say whether the operator designated the network, and
+  says that.
+
+**The drawer** (`#sdrawer`) is built as the device drawer is: the name
+with its non-printable marker, a key and value list (octets, first and
+last seen, the designated line), the strip with its caption, then the
+lists, each with its count (`24 of 340` when cut) and R5's one line
+when empty: access points (the new mark on one first seen in the last
+24 h, the BSSID a button that opens the device drawer), clients
+associated, clients probing, twin and karma findings in sloth's words,
+alerts (each row opens the alert's page). Opening a device or an alert
+from it closes it; Esc closes it; a scope change asks again. Under
+Local the route answers `out_of_scope` and the drawer says so: all of
+it is the monitor radio's. No vendor research is drawn here: an SSID
+has no one vendor. The detail is not in the address, as the device
+drawer is not.
 
 ### The History view (§8.10)
 
@@ -4973,6 +5083,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_ble.c` | the BLE view ([BLE](#ble)) from hand-built `ble_device`, `ble_alert`, `alert.resolve` and `sensor_health` lines in the emitter's exact shape: two rows for one address heard by two sensors, a heartbeat updating in place (the sticky masks OR-ed, the earlier first_seen kept, the rate from two points), the hostile strings (a control byte escaped and flagged, an over-long name cut back to a code-point boundary, a category that is not sloth's slug dropped and counted, an unknown iface `other`, a bad record kept nowhere), the record's absent values null and an anonymous all-zero address a row, the estimate's four fields with the TUI's cell and description, the LRU at 1025 rows evicting the oldest, the findings (standing, the resolve of the key, the time-out, the day's listing, the key never rendered, a `hid_oui` finding under its address), the `sensor_health` block and its rotation bands; the two metrics only while a Bluetooth source is configured; every route through the table (the sort words and both directions, each refusal a word never echoing the value, the search, paging, HEAD, Monitor and Hybrid serving, Local `out_of_scope` with the query still checked, `/api/live`'s `ble` member and `/api/health`'s counters, the M0 shape without the tables, the BLE incident typed and Monitor's on the Alerts page); the page's lines pinned as served; with SQLite the store round trip through the store thread's flush, a changed row upserted once, the seed on reopen with the name's display form and the estimate, every field of a seeded finding (a flood's fresh count, rate, window and citation, a `hid_oui` finding's address and the drawer's match on it), a resolve on a seeded finding updating its stored row in place, a seeded row's presence strip shifting on with fresh traffic, retention at compaction, a failed write (a trigger aborting it mid-transaction) rolled back whole and its batch written by the next flush, the row caps (the oldest gone, a flagged row kept past newer unflagged ones, counted) and a non-canonical stored address not seeded; every sort word in both directions with an empty key last (`mfr`'s three tiers fixed in either direction); a name cut back to a code-point boundary; `ble.devices` with an Ubertooth alone and `ble.adv_rate` only with the host stream; `/api/live`'s `ble` member with every string at its cut and escaped six-fold; without a store the tables still ingest and serve. Each absence seen red under a named mutation |
 | `test_bledev.c` | the BLE Devices waterfall ([BLE](#ble)): each class rule on hand-built fields (SIG Appearance values, Continuity types, the registry's UUIDs) and each left-out shape landing in Unknown, the first-match order and the table's match numbers, the slugs (never a channel key, the only `bleclass` keys), a class from a record line; the proximity edges against `src/rf_distance.h` and `.c` read in the test; the page's class table and grade pinned against the C ones, the panels inside `v-ble`, no `innerHTML` in the module; the mix engine taking kinds 3 and 4 (an advertiser, anonymous advertising) apart and refusing 5, a sized ring; the class mix fed from `ble_device` lines (a baseline, deltas, a reconnect, a row born while listening, a sampled row, one address on two sensors kept apart); the advertisers gauge once a pass, an address on two sensors once; the one anonymous row sloth can send (the host stream's, its first mfr pair kept, a keyboard's HID bit OR-ed in) credited to Unknown alone as one entry and one advertiser while its fields read Phones then Input, named rows and an Ubertooth's uncredited samples beside it, each class's advertisers, drawn transmitters, reports and drawn frames agreeing, no series under the zero address; the anonymous entry through both routes (one `anonymous` tx entry in `b:unk`, its kind word the one `bledev.js` tests, no proximity row, never nearest, `anonymous_heard`, the strip counting it once) and under a read cut (no slot taken: 256 read); five thousand fresh BLE addresses leaving a Wi-Fi row's high-water mark (and its true delta) in place; both routes from memory (display order, the tx entries named from the tables or by address alone, the strip's facts, every refusal), the proximity rows' order, means and window, a tracker heard before three hundred newer addresses still read and first, each row graded with its announced power (extended header, TX Power Level, else 0 dBm) and nearest by the margin; `now`'s sensor facts; both routes 503 `no_time_series` in either scope and the mix 503 `no_ble_mix`; Local `out_of_scope` with the query checked and a long query a 400; with SQLite the WiFi and BLE mixes in one `chmix` at the same tier and t, each namespace reading only its own, each route drawing only its own, a kind-4 anonymous row read back and drawn, and the file still v7. Each absence seen red under a named mutation |
 | `test_radar.c` | the Radar tab ([Radar](#radar)): `/api/radar` from seeded `ble_device`, `beacon` and `probe_client` lines (every row in total, the banded rows nearest-RSSI first, a reading without an estimate in `none` and nowhere else, a word that is not sloth's no band, both halves `null` without their tables), the eight-per-band cap on twelve scrambled rows, rows without a reading sorting last, Monitor and Hybrid against Local's `out_of_scope` with the query checked, `400` for any parameter, the body under 8 KB with every BLE row held and under 10 KB with both censuses full, the name cut on a code-point boundary; the page: the tab between APRS and TACDB, the hook and init lines, every container id looked up, no `scoped-out` toggle and the comment saying why, no control in the view, the projection functions whole (`rn`, `geo`, `place`, `project`, `ringDist`) with no divide by depth, the painters whole, the ring dash and alpha, no gradient or shadow, the kept camera's three prefs validated and cleared, no kept selection, one `requestAnimationFrame`, the Local and estimate sentences verbatim, the centre rule, every fetch through the lent scoped `getJSON`, the three `select()` exports whole. Each absence seen red under a named mutation |
+| `test_ssidview.c` | an SSID's detail ([An SSID's detail](#an-ssids-detail)): the `ssid=` parameter both ways on the empty name, one that is not UTF-8, a zero-width space, 32 octets and two that look like SQL wildcards, and its refusals (one character, leftover bits, a NUL, padding, `+` and `/`, 33 octets); `/api/wifi/ssid` over a generated sloth.db: the BSSIDs now and once, KARMA, the stream's twin link, the associations by name and by BSSID, the askers, the strip, the alerts by BSSID and by the SSID's own key component; `Home%` and `Home_et` each their own; the hidden SSID; a name nothing beacons; Monitor's answer and Local's `out_of_scope`; 600,000 alerts with 40 BSSIDs, 5,000 associations and 50,000 askers inside the request's budget, the alert walk's reach printed; and the page's half, `octets()`, `param()`, `link()`, `more()`, `ssidSpan()` and `ssidHidden()` whole and each hook where the WiFi view writes a name. Each absence assertion seen red under the mutation its comment names |
 | `test_btsig.c` | the Bluetooth SIG table this binary was built with (`WEB_BTSIG_EXPECT`): sorted, the names printable and within the cut, the lookups answering the SIG's names for Apple, Microsoft, Google, Ericsson, Battery, Human Interface Device, the keyboard appearance and the generic forms, a miss and the bounds null; the committed CSVs byte for byte the ones `web/data/btsig/SOURCE.md` hashes, with its row counts; `update_btsig.sh` run by the `update-btsig` target alone and named by no workflow; the generator run on a name holding every trigraph's opening, a quote and a backslash, its literal decoded back byte-identical and no `??` left in its output |
 | `test_replay.c` | spec §12's M3 acceptance: a six-week JSONL stream generated in the test (never a fixture) through the framer, decoder, live state, metric derivation, identity tables, rollup, `web_tsdb_step()` and the engine as `main.c` wires them, on pinned clocks: four weeks of routine (noisy gauges, Poisson counts, and an input for every rule: names that agree, a randomised MAC with its own name, a month-old probe client, a steady ssh host), then a quiet 7 d week in which nothing at all fires, slothweb and sloth restarting in the middle of it in an SQLite build, then a 7 d week in which A1 fires for a burst of connections and A3 for a daytime device that appears only at night, while a device that is only ever present at night never fires; and the hour that just closed reaching the baseline at flush phases 0, 3 and 7 (the previous slice fed it only at phase 0); A9 for a new host whose first row the rollup released late, at sloth's real cadence (SQLite); five weeks of a 13:30-14:30 routine in IST firing nothing. Both builds |
 | `test_evidence.c` | an alert's proof, every pcap written at run time from byte arrays built per their clause (no capture is committed): the file header in both byte orders and both resolutions, pcapng and junk refused by name, the record walk (orig_len raised to incl_len, a caplen past the snaplen, a file cut inside a record); the decoders on Ethernet/IPv4/TCP with a ClientHello cut at 64 bytes (no SNI claimed), a DNS query whole and cut, a compression pointer to itself, SLL2/ICMP, SLL/ARP, radiotap deauthentication (reason 7, Table 9-26 roles, channel and signal), a beacon (SSID, DS channel, RSN, a 33-octet SSID called invalid), an authentication status 0; the hex dump; a page of 24 frames, the next page, the worst case stopping with `more` inside its buffer, a cut file, a record cut below a 0xffffffff snaplen said as `40 of 270 bytes captured` and never as the snaplen; both alert-pcap name grammars and what they refuse (a handshake pcap's name, `eapol.22000`, a path, a near miss of each); the manifest line in `src/evidence_manifest.c`'s shape and every sink and shape it refuses; a directory: newest first, a handshake line and an unterminated tail not indexed, an 18-digit `written_at_epoch` sorted first and returned as written (no arithmetic on a stamp; the sanitized build would stop on an overflow) and equal stamps in read order, the three joins and the fallback only when they find nothing, hash verified, mismatched by a byte and by a length, no entry; a symlink, a FIFO, a name off the gate and a 16 MiB + 1 file refused; a missing directory; the routes: `captures` with no `incident_id`, session or path in the answer, `hash verified`, `no manifest entry`, `HASH MISMATCH` after a byte changed, `404` past the list, `400` for a file name or a bad `n`, `405` on `HEAD`, the download's headers and bytes, its `X-Sloth-SHA256` of the bytes served (`verified`, then `mismatch` after a byte changed, `no_manifest_entry`), `415` for pcapng, `why_no_capture` for an L2-only rule and with no `--pcap-dir`; an evidence pcap listed `withheld` and refused `403` by both routes with no frame or byte, then decoded and served under `serve_evidence`; a symlink and a FIFO with manifest lines listed `unreadable: not a regular file` and refused `403`; a file with sloth's line and a forged later-stamped line `hash verified` (by sloth's line) with `conflicting manifest lines (2)`, and a file with only a forged line `HASH MISMATCH`; the assessment generator run on documents it writes (header lines, front matter, sections, bibliography, Related pages left out, an indented continuation kept with its entry and other prose kept apart as the note, MY_NETWORK_RECON.md's note never in an entry) and its two build stops; the page's hooks (the drawer's list by its `data-ev` mark, the frame index through `DataTable`, a withheld or unreadable capture never opened), the download's one form and the section's place, last |
@@ -5048,6 +5159,8 @@ web/
                    /api/ble/proximity (the BLE Devices waterfall)
     web_radar.c    /api/radar: the Wi-Fi and BLE distance-band census the Radar
                    tab's rings draw (the BLE tables, the FRRS ledger)
+    web_ssidview.c /api/wifi/ssid: one SSID's detail, and the ssid= parameter
+    web_probeq.h   the few lines each of its sloth.db reads repeats
     web_history.c  /api/history/*, /api/sessions, /api/sessions/new (M5)
     web_flows.c    /api/flows, /api/flows/graph and its matrix form (M6, #171 V4)
     web_alerts.c   /api/alerts, /api/alert: the Alerts page, an alert's page
@@ -5075,8 +5188,8 @@ web/
                    control, location.js and location.css: where
                    the sensor was, gnss.js and gnss.css: the GPS Sat
                    tab, bledev.js and bledev.css: the BLE Devices
-                   waterfall, and radar.js and radar.css: the Radar tab's
-                   dome)
+                   waterfall, radar.js and radar.css: the Radar tab's
+                   dome, and ssid.js and ssid.css: an SSID's detail)
   tools/
     embed.c        ui/ -> build/web/web_assets.c (build time only)
     oui_gen.c      web/data/*.csv -> build/web/web_oui_table.c (build time only)

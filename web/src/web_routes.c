@@ -21,6 +21,7 @@
 #include "web_wifi.h"
 #include "web_positions.h"
 #include "web_radar.h"
+#include "web_ssidview.h"
 
 static int route_scoped(const web_req_t *rq, const web_health_t *h,
                         int sse_room, char *out, size_t outsz, web_resp_t *r);
@@ -691,7 +692,7 @@ static int route_m4(const web_req_t *rq, const web_health_t *h, int which,
 enum { M5_CHANNELS, M5_DEAUTH, M5_APS, M5_OVERVIEW, M5_HDEVICES, M5_HALERTS,
        M5_HFLOWS, M5_SESSIONS, M5_SESSIONS_NEW, M6_FLOWS, M6_GRAPH, M5_WLOCAL,
        M5_CHAIN, RF_GNSS_SEEN, RF_GNSS_SAT, RF_ADSB_SEEN, RF_ADSB_AC, RF_GNSS_TRACKS,
-       RF_APRS_SEEN, RF_APRS_STN, RF_APRS_TRK };
+       RF_APRS_SEEN, RF_APRS_STN, RF_APRS_TRK, M5_SSID };
 
 /* The WiFi and History routes (M5, web_wifi.h, web_history.h) and the
  * Flows routes (M6, web_flows.h): the same shape as route_m4(). */
@@ -715,6 +716,7 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
         web_gnss_seen_route, web_gnss_sat_route, web_adsb_seen_route,
         web_adsb_aircraft_route, web_gnss_tracks_route,
         web_aprs_seen_route, web_aprs_station_route, web_aprs_tracks_route,
+        web_ssid_route,
     };
     /* A view a capture scope holds nothing of (web_scope.h): the WiFi
      * view's channels, deauths and APs are the monitor radio's, its card
@@ -745,6 +747,10 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
                                     which == RF_APRS_TRK)
             ? "APRS stations are the Dire Wolf decoder's (--aprs), a passive "
               "radio; the host's own interfaces carried none"
+        : sc == WEB_SCOPE_LOCAL && which == M5_SSID
+            ? "an SSID's beacons and the probe requests asking for it are the "
+              "passive monitor radio's; the host's own interfaces carried none "
+              "of it"
         : NULL;
     if (qlong(rq)) {
         status = 400;
@@ -1483,6 +1489,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             { "/api/sessions/new", M5_SESSIONS_NEW },
             { "/api/flows", M6_FLOWS },
             { "/api/flows/graph", M6_GRAPH },
+            /* One SSID's detail (web_ssidview.h). */
+            { "/api/wifi/ssid", M5_SSID },
         };
         for (size_t i = 0; i < sizeof(M5) / sizeof(M5[0]); i++)
             if (!strcmp(rq->path, M5[i].path))

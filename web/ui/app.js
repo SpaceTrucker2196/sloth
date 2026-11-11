@@ -396,7 +396,7 @@
   // the colour it hashed over the octets themselves (k, its *_k member),
   // which is the TUI's; the page's own hash is for an SSID that came
   // without one. One that needed escaping (np) carries a marker.
-  function ssidSpan(ssid, k, np) {
+  function ssidText(ssid, k, np) {
     var sp = el("span", "", ssid);
     if (num(k) && k >= 0 && k < P.ip) sp.style.color = "var(--k-" + k + ")";
     else if (ssid !== "") sp.style.color = "var(--k-" + ipColorIndex(ssid) + ")";
@@ -406,6 +406,19 @@
     w.appendChild(el("span", "npm", "non-printable"));
     w.title = "bytes that are not printable UTF-8 are shown as \\xNN";
     return w;
+  }
+
+  // Every SSID the page writes is selectable (web/ui/ssid.js): a click,
+  // Enter or Space opens its detail, as a device row opens the drawer.
+  // plain: inside a control that has an action of its own. ssidHidden:
+  // the word a view writes for the empty SSID, selectable the same way.
+  function ssidSpan(ssid, k, np, plain) {
+    var n = ssidText(ssid, k, np);
+    return plain || !window.SlothSsid ? n : SlothSsid.link(n, ssid);
+  }
+  function ssidHidden(word) {
+    var n = el("span", "d-dim", word);
+    return window.SlothSsid ? SlothSsid.link(n, null) : n;
   }
 
   // tui_brand_addstr() into parent: brand runs in their colours, the
@@ -3290,7 +3303,7 @@
       var nm = el("span", "nm");
       if (t.kind === "ap") {
         nm.appendChild(t.ssid === null || t.ssid === undefined ? el("span", "d-dim", "(no name)")
-                                                                : ssidSpan(String(t.ssid), t.ssid_k, t.ssid_np));
+                                                                : ssidSpan(String(t.ssid), t.ssid_k, t.ssid_np, true));
         nm.appendChild(el("span", "d-dim", "  " + t.id + "  AP"));
       } else {
         nm.appendChild(el("span", "d-normal", t.id));
@@ -3301,6 +3314,7 @@
       b.appendChild(el("span", "n d-normal", share(m[e + 1])));
       b.addEventListener("click", mixGo(t));
       li.appendChild(b);
+      if (t.kind === "ap" && window.SlothSsid) SlothSsid.more(li, t.ssid === undefined ? null : t.ssid);
       ol.appendChild(li);
     }
     if (num(m[1]) && m[1] > 0) {
@@ -3402,7 +3416,7 @@
     // The SSID in its hash colour; the warning (KARMA, multi-VAP) is
     // the squares after it, at the heat the TUI warns at.
     var ss = el("span", "c-ssid");
-    ss.appendChild(a.ssid === null ? el("span", "d-dim", "(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
+    ss.appendChild(a.ssid === null ? ssidHidden("(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
     // §6.3: the SSID count as a row of small squares after the SSID, one
     // each (eight, then a plus), not "+3 ssids" in words; the count in
     // words in its title.
@@ -3611,7 +3625,7 @@
       var row = el("div", "dt-row");
       row.appendChild(macCell(a.bssid));
       var ss = el("span", "");
-      ss.appendChild(a.ssid === null ? el("span", "d-dim", "(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
+      ss.appendChild(a.ssid === null ? ssidHidden("(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
       row.appendChild(ss);
       row.appendChild(el("span", "n d-normal", String(a.channel)));
       row.appendChild(el("span", "n d-dim", num(a.signal) ? String(a.signal) : "-"));
@@ -5717,6 +5731,11 @@
   if (window.SlothFrrs) SlothFrrs.init({ el: el, getJSON: getJSON, DataTable: DataTable,
     prefGet: prefGet, prefSet: prefSet, stamp: stamp, shortStamp: shortStamp, go: go, show: show,
     openDrawer: openDrawer, alertsReload: function () { alertsLoad(true); } });
+
+  // One SSID's detail (web/ui/ssid.js): the page's helpers, lent once.
+  if (window.SlothSsid) SlothSsid.init({ el: el, getJSON: getJSON, errText: errText, keyColor: keyColor,
+    stamp: stamp, shortStamp: shortStamp, kvList: kvList, drawStrip: drawStrip, ssidPlain: ssidText,
+    openDrawer: openDrawer, alertLink: alertLink, scope: function () { return SCOPE; } });
 
   // The BLE Devices waterfall (web/ui/bledev.js): the page's helpers, lent once.
   if (window.SlothBleDev) SlothBleDev.init({ el: el, set: set, getJSON: getJSON, theme: theme,

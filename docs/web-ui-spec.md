@@ -21,6 +21,7 @@
 > | Capture scope | **2026-10-26 (owner request):** a Monitor / Hybrid / Local switch in the top bar filters every view by how the data was captured: Monitor the passive monitor radio (and BLE), Local the host's own interfaces (managed Wi-Fi scans included), Hybrid everything (the default). Every `/api` route but `/api/health` and `/api/query` takes `scope=`; a datum's scope is decided by its type in `web/src/web_scope.c`; a device seen both ways shows each scope's own fields; the SQL box is unscoped. `sensor_health` gains `capture_linktype` and `monitor_only`. `docs/wiki/capture-scope.md` is the reference. | §7, §8 (every view) |
 > | Radar view | **2026-11-06 (owner request):** a Radar tab, one half-dome of every radio heard (§8.14). Its dome and its ◇ ▲ ○ marks have no character-cell form (the TUI's `[#]` sky plot is the nearest relative), so the view is **exempt from R12** of `docs/web-visual-spec.md` as an owner ruling, not an oversight; the marks still carry shape and word (R10), the chrome has no gradient, shadow or fill (R8), the selection is the one accent (R1). | visual spec R12, for this view only |
 > | Vendor research's place | **2026-11-11 (owner request):** in the device drawer (the detail view of a WiFi client or access point, and of every other device) the vendor research section is the last block, after the record, the lists, presence, signal, the week, anomalies and the FRRS record. The Lookup card keeps it under the OUI card. | §8.6's drawer order |
+> | SSID detail | **2026-11-11 (owner request):** every SSID the page writes is selectable and opens a detail drawer built as the device drawer is (§8.8), from `/api/wifi/ssid?ssid=`, the name as the base64url of its octets. Read-only, the existing column allow-list, Monitor's and Hybrid's. | §8.8 (no SSID view), §7's route list |
 
 # sloth web UI: specification
 
@@ -295,6 +296,7 @@ All routes are `GET`. Any other method returns `405`. Responses are JSON unless 
 | `/api/aprs/seen?days=&limit=&offset=&q=`, `/api/aprs/station?call=&days=` | the APRS tab's history from sloth.db's `aprs_stations` / `aprs_packets` (v13): stations heard over a window, one station's row and packets (2026-11-05); Monitor's and Hybrid's |
 | `/api/aprs/tracks?hours=` | the Radar tab's APRS entities from sloth.db's `aprs_packets` over 1..24 h: stations and, by name, objects and items, each with its newest packet's time, newest position, motion, status, comment and a moving one's trail (≤ 48 points) (2026-11-06); Monitor's and Hybrid's |
 | `/api/radar` | the Radar tab's Wi-Fi and BLE distance-band census: totals, the rows without an estimate, per band the count and eight strongest rows, and `devs`, each family's 50 most recently heard rows with an estimate (metres, band, trend) (2026-11-06); Monitor's and Hybrid's, no parameter |
+| `/api/wifi/ssid?ssid=` | one SSID's detail (2026-11-11): its BSSIDs now and once with vendor, channel, security, signal, KARMA score and twin links; the stations associated to it and asking for it; its 24 h presence; the alerts naming it or a BSSID of it. `ssid` is the base64url of its octets, `-` for the hidden SSID; compared with `=`, never a pattern |
 | `/events` | SSE stream (see below) |
 
 ### 7.1 SSE events
@@ -427,6 +429,7 @@ Open episodes first, then closed ones in the selected window. Each card: kind gl
 - **AP table**: `beacon_aps` with SSID history, AKM bits, downgrade flags, MFP, KARMA score. SSID count above 1 is highlighted in `--sev-warn`.
 - **Deauth timeline**: bars per bssid, flood episodes in `--sev-crit`.
 - **Probe clients**: count over time with band.
+- **SSID detail (added 2026-11-11)**: any SSID on the view (the AP table and its SSID history, the hidden word, the card's scan, the channel mix's list) is selectable by click or keyboard and opens a drawer like the device drawer's: the SSID in its display form with the non-printable marker; every BSSID beaconing it (vendor, channel, security and AKM, signal, first and last seen, the new mark), each opening the device drawer; the clients associated to it and the clients probing for it, each opening the device drawer; the 24 h presence strip (any of its BSSIDs present) in G5; the twin and KARMA findings on its BSSIDs; the alerts naming it or its BSSIDs, each opening the alert's page. Whether the operator designated it (`--my-ssid`) is not known to slothweb and the drawer says so. Empty states per R5. Under Local: out of scope, said.
 
 ### 8.9 View: Flows
 
