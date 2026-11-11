@@ -571,16 +571,19 @@ var SlothFrrs = (function () {
       if (!f || typeof f !== "object" || !Object.prototype.hasOwnProperty.call(f, "v")) return;
       kv.appendChild(el("span", "k", k.replace(/_/g, " ")));
       if (k === "series_rssi" && f.v && typeof f.v === "object" && Array.isArray(f.v.cells)) {
-        kv.appendChild(rssiSpark(f.v));
-        kv.appendChild(el("span", "s d-dim", typeof f["src"] === "string" ? f["src"] : ""));
+        var sp = rssiSpark(f.v);
+        if (typeof f["src"] === "string") sp.title = f["src"];
+        kv.appendChild(sp);
         return;
       }
       var t = vtext(k, f.v);
       var v = el("span", t === null ? "v d-dim" : "v d-bright", t === null ? (f.why || "not observed") : t);
       if (num(f.since) && f.since > 0) v.appendChild(el("span", "d-dim", "  (as of " + H.shortStamp(f.since) + ")"));
+      // Two columns, the field and what was observed (owner ruling
+      // 2026-11-11). Where the value came from is the value's tooltip,
+      // so the provenance is one hover away and off the page's width.
+      if (typeof f["src"] === "string") v.title = f["src"];
       kv.appendChild(v);
-      var from = f["src"];
-      kv.appendChild(el("span", "s d-dim", typeof from === "string" ? from : ""));
     });
     box.appendChild(kv);
   }
