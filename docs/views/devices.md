@@ -197,7 +197,7 @@ default-credential matching is struck by owner ruling (#145).
 ## Risk bucket
 
 The `Risk` column shows a bucket derived from independently observable
-signals — no ML, no black box. Bucket = weighted sum of signals:
+signals — no ML, no black box.
 
 | Signal | Weight | Meaning |
 |--------|-------:|---------|
@@ -207,18 +207,34 @@ signals — no ML, no black box. Bucket = weighted sum of signals:
 | `PROBE_ONLY`     | 1 | Probe frames observed, no beacon/STA association |
 | `CLEARTEXT_CRED` | 3 | This device leaked a credential in the clear (see `[v]` Alerts, `CLEARTEXT_CRED`) |
 | `ALERT_TAGGED`   | 3 | An active alert names this device's IP as its target |
+| `SELF`           | — | `ownership_is_own_device()`: the sensor's own radio, or on the operator's `--known-mac` roster. Not summed — forces the bucket to LOW outright (#191) |
 
-Score → bucket:
+**Two running totals, not one** (since #191): `score` is every signal
+above, weak or strong, and decides LOW/MED; `strong` sums only the two
+weight-3 signals and alone decides HIGH/CRIT. A randomised,
+vendor-less, hostname-less, probe-only phone — every modern handset
+that walks past a passive sensor — trips all four weight-1 signals and
+nothing else; before #191 that summed past HIGH. It cannot now,
+because `strong` stays 0 regardless of how many weight-1 signals
+stack:
 
-| Score | Bucket | Colour |
-|-------|--------|--------|
-| 0     | LOW    | dim |
-| 1–2   | MED    | phosphor-heat 0.4 |
-| 3–4   | HIGH   | phosphor-heat 0.7 |
-| 5+    | CRIT   | phosphor-heat 1.0 |
+| `score` | `strong` | Bucket | Colour |
+|---------|----------|--------|--------|
+| 0       | —        | LOW    | dim |
+| >= 1    | 0        | MED    | phosphor-heat 0.4 |
+| any     | >= 3     | HIGH   | phosphor-heat 0.7 |
+| any     | >= 5     | CRIT   | phosphor-heat 1.0 |
+
+A weight-1 signal can never push `strong`, so no amount of
+RANDOM_MAC/UNKNOWN_VENDOR/NO_HOSTNAME/PROBE_ONLY stacking reaches
+HIGH or CRIT on its own, and it can never pad a single evidence
+signal (`strong == 3`, HIGH) into CRIT either — CRIT needs *both*
+weight-3 signals. `SELF` is checked last and overrides every bucket
+above to LOW, so the sensor's own radio and the operator's rostered
+devices never appear in the posture report's High-risk devices table.
 
 The signal bitmask is exported in the JSONL `risk_signals` field so
-external consumers can reproduce the score and show a per-signal
+external consumers can reproduce the bucket and show a per-signal
 breakdown.
 
 ## What's normal

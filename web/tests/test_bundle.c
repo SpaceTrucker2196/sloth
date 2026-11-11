@@ -1400,13 +1400,18 @@ static void test_nested_reasons(void) {
 static void test_glossary_risk_is_the_level(void) {
     WT_EQ(route(&H, "/api/bundle", "kind=device&id=02:00:00:00:00:12"), 200);
     WT_HAS(answer(), "\"risk\":\"sloth\\u0027s device risk level: 0 LOW, 1 MED, 2 HIGH, "
-                     "3 CRIT, from the weighted sum of risk_signals (weights 1,1,1,1,3,3 in "
-                     "bit order; \\u003e=1 MED, \\u003e=3 HIGH, \\u003e=5 CRIT)\"");
+                     "3 CRIT; any risk_signals bit reaches MED, but HIGH "
+                     "(\\u003e=3) and CRIT (\\u003e=5, both) are gated on the "
+                     "weight-3 signals (16, 32) alone, in weight order "
+                     "1,1,1,1,3,3; the weight-1 signals (1,2,4,8) stack "
+                     "to MED and never past it; 64 overrides to LOW "
+                     "regardless\"");
     WT_EQ(DEV_RISK_LOW, 0);
     WT_EQ(DEV_RISK_CRIT, 3);
-    WT_EQ(web_scope_risk_level(1), 1);
-    WT_EQ(web_scope_risk_level(1 | 2 | 4), 2);
-    WT_EQ(web_scope_risk_level(16 | 1 | 2), 3);
+    WT_EQ(web_scope_risk_level(1), 1);           /* one weak signal: MED */
+    WT_EQ(web_scope_risk_level(1 | 2 | 4), 1);   /* 3 weak, no evidence: still MED (#191) */
+    WT_EQ(web_scope_risk_level(16 | 1 | 2), 2);  /* one evidence signal + weak noise: HIGH */
+    WT_EQ(web_scope_risk_level(16 | 32), 3);     /* both evidence signals: CRIT */
 }
 
 /* count and observations are evaluations of a standing condition, not

@@ -243,16 +243,24 @@ long long web_scope_risk_mask(int scope) {
     switch (scope) {
     case WEB_SCOPE_MONITOR: return WEB_RISK_BOTH | WEB_RISK_MONITOR;
     case WEB_SCOPE_LOCAL:   return WEB_RISK_BOTH | WEB_RISK_LOCAL;
-    default:                return 0x3f;
+    default:                return 0x7f;
     }
 }
 
 const int web_scope_risk_w[6] = { 1, 1, 1, 1, 3, 3 };
 
 int web_scope_risk_level(long long sig) {
-    int score = 0;
-    for (int b = 0; b < 6; b++) if (sig & (1LL << b)) score += web_scope_risk_w[b];
-    return score >= 5 ? 3 : score >= 3 ? 2 : score >= 1 ? 1 : 0;
+    if (sig & WEB_RISK_SELF) return 0;
+    int score = 0, strong = 0;
+    for (int b = 0; b < 6; b++) {
+        if (!(sig & (1LL << b))) continue;
+        score += web_scope_risk_w[b];
+        if (b >= 4) strong += web_scope_risk_w[b];  /* CLEARTEXT_CRED, ALERT_TAGGED */
+    }
+    if (strong >= 5) return 3;
+    if (strong >= 3) return 2;
+    if (score  >= 1) return 1;
+    return 0;
 }
 
 int web_scope_ip_on_radio(long long lt, const char *cap, const char *mon) {

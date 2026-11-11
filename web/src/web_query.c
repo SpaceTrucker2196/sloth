@@ -405,7 +405,13 @@ static void cat(char *dst, size_t cap, const char *s) {
     memcpy(dst + n, s, k + 1);
 }
 
-/* The risk level from masked signals S, with sloth's weights. */
+/* The risk level from masked signals S, with sloth's weights. #191:
+ * `sum` is every masked signal, weak or strong, and decides MED; a
+ * second total, `strong`, sums only CLEARTEXT_CRED and ALERT_TAGGED
+ * (bits 4/5) and alone decides HIGH/CRIT — weak signals can pad `sum`
+ * but never `strong`, so they can never push a device past the
+ * bucket its evidence alone earned. SELF (bit 6, 64) forces LOW
+ * outright when the scope's mask carries it. */
 static void risk_case(char *out, size_t cap, const char *s, long long mask) {
     char sum[1280] = "(0";
     for (int b = 0; b < 6; b++) {
@@ -415,8 +421,23 @@ static void risk_case(char *out, size_t cap, const char *s, long long mask) {
         cat(sum, sizeof(sum), t);
     }
     cat(sum, sizeof(sum), ")");
-    snprintf(out, cap, "(CASE WHEN %s >= 5 THEN 3 WHEN %s >= 3 THEN 2"
-             " WHEN %s >= 1 THEN 1 ELSE 0 END)", sum, sum, sum);
+
+    char strong[700] = "(0";
+    for (int b = 4; b <= 5; b++) {
+        if (!(mask & (1LL << b))) continue;
+        char t[320];
+        snprintf(t, sizeof(t), " + %d * ((%s & %d) <> 0)", web_scope_risk_w[b], s, 1 << b);
+        cat(strong, sizeof(strong), t);
+    }
+    cat(strong, sizeof(strong), ")");
+
+    char self_when[256] = "";
+    if (mask & 64)
+        snprintf(self_when, sizeof(self_when), "WHEN (%s & 64) <> 0 THEN 0 ", s);
+
+    snprintf(out, cap, "(CASE %sWHEN %s >= 5 THEN 3"
+             " WHEN %s >= 3 THEN 2 WHEN %s >= 1 THEN 1 ELSE 0 END)",
+             self_when, strong, strong, sum);
 }
 
 static void dcols(unsigned f, int scope, dcols_t *c) {

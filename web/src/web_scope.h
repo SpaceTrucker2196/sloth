@@ -125,16 +125,21 @@ int         web_scope_device(long long sources, long long cam_signals,
                              const char *ip);
 
 /* sloth's device risk (src/device_risk.c) recomputed from the signals a
- * scope can see: RANDOM_MAC and UNKNOWN_VENDOR in both, NO_HOSTNAME,
- * CLEARTEXT_CRED and ALERT_TAGGED Local only, PROBE_ONLY Monitor only.
- * Hybrid keeps every bit. */
-#define WEB_RISK_BOTH    (1 | 2)
+ * scope can see: RANDOM_MAC, UNKNOWN_VENDOR and SELF in both,
+ * NO_HOSTNAME, CLEARTEXT_CRED and ALERT_TAGGED Local only, PROBE_ONLY
+ * Monitor only. SELF (#191) is a roster fact, not a radio observation,
+ * so every scope sees it. Hybrid keeps every bit. */
+#define WEB_RISK_SELF    64
+#define WEB_RISK_BOTH    (1 | 2 | WEB_RISK_SELF)
 #define WEB_RISK_LOCAL   (4 | 16 | 32)
 #define WEB_RISK_MONITOR 8
 long long   web_scope_risk_mask(int scope);
 /* The weights and buckets, device_risk.c's: 1,1,1,1,3,3; 0 LOW, 1-2
- * MED, 3-4 HIGH, 5+ CRIT. web_query.c's scoped SQL sums the same
- * table, so the test that reads device_risk.c holds both. */
+ * MED, 3-4 HIGH, 5+ CRIT since #191 only when a weight-3 bit
+ * (CLEARTEXT_CRED/ALERT_TAGGED) is also present — four weight-1 bits
+ * stacking alone cap at MED — and SELF forces LOW outright.
+ * web_query.c's scoped SQL sums the same table, so the test that reads
+ * device_risk.c holds both. */
 extern const int web_scope_risk_w[6];
 int         web_scope_risk_level(long long signals);
 

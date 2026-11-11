@@ -787,6 +787,9 @@ typedef enum {
 #define DEV_RISK_PROBE_ONLY      (1 << 3)  /* probe frames, no association */
 #define DEV_RISK_CLEARTEXT_CRED  (1 << 4)  /* cred exposure attributed to us */
 #define DEV_RISK_ALERT_TAGGED    (1 << 5)  /* an alert's match_ip == our ip */
+#define DEV_RISK_SELF            (1 << 6)  /* ownership_is_own_device(): this
+                                             * sensor's own radio, or the
+                                             * operator's roster (#191) */
 
 typedef enum {
     DEV_RISK_LOW  = 0,

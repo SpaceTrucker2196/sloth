@@ -197,7 +197,15 @@ static void test_record_types_are_classified(void) {
 /* sloth's risk weights and buckets (src/device_risk.c), read from the
  * source, are the ones the scopes recompute with: web_scope_risk_w[],
  * which web_query.c's scoped risk SQL sums. Seen red with ALERT_TAGGED's
- * weight in web_scope_risk_w[] set to 2. */
+ * weight in web_scope_risk_w[] set to 2.
+ *
+ * #191: a weight alone no longer decides HIGH/CRIT — the four weight-1
+ * signals (RANDOM_MAC, UNKNOWN_VENDOR, NO_HOSTNAME, PROBE_ONLY) cap at
+ * MED by themselves, however many stack; only a weight-3 signal
+ * (CLEARTEXT_CRED, ALERT_TAGGED) reaches HIGH/CRIT. So the per-bit
+ * check below asserts the weight-1/weight-3 split rather than "weight
+ * alone decides the level", and three compound cases below pin the
+ * cap, the still-HIGH evidence case, and the CRIT case directly. */
 static void test_risk_weights_are_sloths(void) {
     char *src = slurp("src/device_risk.c");
     WT_ASSERT(src != NULL);
@@ -214,21 +222,27 @@ static void test_risk_weights_are_sloths(void) {
         int w = atoi(s + 9);
         /* The table web_query.c's scoped SQL sums. */
         WT_EQ(web_scope_risk_w[b], w);
-        /* The weight alone decides the level of a device with only it. */
-        WT_EQ(web_scope_risk_level(1LL << b), w >= 5 ? 3 : w >= 3 ? 2 : w >= 1 ? 1 : 0);
+        /* A weight-1 bit alone is MED; only a weight-3 bit alone is HIGH. */
+        WT_EQ(web_scope_risk_level(1LL << b), w >= 3 ? 2 : 1);
     }
-    WT_HAS(src, "if      (score >= 5) level = DEV_RISK_CRIT;");
-    WT_HAS(src, "else if (score >= 3) level = DEV_RISK_HIGH;");
-    WT_HAS(src, "else if (score >= 1) level = DEV_RISK_MED;");
+    WT_HAS(src, "if      (strong >= 5) level = DEV_RISK_CRIT;");
+    WT_HAS(src, "else if (strong >= 3) level = DEV_RISK_HIGH;");
+    WT_HAS(src, "else if (score  >= 1) level = DEV_RISK_MED;");
     free(src);
     WT_EQ(web_scope_risk_level(0), 0);
-    WT_EQ(web_scope_risk_level(1 | 2), 1);           /* 2: MED */
-    WT_EQ(web_scope_risk_level(1 | 2 | 4), 2);       /* 3: HIGH */
-    WT_EQ(web_scope_risk_level(16 | 1 | 2), 3);      /* 5: CRIT */
-    /* What each scope sees of the signals. */
-    WT_EQ(web_scope_risk_mask(WEB_SCOPE_MONITOR), 1 | 2 | 8);
-    WT_EQ(web_scope_risk_mask(WEB_SCOPE_LOCAL), 1 | 2 | 4 | 16 | 32);
-    WT_EQ(web_scope_risk_mask(WEB_SCOPE_HYBRID), 0x3f);
+    WT_EQ(web_scope_risk_level(1 | 2), 1);               /* 2 weak, no evidence: MED */
+    WT_EQ(web_scope_risk_level(1 | 2 | 4), 1);           /* 3 weak, no evidence: still MED (#191 cap) */
+    WT_EQ(web_scope_risk_level(1 | 2 | 4 | 8), 1);       /* all 4 weak: still MED */
+    WT_EQ(web_scope_risk_level(32), 2);                  /* ALERT_TAGGED alone: HIGH */
+    WT_EQ(web_scope_risk_level(32 | 1 | 2 | 4 | 8), 2);  /* + every weak bit: still HIGH, not CRIT */
+    WT_EQ(web_scope_risk_level(16 | 1 | 2), 2);          /* one evidence signal + weak noise: HIGH, not CRIT */
+    WT_EQ(web_scope_risk_level(16 | 32), 3);             /* both evidence signals: CRIT */
+    WT_EQ(web_scope_risk_level(64 | 16 | 32), 0);        /* SELF overrides even both evidence signals: LOW */
+    /* What each scope sees of the signals. SELF (64) is a roster fact,
+     * not a radio observation, so it is in every scope's mask. */
+    WT_EQ(web_scope_risk_mask(WEB_SCOPE_MONITOR), 1 | 2 | 8 | 64);
+    WT_EQ(web_scope_risk_mask(WEB_SCOPE_LOCAL), 1 | 2 | 4 | 16 | 32 | 64);
+    WT_EQ(web_scope_risk_mask(WEB_SCOPE_HYBRID), 0x7f);
 }
 
 static void test_tags(void) {
@@ -1151,6 +1165,54 @@ static void test_devices_camera_and_probe_only_scoped(void) {
                          " ('02:00:00:00:00:d1','02:00:00:00:00:d2');"), 0);
 }
 
+/* #191 exercised through the real route, not just web_scope_risk_level()
+ * in isolation: risk_case()'s generated SQL is the production path for
+ * Monitor/Local, and it is a separate implementation of the same
+ * formula. Each row's stored risk_level is a deliberately wrong value
+ * (would read back unchanged under Hybrid's passthrough) so a pass
+ * here proves the SQL recomputes rather than echoes it. Seen red with
+ * risk_case()'s WHEN clauses reordered back to a flat score (e1, e2)
+ * and with the self WHEN clause dropped (e3). */
+static void test_devices_risk_recomputed_scoped(void) {
+    char row[4096], sql[1024];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO devices (mac,vendor,sources,risk_signals,risk_level,"
+        "first_seen,last_seen) VALUES"
+        " ('02:00:00:00:00:e1','',1,%d,2,%lld,%lld),"   /* weak only, stored HIGH */
+        " ('02:00:00:00:00:e2','',1,%d,3,%lld,%lld),"   /* 1 evidence + weak, stored CRIT */
+        " ('02:00:00:00:00:e3','',9,%d,3,%lld,%lld);",  /* both evidence + self, stored CRIT; sources also puts it on Monitor */
+        1 | 2 | 4, (long long)SDB_NOW - 3600, (long long)SDB_NOW - 60,
+        16 | 1 | 2, (long long)SDB_NOW - 3600, (long long)SDB_NOW - 60,
+        16 | 32 | 64, (long long)SDB_NOW - 3600, (long long)SDB_NOW - 60);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+
+    WT_EQ(route(&H, "/api/devices", "scope=local"), 200);
+    const char *b = body_of(g_out);
+    row_of(b, "02:00:00:00:00:e1", row, sizeof(row));
+    WT_HAS(row, "\"risk\":1,");    /* MED, not the stored HIGH */
+    row_of(b, "02:00:00:00:00:e2", row, sizeof(row));
+    WT_HAS(row, "\"risk\":2,");    /* HIGH, not the stored CRIT */
+    row_of(b, "02:00:00:00:00:e3", row, sizeof(row));
+    WT_HAS(row, "\"risk\":0,");    /* LOW: SELF overrides even two evidence signals */
+
+    /* Monitor's mask carries SELF too (it is a roster fact, not a
+     * radio observation) but not the Local-only evidence bits, so e3
+     * is still forced LOW even though 16|32 fall out of the mask. */
+    WT_EQ(route(&H, "/api/devices", "scope=monitor"), 200);
+    row_of(body_of(g_out), "02:00:00:00:00:e3", row, sizeof(row));
+    WT_HAS(row, "\"risk\":0,");
+
+    /* Hybrid passes the (deliberately wrong) stored value through
+     * unchanged — the point of this fixture's mismatch. */
+    WT_EQ(route(&H, "/api/devices", ""), 200);
+    row_of(body_of(g_out), "02:00:00:00:00:e1", row, sizeof(row));
+    WT_HAS(row, "\"risk\":2,");
+
+    WT_EQ(sdb_exec(g_db, "DELETE FROM devices WHERE mac IN"
+                         " ('02:00:00:00:00:e1','02:00:00:00:00:e2',"
+                         "'02:00:00:00:00:e3');"), 0);
+}
+
 /* One device, each list in its own scope. Seen red: the SSIDs under
  * Local with the !loc test on the ssids list removed; the ARP address
  * under Monitor with the !mon test on the ips list removed; M's
@@ -1566,6 +1628,7 @@ void run_scope_tests(void) {
     WT_RUN(test_devices_scoped);
     WT_RUN(test_devices_anomalies_scoped);
     WT_RUN(test_devices_camera_and_probe_only_scoped);
+    WT_RUN(test_devices_risk_recomputed_scoped);
     WT_RUN(test_device_scoped);
     WT_RUN(test_alerts_history_scoped);
     WT_RUN(test_wifi_card_scoped);
