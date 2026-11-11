@@ -40,7 +40,10 @@
  * window. The upper bounds keep a value inside the int fields the
  * detectors store them in. */
 static const tune_spec_t g_specs[TUNE_COUNT] = {
-    { "karma.ssid_thresh",          3,   2,   64,     "distinct SSIDs from one BSSID" },
+    /* No higher than the beacon history holds (MAX_AP_SSID_HISTORY): a
+     * BSSID's ssid_history_n never passes it, so a larger threshold
+     * would switch KARMA_AP off without a word. */
+    { "karma.ssid_thresh",          3,   2,   MAX_AP_SSID_HISTORY, "distinct SSIDs from one BSSID" },
     { "dns.tunnel_label_thresh",    30,  8,   255,    "label bytes" },
     { "dns.tunnel_long_hits",       8,   2,   1000,   "long labels per host" },
     { "dns.tunnel_total_thresh",    15,  2,   1000,   "queries per host" },

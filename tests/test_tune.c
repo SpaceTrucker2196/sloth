@@ -249,10 +249,26 @@ static void test_non_default_list_truncates_cleanly(void) {
     ASSERT_EQ((long long)one[0], 0);
 }
 
+/* karma.ssid_thresh cannot be set past the beacon history's length:
+ * ssid_history_n never exceeds MAX_AP_SSID_HISTORY, so a larger value
+ * would make KARMA_AP unable to fire. */
+static void test_karma_thresh_capped_at_history(void) {
+    tune_reset();
+    char err[160];
+    char ok[48], over[48];
+    snprintf(ok, sizeof(ok), "karma.ssid_thresh=%d", MAX_AP_SSID_HISTORY);
+    snprintf(over, sizeof(over), "karma.ssid_thresh=%d", MAX_AP_SSID_HISTORY + 1);
+    ASSERT_EQ(tune_set(ok, err, sizeof(err)), 0);
+    ASSERT_EQ((long long)tune_val(TUNE_KARMA_SSID_THRESH), MAX_AP_SSID_HISTORY);
+    ASSERT_NE(tune_set(over, err, sizeof(err)), 0);
+    ASSERT_EQ((long long)tune_val(TUNE_KARMA_SSID_THRESH), MAX_AP_SSID_HISTORY);
+    tune_reset();
+}
+
 static void test_reset_restores_every_default(void) {
     tune_reset();
     char err[160];
-    ASSERT_EQ(tune_set("karma.ssid_thresh=9", err, sizeof(err)), 0);
+    ASSERT_EQ(tune_set("karma.ssid_thresh=6", err, sizeof(err)), 0);
     ASSERT_EQ(tune_set("mqtt.brute_fails=99", err, sizeof(err)), 0);
     ASSERT_EQ(tune_non_default(), 2);
     tune_reset();
@@ -569,6 +585,7 @@ void run_tune_tests(void) {
     RUN_TEST(test_a_value_equal_to_the_default_is_not_tuned);
     RUN_TEST(test_non_default_list_names_the_knobs);
     RUN_TEST(test_non_default_list_truncates_cleanly);
+    RUN_TEST(test_karma_thresh_capped_at_history);
     RUN_TEST(test_reset_restores_every_default);
     RUN_TEST(test_print_list_covers_every_knob);
     RUN_TEST(test_a_tuned_threshold_reaches_the_detector_macro);

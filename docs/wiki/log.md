@@ -6921,3 +6921,23 @@ Owner rulings: a triaged-out state carried from an earlier episode dims the card
 Slice 1: plain notes (`web/src/web_notes.c`, `web/ui/subnotes.js`) on six kinds of subject (device, BLE advertiser, SSID by its octets, GNSS satellite, aircraft, APRS station), append-only with retraction as a row, only retracted notes folding at the caps (64 a subject, 20,000); `GET /api/frrs/notes`, `GET /api/frrs/notes/marks`, `POST /api/frrs/note`; `/api/glossary`; slothweb.db v10 (`note`, `relation.via`) with its migration from v9, its failure case and the chain from v7; `via` gains `agent`; the bundle's `device.notes` and `ble.notes`.
 
 Slice 2: `slothweb-mcp` (`web/mcp/`, `make web-mcp`), an MCP server over slothweb's HTTP API on loopback, 22 read tools and 5 write tools; `slothweb --web-agent-secret PATH` and the `X-Slothweb-Agent` header (`web/src/web_agent.c`): a write proving the run's secret, from loopback with no Origin, is recorded `via: agent`; one without the header can never be; a wrong secret is 403. New page [[slothweb-mcp]]; [[slothweb]], [[cli-reference]].
+
+## 2026-11-11 — KARMA_PROBE_FORGE (#187 S2); PMKID_HARVEST and HANDSHAKE_HARVEST (#172)
+
+**Source**: #187 and #172, integration round 2026-11-11.
+
+#187: `KARMA_PROBE_FORGE` (T1557, WARN/CRIT) for a BSSID answering stations' directed probe requests for SSIDs it never beaconed, the classic KARMA radio that `KARMA_AP`'s beacon fan-out cannot see. `src/karma_detect.c` records answers paired to their requests; the `[y]` view gains an FR column; knobs `karma.forge_ssids` and `karma.forge_window_s`. Sources: Dai Zovi & Macaulay 2005, airbase-ng. S3 (probe-response latency) not built: no primary source. `karma.ssid_thresh` is now bounded by `MAX_AP_SSID_HISTORY` (8), since a larger value could never be reached and switched `KARMA_AP` off silently.
+
+#172: `PMKID_HARVEST` and `HANDSHAKE_HARVEST` (T1040), from `src/harvest_track.c`, which joins association requests, EAPOL-Key messages and deauthentications. Five `harvest.*` knobs, all heuristic. Sources: Steube 2018, the hcxdumptool README, and §12.7 as the collector cites it. Tests use hand-built frames, not pcap fixtures. [[alerts]], [[alert-remediation]].
+
+## 2026-11-11 — own-state alerts, the beacon memory on sys_status, designated networks (JSONL 1.2.0)
+
+**Source**: owner requests 2026-11-11.
+
+`SENSOR_UNDERVOLT` (WARN) and `SENSOR_SOURCE_DOWN` (WARN; CRIT for the monitor radio and the IP capture), own-state kinds read off `sys_status` (`src/alerts/rules_sensor.c`), held across flaps and resolved with the new `alert.resolve` reason `recovered` after 120 s clear. `sys_status` gains `beacon_recall_*`, the state of the memory behind EVIL_TWIN's late-arrival signal; slothweb's Sensor health says whether that signal is on or quiet. A new change-only `ownership` record carries the `--my-ssid` and `--my-bssid` rosters and the known-device roster's count (not its MACs); slothweb (`web/src/web_own.c`) marks designated networks "yours" in the SSID drawer, Probes and the WiFi AP table. [[jsonl-schema]], [[slothweb]].
+
+## 2026-11-11 — slothweb: the agent secret by group, agents retract agents' notes, restarts inside an hour
+
+**Source**: owner request 2026-11-11 (the OpenClaw agent on the same machine).
+
+`--web-agent-group NAME` writes the agent secret `0640` in a group holding slothweb's user and the operator, so `slothweb-mcp` needs no sudo; `slothweb.service` gains `RuntimeDirectory=slothweb` and gives `fchown` back to its filter. An agent may retract only notes written `via: agent` (`403 not_agent_note`); the page may retract any. slothweb.db v11 `anom_cover` keeps each run's observed minutes, so an hour split by a restart is judged on all runs' minutes and fed from the minute tier; a kill loses only the minute in progress. [[slothweb-mcp]], [[slothweb]], [[deployment]].
