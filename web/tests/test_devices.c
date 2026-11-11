@@ -297,6 +297,10 @@ static void test_devices_acceptance(void) {
     WT_EQ(route(&H, "/api/devices", "q=vendor:apple+random:yes+seen:<24h", 0), 200);
     macs_of(body_of(g_out), macs, sizeof(macs));
     WT_ASSERT(!strcmp(macs, "da:a1:19:00:00:01 f2:11:22:00:00:06"));
+    /* The host's offset beside the strip (the suite pins TZ to UTC): the
+     * page's ruler and sun words are in it. Seen red with the member
+     * taken out of the route. */
+    WT_HAS(body_of(g_out), "\"presence_cell_s\":600,\"utc_offset_s\":0,");
     WT_HAS(g_out, "Content-Type: application/json\r\n");
     WT_HAS(g_out, "Cache-Control: no-store\r\n");
     /* HEAD: the headers, no body. */

@@ -410,6 +410,9 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
     web_jw_raw(&w, ",\"vendor_table\":"); web_jw_str(&w, vendor_table(m));
     web_jw_raw(&w, ",\"presence_from\":"); web_jw_int(&w, strip_from(now_s));
     web_jw_raw(&w, ",\"presence_cell_s\":"); web_jw_int(&w, WEB_DEV_CELL_S);
+    /* The host's UTC offset now, which the page takes as the sensor's zone
+     * for the strip's ruler and words (as week.utc_offset_s is). */
+    web_jw_raw(&w, ",\"utc_offset_s\":"); web_jw_int(&w, web_utc_offset(now_s));
     /* pass:latest's set (the devices tile's): its size, which a page
      * compares with the rows sloth.db holds of it. */
     web_jw_raw(&w, ",\"pass_size\":");
@@ -543,6 +546,9 @@ int web_history_devices_route(const web_m4_t *m, const char *query,
     web_jw_raw(&w, ",\"presence_cell_s\":"); web_jw_int(&w, cell);
     web_jw_raw(&w, ",\"presence_cells\":"); web_jw_int(&w, ncell);
     web_jw_raw(&w, ",\"presence_tier\":"); web_jw_str(&w, hour ? "hour" : "minute");
+    /* The host's UTC offset at the range's end: one offset for the whole
+     * strip's ruler, which the page says when the range is over a day. */
+    web_jw_raw(&w, ",\"utc_offset_s\":"); web_jw_int(&w, web_utc_offset(to));
     web_jw_raw(&w, ",\"rows\":[");
     int shown = 0;
     for (int i = 0; i < show; i++) {

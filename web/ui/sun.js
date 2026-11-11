@@ -7,6 +7,10 @@
 //   SlothSun.runs(ph)                     the phases as [phase, cell] runs
 //   SlothSun.pos(j)                       the sensor's position out of
 //                                         an /api/gnss answer, or null
+//   SlothSun.zone(sensorOff, viewerOff)   the zone G5's ruler and words
+//                                         are in, and its name
+//   SlothSun.says(from, cellS, n, pos, z) a strip's phases in words
+//   SlothSun.rulerSays(z, span)           the ruler's zone in words
 //
 // Pure arithmetic: no request, no library, no clock and no DOM, so
 // web/tests/test_glyph.c ports it line for line and pins it out of the
@@ -119,7 +123,64 @@ var SlothSun = (function () {
     return null;
   }
 
+  // The zone of G5's ruler and words (owner ruling 2026-11-11, the
+  // second): the sensor's, so the midnight ticks and the sun's band
+  // agree whoever is looking. sensorOff is the UTC offset in seconds
+  // the server reports beside the strips (utc_offset_s: slothweb's own
+  // host's zone, taken as the sensor's; a slothweb reading a copied
+  // sloth.db elsewhere reports that machine's, which is why the word
+  // names the host). With none (an older server, an error) the zone is
+  // the viewer's clock, viewerOff, and the word says that instead. An
+  // offset is a number of seconds and nothing more: no zone name is
+  // read, the browser's zone database is not asked.
+  var OFF_MAX = 64800;
+  function zoneWord(off) {
+    var m = Math.round(Math.abs(off) / 60), h = Math.floor(m / 60), mm = m % 60;
+    if (!m) return "UTC";
+    return "UTC" + (off < 0 ? "-" : "+") + h + (mm ? ":" + (mm < 10 ? "0" : "") + mm : "");
+  }
+  function zone(sensorOff, viewerOff) {
+    var s = snum(sensorOff) && Math.abs(sensorOff) <= OFF_MAX;
+    var off = s ? sensorOff : snum(viewerOff) && Math.abs(viewerOff) <= OFF_MAX ? viewerOff : 0;
+    return { off: off, sensor: s,
+             word: (s ? "sensor time (slothweb's host), " : "your clock (the server gave no sensor offset), ") +
+                   zoneWord(off) };
+  }
+  // hh:mm of unix time t in a zone off seconds from UTC.
+  function clock(t, off) {
+    var m = ((Math.floor((t + off) / 60) % 1440) + 1440) % 1440, h = Math.floor(m / 60), mm = m % 60;
+    return (h < 10 ? "0" : "") + h + ":" + (mm < 10 ? "0" : "") + mm;
+  }
+
+  // A strip's phases in words (R10: a colour is also a word), each with
+  // the time it begins in the window, in the zone z and naming it; or
+  // why there are none. Past RUNS_MAX runs, the four words alone.
+  var RUNS_MAX = 8;
+  function says(from, cellS, n, pos, z) {
+    if (!snum(from) || !(cellS > 0)) return "";
+    if (cellS > MAX_CELL_S) return "cells over 1 h: presence in one ink";
+    if (!pos) return "no sensor position: presence in one ink";
+    var r = runs(phases(from, cellS, n, pos));
+    if (!r.length) return "";
+    var s = "coloured by the sun at the sensor (" + pos.from + "), " + z.word + ": ";
+    if (r.length > RUNS_MAX) return s + WORDS.join(", ");
+    for (var i = 0; i < r.length; i++)
+      s += (i ? ", " : "") + WORDS[r[i][0]] + (r[i][1] ? " " + clock(from + r[i][1] * cellS, z.off) : "");
+    return s;
+  }
+  // The ruler's one stated exception to the page's clock. One offset
+  // serves the whole window, the one at its end: over a range longer
+  // than a day that crosses a change of offset (summer time), the ticks
+  // before the change are an hour out, and the words say which offset
+  // they are at rather than hide it.
+  function rulerSays(z, span) {
+    return "midnight ticks in " + z.word +
+           (span > 86400 ? ", the offset at the range's end throughout" : "") +
+           (z.sensor ? "; every other time on the page is your clock" : "");
+  }
+
   return { elev: elev, phase: phase, phases: phases, runs: runs, pos: pos,
+           zone: zone, zoneWord: zoneWord, clock: clock, says: says, rulerSays: rulerSays,
            TOKENS: TOKENS, WORDS: WORDS, NIGHT_BELOW: NIGHT_BELOW, DAY_ABOVE: DAY_ABOVE,
            MAX_CELL_S: MAX_CELL_S };
 })();
