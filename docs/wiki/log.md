@@ -6820,8 +6820,14 @@ heard since, and the sensor has been at rest that long. It only
 corroborates other evidence; a same-vendor pair stays WARN at 40%.
 Limit: `first_seen` is when the sensor first heard a BSSID since it was
 last silent for 300 s, so an AP that drops out and returns is a late
-arrival. [[alerts]], [[evil-twin-reproducer]], [[action-frames]],
-[[cli-reference]]; `docs/views/twins.md`.
+arrival. The deauth-then-twin chain (`twin-chain:`) takes its pair from
+the same scorer (owner ruling 4a): a flood against one radio of a
+dual-band device no longer names and taints the other, a locally
+administered half is admitted on evidence and not on its first three
+bytes, and two inventory-approved radios are not each other's rogue.
+Limit: a copy on a locally administered address with no evidence of its
+own is not named under a flood. [[alerts]], [[evil-twin-reproducer]],
+[[action-frames]], [[cli-reference]]; `docs/views/twins.md`.
 
 ## 2026-11-11 — `EVIL_TWIN_PROXIMITY` needs a twin (#189)
 

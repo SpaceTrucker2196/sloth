@@ -1956,7 +1956,12 @@ static int twin_sensor_moving(const sloth_state_t *s, time_t now) {
  * predicate: a weak/strong split under one SSID, or the same non-OPEN
  * security with positive evidence. The second goes through
  * twin_evidence_score, so one device's radios on two bands (#188) are
- * not a candidate here either. */
+ * not a candidate here either.
+ *
+ * Every pair rule_evil_twin_attack_chain names is one of these since
+ * ruling 4a: it has the same security, is not OPEN, and passed the same
+ * scorer. Before, a chain pair with a locally administered half was
+ * admitted on its first three bytes and was not a candidate here. */
 static int twin_pair_is_candidate(const sloth_state_t *s, const beacon_ap_t *a,
                                   const beacon_ap_t *b, time_t now) {
     if (!a->ssid[0] || strcmp(a->ssid, b->ssid) != 0) return 0;
@@ -2016,7 +2021,31 @@ void rule_evil_twin_proximity(const sloth_state_t *s, time_t now) {
  * Same-cipher pair criteria mirror the WARN branch in rule_evil_twin.
  * We deliberately re-derive them rather than tracking pairs separately
  * — the cost is one extra O(n²) walk per poll over MAX_BEACON_APS=256,
- * which is fine at ≈1 Hz. */
+ * which is fine at ≈1 Hz.
+ *
+ * Which second BSSID is "the other half" (#188, ruling 4a). The flood
+ * is real either way; what this rule adds is a name for the rogue and a
+ * taint on it, and until 4a it gave both to a vehicle hotspot's own
+ * 5 GHz radio, because 02:24:a5 and 02:49:a5 read as two vendors, and
+ * to any dual-band AP whose two radios sit in adjacent OUI blocks.
+ *
+ * So the pair is one twin_evidence_score() calls a candidate: the same
+ * question rule_evil_twin, the Twins view and the proximity rule ask,
+ * answered by the same code. That brings the sibling test (one device's
+ * radios are not a pair), the U/L bit (a locally administered half has
+ * no OUI, so its first three bytes neither admit the pair nor excuse
+ * it, and it needs evidence of its own), and the inventory (two radios
+ * the operator declared are not each other's rogue; one left out of a
+ * declared SSID is reported even beside its sibling).
+ *
+ * One thing is kept from before: two globally administered addresses
+ * with the same OUI are the deployment's own next AP and are skipped,
+ * whatever the scorer makes of their vendor IEs. Under a flood, a mesh
+ * whose nodes differ there would otherwise have a node named the rogue.
+ *
+ * The cost, stated in the assessment: a copy on a locally administered
+ * address that shows no evidence of its own is not named, and the
+ * flood is then DEAUTH_FLOOD's row alone. */
 #define DEAUTH_TWIN_WIN_SECS ((int)tune_val(TUNE_DEAUTH_TWIN_WIN_SECS))
 
 void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
@@ -2035,7 +2064,7 @@ void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
             break;
         }
         if (!flood) continue;
-        /* Find a same-SSID + same-cipher + diff-OUI sibling — that's
+        /* Find the same-SSID + same-cipher second transmitter — that's
          * the rogue half. Loop covers both i<j and j<i so a deauth
          * targeting either AP picks up its twin partner. */
         for (int j = 0; j < s->beacon_count; j++) {
@@ -2044,7 +2073,10 @@ void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
             if (strcmp(a->ssid, b->ssid) != 0) continue;
             if (memcmp(a->bssid, b->bssid, 6) == 0) continue;
             if (strcmp(a->enc, b->enc) != 0) continue;
-            if (memcmp(a->bssid, b->bssid, 3) == 0) continue;
+            if (!bssid_is_laa(a->bssid) && !bssid_is_laa(b->bssid) &&
+                memcmp(a->bssid, b->bssid, 3) == 0)
+                continue;
+            if (!twin_evidence_score(s, a, b, now, NULL)) continue;
 
             taint_mark(b->bssid, now);
 

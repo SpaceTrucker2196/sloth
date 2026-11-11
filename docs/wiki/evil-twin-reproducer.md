@@ -124,6 +124,13 @@ deauth = (RadioTap() /
 sendp([deauth] * 20, iface="wlan1mon", inter=0.02)
 ```
 
+Since #188 (ruling 4a) the chain needs a pair the scorer accepts, which
+the Phase 1 pair is (two globally administered OUIs). A twin on a
+locally administered address is named only with evidence of its own:
+use the Phase 2 vendor IEs on one band. Two addresses at most 2 bytes
+apart on different bands, first sent within 10 s of each other, are one
+device and are not named.
+
 Expected within 5 s of the last deauth:
 
 - `EVIL_TWIN` CRIT alert with key `twin-chain:Cafe-Net:<16-hex hash>` (#112), detail

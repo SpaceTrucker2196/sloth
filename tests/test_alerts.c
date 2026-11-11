@@ -8263,6 +8263,215 @@ static void test_twin_late_arrival_is_not_read_off_a_moving_sensor(void) {
     ASSERT_EQ(late_of(&s, T + 600), 1);
 }
 
+/* ── The chain rule asks the same question (#188, ruling 4a) ──
+ *
+ * rule_evil_twin_attack_chain names "the other half" of a flooded
+ * BSSID as the rogue at CRIT and taints it. It compared the first
+ * three bytes of any two addresses and had no sibling test, so a
+ * deauth flood against one radio of a dual-band device named the
+ * device's other radio. It now takes its pair from
+ * twin_evidence_score(), keeping one rule of its own: two globally
+ * administered addresses with one OUI are the deployment's next AP.
+ *
+ * The four chain tests further up (a8:bb:cc against 11:22:33, both
+ * globally administered, one band, no first_seen) are the true
+ * positive and pass unchanged; no fixture there needed correcting. */
+
+static int chain_alert(const sloth_state_t *s) {
+    for (int k = 0; k < s->alert_count; k++)
+        if (s->alerts[k].type == ALERT_TYPE_EVIL_TWIN &&
+            strstr(s->alerts[k].key, "twin-chain:") != NULL)
+            return k;
+    return -1;
+}
+
+/* A deauth flood whose threshold was last met this second. */
+static void chain_flood(sloth_state_t *s, const uint8_t bssid[6]) {
+    uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
+    add_deauth_flood_full(s, client, bssid, 7, 20);
+    s->deauth_victims[s->deauth_victim_count - 1].flood_last = time(NULL);
+}
+
+/* A flood against one radio of a dual-band device does not make the
+ * other radio a rogue, and does not taint it.
+ *
+ * First a pair the old rule let through on its OUI test: adjacent
+ * addresses in two neighbouring vendor blocks, 2.4 and 5 GHz, heard two
+ * seconds apart. Then the vehicle hotspot of the issue (02:24:a5 and
+ * 02:49:a5, locally administered), inside the sibling window and ten
+ * minutes outside it, where only "a locally administered address has
+ * no OUI" is left to keep it quiet.
+ *
+ * Mutations (2026-11-11), each red here:
+ *   - the twin_evidence_score() test removed from the chain rule: all
+ *     three no-alert blocks (a chain CRIT, and the other radio tainted);
+ *   - the sibling test off (ev.sibling forced to 0 in the scorer): the
+ *     first block only. The hotspot inside the window is excused twice,
+ *     by the sibling test and by the U/L bit, and stayed quiet;
+ *   - bssid_is_laa() returning 0: the third block only (the hotspot's
+ *     bytes read as two vendors again; inside the window the sibling
+ *     test still excuses it), and block 1 of the next test;
+ *   - the rule as it was before 4a (one unconditional three-byte
+ *     compare, no scorer): all three blocks.
+ * The control at the end is the sibling window being a bound: the first
+ * pair heard a minute apart is two transmitters and is named. */
+static void test_twin_chain_does_not_name_a_devices_own_radio(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t r24[6] = {0x28,0x25,0x5f,0x10,0x20,0x14};
+    uint8_t r5[6]  = {0x28,0x25,0x60,0x10,0x20,0x1c};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "HomeNet", r24, "WPA2");
+    add_beacon(&s, "HomeNet", r5,  "WPA2");
+    twin_radio(&s, 0,   6, t0,     0x1111u);
+    twin_radio(&s, 1, 157, t0 + 2, 0x2222u);
+    chain_flood(&s, r24);
+    alerts_update(&s);
+    ASSERT_EQ(chain_alert(&s), -1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(r5), 0);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(r24), 0);
+    /* The flood itself is still reported. */
+    ASSERT(find_alert(&s, ALERT_TYPE_DEAUTH_FLOOD) >= 0);
+
+    uint8_t g24[6] = {0x02,0x24,0xa5,0x5a,0x10,0x01};
+    uint8_t g5[6]  = {0x02,0x49,0xa5,0x5a,0x10,0x01};
+    alerts_clear();
+    static sloth_state_t g; seed_state(&g);
+    add_beacon(&g, "CHEVROLET1234", g24, "WPA2");
+    add_beacon(&g, "CHEVROLET1234", g5,  "WPA2");
+    twin_radio(&g, 0,   6, t0,     0x1111u);
+    twin_radio(&g, 1, 149, t0 + 2, 0x2222u);
+    chain_flood(&g, g5);                    /* the other direction too */
+    alerts_update(&g);
+    ASSERT_EQ(chain_alert(&g), -1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(g24), 0);
+
+    alerts_clear();
+    twin_radio(&g, 1, 149, t0 + 600, 0x2222u);
+    alerts_update(&g);
+    ASSERT_EQ(chain_alert(&g), -1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(g24), 0);
+    ASSERT_EQ(find_alert(&g, ALERT_TYPE_EVIL_TWIN), -1);
+
+    alerts_clear();
+    twin_radio(&s, 1, 157, t0 + 60, 0x2222u);
+    alerts_update(&s);
+    int k = chain_alert(&s);
+    ASSERT(k >= 0);
+    if (k >= 0) ASSERT_EQ((int)s.alerts[k].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(r5), 1);
+}
+
+/* A locally administered half: its first three bytes neither admit the
+ * pair nor excuse it, and the detail says nothing about a vendor.
+ *
+ * Block 1: two locally administered addresses that share their first
+ * three bytes, three bytes apart, one band, different vendor IEs. The
+ * old rule skipped this pair as "same OUI"; it is a second transmitter
+ * with evidence of its own and is named.
+ * Block 2: the same two with the same vendor IEs. No evidence, so no
+ * name, however the addresses read.
+ * Block 3: an original on a vendor's address, the copy on a locally
+ * administered one, different vendor IEs: named, the copy tainted, and
+ * the tainted half is a proximity candidate like any other pair's
+ * (the #189 rule and this one now agree on what a pair is).
+ * Block 4: two globally administered addresses with one OUI, a mesh
+ * whose nodes differ in their vendor IEs. The scorer reports that pair
+ * at WARN; under a flood it is still not named, as before 4a.
+ * Block 5: two radios the inventory approves both of are not each
+ * other's rogue, which the old rule did not know.
+ *
+ * Mutations (2026-11-11), each red here:
+ *   - the U/L test dropped from the OUI skip (any equal three bytes
+ *     skip): block 1 (no chain alert);
+ *   - the twin_evidence_score() test removed: block 2 (a chain CRIT)
+ *     and block 5 (a chain CRIT, the approved AP tainted);
+ *   - the same-OUI skip removed: block 4 (a chain CRIT). */
+static void test_twin_chain_reads_no_oui_from_a_local_address(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t v1[6] = {0x1a,0x48,0xca,0x90,0x00,0x01};
+    uint8_t v2[6] = {0x1a,0x48,0xca,0xf3,0x22,0x07};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "VW-Hotspot", v1, "WPA2");
+    add_beacon(&s, "VW-Hotspot", v2, "WPA2");
+    twin_radio(&s, 0,  6, t0,      0x1111u);
+    twin_radio(&s, 1, 11, t0 + 60, 0x2222u);
+    chain_flood(&s, v1);
+    alerts_update(&s);
+    int k = chain_alert(&s);
+    ASSERT(k >= 0);
+    if (k >= 0) {
+        ASSERT_EQ((int)s.alerts[k].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[k].detail,
+                      "real=1a:48:ca:90:00:01 twin=1a:48:ca:f3:22:07") != NULL);
+        ASSERT(strstr(s.alerts[k].detail, "OUI") == NULL);
+        ASSERT(strstr(s.alerts[k].detail, "vendor") == NULL);
+    }
+    ASSERT_EQ(evil_twin_bssid_is_tainted(v2), 1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(v1), 0);
+
+    alerts_clear();
+    twin_radio(&s, 1, 11, t0 + 60, 0x1111u);
+    alerts_update(&s);
+    ASSERT_EQ(chain_alert(&s), -1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(v2), 0);
+
+    uint8_t real[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t rogue[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+    alerts_clear();
+    static sloth_state_t u; seed_state(&u);
+    add_beacon(&u, "CorpWiFi", real,  "WPA2");
+    add_beacon(&u, "CorpWiFi", rogue, "WPA2");
+    twin_radio(&u, 0, 6, t0,      0x1111u);
+    twin_radio(&u, 1, 6, t0 + 60, 0x2222u);
+    u.beacon_aps[1].rssi_min_60s = -80;
+    u.beacon_aps[1].rssi_max_60s = -60;
+    chain_flood(&u, real);
+    alerts_update(&u);
+    k = chain_alert(&u);
+    ASSERT(k >= 0);
+    if (k >= 0) ASSERT_EQ((int)u.alerts[k].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(rogue), 1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(real), 0);
+    ASSERT(find_alert(&u, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+
+    uint8_t node1[6] = {0xe8,0x9c,0x25,0x10,0x20,0x30};
+    uint8_t node2[6] = {0xe8,0x9c,0x25,0x77,0x41,0x9c};
+    alerts_clear();
+    static sloth_state_t m; seed_state(&m);
+    add_beacon(&m, "HomeMesh", node1, "WPA2");
+    add_beacon(&m, "HomeMesh", node2, "WPA2");
+    twin_radio(&m, 0, 11, t0,      0x1111u);
+    twin_radio(&m, 1, 11, t0 + 60, 0x2222u);
+    chain_flood(&m, node1);
+    alerts_update(&m);
+    ASSERT_EQ(chain_alert(&m), -1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(node2), 0);
+    /* The pair is still the scorer's WARN: the skip is the chain's. */
+    ASSERT(find_alert(&m, ALERT_TYPE_EVIL_TWIN) >= 0);
+
+    uint8_t ruckus[6] = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t aruba[6]  = {0x11,0x22,0x33,0x44,0x55,0x66};
+    ASSERT_EQ(use_inventory(INV_CORP), 1);
+    alerts_clear();
+    static sloth_state_t v; seed_state(&v);
+    add_beacon(&v, "CorpWiFi", ruckus, "WPA2");
+    add_beacon(&v, "CorpWiFi", aruba,  "WPA2");
+    chain_flood(&v, ruckus);
+    alerts_update(&v);
+    ASSERT_EQ(chain_alert(&v), -1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(aruba), 0);
+    no_inventory();
+    /* Without the file the same two radios are the true positive. */
+    alerts_clear();
+    alerts_update(&v);
+    ASSERT(chain_alert(&v) >= 0);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(aruba), 1);
+}
+
 /* ── Open device-onboarding SoftAP (#80) ──────────────────
  *
  * Hand-built beacon_ap rows, no pcap fixtures (agents/AGENTS.md).
@@ -12444,6 +12653,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_twin_late_arrival_does_not_lift_a_same_vendor_mesh);
     RUN_TEST(test_twin_late_arrival_needs_both_on_the_air);
     RUN_TEST(test_twin_late_arrival_is_not_read_off_a_moving_sensor);
+    RUN_TEST(test_twin_chain_does_not_name_a_devices_own_radio);
+    RUN_TEST(test_twin_chain_reads_no_oui_from_a_local_address);
 
     TEST_SUITE("alerts: open device-onboarding SoftAP (#80)");
     RUN_TEST(test_open_setup_ap_fires);

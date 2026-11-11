@@ -23,7 +23,9 @@ and five flags:
 
 - **attack_in_progress** — the chain rule has tainted the twin BSSID
   (a `DEAUTH_FLOOD` against the real half met its threshold within the
-  last 5 s).
+  last 5 s). Since #188 the chain takes its pair from the same scorer
+  as this view, so a flood against one radio of a dual-band device
+  does not flag the device's other radio.
 - **attacker_oui** — the twin's OUI matches the Hak5 (Pineapple /
   Alfa) or Espressif (ESP32 / ESP8266) tables in
   `src/wifi_oui_attacker.c`.
