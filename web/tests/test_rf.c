@@ -145,13 +145,13 @@ static void test_rf_json_agrees_with_sloth(void) {
     char line[512];
     snprintf(line, sizeof(line),
              "{\"type\":\"beacon\",\"ts\":%lld,\"bssid\":\"02:00:00:00:00:A1\",\"ssid\":\"x\","
-             "\"signal_dbm\":-47,\"rssi_min_60s\":-58,\"rssi_max_60s\":-44,"
+             "\"signal_dbm\":-47,\"rssi_min_60s\":-58,\"rssi_max_60s\":-44,\"channel\":100,"
              "\"est_dist_m\":4.5,\"est_dist_band\":\"room\",\"est_dist_trend\":\"approaching\","
              "\"est_ptx_source\":\"assumed\"}", T0 + 5);
     feed(&f, line);
     snprintf(line, sizeof(line),
              "{\"type\":\"probe_client\",\"ts\":%lld,\"mac\":\"02:00:00:00:00:51\","
-             "\"signal_dbm\":-66,\"est_dist_m\":12,\"est_dist_band\":\"building\","
+             "\"signal_dbm\":-66,\"channel\":6,\"est_dist_m\":12,\"est_dist_band\":\"building\","
              "\"est_dist_trend\":\"leaving\",\"est_ptx_source\":\"assumed\"}", T0 + 2);
     feed(&f, line);
     char keys[2][WEB_KEY_MAX + 1];
@@ -170,14 +170,42 @@ static void test_rf_json_agrees_with_sloth(void) {
      * open bucket (-47). */
     WT_HAS(buf, ",-61,null,null,null,-50,-47],\"n\":3,");
     WT_HAS(buf, "\"whisker\":[-58,-44],\"whisker_src\":\"beacon\","
-                "\"band\":\"room\",\"trend\":\"approaching\",\"est_src\":\"beacon\"}");
+                "\"band\":\"room\",\"trend\":\"approaching\",\"est_src\":\"beacon\","
+                "\"radio\":\"5 GHz\"}");
     WT_ASSERT(json_of(&t[1], &f, sta, T0 + 10, buf, sizeof(buf)) > 0);
     WT_HAS(buf, "\"metric\":\"rf.rssi.sta\"");
     WT_HAS(buf, ",-68],\"n\":1,\"whisker\":[-70,-66],\"whisker_src\":\"samples\","
-                "\"band\":\"building\",\"trend\":\"leaving\",\"est_src\":\"probe_client\"}");
-    /* With no ledger there is no word of sloth's to say, so none. */
+                "\"band\":\"building\",\"trend\":\"leaving\",\"est_src\":\"probe_client\","
+                "\"radio\":\"2.4 GHz\"}");
+    /* With no ledger there is no word of sloth's to say, so none, and
+     * no band the signal was heard on either. */
     WT_ASSERT(json_of(&t[0], NULL, ap, T0 + 10, buf, sizeof(buf)) > 0);
-    WT_HAS(buf, "\"whisker_src\":\"samples\",\"band\":null,\"trend\":null,\"est_src\":null}");
+    WT_HAS(buf, "\"whisker_src\":\"samples\",\"band\":null,\"trend\":null,\"est_src\":null,"
+                "\"radio\":null}");
+    /* The S-meter's band row (owner ruling 2026-11-11): the latest
+     * record's channel in ap_band_label()'s words, 6 GHz only when the
+     * beacon's channel_source says so (a 6 GHz channel number is also a
+     * 2.4 or 5 GHz one), and null for a channel in no band or none.
+     * Seen red with radio_band()'s six test taken out (channel 37 at
+     * channel_source 3 read "5 GHz") and with its ch <= 0 guard dropped
+     * (no channel read "2.4 GHz"). */
+    static const struct { int ch, src; const char *want; } R[] = {
+        { 1, 0, "\"radio\":\"2.4 GHz\"}" }, { 14, 0, "\"radio\":\"2.4 GHz\"}" },
+        { 32, 0, "\"radio\":\"5 GHz\"}" }, { 177, 0, "\"radio\":\"5 GHz\"}" },
+        { 37, 3, "\"radio\":\"6 GHz\"}" }, { 1, 3, "\"radio\":\"6 GHz\"}" },
+        { 15, 0, "\"radio\":null}" }, { 31, 0, "\"radio\":null}" },
+        { 178, 0, "\"radio\":null}" }, { 0, 0, "\"radio\":null}" },
+        { 0, 3, "\"radio\":null}" },
+    };
+    for (size_t i = 0; i < sizeof(R) / sizeof(R[0]); i++) {
+        snprintf(line, sizeof(line),
+                 "{\"type\":\"beacon\",\"ts\":%lld,\"bssid\":\"02:00:00:00:00:A1\",\"ssid\":\"x\","
+                 "\"signal_dbm\":-47,\"channel\":%d,\"channel_source\":%d}",
+                 T0 + 6 + (long long)i, R[i].ch, R[i].src);
+        feed(&f, line);
+        WT_ASSERT(json_of(&t[0], &f, ap, T0 + 10, buf, sizeof(buf)) > 0);
+        WT_HAS(buf, R[i].want);
+    }
     web_frrs_destroy(&f);
     web_rollup_destroy(&ru);
 }
@@ -263,7 +291,7 @@ static void test_rf_refuses_other_words(void) {
     WT_LACKS(buf, "next door");
     WT_LACKS(buf, "\\u003cb");
     WT_HAS(buf, "\"whisker\":[-50,-50],\"whisker_src\":\"samples\",\"band\":null,"
-                "\"trend\":null,\"est_src\":null}");
+                "\"trend\":null,\"est_src\":null,\"radio\":null}");
     web_frrs_destroy(&f);
     web_rollup_destroy(&ru);
 }
@@ -287,7 +315,8 @@ static void test_rf_json_bound(void) {
     fprintf(stderr, "    longest rf member: %d bytes of %d\n", n, WEB_RF_JSON_MAX);
     /* The ledger's longest words add these over the nulls. */
     int words = (int)(strlen("\"immediate\"") + strlen("\"approaching\"") +
-                      strlen("\"probe_client\"") - 3 * strlen("null"));
+                      strlen("\"probe_client\"") + strlen("\"2.4 GHz\"") -
+                      4 * strlen("null"));
     WT_ASSERT(n > 0 && n + words <= WEB_RF_JSON_MAX);
     WT_ASSERT(n + words > WEB_RF_JSON_MAX * 3 / 4);
 }

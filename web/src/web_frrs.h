@@ -240,10 +240,14 @@ void web_frrs_record(web_frrs_t *f, const web_jrec_t *r);
  * says what sloth's estimate says and never a trend of its own. band
  * and trend are "" unless they are one of sloth's words (rf_band_name,
  * rf_trend_name); the range is set only when both ends are a reading
- * (-127..-1) in order. 1 when the ledger holds the record, else 0. */
+ * (-127..-1) in order. channel is that record's (0 when it names
+ * none) and six whether a beacon's channel_source says 6 GHz, for the
+ * S-meter's band row (web_rf.h "radio"). 1 when the ledger holds the
+ * record, else 0. */
 typedef struct {
     char      band[12], trend[14];
     int       have_range, rmin, rmax;
+    int       channel, six;
     long long ts;                     /* the record's ts */
 } web_frrs_rf_t;
 int  web_frrs_rf(web_frrs_t *f, int bssid, const char *mac, web_frrs_rf_t *out);

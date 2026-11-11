@@ -618,6 +618,8 @@ int web_frrs_rf(web_frrs_t *f, int bssid, const char *mac, web_frrs_rf_t *out) {
         if (b && b->has_b) {
             got = 1;
             out->ts = b->ts_b;
+            out->channel = b->channel;
+            out->six = b->channel_source == 3;   /* CH_SRC_HE_6GHZ */
             e = &b->est;
             if (b->has_rssi60 && b->rssi_min >= -127 && b->rssi_max <= -1 &&
                 b->rssi_min <= b->rssi_max) {
@@ -628,7 +630,12 @@ int web_frrs_rf(web_frrs_t *f, int bssid, const char *mac, web_frrs_rf_t *out) {
         }
     } else {
         const frrs_sta_t *st = frrs_led_sta(f, mac);
-        if (st && st->has_p) { got = 1; out->ts = st->ts_p; e = &st->est; }
+        if (st && st->has_p) {
+            got = 1;
+            out->ts = st->ts_p;
+            out->channel = st->channel;
+            e = &st->est;
+        }
     }
     if (e && e->have) {
         if (one_of(e->band, BAND)) snprintf(out->band, sizeof(out->band), "%s", e->band);

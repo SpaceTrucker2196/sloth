@@ -637,14 +637,15 @@ static void test_ap_table(void) {
     WT_HAS(a1, "\"ssids_more\":false,\"karma\":{\"score\":80,\"ssid_count\":3,"
                "\"pnl_overlap\":2,\"ie_uniform\":true},\"rf\":{\"metric\":\"rf.rssi.bssid\",");
     WT_HAS(a1, "\"cell_s\":60,\"cells\":[],\"n\":0,\"whisker\":null,\"whisker_src\":null,"
-               "\"band\":null,\"trend\":null,\"est_src\":null},\"ssid_k\":4,\"ssid_np\":false}");
+               "\"band\":null,\"trend\":null,\"est_src\":null,\"radio\":null},\"ssid_k\":4,"
+               "\"ssid_np\":false}");
     WT_HAS(a2, "{\"bssid\":\"0a:00:00:00:00:02\",\"ssid\":null,\"signal\":null,"
                "\"channel\":36,\"enc\":\"OPEN\",\"akm\":null,\"akm_bits\":0,"
                "\"akm_names\":[],\"mfp\":0,\"mfp_word\":\"off\",\"downgrade\":0,"
                "\"downgrade_names\":[],");
     WT_HAS(a2, "\"ssid_count\":0,\"multi_ssid\":false,\"ssids\":[],\"ssids_more\":false,"
                "\"karma\":null,\"rf\":{\"metric\":\"rf.rssi.bssid\",");
-    WT_HAS(a2, "\"est_src\":null},\"ssid_k\":0,\"ssid_np\":false}");
+    WT_HAS(a2, "\"est_src\":null,\"radio\":null},\"ssid_k\":0,\"ssid_np\":false}");
     WT_HAS(a3, "\"ssid\":\"\\u003cscript\\u003ex\\u003c/script\\u003e\"");
     WT_HAS(a3, "\"mfp_word\":\"required\"");
     WT_LACKS(b, "<script>");

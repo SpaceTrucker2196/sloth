@@ -51,6 +51,16 @@ void web_rf_trails(web_rollup_t *ru, const web_scope_ctx_t *sc,
 
 static long long dbm(double v) { return (long long)floor(v + 0.5); }
 
+/* The band a channel is in, as src/beacon_snoop.c ap_band_label() and
+ * web_frrs_report.c band_of() word it; NULL where they say "?". */
+static const char *radio_band(int ch, int six) {
+    if (ch <= 0) return NULL;
+    if (six) return "6 GHz";
+    if (ch <= 14) return "2.4 GHz";
+    if (ch >= 32 && ch <= 177) return "5 GHz";
+    return NULL;
+}
+
 void web_rf_json(web_jw_t *w, const web_rf_trail_t *t, struct web_frrs *frrs,
                  const char *mac, long long now_s) {
     web_jw_raw(w, ",\"rf\":");
@@ -103,5 +113,8 @@ void web_rf_json(web_jw_t *w, const web_rf_trail_t *t, struct web_frrs *frrs,
     web_jw_raw(w, ",\"est_src\":");
     if (led && (fr.band[0] || fr.trend[0])) web_jw_str(w, bssid ? "beacon" : "probe_client");
     else web_jw_raw(w, "null");
+    const char *rb = led ? radio_band(fr.channel, fr.six) : NULL;
+    web_jw_raw(w, ",\"radio\":");
+    if (rb) web_jw_str(w, rb); else web_jw_raw(w, "null");
     web_jw_raw(w, "}");
 }
