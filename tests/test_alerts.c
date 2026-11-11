@@ -3252,6 +3252,89 @@ static void test_evil_twin_proximity_quiet_while_the_sensor_moves(void) {
     ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
 }
 
+/* The edges of "the sensor moved during the window". The test above
+ * uses 12 m/s and 0.3 m/s, 5 s and 300 s, and one fix in the ring, so a
+ * threshold of 10 m/s, a 200 s window and a walk that read only the
+ * oldest fix all passed it.
+ *
+ * Mutations (2026-11-11), each red here only: `speed <
+ * TWIN_PROX_MOVING_MPS` made `<=` and the constant raised to 10 (the
+ * 1.0 m/s row); the age bound raised from RSSI_WIN_SECS to 200 (the
+ * 62 s row); the `ts > now` test dropped (the future fix); the ring
+ * walk cut to its oldest entry (the three-fix ring).
+ *
+ * The ages are 58 and 62, not 60 and 61: the rule reads the clock
+ * after this function does, and a second may pass between the two. */
+static void test_evil_twin_proximity_moving_boundaries(void) {
+    time_t now = time(NULL);
+    static gnss_hist_t h;
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    prox_pair(&s, "Roadside");
+    s.beacon_aps[1].rssi_min_60s = -80;
+    s.beacon_aps[1].rssi_max_60s = -50;
+    s.gnss_hist = &h;
+
+    prox_gnss_fix(&h, now - 5, 1, 1.0);           /* at the threshold */
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+
+    alerts_clear();
+    prox_gnss_fix(&h, now - 5, 1, 0.99);          /* just under it */
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+
+    alerts_clear();
+    prox_gnss_fix(&h, now - 58, 1, 12.0);         /* inside the window */
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+
+    alerts_clear();
+    prox_gnss_fix(&h, now - 62, 1, 12.0);         /* just outside it */
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+
+    /* A fix stamped after "now" is a clock that stepped, not a drive in
+     * this window; it suppresses nothing. */
+    alerts_clear();
+    prox_gnss_fix(&h, now + 3600, 1, 12.0);
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+
+    /* Any fix in the window counts, not the oldest or the newest: the
+     * sensor stood, drove, and stood again inside one minute. */
+    alerts_clear();
+    memset(&h, 0, sizeof(h));
+    for (int i = 0; i < 3; i++) {
+        h.fixes[i].ts        = now - 30 + 10 * i;
+        h.fixes[i].mode      = 3;
+        h.fixes[i].has_speed = 1;
+        h.fixes[i].speed     = i == 1 ? 12.0 : 0.0;
+    }
+    h.fix_n = h.fix_head = 3;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+}
+
+/* Two OPEN BSSIDs under one name are not a pair rule_evil_twin reports
+ * (multi-vendor public hotspots; there is no secret to defend), so a
+ * swing on one of them has nothing to corroborate.
+ *
+ * Mutation (2026-11-11): the OPEN test dropped from
+ * twin_pair_is_candidate; the proximity assertion went red. */
+static void test_evil_twin_proximity_open_pair_is_no_candidate(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "Airport-Free", PROX_REAL,  "OPEN");
+    add_beacon(&s, "Airport-Free", PROX_ROGUE, "OPEN");
+    s.beacon_aps[1].rssi_min_60s = -80;
+    s.beacon_aps[1].rssi_max_60s = -50;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+}
+
 /* ── Evil-twin Phase 4: attack-chain correlation ──────────── */
 
 /* Recent deauth flood targeting the SSID's "real" half AND a
@@ -7711,6 +7794,99 @@ static void test_twin_sibling_does_not_excuse_an_inventory_mismatch(void) {
     no_inventory();
 }
 
+/* The edges of the sibling test, read straight off the scorer. The
+ * tests above sit well inside each bound (gaps of 2 s and 60 s, one
+ * differing byte, both bands known), so a window of 59 s, a byte limit
+ * of 1 or 3, and "unknown band counts as another band" all passed them.
+ *
+ * Mutations (2026-11-11), each red here and nowhere else in the #188
+ * suite: `gap <= TWIN_SIBLING_WINDOW_S` made `<` (the +10 s rows);
+ * TWIN_SIBLING_WINDOW_S 59 (the +11 s rows); TWIN_SIBLING_MAX_DIFF_BYTES
+ * 1 (the complemented pair) and 3 (the three-byte pair); the UNKNOWN
+ * band test dropped from twin_pair_is_sibling (channel 0); the
+ * first_seen == 0 test dropped (both unset); the CH_SRC_HE_6GHZ line
+ * dropped from twin_ap_band (2.4 GHz ch 1 beside 6 GHz ch 1). */
+static int sib_of(const sloth_state_t *s) {
+    twin_evidence_t ev;
+    twin_evidence_score(s, &s->beacon_aps[0], &s->beacon_aps[1],
+                        time(NULL), &ev);
+    return ev.sibling;
+}
+
+static void test_twin_sibling_test_boundaries(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t r24[6] = {0x28,0x25,0x5f,0x10,0x20,0x14};
+    uint8_t r5[6]  = {0x28,0x25,0x5f,0x10,0x20,0x1c};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "HomeNet", r24, "WPA2");
+    add_beacon(&s, "HomeNet", r5,  "WPA2");
+
+    /* The window is inclusive at 10 s and closed at 11, whichever
+     * radio was heard first. Literals, not TWIN_SIBLING_WINDOW_S: the
+     * figure is the issue's 1-3 s observation times three, every second
+     * added to it is a second a copy on another band can arrive in and
+     * be taken for the original's own radio, and a test written in
+     * terms of the constant follows it wherever it is moved. */
+    twin_radio(&s, 0,   6, t0, 0);
+    twin_radio(&s, 1, 157, t0 + 10, 0);
+    ASSERT_EQ(sib_of(&s), 1);
+    twin_radio(&s, 1, 157, t0 + 11, 0);
+    ASSERT_EQ(sib_of(&s), 0);
+    twin_radio(&s, 0,   6, t0 + 10, 0);
+    twin_radio(&s, 1, 157, t0, 0);
+    ASSERT_EQ(sib_of(&s), 1);
+    twin_radio(&s, 0,   6, t0 + 11, 0);
+    ASSERT_EQ(sib_of(&s), 0);
+
+    /* One band is two transmitters, however close the addresses and
+     * the first sightings. */
+    twin_radio(&s, 0,  6, t0,     0);
+    twin_radio(&s, 1, 11, t0 + 2, 0);
+    ASSERT_EQ(sib_of(&s), 0);
+
+    /* "Cannot say" is not "another band": channel 0 on either half, or
+     * on both. */
+    twin_radio(&s, 1, 0, t0 + 2, 0);
+    ASSERT_EQ(sib_of(&s), 0);
+    twin_radio(&s, 0, 0, t0, 0);
+    ASSERT_EQ(sib_of(&s), 0);
+
+    /* Nor is an unset first_seen "the same moment": two entries that
+     * never recorded one are zero seconds apart by subtraction. */
+    twin_radio(&s, 0,   6, 0, 0);
+    twin_radio(&s, 1, 157, 0, 0);
+    ASSERT_EQ(sib_of(&s), 0);
+    twin_radio(&s, 1, 157, t0, 0);
+    ASSERT_EQ(sib_of(&s), 0);
+
+    /* 6 GHz is a band of its own, known only from the HE 6 GHz
+     * Operation Information source: channel 1 there and channel 1 on
+     * 2.4 GHz are one number and two bands. */
+    twin_radio(&s, 0, 1, t0,     0);
+    twin_radio(&s, 1, 1, t0 + 2, 0);
+    ASSERT_EQ(sib_of(&s), 0);
+    s.beacon_aps[1].channel_source = CH_SRC_HE_6GHZ;
+    ASSERT_EQ(sib_of(&s), 1);
+    s.beacon_aps[1].channel_source = CH_SRC_UNKNOWN;
+
+    /* Address distance: the vehicle hotspot's complemented octets 1-2
+     * are two differing bytes and inside the limit; one more is not. */
+    uint8_t g24[6]  = {0x02,0x47,0x43,0x5a,0x10,0x01};
+    uint8_t g5[6]   = {0x02,0xb8,0xbc,0x5a,0x10,0x01};
+    uint8_t far3[6] = {0x02,0xb8,0xbc,0x5b,0x10,0x01};
+    memcpy(s.beacon_aps[0].bssid, g24, 6);
+    memcpy(s.beacon_aps[1].bssid, g5,  6);
+    twin_radio(&s, 0,   6, t0,     0x1111u);
+    twin_radio(&s, 1, 149, t0 + 2, 0x2222u);
+    ASSERT_EQ(sib_of(&s), 1);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+    memcpy(s.beacon_aps[1].bssid, far3, 6);
+    ASSERT_EQ(sib_of(&s), 0);
+}
+
 /* ── Open device-onboarding SoftAP (#80) ──────────────────
  *
  * Hand-built beacon_ap rows, no pcap fixtures (agents/AGENTS.md).
@@ -11711,6 +11887,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_evil_twin_proximity_sibling_radio_is_no_candidate);
     RUN_TEST(test_evil_twin_proximity_noise_floor_swing_no_fire);
     RUN_TEST(test_evil_twin_proximity_quiet_while_the_sensor_moves);
+    RUN_TEST(test_evil_twin_proximity_moving_boundaries);
+    RUN_TEST(test_evil_twin_proximity_open_pair_is_no_candidate);
     RUN_TEST(test_evil_twin_attack_chain_fires_crit);
     RUN_TEST(test_evil_twin_attack_chain_stale_deauth_no_fire);
     RUN_TEST(test_evil_twin_attack_chain_no_twin_no_fire);
@@ -11851,6 +12029,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_twin_self_steer_is_not_a_hard_signal);
     RUN_TEST(test_twin_second_transmitter_same_band_is_still_crit);
     RUN_TEST(test_twin_sibling_does_not_excuse_an_inventory_mismatch);
+    RUN_TEST(test_twin_sibling_test_boundaries);
 
     TEST_SUITE("alerts: open device-onboarding SoftAP (#80)");
     RUN_TEST(test_open_setup_ap_fires);
