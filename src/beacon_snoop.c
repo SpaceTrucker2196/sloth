@@ -130,6 +130,28 @@ static uint8_t recall_arrival(const uint8_t bssid[6], const char *ssid,
     return BEACON_ARRIVAL_NEW;
 }
 
+/* Contract in beacon_snoop.h. The same test recall_arrival() makes, so
+ * `quiet` is exactly "an unknown entry would be stamped UNSURE now". */
+void beacon_recall_stat(beacon_recall_stat_t *out, uint64_t now_ms) {
+    pthread_mutex_lock(&g_mu);
+    out->slots      = g_recall_n;
+    out->max        = BEACON_RECALL_MAX;
+    out->overflowed = g_recall_lost;
+    out->reach_s    = -1;
+    out->quiet      = 0;
+    out->quiet_s    = 0;
+    if (g_recall_lost) {
+        uint64_t back = now_ms >= g_recall_reach_ms ? now_ms - g_recall_reach_ms : 0;
+        uint64_t trust = (uint64_t)BEACON_RECALL_TRUST_S * 1000u;
+        out->reach_s = (long long)(back / 1000u);
+        if (back < trust) {
+            out->quiet   = 1;
+            out->quiet_s = (long long)((trust - back + 999u) / 1000u);
+        }
+    }
+    pthread_mutex_unlock(&g_mu);
+}
+
 /* Ring of timestamps of recently first-seen BSSIDs — the beacon-flood
  * signal (roadmap B4). Written under g_mu from beacon_record's new-entry
  * path; read (with its own lock) by beacon_recent_new_bssids. Sized so a

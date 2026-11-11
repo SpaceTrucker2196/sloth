@@ -1292,6 +1292,23 @@ minimum), so an outage is never averaged away; the alarm's cell is
 *set* when it was set at any time (the maximum); a cell with no report
 is a gap, not a "down".
 
+**The beacon memory.** Since JSONL 1.2.0 `sys_status` carries the
+state of sloth's memory of BSSIDs its beacon table dropped, which
+`EVIL_TWIN`'s late-arrival signal reads to tell a returning AP from a
+new one. When that memory overflows, an AP it does not know is stamped
+unsure and the signal goes quiet until the memory again reaches back
+24 h; nothing said so before. One line under the sources table
+(`sy-recall`) now does: `evil-twin late-arrival: on (beacon memory N of
+4096)`, or `evil-twin late-arrival: quiet until <time>: the beacon
+memory overflowed (4096 of 4096, reaches back 6 h)`, or `not reported by
+this sensor` from an older sloth. `/api/sys`'s `beacon_recall` is
+`{slots, max, overflowed, reach_s, quiet, quiet_s, quiet_until}` or
+`null`; `quiet_until` is the batch's `ts` plus `quiet_s`, the sensor's
+clock, never compared with slothweb's. Ingest is range-checked like its
+neighbours: `slots` within `0..max`, the flags 0 or 1, quiet only with an
+overflow, `quiet_s` at most a day; a batch failing any of the first
+drops the block and keeps the rest.
+
 **Honest states.** Before the first `sys_status`, the panel says the
 sensor has not reported its host status and why that can be: a sloth
 older than JSONL 1.1.0, or **slothweb reading a copied sloth.db with no

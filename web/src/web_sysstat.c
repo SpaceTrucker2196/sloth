@@ -121,6 +121,20 @@ static void status_apply(web_sys_t *y, const web_jrec_t *r, long long ts, long l
     jkeep(r, "temp_max_id", y->temp_max_id, sizeof(y->temp_max_id));
     jkeep(r, "temp_band", y->temp_band, sizeof(y->temp_band));
     y->undervolt = jll(r, "undervolt", 0, 1, &v) ? (int)v : -1;
+    /* The beacon memory (1.2.0): the four always-present members in
+     * range, or none of it; reach and time left only beside the state
+     * that gives them a meaning. */
+    long long ov = 0, qu = 0;
+    y->has_recall = jll(r, "beacon_recall_max", 1, 1 << 20, &y->recall_max) &&
+                    jll(r, "beacon_recall_slots", 0, y->recall_max, &y->recall_slots) &&
+                    jll(r, "beacon_recall_overflowed", 0, 1, &ov) &&
+                    jll(r, "beacon_recall_quiet", 0, 1, &qu) && (!qu || ov);
+    y->recall_overflowed = y->has_recall ? (int)ov : 0;
+    y->recall_quiet = y->has_recall ? (int)qu : 0;
+    if (!y->has_recall || !ov || !jll(r, "beacon_recall_reach_s", 0, 1LL << 40, &y->recall_reach_s))
+        y->recall_reach_s = -1;
+    if (!y->has_recall || !qu || !jll(r, "beacon_recall_quiet_s", 0, 86400, &y->recall_quiet_s))
+        y->recall_quiet_s = -1;
     /* A batch that says it has no sensors (or receivers) is followed by
      * no row to replace the last batch's with, so they go here. */
     long long t = 0, vo = 0, po = 0, rc = 0;
@@ -366,6 +380,23 @@ int web_sys_route(web_sys_t *y, const char *query, long long now_s, long long no
         web_jw_raw(&w, ",\"temp_max_id\":"); jw_strnull(&w, y->has_temp ? y->temp_max_id : "");
         web_jw_raw(&w, ",\"temp_band\":"); jw_strnull(&w, y->has_temp ? y->temp_band : "");
         web_jw_raw(&w, ",\"undervolt\":"); jw_ll(&w, y->undervolt >= 0, y->undervolt);
+        web_jw_raw(&w, "}");
+    }
+    /* quiet_until is the sensor's own clock (the batch's ts plus the
+     * time it said was left): a time to show, never compared with
+     * slothweb's. */
+    web_jw_raw(&w, ",\"beacon_recall\":");
+    if (!y->seen || !y->has_recall) {
+        web_jw_raw(&w, "null");
+    } else {
+        web_jw_raw(&w, "{\"slots\":"); web_jw_int(&w, y->recall_slots);
+        web_jw_raw(&w, ",\"max\":"); web_jw_int(&w, y->recall_max);
+        web_jw_raw(&w, ",\"overflowed\":"); web_jw_raw(&w, y->recall_overflowed ? "true" : "false");
+        web_jw_raw(&w, ",\"reach_s\":"); jw_ll(&w, y->recall_reach_s >= 0, y->recall_reach_s);
+        web_jw_raw(&w, ",\"quiet\":"); web_jw_raw(&w, y->recall_quiet ? "true" : "false");
+        web_jw_raw(&w, ",\"quiet_s\":"); jw_ll(&w, y->recall_quiet_s >= 0, y->recall_quiet_s);
+        web_jw_raw(&w, ",\"quiet_until\":");
+        jw_ll(&w, y->recall_quiet_s >= 0, y->ts + y->recall_quiet_s);
         web_jw_raw(&w, "}");
     }
     web_jw_raw(&w, ",\"sensors\":[");
