@@ -172,7 +172,8 @@ static const tool_t TOOLS[] = {
         { "id", 's', 1, "The subject's id, as sloth_notes takes it." },
         { "text", 's', 1, "The note, at most 240 bytes, one line." }, { NULL, 0, 0, NULL } } },
     { "sloth_retract_note", K_NOTE_RETRACT, "POST /api/frrs/note",
-      "Take a note back. Nothing is deleted: a row records the retraction under this agent's "
+      "Take back a note this or another agent wrote. A note the operator wrote is refused "
+      "(not_agent_note). Nothing is deleted: a row records the retraction under this agent's "
       "name and the note stays listed as retracted.",
       { { "kind", 's', 1, "The subject's kind." }, { "id", 's', 1, "The subject's id." },
         { "note", 'i', 1, "The note's number, from sloth_notes." },

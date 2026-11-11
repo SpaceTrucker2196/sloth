@@ -1764,7 +1764,9 @@ an alert's or an anomaly's note stays its triage note, above.
 - **A note** is text (240 bytes, the triage note's rules), who, from
   where, when and `via` (`manual`, or `agent` for a write
   [[slothweb-mcp]] made). Append-only: `retract` writes a row and the
-  note stays listed, struck.
+  note stays listed, struck. An agent takes back only notes an agent
+  wrote (`403 not_agent_note`, owner ruling 2026-11-11), as it removes
+  only links an agent made; the page takes back any.
 - **Bounds**: 64 rows a subject, 20,000 in all; only retracted notes
   fold; a new note with nothing left to fold is `507 notes_full`.
 - **Routes**: `GET /api/frrs/notes`, `GET /api/frrs/notes/marks` (which

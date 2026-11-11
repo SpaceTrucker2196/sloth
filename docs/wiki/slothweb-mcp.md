@@ -25,7 +25,8 @@ or from another writer is data in a named field, never an instruction.
 `web_frrs_route()`), `web/src/web_notes.h`, `web/tests/test_mcp.c`,
 `research/mcp/` (the precedent), the owner's request of 2026-11-11.
 
-**Last updated**: 2026-11-11 (the secret readable through a group,
+**Last updated**: 2026-11-11 (an agent takes back only agents' notes,
+owner ruling: `403 not_agent_note`, as links); 2026-11-11 (the secret readable through a group,
 owner ruling: `slothweb --web-agent-group`, the file `0640` in
 `/run/slothweb`, `slothweb-mcp` as the operator's own user with no sudo
 rule, `secret_no_access`; section 7 rewritten); 2026-11-11 (first
@@ -147,7 +148,7 @@ nothing is validated here beyond what is needed to build it.
 |---|---|---|---|
 | `sloth_set_triage` | `POST /api/frrs/triage` | `{"by","id","state","note"}` | `id`, `state` (`untriaged`, `false`, `noise`, `incident`, `known`) required; `note` |
 | `sloth_add_note` | `POST /api/frrs/note` | `{"op":"add","by","kind","id","text"}` | `kind`, `id`, `text` required |
-| `sloth_retract_note` | `POST /api/frrs/note` | `{"op":"retract","by","kind","id","text","note"}` | `kind`, `id`, `note` required; `reason` |
+| `sloth_retract_note` | `POST /api/frrs/note` | `{"op":"retract","by","kind","id","text","note"}` | `kind`, `id`, `note` required; `reason`. An agent's note only (`403 not_agent_note`) |
 | `sloth_link` | `POST /api/frrs/relate` | `{"op":"add","by","from","to","note"}` | `from`, `to` required; `note` |
 | `sloth_unlink` | `POST /api/frrs/relate` | `{"op":"remove","by","from","link"}` | `from`, `link` required |
 
@@ -165,8 +166,14 @@ does. An agent's row always carries a name (`400 missing_by` without
 one). "Follow recommended" is the page's button and records `via:
 recommended`; an agent names the state it means (`400 bad_state`
 otherwise). An agent removes only links an agent made (`403
-not_agent_link`): a removal leaves no row behind to say who did it. A
-retraction of a note is a row and is allowed on any note.
+not_agent_link`): a removal leaves no row behind to say who did it. It
+takes back only notes an agent wrote (owner ruling 2026-11-11: `403
+not_agent_note`, and nothing is written), asked before whether the note
+was already taken back; the operator, through the page, takes back any
+note, an agent's included. Both rules ask how the row was written
+(`via: agent`), not under which name: an agent may remove another
+agent's link and take back another agent's note, as `by` is a label and
+not a credential (below).
 
 **How a write is known to be an agent's.** The mark must not be
 something a request says about itself: a web page could then label its

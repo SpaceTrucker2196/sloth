@@ -56,7 +56,9 @@
  * What the agent's path may write is narrower than the page's: triage,
  * a note, a link (web_frrs.c refuses the TACDB and the import to it),
  * each under a name ("by" is required), and it removes only links an
- * agent made. The token bucket applies, in a bucket of the agent's own
+ * agent made and takes back only notes an agent wrote (any agent's,
+ * the operator's never: 403 not_agent_note, web_notes.c). The token
+ * bucket applies, in a bucket of the agent's own
  * per peer, so an agent can exhaust neither the operator's allowance
  * nor its own unbounded. */
 #ifndef SLOTHWEB_AGENT_H

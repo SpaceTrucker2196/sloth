@@ -4560,8 +4560,10 @@ a request carrying both is refused as a page's. The browser's path is
 unchanged. The agent's path is narrower than the page's: triage, notes
 and links only (`403 agent_path` on the TACDB routes and the import), a
 name required (`400 missing_by`), no "follow recommended" (`400
-bad_state`), and it removes only links an agent made (`403
-not_agent_link`). The token bucket applies, in a bucket of the agent's
+bad_state`), it removes only links an agent made (`403
+not_agent_link`), and it takes back only notes an agent wrote (`403
+not_agent_note`, owner ruling 2026-11-11; any agent's, never the
+operator's, while the page takes back any). The token bucket applies, in a bucket of the agent's
 own per peer (`a/` and the address), so it can neither spend the
 operator's allowance nor write unbounded; limited, it gets the same
 `429` and `Retry-After`. `/api/health`'s `frrs.agent` is
@@ -4615,7 +4617,10 @@ control or bidirectional-control character, over-long refused with
 never cut), who (`by`, 32 bytes, optional from the page), the peer's
 address, the time, and `via`. It is never changed and never deleted:
 `retract` writes a row naming it, with who and an optional reason, and
-the note stays listed, struck, with who took it back. Reading and
+the note stays listed, struck, with who took it back. The page may take
+back any note; an agent (`via: agent`, [Writes by an agent](#writes-by-an-agent))
+only one an agent wrote: the operator's is `403 not_agent_note` and
+nothing is written, whether or not it was already taken back. Reading and
 retracting need no holder, so a note outlives what it was written on
 and its listing says `"held":false`.
 

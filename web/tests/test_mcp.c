@@ -922,6 +922,52 @@ static void test_write_tools(void) {
     m_close();
 }
 
+/* An agent takes back only agents' notes (owner ruling 2026-11-11), as
+ * it removes only agents' links: the operator's note is 403
+ * not_agent_note and nothing is written, retracted or not; another
+ * agent's note (a different name) may be taken back, as another
+ * agent's link may be removed; the page takes back any note, an
+ * agent's included. Seen red with the ownership test in
+ * note_retract() made `if (0)` (the operator's note retracted by the
+ * agent: 3 rows, not 2, and a retraction of note 1) and with the
+ * column it reads made the retraction flag's
+ * (`sqlite3_column_int(s, 0)`: every agent retraction refused,
+ * test_write_tools' own among them). */
+static void test_agent_retracts_only_agents_notes(void) {
+    m_open();
+    if (!W.have_store) { m_close(); return; }
+    WT_EQ(w_post("/api/frrs/note", "{\"op\":\"add\",\"kind\":\"device\",\"id\":\"" W_MAC1 "\","
+                 "\"text\":\"the operator's\",\"by\":\"op\"}"), 200);
+    WT_EQ(call("sloth_add_note", "{\"kind\":\"device\",\"id\":\"" W_MAC1 "\",\"text\":\"an agent's\"}"), 1);
+    WT_EQ(w_store_int("SELECT COUNT(*) FROM note WHERE id = 1 AND via = 0"), 1);
+    WT_EQ(w_store_int("SELECT COUNT(*) FROM note WHERE id = 2 AND via = 3"), 1);
+    /* The operator's: refused, no row. */
+    WT_EQ(call("sloth_retract_note", "{\"kind\":\"device\",\"id\":\"" W_MAC1 "\",\"note\":1,\"reason\":\"x\"}"), 0);
+    WT_HAS(g_env, "\"http_status\":403,\"error\":\"not_agent_note\"");
+    WT_EQ(w_store_int("SELECT COUNT(*) FROM note"), 2);
+    WT_EQ(w_store_int("SELECT COUNT(*) FROM note WHERE retracts = 1"), 0);
+    /* Another agent's, under a different name: taken back. */
+    snprintf(C.agent, sizeof(C.agent), "%s", "claw-other");
+    WT_EQ(call("sloth_retract_note", "{\"kind\":\"device\",\"id\":\"" W_MAC1 "\",\"note\":2}"), 1);
+    WT_EQ(w_store_int("SELECT COUNT(*) FROM note WHERE id = 3 AND retracts = 2 AND via = 3 AND"
+                      " who = 'claw-other'"), 1);
+    snprintf(C.agent, sizeof(C.agent), "%s", AGENT);
+    /* The operator's, once the page has taken it back: still refused
+     * (whose it is is asked first), still no row. */
+    WT_EQ(w_post("/api/frrs/note", "{\"op\":\"retract\",\"kind\":\"device\",\"id\":\"" W_MAC1 "\","
+                 "\"note\":1,\"text\":\"\",\"by\":\"op\"}"), 200);
+    WT_EQ(w_store_int("SELECT COUNT(*) FROM note WHERE id = 4 AND retracts = 1 AND via = 0"), 1);
+    WT_EQ(call("sloth_retract_note", "{\"kind\":\"device\",\"id\":\"" W_MAC1 "\",\"note\":1}"), 0);
+    WT_HAS(g_env, "\"error\":\"not_agent_note\"");
+    WT_EQ(w_store_int("SELECT COUNT(*) FROM note"), 4);
+    /* The page takes back an agent's note. */
+    WT_EQ(call("sloth_add_note", "{\"kind\":\"device\",\"id\":\"" W_MAC1 "\",\"text\":\"again\"}"), 1);
+    WT_EQ(w_post("/api/frrs/note", "{\"op\":\"retract\",\"kind\":\"device\",\"id\":\"" W_MAC1 "\","
+                 "\"note\":5,\"text\":\"not so\",\"by\":\"op\"}"), 200);
+    WT_EQ(w_store_int("SELECT COUNT(*) FROM note WHERE retracts = 5 AND via = 0 AND who = 'op'"), 1);
+    m_close();
+}
+
 /* What a write is refused for, and that a refused write wrote nothing.
  * Seen red, each alone: the secret compared over its first 8 bytes
  * only in web_agent_check() (the near-miss secret accepted); the
@@ -1560,6 +1606,7 @@ void run_mcp_tests(void) {
     WT_RUN(test_read_tools);
 #ifdef WITH_SQLITE
     WT_RUN(test_write_tools);
+    WT_RUN(test_agent_retracts_only_agents_notes);
     WT_RUN(test_write_refusals);
     WT_RUN(test_errors_never_echo);
     WT_RUN(test_rate_limit);
