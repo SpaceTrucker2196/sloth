@@ -175,7 +175,7 @@ static int twin_pair_is_sibling(const beacon_ap_t *a, const beacon_ap_t *b) {
 }
 
 /* ── The copy arrives after the original (#188, ruling 3b) ────
- * The four conditions and why each exists: src/alerts.h. */
+ * The conditions and why each exists: src/alerts.h. */
 #define TWIN_LATE_ARRIVAL_S ((time_t)tune_val(TUNE_TWIN_LATE_ARRIVAL_S))
 
 static int twin_sensor_moving(const sloth_state_t *s, time_t now);
@@ -200,13 +200,23 @@ static void twin_note_motion(const sloth_state_t *s, time_t now) {
 
 /* Wall-clock differences, like the sibling window: first_seen and
  * last_seen are evidence stamps and the table keeps no monotonic one.
- * A stepped clock moves both halves' stamps together. */
+ * A step of the host clock between the two first sightings is
+ * therefore read as a gap (a host with no RTC corrected by NTP after
+ * sloth started): stamps already written do not move with the clock.
+ * Not guarded; the EVIL_TWIN assessment lists it. */
 static int twin_pair_late_arrival(const beacon_ap_t *a, const beacon_ap_t *b) {
     if (!a->first_seen || !b->first_seen) return 0;
     const beacon_ap_t *early = a->first_seen <= b->first_seen ? a : b;
     const beacon_ap_t *late  = early == a ? b : a;
     if (late->first_seen - early->first_seen < TWIN_LATE_ARRIVAL_S) return 0;
     if (early->last_seen < late->first_seen) return 0;
+    /* A full table re-admits what it evicted a hop pass ago under a new
+     * first_seen, so one stamped inside the wait after an eviction is
+     * not an arrival. The age is the later half's own, taken at its
+     * insert: an eviction since then says nothing about it. */
+    if (late->evict_age_s1 &&
+        (time_t)(late->evict_age_s1 - 1u) < TWIN_LATE_ARRIVAL_S)
+        return 0;
     if (g_twin_moved_at &&
         late->first_seen - g_twin_moved_at < TWIN_LATE_ARRIVAL_S)
         return 0;
@@ -446,8 +456,9 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
     return ev.positive > 0;
 }
 
-/* One short, bounded phrase per context signal. ALERT_DETAIL_LEN is 256
- * and the SSID + two BSSIDs + cipher already take ~60 of it. The BTM
+/* One short, bounded phrase per context signal. ALERT_DETAIL_LEN is 320
+ * and the longest EVIL_TWIN detail, every phrase present, is 281
+ * (test_twin_detail_fits_with_every_phrase). The BTM
  * steer is not here: it gets its own note naming the steering AP, which
  * is the actionable half. */
 static void twin_evidence_note(char *out, size_t n, const twin_evidence_t *ev) {

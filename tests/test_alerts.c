@@ -8263,6 +8263,113 @@ static void test_twin_late_arrival_is_not_read_off_a_moving_sensor(void) {
     ASSERT_EQ(late_of(&s, T + 600), 1);
 }
 
+/* A full beacon table turns over: it drops the AP heard longest ago to
+ * admit a new one and re-admits the dropped one, with a new
+ * first_seen, the next time the hopper reaches it. A first_seen
+ * stamped inside the wait after an eviction is therefore not an
+ * arrival. The age read is the later half's own (taken at its insert,
+ * seconds plus one); the earlier half's is not the question, since a
+ * re-insert there only shortens the gap.
+ *
+ * Mutations (2026-11-11), each red here: the evict_age_s1 clause
+ * dropped from twin_pair_late_arrival (the three 0 rows, and the alert
+ * went CRIT at 55); its comparison made `<=` (the 120 s row); the `- 1u`
+ * dropped (the 119 s row); the clause reading the earlier half's age
+ * instead (every row after the first). */
+static void test_twin_late_arrival_is_not_read_off_a_full_table(void) {
+    time_t now = time(NULL);
+    time_t t0  = now - 1200;
+    uint8_t real[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t rogue[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", real,  "WPA2");
+    add_beacon(&s, "CorpWiFi", rogue, "WPA2");
+    twin_radio(&s, 0, 6, t0,       0x1111u);
+    twin_radio(&s, 1, 6, t0 + 600, 0x2222u);
+    ASSERT_EQ(late_of(&s, now), 1);             /* the table had room */
+
+    /* Its own insert was the eviction. */
+    s.beacon_aps[1].evict_age_s1 = 1;
+    ASSERT_EQ(late_of(&s, now), 0);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ(s.alerts[idx].confidence, 35);
+    ASSERT(strstr(s.alerts[idx].detail, "late-arrival") == NULL);
+
+    /* An eviction shortly before it: 119 s is inside the wait, 120 is
+     * a silence as long as the gap the signal itself asks for. */
+    s.beacon_aps[1].evict_age_s1 = 119 + 1;
+    ASSERT_EQ(late_of(&s, now), 0);
+    s.beacon_aps[1].evict_age_s1 = 120 + 1;
+    ASSERT_EQ(late_of(&s, now), 1);
+
+    /* Whichever slot holds the later half. */
+    twin_radio(&s, 0, 6, t0 + 600, 0x1111u);
+    twin_radio(&s, 1, 6, t0,       0x2222u);
+    s.beacon_aps[1].last_seen    = now;
+    s.beacon_aps[1].evict_age_s1 = 0;
+    s.beacon_aps[0].evict_age_s1 = 1;
+    ASSERT_EQ(late_of(&s, now), 0);
+
+    /* The earlier half re-admitted is not the question. */
+    s.beacon_aps[0].evict_age_s1 = 0;
+    s.beacon_aps[1].evict_age_s1 = 1;
+    ASSERT_EQ(late_of(&s, now), 1);
+}
+
+/* The longest detail the same-security branch writes: a 16-octet SSID
+ * and every phrase at once (inventory mismatch, late arrival, same
+ * OUI, neighbour claim, a steer, the class note). It has to arrive
+ * whole, since the class note is last and is what a cut would take.
+ * 278 here; `wired=yes` in place of `wired=?` is two more, and
+ * ALERT_DETAIL_LEN is 320.
+ *
+ * Mutation (2026-11-11): `note[80]` in that branch put back to the 64
+ * it was before " +late-arrival" (the "(unverified)" and length rows
+ * went red: the note lost its last 14 characters). */
+static void test_twin_detail_fits_with_every_phrase(void) {
+    static const char *INV_LONG =
+        "{\"version\":\"2026-09-25.1\",\"site\":\"hq-3f\","
+        "\"networks\":[{\"ssid\":\"SixteenOctetSSID\","
+        "\"security_profile\":\"wpa2-enterprise\","
+        "\"bssids\":[\"a8:bb:cc:00:11:22\"]}]}";
+    time_t t0 = time(NULL) - 1200;
+    uint8_t ok[6]      = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t bad[6]     = {0xa8,0xbb,0xcc,0x77,0x41,0x9c};
+    uint8_t steerer[6] = {0x5c,0x11,0x22,0x33,0x44,0x55};
+
+    ASSERT_EQ(use_inventory(INV_LONG), 1);
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "SixteenOctetSSID", ok,  "WPA2");
+    add_beacon(&s, "SixteenOctetSSID", bad, "WPA2");
+    twin_radio(&s, 0, 6, t0,       0x1111u);
+    twin_radio(&s, 1, 6, t0 + 600, 0x2222u);
+    add_neighbor(&s, ok, bad);
+    seed_steer(&s, steerer, bad, 1);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        const char *d = s.alerts[idx].detail;
+        size_t n = strlen(d);
+        ASSERT_EQ((long long)n, 278);
+        ASSERT(n + 2 < ALERT_DETAIL_LEN);
+        ASSERT(strstr(d, "'SixteenOctetSSID' on ") == d);
+        ASSERT(strstr(d, " - BSSID not in the approved inventory"
+                         " +not in inventory +late-arrival +same-vendor-OUI"
+                         " +802.11k claim (unverified)"
+                         " +btm-steered by 5c:11:22:33:44:55") != NULL);
+        ASSERT(n >= 25 &&
+               strcmp(d + n - 25, " [class=impostor wired=?]") == 0);
+    }
+    no_inventory();
+}
+
 /* ── The chain rule asks the same question (#188, ruling 4a) ──
  *
  * rule_evil_twin_attack_chain names "the other half" of a flooded
@@ -12653,6 +12760,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_twin_late_arrival_does_not_lift_a_same_vendor_mesh);
     RUN_TEST(test_twin_late_arrival_needs_both_on_the_air);
     RUN_TEST(test_twin_late_arrival_is_not_read_off_a_moving_sensor);
+    RUN_TEST(test_twin_late_arrival_is_not_read_off_a_full_table);
+    RUN_TEST(test_twin_detail_fits_with_every_phrase);
     RUN_TEST(test_twin_chain_does_not_name_a_devices_own_radio);
     RUN_TEST(test_twin_chain_reads_no_oui_from_a_local_address);
 

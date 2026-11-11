@@ -197,7 +197,7 @@ Threshold of the `--adsb` rule ([[alerts]] § ADS-B, `src/alerts/rules_adsb.c`; 
 
 | Knob | Default | Range | Meaning |
 |------|---------|-------|---------|
-| `twin.late_arrival_s` | 120 | 30..86400 | `EVIL_TWIN`: seconds the later-heard half of a same-SSID pair must be first heard after the earlier half before `+late-arrival` (+20 confidence) counts, and the wait after the sensor was last moving (GNSS, 1 m/s or more) before any arrival counts. 120 is five worst passes of the default 11-channel hop list (22 s each); the floor keeps it above one such pass and above the 10 s in which one device's two radios are first heard. Raise it where APs at the edge of range come and go ([[alerts]], `docs/wiki/alert-assessments/EVIL_TWIN.md`) |
+| `twin.late_arrival_s` | 120 | 30..86400 | `EVIL_TWIN`: seconds the later-heard half of a same-SSID pair must be first heard after the earlier half before `+late-arrival` (+20 confidence) counts, and the wait after the sensor was last moving (GNSS, 1 m/s or more), and after the beacon table last evicted an entry for room, before any arrival counts. 120 is five worst passes of the default 11-channel hop list (22 s each); the floor keeps it above one such pass and above the 10 s in which one device's two radios are first heard. Raise it where APs at the edge of range come and go ([[alerts]], `docs/wiki/alert-assessments/EVIL_TWIN.md`) |
 
 `--refresh-ms` is deliberately not a knob: it is UI cadence, not a detector or retention decision.
 

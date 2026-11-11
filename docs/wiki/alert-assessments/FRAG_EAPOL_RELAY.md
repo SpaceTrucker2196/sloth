@@ -1,7 +1,7 @@
 ---
 type: FRAG_EAPOL_RELAY
 technique: T1557
-rule_file: src/alerts/rules_twin.c:726 rule_fragattack()
+rule_file: src/alerts/rules_twin.c:737 rule_fragattack()
 count_semantics: per rule evaluation, not per frame - fire() bumps evaluations/count on every alerts_update() tick (src/alerts/engine.c:479-480; at most POLL_MS 250 ms apart, include/sloth.h:28, shortened by event wakes, so 4 ticks/s is a floor) while the BSS row's cumulative eapol_relay counter is > 0 (src/alerts/rules_twin.c:634); the counter is incremented once per qualifying EAPOL frame (src/fragattack.c:535) and never decays, so one frame holds the CRIT open for the row's lifetime and count = ticks elapsed. The reference host's 2,964,009 is ticks over roughly 42 hours (about 20/s), with the detail's leading integer at 2 frames.
 severity_assessment: too high as implemented - the premise "EAPOL on an infrastructure BSS always has the BSSID as SA or DA" is right for every pre-802.11be AP, and a unicast plaintext EAPOL between two non-AP addresses would merit CRIT; but on a Wi-Fi 7 AP MLD the authenticator address in EAPOL is the MLD MAC, not the per-link BSSID, so every AP-originated handshake frame on an MLO link matches (open issue #180). Until the AP-identity test accepts the MLD MAC, WARN on a Wi-Fi 7 BSS and CRIT elsewhere would match the evidence.
 false_positive_risk: high on Wi-Fi 7 MLO BSSes, low elsewhere - the rule tests addresses only (src/fragattack.c:532-534), with no key-install gate by design, so any legitimate topology in which the authenticator's address is not the link BSSID fires on the first handshake it hears; the one such topology observed is 802.11be MLO (#180), and Wi-Fi 7 APs are becoming common.

@@ -214,6 +214,14 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
  *     is the route, not the transmitters, and it stays the route after
  *     the sensor parks, so this is remembered rather than read off the
  *     current fix. No GNSS is "not known to be moving", as in #189;
+ *   - the later half was first heard at least that long after the
+ *     beacon table last evicted an entry for want of room, as of that
+ *     half's own insert (beacon_ap_t.evict_age_s1). A full table
+ *     (MAX_BEACON_APS) drops the AP heard longest ago to admit a new
+ *     one and re-admits it a hop pass later under a new first_seen, so
+ *     in a table that is turning over first_seen is the last
+ *     re-insert. Where more APs are in earshot than the table holds,
+ *     this signal is therefore never counted;
  *   - the pair already has positive evidence. It corroborates and never
  *     nominates: every same-SSID pair whose halves were heard two
  *     minutes apart (a mesh node at the edge of earshot, a guest SSID

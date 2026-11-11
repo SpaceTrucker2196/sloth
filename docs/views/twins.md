@@ -37,6 +37,7 @@ and five flags:
 - **late_arrival** (`>`, #188) — the later-heard half was first heard at
   least `twin.late_arrival_s` (120 s) after the earlier one, the earlier
   one has been heard again since, the sensor has been at rest that long,
+  the beacon table had not evicted an entry for room in that time,
   and the scorer counted it (+20). Set only on a pair with other
   positive evidence; it is the alert's `+late-arrival`.
 - **unattributed** (`?`) — nothing has established which half is the
