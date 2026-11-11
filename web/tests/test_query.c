@@ -252,7 +252,18 @@ static void test_compiled_shape(void) {
         for (int dir = 0; dir < 3; dir++) {
             WT_EQ(web_query_compile_scoped(&Q, ~0u, sc, WEB_QS_RISK | (dir << 8), 10, 0, &S), 0);
             WT_LACKS(S.sql, "risk_level");
+            /* A directed risk sort names the score once: no "empty
+             * last" term, which would score every row a second time
+             * (the level is never empty). Seen red with the
+             * sort != WEB_QS_RISK tests in web_query_compile_scoped()
+             * removed. */
+            WT_LACKS(S.sql, "s_risk IS NULL");
+            if (dir == WEB_SORT_ASC) WT_HAS(S.sql, " ORDER BY s_risk ASC, d.mac LIMIT ");
+            if (dir == WEB_SORT_DESC) WT_HAS(S.sql, " ORDER BY s_risk DESC, d.mac LIMIT ");
         }
+    /* Every other key keeps it. */
+    WT_EQ(web_query_compile(&Q, ~0u, WEB_QS_VENDOR | (WEB_SORT_ASC << 8), 10, 0, &S), 0);
+    WT_HAS(S.sql, " ORDER BY d.vendor IS NULL, d.vendor ASC, d.mac LIMIT ");
     WT_EQ(web_query_compile(&Q, 0, WEB_QS_RISK, 10, 0, &S), 0);
     WT_EQ(S.nb, 5);
     WT_EQ(web_query_compile(&Q, WEB_QF_PNL, WEB_QS_LAST, 10, 0, &S), 0);

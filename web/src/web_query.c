@@ -950,7 +950,12 @@ int web_query_compile_scoped(const web_query_t *q, unsigned feats, int scope,
     };
     /* With a direction: the sort's column, empty last, then the MAC.
      * An address sorts by its numeric key (web_slothdb.c fn_ipkey()),
-     * as the page compares addresses, not as text. */
+     * as the page compares addresses, not as text. The risk level has
+     * no empty (risk_signals is NOT NULL, and the row reads a NULL as
+     * 0), so its key goes without the "IS NULL" term: that term is the
+     * scored expression a second time for every row, and on 900,000
+     * devices it took the directed risk sort from 150 ms to 241 of the
+     * 250 ms read budget (#191). */
     static const char *const KEY[WEB_QS_COUNT] = {
         "d.last_seen", "d.first_seen", "d.mac", "s_risk", "d.vendor",
         "web_ipkey(d.ip)", "d.last_ssid", "d.signal_dbm", "d.sources",
@@ -993,8 +998,10 @@ int web_query_compile_scoped(const web_query_t *q, unsigned feats, int scope,
                 "web_ipkey(s_ip)", "s_ssid", "s_signal", "s_sources",
             };
             sb_put(&b, " ORDER BY ");
-            sb_put(&b, SKEY[sort]);
-            sb_put(&b, " IS NULL, ");
+            if (sort != WEB_QS_RISK) {
+                sb_put(&b, SKEY[sort]);
+                sb_put(&b, " IS NULL, ");
+            }
             sb_put(&b, SKEY[sort]);
             sb_put(&b, dir == WEB_SORT_ASC ? " ASC" : " DESC");
             if (sort != WEB_QS_MAC) sb_put(&b, ", d.mac");
@@ -1003,8 +1010,10 @@ int web_query_compile_scoped(const web_query_t *q, unsigned feats, int scope,
         }
     } else if (dir == WEB_SORT_ASC || dir == WEB_SORT_DESC) {
         sb_put(&b, " ORDER BY ");
-        sb_put(&b, KEY[sort]);
-        sb_put(&b, " IS NULL, ");
+        if (sort != WEB_QS_RISK) {
+            sb_put(&b, KEY[sort]);
+            sb_put(&b, " IS NULL, ");
+        }
         sb_put(&b, KEY[sort]);
         sb_put(&b, dir == WEB_SORT_ASC ? " ASC" : " DESC");
         if (sort != WEB_QS_MAC) sb_put(&b, ", d.mac");
