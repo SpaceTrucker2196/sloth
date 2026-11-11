@@ -2,7 +2,9 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -27,8 +29,39 @@ static int random_bytes(unsigned char *b, size_t n) {
     return got == n ? 0 : -1;
 }
 
-int web_agent_secret_make(const char *path, char out[WEB_AGENT_SECRET_LEN + 1],
-                          char *err, size_t errsz) {
+int web_agent_group_resolve(const char *name, gid_t *gid, char *err, size_t errsz) {
+    if (!name || !name[0]) {
+        snprintf(err, errsz, "--web-agent-group: empty group name");
+        return -1;
+    }
+    long hint = sysconf(_SC_GETGR_R_SIZE_MAX);
+    size_t cap = hint > 0 ? (size_t)hint : 16384;
+    /* A group with many members needs a larger buffer: ERANGE says so,
+     * up to a bound past which the name is not worth the memory. */
+    for (;;) {
+        char *buf = malloc(cap);
+        if (!buf) {
+            snprintf(err, errsz, "--web-agent-group %s: out of memory", name);
+            return -1;
+        }
+        struct group gr, *res = NULL;
+        int rc = getgrnam_r(name, &gr, buf, cap, &res);
+        if (rc == ERANGE && cap < (1u << 20)) {
+            free(buf);
+            cap *= 2;
+            continue;
+        }
+        if (rc == 0 && res) *gid = gr.gr_gid;
+        free(buf);
+        if (rc == 0 && res) return 0;
+        if (rc == 0) snprintf(err, errsz, "--web-agent-group %s: no such group", name);
+        else snprintf(err, errsz, "--web-agent-group %s: %s", name, strerror(rc));
+        return -1;
+    }
+}
+
+int web_agent_secret_make(const char *path, const gid_t *group,
+                          char out[WEB_AGENT_SECRET_LEN + 1], char *err, size_t errsz) {
     static const char hex[] = "0123456789abcdef";
     unsigned char raw[WEB_AGENT_SECRET_LEN / 2];
     char tmp[4200];
@@ -43,9 +76,14 @@ int web_agent_secret_make(const char *path, char out[WEB_AGENT_SECRET_LEN + 1],
      * is a mistake to be looked at, not written over. */
     struct stat st;
     if (lstat(path, &st) == 0) {
-        if (!S_ISREG(st.st_mode) || st.st_uid != geteuid() || (st.st_mode & 077) || st.st_nlink != 1) {
+        /* Its own file, one link, readable by no other but, with
+         * --web-agent-group, the configured group (and only read). */
+        int others = (int)(st.st_mode & 077);
+        int mode_ok = others == 0 || (group && others == 040 && st.st_gid == *group);
+        if (!S_ISREG(st.st_mode) || st.st_uid != geteuid() || !mode_ok || st.st_nlink != 1) {
             snprintf(err, errsz, "--web-agent-secret %s: exists and is not a private regular file "
-                                 "of this user (mode 0600, one link); refused, left as it is", path);
+                                 "of this user (mode 0600%s, one link); refused, left as it is", path,
+                     group ? ", or 0640 with the --web-agent-group group" : "");
             return -1;
         }
     } else if (errno != ENOENT) {
@@ -71,10 +109,28 @@ int web_agent_secret_make(const char *path, char out[WEB_AGENT_SECRET_LEN + 1],
         return -1;
     }
     int ok = fchmod(fd, 0600) == 0 &&
-             write(fd, sec, WEB_AGENT_SECRET_LEN + 1) == WEB_AGENT_SECRET_LEN + 1 && fsync(fd) == 0;
+             write(fd, sec, WEB_AGENT_SECRET_LEN + 1) == WEB_AGENT_SECRET_LEN + 1;
+    /* The group is given while the file is still 0600 and under its
+     * temporary name, and read for it only after: no instant at which
+     * anyone but this user could read it, and none at which the name
+     * readers open is a file without its group. Only a group this user
+     * is a member of can be given (EPERM otherwise). */
+    int chown_errno = 0;
+    if (ok && group) {
+        if (fchown(fd, geteuid(), *group) != 0) { chown_errno = errno; ok = 0; }
+        else if (fchmod(fd, 0640) != 0) ok = 0;
+    }
+    if (ok && fsync(fd) != 0) ok = 0;
+    int saved = errno;
     if (close(fd) != 0) ok = 0;
+    if (chown_errno) {
+        snprintf(err, errsz, "--web-agent-group: cannot give %s the group (%s); slothweb's user "
+                             "must be a member of the group", tmp, strerror(chown_errno));
+        unlink(tmp);
+        return -1;
+    }
     if (!ok || rename(tmp, path) != 0) {
-        snprintf(err, errsz, "--web-agent-secret %s: %s", path, strerror(errno));
+        snprintf(err, errsz, "--web-agent-secret %s: %s", path, strerror(ok ? errno : saved));
         unlink(tmp);
         return -1;
     }

@@ -489,8 +489,40 @@ static void test_serve_evidence_pcap_flag(void) {
     done(&p);
 }
 
+/* --web-agent-group names the secret file's group, so it needs the
+ * file: alone it is refused (exit 2), with --web-agent-secret it is
+ * kept for main.c to resolve. Seen red with web_config_check()'s test
+ * for it taken out (rc 0 alone). */
+static void test_agent_group_flag(void) {
+    parsed_t p;
+    static const char *const alone[] = { "--web-agent-group", "slothweb-agent", NULL };
+    parse(&p, alone);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--web-agent-group needs --web-agent-secret");
+    done(&p);
+    static const char *const both[] = { "--web-agent-secret", "/run/slothweb/agent.secret",
+                                        "--web-agent-group", "slothweb-agent", NULL };
+    parse(&p, both);
+    WT_EQ(p.rc, 0);
+    WT_ASSERT(!strcmp(p.cfg.agent_group, "slothweb-agent"));
+    done(&p);
+    static const char *const empty[] = { "--web-agent-secret", "/x", "--web-agent-group", "", NULL };
+    parse(&p, empty);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--web-agent-group: empty or too long a name");
+    done(&p);
+    static const char *const none[] = { "--web-agent-secret", "/x", "--web-agent-group", NULL };
+    parse(&p, none);
+    WT_EQ(p.rc, -1);
+    done(&p);
+    parse(&p, NULL);
+    WT_EQ(p.cfg.agent_group[0], 0);
+    done(&p);
+}
+
 void run_config_tests(void) {
     WT_RUN(test_serve_evidence_pcap_flag);
+    WT_RUN(test_agent_group_flag);
     WT_RUN(test_web_allow_sql_flag);
     WT_RUN(test_ceiling_below_minimum_refused);
     WT_RUN(test_socket_flag);

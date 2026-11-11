@@ -78,9 +78,12 @@ typedef struct {
 int mcp_agent_ok(const char *name);
 
 /* The secret in the file at path into out: opened without following a
- * link, a regular file owned by this user with no group or other
- * permission, holding exactly MCP_SECRET_LEN lower-case hex digits and
- * at most one newline. 0, or -1. */
+ * link, a regular file either owned by this user with no group or other
+ * permission (mode 0600) or group-readable only (0640) in a group this
+ * process is in (slothweb --web-agent-group), holding exactly
+ * MCP_SECRET_LEN lower-case hex digits and at most one newline. 0, -2
+ * when the open is refused for permission (the user is not in the
+ * file's group, or cannot reach its directory), or -1. */
 int mcp_secret_read(const char *path, char out[MCP_SECRET_LEN + 1]);
 
 /* One request (len bytes of one line, no newline) to one response in

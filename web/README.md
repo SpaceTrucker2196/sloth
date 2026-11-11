@@ -322,7 +322,8 @@ and the page says why in each view that needs it):
 | `PATH: SQLITE_DBCONFIG_DEFENSIVE refused`, `PATH: query_only: ERR` | The SQLite library lacks what slothweb needs: 3.31 or newer. |
 | `no --sloth-db`, `slothweb was built without SQLite; no sloth.db` | The reason `/api/health` gives (`db_error`) when there is no sloth.db to read. |
 | `--web-assessments: empty or too long a path`, `--web-assessments PATH: not a directory` | Give the directory holding the research assessments (`<TYPE>.md` with front matter), or leave the flag out: "follow recommended" then says "no recommendation yet". A path that is not there is accepted and means the same (`slothweb: follow recommended: PATH: no such directory, no recommendation yet`); `make install` puts them in `$(PREFIX)/share/sloth/alert-assessments`. |
-| `--web-agent-secret: empty or too long a path`, `--web-agent-secret PATH: exists and is not a private regular file of this user (mode 0600, one link); refused, left as it is`, `--web-agent-secret: no random bytes from /dev/urandom`, `--web-agent-secret PATH: ERR` | The file slothweb writes the run's agent secret to ([Writes by an agent](#writes-by-an-agent)). Name a path in a directory slothweb's user can write (its state directory); slothweb replaces its own earlier file there and will not write over anything else. Exit `1` for all but the first. |
+| `--web-agent-secret: empty or too long a path`, `--web-agent-secret PATH: exists and is not a private regular file of this user (mode 0600, one link); refused, left as it is`, `--web-agent-secret: no random bytes from /dev/urandom`, `--web-agent-secret PATH: ERR` | The file slothweb writes the run's agent secret to ([Writes by an agent](#writes-by-an-agent)). Name a path in a directory slothweb's user can write (under the shipped unit `/run/slothweb`); slothweb replaces its own earlier file there and will not write over anything else (with `--web-agent-group`, its own file may also be `0640` in that group: `... (mode 0600, or 0640 with the --web-agent-group group, one link) ...`). Exit `1` for all but the first. |
+| `--web-agent-group needs --web-agent-secret`, `--web-agent-group: empty or too long a name`, `--web-agent-group NAME: no such group`, `--web-agent-group: cannot give PATH.new the group (ERR); slothweb's user must be a member of the group` | The group the agent secret is given ([Writes by an agent](#writes-by-an-agent)). Create the group and add slothweb's user to it (`usermod -aG NAME sloth`; it takes effect at the next start of the service), or leave the flag out for a `0600` file. Exit `2` for the first two, `1` for the others. |
 | `triage: ERR`, `the store is not open`, `PATH: changed while it was being opened; refused` | The triage and TACDB writer (a third connection to the store, [Triage and the FRRS record](#triage-and-the-frrs-record)) could not open what the store thread had just opened: the file was replaced or locked in between. Start again; exit 1. |
 
 **The alert pcaps** (not fatal; each directory is opened afresh per
@@ -478,7 +479,8 @@ milestone (W0, M0 to M6; tracker #102).
 | `--web-retain-days N` | Days of 1 min buckets kept, 1..400, default 30. |
 | `--sloth-db PATH` | sloth's own database (`sloth --db`), read-only (below). Absent: `/api/devices` is a `503` `no_sloth_db`, the drawer and Lookup answer from the stream and the vendor table, A2 runs on the stream alone, and the page says so. A path that is not there yet, or a file refused, is not fatal: every request opens it afresh. Needs a `WITH_SQLITE` build; the same path as `--store` is refused. |
 | `--web-allow-sql` | The SQL box (M5, below): `/api/query` and `/api/recipes`, and the box on the History view. Off by default; without it both paths are `404` and the page never draws the box. Needs `--sloth-db` and a `WITH_SQLITE` build. `--strict` refuses it (exit 2). With `--web-allow-remote` it is announced on stderr, naming what every admitted peer can then read. |
-| `--web-agent-secret PATH` | Let an agent on this machine write through `slothweb-mcp` ([Writes by an agent](#writes-by-an-agent)): a secret drawn at start is written to `PATH` (`0600`, a new one every run, removed at exit), and a loopback POST carrying it in `X-Slothweb-Agent`, with no `Origin`, may write triage, notes and links, recorded `via: agent` under the name it gives. A `PATH` that is empty or too long is `slothweb: --web-agent-secret: empty or too long a path`; one holding something that is not a private regular file of this user is `--web-agent-secret PATH: exists and is not a private regular file of this user (mode 0600, one link); refused, left as it is`; no random bytes is `--web-agent-secret: no random bytes from /dev/urandom`; each exits before serving. Unset: no agent path, and a request with the header is `403 agent_off`. |
+| `--web-agent-group NAME` | With `--web-agent-secret`, the secret file is `0640` in group `NAME` instead of `0600` ([Writes by an agent](#writes-by-an-agent)), so `slothweb-mcp` runs as the operator's own user, a member of `NAME`, with no sudo rule (owner ruling 2026-11-11). Looked up at start; slothweb's own user must be a member of `NAME` (only then may it give a file that group). An unknown group, or one it cannot give, exits `1` before serving; without `--web-agent-secret` it exits `2`. |
+| `--web-agent-secret PATH` | Let an agent on this machine write through `slothweb-mcp` ([Writes by an agent](#writes-by-an-agent)): a secret drawn at start is written to `PATH` (`0600`, or `0640` in the `--web-agent-group` group; a new one every run, removed at exit), and a loopback POST carrying it in `X-Slothweb-Agent`, with no `Origin`, may write triage, notes and links, recorded `via: agent` under the name it gives. A `PATH` that is empty or too long is `slothweb: --web-agent-secret: empty or too long a path`; one holding something that is not a private regular file of this user is `--web-agent-secret PATH: exists and is not a private regular file of this user (mode 0600, one link); refused, left as it is`; no random bytes is `--web-agent-secret: no random bytes from /dev/urandom`; each exits before serving. Unset: no agent path, and a request with the header is `403 agent_off`. |
 | `--web-read-only` | No write route: every POST is `405` `Allow: GET, HEAD` before a header is checked, the surface before triage existed. The triage states and the TACDB still read; the page draws no button and says why. Default off: an admitted peer may write (the owner's open question Q10 asks whether `--web-allow-remote` should imply it). |
 | `--web-assessments DIR` | Where "follow recommended" reads each alert type's research assessment, `DIR/<TYPE>.md` (front matter `false_positive_risk`, `noise_verdict`, `severity_assessment`; [Triage](#triage-and-the-frrs-record)). The type name comes from the alert table, never from a request; each file read until its front matter closes, at most 32 KiB. Unset, or a path not there: every type says "no recommendation yet". Something there that is not a directory is refused (exit 2). `slothweb.service` passes `/usr/local/share/sloth/alert-assessments`, where `make install` copies `docs/wiki/alert-assessments/*.md`. |
 | `--pcap-dir DIR` | The sensor's `--pcap-dir`, read-only, for the alert page's packet capture ([An alert's proof](#an-alerts-proof)). Repeatable once more for its `--eapol-dir` (at most two; the same path twice is refused). Only a file named as sloth names an alert pcap is ever opened (`alert_YYYYMMDD_HHMMSS_<slug>.pcap`, or `<incident_id>-<event>-<RULE>[-N].pcap`), through the directory's descriptor, not following a symlink, a regular file of at most 16 MiB; never a handshake pcap or `eapol.22000`, whatever directory they sit in. Absent: the page says "slothweb was not given --pcap-dir". An evidence pcap is listed but withheld unless `--web-serve-evidence-pcap` is given (below). |
@@ -669,7 +671,7 @@ the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
  "anomaly":{"open":1,"building":0,"closed_kept":2,"cap":512,"opened":3,
    "closed":2,"dropped":0,"evicted_closed":0,"candidates_dropped":0,
    "rows_dropped":0,"late_rows":4,"hours_fed":31,"hours_unobserved":1,
-   "minutes_unobserved":3,"mad":true,"mad_queries":2,"mad_skipped":0,
+   "minutes_unobserved":3,"hours_merged":1,"mad":true,"mad_queries":2,"mad_skipped":0,
    "a9":true,"a9_queries":5,"fanout_hosts":20,"fanout_evictions":0,
    "reported":1,"reported_evicted":0,"known_evictions":0,
    "persist_errors":0,"persisted":true},
@@ -2043,6 +2045,22 @@ hour is fed to the baselines only when at least 45 of its minutes were
 observed; otherwise it is skipped and counted (`hours_unobserved`): a
 counter that did not see half its hour would read as a quiet hour.
 
+**A slothweb restart** (owner ruling 2026-11-11) no longer costs an
+hour by itself. Coverage used to live in memory and count only minutes
+after the process started, so every restart lost the clock hour it
+started in and the hour it stopped in. Now each run writes the minutes
+it observed to the store ([slothweb.db v11](#restarts-inside-an-hour-slothwebdb-v11))
+at every minute boundary, after that minute's rows are in the minute
+tier, and an hour that began before this run is judged on every run's
+minutes together: 45 or more and it is fed (`hours_merged`), from the
+minute tier's rows of the hour, both runs' parts. A run killed without
+a clean exit loses only the minute in progress (at most 60 s and one
+store-thread step); every completed minute's bits are already written.
+An hour the previous run observed but never passed (it stopped before
+the hour ended, and this run started after) is passed at this run's
+first step, if it is within the last day. Without a store, the old rule
+stands.
+
 ### The baseline (§5.3)
 
 - **Cells** are the local hour of the week, `((tm_wday + 6) % 7) * 24 +
@@ -2227,6 +2245,7 @@ read back before any thread starts:
 | `episode (id, kind, metric, key, state, score, peak, evidence, ...)` | open and closed episodes; `kind` holds the rule (`A1`..`A10`) | each minute an episode changes |
 | `fanout (key, windows, hist)` | A7's per-host histogram, 16 weights as text | at each 10-minute window |
 | `reported (kind, key, t)` | the MACs A2 has reported, `t` the MAC's `first_seen`, for 24 h from it | as they are reported |
+| `anom_cover (hour, mask, done)` (v11) | which minutes of each hour a run observed, every run's bits ORed; `done` once a run passed the hour; two days kept | at each minute boundary and at a clean exit; `done` at the hour pass |
 
 At start the most recently active entries up to the cap are loaded and
 any other row is deleted, so the file never holds a row the table does
@@ -2670,7 +2689,7 @@ and columns as written, and the failure (a v9 file already holding the
 name `note_subject`: still v9, no `note` table, `relation` with the
 eleven columns it had; seen red with the migration's `ROLLBACK` made
 `COMMIT`, and the default seen red as `DEFAULT 3`). A v7 file goes v7,
-v8, v9, v10 in one open (`test_v7_file_reaches_v10_in_one_open`). The
+v8, v9, v10 (and on to v11) in one open (`test_v7_file_reaches_v11_in_one_open`). The
 `triage` table is not touched: its `via` column already takes the new
 value.
 
@@ -2684,6 +2703,60 @@ value.
 can set it: a body naming `via` is refused as an unknown member, and 3
 is written only for a request the gate authenticated as the agent's
 ([[slothweb-mcp]]).
+
+
+### Restarts inside an hour: slothweb.db v11
+
+`v10 -> v11` (owner ruling 2026-11-11: schedule the restart-loss fix as
+its own slice) adds one table in one `BEGIN IMMEDIATE` step:
+
+| Table | Columns | Holds |
+|---|---|---|
+| `anom_cover` | `hour` (PK, an hour start), `mask` (bit i the hour's minute i), `done` | which minutes of the hour slothweb observed, across its runs: each run ORs its own bits in (`INSERT ... ON CONFLICT DO UPDATE SET mask = mask \| excluded.mask`), never puts its bits in place of another's; `done` is 1 once a run passed the hour. Rows older than two days are deleted at each hour pass |
+
+What it is for and what each metric kind gets
+([Where the numbers come from](#where-the-numbers-come-from), "Observed time"): the bits of minute m are
+written by the store thread at the step that crosses into m+1, after
+that step has flushed the rollup's queue, so a persisted bit always
+names a minute whose rows are in the minute tier; if a store write
+failed while an hour was open, no more of that hour's bits are written,
+and it may be judged short but is never fed from rows that are not
+there. An hour that began before the running process is fed only when
+the runs together observed 45 minutes, and then from the minute tier's
+rows of the hour (every run's, with whatever a killed run had flushed),
+in place of this run's own hour row, which holds only its part: a
+presence metric's value is the max of those rows (present if present
+in either part), a counter's the sum of their sums (both parts; its
+minutes with no row count 0, as in any hour), a gauge's the sum of
+sums over the sum of counts; the within-hour spread is rebuilt from
+the same rows, a value a minute. A pair with a baseline and no row in
+either part is fed 0 (presence and counters only, as in any fed hour);
+an hour not fed is never zero-filled. A late hour row from this run for
+such an hour is dropped, as before, since it is a part. No metric kind
+is left out: the minute tier carries sum, count, min and max for all
+three. What is still lost: a killed run's minute in progress (its rows
+and its bit), a minute row the rollup's queue dropped when full
+(`queue_dropped`), and any minute rows the `--web-max-mb` ceiling has
+already trimmed (it trims the oldest first; an hour is merged within
+the hour after it).
+
+Cost, measured in the test build (`-O0`, this host): rebuilding an hour
+of 2,050 series, 60 minute rows each, took 199.9 ms on the store
+thread; one coverage write 0.012 ms. Both run on the store thread
+(web_tsdb's step hook) over the writer connection, never on a request,
+and the store is in WAL mode, so a request's read on the reader
+connection is not held by either.
+
+`web/tests/test_store.c` builds a v10 file (the v9 file, two notes and
+a retraction, an agent's link, episodes and minute rows) and holds the
+migration, which leaves every one of those rows as written and the new
+table's own statements working (`test_v10_file_is_migrated`), and the
+failure (a v10 file already holding the name `anom_cover`: still v10,
+its rows as they were; `test_v10_failed_step_leaves_file_unchanged`).
+A v7 file goes v7 to v11 in one open
+(`test_v7_file_reaches_v11_in_one_open`). `web/tests/test_anomaly.c`'s
+`test_restart_*` and `test_killed_run_loses_only_the_minute_in_progress`
+hold the engine's side.
 
 ### /api/devices, /api/device/{mac}, /api/lookup
 
@@ -4522,8 +4595,24 @@ by descriptor, never through a link, put in place by `rename`; a file
 already there that is not a private regular file of this user is
 refused and left as it is) and keeps them in memory: a new secret every
 run, the file removed at a clean exit. slothweb says `agent writes: a
-loopback POST carrying the secret in PATH writes triage, notes and
-links, recorded via agent`. Without the flag there is no agent path.
+loopback POST carrying the secret in PATH (0600) writes triage, notes
+and links, recorded via agent`. Without the flag there is no agent path.
+
+`--web-agent-group NAME` (owner ruling 2026-11-11: `slothweb-mcp` reads
+the secret through group permission, with no sudo rule): the group is
+looked up at start (`getgrnam_r`); the file is created `0600` under its
+temporary name, given `(this user, NAME)` with `fchown` and made `0640`
+with `fchmod` there, and only then renamed into place, so it is never
+readable by anyone else at any instant. The kernel lets slothweb give a
+file only a group its user is a member of, so slothweb's user must be
+in `NAME`; otherwise, or with no such group, it refuses to start. A file
+already at `PATH` is then accepted as its own when it is `0600`, or
+`0640` with that group; another group or any other bit is refused and
+left as it is. The shipped unit puts it in `/run/slothweb`
+(`RuntimeDirectory=slothweb`, `0711`), because its state directory is
+`0700`; [docs/wiki/slothweb-mcp.md](../docs/wiki/slothweb-mcp.md)
+section 7 has the group, the flags and the re-login the operator's new
+group needs.
 
 `web_agent_check()` is the rule, run by `web_frrs_gate()` before a body
 byte is read and again by the router:
@@ -4542,8 +4631,10 @@ a request carrying both is refused as a page's. The browser's path is
 unchanged. The agent's path is narrower than the page's: triage, notes
 and links only (`403 agent_path` on the TACDB routes and the import), a
 name required (`400 missing_by`), no "follow recommended" (`400
-bad_state`), and it removes only links an agent made (`403
-not_agent_link`). The token bucket applies, in a bucket of the agent's
+bad_state`), it removes only links an agent made (`403
+not_agent_link`), and it takes back only notes an agent wrote (`403
+not_agent_note`, owner ruling 2026-11-11; any agent's, never the
+operator's, while the page takes back any). The token bucket applies, in a bucket of the agent's
 own per peer (`a/` and the address), so it can neither spend the
 operator's allowance nor write unbounded; limited, it gets the same
 `429` and `Retry-After`. `/api/health`'s `frrs.agent` is
@@ -4552,7 +4643,11 @@ stop: another process of slothweb's own user, or root, can read the
 file; `by` is a label, as the operator's is.
 
 `web/tests/test_mcp.c` holds it (`test_whose_write`,
-`test_write_refusals`, `test_rate_limit`, `test_secret_file_rules`):
+`test_write_refusals`, `test_rate_limit`, `test_secret_file_rules`,
+`test_secret_file_group`: the file's mode and group with one of the
+test's own supplementary groups configured, an unknown group, a group
+the user is not in, a `0640` file of the group accepted and one of
+another group or with other bits refused, and `secret_no_access`):
 each line of the table, a browser's write never marked agent, a wrong
 secret refused by the gate and by the router each on its own, a
 near-miss and a prefix of the secret, the three routes and no other,
@@ -4593,7 +4688,10 @@ control or bidirectional-control character, over-long refused with
 never cut), who (`by`, 32 bytes, optional from the page), the peer's
 address, the time, and `via`. It is never changed and never deleted:
 `retract` writes a row naming it, with who and an optional reason, and
-the note stays listed, struck, with who took it back. Reading and
+the note stays listed, struck, with who took it back. The page may take
+back any note; an agent (`via: agent`, [Writes by an agent](#writes-by-an-agent))
+only one an agent wrote: the operator's is `403 not_agent_note` and
+nothing is written, whether or not it was already taken back. Reading and
 retracting need no holder, so a note outlives what it was written on
 and its listing says `"held":false`.
 
@@ -6366,7 +6464,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_server.c` | real loopback sockets: default bind address, a refused peer over v4 and v6, 405 for POST/PUT/DELETE/PATCH, 431, idle and slow clients timed out, slot exhaustion; the page byte for byte and its `304`, health, a stream's ticks and pings and the client leaving, the first tick at once, a departing client noticed on the read path with no event due, the stream socket's `TCP_NODELAY` and `SO_SNDBUF`, a non-reading stream client dropped at the 64 KB backlog and not past it, the stream cap, `421` for `Host: attacker.example`; an episode that opens reaching a stream client as one `anomaly` event, counted once |
 | `test_baseline.c` | the cell as the local hour of the week, Monday first, and the same cell for the same local hour across a DST change (167 UTC hours apart), a never-fed pair scoring absent and a zero feed making no entry, warming forcing z to 0, an established cell's z, the sd floor (a constant history and one AP more scores 1, not 31,623; 10% of the mean; 1 KiB/s for a byte rate), an hour fed once, zero feeds for counters and presence and none for gauges and not counted as activity, cells independent, the full table evicting the least recently active entry by real feeds only, ageing out with the row id queued for deletion, allocation following the entries, dirty cells out once and back through a restore, the cap at the default and the extremes, NaN and both infinities ignored, the value scale per kind, a minute's sd carrying the within-hour spread (and Poisson for a counter), the delete queue returning 5,000 ids with none lost, refused records held to the next pass, restore refusing values a float cannot hold and keeping `first_fed` |
 | `test_ident.c` | records on a pinned clock: the earliest `first_seen` kept and randomised MACs left out, names cut to 63 bytes on a code-point boundary and NBNS to 15, group NBNS suffixes ignored and names current for their TTL, both tables evicting and counting, the DNS join (an NXDOMAIN answer counted once against the client that asked that qname within 10 s, a late or unknown one unmatched), the normal form |
-| `test_anomaly.c` | every rule from seeded state, rows given to the engine as web_tsdb gives them and the clock moved only through its step: A1 opening on three burst minutes with the evidence `metric[key]` closed, never on two, a gauge gap breaking the streak, a constant history with ±1 jitter firing nothing, a silent counter scored as 0, unobserved minutes not scored, a bucket closed in two parts scored as one, 300 keys all scored (the previous cap was 256); the lifecycle (open after one quiet minute, closed after two, a closed episode listed 59 minutes on and not 61, a recurrence starting a new episode that must earn three minutes, a full table keeping its open episodes, the worst-case listing fitting with `more`, the kind and since filters, the change feed); A2 once per MAC across a restart and never for an old or randomised MAC; A3 at four weeks and not three, and not in normal hours; A5 for the randomised MAC only and not through a reassigned lease; A6's normal form and escaped evidence; A7 far above its p95 and not without history or margin; A8 for the client the answers were joined to, not under 20 queries or at exactly 30%; A9 on first use and not for a host with history across a restart; MAD refuting a return to an old level and confirming a real burst, once per hour per series; baselines and an open episode surviving a restart; A10 for a connection that never sends, not just after a reconnect, not while disconnected, not before the limit; the engine without a store; the newest changes when there are more than asked for; the hour pass learning the within-hour spread; A2 not new after sloth restarts (by the baseline, and by the store's rows), a flood of new MACs as one episode that keeps another rule's history, the slot policy, the reported set evicting its oldest with the new MAC still given its episode and the evicted one not reported again while remembered, re-reports (8) bounded by evictions (32), a burst's and a trickle's evidence counting exactly what was judged new and naming two MACs, a trickle of eight a minute folded into one episode once the hour's sixteen are reported, a scan past 4,096 identity slots; MAD refuted by the within-hour term alone; A3 in a half-hour zone; A7 below its minimum excess and across a restart; a baseline pair evicted and back in one hour, a refused batch written later, restored episode values checked (the episode's own score, and a metric below -1) |
+| `test_anomaly.c` | every rule from seeded state, rows given to the engine as web_tsdb gives them and the clock moved only through its step: A1 opening on three burst minutes with the evidence `metric[key]` closed, never on two, a gauge gap breaking the streak, a constant history with ±1 jitter firing nothing, a silent counter scored as 0, unobserved minutes not scored, a bucket closed in two parts scored as one, 300 keys all scored (the previous cap was 256); the lifecycle (open after one quiet minute, closed after two, a closed episode listed 59 minutes on and not 61, a recurrence starting a new episode that must earn three minutes, a full table keeping its open episodes, the worst-case listing fitting with `more`, the kind and since filters, the change feed); A2 once per MAC across a restart and never for an old or randomised MAC; A3 at four weeks and not three, and not in normal hours; A5 for the randomised MAC only and not through a reassigned lease; A6's normal form and escaped evidence; A7 far above its p95 and not without history or margin; A8 for the client the answers were joined to, not under 20 queries or at exactly 30%; A9 on first use and not for a host with history across a restart; MAD refuting a return to an old level and confirming a real burst, once per hour per series; baselines and an open episode surviving a restart; A10 for a connection that never sends, not just after a reconnect, not while disconnected, not before the limit; the engine without a store; the newest changes when there are more than asked for; the hour pass learning the within-hour spread; A2 not new after sloth restarts (by the baseline, and by the store's rows), a flood of new MACs as one episode that keeps another rule's history, the slot policy, the reported set evicting its oldest with the new MAC still given its episode and the evicted one not reported again while remembered, re-reports (8) bounded by evictions (32), a burst's and a trickle's evidence counting exactly what was judged new and naming two MACs, a trickle of eight a minute folded into one episode once the hour's sixteen are reported, a scan past 4,096 identity slots; MAD refuted by the within-hour term alone; A3 in a half-hour zone; A7 below its minimum excess and across a restart; a baseline pair evicted and back in one hour, a refused batch written later, restored episode values checked (the episode's own score, and a metric below -1); a slothweb restart inside an hour fed once from both runs' minute rows (presence present in either part, Z zero-filled, the counter's 30 x 2 + 30 x 4), a counter not fed when the first run's rows could not be written, 20 + 20 minutes feeding nothing, a killed run losing only its minute in progress, a restart across the hour boundary feeding both hours, and the merge's cost (SQLite) |
 | `test_oui.c` | the vendor table from registry CSVs the test writes into its own directory (MA-L, MA-M, MA-S, IAB; a BOM, CRLF, quoted fields with commas, quotes and a line break; CID skipped; a duplicate keeps the first): the most specific block first, 28- and 36-bit blocks inside the IEEE's MA-L, the local and group bits on a miss, the generated C (octal escapes, no name ending a literal or a comment), every malformed CSV failing with its row, names cleaned and cut on a code-point boundary, sloth's own `src/oui.c` read as text (every initialiser line, Apple found, an MA-S vendor not), the built-in table's source (the one `make web-test` says the build should have: `ieee` by default, `sloth` from an empty `WEB_OUI_DIR`) and order; the committed `web/data/` held to `SOURCE.md`'s hashes and built in a forked child under a time bound, its counts `SOURCE.md`'s rows, and a first file of 6,000 names then a second built under one too (the generator hung there until 2026-10-26); `update-oui` named in the Makefile only by comments, `.PHONY` and its own rule, and by no workflow or script under `.github/`; `update_oui.sh` run on a copy of `web/data/` with the same four files leaving `SOURCE.md` unchanged, and rewriting it once a CSV differs |
 | `test_query.c` | the query language: the acceptance terms, every §9.1 prefix, free text, negation, quotes and MAC fragments as text, every refusal and its reason, the length, term and term-length bounds, the compiled statement holding no byte of the query (an injection attempt and LIKE metacharacters bound and escaped, the text the same whatever the values), the day range, missing tables reading as false, the worst case fitting, the anomaly kinds and `src:` bits held to the engine's and to `include/sloth.h`'s `DEV_SRC_*` |
 | `test_ptr.c` | the passive PTR cache: reverse names per RFC 1035 §3.5 and RFC 3596 §2.5 (and what is not one), what a dns record must be to be recorded (an empty answer, sloth's today, counted), the bound and its eviction, a rename, changed rows out once and back on a failed write, a row read back checked; the identity tables' M4 readers |

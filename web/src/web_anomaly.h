@@ -14,9 +14,13 @@
  * not feed is fed 0 (web_baseline_zero_missing()). An hour slothweb did
  * not observe is not fed at all: fewer than WEB_ANOM_COVER_MIN of its
  * minutes had the socket connected and a record within
- * WEB_ANOM_A10_SILENCE_S, or slothweb was not running for all of it. A
- * minute it did not observe is not scored: neither a hit nor a quiet
- * minute for any episode.
+ * WEB_ANOM_A10_SILENCE_S. With a store, the minutes observed are kept
+ * there (slothweb.db v11), so an hour split by a slothweb restart is
+ * judged on what both runs observed, and fed from both runs' minute
+ * rows (web_anomaly.c, "coverage across restarts"); without one, an
+ * hour that began before this run is not fed. A minute it did not
+ * observe is not scored: neither a hit nor a quiet minute for any
+ * episode.
  *
  * The rules, and exactly what each measures:
  *
@@ -267,6 +271,7 @@ typedef struct {
     unsigned long opened, closed, dropped, evicted_closed;
     unsigned long candidates_dropped, rows_dropped, late_rows;
     unsigned long hours_fed, hours_unobserved, minutes_unobserved;
+    unsigned long hours_merged;    /* fed from the runs' minute rows (v11) */
     unsigned long mad_queries, mad_skipped, a9_queries, a9_errors;
     unsigned long fanout_evictions, reported_evicted, known_evictions;
     unsigned long persist_errors;
@@ -321,6 +326,12 @@ void web_anomaly_attach(web_anomaly_t *a, web_tsdb_t *t);
  * whose last_seen is older than now_s - WEB_ANOM_KEEP_S are dropped.
  * 0, or -1 (the store refused a read; the engine starts empty). */
 int  web_anomaly_restore(web_anomaly_t *a, long long now_s);
+
+/* Write the coverage of every completed minute not yet in the store:
+ * at a clean exit, after web_tsdb_stop() (the store thread is gone, so
+ * this is the only writer). The step writes it at every minute
+ * boundary, so a run killed instead loses the minute in progress. */
+void web_anomaly_save_cover(web_anomaly_t *a);
 
 /* One episode as web_anomaly_restore() takes it from the store, with
  * the same checks (a bad id, time, state, kind or metric is dropped;

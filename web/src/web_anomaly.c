@@ -225,6 +225,14 @@ struct web_anom_priv {
     long long   start_s, done_minute, final_hour;
     long long   cov_hour[COV_HOURS];
     unsigned char cov[COV_HOURS][60];
+    /* The coverage in the store (v11, cover_save()): the bits of each
+     * slot's hour written so far, and whether a store write failed
+     * while the slot's hour was open (its later minutes' rows may then
+     * be missing, so no more of its bits are written). */
+    unsigned long long cov_put[COV_HOURS];
+    unsigned char cov_taint[COV_HOURS];
+    unsigned long werr_seen;
+    long long   saved_upto;     /* the last minute cover_save() covered */
 
     kvtab_t     fan_ix;
     fan_t      *fan;
@@ -522,6 +530,8 @@ static unsigned char *cov_slot(struct web_anom_priv *p, long long minute,
         if (!make) return NULL;
         p->cov_hour[k] = hour;
         memset(p->cov[k], 0, sizeof(p->cov[k]));
+        p->cov_put[k] = 0;
+        p->cov_taint[k] = 0;
     }
     return &p->cov[k][(t % 3600) / 60];
 }
@@ -542,6 +552,138 @@ static int minutes_observed(web_anomaly_t *a, long long from_minute, int n) {
 
 static int hour_observed(web_anomaly_t *a, long long hour) {
     return minutes_observed(a, hour / 60, 60) >= (a->cfg.live ? WEB_ANOM_COVER_MIN : 1);
+}
+
+/* ── coverage across restarts (v11) ──────────────────────────────────── *
+ *
+ * Owner ruling 2026-11-11 (schedule the restart-loss fix). Coverage is
+ * held in memory and counts only minutes after this process started, so
+ * a slothweb restart cost the clock hour it started in and the hour the
+ * previous run stopped in. Now each run writes which minutes of the
+ * hour it observed to the store (anom_cover, one row an hour, the runs'
+ * bits ORed together) at every minute boundary and at a clean exit, and
+ * an hour that began before this run is judged on the union.
+ *
+ * The bits of minute m are written only after its rows are: the step
+ * that crosses into m+1 has flushed the rollup's queue (minute m's rows
+ * written to the minute tier) before this hook runs, on this same
+ * thread. So every persisted bit names a minute whose rows are in the
+ * store, and if a store write failed while an hour was open no more of
+ * its bits are written (cov_taint): it may then be judged short, never
+ * fed from rows that are missing. A run killed without a clean exit
+ * loses the minute in progress, at most 60 s plus one step; the bits of
+ * every completed minute are already in the store.
+ *
+ * The value fed for a split hour is rebuilt from the minute tier, not
+ * from the hour rows: a killed run never wrote its partial hour row,
+ * and this run's hour row holds only its own part. The minute tier
+ * holds every run's minute rows of the hour (sum, n, min and max of
+ * every sample, flushed at every minute boundary), so their sums are
+ * exactly the hour row an unbroken run would have closed, less only
+ * what was lost with a killed run's minute in progress: a presence
+ * metric's max over the hour, a counter's sum (and so its count over
+ * 60 minutes), a gauge's mean as sum over n. The within-hour spread is
+ * rebuilt from the same rows (one value a minute, as minute_pass()
+ * takes them). Nothing is reconstructed that the rows do not hold, and
+ * a store error drops the hour as before, unfed and not zero-filled. */
+
+static int cover_on(const web_anomaly_t *a) {
+    return a->cfg.live && a->cfg.store;
+}
+
+static int popcount60(unsigned long long m) {
+    int n = 0;
+    for (; m; m &= m - 1) n++;
+    return n;
+}
+
+/* This run's observed minutes of the hour, up to minute upto. */
+static unsigned long long own_mask(web_anomaly_t *a, long long hour, long long upto) {
+    unsigned long long m = 0;
+    for (int i = 0; i < 60 && hour / 60 + i <= upto; i++)
+        if (minute_observed(a, hour / 60 + i)) m |= 1ULL << i;
+    return m;
+}
+
+/* The completed minutes (up to upto) of the hours this run still holds,
+ * into the store when they add a bit. */
+static void cover_save(web_anomaly_t *a, long long upto) {
+    struct web_anom_priv *p = a->p;
+    if (!cover_on(a) || upto < 0) return;
+    web_store_stats_t ss;
+    web_store_stats(a->cfg.store, &ss);
+    int werr = ss.write_errors != p->werr_seen;
+    p->werr_seen = ss.write_errors;
+    unsigned long errors = 0;
+    for (int k = 0; k < COV_HOURS; k++) {
+        long long h = p->cov_hour[k];
+        if (h < 0 || h / 60 > upto) continue;
+        /* A failed write since the last save: the hours holding the
+         * minutes completed since then may lack those minutes' rows. */
+        if (werr && h / 60 + 59 > p->saved_upto) p->cov_taint[k] = 1;
+        if (p->cov_taint[k]) continue;
+        unsigned long long m = own_mask(a, h, upto);
+        if ((m & ~p->cov_put[k]) == 0) continue;
+        if (web_store_cover_put(a->cfg.store, h, m) == 0) p->cov_put[k] |= m;
+        else errors++;
+    }
+    p->saved_upto = upto;
+    if (errors) {
+        pthread_mutex_lock(&a->mu);
+        a->st.persist_errors += errors;
+        pthread_mutex_unlock(&a->mu);
+    }
+}
+
+static void merge_row(void *ctx, int metric, const char *key, const web_point_t *pt) {
+    web_anomaly_t *a = ctx;
+    struct web_anom_priv *p = a->p;
+    long long h = pt->t - pt->t % 3600;
+    web_qrow_t r;
+    memset(&r, 0, sizeof(r));
+    r.tier = WEB_TIER_HOUR;
+    r.metric = metric;
+    snprintf(r.key, sizeof(r.key), "%s", key);
+    r.t = h;
+    r.sum = pt->sum;
+    r.n = pt->n;
+    r.min = pt->min;
+    r.max = pt->max;
+    int bad = agg_put(p, &r) != 0;
+    if (acc_add(p, metric, r.key, pt->t, web_bl_value(metric, pt, 60)) != 0) bad = 1;
+    if (bad) {
+        pthread_mutex_lock(&a->mu);
+        a->st.rows_dropped++;
+        pthread_mutex_unlock(&a->mu);
+    }
+}
+
+static void release_hour(struct web_anom_priv *p, long long h) {
+    for (int i = 0; i < p->agg_alloc; i++)
+        if (p->agg[i].used && p->agg[i].t == h &&
+            (p->agg[i].tier == WEB_TIER_HOUR || p->agg[i].tier == TIER_ACC))
+            agg_release(p, i);
+}
+
+/* An hour that began before this run: 1 when the runs together observed
+ * WEB_ANOM_COVER_MIN of its minutes and its merged rows were rebuilt
+ * from the minute tier in place of this run's own, 0 when they did
+ * not, -1 when the store could not say (the hour is then dropped). */
+static int hour_merge(web_anomaly_t *a, long long h) {
+    struct web_anom_priv *p = a->p;
+    unsigned long long mask;
+    int done;
+    if (web_store_cover_get(a->cfg.store, h, &mask, &done) < 0) return -1;
+    if (popcount60(mask) < WEB_ANOM_COVER_MIN) return 0;
+    release_hour(p, h);
+    if (web_store_hour_minutes(a->cfg.store, h, merge_row, a) < 0) {
+        release_hour(p, h);
+        return -1;
+    }
+    pthread_mutex_lock(&a->mu);
+    a->st.hours_merged++;
+    pthread_mutex_unlock(&a->mu);
+    return 1;
 }
 
 /* The socket connected and a record within the silence limit, counted
@@ -1583,7 +1725,9 @@ static void persist_baseline(web_anomaly_t *a) {
 
 static void hour_pass(web_anomaly_t *a, long long h) {
     struct web_anom_priv *p = a->p;
-    int obs = hour_observed(a, h) && (!a->cfg.live || h >= p->start_s);
+    int obs;
+    if (!a->cfg.live || h >= p->start_s) obs = hour_observed(a, h);
+    else obs = cover_on(a) && hour_merge(a, h) > 0;
     p->idx_n = 0;
     for (int i = 0; i < p->agg_alloc; i++)
         if (p->agg[i].used && (p->agg[i].tier == WEB_TIER_HOUR ||
@@ -1606,6 +1750,30 @@ static void hour_pass(web_anomaly_t *a, long long h) {
     else     a->st.hours_unobserved++;
     pthread_mutex_unlock(&a->mu);
     persist_baseline(a);
+    if (cover_on(a)) {
+        /* Passed, so a later run does not pass it again; two days of
+         * rows are kept, a day more than the catch-up looks back. */
+        if (web_store_cover_done(a->cfg.store, h) != 0 ||
+            web_store_cover_prune(a->cfg.store, h - 2 * 86400) != 0) {
+            pthread_mutex_lock(&a->mu);
+            a->st.persist_errors++;
+            pthread_mutex_unlock(&a->mu);
+        }
+    }
+}
+
+/* The hours before this run's first that an earlier run observed and
+ * did not pass (it stopped before their end), oldest first: within a
+ * day, at most a day of them. */
+static void cover_catch_up(web_anomaly_t *a, long long h_now) {
+    long long hours[24];
+    int n = web_store_cover_open(a->cfg.store, h_now - 24 * 3600LL, h_now, hours, 24);
+    for (int i = 0; i < n; i++) hour_pass(a, hours[i]);
+}
+
+void web_anomaly_save_cover(web_anomaly_t *a) {
+    struct web_anom_priv *p = a->p;
+    if (p && p->start_s >= 0) cover_save(a, p->done_minute);
 }
 
 static void persist(web_anomaly_t *a) {
@@ -1767,6 +1935,13 @@ void web_anomaly_step(web_anomaly_t *a, long long now_s) {
         p->start_s = now_s;
         p->done_minute = m_now - 1;
         p->final_hour = h_now - 3600;
+        if (cover_on(a)) {
+            web_store_stats_t ss;
+            web_store_stats(a->cfg.store, &ss);
+            p->werr_seen = ss.write_errors;
+            p->saved_upto = p->done_minute;
+            cover_catch_up(a, h_now);
+        }
     }
     if (a->cfg.live) {
         int conn;
@@ -1790,6 +1965,10 @@ void web_anomaly_step(web_anomaly_t *a, long long now_s) {
         ran = 1;
     }
     if (m_now - 1 > p->done_minute) p->done_minute = m_now - 1;
+    /* Before the hour pass: an hour's last minute is in the store before
+     * the hour is judged, and a run killed after this loses no more
+     * than the minute in progress. */
+    if (ran) cover_save(a, p->done_minute);
     if (p->final_hour < h_now - 3600) {
         hour_pass(a, h_now - 3600);
         p->final_hour = h_now - 3600;

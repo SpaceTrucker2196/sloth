@@ -369,8 +369,11 @@ out:
 }
 
 /* Note nid of the subject taken back, by a row: 0 written, 2 it already
- * was, 3 the subject has no such note, -1. Never refused for room: past
- * a cap, the oldest retracted pairs fold at once, this one among them. */
+ * was, 3 the subject has no such note, 4 the agent's path asked for a
+ * note an agent did not write (owner ruling 2026-11-11: an agent takes
+ * back only agents' notes, as it removes only agents' links; the page
+ * may take back any), -1. Never refused for room: past a cap, the
+ * oldest retracted pairs fold at once, this one among them. */
 static int note_retract(web_frrs_t *f, int kind, const char *subject, long long nid,
                         const char *reason, const char *by, const char *peer, int via,
                         long long now_s, const char **why) {
@@ -384,7 +387,7 @@ static int note_retract(web_frrs_t *f, int kind, const char *subject, long long 
     sqlite3_stmt *s = NULL;
     if (sqlite3_prepare_v2(f->wr,
             "SELECT EXISTS (SELECT 1 FROM note r WHERE r.kind = n.kind AND r.subject = n.subject"
-            " AND r.retracts = n.id) FROM note n WHERE n.id = ?3 AND n.kind = ?1 AND"
+            " AND r.retracts = n.id), n.via FROM note n WHERE n.id = ?3 AND n.kind = ?1 AND"
             " n.subject = ?2 AND n.retracts = 0", -1, &s, NULL) != SQLITE_OK)
         goto out;
     sqlite3_bind_int(s, 1, kind);
@@ -393,6 +396,12 @@ static int note_retract(web_frrs_t *f, int kind, const char *subject, long long 
     int st = sqlite3_step(s);
     if (st == SQLITE_DONE) { rc = 3; goto out; }
     if (st != SQLITE_ROW) goto out;
+    /* Before "already taken back": whose note it is decides first, as
+     * link_remove() asks whose link before it deletes. */
+    if (via == WEB_TRI_VIA_AGENT && sqlite3_column_int(s, 1) != WEB_TRI_VIA_AGENT) {
+        rc = 4;
+        goto out;
+    }
     if (sqlite3_column_int(s, 0)) { rc = 2; goto out; }
     sqlite3_finalize(s);
     s = NULL;
@@ -690,6 +699,7 @@ int web_notes_post(const web_m4_t *m, web_live_t *live, const web_jrec_t *r, con
             return frrs_error(400, "bad_note", "note", body, cap, len, status);
         int g = note_retract(f, kind, id, nid, text, by, peer, via, now_s, &why);
         if (g == 3) return frrs_error(404, "no_such_note", "note", body, cap, len, status);
+        if (g == 4) return frrs_error(403, "not_agent_note", "note", body, cap, len, status);
         if (g < 0) {
             frrs_stat_inc(f, &f->st.write_errors);
             return frrs_error(!strcmp(why, "store_busy") ? 503 : 500, why, NULL, body, cap, len, status);

@@ -15,6 +15,10 @@
  *       and keeps them in memory. A new secret every run; the file is
  *       removed at a clean exit. Without the flag there is no secret
  *       and no agent path at all.
+ *   --web-agent-group NAME    the file is 0640 and in group NAME instead,
+ *       so slothweb-mcp can run as the operator's own user, a member of
+ *       NAME, with no sudo rule (slothweb's user must be a member too:
+ *       only then may it give a file that group).
  *   X-Slothweb-Agent: <secret>   on a POST. slothweb-mcp reads the file
  *       (it runs on the same machine, as a user that may read it) and
  *       sends it on every write.
@@ -52,24 +56,39 @@
  * What the agent's path may write is narrower than the page's: triage,
  * a note, a link (web_frrs.c refuses the TACDB and the import to it),
  * each under a name ("by" is required), and it removes only links an
- * agent made. The token bucket applies, in a bucket of the agent's own
+ * agent made and takes back only notes an agent wrote (any agent's,
+ * the operator's never: 403 not_agent_note, web_notes.c). The token
+ * bucket applies, in a bucket of the agent's own
  * per peer, so an agent can exhaust neither the operator's allowance
  * nor its own unbounded. */
 #ifndef SLOTHWEB_AGENT_H
 #define SLOTHWEB_AGENT_H
 
 #include <stddef.h>
+#include <sys/types.h>
 
 #include "web_http.h"
 
 #define WEB_AGENT_SECRET_LEN 64
 
-/* A fresh secret into out and into the file at path (see above). An
- * existing file there must be a regular one of this user's with no
- * group or other permission and one link: it is replaced; anything
- * else is refused, not repaired. 0, or -1 with err. */
-int  web_agent_secret_make(const char *path, char out[WEB_AGENT_SECRET_LEN + 1],
-                           char *err, size_t errsz);
+/* --web-agent-group NAME (owner ruling 2026-11-11: slothweb-mcp runs as
+ * the operator's own user and reads the secret through a group, with no
+ * sudo rule): the group's id, looked up at start. 0, or -1 with err
+ * (no such group, or the lookup failed). */
+int  web_agent_group_resolve(const char *name, gid_t *gid, char *err, size_t errsz);
+
+/* A fresh secret into out and into the file at path (see above). group
+ * NULL: the file is 0600, as before the group existed. A gid: the file
+ * is created 0600 under a temporary name, given (this user, *group) and
+ * made 0640 there, and only then renamed into place, so it is never
+ * readable by anyone else at any instant; giving the group fails (and
+ * so does the start) unless this user is a member of it. An existing
+ * file at path must be a regular one of this user's with one link and
+ * no group or other permission, or, with a group, mode 0640 and that
+ * group: it is replaced; anything else is refused, not repaired. 0, or
+ * -1 with err. */
+int  web_agent_secret_make(const char *path, const gid_t *group,
+                           char out[WEB_AGENT_SECRET_LEN + 1], char *err, size_t errsz);
 
 /* The rule above for one parsed request. secret is the configured one
  * or "" (none). 0 the browser's path, 1 the agent's, -1 refused with a

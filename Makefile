@@ -1594,7 +1594,7 @@ install-service:
 DEPLOY_SCRIPTS = packaging/bin/sloth-migrate-sensor packaging/bin/sloth-monitor-up \
                  tests/deploy/test_migrate_sensor.sh \
                  .github/scripts/wiki_sync.sh tests/deploy/test_wiki_sync.sh \
-                 tools/gate.sh
+                 tests/deploy/test_slothweb_unit.sh tools/gate.sh
 
 # The whole build surface in one measured run (agents/AGENTS.md
 # "Discipline"); one run per tree, refuses a full TMPDIR, prints the
@@ -1613,3 +1613,4 @@ deploy-test:
 	fi
 	sh tests/deploy/test_migrate_sensor.sh
 	sh tests/deploy/test_wiki_sync.sh
+	sh tests/deploy/test_slothweb_unit.sh

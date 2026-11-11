@@ -41,6 +41,13 @@
 # that is refused unless spelled --web-serve-evidence-pcap=remote.
 #   --pcap-dir /var/lib/sloth/pcap
 #
+# An agent on this machine writing triage, notes and links through
+# slothweb-mcp (docs/wiki/slothweb-mcp.md §7): the run's secret in the
+# unit's /run/slothweb, 0640 in a group holding sloth and the operator's
+# own user (create the group and add both first; slothweb refuses to
+# start if the group does not exist or sloth is not in it).
+#   --web-agent-secret /run/slothweb/agent.secret --web-agent-group slothweb-agent
+#
 # Example:
 #   SLOTHWEB_ARGS=--web-bind 100.64.0.10:8770 --web-allow-remote --web-allow 100.64.0.20/32
 #   SLOTHWEB_ARGS=--pcap-dir /var/lib/sloth/pcap

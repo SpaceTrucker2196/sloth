@@ -150,6 +150,11 @@ int web_config_check(const web_config_t *c, char *err, size_t errsz) {
             return -1;
         }
     }
+    /* A group for a secret file that is not written says nothing. */
+    if (c->agent_group[0] && !c->agent_secret_path[0]) {
+        snprintf(err, errsz, "slothweb: --web-agent-group needs --web-agent-secret\n");
+        return -1;
+    }
     /* sloth.db is read, the store written: one path for both would
      * have slothweb refuse its own store at best. */
     if (c->sloth_db[0] && !strcmp(c->sloth_db, c->store_path)) {
@@ -270,7 +275,7 @@ void web_usage(FILE *out) {
         "                [--store PATH] [--web-max-keys N] [--web-max-mb N]\n"
         "                [--web-retain-days N] [--sloth-db PATH]\n"
         "                [--web-allow-sql] [--web-read-only]\n"
-        "                [--web-agent-secret PATH]\n"
+        "                [--web-agent-secret PATH [--web-agent-group NAME]]\n"
         "                [--web-assessments DIR] [--pcap-dir DIR]...\n"
         "                [--web-serve-evidence-pcap[=remote]]\n"
         "                [--peer NAME=URL]... [--peer-interval-secs N]\n"
@@ -333,6 +338,12 @@ void web_usage(FILE *out) {
         "                        write triage, notes and links, recorded via\n"
         "                        agent under the name it gives. Unset: no\n"
         "                        such path; a request with the header is 403.\n"
+        "  --web-agent-group NAME\n"
+        "                        write the secret 0640 in group NAME instead,\n"
+        "                        so slothweb-mcp runs as a member of NAME\n"
+        "                        with no sudo rule. slothweb's user must be\n"
+        "                        a member of NAME; slothweb refuses to start\n"
+        "                        if NAME does not exist or cannot be given.\n"
         "  --web-assessments DIR where \"follow recommended\" reads each alert\n"
         "                        type's <TYPE>.md front matter (the research\n"
         "                        assessments). Unset, or no such directory:\n"
@@ -419,6 +430,17 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
                 return -1;
             }
             snprintf(c->agent_secret_path, sizeof(c->agent_secret_path), "%s", v);
+        } else if (!strcmp(a, "--web-agent-group")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (!v[0] || strlen(v) >= sizeof(c->agent_group)) {
+                fprintf(err, "slothweb: --web-agent-group: empty or too long a name\n");
+                return -1;
+            }
+            snprintf(c->agent_group, sizeof(c->agent_group), "%s", v);
         } else if (!strcmp(a, "--web-assessments")) {
             if (i + 1 >= argc) {
                 fprintf(err, "slothweb: %s needs an argument\n", a);
