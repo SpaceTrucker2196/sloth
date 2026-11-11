@@ -2113,15 +2113,27 @@ static void test_recurring_transit_self_device_demoted_and_tagged(void) {
     if (idx >= 0) {
         ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_LOW);
         ASSERT(strstr(s.alerts[idx].detail, "self") != NULL);
+        /* A self address is not on the operator's roster. Seen red with
+         * `rostered` asking ownership_is_own_device() and tested ahead
+         * of `self` in the tag. */
+        ASSERT(strstr(s.alerts[idx].detail, "rostered device") == NULL);
     }
     ownership_clear();
 }
 
-/* A device on the operator's --known-mac roster is not the sensor: the
- * tag would say "the sensor's own radio" about somebody's laptop. The
- * same passes from a rostered address are WARN and untagged. Seen red
- * with the rule asking ownership_is_own_device(). */
-static void test_recurring_transit_rostered_device_is_not_self(void) {
+static int count_transit_alerts(const sloth_state_t *s) {
+    int n = 0;
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == ALERT_TYPE_RECURRING_TRANSIT) n++;
+    return n;
+}
+
+/* #183, owner ruling 2a: a device on the operator's --known-mac roster
+ * passing repeatedly is one step lower, WARN to LOW, and says "rostered
+ * device". It is not the sensor, so it is never called "self": seen red
+ * (tagged "self (the sensor's own radio)") with `self` asking
+ * ownership_is_own_device(). */
+static void test_recurring_transit_rostered_device_demoted_and_tagged(void) {
     alerts_clear(); ownership_clear();
     sloth_state_t s; seed_state(&s);
     uint8_t mac[6] = {0x24,0x41,0x8c,0x30,0x97,0xb1};
@@ -2131,8 +2143,85 @@ static void test_recurring_transit_rostered_device_is_not_self(void) {
     int idx = find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT);
     ASSERT(idx >= 0);
     if (idx >= 0) {
-        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_LOW);
+        ASSERT(strstr(s.alerts[idx].detail, "rostered device") != NULL);
         ASSERT(strstr(s.alerts[idx].detail, "self") == NULL);
+        ASSERT_STR(s.alerts[idx].key, "transit:24:41:8c:30:97:b1");
+    }
+    ownership_clear();
+}
+
+/* The roster names one device, not every device: with somebody else on
+ * it, the same passes from an address nobody wrote down are WARN and
+ * carry no tag. Seen red (LOW, tagged) with `rostered` set from
+ * ownership_known_count() instead of the address's own lookup, and the
+ * "self" absence with `self` set the same way. */
+static void test_recurring_transit_unrostered_device_stays_warn(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0x02};
+    ASSERT(ownership_add_known_mac("24:41:8c:30:97:b1"));
+    seed_transit(&s, mac, TRANSIT_RECUR_THRESH, time(NULL));
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+        ASSERT(strstr(s.alerts[idx].detail, "rostered device") == NULL);
+        ASSERT(strstr(s.alerts[idx].detail, "self") == NULL);
+    }
+    ownership_clear();
+}
+
+/* An address on both rosters is the sensor's: "self" is the narrower
+ * claim and wins, and the two tags never appear together. Seen red
+ * ("rostered device", no "self") with the tag testing `rostered` first
+ * and `rostered` no longer excluding a self address. */
+static void test_recurring_transit_both_rosters_is_self(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    ASSERT(ownership_self_add(mac));
+    ASSERT(ownership_add_known_mac("24:41:8c:30:97:a1"));
+    seed_transit(&s, mac, TRANSIT_RECUR_THRESH, time(NULL));
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_LOW);
+        ASSERT(strstr(s.alerts[idx].detail, "self") != NULL);
+        ASSERT(strstr(s.alerts[idx].detail, "rostered device") == NULL);
+    }
+    ownership_clear();
+}
+
+/* The tag and the demotion are not part of the incident's identity: a
+ * device evaluated untagged at WARN and then, once rostered, tagged at
+ * LOW is the same key and the same incident, not a second one beside
+ * the first. (A running sloth cannot gain a --known-mac entry; the
+ * self roster can grow, and the engine path is the same.) Seen red
+ * (two alerts) with the key built as "transit:<mac>:r" when rostered. */
+static void test_recurring_transit_tag_does_not_split_the_incident(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x24,0x41,0x8c,0x30,0x97,0xb1};
+    seed_transit(&s, mac, TRANSIT_RECUR_THRESH, time(NULL));
+    alerts_update(&s);
+    ASSERT_EQ(count_transit_alerts(&s), 1);
+    int idx = find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT);
+    ASSERT(idx >= 0);
+    if (idx >= 0) ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+
+    ASSERT(ownership_add_known_mac("24:41:8c:30:97:b1"));
+    alerts_update(&s);
+    ASSERT_EQ(count_transit_alerts(&s), 1);
+    idx = find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_LOW);
+        ASSERT_STR(s.alerts[idx].key, "transit:24:41:8c:30:97:b1");
+        ASSERT_EQ((int)s.alerts[idx].evaluations, 2);
+        ASSERT(strstr(s.alerts[idx].detail, "rostered device") != NULL);
     }
     ownership_clear();
 }
@@ -2211,7 +2300,10 @@ static void test_blockack_attack_self_device_demoted_and_tagged(void) {
 /* The station whose window is being paralysed is on the operator's
  * roster, not one of the sensor's interfaces: an attack on a device the
  * operator named stays WARN and is not called "self". Seen red with the
- * rule asking ownership_is_own_device(). */
+ * rule asking ownership_is_own_device(). Nor does the roster soften it
+ * the way it does RECURRING_TRANSIT (#183 ruling 2a is that rule's
+ * alone): seen red (LOW, "rostered device") with the transit rule's
+ * roster demotion and tag copied into rule_blockack_attack(). */
 static void test_blockack_attack_rostered_device_is_not_self(void) {
     alerts_clear(); ownership_clear(); ctrl_clear();
     sloth_state_t s; seed_state(&s);
@@ -2229,6 +2321,7 @@ static void test_blockack_attack_rostered_device_is_not_self(void) {
     if (i >= 0) {
         ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
         ASSERT(strstr(s.alerts[i].detail, "self") == NULL);
+        ASSERT(strstr(s.alerts[i].detail, "rostered device") == NULL);
     }
     ctrl_clear(); ownership_clear();
 }
@@ -9851,7 +9944,9 @@ static void test_pm_forge_self_device_on_my_bssid_is_warn_not_crit(void) {
  * attack on the operator's own network. That is the CRIT the rule is
  * for, so the roster neither demotes it nor tags it "self"; only one of
  * the sensor's own interface addresses does. Seen red (WARN, tagged)
- * with the rule asking ownership_is_own_device(). */
+ * with the rule asking ownership_is_own_device(). RECURRING_TRANSIT's
+ * roster demotion (#183 ruling 2a) is not extended here either: seen
+ * red (WARN, "rostered device") with it copied into rule_pm_forge(). */
 static void test_pm_forge_rostered_device_is_not_self(void) {
     alerts_clear(); ownership_clear(); pm_forge_clear(); beacon_clear();
     sloth_state_t s; seed_state(&s);
@@ -9873,6 +9968,7 @@ static void test_pm_forge_rostered_device_is_not_self(void) {
     if (i >= 0) {
         ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
         ASSERT(strstr(s.alerts[i].detail, "self") == NULL);
+        ASSERT(strstr(s.alerts[i].detail, "rostered device") == NULL);
         ASSERT(strstr(s.alerts[i].detail, "YOUR network") != NULL);
     }
     pm_forge_clear(); beacon_clear(); ownership_clear();
@@ -11918,7 +12014,10 @@ void run_alerts_tests(void) {
     TEST_SUITE("alerts: recurring transit (#54)");
     RUN_TEST(test_recurring_transit_fires_at_threshold);
     RUN_TEST(test_recurring_transit_self_device_demoted_and_tagged);
-    RUN_TEST(test_recurring_transit_rostered_device_is_not_self);
+    RUN_TEST(test_recurring_transit_rostered_device_demoted_and_tagged);
+    RUN_TEST(test_recurring_transit_unrostered_device_stays_warn);
+    RUN_TEST(test_recurring_transit_both_rosters_is_self);
+    RUN_TEST(test_recurring_transit_tag_does_not_split_the_incident);
     RUN_TEST(test_two_passes_do_not_fire);
     RUN_TEST(test_stale_passes_do_not_fire);
     RUN_TEST(test_no_transits_no_fire);
