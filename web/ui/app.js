@@ -1330,6 +1330,8 @@
     if (v === "alert") alertView();
     if (v === "records") recordsView();
     if (v === "health") healthView();
+    // The host's status (syshealth.js, its own module): a no-op when not loaded.
+    if (v === "health" && window.SlothSysHealth) SlothSysHealth.show();
     if (DB_VIEWS.indexOf(v) >= 0) dbFresh();
     scopeView(v);
     // A tab's view is kept, for an address that names none; a
@@ -5944,6 +5946,11 @@
     baseline: baseline, bands: bands, sens: function () { return sens; },
     scope: function () { return SCOPE; }, scopeWord: function (s) { return SCOPE_WORD[s]; },
     storeOn: function () { return A.storeOn; }, onOverview: function () { return view === "overview"; } });
+
+  // The Sensor health view's host status (web/ui/syshealth.js), likewise.
+  if (window.SlothSysHealth) SlothSysHealth.init({ fmt: fmt, dur: dur, tok: tok, bands: bands,
+    sens: function () { return sens; }, storeOn: function () { return A.storeOn; },
+    prefGet: prefGet, prefSet: prefSet });
 
   // The Overview is the first view: learn whether there is a store (for
   // the tier), then draw it, and redraw every minute.

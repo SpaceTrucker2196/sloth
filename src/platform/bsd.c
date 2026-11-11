@@ -163,6 +163,7 @@ platform_ops_t g_platform = {
     bsd_init,
     bsd_cleanup,
     bsd_set_channel,
+    NULL, NULL,   /* sys_read, sys_list: no /proc or /sys tree here */
 };
 
 #endif /* PLATFORM_BSD */

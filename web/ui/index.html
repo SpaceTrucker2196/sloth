@@ -24,6 +24,7 @@
 @include allkeys.css
 @include ssid.css
 @include probes.css
+@include syshealth.css
 </style>
 <script>
 @include palette.js
@@ -48,6 +49,7 @@
 @include radar.js
 @include ssid.js
 @include probes.js
+@include syshealth.js
 </script>
 </head>
 <body>
@@ -764,7 +766,32 @@
     </section>
    </div>
    <div id="v-health" hidden>
-    <div class="filterbar"><span>sensor health: capture, monitor, stream, sloth.db</span> <a href="#overview">back to the overview</a></div>
+    <div class="filterbar"><span>sensor health: sources, receivers, the host, capture, monitor, stream, sloth.db</span> <a href="#overview">back to the overview</a></div>
+    <section class="panel" aria-label="sources and receivers">
+      <div class="label">sources <span class="sub" id="sy-note"></span> <span class="dt-tools" id="sy-src-tools"></span></div>
+      <p class="sub" id="sy-empty" hidden></p>
+      <div class="hscroll" id="sy-src-box"><div class="syrow dhead" id="sy-src-thead"></div><div id="sy-src-rows"></div></div>
+      <div class="sub" id="sy-src-cap"></div>
+      <div class="label sy-second">attached receivers <span class="dt-tools" id="sy-hw-tools"></span></div>
+      <div class="hscroll" id="sy-hw-box"><div class="syrow dhead" id="sy-hw-thead"></div><div id="sy-hw-rows"></div></div>
+      <div class="sub" id="sy-hw-cap"></div>
+    </section>
+    <section class="panel" aria-label="the sensor host">
+      <div class="label">the sensor host</div>
+      <div class="kpis" id="sy-tiles"></div>
+      <div class="sub" id="sy-sys-cap"></div>
+    </section>
+    <section class="panel" aria-label="trends">
+      <div class="label">trends <label class="sub">window <select id="sy-win">
+        <option value="3600">1 h</option>
+        <option value="21600">6 h</option>
+        <option value="86400" selected>24 h</option>
+        <option value="604800">7 d</option>
+        <option value="2592000">30 d</option>
+      </select></label></div>
+      <div id="sy-trends"></div>
+      <div class="sub" id="sy-trend-cap"></div>
+    </section>
     <section class="panel">
       <div class="label">health <span class="sub" id="hl-note"></span></div>
       <div id="hl-rows"></div>

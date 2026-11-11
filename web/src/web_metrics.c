@@ -15,6 +15,7 @@
 #include "web_ident.h"
 #include "web_live.h"
 #include "web_scope.h"
+#include "web_sysstat.h"
 
 /* ── keys ────────────────────────────────────────────────────────────── */
 
@@ -140,6 +141,7 @@ int web_key_canon(int metric, const char *s, char *out) {
     }
     if (!strcmp(kk, "rectype")) return web_key_rectype(s, out);
     if (!strcmp(kk, "bleclass")) return web_key_bleclass_text(s, out);
+    if (!strcmp(kk, "sys")) return web_key_sys(s, out);
     return -1;
 }
 
@@ -659,6 +661,9 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
         if (web_jl_get(r, "status")) return;
         if (web_key_ip(web_jl_str(r, "src"), k) != 0) return;
         web_rollup_add(m->ru, WM_HTTP_REQUESTS, k, 1, now);
+    } else if (!strncmp(t, "sys_s", 5) || !strcmp(t, "source_status")) {
+        /* The sensor's host status and sources (web_sysstat.h). */
+        web_sys_metrics(m->ru, r, now);
     } else if (!strcmp(t, "sensor_health")) {
         /* The tick's own drops, libpcap's and the NIC's, on both
          * capture workers: already a delta (sloth's own pcap_stats()

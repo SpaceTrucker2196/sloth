@@ -15,7 +15,13 @@
 #     malloc and sqlite heap, open descriptors, the loaded library
 #     versions, and the seconds-since-last-frame counters: "X";
 #   - the alert pcap path, which names a per-run directory when
-#     --pcap-dir is set.
+#     --pcap-dir is set;
+#   - the two host facts a replay's sys_status still carries
+#     (src/sys_status.h): the free space under the --db path and its
+#     band, and a source's age_s. Everything else about the host is
+#     absent by construction: replay_platform_install() leaves no
+#     /proc or /sys reader, so no CPU, memory, sensor or receiver is
+#     reported and there is no sys_sensor or receiver_hw line to vary.
 #
 # Not "host": that is the HTTP Host header, which is content. Every key
 # here was checked against a real replay's output before it was listed.
@@ -34,7 +40,7 @@ set -eu
 
 TIME_KEYS='ts|ts_sec|first_seen|last_seen|first_detected|last_evaluated|first_observed|last_observed|flood_last|capture_last_frame_ts|monitor_last_frame_ts|btmon_last_frame_ts'
 ID_KEYS='incident_id|event_id'
-HOST_KEYS='rss_kb|rss_hwm_kb|sqlite_mem_kb|sqlite_mem_hwm_kb|malloc_kb|fd_count|libs|capture_stale_secs|monitor_stale_secs|btmon_stale_secs|ble_own_tx_secs|pcap_path'
+HOST_KEYS='rss_kb|rss_hwm_kb|sqlite_mem_kb|sqlite_mem_hwm_kb|malloc_kb|fd_count|libs|capture_stale_secs|monitor_stale_secs|btmon_stale_secs|ble_own_tx_secs|pcap_path|age_s|disk_free_mb|disk_total_mb|disk_band'
 STR='"([^"\\]|\\.)*"'
 
 LC_ALL=C sed -E \

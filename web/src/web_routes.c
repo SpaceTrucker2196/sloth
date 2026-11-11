@@ -940,6 +940,30 @@ static int route_adsb(const web_req_t *rq, const web_health_t *h,
     return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
+/* /api/sys (web_sysstat.h): the sensor host's status, its sources and
+ * the receivers attached to it. sloth's own state, so every scope's. */
+static int route_sys(const web_req_t *rq, const web_health_t *h,
+                     char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = web_sys_route(h->sys, rq->query, h->wall_s, h->now_ms, body, cap, &bl, &status);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
 /* /api/aprs (web_aprs.h): the stations a local Dire Wolf decodes. Its
  * receiver is a passive radio, as the decoder's SDR for ADS-B, so
  * Monitor's and Hybrid's; under Local the query is checked, then the
@@ -1555,6 +1579,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_adsb(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/aprs"))
             return route_aprs(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/sys"))
+            return route_sys(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/radar"))
             return route_radar(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/ble"))

@@ -13,6 +13,7 @@
 #include "platform/linux_tcpdiag.h"
 #include "platform/linux_neigh.h"
 #include "sloth_clock.h"
+#include "sys_status.h"
 
 /* ── Rate tracking across polls ─────────────────────────── */
 
@@ -193,6 +194,8 @@ platform_ops_t g_platform = {
     linux_init,
     linux_cleanup,
     linux_wifi_set_channel,
+    sys_io_read_file,   /* src/sys_status.c: regular files only */
+    sys_io_list_dir,
 };
 
 #endif /* PLATFORM_LINUX */

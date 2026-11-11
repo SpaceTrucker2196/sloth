@@ -117,6 +117,29 @@ const web_metric_t web_metric_defs[WM_COUNT] = {
     [WM_BLE_CLASS_ADV] = { "ble.class.adv", WEB_MK_COUNTER, WEB_KC_BLECLASS,
                            "bleclass", "ble_device adv_count delta per device "
                            "class (sampled rows left out)", "reports" },
+    [WM_SYS_CPU] = { "sys.cpu", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                     "sys_status cpu_pct (the sensor host's busy share, all "
+                     "CPUs, iowait apart)", "%" },
+    [WM_SYS_MEM_USED] = { "sys.mem_used", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                          "sys_status mem_total_kb minus mem_avail_kb, as a "
+                          "share of the total", "%" },
+    [WM_SYS_RSS] = { "sys.rss", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                     "sys_status rss_kb (sloth's own resident set)", "kB" },
+    [WM_SYS_UNDERVOLT] = { "sys.undervolt", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                           "sys_status undervolt (0 or 1; a bucket's max says "
+                           "whether the alarm was set in it)", "0/1" },
+    [WM_SYS_TEMP] = { "sys.temp", WEB_MK_GAUGE, WEB_KC_SYS, "sys",
+                      "sys_sensor c by id (class temp); key \"hottest\" is "
+                      "sys_status temp_max_c", "C" },
+    [WM_SYS_VOLT] = { "sys.volt", WEB_MK_GAUGE, WEB_KC_SYS, "sys",
+                      "sys_sensor v by id (class volt and power)", "V" },
+    [WM_SRC_RATE] = { "source.rate", WEB_MK_GAUGE, WEB_KC_SYS, "sys",
+                      "source_status rate by name (the source's own unit per "
+                      "second)", "/s" },
+    [WM_SRC_UP] = { "source.up", WEB_MK_GAUGE, WEB_KC_SYS, "sys",
+                    "source_status state by name: 1 ok, 0 stale or down; not "
+                    "sampled while not_configured (a bucket's min says whether "
+                    "it was up throughout)", "0/1" },
 };
 
 int web_metric_is_rssi(int metric) {
@@ -127,8 +150,8 @@ int web_metric_is_rssi(int metric) {
 static const int TIER_STEP[WEB_TIER_COUNT] = { WEB_FINE_S, WEB_MINUTE_S, WEB_HOUR_S };
 static const char *const TIER_NAME[WEB_TIER_COUNT] = { "fine", "minute", "hour" };
 static const char *const KC_NAME[WEB_KC_COUNT] = {
-    "global", "device", "host", "iface", "channel", "alert", "rectype", "bleclass",
-    "ble"
+    "global", "device", "host", "iface", "channel", "alert", "rectype", "sys",
+    "bleclass", "ble"
 };
 
 int web_metric_find(const char *name) {
@@ -443,7 +466,7 @@ int web_rollup_init(web_rollup_t *ru, int max_keys, int store_on,
     pthread_mutex_init(&ru->mu, NULL);
     const int caps[WEB_KC_COUNT] = {
         1, max_keys, max_keys / 2, WEB_IFACE_KEYS, WEB_CHANNEL_KEYS,
-        WEB_ALERT_KEYS, WEB_RECTYPE_KEYS, WEB_BLECLASS_KEYS, max_keys
+        WEB_ALERT_KEYS, WEB_RECTYPE_KEYS, WEB_SYS_KEYS, WEB_BLECLASS_KEYS, max_keys
     };
     int bad = 0;
     size_t series_max = 0;

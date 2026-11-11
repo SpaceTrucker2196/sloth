@@ -502,6 +502,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/pcap/frames?id=&n=&offset=` | `200` JSON: capture `n` of alert `id` (an index into `/api/alert`'s `captures`; a name or path is never taken), its SHA-256 recomputed against the manifest (`hash.says`: `hash verified`, `HASH MISMATCH` or `no manifest entry`), its file header, and 24 decoded frames from `offset` (0..4095) with each one's hex dump; `400` for a parameter that does not pass; `404` `no_such_alert`, `no_such_capture`, `no_pcap_dir`, `not_found`; `403` `not_regular`, `withheld_evidence_pcap` (an evidence pcap without `--web-serve-evidence-pcap`); `413` `too_large` (over 16 MiB); `415` `pcapng_not_supported` or `not_pcap` with a `message` |
    | `GET /api/pcap?id=&n=` | `200` the same file's bytes, `Content-Type: application/vnd.tcpdump.pcap`, `Content-Disposition: attachment; filename="<its name>"`, `X-Sloth-SHA256: verified`, `mismatch` or `no_manifest_entry` (the check of the bytes served), `Cache-Control: no-store`; the errors as above, as JSON |
    | `GET /api/bundle?kind=device\|alert\|lookup\|ble\|platform&id=` | `200` JSON, a detail view's whole answer for its "copy JSON" button ([Copy JSON: the analysis bundle](#copy-json-the-analysis-bundle)); `400` for a kind, an id or a parameter that does not pass; `404` and `503` as the route it splices (`not_found` for a BLE address no sensor heard, `no_such_platform`, `no_store`); `413` `bundle_too_large` |
+   | `GET /api/sys` | `200` JSON, the Sensor health view's host status ([Sensor health](#sensor-health)): the newest `sys_status` (CPU, load, memory, uptime, sloth's RSS, the output filesystem, the hottest temperature, the under-voltage alarm; `null` for a figure the host does not have), its `sys_sensor` rows, every `source_status` (all of sloth's sources, configured or not) and every `receiver_hw` (the attached receivers); `"seen":false` before the first batch or with no live stream; `"stale":true` past three of the sensor's own intervals. The same answer under every scope. No parameter: any is `400` |
    | `GET /api/gnss?limit=` | `200` JSON, the GNSS tab ([GNSS](#gnss)): the `sensor_health` gnss block, the newest `gnss_fix` and `gnss_sky`, every satellite row with its last 16 `(ts, C/N0)` points sorted by C/N0, and the panel's counts; `scope_note` says the receiver is the host's own, so the answer is the same under every scope; `400` for an unknown parameter or a `limit` outside 1..64; `503` with no panel |
    | `GET /api/adsb?limit=` | `200` JSON, the ADS-B tab ([ADS-B](#ads-b)): the `sensor_health` adsb block, every aircraft row with its kept track (its last 32 positions, `[ts, lat, lon, alt]`), an emergency first, then live before gone, then the most recently heard, each row's `alert` (the open `ADSB_EMERGENCY` incident naming its address, `{"id","sev"}`, else `null`), and the panel's counts (`total`, `live`, `with_pos`, `emergency`); Monitor's and Hybrid's, Local answers `out_of_scope` with the query still checked; `400` for an unknown parameter or a `limit` outside 1..512; `503` with no panel |
    | `GET /api/gnss/seen?days=&limit=` | `200` JSON from sloth.db's `gnss_sightings` (needs `--sloth-db`): one row per satellite seen in the last `days` (1..400, default 1), most recently seen first, at most `limit` (1..160): first and last seen, records, `used_pct`, `cn0_max`, `cn0_mean`, `el_max`; `"have":false` from a file older than v10; every scope's; `503` `no_sloth_db` without one |
@@ -624,10 +625,10 @@ the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
    "queue_dropped":0,"folded":0,"channel_evictions":0,"store_rows":2210,
    "store_dropped_expired":0,"store_dropped_cap":0},
  "retain_days":30,
- "series_keys":{"global":1,"device":30,"host":20,"iface":2,"channel":3,"alert":0,"rectype":9,"bleclass":3,"ble":40},
- "series_key_caps":{"global":1,"device":512,"host":256,"iface":32,"channel":64,"alert":128,"rectype":64,"bleclass":8,"ble":512},
- "key_evictions":{"global":0,"device":0,"host":0,"iface":0,"channel":0,"alert":0,"rectype":0,"bleclass":0,"ble":0},
- "key_returns":{"global":0,"device":0,"host":0,"iface":0,"channel":0,"alert":0,"rectype":0,"bleclass":0,"ble":0},
+ "series_keys":{"global":1,"device":30,"host":20,"iface":2,"channel":3,"alert":0,"rectype":9,"sys":12,"bleclass":3,"ble":40},
+ "series_key_caps":{"global":1,"device":512,"host":256,"iface":32,"channel":64,"alert":128,"rectype":80,"sys":64,"bleclass":8,"ble":512},
+ "key_evictions":{"global":0,"device":0,"host":0,"iface":0,"channel":0,"alert":0,"rectype":0,"sys":0,"bleclass":0,"ble":0},
+ "key_returns":{"global":0,"device":0,"host":0,"iface":0,"channel":0,"alert":0,"rectype":0,"sys":0,"bleclass":0,"ble":0},
  "series":117,"samples":221385,"ring_rows":42120,"queue_rows":0,
  "queue_cap":32768,"queue_dropped":0,"churn_dropped":0,"highwater_evictions":0,
  "values_clamped":0,
@@ -1186,6 +1187,135 @@ by `test_radar.c`. It takes
 no parameter (any is `400`), Local answers `out_of_scope` with the query
 checked, and a half whose table is not attached is `null`.
 
+## Sensor health
+
+The `#health` view (the sensor health tile's) leads with three panels
+about the sensor's own machine, fed by four record types sloth writes
+once a minute since JSONL 1.1.0 (`sys_status`, `sys_sensor`,
+`source_status`, `receiver_hw`;
+[`docs/wiki/jsonl-schema.md`](../docs/wiki/jsonl-schema.md), *Host
+status and the source inventory*). `web/src/web_sysstat.c` keeps the
+newest batch in memory and answers `/api/sys`; the page is
+`web/ui/syshealth.js` (`window.SlothSysHealth`, containers `sy-*`), two
+hooks in `app.js`. The older panel (capture, monitor, Bluetooth, the
+stream, sloth.db, slothweb.db) is unchanged below them.
+
+**Sources and receivers.** Two tables, each the page's one DataTable.
+*Sources* lists every source sloth can read, configured or not: the
+IP capture, the monitor radio, the HCI monitor channel, an Ubertooth
+stream, the GNSS receiver, the ADS-B and APRS decoders. Each row is its
+state, as a mark **and** a word (`● ok`, `◐ stale`, `✕ down`,
+`· not configured`; R10: never colour alone), its kind, its endpoint
+(or `not configured (--flag)`), the receiver it runs on, when it last
+delivered, its rate in its own unit, its errors and the reader's own
+word for what is wrong. *Attached receivers* lists the hardware sloth
+found in sysfs: the SDRs, GNSS receivers, serial bridges, Wi-Fi
+adapters and Bluetooth controllers, each with its USB or PCI ID, the
+port it is on, its driver, the interfaces under it, which of sloth's
+sources uses it, and what the device says it is.
+
+Two things the tables do not claim. A source is tied to a receiver
+**only where sysfs ties them** (an interface or a tty under the
+device): an RTL-SDR with `--adsb beast:127.0.0.1:30005` configured
+reads `no source of sloth's` on one row and `not tied to a receiver` on
+the other, because the dongle is readsb's and sloth sees a TCP
+endpoint. And **no serial number** is shown, because sloth does not
+read one.
+
+**The sensor host.** A tile per figure: CPU (with iowait and its band),
+load, memory, sloth's own RSS, the free space under the output path,
+uptime, the hottest temperature, the under-voltage alarm, then one per
+temperature sensor, voltage rail and power supply. A reading the host
+does not have is `-` and the words `not reported by this host`: a VM
+has no hwmon and a desktop no under-voltage alarm, and neither is a
+zero. A band is its word (`band: warm`), not a colour.
+
+**Trends.** One row per series, G1 over its hour-of-week band with the
+last value, the band's words and a trend word; a source's up/down and
+the under-voltage alarm are G5 strips, 96 cells over the window
+(`glyph.g5()`, called; the glyph is unchanged). Rows: CPU and memory
+(0 to 100 %, one fixed scale, so the two compare), sloth's RSS, the
+hottest temperature and each sensor (one shared scale, R3), each
+voltage and the alarm, capture drops (`sensor.drops`) and records per
+second (`records.total`), and for each configured source its up/down
+strip and its rate (each on its own scale: the units differ, and the
+caption says so). The window is the `sy-win` control: 1 h, 6 h, **24 h**
+(default), 7 d, 30 d, kept per browser. Up to 24 h reads the minute tier
+(the fine tier with no store); 7 d and 30 d read the hour tier and need
+the store, and say so without one.
+
+The trend word follows one stated rule (`trendOf()`): the median of the
+last third of the samples against the median of the first third,
+`rising` or `falling` when they differ by more than the series' own
+spread (1.4826 × the median absolute deviation, a robust standard
+deviation) **and** by more than the smallest change worth a word in
+that unit (1 °C, 5 % CPU, 2 % memory, 0.05 V, 1 MB of RSS), `steady`
+otherwise. Medians, so one spike moves nothing. With fewer than 12
+samples, or samples covering under half the window, the word is
+`warming`, as a baseline's is: no trend is claimed. A strip's cell is
+*up* only when every bucket in it was up throughout (the bucket's
+minimum), so an outage is never averaged away; the alarm's cell is
+*set* when it was set at any time (the maximum); a cell with no report
+is a gap, not a "down".
+
+**Honest states.** Before the first `sys_status`, the panel says the
+sensor has not reported its host status and why that can be: a sloth
+older than JSONL 1.1.0, or **slothweb reading a copied sloth.db with no
+live stream** — sloth.db holds none of this, so there is nothing to
+show (the trends still draw whatever the store kept from an earlier
+stream). A sensor that stopped reporting shows its age, and `STALE`
+past three of its own intervals, with the last figures marked stale
+rather than removed. The view is every scope's, as the health view
+always was: `/api/sys` answers the same under Local and Monitor, and
+the series are read as Hybrid's whatever the page's scope is (they are
+tagged to no radio), so this module fetches them itself rather than
+through the page's scoped `getJSON`.
+
+**`/api/sys`** takes no parameter:
+
+```
+{"now":1800000065,"scope_note":"every scope: sloth's own state","seen":true,
+ "ts":1800000060,"age_s":4,"seq":2,"interval_s":60,"stale":false,
+ "system":{"cpu_pct":15.0,"cpu_iowait_pct":10.0,"cpu_band":"low","load1":0.20,...,
+           "temp_max_c":51.0,"temp_max_id":"hwmon3/temp1","temp_band":"ok","undervolt":0},
+ "sensors":[{"class":"temp","id":"thermal_zone0","key":"thermal_zone0","label":"cpu-thermal",
+             "c":48.3,"alarm":null,"capacity":null,"status":null},...],
+ "sources":[{"name":"monitor","kind":"wifi-monitor","state":"ok","endpoint":"wlan1mon",
+             "hw":"usb:1-1.4","desc":"Realtek RTL8812AU 802.11ac","driver":"rtl88XXau",
+             "age_s":0,"age_band":"fresh","unit":"frames","count":184220,"rate":51.30,...},...],
+ "receivers":[{"key":"usb:1-1.2","kind":"sdr","bus":"usb","id":"0bda:2838","known":1,...},...],
+ "records":11,"rejected":0,"overflow":0}
+```
+
+A figure the sensor did not send is `null`; an empty string is `null`
+too. `age_s` is slothweb's monotonic clock against itself (when the
+batch arrived), never the record's `ts` against this host's wall clock.
+`key` is the sensor's series key. Bounds: 36 sensors, 8 sources, 16
+receivers (sloth sends at most 36, 7 and 16; more are counted in
+`overflow`), a record that does not pass its checks is counted in
+`rejected`, and every string is kept only up to what it costs to write
+(a byte the JSON writer escapes to six costs six), so the answer at its
+worst — every slot full of `<` — is 17.8 KB of the 63 KB the buffer
+holds (`test_sysstat.c` builds it and prints the figure).
+
+**Series and cost.** Eight metrics ([Metrics](#metrics)): `sys.cpu`,
+`sys.mem_used`, `sys.rss`, `sys.undervolt` (global) and `sys.temp`,
+`sys.volt`, `source.rate`, `source.up` (keyed, the `sys` class, 64
+keys). One sample a minute each. They are rows in the store's existing
+`series` / `fine` / `minute` / `hour` tables under their metric names:
+**no table, no column and no store version change**. A Raspberry Pi
+with two temperature sensors, the under-voltage alarm and four
+configured sources is 15 series, each a row a minute in the fine tier
+(24 h) and the minute tier (30 d) and one an hour for 400 days. None of the eight is scored by the
+anomaly engine (the global ones as every global series, the keyed ones
+by class): a board warming up is not an intrusion. In memory, each
+metric adds its open buckets to every key slot of every class (204
+bytes a slot, measured): eight metrics are 2.58 MB over the 1,657 slots
+of the default `--web-max-keys 512`, and the new class's own 64 slots
+0.61 MB; at `--web-max-keys 8192` the eight are 32.5 MB. The record-type
+class went from 64 to 80 keys with the four new types (0.15 MB). That is the
+rollup's existing cost per metric, not a new one.
+
 ## The data socket (M1)
 
 One thread (`web/src/web_ingest.c`) connects to `--socket`, reads, and
@@ -1280,6 +1410,9 @@ docs/web-ui-spec.md §5.1, and every one of its metrics has a source
 | `gnss.sats_used`, `gnss.hdop`, `gnss.time_off_ms`, `gnss.cn0_mean` | gauge | none | the host's own GNSS receiver ([GNSS](#gnss)): `gnss_fix` `usat` (when ≥ 0), `hdop` (when > 0) and `time_off_ms` (when present), `gnss_sky` `cn0_mean` (when > 0). The records are change-only (a band change or the 300 s heartbeat), so each series is as sparse as its record; every scope's, as `sensor.drops` is; not scored by the anomaly engine |
 | `ble.class.advertisers` | gauge | BLE class | the BLE Devices view's class rows ([BLE](#ble), `web/src/web_bledev.h`): once a snapshot pass (at the batch's first `iface` record), the distinct addresses whose rows in the BLE tables were heard in the last 20 s, per device class (`b:phone`, `b:wear`, `b:tag`, `b:hid`, `b:bcn`, `b:iot`, `b:unk`), anonymous rows (`addr_type` 255) one advertiser between them in `b:unk`, as the class mix draws them; a class with none is not sampled |
 | `ble.class.adv` | counter, reports | BLE class | `ble_device` `adv_count` deltas per (address, address type, sensor), by the record's class, an anonymous row's (`addr_type` 255) included, always under `b:unk`; a one-channel sample (`sampled` 1) left out. HCI advertising reports, one a scan rather than a frame when the controller filters duplicates |
+| `sys.cpu`, `sys.mem_used`, `sys.rss`, `sys.undervolt` | gauge; %, %, kB, 0/1 | none | the sensor host's own state ([Sensor health](#sensor-health)), one sample a minute: `sys_status` `cpu_pct`; `mem_total_kb` less `mem_avail_kb` as a share of the total; `rss_kb`; `undervolt`, whose bucket maximum says whether the alarm was set in it. A member the record does not carry, or one out of range, is not sampled: an absent reading is a gap, never a 0. Every scope's; not scored |
+| `sys.temp`, `sys.volt` | gauge; C, V | sensor (`sys`) | `sys_sensor` `c` by `id` (class `temp`) and `v` by `id` (classes `volt` and `power`); key `hottest` of `sys.temp` is `sys_status` `temp_max_c`. An alarm-only rail has no `sys.volt` series |
+| `source.rate`, `source.up` | gauge; /s, 0/1 | source (`sys`) | `source_status` `rate` and `state` by `name`: 1 for `ok`, 0 for `stale` or `down`, nothing while `not_configured`. A bucket's minimum says whether the source was up throughout it, which is what the page's strip reads |
 | `sensor.drops` | counter | none | §7: `sensor_health` `capture_drop_delta` + `capture_ifdrop_delta` + `monitor_drop_delta` + `monitor_ifdrop_delta`, every tick, including the 0 of a healthy one -- a flat line, not a gap |
 | `rf.rssi.sta`, `rf.rssi.bssid`, `rf.rssi.ble` | gauge, dBm | MAC | the signal sloth last heard from the emitter, one sample per record that carries one: `probe_client` `signal_dbm` by `mac`; `beacon` and `assoc` `signal_dbm` by `bssid` (an assoc row's signal is the AP's frames, the (re)association response and EAPOL M1/M3, never the station's); `ble_device` `rssi` by `addr` with `has_rssi` 1, every receiver and address type of that address in one series. Sampled only when the record's `last_seen` is within 10 s of its `ts`, so a row sloth re-sends after the emitter went quiet adds nothing; a Wi-Fi 0 (sloth's "no signal") and anything outside -127..-1 dBm (BLE -127..+20) is not a reading. Since 2026-11-02 sloth re-sends `ble_device` once a 10 s slot while it keeps hearing the advertiser (otherwise on a change or the 300 s heartbeat), so a heard advertiser's series has a point a fine bucket. Owner ruling 2026-11-02 on [`docs/web-frrs-spec.md`](../docs/web-frrs-spec.md) Q7. Each bucket is the mean of what one receiver's driver reported, with min and max: a sloth gauge, not a calibrated measurement. The Wi-Fi pair are the device class's keys, so `--web-max-keys` bounds them with the same eviction; `rf.rssi.ble` is the BLE class's (#177), its own cap at the same N, so rotating advertiser addresses evict each other and never a Wi-Fi key; Monitor's scope; not scored by the anomaly engine |
 
@@ -1291,7 +1424,11 @@ interface name is 1..15 bytes of `[A-Za-z0-9_.:@-]`, a channel is
 type is `ty` 0..9999, a record type is 1..32 bytes of `[a-z0-9_.]` (the
 same charset `web_live.c`'s own `type_ok()` holds it to), a BLE class one
 of the seven slugs (`bleclass`, at most 8 keys, never evicted by the
-others, not scored by the anomaly engine). A record whose
+others, not scored by the anomaly engine), a sensor or source name
+1..47 bytes of `[a-z0-9_.-]` after lower-casing and `/` to `.`, so
+`hwmon1/temp2` is `hwmon1.temp2` (`sys`, at most 64 keys: sloth sends
+36 sensors and 7 sources at most; a class of its own, established from
+the first sample as the interface class is, not scored). A record whose
 key does not pass is not counted, so no string a peer wrote is ever a
 key as it was sent. Gauges take sloth's `%.2f` reals.
 
@@ -3848,7 +3985,7 @@ document's own bytes: the one `.href =` on the page, and the only
 | devices | `#devices?q=pass:latest`: sloth.db's devices whose MAC was in sloth's latest pass on the stream (`pass:latest`, a query term) | the stream's pass; the note says how many of them sloth.db holds |
 | open alerts | `#alerts?state=open` | the rows |
 | records/s | `#records`: records by type over the same five seconds, and the ticker of one type or all | the sum of the per-type rates (`/api/live`'s `types_rate`) |
-| sensor health | `#health`: capture, monitor, the stream, sloth.db and its freshness | the state word at its top |
+| sensor health | `#health`: every source and attached receiver, the sensor host's status and its trends ([Sensor health](#sensor-health)), then capture, monitor, the stream, sloth.db and its freshness | the state word of the older panel |
 
 Each opens with the filter it applies named in a bar above it, and a
 way back. `test_alerts.c` asserts the counts on the demo's own data
@@ -5917,6 +6054,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_rf.c` | the signal meter's data (`web_rf.h`): `radio`, the band the latest record was heard on, for every channel edge, a 6 GHz channel only by its `channel_source`, `null` with no channel; the hour's window; `web_rollup_trail()` merging closed and open fine buckets per cell, another key's and an earlier bucket left out; an AP's series first, a station's otherwise, the other when the first is empty, and no trail under Local or without a rollup; the member with the beacon's 60 s range or the last cell's samples as the whisker (the beacon's only when it is in the last value's minute) and sloth's band and trend from the FRRS ledger's latest beacon or probe_client; a record's word that is not sloth's, and a range out of order, refused; `WEB_RF_JSON_MAX` holding the longest member |
 | `test_parity.c` | the AKM names (src/rsn_ie.c, linked into the test alone), the downgrade bits (`WPA_DG_*`) and DEAUTH_FLOOD's type held to sloth's own; the BLE view's vocabularies (the PDU, band, trend, glyph and P_tx-source words, the finding kinds, the alert names, the TUI's address-type letters and its legend line) held to `src/` as text |
 | `test_ble.c` | the BLE view ([BLE](#ble)) from hand-built `ble_device`, `ble_alert`, `alert.resolve` and `sensor_health` lines in the emitter's exact shape: two rows for one address heard by two sensors, a heartbeat updating in place (the sticky masks OR-ed, the earlier first_seen kept, the rate from two points), the hostile strings (a control byte escaped and flagged, an over-long name cut back to a code-point boundary, a category that is not sloth's slug dropped and counted, an unknown iface `other`, a bad record kept nowhere), the record's absent values null and an anonymous all-zero address a row, the estimate's four fields with the TUI's cell and description, the LRU at 1025 rows evicting the oldest, the findings (standing, the resolve of the key, the time-out, the day's listing, the key never rendered, a `hid_oui` finding under its address), the `sensor_health` block and its rotation bands; the two metrics only while a Bluetooth source is configured; every route through the table (the sort words and both directions, each refusal a word never echoing the value, the search, paging, HEAD, Monitor and Hybrid serving, Local `out_of_scope` with the query still checked, `/api/live`'s `ble` member and `/api/health`'s counters, the M0 shape without the tables, the BLE incident typed and Monitor's on the Alerts page); the page's lines pinned as served; with SQLite the store round trip through the store thread's flush, a changed row upserted once, the seed on reopen with the name's display form and the estimate, every field of a seeded finding (a flood's fresh count, rate, window and citation, a `hid_oui` finding's address and the drawer's match on it), a resolve on a seeded finding updating its stored row in place, a seeded row's presence strip shifting on with fresh traffic, retention at compaction, a failed write (a trigger aborting it mid-transaction) rolled back whole and its batch written by the next flush, the row caps (the oldest gone, a flagged row kept past newer unflagged ones, counted) and a non-canonical stored address not seeded; every sort word in both directions with an empty key last (`mfr`'s three tiers fixed in either direction); a name cut back to a code-point boundary; `ble.devices` with an Ubertooth alone and `ble.adv_rate` only with the host stream; `/api/live`'s `ble` member with every string at its cut and escaped six-fold; without a store the tables still ingest and serve. Each absence seen red under a named mutation |
+| `test_sysstat.c` | the Sensor health view's host status ([Sensor health](#sensor-health)): sloth's four records in the emitter's exact shape through `/api/sys` (a figure the host lacks `null`, a not-configured source listed, a batch replacing the last, the age on the monotonic clock, the same answer under every scope with one `scope` member), refusals and ranges on hostile lines, the worst-case answer inside the buffer, the eight series through `web_metrics_record()` (absent or out of range not sampled, an outage in a bucket's minimum), the `sys` key kind; and the page's words as a C port of `syshealth.js`'s `trendOf()` and `stripOf()` with the JS pinned out of the served page. Each absence assertion seen red under a named mutation |
 | `test_bledev.c` | the BLE Devices waterfall ([BLE](#ble)): each class rule on hand-built fields (SIG Appearance values, Continuity types, the registry's UUIDs) and each left-out shape landing in Unknown, the first-match order and the table's match numbers, the slugs (never a channel key, the only `bleclass` keys), a class from a record line; the proximity edges against `src/rf_distance.h` and `.c` read in the test; the page's class table and grade pinned against the C ones, the panels inside `v-ble`, no `innerHTML` in the module; the mix engine taking kinds 3 and 4 (an advertiser, anonymous advertising) apart and refusing 5, a sized ring; the class mix fed from `ble_device` lines (a baseline, deltas, a reconnect, a row born while listening, a sampled row, one address on two sensors kept apart); the advertisers gauge once a pass, an address on two sensors once; the one anonymous row sloth can send (the host stream's, its first mfr pair kept, a keyboard's HID bit OR-ed in) credited to Unknown alone as one entry and one advertiser while its fields read Phones then Input, named rows and an Ubertooth's uncredited samples beside it, each class's advertisers, drawn transmitters, reports and drawn frames agreeing, no series under the zero address; the anonymous entry through both routes (one `anonymous` tx entry in `b:unk`, its kind word the one `bledev.js` tests, no proximity row, never nearest, `anonymous_heard`, the strip counting it once) and under a read cut (no slot taken: 256 read); five thousand fresh BLE addresses leaving a Wi-Fi row's high-water mark (and its true delta) in place; both routes from memory (display order, the tx entries named from the tables or by address alone, the strip's facts, every refusal), the proximity rows' order, means and window, a tracker heard before three hundred newer addresses still read and first, each row graded with its announced power (extended header, TX Power Level, else 0 dBm) and nearest by the margin; `now`'s sensor facts; both routes 503 `no_time_series` in either scope and the mix 503 `no_ble_mix`; Local `out_of_scope` with the query checked and a long query a 400; with SQLite the WiFi and BLE mixes in one `chmix` at the same tier and t, each namespace reading only its own, each route drawing only its own, a kind-4 anonymous row read back and drawn, and the file still v7. Each absence seen red under a named mutation |
 | `test_radar.c` | the Radar tab ([Radar](#radar)): `/api/radar` from seeded `ble_device`, `beacon` and `probe_client` lines (every row in total, the banded rows nearest-RSSI first, a reading without an estimate in `none` and nowhere else, a word that is not sloth's no band, both halves `null` without their tables), the eight-per-band cap on twelve scrambled rows, rows without a reading sorting last, Monitor and Hybrid against Local's `out_of_scope` with the query checked, `400` for any parameter, the body under 8 KB with every BLE row held and under 10 KB with both censuses full, the name cut on a code-point boundary; the page: the tab between APRS and TACDB, the hook and init lines, every container id looked up, no `scoped-out` toggle and the comment saying why, no control in the view, the projection functions whole (`rn`, `geo`, `place`, `project`, `ringDist`) with no divide by depth, the painters whole, the ring dash and alpha, no gradient or shadow, the kept camera's three prefs validated and cleared, no kept selection, one `requestAnimationFrame`, the Local and estimate sentences verbatim, the centre rule, every fetch through the lent scoped `getJSON`, the three `select()` exports whole. Each absence seen red under a named mutation |
 | `test_allkeys.c` | the Activity graph's `keys: all`: `/api/series/all` (every parameter and reason word, the cell arithmetic, the answer's shape for a gauge, a counter, presence and a global metric, an empty cell absent, keys in byte order, 128 to an answer and `after` paging with no key twice, `total` on the first answer only, a full answer stopping whole, the scopes by metric and by key, the route's `400` and `503`), every key walked (300 where `/api/keys` lists 256, the oldest among them; the rollup's and the store's, a store key with no bucket in the window left out), an answer stopping at its time and still answering one key, the fullest answer and a walk of 8,192 keys from memory and from the store timed against the 250 ms request budget and printed; and `web/ui/allkeys.js`: its pure half ported to C line for line and pinned verbatim (the legend's order, the `N of M keys` and `loading N of M keys` words, the tier per window, the cells a key is read in, the legend's filter, the multi-key mark list: one token a key, the shared scale, gaps, dots under five points, the focus row last and the rest `--faint` (never `--rule`), the rows past 256 folded into one range a cell, the band only for a picked key, the top five end labels pushed apart, greyscale; the frame; the presence strips), the key colours pinned against `ip_color_index()`, and the other half by whole functions, with no `innerHTML`, no `setAttribute` and one `--signal`. Each absence seen red under a named mutation |
@@ -6036,8 +6174,10 @@ web/
                    the sensor was, gnss.js and gnss.css: the GPS Sat
                    tab, bledev.js and bledev.css: the BLE Devices
                    waterfall, radar.js and radar.css: the Radar tab's
-                   dome, ssid.js and ssid.css: an SSID's detail, and
-                   probes.js and probes.css: the Probes tab)
+                   dome, ssid.js and ssid.css: an SSID's detail,
+                   probes.js and probes.css: the Probes tab, and
+                   syshealth.js and syshealth.css: the Sensor
+                   health view's host status)
   tools/
     embed.c        ui/ -> build/web/web_assets.c (build time only)
     oui_gen.c      web/data/*.csv -> build/web/web_oui_table.c (build time only)

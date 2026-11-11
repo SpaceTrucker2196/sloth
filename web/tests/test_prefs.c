@@ -133,6 +133,7 @@ static const char *const KEPT_ELSEWHERE[] = {
     "tc-q",       /* frrs.tacdb.q, by frrs.js */
     /* probes.<id>, by probes.js: put back only as one of its options */
     "pr-days", "pr-min", "pr-cl-sort", "pr-ss-sort",
+    "sy-win",     /* ctl.sy-win, by syshealth.js, through the lent prefGet/prefSet */
 };
 static const char *const NOT_KEPT[] = {
     "q-recipe",   /* an action: it fills the SQL box, whose text is kept */

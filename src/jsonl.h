@@ -136,6 +136,22 @@ void jsonl_emit_aprs          (const sloth_state_t *s);
  * counters deliberately are not. */
 void jsonl_emit_sensor_health (const sloth_state_t *s);
 
+/* One flat record built from a field list, for a module that shapes
+ * its own records (src/sys_status.c: sys_status, sys_sensor,
+ * source_status, receiver_hw). Strings go through the same escaping as
+ * every other record's; JSONL_F_FIXED is written with `dp` decimals and
+ * no locale. A no-op with no sink open. */
+enum { JSONL_F_STR = 0, JSONL_F_INT, JSONL_F_FIXED };
+typedef struct {
+    const char *key;
+    int         kind;      /* JSONL_F_* */
+    const char *s;
+    long long   i;
+    double      d;
+    int         dp;
+} jsonl_field_t;
+void jsonl_emit_fields(const char *type, time_t ts, const jsonl_field_t *f, int n);
+
 /* Umbrella — calls every per-view snapshot emitter. Driven once per
  * poll from main.c after the underlying tables have been refreshed.
  * Connections and twin_episode are emitted separately because they

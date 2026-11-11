@@ -795,6 +795,7 @@ static void sample_every_key(long long now, size_t *series) {
                 : kc == WEB_KC_IFACE ? WEB_IFACE_KEYS
                 : kc == WEB_KC_CHANNEL ? WEB_CHANNEL_KEYS
                 : kc == WEB_KC_RECTYPE ? WEB_RECTYPE_KEYS
+                : kc == WEB_KC_SYS ? WEB_SYS_KEYS
                 : kc == WEB_KC_BLECLASS ? WEB_BLECLASS_KEYS : WEB_ALERT_KEYS;
         for (int i = 0; i < cap; i++) {
             switch (kc) {

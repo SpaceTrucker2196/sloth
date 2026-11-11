@@ -28,6 +28,7 @@ platform_ops_t g_platform = {
     stub_init,
     stub_cleanup,
     stub_set_channel,
+    NULL, NULL,   /* sys_read, sys_list: no /proc or /sys tree here */
 };
 
 #endif /* PLATFORM_STUB */

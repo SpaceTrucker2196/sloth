@@ -263,6 +263,7 @@ static const char *const POLL_TYPES[] = {
     "ndp_ra", "smb_session", "kerb_event", "ldap_event", "bgp_session",
     "ssh_flow", "rdp_flow", "snmp_flow", "mqtt_flow", "ble_device",
     "ble_alert", "gnss_fix", "gnss_sky", "gnss_sat", "adsb_aircraft", "aprs_packet", "aprs_station",
+    "sys_status", "sys_sensor", "source_status", "receiver_hw",
     "sensor_health", NULL
 };
 

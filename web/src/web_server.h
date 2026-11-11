@@ -32,6 +32,7 @@
 #include "web_tsdb.h"
 #include "web_adsb.h"
 #include "web_aprs.h"
+#include "web_sysstat.h"
 #include "web_gnss.h"
 
 #define WEB_MAX_CONNS 32
@@ -132,6 +133,7 @@ typedef struct {
     web_gnss_t     *gnss;     /* NULL: no GNSS panel; set before run */
     web_adsb_t     *adsb;     /* NULL: no ADS-B panel; set before run */
     web_aprs_t     *aprs;     /* NULL: no APRS panel; set before run */
+    web_sys_t      *sys;      /* NULL: no host status; set before run */
     int             sql_conn; /* the slot waiting on the box, or -1 */
     int             import_conn;  /* the slot reading an import, or -1 */
     unsigned long long rec_sent;  /* newest ticker record broadcast */
@@ -183,6 +185,8 @@ void     web_server_set_gnss(web_server_t *s, web_gnss_t *g);
 void     web_server_set_adsb(web_server_t *s, web_adsb_t *a);
 /* The APRS panel (web_aprs.h) the route answers from; NULL for none. */
 void     web_server_set_aprs(web_server_t *s, web_aprs_t *a);
+/* The sensor's host status (web_sysstat.h) /api/sys answers from; NULL for none. */
+void     web_server_set_sys(web_server_t *s, web_sys_t *y);
 
 void     web_server_stats(web_server_t *s, web_stats_t *out);
 uint16_t web_server_port(const web_server_t *s);

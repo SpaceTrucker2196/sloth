@@ -28,7 +28,7 @@ sensor runs, installed but never enabled by make.
 `src/secure_file.c`, `src/data_socket.c`, `src/privdrop.c`, `tests/test_privdrop.c`, `MISSION.md` §2,
 `packaging/systemd/sloth-ble-scan.service`, `src/ble_scan/main.c`, `src/ble_scan/ble_scan_cmd.c`, `tests/test_ble_scan.c`.
 
-**Last updated**: 2026-11-02 (§7.2: uncomment the whole block, the `[Service]` line included, and what the one-line mistake looks like; §7.3: GPS time into the host clock through gpsd and ntpsec's SHM refclock, as done on the reference host); 2026-11-02 (§6: `slothweb.service` passes `--web-assessments` the copy `make install` puts in `share/sloth/alert-assessments`); 2026-10-27 (§6: `--pcap-dir /var/lib/sloth/pcap` for the alert page's capture, an example in `/etc/default/slothweb`); 2026-10-27 (§7.2: the inert `gps.conf` drop-in for `--gps`, why `PrivateDevices=true` hides the receiver, `dialout`, the gpsd variant); 2026-10-26 (§2, §7.1 integration: `/etc/default/sloth` no-clobber like slothweb's, units still replaced; `[Service]` of the scan unit an allow-list; the reference host's hand-made `10-bluetooth-monitor.conf` removed in §7.1 and after §4.4's migration, so one drop-in grants `AF_BLUETOOTH`); 2026-10-26 (§7 review: the sensor's `AF_BLUETOOTH` moved to an opt-in drop-in; `Conflicts=` in both directions and the mask required; what stopping bluetoothd sends; `WantedBy=` pulls the scan in, `PartOf=` carries restarts, measured; the boot-time bind wait; the journal check); 2026-10-26 (§7 BLE capture: `sloth-ble-scan.service`, `AF_BLUETOOTH` for `--bt-monitor` in the sensor's unit, the migration carries `--bt-monitor`); 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
+**Last updated**: 2026-11-11 (§5.1: host status under the unit; no unit key changes), 2026-11-02 (§7.2: uncomment the whole block, the `[Service]` line included, and what the one-line mistake looks like; §7.3: GPS time into the host clock through gpsd and ntpsec's SHM refclock, as done on the reference host); 2026-11-02 (§6: `slothweb.service` passes `--web-assessments` the copy `make install` puts in `share/sloth/alert-assessments`); 2026-10-27 (§6: `--pcap-dir /var/lib/sloth/pcap` for the alert page's capture, an example in `/etc/default/slothweb`); 2026-10-27 (§7.2: the inert `gps.conf` drop-in for `--gps`, why `PrivateDevices=true` hides the receiver, `dialout`, the gpsd variant); 2026-10-26 (§2, §7.1 integration: `/etc/default/sloth` no-clobber like slothweb's, units still replaced; `[Service]` of the scan unit an allow-list; the reference host's hand-made `10-bluetooth-monitor.conf` removed in §7.1 and after §4.4's migration, so one drop-in grants `AF_BLUETOOTH`); 2026-10-26 (§7 review: the sensor's `AF_BLUETOOTH` moved to an opt-in drop-in; `Conflicts=` in both directions and the mask required; what stopping bluetoothd sends; `WantedBy=` pulls the scan in, `PartOf=` carries restarts, measured; the boot-time bind wait; the journal check); 2026-10-26 (§7 BLE capture: `sloth-ble-scan.service`, `AF_BLUETOOTH` for `--bt-monitor` in the sensor's unit, the migration carries `--bt-monitor`); 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
 
 ---
 
@@ -796,6 +796,31 @@ else, `ProtectSystem=strict`, `ExecStart=/usr/local/bin/sloth`, no
 record, the helper's idempotency check preceding its `iw` call, and the
 Makefile never calling `useradd`. Each absence check was seen to fail
 under a mutation before it shipped (`docs/wiki/log.md`, #139 entry).
+
+### 5.1 Host status under the unit
+
+Since 2026-11-11 the sensor reports the host's own state and the
+receivers attached to it once a minute (`sys_status`, `sys_sensor`,
+`source_status`, `receiver_hw`; [JSONL schema](jsonl-schema.md)), read
+from `/proc` and `/sys` only. **Nothing in the unit changes for it**,
+and each hardening key was checked against what it reads:
+
+| Key | Effect on the readings |
+|---|---|
+| `ProtectProc=invisible` | hides other users' processes; `/proc/stat`, `/proc/loadavg`, `/proc/meminfo`, `/proc/uptime` and `/proc/self/status` stay readable |
+| `ProtectKernelTunables=true` | makes `/sys` read-only, which is all a reader needs |
+| `PrivateDevices=true` | removes device nodes from `/dev`; sloth opens none for this, and the sysfs entries describing the devices are not under `/dev` |
+| `ProtectSystem=strict`, `StateDirectory=sloth` | the free space reported (`disk_free_mb`) is the filesystem under `--db`, i.e. `/var/lib/sloth` |
+
+A reading the board does not expose is absent from the record, not
+zero: no `undervolt` off a Raspberry Pi, no `sys_sensor` rows in a VM.
+To see what a host will report without starting sloth:
+
+```sh
+cat /sys/class/thermal/thermal_zone*/type /sys/class/thermal/thermal_zone*/temp
+grep . /sys/class/hwmon/hwmon*/name /sys/class/hwmon/hwmon*/in*_lcrit_alarm 2>/dev/null
+grep . /sys/bus/usb/devices/*/idVendor /sys/bus/usb/devices/*/idProduct
+```
 
 ## 6. slothweb.service
 

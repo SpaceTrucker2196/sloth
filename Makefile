@@ -129,6 +129,7 @@ CORE_COMMON_SRCS = \
        src/wifi_baseline.c   \
        src/sensors.c         \
        src/sensor_health.c   \
+       src/sys_status.c      \
        src/stab.c            \
        src/persist_health.c  \
        src/wps_track.c       \
