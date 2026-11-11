@@ -396,6 +396,160 @@ var glyph = (function () {
              bold: trend === "approaching", near: b && g ? b + " " + g : b || g };
   }
 
+  // The S-meter (owner rulings of 2026-11-11: "make all signal graphs a
+  // s-meter style bar", "yes add S+ numbers for wifi", "make the s-meter
+  // appropriate for the band"). It replaces G2's sparkline wherever the
+  // page draws a signal's strength; g2 above is kept as it was and has
+  // no caller.
+  //
+  // The face is a receiver's: SM_UNITS segments S1 to S9, SM_DB apart,
+  // then segments SM_OVER_DB apart up to SM_OVER_TOP dB over S9. What
+  // reads S9 is the one line a band has in SM_BANDS. The IARU Region 1
+  // reference (S9 = -93 dBm above 30 MHz, -73 below) would pin nearly
+  // every 802.11 reading past S9, which is a meter that says nothing, so
+  // this is a display scale: at 2.4 GHz S1 is the floor of the range R3
+  // gave every RSSI glyph (-95 dBm), which puts S9 at -47 and the top
+  // at -20. The 5 and 6 GHz rows sit lower by the extra free-space path
+  // loss against 2442 MHz, 20 log10(f / 2442) at the band's middle
+  // rounded to a whole dB (7.05 at 5500, 8.55 at 6535), so one emitter
+  // at one distance reads about the same S on every band. BLE is the
+  // 2.4 GHz row. A reading whose band is not known reads on the
+  // SM_DEFAULT row and the scale says unknown, for the caller to print.
+  var SM_DB = 6, SM_UNITS = 9, SM_OVER_DB = 10, SM_OVER_TOP = 27;
+  var SM_BANDS = {
+    "2.4 GHz": { mhz: 2442, s9: -47 },
+    "5 GHz": { mhz: 5500, s9: -54 },
+    "6 GHz": { mhz: 6535, s9: -56 }
+  };
+  var SM_DEFAULT = "2.4 GHz";
+  // A meter's scale: a segment per edge, lit when the value has reached
+  // its edge; the first `knee` are the plain run and the rest the run
+  // over it. over 0 is a strength with no S-units (dB-Hz, dBFS): equal
+  // segments and no second run.
+  function smScale(lo, hi, step, units, over) {
+    var e = [], i, v;
+    for (i = 0; i < units; i++) e.push(lo + i * step);
+    for (v = lo + (units - 1) * step + over; over > 0 && v < hi; v += over) e.push(v);
+    return { lo: lo, hi: hi, edges: e, knee: units, over: over, band: "", unknown: false };
+  }
+  // The band a row's own words name: sloth's label where the row has
+  // one, else its channel number as ap_band_label() reads one with no
+  // channel_source (a 6 GHz channel number alone is not told from a
+  // 2.4 or 5 GHz one, here as there). "" is unknown; never a guess.
+  function smBand(ch, label) {
+    if (typeof label === "string" && Object.prototype.hasOwnProperty.call(SM_BANDS, label)) return label;
+    if (gnum(ch) && ch >= 1 && ch <= 14) return "2.4 GHz";
+    if (gnum(ch) && ch >= 32 && ch <= 177) return "5 GHz";
+    return "";
+  }
+  function smDbm(band) {
+    var known = typeof band === "string" && Object.prototype.hasOwnProperty.call(SM_BANDS, band);
+    var s9 = SM_BANDS[known ? band : SM_DEFAULT].s9;
+    var sc = smScale(s9 - (SM_UNITS - 1) * SM_DB, s9 + SM_OVER_TOP, SM_DB, SM_UNITS, SM_OVER_DB);
+    sc.band = known ? band : SM_DEFAULT;
+    sc.unknown = !known;
+    return sc;
+  }
+  // How many segments a value lights: clamped at both ends as g2Y
+  // clamps, so a reading under S1 is still S1 and smClamped() counts it.
+  function smLevel(v, sc) {
+    if (!gnum(v)) return 0;
+    var c = v < sc.lo ? sc.lo : v > sc.hi ? sc.hi : v, n = 0;
+    for (var i = 0; i < sc.edges.length; i++) if (c >= sc.edges[i]) n++;
+    return n;
+  }
+  function smClamped(pts, sc) {
+    var n = 0;
+    for (var i = 0; pts && i < pts.length; i++)
+      if (pts[i][1] > sc.hi || pts[i][1] < sc.lo) n++;
+    return n;
+  }
+  // The reading in words, stepped as the face is: "S7", "S9+10". The
+  // exact figure is the dBm number the caller keeps beside it.
+  function smWord(v, sc) {
+    var n = smLevel(v, sc);
+    if (!n) return "-";
+    return n <= sc.knee ? "S" + n : "S" + sc.knee + "+" + (n - sc.knee) * sc.over;
+  }
+  // Each segment's label, for a legend that draws the face once.
+  function smLabels(sc) {
+    var out = [];
+    for (var i = 0; i < sc.edges.length; i++)
+      out.push(i < sc.knee ? String(i + 1) : "+" + (i - sc.knee + 1) * sc.over);
+    return out;
+  }
+  // The scale in words, once per table: every band's S9.
+  function smNote() {
+    var p = [];
+    for (var b in SM_BANDS)
+      if (Object.prototype.hasOwnProperty.call(SM_BANDS, b))
+        p.push((p.length ? "" : "S9 = ") + SM_BANDS[b].s9 + (p.length ? "" : " dBm") + " at " + b);
+    return p.join(", ") + ", " + SM_DB + " dB per S-unit, by the band heard on; " +
+           "a display scale, not the IARU reference";
+  }
+  // A window's least and greatest reading, or null with none.
+  function smRange(pts) {
+    var lo = null, hi = null;
+    for (var i = 0; pts && i < pts.length; i++) {
+      if (!gnum(pts[i][1])) continue;
+      if (lo === null || pts[i][1] < lo) lo = pts[i][1];
+      if (hi === null || pts[i][1] > hi) hi = pts[i][1];
+    }
+    return lo === null ? null : [lo, hi];
+  }
+  // Whole pixels, so a segment's edge is an edge at any ratio; the gap
+  // at the knee is wider, which is how the S9 boundary reads in one
+  // grey (R10).
+  var SM_GAP = 1, SM_KNEE = 3;
+  function smGeo(sc, w) {
+    var n = sc.edges.length, k = sc.knee < n ? SM_KNEE - SM_GAP : 0;
+    return { n: n, k: k, sw: Math.max(1, Math.floor((w - (n - 1) * SM_GAP - k) / n)) };
+  }
+  function smSegX(i, sc, ge) { return i * (ge.sw + SM_GAP) + (i >= sc.knee ? ge.k : 0); }
+  // Where a value falls on the face: inside the segment it would light
+  // last, by how far it is through that segment's span.
+  function smX(v, sc, w) {
+    var ge = smGeo(sc, w), i = Math.max(0, smLevel(v, sc) - 1);
+    var c = v < sc.lo ? sc.lo : v > sc.hi ? sc.hi : v;
+    var top = i + 1 < ge.n ? sc.edges[i + 1] : sc.hi;
+    var f = top > sc.edges[i] ? Math.max(0, (c - sc.edges[i]) / (top - sc.edges[i])) : 0;
+    return smSegX(i, sc, ge) + Math.min(ge.sw - 1, Math.floor(f * ge.sw));
+  }
+  // The meter. v is the latest reading; opt: {w, h, scale, lo, hi} -
+  // scale a smScale() or smDbm() (the unknown-band row when none), lo
+  // and hi the window's least and greatest reading or null. The lit run
+  // is the reading: a lit segment is half the height in the line's ink
+  // (--heat-3 past the knee), an unlit one a 2 px rule, so lit against
+  // unlit is a shape as well as a tone (R10). What G2's line said about
+  // movement is the two peak-hold ticks, full height so they stand
+  // clear of the run, and only where the window moved at all: one
+  // reading is the run alone. No reading is R5's dash and no segment.
+  function sm(v, opt) {
+    var m = [], w = opt.w, h = opt.h, sc = opt.scale || smDbm(""), i;
+    if (!gnum(v)) { m.push(dash(w, h)); return m; }
+    var ge = smGeo(sc, w), lit = smLevel(v, sc);
+    for (i = 0; i < ge.n; i++) {
+      if (i < lit)
+        m.push(["seg", smSegX(i, sc, ge), h * 0.25, ge.sw, h * 0.5,
+                i < sc.knee ? "--tui-normal" : "--heat-3"]);
+      else m.push(["off", smSegX(i, sc, ge), h / 2 - 1, ge.sw, 2, "--rule"]);
+    }
+    if (gnum(opt.lo) && gnum(opt.hi) && opt.hi > opt.lo) {
+      m.push(["pklo", smX(opt.lo, sc, w), 0, 1, h, "--ink"]);
+      m.push(["pkhi", smX(opt.hi, sc, w), 0, 1, h, "--ink"]);
+    }
+    return m;
+  }
+  // The meter in character cells (the emitter report's, which must copy
+  // as text): a token a segment, --tui-dim for an unlit one; none at all
+  // with no reading.
+  function smCells(v, sc) {
+    var out = [], lit = smLevel(v, sc);
+    for (var i = 0; lit && i < sc.edges.length; i++)
+      out.push(i >= lit ? "--tui-dim" : i < sc.knee ? "--tui-normal" : "--heat-3");
+    return out;
+  }
+
   // F15: new is first seen inside the window the row is shown against,
   // and G5's first-seen cell is the cell of the strip it falls in (-1
   // when it is before the strip, or after it).
@@ -769,6 +923,10 @@ var glyph = (function () {
   return { g1: g1, g2: g2, g2Clamped: g2Clamped, g2Words: g2Words, isNew: isNew,
            firstCell: firstCell, RSSI_LO: RSSI_LO, RSSI_HI: RSSI_HI, RSSI_REF: RSSI_REF,
            g4: g4, g4Stats: g4Stats, g5: g5, g5Ruler: g5Ruler, g6: g6,
+           sm: sm, smScale: smScale, smDbm: smDbm, smBand: smBand, smLevel: smLevel,
+           smWord: smWord, smLabels: smLabels, smNote: smNote, smRange: smRange,
+           smClamped: smClamped, smCells: smCells, smX: smX, SM_BANDS: SM_BANDS,
+           SM_DB: SM_DB,
            paint: paint, caption: caption, win: win, scale: scale, dur: dur,
            trend: trend, shared: shared, order: order,
            g3: g3, g3Vals: g3Vals, G3_BANDS: G3_BANDS, g7: g7, g7Max: g7Max,

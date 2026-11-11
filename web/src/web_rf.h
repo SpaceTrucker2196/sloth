@@ -21,7 +21,8 @@
  *    "whisker":[-70,-55]|null,        the range at the last value
  *    "whisker_src":"beacon"|"samples"|null,
  *    "band":"room"|null,"trend":"approaching"|null,
- *    "est_src":"beacon"|"probe_client"|null}
+ *    "est_src":"beacon"|"probe_client"|null,
+ *    "radio":"2.4 GHz"|"5 GHz"|"6 GHz"|null}
  *
  * The cells are the fine buckets in memory (web_rollup_trail()), merged
  * per minute. The whisker is the beacon's own rssi_min_60s..max_60s for
@@ -30,7 +31,13 @@
  * sloth's (src/rf_distance.c, through the FRRS ledger, web_frrs_rf()):
  * the page bolds an approaching emitter by sloth's trend and names
  * sloth's band, so G2 never draws a nearness of its own that could
- * disagree with the estimate the TUI and the record show.
+ * disagree with the estimate the TUI and the record show. radio is the
+ * band the latest beacon (or probe_client) record was heard on, in
+ * ap_band_label()'s words from that record's channel and, for a beacon,
+ * its channel_source: the page's S-meter reads a signal on its band's
+ * scale (owner ruling 2026-11-11), and null is "band unknown", never a
+ * guess. A probe_client record has no channel_source, so a 6 GHz
+ * channel number in one reads as the 2.4 or 5 GHz number it shares.
  *
  * Under a scope that does not show the monitor radio (web_scope.h:
  * rf.rssi.* are Monitor's), "rf" is null. */
@@ -47,7 +54,7 @@ struct web_frrs;
 #define WEB_RF_CELL_S   60
 /* The longest "rf" member: every cell "-127", the fixed members and
  * the longest words. */
-#define WEB_RF_JSON_MAX 560
+#define WEB_RF_JSON_MAX 580
 
 typedef struct {
     int       metric;                 /* WM_RF_RSSI_STA or _BSSID; -1 none */

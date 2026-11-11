@@ -541,36 +541,24 @@
 
   // ── the drawer: the row's signal over the waterfall's window ─────
   var DR = { gen: 0 };
-  function rssiChart(pts, from, to, step, E) {
-    if (!E) E = PROX_EDGES;
-    var c = $("bledev-rssi"), T = H.theme();
-    var dpr = H.sizeCanvas(c), g = c.getContext("2d");
-    var W = c.width, Hh = c.height, LO = -100, HI = -20;
-    g.clearRect(0, 0, W, Hh);
-    function X(t) { return (t - from) / Math.max(1, to - from) * W; }
-    function Y(v) { return Hh - (Math.max(LO, Math.min(HI, v)) - LO) / (HI - LO) * Hh; }
-    // The band edges, faint, so the line reads against the grade.
-    g.fillStyle = T.rule;
-    E.forEach(function (e) { g.fillRect(0, Math.round(Y(e)), W, Math.max(1, dpr / 2)); });
-    if (!pts.length) {
-      g.fillStyle = T.faint;
-      g.fillRect(W * 0.35, Hh / 2, W * 0.3, Math.max(1, dpr));
-      return;
-    }
-    g.lineWidth = Math.max(1, 1.5 * dpr);
-    for (var i = 1; i < pts.length; i++) {
-      if (pts[i][0] - pts[i - 1][0] > 2.5 * step) continue;
-      g.strokeStyle = proxColor(proxBand(pts[i][1], E));
-      g.beginPath();
-      g.moveTo(X(pts[i - 1][0]), Y(pts[i - 1][1]));
-      g.lineTo(X(pts[i][0]), Y(pts[i][1]));
-      g.stroke();
-    }
-    var r = Math.max(1.5, 1.5 * dpr);
-    pts.forEach(function (p) {
-      g.fillStyle = proxColor(proxBand(p[1], E));
-      g.fillRect(X(p[0]) - r / 2, Y(p[1]) - r / 2, r, r);
-    });
+  // The S-meter (glyph.sm; owner rulings 2026-11-11: every signal
+  // graphic is the meter, with its S reading, on the scale of the band
+  // heard on): BLE is 2.4 GHz, so that row. The lit run is the window's
+  // last sample and the two ticks its least and greatest; it was a line
+  // over the window graded by the proximity band, which the waterfall
+  // above and the table's dist column still say. The words it returns
+  // are the canvas's label and lead the note.
+  function rssiChart(pts) {
+    var c = $("bledev-rssi"), sc = glyph.smDbm("2.4 GHz"), r = glyph.smRange(pts);
+    var last = pts.length ? pts[pts.length - 1][1] : null;
+    glyph.paint(c, glyph.sm(last, { w: c.clientWidth, h: c.clientHeight, scale: sc,
+                                    lo: r ? r[0] : null, hi: r ? r[1] : null }), H.css);
+    var words = last === null ? "no reading"
+      : glyph.smWord(last, sc) + " " + Math.round(last) + " dBm" +
+        (r[1] > r[0] ? ", the window " + glyph.smWord(r[0], sc) + " to " + glyph.smWord(r[1], sc) +
+                       " (" + Math.round(r[0]) + " to " + Math.round(r[1]) + " dBm)" : "");
+    c.ariaLabel = "this address's signal strength: " + words;
+    return words;
   }
   // The drawer opens on another address (or one that left the table, or
   // the theme changed): nothing of the last one's stays under the new
@@ -590,7 +578,6 @@
     if (!H) return;
     if (!d || typeof d.addr !== "string") { reset(); return; }
     var gen = ++DR.gen, r = win(), cd = classDef(d["class"]);
-    var E = edgesAt(num(d.grade_ptx) ? d.grade_ptx : null);
     H.set("bledev-class", "class: " + cd.label + (typeof d.class_label === "string" && d.class_label !== cd.label ? " (" + d.class_label + ")" : ""));
     var ch = $("bledev-chans");
     ch.hidden = !Array.isArray(d.channels) || !d.channels.length;
@@ -602,11 +589,10 @@
     H.series("rf.rssi.ble", d.addr, tier, r.from, r.to).then(function (s) {
       if (gen !== DR.gen) return;
       var pts = (s.points || []).filter(function (p) { return num(p[1]); }).map(function (p) { return [p[0], p[1]]; });
-      rssiChart(pts, r.from, r.to, s.step || 10, E);
+      var words = rssiChart(pts);
       H.set("bledev-rssi-note", pts.length
-        ? "rf.rssi.ble, " + (r.win >= 86400 ? Math.round(r.win / 86400) + " d" : Math.round(r.win / 3600) + " h") + ", " + tier +
-          " tier, -100 to -20 dBm, n=" + pts.length + "; coloured by the grade at P_tx " +
-          ptxText(d.grade_ptx, d.grade_ptx_source) + ", faint lines at its edges"
+        ? words + "; rf.rssi.ble, " + (r.win >= 86400 ? Math.round(r.win / 86400) + " d" : Math.round(r.win / 3600) + " h") + ", " + tier +
+          " tier, n=" + pts.length + "; ticks: the window's least and greatest; 2.4 GHz scale: " + glyph.smNote()
         : "no data: no signal sample of this address in the window");
     }).catch(function (e) { if (gen === DR.gen) H.set("bledev-rssi-note", H.errText(e.message)); });
   }

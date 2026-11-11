@@ -2516,7 +2516,7 @@
       { k: "ip", label: "ip", w: 15, type: "ip", srv: "ip", val: dv("ip") },
       { k: "nm", label: "name", w: 8, flex: true },
       { k: "ss", label: "ssid", w: 12, type: "text", srv: "ssid", val: dv("ssid") },
-      { k: "sig", label: "dBm", px: 150, min: 3, num: true, type: "num", srv: "signal", val: dv("signal") },
+      { k: "sig", label: "dBm", px: 196, min: 3, num: true, type: "num", srv: "signal", val: dv("signal") },
       { k: "src", label: "src", w: 6, min: 3, type: "num", srv: "sources", val: dv("sources") },
       { k: "rk", label: "risk", px: 52, min: 3, type: "sev", srv: "risk", val: dv("risk") },
       { k: "fs", label: "first", w: 10, type: "time", srv: "first", val: dv("first_seen") },
@@ -3464,7 +3464,7 @@
       { k: "bs", label: "bssid", w: 19, min: 8, type: "mac", srv: "bssid", val: av("bssid") },
       { k: "ss", label: "ssid", w: 12, flex: true, type: "text", srv: "ssid", val: av("ssid") },
       { k: "ch", label: "ch", w: 4, min: 3, type: "num", srv: "channel", val: av("channel") },
-      { k: "sig", label: "dBm", px: 150, min: 3, type: "num", srv: "signal", val: av("signal") },
+      { k: "sig", label: "dBm", px: 196, min: 3, type: "num", srv: "signal", val: av("signal") },
       { k: "enc", label: "enc / akm", w: 20, type: "text", srv: "enc", val: av("enc") },
       { k: "mfp", label: "mfp", w: 12, type: "num", srv: "mfp", val: av("mfp") },
       { k: "dg", label: "downgrade", w: 16, type: "num", srv: "downgrade", val: av("downgrade") },
@@ -3500,7 +3500,7 @@
     row.appendChild(ss);
     row.appendChild(el("span", "c-ch d-normal", String(a.channel)));
     var sg = row.appendChild(el("span", "c-sig d-dim"));
-    SlothRf.cell(sg, a.rf, num(a.signal) ? a.signal : null);
+    SlothRf.cell(sg, a.rf, num(a.signal) ? a.signal : null, a.channel);
     row.appendChild(el("span", "c-enc d-normal", (a.enc === null ? "?" : a.enc) + " " +
                        (a.akm_names && a.akm_names.length ? a.akm_names.join(",") : "")));
     row.appendChild(el("span", "c-mfp d-normal", "mfp " + a.mfp_word));
@@ -3581,7 +3581,7 @@
     head: $("w-cl-head"), reset: $("w-cl-tools"), redraw: function () { clientsDraw(); }, cols: [
       { k: "mac", label: "mac", w: 20, min: 8, type: "mac", val: av("mac") },
       { k: "ven", label: "vendor", w: 12, flex: true, type: "text", val: av("vendor") },
-      { k: "sig", label: "dBm", px: 150, min: 3, type: "num", val: av("signal") },
+      { k: "sig", label: "dBm", px: 196, min: 3, type: "num", val: av("signal") },
       { k: "pr", label: "24 h presence", px: 146, ruler: true },
       { k: "ls", label: "last", w: 10, type: "time", val: av("last_seen") }
     ] });

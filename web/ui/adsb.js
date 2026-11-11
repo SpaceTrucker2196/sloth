@@ -164,6 +164,20 @@
   }
   function cell(cls, text) { var c = el("span", cls); if (text !== undefined) c.textContent = String(text); return c; }
   function rssiFrac(v) { return Math.max(0, Math.min(1, (v - RSSI_LO) / -RSSI_LO)); }
+  // The signal cell (owner ruling 2026-11-11: every signal graphic is
+  // the meter, glyph.sm). The decoder's RSSI is dBFS, a level against
+  // its own full scale and not dBm, so no S-units and no band row: the
+  // segmented face over RSSI_LO..0 in ten equal segments, lit to the
+  // row's last RSSI. A row carries one reading, so there are no ticks.
+  var SM_DBFS = glyph.smScale(RSSI_LO, 0, -RSSI_LO / 10, 10, 0);
+  function sigCell(a) {
+    var sig = cell("c-sg"), v = num(a.rssi) ? a.rssi : null;
+    var words = v === null ? "RSSI: no reading"
+      : "RSSI " + v.toFixed(1) + " dBFS on a " + RSSI_LO + " to 0 dBFS meter";
+    sig.title = words;
+    if (window.SlothRf) window.SlothRf.meter(sig, v, { scale: SM_DBFS }, words);
+    return sig;
+  }
   // A row under the columns: bright when it has a position, normal
   // without, dim once gone; an emergency or a reserved squawk in the
   // peak heat colour on its own cells (text colour only, no row tint).
@@ -182,11 +196,7 @@
     r.appendChild(cell("c-tk n", fx(a.track, 0)));
     r.appendChild(cell("c-ps", num(a.lat) ? a.lat.toFixed(3) + ", " + a.lon.toFixed(3) : "-"));
     r.appendChild(cell("c-rs n " + (num(a.rssi) ? heatClass(rssiFrac(a.rssi)) : "d-dim"), fx(a.rssi, 1)));
-    var sig = cell("c-sg " + (num(a.rssi) ? heatClass(rssiFrac(a.rssi)) : ""));
-    var bar = el("span", "adsb-bar");
-    bar.style.width = (num(a.rssi) ? Math.round(rssiFrac(a.rssi) * 100) : 0) + "%";
-    sig.appendChild(bar);
-    r.appendChild(sig);
+    r.appendChild(sigCell(a));
     r.appendChild(cell("c-ms n", num(a.messages) ? a.messages : "-"));
     r.appendChild(cell("c-sr", a.source_type || "-"));
     r.appendChild(cell("c-st", a.state));

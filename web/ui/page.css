@@ -246,6 +246,13 @@ canvas.g6, .drow canvas.g6 { display: inline-block; vertical-align: middle; widt
 .g2e { color: var(--muted); }
 .g2b { margin: var(--gap) 0; }
 canvas.g2w { display: block; width: 100%; height: 48px; }
+/* The S-meter (glyph.sm, owner ruling 2026-11-11): in a table it takes
+ * canvas.g2's cell, so the column is the width it was; at a drawer's
+ * width it is a tile's 18 px (R2). .sms is its S reading, .smleg the
+ * face drawn once per table. */
+canvas.smw { display: block; width: 100%; height: 18px; }
+.sms { color: var(--tui-bright); }
+.smleg { white-space: normal; }
 .g2t { display: flex; justify-content: space-between; font-size: 10px; color: var(--faint); }
 /* F15: the new mark, the row's one --signal accent (P6). */
 .nw { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--signal); margin-right: 4px; vertical-align: middle; }

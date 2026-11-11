@@ -2361,17 +2361,19 @@ static void test_page_module(void) {
     WT_HAS(m, "if (o.known) parts.push(o.known + \" known\");");
     WT_HAS(m, "known good: expected traffic from a friendly or neutral emitter ");
     WT_HAS(m, "MIL-STD-2525's green");
-    /* The Report's RSSI series is drawn as text: draw_sparkline_at()'s
-     * glyphs and the heat ramp's classes, each from a fixed table and
-     * graded by glyph.js's port of the TUI's level, never a value of the
-     * answer as markup, a class or an attribute (the sinks above hold
-     * this function too: seen red with `v.innerHTML = s.history` added
-     * to rssiSpark()). */
+    /* The Report's RSSI is drawn as text, a character-cell S-meter
+     * since the owner's ruling of 2026-11-11 (test_glyph.c pins the
+     * whole function): draw_sparkline_at()'s glyphs and the heat
+     * ramp's classes, each from a fixed table and picked by glyph.js's
+     * smCells(), never a value of the answer as markup, a class or an
+     * attribute (the sinks above hold this function too: seen red with
+     * `v.innerHTML = s.history` added to rssiSpark()). */
     WT_HAS(m, "var SPARK = [\"_\", \"\\u2581\", \"\\u2582\", \"\\u2583\", \"\\u2584\", \"\\u2585\", "
               "\"\\u2586\", \"\\u2587\", \"\\u2588\"];");
     WT_HAS(m, "var SPARK_CLS = { \"--tui-dim\": \"d-dim\", \"--tui-normal\": \"d-normal\", \"--heat-1\": \"h1\",");
-    WT_HAS(m, "glyph.level(lift(cells[i]), max)");
-    WT_HAS(m, "line.appendChild(el(\"span\", SPARK_CLS[tk] || \"d-normal\", SPARK[l] || \"_\"));");
+    WT_HAS(m, "glyph.smCells(num(s.last_dbm) ? s.last_dbm : null, sc)");
+    WT_HAS(m, "      line.appendChild(el(\"span\", SPARK_CLS[tk[i]] || \"d-normal\",\n"
+              "                          (i === sc.knee ? \" \" : \"\") + SPARK[tk[i] === \"--tui-dim\" ? 1 : 8]));");
     WT_HAS(m, "if (k === \"series_rssi\" && f.v && typeof f.v === \"object\" && Array.isArray(f.v.cells)) {");
     WT_HAS(m, "a sloth gauge, not a calibrated measurement");
     /* #181: a note is measured in bytes, as the server does, against the
