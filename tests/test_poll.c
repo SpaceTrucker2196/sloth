@@ -298,7 +298,7 @@ static void test_twin_episode_sees_this_ticks_beacons(void) {
     pcap_case_reset();
     TEST_STATE(s);
     memset(&s, 0, sizeof(s));
-    const uint8_t a[6] = {0xaa, 0xbb, 0xcc, 0x01, 0x02, 0x03};
+    const uint8_t a[6] = {0xa8, 0xbb, 0xcc, 0x01, 0x02, 0x03};
     const uint8_t b[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
     beacon_record(a, "Cafe-Net", -70, 6, "WPA2", 102, NULL);
     beacon_record(b, "Cafe-Net", -50, 6, "WPA2", 102, NULL);

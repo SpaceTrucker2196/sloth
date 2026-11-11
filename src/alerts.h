@@ -151,7 +151,42 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
  * [TWIN_CONF_MIN, TWIN_CONF_MAX]. It is never 100 and it is *not* the
  * severity: severity is how bad the finding is if true, confidence is
  * how likely it is to be true. They are different numbers that move
- * independently and the operator needs both. */
+ * independently and the operator needs both.
+ *
+ * ── One device is not a pair (#188) ──────────────────────────
+ *
+ * Every weight above assumes the two BSSIDs are two transmitters. On a
+ * field sensor 33 of 38 CRIT pairs were the 2.4 GHz and 5 GHz radios of
+ * one box, so four things are checked before any weight is added:
+ *
+ *   - `sibling`: BSSIDs at most TWIN_SIBLING_MAX_DIFF_BYTES apart, on
+ *     different known bands, first heard within TWIN_SIBLING_WINDOW_S
+ *     of each other. That is one device coming into earshot, and it
+ *     carries no weight in either direction: twin_evidence_score
+ *     returns 0. Only `inv_mismatch` survives it, for the reason the
+ *     inventory outranks everything else here.
+ *   - an OUI is read only from two globally administered addresses. A
+ *     locally administered BSSID (bit 0x02 of the first octet) has no
+ *     OUI, so neither `diff_oui` nor `same_oui` is set and no weight
+ *     moves. Vehicle hotspots derive their second-band address by
+ *     complementing octets 1-2, which the old three-byte memcmp scored
+ *     as a second vendor.
+ *   - `hashes_differ` is read only within one known band. A dual-band
+ *     AP's two radios advertise band-dependent vendor IEs, so a
+ *     cross-band mismatch says "two bands", not "two firmwares".
+ *   - a BTM steer whose steering BSSID is a sibling address of the
+ *     candidate it names is the device band-steering its own clients.
+ *     It sets `self_steer` and nothing else: not `steered`, not `hard`,
+ *     no weight.
+ *
+ * And CRIT is gated on confidence: a severity resting only on soft
+ * signals needs TWIN_CRIT_MIN_CONF. With the weights below the only
+ * soft combination that reaches it is a vendor-IE mismatch together
+ * with a different globally administered OUI (35 + 20), which is the
+ * "cross-device signal" the mismatch needs before it may be critical.
+ * A `hard` signal is exempt, for the reason a neighbour claim cannot
+ * demote one: a gate an attacker can advertise a finding under is a
+ * severity lever. */
 #define TWIN_W_DIFF_OUI      20   /* cross-vendor: weak, and forgeable */
 #define TWIN_W_IE_HASH       35   /* vendor-IE fingerprints disagree */
 #define TWIN_W_ATTACKER_OUI  40   /* Hak5 / Espressif OUI present */
@@ -164,13 +199,33 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
 #define TWIN_C_SAME_OUI      15   /* same vendor, or a copied OUI */
 #define TWIN_CONF_MIN         5
 #define TWIN_CONF_MAX        95
+/* The least confidence a soft-signal CRIT may carry (#188). 50 is the
+ * issue's figure and the point below which the finding is, by sloth's
+ * own number, more likely wrong than right. */
+#define TWIN_CRIT_MIN_CONF   50
+/* Sibling test (#188). Two bytes covers every pair in the field data:
+ * adjacent addresses (one byte, including an :ef -> :f0 carry), a
+ * flipped nibble, and the complemented octets 1-2 of a vehicle hotspot.
+ * A carry across three octets is missed and falls to the other checks. */
+#define TWIN_SIBLING_MAX_DIFF_BYTES 2
+/* The field pairs first appeared 1-3 s apart on a parked sensor: the
+ * gap is how long the hopper takes to reach the other band, since each
+ * radio beacons every ~100 ms. 10 s is three times the worst observed,
+ * and still far short of the minutes it takes anyone to notice an SSID
+ * and stand up a copy of it. It cannot tell the two apart at sensor
+ * start, when everything in range is first heard together; the address
+ * and band conditions are what carry the test then. */
+#define TWIN_SIBLING_WINDOW_S 10
 
 typedef struct {
     int diff_oui;
     int same_oui;
     int hashes_differ;
     int attacker_oui;
-    int steered;
+    int steered;         /* a steer aimed at the pair from another device */
+    int self_steer;      /* a steer from a sibling address of its own
+                          * candidate: band steering, no weight (#188) */
+    int sibling;         /* one device's radios on two bands (#188) */
     int nbr_claim;       /* either side advertises the other (802.11k) */
     int inv_mismatch;    /* a half is not approved for an inventoried SSID */
     int inv_approved;    /* both halves approved for an inventoried SSID */

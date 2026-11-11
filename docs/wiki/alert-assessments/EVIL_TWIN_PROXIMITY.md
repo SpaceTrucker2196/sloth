@@ -1,11 +1,11 @@
 ---
 type: EVIL_TWIN_PROXIMITY
 technique: T1557
-rule_file: src/alerts/rules_twin.c:1746 (rule_evil_twin_proximity)
-count_semantics: per poll tick (default 250 ms) per BSSID whose 60 s RSSI swing stays >= the threshold; `count` aliases `evaluations` (engine.c:478-479). Not per beacon and not per distinct swing event - the min/max are recomputed each beacon over a 60 s window (RSSI_WIN_SECS, 16 samples), so one sustained spread keeps re-firing every tick
+rule_file: src/alerts/rules_twin.c:1927 (rule_evil_twin_proximity)
+count_semantics: per poll tick (default 250 ms) per BSSID that has a twin candidate (since #189) and whose 60 s RSSI swing stays >= the threshold with its minimum above -92 dBm, while the sensor is not moving; `count` aliases `evaluations` (engine.c:478-479). Not per beacon and not per distinct swing event - the min/max are recomputed each beacon over a 60 s window (RSSI_WIN_SECS, 16 samples), so one sustained spread keeps re-firing every tick
 severity_assessment: agree - WARN, and the rule's own comment calls it noisy on its own; it is a corroborator for EVIL_TWIN, not a standalone finding
-false_positive_risk: high - any mobile radio walking past the sensor, or the sensor/AP antenna environment changing, produces a >=15 dBm swing with no attacker present; the rule's comment says so
-noise_verdict: noisy on the reference host - 458 keys, 70,568,495 fires, max_sev 1. 70.6e6 / 458 = 1.54e5 evaluations per BSSID; at 4 ticks/s that is ~11 hours of held swing-state per BSSID. 458 distinct BSSIDs crossing a 15 dBm swing is ordinary RF churn in a busy band, not 458 rogues. Recommend: only show it beside an EVIL_TWIN on the same SSID (which the remediation already says), or gate the alert on an existing twin candidate for that SSID; raise --tune twin.proximity_dbm in a reflective/mobile environment; show first_seen/last_seen not count
+false_positive_risk: medium since #189, high before it - any mobile radio walking past the sensor, or the sensor/AP antenna environment changing, produces a >=15 dBm swing with no attacker present, but the swing is now reported only for a BSSID that already has an EVIL_TWIN candidate pair, so it can no longer fire for a network with no second transmitter. What is left is path change on a pair that is itself a false positive (a mixed-vendor mesh at WARN 20%)
+noise_verdict: noisy on the reference host - 458 keys, 70,568,495 fires, max_sev 1. 70.6e6 / 458 = 1.54e5 evaluations per BSSID; at 4 ticks/s that is ~11 hours of held swing-state per BSSID. 458 distinct BSSIDs crossing a 15 dBm swing is ordinary RF churn in a busy band, not 458 rogues. The figures are from before #189 and have not been re-measured: the gate recommended here (an existing twin candidate) is now in the rule, and on a second sensor 254 of the 300 BSSIDs that fired in a week had no twin (issue #189), which is the share it removes there. Was recommended: only show it beside an EVIL_TWIN on the same SSID (which the remediation already says), or gate the alert on an existing twin candidate for that SSID; raise --tune twin.proximity_dbm in a reflective/mobile environment; show first_seen/last_seen not count
 prevalence: not an attack class of its own - it is a weak proxy for an evil twin being switched on or carried closer; prevalence of the thing it hints at is covered under EVIL_TWIN (common) [4][5]
 tuning: [--tune twin.proximity_dbm (default 15, 1..100; TUNE_EVIL_TWIN_PROXIMITY_DBM)]
 researched: 2026-10-27
@@ -19,6 +19,26 @@ The condition is a single threshold: `delta = rssi_max_60s - rssi_min_60s`, and 
 No confidence, no evidence IDs, no `match_ip` - a plain `fire()` (:1717-1718). So `--pcap-dir` writes nothing and there is no evidence-ring citation for this type. One fire per qualifying BSSID per tick; the incident resolves 300 s (ALERT_RESOLVE_AFTER_S) after the swing last met the threshold.
 
 The radiotap antenna-signal field is "RF signal power at the antenna ... in decibels difference from 1mW" [6]; the radiotap header is "a mechanism to supply additional information about frames, from the driver to userspace applications such as libpcap" [6], i.e. it is written by the capturing driver on sloth's side. That is the crux of the rule's weakness: the number describes the path between the transmitter and sloth's own antenna, not anything the transmitter did.
+
+### Gated on a twin candidate (#189, 2026-11-11)
+
+This subsection supersedes the description above wherever the two differ; the line anchors above predate it and were not re-pinned (only `rule_file` was).
+
+Field data behind it (issue #189, one sensor, 2026-11-04 to 2026-11-10): 300 distinct BSSIDs fired, 254 of them with no same-SSID twin candidate at any point. Typical lone rows were printers, cameras and vehicle hotspots swinging between -100 and -80 dBm at a mobile sensor.
+
+The swing test is unchanged. Three conditions were added, all in `rule_evil_twin_proximity()` and the helpers above it in `src/alerts/rules_twin.c`:
+
+| condition | detail | constant |
+|---|---|---|
+| twin candidate | another beacon-table entry with the same SSID forms a pair `rule_evil_twin` would report: a weak/strong split, or the same non-OPEN security with positive evidence from `twin_evidence_score()`. Either half of the pair qualifies. One device's radios on two bands are not a pair (#188), so they are not a candidate here | `twin_pair_is_candidate()` |
+| noise floor | `rssi_min_60s` must be above -92 dBm. Thermal noise in 20 MHz is -101 dBm and a typical receiver adds 6-7 dB, so its floor is about -95 dBm; at -92 or below, which beacons decode is decided by fading and the minimum is the weakest one that got through, not a level the AP sat at | `TWIN_PROX_FLOOR_DBM` -92 |
+| sensor not moving | no positioned GNSS fix in the last 60 s (the RSSI window, `RSSI_WIN_SECS`) reports a speed of 1.0 m/s or more. Read from the per-poll fix history `s->gnss_hist`. With no GNSS source, no speed in the fix, or no fix inside the window, nothing is suppressed | `TWIN_PROX_MOVING_MPS` 1.0 |
+
+1.0 m/s is twice the 0.5 m/s below which `src/gps.c`'s speed band calls a receiver stationary, and under walking pace. The whole rule is skipped while the sensor moves, so a real twin's swing is not reported during a drive either; the `EVIL_TWIN` row for the pair is unaffected.
+
+What it does not do: prefer the accused half (the issue's suggestion; an unattributed pair has none, so either half is reported), require a monotone climb rather than a min/max spread, or carry the swing onto the twin row as context when it is withheld. The stale-swing behaviour described above (an AP that stops beaconing keeps its last min/max until it is evicted) is unchanged.
+
+Tests: `tests/test_alerts.c`, the "Evil-twin Phase 3" block; each absence test names the mutation that turned it red.
 
 ## The attack
 
@@ -45,7 +65,7 @@ Tell them apart by correlation: a proximity swing with no same-SSID twin candida
 
 Severity (WARN) is correct and the rule is honest about being noisy; it should never be the sole basis for action. Prevalence as an attack is not meaningful - it is a hint, and the thing it hints at (an evil twin) is common and serious [4][5][10]. The evidence is not sufficient to act on by itself; the rule is designed as a corroborator.
 
-The reference-host figures confirm the noise: 70.6e6 fires on 458 keys is ordinary RF churn being counted per tick, not 458 rogues approaching. A responder should ignore a lone proximity alert and only weight it when it lands on a BSSID that already carries an `EVIL_TWIN` row for the same SSID; then the rising signal adds "and it is getting closer / louder" to that finding. Operationally: raise `twin.proximity_dbm` in a reflective or high-traffic environment, and on the alert page show the swing and timestamps rather than the tick count. The best improvement would be to gate emission on an existing twin candidate for the SSID, so the alert cannot fire for RF churn with no twin to corroborate.
+The reference-host figures confirm the noise: 70.6e6 fires on 458 keys is ordinary RF churn being counted per tick, not 458 rogues approaching. A responder should ignore a lone proximity alert and only weight it when it lands on a BSSID that already carries an `EVIL_TWIN` row for the same SSID; then the rising signal adds "and it is getting closer / louder" to that finding. Operationally: raise `twin.proximity_dbm` in a reflective or high-traffic environment, and on the alert page show the swing and timestamps rather than the tick count. The best improvement was to gate emission on an existing twin candidate for the SSID, so the alert cannot fire for RF churn with no twin to corroborate; #189 did that (see "Gated on a twin candidate" above).
 
 ## Bibliography
 

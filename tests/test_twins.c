@@ -63,7 +63,7 @@ static void test_twins_empty_state_no_episodes(void) {
 static void test_twins_same_cipher_diff_oui_produces_episode(void) {
     alerts_clear();
     sloth_state_t s; seed(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", a, "WPA2", -70);
     add_beacon(&s, "Cafe-Net", b, "WPA2", -50);
@@ -79,8 +79,8 @@ static void test_twins_same_cipher_diff_oui_produces_episode(void) {
 static void test_twins_same_oui_no_episode(void) {
     alerts_clear();
     sloth_state_t s; seed(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
-    uint8_t b[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x02};  /* same OUI */
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t b[6] = {0xa8,0xbb,0xcc,0x00,0x00,0x02};  /* same OUI */
     add_beacon(&s, "Mesh", a, "WPA2", -70);
     add_beacon(&s, "Mesh", b, "WPA2", -50);
     twins_snapshot(&s);
@@ -92,8 +92,8 @@ static void test_twins_same_oui_no_episode(void) {
 static void test_twins_same_oui_clone_with_ie_mismatch_produces_episode(void) {
     alerts_clear();
     sloth_state_t s; seed(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
-    uint8_t b[6] = {0xaa,0xbb,0xcc,0x99,0x99,0x99};  /* copied OUI */
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t b[6] = {0xa8,0xbb,0xcc,0x99,0x99,0x99};  /* copied OUI */
     add_beacon(&s, "Mesh", a, "WPA2", -70);
     add_beacon(&s, "Mesh", b, "WPA2", -50);
     s.beacon_aps[0].fp.vendor_ies_hash = 0x1111u;
@@ -106,7 +106,7 @@ static void test_twins_same_oui_clone_with_ie_mismatch_produces_episode(void) {
 static void test_twins_open_no_episode(void) {
     alerts_clear();
     sloth_state_t s; seed(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x00,0x00,0x01};
     uint8_t b[6] = {0x11,0x22,0x33,0x00,0x00,0x02};
     add_beacon(&s, "Airport", a, "OPEN", -70);
     add_beacon(&s, "Airport", b, "OPEN", -50);
@@ -130,7 +130,7 @@ static void test_twins_rssi_does_not_decide_sides(void) {
     alerts_clear(); ownership_clear();
     sloth_state_t s; seed(&s);
     uint8_t lo[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
-    uint8_t hi[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t hi[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     add_beacon(&s, "Cafe-Net", hi, "WPA2", -80);
     add_beacon(&s, "Cafe-Net", lo, "WPA2", -45);
     twins_snapshot(&s);
@@ -158,7 +158,7 @@ static void test_twins_rssi_does_not_decide_sides(void) {
 static void test_twins_episode_carries_confidence(void) {
     alerts_clear(); ownership_clear();
     sloth_state_t s; seed(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", a, "WPA2", -70);
     add_beacon(&s, "Cafe-Net", b, "WPA2", -50);
@@ -171,7 +171,7 @@ static void test_twins_episode_carries_confidence(void) {
 static void test_twins_hash_mismatch_flag(void) {
     alerts_clear();
     sloth_state_t s; seed(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", a, "WPA2", -70);
     add_beacon(&s, "Cafe-Net", b, "WPA2", -50);
@@ -191,7 +191,7 @@ static void test_twins_hash_mismatch_flag(void) {
 static void test_twins_attacker_oui_attributes_the_impostor(void) {
     alerts_clear(); ownership_clear();
     sloth_state_t s; seed(&s);
-    uint8_t legit[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t legit[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t pin[6]   = {0x00,0x13,0x37,0x44,0x55,0x66};  /* Hak5 OUI */
     add_beacon(&s, "Cafe-Net", legit, "WPA2", -75);
     add_beacon(&s, "Cafe-Net", pin,   "WPA2", -40);
@@ -207,7 +207,7 @@ static void test_twins_attacker_oui_attributes_the_impostor(void) {
 static void test_twins_rssi_swing_from_twin_side(void) {
     alerts_clear();
     sloth_state_t s; seed(&s);
-    uint8_t legit[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t legit[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t rogue[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", legit, "WPA2", -70);
     add_beacon(&s, "Cafe-Net", rogue, "WPA2", -45);
@@ -229,7 +229,7 @@ static void test_twins_taint_overrides_rssi_assignment(void) {
     alerts_clear(); ownership_clear();
     sloth_state_t s; seed(&s);
     uint8_t rogue[6] = {0x11,0x22,0x33,0x44,0x55,0x66};  /* tainted, lower */
-    uint8_t real[6]  = {0xaa,0xbb,0xcc,0x01,0x02,0x03};  /* clean,   higher */
+    uint8_t real[6]  = {0xa8,0xbb,0xcc,0x01,0x02,0x03};  /* clean,   higher */
     add_beacon(&s, "Cafe-Net", rogue, "WPA2", -80);
     add_beacon(&s, "Cafe-Net", real,  "WPA2", -45);
     /* Seed a deauth flood targeting `real` so the chain rule taints the
@@ -256,7 +256,7 @@ static void test_twins_taint_overrides_rssi_assignment(void) {
 static void test_twins_snapshot_idempotent(void) {
     alerts_clear();
     sloth_state_t s; seed(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", a, "WPA2", -70);
     add_beacon(&s, "Cafe-Net", b, "WPA2", -50);
@@ -278,7 +278,7 @@ static void test_view_twins_empty_does_not_crash(void) {
 static void test_view_twins_populated_does_not_crash(void) {
     alerts_clear();
     sloth_state_t s; seed(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", a, "WPA2", -70);
     add_beacon(&s, "Cafe-Net", b, "WPA2", -50);
@@ -291,9 +291,9 @@ static void test_view_twins_populated_does_not_crash(void) {
 static void test_view_twins_key_navigation(void) {
     alerts_clear();
     sloth_state_t s; seed(&s);
-    uint8_t a1[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a1[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b1[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
-    uint8_t a2[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x04};
+    uint8_t a2[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x04};
     uint8_t b2[6] = {0x11,0x22,0x33,0x44,0x55,0x67};
     add_beacon(&s, "Net-A", a1, "WPA2", -70);
     add_beacon(&s, "Net-A", b1, "WPA2", -50);
@@ -324,7 +324,7 @@ static void test_view_twins_key_navigation(void) {
 static void test_twins_infrastructure_peers_lower_confidence_not_erased(void) {
     alerts_clear(); ownership_clear();
     sloth_state_t s; seed(&s);
-    uint8_t router[6]   = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t router[6]   = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t extender[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "CorpWiFi", router,   "WPA2", -70);
     add_beacon(&s, "CorpWiFi", extender, "WPA2", -45);
@@ -340,7 +340,7 @@ static void test_twins_infrastructure_peers_lower_confidence_not_erased(void) {
 static void test_twins_unrelated_neighbors_still_episode(void) {
     alerts_clear();
     sloth_state_t s; seed(&s);
-    uint8_t real[6]      = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t real[6]      = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t rogue[6]     = {0x11,0x22,0x33,0x44,0x55,0x66};
     uint8_t elsewhere[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
     add_beacon(&s, "CorpWiFi", real,  "WPA2", -70);
@@ -358,13 +358,13 @@ static void test_twins_unrelated_neighbors_still_episode(void) {
 static void test_twins_designated_bssid_is_always_real(void) {
     alerts_clear(); ownership_clear();
     sloth_state_t s; seed(&s);
-    uint8_t mine[6]  = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t mine[6]  = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t rogue[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     /* Mine is the STRONGER signal — without the designation the
      * lower-RSSI rule would call it the twin. */
     add_beacon(&s, "CorpWiFi", mine,  "WPA2", -40);
     add_beacon(&s, "CorpWiFi", rogue, "WPA2", -75);
-    ownership_add_bssid("aa:bb:cc:01:02:03");
+    ownership_add_bssid("a8:bb:cc:01:02:03");
     twins_snapshot(&s);
     ASSERT_EQ(s.twin_episode_count, 1);
     ASSERT_EQ(memcmp(s.twin_episodes[0].real_bssid, mine,  6), 0);
@@ -389,13 +389,13 @@ static void test_twins_inventory_approved_bssid_is_never_the_impostor(void) {
     if (!f) return;
     const char *body =
         "{\"networks\":[{\"ssid\":\"CorpWiFi\","
-        "\"bssids\":[\"aa:bb:cc:01:02:03\"]}]}";
+        "\"bssids\":[\"a8:bb:cc:01:02:03\"]}]}";
     fwrite(body, 1, strlen(body), f);
     fclose(f);
     ASSERT_EQ(inventory_load(tmp, NULL, 0), 1);
 
     sloth_state_t s; seed(&s);
-    uint8_t declared[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t declared[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t rogue[6]    = {0x11,0x22,0x33,0x44,0x55,0x66};
     /* The declared radio is the STRONGER signal — the pre-#89 rule
      * would have named it the twin. */
@@ -432,13 +432,13 @@ static void test_twins_both_inventory_approved_no_episode(void) {
     if (!f) return;
     const char *body =
         "{\"networks\":[{\"ssid\":\"CorpWiFi\","
-        "\"bssids\":[\"aa:bb:cc:01:02:03\",\"11:22:33:44:55:66\"]}]}";
+        "\"bssids\":[\"a8:bb:cc:01:02:03\",\"11:22:33:44:55:66\"]}]}";
     fwrite(body, 1, strlen(body), f);
     fclose(f);
     ASSERT_EQ(inventory_load(tmp, NULL, 0), 1);
 
     sloth_state_t s; seed(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "CorpWiFi", a, "WPA2", -40);
     add_beacon(&s, "CorpWiFi", b, "WPA2", -75);
@@ -457,7 +457,7 @@ static void test_twins_both_inventory_approved_no_episode(void) {
 static void test_twins_without_designation_pair_is_unattributed(void) {
     alerts_clear(); ownership_clear();
     sloth_state_t s; seed(&s);
-    uint8_t strong[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t strong[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t weak[6]   = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "CorpWiFi", strong, "WPA2", -40);
     add_beacon(&s, "CorpWiFi", weak,   "WPA2", -75);
@@ -471,11 +471,11 @@ static void test_twins_without_designation_pair_is_unattributed(void) {
 static void test_twins_both_designated_falls_through(void) {
     alerts_clear(); ownership_clear();
     sloth_state_t s; seed(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "CorpWiFi", a, "WPA2", -40);
     add_beacon(&s, "CorpWiFi", b, "WPA2", -75);
-    ownership_add_bssid("aa:bb:cc:01:02:03");
+    ownership_add_bssid("a8:bb:cc:01:02:03");
     ownership_add_bssid("11:22:33:44:55:66");
     twins_snapshot(&s);
     ASSERT_EQ(s.twin_episode_count, 1);
@@ -513,7 +513,7 @@ static void load_inventory(char *path, const char *body) {
 static void test_twins_no_inventory_class_is_unknown_and_nothing_lost(void) {
     alerts_clear(); ownership_clear(); inventory_clear(); wired_attach_clear();
     sloth_state_t s; seed(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", a, "WPA2", -70);
     add_beacon(&s, "Cafe-Net", b, "WPA2", -50);
@@ -535,10 +535,10 @@ static void test_twins_inventory_mismatch_classifies_impersonator(void) {
     alerts_clear(); ownership_clear(); inventory_clear(); wired_attach_clear();
     if (!made) { int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_twins_cls1_XXXXXX")); if (fd >= 0) close(fd); made = 1; }
     load_inventory(tmp, "{\"networks\":[{\"ssid\":\"CorpWiFi\","
-                        "\"bssids\":[\"aa:bb:cc:01:02:03\"]}]}");
+                        "\"bssids\":[\"a8:bb:cc:01:02:03\"]}]}");
 
     sloth_state_t s; seed(&s);
-    uint8_t declared[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t declared[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t rogue[6]    = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "CorpWiFi", declared, "WPA2", -40);
     add_beacon(&s, "CorpWiFi", rogue,    "WPA2", -75);
@@ -564,10 +564,10 @@ static void test_twins_ssid_outside_declared_estate_is_neighbor(void) {
     alerts_clear(); ownership_clear(); inventory_clear(); wired_attach_clear();
     if (!made) { int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_twins_cls2_XXXXXX")); if (fd >= 0) close(fd); made = 1; }
     load_inventory(tmp, "{\"networks\":[{\"ssid\":\"CorpWiFi\","
-                        "\"bssids\":[\"aa:bb:cc:01:02:03\"]}]}");
+                        "\"bssids\":[\"a8:bb:cc:01:02:03\"]}]}");
 
     sloth_state_t s; seed(&s);
-    uint8_t a[6] = {0x02,0x22,0x33,0x44,0x55,0x66};
+    uint8_t a[6] = {0x00,0x22,0x33,0x44,0x55,0x66};
     uint8_t b[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
     add_beacon(&s, "Cafe-Net", a, "WPA2", -70);   /* not declared at all */
     add_beacon(&s, "Cafe-Net", b, "WPA2", -50);
@@ -586,7 +586,7 @@ static void test_twins_ssid_outside_declared_estate_is_neighbor(void) {
 static void test_twins_attacker_oui_is_impersonator_without_inventory(void) {
     alerts_clear(); ownership_clear(); inventory_clear(); wired_attach_clear();
     sloth_state_t s; seed(&s);
-    uint8_t legit[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t legit[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t pin[6]   = {0x00,0x13,0x37,0x44,0x55,0x66};  /* Hak5 OUI */
     add_beacon(&s, "Cafe-Net", legit, "WPA2", -75);
     add_beacon(&s, "Cafe-Net", pin,   "WPA2", -40);
@@ -607,10 +607,10 @@ static void test_twins_spoofed_neighbor_does_not_downgrade_class(void) {
     alerts_clear(); ownership_clear(); inventory_clear(); wired_attach_clear();
     if (!made) { int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_twins_cls3_XXXXXX")); if (fd >= 0) close(fd); made = 1; }
     load_inventory(tmp, "{\"networks\":[{\"ssid\":\"CorpWiFi\","
-                        "\"bssids\":[\"aa:bb:cc:01:02:03\"]}]}");
+                        "\"bssids\":[\"a8:bb:cc:01:02:03\"]}]}");
 
     sloth_state_t s; seed(&s);
-    uint8_t declared[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t declared[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t rogue[6]    = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "CorpWiFi", declared, "WPA2", -40);
     add_beacon(&s, "CorpWiFi", rogue,    "WPA2", -75);
@@ -639,10 +639,10 @@ static void test_twins_registered_correlator_reaches_the_episode(void) {
     alerts_clear(); ownership_clear(); inventory_clear(); wired_attach_clear();
     if (!made) { int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_twins_cls4_XXXXXX")); if (fd >= 0) close(fd); made = 1; }
     load_inventory(tmp, "{\"networks\":[{\"ssid\":\"CorpWiFi\","
-                        "\"bssids\":[\"aa:bb:cc:01:02:03\"]}]}");
+                        "\"bssids\":[\"a8:bb:cc:01:02:03\"]}]}");
 
     sloth_state_t s; seed(&s);
-    uint8_t declared[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t declared[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t rogue[6]    = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "CorpWiFi", declared, "WPA2", -40);
     add_beacon(&s, "CorpWiFi", rogue,    "WPA2", -75);
@@ -674,7 +674,7 @@ static void test_twins_unattributed_pair_gets_no_wired_verdict(void) {
     alerts_clear(); ownership_clear(); inventory_clear(); wired_attach_clear();
     wired_attach_register(twin_is_on_the_wire, NULL);
     sloth_state_t s; seed(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", a, "WPA2", -70);
     add_beacon(&s, "Cafe-Net", b, "WPA2", -50);
@@ -695,10 +695,10 @@ static void test_twins_neighbor_class_does_not_suppress_the_episode(void) {
     alerts_clear(); ownership_clear(); inventory_clear(); wired_attach_clear();
     if (!made) { int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_twins_cls5_XXXXXX")); if (fd >= 0) close(fd); made = 1; }
     load_inventory(tmp, "{\"networks\":[{\"ssid\":\"CorpWiFi\","
-                        "\"bssids\":[\"aa:bb:cc:01:02:03\"]}]}");
+                        "\"bssids\":[\"a8:bb:cc:01:02:03\"]}]}");
 
     sloth_state_t s; seed(&s);
-    uint8_t a[6] = {0x02,0x22,0x33,0x44,0x55,0x66};
+    uint8_t a[6] = {0x00,0x22,0x33,0x44,0x55,0x66};
     uint8_t b[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
     add_beacon(&s, "Cafe-Net", a, "WPA2", -70);
     add_beacon(&s, "Cafe-Net", b, "WPA2", -50);
@@ -713,6 +713,42 @@ static void test_twins_neighbor_class_does_not_suppress_the_episode(void) {
 
     inventory_clear();
     unlink(tmp);
+}
+
+/* #188: the view takes its pairs from the same scorer as the rule, so
+ * one device's 2.4 and 5 GHz radios are no more an episode than they
+ * are an alert. The steer from an unrelated address is what would have
+ * made them one: it is hard evidence on a real pair, and the only
+ * signal here that the band rule and the U/L bit do not already excuse.
+ * Mutation (2026-11-11): twin_pair_is_sibling() returning 0 turned the
+ * count below to 1. The second half is the control: the same radios
+ * first heard a minute apart are a pair again. */
+static void test_twins_dual_band_radios_of_one_device_are_no_episode(void) {
+    alerts_clear(); ownership_clear(); inventory_clear();
+    time_t t0 = time(NULL) - 900;
+    uint8_t r24[6]  = {0x28,0x25,0x5f,0x10,0x20,0x14};
+    uint8_t r5[6]   = {0x28,0x25,0x5f,0x10,0x20,0x1c};
+    uint8_t mesh[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+
+    static sloth_state_t s; seed(&s);
+    add_beacon(&s, "HomeNet", r24, "WPA2", -60);
+    add_beacon(&s, "HomeNet", r5,  "WPA2", -64);
+    s.beacon_aps[0].channel = 6;   s.beacon_aps[0].first_seen = t0;
+    s.beacon_aps[1].channel = 157; s.beacon_aps[1].first_seen = t0 + 2;
+    btm_steer_t *st = &s.btm_steers[s.btm_steer_count++];
+    memset(st, 0, sizeof(*st));
+    memcpy(st->bssid, mesh, 6);
+    st->req_count = 1;
+    st->imminent_count = 3;
+    memcpy(st->candidates[0], r5, 6);
+    st->candidate_count = 1;
+    st->first_seen = st->last_seen = time(NULL);
+    twins_snapshot(&s);
+    ASSERT_EQ(s.twin_episode_count, 0);
+
+    s.beacon_aps[1].first_seen = t0 + 60;
+    twins_snapshot(&s);
+    ASSERT_EQ(s.twin_episode_count, 1);
 }
 
 /* twin_classify itself, on hand-built evidence rather than through a
@@ -803,6 +839,7 @@ void run_twins_tests(void) {
     RUN_TEST(test_twins_registered_correlator_reaches_the_episode);
     RUN_TEST(test_twins_unattributed_pair_gets_no_wired_verdict);
     RUN_TEST(test_twins_neighbor_class_does_not_suppress_the_episode);
+    RUN_TEST(test_twins_dual_band_radios_of_one_device_are_no_episode);
 
     TEST_SUITE("twins view");
     RUN_TEST(test_view_twins_empty_does_not_crash);

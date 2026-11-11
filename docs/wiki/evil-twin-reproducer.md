@@ -37,7 +37,7 @@ def beacon(bssid, ssid, channel=6):
                 "0100" "000fac02"   # AKM: PSK
                 "0000")))            # RSN caps
 
-real  = "aa:bb:cc:01:02:03"
+real  = "a8:bb:cc:01:02:03"        # globally administered (see below)
 twin  = "11:22:33:44:55:66"        # different OUI
 sendp([beacon(real, "Cafe-Net"),
        beacon(twin, "Cafe-Net")], iface="wlan1mon", inter=0.1, count=20)
@@ -45,6 +45,11 @@ sendp([beacon(real, "Cafe-Net"),
 
 Expected: `EVIL_TWIN` WARN alert with key `twin-fp:Cafe-Net`; row
 appears in `[x] Twins`.
+
+Both addresses must be globally administered (bit `0x02` of the first
+octet clear). Since #188 a locally administered BSSID has no OUI to
+compare, so the `aa:bb:cc:..` address this page used before earns no
+"vendor OUI differs" credit and Phase 1 raises nothing with it.
 
 ## Phase 2 — Vendor-IE delta (escalates to CRIT)
 
@@ -67,6 +72,12 @@ sendp([beacon_with_vendor_ie(real, "Cafe-Net", real_v),
 Expected: the `twin-fp:Cafe-Net` alert is now CRIT with detail
 "vendor-IE fingerprint differs".
 
+Since #188 this needs both beacons on one band (the helper's
+`channel=6` default does that; vendor IEs are not compared across
+bands) and the different globally administered OUIs of Phase 1: the
+mismatch alone is 35 % and a soft-signal CRIT needs 50 %. With a
+same-OUI or locally administered twin the row stays WARN.
+
 **Attacker OUI bonus**: swap the twin BSSID to `00:13:37:..` (Hak5) or
 `24:0a:c4:..` (Espressif) and the same WARN→CRIT escalation fires even
 without distinct vendor-IE bodies. Detail will read "attacker-tool OUI
@@ -76,7 +87,10 @@ present".
 
 scapy can't fake an adapter-level RSSI step directly — the RadioTap
 `dbm_antsignal` field is set by the receiving radio, not the sender.
-Reproduce by either:
+Since #189 the swing is reported only for a BSSID that is half of an
+`EVIL_TWIN` pair, so keep the Phase 1 pair on the air; the weakest
+reading in the window must be above -92 dBm, and a sensor that gpsd
+reports moving at 1 m/s or more stays silent. Reproduce by either:
 
 - **Physical**: walk the twin radio toward sloth's antenna while
   re-broadcasting. A 15 dBm swing inside 60 s fires
