@@ -547,14 +547,24 @@ agent` ([[slothweb-mcp]] section 4).
 newline-delimited JSON-RPC) that is a client of slothweb's HTTP API
 on loopback ([[slothweb-mcp]]). Not in `all`, `web` or the install.
 
-| Flag | Meaning |
-|---|---|
-| `--url URL` | slothweb's address, `http://` and a literal IPv4 or `[IPv6]` address with an optional port; default `http://127.0.0.1:8770`. No name is resolved. Not loopback: exit `2` unless `--allow-remote` |
-| `--allow-remote` | read a slothweb on another host (in the clear: slothweb has no TLS). Writes still fail: the agent secret is taken from loopback peers only |
-| `--agent NAME` | the name writes are recorded under, 1..32 bytes of UTF-8 with no control characters (exit `2` otherwise). Without it the write tools refuse |
-| `--secret-file PATH` | the file `slothweb --web-agent-secret PATH` wrote; read at each write; must be private to the user running it. Without it the write tools refuse |
-| `--read-only` | no write tools: not listed, not callable |
-| `--help`, `-h` | usage, on stderr |
+Its flags, in prose because this page's tables are `sloth`'s own flags
+(a test holds every table row to `src/main.c`):
+
+- **`--url URL`**: slothweb's address, `http://` and a literal IPv4 or
+  `[IPv6]` address with an optional port; default
+  `http://127.0.0.1:8770`. No name is resolved. Not loopback: exit `2`
+  unless `--allow-remote`.
+- **`--allow-remote`**: read a slothweb on another host (in the clear:
+  slothweb has no TLS). Writes still fail: the agent secret is taken
+  from loopback peers only.
+- **`--agent NAME`**: the name writes are recorded under, 1..32 bytes
+  of UTF-8 with no control characters (exit `2` otherwise). Without it
+  the write tools refuse.
+- **`--secret-file PATH`**: the file `slothweb --web-agent-secret PATH`
+  wrote; read at each write; must be private to the user running it.
+  Without it the write tools refuse.
+- **`--read-only`**: no write tools: not listed, not callable.
+- **`--help`**, **`-h`**: usage, on stderr.
 
 An unknown or incomplete argument exits `2`.
 

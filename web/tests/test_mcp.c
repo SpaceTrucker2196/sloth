@@ -894,9 +894,9 @@ static void test_write_refusals(void) {
 }
 
 /* No refusal carries any of the text that was refused: an error is a
- * word and, at most, an argument's name. Seen red with the refused
- * note's text added to env_error()'s document (IGNORE-MARK then in the
- * result). */
+ * word and, at most, an argument's name. Seen red with the request that
+ * was sent added to a refusal's document in tool_run() (IGNORE-MARK then
+ * in the result). */
 static void test_errors_never_echo(void) {
     m_open();
     if (!W.have_store) { m_close(); return; }
