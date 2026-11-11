@@ -18,6 +18,11 @@
  * the main thread as the only eligible target, so the question never
  * arises.
  *
+ * SIGUSR1 is the third (#190): on_report_signal() only sets a flag the
+ * main loop reads, and the signal arrives on a sensor that carries on
+ * capturing, so a worker call cut short by it would matter more than
+ * one cut short by a shutdown.
+ *
  * The mask is set in the creating thread around pthread_create() rather
  * than first thing in the worker, because a new thread inherits its
  * creator's mask (XSH pthread_create): there is no window in which the

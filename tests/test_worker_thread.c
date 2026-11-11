@@ -17,11 +17,16 @@
  * process-directed signal to any thread that does not block it (XSH
  * 2.4.1), so every worker sloth starts must block both, or a Ctrl-C can
  * land on the capture thread mid-pcap_dispatch() instead of the main
- * loop that acts on it. */
+ * loop that acts on it.
+ *
+ * SIGUSR1 joined them with #190: main() handles it too (write the live
+ * posture report), and unlike the other two it arrives while the sensor
+ * is meant to keep running, so a worker interrupted by it is not on its
+ * way out anyway. */
 
 /* ── the helper itself ───────────────────────────────────── */
 
-static int g_saw_int, g_saw_term;
+static int g_saw_int, g_saw_term, g_saw_usr1;
 
 static void *report_mask(void *arg) {
     (void)arg;
@@ -29,6 +34,7 @@ static void *report_mask(void *arg) {
     pthread_sigmask(SIG_BLOCK, NULL, &cur);
     g_saw_int  = sigismember(&cur, SIGINT);
     g_saw_term = sigismember(&cur, SIGTERM);
+    g_saw_usr1 = sigismember(&cur, SIGUSR1);
     return NULL;
 }
 
@@ -39,12 +45,13 @@ static void test_worker_starts_with_int_and_term_blocked(void) {
     sigemptyset(&none);
     pthread_sigmask(SIG_SETMASK, &none, &saved);
 
-    g_saw_int = g_saw_term = -1;
+    g_saw_int = g_saw_term = g_saw_usr1 = -1;
     pthread_t t;
     ASSERT_EQ(0, worker_thread_create(&t, report_mask, NULL));
     pthread_join(t, NULL);
     ASSERT_EQ(1, g_saw_int);
     ASSERT_EQ(1, g_saw_term);
+    ASSERT_EQ(1, g_saw_usr1);
 
     pthread_sigmask(SIG_SETMASK, &saved, NULL);
 }
@@ -56,7 +63,7 @@ static void test_worker_starts_with_int_and_term_blocked(void) {
 static void test_creator_mask_is_restored_exactly(void) {
     sigset_t mine, saved, after;
     sigemptyset(&mine);
-    sigaddset(&mine, SIGUSR1);
+    sigaddset(&mine, SIGUSR2);
     pthread_sigmask(SIG_SETMASK, &mine, &saved);
 
     pthread_t t;
@@ -66,7 +73,8 @@ static void test_creator_mask_is_restored_exactly(void) {
     pthread_sigmask(SIG_BLOCK, NULL, &after);
     ASSERT_EQ(0, sigismember(&after, SIGINT));
     ASSERT_EQ(0, sigismember(&after, SIGTERM));
-    ASSERT_EQ(1, sigismember(&after, SIGUSR1));
+    ASSERT_EQ(0, sigismember(&after, SIGUSR1));
+    ASSERT_EQ(1, sigismember(&after, SIGUSR2));
 
     pthread_sigmask(SIG_SETMASK, &saved, NULL);
 }
@@ -76,6 +84,8 @@ static void test_signal_set_is_int_and_term(void) {
     worker_signal_set(&s);
     ASSERT_EQ(1, sigismember(&s, SIGINT));
     ASSERT_EQ(1, sigismember(&s, SIGTERM));
+    /* #190: handled by main(), and sent to a sensor that keeps running. */
+    ASSERT_EQ(1, sigismember(&s, SIGUSR1));
     /* SIGHUP keeps its default action in sloth; nothing handles it. */
     ASSERT_EQ(0, sigismember(&s, SIGHUP));
 }
@@ -154,7 +164,8 @@ static int read_settled_sigblk(long tid, unsigned long long *mask) {
 static void test_live_dns_worker_blocks_int_and_term(void) {
     long before[MAX_TIDS], after[MAX_TIDS];
     const unsigned long long want =
-        (1ULL << (SIGINT - 1)) | (1ULL << (SIGTERM - 1));
+        (1ULL << (SIGINT - 1)) | (1ULL << (SIGTERM - 1)) |
+        (1ULL << (SIGUSR1 - 1));
     dns_cleanup();
     dns_reset();
     dns_resolver_reset_policy();

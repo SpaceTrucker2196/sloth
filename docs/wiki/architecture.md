@@ -337,19 +337,21 @@ poll.
 | DNS worker | `dns_init()` (`src/dns.c`) | only under `--allow-active`; never under the default or `--strict` policy |
 
 Every one of them is created through `worker_thread_create()`
-(`src/worker_thread.c`), which blocks SIGINT and SIGTERM in the creating
+(`src/worker_thread.c`), which blocks SIGINT, SIGTERM and SIGUSR1 in the creating
 thread around `pthread_create()` so the new thread inherits them blocked
 and then restores the creator's mask. POSIX delivers a process-directed
 signal to any thread that does not block it; with the workers blocking
-both, `on_signal()` can only run on the main thread, which is the thread
+them, `on_signal()` can only run on the main thread, which is the thread
 that acts on `g_quit`, and a Ctrl-C can no longer land on the capture
-worker inside `pcap_dispatch()`. SIGHUP is not handled — it keeps its
+worker inside `pcap_dispatch()`. SIGUSR1 (#190, write the live posture
+report now) is in the set for the same reason, and it arrives on a
+sensor that keeps capturing. SIGHUP is not handled — it keeps its
 default action — so it is not in the set.
 
 `tests/test_worker_thread.c` holds this three ways: the helper's thread
-starts with both signals blocked and the creator's mask comes back
+starts with all three signals blocked and the creator's mask comes back
 exactly; a live DNS worker's mask, read from the kernel at
-`/proc/self/task/<tid>/status`, is exactly {SIGINT, SIGTERM}; and no
+`/proc/self/task/<tid>/status`, is exactly {SIGINT, SIGTERM, SIGUSR1}; and no
 `.c` under `src/` other than the helper calls `pthread_create()`, which
 is what covers the capture and probe workers that a unit test cannot
 start without a pcap handle.
