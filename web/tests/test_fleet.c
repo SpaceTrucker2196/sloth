@@ -320,6 +320,13 @@ static void test_fleet_page(void) {
               "    return e;\n"
               "  }");
     WT_HAS(mod,
+              "    function sized(t, px) { t.style.fontSize = (px * fk).toFixed(1) + \"px\"; return t; }");
+    WT_HAS(mod,
+              "      kv(dl, \"backfill\", p.pages_refused ? \"not offered: the peer's build has no paged export (F1); upgrade it\"\n"
+              "                         : bf.length ? \"fetching the rest of \" + bf.join(\", \") + \" (\" + p.pages + \" pages, \" +\n"
+              "                          p.page_failures + \" refused)\" : \"complete\" + (p.pages ? \" (\" + p.pages + \" pages)\" : \"\"),\n"
+              "         p.page_failures > 0 || !!p.pages_refused);");
+    WT_HAS(mod,
               "  function show() {\n"
               "    load();\n"
               "    if (!S.timer) S.timer = setInterval(function () { if (!$(\"v-fleet\").hidden) load(); }, POLL_MS);\n"
@@ -1100,6 +1107,7 @@ static void test_pull_unreachable_and_thread(void) {
  * stopped; each request's target kept. */
 typedef struct {
     int       lfd, stop, n;
+    int       f1;                     /* answer as an F1 export: a 400 for any '&' */
     pthread_mutex_t mu;               /* guards stop */
     char      req[24][256];
     web_fleet_src_t src;
@@ -1142,7 +1150,14 @@ static void *serve_export(void *arg) {
         char *body = NULL;
         size_t bl = 0;
         int st = 0;
-        web_fleet_export_route(&s->src, query, T, &body, &bl, &st);
+        if (s->f1 && strchr(query, '&')) {
+            /* F1's parse_since(): since= alone, else unknown_parameter. */
+            body = malloc(64);
+            if (body) bl = (size_t)snprintf(body, 64, "{\"error\":\"unknown_parameter\"}");
+            st = 400;
+        } else {
+            web_fleet_export_route(&s->src, query, T, &body, &bl, &st);
+        }
         char hdr[160];
         int hl = snprintf(hdr, sizeof(hdr), "HTTP/1.1 %d X\r\nContent-Length: %zu\r\n"
                           "Connection: close\r\n\r\n", st, bl);
@@ -1329,6 +1344,108 @@ static void test_backfill_after_a_cut(void) {
     here_down(&srv, th);
 }
 
+/* An alert key's incidents by the thousand fill the reader's
+ * WEB_SDB_ALERT_SCAN window long before the cap, as they do on W9FJC
+ * (364,191 incidents, the newest 20,000 of them 955 keys of 17,988):
+ * three hot keys with 7,000 incidents each, newer than 1,500 keys with
+ * one. The whole export sends the three uncut-looking keys, says the
+ * kind was cut at the scan's oldest row, and the pages from there bring
+ * every other key. Seen red with the scan-cap check removed from the
+ * export (6 of 1,506 keys arrived, no page asked for) and with
+ * web_sdb_alerts_upto()'s ceiling not applied (the page read the same
+ * newest 20,000 rows, found nothing past its cursor and ended the
+ * backfill: 6 of 1,506, no cold key). */
+static void test_backfill_alerts_past_the_scan(void) {
+    peer_srv_t srv;
+    pthread_t th;
+    here_up(&srv, &th);
+    char sql[4096];
+    snprintf(sql, sizeof(sql),
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<2)"
+        " INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,technique,count)"
+        " SELECT 'hot:'||i,%lld,%lld,3,1,'hot alert '||i,'T1557',7000 FROM n;"
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<20999)"
+        " INSERT INTO alert_incidents (key,incident_id,type,first_seen,last_seen,sev,"
+        "peak_sev,count,observations) SELECT 'hot:'||(i%%3),printf('%%016x',i),3,"
+        "%lld-(i/3)-10,%lld-(i/3),1,1,1,1 FROM n;"
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<1499)"
+        " INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,technique,count)"
+        " SELECT 'cold:'||i,%lld-i-10,%lld-i,3,1,'cold alert '||i,'T1557',1 FROM n;"
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<1499)"
+        " INSERT INTO alert_incidents (key,incident_id,type,first_seen,last_seen,sev,"
+        "peak_sev,count,observations) SELECT 'cold:'||i,'0000000000000001',3,%lld-i-10,"
+        "%lld-i,1,1,1,1 FROM n;",
+        T - 8100, T - 1000, T - 1000, T - 1000, T - 9000, T - 9000, T - 9000, T - 9000);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    long long want = q1(g_db, "SELECT COUNT(DISTINCT type||'|'||title) FROM alerts");
+    WT_ASSERT(want > 1500);
+    F.pages_per_pull = 4;
+    WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
+    /* The first answer was cut by the scan, not the cap: fewer keys than
+     * the cap, and a backfill. */
+    WT_ASSERT(srv.n >= 2);
+    WT_ASSERT(!strncmp(srv.req[1], "since=0&kind=alert&after=", 25));
+    for (int i = 0; i < 6 && F.peer[0].bf[WEB_FK_ALERT].active; i++)
+        WT_EQ(web_fleet_pull_one(&F, 0, T + 60 * (i + 1)), 0);
+    WT_EQ(F.peer[0].bf[WEB_FK_ALERT].active, 0);
+    WT_EQ(F.peer[0].page_failures, 0);
+    WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='alert'"), want);
+    WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='alert' AND"
+                 " label LIKE 'cold alert %'"), 1500);
+    /* A hot key given again from a page keeps its newest last_seen. */
+    WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='alert' AND"
+                 " label LIKE 'hot alert %' AND last_seen = (SELECT MAX(last_seen) FROM"
+                 " peer_sightings WHERE kind='alert' AND label LIKE 'hot alert %')"), 3);
+    here_down(&srv, th);
+}
+
+/* A fleet upgraded a host at a time: this F2 puller against an F1 peer,
+ * whose export refuses next=1 as an unknown parameter. The pull asks
+ * again without it and is stored; nothing is paged from that peer; the
+ * next pull within WEB_FLEET_NONEXT_S asks plainly at once; the overview
+ * says so. Seen red with the retry removed (the pull failed with HTTP
+ * status 400 and no row was stored). */
+static void test_pull_from_an_f1_peer(void) {
+    peer_srv_t srv;
+    pthread_t th;
+    here_up(&srv, &th);
+    srv.f1 = 1;
+    int rc = web_fleet_pull_one(&F, 0, T);
+    if (rc) fprintf(stderr, "    pull: %s\n", F.peer[0].last_error);
+    WT_EQ(rc, 0);
+    WT_ASSERT(srv.n == 2);
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1"));
+    WT_ASSERT(!strcmp(srv.req[1], "since=0"));
+    WT_ASSERT(here_q("SELECT COUNT(*) FROM peer_sightings WHERE peer='beta'") > 0);
+    WT_EQ(F.peer[0].failures, 0);
+    WT_EQ(F.peer[0].last_error[0], '\0');
+    WT_ASSERT(F.peer[0].no_next_until > T);
+    /* Within the hour: plain at once, one request. */
+    WT_EQ(web_fleet_pull_one(&F, 0, T + 60), 0);
+    WT_ASSERT(srv.n == 3);
+    char want[64];
+    snprintf(want, sizeof(want), "since=%lld", T - WEB_FLEET_OVERLAP_S);
+    WT_ASSERT(!strcmp(srv.req[2], want));
+    web_m4_t m4;
+    memset(&m4, 0, sizeof(m4));
+    m4.fleet = &F;
+    web_fleet_src_t src = { NULL, NULL, NULL, NULL };
+    static char body[65536];
+    size_t len = 0;
+    int st = 0;
+    WT_EQ(web_fleet_overview_route(&F, &src, "", T + 60, body, sizeof(body) - 1, &len, &st), 0);
+    body[len] = '\0';
+    WT_EQ(st, 200);
+    WT_HAS(body, ",\"pages_refused\":true,");
+    /* After it: asked with next=1 again (the peer may have been
+     * upgraded meanwhile). */
+    srv.f1 = 0;
+    WT_EQ(web_fleet_pull_one(&F, 0, T + 60 + WEB_FLEET_NONEXT_S), 0);
+    WT_ASSERT(srv.n == 4);
+    WT_ASSERT(strstr(srv.req[3], "&next=1") != NULL);
+    here_down(&srv, th);
+}
+
 /* The export's paging, request by request: the parameters; an F1 pull
  * (no next=1) answered without a member an F1 importer would refuse; a
  * page of wifi after a cursor holding only that kind. Seen red with the
@@ -1390,14 +1507,25 @@ static void test_export_pages(void) {
  * probe too) and with the overview's skew written as last_ok -
  * remote_ts. A key only this site holds (02:10:ca:10:ca:01, OnlyHere)
  * cannot be listed by construction (the walk starts from the peer's
- * rows), so its absence is a statement of that, not a guard seen red. */
+ * rows), so its absence is a statement of that, not a guard seen red.
+ * The verdicts: the peer's "incident" at a device this site has not
+ * triaged, never the peer's "noise" where this site said "known" (seen
+ * red with this site's triage pass skipped: "noise" from beta shown). */
 static void test_overview_and_shared(void) {
     peer_srv_t srv;
     pthread_t th;
     here_up(&srv, &th);
+    char sql[2048];
+    /* The peer's verdicts at two of the devices: one this site has
+     * triaged too (its own wins), one it has not (the peer's shown). */
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO triage (subject,finding,type,addr,port,first_seen,state,ts,note,who,"
+        "peer) VALUES ('p3a',NULL,3,'da:a1:19:00:00:01',0,%lld,2,%lld,'','',''),"
+        " ('p3b',NULL,3,'da:a1:19:00:00:04',0,%lld,3,%lld,'','','');",
+        T - 600, T - 590, T - 600, T - 580);
+    WT_EQ(sql_on(g_store, sql), 0);
     WT_EQ(web_fleet_pull_one(&F, 0, T + 5), 0);
     WT_EQ(sdb_make(g_here_db, db_schema_version(), 0), 0);
-    char sql[2048];
     snprintf(sql, sizeof(sql),
         "INSERT INTO devices (mac,vendor,is_ap,signal_dbm,first_seen,last_seen) VALUES"
         " ('da:a1:19:00:00:01','Apple',0,-41,%lld,%lld),"
@@ -1474,6 +1602,10 @@ static void test_overview_and_shared(void) {
         WT_HAS(body, "\"sites\":[{\"site\":\"self\",\"first_seen\":1792626300,"
                      "\"last_seen\":1792627170,\"rssi\":-41},{\"site\":\"beta\",");
         WT_HAS(body, "\"verdict\":{\"state\":\"known\",\"site\":\"self\"}");
+        /* No verdict here: the peer's, named with its site; and the
+         * peer's at the address this site has triaged is not shown. */
+        WT_HAS(body, "\"verdict\":{\"state\":\"incident\",\"site\":\"beta\"}");
+        WT_LACKS(body, "\"state\":\"noise\"");
         /* Held by one site only: not listed. */
         WT_LACKS(body, "02:10:ca:10:ca:01");
         WT_LACKS(body, "da:a1:19:00:00:02");
@@ -1533,6 +1665,8 @@ void run_fleet_tests(void) {
     WT_RUN(test_pull_unreachable_and_thread);
     WT_RUN(test_export_pages);
     WT_RUN(test_backfill_after_a_cut);
+    WT_RUN(test_backfill_alerts_past_the_scan);
+    WT_RUN(test_pull_from_an_f1_peer);
     WT_RUN(test_overview_and_shared);
 #endif
     WT_RUN(test_distance);

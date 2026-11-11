@@ -319,10 +319,12 @@ typedef struct {
 int  web_frrs_verdicts(web_frrs_t *f, long long since, long long after_ts,
                        long long after_id, int max,
                        int (*fn)(void *ctx, const web_frrs_verdict_t *v), void *ctx);
-/* The newest current state of any triaged subject whose descriptor's
- * address is addr (a canonical IP or MAC): the Fleet tab's verdict for a
- * device (web_fleet.h). 1 with *state and *ts, 0 none, -1 on an error. */
-int  web_frrs_addr_state(web_frrs_t *f, const char *addr, int *state, long long *ts);
+/* For each of addrs (n, sorted by strcmp, canonical IPs or MACs) the
+ * newest current state of a triaged subject whose descriptor's address
+ * it is, else -1: the Fleet tab's verdicts (web_fleet.h), one pass over
+ * triage for all of them. The state only. Addresses found, -1 on an
+ * error. */
+int  web_frrs_addr_states(web_frrs_t *f, const char *const *addrs, int n, int *state);
 /* "any", "untriaged", "false", "noise", "incident", "known", "triaged", "out"
  * -> the WEB_TRI_* value or WEB_TRI_F_*; WEB_TRI_F_BAD for anything
  * else. */

@@ -4160,7 +4160,14 @@ is never cut. The state is in slothweb.db's `meta` table
 (`fleet.backfill.NAME.KIND`, the floor and the cursor), written in the
 transaction that stores the rows, and read back at start. A page's
 refusal is `backfill KIND: ...` in `last_error` and leaves the
-backfill to the next pull. [docs/wiki/fleet.md](../docs/wiki/fleet.md)
+backfill to the next pull, as does a page that did not move its cursor.
+An alert answer whose reader's 20,000-row scan did not reach the floor
+is cut too, its cursor the scan's oldest `last_seen` (`<ts>~`), and a
+page scans only the rows at or before its cursor. A peer whose export
+answers `next=1` with a 400 `unknown_parameter` (an F1 build) is asked
+again with `since=` alone and pulled so for an hour, nothing paged from
+it (`pages_refused` in `/api/fleet/overview`), so a fleet can be
+upgraded a host at a time. [docs/wiki/fleet.md](../docs/wiki/fleet.md)
 has why it is a keyset and not an offset.
 
 ### The fleet tables: slothweb.db v8
@@ -4206,7 +4213,7 @@ counted by kind.
 position, `last_ok_age_s`, `last_attempt_age_s`, `last_error`, `skew_s`
 = the peer's clock at its last good answer less this one's then,
 `remote_version`, `rows_last`, `counts` by kind, `backfill` per running
-kind with `floor` and `cursor`, `pages`, `page_failures`, `distance_m`)
+kind with `floor` and `cursor`, `pages`, `page_failures`, `pages_refused`, `distance_m`)
 and `distances` (every pair of sites with a position, haversine metres,
 this site `self`). **`/api/fleet/shared?kind=wifi|ble|ap|probe&limit=N`**
 (GET only, limit 50, 1..200): the keys of the kind a peer sent that this

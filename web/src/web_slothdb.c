@@ -671,9 +671,21 @@ int web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
     (void)c; (void)from; (void)to; (void)max; (void)fn; (void)ctx;
     return -1;
 }
+int web_sdb_alerts_upto(web_sdb_conn_t *c, long long from, long long to, long long ls_max,
+                        int max, web_sdb_item_fn fn, void *ctx) {
+    (void)c; (void)from; (void)to; (void)ls_max; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
 int web_sdb_alerts_scan(web_sdb_conn_t *c, long long from, long long to,
                         long long *rows, long long *oldest) {
     (void)c; (void)from; (void)to;
+    *rows = 0;
+    *oldest = 0;
+    return -1;
+}
+int web_sdb_alerts_scan_upto(web_sdb_conn_t *c, long long from, long long to,
+                             long long ls_max, long long *rows, long long *oldest) {
+    (void)c; (void)from; (void)to; (void)ls_max;
     *rows = 0;
     *oldest = 0;
     return -1;
@@ -762,6 +774,7 @@ int web_sdb_aprs_tracks(web_sdb_conn_t *c, long long from, long long bucket_s,
     if (more) *more = 0;
     return -1;
 }
+int web_sdb_spent(web_sdb_conn_t *c) { (void)c; return 1; }
 
 #else
 
@@ -850,6 +863,11 @@ static int progress(void *ud) {
         return 1;
     }
     return 0;
+}
+
+int web_sdb_spent(web_sdb_conn_t *c) {
+    if (!c->timed_out && mono_ms() > c->deadline_ms) c->timed_out = 1;
+    return c->timed_out;
 }
 
 /* ── SQL functions ────────────────────────────────────────────────── */
@@ -2122,15 +2140,17 @@ int web_sdb_ap_ssid(web_sdb_conn_t *c, const char *bssid, char *out) {
 
 /* One statement of the seven-column item shape: ?1 a text (when p1),
  * ?2 and ?3 the range, ?4 the cap. */
-static int items_range(web_sdb_conn_t *c, const char *sql, const char *p1,
-                       long long from, long long to, int max,
-                       web_sdb_item_fn fn, void *ctx) {
+/* ub >= 0: bound ?5 too (the alert reader's last_seen ceiling). */
+static int items_range_ub(web_sdb_conn_t *c, const char *sql, const char *p1,
+                          long long from, long long to, long long ub, int max,
+                          web_sdb_item_fn fn, void *ctx) {
     sqlite3_stmt *st = NULL;
     if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
     if (p1) sqlite3_bind_text(st, 1, p1, -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(st, 2, from);
     sqlite3_bind_int64(st, 3, to);
     sqlite3_bind_int(st, 4, max);
+    if (ub >= 0) sqlite3_bind_int64(st, 5, ub);
     int n = 0, rc;
     while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
         web_sdb_item_t it;
@@ -2152,6 +2172,12 @@ static int items_range(web_sdb_conn_t *c, const char *sql, const char *p1,
     }
     sqlite3_finalize(st);
     return rc == SQLITE_DONE ? n : -1;
+}
+
+static int items_range(web_sdb_conn_t *c, const char *sql, const char *p1,
+                       long long from, long long to, int max,
+                       web_sdb_item_fn fn, void *ctx) {
+    return items_range_ub(c, sql, p1, from, to, -1, max, fn, ctx);
 }
 
 /* The start of the latest incident on an alerts row (#170). On a v8
@@ -2470,9 +2496,12 @@ int web_sdb_devices_after(web_sdb_conn_t *c, long long from, long long to,
     return devices_range(c, from, to, after_ts, after_key, limit, 0, fn, ctx);
 }
 
-int web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
-                           int max, web_sdb_item_fn fn, void *ctx) {
+/* ls_max >= 0: the scan's rows are those at or before it (?5), the
+ * fleet export's page (web_sdb_alerts_upto()); -1 none. */
+static int alerts_q(web_sdb_conn_t *c, long long from, long long to, long long ls_max,
+                    int max, web_sdb_item_fn fn, void *ctx) {
     if (!(c->feats & WEB_QF_ALERTS)) return 0;
+    const char *ub = ls_max >= 0 ? " AND last_seen <= ?5" : "";
     /* One item per key: the GROUP BY reads it, no result column does.
      * The keys come from the range's newest WEB_SDB_ALERT_SCAN rows; each
      * shown key's figures are then its own, over every row of it that
@@ -2499,10 +2528,10 @@ int web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
          * key). */
         snprintf(sql, sizeof(sql),
                  "WITH wi AS (SELECT key, last_seen FROM alert_incidents"
-                 " WHERE last_seen >= ?2 AND first_seen < ?3%s"
+                 " WHERE last_seen >= ?2 AND first_seen < ?3%s%s"
                  " ORDER BY last_seen DESC LIMIT %d),"
                  " wa AS (SELECT key, last_seen FROM alerts WHERE last_seen >= ?2"
-                 " AND %s < ?3%s AND NOT EXISTS (SELECT 1 FROM alert_incidents i"
+                 " AND %s < ?3%s%s AND NOT EXISTS (SELECT 1 FROM alert_incidents i"
                  " WHERE i.key = alerts.key) ORDER BY last_seen DESC LIMIT %d),"
                  " u AS (SELECT key, last_seen FROM (SELECT key, last_seen FROM wi"
                  " UNION ALL SELECT key, last_seen FROM wa)"
@@ -2523,10 +2552,10 @@ int web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
                  " SELECT COALESCE(a.title,''), COALESCE(a.match_ip,''), a.type, f.sv,"
                  " f.cn, f.f0, k.ls, k.rid, f.n FROM k JOIN f ON f.fk = k.key"
                  " JOIN alerts a ON a.rowid = k.rid ORDER BY k.ls DESC, k.rid DESC",
-                 tys, WEB_SDB_ALERT_SCAN, fs, tys, WEB_SDB_ALERT_SCAN,
+                 tys, ub, WEB_SDB_ALERT_SCAN, fs, tys, ub, WEB_SDB_ALERT_SCAN,
                  WEB_SDB_ALERT_SCAN, fs, fs, fs);
         c->pred_ok = 1;
-        int n = items_range(c, sql, NULL, from, to, max, fn, ctx);
+        int n = items_range_ub(c, sql, NULL, from, to, ls_max, max, fn, ctx);
         c->pred_ok = 0;
         return n;
     }
@@ -2534,7 +2563,7 @@ int web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
      * key's rows in the range, joined through the primary key. */
     snprintf(sql, sizeof(sql),
              "WITH w AS (SELECT rowid AS rid, key, type, title, match_ip, last_seen,"
-             " %s AS fs FROM alerts WHERE last_seen >= ?2 AND fs < ?3%s"
+             " %s AS fs FROM alerts WHERE last_seen >= ?2 AND fs < ?3%s%s"
              " ORDER BY last_seen DESC LIMIT %d),"
              " g AS (SELECT COALESCE(title,'') AS t, COALESCE(match_ip,'') AS ip, type AS ty,"
              " max(last_seen) AS ls, max(rid) AS rid FROM w GROUP BY key"
@@ -2543,18 +2572,29 @@ int web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
              " count(*) FROM g JOIN alerts a ON a.key = (SELECT x.key FROM alerts x"
              " WHERE x.rowid = g.rid) WHERE a.last_seen >= ?2 AND %s < ?3"
              " GROUP BY g.rid ORDER BY g.ls DESC, g.rid DESC",
-             fs, tys, WEB_SDB_ALERT_SCAN, fs, fs);
+             fs, tys, ub, WEB_SDB_ALERT_SCAN, fs, fs);
     c->pred_ok = 1;
-    int n = items_range(c, sql, NULL, from, to, max, fn, ctx);
+    int n = items_range_ub(c, sql, NULL, from, to, ls_max, max, fn, ctx);
     c->pred_ok = 0;
     return n;
 }
 
-int web_sdb_alerts_scan(web_sdb_conn_t *c, long long from, long long to,
-                        long long *rows, long long *oldest) {
+int web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
+                           int max, web_sdb_item_fn fn, void *ctx) {
+    return alerts_q(c, from, to, -1, max, fn, ctx);
+}
+
+int web_sdb_alerts_upto(web_sdb_conn_t *c, long long from, long long to, long long ls_max,
+                        int max, web_sdb_item_fn fn, void *ctx) {
+    return alerts_q(c, from, to, ls_max < 0 ? 0 : ls_max, max, fn, ctx);
+}
+
+static int alerts_scan_q(web_sdb_conn_t *c, long long from, long long to, long long ls_max,
+                         long long *rows, long long *oldest) {
     *rows = 0;
     *oldest = 0;
     if (!(c->feats & WEB_QF_ALERTS)) return 0;
+    const char *ub = ls_max >= 0 ? " AND last_seen <= ?5" : "";
     char sql[2560], tys[640];
     web_sdb_scope_types(c, "type", tys, sizeof(tys));
     if (c->opt & WEB_SDB_OPT_INCROWS)
@@ -2562,19 +2602,19 @@ int web_sdb_alerts_scan(web_sdb_conn_t *c, long long from, long long to,
         snprintf(sql, sizeof(sql),
                  "SELECT count(*), min(last_seen) FROM (SELECT last_seen FROM"
                  " (SELECT last_seen FROM (SELECT last_seen FROM alert_incidents"
-                 " WHERE last_seen >= ?2 AND first_seen < ?3%s"
+                 " WHERE last_seen >= ?2 AND first_seen < ?3%s%s"
                  " ORDER BY last_seen DESC LIMIT %d)"
                  " UNION ALL SELECT last_seen FROM (SELECT last_seen FROM alerts"
-                 " WHERE last_seen >= ?2 AND %s < ?3%s AND NOT EXISTS (SELECT 1"
+                 " WHERE last_seen >= ?2 AND %s < ?3%s%s AND NOT EXISTS (SELECT 1"
                  " FROM alert_incidents i WHERE i.key = alerts.key)"
                  " ORDER BY last_seen DESC LIMIT %d))"
-                 " ORDER BY last_seen DESC LIMIT %d)", tys, WEB_SDB_ALERT_SCAN,
-                 alert_start(c), tys, WEB_SDB_ALERT_SCAN, WEB_SDB_ALERT_SCAN);
+                 " ORDER BY last_seen DESC LIMIT %d)", tys, ub, WEB_SDB_ALERT_SCAN,
+                 alert_start(c), tys, ub, WEB_SDB_ALERT_SCAN, WEB_SDB_ALERT_SCAN);
     else
         snprintf(sql, sizeof(sql),
                  "SELECT count(*), min(last_seen) FROM (SELECT last_seen, %s AS fs"
-                 " FROM alerts WHERE last_seen >= ?2 AND fs < ?3%s"
-                 " ORDER BY last_seen DESC LIMIT %d)", alert_start(c), tys,
+                 " FROM alerts WHERE last_seen >= ?2 AND fs < ?3%s%s"
+                 " ORDER BY last_seen DESC LIMIT %d)", alert_start(c), tys, ub,
                  WEB_SDB_ALERT_SCAN);
     sqlite3_stmt *st = NULL;
     /* The v11 form matches a key against a key; its result columns are
@@ -2585,6 +2625,7 @@ int web_sdb_alerts_scan(web_sdb_conn_t *c, long long from, long long to,
     if (prc != SQLITE_OK) return -1;
     sqlite3_bind_int64(st, 2, from);
     sqlite3_bind_int64(st, 3, to);
+    if (ls_max >= 0) sqlite3_bind_int64(st, 5, ls_max);
     int rc = sqlite3_step(st);
     if (rc == SQLITE_ROW) {
         *rows = sqlite3_column_int64(st, 0);
@@ -2592,6 +2633,16 @@ int web_sdb_alerts_scan(web_sdb_conn_t *c, long long from, long long to,
     }
     sqlite3_finalize(st);
     return rc == SQLITE_ROW ? 0 : -1;
+}
+
+int web_sdb_alerts_scan(web_sdb_conn_t *c, long long from, long long to,
+                        long long *rows, long long *oldest) {
+    return alerts_scan_q(c, from, to, -1, rows, oldest);
+}
+
+int web_sdb_alerts_scan_upto(web_sdb_conn_t *c, long long from, long long to,
+                             long long ls_max, long long *rows, long long *oldest) {
+    return alerts_scan_q(c, from, to, ls_max < 0 ? 0 : ls_max, rows, oldest);
 }
 
 int web_sdb_flows_between(web_sdb_conn_t *c, long long from, long long to,

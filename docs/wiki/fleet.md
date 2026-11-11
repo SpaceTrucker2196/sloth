@@ -40,7 +40,7 @@ health member), `web/src/web_frrs.c` (`web_frrs_verdicts()`),
 issue #192; RFC 9112 (HTTP/1.1 message syntax), RFC 6598 (the
 100.64.0.0/10 shared address space Tailscale numbers its nodes from).
 
-**Last updated**: 2026-11-11 (#192 F2: the Fleet tab, `/api/fleet/overview`, `/api/fleet/shared`, the backfill); 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
+**Last updated**: 2026-11-11 (#192 F2 review: the alert backfill past the reader's 20,000-row scan, an F1 peer pulled without `next=1`, the shared list's verdicts in one pass); 2026-11-11 (#192 F2: the Fleet tab, `/api/fleet/overview`, `/api/fleet/shared`, the backfill); 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
 
 ## What travels, and what never does
 
@@ -172,11 +172,31 @@ the same transaction as the rows it follows and read back at start, so
 a restart resumes a backfill rather than lose its rows; there is no new
 column and no schema step. A whole export cut again while a backfill
 runs restarts that kind's backfill from the new cut, with the older of
-the two floors, which fetches some rows twice and loses none. Only
-`next=1` brings the cursors: an F1 puller, which refuses a member it
-does not know, is answered as before. An F2 puller needs an F2 peer
-(an F1 export refuses `next=1` as an unknown parameter), so upgrade
-both.
+the two floors, which fetches some rows twice and loses none. A page
+that does not move its cursor (the peer's read ran out of its budget
+first) is asked again at the next pull, not again in the same one.
+
+Alerts need one more step. The reader takes its keys from the newest
+20,000 rows of the range (`WEB_SDB_ALERT_SCAN`), and on a busy sensor
+one finding's incidents fill that long before the cap: on W9FJC
+(2026-11-11) the newest 20,000 of 364,191 incidents were 955 of 17,988
+keys, so the first answer looked whole at 955. When the scan does not
+reach the range's floor, the export now marks `alert` cut and its
+cursor is the scan's oldest `last_seen` (`<ts>~`, every key at it
+included); a page reads only the rows at or before its cursor
+(`web_sdb_alerts_upto()`), so each page's scan starts where the last
+one ended. A key newer than the cursor may come again with an older
+`last_seen`; the importer's widening keeps its newest. More than 20,000
+incidents in one second would stop the alert backfill at that second
+(it is asked again each pull, and says so in its unchanged cursor).
+
+Only `next=1` brings the cursors: an F1 puller, which refuses a member
+it does not know, is answered as before. An F1 export refuses `next=1`
+as an unknown parameter; an F2 puller that gets that 400 asks again
+with `since=` alone, stores the answer, pulls that peer without `next=1`
+for the next hour (then tries it again), and pages nothing from it;
+the overview's `pages_refused` and the peer's card say so. A fleet can
+therefore be upgraded one host at a time.
 
 ## The Fleet tab
 
@@ -223,8 +243,9 @@ clock), `last_ok_age_s`, `last_attempt_age_s`, `last_error`, `skew_s`
 (the peer's clock at its last good answer less this one's then:
 positive, the peer runs ahead; within one pull's duration of the
 truth), `remote_version`, `rows_last`, `counts` by kind, `backfill`
-(each running kind's `floor` and `cursor`), `pages`, `page_failures`
-and `distance_m` from this site. `distances` lists every pair of sites
+(each running kind's `floor` and `cursor`), `pages`, `page_failures`,
+`pages_refused` (the peer's export refused `next=1`: an F1 build, pulled
+without it) and `distance_m` from this site. `distances` lists every pair of sites
 with a position (`a`, `b`, `m`), this site named `self`: the haversine
 on the IUGG mean radius, 6,371,008.8 m.
 
@@ -237,9 +258,12 @@ reader (read-only, its column allow-list, the 1.5 s overview budget); a
 BLE address in slothweb's own BLE table. `rows`, newest activity at any
 site first: `key`, `addr` (what the drawer opens), `label`, `vendor`,
 `last`, `sites` (`self` first, then each peer: `first_seen`,
-`last_seen`, `rssi`) and `verdict` (`state` and `site`, or null).
-`partial` is true when the scan stopped at 5,000 rows or the budget ran
-out; `scanned`, `keys` and `looked_up` say how far it got, and `local`
+`last_seen`, `rssi`) and `verdict` (`state` and `site`, or null):
+this site's triage at the address, else the newest a peer sent, each
+found in one pass over its table for all the listed rows, not a scan a
+row. `partial` is true when the scan stopped at 5,000 rows or the budget
+ran out (checked between the lookups, which are each too short for the
+reader's own progress check); `scanned`, `keys` and `looked_up` say how far it got, and `local`
 whether `sloth.db` was read (`open`, `none`, `unavailable`, `ble`).
 
 ## The store: slothweb.db v8

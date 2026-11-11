@@ -116,6 +116,9 @@
 #define WEB_FLEET_ROWS_PER_PEER  20000
 /* Backfill pages of one kind a pull at most (web_fleet_bf_t). */
 #define WEB_FLEET_PAGES_PER_PULL 4
+/* A peer whose export refused next=1 (an F1 build) is pulled without it
+ * for this long before it is asked with it again. */
+#define WEB_FLEET_NONEXT_S       3600
 #define WEB_FLEET_KEEP_S         (90LL * 86400)
 
 enum { WEB_FK_WIFI = 0, WEB_FK_BLE, WEB_FK_AP, WEB_FK_PROBE, WEB_FK_ALERT,
@@ -176,6 +179,7 @@ typedef struct {
     long long rows_last;
     unsigned long pulls, failures;
     unsigned long pages, page_failures;    /* backfill pages fetched, refused */
+    long long no_next_until;               /* an F1 peer: plain pulls until then */
     web_fleet_bf_t bf[WEB_FK_COUNT];
     char      last_error[WEB_FLEET_ERR_MAX + 1];
 } web_fleet_peer_t;

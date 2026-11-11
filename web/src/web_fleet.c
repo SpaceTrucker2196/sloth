@@ -299,6 +299,11 @@ typedef struct {
     const char *pnl_mac;
     int         pnl_cut;
     long long   alert_after_rid;     /* the alert page's rid bound */
+    /* Every key of the alert reader's scan was sent and the scan did
+     * not reach the range's floor: the next page starts at its oldest
+     * row's last_seen, every key there included. */
+    int         alert_bottom;
+    long long   alert_bottom_ts;
     web_jrec_t *rec;                 /* the self-check's decoder record */
 } xp_t;
 
@@ -751,15 +756,38 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
                                      xp_ap, &x)
                  : web_sdb_aps(&c, WEB_AP_SORT_LAST, WEB_FLEET_CAP_AP + 1, 0, xp_ap, &x)) < 0)
             x.cut[WEB_FK_AP] = 1;
-        /* A page of alerts reads past the rows at or before its cursor
-         * (the reader has no keyset of its own): as far as the reader's
-         * own scan goes. */
-        if (WANT(WEB_FK_ALERT) && !c.timed_out &&
-            web_sdb_alerts_between(&c, since, LLONG_MAX / 2,
-                                   AFTER(WEB_FK_ALERT) ? WEB_SDB_ALERT_SCAN
-                                                       : WEB_FLEET_CAP_ALERT + 1,
-                                   xp_alert, &x) < 0)
-            x.cut[WEB_FK_ALERT] = 1;
+        /* The alert reader takes its keys from the newest
+         * WEB_SDB_ALERT_SCAN rows of the range, which on a busy sensor
+         * (one key's incidents by the thousand) hold far fewer keys than
+         * the cap: the rows past the scan are a cut like any other, and
+         * the cursor is then the scan's oldest last_seen. A page reads
+         * the rows at or before its cursor (web_sdb_alerts_upto()) and
+         * passes over the keys at it that were sent (xp_alert()); a key
+         * newer than the cursor may come again with an older last_seen,
+         * which the importer's widening takes as it is. */
+        if (WANT(WEB_FK_ALERT) && !c.timed_out) {
+            long long ub = AFTER(WEB_FK_ALERT) ? xq.after_ts : -1;
+            int ar = ub >= 0
+                ? web_sdb_alerts_upto(&c, since, LLONG_MAX / 2, ub, WEB_SDB_ALERT_SCAN,
+                                      xp_alert, &x)
+                : web_sdb_alerts_between(&c, since, LLONG_MAX / 2, WEB_FLEET_CAP_ALERT + 1,
+                                         xp_alert, &x);
+            if (ar < 0) {
+                x.cut[WEB_FK_ALERT] = 1;
+            } else if (!x.cut[WEB_FK_ALERT] && !c.timed_out) {
+                long long rows = 0, oldest = 0;
+                int sr = ub >= 0
+                    ? web_sdb_alerts_scan_upto(&c, since, LLONG_MAX / 2, ub, &rows, &oldest)
+                    : web_sdb_alerts_scan(&c, since, LLONG_MAX / 2, &rows, &oldest);
+                if (sr < 0) {
+                    x.cut[WEB_FK_ALERT] = 1;
+                } else if (rows >= WEB_SDB_ALERT_SCAN) {
+                    x.cut[WEB_FK_ALERT] = 1;
+                    x.alert_bottom = 1;
+                    x.alert_bottom_ts = oldest;
+                }
+            }
+        }
         /* A read that ran out of budget is a cut, never an error: what
          * was read before it went out, and the cursor says where. */
         if (c.timed_out) {
@@ -815,7 +843,9 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
             snprintf(nm, sizeof(nm), "next_%s", KIND_WORD[k]);
             jk(&w, M_END, nm);
             if (!x.cut[k]) { web_jw_raw(&w, "null"); continue; }
-            if (x.has_cur[k])
+            if (k == WEB_FK_ALERT && x.alert_bottom)
+                snprintf(cur, sizeof(cur), "%lld~", x.alert_bottom_ts);
+            else if (x.has_cur[k])
                 snprintf(cur, sizeof(cur), "%lld~%s", x.cur_ts[k], x.cur_tok[k]);
             else if (AFTER_K(xq, k))
                 snprintf(cur, sizeof(cur), "%s", xq.after);
@@ -877,10 +907,14 @@ static int ci_prefix(const char *a, const char *b) {
     return 1;
 }
 
+/* *unknown_param (may be NULL): set when the answer was a 400 naming
+ * unknown_parameter, an F1 export's word for next=1. */
 static int http_get(web_fleet_t *f, const web_fleet_peer_cfg_t *p, const char *query,
-                    char **out, size_t *outlen, char *err, size_t errsz) {
+                    char **out, size_t *outlen, char *err, size_t errsz,
+                    int *unknown_param) {
     *out = NULL;
     *outlen = 0;
+    if (unknown_param) *unknown_param = 0;
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (fd < 0) {
         snprintf(err, errsz, "socket: %s", strerror(errno));
@@ -970,6 +1004,8 @@ static int http_get(web_fleet_t *f, const web_fleet_peer_cfg_t *p, const char *q
         for (int i = 0; i < 3; i++)
             if (b[9 + i] >= '0' && b[9 + i] <= '9') st[i] = b[9 + i];
         snprintf(err, errsz, "HTTP status %s", st);
+        if (unknown_param && !strcmp(st, "400") && strstr(b, "\"unknown_parameter\""))
+            *unknown_param = 1;
         goto fail;
     }
     char *end = strstr(b, "\r\n\r\n");
@@ -1705,7 +1741,7 @@ static void backfill_pages(web_fleet_t *f, int i, long long now_s) {
         size_t len = 0;
         long long rows = 0, remote = 0;
         int rc = -1;
-        if (http_get(f, &p->cfg, q, &body, &len, e2, sizeof(e2)) == 0)
+        if (http_get(f, &p->cfg, q, &body, &len, e2, sizeof(e2), NULL) == 0)
             rc = ingest(f, i, body, len, now_s, 1, k, bf.floor, &rows, &remote, e2, sizeof(e2));
         free(body);
         if (rc != 0) {
@@ -1713,14 +1749,19 @@ static void backfill_pages(web_fleet_t *f, int i, long long now_s) {
             store_failure(f, &p->cfg, now_s, err);
         }
         pthread_mutex_lock(&f->mu);
+        int stuck = 0;
         if (rc == 0) {
             p->pages++;
+            /* A page that did not move its cursor (the peer's read ran
+             * out of budget before its first row): asked again at the
+             * next pull, not again now. */
+            stuck = p->bf[k].active && !strcmp(p->bf[k].cur, bf.cur);
         } else {
             p->page_failures++;
             snprintf(p->last_error, sizeof(p->last_error), "%s", err);
         }
         pthread_mutex_unlock(&f->mu);
-        if (rc != 0) break;
+        if (rc != 0 || stuck) break;
     }
 }
 
@@ -1735,14 +1776,33 @@ int web_fleet_pull_one(web_fleet_t *f, int i, long long now_s) {
     char *body = NULL;
     size_t len = 0;
     long long rows = 0, remote = 0;
-    int rc = -1;
+    int rc = -1, skip_pages = 0;
     if (!f->store || !f->wr)
         snprintf(err, sizeof(err), "no store: nothing is pulled");
     else {
+        /* An F1 peer's export refuses next=1 as an unknown parameter:
+         * asked again without it, and not asked with it for
+         * WEB_FLEET_NONEXT_S, so a fleet is upgraded a host at a time.
+         * Its answers carry no cursor, so nothing is backfilled from it
+         * until it is upgraded. */
+        pthread_mutex_lock(&f->mu);
+        int plain = p->no_next_until > now_s;
+        pthread_mutex_unlock(&f->mu);
         char q[64];
-        snprintf(q, sizeof(q), "since=%lld&next=1", since);
-        if (http_get(f, &p->cfg, q, &body, &len, err, sizeof(err)) == 0)
+        snprintf(q, sizeof(q), plain ? "since=%lld" : "since=%lld&next=1", since);
+        int unk = 0;
+        int g = http_get(f, &p->cfg, q, &body, &len, err, sizeof(err), &unk);
+        if (g != 0 && unk && !plain) {
+            plain = 1;
+            pthread_mutex_lock(&f->mu);
+            p->no_next_until = now_s + WEB_FLEET_NONEXT_S;
+            pthread_mutex_unlock(&f->mu);
+            snprintf(q, sizeof(q), "since=%lld", since);
+            g = http_get(f, &p->cfg, q, &body, &len, err, sizeof(err), NULL);
+        }
+        if (g == 0)
             rc = ingest(f, i, body, len, now_s, 1, -1, since, &rows, &remote, err, sizeof(err));
+        if (rc == 0 && plain) skip_pages = 1;
     }
     free(body);
     if (rc != 0) store_failure(f, &p->cfg, now_s, err);
@@ -1758,7 +1818,7 @@ int web_fleet_pull_one(web_fleet_t *f, int i, long long now_s) {
         snprintf(p->last_error, sizeof(p->last_error), "%s", err);
     }
     pthread_mutex_unlock(&f->mu);
-    if (rc == 0) backfill_pages(f, i, now_s);
+    if (rc == 0 && !skip_pages) backfill_pages(f, i, now_s);
     return rc;
 }
 
@@ -2269,13 +2329,14 @@ int web_fleet_overview_route(web_fleet_t *f, const web_fleet_src_t *src, const c
             web_jw_int(&w, o->counts[k]);
         }
         web_jw_raw(&w, "},\"backfill\":{");
-        int nb = 0;
+        int nb = 0, plain = 0;
         unsigned long pages = 0, pfail = 0;
         if (f && o->cfg_i >= 0) {
             pthread_mutex_lock(&f->mu);
             const web_fleet_peer_t *p = &f->peer[o->cfg_i];
             pages = p->pages;
             pfail = p->page_failures;
+            plain = p->no_next_until > now_s;
             for (int k = 0; k < WEB_FK_COUNT; k++) {
                 if (!p->bf[k].active) continue;
                 if (nb++) web_jw_raw(&w, ",");
@@ -2290,6 +2351,9 @@ int web_fleet_overview_route(web_fleet_t *f, const web_fleet_src_t *src, const c
         }
         web_jw_raw(&w, "},\"pages\":");          web_jw_int(&w, (long long)pages);
         web_jw_raw(&w, ",\"page_failures\":");   web_jw_int(&w, (long long)pfail);
+        /* The peer's export refused next=1 (an F1 build): pulled
+         * without it, nothing backfilled from it. */
+        web_jw_raw(&w, ",\"pages_refused\":");   web_jw_raw(&w, plain ? "true" : "false");
         web_jw_raw(&w, ",\"distance_m\":");
         if (o->has_pos && me.loc.has)
             jfix(&w, web_fleet_dist_m(me.loc.lat, me.loc.lon, o->lat, o->lon), 1);
@@ -2373,6 +2437,33 @@ static int parse_mac6(const char *s, uint8_t out[6]) {
         out[i] = (uint8_t)v;
     }
     return 0;
+}
+
+/* A listed row's address (the device drawer's; a probe's client) and
+ * its verdict, this site's state or a peer's word and name. */
+typedef struct {
+    char      addr[WEB_KEY_MAX + 1];
+    int       row, state;
+    char      peer[WEB_FLEET_NAME_MAX + 1];
+    char      pstate[16];
+} sverd_t;
+
+static void row_addr(const char *key, char out[WEB_KEY_MAX + 1]) {
+    const char *bar = strchr(key, '|');
+    if (bar && (size_t)(bar - key) <= WEB_KEY_MAX) {
+        memcpy(out, key, (size_t)(bar - key));
+        out[bar - key] = '\0';
+    } else {
+        snprintf(out, WEB_KEY_MAX + 1, "%.*s", WEB_KEY_MAX, key);
+    }
+}
+
+static int by_vaddr(const void *pa, const void *pb) {
+    return strcmp(((const sverd_t *)pa)->addr, ((const sverd_t *)pb)->addr);
+}
+
+static int by_vrow(const void *pa, const void *pb) {
+    return ((const sverd_t *)pa)->row - ((const sverd_t *)pb)->row;
 }
 
 int web_fleet_shared_route(web_fleet_t *f, const web_fleet_src_t *src, const char *query,
@@ -2487,7 +2578,9 @@ int web_fleet_shared_route(web_fleet_t *f, const web_fleet_src_t *src, const cha
             x->local_last = cand.last_seen;
         } else {
             if (!have_c) break;
-            if (c.timed_out) { partial = 1; break; }
+            /* Each lookup is too short for the reader's progress handler
+             * to see the budget run out, so it is asked here. */
+            if (web_sdb_spent(&c)) { partial = 1; break; }
             web_sdb_item_t it;
             int rc;
             looked++;
@@ -2516,6 +2609,64 @@ int web_fleet_shared_route(web_fleet_t *f, const web_fleet_src_t *src, const cha
     if (have_c) web_slothdb_close(&c);
     if (nshared > 1) qsort(g, (size_t)nshared, sizeof(*g), by_last);
     if (nshared > fq.limit) nshared = fq.limit;
+    /* Each listed row's address and its verdict: this site's triage, one
+     * pass over it for every row; else a peer's, one pass over the
+     * verdicts the peers sent. Never a scan a row. */
+    sverd_t *vd = nshared > 0 ? calloc((size_t)nshared, sizeof(*vd)) : NULL;
+    if (nshared > 0 && !vd) { free(rows); free(g); free(buf); return -1; }
+    for (int i = 0; i < nshared; i++) {
+        row_addr(rows[g[i].at].key, vd[i].addr);
+        vd[i].row = i;
+        vd[i].state = -1;
+    }
+    if (nshared > 1) qsort(vd, (size_t)nshared, sizeof(*vd), by_vaddr);
+    if (src->frrs && nshared > 0) {
+        size_t nv = (size_t)nshared;
+        const char **av = malloc(sizeof(*av) * nv);
+        int *sv = malloc(sizeof(*sv) * nv);
+        if (av && sv) {
+            for (int i = 0; i < nshared; i++) av[i] = vd[i].addr;
+            if (web_frrs_addr_states(src->frrs, av, nshared, sv) >= 0)
+                for (int i = 0; i < nshared; i++) vd[i].state = sv[i];
+        }
+        free(av);
+        free(sv);
+    }
+#ifdef WITH_SQLITE
+    if (s && s->rd && nshared > 0) {
+        pthread_mutex_lock(&s->rmu);
+        sqlite3_stmt *q = NULL;
+        if (sqlite3_prepare_v2(s->rd,
+                "SELECT key,peer,label FROM peer_sightings WHERE kind='verdict'"
+                " ORDER BY last_seen DESC", -1, &q, NULL) == SQLITE_OK) {
+            while (sqlite3_step(q) == SQLITE_ROW) {
+                /* The key: TYPE|addr|port|first_seen (row_of()). */
+                const char *k = (const char *)sqlite3_column_text(q, 0);
+                const char *a = k ? strchr(k, '|') : NULL;
+                const char *e = a ? strchr(a + 1, '|') : NULL;
+                if (!e || e == a + 1 || (size_t)(e - a - 1) > WEB_KEY_MAX) continue;
+                sverd_t key;
+                memset(&key, 0, sizeof(key));
+                memcpy(key.addr, a + 1, (size_t)(e - a - 1));
+                key.addr[e - a - 1] = '\0';
+                sverd_t *hit = bsearch(&key, vd, (size_t)nshared, sizeof(*vd), by_vaddr);
+                if (!hit) continue;
+                /* Equal addresses sit together; the first unset takes it. */
+                while (hit > vd && !strcmp(hit[-1].addr, key.addr)) hit--;
+                for (; hit < vd + nshared && !strcmp(hit->addr, key.addr); hit++) {
+                    if (hit->state >= 0 || hit->peer[0]) continue;
+                    const char *pe = (const char *)sqlite3_column_text(q, 1);
+                    const char *lb = (const char *)sqlite3_column_text(q, 2);
+                    snprintf(hit->peer, sizeof(hit->peer), "%s", pe ? pe : "");
+                    snprintf(hit->pstate, sizeof(hit->pstate), "%s", lb ? lb : "");
+                }
+            }
+        }
+        sqlite3_finalize(q);
+        pthread_mutex_unlock(&s->rmu);
+    }
+#endif
+    if (nshared > 1) qsort(vd, (size_t)nshared, sizeof(*vd), by_vrow);
 
     web_jw_raw(&w, ",\"store\":");     web_jw_raw(&w, store ? "true" : "false");
     web_jw_raw(&w, ",\"local\":");     web_jw_str(&w, sdb_word);
@@ -2526,14 +2677,7 @@ int web_fleet_shared_route(web_fleet_t *f, const web_fleet_src_t *src, const cha
     for (int i = 0; i < nshared && !w.overflow; i++) {
         const sgroup_t *x = &g[i];
         const srow_t *r0 = &rows[x->at];
-        char mac[WEB_KEY_MAX + 1] = "";
-        const char *bar = strchr(r0->key, '|');
-        if (bar && (size_t)(bar - r0->key) <= WEB_KEY_MAX) {
-            memcpy(mac, r0->key, (size_t)(bar - r0->key));
-            mac[bar - r0->key] = '\0';
-        } else {
-            snprintf(mac, sizeof(mac), "%.*s", WEB_KEY_MAX, r0->key);
-        }
+        const char *mac = vd[i].addr;
         web_jw_raw(&w, i ? ",{\"key\":" : "{\"key\":");
         web_jw_str(&w, r0->key);
         /* The address the device page opens: a probe's client. */
@@ -2559,39 +2703,18 @@ int web_fleet_shared_route(web_fleet_t *f, const web_fleet_src_t *src, const cha
         /* The verdict: this site's triage of a finding at the address,
          * else the newest a peer sent (I8 is F3's; this only shows it). */
         web_jw_raw(&w, "],\"verdict\":");
-        int st = -1;
-        long long vts = 0;
-        if (src->frrs && web_frrs_addr_state(src->frrs, mac, &st, &vts) == 1 && st >= 0) {
+        if (vd[i].state >= 0) {
             web_jw_raw(&w, "{\"state\":");
-            web_jw_str(&w, web_frrs_state_word(st));
+            web_jw_str(&w, web_frrs_state_word(vd[i].state));
             web_jw_raw(&w, ",\"site\":\"self\"}");
+        } else if (vd[i].peer[0]) {
+            web_jw_raw(&w, "{\"state\":");
+            jstr_or_null(&w, vd[i].pstate);
+            web_jw_raw(&w, ",\"site\":");
+            web_jw_str(&w, vd[i].peer);
+            web_jw_raw(&w, "}");
         } else {
-            int done = 0;
-#ifdef WITH_SQLITE
-            if (s && s->rd) {
-                pthread_mutex_lock(&s->rmu);
-                sqlite3_stmt *q = NULL;
-                if (sqlite3_prepare_v2(s->rd,
-                        "SELECT peer,label FROM peer_sightings WHERE kind='verdict' AND"
-                        " instr(key, '|' || ?1 || '|') > 0 ORDER BY last_seen DESC LIMIT 1",
-                        -1, &q, NULL) == SQLITE_OK) {
-                    sqlite3_bind_text(q, 1, mac, -1, SQLITE_TRANSIENT);
-                    if (sqlite3_step(q) == SQLITE_ROW) {
-                        const char *pe = (const char *)sqlite3_column_text(q, 0);
-                        const char *lb = (const char *)sqlite3_column_text(q, 1);
-                        web_jw_raw(&w, "{\"state\":");
-                        jstr_or_null(&w, lb);
-                        web_jw_raw(&w, ",\"site\":");
-                        jstr_or_null(&w, pe);
-                        web_jw_raw(&w, "}");
-                        done = 1;
-                    }
-                }
-                sqlite3_finalize(q);
-                pthread_mutex_unlock(&s->rmu);
-            }
-#endif
-            if (!done) web_jw_raw(&w, "null");
+            web_jw_raw(&w, "null");
         }
         web_jw_raw(&w, "}");
     }
@@ -2600,6 +2723,7 @@ int web_fleet_shared_route(web_fleet_t *f, const web_fleet_src_t *src, const cha
     web_jw_raw(&w, "}\n");
     free(rows);
     free(g);
+    free(vd);
     if (w.overflow) {
         *len = web_series_error_json("too_large", buf, cap);
         *status = 503;

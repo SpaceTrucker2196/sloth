@@ -94,6 +94,13 @@
     fr.y.baseVal.value = 1;
     g.appendChild(fr);
     var at = {}, P = pts.length ? project(pts) : null;
+    // The viewBox scales with the panel: at phone width its 12 px text
+    // would draw at 7, so the text is sized up by the same factor (at
+    // most double), and drawn at least at 12 px on any screen.
+    $("fleet-map").style.display = pts.length ? "" : "none";
+    var wpx = $("fleet-map").getBoundingClientRect().width;
+    var fk = wpx > 0 ? Math.min(2, Math.max(1, MAP_W / wpx)) : 1;
+    function sized(t, px) { t.style.fontSize = (px * fk).toFixed(1) + "px"; return t; }
     pts.forEach(function (s) { at[s.name] = P(s.lat, s.lon); });
     (ov.distances || []).forEach(function (d) {
       var a = at[d.a], b = at[d.b];
@@ -102,9 +109,9 @@
       ln.x1.baseVal.value = a[0]; ln.y1.baseVal.value = a[1];
       ln.x2.baseVal.value = b[0]; ln.y2.baseVal.value = b[1];
       g.appendChild(ln);
-      var t = svgEl("text", "fleet-dist");
+      var t = sized(svgEl("text", "fleet-dist"), 12);
       t.x.baseVal.appendItem(svgLen((a[0] + b[0]) / 2));
-      t.y.baseVal.appendItem(svgLen((a[1] + b[1]) / 2 - 6));
+      t.y.baseVal.appendItem(svgLen((a[1] + b[1]) / 2 - 6 * fk));
       t.textContent = dist(d.m);
       g.appendChild(t);
     });
@@ -114,14 +121,13 @@
       if (s.name === "self") c.classList.add("self");
       c.cx.baseVal.value = p[0]; c.cy.baseVal.value = p[1]; c.r.baseVal.value = 7;
       g.appendChild(c);
-      var t = svgEl("text", "fleet-name");
+      var t = sized(svgEl("text", "fleet-name"), 13);
       t.x.baseVal.appendItem(svgLen(p[0]));
-      t.y.baseVal.appendItem(svgLen(p[1] + 22));
+      t.y.baseVal.appendItem(svgLen(p[1] + 8 + 14 * fk));
       t.textContent = siteName(s.name);
       g.appendChild(t);
     });
-    // No position at all: no frame to show.
-    $("fleet-map").style.display = pts.length ? "" : "none";
+    // No position at all: no frame to show (hidden above).
     var note = !pts.length ? "no site has a position yet. "
              : pts.length < 2 ? "one site placed: a distance needs two positions. " : "";
     if (none.length) note += "no position for " + none.join(", ") + " (--location LAT,LON or --gps on that sensor).";
@@ -152,9 +158,10 @@
       kv(dl, "rows held", rows.join(", "));
       var bf = [];
       Object.keys(p.backfill || {}).forEach(function (k) { bf.push(k); });
-      kv(dl, "backfill", bf.length ? "fetching the rest of " + bf.join(", ") + " (" + p.pages + " pages, " +
+      kv(dl, "backfill", p.pages_refused ? "not offered: the peer's build has no paged export (F1); upgrade it"
+                         : bf.length ? "fetching the rest of " + bf.join(", ") + " (" + p.pages + " pages, " +
                           p.page_failures + " refused)" : "complete" + (p.pages ? " (" + p.pages + " pages)" : ""),
-         p.page_failures > 0);
+         p.page_failures > 0 || !!p.pages_refused);
       kv(dl, "url", p.url || "-");
       c.appendChild(dl);
       box.appendChild(c);

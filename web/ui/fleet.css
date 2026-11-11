@@ -25,3 +25,8 @@
 .fleet-lane .fleet-track { position: absolute; left: 68px; right: 0; top: 4px; height: 4px; border-bottom: 1px dotted var(--rule); }
 .fleet-lane .fleet-bar { position: absolute; top: -2px; height: 6px; min-width: 2px; background: var(--data); }
 .fleet-lane.self .fleet-bar { background: var(--signal); }
+@media (max-width: 480px) {
+  .fleet-lane { height: 14px; }
+  .fleet-lane .fleet-who { font-size: 11px; width: 56px; }
+  .fleet-lane .fleet-track { left: 60px; top: 5px; }
+}

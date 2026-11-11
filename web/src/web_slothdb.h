@@ -535,6 +535,20 @@ int  web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
  * most WEB_SDB_ALERT_SCAN) and the oldest last_seen among them. 0, -1. */
 int  web_sdb_alerts_scan(web_sdb_conn_t *c, long long from, long long to,
                          long long *rows, long long *oldest);
+/* The two above with the scan's rows those at or before ls_max (a
+ * last_seen): the fleet export's alert page (web_fleet.h), whose cursor
+ * may lie past the newest WEB_SDB_ALERT_SCAN rows of its range. A key
+ * newer than ls_max may then be given again with the older last_seen of
+ * its rows within it; its figures, title and rid are the range's, as
+ * web_sdb_alerts_between() gives them. */
+int  web_sdb_alerts_upto(web_sdb_conn_t *c, long long from, long long to, long long ls_max,
+                         int max, web_sdb_item_fn fn, void *ctx);
+int  web_sdb_alerts_scan_upto(web_sdb_conn_t *c, long long from, long long to,
+                              long long ls_max, long long *rows, long long *oldest);
+/* Whether c's budget is spent: sets timed_out past its deadline. The
+ * progress handler only runs inside a long statement, so a loop of short
+ * ones asks this between them. */
+int  web_sdb_spent(web_sdb_conn_t *c);
 /* Flows (ssh_flows, rdp_flows, smb_sessions, snmp_flows) overlapping
  * [from, to): a = src, b = dst, n1 = WEB_FLOW_*, n2 = their count
  * (banners, connect requests, messages, PDUs), n3 = the server port

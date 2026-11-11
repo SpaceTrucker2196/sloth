@@ -1126,27 +1126,40 @@ int web_frrs_verdicts(web_frrs_t *f, long long since, long long after_ts,
     return rc == SQLITE_DONE ? n : -1;
 }
 
-int web_frrs_addr_state(web_frrs_t *f, const char *addr, int *state, long long *ts) {
-    *state = -1;
-    *ts = 0;
-    if (!f || !f->wr || !addr || !addr[0]) return 0;
+static int addr_cmp(const void *k, const void *e) {
+    return strcmp((const char *)k, *(const char *const *)e);
+}
+
+int web_frrs_addr_states(web_frrs_t *f, const char *const *addrs, int n, int *state) {
+    for (int i = 0; i < n; i++) state[i] = -1;
+    if (!f || !f->wr || n <= 0) return 0;
     sqlite3_stmt *s = NULL;
+    /* One pass over triage, newest first, whatever n is: never a scan
+     * an address (no index leads with addr). */
     if (sqlite3_prepare_v2(f->wr,
-            "SELECT t.state, t.ts FROM triage t WHERE t.addr = ?1 AND t.id = (SELECT"
+            "SELECT t.addr, t.state FROM triage t WHERE t.addr <> '' AND t.id = (SELECT"
             " MAX(u.id) FROM triage u WHERE u.subject = t.subject)"
-            " ORDER BY t.ts DESC, t.id DESC LIMIT 1", -1, &s, NULL) != SQLITE_OK) {
+            " ORDER BY t.ts DESC, t.id DESC", -1, &s, NULL) != SQLITE_OK) {
         sqlite3_finalize(s);
         return -1;
     }
-    sqlite3_bind_text(s, 1, addr, -1, SQLITE_TRANSIENT);
-    int rc = sqlite3_step(s), found = 0;
-    if (rc == SQLITE_ROW) {
-        *state = sqlite3_column_int(s, 0);
-        *ts = sqlite3_column_int64(s, 1);
-        found = 1;
+    int found = 0, rc = SQLITE_DONE;
+    while (found < n && (rc = sqlite3_step(s)) == SQLITE_ROW) {
+        const char *a = (const char *)sqlite3_column_text(s, 0);
+        if (!a) continue;
+        const char *const *hit = bsearch(a, addrs, (size_t)n, sizeof(*addrs), addr_cmp);
+        if (!hit) continue;
+        /* Equal addresses sit together: each takes the newest. */
+        while (hit > addrs && !strcmp(hit[-1], a)) hit--;
+        for (; hit < addrs + n && !strcmp(*hit, a); hit++) {
+            if (state[hit - addrs] >= 0) continue;
+            state[hit - addrs] = sqlite3_column_int(s, 1);
+            found++;
+        }
     }
+    if (found == n) rc = SQLITE_DONE;
     sqlite3_finalize(s);
-    return rc == SQLITE_ROW || rc == SQLITE_DONE ? found : -1;
+    return rc == SQLITE_DONE ? found : -1;
 }
 
 static long long q_count(web_frrs_t *f, const char *sql) {
@@ -1173,10 +1186,9 @@ int web_frrs_verdicts(web_frrs_t *f, long long since, long long after_ts,
     (void)f; (void)since; (void)after_ts; (void)after_id; (void)max; (void)fn; (void)ctx;
     return 0;
 }
-int web_frrs_addr_state(web_frrs_t *f, const char *addr, int *state, long long *ts) {
-    (void)f; (void)addr;
-    *state = -1;
-    *ts = 0;
+int web_frrs_addr_states(web_frrs_t *f, const char *const *addrs, int n, int *state) {
+    (void)f; (void)addrs;
+    for (int i = 0; i < n; i++) state[i] = -1;
     return 0;
 }
 static long long q_count(web_frrs_t *f, const char *sql) { (void)f; (void)sql; return -1; }
