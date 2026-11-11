@@ -325,3 +325,5 @@
 | 5cc6098 | 2026-11-11T15:21:25Z | claude-opus-5-5 | 16 | 2918 | 780764 | 316194 | 2.7441 | #192 F2 review: alert backfill past scan cap, F1-peer fallback, shared-route budget |
 | a365563 | 2026-11-11T18:55:30Z | claude-opus-5-5 | 36 | 8509 | 2949883 | 182887 | 2.2234 | #192 I5: two-sensor RSSI localisation, rf_model leaf, rssi=0 fix |
 | 6b273fd | 2026-11-11T19:39:00Z | claude-opus-5-5 | 58 | 3343 | 3614268 | 14974 | 0.9097 | #192 I5 review: LM least squares, 2.4 GHz calibration, probe time bound, nearer sigma |
+| 95a754c | 2026-11-11T20:31:56Z | claude-opus-5-5 | 12 | 4599 | 1110535 | 8968 | 0.3859 | Classify GNSS events across sites as regional, local or undetermined (#192 I6) |
+| bbf99b6 | 2026-11-11T21:11:40Z | claude-opus-5-5 | 10 | 2619 | 930685 | 6447 | 0.2901 | Never read a peer as quiet before it could have answered (#192 I6 review) |
