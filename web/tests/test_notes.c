@@ -176,6 +176,9 @@ static int get(const char *path, const char *query) {
     }
     g_out[n] = '\0';
     if (r.body_free) free((void *)r.body);
+    /* /api/bundle's body is the route's heap copy, the caller's to free
+     * (web_resp_t.body_owned); NULL for every other route here. */
+    free(r.body_owned);
     return r.status;
 }
 
