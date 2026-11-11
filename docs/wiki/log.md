@@ -6780,3 +6780,4 @@ its excess over the receiver's gap and over the interval, nothing when
 they disagree in sign). Residual, stated in the rule and the assessment:
 a reader falling behind on the very pair where the receiver dropped an
 epoch is not seen, since at 1 Hz that gap is a whole-second step's.
+- 2026-11-10 — ADR 0008 "own fleet" (#192 F0): the owner's own sensors share at full fidelity over the tailnet, pulled by slothweb; ADR 0006 stays the rule for community sharing.
