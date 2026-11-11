@@ -6793,7 +6793,7 @@ devices, which record no anonymity signal. `00:c0:ca` resolves to ALFA.
 slothweb scores from `risk_signals` in every scope and no longer reads
 the stored `risk_level`, so rows stored under the old sums read at the
 new level. The replay golden file's three probe-only device rows move
-from HIGH to MED. [[devices]], [[posture-report]], [[capture-scope]],
+from HIGH to MED. `docs/views/devices.md`, [[posture-report]], [[capture-scope]],
 [[slothweb]].
 
 ## 2026-11-11 — the "self" tag is the sensor's own interfaces only (#183)
@@ -6813,7 +6813,7 @@ A locally administered BSSID has no OUI to compare, vendor-IE hashes are
 compared within a band only, a steer from a sibling address is not a
 hard signal, and a soft-signal CRIT needs 50% confidence. Known limit: a
 rogue on a locally administered address now reaches WARN at most without
-a hard signal. [[alerts]], [[twins]], [[evil-twin-reproducer]],
+a hard signal. [[alerts]], `docs/views/twins.md`, [[evil-twin-reproducer]],
 [[action-frames]].
 
 ## 2026-11-11 — `EVIL_TWIN_PROXIMITY` needs a twin (#189)
@@ -6822,7 +6822,7 @@ The rule fired on any BSSID with a 15 dBm swing in 60 s; 254 of 300
 firing BSSIDs had no same-SSID twin. It now fires only for half of a
 candidate pair, with the window's minimum above -92 dBm, and not while
 a GNSS fix in the last 60 s shows the sensor moving. [[alerts]],
-[[twins]].
+`docs/views/twins.md`.
 
 ## 2026-11-11 — posture report while running, one record per session (#190)
 
