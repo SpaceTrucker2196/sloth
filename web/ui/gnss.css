@@ -11,6 +11,10 @@
 .gnssrow > span { color: inherit; }
 .gnssrow canvas.trail { width: 96px; height: 14px; display: inline-block; vertical-align: middle; }
 .gnss-bar { display: inline-block; height: 8px; vertical-align: middle; background: currentColor; max-width: 100%; }
+/* The constellation swatch and the sky's key (gnssColor(), --k-0..7). */
+.gnss-sw { display: inline-block; width: 8px; height: 8px; margin-right: 4px; vertical-align: baseline; border-radius: 1px; }
+.gnss-legend { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 4px; }
+.gnss-legend-it { white-space: nowrap; }
 .gnss-two { display: grid; grid-template-columns: 340px 1fr; gap: var(--gap, 12px); }
 @media (max-width: 760px) { .gnss-two { grid-template-columns: 1fr; } }
 #gnss-sky { display: block; width: 320px; height: 320px; max-width: 100%; }

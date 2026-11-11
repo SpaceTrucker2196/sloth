@@ -868,7 +868,7 @@ cell heat-graded over 50 dB-Hz with the TUI's thresholds; a per-row
 C/N0 trail from the points), a polar sky plot (azimuth around,
 elevation inward, north up, dots heat-graded and larger when used),
 and a fix-history strip (mode, satellites used, HDOP, clock offset
-over the kept records). Clicking a row opens the TUI's detail rows.
+over the kept records). Satellites are coloured by constellation (the key palette, one colour per `gnssid`) in the sky plot, its trails and both tables' GNSS column, with a key under the sky; C/N0 keeps its heat in the signal cells. Clicking a row opens the TUI's detail rows.
 The receiver is neither the monitor radio's nor the IP capture's, so
 its records are META like `sensor_health`, the tab is served under
 every scope, and the scope chip says so.

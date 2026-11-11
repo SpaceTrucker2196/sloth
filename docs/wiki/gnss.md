@@ -202,7 +202,7 @@ the rows are in the TUI's order; rows bright / dim as the TUI's; the
 signal cell heat-graded with the TUI's thresholds; a per-row C/N0
 trail), a polar
 sky plot (azimuth around, elevation inward, north up) and a fix-history
-strip (mode, satellites used, HDOP, clock offset). `web_gnss.c` keeps
+strip (mode, satellites used, HDOP, clock offset). Satellites are coloured by constellation (the key palette, one colour per `gnssid`) in the sky plot, its trails and both tables' GNSS column, with a key under the sky; C/N0 keeps its heat in the signal cells. `web_gnss.c` keeps
 64 satellite rows (least recently reported evicted, a row quiet for
 660 s — two heartbeats and a margin — dropped as set) and 512 fixes,
 in memory only. Four global gauges ride the rollup: `gnss.sats_used`,

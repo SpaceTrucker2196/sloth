@@ -34,6 +34,25 @@
   function heatColor(f) {
     return cssVar("--heat-" + (f < 0.15 ? 0 : f < 0.40 ? 1 : f < 0.70 ? 2 : 3), "currentColor");
   }
+  // A satellite's colour is its constellation's (owner ruling
+  // 2026-11-11): gnssid 0..7 (web_gnss_name()'s table) takes the key
+  // palette's --k-0..--k-7, one each, so GPS is the same colour in the
+  // sky, its trail, both tables and the legend. An id outside the
+  // table is --tui-dim. C/N0 keeps its heat in the table's signal cells.
+  var GNSS_NAMES = ["GPS", "SBAS", "Galileo", "BeiDou", "IMES", "QZSS", "GLONASS", "NavIC"];
+  function gnssColor(id) {
+    return num(id) && id >= 0 && id < 8 && Math.floor(id) === id
+      ? cssVar("--k-" + id, "currentColor") : cssVar("--tui-dim", "#888");
+  }
+  // The constellation cell: a swatch, then the name as text.
+  function gnssCell(s) {
+    var c = el("span", "c-gn");
+    var sw = el("span", "gnss-sw");
+    sw.style.background = gnssColor(s.gnssid);
+    c.appendChild(sw);
+    c.appendChild(document.createTextNode(String(s.gnss || "")));
+    return c;
+  }
   function visible() { var v = $("v-gnss"); return v && !v.hidden; }
   function age(ts, now) {
     if (!num(ts) || ts <= 0) return "-";
@@ -165,7 +184,7 @@
     var cls = s.health === 2 ? "d-dim" : s.used ? "d-bright" : "d-normal";
     var r = el("div", "gnssrow dt-row " + cls + (on ? " on" : ""));
     r.appendChild(cell("c-id", s.id || "-"));
-    r.appendChild(cell("c-gn", s.gnss));
+    r.appendChild(gnssCell(s));
     r.appendChild(cell("c-nm", vname(s) || "-"));
     r.appendChild(cell("c-sv n", num(s.svid) ? s.svid : "-"));
     r.appendChild(cell("c-pr n", s.prn));
@@ -282,7 +301,7 @@
       var pts = t.pts || [];
       if (pts.length < 2) return;
       var picked = sel && sel.gnssid === t.gnssid && sel.prn === t.prn;
-      g.strokeStyle = picked ? cssVar("--signal", tcol) : tcol;
+      g.strokeStyle = picked ? cssVar("--signal", tcol) : gnssColor(t.gnssid);
       g.lineWidth = picked ? 2 : 1;
       for (var i = 1; i < pts.length; i++) {
         // A gap over two buckets is the satellite setting and rising
@@ -299,13 +318,54 @@
       if (!num(s.el) || !num(s.az)) return;
       var r = R * (90 - s.el) / 90, a = (s.az - 90) * Math.PI / 180;
       var x = cx + r * Math.cos(a), y = cy + r * Math.sin(a);
-      var f = num(s.cn0) ? s.cn0 / SPAN_DBHZ : 0;
-      g.fillStyle = num(s.cn0) ? heatColor(f) : cssVar("--tui-dim", "#888");
-      g.beginPath(); g.arc(x, y, s.used ? 6 : 4, 0, Math.PI * 2); g.fill();
+      // Filled in its constellation's colour; a satellite with no
+      // C/N0 (listed, not tracked) is the ring alone.
+      g.fillStyle = gnssColor(s.gnssid);
+      g.strokeStyle = g.fillStyle;
+      g.beginPath(); g.arc(x, y, s.used ? 6 : 4, 0, Math.PI * 2);
+      if (num(s.cn0)) g.fill(); else g.stroke();
       if (s.health === 2) { g.strokeStyle = cssVar("--heat-3", "#f00"); g.beginPath(); g.arc(x, y, 8, 0, Math.PI * 2); g.stroke(); }
       g.fillStyle = cssVar("--ink", "currentColor");
       g.fillText(s.id || (s.gnss.charAt(0) + (num(s.svid) ? s.svid : s.prn)), x, y - 9);
     });
+    skyLegend(j);
+  }
+  // Under the sky: each constellation in view with its swatch and how
+  // many of its satellites are listed, in gnssid order. Made here
+  // rather than in the page so the sky and its key are one thing.
+  function skyLegend(j) {
+    var c = $("gnss-sky");
+    if (!c || !c.parentNode) return;
+    var box = $("gnss-sky-legend");
+    if (!box) {
+      box = el("div", "sub gnss-legend");
+      box.id = "gnss-sky-legend";
+      c.parentNode.insertBefore(box, c.nextSibling);
+    }
+    clear(box);
+    var n = [0, 0, 0, 0, 0, 0, 0, 0], other = 0;
+    (j.sats || []).forEach(function (s) {
+      if (num(s.gnssid) && s.gnssid >= 0 && s.gnssid < 8 && Math.floor(s.gnssid) === s.gnssid) n[s.gnssid]++;
+      else other++;
+    });
+    for (var i = 0; i < 8; i++) {
+      if (!n[i]) continue;
+      var it = el("span", "gnss-legend-it");
+      var sw = el("span", "gnss-sw");
+      sw.style.background = gnssColor(i);
+      it.appendChild(sw);
+      it.appendChild(document.createTextNode(GNSS_NAMES[i] + " " + n[i]));
+      box.appendChild(it);
+    }
+    if (other) {
+      var o = el("span", "gnss-legend-it");
+      var osw = el("span", "gnss-sw");
+      osw.style.background = gnssColor(-1);
+      o.appendChild(osw);
+      o.appendChild(document.createTextNode("other " + other));
+      box.appendChild(o);
+    }
+    box.appendChild(el("span", "gnss-legend-it", "colour: constellation · larger: in the solution · ring only: no C/N0"));
   }
 
   // ── the fix history: four strips over the kept gnss_fix records ──
@@ -433,7 +493,7 @@
       var on = histSel && histSel.gnssid === g.gnssid && histSel.prn === g.prn;
       var r = el("div", "histrow dt-row d-normal" + (on ? " on" : ""));
       r.appendChild(cell("c-id", g.id || "-"));
-      r.appendChild(cell("c-gn", g.gnss));
+      r.appendChild(gnssCell(g));
       r.appendChild(cell("c-nm", vname(g) || "-"));
       r.appendChild(cell("c-nr n", g.veh ? g.veh.norad : "-"));
       r.appendChild(cell("c-pr n", g.prn));
