@@ -412,7 +412,7 @@ The device database. Data comes from `sloth.db` joined with `slothweb` lookups.
 
 - Search box with a small query language (§9.1).
 - Virtualised table, 60 fps at 512 rows. Columns: mac (with a colour swatch), vendor, ip, name (best passive name, with a source glyph: `D` DHCP, `m` mDNS, `N` NBNS, `p` PTR seen on the wire, `P` active PTR), last SSID, signal, sources (bit glyphs: `A`RP `D`HCP `P`robe `B`eacon `S`TA), risk, first seen, last seen, `z` now, anomaly count.
-- Row colour: the mac's hash colour on the swatch only. Text stays `--ink` and `--muted`. Rows with `risk_level > 0` get a left border in the severity colour. Rows with `mac_random = 1` show the mac in `--muted` with a `~` prefix.
+- Row colour: the mac's hash colour on the swatch only. Text stays `--ink` and `--muted`. Rows with a risk level above 0 (scored by slothweb from `risk_signals`, #191; the stored `risk_level` is not read) get a left border in the severity colour. Rows with `mac_random = 1` show the mac in `--muted` with a `~` prefix.
 - Presence strip: a 24 h mini heatmap per row (144 cells of 10 minutes) showing when the device was present. This is the fastest way to spot the device that only appears at 3 AM.
 - Click a row: a drawer slides in (second-brain viewer style) with the full `/api/device/{mac}` record: PNL SSIDs, associations with evidence grade, probe history, the 168-cell presence heatmap, anomalies, alerts, and the lookup panel.
 

@@ -2008,7 +2008,7 @@ or instance, NBNS, a PTR answer seen), `random:yes|no` (the locally
 administered bit), `seen:` and `first:` (`<24h` less than 24 h ago,
 `>7d` more than, `>2026-09-29` at or after that day UTC, `<...` before
 it, `<=...` on or before it, a bare date that day; units `s m h d w`), `risk:` (0..3 with
-`= < > <= >=`), `z:` (`|z|` now, below), `src:` (`arp dhcp mdns beacon
+`= < > <= >=`, the level slothweb scores from `risk_signals`, below), `z:` (`|z|` now, below), `src:` (`arp dhcp mdns beacon
 probe sta camera`, sloth's `DEV_SRC_*` bits), `has:` (`pnl alert
 anomaly name ip ssid`) and `anomaly:` (a kind, keyed by the MAC). A
 word before `:` that is no prefix (`b8:27:eb`) is free text, which
@@ -2225,6 +2225,19 @@ GET /api/devices?q=vendor%3Aapple%20random%3Ayes%20seen%3A%3C24h
    "z":null,"anomalies":0,"presence":"000000000000000000000000000000000000"}],
  "count":1,"more":false,"next_offset":null}
 ```
+
+`risk` is scored from `risk_signals` on every read, in every scope, and
+the level sloth stored in `devices.risk_level` is not read at all
+(#191). The bits: 1 random MAC, 2 unknown vendor, 4 no hostname, 8
+probe-only, 16 a cleartext credential, 32 an alert, 64 self (one of the
+sensor host's own interfaces, or a device on the operator's roster; the
+drawer writes `(self)` beside the level). Bits 1, 2, 4 and 8 are one
+anonymity family worth one point in total, and nothing beside bit 64;
+bits 16 and 32 are three points each; 1 is MED, 3 HIGH, 5 CRIT. A phone
+walking past (random MAC, no hostname, probe-only) is MED, where the
+three bits used to sum to HIGH, and a database written before the
+change reads the new levels without being rewritten: its rows for
+devices never seen again would otherwise stay HIGH for good.
 
 A row is the §8.6 columns that have a source: the MAC, randomised or
 not, the vendor (`vendor_src` `oui` from the table, `sloth` sloth's own
@@ -4069,7 +4082,7 @@ signals. sloth's own state, and its two own-state alerts, are in every
 scope. A device seen both ways appears in both, and in each shows only
 what that scope captured: under Monitor no address or name behind it,
 under Local no SSID, AP bit or PNL; its signal, first and last seen and
-risk (sloth's weights over the scope's signals) are the scope's own.
+risk (sloth's score over the scope's signals) are the scope's own.
 While sloth says its IP capture is itself a monitor radio
 (`sensor_health.capture_linktype`, or `capture_iface == monitor_iface`
 from an older sloth) the stream's IP-capture records count as

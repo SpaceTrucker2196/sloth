@@ -117,7 +117,7 @@ int sdb_seed(const char *path) {
         " ('00:03:93:00:00:03','10.0.1.13','macbook','Apple',NULL,0,NULL,0,3,0,0,%lld,%lld),"
         " ('da:a1:19:00:00:04',NULL,NULL,'Samsung',NULL,0,-60,2,16,1,1,%lld,%lld),"
         " ('3e:00:00:00:00:05',NULL,NULL,NULL,NULL,0,NULL,0,16,1,0,%lld,%lld),"
-        " ('f2:11:22:00:00:06','10.0.1.16',NULL,'Apple Inc','CorpWiFi',0,-55,5,16,1,2,%lld,%lld),"
+        " ('f2:11:22:00:00:06','10.0.1.16',NULL,'Apple Inc','CorpWiFi',0,-55,5,16,17,2,%lld,%lld),"
         " ('da:a1:19:00:00:07',NULL,NULL,'apple',NULL,0,NULL,0,16,1,0,%lld,%lld),"
         " ('70:b3:d5:f2:a1:23','10.0.1.18',NULL,NULL,NULL,0,NULL,0,1,2,1,%lld,%lld),"
         " ('00:11:22:33:44:55','10.0.1.5','<b>nas</b>','Generic',NULL,0,NULL,0,7,0,0,%lld,%lld);"

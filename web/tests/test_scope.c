@@ -1,7 +1,7 @@
 /* The capture scope (web_scope.h, owner request 2026-10-26): the top
  * bar's Monitor / Hybrid / Local switch. The tables are held to the
  * files they classify (include/sloth_alerts.def, web_live.c's
- * POLL_TYPES, src/device_risk.c's weights, app.js's monitor-row types);
+ * POLL_TYPES, include/sloth.h's DEV_RISK_* bits, app.js's monitor-row types);
  * the parameter step is held to the shared parser's rules; and every
  * route is asked under each scope against one fixture that holds data of
  * both kinds and one MAC seen both ways, through the route table, so
@@ -18,12 +18,14 @@
 #include <unistd.h>
 
 #include "sdb_gen.h"
+#include "sloth.h"
 #include "web_alertkb.h"
 #include "web_anomaly.h"
 #include "web_assets.h"
 #include "web_jsonl.h"
 #include "web_live.h"
 #include "web_metrics.h"
+#include "web_query.h"
 #include "web_routes.h"
 #include "web_scope.h"
 #include "web_series.h"
@@ -194,41 +196,67 @@ static void test_record_types_are_classified(void) {
     WT_EQ(web_scope_eff(web_scope_metric(WM_HOST_CONNS), 1), WEB_SC_L);
 }
 
-/* sloth's risk weights and buckets (src/device_risk.c), read from the
- * source, are the ones the scopes recompute with: web_scope_risk_w[],
- * which web_query.c's scoped risk SQL sums. Seen red with ALERT_TAGGED's
- * weight in web_scope_risk_w[] set to 2. */
-static void test_risk_weights_are_sloths(void) {
-    char *src = slurp("src/device_risk.c");
-    WT_ASSERT(src != NULL);
-    if (!src) return;
-    static const char *const BIT[6] = {
-        "DEV_RISK_RANDOM_MAC;", "DEV_RISK_UNKNOWN_VENDOR;", "DEV_RISK_NO_HOSTNAME;",
-        "DEV_RISK_PROBE_ONLY;", "DEV_RISK_CLEARTEXT_CRED;", "DEV_RISK_ALERT_TAGGED;",
-    };
-    for (int b = 0; b < 6; b++) {
-        const char *p = strstr(src, BIT[b]);
-        const char *s = p ? strstr(p, "score += ") : NULL;
-        WT_ASSERT(s != NULL);
-        if (!s) continue;
-        int w = atoi(s + 9);
-        /* The table web_query.c's scoped SQL sums. */
-        WT_EQ(web_scope_risk_w[b], w);
-        /* The weight alone decides the level of a device with only it. */
-        WT_EQ(web_scope_risk_level(1LL << b), w >= 5 ? 3 : w >= 3 ? 2 : w >= 1 ? 1 : 0);
-    }
-    WT_HAS(src, "if      (score >= 5) level = DEV_RISK_CRIT;");
-    WT_HAS(src, "else if (score >= 3) level = DEV_RISK_HIGH;");
-    WT_HAS(src, "else if (score >= 1) level = DEV_RISK_MED;");
-    free(src);
+/* The device risk model of #191, which the sensor (src/device_risk.c)
+ * and slothweb each carry: the four anonymity bits are one family worth
+ * one point however many are set, nothing on a SELF device; a cleartext
+ * credential and an alert are three each; CRIT at 5, HIGH at 3, MED at
+ * 1. The bits are held to include/sloth.h; the score is pinned here
+ * value by value, not read out of device_risk.c's text as the per-bit
+ * weights were, because a family has no "score += N" per bit to read.
+ * Seen red with WEB_RISK_W_EVID 2 (one evidence bit read MED) and with
+ * web_scope_risk_level()'s SELF test removed (64|8 read MED). */
+static void test_risk_model(void) {
+    WT_EQ(WEB_RISK_ANON, DEV_RISK_RANDOM_MAC | DEV_RISK_UNKNOWN_VENDOR |
+                         DEV_RISK_NO_HOSTNAME | DEV_RISK_PROBE_ONLY);
+    WT_EQ(WEB_RISK_EVID, DEV_RISK_CLEARTEXT_CRED | DEV_RISK_ALERT_TAGGED);
+    WT_EQ(WEB_RISK_BOTH, DEV_RISK_RANDOM_MAC | DEV_RISK_UNKNOWN_VENDOR);
+    WT_EQ(WEB_RISK_LOCAL, DEV_RISK_NO_HOSTNAME | DEV_RISK_CLEARTEXT_CRED |
+                          DEV_RISK_ALERT_TAGGED);
+    WT_EQ(WEB_RISK_MONITOR, DEV_RISK_PROBE_ONLY);
+    WT_EQ(WEB_RISK_SELF, 64);
+#ifdef DEV_RISK_SELF
+    /* The sensor's half of #191 names the bit; before it lands this is
+     * not compiled, and the 64 above is the agreed value. */
+    WT_EQ(WEB_RISK_SELF, DEV_RISK_SELF);
+#endif
     WT_EQ(web_scope_risk_level(0), 0);
-    WT_EQ(web_scope_risk_level(1 | 2), 1);           /* 2: MED */
-    WT_EQ(web_scope_risk_level(1 | 2 | 4), 2);       /* 3: HIGH */
-    WT_EQ(web_scope_risk_level(16 | 1 | 2), 3);      /* 5: CRIT */
-    /* What each scope sees of the signals. */
-    WT_EQ(web_scope_risk_mask(WEB_SCOPE_MONITOR), 1 | 2 | 8);
-    WT_EQ(web_scope_risk_mask(WEB_SCOPE_LOCAL), 1 | 2 | 4 | 16 | 32);
-    WT_EQ(web_scope_risk_mask(WEB_SCOPE_HYBRID), 0x3f);
+    /* Each anonymity bit alone, and all four: MED, never more. */
+    for (int b = 0; b < 4; b++) WT_EQ(web_scope_risk_level(1LL << b), 1);
+    WT_EQ(web_scope_risk_level(1 | 2), 1);
+    /* 1|2|4 was 3 points, HIGH, when the bits summed: the family is one
+     * point now, MED. 0xd and 0xe are the two values the reference
+     * host's 29,316 HIGH rows carry. */
+    WT_EQ(web_scope_risk_level(1 | 2 | 4), 1);
+    WT_EQ(web_scope_risk_level(0xd), 1);
+    WT_EQ(web_scope_risk_level(0xe), 1);
+    WT_EQ(web_scope_risk_level(0xf), 1);
+    /* One evidence bit is HIGH, with or without the family (3 or 4). */
+    WT_EQ(web_scope_risk_level(16), 2);
+    WT_EQ(web_scope_risk_level(32), 2);
+    /* 16|1|2 was 5 points, CRIT: 3 + 1 now, HIGH. */
+    WT_EQ(web_scope_risk_level(16 | 1 | 2), 2);
+    WT_EQ(web_scope_risk_level(32 | 0xf), 2);
+    /* Both evidence bits are CRIT. */
+    WT_EQ(web_scope_risk_level(16 | 32), 3);
+    WT_EQ(web_scope_risk_level(16 | 32 | 0xf), 3);
+    /* SELF: the family counts nothing, the evidence still does. */
+    WT_EQ(web_scope_risk_level(64), 0);
+    WT_EQ(web_scope_risk_level(64 | 8), 0);
+    WT_EQ(web_scope_risk_level(64 | 0xf), 0);
+    WT_EQ(web_scope_risk_level(64 | 16), 2);
+    WT_EQ(web_scope_risk_level(64 | 16 | 0xf), 2);
+    WT_EQ(web_scope_risk_level(64 | 16 | 32), 3);
+    /* A bit above SELF is no signal of this model's. */
+    WT_EQ(web_scope_risk_level(128), 0);
+    /* The drawer says "self" beside the level, from bit 64. */
+    WT_HAS((const char *)web_page,
+           "function riskSelf(sig) { return num(sig) && (sig & 64) !== 0; }");
+    WT_HAS((const char *)web_page, "[\"risk\", String(r.risk) + "
+           "(riskSelf(r.risk_signals) ? \" (self)\" : \"\")],");
+    /* What each scope sees of the signals: SELF in all three. */
+    WT_EQ(web_scope_risk_mask(WEB_SCOPE_MONITOR), 1 | 2 | 8 | 64);
+    WT_EQ(web_scope_risk_mask(WEB_SCOPE_LOCAL), 1 | 2 | 4 | 16 | 32 | 64);
+    WT_EQ(web_scope_risk_mask(WEB_SCOPE_HYBRID), 0x7f);
 }
 
 static void test_tags(void) {
@@ -851,13 +879,15 @@ static void test_presence_split(void) {
 }
 
 #ifdef WITH_SQLITE
+#include <sqlite3.h>
 
 /* ── sloth.db ───────────────────────────────────────────────────────── *
  *
  *   B 02:00:00:00:00:b0 seen both ways: ARP and probes (sources 17),
  *     a DHCP name, a PNL SSID, a wifi_stas signal (-33, Local's) and a
  *     probe signal (-71, Monitor's) beside the merged -40; risk signals
- *     RANDOM_MAC | PROBE_ONLY | ALERT_TAGGED (CRIT in all, MED in
+ *     RANDOM_MAC | PROBE_ONLY | ALERT_TAGGED (stored CRIT, as the old sum
+ *     had it; HIGH in all by #191's score, MED in
  *     Monitor, HIGH in Local); first seen by ARP 20 d ago, by probe 5 d.
  *   M 02:00:00:00:00:a1 the monitor radio's only: a beacon (sources 8).
  *   L 02:00:00:00:00:c1 the wire's only: ARP (sources 1).
@@ -965,7 +995,7 @@ static void row_of(const char *b, const char *mac, char *out, size_t cap) {
  * Monitor with c->ip "d.ip"; Monitor's signal with c->signal
  * "d.signal_dbm" (-40); Local's SSID with c->ssid "d.last_ssid"; the DHCP name
  * under Monitor with row_select()'s names test removed; the risk with
- * c->risk "d.risk_level". */
+ * c->risk "d.risk_level" (and the column allow-listed again). */
 static void test_devices_scoped(void) {
     char row[4096];
     WT_EQ(route(&H, "/api/devices", "scope=monitor"), 200);
@@ -1008,7 +1038,9 @@ static void test_devices_scoped(void) {
     WT_HAS(b, "02:00:00:00:00:c1");
     row_of(b, "02:00:00:00:00:b0", row, sizeof(row));
     WT_HAS(row, "\"signal\":-40");
-    WT_HAS(row, "\"risk\":3,\"risk_signals\":41");
+    /* 41 is 1|8|32: the family's one point and the alert's three, HIGH.
+     * The row is stored CRIT (the old sum's 5) and is not read back so. */
+    WT_HAS(row, "\"risk\":2,\"risk_signals\":41");
     same_as_hybrid(&H, "/api/devices", "");
     same_as_hybrid(&H, "/api/devices", "q=has%3Aip&sort=signal&dir=asc");
     /* The query language answers in the scope's columns: under Monitor
@@ -1149,6 +1181,178 @@ static void test_devices_camera_and_probe_only_scoped(void) {
     WT_HAS(row, "\"risk\":1,\"risk_signals\":1,");
     WT_EQ(sdb_exec(g_db, "DELETE FROM devices WHERE mac IN"
                          " ('02:00:00:00:00:d1','02:00:00:00:00:d2');"), 0);
+}
+
+/* A row's stored level is never read (#191). The reference host holds
+ * 29,316 rows stored HIGH under the old per-bit sum, most of them 0xd
+ * (random MAC, no hostname, probe-only), on devices sloth will not see
+ * again and so will never rewrite: each scope scores the level from the
+ * signals instead. O is such a row; S1 is a SELF device with an
+ * anonymity bit beside it and a stored CRIT; S2 SELF with a cleartext
+ * credential; E both evidence bits and a stored LOW. All four are heard
+ * both ways (sources 17).
+ *
+ * Seen red with dcols()'s Hybrid c->risk put back to "d.risk_level" and
+ * risk_level allow-listed again: O read "risk":2 in the Hybrid list and
+ * in the Hybrid drawer (each of the four rows its stored level), risk:>=2
+ * listed O and S1 and lost S2 and E, risk:<2 lost O, and the risk sort
+ * put S1 first. The Monitor and Local readings never read the stored
+ * column and stayed green under that mutation. Seen red too with
+ * Monitor's rsig setting PROBE_ONLY on a SELF row (its
+ * "(d.risk_signals & 64) = 0" made always true): S1 and S2 read
+ * "risk_signals":72 under Monitor. */
+static void test_stored_level_is_not_read(void) {
+    char row[4096], sql[1024];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO devices (mac,ip,vendor,sources,risk_signals,risk_level,"
+        "first_seen,last_seen) VALUES"
+        " ('02:00:00:00:00:e1','10.0.2.31','OldCo',17,13,2,%lld,%lld),"
+        " ('02:00:00:00:00:e2','10.0.2.32','SelfCo',17,72,3,%lld,%lld),"
+        " ('02:00:00:00:00:e3','10.0.2.33','SelfCo',17,80,0,%lld,%lld),"
+        " ('02:00:00:00:00:e4','10.0.2.34','EvidCo',17,48,0,%lld,%lld);",
+        (long long)SDB_NOW - 3600, (long long)SDB_NOW - 10,
+        (long long)SDB_NOW - 3600, (long long)SDB_NOW - 5,
+        (long long)SDB_NOW - 3600, (long long)SDB_NOW - 20,
+        (long long)SDB_NOW - 3600, (long long)SDB_NOW - 900);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    /* [scope][row]: Monitor sees neither evidence bit, so S2 and E are
+     * LOW or MED there; PROBE_ONLY is the radio's own (sources 17 is a
+     * probe and no beacon), so E has it under Monitor, and S1 and S2,
+     * SELF, do not. */
+    static const char *const SC[3] = { "", "scope=monitor", "scope=local" };
+    static const char *const MAC[4] = { "02:00:00:00:00:e1", "02:00:00:00:00:e2",
+                                        "02:00:00:00:00:e3", "02:00:00:00:00:e4" };
+    static const char *const WANT[3][4] = {
+        { "\"risk\":1,\"risk_signals\":13,", "\"risk\":0,\"risk_signals\":72,",
+          "\"risk\":2,\"risk_signals\":80,", "\"risk\":3,\"risk_signals\":48," },
+        { "\"risk\":1,\"risk_signals\":9,",  "\"risk\":0,\"risk_signals\":64,",
+          "\"risk\":0,\"risk_signals\":64,", "\"risk\":1,\"risk_signals\":8," },
+        { "\"risk\":1,\"risk_signals\":5,",  "\"risk\":0,\"risk_signals\":64,",
+          "\"risk\":2,\"risk_signals\":80,", "\"risk\":3,\"risk_signals\":48," },
+    };
+    for (int sc = 0; sc < 3; sc++) {
+        WT_EQ(route(&H, "/api/devices", SC[sc]), 200);
+        for (int i = 0; i < 4; i++) {
+            row_of(body_of(g_out), MAC[i], row, sizeof(row));
+            WT_HAS(row, WANT[sc][i]);
+        }
+        /* The drawer's record is the same row. */
+        for (int i = 0; i < 4; i++) {
+            char path[64];
+            snprintf(path, sizeof(path), "/api/device/02%%3A00%%3A00%%3A00%%3A00%%3Ae%d", i + 1);
+            WT_EQ(route(&H, path, SC[sc]), 200);
+            WT_HAS(body_of(g_out), WANT[sc][i]);
+        }
+    }
+    /* risk: filters on the scored level. */
+    WT_EQ(route(&H, "/api/devices", "q=risk%3A%3E%3D2"), 200);
+    const char *b = body_of(g_out);
+    WT_LACKS(b, "02:00:00:00:00:e1");
+    WT_LACKS(b, "02:00:00:00:00:e2");
+    WT_HAS(b, "02:00:00:00:00:e3");
+    WT_HAS(b, "02:00:00:00:00:e4");
+    WT_EQ(route(&H, "/api/devices", "q=risk%3A%3C2%20vendor%3Aoldco"), 200);
+    WT_HAS(body_of(g_out), "02:00:00:00:00:e1");
+    WT_EQ(route(&H, "/api/devices", "q=risk%3A0%20vendor%3Aselfco"), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "02:00:00:00:00:e2");
+    WT_LACKS(b, "02:00:00:00:00:e3");
+    WT_EQ(route(&H, "/api/devices", "scope=monitor&q=risk%3A%3E%3D2"), 200);
+    WT_HAS(body_of(g_out), "\"rows\":[]");
+    /* The risk sort is by the scored level: E (CRIT) leads although it
+     * is the oldest and stored LOW; S1, the newest and stored CRIT, is
+     * behind every scored row; ascending, E is last. */
+    WT_EQ(route(&H, "/api/devices", "sort=risk"), 200);
+    b = body_of(g_out);
+    const char *e1 = strstr(b, "\"mac\":\"02:00:00:00:00:e1\"");
+    const char *e2 = strstr(b, "\"mac\":\"02:00:00:00:00:e2\"");
+    const char *e3 = strstr(b, "\"mac\":\"02:00:00:00:00:e3\"");
+    const char *e4 = strstr(b, "\"mac\":\"02:00:00:00:00:e4\"");
+    const char *first = strstr(b, "{\"mac\":");
+    WT_ASSERT(e1 && e2 && e3 && e4 && first);
+    if (e1 && e2 && e3 && e4 && first) {
+        WT_ASSERT(e4 == first + 1);
+        WT_ASSERT(e4 < e3 && e3 < e1 && e1 < e2);
+    }
+    WT_EQ(route(&H, "/api/devices", "sort=risk&dir=asc"), 200);
+    b = body_of(g_out);
+    e2 = strstr(b, "\"mac\":\"02:00:00:00:00:e2\"");
+    e4 = strstr(b, "\"mac\":\"02:00:00:00:00:e4\"");
+    WT_ASSERT(e2 && e4 && e2 < e4 && !strstr(e4 + 1, "{\"mac\":"));
+    same_as_hybrid(&H, "/api/devices", "sort=risk");
+    WT_EQ(sdb_exec(g_db, "DELETE FROM devices WHERE mac LIKE '02:00:00:00:00:e_';"), 0);
+}
+
+/* The SQL each scope's statement scores with (web_query.c risk_case())
+ * and web_scope_risk_level() are one function: all 128 signal values,
+ * each on a device the radio would call probe-only (sources 16) and one
+ * it would not (8), read through web_query_row_select_scoped() in every
+ * scope. The stored level is a value of its own (3 - i % 4), so a
+ * statement reading it disagrees on most rows. risk_case() tabulates
+ * the C function, so what this holds is the indexing, the masks and
+ * Monitor's own PROBE_ONLY. Seen red with Hybrid's c->risk
+ * "d.risk_level" (384 rows of 512); with risk_case()'s table built over
+ * v and not v & mask (Local scored a stored PROBE_ONLY, which is not
+ * Local's: 4 rows); and with Monitor's rsig setting PROBE_ONLY on a
+ * SELF row (128 rows). */
+static void test_risk_sql_is_the_c_form(void) {
+    char dir[TEST_TMP_MAX], path[128];
+    snprintf(dir, sizeof(dir), "%s/slothweb-scrisk-XXXXXX", test_tmpdir());
+    WT_ASSERT(mkdtemp(dir) != NULL);
+    snprintf(path, sizeof(path), "%s/sloth.db", dir);
+    WT_EQ(sdb_make(path, db_schema_version(), 0), 0);
+    WT_EQ(sdb_exec(path,
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 255)"
+        " INSERT INTO devices (mac,sources,risk_signals,risk_level,first_seen,last_seen)"
+        " SELECT printf('02:00:00:00:%02x:%02x', i / 128, i % 128),"
+        " CASE WHEN i < 128 THEN 16 ELSE 8 END, i % 128, 3 - (i % 4), 1, 2 FROM n;"), 0);
+    sqlite3 *h = NULL;
+    WT_EQ(sqlite3_open_v2(path, &h, SQLITE_OPEN_READONLY, NULL), SQLITE_OK);
+    char *sql = malloc(WEB_Q_SQL_MAX);
+    WT_ASSERT(sql != NULL);
+    static const int SCOPES[3] = { WEB_SCOPE_HYBRID, WEB_SCOPE_MONITOR, WEB_SCOPE_LOCAL };
+    for (int k = 0; sql && k < 3; k++) {
+        int scope = SCOPES[k], rows = 0, bad = 0;
+        long long mask = web_scope_risk_mask(scope);
+        /* Every feature bit and none: the score is the same text. */
+        for (int pass = 0; pass < 2; pass++) {
+            sqlite3_stmt *st = NULL;
+            WT_EQ(web_query_row_select_scoped(pass ? ~0u : 0u, scope, NULL, sql,
+                                              WEB_Q_SQL_MAX), 0);
+            WT_EQ(sqlite3_prepare_v2(h, sql, -1, &st, NULL), SQLITE_OK);
+            while (st && sqlite3_step(st) == SQLITE_ROW) {
+                const char *mac = (const char *)sqlite3_column_text(st, WEB_QCOL_MAC);
+                unsigned beacon = 0, v = 0;
+                if (!mac || sscanf(mac, "02:00:00:00:%x:%x", &beacon, &v) != 2) {
+                    bad++;
+                    continue;
+                }
+                long long sig = (long long)v & mask;
+                if (scope == WEB_SCOPE_MONITOR) {
+                    /* The stored PROBE_ONLY is not Monitor's; the
+                     * radio's own is, and not on a SELF device. */
+                    sig &= ~(long long)WEB_RISK_MONITOR;
+                    if (!beacon && !(v & WEB_RISK_SELF)) sig |= WEB_RISK_MONITOR;
+                }
+                long long got_sig = sqlite3_column_int64(st, WEB_QCOL_RISK_SIGNALS);
+                long long got = sqlite3_column_int64(st, WEB_QCOL_RISK);
+                if (got_sig != sig || got != web_scope_risk_level(sig)) {
+                    if (!bad)
+                        fprintf(stderr, "    scope %d signals %u: sql %lld/%lld, c %lld/%d\n",
+                                scope, v, got_sig, got, sig, web_scope_risk_level(sig));
+                    bad++;
+                }
+                rows++;
+            }
+            sqlite3_finalize(st);
+        }
+        WT_EQ(rows, 512);
+        WT_EQ(bad, 0);
+    }
+    free(sql);
+    sqlite3_close(h);
+    unlink(path);
+    rmdir(dir);
 }
 
 /* One device, each list in its own scope. Seen red: the SSIDs under
@@ -1489,7 +1693,9 @@ static long long sc_mono_ms(void) {
  * overview answer inside their budgets (scaled for the sanitizers),
  * not sloth_db_timeout. Seen red (each Local read a 503) with dcols()'s
  * ARP columns the correlated subqueries again, one scan of arp per
- * device: arp is keyed (ip, mac), and nothing indexes mac. */
+ * device: arp is keyed (ip, mac), and nothing indexes mac. Every row is
+ * stored HIGH, most with the passer-by's 0xd, as the reference host's
+ * are (#191). */
 static void test_scoped_reads_on_a_large_file(void) {
     char dir[TEST_TMP_MAX], path[128], sql[2048], q[160];
     snprintf(dir, sizeof(dir), "%s/slothweb-scbig-XXXXXX", test_tmpdir());
@@ -1501,11 +1707,13 @@ static void test_scoped_reads_on_a_large_file(void) {
         "BEGIN;"
         "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n"
         " WHERE i < %d - 1)"
-        " INSERT INTO devices (mac,ip,sources,first_seen,last_seen)"
+        " INSERT INTO devices (mac,ip,sources,risk_signals,risk_level,first_seen,"
+        "last_seen)"
         " SELECT printf('02:00:%%02x:%%02x:%%02x:%%02x', i / 16777216 %% 256,"
         " i / 65536 %% 256, i / 256 %% 256, i %% 256),"
         " CASE WHEN i < %d THEN printf('10.%%d.%%d.%%d', i / 65536, i / 256 %% 256,"
         " i %% 256) END, CASE WHEN i < %d THEN 1 ELSE 16 END,"
+        " CASE WHEN i %% 1000 = 7 THEN 48 WHEN i %% 50 = 3 THEN 16 ELSE 13 END, 2,"
         " %lld - i, %lld - i %% 600 FROM n;"
         "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n"
         " WHERE i < %d - 1)"
@@ -1526,6 +1734,12 @@ static void test_scoped_reads_on_a_large_file(void) {
         { "/api/devices", "scope=local", WEB_SDB_HTTP_MS },
         { "/api/devices", "scope=local&sort=first", WEB_SDB_HTTP_MS },
         { "/api/devices", "scope=monitor", WEB_SDB_HTTP_MS },
+        /* The risk sort scores every row (no index ever held the level,
+         * stored or not), and risk: filters on the score. */
+        { "/api/devices", "sort=risk", WEB_SDB_HTTP_MS },
+        { "/api/devices", "sort=risk&q=risk%%3A%%3E%%3D2", WEB_SDB_HTTP_MS },
+        { "/api/devices", "scope=monitor&sort=risk", WEB_SDB_HTTP_MS },
+        { "/api/devices", "scope=local&sort=risk&dir=asc", WEB_SDB_HTTP_MS },
         { "/api/history/devices", "scope=local&from=%lld", WEB_SDB_HTTP_MS },
         { "/api/history/overview", "scope=local&from=%lld&cols=24", WEB_SDB_OVERVIEW_MS },
     };
@@ -1550,7 +1764,7 @@ static void test_scoped_reads_on_a_large_file(void) {
 void run_scope_tests(void) {
     WT_RUN(test_alert_table_is_the_def);
     WT_RUN(test_record_types_are_classified);
-    WT_RUN(test_risk_weights_are_sloths);
+    WT_RUN(test_risk_model);
     WT_RUN(test_tags);
     WT_RUN(test_take);
     live_up(&g_live);
@@ -1566,6 +1780,8 @@ void run_scope_tests(void) {
     WT_RUN(test_devices_scoped);
     WT_RUN(test_devices_anomalies_scoped);
     WT_RUN(test_devices_camera_and_probe_only_scoped);
+    WT_RUN(test_stored_level_is_not_read);
+    WT_RUN(test_risk_sql_is_the_c_form);
     WT_RUN(test_device_scoped);
     WT_RUN(test_alerts_history_scoped);
     WT_RUN(test_wifi_card_scoped);

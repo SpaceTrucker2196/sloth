@@ -124,18 +124,32 @@ void        web_scope_note_mon(web_scope_ctx_t *c, const char *name);
 int         web_scope_device(long long sources, long long cam_signals,
                              const char *ip);
 
-/* sloth's device risk (src/device_risk.c) recomputed from the signals a
- * scope can see: RANDOM_MAC and UNKNOWN_VENDOR in both, NO_HOSTNAME,
- * CLEARTEXT_CRED and ALERT_TAGGED Local only, PROBE_ONLY Monitor only.
- * Hybrid keeps every bit. */
+/* sloth's device risk (src/device_risk.c, #191) recomputed from the
+ * signals a scope can see: RANDOM_MAC and UNKNOWN_VENDOR in both,
+ * NO_HOSTNAME, CLEARTEXT_CRED and ALERT_TAGGED Local only, PROBE_ONLY
+ * Monitor only. SELF (the sensor host's own interface, or one on the
+ * operator's roster) is no capture's finding but the sensor's knowledge
+ * of the device, so every scope keeps it. Hybrid keeps every bit. */
 #define WEB_RISK_BOTH    (1 | 2)
 #define WEB_RISK_LOCAL   (4 | 16 | 32)
 #define WEB_RISK_MONITOR 8
+#define WEB_RISK_SELF    64
+#define WEB_RISK_ALL     0x7f
 long long   web_scope_risk_mask(int scope);
-/* The weights and buckets, device_risk.c's: 1,1,1,1,3,3; 0 LOW, 1-2
- * MED, 3-4 HIGH, 5+ CRIT. web_query.c's scoped SQL sums the same
- * table, so the test that reads device_risk.c holds both. */
-extern const int web_scope_risk_w[6];
+/* The score. The four anonymity bits (random MAC, unknown vendor, no
+ * hostname, probe-only) are near-collinear, a phone walking past sets
+ * three at once, so they are one family worth WEB_RISK_W_ANON in total
+ * however many are set, and nothing at all on a SELF device. The two
+ * evidence bits are WEB_RISK_W_EVID each. 0 LOW, 1-2 MED, 3-4 HIGH,
+ * 5+ CRIT: anonymity alone stops at MED, one evidence bit is HIGH,
+ * both are CRIT. web_query.c's SQL is this function tabulated, in
+ * every scope, Hybrid included: the stored devices.risk_level is
+ * never read, because a row the sensor will not see again keeps the
+ * level an older formula gave it (29,316 HIGH on the reference host). */
+#define WEB_RISK_ANON    (1 | 2 | 4 | 8)
+#define WEB_RISK_EVID    (16 | 32)
+#define WEB_RISK_W_ANON  1
+#define WEB_RISK_W_EVID  3
 int         web_scope_risk_level(long long signals);
 
 /* What the IP capture is, from sensor_health: a monitor radio when its

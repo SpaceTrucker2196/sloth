@@ -2636,6 +2636,10 @@
   // CRIT 1.0, LOW dim), a non-zero count at heat 0.5; the address in
   // its hash colour, the SSID in its own, the name through the brands.
   var RISK_HEAT = [-1, 0.4, 0.7, 1.0];
+  // risk_signals bit 64 (sloth's DEV_RISK_SELF, #191): the sensor
+  // host's own interface or one on the operator's roster. Its anonymity
+  // bits score nothing, and the drawer says so beside the level.
+  function riskSelf(sig) { return num(sig) && (sig & 64) !== 0; }
   function fill(r, d) {
     r.mac = typeof d.mac === "string" ? d.mac : "";
     var risk = num(d.risk) && d.risk >= 0 && d.risk <= 3 ? d.risk : 0;
@@ -2900,7 +2904,7 @@
         ["name", r.name === null ? null : hostVal(r.name, " (" + r.name_src + ")")],
         ["hostname", hostVal(dt.hostname)], ["last ssid", ssidVal(r.ssid, r.ssid_k, r.ssid_np)],
         ["signal", num(r.signal) ? r.signal + " dBm" : null],
-        ["sources", srcGlyphs(r.sources)], ["risk", String(r.risk)],
+        ["sources", srcGlyphs(r.sources)], ["risk", String(r.risk) + (riskSelf(r.risk_signals) ? " (self)" : "")],
         ["first seen", stamp(r.first_seen)], ["last seen", stamp(r.last_seen)],
         ["z now", num(r.z) ? r.z.toFixed(1) : null],
         ["camera", dt.camera_vendor ? dt.camera_vendor + (dt.camera_model ? " " + dt.camera_model : "") : null],

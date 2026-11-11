@@ -143,14 +143,27 @@ associations; its signal is `wifi_stas`'s. In both:
   bits in `devices.sources` (the latest tick only: sloth's upsert
   replaces them), so a device first seen by ARP and now only by probes
   stays in Local;
-- **risk** is sloth's weights (`src/device_risk.c`: 1, 1, 1, 1, 3, 3;
-  CRIT at 5, HIGH at 3, MED at 1; `web_scope_risk_w[]`, which the
-  scoped SQL sums, is held to the source by a test) over the signals
-  the scope can see: RANDOM_MAC and UNKNOWN_VENDOR in both,
-  NO_HOSTNAME, CLEARTEXT_CRED and ALERT_TAGGED Local's, PROBE_ONLY
-  Monitor's, recomputed there from the radio's sources alone (a probe
-  and no beacon): sloth clears the stored bit for a device in the
-  managed card's station dump, which is Local's;
+- **risk** is sloth's score (#191, `web_scope_risk_level()`) over the
+  signals the scope can see. The four anonymity bits (RANDOM_MAC,
+  UNKNOWN_VENDOR, NO_HOSTNAME, PROBE_ONLY) are one family worth one
+  point in total however many are set, and nothing on a SELF device
+  (bit 64: one of the sensor host's own interfaces, or one on the
+  operator's roster); CLEARTEXT_CRED and ALERT_TAGGED are three each;
+  CRIT at 5, HIGH at 3, MED at 1. So anonymity alone is MED at most,
+  one evidence bit HIGH, both CRIT. RANDOM_MAC and UNKNOWN_VENDOR are
+  in both scopes, NO_HOSTNAME, CLEARTEXT_CRED and ALERT_TAGGED Local's,
+  PROBE_ONLY Monitor's, recomputed there from the radio's sources
+  alone (a probe and no beacon; not on a SELF device): sloth clears the
+  stored bit for a device in the managed card's station dump, which is
+  Local's. SELF is in every scope. **Hybrid scores the level the same
+  way and `devices.risk_level` is never read** (the column is off the
+  allow-list): a row sloth does not see again keeps the level its
+  formula of the day stored, and the reference host held 29,316 rows
+  stored HIGH for three anonymity bits that summed to 3. The SQL is the
+  C function tabulated over the 128 signal values, a string of level
+  digits the signals index (`web_query.c` `risk_case()`), so the two
+  cannot differ and the risk sort costs one lookup a row; no index ever
+  covered the stored level, so that sort read every row before too;
 - **the camera identity**, and the camera bit in `sources` (and so
   `src:camera`), are shown where the scope has a camera signal of its
   own; a not-camera verdict (from the IP vetoes) under Local only;

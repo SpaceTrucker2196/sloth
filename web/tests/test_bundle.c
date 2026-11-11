@@ -1396,17 +1396,33 @@ static void test_nested_reasons(void) {
 }
 
 /* The glossary's risk is sloth's device_risk_level_t, 0..3, with the
- * thresholds of web_scope_risk_level() (the page's own clamp). */
+ * score of web_scope_risk_level() (#191: one point for the anonymity
+ * family, three per evidence bit, nothing for anonymity on a self
+ * device), and risk_signals names the self bit. */
 static void test_glossary_risk_is_the_level(void) {
     WT_EQ(route(&H, "/api/bundle", "kind=device&id=02:00:00:00:00:12"), 200);
     WT_HAS(answer(), "\"risk\":\"sloth\\u0027s device risk level: 0 LOW, 1 MED, 2 HIGH, "
-                     "3 CRIT, from the weighted sum of risk_signals (weights 1,1,1,1,3,3 in "
-                     "bit order; \\u003e=1 MED, \\u003e=3 HIGH, \\u003e=5 CRIT)\"");
+                     "3 CRIT, scored from risk_signals: the four anonymity bits (1, 2, 4, 8) "
+                     "are one family worth 1 point in total however many are set, and 0 on a "
+                     "self device (bit 64); bits 16 and 32 are evidence, 3 points each; "
+                     "\\u003e=1 MED, \\u003e=3 HIGH, \\u003e=5 CRIT. So anonymity alone is "
+                     "never above MED, one evidence bit is HIGH, both are CRIT. slothweb "
+                     "scores this from risk_signals itself and does not read the level sloth "
+                     "stored\"");
+    WT_HAS(answer(), "32 an alert\\u0027s match_ip was its IP, 64 self: one of the sensor "
+                     "host\\u0027s own interfaces, or a device on the operator\\u0027s roster "
+                     "(the page says \\\"self\\\")\"");
     WT_EQ(DEV_RISK_LOW, 0);
     WT_EQ(DEV_RISK_CRIT, 3);
     WT_EQ(web_scope_risk_level(1), 1);
-    WT_EQ(web_scope_risk_level(1 | 2 | 4), 2);
-    WT_EQ(web_scope_risk_level(16 | 1 | 2), 3);
+    /* The sentences above, each as the function has it: 1|2|4 was HIGH
+     * and 16|1|2 CRIT while the bits summed. */
+    WT_EQ(web_scope_risk_level(1 | 2 | 4), 1);
+    WT_EQ(web_scope_risk_level(1 | 2 | 4 | 8), 1);
+    WT_EQ(web_scope_risk_level(16 | 1 | 2), 2);
+    WT_EQ(web_scope_risk_level(16 | 32), 3);
+    WT_EQ(web_scope_risk_level(64 | 8), 0);
+    WT_EQ(web_scope_risk_level(64 | 16), 2);
 }
 
 /* count and observations are evaluations of a standing condition, not
