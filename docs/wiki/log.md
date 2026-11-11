@@ -6839,3 +6839,14 @@ restart no longer replaces the last session's record. A killed session's
 live file is set aside as `.unclean`. `SIGUSR1` forces a live write and
 is blocked in the worker threads. Nothing prunes the per-session files.
 [[posture-report]], [[cli-reference]], [[deployment]], [[retention]].
+
+## 2026-11-11 — slothweb: the presence strip coloured by the sun at the sensor
+
+Owner ruling ("color the 24 hour presence based on night sunrise day
+sunset"): a present cell of G5 takes `--sun-night`, `--sun-rise`,
+`--sun-day` or `--sun-set` by the sun's elevation at the sensor's own
+position (`/api/gnss`: the fix, else `loc`), computed on the page by
+`web/ui/sun.js`; no position or a cell over an hour keeps the one ink,
+and says so. G5's ruler is drawn in the three tables' headers with the
+phases as a band. R1 gains its second exception, for G5 only
+(`docs/web-visual-spec.md`, `web/README.md`). [[slothweb]].

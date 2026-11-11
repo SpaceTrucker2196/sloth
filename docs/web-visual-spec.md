@@ -15,6 +15,8 @@
 > | 3. G2 reference line | **Keep -67 dBm**, captioned as a field rule of thumb, not a standard (default taken) |
 > | 4. Flows first mode (F11) | **Matrix first**, chord second |
 > | 5. Overview tile order (§6.1) | **Urgency first**: open alerts, open anomalies, sensor health, throughput, devices, records |
+>
+> **Owner ruling, 2026-11-11** ("color the 24 hour presence based on night sunrise day sunset"): **G5's present cells are coloured by the sun's phase at the sensor**, night, sunrise, day or sunset, in the four `--sun-*` tokens. This is a second exception to R1's "one ink", for G5 only (G1's line is the first). The phase is taken at the sensor's own position and nowhere else; with no position, or a cell longer than an hour, a present cell is `--tui-normal` as before. §5 G5 and R1 below are written to it.
 
 ## 0. What this document is
 
@@ -273,15 +275,18 @@ The existing 7 by 24 grid, with three changes (F3):
 
 Answers: *when was it here.*
 
-The existing 144-cell strip, with a header ruler (F10) and two marks (F15):
+The existing 144-cell strip, with a header ruler (F10), two marks (F15) and, since the ruling of 2026-11-11, the sun's phase as the colour of a present cell:
 
 ```
    24 H PRESENCE   |·······|·······|·······▲        ← ruler once, in the header: midnight ticks, ▲ now
-   ▮▮▮▮▮▮▮▮      ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮    ← present cells in --tui-normal
-   ◆▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮                                 ← ◆ first seen inside the window, --signal
+                   ▁▁▂▃▃▃▃▃▃▃▃▃▂▁▁▁▁▁▂▃▃▃▃▃▃        ← under the ticks, the sun's phases: night 1 px, sunrise and sunset 2, day 3
+   nnnnrDDD      DDDDDDDsnnnnnnnnnnrDDDDDDDDDDDD    ← present cells: n --sun-night, r --sun-rise, D --sun-day, s --sun-set
+   ◆nnnrDDDDDDDDDDDsnn                              ← ◆ first seen inside the window, --signal
+   ▮▮▮▮▮▮▮▮      ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮    ← no sensor position, or cells over 1 h: every present cell --tui-normal
 ```
 
 - **Marks:** present cells; a `◆` at the first-seen cell when it is inside the window; an anomaly episode as a 1 px `--heat-2` underline across its cells. The ruler is drawn once per table, not per row.
+- **Sun phase (ruling 2026-11-11):** a present cell takes one of `--sun-night`, `--sun-rise`, `--sun-day`, `--sun-set` by the sun's elevation at the sensor's position at the cell's midpoint: night below -6 degrees (past civil twilight), day above +6 (the low warm light is over), and between them sunrise while the elevation rises across the cell and sunset while it falls. The elevation is NOAA's low-precision solar position, computed on the page (`web/ui/sun.js`); the position is the sensor's GNSS fix, else the position `sensor_health` carries, and never the viewer's. No position, or a cell longer than an hour (a cell that spans a sunrise is not one phase): the one ink. Absent cells, gaps, the `◆` and the underline are unchanged. The ruler carries the same phases as a band under its ticks, each phase a height as well as a colour, and each strip's label says the phases in words with the time each begins (R10).
 - **Size:** unchanged (the column width), 12 px tall.
 - **TUI form:** the Devices view can print 24 cells (one per hour) as `▮` and `·`.
 
@@ -431,7 +436,7 @@ Route changes:
 
 These are the operational rules every glyph and panel follows. A review of a slothweb change checks the change against this list.
 
-- **R1. One ink.** A line is `--tui-normal`. The band is `--data` at 12 percent. Grey (`--rule`, `--faint`, `--muted`) carries structure. Colour carries only out of band (the heat ramp), severity (the `--sev-*` tokens, on alerts and chain bars only), identity (the hash hues on addresses and SSIDs, as ruled), and the one accent (`--signal`, once per panel).
+- **R1. One ink.** A line is `--tui-normal`. The band is `--data` at 12 percent. Grey (`--rule`, `--faint`, `--muted`) carries structure. Colour carries only out of band (the heat ramp), severity (the `--sev-*` tokens, on alerts and chain bars only), identity (the hash hues on addresses and SSIDs, as ruled), and the one accent (`--signal`, once per panel). Two owner-ruled exceptions: G1's line keeps the TUI's level grading (2026-10-26), and G5's present cells take the sun's phase at the sensor, the four `--sun-*` tokens (2026-11-11).
 - **R2. Fixed heights, data-driven widths.** A glyph's height is set by the text line it sits in (14 px in a table, 18 px in a tile). Its width follows the container. Never the other way round.
 - **R3. Shared scales inside a set.** Small multiples share a y-scale by default and say so. `own scale` is a toggle and prints each cell's maximum. RSSI is always on the fixed -95 to -20 dBm scale.
 - **R4. Honest windows.** When data covers less than a tenth of the window, the glyph shrinks the window to the data and the caption says `6 min of 24 h`. A band chart carries at least three time labels and a now mark.
