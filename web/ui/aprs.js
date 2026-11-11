@@ -130,6 +130,7 @@
     var cls = a.state === "gone" ? "d-dim" : num(a.lat) ? "d-bright" : "d-normal";
     var r = el("div", "aprsrow dt-row " + cls + (on ? " on" : ""));
     r.appendChild(cell("c-cl", a.call));
+    if (window.SlothSubNotes) window.SlothSubNotes.mark(r.firstChild, "aprs", a.call);
     r.appendChild(cell("c-sy", a.symbol || "-"));
     r.appendChild(cell("c-lh d-dim", age(a.last_seen, now)));
     r.appendChild(cell("c-pk n", a.packets));
@@ -184,6 +185,7 @@
   }
   function detail(a, now) {
     var kv = clear($("aprs-detail-kv"));
+    if (window.SlothSubNotes) window.SlothSubNotes.show("aprs", "aprs", a ? a.call : sel);
     if (!a) {
       set("aprs-detail-name", sel + ", not heard this session");
       set("aprs-recent-note", "");

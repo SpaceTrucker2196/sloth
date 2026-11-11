@@ -52,6 +52,9 @@
 struct web_frrs;
 struct web_chain;
 struct web_fleet;
+struct web_gnss;
+struct web_adsb;
+struct web_aprs;
 
 #define WEB_DEV_LIMIT       100
 #define WEB_DEV_LIMIT_MAX   200
@@ -87,6 +90,12 @@ typedef struct {
     /* The owner's fleet (web_fleet.h): the peers pulled, for
      * /api/health and /api/fleet/peers; NULL: not attached. */
     struct web_fleet    *fleet;
+    /* The GNSS, ADS-B and APRS panels' tables (web_gnss.h, web_adsb.h,
+     * web_aprs.h), for a note's "is this subject held" (web_notes.h);
+     * NULL: not attached, and such a note cannot be added. */
+    struct web_gnss     *gnss;
+    struct web_adsb     *adsb;
+    struct web_aprs     *aprs;
 } web_m4_t;
 
 /* In a route, once its parameters are checked: under check_only, an

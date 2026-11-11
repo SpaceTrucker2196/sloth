@@ -204,6 +204,11 @@ int main(int argc, char **argv) {
     web_fleet_init(&g_fleet, cfg.peer, cfg.npeer, cfg.peer_interval_s, cfg.peer_outside,
                    have_store ? &g_store : NULL);
     g_m4.fleet = &g_fleet;
+    /* A note on a satellite, an aircraft or a station is checked
+     * against the panel that holds it (web_notes.h). */
+    g_m4.gnss = &g_gnss;
+    g_m4.adsb = &g_adsb;
+    g_m4.aprs = &g_aprs;
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));

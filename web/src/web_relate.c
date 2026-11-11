@@ -280,6 +280,15 @@ static int ble_held(const web_m4_t *m, const char *id, char *iface, size_t cap) 
     return n > 0;
 }
 
+/* The same two questions for a note's subject (web_notes.c). */
+int frrs_device_held(const web_m4_t *m, web_live_t *live, web_sdb_conn_t *c, const char *mac) {
+    return device_held(m, live, c, mac);
+}
+int frrs_ble_held(const web_m4_t *m, const char *id) {
+    char iface[24];
+    return ble_held(m, id, iface, sizeof(iface));
+}
+
 /* text as a request or a stored link names a finding: an anomaly's id,
  * an alert's, a MAC, or a BLE address with its type. 1 held (or, an anomaly, known to the store), 0
  * its shape is one of ours and nothing holds it (kind and id still
@@ -364,6 +373,7 @@ typedef struct {
     char      note[WEB_FRRS_NOTE_MAX + 1];
     char      by[WEB_FRRS_BY_MAX + 1];
     char      peer[WEB_PEER_MAX];
+    int       via;                      /* WEB_TRI_VIA_MANUAL or _AGENT */
 } link_t;
 
 #ifdef WITH_SQLITE
@@ -376,7 +386,7 @@ static int links_of(web_frrs_t *f, const ref_t *r, link_t *out, int max, int *mo
     sqlite3_stmt *s = NULL;
     if (sqlite3_prepare_v2(f->wr,
             "SELECT id, a_kind, a_id, a_label, b_kind, b_id, b_label, note, who, peer, ts,"
-            " " END_IS("a_kind", "a_id") " FROM relation WHERE " END_IS("a_kind", "a_id")
+            " " END_IS("a_kind", "a_id") ", via FROM relation WHERE " END_IS("a_kind", "a_id")
             " OR " END_IS("b_kind", "b_id") " ORDER BY id DESC LIMIT ?4", -1, &s, NULL) != SQLITE_OK) {
         sqlite3_finalize(s);
         return -1;
@@ -400,6 +410,7 @@ static int links_of(web_frrs_t *f, const ref_t *r, link_t *out, int max, int *mo
         col_text(s, 8, l->by, sizeof(l->by));
         col_text(s, 9, l->peer, sizeof(l->peer));
         l->ts = sqlite3_column_int64(s, 10);
+        l->via = sqlite3_column_int(s, 12);
     }
     sqlite3_finalize(s);
     return rc == SQLITE_DONE ? n : -1;
@@ -595,6 +606,8 @@ static void related_json(const web_m4_t *m, web_live_t *live, web_sdb_conn_t *c,
         web_jw_raw(w, ",\"by\":");    web_jw_str(w, l->by);
         web_jw_raw(w, ",\"peer\":");  web_jw_str(w, l->peer);
         web_jw_raw(w, ",\"ts\":");    web_jw_int(w, l->ts);
+        /* How it was written: the page, or an agent (web_agent.h). */
+        web_jw_raw(w, ",\"via\":");   web_jw_str(w, web_frrs_via_word(l->via));
         /* A held BLE advertiser's sensor: what its drawer is opened by. */
         if (held && o->kind == REF_BLE && o->iface[0]) {
             web_jw_raw(w, ",\"iface\":");
@@ -747,7 +760,7 @@ static long long end_count(web_frrs_t *f, const ref_t *r) {
 
 /* One link from a to b in one transaction: 0 made (*link), 2 already
  * there in either direction (*link), 1 refused (*why), -1. */
-static int link_add(web_frrs_t *f, const ref_t *a, const ref_t *b, const char *note,
+static int link_add(web_frrs_t *f, const ref_t *a, const ref_t *b, int via, const char *note,
                     const char *by, const char *peer, long long now_s, long long *link,
                     const char **why) {
     if (sqlite3_exec(f->wr, "BEGIN IMMEDIATE", NULL, NULL, NULL) != SQLITE_OK) {
@@ -785,8 +798,8 @@ static int link_add(web_frrs_t *f, const ref_t *a, const ref_t *b, const char *n
         goto out;
     }
     if (sqlite3_prepare_v2(f->wr,
-            "INSERT INTO relation (a_kind, a_id, a_label, b_kind, b_id, b_label, note, who, peer, ts)"
-            " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)", -1, &s, NULL) != SQLITE_OK)
+            "INSERT INTO relation (a_kind, a_id, a_label, b_kind, b_id, b_label, note, who, peer, ts, via)"
+            " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)", -1, &s, NULL) != SQLITE_OK)
         goto out;
     sqlite3_bind_int(s, 1, a->kind);
     sqlite3_bind_text(s, 2, a->id, -1, SQLITE_TRANSIENT);
@@ -798,6 +811,7 @@ static int link_add(web_frrs_t *f, const ref_t *a, const ref_t *b, const char *n
     sqlite3_bind_text(s, 8, by, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(s, 9, peer, -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(s, 10, now_s);
+    sqlite3_bind_int(s, 11, via);
     if (sqlite3_step(s) != SQLITE_DONE) goto out;
     *link = sqlite3_last_insert_rowid(f->wr);
     rc = 0;
@@ -812,26 +826,37 @@ out:
 }
 
 /* The link numbered link, when r is one of its ends: 1 removed, 0 no
- * such link of r's, -1. */
-static int link_remove(web_frrs_t *f, const ref_t *r, long long link) {
-    sqlite3_stmt *s = NULL;
-    if (sqlite3_prepare_v2(f->wr, "DELETE FROM relation WHERE id = ?4 AND (" END_IS("a_kind", "a_id")
-                           " OR " END_IS("b_kind", "b_id") ")", -1, &s, NULL) != SQLITE_OK) {
+ * such link of r's, 2 it is one the page made and an agent asked (a
+ * removal leaves no row behind to say who did it, so an agent takes
+ * away only what an agent made), -1. */
+static int link_remove(web_frrs_t *f, const ref_t *r, long long link, int via) {
+    static const char WHERE[] = " FROM relation WHERE id = ?4 AND (" END_IS("a_kind", "a_id")
+                                " OR " END_IS("b_kind", "b_id") ")";
+    char sql[sizeof(WHERE) + 64];
+    int agent = via == WEB_TRI_VIA_AGENT, out = -1;
+    for (int pass = agent ? 0 : 1; pass < 2; pass++) {
+        sqlite3_stmt *s = NULL;
+        snprintf(sql, sizeof(sql), "%s%s", pass ? "DELETE" : "SELECT via", WHERE);
+        if (sqlite3_prepare_v2(f->wr, sql, -1, &s, NULL) != SQLITE_OK) {
+            sqlite3_finalize(s);
+            return -1;
+        }
+        sqlite3_bind_int(s, 1, r->kind);
+        sqlite3_bind_text(s, 2, r->id, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(s, 3, r->alt, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(s, 4, link);
+        int rc = sqlite3_step(s);
+        int theirs = !pass && rc == SQLITE_ROW && sqlite3_column_int(s, 0) != WEB_TRI_VIA_AGENT;
         sqlite3_finalize(s);
-        return -1;
+        if (theirs) return 2;
+        if (rc != SQLITE_DONE && !(rc == SQLITE_ROW && !pass)) return -1;
+        if (pass) out = sqlite3_changes(f->wr) > 0;
     }
-    sqlite3_bind_int(s, 1, r->kind);
-    sqlite3_bind_text(s, 2, r->id, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(s, 3, r->alt, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(s, 4, link);
-    int rc = sqlite3_step(s);
-    sqlite3_finalize(s);
-    if (rc != SQLITE_DONE) return -1;
-    return sqlite3_changes(f->wr) > 0;
+    return out;
 }
 
 int frrs_relate_post(const web_m4_t *m, web_live_t *live, const web_jrec_t *r, const char *peer,
-                     long long now_s, char *body, size_t cap, size_t *len, int *status) {
+                     int via, long long now_s, char *body, size_t cap, size_t *len, int *status) {
     static const char *const MEMBERS[] = { "op", "from", "to", "note", "by", "link", NULL };
     const char *bad = NULL, *why = NULL;
     if (!frrs_members_ok(r, MEMBERS, &bad))
@@ -877,7 +902,7 @@ int frrs_relate_post(const web_m4_t *m, web_live_t *live, const web_jrec_t *r, c
         else if (!pair_ok(a, b))
             rc = frrs_error(400, "bad_pair", "to", body, cap, len, status);
         else {
-            int g = link_add(f, a, b, note, by, peer, now_s, &link, &why);
+            int g = link_add(f, a, b, via, note, by, peer, now_s, &link, &why);
             if (g == 2) {
                 unchanged = 1;
             } else if (g != 0) {
@@ -894,9 +919,11 @@ int frrs_relate_post(const web_m4_t *m, web_live_t *live, const web_jrec_t *r, c
          * link whose end is gone can still be taken away. */
         const web_jfield_t *lf = web_jl_get(r, "link");
         link = web_jl_int(r, "link", 0);
-        int g = lf && lf->kind == WEB_J_INT && link > 0 ? link_remove(f, a, link) : -2;
+        int g = lf && lf->kind == WEB_J_INT && link > 0 ? link_remove(f, a, link, via) : -2;
         if (g == -2) {
             rc = frrs_error(400, "bad_link", "link", body, cap, len, status);
+        } else if (g == 2) {
+            rc = frrs_error(403, "not_agent_link", "link", body, cap, len, status);
         } else if (g < 0) {
             frrs_stat_inc(f, &f->st.write_errors);
             rc = frrs_error(500, "store_error", NULL, body, cap, len, status);
@@ -929,8 +956,8 @@ int frrs_relate_post(const web_m4_t *m, web_live_t *live, const web_jrec_t *r, c
 }
 #else
 int frrs_relate_post(const web_m4_t *m, web_live_t *live, const web_jrec_t *r, const char *peer,
-                     long long now_s, char *body, size_t cap, size_t *len, int *status) {
-    (void)m; (void)live; (void)r; (void)peer; (void)now_s;
+                     int via, long long now_s, char *body, size_t cap, size_t *len, int *status) {
+    (void)m; (void)live; (void)r; (void)peer; (void)via; (void)now_s;
     return frrs_error(503, "no_store", NULL, body, cap, len, status);
 }
 #endif

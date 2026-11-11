@@ -1423,6 +1423,28 @@ static int route_fleet_peers(const web_req_t *rq, const web_health_t *h, char *o
     return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
+/* /api/glossary (web_bundle.h): the bundle's glossary alone. */
+static int route_glossary(const web_req_t *rq, const web_health_t *h, char *out, size_t outsz,
+                          web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    int status = 200;
+    size_t bl;
+    if (rq->query[0] || rq->query_long) {
+        status = 400;
+        bl = web_series_error_json("unknown_parameter", body, cap);
+    } else {
+        bl = web_bundle_glossary_json(body, cap);
+    }
+    if (bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
 /* /api/recipes: docs/wiki/sqlite-schema.md's, as built in. */
 static int route_recipes(const web_req_t *rq, const web_health_t *h, char *out, size_t outsz,
                          web_resp_t *r) {
@@ -1699,6 +1721,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_fleet_export(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/fleet/peers"))
             return route_fleet_peers(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/glossary"))
+            return route_glossary(rq, h, out, outsz, r);
         /* Without --web-allow-sql neither exists: a 404 like any path. */
         if (h->sql && h->sql->enabled) {
             if (!strcmp(rq->path, "/api/query"))

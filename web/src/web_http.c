@@ -58,7 +58,7 @@ static void keep_path(web_req_t *rq, const char *t, size_t n) {
 static const char *const POST_PATHS[] = {
     "/api/frrs/triage", "/api/frrs/tacdb/unit", "/api/frrs/tacdb/platform",
     "/api/frrs/tacdb/emitter", "/api/frrs/tacdb/dismiss", "/api/frrs/import",
-    "/api/frrs/relate",
+    "/api/frrs/relate", "/api/frrs/note",
     NULL
 };
 

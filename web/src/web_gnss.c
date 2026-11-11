@@ -513,3 +513,12 @@ void web_gnss_site(web_gnss_t *g, web_loc_t *loc, web_gnss_sh_t *sh) {
     *sh = g->sh;
     pthread_mutex_unlock(&g->mu);
 }
+
+int web_gnss_has(web_gnss_t *g, int gnssid, int prn) {
+    int has = 0;
+    pthread_mutex_lock(&g->mu);
+    for (int i = 0; i < WEB_GNSS_SATS && !has; i++)
+        has = g->sats[i].used && g->sats[i].gnssid == gnssid && g->sats[i].prn == prn;
+    pthread_mutex_unlock(&g->mu);
+    return has;
+}

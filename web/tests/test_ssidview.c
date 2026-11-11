@@ -551,7 +551,8 @@ static void test_page_ssid_detail(void) {
     WT_HAS(p, "    H.getJSON(\"/api/wifi/ssid?ssid=\" + encodeURIComponent(p)).then(function (j) {\n");
     /* The hooks, where the WiFi view writes a name. */
     WT_HAS(p, "    ss.appendChild(a.ssid === null ? ssidHidden(\"(hidden)\") : "
-              "ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));\n    // ");
+              "ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));\n"
+              "    if (window.SlothSubNotes && window.SlothSsid && a.ssid !== null)\n");
     WT_HAS(p, "        hist.appendChild(ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np));");
     WT_HAS(p, "      ss.appendChild(a.ssid === null ? ssidHidden(\"(hidden)\") : "
               "ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));\n      row.appendChild(ss);");

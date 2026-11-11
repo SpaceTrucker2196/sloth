@@ -276,6 +276,9 @@
     clear("sdr-lists");
     H.drawStrip($("sdr-strip"), null, CELLS, -1);
     $("sdr-strip-note").textContent = "";
+    // The notes on it (subnotes.js), by the octets the route names it
+    // by; none for the hidden SSID or a name that is no SSID.
+    if (window.SlothSubNotes) window.SlothSubNotes.show("ssid", "ssid", p === "-" ? null : p);
     if (p === null) {
       $("sdr-note").textContent = "no detail: this name is not an SSID sloth.db can hold (more than 32 " +
         "octets, where the stream replaced lost octets with a mark)";

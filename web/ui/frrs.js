@@ -187,6 +187,8 @@ var SlothFrrs = (function () {
     if (s === "known") c.title = KNOWN_TITLE;
     if (st && st.via === "recommended") c.appendChild(el("span", "d-dim", " (rec.)"));
     if (st && st.via === "import") c.appendChild(el("span", "d-dim", " (imp.)"));
+    // A state an agent set through slothweb-mcp, wherever a chip is drawn.
+    if (st && st.via === "agent") c.appendChild(el("span", "d-dim", " (agent)"));
     return c;
   }
   function act(id, state, note, msg) {

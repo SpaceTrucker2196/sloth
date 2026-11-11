@@ -1293,10 +1293,11 @@ static void test_store_shares_chmix(void) {
     route_down();
     web_store_close(&st);
     /* Still a current file (v8 since the fleet, #192 F1; v9 since the
-     * anomaly triage slice: this one added no step), and it opens
+     * anomaly triage slice, v10 since the plain notes: this one added no
+     * step), and it opens
      * as one. */
     WT_EQ(raw_q(p, "SELECT value FROM meta WHERE name='schema_version'"), WEB_STORE_SCHEMA);
-    WT_EQ(WEB_STORE_SCHEMA, 9);
+    WT_EQ(WEB_STORE_SCHEMA, 10);
     WT_EQ(web_store_open(&st, p, err, sizeof(err)), 0);
     WT_EQ(web_store_mix_count(&st), 5);
     web_store_close(&st);

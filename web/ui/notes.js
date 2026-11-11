@@ -163,6 +163,9 @@ var SlothNotes = (function () {
       if (!l.held) li.appendChild(el("span", "sev1", "no longer held"));
       if (l.triage && l.triage.state !== "untriaged") li.appendChild(chipOf(l.triage));
       if (l.note) li.appendChild(el("span", "d-normal", l.note));
+      // A link an agent made says so (subnotes.js's mark).
+      var am = window.SlothSubNotes ? window.SlothSubNotes.agent(l.via) : null;
+      if (am) li.appendChild(am);
       li.appendChild(el("span", "d-dim", (l.by || "-") + " · from " + (l.peer || "?") + " · " + H.shortStamp(l.ts)));
       if (l.held && (l.kind !== "ble" || l.iface)) li.appendChild(btn("open", "", function () { follow(l.kind, l.id, l.iface); }));
       if (rel.writes) li.appendChild(btn("remove", "", function () {

@@ -551,3 +551,10 @@ void web_aprs_health_json(web_aprs_t *a, web_jw_t *w) {
     web_jw_raw(w, "}");
     pthread_mutex_unlock(&a->mu);
 }
+
+int web_aprs_has(web_aprs_t *a, const char *call) {
+    pthread_mutex_lock(&a->mu);
+    int has = row_find(a, call) != NULL;
+    pthread_mutex_unlock(&a->mu);
+    return has;
+}

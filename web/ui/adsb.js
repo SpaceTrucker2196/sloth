@@ -186,6 +186,7 @@
     var cls = a.state === "gone" ? "d-dim" : num(a.lat) ? "d-bright" : "d-normal";
     var r = el("div", "adsbrow dt-row " + cls + (on ? " on" : ""));
     r.appendChild(cell("c-hx", a.hex));
+    if (window.SlothSubNotes) window.SlothSubNotes.mark(r.firstChild, "aircraft", a.hex);
     r.appendChild(cell("c-fl" + (emerg(a) ? " h3" : ""), a.flight || "-"));
     r.appendChild(cell("c-sq" + (SPECIAL[a.squawk] || emerg(a) ? " h3" : ""), a.squawk || "-"));
     r.appendChild(cell("c-ct", a.category || "-"));
@@ -227,6 +228,7 @@
     box.hidden = false;
     set("adsb-detail-name", label(a) + (a.flight ? " (" + a.hex + ")" : ""));
     var kv = clear($("adsb-detail-kv"));
+    if (window.SlothSubNotes) window.SlothSubNotes.show("adsb", "aircraft", a.hex);
     [["address", a.hex + (a.non_icao ? " (non-ICAO: TIS-B or similar)" : " (ICAO 24-bit)")],
      ["callsign", a.flight || "-"],
      ["squawk", a.squawk ? a.squawk + (SPECIAL[a.squawk] ? " (reserved: " + SPECIAL[a.squawk] + ")" : "") : "-"],

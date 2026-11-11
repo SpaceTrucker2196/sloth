@@ -19,6 +19,7 @@
 #include "web_alertkb.h"
 #include "web_history.h"
 #include "web_metrics.h"
+#include "web_notes.h"
 #include "web_scope.h"
 #include "web_series.h"
 
@@ -31,14 +32,14 @@
 static const char *const STATE_WORD[WEB_TRI_COUNT] = {
     "untriaged", "false", "noise", "incident", "known",
 };
-static const char *const VIA_WORD[] = { "manual", "recommended", "import" };
+static const char *const VIA_WORD[WEB_TRI_VIA_COUNT] = { "manual", "recommended", "import", "agent" };
 static const char *const KIND_WORD[FRRS_K_COUNT] = { "sta", "bssid", "ble" };
 
 const char *web_frrs_state_word(int s) {
     return s >= 0 && s < WEB_TRI_COUNT ? STATE_WORD[s] : "untriaged";
 }
 const char *web_frrs_via_word(int v) {
-    return v >= 0 && v <= WEB_TRI_VIA_IMPORT ? VIA_WORD[v] : "manual";
+    return v >= 0 && v < WEB_TRI_VIA_COUNT ? VIA_WORD[v] : "manual";
 }
 const char *frrs_kind_word(int k) {
     return k >= 0 && k < FRRS_K_COUNT ? KIND_WORD[k] : "sta";
@@ -2056,7 +2057,7 @@ int frrs_text_refused(const web_jrec_t *r, const char *member, size_t max, const
 }
 
 static int post_triage(const web_m4_t *m, web_live_t *live, const web_jrec_t *r,
-                       const char *peer, long long now_s, char *body, size_t cap,
+                       const char *peer, int via, long long now_s, char *body, size_t cap,
                        size_t *len, int *status) {
     static const char *const MEMBERS[] = { "id", "state", "note", "by", NULL };
     const char *bad = NULL, *why = NULL;
@@ -2072,9 +2073,12 @@ static int post_triage(const web_m4_t *m, web_live_t *live, const web_jrec_t *r,
     if (!frrs_text(r, "by", WEB_FRRS_BY_MAX, by, &why))
         return frrs_text_refused(r, "by", WEB_FRRS_BY_MAX, why, body, cap, len, status);
     if (!id[0]) return frrs_error(400, "missing_id", "id", body, cap, len, status);
-    int state = -1, via = WEB_TRI_VIA_MANUAL;
+    int state = -1;
     for (int s = 0; s < WEB_TRI_COUNT; s++) if (!strcmp(sw, STATE_WORD[s])) state = s;
-    if (!strcmp(sw, "recommended")) state = 100;
+    /* "Follow recommended" is the page's button and records via
+     * recommended; an agent's row is via agent and nothing else, so it
+     * names the state it means. */
+    if (!strcmp(sw, "recommended") && via != WEB_TRI_VIA_AGENT) state = 100;
     if (state < 0) return frrs_error(400, "bad_state", "state", body, cap, len, status);
     tri_subj_t s;
     frrs_anom_t an;
@@ -2393,7 +2397,8 @@ static int route_report_alert(const web_m4_t *m, web_live_t *live, const char *q
 static const char *const GET_PATHS[] = {
     "/api/frrs/states", "/api/frrs/history", "/api/frrs/summary", "/api/frrs/recommend",
     "/api/frrs/report", "/api/frrs/report/alert", "/api/frrs/tacdb", "/api/frrs/tacdb/view",
-    "/api/frrs/suggest", "/api/frrs/export", "/api/frrs/related", NULL,
+    "/api/frrs/suggest", "/api/frrs/export", "/api/frrs/related",
+    "/api/frrs/notes", "/api/frrs/notes/marks", NULL,
 };
 
 int web_frrs_path(const char *path) {
@@ -2434,6 +2439,10 @@ int web_frrs_route(const web_m4_t *m, web_live_t *live, const web_req_t *rq,
         if (!strcmp(p, "/api/frrs/suggest")) return frrs_suggest_get(m, q, now_s, body, cap, len, status);
         if (!strcmp(p, "/api/frrs/related"))
             return frrs_related_get(m, live, q, now_s, body, cap, len, status);
+        if (!strcmp(p, "/api/frrs/notes"))
+            return web_notes_get(m, live, q, now_s, body, cap, len, status);
+        if (!strcmp(p, "/api/frrs/notes/marks"))
+            return web_notes_marks(m, q, body, cap, len, status);
         if (!strcmp(p, "/api/frrs/export")) {
             if (q[0]) return frrs_error(400, "unknown_parameter", NULL, body, cap, len, status);
             int rc = frrs_export(m, now_s, big, biglen, body, cap, len, status);
@@ -2470,11 +2479,13 @@ int web_frrs_route(const web_m4_t *m, web_live_t *live, const web_req_t *rq,
         stat_inc(f, &f->st.refused_body);
         return frrs_error(400, "bad_body", NULL, body, cap, len, status);
     }
-    int rc;
+    int rc, via = WEB_TRI_VIA_MANUAL;
     if (!strcmp(rq->path, "/api/frrs/triage"))
-        rc = post_triage(m, live, r, rq->peer, now_s, body, cap, len, status);
+        rc = post_triage(m, live, r, rq->peer, via, now_s, body, cap, len, status);
     else if (!strcmp(rq->path, "/api/frrs/relate"))
-        rc = frrs_relate_post(m, live, r, rq->peer, now_s, body, cap, len, status);
+        rc = frrs_relate_post(m, live, r, rq->peer, via, now_s, body, cap, len, status);
+    else if (!strcmp(rq->path, "/api/frrs/note"))
+        rc = web_notes_post(m, live, r, rq->peer, via, now_s, body, cap, len, status);
     else
         rc = frrs_tacdb_post(m, rq->path, r, rq->peer, now_s, body, cap, len, status);
     free(r);
@@ -2492,6 +2503,8 @@ int web_frrs_init(web_frrs_t *f, web_store_t *store, const char *assess_dir,
     f->lmu_init = 1;
     f->writes = writes;
     f->triage_cap = WEB_FRRS_TRIAGE_CAP;
+    f->note_cap = WEB_NOTE_CAP;
+    f->note_per = WEB_NOTE_PER;
     err[0] = '\0';
     f->led = calloc(1, sizeof(*f->led));
     if (!f->led) {
@@ -2579,5 +2592,13 @@ void web_frrs_health(web_frrs_t *f, web_jw_t *w) {
     jw_count(w, q_count(f, "SELECT COUNT(*) FROM anom_subject"));
     web_jw_raw(w, ",\"links\":");
     jw_count(w, q_count(f, "SELECT COUNT(*) FROM relation"));
+    /* The plain notes (web_notes.h): additive, last. */
+    web_jw_raw(w, ",\"notes\":{\"rows\":");
+    jw_count(w, web_notes_rows(f));
+    web_jw_raw(w, ",\"cap\":");       web_jw_int(w, f->note_cap);
+    web_jw_raw(w, ",\"added\":");     web_jw_int(w, (long long)s.notes_added);
+    web_jw_raw(w, ",\"retracted\":"); web_jw_int(w, (long long)s.notes_retracted);
+    web_jw_raw(w, ",\"folded\":");    web_jw_int(w, (long long)s.notes_folded);
+    web_jw_raw(w, "}");
     web_jw_raw(w, "}");
 }

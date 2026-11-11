@@ -99,5 +99,6 @@ void run_btsig_tests(void);
 void run_bundle_tests(void);
 void run_chain_tests(void);              /* tests/test_chain.c (#171 V4) */
 void run_fleet_tests(void);              /* tests/test_fleet.c (#192 F1) */
+void run_subnotes_tests(void);           /* tests/test_subnotes.c (2026-11-11) */
 
 #endif

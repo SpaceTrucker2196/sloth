@@ -150,4 +150,8 @@ size_t web_adsb_out_of_scope_json(char *body, size_t cap);
 /* The /api/health member: counts only. */
 void web_adsb_health_json(web_adsb_t *a, web_jw_t *w);
 
+/* Does the table hold a row of this address now, live or gone
+ * (web_notes.h)? hex as the table spells it. */
+int  web_adsb_has(web_adsb_t *a, const char *hex);
+
 #endif /* SLOTHWEB_ADSB_H */
