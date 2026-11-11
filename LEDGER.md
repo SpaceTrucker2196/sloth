@@ -321,3 +321,5 @@
 | 9879273 | 2026-11-11T04:24:32Z | claude-fable-5-1, claude-opus-5-5 | 90 | 18225 | 3535517 | 509129 | 10.3684 | #192 F0: ADR 0008 own-fleet sharing |
 | c6dea24 | 2026-11-11T05:33:57Z | claude-opus-5-5 | 8 | 4681 | 534499 | 7269 | 0.2587 | #192 F1: slothweb fleet peer pull, export, slothweb.db v8 |
 | 2f8ce12 | 2026-11-11T06:02:45Z | claude-opus-5-5 | 62 | 10884 | 4279372 | 132475 | 2.1336 | #192 F1 review: exporter self-check, transfer-coding refusal, trickle test |
+| 8089c6b | 2026-11-11T07:24:45Z | claude-fable-5-1, claude-opus-5-5 | 134 | 8977 | 2890038 | 69054 | 2.3049 | #192 F2: Fleet tab, overview/shared routes, backfill |
+| 5cc6098 | 2026-11-11T15:21:25Z | claude-opus-5-5 | 16 | 2918 | 780764 | 316194 | 2.7441 | #192 F2 review: alert backfill past scan cap, F1-peer fallback, shared-route budget |
