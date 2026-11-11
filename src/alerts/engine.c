@@ -990,5 +990,6 @@ void alerts_clear(void) {
     rules_wired_forget();
     rules_gnss_forget();
     rules_adsb_forget();
+    rules_twin_forget();
     evil_twin_taint_clear();
 }

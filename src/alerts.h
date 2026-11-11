@@ -186,11 +186,58 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
  * "cross-device signal" the mismatch needs before it may be critical.
  * A `hard` signal is exempt, for the reason a neighbour claim cannot
  * demote one: a gate an attacker can advertise a finding under is a
- * severity lever. */
+ * severity lever.
+ *
+ * ── The copy arrives after the original (#188, ruling 3b) ────
+ *
+ * Masking the U/L bit left a rogue on a locally administered address
+ * with one soft signal to its name: a same-band vendor-IE mismatch is
+ * 35, under the gate, and there is no OUI to add. The issue names the
+ * cross-device signal that does not need one: "spoofing an existing
+ * SSID implies the twin's first_seen comes well after the original's".
+ *
+ * `late_arrival` is that, and it is deliberately hard to earn. It is
+ * set only when all of these hold:
+ *
+ *   - both halves carry a first_seen, and the later one is at least
+ *     `twin.late_arrival_s` (TWIN_LATE_ARRIVAL_S, 120) after the
+ *     earlier. Sensor start needs no clock of its own: the beacon table
+ *     is empty at start, so nothing in it is older than the process and
+ *     a gap of N is also N seconds of the sensor listening;
+ *   - the earlier half was heard again at or after the later one's
+ *     first_seen. "Later" otherwise only means the table had not
+ *     forgotten the first AP yet (BEACON_AGE_SECS is 300), which is
+ *     what a sensor driven past two APs a kilometre apart sees;
+ *   - the later half was first heard at least that long after the
+ *     sensor was last known to be moving (a GNSS fix at
+ *     TWIN_PROX_MOVING_MPS or more). Arrival order on a moving sensor
+ *     is the route, not the transmitters, and it stays the route after
+ *     the sensor parks, so this is remembered rather than read off the
+ *     current fix. No GNSS is "not known to be moving", as in #189;
+ *   - the pair already has positive evidence. It corroborates and never
+ *     nominates: every same-SSID pair whose halves were heard two
+ *     minutes apart (a mesh node at the edge of earshot, a guest SSID
+ *     switched on later) would otherwise become a row, a Twins episode
+ *     and a proximity candidate, which is the noise #188 was opened on.
+ *     So the flag means "counted", and is never set without its weight.
+ *
+ * What it cannot see: first_seen is when *this table* first heard the
+ * BSSID since it was last silent for BEACON_AGE_SECS, not when the
+ * radio first transmitted. An AP at the edge of range that drops out
+ * for five minutes and returns is a late arrival by this test. That is
+ * why the weight is soft, why it is 20 and not more, and why a
+ * same-vendor pair cannot reach CRIT on it (35 + 20 - 15 = 40). */
 #define TWIN_W_DIFF_OUI      20   /* cross-vendor: weak, and forgeable */
 #define TWIN_W_IE_HASH       35   /* vendor-IE fingerprints disagree */
 #define TWIN_W_ATTACKER_OUI  40   /* Hak5 / Espressif OUI present */
 #define TWIN_W_BTM_STEER     25   /* 802.11v steer aimed at the pair */
+/* Worth what a second vendor's OUI is worth, because it stands in for
+ * one where there is no OUI to read: 35 + 20 clears TWIN_CRIT_MIN_CONF
+ * exactly as a vendor-IE mismatch plus a different OUI does. The bounds
+ * are both pinned: under 15 a locally administered rogue stays below
+ * the gate, and at 30 a same-vendor mesh node that came up late with
+ * different vendor IEs reaches it (35 + 30 - TWIN_C_SAME_OUI). */
+#define TWIN_W_LATE_ARRIVAL 20   /* the copy came after the original */
 #define TWIN_W_WEAK_CLONE    85   /* OPEN/WEP beside strong under one SSID —
                                    * no vendor-diversity explanation exists */
 #define TWIN_W_INV_MISMATCH  50   /* a half is not in the approved inventory —
@@ -216,11 +263,27 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
  * start, when everything in range is first heard together; the address
  * and band conditions are what carry the test then. */
 #define TWIN_SIBLING_WINDOW_S 10
+/* Shipped default of `twin.late_arrival_s`, the least first-heard gap
+ * that counts as "the copy came later" (#188). Three numbers bound it
+ * from below. The issue's own radios appear 1-3 s apart and the sibling
+ * window is 10 s. A sensor start is one pass of the hop list before
+ * everything in steady earshot has been heard: the default list is 11
+ * channels at 100-2000 ms each, 22 s at worst, so 120 s is five worst
+ * passes and an AP missed on the first has had four more. And parking
+ * is a second start, so the same figure is the wait after the sensor
+ * last moved. From above it costs little: a copy is missed as "late"
+ * only when it is stood up inside two minutes of the sensor first
+ * hearing the original. The knob's floor is 30 s so it cannot be set
+ * under one worst hop pass or into the sibling window. */
+#define TWIN_LATE_ARRIVAL_DEFAULT_S 120
 
 typedef struct {
     int diff_oui;
     int same_oui;
     int hashes_differ;
+    int late_arrival;    /* the later half was first heard well after the
+                          * earlier, on a gap that can be trusted, and
+                          * the pair had other positive evidence (#188) */
     int attacker_oui;
     int steered;         /* a steer aimed at the pair from another device */
     int self_steer;      /* a steer from a sibling address of its own

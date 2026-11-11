@@ -193,6 +193,12 @@ Threshold of the `--adsb` rule ([[alerts]] § ADS-B, `src/alerts/rules_adsb.c`; 
 |------|---------|-------|---------|
 | `adsb.emerg_hold_s` | 10 | 2..59 | `ADSB_EMERGENCY`: seconds an aircraft's emergency squawk (7500 / 7600 / 7700) or status must hold, measured on its own messages (the row's `last_mono_ms`), before LOW becomes WARN. No source read gives a figure for how long a decode error or a code dialled through in passing lasts; 10 s is a judgement - ten of readsb's one-second documents. Below 60 because the table retires an aircraft unheard for 60 s |
 
+#### Knob added 2026-11-11 (`EVIL_TWIN` late arrival, #188)
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `twin.late_arrival_s` | 120 | 30..86400 | `EVIL_TWIN`: seconds the later-heard half of a same-SSID pair must be first heard after the earlier half before `+late-arrival` (+20 confidence) counts, and the wait after the sensor was last moving (GNSS, 1 m/s or more) before any arrival counts. 120 is five worst passes of the default 11-channel hop list (22 s each); the floor keeps it above one such pass and above the 10 s in which one device's two radios are first heard. Raise it where APs at the edge of range come and go ([[alerts]], `docs/wiki/alert-assessments/EVIL_TWIN.md`) |
+
 `--refresh-ms` is deliberately not a knob: it is UI cadence, not a detector or retention decision.
 
 

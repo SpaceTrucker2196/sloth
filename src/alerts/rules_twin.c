@@ -174,6 +174,45 @@ static int twin_pair_is_sibling(const beacon_ap_t *a, const beacon_ap_t *b) {
     return gap <= TWIN_SIBLING_WINDOW_S;
 }
 
+/* ── The copy arrives after the original (#188, ruling 3b) ────
+ * The four conditions and why each exists: src/alerts.h. */
+#define TWIN_LATE_ARRIVAL_S ((time_t)tune_val(TUNE_TWIN_LATE_ARRIVAL_S))
+
+static int twin_sensor_moving(const sloth_state_t *s, time_t now);
+
+/* When the sensor was last known to be moving, 0 for never. Kept here
+ * because the fix history is 64 fixes deep and the question is asked
+ * for as long as the pair stands: a sensor that drove in, heard one AP
+ * at the gate and its mesh partner seven minutes later, then parked,
+ * holds that seven-minute gap for hours after the last moving fix has
+ * left the ring. twin_sensor_moving() looks RSSI_WIN_SECS back, so this
+ * trails the last moving fix by up to that much, which only lengthens
+ * the wait. Main-loop state like the rest of the scorer; alerts_clear()
+ * forgets it with the other rule history, so an operator who clears
+ * inside the wait after parking gets the gaps back early. */
+static time_t g_twin_moved_at;
+
+void rules_twin_forget(void) { g_twin_moved_at = 0; }
+
+static void twin_note_motion(const sloth_state_t *s, time_t now) {
+    if (s && twin_sensor_moving(s, now)) g_twin_moved_at = now;
+}
+
+/* Wall-clock differences, like the sibling window: first_seen and
+ * last_seen are evidence stamps and the table keeps no monotonic one.
+ * A stepped clock moves both halves' stamps together. */
+static int twin_pair_late_arrival(const beacon_ap_t *a, const beacon_ap_t *b) {
+    if (!a->first_seen || !b->first_seen) return 0;
+    const beacon_ap_t *early = a->first_seen <= b->first_seen ? a : b;
+    const beacon_ap_t *late  = early == a ? b : a;
+    if (late->first_seen - early->first_seen < TWIN_LATE_ARRIVAL_S) return 0;
+    if (early->last_seen < late->first_seen) return 0;
+    if (g_twin_moved_at &&
+        late->first_seen - g_twin_moved_at < TWIN_LATE_ARRIVAL_S)
+        return 0;
+    return 1;
+}
+
 int btm_candidate_is_twin(const sloth_state_t *s,
                           const uint8_t bssid[6]) {
     for (int i = 0; i < s->twin_episode_count; i++) {
@@ -309,6 +348,7 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
     memset(&ev, 0, sizeof(ev));
     if (!a || !b) { if (out) *out = ev; return 0; }
 
+    twin_note_motion(s, now);
     ev.sibling = twin_pair_is_sibling(a, b);
 
     /* Two OUIs are comparable only when both are OUIs (#188). With a
@@ -377,6 +417,13 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
      * an OUI; it cannot edit the file. This is what keeps a spoofed
      * neighbour claim from erasing an inventory mismatch. */
     if (ev.inv_mismatch) { ev.positive += TWIN_W_INV_MISMATCH; ev.hard = 1; }
+    /* Last, and only on a pair that is already one: it corroborates and
+     * never nominates (alerts.h). Below the sibling return, so one
+     * device's radios are never asked. */
+    if (ev.positive > 0 && twin_pair_late_arrival(a, b)) {
+        ev.late_arrival = 1;
+        ev.positive += TWIN_W_LATE_ARRIVAL;
+    }
 
     if (ev.nbr_claim) ev.context += TWIN_C_NBR_CLAIM;
     if (ev.same_oui)  ev.context += TWIN_C_SAME_OUI;
@@ -404,8 +451,9 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
  * steer is not here: it gets its own note naming the steering AP, which
  * is the actionable half. */
 static void twin_evidence_note(char *out, size_t n, const twin_evidence_t *ev) {
-    snprintf(out, n, "%s%s%s",
+    snprintf(out, n, "%s%s%s%s",
              ev->inv_mismatch ? " +not in inventory"           : "",
+             ev->late_arrival ? " +late-arrival"               : "",
              ev->same_oui     ? " +same-vendor-OUI"            : "",
              ev->nbr_claim    ? " +802.11k claim (unverified)" : "");
 }
@@ -1476,6 +1524,9 @@ static int enc_is_strong(const char *enc) {
 }
 
 void rule_evil_twin(const sloth_state_t *s, time_t now) {
+    /* Every tick, pair or no pair: the scorer only runs when two APs
+     * share a name, and a drive with none in earshot still happened. */
+    twin_note_motion(s, now);
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
         if (!a->ssid[0]) continue;      /* hidden -> can't correlate */
@@ -1529,7 +1580,7 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
                 twin_evidence_score(s, a, b, now, &ev);
                 int conf = clamp_conf(TWIN_W_WEAK_CLONE + ev.positive -
                                       ev.context);
-                char note[64];
+                char note[80];
                 twin_evidence_note(note, sizeof(note), &ev);
 
                 /* Both radios declared by the operator (#89 slice 2).
@@ -1674,16 +1725,18 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
              * sensor reported a week of CRIT rows at 10-20 %, every one
              * of them one device's own radios. Hard signals are exempt
              * for the reason the neighbour claim above cannot touch
-             * them. With today's weights the one soft pair that clears
-             * the bar is a vendor-IE mismatch plus a different globally
-             * administered OUI; the reason says which signal it was. */
+             * them. With today's weights a vendor-IE mismatch clears
+             * the bar with one cross-device signal beside it: a
+             * different globally administered OUI, or the copy having
+             * arrived after the original (+late-arrival), which is the
+             * only one a locally administered address can show. */
             if (!ev.hard && sev > ALERT_SEV_WARN &&
                 ev.confidence < TWIN_CRIT_MIN_CONF)
                 sev = ALERT_SEV_WARN;
 
             char key[ALERT_KEY_LEN];
             char detail[ALERT_DETAIL_LEN];
-            char note[64];
+            char note[80];
             /* Canonical pair key (#89). `twin-fp` stays the rule id so
              * the CRIT `twin` key for the same pair still coexists, but
              * the identity is now the ordered BSSID pair rather than the

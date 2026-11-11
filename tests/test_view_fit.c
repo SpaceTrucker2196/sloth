@@ -346,9 +346,9 @@ static int seed_twins(sloth_state_t *s, time_t now) {
         mac_of(e->twin_bssid, 0xfb, i);
         snprintf(e->enc, sizeof(e->enc), "WPA2");
         e->rssi_swing_dbm = 18; e->confidence = 80;
-        /* Every flag: the widest Flags cell, `!*#?`. */
+        /* Every flag: the widest Flags cell, `!*#>?`. */
         e->attack_in_progress = 1; e->attacker_oui = 1;
-        e->hash_mismatch = 1; e->attributed = 0;
+        e->hash_mismatch = 1; e->late_arrival = 1; e->attributed = 0;
         e->last_seen = now - 1234567;
     }
     s->twin_episode_sel = s->twin_episode_count - 1;
@@ -889,7 +889,8 @@ static void test_conns_scan_banner_wraps_at_100x33(void) {
 /* Twins in full is wider than 100 columns, and Flags sat at column
  * 97: under the row clip a `!*#?` row showed `!*`, dropping the
  * hash-mismatch mark and the `?` that says neither half is accused.
- * Every table row has to carry all four. Red with twins_plan()'s SSID
+ * Every table row has to carry every mark: five since #188 added `>`
+ * (late arrival), in a column of six. Red with twins_plan()'s SSID
  * held at its 18-column maximum. */
 static void test_twins_flags_whole_at_100x33(void) {
     static sloth_state_t s;
@@ -907,7 +908,7 @@ static void test_twins_flags_whole_at_100x33(void) {
         if (tui_test_line(y, line, sizeof(line)) < 0) break;
         if (!strstr(line, "02:fa:")) continue;
         rows++;
-        if (strstr(line, "!*#?")) whole++;
+        if (strstr(line, "!*#>?")) whole++;
     }
     if (rows == 0 || whole != rows) tui_test_dump(stderr);
     ASSERT(rows > 0);

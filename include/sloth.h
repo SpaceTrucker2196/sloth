@@ -1765,6 +1765,8 @@ typedef struct {
     uint8_t  attack_in_progress;     /* set when chain rule tainted twin BSSID */
     uint8_t  attacker_oui;           /* twin OUI in Hak5 / Espressif tables */
     uint8_t  hash_mismatch;          /* vendor-IE hashes differ */
+    uint8_t  late_arrival;           /* the later half came well after the
+                                      * earlier and the scorer counted it (#188) */
     /* Do we actually know which half is the impostor? (#89)
      *
      * 1 only when something other than radio physics said so: an

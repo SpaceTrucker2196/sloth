@@ -615,7 +615,7 @@ sees for a given `(src, dst, proto)` tuple.
 ### `twin_episode`
 
 ```json
-{"type":"twin_episode","ts":1700000007,"ssid":"Cafe-Net","real_bssid":"aa:bb:cc:01:02:03","twin_bssid":"11:22:33:44:55:66","enc":"WPA2","real_rssi":-70,"twin_rssi":-45,"rssi_swing_dbm":25,"attack_in_progress":1,"attacker_oui":1,"hash_mismatch":1,"attributed":1,"confidence":60}
+{"type":"twin_episode","ts":1700000007,"ssid":"Cafe-Net","real_bssid":"aa:bb:cc:01:02:03","twin_bssid":"11:22:33:44:55:66","enc":"WPA2","real_rssi":-70,"twin_rssi":-45,"rssi_swing_dbm":25,"attack_in_progress":1,"attacker_oui":1,"hash_mismatch":1,"late_arrival":0,"attributed":1,"confidence":60}
 ```
 
 | Field                | Type   | Meaning |
@@ -630,6 +630,7 @@ sees for a given `(src, dst, proto)` tuple.
 | `attack_in_progress` | int    | 1 if the chain rule tainted `twin_bssid` (DEAUTH_FLOOD seen within 5 s) |
 | `attacker_oui`       | int    | 1 if `twin_bssid`'s OUI is Hak5 or Espressif |
 | `hash_mismatch`      | int    | 1 if the vendor-IE fingerprint hashes disagree |
+| `late_arrival`       | int    | additive, #188 — 1 if the scorer counted the later half's arrival as evidence: first heard at least `twin.late_arrival_s` (120 s) after the earlier half, the earlier half heard again since, the sensor at rest that long, and other positive evidence on the pair. The alert's `+late-arrival`. Absent from records written before it existed |
 | `attributed`         | int    | additive, #89 — 1 when something other than radio physics established which half is the impostor (an operator-designated BSSID, a tainted BSSID from the deauth chain, or an attacker-tool OUI). **0 means unattributed**: the pair is a candidate and the two BSSID fields are only in canonical byte order |
 | `confidence`         | int    | additive, #89 — same percentage the pair's `EVIL_TWIN` alert carries |
 | `ap_class`           | string | additive, #89 slice 3 — `impostor`, `neighbor` or `declared`. **Omitted** when nothing established a class, which is every pair until an inventory is loaded. Same values and same meaning as on the alert records |

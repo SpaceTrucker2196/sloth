@@ -1,7 +1,7 @@
 ---
 type: FRAG_BCAST
 technique: T1557
-rule_file: src/alerts/rules_twin.c:678 (rule_fragattack(); FRAG_BCAST branch lines 707-717; counter incremented in src/fragattack.c:566-573)
+rule_file: src/alerts/rules_twin.c:726 (rule_fragattack(); FRAG_BCAST branch lines 707-717; counter incremented in src/fragattack.c:566-573)
 count_semantics: per poll tick, not per frame. fire() increments count (= evaluations) every alerts_update() pass while the BSS row's plaintext_bcast_frag counter is > 0 (src/alerts/engine.c:478-480). That counter is cumulative and never decays (src/fragattack.c:573), so one offending fragment makes the alert re-fire every tick until the 64-slot BSS row is evicted or sloth exits. The number of fragments actually observed is the leading integer in the detail string, not count.
 severity_assessment: agree - a fragmented, unprotected, group-addressed data frame on a BSS whose transmitter has already been seen sending protected frames has no conforming explanation; CRIT on the first one is right. The re-fire-every-tick behaviour is a count-semantics problem, not a severity problem.
 false_positive_risk: low - the per-station ordered key-install gate (src/fragattack.c:550-564) excludes open networks and mid-association clients; what remains is a non-conforming stack, a corrupted header bit, or the attack.

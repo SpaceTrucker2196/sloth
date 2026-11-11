@@ -1,7 +1,7 @@
 ---
 type: FRAG_CACHE
 technique: T1557
-rule_file: src/alerts/rules_twin.c:678 (rule_fragattack(); FRAG_CACHE branch lines 781-794; counter incremented in src/fragattack.c:336-346 inside frag_track())
+rule_file: src/alerts/rules_twin.c:726 (rule_fragattack(); FRAG_CACHE branch lines 781-794; counter incremented in src/fragattack.c:336-346 inside frag_track())
 count_semantics: per poll tick, not per reassembly. fire() increments count (= evaluations) every alerts_update() pass while the BSS row's cumulative cache_poison counter is > 0 (src/alerts/engine.c:478-480); the counter never decays (src/fragattack.c:342). The leading integer in the detail string is the number of *continuation fragments* that arrived after a straddling (re)association (src/fragattack.c:340-342 runs once per FN>0 frame, retransmissions included), not the number of reassemblies: a three-fragment MSDU straddling one reassociation counts 2, and a retried continuation counts again.
 severity_assessment: too high (marginally) - CRIT is right for the CVE's own failure mode, but the session match ignores the sequence number and has no age limit, so the rule can also count a stale, abandoned session being "completed" by an unrelated fragment after a reassociation. WARN until the sequence number matches, CRIT when it does, would be truer to the evidence.
 false_positive_risk: medium - on a hopping radio that misses fragment 0 of a new MSDU, a continuation for the same (BSSID,SA,DA,TID) is matched against whatever older session is still on file, and a reassociation in between (roaming, power-save reconnect) is ordinary.

@@ -7722,13 +7722,20 @@ static void test_twin_locally_administered_bssids_have_no_oui(void) {
     /* And on ONE band, where the vendor-IE mismatch does count, the
      * pair is reported but cannot be critical: 35 with no OUI to add is
      * under TWIN_CRIT_MIN_CONF. Went red (CRIT) with the confidence
-     * gate in rule_evil_twin removed. */
+     * gate in rule_evil_twin removed.
+     *
+     * A minute apart, not the ten this block had until ruling 3b: at
+     * ten minutes the second half is a late arrival and the pair is
+     * CRIT at 55 (test_twin_late_arrival_lifts_a_locally_administered_
+     * rogue). With the gap left at 600 s these two assertions were the
+     * ones that went red when the signal was added, which is the
+     * "WARN before" half of that test. */
     alerts_clear();
     static sloth_state_t t; seed_state(&t);
     add_beacon(&t, "CHEVROLET1234", g24, "WPA2");
     add_beacon(&t, "CHEVROLET1234", g5,  "WPA2");
-    twin_radio(&t, 0, 6,  t0,       0x1111u);
-    twin_radio(&t, 1, 11, t0 + 600, 0x2222u);
+    twin_radio(&t, 0, 6,  t0,      0x1111u);
+    twin_radio(&t, 1, 11, t0 + 60, 0x2222u);
     alerts_update(&t);
     int idx = find_alert(&t, ALERT_TYPE_EVIL_TWIN);
     ASSERT(idx >= 0);
@@ -7777,8 +7784,11 @@ static void test_twin_self_steer_is_not_a_hard_signal(void) {
 
 /* What all of the above must not cost: a second transmitter, a
  * different globally administered OUI, the same band, contradicting
- * vendor IEs, arriving an hour after the network it copies. 20 + 35
- * clears TWIN_CRIT_MIN_CONF and nothing deducts. */
+ * vendor IEs. 20 + 35 clears TWIN_CRIT_MIN_CONF and nothing deducts.
+ *
+ * Heard a minute after the network it copies, so the OUI and the
+ * vendor IEs carry the CRIT alone; then an hour after, where the late
+ * arrival (ruling 3b) adds its 20 on top and says so. */
 static void test_twin_second_transmitter_same_band_is_still_crit(void) {
     time_t now = time(NULL);
     uint8_t real[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
@@ -7789,7 +7799,7 @@ static void test_twin_second_transmitter_same_band_is_still_crit(void) {
     add_beacon(&s, "CorpWiFi", real,  "WPA2");
     add_beacon(&s, "CorpWiFi", rogue, "WPA2");
     twin_radio(&s, 0, 6, now - 3600, 0x1111u);
-    twin_radio(&s, 1, 6, now - 30,   0x2222u);
+    twin_radio(&s, 1, 6, now - 3540, 0x2222u);
     alerts_update(&s);
     int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
     ASSERT(idx >= 0);
@@ -7798,6 +7808,16 @@ static void test_twin_second_transmitter_same_band_is_still_crit(void) {
     ASSERT(s.alerts[idx].confidence >= TWIN_CRIT_MIN_CONF);
     ASSERT(strstr(s.alerts[idx].detail,
                   "vendor-IE fingerprint differs") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "late-arrival") == NULL);
+
+    alerts_clear();
+    twin_radio(&s, 1, 6, now - 30, 0x2222u);
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ(s.alerts[idx].confidence, 20 + 35 + 20);
+    ASSERT(strstr(s.alerts[idx].detail, " +late-arrival") != NULL);
 
     /* Address distance is not an alibi on its own. A copy two bytes
      * from its victim on the victim's own band, and one on another band
@@ -7930,6 +7950,317 @@ static void test_twin_sibling_test_boundaries(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
     memcpy(s.beacon_aps[1].bssid, far3, 6);
     ASSERT_EQ(sib_of(&s), 0);
+}
+
+/* ── The copy arrives after the original (#188, ruling 3b) ────
+ *
+ * Masking the U/L bit left a rogue on a locally administered address
+ * at WARN 35 % with a same-band vendor-IE mismatch and nothing else to
+ * add. `late_arrival` is the cross-device signal the issue names for
+ * it. Hand-seeded beacon rows; gaps are literals, not the constant,
+ * for the reason given at test_twin_sibling_test_boundaries.
+ *
+ * add_beacon() stamps last_seen = now, so the earlier half has been
+ * heard since the later one appeared unless a test says otherwise. */
+
+static int late_of(const sloth_state_t *s, time_t now) {
+    twin_evidence_t ev;
+    twin_evidence_score(s, &s->beacon_aps[0], &s->beacon_aps[1], now, &ev);
+    return ev.late_arrival;
+}
+
+/* The regression the ruling closes: an original on a vendor's address,
+ * a copy on a locally administered one, one band, different vendor
+ * IEs, the copy first heard ten minutes after the original.
+ *
+ * Before the signal existed this shape was WARN at 35 %: the two
+ * assertions of test_twin_locally_administered_bssids_have_no_oui that
+ * pinned it (then seeded 600 s apart) went red, CRIT and 55, when the
+ * weight was added, and with the `ev.positive += TWIN_W_LATE_ARRIVAL`
+ * block removed the first block here is WARN 35 again.
+ *
+ * Mutations (2026-11-11), each red here:
+ *   - that block removed: CRIT, 55 and the marker (first block);
+ *   - TWIN_W_LATE_ARRIVAL 14: CRIT (35 + 14 is under the gate), and 15
+ *     stays CRIT, so the floor of the weight is pinned at 15;
+ *   - the `!a->first_seen || !b->first_seen` test dropped from
+ *     twin_pair_late_arrival: both unset-first_seen rows (CRIT);
+ *   - `late->first_seen - early->first_seen < N` made `<=`: the 120 s
+ *     row; the default raised to 121: the 120 s row; lowered to 119:
+ *     the 119 s row. */
+static void test_twin_late_arrival_lifts_a_locally_administered_rogue(void) {
+    time_t now = time(NULL);
+    time_t t0  = now - 1200;
+    uint8_t real[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t rogue[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", real,  "WPA2");
+    add_beacon(&s, "CorpWiFi", rogue, "WPA2");
+    twin_radio(&s, 0, 6, t0,       0x1111u);
+    twin_radio(&s, 1, 6, t0 + 600, 0x2222u);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ(s.alerts[idx].confidence, 35 + 20);
+    ASSERT(strstr(s.alerts[idx].detail,
+                  "vendor-IE fingerprint differs") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, " +late-arrival") != NULL);
+    /* No OUI was read to get here. */
+    ASSERT(strstr(s.alerts[idx].detail, "OUI") == NULL);
+
+    twin_evidence_t ev;
+    ASSERT_EQ(twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1],
+                                  now, &ev), 1);
+    ASSERT_EQ(ev.late_arrival, 1);
+    ASSERT_EQ(ev.diff_oui, 0);
+    ASSERT_EQ(ev.same_oui, 0);
+    ASSERT_EQ(ev.hard, 0);          /* soft: a neighbour claim demotes it */
+    ASSERT_EQ(ev.positive, 55);
+    /* Whichever half the caller names first. */
+    ASSERT_EQ(twin_evidence_score(&s, &s.beacon_aps[1], &s.beacon_aps[0],
+                                  now, &ev), 1);
+    ASSERT_EQ(ev.late_arrival, 1);
+
+    /* The same two radios heard a minute apart: a sensor start, or the
+     * hopper reaching the second one late. Still a pair, still under
+     * the gate. */
+    alerts_clear();
+    twin_radio(&s, 1, 6, t0 + 60, 0x2222u);
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ(s.alerts[idx].confidence, 35);
+    ASSERT(strstr(s.alerts[idx].detail, "late-arrival") == NULL);
+
+    /* The edge: 120 s counts, 119 does not, whichever half was first. */
+    twin_radio(&s, 1, 6, t0 + 119, 0x2222u);
+    ASSERT_EQ(late_of(&s, now), 0);
+    twin_radio(&s, 1, 6, t0 + 120, 0x2222u);
+    ASSERT_EQ(late_of(&s, now), 1);
+    twin_radio(&s, 0, 6, t0 + 120, 0x1111u);
+    twin_radio(&s, 1, 6, t0,       0x2222u);
+    ASSERT_EQ(late_of(&s, now), 1);
+    twin_radio(&s, 0, 6, t0 + 119, 0x1111u);
+    ASSERT_EQ(late_of(&s, now), 0);
+
+    /* An unset first_seen is "cannot say", on either half: by
+     * subtraction it is a gap of fifty years. */
+    alerts_clear();
+    twin_radio(&s, 0, 6, 0,        0x1111u);
+    twin_radio(&s, 1, 6, t0 + 600, 0x2222u);
+    ASSERT_EQ(late_of(&s, now), 0);
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    alerts_clear();
+    twin_radio(&s, 0, 6, t0, 0x1111u);
+    twin_radio(&s, 1, 6, 0,  0x2222u);
+    ASSERT_EQ(late_of(&s, now), 0);
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+
+    /* The knob moves the edge and nothing else. */
+    ASSERT_EQ(tune_set_id(TUNE_TWIN_LATE_ARRIVAL_S, 300), 1);
+    twin_radio(&s, 0, 6, t0,       0x1111u);
+    twin_radio(&s, 1, 6, t0 + 299, 0x2222u);
+    ASSERT_EQ(late_of(&s, now), 0);
+    twin_radio(&s, 1, 6, t0 + 300, 0x2222u);
+    ASSERT_EQ(late_of(&s, now), 1);
+    tune_reset();
+    twin_radio(&s, 1, 6, t0 + 299, 0x2222u);
+    ASSERT_EQ(late_of(&s, now), 1);
+}
+
+/* Legitimate late arrivals: a mesh node powered on an hour after the
+ * first, the same vendor, the same band, different vendor IEs (another
+ * model). 35 + 20 - 15 is 40 and stays WARN; the row says why it moved.
+ *
+ * And a late arrival is not evidence on its own. The same node with
+ * nothing else to show is no row at all, as it was before: the signal
+ * corroborates a pair and never nominates one, or every mesh whose
+ * nodes were heard two minutes apart would be a WARN, a Twins episode
+ * and a proximity candidate.
+ *
+ * Mutations (2026-11-11): TWIN_W_LATE_ARRIVAL 30 (the first block went
+ * CRIT at 50; 29 stays WARN, so the ceiling is pinned at 29); the
+ * `ev.positive > 0 &&` guard dropped (the second block raised a WARN at
+ * 5 % and late_arrival read 1; the third a WARN at 20 %). */
+static void test_twin_late_arrival_does_not_lift_a_same_vendor_mesh(void) {
+    time_t now = time(NULL);
+    uint8_t node1[6] = {0xe8,0x9c,0x25,0x10,0x20,0x30};
+    uint8_t node2[6] = {0xe8,0x9c,0x25,0x77,0x41,0x9c};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "HomeMesh", node1, "WPA2");
+    add_beacon(&s, "HomeMesh", node2, "WPA2");
+    twin_radio(&s, 0, 11, now - 7200, 0x1111u);
+    twin_radio(&s, 1, 11, now - 3600, 0x2222u);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ(s.alerts[idx].confidence, 35 + 20 - 15);
+    ASSERT(strstr(s.alerts[idx].detail, " +late-arrival") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, " +same-vendor-OUI") != NULL);
+
+    /* Same vendor IEs: nothing positive, so nothing to corroborate. */
+    alerts_clear();
+    twin_radio(&s, 1, 11, now - 3600, 0x1111u);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+    twin_evidence_t ev;
+    ASSERT_EQ(twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1],
+                                  now, &ev), 0);
+    ASSERT_EQ(ev.late_arrival, 0);
+    ASSERT_EQ(ev.positive, 0);
+
+    /* Nor where there is no OUI to deduct: a guest network's locally
+     * administered BSSID on a second node, an hour later, on another
+     * band. It was silent before the signal and it is silent now. */
+    alerts_clear();
+    uint8_t guest[6] = {0xea,0x9c,0x25,0x77,0x41,0x9d};
+    memcpy(s.beacon_aps[1].bssid, guest, 6);
+    twin_radio(&s, 1, 36, now - 3600, 0x2222u);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+    ASSERT_EQ(late_of(&s, now), 0);
+}
+
+/* "Later" has to mean both were on the air at once. The table forgets
+ * an AP BEACON_AGE_SECS (300) after it was last heard, so a sensor
+ * driven past two APs of one carrier SSID a few minutes apart holds
+ * both with a gap of minutes, and the first was never heard again.
+ * The earlier half must have been heard at or after the later half's
+ * first_seen.
+ *
+ * Mutations (2026-11-11): the `early->last_seen < late->first_seen`
+ * test dropped (the first and last rows read 1); made `<=` (the "same
+ * second" row read 0). */
+static void test_twin_late_arrival_needs_both_on_the_air(void) {
+    time_t now = time(NULL);
+    time_t t0  = now - 1200;
+    uint8_t real[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t rogue[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", real,  "WPA2");
+    add_beacon(&s, "CorpWiFi", rogue, "WPA2");
+    twin_radio(&s, 0, 6, t0,       0x1111u);
+    twin_radio(&s, 1, 6, t0 + 600, 0x2222u);
+
+    s.beacon_aps[0].last_seen = t0 + 599;       /* gone before the copy */
+    ASSERT_EQ(late_of(&s, now), 0);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ(s.alerts[idx].confidence, 35);
+
+    s.beacon_aps[0].last_seen = t0 + 600;       /* the same second */
+    ASSERT_EQ(late_of(&s, now), 1);
+
+    /* The later half's own last_seen is not the question, and neither
+     * is which slot holds the earlier one. */
+    twin_radio(&s, 0, 6, t0 + 600, 0x1111u);
+    twin_radio(&s, 1, 6, t0,       0x2222u);
+    s.beacon_aps[0].last_seen = now;
+    s.beacon_aps[1].last_seen = t0 + 599;
+    ASSERT_EQ(late_of(&s, now), 0);
+}
+
+/* A moving sensor hears things in the order of its route. The later
+ * half must have been first heard at least the wait after the sensor
+ * was last known to be moving, and that has to be remembered: the
+ * fix history is a minute deep and the pair's gap stands for hours.
+ *
+ * The decision, stated: a late arrival heard while the sensor moves
+ * does not count, and neither does one heard in the wait after it
+ * stops (parking is a sensor start). No GNSS, or no speed in the fix,
+ * is "not known to be moving" and suppresses nothing, as in #189.
+ *
+ * `now` is passed to the scorer by hand so the sensor can stop, wait
+ * and listen without the test sleeping.
+ *
+ * Mutations (2026-11-11), each red here:
+ *   - the `g_twin_moved_at &&` clause dropped from
+ *     twin_pair_late_arrival: the "while it moves" and "after it
+ *     parked" rows read 1;
+ *   - the memory replaced by a look at the current fix
+ *     (twin_note_motion() assigning 0 when the sensor is not moving):
+ *     the "after it parked" rows;
+ *   - its comparison made `<=`: the +120 s row; the wait read as 121:
+ *     the +120 s row; as 119: the +119 s row;
+ *   - twin_note_motion() removed from rule_evil_twin: the "drive with
+ *     no pair in earshot" row;
+ *   - rules_twin_forget() removed from alerts_clear(): the row after
+ *     "Clearing the engine". */
+static void test_twin_late_arrival_is_not_read_off_a_moving_sensor(void) {
+    time_t T = time(NULL);
+    uint8_t real[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t rogue[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+    static gnss_hist_t h;
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", real,  "WPA2");
+    add_beacon(&s, "CorpWiFi", rogue, "WPA2");
+    twin_radio(&s, 0, 6, T - 1200, 0x1111u);
+    twin_radio(&s, 1, 6, T - 600,  0x2222u);
+    s.beacon_aps[0].last_seen = T + 100000;     /* heard throughout */
+    s.gnss_hist = &h;
+
+    memset(&h, 0, sizeof(h));                   /* GNSS, but no fix yet */
+    ASSERT_EQ(late_of(&s, T), 1);
+
+    prox_gnss_fix(&h, T - 5, 0, 12.0);          /* a fix with no speed */
+    ASSERT_EQ(late_of(&s, T), 1);
+    prox_gnss_fix(&h, T - 5, 1, 0.3);           /* parked, jitter */
+    ASSERT_EQ(late_of(&s, T), 1);
+
+    prox_gnss_fix(&h, T - 5, 1, 12.0);          /* while it moves */
+    ASSERT_EQ(late_of(&s, T), 0);
+
+    /* After it parked: ten minutes on, the moving fix long out of the
+     * window, and the gap it drove through is still not evidence. */
+    ASSERT_EQ(late_of(&s, T + 600), 0);
+    memset(&h, 0, sizeof(h));
+    ASSERT_EQ(late_of(&s, T + 600), 0);
+
+    /* A copy that turns up once the sensor has stood still for the
+     * wait counts; a second sooner does not. */
+    twin_radio(&s, 1, 6, T + 119, 0x2222u);
+    ASSERT_EQ(late_of(&s, T + 600), 0);
+    twin_radio(&s, 1, 6, T + 120, 0x2222u);
+    ASSERT_EQ(late_of(&s, T + 600), 1);
+
+    /* Clearing the engine forgets the drive with the rest of the rule
+     * history. */
+    twin_radio(&s, 1, 6, T - 600, 0x2222u);
+    ASSERT_EQ(late_of(&s, T + 600), 0);
+    alerts_clear();
+    ASSERT_EQ(late_of(&s, T + 600), 1);
+
+    /* A drive with no pair in earshot is still a drive: the rule notes
+     * it every tick, not only when the scorer has a pair to score. */
+    alerts_clear();
+    static sloth_state_t empty; seed_state(&empty);
+    prox_gnss_fix(&h, T - 5, 1, 12.0);
+    empty.gnss_hist = &h;
+    alerts_update(&empty);
+    memset(&h, 0, sizeof(h));
+    ASSERT_EQ(late_of(&s, T + 600), 0);
+
+    alerts_clear();
+    ASSERT_EQ(late_of(&s, T + 600), 1);
 }
 
 /* ── Open device-onboarding SoftAP (#80) ──────────────────
@@ -12109,6 +12440,10 @@ void run_alerts_tests(void) {
     RUN_TEST(test_twin_second_transmitter_same_band_is_still_crit);
     RUN_TEST(test_twin_sibling_does_not_excuse_an_inventory_mismatch);
     RUN_TEST(test_twin_sibling_test_boundaries);
+    RUN_TEST(test_twin_late_arrival_lifts_a_locally_administered_rogue);
+    RUN_TEST(test_twin_late_arrival_does_not_lift_a_same_vendor_mesh);
+    RUN_TEST(test_twin_late_arrival_needs_both_on_the_air);
+    RUN_TEST(test_twin_late_arrival_is_not_read_off_a_moving_sensor);
 
     TEST_SUITE("alerts: open device-onboarding SoftAP (#80)");
     RUN_TEST(test_open_setup_ap_fires);

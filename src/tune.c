@@ -11,6 +11,7 @@
  * drift apart. */
 #include "sloth.h"
 #include "action_snoop.h"
+#include "alerts.h"
 #include "alert_pcap.h"
 #include "camera_join.h"
 #include "beacon_detect.h"
@@ -50,6 +51,8 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "twin.proximity_dbm",         15,  1,   100,    "dBm gap between twins" },
     { "deauth.twin_window_s",       5,   1,   600,    "seconds" },
     { "twin.steer_window_s",        300, 10,  3600,   "seconds a BTM steer marks a twin" },
+    { "twin.late_arrival_s",        TWIN_LATE_ARRIVAL_DEFAULT_S, 30, 86400,
+                                                  "seconds after the original a twin counts as late" },
     { "recon.sustain_s",            600, 10,  86400,  "seconds of probing" },
     { "recon.sustain_probes",       20,  2,   10000,  "probes" },
     { "kerb.preauth_burst",         5,   2,   1000,   "pre-auth failures" },

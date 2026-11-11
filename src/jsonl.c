@@ -705,6 +705,9 @@ void jsonl_emit_twin_episodes(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "attack_in_progress",  e->attack_in_progress ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "attacker_oui",        e->attacker_oui       ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "hash_mismatch",       e->hash_mismatch      ? 1 : 0);
+        /* Additive (#188): the scorer counted the later half's arrival
+         * as evidence. Absent from a record an older build wrote. */
+        kv_int(buf, LINEBUF, &off, "late_arrival",        e->late_arrival       ? 1 : 0);
         /* Additive (#89). `attributed` 0 means `real_bssid`/`twin_bssid`
          * hold the pair in canonical BSSID order and nothing has
          * established which half is the impostor — a consumer must not

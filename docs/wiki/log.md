@@ -6811,10 +6811,17 @@ radios of one box. A pair whose BSSIDs differ in at most two bytes, on
 different bands, first heard within 10 s of each other is one device.
 A locally administered BSSID has no OUI to compare, vendor-IE hashes are
 compared within a band only, a steer from a sibling address is not a
-hard signal, and a soft-signal CRIT needs 50% confidence. Known limit: a
-rogue on a locally administered address now reaches WARN at most without
-a hard signal. [[alerts]], [[twins]], [[evil-twin-reproducer]],
-[[action-frames]].
+hard signal, and a soft-signal CRIT needs 50% confidence. A rogue on a
+locally administered address, which that left at WARN and 35%, reaches
+CRIT again through a late arrival (owner ruling 3b): `+late-arrival`,
++20, when the later half was first heard 120 s or more
+(`twin.late_arrival_s`) after the earlier one, the earlier one has been
+heard since, and the sensor has been at rest that long. It only
+corroborates other evidence; a same-vendor pair stays WARN at 40%.
+Limit: `first_seen` is when the sensor first heard a BSSID since it was
+last silent for 300 s, so an AP that drops out and returns is a late
+arrival. [[alerts]], [[evil-twin-reproducer]], [[action-frames]],
+[[cli-reference]]; `docs/views/twins.md`.
 
 ## 2026-11-11 — `EVIL_TWIN_PROXIMITY` needs a twin (#189)
 

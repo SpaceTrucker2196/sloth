@@ -1,7 +1,7 @@
 ---
 type: SAE_PSK_SPLIT
 technique: T1557.004
-rule_file: src/alerts/rules_twin.c:859 (rule_sae_psk_split())
+rule_file: src/alerts/rules_twin.c:907 (rule_sae_psk_split())
 count_semantics: per poll tick, per SSID. The rule walks beacon_aps every alerts_update() pass and fires once per *SAE-only BSSID* of an SSID that has a PSK-only partner — the `break` at rules_twin.c:805 ends only the inner loop, so it limits each SAE-side BSSID to its first PSK-only partner in table order, not the SSID to one fire. All of those fires share the one key `saesplit:<SSID>` (the key carries no BSSID), so an SSID with N SAE-only BSSIDs (a mesh or multi-radio ESS) adds N to count per poll, and the stored detail and severity are whichever fired last. If one pair is same-OUI (WARN) and another different-OUI (CRIT), severity flips WARN->CRIT->WARN every poll, and engine.c:516-526 emits an unthrottled alert.escalate/alert.update on every flip. fire() increments count (= evaluations) on each call (src/alerts/engine.c:478-479); count is fires, not distinct splits.
 severity_assessment: agree - the WARN/CRIT split is well-reasoned: WARN for a same-vendor dual-band misconfig, CRIT when the vendor OUIs differ (removing the benign "same AP's other radio" reading) or a client actually associated on the PSK lane. Both map correctly to how bad the finding is.
 false_positive_risk: medium - a staged WPA3 migration (one radio cut over to SAE, another not yet) legitimately produces the split; the same-OUI WARN tier is designed to hold those at WARN, but a mixed-vendor ESS mid-migration can reach CRIT without an attacker.
