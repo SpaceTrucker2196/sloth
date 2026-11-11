@@ -157,6 +157,13 @@ static int       g_hop_enabled = 0;
 
 static void on_signal(int sig) { (void)sig; g_quit = 1; }
 
+/* SIGUSR1 (#190): write the live posture report on the next tick. Same
+ * rule as g_quit: the handler only stores a flag, the main loop does
+ * the work. Installed whether or not a report path was given, so the
+ * signal's default action (terminate) can never take a sensor down. */
+static volatile sig_atomic_t g_report_now = 0;
+static void on_report_signal(int sig) { (void)sig; g_report_now = 1; }
+
 #ifdef WITH_PCAP
 /* Advance the channel scheduler once per poll: attribute the packets seen
  * since the last tick to the current channel, then retune the monitor
@@ -326,6 +333,7 @@ static void print_usage(const char *argv0) {
             "       [--wps-pin-brute-cycles N] [--wps-lockout-cycles N]\n"
             "       [--wps-pbc-concurrent N]\n"
             "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
+            "       [--report-interval SECS] [--report-history]\n"
             "       [--my-ssid SSID] [--my-bssid BSSID]\n"
             "       [--inventory FILE] [--site TEXT]\n"
             "       [--known-mac MAC] [--known-macs FILE]\n"
@@ -752,6 +760,20 @@ static void print_usage(const char *argv0) {
             "  --report-json FILE.json\n"
             "                     same rollup as --report, structured for\n"
             "                     machine consumption / SIEM diff.\n"
+            "  --report-interval SECS\n"
+            "                     also write the report every SECS seconds\n"
+            "                     while running (0..86400, default 0 = off),\n"
+            "                     to FILE.live.md / FILE.live.json beside the\n"
+            "                     --report paths, replaced whole by rename and\n"
+            "                     marked \"Session end: (running)\". SIGUSR1\n"
+            "                     writes it at once, with or without an\n"
+            "                     interval. Removed when the session signs\n"
+            "                     off; one left by a killed session is kept\n"
+            "                     as FILE.<UTC>.unclean.md, never replaced.\n"
+            "  --report-history   on exit, also keep this session's report as\n"
+            "                     FILE.<UTC session start>.md (and .json), so\n"
+            "                     a restart does not replace the last record.\n"
+            "                     Never overwritten; not pruned by sloth.\n"
             "  --check-manifest FILE\n"
             "                     read a locally-populated release manifest\n"
             "                     (JSON) and show \"update available\" in the\n"
@@ -777,6 +799,7 @@ static int tune_alias(const char *flag, tune_id_t id, const char *value) {
 int main(int argc, char **argv) {
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
+    signal(SIGUSR1, on_report_signal);
 
     const char *jsonl_path   = NULL;
     const char *pcap_dir     = NULL;
@@ -785,6 +808,8 @@ int main(int argc, char **argv) {
     const char *data_socket  = NULL;
     const char *report_md    = NULL;   /* --report      FILE.md   */
     const char *report_json  = NULL;   /* --report-json FILE.json */
+    unsigned    report_interval = 0;   /* --report-interval SECS (#190) */
+    int         report_history  = 0;   /* --report-history       (#190) */
     const char *check_manifest = NULL; /* --check-manifest FILE   */
     int         headless       = 0;    /* --headless           (#50) */
     const char *db_path        = NULL; /* --db FILE            (#42) */
@@ -881,6 +906,19 @@ int main(int argc, char **argv) {
             report_md = argv[++i];
         } else if (!strcmp(argv[i], "--report-json") && i + 1 < argc) {
             report_json = argv[++i];
+        } else if (!strcmp(argv[i], "--report-interval") && i + 1 < argc) {
+            /* Strict, like --ticks: "5m" read as 5 would write sixty
+             * times as often as the operator asked for. */
+            char *end = NULL;
+            long v = strtol(argv[++i], &end, 10);
+            if (!end || *end || end == argv[i] || v < 0 || v > 86400) {
+                fprintf(stderr, "sloth: --report-interval %s: want 0..86400 "
+                                "seconds (0 = off)\n", argv[i]);
+                return 2;
+            }
+            report_interval = (unsigned)v;
+        } else if (!strcmp(argv[i], "--report-history")) {
+            report_history = 1;
         } else if (!strcmp(argv[i], "--check-manifest") && i + 1 < argc) {
             check_manifest = argv[++i];
         } else if (!strcmp(argv[i], "--iface") && i + 1 < argc) {
@@ -1126,6 +1164,15 @@ int main(int argc, char **argv) {
      * offline-crackable material, and a sloth that starts anyway reads as
      * "the export is happening". Failing loudly at argv time is also the
      * only version an init unit or a script can notice. */
+    /* The two #190 flags qualify --report / --report-json. Given alone
+     * they would do nothing, and a sensor the operator believes is
+     * keeping reports while it keeps none is the failure to refuse. */
+    if ((report_interval || report_history) && !report_md && !report_json) {
+        fprintf(stderr, "sloth: %s needs --report or --report-json: there "
+                        "is no report to write\n",
+                report_interval ? "--report-interval" : "--report-history");
+        return 2;
+    }
     if (eapol_dir && !collect_hs) {
         fprintf(stderr,
                 "sloth: --eapol-dir %s refused: PMKIDs and 4-way handshakes "
@@ -1830,6 +1877,12 @@ int main(int argc, char **argv) {
         tui_init();
     }
 
+    /* Live posture report (#190). Inert with no report path; with one
+     * and interval 0 it writes only on SIGUSR1. */
+    posture_live_t live_report;
+    posture_live_init(&live_report, report_md, report_json, report_interval,
+                      session_start, g_research);
+
     int  first_poll = 1;
     long ticks_done = 0;
     while (!g_quit) {
@@ -1863,6 +1916,17 @@ int main(int argc, char **argv) {
          * manifest on mtime change or after UPDATER_CHECK_INTERVAL_S. */
         updater_tick(sloth_wall());
         updater_snapshot(&g_state);
+        /* Live posture report (#190): due by interval, or asked for by
+         * SIGUSR1. On the main thread after poll_data, where the views
+         * read the same state. A failed write is counted and announced
+         * once (sfile_fail) and the loop carries on: an export problem
+         * never stops capture. The flag is cleared before the write, so
+         * a signal arriving during it asks for one more. */
+        {
+            int now_req = g_report_now != 0;
+            if (now_req) g_report_now = 0;
+            (void)posture_live_tick(&live_report, &g_state, now_req);
+        }
         /* --ticks (#119): the last tick still emits and draws; only the
          * wait after it is skipped, since nothing follows to wait for. */
         int last_tick = max_ticks > 0 && ++ticks_done >= max_ticks;
@@ -1910,10 +1974,14 @@ int main(int argc, char **argv) {
                                err, sizeof(err));
         if (fp) {
             posture_render_md(fp, &g_state, session_start, g_research);
-            if (sfile_fclose(fp, report_md, err, sizeof(err)) == 0)
+            if (sfile_fclose(fp, report_md, err, sizeof(err)) == 0) {
                 fprintf(stderr, "sloth: posture report -> %s\n", report_md);
-            else
+                /* Signed off: the live file is superseded (#190). Kept
+                 * when this write failed, as the session's only word. */
+                posture_live_retire(&live_report, 0);
+            } else {
                 fprintf(stderr, "sloth: --report %s\n", err);
+            }
         } else {
             fprintf(stderr, "sloth: could not open --report %s "
                             "(report skipped)\n", err);
@@ -1925,13 +1993,36 @@ int main(int argc, char **argv) {
                                err, sizeof(err));
         if (fp) {
             posture_render_json(fp, &g_state, session_start);
-            if (sfile_fclose(fp, report_json, err, sizeof(err)) == 0)
+            if (sfile_fclose(fp, report_json, err, sizeof(err)) == 0) {
                 fprintf(stderr, "sloth: posture-json -> %s\n", report_json);
-            else
+                posture_live_retire(&live_report, 1);
+            } else {
                 fprintf(stderr, "sloth: --report-json %s\n", err);
+            }
         } else {
             fprintf(stderr, "sloth: could not open --report-json %s "
                             "(report skipped)\n", err);
+        }
+    }
+    /* --report-history (#190): the write above replaces the file the
+     * previous session left, so on a service every restart lost a
+     * record. This keeps one more copy per session under a name built
+     * from the session start, created O_EXCL so no later run can
+     * replace it. Independent of the write above: a refused report.md
+     * does not cost the session its record. */
+    if (report_history) {
+        const char *paths[2] = { report_md, report_json };
+        for (int k = 0; k < 2; k++) {
+            if (!paths[k]) continue;
+            char name[POSTURE_PATH_MAX], err[SFILE_ERR_MAX];
+            if (posture_session_record(paths[k], k, &g_state, session_start,
+                                       g_research, name, sizeof(name),
+                                       err, sizeof(err)) == 0) {
+                fprintf(stderr, "sloth: session record -> %s\n", name);
+                posture_live_retire(&live_report, k);
+            } else
+                fprintf(stderr, "sloth: --report-history %s "
+                                "(record skipped)\n", err);
         }
     }
 

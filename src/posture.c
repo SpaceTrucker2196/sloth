@@ -4,10 +4,16 @@
  * Markdown (for hand-audit) or JSON (for SIEM diff / CI compare).
  * Reads only sloth_state_t and the alert/cleartext ring snapshots
  * that are already there — no new observation surface. Runs once at
- * shutdown so the file is a signed-off session record. */
+ * shutdown so the file is a signed-off session record; since #190 the
+ * same renderers also feed a separate live file while the session runs
+ * (the last section of this file). */
 
+#include <errno.h>
+#include <fcntl.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include "posture.h"
 #include "sloth_clock.h"
 #include "query.h"
@@ -74,8 +80,13 @@ static int bucketize_techniques(const sloth_state_t *s,
     return n;
 }
 
-int posture_render_md(FILE *out, const sloth_state_t *s,
-                      time_t session_start, struct rq_handle *research) {
+/* `live` is the one difference between the signed-off report and the
+ * one written mid-session (#190): a live report has no session end, and
+ * says so where the end would be, so it cannot be read as a finished
+ * record. */
+static int render_md(FILE *out, const sloth_state_t *s,
+                     time_t session_start, struct rq_handle *research,
+                     int live) {
     if (!out || !s) return 0;
     time_t now = sloth_wall();
     char ts_start[32], ts_end[32];
@@ -87,7 +98,12 @@ int posture_render_md(FILE *out, const sloth_state_t *s,
 
     fprintf(out, "# sloth posture report\n\n");
     fprintf(out, "- **Session start**: `%s`\n", ts_start);
-    fprintf(out, "- **Session end**:   `%s`\n", ts_end);
+    if (live) {
+        fprintf(out, "- **Session end**:   (running)\n");
+        fprintf(out, "- **As of**:         `%s`\n", ts_end);
+    } else {
+        fprintf(out, "- **Session end**:   `%s`\n", ts_end);
+    }
     fprintf(out, "- **Duration**:      `%lds`\n", (long)(now - session_start));
     fprintf(out, "\n");
     fprintf(out, "## Alert summary\n\n");
@@ -417,7 +433,13 @@ int posture_render_md(FILE *out, const sloth_state_t *s,
     return 1;
 }
 
-int posture_render_json(FILE *out, const sloth_state_t *s, time_t session_start) {
+int posture_render_md(FILE *out, const sloth_state_t *s,
+                      time_t session_start, struct rq_handle *research) {
+    return render_md(out, s, session_start, research, 0);
+}
+
+static int render_json(FILE *out, const sloth_state_t *s,
+                       time_t session_start, int live) {
     if (!out || !s) return 0;
     time_t now = sloth_wall();
     char ts_start[32], ts_end[32];
@@ -430,7 +452,13 @@ int posture_render_json(FILE *out, const sloth_state_t *s, time_t session_start)
     fprintf(out, "{\n");
     fprintf(out, "  \"type\": \"posture_report\",\n");
     fprintf(out, "  \"session_start\": \"%s\",\n", ts_start);
-    fprintf(out, "  \"session_end\":   \"%s\",\n", ts_end);
+    if (live) {
+        fprintf(out, "  \"session_end\":   null,\n");
+        fprintf(out, "  \"running\":       true,\n");
+        fprintf(out, "  \"as_of\":         \"%s\",\n", ts_end);
+    } else {
+        fprintf(out, "  \"session_end\":   \"%s\",\n", ts_end);
+    }
     fprintf(out, "  \"duration_s\":    %ld,\n", (long)(now - session_start));
     fprintf(out, "  \"alerts\": {\n");
     fprintf(out, "    \"crit\": %d,\n", n_crit);
@@ -477,4 +505,238 @@ int posture_render_json(FILE *out, const sloth_state_t *s, time_t session_start)
     fprintf(out, "]\n");
     fprintf(out, "}\n");
     return 1;
+}
+
+int posture_render_json(FILE *out, const sloth_state_t *s, time_t session_start) {
+    return render_json(out, s, session_start, 0);
+}
+
+/* ── Live report and per-session records (#190) ──────────────────────── */
+
+/* Where the file name starts and where its extension starts. The
+ * extension is the last dot of the name unless that dot leads it
+ * (".report" has none). -1 for a path with no file name. */
+static int path_split(const char *path, size_t *base, size_t *ext) {
+    if (!path || !path[0]) return -1;
+    const char *slash = strrchr(path, '/');
+    const char *b = slash ? slash + 1 : path;
+    if (!b[0]) return -1;
+    const char *dot = strrchr(b, '.');
+    *base = (size_t)(b - path);
+    *ext  = (dot && dot != b) ? (size_t)(dot - path) : strlen(path);
+    return 0;
+}
+
+static int fits(int n, size_t sz) { return n >= 0 && (size_t)n < sz; }
+
+static void stamp_utc(char out[20], time_t t) {
+    struct tm tm_buf;
+    struct tm *tm = gmtime_r(&t, &tm_buf);
+    if (!tm || strftime(out, 20, "%Y%m%dT%H%M%SZ", tm) == 0)
+        snprintf(out, 20, "0");
+}
+
+int posture_live_path(const char *path, char *out, size_t n) {
+    size_t base, ext;
+    if (path_split(path, &base, &ext) != 0) return -1;
+    return fits(snprintf(out, n, "%.*s.live%s", (int)ext, path, path + ext), n)
+           ? 0 : -1;
+}
+
+/* "<stem>.<stamp><tag>" with the extension returned apart, the shape
+ * sfile_fopen_unique() and the _N walk below both want. */
+static int stamped_stem(const char *path, time_t t, const char *tag,
+                        char *stem, size_t n, const char **ext_out) {
+    size_t base, ext;
+    char stamp[20];
+    if (path_split(path, &base, &ext) != 0) return -1;
+    stamp_utc(stamp, t);
+    *ext_out = path + ext;
+    return fits(snprintf(stem, n, "%.*s.%s%s", (int)ext, path, stamp, tag), n)
+           ? 0 : -1;
+}
+
+int posture_session_path(const char *path, time_t session_start,
+                         char *out, size_t n) {
+    char stem[POSTURE_PATH_MAX];
+    const char *ext;
+    if (stamped_stem(path, session_start, "", stem, sizeof(stem), &ext) != 0)
+        return -1;
+    return fits(snprintf(out, n, "%s%s", stem, ext), n) ? 0 : -1;
+}
+
+void posture_live_init(posture_live_t *L, const char *md_path,
+                       const char *json_path, unsigned interval_s,
+                       time_t session_start, struct rq_handle *research) {
+    memset(L, 0, sizeof(*L));
+    L->md_path       = md_path;
+    L->json_path     = json_path;
+    L->interval_s    = interval_s;
+    L->session_start = session_start;
+    L->research      = research;
+    L->last_ms       = sloth_mono_ms();
+}
+
+/* A live file that exists before this session's first live write was
+ * left by a session that never signed off; it is that session's only
+ * record and the rename below is about to replace it. Give it a second
+ * name first. link(2) rather than rename(2) because link refuses an
+ * existing target (EEXIST) where rename would silently replace one, and
+ * because the live name then stays in place until the new report takes
+ * it over in one step. When the old file cannot be set aside the live
+ * write is refused: a stale live report is the smaller loss. */
+static int adopt_orphan(const char *path, const char *live,
+                        char *err, size_t errsz) {
+    struct stat st;
+    if (lstat(live, &st) != 0) {
+        if (errno == ENOENT) return 0;
+        snprintf(err, errsz, "%.200s: %s", live, strerror(errno));
+        return -1;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        snprintf(err, errsz, "%.200s: not a regular file — refusing", live);
+        return -1;
+    }
+    char stem[POSTURE_PATH_MAX], dest[POSTURE_PATH_MAX];
+    const char *ext;
+    if (stamped_stem(path, st.st_mtime, ".unclean",
+                     stem, sizeof(stem), &ext) != 0) {
+        snprintf(err, errsz, "%.200s: path too long", live);
+        return -1;
+    }
+    for (int i = 1; i <= 99; i++) {
+        int n = i == 1 ? snprintf(dest, sizeof(dest), "%s%s", stem, ext)
+                       : snprintf(dest, sizeof(dest), "%s_%d%s", stem, i, ext);
+        if (!fits(n, sizeof(dest))) break;
+        if (link(live, dest) == 0) {
+            fprintf(stderr, "sloth: kept the unfinished session's live "
+                            "report as %s\n", dest);
+            return 0;
+        }
+        if (errno != EEXIST) {
+            snprintf(err, errsz, "%.200s: could not keep the previous session's "
+                     "live report (%s) — not replacing it",
+                     live, strerror(errno));
+            return -1;
+        }
+    }
+    snprintf(err, errsz, "%.200s: no free name to keep the previous session's "
+             "live report under — not replacing it", live);
+    return -1;
+}
+
+static int live_write_one(posture_live_t *L, const sloth_state_t *s,
+                          const char *path, int json, int *adopted,
+                          char *err, size_t errsz) {
+    char live[POSTURE_PATH_MAX], tmp[POSTURE_PATH_MAX];
+    size_t base, ext;
+    if (posture_live_path(path, live, sizeof(live)) != 0 ||
+        path_split(live, &base, &ext) != 0 ||
+        !fits(snprintf(tmp, sizeof(tmp), "%.*s.%s.tmp",
+                       (int)base, live, live + base), sizeof(tmp))) {
+        snprintf(err, errsz, "%.200s: bad or over-long path", path);
+        return -1;
+    }
+    if (!*adopted) {
+        if (adopt_orphan(path, live, err, errsz) != 0) return -1;
+        *adopted = 1;
+    }
+    /* A temporary of this name is ours, left by a crash mid-write (the
+     * discovery and handshake writers reason the same way). unlink
+     * removes the name without following it; O_EXCL then guarantees the
+     * file written is one this call created, 0600. */
+    (void)unlink(tmp);
+    FILE *fp = sfile_fopen(AT_FDCWD, tmp, SFILE_EXCL, err, errsz);
+    if (!fp) return -1;
+    if (json) render_json(fp, s, L->session_start, 1);
+    else      render_md(fp, s, L->session_start, L->research, 1);
+    /* On disk before it is visible: a rename that survives a power cut
+     * while the data does not is how a zero-length report appears. */
+    int sync_bad = fflush(fp) != 0 || fsync(fileno(fp)) != 0;
+    int sync_err = errno;
+    if (sfile_fclose(fp, live, err, errsz) != 0) {
+        (void)unlink(tmp);
+        return -1;
+    }
+    if (sync_bad) {
+        snprintf(err, errsz, "%.200s: write failed: %s", live, strerror(sync_err));
+        (void)unlink(tmp);
+        return -1;
+    }
+    if (rename(tmp, live) != 0) {
+        snprintf(err, errsz, "%.200s: rename failed: %s", live, strerror(errno));
+        (void)unlink(tmp);
+        return -1;
+    }
+    return 0;
+}
+
+int posture_live_tick(posture_live_t *L, const sloth_state_t *s, int force) {
+    if (!L || !s || (!L->md_path && !L->json_path)) return 0;
+    uint64_t now = sloth_mono_ms();
+    if (!force && (L->interval_s == 0 ||
+                   now - L->last_ms < (uint64_t)L->interval_s * 1000u))
+        return 0;
+    /* Stamped before the attempt, so a failing write is retried once an
+     * interval and not once a poll. */
+    L->last_ms = now;
+    int wrote = 0, bad = 0;
+    char err[SFILE_ERR_MAX];
+    if (L->md_path) {
+        if (live_write_one(L, s, L->md_path, 0, &L->md_adopted,
+                           err, sizeof(err)) == 0) wrote++;
+        else { bad = 1; sfile_fail(&L->fail, "live report", err); }
+    }
+    if (L->json_path) {
+        if (live_write_one(L, s, L->json_path, 1, &L->json_adopted,
+                           err, sizeof(err)) == 0) wrote++;
+        else { bad = 1; sfile_fail(&L->fail, "live report", err); }
+    }
+    return bad ? -1 : wrote;
+}
+
+void posture_live_retire(posture_live_t *L, int json) {
+    const char *path = json ? L->json_path : L->md_path;
+    int *adopted     = json ? &L->json_adopted : &L->md_adopted;
+    char live[POSTURE_PATH_MAX], err[SFILE_ERR_MAX];
+    if (!path || posture_live_path(path, live, sizeof(live)) != 0) return;
+    /* A session that never wrote a live report does not own the file at
+     * the live name: one found there belongs to an earlier session that
+     * was killed, and removing it would destroy that session's record
+     * on the way out. It is set aside first, exactly as a live write
+     * would have done, and left alone if it cannot be. */
+    if (!*adopted) {
+        if (adopt_orphan(path, live, err, sizeof(err)) != 0) {
+            sfile_fail(&L->fail, "live report", err);
+            return;
+        }
+        *adopted = 1;
+    }
+    (void)unlink(live);
+}
+
+int posture_session_record(const char *path, int json,
+                           const sloth_state_t *s, time_t session_start,
+                           struct rq_handle *research,
+                           char *name_out, size_t name_sz,
+                           char *err, size_t errsz) {
+    char stem[POSTURE_PATH_MAX];
+    const char *ext;
+    if (stamped_stem(path, session_start, "", stem, sizeof(stem), &ext) != 0) {
+        snprintf(err, errsz, "%.200s: bad or over-long path",
+                 path ? path : "?");
+        return -1;
+    }
+    /* O_EXCL, then _2 .. _99: two sessions started in the same second
+     * each keep their own record. */
+    FILE *fp = sfile_fopen_unique(AT_FDCWD, stem, ext, name_out, name_sz,
+                                  err, errsz);
+    if (!fp) return -1;
+    if (json) render_json(fp, s, session_start, 0);
+    else      render_md(fp, s, session_start, research, 0);
+    if (sfile_fclose(fp, name_out, err, errsz) != 0) {
+        (void)unlink(name_out);
+        return -1;
+    }
+    return 0;
 }
