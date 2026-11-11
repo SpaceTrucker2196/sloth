@@ -920,10 +920,11 @@ static void v8_rows_as_written(const char *p, long long tri_cols) {
  * empty, and changes nothing that was there: main's file, the fleet's
  * tables present and holding rows, comes through with those tables and
  * rows untouched, the triage table with the columns it had and both of
- * its rows (an anomaly's rows go into it unchanged). Seen red with the
- * step's row in STEPS[] made { 7, ... } (two steps claiming v7: the
- * file then never reaches v9, and the build's own check that the chain
- * is one step a version does not see it). */
+ * its rows (an anomaly's rows go into it unchanged). The step claiming
+ * v8 again (its row in STEPS[] made { 7, ... }, two steps from v7) is
+ * not caught by the build's count of the chain; it was seen red in
+ * test_schema_text_guardrail, where web_store_step_sql(8) is then
+ * NULL. */
 static void test_v8_file_is_migrated(void) {
     char p[128], err[512];
     path_in(p, sizeof(p), "v8.db");
