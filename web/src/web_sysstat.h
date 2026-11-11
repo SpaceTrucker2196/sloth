@@ -48,6 +48,7 @@
 #include "web_json.h"
 #include "web_jsonl.h"
 #include "web_rollup.h"
+#include "web_own.h"
 
 #define WEB_SYS_SENSORS  36      /* sloth: 16 temps, 16 volts, 4 supplies */
 #define WEB_SYS_SOURCES  8       /* sloth: 7 */
@@ -110,6 +111,9 @@ typedef struct web_sys {
     web_sys_source_t sources[WEB_SYS_SOURCES];
     web_sys_hw_t     hw[WEB_SYS_HW];
     unsigned long records, rejected, overflow;
+    /* The operator's designated networks (web_own.h): sloth's own
+     * configuration, fed by the same ingest hook as the host status. */
+    web_own_t own;
 } web_sys_t;
 
 int  web_sys_init(web_sys_t *y);

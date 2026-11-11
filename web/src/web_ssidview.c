@@ -1,4 +1,5 @@
 #include "web_ssidview.h"
+#include "web_own.h"
 
 #include <stdlib.h>
 
@@ -92,6 +93,7 @@ static void sb_json(web_jw_t *w, const web_m4_t *m, sqlite3_stmt *karma,
                     const sb_t *b, long long now_s) {
     web_jw_raw(w, "{\"bssid\":");     web_jw_str(w, b->bssid);
     web_jw_raw(w, ",\"current\":");   jw_bool(w, b->current);
+    web_jw_raw(w, ",\"designated\":"); web_own_jw(w, web_own_bssid(b->bssid));
     web_jw_raw(w, ",\"vendor\":");    jw_text_or_null(w, b->vendor);
     web_jw_raw(w, ",\"channel\":");   web_jw_int(w, b->channel & 0xffff);
     web_jw_raw(w, ",\"enc\":");       jw_text_or_null(w, b->enc);
@@ -274,9 +276,12 @@ int web_ssid_route(const web_m4_t *m, const char *query, long long now_s,
     web_jw_raw(&w, ",\"octets\":");   web_jw_int(&w, octets);
     web_jw_raw(&w, ",\"now\":");      web_jw_int(&w, now_s);
     web_jw_raw(&w, ",\"db\":\"open\",\"db_schema\":"); web_jw_int(&w, conn.schema);
-    /* sloth's --my-ssid is its own configuration: neither sloth.db nor
-     * the stream carries it, so the page cannot know. */
-    web_jw_raw(&w, ",\"designated\":null");
+    /* sloth's --my-ssid, from its `ownership` record (web_own.h): null
+     * until sloth has reported it, never a guess. */
+    web_jw_raw(&w, ",\"designated\":"); web_own_jw(&w, web_own_ssid(ssid, (size_t)octets));
+    int ndes = web_own_ssid_count();
+    web_jw_raw(&w, ",\"designated_count\":");
+    if (ndes >= 0) web_jw_int(&w, ndes); else web_jw_raw(&w, "null");
     web_jw_raw(&w, ",\"first_seen\":");
     if (total > 0) web_jw_int(&w, first); else web_jw_raw(&w, "null");
     web_jw_raw(&w, ",\"last_seen\":");

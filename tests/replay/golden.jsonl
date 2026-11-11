@@ -28,6 +28,7 @@
 {"type":"http","ts":"T","src":"192.0.2.10","host":"replay.example","method":"GET","path":"/replay","ja4h":"ge11nn0200_36b62d53ad86_000000000000_000000000000"}
 {"type":"icmp","ts":"T","src":"192.0.2.10","dst":"198.51.100.1","desc":"Echo Req","ty":8,"code":0,"seq":1,"plen":0,"v6":0}
 {"type":"icmp","ts":"T","src":"198.51.100.1","dst":"192.0.2.10","desc":"Echo Reply","ty":0,"code":0,"seq":1,"plen":0,"v6":0}
+{"type":"ownership","ts":"T","ssids":0,"bssids":0,"known_macs":0}
 {"type":"packet","ts":"T","ts_sec":"T","ts_usec":0,"src":"192.0.2.10","dst":"198.51.100.53","src_port":53001,"dst_port":53,"proto":17,"len":78,"info":"DNS qry c2.example-bad.com"}
 {"type":"packet","ts":"T","ts_sec":"T","ts_usec":1000,"src":"198.51.100.53","dst":"192.0.2.10","src_port":53,"dst_port":53001,"proto":17,"len":94,"info":"DNS c2.example-bad.com → 203.0.113.13"}
 {"type":"packet","ts":"T","ts_sec":"T","ts_usec":2000,"src":"192.0.2.10","dst":"203.0.113.13","src_port":40000,"dst_port":443,"proto":6,"len":54,"info":"TCP SYN"}

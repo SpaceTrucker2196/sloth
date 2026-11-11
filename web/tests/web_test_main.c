@@ -132,6 +132,7 @@ int main(void) {
     SUITE(run_ble_tests);
     SUITE(run_gnss_tests);
     SUITE(run_sysstat_tests);
+    SUITE(run_own_tests);
     SUITE(run_adsb_tests);
     SUITE(run_aprs_tests);
     SUITE(run_radar_tests);

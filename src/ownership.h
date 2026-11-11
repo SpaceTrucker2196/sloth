@@ -168,6 +168,13 @@ int ownership_any(void);
 int ownership_ssid_count(void);
 int ownership_bssid_count(void);
 
+/* The i-th designation, 0 <= i < the count; NULL out of range. For the
+ * `ownership` record (src/jsonl.c), which exports the rosters so a
+ * consumer can mark the operator's networks: the designated SSIDs and
+ * BSSIDs, and the known-device roster as a count only. */
+const char    *ownership_ssid_at(int i);
+const uint8_t *ownership_bssid_at(int i);
+
 /* Drop all designations — tests only. */
 void ownership_clear(void);
 

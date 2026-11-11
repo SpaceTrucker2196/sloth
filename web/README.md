@@ -3111,9 +3111,9 @@ drawer then says it is not an SSID sloth.db can hold, and asks nothing.
 ```
 GET /api/wifi/ssid?ssid=SG9tZU5ldA
 {"ssid":"HomeNet","ssid_k":3,"ssid_np":false,"hidden":false,"octets":7,
- "now":1792627200,"db":"open","db_schema":13,"designated":null,
- "first_seen":1791849600,"last_seen":1792627140,
- "bssids":[{"bssid":"0a:00:00:00:00:01","current":true,"vendor":"Acme",
+ "now":1792627200,"db":"open","db_schema":13,"designated":true,
+ "designated_count":2,"first_seen":1791849600,"last_seen":1792627140,
+ "bssids":[{"bssid":"0a:00:00:00:00:01","current":true,"designated":true,"vendor":"Acme",
    "channel":6,"enc":"WPA3","akm":"PSK,SAE","akm_names":["PSK","SAE"],
    "mfp_word":"capable","signal":-50,"first_seen":1791849600,
    "last_seen":1792627140,"karma":null,
@@ -3162,10 +3162,15 @@ GET /api/wifi/ssid?ssid=SG9tZU5ldA
   BSSIDs) alert rows, the newest of the last 30 days, found through
   `idx_alerts_last_seen` before the walk begins; `alerts_reached` says
   how far back that was, `null` for the whole window.
-- **`designated`** is always `null`: sloth's `--my-ssid` is its own
-  configuration and reaches neither sloth.db nor the stream, so the
-  page cannot say whether the operator designated the network, and
-  says that.
+- **`designated`** is `true` or `false` once sloth's `ownership`
+  record (JSONL 1.2.0) has arrived, with `designated_count` the number
+  of SSIDs sloth designates (`--my-ssid`), and `null` for both before
+  it: the page then says `not known: sloth has not reported its
+  designated networks`, never a guess. Each BSSID carries its own
+  `designated` (`--my-bssid`), marked `yours` in the drawer. The record
+  is kept in memory by `web/src/web_own.c`, the newest replacing the
+  last whole, a malformed one refused; SSIDs compare octet for octet,
+  as sloth's own `ownership_is_my_ssid()` does.
 
 **The drawer** (`#sdrawer`) is built as the device drawer is: the name
 with its non-printable marker, a key and value list (octets, first and
@@ -5074,8 +5079,13 @@ by name in the window: the stations asking (distinct MACs: `pnl_ssids`'
 key is the pair) and how many of those MACs are randomised, whether an
 access point in sloth.db beacons exactly that name (how many, and the
 strongest), first and last asked for; the name opens its detail. The
-operator's designated networks are not marked: `--my-ssid` is sloth's
-own setting and is in neither sloth.db nor the stream.
+operator's designated networks (`--my-ssid`, from sloth's `ownership`
+record) carry `"designated": true` and a `yours` mark: a designated
+network being searched for is the row an operator most wants to see.
+Before that record arrives every row's `designated` is `null`, the
+answer's `designated_count` is `null`, and the caption says the
+designated networks are not known. The WiFi AP table's rows carry the
+same member, `true` by BSSID (`--my-bssid`) or SSID, and the same mark.
 
 **Groups** (`/api/probes/groups`): the stations linked, directly or
 through one another, by at least `min` shared uncommon networks, each

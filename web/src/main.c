@@ -269,6 +269,8 @@ int main(int argc, char **argv) {
     web_ingest_set_adsb(&g_ingest, &g_adsb);
     web_ingest_set_aprs(&g_ingest, &g_aprs);
     web_ingest_set_sys(&g_ingest, &g_sys);
+    /* The designated networks the SSID, Probes and WiFi routes mark. */
+    web_own_bind(&g_sys.own);
     web_ingest_set_chain(&g_ingest, &g_chain);
     if (web_fleet_start(&g_fleet, err, sizeof(err)) != 0) {
         fprintf(stderr, "slothweb: fleet: %s\n", err);

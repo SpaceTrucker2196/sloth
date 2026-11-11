@@ -11,6 +11,114 @@
 #include <unistd.h>
 #include "ownership.h"
 #include "tmp_dir.h"
+#include "jsonl.h"
+#include "sloth_clock.h"
+
+/* ── the `ownership` record (JSONL 1.2.0) ─────────────────── */
+
+static time_t g_own_wall;
+static time_t own_wall(void) { return g_own_wall; }
+static char   g_own_path[TEST_TMP_MAX];
+
+static void own_open(void) {
+    int fd = mkstemp(test_tmp_tpl(g_own_path, sizeof(g_own_path), "sloth_own_XXXXXX"));
+    if (fd >= 0) close(fd);
+    jsonl_close();
+    unlink(g_own_path);
+    ASSERT(jsonl_open(g_own_path));
+    jsonl_dedup_reset();
+    g_own_wall = 1800000000;
+    sloth_clock_test_set(NULL, own_wall);
+}
+
+static const char *own_read(void) {
+    static char buf[8192];
+    jsonl_close();
+    FILE *fp = fopen(g_own_path, "r");
+    size_t n = fp ? fread(buf, 1, sizeof(buf) - 1, fp) : 0;
+    buf[n] = '\0';
+    if (fp) fclose(fp);
+    unlink(g_own_path);
+    memcpy(g_own_path + strlen(g_own_path) - 6, "XXXXXX", 6);
+    sloth_clock_test_set(NULL, NULL);
+    return buf;
+}
+
+static int own_lines(const char *b) {
+    int n = 0;
+    for (const char *p = b; (p = strstr(p, "{\"type\":\"ownership\"")) != NULL; p++) n++;
+    return n;
+}
+
+/* The designated SSIDs in the stream's string encoding (a control byte
+ * as \u0001, an octet that is not UTF-8 as \ufffd, never the raw byte),
+ * the BSSIDs lower-case, and the known-device roster as a count: none
+ * of its MACs is written. That absence is pinned by the whole-line
+ * match, not by a mutation: ownership.h has no accessor for the
+ * roster's entries, so no one-line change to the emitter could write
+ * one. The raw-byte absence was seen red with kv_str() swapped for a
+ * raw copy of the SSID. */
+static void test_record_carries_the_rosters(void) {
+    ownership_clear();
+    ASSERT_EQ(ownership_add_ssid("Home"), 1);
+    ASSERT_EQ(ownership_add_ssid("a\x01" "b\xff"), 1);
+    ASSERT_EQ(ownership_add_bssid("AA:BB:CC:DD:EE:0F"), 1);
+    ASSERT_EQ(ownership_add_known_mac("02:11:22:33:44:55"), 1);
+    ASSERT_EQ(ownership_add_known_mac("02:11:22:33:44:66"), 1);
+    own_open();
+    jsonl_emit_ownership();
+    const char *b = own_read();
+    ASSERT(strstr(b, "{\"type\":\"ownership\",\"ts\":1800000000,\"ssids\":2,"
+                     "\"ssid_0\":\"Home\",\"ssid_1\":\"a\\u0001b\\ufffd\","
+                     "\"bssids\":1,\"bssid_0\":\"aa:bb:cc:dd:ee:0f\",\"known_macs\":2}\n") != NULL);
+    ASSERT(strstr(b, "02:11:22") == NULL);
+    ASSERT(strstr(b, "\x01") == NULL);
+    ownership_clear();
+}
+
+/* No designation is still a record: "sloth says none", which a consumer
+ * must be able to tell from "sloth has not said". */
+static void test_record_of_an_empty_roster(void) {
+    ownership_clear();
+    own_open();
+    jsonl_emit_ownership();
+    const char *b = own_read();
+    ASSERT(strstr(b, "{\"type\":\"ownership\",\"ts\":1800000000,\"ssids\":0,"
+                     "\"bssids\":0,\"known_macs\":0}\n") != NULL);
+}
+
+/* One line, then nothing while nothing changes inside the 300 s
+ * heartbeat; a change is a line at once, a renamed designation with
+ * the counts unchanged too; the heartbeat is a line.
+ * Seen red (one line short) with the SSIDs left out of the signature,
+ * and red (a line per call) with the jsonl_changed() test removed. */
+static void test_record_is_change_only_with_a_heartbeat(void) {
+    ownership_clear();
+    ASSERT_EQ(ownership_add_ssid("Home"), 1);
+    own_open();
+    jsonl_emit_ownership();
+    g_own_wall += 10;
+    jsonl_emit_ownership();
+    g_own_wall += 289;
+    jsonl_emit_ownership();                 /* 299 s: suppressed */
+    ASSERT_EQ(ownership_add_ssid("Home-5G"), 1);
+    jsonl_emit_ownership();                 /* changed: written */
+    g_own_wall += 299;
+    jsonl_emit_ownership();                 /* 299 s since: suppressed */
+    g_own_wall += 1;
+    jsonl_emit_ownership();                 /* the heartbeat */
+    /* The same counts, another name: a change. */
+    ownership_clear();
+    ASSERT_EQ(ownership_add_ssid("Office"), 1);
+    ASSERT_EQ(ownership_add_ssid("Office-5G"), 1);
+    g_own_wall += 1;
+    jsonl_emit_ownership();
+    const char *b = own_read();
+    ASSERT_EQ(own_lines(b), 4);
+    ASSERT(strstr(b, "\"ssids\":2,\"ssid_0\":\"Home\",\"ssid_1\":\"Home-5G\"") != NULL);
+    ASSERT(strstr(b, "\"ssids\":2,\"ssid_0\":\"Office\",\"ssid_1\":\"Office-5G\"") != NULL);
+    ownership_clear();
+}
 
 /* ── SSID designation ────────────────────────────────────── */
 
@@ -581,6 +689,11 @@ void run_ownership_tests(void) {
     RUN_TEST(test_self_roster_is_bounded);
     RUN_TEST(test_self_is_own_device_but_not_a_known_mac);
     RUN_TEST(test_self_roster_cleared_and_null_safe);
+
+    TEST_SUITE("ownership: the `ownership` record (JSONL 1.2.0)");
+    RUN_TEST(test_record_carries_the_rosters);
+    RUN_TEST(test_record_of_an_empty_roster);
+    RUN_TEST(test_record_is_change_only_with_a_heartbeat);
 
     TEST_SUITE("ownership: echoed input is sanitised (#137)");
     RUN_TEST(test_roster_bad_line_echo_has_no_control_bytes);

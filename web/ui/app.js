@@ -3546,6 +3546,8 @@
     // the squares after it, at the heat the TUI warns at.
     var ss = el("span", "c-ssid");
     ss.appendChild(a.ssid === null ? ssidHidden("(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
+    // sloth's --my-ssid / --my-bssid, from its `ownership` record.
+    if (a.designated === true) ss.appendChild(el("span", "d-bright", " yours"));
     if (window.SlothSubNotes && window.SlothSsid && a.ssid !== null)
       SlothSubNotes.mark(ss, "ssid", SlothSsid.param(String(a.ssid)));
     // §6.3: the SSID count as a row of small squares after the SSID, one

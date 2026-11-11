@@ -1,4 +1,5 @@
 #include "web_probes.h"
+#include "web_own.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -428,15 +429,24 @@ int web_probes_ssids_route(const web_m4_t *m, const char *query, long long now_s
         web_jw_raw(&w, ",\"ap_signal\":");  jw_signal(&w, has_sig, sig);
         web_jw_raw(&w, ",\"uncommon\":");
         jw_bool(&w, df >= 2 && df <= web_probe_u(clients));
-        /* sloth's --my-ssid reaches neither sloth.db nor the stream. */
-        web_jw_raw(&w, ",\"designated\":null}");
+        /* sloth's --my-ssid, from its `ownership` record (web_own.h):
+         * a designated network being searched for is the row an
+         * operator most wants to see. null until sloth has said. */
+        web_jw_raw(&w, ",\"designated\":");
+        web_own_jw(&w, web_own_ssid(s, strlen(s)));
+        web_jw_raw(&w, "}");
     }
     sqlite3_finalize(st);
     sqlite3_finalize(ap);
     if (rc != SQLITE_DONE) return db_failed(&conn, body, cap, len, status);
     web_slothdb_close(&conn);
     int more = offset + shown < total;
-    web_jw_raw(&w, "],\"count\":");   web_jw_int(&w, shown);
+    /* How many networks sloth designated, null until it has said: the
+     * page's caption tells "none of these is yours" from "not known". */
+    int ndes = web_own_ssid_count();
+    web_jw_raw(&w, "],\"designated_count\":");
+    if (ndes >= 0) web_jw_int(&w, ndes); else web_jw_raw(&w, "null");
+    web_jw_raw(&w, ",\"count\":");   web_jw_int(&w, shown);
     web_jw_raw(&w, ",\"total\":");    web_jw_int(&w, total);
     web_jw_raw(&w, ",\"more\":");     jw_bool(&w, more);
     web_jw_raw(&w, ",\"next_offset\":");

@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/sys_status.c`, `src/dns_wire.c`.
 
-**Last updated**: 2026-11-11 (`jsonl_version` `1.2.0`: the `beacon_recall_*` fields appended to `sys_status`, a batch written at once when the memory overflows or goes quiet; the `alert.resolve` reason `recovered`), 2026-11-11 (host status and the source inventory: the `sys_status`, `sys_sensor`, `source_status` and `receiver_hw` records, on a 60 s cadence; `jsonl_version` `1.1.0`, a MINOR bump for four added record types; no existing record changed), 2026-11-10 (#185 item 3, [ADR 0007](adr/0007-versioning.md): `jsonl_version` appended to `sensor_health` as the stream's own contract version, `1.0.0`, from `SLOTH_JSONL_VERSION`; the *Versioning* section's "no version field" replaced by the bump rule), 2026-11-09 ([[adsb]]: `beast:HOST:PORT` as `adsb_src` / `src`, readsb's address-type names as `source_type` for Beast rows, and what the `adsb_*` tallies count for a Beast stream; no field added), 2026-11-06 ([[location]]: `loc_lat`, `loc_lon`, `loc_alt_m`, `loc_src` appended to `sensor_health` while a position exists, signed on the 0.01° cell; slothweb's Radar centre), 2026-11-05 ([[aprs]]: the `aprs_packet` record, one per packet Dire Wolf decoded, the change-only `aprs_station` record, the `aprs_*` block appended to `sensor_health`, present only with `--aprs`, and the `sensor` kind `aprs`), 2026-11-05 (#26 slice 1, [[adsb]]: the change-only `adsb_aircraft` record, and the `adsb_*` block appended to `sensor_health`, present only with `--adsb`), 2026-11-03 (#173: the MGMT_FUZZ lifecycle example carries the banded detail), 2026-11-03 (#180: `evict_frag_ap_ident` appended to the `sensor_health` breakout — the FragAttacks per-BSSID AP-identity table), 2026-11-02 ([[gnss]]: the change-only `gnss_fix`, `gnss_sky` and `gnss_sat` records, and `gnss_sats_in_view`, `gnss_sats_used`, `gnss_cn0_mean`, `gnss_time_offset_ms`, `gnss_jam` appended to `sensor_health` with a `--gps` reader; on review, the used count signed as a band, the offset band with hysteresis, `jam` sticky across the TPVs gpsd omits it from, `el` / `az` absent rather than -1, and a set satellite inferred from its heartbeat lapsing), 2026-10-27 ([[location]]: the `loc` object on `alert` and every `alert.*` record of a stamped incident; the `gps_*` block in `sensor_health`, present only with `--location` or `--gps`), 2026-10-26 (`capture_linktype` and `monitor_only` in `sensor_health`, for slothweb's capture scope), 2026-10-26 (RSSI distance data point: `est_dist_m`, `est_dist_band`, `est_dist_trend`, `est_ptx_source` on `beacon`, `probe_client`, `assoc`, `device` and `ble_device`, present only with an estimate; `ble_device` signs the band only, never metres or the trend), 2026-10-26 (#170: incidents versus `--db` findings stated under *Incident lifecycle*; no record changed), 2026-10-26 (#166: `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` in `sensor_health`, present only with `--pcap-dir`), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
+**Last updated**: 2026-11-11 (`jsonl_version` `1.2.0`: the `ownership` record, the designated SSIDs and BSSIDs and the known-device roster's count; the `beacon_recall_*` fields appended to `sys_status`, a batch written at once when the memory overflows or goes quiet; the `alert.resolve` reason `recovered`), 2026-11-11 (host status and the source inventory: the `sys_status`, `sys_sensor`, `source_status` and `receiver_hw` records, on a 60 s cadence; `jsonl_version` `1.1.0`, a MINOR bump for four added record types; no existing record changed), 2026-11-10 (#185 item 3, [ADR 0007](adr/0007-versioning.md): `jsonl_version` appended to `sensor_health` as the stream's own contract version, `1.0.0`, from `SLOTH_JSONL_VERSION`; the *Versioning* section's "no version field" replaced by the bump rule), 2026-11-09 ([[adsb]]: `beast:HOST:PORT` as `adsb_src` / `src`, readsb's address-type names as `source_type` for Beast rows, and what the `adsb_*` tallies count for a Beast stream; no field added), 2026-11-06 ([[location]]: `loc_lat`, `loc_lon`, `loc_alt_m`, `loc_src` appended to `sensor_health` while a position exists, signed on the 0.01° cell; slothweb's Radar centre), 2026-11-05 ([[aprs]]: the `aprs_packet` record, one per packet Dire Wolf decoded, the change-only `aprs_station` record, the `aprs_*` block appended to `sensor_health`, present only with `--aprs`, and the `sensor` kind `aprs`), 2026-11-05 (#26 slice 1, [[adsb]]: the change-only `adsb_aircraft` record, and the `adsb_*` block appended to `sensor_health`, present only with `--adsb`), 2026-11-03 (#173: the MGMT_FUZZ lifecycle example carries the banded detail), 2026-11-03 (#180: `evict_frag_ap_ident` appended to the `sensor_health` breakout — the FragAttacks per-BSSID AP-identity table), 2026-11-02 ([[gnss]]: the change-only `gnss_fix`, `gnss_sky` and `gnss_sat` records, and `gnss_sats_in_view`, `gnss_sats_used`, `gnss_cn0_mean`, `gnss_time_offset_ms`, `gnss_jam` appended to `sensor_health` with a `--gps` reader; on review, the used count signed as a band, the offset band with hysteresis, `jam` sticky across the TPVs gpsd omits it from, `el` / `az` absent rather than -1, and a set satellite inferred from its heartbeat lapsing), 2026-10-27 ([[location]]: the `loc` object on `alert` and every `alert.*` record of a stamped incident; the `gps_*` block in `sensor_health`, present only with `--location` or `--gps`), 2026-10-26 (`capture_linktype` and `monitor_only` in `sensor_health`, for slothweb's capture scope), 2026-10-26 (RSSI distance data point: `est_dist_m`, `est_dist_band`, `est_dist_trend`, `est_ptx_source` on `beacon`, `probe_client`, `assoc`, `device` and `ble_device`, present only with an estimate; `ble_device` signs the band only, never metres or the trend), 2026-10-26 (#170: incidents versus `--db` findings stated under *Incident lifecycle*; no record changed), 2026-10-26 (#166: `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` in `sensor_health`, present only with `--pcap-dir`), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
 and `drained`; the `beacon-overflow` `BEACONING` finding; IPv4-mapped
 beaconing peers keyed as IPv4), 2026-10-23 (#165 audit: a PTR `answer`
 is whole up to 63 bytes, for a PTR question only; a target that would
@@ -1681,6 +1681,38 @@ apart on this host. sloth does not read the attribute.
 {"type":"receiver_hw","ts":1800000000,"seq":1,"key":"net:wlan0","kind":"wifi","bus":"sdio","id":"02d0:a9a6","known":0,"desc":"","vendor":"","product":"","driver":"brcmfmac","ifaces":"wlan0"}
 ```
 
+## `ownership` — the operator's designated networks (JSONL 1.2.0)
+
+Owner ruling 2026-11-11: "export your designated networks from the
+sensor". sloth's `--my-ssid` and `--my-bssid` rosters
+(`src/ownership.h`) were in neither sloth.db nor the stream, so a
+consumer (slothweb's SSID drawer, Probes and WiFi views) could not mark
+the operator's networks and had to say it did not know.
+
+One singleton record, written by `src/jsonl.c` `jsonl_emit_ownership()`
+through the change-only snapshot cache: on the first tick, at once on
+any change, and on the 300 s heartbeat, so a consumer that connects late
+has it within five minutes. The rosters are fixed for the life of the
+process today (flags only; there is no roster reload and no SIGHUP
+handler), so in practice it is the first line and then a heartbeat.
+
+| Field | Meaning |
+|---|---|
+| `ssids` | how many SSIDs `--my-ssid` designates, `0`..`16` |
+| `ssid_0` .. `ssid_15` | each designated SSID, as given, through the stream's string escaping (*Common envelope*): a control byte as `\u00XX`, an octet that is not UTF-8 as `\ufffd`, never the raw byte. Not the `?` mapping observed SSIDs get at ingest: the record carries the designation sloth compares with (`ownership_is_my_ssid()`, exact and case-sensitive), so a designation with a control byte in it matches no stored SSID here or in a consumer that compares as sloth does |
+| `bssids` | how many BSSIDs `--my-bssid` designates, `0`..`16` |
+| `bssid_0` .. `bssid_15` | each designated BSSID, lower-case `aa:bb:cc:dd:ee:ff` |
+| `known_macs` | how many MACs the known-device roster (`--known-mac`, `--known-macs`) holds, `0`..`512`. **The count only**: those addresses are the operator's own devices, and a stream that is forwarded to a SIEM or bundled for a colleague has no need to carry them; what a consumer can use is whether the roster is set (it gates `UNKNOWN_DEVICE`). The sensor's own interface addresses are not here either: they are the `iface` records' |
+
+Flat members rather than arrays because slothweb's decoder keeps
+top-level scalars only. An empty roster is still a record (`ssids` 0,
+`bssids` 0): "sloth designates none", which a consumer must be able to
+tell from "sloth has not said".
+
+```json
+{"type":"ownership","ts":1800000000,"ssids":2,"ssid_0":"HomeNet","ssid_1":"a\u0001b","bssids":1,"bssid_0":"aa:bb:cc:dd:ee:0f","known_macs":2}
+```
+
 ## `socket_gap` (socket-only)
 
 ```json
@@ -1728,7 +1760,8 @@ signature / syslog MSGID), and it does not count towards `seq` itself.
 
   History: `1.2.0` (2026-11-11) appended the `beacon_recall_*` fields
   to `sys_status` (the forgotten-BSSID memory behind `EVIL_TWIN`'s
-  late-arrival signal); no existing field changed. `1.1.0` (2026-11-11)
+  late-arrival signal) and added the record type `ownership` (the
+  operator's designated networks); no existing field changed. `1.1.0` (2026-11-11)
   added the record types `sys_status`,
   `sys_sensor`, `source_status` and `receiver_hw`; no existing record
   gained, lost or renamed a field.

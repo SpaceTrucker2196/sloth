@@ -12,10 +12,12 @@ int web_sys_init(web_sys_t *y) {
     memset(y, 0, sizeof(*y));
     y->undervolt = -1;
     y->sensor_seq = y->hw_seq = -1;
+    if (web_own_init(&y->own) != 0) return -1;
     return pthread_mutex_init(&y->mu, NULL) == 0 ? 0 : -1;
 }
 
 void web_sys_destroy(web_sys_t *y) {
+    web_own_destroy(&y->own);
     pthread_mutex_destroy(&y->mu);
 }
 
@@ -264,6 +266,7 @@ static int which(const char *t) {
 }
 
 void web_sys_record(web_sys_t *y, const web_jrec_t *r, long long now_ms) {
+    if (y) web_own_record(&y->own, r, now_ms);
     int w = which(web_jl_str(r, "type"));
     if (!y || !w) return;
     long long ts = web_jl_int(r, "ts", 0);

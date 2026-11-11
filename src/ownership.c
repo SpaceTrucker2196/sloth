@@ -246,6 +246,14 @@ int ownership_any(void)         { return g_ssid_n > 0 || g_bssid_n > 0; }
 int ownership_ssid_count(void)  { return g_ssid_n; }
 int ownership_bssid_count(void) { return g_bssid_n; }
 
+const char *ownership_ssid_at(int i) {
+    return i >= 0 && i < g_ssid_n ? g_ssids[i] : NULL;
+}
+
+const uint8_t *ownership_bssid_at(int i) {
+    return i >= 0 && i < g_bssid_n ? g_bssids[i] : NULL;
+}
+
 void ownership_clear(void) {
     g_ssid_n  = 0;
     g_bssid_n = 0;
