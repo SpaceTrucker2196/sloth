@@ -87,7 +87,7 @@
       <dd>only what the host's own connected interfaces carried: Ethernet and the associated Wi-Fi card in managed mode (the IP capture, ARP, DHCP, DNS, mDNS, NBNS, flows, <code>/proc</code>, the interfaces' throughput), and that card's own station dump and scans (Wi-Fi through the local network, not passive). Never the monitor radio.</dd>
     </dl>
     <ul class="sub">
-      <li>A device seen both ways appears in both scopes, and in each shows only the fields that scope captured: under Monitor no address, hostname or DHCP, mDNS or NBNS name; under Local no SSID, AP bit or probe signal. Its signal, first and last seen and risk are the scope's own (sloth's risk weights over the scope's signals).</li>
+      <li>A device seen both ways appears in both scopes, and in each shows only the fields that scope captured: under Monitor no address, hostname or DHCP, mDNS or NBNS name; under Local no SSID, AP bit or probe signal. Its signal, first and last seen and risk are the scope's own (sloth's risk score over the scope's signals).</li>
       <li>An alert is in the scope of its rule's input, whatever file the rule is in (CAPTIVE_PORTAL reads DNS, HTTP and TLS: Local). sloth's own-state alerts (NO_MONITOR_MODE, BT_OWN_TRANSMIT) appear in every scope.</li>
       <li>While sloth says its IP capture is itself a monitor radio (a radiotap link type, or the capture interface is the monitor interface), the stream's IP records count as Monitor's; a banner says so. sloth.db's rows carry no capture path, so its IP tables stay Local.</li>
       <li>An anomaly is in the scope of what it scored: A2 Monitor, A5-A9 Local, A1 by its metric and key, A3 and A4 (scored on every source's presence) where the device has presence of the scope's own; A10 every scope.</li>
