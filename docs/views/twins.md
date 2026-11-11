@@ -28,7 +28,10 @@ and four flags:
   Alfa) or Espressif (ESP32 / ESP8266) tables in
   `src/wifi_oui_attacker.c`.
 - **hash_mismatch** — the two APs' vendor-IE fingerprint hashes (FNV-1a
-  over non-Microsoft tag-221 IEs) disagree.
+  over non-Microsoft tag-221 IEs) disagree. Compared only when both are
+  on the same band (#188): one AP's 2.4 and 5 GHz radios differ here by
+  design, and such a pair — addresses at most 2 bytes apart, different
+  bands, first heard within 10 s — is one device and not an episode.
 - **unattributed** (`?`) — nothing has established which half is the
   impostor. The two BSSID columns are the pair in canonical byte order,
   not an accusation.
