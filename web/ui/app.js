@@ -396,7 +396,7 @@
   // the colour it hashed over the octets themselves (k, its *_k member),
   // which is the TUI's; the page's own hash is for an SSID that came
   // without one. One that needed escaping (np) carries a marker.
-  function ssidSpan(ssid, k, np) {
+  function ssidText(ssid, k, np) {
     var sp = el("span", "", ssid);
     if (num(k) && k >= 0 && k < P.ip) sp.style.color = "var(--k-" + k + ")";
     else if (ssid !== "") sp.style.color = "var(--k-" + ipColorIndex(ssid) + ")";
@@ -406,6 +406,19 @@
     w.appendChild(el("span", "npm", "non-printable"));
     w.title = "bytes that are not printable UTF-8 are shown as \\xNN";
     return w;
+  }
+
+  // Every SSID the page writes is selectable (web/ui/ssid.js): a click,
+  // Enter or Space opens its detail, as a device row opens the drawer.
+  // plain: inside a control that has an action of its own. ssidHidden:
+  // the word a view writes for the empty SSID, selectable the same way.
+  function ssidSpan(ssid, k, np, plain) {
+    var n = ssidText(ssid, k, np);
+    return plain || !window.SlothSsid ? n : SlothSsid.link(n, ssid);
+  }
+  function ssidHidden(word) {
+    var n = el("span", "d-dim", word);
+    return window.SlothSsid ? SlothSsid.link(n, null) : n;
   }
 
   // tui_brand_addstr() into parent: brand runs in their colours, the
@@ -1259,6 +1272,8 @@
   // ── views ─────────────────────────────────────────────────────────
   var VIEWS = ["overview", "activity", "devices", "anomalies", "wifi", "flows", "history",
                "lookup", "tacdb", "ble", "gnss", "adsb", "aprs", "radar"];
+  // The Probes view (web/ui/probes.js), a tab of its own.
+  VIEWS.push("probes");
   // The views with a tab, and the drill-downs: the Alerts page (6),
   // an alert's page, the record ticker by type, the sensor's health.
   var NAV = VIEWS.concat(["alerts"]);
@@ -1309,6 +1324,8 @@
     if (v === "aprs" && window.SlothAprs) SlothAprs.show();
     // The Radar view (radar.js, its own module): a no-op when not loaded.
     if (v === "radar" && window.SlothRadar) SlothRadar.show();
+    // The Probes view (probes.js, its own module): a no-op when not loaded.
+    if (v === "probes" && window.SlothProbes) SlothProbes.show();
     if (v === "alerts") alertsView();
     if (v === "alert") alertView();
     if (v === "records") recordsView();
@@ -1394,6 +1411,7 @@
   $("nav-adsb").addEventListener("click", function () { show("adsb"); });
   $("nav-aprs").addEventListener("click", function () { show("aprs"); });
   $("nav-radar").addEventListener("click", function () { show("radar"); });
+  $("nav-probes").addEventListener("click", function () { show("probes"); });
 
   // ── the theme toggle ──────────────────────────────────────────────
   // Light or dark on :root's data-theme, the choice kept in this
@@ -1489,6 +1507,8 @@
     $("v-adsb").classList.toggle("scoped-out", SCOPE === "local");
     // And Dire Wolf's APRS receiver.
     $("v-aprs").classList.toggle("scoped-out", SCOPE === "local");
+    // And the probe requests: the monitor radio's.
+    $("v-probes").classList.toggle("scoped-out", SCOPE === "local");
     // No scoped-out toggle for v-radar: the satellites it draws are the
     // host's own receiver's, every scope's; under Local the module itself
     // skips the three passive fetches and says so in its header.
@@ -2998,6 +3018,8 @@
     $("dr-sw").style.background = keyColor(mac);
     $("dr-mac").className = "d-dim";
     set("dr-note", "loading");
+    // The last device's research is not this one's.
+    clear("dr-vendor");
     if (window.SlothLocation) window.SlothLocation.drawer(mac);
     // G8 when the device is a BSSID with more than one stage (§6.8).
     if (window.SlothChain) SlothChain.drawer(mac);
@@ -3022,7 +3044,6 @@
         ["dhcp vci", dt.dhcp_vci]
       ] : [["stream ip", j.stream ? ipVal(j.stream.ip, IP_SRC.dev) : null],
            ["stream first seen", j.stream && num(j.stream.first_seen) ? stamp(j.stream.first_seen) : null]]));
-      vendorResearch(box, j.vendor_research, j.oui);
       itemList(box, "names (passive)", j.names, nameLine, false);
       itemList(box, "pnl ssids", j.ssids, function (x) { return ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np); }, j.ssids_more);
       itemList(box, "associations", j.assocs, function (x) {
@@ -3078,6 +3099,11 @@
       (j.anomalies || []).forEach(function (a) { an.appendChild(card(a)); });
       if (window.SlothFrrs) SlothFrrs.mountDrawer(mac, j);
       if (window.SlothNotes) SlothNotes.drawer(mac);
+      // The vendor research last (owner request 2026-11-11): under the
+      // device's own record, strip, signal, week, anomalies and FRRS
+      // record, in the drawer's last container, not between its
+      // addresses and its names.
+      vendorResearch(clear("dr-vendor"), j.vendor_research, j.oui);
     }).catch(function (e) { if (gen === DR.gen) set("dr-note", errText(e.message)); });
   }
 
@@ -3401,7 +3427,7 @@
       var nm = el("span", "nm");
       if (t.kind === "ap") {
         nm.appendChild(t.ssid === null || t.ssid === undefined ? el("span", "d-dim", "(no name)")
-                                                                : ssidSpan(String(t.ssid), t.ssid_k, t.ssid_np));
+                                                                : ssidSpan(String(t.ssid), t.ssid_k, t.ssid_np, true));
         nm.appendChild(el("span", "d-dim", "  " + t.id + "  AP"));
       } else {
         nm.appendChild(el("span", "d-normal", t.id));
@@ -3412,6 +3438,7 @@
       b.appendChild(el("span", "n d-normal", share(m[e + 1])));
       b.addEventListener("click", mixGo(t));
       li.appendChild(b);
+      if (t.kind === "ap" && window.SlothSsid) SlothSsid.more(li, t.ssid === undefined ? null : t.ssid);
       ol.appendChild(li);
     }
     if (num(m[1]) && m[1] > 0) {
@@ -3513,7 +3540,7 @@
     // The SSID in its hash colour; the warning (KARMA, multi-VAP) is
     // the squares after it, at the heat the TUI warns at.
     var ss = el("span", "c-ssid");
-    ss.appendChild(a.ssid === null ? el("span", "d-dim", "(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
+    ss.appendChild(a.ssid === null ? ssidHidden("(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
     // §6.3: the SSID count as a row of small squares after the SSID, one
     // each (eight, then a plus), not "+3 ssids" in words; the count in
     // words in its title.
@@ -3724,7 +3751,7 @@
       var row = el("div", "dt-row");
       row.appendChild(macCell(a.bssid));
       var ss = el("span", "");
-      ss.appendChild(a.ssid === null ? el("span", "d-dim", "(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
+      ss.appendChild(a.ssid === null ? ssidHidden("(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
       row.appendChild(ss);
       row.appendChild(el("span", "n d-normal", String(a.channel)));
       row.appendChild(el("span", "n d-dim", num(a.signal) ? String(a.signal) : "-"));
@@ -5846,6 +5873,16 @@
   // Anomaly triage and the links (web/ui/notes.js): the page's helpers, lent once.
   if (window.SlothNotes) SlothNotes.init({ el: el, getJSON: getJSON, prefGet: prefGet, stamp: stamp,
     shortStamp: shortStamp, go: go, openDrawer: openDrawer });
+  // One SSID's detail (web/ui/ssid.js): the page's helpers, lent once.
+  if (window.SlothSsid) SlothSsid.init({ el: el, getJSON: getJSON, errText: errText, keyColor: keyColor,
+    stamp: stamp, shortStamp: shortStamp, kvList: kvList, drawStrip: drawStrip, ssidPlain: ssidText,
+    openDrawer: openDrawer, alertLink: alertLink, scope: function () { return SCOPE; } });
+
+  // The Probes view (web/ui/probes.js): the page's helpers, lent once.
+  if (window.SlothProbes) SlothProbes.init({ el: el, getJSON: getJSON, errText: errText,
+    keyColor: keyColor, shortStamp: shortStamp, drawStrip: drawStrip, DataTable: DataTable,
+    ssidSpan: ssidSpan, openDrawer: openDrawer, show: show, scope: function () { return SCOPE; },
+    prefGet: prefGet, prefSet: prefSet });
 
   // The BLE Devices waterfall (web/ui/bledev.js): the page's helpers, lent once.
   if (window.SlothBleDev) SlothBleDev.init({ el: el, set: set, getJSON: getJSON, theme: theme,

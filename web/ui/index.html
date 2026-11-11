@@ -22,6 +22,8 @@
 @include bledev.css
 @include radar.css
 @include allkeys.css
+@include ssid.css
+@include probes.css
 </style>
 <script>
 @include palette.js
@@ -44,6 +46,8 @@
 @include aprs.js
 @include bledev.js
 @include radar.js
+@include ssid.js
+@include probes.js
 </script>
 </head>
 <body>
@@ -64,6 +68,7 @@
       <li><button type="button" class="go" id="nav-history"><span class="k">8</span>History</button></li>
       <li><button type="button" class="go" id="nav-lookup"><span class="k">9</span>Lookup</button></li>
       <li><button type="button" class="go" id="nav-ble"><span class="k">0</span>BLE Devices</button></li>
+      <li><button type="button" class="go" id="nav-probes">Probes</button></li>
       <li><button type="button" class="go" id="nav-gnss">GPS Sat</button></li>
       <li><button type="button" class="go" id="nav-adsb">ADS-B</button></li>
       <li><button type="button" class="go" id="nav-aprs">APRS</button></li>
@@ -532,7 +537,7 @@
       <div class="aprow dhead" id="w-aps-head"></div>
       <div id="w-aps"></div>
       </div>
-      <div class="sub">nearest first by default (sloth.db's last signal); a square after the SSID for each SSID the BSSID has beaconed, in the warning colour above one (KARMA, multi-VAP), with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers. The dBm column is an S-meter: the lit run is the last reading, the number beside it its S reading and dBm. <span class="smkey"></span></div>
+      <div class="sub">an SSID anywhere on the page is selectable: a click, or Enter on it, opens its detail (its access points, the clients on it and asking for it, its presence, alerts and twin and karma findings). Nearest first by default (sloth.db's last signal); a square after the SSID for each SSID the BSSID has beaconed, in the warning colour above one (KARMA, multi-VAP), with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers. The dBm column is an S-meter: the lit run is the last reading, the number beside it its S reading and dBm. <span class="smkey"></span></div>
     </section>
     <section class="panel">
       <div class="label">chains <span class="sub" id="w-ch-note"></span></div>
@@ -551,7 +556,67 @@
       <div class="dhead" id="w-cl-head"></div>
       <div id="w-cl"></div>
       </div>
-      <div class="sub">sloth.db's devices with a probe_clients row last seen in the window, nearest first: the dBm column with sloth's own distance words, and the 24 h presence; click a row for its drawer. The dBm column is an S-meter: the lit run is the last reading, the number beside it its S reading and dBm. <span class="smkey"></span></div>
+      <div class="sub">sloth.db's devices with a probe_clients row last seen in the window, nearest first: the dBm column with sloth's own distance words, and the 24 h presence; click a row for its drawer. The dBm column is an S-meter: the lit run is the last reading, the number beside it its S reading and dBm. <span class="smkey"></span>. The networks each asks for, and who asks for the same ones: <button type="button" class="dt-reset" id="w-probes-go">the Probes tab</button></div>
+    </section>
+   </div>
+   <div id="v-probes" hidden>
+    <section class="panel scope-empty" id="pr-scope-empty"><div class="label">Probes</div><p>Nothing here under Local. Probe requests are the passive monitor radio's; the host's own interfaces carried none. Switch to Monitor or Hybrid to see them.</p></section>
+    <section class="panel controls" aria-label="probes controls">
+      <label>window <select id="pr-days">
+        <option value="1">24 h</option>
+        <option value="7">7 d</option>
+        <option value="30" selected>30 d</option>
+        <option value="0">all sloth.db retains</option>
+      </select></label>
+      <label>shared uncommon networks, at least <select id="pr-min">
+        <option value="1">1</option>
+        <option value="2" selected>2</option>
+        <option value="3">3</option>
+        <option value="4">4</option>
+      </select></label>
+      <span class="sub" id="pr-note">from sloth.db's probe_clients, pnl_clients, pnl_ssids, assocs and seqnum_correlations: what sloth retains, across restarts; nothing is sent. A list of the networks a device asks for can name a home or a workplace: this view shows what sloth.db already holds and exports nothing of its own.</span>
+    </section>
+    <section class="panel">
+      <div class="label">clients heard probing <span class="dt-tools" id="pr-cl-tools"></span></div>
+      <div class="controls"><label>order <select id="pr-cl-sort">
+        <option value="last" selected>last heard</option>
+        <option value="first">first heard</option>
+        <option value="ssids">networks asked for</option>
+        <option value="frames">frames</option>
+        <option value="signal">signal (near first)</option>
+        <option value="mac">address</option>
+      </select></label> <button type="button" class="dt-reset" id="pr-cl-more" hidden>more</button></div>
+      <div class="hscroll" id="pr-cl-box">
+      <div class="dhead" id="pr-cl-head"></div>
+      <div id="pr-cl"></div>
+      </div>
+      <div class="sub" id="pr-cl-cap"></div>
+      <div class="sub">a row: a station heard sending probe requests, the networks it asked for by name (each opens that SSID's detail), how many, its frames, signal and 24 h presence, and what sloth already ties it to: a devices row for the same MAC, an association seen for it, or sloth's sequence-number correlation with another MAC (a hypothesis about one radio, which a passive sensor corroborates and never confirms). A wildcard probe names no network and is never listed as one. Click a row, or Enter on it, for the stations probing for the same networks.</div>
+    </section>
+    <section class="panel">
+      <div class="label">probing for the same networks</div>
+      <div id="pr-sh"></div>
+      <div class="sub" id="pr-sh-cap"></div>
+      <div class="sub">the picked station's networks, each with how many stations ask for it and the weight that gives it (a network everyone asks for weighs nothing), then the other stations sharing its uncommon ones, the most similar first. Two stations probing for the same networks have been in the same places or share a configuration; it does not say whose they are.</div>
+    </section>
+    <section class="panel">
+      <div class="label">networks searched for <span class="dt-tools" id="pr-ss-tools"></span></div>
+      <div class="controls"><label>order <select id="pr-ss-sort">
+        <option value="clients" selected>stations asking</option>
+        <option value="last">last asked for</option>
+        <option value="first">first asked for</option>
+        <option value="ssid">name</option>
+      </select></label></div>
+      <div class="hscroll" id="pr-ss-box">
+      <div class="dhead" id="pr-ss-head"></div>
+      <div id="pr-ss"></div>
+      </div>
+      <div class="sub" id="pr-ss-cap"></div>
+    </section>
+    <section class="panel">
+      <div class="label">groups</div>
+      <div id="pr-gr"></div>
+      <div class="sub" id="pr-gr-cap"></div>
     </section>
    </div>
    <div id="v-alerts" hidden>
@@ -952,6 +1017,7 @@
     <div id="notes-drawer"></div>
     <div id="frrs-drawer"></div>
     <div id="loc-drawer" hidden></div>
+    <div id="dr-vendor"></div>
   </aside>
   <!-- An anomaly's triage, notes and links (web/ui/notes.js): the same
        states, note bound and write route as an alert's triage panel. -->
@@ -1000,6 +1066,19 @@
     <div class="sub" id="bledev-chans" hidden></div>
     <div class="label">ble alerts naming it</div>
     <div id="bdr-alerts"></div>
+  </aside>
+  <aside class="drawer" id="sdrawer" hidden aria-label="ssid">
+    <div class="dr-hd">
+      <span class="d-dim">SSID</span>
+      <b id="sdr-name">-</b>
+      <span class="sub" id="sdr-note"></span>
+      <button type="button" id="sdr-close">close</button>
+    </div>
+    <div id="sdr-body"></div>
+    <div class="label">24 h presence, 10 min cells</div>
+    <canvas class="strip" id="sdr-strip" aria-label="presence of this SSID's access points over the last 24 hours"></canvas>
+    <div class="sub" id="sdr-strip-note"></div>
+    <div id="sdr-lists"></div>
   </aside>
   <footer class="foot" aria-label="slothweb">
     <span>sock <b id="sock">-</b></span>

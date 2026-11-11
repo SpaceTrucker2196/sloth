@@ -187,6 +187,13 @@ static void strips(const web_m4_t *m, const char (*macs)[WEB_KEY_MAX + 1],
               WEB_DEV_CELLS, WEB_DEV_CELL_S, 0, bits);
 }
 
+long long web_dev_strip_from(long long now_s) { return strip_from(now_s); }
+
+void web_dev_strips(const web_m4_t *m, const char (*macs)[WEB_KEY_MAX + 1],
+                    int n, long long now_s, unsigned char *bits) {
+    strips(m, macs, n, now_s, bits);
+}
+
 static const char *vendor_table(const web_m4_t *m) {
     return m->oui && m->oui->source ? m->oui->source : "none";
 }
