@@ -136,6 +136,12 @@ void jsonl_emit_aprs          (const sloth_state_t *s);
  * counters deliberately are not. */
 void jsonl_emit_sensor_health (const sloth_state_t *s);
 
+/* The operator's designated networks (src/ownership.h), JSONL 1.2.0:
+ * `ownership`, change-only on the shared snapshot cache, so written on
+ * the first tick, on any change and on the 300 s heartbeat. A consumer
+ * that connects late has it within one heartbeat. */
+void jsonl_emit_ownership(void);
+
 /* One flat record built from a field list, for a module that shapes
  * its own records (src/sys_status.c: sys_status, sys_sensor,
  * source_status, receiver_hw). Strings go through the same escaping as

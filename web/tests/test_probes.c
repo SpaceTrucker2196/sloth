@@ -22,6 +22,8 @@
 #include "web_scope.h"
 #include "web_store.h"
 #include "web_tsdb.h"
+#include "web_own.h"
+#include "web_jsonl.h"
 #include "wtest.h"
 #include "wt_tmp.h"
 
@@ -253,8 +255,31 @@ static void test_probe_clients(void) {
     WT_HAS(b, "\"aps\":0,\"ap_signal\":null,\"uncommon\":false,\"designated\":null}");
     /* OldNet was last asked for five days ago: in 30 d, not in 1. */
     WT_HAS(b, "{\"ssid\":\"OldNet\",");
-    WT_HAS(b, "],\"count\":3,\"total\":3,\"more\":false,\"next_offset\":null}\n");
+    WT_HAS(b, "],\"designated_count\":null,\"count\":3,\"total\":3,\"more\":false,\"next_offset\":null}\n");
     WT_LACKS(b, "{\"ssid\":null");
+    /* With sloth's `ownership` record (web_own.h) the network it
+     * designates and is being asked for is marked yours, the others
+     * not; with none, every row says null above, never false. Seen red
+     * with web_probes_ssids_route()'s designated member written as
+     * null again. */
+    {
+        static web_own_t own;
+        WT_EQ(web_own_init(&own), 0);
+        web_own_bind(&own);
+        web_jrec_t rec;
+        static const char OWN[] = "{\"type\":\"ownership\",\"ts\":1,\"ssids\":1,"
+                                  "\"ssid_0\":\"HomeNet\",\"bssids\":0,\"known_macs\":0}";
+        WT_EQ(web_jl_parse(OWN, strlen(OWN), &rec), WEB_JL_OK);
+        web_own_record(&own, &rec, 1);
+        WT_EQ(route(&H, "/api/probes/ssids", ""), 200);
+        b = body_of(g_out);
+        WT_HAS(b, "\"aps\":2,\"ap_signal\":-41,\"uncommon\":true,\"designated\":true}");
+        WT_HAS(b, "\"aps\":0,\"ap_signal\":null,\"uncommon\":false,\"designated\":false}");
+        WT_HAS(b, "],\"designated_count\":1,\"count\":3,");
+        WT_LACKS(b, "\"designated\":null");
+        web_own_bind(NULL);
+        web_own_destroy(&own);
+    }
     WT_EQ(route(&H, "/api/probes/ssids", "days=3&sort=ssid&limit=1"), 200);
     b = body_of(g_out);
     WT_HAS(b, "\"rows\":[{\"ssid\":\"CafeFree\",");

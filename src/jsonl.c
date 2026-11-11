@@ -26,6 +26,7 @@
 #include "formatter.h"
 #include "views/procs.h"
 #include "sensor_health.h"
+#include "ownership.h"
 #include "sys_status.h"
 #include "ble_hci.h"        /* Bluetooth host source names (#144 slice 2) */
 #include "bt_stream.h"      /* Ubertooth stream state names (#144 slice 3) */
@@ -102,7 +103,7 @@ static jsonl_dedup_slot_t g_dedup[JSONL_DEDUP_SLOTS];
 /* Snapshot event "kinds" — one per deduped emitter. */
 enum { JD_PNL = 1, JD_SEQNUM, JD_SENSOR_HEALTH, JD_WIFI_REG,
        JD_BLE_DEVICE, JD_BLE_ALERT, JD_GNSS_FIX, JD_GNSS_SKY, JD_GNSS_SAT,
-       JD_ADSB_AIRCRAFT, JD_APRS_STATION };
+       JD_ADSB_AIRCRAFT, JD_APRS_STATION, JD_OWNERSHIP };
 
 static uint64_t fnv1a(const void *data, size_t n, uint64_t h) {
     const unsigned char *p = (const unsigned char *)data;
@@ -2771,6 +2772,68 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     emit_line(buf);
 }
 
+/* ── ownership (2026-11-11) ─────────────────────────────────────────
+ *
+ * The operator's designated networks, so a consumer (slothweb's SSID
+ * drawer, its Probes and WiFi views) can mark them: until this record
+ * the rosters were in neither sloth.db nor the stream, and slothweb
+ * could only say it did not know.
+ *
+ * Flat, one member per designation (`ssid_0` .. `ssid_15`, `bssid_0`
+ * .. `bssid_15`) beside their counts, rather than an array: slothweb's
+ * decoder keeps top-level scalars only, and the bounds are sloth's own
+ * (MAX_MY_SSIDS, MAX_MY_BSSIDS). An SSID goes through the same escaping
+ * as every string (json_escape: a control byte as \u00XX, an octet
+ * that is not UTF-8 as \ufffd), the operator's text as given, which is
+ * exactly what ownership_is_my_ssid() compares against: a designation
+ * with a control byte in it matches no stored SSID (those hold '?'),
+ * here or in a consumer that compares as sloth does.
+ *
+ * The known-device roster travels as a count. Its MACs are the
+ * operator's own devices, a list a stream that is forwarded to a SIEM
+ * or bundled for a colleague has no need to carry; what a consumer can
+ * use is whether the roster gates UNKNOWN_DEVICE (non-zero) or not.
+ * The sensor's own addresses (the self roster) are not here either:
+ * they are the host's interfaces, already in the `iface` records.
+ *
+ * Change-only, keyed as a singleton. The rosters are fixed for the life
+ * of the process today (flags only; no reload, no SIGHUP handler), so
+ * in practice it is the first tick and then a heartbeat every 300 s;
+ * the signature is there so a future reload is a line at once. */
+void jsonl_emit_ownership(void) {
+    if (!any_sink()) return;
+    time_t now = sloth_wall();
+    const int ns = ownership_ssid_count(), nb = ownership_bssid_count();
+    const int nk = ownership_known_count();
+    uint64_t sig = fnv1a(&ns, sizeof(ns), FNV64_OFFSET);
+    sig = fnv1a(&nb, sizeof(nb), sig);
+    sig = fnv1a(&nk, sizeof(nk), sig);
+    for (int i = 0; i < ns; i++) {
+        const char *x = ownership_ssid_at(i);
+        sig = fnv1a(x, strlen(x) + 1, sig);   /* the NUL: "ab","c" is not "a","bc" */
+    }
+    for (int i = 0; i < nb; i++) sig = fnv1a(ownership_bssid_at(i), 6, sig);
+    static const char own_key[] = "ownership";
+    if (!jsonl_changed(JD_OWNERSHIP, own_key, sizeof(own_key) - 1, sig, now)) return;
+
+    char buf[LINEBUF]; int off = 0;
+    char key[24];
+    start_obj(buf, LINEBUF, &off, "ownership", now);
+    kv_int(buf, LINEBUF, &off, "ssids", ns);
+    for (int i = 0; i < ns; i++) {
+        snprintf(key, sizeof(key), "ssid_%d", i);
+        kv_str(buf, LINEBUF, &off, key, ownership_ssid_at(i));
+    }
+    kv_int(buf, LINEBUF, &off, "bssids", nb);
+    for (int i = 0; i < nb; i++) {
+        snprintf(key, sizeof(key), "bssid_%d", i);
+        kv_mac(buf, LINEBUF, &off, key, ownership_bssid_at(i));
+    }
+    kv_int(buf, LINEBUF, &off, "known_macs", nk);
+    end_obj(buf, LINEBUF, &off);
+    emit_line(buf);
+}
+
 /* ── GNSS observation (2026-11-02) ──────────────────────────────────
  *
  * Three change-only records off the receiver sloth already reads for
@@ -3414,6 +3477,8 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     /* The host's status and the source inventory (src/sys_status.h):
      * a batch on its own cadence, nothing on most ticks. */
     sys_status_emit              (s);
+    /* The operator's designated networks: change-only, a heartbeat. */
+    jsonl_emit_ownership         ();
     /* Last: the sensor's self-report about this tick, after every
      * observation in it has been emitted (#91 slice 3). */
     jsonl_emit_sensor_health     (s);

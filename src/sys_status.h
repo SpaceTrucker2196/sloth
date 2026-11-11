@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <time.h>
 #include "sloth.h"
+#include "beacon_snoop.h"
 
 /* ── Host status and the receiver inventory ──────────────────────────
  *
@@ -168,6 +169,12 @@ typedef struct {
     sys_source_t src[SYS_SRC_COUNT];
     /* The held bands; -1 when the reading is absent. */
     int       temp_band, cpu_band, mem_band, disk_band;
+    /* The forgotten-BSSID memory behind EVIL_TWIN's late-arrival
+     * signal (beacon_recall_stat()), sampled with the system. Its
+     * overflow and its quiet spell are each a band of two: going to 1
+     * writes a batch at once, as a band getting worse does. */
+    int       has_recall;
+    beacon_recall_stat_t recall;
 } sys_snapshot_t;
 
 /* The poll loop's hook (health stage, after the per-source polls so

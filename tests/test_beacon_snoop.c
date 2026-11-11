@@ -7,6 +7,11 @@
 #include "beacon_snoop.h"
 #include "sloth_clock.h"
 #include "views/beacon.h"
+#include <stdlib.h>
+#include "tmp_dir.h"
+#include "fake_platform.h"
+#include "jsonl.h"
+#include "sys_status.h"
 
 /* ── Beacon frame builder helpers ────────────────────────── */
 
@@ -3958,6 +3963,140 @@ static void test_recall_overflow_fails_quiet(void) {
     beacon_clear();
 }
 
+/* The memory's state for sensor health (beacon_recall_stat()): slots in
+ * use of 4096, whether it has overflowed, how far back it reaches and
+ * whether the late-arrival signal is quiet because of it, and for how
+ * long. Literals, as above. f0 is dropped first, so it is the memory
+ * the 4097th overwrites, and the reach is measured from its drop.
+ *
+ * Mutations (2026-11-11), each red here:
+ *   - `out->overflowed = g_recall_lost` made 0: the overflowed rows;
+ *   - the quiet test made `back <= trust`: the row at exactly a day;
+ *   - quiet_s rounded down (`+ 999u` removed): the one-millisecond-short
+ *     row read 0 s left while still quiet. */
+static void test_recall_stat_reports_the_overflow(void) {
+    static sloth_state_t s;
+    beacon_recall_stat_t st;
+    const uint8_t f0[6] = { 0x06, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    uint8_t b[6] = { 0x06, 0x00, 0x00, 0x00, 0x00, 0x00 };
+
+    rc_start();
+    beacon_recall_stat(&st, g_rc_mono);
+    ASSERT_EQ(st.slots, 0);
+    ASSERT_EQ(st.max, 4096);
+    ASSERT_EQ(st.overflowed, 0);
+    ASSERT_EQ(st.reach_s, -1);
+    ASSERT_EQ(st.quiet, 0);
+    ASSERT_EQ(st.quiet_s, 0);
+
+    rc_hear(f0, "net");
+    rc_age_out(&s);
+    uint64_t f0_dropped = g_rc_mono;
+    for (int i = 1; i < 4096; ) {
+        for (int k = 0; k < MAX_BEACON_APS && i < 4096; k++, i++) {
+            b[4] = (uint8_t)(i >> 8); b[5] = (uint8_t)i;
+            rc_hear(b, "net");
+        }
+        rc_age_out(&s);
+    }
+    beacon_recall_stat(&st, g_rc_mono);
+    ASSERT_EQ(st.slots, 4096);              /* exactly full, nothing lost */
+    ASSERT_EQ(st.overflowed, 0);
+    ASSERT_EQ(st.quiet, 0);
+
+    b[4] = 0x10; b[5] = 0x00;
+    rc_hear(b, "net");
+    rc_age_out(&s);                         /* the 4097th: f0's is overwritten */
+    beacon_recall_stat(&st, g_rc_mono);
+    ASSERT_EQ(st.slots, 4096);
+    ASSERT_EQ(st.overflowed, 1);
+    ASSERT_EQ(st.reach_s, (long long)((g_rc_mono - f0_dropped) / 1000u));
+    ASSERT_EQ(st.quiet, 1);
+    ASSERT_EQ(st.quiet_s, 86400 - (long long)((g_rc_mono - f0_dropped) / 1000u));
+
+    /* One millisecond short of a day after f0's drop: still quiet, one
+     * second left (rounded up); at the day: on again, still overflowed. */
+    beacon_recall_stat(&st, f0_dropped + 86400ull * 1000u - 1u);
+    ASSERT_EQ(st.quiet, 1);
+    ASSERT_EQ(st.quiet_s, 1);
+    beacon_recall_stat(&st, f0_dropped + 86400ull * 1000u);
+    ASSERT_EQ(st.quiet, 0);
+    ASSERT_EQ(st.quiet_s, 0);
+    ASSERT_EQ(st.overflowed, 1);
+    ASSERT_EQ(st.reach_s, 86400);
+
+    beacon_clear();
+    beacon_recall_stat(&st, g_rc_mono);
+    ASSERT_EQ(st.slots, 0);
+    ASSERT_EQ(st.overflowed, 0);
+    ASSERT_EQ(st.reach_s, -1);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* The same state on the sys_status record, and its overflow written at
+ * once rather than at the next minute's batch. Seen red (one batch, not
+ * two) with the two recall bands dropped from sys_status_poll()'s
+ * early-batch comparison. */
+static void test_recall_stat_on_sys_status(void) {
+    static sloth_state_t s;
+    uint8_t b[6] = { 0x06, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    char path[TEST_TMP_MAX] = "";
+    int fd = mkstemp(test_tmp_tpl(path, sizeof(path), "sloth_recall_XXXXXX"));
+    if (fd >= 0) close(fd);
+    jsonl_close();
+    unlink(path);
+    ASSERT(jsonl_open(path));
+
+    rc_start();
+    fake_net_reset();
+    sys_status_reset();
+    memset(&s, 0, sizeof(s));
+    uint64_t first_dropped = 0;
+    for (int i = 0; i < 4096; ) {
+        for (int k = 0; k < MAX_BEACON_APS && i < 4096; k++, i++) {
+            b[4] = (uint8_t)(i >> 8); b[5] = (uint8_t)i;
+            rc_hear(b, "net");
+        }
+        rc_age_out(&s);
+        if (!first_dropped) first_dropped = g_rc_mono;
+    }
+    sys_status_poll(&s, g_rc_wall, g_rc_mono);
+    sys_status_emit(&s);
+    ASSERT_EQ(sys_status_get()->seq, 1u);
+
+    /* Ten seconds on, one more memory: an overflow, and a batch now. */
+    b[4] = 0x10; b[5] = 0x00;
+    rc_hear(b, "net");
+    g_rc_wall += BEACON_AGE_SECS + 1;
+    g_rc_mono += 10000;
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    sys_status_poll(&s, g_rc_wall, g_rc_mono);
+    sys_status_emit(&s);
+    ASSERT_EQ(sys_status_get()->seq, 2u);
+
+    jsonl_close();
+    static char buf[65536];
+    FILE *fp = fopen(path, "r");
+    size_t n = fp ? fread(buf, 1, sizeof(buf) - 1, fp) : 0;
+    buf[n] = '\0';
+    if (fp) fclose(fp);
+    unlink(path);
+    ASSERT(strstr(buf, "\"receivers\":0,\"beacon_recall_slots\":4096,\"beacon_recall_max\":4096,"
+                       "\"beacon_recall_overflowed\":0,\"beacon_recall_quiet\":0}") != NULL);
+    long long reach = (long long)((g_rc_mono - first_dropped) / 1000u);
+    char want[200];
+    snprintf(want, sizeof(want), "\"beacon_recall_slots\":4096,\"beacon_recall_max\":4096,"
+             "\"beacon_recall_overflowed\":1,\"beacon_recall_reach_s\":%lld,"
+             "\"beacon_recall_quiet\":1,\"beacon_recall_quiet_s\":%lld}", reach, 86400 - reach);
+    ASSERT(strstr(buf, want) != NULL);
+
+    sys_status_reset();
+    fake_net_reset();
+    sloth_clock_test_set(NULL, NULL);
+    beacon_clear();
+}
+
 /* #138: the SSID is stored through netstr_copy() at the one choke point,
  * dot11_ie_ssid_copy(). '\n' (which ncurses acts on — a row-spoofing
  * SSID) and DEL become '?'. Mutation-proved: restoring the memcpy in
@@ -4194,6 +4333,8 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_recall_a_full_table_eviction_is_a_return);
     RUN_TEST(test_recall_is_of_the_name_not_its_hash);
     RUN_TEST(test_recall_overflow_fails_quiet);
+    RUN_TEST(test_recall_stat_reports_the_overflow);
+    RUN_TEST(test_recall_stat_on_sys_status);
     RUN_TEST(test_parse_ssid_control_octets_stored_as_marks);
     RUN_TEST(test_parse_ssid_high_octets_kept);
 }

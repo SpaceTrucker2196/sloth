@@ -159,6 +159,7 @@
         li.appendChild(nw);
       }
       li.appendChild(macGo(b.bssid, false));
+      if (b.designated === true) li.appendChild(H.el("span", "d-bright", "yours: --my-bssid"));
       li.appendChild(H.el("span", typeof b.vendor === "string" ? "d-bright" : "d-dim",
                           typeof b.vendor === "string" ? b.vendor : "?"));
       li.appendChild(H.el("span", "d-normal", "ch " + b.channel));
@@ -196,6 +197,16 @@
     return out;
   }
 
+  // sloth's --my-ssid as its `ownership` record reports it: yes, no, or
+  // not known when slothweb has had no such record, never a guess.
+  function designatedText(j) {
+    var n = j.designated_count;
+    if (j.designated === true) return "yes: one of the " + n + " network" + (n === 1 ? "" : "s") + " sloth designates (--my-ssid)";
+    if (j.designated === false)
+      return "no: not among the " + n + " network" + (n === 1 ? "" : "s") + " sloth designates (--my-ssid)";
+    return "not known: sloth has not reported its designated networks";
+  }
+
   function render(j) {
     var body = clear("sdr-body"), lists = clear("sdr-lists");
     var nm = clear("sdr-name");
@@ -208,7 +219,7 @@
       ["octets", String(j.octets) + (j.ssid_np ? ", some not printable UTF-8 (shown as \\xNN)" : "")],
       ["first seen", num(j.first_seen) ? H.stamp(j.first_seen) : "no access point in sloth.db beacons it"],
       ["last seen", num(j.last_seen) ? H.stamp(j.last_seen) : null],
-      ["designated", "not known here: sloth's --my-ssid is its own setting, in neither sloth.db nor the stream"]
+      ["designated", designatedText(j)]
     ]);
     H.drawStrip($("sdr-strip"), j.presence, CELLS,
                 glyph.firstCell(j.first_seen, j.presence_from, CELL_S, CELLS),

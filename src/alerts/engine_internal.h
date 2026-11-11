@@ -69,6 +69,8 @@ void rules_gnss_forget(void);
 void rules_adsb_forget(void);
 /* rules_twin.c: when the sensor was last known to be moving (#188). */
 void rules_twin_forget(void);
+/* rules_sensor.c: the under-voltage and source holds. */
+void rules_sensor_forget(void);
 
 /* Formatting helpers every rule file uses. static inline rather than
  * external: a name as generic as mac_to_str() has no business in

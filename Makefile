@@ -218,6 +218,7 @@ CORE_COMMON_SRCS += src/ble_hci.c src/alerts/rules_ble.c
 CORE_COMMON_SRCS += src/alerts/rules_gnss.c
 # #186: ADSB_EMERGENCY, read off the ADS-B table (src/adsb.c below).
 CORE_COMMON_SRCS += src/alerts/rules_adsb.c
+CORE_COMMON_SRCS += src/alerts/rules_sensor.c
 # #144 slice 3: the Ubertooth stream's framer and its two link-layer
 # parsers are pure; the reader that feeds them is in PCAP_CORE_SRCS.
 CORE_COMMON_SRCS += src/btle_ll.c src/bredr_bb.c src/bt_stream.c

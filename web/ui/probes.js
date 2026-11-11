@@ -218,6 +218,7 @@
       var row = H.el("div", "prsrow dt-row");
       var c = H.el("span", "");
       c.appendChild(H.ssidSpan(String(s.ssid), s.ssid_k, s.ssid_np));
+      if (s.designated === true) c.appendChild(H.el("span", "d-bright", " yours"));
       row.appendChild(c);
       row.appendChild(H.el("span", "n d-normal", String(s.clients)));
       row.appendChild(H.el("span", "n d-dim", String(s.random)));
@@ -231,6 +232,18 @@
     });
   }
 
+  // Whether "yours" can be marked: sloth's `ownership` record says
+  // which networks it designates (--my-ssid), and without one nothing is
+  // marked and the caption says it is not known, never "none".
+  function designatedCaption(j) {
+    var n = j.designated_count;
+    if (!num(n)) return "designated networks not known: sloth has not reported them";
+    if (!n) return "sloth designates no network (--my-ssid), so none is marked yours";
+    var mine = (j.rows || []).filter(function (s) { return s.designated === true; }).length;
+    return "yours: one of the " + n + " network" + (n === 1 ? "" : "s") + " sloth designates (--my-ssid), " +
+           mine + " of them asked for here";
+  }
+
   function ssidsLoad(gen) {
     var d = days(), sort = sortOf("pr-ss-sort", SS_SORTS, "clients");
     H.getJSON("/api/probes/ssids?days=" + d + "&sort=" + encodeURIComponent(sort) + "&limit=100")
@@ -242,7 +255,7 @@
         $("pr-ss-cap").textContent = glyph.caption({
           source: "sloth.db pnl_ssids by name, beacon_aps for the access points", window: winWord(d),
           scale: "stations: distinct MACs asking for it, of " + j.clients + " that named a network; " +
-                 "designated networks not marked: sloth's --my-ssid is in neither sloth.db nor the stream",
+                 designatedCaption(j),
           n: n,
           state: !n ? "no network asked for by name in the window"
                     : n < j.total ? n + " of " + j.total + " networks, " + SS_SORTS[sort] : "" });

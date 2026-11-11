@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-11-11 (#172: `PMKID_HARVEST`, `HANDSHAKE_HARVEST`). 2026-11-11 (#187 S2: `KARMA_PROBE_FORGE`, directed probe-response forgery). 2026-11-09 (#182: `GNSS_TIME_JUMP` late-read guard). 2026-11-08 (#186: `ADSB_EMERGENCY`, `src/alerts/rules_adsb.c`). 2026-11-03 (#173: a detail carries only what moves with the evidence; per-rule fixes listed under *Incident lifecycle*). 2026-11-03 (the four GNSS rules: `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, `src/alerts/rules_gnss.c`). 2026-10-27 (per-type research assessments in [alert-assessments/](alert-assessments/README.md)). 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
+**Last updated**: 2026-11-11 (`SENSOR_UNDERVOLT`, `SENSOR_SOURCE_DOWN`: the sensor's own host and sources, `src/alerts/rules_sensor.c`). 2026-11-11 (#172: `PMKID_HARVEST`, `HANDSHAKE_HARVEST`). 2026-11-11 (#187 S2: `KARMA_PROBE_FORGE`, directed probe-response forgery). 2026-11-09 (#182: `GNSS_TIME_JUMP` late-read guard). 2026-11-08 (#186: `ADSB_EMERGENCY`, `src/alerts/rules_adsb.c`). 2026-11-03 (#173: a detail carries only what moves with the evidence; per-rule fixes listed under *Incident lifecycle*). 2026-11-03 (the four GNSS rules: `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, `src/alerts/rules_gnss.c`). 2026-10-27 (per-type research assessments in [alert-assessments/](alert-assessments/README.md)). 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
 **Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
@@ -497,6 +497,8 @@ the exemption in `agents/AGENTS.md`, *Detectors cite their sources*):
 |---|---|---|
 | `NO_MONITOR_MODE` | WARN | interfaces seen, none in monitor mode — the 802.11 views will be empty |
 | `BT_OWN_TRANSMIT` | WARN | the Bluetooth host controller sloth listens through (`--bt-monitor`, or a DLT 254 replay) was told by the host stack to transmit and is still on, or was told within 120 s: an LE scan configured or enabled **active** (it sends SCAN_REQ), Inquiry or Periodic Inquiry, legacy / extended / periodic advertising enabled, LE or BR/EDR Create Connection, Remote Name Request, or Write Scan Enable with inquiry or page scan on (#144 slice 2) |
+| `SENSOR_UNDERVOLT` | WARN | the host's under-voltage alarm (an hwmon `inN_lcrit_alarm`; the Raspberry Pi firmware's flag) reads 1 |
+| `SENSOR_SOURCE_DOWN` | WARN, CRIT for `monitor` and `capture` | a configured source reads `down` for 10 s, or not `ok` for 300 s |
 
 `BT_OWN_TRANSMIT` is **bucketed, not latched**, on two clocks. The
 persistent kinds — advertising (legacy, extended, periodic), inquiry or
@@ -524,6 +526,37 @@ a host command is not seen. `sensor_health` carries the same state as
 on), `ble_own_tx` / `ble_own_tx_kind` (the newest command), and the scan
 configuration
 as `ble_scan_mode` / `ble_scan_filter`. → [[ble]]
+
+`SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN` (2026-11-11,
+`src/alerts/rules_sensor.c`) read the host-status snapshot
+`src/sys_status.c` takes for the `sys_status` and `source_status`
+records, so they say what those records say, once, as incidents. Both
+**hold an incident across a flap** and close it themselves with the
+`alert.resolve` reason `recovered` once the condition has been clear for
+`SENSOR_RECOVER_S` (120 s, two `sys_status` batches) without a break: a
+supply or a decoder toggling every few seconds is one incident, not a
+create/resolve pair per toggle.
+
+- **`SENSOR_UNDERVOLT`**, key `undervolt:host`. The alarm is sampled every
+  10 s, so a dip shorter than that is not seen. WARN only: the alarm says
+  the supply dipped, and nothing sloth reads says for how long a dip has
+  to last before an SD card or a USB radio is harmed, so a CRIT on a span
+  chosen here would be a guess. A host with no alarm node never fires.
+- **`SENSOR_SOURCE_DOWN`**, key `srcdown:<name>`, for the sources
+  `source_status` lists as configured: the command line enabled them, or
+  (the monitor radio) sloth found and opened one. It opens on `down` held
+  10 s (a gpsd or decoder reconnect that succeeds within seconds is not an
+  incident) or on anything but `ok` held 300 s (five of the 60 s stale
+  threshold, and the engine's own quiet period), and is re-asserted in
+  every state but `ok`, so down, then stale, then down is one incident
+  whose detail follows the state. A source down from the first poll (a
+  capture that never opened) opens after the same 10 s. **CRIT for the
+  monitor radio and the IP capture**: every 802.11 rule and view reads the
+  one, every wired rule the other, and with either gone the sensor is
+  silent on that whole domain while it looks like a quiet network. WARN
+  for the rest, which each feed one domain beside them. A source not
+  configured never fires. The detail carries the reader's own word, the
+  state and the freshness band, never an age in seconds (#173).
 
 ### Bluetooth Low Energy advertisements (#144 slice 4)
 

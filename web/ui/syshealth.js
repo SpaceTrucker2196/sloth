@@ -275,6 +275,30 @@
     });
   }
 
+  // The beacon memory behind EVIL_TWIN's late-arrival signal, one line
+  // (JSONL 1.2.0): on, or quiet until a time because the memory
+  // overflowed. The time is the sensor's own clock (its batch's ts plus
+  // the time it said was left), shown in this browser's zone.
+  function recallText(b) {
+    if (!b) return "evil-twin late-arrival: not reported by this sensor (older than JSONL 1.2.0)";
+    var mem = "beacon memory " + b.slots + " of " + b.max;
+    if (b.quiet)
+      return "evil-twin late-arrival: quiet until " +
+             (num(b.quiet_until) ? new Date(b.quiet_until * 1000).toLocaleString() : "the memory reaches back 24 h") +
+             ": the beacon memory overflowed (" + mem +
+             (num(b.reach_s) ? ", reaches back " + H.dur(b.reach_s) : "") + ")";
+    return "evil-twin late-arrival: on (" + mem +
+           (b.overflowed ? "; it overflowed earlier and reaches back " +
+                           (num(b.reach_s) ? H.dur(b.reach_s) : "24 h or more") : "") + ")";
+  }
+  function drawRecall(j) {
+    var e = $("sy-recall");
+    if (!e) return;
+    var b = j.seen ? j.beacon_recall : null;
+    e.textContent = j.seen ? recallText(b) : "";
+    e.className = "sub" + (b && b.quiet ? " health-bad" : "");
+  }
+
   // \u2500\u2500 /api/sys \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   function draw(j) {
     S.last = j;
@@ -284,6 +308,7 @@
     drawSources();
     drawHw();
     drawTiles(j);
+    drawRecall(j);
     var cfg = S.rows.filter(function (r) { return r.state !== "not_configured"; }).length;
     var ok = S.rows.filter(function (r) { return r.state === "ok"; }).length;
     if (!j.seen) {

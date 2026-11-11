@@ -200,7 +200,7 @@ static void test_sys_nothing_yet(void) {
     const char *b = body_of(g_out);
     WT_HAS(b, "{\"now\":1800000065,\"scope_note\":\"every scope: sloth's own state\",\"seen\":false,"
               "\"ts\":null,\"age_s\":null,\"seq\":null,\"interval_s\":null,\"stale\":false,"
-              "\"system\":null,\"sensors\":[],\"sources\":[],\"receivers\":[],"
+              "\"system\":null,\"beacon_recall\":null,\"sensors\":[],\"sources\":[],\"receivers\":[],"
               "\"records\":0,\"rejected\":0,\"overflow\":0}");
     /* No module at all is a 503, not an empty answer. */
     H.sys = NULL;
@@ -278,7 +278,7 @@ static void test_sys_absent_is_null(void) {
            "\"mem_avail_kb\":null,\"mem_band\":null,\"uptime_s\":null,\"rss_kb\":null,"
            "\"disk_for\":null,\"disk_free_mb\":null,\"disk_total_mb\":null,\"disk_band\":null,"
            "\"temp_max_c\":null,\"temp_max_id\":null,\"temp_band\":null,\"undervolt\":null},"
-           "\"sensors\":[],\"sources\":[],\"receivers\":[]");
+           "\"beacon_recall\":null,\"sensors\":[],\"sources\":[],\"receivers\":[]");
 }
 
 /* A sensor or receiver that is not in the newest batch is gone; a
@@ -377,6 +377,66 @@ static void test_sys_every_scope(void) {
 }
 
 /* The socket may be someone else's: refusals, ranges, and the bounds. */
+/* The beacon memory (JSONL 1.2.0): on, and quiet after an overflow with
+ * the time it said was left on the sensor's own clock; a batch without
+ * it (an older sloth) is null; a member out of range, or quiet without
+ * an overflow, refuses the block and nothing else of the batch. Seen
+ * red with the `(!qu || ov)` term removed (the inconsistent batch was
+ * shown quiet) and with the slots bound widened past max. */
+static void test_sys_beacon_recall(void) {
+    fresh();
+    web_health_t H;
+    health(&H, T + 5);
+    feed("{\"type\":\"sys_status\",\"ts\":1800000060,\"seq\":1,\"interval_s\":60,"
+         "\"receivers\":0,\"beacon_recall_slots\":312,\"beacon_recall_max\":4096,"
+         "\"beacon_recall_overflowed\":0,\"beacon_recall_quiet\":0}");
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    WT_HAS(body_of(g_out), "\"beacon_recall\":{\"slots\":312,\"max\":4096,\"overflowed\":false,"
+                           "\"reach_s\":null,\"quiet\":false,\"quiet_s\":null,\"quiet_until\":null},");
+    feed("{\"type\":\"sys_status\",\"ts\":1800000060,\"seq\":2,\"interval_s\":60,"
+         "\"receivers\":0,\"beacon_recall_slots\":4096,\"beacon_recall_max\":4096,"
+         "\"beacon_recall_overflowed\":1,\"beacon_recall_reach_s\":21600,"
+         "\"beacon_recall_quiet\":1,\"beacon_recall_quiet_s\":64800}");
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    WT_HAS(body_of(g_out), "\"beacon_recall\":{\"slots\":4096,\"max\":4096,\"overflowed\":true,"
+                           "\"reach_s\":21600,\"quiet\":true,\"quiet_s\":64800,"
+                           "\"quiet_until\":1800064860},");
+    static const char *const BAD[] = {
+        /* more slots than the memory has */
+        "\"beacon_recall_slots\":4097,\"beacon_recall_max\":4096,"
+        "\"beacon_recall_overflowed\":1,\"beacon_recall_quiet\":0}",
+        /* quiet without an overflow */
+        "\"beacon_recall_slots\":10,\"beacon_recall_max\":4096,"
+        "\"beacon_recall_overflowed\":0,\"beacon_recall_quiet\":1}",
+        /* a flag that is not 0 or 1 */
+        "\"beacon_recall_slots\":10,\"beacon_recall_max\":4096,"
+        "\"beacon_recall_overflowed\":2,\"beacon_recall_quiet\":0}",
+        /* no max */
+        "\"beacon_recall_slots\":10,\"beacon_recall_overflowed\":0,\"beacon_recall_quiet\":0}",
+        /* a string where a number goes */
+        "\"beacon_recall_slots\":\"10\",\"beacon_recall_max\":4096,"
+        "\"beacon_recall_overflowed\":0,\"beacon_recall_quiet\":0}",
+    };
+    for (size_t i = 0; i < sizeof(BAD) / sizeof(BAD[0]); i++) {
+        char line[512];
+        snprintf(line, sizeof(line), "{\"type\":\"sys_status\",\"ts\":1800000060,\"seq\":%d,"
+                 "\"interval_s\":60,\"receivers\":0,\"cpu_pct\":12.5,%s", (int)i + 3, BAD[i]);
+        feed(line);
+        WT_EQ(route(&H, "/api/sys", ""), 200);
+        WT_HAS(body_of(g_out), "\"beacon_recall\":null,");
+        WT_HAS(body_of(g_out), "\"cpu_pct\":12.5,");          /* the rest is kept */
+    }
+    /* Quiet, with a time left past a day or a reach that is negative:
+     * the state stands, the figure does not. */
+    feed("{\"type\":\"sys_status\",\"ts\":1800000060,\"seq\":9,\"interval_s\":60,"
+         "\"receivers\":0,\"beacon_recall_slots\":4096,\"beacon_recall_max\":4096,"
+         "\"beacon_recall_overflowed\":1,\"beacon_recall_reach_s\":-4,"
+         "\"beacon_recall_quiet\":1,\"beacon_recall_quiet_s\":90000}");
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    WT_HAS(body_of(g_out), "\"beacon_recall\":{\"slots\":4096,\"max\":4096,\"overflowed\":true,"
+                           "\"reach_s\":null,\"quiet\":true,\"quiet_s\":null,\"quiet_until\":null},");
+}
+
 static void test_sys_hostile(void) {
     fresh();
     /* No seq, an unknown class, an empty id, a name that is not a
@@ -842,6 +902,28 @@ static void test_sys_page(void) {
     WT_HAS(m, "            var sh = temps.length ? glyph.shared(sets, S.scale.temp || null) : null;");
     /* With no report at all, the page says what that means. */
     WT_HAS(m, "or slothweb is reading a copied sloth.db with no live stream: sloth.db holds none of this, ");
+    /* The beacon memory's one line, under the sources table, whole. */
+    WT_HAS(p, "      <div class=\"sub\" id=\"sy-src-cap\"></div>\n      <div class=\"sub\" id=\"sy-recall\"></div>\n");
+    WT_HAS(m, "  function recallText(b) {\n"
+              "    if (!b) return \"evil-twin late-arrival: not reported by this sensor (older than JSONL 1.2.0)\";\n"
+              "    var mem = \"beacon memory \" + b.slots + \" of \" + b.max;\n"
+              "    if (b.quiet)\n"
+              "      return \"evil-twin late-arrival: quiet until \" +\n"
+              "             (num(b.quiet_until) ? new Date(b.quiet_until * 1000).toLocaleString() : \"the memory reaches back 24 h\") +\n"
+              "             \": the beacon memory overflowed (\" + mem +\n"
+              "             (num(b.reach_s) ? \", reaches back \" + H.dur(b.reach_s) : \"\") + \")\";\n"
+              "    return \"evil-twin late-arrival: on (\" + mem +\n"
+              "           (b.overflowed ? \"; it overflowed earlier and reaches back \" +\n"
+              "                           (num(b.reach_s) ? H.dur(b.reach_s) : \"24 h or more\") : \"\") + \")\";\n"
+              "  }\n");
+    WT_HAS(m, "  function drawRecall(j) {\n"
+              "    var e = $(\"sy-recall\");\n"
+              "    if (!e) return;\n"
+              "    var b = j.seen ? j.beacon_recall : null;\n"
+              "    e.textContent = j.seen ? recallText(b) : \"\";\n"
+              "    e.className = \"sub\" + (b && b.quiet ? \" health-bad\" : \"\");\n"
+              "  }\n");
+    WT_HAS(m, "    drawTiles(j);\n    drawRecall(j);\n");
     /* Past 24 h needs the store's hour tier, and says so without one. */
     WT_HAS(m, "    if (win > 86400) return H.storeOn() ? \"hour\" : null;");
     free(m);
@@ -856,6 +938,7 @@ void run_sysstat_tests(void) {
     WT_RUN(test_sys_batch_replaces);
     WT_RUN(test_sys_stale);
     WT_RUN(test_sys_every_scope);
+    WT_RUN(test_sys_beacon_recall);
     WT_RUN(test_sys_hostile);
     WT_RUN(test_sys_metrics);
     WT_RUN(test_sys_page_pure_half_is_pinned);

@@ -150,6 +150,9 @@ const web_scope_alert_t web_scope_alerts[] = {
     /* Association requests, EAPOL-Key and deauths off the monitor
      * radio (#172). */
     { "PMKID_HARVEST", M }, { "HANDSHAKE_HARVEST", M },
+    /* The sensor's own host and sources (rules_sensor.c): every
+     * scope's, as sys_status and source_status are. */
+    { "SENSOR_UNDERVOLT", MT }, { "SENSOR_SOURCE_DOWN", MT },
 };
 const int web_scope_alerts_n = (int)(sizeof(web_scope_alerts) / sizeof(web_scope_alerts[0]));
 

@@ -13,6 +13,7 @@
 #include "web_ssid.h"
 #include "web_chmix.h"
 #include "web_chain.h"
+#include "web_own.h"
 
 /* ── names ───────────────────────────────────────────────────────────── */
 
@@ -1343,6 +1344,12 @@ static void ap_json(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *c,
     }
     if (rf) web_rf_json(w, rf, m->frrs, a->bssid, now_s);
     web_jw_ssid_meta(w, "ssid", a->ssid);
+    /* Designated by its BSSID or its SSID (sloth's --my-bssid,
+     * --my-ssid, web_own.h); null until sloth has reported them. */
+    int db = web_own_bssid(a->bssid);
+    int ds = a->ssid[0] ? web_own_ssid(a->ssid, strlen(a->ssid)) : db;
+    web_jw_raw(w, ",\"designated\":");
+    web_own_jw(w, db > 0 || ds > 0 ? 1 : db < 0 ? -1 : 0);
     web_jw_raw(w, "}");
 }
 

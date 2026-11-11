@@ -24,6 +24,7 @@
 #include "web_scope.h"
 #include "web_store.h"
 #include "web_tsdb.h"
+#include "web_own.h"
 #include "wtest.h"
 #include "wt_tmp.h"
 
@@ -335,19 +336,51 @@ static void test_ssid_detail(void) {
     const char *b = body_of(g_out);
     WT_HAS(b, "{\"ssid\":\"HomeNet\",\"ssid_k\":");
     WT_HAS(b, "\"ssid_np\":false,\"hidden\":false,\"octets\":7,\"now\":1792627200,\"db\":\"open\",");
-    WT_HAS(b, "\"designated\":null,\"first_seen\":1791849600,\"last_seen\":1792627140,\"bssids\":["
-              "{\"bssid\":\"0a:00:00:00:00:01\",\"current\":true,\"vendor\":\"Acme\",\"channel\":6,"
+    WT_HAS(b, "\"designated\":null,\"designated_count\":null,\"first_seen\":1791849600,\"last_seen\":1792627140,\"bssids\":["
+              "{\"bssid\":\"0a:00:00:00:00:01\",\"current\":true,\"designated\":null,\"vendor\":\"Acme\",\"channel\":6,"
               "\"enc\":\"WPA3\",\"akm\":\"PSK,SAE\",\"akm_names\":[\"PSK\",\"SAE\"],"
               "\"mfp_word\":\"capable\",\"signal\":-50,\"first_seen\":1791849600,"
               "\"last_seen\":1792627140,\"karma\":null,\"twins\":[{\"real\":\"0a:00:00:00:00:01\","
               "\"twin\":\"0a:00:00:00:00:02\",\"attributed\":true,\"tainted\":true,\"confidence\":80,");
-    WT_HAS(b, "{\"bssid\":\"0a:00:00:00:00:02\",\"current\":true,\"vendor\":null,\"channel\":36,");
+    WT_HAS(b, "{\"bssid\":\"0a:00:00:00:00:02\",\"current\":true,\"designated\":null,\"vendor\":null,\"channel\":36,");
     WT_HAS(b, "\"karma\":{\"score\":5,\"ssid_count\":3},\"twins\":[{\"real\":");
     /* Once, and something else now: the times it beaconed this name. */
-    WT_HAS(b, "{\"bssid\":\"0a:00:00:00:00:03\",\"current\":false,\"vendor\":null,\"channel\":1,"
+    WT_HAS(b, "{\"bssid\":\"0a:00:00:00:00:03\",\"current\":false,\"designated\":null,\"vendor\":null,\"channel\":1,"
               "\"enc\":\"OPEN\",\"akm\":null,\"akm_names\":[],\"mfp_word\":\"off\",\"signal\":-60,"
               "\"first_seen\":1792022400,\"last_seen\":1792368000,\"karma\":null,\"twins\":[]}");
     WT_HAS(b, "],\"bssids_total\":2,\"bssids_more\":false,");
+    /* With sloth's `ownership` record (web_own.h): the SSID is one of
+     * the networks it designates, and one of its BSSIDs is marked
+     * yours; without one, null above. Seen red with the drawer's
+     * designated member written as null again, and with sb_json()'s
+     * per-BSSID one. */
+    {
+        static web_own_t own;
+        WT_EQ(web_own_init(&own), 0);
+        web_own_bind(&own);
+        web_jrec_t rec;
+        static const char OWN[] = "{\"type\":\"ownership\",\"ts\":1,\"ssids\":2,"
+                                  "\"ssid_0\":\"Office\",\"ssid_1\":\"HomeNet\",\"bssids\":1,"
+                                  "\"bssid_0\":\"0a:00:00:00:00:01\",\"known_macs\":0}";
+        WT_EQ(web_jl_parse(OWN, strlen(OWN), &rec), WEB_JL_OK);
+        web_own_record(&own, &rec, 1);
+        WT_EQ(route(&H, "/api/wifi/ssid", "ssid=SG9tZU5ldA"), 200);
+        const char *ob = body_of(g_out);
+        WT_HAS(ob, "\"designated\":true,\"designated_count\":2,\"first_seen\":");
+        WT_HAS(ob, "{\"bssid\":\"0a:00:00:00:00:01\",\"current\":true,\"designated\":true,");
+        WT_HAS(ob, "{\"bssid\":\"0a:00:00:00:00:02\",\"current\":true,\"designated\":false,");
+        /* The empty roster: a "no", not "not known". */
+        static const char NONE[] = "{\"type\":\"ownership\",\"ts\":2,\"ssids\":0,"
+                                   "\"bssids\":0,\"known_macs\":0}";
+        WT_EQ(web_jl_parse(NONE, strlen(NONE), &rec), WEB_JL_OK);
+        web_own_record(&own, &rec, 2);
+        WT_EQ(route(&H, "/api/wifi/ssid", "ssid=SG9tZU5ldA"), 200);
+        WT_HAS(body_of(g_out), "\"designated\":false,\"designated_count\":0,\"first_seen\":");
+        web_own_bind(NULL);
+        web_own_destroy(&own);
+        WT_EQ(route(&H, "/api/wifi/ssid", "ssid=SG9tZU5ldA"), 200);
+        b = body_of(g_out);
+    }
     WT_EQ(count(b, "{\"bssid\":"), 3);
     /* Not its neighbours as a pattern would have them. */
     WT_LACKS(b, "0a:00:00:00:00:04");
@@ -645,6 +678,8 @@ static void test_page_ssid_detail(void) {
     /* The hooks, where the WiFi view writes a name. */
     WT_HAS(p, "    ss.appendChild(a.ssid === null ? ssidHidden(\"(hidden)\") : "
               "ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));\n"
+              "    // sloth's --my-ssid / --my-bssid, from its `ownership` record.\n"
+              "    if (a.designated === true) ss.appendChild(el(\"span\", \"d-bright\", \" yours\"));\n"
               "    if (window.SlothSubNotes && window.SlothSsid && a.ssid !== null)\n");
     WT_HAS(p, "        hist.appendChild(ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np));");
     WT_HAS(p, "      ss.appendChild(a.ssid === null ? ssidHidden(\"(hidden)\") : "

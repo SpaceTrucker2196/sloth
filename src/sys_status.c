@@ -425,6 +425,7 @@ static struct {
     int       have_prev_cpu;
     sys_cpu_t prev_cpu;
     int       undervolt_emitted;        /* -1 absent */
+    int       recall_emitted[2];        /* overflowed, quiet; -1 none yet */
     int       bands_emitted[4];
     int       cap_wireless;
     char      cap_wireless_for[32];
@@ -623,6 +624,9 @@ static void sample_system(void) {
     for (int i = 0; i < sn->ntemp; i++)
         if (sn->hottest < 0 || sn->temp[i].val > sn->temp[sn->hottest].val)
             sn->hottest = i;
+
+    beacon_recall_stat(&sn->recall, sloth_mono_ms());
+    sn->has_recall = 1;
 
     sn->temp_band = sn->hottest < 0 ? -1
         : sys_held_band(sn->temp_band, sn->temp[sn->hottest].val, TEMP_EDGES, 3, 2.0);
@@ -1070,10 +1074,12 @@ void sys_status_poll(const sloth_state_t *s, time_t wall, uint64_t mono_ms) {
          * swing. Each band can so add one batch after
          * a cadence batch that caught it low, and no more until the
          * next. */
-        const int cur[5] = { sn->temp_band, sn->cpu_band, sn->mem_band, sn->disk_band, uv };
-        const int was[5] = { g.bands_emitted[0], g.bands_emitted[1], g.bands_emitted[2],
-                             g.bands_emitted[3], g.undervolt_emitted };
-        for (int i = 0; i < 5 && g.batched; i++)
+        const int cur[7] = { sn->temp_band, sn->cpu_band, sn->mem_band, sn->disk_band, uv,
+                             sn->recall.overflowed, sn->recall.quiet };
+        const int was[7] = { g.bands_emitted[0], g.bands_emitted[1], g.bands_emitted[2],
+                             g.bands_emitted[3], g.undervolt_emitted,
+                             g.recall_emitted[0], g.recall_emitted[1] };
+        for (int i = 0; i < 7 && g.batched; i++)
             if (cur[i] >= 0 && was[i] >= 0 && cur[i] > was[i]) g.batch_due = 1;
     }
     if (!g.batched || mono_ms - g.batch_ms >= (uint64_t)SYS_EMIT_SECS * 1000u)
@@ -1083,7 +1089,7 @@ void sys_status_poll(const sloth_state_t *s, time_t wall, uint64_t mono_ms) {
 
 /* ── Emit ────────────────────────────────────────────────────────── */
 
-#define FL_MAX 40
+#define FL_MAX 48
 typedef struct { jsonl_field_t f[FL_MAX]; int n; } fl_t;
 
 static void f_str(fl_t *l, const char *k, const char *v) {
@@ -1197,6 +1203,15 @@ static void emit_batch(time_t wall, uint64_t now_ms) {
     f_int(&l, "sources_ok", ok);
     f_int(&l, "sources_down", down);
     f_int(&l, "receivers", sn->nhw);
+    /* JSONL 1.2.0: appended, so every earlier field keeps its place. */
+    if (sn->has_recall) {
+        f_int(&l, "beacon_recall_slots", sn->recall.slots);
+        f_int(&l, "beacon_recall_max", sn->recall.max);
+        f_int(&l, "beacon_recall_overflowed", sn->recall.overflowed);
+        if (sn->recall.overflowed) f_int(&l, "beacon_recall_reach_s", sn->recall.reach_s);
+        f_int(&l, "beacon_recall_quiet", sn->recall.quiet);
+        if (sn->recall.quiet) f_int(&l, "beacon_recall_quiet_s", sn->recall.quiet_s);
+    }
     jsonl_emit_fields("sys_status", wall, l.f, l.n);
 
     for (int i = 0; i < sn->ntemp; i++)  emit_reading("temp", &sn->temp[i], wall);
@@ -1228,6 +1243,8 @@ static void emit_batch(time_t wall, uint64_t now_ms) {
     g.bands_emitted[2] = sn->mem_band;
     g.bands_emitted[3] = sn->disk_band;
     g.undervolt_emitted = sn->has_undervolt ? sn->undervolt : -1;
+    g.recall_emitted[0] = sn->has_recall ? sn->recall.overflowed : -1;
+    g.recall_emitted[1] = sn->has_recall ? sn->recall.quiet : -1;
 }
 
 void sys_status_emit(const sloth_state_t *s) {

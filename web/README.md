@@ -1294,6 +1294,23 @@ minimum), so an outage is never averaged away; the alarm's cell is
 *set* when it was set at any time (the maximum); a cell with no report
 is a gap, not a "down".
 
+**The beacon memory.** Since JSONL 1.2.0 `sys_status` carries the
+state of sloth's memory of BSSIDs its beacon table dropped, which
+`EVIL_TWIN`'s late-arrival signal reads to tell a returning AP from a
+new one. When that memory overflows, an AP it does not know is stamped
+unsure and the signal goes quiet until the memory again reaches back
+24 h; nothing said so before. One line under the sources table
+(`sy-recall`) now does: `evil-twin late-arrival: on (beacon memory N of
+4096)`, or `evil-twin late-arrival: quiet until <time>: the beacon
+memory overflowed (4096 of 4096, reaches back 6 h)`, or `not reported by
+this sensor` from an older sloth. `/api/sys`'s `beacon_recall` is
+`{slots, max, overflowed, reach_s, quiet, quiet_s, quiet_until}` or
+`null`; `quiet_until` is the batch's `ts` plus `quiet_s`, the sensor's
+clock, never compared with slothweb's. Ingest is range-checked like its
+neighbours: `slots` within `0..max`, the flags 0 or 1, quiet only with an
+overflow, `quiet_s` at most a day; a batch failing any of the first
+drops the block and keeps the rest.
+
 **Honest states.** Before the first `sys_status`, the panel says the
 sensor has not reported its host status and why that can be: a sloth
 older than JSONL 1.1.0, or **slothweb reading a copied sloth.db with no
@@ -3167,9 +3184,9 @@ drawer then says it is not an SSID sloth.db can hold, and asks nothing.
 ```
 GET /api/wifi/ssid?ssid=SG9tZU5ldA
 {"ssid":"HomeNet","ssid_k":3,"ssid_np":false,"hidden":false,"octets":7,
- "now":1792627200,"db":"open","db_schema":13,"designated":null,
- "first_seen":1791849600,"last_seen":1792627140,
- "bssids":[{"bssid":"0a:00:00:00:00:01","current":true,"vendor":"Acme",
+ "now":1792627200,"db":"open","db_schema":13,"designated":true,
+ "designated_count":2,"first_seen":1791849600,"last_seen":1792627140,
+ "bssids":[{"bssid":"0a:00:00:00:00:01","current":true,"designated":true,"vendor":"Acme",
    "channel":6,"enc":"WPA3","akm":"PSK,SAE","akm_names":["PSK","SAE"],
    "mfp_word":"capable","signal":-50,"first_seen":1791849600,
    "last_seen":1792627140,"karma":null,
@@ -3218,10 +3235,15 @@ GET /api/wifi/ssid?ssid=SG9tZU5ldA
   BSSIDs) alert rows, the newest of the last 30 days, found through
   `idx_alerts_last_seen` before the walk begins; `alerts_reached` says
   how far back that was, `null` for the whole window.
-- **`designated`** is always `null`: sloth's `--my-ssid` is its own
-  configuration and reaches neither sloth.db nor the stream, so the
-  page cannot say whether the operator designated the network, and
-  says that.
+- **`designated`** is `true` or `false` once sloth's `ownership`
+  record (JSONL 1.2.0) has arrived, with `designated_count` the number
+  of SSIDs sloth designates (`--my-ssid`), and `null` for both before
+  it: the page then says `not known: sloth has not reported its
+  designated networks`, never a guess. Each BSSID carries its own
+  `designated` (`--my-bssid`), marked `yours` in the drawer. The record
+  is kept in memory by `web/src/web_own.c`, the newest replacing the
+  last whole, a malformed one refused; SSIDs compare octet for octet,
+  as sloth's own `ownership_is_my_ssid()` does.
 
 **The drawer** (`#sdrawer`) is built as the device drawer is: the name
 with its non-printable marker, a key and value list (octets, first and
@@ -5155,8 +5177,13 @@ by name in the window: the stations asking (distinct MACs: `pnl_ssids`'
 key is the pair) and how many of those MACs are randomised, whether an
 access point in sloth.db beacons exactly that name (how many, and the
 strongest), first and last asked for; the name opens its detail. The
-operator's designated networks are not marked: `--my-ssid` is sloth's
-own setting and is in neither sloth.db nor the stream.
+operator's designated networks (`--my-ssid`, from sloth's `ownership`
+record) carry `"designated": true` and a `yours` mark: a designated
+network being searched for is the row an operator most wants to see.
+Before that record arrives every row's `designated` is `null`, the
+answer's `designated_count` is `null`, and the caption says the
+designated networks are not known. The WiFi AP table's rows carry the
+same member, `true` by BSSID (`--my-bssid`) or SSID, and the same mark.
 
 **Groups** (`/api/probes/groups`): the stations linked, directly or
 through one another, by at least `min` shared uncommon networks, each

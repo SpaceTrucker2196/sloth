@@ -4,7 +4,8 @@
  * Fed from four record types sloth writes once a minute (JSONL 1.1.0,
  * src/sys_status.h): `sys_status` (CPU, load, memory, uptime, sloth's
  * RSS, the output filesystem, the hottest temperature, the
- * under-voltage alarm), `sys_sensor` (one temperature, voltage or
+ * under-voltage alarm, and since 1.2.0 the state of the beacon memory
+ * EVIL_TWIN's late-arrival signal reads), `sys_sensor` (one temperature, voltage or
  * power-supply reading), `source_status` (one of sloth's sources,
  * configured or not) and `receiver_hw` (one attached receiver).
  *
@@ -47,6 +48,7 @@
 #include "web_json.h"
 #include "web_jsonl.h"
 #include "web_rollup.h"
+#include "web_own.h"
 
 #define WEB_SYS_SENSORS  36      /* sloth: 16 temps, 16 volts, 4 supplies */
 #define WEB_SYS_SOURCES  8       /* sloth: 7 */
@@ -98,11 +100,20 @@ typedef struct web_sys {
     long long disk_free_mb, disk_total_mb;
     char      cpu_band[13], mem_band[13], disk_band[13], temp_band[13];
     char      disk_for[9], temp_max_id[25];
+    /* JSONL 1.2.0: the forgotten-BSSID memory behind EVIL_TWIN's
+     * late-arrival signal (sloth's beacon_recall_*). has_recall 0 when
+     * the batch did not carry it (an older sloth); reach_s and quiet_s
+     * -1 when absent. */
+    int       has_recall, recall_overflowed, recall_quiet;
+    long long recall_slots, recall_max, recall_reach_s, recall_quiet_s;
     long long sensor_seq, hw_seq;
     web_sys_sensor_t sensors[WEB_SYS_SENSORS];
     web_sys_source_t sources[WEB_SYS_SOURCES];
     web_sys_hw_t     hw[WEB_SYS_HW];
     unsigned long records, rejected, overflow;
+    /* The operator's designated networks (web_own.h): sloth's own
+     * configuration, fed by the same ingest hook as the host status. */
+    web_own_t own;
 } web_sys_t;
 
 int  web_sys_init(web_sys_t *y);

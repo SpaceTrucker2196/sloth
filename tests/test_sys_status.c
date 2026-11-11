@@ -91,6 +91,7 @@ static void tick(sloth_state_t *s, uint64_t ms) {
 
 static void fresh(sloth_state_t *s) {
     memset(s, 0, sizeof(*s));
+    beacon_clear();             /* the recall memory is the session's */
     fake_net_reset();
     sys_status_reset();
     clock_at(0);
@@ -458,7 +459,12 @@ static void test_bare_host_reports_nothing_as_zero(void) {
     ASSERT(strstr(l, "\"seq\":1,\"interval_s\":60,") != NULL);
     ASSERT(strstr(l, "\"temps\":0,\"volts\":0,\"power\":0,\"sources\":7,"
                      "\"sources_configured\":0,\"sources_ok\":0,\"sources_down\":0,"
-                     "\"receivers\":0}") != NULL);
+                     "\"receivers\":0,\"beacon_recall_slots\":0,\"beacon_recall_max\":4096,"
+                     "\"beacon_recall_overflowed\":0,\"beacon_recall_quiet\":0}") != NULL);
+    /* reach and time-left are absent while there is nothing to say.
+     * Seen red with either condition in emit_batch() removed. */
+    ASSERT(strstr(l, "beacon_recall_reach_s") == NULL);
+    ASSERT(strstr(l, "beacon_recall_quiet_s") == NULL);
     ASSERT(strstr(l, "cpu_pct") == NULL);
     ASSERT(strstr(l, "cpu_band") == NULL);
     ASSERT(strstr(l, "load1") == NULL);

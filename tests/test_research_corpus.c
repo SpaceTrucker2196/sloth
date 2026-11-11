@@ -348,6 +348,8 @@ static void test_own_state_kinds_are_named(void) {
     static const char *const kinds[] = {
         "ALERT_TYPE_NO_MONITOR_MODE",
         "ALERT_TYPE_BT_OWN_TRANSMIT",   /* #144 slice 2 */
+        "ALERT_TYPE_SENSOR_UNDERVOLT",  /* 2026-11-11, rules_sensor.c */
+        "ALERT_TYPE_SENSOR_SOURCE_DOWN",/* 2026-11-11, rules_sensor.c */
     };
     for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
         int found = 0;

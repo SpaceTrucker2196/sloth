@@ -18,6 +18,8 @@
 #include "web_store.h"
 #include "web_tsdb.h"
 #include "web_wifi.h"
+#include "web_own.h"
+#include "web_jsonl.h"
 #include "wtest.h"
 #include "wt_tmp.h"
 
@@ -638,18 +640,54 @@ static void test_ap_table(void) {
                "\"pnl_overlap\":2,\"ie_uniform\":true},\"rf\":{\"metric\":\"rf.rssi.bssid\",");
     WT_HAS(a1, "\"cell_s\":60,\"cells\":[],\"n\":0,\"whisker\":null,\"whisker_src\":null,"
                "\"band\":null,\"trend\":null,\"est_src\":null,\"radio\":null},\"ssid_k\":4,"
-               "\"ssid_np\":false}");
+               "\"ssid_np\":false,\"designated\":null}");
     WT_HAS(a2, "{\"bssid\":\"0a:00:00:00:00:02\",\"ssid\":null,\"signal\":null,"
                "\"channel\":36,\"enc\":\"OPEN\",\"akm\":null,\"akm_bits\":0,"
                "\"akm_names\":[],\"mfp\":0,\"mfp_word\":\"off\",\"downgrade\":0,"
                "\"downgrade_names\":[],");
     WT_HAS(a2, "\"ssid_count\":0,\"multi_ssid\":false,\"ssids\":[],\"ssids_more\":false,"
                "\"karma\":null,\"rf\":{\"metric\":\"rf.rssi.bssid\",");
-    WT_HAS(a2, "\"est_src\":null,\"radio\":null},\"ssid_k\":0,\"ssid_np\":false}");
+    WT_HAS(a2, "\"est_src\":null,\"radio\":null},\"ssid_k\":0,\"ssid_np\":false,\"designated\":null}");
     WT_HAS(a3, "\"ssid\":\"\\u003cscript\\u003ex\\u003c/script\\u003e\"");
     WT_HAS(a3, "\"mfp_word\":\"required\"");
     WT_LACKS(b, "<script>");
     WT_HAS(b, "\"count\":3,\"more\":false,\"next_offset\":null}");
+    /* With sloth's `ownership` record (web_own.h) an AP is yours by its
+     * BSSID (--my-bssid) or its SSID (--my-ssid); a hidden one only by
+     * its BSSID. Seen red with ap_json()'s designated member written as
+     * null again, and with the SSID half of it dropped (Cafe's row). */
+    {
+        static web_own_t own;
+        WT_EQ(web_own_init(&own), 0);
+        web_own_bind(&own);
+        web_jrec_t rec;
+        static const char OWN[] = "{\"type\":\"ownership\",\"ts\":1,\"ssids\":1,"
+                                  "\"ssid_0\":\"Cafe\",\"bssids\":1,"
+                                  "\"bssid_0\":\"0a:00:00:00:00:02\",\"known_macs\":0}";
+        WT_EQ(web_jl_parse(OWN, strlen(OWN), &rec), WEB_JL_OK);
+        web_own_record(&own, &rec, 1);
+        WT_EQ(route(&H, "/api/wifi/aps", ""), 200);
+        const char *ob = body_of(g_out);
+        const char *o1 = ap_row(ob, "0a:00:00:00:00:01");
+        const char *o2 = ap_row(ob, "0a:00:00:00:00:02");
+        const char *o3 = ap_row(ob, "0a:00:00:00:00:03");
+        WT_ASSERT(o1 && o2 && o3 && o1 < o2 && o2 < o3);
+        /* Each row read up to the next one's start. */
+        static char r1[16384], r2[16384];
+        size_t n1 = o1 && o2 && o2 > o1 ? (size_t)(o2 - o1) : 0;
+        size_t n2 = o2 && o3 && o3 > o2 ? (size_t)(o3 - o2) : 0;
+        if (n1 >= sizeof(r1)) n1 = sizeof(r1) - 1;
+        if (n2 >= sizeof(r2)) n2 = sizeof(r2) - 1;
+        memcpy(r1, o1 ? o1 : "", n1); r1[n1] = '\0';
+        memcpy(r2, o2 ? o2 : "", n2); r2[n2] = '\0';
+        WT_HAS(r1, "\"ssid_np\":false,\"designated\":true}");     /* by SSID */
+        WT_HAS(r2, "\"ssid_np\":false,\"designated\":true}");     /* hidden, by BSSID */
+        WT_HAS(o3, "\"designated\":false}");
+        web_own_bind(NULL);
+        web_own_destroy(&own);
+        WT_EQ(route(&H, "/api/wifi/aps", ""), 200);
+        b = body_of(g_out);
+    }
     /* Sorts and a page. */
     WT_EQ(route(&H, "/api/wifi/aps", "sort=bssid&limit=1&offset=1"), 200);
     b = body_of(g_out);

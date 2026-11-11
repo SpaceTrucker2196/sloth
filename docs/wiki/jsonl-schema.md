@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/sys_status.c`, `src/dns_wire.c`.
 
-**Last updated**: 2026-11-11 (host status and the source inventory: the `sys_status`, `sys_sensor`, `source_status` and `receiver_hw` records, on a 60 s cadence; `jsonl_version` `1.1.0`, a MINOR bump for four added record types; no existing record changed), 2026-11-10 (#185 item 3, [ADR 0007](adr/0007-versioning.md): `jsonl_version` appended to `sensor_health` as the stream's own contract version, `1.0.0`, from `SLOTH_JSONL_VERSION`; the *Versioning* section's "no version field" replaced by the bump rule), 2026-11-09 ([[adsb]]: `beast:HOST:PORT` as `adsb_src` / `src`, readsb's address-type names as `source_type` for Beast rows, and what the `adsb_*` tallies count for a Beast stream; no field added), 2026-11-06 ([[location]]: `loc_lat`, `loc_lon`, `loc_alt_m`, `loc_src` appended to `sensor_health` while a position exists, signed on the 0.01° cell; slothweb's Radar centre), 2026-11-05 ([[aprs]]: the `aprs_packet` record, one per packet Dire Wolf decoded, the change-only `aprs_station` record, the `aprs_*` block appended to `sensor_health`, present only with `--aprs`, and the `sensor` kind `aprs`), 2026-11-05 (#26 slice 1, [[adsb]]: the change-only `adsb_aircraft` record, and the `adsb_*` block appended to `sensor_health`, present only with `--adsb`), 2026-11-03 (#173: the MGMT_FUZZ lifecycle example carries the banded detail), 2026-11-03 (#180: `evict_frag_ap_ident` appended to the `sensor_health` breakout — the FragAttacks per-BSSID AP-identity table), 2026-11-02 ([[gnss]]: the change-only `gnss_fix`, `gnss_sky` and `gnss_sat` records, and `gnss_sats_in_view`, `gnss_sats_used`, `gnss_cn0_mean`, `gnss_time_offset_ms`, `gnss_jam` appended to `sensor_health` with a `--gps` reader; on review, the used count signed as a band, the offset band with hysteresis, `jam` sticky across the TPVs gpsd omits it from, `el` / `az` absent rather than -1, and a set satellite inferred from its heartbeat lapsing), 2026-10-27 ([[location]]: the `loc` object on `alert` and every `alert.*` record of a stamped incident; the `gps_*` block in `sensor_health`, present only with `--location` or `--gps`), 2026-10-26 (`capture_linktype` and `monitor_only` in `sensor_health`, for slothweb's capture scope), 2026-10-26 (RSSI distance data point: `est_dist_m`, `est_dist_band`, `est_dist_trend`, `est_ptx_source` on `beacon`, `probe_client`, `assoc`, `device` and `ble_device`, present only with an estimate; `ble_device` signs the band only, never metres or the trend), 2026-10-26 (#170: incidents versus `--db` findings stated under *Incident lifecycle*; no record changed), 2026-10-26 (#166: `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` in `sensor_health`, present only with `--pcap-dir`), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
+**Last updated**: 2026-11-11 (`jsonl_version` `1.2.0`: the `ownership` record, the designated SSIDs and BSSIDs and the known-device roster's count; the `beacon_recall_*` fields appended to `sys_status`, a batch written at once when the memory overflows or goes quiet; the `alert.resolve` reason `recovered`), 2026-11-11 (host status and the source inventory: the `sys_status`, `sys_sensor`, `source_status` and `receiver_hw` records, on a 60 s cadence; `jsonl_version` `1.1.0`, a MINOR bump for four added record types; no existing record changed), 2026-11-10 (#185 item 3, [ADR 0007](adr/0007-versioning.md): `jsonl_version` appended to `sensor_health` as the stream's own contract version, `1.0.0`, from `SLOTH_JSONL_VERSION`; the *Versioning* section's "no version field" replaced by the bump rule), 2026-11-09 ([[adsb]]: `beast:HOST:PORT` as `adsb_src` / `src`, readsb's address-type names as `source_type` for Beast rows, and what the `adsb_*` tallies count for a Beast stream; no field added), 2026-11-06 ([[location]]: `loc_lat`, `loc_lon`, `loc_alt_m`, `loc_src` appended to `sensor_health` while a position exists, signed on the 0.01° cell; slothweb's Radar centre), 2026-11-05 ([[aprs]]: the `aprs_packet` record, one per packet Dire Wolf decoded, the change-only `aprs_station` record, the `aprs_*` block appended to `sensor_health`, present only with `--aprs`, and the `sensor` kind `aprs`), 2026-11-05 (#26 slice 1, [[adsb]]: the change-only `adsb_aircraft` record, and the `adsb_*` block appended to `sensor_health`, present only with `--adsb`), 2026-11-03 (#173: the MGMT_FUZZ lifecycle example carries the banded detail), 2026-11-03 (#180: `evict_frag_ap_ident` appended to the `sensor_health` breakout — the FragAttacks per-BSSID AP-identity table), 2026-11-02 ([[gnss]]: the change-only `gnss_fix`, `gnss_sky` and `gnss_sat` records, and `gnss_sats_in_view`, `gnss_sats_used`, `gnss_cn0_mean`, `gnss_time_offset_ms`, `gnss_jam` appended to `sensor_health` with a `--gps` reader; on review, the used count signed as a band, the offset band with hysteresis, `jam` sticky across the TPVs gpsd omits it from, `el` / `az` absent rather than -1, and a set satellite inferred from its heartbeat lapsing), 2026-10-27 ([[location]]: the `loc` object on `alert` and every `alert.*` record of a stamped incident; the `gps_*` block in `sensor_health`, present only with `--location` or `--gps`), 2026-10-26 (`capture_linktype` and `monitor_only` in `sensor_health`, for slothweb's capture scope), 2026-10-26 (RSSI distance data point: `est_dist_m`, `est_dist_band`, `est_dist_trend`, `est_ptx_source` on `beacon`, `probe_client`, `assoc`, `device` and `ble_device`, present only with an estimate; `ble_device` signs the band only, never metres or the trend), 2026-10-26 (#170: incidents versus `--db` findings stated under *Incident lifecycle*; no record changed), 2026-10-26 (#166: `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` in `sensor_health`, present only with `--pcap-dir`), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
 and `drained`; the `beacon-overflow` `BEACONING` finding; IPv4-mapped
 beaconing peers keyed as IPv4), 2026-10-23 (#165 audit: a PTR `answer`
 is whole up to 63 bytes, for a PTR question only; a target that would
@@ -493,6 +493,7 @@ not duration.
 | `cleared` | the operator pressed `c` in the TUI. Every open incident closes — leaving them open would strand a consumer waiting for a resolve that can never come |
 | `displaced` | additive, #148 — a per-destination `BEACONING` finding (`beacon:<ip>:<port>`) lost its place among the `bd.max_findings` strongest tracks to a clearly stronger one, or — no longer strong itself — to any strong one, or the cap was lowered under it. The track may still be beaconing: from this record on it is counted in the `beacon-overflow` finding for as long as it stays strong (a holder displaced because it stopped being strong is not counted at all), and if it wins a place back its next `alert.create` is a new incident of the same key (`reopen_count` > 0) |
 | `drained` | additive, #148 — the `beacon-overflow` finding closed because no strong beaconing track is without its own finding (K = 0) — whether the overflowed tracks won places or simply stopped being strong |
+| `recovered` | additive, 2026-11-11 — an own-state finding closed by its rule because the condition has been clear for 120 s without a break: `SENSOR_UNDERVOLT` (the under-voltage alarm read 0) and `SENSOR_SOURCE_DOWN` (the source read `ok`). The hold is what makes a flapping supply or source one incident ([[alerts]]) |
 
 | Field | Type | Meaning |
 |-------|------|---------|
@@ -1032,7 +1033,7 @@ block, present **only** with `--aprs`:
 | `aprs_truncations`, `aprs_rotations` | the file shrank under the offset (copytruncate); a new file at the path |
 | `aprs_read_errors` | opens or reads that failed, not a regular file |
 | `aprs_err` | the last read failure; `""` when none |
-| `jsonl_version` | additive, #185 item 3 — **this stream's contract version**, `MAJOR.MINOR.PATCH`, `1.1.0` today. What a consumer codes against, and not the same thing as sloth's own `SLOTH_VERSION`, which this record does not carry: a release that changes no record leaves this alone, and a record change between releases does not wait for a tag ([ADR 0007](adr/0007-versioning.md)). The last field in the record, after the flag-gated blocks above. Fixed for the life of the process, so — like `libs` — it is outside the change-only signature and rides every line: one record is enough to tell which contract wrote it, with the sensor long gone. The bump rule is under *Versioning* below |
+| `jsonl_version` | additive, #185 item 3 — **this stream's contract version**, `MAJOR.MINOR.PATCH`, `1.2.0` today. What a consumer codes against, and not the same thing as sloth's own `SLOTH_VERSION`, which this record does not carry: a release that changes no record leaves this alone, and a record change between releases does not wait for a tag ([ADR 0007](adr/0007-versioning.md)). The last field in the record, after the flag-gated blocks above. Fixed for the life of the process, so — like `libs` — it is outside the change-only signature and rides every line: one record is enough to tell which contract wrote it, with the sensor long gone. The bump rule is under *Versioning* below |
 
 The signature takes `aprs_state`, `aprs_missing` and none/some bands of
 the read errors, bad lines, overflow and `aprs_err`; the counts and
@@ -1141,7 +1142,7 @@ recovered reports the recovery on the next heartbeat, not at once —
 the same instantaneous state, and only the second is common.
 
 ```json
-{"type":"sensor_health","ts":1700000000,"capture_iface":"any","capture_linktype":276,"monitor_only":0,"monitor_iface":"alfa0","monitor_err":"","chan_requested":11,"chan_confirmed":6,"chan_confirmed_ok":0,"chan_retune_failures":2,"chan_retune_last_errno":16,"chan_retune_reason":"EBUSY","hop_channels":3,"hop_visits":41,"hop_frames":9022,"hop_silent_channels":0,"hop_cur_visits":14,"hop_cur_frames":311,"hop_dwell_planned_ms":250,"hop_dwell_measured_ms":1000,"hop_dwell_last_planned_ms":250,"hop_dwell_last_measured_ms":1000,"hop_dwell_worst_overshoot_ms":750,"hop_dwells_completed":40,"capture_open":1,"capture_running":1,"capture_exit":"none","capture_exit_detail":"","capture_stats_valid":1,"capture_recv":184320,"capture_drop":12,"capture_ifdrop":0,"capture_recv_delta":903,"capture_drop_delta":4,"capture_ifdrop_delta":0,"monitor_open":1,"monitor_running":0,"monitor_exit":"iface_gone","monitor_exit_detail":"The interface went down","monitor_stats_valid":1,"monitor_recv":51201,"monitor_drop":0,"monitor_ifdrop":3,"monitor_recv_delta":0,"monitor_drop_delta":0,"monitor_ifdrop_delta":0,"evictions":917,"evict_alert":1,"evict_top_host":0,"evict_pnl_client":0,"evict_pnl_ssid":4,"evict_dhcp_event":0,"evict_eap_session":0,"evict_device":0,"evict_beacon_ap":0,"evict_seqnum_client":0,"evict_assoc_pair":0,"evict_assoc_req":0,"evict_wps_session":0,"evict_evidence_frame":0,"evict_probe_client":0,"evict_pm_forge":0,"evict_queue_evict":0,"evict_dns_log":912,"evict_tls_log":0,"evict_quic_log":0,"evict_http_log":0,"evict_ntp_log":0,"evict_icmp_log":0,"evict_rf_channel":0,"evict_http_flow":0,"evict_pcap_cooldown":0,"evict_bgp_session":0,"evict_ldap_event":0,"evict_kerb_event":0,"evict_smb_session":0,"evict_ssh_flow":0,"evict_rdp_flow":0,"evict_snmp_flow":0,"evict_mqtt_flow":0,"evict_mdns_service":0,"evict_nbns_name":0,"evict_arp_hist":0,"evict_frag_bss":0,"evict_frag_sta":0,"evict_frag_session":0,"evict_frag_assoc":0,"evict_frag_mpdu":0,"evict_ndp_ra":0,"evict_rogue_radius":0,"evict_ssdp_device":0,"evict_onvif_device":0,"evict_smtp_flow":0,"evict_eapol_pending":0,"evict_deauth_obs":0,"evict_deauth_victim":0,"storage_failures":0,"storage_jsonl_failures":0,"storage_pcap_failures":0,"storage_eapol_failures":0,"pcap_dir_free_mb":273408,"pcap_dir_free_inodes":13138050,"scope":"degraded","scope_not_enforced":1,"scope_requested":1,"scope_enforced":0,"scope_generation":1,"scope_dropped":37,"tuned_count":1,"tuned":"ssh.brute_force=25","socket_peer_refused":0,"socket_clients":1,"parse_faults":5,"parse_fault_radiotap_bad":3,"parse_fault_dot11_runt":2,"parse_fault_ie_overrun":0,"parse_fault_rsn_malformed":0,"parse_fault_mle_malformed":0,"parse_fault_ip_truncated":0,"parse_fault_ip_fragment":0,"parse_fault_dns_name_bad":0,"parse_fault_tls_malformed":0,"parse_fault_frame_edge":0,"parse_fault_fcs_failed":0,"rss_kb":48580,"rss_hwm_kb":49124,"sqlite_mem_kb":1310,"sqlite_mem_hwm_kb":1702,"malloc_kb":2911,"fd_count":16,"resolver_calls":0,"libs":"pcap: libpcap version 1.10.6 (with TPACKET_V3); sqlite: 3.53.4","jsonl_version":"1.1.0"}
+{"type":"sensor_health","ts":1700000000,"capture_iface":"any","capture_linktype":276,"monitor_only":0,"monitor_iface":"alfa0","monitor_err":"","chan_requested":11,"chan_confirmed":6,"chan_confirmed_ok":0,"chan_retune_failures":2,"chan_retune_last_errno":16,"chan_retune_reason":"EBUSY","hop_channels":3,"hop_visits":41,"hop_frames":9022,"hop_silent_channels":0,"hop_cur_visits":14,"hop_cur_frames":311,"hop_dwell_planned_ms":250,"hop_dwell_measured_ms":1000,"hop_dwell_last_planned_ms":250,"hop_dwell_last_measured_ms":1000,"hop_dwell_worst_overshoot_ms":750,"hop_dwells_completed":40,"capture_open":1,"capture_running":1,"capture_exit":"none","capture_exit_detail":"","capture_stats_valid":1,"capture_recv":184320,"capture_drop":12,"capture_ifdrop":0,"capture_recv_delta":903,"capture_drop_delta":4,"capture_ifdrop_delta":0,"monitor_open":1,"monitor_running":0,"monitor_exit":"iface_gone","monitor_exit_detail":"The interface went down","monitor_stats_valid":1,"monitor_recv":51201,"monitor_drop":0,"monitor_ifdrop":3,"monitor_recv_delta":0,"monitor_drop_delta":0,"monitor_ifdrop_delta":0,"evictions":917,"evict_alert":1,"evict_top_host":0,"evict_pnl_client":0,"evict_pnl_ssid":4,"evict_dhcp_event":0,"evict_eap_session":0,"evict_device":0,"evict_beacon_ap":0,"evict_seqnum_client":0,"evict_assoc_pair":0,"evict_assoc_req":0,"evict_wps_session":0,"evict_evidence_frame":0,"evict_probe_client":0,"evict_pm_forge":0,"evict_queue_evict":0,"evict_dns_log":912,"evict_tls_log":0,"evict_quic_log":0,"evict_http_log":0,"evict_ntp_log":0,"evict_icmp_log":0,"evict_rf_channel":0,"evict_http_flow":0,"evict_pcap_cooldown":0,"evict_bgp_session":0,"evict_ldap_event":0,"evict_kerb_event":0,"evict_smb_session":0,"evict_ssh_flow":0,"evict_rdp_flow":0,"evict_snmp_flow":0,"evict_mqtt_flow":0,"evict_mdns_service":0,"evict_nbns_name":0,"evict_arp_hist":0,"evict_frag_bss":0,"evict_frag_sta":0,"evict_frag_session":0,"evict_frag_assoc":0,"evict_frag_mpdu":0,"evict_ndp_ra":0,"evict_rogue_radius":0,"evict_ssdp_device":0,"evict_onvif_device":0,"evict_smtp_flow":0,"evict_eapol_pending":0,"evict_deauth_obs":0,"evict_deauth_victim":0,"storage_failures":0,"storage_jsonl_failures":0,"storage_pcap_failures":0,"storage_eapol_failures":0,"pcap_dir_free_mb":273408,"pcap_dir_free_inodes":13138050,"scope":"degraded","scope_not_enforced":1,"scope_requested":1,"scope_enforced":0,"scope_generation":1,"scope_dropped":37,"tuned_count":1,"tuned":"ssh.brute_force=25","socket_peer_refused":0,"socket_clients":1,"parse_faults":5,"parse_fault_radiotap_bad":3,"parse_fault_dot11_runt":2,"parse_fault_ie_overrun":0,"parse_fault_rsn_malformed":0,"parse_fault_mle_malformed":0,"parse_fault_ip_truncated":0,"parse_fault_ip_fragment":0,"parse_fault_dns_name_bad":0,"parse_fault_tls_malformed":0,"parse_fault_frame_edge":0,"parse_fault_fcs_failed":0,"rss_kb":48580,"rss_hwm_kb":49124,"sqlite_mem_kb":1310,"sqlite_mem_hwm_kb":1702,"malloc_kb":2911,"fd_count":16,"resolver_calls":0,"libs":"pcap: libpcap version 1.10.6 (with TPACKET_V3); sqlite: 3.53.4","jsonl_version":"1.2.0"}
 ```
 
 **The example is abridged between `libs` and `jsonl_version`.** A real
@@ -1502,7 +1503,8 @@ every 60 s: a `sys_status`, its `sys_sensor` rows, every
 is a fixed cadence on purpose — the point is a trend, and
 `sensor_health`'s 300 s heartbeat is too sparse for one. A batch is also
 written at once when a **band gets worse** (`temp_band`, `cpu_band`,
-`mem_band`, `disk_band`, `undervolt` going 0 to 1), never when a figure
+`mem_band`, `disk_band`, `undervolt`, and since 1.2.0
+`beacon_recall_overflowed` and `beacon_recall_quiet`, going 0 to 1), never when a figure
 moves. A recovery is not written at once: it is in the next minute's
 batch. The bands are held as well (a move up is taken at once, a move
 down only once the value is clear of the edge by a margin). A reading
@@ -1547,9 +1549,22 @@ One per batch.
 | `power` | how many rows of class `power` follow |
 | `sources`, `sources_configured`, `sources_ok`, `sources_down` | the source rows that follow (always 7), and how many are configured, `ok` and `down` |
 | `receivers` | the `receiver_hw` rows that follow |
+| `beacon_recall_slots`, `beacon_recall_max` | 1.2.0, appended. The memory of BSSIDs the beacon table has dropped (`src/beacon_snoop.c`, "BSSIDs the table has forgotten"), which `EVIL_TWIN`'s late-arrival signal reads to tell a returning AP from a new one: slots in use (a superseded memory still holds its slot until overwritten) of its fixed size, 4096. Sampled with the system, every 10 s |
+| `beacon_recall_overflowed` | `1` once a live memory has been overwritten since sloth started (or the table was cleared); from then on "not found" no longer means "never heard". `0` otherwise |
+| `beacon_recall_reach_s` | present only when overflowed: how far back the memory now reaches, seconds — the age of the newest memory it overwrote |
+| `beacon_recall_quiet` | `1` while the late-arrival signal is **off because of the overflow**: an entry the memory does not know is stamped unsure, not new, until the memory again reaches back 24 h (`BEACON_RECALL_TRUST_S`). Exactly the test the signal itself makes. `0` otherwise |
+| `beacon_recall_quiet_s` | present only when quiet: seconds until the signal is on again, if nothing else is overwritten first (a later overwrite moves it out) |
+
+**Where, and why there.** On `sys_status`, not `sensor_health`: the
+slot count is a trend and rides the fixed one-minute batch freely, where
+`sensor_health`'s change-only signature would have to leave it out, and
+slothweb's Sensor health page already reads this record. The two states
+that matter enter the early-batch rule as bands of two, so an overflow
+or the start of a quiet spell is written at once, not up to a minute
+later.
 
 ```json
-{"type":"sys_status","ts":1800000060,"seq":2,"interval_s":60,"cpu_pct":15.0,"cpu_iowait_pct":10.0,"cpu_band":"low","load1":0.20,"load5":0.18,"load15":0.12,"mem_total_kb":3884328,"mem_avail_kb":2913246,"mem_band":"ok","uptime_s":350735,"rss_kb":12276,"disk_for":"db","disk_free_mb":21840,"disk_total_mb":29500,"disk_band":"ok","temps":3,"temp_max_c":51.0,"temp_max_id":"hwmon3/temp1","temp_band":"ok","volts":3,"undervolt":0,"power":0,"sources":7,"sources_configured":4,"sources_ok":3,"sources_down":0,"receivers":5}
+{"type":"sys_status","ts":1800000060,"seq":2,"interval_s":60,"cpu_pct":15.0,"cpu_iowait_pct":10.0,"cpu_band":"low","load1":0.20,"load5":0.18,"load15":0.12,"mem_total_kb":3884328,"mem_avail_kb":2913246,"mem_band":"ok","uptime_s":350735,"rss_kb":12276,"disk_for":"db","disk_free_mb":21840,"disk_total_mb":29500,"disk_band":"ok","temps":3,"temp_max_c":51.0,"temp_max_id":"hwmon3/temp1","temp_band":"ok","volts":3,"undervolt":0,"power":0,"sources":7,"sources_configured":4,"sources_ok":3,"sources_down":0,"receivers":5,"beacon_recall_slots":4096,"beacon_recall_max":4096,"beacon_recall_overflowed":1,"beacon_recall_reach_s":21600,"beacon_recall_quiet":1,"beacon_recall_quiet_s":64800}
 ```
 
 ### `sys_sensor`
@@ -1666,6 +1681,38 @@ apart on this host. sloth does not read the attribute.
 {"type":"receiver_hw","ts":1800000000,"seq":1,"key":"net:wlan0","kind":"wifi","bus":"sdio","id":"02d0:a9a6","known":0,"desc":"","vendor":"","product":"","driver":"brcmfmac","ifaces":"wlan0"}
 ```
 
+## `ownership` — the operator's designated networks (JSONL 1.2.0)
+
+Owner ruling 2026-11-11: "export your designated networks from the
+sensor". sloth's `--my-ssid` and `--my-bssid` rosters
+(`src/ownership.h`) were in neither sloth.db nor the stream, so a
+consumer (slothweb's SSID drawer, Probes and WiFi views) could not mark
+the operator's networks and had to say it did not know.
+
+One singleton record, written by `src/jsonl.c` `jsonl_emit_ownership()`
+through the change-only snapshot cache: on the first tick, at once on
+any change, and on the 300 s heartbeat, so a consumer that connects late
+has it within five minutes. The rosters are fixed for the life of the
+process today (flags only; there is no roster reload and no SIGHUP
+handler), so in practice it is the first line and then a heartbeat.
+
+| Field | Meaning |
+|---|---|
+| `ssids` | how many SSIDs `--my-ssid` designates, `0`..`16` |
+| `ssid_0` .. `ssid_15` | each designated SSID, as given, through the stream's string escaping (*Common envelope*): a control byte as `\u00XX`, an octet that is not UTF-8 as `\ufffd`, never the raw byte. Not the `?` mapping observed SSIDs get at ingest: the record carries the designation sloth compares with (`ownership_is_my_ssid()`, exact and case-sensitive), so a designation with a control byte in it matches no stored SSID here or in a consumer that compares as sloth does |
+| `bssids` | how many BSSIDs `--my-bssid` designates, `0`..`16` |
+| `bssid_0` .. `bssid_15` | each designated BSSID, lower-case `aa:bb:cc:dd:ee:ff` |
+| `known_macs` | how many MACs the known-device roster (`--known-mac`, `--known-macs`) holds, `0`..`512`. **The count only**: those addresses are the operator's own devices, and a stream that is forwarded to a SIEM or bundled for a colleague has no need to carry them; what a consumer can use is whether the roster is set (it gates `UNKNOWN_DEVICE`). The sensor's own interface addresses are not here either: they are the `iface` records' |
+
+Flat members rather than arrays because slothweb's decoder keeps
+top-level scalars only. An empty roster is still a record (`ssids` 0,
+`bssids` 0): "sloth designates none", which a consumer must be able to
+tell from "sloth has not said".
+
+```json
+{"type":"ownership","ts":1800000000,"ssids":2,"ssid_0":"HomeNet","ssid_1":"a\u0001b","bssids":1,"bssid_0":"aa:bb:cc:dd:ee:0f","known_macs":2}
+```
+
 ## `socket_gap` (socket-only)
 
 ```json
@@ -1692,7 +1739,7 @@ signature / syslog MSGID), and it does not count towards `seq` itself.
 ## Versioning
 
 - **One version field, `jsonl_version` on `sensor_health`** (#185 item
-  3, [ADR 0007](adr/0007-versioning.md)). `MAJOR.MINOR.PATCH`, `1.1.0`
+  3, [ADR 0007](adr/0007-versioning.md)). `MAJOR.MINOR.PATCH`, `1.2.0`
   today, from `SLOTH_JSONL_VERSION` in `include/sloth.h`. It versions
   **this contract**, not the binary: `SLOTH_VERSION` is the tree's
   semantic version and is deliberately not on this stream.
@@ -1711,7 +1758,11 @@ signature / syslog MSGID), and it does not count towards `seq` itself.
   test_schema_doc_states_the_jsonl_contract_version` fails if the macro
   moves and this page does not.
 
-  History: `1.1.0` (2026-11-11) added the record types `sys_status`,
+  History: `1.2.0` (2026-11-11) appended the `beacon_recall_*` fields
+  to `sys_status` (the forgotten-BSSID memory behind `EVIL_TWIN`'s
+  late-arrival signal) and added the record type `ownership` (the
+  operator's designated networks); no existing field changed. `1.1.0` (2026-11-11)
+  added the record types `sys_status`,
   `sys_sensor`, `source_status` and `receiver_hw`; no existing record
   gained, lost or renamed a field.
 
