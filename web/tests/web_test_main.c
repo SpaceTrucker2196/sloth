@@ -132,6 +132,7 @@ int main(void) {
     SUITE(run_aprs_tests);
     SUITE(run_radar_tests);
     SUITE(run_ssidview_tests);
+    SUITE(run_probes_tests);
     SUITE(run_rfhist_tests);
     SUITE(run_bledev_tests);
     SUITE(run_btsig_tests);

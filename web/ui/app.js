@@ -1265,6 +1265,8 @@
   // ── views ─────────────────────────────────────────────────────────
   var VIEWS = ["overview", "activity", "devices", "anomalies", "wifi", "flows", "history",
                "lookup", "tacdb", "ble", "gnss", "adsb", "aprs", "radar"];
+  // The Probes view (web/ui/probes.js), a tab of its own.
+  VIEWS.push("probes");
   // The views with a tab, and the drill-downs: the Alerts page (6),
   // an alert's page, the record ticker by type, the sensor's health.
   var NAV = VIEWS.concat(["alerts"]);
@@ -1315,6 +1317,8 @@
     if (v === "aprs" && window.SlothAprs) SlothAprs.show();
     // The Radar view (radar.js, its own module): a no-op when not loaded.
     if (v === "radar" && window.SlothRadar) SlothRadar.show();
+    // The Probes view (probes.js, its own module): a no-op when not loaded.
+    if (v === "probes" && window.SlothProbes) SlothProbes.show();
     if (v === "alerts") alertsView();
     if (v === "alert") alertView();
     if (v === "records") recordsView();
@@ -1400,6 +1404,7 @@
   $("nav-adsb").addEventListener("click", function () { show("adsb"); });
   $("nav-aprs").addEventListener("click", function () { show("aprs"); });
   $("nav-radar").addEventListener("click", function () { show("radar"); });
+  $("nav-probes").addEventListener("click", function () { show("probes"); });
 
   // ── the theme toggle ──────────────────────────────────────────────
   // Light or dark on :root's data-theme, the choice kept in this
@@ -1495,6 +1500,8 @@
     $("v-adsb").classList.toggle("scoped-out", SCOPE === "local");
     // And Dire Wolf's APRS receiver.
     $("v-aprs").classList.toggle("scoped-out", SCOPE === "local");
+    // And the probe requests: the monitor radio's.
+    $("v-probes").classList.toggle("scoped-out", SCOPE === "local");
     // No scoped-out toggle for v-radar: the satellites it draws are the
     // host's own receiver's, every scope's; under Local the module itself
     // skips the three passive fetches and says so in its header.
@@ -5736,6 +5743,12 @@
   if (window.SlothSsid) SlothSsid.init({ el: el, getJSON: getJSON, errText: errText, keyColor: keyColor,
     stamp: stamp, shortStamp: shortStamp, kvList: kvList, drawStrip: drawStrip, ssidPlain: ssidText,
     openDrawer: openDrawer, alertLink: alertLink, scope: function () { return SCOPE; } });
+
+  // The Probes view (web/ui/probes.js): the page's helpers, lent once.
+  if (window.SlothProbes) SlothProbes.init({ el: el, getJSON: getJSON, errText: errText,
+    keyColor: keyColor, shortStamp: shortStamp, drawStrip: drawStrip, DataTable: DataTable,
+    ssidSpan: ssidSpan, openDrawer: openDrawer, show: show, scope: function () { return SCOPE; },
+    prefGet: prefGet, prefSet: prefSet });
 
   // The BLE Devices waterfall (web/ui/bledev.js): the page's helpers, lent once.
   if (window.SlothBleDev) SlothBleDev.init({ el: el, set: set, getJSON: getJSON, theme: theme,

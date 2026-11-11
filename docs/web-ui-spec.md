@@ -22,6 +22,7 @@
 > | Radar view | **2026-11-06 (owner request):** a Radar tab, one half-dome of every radio heard (§8.14). Its dome and its ◇ ▲ ○ marks have no character-cell form (the TUI's `[#]` sky plot is the nearest relative), so the view is **exempt from R12** of `docs/web-visual-spec.md` as an owner ruling, not an oversight; the marks still carry shape and word (R10), the chrome has no gradient, shadow or fill (R8), the selection is the one accent (R1). | visual spec R12, for this view only |
 > | Vendor research's place | **2026-11-11 (owner request):** in the device drawer (the detail view of a WiFi client or access point, and of every other device) the vendor research section is the last block, after the record, the lists, presence, signal, the week, anomalies and the FRRS record. The Lookup card keeps it under the OUI card. | §8.6's drawer order |
 > | SSID detail | **2026-11-11 (owner request):** every SSID the page writes is selectable and opens a detail drawer built as the device drawer is (§8.8), from `/api/wifi/ssid?ssid=`, the name as the base64url of its octets. Read-only, the existing column allow-list, Monitor's and Hybrid's. | §8.8 (no SSID view), §7's route list |
+> | Probes view | **2026-11-11 (owner request):** a Probes tab (§8.15): the stations heard probing with the SSIDs each asked for and what sloth ties each to, the SSIDs searched for, and the stations probing for the same uncommon SSIDs. sloth.db only, nothing stored; Monitor's and Hybrid's. | §8.8's "Probe clients" line is the WiFi tab's and stays |
 
 # sloth web UI: specification
 
@@ -297,6 +298,9 @@ All routes are `GET`. Any other method returns `405`. Responses are JSON unless 
 | `/api/aprs/tracks?hours=` | the Radar tab's APRS entities from sloth.db's `aprs_packets` over 1..24 h: stations and, by name, objects and items, each with its newest packet's time, newest position, motion, status, comment and a moving one's trail (≤ 48 points) (2026-11-06); Monitor's and Hybrid's |
 | `/api/radar` | the Radar tab's Wi-Fi and BLE distance-band census: totals, the rows without an estimate, per band the count and eight strongest rows, and `devs`, each family's 50 most recently heard rows with an estimate (metres, band, trend) (2026-11-06); Monitor's and Hybrid's, no parameter |
 | `/api/wifi/ssid?ssid=` | one SSID's detail (2026-11-11): its BSSIDs now and once with vendor, channel, security, signal, KARMA score and twin links; the stations associated to it and asking for it; its 24 h presence; the alerts naming it or a BSSID of it. `ssid` is the base64url of its octets, `-` for the hidden SSID; compared with `=`, never a pattern |
+| `/api/probes/clients?days=&sort=&limit=&offset=` | the Probes tab's stations (2026-11-11): each MAC of `probe_clients` or `pnl_clients` last seen in the window with its named SSIDs, frames and directed probes, signal, presence strip, and what it is tied to (a `devices` row, an association, a `seqnum_correlations` sibling) |
+| `/api/probes/ssids?days=&sort=&limit=&offset=` | the SSIDs asked for by name in the window: stations asking, how many randomised, the APs beaconing it, first and last seen |
+| `/api/probes/shared?mac=&days=&min=`, `/api/probes/groups?days=&min=` | the stations whose named SSIDs overlap `mac`'s, ranked by `sum of w over the shared / sum of w over either's`, `w(s) = ln(N / df(s))`, on at least `min` shared uncommon SSIDs; and the groups such pairs form |
 | `/events` | SSE stream (see below) |
 
 ### 7.1 SSE events
@@ -497,6 +501,28 @@ Owner request: a master "radar / CIC" view. One half-dome centred on the sensor,
 
 **Caption (R9)**: the sources and their windows; the position's source and age; "range log 0.3 m–300 km; height is true elevation angle"; each family's placed and unplaced counts; the devices shown of those with an estimate; "N Wi-Fi, M BLE without a distance estimate"; "distance from signal strength is an estimate; a ring is where the device may be, not where it is". R12 is waived for this view by the ruling in the table above; the glyph-set rules it does meet are R1, R8, R9 and R10. Full description: `web/README.md` (Radar).
 
+### 8.15 View: Probes (added 2026-11-11)
+
+**Purpose**: who is searching for which networks, what each searcher is tied to, and which searchers ask for the same uncommon networks.
+
+**Sources**: sloth.db only (`probe_clients`, `pnl_clients`, `pnl_ssids`, `assocs`, `seqnum_correlations`, `devices`, `beacon_aps`) through the existing allow-list; nothing is stored by slothweb, so the view is what sloth.db retains across restarts. Monitor's and Hybrid's; under Local the tab says why it is empty, as BLE does.
+
+**Controls**: the window (24 h, 7 d, 30 d default, all retained) and the minimum of shared uncommon networks (1 to 4, default 2); an order for each table. Kept per browser.
+
+**Panels**, top to bottom:
+
+- **Clients heard probing**: MAC (randomised marked), vendor, the SSIDs asked for by name (each opens the SSID detail, §8.8), their count, frames (all probe requests) and directed probes as the two counters sloth keeps (no wildcard count exists, and a wildcard is never listed as an SSID), signal, G5 over 24 h, last seen, and "tied to": a device row for the same MAC (opens the drawer), an association seen for it, or sloth's sequence-number correlation with another MAC, worded as a hypothesis with its basis. A row is picked by click or Enter.
+- **Probing for the same networks**: the picked station's SSIDs with df and weight, then the stations sharing its uncommon ones, ranked by the similarity; the formula in the caption.
+- **Networks searched for**: SSID, stations asking, randomised among them, whether an AP in sloth.db beacons it, first and last. Designated networks are not marked (not exported by sloth).
+- **Groups**: stations linked by at least the minimum of shared uncommon networks.
+
+**Similarity**: `w(s) = ln(N / df(s))`; `sim(A,B) = sum of w over A and B / sum of w over A or B`; uncommon is `2 <= df <= U`, `U = N / 20` within 2..16. Worded "probe for the same networks", never an owner.
+
+**Caption (R9)**: the tables, the window, n; N of M wherever a cap or a page cut the list; the empty states in words (R5).
+
+**TUI form (R12)**: the PNL view's rows (client, names, OS, PHY). No new glyph: G5 only.
+
+## 9. Search and lookup tools
 ## 9. Search and lookup tools
 
 ### 9.1 Device query language
