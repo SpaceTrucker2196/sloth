@@ -780,13 +780,19 @@ typedef enum {
 /* ── Device risk signals (roadmap #16 phase 4) ─────
  * A bitmask of signals contributing to a device's risk bucket.
  * Each signal is either "observed / not observed"; the score is
- * derived from a weighted sum in device_risk_score(). */
+ * derived in device_risk_score(), where the four anonymity signals
+ * count once between them (#191). */
 #define DEV_RISK_RANDOM_MAC      (1 << 0)  /* locally-administered MAC */
 #define DEV_RISK_UNKNOWN_VENDOR  (1 << 1)  /* OUI not in the embedded table */
 #define DEV_RISK_NO_HOSTNAME     (1 << 2)  /* no DHCP/mDNS/NBNS resolution */
 #define DEV_RISK_PROBE_ONLY      (1 << 3)  /* probe frames, no association */
 #define DEV_RISK_CLEARTEXT_CRED  (1 << 4)  /* cred exposure attributed to us */
 #define DEV_RISK_ALERT_TAGGED    (1 << 5)  /* an alert's match_ip == our ip */
+/* Not a risk and worth no points: one of the host's own interfaces or a
+ * rostered device. Recorded in place of the anonymity signals. */
+#define DEV_RISK_SELF            (1 << 6)
+#define DEV_RISK_ANON_MASK       (DEV_RISK_RANDOM_MAC | DEV_RISK_UNKNOWN_VENDOR \
+                                  | DEV_RISK_NO_HOSTNAME | DEV_RISK_PROBE_ONLY)
 
 typedef enum {
     DEV_RISK_LOW  = 0,

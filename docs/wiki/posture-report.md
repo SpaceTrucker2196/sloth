@@ -36,7 +36,15 @@ announced as written.
   The Markdown report includes a reminder note to the reader.
 - High-risk devices — the `[g]` Devices view is dedup'd to just the
   rows in `HIGH` and `CRIT` buckets, with the risk signal bitmask
-  next to each.
+  next to each. Since #191 a device reaches `HIGH` only on evidence
+  (a cleartext credential, bit 16, or an active alert naming its IP,
+  bit 32) and `CRIT` only on both: the four anonymity bits (1, 2, 4,
+  8 — randomised MAC, unknown vendor, no hostname, probe-only) are one
+  point between them and stop at `MED`, so a passing phone is no
+  longer listed. Bit 64 (`SELF`) marks one of the sensor's own
+  interfaces or a rostered device; it carries no points, so such a
+  device appears here only when it has evidence against it. The
+  table is in `docs/views/devices.md`, "Risk bucket".
 
 ## Cadence
 

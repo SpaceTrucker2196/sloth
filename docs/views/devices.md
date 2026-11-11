@@ -197,29 +197,43 @@ default-credential matching is struck by owner ruling (#145).
 ## Risk bucket
 
 The `Risk` column shows a bucket derived from independently observable
-signals — no ML, no black box. Bucket = weighted sum of signals:
+signals — no ML, no black box. The signals fall in two families (#191).
 
-| Signal | Weight | Meaning |
-|--------|-------:|---------|
-| `RANDOM_MAC`     | 1 | Locally-administered bit set (Apple/Android privacy MAC, monlib randomization) |
-| `UNKNOWN_VENDOR` | 1 | OUI not in the embedded table |
-| `NO_HOSTNAME`    | 1 | No DHCP/mDNS/NBNS hostname resolution |
-| `PROBE_ONLY`     | 1 | Probe frames observed, no beacon/STA association |
-| `CLEARTEXT_CRED` | 3 | This device leaked a credential in the clear (see `[v]` Alerts, `CLEARTEXT_CRED`) |
-| `ALERT_TAGGED`   | 3 | An active alert names this device's IP as its target |
+Four of them say only that the device is **anonymous**, and they are
+near-collinear: a randomised MAC has no OUI and almost never a hostname,
+and a phone passing a passive sensor probes without associating. They
+used to be one point each, which put 97% of a field sensor's devices in
+`HIGH`; they are now **one point between them**, however many are set,
+so anonymity alone is never more than `MED`. The two **evidence**
+signals are three points each.
+
+| Bit | Signal | Points | Meaning |
+|----:|--------|-------:|---------|
+|  1 | `RANDOM_MAC`     | 1 for the family | Locally-administered bit set (Apple/Android privacy MAC, monlib randomization) |
+|  2 | `UNKNOWN_VENDOR` | 〃 | A registered (not locally-administered) OUI that is not in the embedded table. Never set together with `RANDOM_MAC`: a randomised address has no OUI to be unknown |
+|  4 | `NO_HOSTNAME`    | 〃 | No DHCP/mDNS/NBNS hostname resolution |
+|  8 | `PROBE_ONLY`     | 〃 | Probe frames observed, no beacon/STA association |
+| 16 | `CLEARTEXT_CRED` | 3 | This device leaked a credential in the clear (see `[v]` Alerts, `CLEARTEXT_CRED`) |
+| 32 | `ALERT_TAGGED`   | 3 | An active alert names this device's IP as its target |
+| 64 | `SELF`           | 0 | One of the sensor's own interface addresses (#183) or a device on the operator's `--known-mac` roster. Not a risk: it is recorded **in place of** the four anonymity signals, which are never set beside it. The evidence signals still score |
 
 Score → bucket:
 
-| Score | Bucket | Colour |
-|-------|--------|--------|
-| 0     | LOW    | dim |
-| 1–2   | MED    | phosphor-heat 0.4 |
-| 3–4   | HIGH   | phosphor-heat 0.7 |
-| 5+    | CRIT   | phosphor-heat 1.0 |
+| Score | Bucket | Reached by | Colour |
+|-------|--------|------------|--------|
+| 0     | LOW    | nothing, or `SELF` alone | dim |
+| 1–2   | MED    | anonymity only | phosphor-heat 0.4 |
+| 3–4   | HIGH   | one evidence signal, anonymous or not | phosphor-heat 0.7 |
+| 5+    | CRIT   | both evidence signals | phosphor-heat 1.0 |
+
+The sensor's own adapter is the case `SELF` exists for: its background
+scans are heard while its association sits on another channel, so it
+read as probe-only with no hostname and was `HIGH` on its own host.
 
 The signal bitmask is exported in the JSONL `risk_signals` field so
 external consumers can reproduce the score and show a per-signal
-breakdown.
+breakdown. A consumer that summed bits 1-8 individually must fold them
+to one point, and must treat bit 64 as zero points.
 
 ## What's normal
 

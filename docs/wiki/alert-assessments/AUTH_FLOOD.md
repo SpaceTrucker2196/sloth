@@ -1,7 +1,7 @@
 ---
 type: AUTH_FLOOD
 technique: T1499
-rule_file: src/alerts/rules_wifi_mgmt.c:118 rule_auth_flood()
+rule_file: src/alerts/rules_wifi_mgmt.c:125 rule_auth_flood()
 count_semantics: per evaluation tick, per BSSID key, while a flood stands. fire_ev() bumps count every poll (>= 4/s; POLL_MS 250 is the longest wait) in which the busiest BSSID's in-window 802.11 Authentication-frame total is still >= threshold; one increment is one poll, NOT one auth frame. The measurement (auth_flood_bssid) counts every frame in the 512-slot AUTH_RING over the window, retransmissions included - nothing dedupes the Retry bit or sequence number - so the detail's "N auth frames" is a per-frame count while the alert's own count is per tick
 severity_assessment: agree - WARN off your network, CRIT on a --my-bssid BSSID, matches the impact: an association-table exhaustion DoS only becomes critical when it is filling an AP the operator owns
 false_positive_risk: low - 30 auth frames to one BSSID in 5 s is far above any roaming or reconnect rate; the realistic benign trip is a broken client reauth-looping, and because retransmissions count, a weak-signal client retrying hard can inflate one BSSID's tally

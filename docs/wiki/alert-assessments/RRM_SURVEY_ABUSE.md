@@ -1,7 +1,7 @@
 ---
 type: RRM_SURVEY_ABUSE
 technique: T1595.002
-rule_file: src/alerts/rules_wifi_mgmt.c:503 rule_rrm_survey_abuse()
+rule_file: src/alerts/rules_wifi_mgmt.c:510 rule_rrm_survey_abuse()
 count_semantics: per tick - one increment per alerts_update() pass (default poll 250 ms) in which the busiest (BSSID, STA) pair - last heard inside the trailing 300 s, with a cumulative targeted_reqs >= 6 over the life of its table slot (the counter is not windowed) - still qualifies as fishing or outsider-on-my-net; fire() bumps evaluations/count on each re-assertion (engine.c:478-479). Not per Beacon Request. The request count itself (the slot's cumulative targeted_reqs, printed against the 300 s window label) is carried in the detail, not in count.
 severity_assessment: agree - WARN for a fishing asker, CRIT when an outsider surveys a --my-ssid network or the asker is a known twin; the rule refuses to fire on rate alone and keys on the "asks about an SSID it never beaconed" discriminator, which is the right call.
 false_positive_risk: medium - a legitimate controller-managed deployment whose VAP/SSID layout sloth has only partly observed can look like an asker beaconing one SSID while surveying for another, especially under --hop where the AP inventory is a sample.

@@ -1,7 +1,7 @@
 ---
 type: PROBE_FLOOD
 technique: T1595
-rule_file: src/alerts/rules_wifi_mgmt.c:796 (rule_probe_flood); window detector src/flood_window.c:55 (probe_flood_note)
+rule_file: src/alerts/rules_wifi_mgmt.c:803 (rule_probe_flood); window detector src/flood_window.c:55 (probe_flood_note)
 count_semantics: per poll tick (default 250 ms) per transmitter address (TA) whose `flood` flag is set; the flag latches when >= probe.flood_frames (30) probe-request frames from that TA fall in some probe.flood_window_s (5 s) sliding window, and holds for PROBE_FLOOD_HOLD_SECS = 10 s after the threshold was last met. `count` aliases `evaluations` (engine.c:478-479). Not per probe frame - the frame tallies are in the detail (`sent N probes in Ws`)
 severity_assessment: agree - LOW. A probe-happy radio is recon noise; the rule's own comment puts it in the same tier as port-scan, and notes the real harm is PNL leakage, not the probing
 false_positive_risk: medium - a stuck/looping client DoSes itself with the same burst, and the TA is as-claimed (randomised on modern phones, trivially set by a tool), so the alert names an address, not a device
