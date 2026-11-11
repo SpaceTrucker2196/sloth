@@ -1,7 +1,7 @@
 ---
 type: DEAUTH_FLOOD
 technique: T1498.001
-rule_file: src/alerts/rules_wifi_mgmt.c:57 (rule_deauth_flood)
+rule_file: src/alerts/rules_wifi_mgmt.c:64 (rule_deauth_flood)
 count_semantics: per poll tick (default 250 ms) while the (BSSID, victim) aggregate's `flood` flag is set - the flag holds for DEAUTH_FLOOD_HOLD_SECS = 10 s after the last window that met the threshold; not per frame (the frame tallies are in the detail as `observed N frames, peak P in Ws`)
 severity_assessment: agree - WARN at another network's BSSID, CRIT at a `--my-bssid` network is the right split; the rule honestly states it cannot prove sender or effect
 false_positive_risk: medium - a real AP or WLAN controller also emits deauth bursts (rogue containment, band-steering, mass disconnect on reconfig); retries are already excluded, which removes the main innocent cause

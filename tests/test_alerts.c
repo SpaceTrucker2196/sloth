@@ -2117,6 +2117,26 @@ static void test_recurring_transit_self_device_demoted_and_tagged(void) {
     ownership_clear();
 }
 
+/* A device on the operator's --known-mac roster is not the sensor: the
+ * tag would say "the sensor's own radio" about somebody's laptop. The
+ * same passes from a rostered address are WARN and untagged. Seen red
+ * with the rule asking ownership_is_own_device(). */
+static void test_recurring_transit_rostered_device_is_not_self(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x24,0x41,0x8c,0x30,0x97,0xb1};
+    ASSERT(ownership_add_known_mac("24:41:8c:30:97:b1"));
+    seed_transit(&s, mac, TRANSIT_RECUR_THRESH, time(NULL));
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+        ASSERT(strstr(s.alerts[idx].detail, "self") == NULL);
+    }
+    ownership_clear();
+}
+
 /* ── Block-Ack paralysis — Bl0ck (#70) ─────────────────────
  *
  * No test drove rule_blockack_attack() through alerts_update() before
@@ -2184,6 +2204,31 @@ static void test_blockack_attack_self_device_demoted_and_tagged(void) {
     if (i >= 0) {
         ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_LOW);
         ASSERT(strstr(s.alerts[i].detail, "self") != NULL);
+    }
+    ctrl_clear(); ownership_clear();
+}
+
+/* The station whose window is being paralysed is on the operator's
+ * roster, not one of the sensor's interfaces: an attack on a device the
+ * operator named stays WARN and is not called "self". Seen red with the
+ * rule asking ownership_is_own_device(). */
+static void test_blockack_attack_rostered_device_is_not_self(void) {
+    alerts_clear(); ownership_clear(); ctrl_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x02,0x11,0x22,0x33,0x44,0x77};
+    static const uint8_t sta[6]   = {0x24,0x41,0x8c,0x30,0x97,0xb1};
+    ASSERT(ownership_add_known_mac("24:41:8c:30:97:b1"));
+    time_t base = time(NULL);
+    uint8_t f[20];
+    ctrl_observe(f, build_bar_frame(f, bssid, sta, 3, 1000), 6, base);
+    ctrl_observe(f, build_bar_frame(f, bssid, sta, 3,
+                 (uint16_t)(1000 + BAR_SUSPICIOUS_JUMP + 1)), 6, base + 1);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_BLOCKACK_ATTACK);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT(strstr(s.alerts[i].detail, "self") == NULL);
     }
     ctrl_clear(); ownership_clear();
 }
@@ -9139,6 +9184,38 @@ static void test_pm_forge_self_device_on_my_bssid_is_warn_not_crit(void) {
     pm_forge_clear(); beacon_clear(); ownership_clear();
 }
 
+/* The framed station is on the operator's --known-mac roster and the
+ * BSSID is designated: the operator's own laptop under a Framing Frames
+ * attack on the operator's own network. That is the CRIT the rule is
+ * for, so the roster neither demotes it nor tags it "self"; only one of
+ * the sensor's own interface addresses does. Seen red (WARN, tagged)
+ * with the rule asking ownership_is_own_device(). */
+static void test_pm_forge_rostered_device_is_not_self(void) {
+    alerts_clear(); ownership_clear(); pm_forge_clear(); beacon_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0xaa};
+    static const uint8_t sta[6]   = {0x24,0x41,0x8c,0x30,0x97,0xb1};
+    beacon_record(bssid, "Net", -50, 6, "WPA2", 100, NULL);
+    ASSERT(ownership_add_bssid("00:11:22:33:44:aa"));
+    ASSERT(ownership_add_known_mac("24:41:8c:30:97:b1"));
+
+    uint8_t f[32]; int len;
+    len = pmforge_frame(f, 0xC, 1, bssid, sta, 0);
+    pm_forge_observe(f, len, 6000, 0);
+    len = pmforge_frame(f, 0x8, 0, bssid, sta, 5);
+    pm_forge_observe(f, len, 6000, 50000);
+
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_PM_FORGE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "self") == NULL);
+        ASSERT(strstr(s.alerts[i].detail, "YOUR network") != NULL);
+    }
+    pm_forge_clear(); beacon_clear(); ownership_clear();
+}
+
 /* ── Queued-frame release — Framing Frames CVE-2022-47522 (#107 shape B) ── */
 
 /* AP -> STA data frame: ToDS=0, FromDS=1, addr1=DA addr2=BSSID
@@ -11179,6 +11256,7 @@ void run_alerts_tests(void) {
     TEST_SUITE("alerts: recurring transit (#54)");
     RUN_TEST(test_recurring_transit_fires_at_threshold);
     RUN_TEST(test_recurring_transit_self_device_demoted_and_tagged);
+    RUN_TEST(test_recurring_transit_rostered_device_is_not_self);
     RUN_TEST(test_two_passes_do_not_fire);
     RUN_TEST(test_stale_passes_do_not_fire);
     RUN_TEST(test_no_transits_no_fire);
@@ -11186,6 +11264,7 @@ void run_alerts_tests(void) {
     TEST_SUITE("alerts: Block-Ack paralysis / Bl0ck (#70)");
     RUN_TEST(test_blockack_attack_fires_warn_without_ownership);
     RUN_TEST(test_blockack_attack_self_device_demoted_and_tagged);
+    RUN_TEST(test_blockack_attack_rostered_device_is_not_self);
 
     TEST_SUITE("alerts: unknown device on my network (#55)");
     RUN_TEST(test_unknown_device_on_my_network_fires);
@@ -11449,6 +11528,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_pm_forge_quiet_with_no_contradiction);
     RUN_TEST(test_pm_forge_self_device_demoted_and_tagged);
     RUN_TEST(test_pm_forge_self_device_on_my_bssid_is_warn_not_crit);
+    RUN_TEST(test_pm_forge_rostered_device_is_not_self);
 
     TEST_SUITE("alerts: queued-frame release (#107 shape B)");
     RUN_TEST(test_queue_evict_ages_out_of_the_report_window);

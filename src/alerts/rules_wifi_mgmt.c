@@ -37,10 +37,17 @@ SLOTH_STATIC_ASSERT(QUEUE_EVICT_EVIDENCE_IDS <= ALERT_EVIDENCE_IDS,
 
 /* #183 item 2: a rule with no roster exoneration still evaluates when
  * the MAC on one side of the finding turns out to be the sensor's own
- * (ownership_is_own_device(), #183 item 1) — a compromised sensor is
- * still worth knowing about — but drops one severity step and says so
- * in the detail, so the operator reads "the sensor" rather than
- * "an attacker". One step only: CRIT->WARN->LOW, floor at LOW. */
+ * — a compromised sensor is still worth knowing about — but drops one
+ * severity step and says so in the detail, so the operator reads "the
+ * sensor" rather than "an attacker". One step only: CRIT->WARN->LOW,
+ * floor at LOW.
+ *
+ * The callers ask ownership_is_self_mac(), not ownership_is_own_device():
+ * the tag says "the sensor's own radio", which is false of a device on
+ * the operator's --known-mac roster, and in PM_FORGE and BLOCKACK_ATTACK
+ * the station named is the one being attacked. An attack on a laptop the
+ * operator wrote down is the finding at full severity, the same reason
+ * BTM_ABUSE and PEAP_NO_SERVER_CERT keep the two rosters apart. */
 static alert_sev_t sev_demote_one(alert_sev_t sev) {
     return sev > ALERT_SEV_LOW ? (alert_sev_t)(sev - 1) : ALERT_SEV_LOW;
 }
@@ -367,7 +374,7 @@ void rule_blockack_attack(const sloth_state_t *s, time_t now) {
     if (bar_worst_offender(now, 300, &b) <= 0) return;
 
     int mine = ownership_is_my_bssid(b.bssid);
-    int self = ownership_is_own_device(b.sta);
+    int self = ownership_is_self_mac(b.sta);
 
     /* Is the receiving side visibly struggling? rf_quality tracks the
      * retry ratio per channel; a stalled Block-Ack window shows up
@@ -1046,7 +1053,7 @@ void rule_recurring_transit(const sloth_state_t *s, time_t now) {
 
         char mac_buf[20];
         mac_to_str(d->mac, mac_buf, sizeof(mac_buf));
-        int self = ownership_is_own_device(d->mac);
+        int self = ownership_is_self_mac(d->mac);
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
         snprintf(key, sizeof(key), "transit:%s", mac_buf);
@@ -1185,7 +1192,7 @@ void rule_pm_forge(const sloth_state_t *s, time_t now) {
         mac_to_str(tbl[i].bssid, bss, sizeof(bss));
         mac_to_str(tbl[i].sta,   sta, sizeof(sta));
         int mine = ownership_is_my_bssid(tbl[i].bssid);
-        int self = ownership_is_own_device(tbl[i].sta);
+        int self = ownership_is_self_mac(tbl[i].sta);
 
         char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
         snprintf(key, sizeof(key), "pmforge:%s", sta);
