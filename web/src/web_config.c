@@ -270,6 +270,7 @@ void web_usage(FILE *out) {
         "                [--store PATH] [--web-max-keys N] [--web-max-mb N]\n"
         "                [--web-retain-days N] [--sloth-db PATH]\n"
         "                [--web-allow-sql] [--web-read-only]\n"
+        "                [--web-agent-secret PATH]\n"
         "                [--web-assessments DIR] [--pcap-dir DIR]...\n"
         "                [--web-serve-evidence-pcap[=remote]]\n"
         "                [--peer NAME=URL]... [--peer-interval-secs N]\n"
@@ -323,6 +324,15 @@ void web_usage(FILE *out) {
         "                        admitted peer may POST triage and TACDB\n"
         "                        changes, which write slothweb's own store\n"
         "                        only; the allow list is the only gate.\n"
+        "  --web-agent-secret PATH\n"
+        "                        let an agent on this machine write through\n"
+        "                        slothweb-mcp: a secret drawn at start is\n"
+        "                        written to PATH (0600, replaced every run,\n"
+        "                        removed at exit). A loopback POST carrying\n"
+        "                        it in X-Slothweb-Agent, with no Origin, may\n"
+        "                        write triage, notes and links, recorded via\n"
+        "                        agent under the name it gives. Unset: no\n"
+        "                        such path; a request with the header is 403.\n"
         "  --web-assessments DIR where \"follow recommended\" reads each alert\n"
         "                        type's <TYPE>.md front matter (the research\n"
         "                        assessments). Unset, or no such directory:\n"
@@ -398,6 +408,17 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
             c->allow_sql = 1;
         } else if (!strcmp(a, "--web-read-only")) {
             c->read_only = 1;
+        } else if (!strcmp(a, "--web-agent-secret")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (!v[0] || strlen(v) >= sizeof(c->agent_secret_path) - 16) {
+                fprintf(err, "slothweb: --web-agent-secret: empty or too long a path\n");
+                return -1;
+            }
+            snprintf(c->agent_secret_path, sizeof(c->agent_secret_path), "%s", v);
         } else if (!strcmp(a, "--web-assessments")) {
             if (i + 1 >= argc) {
                 fprintf(err, "slothweb: %s needs an argument\n", a);

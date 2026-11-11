@@ -2,6 +2,7 @@
  * assessment reader and the routes' dispatch (web_frrs.h). The record
  * is web_frrs_report.c's, the TACDB web_frrs_tacdb.c's. */
 #include "web_frrs_int.h"
+#include "web_agent.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -813,19 +814,32 @@ int web_frrs_gate(web_frrs_t *f, const web_req_t *rq, long long now_ms,
                   const char **why, char *extra, size_t extracap) {
     extra[0] = '\0';
     if (!f) { *why = "no_store"; return 503; }
-    if (!web_frrs_origin_ok(rq)) {
+    /* Whose write: a request with the agent header is held to the
+     * agent's rule and no other, and one without it to the browser's,
+     * unchanged (web_agent.h). A refused agent header is never tried
+     * again as a browser's. */
+    int agent = web_agent_check(f->agent_secret, rq, why);
+    if (agent < 0) {
+        stat_inc(f, &f->st.refused_agent);
+        return 403;
+    }
+    if (!agent && !web_frrs_origin_ok(rq)) {
         stat_inc(f, &f->st.refused_origin);
         *why = "bad_origin";
         return 403;
     }
-    if (rq->fetch_site_long ||
-        (rq->fetch_site[0] && strcmp(rq->fetch_site, "same-origin") && strcmp(rq->fetch_site, "none"))) {
+    if (!agent && (rq->fetch_site_long ||
+        (rq->fetch_site[0] && strcmp(rq->fetch_site, "same-origin") && strcmp(rq->fetch_site, "none")))) {
         stat_inc(f, &f->st.refused_origin);
         *why = "bad_fetch_site";
         return 403;
     }
     int cost = !strcmp(rq->path, "/api/frrs/import") ? WEB_FRRS_IMPORT_COST : 1;
-    if (!web_frrs_rate_admit(f, rq->peer[0] ? rq->peer : "?", now_ms, cost)) {
+    /* An agent's writes draw on a bucket of their own for the peer: it
+     * is limited as any peer is and cannot spend the operator's. */
+    char who[WEB_PEER_MAX];
+    snprintf(who, sizeof(who), "%s%.45s", agent ? "a/" : "", rq->peer[0] ? rq->peer : "?");
+    if (!web_frrs_rate_admit(f, who, now_ms, cost)) {
         stat_inc(f, &f->st.rate_limited);
         snprintf(extra, extracap, "Retry-After: %d\r\n", 60 * cost / WEB_FRRS_RATE_PER_MIN + 1);
         *why = "rate_limited";
@@ -2462,6 +2476,16 @@ int web_frrs_route(const web_m4_t *m, web_live_t *live, const web_req_t *rq,
     }
     if (!f || !f->wr) return frrs_error(503, "no_store", NULL, body, cap, len, status);
     if (!f->writes) return frrs_error(405, "read_only", NULL, body, cap, len, status);
+    /* How the row will be marked, from what the request proved and
+     * never from what its body says (web_agent.h). The gate ran the
+     * same check; here it decides via. An agent writes triage, notes
+     * and links: the TACDB and the import are the operator's. */
+    const char *awhy = NULL;
+    int agent = web_agent_check(f->agent_secret, rq, &awhy);
+    if (agent < 0) return frrs_error(403, awhy, NULL, body, cap, len, status);
+    if (agent && strcmp(rq->path, "/api/frrs/triage") && strcmp(rq->path, "/api/frrs/relate") &&
+        strcmp(rq->path, "/api/frrs/note"))
+        return frrs_error(403, "agent_path", NULL, body, cap, len, status);
     if (!strcmp(rq->path, "/api/frrs/import")) {
         int rc = frrs_import(m, rq, now_s, body, cap, len, status);
         if (rc == 0 && *status == 200) stat_inc(f, &f->st.imports);
@@ -2479,7 +2503,14 @@ int web_frrs_route(const web_m4_t *m, web_live_t *live, const web_req_t *rq,
         stat_inc(f, &f->st.refused_body);
         return frrs_error(400, "bad_body", NULL, body, cap, len, status);
     }
-    int rc, via = WEB_TRI_VIA_MANUAL;
+    int rc, via = agent ? WEB_TRI_VIA_AGENT : WEB_TRI_VIA_MANUAL;
+    /* An agent's row always says which agent. */
+    const char *aby = agent ? web_jl_str(r, "by") : NULL;
+    if (agent && (!aby || !aby[0])) {
+        free(r);
+        stat_inc(f, &f->st.refused_body);
+        return frrs_error(400, "missing_by", "by", body, cap, len, status);
+    }
     if (!strcmp(rq->path, "/api/frrs/triage"))
         rc = post_triage(m, live, r, rq->peer, via, now_s, body, cap, len, status);
     else if (!strcmp(rq->path, "/api/frrs/relate"))
@@ -2491,7 +2522,12 @@ int web_frrs_route(const web_m4_t *m, web_live_t *live, const web_req_t *rq,
     free(r);
     if (rc == 0 && *status >= 400 && *status < 500 && *status != 404 && *status != 409)
         stat_inc(f, &f->st.refused_body);
+    if (rc == 0 && *status == 200 && agent) stat_inc(f, &f->st.agent_writes);
     return rc;
+}
+
+void web_frrs_set_agent(web_frrs_t *f, const char *secret) {
+    snprintf(f->agent_secret, sizeof(f->agent_secret), "%s", secret ? secret : "");
 }
 
 /* ── open, close, health ────────────────────────────────────────────── */
@@ -2599,6 +2635,13 @@ void web_frrs_health(web_frrs_t *f, web_jw_t *w) {
     web_jw_raw(w, ",\"added\":");     web_jw_int(w, (long long)s.notes_added);
     web_jw_raw(w, ",\"retracted\":"); web_jw_int(w, (long long)s.notes_retracted);
     web_jw_raw(w, ",\"folded\":");    web_jw_int(w, (long long)s.notes_folded);
+    web_jw_raw(w, "}");
+    /* The agent's path (web_agent.h): whether a secret is set, never
+     * the secret; its writes and its refusals. */
+    web_jw_raw(w, ",\"agent\":{\"enabled\":");
+    web_jw_raw(w, f->agent_secret[0] ? "true" : "false");
+    web_jw_raw(w, ",\"writes\":");    web_jw_int(w, (long long)s.agent_writes);
+    web_jw_raw(w, ",\"refused\":");   web_jw_int(w, (long long)s.refused_agent);
     web_jw_raw(w, "}");
     web_jw_raw(w, "}");
 }

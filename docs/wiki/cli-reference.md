@@ -26,7 +26,7 @@ only that each flag and key is here.
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-11-10 (slothweb's `--peer`, `--peer-interval-secs`, `--peer-allow-outside-tailnet`, [[fleet]], #192 F1); 2026-11-09 (`--adsb beast://`, the decoder's Beast output, #186); 2026-11-09 (`--adsb sbs://`, the decoder's SBS output, #186); 2026-11-08 (`adsb.emerg_hold_s`, #186); 2026-11-07 (the `^` ADS-B view key, [[adsb]]); 2026-11-05 (`--aprs SPEC`, [[aprs]], and its exit-2 refusals); 2026-11-05 (`--adsb SPEC`, [[adsb]], and its exit-2 refusals); 2026-11-03 (the twelve `gnss.*` knobs of the four GNSS rules); 2026-11-02 (the `#` GNSS view key, [[gnss]]); 2026-11-02 (slothweb's `--web-serve-evidence-pcap[=remote]`); 2026-10-27 (a pointer to slothweb's flags, `--pcap-dir` among them); 2026-10-27 (`--location`, `--gps`, `--gps-allow-remote`, `--gps-baud`, the `gps.*` knobs, the exit-2 refusals); 2026-10-26 (`make install-service` writes `/etc/default/sloth` only where absent); 2026-10-26 (`sloth-ble-scan` review: the bind wait, `--down` on an unregistered hciN, exit 1 causes); 2026-10-26 (`sloth-ble-scan`, its `--down` and `--delay`, and the units `make install-service` adds); 2026-10-26 (the five `rf.*` distance knobs); 2026-10-26 (#170: `--db-compact-alerts`, and its review: the un-checkpointed SRC refusal, the immutable read, DST's owner); 2026-10-26 (#166: `pcap.retain_days`, the `--pcap-dir` age sweep); 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
+**Last updated**: 2026-11-11 (slothweb's `--web-agent-secret` and the `slothweb-mcp` binary's flags, [[slothweb-mcp]]); 2026-11-10 (slothweb's `--peer`, `--peer-interval-secs`, `--peer-allow-outside-tailnet`, [[fleet]], #192 F1); 2026-11-09 (`--adsb beast://`, the decoder's Beast output, #186); 2026-11-09 (`--adsb sbs://`, the decoder's SBS output, #186); 2026-11-08 (`adsb.emerg_hold_s`, #186); 2026-11-07 (the `^` ADS-B view key, [[adsb]]); 2026-11-05 (`--aprs SPEC`, [[aprs]], and its exit-2 refusals); 2026-11-05 (`--adsb SPEC`, [[adsb]], and its exit-2 refusals); 2026-11-03 (the twelve `gnss.*` knobs of the four GNSS rules); 2026-11-02 (the `#` GNSS view key, [[gnss]]); 2026-11-02 (slothweb's `--web-serve-evidence-pcap[=remote]`); 2026-10-27 (a pointer to slothweb's flags, `--pcap-dir` among them); 2026-10-27 (`--location`, `--gps`, `--gps-allow-remote`, `--gps-baud`, the `gps.*` knobs, the exit-2 refusals); 2026-10-26 (`make install-service` writes `/etc/default/sloth` only where absent); 2026-10-26 (`sloth-ble-scan` review: the bind wait, `--down` on an unregistered hciN, exit 1 causes); 2026-10-26 (`sloth-ble-scan`, its `--down` and `--delay`, and the units `make install-service` adds); 2026-10-26 (the five `rf.*` distance knobs); 2026-10-26 (#170: `--db-compact-alerts`, and its review: the un-checkpointed SRC refusal, the immutable read, DST's owner); 2026-10-26 (#166: `pcap.retain_days`, the `--pcap-dir` age sweep); 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
 
 ---
 
@@ -534,6 +534,29 @@ Since 2026-11-10 (#192 F1, [[fleet]]) slothweb serves
 operator's other slothwebs every `--peer-interval-secs` (default 60)
 into its own store; a peer outside the tailnet, or any under
 `--strict`, exits `2`.
+Since 2026-11-11 `--web-agent-secret PATH` lets an agent on the same
+machine write through `slothweb-mcp`: slothweb writes a per-run secret
+to `PATH` (`0600`, replaced every start, removed at exit; a path
+holding anything but its own private file exits `1`), and a loopback
+POST carrying it may write triage, notes and links, recorded `via:
+agent` ([[slothweb-mcp]] section 4).
+
+### slothweb-mcp
+
+`make web-mcp` builds `slothweb-mcp`, an MCP server (stdio,
+newline-delimited JSON-RPC) that is a client of slothweb's HTTP API
+on loopback ([[slothweb-mcp]]). Not in `all`, `web` or the install.
+
+| Flag | Meaning |
+|---|---|
+| `--url URL` | slothweb's address, `http://` and a literal IPv4 or `[IPv6]` address with an optional port; default `http://127.0.0.1:8770`. No name is resolved. Not loopback: exit `2` unless `--allow-remote` |
+| `--allow-remote` | read a slothweb on another host (in the clear: slothweb has no TLS). Writes still fail: the agent secret is taken from loopback peers only |
+| `--agent NAME` | the name writes are recorded under, 1..32 bytes of UTF-8 with no control characters (exit `2` otherwise). Without it the write tools refuse |
+| `--secret-file PATH` | the file `slothweb --web-agent-secret PATH` wrote; read at each write; must be private to the user running it. Without it the write tools refuse |
+| `--read-only` | no write tools: not listed, not callable |
+| `--help`, `-h` | usage, on stderr |
+
+An unknown or incomplete argument exits `2`.
 
 ## Build variants (Makefile)
 

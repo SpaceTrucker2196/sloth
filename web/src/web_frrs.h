@@ -249,6 +249,7 @@ typedef struct {
     unsigned long imports, exports;
     unsigned long links_made, links_removed;
     unsigned long notes_added, notes_retracted, notes_folded;
+    unsigned long refused_agent, agent_writes;
 } web_frrs_stats_t;
 
 struct web_frrs_led;
@@ -261,6 +262,8 @@ typedef struct web_frrs {
     long long            triage_cap;  /* WEB_FRRS_TRIAGE_CAP; the tests lower it */
     long long            note_cap;    /* WEB_NOTE_CAP; the tests lower it */
     int                  note_per;    /* WEB_NOTE_PER; the tests lower it */
+    /* The run's agent secret (web_agent.h), "" none: no agent path. */
+    char                 agent_secret[65];
     unsigned             nonce;       /* the suggestion tokens' */
     web_frrs_bucket_t    bucket[WEB_FRRS_PEERS];
     pthread_mutex_t      lmu;         /* the ledger's and the stats' */
@@ -343,8 +346,9 @@ int  web_frrs_route(const web_m4_t *m, web_live_t *live, const web_req_t *rq,
                     char **big, size_t *biglen);
 
 /* The write path's header checks (§5.3 steps 4-6), before a body byte
- * is read: Origin, Sec-Fetch-Site, the peer's token bucket, the
- * Content-Type. 0 to go on, else the status with the reason word in why
+ * is read: whose write it is (web_agent.h: the browser's, held to
+ * Origin and Sec-Fetch-Site, or the agent's, held to the run's secret),
+ * the peer's token bucket (an agent's its own), the Content-Type. 0 to go on, else the status with the reason word in why
  * (and "Retry-After: N\r\n" in extra for a 429). f may be NULL (no
  * module: 503 no_store). Counted. */
 int  web_frrs_gate(web_frrs_t *f, const web_req_t *rq, long long now_ms,
@@ -352,6 +356,10 @@ int  web_frrs_gate(web_frrs_t *f, const web_req_t *rq, long long now_ms,
 /* A refusal's JSON answer, headers and all, into out. Its length. */
 size_t web_frrs_refusal(int status, const char *why, const char *extra,
                         char *out, size_t outsz);
+
+/* The run's agent secret, from --web-agent-secret (web_agent.h); NULL
+ * or "" for none. Before the server runs. */
+void web_frrs_set_agent(web_frrs_t *f, const char *secret);
 
 /* The triage of one alert for the alert routes' triage= join. c is an
  * open sloth.db connection or NULL. 1 with *out filled, 0 untriaged

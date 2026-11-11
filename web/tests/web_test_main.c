@@ -128,6 +128,7 @@ int main(void) {
     SUITE(run_frrs_tests);
     SUITE(run_notes_tests);
     SUITE(run_subnotes_tests);
+    SUITE(run_mcp_tests);
     SUITE(run_ble_tests);
     SUITE(run_gnss_tests);
     SUITE(run_sysstat_tests);

@@ -322,6 +322,7 @@ and the page says why in each view that needs it):
 | `PATH: SQLITE_DBCONFIG_DEFENSIVE refused`, `PATH: query_only: ERR` | The SQLite library lacks what slothweb needs: 3.31 or newer. |
 | `no --sloth-db`, `slothweb was built without SQLite; no sloth.db` | The reason `/api/health` gives (`db_error`) when there is no sloth.db to read. |
 | `--web-assessments: empty or too long a path`, `--web-assessments PATH: not a directory` | Give the directory holding the research assessments (`<TYPE>.md` with front matter), or leave the flag out: "follow recommended" then says "no recommendation yet". A path that is not there is accepted and means the same (`slothweb: follow recommended: PATH: no such directory, no recommendation yet`); `make install` puts them in `$(PREFIX)/share/sloth/alert-assessments`. |
+| `--web-agent-secret: empty or too long a path`, `--web-agent-secret PATH: exists and is not a private regular file of this user (mode 0600, one link); refused, left as it is`, `--web-agent-secret: no random bytes from /dev/urandom`, `--web-agent-secret PATH: ERR` | The file slothweb writes the run's agent secret to ([Writes by an agent](#writes-by-an-agent)). Name a path in a directory slothweb's user can write (its state directory); slothweb replaces its own earlier file there and will not write over anything else. Exit `1` for all but the first. |
 | `triage: ERR`, `the store is not open`, `PATH: changed while it was being opened; refused` | The triage and TACDB writer (a third connection to the store, [Triage and the FRRS record](#triage-and-the-frrs-record)) could not open what the store thread had just opened: the file was replaced or locked in between. Start again; exit 1. |
 
 **The alert pcaps** (not fatal; each directory is opened afresh per
@@ -344,7 +345,9 @@ the SIG CSVs in web/data/btsig/` for a `WEB_BTSIG_DIR` build without
 them), `time series in`, `baselines (N restored)`, `store schema vN
 migrated to vN`, `triage and TACDB writes on` (or `off (no store)`),
 `--web-read-only: no write route; every POST is 405`, `follow
-recommended: ...`, `fleet: /api/fleet/export served to the allow list;
+recommended: ...`, `agent writes: a loopback POST carrying the secret in
+PATH writes triage, notes and links, recorded via agent` (with
+`--web-agent-secret`), `fleet: /api/fleet/export served to the allow list;
 no --peer, nothing pulled` or one `fleet: pulling NAME from
 URL/api/fleet/export every N s into PATH (tailnet)` per `--peer`, and in
 a `WITH_SQLITE=0` build:
@@ -391,7 +394,11 @@ Read this before exposing slothweb to anything but your own loopback.
   them and edit the TACDB. There
   are no accounts and no token; the allow list is the only gate. A
   triage row records the peer's address and whatever name the operator
-  typed ("by"): neither is an identity.
+  typed ("by"): neither is an identity. The one credential slothweb
+  has is the agent secret of `--web-agent-secret`
+  ([Writes by an agent](#writes-by-an-agent)): a file only slothweb's
+  user reads, accepted from loopback only, which marks a write as an
+  agent's and opens nothing the page cannot already do.
 - **No TLS.** Use an SSH tunnel (or a VPN you already trust) for
   another host.
 - **The Host check.** A request is answered only when its `Host` is
@@ -471,6 +478,7 @@ milestone (W0, M0 to M6; tracker #102).
 | `--web-retain-days N` | Days of 1 min buckets kept, 1..400, default 30. |
 | `--sloth-db PATH` | sloth's own database (`sloth --db`), read-only (below). Absent: `/api/devices` is a `503` `no_sloth_db`, the drawer and Lookup answer from the stream and the vendor table, A2 runs on the stream alone, and the page says so. A path that is not there yet, or a file refused, is not fatal: every request opens it afresh. Needs a `WITH_SQLITE` build; the same path as `--store` is refused. |
 | `--web-allow-sql` | The SQL box (M5, below): `/api/query` and `/api/recipes`, and the box on the History view. Off by default; without it both paths are `404` and the page never draws the box. Needs `--sloth-db` and a `WITH_SQLITE` build. `--strict` refuses it (exit 2). With `--web-allow-remote` it is announced on stderr, naming what every admitted peer can then read. |
+| `--web-agent-secret PATH` | Let an agent on this machine write through `slothweb-mcp` ([Writes by an agent](#writes-by-an-agent)): a secret drawn at start is written to `PATH` (`0600`, a new one every run, removed at exit), and a loopback POST carrying it in `X-Slothweb-Agent`, with no `Origin`, may write triage, notes and links, recorded `via: agent` under the name it gives. A `PATH` that is empty or too long is `slothweb: --web-agent-secret: empty or too long a path`; one holding something that is not a private regular file of this user is `--web-agent-secret PATH: exists and is not a private regular file of this user (mode 0600, one link); refused, left as it is`; no random bytes is `--web-agent-secret: no random bytes from /dev/urandom`; each exits before serving. Unset: no agent path, and a request with the header is `403 agent_off`. |
 | `--web-read-only` | No write route: every POST is `405` `Allow: GET, HEAD` before a header is checked, the surface before triage existed. The triage states and the TACDB still read; the page draws no button and says why. Default off: an admitted peer may write (the owner's open question Q10 asks whether `--web-allow-remote` should imply it). |
 | `--web-assessments DIR` | Where "follow recommended" reads each alert type's research assessment, `DIR/<TYPE>.md` (front matter `false_positive_risk`, `noise_verdict`, `severity_assessment`; [Triage](#triage-and-the-frrs-record)). The type name comes from the alert table, never from a request; each file read until its front matter closes, at most 32 KiB. Unset, or a path not there: every type says "no recommendation yet". Something there that is not a directory is refused (exit 2). `slothweb.service` passes `/usr/local/share/sloth/alert-assessments`, where `make install` copies `docs/wiki/alert-assessments/*.md`. |
 | `--pcap-dir DIR` | The sensor's `--pcap-dir`, read-only, for the alert page's packet capture ([An alert's proof](#an-alerts-proof)). Repeatable once more for its `--eapol-dir` (at most two; the same path twice is refused). Only a file named as sloth names an alert pcap is ever opened (`alert_YYYYMMDD_HHMMSS_<slug>.pcap`, or `<incident_id>-<event>-<RULE>[-N].pcap`), through the directory's descriptor, not following a symlink, a regular file of at most 16 MiB; never a handshake pcap or `eapol.22000`, whatever directory they sit in. Absent: the page says "slothweb was not given --pcap-dir". An evidence pcap is listed but withheld unless `--web-serve-evidence-pcap` is given (below). |
@@ -4497,6 +4505,60 @@ sparkline pinned as served; `test_store.c` the v5 to v6
 migration and its failure. Each absence assertion names the mutation it
 was seen red under.
 
+### Writes by an agent
+
+Owner request 2026-11-11: an agent on the same machine reads slothweb
+through `slothweb-mcp` (`web/mcp/`, `make web-mcp`;
+[docs/wiki/slothweb-mcp.md](../docs/wiki/slothweb-mcp.md) has its tools,
+its flags and how to register it) and writes triage, notes and links.
+Its rows are marked `via: agent`, and the mark is decided by slothweb
+from what the request proves, never from what it says: a page could
+otherwise label its writes as it liked, and an agent could pass as the
+operator. `web/src/web_agent.c`.
+
+`--web-agent-secret PATH`: at start slothweb reads 32 bytes from
+`/dev/urandom`, writes them as 64 hex digits to `PATH` (created `0600`
+by descriptor, never through a link, put in place by `rename`; a file
+already there that is not a private regular file of this user is
+refused and left as it is) and keeps them in memory: a new secret every
+run, the file removed at a clean exit. slothweb says `agent writes: a
+loopback POST carrying the secret in PATH writes triage, notes and
+links, recorded via agent`. Without the flag there is no agent path.
+
+`web_agent_check()` is the rule, run by `web_frrs_gate()` before a body
+byte is read and again by the router:
+
+| The POST has | It is | Recorded |
+|---|---|---|
+| no `X-Slothweb-Agent` header | the browser's, held to `Origin` and `Sec-Fetch-Site` exactly as before | `via: manual` or `recommended`; never `agent` |
+| the header once, equal to the secret (constant-time), from a loopback peer, with no `Origin` and no `Sec-Fetch-Site` | the agent's | `via: agent` |
+| the header, otherwise | `403`: `agent_off` (no secret configured), `bad_agent_secret`, `agent_not_local`, `agent_with_origin` | nothing; never tried again as a browser's |
+
+The secret stands in for the `Origin` check on that one path only.
+`Origin` is a CSRF defence, and CSRF needs a browser: a page cannot
+read the file, cannot send the header across origins without a
+preflight slothweb never answers, and cannot strip its own `Origin`, so
+a request carrying both is refused as a page's. The browser's path is
+unchanged. The agent's path is narrower than the page's: triage, notes
+and links only (`403 agent_path` on the TACDB routes and the import), a
+name required (`400 missing_by`), no "follow recommended" (`400
+bad_state`), and it removes only links an agent made (`403
+not_agent_link`). The token bucket applies, in a bucket of the agent's
+own per peer (`a/` and the address), so it can neither spend the
+operator's allowance nor write unbounded; limited, it gets the same
+`429` and `Retry-After`. `/api/health`'s `frrs.agent` is
+`{"enabled","writes","refused"}`, never the secret. What this does not
+stop: another process of slothweb's own user, or root, can read the
+file; `by` is a label, as the operator's is.
+
+`web/tests/test_mcp.c` holds it (`test_whose_write`,
+`test_write_refusals`, `test_rate_limit`, `test_secret_file_rules`):
+each line of the table, a browser's write never marked agent, a wrong
+secret refused by the gate and by the router each on its own, a
+near-miss and a prefix of the secret, the three routes and no other,
+the bucket apart from the operator's, the file's mode and what it will
+not overwrite, and the same over a loopback socket.
+
 ### Notes on devices and the rest
 
 Owner request 2026-11-11: notes on devices and on the other things the
@@ -6321,6 +6383,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_vendorkb.c` | the vendor research table against `web/data/vendors/` and the registry: every `.md` an entry and every entry a file named for its name, every `[n]` resolving and every cited field carrying one, the name, each alias and each affiliate exact `Organization Name` strings of the committed CSVs (a dead entry is red), the lookup folding case, white space and punctuation, matching no prefix and flagging an affiliate, the drawer and Lookup carrying `"vendor_research"` for a researched vendor (without the entry's country, parent and founded for an affiliate) and `{found:false}` for one without and for an IP, the page drawing it through one function with no `href` and no markup sink, the generator refusing each defect the format names (fixtures run through the built `vendorkb`), and `data/vendors/COVERAGE.md` against `REFERENCE_HOST.txt`, the registry and the entries, its count line included |
 | `test_alertkb.c` | the alert knowledge table against its sources: an entry per `.def` row in order with its technique, a trigger, sources and steps for each, plain text, and every remediation source a corpus document that cites the type |
 | `test_alerts.c` | the Alerts page and an alert's page over a generated sloth.db and a fed stream: the collapse (sloth.db's rows and the stream's incidents, a key once), the order, every filter, paging, every `400`/`404`/`405`, the six sections, runs, the device by MAC and by address, no key, username, community or sloth `incident_id` in any body, every type's page within the buffer, the 20,000-row bound on 30,000 rows (500,000 with `SLOTHWEB_ALERTS_BENCH`), filters, History's figures and the drawer reaching past it, and the tiles against their views on the demo's data; the page's views and links |
+| `test_mcp.c` | `slothweb-mcp` and the agent's write path ([Writes by an agent](#writes-by-an-agent), [docs/wiki/slothweb-mcp.md](../docs/wiki/slothweb-mcp.md)): the protocol as the research server's tests hold it, the JSON reader and the copier, the address, name and secret-file rules, every read tool against the real routes, every write tool end to end with its refusals, whose write it is, hostile SSIDs, hostnames, comments and notes held to their fields, the size caps, and the same calls over a loopback socket |
 | `test_subnotes.c` | the plain notes ([Notes on devices and the rest](#notes-on-devices-and-the-rest)): each kind's id, a subject nothing holds refused, the retraction as a row, both caps and that only retracted notes fold, the text rules and the write path's guards, the batched marks, ids beginning `a`, `d` and `s`, `via` on links, the bundle's `notes` and `/api/glossary`, the stream held out of the table, the write over a socket, and `subnotes.js` with its list and write pinned whole |
 | `test_notes.c` | anomaly triage and the links ([Anomaly triage and links](#anomaly-triage-and-links)): `test_frrs.c`'s alert triage tests again on an anomaly's id, the decision across a reopened store and a re-detected, a later and a forgotten episode, an id collision refused, alert and anomaly rows apart, links from both ends with their guards, a dangling end, the candidates' subject and both window edges, the candidate read on a 30,000-row alerts table, the bundle's `related` sections, the link's write over a socket, and `notes.js` with its functions pinned whole |
 | `test_readme.c` | this file: every message the start-up path can print, scraped from `web/src/`, quoted in Troubleshooting; the Security section's points; every screenshot this file shows present under `docs/assets/slothweb/` and under the size bound |
@@ -6424,6 +6487,7 @@ web/
     web_alertdb.c  sloth.db's alerts: groups by key, a key's incidents, its device
     web_relate.c   an anomaly's triage subject; /api/frrs/related, /api/frrs/relate
     web_notes.c    plain notes on devices and the rest: /api/frrs/notes, /notes/marks, /note
+    web_agent.c    --web-agent-secret: the run's secret, and whose write a POST is
     web_alertfmt.c the types whose alert detail is shown, audited
     web_loc.c      sloth's location stamp: range-checked, from the stream or sloth.db
     web_positions.c /api/positions: JSON, GeoJSON, GPX
@@ -6475,6 +6539,9 @@ web/
     demo.c         build/web/slothweb-demo: the synthetic sloth.db and stream (M6);
                    linked into slothweb_test too (-DSLOTHWEB_DEMO_LIB)
     quickstart_check.sh  the five-minute check, make web-quickstart-check (M6)
+  mcp/             slothweb-mcp (make web-mcp): an MCP server for an agent on this
+                   machine, a client of the routes above; main.c the pipe, mcp.c the
+                   tools, mcp_json.c the reader and the copier, mcp_http.c the request
   data/            the IEEE registry CSVs, committed (SOURCE.md: origin, hashes, refresh);
                    vendors/ the vendor research, one .md per OUI holder (docs/wiki/vendor-research.md),
                    COVERAGE.md and REFERENCE_HOST.txt: which reference-host vendors have one

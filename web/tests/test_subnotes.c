@@ -171,7 +171,7 @@ static void test_note_round_trip(void) {
     WT_EQ(w_get("/api/frrs/notes", "kind=device&id=" W_MAC1 "&before=x"), 400);
     /* The health member: the table's rows and the counters. */
     WT_EQ(w_get("/api/health", ""), 200);
-    WT_HAS(w_body(), ",\"notes\":{\"rows\":3,\"cap\":20000,\"added\":2,\"retracted\":1,\"folded\":0}}");
+    WT_HAS(w_body(), ",\"notes\":{\"rows\":3,\"cap\":20000,\"added\":2,\"retracted\":1,\"folded\":0},");
 #endif
     w_close();
 }
@@ -408,7 +408,7 @@ static void test_subject_cap_folds_only_retracted(void) {
     WT_HAS(w_body(), "\"rows\":7,\"live\":7,\"folded\":4");
     WT_LACKS(w_body(), "keep-3");
     WT_EQ(w_get("/api/health", ""), 200);
-    WT_HAS(w_body(), "\"retracted\":2,\"folded\":4}}");
+    WT_HAS(w_body(), "\"retracted\":2,\"folded\":4},");
     w_close();
 }
 

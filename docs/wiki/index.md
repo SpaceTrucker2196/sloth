@@ -159,6 +159,11 @@ the Wi-Fi it watches:
   the five-minute README (`web/README.md`) with its troubleshooting
   table and security section; alert triage, the FRRS emitter record
   and the TACDB tab, its spec [`docs/web-frrs-spec.md`](../web-frrs-spec.md).
+- [[slothweb-mcp]] — the MCP server an agent on the sensor's own
+  machine uses to read slothweb and to write triage, notes and links:
+  its 27 tools and the route each maps to, the per-run agent secret
+  behind `via: agent`, the untrusted-data rules, and how to register
+  it (an OpenClaw example).
 - [[fleet]] — the owner's own sensors sharing over the tailnet (#192,
   ADR 0008): slothweb's `/api/fleet/export`, the `--peer` pull into
   slothweb.db v8 (`peer_sites`, `peer_sightings`), what never travels,
