@@ -1161,9 +1161,12 @@ int web_frrs_addr_states(web_frrs_t *f, const char *const *addrs, int n, int *st
     if (!f || !f->wr || n <= 0) return 0;
     sqlite3_stmt *s = NULL;
     /* One pass over triage, newest first, whatever n is: never a scan
-     * an address (no index leads with addr). */
+     * an address (no index leads with addr). Alerts only, as
+     * web_frrs_verdicts(): an anomaly's row (type -1) carries its id in
+     * addr, which names no device. */
     if (sqlite3_prepare_v2(f->wr,
-            "SELECT t.addr, t.state FROM triage t WHERE t.addr <> '' AND t.id = (SELECT"
+            "SELECT t.addr, t.state FROM triage t WHERE t.type >= 0 AND t.addr <> ''"
+            " AND t.id = (SELECT"
             " MAX(u.id) FROM triage u WHERE u.subject = t.subject)"
             " ORDER BY t.ts DESC, t.id DESC", -1, &s, NULL) != SQLITE_OK) {
         sqlite3_finalize(s);
