@@ -761,6 +761,11 @@ static int emit_contrast(void) {
          * is the caption's count in words, and this is the step from it
          * to the lowest heat of a fed cell beside it. */
         { "--heat-0", "--rule", "a fed cell's lowest heat, beside a warming one" },
+        /* Owner ruling 2026-11-11: a warming cell with a sample carries
+         * its value so far as a bar in one ink on its tile. Told from a
+         * fed cell by shape and the caption's count, not by this step. */
+        { "--tui-dim", "--rule", "a provisional cell's bar, on its warming tile" },
+        { "--tui-dim", "--panel", "a provisional cell's bar, against the panel beside the tile" },
     };
     printf("\nGraphics (`*` under 3:1):\n\n| graphic | on | use | dark | light |\n"
            "|---|---|---|---|---|\n");

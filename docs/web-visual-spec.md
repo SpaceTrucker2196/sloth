@@ -23,6 +23,13 @@
 > | Rule | Ruling |
 > |---|---|
 > | R1, one ink | **Set aside for one graph mode.** The Activity graph's `keys: all` draws every key of the selected metric as its own line (a presence metric: its own strip) in that key's identity colour, the eight hash hues R1 already grants to addresses. Nowhere else: `keys: one`, the default, and every other glyph keep R1. Colour is never the only carrier there (R10): the legend is ranked and numbered, the top five lines carry their rank and key at their right end, and a legend entry hovered, focused or picked draws its line last in its colour with every other line in `--rule`. The band is one key's, so it is drawn only for a picked key; the now mark stays the panel's one `--signal`. §6.2 |
+>
+> **Owner ruling, 2026-11-11** ("check the heat map for hour of week presence, it always only has one tile highlighted"; it wins over the body below as those above do):
+>
+> | Rule | Ruling |
+> |---|---|
+> | G4, F3: an all-warming grid draws only the now outline | **Always draw the grid.** Every one of the 168 cells is drawn whenever the glyph has cells at all, a warming cell as the plain `--rule` tile, so the first three weeks of a store, and any device first seen under three weeks ago, are a grid and not one outlined tile. No cells at all (no baseline for the pair) is R5's `no data` dash alone, with no outline and no labels, and the caption says `no data` |
+> | R8 and G4: a warming cell makes no claim | **Provisional colour from week one.** A warming cell with at least one sample (1 <= n < warm) says its value so far, in a form that cannot be taken for a fed cell: a bar in one ink, `--tui-dim`, on the cell's `--rule` tile, rising from the tile's floor, 1 px for a value of 0 (observed, nothing so far) and a quarter, a half or three quarters of the tile for a value in the first, second or last third of the provisional scale. The bar never fills the tile and never takes a heat token; the heat ramp stays a fed cell's alone (n >= warm). The provisional scale is fixed, 0 to 1, for a map of shares (the drawer's presence map), and 0 to the largest mean of any sampled cell otherwise; the caption names it, and counts the fed, the provisional and the not yet observed cells. No hatch (R8 stands). A cell never sampled (n = 0) is the tile alone, so observed-absent (the 1 px floor) and never-observed differ. §5 G4, F3 and R8 below are written to it |
 
 ## 0. What this document is
 
@@ -65,7 +72,7 @@ Overview, Activity. After one minute of running, the 24 h window puts every samp
 
 Overview. With no baseline, every cell is grey with a diagonal hatch. Tufte names hatching as the first source of moiré vibration, "the unintended optical noise of the design", and the screenshot shows it: the grid flickers and the one outlined cell (now) is hard to find. Hatching also fails the smallest-effective-difference test: a warming cell needs to differ from a cold cell, and a lighter grey does that.
 
-**Fix.** A warming cell is `--rule` with no hatch. The panel caption says `warming: 168 of 168 cells`. The now cell keeps its outline. When the grid is entirely warming, draw the outline and the caption only. Glyph G4 (§5).
+**Fix.** A warming cell is `--rule` with no hatch. The panel caption says `warming: 168 of 168 cells`. The now cell keeps its outline. Glyph G4 (§5). *As first written, an entirely warming grid drew the outline and the caption only; the owner found that it read as broken (one tile on an empty canvas for three weeks) and ruled on 2026-11-11 that the grid is always drawn and a sampled warming cell carries a provisional mark (the head of this document, G4).*
 
 ### F4. Explanatory prose lives inside the data tiles
 
@@ -272,7 +279,9 @@ Answers: *when is this thing usually here, and is now usual.*
 
 The existing 7 by 24 grid, with three changes (F3):
 
-- Warming cells are `--rule`, no hatch. The caption says `warming: n of 168`.
+- Warming cells are `--rule`, no hatch, and every one of the 168 is drawn (ruling of 2026-11-11): a grid that is all warming is 168 plain tiles under the now outline, never the outline alone. The caption says `warming: n of 168 cells, fed: f, provisional: p (under 3 weeks), not yet observed: u`.
+- **Provisional cells** (ruling of 2026-11-11). A warming cell with a sample (1 <= n < warm; a cell gets one sample a week) carries a `prov` bar on its tile in `--tui-dim`, full width, rising from the tile's floor: 1 px for a mean of 0, then a quarter, a half or three quarters of the tile's height for a mean in the first, second or last third of the provisional scale. The scale is 0 to 1 for a map of shares (with n = 1 a share is 0 or 1, with n = 2 it is 0, 0.5 or 1: the floor, the half, the three quarters) and 0 to the largest mean of any sampled cell, fed or provisional, for a mean of a gauge or a counter; the caption names it (`provisional bar in thirds of 0 to 1`, `... of 0 to 25.0k B/s`). One ink, one shape: it is never a heat token and never the whole tile, so in any grey a provisional cell is a part-inked tile and a fed cell a whole one (R10). A cell with n = 0 is the tile alone: "observed, absent so far" (the floor line) and "not yet observed" (no ink) are different marks.
+- No cells at all (the pair was never fed) is R5's `no data`: the `--faint` dash, no outline, no labels, and the caption's state is `no data`.
 - The colour ramp is the TUI's `tui_heat` ramp but applied to the cell's mean against the series' maximum, as now, and the maximum is printed in the caption.
 - A second form at 56 by 28 px for a table cell or a drawer row: the same grid at 2 px per cell with no labels, so a device's weekly rhythm reads at a glance ("only weeknights", "only 03:00").
 - **TUI form:** the Devices Enter detail can draw the 7 by 24 grid in `▪` at four heat levels.
@@ -450,7 +459,7 @@ These are the operational rules every glyph and panel follows. A review of a slo
 - **R5. Three empty states.** `no data` (a `--faint` dash), `warming` (the line without the band, the word in the caption), and a gap (a break in the line). They never look alike. An empty panel collapses to its caption.
 - **R6. Fewer than five points draw dots.** A line through three buckets claims a shape the data does not have.
 - **R7. The last value is marked and written.** A dot on the line and the number beside it, always. Min and max dots only where there is no band.
-- **R8. No hatching, no gradients, no shadows, no rounded bars.** The chrome's radius applies to panels, not to data.
+- **R8. No hatching, no gradients, no shadows, no rounded bars.** The chrome's radius applies to panels, not to data. "Not known yet" is still never a texture: G4's warming cell is a plain `--rule` tile, and where it has a sample its value so far is a solid bar in one ink on that tile (owner ruling 2026-11-11, which amends the earlier reading that a warming cell makes no claim at all), not a hatch and not a tint of the heat ramp.
 - **R9. The caption line.** Every panel ends with one `--muted` line: source, window, tier, scale, n. Example: `ap.rssi 02:de:00:00:00:a1, 1 h, fine, -95 to -20 dBm, n=360`.
 - **R10. Greyscale must still read.** Every colour meaning is also a position, a shape or a word (the existing §8.12 rule, restated so the glyphs inherit it). A heat-coloured segment is also above the band; a severity bar also carries its word.
 - **R11. Scales do not jump.** A glyph that refreshes every tick keeps its scale until the data leaves it, and then grows it; it never shrinks on refresh. A reader must be able to look away and back.
