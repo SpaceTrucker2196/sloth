@@ -269,6 +269,16 @@ int  web_store_query(web_store_t *s, int tier, int metric, const char *key,
 int  web_store_keys(web_store_t *s, int tier, int metric, long long from,
                     long long to, char (*out)[WEB_KEY_MAX + 1], int max);
 
+/* The keys of metric holding a bucket in tier with from <= t < to, in
+ * byte order of the key, those after `after` (NULL: from the first), at
+ * most max into out (/api/series/all walks every key a page at a time,
+ * web_allkeys.h). One seek of the (metric, key) index and, a series, one
+ * of its tier's primary key: no scan of the window. Read-only
+ * connection, every value bound. Count, or -1. */
+int  web_store_keys_after(web_store_t *s, int tier, int metric, long long from,
+                          long long to, const char *after,
+                          char (*out)[WEB_KEY_MAX + 1], int max);
+
 void web_store_stats(web_store_t *s, web_store_stats_t *out);
 
 /* Rows in tier, counted now (tests and the recount). -1 on error. */

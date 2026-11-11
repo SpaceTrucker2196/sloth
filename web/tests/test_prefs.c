@@ -134,6 +134,7 @@ static const char *const KEPT_ELSEWHERE[] = {
 };
 static const char *const NOT_KEPT[] = {
     "q-recipe",   /* an action: it fills the SQL box, whose text is kept */
+    "ak-filter",  /* allkeys.js's legend filter: a look at one metric's keys */
     /* web/ui/frrs.js's forms: each the fields of one change to write,
      * emptied once written, not a setting */
     "frrs-note", "tc-u-name", "tc-u-kind", "tc-u-parent", "tc-p-nom", "tc-p-class",

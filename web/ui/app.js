@@ -5840,7 +5840,9 @@
     pickKey: function (k) {
       var i = A.keys.indexOf(k);
       if (i >= 0) { A.key = i; $("a-key").value = String(i); actKeep(); }
+      return i >= 0;
     },
+    active: function () { return view === "activity"; },
     redraw: function () { if (view === "activity") refresh(); } });
 
   // G2, G6 and the new mark in the tables (web/ui/rf.js).

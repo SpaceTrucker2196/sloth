@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "web_json.h"
 #include "web_metrics.h"
@@ -112,31 +113,88 @@ static void jw_val(web_jw_t *w, double v) {
     web_jw_raw(w, b);
 }
 
+int web_allkeys_budget_ms = WEB_ALLKEYS_ANSWER_MS;
+
+static double mono_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1e3 + (double)ts.tv_nsec / 1e6;
+}
+
+/* The rollup's keys of a metric, every one (the class holds at most
+ * --web-max-keys), those the scope holds, in byte order. NULL with *n 0
+ * when there is none, or on no memory (*n -1). */
+static web_keyinfo_t *rollup_keys(web_tsdb_t *t, int metric,
+                                  const web_scope_ctx_t *sc, int *n) {
+    web_keyinfo_t one;
+    int total = 0;
+    *n = 0;
+    web_rollup_keys(t->ru, metric, &one, 1, &total);
+    if (total <= 0) return NULL;
+    /* Room for the keys that arrive between the two calls. */
+    int room = total + 64;
+    web_keyinfo_t *k = malloc((size_t)room * sizeof(*k));
+    if (!k) { *n = -1; return NULL; }
+    int got = web_rollup_keys(t->ru, metric, k, room, &total), o = 0;
+    for (int i = 0; i < got; i++)
+        if (key_in(metric, k[i].key, sc)) k[o++] = k[i];
+    qsort(k, (size_t)o, sizeof(*k), cmp_key);
+    *n = o;
+    return k;
+}
+
 size_t web_allkeys_json(web_tsdb_t *t, const web_allkeys_q_t *q, char *out,
                         size_t cap) {
+    double t0 = mono_ms();
     long long cell_s;
     int ncell;
     web_allkeys_cells(q->tier, q->from, q->to, q->cols, &cell_s, &ncell);
     const int maxb = WEB_ALLKEYS_BUCKETS + 1;
-    web_keyinfo_t *k = malloc(WEB_KEYS_MAX * sizeof(*k));
+    const int use_store = t->store && t->store->rd;
+    const int in = metric_in(q->metric, q->sc);
+    /* The store's keys: a page and one more after `after`; on the first
+     * answer every one (to WEB_ALLKEYS_COUNT), because that answer says
+     * how many keys there are. */
+    const int want = q->has_after ? WEB_ALLKEYS_PAGE + 1 : WEB_ALLKEYS_COUNT;
     web_point_t *m = malloc((size_t)maxb * sizeof(*m));
     web_agg_t *cell = malloc((size_t)ncell * sizeof(*cell));
-    if (!k || !m || !cell) { free(k); free(m); free(cell); return 0; }
-
-    int total = 0;
-    int n = web_rollup_keys(t->ru, q->metric, k, WEB_KEYS_MAX, &total);
-    int in = metric_in(q->metric, q->sc);
-    if (q->sc && q->sc->scope != WEB_SCOPE_HYBRID) {
-        int o = 0;
-        for (int i = 0; i < n; i++)
-            if (key_in(q->metric, k[i].key, q->sc)) k[o++] = k[i];
-        n = in ? o : 0;
-        total = n;
+    char (*sk)[WEB_KEY_MAX + 1] = use_store && in ? malloc((size_t)want * sizeof(*sk)) : NULL;
+    int nr = 0, ns = 0, store_err = 0;
+    web_keyinfo_t *rk = in ? rollup_keys(t, q->metric, q->sc, &nr) : NULL;
+    if (!m || !cell || nr < 0 || (use_store && in && !sk)) {
+        free(m); free(cell); free(sk); free(rk);
+        return 0;
     }
-    qsort(k, (size_t)n, sizeof(*k), cmp_key);
+    if (sk) {
+        ns = web_store_keys_after(t->store, q->tier, q->metric, q->from, q->to,
+                                  q->has_after ? q->after : NULL, sk, want);
+        if (ns < 0) { ns = 0; store_err = 1; }
+    }
+    /* More in the store than was read: this answer goes no further than
+     * the last key read, or a key between would be passed over. */
+    const int store_more = ns == want;
+    int o = 0;
+    for (int i = 0; i < ns; i++)
+        if (key_in(q->metric, sk[i], q->sc)) { if (o != i) memcpy(sk[o], sk[i], sizeof(sk[0])); o++; }
+    char bound[WEB_KEY_MAX + 1] = "";
+    if (store_more) memcpy(bound, sk[ns - 1], sizeof(bound));
+    ns = o;
+
+    /* How many keys there are: the union of the two lists, counted on
+     * the first answer only. */
+    long long total = -1;
+    if (!q->has_after) {
+        int i = 0, j = 0;
+        total = 0;
+        while (i < nr || j < ns) {
+            int c = i >= nr ? 1 : j >= ns ? -1 : strcmp(rk[i].key, sk[j]);
+            if (c <= 0) i++;
+            if (c >= 0) j++;
+            total++;
+        }
+    }
 
     const web_metric_t *md = &web_metric_defs[q->metric];
-    int use_store = t->store && t->store->rd;
     web_jw_t w;
     web_jw_init(&w, out, cap);
     web_jw_raw(&w, "{\"metric\":");  web_jw_str(&w, md->name);
@@ -149,61 +207,73 @@ size_t web_allkeys_json(web_tsdb_t *t, const web_allkeys_q_t *q, char *out,
     web_jw_raw(&w, ",\"keykind\":"); web_jw_str(&w, md->keykind);
     web_jw_raw(&w, ",\"from\":");    web_jw_int(&w, q->from);
     web_jw_raw(&w, ",\"to\":");      web_jw_int(&w, q->to);
-    web_jw_raw(&w, ",\"total\":");   web_jw_int(&w, total);
-    web_jw_raw(&w, ",\"listed\":");  web_jw_int(&w, n);
+    web_jw_raw(&w, ",\"total\":");
+    if (total >= 0) web_jw_int(&w, total); else web_jw_raw(&w, "null");
+    /* A store holding more keys than one answer counts: at least. */
+    if (total >= 0 && store_more) web_jw_raw(&w, ",\"total_min\":true");
     if (!in) web_jw_raw(&w, ",\"out_of_scope\":true");
     web_jw_raw(&w, ",\"keys\":[");
 
-    int done = 0, more = 0, store_err = 0, last = -1;
-    for (int i = 0; i < n && !w.overflow; i++) {
-        if (q->has_after && strcmp(k[i].key, q->after) <= 0) continue;
+    int done = 0, more = 0, i = 0, j = 0;
+    char last[WEB_KEY_MAX + 1] = "";
+    while (i < nr && q->has_after && strcmp(rk[i].key, q->after) <= 0) i++;
+    while ((i < nr || j < ns) && !w.overflow) {
+        int c = i >= nr ? 1 : j >= ns ? -1 : strcmp(rk[i].key, sk[j]);
+        const char *key = c <= 0 ? rk[i].key : sk[j];
+        if (store_more && strcmp(key, bound) > 0) { more = 1; break; }
         if (done == WEB_ALLKEYS_PAGE) { more = 1; break; }
+        /* The time an answer may take, once it holds a key: the rest is
+         * the next answer's. */
+        if (done && mono_ms() - t0 >= web_allkeys_budget_ms) { more = 1; break; }
         int pm = 0, se = 0;
-        int np = web_series_points(t, q->tier, q->metric, k[i].key, q->from,
+        int np = web_series_points(t, q->tier, q->metric, key, q->from,
                                    q->to, m, maxb, &pm, &se);
-        if (np < 0) { free(k); free(m); free(cell); return 0; }
+        if (np < 0) { free(m); free(cell); free(sk); free(rk); return 0; }
         if (se) store_err = 1;
-        for (int c = 0; c < ncell; c++) { cell[c].t = -1; cell[c].n = 0; }
-        for (int j = 0; j < np; j++) {
-            long long ci = (m[j].t - q->from) / cell_s;
-            if (m[j].t < q->from || ci >= ncell) continue;
+        for (int x = 0; x < ncell; x++) { cell[x].t = -1; cell[x].n = 0; }
+        for (int x = 0; x < np; x++) {
+            long long ci = (m[x].t - q->from) / cell_s;
+            if (m[x].t < q->from || ci >= ncell) continue;
             web_agg_t *a = &cell[ci];
-            if (a->t < 0) { *a = m[j]; continue; }
-            a->sum += m[j].sum;
-            if (m[j].min < a->min) a->min = m[j].min;
-            if (m[j].max > a->max) a->max = m[j].max;
-            a->n += m[j].n;
+            if (a->t < 0) { *a = m[x]; continue; }
+            a->sum += m[x].sum;
+            if (m[x].min < a->min) a->min = m[x].min;
+            if (m[x].max > a->max) a->max = m[x].max;
+            a->n += m[x].n;
         }
         size_t mark = w.len;
         web_jw_raw(&w, done ? ",{\"key\":" : "{\"key\":");
-        web_jw_str(&w, k[i].key);
+        web_jw_str(&w, key);
         web_jw_raw(&w, ",\"p\":[");
         int first = 1;
-        for (int c = 0; c < ncell; c++) {
-            if (cell[c].t < 0 || !cell[c].n) continue;
+        for (int x = 0; x < ncell; x++) {
+            if (cell[x].t < 0 || !cell[x].n) continue;
             if (!first) web_jw_raw(&w, ",");
             first = 0;
-            web_jw_int(&w, c);
+            web_jw_int(&w, x);
             web_jw_raw(&w, ",");
-            jw_val(&w, web_point_value(q->metric, &cell[c]));
+            jw_val(&w, web_point_value(q->metric, &cell[x]));
         }
         web_jw_raw(&w, "]}");
         if (w.overflow || w.len + AK_TAIL > cap) {
             /* It did not fit beside the others: it is the next answer's
              * first. With none before it, it fits no answer at all. */
-            if (!done) { free(k); free(m); free(cell); return 0; }
+            if (!done) { free(m); free(cell); free(sk); free(rk); return 0; }
             w.len = mark;
             w.overflow = 0;
             more = 1;
             break;
         }
         done++;
-        last = i;
+        memcpy(last, key, strlen(key) + 1);
+        if (c <= 0) i++;
+        if (c >= 0) j++;
     }
+    if (!more && store_more) more = 1;
     web_jw_raw(&w, "],\"more\":");
     web_jw_raw(&w, more ? "true" : "false");
     web_jw_raw(&w, ",\"next\":");
-    if (more && last >= 0) web_jw_str(&w, k[last].key); else web_jw_raw(&w, "null");
+    if (more && done) web_jw_str(&w, last); else web_jw_raw(&w, "null");
     /* The same words /api/series uses; after the reads, because a
      * store error is only known then. */
     web_jw_raw(&w, ",\"source\":");
@@ -213,8 +283,9 @@ size_t web_allkeys_json(web_tsdb_t *t, const web_allkeys_q_t *q, char *out,
                              : "memory");
     web_jw_raw(&w, "}\n");
     size_t len = w.overflow ? 0 : w.len;
-    free(k);
     free(m);
     free(cell);
+    free(sk);
+    free(rk);
     return len;
 }
