@@ -45,6 +45,7 @@ const alert_rule_t g_alert_rules[] = {
     R(rule_evil_twin_proximity),
     R(rule_evil_twin_attack_chain),
     R(rule_karma_ap),
+    R(rule_karma_probe_forge),
     R(rule_open_setup_ap),
     R(rule_cam_setup_ssid),
     R(rule_cam_setup_oui),

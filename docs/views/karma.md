@@ -2,14 +2,16 @@
 
 Materialised view of KARMA / PineAP candidate APs — one row per BSSID
 beaconing an abnormal number of distinct SSIDs, the "answer every
-network a client probes for" lure. See issue #30.
+network a client probes for" lure (#30), or answering stations'
+directed probes for SSIDs it never beaconed (#187 S2).
 
 ## Protocol / data source
 
 Built passively each poll by `karma_update()` from `s->beacon_aps[]`
 (distinct-SSID history per BSSID), the client PNLs in
 `s->pnl_clients[]`, and the deauth impact aggregates
-`s->deauth_victims[]`. No new
+`s->deauth_victims[]`, and since #187 S2 the directed-probe answers
+in `s->karma_forge` (`karma_forge_snapshot()`). No new
 radio traffic — every input is already captured by the beacon snooper,
 the probe/PNL tracker, and the deauth tracker. The view reads only
 `s->karma_aps[]`.
@@ -80,8 +82,23 @@ Per candidate:
   (`karma_deauth_lure_victim()`, `src/karma_detect.c`) — crediting
   every candidate in range with any concurrent flood was the false
   positive issue #90 reported.
+- **FR** — forged answers (#187 S2): how many distinct SSIDs this
+  BSSID answered a station's **directed** probe request for while never
+  beaconing them (`karma_forged_ssids()`, shared with the
+  `KARMA_PROBE_FORGE` alert, so the cell and the alert state one
+  number). `-` is none. A BSSID reaches this table on FR alone, at
+  `karma.forge_ssids` (2): the classic KARMA radio — `airbase-ng -P`,
+  the 2005 paper's access point "that responded to any Probe Request" —
+  beacons one name and answers the rest, so it never crosses the SSIDs
+  threshold and the beacon-only view could not list it. Bright at the
+  threshold. An AP answering for its own name, hidden or not, never
+  counts; nor does an answer to a wildcard probe; nor a name the BSSID
+  beaconed at any point this session. With no beacon heard from the
+  BSSID, or its 8-SSID beacon history full, the count is 0 rather than
+  a guess. Basis: `research/papers/daizovi-macaulay-2005-karma.md`,
+  `research/tools/airbase-ng.md`.
 - **score** —
-  `1 + (>=2 PNL hits on one station ? 2 : 0) + (IE uniform ? 1 : 0) + (chain ? 3 : 0)`,
+  `1 + (>=2 PNL hits on one station ? 2 : 0) + (IE uniform ? 1 : 0) + (chain ? 3 : 0) + (FR >= 2 ? 3 : 0)`,
   ranked strongest-first. The PNL term uses the single-station count,
   not the PNL column's union, so the ranking and the `KARMA_AP` alert's
   CRIT gate cannot disagree about one BSSID (#90).
@@ -106,6 +123,12 @@ numbers about one BSSID — the same reason the PNL measures are shared.
 
 ## Open
 
+- **#187 S3, probe-response latency, is not built.** The issue proposes
+  a median answer under 2 ms as a confirmer; no primary source for that
+  figure, or for the direction of the difference (a user-space soft AP
+  answering through hostapd is plausibly *slower* than firmware, not
+  faster), was found. Without one the threshold would be a guess.
+
 - IE **variety** earns no confidence. It is the better-founded half of
   the signal (it argues against one spoofing radio, where collapse is
   consistent with the benign rename), but spending confidence *down*
@@ -121,11 +144,12 @@ numbers about one BSSID — the same reason the PNL measures are shared.
 ```
  ── KARMA ─────────────────────────────────────────────────────────
  KARMA/PineAP candidates: 1 / max 64  deauth-then-lure: 1
- BSSID              SSIDs  PNL   J%    IE  chain  score  Top SSID / last
- -----------------  -----  ----  ----  --  -----  -----  ---------------
- 00:11:22:33:44:55      7     4  80%   1   YES        7  Starbucks (2s)
- 24:6f:28:33:44:55      3     0  0%    3   -          1  ACME-Cor (4s)  [ESP32 M~/med? provisional]
- PNL = SSIDs in client probe lists, >=2 on one station; chain = deauth-then-lure on shared victim
+ BSSID              SSIDs  PNL   J%    IE  chain  FR  score  Top SSID / last
+ -----------------  -----  ----  ----  --  -----  --  -----  ---------------
+ 00:11:22:33:44:55      7     4  80%   1   YES    -       7  Starbucks (2s)
+ 02:13:37:00:00:01      1     0  0%    1   -      2       4  default (1s)
+ 24:6f:28:33:44:55      3     0  0%    3   -      -       1  ACME-Cor (4s)  [ESP~/med? provisional]
+ PNL = SSIDs probed, >=2 on one station; chain = deauth-then-lure on shared victim; FR = forged
  [tool/conf? provisional] = UNVERIFIED signature, no capture: a hypothesis, not an identification
 ```
 
@@ -144,9 +168,10 @@ attribution is kept whole while any of the label fits, because that is
 the part that says the name is unverified. A clipped label ends in `~`
 so a stub is never read as the name of some other tool, and below three
 kept characters only the `~` is left. The mockup above is drawn at 100
-columns, so its second row (`ACME-Corp`, `ESP32 Marauder`) shows the fit.
+columns, so its third row (`ACME-Corp`, `ESP32 Marauder`) shows the fit.
 With a long SSID and an old age a row can read
-`ABCDEFGH (1234567s)  [~/med? provisional]`; the full attribution is
+`ABCDEFGH (14d)  [~/high? provisional]` (an age of a day or more prints in
+whole days since #187 S2 took four cells for FR); the full attribution is
 in the `KARMA_AP` alert detail and on a wider terminal. Pinned by
 `tests/test_karma.c :: test_view_full_page_fits_a_100x33_terminal`,
 which draws through `tui_draw()` on a 100x33 offscreen screen.
@@ -171,6 +196,11 @@ which draws through `tui_draw()` on a 100x33 offscreen screen.
   below — not a defect in the threshold.
 
 ## What's suspicious
+
+- **FR ≥ 2** — this BSSID told stations it was networks they asked for
+  by name, and it has never beaconed those names. That is the KARMA
+  mechanism itself, not a property of the beacons; `KARMA_PROBE_FORGE`
+  is CRIT once two different stations were answered.
 
 - **Two or more PNL hits on one station** — the AP is beaconing
   several of the networks *one* nearby device is looking for. That is

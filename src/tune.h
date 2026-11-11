@@ -189,6 +189,10 @@ typedef enum {
        aircraft's emergency condition must hold, by its own messages,
        before LOW becomes WARN. */
     TUNE_ADSB_EMERG_HOLD_S,
+    /* #187 S2: KARMA_PROBE_FORGE's count and window. See
+       src/karma_detect.h. */
+    TUNE_KARMA_FORGE_SSIDS,
+    TUNE_KARMA_FORGE_WINDOW_S,
     TUNE_COUNT
 } tune_id_t;
 

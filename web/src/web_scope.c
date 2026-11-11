@@ -145,6 +145,8 @@ const web_scope_alert_t web_scope_alerts[] = {
     /* The ADS-B decoder's SDR is a passive radio: Monitor's, as its
      * adsb_aircraft records are (#186). */
     { "ADSB_EMERGENCY", M },
+    /* Probe responses off the monitor radio (#187 S2). */
+    { "KARMA_PROBE_FORGE", M },
 };
 const int web_scope_alerts_n = (int)(sizeof(web_scope_alerts) / sizeof(web_scope_alerts[0]));
 

@@ -10,7 +10,7 @@ by `web/tools/alertkb.c`, never copied by hand).
 step's basis; each section names its own), `docs/wiki/alerts.md` and
 `docs/views/alerts.md` (what each rule fires on).
 
-**Last updated**: 2026-11-08 (#186: ADSB_EMERGENCY). 2026-11-03 (#173: FRAG_PLAINTEXT reads the station pair from the view; PM_FORGE's 900 s report window). 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
+**Last updated**: 2026-11-11 (#187 S2: KARMA_PROBE_FORGE). 2026-11-08 (#186: ADSB_EMERGENCY). 2026-11-03 (#173: FRAG_PLAINTEXT reads the station pair from the view; PM_FORGE's 900 s report window). 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
 remove" steps made conditional on the premises, as the rest are;
 review: WEAK_TLS aimed at the client
 that offered the old version; every on-device step conditional on the
@@ -1969,6 +1969,32 @@ Sources: `research/gnss/time-and-position-integrity.md`
 **Vendor fix:** none.
 
 Sources: `research/adsb/emergency-squawks.md`
+
+## `KARMA_PROBE_FORGE`
+
+**Investigate**
+
+1. Read the BSSID, how many names it answered that it never beaconed,
+   and to how many stations. One radio telling different stations it is
+   each of their private networks is the KARMA mechanism itself.
+2. Open the BSSID in the `[y]` KARMA view (the FR column) and the
+   beacon table: what it does beacon, and whether it also fans out
+   beacon names (`KARMA_AP`).
+3. Check which of the answered stations went on to associate with it.
+
+**Fix**
+
+1. If the transmitter is on premises the operator controls, locate it
+   and remove it; if not, report it to whoever runs the site. Do not
+   join it.
+2. On the operator's own clients, remove open networks from the saved
+   list and turn off automatic joining of them, so a forged answer has
+   nothing to lure.
+
+**Vendor fix:** none; the mechanism is clients trusting a network name
+alone. Mitigate on the clients and by removing the rogue.
+
+Sources: `research/papers/daizovi-macaulay-2005-karma.md`, `research/tools/airbase-ng.md`
 
 ## Related pages
 

@@ -19,6 +19,7 @@
 #include "ctrl_frames.h"
 #include "db.h"
 #include "eapol_log.h"
+#include "karma_detect.h"
 #include "presence.h"
 #include "rf_distance.h"
 #include "queue_evict.h"
@@ -297,6 +298,11 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     /* #186, src/alerts/rules_adsb.c. Below ADSB_EXPIRE_S (60): a hold
      * the table cannot keep a row for could never be reached. */
     { "adsb.emerg_hold_s",          10, 2, 59, "seconds an aircraft's emergency squawk or status must hold, by its own messages, before ADSB_EMERGENCY goes from LOW to WARN" },
+    /* #187 S2, KARMA_PROBE_FORGE (src/karma_detect.h argues both
+     * defaults). The count's ceiling is the per-row SSID set: a
+     * threshold above what a row can hold would never fire. */
+    { "karma.forge_ssids",          KARMA_FORGE_SSID_MIN_DEFAULT, 2, KARMA_FORGE_MAX_SSIDS, "distinct never-beaconed SSIDs one BSSID answered directed probes for" },
+    { "karma.forge_window_s",       KARMA_FORGE_WINDOW_DEFAULT_S, 10, 86400, "seconds an answered SSID stays on the forge row" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

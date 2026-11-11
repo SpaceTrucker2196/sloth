@@ -356,3 +356,9 @@ X(GNSS_POSITION_JUMP, "") /* real basis, no ATT&CK technique (second exemption f
  * Flag only: sloth surfaces it and never acts on it. */
 /* squawk 7500 / 7600 / 7700 or a DO-260B emergency status other than none, per address — SERA.13005, readsb README-json */
 X(ADSB_EMERGENCY, "") /* real basis, no ATT&CK technique (second exemption form) */
+/* One BSSID answering stations' directed probe requests for SSIDs it
+ * has never beaconed (#187 S2, src/karma_detect.h): the classic KARMA
+ * radio that beacons one name and answers the rest, which KARMA_AP's
+ * beacon-only fan-out cannot see. Same technique as KARMA_AP. */
+/* >= karma.forge_ssids never-beaconed SSIDs answered to directed probes — Dai Zovi & Macaulay 2005, airbase-ng -P */
+X(KARMA_PROBE_FORGE, "T1557") /* AiTM (forged directed probe response) */

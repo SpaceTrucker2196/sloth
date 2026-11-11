@@ -102,6 +102,7 @@ void rule_sae_psk_split(const sloth_state_t *s, time_t now);
 void rule_sae_psk_regression(const sloth_state_t *s, time_t now);
 void rule_wpa_downgrade(const sloth_state_t *s, time_t now);
 void rule_karma_ap(const sloth_state_t *s, time_t now);
+void rule_karma_probe_forge(const sloth_state_t *s, time_t now);
 void rule_open_setup_ap(const sloth_state_t *s, time_t now);
 void rule_cam_setup_ssid(const sloth_state_t *s, time_t now);
 void rule_evil_twin(const sloth_state_t *s, time_t now);

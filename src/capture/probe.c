@@ -24,6 +24,7 @@
 #include "flood_window.h"
 #include "sloth_clock.h"
 #include "probe_pnl.h"
+#include "karma_detect.h"         /* directed probe-response forgery (#187 S2) */
 #include "eapol_log.h"
 #include "fragattack.h"
 #include "pm_forge.h"
@@ -623,6 +624,9 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         char ssid[33];
         dot11_ie_ssid(body + fixed, blen - fixed, ssid, NULL);
         if (ssid[0]) beacon_reveal_hidden_ssid(bssid_p, ssid);
+        /* After the reveal, so a hidden AP's answer for its own name
+         * reads as its own name (#187 S2). */
+        if (sub == 5) karma_observe_frame(&fr, ssid);
         /* The WSC element (#82). A probe response carries the full one —
          * the vendor strings and UUID-E many beacons omit — and until
          * this line only its SSID was read. Parsing lives in
@@ -746,6 +750,8 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     pthread_mutex_lock(&g_mu);
     record_probe(sa, ssid, signal, channel, band);
     pthread_mutex_unlock(&g_mu);
+    /* The directed probe a forged answer pairs with (#187 S2). */
+    karma_observe_frame(&fr, ssid);
 
     /* OS fingerprint from vendor-specific IEs (strong-signal only). */
     const char *fp  = probe_pnl_fingerprint_ies(ie_start, ie_total);

@@ -40,6 +40,7 @@
 #include "inventory.h"
 #include "ip_color.h"
 #include "jsonl.h"
+#include "karma_detect.h"
 #include "kerb_snoop.h"
 #include "ldap_snoop.h"
 #include "platform/linux_wifi.h"
