@@ -201,10 +201,15 @@ int main(int argc, char **argv) {
     g_m4.frrs = &g_frrs;
     g_m4.chain = &g_chain;
     /* The agent's path (web_agent.h): only when asked for, a secret of
-     * this run's alone, in a file only this user reads. */
+     * this run's alone, in a file only this user reads (and, with
+     * --web-agent-group, that group's members). */
     if (cfg.agent_secret_path[0]) {
         char secret[WEB_AGENT_SECRET_LEN + 1];
-        if (web_agent_secret_make(cfg.agent_secret_path, secret, err, sizeof(err)) != 0) {
+        gid_t agid;
+        if ((cfg.agent_group[0] &&
+             web_agent_group_resolve(cfg.agent_group, &agid, err, sizeof(err)) != 0) ||
+            web_agent_secret_make(cfg.agent_secret_path, cfg.agent_group[0] ? &agid : NULL,
+                                  secret, err, sizeof(err)) != 0) {
             fprintf(stderr, "slothweb: %s\n", err);
             web_frrs_destroy(&g_frrs);
             web_store_close(&g_store);
@@ -213,8 +218,9 @@ int main(int argc, char **argv) {
         }
         web_frrs_set_agent(&g_frrs, secret);
         fprintf(stderr, "slothweb: agent writes: a loopback POST carrying the secret in %s "
-                        "writes triage, notes and links, recorded via agent%s\n",
-                cfg.agent_secret_path,
+                        "(%s%s) writes triage, notes and links, recorded via agent%s\n",
+                cfg.agent_secret_path, cfg.agent_group[0] ? "0640, group " : "0600",
+                cfg.agent_group,
                 cfg.read_only ? " (none now: --web-read-only)" : "");
     }
     /* The owner's fleet (web_fleet.h): the export is served whatever

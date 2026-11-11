@@ -61,6 +61,9 @@ typedef struct {
     /* Where the run's agent secret is written (web_agent.h); "" not
      * given: no agent path. */
     char     agent_secret_path[4096];   /* --web-agent-secret */
+    /* The group the secret file is given, 0640 (web_agent.h); "" none:
+     * 0600. Needs --web-agent-secret. */
+    char     agent_group[256];          /* --web-agent-group */
     /* The alert page's packet capture (web_pcapdir.h): the sensor's
      * --pcap-dir and, optionally, its --eapol-dir. None by default. */
     char     pcap_dir[WEB_PCAP_DIRS][4096];   /* --pcap-dir, repeatable */

@@ -1,6 +1,7 @@
 /* The dispatcher (mcp.h): one JSON-RPC request in, one response out. */
 #include "mcp.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -230,16 +231,30 @@ int mcp_agent_ok(const char *name) {
     return 1;
 }
 
+/* Whether gid is this process's, primary or supplementary. */
+static int in_group(gid_t gid) {
+    if (gid == getegid()) return 1;
+    gid_t g[256];
+    int n = getgroups((int)(sizeof(g) / sizeof(g[0])), g);
+    for (int i = 0; i < n; i++)
+        if (g[i] == gid) return 1;
+    return 0;
+}
+
 int mcp_secret_read(const char *path, char out[MCP_SECRET_LEN + 1]) {
     out[0] = '\0';
     if (!path || !path[0]) return -1;
     int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
-    if (fd < 0) return -1;
+    if (fd < 0) return errno == EACCES ? -2 : -1;
     struct stat st;
     char buf[MCP_SECRET_LEN + 2];
     ssize_t n = -1;
-    if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == geteuid() &&
-        (st.st_mode & 077) == 0)
+    /* slothweb's file: 0600 and this user's own, or (--web-agent-group)
+     * 0640 in a group this user is in, whoever owns it. Never one any
+     * other user can read: a secret others hold is not this agent's. */
+    int others = fstat(fd, &st) == 0 ? (int)(st.st_mode & 077) : -1;
+    if (others >= 0 && S_ISREG(st.st_mode) &&
+        ((others == 0 && st.st_uid == geteuid()) || (others == 040 && in_group(st.st_gid))))
         n = read(fd, buf, sizeof(buf));
     close(fd);
     if (n == MCP_SECRET_LEN + 1 && buf[MCP_SECRET_LEN] == '\n') n = MCP_SECRET_LEN;
@@ -451,7 +466,9 @@ static int request_build(const mcp_cfg_t *c, const tool_t *t, const args_t *v, m
     char secret[MCP_SECRET_LEN + 1];
     if (!c->agent[0]) { *why = "no_agent_name"; return -1; }
     if (!c->secret_path[0]) { *why = "no_secret_file"; return -1; }
-    if (mcp_secret_read(c->secret_path, secret) != 0) { *why = "secret_unreadable"; return -1; }
+    int sr = mcp_secret_read(c->secret_path, secret);
+    if (sr == -2) { *why = "secret_no_access"; return -1; }
+    if (sr != 0) { *why = "secret_unreadable"; return -1; }
     switch (t->kind) {
     case K_TRIAGE:
         mj_sb_raw(&b, "{\"by\":");
@@ -545,6 +562,10 @@ static void env_error(mj_sb_t *e, const tool_t *t, const char *why, const char *
     env_head(e, t, 0);
     mj_sb_raw(e, ",\"error\":");
     mj_sb_str(e, why);
+    /* The one refusal whose fix is on the host, not in the call: said
+     * in fixed words, never with the path or anything read from it. */
+    if (!strcmp(why, "secret_no_access"))
+        mj_sb_raw(e, ",\"hint\":\"cannot read the agent secret: check group membership\"");
     if (which) {
         mj_sb_raw(e, ",\"argument\":");
         mj_sb_str(e, which);

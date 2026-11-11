@@ -322,7 +322,8 @@ and the page says why in each view that needs it):
 | `PATH: SQLITE_DBCONFIG_DEFENSIVE refused`, `PATH: query_only: ERR` | The SQLite library lacks what slothweb needs: 3.31 or newer. |
 | `no --sloth-db`, `slothweb was built without SQLite; no sloth.db` | The reason `/api/health` gives (`db_error`) when there is no sloth.db to read. |
 | `--web-assessments: empty or too long a path`, `--web-assessments PATH: not a directory` | Give the directory holding the research assessments (`<TYPE>.md` with front matter), or leave the flag out: "follow recommended" then says "no recommendation yet". A path that is not there is accepted and means the same (`slothweb: follow recommended: PATH: no such directory, no recommendation yet`); `make install` puts them in `$(PREFIX)/share/sloth/alert-assessments`. |
-| `--web-agent-secret: empty or too long a path`, `--web-agent-secret PATH: exists and is not a private regular file of this user (mode 0600, one link); refused, left as it is`, `--web-agent-secret: no random bytes from /dev/urandom`, `--web-agent-secret PATH: ERR` | The file slothweb writes the run's agent secret to ([Writes by an agent](#writes-by-an-agent)). Name a path in a directory slothweb's user can write (its state directory); slothweb replaces its own earlier file there and will not write over anything else. Exit `1` for all but the first. |
+| `--web-agent-secret: empty or too long a path`, `--web-agent-secret PATH: exists and is not a private regular file of this user (mode 0600, one link); refused, left as it is`, `--web-agent-secret: no random bytes from /dev/urandom`, `--web-agent-secret PATH: ERR` | The file slothweb writes the run's agent secret to ([Writes by an agent](#writes-by-an-agent)). Name a path in a directory slothweb's user can write (under the shipped unit `/run/slothweb`); slothweb replaces its own earlier file there and will not write over anything else (with `--web-agent-group`, its own file may also be `0640` in that group: `... (mode 0600, or 0640 with the --web-agent-group group, one link) ...`). Exit `1` for all but the first. |
+| `--web-agent-group needs --web-agent-secret`, `--web-agent-group: empty or too long a name`, `--web-agent-group NAME: no such group`, `--web-agent-group: cannot give PATH.new the group (ERR); slothweb's user must be a member of the group` | The group the agent secret is given ([Writes by an agent](#writes-by-an-agent)). Create the group and add slothweb's user to it (`usermod -aG NAME sloth`; it takes effect at the next start of the service), or leave the flag out for a `0600` file. Exit `2` for the first two, `1` for the others. |
 | `triage: ERR`, `the store is not open`, `PATH: changed while it was being opened; refused` | The triage and TACDB writer (a third connection to the store, [Triage and the FRRS record](#triage-and-the-frrs-record)) could not open what the store thread had just opened: the file was replaced or locked in between. Start again; exit 1. |
 
 **The alert pcaps** (not fatal; each directory is opened afresh per
@@ -478,7 +479,8 @@ milestone (W0, M0 to M6; tracker #102).
 | `--web-retain-days N` | Days of 1 min buckets kept, 1..400, default 30. |
 | `--sloth-db PATH` | sloth's own database (`sloth --db`), read-only (below). Absent: `/api/devices` is a `503` `no_sloth_db`, the drawer and Lookup answer from the stream and the vendor table, A2 runs on the stream alone, and the page says so. A path that is not there yet, or a file refused, is not fatal: every request opens it afresh. Needs a `WITH_SQLITE` build; the same path as `--store` is refused. |
 | `--web-allow-sql` | The SQL box (M5, below): `/api/query` and `/api/recipes`, and the box on the History view. Off by default; without it both paths are `404` and the page never draws the box. Needs `--sloth-db` and a `WITH_SQLITE` build. `--strict` refuses it (exit 2). With `--web-allow-remote` it is announced on stderr, naming what every admitted peer can then read. |
-| `--web-agent-secret PATH` | Let an agent on this machine write through `slothweb-mcp` ([Writes by an agent](#writes-by-an-agent)): a secret drawn at start is written to `PATH` (`0600`, a new one every run, removed at exit), and a loopback POST carrying it in `X-Slothweb-Agent`, with no `Origin`, may write triage, notes and links, recorded `via: agent` under the name it gives. A `PATH` that is empty or too long is `slothweb: --web-agent-secret: empty or too long a path`; one holding something that is not a private regular file of this user is `--web-agent-secret PATH: exists and is not a private regular file of this user (mode 0600, one link); refused, left as it is`; no random bytes is `--web-agent-secret: no random bytes from /dev/urandom`; each exits before serving. Unset: no agent path, and a request with the header is `403 agent_off`. |
+| `--web-agent-group NAME` | With `--web-agent-secret`, the secret file is `0640` in group `NAME` instead of `0600` ([Writes by an agent](#writes-by-an-agent)), so `slothweb-mcp` runs as the operator's own user, a member of `NAME`, with no sudo rule (owner ruling 2026-11-11). Looked up at start; slothweb's own user must be a member of `NAME` (only then may it give a file that group). An unknown group, or one it cannot give, exits `1` before serving; without `--web-agent-secret` it exits `2`. |
+| `--web-agent-secret PATH` | Let an agent on this machine write through `slothweb-mcp` ([Writes by an agent](#writes-by-an-agent)): a secret drawn at start is written to `PATH` (`0600`, or `0640` in the `--web-agent-group` group; a new one every run, removed at exit), and a loopback POST carrying it in `X-Slothweb-Agent`, with no `Origin`, may write triage, notes and links, recorded `via: agent` under the name it gives. A `PATH` that is empty or too long is `slothweb: --web-agent-secret: empty or too long a path`; one holding something that is not a private regular file of this user is `--web-agent-secret PATH: exists and is not a private regular file of this user (mode 0600, one link); refused, left as it is`; no random bytes is `--web-agent-secret: no random bytes from /dev/urandom`; each exits before serving. Unset: no agent path, and a request with the header is `403 agent_off`. |
 | `--web-read-only` | No write route: every POST is `405` `Allow: GET, HEAD` before a header is checked, the surface before triage existed. The triage states and the TACDB still read; the page draws no button and says why. Default off: an admitted peer may write (the owner's open question Q10 asks whether `--web-allow-remote` should imply it). |
 | `--web-assessments DIR` | Where "follow recommended" reads each alert type's research assessment, `DIR/<TYPE>.md` (front matter `false_positive_risk`, `noise_verdict`, `severity_assessment`; [Triage](#triage-and-the-frrs-record)). The type name comes from the alert table, never from a request; each file read until its front matter closes, at most 32 KiB. Unset, or a path not there: every type says "no recommendation yet". Something there that is not a directory is refused (exit 2). `slothweb.service` passes `/usr/local/share/sloth/alert-assessments`, where `make install` copies `docs/wiki/alert-assessments/*.md`. |
 | `--pcap-dir DIR` | The sensor's `--pcap-dir`, read-only, for the alert page's packet capture ([An alert's proof](#an-alerts-proof)). Repeatable once more for its `--eapol-dir` (at most two; the same path twice is refused). Only a file named as sloth names an alert pcap is ever opened (`alert_YYYYMMDD_HHMMSS_<slug>.pcap`, or `<incident_id>-<event>-<RULE>[-N].pcap`), through the directory's descriptor, not following a symlink, a regular file of at most 16 MiB; never a handshake pcap or `eapol.22000`, whatever directory they sit in. Absent: the page says "slothweb was not given --pcap-dir". An evidence pcap is listed but withheld unless `--web-serve-evidence-pcap` is given (below). |
@@ -4522,8 +4524,24 @@ by descriptor, never through a link, put in place by `rename`; a file
 already there that is not a private regular file of this user is
 refused and left as it is) and keeps them in memory: a new secret every
 run, the file removed at a clean exit. slothweb says `agent writes: a
-loopback POST carrying the secret in PATH writes triage, notes and
-links, recorded via agent`. Without the flag there is no agent path.
+loopback POST carrying the secret in PATH (0600) writes triage, notes
+and links, recorded via agent`. Without the flag there is no agent path.
+
+`--web-agent-group NAME` (owner ruling 2026-11-11: `slothweb-mcp` reads
+the secret through group permission, with no sudo rule): the group is
+looked up at start (`getgrnam_r`); the file is created `0600` under its
+temporary name, given `(this user, NAME)` with `fchown` and made `0640`
+with `fchmod` there, and only then renamed into place, so it is never
+readable by anyone else at any instant. The kernel lets slothweb give a
+file only a group its user is a member of, so slothweb's user must be
+in `NAME`; otherwise, or with no such group, it refuses to start. A file
+already at `PATH` is then accepted as its own when it is `0600`, or
+`0640` with that group; another group or any other bit is refused and
+left as it is. The shipped unit puts it in `/run/slothweb`
+(`RuntimeDirectory=slothweb`, `0711`), because its state directory is
+`0700`; [docs/wiki/slothweb-mcp.md](../docs/wiki/slothweb-mcp.md)
+section 7 has the group, the flags and the re-login the operator's new
+group needs.
 
 `web_agent_check()` is the rule, run by `web_frrs_gate()` before a body
 byte is read and again by the router:
@@ -4552,7 +4570,11 @@ stop: another process of slothweb's own user, or root, can read the
 file; `by` is a label, as the operator's is.
 
 `web/tests/test_mcp.c` holds it (`test_whose_write`,
-`test_write_refusals`, `test_rate_limit`, `test_secret_file_rules`):
+`test_write_refusals`, `test_rate_limit`, `test_secret_file_rules`,
+`test_secret_file_group`: the file's mode and group with one of the
+test's own supplementary groups configured, an unknown group, a group
+the user is not in, a `0640` file of the group accepted and one of
+another group or with other bits refused, and `secret_no_access`):
 each line of the table, a browser's write never marked agent, a wrong
 secret refused by the gate and by the router each on its own, a
 near-miss and a prefix of the secret, the three routes and no other,

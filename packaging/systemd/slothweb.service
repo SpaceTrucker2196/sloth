@@ -50,6 +50,17 @@ StateDirectoryMode=0700
 WorkingDirectory=/var/lib/slothweb
 UMask=0077
 
+# /run/slothweb holds the agent secret when /etc/default/slothweb asks
+# for one (--web-agent-secret /run/slothweb/agent.secret --web-agent-group
+# NAME; docs/wiki/slothweb-mcp.md §7). The state directory is 0700, so
+# the operator's user could not reach a file in it whatever the file's
+# own mode; this one is 0711: anyone may pass through to a name they
+# already know, nobody else may list it or create in it, and the file's
+# own mode (0640, the group) is the boundary. Empty without the flag.
+# Removed at every stop, so a killed slothweb leaves no secret behind.
+RuntimeDirectory=slothweb
+RuntimeDirectoryMode=0711
+
 # The paths are this deployment's, fixed here because the sandbox
 # below admits no others: the sensor's unix socket, the sensor's db read
 # in place (WAL reader, web/src/web_slothdb.h: no side file is ever made
@@ -107,6 +118,10 @@ SystemCallFilter=~@privileged @resources
 # reaches any process; it costs only a self-signal slothweb never sends
 # (its shutdown is a write to a pipe; abort() still ends the process).
 SystemCallFilter=~kill tkill tgkill rt_sigqueueinfo rt_tgsigqueueinfo pidfd_send_signal
+# fchown back from ~@privileged (@chown is in it): --web-agent-group gives
+# the secret file its group. Unprivileged, it can only give a file this
+# user owns a group this user is in; it was EPERM under the line above.
+SystemCallFilter=fchown fchown32
 SystemCallErrorNumber=EPERM
 
 # ── Resources ────────────────────────────────────────────────────────────

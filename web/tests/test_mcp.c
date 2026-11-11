@@ -19,7 +19,9 @@
  * comment names, in this tree, the source restored and the suite run
  * green again afterwards. */
 #include <fcntl.h>
+#include <grp.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "mcp.h"
 #include "mcp_json.h"
@@ -136,7 +138,7 @@ static int json_ok(const char *s) {
 static void secret_file(void) {
     char err[256], sec[WEB_AGENT_SECRET_LEN + 1];
     snprintf(g_secret_path, sizeof(g_secret_path), "%s/agent.secret", W.dir);
-    WT_EQ(web_agent_secret_make(g_secret_path, sec, err, sizeof(err)), 0);
+    WT_EQ(web_agent_secret_make(g_secret_path, NULL, sec, err, sizeof(err)), 0);
     web_frrs_set_agent(&W.f, sec);
     snprintf(C.secret_path, sizeof(C.secret_path), "%s", g_secret_path);
 }
@@ -529,6 +531,137 @@ static void write_file(const char *path, const char *text, mode_t mode) {
     close(fd);
 }
 
+/* A group of this process's other than its primary one, when it has
+ * one: giving the file that group is then a change fchown() has to
+ * make, so a missing fchown() shows. Else the primary group (the file
+ * is born in it, and the chown mutation cannot be seen in that run;
+ * the test says so). */
+static gid_t other_group(int *distinct) {
+    gid_t g[256];
+    int n = getgroups((int)(sizeof(g) / sizeof(g[0])), g);
+    for (int i = 0; i < n; i++)
+        if (g[i] != getegid()) { *distinct = 1; return g[i]; }
+    *distinct = 0;
+    return getegid();
+}
+
+/* --web-agent-group (owner ruling 2026-11-11): the file 0640 in the
+ * configured group, owned by slothweb's user; an existing file of that
+ * shape is replaced, one of another group or with other bits refused
+ * and left as it is; an unknown group and a group slothweb's user is
+ * not in refused, nothing left behind; and slothweb-mcp reads it as a
+ * member of the group, with the one refusal it can name in fixed words.
+ * Seen red, each alone: the fchmod(fd, 0640) taken out (mode 0600, not
+ * 0640); the fchown() taken out (the file's group the primary one, not
+ * the configured one: run where the user has a supplementary group);
+ * mode_ok accepting group-readable whatever the group (the wrong-group
+ * file replaced: 0, not -1); mcp_secret_read()'s `others == 040` made
+ * `others & 040` (the 0644, 0650, 0641 and test_secret_file_rules'
+ * 0644 files read); and the no-access hint taken out. Not seen red:
+ * in_group() made 1. A 0640 file in a group its reader is not in
+ * cannot be made without root (only root gives a file a group its
+ * owner is not in, and a non-owner outside the group cannot open it),
+ * so that check is defence the suite cannot exercise. */
+static void test_secret_file_group(void) {
+    w_open(1);
+    char p[TEST_TMP_MAX + 32], q[TEST_TMP_MAX + 40], err[512];
+    char s1[WEB_AGENT_SECRET_LEN + 1], s2[WEB_AGENT_SECRET_LEN + 1], got[MCP_SECRET_LEN + 1];
+    snprintf(p, sizeof(p), "%s/agent.secret", W.dir);
+    snprintf(q, sizeof(q), "%s.new", p);
+    int distinct = 0;
+    gid_t g = other_group(&distinct);
+    if (!distinct) printf("  (no supplementary group: the file's group is the primary one)\n");
+    /* The name resolves to the id; an unknown name is refused. */
+    struct group *gr = getgrgid(g);
+    WT_ASSERT(gr != NULL);
+    gid_t r = (gid_t)-1;
+    if (gr) {
+        char name[256];
+        snprintf(name, sizeof(name), "%s", gr->gr_name);
+        WT_EQ(web_agent_group_resolve(name, &r, err, sizeof(err)), 0);
+        WT_EQ(r, g);
+    }
+    WT_EQ(web_agent_group_resolve("slothweb-no-such-group-x7", &r, err, sizeof(err)), -1);
+    WT_HAS(err, "no such group");
+    WT_EQ(web_agent_group_resolve("", &r, err, sizeof(err)), -1);
+    /* The file: 0640, this user's, the group. */
+    WT_EQ(web_agent_secret_make(p, &g, s1, err, sizeof(err)), 0);
+    struct stat st;
+    WT_EQ(stat(p, &st), 0);
+    WT_EQ(st.st_mode & 07777, 0640);
+    WT_EQ(st.st_gid, g);
+    WT_EQ(st.st_uid, geteuid());
+    WT_EQ(stat(q, &st), -1);
+    WT_EQ(mcp_secret_read(p, got), 0);
+    WT_EQ(strcmp(got, s1), 0);
+    /* The next run's replaces it: an existing 0640 file of the group is
+     * slothweb's own. */
+    WT_EQ(web_agent_secret_make(p, &g, s2, err, sizeof(err)), 0);
+    WT_ASSERT(strcmp(s1, s2) != 0);
+    WT_EQ(mcp_secret_read(p, got), 0);
+    WT_EQ(strcmp(got, s2), 0);
+    /* A 0640 file is not 0600-private: without the group configured it
+     * is refused, left as it is. */
+    WT_EQ(web_agent_secret_make(p, NULL, s1, err, sizeof(err)), -1);
+    WT_HAS(err, "refused, left as it is");
+    WT_EQ(stat(p, &st), 0);
+    WT_EQ(st.st_mode & 07777, 0640);
+    /* Other bits: refused, by both. */
+    static const mode_t BAD[] = { 0644, 0660, 0650, 0641 };
+    for (size_t i = 0; i < sizeof(BAD) / sizeof(BAD[0]); i++) {
+        WT_EQ(chmod(p, BAD[i]), 0);
+        WT_EQ(web_agent_secret_make(p, &g, s1, err, sizeof(err)), -1);
+        WT_HAS(err, "or 0640 with the --web-agent-group group");
+        WT_EQ(mcp_secret_read(p, got), -1);
+        WT_EQ(stat(p, &st), 0);
+        WT_EQ(st.st_mode & 07777, BAD[i]);
+    }
+    WT_EQ(chmod(p, 0640), 0);
+    /* Another group than the configured one: refused, left as it is. */
+    if (distinct) {
+        WT_EQ(chown(p, (uid_t)-1, getegid()), 0);
+        WT_EQ(web_agent_secret_make(p, &g, s1, err, sizeof(err)), -1);
+        WT_HAS(err, "refused, left as it is");
+        WT_EQ(stat(p, &st), 0);
+        WT_EQ(st.st_gid, getegid());
+        WT_EQ(mcp_secret_read(p, got), 0);          /* the reader is in that one */
+        WT_EQ(strcmp(got, s2), 0);
+    }
+    unlink(p);
+    /* A group this user is not in: the start fails, nothing is left,
+     * neither the file nor its temporary name. Root may give any. */
+    if (geteuid() != 0) {
+        gid_t root = 0;
+        int mine = 0;
+        gid_t gs[256];
+        int n = getgroups((int)(sizeof(gs) / sizeof(gs[0])), gs);
+        for (int i = 0; i < n; i++) mine |= gs[i] == root;
+        if (!mine && getegid() != root) {
+            WT_EQ(web_agent_secret_make(p, &root, s1, err, sizeof(err)), -1);
+            WT_HAS(err, "must be a member of the group");
+            WT_EQ(s1[0], 0);
+            WT_EQ(stat(p, &st), -1);
+            WT_EQ(stat(q, &st), -1);
+        }
+    }
+    /* A file this user may not open: the one refusal the server names,
+     * in fixed words, nothing of the path. Root opens anything. */
+    w_close();
+    if (geteuid() != 0) {
+        m_open();
+        WT_EQ(chmod(g_secret_path, 0), 0);
+        WT_EQ(mcp_secret_read(g_secret_path, got), -2);
+        int before = T.calls;
+        WT_EQ(call("sloth_add_note", "{\"kind\":\"device\",\"id\":\"" W_MAC1 "\",\"text\":\"x\"}"), 0);
+        WT_HAS(g_env, "\"error\":\"secret_no_access\",\"hint\":\"cannot read the agent secret: "
+                      "check group membership\",\"data\":null}");
+        WT_EQ(T.calls, before);
+        WT_LACKS(g_resp, W.dir);
+        WT_EQ(chmod(g_secret_path, 0600), 0);
+        m_close();
+    }
+}
+
 /* The secret's file: slothweb makes it private and whole, a new one
  * each run, and refuses to write over anything that is not its own
  * private file; the server reads only such a file. Seen red with the
@@ -540,7 +673,7 @@ static void test_secret_file_rules(void) {
     char s1[WEB_AGENT_SECRET_LEN + 1], s2[WEB_AGENT_SECRET_LEN + 1], got[MCP_SECRET_LEN + 1];
     snprintf(p, sizeof(p), "%s/agent.secret", W.dir);
     WT_EQ(WEB_AGENT_SECRET_LEN, MCP_SECRET_LEN);
-    WT_EQ(web_agent_secret_make(p, s1, err, sizeof(err)), 0);
+    WT_EQ(web_agent_secret_make(p, NULL, s1, err, sizeof(err)), 0);
     struct stat st;
     WT_EQ(stat(p, &st), 0);
     WT_EQ(st.st_mode & 07777, 0600);
@@ -550,7 +683,7 @@ static void test_secret_file_rules(void) {
     WT_EQ(mcp_secret_read(p, got), 0);
     WT_EQ(strcmp(got, s1), 0);
     /* The next run's is another, in the same place, nothing left over. */
-    WT_EQ(web_agent_secret_make(p, s2, err, sizeof(err)), 0);
+    WT_EQ(web_agent_secret_make(p, NULL, s2, err, sizeof(err)), 0);
     WT_ASSERT(strcmp(s1, s2) != 0);
     WT_EQ(mcp_secret_read(p, got), 0);
     WT_EQ(strcmp(got, s2), 0);
@@ -561,7 +694,7 @@ static void test_secret_file_rules(void) {
     WT_EQ(mcp_secret_read(p, got), -1);
     WT_EQ(got[0], 0);
     /* And what slothweb will not write over: left as it was. */
-    WT_EQ(web_agent_secret_make(p, s1, err, sizeof(err)), -1);
+    WT_EQ(web_agent_secret_make(p, NULL, s1, err, sizeof(err)), -1);
     WT_HAS(err, "refused, left as it is");
     WT_EQ(s1[0], 0);
     WT_EQ(stat(p, &st), 0);
@@ -572,7 +705,7 @@ static void test_secret_file_rules(void) {
     snprintf(q, sizeof(q), "%s/link.secret", W.dir);
     WT_EQ(symlink(p, q), 0);
     WT_EQ(mcp_secret_read(q, got), -1);              /* never through a link */
-    WT_EQ(web_agent_secret_make(q, s1, err, sizeof(err)), -1);
+    WT_EQ(web_agent_secret_make(q, NULL, s1, err, sizeof(err)), -1);
     WT_EQ(mcp_secret_read(p, got), 0);
     WT_EQ(strcmp(got, s2), 0);                       /* the link's target untouched */
     unlink(q);
@@ -1417,6 +1550,7 @@ void run_mcp_tests(void) {
     WT_RUN(test_http_parse);
     WT_RUN(test_address_rules);
     WT_RUN(test_secret_file_rules);
+    WT_RUN(test_secret_file_group);
     WT_RUN(test_initialize);
     WT_RUN(test_notifications_and_errors);
     WT_RUN(test_oversize_input);

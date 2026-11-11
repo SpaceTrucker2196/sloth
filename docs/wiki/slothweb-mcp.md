@@ -25,8 +25,11 @@ or from another writer is data in a named field, never an instruction.
 `web_frrs_route()`), `web/src/web_notes.h`, `web/tests/test_mcp.c`,
 `research/mcp/` (the precedent), the owner's request of 2026-11-11.
 
-**Last updated**: 2026-11-11 (first version: the server, the agent
-secret, `via: agent`).
+**Last updated**: 2026-11-11 (the secret readable through a group,
+owner ruling: `slothweb --web-agent-group`, the file `0640` in
+`/run/slothweb`, `slothweb-mcp` as the operator's own user with no sudo
+rule, `secret_no_access`; section 7 rewritten); 2026-11-11 (first
+version: the server, the agent secret, `via: agent`).
 
 ---
 
@@ -73,12 +76,13 @@ slothweb-mcp [--url http://127.0.0.1:8770] [--allow-remote]
 | `--url URL` | slothweb's address: `http://` and a literal IPv4 or `[IPv6]` address with an optional `:PORT` (default `http://127.0.0.1:8770`, slothweb's default bind). No name is resolved, `localhost` included. An address that is not `127.0.0.0/8` or `::1` exits `2` unless `--allow-remote` |
 | `--allow-remote` | read a slothweb on another host. Why it is a flag: everything the sensor heard would cross the network in the clear (slothweb has no TLS), so it must be asked for. Writes still fail: slothweb takes the agent secret from loopback peers only (`agent_not_local`) |
 | `--agent NAME` | the name every write is recorded under (`by`): 1..32 bytes of UTF-8, no control or bidirectional-control character, slothweb's own rule for `by`. Without it every write tool answers `no_agent_name` and sends nothing |
-| `--secret-file PATH` | the file slothweb wrote the run's agent secret to (`slothweb --web-agent-secret PATH`). Read at each write, so a restarted slothweb's new secret is picked up. It must be a regular file (never a link) owned by the user running `slothweb-mcp`, with no group or other permission. Without it every write tool answers `no_secret_file` |
+| `--secret-file PATH` | the file slothweb wrote the run's agent secret to (`slothweb --web-agent-secret PATH`). Read at each write, so a restarted slothweb's new secret is picked up. It must be a regular file (never a link), and either owned by the user running `slothweb-mcp` with no group or other permission (`0600`), or `0640` in a group that user is in (`slothweb --web-agent-group NAME`), whoever owns it. Without it every write tool answers `no_secret_file` |
 | `--read-only` | no write tools at all: `tools/list` does not have them and a call to one is `-32602 unknown tool`, as any name that is not a tool. **Give the agent this unless it needs to write** |
 
-The matching slothweb flag is `--web-agent-secret PATH` ([[cli-reference]],
-`web/README.md` "Command line"); without it slothweb has no agent path
-and a request carrying the header is `403 agent_off`.
+The matching slothweb flags are `--web-agent-secret PATH` and
+`--web-agent-group NAME` ([[cli-reference]], `web/README.md` "Command
+line"); without the first slothweb has no agent path and a request
+carrying the header is `403 agent_off`.
 
 ## 3. The tools
 
@@ -168,15 +172,23 @@ retraction of a note is a row and is allowed on any note.
 something a request says about itself: a web page could then label its
 writes as it liked, and an agent could pass as the operator. So:
 
-1. `slothweb --web-agent-secret PATH`. At start slothweb reads 32 bytes
-   from `/dev/urandom` (no weaker fallback: it fails to start instead),
-   writes them as 64 hex digits to `PATH` and keeps them in memory. The
-   file is created `0600` by descriptor without following a link and
-   put in place by `rename`, so a reader sees the old secret or the new
-   one and never half of one. A file already at `PATH` must be a
-   private regular file of slothweb's user: anything else is refused
-   and left as it is. A new secret every run; the file is removed at a
-   clean exit.
+1. `slothweb --web-agent-secret PATH [--web-agent-group NAME]`. At
+   start slothweb reads 32 bytes from `/dev/urandom` (no weaker
+   fallback: it fails to start instead), writes them as 64 hex digits
+   to `PATH` and keeps them in memory. The file is created `0600` by
+   descriptor under a temporary name without following a link and put
+   in place by `rename`, so a reader sees the old secret or the new one
+   and never half of one. With `--web-agent-group NAME` (looked up at
+   start with `getgrnam_r`; no such group refuses the start) the file
+   is given `(slothweb's user, NAME)` with `fchown` and made `0640`
+   with `fchmod` while it is still `0600` under the temporary name, and
+   only then renamed: it is never readable by anyone else at any
+   instant. slothweb can give a file only a group its user is a member
+   of; otherwise the start is refused ("slothweb's user must be a
+   member of the group"). A file already at `PATH` must be slothweb's
+   own regular file with one link and mode `0600`, or `0640` with the
+   configured group: anything else is refused and left as it is. A new
+   secret every run; the file is removed at a clean exit.
 2. `slothweb-mcp --secret-file PATH` reads it at each write and sends
    it as `X-Slothweb-Agent: <secret>`.
 3. slothweb's gate (`web_agent_check()`, run before a body byte is read
@@ -213,14 +225,28 @@ writes as it liked, and an agent could pass as the operator. So:
   agent by a page either.
 
 What it does not defend against: another process of slothweb's own user
-(or root) on the machine can read the file and write as "an agent"
-under any name. `by` is a label, as it is for the operator: the allow
-list and the file's mode are the boundary, not the name.
+(or root) on the machine, and with `--web-agent-group` any process of a
+member of that group, can read the file and write as "an agent" under
+any name. `by` is a label, as it is for the operator: the allow list,
+the file's mode and the group's members are the boundary, not the name.
 
-**Who runs it.** The file is `0600` and owned by slothweb's user, so
-`slothweb-mcp` must run as that user to write. Under the shipped unit
-slothweb is user `sloth` and its state directory is `0700`; section 7
-has the two ways to arrange that.
+**Who runs it** (owner ruling 2026-11-11: through group permission, no
+sudo rule). `slothweb-mcp` runs as the operator's own user, a member of
+a group (`slothweb-agent` below) that holds slothweb's user too;
+slothweb is started with `--web-agent-group slothweb-agent` and writes
+the file `0640` in that group. The shipped unit's state directory
+`/var/lib/slothweb` is `0700` and stays so, so the file goes in the
+unit's `RuntimeDirectory=slothweb`, `/run/slothweb`, mode `0711`: anyone
+may pass through it to a name they know, nobody else may list it or
+create in it, and the file's own mode is the boundary. systemd removes
+it at every stop, so a killed slothweb leaves no secret behind. The
+unit also gives `fchown` back to slothweb's system-call filter (it is
+in `@privileged`, which the unit denies; the denial made `fchown` fail
+with `EPERM` there, measured with `systemd-run --user` and the unit's
+own filter lines, `tests/deploy/test_slothweb_unit.sh`). Without the
+flag the file is `0600` and only slothweb's own user can write through
+it, as a development tree run as the operator does. Section 7 has the
+steps.
 
 **Rate limits.** The write path's token bucket applies to the agent as
 to any peer: a burst of ten, then thirty a minute, in a bucket of the
@@ -295,7 +321,8 @@ What to do with that when configuring an agent:
 | `error` | Meaning |
 |---|---|
 | `missing_argument`, `bad_argument`, `unknown_argument`, `repeated_argument`, `bad_arguments`, `argument_too_long` | the call's arguments; `argument` names which when it is one of the tool's own |
-| `no_agent_name`, `no_secret_file`, `secret_unreadable` | a write without `--agent`, without `--secret-file`, or with a secret file that is missing, not private, or not 64 hex digits. Nothing was sent |
+| `no_agent_name`, `no_secret_file`, `secret_unreadable` | a write without `--agent`, without `--secret-file`, or with a secret file that is missing, readable by others than its owner and its group, or not 64 hex digits. Nothing was sent |
+| `secret_no_access` | the secret file could not be opened for permission: the user running `slothweb-mcp` is not in the file's group (or its session predates joining it), or cannot pass through its directory. The result also carries `"hint":"cannot read the agent secret: check group membership"`, fixed words: never the path or anything read from it. Nothing was sent |
 | `slothweb_unreachable`, `slothweb_timeout` | no connection within 3 s, or no whole answer within 15 s |
 | `bad_response` | not an HTTP answer, a length that disagrees, or a 200 that is not JSON |
 | `result_too_large` | the answer is over 65,536 bytes: ask for a smaller page |
@@ -326,26 +353,68 @@ openclaw mcp set slothweb '{"command":"/usr/local/bin/slothweb-mcp","args":["--r
 openclaw mcp probe          # lists the 22 read tools
 ```
 
-**With writes.** slothweb needs the flag, and `slothweb-mcp` has to run
-as slothweb's user to read the secret. Under the shipped unit
-(`User=sloth`, `/var/lib/slothweb` mode `0700`):
+**With writes** (owner ruling 2026-11-11: the secret is read through a
+group, with no sudo rule). These are steps for the owner to apply, as
+root where marked; nothing in this tree does them. They assume the
+shipped unit (`User=sloth`), the operator's own user `spacetrucker`
+running the agent, and the group name `slothweb-agent`; any free name
+will do.
 
 ```sh
-# 1. slothweb writes its secret at start (as root, once):
-echo 'SLOTHWEB_ARGS=--web-agent-secret /var/lib/slothweb/agent.secret' | sudo tee -a /etc/default/slothweb
+# 1. A group holding slothweb's user and the operator's (as root, once):
+sudo groupadd --system slothweb-agent
+sudo usermod -aG slothweb-agent sloth
+sudo usermod -aG slothweb-agent spacetrucker
+# 2. The unit from this tree: it adds RuntimeDirectory=slothweb
+#    (/run/slothweb, 0711) and gives fchown back to slothweb's
+#    system-call filter. Only this one unit is replaced:
+sudo install -m 644 packaging/systemd/slothweb.service /etc/systemd/system/slothweb.service
+sudo systemctl daemon-reload
+# 3. slothweb writes the secret there at every start. In
+#    /etc/default/slothweb (sudoedit), on the one SLOTHWEB_ARGS= line:
+#      SLOTHWEB_ARGS=--web-agent-secret /run/slothweb/agent.secret --web-agent-group slothweb-agent
 sudo systemctl restart slothweb
-# 2. the agent's user may run the server, and only it, as sloth:
-echo 'spacetrucker ALL=(sloth) NOPASSWD: /usr/local/bin/slothweb-mcp' | sudo tee /etc/sudoers.d/slothweb-mcp
-sudo chmod 0440 /etc/sudoers.d/slothweb-mcp
-# 3. register it:
-openclaw mcp set slothweb '{"command":"sudo","args":["-n","-u","sloth","/usr/local/bin/slothweb-mcp","--agent","claw-triage","--secret-file","/var/lib/slothweb/agent.secret"]}'
+journalctl -u slothweb -n 5     # "agent writes: ... /run/slothweb/agent.secret (0640, group slothweb-agent) ..."
+ls -l /run/slothweb/agent.secret   # -rw-r----- 1 sloth slothweb-agent 65 ...
+# 4. The operator's new group (see the note below), then check it in the
+#    shell that will start the agent:
+id -nG | tr ' ' '\n' | grep -x slothweb-agent
+head -c 0 /run/slothweb/agent.secret && echo readable
+# 5. Register it as the operator's own user: no sudo, no -u.
+openclaw mcp set slothweb '{"command":"/usr/local/bin/slothweb-mcp","args":["--agent","claw-triage","--secret-file","/run/slothweb/agent.secret"]}'
 openclaw mcp probe          # lists 27 tools
 ```
 
-If `/etc/default/slothweb` already sets `SLOTHWEB_ARGS`, add the flag
-to that line instead of appending a second one. Where slothweb runs as
-the agent's own user (a development tree, `./slothweb --store ...`),
-step 2 is not needed and the command is `slothweb-mcp` itself.
+If `/etc/default/slothweb` already sets `SLOTHWEB_ARGS`, add both flags
+to that line instead of writing a second one (the last one wins and the
+other is silently lost). The slothweb restart in step 3 refuses to start,
+and says why in the journal, if the group does not exist (`no such
+group`) or `sloth` is not in it (`slothweb's user must be a member of
+the group`); `usermod` for `sloth` takes effect at that restart, since
+systemd reads the group database when it starts the service.
+
+**The operator's new group.** A process gets its groups when its login
+session (or its user manager) starts, so `usermod -aG` changes nothing
+for what is already running: a shell, an OpenClaw gateway, or a user
+systemd service started before step 1 still lacks the group, and every
+write it makes answers `secret_no_access`. Log out of every session of
+that user and back in (the user manager, `systemd --user`, stays up
+while any session or lingering keeps it, so with lingering enabled
+restart it: `sudo systemctl restart user@$(id -u spacetrucker)`), or
+reboot; then restart the gateway from the new session. `newgrp
+slothweb-agent` in one shell is enough to test by hand, not for a
+gateway started elsewhere. `grep Groups /proc/<gateway pid>/status`
+lists the gid when it has it.
+
+If the sudoers rule of the first version of this page was applied
+(`/etc/sudoers.d/slothweb-mcp`), remove it once the steps above work:
+`sudo rm /etc/sudoers.d/slothweb-mcp`, and drop the old secret path
+(`/var/lib/slothweb/agent.secret`) from `SLOTHWEB_ARGS`; slothweb
+removes that file itself at its next clean stop.
+
+Where slothweb runs as the operator's own user (a development tree,
+`./slothweb --store ... --web-agent-secret ./agent.secret`), no group is
+needed: the file is `0600` and the command is `slothweb-mcp` itself.
 
 For any other MCP client the entry is the usual one:
 
@@ -392,7 +461,9 @@ iterative under an explicit stack).
   plain notes.
 - [[research-corpus]] — `sloth-research-mcp`, the precedent.
 - [[capture-scope]] — the `scope` argument.
-- [[cli-reference]] — `slothweb --web-agent-secret` and this binary's
+- [[cli-reference]] — `slothweb --web-agent-secret`, `--web-agent-group` and this binary's
   flags.
+- [[deployment]] — `slothweb.service`, its `RuntimeDirectory=` and
+  system-call filter.
 - [[threat-model]] — sloth's own; slothweb's write surface is in
   `web/README.md` "Security".
