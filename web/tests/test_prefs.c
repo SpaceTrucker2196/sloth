@@ -131,6 +131,9 @@ static const char *const KEPT_ELSEWHERE[] = {
     "al-triage",  /* ctl.al-triage, by frrs.js (the address wins) */
     "frrs-by",    /* frrs.by: the name a triage row carries */
     "tc-q",       /* frrs.tacdb.q, by frrs.js */
+    "d-sites",    /* fleet.devices, by fvSetup() once the peers are known */
+    "w-sites",    /* fleet.aps */
+    "b-sites",    /* fleet.ble */
 };
 static const char *const NOT_KEPT[] = {
     "q-recipe",   /* an action: it fills the SQL box, whose text is kept */

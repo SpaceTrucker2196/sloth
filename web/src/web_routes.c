@@ -12,6 +12,7 @@
 #include "web_evidence.h"
 #include "web_fleet.h"
 #include "web_fleetgnss.h"
+#include "web_fleetview.h"
 #include "web_locate.h"
 #include "web_bundle.h"
 #include "web_flows.h"
@@ -692,6 +693,14 @@ static int route_m4(const web_req_t *rq, const web_health_t *h, int which,
     } else {
         rc = web_lookup_route(m, rq->query, h->wall_s, body, cap, &bl, &status);
     }
+    /* The peers' rows (web_fleetview.h), after the route has answered. */
+    if (rc == 0 && bl && which != M4_LOOKUP && h->fleet_merge) {
+        web_fv_src_t fs = { m->sdb, h->ble };
+        if (which == M4_DEVICES && status == 200)
+            web_fv_list(m->fleet, &fs, WEB_FV_DEVICES, rq->query, h->wall_s, body, cap, &bl);
+        else if (which == M4_DEVICE)
+            web_fv_detail(m->fleet, 0, arg, h->wall_s, body, cap, &bl, &status);
+    }
     if (rc != 0 || bl == 0) {
         r->status = 503;
         r->out_len = web_http_response(503, rq->is_head, out, outsz);
@@ -766,6 +775,10 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
         web_m4_t mc = *m;
         mc.check_only = none_here != NULL;
         rc = F[which](&mc, rq->query, h->wall_s, body, cap, &bl, &status);
+        if (rc == 0 && which == M5_APS && !none_here && status == 200 && h->fleet_merge) {
+            web_fv_src_t fs = { m->sdb, h->ble };
+            web_fv_list(m->fleet, &fs, WEB_FV_APS, rq->query, h->wall_s, body, cap, &bl);
+        }
         if (rc == 0 && none_here && status == 200) {
             web_jw_t w;
             web_jw_init(&w, body, cap);
@@ -994,6 +1007,14 @@ static int route_ble(const web_req_t *rq, const web_health_t *h, int which,
         else
             rc = web_ble_device_route(h->ble, arg, rq->query, h->wall_s, none_here, body,
                                       cap, &bl, &status);
+        if (rc == 0 && which != BLE_ALERTS && !none_here && h->fleet_merge) {
+            web_fleet_t *fl = h->m4 ? h->m4->fleet : NULL;
+            web_fv_src_t fs = { h->m4 ? h->m4->sdb : NULL, h->ble };
+            if (which == BLE_DEVICES && status == 200)
+                web_fv_list(fl, &fs, WEB_FV_BLE, rq->query, h->wall_s, body, cap, &bl);
+            else if (which == BLE_DEVICE)
+                web_fv_detail(fl, 1, arg, h->wall_s, body, cap, &bl, &status);
+        }
         if (rc == 0 && none_here && status == 200) bl = web_ble_out_of_scope_json(body, cap);
     }
     if (rc != 0 || bl == 0) {
@@ -1583,6 +1604,50 @@ int web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
     return route_paths(rq, h, sse_room, out, outsz, r);
 }
 
+enum { MG_DEVICES, MG_DEVICE, MG_APS, MG_BLE, MG_BLEDEV };
+
+/* The merged views (web_fleetview.h): fleet= taken out of the query as
+ * scope= is, the route answered as before on the rest, and the peers'
+ * rows merged into its answer when the request asks for them (fleet=1
+ * or no fleet=), a peer is configured and the request is Hybrid's. */
+static int route_merged(const web_req_t *rq, const web_health_t *h, int which,
+                        const char *arg, char *out, size_t outsz, web_resp_t *r) {
+    web_health_t hh = *h;
+    hh.fleet_merge = 0;
+    web_req_t *q = NULL;
+    const web_req_t *use = rq;
+    if (!qlong(rq) && strstr(rq->query, "fleet")) {
+        int mode;
+        char why[48] = "";
+        q = malloc(sizeof(*q));
+        if (!q) return -1;
+        *q = *rq;
+        if (web_fv_take(rq->query, q->query, WEB_QUERY_ROUTE_MAX, &mode, why,
+                        sizeof(why)) != 0) {
+            free(q);
+            if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+            size_t bl = web_series_error_json(why, out + WEB_LIVE_HDR_RESERVE,
+                                              outsz - WEB_LIVE_HDR_RESERVE);
+            if (!bl) return -1;
+            return json_answer(rq, h, 400, bl, out, outsz, r);
+        }
+        hh.fleet_merge = web_fv_on(h->m4 ? h->m4->fleet : NULL, mode, h->sc);
+        use = q;
+    } else {
+        hh.fleet_merge = web_fv_on(h->m4 ? h->m4->fleet : NULL, WEB_FV_DEFAULT, h->sc);
+    }
+    int rc;
+    switch (which) {
+    case MG_DEVICES: rc = route_m4(use, &hh, M4_DEVICES, NULL, out, outsz, r); break;
+    case MG_DEVICE:  rc = route_m4(use, &hh, M4_DEVICE, arg, out, outsz, r); break;
+    case MG_APS:     rc = route_m5(use, &hh, M5_APS, out, outsz, r); break;
+    case MG_BLE:     rc = route_ble(use, &hh, BLE_DEVICES, NULL, out, outsz, r); break;
+    default:         rc = route_ble(use, &hh, BLE_DEVICE, arg, out, outsz, r); break;
+    }
+    free(q);
+    return rc;
+}
+
 static int route_scoped(const web_req_t *rq, const web_health_t *h,
                         int sse_room, char *out, size_t outsz, web_resp_t *r) {
     static const web_m4_t none;
@@ -1634,12 +1699,14 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
         if (!strcmp(rq->path, "/api/baseline"))
             return route_baseline(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/devices"))
-            return route_m4(rq, h, M4_DEVICES, NULL, out, outsz, r);
+            return route_merged(rq, h, MG_DEVICES, NULL, out, outsz, r);
         if (!strcmp(rq->path, "/api/lookup"))
             return route_m4(rq, h, M4_LOOKUP, NULL, out, outsz, r);
         if (!strncmp(rq->path, "/api/device/", 12) && rq->path[12] &&
             !strchr(rq->path + 12, '/'))
-            return route_m4(rq, h, M4_DEVICE, rq->path + 12, out, outsz, r);
+            return route_merged(rq, h, MG_DEVICE, rq->path + 12, out, outsz, r);
+        if (!strcmp(rq->path, "/api/wifi/aps"))
+            return route_merged(rq, h, MG_APS, NULL, out, outsz, r);
         static const struct { const char *path; int which; } M5[] = {
             { "/api/wifi/channels", M5_CHANNELS },
             { "/api/wifi/deauth", M5_DEAUTH },
@@ -1654,7 +1721,6 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             { "/api/aprs/seen", RF_APRS_SEEN },
             { "/api/aprs/station", RF_APRS_STN },
             { "/api/aprs/tracks", RF_APRS_TRK },
-            { "/api/wifi/aps", M5_APS },
             { "/api/wifi/local", M5_WLOCAL },
             { "/api/history/overview", M5_OVERVIEW },
             { "/api/history/devices", M5_HDEVICES },
@@ -1685,7 +1751,7 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
         if (!strcmp(rq->path, "/api/radar"))
             return route_radar(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/ble"))
-            return route_ble(rq, h, BLE_DEVICES, NULL, out, outsz, r);
+            return route_merged(rq, h, MG_BLE, NULL, out, outsz, r);
         if (!strcmp(rq->path, "/api/ble/alerts"))
             return route_ble(rq, h, BLE_ALERTS, NULL, out, outsz, r);
         /* Before the address branch below, which would read either as a
@@ -1696,7 +1762,7 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_bledev(rq, h, 1, out, outsz, r);
         if (!strncmp(rq->path, "/api/ble/", 9) && rq->path[9] &&
             !strchr(rq->path + 9, '/'))
-            return route_ble(rq, h, BLE_DEVICE, rq->path + 9, out, outsz, r);
+            return route_merged(rq, h, MG_BLEDEV, rq->path + 9, out, outsz, r);
         if (!strcmp(rq->path, "/api/pcap/frames"))
             return route_pcap(rq, h, 0, out, outsz, r);
         if (!strcmp(rq->path, "/api/pcap"))

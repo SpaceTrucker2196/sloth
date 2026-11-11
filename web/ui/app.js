@@ -187,6 +187,79 @@
     return e;
   }
 
+  // ── the merged views (web_fleetview.h; owner request 2026-11-11) ──
+  // The WiFi Devices list, the AP table and the BLE advertisers carry
+  // the peers' rows (--peer): a row only another sloth host heard is
+  // drawn in the grey state (--tui-dim, no hash hue) with that host's
+  // name small beside its address; a local row another host also heard
+  // gets a small "+name". Each view's "This site / All sites" choice is
+  // kept in this browser (fleet.<view>), All sites by default; it is
+  // hidden while no peer is configured. A peer's strings came over the
+  // network from another slothweb: textContent only, cut for the cell.
+  var FV = { peers: [] };
+  var FV_SEL = { devices: "d-sites", aps: "w-sites", ble: "b-sites" };
+  function fvAll(v) { return FV.peers.length > 0 && $(FV_SEL[v]).value !== "here"; }
+  // The query's tail: fleet=0 for This site, nothing for All sites (the
+  // server's default), nothing at all while there is no peer.
+  function fvQuery(v) { return FV.peers.length && !fvAll(v) ? "&fleet=0" : ""; }
+  function fvCut(s) { s = String(s); return s.length > 24 ? s.slice(0, 23) + "…" : s; }
+  // A host's name for people: the label its export sent, else its
+  // --peer name.
+  function fvName(x) {
+    return x && typeof x.site_label === "string" && x.site_label ? x.site_label
+         : x && typeof x.label === "string" && x.label ? x.label
+         : x && typeof x.site === "string" ? x.site : "?";
+  }
+  // The small mark after an address: the remote row's host, or "+host"
+  // (and how many more) on a local row other hosts heard. null: none.
+  function fvMark(d) {
+    if (d.remote === true) {
+      var sp = el("span", "fv-site", fvCut(fvName(d)));
+      sp.title = "heard by " + (d.sites || []).map(fvName).join(", ");
+      return sp;
+    }
+    if (!d.sites || !d.sites.length) return null;
+    var p = el("span", "fv-plus", "+" + fvCut(fvName(d.sites[0])) +
+               (d.sites.length > 1 ? " +" + (d.sites.length - 1) : ""));
+    p.title = "also heard by " + d.sites.map(fvName).join(", ");
+    return p;
+  }
+  // The local rows of a list (its "count" is theirs) and the remote.
+  function fvSplit(rows) {
+    var r = 0;
+    rows.forEach(function (d) { if (d.remote === true) r++; });
+    return { local: rows.length - r, remote: r };
+  }
+  // The drawer's section for what the other hosts reported.
+  function fvDrawer(box, f) {
+    if (!f) return;
+    var rows = (f.rows || []).concat(f.ap_rows || []);
+    if (!rows.length) return;
+    box.appendChild(el("div", "label", f.remote ? "other sloth hosts (" + f.note + ")"
+                                                : "also heard by other sloth hosts"));
+    rows.forEach(function (x) {
+      var line = el("div", "fv-line");
+      line.appendChild(el("span", "fv-host", fvCut(fvName(x))));
+      var t = [x.kind === "ap" ? "as an AP" : null,
+               x.ssid ? "ssid " + x.ssid : null, x.name ? "name " + x.name : null,
+               x.vendor ? "vendor " + x.vendor : null, x.class ? "class " + x.class : null,
+               num(x.signal) ? x.signal + " dBm" : num(x.rssi) ? x.rssi + " dBm" : null,
+               num(x.channel) ? "ch " + x.channel : null, x.enc ? x.enc : null,
+               x.bssid ? "bssid " + x.bssid : null,
+               "first " + stamp(x.first_seen), "last " + stamp(x.last_seen)];
+      line.appendChild(el("span", "d-dim", "  " + t.filter(function (s) { return s !== null; }).join(", ")));
+      box.appendChild(line);
+    });
+  }
+  function fvSetup(peers) {
+    FV.peers = Array.isArray(peers) ? peers : [];
+    Object.keys(FV_SEL).forEach(function (v) {
+      var s = $(FV_SEL[v]);
+      s.parentNode.hidden = !FV.peers.length;
+      s.value = prefGet("fleet." + v) === "here" ? "here" : "all";
+    });
+  }
+
   function typeClass(t) {
     return Object.prototype.hasOwnProperty.call(TYPE_CLASS, t)
       ? TYPE_CLASS[t] : "t-other";
@@ -1229,6 +1302,15 @@
       // A store of "memory" is a slothweb built without SQLite: it has
       // no --sloth-db to suggest.
       NOSQL = h.store === "memory";
+      // The merged views' choice, shown only with a peer configured;
+      // a view drawn before this answer is drawn again under the
+      // choice kept.
+      fvSetup(h.fleet && Array.isArray(h.fleet.peers) ? h.fleet.peers : []);
+      if (FV.peers.length) {
+        if (view === "devices") devices();
+        else if (view === "wifi") wifiAps();
+        else if (view === "ble") bleLoad();
+      }
       set("milestone", h.milestone);
       dbAge(h);
       // The SQL box exists only when the server was started with
@@ -2498,7 +2580,7 @@
             "&sort=" + encodeURIComponent(sort);
     if (q !== "") p += "&q=" + encodeURIComponent(q);
     if (dir === "asc" || dir === "desc") p += "&dir=" + dir;
-    return p;
+    return p + fvQuery("devices");
   }
 
   function dv(k) { return function (d) { return d[k]; }; }
@@ -2542,7 +2624,11 @@
         rows = rows.concat(j.rows || []);
         var more = !!j.more;
         if (more && num(j.next_offset) && rows.length < DEV_MAX) return page(j.next_offset);
-        D.rows = DTD.sort(rows.slice(0, DEV_MAX), !more && rows.length <= DEV_MAX);
+        // Another host's rows ride the last page, after this site's;
+        // DEV_MAX bounds this site's.
+        var rem = rows.filter(function (d) { return d.remote === true; });
+        if (rem.length) rows = rows.filter(function (d) { return d.remote !== true; });
+        D.rows = DTD.sort(rows.slice(0, DEV_MAX).concat(rem), !more && rows.length <= DEV_MAX);
         // V2: the strip's window is the new mark's (F15), the anom
         // column's bars share its largest count (F17, R3), and the
         // caption counts what is new and what sloth says is approaching.
@@ -2550,14 +2636,19 @@
         D.anMax = SlothRf.colMax(D.rows, function (d) { return d.anomalies; });
         var nnew = 0, nnear = 0;
         D.rows.forEach(function (d) {
+          if (d.remote === true) return;
           if (glyph.isNew(d.first_seen, D.pfrom)) nnew++;
           if (d.rf && d.rf.trend === "approaching") nnear++;
         });
-        set("d-count", D.rows.length + " shown, " + nnew + " new in 24 h, " + nnear +
+        var fs = fvSplit(D.rows), fl = j.fleet || {};
+        set("d-count", fs.local + " shown, " + nnew + " new in 24 h, " + nnear +
             " approaching (sloth's estimate)" + (D.anMax ? "; anom bars to " + D.anMax : "") +
-            (more || rows.length > DEV_MAX ? "; the first " + D.rows.length + ", narrow the search" : "") +
+            (more || rows.length > DEV_MAX ? "; the first " + fs.local + ", narrow the search" : "") +
             (q.indexOf("pass:latest") >= 0 && num(j.pass_size)
-              ? "; " + j.pass_size + " in the latest pass, " + D.rows.length + " of them in sloth.db" : ""));
+              ? "; " + j.pass_size + " in the latest pass, " + fs.local + " of them in sloth.db" : "") +
+            (fs.remote ? "; " + fs.remote + " heard only by other sloth hosts, in grey" +
+                         (fl.remote_more ? " (the first " + fs.remote + ")" : "") : "") +
+            (fl.remote_off === "query" ? "; other hosts' rows left out: the search names a field they do not send" : ""));
         set("d-note", "vendor table " + j.vendor_table + ", sloth.db schema v" + j.db_schema);
         layout();
       });
@@ -2616,6 +2707,8 @@
     r.macText = el("span", "");
     r.cells["c-mac"].appendChild(r.sw);
     r.cells["c-mac"].appendChild(r.macText);
+    r.fv = el("span", "");
+    r.cells["c-mac"].appendChild(r.fv);
     r.glyph = el("span", "gl");
     r.nameText = el("span", "");
     r.cells["c-nm"].appendChild(r.glyph);
@@ -2641,6 +2734,11 @@
   var RISK_HEAT = [-1, 0.4, 0.7, 1.0];
   function fill(r, d) {
     r.mac = typeof d.mac === "string" ? d.mac : "";
+    // A row only another sloth host heard: grey, its host named, and
+    // none of the columns only this site has (fvMark()).
+    if (d.remote === true) return fillRemote(r, d);
+    var m = fvMark(d);
+    put(r.fv, m || el("span", ""));
     var risk = num(d.risk) && d.risk >= 0 && d.risk <= 3 ? d.risk : 0;
     r.el.className = "drow dt-row" + (SEV_CLASS[risk] ? " " + SEV_CLASS[risk] : "") +
                      (r.mac === D.sel ? " on" : "");
@@ -2678,6 +2776,31 @@
     r.cells["c-an"].className = "c-an";
     SlothRf.count(r.cells["c-an"], an, D.anMax, String(an), an > 0 ? heatClass(0.5) : "d-dim");
     drawStrip(r.cv, d.presence, 144, glyph.firstCell(d.first_seen, D.pfrom, 600, 144));
+  }
+  function fillRemote(r, d) {
+    r.el.className = "drow dt-row remote" + (r.mac === D.sel ? " on" : "");
+    r.sw.style.background = "var(--tui-dim)";
+    if (r.nw) { r.nw.remove(); r.nw = null; }
+    r.macText.className = "";
+    r.macText.textContent = (d.random ? "~" : "") + r.mac;
+    put(r.fv, fvMark(d));
+    r.cells["c-ven"].className = "c-ven";
+    r.cells["c-ven"].textContent = typeof d.vendor === "string" ? d.vendor : "?";
+    put(r.cells["c-ip"], el("span", "", "-"));
+    r.glyph.textContent = "";
+    put(r.nameText, el("span", "", "-"));
+    put(r.cells["c-ss"], el("span", "", typeof d.ssid === "string" ? d.ssid : "-"));
+    r.cells["c-sig"].className = "c-sig";
+    r.cells["c-sig"].textContent = num(d.signal) ? String(d.signal) : "-";
+    ["c-src", "c-rk", "c-z", "c-an"].forEach(function (c) {
+      r.cells[c].className = c;
+      r.cells[c].textContent = "-";
+    });
+    r.cells["c-fs"].className = "c-fs";
+    r.cells["c-fs"].textContent = shortStamp(d.first_seen);
+    r.cells["c-ls"].className = "c-ls";
+    r.cells["c-ls"].textContent = shortStamp(d.last_seen);
+    drawStrip(r.cv, null, 144, -1);
   }
 
   function layout() {
@@ -2897,6 +3020,14 @@
                                       : "sloth.db " + j.db + "; the stream only") +
           (j.in_scope === false ? "; not heard in the " + SCOPE_WORD[SCOPE] + " scope" : "") +
           (SCOPE !== "hybrid" ? "; " + SCOPE_WORD[SCOPE] + "'s fields and presence only" : ""));
+      // Only another sloth host heard it: that host's name (its note)
+      // in place of this site's record, in the grey state.
+      var fr = j.fleet && j.fleet.remote === true;
+      $("drawer").classList.toggle("remote", fr);
+      if (fr) {
+        set("dr-note", typeof j.fleet.note === "string" ? j.fleet.note : "");
+        $("dr-sw").style.background = "var(--tui-dim)";
+      }
       var r = j.record, dt = r && r.detail ? r.detail : {};
       kvList(box, ouiPairs(j.oui).concat(r ? [
         ["ip", ipVal(r.ip, IP_SRC.dev)],
@@ -2911,6 +3042,7 @@
       ] : [["stream ip", j.stream ? ipVal(j.stream.ip, IP_SRC.dev) : null],
            ["stream first seen", j.stream && num(j.stream.first_seen) ? stamp(j.stream.first_seen) : null]]));
       vendorResearch(box, j.vendor_research, j.oui);
+      fvDrawer(box, j.fleet);
       itemList(box, "names (passive)", j.names, nameLine, false);
       itemList(box, "pnl ssids", j.ssids, function (x) { return ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np); }, j.ssids_more);
       itemList(box, "associations", j.assocs, function (x) {
@@ -3025,6 +3157,7 @@
   var WF = { gen: 0, heat: null, mix: null, rows: [], cur: null, apEls: new Map(), geo: null,
              g3max: {}, g3of: "", cl: [], clFrom: null };
   var AP_SORTS = { "signal": 1, "last": 1, "ssids": 1, "karma": 1, "bssid": 1 };
+  var AP_FV_MAX = 500;
   var BAND_WORD = { "2.4": "2.4 GHz", "5": "5 GHz", "6": "6 GHz" };
 
   function wifiWindow() {
@@ -3382,20 +3515,31 @@
     ] });
 
   function apRow(a) {
-    var row = el("div", "aprow dt-row" + (a.multi_ssid ? " many-ssid" : ""));
+    // A row only another sloth host heard (fvMark()): grey, no hue.
+    var rem = a.remote === true;
+    var row = el("div", "aprow dt-row" + (a.multi_ssid ? " many-ssid" : "") + (rem ? " remote" : ""));
     WF.apEls.set(String(a.bssid), row);
     var bs = el("span", "c-bs");
     var sw = el("span", "sw");
-    sw.style.background = keyColor(String(a.bssid));
+    sw.style.background = rem ? "var(--tui-dim)" : keyColor(String(a.bssid));
     var nw = SlothRf.newMark(a.first_seen, WF.newFrom);
     if (nw) bs.appendChild(nw);
     bs.appendChild(sw);
     bs.appendChild(el("span", "d-dim", a.bssid));
+    var fm = fvMark(a);
+    if (fm) bs.appendChild(fm);
     row.appendChild(bs);
+    // The drawer answers for a BSSID only another host heard with what
+    // that host reported (/api/device's "fleet").
+    if (rem) {
+      row.tabIndex = 0;
+      row.addEventListener("click", function () { openDrawer(String(a.bssid)); });
+    }
     // The SSID in its hash colour; the warning (KARMA, multi-VAP) is
     // the squares after it, at the heat the TUI warns at.
     var ss = el("span", "c-ssid");
-    ss.appendChild(a.ssid === null ? el("span", "d-dim", "(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
+    ss.appendChild(a.ssid === null ? el("span", "d-dim", "(hidden)")
+                   : rem ? el("span", "", String(a.ssid)) : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
     // §6.3: the SSID count as a row of small squares after the SSID, one
     // each (eight, then a plus), not "+3 ssids" in words; the count in
     // words in its title.
@@ -3406,12 +3550,12 @@
       ss.appendChild(sq);
     }
     row.appendChild(ss);
-    row.appendChild(el("span", "c-ch d-normal", String(a.channel)));
+    row.appendChild(el("span", "c-ch d-normal", num(a.channel) ? String(a.channel) : "-"));
     var sg = row.appendChild(el("span", "c-sig d-dim"));
     SlothRf.cell(sg, a.rf, num(a.signal) ? a.signal : null);
     row.appendChild(el("span", "c-enc d-normal", (a.enc === null ? "?" : a.enc) + " " +
                        (a.akm_names && a.akm_names.length ? a.akm_names.join(",") : "")));
-    row.appendChild(el("span", "c-mfp d-normal", "mfp " + a.mfp_word));
+    row.appendChild(el("span", "c-mfp d-normal", typeof a.mfp_word === "string" ? "mfp " + a.mfp_word : "-"));
     row.appendChild(el("span", "c-dg" + (a.downgrade ? " warn" : " d-dim"),
                        a.downgrade_names && a.downgrade_names.length
                          ? a.downgrade_names.join(", ") : "-"));
@@ -3451,8 +3595,21 @@
     // A header's sort: its word and direction, which the server checks.
     var wd = DTA.word();
     if (wd) sort = wd.sort;
-    (wd ? getJSON("/api/wifi/aps?limit=100&sort=" + encodeURIComponent(sort) + "&dir=" + wd.dir)
-        : getJSON("/api/wifi/aps?limit=100&sort=" + encodeURIComponent(sort))).then(function (j) {
+    var path = "/api/wifi/aps?limit=100&sort=" + encodeURIComponent(sort) + (wd ? "&dir=" + wd.dir : "") +
+               fvQuery("aps");
+    // All sites: the other hosts' APs ride the page that ends this
+    // site's list, so the pages are read on to it (at most AP_FV_MAX
+    // rows of this site's); This site is the one page it always was.
+    var all = fvAll("aps"), acc = [];
+    function apPage(off) {
+      return getJSON(path + (off ? "&offset=" + off : "")).then(function (j) {
+        acc = acc.concat(j.rows || []);
+        if (all && j.more && num(j.next_offset) && acc.length < AP_FV_MAX) return apPage(j.next_offset);
+        j.rows = acc;
+        return j;
+      });
+    }
+    apPage(0).then(function (j) {
       if (gen !== WF.gen) return;
       var box = $("w-aps");
       while (box.firstChild) box.removeChild(box.firstChild);
@@ -3467,8 +3624,11 @@
       });
       DTA.sort(j.rows || [], !j.more).forEach(function (a) { box.appendChild(apRow(a)); });
       if (!j.rows || !j.rows.length) box.appendChild(el("div", "sub", "no beacon_aps rows"));
-      set("w-aps-count", (j.rows ? j.rows.length : 0) + " shown, " + nnew + " new in 24 h, " + nnear +
-          " approaching (sloth's estimate)" + (j.more ? ", more in sloth.db" : ""));
+      var fs = fvSplit(j.rows || []);
+      set("w-aps-count", fs.local + " shown, " + nnew + " new in 24 h, " + nnear +
+          " approaching (sloth's estimate)" + (j.more ? ", more in sloth.db" : "") +
+          (fs.remote ? "; " + fs.remote + " heard only by other sloth hosts, in grey" +
+                       (j.fleet && j.fleet.remote_more ? " (the first " + fs.remote + ")" : "") : ""));
     }).catch(function (e) {
       if (gen !== WF.gen) return;
       var box = $("w-aps");
@@ -3720,6 +3880,10 @@
   $("w-grid").addEventListener("change", function () { if (view === "wifi") channelGrid(); });
   $("w-win").addEventListener("change", function () { wifi(); });
   $("w-sort").addEventListener("change", function () { DTA.clear(); wifiAps(); });
+  // The merged views' choices, each kept per browser (fvSetup()).
+  $("w-sites").addEventListener("change", function () { prefSet("fleet.aps", this.value); wifiAps(); });
+  $("d-sites").addEventListener("change", function () { prefSet("fleet.devices", this.value); devices(); });
+  $("b-sites").addEventListener("change", function () { prefSet("fleet.ble", this.value); bleLoad(); });
 
   // ── Flows (§8.9, M6) ──────────────────────────────────────────────
   // sloth.db's protocol tables, one tab each (/api/flows, paged), and
@@ -5250,11 +5414,38 @@
       { k: "pd", label: "pdus", w: 18, min: 6, type: "text", srv: "pdus", val: function (d) { return (d.pdus || []).join(" "); } },
       { k: "wc", label: "watch", w: 10, min: 5, type: "text", srv: "watch", val: bv("watch_category") }
     ] });
+  // A row only another sloth host heard (fvMark()): the address, its
+  // host, type, name, class, rssi and times; grey, the rest "-".
+  function bleRemoteRow(d, now) {
+    var row = el("div", "blerow dt-row remote" + (B.sel && B.sel.addr === d.addr && B.sel.remote ? " on" : ""));
+    var ad = el("span", "c-ad", d.addr);
+    ad.appendChild(fvMark(d));
+    row.appendChild(ad);
+    row.appendChild(el("span", "c-ty", typeof d.type === "string" ? d.type : "-"));
+    row.appendChild(el("span", "c-ak", "-"));
+    row.appendChild(el("span", "c-if", "-"));
+    row.appendChild(el("span", "c-rs n", num(d.rssi) ? String(d.rssi) : "-"));
+    ["c-di", "c-ac n"].forEach(function (c) { row.appendChild(el("span", c, "-")); });
+    row.appendChild(el("span", "c-ag", bleAge(d.last_seen, now)));
+    row.appendChild(el("span", "c-hw", "-"));
+    row.appendChild(el("span", "c-sm", typeof d.name === "string" ? "\"" + d.name + "\"" : "-"));
+    row.appendChild(el("span", "c-nm", typeof d.class_label === "string" ? d.class_label : ""));
+    ["c-rb n", "c-rt n"].forEach(function (c) { row.appendChild(el("span", c, "-")); });
+    row.appendChild(el("span", "c-fs", shortStamp(d.first_seen)));
+    row.appendChild(el("span", "c-pd", "-"));
+    row.appendChild(el("span", "c-wc", "-"));
+    row.tabIndex = 0;
+    row.addEventListener("click", function () { openBleDrawer(d.addr, null, null); });
+    return row;
+  }
   function bleRow(d, now) {
+    if (d.remote === true) return bleRemoteRow(d, now);
     var sel = B.sel && B.sel.addr === d.addr && B.sel.type === d.addr_type && B.sel.iface === d.iface;
     var cls = d.hid || d.watch_category ? "d-bright" : "d-normal";
     var row = el("div", "blerow dt-row " + cls + (sel ? " on" : ""));
-    row.appendChild(el("span", "c-ad", d.addr));
+    var adc = row.appendChild(el("span", "c-ad", d.addr));
+    var fm = fvMark(d);
+    if (fm) adc.appendChild(fm);
     var ty = el("span", "c-ty", d.type);
     ty.title = d.addr_kind;
     row.appendChild(ty);
@@ -5393,7 +5584,9 @@
     $("b-more").hidden = !B.more;
     // R9: source, window, tier, scale, n, then the state.
     var s = j.sensor || {};
-    set("b-count", "ble_device, " + B.rows.length + " of " + j.total + " rows" +
+    var fs = fvSplit(B.rows);
+    set("b-count", "ble_device, " + fs.local + " of " + j.total + " rows" +
+        (fs.remote ? " and " + fs.remote + " heard only by other sloth hosts, in grey" : "") +
         (j.matched !== j.total ? " (" + j.matched + " matched)" : "") + ", " + j.standing +
         " standing alert" + (j.standing === 1 ? "" : "s") + ", sensor " + (s.btmon_iface || s.btcap_iface || "none") +
         (s.scan_mode ? ", scan " + s.scan_mode + "/" + s.scan_filter : "") +
@@ -5413,7 +5606,7 @@
     var offset = more ? B.rows.length : 0;
     var limit = keep && !more ? Math.min(1024, Math.max(200, B.rows.length)) : 200;
     var p = "/api/ble?limit=" + limit + "&offset=" + offset + "&sort=" + encodeURIComponent(sort) +
-            (wd ? "&dir=" + wd.dir : "") + (q ? "&q=" + encodeURIComponent(q) : "");
+            (wd ? "&dir=" + wd.dir : "") + (q ? "&q=" + encodeURIComponent(q) : "") + fvQuery("ble");
     Promise.all([getJSON(p), getJSON("/api/ble/alerts")]).then(function (r) {
       if (gen !== B.gen || view !== "ble" || asked !== SCOPE) return;
       var j = r[0], a = r[1];
@@ -5476,7 +5669,9 @@
   function openBleDrawer(addr, type, iface) {
     if (typeof addr !== "string" || !MAC_RE.test(addr)) return;
     var gen = ++BDR.gen;
-    B.sel = { addr: addr, type: type, iface: iface };
+    // type and iface null: a row only another sloth host heard, asked
+    // for by its address alone.
+    B.sel = { addr: addr, type: type, iface: iface, remote: type === null };
     if ($("bdrawer").hidden) BDR.back = document.activeElement;
     $("bdrawer").hidden = false;
     $("bdr-close").focus();
@@ -5487,12 +5682,21 @@
     var bb = $("bundle-btn-ble");
     if (bb && window.SlothBundle && SlothBundle.mount) SlothBundle.mount(bb, "ble", addr, scoped);
     set("bdr-note", "loading");
-    var p = "/api/ble/" + encodeURIComponent(addr) + "?type=" + encodeURIComponent(String(type)) +
-            "&iface=" + encodeURIComponent(String(iface));
+    var p = "/api/ble/" + encodeURIComponent(addr) + (type === null ? "" :
+            "?type=" + encodeURIComponent(String(type)) + "&iface=" + encodeURIComponent(String(iface)));
     getJSON(p).then(function (j) {
       if (gen !== BDR.gen) return;
       var d = j.rows && j.rows.length ? j.rows[0] : null;
       var box = clear("bdr-body");
+      $("bdrawer").classList.toggle("remote", !d && !!(j.fleet && j.fleet.remote));
+      if (!d && j.fleet && j.fleet.remote) {
+        // Only another sloth host heard it: that host's name and what it
+        // reported, none of this site's fields.
+        set("bdr-note", typeof j.fleet.note === "string" ? j.fleet.note : "");
+        fvDrawer(box, j.fleet);
+        clear("bdr-alerts");
+        return;
+      }
       if (!d) {
         set("bdr-note", "the row has left the table: the advertiser stopped, or a newer one took its slot");
         return;
@@ -5534,6 +5738,7 @@
         ["watchlist", d.watch_category ? d.watch_category + " - a category, never an identity" : null],
         ["records", String(d.records)]
       ]);
+      fvDrawer(box, j.fleet);
       // G1 of the rate between successive records; dots below five.
       var pts = [], P = d.points || [];
       for (var i = 1; i < P.length; i++)

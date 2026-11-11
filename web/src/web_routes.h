@@ -56,6 +56,13 @@
  * answer's first member is "scope". /api/query is never scoped: the SQL
  * box runs what it is given.
  *
+ * The merged views (web_fleetview.h): /api/devices, /api/device/{mac},
+ * /api/wifi/aps, /api/ble and /api/ble/{addr} take fleet=0|1 the same
+ * way, taken out before the route's parser. fleet=0 is the route's own
+ * answer byte for byte; otherwise, with a --peer configured and the
+ * request Hybrid, the peers' rows are merged into it. Anything else is
+ * a 400 "bad_fleet".
+ *
  *   /api/frrs/...  triage and the FRRS record (web_frrs.h): GET and HEAD
  *                 to its read paths, POST to its write paths only
  *
@@ -99,6 +106,9 @@ typedef struct {
     web_gnss_t    *gnss;      /* NULL: no GNSS panel (web_gnss.h) */
     web_adsb_t    *adsb;      /* NULL: no ADS-B panel (web_adsb.h) */
     web_aprs_t    *aprs;      /* NULL: no APRS panel (web_aprs.h) */
+    int            fleet_merge; /* merge the peers' rows (web_fleetview.h);
+                                   set by the router on its own copy, and
+                                   read only on the merged routes */
 } web_health_t;
 
 /* /api/live and the series routes are built into the connection's

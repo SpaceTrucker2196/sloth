@@ -509,12 +509,12 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/series?...`, `/api/keys?...`, `/api/metrics` | `200` JSON, `Cache-Control: no-store`; `400` with `{"error":"reason"}` for a parameter that does not pass (below); `503` with no time series attached |
    | `GET /api/anomalies?since=&kind=` | `200` JSON, `Cache-Control: no-store`, open episodes and those closed since `since` (below); `400` for a parameter that does not pass; `503` with no anomaly engine |
    | `GET /api/baseline?metric=&key=` | `200` JSON, one series' 168 hour-of-week cells; `400` / `503` as above |
-   | `GET /api/devices?q=&sort=&dir=&limit=&offset=` | `200` JSON, a page of sloth.db's devices (M4, below); `400` for a parameter or a query term that does not pass; `503` with no `--sloth-db`, or sloth.db missing, refused, busy or past its budget |
-   | `GET /api/device/{mac}` | `200` JSON, one device; `400` for a MAC that does not pass or any query |
+   | `GET /api/devices?q=&sort=&dir=&limit=&offset=&fleet=` | `200` JSON, a page of sloth.db's devices (M4, below), with the peers' rows unless `fleet=0` ([Fleet](#fleet)); `400` for a parameter or a query term that does not pass; `503` with no `--sloth-db`, or sloth.db missing, refused, busy or past its budget |
+   | `GET /api/device/{mac}` | `200` JSON, one device, with what each peer reported of it ([Fleet](#fleet)); `400` for a MAC that does not pass or any query but `fleet=` |
    | `GET /api/lookup?q=` | `200` JSON, the Lookup card for a MAC or an IP; `400` otherwise |
    | `GET /api/wifi/channels?metric=&from=&to=&cols=`, `/api/wifi/deauth?from=&to=&cols=` | `200` JSON, the channel waterfall and the deauth timeline (M5, below); `400` for a parameter that does not pass; `503` with no time series |
    | `GET /api/wifi/chain?from=&to=&cols=&bssid=` | `200` JSON, G8's attack chain per BSSID: the deauth timeline's rows (or the one `bssid`) with the EVIL_TWIN, KARMA_AP and association stages sloth.db holds against each and the links the stream's `twin_episode` made (#171 V4, below); out of scope under Local; `400` for a parameter that does not pass (`bad_bssid`); `503` with no time series |
-   | `GET /api/wifi/aps?sort=&dir=&limit=&offset=` | `200` JSON, a page of sloth.db's beacon_aps; `400`; `503` with no `--sloth-db` or sloth.db unreadable |
+   | `GET /api/wifi/aps?sort=&dir=&limit=&offset=&fleet=` | `200` JSON, a page of sloth.db's beacon_aps, with the peers' rows unless `fleet=0` ([Fleet](#fleet)); `400`; `503` with no `--sloth-db` or sloth.db unreadable |
    | `GET /api/wifi/local?limit=` | `200` JSON, the managed Wi-Fi card's own scan (sloth.db `wifi_aps`, newest first, at most 100) and link (`wifi_stas`, at most 32); out of scope under Monitor; `400`; `503` as above |
    | `GET /api/history/overview`, `/api/history/devices`, `/api/history/alerts`, `/api/history/flows` (`?from=&to=` and their own) | `200` JSON, the History view's reads of sloth.db; `400`; `503` as above |
    | `GET /api/sessions`, `/api/sessions/new?id=` | `200` JSON, the survey sessions and one's "new since the previous session"; `404` for a session sloth.db does not have |
@@ -4312,6 +4312,63 @@ satellites, fix, distance from its reference, clock offset), a gauge
 per pair of sites (the band is the bound around the reference distance,
 the mark the distance now) and the classified events. The other
 inferences across sites are F3 and F4.
+
+**The merged views** (owner request 2026-11-11;
+`web/src/web_fleetview.h`). `/api/devices`, `/api/wifi/aps` and
+`/api/ble` carry the peers' rows, and `/api/device/{mac}` and
+`/api/ble/{addr}` answer for an address only a peer heard. Each takes
+`fleet=0|1`, taken out of the query before the route's own parser as
+`scope=` is: `fleet=0` is the route's own answer byte for byte; `fleet=1`
+or none merges when a `--peer` is configured and the request is Hybrid
+(a peer row carries no capture path, so Monitor and Local never merge);
+anything else is a `400` `bad_fleet`. Without a peer the answers are as
+they were.
+
+- A local row a peer also reported gains `sites`: `[{site, label,
+  first_seen, last_seen}]`, one a peer (`label` the name its export
+  sent, `null` for none).
+- The peers' other keys follow the local rows on the page that ends the
+  local list (`"more": false`), at most 100 (`WEB_FV_REMOTE_MAX`), as
+  rows with `"remote": true`, `site` (the peer that heard it last),
+  `site_label` and `sites`, in the route's own sort (a column a peer
+  sends nothing for reads as empty, then by last seen). They hold only
+  what `peer_sightings` holds, under the route's names: a device's
+  `mac`, `random` (the MAC's own bit), `vendor`, `ssid`, `signal`,
+  `is_ap`, `first_seen`, `last_seen`; an AP's `bssid`, `ssid`,
+  `signal`, `channel`, `enc`, `vendor` and the times; an advertiser's
+  `addr`, `addr_type`, `type`, `name`, `rssi`, `class` (when it is one
+  of the closed list) and the times. Every other member is absent. A
+  peer's 0 dBm is no reading (`null`), as everywhere in the fleet.
+- A key this site holds anywhere (`sloth.db`'s `devices` or
+  `beacon_aps`, the BLE table), whatever the page or the filter shows,
+  is never a remote row. `/api/devices`' `q` applies to the remote rows
+  when every term is one they can answer (free text, `vendor:`, `mac:`,
+  `ssid:`, `random:`, `seen:`, `first:`); any other term leaves them out.
+  `/api/ble`'s `q` is the address prefix or the name.
+- `fleet`, the answer's last member: `peers` (`site`, `label`), `remote`
+  (the rows added), `remote_cap`, `remote_more` (more were cut by the cap
+  or the room), `partial` (the 4,000 newest peer rows were read, or the
+  budget stopped the check against `sloth.db`), `remote_off` (`null`,
+  `not_last_page`, `query` or `sloth_db`). `count`, `total` and every
+  other figure stay this site's own.
+- `/api/device/{mac}` gains `fleet` where a peer reported the MAC (as a
+  client, `rows`, or as an AP, `ap_rows`: each `site`, `label`, the
+  times, `ssid`, `vendor`, `signal`, `is_ap` and `bssid` or `channel`
+  and `enc`), with `remote` true when `sloth.db` has no record of it and
+  `note` naming each host that saw it, `"seen at beta-site, gamma"` (its
+  label, else its `--peer` name). `/api/ble/{addr}` the same; an address
+  only a peer reported is a `200` with no local row in place of the
+  `404`.
+
+The remote rows are display only: no risk, alert, anomaly, baseline,
+series, triage, tile count or detail audit reads them, and
+`/api/fleet/export` reads `sloth.db` and the BLE table, never
+`peer_sightings`, so a peer's rows never echo back to it
+(`web/tests/test_fleetview.c`). The page draws them in the grey state
+(`--tui-dim`, no hash hue) with the host's name beside the address, a
+local row another host heard with a small `+name`; each view has a
+"This site / All sites" choice kept in the browser (`fleet.devices`,
+`fleet.aps`, `fleet.ble`), All sites by default and hidden with no peer.
 
 ## Capture scope
 
