@@ -33,6 +33,7 @@ platform_ops_t g_platform = {
     win32_init,
     win32_cleanup,
     win32_set_channel,
+    NULL, NULL,   /* sys_read, sys_list: no /proc or /sys tree here */
 };
 
 #endif /* PLATFORM_WIN32 */

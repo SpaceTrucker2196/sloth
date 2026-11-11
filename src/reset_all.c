@@ -67,6 +67,7 @@
 #include "smtp_snoop.h"
 #include "snmp_snoop.h"
 #include "ssdp_snoop.h"
+#include "sys_status.h"
 #include "ssh_snoop.h"
 #include "tls_log.h"
 #include "top_hosts.h"

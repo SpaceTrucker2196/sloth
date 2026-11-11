@@ -78,6 +78,7 @@
 #include "ldap_snoop.h"
 #include "bgp_snoop.h"
 #include "ssh_snoop.h"
+#include "sys_status.h"
 #include "rdp_snoop.h"
 #include "snmp_snoop.h"
 #include "mqtt_snoop.h"
@@ -1720,6 +1721,9 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
+    /* sys_status reports the filesystem its output lands on: the
+     * database's, else the JSONL file's. */
+    sys_status_set_disk_path(db_path ? db_path : jsonl_path, db_path ? "db" : "jsonl");
     if (db_path) {
         if (!db_open(db_path)) {
             /* Diagnostic already printed. A DB the operator explicitly

@@ -26,6 +26,7 @@
 #include "formatter.h"
 #include "views/procs.h"
 #include "sensor_health.h"
+#include "sys_status.h"
 #include "ble_hci.h"        /* Bluetooth host source names (#144 slice 2) */
 #include "bt_stream.h"      /* Ubertooth stream state names (#144 slice 3) */
 #include "ble_detect.h"     /* ble_alert findings (#144 slice 4) */
@@ -3338,6 +3339,25 @@ void jsonl_emit_ble_alerts(const sloth_state_t *s) {
     }
 }
 
+void jsonl_emit_fields(const char *type, time_t ts, const jsonl_field_t *f, int n) {
+    if (!any_sink() || !type || !f) return;
+    char buf[LINEBUF]; int off = 0;
+    start_obj(buf, LINEBUF, &off, type, ts);
+    for (int i = 0; i < n; i++) {
+        if (f[i].kind == JSONL_F_STR) {
+            kv_str(buf, LINEBUF, &off, f[i].key, f[i].s);
+        } else if (f[i].kind == JSONL_F_INT) {
+            kv_int(buf, LINEBUF, &off, f[i].key, f[i].i);
+        } else {
+            char num[32];
+            gps_fmt_fixed(num, sizeof(num), f[i].d, f[i].dp);
+            appendf(buf, LINEBUF, &off, ",\"%s\":%s", f[i].key, num);
+        }
+    }
+    end_obj(buf, LINEBUF, &off);
+    emit_line(buf);
+}
+
 void jsonl_emit_state_snapshots(sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
@@ -3388,6 +3408,9 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_gnss              (s);   /* 2026-11-02 */
     jsonl_emit_adsb              (s);   /* #26 slice 1 */
     jsonl_emit_aprs              (s);   /* 2026-11-05 */
+    /* The host's status and the source inventory (src/sys_status.h):
+     * a batch on its own cadence, nothing on most ticks. */
+    sys_status_emit              (s);
     /* Last: the sensor's self-report about this tick, after every
      * observation in it has been emitted (#91 slice 3). */
     jsonl_emit_sensor_health     (s);

@@ -46,7 +46,7 @@
  * stream's history — the records predate the field by many releases. A
  * `sensor_health` line with no `jsonl_version` is from a stream written
  * before this version and says nothing more than that. */
-#define SLOTH_JSONL_VERSION "1.0.0"
+#define SLOTH_JSONL_VERSION "1.1.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
@@ -4185,6 +4185,16 @@ typedef struct {
      * kicks an nl80211 scan trigger when --allow-active permitted it
      * (#84). */
     int  (*set_channel)(const char *iface, int freq_mhz);
+    /* Host status and receiver inventory (src/sys_status.h): the text of
+     * one /proc or /sys attribute, and the entry names of one /sys
+     * directory. Read-only, no device node is ever opened, and nothing
+     * is written. sys_read returns the bytes read (at most cap) or -1
+     * when the file is not there; sys_list writes up to max names of
+     * name_sz bytes each into names (a flat max * name_sz buffer) and
+     * returns how many, or -1 when the directory is not there. NULL on a
+     * platform with neither tree: every reading is then absent. */
+    int  (*sys_read)(const char *path, char *buf, int cap);
+    int  (*sys_list)(const char *dir, char *names, int name_sz, int max);
 } platform_ops_t;
 
 extern platform_ops_t g_platform;

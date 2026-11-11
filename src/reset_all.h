@@ -100,6 +100,7 @@
     X(snmp_snoop_clear) \
     X(ssdp_clear) \
     X(ssh_snoop_clear) \
+    X(sys_status_reset) \
     X(tls_log_clear) \
     X(top_hosts_clear) \
     X(transit_clear) \
