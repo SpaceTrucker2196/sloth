@@ -173,7 +173,7 @@
       row.appendChild(H.el("span", "d-dim", H.shortStamp(d.last_seen)));
       row.addEventListener("click", function () { select(String(d.mac)); });
       box.appendChild(row);
-      H.drawStrip(cv, d.presence, CELLS, glyph.firstCell(d.first_seen, P.from, CELL_S, CELLS));
+      H.drawStrip(cv, d.presence, CELLS, glyph.firstCell(d.first_seen, P.from, CELL_S, CELLS), P.from, CELL_S);
     });
   }
 

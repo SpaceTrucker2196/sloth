@@ -211,7 +211,8 @@
       ["designated", "not known here: sloth's --my-ssid is its own setting, in neither sloth.db nor the stream"]
     ]);
     H.drawStrip($("sdr-strip"), j.presence, CELLS,
-                glyph.firstCell(j.first_seen, j.presence_from, CELL_S, CELLS));
+                glyph.firstCell(j.first_seen, j.presence_from, CELL_S, CELLS),
+                j.presence_from, CELL_S);
     $("sdr-strip-note").textContent = glyph.caption({
       source: "dev.present of its " + j.presence_bssids + " current access point" +
               (j.presence_bssids === 1 ? "" : "s") + ", any one present", window: "24 h",

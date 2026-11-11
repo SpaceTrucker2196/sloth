@@ -2481,10 +2481,19 @@ static void test_the_page_carries_the_sun(void) {
     WT_HAS(p, "        drawStrip($(\"ad-strip\"), d.presence, 144, -1, d.presence_from, 600);\n"
               "        sunNote($(\"ad-sun\"), d.presence_from, 600, 144, d.week ? d.week.utc_offset_s : null);");
     WT_HAS(p, "    drawStrip($(\"ad-strip\"), null);\n    sunNote($(\"ad-sun\"));");
-    /* ... and there is no other: seven calls and the definition. */
+    /* The SSID drawer's strip and the Probes rows' are drawn through
+     * the same function, lent to their modules, with their window so
+     * they take the sun's phase as every other strip does. */
+    WT_HAS(p, "    H.drawStrip($(\"sdr-strip\"), j.presence, CELLS,\n"
+              "                glyph.firstCell(j.first_seen, j.presence_from, CELL_S, CELLS),\n"
+              "                j.presence_from, CELL_S);");
+    WT_HAS(p, "    H.drawStrip($(\"sdr-strip\"), null, CELLS, -1);");
+    WT_HAS(p, "      H.drawStrip(cv, d.presence, CELLS, glyph.firstCell(d.first_seen, P.from, CELL_S, CELLS), P.from, CELL_S);");
+    /* ... and there is no other: seven calls and the definition in
+     * app.js, and those three. */
     int calls = 0;
     for (const char *q = p; (q = strstr(q, "drawStrip(")) != NULL; q += 10) calls++;
-    WT_EQ(calls, 8);
+    WT_EQ(calls, 11);
     int g5s = 0;
     for (const char *q = p; (q = strstr(q, "glyph.g5(")) != NULL; q += 9) g5s++;
     WT_EQ(g5s, 1);                         /* paintStrip()'s, the one painter */
