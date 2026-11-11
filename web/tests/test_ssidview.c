@@ -676,11 +676,10 @@ static void test_page_ssid_detail(void) {
     WT_HAS(p, "  function ssidText(ssid, k, np) {\n    var sp = el(\"span\", \"\", ssid);\n");
     WT_HAS(p, "    H.getJSON(\"/api/wifi/ssid?ssid=\" + encodeURIComponent(p)).then(function (j) {\n");
     /* The hooks, where the WiFi view writes a name. */
-    WT_HAS(p, "    ss.appendChild(a.ssid === null ? ssidHidden(\"(hidden)\") : "
-              "ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));\n"
-              "    // sloth's --my-ssid / --my-bssid, from its `ownership` record.\n"
-              "    if (a.designated === true) ss.appendChild(el(\"span\", \"d-bright\", \" yours\"));\n"
-              "    if (window.SlothSubNotes && window.SlothSsid && a.ssid !== null)\n");
+    WT_HAS(p, "    ss.appendChild(a.ssid === null ? ssidHidden(\"(hidden)\")\n"
+              "                   : rem ? el(\"span\", \"\", String(a.ssid)) : "
+              "ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));\n");
+    WT_HAS(p, "    if (!rem && window.SlothSubNotes && window.SlothSsid && a.ssid !== null)\n");
     WT_HAS(p, "        hist.appendChild(ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np));");
     WT_HAS(p, "      ss.appendChild(a.ssid === null ? ssidHidden(\"(hidden)\") : "
               "ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));\n      row.appendChild(ss);");

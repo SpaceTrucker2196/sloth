@@ -118,6 +118,18 @@ section + .panel.controls { margin-top: 14px; }
 .d-normal { color: var(--tui-normal); }
 .d-dim { color: var(--tui-dim); }
 .xb { font-weight: 700; }
+/* The merged views (web_fleetview.h): a row only another sloth host
+ * heard is all CP_DIM, no hue and no weight, whatever its cells' own
+ * roles; its host's name small after the address in --faint, and a
+ * local row another host also heard a "+host" in --muted. Tokens
+ * only, so both themes hold. */
+.dt-row.remote, .dt-row.remote span { color: var(--tui-dim); font-weight: 400; }
+.drawer.remote #dr-body, .drawer.remote #bdr-body { color: var(--tui-dim); }
+.fv-site, .fv-plus { font-size: 10px; margin-left: 6px; white-space: nowrap; }
+.dt-row.remote .fv-site, .fv-site { color: var(--faint); }
+.fv-plus { color: var(--muted); }
+.fv-line { font-size: 12px; }
+.fv-host { color: var(--tui-normal); }
 .h0 { color: var(--heat-0); }
 .h1 { color: var(--heat-1); }
 .h2 { color: var(--heat-2); }

@@ -729,7 +729,8 @@ static void test_page_module(void) {
         "    if (window.SlothSubNotes) window.SlothSubNotes.show(\"adsb\", \"aircraft\", a.hex);\n",
         "    if (window.SlothSubNotes) window.SlothSubNotes.show(\"aprs\", \"aprs\", a ? a.call : sel);\n",
         "    if (window.SlothSubNotes) SlothSubNotes.mark(r.cells[\"c-mac\"], \"device\", r.mac);\n",
-        "    if (window.SlothSubNotes) SlothSubNotes.mark(row.firstChild, \"ble\", String(d.addr) + \"/\" + String(d.addr_type));\n",
+        "    if (window.SlothSubNotes && d.remote !== true)\n"
+        "      SlothSubNotes.mark(adc, \"ble\", String(d.addr) + \"/\" + String(d.addr_type));\n",
         "      SlothSubNotes.mark(ss, \"ssid\", SlothSsid.param(String(a.ssid)));\n",
         "    if (window.SlothSubNotes) window.SlothSubNotes.mark(r.firstChild, \"gnss\", s.gnssid + \".\" + s.prn);\n",
         "    if (window.SlothSubNotes) window.SlothSubNotes.mark(r.firstChild, \"aircraft\", a.hex);\n",

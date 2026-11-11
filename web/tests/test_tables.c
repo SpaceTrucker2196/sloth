@@ -99,9 +99,9 @@ static void test_page_tables(void) {
      * laid over the Overview's (it was, before the two met). */
     WT_LACKS(p, ".alrow { display: grid;");
     WT_HAS(p, "if (dir === \"asc\" || dir === \"desc\") p += \"&dir=\" + dir;");
-    WT_HAS(p, "            (wd ? \"&dir=\" + wd.dir : \"\") + (q ? \"&q=\" + encodeURIComponent(q) : \"\");");
+    WT_HAS(p, "            (wd ? \"&dir=\" + wd.dir : \"\") + (q ? \"&q=\" + encodeURIComponent(q) : \"\") + fvQuery(\"ble\");");
     WT_HAS(p, "      B.rows = DTB.sort(rows, !j.more);");
-    WT_HAS(p, "getJSON(\"/api/wifi/aps?limit=100&sort=\" + encodeURIComponent(sort) + \"&dir=\" + wd.dir)");
+    WT_HAS(p, "var path = \"/api/wifi/aps?limit=100&sort=\" + encodeURIComponent(sort) + (wd ? \"&dir=\" + wd.dir : \"\") +");
     WT_HAS(p, "if (wd) p += \"&dir=\" + wd.dir;");
     WT_HAS(p, ".dt .dt-row { display: grid; grid-template-columns: var(--dt-cols);");
     /* The review's fixes, each pinned where it lives: a flex column the
@@ -122,7 +122,7 @@ static void test_page_tables(void) {
     WT_HAS(p, "if (!p.role) p.role = \"rowgroup\";");
     WT_HAS(p, "}).observe(o.box, { childList: true, subtree: true });");
     WT_HAS(p, "if (!c || !t.dir || !c.val || (o.server && !complete)) return rows.slice();");
-    WT_HAS(p, "D.rows = DTD.sort(rows.slice(0, DEV_MAX), !more && rows.length <= DEV_MAX);");
+    WT_HAS(p, "D.rows = DTD.sort(rows.slice(0, DEV_MAX).concat(rem), !more && rows.length <= DEV_MAX);");
     WT_HAS(p, "DTF.sort(F.rows, !j.more)");
     WT_HAS(p, "DTA.sort(j.rows || [], !j.more)");
     WT_HAS(p, "return { k: \"n:\" + nm + (seen[nm] > 1 ? \"#\" + seen[nm] : \"\"), label: nm,");

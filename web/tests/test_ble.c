@@ -933,7 +933,7 @@ static void test_page(void) {
      * no swatch, no hash hue, no monitor ground. */
     WT_HAS(p, "    var cls = d.hid || d.watch_category ? \"d-bright\" : \"d-normal\";\n"
               "    var row = el(\"div\", \"blerow dt-row \" + cls + (sel ? \" on\" : \"\"));");
-    WT_HAS(p, "    row.appendChild(el(\"span\", \"c-ad\", d.addr));");
+    WT_HAS(p, "    var adc = row.appendChild(el(\"span\", \"c-ad\", d.addr));");
     WT_LACKS(p, "keyColor(d.addr)");
     WT_LACKS(p, "ssidSpan(d.name");
     WT_HAS(p, ".blerow > span { color: inherit; }");

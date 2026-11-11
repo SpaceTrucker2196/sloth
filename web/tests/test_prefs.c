@@ -134,6 +134,9 @@ static const char *const KEPT_ELSEWHERE[] = {
     /* probes.<id>, by probes.js: put back only as one of its options */
     "pr-days", "pr-min", "pr-cl-sort", "pr-ss-sort",
     "sy-win",     /* ctl.sy-win, by syshealth.js, through the lent prefGet/prefSet */
+    "d-sites",    /* fleet.devices, by fvSetup() once the peers are known */
+    "w-sites",    /* fleet.aps */
+    "b-sites",    /* fleet.ble */
 };
 static const char *const NOT_KEPT[] = {
     "q-recipe",   /* an action: it fills the SQL box, whose text is kept */

@@ -249,6 +249,7 @@
         <option value="mac">mac</option>
         <option value="risk">risk</option>
       </select></label>
+      <label hidden>sites <select id="d-sites" aria-label="this site or all sloth hosts"><option value="all" selected>All sites</option><option value="here">This site</option></select></label>
       <span class="sub" id="d-note"></span>
       <span class="sub dbage" id="d-dbage"></span>
     </section>
@@ -295,6 +296,7 @@
         <option value="mfr">company</option>
         <option value="watch">watch category</option>
       </select></label>
+      <label hidden>sites <select id="b-sites" aria-label="this site or all sloth hosts"><option value="all" selected>All sites</option><option value="here">This site</option></select></label>
       <span class="sub" id="b-note">sloth's ble_device records, kept by slothweb (slothweb.db; sloth.db has no BLE table); nothing is sent, and sloth never scans, connects or reads GATT: the operator's stack runs the scan</span>
     </section>
     <section class="panel controls" aria-label="ble waterfall controls">
@@ -569,7 +571,7 @@
         <option value="ssids">ssid count</option>
         <option value="karma">karma score</option>
         <option value="bssid">bssid</option>
-      </select></label></div>
+      </select></label> <label hidden>sites <select id="w-sites" aria-label="this site or all sloth hosts"><option value="all" selected>All sites</option><option value="here">This site</option></select></label></div>
       <div class="hscroll" id="w-aps-box">
       <div class="aprow dhead" id="w-aps-head"></div>
       <div id="w-aps"></div>

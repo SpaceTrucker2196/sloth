@@ -667,3 +667,42 @@ and the skew compares a GNSS-steered clock with a network one.
 - [[gnss]] — the receiver summary.
 - [[data-socket-exposure]] — the other network surface and its rules.
 - [[threat-model]]
+
+## The merged views
+
+Owner request 2026-11-11: "combine data from all sloth hosts in the web
+ui make non local devices and data show in a grey state". The WiFi
+Devices list, the WiFi view's AP table and the BLE advertisers show the
+other sloth hosts' rows beside this site's (`web/src/web_fleetview.c`,
+`/api/devices`, `/api/wifi/aps`, `/api/ble`; the API is in
+[`web/README.md`](../../web/README.md#fleet)).
+
+- A row this site holds stays its own row, every figure this site's; when
+  another host reported the same key it gains a small `+name` (the host's
+  label from its export, else its `--peer` name).
+- A key only another host reported is added after this site's rows, in
+  the grey state (`--tui-dim`, no hash hue, no weight), with that host's
+  name beside the address. It carries only what `peer_sightings` holds
+  (address, SSID or name, vendor or class, signal, times); the columns
+  only this site has (risk, z, anomalies, presence, sources, IP, name)
+  are `-`. A peer's 0 dBm is no reading.
+- At most 100 such rows an answer, on the page that ends this site's
+  list, sorted by the view's own column among themselves. A key this
+  site holds anywhere is never one of them, whatever the filter.
+- Each view has a "This site / All sites" choice, kept in the browser,
+  All sites by default and hidden while no `--peer` is configured. This
+  site asks with `fleet=0`, which is the route's answer exactly as it
+  was before.
+- Clicking a grey row opens the drawer with what each host reported and
+  the hosts that saw it by name ("seen at beta-site"), none of this
+  site's fields.
+- Hybrid only: a peer's row carries no capture path, so under Monitor or
+  Local nothing is merged.
+
+The other hosts' rows are display only. They never reach risk scoring,
+alerts, anomalies, baselines, series, triage, the Overview's tiles, the
+detail audit or `/api/fleet/export`, which reads `sloth.db` and the BLE
+table and never `peer_sightings`, so a row cannot echo from one site to
+the next. Every string in them came from another slothweb over the
+network: JSON-escaped on the way out and set with `textContent` on the
+page.

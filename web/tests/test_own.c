@@ -158,7 +158,7 @@ static void test_own_page(void) {
     WT_HAS(p, "      c.appendChild(H.ssidSpan(String(s.ssid), s.ssid_k, s.ssid_np));\n"
               "      if (s.designated === true) c.appendChild(H.el(\"span\", \"d-bright\", \" yours\"));\n");
     WT_HAS(p, "                 designatedCaption(j),\n");
-    WT_HAS(p, "    if (a.designated === true) ss.appendChild(el(\"span\", \"d-bright\", \" yours\"));\n");
+    WT_HAS(p, "    if (!rem && a.designated === true) ss.appendChild(el(\"span\", \"d-bright\", \" yours\"));\n");
     /* The old "cannot know" words are gone from both views. */
     WT_LACKS(p, "in neither sloth.db nor the stream");
 }
