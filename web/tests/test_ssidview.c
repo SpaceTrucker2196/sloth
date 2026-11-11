@@ -95,6 +95,99 @@ static void test_ssid_param(void) {
     WT_EQ(web_ssid_param(NULL, out), -1);
 }
 
+/* A decoder of this file's own, written from RFC 4648 section 5 by
+ * position and not by the routine's accumulator: the octets of a
+ * base64url text with no padding, -1 for anything web_ssid_param() is
+ * documented to refuse (a character outside the alphabet, a length no
+ * octet string encodes to, non-zero spare bits, a NUL octet, over 32
+ * octets). "-" is the empty SSID and is not asked of it. */
+static int ref_b64(const char *s, unsigned char *out) {
+    size_t n = strlen(s);
+    int v[64];
+    if (n == 0 || n > 60 || n % 4 == 1) return -1;
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        v[i] = c >= 'A' && c <= 'Z' ? c - 'A' : c >= 'a' && c <= 'z' ? c - 'a' + 26
+             : c >= '0' && c <= '9' ? c - '0' + 52 : c == '-' ? 62 : c == '_' ? 63 : -1;
+        if (v[i] < 0) return -1;
+    }
+    size_t no = n * 6 / 8;
+    if (no > WEB_SSID_OCTETS) return -1;
+    for (size_t k = 0; k < no; k++) {
+        size_t q = k / 3 * 4;
+        int b = k % 3 == 0 ? (v[q] << 2) | (v[q + 1] >> 4)
+              : k % 3 == 1 ? ((v[q + 1] & 15) << 4) | (v[q + 2] >> 2)
+                           : ((v[q + 2] & 3) << 6) | v[q + 3];
+        if (!b) return -1;
+        out[k] = (unsigned char)b;
+    }
+    int spare = n % 4 == 2 ? v[n - 1] & 15 : n % 4 == 3 ? v[n - 1] & 3 : 0;
+    return spare ? -1 : (int)no;
+}
+
+/* The parameter under a few thousand generated texts, from a fixed
+ * seed: every length from none to past the longest, the alphabet with
+ * the characters next to it (+ / = % space, a byte over 0x7f), and
+ * octet strings of every length with every byte value but NUL. Each
+ * result is held to ref_b64() above, and the output goes into a block
+ * of exactly WEB_SSID_OCTETS + 1 bytes so a write past it is the
+ * sanitizer's to report. What it found on 2026-11-11: nothing. */
+static void test_ssid_param_generated(void) {
+    static const char ALPHA[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    static const char NEAR[] = "+/=% .~\x80\xff";
+    uint32_t x = 0x51075ead;
+    int asked = 0, agreed = 0, taken = 0;
+    for (int it = 0; it < 6000; it++) {
+        char in[64];
+        x = x * 1664525u + 1013904223u;
+        size_t n = (x >> 8) % 50;
+        int dirty = (x >> 20) % 4 == 0;
+        for (size_t i = 0; i < n; i++) {
+            x = x * 1664525u + 1013904223u;
+            in[i] = dirty && (x >> 28) == 0 ? NEAR[(x >> 12) % (sizeof(NEAR) - 1)]
+                                            : ALPHA[(x >> 12) % 64];
+        }
+        in[n] = '\0';
+        if (!strcmp(in, "-")) continue;
+        char *out = malloc(WEB_SSID_OCTETS + 1);
+        unsigned char want[64];
+        WT_ASSERT(out != NULL);
+        if (!out) return;
+        int got = web_ssid_param(in, out), ref = ref_b64(in, want);
+        if (got != ref) fprintf(stderr, "  \"%s\": got %d, want %d\n", in, got, ref);
+        asked++;
+        agreed += got == ref;
+        if (got >= 0) {
+            taken++;
+            WT_ASSERT(got <= WEB_SSID_OCTETS && strlen(out) == (size_t)got);
+            WT_ASSERT(ref < 0 || !memcmp(out, want, (size_t)got));
+        }
+        free(out);
+    }
+    WT_EQ(agreed, asked);
+    WT_ASSERT(taken > 500);            /* the generator does reach the accepting side */
+    /* Octets to text and back: every length, every byte value. */
+    for (int it = 0; it < 2000; it++) {
+        char oct[WEB_SSID_OCTETS + 8], text[48];
+        x = x * 1664525u + 1013904223u;
+        size_t n = 1 + (x >> 8) % (WEB_SSID_OCTETS + 4);
+        for (size_t i = 0; i < n; i++) {
+            x = x * 1664525u + 1013904223u;
+            oct[i] = (char)(1 + (x >> 16) % 255);
+        }
+        web_ssid_param_of(oct, n, text);
+        size_t kept = n > WEB_SSID_OCTETS ? WEB_SSID_OCTETS : n;
+        WT_EQ((int)strlen(text), (int)((kept * 4 + 2) / 3));
+        char *out = malloc(WEB_SSID_OCTETS + 1);
+        WT_ASSERT(out != NULL);
+        if (!out) return;
+        WT_EQ(web_ssid_param(text, out), (int)kept);
+        WT_ASSERT(!memcmp(out, oct, kept) && out[kept] == '\0');
+        free(out);
+    }
+}
+
 #ifndef WITH_SQLITE
 
 /* Without SQLite there is no sloth.db: the route says so. */
@@ -621,6 +714,7 @@ static void test_page_ssid_detail(void) {
 
 void run_ssidview_tests(void) {
     WT_RUN(test_ssid_param);
+    WT_RUN(test_ssid_param_generated);
 #ifndef WITH_SQLITE
     WT_RUN(test_route_without_sqlite);
 #else

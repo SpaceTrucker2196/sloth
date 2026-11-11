@@ -315,8 +315,12 @@ static int resolve_ref(const web_m4_t *m, web_live_t *live, web_sdb_conn_t *c,
         r->has_subj = 1;
         return 1;
     }
-    if (text[0] == 's' || text[0] == 'd') {
-        for (const char *p = text + 1; *p; p++) if (!isalnum((unsigned char)*p)) return -3;
+    /* An alert's id is all alphanumeric; a MAC or a BLE address whose
+     * first hex digit is d holds colons, and is looked at below. */
+    int alert_shape = text[0] == 's' || text[0] == 'd';
+    for (const char *p = text + 1; *p && alert_shape; p++)
+        if (!isalnum((unsigned char)*p)) alert_shape = 0;
+    if (alert_shape) {
         if (strlen(text) < 2 || strlen(text) > 25) return -3;
         r->kind = REF_ALERT;
         snprintf(r->id, sizeof(r->id), "%s", text);
