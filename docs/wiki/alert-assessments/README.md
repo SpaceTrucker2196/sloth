@@ -54,7 +54,7 @@ each file's `count_semantics` says how its rule counts.
 | [DGA_DOMAIN](DGA_DOMAIN.md) | T1568.002 | agree | high | quiet in findings, very noisy in count on the reference host |
 | [DNS_TUNNEL](DNS_TUNNEL.md) | T1071.004 | agree | medium | not seen on the reference host (host data null for this type). Given the count semantics it would be quiet-to-moderate: the key dedupes per parent domain and only 16 parents are tracked per tick (buckets[16]), so even a live tunnel is one key counting up per tick, not per query. If it does fire repeatedly on a benign service, raise --tune dns.tunnel_total_thresh or dns.tunnel_label_thresh, or allowlist the parent at the resolver |
 | [EVIL_TWIN](EVIL_TWIN.md) | T1557 | agree | medium | noisy on the reference host |
-| [EVIL_TWIN_PROXIMITY](EVIL_TWIN_PROXIMITY.md) | T1557 | agree | high | noisy on the reference host |
+| [EVIL_TWIN_PROXIMITY](EVIL_TWIN_PROXIMITY.md) | T1557 | agree | medium since #189, high before it | noisy on the reference host |
 | [FRAG_AMSDU](FRAG_AMSDU.md) | T1557 | agree in intent, too high as implemented | medium | noisy on the reference host |
 | [FRAG_AMSDU_EAPOL](FRAG_AMSDU_EAPOL.md) | T1557 | agree for the frame the rule actually matches, with a scope caveat | low | not seen on the reference host |
 | [FRAG_BCAST](FRAG_BCAST.md) | T1557 | agree | low | not seen on the reference host |
