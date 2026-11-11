@@ -2489,14 +2489,23 @@ static void test_the_page_carries_the_sun(void) {
               "                j.presence_from, CELL_S);");
     WT_HAS(p, "    H.drawStrip($(\"sdr-strip\"), null, CELLS, -1);");
     WT_HAS(p, "      H.drawStrip(cv, d.presence, CELLS, glyph.firstCell(d.first_seen, P.from, CELL_S, CELLS), P.from, CELL_S);");
+    /* The Sensor health view (syshealth.js) has a strip function of its
+     * own name for a source's up/down state and the under-voltage alarm.
+     * Those are states, not presence, so it calls the glyph with no
+     * window and they stay one ink: no sun on a strip that is not about
+     * when a device was here. */
+    WT_HAS(p, "  function drawStrip(w, ui, s, from, to) {");
+    WT_HAS(p, "    glyph.paint(ui.c, glyph.g5(st.cells, { w: ui.c.clientWidth, h: ui.c.clientHeight, first: -1 }), H.tok);");
+    WT_HAS(p, "          if (w.strip) n += drawStrip(w, ui, r[0], from, to) || 0;");
     /* ... and there is no other: seven calls and the definition in
-     * app.js, and those three. */
+     * app.js, the SSID drawer's two and the Probes rows' one, and
+     * syshealth.js's own definition and call. */
     int calls = 0;
     for (const char *q = p; (q = strstr(q, "drawStrip(")) != NULL; q += 10) calls++;
-    WT_EQ(calls, 11);
+    WT_EQ(calls, 13);
     int g5s = 0;
     for (const char *q = p; (q = strstr(q, "glyph.g5(")) != NULL; q += 9) g5s++;
-    WT_EQ(g5s, 1);                         /* paintStrip()'s, the one painter */
+    WT_EQ(g5s, 3);    /* paintStrip()'s, the one presence painter; syshealth.js's state strip and the comment naming it */
     /* The three tables' rulers and words. */
     WT_HAS(p, "        D.pfrom = num(j.presence_from) ? j.presence_from : null;\n"
               "        drawRuler(DTD.ruler, D.pfrom, D.pfrom + 144 * 600, 144, j.utc_offset_s);\n"
