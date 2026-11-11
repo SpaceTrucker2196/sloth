@@ -12,7 +12,10 @@
 // heard, located (#192 I5, /api/fleet/locate): each candidate a
 // translucent circle of its radius, the key on hover or tap, the picked
 // row's range circles dashed, and a metre scale; the map fits the sites
-// and the candidates, so at a 17 m baseline it is drawn in metres. Every
+// and the candidates, so at a 17 m baseline it is drawn in metres. GNSS
+// across the sites (#192 I6, /api/fleet/gnss): each site's receiver, the
+// baseline between static sites against its bound, and the GNSS events
+// classified regional, local or undetermined. Every
 // peer string goes in as textContent; SVG geometry is set through the
 // elements' own length properties.
 (function () {
@@ -22,7 +25,7 @@
   var MAP_W = 600, MAP_H = 300, PAD = 56;
   var KINDS = ["wifi", "ble", "ap", "probe"];
   var M_DEG = 111194.9;               // metres in a degree of latitude (IUGG mean radius)
-  var S = { timer: 0, gen: 0, sgen: 0, lgen: 0, ov: null, loc: null, pick: "" };
+  var S = { timer: 0, gen: 0, sgen: 0, lgen: 0, ggen: 0, ov: null, loc: null, pick: "" };
 
   function $(id) { return document.getElementById(id); }
   // The namespace from the page's own <svg>: the page names no URL.
@@ -384,8 +387,96 @@
     });
   }
 
+  // GNSS across the sites: a card per receiver, a gauge per pair of
+  // sites (the band is +/- the bound around the reference distance, the
+  // mark the distance now), and the classified events.
+  function gnssCards(j) {
+    var box = $("fleet-gnss-sites");
+    while (box.firstChild) box.removeChild(box.firstChild);
+    j.sites.forEach(function (s) {
+      var c = H.el("div", "fleet-card");
+      c.appendChild(H.el("div", "fleet-card-h", siteName(s.site)));
+      var dl = H.el("dl");
+      kv(dl, "receiver", !s.fresh ? "no fresh summary" : (s.state || "-") + ", " + s.sats_used + " of " +
+         s.sats_in_view + " satellites used", !s.fresh);
+      kv(dl, "C/N0", num(s.cn0_med) ? "median " + s.cn0_med + " dB-Hz over " + s.tracked + " tracked" +
+         (num(s.cn0_mean) ? ", mean " + s.cn0_mean : "") : num(s.cn0_mean) ? "mean " + s.cn0_mean + " dB-Hz" : "-");
+      kv(dl, "fix", s.fix ? "mode " + s.fix.mode + "D, eph " + (num(s.fix.eph) ? s.fix.eph + " m" : "-") +
+         (num(s.fix.hdop) ? ", hdop " + s.fix.hdop : "") : "none");
+      if (s.reference) kv(dl, "from reference", num(s.reference.displacement_m) ? s.reference.displacement_m +
+         " m (bound " + s.reference.bound_m + " m, " + s.reference.n + " fixes)" : "-", s.reference.outside === true);
+      kv(dl, "clock offset", num(s.time_offset_ms) ? s.time_offset_ms + " ms" + (s.time && num(s.time.step_ms) ?
+         ", step " + s.time.step_ms + " ms" : "") : "-", !!(s.time && s.time.stepped));
+      if (num(s.jam)) kv(dl, "jam indicator", String(s.jam), s.jam >= j.jam_ind);
+      kv(dl, "incidents", s.incidents ? "offered" : "not offered (older export or no sloth.db)", !s.incidents);
+      c.appendChild(dl);
+      box.appendChild(c);
+    });
+  }
+  function gauge(p) {
+    var row = H.el("div", "fleet-gauge");
+    row.appendChild(H.el("span", "fleet-who", siteName(p.a) + " - " + siteName(p.b)));
+    var tr = H.el("div", "fleet-gtrack");
+    if (num(p.delta_m) && num(p.bound_m)) {
+      var span = Math.max(p.bound_m * 1.5, Math.abs(p.delta_m) * 1.2, 1);
+      var band = H.el("div", "fleet-gband"), mark = H.el("div", "fleet-gmark" + (p.verdict === "outside" ? " out" : ""));
+      band.style.left = (50 - 50 * p.bound_m / span).toFixed(2) + "%";
+      band.style.width = (100 * p.bound_m / span).toFixed(2) + "%";
+      mark.style.left = (50 + 50 * p.delta_m / span).toFixed(2) + "%";
+      tr.appendChild(band);
+      tr.appendChild(mark);
+    }
+    row.appendChild(tr);
+    row.appendChild(H.el("span", p.verdict === "outside" ? "warn" : "", p.verdict === "undetermined"
+      ? "undetermined (" + (p.why || "").replace(/_/g, " ") + ")"
+      : p.ref_m + " m then, " + p.now_m + " m now: " + (p.delta_m > 0 ? "+" : "") + p.delta_m + " m, bound +/-" +
+        p.bound_m + " m, " + p.verdict + (p.moved.length ? "; moved: " + p.moved.map(siteName).join(", ") : "")));
+    return row;
+  }
+  function gnssRows(j) {
+    var box = $("fleet-gnss-rows");
+    while (box.firstChild) box.removeChild(box.firstChild);
+    j.events.forEach(function (e) {
+      var row = H.el("div", "fleet-gev");
+      row.appendChild(H.el("span", "", H.stamp(e.first_seen) + (e.last_seen > e.first_seen ? " +" +
+                           Math.round((e.last_seen - e.first_seen) / 60) + " min" : "")));
+      row.appendChild(H.el("span", "", siteName(e.site)));
+      row.appendChild(H.el("span", "", e.type + " (" + e.class + (e.source === "sample" ? ", from the summary" : "") + ")"));
+      row.appendChild(H.el("span", "fleet-v " + e.verdict, e.verdict));
+      var who = [];
+      if (e.with.length) who.push("same at " + e.with.map(siteName).join(", "));
+      if (e.quiet.length) who.push("quiet at " + e.quiet.map(siteName).join(", "));
+      if (e.stale.length) who.push("not observed at " + e.stale.map(siteName).join(", "));
+      if (e.far.length) who.push("outside the region: " + e.far.map(siteName).join(", "));
+      var w = H.el("span", "", who.join("; ") || "no other site");
+      w.title = j.basis[e.class] || "";
+      row.appendChild(w);
+      box.appendChild(row);
+    });
+  }
+  function loadGnss() {
+    var gen = ++S.ggen;
+    return H.getJSON("/api/fleet/gnss?limit=50").then(function (j) {
+      if (gen !== S.ggen) return;
+      gnssCards(j);
+      var base = $("fleet-gnss-base");
+      while (base.firstChild) base.removeChild(base.firstChild);
+      j.baseline.forEach(function (p) { base.appendChild(gauge(p)); });
+      gnssRows(j);
+      var c = j.counts;
+      H.set("fleet-gnss-note", "position " + j.position.verdict.replace("_", " ") +
+            (j.position.site ? " (" + siteName(j.position.site) + ")" : "") + ", time " +
+            j.time.verdict.replace("_", " ") + (j.time.site ? " (" + siteName(j.time.site) + ")" : "") +
+            "; this week " + c.regional + " regional, " + c.local + " local, " + c.undetermined +
+            " undetermined; window " + j.window_s + " s, region " + dist(j.region_m) +
+            (j.local === "open" ? "" : "; this site's sloth.db is " + j.local));
+    }).catch(function (e) {
+      if (gen === S.ggen) H.set("fleet-gnss-note", H.errText(e.message));
+    });
+  }
+
   function load() {
-    loadOverview().then(loadLocate).then(loadShared);
+    loadOverview().then(loadLocate).then(loadShared).then(loadGnss);
   }
   function show() {
     load();

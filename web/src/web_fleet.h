@@ -131,6 +131,12 @@
 #define WEB_FLEET_OWN_MAX        8
 #define WEB_FLEET_MAC_SZ         18
 #define WEB_FLEET_NOOWN_S        3600
+/* The receiver's GNSS incidents (#192 I6, web_fleetgnss.h), asked for
+ * with gnss=1: at most this many gnss_event lines, the newest of the last
+ * week. An older export refuses gnss=1; it is then asked without it for
+ * WEB_FLEET_NOGNSS_S. */
+#define WEB_FLEET_CAP_GNSSEV     256
+#define WEB_FLEET_NOGNSS_S       3600
 
 enum { WEB_FK_WIFI = 0, WEB_FK_BLE, WEB_FK_AP, WEB_FK_PROBE, WEB_FK_ALERT,
        WEB_FK_VERDICT, WEB_FK_COUNT };
@@ -192,6 +198,7 @@ typedef struct {
     unsigned long pages, page_failures;    /* backfill pages fetched, refused */
     long long no_next_until;               /* an F1 peer: plain pulls until then */
     long long no_own_until;                /* an F2 peer: no own=1 until then */
+    long long no_gnss_until;               /* an I5 peer: no gnss=1 until then */
     /* The peer's own radios, as its last full answer named them (own=1;
      * memory only: the next pull after a restart names them again). */
     int       nown;
@@ -203,6 +210,8 @@ typedef struct {
 
 
 struct sqlite3;
+struct web_gnss;
+struct web_fg;
 
 typedef struct web_fleet {
     pthread_mutex_t   mu;                  /* guards peer[] and the counts */
@@ -220,6 +229,13 @@ typedef struct web_fleet {
     int               nown;
     char              own[WEB_FLEET_OWN_MAX][WEB_FLEET_MAC_SZ];
     char              own_csv[WEB_FLEET_OWN_MAX * WEB_FLEET_MAC_SZ];
+    /* GNSS across the sites (#192 I6, web_fleetgnss.h): this site's
+     * receiver (set before start; NULL none), the region a peer must be
+     * within to make an event regional (--peer-gnss-region-km), and the
+     * samples, under mu (NULL when it could not be allocated). */
+    struct web_gnss  *gnss;
+    double            gnss_region_m;
+    struct web_fg    *fg;
     /* Test seams, the defaults otherwise. */
     int               connect_ms, read_ms;
     size_t            resp_max;
@@ -260,6 +276,11 @@ int  web_fleet_pull_one(web_fleet_t *f, int i, long long now_s);
 int  web_fleet_ingest(web_fleet_t *f, int i, const char *body, size_t len,
                       long long now_s, int write, long long *rows,
                       long long *remote_ts, char *err, size_t errsz);
+
+/* This site's receiver sample for the GNSS comparison and the save of
+ * every site's coverage and reference to meta (web_fleetgnss.h): the
+ * pull thread's, once a round after the peers; the tests call it. */
+void web_fleet_gnss_tick(web_fleet_t *f, long long now_s);
 
 /* /api/health's "fleet" member. */
 void web_fleet_health_json(web_fleet_t *f, web_jw_t *w, long long now_s);

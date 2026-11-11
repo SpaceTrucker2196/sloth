@@ -19,6 +19,7 @@
 #include "web_alertkb.h"
 #include "web_ble.h"
 #include "web_bledev.h"
+#include "web_fleetgnss.h"
 #include "web_frrs.h"
 #include "web_gnss.h"
 #include "web_jsonl.h"
@@ -89,9 +90,15 @@ static const char *const M_HDR[] = {
     "fleet_export", "fleet_export_version", "generated", "since", "site_label",
     "slothweb_version", "sloth_version", "sloth_db", "lat", "lon", "alt_m",
     "pos_source", "pos_ts", "pos_age_s", "own_macs", NULL };
+/* The receiver's summary; from fix_ts on (#192 I6), sent for gnss=1
+ * only: the newest fix and the tracked satellites' median C/N0. */
 static const char *const M_GNSS[] = {
     "gnss", "gps_state", "sats_in_view", "sats_used", "cn0_mean",
-    "time_offset_ms", "jam", "ts", NULL };
+    "time_offset_ms", "jam", "ts", "fix_ts", "mode", "fix_lat", "fix_lon", "eph",
+    "hdop", "cn0_med", "tracked", NULL };
+/* One of sloth's GNSS incidents (#192 I6), for gnss=1 only. */
+static const char *const M_GEV[] = {
+    "gnss_event", "alert_type", "ty", "first_seen", "last_seen", "count", "sev", NULL };
 static const char *const M_WIFI[] = {
     "wifi", "mac", "vendor", "ssid", "rssi", "bssid", "is_ap", "first_seen",
     "last_seen", NULL };
@@ -113,10 +120,10 @@ static const char *const M_END[] = {
     "fleet_end", "rows", "wifi", "ble", "ap", "probe", "alert", "verdict",
     "truncated_wifi", "truncated_ble", "truncated_ap", "truncated_probe",
     "truncated_alert", "truncated_verdict", "next_wifi", "next_ap", "next_alert",
-    "next_verdict", "complete", NULL };
+    "next_verdict", "gnss_event", "complete", NULL };
 
 const char *const *const web_fleet_members[] = {
-    M_HDR, M_GNSS, M_WIFI, M_BLE, M_AP, M_PROBE, M_ALERT, M_VERDICT, M_END,
+    M_HDR, M_GNSS, M_WIFI, M_BLE, M_AP, M_PROBE, M_ALERT, M_VERDICT, M_END, M_GEV,
 };
 const size_t web_fleet_members_n = sizeof(web_fleet_members) / sizeof(web_fleet_members[0]);
 
@@ -263,6 +270,7 @@ typedef struct frow {
 
 typedef struct fhdr {
     long long generated, pos_ts;
+    int       sdb_open;              /* sloth_db "open" */
     char      label[WEB_FLEET_STR_MAX + 1];
     char      version[32];
     char      pos_source[8];
@@ -281,6 +289,7 @@ typedef struct {
     long long since;
     int       next;
     int       own;                   /* own=1: the header names this site's radios */
+    int       gnss;                  /* gnss=1: the fix, the incidents (#192 I6) */
     int       only;                  /* -1 every kind, else the page's WEB_FK_* */
     int       has_after;
     long long after_ts;
@@ -312,6 +321,7 @@ typedef struct {
     long long   alert_bottom_ts;
     web_jrec_t *rec;                 /* the self-check's decoder record */
     const char *own_csv;             /* this site's radios, for own=1 */
+    int         gev_n, gev_cut;      /* gnss_event lines (gnss=1) */
 } xp_t;
 
 static void set_cur(xp_t *x, int k, long long ts, const char *tok) {
@@ -593,6 +603,38 @@ static int xp_verdict(void *ctx, const web_frrs_verdict_t *v) {
     return r <= 0;
 }
 
+/* One GNSS incident (#192 I6): the type, sloth's own figures and times;
+ * no key (a constant) and no detail. A line the importer would refuse is
+ * left out, as every row's. */
+static int xp_gev(void *ctx, const web_sdb_item_t *it) {
+    xp_t *x = ctx;
+    if (x->gev_n >= WEB_FLEET_CAP_GNSSEV) { x->gev_cut = 1; return 1; }
+    const web_akb_t *k = web_akb_get(it->n1 & 0xffff);
+    if (!k || web_fg_class_of(k->name) < 0) return 0;
+    web_jw_t *w = x->w;
+    size_t mark = w->len;
+    if (w->len > x->soft) { x->gev_cut = 1; return 1; }
+    web_jw_raw(w, "{\"type\":\"gnss_event\"");
+    jk(w, M_GEV, "alert_type"); web_jw_str(w, k->name);
+    jk(w, M_GEV, "ty");         web_jw_int(w, it->n1 & 0xffff);
+    jk(w, M_GEV, "first_seen"); web_jw_int(w, it->first_seen);
+    jk(w, M_GEV, "last_seen");  web_jw_int(w, it->last_seen);
+    jk(w, M_GEV, "count");      web_jw_int(w, it->n3 > 0 ? it->n3 : 0);
+    jk(w, M_GEV, "sev");        web_jw_int(w, it->n2 < 0 ? 0 : it->n2 > 2 ? 2 : it->n2);
+    web_jw_raw(w, "}");
+    if (w->overflow) {
+        if (w->len <= x->soft) return -1;      /* an unlisted member */
+        w->len = mark;
+        w->overflow = 0;
+        x->gev_cut = 1;
+        return 1;
+    }
+    if (!line_takes(x, mark, "gnss_event")) { w->len = mark; return 0; }
+    web_jw_raw(w, "\n");
+    x->gev_n++;
+    return 0;
+}
+
 static void xp_ble(xp_t *x, struct web_ble *ble, long long now_s) {
     web_ble_cand_t *cand = malloc(sizeof(*cand) * WEB_FLEET_CAP_BLE);
     if (!cand) { x->cut[WEB_FK_BLE] = 1; return; }
@@ -631,8 +673,9 @@ static int kind_of_word(const char *s, size_t n) {
     return -1;
 }
 
-/* since=EPOCH, next=1, own=1, kind=wifi|ap|alert|verdict, after=CURSOR
- * (with kind), each at most once, nothing else. own=1 (#192 I5) asks
+/* since=EPOCH, next=1, own=1, gnss=1, kind=wifi|ap|alert|verdict,
+ * after=CURSOR (with kind), each at most once, nothing else. gnss=1
+ * (#192 I6) the same way as own=1. own=1 (#192 I5) asks
  * for the header's own_macs: an older puller never sends it, so it never
  * meets a member it does not know, and an older export refuses it as an
  * unknown parameter, which the puller takes as "not offered". */
@@ -660,6 +703,9 @@ static int parse_query(const char *q, xq_t *x, const char **why) {
         } else if (kl == 3 && !strncmp(p, "own", 3) && !x->own) {
             if (vl != 1 || v[0] != '1') { *why = "bad_own"; return -1; }
             x->own = 1;
+        } else if (kl == 4 && !strncmp(p, "gnss", 4) && !x->gnss) {
+            if (vl != 1 || v[0] != '1') { *why = "bad_gnss"; return -1; }
+            x->gnss = 1;
         } else if (kl == 4 && !strncmp(p, "kind", 4) && !seen_kind) {
             seen_kind = 1;
             int k = kind_of_word(v, vl);
@@ -770,6 +816,32 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
         jk(&w, M_GNSS, "jam");
         if (sh.jam >= 0) web_jw_int(&w, sh.jam); else web_jw_raw(&w, "null");
         jk(&w, M_GNSS, "ts");           web_jw_int(&w, sh.ts);
+        /* The newest fix and the tracked median (#192 I6), for gnss=1:
+         * an older importer refuses a member it does not know. */
+        if (xq.gnss) {
+            web_gnss_fleet_t gf;
+            web_gnss_fleet(src->gnss, now_s, &gf);
+            const web_gnss_fix_t *fx = &gf.fix;
+            jk(&w, M_GNSS, "fix_ts");
+            if (gf.has_fix && fx->ts > 0) web_jw_int(&w, fx->ts); else web_jw_raw(&w, "null");
+            jk(&w, M_GNSS, "mode");
+            if (gf.has_fix) web_jw_int(&w, fx->mode); else web_jw_raw(&w, "null");
+            int pos = gf.has_fix && fx->has_pos && isfinite(fx->lat) && isfinite(fx->lon);
+            jk(&w, M_GNSS, "fix_lat");
+            if (pos) jfix(&w, fx->lat, 7); else web_jw_raw(&w, "null");
+            jk(&w, M_GNSS, "fix_lon");
+            if (pos) jfix(&w, fx->lon, 7); else web_jw_raw(&w, "null");
+            jk(&w, M_GNSS, "eph");
+            if (gf.has_fix && fx->has_eph && isfinite(fx->eph)) jfix(&w, fx->eph, 1);
+            else web_jw_raw(&w, "null");
+            jk(&w, M_GNSS, "hdop");
+            if (gf.has_fix && fx->hdop > 0 && isfinite(fx->hdop)) jfix(&w, fx->hdop, 1);
+            else web_jw_raw(&w, "null");
+            jk(&w, M_GNSS, "cn0_med");
+            if (gf.tracked && isfinite(gf.cn0_med)) jfix(&w, gf.cn0_med, 1);
+            else web_jw_raw(&w, "null");
+            jk(&w, M_GNSS, "tracked");      web_jw_int(&w, gf.tracked);
+        }
         web_jw_raw(&w, "}");
         /* The receiver's summary is optional: one the importer would
          * refuse is left out. */
@@ -828,6 +900,15 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
                     x.alert_bottom_ts = oldest;
                 }
             }
+        }
+        /* The receiver's incidents (#192 I6): gnss=1, the whole export
+         * only, the newest of the last week changed since `since`. */
+        if (all && xq.gnss && !c.timed_out && !w.overflow) {
+            long long from = now_s - WEB_FG_EVENTS_S;
+            if (since > from) from = since;
+            if (web_sdb_gnss_incidents(&c, from, WEB_FLEET_CAP_GNSSEV + 1, xp_gev, &x) < 0 &&
+                w.overflow)
+                fault = 1;
         }
         /* A read that ran out of budget is a cut, never an error: what
          * was read before it went out, and the cursor says where. */
@@ -895,6 +976,11 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
             if (!web_fleet_cursor_ok(cur)) w.overflow = 1;
             web_jw_str(&w, cur);
         }
+    }
+    /* Asked for only, like the cursors: an older importer refuses it. */
+    if (xq.gnss && all) {
+        jk(&w, M_END, "gnss_event");
+        web_jw_int(&w, x.gev_n);
     }
     jk(&w, M_END, "complete"); web_jw_raw(&w, "true");
     web_jw_raw(&w, "}\n");
@@ -1377,6 +1463,20 @@ static int row_of(const web_jrec_t *r, const char *type, frow_t *o, const char *
             (goff = v_int(r, "time_offset_ms", -(1LL << 46), 1LL << 46, &off)) < 0 ||
             v_int(r, "jam", 0, 255, &jam) < 0 || v_int(r, "ts", 0, T_MAX, &ts) < 0)
             return -1;
+        /* The fix and the tracked median (#192 I6): each absent from an
+         * older export, null when the receiver had none. */
+        long long fts, mode, trk;
+        double flat, flon, eph, hdop, med;
+        int gfl, gfo, geph, ghd, gmed, gmode;
+        if (v_int(r, "fix_ts", 0, T_MAX, &fts) < 0 ||
+            (gmode = v_int(r, "mode", 0, 3, &mode)) < 0 ||
+            (gfl = v_num(r, "fix_lat", -90, 90, &flat)) < 0 ||
+            (gfo = v_num(r, "fix_lon", -180, 180, &flon)) < 0 || gfl != gfo ||
+            (geph = v_num(r, "eph", 0, 1e5, &eph)) < 0 ||
+            (ghd = v_num(r, "hdop", 0, 100, &hdop)) < 0 ||
+            (gmed = v_num(r, "cn0_med", 0, 99, &med)) < 0 ||
+            v_int(r, "tracked", 0, 999, &trk) < 0)
+            return -1;
         snprintf(o->key, sizeof(o->key), "receiver");
         snprintf(o->label, sizeof(o->label), "%s", a);
         o->first = o->last = ts;
@@ -1387,6 +1487,27 @@ static int row_of(const web_jrec_t *r, const char *type, frow_t *o, const char *
         ex_key(&w, &fst, "time_offset_ms");
         if (goff == 1) web_jw_int(&w, off); else web_jw_raw(&w, "null");
         ex_key(&w, &fst, "jam");          web_jw_int(&w, jam);
+        if (gmode == 1) { ex_key(&w, &fst, "mode"); web_jw_int(&w, mode); }
+        if (gfl == 1) {
+            ex_key(&w, &fst, "fix_lat"); jfix(&w, flat, 7);
+            ex_key(&w, &fst, "fix_lon"); jfix(&w, flon, 7);
+        }
+        if (geph == 1) { ex_key(&w, &fst, "eph"); jfix(&w, eph, 1); }
+        if (ghd == 1) { ex_key(&w, &fst, "hdop"); jfix(&w, hdop, 1); }
+        if (gmed == 1) { ex_key(&w, &fst, "cn0_med"); jfix(&w, med, 1); }
+    } else if (!strcmp(type, "gnss_event")) {
+        o->kind = -2;
+        long long ty, count, sev;
+        if (v_str(r, "alert_type", 47, b, sizeof(b)) != 1 || !web_fg_is_alert(b) ||
+            v_int(r, "ty", 0, 65535, &ty) != 1 || !times_ok(r, &o->first, &o->last) ||
+            v_int(r, "count", 0, LLONG_MAX / 4, &count) < 0 ||
+            v_int(r, "sev", 0, 2, &sev) < 0)
+            return -1;
+        snprintf(o->key, sizeof(o->key), "%s|%lld", b, o->first);
+        snprintf(o->label, sizeof(o->label), "%s", b);
+        ex_begin(&w, o->extra, sizeof(o->extra));
+        ex_key(&w, &fst, "count"); web_jw_int(&w, count);
+        ex_key(&w, &fst, "sev");   web_jw_int(&w, sev);
     } else {
         *why = "unknown_type";
         return -1;
@@ -1412,6 +1533,7 @@ static int hdr_of(const web_jrec_t *r, fhdr_t *h) {
     if (v_str(r, "sloth_version", 31, tmp, sizeof(tmp)) < 0 ||
         v_str(r, "sloth_db", 15, tmp, sizeof(tmp)) < 0)
         return -1;
+    h->sdb_open = !strcmp(tmp, "open");
     int ga = v_num(r, "lat", -90, 90, &h->lat), gb = v_num(r, "lon", -180, 180, &h->lon);
     int gc = v_num(r, "alt_m", -1000, 100000, &d);   /* web_loc_set()'s range */
     if (ga < 0 || gb < 0 || gc < 0 || ga != gb) return -1;
@@ -1476,6 +1598,10 @@ static int walk(const char *body, size_t len, web_jrec_t *rec, line_fn fn, void 
 typedef struct {
     fhdr_t    hdr;
     long long data, end_rows, counts[WEB_FK_COUNT];
+    long long gev;                   /* gnss_event lines (#192 I6) */
+    int       has_gev_end;           /* the end line counted them */
+    int       has_gnss;              /* a gnss line, into gs */
+    web_fg_sample_t gs;
     int       has_next[WEB_FK_COUNT];
     char      next[WEB_FK_COUNT][WEB_FLEET_CUR_MAX + 1];
     int       seen_end, bad_line;
@@ -1484,6 +1610,40 @@ typedef struct {
     char     *err;
     size_t    errsz;
 } chk_t;
+
+/* A gnss line row_of() took, as a sample of the peer's receiver (the
+ * times and the freshness are the caller's). */
+static void gnss_sample(const web_jrec_t *r, web_fg_sample_t *o) {
+    memset(o, 0, sizeof(*o));
+    long long v;
+    double d;
+    v_str(r, "gps_state", 15, o->state, sizeof(o->state));
+    o->sats_view = v_int(r, "sats_in_view", 0, 999, &v) == 1 ? (int)v : -1;
+    o->sats_used = v_int(r, "sats_used", 0, 999, &v) == 1 ? (int)v : -1;
+    if (v_num(r, "cn0_mean", 0, 99, &d) == 1) { o->has_cn0 = 1; o->cn0_mean = d; }
+    o->jam = v_int(r, "jam", 0, 255, &v) == 1 ? (int)v : -1;
+    if (v_int(r, "time_offset_ms", -(1LL << 46), 1LL << 46, &v) == 1) {
+        o->has_off = 1;
+        o->off_ms = v;
+    }
+    if (v_int(r, "ts", 0, T_MAX, &v) == 1) o->gts = v;
+    if (v_int(r, "fix_ts", 0, T_MAX, &v) == 1) o->fix_ts = v;
+    o->mode = v_int(r, "mode", 0, 3, &v) == 1 ? (int)v : 0;
+    double la, lo;
+    if (v_num(r, "fix_lat", -90, 90, &la) == 1 && v_num(r, "fix_lon", -180, 180, &lo) == 1) {
+        o->has_fix = 1;
+        o->lat = la;
+        o->lon = lo;
+    }
+    if (v_num(r, "eph", 0, 1e5, &d) == 1) { o->has_eph = 1; o->eph = d; }
+    if (v_num(r, "hdop", 0, 100, &d) == 1) { o->has_hdop = 1; o->hdop = d; }
+    if (v_int(r, "tracked", 0, 999, &v) == 1) {
+        o->has_trk = 1;
+        o->tracked = (int)v;
+        if (v > 0 && v_num(r, "cn0_med", 0, 99, &d) == 1) o->cn0_med = d;
+        else o->tracked = 0;
+    }
+}
 
 static int check_line(void *ctx, const web_jrec_t *r, long long idx, const char *type) {
     chk_t *k = ctx;
@@ -1527,6 +1687,15 @@ static int check_line(void *ctx, const web_jrec_t *r, long long idx, const char 
             }
             k->has_next[i] = g == 1;
         }
+        /* The incidents' count, for gnss=1 only; lines without it are
+         * no answer this importer asked for. */
+        int gg = v_int(r, "gnss_event", 0, LLONG_MAX / 4, &v);
+        if (gg < 0 || (gg == 1 && v != k->gev) || (gg == 0 && k->gev > 0)) {
+            snprintf(k->err, k->errsz, "the end line's gnss_event count is not the "
+                     "lines sent: refused");
+            return -1;
+        }
+        k->has_gev_end = gg == 1;
         k->seen_end = 1;
         return 0;
     }
@@ -1540,6 +1709,11 @@ static int check_line(void *ctx, const web_jrec_t *r, long long idx, const char 
     if (row.kind >= 0) {
         k->counts[row.kind]++;
         k->data++;
+    } else if (row.kind == -2) {
+        k->gev++;
+    } else {
+        gnss_sample(r, &k->gs);
+        k->has_gnss = 1;
     }
     return 0;
 }
@@ -1573,7 +1747,8 @@ static int put_line(void *ctx, const web_jrec_t *r, long long idx, const char *t
     sqlite3_stmt *s = p->up;
     sqlite3_reset(s);
     sqlite3_bind_text(s, 1, p->peer, -1, SQLITE_STATIC);
-    sqlite3_bind_text(s, 2, row.kind >= 0 ? KIND_WORD[row.kind] : "gnss", -1, SQLITE_STATIC);
+    sqlite3_bind_text(s, 2, row.kind >= 0 ? KIND_WORD[row.kind]
+                            : row.kind == -2 ? "gnss_event" : "gnss", -1, SQLITE_STATIC);
     sqlite3_bind_text(s, 3, row.key, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(s, 4, row.label, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(s, 5, row.vendor, -1, SQLITE_TRANSIENT);
@@ -1840,6 +2015,26 @@ static int ingest(web_fleet_t *f, int i, const char *body, size_t len,
                 f->peer[i].nown = k.hdr.nown;
                 f->peer[i].own_at = now_s;
             }
+            /* The peer's receiver, sampled (#192 I6): fresh when its
+             * summary is at most WEB_FG_FRESH_S older than the answer,
+             * by the peer's own clock. */
+            if (page < 0 && f->fg) {
+                int sl = web_fg_slot(f->fg, f->peer[i].cfg.name);
+                if (sl >= 0) {
+                    web_fg_sample_t gs;
+                    if (k.has_gnss) gs = k.gs; else memset(&gs, 0, sizeof(gs));
+                    if (!k.has_gnss) gs.sats_used = gs.sats_view = gs.jam = -1;
+                    gs.t = now_s;
+                    gs.skew = k.hdr.generated - now_s;
+                    gs.fresh = k.has_gnss && gs.gts > 0 && gs.gts <= k.hdr.generated + 5 &&
+                               k.hdr.generated - gs.gts <= WEB_FG_FRESH_S;
+                    gs.evok = gs.fresh && k.hdr.sdb_open && k.has_gev_end;
+                    if (gs.has_fix && (gs.mode < 2 || gs.fix_ts <= 0 ||
+                                       k.hdr.generated - gs.fix_ts > WEB_FG_FRESH_S))
+                        gs.has_fix = 0;
+                    web_fg_add(f->fg, sl, &gs, 2LL * f->interval_s + 30);
+                }
+            }
             pthread_mutex_unlock(&f->mu);
         }
     }
@@ -1922,15 +2117,29 @@ int web_fleet_pull_one(web_fleet_t *f, int i, long long now_s) {
         /* own=1 the same way (#192 I5): an F2 export refuses it, so it
          * is asked again with next=1 alone, and not asked with own=1 for
          * WEB_FLEET_NOOWN_S. */
+        /* gnss=1 the same way again (#192 I6): an I5 export refuses it,
+         * so it is asked again with next=1&own=1, and not asked with
+         * gnss=1 for WEB_FLEET_NOGNSS_S. */
         pthread_mutex_lock(&f->mu);
         int plain = p->no_next_until > now_s;
         int noown = plain || p->no_own_until > now_s;
+        int nognss = noown || p->no_gnss_until > now_s;
         pthread_mutex_unlock(&f->mu);
         char q[64];
         snprintf(q, sizeof(q), plain ? "since=%lld" : noown ? "since=%lld&next=1"
-                                                            : "since=%lld&next=1&own=1", since);
+                               : nognss ? "since=%lld&next=1&own=1"
+                                        : "since=%lld&next=1&own=1&gnss=1", since);
         int unk = 0;
         int g = http_get(f, &p->cfg, q, &body, &len, err, sizeof(err), &unk);
+        if (g != 0 && unk && !nognss) {
+            nognss = 1;
+            pthread_mutex_lock(&f->mu);
+            p->no_gnss_until = now_s + WEB_FLEET_NOGNSS_S;
+            pthread_mutex_unlock(&f->mu);
+            snprintf(q, sizeof(q), "since=%lld&next=1&own=1", since);
+            unk = 0;
+            g = http_get(f, &p->cfg, q, &body, &len, err, sizeof(err), &unk);
+        }
         if (g != 0 && unk && !noown) {
             noown = 1;
             pthread_mutex_lock(&f->mu);
@@ -1991,6 +2200,8 @@ void web_fleet_init(web_fleet_t *f, const web_fleet_peer_cfg_t *peers, int n,
     f->read_ms = WEB_FLEET_READ_MS;
     f->resp_max = WEB_FLEET_RESP_MAX;
     f->pages_per_pull = WEB_FLEET_PAGES_PER_PULL;
+    f->gnss_region_m = WEB_FG_REGION_KM_DEF * 1000.0;
+    f->fg = web_fg_new();
 }
 
 static void *pull_main(void *arg) {
@@ -1998,6 +2209,7 @@ static void *pull_main(void *arg) {
     for (;;) {
         for (int i = 0; i < f->npeer && !stopping(f); i++)
             web_fleet_pull_one(f, i, (long long)time(NULL));
+        if (!stopping(f)) web_fleet_gnss_tick(f, (long long)time(NULL));
         pthread_mutex_lock(&f->mu);
         long long until = mono_ms() + (long long)f->interval_s * 1000;
         while (!f->stop) {
@@ -2061,6 +2273,7 @@ void web_fleet_load(web_fleet_t *f) {
     }
     sqlite3_finalize(s);
     for (int i = 0; i < f->npeer; i++) bf_meta_read(f->wr, f->peer[i].cfg.name, f->peer[i].bf);
+    web_fg_meta_load(f);
 #else
     (void)f;
 #endif
@@ -2082,6 +2295,8 @@ void web_fleet_destroy(web_fleet_t *f) {
     if (f->wr) sqlite3_close(f->wr);
 #endif
     f->wr = NULL;
+    web_fg_free(f->fg);
+    f->fg = NULL;
     pthread_cond_destroy(&f->cv);
     pthread_mutex_destroy(&f->mu);
 }
@@ -2512,6 +2727,9 @@ int web_fleet_overview_route(web_fleet_t *f, const web_fleet_src_t *src, const c
     /* Each site's receiver calibration (#192 I5, web_locate.h). */
     web_jw_raw(&w, "],");
     web_loc_cal_json(f, src, now_s, &w);
+    /* The compact GNSS verdicts (#192 I6, web_fleetgnss.h). */
+    web_jw_raw(&w, ",\"gnss\":");
+    web_fg_overview_json(f, src, now_s, &w);
     /* Every pair of sites with a position, this one named "self". */
     web_jw_raw(&w, ",\"distances\":[");
     int nd = 0;

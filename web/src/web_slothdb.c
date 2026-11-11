@@ -690,6 +690,11 @@ int web_sdb_alerts_scan_upto(web_sdb_conn_t *c, long long from, long long to,
     *oldest = 0;
     return -1;
 }
+int web_sdb_gnss_incidents(web_sdb_conn_t *c, long long from, int max,
+                           web_sdb_item_fn fn, void *ctx) {
+    (void)c; (void)from; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
 int web_sdb_flows_between(web_sdb_conn_t *c, long long from, long long to,
                           int max, web_sdb_item_fn fn, void *ctx) {
     (void)c; (void)from; (void)to; (void)max; (void)fn; (void)ctx;
@@ -2670,6 +2675,45 @@ int web_sdb_alerts_scan(web_sdb_conn_t *c, long long from, long long to,
 int web_sdb_alerts_scan_upto(web_sdb_conn_t *c, long long from, long long to,
                              long long ls_max, long long *rows, long long *oldest) {
     return alerts_scan_q(c, from, to, ls_max < 0 ? 0 : ls_max, rows, oldest);
+}
+
+int web_sdb_gnss_incidents(web_sdb_conn_t *c, long long from, int max,
+                           web_sdb_item_fn fn, void *ctx) {
+    if (!(c->feats & WEB_QF_ALERTS) || !(c->opt & WEB_SDB_OPT_INCROWS)) return 0;
+    if (max < 1) max = 1;
+    /* The four keys are sloth's own constants (akey_begin() with no
+     * remote part), so the key is compared to literals and never read;
+     * idx_alert_incidents_key seeks each, and a key holds at most
+     * DB_INCIDENTS_PER_KEY rows. */
+    sqlite3_stmt *st = NULL;
+    c->pred_ok = 1;
+    int rc = sqlite3_prepare_v2(c->db,
+        "SELECT type, peak_sev, count, first_seen, last_seen FROM alert_incidents"
+        " WHERE key IN ('gnssjam','gnssspoof','gnsstime','gnsspos') AND last_seen >= ?1"
+        " ORDER BY last_seen DESC, first_seen DESC LIMIT ?2", -1, &st, NULL);
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(st);
+        c->pred_ok = 0;
+        return -1;
+    }
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int(st, 2, max);
+    int n = 0, r;
+    while ((r = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_item_t it;
+        memset(&it, 0, sizeof(it));
+        it.n1 = sqlite3_column_int64(st, 0);
+        it.n2 = sqlite3_column_int64(st, 1);
+        it.has_n3 = 1;
+        it.n3 = sqlite3_column_int64(st, 2);
+        it.first_seen = sqlite3_column_int64(st, 3);
+        it.last_seen = sqlite3_column_int64(st, 4);
+        n++;
+        if (fn(ctx, &it)) { r = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    c->pred_ok = 0;
+    return r == SQLITE_DONE ? n : -1;
 }
 
 int web_sdb_flows_between(web_sdb_conn_t *c, long long from, long long to,

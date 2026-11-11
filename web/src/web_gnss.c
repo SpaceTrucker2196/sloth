@@ -504,6 +504,34 @@ void web_gnss_health_json(web_gnss_t *g, web_jw_t *w) {
     pthread_mutex_unlock(&g->mu);
 }
 
+static int by_dbl(const void *a, const void *b) {
+    double x = *(const double *)a, y = *(const double *)b;
+    return (x > y) - (x < y);
+}
+
+void web_gnss_fleet(web_gnss_t *g, long long now_s, web_gnss_fleet_t *out) {
+    memset(out, 0, sizeof(*out));
+    if (!g || !g->sats) return;
+    double v[WEB_GNSS_SATS];
+    int n = 0;
+    pthread_mutex_lock(&g->mu);
+    if (g->fix_n) {
+        out->has_fix = 1;
+        out->fix = g->fixes[(g->fix_head + WEB_GNSS_FIXES - 1) % WEB_GNSS_FIXES];
+    }
+    for (int i = 0; i < WEB_GNSS_SATS; i++) {
+        const web_gnss_sat_t *s = &g->sats[i];
+        if (s->used && s->has_cn0 && s->cn0 > 0 && s->ts + WEB_GNSS_SAT_TTL_S >= now_s)
+            v[n++] = s->cn0;
+    }
+    pthread_mutex_unlock(&g->mu);
+    if (n) {
+        qsort(v, (size_t)n, sizeof(v[0]), by_dbl);
+        out->tracked = n;
+        out->cn0_med = n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2;
+    }
+}
+
 void web_gnss_site(web_gnss_t *g, web_loc_t *loc, web_gnss_sh_t *sh) {
     memset(loc, 0, sizeof(*loc));
     memset(sh, 0, sizeof(*sh));

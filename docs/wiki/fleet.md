@@ -25,7 +25,10 @@ seen at more than one site) and the backfill of a kind an answer cut at
 its cap. I5 locates an emitter two or more sites hear, from each site's
 signal strength (`/api/fleet/locate`, the map's located emitters), with
 each receiver calibrated by another site's own radio when it hears one;
-the other inferences across sites (F3, the rest of F4) come next.
+I6 compares the sites' GNSS receivers (`/api/fleet/gnss`): each GNSS
+event classified regional, local or undetermined, the baseline between
+two static sites against its bound, and a clock step named to its site;
+the other inferences across sites (F3, I7) come next.
 
 **Sources**: `web/src/web_fleet.h`, `web/src/web_fleet.c` (the export,
 the member allow-list, the HTTP/1.1 client, the ingest and its checks,
@@ -39,16 +42,23 @@ health member), `web/src/web_frrs.c` (`web_frrs_verdicts()`),
 `web_sdb_seen()`), `web/ui/fleet.js`, `web/ui/fleet.css`,
 `web/src/web_locate.h`, `web/src/web_locate.c` (I5), `src/rf_model.h`,
 `src/rf_model.c` (the path-loss model both sloth and slothweb link),
-`web/tests/test_fleet.c`, `web/tests/test_locate.c`, `web/tests/test_store.c`
+`web/src/web_fleetgnss.h`, `web/src/web_fleetgnss.c` (I6),
+`web/src/web_slothdb.c` (`web_sdb_gnss_incidents()`), `web/src/web_gnss.c`
+(`web_gnss_fleet()`),
+`web/tests/test_fleet.c`, `web/tests/test_locate.c`, `web/tests/test_fleetgnss.c`,
+`web/tests/test_store.c`
 (`test_v7_file_is_migrated`), `web/README.md` ("Fleet"),
 [ADR 0008](adr/0008-own-fleet.md), [ADR 0006](adr/0006-sharing-is-opt-in.md),
 issue #192; RFC 9112 (HTTP/1.1 message syntax), RFC 6598 (the
 100.64.0.0/10 shared address space Tailscale numbers its nodes from);
 ITU-R P.1238-10 eq. (1), Tables 2 and 4, through
 `research/papers/rssi-distance-estimation.md` (I5's model, exponent and
-error).
+error); for I6 `research/gnss/jamming-detection.md`,
+`research/gnss/spoofing-detection.md`,
+`research/gnss/time-and-position-integrity.md` and
+`docs/wiki/alert-assessments/GNSS_*.md`.
 
-**Last updated**: 2026-11-11 (#192 I5 review: the least-squares fix damped and refused when unsettled; `nearest` with its difference's sigma and `within_band`; the export's probe reading only within 120 s of its row and not on 5 or 6 GHz; a 5 GHz probe no calibration link and modelled at 5 GHz; an address two sites claim no link); 2026-11-11 (#192 I5: locating emitters from two or more sites' signal strength, `/api/fleet/locate`, the own-radio calibration and `own=1`, the overview's `calibration`, the map's located emitters and metre scale; a stored 0 dBm is no reading, and an ARP-only device takes its probe reading); 2026-11-11 (#192 F2 review: the alert backfill past the reader's 20,000-row scan, an F1 peer pulled without `next=1`, the shared list's verdicts in one pass); 2026-11-11 (#192 F2: the Fleet tab, `/api/fleet/overview`, `/api/fleet/shared`, the backfill); 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
+**Last updated**: 2026-11-11 (#192 I6: GNSS regional or local, the baseline and clock checks, `/api/fleet/gnss`, the export's `gnss=1`, `--peer-gnss-region-km`, the Fleet tab's GNSS panel); 2026-11-11 (#192 I5 review: the least-squares fix damped and refused when unsettled; `nearest` with its difference's sigma and `within_band`; the export's probe reading only within 120 s of its row and not on 5 or 6 GHz; a 5 GHz probe no calibration link and modelled at 5 GHz; an address two sites claim no link); 2026-11-11 (#192 I5: locating emitters from two or more sites' signal strength, `/api/fleet/locate`, the own-radio calibration and `own=1`, the overview's `calibration`, the map's located emitters and metre scale; a stored 0 dBm is no reading, and an ARP-only device takes its probe reading); 2026-11-11 (#192 F2 review: the alert backfill past the reader's 20,000-row scan, an F1 peer pulled without `next=1`, the shared list's verdicts in one pass); 2026-11-11 (#192 F2: the Fleet tab, `/api/fleet/overview`, `/api/fleet/shared`, the backfill); 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
 
 ## What travels, and what never does
 
@@ -61,7 +71,8 @@ export carries, each kind newest first and bounded:
 | Kind | From | Members | Cap |
 |---|---|---|---|
 | site (header) | sloth.db's newest session label; `sensor_health`'s `loc_*` | label, the sensor's lat / lon / alt, its source (`gps`, `fixed`) and age, slothweb's build | - |
-| `gnss` | `sensor_health`'s `gnss_*` | receiver state, satellites in view and used, mean C/N0, clock offset, jamming indicator | 1 |
+| `gnss` | `sensor_health`'s `gnss_*`; with `gnss=1` the newest `gnss_fix` and the satellites | receiver state, satellites in view and used, mean C/N0, clock offset, jamming indicator; with `gnss=1` the fix (time, mode, position, eph, hdop) and the tracked median C/N0 | 1 |
+| `gnss_event` | sloth.db `alert_incidents` of the four GNSS keys, `gnss=1` only | type, first and last seen, count, peak severity | 256, the last week |
 | `wifi` | sloth.db `devices`, `assocs` | MAC, vendor, last SSID, RSSI, newest associated BSSID, first / last seen | 2,000 |
 | `ap` | `beacon_aps` | BSSID, SSID, channel, encryption, vendor, RSSI, times | 1,000 |
 | `probe` | `pnl_ssids` of the exported clients | client MAC, SSID, times | 32 a client, 4,000 |
@@ -433,9 +444,185 @@ probing for the other's network (I2), one site's own SSID or BSSID at
 the other (I3), the same attack tool at both (I4), an emitter both hear
 (I5), a GNSS event regional or local (I6), an ADS-B cross-check (I7),
 verdicts shared (I8) and peer health (I9). F1 stores what they need;
-I5 is built (above);
+I5 and I6 are built (above and below);
 each inference is a slothweb fleet finding, not a sloth alert, and is
 held to the cited-basis rule when it lands.
+
+## GNSS: regional or local (I6)
+
+Two receivers a few metres apart see the same sky. A GNSS event at one
+of the owner's sites and not at a peer within reach points to a source
+near that site; the same event at both within a short window points to
+something wider: one source reaching both, an exercise, the ionosphere.
+And two static sensors carry a known baseline between them, which a
+spoofed position moves. slothweb does this over what the export
+carries; these are fleet findings, not sloth alerts, and nothing is
+written to `sloth.db` (`web/src/web_fleetgnss.h`).
+
+**What travels.** With `gnss=1` (asked for only, like `own=1`) the
+`gnss` line gains the newest fix (`fix_ts`, `mode`, `fix_lat`,
+`fix_lon`, `eph`, `hdop`) and the median C/N0 of the satellites tracked
+(`cn0_med` over `tracked`: a C/N0 above 0, reported within 660 s, the
+jamming rule's own observable, "Tracked only and a median"), and the
+export sends `gnss_event` lines: `sloth.db`'s `alert_incidents` of the
+four GNSS rules' keys (`gnssjam`, `gnssspoof`, `gnsstime`, `gnsspos`;
+the keys are sloth's constants, compared in the WHERE and never read),
+the last week's changed since `since`, at most 256, with the end line's
+`gnss_event` count. An I5 export refuses `gnss=1`; the puller asks again
+with `next=1&own=1` and not with `gnss=1` for the hour, as for `own=1`.
+The importer keys an incident `TYPE|first_seen` in `peer_sightings`.
+
+**The samples.** After each good pull of a peer, and once a round for
+this site, the pull thread takes one sample of each receiver: fresh when
+its summary is at most 660 s old (two of sloth's 300 s heartbeats and a
+margin), the state, satellites, mean and tracked-median C/N0, jamming
+indicator, clock offset, the fix, and a peer's skew (its `generated`
+less this site's clock). From them, per site:
+
+- *coverage*: the spans of this site's clock over which the site was
+  seen observing, `rx` (its receiver fresh and its tracked median sent)
+  and `ev` (also its `sloth.db` open and its incidents offered). Samples
+  more than the gap apart (two pull intervals and 30 s, 150 s by
+  default) start a new span; the newest sample stands for the gap after
+  it.
+- a *reference position*: one fix a 600 s (fresh, mode 2 or 3, with an
+  eph), the last 1,008 (a week); the coordinate-wise median of them,
+  from 6 on (an hour). A move held for more than half the week becomes
+  the new reference.
+
+Coverage and the reference are kept in `slothweb.db`'s `meta` table
+(`fleet.gnss.<site>`, written at most every 600 s), so a restart keeps
+them; no schema step. The sample ring (8 hours) is memory only: the
+C/N0 and clock medians rebuild within the hour.
+
+**The events**, each in this site's clock (a peer's less its skew from
+`peer_sites`): this site's GNSS incidents from `sloth.db`, each peer's
+from its `gnss_event` rows, and two the samples show: `JAM_IND`, the
+jamming indicator at 128 or more, and `CN0_DROP`, the tracked median at
+least 10 dB under the site's own median of the hour before (at least ten
+samples; the dropped samples kept out of that median, as the rule holds
+its onset baseline, so a standing drop is not absorbed into its own
+reference; a sample tracking nothing while satellites are listed is
+0 dB-Hz, the rule's reading). Each has a class: *interference*
+(GNSS_JAMMING, JAM_IND, CN0_DROP), *spoof*, *time* or *position*.
+
+**The classification.** For an event [a, b] at site S, over the sites
+within `--peer-gnss-region-km` (default 50) of S:
+
+| Verdict | When |
+|---|---|
+| regional | a site there has an event of the same class whose span comes within 120 s of [a, b] |
+| local | none has, and at least one of them was covered over [a - 120 s, min(b + 120 s, now)] |
+| undetermined | none of them was covered: stale, unreachable, pulled only since, an older export with no incidents, no `sloth.db` here, or no site within the region |
+
+Covered means one span holds the interval. An alert's class needs `ev`
+coverage (the peer's incidents were offered all along); interference
+takes `rx` coverage too when the event lasted at least the gap, so a
+peer sample fell inside it. Each event lists the sites `with` the same
+class, `quiet` (covered, nothing), `stale` (not covered) and `far`
+(outside the region, or with no position). A site's position for the
+region is its reference, else its newest fix, else what it last stated.
+Events from before a site was first sampled read undetermined: there is
+no record that the peer was observing then.
+
+**The window, 120 s, is a choice with no source.** The jamming research
+says so plainly: "No read source puts a number on 'simultaneous'"
+(`research/gnss/jamming-detection.md`). It is two default pull
+intervals, past the jamming rule's 30 s indicator hold and 10 s collapse
+window, so one onset seen by two receivers a pull apart still pairs.
+**The region, 50 km, is a choice too**: how far a ground-level source
+reaches is not in the corpus.
+
+**The basis of each class**, as the corpus holds it:
+
+- *Interference*: "C/N0 collapsing on every satellite at once while the
+  sky is unchanged", with the receiver's CW indicator as corroboration;
+  interference and jamming are "the same effect", and "One receiver
+  cannot bearing a jammer" (`research/gnss/jamming-detection.md`). A
+  jammer aimed at one receiver affecting another nearby is the FCC's
+  Bojczak case, quoted there. Two receivers seeing it at once are one
+  source reaching both, or a wide one; one alone is a source near it.
+  The 10 dB drop and the indicator's 128 are the GNSS_JAMMING rule's
+  defaults, themselves judgements (`alert-assessments/GNSS_JAMMING.md`):
+  the research gives no threshold for either.
+- *Spoof*: "a suspicion built from several weak observables, not a
+  detection" (`research/gnss/spoofing-detection.md`). At both sites at
+  once it is wide; at one, that receiver.
+- *Time*: a step of the receiver's clock, 1000 ms: "anything below
+  roughly a second is noise", over the gpsd HOWTO's 200 ms floor
+  (`research/gnss/time-and-position-integrity.md`,
+  `alert-assessments/GNSS_TIME_JUMP.md`).
+- *Position*: for a fixed sensor "the bound collapses to the two error
+  estimates" (`research/gnss/time-and-position-integrity.md`), and k = 3
+  is the GNSS_POSITION_JUMP rule's own default, a judgement because
+  gpsd's eph is "guessed to be 95% confidence, may also be 50%, one
+  sigma, or two sigma" (`alert-assessments/GNSS_POSITION_JUMP.md`).
+
+**The baseline.** Each site's displacement from its reference against
+3 x its own eph, and for each pair the distance between the fixes now
+against the distance between the references, bounded by
+3 x (eph_a + eph_b). No eph, no bound, no claim, as the rule. A site past
+its own bound is named (`moved`); one site alone gives the position
+verdict `one_site` and that site, which moved or is being spoofed (the
+two look alike here, as for the rule: "a spoofed position, multipath or
+a receiver fault look alike"). The pair and the site checks differ on
+purpose: a site moving along the line away from the other changes the
+distance by less than it moved, so the distance can stay within the
+pair's bound while the site is past its own; a common-mode spoof that
+moves both sites alike keeps the distance and moves both references.
+
+**The clock.** Each site's receiver offset (`time_offset_ms`: the
+receiver's clock against its host's) now against its median of the hour
+before; a step of 1000 ms or more at one site and not at the other
+names that site (`time` verdict `one_site`). A peer's skew (its clock
+against this one's at the pull, whole seconds) is shown beside it,
+against its own median: a step in the offset with the skew still is
+the receiver; a skew that moved is a host clock. Sub-second steps are
+not seen: in-band GNSS time over USB without PPS is good to "not much
+better than 1 second" (the HOWTO), and `generated` is whole seconds. A
+patient pull of a GNSS-disciplined clock (W9FJC's is, through ntpsec)
+moves the skew slowly and the offset not at all; the skew's median is
+an hour, so a drag slower than that is not caught here either, as the
+time research says of any jump test.
+
+**`GET /api/fleet/gnss?limit=N`** (50, 1..200; GET only): `local`
+(`sloth.db`: `open`, `none`, `unavailable`), `store`, the constants
+(`window_s`, `gap_s`, `region_m`, `fresh_s`, `k`, `time_step_ms`,
+`cn0_drop_db`, `jam_ind`, `ref_min`), `sites` (each receiver as its last
+sample said, its `reference` and `time`, `covered_since`,
+`observed_since`), `baseline` (each pair: `ref_m`, `now_m`, `delta_m`,
+`bound_m`, `verdict` `within`/`outside`/`undetermined` with `why`,
+`moved`), `position` and `time` (`consistent`, `one_site` with `site`,
+`several`, or `undetermined` with fewer than two sites evaluated),
+`counts` by verdict over the week, `events` newest first (`site`,
+`type`, `class`, `source` `incident` or `sample`, `first_seen`,
+`last_seen`, `count`, `sev`, `verdict`, `with`, `quiet`, `stale`, `far`),
+`events_total`, `events_cut`, and `basis` (each class's sources, and the
+window's and the region's "a choice, no source"). Every number is
+finite or null. `/api/fleet/overview` gains `gnss`: `position`, `time`
+and `events_24h` by verdict.
+
+**The Fleet tab** gains "GNSS across the sites" after the map: a card
+per receiver (state and satellites, C/N0, fix, distance from its
+reference against its bound, clock offset and step, the jamming
+indicator, whether its incidents are offered), a gauge per pair of sites
+(the band is the bound around the reference distance, the mark the
+distance now, drawn in the warning colour outside it) and the events
+with their verdicts and the other sites, each row's basis on hover.
+
+**At W9FJC and beta-site** (measured 2026-11-11, before this build ran
+there): both u-blox 7 through gpsd, static, the fixes 13.9 m apart at
+eph 6.1 and 5.4 m (a bound of 34 m), the headers' positions 14.8 m. In
+the week W9FJC's `sloth.db` holds one GNSS_JAMMING incident (07:58 to
+08:05 MST on 11-11) and one GNSS_TIME_JUMP (11-05); beta-site's alert
+page shows eight GNSS_JAMMING incidents from 11-07 to 23:03 MST on
+11-10. None of beta's comes within 120 s of W9FJC's, so on the raw times
+each is single-site; with no coverage recorded before the build, the
+route reads them undetermined until the samples cover a new one.
+W9FJC's clock is disciplined from its receiver (ntpsec, SHM preferred);
+beta-site's is ntpsec over the network pool only (its selected source a
+stratum-1 PPS server, no refclock), so the two clocks are independent
+and the skew compares a GNSS-steered clock with a network one.
 
 ## Related pages
 

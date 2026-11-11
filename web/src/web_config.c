@@ -3,6 +3,7 @@
 #include "web_slothdb.h"
 
 #include "web_anomaly.h"
+#include "web_fleetgnss.h"
 #include "web_baseline.h"
 
 #include <arpa/inet.h>
@@ -33,6 +34,7 @@ void web_config_defaults(web_config_t *c) {
     c->max_mb      = WEB_DEFAULT_MAX_MB;
     c->retain_days = WEB_DEFAULT_RETAIN_DAYS;
     c->peer_interval_s = WEB_FLEET_INTERVAL_DEF;
+    c->peer_gnss_region_km = WEB_FG_REGION_KM_DEF;
 }
 
 /* A decimal in [lo, hi], digits only. */
@@ -273,7 +275,8 @@ void web_usage(FILE *out) {
         "                [--web-assessments DIR] [--pcap-dir DIR]...\n"
         "                [--web-serve-evidence-pcap[=remote]]\n"
         "                [--peer NAME=URL]... [--peer-interval-secs N]\n"
-        "                [--peer-allow-outside-tailnet] [--help]\n"
+        "                [--peer-allow-outside-tailnet]\n"
+        "                [--peer-gnss-region-km N] [--help]\n"
         "\n"
         "  --socket SPEC         sloth's data socket to read: unix:PATH or\n"
         "                        tcp:A.B.C.D:PORT / tcp:[V6]:PORT, literal\n"
@@ -355,6 +358,9 @@ void web_usage(FILE *out) {
         "                        allow a --peer address outside\n"
         "                        100.64.0.0/10 (no TLS: only over a link\n"
         "                        you trust); announced on stderr.\n"
+        "  --peer-gnss-region-km N  a GNSS event at two sites at most this\n"
+        "                        far apart is regional (default 50,\n"
+        "                        1..20000; docs/wiki/fleet.md).\n"
         "  --help                this text.\n"
         "\n"
         "Routes (GET and HEAD): / (the page), /api/health, /api/live,\n"
@@ -367,7 +373,7 @@ void web_usage(FILE *out) {
         "/api/frrs/* (triage, the FRRS record, the TACDB), /api/ble,\n"
         "/api/ble/alerts, /api/ble/ADDR (the BLE view),\n"
         "/api/alerts, /api/alert, /api/pcap/frames, /api/pcap and\n"
-        "/api/fleet/export (GET only), /api/fleet/peers,\n"
+        "/api/fleet/export (GET only), /api/fleet/peers, /api/fleet/gnss,\n"
         "/events (Server-Sent Events); with --web-allow-sql, /api/query\n"
         "(GET only) and /api/recipes. POST only to the six /api/frrs\n"
         "write routes, same-origin, unless --web-read-only. Any other\n"
@@ -458,6 +464,17 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
                 fprintf(err, "slothweb: --peer-interval-secs %s: want a whole number "
                              "from %d to %d\n", v, WEB_FLEET_INTERVAL_MIN,
                         WEB_FLEET_INTERVAL_MAX);
+                return -1;
+            }
+        } else if (!strcmp(a, "--peer-gnss-region-km")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (parse_count(v, 1, WEB_FG_REGION_KM_MAX, &c->peer_gnss_region_km) != 0) {
+                fprintf(err, "slothweb: --peer-gnss-region-km %s: want a whole number "
+                             "from 1 to %d\n", v, WEB_FG_REGION_KM_MAX);
                 return -1;
             }
         } else if (!strcmp(a, "--web-serve-evidence-pcap")) {

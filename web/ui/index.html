@@ -794,6 +794,16 @@
       <div id="fleet-loc-rows"></div></div>
     </section>
     <section class="panel">
+      <div class="label">GNSS across the sites <span class="sub" id="fleet-gnss-note"></span></div>
+      <div class="fleet-cards" id="fleet-gnss-sites"></div>
+      <div class="label">baseline</div>
+      <div id="fleet-gnss-base"></div>
+      <div class="label">events</div>
+      <div class="hscroll"><div class="fleet-gev dhead"><span>when</span><span>site</span><span>event</span><span>verdict</span><span>the other sites</span></div>
+      <div id="fleet-gnss-rows"></div></div>
+      <div class="sub">each site's receiver as its export last said; the baseline is the distance between two static sites now against the distance between their reference positions (each the median of a week of fixes), bounded by 3 x (eph + eph); an event is regional when a site within the region shows the same class within the window, local when the sites there were seen observing and showed nothing, undetermined when none was. Fleet findings, not sloth alerts.</div>
+    </section>
+    <section class="panel">
       <div class="label">peers</div>
       <div class="fleet-cards" id="fleet-cards"></div>
       <div class="sub">each peer's last good pull and attempt (this slothweb's clock), its last refusal, its clock less this one's at the last good pull, the rows held from it by kind, and whether a kind cut at its cap is still being fetched a page a pull (backfill)</div>
