@@ -61,6 +61,7 @@ static const struct { uint32_t oui; const char *vendor; } g_oui[] = {
     { 0x003065, "Apple"        },
     { 0x009049, "Netgear"      },
     { 0x00904C, "Broadcom"     },
+    { 0x00C0CA, "ALFA"         },
     { 0x040CCE, "Apple"        },
     { 0x041552, "Apple"        },
     { 0x0418D6, "Ubiquiti"     },
