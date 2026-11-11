@@ -89,9 +89,9 @@ The twin's BSSID must be new to the session under that SSID: if sloth
 heard it beacon `Cafe-Net` earlier and dropped it (300 s of silence),
 its return is not an arrival. Use a fresh BSSID, or clear the beacon
 table, between runs.
-The same delay on the Phase 1 pair with no vendor-IE mismatch changes
-nothing: a late arrival corroborates other evidence and never raises a
-row on its own.
+The same delay on the Phase 1 or Phase 2 pair changes nothing: a late
+arrival is counted only where a half is locally administered, and it
+corroborates other evidence and never raises a row on its own.
 
 **Attacker OUI bonus**: swap the twin BSSID to `00:13:37:..` (Hak5) or
 `24:0a:c4:..` (Espressif) and the same WARN→CRIT escalation fires even

@@ -1,7 +1,7 @@
 ---
 type: SAE_PSK_REGRESSION
 technique: T1562.004
-rule_file: src/alerts/rules_twin.c:996 (rule_sae_psk_regression()); the evidence query is src/db.c:2048 (refresh_akm_regressions()), exposed via db_akm_regressions() (src/db.c:2106)
+rule_file: src/alerts/rules_twin.c:1001 (rule_sae_psk_regression()); the evidence query is src/db.c:2048 (refresh_akm_regressions()), exposed via db_akm_regressions() (src/db.c:2106)
 count_semantics: per poll tick, per (SSID, BSSID) regression row. The rule fires once per row returned by db_akm_regressions() every alerts_update() pass (rules_twin.c:831-845); fire() increments count (= evaluations) every tick the row persists (src/alerts/engine.c:478-480). The regression set is recomputed only at a --db tick (src/db.c:2150), not every poll, so count is the number of polls the regression has stood, not a count of events.
 severity_assessment: agree - CRIT is right: a BSSID recorded as SAE-only at two points ≥24 h apart and now advertising PSK-only has lost WPA3 protection, and the span plus latest-posture requirement make it a real state change, not a sample (note the span is first-to-last sighting, not continuous observation). T1562.004 (Impair Defenses) rather than T1557 is the honest tag since nothing here asserts an adversary.
 false_positive_risk: low-to-medium - the sustain window and "latest recorded posture" logic exclude transition mode and brief blips, but a deliberate administrative downgrade (an admin turning off WPA3) fires identically to a malicious one; the rule says so by design and leaves the judgement to the operator.

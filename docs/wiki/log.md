@@ -6824,7 +6824,10 @@ CRIT again through a late arrival (owner ruling 3b): `+late-arrival`,
 +20, when the later half was first heard 120 s or more
 (`twin.late_arrival_s`) after the earlier one, the earlier one has been
 heard since, and the sensor has been at rest that long. It only
-corroborates other evidence; a same-vendor pair stays WARN at 40%.
+corroborates other evidence, and only on a pair with a locally
+administered half: two globally administered addresses are scored on
+their OUIs as before (a same-vendor or OUI-only pair 20%, a two-vendor
+pair with a vendor-IE mismatch 55%).
 An AP that drops out and returns is not a late arrival: the beacon
 table remembers the BSSID/SSID pairs it has dropped (4096, for the
 session) and only a name new on its address counts, which also

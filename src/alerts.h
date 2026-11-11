@@ -226,7 +226,14 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
  *     minutes apart (a mesh node at the edge of earshot, a guest SSID
  *     switched on later) would otherwise become a row, a Twins episode
  *     and a proximity candidate, which is the noise #188 was opened on.
- *     So the flag means "counted", and is never set without its weight.
+ *     So the flag means "counted", and is never set without its weight;
+ *   - a half is locally administered (owner ruling on review). The
+ *     signal exists for the pair that has no OUI to compare. Two
+ *     globally administered addresses are scored on their OUIs as
+ *     before and get neither the weight nor the flag: a same-vendor
+ *     mesh pair or an OUI-only pair heard two minutes apart stays at
+ *     20 %, inside slothweb's mute, and a two-vendor pair with a
+ *     vendor-IE mismatch stays at 55 rather than 75.
  *
  * What it cannot see. "New this session" is new to this sensor: an AP
  * that was out of earshot until now and one that was switched on now
@@ -242,10 +249,11 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
 #define TWIN_W_BTM_STEER     25   /* 802.11v steer aimed at the pair */
 /* Worth what a second vendor's OUI is worth, because it stands in for
  * one where there is no OUI to read: 35 + 20 clears TWIN_CRIT_MIN_CONF
- * exactly as a vendor-IE mismatch plus a different OUI does. The bounds
- * are both pinned: under 15 a locally administered rogue stays below
- * the gate, and at 30 a same-vendor mesh node that came up late with
- * different vendor IEs reaches it (35 + 30 - TWIN_C_SAME_OUI). */
+ * exactly as a vendor-IE mismatch plus a different OUI does. The floor
+ * is pinned: under 15 a locally administered rogue stays below the
+ * gate. It has no ceiling to pin since it was restricted to pairs with
+ * a locally administered half, where nothing deducts but a neighbour
+ * claim, and that demotes a soft CRIT whatever the sum. */
 #define TWIN_W_LATE_ARRIVAL 20   /* the copy came after the original */
 #define TWIN_W_WEAK_CLONE    85   /* OPEN/WEP beside strong under one SSID —
                                    * no vendor-diversity explanation exists */

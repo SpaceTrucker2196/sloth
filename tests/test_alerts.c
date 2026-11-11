@@ -7879,9 +7879,15 @@ static void test_twin_self_steer_is_not_a_hard_signal(void) {
  * different globally administered OUI, the same band, contradicting
  * vendor IEs. 20 + 35 clears TWIN_CRIT_MIN_CONF and nothing deducts.
  *
- * Heard a minute after the network it copies, so the OUI and the
- * vendor IEs carry the CRIT alone; then an hour after, where the late
- * arrival (ruling 3b) adds its 20 on top and says so. */
+ * Heard a minute after the network it copies, and then an hour
+ * after: the same row both times. Two globally administered addresses
+ * are scored on their OUIs, and the late arrival is kept for the pair
+ * that has none to compare (owner ruling on review; this block pinned
+ * 75 and the marker before it).
+ *
+ * Mutation (2026-11-11): the locally-administered test dropped from
+ * the late-arrival block in twin_evidence_score; the second block read
+ * 75 with the marker. */
 static void test_twin_second_transmitter_same_band_is_still_crit(void) {
     time_t now = time(NULL);
     uint8_t real[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
@@ -7909,8 +7915,11 @@ static void test_twin_second_transmitter_same_band_is_still_crit(void) {
     idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
     ASSERT(idx >= 0);
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
-    ASSERT_EQ(s.alerts[idx].confidence, 20 + 35 + 20);
-    ASSERT(strstr(s.alerts[idx].detail, " +late-arrival") != NULL);
+    ASSERT_EQ(s.alerts[idx].confidence, 20 + 35);
+    ASSERT(strstr(s.alerts[idx].detail, "late-arrival") == NULL);
+    twin_evidence_t evg;
+    twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1], now, &evg);
+    ASSERT_EQ(evg.late_arrival, 0);
 
     /* Address distance is not an alibi on its own. A copy two bytes
      * from its victim on the victim's own band, and one on another band
@@ -8076,6 +8085,8 @@ static int late_of(const sloth_state_t *s, time_t now) {
  *   - that block removed: CRIT, 55 and the marker (first block);
  *   - TWIN_W_LATE_ARRIVAL 14: CRIT (35 + 14 is under the gate), and 15
  *     stays CRIT, so the floor of the weight is pinned at 15;
+ *   - the locally-administered test made `&&` (both halves): CRIT, 55
+ *     and the marker, since the original here is on a vendor's address;
  *   - the `!a->first_seen || !b->first_seen` test dropped from
  *     twin_pair_late_arrival: both unset-first_seen rows (CRIT);
  *   - `late->first_seen - early->first_seen < N` made `<=`: the 120 s
@@ -8173,18 +8184,21 @@ static void test_twin_late_arrival_lifts_a_locally_administered_rogue(void) {
 
 /* Legitimate late arrivals: a mesh node powered on an hour after the
  * first, the same vendor, the same band, different vendor IEs (another
- * model). 35 + 20 - 15 is 40 and stays WARN; the row says why it moved.
+ * model). It is the 20 % WARN it was before the signal existed, inside
+ * slothweb's 20 % mute, with no marker: the late arrival is for a pair
+ * with a locally administered half (owner ruling on review; this block
+ * pinned 40 % and the marker before it). So is a two-vendor pair with
+ * nothing but its OUIs, heard an hour apart: 20 %.
  *
- * And a late arrival is not evidence on its own. The same node with
- * nothing else to show is no row at all, as it was before: the signal
- * corroborates a pair and never nominates one, or every mesh whose
- * nodes were heard two minutes apart would be a WARN, a Twins episode
- * and a proximity candidate.
+ * And a late arrival is not evidence on its own. A guest network's
+ * locally administered BSSID with nothing else to show is no row at
+ * all, as it was before: the signal corroborates a pair and never
+ * nominates one.
  *
- * Mutations (2026-11-11): TWIN_W_LATE_ARRIVAL 30 (the first block went
- * CRIT at 50; 29 stays WARN, so the ceiling is pinned at 29); the
- * `ev.positive > 0 &&` guard dropped (the second block raised a WARN at
- * 5 % and late_arrival read 1; the third a WARN at 20 %). */
+ * Mutations (2026-11-11): the locally-administered test dropped from
+ * the late-arrival block in twin_evidence_score (the first block read
+ * 40 % with the marker, the OUI-only block 40 %); the `ev.positive > 0
+ * &&` guard dropped (the last block raised a WARN at 20 %). */
 static void test_twin_late_arrival_does_not_lift_a_same_vendor_mesh(void) {
     time_t now = time(NULL);
     uint8_t node1[6] = {0xe8,0x9c,0x25,0x10,0x20,0x30};
@@ -8200,20 +8214,26 @@ static void test_twin_late_arrival_does_not_lift_a_same_vendor_mesh(void) {
     int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
     ASSERT(idx >= 0);
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
-    ASSERT_EQ(s.alerts[idx].confidence, 35 + 20 - 15);
-    ASSERT(strstr(s.alerts[idx].detail, " +late-arrival") != NULL);
+    ASSERT_EQ(s.alerts[idx].confidence, 35 - 15);
+    ASSERT(strstr(s.alerts[idx].detail, "late-arrival") == NULL);
     ASSERT(strstr(s.alerts[idx].detail, " +same-vendor-OUI") != NULL);
-
-    /* Same vendor IEs: nothing positive, so nothing to corroborate. */
-    alerts_clear();
-    twin_radio(&s, 1, 11, now - 3600, 0x1111u);
-    alerts_update(&s);
-    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
     twin_evidence_t ev;
     ASSERT_EQ(twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1],
-                                  now, &ev), 0);
+                                  now, &ev), 1);
     ASSERT_EQ(ev.late_arrival, 0);
-    ASSERT_EQ(ev.positive, 0);
+
+    /* Two vendors, the same vendor IEs, an hour apart: the OUI-only
+     * row, at the 20 % it has always been. */
+    alerts_clear();
+    uint8_t other[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+    memcpy(s.beacon_aps[1].bssid, other, 6);
+    twin_radio(&s, 1, 11, now - 3600, 0x1111u);
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ(s.alerts[idx].confidence, 20);
+    ASSERT(strstr(s.alerts[idx].detail, "late-arrival") == NULL);
 
     /* Nor where there is no OUI to deduct: a guest network's locally
      * administered BSSID on a second node, an hour later, on another
@@ -8506,16 +8526,22 @@ static void test_twin_an_ap_that_returns_is_not_a_late_arrival(void) {
     alerts_clear(); beacon_clear();
 }
 
-/* The longest detail the same-security branch writes: a 16-octet SSID
- * and every phrase at once (inventory mismatch, late arrival, same
- * OUI, neighbour claim, a steer, the class note). It has to arrive
- * whole, since the class note is last and is what a cut would take.
- * 278 here; `wired=yes` in place of `wired=?` is two more, and
- * ALERT_DETAIL_LEN is 320.
+/* The longest details the same-security branch writes: a 16-octet
+ * SSID and every phrase that can stand together (inventory mismatch,
+ * neighbour claim, a steer, the class note, and either the same-OUI
+ * note or the late arrival). The two exclude each other since the late
+ * arrival was restricted to a pair with a locally administered half:
+ * same-OUI needs two globally administered addresses. Each has to
+ * arrive whole, since the class note is last and is what a cut would
+ * take. 264 with the same-OUI note and 261 with the late arrival;
+ * `wired=yes` in place of `wired=?` is two more, and ALERT_DETAIL_LEN
+ * is 320.
  *
- * Mutation (2026-11-11): `note[80]` in that branch put back to the 64
- * it was before " +late-arrival" (the "(unverified)" and length rows
- * went red: the note lost its last 14 characters). */
+ * The evidence note is 63 characters at its longest now and would fit
+ * the 64 bytes it had before " +late-arrival"; it is left at 80, and
+ * the mutation this test once named (note[80] put back to 64) no
+ * longer turns anything red. With note[60] both blocks lost the end
+ * of "(unverified)" and went red. */
 static void test_twin_detail_fits_with_every_phrase(void) {
     static const char *INV_LONG =
         "{\"version\":\"2026-09-25.1\",\"site\":\"hq-3f\","
@@ -8542,11 +8568,37 @@ static void test_twin_detail_fits_with_every_phrase(void) {
     if (idx >= 0) {
         const char *d = s.alerts[idx].detail;
         size_t n = strlen(d);
-        ASSERT_EQ((long long)n, 278);
+        ASSERT_EQ((long long)n, 264);
         ASSERT(n + 2 < ALERT_DETAIL_LEN);
         ASSERT(strstr(d, "'SixteenOctetSSID' on ") == d);
         ASSERT(strstr(d, " - BSSID not in the approved inventory"
-                         " +not in inventory +late-arrival +same-vendor-OUI"
+                         " +not in inventory +same-vendor-OUI"
+                         " +802.11k claim (unverified)"
+                         " +btm-steered by 5c:11:22:33:44:55") != NULL);
+        ASSERT(n >= 25 &&
+               strcmp(d + n - 25, " [class=impostor wired=?]") == 0);
+    }
+
+    /* The same row with the unapproved half on a locally administered
+     * address: no OUI note, and the late arrival in its place. */
+    alerts_clear();
+    uint8_t local[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+    static sloth_state_t u; seed_state(&u);
+    add_beacon(&u, "SixteenOctetSSID", ok,    "WPA2");
+    add_beacon(&u, "SixteenOctetSSID", local, "WPA2");
+    twin_radio(&u, 0, 6, t0,       0x1111u);
+    twin_radio(&u, 1, 6, t0 + 600, 0x2222u);
+    add_neighbor(&u, ok, local);
+    seed_steer(&u, steerer, local, 1);
+    alerts_update(&u);
+    idx = find_alert(&u, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        const char *d = u.alerts[idx].detail;
+        size_t n = strlen(d);
+        ASSERT_EQ((long long)n, 261);
+        ASSERT(strstr(d, " - BSSID not in the approved inventory"
+                         " +not in inventory +late-arrival"
                          " +802.11k claim (unverified)"
                          " +btm-steered by 5c:11:22:33:44:55") != NULL);
         ASSERT(n >= 25 &&

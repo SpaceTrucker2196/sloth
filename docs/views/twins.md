@@ -40,7 +40,8 @@ and five flags:
   its SSID is new on its BSSID this session (an AP the beacon table
   dropped and heard again is a return),
   and the scorer counted it (+20). Set only on a pair with other
-  positive evidence; it is the alert's `+late-arrival`.
+  positive evidence and a locally administered half; it is the alert's
+  `+late-arrival`.
 - **unattributed** (`?`) — nothing has established which half is the
   impostor. The two BSSID columns are the pair in canonical byte order,
   not an accusation.
