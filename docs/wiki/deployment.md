@@ -156,6 +156,7 @@ ExecStart=/usr/local/bin/sloth \
     --with-research /usr/local/share/sloth/research.db \
     --report /var/lib/sloth/report.md \
     --report-json /var/lib/sloth/report.json \
+    --report-interval 300 --report-history \
     --snapshot-out /var/lib/sloth/snapshot.txt \
     --baseline-in /var/lib/sloth/snapshot.txt \
     $SLOTH_ARGS
@@ -190,6 +191,14 @@ ExecStart=/usr/local/bin/sloth \
 - **`--report`, `--report-json`** Written on `SIGTERM`
   ([[posture-report]]) — which is why `KillSignal=SIGTERM` and
   `TimeoutStopSec=60`.
+- **`--report-interval 300 --report-history`** (#190) The `SIGTERM`
+  report alone is stale for as long as the service has been up, and the
+  next restart replaces it. Every five minutes the running session is
+  written to `report.live.md` / `report.live.json` (whole-file rename,
+  marked `(running)`; `systemctl kill -s USR1 sloth-sensor` writes it at
+  once), and each clean stop also leaves `report.<UTC start>.md` /
+  `.json`, never overwritten. sloth does not prune those; they are a few
+  KiB per restart. See [[cli-reference]].
 - **`--snapshot-out` / `--baseline-in`** The same path: each run writes
   the site snapshot it will compare against next time.
 - **`$SLOTH_ARGS`** Unquoted, so it word-splits. The site's `--my-ssid`,

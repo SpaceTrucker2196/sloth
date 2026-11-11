@@ -70,6 +70,13 @@ ExecStartPre=+/usr/local/sbin/sloth-monitor-up ${SLOTH_IFACE}
 # authentication, and a tcp: socket would need AF_INET added to
 # RestrictAddressFamilies below. $SLOTH_ARGS carries the site-specific
 # flags (--my-ssid, --my-bssid, --site-label) from /etc/default/sloth.
+#
+# --report-interval / --report-history (#190): the report was written
+# only on SIGTERM, so on a sensor that runs for days it described the
+# session before last, and each restart replaced it. Every five minutes
+# report.live.md / .json now carry the running session, and each clean
+# stop also leaves report.<UTC start>.md / .json. sloth does not prune
+# the per-session files (a few KiB per restart); clear old ones by hand.
 ExecStart=/usr/local/bin/sloth \
     --headless \
     --hop \
@@ -79,6 +86,7 @@ ExecStart=/usr/local/bin/sloth \
     --with-research /usr/local/share/sloth/research.db \
     --report /var/lib/sloth/report.md \
     --report-json /var/lib/sloth/report.json \
+    --report-interval 300 --report-history \
     --snapshot-out /var/lib/sloth/snapshot.txt \
     --baseline-in /var/lib/sloth/snapshot.txt \
     $SLOTH_ARGS
