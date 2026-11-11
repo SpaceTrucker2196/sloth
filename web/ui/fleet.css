@@ -1,0 +1,27 @@
+/* The Fleet view (fleet.js, web_fleet.h, #192 F2). Colours are the
+ * palette's tokens, so the light theme follows: this site in --signal,
+ * a peer in --data, the rules and lines in --muted. */
+#fleet-map { display: block; width: 100%; max-width: 760px; height: auto; }
+#fleet-map .fleet-line { stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 6 4; fill: none; }
+#fleet-map .fleet-dist { fill: var(--muted); font-size: 12px; text-anchor: middle; }
+#fleet-map .fleet-site { fill: var(--data); stroke: var(--panel); stroke-width: 2; }
+#fleet-map .fleet-site.self { fill: var(--signal); }
+#fleet-map .fleet-name { fill: var(--ink); font-size: 13px; text-anchor: middle; }
+#fleet-map .fleet-frame { fill: none; stroke: var(--rule); stroke-width: 1; }
+.fleet-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--gap, 8px); }
+.fleet-card { border: 1px solid var(--rule); border-radius: var(--radius-sm, 8px); padding: 6px 8px; font-size: 12px; }
+.fleet-card .fleet-card-h { font-size: 13px; margin-bottom: 4px; }
+.fleet-card .warn { color: var(--sev-warn); }
+.fleet-card dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 0; }
+.fleet-card dt { opacity: 0.7; }
+.fleet-card dd { margin: 0; overflow-wrap: anywhere; }
+.fleet-row { display: grid; grid-template-columns: minmax(150px, 1.2fr) minmax(110px, 1fr) 100px minmax(200px, 2fr); gap: 0 8px; align-items: center; font-size: 12px; padding: 3px 0 3px 4px; border-bottom: 1px dotted var(--rule); min-width: 600px; }
+.fleet-row.dhead { opacity: 0.7; }
+.fleet-dev { font: inherit; text-transform: none; letter-spacing: normal; color: var(--data); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; overflow-wrap: anywhere; }
+.fleet-dev:hover { color: var(--hover); }
+.fleet-tl { position: relative; }
+.fleet-lane { position: relative; height: 12px; }
+.fleet-lane .fleet-who { position: absolute; left: 0; top: -1px; font-size: 10px; opacity: 0.7; width: 64px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.fleet-lane .fleet-track { position: absolute; left: 68px; right: 0; top: 4px; height: 4px; border-bottom: 1px dotted var(--rule); }
+.fleet-lane .fleet-bar { position: absolute; top: -2px; height: 6px; min-width: 2px; background: var(--data); }
+.fleet-lane.self .fleet-bar { background: var(--signal); }

@@ -4080,7 +4080,7 @@ the lookups to the SIG's names.
 
 ## Fleet
 
-Issue #192 slice F1, under [ADR 0008](../docs/wiki/adr/0008-own-fleet.md)
+Issue #192 slices F1 and F2, under [ADR 0008](../docs/wiki/adr/0008-own-fleet.md)
 (the owner's own sensors share at full fidelity over the tailnet) and
 [docs/wiki/fleet.md](../docs/wiki/fleet.md). Each slothweb serves what
 its sensor has seen to the addresses its allow list admits, and pulls
@@ -4105,7 +4105,7 @@ stream's own strict decoder (`web_jsonl.h`) and nothing new:
 | `ble` | slothweb's BLE advertisers heard since: `addr`, `addr_type`, `name`, `class`, `rssi`, times; at most 1,024 |
 | `alert` | the alert keys whose latest incident is in the window: `alert_type`, `ty`, `fingerprint` (FNV-1a of type and title), `title`, `ip`, `sev`, `count`, times; at most 1,000 |
 | `verdict` | each triaged finding's current state decided since: `alert_type`, `addr`, `port`, `alert_first_seen`, `state`, `ts`; at most 1,000 |
-| `fleet_end` (last) | `rows`, the count of each kind, `truncated_<kind>` for each, `complete: true` |
+| `fleet_end` (last) | `rows`, the count of each kind, `truncated_<kind>` for each, with `next=1` or a page `next_wifi`, `next_ap`, `next_alert`, `next_verdict` (null, or the cursor after the last row sent of a kind that was cut), `complete: true` |
 
 Every member of every line is listed once, in `web_fleet_members[]`:
 the writer names nothing else (an unlisted name fails the answer, 503)
@@ -4124,8 +4124,16 @@ last): every line is held to the importer's own checks before it is
 sent, and such a row is left out, because one would refuse the peer's
 whole answer at every pull while it stayed in the window.
 
+Parameters, each at most once: `since=EPOCH`; `next=1` (the end line
+carries the cursors); `kind=wifi|ap|alert|verdict` with `after=CURSOR`
+(`<last_seen>~<key>`, 1..12 digits, `~`, up to 24 of `[0-9A-Za-z:]`), a
+page of that kind only after the cursor, in the reader's own order
+(keyset on last_seen and the key). Anything else is a 400 (`bad_since`,
+`bad_next`, `bad_kind`, `bad_after`, `after_needs_kind`,
+`unknown_parameter`).
+
 **The pull** runs on a thread of its own, every `--peer-interval-secs`:
-one HTTP/1.1 `GET /api/fleet/export?since=` to each peer over plain TCP,
+one HTTP/1.1 `GET /api/fleet/export?since=N&next=1` to each peer over plain TCP,
 5 s to connect and 30 s for the whole answer (not each read: a peer
 that trickles bytes is cut off), which is held to 10 MB and refused
 whole past it (never cut to fit); a `Transfer-Encoding` or a second
@@ -4141,6 +4149,19 @@ reason in slothweb's own words (`line 4: a wifi line with a member it
 may not carry: refused`, `HTTP status 503`, `response over 10485760
 bytes: refused`), kept in memory, in `/api/health` and in `peer_sites`,
 and no sighting is written.
+
+**The backfill** (F2). A kind cut at its cap comes back with a cursor;
+the puller keeps the cut answer's `since` (the floor) and the cursor for
+it and, after each good pull, asks for up to 4 pages a kind
+(`since=FLOOR&kind=K&after=CURSOR`) until a page is not cut, so the rows
+a first pull cut are fetched over the next pulls and nothing already
+held is asked for again. A probe list rides its client's wifi row; BLE
+is never cut. The state is in slothweb.db's `meta` table
+(`fleet.backfill.NAME.KIND`, the floor and the cursor), written in the
+transaction that stores the rows, and read back at start. A page's
+refusal is `backfill KIND: ...` in `last_error` and leaves the
+backfill to the next pull. [docs/wiki/fleet.md](../docs/wiki/fleet.md)
+has why it is a keyset and not an offset.
 
 ### The fleet tables: slothweb.db v8
 
@@ -4177,7 +4198,29 @@ accounting but not dropped by its ceiling.
 "last_ok_age_s","last_attempt_age_s","last_error","rows","pulls",
 "failures"}]}`. **`/api/fleet/peers`** answers each `peer_sites` row
 (`configured` false for a name no longer given) with its sightings
-counted by kind. There is no Fleet tab yet (#192 F2); the inferences
+counted by kind.
+
+**`/api/fleet/overview`** (the Fleet tab): `local` (this site's label,
+`sloth_db`, the position the export sends), `interval_s`, `store`,
+`configured`, `peers` (each `peer_sites` row or configured peer: its
+position, `last_ok_age_s`, `last_attempt_age_s`, `last_error`, `skew_s`
+= the peer's clock at its last good answer less this one's then,
+`remote_version`, `rows_last`, `counts` by kind, `backfill` per running
+kind with `floor` and `cursor`, `pages`, `page_failures`, `distance_m`)
+and `distances` (every pair of sites with a position, haversine metres,
+this site `self`). **`/api/fleet/shared?kind=wifi|ble|ap|probe&limit=N`**
+(GET only, limit 50, 1..200): the keys of the kind a peer sent that this
+site holds too (`sloth.db`'s `devices`, `beacon_aps` or `pnl_ssids`
+through the M4 reader, read-only, in the 1.5 s overview budget; a BLE
+address from slothweb's table), the newest activity at any site first,
+each with `sites` (`self` and each peer: `first_seen`, `last_seen`,
+`rssi`) and `verdict` (this site's triage at the address, else a
+peer's); `partial` when the 5,000-row scan or the budget stopped short.
+
+**The Fleet tab** (after TACDB, `web/ui/fleet.js`): the sites on an SVG
+map with the distance between each pair, a health card per peer, and
+"seen at more than one site" with each site's first-to-last-seen bar on
+one time axis, the key a link to the device drawer. The inferences
 across sites are F3 and F4.
 
 ## Capture scope

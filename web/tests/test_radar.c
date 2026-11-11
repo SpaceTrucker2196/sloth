@@ -442,7 +442,7 @@ static void test_radar_page(void) {
     WT_HAS(p, "  if (window.SlothRadar) SlothRadar.init({ el: el, set: set, getJSON: getJSON, theme: theme, tok: tok,\n"
               "    heat: heat, sizeCanvas: sizeCanvas, prefGet: prefGet, prefSet: prefSet, show: show,\n"
               "    openDrawer: openDrawer, openBleDrawer: openBleDrawer, scope: function () { return SCOPE; } });");
-    WT_HAS(p, "               \"lookup\", \"tacdb\", \"ble\", \"gnss\", \"adsb\", \"aprs\", \"radar\"];");
+    WT_HAS(p, "               \"lookup\", \"tacdb\", \"ble\", \"gnss\", \"adsb\", \"aprs\", \"radar\", \"fleet\"];");
     WT_HAS(p, "<div id=\"v-radar\" hidden>");
     WT_HAS(p, "<canvas id=\"radar-dome\" aria-label=");
     static const char *const ids[] = {
@@ -1056,7 +1056,7 @@ static void test_radar_aprs_js(void) {
     WT_HAS(p, "<label class=\"sub\">APRS for <select id=\"radar-aprs-win\"><option value=\"900\">15 min</option>"
               "<option value=\"3600\" selected>1 h</option><option value=\"10800\">3 h</option>"
               "<option value=\"21600\">6 h</option><option value=\"86400\">24 h</option></select></label></div>");
-    WT_HAS(p, "   \"aprs-seen-days\", \"aprs-seen-q\", \"radar-aprs-win\"].forEach(keepCtl);");
+    WT_HAS(p, "   \"aprs-seen-days\", \"aprs-seen-q\", \"radar-aprs-win\", \"fleet-kind\"].forEach(keepCtl);");
     WT_HAS(p, "  var APRS_WINS = [900, 3600, 10800, 21600, 86400], APRS_WIN_DFLT = 3600;");
     WT_HAS(p, "  var ATRK_H = 24, ATRK_MS = 60000;");
     WT_HAS(p, "    $(\"radar-aprs-win\").addEventListener(\"change\", function () { S.atrkAt = 0; load(); dirty(); });");

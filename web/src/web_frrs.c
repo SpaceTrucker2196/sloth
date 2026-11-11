@@ -1090,20 +1090,24 @@ int web_frrs_triage_any(web_frrs_t *f) {
  * state (its newest row) decided at or after since, newest first. The
  * descriptor and the state only: the note, who and from where stay
  * here. */
-int web_frrs_verdicts(web_frrs_t *f, long long since, int max,
+int web_frrs_verdicts(web_frrs_t *f, long long since, long long after_ts,
+                      long long after_id, int max,
                       int (*fn)(void *ctx, const web_frrs_verdict_t *v), void *ctx) {
     if (!f || !f->wr || max <= 0) return 0;
     sqlite3_stmt *s = NULL;
     if (sqlite3_prepare_v2(f->wr,
-            "SELECT t.type, t.addr, t.port, t.first_seen, t.state, t.ts FROM triage t"
+            "SELECT t.type, t.addr, t.port, t.first_seen, t.state, t.ts, t.id FROM triage t"
             " WHERE t.ts >= ?1 AND t.id = (SELECT MAX(u.id) FROM triage u"
-            " WHERE u.subject = t.subject) ORDER BY t.ts DESC, t.id DESC LIMIT ?2",
+            " WHERE u.subject = t.subject) AND (?3 < 0 OR t.ts < ?3 OR (t.ts = ?3"
+            " AND t.id < ?4)) ORDER BY t.ts DESC, t.id DESC LIMIT ?2",
             -1, &s, NULL) != SQLITE_OK) {
         sqlite3_finalize(s);
         return -1;
     }
     sqlite3_bind_int64(s, 1, since);
     sqlite3_bind_int(s, 2, max);
+    sqlite3_bind_int64(s, 3, after_ts);
+    sqlite3_bind_int64(s, 4, after_id);
     int n = 0, rc;
     while ((rc = sqlite3_step(s)) == SQLITE_ROW) {
         web_frrs_verdict_t v;
@@ -1114,11 +1118,35 @@ int web_frrs_verdicts(web_frrs_t *f, long long since, int max,
         v.first_seen = sqlite3_column_int64(s, 3);
         v.state = sqlite3_column_int(s, 4);
         v.ts = sqlite3_column_int64(s, 5);
+        v.id = sqlite3_column_int64(s, 6);
         n++;
         if (fn(ctx, &v)) { rc = SQLITE_DONE; break; }
     }
     sqlite3_finalize(s);
     return rc == SQLITE_DONE ? n : -1;
+}
+
+int web_frrs_addr_state(web_frrs_t *f, const char *addr, int *state, long long *ts) {
+    *state = -1;
+    *ts = 0;
+    if (!f || !f->wr || !addr || !addr[0]) return 0;
+    sqlite3_stmt *s = NULL;
+    if (sqlite3_prepare_v2(f->wr,
+            "SELECT t.state, t.ts FROM triage t WHERE t.addr = ?1 AND t.id = (SELECT"
+            " MAX(u.id) FROM triage u WHERE u.subject = t.subject)"
+            " ORDER BY t.ts DESC, t.id DESC LIMIT 1", -1, &s, NULL) != SQLITE_OK) {
+        sqlite3_finalize(s);
+        return -1;
+    }
+    sqlite3_bind_text(s, 1, addr, -1, SQLITE_TRANSIENT);
+    int rc = sqlite3_step(s), found = 0;
+    if (rc == SQLITE_ROW) {
+        *state = sqlite3_column_int(s, 0);
+        *ts = sqlite3_column_int64(s, 1);
+        found = 1;
+    }
+    sqlite3_finalize(s);
+    return rc == SQLITE_ROW || rc == SQLITE_DONE ? found : -1;
 }
 
 static long long q_count(web_frrs_t *f, const char *sql) {
@@ -1139,9 +1167,16 @@ static int tri_lookup(web_frrs_t *f, const tri_subj_t *q, web_tri_t *out) {
     return 0;
 }
 int web_frrs_triage_any(web_frrs_t *f) { (void)f; return 0; }
-int web_frrs_verdicts(web_frrs_t *f, long long since, int max,
+int web_frrs_verdicts(web_frrs_t *f, long long since, long long after_ts,
+                      long long after_id, int max,
                       int (*fn)(void *ctx, const web_frrs_verdict_t *v), void *ctx) {
-    (void)f; (void)since; (void)max; (void)fn; (void)ctx;
+    (void)f; (void)since; (void)after_ts; (void)after_id; (void)max; (void)fn; (void)ctx;
+    return 0;
+}
+int web_frrs_addr_state(web_frrs_t *f, const char *addr, int *state, long long *ts) {
+    (void)f; (void)addr;
+    *state = -1;
+    *ts = 0;
     return 0;
 }
 static long long q_count(web_frrs_t *f, const char *sql) { (void)f; (void)sql; return -1; }

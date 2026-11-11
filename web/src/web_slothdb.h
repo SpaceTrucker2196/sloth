@@ -431,6 +431,19 @@ enum { WEB_AP_SORT_LAST = 0, WEB_AP_SORT_SSIDS, WEB_AP_SORT_KARMA,
  * beacon_aps with the columns read. */
 int  web_sdb_aps(web_sdb_conn_t *c, int sort, long long limit,
                  long long offset, web_sdb_ap_fn fn, void *ctx);
+/* web_sdb_aps(.., WEB_AP_SORT_LAST, ..)'s rows after (after_ts,
+ * after_key) in that order (last_seen newest first, then the BSSID as
+ * stored): the fleet export's keyset page (web_fleet.h). */
+int  web_sdb_aps_after(web_sdb_conn_t *c, long long after_ts, const char *after_key,
+                       long long limit, web_sdb_ap_fn fn, void *ctx);
+/* One key's signal (n3, has_n3), first and last seen, as sloth.db holds
+ * it: a device by MAC (devices), an AP by BSSID (beacon_aps), a probed
+ * SSID by MAC and SSID (pnl_ssids, key2; no signal). The key as stored
+ * (sloth writes canonical lower-case MACs). 1 found, 0 none (or no such
+ * table), -1. The fleet's local side (web_fleet.h). */
+enum { WEB_SEEN_DEVICE = 0, WEB_SEEN_AP, WEB_SEEN_PNL };
+int  web_sdb_seen(web_sdb_conn_t *c, int what, const char *key, const char *key2,
+                  web_sdb_item_t *out);
 /* The SSIDs bssid has advertised (a = ssid), newest first. */
 int  web_sdb_ap_ssids(web_sdb_conn_t *c, const char *bssid, int max,
                       web_sdb_item_fn fn, void *ctx);
@@ -493,6 +506,13 @@ int  web_sdb_new_since(web_sdb_conn_t *c, int kind, long long since,
 int  web_sdb_devices_between(web_sdb_conn_t *c, long long from, long long to,
                              long long limit, long long offset,
                              web_sdb_dev_fn fn, void *ctx);
+/* The same rows after (after_ts, after_key) in that order (last_seen
+ * newest first, then the MAC as stored), at most limit: the fleet
+ * export's keyset page (web_fleet.h), exact where an offset would skip a
+ * row when one before it is updated. */
+int  web_sdb_devices_after(web_sdb_conn_t *c, long long from, long long to,
+                           long long after_ts, const char *after_key,
+                           long long limit, web_sdb_dev_fn fn, void *ctx);
 /* Alerts whose latest incident overlaps [from, to), one item per key,
  * the keys among the WEB_SDB_ALERT_SCAN newest rows of the range, each
  * key's figures over all of its rows in the range (through the primary
