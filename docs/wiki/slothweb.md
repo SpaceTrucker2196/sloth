@@ -1414,6 +1414,23 @@ is R1's second exception, for G5 only.
   phases as a band, night 1 px, sunrise and sunset 2, day 3, so a
   phase is a height as well as a colour. Each strip's words name the
   phases and when each begins (`night, sunrise 06:40, day 07:40, ...`).
+- **Sensor time (the second ruling of 2026-11-11).** The ruler's
+  midnight ticks and the words' sunrise and sunset times are in the
+  sensor's zone, not the viewer's, so the ticks and the sun's band
+  agree; every other time on the page stays the viewer's clock, and
+  each table's line and the ruler's title say so (`midnight ticks in
+  sensor time (slothweb's host), UTC-7; every other time on the page
+  is your clock`). The zone is `utc_offset_s`, a number the server
+  reports beside the strips (`/api/devices` and `/api/history/devices`
+  gained it; `/api/device/{mac}` had it in `week`): slothweb's own
+  host's offset, taken as the sensor's, so a slothweb reading a copied
+  sloth.db elsewhere shows that machine's zone, which is why the words
+  name the host. One offset, the one at the window's end, serves the
+  whole ruler: a range over a day that crosses a summer-time change
+  has its earlier ticks an hour out, and the line says `the offset at
+  the range's end throughout`. No offset from the server: the viewer's
+  clock, said as `your clock (the server gave no sensor offset)`. No
+  zone name is read and the browser's zone database is not asked.
 - **The colours** are written in `web/ui/theme.css` for both themes,
   night the least contrast of the four and day `--tui-normal` itself;
   `web/tools/palette.c` fails the build if one is under 3:1 on `--bg`

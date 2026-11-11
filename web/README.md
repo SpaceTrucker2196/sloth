@@ -2353,7 +2353,7 @@ and a row's class is derived from its fields when asked, never stored.
 GET /api/devices?q=vendor%3Aapple%20random%3Ayes%20seen%3A%3C24h
 {"now":1792627200,"q":"vendor:apple random:yes seen:<24h","sort":"last",
  "limit":100,"offset":0,"db_schema":7,"vendor_table":"ieee",
- "presence_from":1792541400,"presence_cell_s":600,
+ "presence_from":1792541400,"presence_cell_s":600,"utc_offset_s":0,
  "rows":[{"mac":"da:a1:19:00:00:01","random":true,"vendor":"Apple",
    "vendor_src":"sloth","ip":"10.0.1.11","name":null,"name_src":null,
    "ssid":"HomeNet","signal":-48,"sources":48,"is_ap":false,"risk":1,
@@ -2746,7 +2746,9 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   overlaps `[from, to]`, edges included, rendered as `/api/devices`
   renders a row, with the presence strip over the range itself and
   nothing past it: `presence_cells` (at most 144) cells of
-  `presence_cell_s` from `from`, the last ending at `to`, from
+  `presence_cell_s` from `from`, the last ending at `to` (and
+  `utc_offset_s`, the host's UTC offset at `to`, the zone of the
+  strip's ruler), from
   slothweb.db's `dev.present`. A cell is a whole number of the steps of
   `presence_tier`: `minute` while the range lies inside
   `--web-retain-days`, `hour` (the hour tier, kept 400 d, with whatever
@@ -4509,7 +4511,7 @@ own.
 - **The ruler (F10)** is drawn at last, in the presence column's header
   of the Devices, WiFi clients and History tables (`drawRuler()`, a
   144 by 6 px canvas over the rows' strips): a `--faint` tick at each
-  midnight of the zone the page's clock labels are in, `--signal` at
+  midnight **of the sensor's zone** (below), `--signal` at
   now where it falls (none when a History range ended before now), and
   under them the phases as one `sun` mark a run, night 1 px, sunrise
   and sunset 2, day 3, from the bottom, so a row with three present
@@ -4517,9 +4519,43 @@ own.
   well as a colour (R10). No position: the ticks alone.
 - **In words (R10).** Each strip's label, and a line over each of the
   three tables, names the phases and when each begins in the window:
-  `coloured by the sun at the sensor (gps fix): night, sunrise 06:40,
-  day 07:40, sunset 16:10, night 17:10` (`last gps fix` or
-  `--location` for `loc`; past eight runs, the four words alone).
+  `coloured by the sun at the sensor (gps fix), sensor time (slothweb's
+  host), UTC-5: night, sunrise 06:10, day 07:20, sunset 16:00, night
+  17:10` (`last gps fix` or `--location` for `loc`; past eight runs,
+  the four words alone). `SlothSun.says()`, pure, ported and tested.
+- **Sensor time (owner ruling 2026-11-11, the second).** The ruler's
+  midnight ticks and the words' sunrise and sunset times are in the
+  sensor's zone, not the viewer's, so the ticks and the sun's band
+  agree whoever is looking: a sensor at UTC-7 seen from UTC+1 has its
+  midnight ticks at 07:00 UTC. It is the one exception to the page's
+  clock, every other time label staying the viewer's, and it is said
+  where it applies: each table's line ends `midnight ticks in sensor
+  time (slothweb's host), UTC-7; every other time on the page is your
+  clock`, the ruler's title says the same, and each strip's words name
+  the zone before their times.
+  - **Where the zone comes from.** `utc_offset_s`, a number of seconds
+    the server reports beside the strips: `/api/devices` (the offset
+    now) and `/api/history/devices` (the offset at the range's end)
+    gained it for this; `/api/device/{mac}` already had it in `week`,
+    which the drawer and the alert page use. The Lookup card and the
+    BLE drawer, whose answers carry none, use the last one any answer
+    gave. No zone name is read and the browser's zone database is not
+    asked (`SlothSun.zone()` takes two numbers).
+  - **Whose zone it is.** `web_utc_offset()` is slothweb's own host's.
+    Beside sloth that is the sensor's, which is why it is taken as
+    such; a slothweb reading a copied sloth.db on another machine
+    reports that machine's zone, and the words say `slothweb's host`
+    so the reader can tell.
+  - **Summer time.** One offset serves the whole ruler, the one at the
+    window's end. A 24 h window is right but for the day of a change;
+    a History range over a day that crosses one has its earlier ticks
+    an hour out, and the line says `the offset at the range's end
+    throughout` for every range over a day rather than hide it. An
+    offset per midnight would need the server to answer one per day of
+    the range; not built.
+  - **No offset** (an older server, an error, a value past 18 h): the
+    viewer's clock, as before the ruling, and the words say `your clock
+    (the server gave no sensor offset), UTC+1`.
 - **Every strip.** `paintStrip()` is the one caller of `glyph.g5()`;
   `drawStrip()` (the server's hex) and the BLE drawer's own cells go
   through it with the window's start and the cell's seconds: Devices,
@@ -5218,7 +5254,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_alerts.c` | the Alerts page and an alert's page over a generated sloth.db and a fed stream: the collapse (sloth.db's rows and the stream's incidents, a key once), the order, every filter, paging, every `400`/`404`/`405`, the six sections, runs, the device by MAC and by address, no key, username, community or sloth `incident_id` in any body, every type's page within the buffer, the 20,000-row bound on 30,000 rows (500,000 with `SLOTHWEB_ALERTS_BENCH`), filters, History's figures and the drawer reaching past it, and the tiles against their views on the demo's data; the page's views and links |
 | `test_readme.c` | this file: every message the start-up path can print, scraped from `web/src/`, quoted in Troubleshooting; the Security section's points; every screenshot this file shows present under `docs/assets/slothweb/` and under the size bound |
 | `test_tui_colors.c` | the data colours against the TUI itself ([Design](#design)): `src/tui.c`'s ANSI backend linked in and captured, every byte of an address, an SSID, a host name and an info string compared with the page's colour for it (its functions pinned as served, a C port of them over the served `SLOTH_PALETTE`, the served custom properties); the cross-panel bold and the page's `IP_SRC` bits held to `IP_SRC_*`, an alert counted by its `match_ip` alone; the alert-hot override against `tui_alert_hot_set()` (severity, bold from WARN, the TTL's edge, promotion, the full table) and its TTL and cap against `src/tui.c`; the phosphor, heat, alert-hot and monitor-row pairs; `MON_TYPES` against the record types `src/jsonl.c` emits from the monitor radio |
-| `test_glyph.c` | the glyph layer's geometry ([the glyph layer](#the-glyph-layer)): a C port of `web/ui/glyph.js` with the JS pinned verbatim out of the served page, so a change on either side fails. For G1, G5 and G6: empty, warming, one point, four points as dots (R6), a gap (R5), in band, out of band (and in again once the band is widened), G1's line graded as `draw_sparkline_at()` grades it (ruling 1), min and max dots only without a band (R7), a scale that grows and never shrinks (R11), the window rule and its words (R4), the caption grammar and the three states in it (R9), the presence cells from the server's hex, the ruler's midnight and now ticks in a shifted zone (F10), the first-seen mark (F15), an anomaly episode's underline clipped to the strip, the bullet's ranges, threshold tick and severity, the count bar's shared scale, and each glyph's list read with every token flattened to one grey (R10); each glyph's TUI form named in the README (R12). Nineteen mutations, each naming the test it reddened. V2: G2's states (the dash, one sample as its dot alone, dots under five, a gap), its fixed −95 to −20 dBm scale and the −67 dBm rule, a reading off the scale clamped and counted, the whisker only when there is one and in order, the four kinds in one grey (R10); G2's words bold only by sloth's `approaching` and naming sloth's band and trend glyph, never a slope of their own; the new mark and G5's first-seen cell (F15); every placement of G2 and G6 and the card's rounded bar gone (R8). The sun (ruling 2026-11-11): a C port of `web/ui/sun.js`, pinned whole as served; rise, set, transit and both civil twilights at five places within 3 min of the U.S. Naval Observatory (London and Sydney at the June solstice, New York in November, the equator at the equinox, Fiji a tenth of a degree off the antimeridian); noon elevations from latitude and declination; polar night and midnight sun at Longyearbyen, twilight all night at Reykjavik, no day at Tromso; a strip present all day at London giving the four tokens in order with counts within a cell of the almanac; no position, a bad one or no window giving the plain strip mark for mark; cells over an hour one ink; the ruler's band under its ticks, its heights in one grey (R10); every G5 caller, the tokens, and the page naming neither geolocation nor a zone. 31 mutations (14 in the port, 15 in the JS and CSS, 2 the build's colour check), each seen red |
+| `test_glyph.c` | the glyph layer's geometry ([the glyph layer](#the-glyph-layer)): a C port of `web/ui/glyph.js` with the JS pinned verbatim out of the served page, so a change on either side fails. For G1, G5 and G6: empty, warming, one point, four points as dots (R6), a gap (R5), in band, out of band (and in again once the band is widened), G1's line graded as `draw_sparkline_at()` grades it (ruling 1), min and max dots only without a band (R7), a scale that grows and never shrinks (R11), the window rule and its words (R4), the caption grammar and the three states in it (R9), the presence cells from the server's hex, the ruler's midnight and now ticks in a shifted zone (F10), the first-seen mark (F15), an anomaly episode's underline clipped to the strip, the bullet's ranges, threshold tick and severity, the count bar's shared scale, and each glyph's list read with every token flattened to one grey (R10); each glyph's TUI form named in the README (R12). Nineteen mutations, each naming the test it reddened. V2: G2's states (the dash, one sample as its dot alone, dots under five, a gap), its fixed −95 to −20 dBm scale and the −67 dBm rule, a reading off the scale clamped and counted, the whisker only when there is one and in order, the four kinds in one grey (R10); G2's words bold only by sloth's `approaching` and naming sloth's band and trend glyph, never a slope of their own; the new mark and G5's first-seen cell (F15); every placement of G2 and G6 and the card's rounded bar gone (R8). The sun (ruling 2026-11-11): a C port of `web/ui/sun.js`, pinned whole as served; rise, set, transit and both civil twilights at five places within 3 min of the U.S. Naval Observatory (London and Sydney at the June solstice, New York in November, the equator at the equinox, Fiji a tenth of a degree off the antimeridian); noon elevations from latitude and declination; polar night and midnight sun at Longyearbyen, twilight all night at Reykjavik, no day at Tromso; a strip present all day at London giving the four tokens in order with counts within a cell of the almanac; no position, a bad one or no window giving the plain strip mark for mark; cells over an hour one ink; the ruler's band under its ticks, its heights in one grey (R10); every G5 caller, the tokens, and the page naming neither geolocation nor a zone. 31 mutations (14 in the port, 15 in the JS and CSS, 2 the build's colour check), each seen red. Sensor time (the second ruling): the ruler's ticks at a UTC-7 sensor's midnights seen from UTC+1, the fallback to the viewer's clock and its words, the words' sunrise and sunset in sensor time against the almanac at New York, the zone's name for whole and part-hour offsets, the page reading the viewer's offset in one place only; 12 more mutations seen red, among them the ticks put back on the viewer's offset |
 | `test_rf.c` | G2's data (`web_rf.h`): the hour's window; `web_rollup_trail()` merging closed and open fine buckets per cell, another key's and an earlier bucket left out; an AP's series first, a station's otherwise, the other when the first is empty, and no trail under Local or without a rollup; the member with the beacon's 60 s range or the last cell's samples as the whisker (the beacon's only when it is in the last value's minute) and sloth's band and trend from the FRRS ledger's latest beacon or probe_client; a record's word that is not sloth's, and a range out of order, refused; `WEB_RF_JSON_MAX` holding the longest member |
 | `test_parity.c` | the AKM names (src/rsn_ie.c, linked into the test alone), the downgrade bits (`WPA_DG_*`) and DEAUTH_FLOOD's type held to sloth's own; the BLE view's vocabularies (the PDU, band, trend, glyph and P_tx-source words, the finding kinds, the alert names, the TUI's address-type letters and its legend line) held to `src/` as text |
 | `test_ble.c` | the BLE view ([BLE](#ble)) from hand-built `ble_device`, `ble_alert`, `alert.resolve` and `sensor_health` lines in the emitter's exact shape: two rows for one address heard by two sensors, a heartbeat updating in place (the sticky masks OR-ed, the earlier first_seen kept, the rate from two points), the hostile strings (a control byte escaped and flagged, an over-long name cut back to a code-point boundary, a category that is not sloth's slug dropped and counted, an unknown iface `other`, a bad record kept nowhere), the record's absent values null and an anonymous all-zero address a row, the estimate's four fields with the TUI's cell and description, the LRU at 1025 rows evicting the oldest, the findings (standing, the resolve of the key, the time-out, the day's listing, the key never rendered, a `hid_oui` finding under its address), the `sensor_health` block and its rotation bands; the two metrics only while a Bluetooth source is configured; every route through the table (the sort words and both directions, each refusal a word never echoing the value, the search, paging, HEAD, Monitor and Hybrid serving, Local `out_of_scope` with the query still checked, `/api/live`'s `ble` member and `/api/health`'s counters, the M0 shape without the tables, the BLE incident typed and Monitor's on the Alerts page); the page's lines pinned as served; with SQLite the store round trip through the store thread's flush, a changed row upserted once, the seed on reopen with the name's display form and the estimate, every field of a seeded finding (a flood's fresh count, rate, window and citation, a `hid_oui` finding's address and the drawer's match on it), a resolve on a seeded finding updating its stored row in place, a seeded row's presence strip shifting on with fresh traffic, retention at compaction, a failed write (a trigger aborting it mid-transaction) rolled back whole and its batch written by the next flush, the row caps (the oldest gone, a flagged row kept past newer unflagged ones, counted) and a non-canonical stored address not seeded; every sort word in both directions with an empty key last (`mfr`'s three tiers fixed in either direction); a name cut back to a code-point boundary; `ble.devices` with an Ubertooth alone and `ble.adv_rate` only with the host stream; `/api/live`'s `ble` member with every string at its cut and escaped six-fold; without a store the tables still ingest and serve. Each absence seen red under a named mutation |

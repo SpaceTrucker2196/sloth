@@ -299,6 +299,9 @@ static void test_who_was_here(void) {
     WT_EQ(route(&H, "/api/history/devices", q), 200);
     const char *b = body_of(g_out);
     WT_HAS(b, "\"presence_cell_s\":60,\"presence_cells\":60,\"presence_tier\":\"minute\",");
+    /* The host's offset at the range's end, for the ruler (TZ is UTC
+     * here). Seen red with the member taken out of the route. */
+    WT_HAS(b, "\"presence_tier\":\"minute\",\"utc_offset_s\":0,\"rows\":[");
     const char *row = strstr(b, "{\"mac\":\"02:00:00:00:00:04\"");
     WT_ASSERT(row != NULL);
     char hx[64] = "\"presence\":\"";
