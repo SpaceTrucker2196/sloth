@@ -1,0 +1,23 @@
+/* The Activity graph's "keys: all" (web/ui/allkeys.js, 2026-11-11). Its
+ * own file, so the slices changing page.css in parallel do not meet it.
+ * Only the page's tokens: a key's colour is the --k-N its swatch is
+ * given, never a colour named here. The picked entry is marked by its
+ * border and weight, not by --signal: the graph's now mark is the
+ * panel's one accent. */
+#ak-chart { cursor: crosshair; }
+#ak-hover { min-height: 1.4em; }
+.ak-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin-top: var(--gap); }
+.ak-legend { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); gap: 2px 12px; margin-top: 4px; max-height: 260px; overflow-y: auto; }
+.ak-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+button.ak-key {
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 2px; text-align: left;
+  font-size: 11px; letter-spacing: 0; text-transform: none; padding: 1px 6px;
+  border-color: transparent; border-radius: 4px; white-space: nowrap;
+}
+/* The key is never cut: it is what the entry is. The value gives way. */
+button.ak-key > span { flex: 0 0 auto; }
+button.ak-key .ak-rank { flex: 0 0 3ch; color: var(--muted); text-align: right; margin-right: 6px; }
+button.ak-key .sw { flex: 0 0 8px; }
+button.ak-key .ak-v { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: right; color: var(--muted); padding-left: 8px; }
+button.ak-key:hover, button.ak-key:focus-visible { border-color: var(--rule); background: var(--tint); }
+button.ak-key.on { border-color: var(--brass); font-weight: 700; }

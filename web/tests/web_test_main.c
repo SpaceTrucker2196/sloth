@@ -131,6 +131,7 @@ int main(void) {
     SUITE(run_adsb_tests);
     SUITE(run_aprs_tests);
     SUITE(run_radar_tests);
+    SUITE(run_allkeys_tests);
     SUITE(run_rfhist_tests);
     SUITE(run_bledev_tests);
     SUITE(run_btsig_tests);

@@ -21,6 +21,7 @@
 #include "web_wifi.h"
 #include "web_positions.h"
 #include "web_radar.h"
+#include "web_allkeys.h"
 
 static int route_scoped(const web_req_t *rq, const web_health_t *h,
                         int sse_room, char *out, size_t outsz, web_resp_t *r);
@@ -574,6 +575,41 @@ static int route_series(const web_req_t *rq, const web_health_t *h, int which,
         } else {
             bl = web_metrics_json_scoped(h->tsdb, h->sc, body, cap);
         }
+    }
+    if (bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/series/all (web_allkeys.h): every key of one metric, each in at
+ * most cols cells, a page of keys to an answer. Checked as /api/series
+ * is, before anything is read. */
+static int route_allkeys(const web_req_t *rq, const web_health_t *h,
+                         char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    char why[48] = "";
+    size_t bl = 0;
+    int status = 200;
+    web_allkeys_q_t q;
+    if (!h->tsdb) {
+        status = 503;
+        bl = web_series_error_json("no_time_series", body, cap);
+    } else if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+    } else if (web_allkeys_parse(rq->query, h->wall_s,
+                                 h->tsdb->store && h->tsdb->store->rd, &q,
+                                 why, sizeof(why)) != 0) {
+        status = 400;
+        bl = web_series_error_json(why, body, cap);
+    } else {
+        q.sc = h->sc;
+        bl = web_allkeys_json(h->tsdb, &q, body, cap);
     }
     if (bl == 0) {
         r->status = 503;
@@ -1446,6 +1482,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_series(rq, h, SR_SERIES, out, outsz, r);
         if (!strcmp(rq->path, "/api/keys"))
             return route_series(rq, h, SR_KEYS, out, outsz, r);
+        if (!strcmp(rq->path, "/api/series/all"))
+            return route_allkeys(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/metrics"))
             return route_series(rq, h, SR_METRICS, out, outsz, r);
         if (!strcmp(rq->path, "/api/anomalies"))

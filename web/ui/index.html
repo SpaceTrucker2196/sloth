@@ -20,12 +20,14 @@
 @include aprs.css
 @include bledev.css
 @include radar.css
+@include allkeys.css
 </style>
 <script>
 @include palette.js
 @include sun.js
 @include glyph.js
 @include facts.js
+@include allkeys.js
 @include rf.js
 @include air.js
 @include chain.js
@@ -907,9 +909,15 @@
       <span class="sub" id="a-note"></span>
     </section>
     <section class="panel">
-      <div class="label"><span id="a-title">-</span> <span class="sub" id="a-src"></span></div>
+      <div class="label"><span id="a-title">-</span> <button type="button" class="dt-reset" id="ak-mode" aria-pressed="false" title="one: the picked key over its baseline band; all: every key of the metric on this graph, one colour a key, on one shared scale, with a legend">keys: one</button> <span class="sub" id="a-src"></span></div>
       <canvas class="chart" id="a-chart" height="240" aria-label="band chart"></canvas>
       <div class="sub" id="a-hover">bucket value over its baseline band (mean &#177; k sd for its hour of the week)</div>
+      <div id="ak-box" hidden>
+        <canvas class="chart" id="ak-chart" aria-label="every key of the metric on one scale, one colour a key; the legend below lists them"></canvas>
+        <div class="sub" id="ak-hover"></div>
+        <div class="ak-head"><span class="sub" id="ak-rule"></span> <button type="button" class="dt-reset" id="ak-all" hidden>show every key</button></div>
+        <div class="ak-legend" id="ak-legend" role="list" aria-label="every key drawn, its colour and its latest value"></div>
+      </div>
     </section>
     <section class="panel">
       <div class="label">every key, last hour at 10 s <button type="button" class="dt-reset" id="a-scale" aria-pressed="false" title="shared: every cell on one y-scale, its top in the caption; own: each cell on its own, its top in the cell">scale: shared</button> <span class="sub" id="a-multi-note"></span></div>
