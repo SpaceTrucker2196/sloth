@@ -254,6 +254,55 @@ static void test_risk_own_device_still_scores_evidence(void) {
     ownership_clear();
 }
 
+static void test_risk_each_anonymity_signal_alone_is_med(void) {
+    /* "One point when any is set": the family is worth its point on a
+     * single bit, not only on the three-bit rows above. Each fixture
+     * sets exactly one. */
+    ownership_clear();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    uint8_t la[]  = { 0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee };
+    uint8_t reg[] = { 0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e };
+    device_t d[4];
+    d[0] = make_dev(la,  "Apple", "iphone.local", "10.0.0.5");
+    d[0].sources = DEV_SRC_STA;
+    d[1] = make_dev(reg, "",      "known.local",  "10.0.0.6");
+    d[1].sources = DEV_SRC_ARP;
+    d[2] = make_dev(reg, "Cisco", "",             "10.0.0.7");
+    d[2].sources = DEV_SRC_ARP;
+    d[3] = make_dev(reg, "Apple", "iphone.local", "");
+    d[3].sources = DEV_SRC_PROBE;
+    static const int want[4] = { DEV_RISK_RANDOM_MAC, DEV_RISK_UNKNOWN_VENDOR,
+                                 DEV_RISK_NO_HOSTNAME, DEV_RISK_PROBE_ONLY };
+    for (int i = 0; i < 4; i++) {
+        int signals = 0;
+        ASSERT_EQ((int)device_risk_score(&d[i], &s, &signals),
+                  (int)DEV_RISK_MED);
+        ASSERT_EQ(signals, want[i]);
+    }
+}
+
+static void test_risk_own_device_with_both_evidence_is_crit(void) {
+    /* SELF is worth nothing in either direction: it does not cap the
+     * bucket, so a host of ours with a leaked credential and an active
+     * alert on its IP is CRIT like anyone else's. */
+    ownership_clear();
+    uint8_t mac[] = { 0x00, 0xc0, 0xca, 0x11, 0x22, 0x05 };
+    ASSERT_EQ(ownership_self_add(mac), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    snprintf(s.cleartext_creds[0].src, sizeof(s.cleartext_creds[0].src),
+             "10.0.0.2");
+    s.cleartext_cred_count = 1;
+    s.alert_count = 1;
+    snprintf(s.alerts[0].match_ip, sizeof(s.alerts[0].match_ip), "10.0.0.2");
+    device_t d = make_dev(mac, "", "", "10.0.0.2");
+    d.sources = DEV_SRC_PROBE;
+    int signals = 0;
+    ASSERT_EQ((int)device_risk_score(&d, &s, &signals), (int)DEV_RISK_CRIT);
+    ASSERT_EQ(signals, DEV_RISK_SELF | DEV_RISK_CLEARTEXT_CRED
+                       | DEV_RISK_ALERT_TAGGED);
+    ownership_clear();
+}
+
 static void test_oui_alfa_resolves(void) {
     /* 00:c0:ca is ALFA's registered block; the adapter above read as
      * UNKNOWN_VENDOR while tool_fingerprint.c knew the prefix. */
@@ -291,5 +340,7 @@ void run_device_risk_tests(void) {
     RUN_TEST(test_risk_own_interface_is_low_self);
     RUN_TEST(test_risk_rostered_device_is_low_self);
     RUN_TEST(test_risk_own_device_still_scores_evidence);
+    RUN_TEST(test_risk_each_anonymity_signal_alone_is_med);
+    RUN_TEST(test_risk_own_device_with_both_evidence_is_crit);
     RUN_TEST(test_oui_alfa_resolves);
 }
