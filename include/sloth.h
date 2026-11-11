@@ -1632,6 +1632,10 @@ typedef struct {
      * pick one and stick to it; pineapple-style rogue APs spoof
      * many SSIDs from a single radio (>=3 = strong KARMA signal). */
 #define MAX_AP_SSID_HISTORY 8
+/* beacon_ap_t.arrival (#188). */
+#define BEACON_ARRIVAL_NEW     0   /* not heard under this name before */
+#define BEACON_ARRIVAL_RETURN  1   /* dropped earlier under this name; back */
+#define BEACON_ARRIVAL_UNSURE  2   /* the memory cannot say (it overflowed) */
     char     ssid_history[MAX_AP_SSID_HISTORY][33];
     /* Per-SSID IE fingerprint (enc/cipher/akm/mfp + vendor-IE hash) at the
      * time each SSID was first seen. A legit multi-VAP AP varies these
@@ -1647,15 +1651,21 @@ typedef struct {
      * somewhere else must not rewrite where it came from. 0 = unknown
      * (an entry created with no channel). */
     int      first_seen_channel;
-    /* How long before this entry's insert the table last evicted one
-     * for want of room: seconds on the monotonic clock plus one, so 1
-     * is "this insert was the eviction" and 0 is "it never had". A full
-     * table drops the entry heard longest ago to admit a new one, and
-     * that AP is back on the next hop pass under a new first_seen, so a
-     * first_seen this close to an eviction is a re-insert as likely as
-     * an arrival (#188). Sits in what was padding: sloth_state_t does
-     * not grow, which tests that hold three on the stack depend on. */
-    uint32_t evict_age_s1;
+    /* Is this entry's name on this address new to the session (#188)?
+     * first_seen is when the table first heard the BSSID since it last
+     * dropped it, by age (BEACON_AGE_SECS) or for room, so on its own
+     * it cannot tell an AP that came back from one that arrived. The
+     * table keeps a memory of what it has dropped
+     * (src/beacon_snoop.c, "BSSIDs the table has forgotten") and stamps
+     * the answer here when the entry is created and whenever it takes
+     * another SSID. Only twin_pair_late_arrival() reads it. first_seen
+     * itself is left alone: the observation floors of
+     * COUNTRY_ABSENT, TPC_ABSENT and WPA_DOWNGRADE and the DFS-masking
+     * CSA test all read it as "this entry has been watched since", and
+     * an entry that was dropped has been rebuilt from nothing.
+     * 0 is BEACON_ARRIVAL_NEW so a hand-built entry is an arrival.
+     * Sits in what was padding: sloth_state_t does not grow. */
+    uint8_t  arrival;
     time_t   last_seen;
     int      frame_count;
     /* Evil-twin fingerprint surface. Populated incrementally:

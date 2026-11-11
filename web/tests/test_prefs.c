@@ -131,9 +131,12 @@ static const char *const KEPT_ELSEWHERE[] = {
     "al-triage",  /* ctl.al-triage, by frrs.js (the address wins) */
     "frrs-by",    /* frrs.by: the name a triage row carries */
     "tc-q",       /* frrs.tacdb.q, by frrs.js */
+    /* probes.<id>, by probes.js: put back only as one of its options */
+    "pr-days", "pr-min", "pr-cl-sort", "pr-ss-sort",
 };
 static const char *const NOT_KEPT[] = {
     "q-recipe",   /* an action: it fills the SQL box, whose text is kept */
+    "ak-filter",  /* allkeys.js's legend filter: a look at one metric's keys */
     /* web/ui/frrs.js's forms: each the fields of one change to write,
      * emptied once written, not a setting */
     "frrs-note", "tc-u-name", "tc-u-kind", "tc-u-parent", "tc-p-nom", "tc-p-class",

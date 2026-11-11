@@ -121,4 +121,12 @@ int  web_dev_canon_mac(const char *in, char *out);
 void web_dev_presence_hex(const unsigned char bits[WEB_DEV_CELLS / 8],
                           char out[WEB_DEV_CELLS / 4 + 1]);
 
+/* The strips of n MACs as the Devices rows draw them, in the request's
+ * scope: n * (WEB_DEV_CELLS / 8) bytes into bits, cell 0 of each the
+ * cell at web_dev_strip_from(now_s). For the SSID detail and the Probes
+ * view (web_ssidview.h, web_probes.h). */
+long long web_dev_strip_from(long long now_s);
+void web_dev_strips(const web_m4_t *m, const char (*macs)[WEB_KEY_MAX + 1],
+                    int n, long long now_s, unsigned char *bits);
+
 #endif

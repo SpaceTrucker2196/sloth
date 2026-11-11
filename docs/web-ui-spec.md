@@ -20,6 +20,9 @@
 > | Milestones | One child issue per milestone (W0 allow-list, then M0–M6); #102 is the tracker. | §12 |
 > | Capture scope | **2026-10-26 (owner request):** a Monitor / Hybrid / Local switch in the top bar filters every view by how the data was captured: Monitor the passive monitor radio (and BLE), Local the host's own interfaces (managed Wi-Fi scans included), Hybrid everything (the default). Every `/api` route but `/api/health` and `/api/query` takes `scope=`; a datum's scope is decided by its type in `web/src/web_scope.c`; a device seen both ways shows each scope's own fields; the SQL box is unscoped. `sensor_health` gains `capture_linktype` and `monitor_only`. `docs/wiki/capture-scope.md` is the reference. | §7, §8 (every view) |
 > | Radar view | **2026-11-06 (owner request):** a Radar tab, one half-dome of every radio heard (§8.14). Its dome and its ◇ ▲ ○ marks have no character-cell form (the TUI's `[#]` sky plot is the nearest relative), so the view is **exempt from R12** of `docs/web-visual-spec.md` as an owner ruling, not an oversight; the marks still carry shape and word (R10), the chrome has no gradient, shadow or fill (R8), the selection is the one accent (R1). | visual spec R12, for this view only |
+> | Vendor research's place | **2026-11-11 (owner request):** in the device drawer (the detail view of a WiFi client or access point, and of every other device) the vendor research section is the last block, after the record, the lists, presence, signal, the week, anomalies and the FRRS record. The Lookup card keeps it under the OUI card. | §8.6's drawer order |
+> | SSID detail | **2026-11-11 (owner request):** every SSID the page writes is selectable and opens a detail drawer built as the device drawer is (§8.8), from `/api/wifi/ssid?ssid=`, the name as the base64url of its octets. Read-only, the existing column allow-list, Monitor's and Hybrid's. | §8.8 (no SSID view), §7's route list |
+> | Probes view | **2026-11-11 (owner request):** a Probes tab (§8.15): the stations heard probing with the SSIDs each asked for and what sloth ties each to, the SSIDs searched for, and the stations probing for the same uncommon SSIDs. sloth.db only, nothing stored; Monitor's and Hybrid's. | §8.8's "Probe clients" line is the WiFi tab's and stays |
 
 # sloth web UI: specification
 
@@ -270,7 +273,7 @@ All routes are `GET`. Any other method returns `405`. Responses are JSON unless 
 | `/api/health` | socket state, last record age, `sloth.db` schema version, rows, uptime |
 | `/api/live` | the current in-memory snapshot: devices, hosts, alerts, channels (what the TUI shows) |
 | `/api/series?metric=&key=&from=&to=&tier=` | buckets `[t, avg, min, max, n]` plus the baseline band for the same range |
-| `/api/series/all?metric=&tier=&from=&to=&cols=&after=` | every key of one metric (the 256 most recently seen, `listed` of `total`), each merged into at most `cols` cells (8..480) as a sparse `[i, v, ...]`, keys in byte order, at most 32 to an answer with `more` / `next` (2026-11-11, the Activity chart's `keys: all`) |
+| `/api/series/all?metric=&tier=&from=&to=&cols=&after=` | every key of one metric in the window (the rollup's and the store's; `total` on the first answer), each merged into at most `cols` cells (8..480) as a sparse `[i, v, ...]`, keys in byte order, at most 128 to an answer and fewer once it is full or has run 100 ms, with `more` / `next` (2026-11-11, the Activity chart's `keys: all`) |
 | `/api/baseline?metric=&key=` | the 168 cells, for the hour-of-week heatmap |
 | `/api/anomalies?since=&kind=` | open and recent anomaly episodes, each with `tid`, the id its triage and links are filed under (2026-11-11) |
 | `/api/frrs/related?id=` | an alert's, an anomaly's or a device's links, the other end's triage, and the candidates (2026-11-11); `POST /api/frrs/relate` adds or removes a link (the write surface is `docs/web-frrs-spec.md` §5.2 and §15) |
@@ -298,6 +301,10 @@ All routes are `GET`. Any other method returns `405`. Responses are JSON unless 
 | `/api/aprs/seen?days=&limit=&offset=&q=`, `/api/aprs/station?call=&days=` | the APRS tab's history from sloth.db's `aprs_stations` / `aprs_packets` (v13): stations heard over a window, one station's row and packets (2026-11-05); Monitor's and Hybrid's |
 | `/api/aprs/tracks?hours=` | the Radar tab's APRS entities from sloth.db's `aprs_packets` over 1..24 h: stations and, by name, objects and items, each with its newest packet's time, newest position, motion, status, comment and a moving one's trail (≤ 48 points) (2026-11-06); Monitor's and Hybrid's |
 | `/api/radar` | the Radar tab's Wi-Fi and BLE distance-band census: totals, the rows without an estimate, per band the count and eight strongest rows, and `devs`, each family's 50 most recently heard rows with an estimate (metres, band, trend) (2026-11-06); Monitor's and Hybrid's, no parameter |
+| `/api/wifi/ssid?ssid=` | one SSID's detail (2026-11-11): its BSSIDs now and once with vendor, channel, security, signal, KARMA score and twin links; the stations associated to it and asking for it; its 24 h presence; the alerts naming it or a BSSID of it. `ssid` is the base64url of its octets, `-` for the hidden SSID; compared with `=`, never a pattern |
+| `/api/probes/clients?days=&sort=&limit=&offset=` | the Probes tab's stations (2026-11-11): each MAC of `probe_clients` or `pnl_clients` last seen in the window with its named SSIDs, frames and directed probes, signal, presence strip, and what it is tied to (a `devices` row, an association, a `seqnum_correlations` sibling) |
+| `/api/probes/ssids?days=&sort=&limit=&offset=` | the SSIDs asked for by name in the window: stations asking, how many randomised, the APs beaconing it, first and last seen |
+| `/api/probes/shared?mac=&days=&min=`, `/api/probes/groups?days=&min=` | the stations whose named SSIDs overlap `mac`'s, ranked by `sum of w over the shared / sum of w over either's`, `w(s) = ln(N / df(s))`, on at least `min` shared uncommon SSIDs; and the groups such pairs form |
 | `/events` | SSE stream (see below) |
 
 ### 7.1 SSE events
@@ -409,7 +416,7 @@ The current-vs-average workbench.
 - Main band chart: live line, `mean ± 2 sd` band, `warming` cells hatched. Hover gives the bucket value, the baseline mean, the z-score.
 - Under it, a **small-multiples grid**: one sparkline per key, sorted by `abs(z)` descending, so the outlier is top left. Each sparkline is colour-coded by key with the hash colour from §8.12, and its frame turns heat-coloured when out of band.
 - Toggle: absolute values, or ratio to baseline (`x / mean`), which puts a 10 KB/s IoT device and a 50 MB/s NAS on the same axis.
-- **`keys: one` / `keys: all`** on the main chart (owner request and ruling, 2026-11-11; `docs/web-visual-spec.md` §6.2 and its rulings). One, the default, is the chart above. All draws every key of the metric (the 256 most recently seen, `N of M keys` in the caption when there are more) as its own line on one shared y-scale in the key's hash colour of §8.12, with a legend of every key drawn (rank, swatch, key, latest value; largest first), hover or focus to bring one line forward, a pick to hold it and return, the picked key's band only, and a device's drawer from its entry. A presence metric stacks its strips, a row a key. Kept per browser as `act.allkeys`. Data: `/api/series/all`.
+- **`keys: one` / `keys: all`** on the main chart (owner request and ruling, 2026-11-11; `docs/web-visual-spec.md` §6.2 and its rulings). One, the default, is the chart above. All draws every key of the metric in the window (the rollup's and the store's, not the key picker's 256: owner ruling "lift the cap"; read a page at a time and drawn as it arrives under `loading N of M keys`; the graph holds 8,192 and a read stops at 60 s, either said as `N of M keys`) as its own line on one shared y-scale in the key's hash colour of §8.12, with a legend of every key drawn (rank, swatch, key, latest value; largest first), a filter box and 200 entries at a time once there are many, hover or focus to bring one line forward (the rest `--faint`), a pick to hold it and return, past 256 keys the 256 largest as lines and the rest as their range a cell, the picked key's band only, and a device's drawer from its entry. A presence metric stacks its strips, a row a key. Kept per browser as `act.allkeys`. Data: `/api/series/all`.
 
 ### 8.6 View: Devices
 
@@ -433,6 +440,7 @@ Open episodes first, then closed ones in the selected window. Each card: kind gl
 - **AP table**: `beacon_aps` with SSID history, AKM bits, downgrade flags, MFP, KARMA score. SSID count above 1 is highlighted in `--sev-warn`.
 - **Deauth timeline**: bars per bssid, flood episodes in `--sev-crit`.
 - **Probe clients**: count over time with band.
+- **SSID detail (added 2026-11-11)**: any SSID on the view (the AP table and its SSID history, the hidden word, the card's scan, the channel mix's list) is selectable by click or keyboard and opens a drawer like the device drawer's: the SSID in its display form with the non-printable marker; every BSSID beaconing it (vendor, channel, security and AKM, signal, first and last seen, the new mark), each opening the device drawer; the clients associated to it and the clients probing for it, each opening the device drawer; the 24 h presence strip (any of its BSSIDs present) in G5; the twin and KARMA findings on its BSSIDs; the alerts naming it or its BSSIDs, each opening the alert's page. Whether the operator designated it (`--my-ssid`) is not known to slothweb and the drawer says so. Empty states per R5. Under Local: out of scope, said.
 
 ### 8.9 View: Flows
 
@@ -500,6 +508,28 @@ Owner request: a master "radar / CIC" view. One half-dome centred on the sensor,
 
 **Caption (R9)**: the sources and their windows; the position's source and age; "range log 0.3 m–300 km; height is true elevation angle"; each family's placed and unplaced counts; the devices shown of those with an estimate; "N Wi-Fi, M BLE without a distance estimate"; "distance from signal strength is an estimate; a ring is where the device may be, not where it is". R12 is waived for this view by the ruling in the table above; the glyph-set rules it does meet are R1, R8, R9 and R10. Full description: `web/README.md` (Radar).
 
+### 8.15 View: Probes (added 2026-11-11)
+
+**Purpose**: who is searching for which networks, what each searcher is tied to, and which searchers ask for the same uncommon networks.
+
+**Sources**: sloth.db only (`probe_clients`, `pnl_clients`, `pnl_ssids`, `assocs`, `seqnum_correlations`, `devices`, `beacon_aps`) through the existing allow-list; nothing is stored by slothweb, so the view is what sloth.db retains across restarts. Monitor's and Hybrid's; under Local the tab says why it is empty, as BLE does.
+
+**Controls**: the window (24 h, 7 d, 30 d default, all retained) and the minimum of shared uncommon networks (1 to 4, default 2); an order for each table. Kept per browser.
+
+**Panels**, top to bottom:
+
+- **Clients heard probing**: MAC (randomised marked), vendor, the SSIDs asked for by name (each opens the SSID detail, §8.8), their count, frames (all probe requests) and directed probes as the two counters sloth keeps (no wildcard count exists, and a wildcard is never listed as an SSID), signal, G5 over 24 h, last seen, and "tied to": a device row for the same MAC (opens the drawer), an association seen for it, or sloth's sequence-number correlation with another MAC, worded as a hypothesis with its basis. A row is picked by click or Enter.
+- **Probing for the same networks**: the picked station's SSIDs with df and weight, then the stations sharing its uncommon ones, ranked by the similarity; the formula in the caption.
+- **Networks searched for**: SSID, stations asking, randomised among them, whether an AP in sloth.db beacons it, first and last. Designated networks are not marked (not exported by sloth).
+- **Groups**: stations linked by at least the minimum of shared uncommon networks.
+
+**Similarity**: `w(s) = ln(N / df(s))`; `sim(A,B) = sum of w over A and B / sum of w over A or B`; uncommon is `2 <= df <= U`, `U = N / 20` within 2..16. Worded "probe for the same networks", never an owner.
+
+**Caption (R9)**: the tables, the window, n; N of M wherever a cap or a page cut the list; the empty states in words (R5).
+
+**TUI form (R12)**: the PNL view's rows (client, names, OS, PHY). No new glyph: G5 only.
+
+## 9. Search and lookup tools
 ## 9. Search and lookup tools
 
 ### 9.1 Device query language

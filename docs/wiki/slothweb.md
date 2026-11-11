@@ -113,7 +113,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-11 (the S-meter: every signal graphic on the page is a receiver's S-meter bar, G2's sparkline replaced by owner ruling; 6 dB per S-unit on the scale of the band heard on, S9 = -47 dBm at 2.4 GHz, -54 at 5 GHz, -56 at 6 GHz; the S reading beside the dBm; peak-hold ticks for the window's least and greatest; the GNSS and ADS-B signal cells on dB-Hz and dBFS; the `"rf"` member's `radio`); 2026-11-11 (triage notes on anomalies through the alert's own rows, routes and guards; an anomaly named by its rule, metric and key, each row recording its episode and a state decided on an earlier episode shown as carried; the operator's links between an anomaly and an alert, another anomaly or a device, read from both ends, a gone end "no longer held"; candidates on the same MAC or address within 10 minutes, offered and never stored; slothweb.db v8 with its migration; `web/ui/notes.js`); 2026-11-11 (the Activity graph's `keys: all`: every key of the selected metric on the one graph, a line a key in the key's hash colour on one shared scale, a ranked legend with each key's latest value, hover and pick to bring one line forward, the picked key's band only, presence metrics as stacked strips; `/api/series/all`, each key in at most 480 cells and a page of keys to an answer; R1's one ink set aside for that mode by owner ruling); 2026-11-11 (the presence strip coloured by the sun at the sensor, owner ruling; G5's ruler drawn); 2026-11-06 (the Radar tab's APRS window, `APRS for`, 1 h by default and kept per browser, counted from each entity's newest packet of any kind; APRS objects and items drawn as entities of their own keyed by name; each entity's newest status and comment; a moving entity's 24 h trail; all from the new `/api/aprs/tracks` over sloth.db's `aprs_packets`); 2026-11-06 (the Radar tab's devices: of each family the 50 most recently heard Wi-Fi and BLE rows with a distance estimate on the north axis at their own distance with a faint ring, from `/api/radar`'s new `devs` (metres, band, trend); labels laid out so none overlaps another (stacked columns with leaders for the devices, greedy placement for the rest); a speed-and-heading tick for aircraft and moving APRS stations; the band rings fainter; `/api/radar` every 10 s); 2026-11-06 (the Radar view is the page: the dome fills the window and the header, controls, picked panel and caption float over it); 2026-11-06 (the Radar tab after APRS: one orthographic half-dome centred on the sensor placing GNSS satellites at their az/el, aircraft and APRS stations at their true bearing and elevation angle with the range on a log scale (0.3 m to 300 km), and the Wi-Fi and BLE distance bands as counted rings from the new `/api/radar` census (`web/src/web_radar.c`, `web_frrs_rf_census()`); drag, tilt, zoom, pick, a side panel with "open in" each family's tab through the new `SlothGnss` / `SlothAdsb` / `SlothAprs` `select()` hooks; the camera kept as `radar.yaw|pitch|zoom`; satellites only under Local; exempt from the visual spec's R12 by owner ruling); 2026-11-05 (the APRS tab after ADS-B: `/api/aprs`, `/api/aprs/seen`, `/api/aprs/station`, `web/src/web_aprs.c`, `web/src/web_aprshist.c`, `web/ui/aprs.js`, [[aprs]]; sloth.db v13 read); 2026-11-05 (the GPS Sat tab names each satellite - RINEX id and, from the IGS metadata in `web/data/gnss/`, the vehicle - and draws sky trails from `/api/gnss/tracks`); 2026-11-05 (GNSS and ADS-B history: "satellites seen" and "aircraft seen" from sloth.db's `gnss_sightings` and v12 `adsb_aircraft` / `adsb_sightings`, `/api/gnss/seen`, `/api/gnss/sat`, `/api/adsb/seen`, `/api/adsb/aircraft`, a satellite's C/N0 and elevation and an aircraft's altitude profile and recorded track; `WEB_SDB_SCHEMA_MAX` 12); 2026-11-05 (the ADS-B tab: `/api/adsb`, the aircraft kept in memory from `adsb_aircraft` and the `adsb_*` health block, a table, a north-up position plot with altitude-coloured tracks and a detail panel; Monitor's and Hybrid's, as BLE is; [[adsb]]); 2026-11-03 (#171 V4: G8, the chain timeline, on the WiFi view's chains panel for each bssid with more than one stage, on the alert page for the BSSID the alert names and in the drawer, from the new `/api/wifi/chain` (sloth.db's EVIL_TWIN, KARMA_AP and DEAUTH_FLOOD incidents and associations, the stream's `twin_episode` links kept in memory); the Flows view's matrix first and the chord second, from `/api/flows/graph?form=matrix`; `/api/alert`'s `device.bssid`); 2026-11-03 (#171 V3: the WiFi view as four panels, channels as G3 horizon strips on each channel's own 30 d scale or as z against its hour-of-week baseline with a stacked top-5 drill-in per column, emitters nearest first, the chains panel's deauth rug, probing clients with G2 and G5; History's 30 d strip as a G7 rug on one scale); 2026-11-03 (#171 V2: G2 in the Devices and AP tables' signal column, the drawer and the Lookup card, from the existing `rf.rssi.*` series through each row's `"rf"` member, bold and worded by sloth's own distance band and trend rather than a slope of its own; the new mark and G5's first-seen cell; G6 on risk, karma, the anomaly score and the anom and flow total counts); 2026-11-03 (#171 V1: G1 on every Overview tile, the strip's network facts and the footer's drops, from `live.*`, `records.total`, `sensor.drops` and `ble.devices`, with G1's band words and arrow; the tiles in urgency order; anomaly cards' G1 with the episode shaded and `series unavailable` on a failed read; the hour-of-week grid as G4, warming cells plain grey with no hatch, counted in the caption; the small multiples on one shared scale with a `scale: own` toggle and the |z| sort); 2026-11-03 (#175: sloth.db v11's `alert_incidents` allow-listed, its key and incident_id predicate-only, `WEB_SDB_SCHEMA_MAX` 11; `/api/history/alerts` per incident in the range; the alert page's runs per incident and its `db_incident`); 2026-11-03 (#179: the alert page leads with observations, incidents, the times, confidence and the rule's phrase, count last as evaluations; the list sorted by severity then observations, a muted floor under 20% for a row below CRIT; `/api/alert`'s members in that order); 2026-11-03 (#181: a triage note over its 240 bytes refused beside the buttons with both numbers, counted in bytes as typed, never drawn before the server confirms it); 2026-11-03 (the fourth triage verdict `known`, known good, drawn green); 2026-11-03 (BLE Devices: anonymous advertising one entry and one advertiser, always in Unknown, no proximity row and no read slot; A1 across the 10 s slot measured, quiet, no change); 2026-11-02 (the BLE Devices waterfall's review fixes: its own high-water table, trackers read first, the grade at each row's announced power, the no-sensor and Ubertooth-only states); 2026-11-02 (the BLE Devices waterfall: device classes by time as the WiFi channel mix draws channels, advertisers by time graded by sloth's distance bands, the drawer's signal over the window; the `BLE Devices` and `GPS Sat` labels; `ble_device` re-sent once a 10 s slot while heard); 2026-11-02 (copy JSON's `location` filled: a device's `/api/positions` answer, an alert's page `loc` stamp, both spliced, never re-rendered); 2026-11-02 (copy JSON, first landed 2026-10-27 as `/api/bundle` and a copy and download button on every detail view: rebased onto triage, FRRS, BLE, vendor research and the alert's proof; kinds `ble` and `platform` through the views' own hooks; `frrs`, an alert's `triage`, `vendor_research`, `assessment` and `evidence` filled from their routes' answers; records matched on address members, the alert id parsed once, a 10 s prefetch back-off after a failure, `server.slothweb.build_version`); 2026-11-02 (evidence pcaps withheld unless `--web-serve-evidence-pcap`, refused with `--web-allow-remote` unless `=remote`; a file with several manifest lines verified by any matching line, conflicts said; the snaplen named only when it cut the record; non-regular names marked unreadable); 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
+**Last updated**: 2026-11-11 (the Probes tab: the stations heard probing with the networks each asked for and what sloth ties each to, the networks searched for, the stations probing for the same uncommon networks ranked by an inverse-frequency similarity, and the groups; `/api/probes/clients`, `/ssids`, `/shared`, `/groups` over sloth.db's `probe_clients`, `pnl_clients`, `pnl_ssids`, `assocs` and `seqnum_correlations`, nothing stored; `web/src/web_probes.c`, `web/ui/probes.js`); 2026-11-11 (the hour-of-week grid, G4, by owner ruling: every cell always drawn, so an all-warming map is 168 tiles and not one outline; a warming cell with a sample carries a provisional `--tui-dim` bar for its value so far, never a heat token; the caption counts fed, provisional and not yet observed cells; no cells is R5's dash); 2026-11-11 (the Activity graph's `keys: all` walks every key, not the key picker's 256: `/api/series/all` answers the rollup's and the store's keys 128 at a time, the page draws them as they arrive under `loading N of M keys`, holds 8,192, says any bound as `N of M keys`, draws the 256 largest as lines and the rest as their range a cell, lists 200 legend entries at a time with a filter box; dimmed lines `--faint`); 2026-11-11 (the S-meter: every signal graphic on the page is a receiver's S-meter bar, G2's sparkline replaced by owner ruling; 6 dB per S-unit on the scale of the band heard on, S9 = -47 dBm at 2.4 GHz, -54 at 5 GHz, -56 at 6 GHz; the S reading beside the dBm; peak-hold ticks for the window's least and greatest; the GNSS and ADS-B signal cells on dB-Hz and dBFS; the `"rf"` member's `radio`); 2026-11-11 (triage notes on anomalies through the alert's own rows, routes and guards; an anomaly named by its rule, metric and key, each row recording its episode and a state decided on an earlier episode shown as carried; the operator's links between an anomaly and an alert, another anomaly or a device, read from both ends, a gone end "no longer held"; candidates on the same MAC or address within 10 minutes, offered and never stored; slothweb.db v8 with its migration; `web/ui/notes.js`); 2026-11-11 (the Activity graph's `keys: all`: every key of the selected metric on the one graph, a line a key in the key's hash colour on one shared scale, a ranked legend with each key's latest value, hover and pick to bring one line forward, the picked key's band only, presence metrics as stacked strips; `/api/series/all`, each key in at most 480 cells and a page of keys to an answer; R1's one ink set aside for that mode by owner ruling); 2026-11-11 (the presence strip coloured by the sun at the sensor, owner ruling; G5's ruler drawn); 2026-11-06 (the Radar tab's APRS window, `APRS for`, 1 h by default and kept per browser, counted from each entity's newest packet of any kind; APRS objects and items drawn as entities of their own keyed by name; each entity's newest status and comment; a moving entity's 24 h trail; all from the new `/api/aprs/tracks` over sloth.db's `aprs_packets`); 2026-11-06 (the Radar tab's devices: of each family the 50 most recently heard Wi-Fi and BLE rows with a distance estimate on the north axis at their own distance with a faint ring, from `/api/radar`'s new `devs` (metres, band, trend); labels laid out so none overlaps another (stacked columns with leaders for the devices, greedy placement for the rest); a speed-and-heading tick for aircraft and moving APRS stations; the band rings fainter; `/api/radar` every 10 s); 2026-11-06 (the Radar view is the page: the dome fills the window and the header, controls, picked panel and caption float over it); 2026-11-06 (the Radar tab after APRS: one orthographic half-dome centred on the sensor placing GNSS satellites at their az/el, aircraft and APRS stations at their true bearing and elevation angle with the range on a log scale (0.3 m to 300 km), and the Wi-Fi and BLE distance bands as counted rings from the new `/api/radar` census (`web/src/web_radar.c`, `web_frrs_rf_census()`); drag, tilt, zoom, pick, a side panel with "open in" each family's tab through the new `SlothGnss` / `SlothAdsb` / `SlothAprs` `select()` hooks; the camera kept as `radar.yaw|pitch|zoom`; satellites only under Local; exempt from the visual spec's R12 by owner ruling); 2026-11-05 (the APRS tab after ADS-B: `/api/aprs`, `/api/aprs/seen`, `/api/aprs/station`, `web/src/web_aprs.c`, `web/src/web_aprshist.c`, `web/ui/aprs.js`, [[aprs]]; sloth.db v13 read); 2026-11-05 (the GPS Sat tab names each satellite - RINEX id and, from the IGS metadata in `web/data/gnss/`, the vehicle - and draws sky trails from `/api/gnss/tracks`); 2026-11-05 (GNSS and ADS-B history: "satellites seen" and "aircraft seen" from sloth.db's `gnss_sightings` and v12 `adsb_aircraft` / `adsb_sightings`, `/api/gnss/seen`, `/api/gnss/sat`, `/api/adsb/seen`, `/api/adsb/aircraft`, a satellite's C/N0 and elevation and an aircraft's altitude profile and recorded track; `WEB_SDB_SCHEMA_MAX` 12); 2026-11-05 (the ADS-B tab: `/api/adsb`, the aircraft kept in memory from `adsb_aircraft` and the `adsb_*` health block, a table, a north-up position plot with altitude-coloured tracks and a detail panel; Monitor's and Hybrid's, as BLE is; [[adsb]]); 2026-11-03 (#171 V4: G8, the chain timeline, on the WiFi view's chains panel for each bssid with more than one stage, on the alert page for the BSSID the alert names and in the drawer, from the new `/api/wifi/chain` (sloth.db's EVIL_TWIN, KARMA_AP and DEAUTH_FLOOD incidents and associations, the stream's `twin_episode` links kept in memory); the Flows view's matrix first and the chord second, from `/api/flows/graph?form=matrix`; `/api/alert`'s `device.bssid`); 2026-11-03 (#171 V3: the WiFi view as four panels, channels as G3 horizon strips on each channel's own 30 d scale or as z against its hour-of-week baseline with a stacked top-5 drill-in per column, emitters nearest first, the chains panel's deauth rug, probing clients with G2 and G5; History's 30 d strip as a G7 rug on one scale); 2026-11-03 (#171 V2: G2 in the Devices and AP tables' signal column, the drawer and the Lookup card, from the existing `rf.rssi.*` series through each row's `"rf"` member, bold and worded by sloth's own distance band and trend rather than a slope of its own; the new mark and G5's first-seen cell; G6 on risk, karma, the anomaly score and the anom and flow total counts); 2026-11-03 (#171 V1: G1 on every Overview tile, the strip's network facts and the footer's drops, from `live.*`, `records.total`, `sensor.drops` and `ble.devices`, with G1's band words and arrow; the tiles in urgency order; anomaly cards' G1 with the episode shaded and `series unavailable` on a failed read; the hour-of-week grid as G4, warming cells plain grey with no hatch, counted in the caption; the small multiples on one shared scale with a `scale: own` toggle and the |z| sort); 2026-11-03 (#175: sloth.db v11's `alert_incidents` allow-listed, its key and incident_id predicate-only, `WEB_SDB_SCHEMA_MAX` 11; `/api/history/alerts` per incident in the range; the alert page's runs per incident and its `db_incident`); 2026-11-03 (#179: the alert page leads with observations, incidents, the times, confidence and the rule's phrase, count last as evaluations; the list sorted by severity then observations, a muted floor under 20% for a row below CRIT; `/api/alert`'s members in that order); 2026-11-03 (#181: a triage note over its 240 bytes refused beside the buttons with both numbers, counted in bytes as typed, never drawn before the server confirms it); 2026-11-03 (the fourth triage verdict `known`, known good, drawn green); 2026-11-03 (BLE Devices: anonymous advertising one entry and one advertiser, always in Unknown, no proximity row and no read slot; A1 across the 10 s slot measured, quiet, no change); 2026-11-02 (the BLE Devices waterfall's review fixes: its own high-water table, trackers read first, the grade at each row's announced power, the no-sensor and Ubertooth-only states); 2026-11-02 (the BLE Devices waterfall: device classes by time as the WiFi channel mix draws channels, advertisers by time graded by sloth's distance bands, the drawer's signal over the window; the `BLE Devices` and `GPS Sat` labels; `ble_device` re-sent once a 10 s slot while heard); 2026-11-02 (copy JSON's `location` filled: a device's `/api/positions` answer, an alert's page `loc` stamp, both spliced, never re-rendered); 2026-11-02 (copy JSON, first landed 2026-10-27 as `/api/bundle` and a copy and download button on every detail view: rebased onto triage, FRRS, BLE, vendor research and the alert's proof; kinds `ble` and `platform` through the views' own hooks; `frrs`, an alert's `triage`, `vendor_research`, `assessment` and `evidence` filled from their routes' answers; records matched on address members, the alert id parsed once, a 10 s prefetch back-off after a failure, `server.slothweb.build_version`); 2026-11-02 (evidence pcaps withheld unless `--web-serve-evidence-pcap`, refused with `--web-allow-remote` unless `=remote`; a file with several manifest lines verified by any matching line, conflicts said; the snaplen named only when it cut the record; non-regular names marked unreadable); 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
 listed source cited and read, the generator's refusals tested, the
 reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
 set: <!-- count:vendors -->276<!-- /count --> entries, most of the
@@ -516,7 +516,7 @@ than the tier keeps. `/api/keys` and `/api/metrics` feed the pickers.
 The graph draws one key and the other keys are small multiples. The
 `keys: one` button in the graph's label row turns to `keys: all` (kept
 per browser as `act.allkeys`; one key stays the default), and the graph
-then draws every key the key picker holds, one line a key on one shared
+then draws every key of the metric, one line a key on one shared
 y-scale, each in the key's hash colour: `src/ip_color.c`'s hash of the
 key through the page's `ipColorIndex()`, the same `--k-0..7` that key
 has as an address or a device swatch, so it is the same on every load
@@ -524,21 +524,41 @@ and in every view. Eight colours repeat past eight keys, so the legend
 under the graph is ranked and numbered (latest value, largest first,
 and it says so), the top five lines carry their rank and key at their
 right end, and hovering or focusing an entry or a line draws it last in
-its colour with every other line grey; a click (or Enter) picks a key
+its colour with every other line grey (`--faint`, a step above the
+`--rule` it first was: 2.84:1 on the dark `--bg` against 1.65:1); a click (or Enter) picks a key
 and holds that until the same entry, `show every key` or Esc. A picked
 key gets its band; with every key shown there is none, and the caption
 says why. A device's entry opens its drawer. A presence metric has no
 line, so its keys are stacked strips, a row a key in the same order and
-colours. "Every key" is the 256 most recently seen, as the key picker's
-are: with more the caption says `256 of 300 keys, the most recently
-seen`. The data is `/api/series/all` (`web/src/web_allkeys.c`): each
-key's buckets merged into at most 480 cells (a gauge's mean, a counter's
-sum, presence's any; the caption names the cell), keys in byte order,
-at most 32 to an answer and fewer when the answer is full, `more` and
-`next` for the rest. Measured: the fullest answer took 18 ms from
-memory and 38 ms from the store (`test_allkeys.c`, against the 250 ms
-request budget), and 256 keys of 480 cells paint in 16 ms in headless
-Chrome. This is the one place a line is not one ink (R1 of
+colours. "Every key" is every key (owner ruling of 2026-11-11, "lift
+the cap"): the keys the rollup holds and the keys the store holds a
+bucket of in the window, so an evicted key is still drawn; not the key
+picker's 256, which the picker keeps (a picked key it does not hold is
+said in the caption). The page reads them a page at a time and draws
+what has arrived, the caption saying `loading 3968 of 8212 keys`; a
+change of metric, scope or window drops the read and leaving the view
+stops it. What bounds it is said, never silent: the graph holds 8,192
+keys (`--web-max-keys`' maximum; `8192 of 8212 keys, the first by key
+(the graph holds 8192)`) and a read stops at 60 s. Past 256 keys the
+256 largest are lines and the rest are drawn as the range they span in
+each cell, because a line costs its length in pixels and 8,192 of them
+painted in 88 ms; the caption says `lines for the 256 largest, the
+other 7936 as their range a cell`, and picking or hovering any key
+draws its line. The legend keeps 200 entries in the page at once
+(`show 200 more`) under a filter box on the key's text. The data is
+`/api/series/all` (`web/src/web_allkeys.c`): each key's buckets merged
+into at most 480 cells, fewer once there are many keys (64 at 8,192; a
+gauge's mean, a counter's sum, presence's any; the caption names the
+cell), keys in byte order, at most 128 to an answer and fewer when the
+answer is full or has run 100 ms, `more` and `next` for the rest,
+`total` on the first. Measured (`test_allkeys.c`, against the 250 ms
+request budget): the fullest answer 15 ms from memory and 32 to 37 ms
+from the store; 8,192 keys walked from the store in 64 answers and 89
+to 100 ms, the slowest 5 ms; from a full fine ring in 3.8 to 4.0 s, the
+slowest 71 to 100 ms. In headless Chrome: 8,192 keys read and drawn in 0.7 s
+over 65 requests, the first 128 on the graph inside 142 ms; the graph
+paints in 4 to 5 ms at 8,192 keys, 6 to 7 at 4,096 and 23 to 28 at
+1,024 and at 256 (the same 256 lines of 480 cells). This is the one place a line is not one ink (R1 of
 `docs/web-visual-spec.md`, set aside for this mode by the ruling at its
 head). `web/ui/allkeys.js`, `web/README.md` "Every key on one graph".
 
@@ -701,8 +721,10 @@ The full account is in
   strip, the week heatmap, the episodes) opened from a row or an
   anomaly card, and Lookup. `textContent` only; no request off the
   page's own server.
-- **Vendor research (2026-10-27).** Under the OUI card, in the drawer
-  and on the Lookup card: what `web/data/vendors/` documents about the
+- **Vendor research (2026-10-27).** The drawer's last block (since
+  2026-11-11, owner request: it was under the OUI card, above the
+  names; `#dr-vendor`, after the FRRS record) and under the OUI card on
+  the Lookup card: what `web/data/vendors/` documents about the
   block's holder (kind, country, parent, founded, device classes,
   products found carrying it, radios, documented silicon, FCC grantee
   codes, randomisation, security notes, summary, numbered sources),
@@ -1235,11 +1257,39 @@ and draws them.
   window over an hour reads the minute tier when there is a store, and
   a card keeps its y-range across the Overview's minute (R11).
 - **Hour of week (F3).** The grid is G4 in `glyph.js` now: a warming
-  cell plain `--rule` with no hatch (R8), an all-warming grid only its
-  now outline, the caption `warming: n of 168 cells` with the ramp's
-  top and n. The warming meaning is that word count (R10). G4 has no
-  TUI form yet; the grid predates the glyph layer, so R12 is owed, not
-  met.
+  cell plain `--rule` with no hatch (R8), the caption `warming: n of
+  168 cells` with the ramp's top and n. The warming meaning is that
+  word count (R10). G4 has no TUI form yet; the grid predates the
+  glyph layer, so R12 is owed, not met.
+  **Owner ruling, 2026-11-11** ("it always only has one tile
+  highlighted"). As V1 built it, a grid with every cell warming drew
+  only the now outline; a cell gets one sample a week and needs three,
+  so every map of a new store, and of any device under three weeks
+  old, was one outlined tile on an empty canvas. Now all 168 cells are
+  always drawn, and a warming cell with a sample (1 <= n < 3) is
+  provisional: a `--tui-dim` bar on its `--rule` tile, 1 px for a
+  value of 0 so far, a quarter, a half or three quarters of the tile
+  for a value in the first, second or last third of the provisional
+  scale (0 to 1 for the drawer's shares, 0 to the largest sampled mean
+  for the Overview's rate). The heat ramp stays a fed cell's alone and
+  the bar never fills its tile, so the two cannot be confused in any
+  grey. A never-sampled cell is the bare tile; no baseline at all is
+  R5's dash and `no data`. The caption reads `..., provisional bar in
+  thirds of 0 to 1, n=120, warming: 168 of 168 cells, fed: 0,
+  provisional: 96 (under 3 weeks), not yet observed: 72`.
+  **What starves a cell** (read out of `web_anomaly.c` for the same
+  ruling, not changed): an hour is fed only if slothweb observed it
+  (45 of its 60 minutes with the socket connected and a record inside
+  60 s) and, live, only if it began at or after this process started.
+  A sloth restart with slothweb left up costs its minutes, not its
+  hour, unless over 15 minutes of the hour are lost. A slothweb
+  restart always costs the clock hour it starts in, and the hour it
+  stopped in too when that is an earlier one: one or two hours a
+  restart, never more than the hours the restart touches. Forty-two
+  restarts a week at random hours lose about 22 percent of the week's
+  cells (three samples then take about 3.9 weeks, not 3); a restart at
+  the same hour every day leaves that hour's seven cells warming for
+  good.
 - **Small multiples (F6).** One shared y-scale by default, its top in
   the caption, a `scale: own` toggle kept in the browser (each cell then
   prints its top), sorted by |z| when a key has a baseline and by value
@@ -1414,6 +1464,23 @@ is R1's second exception, for G5 only.
   phases as a band, night 1 px, sunrise and sunset 2, day 3, so a
   phase is a height as well as a colour. Each strip's words name the
   phases and when each begins (`night, sunrise 06:40, day 07:40, ...`).
+- **Sensor time (the second ruling of 2026-11-11).** The ruler's
+  midnight ticks and the words' sunrise and sunset times are in the
+  sensor's zone, not the viewer's, so the ticks and the sun's band
+  agree; every other time on the page stays the viewer's clock, and
+  each table's line and the ruler's title say so (`midnight ticks in
+  sensor time (slothweb's host), UTC-7; every other time on the page
+  is your clock`). The zone is `utc_offset_s`, a number the server
+  reports beside the strips (`/api/devices` and `/api/history/devices`
+  gained it; `/api/device/{mac}` had it in `week`): slothweb's own
+  host's offset, taken as the sensor's, so a slothweb reading a copied
+  sloth.db elsewhere shows that machine's zone, which is why the words
+  name the host. One offset, the one at the window's end, serves the
+  whole ruler: a range over a day that crosses a summer-time change
+  has its earlier ticks an hour out, and the line says `the offset at
+  the range's end throughout`. No offset from the server: the viewer's
+  clock, said as `your clock (the server gave no sensor offset)`. No
+  zone name is read and the browser's zone database is not asked.
 - **The colours** are written in `web/ui/theme.css` for both themes,
   night the least contrast of the four and day `--tui-normal` itself;
   `web/tools/palette.c` fails the build if one is under 3:1 on `--bg`
@@ -2011,6 +2078,103 @@ row-cap cases, `test_store.c`'s
 `web/src/web_store.c` (v7), `web/data/btsig/SOURCE.md`,
 `research/papers/rssi-distance-estimation.md`.
 **Last updated**: 2026-11-02.
+
+## An SSID's detail (2026-11-11)
+
+Owner request: "on the wifi tab we should be able to select any ssid
+and get a detail view just like we do for a client". `web/README.md`'s
+"An SSID's detail" has the route and the drawer in full; what matters
+for a reader of the design:
+
+- **One function, one hook.** Every SSID the page writes already went
+  through `ssidSpan()` (app.js), so making that span a link
+  (`SlothSsid.link()`, `web/ui/ssid.js`) made every name selectable at
+  once: the AP table and its SSID history, the card's scan, the device
+  drawer's last SSID, PNL and associations, the Devices column,
+  History. Two places needed a line of their own: the `(hidden)` word
+  (`ssidHidden()`), and the channel mix's list, whose row is already a
+  button, so the detail is a second, small button beside it.
+- **An SSID is octets.** It travels as `ssid=` the base64url of its
+  octets (`-` for none), computed by the page from the display form
+  (`web_ssid.h`), which reads back to one octet string only. The server
+  accepts one spelling an octet string, binds it and compares with `=`:
+  never a LIKE pattern, never statement text. Empty, not UTF-8, 32
+  octets and `%`/`_` names are each tested.
+- **Read-only, the existing allow-list.** `/api/wifi/ssid` reads
+  `beacon_aps`, `beacon_ap_ssids`, `karma_candidates`, `assocs`,
+  `pnl_ssids` and `alerts` through the M4 reader; no column was added,
+  nothing is written, nothing is kept in slothweb.db. Twin links come
+  from the stream (`web_chain.h`), since sloth.db's `twin_episodes` is
+  not on the list.
+- **The alert walk is bounded by work.** Finding the alerts whose key
+  names one of an SSID's BSSIDs is an `instr()` per key per BSSID with
+  no index to help. A clock bound was tried and failed on the suite's
+  large file, whose 30,000 recent alerts all sit in one two-week
+  stretch: three empty slices predicted nothing about the fourth. The
+  bound is now a row count fixed before the walk (320,000 / (8 +
+  BSSIDs), the newest), and the answer says how far back it reached.
+- **What the page cannot know.** Whether the operator designated the
+  network (`--my-ssid`): sloth's own configuration, in neither
+  sloth.db nor the stream. The drawer says so rather than guess.
+- **Scope.** Monitor's and Hybrid's; `out_of_scope` under Local, as the
+  WiFi view's radio panels are.
+
+**Sources**: `web/src/web_ssidview.h`, `web/src/web_ssid.h`,
+`src/alert_key.c`, `src/db_schema.c`, `web/tests/test_ssidview.c`.
+**Last updated**: 2026-11-11.
+
+## The Probes tab (2026-11-11)
+
+Owner request: "a separate probes tab that shows clients searching for
+ssid's. associating these with clients or other devices where possible
+keep track of ssid's and look for devices probing for the same ssids".
+`web/README.md`'s "Probes" has the routes, the caps and the table of
+what sloth records; the design, for a reader deciding whether to trust
+a row:
+
+- **No new store.** Everything is read from sloth.db
+  (`probe_clients`, `pnl_clients`, `pnl_ssids`, `assocs`,
+  `seqnum_correlations`, `devices`, `beacon_aps`) through the M4
+  reader's existing allow-list. "Keeping track" of SSIDs is therefore
+  whatever sloth.db retains: it survives a restart of slothweb or of
+  sloth, and the window (24 h, 7 d, 30 d, all) is in every caption.
+- **A wildcard probe is not an SSID.** sloth's PNL table drops it
+  (`src/probe_pnl.c`), and the reads refuse an empty name as well. sloth
+  keeps no wildcard count; the view shows `frames` (all probe requests,
+  `probe_clients.frame_count`) and `directed` (`pnl_clients.probe_count`)
+  as the two separate counters they are and does not subtract them.
+- **Tied to, with a basis.** A devices row for the same MAC; an
+  association seen for it; sloth's sequence-number correlation with
+  another MAC. The last is drawn as "may be one radio with", its basis
+  in the tooltip (gap, milliseconds, frames), in the repo's hypothesis
+  wording: a passive sensor corroborates, never confirms. sloth.db's
+  table has no confidence column (the stream's record does), so none is
+  shown.
+- **The similarity.** `w(s) = ln(N / df(s))`, `sim(A,B)` the weight of
+  the shared names over the weight of either's, and a pair ranked only
+  on at least `min` (default 2) shared *uncommon* names, uncommon being
+  asked for by 2 to U stations, `U = N / 20` within 2..16. A name every
+  phone asks for weighs nothing and makes no candidate. The formula and
+  both hand-worked figures are pinned in `test_probes.c`.
+- **Groups** are connected components over pairs sharing at least
+  `min` uncommon names: a station is in a group when it is linked to
+  one other member, not necessarily to all. The caption says so.
+- **Wording.** "probe for the same networks", never an owner. Shared
+  names mean shared places or a shared configuration: a household, an
+  office, a conference.
+- **Bounded.** One ordered pass or indexed reads only, each under the
+  request's 250 ms; the caps are constants in `web_probes.h`, and an
+  answer that met one says N of M. Measured on 200,000 `pnl_ssids` rows
+  in `test_probes.c`.
+- **Scope.** The monitor radio's: empty under Local, saying why.
+- **Privacy.** A probed-SSID list can identify a home or a workplace.
+  The page shows what sloth.db already stores to the peers already
+  admitted and adds no export; the bundle is unchanged.
+
+**Sources**: `web/src/web_probes.h`, `src/probe_pnl.c`,
+`src/capture/probe.c`, `src/seqnum_track.c`, `src/db_schema.c`,
+`web/tests/test_probes.c`.
+**Last updated**: 2026-11-11.
 
 ## Tests
 

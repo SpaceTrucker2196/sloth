@@ -1,7 +1,7 @@
 ---
 type: FRAG_PLAINTEXT
 technique: T1557
-rule_file: src/alerts/rules_twin.c:737 rule_fragattack() (FRAG_PLAINTEXT branch at :692-704)
+rule_file: src/alerts/rules_twin.c:742 rule_fragattack() (FRAG_PLAINTEXT branch at :692-704)
 count_semantics: Since #173 the detail carries `plaintext_unicast` exact below ten and by decade above (`count_bucket()`) and no longer carries the row's `last_sa`/`last_da`, which every FragAttacks branch writes; `observations` moves when the plaintext frame count gains a digit, not when another kind hits the same BSS. `count` and the row's lifetime are unchanged: per tick - one increment per alerts_update() pass (default poll 250 ms) while the per-BSS counter plaintext_unicast stays > 0 and the frag_bss row is live; fire() bumps evaluations/count on each re-assertion of the open key (engine.c:478-479). Not per plaintext frame. The actual count of unprotected frames is carried in the detail (plaintext_unicast), not in count.
 severity_assessment: agree - CRIT on the first hit, not on a threshold. A station whose encrypted traffic sloth has already witnessed has no legitimate reason to send even one plaintext non-EAPOL frame, so the count is evidence volume, not confidence. The ordered per-(BSSID,STA) key-install gate is what makes that defensible.
 false_positive_risk: low - the gate (a prior Protected frame witnessed from this exact station on this BSS) excludes the open-network and still-associating cases that would otherwise drown the rule; the realistic false positive is a driver bug, which is what nine of the twelve FragAttacks CVEs are, and is itself worth surfacing.

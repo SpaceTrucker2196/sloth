@@ -396,7 +396,7 @@
   // the colour it hashed over the octets themselves (k, its *_k member),
   // which is the TUI's; the page's own hash is for an SSID that came
   // without one. One that needed escaping (np) carries a marker.
-  function ssidSpan(ssid, k, np) {
+  function ssidText(ssid, k, np) {
     var sp = el("span", "", ssid);
     if (num(k) && k >= 0 && k < P.ip) sp.style.color = "var(--k-" + k + ")";
     else if (ssid !== "") sp.style.color = "var(--k-" + ipColorIndex(ssid) + ")";
@@ -406,6 +406,19 @@
     w.appendChild(el("span", "npm", "non-printable"));
     w.title = "bytes that are not printable UTF-8 are shown as \\xNN";
     return w;
+  }
+
+  // Every SSID the page writes is selectable (web/ui/ssid.js): a click,
+  // Enter or Space opens its detail, as a device row opens the drawer.
+  // plain: inside a control that has an action of its own. ssidHidden:
+  // the word a view writes for the empty SSID, selectable the same way.
+  function ssidSpan(ssid, k, np, plain) {
+    var n = ssidText(ssid, k, np);
+    return plain || !window.SlothSsid ? n : SlothSsid.link(n, ssid);
+  }
+  function ssidHidden(word) {
+    var n = el("span", "d-dim", word);
+    return window.SlothSsid ? SlothSsid.link(n, null) : n;
   }
 
   // tui_brand_addstr() into parent: brand runs in their colours, the
@@ -1259,6 +1272,8 @@
   // ── views ─────────────────────────────────────────────────────────
   var VIEWS = ["overview", "activity", "devices", "anomalies", "wifi", "flows", "history",
                "lookup", "tacdb", "ble", "gnss", "adsb", "aprs", "radar"];
+  // The Probes view (web/ui/probes.js), a tab of its own.
+  VIEWS.push("probes");
   // The views with a tab, and the drill-downs: the Alerts page (6),
   // an alert's page, the record ticker by type, the sensor's health.
   var NAV = VIEWS.concat(["alerts"]);
@@ -1309,6 +1324,8 @@
     if (v === "aprs" && window.SlothAprs) SlothAprs.show();
     // The Radar view (radar.js, its own module): a no-op when not loaded.
     if (v === "radar" && window.SlothRadar) SlothRadar.show();
+    // The Probes view (probes.js, its own module): a no-op when not loaded.
+    if (v === "probes" && window.SlothProbes) SlothProbes.show();
     if (v === "alerts") alertsView();
     if (v === "alert") alertView();
     if (v === "records") recordsView();
@@ -1394,6 +1411,7 @@
   $("nav-adsb").addEventListener("click", function () { show("adsb"); });
   $("nav-aprs").addEventListener("click", function () { show("aprs"); });
   $("nav-radar").addEventListener("click", function () { show("radar"); });
+  $("nav-probes").addEventListener("click", function () { show("probes"); });
 
   // ── the theme toggle ──────────────────────────────────────────────
   // Light or dark on :root's data-theme, the choice kept in this
@@ -1489,6 +1507,8 @@
     $("v-adsb").classList.toggle("scoped-out", SCOPE === "local");
     // And Dire Wolf's APRS receiver.
     $("v-aprs").classList.toggle("scoped-out", SCOPE === "local");
+    // And the probe requests: the monitor radio's.
+    $("v-probes").classList.toggle("scoped-out", SCOPE === "local");
     // No scoped-out toggle for v-radar: the satellites it draws are the
     // host's own receiver's, every scope's; under Local the module itself
     // skips the three passive fetches and says so in its header.
@@ -1864,18 +1884,27 @@
   }
 
   // The hour-of-week heatmap (§8.4, §8.12), G4 (glyph.js): 7 rows from
-  // Monday, 24 columns, the heat ramp by the cell's mean against the
-  // largest, a warming cell (fewer than warm_n samples) plain --rule
-  // with no hatch (F3, R8), the current cell outlined in --signal. The
-  // grid's own words are its caption (heatCaption): how many cells are
-  // warming and the top of the ramp.
+  // Monday, 24 columns, every cell drawn (owner ruling 2026-11-11). A
+  // fed cell is the heat ramp by its mean against the largest fed mean;
+  // a warming cell (fewer than warm_n samples) is plain --rule with no
+  // hatch (F3, R8), and one with a sample carries its value so far as a
+  // --tui-dim bar on that tile; the current cell is outlined in
+  // --signal. bl is /api/baseline's answer or the drawer's week member:
+  // {cells, warm_n, now_cell} and share (or scale "share_of_weeks") for
+  // a map of shares. No cells is R5's dash with no labels round it. The
+  // grid's own words are its caption (heatCaption).
   var DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   function heatmap(c, bl) {
     var T = theme();
     var cells = bl && bl.cells || null;
     var warm = bl && num(bl.warm_n) ? bl.warm_n : 3;
+    var share = !!bl && (bl.share === true || bl.scale === "share_of_weeks");
     glyph.paint(c, glyph.g4(cells, { w: c.clientWidth, h: c.clientHeight, x0: 32, y0: 14,
-                                     warm: warm, now: bl ? bl.now_cell : -1 }), tok);
+                                     warm: warm, now: bl ? bl.now_cell : -1,
+                                     share: share }), tok);
+    var st = glyph.g4Stats(cells, warm);
+    st.share = share;
+    if (!cells) return st;
     var dpr = window.devicePixelRatio || 1;
     var g = c.getContext("2d");
     var cw = (c.width - 32 * dpr) / 24, ch = (c.height - 14 * dpr) / 7;
@@ -1885,15 +1914,26 @@
     for (var d = 0; d < 7; d++) g.fillText(DAYS[d], 0, 14 * dpr + ch * (d + 0.5));
     g.textBaseline = "top";
     for (var h = 0; h < 24; h += 3) g.fillText(String(h), 32 * dpr + cw * h, 0);
-    return glyph.g4Stats(cells, warm);
+    return st;
   }
   // R9 for a G4: the source, the window, the scale (the ramp's top, in
-  // the series' unit), n (the samples behind the fed cells), and the
-  // warming count whenever a cell is still warming.
+  // the series' unit, while a cell is fed; the provisional bar's scale
+  // while a cell is provisional: 0 to 1 for shares, else 0 to the
+  // largest mean of any sampled cell), n (the samples behind the fed
+  // and the provisional cells), and while a cell is warming the counts:
+  // warming, fed, provisional, not yet observed. No cells: `no data`.
   function heatCaption(source, st, unit) {
-    return glyph.caption({ source: source, window: "hour of week",
-      scale: st.fed ? "ramp 0 to " + fmt(st.max) + (unit ? " " + unit : "") : "",
-      n: st.n, state: st.warming ? "warming: " + st.warming + " of 168 cells" : "" });
+    if (st.none)
+      return glyph.caption({ source: source, window: "hour of week", n: 0, state: "no data" });
+    var u = unit ? " " + unit : "", sc = [];
+    if (st.fed) sc.push("ramp 0 to " + fmt(st.max) + u);
+    if (st.prov)
+      sc.push("provisional bar in thirds of 0 to " + (st.share ? "1" : fmt(st.top) + u));
+    return glyph.caption({ source: source, window: "hour of week", scale: sc.join(", "),
+      n: st.n + st.pn,
+      state: st.warming ? "warming: " + st.warming + " of 168 cells, fed: " + st.fed +
+             ", provisional: " + st.prov + " (under " + st.warm + " weeks), not yet observed: " +
+             st.unseen : "" });
   }
 
   // ── Overview (§8.4) ───────────────────────────────────────────────
@@ -2555,8 +2595,8 @@
         // column's bars share its largest count (F17, R3), and the
         // caption counts what is new and what sloth says is approaching.
         D.pfrom = num(j.presence_from) ? j.presence_from : null;
-        drawRuler(DTD.ruler, D.pfrom, D.pfrom + 144 * 600, 144);
-        sunNote($("d-sun"), D.pfrom, 600, 144);
+        drawRuler(DTD.ruler, D.pfrom, D.pfrom + 144 * 600, 144, j.utc_offset_s);
+        sunNote($("d-sun"), D.pfrom, 600, 144, j.utc_offset_s, true);
         D.anMax = SlothRf.colMax(D.rows, function (d) { return d.anomalies; });
         var nnew = 0, nnear = 0;
         D.rows.forEach(function (d) {
@@ -2616,8 +2656,8 @@
   // on the page is coloured from the same place. None held: one ink,
   // and the strip's words say so. Never the browser's zone or its
   // location: the viewer need not be where the sensor is.
-  var SUN = { pos: null, key: "" };
-  var SUN_POLL_MS = 300000, SUN_RUNS_MAX = 8;
+  var SUN = { pos: null, key: "", off: null };
+  var SUN_POLL_MS = 300000;
   // Every G5 on the page is painted here, and its arguments kept on its
   // canvas, so sunRepaint() can draw it again when the position comes
   // or moves.
@@ -2630,46 +2670,51 @@
   function drawStrip(c, hex, n, first, from, cellS) {
     paintStrip(c, glyph.cellsFromHex(hex, n), first, from, cellS);
   }
+  // The zone G5's ruler and words are in (owner ruling 2026-11-11): the
+  // sensor's, by the UTC offset the answer beside the strip carried
+  // (utc_offset_s), else the last one any answer carried; with none,
+  // the viewer's clock at t, which SlothSun.zone() then names as that.
+  // Every other time on the page stays the viewer's clock.
+  function sunZone(off, t) {
+    if (num(off)) SUN.off = off;
+    return SlothSun.zone(num(off) ? off : SUN.off, -new Date(t * 1000).getTimezoneOffset() * 60);
+  }
   // G5's ruler in a table's header (F10), once per table: the midnight
-  // ticks in the zone the page's own clock labels are in, now where it
-  // falls, and the sun's phases under them when there is a position.
-  function drawRuler(c, from, to, cells) {
+  // ticks in the sensor's zone, now where it falls, and the sun's phases
+  // under them when there is a position. Its title says the zone.
+  function drawRuler(c, from, to, cells, off) {
     if (!c) return;
-    c.g5r = [from, to, cells];
-    if (!num(from) || !num(to)) { glyph.paint(c, [], tok); return; }
+    c.g5r = [from, to, cells, off];
+    if (!num(from) || !num(to)) { c.title = ""; glyph.paint(c, [], tok); return; }
+    var z = sunZone(off, to);
+    c.title = SlothSun.rulerSays(z, to - from);
     glyph.paint(c, glyph.g5Ruler({ w: c.clientWidth, h: c.clientHeight, from: from, to: to,
-                                   offset: -new Date(to * 1000).getTimezoneOffset() * 60,
+                                   offset: z.off,
                                    now: Date.now() / 1000, cells: cells, pos: SUN.pos }), tok);
   }
-  // The strip's phases in words (R10: a colour is also a word), each
-  // with the time it begins in the window, or why there are none.
-  function sunWords(from, cellS, n) {
-    if (!num(from) || !(cellS > 0)) return "";
-    if (cellS > SlothSun.MAX_CELL_S) return "cells over 1 h: presence in one ink";
-    if (!SUN.pos) return "no sensor position: presence in one ink";
-    var r = SlothSun.runs(SlothSun.phases(from, cellS, n, SUN.pos));
-    if (!r.length) return "";
-    var head = "coloured by the sun at the sensor (" + SUN.pos.from + "): ";
-    if (r.length > SUN_RUNS_MAX) return head + SlothSun.WORDS.join(", ");
-    return head + r.map(function (x) {
-      return SlothSun.WORDS[x[0]] + (x[1] ? " " + hhmmss(from + x[1] * cellS).slice(0, 5) : "");
-    }).join(", ");
+  // The strip's phases in words (SlothSun.says()), their times in the
+  // ruler's zone. ruled: a table's line, which speaks for its ruler too
+  // and so names the zone once for the table.
+  function sunWords(from, cellS, n, off, ruled) {
+    var z = sunZone(off, from + n * cellS), s = SlothSun.says(from, cellS, n, SUN.pos, z);
+    if (!ruled || !num(from) || !(cellS > 0)) return s;
+    return (s ? s + "; " : "") + SlothSun.rulerSays(z, n * cellS);
   }
-  function sunNote(e, from, cellS, n) {
+  function sunNote(e, from, cellS, n, off, ruled) {
     if (!e) return;
-    e.g5w = [from, cellS, n];
+    e.g5w = [from, cellS, n, off, ruled];
     e.classList.add("sunw");
-    e.textContent = sunWords(from, cellS, n);
+    e.textContent = sunWords(from, cellS, n, off, ruled);
   }
   function sunRepaint() {
     var cs = document.querySelectorAll("canvas"), i;
     for (i = 0; i < cs.length; i++) {
       if (cs[i].g5) paintStrip(cs[i], cs[i].g5[0], cs[i].g5[1], cs[i].g5[2], cs[i].g5[3]);
-      if (cs[i].g5r) drawRuler(cs[i], cs[i].g5r[0], cs[i].g5r[1], cs[i].g5r[2]);
+      if (cs[i].g5r) drawRuler(cs[i], cs[i].g5r[0], cs[i].g5r[1], cs[i].g5r[2], cs[i].g5r[3]);
     }
     var ws = document.querySelectorAll(".sunw");
     for (i = 0; i < ws.length; i++)
-      if (ws[i].g5w) sunNote(ws[i], ws[i].g5w[0], ws[i].g5w[1], ws[i].g5w[2]);
+      if (ws[i].g5w) sunNote(ws[i], ws[i].g5w[0], ws[i].g5w[1], ws[i].g5w[2], ws[i].g5w[3], ws[i].g5w[4]);
   }
   function sunLoad() {
     getJSON("/api/gnss").then(function (j) {
@@ -2974,6 +3019,8 @@
     $("dr-sw").style.background = keyColor(mac);
     $("dr-mac").className = "d-dim";
     set("dr-note", "loading");
+    // The last device's research is not this one's.
+    clear("dr-vendor");
     if (window.SlothLocation) window.SlothLocation.drawer(mac);
     // G8 when the device is a BSSID with more than one stage (§6.8).
     if (window.SlothChain) SlothChain.drawer(mac);
@@ -2998,7 +3045,6 @@
         ["dhcp vci", dt.dhcp_vci]
       ] : [["stream ip", j.stream ? ipVal(j.stream.ip, IP_SRC.dev) : null],
            ["stream first seen", j.stream && num(j.stream.first_seen) ? stamp(j.stream.first_seen) : null]]));
-      vendorResearch(box, j.vendor_research, j.oui);
       itemList(box, "names (passive)", j.names, nameLine, false);
       itemList(box, "pnl ssids", j.ssids, function (x) { return ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np); }, j.ssids_more);
       itemList(box, "associations", j.assocs, function (x) {
@@ -3034,7 +3080,7 @@
       drawStrip($("dr-strip"), j.presence, 144,
                 glyph.firstCell(rec ? rec.first_seen : null, j.presence_from, 600, 144),
                 j.presence_from, 600);
-      sunNote($("dr-sun"), j.presence_from, 600, 144);
+      sunNote($("dr-sun"), j.presence_from, 600, 144, j.week ? j.week.utc_offset_s : null);
       // G2 at the drawer's width (F9, §6.8): the device's signal over
       // the hour, with sloth's band and trend.
       var drf = clear("dr-rf");
@@ -3045,7 +3091,8 @@
         cells = [];
         for (var c = 0; c < 168; c++) cells.push([wk.cells[c][0], 0, wk.cells[c][1]]);
       }
-      var ws = heatmap($("dr-week"), { cells: cells, warm_n: wk.warm_n, now_cell: wk.now_cell });
+      var ws = heatmap($("dr-week"), { cells: cells, warm_n: wk.warm_n, now_cell: wk.now_cell,
+                                       share: true });
       set("dr-week-note", heatCaption("dev.present, share of weeks present", ws, ""));
       var an = $("dr-anoms");
       while (an.firstChild) an.removeChild(an.firstChild);
@@ -3053,6 +3100,11 @@
       (j.anomalies || []).forEach(function (a) { an.appendChild(card(a)); });
       if (window.SlothFrrs) SlothFrrs.mountDrawer(mac, j);
       if (window.SlothNotes) SlothNotes.drawer(mac);
+      // The vendor research last (owner request 2026-11-11): under the
+      // device's own record, strip, signal, week, anomalies and FRRS
+      // record, in the drawer's last container, not between its
+      // addresses and its names.
+      vendorResearch(clear("dr-vendor"), j.vendor_research, j.oui);
     }).catch(function (e) { if (gen === DR.gen) set("dr-note", errText(e.message)); });
   }
 
@@ -3376,7 +3428,7 @@
       var nm = el("span", "nm");
       if (t.kind === "ap") {
         nm.appendChild(t.ssid === null || t.ssid === undefined ? el("span", "d-dim", "(no name)")
-                                                                : ssidSpan(String(t.ssid), t.ssid_k, t.ssid_np));
+                                                                : ssidSpan(String(t.ssid), t.ssid_k, t.ssid_np, true));
         nm.appendChild(el("span", "d-dim", "  " + t.id + "  AP"));
       } else {
         nm.appendChild(el("span", "d-normal", t.id));
@@ -3387,6 +3439,7 @@
       b.appendChild(el("span", "n d-normal", share(m[e + 1])));
       b.addEventListener("click", mixGo(t));
       li.appendChild(b);
+      if (t.kind === "ap" && window.SlothSsid) SlothSsid.more(li, t.ssid === undefined ? null : t.ssid);
       ol.appendChild(li);
     }
     if (num(m[1]) && m[1] > 0) {
@@ -3488,7 +3541,7 @@
     // The SSID in its hash colour; the warning (KARMA, multi-VAP) is
     // the squares after it, at the heat the TUI warns at.
     var ss = el("span", "c-ssid");
-    ss.appendChild(a.ssid === null ? el("span", "d-dim", "(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
+    ss.appendChild(a.ssid === null ? ssidHidden("(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
     // §6.3: the SSID count as a row of small squares after the SSID, one
     // each (eight, then a plus), not "+3 ssids" in words; the count in
     // words in its title.
@@ -3617,8 +3670,8 @@
       if (gen !== WF.gen) return;
       WF.cl = j.rows || [];
       WF.clFrom = num(j.presence_from) ? j.presence_from : null;
-      drawRuler(DTWL.ruler, WF.clFrom, WF.clFrom + 144 * 600, 144);
-      sunNote($("w-cl-sun"), WF.clFrom, 600, 144);
+      drawRuler(DTWL.ruler, WF.clFrom, WF.clFrom + 144 * 600, 144, j.utc_offset_s);
+      sunNote($("w-cl-sun"), WF.clFrom, 600, 144, j.utc_offset_s, true);
       var nnew = 0, nnear = 0;
       WF.cl.forEach(function (d) {
         if (glyph.isNew(d.first_seen, WF.clFrom)) nnew++;
@@ -3699,7 +3752,7 @@
       var row = el("div", "dt-row");
       row.appendChild(macCell(a.bssid));
       var ss = el("span", "");
-      ss.appendChild(a.ssid === null ? el("span", "d-dim", "(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
+      ss.appendChild(a.ssid === null ? ssidHidden("(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
       row.appendChild(ss);
       row.appendChild(el("span", "n d-normal", String(a.channel)));
       row.appendChild(el("span", "n d-dim", num(a.signal) ? String(a.signal) : "-"));
@@ -4432,8 +4485,8 @@
       HS.cells = j.presence_cells;
       HS.pfrom = num(j.presence_from) ? j.presence_from : null;
       HS.cellS = num(j.presence_cell_s) ? j.presence_cell_s : null;
-      drawRuler(DTH.ruler, HS.pfrom, HS.pfrom + HS.cells * HS.cellS, HS.cells);
-      sunNote($("h-sun"), HS.pfrom, HS.cellS, HS.cells);
+      drawRuler(DTH.ruler, HS.pfrom, HS.pfrom + HS.cells * HS.cellS, HS.cells, j.utc_offset_s);
+      sunNote($("h-sun"), HS.pfrom, HS.cellS, HS.cells, j.utc_offset_s, true);
       histDevs();
       set("h-dev-count", (j.rows || []).length + " overlap the range" +
           (j.more ? ", more than shown" : "") + "; strip: " + fmt(j.presence_cells) +
@@ -5140,7 +5193,7 @@
         b.addEventListener("click", function () { openDrawer(mac); });
         box.appendChild(b);
         drawStrip($("ad-strip"), d.presence, 144, -1, d.presence_from, 600);
-        sunNote($("ad-sun"), d.presence_from, 600, 144);
+        sunNote($("ad-sun"), d.presence_from, 600, 144, d.week ? d.week.utc_offset_s : null);
         AD.others = (d.alerts || []).filter(function (x) { return x.id !== j.id && x.id !== j.db_id; });
         AD.othersNone = "none";
         othersDraw();
@@ -5822,6 +5875,16 @@
   // Anomaly triage and the links (web/ui/notes.js): the page's helpers, lent once.
   if (window.SlothNotes) SlothNotes.init({ el: el, getJSON: getJSON, prefGet: prefGet, stamp: stamp,
     shortStamp: shortStamp, go: go, openDrawer: openDrawer, openBleDrawer: openBleDrawer });
+  // One SSID's detail (web/ui/ssid.js): the page's helpers, lent once.
+  if (window.SlothSsid) SlothSsid.init({ el: el, getJSON: getJSON, errText: errText, keyColor: keyColor,
+    stamp: stamp, shortStamp: shortStamp, kvList: kvList, drawStrip: drawStrip, ssidPlain: ssidText,
+    openDrawer: openDrawer, alertLink: alertLink, scope: function () { return SCOPE; } });
+
+  // The Probes view (web/ui/probes.js): the page's helpers, lent once.
+  if (window.SlothProbes) SlothProbes.init({ el: el, getJSON: getJSON, errText: errText,
+    keyColor: keyColor, shortStamp: shortStamp, drawStrip: drawStrip, DataTable: DataTable,
+    ssidSpan: ssidSpan, openDrawer: openDrawer, show: show, scope: function () { return SCOPE; },
+    prefGet: prefGet, prefSet: prefSet });
 
   // The BLE Devices waterfall (web/ui/bledev.js): the page's helpers, lent once.
   if (window.SlothBleDev) SlothBleDev.init({ el: el, set: set, getJSON: getJSON, theme: theme,
@@ -5849,7 +5912,9 @@
     pickKey: function (k) {
       var i = A.keys.indexOf(k);
       if (i >= 0) { A.key = i; $("a-key").value = String(i); actKeep(); }
+      return i >= 0;
     },
+    active: function () { return view === "activity"; },
     redraw: function () { if (view === "activity") refresh(); } });
 
   // G2, G6 and the new mark in the tables (web/ui/rf.js).

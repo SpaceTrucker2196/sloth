@@ -490,6 +490,9 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/wifi/chain?from=&to=&cols=&bssid=` | `200` JSON, G8's attack chain per BSSID: the deauth timeline's rows (or the one `bssid`) with the EVIL_TWIN, KARMA_AP and association stages sloth.db holds against each and the links the stream's `twin_episode` made (#171 V4, below); out of scope under Local; `400` for a parameter that does not pass (`bad_bssid`); `503` with no time series |
    | `GET /api/wifi/aps?sort=&dir=&limit=&offset=` | `200` JSON, a page of sloth.db's beacon_aps; `400`; `503` with no `--sloth-db` or sloth.db unreadable |
    | `GET /api/wifi/local?limit=` | `200` JSON, the managed Wi-Fi card's own scan (sloth.db `wifi_aps`, newest first, at most 100) and link (`wifi_stas`, at most 32); out of scope under Monitor; `400`; `503` as above |
+   | `GET /api/wifi/ssid?ssid=` | `200` JSON, one SSID's detail ([An SSID's detail](#an-ssids-detail)): its access points now and once, the stations associated to it and asking for it, its 24 h presence, its KARMA and twin findings and the alerts naming it; `ssid` is the base64url of its octets, or `-` for the hidden (empty) SSID; out of scope under Local; `400` `missing_ssid`, `bad_ssid`; `503` as above |
+   | `GET /api/probes/clients?days=&sort=&limit=&offset=`, `/api/probes/ssids?days=&sort=&limit=&offset=` | `200` JSON, the Probes tab ([Probes](#probes)): the stations heard probing with the networks each asked for by name, and the networks asked for with how many stations ask; `days` 0 (all sloth.db retains) or 1..400, default 30; `limit` 1..100; each with `total` beside `count`; out of scope under Local; `400` `bad_days`, `bad_sort`, `bad_limit`, `bad_offset`; `503` as above |
+   | `GET /api/probes/shared?mac=&days=&min=`, `/api/probes/groups?days=&min=` | `200` JSON, the stations probing for the same networks as `mac`, ranked by the similarity, and the groups of stations linked by shared uncommon networks; `min` 1..8, default 2; out of scope under Local; `400` `missing_mac`, `bad_mac`, `bad_min`, `bad_days`; `503` as above |
    | `GET /api/history/overview`, `/api/history/devices`, `/api/history/alerts`, `/api/history/flows` (`?from=&to=` and their own) | `200` JSON, the History view's reads of sloth.db; `400`; `503` as above |
    | `GET /api/sessions`, `/api/sessions/new?id=` | `200` JSON, the survey sessions and one's "new since the previous session"; `404` for a session sloth.db does not have |
    | `GET /api/flows?proto=&from=&to=&ip=&sort=&dir=&limit=&offset=` | `200` JSON, one protocol table of sloth.db (M6, below); `400` for a parameter that does not pass, `proto=mqtt` included (`proto_withheld`); `503` as above |
@@ -1607,7 +1610,7 @@ this build serves them.
 GET /api/series/all?metric=host.rx_rate&tier=fine&from=1792540800&to=1792627200&cols=480
 {"metric":"host.rx_rate","tier":"fine","step":10,"cell":180,"cells":480,
  "kind":"gauge","unit":"B/s","keykind":"ip","from":1792540800,"to":1792627200,
- "total":300,"listed":256,
+ "total":300,
  "keys":[{"key":"192.0.2.10","p":[0,1002.5,1,998.25,7,1010]},...],
  "more":true,"next":"192.0.2.31","source":"store+memory"}
 ```
@@ -1615,7 +1618,8 @@ GET /api/series/all?metric=host.rx_rate&tier=fine&from=1792540800&to=1792627200&
 Every key of one metric over one window, for the Activity graph's
 `keys: all` (`web/src/web_allkeys.c`). One `/api/series` read a key
 would be 2,560 requests for 256 keys over 24 h at 10 s (ten pages of 900
-each); this is one read a key on the server and a handful of answers.
+each), and 81,920 for 8,192; this is one read a key on the server, 128
+keys to an answer.
 
 - **Cells.** A key's buckets are merged into at most `cols` cells
   (8..480, 240 when absent). A cell is `cell` seconds, a whole number of
@@ -1625,15 +1629,25 @@ each); this is one read a key on the server and a handful of answers.
   a 0. A cell's value is its buckets' merge read as `/api/series` reads
   one bucket: a gauge's mean, a counter's **sum** (per `cell` seconds,
   not per bucket), presence's max. Six significant digits.
-- **Keys, and the cap.** The keys are `/api/keys`': the 256 most
-  recently seen that the scope holds. `listed` is how many that is and
-  `total` how many the metric has, so a reader can say `256 of 300`;
-  nothing is cut without both numbers.
-- **Paging.** Keys are answered in byte order, at most 32 to an answer
-  and fewer when the 64 KB answer is full (a key is never cut: the one
-  that did not fit is the next answer's first). `more` and `next` say to
-  ask again with `after=next`. The set is read afresh for each answer,
-  so a key that entered or left the 256 between two pages is the one
+- **Keys: every one.** Not `/api/keys`' 256 most recently seen (owner
+  ruling of 2026-11-11, "lift the cap"): the union of the keys the
+  rollup holds a series of now (at most `--web-max-keys`, 8,192 at its
+  maximum) and the keys the store holds a bucket of in the window
+  (`web_store_keys_after()`: one seek of the `(metric, key)` index a
+  series and one of the tier's primary key, no scan of the window), so
+  a key the rollup has since evicted is still answered from its rows.
+  The first answer (no `after`) carries `total`, how many there are;
+  the others `"total":null`. A store holding more than the 65,536 keys
+  one answer counts says `"total_min":true`, and the page writes
+  `65536+`.
+- **Paging.** Keys are answered in byte order, at most 128 to an
+  answer, and fewer when the 64 KB answer is full (a key is never cut:
+  the one that did not fit is the next answer's first) or when the
+  answer has taken keys for 100 ms (`WEB_ALLKEYS_ANSWER_MS`; it always
+  answers one), which is what keeps an answer inside the request's
+  250 ms whatever the keys hold. `more` and `next` say to ask again
+  with `after=next`. The lists are read afresh for each answer, so a
+  key that appeared or was evicted between two pages is the one
   inconsistency a paged read can show; none is answered twice.
 - **Bounds.** `after` is a key of the metric, canonicalised as `key`
   is (`bad_after`; a global metric takes none); `cols` out of range is
@@ -1644,13 +1658,20 @@ each); this is one read a key on the server and a handful of answers.
   not hold answers no key and `"out_of_scope":true`.
 - **Cost.** Rows, not cells: a key is one read of at most 10,081
   buckets (the store's and the ring's, merged as `/api/series` merges
-  them). Measured by `test_allkeys.c` on the build host, unsanitized:
-  the fullest answer memory can give (19 keys of 4,096 buckets each in
-  480 cells, 62,384 bytes, the ring's 131,072 rows scanned for each)
-  took 18 ms, and the fullest the store can (14 keys of 24 h at 10 s,
-  8,640 rows each, 62,659 bytes) 38 ms, against the 250 ms a request is
-  allowed. A dense key is some 4.5 KB, so 256 dense keys are about 19
-  answers; sparse keys (devices) go 32 to an answer, 8 answers.
+  them) and one pass over the fine ring. Measured by `test_allkeys.c`
+  on the build host, unsanitized, on a busy machine:
+
+  | what | answers | bytes | in all | the slowest answer |
+  |---|---|---|---|---|
+  | the fullest answer from memory: 19 keys of 4,096 buckets each in 480 cells | 1 | 62,372 | 15 to 16 ms | |
+  | the fullest from the store: 14 keys of 24 h at 10 s, 8,640 rows each | 1 | 62,647 | 32 to 37 ms | |
+  | 8,192 keys walked from the store (8 rows each, none in the rollup), 64 cells | 64 | 604,978 | 89 to 100 ms | 4.5 to 5.4 ms (the first, which counts the keys: 6 to 8 ms) |
+  | 8,192 keys walked from memory (16 buckets each: the ring's 131,072 rows full), 64 cells | 64 to 65 | 416,178 | 3.8 to 4.0 s | 71 to 100 ms (100 is the answer's own time bound stopping it) |
+
+  The last is the ring's worst: `web_rollup_fine()` passes over all
+  131,072 rows for each key, 0.47 ms a key, so a full ring and the most
+  keys a rollup can hold is 3.8 s of answers, each inside the budget.
+  A dense key is some 4.5 KB, so dense keys go 14 to an answer.
 
 ### The Activity view
 
@@ -1693,12 +1714,18 @@ in the key's colour, with a legend.
   every load and in every view. Nothing but the key's bytes goes in:
   not its rank, not how many keys there are. `eth0` is `--k-6`,
   `wlan0mon` `--k-1` (pinned in `test_allkeys.c`).
-- **More keys than colours.** Eight hues and up to 256 keys: colours
+- **More keys than colours.** Eight hues and up to 8,192 keys: colours
   repeat, and colour is never the only carrier (R10). The legend is
   ranked and numbered; the top five lines carry `rank key` at their
   right end, pushed apart so no two overlap; hovering or focusing a
   legend entry, or hovering a line, draws that line last in its colour
-  and every other line in `--rule`.
+  and every other line in `--faint`. (`--rule` at first; the owner
+  asked for the dimmed lines "a little more visible" on 2026-11-11.
+  `--faint` is 2.84:1 on `--bg` and 2.72:1 on `--panel` in the dark
+  theme, 3.03 and 3.39 in the light, where `--rule` is 1.65 and 1.58,
+  1.34 and 1.51: `make web-contrast`. `--tui-dim`, 4.55:1, is a
+  phosphor green and would read as a ninth key colour; the picked
+  line's hue against a grey is what makes it dominate.)
 - **The legend** lists every key drawn: rank, swatch, the key (through
   `keySpan()`, so an address is an address), and its latest value in
   the window (`-` when it has none). The order is stated beside it:
@@ -1708,13 +1735,47 @@ in the key's colour, with a legend.
   again, `show every key`, or Esc. A click on a line does the same.
   Up and Down move between entries. A pick also sets the key picker, so
   `keys: one` opens on that key, and moving the key picker picks that
-  key here. A device's entry carries a `device` button, the drawer.
-  (A host has no detail view of its own to open by address, so an
-  address's entry has none.)
-- **"Every key" is the key picker's.** `/api/keys` lists the 256 most
-  recently seen, and so does this. With more, the caption says
-  `256 of 300 keys, the most recently seen`; with all of them, `19
-  keys`. Never fewer without saying so.
+  key here; the key picker keeps its 256, so a picked key it does not
+  hold is said in the caption: `; 02:5e:ed:00:1f:fc is not one of the
+  key picker's 256`. A device's entry carries a `device` button, the
+  drawer. (A host has no detail view of its own to open by address, so
+  an address's entry has none.) **At 8,192 keys** the legend is not
+  8,192 buttons: 200 entries are in the page at once, `show 200 more`
+  adds as many, and a **filter** box over it (`#ak-filter`, the page's
+  own search input, not kept: it is a look at one metric's keys)
+  narrows the entries to the keys whose text holds what is typed,
+  ASCII case aside. An entry keeps the rank it has among every key,
+  and the line beside the box says `Listed: 16 of 16 matching, of
+  8192`. The filter narrows the list, not the graph.
+- **"Every key" is every key** (owner ruling of 2026-11-11, "lift the
+  cap"): the route walks them all, 128 to an answer, and the page
+  draws what has arrived while the rest is read, the caption saying
+  `loading 3968 of 8212 keys`, each answer handled in its own turn so
+  the page stays responsive, the graph drawn again every 300 ms. What
+  bounds it is said in the caption, never silent:
+  - the graph holds **8,192 keys**, `--web-max-keys`' own maximum, so
+    every key a rollup can hold is drawn; a store with more in the
+    window reads `8192 of 8212 keys, the first by key (the graph holds
+    8192)`;
+  - a read that has run **60 s** stops: `3072 of 8192 keys (the read
+    was stopped at 60 s)`;
+  - a read the server ended: `(the read stopped)`.
+
+  A read is dropped without a word when the metric, the scope, the
+  window or the mode changes, and stops when the Activity view is no
+  longer the one shown; coming back starts it afresh. A later read of
+  the same window (a cell's time on, 60 s at most, and never sooner
+  than ten times what the last read took) lands whole, so the graph
+  does not flicker each minute.
+- **What 8,192 lines are.** A line costs its length in pixels to
+  draw, so 8,192 of them are 8,192 plot widths however few cells each
+  has (measured: 88 ms). So the **256 largest** by the legend's order
+  are lines, and the focus row whatever its rank; the rest are drawn as
+  one thing, **the range they span in each cell** (least to most, one
+  `--faint` rectangle a cell at 35 percent, under the lines), which is
+  what a mass of lines shows. The caption says `lines for the 256
+  largest, the other 7936 as their range a cell`. Pick or hover any
+  key, from the legend or its filter, and its line is drawn.
 - **One scale, stated.** Every line is on one y-scale, grown and never
   shrunk on a refresh (R11), its top in the caption: `shared scale,
   top 86.6k B/s`.
@@ -1726,25 +1787,47 @@ in the key's colour, with a legend.
 - **Cells, tier, cost.** Each key is read as at most 480 cells, one for
   every two pixels of the plot; the caption names them: `fine in 3 min
   cells (mean)`, `(sum)` for a counter, whose values are then per cell
-  and not per bucket. The tier is the finest whose buckets over the
-  window number at most 10,080: fine for 1 h, 6 h and 24 h, minute for
-  7 d, hour for 30 d and 400 d (the one-key graph reads 30 d at the
-  minute tier; the caption says which). The window is read again when
-  it, the metric or the scope changes or a cell's time has passed (60 s
-  at most); a hover or a pick repaints from what was read. Measured in
-  headless Chrome on the build host (software raster, 1200 px, device
-  ratio 1): the worst the graph can hold, 256 keys of 480 cells each
-  (122,893 marks), is 3 ms to build and 16 ms to paint; 32 keys of 480
-  cells are 2 ms and 3 ms. That is with the lines of one colour in one
-  path; through `glyph.paint()`, which strokes each segment, the same
-  list took 116 ms, which is why the module has its own painter
-  (`paintMarks()`, the same rules).
+  and not per bucket. The cells the graph holds across all its keys
+  are bounded (524,288; 131,072 for a presence metric, whose every
+  cell can be a mark of its own), so past 1,092 keys each is read at
+  fewer: 128 cells at 4,096 keys, 64 at 8,192 (the first answer says
+  how many keys there are, and the walk starts again at the cells that
+  fit). The tier is the finest whose buckets over the window number at
+  most 10,080: fine for 1 h, 6 h and 24 h, minute for 7 d, hour for
+  30 d and 400 d (the one-key graph reads 30 d at the minute tier; the
+  caption says which; kept by owner ruling of 2026-11-11). A hover or
+  a pick repaints from what was read. Measured in headless Chrome on
+  the build host (software raster, 1200 px, device ratio 1), the
+  graph's build and paint, with no focus and with a key picked:
+
+  | keys | cells a key | marks | build | paint |
+  |---|---|---|---|---|
+  | 256 | 480 | 122,893 | 5 to 21 ms | 24 to 28 ms (16 ms on a quieter host, the first measurement) |
+  | 1,024 | 480 | 123,373 | 12 to 23 ms | 23 to 27 ms |
+  | 4,096 | 128 | 32,909 | 8 to 12 ms | 6 to 7 ms |
+  | 8,192 | 64 | 16,461 | 7 to 8 ms | 4 to 5 ms |
+
+  (ranking 8,192 rows: 2 to 3 ms). 256 and 1,024 keys are the same 256
+  lines of 480 cells, the worst the graph draws; more keys are fewer
+  cells a line. Without the fold, 8,192 lines of 16 cells painted in
+  86 to 94 ms. The lines of one row are one path: through
+  `glyph.paint()`, which strokes each segment, the 256-key list took
+  116 ms, which is why the module has its own painter (`paintMarks()`,
+  the same rules). **End to end**, in headless Chrome against a
+  slothweb whose store held 8,192 synthetic devices (24 rows each in
+  the hour): 8,192 of 8,212 keys read, ranked and drawn in 0.65 to
+  0.71 s over 65 requests, the first 128 keys on the graph at 86 to
+  142 ms; two tasks over 50 ms on the page's thread in that time (50
+  and 58 ms, each a redraw of the legend and the graph).
 - **Presence.** A presence metric has no line. Its keys are stacked
   strips on one canvas: a row a key, 8 px, in the legend's order (most
   cells present first; the legend's value is `n/480 cells`), each
   run of present cells in the key's colour, the rank beside the first
   row and every fifth, three time labels under the last row, the same
-  hover and pick. Stacked and not disabled, because "who was here when,
+  hover and pick. Past 512 keys a row is 4 px, past 1,024 2 px, past
+  4,096 1 px, so 8,192 keys are a canvas of 8,192 px (a browser makes
+  no taller one reliably); measured, 8,192 rows of 16 cells (46,506
+  marks) paint in 26 to 28 ms, 1,024 of 128 cells in 25 ms. Stacked and not disabled, because "who was here when,
   across every device" is what a presence metric is for.
 - **Scopes and empty states.** Every scope the view has: the keys are
   the scope's (an interface by its radio), and a metric the scope does
@@ -2046,7 +2129,10 @@ The Overview (§8.4) gains a throughput tile (the `iface.rx_rate` of the
 interface sloth reported most recently) with its 24 h sparkline over the
 baseline band, an open-anomalies tile, "now vs normal" (the same series,
 larger), the hour-of-week heatmap of that series (7 x 24, the heat ramp
-by mean, warming cells plain grey (no hatch, #171 V1), the current cell outlined in
+by mean, warming cells plain grey (no hatch, #171 V1; since the ruling
+of 2026-11-11 every cell is drawn and a warming cell with a sample
+carries a `--tui-dim` bar for its value so far, [below](#the-glyph-layer)),
+the current cell outlined in
 `--signal`), and the five highest-scoring open episodes. Since #171
 V1 every tile has its own series and band (the glyph layer, below):
 the hour-of-week grid's warming cells are plain grey, counted in its
@@ -2395,7 +2481,7 @@ cleartext-credential alert and scans the file for the username).
 GET /api/devices?q=vendor%3Aapple%20random%3Ayes%20seen%3A%3C24h
 {"now":1792627200,"q":"vendor:apple random:yes seen:<24h","sort":"last",
  "limit":100,"offset":0,"db_schema":7,"vendor_table":"ieee",
- "presence_from":1792541400,"presence_cell_s":600,
+ "presence_from":1792541400,"presence_cell_s":600,"utc_offset_s":0,
  "rows":[{"mac":"da:a1:19:00:00:01","random":true,"vendor":"Apple",
    "vendor_src":"sloth","ip":"10.0.1.11","name":null,"name_src":null,
    "ssid":"HomeNet","signal":-48,"sources":48,"is_ap":false,"risk":1,
@@ -2517,7 +2603,15 @@ border in its severity colour; text stays `--ink` and `--muted`. A row
 click opens the drawer, as does an Anomalies card keyed by a MAC; Esc
 closes it. The drawer lists everything `/api/device/{mac}` gives, the
 strip, the week heatmap (the Overview's heatmap drawing, by share of
-weeks) and the episodes as cards. `9` opens Lookup: one input, a MAC or
+weeks) and the episodes as cards. The vendor research is the drawer's
+last block (owner request 2026-11-11, "move the vendor research to the
+bottom on the wifi detail view"): its own container, `#dr-vendor`,
+after the FRRS record and the sensor's positions, so a device's own
+record, lists, presence, signal and anomalies come before what is
+documented about its OUI's holder. The drawer is one view whatever
+opened it (a WiFi client or access point, a Devices row, an anomaly
+card), so it moved for all of them; the Lookup card keeps the section
+under its OUI card. `9` opens Lookup: one input, a MAC or
 an IP, and the card, which ends with the drawer's strip and G2 (F20).
 Slice V2 (#171) puts G2 in the signal column, G6 in risk and anom, the
 `new` mark before the swatch and the first-seen `◆` on the strip; see
@@ -2751,6 +2845,115 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
 - **Probe clients** is `/api/series` and `/api/baseline` for
   `wifi.probe_clients`, drawn as every time chart is, over its M3 band.
 
+### An SSID's detail
+
+Owner request 2026-11-11: "on the wifi tab we should be able to select
+any ssid and get a detail view just like we do for a client"
+(`web/src/web_ssidview.h`, `web/ui/ssid.js`).
+
+**Every SSID the page writes is selectable.** `ssidSpan()` is the one
+function a name is written through, and it hands its span to
+`SlothSsid.link()`: a dotted rule under the name, `tabIndex` 0, a click
+or Enter or Space (the page's one keydown handler) opens the detail. On
+the WiFi view that is the AP table's SSID and each name of its SSID
+history, the `(hidden)` word of a BSSID that beacons no name, the
+card's scan, and the channel mix's list, where the row is already a
+button that brings the AP into view, so the detail is a small `ssid`
+button after it. The device drawer's last SSID, PNL SSIDs and
+associations are the same span, so a client's probed networks open
+from there; so are the Devices table's SSID column and History's
+lists. The WiFi view's clients table has no SSID column, and the
+chains, the deauth rug and the channel strips draw BSSIDs and
+channels, not names.
+
+**How a name travels.** An SSID is 0 to 32 octets, not text, and a
+route parameter is 1 to 63 bytes of printable ASCII. The page has each
+name in its display form (printable UTF-8 as it is, any other octet as
+`\xNN`, a backslash doubled), which reads back to one octet string
+only; `octets()` reads it back and `param()` spells the octets as
+base64url without padding (RFC 4648 section 5), 1 to 43 characters, or
+`-` for none. The server takes exactly one spelling of an octet string
+(`web_ssid_param()`: leftover bits must be zero, no padding, no NUL, at
+most 32 octets), binds it as a parameter and compares it with `=`. It
+is never a LIKE pattern and never part of a statement's text, so
+`Home%` and `Home_et` are their own networks and not `HomeNet`'s
+(`test_ssidview.c`). A name the stream carried with lost octets
+(U+FFFD, three octets where one was) can be more than 32 octets: the
+drawer then says it is not an SSID sloth.db can hold, and asks nothing.
+
+```
+GET /api/wifi/ssid?ssid=SG9tZU5ldA
+{"ssid":"HomeNet","ssid_k":3,"ssid_np":false,"hidden":false,"octets":7,
+ "now":1792627200,"db":"open","db_schema":13,"designated":null,
+ "first_seen":1791849600,"last_seen":1792627140,
+ "bssids":[{"bssid":"0a:00:00:00:00:01","current":true,"vendor":"Acme",
+   "channel":6,"enc":"WPA3","akm":"PSK,SAE","akm_names":["PSK","SAE"],
+   "mfp_word":"capable","signal":-50,"first_seen":1791849600,
+   "last_seen":1792627140,"karma":null,
+   "twins":[{"real":"0a:00:00:00:00:01","twin":"0a:00:00:00:00:02",
+     "attributed":true,"tainted":true,"confidence":80,
+     "first_seen":1792626300,"last_seen":1792626300}]}],
+ "bssids_total":2,"bssids_more":false,
+ "assocs":[{"mac":"00:03:93:00:00:03","random":false,"vendor":"Apple",
+   "bssid":"0a:00:00:00:00:01","channel":6,"signal":-52,
+   "first_seen":1792454400,"last_seen":1792626900}],"assocs_total":2,
+ "probers":[{"mac":"da:a1:19:00:00:01","random":true,"vendor":null,
+   "first_seen":1791763200,"last_seen":1792623600}],"probers_total":1,
+ "alerts":[{"title":"Deauth flood","type":7,"sev":2,"count":40,
+   "incidents":1,"id":"d12","first_seen":1792623600,
+   "last_seen":1792626600}],"alerts_more":false,"alerts_read":true,
+ "alerts_reached":null,"alerts_days":30,
+ "presence":"000000000000000000000000000000000002",
+ "presence_from":1792541400,"presence_bssids":2}
+```
+
+- **`bssids`**: sloth.db's `beacon_aps` rows whose SSID is exactly this
+  one (`current`), the 48 last seen, then the BSSIDs `beacon_ap_ssids`
+  says beaconed it once and beacon another name now (`current` false,
+  their times those of this name). Each with sloth's vendor, channel
+  (`beacon_aps.channel` carries no band, so a 6 GHz channel is its
+  number alone, as in the AP table), `enc`, `akm` and the AKM bits by
+  name, MFP as a word, the last signal, its KARMA score from
+  `karma_candidates`, and the twin pairs the stream's `twin_episode`
+  made with it since slothweb started (`web_chain.h`; sloth.db keeps
+  none the page may read). The hidden SSID is the rows whose SSID is
+  NULL or empty.
+- **`assocs`**: `assocs` rows that carried this SSID or are to one of
+  its current BSSIDs, the 24 newest with the whole count. **`probers`**:
+  `pnl_ssids` rows of this name, the same; none for the hidden SSID,
+  since a wildcard probe names no network.
+- **`presence`**: G5's 144 cells of 10 minutes: a cell is set when any
+  current BSSID was present in it (`dev.present`, as a Devices row's
+  strip).
+- **`alerts`**: the 12 newest findings whose key names a current BSSID
+  or the SSID itself (the component `src/alert_key.c` `akey_remote()`
+  writes for an SSID: its sanitised first 32 octets and the FNV-1a of
+  all of it), by the alert page's opaque id. The key is in the WHERE
+  and the GROUP BY only, never in the answer. `instr()` over every
+  recent key once a BSSID is the cost and no index helps it, so the
+  walk is bounded by work, not by a clock: at most 320,000 / (8 +
+  BSSIDs) alert rows, the newest of the last 30 days, found through
+  `idx_alerts_last_seen` before the walk begins; `alerts_reached` says
+  how far back that was, `null` for the whole window.
+- **`designated`** is always `null`: sloth's `--my-ssid` is its own
+  configuration and reaches neither sloth.db nor the stream, so the
+  page cannot say whether the operator designated the network, and
+  says that.
+
+**The drawer** (`#sdrawer`) is built as the device drawer is: the name
+with its non-printable marker, a key and value list (octets, first and
+last seen, the designated line), the strip with its caption, then the
+lists, each with its count (`24 of 340` when cut) and R5's one line
+when empty: access points (the new mark on one first seen in the last
+24 h, the BSSID a button that opens the device drawer), clients
+associated, clients probing, twin and karma findings in sloth's words,
+alerts (each row opens the alert's page). Opening a device or an alert
+from it closes it; Esc closes it; a scope change asks again. Under
+Local the route answers `out_of_scope` and the drawer says so: all of
+it is the monitor radio's. No vendor research is drawn here: an SSID
+has no one vendor. The detail is not in the address, as the device
+drawer is not.
+
 ### The History view (§8.10)
 
 - **The strip** (`/api/history/overview`) is the last 30 days in 180
@@ -2798,7 +3001,9 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   overlaps `[from, to]`, edges included, rendered as `/api/devices`
   renders a row, with the presence strip over the range itself and
   nothing past it: `presence_cells` (at most 144) cells of
-  `presence_cell_s` from `from`, the last ending at `to`, from
+  `presence_cell_s` from `from`, the last ending at `to` (and
+  `utc_offset_s`, the host's UTC offset at `to`, the zone of the
+  strip's ruler), from
   slothweb.db's `dev.present`. A cell is a whole number of the steps of
   `presence_tier`: `minute` while the range lies inside
   `--web-retain-days`, `hour` (the hour tier, kept 400 d, with whatever
@@ -4411,6 +4616,134 @@ notice) and the page shows the numbers alone, as the TUI does.
 `web/tests/test_btsig.c` holds the committed files to the hashes and
 the lookups to the SIG's names.
 
+## Probes
+
+Owner request 2026-11-11: "i want a separate probes tab that shows
+clients searching for ssid's. associating these with clients or other
+devices where possible keep track of ssid's and look for devices
+probing for the same ssids" (`web/src/web_probes.h`,
+`web/ui/probes.js`). A tab of its own, after BLE Devices in the bar;
+no digit is left for it.
+
+**What sloth records about a probe request**, which is all this view
+has:
+
+| Where | What |
+|---|---|
+| sloth.db `probe_clients` | one row a station heard probing: its latest directed SSID, signal, channel, first and last seen, sloth's presence class, and `frame_count`, every probe request sloth counted for it, directed and wildcard together (`src/capture/probe.c` `record_probe()`; the live table is 128 entries, aged out after 120 s, sloth.db keeps the row) |
+| sloth.db `pnl_clients` | one row a station that sent a directed probe: `probe_count` (directed probes only), sloth's OS label from the probe's vendor elements and its PHY tier, first and last seen (`src/probe_pnl.c`; 128 clients live) |
+| sloth.db `pnl_ssids` | one row per (station, SSID) asked for by name, 16 names a station live; a wildcard probe names none and has no row (`probe_pnl_observe()` returns on an empty SSID) |
+| sloth.db `seqnum_correlations` | two MACs whose 802.11 sequence counters ran on from one another (`src/seqnum_track.c`): `gap`, `dt_ms`, each side's frame count. sloth's hypothesis that one radio sent both across a MAC rotation, capped below certainty in sloth's own record |
+| sloth.db `assocs`, `devices` | an association seen for the MAC; a device row for it |
+| the stream | `probe_client` (the flood window and sloth's distance estimate besides), `pnl_client` (its `ssids` array), `seqnum_client`, `seqnum_correlation` (with `confidence`, `fwd_gap` and the window, which sloth.db does not keep) |
+| the TUI | the PNL view: a client, its names, its OS and PHY labels; the WiFi tab's clients panel here is the `wifi.probe_clients` count and the nearest probing devices |
+
+The view reads sloth.db only, through the M4 reader and its column
+allow-list: no column was added, nothing is written, and nothing is
+kept in slothweb.db, so what it shows is what sloth.db retains, across
+restarts of either process. sloth keeps **no count of wildcard
+probes**: `frame_count` and `probe_count` are two tables' counters
+with their own lifetimes, so their difference is not one. Each row
+gives both, named; a station with no named network says `wildcard
+probes only`, and an empty name is never listed as an SSID (the reads
+refuse one even from a file something else wrote).
+
+**The window** is the view's first control: 24 h, 7 d, 30 d (the
+default) or everything sloth.db retains, by each row's last seen. It is
+in every caption.
+
+**Clients heard probing** (`/api/probes/clients`): every station of
+`probe_clients` or `pnl_clients` last seen in the window, 50 a page
+with `more`, in the order the control picks (last heard, first heard,
+networks asked for, frames, signal, address). A row: the MAC (`~` and
+`randomised` for a locally administered one, else the OUI table's
+vendor), the networks it asked for by name (the 16 newest and `+n
+more`; each opens that [SSID's detail](#an-ssids-detail)), their
+count, frames and directed probes, signal, the 24 h presence strip
+(G5, as a Devices row's), last seen, and what it is **tied to**, only
+where sloth already has a basis:
+
+- `device`: sloth.db holds a `devices` row for the same MAC; the button
+  opens the device drawer.
+- `associated to <bssid> <ssid>`: the newest `assocs` row for the MAC;
+  the BSSID opens its drawer, the SSID its detail.
+- `may be one radio with <mac>`: a `seqnum_correlations` row naming the
+  MAC, the three newest. The tooltip gives its basis (gap, milliseconds
+  apart, frames) and the words: consistent with one radio; a hypothesis
+  a passive sensor corroborates and never confirms. The correlations
+  are read newest first, at most 20,000 rows of the table.
+
+A click or Enter on a row picks the station for the next panel.
+
+**Probing for the same networks** (`/api/probes/shared`): the picked
+station's named networks, each with how many stations ask for it and
+its weight, then the other stations sharing its uncommon ones, the
+most similar first. The similarity, over the window's rows:
+
+```
+N        the stations that sent a directed probe (pnl_clients)
+df(s)    the stations asking for SSID s (pnl_ssids)
+w(s)     ln(N / df(s)): a network every station asks for weighs 0
+uncommon 2 <= df(s) <= U, U = N / 20 kept within 2..16
+sim(A,B) = sum of w(s) over the SSIDs both ask for
+           / sum of w(s) over the SSIDs either asks for
+```
+
+and a pair is ranked only when it shares at least `min` uncommon SSIDs
+(the second control: 1 to 4 on the page, default 2). A carrier or
+hotspot name weighs next to nothing and never makes a candidate: only
+an uncommon name of the picked station does, so the candidates are at
+most 64 names x 15 stations, each read by `idx_pnl_ssids_ssid`. The
+caption carries the formula with the answer's own N and U. `sim` is
+symmetric and in 0..1; `test_probes.c` works one set by hand (six
+stations: 0.319 and 0.216). It says two stations probe for the same
+networks: they have been in the same places or share a configuration.
+It does not say whose they are, and the page never words it so.
+
+**Networks searched for** (`/api/probes/ssids`): every SSID asked for
+by name in the window: the stations asking (distinct MACs: `pnl_ssids`'
+key is the pair) and how many of those MACs are randomised, whether an
+access point in sloth.db beacons exactly that name (how many, and the
+strongest), first and last asked for; the name opens its detail. The
+operator's designated networks are not marked: `--my-ssid` is sloth's
+own setting and is in neither sloth.db nor the stream.
+
+**Groups** (`/api/probes/groups`): the stations linked, directly or
+through one another, by at least `min` shared uncommon networks, each
+group with its stations and the uncommon names at least two of them
+ask for; the group sharing most first. One pass over the window's
+`pnl_ssids` in SSID order, so only an uncommon name's stations are ever
+held.
+
+**Bounds.** Every read runs under the request's 250 ms budget and
+answers `503` `sloth_db_timeout` past it. What is capped, each shown
+as `N of M` in its caption when met:
+
+| What | Cap |
+|---|---|
+| a page of stations or networks | 100 rows (`total` is every row in the window) |
+| a station's names in its row | the 16 newest (`ssid_count` is all) |
+| the picked station's names, and each candidate's | the 64 newest |
+| candidates ranked, and shown | 1,024; 50 |
+| groups: stations held, uncommon names, pairs counted | 4,096; 8,192; 65,536 (`capped`, with `ssids_read` of `ssids_uncommon`) |
+| groups shown, and a group's stations and names | 40; 12; 8 |
+| correlations read | 20,000 |
+
+On the suite's large file (50,000 stations, 200,000 `pnl_ssids` rows,
+600,000 alerts) every route answers inside the budget
+(`test_probes.c` prints each time).
+
+**Scope.** Probe requests are the monitor radio's: Monitor's and
+Hybrid's; under Local the tab says so, as the BLE tab does, and the
+four routes answer `out_of_scope`.
+
+**Privacy.** A list of the networks a device asks for can name a home
+or a workplace, and across MAC rotations the list itself can single a
+device out. The view shows what sloth.db already holds, to whoever the
+peer list already admits; it adds no export: the copy-JSON bundle
+gains no kind and no member for it, so the bundle's glossary needed no
+entry, and a device's bundle carries its PNL as it did before.
+
 ## Capture scope
 
 Owner request 2026-10-26. The top bar's **Monitor | Hybrid | Local**
@@ -4442,7 +4775,8 @@ which read them. sloth.db's IP tables keep no capture path and stay
 Local's. Under Local the WiFi view is the managed card's own scan and
 link; Flows are empty under Monitor, saying why; the BLE view is empty
 under Local, saying why (the receivers are passive radio, so `/api/ble*`
-answers `out_of_scope` there and `/api/live`'s `ble` member is `null`).
+answers `out_of_scope` there and `/api/live`'s `ble` member is `null`);
+so are the Probes view and an SSID's detail, the monitor radio's.
 The SQL box is unscoped and says so. A device row's anomaly count and z, the
 open-anomalies tile and the Records view are counted in the scope.
 
@@ -4517,6 +4851,7 @@ and forgets the kept ones, so it does show all.
 | BLE Devices: cells, window, devices | `ctl.bledev-metric`, `ctl.bledev-win`, `ctl.bledev-n` | the waterfall's three selects |
 | Radar: the APRS window | `ctl.radar-aprs-win` | by `keepCtl()`; one of its five options (15 min to 24 h), else 1 h |
 | Radar: the camera | `radar.yaw`, `radar.pitch`, `radar.zoom` | by `radar.js`; a number in range (yaw 0..360, pitch 10..90, zoom 0.5..4) else the default; `reset view` removes all three; the selection is not kept |
+| Probes: window, minimum shared, the two orders | `probes.pr-days`, `probes.pr-min`, `probes.pr-cl-sort`, `probes.pr-ss-sort` | by `probes.js`; put back only as one of the control's own options; the picked station is not kept |
 | the SQL box's text | `ctl.q-sql` | the draft; the first recipe no longer replaces it |
 | Alerts: triage filter | `ctl.al-triage` | by `frrs.js`; `#alerts?triage=out` wins, and an address naming any other filter opens on `any` |
 | triage: the "by" name | `frrs.by` | typed once, sent with every triage change from this browser |
@@ -4640,7 +4975,12 @@ slothweb change checks the change against the list
   line and the number beside it, always. Min and max dots only where
   there is no band, because then the range is the only reference.
 - **R8. No hatching, no gradients, no shadows, no rounded bars.** The
-  chrome's radius applies to panels, not to data.
+  chrome's radius applies to panels, not to data. "Not known yet" is
+  never a texture either: G4's warming cell is a plain `--rule` tile,
+  and where it has a sample its value so far is a solid `--tui-dim` bar
+  on that tile (owner ruling of 2026-11-11, recorded at the head of
+  `docs/web-visual-spec.md`; it amends the earlier rule that a warming
+  cell makes no claim), never a hatch and never a heat token.
 - **R9. The caption line.** Every panel ends with one `--muted` line:
   source, window, tier, scale, n, in that order, and then the state
   when there is one (`glyph.caption()`). Example: `ap.rssi
@@ -4730,7 +5070,7 @@ own.
 - **The ruler (F10)** is drawn at last, in the presence column's header
   of the Devices, WiFi clients and History tables (`drawRuler()`, a
   144 by 6 px canvas over the rows' strips): a `--faint` tick at each
-  midnight of the zone the page's clock labels are in, `--signal` at
+  midnight **of the sensor's zone** (below), `--signal` at
   now where it falls (none when a History range ended before now), and
   under them the phases as one `sun` mark a run, night 1 px, sunrise
   and sunset 2, day 3, from the bottom, so a row with three present
@@ -4738,9 +5078,43 @@ own.
   well as a colour (R10). No position: the ticks alone.
 - **In words (R10).** Each strip's label, and a line over each of the
   three tables, names the phases and when each begins in the window:
-  `coloured by the sun at the sensor (gps fix): night, sunrise 06:40,
-  day 07:40, sunset 16:10, night 17:10` (`last gps fix` or
-  `--location` for `loc`; past eight runs, the four words alone).
+  `coloured by the sun at the sensor (gps fix), sensor time (slothweb's
+  host), UTC-5: night, sunrise 06:10, day 07:20, sunset 16:00, night
+  17:10` (`last gps fix` or `--location` for `loc`; past eight runs,
+  the four words alone). `SlothSun.says()`, pure, ported and tested.
+- **Sensor time (owner ruling 2026-11-11, the second).** The ruler's
+  midnight ticks and the words' sunrise and sunset times are in the
+  sensor's zone, not the viewer's, so the ticks and the sun's band
+  agree whoever is looking: a sensor at UTC-7 seen from UTC+1 has its
+  midnight ticks at 07:00 UTC. It is the one exception to the page's
+  clock, every other time label staying the viewer's, and it is said
+  where it applies: each table's line ends `midnight ticks in sensor
+  time (slothweb's host), UTC-7; every other time on the page is your
+  clock`, the ruler's title says the same, and each strip's words name
+  the zone before their times.
+  - **Where the zone comes from.** `utc_offset_s`, a number of seconds
+    the server reports beside the strips: `/api/devices` (the offset
+    now) and `/api/history/devices` (the offset at the range's end)
+    gained it for this; `/api/device/{mac}` already had it in `week`,
+    which the drawer and the alert page use. The Lookup card and the
+    BLE drawer, whose answers carry none, use the last one any answer
+    gave. No zone name is read and the browser's zone database is not
+    asked (`SlothSun.zone()` takes two numbers).
+  - **Whose zone it is.** `web_utc_offset()` is slothweb's own host's.
+    Beside sloth that is the sensor's, which is why it is taken as
+    such; a slothweb reading a copied sloth.db on another machine
+    reports that machine's zone, and the words say `slothweb's host`
+    so the reader can tell.
+  - **Summer time.** One offset serves the whole ruler, the one at the
+    window's end. A 24 h window is right but for the day of a change;
+    a History range over a day that crosses one has its earlier ticks
+    an hour out, and the line says `the offset at the range's end
+    throughout` for every range over a day rather than hide it. An
+    offset per midnight would need the server to answer one per day of
+    the range; not built.
+  - **No offset** (an older server, an error, a value past 18 h): the
+    viewer's clock, as before the ruling, and the words say `your clock
+    (the server gave no sensor offset), UTC+1`.
 - **Every strip.** `paintStrip()` is the one caller of `glyph.g5()`;
   `drawStrip()` (the server's hex) and the BLE drawer's own cells go
   through it with the window's start and the cell's seconds: Devices,
@@ -4796,14 +5170,44 @@ own.
   its strip.
   A failed read hides the canvas and says `series unavailable`, never a
   blank; the card's caption follows R9 and ends `shaded: the episode`.
-- **Hour-of-week grid (F3, G4).** A warming cell is one plain `--rule`
-  `warm` mark, no hatch (R8); a grid with every cell warming draws only
-  the now `outline` and its caption. The caption (`heatCaption()`) is
-  R9's: the source, `hour of week`, the top of the ramp (`ramp 0 to
-  1.2k B/s`, the largest fed mean; a warming cell's mean never sets
-  it), n (the samples behind the fed cells), and `warming: n of 168
-  cells` while any is. The warming cell's meaning is that count in
-  words (R10), so the grey itself is not asked to reach 3:1.
+- **Hour-of-week grid (F3, G4; owner ruling of 2026-11-11).** Every
+  one of the 168 cells is drawn whenever there are cells: a grid that
+  is all warming is 168 tiles under the now `outline`, which is always
+  the last mark. (Until the ruling an all-warming grid drew the outline
+  alone, which for the first three weeks of a store, and for any device
+  under three weeks old, was one tile on an empty canvas.) A fed cell
+  (n >= `warm_n`, 3) is one `cell` mark on the heat ramp by its mean
+  against the largest fed mean, as before, and only a fed cell takes
+  the ramp. A warming cell is one plain `--rule` `warm` mark, no hatch
+  (R8). A warming cell with a sample (1 <= n < `warm_n`; a cell gets
+  one sample a week) is **provisional**: on its tile it carries a
+  `prov` bar in one ink, `--tui-dim`, the tile's width, rising from
+  the tile's floor: 1 px for a mean of 0 (observed, absent so far), a
+  quarter, a half or three quarters of the tile for a mean in the
+  first, second or last third of the provisional scale (under 0.34,
+  under 0.67, the rest). The bar never fills the tile, so in one grey
+  a provisional cell is a part-inked tile and a fed cell a whole one
+  (R10). **The provisional scale** is fixed at 0 to 1 for a map of
+  shares (the drawer's presence map passes `share`; `/api/baseline`'s
+  `"scale":"share_of_weeks"` says the same), where n = 1 gives the
+  floor or three quarters and n = 2 the floor, the half or three
+  quarters; for a mean of a gauge or a counter (the Overview's
+  `iface.rx_rate`) it is 0 to the largest mean of any sampled cell,
+  fed or provisional. A cell with n = 0 is the tile alone, so
+  "observed, absent so far" and "not yet observed" are different
+  marks. No cells at all (`"cells":null`, a pair never fed) is R5's
+  `no data`: the `--faint` dash alone, no outline, no day or hour
+  labels. The caption (`heatCaption()`) is R9's: the source, `hour of
+  week`, the scale (`ramp 0 to 1.2k B/s`, the largest fed mean, while
+  a cell is fed; `provisional bar in thirds of 0 to 1`, or `... of 0
+  to 25.0k B/s`, while a cell is provisional), n (the samples behind
+  the fed and the provisional cells), and while any cell is warming
+  `warming: 156 of 168 cells, fed: 12, provisional: 84 (under 3
+  weeks), not yet observed: 72`; with no cells, `no data`. The
+  meanings are those words (R10): the bar on its tile reads 2.75:1 in
+  the dark theme and 3.37:1 in the light, and against the panel beside
+  it 4.35:1 and 5.07:1 (the graphics table under
+  [Design](#design)).
 - **Small multiples (F6).** One G1 per key over the last hour, every
   cell on one y-scale (`glyph.shared()`, grown and never shrunk on a
   refresh, R11, started again for a new metric, a scope or the toggle)
@@ -5307,7 +5711,14 @@ meaning is carried in words, the caption's `warming: n of 168 cells`
 (R10), so the fill is structure, and a fed cell's lowest heat
 (`--heat-0`) is measured against it below: 2.05:1 in the dark theme,
 under 3:1, which is why the count in words is the carrier and not the
-grey. The dotted row
+grey. A provisional cell's bar (owner ruling of 2026-11-11) is
+`--tui-dim` on that tile: 2.75:1 in the dark theme, 3.37:1 in the
+light, and 4.35:1 and 5.07:1 against the panel at the tile's edge; it
+is told from a fed cell by shape (it never fills the tile) and by the
+caption's count, not by hue alone. `--tui-dim` was chosen over `--data`
+because `--data` at full strength reads 8.70:1 on the tile in the dark
+theme, louder than every fed cell beside it, and the painter has no
+reduced strength for a G4 mark. The dotted row
 rules are under 3:1 on purpose; they separate rows that read without
 them. A closed anomaly card is marked by a dashed edge and the word
 `closed`, never by dimming, so its data keep these ratios.
@@ -5381,6 +5792,8 @@ Graphics (`*` under 3:1):
 | `--rule` | `--bg` | row rules | 1.65 * | 1.34 * |
 | `--rule` | `--panel` | row rules, the warming cell | 1.58 * | 1.51 * |
 | `--heat-0` | `--rule` | a fed cell's lowest heat, beside a warming one | 2.05 * | 3.99 |
+| `--tui-dim` | `--rule` | a provisional cell's bar, on its warming tile | 2.75 * | 3.37 |
+| `--tui-dim` | `--panel` | a provisional cell's bar, against the panel beside the tile | 4.35 | 5.07 |
 
 Chart hues closer than 30 (CIEDE2000) in either theme; under 15 fails the build:
 
@@ -5519,13 +5932,15 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_notes.c` | anomaly triage and the links ([Anomaly triage and links](#anomaly-triage-and-links)): `test_frrs.c`'s alert triage tests again on an anomaly's id, the decision across a reopened store and a re-detected, a later and a forgotten episode, an id collision refused, alert and anomaly rows apart, links from both ends with their guards, a dangling end, the candidates' subject and both window edges, the candidate read on a 30,000-row alerts table, the bundle's `related` sections, the link's write over a socket, and `notes.js` with its functions pinned whole |
 | `test_readme.c` | this file: every message the start-up path can print, scraped from `web/src/`, quoted in Troubleshooting; the Security section's points; every screenshot this file shows present under `docs/assets/slothweb/` and under the size bound |
 | `test_tui_colors.c` | the data colours against the TUI itself ([Design](#design)): `src/tui.c`'s ANSI backend linked in and captured, every byte of an address, an SSID, a host name and an info string compared with the page's colour for it (its functions pinned as served, a C port of them over the served `SLOTH_PALETTE`, the served custom properties); the cross-panel bold and the page's `IP_SRC` bits held to `IP_SRC_*`, an alert counted by its `match_ip` alone; the alert-hot override against `tui_alert_hot_set()` (severity, bold from WARN, the TTL's edge, promotion, the full table) and its TTL and cap against `src/tui.c`; the phosphor, heat, alert-hot and monitor-row pairs; `MON_TYPES` against the record types `src/jsonl.c` emits from the monitor radio |
-| `test_glyph.c` | the glyph layer's geometry ([the glyph layer](#the-glyph-layer)): a C port of `web/ui/glyph.js` with the JS pinned verbatim out of the served page, so a change on either side fails. The S-meter (2026-11-11): the band table against the path-loss formula, every S boundary on the edge and a hundredth either side, the reading past S9 stepped in tens, both clamps and their count, one reading on three bands, the unknown band's row and label, no reading (the dash and no segment), one reading, the peak-hold ticks and their band, the geometry at 72 by 14, greyscale, the dB-Hz and dBFS faces, the legend's labels and words, the report's character cells, every sm function and every call site pinned whole, and what it replaced gone from the page. For G1, G5 and G6: empty, warming, one point, four points as dots (R6), a gap (R5), in band, out of band (and in again once the band is widened), G1's line graded as `draw_sparkline_at()` grades it (ruling 1), min and max dots only without a band (R7), a scale that grows and never shrinks (R11), the window rule and its words (R4), the caption grammar and the three states in it (R9), the presence cells from the server's hex, the ruler's midnight and now ticks in a shifted zone (F10), the first-seen mark (F15), an anomaly episode's underline clipped to the strip, the bullet's ranges, threshold tick and severity, the count bar's shared scale, and each glyph's list read with every token flattened to one grey (R10); each glyph's TUI form named in the README (R12). Nineteen mutations, each naming the test it reddened. V2: G2's states (the dash, one sample as its dot alone, dots under five, a gap), its fixed −95 to −20 dBm scale and the −67 dBm rule, a reading off the scale clamped and counted, the whisker only when there is one and in order, the four kinds in one grey (R10); G2's words bold only by sloth's `approaching` and naming sloth's band and trend glyph, never a slope of their own; the new mark and G5's first-seen cell (F15); every placement of G2 and G6 and the card's rounded bar gone (R8). The sun (ruling 2026-11-11): a C port of `web/ui/sun.js`, pinned whole as served; rise, set, transit and both civil twilights at five places within 3 min of the U.S. Naval Observatory (London and Sydney at the June solstice, New York in November, the equator at the equinox, Fiji a tenth of a degree off the antimeridian); noon elevations from latitude and declination; polar night and midnight sun at Longyearbyen, twilight all night at Reykjavik, no day at Tromso; a strip present all day at London giving the four tokens in order with counts within a cell of the almanac; no position, a bad one or no window giving the plain strip mark for mark; cells over an hour one ink; the ruler's band under its ticks, its heights in one grey (R10); every G5 caller, the tokens, and the page naming neither geolocation nor a zone. 31 mutations (14 in the port, 15 in the JS and CSS, 2 the build's colour check), each seen red |
+| `test_glyph.c` | the glyph layer's geometry ([the glyph layer](#the-glyph-layer)): a C port of `web/ui/glyph.js` with the JS pinned verbatim out of the served page, so a change on either side fails. The S-meter (2026-11-11): the band table against the path-loss formula, every S boundary on the edge and a hundredth either side, the reading past S9 stepped in tens, both clamps and their count, one reading on three bands, the unknown band's row and label, no reading (the dash and no segment), one reading, the peak-hold ticks and their band, the geometry at 72 by 14, greyscale, the dB-Hz and dBFS faces, the legend's labels and words, the report's character cells, every sm function and every call site pinned whole, and what it replaced gone from the page. For G1, G5 and G6: empty, warming, one point, four points as dots (R6), a gap (R5), in band, out of band (and in again once the band is widened), G1's line graded as `draw_sparkline_at()` grades it (ruling 1), min and max dots only without a band (R7), a scale that grows and never shrinks (R11), the window rule and its words (R4), the caption grammar and the three states in it (R9), the presence cells from the server's hex, the ruler's midnight and now ticks in a shifted zone (F10), the first-seen mark (F15), an anomaly episode's underline clipped to the strip, the bullet's ranges, threshold tick and severity, the count bar's shared scale, and each glyph's list read with every token flattened to one grey (R10); each glyph's TUI form named in the README (R12). Nineteen mutations, each naming the test it reddened. V2: G2's states (the dash, one sample as its dot alone, dots under five, a gap), its fixed −95 to −20 dBm scale and the −67 dBm rule, a reading off the scale clamped and counted, the whisker only when there is one and in order, the four kinds in one grey (R10); G2's words bold only by sloth's `approaching` and naming sloth's band and trend glyph, never a slope of their own; the new mark and G5's first-seen cell (F15); every placement of G2 and G6 and the card's rounded bar gone (R8). The sun (ruling 2026-11-11): a C port of `web/ui/sun.js`, pinned whole as served; rise, set, transit and both civil twilights at five places within 3 min of the U.S. Naval Observatory (London and Sydney at the June solstice, New York in November, the equator at the equinox, Fiji a tenth of a degree off the antimeridian); noon elevations from latitude and declination; polar night and midnight sun at Longyearbyen, twilight all night at Reykjavik, no day at Tromso; a strip present all day at London giving the four tokens in order with counts within a cell of the almanac; no position, a bad one or no window giving the plain strip mark for mark; cells over an hour one ink; the ruler's band under its ticks, its heights in one grey (R10); every G5 caller, the tokens, and the page naming neither geolocation nor a zone. 31 mutations (14 in the port, 15 in the JS and CSS, 2 the build's colour check), each seen red. Sensor time (the second ruling): the ruler's ticks at a UTC-7 sensor's midnights seen from UTC+1, the fallback to the viewer's clock and its words, the words' sunrise and sunset in sensor time against the almanac at New York, the zone's name for whole and part-hour offsets, the page reading the viewer's offset in one place only; 12 more mutations seen red, among them the ticks put back on the viewer's offset. G4 by the ruling of 2026-11-11: an all-warming grid is 168 plain tiles and the outline last (red with the `st.fed` loop guard put back), no cells is the dash alone, a cell with n = 1 or 2 is a `--tui-dim` bar on its tile and never a heat token (red with the ramp given to it), the bar never the tile's height, a never-sampled cell no bar, the share scale against the largest-mean scale, fed cells as they were, the caption's scales and counts through a port of `heatCaption()` and `fmt()`, and `g4()`, `g4Stats()`, `heatmap()`, `heatCaption()` and both callers pinned whole. 18 mutations (12 in the port, 3 in `glyph.js`, 3 in `app.js`), each seen red |
 | `test_rf.c` | the signal meter's data (`web_rf.h`): `radio`, the band the latest record was heard on, for every channel edge, a 6 GHz channel only by its `channel_source`, `null` with no channel; the hour's window; `web_rollup_trail()` merging closed and open fine buckets per cell, another key's and an earlier bucket left out; an AP's series first, a station's otherwise, the other when the first is empty, and no trail under Local or without a rollup; the member with the beacon's 60 s range or the last cell's samples as the whisker (the beacon's only when it is in the last value's minute) and sloth's band and trend from the FRRS ledger's latest beacon or probe_client; a record's word that is not sloth's, and a range out of order, refused; `WEB_RF_JSON_MAX` holding the longest member |
 | `test_parity.c` | the AKM names (src/rsn_ie.c, linked into the test alone), the downgrade bits (`WPA_DG_*`) and DEAUTH_FLOOD's type held to sloth's own; the BLE view's vocabularies (the PDU, band, trend, glyph and P_tx-source words, the finding kinds, the alert names, the TUI's address-type letters and its legend line) held to `src/` as text |
 | `test_ble.c` | the BLE view ([BLE](#ble)) from hand-built `ble_device`, `ble_alert`, `alert.resolve` and `sensor_health` lines in the emitter's exact shape: two rows for one address heard by two sensors, a heartbeat updating in place (the sticky masks OR-ed, the earlier first_seen kept, the rate from two points), the hostile strings (a control byte escaped and flagged, an over-long name cut back to a code-point boundary, a category that is not sloth's slug dropped and counted, an unknown iface `other`, a bad record kept nowhere), the record's absent values null and an anonymous all-zero address a row, the estimate's four fields with the TUI's cell and description, the LRU at 1025 rows evicting the oldest, the findings (standing, the resolve of the key, the time-out, the day's listing, the key never rendered, a `hid_oui` finding under its address), the `sensor_health` block and its rotation bands; the two metrics only while a Bluetooth source is configured; every route through the table (the sort words and both directions, each refusal a word never echoing the value, the search, paging, HEAD, Monitor and Hybrid serving, Local `out_of_scope` with the query still checked, `/api/live`'s `ble` member and `/api/health`'s counters, the M0 shape without the tables, the BLE incident typed and Monitor's on the Alerts page); the page's lines pinned as served; with SQLite the store round trip through the store thread's flush, a changed row upserted once, the seed on reopen with the name's display form and the estimate, every field of a seeded finding (a flood's fresh count, rate, window and citation, a `hid_oui` finding's address and the drawer's match on it), a resolve on a seeded finding updating its stored row in place, a seeded row's presence strip shifting on with fresh traffic, retention at compaction, a failed write (a trigger aborting it mid-transaction) rolled back whole and its batch written by the next flush, the row caps (the oldest gone, a flagged row kept past newer unflagged ones, counted) and a non-canonical stored address not seeded; every sort word in both directions with an empty key last (`mfr`'s three tiers fixed in either direction); a name cut back to a code-point boundary; `ble.devices` with an Ubertooth alone and `ble.adv_rate` only with the host stream; `/api/live`'s `ble` member with every string at its cut and escaped six-fold; without a store the tables still ingest and serve. Each absence seen red under a named mutation |
 | `test_bledev.c` | the BLE Devices waterfall ([BLE](#ble)): each class rule on hand-built fields (SIG Appearance values, Continuity types, the registry's UUIDs) and each left-out shape landing in Unknown, the first-match order and the table's match numbers, the slugs (never a channel key, the only `bleclass` keys), a class from a record line; the proximity edges against `src/rf_distance.h` and `.c` read in the test; the page's class table and grade pinned against the C ones, the panels inside `v-ble`, no `innerHTML` in the module; the mix engine taking kinds 3 and 4 (an advertiser, anonymous advertising) apart and refusing 5, a sized ring; the class mix fed from `ble_device` lines (a baseline, deltas, a reconnect, a row born while listening, a sampled row, one address on two sensors kept apart); the advertisers gauge once a pass, an address on two sensors once; the one anonymous row sloth can send (the host stream's, its first mfr pair kept, a keyboard's HID bit OR-ed in) credited to Unknown alone as one entry and one advertiser while its fields read Phones then Input, named rows and an Ubertooth's uncredited samples beside it, each class's advertisers, drawn transmitters, reports and drawn frames agreeing, no series under the zero address; the anonymous entry through both routes (one `anonymous` tx entry in `b:unk`, its kind word the one `bledev.js` tests, no proximity row, never nearest, `anonymous_heard`, the strip counting it once) and under a read cut (no slot taken: 256 read); five thousand fresh BLE addresses leaving a Wi-Fi row's high-water mark (and its true delta) in place; both routes from memory (display order, the tx entries named from the tables or by address alone, the strip's facts, every refusal), the proximity rows' order, means and window, a tracker heard before three hundred newer addresses still read and first, each row graded with its announced power (extended header, TX Power Level, else 0 dBm) and nearest by the margin; `now`'s sensor facts; both routes 503 `no_time_series` in either scope and the mix 503 `no_ble_mix`; Local `out_of_scope` with the query checked and a long query a 400; with SQLite the WiFi and BLE mixes in one `chmix` at the same tier and t, each namespace reading only its own, each route drawing only its own, a kind-4 anonymous row read back and drawn, and the file still v7. Each absence seen red under a named mutation |
 | `test_radar.c` | the Radar tab ([Radar](#radar)): `/api/radar` from seeded `ble_device`, `beacon` and `probe_client` lines (every row in total, the banded rows nearest-RSSI first, a reading without an estimate in `none` and nowhere else, a word that is not sloth's no band, both halves `null` without their tables), the eight-per-band cap on twelve scrambled rows, rows without a reading sorting last, Monitor and Hybrid against Local's `out_of_scope` with the query checked, `400` for any parameter, the body under 8 KB with every BLE row held and under 10 KB with both censuses full, the name cut on a code-point boundary; the page: the tab between APRS and TACDB, the hook and init lines, every container id looked up, no `scoped-out` toggle and the comment saying why, no control in the view, the projection functions whole (`rn`, `geo`, `place`, `project`, `ringDist`) with no divide by depth, the painters whole, the ring dash and alpha, no gradient or shadow, the kept camera's three prefs validated and cleared, no kept selection, one `requestAnimationFrame`, the Local and estimate sentences verbatim, the centre rule, every fetch through the lent scoped `getJSON`, the three `select()` exports whole. Each absence seen red under a named mutation |
-| `test_allkeys.c` | the Activity graph's `keys: all`: `/api/series/all` (every parameter and reason word, the cell arithmetic, the answer's shape for a gauge, a counter, presence and a global metric, an empty cell absent, keys in byte order, 32 to an answer and `after` paging with no key twice, the 256-key cap said as `listed` of `total` and the oldest left out, a full answer stopping whole, the scopes by metric and by key, the route's `400` and `503`), the fullest answer from memory and from the store timed against the 250 ms request budget and printed; and `web/ui/allkeys.js`: its pure half ported to C line for line and pinned verbatim (the legend's order, the `N of M keys` words, the tier per window, the multi-key mark list: one token a key, the shared scale, gaps, dots under five points, the focus row last and the rest `--rule`, the band only for a picked key, the top five end labels pushed apart, greyscale; the frame; the presence strips), the key colours pinned against `ip_color_index()`, and the other half by whole functions, with no `innerHTML`, no `setAttribute` and one `--signal`. Each absence seen red under a named mutation |
+| `test_allkeys.c` | the Activity graph's `keys: all`: `/api/series/all` (every parameter and reason word, the cell arithmetic, the answer's shape for a gauge, a counter, presence and a global metric, an empty cell absent, keys in byte order, 128 to an answer and `after` paging with no key twice, `total` on the first answer only, a full answer stopping whole, the scopes by metric and by key, the route's `400` and `503`), every key walked (300 where `/api/keys` lists 256, the oldest among them; the rollup's and the store's, a store key with no bucket in the window left out), an answer stopping at its time and still answering one key, the fullest answer and a walk of 8,192 keys from memory and from the store timed against the 250 ms request budget and printed; and `web/ui/allkeys.js`: its pure half ported to C line for line and pinned verbatim (the legend's order, the `N of M keys` and `loading N of M keys` words, the tier per window, the cells a key is read in, the legend's filter, the multi-key mark list: one token a key, the shared scale, gaps, dots under five points, the focus row last and the rest `--faint` (never `--rule`), the rows past 256 folded into one range a cell, the band only for a picked key, the top five end labels pushed apart, greyscale; the frame; the presence strips), the key colours pinned against `ip_color_index()`, and the other half by whole functions, with no `innerHTML`, no `setAttribute` and one `--signal`. Each absence seen red under a named mutation |
+| `test_ssidview.c` | an SSID's detail ([An SSID's detail](#an-ssids-detail)): the `ssid=` parameter both ways on the empty name, one that is not UTF-8, a zero-width space, 32 octets and two that look like SQL wildcards, and its refusals (one character, leftover bits, a NUL, padding, `+` and `/`, 33 octets); `/api/wifi/ssid` over a generated sloth.db: the BSSIDs now and once, KARMA, the stream's twin link, the associations by name and by BSSID, the askers, the strip, the alerts by BSSID and by the SSID's own key component; `Home%` and `Home_et` each their own; the hidden SSID; a name nothing beacons; Monitor's answer and Local's `out_of_scope`; 600,000 alerts with 40 BSSIDs, 5,000 associations and 50,000 askers inside the request's budget, the alert walk's reach printed; and the page's half, `octets()`, `param()`, `link()`, `more()`, `ssidSpan()` and `ssidHidden()` whole and each hook where the WiFi view writes a name. Each absence assertion seen red under the mutation its comment names |
+| `test_probes.c` | the Probes tab ([Probes](#probes)): `/api/probes/clients` over the acceptance scenario with a wildcard-only station, an old one and a correlation (frames and directed, the names, the device row, the association, the sibling, the strip, each order, a page as N of M, the window); `/api/probes/ssids` (stations, randomised, the APs beaconing it); the similarity on six stations worked by hand (0.319, 0.216, nothing at the minimum, nobody by the common name) and the groups at a minimum of 2 and of 1; each refusal; Local's `out_of_scope`; 50,000 stations, 200,000 `pnl_ssids` rows and 600,000 alerts with each route inside the request's budget and the groups saying they are capped; and the page's half, `tied()`, `formula()`, `select()` and `show()` whole, the tab's place in the bar, the views, the scope switch and the kept controls, the wording. Each absence assertion seen red under the mutation its comment names |
 | `test_btsig.c` | the Bluetooth SIG table this binary was built with (`WEB_BTSIG_EXPECT`): sorted, the names printable and within the cut, the lookups answering the SIG's names for Apple, Microsoft, Google, Ericsson, Battery, Human Interface Device, the keyboard appearance and the generic forms, a miss and the bounds null; the committed CSVs byte for byte the ones `web/data/btsig/SOURCE.md` hashes, with its row counts; `update_btsig.sh` run by the `update-btsig` target alone and named by no workflow; the generator run on a name holding every trigraph's opening, a quote and a backslash, its literal decoded back byte-identical and no `??` left in its output |
 | `test_replay.c` | spec §12's M3 acceptance: a six-week JSONL stream generated in the test (never a fixture) through the framer, decoder, live state, metric derivation, identity tables, rollup, `web_tsdb_step()` and the engine as `main.c` wires them, on pinned clocks: four weeks of routine (noisy gauges, Poisson counts, and an input for every rule: names that agree, a randomised MAC with its own name, a month-old probe client, a steady ssh host), then a quiet 7 d week in which nothing at all fires, slothweb and sloth restarting in the middle of it in an SQLite build, then a 7 d week in which A1 fires for a burst of connections and A3 for a daytime device that appears only at night, while a device that is only ever present at night never fires; and the hour that just closed reaching the baseline at flush phases 0, 3 and 7 (the previous slice fed it only at phase 0); A9 for a new host whose first row the rollup released late, at sloth's real cadence (SQLite); five weeks of a 13:30-14:30 routine in IST firing nothing. Both builds |
 | `test_evidence.c` | an alert's proof, every pcap written at run time from byte arrays built per their clause (no capture is committed): the file header in both byte orders and both resolutions, pcapng and junk refused by name, the record walk (orig_len raised to incl_len, a caplen past the snaplen, a file cut inside a record); the decoders on Ethernet/IPv4/TCP with a ClientHello cut at 64 bytes (no SNI claimed), a DNS query whole and cut, a compression pointer to itself, SLL2/ICMP, SLL/ARP, radiotap deauthentication (reason 7, Table 9-26 roles, channel and signal), a beacon (SSID, DS channel, RSN, a 33-octet SSID called invalid), an authentication status 0; the hex dump; a page of 24 frames, the next page, the worst case stopping with `more` inside its buffer, a cut file, a record cut below a 0xffffffff snaplen said as `40 of 270 bytes captured` and never as the snaplen; both alert-pcap name grammars and what they refuse (a handshake pcap's name, `eapol.22000`, a path, a near miss of each); the manifest line in `src/evidence_manifest.c`'s shape and every sink and shape it refuses; a directory: newest first, a handshake line and an unterminated tail not indexed, an 18-digit `written_at_epoch` sorted first and returned as written (no arithmetic on a stamp; the sanitized build would stop on an overflow) and equal stamps in read order, the three joins and the fallback only when they find nothing, hash verified, mismatched by a byte and by a length, no entry; a symlink, a FIFO, a name off the gate and a 16 MiB + 1 file refused; a missing directory; the routes: `captures` with no `incident_id`, session or path in the answer, `hash verified`, `no manifest entry`, `HASH MISMATCH` after a byte changed, `404` past the list, `400` for a file name or a bad `n`, `405` on `HEAD`, the download's headers and bytes, its `X-Sloth-SHA256` of the bytes served (`verified`, then `mismatch` after a byte changed, `no_manifest_entry`), `415` for pcapng, `why_no_capture` for an L2-only rule and with no `--pcap-dir`; an evidence pcap listed `withheld` and refused `403` by both routes with no frame or byte, then decoded and served under `serve_evidence`; a symlink and a FIFO with manifest lines listed `unreadable: not a regular file` and refused `403`; a file with sloth's line and a forged later-stamped line `hash verified` (by sloth's line) with `conflicting manifest lines (2)`, and a file with only a forged line `HASH MISMATCH`; the assessment generator run on documents it writes (header lines, front matter, sections, bibliography, Related pages left out, an indented continuation kept with its entry and other prose kept apart as the note, MY_NETWORK_RECON.md's note never in an entry) and its two build stops; the page's hooks (the drawer's list by its `data-ev` mark, the frame index through `DataTable`, a withheld or unreadable capture never opened), the download's one form and the section's place, last |
@@ -5603,6 +6018,11 @@ web/
                    /api/ble/proximity (the BLE Devices waterfall)
     web_radar.c    /api/radar: the Wi-Fi and BLE distance-band census the Radar
                    tab's rings draw (the BLE tables, the FRRS ledger)
+    web_ssidview.c /api/wifi/ssid: one SSID's detail, and the ssid= parameter
+    web_probeq.h   the few lines each of its sloth.db reads repeats (the
+                   Probes view's reads too)
+    web_probes.c   /api/probes/*: the stations heard probing, the networks
+                   asked for, the similarity and the groups
     web_history.c  /api/history/*, /api/sessions, /api/sessions/new (M5)
     web_flows.c    /api/flows, /api/flows/graph and its matrix form (M6, #171 V4)
     web_alerts.c   /api/alerts, /api/alert: the Alerts page, an alert's page
@@ -5634,8 +6054,9 @@ web/
                    the links, location.js and location.css: where
                    the sensor was, gnss.js and gnss.css: the GPS Sat
                    tab, bledev.js and bledev.css: the BLE Devices
-                   waterfall, and radar.js and radar.css: the Radar tab's
-                   dome)
+                   waterfall, radar.js and radar.css: the Radar tab's
+                   dome, ssid.js and ssid.css: an SSID's detail, and
+                   probes.js and probes.css: the Probes tab)
   tools/
     embed.c        ui/ -> build/web/web_assets.c (build time only)
     oui_gen.c      web/data/*.csv -> build/web/web_oui_table.c (build time only)

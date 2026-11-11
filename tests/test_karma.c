@@ -425,7 +425,7 @@ static void test_view_ie_column_prints_the_distinct_count(void) {
     char out[8192];
 
     /* Collapsed: three SSIDs, one posture -> "1", and bright. */
-    sloth_state_t one; seed(&one);
+    static sloth_state_t one; seed(&one);
     add_multi_ssid_ap(&one, ap, adv, 3);
     for (int i = 0; i < 3; i++) one.beacon_aps[0].ssid_history_fp[i] = 0x5a5a5a5au;
     karma_update(&one);
@@ -434,7 +434,7 @@ static void test_view_ie_column_prints_the_distinct_count(void) {
     ASSERT(strstr(out, "0%    1   -") != NULL);
 
     /* Varied: three SSIDs, three postures -> "3", not a "-". */
-    sloth_state_t many; seed(&many);
+    static sloth_state_t many; seed(&many);
     add_multi_ssid_ap(&many, ap, adv, 3);
     many.beacon_aps[0].ssid_history_fp[0] = 0x11111111u;
     many.beacon_aps[0].ssid_history_fp[1] = 0x22222222u;
@@ -445,7 +445,7 @@ static void test_view_ie_column_prints_the_distinct_count(void) {
     ASSERT(strstr(out, "0%    3   -") != NULL);
 
     /* Unknown: the one case that really is an absent observation. */
-    sloth_state_t unk; seed(&unk);
+    static sloth_state_t unk; seed(&unk);
     add_multi_ssid_ap(&unk, ap, adv, 3);   /* fingerprints left 0 */
     karma_update(&unk);
     unk.karma_sel = -1;

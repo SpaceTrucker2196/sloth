@@ -293,32 +293,99 @@ static const char *gl_order(grow_t *rows, int n) {
 }
 
 /* G4, the hour-of-week grid. cells NULL, or 168 [mean, sd, n]. */
-typedef struct { double warm; int warming, fed; double max, n; } g4st_t;
+typedef struct {
+    double warm; int warming, fed; double max, n;
+    int prov, unseen; double top, pn; int none;
+} g4st_t;
 static g4st_t gl_g4_stats(const double (*cells)[3], double warm) {
     g4st_t o;
     o.warm = warm; o.warming = 0; o.fed = 0; o.max = 0; o.n = 0;
+    o.prov = 0; o.unseen = 0; o.top = 0; o.pn = 0; o.none = !cells;
     for (int i = 0; i < 168; i++) {
-        if (!cells || !(cells[i][2] >= o.warm)) { o.warming++; continue; }
-        o.fed++;
-        o.n += cells[i][2];
-        if (cells[i][0] > o.max) o.max = cells[i][0];
+        if (cells && cells[i][2] >= o.warm) {
+            o.fed++;
+            o.n += cells[i][2];
+            if (cells[i][0] > o.max) o.max = cells[i][0];
+            if (cells[i][0] > o.top) o.top = cells[i][0];
+            continue;
+        }
+        o.warming++;
+        if (!cells || !(cells[i][2] >= 1)) { o.unseen++; continue; }
+        o.prov++;
+        o.pn += cells[i][2];
+        if (cells[i][0] > o.top) o.top = cells[i][0];
     }
     return o;
 }
 static void gl_g4(const double (*cells)[3], double w, double h, double x0, double y0,
-                  double warm, int now, gmarks_t *g) {
+                  double warm, int now, int share, gmarks_t *g) {
     memset(g, 0, sizeof(*g));
+    if (!cells) { gl_dash(g, w, h); return; }
     double cw = (w - x0) / 24, ch = (h - y0) / 7;
     g4st_t st = gl_g4_stats(cells, warm);
-    for (int i = 0; st.fed && i < 168; i++) {
+    double top = share ? 1 : st.top;
+    for (int i = 0; i < 168; i++) {
         double x = x0 + cw * (i % 24), y = y0 + ch * (i / 24);
-        if (cells && cells[i][2] >= st.warm)
+        if (cells[i][2] >= st.warm) {
             gm_push(g, "cell", x + 1, y + 1, cw - 2, ch - 2,
                     gl_heat_token(st.max > 0 ? cells[i][0] / st.max : 0));
-        else gm_push(g, "warm", x + 1, y + 1, cw - 2, ch - 2, "--rule");
+            continue;
+        }
+        gm_push(g, "warm", x + 1, y + 1, cw - 2, ch - 2, "--rule");
+        if (!(cells[i][2] >= 1)) continue;
+        double f = top > 0 ? cells[i][0] / top : 0;
+        int lv = !(f > 0) ? 0 : f < 0.34 ? 1 : f < 0.67 ? 2 : 3;
+        double ph = lv ? (ch - 2) * lv / 4 : 1;
+        gm_push(g, "prov", x + 1, y + ch - 1 - ph, cw - 2, ph, "--tui-dim");
     }
     if (now >= 0 && now < 168)
         gm_push(g, "outline", x0 + cw * (now % 24), y0 + ch * (now / 24), cw, ch, "--signal");
+}
+
+/* app.js's fmt() and heatCaption(), ported: G4's caption is where its
+ * warming cells' meaning is carried in words (R10). */
+static void gl_fmt(double v, char *out, size_t sz) {
+    if (!isfinite(v)) { snprintf(out, sz, "-"); return; }
+    double a = fabs(v);
+    if (a >= 1e9) snprintf(out, sz, "%.1fG", v / 1e9);
+    else if (a >= 1e6) snprintf(out, sz, "%.1fM", v / 1e6);
+    else if (a >= 1e4) snprintf(out, sz, "%.1fk", v / 1e3);
+    else if (a >= 100 || v == floor(v + 0.5)) snprintf(out, sz, "%.0f", floor(v + 0.5));
+    else snprintf(out, sz, "%.2f", v);
+}
+static void gl_heat_caption(const char *source, const g4st_t *st, int share,
+                            const char *unit, char *out, size_t sz) {
+    gcap_t c;
+    memset(&c, 0, sizeof(c));
+    c.source = source;
+    c.window = "hour of week";
+    if (st->none) {
+        c.state = "no data";
+        gl_caption(&c, out, sz);
+        return;
+    }
+    char u[24], sc[200], state[200], num[32];
+    size_t at = 0;
+    snprintf(u, sizeof(u), "%s%s", unit && *unit ? " " : "", unit ? unit : "");
+    sc[0] = '\0';
+    state[0] = '\0';
+    if (st->fed) {
+        gl_fmt(st->max, num, sizeof(num));
+        at += (size_t)snprintf(sc + at, sizeof(sc) - at, "ramp 0 to %s%s", num, u);
+    }
+    if (st->prov) {
+        gl_fmt(st->top, num, sizeof(num));
+        snprintf(sc + at, sizeof(sc) - at, "%sprovisional bar in thirds of 0 to %s%s",
+                 at ? ", " : "", share ? "1" : num, share ? "" : u);
+    }
+    if (st->warming)
+        snprintf(state, sizeof(state), "warming: %d of 168 cells, fed: %d, provisional: %d "
+                 "(under %d weeks), not yet observed: %d", st->warming, st->fed, st->prov,
+                 (int)st->warm, st->unseen);
+    c.scale = sc;
+    c.n = st->n + st->pn;
+    c.state = state;
+    gl_caption(&c, out, sz);
 }
 
 /* ── web/ui/sun.js, ported ──────────────────────────────────────── */
@@ -1076,12 +1143,14 @@ static void test_the_page_carries_the_ported_js(void) {
     WT_HAS(p, "        if (za !== zb) return za ? -1 : 1;\n"
               "        if (za && Math.abs(b.z) !== Math.abs(a.z)) return Math.abs(b.z) - Math.abs(a.z);");
     WT_HAS(p, "    return { rows: out, by: byz ? \"|z|\" : \"value\" };");
-    WT_HAS(p, "      if (c && c[2] >= st.warm)\n"
+    WT_HAS(p, "      if (c && c[2] >= st.warm) {\n"
               "        m.push([\"cell\", x + 1, y + 1, cw - 2, ch - 2,\n"
               "                heatToken(st.max > 0 ? c[0] / st.max : 0)]);\n"
-              "      else m.push([\"warm\", x + 1, y + 1, cw - 2, ch - 2, \"--rule\"]);");
+              "        continue;\n"
+              "      }\n"
+              "      m.push([\"warm\", x + 1, y + 1, cw - 2, ch - 2, \"--rule\"]);");
     WT_HAS(p, "      m.push([\"outline\", x0 + cw * (nc % 24), y0 + ch * Math.floor(nc / 24), cw, ch, \"--signal\"]);");
-    WT_HAS(p, "      if (!c || !(c[2] >= o.warm)) { o.warming++; continue; }");
+    WT_HAS(p, "      if (!c || !(c[2] >= 1)) { o.unseen++; continue; }");
     WT_HAS(p, "      } else if (k === \"band\" || k === \"shade\") {\n"
               "        g.globalAlpha = 0.12;");
     /* The V1 functions whole, not a line of each: a line-only pin let
@@ -1110,18 +1179,28 @@ static void test_the_page_carries_the_ported_js(void) {
               "    return { rows: out, by: byz ? \"|z|\" : \"value\" };\n");
     WT_HAS(p, "  function g4(cells, opt) {\n"
               "    var m = [], w = opt.w, h = opt.h, x0 = opt.x0 || 0, y0 = opt.y0 || 0, i;\n"
+              "    if (!cells) { m.push(dash(w, h)); return m; }\n"
               "    var cw = (w - x0) / 24, ch = (h - y0) / 7, st = g4Stats(cells, opt.warm);\n"
-              "    for (i = 0; st.fed && i < 168; i++) {\n"
-              "      var c = cells && cells[i], x = x0 + cw * (i % 24), y = y0 + ch * Math.floor(i / 24);\n"
-              "      if (c && c[2] >= st.warm)\n"
+              "    var top = opt.share ? 1 : st.top;\n"
+              "    for (i = 0; i < 168; i++) {\n"
+              "      var c = cells[i], x = x0 + cw * (i % 24), y = y0 + ch * Math.floor(i / 24);\n"
+              "      if (c && c[2] >= st.warm) {\n"
               "        m.push([\"cell\", x + 1, y + 1, cw - 2, ch - 2,\n"
               "                heatToken(st.max > 0 ? c[0] / st.max : 0)]);\n"
-              "      else m.push([\"warm\", x + 1, y + 1, cw - 2, ch - 2, \"--rule\"]);\n"
+              "        continue;\n"
+              "      }\n"
+              "      m.push([\"warm\", x + 1, y + 1, cw - 2, ch - 2, \"--rule\"]);\n"
+              "      if (!c || !(c[2] >= 1)) continue;\n"
+              "      var f = top > 0 ? c[0] / top : 0;\n"
+              "      var lv = !(f > 0) ? 0 : f < 0.34 ? 1 : f < 0.67 ? 2 : 3;\n"
+              "      var ph = lv ? (ch - 2) * lv / 4 : 1;\n"
+              "      m.push([\"prov\", x + 1, y + ch - 1 - ph, cw - 2, ph, \"--tui-dim\"]);\n"
               "    }\n"
               "    var nc = opt.now;\n"
               "    if (gnum(nc) && nc >= 0 && nc < 168)\n"
               "      m.push([\"outline\", x0 + cw * (nc % 24), y0 + ch * Math.floor(nc / 24), cw, ch, \"--signal\"]);\n"
-              "    return m;\n");
+              "    return m;\n"
+              "  }\n");
     /* V2: G2, its words and the new mark, whole. Seen red with one
      * character changed in each (the -67 rule's constant, and the
      * approaching word). */
@@ -1178,15 +1257,25 @@ static void test_the_page_carries_the_ported_js(void) {
               "    return c < n ? c : -1;\n"
               "  }\n");
     WT_HAS(p, "  function g4Stats(cells, warm) {\n"
-              "    var o = { warm: gnum(warm) ? warm : 3, warming: 0, fed: 0, max: 0, n: 0 };\n"
+              "    var o = { warm: gnum(warm) ? warm : 3, warming: 0, fed: 0, max: 0, n: 0,\n"
+              "              prov: 0, unseen: 0, top: 0, pn: 0, none: !cells };\n"
               "    for (var i = 0; i < 168; i++) {\n"
               "      var c = cells && cells[i];\n"
-              "      if (!c || !(c[2] >= o.warm)) { o.warming++; continue; }\n"
-              "      o.fed++;\n"
-              "      o.n += c[2];\n"
-              "      if (c[0] > o.max) o.max = c[0];\n"
+              "      if (c && c[2] >= o.warm) {\n"
+              "        o.fed++;\n"
+              "        o.n += c[2];\n"
+              "        if (c[0] > o.max) o.max = c[0];\n"
+              "        if (c[0] > o.top) o.top = c[0];\n"
+              "        continue;\n"
+              "      }\n"
+              "      o.warming++;\n"
+              "      if (!c || !(c[2] >= 1)) { o.unseen++; continue; }\n"
+              "      o.prov++;\n"
+              "      o.pn += c[2];\n"
+              "      if (c[0] > o.top) o.top = c[0];\n"
               "    }\n"
-              "    return o;\n");
+              "    return o;\n"
+              "  }\n");
 }
 
 /* ── G1, every state §9 asks for ────────────────────────────────── */
@@ -1942,6 +2031,218 @@ static void test_sun_position_is_rounded(void) {
     WT_EQ(memcmp(a, b, sizeof(a)), 0);
 }
 
+/* ── the ruler's zone and the words (sun.js, ruling 2026-11-11) ──── */
+
+#define SUN_OFF_MAX 64800.0
+#define SUN_RUNS_MAX 8
+static const char *const SUN_WORDS[4] = { "night", "sunrise", "day", "sunset" };
+
+typedef struct { double off; int sensor; char word[80]; } sunzone_t;
+
+static void sun_zone_word(double off, char *out, size_t sz) {
+    int m = (int)floor(fabs(off) / 60 + 0.5), h = m / 60, mm = m % 60;
+    if (!m) { snprintf(out, sz, "UTC"); return; }
+    if (mm) snprintf(out, sz, "UTC%c%d:%s%d", off < 0 ? '-' : '+', h, mm < 10 ? "0" : "", mm);
+    else snprintf(out, sz, "UTC%c%d", off < 0 ? '-' : '+', h);
+}
+/* NAN is the JS's null or undefined. */
+static sunzone_t sun_zone(double sensor_off, double viewer_off) {
+    sunzone_t z;
+    char w[32];
+    z.sensor = isfinite(sensor_off) && fabs(sensor_off) <= SUN_OFF_MAX;
+    z.off = z.sensor ? sensor_off
+          : isfinite(viewer_off) && fabs(viewer_off) <= SUN_OFF_MAX ? viewer_off : 0;
+    sun_zone_word(z.off, w, sizeof(w));
+    snprintf(z.word, sizeof(z.word), "%s%s",
+             z.sensor ? "sensor time (slothweb's host), "
+                      : "your clock (the server gave no sensor offset), ", w);
+    return z;
+}
+static void sun_clock(double t, double off, char *out, size_t sz) {
+    int m = (int)fmod(fmod(floor((t + off) / 60), 1440) + 1440, 1440), h = m / 60, mm = m % 60;
+    snprintf(out, sz, "%s%d:%s%d", h < 10 ? "0" : "", h, mm < 10 ? "0" : "", mm);
+}
+/* pos NULL is the JS's null; pos_from its pos.from. */
+static void sun_says(double from, double cell_s, int n, const sunpos_t *pos, const char *pos_from,
+                     const sunzone_t *z, char *out, size_t sz) {
+    static int ph[SUN_CELLS_MAX];
+    int r[SUN_CELLS_MAX][2];
+    out[0] = '\0';
+    if (!isfinite(from) || !(cell_s > 0)) return;
+    if (cell_s > SUN_MAX_CELL_S) { snprintf(out, sz, "cells over 1 h: presence in one ink"); return; }
+    if (!pos) { snprintf(out, sz, "no sensor position: presence in one ink"); return; }
+    int nr = sun_runs(sun_phases(from, cell_s, n, pos, ph) ? ph : NULL, n, r);
+    if (!nr) return;
+    size_t k = (size_t)snprintf(out, sz, "coloured by the sun at the sensor (%s), %s: ", pos_from, z->word);
+    if (nr > SUN_RUNS_MAX) {
+        if (k < sz) snprintf(out + k, sz - k, "%s, %s, %s, %s", SUN_WORDS[0], SUN_WORDS[1], SUN_WORDS[2], SUN_WORDS[3]);
+        return;
+    }
+    for (int i = 0; i < nr && k < sz; i++) {
+        char c[16] = "";
+        if (r[i][1]) sun_clock(from + r[i][1] * cell_s, z->off, c, sizeof(c));
+        k += (size_t)snprintf(out + k, sz - k, "%s%s%s%s", i ? ", " : "", SUN_WORDS[r[i][0]],
+                              r[i][1] ? " " : "", c);
+    }
+}
+static void sun_ruler_says(const sunzone_t *z, double span, char *out, size_t sz) {
+    snprintf(out, sz, "midnight ticks in %s%s%s", z->word,
+             span > 86400 ? ", the offset at the range's end throughout" : "",
+             z->sensor ? "; every other time on the page is your clock" : "");
+}
+
+/* A sensor at UTC-7 looked at from a browser at UTC+1: the ruler's
+ * ticks are the sensor's midnights, 07:00 UTC, not the viewer's 23:00.
+ * Seen red with the port's zone() taking the viewer's offset first. */
+static void test_sun_zone_is_the_sensors(void) {
+    sunzone_t z = sun_zone(-7 * 3600, 3600);
+    WT_EQ(z.sensor, 1);
+    WT_ASSERT(near(z.off, -25200));
+    WT_ASSERT(!strcmp(z.word, "sensor time (slothweb's host), UTC-7"));
+    double from = utc(2026, 6, 21, 12, 0), to = from + 86400;
+    gmarks_t g;
+    gl_g5_ruler_sun(144, 6, from, to, z.off, NAN, 0, NULL, &g);
+    WT_EQ(gm_count(&g, "tick"), 1);
+    /* 2026-06-22 07:00 UTC is 19 h into the window; the viewer's
+     * midnight, 23:00 UTC, would be 11 h in, at x 66. */
+    WT_ASSERT(near(gm_get(&g, "tick").x, 144.0 * 19 / 24));
+    WT_ASSERT(!near(gm_get(&g, "tick").x, 144.0 * 11 / 24));
+    /* Three days: three sensor midnights, each 07:00 UTC. */
+    gl_g5_ruler_sun(144, 6, from, from + 3 * 86400, z.off, NAN, 0, NULL, &g);
+    WT_EQ(gm_count(&g, "tick"), 3);
+    WT_ASSERT(near(gm_get(&g, "tick").x, 144.0 * 19 / 72));
+}
+
+/* No offset from the server (an older one, an error), or one that is
+ * no offset: the viewer's clock, and the word says so. Seen red with
+ * the port's fallback word made the sensor's, and with the 18 h bound
+ * taken off the sensor's offset (the 1e6 line). */
+static void test_sun_zone_fallback_and_names(void) {
+    sunzone_t z = sun_zone(NAN, 3600);
+    WT_EQ(z.sensor, 0);
+    WT_ASSERT(near(z.off, 3600));
+    WT_ASSERT(!strcmp(z.word, "your clock (the server gave no sensor offset), UTC+1"));
+    z = sun_zone(1e6, -18000);
+    WT_EQ(z.sensor, 0);
+    WT_ASSERT(near(z.off, -18000));
+    z = sun_zone(NAN, NAN);
+    WT_EQ(z.sensor, 0);
+    WT_ASSERT(near(z.off, 0));
+    WT_ASSERT(!strcmp(z.word, "your clock (the server gave no sensor offset), UTC"));
+    /* UTC itself is a sensor's zone like any other. */
+    z = sun_zone(0, 3600);
+    WT_EQ(z.sensor, 1);
+    WT_ASSERT(!strcmp(z.word, "sensor time (slothweb's host), UTC"));
+    char w[32];
+    sun_zone_word(19800, w, sizeof(w));  WT_ASSERT(!strcmp(w, "UTC+5:30"));   /* India */
+    sun_zone_word(-12600, w, sizeof(w)); WT_ASSERT(!strcmp(w, "UTC-3:30"));   /* Newfoundland */
+    sun_zone_word(20700, w, sizeof(w));  WT_ASSERT(!strcmp(w, "UTC+5:45"));   /* Nepal */
+    sun_zone_word(3600, w, sizeof(w));   WT_ASSERT(!strcmp(w, "UTC+1"));
+    char c[16];
+    sun_clock(0, -3600, c, sizeof(c));   WT_ASSERT(!strcmp(c, "23:00"));      /* before the epoch's day */
+    sun_clock(utc(2026, 11, 11, 11, 10), -18000, c, sizeof(c));
+    WT_ASSERT(!strcmp(c, "06:10"));
+}
+
+/* The words' sunrise and sunset are the sensor's clock. New York on
+ * 2026-11-11 (UTC-5), a strip from its local midnight: the almanac's
+ * civil twilight begins 11:09 UTC, 06:09 there, so the first sunrise
+ * cell is the one whose midpoint is past it, 06:10; it ends 22:11 UTC,
+ * 17:11, so night begins with the 17:10 cell. A viewer at UTC+1 with no
+ * sensor offset reads the same cells as 12:10 and 23:10, and is told
+ * whose clock that is. Seen red with the port's clock() ignoring its
+ * offset, and with says() leaving the zone's word out. */
+static void test_sun_words_in_sensor_time(void) {
+    sunpos_t ny = { 40.71, -74.01 };
+    double from = utc(2026, 11, 11, 5, 0);
+    sunzone_t z = sun_zone(-18000, 3600);
+    char s[400];
+    sun_says(from, 600, 144, &ny, "gps fix", &z, s, sizeof(s));
+    WT_HAS(s, "coloured by the sun at the sensor (gps fix), sensor time (slothweb's host), UTC-5: "
+              "night, sunrise 06:10, day ");
+    WT_HAS(s, ", night 17:10");
+    WT_LACKS(s, "12:10");
+    z = sun_zone(NAN, 3600);
+    sun_says(from, 600, 144, &ny, "--location", &z, s, sizeof(s));
+    WT_HAS(s, "coloured by the sun at the sensor (--location), your clock (the server gave no "
+              "sensor offset), UTC+1: night, sunrise 12:10, day ");
+    WT_HAS(s, ", night 23:10");
+    /* The states with no times name no zone. */
+    z = sun_zone(-18000, 3600);
+    sun_says(from, 600, 144, NULL, "", &z, s, sizeof(s));
+    WT_ASSERT(!strcmp(s, "no sensor position: presence in one ink"));
+    sun_says(from, 7200, 12, &ny, "gps fix", &z, s, sizeof(s));
+    WT_ASSERT(!strcmp(s, "cells over 1 h: presence in one ink"));
+    sun_says(NAN, 600, 144, &ny, "gps fix", &z, s, sizeof(s));
+    WT_ASSERT(!strcmp(s, ""));
+    /* Six days of hour cells: more runs than fit, the four words. */
+    sun_says(from, 3600, 144, &ny, "gps fix", &z, s, sizeof(s));
+    WT_ASSERT(!strcmp(s, "coloured by the sun at the sensor (gps fix), sensor time (slothweb's host), "
+                         "UTC-5: night, sunrise, day, sunset"));
+    /* The ruler's own words: the one stated exception to the page's
+     * clock, and for a range over a day which offset the ticks are at. */
+    sun_ruler_says(&z, 86400, s, sizeof(s));
+    WT_ASSERT(!strcmp(s, "midnight ticks in sensor time (slothweb's host), UTC-5; "
+                         "every other time on the page is your clock"));
+    sun_ruler_says(&z, 3 * 86400, s, sizeof(s));
+    WT_ASSERT(!strcmp(s, "midnight ticks in sensor time (slothweb's host), UTC-5, the offset at the "
+                         "range's end throughout; every other time on the page is your clock"));
+    z = sun_zone(NAN, 3600);
+    sun_ruler_says(&z, 86400, s, sizeof(s));
+    WT_ASSERT(!strcmp(s, "midnight ticks in your clock (the server gave no sensor offset), UTC+1"));
+}
+
+/* The zone as served and as the page uses it. The viewer's offset is
+ * read in one place, sunZone()'s fallback argument, and nowhere else.
+ * Seen red with drawRuler() given getTimezoneOffset for its ticks
+ * again (its pin, and the count), with sun.js's zone() preferring the
+ * viewer's offset, with clock() ignoring its offset, and with says()
+ * giving clock() no offset; and with the Devices call passing no
+ * offset. */
+static void test_the_page_carries_the_sun_zone(void) {
+    const char *p = page();
+    WT_HAS(p, "  var OFF_MAX = 64800;\n"
+              "  function zoneWord(off) {\n"
+              "    var m = Math.round(Math.abs(off) / 60), h = Math.floor(m / 60), mm = m % 60;\n"
+              "    if (!m) return \"UTC\";\n"
+              "    return \"UTC\" + (off < 0 ? \"-\" : \"+\") + h + (mm ? \":\" + (mm < 10 ? \"0\" : \"\") + mm : \"\");\n"
+              "  }\n");
+    WT_HAS(p, "  function zone(sensorOff, viewerOff) {\n"
+              "    var s = snum(sensorOff) && Math.abs(sensorOff) <= OFF_MAX;\n"
+              "    var off = s ? sensorOff : snum(viewerOff) && Math.abs(viewerOff) <= OFF_MAX ? viewerOff : 0;\n"
+              "    return { off: off, sensor: s,\n"
+              "             word: (s ? \"sensor time (slothweb's host), \" : \"your clock (the server gave no sensor offset), \") +\n"
+              "                   zoneWord(off) };\n"
+              "  }\n");
+    WT_HAS(p, "  function clock(t, off) {\n"
+              "    var m = ((Math.floor((t + off) / 60) % 1440) + 1440) % 1440, h = Math.floor(m / 60), mm = m % 60;\n"
+              "    return (h < 10 ? \"0\" : \"\") + h + \":\" + (mm < 10 ? \"0\" : \"\") + mm;\n"
+              "  }\n");
+    WT_HAS(p, "  var RUNS_MAX = 8;\n"
+              "  function says(from, cellS, n, pos, z) {\n"
+              "    if (!snum(from) || !(cellS > 0)) return \"\";\n"
+              "    if (cellS > MAX_CELL_S) return \"cells over 1 h: presence in one ink\";\n"
+              "    if (!pos) return \"no sensor position: presence in one ink\";\n"
+              "    var r = runs(phases(from, cellS, n, pos));\n"
+              "    if (!r.length) return \"\";\n"
+              "    var s = \"coloured by the sun at the sensor (\" + pos.from + \"), \" + z.word + \": \";\n"
+              "    if (r.length > RUNS_MAX) return s + WORDS.join(\", \");\n"
+              "    for (var i = 0; i < r.length; i++)\n"
+              "      s += (i ? \", \" : \"\") + WORDS[r[i][0]] + (r[i][1] ? \" \" + clock(from + r[i][1] * cellS, z.off) : \"\");\n"
+              "    return s;\n"
+              "  }\n");
+    WT_HAS(p, "  function rulerSays(z, span) {\n"
+              "    return \"midnight ticks in \" + z.word +\n"
+              "           (span > 86400 ? \", the offset at the range's end throughout\" : \"\") +\n"
+              "           (z.sensor ? \"; every other time on the page is your clock\" : \"\");\n"
+              "  }\n");
+    int n = 0;
+    for (const char *q = p; (q = strstr(q, "getTimezoneOffset")) != NULL; q += 17) n++;
+    WT_EQ(n, 1);
+    WT_HAS(p, "    return SlothSun.zone(num(off) ? off : SUN.off, -new Date(t * 1000).getTimezoneOffset() * 60);");
+    WT_HAS(p, "                                   offset: z.off,\n");
+}
+
 /* sun.js as served, whole functions (the #171 V1 review's rule), and
  * the page's half: every G5 caller, the ruler, the words, where the
  * position comes from. Seen red, one pin each, with sun.js's
@@ -2076,8 +2377,8 @@ static void test_the_page_carries_the_sun(void) {
               "    return m;\n"
               "  }\n");
     /* web/ui/app.js */
-    WT_HAS(p, "  var SUN = { pos: null, key: \"\" };\n"
-              "  var SUN_POLL_MS = 300000, SUN_RUNS_MAX = 8;\n");
+    WT_HAS(p, "  var SUN = { pos: null, key: \"\", off: null };\n"
+              "  var SUN_POLL_MS = 300000;\n");
     /* web/ui/app.js */
     WT_HAS(p, "  function paintStrip(c, cells, first, from, cellS) {\n"
               "    c.g5 = [cells, first, from, cellS];\n"
@@ -2090,44 +2391,43 @@ static void test_the_page_carries_the_sun(void) {
               "    paintStrip(c, glyph.cellsFromHex(hex, n), first, from, cellS);\n"
               "  }\n");
     /* web/ui/app.js */
-    WT_HAS(p, "  function drawRuler(c, from, to, cells) {\n"
+    WT_HAS(p, "  function sunZone(off, t) {\n"
+              "    if (num(off)) SUN.off = off;\n"
+              "    return SlothSun.zone(num(off) ? off : SUN.off, -new Date(t * 1000).getTimezoneOffset() * 60);\n"
+              "  }\n");
+    WT_HAS(p, "  function drawRuler(c, from, to, cells, off) {\n"
               "    if (!c) return;\n"
-              "    c.g5r = [from, to, cells];\n"
-              "    if (!num(from) || !num(to)) { glyph.paint(c, [], tok); return; }\n"
+              "    c.g5r = [from, to, cells, off];\n"
+              "    if (!num(from) || !num(to)) { c.title = \"\"; glyph.paint(c, [], tok); return; }\n"
+              "    var z = sunZone(off, to);\n"
+              "    c.title = SlothSun.rulerSays(z, to - from);\n"
               "    glyph.paint(c, glyph.g5Ruler({ w: c.clientWidth, h: c.clientHeight, from: from, to: to,\n"
-              "                                   offset: -new Date(to * 1000).getTimezoneOffset() * 60,\n"
+              "                                   offset: z.off,\n"
               "                                   now: Date.now() / 1000, cells: cells, pos: SUN.pos }), tok);\n"
               "  }\n");
     /* web/ui/app.js */
-    WT_HAS(p, "  function sunWords(from, cellS, n) {\n"
-              "    if (!num(from) || !(cellS > 0)) return \"\";\n"
-              "    if (cellS > SlothSun.MAX_CELL_S) return \"cells over 1 h: presence in one ink\";\n"
-              "    if (!SUN.pos) return \"no sensor position: presence in one ink\";\n"
-              "    var r = SlothSun.runs(SlothSun.phases(from, cellS, n, SUN.pos));\n"
-              "    if (!r.length) return \"\";\n"
-              "    var head = \"coloured by the sun at the sensor (\" + SUN.pos.from + \"): \";\n"
-              "    if (r.length > SUN_RUNS_MAX) return head + SlothSun.WORDS.join(\", \");\n"
-              "    return head + r.map(function (x) {\n"
-              "      return SlothSun.WORDS[x[0]] + (x[1] ? \" \" + hhmmss(from + x[1] * cellS).slice(0, 5) : \"\");\n"
-              "    }).join(\", \");\n"
+    WT_HAS(p, "  function sunWords(from, cellS, n, off, ruled) {\n"
+              "    var z = sunZone(off, from + n * cellS), s = SlothSun.says(from, cellS, n, SUN.pos, z);\n"
+              "    if (!ruled || !num(from) || !(cellS > 0)) return s;\n"
+              "    return (s ? s + \"; \" : \"\") + SlothSun.rulerSays(z, n * cellS);\n"
               "  }\n");
     /* web/ui/app.js */
-    WT_HAS(p, "  function sunNote(e, from, cellS, n) {\n"
+    WT_HAS(p, "  function sunNote(e, from, cellS, n, off, ruled) {\n"
               "    if (!e) return;\n"
-              "    e.g5w = [from, cellS, n];\n"
+              "    e.g5w = [from, cellS, n, off, ruled];\n"
               "    e.classList.add(\"sunw\");\n"
-              "    e.textContent = sunWords(from, cellS, n);\n"
+              "    e.textContent = sunWords(from, cellS, n, off, ruled);\n"
               "  }\n");
     /* web/ui/app.js */
     WT_HAS(p, "  function sunRepaint() {\n"
               "    var cs = document.querySelectorAll(\"canvas\"), i;\n"
               "    for (i = 0; i < cs.length; i++) {\n"
               "      if (cs[i].g5) paintStrip(cs[i], cs[i].g5[0], cs[i].g5[1], cs[i].g5[2], cs[i].g5[3]);\n"
-              "      if (cs[i].g5r) drawRuler(cs[i], cs[i].g5r[0], cs[i].g5r[1], cs[i].g5r[2]);\n"
+              "      if (cs[i].g5r) drawRuler(cs[i], cs[i].g5r[0], cs[i].g5r[1], cs[i].g5r[2], cs[i].g5r[3]);\n"
               "    }\n"
               "    var ws = document.querySelectorAll(\".sunw\");\n"
               "    for (i = 0; i < ws.length; i++)\n"
-              "      if (ws[i].g5w) sunNote(ws[i], ws[i].g5w[0], ws[i].g5w[1], ws[i].g5w[2]);\n"
+              "      if (ws[i].g5w) sunNote(ws[i], ws[i].g5w[0], ws[i].g5w[1], ws[i].g5w[2], ws[i].g5w[3], ws[i].g5w[4]);\n"
               "  }\n");
     /* web/ui/app.js */
     WT_HAS(p, "  function sunLoad() {\n"
@@ -2171,7 +2471,7 @@ static void test_the_page_carries_the_sun(void) {
     WT_HAS(p, "      drawStrip($(\"dr-strip\"), j.presence, 144,\n"
               "                glyph.firstCell(rec ? rec.first_seen : null, j.presence_from, 600, 144),\n"
               "                j.presence_from, 600);\n"
-              "      sunNote($(\"dr-sun\"), j.presence_from, 600, 144);");
+              "      sunNote($(\"dr-sun\"), j.presence_from, 600, 144, j.week ? j.week.utc_offset_s : null);");
     WT_HAS(p, "        var lb = box.appendChild(el(\"div\", \"label\", \"24 h presence, 10 min cells \"));\n"
               "        sunNote(lb.appendChild(el(\"span\", \"sub\")), j.presence_from, 600, 144);");
     WT_HAS(p, "        drawStrip(sc, j.presence, 144, glyph.firstCell(d ? d.first_seen : null, j.presence_from, 600, 144),\n"
@@ -2179,7 +2479,7 @@ static void test_the_page_carries_the_sun(void) {
     WT_HAS(p, "      drawStrip(cv, d.presence, 144, glyph.firstCell(d.first_seen, WF.clFrom, 600, 144), WF.clFrom, 600);");
     WT_HAS(p, "    drawStrip(cv, d.presence, cells, -1, HS.pfrom, HS.cellS);");
     WT_HAS(p, "        drawStrip($(\"ad-strip\"), d.presence, 144, -1, d.presence_from, 600);\n"
-              "        sunNote($(\"ad-sun\"), d.presence_from, 600, 144);");
+              "        sunNote($(\"ad-sun\"), d.presence_from, 600, 144, d.week ? d.week.utc_offset_s : null);");
     WT_HAS(p, "    drawStrip($(\"ad-strip\"), null);\n    sunNote($(\"ad-sun\"));");
     /* ... and there is no other: seven calls and the definition. */
     int calls = 0;
@@ -2190,16 +2490,16 @@ static void test_the_page_carries_the_sun(void) {
     WT_EQ(g5s, 1);                         /* paintStrip()'s, the one painter */
     /* The three tables' rulers and words. */
     WT_HAS(p, "        D.pfrom = num(j.presence_from) ? j.presence_from : null;\n"
-              "        drawRuler(DTD.ruler, D.pfrom, D.pfrom + 144 * 600, 144);\n"
-              "        sunNote($(\"d-sun\"), D.pfrom, 600, 144);");
+              "        drawRuler(DTD.ruler, D.pfrom, D.pfrom + 144 * 600, 144, j.utc_offset_s);\n"
+              "        sunNote($(\"d-sun\"), D.pfrom, 600, 144, j.utc_offset_s, true);");
     WT_HAS(p, "      WF.clFrom = num(j.presence_from) ? j.presence_from : null;\n"
-              "      drawRuler(DTWL.ruler, WF.clFrom, WF.clFrom + 144 * 600, 144);\n"
-              "      sunNote($(\"w-cl-sun\"), WF.clFrom, 600, 144);");
+              "      drawRuler(DTWL.ruler, WF.clFrom, WF.clFrom + 144 * 600, 144, j.utc_offset_s);\n"
+              "      sunNote($(\"w-cl-sun\"), WF.clFrom, 600, 144, j.utc_offset_s, true);");
     WT_HAS(p, "      HS.cells = j.presence_cells;\n"
               "      HS.pfrom = num(j.presence_from) ? j.presence_from : null;\n"
               "      HS.cellS = num(j.presence_cell_s) ? j.presence_cell_s : null;\n"
-              "      drawRuler(DTH.ruler, HS.pfrom, HS.pfrom + HS.cells * HS.cellS, HS.cells);\n"
-              "      sunNote($(\"h-sun\"), HS.pfrom, HS.cellS, HS.cells);");
+              "      drawRuler(DTH.ruler, HS.pfrom, HS.pfrom + HS.cells * HS.cellS, HS.cells, j.utc_offset_s);\n"
+              "      sunNote($(\"h-sun\"), HS.pfrom, HS.cellS, HS.cells, j.utc_offset_s, true);");
     WT_HAS(p, "        if (c.ruler) {\n"
               "          t.ruler = th.appendChild(el(\"canvas\", \"dt-ruler\"));\n"
               "          t.ruler.ariaHidden = \"true\";\n"
@@ -2394,62 +2694,292 @@ static void test_multiples_sort(void) {
     WT_EQ(v[2].id, 2);
 }
 
-/* F3, R8: a warming cell is one --rule mark and nothing else, and a
- * grid that is all warming draws only the now outline. Seen red with a
- * second "hatch" mark pushed for each warming cell, and with the
- * all-warming guard taken out of the port. */
+/* The i-th mark by value, and gm_get()'s empty mark past the end: a
+ * mutation that draws fewer marks must fail the assertion that reads
+ * one, not crash on it. */
+static gmark_t g4at(const gmarks_t *g, int i) {
+    static const gmark_t none = { "", 0, 0, 0, 0, "", NULL };
+    return i >= 0 && i < g->n ? g->m[i] : none;
+}
+
+/* F3, R8 and the ruling of 2026-11-11: every cell is drawn. A grid
+ * that is all warming with no sample anywhere is 168 plain --rule
+ * tiles and the now outline on top; no cells at all is R5's dash and
+ * nothing else, the outline included. Seen red with the `st.fed` loop
+ * guard put back in the port (1 mark, not 169), with a second "hatch"
+ * mark pushed for each warming cell, and with the no-cells dash taken
+ * out of the port. */
 static void test_g4_warming_is_plain_rule(void) {
     static double cells[168][3];
     memset(cells, 0, sizeof(cells));
     gmarks_t g;
-    gl_g4(cells, 272, 84, 32, 14, 3, 30, &g);
-    WT_EQ(g.n, 1);
+    gl_g4(cells, 272, 84, 32, 14, 3, 30, 1, &g);
+    WT_EQ(g.n, 169);
+    WT_EQ(gm_count(&g, "warm"), 168);
+    WT_EQ(gm_count(&g, "prov"), 0);
+    WT_EQ(gm_count(&g, "cell"), 0);
     WT_EQ(gm_count(&g, "outline"), 1);
-    gmark_t ol = gm_get(&g, "outline");
+    for (int i = 0; i < 168; i++) {
+        WT_ASSERT(!strcmp(g4at(&g, i).kind, "warm") && !strcmp(g4at(&g, i).tok, "--rule"));
+        WT_ASSERT(near(g4at(&g, i).x, 32 + 10.0 * (i % 24) + 1) && near(g4at(&g, i).y, 14 + 10.0 * (i / 24) + 1));
+        WT_ASSERT(near(g4at(&g, i).w, 8) && near(g4at(&g, i).h, 8));
+    }
+    /* The outline is the last mark: drawn on top. */
+    gmark_t ol = g4at(&g, g.n - 1);
+    WT_ASSERT(!strcmp(ol.kind, "outline"));
     WT_ASSERT(near(ol.x, 32 + 10.0 * 6) && near(ol.y, 14 + 10.0));
+    WT_ASSERT(near(ol.w, 10) && near(ol.h, 10));
     WT_ASSERT(!strcmp(ol.tok, "--signal"));
-    gl_g4(NULL, 272, 84, 32, 14, 3, -1, &g);
-    WT_EQ(g.n, 0);
+    /* No baseline at all: the dash alone, with or without a now cell. */
+    gl_g4(NULL, 272, 84, 32, 14, 3, 30, 1, &g);
+    WT_EQ(g.n, 1);
+    WT_EQ(gm_count(&g, "dash"), 1);
+    WT_ASSERT(!strcmp(gm_get(&g, "dash").tok, "--faint"));
+    WT_EQ(gm_count(&g, "outline"), 0);
     /* One cell fed: every other is a single warming mark. */
     cells[5][0] = 7; cells[5][2] = 3;
-    gl_g4(cells, 272, 84, 32, 14, 3, 30, &g);
+    gl_g4(cells, 272, 84, 32, 14, 3, 30, 0, &g);
     WT_EQ(g.n, 169);
     WT_EQ(gm_count(&g, "cell"), 1);
     WT_EQ(gm_count(&g, "warm"), 167);
     for (int i = 0; i < g.n; i++)
-        if (!strcmp(g.m[i].kind, "warm")) WT_ASSERT(!strcmp(g.m[i].tok, "--rule"));
+        if (!strcmp(g4at(&g, i).kind, "warm")) WT_ASSERT(!strcmp(g4at(&g, i).tok, "--rule"));
     /* The hatch the old heatmap stroked is gone from the page. */
     WT_LACKS(page(), "for (var s = -ch; s < cw; s += 4 * dpr) {");
     WT_LACKS(page(), "grey hatched");
+    /* And so is the guard that left an all-warming grid undrawn. */
+    WT_LACKS(page(), "st.fed && i < 168");
+}
+
+/* Is tok one of the heat ramp's four? */
+static int is_heat(const char *tok) { return !strncmp(tok, "--heat-", 7); }
+
+/* The ruling of 2026-11-11: a warming cell with a sample is provisional
+ * and says its value so far as a bar in one ink on its --rule tile, by
+ * how much of the tile is inked; the ramp is a fed cell's alone. On a
+ * share map the steps are fixed over 0..1. Seen red with a provisional
+ * cell given heatToken() in the port, with the bar's level-3 height
+ * made the whole tile, with the n >= 1 test dropped (a never-sampled
+ * cell then draws the observed-absent floor), and with `share` ignored
+ * (the bars then scale against the largest mean, 0.5, and the half
+ * reads as three quarters). */
+static void test_g4_provisional_is_one_ink(void) {
+    static double cells[168][3];
+    memset(cells, 0, sizeof(cells));
+    /* Week one and two of a device: n = 1 present, n = 1 absent, n = 2
+     * at one week in two, n = 2 absent; the rest never sampled. No
+     * cell is at share 1, so the scale is not the largest mean. */
+    cells[0][0] = 0.5; cells[0][2] = 2;
+    cells[1][0] = 0;   cells[1][2] = 1;
+    cells[2][0] = 0.5; cells[2][2] = 2;
+    cells[3][0] = 0;   cells[3][2] = 2;
+    cells[30][0] = 0.2; cells[30][2] = 2;
+    gmarks_t g;
+    gl_g4(cells, 272, 84, 32, 14, 3, 30, 1, &g);
+    WT_EQ(gm_count(&g, "warm"), 168);
+    WT_EQ(gm_count(&g, "prov"), 5);
+    WT_EQ(gm_count(&g, "cell"), 0);
+    WT_EQ(gm_count(&g, "outline"), 1);
+    WT_EQ(g.n, 174);
+    int heat = 0, inks = 0;
+    for (int i = 0; i < g.n; i++) {
+        if (is_heat(g4at(&g, i).tok)) heat++;
+        if (!strcmp(g4at(&g, i).kind, "prov") && strcmp(g4at(&g, i).tok, "--tui-dim")) inks++;
+    }
+    WT_EQ(heat, 0);
+    WT_EQ(inks, 0);
+    /* Each bar follows its own tile, sits on the tile's floor, is the
+     * tile's width, and is never the tile's height: 1 px for 0 so far,
+     * a half for 0.5, a quarter for 0.2 (tile 8 by 8 at y 15..23). */
+    WT_ASSERT(!strcmp(g4at(&g, 0).kind, "warm") && !strcmp(g4at(&g, 1).kind, "prov"));
+    WT_ASSERT(near(g4at(&g, 1).x, g4at(&g, 0).x) && near(g4at(&g, 1).w, g4at(&g, 0).w));
+    WT_ASSERT(near(g4at(&g, 1).h, 4) && near(g4at(&g, 1).y, 19));
+    WT_ASSERT(!strcmp(g4at(&g, 3).kind, "prov") && near(g4at(&g, 3).h, 1) && near(g4at(&g, 3).y, 22));
+    WT_ASSERT(!strcmp(g4at(&g, 5).kind, "prov") && near(g4at(&g, 5).h, 4));
+    WT_ASSERT(!strcmp(g4at(&g, 7).kind, "prov") && near(g4at(&g, 7).h, 1));
+    /* Cell 4 was never sampled: its tile and no bar. */
+    WT_ASSERT(!strcmp(g4at(&g, 8).kind, "warm") && !strcmp(g4at(&g, 9).kind, "warm"));
+    gmark_t last = gm_last(&g, "prov");
+    WT_ASSERT(near(last.h, 2) && near(last.y, 31) && near(last.x, 32 + 10.0 * 6 + 1));
+    for (int i = 0; i < g.n; i++)
+        if (!strcmp(g4at(&g, i).kind, "prov")) WT_ASSERT(g4at(&g, i).h < 8 - 1e-6);
+    /* The outline is still last, over the provisional cell it frames. */
+    WT_ASSERT(!strcmp(g4at(&g, g.n - 1).kind, "outline"));
+    /* A full share is three quarters of the tile, the most a bar gets. */
+    cells[0][0] = 1; cells[0][2] = 1;
+    gl_g4(cells, 272, 84, 32, 14, 3, -1, 1, &g);
+    WT_ASSERT(!strcmp(g4at(&g, 1).kind, "prov") && near(g4at(&g, 1).h, 6) && near(g4at(&g, 1).y, 17));
+    /* R10: in one grey, fed, warming, provisional and now are four
+     * kinds, and a provisional cell is two marks where a fed one is
+     * one. */
+    cells[100][0] = 1; cells[100][2] = 3;
+    gl_g4(cells, 272, 84, 32, 14, 3, 0, 1, &g);
+    gm_grey(&g);
+    WT_ASSERT(gm_all_grey(&g));
+    WT_EQ(gm_count(&g, "cell"), 1);
+    WT_EQ(gm_count(&g, "warm"), 167);
+    WT_EQ(gm_count(&g, "prov"), 5);
+    WT_EQ(gm_count(&g, "outline"), 1);
 }
 
 /* G4's ramp is against the largest fed mean: a warming cell's mean,
- * however large, neither sets the top nor is drawn. Seen red with the
- * stats' max taken over every cell. */
+ * however large, does not set the ramp's top and takes no heat token.
+ * A map that is not of shares scales its provisional bars against the
+ * largest mean of any sampled cell, fed or provisional. Seen red with
+ * the stats' max taken over every cell, with top taken over the fed
+ * cells alone, and with a fed cell's token changed. */
 static void test_g4_ramp_and_caption_facts(void) {
     static double cells[168][3];
     memset(cells, 0, sizeof(cells));
     cells[0][0] = 100; cells[0][2] = 4;
     cells[1][0] = 50;  cells[1][2] = 3;
-    cells[2][0] = 1e6; cells[2][2] = 2;    /* warming */
+    cells[2][0] = 400; cells[2][2] = 2;    /* provisional, the largest */
+    cells[3][0] = 200; cells[3][2] = 1;    /* provisional */
+    cells[4][0] = 0;   cells[4][2] = 1;    /* provisional, nothing so far */
     g4st_t st = gl_g4_stats(cells, 3);
     WT_EQ(st.fed, 2);
     WT_EQ(st.warming, 166);
+    WT_EQ(st.prov, 3);
+    WT_EQ(st.unseen, 163);
+    WT_EQ(st.none, 0);
     WT_ASSERT(near(st.max, 100));
+    WT_ASSERT(near(st.top, 400));
     WT_ASSERT(near(st.n, 7));
+    WT_ASSERT(near(st.pn, 4));
     gmarks_t g;
-    gl_g4(cells, 272, 84, 32, 14, 3, -1, &g);
-    WT_ASSERT(!strcmp(g.m[0].tok, "--heat-3"));
-    WT_ASSERT(!strcmp(g.m[1].tok, "--heat-2"));
-    WT_ASSERT(!strcmp(g.m[2].kind, "warm"));
+    gl_g4(cells, 272, 84, 32, 14, 3, -1, 0, &g);
+    /* Fed cells are what they were: one whole tile each, on the ramp. */
+    WT_ASSERT(!strcmp(g4at(&g, 0).kind, "cell") && !strcmp(g4at(&g, 0).tok, "--heat-3"));
+    WT_ASSERT(near(g4at(&g, 0).x, 33) && near(g4at(&g, 0).y, 15) && near(g4at(&g, 0).w, 8) && near(g4at(&g, 0).h, 8));
+    WT_ASSERT(!strcmp(g4at(&g, 1).kind, "cell") && !strcmp(g4at(&g, 1).tok, "--heat-2"));
+    /* 400 of 400 is three quarters, 200 of 400 a half, 0 the floor. */
+    WT_ASSERT(!strcmp(g4at(&g, 2).kind, "warm") && !strcmp(g4at(&g, 3).kind, "prov"));
+    WT_ASSERT(near(g4at(&g, 3).h, 6) && !strcmp(g4at(&g, 3).tok, "--tui-dim"));
+    WT_ASSERT(!strcmp(g4at(&g, 5).kind, "prov") && near(g4at(&g, 5).h, 4));
+    WT_ASSERT(!strcmp(g4at(&g, 7).kind, "prov") && near(g4at(&g, 7).h, 1));
     WT_EQ(gm_count(&g, "outline"), 0);
-    /* R10: in one grey, fed, warming and now are still three kinds. */
-    gl_g4(cells, 272, 84, 32, 14, 3, 0, &g);
+    int heat = 0;
+    for (int i = 0; i < g.n; i++) if (is_heat(g4at(&g, i).tok)) heat++;
+    WT_EQ(heat, 2);
+    /* A fed cell's mean sets the provisional scale too: against 100,
+     * 0.5 and 0.25 are both in the first third. */
+    cells[2][0] = 0.5; cells[3][0] = 0.25;
+    gl_g4(cells, 272, 84, 32, 14, 3, -1, 0, &g);
+    WT_ASSERT(near(g4at(&g, 3).h, 2) && near(g4at(&g, 5).h, 2));
+    /* Which scale is the caller's word, not the data's: the same cells
+     * against their own largest mean, then as shares against 1. */
+    cells[0][0] = 0.4; cells[1][0] = 0.1;
+    gl_g4(cells, 272, 84, 32, 14, 3, -1, 0, &g);
+    WT_ASSERT(near(g4at(&g, 3).h, 6) && near(g4at(&g, 5).h, 4));   /* against top 0.5 */
+    gl_g4(cells, 272, 84, 32, 14, 3, -1, 1, &g);
+    WT_ASSERT(near(g4at(&g, 3).h, 4) && near(g4at(&g, 5).h, 2));   /* against 1 */
+    /* R10: in one grey, fed, warming and now are still their kinds. */
+    gl_g4(cells, 272, 84, 32, 14, 3, 0, 0, &g);
     gm_grey(&g);
     WT_ASSERT(gm_all_grey(&g));
     WT_EQ(gm_count(&g, "cell"), 2);
     WT_EQ(gm_count(&g, "warm"), 166);
     WT_EQ(gm_count(&g, "outline"), 1);
+}
+
+/* The caption says what the tiles cannot (R9, R10): the ramp's top
+ * while a cell is fed, the provisional bar's scale while one is
+ * provisional (0 to 1 for shares, else the largest mean so far, in the
+ * unit), n over both, and the counts: warming, fed, provisional, not
+ * yet observed. Seen red with prov and unseen swapped in the port's
+ * state, and with the share scale printed as the largest mean. */
+static void test_g4_caption_counts(void) {
+    static double cells[168][3];
+    memset(cells, 0, sizeof(cells));
+    char out[400];
+    /* No baseline: R5's words, no scale. */
+    g4st_t st = gl_g4_stats(NULL, 3);
+    WT_EQ(st.none, 1);
+    WT_EQ(st.unseen, 168);
+    gl_heat_caption("dev.present, share of weeks present", &st, 1, "", out, sizeof(out));
+    WT_ASSERT(!strcmp(out, "dev.present, share of weeks present, hour of week, n=0, no data"));
+    /* Never sampled anywhere: no scale to name. */
+    st = gl_g4_stats(cells, 3);
+    gl_heat_caption("s", &st, 1, "", out, sizeof(out));
+    WT_ASSERT(!strcmp(out, "s, hour of week, n=0, warming: 168 of 168 cells, fed: 0, "
+                           "provisional: 0 (under 3 weeks), not yet observed: 168"));
+    /* Week two of a device: 96 cells sampled, 24 of them twice. */
+    for (int i = 0; i < 96; i++) { cells[i][0] = i % 2 ? 0.5 : 0; cells[i][2] = i < 24 ? 2 : 1; }
+    st = gl_g4_stats(cells, 3);
+    gl_heat_caption("dev.present, share of weeks present", &st, 1, "", out, sizeof(out));
+    WT_ASSERT(!strcmp(out, "dev.present, share of weeks present, hour of week, "
+                           "provisional bar in thirds of 0 to 1, n=120, "
+                           "warming: 168 of 168 cells, fed: 0, provisional: 96 "
+                           "(under 3 weeks), not yet observed: 72"));
+    /* A rate, some fed: both scales, each in the unit. */
+    for (int i = 0; i < 12; i++) { cells[i][0] = 1200; cells[i][2] = 3; }
+    cells[50][0] = 25000;
+    st = gl_g4_stats(cells, 3);
+    gl_heat_caption("iface.rx_rate wlan0", &st, 0, "B/s", out, sizeof(out));
+    WT_ASSERT(!strcmp(out, "iface.rx_rate wlan0, hour of week, ramp 0 to 1200 B/s, "
+                           "provisional bar in thirds of 0 to 25.0k B/s, n=132, "
+                           "warming: 156 of 168 cells, fed: 12, provisional: 84 "
+                           "(under 3 weeks), not yet observed: 72"));
+    /* Every cell fed: the ramp and n, no state. */
+    for (int i = 0; i < 168; i++) { cells[i][0] = 0.5; cells[i][2] = 4; }
+    st = gl_g4_stats(cells, 3);
+    gl_heat_caption("s", &st, 1, "", out, sizeof(out));
+    WT_ASSERT(!strcmp(out, "s, hour of week, ramp 0 to 0.50, n=672"));
+    /* The page's side of it, whole: the callers and the caption. */
+    const char *p = page();
+    WT_HAS(p, "  function fmt(v) {\n"
+              "    if (!num(v)) return \"-\";\n"
+              "    var a = Math.abs(v);\n"
+              "    if (a >= 1e9) return (v / 1e9).toFixed(1) + \"G\";\n"
+              "    if (a >= 1e6) return (v / 1e6).toFixed(1) + \"M\";\n"
+              "    if (a >= 1e4) return (v / 1e3).toFixed(1) + \"k\";\n"
+              "    if (a >= 100 || v === Math.round(v)) return String(Math.round(v));\n"
+              "    return v.toFixed(2);\n"
+              "  }\n");
+    WT_HAS(p, "  function heatmap(c, bl) {\n"
+              "    var T = theme();\n"
+              "    var cells = bl && bl.cells || null;\n"
+              "    var warm = bl && num(bl.warm_n) ? bl.warm_n : 3;\n"
+              "    var share = !!bl && (bl.share === true || bl.scale === \"share_of_weeks\");\n"
+              "    glyph.paint(c, glyph.g4(cells, { w: c.clientWidth, h: c.clientHeight, x0: 32, y0: 14,\n"
+              "                                     warm: warm, now: bl ? bl.now_cell : -1,\n"
+              "                                     share: share }), tok);\n"
+              "    var st = glyph.g4Stats(cells, warm);\n"
+              "    st.share = share;\n"
+              "    if (!cells) return st;\n"
+              "    var dpr = window.devicePixelRatio || 1;\n"
+              "    var g = c.getContext(\"2d\");\n"
+              "    var cw = (c.width - 32 * dpr) / 24, ch = (c.height - 14 * dpr) / 7;\n"
+              "    g.font = (9 * dpr) + \"px \" + css(\"--font-mono\");\n"
+              "    g.fillStyle = T.muted;\n"
+              "    g.textBaseline = \"middle\";\n"
+              "    for (var d = 0; d < 7; d++) g.fillText(DAYS[d], 0, 14 * dpr + ch * (d + 0.5));\n"
+              "    g.textBaseline = \"top\";\n"
+              "    for (var h = 0; h < 24; h += 3) g.fillText(String(h), 32 * dpr + cw * h, 0);\n"
+              "    return st;\n"
+              "  }\n");
+    WT_HAS(p, "  function heatCaption(source, st, unit) {\n"
+              "    if (st.none)\n"
+              "      return glyph.caption({ source: source, window: \"hour of week\", n: 0, state: \"no data\" });\n"
+              "    var u = unit ? \" \" + unit : \"\", sc = [];\n"
+              "    if (st.fed) sc.push(\"ramp 0 to \" + fmt(st.max) + u);\n"
+              "    if (st.prov)\n"
+              "      sc.push(\"provisional bar in thirds of 0 to \" + (st.share ? \"1\" : fmt(st.top) + u));\n"
+              "    return glyph.caption({ source: source, window: \"hour of week\", scale: sc.join(\", \"),\n"
+              "      n: st.n + st.pn,\n"
+              "      state: st.warming ? \"warming: \" + st.warming + \" of 168 cells, fed: \" + st.fed +\n"
+              "             \", provisional: \" + st.prov + \" (under \" + st.warm + \" weeks), not yet observed: \" +\n"
+              "             st.unseen : \"\" });\n"
+              "  }\n");
+    /* Each caller hands the glyph what it needs: the drawer's map is of
+     * shares and says so; the Overview's takes /api/baseline's answer,
+     * whose "scale" says whether it is. */
+    WT_HAS(p, "      var ws = heatmap($(\"dr-week\"), { cells: cells, warm_n: wk.warm_n, now_cell: wk.now_cell,\n"
+              "                                       share: true });\n"
+              "      set(\"dr-week-note\", heatCaption(\"dev.present, share of weeks present\", ws, \"\"));");
+    WT_HAS(p, "          var hs = heatmap($(\"o-heat\"), bl);\n"
+              "          set(\"o-heat-note\", heatCaption(\"iface.rx_rate \" + O.key +\n"
+              "              \", mean by local hour of the sensor host\", hs, \"B/s\"));");
 }
 
 /* F1, ruling 5: the Overview's tiles in urgency order, each with a G1
@@ -2514,7 +3044,7 @@ static void test_cards_and_multiples_wiring(void) {
     WT_HAS(p, "                : \"shared scale, top \" + fmt(sh[1]) + \" \" + m.unit) + \", sorted by \" + ord.by,");
     WT_HAS(p, "        if (own) cell.appendChild(el(\"div\", \"mx\", \"top \" + fmt(own[1])));");
     /* The heatmap's caption counts the warming cells (F3). */
-    WT_HAS(p, "n: st.n, state: st.warming ? \"warming: \" + st.warming + \" of 168 cells\" : \"\" });");
+    WT_HAS(p, "      state: st.warming ? \"warming: \" + st.warming + \" of 168 cells, fed: \" + st.fed +");
 }
 
 /* ── V2: G2, its words, the new mark, G6's placements ───────────── */
@@ -4276,6 +4806,10 @@ void run_glyph_tests(void) {
     WT_RUN(test_g5_long_cells_are_one_ink);
     WT_RUN(test_g5_ruler_sun_band);
     WT_RUN(test_the_page_carries_the_sun);
+    WT_RUN(test_sun_zone_is_the_sensors);
+    WT_RUN(test_sun_zone_fallback_and_names);
+    WT_RUN(test_sun_words_in_sensor_time);
+    WT_RUN(test_the_page_carries_the_sun_zone);
     WT_RUN(test_g6_bullet);
     WT_RUN(test_g6_count_bar);
     WT_RUN(test_g6_states);
@@ -4285,7 +4819,9 @@ void run_glyph_tests(void) {
     WT_RUN(test_shared_scale_has_one_maximum);
     WT_RUN(test_multiples_sort);
     WT_RUN(test_g4_warming_is_plain_rule);
+    WT_RUN(test_g4_provisional_is_one_ink);
     WT_RUN(test_g4_ramp_and_caption_facts);
+    WT_RUN(test_g4_caption_counts);
     WT_RUN(test_tiles_and_strip_carry_g1);
     WT_RUN(test_cards_and_multiples_wiring);
     WT_RUN(test_v1_review_wiring);

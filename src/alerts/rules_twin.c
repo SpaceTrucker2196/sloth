@@ -210,13 +210,13 @@ static int twin_pair_late_arrival(const beacon_ap_t *a, const beacon_ap_t *b) {
     const beacon_ap_t *late  = early == a ? b : a;
     if (late->first_seen - early->first_seen < TWIN_LATE_ARRIVAL_S) return 0;
     if (early->last_seen < late->first_seen) return 0;
-    /* A full table re-admits what it evicted a hop pass ago under a new
-     * first_seen, so one stamped inside the wait after an eviction is
-     * not an arrival. The age is the later half's own, taken at its
-     * insert: an eviction since then says nothing about it. */
-    if (late->evict_age_s1 &&
-        (time_t)(late->evict_age_s1 - 1u) < TWIN_LATE_ARRIVAL_S)
-        return 0;
+    /* first_seen is the entry's, and the table rebuilds an entry it
+     * dropped: an AP that fell silent for BEACON_AGE_SECS, or lost its
+     * slot in a full table, comes back with a new one. Only a name
+     * this address has not carried before in the session is an arrival
+     * (beacon_ap_t.arrival); a return is not, and neither is an entry
+     * the table's memory can no longer vouch for. */
+    if (late->arrival != BEACON_ARRIVAL_NEW) return 0;
     if (g_twin_moved_at &&
         late->first_seen - g_twin_moved_at < TWIN_LATE_ARRIVAL_S)
         return 0;
@@ -429,8 +429,12 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
     if (ev.inv_mismatch) { ev.positive += TWIN_W_INV_MISMATCH; ev.hard = 1; }
     /* Last, and only on a pair that is already one: it corroborates and
      * never nominates (alerts.h). Below the sibling return, so one
-     * device's radios are never asked. */
-    if (ev.positive > 0 && twin_pair_late_arrival(a, b)) {
+     * device's radios are never asked. And only where a half is locally
+     * administered, which is the case it was asked for: two globally
+     * administered addresses have their OUIs to be compared on. */
+    if (ev.positive > 0 &&
+        (bssid_is_laa(a->bssid) || bssid_is_laa(b->bssid)) &&
+        twin_pair_late_arrival(a, b)) {
         ev.late_arrival = 1;
         ev.positive += TWIN_W_LATE_ARRIVAL;
     }
@@ -457,8 +461,9 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
 }
 
 /* One short, bounded phrase per context signal. ALERT_DETAIL_LEN is 320
- * and the longest EVIL_TWIN detail, every phrase present, is 281
- * (test_twin_detail_fits_with_every_phrase). The BTM
+ * and the longest EVIL_TWIN detail is 264 (the late-arrival and
+ * same-OUI phrases cannot both appear;
+ * test_twin_detail_fits_with_every_phrase). The BTM
  * steer is not here: it gets its own note naming the steering AP, which
  * is the actionable half. */
 static void twin_evidence_note(char *out, size_t n, const twin_evidence_t *ev) {

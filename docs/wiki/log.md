@@ -6824,11 +6824,17 @@ CRIT again through a late arrival (owner ruling 3b): `+late-arrival`,
 +20, when the later half was first heard 120 s or more
 (`twin.late_arrival_s`) after the earlier one, the earlier one has been
 heard since, and the sensor has been at rest that long. It only
-corroborates other evidence; a same-vendor pair stays WARN at 40%.
-Limit: `first_seen` is when the sensor first heard a BSSID since it was
-last silent for 300 s, so an AP that drops out and returns is a late
-arrival; one re-admitted to a full beacon table (256 BSSIDs) within
-that wait of an eviction is not counted. The deauth-then-twin chain (`twin-chain:`) takes its pair from
+corroborates other evidence, and only on a pair with a locally
+administered half: two globally administered addresses are scored on
+their OUIs as before (a same-vendor or OUI-only pair 20%, a two-vendor
+pair with a vendor-IE mismatch 55%).
+An AP that drops out and returns is not a late arrival: the beacon
+table remembers the BSSID/SSID pairs it has dropped (4096, for the
+session) and only a name new on its address counts, which also
+replaces the full-table guard. Limits: once that memory overflows, an
+entry it does not know is not counted until it reaches back a day; and
+a transmitter can announce the name it will copy ahead of time and be
+a return. The deauth-then-twin chain (`twin-chain:`) takes its pair from
 the same scorer (owner ruling 4a): a flood against one radio of a
 dual-band device no longer names and taints the other, a locally
 administered half is admitted on evidence and not on its first three
@@ -6880,3 +6886,19 @@ Owner request. An anomaly is triaged through the alert's own rows, routes, state
 ## 2026-11-11 — slothweb: every signal graphic is an S-meter on its band's scale
 
 Owner rulings. Every signal graphic on the page is a receiver's S-meter bar (G2's range sparkline replaced; `glyph.g2()` kept, no caller). 6 dB per S-unit on the scale of the band heard on, from one table (S9 = -47 dBm at 2.4 GHz, -54 at 5 GHz, -56 at 6 GHz: the free-space path-loss offset against 2442 MHz), which amends the visual spec's R3; the S reading beside the dBm, stepped in tens past S9; two peak-hold ticks for the window's least and greatest; the face and every band's S9 said once per table; "band unknown: 2.4 GHz scale" where a row names no band. The GNSS and ADS-B signal cells take the same face on dB-Hz and dBFS with no S-units, and the GNSS trail column is gone. The `rf` member gains `radio`. [[slothweb]].
+
+## 2026-11-11 — slothweb: the presence ruler and its words in the sensor's time zone
+
+Owner ruling on the sun-phase strip: G5's ruler ticks its midnights in the sensor's zone, not the viewer's clock, so the ticks and the sun band agree, and the words' sunrise and sunset times are in the same zone and name it (`sensor time (slothweb's host), UTC-7`); every other time on the page stays the viewer's. The zone is `utc_offset_s`, which `/api/devices` and `/api/history/devices` now report (slothweb's host's offset, taken as the sensor's; a copied sloth.db read elsewhere shows that machine's). One offset, the window's end's, serves the ruler: a range over a day says so. No offset from the server: the viewer's clock, named as that. [[slothweb]].
+
+## 2026-11-11 — keys: all walks every key, not the key picker's 256
+
+Owner rulings on the first build: "lift the cap", dimmed lines "a little more visible", the hour tier kept for 30 d. `/api/series/all` now answers the union of the rollup's keys and the keys the store holds a bucket of in the window (`web_store_keys_after()`, a seek a series), 128 to an answer and fewer when it is full or has run 100 ms, `total` on the first. The page draws what has arrived under `loading N of M keys`, drops the read on a metric, scope, window or mode change and stops it when the view is left; the graph holds 8,192 keys and a read stops at 60 s, either said in the caption as `N of M keys`. Past 256 keys the 256 largest are lines and the rest the range they span in each cell; the legend keeps 200 entries in the page under a filter box. Unfocused lines are `--faint`, not `--rule`. The key picker keeps its 256. [[slothweb]].
+
+## 2026-11-11 — slothweb: the hour-of-week grid always drawn, provisional cells marked
+
+Owner ruling ("it always only has one tile highlighted"). All 168 cells of G4 are always drawn; an all-warming grid is 168 `--rule` tiles under the now outline, not the outline alone. A warming cell with a sample (1 <= n < 3) is provisional: a `--tui-dim` bar on its tile, 1 px for 0 so far, a quarter, a half or three quarters by thirds of the provisional scale (0 to 1 for shares, 0 to the largest sampled mean otherwise), never a heat token and never the whole tile. A never-sampled cell is the bare tile; no baseline is R5's dash and `no data`. The caption names the scale and counts fed, provisional and not yet observed cells. R8, F3 and G4 amended in `docs/web-visual-spec.md` and `web/README.md`; [[slothweb]] also records what a restart costs the baseline (the start hour always, the stop hour too when it is an earlier one).
+
+## 2026-11-11 — slothweb: an SSID's detail, vendor research at the drawer's foot, the Probes tab
+
+Three owner requests. (1) Every SSID on the page is selectable and opens an SSID detail drawer from the new read-only `/api/wifi/ssid?ssid=` (base64url of the octets, compared with `=`): BSSIDs now and once, associated and probing stations, 24 h presence, KARMA and twin findings, alerts by BSSID or the SSID's key component with a work-bounded walk; `web/src/web_ssidview.c`, `web/ui/ssid.js`. (2) The device drawer's vendor research moved to the drawer's foot (`#dr-vendor`); Lookup unchanged. (3) New Probes tab from `/api/probes/clients|ssids|shared|groups` over sloth.db only (no store): stations heard probing and what sloth ties each to, networks searched for, an inverse-frequency similarity (`w = ln(N/df)`, at least `min` shared uncommon names) and groups; `web/src/web_probes.c`, `web/ui/probes.js`. [[slothweb]], [[capture-scope]].
