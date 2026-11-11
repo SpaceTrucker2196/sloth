@@ -103,6 +103,9 @@ void rule_sae_psk_regression(const sloth_state_t *s, time_t now);
 void rule_wpa_downgrade(const sloth_state_t *s, time_t now);
 void rule_karma_ap(const sloth_state_t *s, time_t now);
 void rule_karma_probe_forge(const sloth_state_t *s, time_t now);
+/* src/alerts/rules_harvest.c (#172) */
+void rule_pmkid_harvest(const sloth_state_t *s, time_t now);
+void rule_handshake_harvest(const sloth_state_t *s, time_t now);
 void rule_open_setup_ap(const sloth_state_t *s, time_t now);
 void rule_cam_setup_ssid(const sloth_state_t *s, time_t now);
 void rule_evil_twin(const sloth_state_t *s, time_t now);

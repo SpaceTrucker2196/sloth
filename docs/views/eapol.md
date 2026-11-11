@@ -272,7 +272,17 @@ stand out.
 - **A high deauth rate from one BSSID + many M1/M2 captures shortly
   after** = someone is actively running an aireplay-style deauth +
   rejoin loop to harvest handshakes. Check the [Deauth](deauth.md)
-  view in parallel.
+  view in parallel. Since #172 this is also an alert,
+  `HANDSHAKE_HARVEST`: two or more deauths claimed from the BSSID, then
+  the victim's fresh M1/M2 within 30 s (WARN; CRIT at two victims).
+- **Many PMKID-bearing M1s to one station that never sends an M2** =
+  hcxdumptool's clientless PMKID harvest: the station asks AP after AP
+  to associate and collects each M1. Since #172 this is
+  `PMKID_HARVEST` (three BSSIDs left unanswered; CRIT when three of
+  them handed over a PMKID and the station answered none). In this view
+  it reads as a column of `M1` rows, one STA, many BSSIDs, no `M2`.
+  The view itself gains no mark: the alert names the station, and the
+  rows are already filterable by it.
 
 ## What's suspicious (defensive)
 

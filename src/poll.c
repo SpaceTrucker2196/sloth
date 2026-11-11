@@ -25,6 +25,7 @@
 #include "twins.h"
 #include "probe_pnl.h"
 #include "eapol_log.h"
+#include "harvest_track.h"
 #include "seqnum_track.h"
 #include "assoc_track.h"
 #include "action_snoop.h"
@@ -154,6 +155,7 @@ static void st_wifi_snapshots(sloth_state_t *s, const poll_ctx_t *ctx) {
     mon_frame_snapshot(s);
     probe_pnl_snapshot(s);
     eapol_snapshot(s);
+    harvest_snapshot(s);  /* PMKID / handshake harvesting (#172) */
     seqnum_snapshot(s);
     assoc_snapshot(s);
     assoc_request_snapshot(s);

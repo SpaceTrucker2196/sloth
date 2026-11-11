@@ -75,6 +75,8 @@ const alert_rule_t g_alert_rules[] = {
     R(rule_beacon_flood),
     R(rule_auth_flood),
     R(rule_assoc_flood),
+    R(rule_pmkid_harvest),
+    R(rule_handshake_harvest),
     R(rule_btm_abuse),
     R(rule_wpa_downgrade),
     R(rule_tpc_absent_high_band),

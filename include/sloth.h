@@ -1902,6 +1902,9 @@ typedef struct {
     time_t   last_seen;
 } karma_forge_t;
 
+struct harvest_sta_s;     /* src/harvest_track.h (#172) */
+struct harvest_chain_s;
+
 /* ── Rogue-RADIUS / EAP method tracking (#31) ────────────────
  * One row per BSSID seen running an 802.1X EAP conversation. Records
  * which inner EAP method types it offered (bitmap; the methods we
@@ -3830,6 +3833,13 @@ typedef struct {
      * table of this size was measured to overflow it. */
     const karma_forge_t *karma_forge;
     int            karma_forge_count;
+    /* PMKID / handshake harvesting (#172): harvest_snapshot()'s per-poll
+     * copies (src/harvest_track.h), NULL before the first poll. Pointers
+     * for the reason karma_forge is one. */
+    const struct harvest_sta_s   *harvest_sta;
+    int                           harvest_sta_count;
+    const struct harvest_chain_s *harvest_chain;
+    int                           harvest_chain_count;
 
     /* Research-corpus coverage (#73 slice 3). */
     research_cov_t research_cov[MAX_RESEARCH_COV];

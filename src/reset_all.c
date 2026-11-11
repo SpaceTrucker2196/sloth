@@ -34,6 +34,7 @@
 #include "evidence_ring.h"
 #include "evidence_manifest.h"
 #include "fragattack.h"
+#include "harvest_track.h"
 #include "host_cache.h"
 #include "http_log.h"
 #include "icmp_log.h"

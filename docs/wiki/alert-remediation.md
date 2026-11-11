@@ -10,7 +10,7 @@ by `web/tools/alertkb.c`, never copied by hand).
 step's basis; each section names its own), `docs/wiki/alerts.md` and
 `docs/views/alerts.md` (what each rule fires on).
 
-**Last updated**: 2026-11-11 (#187 S2: KARMA_PROBE_FORGE). 2026-11-08 (#186: ADSB_EMERGENCY). 2026-11-03 (#173: FRAG_PLAINTEXT reads the station pair from the view; PM_FORGE's 900 s report window). 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
+**Last updated**: 2026-11-11 (#172: PMKID_HARVEST, HANDSHAKE_HARVEST). 2026-11-11 (#187 S2: KARMA_PROBE_FORGE). 2026-11-08 (#186: ADSB_EMERGENCY). 2026-11-03 (#173: FRAG_PLAINTEXT reads the station pair from the view; PM_FORGE's 900 s report window). 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
 remove" steps made conditional on the premises, as the rest are;
 review: WEAK_TLS aimed at the client
 that offered the old version; every on-device step conditional on the
@@ -1995,6 +1995,57 @@ Sources: `research/adsb/emergency-squawks.md`
 alone. Mitigate on the clients and by removing the rogue.
 
 Sources: `research/papers/daizovi-macaulay-2005-karma.md`, `research/tools/airbase-ng.md`
+
+## `PMKID_HARVEST`
+
+**Investigate**
+
+1. Read the station address, how many BSSIDs it asked, how many it left
+   without an M2, and how many of those M1s carried a PMKID. A station
+   that never answers any M1 is not trying to join anything.
+2. Find the station in the EAPOL `[e]` view: a column of `M1` rows to
+   that one STA, many BSSIDs, no `M2`.
+3. Check whether the operator's own BSSIDs are among them, and whether
+   their M1s carried a PMKID.
+
+**Fix**
+
+1. If the station is on premises the operator controls, locate the
+   radio and remove it.
+2. Treat the PSK of every operator network that handed it a PMKID as
+   exposed to an offline guess: if the passphrase is weak, change it.
+3. Prefer WPA3-SAE, which this attack does not apply to, where clients
+   allow it.
+
+**Vendor fix:** none for the WPA2-PSK design; the protection is a
+strong passphrase or SAE.
+
+Sources: `research/papers/steube-2018-pmkid.md`, `research/tools/hcxdumptool.md`, `research/ieee/802.11-2020-12.7-eapol-key.md`
+
+## `HANDSHAKE_HARVEST`
+
+**Investigate**
+
+1. Read the BSSID, how many stations were knocked off and reconnected,
+   and how many deauths preceded them. One station on a band-steering
+   AP can look like this; several stations is the harvesting run.
+2. Open the `[a]` Deauth view for the frames and the EAPOL `[e]` view
+   for the reconnect handshakes.
+3. Check whether the BSSID is the operator's, and whether its clients
+   use management frame protection.
+
+**Fix**
+
+1. Enable management frame protection (PMF required) on the operator's
+   network, so forged deauthentications are ignored by its clients.
+2. Treat the network's PSK as exposed to an offline guess; change a
+   weak one.
+3. If the transmitter can be located on controlled premises, remove
+   it.
+
+**Vendor fix:** PMF (802.11w) on AP and clients; WPA3 requires it.
+
+Sources: `research/tools/hcxdumptool.md`, `research/ieee/802.11-2020-12.7-eapol-key.md`
 
 ## Related pages
 

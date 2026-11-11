@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include "harvest_track.h"
 #include "assoc_track.h"
 #include "sloth_clock.h"
 #include "probe_pnl.h"
@@ -189,6 +190,12 @@ void assoc_request_observe(const assoc_req_t *req, int8_t signal, int channel) {
      * STA — the rate is the signal there, independent of whether the
      * ask changed. */
     flood_record(req->bssid, req->sta, now, req->event_id);
+
+    /* The request that opens a station's row in the harvest tracker
+     * (#172): it is what proves the station was audible, so a later M1
+     * left without an M2 means one never sent. Before any assoc_track
+     * lock, for the reason probe_pnl is called here. */
+    harvest_note_assoc_req(req->sta, req->bssid);
 
     /* Corroborate the client's PHY tier in the PNL (#60). Done here,
      * before any assoc_track lock is taken, so the two modules never

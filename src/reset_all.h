@@ -62,6 +62,7 @@
     X(evil_twin_taint_clear) \
     X(frag_clear) \
     X(gps_location_reset) \
+    X(harvest_clear) \
     X(host_cache_clear) \
     X(http_log_clear) \
     X(icmp_log_clear) \

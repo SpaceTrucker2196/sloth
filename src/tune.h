@@ -193,6 +193,13 @@ typedef enum {
        src/karma_detect.h. */
     TUNE_KARMA_FORGE_SSIDS,
     TUNE_KARMA_FORGE_WINDOW_S,
+    /* #172: PMKID_HARVEST and HANDSHAKE_HARVEST. Each default is argued
+       in src/harvest_track.h; none comes from a source. */
+    TUNE_HARVEST_WINDOW_S,
+    TUNE_HARVEST_MIN_BSSIDS,
+    TUNE_HARVEST_UNANSWERED_PCT,
+    TUNE_HARVEST_DEAUTH_MIN,
+    TUNE_HARVEST_RECONNECT_S,
     TUNE_COUNT
 } tune_id_t;
 

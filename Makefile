@@ -139,6 +139,7 @@ CORE_COMMON_SRCS = \
        src/twins.c           \
        src/views/twins.c     \
        src/karma_detect.c    \
+       src/harvest_track.c   \
        src/views/karma.c     \
        src/views/rogue_radius.c \
        src/alerts/engine.c   \
@@ -149,6 +150,7 @@ CORE_COMMON_SRCS = \
        src/alerts/rules_wifi_mgmt.c \
        src/alerts/rules_twin.c \
        src/alerts/rules_camera.c \
+       src/alerts/rules_harvest.c \
        src/tune.c src/fs_capacity.c            \
        src/views/alerts.c    \
        src/md5.c             \
