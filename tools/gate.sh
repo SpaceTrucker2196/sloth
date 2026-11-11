@@ -64,6 +64,9 @@ say() { printf '%s\n' "$*" | tee -a "$LOG"; }
 step() {
     name=$1; shift
     out=build/gate-$(printf '%s' "$name" | tr -c 'A-Za-z0-9' '_').log
+    # `make clean` removes build/, and the step after one would fail on
+    # its own redirect (rc=2, nothing run) rather than on the tree.
+    mkdir -p build
     "$@" > "$out" 2>&1
     rc=$?
     line=$(grep -E 'assertions passed|slothweb tests:|deploy-test:|wiki-sync-test:|replay-check:|quickstart_check:' "$out" | tail -1)
