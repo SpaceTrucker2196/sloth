@@ -60,10 +60,9 @@ details.frgrp { border-top: 1px dotted var(--rule); padding: 4px 0; }
 details.frgrp > summary { cursor: pointer; font-size: 12px; color: var(--tui-bright); letter-spacing: 0.04em; }
 details.frgrp > summary:hover { color: var(--hover); }
 .fr-sub { margin-top: 8px; }
-.frkv { display: grid; grid-template-columns: minmax(10ch, 18ch) minmax(0, 1fr) minmax(0, 0.9fr); gap: 1px 10px; font-size: 12px; margin: 4px 0 8px; }
+.frkv { display: grid; grid-template-columns: minmax(10ch, 18ch) minmax(0, 1fr); gap: 1px 10px; font-size: 12px; margin: 4px 0 8px; }
 .frkv .k { color: var(--muted); overflow-wrap: anywhere; }
 .frkv .v { overflow-wrap: anywhere; }
-.frkv .s { font-size: 10px; overflow-wrap: anywhere; }
 /* The RSSI sparkline: one glyph a cell; at phone width it breaks between
  * glyphs rather than push the page sideways. */
 .fr-spark-g { word-break: break-all; letter-spacing: 0; }
@@ -80,5 +79,5 @@ details.frgrp > summary:hover { color: var(--hover); }
 
 @media (max-width: 480px) {
   .frkv { grid-template-columns: minmax(0, 1fr); }
-  .frkv .s { margin-bottom: 4px; }
+  .frkv .v { margin-bottom: 4px; }
 }
