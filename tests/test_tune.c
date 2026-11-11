@@ -77,6 +77,9 @@ static void test_specs_match_enum_order(void) {
     /* The floor keeps the wait above the sibling window (10 s) and one
      * worst pass of the default hop list (22 s). */
     ASSERT_EQ((long long)tune_spec(TUNE_TWIN_LATE_ARRIVAL_S)->lo, 30);
+    /* A day, as documented; unpinned until 2026-11-11, when a ceiling
+     * of 3600 passed the suite. */
+    ASSERT_EQ((long long)tune_spec(TUNE_TWIN_LATE_ARRIVAL_S)->hi, 86400);
     ASSERT_STR(tune_spec(TUNE_RECON_SUSTAIN_PROBES)->name, "recon.sustain_probes");
     ASSERT_STR(tune_spec(TUNE_SOCKET_MAX_PER_PEER)->name, "socket.max_per_peer");
     ASSERT_STR(tune_spec(TUNE_SOCKET_IDLE_SECS)->name, "socket.idle_secs");
