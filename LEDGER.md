@@ -319,3 +319,5 @@
 | dac89dd | 2026-11-09T14:13:44Z | claude-opus-5 | 284 | 135585 | 12350852 | 2291111 | 32.4776 | release v1.8.6 |
 | 308aa87 | 2026-11-10T12:29:03Z | claude-opus-5 | 336 | 110232 | 27612356 | 504457 | 21.6082 | #185 item 3 — SLOTH_JSONL_VERSION reported as jsonl_version in sensor_health |
 | 9879273 | 2026-11-11T04:24:32Z | claude-fable-5-1, claude-opus-5-5 | 90 | 18225 | 3535517 | 509129 | 10.3684 | #192 F0: ADR 0008 own-fleet sharing |
+| c6dea24 | 2026-11-11T05:33:57Z | claude-opus-5-5 | 8 | 4681 | 534499 | 7269 | 0.2587 | #192 F1: slothweb fleet peer pull, export, slothweb.db v8 |
+| 2f8ce12 | 2026-11-11T06:02:45Z | claude-opus-5-5 | 62 | 10884 | 4279372 | 132475 | 2.1336 | #192 F1 review: exporter self-check, transfer-coding refusal, trickle test |
