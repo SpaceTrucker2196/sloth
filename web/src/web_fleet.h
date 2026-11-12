@@ -144,6 +144,8 @@
 #define WEB_FLEET_OWN_MAX        8
 #define WEB_FLEET_MAC_SZ         18
 #define WEB_FLEET_NOOWN_S        3600
+/* The own radios are read again this often (#196). */
+#define WEB_FLEET_OWN_REREAD_S   600
 /* The receiver's GNSS incidents (#192 I6, web_fleetgnss.h), asked for
  * with gnss=1: at most this many gnss_event lines, the newest of the last
  * week. An older export refuses gnss=1; it is then asked without it for
@@ -155,6 +157,11 @@
  * AP row's attacker-fingerprint members. An older export refuses
  * ident=1; it is then asked without it for WEB_FLEET_NOIDENT_S. */
 #define WEB_FLEET_NOIDENT_S      3600
+/* A peer's own networks (own_net rows) are dropped once its newest
+ * answer to ident=1 is this old by its own clock, and not counted once
+ * that answer is this old by this site's (#196): a peer that stops
+ * offering ident, or stops answering, no longer names them for ever. */
+#define WEB_FLEET_OWN_STALE_S    86400
 /* This site's own networks (--my-ssid, --my-bssid on slothweb, as on
  * sloth): at most WEB_FLEET_MINE_MAX of each, an SSID of 1..32 octets. */
 #define WEB_FLEET_MINE_MAX       16
@@ -203,11 +210,30 @@ int  web_fleet_check_peer(const web_fleet_peer_cfg_t *p, int allow_outside,
 /* A kind's backfill (F2): the rows a cut answer left behind, from
  * floor (the cut answer's since) to the cursor, fetched a page a pull
  * until a page is not cut. Kept in slothweb.db's meta table while it
- * runs, so a restart resumes it. */
+ * runs, so a restart resumes it.
+ *
+ * A whole export cut again while a backfill runs (#196) leaves a new
+ * gap, from its own since to its cut, above the one being paged. The
+ * segment being paged is suspended with its cursor (old[], the newest
+ * last) and the new gap paged first; when a gap's page is not cut, the
+ * newest suspended segment resumes where it stopped. Each pull's own gap
+ * is therefore finished before older work and no page is spent twice on
+ * the same rows, so a peer cut at every pull still reaches its oldest
+ * rows as long as one pull's gap takes fewer pages than a pull fetches.
+ * At most WEB_FLEET_BF_SEGS are suspended; past that the new gap is
+ * merged into the segment being paged (the older floor, the new
+ * cursor), which re-reads that segment's paged rows and loses none. */
+#define WEB_FLEET_BF_SEGS        4
+typedef struct {
+    long long floor;
+    char      cur[WEB_FLEET_CUR_MAX + 1];
+} web_fleet_seg_t;
 typedef struct {
     int       active;
     long long floor;
     char      cur[WEB_FLEET_CUR_MAX + 1];
+    int       nold;
+    web_fleet_seg_t old[WEB_FLEET_BF_SEGS];
 } web_fleet_bf_t;
 
 typedef struct {
@@ -218,6 +244,8 @@ typedef struct {
     long long rows_last;
     unsigned long pulls, failures;
     unsigned long pages, page_failures;    /* backfill pages fetched, refused */
+    long long rtt_ms;                      /* the last good pull's round trip,
+                                              ms (-1 none, #196) */
     long long no_next_until;               /* an F1 peer: plain pulls until then */
     long long no_own_until;                /* an F2 peer: no own=1 until then */
     long long no_gnss_until;               /* an I5 peer: no gnss=1 until then */
@@ -261,9 +289,13 @@ typedef struct web_fleet {
     int               allow_outside;
     web_store_t *store;               /* NULL: no store, nothing pulled */
     struct sqlite3   *wr;                  /* the pull thread's own */
-    /* This site's own radios (web_fleet_read_own(), at start, before
-     * any thread: read without the lock after that). */
-    int               nown;
+    /* This site's own radios (web_fleet_read_own() at start, re-read by
+     * web_fleet_own_tick(); #196): under web_fleet.c's own lock, so read
+     * them with web_fleet_own_get(), never directly. own_csv is handed
+     * to the export as the src's own_csv, which copies it under the lock. */
+    int               nown, own_read;
+    long long         own_read_at;
+    char              own_sysfs[192];
     char              own[WEB_FLEET_OWN_MAX][WEB_FLEET_MAC_SZ];
     char              own_csv[WEB_FLEET_OWN_MAX * WEB_FLEET_MAC_SZ];
     /* This site's own networks (#192 I2, I3; set before start, read
@@ -286,10 +318,18 @@ typedef struct web_fleet {
  * set; -1 for anything else. */
 int  web_fleet_own_parse(const char *csv, char own[][WEB_FLEET_MAC_SZ], int *n);
 /* This host's own radios: the address of each physical interface under
- * SYSFS/class/net (sysfs NULL: /sys), sorted by interface name, at most
- * WEB_FLEET_OWN_MAX, into f->own and f->own_csv. A read of the host's
- * own files, nothing on a network. The count. */
+ * SYSFS/class/net (sysfs NULL: /sys), every entry looked at, sorted by
+ * interface name, at most WEB_FLEET_OWN_MAX, into f->own and f->own_csv;
+ * the path is kept for the re-reads. A read of the host's own files,
+ * nothing on a network. The count. */
 int  web_fleet_read_own(web_fleet_t *f, const char *sysfs);
+/* Read the list again when WEB_FLEET_OWN_REREAD_S have passed since the
+ * last read (the first call after web_fleet_read_own() only notes now):
+ * the pull thread's, once a round; the export's too, so a slothweb with
+ * no --peer keeps it current. */
+void web_fleet_own_tick(web_fleet_t *f, long long now_s);
+/* A copy of the list under its lock; the count. */
+int  web_fleet_own_get(web_fleet_t *f, char own[][WEB_FLEET_MAC_SZ]);
 
 /* Set up (no thread, no connection). peers may be NULL with n 0. */
 void web_fleet_init(web_fleet_t *f, const web_fleet_peer_cfg_t *peers, int n,

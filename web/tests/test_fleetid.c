@@ -844,6 +844,69 @@ static void test_own_net_replaced(void) {
     down();
 }
 
+/* An answer generated at gen, read here at the same time. */
+static int ingest_at(const char *b, long long gen) {
+    char *t = strdup(b), err[200];
+    if (!t) return -1;
+    char g[16];
+    snprintf(g, sizeof(g), "%lld", gen);
+    for (char *p = t; (p = strstr(p, "1792627000")) != NULL; p += 10) memcpy(p, g, 10);
+    long long rows = 0, rts = 0;
+    int rc = web_fleet_ingest(&F, 0, t, strlen(t), gen, 1, &rows, &rts, err, sizeof(err));
+    if (rc) fprintf(stderr, "    ingest: %s\n", err);
+    free(t);
+    return rc;
+}
+
+static char *findings_at(long long now) {
+    web_fleet_mine_t mine;
+    memset(&mine, 0, sizeof(mine));
+    web_fleet_src_t src = { &HSDB, NULL, &HG, &HFR, NULL, NULL, &mine, NULL };
+    char *b = NULL;
+    size_t len = 0;
+    int st = 0;
+    WT_EQ(web_fleet_findings_route(&F, &src, "", now, &b, &len, &st), 0);
+    WT_EQ(st, 200);
+    if (!b) return NULL;
+    char *t = realloc(b, len + 1);
+    if (!t) { free(b); return NULL; }
+    t[len] = '\0';
+    return t;
+}
+
+/* A peer that stops offering ident (#196): its own networks are not
+ * counted once its last ident answer is a day old by this site's clock
+ * (the route says own_expired, with the age), and its own_net rows are
+ * dropped by the first whole answer more than a day after it by the
+ * peer's (the meta row kept, so the age still shows). Seen red with the
+ * store's stale DELETE removed (the row stayed) and with the findings'
+ * expiry skip removed (BetaNet still listed at a day and a second). */
+static void test_own_net_expires(void) {
+    up();
+    static const char one_own[] =
+        HDR "{\"type\":\"own_net\",\"ssid\":\"BetaNet\",\"bssid\":null}\n" END(0, ",\"own_net\":1");
+    static const char none[] = HDR END(0, "");
+    WT_EQ(ingest_at(one_own, T), 0);
+    char *b = findings_at(T + WEB_FLEET_OWN_STALE_S);
+    WT_HAS(b, "\"own_age_s\":86400,\"own_expired\":false,\"own_ssids\":[\"BetaNet\"]");
+    free(b);
+    b = findings_at(T + WEB_FLEET_OWN_STALE_S + 1);
+    WT_HAS(b, "\"own_age_s\":86401,\"own_expired\":true,\"own_ssids\":[],\"own_bssids\":[]");
+    free(b);
+    WT_EQ(ingest_at(none, T + WEB_FLEET_OWN_STALE_S), 0);
+    WT_EQ(q1(g_here_web, "SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net'"), 1);
+    WT_EQ(ingest_at(none, T + WEB_FLEET_OWN_STALE_S + 1), 0);
+    WT_EQ(q1(g_here_web, "SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net'"), 0);
+    WT_EQ(q1(g_here_web, "SELECT COUNT(*) FROM meta WHERE name='fleet.ident.beta' AND"
+             " value='1792627000 1'"), 1);
+    /* Offered again: counted again. */
+    WT_EQ(ingest_at(one_own, T + WEB_FLEET_OWN_STALE_S + 2), 0);
+    b = findings_at(T + WEB_FLEET_OWN_STALE_S + 2);
+    WT_HAS(b, "\"own_expired\":false,\"own_ssids\":[\"BetaNet\"]");
+    free(b);
+    down();
+}
+
 /* EVIL_TWIN's key names both halves of a pair; which is the impostor is
  * the stream's (web_chain.h). Peer's 0e:..:01 (KARMA_AP too) and
  * 0e:..:02 under one twin: key: with no chain, or no attributed
@@ -1232,6 +1295,7 @@ void run_fleetid_tests(void) {
     WT_RUN(test_export_ident);
     WT_RUN(test_ident_import_bounds);
     WT_RUN(test_own_net_replaced);
+    WT_RUN(test_own_net_expires);
     WT_RUN(test_export_twin_attribution);
     WT_RUN(test_findings_route);
     WT_RUN(test_findings_unconfigured);

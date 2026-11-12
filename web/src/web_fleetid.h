@@ -196,6 +196,9 @@ typedef struct {
     double    lat, lon;
     int       offered;                   /* its own networks were offered (ident) */
     long long own_ts;                    /* when, in this site's clock */
+    int       own_expired;               /* offered last more than
+                                            WEB_FLEET_OWN_STALE_S ago: its own
+                                            networks no longer counted (#196) */
     web_fleet_mine_t mine;
     int       nap;
     web_fid_ap_t *ap;

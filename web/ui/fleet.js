@@ -410,6 +410,9 @@
          (num(s.fix.hdop) ? ", hdop " + s.fix.hdop : "") : "none");
       if (s.reference) kv(dl, "from reference", num(s.reference.displacement_m) ? s.reference.displacement_m +
          " m (bound " + s.reference.bound_m + " m, " + s.reference.n + " fixes)" : "-", s.reference.outside === true);
+      // A move held past half the week becomes the reference: said, not silent (#196).
+      if (num(s.reference_moved_at)) kv(dl, "reference", "re-anchored " + dist(s.reference_moved_m) +
+         " on " + H.stamp(s.reference_moved_at), true);
       kv(dl, "clock offset", num(s.time_offset_ms) ? s.time_offset_ms + " ms" + (s.time && num(s.time.step_ms) ?
          ", step " + s.time.step_ms + " ms" : "") : "-", !!(s.time && s.time.stepped));
       if (num(s.jam)) kv(dl, "jam indicator", String(s.jam), s.jam >= j.jam_ind);

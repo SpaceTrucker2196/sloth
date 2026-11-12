@@ -285,6 +285,10 @@ static void test_fleet_page(void) {
         snprintf(want, sizeof(want), "\"%s\"", ids[i]);
         WT_HAS(mod, want);
     }
+    /* The GNSS card says when the reference re-anchored (#196). */
+    WT_HAS(mod, "      if (num(s.reference_moved_at)) kv(dl, \"reference\", \"re-anchored \" + "
+                "dist(s.reference_moved_m) +\n"
+                "         \" on \" + H.stamp(s.reference_moved_at), true);\n");
     /* The whole functions. */
     WT_HAS(mod,
               "  function project(pts) {\n"
@@ -1407,7 +1411,9 @@ typedef struct {
     int       i5;                     /* answer as an I5 export: a 400 for gnss= */
     int       i6;                     /* answer as an I6 export: a 400 for adsb= */
     int       i7;                     /* answer as an I7 export: a 400 for ident= */
-    pthread_mutex_t mu;               /* guards stop */
+    long long now;                    /* the export's clock (0: T), under mu */
+    unsigned  delay_ms;               /* each answer held this long first */
+    pthread_mutex_t mu;               /* guards stop, now */
     char      req[24][256];
     web_fleet_src_t src;
 } peer_srv_t;
@@ -1457,7 +1463,15 @@ static void *serve_export(void *arg) {
             if (body) bl = (size_t)snprintf(body, 64, "{\"error\":\"unknown_parameter\"}");
             st = 400;
         } else {
-            web_fleet_export_route(&s->src, query, T, &body, &bl, &st);
+            pthread_mutex_lock(&s->mu);
+            long long now = s->now ? s->now : T;
+            unsigned dl = s->delay_ms;
+            pthread_mutex_unlock(&s->mu);
+            if (dl) {
+                struct timespec ds = { (time_t)(dl / 1000), (long)(dl % 1000) * 1000000L };
+                nanosleep(&ds, NULL);
+            }
+            web_fleet_export_route(&s->src, query, now, &body, &bl, &st);
         }
         char hdr[160];
         int hl = snprintf(hdr, sizeof(hdr), "HTTP/1.1 %d X\r\nContent-Length: %zu\r\n"
@@ -1644,6 +1658,134 @@ static void test_backfill_after_a_cut(void) {
     WT_EQ(web_fleet_pull_one(&F, 0, T + 65), 0);
     WT_ASSERT(srv.n == 8);
     here_down(&srv, th);
+}
+
+static void srv_set(peer_srv_t *s, long long now, unsigned delay_ms) {
+    pthread_mutex_lock(&s->mu);
+    s->now = now;
+    s->delay_ms = delay_ms;
+    pthread_mutex_unlock(&s->mu);
+}
+
+/* A peer cut at every pull (#196): 10,000 devices older than any later
+ * window, then, before each later pull, 2,100 new ones inside that
+ * pull's window only, so every incremental answer is cut at its 2,000
+ * and leaves a gap of 100. Two pages a pull: the gap's page and one more.
+ * The backfill pages the new gap first and then resumes the older
+ * segment from its own cursor, so the old rows arrive at a page a pull
+ * (all but up()'s few newer devices' share of the first answer after the
+ * third pull) with every new row, and the fourth leaves nothing running. Seen red with bf_next() restarting the paged
+ * segment from the new cut at the older floor (the old rule: every pull's
+ * two pages re-read the 100 new rows and the newest 3,900 already held,
+ * and the old devices stayed at 6,000 of 10,000). */
+static void test_backfill_cut_every_pull(void) {
+    peer_srv_t srv;
+    pthread_t th;
+    here_up(&srv, &th);
+    char sql[1024];
+    snprintf(sql, sizeof(sql),
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<9999)"
+        " INSERT INTO devices (mac,vendor,is_ap,signal_dbm,first_seen,last_seen)"
+        " SELECT printf('02:aa:00:00:%%02x:%%02x', i/256, i%%256),'Bulk',0,-60,%lld,"
+        " %lld-(i%%7) FROM n;", T - 9000, T - 5000);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    /* up()'s own devices that the first answer carried, newer than these. */
+    long long fx = 0;
+    F.pages_per_pull = 2;
+    for (int k = 0; k < 4; k++) {
+        long long now = T + 600LL * k;
+        if (k > 0) {
+            snprintf(sql, sizeof(sql),
+                "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<2099)"
+                " INSERT INTO devices (mac,vendor,is_ap,signal_dbm,first_seen,last_seen)"
+                " SELECT printf('02:b%d:00:00:%%02x:%%02x', i/256, i%%256),'New',0,-60,%lld,"
+                " %lld-(i%%3) FROM n;", k, now - 300, now - 200);
+            WT_EQ(sdb_exec(g_db, sql), 0);
+        }
+        srv_set(&srv, now, 0);
+        int rc = web_fleet_pull_one(&F, 0, now);
+        if (rc) fprintf(stderr, "    pull %d: %s\n", k, F.peer[0].last_error);
+        WT_EQ(rc, 0);
+        if (k == 0) {
+            fx = here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi' AND"
+                        " key NOT LIKE '02:aa:%'");
+            WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi' AND"
+                         " key LIKE '02:aa:%'"), 6000 - fx);
+        }
+        if (k == 1) {
+            /* The new gap was paged first and ended; the older segment
+             * resumed from its own cursor, not from the new cut. */
+            WT_EQ(F.peer[0].bf[WEB_FK_WIFI].active, 1);
+            WT_EQ(F.peer[0].bf[WEB_FK_WIFI].nold, 0);
+            WT_EQ(F.peer[0].bf[WEB_FK_WIFI].floor, 0);
+            WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi' AND"
+                         " key LIKE '02:aa:%'"), 8000 - fx);
+        }
+        if (k == 2) {
+            WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi' AND"
+                         " key LIKE '02:aa:%'"), 10000 - fx);
+            WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi' AND"
+                         " key LIKE '02:b%'"), 2 * 2100);
+        }
+    }
+    WT_EQ(F.peer[0].page_failures, 0);
+    WT_EQ(F.peer[0].bf[WEB_FK_WIFI].active, 0);
+    WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi'"),
+          q1(g_db, "SELECT COUNT(*) FROM devices"));
+    WT_EQ(here_q("SELECT COUNT(*) FROM meta WHERE name LIKE 'fleet.backfill.%'"), 0);
+    here_down(&srv, th);
+}
+
+/* The backfill's suspended segments survive a restart through meta, in
+ * order, and a value an earlier build wrote (one pair) still reads; a
+ * value with more pairs than kept, or a bad cursor anywhere, is not
+ * taken. Seen red with bf_meta_write() writing the paged segment only
+ * (the restart forgot the suspended one). */
+static void test_backfill_segments_meta(void) {
+    pull_up();
+    F.pages_per_pull = 0;
+    web_fleet_bf_t *b = &F.peer[0].bf[WEB_FK_WIFI];
+    b->active = 1;
+    b->floor = 500;
+    snprintf(b->cur, sizeof(b->cur), "900~02:aa:00:00:00:01");
+    b->nold = 2;
+    b->old[0].floor = 0;
+    snprintf(b->old[0].cur, sizeof(b->old[0].cur), "100~02:aa:00:00:00:09");
+    b->old[1].floor = 200;
+    snprintf(b->old[1].cur, sizeof(b->old[1].cur), "300~02:aa:00:00:00:05");
+    /* A whole answer with nothing cut writes the state as it stands. */
+    char req[512];
+    WT_EQ(pull_with(GOOD, 0, req, sizeof(req)), 0);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name='fleet.backfill.beta.wifi' AND"
+             " value='500 900~02:aa:00:00:00:01 200 300~02:aa:00:00:00:05"
+             " 0 100~02:aa:00:00:00:09'"), 1);
+    memset(F.peer[0].bf, 0, sizeof(F.peer[0].bf));
+    web_fleet_load(&F);
+    WT_EQ(b->active, 1);
+    WT_EQ(b->floor, 500);
+    WT_EQ(b->nold, 2);
+    WT_EQ(b->old[0].floor, 0);
+    WT_ASSERT(!strcmp(b->old[0].cur, "100~02:aa:00:00:00:09"));
+    WT_EQ(b->old[1].floor, 200);
+    WT_ASSERT(!strcmp(b->old[1].cur, "300~02:aa:00:00:00:05"));
+    /* An earlier build's one pair. */
+    WT_EQ(sql_on(g_store, "UPDATE meta SET value='7 9~ab' WHERE name='fleet.backfill.beta.wifi'"), 0);
+    web_fleet_load(&F);
+    WT_EQ(b->active, 1);
+    WT_EQ(b->floor, 7);
+    WT_EQ(b->nold, 0);
+    static const char *const BAD[] = {
+        "1 2~a 1 2~a 1 2~a 1 2~a 1 2~a 1 2~a", "1 2~a 3", "1 2~a 3 x~a", "1 2~a ", "1  2~a",
+    };
+    for (size_t j = 0; j < sizeof(BAD) / sizeof(BAD[0]); j++) {
+        char q[160];
+        snprintf(q, sizeof(q), "UPDATE meta SET value='%s' WHERE name='fleet.backfill.beta.wifi'",
+                 BAD[j]);
+        WT_EQ(sql_on(g_store, q), 0);
+        web_fleet_load(&F);
+        WT_EQ(b->active, 0);
+    }
+    pull_down();
 }
 
 /* An alert key's incidents by the thousand fill the reader's
@@ -2339,6 +2481,96 @@ static void test_read_own(void) {
     rmdir(d);
 }
 
+static void mk_if(const char *d, const char *name, const char *addr, int phys) {
+    char p[TEST_TMP_MAX + 96];
+    snprintf(p, sizeof(p), "%s/class/net/%s", d, name);
+    mkdir(p, 0700);
+    snprintf(p, sizeof(p), "%s/class/net/%s/address", d, name);
+    FILE *fp = fopen(p, "w");
+    if (fp) { fputs(addr, fp); fclose(fp); }
+    if (phys) {
+        snprintf(p, sizeof(p), "%s/class/net/%s/device", d, name);
+        mkdir(p, 0700);
+    }
+}
+
+static void rm_if(const char *d, const char *name) {
+    char p[TEST_TMP_MAX + 96];
+    snprintf(p, sizeof(p), "%s/class/net/%s/address", d, name);
+    unlink(p);
+    snprintf(p, sizeof(p), "%s/class/net/%s/device", d, name);
+    rmdir(p);
+    snprintf(p, sizeof(p), "%s/class/net/%s", d, name);
+    rmdir(p);
+}
+
+/* A host with a thousand container veths beside its radios (#196): every
+ * directory entry is looked at, so the two physical interfaces are named
+ * wherever readdir() puts them; a radio plugged in later is named at the
+ * next read due (WEB_FLEET_OWN_REREAD_S after the last), not before, and
+ * the export carries the list as re-read. Seen red with the scan stopped
+ * at 64 entries, as before (the radios missed in 5 of 5 runs on tmpfs),
+ * and with the tick's re-read removed (wlan9 never named). */
+static void test_read_own_many_and_again(void) {
+    char d[TEST_TMP_MAX], p[TEST_TMP_MAX + 96];
+    snprintf(d, sizeof(d), "%s/slothweb-sysfs-XXXXXX", test_tmpdir());
+    WT_ASSERT(mkdtemp(d) != NULL);
+    snprintf(p, sizeof(p), "%s/class", d);
+    mkdir(p, 0700);
+    snprintf(p, sizeof(p), "%s/class/net", d);
+    mkdir(p, 0700);
+    /* The radios first: tmpfs lists the newest entries first, so they
+     * then come after the veths there; elsewhere readdir()'s order is a
+     * hash, 2 of 1,002. */
+    mk_if(d, "wlan1", "24:41:8c:30:97:a1\n", 1);
+    mk_if(d, "eth0", "00:c0:ca:bb:51:82\n", 1);
+    char nm[32], ad[32];
+    for (int i = 0; i < 1000; i++) {
+        snprintf(nm, sizeof(nm), "veth%04x", i);
+        snprintf(ad, sizeof(ad), "02:42:ac:11:%02x:%02x\n", i / 256, i % 256);
+        mk_if(d, nm, ad, 0);
+    }
+    web_fleet_t f;
+    web_fleet_init(&f, NULL, 0, 60, 0, NULL);
+    WT_EQ(web_fleet_read_own(&f, d), 2);
+    char own[WEB_FLEET_OWN_MAX][WEB_FLEET_MAC_SZ];
+    WT_EQ(web_fleet_own_get(&f, own), 2);
+    WT_ASSERT(!strcmp(own[0], "00:c0:ca:bb:51:82") && !strcmp(own[1], "24:41:8c:30:97:a1"));
+    mk_if(d, "wlan9", "00:c0:ca:00:00:09\n", 1);
+    web_fleet_own_tick(&f, T);                       /* notes now */
+    web_fleet_own_tick(&f, T + WEB_FLEET_OWN_REREAD_S - 1);
+    WT_EQ(web_fleet_own_get(&f, own), 2);
+    web_fleet_own_tick(&f, T + WEB_FLEET_OWN_REREAD_S);
+    WT_EQ(web_fleet_own_get(&f, own), 3);
+    WT_ASSERT(!strcmp(own[2], "00:c0:ca:00:00:09"));
+    /* The export names the list as it now stands. */
+    web_fleet_src_t src;
+    memset(&src, 0, sizeof(src));
+    src.own_csv = f.own_csv;
+    char *body = NULL;
+    size_t len = 0;
+    int st = 0;
+    WT_EQ(web_fleet_export_route(&src, "since=0&next=1&own=1", T, &body, &len, &st), 0);
+    WT_EQ(st, 200);
+    char *b = body ? realloc(body, len + 1) : NULL;
+    if (b) b[len] = '\0'; else free(body);
+    WT_HAS(b, "\"own_macs\":\"00:c0:ca:bb:51:82,24:41:8c:30:97:a1,00:c0:ca:00:00:09\"");
+    free(b);
+    web_fleet_destroy(&f);
+    for (int i = 0; i < 1000; i++) {
+        snprintf(nm, sizeof(nm), "veth%04x", i);
+        rm_if(d, nm);
+    }
+    rm_if(d, "wlan1");
+    rm_if(d, "eth0");
+    rm_if(d, "wlan9");
+    snprintf(p, sizeof(p), "%s/class/net", d);
+    rmdir(p);
+    snprintf(p, sizeof(p), "%s/class", d);
+    rmdir(p);
+    rmdir(d);
+}
+
 /* ── #192 I6: GNSS across the sites ────────────────────────────────── */
 
 /* This site's receiver as sloth writes it (test_gnss.c's records at T):
@@ -2616,6 +2848,63 @@ static void test_gnss_pull_and_mixed_versions(void) {
     free(g);
 }
 
+/* The skew against a slow peer (#196), on the real pull: ten quick pulls
+ * of a peer whose clock is this one's, then one it holds 5 s before
+ * answering, its generated 5 s on. The skew is measured at the
+ * request's middle and judged against 2 s plus half the round trip, so
+ * the slow pull's 3 s step (its generated less the middle) is not a
+ * clock that moved; a quick pull 3 s ahead then is. Seen red with the
+ * allowance dropped (the slow pull read as moved) and with the skew
+ * taken from the request's start instead of its middle (the same). */
+static char *gnss_get(const web_fleet_src_t *src, const char *q, long long now);
+
+static void test_gnss_skew_slow_peer(void) {
+    peer_srv_t srv;
+    pthread_t th;
+    here_up(&srv, &th);
+    web_gnss_t *g = malloc(sizeof(*g));
+    WT_ASSERT(g && web_gnss_init(g) == 0);
+    srv.src.gnss = g;
+    web_fleet_src_t none;
+    memset(&none, 0, sizeof(none));
+    int sl = -1;
+    for (int k = 0; k < 12; k++) {
+        long long now = T + 60LL * k;
+        long long ahead = k == 10 ? 5 : k == 11 ? 3 : 0;
+        gnss_feed(g, now + ahead - 5, 33.32910, -111.86995, 20);
+        srv_set(&srv, now + ahead, k == 10 ? 5000 : 0);
+        WT_EQ(web_fleet_pull_one(&F, 0, now), 0);
+        sl = web_fg_slot(F.fg, "beta");
+        WT_ASSERT(sl > 0);
+        const web_fg_site_t *fs = &F.fg->site[sl];
+        const web_fg_sample_t *r = &fs->ring[(fs->head + WEB_FG_RING - 1) % WEB_FG_RING];
+        WT_EQ(r->has_ms, 1);
+        WT_EQ(r->fresh, 1);
+        if (k < 10) WT_ASSERT(r->rtt_ms >= 0 && r->rtt_ms < 1000);
+        if (k < 10) WT_ASSERT(r->skew_ms > -500 && r->skew_ms <= 500);
+        if (k == 10) {
+            WT_ASSERT(r->rtt_ms >= 5000 && r->rtt_ms < 9000);
+            /* 5,500 less the middle, about 2,500 in. */
+            WT_ASSERT(r->skew_ms >= 1000 && r->skew_ms <= 3500);
+            WT_EQ(r->skew, 5);
+            WT_EQ(F.peer[0].rtt_ms, r->rtt_ms);
+            char *b = gnss_get(&none, NULL, now);
+            WT_HAS(b, "\"skew_moved\":false");
+            WT_LACKS(b, "\"skew_moved\":true");
+            WT_ASSERT(b && strstr(b, "\"rtt_ms\":5") != NULL);
+            free(b);
+        }
+        if (k == 11) {
+            char *b = gnss_get(&none, NULL, now);
+            WT_HAS(b, "\"skew_moved\":true");
+            free(b);
+        }
+    }
+    here_down(&srv, th);
+    web_gnss_destroy(g);
+    free(g);
+}
+
 /* Samples every 60 s over two hours at both sites, both fixed: W9FJC
  * ("self") at 33.32922,-111.87006 and beta at 33.32910,-111.86995, 16.8 m
  * apart, eph 4.5 each, offsets -60 and 20 ms. beta's clock 100 s ahead. */
@@ -2767,7 +3056,8 @@ static void test_gnss_route(void) {
     WT_HAS(b, "\"position\":{\"verdict\":\"one_site\",\"site\":\"beta\",\"evaluated\":2}");
     WT_HAS(b, "\"time\":{\"verdict\":\"one_site\",\"site\":\"beta\",\"evaluated\":2}");
     WT_HAS(b, "\"time\":{\"ref_ms\":20,\"now_ms\":2020,\"step_ms\":2000,\"stepped\":true,"
-              "\"skew_ref_s\":100,\"skew_step_s\":0,\"skew_moved\":false}");
+              "\"skew_ref_s\":100,\"skew_step_s\":0,\"skew_step_ms\":0,\"rtt_ms\":null,"
+              "\"skew_moved\":false}");
     WT_HAS(b, "\"displacement_m\":50.0,\"bound_m\":13.5,\"outside\":true}");
     WT_EQ(count_of(b, "{\"site\":\"self\",\"type\""), 0);    /* limit=1: beta's newest */
     free(b);
@@ -2951,6 +3241,76 @@ static void test_gnss_state_survives_a_restart(void) {
     char *body = gnss_get(&src, "", T + 60);
     WT_HAS(body, "\"verdict\":\"within\"");
     free(body);
+    web_fleet_destroy(&F);
+    down();
+}
+
+/* A move held past half the week becomes the reference (#196): beta's
+ * fixes at A ten times, a reference sample each 600 s, then at B 100 m
+ * north. The reference median stays at A through nine fixes at B; at
+ * ten of twenty it is the midpoint (the median of an even count), 50 m
+ * on, and at eleven it is B, another 50 m: each step past the 13.5 m
+ * bound is announced. The route says when and how far, and the
+ * record survives a restart through meta "fleet.gnssref.beta" (a build
+ * before it reads "fleet.gnss.beta" unchanged). Seen red with ref_note()
+ * not called (reference_moved_at stayed null while the reference sat on
+ * B) and with the move's test made always false (the same). */
+static void test_gnss_reference_moved(void) {
+    up();
+    web_fleet_peer_cfg_t pc;
+    char err[256];
+    WT_EQ(web_fleet_parse_peer("beta=http://127.0.0.1:1", &pc, err, sizeof(err)), 0);
+    web_fleet_init(&F, &pc, 1, 60, 1, &S);
+    WT_EQ(web_store_open_aux(&S, &F.wr, err, sizeof(err)), 0);
+    int sl = web_fg_slot(F.fg, "beta");
+    web_fg_sample_t s;
+    memset(&s, 0, sizeof(s));
+    s.fresh = s.has_fix = s.has_eph = 1;
+    s.mode = 3;
+    s.eph = 4.5;
+    s.lon = -111.86995;
+    web_fleet_src_t none;
+    memset(&none, 0, sizeof(none));
+    long long t = T - 21 * 600;
+    for (int k = 0; k < 21; k++, t += 600) {
+        s.t = s.gts = s.fix_ts = t;
+        s.lat = 33.32910 + (k < 10 ? 0 : 100.0 / 111194.9);
+        web_fg_add(F.fg, sl, &s, 1300);
+        char *b = gnss_get(&none, "", t);
+        if (k == 18) {
+            WT_HAS(b, "\"reference_moved_at\":null,\"reference_moved_m\":null");
+            WT_HAS(b, "\"reference\":{\"n\":19,\"lat\":33.3291000,");
+        }
+        if (k >= 19) {
+            char want[96];
+            snprintf(want, sizeof(want), "\"reference_moved_at\":%lld,\"reference_moved_m\":50.0",
+                     t);
+            WT_HAS(b, want);
+        }
+        free(b);
+    }
+    long long at = F.fg->site[sl].moved_at;
+    WT_EQ(at, t - 600);
+    WT_ASSERT(fabs(F.fg->site[sl].anc_lat - (33.32910 + 100.0 / 111194.9)) < 1e-7);
+    web_fleet_gnss_tick(&F, t);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name='fleet.gnssref.beta'"), 1);
+    web_fleet_destroy(&F);
+    web_fleet_init(&F, &pc, 1, 60, 1, &S);
+    WT_EQ(web_store_open_aux(&S, &F.wr, err, sizeof(err)), 0);
+    web_fleet_load(&F);
+    sl = web_fg_slot(F.fg, "beta");
+    WT_EQ(F.fg->site[sl].moved_at, at);
+    WT_ASSERT(fabs(F.fg->site[sl].moved_m - 50.0) < 0.1);
+    WT_EQ(F.fg->site[sl].has_anc, 1);
+    /* A value it did not write is not taken. */
+    web_fg_site_t z;
+    memset(&z, 0, sizeof(z));
+    WT_EQ(web_fg_ref_parse(&z, "33.3 -111.8 5"), -1);
+    WT_EQ(web_fg_ref_parse(&z, "91 -111.8 5 1.0"), -1);
+    WT_EQ(web_fg_ref_parse(&z, "33.3 -111.8 5 1.0 x"), -1);
+    WT_EQ(z.has_anc, 0);
+    WT_EQ(web_fg_ref_parse(&z, "33.3 -111.8 5 1.0"), 0);
+    WT_EQ(z.moved_at, 5);
     web_fleet_destroy(&F);
     down();
 }
@@ -3542,17 +3902,22 @@ void run_fleet_tests(void) {
     WT_RUN(test_export_pages);
     WT_RUN(test_backfill_after_a_cut);
     WT_RUN(test_backfill_alerts_past_the_scan);
+    WT_RUN(test_backfill_cut_every_pull);
+    WT_RUN(test_backfill_segments_meta);
     WT_RUN(test_pull_from_an_f1_peer);
     WT_RUN(test_overview_and_shared);
     WT_RUN(test_pull_own_radios);
     WT_RUN(test_locate_route);
     WT_RUN(test_read_own);
+    WT_RUN(test_read_own_many_and_again);
     WT_RUN(test_gnss_export);
     WT_RUN(test_gnss_import_refusals);
     WT_RUN(test_gnss_pull_and_mixed_versions);
+    WT_RUN(test_gnss_skew_slow_peer);
     WT_RUN(test_gnss_route);
     WT_RUN(test_gnss_sample_events);
     WT_RUN(test_gnss_state_survives_a_restart);
+    WT_RUN(test_gnss_reference_moved);
     WT_RUN(test_adsb_export);
     WT_RUN(test_adsb_import_refusals);
     WT_RUN(test_adsb_pull_and_mixed_versions);
