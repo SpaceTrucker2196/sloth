@@ -205,12 +205,15 @@
   // server's default), nothing at all while there is no peer.
   function fvQuery(v) { return FV.peers.length && !fvAll(v) ? "&fleet=0" : ""; }
   function fvCut(s) { s = String(s); return s.length > 24 ? s.slice(0, 23) + "…" : s; }
-  // A host's name for people: the label its export sent, else its
-  // --peer name.
+  // A host's name for people: the label its export sent and the host
+  // name it gave (owner rule 2026-11-12), else its --peer name.
   function fvName(x) {
-    return x && typeof x.site_label === "string" && x.site_label ? x.site_label
-         : x && typeof x.label === "string" && x.label ? x.label
-         : x && typeof x.site === "string" ? x.site : "?";
+    var l = x && typeof x.site_label === "string" && x.site_label ? x.site_label
+          : x && typeof x.label === "string" && x.label ? x.label : "";
+    var h = x && typeof x.site_host === "string" && x.site_host ? x.site_host
+          : x && typeof x.host === "string" && x.host ? x.host : "";
+    if (l && h && l !== h) return l + " (" + h + ")";
+    return l || h || (x && typeof x.site === "string" ? x.site : "?");
   }
   // The small mark after an address: the remote row's host, or "+host"
   // (and how many more) on a local row other hosts heard. null: none.

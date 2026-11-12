@@ -23,11 +23,13 @@
 #include "web_fleetadsb.h"
 #include "web_fleetgnss.h"
 #include "web_fleetid.h"
+#include "web_fleetshare.h"
 #include "web_frrs.h"
 #include "web_gnss.h"
 #include "web_jsonl.h"
 #include "web_locate.h"
 #include "web_metrics.h"
+#include "web_scope.h"
 #include "web_series.h"
 #include "web_slothdb.h"
 #include "web_store.h"
@@ -93,7 +95,7 @@ static void cursor_split(const char *s, long long *ts, char *tok, size_t cap) {
 static const char *const M_HDR[] = {
     "fleet_export", "fleet_export_version", "generated", "since", "site_label",
     "slothweb_version", "sloth_version", "sloth_db", "lat", "lon", "alt_m",
-    "pos_source", "pos_ts", "pos_age_s", "own_macs", NULL };
+    "pos_source", "pos_ts", "pos_age_s", "own_macs", "hostname", "share_rule", NULL };
 /* The receiver's summary; from fix_ts on (#192 I6), sent for gnss=1
  * only: the newest fix and the tracked satellites' median C/N0. */
 static const char *const M_GNSS[] = {
@@ -304,6 +306,10 @@ typedef struct fhdr {
     double    lat, lon, alt;
     int       has_own, nown;         /* own_macs was sent; its MACs */
     char      own[WEB_FLEET_OWN_MAX][WEB_FLEET_MAC_SZ];
+    /* The sender's host name, and whether it states the monitor-only
+     * rule (owner, 2026-11-12; web_fleetshare.h). */
+    char      host[WEB_FLEET_HOST_MAX + 1];
+    int       attested;
 } fhdr_t;
 
 static int row_of(const web_jrec_t *r, const char *type, frow_t *o, const char **why);
@@ -355,7 +361,15 @@ typedef struct {
     struct web_frrs *frrs;           /* the beacon ledger, for ident=1's fingerprints */
     web_fid_atk_t *atk;              /* the attack alerts by BSSID (ident=1) */
     int         natk;
-    int         own_n;               /* own_net lines (ident=1) */
+    /* The monitor-only rule (web_fleetshare.h): this host's local
+     * network, which nothing that travels names; an alert key's check
+     * against it; and each kind's rows read, sent or withheld, which
+     * the cap and the cursor count, so a withheld row is passed over by
+     * the next page like a sent one. */
+    const web_fleet_local_t *loc;
+    web_sdb_keychk_t *kc;
+    int         rd[WEB_FK_COUNT];
+    int         held[WEB_FK_COUNT];  /* withheld by the rule */
 } xp_t;
 
 static void set_cur(xp_t *x, int k, long long ts, const char *tok) {
@@ -448,21 +462,46 @@ static void xp_header(xp_t *x, long long now_s, long long since, const char *lab
     jk(w, M_HDR, "pos_age_s");
     if (loc->has) web_jw_int(w, now_s > loc->ts ? now_s - loc->ts : 0);
     else web_jw_raw(w, "null");
-    /* This site's own radios (#192 I5), asked for with own=1 only: a
-     * peer that hears one is hearing a transmitter at a known position,
-     * which calibrates that peer's receiver (web_locate.h). */
+    /* This site's own radios (#192 I5), asked for with own=1: never
+     * named (owner rule 2026-11-12). The managed card is a station of the
+     * local network, and its address says which network to a peer that
+     * hears it associate; null is "no radio to name", which an own=1
+     * puller of any build takes. */
     if (x->q && x->q->own) {
         jk(w, M_HDR, "own_macs");
-        jstr_or_null(w, x->own_csv);
+        web_jw_raw(w, "null");
     }
+    /* Which host this is (/api/health's hostname), and the rule its rows
+     * were filtered by: an importer refuses the rows only a sender can
+     * judge from an answer that does not state it. */
+    char hn[256];
+    jk(w, M_HDR, "hostname");
+    if (gethostname(hn, sizeof(hn)) == 0) {
+        hn[sizeof(hn) - 1] = '\0';
+        jstr_or_null(w, web_fleet_host_ok(hn) ? hn : NULL);
+    } else {
+        web_jw_raw(w, "null");
+    }
+    jk(w, M_HDR, "share_rule");           web_jw_str(w, WEB_FLEET_SHARE_RULE);
     web_jw_raw(w, "}");
 }
 
+/* A station's associations (newest first): the newest BSSID, and
+ * whether any was to the local network (a station of it is withheld
+ * whole). */
+typedef struct {
+    const web_fleet_local_t *loc;
+    char bssid[WEB_KEY_MAX + 1];
+    int  n, local;
+} xassoc_t;
+
 static int xp_assoc(void *ctx, const web_sdb_item_t *it) {
-    char *bssid = ctx;
+    xassoc_t *a = ctx;
     char k[WEB_KEY_MAX + 1];
-    if (web_key_mac(it->a, k) == 0) snprintf(bssid, WEB_KEY_MAX + 1, "%s", k);
-    return 1;
+    if (web_key_mac(it->a, k) == 0 && !a->n++) snprintf(a->bssid, sizeof(a->bssid), "%s", k);
+    if (web_fleet_local_addr(a->loc, it->a) || web_fleet_local_ssid(a->loc, it->b))
+        a->local = 1;
+    return a->local;
 }
 
 static int xp_pnl(void *ctx, const web_sdb_item_t *it);
@@ -472,11 +511,31 @@ static int xp_pnl(void *ctx, const web_sdb_item_t *it);
  * kind's cursor and is never cut on its own. */
 static int xp_dev(void *ctx, const web_sdb_dev_t *d) {
     xp_t *x = ctx;
-    if (x->n[WEB_FK_WIFI] >= WEB_FLEET_CAP_WIFI) { x->cut[WEB_FK_WIFI] = 1; return 1; }
+    if (x->rd[WEB_FK_WIFI] >= WEB_FLEET_CAP_WIFI) { x->cut[WEB_FK_WIFI] = 1; return 1; }
+    x->rd[WEB_FK_WIFI]++;
     char mac[WEB_KEY_MAX + 1];
     if (web_key_mac(d->mac, mac) != 0) return 0;
-    char bssid[WEB_KEY_MAX + 1] = "";
-    if (!d->is_ap) web_sdb_assocs(x->c, mac, 1, xp_assoc, bssid);
+    /* The monitor-only rule: a device the radio did not hear, the host's
+     * own, or one of the local network (its AP, a station on it, a host
+     * the LAN knows) is withheld whole, its probe list with it; the next
+     * page starts after it as after one sent. */
+    xassoc_t as;
+    memset(&as, 0, sizeof(as));
+    as.loc = x->loc;
+    int share = web_fleet_share_dev(x->loc, d);
+    if (share && !d->is_ap) {
+        int na = web_sdb_assocs(x->c, mac, WEB_FLEET_LOCAL_ASSOCS, xp_assoc, &as);
+        if (na < 0 || as.local || na >= WEB_FLEET_LOCAL_ASSOCS) share = 0;
+    }
+    if (!share) {
+        x->held[WEB_FK_WIFI]++;
+        set_cur(x, WEB_FK_WIFI, d->last_seen, d->mac);
+        return 0;
+    }
+    const char *bssid = as.bssid;
+    /* A probed SSID of the local network is not named, here or in a
+     * probe line. */
+    const char *pssid = web_fleet_local_ssid(x->loc, d->ssid) ? NULL : d->ssid;
     size_t dmark = x->w->len;
     int np0 = x->n[WEB_FK_PROBE];
     size_t mark;
@@ -485,19 +544,21 @@ static int xp_dev(void *ctx, const web_sdb_dev_t *d) {
     web_jw_raw(w, "{\"type\":\"wifi\"");
     jk(w, M_WIFI, "mac");        web_jw_str(w, mac);
     jk(w, M_WIFI, "vendor");     jstr_or_null(w, d->vendor);
-    jk(w, M_WIFI, "ssid");       jstr_or_null(w, d->ssid);
+    jk(w, M_WIFI, "ssid");       jstr_or_null(w, pssid);
     /* A radio reading or none (web_sdb_seen(): sloth's 0 is "never heard
-     * on the air"); an ARP- or DHCP-only row takes the station's probe
-     * reading when the monitor heard it probe. The importer takes a row's
-     * rssi as of its last_seen and, with no channel, at 2.4 GHz
-     * (web_locate.h), so the probe's reading travels only when it is
+     * on the air"). The Monitor scope's signal is the radio's own table's,
+     * an AP's beacon or a client's probe. The importer takes a row's rssi
+     * as of its last_seen and, with no channel, at 2.4 GHz
+     * (web_locate.h), so a client's probe reading travels only when it is
      * within WEB_LOC_WINDOW_S of this row's last_seen and not on 5 or
-     * 6 GHz: on W9FJC, 2026-11-11, all 24 such client readings were
-     * older than their row's ARP-moved last_seen by more than that (7 by
-     * a day), and 10 of the 24 were on 5 GHz. */
-    int has_sig = d->has_signal && d->signal_dbm < 0;
+     * 6 GHz: on W9FJC, 2026-11-11, all 24 client readings of rows the ARP
+     * table moved were older than the row's last_seen by more than that
+     * (7 by a day), and 10 of the 24 were on 5 GHz. The scope's last_seen
+     * is the radio's own, so the first can now arise only through a newer
+     * association. */
+    int has_sig = d->is_ap && d->has_signal && d->signal_dbm < 0;
     long long sig = d->signal_dbm;
-    if (!has_sig && !d->is_ap) {
+    if (!d->is_ap) {
         web_sdb_item_t it;
         if (web_sdb_seen(x->c, WEB_SEEN_DEVICE, d->mac, NULL, &it) == 1 && it.has_n3 &&
             it.n2 >= d->last_seen - WEB_LOC_WINDOW_S && web_loc_chan_24((int)it.n1)) {
@@ -536,9 +597,17 @@ static int xp_dev(void *ctx, const web_sdb_dev_t *d) {
 static int xp_ap(void *ctx, const web_sdb_ap_t *a) {
     xp_t *x = ctx;
     if (a->last_seen < x->since) return 1;     /* newest first: the rest are older */
-    if (x->n[WEB_FK_AP] >= WEB_FLEET_CAP_AP) { x->cut[WEB_FK_AP] = 1; return 1; }
+    if (x->rd[WEB_FK_AP] >= WEB_FLEET_CAP_AP) { x->cut[WEB_FK_AP] = 1; return 1; }
+    x->rd[WEB_FK_AP]++;
     char bssid[WEB_KEY_MAX + 1];
     if (web_key_mac(a->bssid, bssid) != 0) return 0;
+    /* The local network's own APs, by address or by name: withheld. */
+    if (!x->loc->ok || web_fleet_local_addr(x->loc, bssid) ||
+        web_fleet_local_ssid(x->loc, a->ssid)) {
+        x->held[WEB_FK_AP]++;
+        set_cur(x, WEB_FK_AP, a->last_seen, a->bssid);
+        return 0;
+    }
     size_t mark;
     row_begin(x, &mark);
     web_jw_t *w = x->w;
@@ -582,6 +651,7 @@ static int xp_pnl(void *ctx, const web_sdb_item_t *it) {
     xp_t *x = ctx;
     if (it->last_seen < x->since) return 1;    /* newest first */
     if (x->n[WEB_FK_PROBE] >= WEB_FLEET_CAP_PROBE) { x->pnl_cut = 1; return 1; }
+    if (web_fleet_local_ssid(x->loc, it->a)) { x->held[WEB_FK_PROBE]++; return 0; }
     size_t mark;
     row_begin(x, &mark);
     web_jw_t *w = x->w;
@@ -612,12 +682,22 @@ static int xp_alert(void *ctx, const web_sdb_item_t *it) {
         !(it->last_seen < x->q->after_ts ||
           (it->last_seen == x->q->after_ts && it->rid < x->alert_after_rid)))
         return 0;
-    if (x->n[WEB_FK_ALERT] >= WEB_FLEET_CAP_ALERT) { x->cut[WEB_FK_ALERT] = 1; return 1; }
+    if (x->rd[WEB_FK_ALERT] >= WEB_FLEET_CAP_ALERT) { x->cut[WEB_FK_ALERT] = 1; return 1; }
+    x->rd[WEB_FK_ALERT]++;
     long long ty = it->n1 & 0xffff;
     const web_akb_t *k = web_akb_get(ty);
-    char fp[17], ip[WEB_KEY_MAX + 1] = "";
+    /* The monitor-only rule: a type on the allow-list only, and not one
+     * whose title names a local SSID or whose key names a local address
+     * (a deauth flood on the host's own AP is the local network's). A
+     * check that fails withholds. */
+    if (!k || !web_fleet_alert_shareable(k->name) || !x->loc->ok ||
+        web_fleet_local_names(x->loc, it->a) || !x->kc || web_sdb_keychk(x->kc, it->rid) != 0) {
+        x->held[WEB_FK_ALERT]++;
+        set_cur_n(x, WEB_FK_ALERT, it->last_seen, it->rid);
+        return 0;
+    }
+    char fp[17];
     alert_fp(ty, it->a, fp);
-    if (it->b[0] && web_key_ip(it->b, ip) != 0) ip[0] = '\0';
     size_t mark;
     row_begin(x, &mark);
     web_jw_t *w = x->w;
@@ -626,7 +706,8 @@ static int xp_alert(void *ctx, const web_sdb_item_t *it) {
     jk(w, M_ALERT, "ty");          web_jw_int(w, ty);
     jk(w, M_ALERT, "fingerprint"); web_jw_str(w, fp);
     jk(w, M_ALERT, "title");       jstr_or_null(w, it->a);
-    jk(w, M_ALERT, "ip");          jstr_or_null(w, ip);
+    /* An address is the IP capture's, never the radio's: always none. */
+    jk(w, M_ALERT, "ip");          web_jw_raw(w, "null");
     jk(w, M_ALERT, "sev");         web_jw_int(w, it->n2 < 0 ? 0 : it->n2 > 2 ? 2 : it->n2);
     jk(w, M_ALERT, "count");       web_jw_int(w, it->has_n3 && it->n3 > 0 ? it->n3 : 0);
     jk(w, M_ALERT, "first_seen");  web_jw_int(w, it->first_seen);
@@ -638,9 +719,18 @@ static int xp_alert(void *ctx, const web_sdb_item_t *it) {
 
 static int xp_verdict(void *ctx, const web_frrs_verdict_t *v) {
     xp_t *x = ctx;
-    if (x->n[WEB_FK_VERDICT] >= WEB_FLEET_CAP_VERDICT) { x->cut[WEB_FK_VERDICT] = 1; return 1; }
+    if (x->rd[WEB_FK_VERDICT] >= WEB_FLEET_CAP_VERDICT) { x->cut[WEB_FK_VERDICT] = 1; return 1; }
+    x->rd[WEB_FK_VERDICT]++;
     const web_akb_t *k = web_akb_get(v->type);
-    if (!k) return 0;
+    /* A verdict travels with its finding's type: an allow-listed type,
+     * on a radio address (a MAC) outside the local network, or on none. */
+    char va[WEB_KEY_MAX + 1];
+    if (!k || !web_fleet_alert_shareable(k->name) || !x->loc->ok ||
+        (v->addr[0] && (web_key_mac(v->addr, va) != 0 || web_fleet_local_addr(x->loc, va)))) {
+        x->held[WEB_FK_VERDICT]++;
+        set_cur_n(x, WEB_FK_VERDICT, v->ts, v->id);
+        return 0;
+    }
     size_t mark;
     row_begin(x, &mark);
     web_jw_t *w = x->w;
@@ -1031,26 +1121,28 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
         if (!w.overflow && !line_takes(&x, gmark, "gnss")) w.len = gmark;
         else web_jw_raw(&w, "\n");
     }
-    /* This site's own networks (#192 I2, I3): ident=1, the whole export
-     * only, every one whatever `since` says (they are configuration, and
-     * an answer that names them replaces what the peer named before). */
-    if (xq.ident && xq.only < 0 && !w.overflow && src->mine) {
-        const web_fleet_mine_t *m = src->mine;
-        for (int i = 0; i < m->nssid + m->nbssid && !w.overflow; i++) {
-            size_t omark = w.len;
-            web_jw_raw(&w, "{\"type\":\"own_net\"");
-            jk(&w, M_OWNNET, "ssid");
-            jstr_or_null(&w, i < m->nssid ? m->ssid[i] : NULL);
-            jk(&w, M_OWNNET, "bssid");
-            jstr_or_null(&w, i < m->nssid ? NULL : m->bssid[i - m->nssid]);
-            web_jw_raw(&w, "}");
-            if (w.overflow) break;
-            if (!line_takes(&x, omark, "own_net")) { w.len = omark; continue; }
-            web_jw_raw(&w, "\n");
-            x.own_n++;
-        }
-    }
+    /* This site's own networks (#192 I2, I3) are never sent (owner rule
+     * 2026-11-12): they name the local network. ident=1 brings the ap
+     * lines' fingerprints alone; slothweb's --my-ssid and --my-bssid stay
+     * here, for its own findings and for the rule itself. */
     int fault = w.overflow;
+
+    /* The local network (web_fleetshare.h), which no line names: read
+     * before any row. When it cannot be known, no row of sloth.db or of
+     * triage is sent and those kinds say they are cut. */
+    web_fleet_local_t lnet;
+    int lnet_ok = web_fleet_local_build(&lnet, have_c ? &c : NULL, src->mine, x.own_csv) == 0;
+    x.loc = &lnet;
+    web_sdb_keychk_t kc;
+    memset(&kc, 0, sizeof(kc));
+    if (lnet_ok && have_c) {
+        const char **nd = malloc(sizeof(*nd) * (WEB_FLEET_LOCAL_BSSIDS + WEB_FLEET_LOCAL_MACS));
+        int nn = nd ? web_fleet_local_needles(&lnet, nd,
+                                              WEB_FLEET_LOCAL_BSSIDS + WEB_FLEET_LOCAL_MACS) : -1;
+        if (nn >= 0 && web_sdb_keychk_open(&kc, &c, nd, nn) == 0) x.kc = &kc;
+        free(nd);
+    }
+    if (!lnet_ok) lnet.ok = 0;
     int ac_read = 0;                 /* the aircraft read ran (adsb=1) */
 
     /* A page reads its one kind after the cursor; the whole export
@@ -1065,14 +1157,21 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
         x.natk = na > 0 ? na : 0;
     }
     if (have_c && !fault) {
-        if (WANT(WEB_FK_WIFI) &&
+        /* Devices in the Monitor scope (web_scope.h): no address, no
+         * name, the radio's sources, and the first and last seen and the
+         * signal of the radio's own tables, so a row the LAN also moves
+         * carries only what was heard over the air. */
+        int scope0 = c.scope;
+        c.scope = WEB_SCOPE_MONITOR;
+        if (WANT(WEB_FK_WIFI) && lnet.ok &&
             (AFTER(WEB_FK_WIFI)
                  ? web_sdb_devices_after(&c, since, LLONG_MAX / 2, xq.after_ts, xq.after_tok,
                                          WEB_FLEET_CAP_WIFI + 1, xp_dev, &x)
                  : web_sdb_devices_between(&c, since, LLONG_MAX / 2, WEB_FLEET_CAP_WIFI + 1,
                                            0, xp_dev, &x)) < 0)
             x.cut[WEB_FK_WIFI] = 1;
-        if (WANT(WEB_FK_AP) && !c.timed_out &&
+        c.scope = scope0;
+        if (WANT(WEB_FK_AP) && !c.timed_out && lnet.ok &&
             (AFTER(WEB_FK_AP)
                  ? web_sdb_aps_after(&c, xq.after_ts, xq.after_tok, WEB_FLEET_CAP_AP + 1,
                                      xp_ap, &x)
@@ -1087,7 +1186,7 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
          * passes over the keys at it that were sent (xp_alert()); a key
          * newer than the cursor may come again with an older last_seen,
          * which the importer's widening takes as it is. */
-        if (WANT(WEB_FK_ALERT) && !c.timed_out) {
+        if (WANT(WEB_FK_ALERT) && !c.timed_out && lnet.ok && x.kc) {
             long long ub = AFTER(WEB_FK_ALERT) ? xq.after_ts : -1;
             int ar = ub >= 0
                 ? web_sdb_alerts_upto(&c, since, LLONG_MAX / 2, ub, WEB_SDB_ALERT_SCAN,
@@ -1142,7 +1241,15 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
             if (WANT(WEB_FK_ALERT)) x.cut[WEB_FK_ALERT] = 1;
         }
     }
+    web_sdb_keychk_close(&kc);
     if (have_c) web_slothdb_close(&c);
+    /* A kind the rule could not judge is cut, never an answer that
+     * reads as "none". */
+    if (have_c && (!lnet.ok || !x.kc)) {
+        if (WANT(WEB_FK_WIFI)) x.cut[WEB_FK_WIFI] = x.cut[WEB_FK_PROBE] = 1;
+        if (WANT(WEB_FK_AP)) x.cut[WEB_FK_AP] = 1;
+        if (WANT(WEB_FK_ALERT)) x.cut[WEB_FK_ALERT] = 1;
+    }
     /* Aircraft asked for and not read (no sloth.db, its budget spent or
      * the body full before them): cut, never an empty list that reads
      * as "heard none" - the comparison takes a receiver's silence from
@@ -1152,7 +1259,11 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
     if (!have_c && all && xq.adsb && !fault && xp_adsb_rx(&x, src->adsb, NULL, &loc, now_s) != 0)
         fault = 1;
     if (all && src->ble && !fault) xp_ble(&x, src->ble, now_s);
-    if (WANT(WEB_FK_VERDICT) && src->frrs && !fault) {
+    /* Verdicts need sloth.db too: their addresses are judged against
+     * the local network it records. */
+    if (WANT(WEB_FK_VERDICT) && src->frrs && !fault && (!have_c || !lnet.ok)) {
+        x.cut[WEB_FK_VERDICT] = 1;
+    } else if (WANT(WEB_FK_VERDICT) && src->frrs && !fault) {
         long long ats = -1, aid = 0;
         if (AFTER(WEB_FK_VERDICT)) {
             ats = xq.after_ts;
@@ -1222,14 +1333,11 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
         jk(&w, M_END, "truncated_aircraft");
         web_jw_raw(&w, x.ac_cut ? "true" : "false");
     }
-    if (xq.ident && all) {
-        jk(&w, M_END, "own_net");
-        web_jw_int(&w, x.own_n);
-    }
     jk(&w, M_END, "complete"); web_jw_raw(&w, "true");
     web_jw_raw(&w, "}\n");
     free(rec);
     free(x.atk);
+    web_fleet_local_free(&lnet);
     if (fault || w.overflow) {
         *len = web_series_error_json("export_failed", buf, WEB_FLEET_EXPORT_MAX);
         *status = 503;
@@ -1437,6 +1545,18 @@ int web_fleet_ssid_ok(const char *s) {
     if (n == 0 || n > WEB_FLEET_SSID_MAX) return 0;
     for (size_t i = 0; i < n; i++)
         if ((unsigned char)s[i] < 0x20 || (unsigned char)s[i] == 0x7f) return 0;
+    return 1;
+}
+
+int web_fleet_host_ok(const char *s) {
+    size_t n = s ? strlen(s) : 0;
+    if (n == 0 || n > WEB_FLEET_HOST_MAX) return 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+              c == '.' || c == '_' || c == '-'))
+            return 0;
+    }
     return 1;
 }
 
@@ -2099,6 +2219,14 @@ static int hdr_of(const web_jrec_t *r, fhdr_t *h) {
      * the peer said before; absent (not asked, or an older export)
      * leaves it. */
     h->has_own = web_jl_get(r, "own_macs") != NULL;
+    /* The host name and the rule (owner, 2026-11-12): each absent from
+     * an older export, which is then not attested. */
+    int gh = v_str(r, "hostname", WEB_FLEET_HOST_MAX, h->host, sizeof(h->host));
+    if (gh < 0 || (gh == 1 && !web_fleet_host_ok(h->host))) return -1;
+    char rule[32];
+    int gr = v_str(r, "share_rule", 31, rule, sizeof(rule));
+    if (gr < 0) return -1;
+    h->attested = gr == 1 && !strcmp(rule, WEB_FLEET_SHARE_RULE);
     return 0;
 }
 
@@ -2161,6 +2289,10 @@ typedef struct {
     const char *why;
     char     *err;
     size_t    errsz;
+    /* Lines the monitor-only rule refuses (web_fleet_share_refuses()):
+     * checked like any other, counted, never stored; held the data
+     * kinds' of them. */
+    long long refused, refused_data;
 } chk_t;
 
 /* A gnss line row_of() took, as a sample of the peer's receiver (the
@@ -2208,6 +2340,13 @@ static int check_line(void *ctx, const web_jrec_t *r, long long idx, const char 
             snprintf(k->err, k->errsz, "no fleet_export header of version %d: refused",
                      WEB_FLEET_EXPORT_VERSION);
             return -1;
+        }
+        /* A site's own radios name its station on its local network
+         * (owner rule 2026-11-12): an older peer's are not kept. Sent,
+         * they still replace what the peer named before, with none. */
+        if (k->hdr.nown > 0) {
+            k->refused++;
+            k->hdr.nown = 0;
         }
         return 0;
     }
@@ -2283,6 +2422,10 @@ static int check_line(void *ctx, const web_jrec_t *r, long long idx, const char 
                  "refused", idx + 1, type);
         return -1;
     }
+    if (web_fleet_share_refuses(type, r, k->hdr.attested)) {
+        k->refused++;
+        if (row.kind >= 0) k->refused_data++;
+    }
     if (row.kind >= 0) {
         k->counts[row.kind]++;
         k->data++;
@@ -2310,6 +2453,7 @@ typedef struct {
     long long     rows;
     int           failed;
     long long     gen;               /* the answer's clock */
+    int           attested;          /* the header states the rule */
 } put_t;
 
 static const char UPSERT_SQL[] =
@@ -2328,6 +2472,8 @@ static int put_line(void *ctx, const web_jrec_t *r, long long idx, const char *t
     frow_t row;
     const char *why;
     if (row_of(r, type, &row, &why) != 0) return -1;   /* checked already */
+    /* The monitor-only rule: refused, counted by the check, never kept. */
+    if (web_fleet_share_refuses(type, r, p->attested)) return 0;
     /* A receiver line with no summary (coverage alone): kept as of the
      * answer, so the age bound does not take it at once. */
     if (row.kind == -4 && row.last <= 0) row.first = row.last = p->gen;
@@ -2493,40 +2639,114 @@ static int ac_meta_write(sqlite3 *db, const char *peer, const chk_t *k) {
     return ok ? 0 : -1;
 }
 
-/* meta "fleet.ident.<peer>": "<generated> <own_net count>" of the
- * peer's newest answer to ident=1 (#192 I2, I3, web_fleetid.h). */
-static int ident_meta_write(sqlite3 *db, const char *peer, const chk_t *k) {
-    char nm[96], v[64];
-    snprintf(nm, sizeof(nm), "fleet.ident.%s", peer);
-    snprintf(v, sizeof(v), "%lld %lld", k->hdr.generated, k->own);
+/* meta "fleet.host.<peer>": the host name the peer's newest whole
+ * answer gave (owner rule 2026-11-12), none when it gave none. */
+static int host_meta_write(sqlite3 *db, const char *peer, const char *host) {
+    char nm[96];
+    snprintf(nm, sizeof(nm), "fleet.host.%s", peer);
     sqlite3_stmt *s = NULL;
-    int ok = sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO meta (name,value) VALUES (?1,?2)",
+    int ok = sqlite3_prepare_v2(db, host[0]
+                                    ? "INSERT OR REPLACE INTO meta (name,value) VALUES (?1,?2)"
+                                    : "DELETE FROM meta WHERE name=?1",
                                 -1, &s, NULL) == SQLITE_OK;
     if (ok) {
         sqlite3_bind_text(s, 1, nm, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(s, 2, v, -1, SQLITE_TRANSIENT);
+        if (host[0]) sqlite3_bind_text(s, 2, host, -1, SQLITE_TRANSIENT);
         ok = sqlite3_step(s) == SQLITE_DONE;
     }
     sqlite3_finalize(s);
     return ok ? 0 : -1;
 }
 
-/* The generated of the peer's newest answer to ident=1, 0 none. */
-static long long ident_meta_gen(sqlite3 *db, const char *peer) {
-    char nm[96];
-    snprintf(nm, sizeof(nm), "fleet.ident.%s", peer);
+/* The purge (owner rule 2026-11-12): what an earlier build stored that
+ * the rule forbids, once. Every peer's own_net rows; its alert and
+ * verdict rows of a type the rule withholds, an alert row naming an
+ * address and a verdict on an IP (rewriting an extra in place would be
+ * a second encoder of the importer's members, so the row goes and the
+ * next pull brings it back without the member, if it may travel); its
+ * wifi, ap and probe rows, which came from exports that did not filter
+ * them, with each peer's clock and backfill reset so the next pull asks
+ * from the start and an upgraded peer sends them again filtered; and
+ * the ident meta that said which networks a peer named. In one
+ * transaction, marked done in meta "fleet.rule.monitor_only". */
+#define RULE_META "fleet.rule.monitor_only"
+static int purge_store(sqlite3 *db, long long now_s, web_fleet_purge_t *out) {
+    memset(out, 0, sizeof(*out));
     sqlite3_stmt *s = NULL;
-    long long g = 0, c = 0;
-    if (sqlite3_prepare_v2(db, "SELECT value FROM meta WHERE name=?1", -1, &s, NULL) == SQLITE_OK) {
-        sqlite3_bind_text(s, 1, nm, -1, SQLITE_TRANSIENT);
-        if (sqlite3_step(s) == SQLITE_ROW) {
-            const unsigned char *t = sqlite3_column_text(s, 0);
-            if (!t || sscanf((const char *)t, "%lld %lld", &g, &c) != 2 || g < 0 || g > T_MAX)
-                g = 0;
-        }
+    int done = 0;
+    if (sqlite3_prepare_v2(db, "SELECT 1 FROM meta WHERE name='" RULE_META "'", -1, &s,
+                           NULL) != SQLITE_OK) {
+        sqlite3_finalize(s);
+        return -1;
     }
+    done = sqlite3_step(s) == SQLITE_ROW;
     sqlite3_finalize(s);
-    return g;
+    if (done) return 1;
+    if (sqlite3_exec(db, "BEGIN IMMEDIATE", NULL, NULL, NULL) != SQLITE_OK) return -1;
+    int ok = 1;
+    /* The alert and verdict rows, each judged by the importer's own
+     * rule over its stored members. */
+    sqlite3_stmt *del = NULL;
+    ok = sqlite3_prepare_v2(db, "SELECT rowid, kind, extra FROM peer_sightings WHERE"
+                                " kind IN ('alert','verdict')", -1, &s, NULL) == SQLITE_OK &&
+         sqlite3_prepare_v2(db, "DELETE FROM peer_sightings WHERE rowid=?1", -1, &del,
+                            NULL) == SQLITE_OK;
+    web_jrec_t *rec = ok ? malloc(sizeof(*rec)) : NULL;
+    if (ok && !rec) ok = 0;
+    while (ok && sqlite3_step(s) == SQLITE_ROW) {
+        const char *kind = (const char *)sqlite3_column_text(s, 1);
+        const unsigned char *ex = sqlite3_column_text(s, 2);
+        char buf[2400];
+        int n = ex && ex[0] == '{'
+            ? snprintf(buf, sizeof(buf), "{\"type\":\"x\"%s%s", ex[1] == '}' ? "" : ",",
+                       (const char *)ex + 1)
+            : -1;
+        int gone = n < 0 || (size_t)n >= sizeof(buf) ||
+                   web_jl_parse(buf, (size_t)n, rec) != WEB_JL_OK ||
+                   web_fleet_share_refuses(kind, rec, 1) != NULL;
+        if (!gone) continue;
+        sqlite3_reset(del);
+        sqlite3_bind_int64(del, 1, sqlite3_column_int64(s, 0));
+        if (sqlite3_step(del) != SQLITE_DONE) ok = 0;
+        if (kind && !strcmp(kind, "alert")) out->alert++;
+        else out->verdict++;
+    }
+    free(rec);
+    sqlite3_finalize(s);
+    sqlite3_finalize(del);
+    static const struct { const char *sql; int which; } Q[] = {
+        { "DELETE FROM peer_sightings WHERE kind='own_net'", 0 },
+        { "DELETE FROM peer_sightings WHERE kind IN ('wifi','ap','probe')", 1 },
+        { "DELETE FROM meta WHERE name LIKE 'fleet.ident.%'", 2 },
+        { "DELETE FROM meta WHERE name LIKE 'fleet.backfill.%.wifi' OR name LIKE"
+          " 'fleet.backfill.%.ap'", 2 },
+        { "UPDATE peer_sites SET remote_ts=0", 3 },
+    };
+    for (size_t i = 0; ok && i < sizeof(Q) / sizeof(Q[0]); i++) {
+        ok = sqlite3_exec(db, Q[i].sql, NULL, NULL, NULL) == SQLITE_OK;
+        long long ch = sqlite3_changes(db);
+        if (Q[i].which == 0) out->own_net += ch;
+        else if (Q[i].which == 1) out->rows += ch;
+        else if (Q[i].which == 2) out->meta += ch;
+    }
+    if (ok) {
+        char v[64];
+        snprintf(v, sizeof(v), "%lld", now_s);
+        ok = sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO meta (name,value) VALUES ('"
+                                    RULE_META "',?1)", -1, &s, NULL) == SQLITE_OK;
+        if (ok) {
+            sqlite3_bind_text(s, 1, v, -1, SQLITE_TRANSIENT);
+            ok = sqlite3_step(s) == SQLITE_DONE;
+        }
+        sqlite3_finalize(s);
+    }
+    if (ok) ok = sqlite3_exec(db, "COMMIT", NULL, NULL, NULL) == SQLITE_OK;
+    if (!ok) {
+        sqlite3_exec(db, "ROLLBACK", NULL, NULL, NULL);
+        memset(out, 0, sizeof(*out));
+        return -1;
+    }
+    return 0;
 }
 
 static int store_answer(web_fleet_t *f, const web_fleet_peer_cfg_t *pc, const chk_t *k,
@@ -2542,24 +2762,16 @@ static int store_answer(web_fleet_t *f, const web_fleet_peer_cfg_t *pc, const ch
     p.f = f;
     p.peer = pc->name;
     p.gen = k->hdr.generated;
+    p.attested = k->hdr.attested;
     long long nl;
     char e2[WEB_FLEET_ERR_MAX + 1];
-    /* An answer that names the peer's own networks (#192 I2, I3)
-     * replaces what it named before: one it no longer names is gone. */
-    int ok = !(page < 0 && k->has_own_end) ||
-             (run1(db, "DELETE FROM peer_sightings WHERE peer=?1 AND kind='own_net' AND"
-                       " last_seen<=?2", pc->name, T_MAX) == 0 &&
-              ident_meta_write(db, pc->name, k) == 0);
-    /* A whole answer without them (the peer stopped offering ident=1):
-     * what it named is dropped once its newest such answer is
-     * WEB_FLEET_OWN_STALE_S old by the peer's own clock (#196). The meta
-     * row stays, so the age is still shown. */
-    if (ok && page < 0 && !k->has_own_end) {
-        long long ig = ident_meta_gen(db, pc->name);
-        if (ig > 0 && k->hdr.generated - ig > WEB_FLEET_OWN_STALE_S)
-            ok = run1(db, "DELETE FROM peer_sightings WHERE peer=?1 AND kind='own_net' AND"
-                          " last_seen<=?2", pc->name, T_MAX) == 0;
-    }
+    /* A site's own networks (#192 I2, I3) are never kept (owner rule
+     * 2026-11-12): an older peer's own_net lines are refused, and none
+     * is ever stored, so there is nothing of them to replace. */
+    int ok = 1;
+    /* The peer's host name (owner rule 2026-11-12), with the site it
+     * names: meta "fleet.host.<peer>", no schema step. */
+    if (page < 0) ok = host_meta_write(db, pc->name, k->hdr.host) == 0;
     ok = ok && sqlite3_prepare_v2(db, UPSERT_SQL, -1, &p.up, NULL) == SQLITE_OK &&
          walk(body, len, rec, put_line, &p, &nl, e2, sizeof(e2)) == 0 && !p.failed;
     sqlite3_finalize(p.up);
@@ -2593,7 +2805,7 @@ static int store_answer(web_fleet_t *f, const web_fleet_peer_cfg_t *pc, const ch
         sqlite3_bind_int64(s, 9, k->hdr.pos_ts);
         sqlite3_bind_text(s, 10, k->hdr.version, -1, SQLITE_STATIC);
         sqlite3_bind_int64(s, 11, k->hdr.generated);
-        sqlite3_bind_int64(s, 12, k->data);
+        sqlite3_bind_int64(s, 12, k->data - k->refused_data);
         ok = sqlite3_step(s) == SQLITE_DONE;
     }
     sqlite3_finalize(s);
@@ -2756,6 +2968,8 @@ static int ingest(web_fleet_t *f, int i, const char *body, size_t len,
             pthread_mutex_lock(&f->mu);
             memcpy(f->peer[i].bf, nb, sizeof(nb));
             if (page < 0 && ck) f->peer[i].rtt_ms = ck->rtt_ms;
+            f->peer[i].refused_last = k.refused;
+            f->peer[i].refused_total += (unsigned long)k.refused;
             if (page < 0 && k.hdr.has_own) {
                 memcpy(f->peer[i].own, k.hdr.own, sizeof(f->peer[i].own));
                 f->peer[i].nown = k.hdr.nown;
@@ -2793,7 +3007,7 @@ static int ingest(web_fleet_t *f, int i, const char *body, size_t len,
     }
     free(rec);
     if (rc != 0) return -1;
-    *rows = k.data;
+    *rows = k.data - k.refused_data;
     *remote_ts = k.hdr.generated;
     return 0;
 }
@@ -3004,7 +3218,38 @@ static void *pull_main(void *arg) {
     return NULL;
 }
 
+int web_fleet_purge(web_fleet_t *f, long long now_s, web_fleet_purge_t *out) {
+    memset(out, 0, sizeof(*out));
+#ifdef WITH_SQLITE
+    if (!f->store) return -1;
+    sqlite3 *db = f->wr;
+    char err[WEB_FLEET_ERR_MAX + 1];
+    if (!db && web_store_open_aux(f->store, &db, err, sizeof(err)) != 0) return -1;
+    sqlite3_busy_timeout(db, WEB_FLEET_BUSY_MS);
+    int rc = purge_store(db, now_s, out);
+    if (db != f->wr) sqlite3_close(db);
+    if (rc == 0)
+        fprintf(stderr, "slothweb: fleet: monitor-only rule (2026-11-12): purged %lld own_net "
+                "row(s), %lld alert and %lld verdict row(s) it withholds, %lld unfiltered "
+                "wifi/ap/probe row(s), %lld meta row(s); each peer is asked again from the "
+                "start\n", out->own_net, out->alert, out->verdict, out->rows, out->meta);
+    else if (rc < 0)
+        fprintf(stderr, "slothweb: fleet: monitor-only rule: the purge of stored peer rows "
+                "failed; it is tried again at the next start\n");
+    return rc;
+#else
+    (void)f; (void)now_s;
+    return -1;
+#endif
+}
+
 int web_fleet_start(web_fleet_t *f, char *err, size_t errsz) {
+    /* The rule's purge runs whether or not a peer is named now: rows an
+     * earlier build stored are read by the merged views either way. */
+    if (f->store) {
+        web_fleet_purge_t pg;
+        web_fleet_purge(f, (long long)time(NULL), &pg);
+    }
     if (!f->npeer) return 0;
     if (!f->store) {
         snprintf(err, errsz, "--peer needs the store (slothweb.db), and there is none");
@@ -3090,6 +3335,7 @@ void web_fleet_health_json(web_fleet_t *f, web_jw_t *w, long long now_s) {
     pthread_mutex_lock(&f->mu);
     web_jw_raw(w, "{\"export\":true,\"export_version\":");
     web_jw_int(w, WEB_FLEET_EXPORT_VERSION);
+    web_jw_raw(w, ",\"share_rule\":");     web_jw_str(w, WEB_FLEET_SHARE_RULE);
     web_jw_raw(w, ",\"interval_s\":");      web_jw_int(w, f->interval_s);
     web_jw_raw(w, ",\"outside_tailnet\":"); web_jw_raw(w, f->allow_outside ? "true" : "false");
     web_jw_raw(w, ",\"peers\":[");
@@ -3104,6 +3350,7 @@ void web_fleet_health_json(web_fleet_t *f, web_jw_t *w, long long now_s) {
         web_jw_raw(w, ",\"rows\":");              web_jw_int(w, p->rows_last);
         web_jw_raw(w, ",\"pulls\":");             web_jw_int(w, (long long)p->pulls);
         web_jw_raw(w, ",\"failures\":");          web_jw_int(w, (long long)p->failures);
+        web_jw_raw(w, ",\"refused_by_rule\":");   web_jw_int(w, p->refused_last);
         web_jw_raw(w, "}");
     }
     web_jw_raw(w, "]}");
@@ -3139,7 +3386,8 @@ int web_fleet_peers_route(web_fleet_t *f, const char *query, long long now_s,
         sqlite3_stmt *q = NULL, *c = NULL;
         int ok = sqlite3_prepare_v2(s->rd,
             "SELECT peer,url,label,last_attempt,last_ok,last_error,lat,lon,alt,pos_source,"
-            "pos_ts,remote_version,remote_ts,rows_last FROM peer_sites ORDER BY peer"
+            "pos_ts,remote_version,remote_ts,rows_last,(SELECT value FROM meta WHERE"
+            " name='fleet.host.'||peer_sites.peer) FROM peer_sites ORDER BY peer"
             " LIMIT 32", -1, &q, NULL) == SQLITE_OK &&
             sqlite3_prepare_v2(s->rd, "SELECT kind, COUNT(*) FROM peer_sightings"
                                " WHERE peer=?1 GROUP BY kind ORDER BY kind", -1, &c,
@@ -3180,6 +3428,9 @@ int web_fleet_peers_route(web_fleet_t *f, const char *query, long long now_s,
             if (rts > 0) web_jw_int(&w, rts); else web_jw_raw(&w, "null");
             web_jw_raw(&w, ",\"rows_last\":");
             web_jw_int(&w, sqlite3_column_int64(q, 13));
+            /* The host name its newest answer gave (owner rule 2026-11-12). */
+            web_jw_raw(&w, ",\"host\":");
+            jstr_or_null(&w, (const char *)sqlite3_column_text(q, 14));
             web_jw_raw(&w, ",\"counts\":{");
             sqlite3_reset(c);
             sqlite3_bind_text(c, 1, peer, -1, SQLITE_TRANSIENT);
@@ -3312,6 +3563,7 @@ typedef struct {
     char      name[WEB_FLEET_NAME_MAX + 1];
     char      url[WEB_FLEET_URL_MAX + 1];
     char      label[WEB_FLEET_STR_MAX + 1];
+    char      host[WEB_FLEET_HOST_MAX + 1];
     char      err[WEB_FLEET_ERR_MAX + 1];
     char      pos_source[8];
     char      version[32];
@@ -3344,7 +3596,8 @@ int web_fleet_overview_route(web_fleet_t *f, const web_fleet_src_t *src, const c
         sqlite3_stmt *q = NULL, *c = NULL;
         int ok = sqlite3_prepare_v2(s->rd,
             "SELECT peer,url,label,last_attempt,last_ok,last_error,lat,lon,alt,pos_source,"
-            "pos_ts,remote_version,remote_ts,rows_last FROM peer_sites ORDER BY peer"
+            "pos_ts,remote_version,remote_ts,rows_last,(SELECT value FROM meta WHERE"
+            " name='fleet.host.'||peer_sites.peer) FROM peer_sites ORDER BY peer"
             " LIMIT 32", -1, &q, NULL) == SQLITE_OK &&
             sqlite3_prepare_v2(s->rd, "SELECT kind, COUNT(*) FROM peer_sightings"
                                " WHERE peer=?1 GROUP BY kind", -1, &c, NULL) == SQLITE_OK;
@@ -3361,6 +3614,7 @@ int web_fleet_overview_route(web_fleet_t *f, const web_fleet_src_t *src, const c
             COLS(5, o->err);
             COLS(9, o->pos_source);
             COLS(11, o->version);
+            COLS(14, o->host);
 #undef COLS
             o->last_attempt = sqlite3_column_int64(q, 3);
             o->last_ok = sqlite3_column_int64(q, 4);
@@ -3422,6 +3676,18 @@ int web_fleet_overview_route(web_fleet_t *f, const web_fleet_src_t *src, const c
     web_jw_init(&w, body, cap);
     web_jw_raw(&w, "{\"local\":{\"name\":\"self\",\"label\":");
     jstr_or_null(&w, me.label);
+    {
+        char hn[256];
+        web_jw_raw(&w, ",\"host\":");
+        if (gethostname(hn, sizeof(hn)) == 0) {
+            hn[sizeof(hn) - 1] = '\0';
+            jstr_or_null(&w, web_fleet_host_ok(hn) ? hn : NULL);
+        } else {
+            web_jw_raw(&w, "null");
+        }
+    }
+    /* The rule every export here is filtered by. */
+    web_jw_raw(&w, ",\"share_rule\":");  web_jw_str(&w, WEB_FLEET_SHARE_RULE);
     web_jw_raw(&w, ",\"sloth_db\":");    web_jw_str(&w, me.sdb);
     web_jw_raw(&w, ",\"lat\":");         jnum_or_null(&w, me.loc.has, me.loc.lat, 7);
     web_jw_raw(&w, ",\"lon\":");         jnum_or_null(&w, me.loc.has, me.loc.lon, 7);
@@ -3441,6 +3707,7 @@ int web_fleet_overview_route(web_fleet_t *f, const web_fleet_src_t *src, const c
         web_jw_raw(&w, ",\"configured\":");   web_jw_raw(&w, o->configured ? "true" : "false");
         web_jw_raw(&w, ",\"url\":");          jstr_or_null(&w, o->url);
         web_jw_raw(&w, ",\"label\":");        jstr_or_null(&w, o->label);
+        web_jw_raw(&w, ",\"host\":");         jstr_or_null(&w, o->host);
         web_jw_raw(&w, ",\"lat\":");          jnum_or_null(&w, o->has_pos, o->lat, 7);
         web_jw_raw(&w, ",\"lon\":");          jnum_or_null(&w, o->has_pos, o->lon, 7);
         web_jw_raw(&w, ",\"alt_m\":");        jnum_or_null(&w, o->has_pos && o->has_alt, o->alt, 1);
@@ -3474,6 +3741,19 @@ int web_fleet_overview_route(web_fleet_t *f, const web_fleet_src_t *src, const c
         }
         web_jw_raw(&w, ",\"remote_version\":");     jstr_or_null(&w, o->version);
         web_jw_raw(&w, ",\"rows_last\":");          web_jw_int(&w, o->rows_last);
+        /* Lines the monitor-only rule refused (owner, 2026-11-12): in the
+         * last good answer, and since this slothweb started. */
+        {
+            long long rl = 0, rt = 0;
+            if (f && o->cfg_i >= 0) {
+                pthread_mutex_lock(&f->mu);
+                rl = f->peer[o->cfg_i].refused_last;
+                rt = (long long)f->peer[o->cfg_i].refused_total;
+                pthread_mutex_unlock(&f->mu);
+            }
+            web_jw_raw(&w, ",\"refused_by_rule\":"); web_jw_int(&w, rl);
+            web_jw_raw(&w, ",\"refused_by_rule_total\":"); web_jw_int(&w, rt);
+        }
         web_jw_raw(&w, ",\"counts\":{");
         for (int k = 0; k <= WEB_FK_COUNT; k++) {
             if (k) web_jw_raw(&w, ",");

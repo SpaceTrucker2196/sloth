@@ -59,7 +59,7 @@ static void test_members_are_not_secret(void) {
     static const char *const M[] = {
         "fleet", "peers", "site", "site_label", "sites", "label", "remote", "remote_cap",
         "remote_more", "remote_off", "partial", "note", "ap_rows", "kind", "probe_rows",
-        "alt", "visit_first", "pos_prev", "pos_alt", NULL };
+        "alt", "visit_first", "pos_prev", "pos_alt", "host", "site_host", NULL };
     for (int i = 0; M[i]; i++) WT_EQ(web_sdb_is_secret("peer_sightings", M[i], "TEXT"), 0);
 }
 
@@ -309,8 +309,8 @@ static void test_devices_merge(void) {
     const char *b = get("/api/devices", "sort=last", &st, NULL);
     WT_EQ(st, 200);
     WT_HAS(b, "\"count\":3,");
-    WT_HAS(b, "\"sites\":[{\"site\":\"gamma\",\"label\":null,\"first_seen\":1792626500,"
-              "\"last_seen\":1792627150},{\"site\":\"beta\",\"label\":\"beta-site\","
+    WT_HAS(b, "\"sites\":[{\"site\":\"gamma\",\"label\":null,\"host\":null,\"first_seen\":1792626500,"
+              "\"last_seen\":1792627150},{\"site\":\"beta\",\"label\":\"beta-site\",\"host\":null,"
               "\"first_seen\":1792626400,\"last_seen\":1792627100}]}");
     /* The remote rows, newest first (sort=last), after the local ones. */
     const char *r1 = strstr(b, "{\"mac\":\"bb:00:00:00:00:01\"");
@@ -327,8 +327,8 @@ static void test_devices_merge(void) {
     WT_ASSERT(!strstr(b, "cc:00:00:00:00:01"));
     WT_EQ(count_of(b, "\"risk\":"), 3);
     WT_EQ(count_of(b, "\"anomalies\":"), 3);
-    WT_HAS(b, ",\"fleet\":{\"peers\":[{\"site\":\"beta\",\"label\":\"beta-site\"},"
-              "{\"site\":\"gamma\",\"label\":null}],\"remote\":3,\"remote_cap\":100,"
+    WT_HAS(b, ",\"fleet\":{\"peers\":[{\"site\":\"beta\",\"label\":\"beta-site\",\"host\":null},"
+              "{\"site\":\"gamma\",\"label\":null,\"host\":null}],\"remote\":3,\"remote_cap\":100,"
               "\"remote_more\":false,\"partial\":false,\"remote_off\":null}}\n");
     /* The hostile strings, escaped: no markup, and no member they tried
      * to close the row with. */
@@ -457,7 +457,7 @@ static void test_aps_and_ble(void) {
     int st;
     const char *b = get("/api/wifi/aps", "", &st, NULL);
     WT_EQ(st, 200);
-    WT_HAS(b, "\"sites\":[{\"site\":\"beta\",\"label\":\"beta-site\",");
+    WT_HAS(b, "\"sites\":[{\"site\":\"beta\",\"label\":\"beta-site\",\"host\":null,");
     WT_HAS(b, "{\"bssid\":\"0b:00:00:00:00:01\",\"ssid\":\"CafeFree\",\"signal\":-58,"
               "\"channel\":6,\"enc\":\"OPEN\",\"vendor\":\"Cisco\",");
     WT_HAS(b, "\"remote\":true,\"site\":\"gamma\",\"site_label\":null");
@@ -484,7 +484,7 @@ static void test_drawers(void) {
     const char *b = get("/api/device/bb:00:00:00:00:01", "", &st, NULL);
     WT_EQ(st, 200);
     WT_HAS(b, "\"record\":null");
-    WT_HAS(b, "\"fleet\":{\"remote\":true,\"site\":\"beta\",\"site_label\":\"beta-site\","
+    WT_HAS(b, "\"fleet\":{\"remote\":true,\"site\":\"beta\",\"site_label\":\"beta-site\",\"site_host\":null,"
               "\"note\":\"seen at beta-site\",\"rows\":[{\"site\":\"beta\",");
     WT_HAS(b, "\"bssid\":\"0b:00:00:00:00:01\"");
     WT_ASSERT(!strstr(b, "not heard"));
@@ -495,7 +495,7 @@ static void test_drawers(void) {
     WT_HAS(b, "\"note\":null");
     WT_HAS(b, "\"ap_rows\":[]");
     b = get("/api/device/0b:00:00:00:00:01", "", &st, NULL);
-    WT_HAS(b, "\"rows\":[],\"ap_rows\":[{\"site\":\"gamma\",\"label\":null,\"kind\":\"ap\",");
+    WT_HAS(b, "\"rows\":[],\"ap_rows\":[{\"site\":\"gamma\",\"label\":null,\"host\":null,\"kind\":\"ap\",");
     b = get("/api/ble/02:de:00:00:00:09", "", &st, NULL);
     WT_EQ(st, 200);
     WT_HAS(b, "\"rows\":[],\"alerts\":[],\"count\":0,\"fleet\":{\"remote\":true,");
@@ -524,7 +524,10 @@ static void test_export_carries_no_peer_row(void) {
     if (body) {
         char *t = realloc(body, len + 1);
         if (t) { body = t; body[len] = '\0'; }
-        WT_HAS(body, "\"aa:00:00:00:00:01\"");
+        /* This site's own rows travel (the AP its radio heard); its
+         * devices with no source the radio recorded do not (owner rule
+         * 2026-11-12). */
+        WT_HAS(body, "{\"type\":\"ap\",\"bssid\":\"0a:00:00:00:00:01\"");
         WT_ASSERT(!strstr(body, "bb:00:00:00:00:0"));
         WT_ASSERT(!strstr(body, "0b:00:00:00:00:01"));
         WT_ASSERT(!strstr(body, "02:de:00:00:00:09"));
@@ -603,8 +606,8 @@ static void test_probe_clients_merge(void) {
     WT_EQ(st, 200);
     WT_HAS(b, "\"count\":1,\"total\":1,\"more\":false,");
     WT_HAS(b, "\"siblings_total\":0,\"presence\":");
-    WT_HAS(b, ",\"sites\":[{\"site\":\"gamma\",\"label\":null,\"first_seen\":1792626600,"
-              "\"last_seen\":1792627150},{\"site\":\"beta\",\"label\":\"beta-site\","
+    WT_HAS(b, ",\"sites\":[{\"site\":\"gamma\",\"label\":null,\"host\":null,\"first_seen\":1792626600,"
+              "\"last_seen\":1792627150},{\"site\":\"beta\",\"label\":\"beta-site\",\"host\":null,"
               "\"first_seen\":1792626500,\"last_seen\":1792627140}]}");
     WT_HAS(b, "{\"mac\":\"bb:00:00:00:00:11\",\"random\":true,\"vendor\":null,\"frames\":null,"
               "\"directed\":null,\"signal\":null,\"channel\":null,\"os\":null,\"phy\":null,"
@@ -612,9 +615,9 @@ static void test_probe_clients_merge(void) {
               "\"ssids\":[{\"ssid\":\"CafeFree\",");
     WT_HAS(b, "\"first_seen\":1792626700,\"last_seen\":1792627190},{\"ssid\":\"HomeNet\",");
     WT_HAS(b, "\"ssids_more\":false,\"device\":null,\"assoc\":null,\"remote\":true,"
-              "\"site\":\"gamma\",\"site_label\":null,\"sites\":[{\"site\":\"gamma\",\"label\":null,"
+              "\"site\":\"gamma\",\"site_label\":null,\"site_host\":null,\"sites\":[{\"site\":\"gamma\",\"label\":null,\"host\":null,"
               "\"first_seen\":1792626800,\"last_seen\":1792627190},{\"site\":\"beta\","
-              "\"label\":\"beta-site\",\"first_seen\":1792626700,\"last_seen\":1792627180}]}");
+              "\"label\":\"beta-site\",\"host\":null,\"first_seen\":1792626700,\"last_seen\":1792627180}]}");
     WT_EQ(count_of(b, "\"remote\":true"), 2);
     /* beta once in each row's sites (aa:01, bb:11, bb:12), bb:12's
      * "site", and the fleet member's peers. */
@@ -670,14 +673,14 @@ static void test_probe_ssids_merge(void) {
     const char *b = get("/api/probes/ssids", "", &st, NULL);
     WT_EQ(st, 200);
     WT_HAS(b, "\"count\":2,\"total\":2,\"more\":false,");
-    WT_HAS(b, ",\"sites\":[{\"site\":\"beta\",\"label\":\"beta-site\","
+    WT_HAS(b, ",\"sites\":[{\"site\":\"beta\",\"label\":\"beta-site\",\"host\":null,"
               "\"first_seen\":1792626500,\"last_seen\":1792627175}]}");
     WT_HAS(b, "{\"ssid\":\"CafeFree\",");
     WT_HAS(b, "\"clients\":null,\"random\":null,\"first_seen\":1792626600,\"last_seen\":1792627190,"
               "\"aps\":null,\"ap_signal\":null,\"uncommon\":null,\"designated\":null,\"remote\":true,"
-              "\"site\":\"gamma\",\"site_label\":null,\"sites\":[{\"site\":\"gamma\",\"label\":null,"
+              "\"site\":\"gamma\",\"site_label\":null,\"site_host\":null,\"sites\":[{\"site\":\"gamma\",\"label\":null,\"host\":null,"
               "\"first_seen\":1792626600,\"last_seen\":1792627190},{\"site\":\"beta\","
-              "\"label\":\"beta-site\",\"first_seen\":1792626700,\"last_seen\":1792627180}]}");
+              "\"label\":\"beta-site\",\"host\":null,\"first_seen\":1792626700,\"last_seen\":1792627180}]}");
     WT_EQ(count_of(b, "\"remote\":true"), 2);
     WT_EQ(count_of(b, "\"ssid\":\"HomeNet\""), 1);
     WT_ASSERT(!strstr(b, "OldPlace"));
@@ -782,9 +785,9 @@ static void test_probe_drawer(void) {
     const char *b = get("/api/device/bb:00:00:00:00:11", "", &st, NULL);
     WT_EQ(st, 200);
     WT_HAS(b, "\"record\":null");
-    WT_HAS(b, "\"fleet\":{\"remote\":true,\"site\":\"gamma\",\"site_label\":null,"
+    WT_HAS(b, "\"fleet\":{\"remote\":true,\"site\":\"gamma\",\"site_label\":null,\"site_host\":null,"
               "\"note\":\"seen at gamma, beta-site\",\"rows\":[],\"ap_rows\":[],"
-              "\"probe_rows\":[{\"site\":\"gamma\",\"label\":null,\"kind\":\"probe\","
+              "\"probe_rows\":[{\"site\":\"gamma\",\"label\":null,\"host\":null,\"kind\":\"probe\","
               "\"first_seen\":1792626800,\"last_seen\":1792627190,\"ssid\":\"CafeFree\",");
     WT_EQ(count_of(b, "\"kind\":\"probe\""), 3);
     b = get("/api/device/bb:00:00:00:00:12", "", &st, NULL);
@@ -884,15 +887,15 @@ static void test_adsb_merge(void) {
     const char *b = get("/api/adsb", "", &st, NULL);
     WT_EQ(st, 200);
     WT_HAS(b, "\"total\":2,\"live\":2,\"with_pos\":2,\"emergency\":0,\"rows\":[");
-    WT_HAS(b, "\"sites\":[{\"site\":\"beta\",\"label\":\"beta-site\",\"first_seen\":1792626300,"
-              "\"last_seen\":1792627160},{\"site\":\"gamma\",\"label\":null,"
+    WT_HAS(b, "\"sites\":[{\"site\":\"beta\",\"label\":\"beta-site\",\"host\":null,\"first_seen\":1792626300,"
+              "\"last_seen\":1792627160},{\"site\":\"gamma\",\"label\":null,\"host\":null,"
               "\"first_seen\":1792626400,\"last_seen\":1792627155}]}");
     WT_HAS(b, "{\"hex\":\"b0b001\",\"non_icao\":0,\"flight\":\"PEER1\",\"squawk\":\"1200\","
               "\"category\":\"A1\",\"emergency\":\"none\",\"on_ground\":0,\"alt\":4500,"
               "\"gs\":120.5,\"track\":90.0,\"lat\":10.50000,\"lon\":20.25000,"
               "\"pos_ts\":1792627185,\"rssi\":-21.3,\"messages\":77,\"first_seen\":1792626600,"
               "\"last_seen\":1792627190,\"remote\":true,\"site\":\"beta\","
-              "\"site_label\":\"beta-site\",\"sites\":[");
+              "\"site_label\":\"beta-site\",\"site_host\":null,\"sites\":[");
     WT_EQ(count_of(b, "\"remote\":true"), 3);
     WT_HAS(b, "{\"hex\":\"0d0e0f\",");
     WT_HAS(b, "{\"hex\":\"~00cc01\",\"non_icao\":1,");
@@ -907,8 +910,8 @@ static void test_adsb_merge(void) {
     /* After every local row. */
     const char *l2 = strstr(b, "{\"hex\":\"~00abcd\"");
     WT_ASSERT(l2 && r1 && l2 < r1);
-    WT_HAS(b, ",\"fleet\":{\"peers\":[{\"site\":\"beta\",\"label\":\"beta-site\"},"
-              "{\"site\":\"gamma\",\"label\":null}],\"remote\":3,\"remote_cap\":100,"
+    WT_HAS(b, ",\"fleet\":{\"peers\":[{\"site\":\"beta\",\"label\":\"beta-site\",\"host\":null},"
+              "{\"site\":\"gamma\",\"label\":null,\"host\":null}],\"remote\":3,\"remote_cap\":100,"
               "\"remote_more\":false,\"partial\":false,\"remote_off\":null}}");
     /* The hostile callsign, escaped. */
     WT_ASSERT(!strstr(b, "<b>"));
@@ -1043,8 +1046,8 @@ static void test_adsb_detail(void) {
     WT_EQ(st, 200);
     WT_HAS(b, "\"aircraft\":null");
     WT_HAS(b, "\"sightings\":[]");
-    WT_HAS(b, "\"fleet\":{\"remote\":true,\"site\":\"beta\",\"site_label\":\"beta-site\","
-              "\"note\":\"seen at beta-site\",\"rows\":[{\"site\":\"beta\",\"label\":\"beta-site\","
+    WT_HAS(b, "\"fleet\":{\"remote\":true,\"site\":\"beta\",\"site_label\":\"beta-site\",\"site_host\":null,"
+              "\"note\":\"seen at beta-site\",\"rows\":[{\"site\":\"beta\",\"label\":\"beta-site\",\"host\":null,"
               "\"kind\":\"aircraft\",\"first_seen\":1792626600,\"last_seen\":1792627190,"
               "\"visit_first\":1792626600,\"flight\":\"PEER1\",\"squawk\":\"1200\","
               "\"category\":\"A1\",\"emergency\":\"none\",\"on_ground\":false,\"alt\":4500,"

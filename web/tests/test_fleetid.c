@@ -614,13 +614,26 @@ static void up(void) {
     alert_row(g_peer_db, "karma:0e:00:00:00:00:01", 20, T - 9000, T - 8000);
     alert_row(g_peer_db, "karma:0e:00:00:00:00:02", 20, T - 40 * 86400, T - 35 * 86400);
     alert_row(g_peer_db, "deauth:0e:00:00:00:00:02@ff:ff:ff:ff:ff:ff", 1, T - 100, T - 50);
+    /* Clients the peer's radio heard probing (sources 16): one for this
+     * site's own HereNet, a randomised one for it, one elsewhere. A site's
+     * own networks stay at that site (owner rule 2026-11-12), so I2 runs
+     * with this site as the owner, on the probes the peer sends. */
+    WT_EQ(sdb_exec(g_peer_db,
+        "INSERT INTO devices (mac,vendor,is_ap,sources,first_seen,last_seen) VALUES"
+        " ('00:11:22:33:44:55','Generic',0,16,1792620000,1792626000),"
+        " ('06:11:22:33:44:56',NULL,0,16,1792620000,1792626000),"
+        " ('00:11:22:33:44:57','Generic',0,16,1792620000,1792626000);"
+        "INSERT INTO pnl_ssids (mac,ssid,first_seen,last_seen) VALUES"
+        " ('00:11:22:33:44:55','HereNet',1792620000,1792626000),"
+        " ('06:11:22:33:44:56','HereNet',1792620000,1792626000),"
+        " ('00:11:22:33:44:57','Elsewhere',1792620000,1792626000);"), 0);
     ap_row(g_here_db, "0e:00:00:00:00:09", "FreeWiFi", -58, T - 900, T - 10);
     alert_row(g_here_db, "karma:0e:00:00:00:00:09", 20, T - 500, T - 400);
+    /* Here, a client probing the peer's BetaNet: the peer never names
+     * it, so nothing is found of it. */
     WT_EQ(sdb_exec(g_here_db,
         "INSERT INTO pnl_ssids (mac,ssid,first_seen,last_seen) VALUES"
-        " ('00:11:22:33:44:55','BetaNet',1792620000,1792626000),"
-        " ('06:11:22:33:44:56','BetaNet',1792620000,1792626000),"
-        " ('00:11:22:33:44:57','Elsewhere',1792620000,1792626000);"), 0);
+        " ('00:11:22:33:44:58','BetaNet',1792620000,1792626000);"), 0);
     web_slothdb_init(&PSDB, g_peer_db, NULL);
     web_slothdb_init(&HSDB, g_here_db, NULL);
     char err[512];
@@ -700,8 +713,12 @@ static void test_export_ident(void) {
     char *b = peer_export("since=0&ident=1");
     WT_ASSERT(b != NULL);
     if (b) {
-        WT_HAS(b, "{\"type\":\"own_net\",\"ssid\":\"BetaNet\",\"bssid\":null}\n");
-        WT_HAS(b, "{\"type\":\"own_net\",\"ssid\":null,\"bssid\":\"0b:00:00:00:00:b1\"}\n");
+        /* The peer's own networks never travel, nor its own AP (owner
+         * rule 2026-11-12; seen red with the own_net lines written
+         * again). */
+        WT_LACKS(b, "own_net");
+        WT_LACKS(b, "BetaNet");
+        WT_LACKS(b, "0b:00:00:00:00:b1");
         WT_HAS(b, "\"bssid\":\"0e:00:00:00:00:01\",\"ssid\":\"Starbucks\"");
         char want[256];
         snprintf(want, sizeof(want), "\"ie_fp\":\"123456789\",\"vie_fp\":\"987\",\"wps_manuf\":"
@@ -710,7 +727,7 @@ static void test_export_ident(void) {
         WT_HAS(b, want);
         WT_HAS(b, "\"ie_fp\":null,\"vie_fp\":\"5\",\"wps_manuf\":null,\"wps_model\":null,"
                   "\"wps_num\":null,\"attacks\":null,\"attack_first\":null,\"attack_last\":null}");
-        WT_HAS(b, ",\"own_net\":2,\"complete\":true}");
+        WT_HAS(b, ",\"truncated_verdict\":false,\"complete\":true}");
         char err[200];
         WT_EQ(ingest(b, 0, err, sizeof(err)), 0);
         free(b);
@@ -747,7 +764,8 @@ static void test_export_ident(void) {
 #define HDR "{\"type\":\"fleet_export\",\"fleet_export_version\":1,\"generated\":1792627000," \
     "\"since\":0,\"site_label\":\"beta-site\",\"slothweb_version\":\"1.8.6\"," \
     "\"sloth_version\":null,\"sloth_db\":\"open\",\"lat\":33.82922,\"lon\":-111.87006," \
-    "\"alt_m\":181.0,\"pos_source\":\"fixed\",\"pos_ts\":1792627000,\"pos_age_s\":0}\n"
+    "\"alt_m\":181.0,\"pos_source\":\"fixed\",\"pos_ts\":1792627000,\"pos_age_s\":0," \
+    "\"hostname\":\"beta-host\",\"share_rule\":\"monitor_only\"}\n"
 #define END(ap, own) "{\"type\":\"fleet_end\",\"rows\":" #ap ",\"wifi\":0,\"ble\":0,\"ap\":" #ap \
     ",\"probe\":0,\"alert\":0,\"verdict\":0,\"truncated_wifi\":false,\"truncated_ble\":false," \
     "\"truncated_ap\":false,\"truncated_probe\":false,\"truncated_alert\":false," \
@@ -817,93 +835,59 @@ static void test_ident_import_bounds(void) {
     down();
 }
 
-/* The own networks: an answer naming them replaces what was named
- * before (one dropped is gone), the meta row says when and how many;
- * an answer that does not name them (an I7 export, a plain pull)
- * leaves them. Seen red with store_answer()'s own_net DELETE removed
- * (the dropped SSID then stayed). */
-static void test_own_net_replaced(void) {
+/* An older peer's own networks are refused, never stored (owner rule
+ * 2026-11-12): each line checked as before (a malformed one still
+ * refuses the answer, test_ident_import_bounds), counted, and no
+ * own_net row and no ident meta row written. Seen red with put_line()'s
+ * refusal removed (the two rows then stored). */
+static void test_own_net_refused(void) {
     up();
     char err[200];
     static const char two_own[] =
         HDR "{\"type\":\"own_net\",\"ssid\":\"BetaNet\",\"bssid\":null}\n"
         "{\"type\":\"own_net\",\"ssid\":\"OldNet\",\"bssid\":null}\n" END(0, ",\"own_net\":2");
-    static const char one_own[] =
-        HDR "{\"type\":\"own_net\",\"ssid\":\"BetaNet\",\"bssid\":null}\n" END(0, ",\"own_net\":1");
-    static const char none[] = HDR END(0, "");
     WT_EQ(ingest(two_own, 1, err, sizeof(err)), 0);
-    WT_EQ(q1(g_here_web, "SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net'"), 2);
-    WT_EQ(ingest(one_own, 1, err, sizeof(err)), 0);
-    WT_EQ(q1(g_here_web, "SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net'"), 1);
-    WT_EQ(q1(g_here_web, "SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net' AND"
-             " key='ssid:BetaNet' AND label='BetaNet'"), 1);
-    WT_EQ(ingest(none, 1, err, sizeof(err)), 0);
-    WT_EQ(q1(g_here_web, "SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net'"), 1);
-    WT_EQ(q1(g_here_web, "SELECT COUNT(*) FROM meta WHERE name='fleet.ident.beta' AND"
-             " value='1792627000 1'"), 1);
+    WT_EQ(q1(g_here_web, "SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net'"), 0);
+    WT_EQ(q1(g_here_web, "SELECT COUNT(*) FROM meta WHERE name LIKE 'fleet.ident.%'"), 0);
+    WT_EQ(F.peer[0].refused_last, 2);
     down();
 }
 
-/* An answer generated at gen, read here at the same time. */
-static int ingest_at(const char *b, long long gen) {
-    char *t = strdup(b), err[200];
-    if (!t) return -1;
-    char g[16];
-    snprintf(g, sizeof(g), "%lld", gen);
-    for (char *p = t; (p = strstr(p, "1792627000")) != NULL; p += 10) memcpy(p, g, 10);
-    long long rows = 0, rts = 0;
-    int rc = web_fleet_ingest(&F, 0, t, strlen(t), gen, 1, &rows, &rts, err, sizeof(err));
-    if (rc) fprintf(stderr, "    ingest: %s\n", err);
-    free(t);
-    return rc;
-}
+static char *findings_mine(const char *q, int *st, const web_fleet_mine_t *mine);
 
-static char *findings_at(long long now) {
-    web_fleet_mine_t mine;
-    memset(&mine, 0, sizeof(mine));
-    web_fleet_src_t src = { &HSDB, NULL, &HG, &HFR, NULL, NULL, &mine, NULL };
-    char *b = NULL;
-    size_t len = 0;
-    int st = 0;
-    WT_EQ(web_fleet_findings_route(&F, &src, "", now, &b, &len, &st), 0);
-    WT_EQ(st, 200);
-    if (!b) return NULL;
-    char *t = realloc(b, len + 1);
-    if (!t) { free(b); return NULL; }
-    t[len] = '\0';
-    return t;
-}
-
-/* A peer that stops offering ident (#196): its own networks are not
- * counted once its last ident answer is a day old by this site's clock
- * (the route says own_expired, with the age), and its own_net rows are
- * dropped by the first whole answer more than a day after it by the
- * peer's (the meta row kept, so the age still shows). Seen red with the
- * store's stale DELETE removed (the row stayed) and with the findings'
- * expiry skip removed (BetaNet still listed at a day and a second). */
-static void test_own_net_expires(void) {
+/* With no own network of a peer to judge by, I2 and I3 say so for each
+ * peer, not applicable "no_own_networks_shared", rather than an empty
+ * list that reads as nothing found; this site's own (local) networks
+ * still find what the peer sends. Seen red with run_unshared() not
+ * called (no such finding). */
+static void test_findings_unshared(void) {
     up();
-    static const char one_own[] =
-        HDR "{\"type\":\"own_net\",\"ssid\":\"BetaNet\",\"bssid\":null}\n" END(0, ",\"own_net\":1");
-    static const char none[] = HDR END(0, "");
-    WT_EQ(ingest_at(one_own, T), 0);
-    char *b = findings_at(T + WEB_FLEET_OWN_STALE_S);
-    WT_HAS(b, "\"own_age_s\":86400,\"own_expired\":false,\"own_ssids\":[\"BetaNet\"]");
+    char *b = peer_export("since=0&next=1&own=1&gnss=1&adsb=1&ident=1");
+    char err[200];
+    WT_ASSERT(b && ingest(b, 1, err, sizeof(err)) == 0);
     free(b);
-    b = findings_at(T + WEB_FLEET_OWN_STALE_S + 1);
-    WT_HAS(b, "\"own_age_s\":86401,\"own_expired\":true,\"own_ssids\":[],\"own_bssids\":[]");
-    free(b);
-    WT_EQ(ingest_at(none, T + WEB_FLEET_OWN_STALE_S), 0);
-    WT_EQ(q1(g_here_web, "SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net'"), 1);
-    WT_EQ(ingest_at(none, T + WEB_FLEET_OWN_STALE_S + 1), 0);
-    WT_EQ(q1(g_here_web, "SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net'"), 0);
-    WT_EQ(q1(g_here_web, "SELECT COUNT(*) FROM meta WHERE name='fleet.ident.beta' AND"
-             " value='1792627000 1'"), 1);
-    /* Offered again: counted again. */
-    WT_EQ(ingest_at(one_own, T + WEB_FLEET_OWN_STALE_S + 2), 0);
-    b = findings_at(T + WEB_FLEET_OWN_STALE_S + 2);
-    WT_HAS(b, "\"own_expired\":false,\"own_ssids\":[\"BetaNet\"]");
-    free(b);
+    web_fleet_mine_t none;
+    memset(&none, 0, sizeof(none));
+    int st = 0;
+    b = findings_mine("kind=I2", &st, &none);
+    WT_EQ(st, 200);
+    if (b) {
+        WT_HAS(b, "\"class\":\"I2\",\"kind\":\"probe_other_site\",\"key\":\"beta\","
+                  "\"ssid\":null,\"alert_type\":null,\"sites\":[\"beta\"],");
+        WT_HAS(b, "\"applicable\":false,\"lead\":false,\"reason\":\"no_own_networks_shared\","
+                  "\"note\":\"unavailable: own networks are not shared");
+        WT_HAS(b, "\"offered\":false,\"own_shared\":false,");
+        /* Here's client probing BetaNet: never found, the name never came. */
+        WT_LACKS(b, "00:11:22:33:44:58");
+        free(b);
+    }
+    b = findings_mine("kind=I3", &st, &none);
+    if (b) {
+        WT_HAS(b, "\"kind\":\"own_bssid_elsewhere\",\"key\":\"beta\",");
+        WT_HAS(b, "\"kind\":\"own_ssid_foreign_bssid\",\"key\":\"beta\",");
+        WT_HAS(b, "\"total\":2,");
+        free(b);
+    }
     down();
 }
 
@@ -1008,9 +992,24 @@ static void test_export_twin_attribution(void) {
     down();
 }
 
+static char *findings_mine(const char *q, int *st, const web_fleet_mine_t *mine) {
+    web_fleet_src_t src = { &HSDB, NULL, &HG, &HFR, NULL, NULL, mine, NULL };
+    char *b = NULL;
+    size_t len = 0;
+    WT_EQ(web_fleet_findings_route(&F, &src, q, T, &b, &len, st), 0);
+    if (!b) return NULL;
+    char *t = realloc(b, len + 1);
+    if (!t) { free(b); return NULL; }
+    t[len] = '\0';
+    return t;
+}
+
+/* This site names HereNet its own (--my-ssid): kept here, never sent. */
 static char *findings(const char *q, int *st) {
     web_fleet_mine_t mine;
     memset(&mine, 0, sizeof(mine));
+    snprintf(mine.ssid[0], sizeof(mine.ssid[0]), "HereNet");
+    mine.nssid = 1;
     web_fleet_src_t src = { &HSDB, NULL, &HG, &HFR, NULL, NULL, &mine, NULL };
     char *b = NULL;
     size_t len = 0;
@@ -1023,8 +1022,9 @@ static char *findings(const char *q, int *st) {
 }
 
 /* End to end: the peer's ident answer stored here, then the route.
- * I2 (the client probing BetaNet; the randomised one counted, not
- * listed), I4 (the fingerprint attacking at both, beta first, 55 km
+ * I2 (a client at the peer probing this site's own HereNet; the
+ * randomised one counted, not listed; the peer's own networks never
+ * come, so I2 and I3 with the peer as the owner are not applicable), I4 (the fingerprint attacking at both, beta first, 55 km
  * apart), I8 (known there, incident here), the peer's verdict shown and
  * this site's triage left exactly as it was; the overview's counts; no
  * nan or inf anywhere. The no-write claim was seen red with a write of
@@ -1046,11 +1046,12 @@ static void test_findings_route(void) {
         WT_LACKS(b, "nan");
         WT_LACKS(b, "inf");
         WT_HAS(b, "\"configure\":null");
-        WT_HAS(b, "\"own_ssids\":[\"BetaNet\"],\"own_bssids\":[\"0b:00:00:00:00:b1\"]");
+        WT_HAS(b, "\"own_ssids\":[\"HereNet\"],\"own_bssids\":[]");
+        WT_LACKS(b, "BetaNet");
         WT_HAS(b, "\"randomised\":1,");
         WT_HAS(b, "\"co_located\":false}");
         WT_HAS(b, "\"class\":\"I2\",\"kind\":\"probe_other_site\",\"key\":\"00:11:22:33:44:55\","
-                  "\"ssid\":\"BetaNet\"");
+                  "\"ssid\":\"HereNet\",\"alert_type\":null,\"sites\":[\"beta\",\"self\"]");
         WT_LACKS(b, "06:11:22:33:44:56");
         WT_LACKS(b, "00:11:22:33:44:57");
         WT_HAS(b, "\"class\":\"I4\",\"kind\":\"tool_travel\",\"key\":\"123456789/987\","
@@ -1060,7 +1061,7 @@ static void test_findings_route(void) {
         WT_HAS(b, "\"verdicts\":[{\"addr\":\"00:11:22:33:44:55\",\"states\":[{\"site\":\"self\","
                   "\"state\":\"incident\"");
         WT_HAS(b, "{\"site\":\"beta\",\"state\":\"known\"");
-        WT_HAS(b, "\"counts\":{\"I2\":0,\"I3\":0,\"I4\":1,\"I8\":1,\"not_applicable\":0,"
+        WT_HAS(b, "\"counts\":{\"I2\":0,\"I3\":0,\"I4\":1,\"I8\":1,\"not_applicable\":3,"
                   "\"exonerated\":1}");
         free(b);
     }
@@ -1103,13 +1104,15 @@ static void test_findings_route(void) {
 static void test_findings_unconfigured(void) {
     up();
     int st = 0;
-    char *b = findings("", &st);
+    web_fleet_mine_t none;
+    memset(&none, 0, sizeof(none));
+    char *b = findings_mine("", &st, &none);
     WT_EQ(st, 200);
     if (b) {
-        WT_HAS(b, "\"configure\":\"no site names its own networks: give the slothweb at each "
-                  "site --my-ssid and --my-bssid");
-        WT_HAS(b, "{\"site\":\"beta\",\"label\":null,\"lat\":null,\"lon\":null,\"offered\":false,"
-                  "\"own_age_s\":null,");
+        WT_HAS(b, "\"configure\":\"this site names no networks of its own: give this slothweb "
+                  "--my-ssid and --my-bssid");
+        WT_HAS(b, "{\"site\":\"beta\",\"label\":null,\"host\":null,\"lat\":null,\"lon\":null,"
+                  "\"offered\":false,\"own_shared\":false,\"own_age_s\":null,");
         WT_HAS(b, "\"co_located\":null}");
         free(b);
     }
@@ -1238,7 +1241,7 @@ static void test_fleetid_page(void) {
               "      H.set(\"fid-config\", j.configure || \"\");\n"
               "      var c = j.counts, own = j.sites.map(function (s) {\n"
               "        return siteName(s.site) + \" \" + (s.offered ? s.own_ssids.length + \" SSID, \" + s.own_bssids.length +\n"
-              "               \" BSSID\" : \"not offered (older build)\");\n"
+              "               \" BSSID\" : \"own networks not shared (they stay at that site)\");\n"
               "      });\n"
               "      var pairs = j.pairs.map(function (p) {\n"
               "        return siteName(p.a) + \" - \" + siteName(p.b) + \" \" + (p.co_located === null ? \"no position\" :\n"
@@ -1294,8 +1297,8 @@ void run_fleetid_tests(void) {
 #ifdef WITH_SQLITE
     WT_RUN(test_export_ident);
     WT_RUN(test_ident_import_bounds);
-    WT_RUN(test_own_net_replaced);
-    WT_RUN(test_own_net_expires);
+    WT_RUN(test_own_net_refused);
+    WT_RUN(test_findings_unshared);
     WT_RUN(test_export_twin_attribution);
     WT_RUN(test_findings_route);
     WT_RUN(test_findings_unconfigured);

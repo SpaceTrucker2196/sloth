@@ -356,8 +356,10 @@ PATH writes triage, notes and links, recorded via agent` (with
 no --peer, nothing pulled` or one `fleet: pulling NAME from
 URL/api/fleet/export every N s into PATH (tailnet)` per `--peer`,
 `fleet: this site's own networks (N SSIDs, N BSSIDs,
---my-ssid/--my-bssid) named in /api/fleet/export to the allow list for
-ident=1` when any is given, and in
+--my-ssid/--my-bssid) kept here: never in /api/fleet/export (monitor
+data only)` when any is given, `fleet: monitor-only rule (2026-11-12):
+purged ...` once, with its counts, after an upgrade from a build before
+the rule, and in
 a `WITH_SQLITE=0` build:
 
 | Message | Meaning |
@@ -443,13 +445,17 @@ Read this before exposing slothweb to anything but your own loopback.
   read-only `SELECT` at a time over sloth.db (5 s, 10,000 rows, the
   withheld columns refused) for every admitted peer. Combined with
   `--web-allow-remote` that is announced as a warning.
-- **The fleet** ([Fleet](#fleet), ADR 0008). `/api/fleet/export` is a
+- **The fleet** ([Fleet](#fleet), ADR 0008, ADR 0009). `/api/fleet/export` is a
   read like any other route, so it answers only what the allow list
   admits; it reads sloth.db through the same allow-list and its member
   names are one list held to the withheld words, so no credential,
   username, alert key or detail, EAPOL row or RADIUS identity is in it.
-  It does carry SSIDs and client MACs: admit only your own sensors, one
-  address each. `--peer` pulls nothing unless given, refuses an address
+  It does carry SSIDs and client MACs the monitor radio heard: admit
+  only your own sensors, one address each. It never carries this host's
+  local network (the network it is joined to, its stations, the LAN's
+  hosts, `--my-ssid`/`--my-bssid`, its own radios) or anything its own
+  interfaces learned (the owner's hard rule of 2026-11-12), and the
+  importer refuses the same from any peer. `--peer` pulls nothing unless given, refuses an address
   outside the tailnet unless `--peer-allow-outside-tailnet` (announced),
   and refuses a peer's answer whole if it is oversize or carries
   anything not on the list. A peer's `slothweb.db` then holds this
@@ -495,7 +501,7 @@ milestone (W0, M0 to M6; tracker #102).
 | `--peer NAME=URL` | Pull another of the operator's own slothwebs ([Fleet](#fleet), ADR 0008): its `/api/fleet/export`, into this store's `peer_sites` and `peer_sightings`. Repeatable, at most 8. `URL` is `http://A.B.C.D[:PORT]` (port 80 when absent), a literal address in the tailnet, `100.64.0.0/10`; a name is never resolved, and an address outside the tailnet is refused (exit 2) unless `--peer-allow-outside-tailnet` is given. Off by default; each peer is named on stderr at start. Needs a `WITH_SQLITE` build; `--strict` refuses it. |
 | `--peer-interval-secs N` | Seconds between pulls, 10..3600, default 60. |
 | `--peer-gnss-region-km N` | A GNSS event at two sites at most this far apart is regional ([Fleet](#fleet), #192 I6), 1..20000, default 50. A choice, not a sourced figure: how far a ground-level source reaches is not in the corpus. |
-| `--my-ssid SSID`, `--my-bssid MAC` | This site's own networks, the values its sloth is given with the same flags (repeatable, at most 16 of each, as sloth; [Fleet](#fleet), #192 I2, I3). Named in `/api/fleet/export` to a peer that asks with `ident=1`, and the baseline of the identity findings: a client elsewhere probing for them, this network's BSSID or SSID heard where it cannot reach. None by default; named on stderr at start. |
+| `--my-ssid SSID`, `--my-bssid MAC` | This site's own networks, the values its sloth is given with the same flags (repeatable, at most 16 of each, as sloth; [Fleet](#fleet), #192 I2, I3). Kept here, never sent (the monitor-only rule, ADR 0009): part of this site's local network, which `/api/fleet/export` withholds, and this site's baseline of the identity findings: a client a peer heard probing for them, this network's BSSID or SSID heard at a peer where it cannot reach. None by default; named on stderr at start. |
 | `--peer-allow-outside-tailnet` | Allow a `--peer` address outside `100.64.0.0/10` (a LAN peer, a loopback test). There is no TLS: the link you chose is the only protection, and each such peer is announced as a warning. |
 | `--help` | Usage. |
 
@@ -5420,8 +5426,29 @@ entry, and a device's bundle carries its PNL as it did before.
 ## Fleet
 
 Issue #192 slices F1, F2, I5 and I6, under [ADR 0008](../docs/wiki/adr/0008-own-fleet.md)
-(the owner's own sensors share at full fidelity over the tailnet) and
-[docs/wiki/fleet.md](../docs/wiki/fleet.md). Each slothweb serves what
+(the owner's own sensors share over the tailnet) as narrowed by
+[ADR 0009](../docs/wiki/adr/0009-fleet-monitor-only.md) (monitor data
+only, the owner's hard rule of 2026-11-12) and
+[docs/wiki/fleet.md](../docs/wiki/fleet.md).
+
+**Monitor data only.** Only what this site heard passively over the air
+travels: the monitor radio's, the BLE receivers', the GNSS receiver's
+and the ADS-B SDR's. Never this host's local network (the managed
+card's joined networks and every BSSID carrying their SSIDs, its
+station dump, every MAC the ARP table held, `--my-ssid`/`--my-bssid`,
+its own radios, the roster) and never what its own interfaces learned
+(addresses, host names, DHCP, DNS, flows). Devices are read in the
+Monitor scope; a device, AP, probed SSID, alert or verdict of the local
+network is withheld whole; alerts and verdicts travel only for the 64
+allow-listed types of `web/src/web_fleetshare.c` (36 withheld, a new
+type withheld until classified), with no address. When the local network
+cannot be read, no sloth.db row and no verdict is sent and those kinds
+say they are cut. Every export names its host (`hostname`) and the rule
+(`share_rule`). The importer refuses what the rule forbids from any
+peer (counted, `refused_by_rule`, never stored), and a pre-rule peer's
+`wifi`, `ap` and `probe` rows; a one-time purge at start removes what an
+earlier build stored. The rule is in the agent instructions as a hard
+rule (agents/AGENTS.md). Each slothweb serves what
 its sensor has seen to the addresses its allow list admits, and pulls
 the same from the peers `--peer` names, into its own `slothweb.db`. The
 sensor and `sloth.db` are not touched; slothweb still never writes
@@ -5436,15 +5463,15 @@ stream's own strict decoder (`web_jsonl.h`) and nothing new:
 
 | Line | Members |
 |---|---|
-| `fleet_export` (first) | `fleet_export_version` (1), `generated` (the peer's clock), `since`, `site_label` (sloth.db's newest session label), `slothweb_version`, `sloth_version` (null: not kept), `sloth_db` (`open`, `none`, `unavailable`), `lat`, `lon`, `alt_m`, `pos_source` (`gps`/`fixed`), `pos_ts`, `pos_age_s` (all null without a position; from `sensor_health`'s `loc_*`) |
+| `fleet_export` (first) | `fleet_export_version` (1), `generated` (the peer's clock), `since`, `site_label` (sloth.db's newest session label), `slothweb_version`, `sloth_version` (null: not kept), `sloth_db` (`open`, `none`, `unavailable`), `lat`, `lon`, `alt_m`, `pos_source` (`gps`/`fixed`), `pos_ts`, `pos_age_s` (all null without a position; from `sensor_health`'s `loc_*`), `hostname` (`/api/health`'s), `share_rule` (`"monitor_only"`) |
 | `gnss` | `sensor_health`'s receiver summary: `gps_state`, `sats_in_view`, `sats_used`, `cn0_mean`, `time_offset_ms`, `jam`, `ts`; with `gnss=1` (#192 I6) also the newest fix (`fix_ts`, `mode`, `fix_lat`, `fix_lon`, `eph`, `hdop`) and the tracked satellites' median C/N0 (`cn0_med`, `tracked`) |
 | `gnss_event` | with `gnss=1` only (#192 I6): sloth.db's `alert_incidents` of the four GNSS rules' keys, the last week's changed since `since`, newest first: `alert_type`, `ty`, `first_seen`, `last_seen`, `count`, `sev`; at most 256 |
-| `wifi` | sloth.db `devices` last seen at or after `since`: `mac`, `vendor`, `ssid` (its last), `rssi`, `bssid` (its newest association), `is_ap`, `first_seen`, `last_seen`; at most 2,000 |
-| `ap` | `beacon_aps`: `bssid`, `ssid`, `channel`, `enc`, `vendor`, `rssi`, times; at most 1,000 |
-| `probe` | each exported client's probe list (`pnl_ssids`), one line per SSID: `mac`, `ssid`, times; 32 a client, 4,000 in all |
+| `wifi` | sloth.db `devices` the monitor radio heard (the Monitor scope), not of the local network, last seen by the radio at or after `since`: `mac`, `vendor`, `ssid` (its last probed, none when a local SSID), `rssi`, `bssid` (its newest association), `is_ap`, `first_seen`, `last_seen`; at most 2,000 read |
+| `ap` | `beacon_aps` not of the local network: `bssid`, `ssid`, `channel`, `enc`, `vendor`, `rssi`, times; at most 1,000 read |
+| `probe` | each exported client's probe list (`pnl_ssids`), one line per SSID, no local SSID: `mac`, `ssid`, times; 32 a client, 4,000 in all |
 | `ble` | slothweb's BLE advertisers heard since: `addr`, `addr_type`, `name`, `class`, `rssi`, times; at most 1,024 |
-| `alert` | the alert keys whose latest incident is in the window: `alert_type`, `ty`, `fingerprint` (FNV-1a of type and title), `title`, `ip`, `sev`, `count`, times; at most 1,000 |
-| `verdict` | each triaged finding's current state decided since: `alert_type`, `addr`, `port`, `alert_first_seen`, `state`, `ts`; at most 1,000 |
+| `alert` | the alert keys whose latest incident is in the window, of an allow-listed type and naming nothing of the local network: `alert_type`, `ty`, `fingerprint` (FNV-1a of type and title), `title`, `ip` (always null), `sev`, `count`, times; at most 1,000 read |
+| `verdict` | each triaged finding's current state decided since, of an allow-listed type, on a MAC outside the local network or none: `alert_type`, `addr`, `port`, `alert_first_seen`, `state`, `ts`; at most 1,000 read |
 | `fleet_end` (last) | `rows`, the count of each kind, `truncated_<kind>` for each, with `next=1` or a page `next_wifi`, `next_ap`, `next_alert`, `next_verdict` (null, or the cursor after the last row sent of a kind that was cut), with `gnss=1` `gnss_event` (the incident lines sent) and `gnss_complete` (true only when the week's incidents were read to the end: false on a sloth.db before v11, a read error or timeout, or the cap; the importer then takes no `ev` coverage from the answer), `complete: true` |
 
 Every member of every line is listed once, in `web_fleet_members[]`:
@@ -5602,8 +5629,10 @@ looked at; #196), an offset bounded at +/-20 dB applied to
 `unpaired`, `stale`, `partial`. The model, the band and what it is worth
 at a 17 m baseline: [docs/wiki/fleet.md](../docs/wiki/fleet.md).
 
-The export's `own=1` adds `own_macs` to its header (this site's physical
-interfaces' addresses, comma-separated, or `null`); an F2 puller never
+The export's `own=1` adds `own_macs` to its header, since the
+monitor-only rule always `null` (this site's radios are its stations on
+its local network; a peer's are refused, so no receiver is calibrated by
+another site's radio); an F2 puller never
 asks for it, and an F2 export refuses it as an unknown parameter, which
 the puller answers by asking with `next=1` alone and not asking with
 `own=1` for an hour. `gnss=1` (#192 I6) the same way, in front of it:
@@ -5709,12 +5738,7 @@ site's state beside it: shown, never written into this site's triage)
 and `basis`. `/api/fleet/overview` gains `findings`: the counts,
 `total`, `own_named`, `partial`.
 
-The export's `ident=1` (#192 I4) adds an `own_net` line per network
-`--my-ssid` and `--my-bssid` name (the end line's `own_net` counts
-them, and an answer that does replaces what the peer named before; a
-day after the peer's last such answer they are no longer counted,
-`own_expired`, and its rows are dropped: #196), and
-to every `ap` line `ie_fp`, `vie_fp` (the beacon's IE-order and
+The export's `ident=1` (#192 I4) adds to every `ap` line `ie_fp`, `vie_fp` (the beacon's IE-order and
 vendor-IE hashes from the FRRS ledger), `wps_manuf`, `wps_model`,
 `wps_num`, and `attacks`, `attack_first`, `attack_last` (the
 `EVIL_TWIN` and `KARMA_AP` alerts of the last 30 days naming that BSSID
@@ -5722,7 +5746,11 @@ at a key field: `KARMA_AP`; `EVIL_TWIN` only for the impostor half of a
 pair the stream's `twin_episode` attributed, `web_chain.h`;
 `TWIN_UNATTRIBUTED` for either half of a pair it did not; the real half
 of an attributed pair neither). An I7 export refuses it; the puller asks again with
-`adsb=1` and not with `ident=1` for the hour.
+`adsb=1` and not with `ident=1` for the hour. Until 2026-11-12 it also
+added an `own_net` line per network `--my-ssid` and `--my-bssid` name;
+a site's own networks now stay at that site, an older peer's `own_net`
+lines are refused, and I2 and I3 with a peer as the owner answer not
+applicable, `no_own_networks_shared`.
 
 **The Fleet tab** (after TACDB, `web/ui/fleet.js`): the sites on an SVG
 map with the distance between each pair, a health card per peer, and

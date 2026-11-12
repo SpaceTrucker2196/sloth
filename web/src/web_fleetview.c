@@ -109,10 +109,12 @@ typedef struct {
     } ac;
 } fv_row_t;
 
-/* A site's names: the --peer name and the label its export last sent. */
+/* A site's names: the --peer name, the label its export last sent and
+ * the host name it gave (owner rule 2026-11-12). */
 typedef struct {
     char name[WEB_FLEET_NAME_MAX + 1];
     char label[WEB_FLEET_STR_MAX + 1];
+    char host[WEB_FLEET_HOST_MAX + 1];
 } fv_site_t;
 
 static const char *KIND[] = { "wifi", "ap", "ble", "probe", "probe", "aircraft", "aircraft" };
@@ -154,17 +156,22 @@ static int read_sites(web_fleet_t *f, fv_site_t *st) {
     for (int i = 0; i < n; i++) {
         snprintf(st[i].name, sizeof(st[i].name), "%s", f->peer[i].cfg.name);
         st[i].label[0] = '\0';
+        st[i].host[0] = '\0';
     }
     web_store_t *s = f->store;
     if (!s || !s->rd) return n;
     pthread_mutex_lock(&s->rmu);
     sqlite3_stmt *q = NULL;
-    if (sqlite3_prepare_v2(s->rd, "SELECT peer,label FROM peer_sites", -1, &q, NULL) == SQLITE_OK)
+    if (sqlite3_prepare_v2(s->rd, "SELECT peer,label,(SELECT value FROM meta WHERE"
+                           " name='fleet.host.'||peer_sites.peer) FROM peer_sites", -1, &q,
+                           NULL) == SQLITE_OK)
         while (sqlite3_step(q) == SQLITE_ROW) {
             const unsigned char *p = sqlite3_column_text(q, 0);
             for (int i = 0; p && i < n; i++)
-                if (!strcmp(st[i].name, (const char *)p))
+                if (!strcmp(st[i].name, (const char *)p)) {
                     copy_col(q, 1, st[i].label, sizeof(st[i].label));
+                    copy_col(q, 2, st[i].host, sizeof(st[i].host));
+                }
         }
     sqlite3_finalize(q);
     pthread_mutex_unlock(&s->rmu);
@@ -510,10 +517,12 @@ static void jstr_or_null(web_jw_t *w, const char *s) {
     if (s && s[0]) web_jw_str(w, s); else web_jw_raw(w, "null");
 }
 
-/* A site's name for people: its label when its export sent one. */
+/* A site's name for people: its label when its export sent one, else
+ * its host name (owner rule 2026-11-12), else the --peer name. */
 static const char *site_word(const fv_site_t *st, int nst, const char *peer) {
     int i = site_of(st, nst, peer);
-    return i >= 0 && st[i].label[0] ? st[i].label : peer;
+    if (i < 0) return peer;
+    return st[i].label[0] ? st[i].label : st[i].host[0] ? st[i].host : peer;
 }
 
 /* r[0..n), one key's rows, as one per peer (the earliest first_seen,
@@ -558,6 +567,8 @@ static void sites_json(web_jw_t *w, const fv_row_t *rows, int nrows, const fv_si
         web_jw_str(w, r[i].peer);
         web_jw_raw(w, ",\"label\":");
         jstr_or_null(w, k >= 0 ? st[k].label : NULL);
+        web_jw_raw(w, ",\"host\":");
+        jstr_or_null(w, k >= 0 ? st[k].host : NULL);
         web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, r[i].first);
         web_jw_raw(w, ",\"last_seen\":");  web_jw_int(w, r[i].last);
         web_jw_raw(w, "}");
@@ -754,6 +765,8 @@ static void remote_json(web_jw_t *w, int view, const fv_row_t *r, int n, const f
     web_jw_raw(w, ",\"site_label\":");
     int k = site_of(st, nst, h->peer);
     jstr_or_null(w, k >= 0 ? st[k].label : NULL);
+    web_jw_raw(w, ",\"site_host\":");
+    jstr_or_null(w, k >= 0 ? st[k].host : NULL);
     web_jw_raw(w, ",");
     sites_json(w, r, n, st, nst);
     web_jw_raw(w, "}");
@@ -1009,6 +1022,8 @@ static void fleet_member(web_jw_t *w, const fv_site_t *st, int nst, int nremote,
         web_jw_str(w, st[i].name);
         web_jw_raw(w, ",\"label\":");
         jstr_or_null(w, st[i].label);
+        web_jw_raw(w, ",\"host\":");
+        jstr_or_null(w, st[i].host);
         web_jw_raw(w, "}");
     }
     web_jw_raw(w, "],\"remote\":");     web_jw_int(w, nremote);
@@ -1312,6 +1327,7 @@ static void detail_rows(web_jw_t *w, const char *name, int view, const fv_row_t 
         web_jw_raw(w, i ? ",{\"site\":" : "{\"site\":");
         web_jw_str(w, x->peer);
         web_jw_raw(w, ",\"label\":");      jstr_or_null(w, k >= 0 ? st[k].label : NULL);
+        web_jw_raw(w, ",\"host\":");       jstr_or_null(w, k >= 0 ? st[k].host : NULL);
         web_jw_raw(w, ",\"kind\":");       web_jw_str(w, KIND[view]);
         web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, x->first);
         web_jw_raw(w, ",\"last_seen\":");  web_jw_int(w, x->last);
@@ -1392,8 +1408,11 @@ static void fleet_detail(web_jw_t *w, int remote, const fv_row_t *r, int n, int 
     for (int i = 1; i < n; i++) if (r[i].last > r[nb].last) nb = i;
     web_jw_raw(w, ",\"site\":");
     web_jw_str(w, r[nb].peer);
+    int kb = site_of(st, nst, r[nb].peer);
     web_jw_raw(w, ",\"site_label\":");
-    jstr_or_null(w, site_of(st, nst, r[nb].peer) >= 0 ? st[site_of(st, nst, r[nb].peer)].label : NULL);
+    jstr_or_null(w, kb >= 0 ? st[kb].label : NULL);
+    web_jw_raw(w, ",\"site_host\":");
+    jstr_or_null(w, kb >= 0 ? st[kb].host : NULL);
     web_jw_raw(w, ",\"note\":");
     if (remote) seen_at(w, r, n, st, nst); else web_jw_raw(w, "null");
     web_jw_raw(w, ",");

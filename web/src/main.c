@@ -239,8 +239,9 @@ int main(int argc, char **argv) {
      * the pull thread beside each peer's. */
     g_fleet.gnss = &g_gnss;
     g_fleet.gnss_region_m = cfg.peer_gnss_region_km * 1000.0;
-    /* This site's own networks (#192 I2, I3): named to a peer that asks
-     * with ident=1, and the fleet's identity findings' baseline. */
+    /* This site's own networks (#192 I2, I3): this site's identity
+     * findings' baseline and part of the local network the monitor-only
+     * rule never sends (owner, 2026-11-12; web_fleetshare.h). */
     g_fleet.mine = cfg.mine;
     g_m4.fleet = &g_fleet;
     /* A note on a satellite, an aircraft or a station is checked
@@ -417,8 +418,8 @@ int main(int argc, char **argv) {
                         "list; no --peer, nothing pulled\n");
     if (cfg.mine.nssid || cfg.mine.nbssid)
         fprintf(stderr, "slothweb: fleet: this site's own networks (%d SSID%s, %d BSSID%s, "
-                        "--my-ssid/--my-bssid) named in /api/fleet/export to the allow "
-                        "list for ident=1\n", cfg.mine.nssid, cfg.mine.nssid == 1 ? "" : "s",
+                        "--my-ssid/--my-bssid) kept here: never in /api/fleet/export "
+                        "(monitor data only)\n", cfg.mine.nssid, cfg.mine.nssid == 1 ? "" : "s",
                 cfg.mine.nbssid, cfg.mine.nbssid == 1 ? "" : "s");
     for (int i = 0; i < cfg.npeer; i++)
         fprintf(stderr, "slothweb: fleet: pulling %s from %s/api/fleet/export every "

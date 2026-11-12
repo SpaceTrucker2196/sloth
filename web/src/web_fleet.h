@@ -23,19 +23,36 @@
  * this site's ADS-B receiver and its demonstrated coverage (adsb_rx) and
  * the aircraft it heard (aircraft lines), counted on the end line.
  *
- * With own=1 (#192 I5) the header also names this site's own radios
- * (own_macs), the transmitters at a known position that calibrate a
- * peer's receiver (web_locate.h); only asked for, so an older importer
- * never meets the member.
+ * Monitor data only (owner hard rule, 2026-11-12; web_fleetshare.h,
+ * docs/wiki/adr/0009-fleet-monitor-only.md). A row travels only when
+ * this site learned it passively over the air: devices are read in the
+ * Monitor scope (web_scope.h: no address, no name, the radio's own
+ * first and last seen and signal); a device, AP, probed SSID, alert or
+ * verdict of this host's local network (the managed card's joined
+ * network and every BSSID carrying its SSID, its station dump, every
+ * MAC the neighbour table held, --my-ssid / --my-bssid, this host's own
+ * radios, the roster) is withheld whole; an alert or verdict travels
+ * only for a type on the allow-list, with no address. When the local
+ * network cannot be read, no sloth.db row and no verdict is sent and
+ * those kinds say they are cut. The header names this host
+ * (hostname) and the rule (share_rule); the importer refuses what the
+ * rule forbids from any peer, and the rows only a sender can judge
+ * (wifi, ap, probe) from an answer that does not state it.
  *
- * With ident=1 (#192 I2-I4, I8, web_fleetid.h) the whole export also
- * names this site's own networks (own_net lines, counted on the end
- * line), and each ap line carries the attacker-fingerprint material
+ * With own=1 (#192 I5) the header carries own_macs, and since the rule
+ * always as null: this site's radios are its stations on the local
+ * network. An older peer's are refused. Only asked for, so an older
+ * importer never meets the member.
+ *
+ * With ident=1 (#192 I2-I4, I8, web_fleetid.h) each ap line carries the
+ * attacker-fingerprint material
  * slothweb holds for it: the beacon's IE-order and vendor-IE hashes and
  * WPS strings from the stream's ledger, and the AP-impersonation alerts
  * sloth.db holds naming that BSSID as a transmitter. A page asked with
  * ident=1 carries the ap members too. Only asked for, so an older
- * importer never meets a member it does not know.
+ * importer never meets a member it does not know. This site's own
+ * networks (own_net lines) are no longer sent (the rule), and an older
+ * peer's are refused.
  *
  * Every member of every line is named in web_fleet_members[] and in no
  * other place: the writer emits those names only, the reader refuses a
@@ -166,6 +183,9 @@
  * sloth): at most WEB_FLEET_MINE_MAX of each, an SSID of 1..32 octets. */
 #define WEB_FLEET_MINE_MAX       16
 #define WEB_FLEET_SSID_MAX       32
+/* A site's host name in its export's header (owner rule 2026-11-12):
+ * 1..WEB_FLEET_HOST_MAX of [A-Za-z0-9._-]. */
+#define WEB_FLEET_HOST_MAX       253
 
 enum { WEB_FK_WIFI = 0, WEB_FK_BLE, WEB_FK_AP, WEB_FK_PROBE, WEB_FK_ALERT,
        WEB_FK_VERDICT, WEB_FK_COUNT };
@@ -251,6 +271,10 @@ typedef struct {
     long long no_gnss_until;               /* an I5 peer: no gnss=1 until then */
     long long no_adsb_until;               /* an I6 peer: no adsb=1 until then */
     long long no_ident_until;              /* an I7 peer: no ident=1 until then */
+    /* Lines the monitor-only rule refused (owner, 2026-11-12;
+     * web_fleetshare.h): in the last good answer, and since the start. */
+    long long refused_last;
+    unsigned long refused_total;
     /* The peer's own radios, as its last full answer named them (own=1;
      * memory only: the next pull after a restart names them again). */
     int       nown;
@@ -277,6 +301,8 @@ typedef struct {
 
 /* An SSID --my-ssid takes: 1..32 octets, none a control character. */
 int  web_fleet_ssid_ok(const char *s);
+/* A host name the header carries: 1..WEB_FLEET_HOST_MAX of [A-Za-z0-9._-]. */
+int  web_fleet_host_ok(const char *s);
 
 typedef struct web_fleet {
     pthread_mutex_t   mu;                  /* guards peer[] and the counts */
@@ -344,6 +370,21 @@ void web_fleet_stop(web_fleet_t *f);
  * web_fleet_start()'s first step, and the tests' restart. */
 void web_fleet_load(web_fleet_t *f);
 void web_fleet_destroy(web_fleet_t *f);
+
+/* The monitor-only rule's purge of what an earlier build stored (owner,
+ * 2026-11-12; web_fleetshare.h): once, at start, every peer's own_net
+ * rows, its alert and verdict rows the rule refuses, its wifi, ap and
+ * probe rows (from exports that did not filter them; the peer's clock
+ * and wifi/ap backfill are reset, so the next pull asks again from the
+ * start) and the ident meta, in one transaction, marked done in meta
+ * "fleet.rule.monitor_only". */
+typedef struct {
+    long long own_net, alert, verdict, rows, meta;
+} web_fleet_purge_t;
+/* Over f->wr when open, else a connection of its own. 0 purged, 1
+ * already done before, -1 failed (nothing changed). Logged to stderr
+ * with its counts when it purged. */
+int  web_fleet_purge(web_fleet_t *f, long long now_s, web_fleet_purge_t *out);
 
 /* One pull of peer i, now (the thread's step; the tests call it
  * directly). 0 stored, -1 refused or failed (the reason in the peer's

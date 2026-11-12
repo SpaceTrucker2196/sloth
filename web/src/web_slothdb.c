@@ -602,6 +602,25 @@ int web_sdb_card_stas(web_sdb_conn_t *c, long long limit, web_sdb_card_sta_fn fn
     (void)c; (void)limit; (void)fn; (void)ctx;
     return -1;
 }
+int web_sdb_local_net(web_sdb_conn_t *c, int what, const char *arg, int max,
+                      web_sdb_item_fn fn, void *ctx) {
+    (void)c; (void)what; (void)arg; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
+int web_sdb_keychk_open(web_sdb_keychk_t *k, web_sdb_conn_t *c, const char *const *needles,
+                        int n) {
+    (void)needles; (void)n;
+    memset(k, 0, sizeof(*k));
+    k->c = c;
+    return -1;
+}
+int web_sdb_keychk(web_sdb_keychk_t *k, long long rid) {
+    (void)k; (void)rid;
+    return -1;
+}
+void web_sdb_keychk_close(web_sdb_keychk_t *k) {
+    (void)k;
+}
 int web_sdb_ap_ssid(web_sdb_conn_t *c, const char *bssid, char *out) {
     (void)c; (void)bssid;
     out[0] = '\0';
@@ -2166,6 +2185,92 @@ int web_sdb_card_stas(web_sdb_conn_t *c, long long limit, web_sdb_card_sta_fn fn
     }
     sqlite3_finalize(st);
     return rc == SQLITE_DONE ? n : -1;
+}
+
+/* The fleet export's local network (web_fleetshare.h). Each the whole
+ * table's history, not a window: a network this host was part of once is
+ * still its local network's identity. */
+int web_sdb_local_net(web_sdb_conn_t *c, int what, const char *arg, int max,
+                      web_sdb_item_fn fn, void *ctx) {
+    static const char *const ap[] = { "bssid", "ssid", "status", "first_seen", "last_seen",
+                                      NULL };
+    static const char *const sta[] = { "mac", "first_seen", "last_seen", NULL };
+    static const char *const bc[] = { "bssid", "ssid", "first_seen", "last_seen", NULL };
+    switch (what) {
+    case WEB_SDB_LN_JOINED:
+        if (!have_all(c, "wifi_aps", ap)) return 0;
+        return items(c, "SELECT bssid, COALESCE(ssid,''), first_seen, last_seen FROM wifi_aps"
+                        " WHERE status >= 0 AND ?1 IS NOT NULL ORDER BY bssid LIMIT ?2",
+                     "", NULL, max, fn, ctx, 4);
+    case WEB_SDB_LN_LINK:
+        if (!have_all(c, "wifi_stas", sta)) return 0;
+        return items(c, "SELECT mac, first_seen, last_seen FROM wifi_stas"
+                        " WHERE ?1 IS NOT NULL ORDER BY mac LIMIT ?2",
+                     "", NULL, max, fn, ctx, 3);
+    case WEB_SDB_LN_ARP:
+        if (!(c->feats & WEB_QF_ARP)) return 0;
+        return items(c, "SELECT mac, min(first_seen), max(last_seen) FROM arp"
+                        " WHERE ?1 IS NOT NULL GROUP BY mac ORDER BY mac LIMIT ?2",
+                     "", NULL, max, fn, ctx, 3);
+    case WEB_SDB_LN_SSID: {
+        if (!arg || !have_all(c, "beacon_aps", bc)) return 0;
+        /* beacon_ap_ssids keeps every SSID a BSSID carried (#188): one
+         * that renamed itself is still the network's. */
+        if (ap_ssids_ok(c))
+            return items(c, "SELECT bssid, min(first_seen), max(last_seen) FROM ("
+                            "SELECT bssid, first_seen, last_seen FROM beacon_aps WHERE ssid = ?1"
+                            " UNION ALL SELECT bssid, first_seen, last_seen FROM beacon_ap_ssids"
+                            " WHERE ssid = ?1) GROUP BY bssid ORDER BY bssid LIMIT ?2",
+                         arg, NULL, max, fn, ctx, 3);
+        return items(c, "SELECT bssid, first_seen, last_seen FROM beacon_aps WHERE ssid = ?1"
+                        " ORDER BY bssid LIMIT ?2", arg, NULL, max, fn, ctx, 3);
+    }
+    default:
+        return -1;
+    }
+}
+
+int web_sdb_keychk_open(web_sdb_keychk_t *k, web_sdb_conn_t *c, const char *const *needles,
+                        int n) {
+    memset(k, 0, sizeof(*k));
+    k->c = c;
+    if (n < 0 || n > WEB_SDB_KEYCHK_CHUNK * WEB_SDB_KEYCHK_MAX) return -1;
+    if (!(c->feats & WEB_QF_ALERTS)) return 0;
+    char sql[WEB_SDB_KEYCHK_CHUNK * 40 + 128];
+    for (int at = 0; at < n; at += WEB_SDB_KEYCHK_CHUNK) {
+        int m = n - at < WEB_SDB_KEYCHK_CHUNK ? n - at : WEB_SDB_KEYCHK_CHUNK;
+        size_t o = (size_t)snprintf(sql, sizeof(sql),
+                                    "SELECT 1 FROM alerts WHERE rowid = ?1 AND (0");
+        for (int i = 0; i < m; i++)
+            o += (size_t)snprintf(sql + o, sizeof(sql) - o, " OR instr(key, ?%d) > 0", i + 2);
+        snprintf(sql + o, sizeof(sql) - o, ")");
+        sqlite3_stmt *st = NULL;
+        c->pred_ok = 1;
+        int rc = sqlite3_prepare_v2(c->db, sql, -1, &st, NULL);
+        c->pred_ok = 0;
+        if (rc != SQLITE_OK) { web_sdb_keychk_close(k); return -1; }
+        for (int i = 0; i < m; i++)
+            sqlite3_bind_text(st, i + 2, needles[at + i], -1, SQLITE_TRANSIENT);
+        k->st[k->nst++] = st;
+    }
+    return 0;
+}
+
+int web_sdb_keychk(web_sdb_keychk_t *k, long long rid) {
+    for (int i = 0; i < k->nst; i++) {
+        sqlite3_stmt *st = k->st[i];
+        sqlite3_reset(st);
+        sqlite3_bind_int64(st, 1, rid);
+        int rc = sqlite3_step(st);
+        if (rc == SQLITE_ROW) return 1;
+        if (rc != SQLITE_DONE) return -1;
+    }
+    return 0;
+}
+
+void web_sdb_keychk_close(web_sdb_keychk_t *k) {
+    for (int i = 0; i < k->nst; i++) sqlite3_finalize(k->st[i]);
+    k->nst = 0;
 }
 
 int web_sdb_ap_ssids(web_sdb_conn_t *c, const char *bssid, int max,

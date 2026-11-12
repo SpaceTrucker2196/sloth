@@ -24,4 +24,18 @@ are a reviewed, high-signal event. `agents/risk_score.sh` weights any
 diff touching `agents/` at +40 precisely so such a change cannot arrive
 quietly inside a feature commit.
 
+## Fleet sharing: monitor data only (owner hard rule, 2026-11-12)
+
+- Share with peers only what sloth heard passively over the air (monitor
+  radio, BLE, GNSS, ADS-B). Never what the host's own interfaces or the
+  wire learned (ARP, DHCP, mDNS, DNS, flows, IPs, host names).
+- Never share the local network the host is joined to: its SSIDs and
+  BSSIDs, its stations, `--my-ssid` / `--my-bssid`, the host's own
+  radios. Local network data stays on the local host.
+- Fail closed; every export names its host; the importer refuses what
+  the rule forbids.
+- Only the owner relaxes this. Enforcement points and the tests that
+  hold it: agents/AGENTS.md, same heading;
+  [ADR 0009](docs/wiki/adr/0009-fleet-monitor-only.md).
+
 @agents/AGENTS.md

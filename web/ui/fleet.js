@@ -62,13 +62,21 @@
     if (!num(s)) return "-";
     return (s > 0 ? "+" : "") + s + " s" + (Math.abs(s) >= 30 ? " (clocks disagree)" : "");
   }
-  // A site's name as the page shows it: its label, else the peer's own
-  // name; this site's label, else "this site".
+  // A site's name as the page shows it: its label and its host name
+  // (owner rule 2026-11-12), else the peer's own name; this site's,
+  // else "this site".
+  function labelHost(s) {
+    var l = s && s.label ? s.label : "", h = s && s.host ? s.host : "";
+    return l && h && l !== h ? l + " (" + h + ")" : l || h;
+  }
   function siteName(name) {
     var ov = S.ov;
-    if (name === "self") return ov && ov.local && ov.local.label ? ov.local.label + " (here)" : "this site";
+    if (name === "self") {
+      var me = ov && ov.local ? labelHost(ov.local) : "";
+      return me ? me + " (here)" : "this site";
+    }
     if (ov) for (var i = 0; i < ov.peers.length; i++)
-      if (ov.peers[i].name === name) return ov.peers[i].label || name;
+      if (ov.peers[i].name === name) return labelHost(ov.peers[i]) || name;
     return name;
   }
 
