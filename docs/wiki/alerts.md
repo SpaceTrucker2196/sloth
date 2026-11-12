@@ -865,7 +865,7 @@ is the conservative one.
 |---|---|---|---|
 | `GNSS_JAMMING` | WARN, CRIT when the fix is lost | Mobile T1464 | the tracked satellites' median C/N0 collapsing at once (≥ 10 dB under the 60 s before a 10 s window, satellites still listed and the list not down 2, the used set down 2 or the fix gone; ss-0 rows are not tracked and do not count), or the u-blox `jamInd` ≥ 128 held 30 s |
 | `GNSS_SPOOF_SUSPECT` | LOW on two heuristics, WARN on three, never CRIT | — | two of: used C/N0 too high on ≥ 4 satellites, used C/N0 uniform (sd < 1 dB over ≥ 6) and high, a reacquisition with a position or time jump — within 300 s |
-| `GNSS_TIME_JUMP` | WARN | — | the receiver's time stepping ≥ 1000 ms against the host's monotonic clock from the last accepted fix, held on the next fix; not a queued read after a stall, not a late read by a starved reader (#182), not a suspend |
+| `GNSS_TIME_JUMP` | WARN | — | the receiver's time stepping ≥ 1000 ms against the host's monotonic clock, judged on consecutive gpsd TOFFs when gpsd sends them (#182, 2026-11-12), else from the last accepted fix, held on the next TOFF or fix; not a queued read after a stall, not a late read by a starved reader (#182), not a suspend |
 | `GNSS_POSITION_JUMP` | WARN | — | consecutive fixes farther apart than (speed + eps) × Δt + 3 × (eph₁ + eph₂), Δt the receiver's epoch spacing |
 
 **`GNSS_JAMMING` takes Mobile T1464** (owner ruling 2026-11-03), the

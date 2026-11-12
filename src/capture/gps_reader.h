@@ -17,7 +17,9 @@
  *
  * gpsd (`--gps gpsd://HOST:PORT`): the TCP connect happens on the worker,
  * after the drop, since it needs no privilege. sloth sends exactly one
- * line, `?WATCH={"enable":true,"json":true}`, and then only reads.
+ * line, GPSD_WATCH_LINE (src/gps.h:
+ * `?WATCH={"enable":true,"json":true,"pps":true}`, "pps" since #182 on
+ * 2026-11-12, so gpsd also sends TOFF), and then only reads.
  * Lost connections are retried with backoff. */
 
 /* Parse SPEC, refuse a remote gpsd unless allow_remote, and for a

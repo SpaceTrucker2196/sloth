@@ -462,6 +462,8 @@ int gpsd_json_parse(const char *line, size_t n, gpsd_msg_t *out) {
     char cls[32] = "";
     int have_msl = 0, have_hae = 0;
     double msl = 0, hae = 0;
+    double toff[4] = { 0, 0, 0, 0 };    /* real s, ns, clock s, ns */
+    int toff_have = 0;
     jws(&c);
     if (c.p < c.e && *c.p == '}') { c.p++; goto done; }
     for (;;) {
@@ -512,6 +514,10 @@ int gpsd_json_parse(const char *line, size_t n, gpsd_msg_t *out) {
             else if (strcmp(key, "major") == 0)  out->gst_major = d;
             else if (strcmp(key, "minor") == 0)  out->gst_minor = d;
             else if (strcmp(key, "orient") == 0) out->gst_orient = d;
+            else if (strcmp(key, "real_sec") == 0)   { toff[0] = d; toff_have |= 1; }
+            else if (strcmp(key, "real_nsec") == 0)  { toff[1] = d; toff_have |= 2; }
+            else if (strcmp(key, "clock_sec") == 0)  { toff[2] = d; toff_have |= 4; }
+            else if (strcmp(key, "clock_nsec") == 0) { toff[3] = d; toff_have |= 8; }
         } else if (*c.p == '[' && strcmp(key, "satellites") == 0) {
             out->has_sats = 1;
             if (parse_sats(&c, out) != 0) return -1;
@@ -532,6 +538,21 @@ done:
     if (strcmp(cls, "TPV") == 0)     { out->cls = GPSD_CLS_TPV; return 1; }
     if (strcmp(cls, "SKY") == 0)     { out->cls = GPSD_CLS_SKY; return 1; }
     if (strcmp(cls, "VERSION") == 0) { out->cls = GPSD_CLS_VERSION; return 1; }
+    if (strcmp(cls, "TOFF") == 0) {
+        /* Whole seconds from 1970 to the year 3000 (gpsd_time_parse()'s
+         * range) and whole nanoseconds under one second; anything else
+         * is refused, never clamped into a step. */
+        if (toff_have != 15) return -1;
+        for (int i = 0; i < 4; i++) {
+            double hi = (i & 1) ? 999999999.0 : 32503680000.0;
+            if (!(toff[i] >= 0.0 && toff[i] <= hi) || toff[i] != floor(toff[i]))
+                return -1;
+        }
+        out->cls = GPSD_CLS_TOFF;
+        out->toff_real_ms = (long long)toff[0] * 1000 + (long long)toff[1] / 1000000;
+        out->toff_clock_ms = (long long)toff[2] * 1000 + (long long)toff[3] / 1000000;
+        return 1;
+    }
     if (strcmp(cls, "GST") == 0) {
         /* GST's lat / lon / alt are standard deviations in metres, not a
          * position: moved out of the position fields so no caller can
@@ -750,6 +771,8 @@ static struct {
     int         fix_gap;    /* a TPV said no fix, or the source went away,
                              * since the newest positioned fix: the next
                              * one is a reacquisition (gnss_fix_pt_t.reacq) */
+    int         toff_gap;   /* the same since the newest TOFF */
+    uint64_t    toff_count; /* TOFFs read, lifetime */
 } g_loc = { .quality = -1 };
 
 /* The per-poll copy of g_loc.hist that s->gnss_hist points at: written
@@ -1051,7 +1074,7 @@ static void take_tpv(const gpsd_msg_t *m, time_t wall, int64_t wall_ms) {
     f->mode = m->mode < 0 ? 0 : m->mode;
     /* An explicit mode 0 or 1 is the receiver saying it has no fix; a
      * TPV without a mode says nothing either way. */
-    if (m->mode >= 0 && m->mode < 2) g_loc.fix_gap = 1;
+    if (m->mode >= 0 && m->mode < 2) g_loc.fix_gap = g_loc.toff_gap = 1;
     f->status = m->status;
     f->leap = m->leap;
     /* jam rides only the TPV after a UBX-MON-HW poll: a TPV without it
@@ -1125,10 +1148,31 @@ static void take_gst(const gpsd_msg_t *m) {
     f->gst_alt_sd = v[6];
 }
 
+/* Caller holds g_mu. A TOFF into its ring (#182): the receiver's time
+ * against gpsd's clock, both as gpsd stamped them, with the host's
+ * clocks at sloth's read so the rule can take out a host clock step. */
+static void take_toff(const gpsd_msg_t *m, int64_t wall_ms) {
+    gnss_hist_t *h = &g_loc.hist;
+    gnss_toff_pt_t *p = &h->toffs[h->toff_head];
+    memset(p, 0, sizeof(*p));
+    p->seq = ++g_loc.toff_count;
+    p->mono_ms = sloth_mono_ms();
+    p->wall_ms = (long long)wall_ms;
+    p->real_ms = m->toff_real_ms;
+    p->off_ms = m->toff_real_ms - m->toff_clock_ms;
+    p->leap = g_loc.gfix.valid ? g_loc.gfix.leap : -1;
+    p->reacq = (h->toff_n == 0 || g_loc.toff_gap) ? 1 : 0;
+    g_loc.toff_gap = 0;
+    h->toff_head = (h->toff_head + 1) % GNSS_TOFF_HIST;
+    if (h->toff_n < GNSS_TOFF_HIST) h->toff_n++;
+}
+
 static void feed_gpsd(const gpsd_msg_t *m, time_t wall, int64_t wall_ms) {
     if (!m) return;
     pthread_mutex_lock(&g_mu);
-    if (m->cls == GPSD_CLS_SKY) {
+    if (m->cls == GPSD_CLS_TOFF) {
+        take_toff(m, wall_ms);
+    } else if (m->cls == GPSD_CLS_SKY) {
         if (m->has_usat) g_loc.sats = m->usat;
         if (m->has_hdop && hdop_ok(m->hdop)) g_loc.hdop = m->hdop;
         take_sky(m, wall);
@@ -1179,6 +1223,7 @@ void gps_location_source_lost(void) {
     pthread_mutex_lock(&g_mu);
     g_loc.fix_live = 0;
     g_loc.fix_gap = 1;      /* a reconnect's first fix has no prior */
+    g_loc.toff_gap = 1;     /* nor its first TOFF */
     pthread_mutex_unlock(&g_mu);
 }
 

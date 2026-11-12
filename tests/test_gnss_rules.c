@@ -1329,6 +1329,276 @@ static void test_history_carries_what_the_rules_read(void) {
     end();
 }
 
+/* ── GNSS_TIME_JUMP on gpsd's TOFF (#182, 2026-11-12) ─────────────────
+ *
+ * Hand-built gpsd JSON streams through src/gps.c's own parser and feed,
+ * then gps_health_poll() and the rules, one tick per receiver cycle as
+ * a live sensor runs them. The host is modelled as one monotonic clock,
+ * a wall clock g_tw ahead of it, and the receiver's time g_trw ahead of
+ * it: a `date -s` moves g_tw alone, a suspend moves both (monotonic
+ * stops, neither of the others does), a receiver step moves g_trw alone.
+ * Each cycle gpsd stamps TOFF clock with the host wall at the cycle's
+ * first message (gpsd_json(5)), the receiver's time for the cycle sits
+ * 150 ms before it (USB / serial latency), and sloth reads the lines
+ * `late` ms after gpsd stamped them. TOFF rides every other TPV: gpsd
+ * does not send one per TPV (the reference site read 7 TOFF to 14 TPV
+ * in 5 s, and no PPS). */
+
+static uint64_t  g_tgm;          /* host monotonic at gpsd's receipt */
+static long long g_tw;           /* host wall - monotonic, ms */
+static long long g_trw;          /* receiver time - monotonic, ms */
+static int       g_tcycle;
+
+static void toff_begin(void) {
+    begin();
+    gps_location_reset();
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    g_tgm = g_mono;
+    g_tw = T0_WALL * 1000 - (long long)g_mono;
+    g_trw = g_tw - 150;
+    g_tcycle = 0;
+}
+
+static void toff_end(void) {
+    gps_location_reset();
+    memset(&g_s.gps, 0, sizeof(g_s.gps));
+    end();
+}
+
+static void feed_json(const char *line, long long wall_ms, int want) {
+    gpsd_msg_t m;
+    ASSERT_EQ(gpsd_json_parse(line, strlen(line), &m), want);
+    if (want == 1) gps_location_feed_gpsd_ms(&m, wall_ms);
+}
+
+static void iso_ms(long long ms, char *out, size_t n) {
+    time_t s = (time_t)(ms / 1000);
+    struct tm tm;
+    gmtime_r(&s, &tm);
+    snprintf(out, n, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", tm.tm_year + 1900,
+             tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec,
+             (int)(ms % 1000));
+}
+
+/* One receiver cycle: the TPV, the TOFF when `toff` (and a PPS when
+ * `pps`), read `late` ms after gpsd stamped the cycle; then one tick. */
+static void tcycle(long long late, int toff, int pps) {
+    g_tgm += 1000;
+    long long clock = (long long)g_tgm + g_tw;
+    long long real = (long long)g_tgm + g_trw;
+    g_mono = g_tgm + (uint64_t)late;
+    long long wall = (long long)g_mono + g_tw;
+    g_wall = (time_t)(wall / 1000);
+    char ts[40], line[512];
+    iso_ms(real, ts, sizeof(ts));
+    snprintf(line, sizeof(line),
+             "{\"class\":\"TPV\",\"device\":\"/dev/ttyACM0\",\"mode\":3,"
+             "\"time\":\"%s\",\"leapseconds\":18,\"lat\":51.50074,"
+             "\"lon\":-0.12469,\"eph\":2.5,\"speed\":0.0}", ts);
+    feed_json(line, wall, 1);
+    if (toff) {
+        snprintf(line, sizeof(line),
+                 "{\"class\":\"TOFF\",\"device\":\"/dev/ttyACM0\","
+                 "\"real_sec\":%lld,\"real_nsec\":%lld,\"clock_sec\":%lld,"
+                 "\"clock_nsec\":%lld,\"precision\":-1}",
+                 real / 1000, (real % 1000) * 1000000 + 4321,
+                 clock / 1000, (clock % 1000) * 1000000 + 87);
+        feed_json(line, wall, 1);
+    }
+    if (pps) {
+        snprintf(line, sizeof(line),
+                 "{\"class\":\"PPS\",\"device\":\"/dev/pps0\",\"real_sec\":%lld,"
+                 "\"real_nsec\":0,\"clock_sec\":%lld,\"clock_nsec\":1500,"
+                 "\"precision\":-20,\"shm\":\"NTP2\"}",
+                 real / 1000 + 1, clock / 1000 + 1);
+        feed_json(line, wall, 0);
+    }
+    g_tcycle++;
+    gps_health_poll(&g_s, g_wall);
+    evaluate();
+}
+
+/* n cycles read on time, TOFF on every other one (1:2), no PPS. */
+static void tcycles(int n, long long late) {
+    for (int i = 0; i < n; i++) tcycle(late, g_tcycle % 2 == 0, 0);
+}
+
+static int time_jumps(void) {
+    int n = 0;
+    for (int i = 0; i < g_s.alert_count; i++)
+        if (g_s.alerts[i].type == ALERT_TYPE_GNSS_TIME_JUMP) n++;
+    return n;
+}
+
+/* The read-time measure's documented blind spot (read_lateness(): "a
+ * reader that falls behind on the very pair where the receiver also
+ * dropped an epoch"), then 1.5 s late for four fixes, then caught up.
+ * Run twice: without TOFF (gpsd sends none) the read-time measure
+ * fires, which is the positive control that this stream exercises the
+ * rule; with TOFF at 1:2 and a stable offset it does not. The second
+ * half was seen red with toff_covers() removed from the rule's skip
+ * (the read-time measure judged the fixes TOFF covers). */
+static void dropped_epoch_then_late(int with_toff) {
+    for (int i = 0; i < 10; i++) tcycle(0, with_toff && g_tcycle % 2 == 0, 0);
+    g_tgm += 1000;                                   /* an epoch not sent */
+    for (int i = 0; i < 4; i++) tcycle(1500, with_toff && g_tcycle % 2 == 0, 0);
+    for (int i = 0; i < 6; i++) tcycle(0, with_toff && g_tcycle % 2 == 0, 0);
+}
+
+static void test_time_jump_toff_stable_under_reader_lag_does_not_fire(void) {
+    toff_begin();
+    dropped_epoch_then_late(0);
+    ASSERT(time_jumps() >= 1);                       /* the control */
+    int i = find_type(ALERT_TYPE_GNSS_TIME_JUMP);
+    if (i >= 0) ASSERT(strstr(g_s.alerts[i].detail, "judged on read time, no TOFF") != NULL);
+    toff_end();
+
+    toff_begin();
+    dropped_epoch_then_late(1);
+    ASSERT_EQ(time_jumps(), 0);
+    toff_end();
+}
+
+/* The issue's own shape at 1:2 TOFF:TPV with a PPS line in the stream:
+ * a reader 1.5 s late over six fixes, wandering, then caught up, TOFF
+ * stable. Seen red with toff_step() taking the offset from sloth's read
+ * (b->wall_ms in place of gpsd's clock) - that is, judged on read time
+ * again with the late-read guard not in the TOFF path. */
+static void test_time_jump_toff_steady_lateness_does_not_fire(void) {
+    toff_begin();
+    tcycles(10, 0);
+    static const long long lag[] = { 1500, 1500, 1700, 1300, 1500, 1500 };
+    for (int i = 0; i < 6; i++) tcycle(lag[i], g_tcycle % 2 == 0, 1);
+    tcycles(8, 0);
+    ASSERT_EQ(time_jumps(), 0);
+    toff_end();
+}
+
+/* A real +5000 ms step of the receiver's clock that holds, on a cycle
+ * with no TOFF (1:2, no PPS): judged on the next TOFFs, fires once and
+ * names TOFF. The TPV path does not fire it a second time. */
+static void test_time_jump_toff_step_fires_naming_toff(void) {
+    toff_begin();
+    tcycles(11, 0);
+    g_trw += 5000;
+    tcycles(6, 0);
+    ASSERT_EQ(time_jumps(), 1);
+    int i = find_type(ALERT_TYPE_GNSS_TIME_JUMP);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        const char *d = g_s.alerts[i].detail;
+        ASSERT(strstr(d, "judged on gpsd TOFF") != NULL);
+        ASSERT(strstr(d, "stepped +5000 ms") != NULL);
+        ASSERT(strstr(d, "offset -150 -> +4850 ms") != NULL);
+        ASSERT(strstr(d, "host clock step +0 ms") != NULL);
+        ASSERT_EQ(g_s.alerts[i].count, 1);
+    }
+    toff_end();
+}
+
+/* A backward step judged on TOFF while the reader is also late: the
+ * TOFF measure needs no guard, so the step is still seen. */
+static void test_time_jump_toff_backward_step_under_lag_fires(void) {
+    toff_begin();
+    tcycles(10, 0);
+    g_trw -= 3000;
+    tcycles(6, 1200);
+    ASSERT_EQ(time_jumps(), 1);
+    int i = find_type(ALERT_TYPE_GNSS_TIME_JUMP);
+    if (i >= 0) {
+        ASSERT(strstr(g_s.alerts[i].detail, "judged on gpsd TOFF") != NULL);
+        ASSERT(strstr(g_s.alerts[i].detail, "stepped -3000 ms") != NULL);
+    }
+    toff_end();
+}
+
+/* One TOFF stepped, the next back: does not hold. Seen red with the
+ * hold test (toff_step(b, c) >= thr / 2) removed from toff_judge(). */
+static void test_time_jump_toff_step_must_hold(void) {
+    toff_begin();
+    tcycles(10, 0);
+    g_trw += 5000;
+    tcycle(0, 1, 0);
+    g_trw -= 5000;
+    tcycle(0, 0, 0);
+    tcycles(6, 0);
+    ASSERT_EQ(time_jumps(), 0);
+    toff_end();
+}
+
+/* The host's wall clock stepped +5 s (NTP, `date -s`): gpsd's clock
+ * moves and real - clock with it; the host step sloth reads takes it
+ * out. Seen red with toff_host_step() dropped from toff_step(). */
+static void test_time_jump_toff_host_clock_step_does_not_fire(void) {
+    toff_begin();
+    tcycles(10, 0);
+    g_tw += 5000;
+    tcycles(6, 0);
+    ASSERT_EQ(time_jumps(), 0);
+    toff_end();
+}
+
+/* A one-minute suspend: monotonic stops, the receiver's time and the
+ * host's wall go on together. A reacquisition, not a step. Seen red
+ * with the suspend test removed from toff_judge(). */
+static void test_time_jump_toff_suspend_does_not_fire(void) {
+    toff_begin();
+    tcycles(10, 0);
+    g_tw += 60000;
+    g_trw += 60000;
+    tcycles(6, 0);
+    ASSERT_EQ(time_jumps(), 0);
+    toff_end();
+}
+
+/* gpsd stops sending TOFF (an older gpsd after a restart, a device it
+ * times no cycle for): after GNSS_TOFF_FRESH_MS the read-time measure
+ * judges again, from a fresh anchor, and names itself. */
+static void test_time_jump_falls_back_to_read_time_when_toff_stops(void) {
+    toff_begin();
+    tcycles(10, 0);
+    for (int i = 0; i < 10; i++) tcycle(0, 0, 0);
+    g_trw += 5000;
+    for (int i = 0; i < 4; i++) tcycle(0, 0, 0);
+    ASSERT_EQ(time_jumps(), 1);
+    int i = find_type(ALERT_TYPE_GNSS_TIME_JUMP);
+    if (i >= 0) {
+        ASSERT(strstr(g_s.alerts[i].detail, "judged on read time, no TOFF") != NULL);
+        ASSERT(strstr(g_s.alerts[i].detail, "stepped +5000 ms") != NULL);
+    }
+    toff_end();
+}
+
+/* What the TOFF ring carries off the feed: gpsd's real - clock, the
+ * receiver's time, the leap count of the TPV before, sloth's read, and
+ * reacq on the first TOFF and on the first after the source was lost. A
+ * malformed TOFF is a parse error and is not in the ring. */
+static void test_toff_history_carries_what_the_rule_reads(void) {
+    toff_begin();
+    tcycles(4, 0);                           /* TOFF on cycles 0 and 2 */
+    feed_json("{\"class\":\"TOFF\",\"real_sec\":1800000000,\"real_nsec\":0,"
+              "\"clock_sec\":1800000000}", 0, -1);
+    gps_location_source_lost();
+    tcycle(250, 1, 0);
+    gps_health_poll(&g_s, g_wall);
+    const gnss_hist_t *h = g_s.gnss_hist;
+    ASSERT(h != NULL && h != &g_hist);
+    if (!h) { toff_end(); return; }
+    ASSERT_EQ(h->toff_n, 3);
+    ASSERT_EQ(h->toffs[0].reacq, 1);
+    ASSERT_EQ(h->toffs[1].reacq, 0);
+    ASSERT_EQ(h->toffs[2].reacq, 1);
+    ASSERT_EQ(h->toffs[0].off_ms, -150);
+    ASSERT_EQ(h->toffs[2].off_ms, -150);
+    ASSERT_EQ(h->toffs[1].seq, h->toffs[0].seq + 1);
+    ASSERT_EQ(h->toffs[1].mono_ms - h->toffs[0].mono_ms, 2000);
+    ASSERT_EQ(h->toffs[2].mono_ms - h->toffs[1].mono_ms, 2250);
+    ASSERT_EQ(h->toffs[1].wall_ms - (long long)h->toffs[1].mono_ms, g_tw);
+    ASSERT_EQ(h->toffs[1].leap, 18);
+    ASSERT_EQ(h->toffs[1].real_ms, (long long)h->toffs[1].mono_ms + g_tw - 150);
+    toff_end();
+}
+
 void run_gnss_rules_tests(void) {
     TEST_SUITE("GNSS rules: jamming, spoofing suspect, time and position jumps");
     RUN_TEST(test_jam_collapse_fires_warn);
@@ -1387,4 +1657,13 @@ void run_gnss_rules_tests(void) {
     RUN_TEST(test_spoof_host_suspend_is_not_heuristic_3);
     RUN_TEST(test_spoof_stale_sky_not_evaluated);
     RUN_TEST(test_history_carries_what_the_rules_read);
+    RUN_TEST(test_time_jump_toff_stable_under_reader_lag_does_not_fire);
+    RUN_TEST(test_time_jump_toff_steady_lateness_does_not_fire);
+    RUN_TEST(test_time_jump_toff_step_fires_naming_toff);
+    RUN_TEST(test_time_jump_toff_backward_step_under_lag_fires);
+    RUN_TEST(test_time_jump_toff_step_must_hold);
+    RUN_TEST(test_time_jump_toff_host_clock_step_does_not_fire);
+    RUN_TEST(test_time_jump_toff_suspend_does_not_fire);
+    RUN_TEST(test_time_jump_falls_back_to_read_time_when_toff_stops);
+    RUN_TEST(test_toff_history_carries_what_the_rule_reads);
 }

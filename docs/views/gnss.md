@@ -28,7 +28,7 @@ position. Three objects feed this view:
 - **GST** — pseudorange noise statistics (rms, the error ellipse, the
   lat / lon / alt sigmas).
 
-sloth sends gpsd exactly one `?WATCH={"enable":true,"json":true}` line
+sloth sends gpsd exactly one `?WATCH={"enable":true,"json":true,"pps":true}` line
 and writes nothing to a serial device (MISSION §2). The host's own
 receiver is the only transmitter in the picture, and it transmits
 nothing.

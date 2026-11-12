@@ -18,8 +18,9 @@ five `sensor_health` fields, two `--db` tables (schema v10), the `gps`
 sensor in the registry, and slothweb's GNSS tab. Since 2026-11-03 four
 alert rules read it — `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`,
 `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP` (below). **Receive-only** (MISSION §2):
-the one `?WATCH` line to gpsd is unchanged, and a serial device is
-never written to.
+sloth sends gpsd one `?WATCH` line (since 2026-11-12 with `"pps":true`,
+owner ruling on #182, so gpsd also sends `TOFF`; below), and a serial
+device is never written to.
 
 **Sources**: `src/gps.h`, `src/gps.c` (the parser's `satellites[]`,
 GST, `gpsd_time_parse()`, the sky / fix state, `gps_gnss_*_sig()`),
@@ -32,7 +33,7 @@ GST, `gpsd_time_parse()`, the sky / fix state, `gps_gnss_*_sig()`),
 `tests/test_gnss_view.c`, `tests/test_db.c` (v9 → v10),
 `web/tests/test_gnss.c`.
 
-**Last updated**: 2026-11-12 (#182: the late-read guard tested against a lateness that varies from fix to fix; `TOFF` still not used, owner ruling). 2026-11-11 (a link to [[fleet]]'s GNSS comparison across sites, #192 I6). 2026-11-09 (#182: `GNSS_TIME_JUMP` does not judge or anchor on a fix read late, the queued read's mirror; its detail carries both gaps and the fix interval). 2026-11-06 (`/api/gnss` gains `loc`, the sensor's own position from `sensor_health`'s `loc_*`, GPS else `--location`, for the Radar view's centre); 2026-11-05 (slothweb names each satellite: the RINEX identifier and, from the IGS satellite metadata compiled in, the vehicle - name, NORAD and COSPAR numbers, SVN, block, launch, plane and slot - at the record's time; the sky plot draws each satellite's trail from `gnss_sightings`, `/api/gnss/tracks`). 2026-11-05 (slothweb's "satellites seen" history over `gnss_sightings`, `/api/gnss/seen` and `/api/gnss/sat`, and a satellite's C/N0 and elevation over a window). 2026-11-03 (the four GNSS rules replace the hooks section; the history carries the monotonic clock, `eps`, `leapseconds` and `reacq`). 2026-11-02 (verify: `GPSD_MAX_LINE` 10240 so a full multi-GNSS SKY fits; a fractional `mode` is no fix; slothweb shows any offset sloth records). 2026-11-02 (review: `jam` sticky across the TPVs gpsd omits it from; the clock-offset band held with hysteresis; the used count signed as a band in `gnss_fix` and `gnss_sky`; `el` / `az` carried with flags and absent from the records rather than -1; an empty `satellites` set empties the sky and the view says so; the `[#]` cursor follows the satellite across a re-sort; the TUI's cursor, the DataTable and the fix-ring walk in slothweb; what a set satellite writes, and the accepted band-edge case, stated); 2026-11-02 (first version).
+**Last updated**: 2026-11-12 (#182 item 1, owner ruling 2026-11-12: the `?WATCH` line asks for `"pps":true`; gpsd's `TOFF` is parsed into its own ring and `GNSS_TIME_JUMP` judges a step on consecutive TOFFs, falling back to the read-time measure and its late-read guard where no TOFF is fresh). 2026-11-12 (#182: the late-read guard tested against a lateness that varies from fix to fix; `TOFF` still not used, owner ruling). 2026-11-11 (a link to [[fleet]]'s GNSS comparison across sites, #192 I6). 2026-11-09 (#182: `GNSS_TIME_JUMP` does not judge or anchor on a fix read late, the queued read's mirror; its detail carries both gaps and the fix interval). 2026-11-06 (`/api/gnss` gains `loc`, the sensor's own position from `sensor_health`'s `loc_*`, GPS else `--location`, for the Radar view's centre); 2026-11-05 (slothweb names each satellite: the RINEX identifier and, from the IGS satellite metadata compiled in, the vehicle - name, NORAD and COSPAR numbers, SVN, block, launch, plane and slot - at the record's time; the sky plot draws each satellite's trail from `gnss_sightings`, `/api/gnss/tracks`). 2026-11-05 (slothweb's "satellites seen" history over `gnss_sightings`, `/api/gnss/seen` and `/api/gnss/sat`, and a satellite's C/N0 and elevation over a window). 2026-11-03 (the four GNSS rules replace the hooks section; the history carries the monotonic clock, `eps`, `leapseconds` and `reacq`). 2026-11-02 (verify: `GPSD_MAX_LINE` 10240 so a full multi-GNSS SKY fits; a fractional `mode` is no fix; slothweb shows any offset sloth records). 2026-11-02 (review: `jam` sticky across the TPVs gpsd omits it from; the clock-offset band held with hysteresis; the used count signed as a band in `gnss_fix` and `gnss_sky`; `el` / `az` carried with flags and absent from the records rather than -1; an empty `satellites` set empties the sky and the view says so; the `[#]` cursor follows the satellite across a re-sort; the TUI's cursor, the DataTable and the fix-ring walk in slothweb; what a set satellite writes, and the accepted band-edge case, stated); 2026-11-02 (first version).
 
 ## What is read
 
@@ -89,10 +90,41 @@ eight seconds on the reference host), not to every TPV. A TPV without
 it keeps the last reported value for `GNSS_JAM_HOLD_TPVS` (10) TPVs,
 then it reads -1 again. Per TPV it flipped -1 / value every second,
 which re-signed `gnss_fix` and `sensor_health` on every tick and left
-the one-second series mostly -1. gpsd's `TOFF` / `PPS`
-objects would give a far better one, but they need
-`?WATCH={"pps":true}`, a change to the one line sloth sends; that is
-an owner ruling, not this slice's.
+the one-second series mostly -1.
+
+## gpsd's `TOFF` (#182, owner ruling 2026-11-12)
+
+sloth's one line to gpsd is `?WATCH={"enable":true,"json":true,"pps":true}`
+(`GPSD_WATCH_LINE`, `src/gps.h`; its bytes pinned by
+`tests/test_gps.c`). Under `"pps":true` gpsd emits "the TOFF JSON
+message on each cycle and a PPS JSON message when the device issues
+1PPS" (gpsd_json(5), gpsd.io/gpsd_json.html, read 2026-11-12). It asks
+gpsd for more reports; it writes nothing to the receiver.
+
+`TOFF` carries `real_sec` / `real_nsec`, the receiver's time "for the
+start of the cycle", and `clock_sec` / `clock_nsec`, the host's clock
+"when the first timing message of the cycle was received" (gpsd_json(5)).
+gpsd stamps both, so `real − clock` is the receiver against the host
+clock *as gpsd measured it*, free of sloth's own read latency — which
+`time_off_ms` above is not. `src/gps.c` parses it (`GPSD_CLS_TOFF`; a
+TOFF missing one of the four fields, or with one fractional, negative
+or out of range, is a parse error and dropped) and keeps the newest 64
+in `gnss_hist_t.toffs` (`take_toff()`), each with sloth's monotonic and
+wall clocks at the read and the newest TPV's `leapseconds`.
+`GNSS_TIME_JUMP` judges a step on consecutive TOFFs and falls back to
+the read-time measure where no TOFF is fresh (below).
+
+What the second site's gpsd sent under this line on 2026-11-12, in 5 s:
+7 TOFF, 14 TPV, 21 SKY and **0 PPS** although `/dev/pps0`-`2` exist. So
+TOFF is not one per TPV and is never paired with a fix, and PPS is not
+relied on: `PPS` is recognised as well-formed and not read. A PPS-timed
+offset would be far tighter (gpsd_json(5): a serial-line PPS strobe's
+latency is "bounded above by about 10 microseconds"); taking it is
+future work for a host that gets one.
+
+Not recorded: no JSONL field and no sloth.db column carry the TOFF
+offset. The rule reads the in-memory ring, and the alert detail carries
+the offsets that judged a step.
 
 ## The `[#]` view
 
@@ -288,7 +320,7 @@ are the twelve `gnss.*` knobs ([[cli-reference]]).
 |---|---|---|---|
 | `GNSS_JAMMING` | WARN; CRIT when the fix is lost | Mobile T1464 | the 300 s series: the newest point's median C/N0 over the tracked satellites (ss > 0) against the 60 s before a 10 s window, with the used set falling and the sky still listed at its size; or `jam` held high for 30 s |
 | `GNSS_SPOOF_SUSPECT` | LOW on two heuristics, WARN on three | — | the sky (used C/N0 too high; uniform and high) and the fix ring (a reacquisition with a jump), two within 300 s |
-| `GNSS_TIME_JUMP` | WARN | — | the fix ring: the receiver's time against the host's monotonic clock, from the last accepted fix, held on the next; a fix read from a queue, read late (#182) or that did not hold is never the reference |
+| `GNSS_TIME_JUMP` | WARN | — | gpsd's TOFF ring when gpsd sends TOFF (#182, 2026-11-12): the change of `real − clock` between consecutive TOFFs plus the host's own clock step, held on the next TOFF; else the fix ring: the receiver's time against the host's monotonic clock, from the last accepted fix, held on the next; a fix read from a queue, read late (#182) or that did not hold is never the reference |
 | `GNSS_POSITION_JUMP` | WARN | — | the fix ring: distance against (speed + eps) × Δt + 3 × (eph₁ + eph₂), Δt the receiver's epoch spacing |
 
 **What the history carries for them** (`gnss_hist_t`, now in
@@ -325,6 +357,24 @@ suspend (the receiver's and the host's wall clocks moving past the
 monotonic one together) as a reacquisition; `GNSS_POSITION_JUMP` takes
 Δt from the receiver's own time.
 
+**TOFF first** (#182 item 1, 2026-11-12). All of that is the fallback.
+When gpsd sends `TOFF` (above), `GNSS_TIME_JUMP` judges on consecutive
+TOFFs: the step is the change of `real − clock` plus the host's
+wall-against-monotonic step between sloth's two reads of them (the
+host's own clock step taken out, as the fix measure does), at least
+`gnss.time_jump_ms`, holding within half of it on the next TOFF, with
+the same leap-second, midnight, rollover and suspend exclusions. No
+queue or late-read guard: no read time is in it, so a reader starved
+1.5 s does not move it. A positioned fix with a TOFF read within 3 s of
+it is TOFF's to judge, and the fix measure only re-anchors on it; a fix
+with none (an older gpsd, a receiver gpsd times no cycle for, TOFF
+stopping) is judged on read time as above, from a fresh anchor. Two
+TOFFs more than 5 s apart, the first TOFF and the first after a no-fix
+TPV or a lost source are not stepped across. The detail opens with
+"judged on gpsd TOFF" or "judged on read time, no TOFF". With a remote
+gpsd (`--gps-allow-remote`), `clock` is that host's clock and a step of
+it reads as a TOFF step; on loopback it is this host's and is taken out.
+
 **What they cannot do**, from the research: tell interference from
 jamming (DHS 2017), locate a jammer, see a spoofer present before sloth
 started, or catch a patient drag-off; a consumer receiver has no signal
@@ -336,10 +386,10 @@ owner on 2026-11-03.
 
 - NMEA `GSV` / `GSA` satellite lists for a serial receiver (the
   reference host runs gpsd; the position path is unchanged).
-- `?WATCH={"pps":true}` and the TOFF / PPS offset (changes the one
-  line sloth sends; owner ruling). #182's item 1, judging
-  `GNSS_TIME_JUMP` on gpsd's receipt time rather than sloth's, waits
-  on it.
+- Reading gpsd's `PPS` (recognised, not read: the second site's gpsd
+  sent none), and recording the `TOFF` offset in JSONL or sloth.db.
+  `?WATCH` `"pps":true` and judging `GNSS_TIME_JUMP` on `TOFF` (#182
+  item 1) shipped 2026-11-12, above.
 - A text sky plot in the TUI (slothweb has one).
 - Persisting slothweb's live GNSS tables in `slothweb.db` (sloth.db
   v10 holds the history, which the tab reads since 2026-11-05; the live

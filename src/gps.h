@@ -101,7 +101,16 @@ double nmea_acc_m(double hdop);
 #define GPSD_MAX_LINE 10240
 
 enum { GPSD_CLS_OTHER = 0, GPSD_CLS_TPV, GPSD_CLS_SKY, GPSD_CLS_VERSION,
-       GPSD_CLS_GST };
+       GPSD_CLS_GST, GPSD_CLS_TOFF };
+
+/* The one line sloth sends gpsd (src/capture/gps_reader.c), its exact
+ * bytes pinned by tests/test_gps.c. "pps":true (owner ruling 2026-11-12,
+ * #182) asks gpsd for TOFF on each cycle and PPS when the device issues
+ * 1PPS (gpsd_json(5), WATCH: "If true, emit the TOFF JSON message on
+ * each cycle and a PPS JSON message when the device issues 1PPS"). It
+ * changes what gpsd reports to sloth, never the receiver: nothing is
+ * written to the device. */
+#define GPSD_WATCH_LINE "?WATCH={\"enable\":true,\"json\":true,\"pps\":true}\n"
 
 /* One entry of SKY's satellites[] (2026-11-02). PRN is the only member
  * gpsd always writes; -1 / has_* 0 mark the rest absent. */
@@ -141,11 +150,23 @@ typedef struct {
     /* GST (error statistics): rms, the error ellipse, the sigmas; -1 absent. */
     double gst_rms, gst_major, gst_minor, gst_orient;
     double gst_lat, gst_lon, gst_alt;
+    /* TOFF (#182, 2026-11-12), unix ms with the nanoseconds truncated:
+     * gpsd_json(5) real_sec/real_nsec, the receiver's time "for the start
+     * of the cycle", and clock_sec/clock_nsec, the host's clock "when the
+     * first timing message of the cycle was received". gpsd stamps both,
+     * so their difference carries none of sloth's read latency. */
+    long long toff_real_ms, toff_clock_ms;
 } gpsd_msg_t;
 
-/* One line of gpsd's stream. 1 for a TPV, SKY, GST or VERSION object, 0
- * for any other well-formed object (DEVICES, WATCH, ...), -1 when the
- * line is not a JSON object, is unbalanced, or is over GPSD_MAX_LINE.
+/* One line of gpsd's stream. 1 for a TPV, SKY, GST, TOFF or VERSION
+ * object, 0 for any other well-formed object (DEVICES, WATCH, PPS, ...),
+ * -1 when the line is not a JSON object, is unbalanced, or is over
+ * GPSD_MAX_LINE, and for a TOFF without all four of real_sec, real_nsec,
+ * clock_sec and clock_nsec as whole numbers in range (seconds 0 to the
+ * year 3000, nanoseconds 0..999999999): gpsd always writes the four, so
+ * a TOFF missing one, or out of range, is not one sloth measures from.
+ * PPS is recognised as well-formed and not read: sloth judges on TOFF,
+ * which gpsd sends with or without a PPS source.
  * Unknown keys are skipped; nested arrays and objects are skipped by
  * depth except SKY's satellites[], whose flat objects are read into
  * sats[] (a member of another type, or a nested value inside one, is

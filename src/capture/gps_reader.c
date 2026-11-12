@@ -157,7 +157,7 @@ static int gpsd_connect(void) {
             return -1;
         }
     }
-    static const char watch[] = "?WATCH={\"enable\":true,\"json\":true}\n";
+    static const char watch[] = GPSD_WATCH_LINE;   /* the only bytes sent */
     size_t off = 0;
     while (off < sizeof(watch) - 1) {
         ssize_t w = send(fd, watch + off, sizeof(watch) - 1 - off, MSG_NOSIGNAL);
