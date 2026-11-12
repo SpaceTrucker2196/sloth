@@ -79,8 +79,15 @@ ExecStartPre=+/usr/local/sbin/sloth-monitor-up ${SLOTH_IFACE}
 # report.retain_days (default 90). snapshot.live.txt carries the running
 # AP inventory on the same cadence; snapshot.txt, the baseline, still
 # moves only at a clean stop.
+#
+# --monitor-iface ${SLOTH_IFACE}: open the radio the helper above put in
+# monitor mode, not whichever type-803 interface sorts first — a second
+# radio in monitor mode on the same host (a bench attacker) could
+# otherwise be taken for the sensor. If it is missing or not in monitor
+# mode there is no fallback. It does not scope the IP stream (--iface).
 ExecStart=/usr/local/bin/sloth \
     --headless \
+    --monitor-iface ${SLOTH_IFACE} \
     --hop \
     --db /var/lib/sloth/sloth.db --db-interval-secs 1 \
     --pcap-dir /var/lib/sloth/pcap \

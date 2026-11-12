@@ -648,6 +648,15 @@ static void print_usage(const char *argv0) {
             "                     cannot be enforced on the capture datalink,\n"
             "                     sloth exits non-zero rather than capture an\n"
             "                     unrestricted stream.\n"
+            "  --monitor-iface NAME\n"
+            "                     open exactly NAME as the 802.11 monitor\n"
+            "                     radio instead of the first type-803\n"
+            "                     interface discovery finds. If NAME is\n"
+            "                     missing or not in monitor mode, no\n"
+            "                     monitor capture runs: there is no\n"
+            "                     fallback. [m] cannot retarget away from\n"
+            "                     it. Not part of the --iface allow-list,\n"
+            "                     which does not reach the monitor radio.\n"
             "  --no-discovery     suppress the mDNS advertisement of the data\n"
             "                     socket. By default, when --data-socket is bound\n"
             "                     to a routable (non-loopback) TCP address, sloth\n"
@@ -852,6 +861,7 @@ int main(int argc, char **argv) {
     const char *allow_ifaces[MAX_IFACES];/* --iface NAME, repeatable (#35) */
     int         allow_iface_count = 0;
     int         monitor_only = 0;        /* --monitor-only (#35) */
+    const char *monitor_iface = NULL;    /* --monitor-iface NAME */
     int         bt_monitor   = 0;        /* --bt-monitor (#144 slice 2) */
     const char *bt_capture   = NULL;     /* --bt-capture PATH (#144 slice 3) */
     int         ble_rotation_hints = 0;  /* --ble-rotation-hints (#156) */
@@ -965,6 +975,28 @@ int main(int argc, char **argv) {
                         MAX_IFACES);
                 return 2;
             }
+        } else if (!strcmp(argv[i], "--monitor-iface") && i + 1 < argc) {
+            /* Names the sensor radio; does not scope anything. Kept
+             * apart from --iface by the owner's 2026-10-04 ruling that
+             * the monitor stream stays outside the allow-list. */
+            const char *n = argv[++i];
+            if (monitor_iface) {
+                fprintf(stderr, "sloth: --monitor-iface given twice; one "
+                                "radio is pinned\n");
+                return 2;
+            }
+            if (!n[0] || strlen(n) >= 16 /* IFNAMSIZ */ || strchr(n, '/')) {
+                fprintf(stderr, "sloth: --monitor-iface %s: not an "
+                                "interface name (1..15 chars, no '/')\n", n);
+                return 2;
+            }
+            if (bt_dev_is_raw_hci(n)) {
+                fprintf(stderr, "sloth: --monitor-iface %s refused: a raw "
+                                "HCI device accepts injected packets; use "
+                                "--bt-monitor\n", n);
+                return 2;
+            }
+            monitor_iface = n;
         } else if (!strcmp(argv[i], "--monitor-only")) {
             monitor_only = 1;
         } else if (!strcmp(argv[i], "--bt-monitor")) {
@@ -1339,6 +1371,13 @@ int main(int argc, char **argv) {
 
     char replay_paths[REPLAY_MAX_FILES][REPLAY_PATH_MAX];
     int  replay_count = 0;
+#ifndef WITH_PCAP
+    if (monitor_iface) {
+        fprintf(stderr, "sloth: --monitor-iface needs a build with libpcap "
+                        "(this one is WITH_PCAP=0)\n");
+        return 2;
+    }
+#endif
     if (replay_arg) {
 #ifndef WITH_PCAP
         fprintf(stderr, "sloth: --replay needs a build with libpcap "
@@ -1353,11 +1392,12 @@ int main(int argc, char **argv) {
                     replay_arg, REPLAY_MAX_FILES);
             return 2;
         }
-        if (allow_iface_count || monitor_only || g_hop_enabled || bt_monitor ||
-            bt_capture) {
+        if (allow_iface_count || monitor_only || monitor_iface ||
+            g_hop_enabled || bt_monitor || bt_capture) {
             fprintf(stderr, "sloth: --replay reads savefiles, not "
-                            "interfaces: --iface, --monitor-only, --hop, "
-                            "--bt-monitor and --bt-capture do not apply\n");
+                            "interfaces: --iface, --monitor-only, "
+                            "--monitor-iface, --hop, --bt-monitor and "
+                            "--bt-capture do not apply\n");
             return 2;
         }
         /* --allow-active would send PTR queries for addresses read out of
@@ -1549,7 +1589,22 @@ int main(int argc, char **argv) {
         }
     } else {
         capture_open(&g_state);
+        probe_set_monitor_pin(monitor_iface);
         probe_open(&g_state);
+        /* MISSION section 2: say what was opened. A pinned radio that is
+         * missing or not in monitor mode is not replaced by discovery;
+         * the run continues without 802.11, as it does when discovery
+         * finds nothing, and sensor_health carries probe_err. */
+        if (monitor_iface) {
+            if (g_state.probe_iface[0])
+                fprintf(stderr, "sloth: --monitor-iface: 802.11 monitor "
+                                "capture opened on %s (receive-only; "
+                                "discovery skipped)\n", g_state.probe_iface);
+            else
+                fprintf(stderr, "sloth: --monitor-iface: %s; no monitor "
+                                "capture, no fallback to another radio\n",
+                        g_state.probe_err);
+        }
         /* #144 slice 2: beside the IP handle and for the same reason —
          * binding the monitor channel needs CAP_NET_RAW, which the drop
          * below gives up. Opt-in, and a failure is announced and the run

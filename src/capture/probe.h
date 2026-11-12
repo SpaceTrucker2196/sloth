@@ -60,6 +60,22 @@ void probe_clear(void);
    everything, so an unrestricted run is unaffected. */
 void probe_set_iface(sloth_state_t *s, const char *iface);
 
+/* --monitor-iface NAME: pin the monitor radio. When set, probe_open()
+   opens exactly NAME — refused with s->probe_err when it is missing or
+   not type 803, never falling back to discovery — and probe_set_iface()
+   refuses a retarget to any other interface. NULL or "" unpins. Not the
+   --iface allow-list (owner ruling 2026-10-04): that scopes the IP
+   stream and does not reach the monitor radio. */
+void probe_set_monitor_pin(const char *name);
+
+/* The pinned name, "" when none. */
+const char *probe_monitor_pin(void);
+
+/* Test-only: read netdev types from root/<name>/type instead of
+   /sys/class/net, so the selection logic runs over a fake tree. NULL
+   restores the real path. */
+void probe_test_set_sysfs_net(const char *root);
+
 /* Drive the real on_probe_frame() over caller-supplied radiotap+802.11
    frames via an in-memory libpcap savefile — the monitor twin of
    capture_test_dispatch() (#92). No device, no .pcap fixture. ts_secs
@@ -102,6 +118,8 @@ static inline uint64_t mon_bad_clock_total(void)                        { return
 static inline uint64_t mon_radiotap_reject_total(void)                  { return 0; }
 static inline void probe_clear(void)                                    {}
 static inline void probe_set_iface(sloth_state_t *s, const char *iface) { (void)s; (void)iface; }
+static inline void probe_set_monitor_pin(const char *name)              { (void)name; }
+static inline const char *probe_monitor_pin(void)                       { return ""; }
 static inline void probe_health_poll(capture_health_t *h)
     { if (h) { h->open = 0; h->running = 0; } }
 
