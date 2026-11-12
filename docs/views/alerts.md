@@ -347,7 +347,7 @@ printed. A lane with nothing begun is not drawn, and with nothing at
 all the block is one line, `begun: none in the last 60 min`. The
 columns flex with the width (12 to 60). It reads the alert table, so an
 incident the table has already dropped is not on it. slothweb draws the
-same per-severity ticks under History's 30-day rug.
+same lanes for PROBE_FLOOD on the WiFi view's chains panel.
 
 **Location** (2026-10-27). With `--location` or `--gps`, Enter's
 detail panel carries one more line, where the sensor was as the

@@ -317,8 +317,8 @@ static g4st_t gl_g4_stats(const double (*cells)[3], double warm) {
     }
     return o;
 }
-static void gl_g4(const double (*cells)[3], double w, double h, double x0, double y0,
-                  double warm, int now, int share, gmarks_t *g) {
+static void gl_g4p(const double (*cells)[3], double w, double h, double x0, double y0,
+                   double warm, int now, int share, double p, gmarks_t *g) {
     memset(g, 0, sizeof(*g));
     if (!cells) { gl_dash(g, w, h); return; }
     double cw = (w - x0) / 24, ch = (h - y0) / 7;
@@ -327,19 +327,24 @@ static void gl_g4(const double (*cells)[3], double w, double h, double x0, doubl
     for (int i = 0; i < 168; i++) {
         double x = x0 + cw * (i % 24), y = y0 + ch * (i / 24);
         if (cells[i][2] >= st.warm) {
-            gm_push(g, "cell", x + 1, y + 1, cw - 2, ch - 2,
+            gm_push(g, "cell", x + p, y + p, cw - 2 * p, ch - 2 * p,
                     gl_heat_token(st.max > 0 ? cells[i][0] / st.max : 0));
             continue;
         }
-        gm_push(g, "warm", x + 1, y + 1, cw - 2, ch - 2, "--rule");
+        gm_push(g, "warm", x + p, y + p, cw - 2 * p, ch - 2 * p, "--rule");
         if (!(cells[i][2] >= 1)) continue;
         double f = top > 0 ? cells[i][0] / top : 0;
         int lv = !(f > 0) ? 0 : f < 0.34 ? 1 : f < 0.67 ? 2 : 3;
-        double ph = lv ? (ch - 2) * lv / 4 : 1;
-        gm_push(g, "prov", x + 1, y + ch - 1 - ph, cw - 2, ph, "--tui-dim");
+        double ph = lv ? (ch - 2 * p) * lv / 4 : 1;
+        gm_push(g, "prov", x + p, y + ch - p - ph, cw - 2 * p, ph, "--tui-dim");
     }
     if (now >= 0 && now < 168)
         gm_push(g, "outline", x0 + cw * (now % 24), y0 + ch * (now / 24), cw, ch, "--signal");
+}
+/* opt.pad left out: the 1 px inset. */
+static void gl_g4(const double (*cells)[3], double w, double h, double x0, double y0,
+                  double warm, int now, int share, gmarks_t *g) {
+    gl_g4p(cells, w, h, x0, y0, warm, now, share, 1, g);
 }
 
 /* app.js's fmt() and heatCaption(), ported: G4's caption is where its
@@ -1144,11 +1149,11 @@ static void test_the_page_carries_the_ported_js(void) {
               "        if (za && Math.abs(b.z) !== Math.abs(a.z)) return Math.abs(b.z) - Math.abs(a.z);");
     WT_HAS(p, "    return { rows: out, by: byz ? \"|z|\" : \"value\" };");
     WT_HAS(p, "      if (c && c[2] >= st.warm) {\n"
-              "        m.push([\"cell\", x + 1, y + 1, cw - 2, ch - 2,\n"
+              "        m.push([\"cell\", x + p, y + p, cw - 2 * p, ch - 2 * p,\n"
               "                heatToken(st.max > 0 ? c[0] / st.max : 0)]);\n"
               "        continue;\n"
               "      }\n"
-              "      m.push([\"warm\", x + 1, y + 1, cw - 2, ch - 2, \"--rule\"]);");
+              "      m.push([\"warm\", x + p, y + p, cw - 2 * p, ch - 2 * p, \"--rule\"]);");
     WT_HAS(p, "      m.push([\"outline\", x0 + cw * (nc % 24), y0 + ch * Math.floor(nc / 24), cw, ch, \"--signal\"]);");
     WT_HAS(p, "      if (!c || !(c[2] >= 1)) { o.unseen++; continue; }");
     WT_HAS(p, "      } else if (k === \"band\" || k === \"shade\") {\n"
@@ -1181,20 +1186,20 @@ static void test_the_page_carries_the_ported_js(void) {
               "    var m = [], w = opt.w, h = opt.h, x0 = opt.x0 || 0, y0 = opt.y0 || 0, i;\n"
               "    if (!cells) { m.push(dash(w, h)); return m; }\n"
               "    var cw = (w - x0) / 24, ch = (h - y0) / 7, st = g4Stats(cells, opt.warm);\n"
-              "    var top = opt.share ? 1 : st.top;\n"
+              "    var top = opt.share ? 1 : st.top, p = gnum(opt.pad) ? opt.pad : 1;\n"
               "    for (i = 0; i < 168; i++) {\n"
               "      var c = cells[i], x = x0 + cw * (i % 24), y = y0 + ch * Math.floor(i / 24);\n"
               "      if (c && c[2] >= st.warm) {\n"
-              "        m.push([\"cell\", x + 1, y + 1, cw - 2, ch - 2,\n"
+              "        m.push([\"cell\", x + p, y + p, cw - 2 * p, ch - 2 * p,\n"
               "                heatToken(st.max > 0 ? c[0] / st.max : 0)]);\n"
               "        continue;\n"
               "      }\n"
-              "      m.push([\"warm\", x + 1, y + 1, cw - 2, ch - 2, \"--rule\"]);\n"
+              "      m.push([\"warm\", x + p, y + p, cw - 2 * p, ch - 2 * p, \"--rule\"]);\n"
               "      if (!c || !(c[2] >= 1)) continue;\n"
               "      var f = top > 0 ? c[0] / top : 0;\n"
               "      var lv = !(f > 0) ? 0 : f < 0.34 ? 1 : f < 0.67 ? 2 : 3;\n"
-              "      var ph = lv ? (ch - 2) * lv / 4 : 1;\n"
-              "      m.push([\"prov\", x + 1, y + ch - 1 - ph, cw - 2, ph, \"--tui-dim\"]);\n"
+              "      var ph = lv ? (ch - 2 * p) * lv / 4 : 1;\n"
+              "      m.push([\"prov\", x + p, y + ch - p - ph, cw - 2 * p, ph, \"--tui-dim\"]);\n"
               "    }\n"
               "    var nc = opt.now;\n"
               "    if (gnum(nc) && nc >= 0 && nc < 168)\n"
@@ -4800,6 +4805,214 @@ static void test_v4_wiring(void) {
     WT_HAS(p, "    var id = SlothFlowMx.hit(e);\n    if (id === null) return;\n    $(\"f-ip\").value = id;");
 }
 
+/* ── #195: the V-slices' leftovers ──────────────────────────────── */
+
+/* G4's 56 by 28 form (§5 G4, §6.8): pad 0 lays the cells edge to edge,
+ * a little over 2 px each, where the 1 px inset would leave a third of
+ * a pixel. Seen red with the pad ignored (cw - 2 wide). */
+static void test_g4_small_form_has_no_inset(void) {
+    static double cells[168][3];
+    for (int i = 0; i < 168; i++) { cells[i][0] = 0.5; cells[i][1] = 0; cells[i][2] = 5; }
+    gmarks_t g;
+    gl_g4p(cells, 56, 28, 0, 0, 3, -1, 1, 0, &g);
+    WT_EQ(gm_count(&g, "cell"), 168);
+    WT_ASSERT(near(g4at(&g, 0).w, 56.0 / 24) && near(g4at(&g, 0).h, 4));
+    WT_ASSERT(near(g4at(&g, 25).x, 56.0 / 24) && near(g4at(&g, 25).y, 4));
+    /* The 1 px inset is still the default. */
+    gl_g4(cells, 56, 28, 0, 0, 3, -1, 1, &g);
+    WT_ASSERT(near(g4at(&g, 0).w, 56.0 / 24 - 2));
+}
+
+/* F4: what a tile's number is, in words, is the tile's hover note; the
+ * line under its glyph is a state or nothing. Seen red with the
+ * alerts tile's prose line put back, and with the anomalies tile's
+ * rules written to its sub line again. */
+static void test_tile_prose_is_a_hover_note(void) {
+    const char *p = page();
+    WT_HAS(p, "<a class=\"tile hud\" id=\"t-alerts\" href=\"#alerts?state=open\" title=\"open alerts by "
+              "severity: crit / warn / low, since this page connected\">");
+    WT_LACKS(p, "<div class=\"sub\">crit / warn / low, since connect</div>");
+    WT_HAS(p, "<a class=\"tile hud\" id=\"t-tp\" href=\"#activity?focus=throughput\" title=\"rx, 24 h, "
+              "band = mean &#177; k sd\">");
+    WT_LACKS(p, "id=\"k-tp-sub\"");
+    WT_HAS(p, "      set(\"k-anoms-sub\", h.anomaly && h.anomaly.persisted === false\n"
+              "                         ? \"in memory only: lost at a restart\" : \"\");\n"
+              "      if (typeof h.a4 === \"string\" && h.a4 !== \"on\")\n"
+              "        $(\"t-anoms\").title = \"slothweb's own anomalies, rules A1-A3, A5-A10; A4 off: \" + h.a4;\n");
+    WT_LACKS(p, "set(\"k-anoms-sub\", \"rules A1");
+    WT_HAS(p, "      set(\"k-devs-sub\", !num(t.devices) ? \"waiting for a device pass\"\n"
+              "                        : t.devices_stale ? \"last known; stream not live\" : \"\");\n");
+    WT_LACKS(p, "set(\"k-tp-sub\"");
+}
+
+/* §6.1's Records header: records.rate by type, a 40 px G1 each for the
+ * busiest four of the first eight keys read, ranked by the hour's sum;
+ * each its own scale (R11), its last bucket its number (R7), the type
+ * only ever textContent; the caption names source, window, tier, scale
+ * and how many types. Pinned whole. */
+static void test_records_types_g1(void) {
+    const char *p = page();
+    WT_HAS(p, "      <div class=\"rc-types\" id=\"ticker-types\"></div>\n"
+              "      <div class=\"sub\" id=\"ticker-types-note\"></div>");
+    WT_HAS(p, "  var TYPES_READ = 8, TYPES_SHOWN = 4;\n");
+    WT_HAS(p, "  function typesPaint() {\n"
+              "    var box = $(\"ticker-types\"), cap = $(\"ticker-types-note\");\n"
+              "    if (!box) return;\n"
+              "    while (box.firstChild) box.removeChild(box.firstChild);\n"
+              "    T.got.slice(0, TYPES_SHOWN).forEach(function (g) {\n"
+              "      var sp = document.createElement(\"span\");\n"
+              "      sp.className = \"rct\";\n"
+              "      var k = document.createElement(\"span\");\n"
+              "      k.className = \"rct-k\";\n"
+              "      k.textContent = g.key;\n"
+              "      var c = document.createElement(\"canvas\");\n"
+              "      c.className = \"sg\";\n"
+              "      c.ariaLabel = g.key + \" records per second, 1 h\";\n"
+              "      var v = document.createElement(\"b\");\n"
+              "      v.textContent = g.pts.length ? H.fmt(g.pts[g.pts.length - 1][1]) : \"-\";\n"
+              "      sp.appendChild(k); sp.appendChild(c); sp.appendChild(v);\n"
+              "      box.appendChild(sp);\n"
+              "      if (c.clientWidth)\n"
+              "        glyph.paint(c, glyph.g1(g.pts, g.band, { w: c.clientWidth, h: c.clientHeight,\n"
+              "          from: g.from, to: g.to, step: g.step, sens: H.sens(), scale: T.scale[g.key] }), H.tok);\n"
+              "    });\n"
+              "    if (cap)\n"
+              "      cap.textContent = T.err ? \"records.rate by type: unavailable\"\n"
+              "        : !T.total ? \"records.rate by type: no types yet\"\n"
+              "        : glyph.caption({ source: \"records.rate by type\", window: \"1 h\", tier: \"fine\",\n"
+              "                          scale: \"own, rec/s\", n: Math.min(TYPES_SHOWN, T.got.length) + \" of \" +\n"
+              "                          T.total + \" types, busiest first\" });\n"
+              "  }\n");
+    WT_HAS(p, "  function typesRefresh() {\n"
+              "    if (!$(\"ticker-types\")) return;\n"
+              "    var gen = ++T.gen;\n"
+              "    var now = Math.floor(Date.now() / 1000), step = 10;\n"
+              "    var to = now - now % step + step, from = to - 3600;\n"
+              "    if (T.scaleOf !== H.scope()) { T.scale = {}; T.scaleOf = H.scope(); }\n"
+              "    H.getJSON(\"/api/keys?metric=records.rate\").then(function (j) {\n"
+              "      var ks = (j.keys || []).filter(function (k) { return typeof k.key === \"string\"; })\n"
+              "                             .slice(0, TYPES_READ);\n"
+              "      T.total = num(j.total) ? j.total : ks.length;\n"
+              "      return Promise.all(ks.map(function (k) {\n"
+              "        return Promise.all([H.series(\"records.rate\", k.key, \"fine\", from, to),\n"
+              "                            H.baseline(\"records.rate\", k.key)]).then(function (r) {\n"
+              "          var s = r[0], ps = perSec(s.points, H.bands(s.points, r[1], s.kind, s.step), s.step);\n"
+              "          var sum = 0;\n"
+              "          ps.pts.forEach(function (p) { if (num(p[1])) sum += p[1]; });\n"
+              "          var gw = glyph.win(ps.pts, from, to);\n"
+              "          return { key: k.key, pts: ps.pts, band: ps.band, from: gw.from, to: gw.to,\n"
+              "                   step: s.step, sum: sum };\n"
+              "        }).catch(function () { return null; });\n"
+              "      }));\n"
+              "    }).then(function (rows) {\n"
+              "      if (gen !== T.gen) return;\n"
+              "      T.err = false;\n"
+              "      T.got = (rows || []).filter(function (g) { return g && g.sum > 0; })\n"
+              "        .sort(function (a, b) { return b.sum - a.sum || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0); });\n"
+              "      T.got.forEach(function (g) { T.scale[g.key] = glyph.scale(g.pts, g.band, T.scale[g.key] || null); });\n"
+              "      typesPaint();\n"
+              "    }).catch(function () {\n"
+              "      if (gen !== T.gen) return;\n"
+              "      T.err = true; T.got = [];\n"
+              "      typesPaint();\n"
+              "    });\n"
+              "  }\n");
+    WT_HAS(p, "  function paint() { FACTS.forEach(paintOne); typesPaint(); }\n");
+    WT_HAS(p, "    typesRefresh();\n    FACTS.forEach(function (f) {\n");
+    WT_HAS(p, "SlothFacts.init({ set: set, fmt: fmt, tok: tok, series: series, getJSON: getJSON,");
+}
+
+/* §6.8: the Lookup card's G4 at 56 by 28 between the strip and G2, from
+ * the device's week, drawn only when a cell has a sample, a failed
+ * read said in its place. Pinned whole, and its place in the card. */
+static void test_lookup_week(void) {
+    const char *p = page();
+    WT_HAS(p, "  function lookupWeek(wb, mac, gen) {\n"
+              "    getJSON(\"/api/device/\" + encodeURIComponent(mac)).then(function (j) {\n"
+              "      if (gen !== L.gen) return;\n"
+              "      var wk = j.week || {};\n"
+              "      if (!wk.cells || wk.cells.length !== 168) { wb.remove(); return; }\n"
+              "      var cells = [];\n"
+              "      for (var c = 0; c < 168; c++) cells.push([wk.cells[c][0], 0, wk.cells[c][1]]);\n"
+              "      var warm = num(wk.warm_n) ? wk.warm_n : 3;\n"
+              "      var st = glyph.g4Stats(cells, warm);\n"
+              "      if (!st.fed && !st.prov) { wb.remove(); return; }\n"
+              "      st.share = true;\n"
+              "      var lb = wb.appendChild(el(\"div\", \"label\", \"hour of week \"));\n"
+              "      lb.appendChild(el(\"span\", \"sub\", heatCaption(\"dev.present, share of weeks present\", st, \"\")));\n"
+              "      var cv = wb.appendChild(el(\"canvas\", \"g4s\"));\n"
+              "      cv.ariaLabel = \"the hours of the week this device is usually present\";\n"
+              "      glyph.paint(cv, glyph.g4(cells, { w: cv.clientWidth, h: cv.clientHeight, warm: warm,\n"
+              "                                        now: wk.now_cell, share: true, pad: 0 }), tok);\n"
+              "    }).catch(function () {\n"
+              "      if (gen === L.gen) wb.appendChild(el(\"div\", \"sub\", \"hour of week: unavailable\"));\n"
+              "    });\n"
+              "  }\n");
+    WT_HAS(p, "        var wb = box.appendChild(el(\"div\", \"l-week\"));\n"
+              "        box.appendChild(SlothRf.block(j.rf, j.mac));\n"
+              "        if (d && typeof d.mac === \"string\") lookupWeek(wb, d.mac, gen);\n");
+    WT_HAS(p, "canvas.g4s { display: block; width: 56px; height: 28px; margin-top: 4px; }");
+}
+
+/* §6.3's probe-flood rug: PROBE_FLOOD by type name from /api/alerts, a
+ * lane per severity in its colour, collapsed with none. Pinned whole,
+ * with its fetch and its caption. */
+static void test_probe_flood_rug(void) {
+    const char *p = page();
+    WT_HAS(p, "  function floodRug(c, rows, from, to, cols) {\n"
+              "    var col_s = (to - from) / cols, lanes = [], names = [], keys = 0;\n"
+              "    function col(t) { return Math.max(0, Math.min(cols - 1, Math.floor((t - from) / col_s))); }\n"
+              "    for (var sv = 2; sv >= 0; sv--) {\n"
+              "      var counts = [], spans = [], i;\n"
+              "      for (i = 0; i < cols; i++) counts.push(0);\n"
+              "      for (i = 0; rows && i < rows.length; i++) {\n"
+              "        var r = rows[i];\n"
+              "        if (r.sev !== sv || !num(r.first_seen) || !num(r.last_seen)) continue;\n"
+              "        if (r.last_seen < from || r.first_seen >= to) continue;\n"
+              "        if (r.first_seen >= from) counts[col(r.first_seen)]++;\n"
+              "        spans.push([col(r.first_seen), col(r.last_seen)]);\n"
+              "      }\n"
+              "      if (!spans.length) continue;\n"
+              "      keys += spans.length;\n"
+              "      lanes.push({ counts: counts, token: SEV_TOK[sv], spans: spans, spanToken: SEV_TOK[sv] });\n"
+              "      names.push(SEV_LANE[sv]);\n"
+              "    }\n"
+              "    c.hidden = !lanes.length;\n"
+              "    if (!lanes.length) return { max: 0, lanes: 0, keys: 0 };\n"
+              "    c.style.height = lanes.length * (LANE + GAP) + \"px\";\n"
+              "    var gw = Math.max(1, c.clientWidth - BSS);\n"
+              "    glyph.paint(c, shift(glyph.g7(lanes, { w: gw, h: c.clientHeight, lane: LANE, gap: GAP }), BSS, 0),\n"
+              "                H.tok);\n"
+              "    var dpr = window.devicePixelRatio || 1, g = c.getContext(\"2d\");\n"
+              "    g.font = 10 * dpr + \"px \" + H.css(\"--font-mono\");\n"
+              "    g.textBaseline = \"middle\";\n"
+              "    names.forEach(function (n, k) {\n"
+              "      g.fillStyle = H.tok(lanes[k].token);\n"
+              "      g.fillText(n, 2 * dpr, (k * (LANE + GAP) + LANE / 2) * dpr);\n"
+              "    });\n"
+              "    return { max: glyph.g7Max(lanes), lanes: lanes.length, keys: keys };\n"
+              "  }\n");
+    WT_HAS(p, "    getJSON(\"/api/alerts?state=all&type=PROBE_FLOOD&window=\" + Math.max(60, r.win) + \"&limit=100\")\n");
+    WT_HAS(p, "        var pf = SlothAir.floodRug($(\"w-pflood\"), rows, r.from, r.to, 96);\n");
+    WT_HAS(p, "n: 96, state: pf.keys ? \"\" : \"0 probe floods in the window\" }));");
+    WT_HAS(p, "<canvas class=\"rug\" id=\"w-pflood\"");
+}
+
+/* F17 on the Flows counts column: each count its name and a G6 bar on
+ * that count's largest in the rows shown. */
+static void test_flow_counts_bars(void) {
+    const char *p = page();
+    WT_HAS(p, "    var cc = row.appendChild(el(\"span\", hot ? \"fc\" : \"fc d-normal\"));\n"
+              "    (f.counts || []).forEach(function (v, i) {\n"
+              "      var part = cc.appendChild(el(\"span\", \"fcp\"));\n"
+              "      part.appendChild(el(\"span\", hot ? \"\" : \"d-dim\", String(cols[i] || \"?\").replace(/_count$/, \"\") + \" \"));\n"
+              "      SlothRf.count(part.appendChild(el(\"span\", \"\")), v, F.cMax[i] || 0, fmt(v), hot ? \"\" : \"d-normal\");\n"
+              "    });\n");
+    WT_HAS(p, "      F.cMax = (j.columns || []).map(function (c, i) {\n"
+              "        return SlothRf.colMax(F.rows, function (f) { return f.counts ? f.counts[i] : null; });\n"
+              "      });\n");
+}
+
 void run_glyph_tests(void) {
     WT_RUN(test_the_page_carries_the_ported_js);
     WT_RUN(test_g1_empty_is_a_dash);
@@ -4881,4 +5094,10 @@ void run_glyph_tests(void) {
     WT_RUN(test_mx);
     WT_RUN(test_mx_num);
     WT_RUN(test_v4_wiring);
+    WT_RUN(test_g4_small_form_has_no_inset);
+    WT_RUN(test_tile_prose_is_a_hover_note);
+    WT_RUN(test_records_types_g1);
+    WT_RUN(test_lookup_week);
+    WT_RUN(test_probe_flood_rug);
+    WT_RUN(test_flow_counts_bars);
 }

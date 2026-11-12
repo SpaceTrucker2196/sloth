@@ -6454,8 +6454,33 @@ G2 in both places on 2026-11-11.
   counts: the Devices `anom` column and the Flows `total` column, each
   on its own column's largest value (R3), which the Devices caption
   prints (`anom bars to 3`). The card's old rounded score bar is gone
-  (R8). The Flows `counts` column, several numbers to a cell, keeps its
-  text.
+  (R8). The Flows `counts` column, several numbers to a cell, is since
+  #195 a name and a narrower G6 count bar per number, each on that
+  count's largest in the rows shown (R3, one scale a count), so one
+  count's bars read down the table beside the next.
+- **G4's 56 by 28 form (§6.8, #195).** On the Lookup card of a MAC
+  with a sloth.db record, between the strip and G2: the device's week
+  (`/api/device/MAC`'s `week`, shares of past weeks present, as the
+  drawer reads it) at a little over 2 px a cell, no labels, no tile
+  inset (`glyph.g4()`'s `pad: 0`), and R9's caption. Drawn only when a
+  cell has a sample; a failed read says `hour of week: unavailable`.
+
+**#195, the V-slices' smaller leftovers.**
+
+- **F4: tile prose as hover notes.** What a tile's number is, in words
+  (`open alerts by severity ...`, the anomaly rules and A4's state, the
+  throughput's `rx, 24 h, band = mean ± k sd`, what the device count
+  counts), is the tile's `title`; the line under a tile's glyph is G1's
+  words and, at most, a state (`in memory only: lost at a restart`,
+  `waiting for a device pass`, `last known; stream not live`).
+- **The Records panel's per-type G1 (§6.1).** Under the ticker's label,
+  `records.rate` by type: the first 8 keys `/api/keys` lists (most
+  recently seen first), each read for the last hour at the fine tier
+  with its band, ranked by the hour's sum, the busiest 4 shown as the
+  type, a 40 px G1 on its own scale (R11) and its last bucket's rate
+  (R7); the caption `records.rate by type, 1 h, fine, own, rec/s, 4 of
+  N types, busiest first`. A type with nothing in the hour is not
+  shown. `web/ui/facts.js`, refreshed with the strip.
 
 **Slice V3 (#171), the WiFi view's air picture (§6.3) and History's
 rug (`web/ui/air.js`).** The WiFi view is four panels, top to bottom:
@@ -6563,9 +6588,13 @@ channels, emitters, chains, clients.
   `attributed ↑` on the twin lane at the first that carried
   `attributed`; the twin's newest `confidence` follows its label.
   Three time labels under it (R4). The data is
-  **`/api/wifi/chain`**: the deauth rows of `/api/wifi/deauth` (at
-  most 16, the busiest first), or the one BSSID `bssid=` names whether
-  or not it has a deauth key, each with `"twin"` and `"karma"`
+  **`/api/wifi/chain`**: the deauth rows of `/api/wifi/deauth`, and
+  since #195 every BSSID sloth.db holds an EVIL_TWIN or KARMA_AP row
+  for in the window (`web_sdb_ap_attacks()`: beacon_aps' BSSID, the
+  key matched at its fields), those an alert names first and the
+  deauth-only ones after them, each part busiest first, at most 16; or
+  the one BSSID `bssid=` names whether or not it has a deauth key; each
+  with `"twin"` and `"karma"`
   (sloth.db's EVIL_TWIN and KARMA_AP rows whose key names the BSSID,
   matched as a predicate and never read out, `[first, last, sev,
   count]`, at most 8 each; the key matched at its fields, the pair's
@@ -6594,9 +6623,11 @@ channels, emitters, chains, clients.
   it, and a bssid with one stage a lane of the G7 rug under it (§5:
   "a BSSID with one stage gets a G7 rug, not a G8"); with no chain the
   block collapses to its caption (`no bssid with more than one stage
-  in the window`, F16). A BSSID with no deauth key in the window is not
-  a candidate there (the chain begins with a deauth); it still has its
-  G8 on its alert page and in its drawer. **On the alert page**, in an
+  in the window`, F16). A BSSID with no deauth key in the window is a
+  candidate there too since #195 when sloth.db holds an EVIL_TWIN or
+  KARMA_AP row naming it (a twin raised with no deauth flood), and the
+  BSSIDs an alert names are read before the deauth-only ones, so the
+  16 a page reads are not all merely busy APs. **On the alert page**, in an
   `attack chain` section above the device's: the chain of the BSSID
   the alert names (`/api/alert`'s `device.bssid`: an AP sloth heard
   beacon that the key names, matched as a predicate, `null` for
@@ -6609,7 +6640,17 @@ channels, emitters, chains, clients.
   of the three asks.
 - **The Flows matrix (F11)**, above under Flows: the matrix first, the
   chord second, by ruling 4.
-- **The TUI's half (R12)** is not done for G8 (the table above).
+- **The TUI's half (R12)**: the Twins view's chain lanes for the
+  selected pair (#195; `docs/views/twins.md`).
+- **The probe-flood rug** (#195, V3's leftover): under the deauth rug,
+  `PROBE_FLOOD` from `/api/alerts?state=all&type=PROBE_FLOOD` (the type
+  by name, which is what the page lacked), a G7 lane per severity that
+  has any in that severity's colour, the worst on top: a tick where a
+  finding (one alert key) was first seen, its height the findings begun
+  in the cell on one scale for every lane, and an underline from its
+  first to its last sighting, which is the finding's span (quiet gaps
+  between its incidents included, as the caption says). None in the
+  window collapses it to its caption (`SlothAir.floodRug()`).
 
 ### Tables: sort and resize
 

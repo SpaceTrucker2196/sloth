@@ -197,6 +197,13 @@ canvas.spark { display: block; width: 100%; height: 36px; margin-top: 4px; }
 /* F1, F5: a 40 px G1 after each network fact in the strip, and after
    the footer's drops, on the text line's own height (R2). */
 canvas.sg { display: inline-block; vertical-align: middle; width: 40px; height: 12px; margin-left: 6px; }
+/* §5 G4's second form, on the Lookup card (§6.8): 2 px a cell, no labels. */
+canvas.g4s { display: block; width: 56px; height: 28px; margin-top: 4px; }
+/* §6.1: the Records panel's per-type G1s, one fact each on a line. */
+.rc-types { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; margin: 2px 0; }
+.rc-types:empty { display: none; }
+.rct { white-space: nowrap; color: var(--muted); }
+.rct b { color: var(--ink); font-weight: 600; margin-left: 4px; }
 canvas.heat { display: block; width: 100%; height: 180px; margin-top: var(--gap); }
 canvas.wfall { display: block; width: 100%; height: 280px; margin-top: var(--gap); }
 /* #171 V3: G3's block and its drill-in side by side, the drill-in a
@@ -305,6 +312,9 @@ canvas.smw { display: block; width: 100%; height: 18px; }
 .frow { display: grid; grid-template-columns: minmax(16ch, 40ch) minmax(16ch, 40ch) minmax(14ch, 1fr) 9ch 11ch 11ch 11ch; gap: 6px; align-items: center; font-size: 12px; white-space: nowrap; padding: 2px 0 2px 4px; border-left: 3px solid transparent; border-bottom: 1px dotted var(--rule); min-width: calc(88ch + 60px); }
 .frow > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .frow.sev2 { color: var(--sev-crit); border-left-color: var(--sev-crit); }
+/* F17 on the counts column: a name and a narrow G6 bar per count. */
+.frow .fcp { margin-right: 10px; }
+.frow .fcp canvas.g6 { width: 24px; }
 .frow .n { text-align: right; }
 .frow.go { cursor: pointer; }
 .qout { overflow: auto; max-height: 50vh; margin-top: var(--gap); }

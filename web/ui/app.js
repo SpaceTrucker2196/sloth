@@ -1072,11 +1072,13 @@
       set("k-devs", devs);
       set("s-devs", devs);
       $("k-devs").className = "kpi" + (t.devices_stale ? " stale" : "");
+      // F4: what the number counts is the hover note; the line is a
+      // state, or nothing.
       set("k-devs-sub", !num(t.devices) ? "waiting for a device pass"
-                        : t.devices_stale ? "last known; stream not live"
-                        : SCOPE === "monitor" ? "the monitor radio's, in sloth's latest pass"
-                        : SCOPE === "local" ? "the host's interfaces', in sloth's latest pass"
-                        : "in sloth's latest pass");
+                        : t.devices_stale ? "last known; stream not live" : "");
+      $("t-devs").title = SCOPE === "monitor" ? "devices: the monitor radio's, in sloth's latest pass"
+                        : SCOPE === "local" ? "devices: the host's interfaces', in sloth's latest pass"
+                        : "devices in sloth's latest pass";
     }
     var a = t.alerts_open;
     if (a && num(a[0]) && num(a[1]) && num(a[2])) {
@@ -1343,12 +1345,14 @@
       // --web-allow-sql; otherwise it is never drawn and never asked.
       Q.on = !!(h.sql && typeof h.sql === "object");
       $("h-sql").hidden = !Q.on;
-      if (h.anomaly && h.anomaly.persisted === false)
-        set("k-anoms-sub", "in memory only: lost at a restart");
-      else if (typeof h.a4 === "string" && h.a4 !== "on")
-        set("k-anoms-sub", "rules A1-A3, A5-A10; A4 off: " + h.a4);
+      // F4: the rules are the tile's hover note; the one line under
+      // its glyph is a state, here that the episodes do not persist.
+      set("k-anoms-sub", h.anomaly && h.anomaly.persisted === false
+                         ? "in memory only: lost at a restart" : "");
+      if (typeof h.a4 === "string" && h.a4 !== "on")
+        $("t-anoms").title = "slothweb's own anomalies, rules A1-A3, A5-A10; A4 off: " + h.a4;
       else if (h.a4 === "on")
-        set("k-anoms-sub", "rules A1-A10");
+        $("t-anoms").title = "slothweb's own anomalies, rules A1-A10";
     })
     .catch(function () { set("db", "?"); });
 
@@ -2081,8 +2085,8 @@
       }
       O.key = ks[0].key;
       set("k-tp-key", O.key);
-      set("k-tp-sub", SCOPE === "monitor" ? "the monitor radio's rx (frames heard), 24 h, band = mean ± k sd"
-                      : "rx, 24 h, band = mean ± k sd");
+      $("t-tp").title = SCOPE === "monitor" ? "the monitor radio's rx (frames heard), 24 h, band = mean ± k sd"
+                        : "rx, 24 h, band = mean ± k sd";
       var now = Math.floor(Date.now() / 1000);
       var tier = A.storeOn ? "minute" : "fine";
       var step = tier === "minute" ? 60 : 10;
@@ -3291,7 +3295,9 @@
         sc.ariaLabel = "presence over the last 24 hours";
         drawStrip(sc, j.presence, 144, glyph.firstCell(d ? d.first_seen : null, j.presence_from, 600, 144),
                   j.presence_from, 600);
+        var wb = box.appendChild(el("div", "l-week"));
         box.appendChild(SlothRf.block(j.rf, j.mac));
+        if (d && typeof d.mac === "string") lookupWeek(wb, d.mac, gen);
       }
       if (d) {
         kvList(box, [["sloth.db", macVal(d.mac)],
@@ -3306,6 +3312,33 @@
       }
       tail();
     }).catch(function (e) { if (gen === L.gen) set("l-src", errText(e.message)); });
+  }
+  // §6.8 (#195): G4's 56 by 28 form between the strip and G2, the
+  // device's week as the drawer reads it (/api/device's week member,
+  // shares of past weeks present) at 2 px a cell with no labels, so the
+  // weekly rhythm ("only weeknights") reads beside the day's strip. Only
+  // when a baseline exists: no cells draws nothing, and a read that
+  // fails says so in its place (R5).
+  function lookupWeek(wb, mac, gen) {
+    getJSON("/api/device/" + encodeURIComponent(mac)).then(function (j) {
+      if (gen !== L.gen) return;
+      var wk = j.week || {};
+      if (!wk.cells || wk.cells.length !== 168) { wb.remove(); return; }
+      var cells = [];
+      for (var c = 0; c < 168; c++) cells.push([wk.cells[c][0], 0, wk.cells[c][1]]);
+      var warm = num(wk.warm_n) ? wk.warm_n : 3;
+      var st = glyph.g4Stats(cells, warm);
+      if (!st.fed && !st.prov) { wb.remove(); return; }
+      st.share = true;
+      var lb = wb.appendChild(el("div", "label", "hour of week "));
+      lb.appendChild(el("span", "sub", heatCaption("dev.present, share of weeks present", st, "")));
+      var cv = wb.appendChild(el("canvas", "g4s"));
+      cv.ariaLabel = "the hours of the week this device is usually present";
+      glyph.paint(cv, glyph.g4(cells, { w: cv.clientWidth, h: cv.clientHeight, warm: warm,
+                                        now: wk.now_cell, share: true, pad: 0 }), tok);
+    }).catch(function () {
+      if (gen === L.gen) wb.appendChild(el("div", "sub", "hour of week: unavailable"));
+    });
   }
   $("l-go").addEventListener("click", lookup);
   $("l-q").addEventListener("keydown", function (e) { if (e.key === "Enter") lookup(); });
@@ -4010,6 +4043,25 @@
       set("w-da-note", errText(e.message));
       set("w-ch-note", errText(e.message));
     });
+    // The probe-flood rug (§6.3, #195): the Alerts page's PROBE_FLOOD
+    // rows for the window, by type name, a lane per severity.
+    getJSON("/api/alerts?state=all&type=PROBE_FLOOD&window=" + Math.max(60, r.win) + "&limit=100")
+      .then(function (aj) {
+        if (gen !== WF.gen) return;
+        var rows = aj.rows || [];
+        var pf = SlothAir.floodRug($("w-pflood"), rows, r.from, r.to, 96);
+        set("w-pf-note", glyph.caption({
+              source: "alerts PROBE_FLOOD, sloth.db " + aj.db + " and the stream",
+              window: glyph.dur(r.to - r.from), tier: glyph.dur(Math.round((r.to - r.from) / 96)) + " cells",
+              scale: pf.keys ? "one scale, tallest " + fmt(pf.max) + " begun a cell; " + pf.keys +
+                               " finding" + (pf.keys === 1 ? "" : "s") + ", a finding's first to last sighting" +
+                               (aj.more ? "; the first 100 read" : "") : "",
+              n: 96, state: pf.keys ? "" : "0 probe floods in the window" }));
+      }).catch(function (e) {
+        if (gen !== WF.gen) return;
+        $("w-pflood").hidden = true;
+        set("w-pf-note", errText(e.message));
+      });
     var tier = tierFor(r.win);
     Promise.all([series("wifi.probe_clients", "", tier, r.from, r.to),
                  baseline("wifi.probe_clients", "")]).then(function (res) {
@@ -4067,7 +4119,7 @@
                      "ldap": "LDAP", "kerb": "Kerberos", "bgp": "BGP" };
   var FLOW_PAGE = 50;
   var F = { proto: "ssh", gen: 0, ggen: 0, rows: [], offset: 0, graph: null,
-            tabs: null, hits: [] };
+            tabs: null, hits: [], cMax: [] };
   if (FLOW_TABS.indexOf(prefGet("flows.proto")) >= 0) F.proto = prefGet("flows.proto");
 
   function flowHue(p) {
@@ -4140,10 +4192,17 @@
     var dc = row.appendChild(flowAddr(to, "(source only)"));
     if (typeof from === "string") sc.title = from;
     if (typeof to === "string") dc.title = to;
-    var counts = (f.counts || []).map(function (v, i) {
-      return String(cols[i] || "?").replace(/_count$/, "") + " " + fmt(v);
-    }).join("  ");
-    row.appendChild(el("span", hot ? "" : "d-normal", counts));
+    // F17 for the counts column (#195): several numbers a cell, each
+    // its name and a G6 count bar behind its number, on the largest of
+    // that count in the rows shown (R3: one scale a count, as the total
+    // column's is one scale), so a column of asreq bars reads down the
+    // table beside the tgsreq ones.
+    var cc = row.appendChild(el("span", hot ? "fc" : "fc d-normal"));
+    (f.counts || []).forEach(function (v, i) {
+      var part = cc.appendChild(el("span", "fcp"));
+      part.appendChild(el("span", hot ? "" : "d-dim", String(cols[i] || "?").replace(/_count$/, "") + " "));
+      SlothRf.count(part.appendChild(el("span", "")), v, F.cMax[i] || 0, fmt(v), hot ? "" : "d-normal");
+    });
     SlothRf.count(row.appendChild(el("span", "n")), f.total, F.totMax, fmt(f.total),
                   hot ? "" : "d-bright");
     var extra = "";
@@ -4187,6 +4246,9 @@
       F.rows = F.rows.concat(j.rows || []);
       // F17: the total column's bars on its largest (R3).
       F.totMax = SlothRf.colMax(F.rows, function (f) { return f.total; });
+      F.cMax = (j.columns || []).map(function (c, i) {
+        return SlothRf.colMax(F.rows, function (f) { return f.counts ? f.counts[i] : null; });
+      });
       DTF.sort(F.rows, !j.more).forEach(function (f) { box.appendChild(flowRow(f, j.columns || [])); });
       F.offset += num(j.count) ? j.count : 0;
       $("f-more").hidden = !j.more;
@@ -6194,7 +6256,7 @@
 
   // G1 on the strip, the tiles and the footer (web/ui/facts.js): the
   // page's helpers, lent once.
-  if (window.SlothFacts) SlothFacts.init({ set: set, fmt: fmt, tok: tok, series: series,
+  if (window.SlothFacts) SlothFacts.init({ set: set, fmt: fmt, tok: tok, series: series, getJSON: getJSON,
     baseline: baseline, bands: bands, sens: function () { return sens; },
     scope: function () { return SCOPE; }, scopeWord: function (s) { return SCOPE_WORD[s]; },
     storeOn: function () { return A.storeOn; }, onOverview: function () { return view === "overview"; } });

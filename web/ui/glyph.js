@@ -214,8 +214,10 @@ var glyph = (function () {
   // G4, the hour-of-week grid (F3; owner ruling 2026-11-11). cells are
   // 168 [mean, sd, n] from Monday 00:00, or null for no baseline at all;
   // a cell with n under warm is warming. opt: {w, h, x0, y0, warm, now,
-  // share} — x0 and y0 leave room for the labels, now is the current
-  // cell or -1, share says the means are shares in 0..1. Every cell is
+  // share, pad} — x0 and y0 leave room for the labels, now is the current
+  // cell or -1, share says the means are shares in 0..1, pad the inset
+  // of each tile (1 px; 0 for §5's 56 by 28 form, whose cells are a
+  // little over 2 px and would vanish inside a 1 px inset). Every cell is
   // drawn. A fed cell is the heat ramp by its mean against the largest
   // fed mean, and only a fed cell takes the ramp. A warming cell is the
   // plain --rule tile (R8: no hatch); one with a sample (1 <= n < warm)
@@ -231,20 +233,20 @@ var glyph = (function () {
     var m = [], w = opt.w, h = opt.h, x0 = opt.x0 || 0, y0 = opt.y0 || 0, i;
     if (!cells) { m.push(dash(w, h)); return m; }
     var cw = (w - x0) / 24, ch = (h - y0) / 7, st = g4Stats(cells, opt.warm);
-    var top = opt.share ? 1 : st.top;
+    var top = opt.share ? 1 : st.top, p = gnum(opt.pad) ? opt.pad : 1;
     for (i = 0; i < 168; i++) {
       var c = cells[i], x = x0 + cw * (i % 24), y = y0 + ch * Math.floor(i / 24);
       if (c && c[2] >= st.warm) {
-        m.push(["cell", x + 1, y + 1, cw - 2, ch - 2,
+        m.push(["cell", x + p, y + p, cw - 2 * p, ch - 2 * p,
                 heatToken(st.max > 0 ? c[0] / st.max : 0)]);
         continue;
       }
-      m.push(["warm", x + 1, y + 1, cw - 2, ch - 2, "--rule"]);
+      m.push(["warm", x + p, y + p, cw - 2 * p, ch - 2 * p, "--rule"]);
       if (!c || !(c[2] >= 1)) continue;
       var f = top > 0 ? c[0] / top : 0;
       var lv = !(f > 0) ? 0 : f < 0.34 ? 1 : f < 0.67 ? 2 : 3;
-      var ph = lv ? (ch - 2) * lv / 4 : 1;
-      m.push(["prov", x + 1, y + ch - 1 - ph, cw - 2, ph, "--tui-dim"]);
+      var ph = lv ? (ch - 2 * p) * lv / 4 : 1;
+      m.push(["prov", x + p, y + ch - p - ph, cw - 2 * p, ph, "--tui-dim"]);
     }
     var nc = opt.now;
     if (gnum(nc) && nc >= 0 && nc < 168)

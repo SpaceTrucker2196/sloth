@@ -140,21 +140,22 @@
            then BLE. Each tile's G1 is the 24 h series behind its number
            over the band for its hour (F1), and the line under it is
            G1's words: that band, and the direction since the last
-           bucket (web/ui/facts.js; the throughput tile's, app.js). -->
-      <a class="tile hud" id="t-alerts" href="#alerts?state=open">
+           bucket (web/ui/facts.js; the throughput tile's, app.js). What
+           a tile's number is, in words, is its hover note (the tile's
+           title, F4); a line under the glyph is a state, never prose. -->
+      <a class="tile hud" id="t-alerts" href="#alerts?state=open" title="open alerts by severity: crit / warn / low, since this page connected">
         <div class="label">open alerts</div>
         <div class="kpi"><span class="sev2" id="k-crit">-</span> <span class="sev1" id="k-warn">-</span> <span class="sev0" id="k-low">-</span></div>
         <canvas class="spark" id="k-alerts-spark" aria-label="open alerts, 24 h, over their baseline band"></canvas>
         <div class="sub gw" id="k-alerts-w">-</div>
-        <div class="sub">crit / warn / low, since connect</div>
         <div class="sub tri-tile" id="k-alerts-triaged" hidden></div>
       </a>
-      <a class="tile hud" id="t-anoms" href="#anomalies?state=open">
+      <a class="tile hud" id="t-anoms" href="#anomalies?state=open" title="slothweb's own anomalies, rules A1-A3, A5-A10">
         <div class="label">open anomalies</div>
         <div class="kpi" id="k-anoms">-</div>
         <canvas class="spark" id="k-anoms-spark" aria-label="open anomalies, 24 h, over their baseline band"></canvas>
         <div class="sub gw" id="k-anoms-w">-</div>
-        <div class="sub" id="k-anoms-sub">rules A1-A3, A5-A10</div>
+        <div class="sub" id="k-anoms-sub"></div>
       </a>
       <a class="tile hud" id="t-sensor" href="#health">
         <div class="label">sensor health</div>
@@ -163,14 +164,13 @@
         <div class="sub gw" id="k-sensor-w">-</div>
         <div class="sub" id="k-sensor-sub">-</div>
       </a>
-      <a class="tile hud" id="t-tp" href="#activity?focus=throughput">
+      <a class="tile hud" id="t-tp" href="#activity?focus=throughput" title="rx, 24 h, band = mean &#177; k sd">
         <div class="label">throughput <span id="k-tp-key"></span></div>
         <div class="kpi" id="k-tp">-</div>
         <canvas class="spark" id="k-tp-spark" aria-label="throughput, 24 h, over its baseline band"></canvas>
         <div class="sub gw" id="k-tp-w">-</div>
-        <div class="sub" id="k-tp-sub">rx, 24 h, band = mean &#177; k sd</div>
       </a>
-      <a class="tile hud" id="t-devs" href="#devices?q=pass:latest">
+      <a class="tile hud" id="t-devs" href="#devices?q=pass:latest" title="devices in sloth's latest pass">
         <div class="label">devices</div>
         <div class="kpi" id="k-devs">-</div>
         <canvas class="spark" id="k-devs-spark" aria-label="devices, 24 h, over their baseline band"></canvas>
@@ -221,6 +221,9 @@
     </section>
     <section class="panel">
       <div class="label">records <button type="button" id="pause">pause</button> <span class="sub" id="tick-note"></span> <span class="dt-tools" id="ticker-tools"></span></div>
+      <!-- records.rate by type, a G1 each for the busiest (§6.1, #195; web/ui/facts.js) -->
+      <div class="rc-types" id="ticker-types"></div>
+      <div class="sub" id="ticker-types-note"></div>
       <div class="hscroll" id="ticker-box"><div class="tkrow dhead" id="ticker-head"></div>
       <ol class="ticker" id="ticker"></ol></div>
     </section>
@@ -597,10 +600,13 @@
     <section class="panel">
       <div class="label">chains <span class="sub" id="w-ch-note"></span></div>
       <div id="w-chains" hidden></div>
-      <div class="sub" id="w-ch-sub">a bssid with more than one stage of an attack in the window, its chain: a lane per stage in the order the chain runs, deauth frames and associations to it as ticks on one scale, each EVIL_TWIN, KARMA_AP and DEAUTH_FLOOD incident from sloth.db's alerts a bar from its first to its last observation in the severity it reached (its word beside the lane), a dot where it began and where it closed; under the lanes, the links sloth made (the twin tainted by a deauth flood on the other half within 5 s, the pair attributed), from the stream's twin_episode since slothweb started. Every bssid with a deauth key in the window is a candidate; a station associating counts as a stage only on a bssid with an EVIL_TWIN or KARMA_AP incident (on any other AP it is a client joining); a bssid with one stage is a lane of the rug below.</div>
+      <div class="sub" id="w-ch-sub">a bssid with more than one stage of an attack in the window, its chain: a lane per stage in the order the chain runs, deauth frames and associations to it as ticks on one scale, each EVIL_TWIN, KARMA_AP and DEAUTH_FLOOD incident from sloth.db's alerts a bar from its first to its last observation in the severity it reached (its word beside the lane), a dot where it began and where it closed; under the lanes, the links sloth made (the twin tainted by a deauth flood on the other half within 5 s, the pair attributed), from the stream's twin_episode since slothweb started. Every bssid with a deauth key in the window is a candidate, and every bssid sloth.db holds an EVIL_TWIN or KARMA_AP row for in it, after them; a station associating counts as a stage only on a bssid with an EVIL_TWIN or KARMA_AP incident (on any other AP it is a client joining); a bssid with one stage is a lane of the rug below.</div>
       <div class="label">deauth, one stage <span class="sub" id="w-da-note"></span></div>
       <canvas class="rug" id="w-deauth" aria-label="deauthentication frames per bssid, one lane each on one scale, flood episodes underlined"></canvas>
       <div class="sub">a lane per bssid: deauth frames per cell, the tallest of any lane at the lane's height; underlined in the critical colour: DEAUTH_FLOOD episodes from sloth.db's alerts.</div>
+      <div class="label">probe floods <span class="sub" id="w-pf-note"></span></div>
+      <canvas class="rug" id="w-pflood" aria-label="PROBE_FLOOD findings, a lane per severity, ticks where each began, underlined to its last sighting" hidden></canvas>
+      <div class="sub">a lane per severity: PROBE_FLOOD findings (the Alerts page's rows, sloth.db's and the stream's), a tick where each was first seen, its height the findings begun in the cell on one scale, underlined from its first to its last sighting.</div>
     </section>
     <section class="panel">
       <div class="label">clients <span class="sub" id="w-pc-note"></span></div>

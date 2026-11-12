@@ -413,6 +413,26 @@ static void test_route_with_sloth_db(void) {
     WT_HAS(b, "\"twin\":[],\"karma\":[],");
     WT_HAS(b, "\"assoc_n\":1,");
     WT_HAS(b, "\"stages\":1}");
+    /* #195: a BSSID with an EVIL_TWIN row and no deauth key is a
+     * candidate (cc:..:03, the other pair's half), and every BSSID an
+     * alert names reads before the deauth-only ones: A1 (deauth and
+     * alerts) first, then cc:..:03, then E5 (deauth alone). The BSSIDs
+     * are beacon_aps', so dd:..:04, the pair's other half with no
+     * beacon row, is not one. Seen red with the ap_attacks read taken
+     * out (cc:..:03 absent, total_keys 2), and with the move to the
+     * front taken out (E5 before cc:..:03). */
+    WT_EQ(sdb_exec(g_db, "INSERT INTO beacon_aps (bssid,ssid,first_seen,last_seen) VALUES"
+                         " ('" A1 "','Cafe',1,1), ('cc:00:00:00:00:03','Cafe',1,1),"
+                         " ('" E5 "','Cafe',1,1);"), 0);
+    snprintf(q, sizeof(q), "from=%lld&to=%lld&cols=60", T - 3600, T);
+    WT_EQ(route(&H, "/api/wifi/chain", q), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"total_keys\":3,");
+    const char *pa = strstr(b, "{\"bssid\":\"" A1 "\"");
+    const char *pc = strstr(b, "{\"bssid\":\"cc:00:00:00:00:03\"");
+    const char *pe = strstr(b, "{\"bssid\":\"" E5 "\"");
+    WT_ASSERT(pa && pc && pe && pa < pc && pc < pe);
+    WT_LACKS(b, "dd:00:00:00:00:04");
     mem_down();
     web_slothdb_destroy(&sdb);
     unlink(g_db);
