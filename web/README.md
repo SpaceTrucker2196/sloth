@@ -542,12 +542,12 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/bundle?kind=device\|alert\|lookup\|ble\|platform&id=` | `200` JSON, a detail view's whole answer for its "copy JSON" button ([Copy JSON: the analysis bundle](#copy-json-the-analysis-bundle)); `400` for a kind, an id or a parameter that does not pass; `404` and `503` as the route it splices (`not_found` for a BLE address no sensor heard, `no_such_platform`, `no_store`); `413` `bundle_too_large` |
    | `GET /api/sys` | `200` JSON, the Sensor health view's host status ([Sensor health](#sensor-health)): the newest `sys_status` (CPU, load, memory, uptime, sloth's RSS, the output filesystem, the hottest temperature, the under-voltage alarm; `null` for a figure the host does not have), its `sys_sensor` rows, every `source_status` (all of sloth's sources, configured or not) and every `receiver_hw` (the attached receivers); `"seen":false` before the first batch or with no live stream; `"stale":true` past three of the sensor's own intervals. The same answer under every scope. No parameter: any is `400` |
    | `GET /api/gnss?limit=` | `200` JSON, the GNSS tab ([GNSS](#gnss)): the `sensor_health` gnss block, the newest `gnss_fix` and `gnss_sky`, every satellite row with its last 16 `(ts, C/N0)` points sorted by C/N0, and the panel's counts; `scope_note` says the receiver is the host's own, so the answer is the same under every scope; `400` for an unknown parameter or a `limit` outside 1..64; `503` with no panel |
-   | `GET /api/adsb?limit=` | `200` JSON, the ADS-B tab ([ADS-B](#ads-b)): the `sensor_health` adsb block, every aircraft row with its kept track (its last 32 positions, `[ts, lat, lon, alt]`), an emergency first, then live before gone, then the most recently heard, each row's `alert` (the open `ADSB_EMERGENCY` incident naming its address, `{"id","sev"}`, else `null`), and the panel's counts (`total`, `live`, `with_pos`, `emergency`); Monitor's and Hybrid's, Local answers `out_of_scope` with the query still checked; `400` for an unknown parameter or a `limit` outside 1..512; `503` with no panel |
+   | `GET /api/adsb?limit=&fleet=` | `200` JSON, the ADS-B tab ([ADS-B](#ads-b)): the `sensor_health` adsb block, every aircraft row with its kept track (its last 32 positions, `[ts, lat, lon, alt]`), an emergency first, then live before gone, then the most recently heard, each row's `alert` (the open `ADSB_EMERGENCY` incident naming its address, `{"id","sev"}`, else `null`), and the panel's counts (`total`, `live`, `with_pos`, `emergency`); with the peers' aircraft unless `fleet=0` ([Fleet](#fleet)); Monitor's and Hybrid's, Local answers `out_of_scope` with the query still checked; `400` for an unknown parameter or a `limit` outside 1..512; `503` with no panel |
    | `GET /api/gnss/seen?days=&limit=` | `200` JSON from sloth.db's `gnss_sightings` (needs `--sloth-db`): one row per satellite seen in the last `days` (1..400, default 1), most recently seen first, at most `limit` (1..160): first and last seen, records, `used_pct`, `cn0_max`, `cn0_mean`, `el_max`; `"have":false` from a file older than v10; every scope's; `503` `no_sloth_db` without one |
    | `GET /api/gnss/tracks?hours=` | `200` JSON from `gnss_sightings`: every satellite's `[ts, el, az]` over the last `hours` (1..24, default 6), at most 32 a satellite (the newest record of each `bucket_s`) and 2400 in all (`cut`), each track with its RINEX `id`; the sky plot's trails; every scope's |
    | `GET /api/gnss/sat?gnssid=&prn=&days=` | `200` JSON, one satellite's `gnss_sightings` over the window, oldest first, at most 400, as `[ts, el, az, cn0, used, health]`; `400` `bad_gnssid` / `bad_prn` / `bad_days` |
-   | `GET /api/adsb/seen?days=&limit=&offset=&q=` | `200` JSON from sloth.db's `adsb_aircraft`: the aircraft last seen in the last `days` (default 7), newest first, `limit` (1..100) from `offset`, `more` when there are others; `q` a hex or callsign prefix (letters and digits, a leading `~`; anything else `400` `bad_q`); `"have":false` from a file older than v12; Monitor's and Hybrid's (Local `out_of_scope`, the query checked) |
-   | `GET /api/adsb/aircraft?hex=&days=` | `200` JSON, one aircraft's inventory row (`null` when not in the file) and its `adsb_sightings` over the window, oldest first, at most 400, as compact rows named in `cols`; `400` `bad_hex` for anything but sloth's six lower-case hex digits (optionally `~`) |
+   | `GET /api/adsb/seen?days=&limit=&offset=&q=&fleet=` | `200` JSON from sloth.db's `adsb_aircraft`: the aircraft last seen in the last `days` (default 7), newest first, `limit` (1..100) from `offset`, `more` when there are others; with the peers' aircraft unless `fleet=0` ([Fleet](#fleet)); `q` a hex or callsign prefix (letters and digits, a leading `~`; anything else `400` `bad_q`); `"have":false` from a file older than v12; Monitor's and Hybrid's (Local `out_of_scope`, the query checked) |
+   | `GET /api/adsb/aircraft?hex=&days=&fleet=` | `200` JSON, one aircraft's inventory row (`null` when not in the file) and its `adsb_sightings` over the window, oldest first, at most 400, as compact rows named in `cols`; with `fleet` naming the other hosts that heard it unless `fleet=0` ([Fleet](#fleet)); `400` `bad_hex` for anything but sloth's six lower-case hex digits (optionally `~`) |
    | `GET /api/aprs?limit=&call=` | `200` JSON, the APRS tab ([APRS](#aprs)): the `sensor_health` aprs block and the stations (live before gone, the most recently heard first, without tracks; `limit` 1..1024; as many as fit the 64 KB answer, `"cut":true` when the buffer stopped the list, `shown` how many); with `call=` (an AX.25 callsign) that one station with `track_pts` (`[ts, lat, lon]`, its last 32 positions) and `packets_recent` (its last 16 packets as rows named by `packet_cols`), `"station":null` when not kept. Under Local the query is checked, then `out_of_scope`. `400` names an unknown parameter, `bad_limit`, `bad_call` |
    | `GET /api/aprs/tracks?hours=` | `200` JSON, the Radar tab's APRS entities from sloth.db's `aprs_packets` (needs `--sloth-db`) over the last `hours` (1..24, default 24): stations by source call and, as entities of their own, objects and items by their name with the station that reported them as `via`; newest first, each a compact row named by `cols` (`key`, `object`, `via`, `symbol`, `last_seen` its newest packet of any kind, the newest position's `lat`, `lon`, `alt_m`, `speed_kt`, `course`, `pos_ts`, `moving`, the newest non-empty `status` and `comment` cut to 64, and `pts`, a moving entity's trail `[ts, lat, lon]` of at most 48 points, `[]` when stationary); at most 300, while a worst-case row still fits the 64 KB answer, `cut` when more; `bucket_s`; `"have":false` from a file older than v13; `400` `bad_hours` or an unknown parameter; Monitor's and Hybrid's (Local `out_of_scope`, the query checked) |
    | `GET /api/aprs/seen?days=&limit=&offset=&q=` | `200` JSON from sloth.db's `aprs_stations` (needs `--sloth-db`): the stations last heard in the last `days` (1..400, default 7), newest first, `limit` (1..100) a page from `offset`, `more` when another page follows; `q` a callsign prefix of `[0-9A-Za-z-]` (at most 9, upper-cased; anything else `400 bad_q`); the comment cut to 48. A file older than v13 answers `"have":false` and an empty list. Monitor's and Hybrid's |
@@ -5494,7 +5494,9 @@ inferences across sites are F3 and F4.
 `web/src/web_fleetview.h`). `/api/devices`, `/api/wifi/aps`,
 `/api/ble`, `/api/probes/clients` and `/api/probes/ssids` carry the
 peers' rows, and `/api/device/{mac}` and `/api/ble/{addr}` answer for an
-address only a peer heard. Each takes
+address only a peer heard; `/api/adsb` and `/api/adsb/seen` carry the
+peers' aircraft and `/api/adsb/aircraft` names the hosts that heard one.
+Each takes
 `fleet=0|1`, taken out of the query before the route's own parser as
 `scope=` is: `fleet=0` is the route's own answer byte for byte; `fleet=1`
 or none merges when a `--peer` is configured and the request is Hybrid
@@ -5543,6 +5545,27 @@ they were.
   latest `last_seen`). `/api/probes/shared` and `/api/probes/groups`
   are never merged and take no `fleet=`: the similarity, `N`, `df` and
   the groups are this site's `pnl_ssids` alone.
+- The ADS-B tab's two lists read the peers' `aircraft` rows (#192 I7,
+  keyed by the address). `/api/adsb`, the decoder's table now, takes
+  those last seen within `WEB_ADSB_TTL_S` (660 s) plus one
+  `--peer-interval-secs`; `/api/adsb/seen` those last seen in its `days`
+  window, its `q` (a hex or callsign prefix, any case) applied. Both
+  order them by last seen. An address the panel's table lists (live or
+  gone) is never a remote row; in `/api/adsb/seen` neither is one
+  `sloth.db`'s `adsb_aircraft` holds at any time. `/api/adsb` takes no
+  `limit=`-cut answer as the end of its list (`total` must equal the
+  rows). A remote `/api/adsb` row: `hex`, `non_icao` (the leading `~`),
+  `flight`, `squawk`, `category`, `emergency`, `on_ground`, `alt` (the
+  peer's newest altitude, barometric else geometric: the line does not
+  say which, so `alt_baro` and `alt_geom` are absent), `gs`, `track`,
+  `lat`, `lon`, `pos_ts`, `rssi`, `messages` (each `null` when the line
+  had none), `first_seen`, `last_seen`; `state`, `source_type`,
+  `alt_band`, the rates, `ts`, `records`, `alert` and `track_pts` absent.
+  A remote `/api/adsb/seen` row: `hex`, `non_icao`, the times, `flight`,
+  `squawk`, `category`, `alt`, `messages`; `visits`, `sightings`,
+  `source_type`, `emergency_seen`, the ranges and maxima and `pos_seen`
+  absent. The panel's `total`, `live`, `with_pos` and `emergency` stay
+  its own.
 - `fleet`, the answer's last member: `peers` (`site`, `label`), `remote`
   (the rows added), `remote_cap`, `remote_more` (more were cut by the cap
   or the room), `partial` (the 4,000 newest peer rows were read, or the
@@ -5560,6 +5583,15 @@ they were.
   newest first), so a station only a peer heard probing opens a drawer
   too. `/api/ble/{addr}` the same; an address only a peer reported is a
   `200` with no local row in place of the `404`.
+- `/api/adsb/aircraft?hex=` gains `fleet` where a peer reported the
+  address: `rows`, each `site`, `label`, `kind` `"aircraft"`, the times,
+  `visit_first`, `flight`, `squawk`, `category`, `emergency`,
+  `on_ground`, `alt`, `gs`, `track`, `rssi`, `messages`, `lat`, `lon`,
+  `pos_ts`, `pos_prev`, `pos_alt` (`null` for what the line did not
+  carry), with `remote` true and `note` naming the hosts when neither
+  `sloth.db` (`aircraft` `null`) nor the panel's table holds it. The
+  answer stays a `200`; `sightings` stay this site's own, so a peer's
+  position is never drawn as a recorded track.
 
 The remote rows are display only: no risk, alert, anomaly, baseline,
 series, triage, tile count or detail audit reads them, and
@@ -5569,12 +5601,17 @@ series, triage, tile count or detail audit reads them, and
 (`--tui-dim`, no hash hue) with the host's name beside the address, a
 local row another host heard with a small `+name`; each view has a
 "This site / All sites" choice kept in the browser (`fleet.devices`,
-`fleet.aps`, `fleet.ble`, `fleet.probes`), All sites by default and
-hidden with no peer. In the Probes tab a grey station opens its device
+`fleet.aps`, `fleet.ble`, `fleet.probes`, `fleet.adsb`), All sites by
+default and hidden with no peer. In the Probes tab a grey station opens its device
 drawer and a grey network lists, under its row, each host that heard it
 asked for and when; with All sites the networks list reads on past its
 first page, as the AP table does, so the remote rows that ride the last
-page arrive.
+page arrive. In the ADS-B tab a grey aircraft has no altitude colour or
+signal meter; the positions plot draws it as a grey ring at the last
+position its host sent, labelled with the host, with no track or
+heading tick; its detail lists each host's figures and takes no notes.
+The Radar dome asks `/api/adsb?fleet=0`: another host's aircraft has no
+bearing or elevation from this site.
 
 ## Capture scope
 

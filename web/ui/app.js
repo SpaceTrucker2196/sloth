@@ -188,8 +188,9 @@
   }
 
   // ── the merged views (web_fleetview.h; owner request 2026-11-11) ──
-  // The WiFi Devices list, the AP table, the BLE advertisers and the
-  // Probes tab's stations and networks carry the peers' rows (--peer): a row only another sloth host heard is
+  // The WiFi Devices list, the AP table, the BLE advertisers, the
+  // Probes tab's stations and networks and the ADS-B tab's aircraft
+  // carry the peers' rows (--peer): a row only another sloth host heard is
   // drawn in the grey state (--tui-dim, no hash hue) with that host's
   // name small beside its address; a local row another host also heard
   // gets a small "+name". Each view's "This site / All sites" choice is
@@ -197,7 +198,8 @@
   // hidden while no peer is configured. A peer's strings came over the
   // network from another slothweb: textContent only, cut for the cell.
   var FV = { peers: [] };
-  var FV_SEL = { devices: "d-sites", aps: "w-sites", ble: "b-sites", probes: "pr-sites" };
+  var FV_SEL = { devices: "d-sites", aps: "w-sites", ble: "b-sites", probes: "pr-sites",
+                 adsb: "adsb-sites" };
   function fvAll(v) { return FV.peers.length > 0 && $(FV_SEL[v]).value !== "here"; }
   // The query's tail: fleet=0 for This site, nothing for All sites (the
   // server's default), nothing at all while there is no peer.
@@ -4052,6 +4054,10 @@
     prefSet("fleet.probes", this.value);
     if (window.SlothProbes) SlothProbes.show();
   });
+  $("adsb-sites").addEventListener("change", function () {
+    prefSet("fleet.adsb", this.value);
+    if (window.SlothAdsb) SlothAdsb.refresh();
+  });
 
   // ── Flows (§8.9, M6) ──────────────────────────────────────────────
   // sloth.db's protocol tables, one tab each (/api/flows, paged), and
@@ -6134,8 +6140,10 @@
   if (window.SlothFleet) SlothFleet.init({ el: el, set: set, getJSON: getJSON, errText: errText,
     stamp: stamp, openDrawer: openDrawer, openBleDrawer: openBleDrawer });
 
-  // The ADS-B view (web/ui/adsb.js): go() for its alert links (#186).
-  if (window.SlothAdsb) SlothAdsb.init({ go: go });
+  // The ADS-B view (web/ui/adsb.js): go() for its alert links (#186),
+  // the merged views' marks and choice for the other sloth hosts.
+  if (window.SlothAdsb) SlothAdsb.init({ go: go, fvMark: fvMark, fvName: fvName,
+    fvSplit: fvSplit, fvQuery: fvQuery, stamp: stamp });
 
   // The Activity graph's "keys: all" (web/ui/allkeys.js): the page's
   // helpers, lent once; its fetches go through the scoped getJSON.

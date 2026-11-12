@@ -2,11 +2,13 @@
 
 #include <ctype.h>
 #include <limits.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "web_adsb.h"
 #include "web_ble.h"
 #include "web_bledev.h"
 #include "web_fleet.h"
@@ -98,6 +100,13 @@ typedef struct {
     int       channel;                 /* ap, 0 none */
     char      enc[64];                 /* ap, "" none */
     char      atype;                   /* ble, 0 none */
+    struct {                           /* aircraft (#192 I7's extra) */
+        char      squawk[5], emergency[12];
+        int       on_ground, has_alt, alt, has_msgs, has_pos, has_palt, palt;
+        int       has_gs, has_track, has_rssi;
+        double    gs, track, rssi, lat, lon;
+        long long msgs, pos_ts, pos_prev, visit_first;
+    } ac;
 } fv_row_t;
 
 /* A site's names: the --peer name and the label its export last sent. */
@@ -106,10 +115,25 @@ typedef struct {
     char label[WEB_FLEET_STR_MAX + 1];
 } fv_site_t;
 
-static const char *KIND[] = { "wifi", "ap", "ble", "probe", "probe" };
+static const char *KIND[] = { "wifi", "ap", "ble", "probe", "probe", "aircraft", "aircraft" };
 
 static int is_probe(int view) {
     return view == WEB_FV_PROBE_CLIENTS || view == WEB_FV_PROBE_SSIDS;
+}
+
+static int is_ac(int view) {
+    return view == WEB_FV_ADSB || view == WEB_FV_ADSB_SEEN;
+}
+
+/* sloth's spelling of an aircraft address (web_adsb.h): '~' first for
+ * a non-ICAO one, then six lower-case hex digits, as the importer keys
+ * it. */
+static int icao_ok(const char *h) {
+    size_t i = h[0] == '~' ? 1 : 0;
+    if (strlen(h) != i + 6) return 0;
+    for (; h[i]; i++)
+        if (!((h[i] >= '0' && h[i] <= '9') || (h[i] >= 'a' && h[i] <= 'f'))) return 0;
+    return 1;
 }
 
 /* A canonical MAC, as the importer keys every row of these kinds; a row
@@ -177,6 +201,47 @@ static void extra_of(web_jrec_t *r, const char *extra, int view, fv_row_t *o) {
             o->channel = (int)f->i;
         const char *e = web_jl_str(r, "enc");
         if (e) web_utf8_copy(o->enc, sizeof(o->enc) - 1, e);
+    } else if (is_ac(view)) {
+        /* What ac_row() put in extra, each held to its own range again
+         * and taken only whole: a position with its time, or none. */
+        double v;
+        const char *t = web_jl_str(r, "squawk");
+        if (t && strlen(t) == 4 && strspn(t, "01234567") == 4)
+            snprintf(o->ac.squawk, sizeof(o->ac.squawk), "%s", t);
+        t = web_jl_str(r, "emergency");
+        for (int e = 0; t && e < WEB_ADSB_EMERG_COUNT; e++)
+            if (!strcmp(t, web_adsb_emergency_name(e)))
+                snprintf(o->ac.emergency, sizeof(o->ac.emergency), "%s", t);
+        if ((f = web_jl_get(r, "on_ground")) && f->kind == WEB_J_BOOL) o->ac.on_ground = f->i != 0;
+        if ((f = web_jl_get(r, "alt")) && f->kind == WEB_J_INT && f->i >= -2000 && f->i <= 100000) {
+            o->ac.has_alt = 1;
+            o->ac.alt = (int)f->i;
+        }
+        if (web_jl_num(r, "gs", &v) && v >= 0 && v <= 2000) { o->ac.has_gs = 1; o->ac.gs = v; }
+        if (web_jl_num(r, "track", &v) && v >= 0 && v <= 360) { o->ac.has_track = 1; o->ac.track = v; }
+        if (web_jl_num(r, "rssi", &v) && v >= -100 && v <= 10) { o->ac.has_rssi = 1; o->ac.rssi = v; }
+        if ((f = web_jl_get(r, "messages")) && f->kind == WEB_J_INT && f->i >= 0) {
+            o->ac.has_msgs = 1;
+            o->ac.msgs = f->i;
+        }
+        if ((f = web_jl_get(r, "visit_first")) && f->kind == WEB_J_INT && f->i > 0)
+            o->ac.visit_first = f->i;
+        double la, lo;
+        const web_jfield_t *pt = web_jl_get(r, "pos_ts"), *pp = web_jl_get(r, "pos_prev");
+        if (web_jl_num(r, "lat", &la) && web_jl_num(r, "lon", &lo) && la >= -90 && la <= 90 &&
+            lo >= -180 && lo <= 180 && pt && pt->kind == WEB_J_INT && pt->i > 0 && pp &&
+            pp->kind == WEB_J_INT && pp->i >= 0 && pp->i <= pt->i) {
+            o->ac.has_pos = 1;
+            o->ac.lat = la;
+            o->ac.lon = lo;
+            o->ac.pos_ts = pt->i;
+            o->ac.pos_prev = pp->i;
+            if ((f = web_jl_get(r, "pos_alt")) && f->kind == WEB_J_INT && f->i >= -2000 &&
+                f->i <= 100000) {
+                o->ac.has_palt = 1;
+                o->ac.palt = (int)f->i;
+            }
+        }
     } else if (is_probe(view)) {
         /* The probing client's MAC: the row's key is "mac|ssid". */
         const char *m = web_jl_str(r, "mac");
@@ -246,7 +311,9 @@ static int read_rows(web_fleet_t *f, const fv_site_t *st, int nst, int view,
             }
             /* A peer no longer named keeps its rows until the age limit;
              * the merged views show the fleet as configured. */
-            if (!mac_ok(r->key) || site_of(st, nst, r->peer) < 0) continue;
+            if (!(is_ac(view) ? icao_ok(r->key) : mac_ok(r->key)) ||
+                site_of(st, nst, r->peer) < 0)
+                continue;
             copy_col(q, 3, r->vendor, sizeof(r->vendor));
             /* sloth's 0 is "never heard on the air", not a reading
              * (#192 I5), as /api/fleet/shared reads it. */
@@ -332,7 +399,10 @@ static int members(const char *s, size_t i, size_t n, member_fn fn, void *ctx, s
 typedef struct {
     const char *s;
     const char *want;               /* a row's key member */
+    const char *arr;                /* the list's member, NULL "rows" */
     size_t rows_s, rows_e;          /* "rows": its [ and after its ] */
+    size_t tot_s, tot_e;            /* "total" (/api/adsb) */
+    size_t ac_s, ac_e;              /* "aircraft" (/api/adsb/aircraft) */
     size_t more_s, more_e;
     size_t rec_s, rec_e;            /* "record" (the device drawer) */
     char   key[WEB_KEY_MAX + 1];
@@ -345,8 +415,13 @@ static int name_is(const char *name, size_t nl, const char *w) {
 
 static void top_member(void *ctx, const char *name, size_t nl, size_t vs, size_t ve) {
     top_t *t = ctx;
-    if (name_is(name, nl, "rows") && t->s[vs] == '[') { t->rows_s = vs; t->rows_e = ve; }
+    if (name_is(name, nl, t->arr ? t->arr : "rows") && t->s[vs] == '[') {
+        t->rows_s = vs;
+        t->rows_e = ve;
+    }
     else if (name_is(name, nl, "more")) { t->more_s = vs; t->more_e = ve; }
+    else if (name_is(name, nl, "total")) { t->tot_s = vs; t->tot_e = ve; }
+    else if (name_is(name, nl, "aircraft")) { t->ac_s = vs; t->ac_e = ve; }
     else if (name_is(name, nl, "record")) { t->rec_s = vs; t->rec_e = ve; }
 }
 
@@ -490,6 +565,14 @@ static void sites_json(web_jw_t *w, const fv_row_t *rows, int nrows, const fv_si
     web_jw_raw(w, "]");
 }
 
+/* A figure with dp decimals (0: an integer), or null. */
+static void jw_num_or_null(web_jw_t *w, int has, double v, int dp) {
+    char t[40];
+    if (!has || !isfinite(v)) { web_jw_raw(w, "null"); return; }
+    snprintf(t, sizeof(t), "%.*f", dp, v);
+    web_jw_raw(w, t);
+}
+
 static void signal_json(web_jw_t *w, const fv_row_t *r) {
     if (r->has_rssi) web_jw_int(w, r->rssi); else web_jw_raw(w, "null");
 }
@@ -561,7 +644,39 @@ static void remote_json(web_jw_t *w, int view, const fv_row_t *r, int n, const f
                         const web_fv_src_t *src, const fv_site_t *st, int nst) {
     const fv_row_t *h = &r[0];
     for (int i = 1; i < n; i++) if (r[i].last > h->last) h = &r[i];
-    if (view == WEB_FV_PROBE_CLIENTS) {
+    if (is_ac(view)) {
+        /* The newest peer row's figures under the route's names; what
+         * only this decoder or sloth.db can say is absent. */
+        web_jw_raw(w, "{\"hex\":");        web_jw_str(w, h->key);
+        web_jw_raw(w, ",\"non_icao\":");   web_jw_int(w, h->key[0] == '~');
+        if (view == WEB_FV_ADSB_SEEN) {
+            web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, g->first);
+            web_jw_raw(w, ",\"last_seen\":");  web_jw_int(w, g->last);
+        }
+        web_jw_raw(w, ",\"flight\":");     web_jw_str(w, h->label);
+        web_jw_raw(w, ",\"squawk\":");     web_jw_str(w, h->ac.squawk);
+        web_jw_raw(w, ",\"category\":");   web_jw_str(w, h->vendor);
+        if (view == WEB_FV_ADSB) {
+            web_jw_raw(w, ",\"emergency\":"); web_jw_str(w, h->ac.emergency);
+            web_jw_raw(w, ",\"on_ground\":"); web_jw_int(w, h->ac.on_ground);
+        }
+        web_jw_raw(w, ",\"alt\":");        jw_num_or_null(w, h->ac.has_alt, h->ac.alt, 0);
+        if (view == WEB_FV_ADSB) {
+            web_jw_raw(w, ",\"gs\":");     jw_num_or_null(w, h->ac.has_gs, h->ac.gs, 1);
+            web_jw_raw(w, ",\"track\":");  jw_num_or_null(w, h->ac.has_track, h->ac.track, 1);
+            web_jw_raw(w, ",\"lat\":");    jw_num_or_null(w, h->ac.has_pos, h->ac.lat, 5);
+            web_jw_raw(w, ",\"lon\":");    jw_num_or_null(w, h->ac.has_pos, h->ac.lon, 5);
+            web_jw_raw(w, ",\"pos_ts\":");
+            if (h->ac.has_pos) web_jw_int(w, h->ac.pos_ts); else web_jw_raw(w, "null");
+            web_jw_raw(w, ",\"rssi\":");   jw_num_or_null(w, h->ac.has_rssi, h->ac.rssi, 1);
+        }
+        web_jw_raw(w, ",\"messages\":");
+        if (h->ac.has_msgs) web_jw_int(w, h->ac.msgs); else web_jw_raw(w, "null");
+        if (view == WEB_FV_ADSB) {
+            web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, h->first);
+            web_jw_raw(w, ",\"last_seen\":");  web_jw_int(w, h->last);
+        }
+    } else if (view == WEB_FV_PROBE_CLIENTS) {
         /* What sloth.db alone can say of a client is null: no frame
          * count, signal, channel, OS or PHY label, devices row or
          * association, and no seqnum siblings or presence strip. The
@@ -750,6 +865,13 @@ static int ble_matches(const char *q, const fv_row_t *r) {
     return ci_prefix(r->key, q) || (r->label[0] && ci_has(r->label, q));
 }
 
+/* /api/adsb/seen's q (web_slothdb.c web_sdb_adsb_seen()): a hex or a
+ * callsign prefix, any case. */
+static int ac_matches(const char *q, const fv_row_t *r) {
+    if (!q[0]) return 1;
+    return ci_prefix(r->key, q) || ci_prefix(r->label, q);
+}
+
 /* What a route's sort word orders by, for a peer's row. */
 enum { F_NONE = 0, F_LAST, F_FIRST, F_KEY, F_VENDOR, F_LABEL, F_SIGNAL, F_CHANNEL, F_ENC,
        F_NSS };
@@ -777,6 +899,10 @@ static const fv_sort_t SORT_PSS[] = {
 static const fv_sort_t SORT_BLE[] = {
     { "last", F_LAST, -1 }, { "first", F_FIRST, -1 }, { "rssi", F_SIGNAL, -1 },
     { "addr", F_KEY, 1 }, { "name", F_LABEL, 1 }, { NULL, 0, 0 } };
+/* The ADS-B routes take no sort: both order by last seen (the panel puts
+ * an emergency first and live before gone, which a peer row has neither
+ * of). */
+static const fv_sort_t SORT_AC[] = { { "last", F_LAST, -1 }, { NULL, 0, 0 } };
 
 typedef struct {
     const fv_row_t *rows;
@@ -840,6 +966,18 @@ static int held_here(int view, const web_fv_src_t *src, web_sdb_conn_t *c, int h
         web_ble_cand_t cand;
         return src->ble && web_ble_addr_info(src->ble, a, &cand) == 1;
     }
+    if (is_ac(view)) {
+        /* The panel's table (live or gone) for either list; for the
+         * inventory, sloth.db's adsb_aircraft as well, whatever the
+         * window, page or q. No panel (no --adsb) lists nothing. */
+        if (src && src->adsb && web_adsb_has(src->adsb, key)) return 1;
+        if (view == WEB_FV_ADSB) return 0;
+        if (!have_c || web_sdb_spent(c)) return -1;
+        web_sdb_ac_t a;
+        int rc = web_sdb_adsb_one(c, key, &a);
+        if (c->timed_out) return -1;
+        return rc < 0 ? -1 : rc > 0;
+    }
     if (!have_c || web_sdb_spent(c)) return -1;
     if (is_probe(view)) {
         /* A probe client sloth.db has a probe_clients or pnl_clients row
@@ -883,7 +1021,7 @@ static void fleet_member(web_jw_t *w, const fv_site_t *st, int nst, int nremote,
 
 void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *query,
                  long long now_s, char *body, size_t cap, size_t *len) {
-    if (!f || view < 0 || view > WEB_FV_PROBE_SSIDS || !*len || *len > cap) return;
+    if (!f || view < 0 || view > WEB_FV_ADSB_SEEN || !*len || *len > cap) return;
     web_query_t *q = NULL;
     int *pick = NULL;
     const char *s = body;
@@ -891,6 +1029,7 @@ void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *
     top_t t;
     memset(&t, 0, sizeof(t));
     t.s = s;
+    t.arr = view == WEB_FV_ADSB_SEEN ? "aircraft" : NULL;
     size_t root_e;
     if (members(s, 0, n, top_member, &t, &root_e) != 0 || !t.rows_e) return;
     fv_site_t st[WEB_FLEET_PEERS];
@@ -910,6 +1049,18 @@ void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *
         long long days = WEB_PROBE_DAYS;
         if (qparam(query, "days", 0, dv, sizeof(dv)) && dv[0]) days = atoll(dv);
         since = days > 0 ? now_s - days * 86400 : 0;
+    } else if (view == WEB_FV_ADSB_SEEN) {
+        /* The inventory's window, days= as the route reads it (7). */
+        char dv[16];
+        long long days = 7;
+        if (qparam(query, "days", 0, dv, sizeof(dv)) && dv[0]) days = atoll(dv);
+        since = now_s - days * 86400;
+    } else if (view == WEB_FV_ADSB) {
+        /* The decoder's table is now: a peer's aircraft last seen within
+         * the panel's own expiry (two of sloth's 300 s write heartbeats
+         * and a margin) plus one pull interval, the most a peer's still
+         * heard aircraft can lag here. */
+        since = now_s - WEB_ADSB_TTL_S - (f->interval_s > 0 ? f->interval_s : 0);
     }
     int nr = read_rows(f, st, nst, view, NULL, since, rows, WEB_FV_SCAN, &partial);
     if (nr < 0) goto done;
@@ -946,7 +1097,7 @@ void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *
     }
 
     /* The page's rows, each matched to its key's group. */
-    static const char *const KEYM[] = { "mac", "bssid", "addr", "mac", "ssid" };
+    static const char *const KEYM[] = { "mac", "bssid", "addr", "mac", "ssid", "hex", "hex" };
     int nel = 0;
     size_t i = ws(s, t.rows_s + 1, t.rows_e);
     if (i < t.rows_e && s[i] != ']') {
@@ -1000,6 +1151,13 @@ void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *
      * filter's, in the route's order, none this sensor holds. */
     const char *off = NULL;
     int last_page = t.more_e && t.more_e - t.more_s == 5 && !memcmp(s + t.more_s, "false", 5);
+    if (view == WEB_FV_ADSB) {
+        /* /api/adsb pages nothing: its list ends when limit= cut none. */
+        char tv[24] = "";
+        if (t.tot_e > t.tot_s && t.tot_e - t.tot_s < sizeof(tv))
+            memcpy(tv, s + t.tot_s, t.tot_e - t.tot_s);
+        last_page = tv[0] && atoll(tv) == (long long)nel;
+    }
     char qv[WEB_Q_LEN + 1] = "";
     if (!last_page) off = "not_last_page";
     if (!off && view == WEB_FV_DEVICES) {
@@ -1009,7 +1167,7 @@ void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *
         qparam(query, "q", 1, qv, sizeof(qv));
         if (web_query_parse(qv, now_s, q, err, sizeof(err)) != 0 || !query_peerable(q))
             off = "query";
-    } else if (!off && view == WEB_FV_BLE) {
+    } else if (!off && (view == WEB_FV_BLE || view == WEB_FV_ADSB_SEEN)) {
         qparam(query, "q", 0, qv, sizeof(qv));
     }
     int npick = 0, cut = 0;
@@ -1019,13 +1177,15 @@ void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *
             if (g[k].local) continue;
             const fv_row_t *h = &rows[g[k].at];
             if (view == WEB_FV_DEVICES ? !dev_matches(q, h)
-                : view == WEB_FV_BLE ? !ble_matches(qv, h) : 0)
+                : view == WEB_FV_BLE ? !ble_matches(qv, h)
+                : view == WEB_FV_ADSB_SEEN ? !ac_matches(qv, h) : 0)
                 continue;
             g[nc++] = g[k];
         }
         const fv_sort_t *so = view == WEB_FV_DEVICES ? SORT_DEV : view == WEB_FV_APS ? SORT_AP
                             : view == WEB_FV_PROBE_CLIENTS ? SORT_PCL
-                            : view == WEB_FV_PROBE_SSIDS ? SORT_PSS : SORT_BLE;
+                            : view == WEB_FV_PROBE_SSIDS ? SORT_PSS
+                            : is_ac(view) ? SORT_AC : SORT_BLE;
         char sw[16], dw[8];
         qparam(query, "sort", 0, sw, sizeof(sw));
         qparam(query, "dir", 0, dw, sizeof(dw));
@@ -1046,7 +1206,8 @@ void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *
         memset(&c, 0, sizeof(c));
         int have_c = 0;
         sqlite3_stmt *pq = NULL;
-        if (view != WEB_FV_BLE && nc) {
+        /* The ADS-B table answers from the panel alone. */
+        if (view != WEB_FV_BLE && view != WEB_FV_ADSB && nc) {
             char oerr[WEB_SDB_ERR_MAX];
             if (src && src->sdb && src->sdb->configured &&
                 web_slothdb_open(src->sdb, &c, WEB_SDB_HTTP_MS, now_s, oerr, sizeof(oerr)) == 0)
@@ -1155,7 +1316,31 @@ static void detail_rows(web_jw_t *w, const char *name, int view, const fv_row_t 
         web_jw_raw(w, ",\"kind\":");       web_jw_str(w, KIND[view]);
         web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, x->first);
         web_jw_raw(w, ",\"last_seen\":");  web_jw_int(w, x->last);
-        if (is_probe(view)) {
+        if (is_ac(view)) {
+            /* An aircraft row: every figure its line carried, null one
+             * it did not; never a track. */
+            const fv_row_t *a = x;
+            web_jw_raw(w, ",\"visit_first\":");
+            if (a->ac.visit_first) web_jw_int(w, a->ac.visit_first); else web_jw_raw(w, "null");
+            web_jw_raw(w, ",\"flight\":");    jstr_or_null(w, a->label);
+            web_jw_raw(w, ",\"squawk\":");    jstr_or_null(w, a->ac.squawk);
+            web_jw_raw(w, ",\"category\":");  jstr_or_null(w, a->vendor);
+            web_jw_raw(w, ",\"emergency\":"); jstr_or_null(w, a->ac.emergency);
+            web_jw_raw(w, ",\"on_ground\":"); web_jw_raw(w, a->ac.on_ground ? "true" : "false");
+            web_jw_raw(w, ",\"alt\":");       jw_num_or_null(w, a->ac.has_alt, a->ac.alt, 0);
+            web_jw_raw(w, ",\"gs\":");        jw_num_or_null(w, a->ac.has_gs, a->ac.gs, 1);
+            web_jw_raw(w, ",\"track\":");     jw_num_or_null(w, a->ac.has_track, a->ac.track, 1);
+            web_jw_raw(w, ",\"rssi\":");      jw_num_or_null(w, a->ac.has_rssi, a->ac.rssi, 1);
+            web_jw_raw(w, ",\"messages\":");
+            if (a->ac.has_msgs) web_jw_int(w, a->ac.msgs); else web_jw_raw(w, "null");
+            web_jw_raw(w, ",\"lat\":");       jw_num_or_null(w, a->ac.has_pos, a->ac.lat, 5);
+            web_jw_raw(w, ",\"lon\":");       jw_num_or_null(w, a->ac.has_pos, a->ac.lon, 5);
+            web_jw_raw(w, ",\"pos_ts\":");
+            if (a->ac.has_pos) web_jw_int(w, a->ac.pos_ts); else web_jw_raw(w, "null");
+            web_jw_raw(w, ",\"pos_prev\":");
+            if (a->ac.has_pos) web_jw_int(w, a->ac.pos_prev); else web_jw_raw(w, "null");
+            web_jw_raw(w, ",\"pos_alt\":");   jw_num_or_null(w, a->ac.has_palt, a->ac.palt, 0);
+        } else if (is_probe(view)) {
             /* A probe row: the SSID the client asked for, nothing more. */
             web_jw_raw(w, ",\"ssid\":");   web_jw_ssid(w, x->label);
             web_jw_ssid_meta(w, "ssid", x->label);
@@ -1198,8 +1383,10 @@ static void seen_at(web_jw_t *w, const fv_row_t *r, int n, const fv_site_t *st, 
     web_jw_str(w, note);
 }
 
+/* One list's rows (nwifi < 0: of the kind one; else a device's three)
+ * under the host that saw it last. */
 static void fleet_detail(web_jw_t *w, int remote, const fv_row_t *r, int n, int nwifi,
-                         int nap, const fv_site_t *st, int nst) {
+                         int nap, int one, const fv_site_t *st, int nst) {
     web_jw_raw(w, "\"fleet\":{\"remote\":");
     web_jw_raw(w, remote ? "true" : "false");
     int nb = 0;                                 /* the host that saw it last */
@@ -1221,7 +1408,7 @@ static void fleet_detail(web_jw_t *w, int remote, const fv_row_t *r, int n, int 
         detail_rows(w, "probe_rows", WEB_FV_PROBE_CLIENTS, r + nwifi + nap, n - nwifi - nap,
                     st, nst);
     } else {
-        detail_rows(w, "rows", WEB_FV_BLE, r, n, st, nst);
+        detail_rows(w, "rows", one, r, n, st, nst);
     }
     web_jw_raw(w, "}");
 }
@@ -1255,7 +1442,7 @@ void web_fv_detail(web_fleet_t *f, int ble, const char *path_key, long long now_
         /* No row of this sensor's: the peers' rows only. */
         web_jw_raw(&w, "{\"now\":");  web_jw_int(&w, now_s);
         web_jw_raw(&w, ",\"rows\":[],\"alerts\":[],\"count\":0,");
-        fleet_detail(&w, 1, rows, nw, -1, 0, st, nst);
+        fleet_detail(&w, 1, rows, nw, -1, 0, WEB_FV_BLE, st, nst);
         web_jw_raw(&w, "}\n");
     } else {
         top_t t;
@@ -1266,14 +1453,51 @@ void web_fv_detail(web_fleet_t *f, int ble, const char *path_key, long long now_
         int remote = !ble && t.rec_e - t.rec_s == 4 && !memcmp(body + t.rec_s, "null", 4);
         splice(&w, body, root_e - 1);
         web_jw_raw(&w, ",");
-        if (ble) fleet_detail(&w, 0, rows, nw, -1, 0, st, nst);
-        else fleet_detail(&w, remote, rows, nw + na + np, nw, na, st, nst);
+        if (ble) fleet_detail(&w, 0, rows, nw, -1, 0, WEB_FV_BLE, st, nst);
+        else fleet_detail(&w, remote, rows, nw + na + np, nw, na, 0, st, nst);
         splice(&w, body + root_e - 1, *len - (root_e - 1));
     }
     if (w.overflow) goto done;
     memcpy(body, out, w.len);
     *len = w.len;
     *status = 200;
+done:
+    free(rows);
+    free(out);
+}
+
+void web_fv_aircraft(web_fleet_t *f, const web_fv_src_t *src, const char *query,
+                     long long now_s, char *body, size_t cap, size_t *len, int status) {
+    char hex[16];
+    (void)now_s;
+    if (!f || status != 200 || !*len || *len > cap) return;
+    if (!qparam(query, "hex", 0, hex, sizeof(hex)) || !icao_ok(hex)) return;
+    fv_site_t st[WEB_FLEET_PEERS];
+    int nst = read_sites(f, st);
+    enum { PER = 2 * WEB_FLEET_PEERS };
+    fv_row_t *rows = malloc(sizeof(*rows) * PER);
+    char *out = malloc(cap);
+    if (!rows || !out) goto done;
+    int partial;
+    int n = read_rows(f, st, nst, WEB_FV_ADSB, hex, 0, rows, PER, &partial);
+    if (n <= 0) goto done;
+    top_t t;
+    memset(&t, 0, sizeof(t));
+    t.s = body;
+    size_t root_e;
+    if (members(body, 0, *len, top_member, &t, &root_e) != 0 || !t.ac_e) goto done;
+    /* Held here: sloth.db's inventory row, or the panel's table. */
+    int remote = t.ac_e - t.ac_s == 4 && !memcmp(body + t.ac_s, "null", 4) &&
+                 !(src && src->adsb && web_adsb_has(src->adsb, hex));
+    web_jw_t w;
+    web_jw_init(&w, out, cap);
+    splice(&w, body, root_e - 1);
+    web_jw_raw(&w, ",");
+    fleet_detail(&w, remote, rows, n, -1, 0, WEB_FV_ADSB, st, nst);
+    splice(&w, body + root_e - 1, *len - (root_e - 1));
+    if (w.overflow) goto done;
+    memcpy(body, out, w.len);
+    *len = w.len;
 done:
     free(rows);
     free(out);
@@ -1290,6 +1514,12 @@ void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *
 void web_fv_detail(web_fleet_t *f, int ble, const char *path_key, long long now_s,
                    char *body, size_t cap, size_t *len, int *status) {
     (void)f; (void)ble; (void)path_key; (void)now_s; (void)body; (void)cap; (void)len;
+    (void)status;
+}
+
+void web_fv_aircraft(web_fleet_t *f, const web_fv_src_t *src, const char *query,
+                     long long now_s, char *body, size_t cap, size_t *len, int status) {
+    (void)f; (void)src; (void)query; (void)now_s; (void)body; (void)cap; (void)len;
     (void)status;
 }
 

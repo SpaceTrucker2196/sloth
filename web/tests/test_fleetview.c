@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "web_adsb.h"
 #include "web_assets.h"
 #include "web_ble.h"
 #include "web_fleet.h"
@@ -57,7 +58,8 @@ static void test_take(void) {
 static void test_members_are_not_secret(void) {
     static const char *const M[] = {
         "fleet", "peers", "site", "site_label", "sites", "label", "remote", "remote_cap",
-        "remote_more", "remote_off", "partial", "note", "ap_rows", "kind", "probe_rows", NULL };
+        "remote_more", "remote_off", "partial", "note", "ap_rows", "kind", "probe_rows",
+        "alt", "visit_first", "pos_prev", "pos_alt", NULL };
     for (int i = 0; M[i]; i++) WT_EQ(web_sdb_is_secret("peer_sightings", M[i], "TEXT"), 0);
 }
 
@@ -91,7 +93,8 @@ static void test_page(void) {
      * grey network's its hosts, and the drawer naming what each host
      * heard a station probe for. */
     WT_HAS(p, "<select id=\"pr-sites\"");
-    WT_HAS(p, "  var FV_SEL = { devices: \"d-sites\", aps: \"w-sites\", ble: \"b-sites\", probes: \"pr-sites\" };");
+    WT_HAS(p, "  var FV_SEL = { devices: \"d-sites\", aps: \"w-sites\", ble: \"b-sites\", probes: \"pr-sites\",\n"
+              "                 adsb: \"adsb-sites\" };");
     WT_HAS(p, "    prefSet(\"fleet.probes\", this.value);\n"
               "    if (window.SlothProbes) SlothProbes.show();\n");
     WT_HAS(p, "    fvQuery: fvQuery, fvAll: fvAll });");
@@ -104,6 +107,37 @@ static void test_page(void) {
               "    return row;\n");
     WT_HAS(p, "    row.addEventListener(\"click\", function () { P.ssOpen = open ? null : key; ssidsDraw(); });");
     WT_HAS(p, "\"&offset=\" + off + H.fvQuery(\"probes\")).then(function (j) {");
+    /* The ADS-B tab: its choice kept as fleet.adsb and every list asked
+     * again; each of its three fetches carries the choice; a grey row
+     * from the same mark with nothing only this decoder knows; on the
+     * plot a peer's aircraft its last position, grey, named, no track. */
+    WT_HAS(p, "<select id=\"adsb-sites\"");
+    WT_HAS(p, "    prefSet(\"fleet.adsb\", this.value);\n"
+              "    if (window.SlothAdsb) SlothAdsb.refresh();\n");
+    WT_HAS(p, "  if (window.SlothAdsb) SlothAdsb.init({ go: go, fvMark: fvMark, fvName: fvName,\n"
+              "    fvSplit: fvSplit, fvQuery: fvQuery, stamp: stamp });");
+    WT_HAS(p, "  function fvq() { return H && H.fvQuery ? H.fvQuery(\"adsb\") : \"\"; }");
+    WT_HAS(p, "    getJSON(\"/api/adsb\" + fvq().replace(/^&/, \"?\")).then(function (j) {");
+    WT_HAS(p, "\"&offset=\" + off + (q ? \"&q=\" + encodeURIComponent(q) : \"\") + fvq()).then(function (j) {");
+    WT_HAS(p, "    getJSON(\"/api/adsb/aircraft?hex=\" + encodeURIComponent(hex) + \"&days=\" + encodeURIComponent(seenDays()) +\n"
+              "            fvq()).then(function (j) {");
+    WT_HAS(p, "  function row(a, now) {\n    if (remote(a)) return remoteRow(a, now);\n");
+    WT_HAS(p, "    var r = el(\"div\", \"adsbrow dt-row remote\" + (sel === a.hex ? \" on\" : \"\"));\n"
+              "    var hx = cell(\"c-hx\", a.hex);\n"
+              "    var fm = fvMark(a);\n"
+              "    if (fm) hx.appendChild(fm);\n");
+    WT_HAS(p, "      if (remote(a)) { body.appendChild(seenRemote(a)); return; }");
+    WT_HAS(p, "      if (remote(a)) {\n"
+              "        if (!num(a.lat)) return;\n"
+              "        var rx = X(a.lon), ry = Y(a.lat);\n"
+              "        g.globalAlpha = 1;\n"
+              "        g.fillStyle = dim; g.strokeStyle = dim;\n"
+              "        g.beginPath(); g.arc(rx, ry, sel === a.hex ? 5 : 3, 0, Math.PI * 2); g.stroke();\n"
+              "        g.textAlign = \"left\";\n"
+              "        g.fillText(label(a) + \" · \" + fvName(a), rx + 7, ry - 6);\n"
+              "        return;\n"
+              "      }\n");
+    WT_HAS(p, "      fleetLines(kv, j.fleet);");
     WT_LACKS(p, "innerHTML");
     WT_LACKS(p, "not heard here");
 }
@@ -751,6 +785,311 @@ static void test_probe_drawer(void) {
     down();
 }
 
+
+/* ── the ADS-B tab ───────────────────────────────────────────────────── */
+
+static web_adsb_t A;
+
+static void feed_ac(const char *hex, const char *flight, long long last) {
+    static web_jrec_t r;
+    char line[1024];
+    snprintf(line, sizeof(line),
+             "{\"type\":\"adsb_aircraft\",\"ts\":%lld,\"hex\":\"%s\",\"non_icao\":%d,"
+             "\"state\":\"live\",\"src\":\"file:/run/readsb/aircraft.json\","
+             "\"source_type\":\"adsb_icao\",\"flight\":\"%s\",\"squawk\":\"2201\","
+             "\"category\":\"A3\",\"emergency\":\"none\",\"on_ground\":0,\"alt_baro\":34000,"
+             "\"alt_band\":16,\"gs\":451.2,\"track\":271.5,\"lat\":10.12345,\"lon\":20.54321,"
+             "\"pos_ts\":%lld,\"rssi\":-18.4,\"messages\":2210,\"first_seen\":%lld,"
+             "\"last_seen\":%lld}",
+             last, hex, hex[0] == '~', flight, last, last - 100, last);
+    WT_EQ(web_jl_parse(line, strlen(line), &r), WEB_JL_OK);
+    web_adsb_record(&A, &r, 1000);
+}
+
+/* This site: the panel lists a1b2c3 and ~00abcd; sloth.db's inventory
+ * holds a1b2c3 (an hour ago) and 0d0e0f (nine days ago, outside the
+ * inventory's 7 days, gone from the panel). The peers (I7's aircraft
+ * lines as web_fleet.c ac_row() stores them): a1b2c3 at beta and gamma;
+ * b0b001 at beta only, with a position; 0d0e0f at beta; ~00cc01 at gamma
+ * with a hostile callsign; b0b002 at beta three days ago (outside the
+ * table's freshness and the 1-day window, inside 7 days); dddd03 from
+ * the peer no longer named; a key that is no address. */
+static void adsb_up(void) {
+    up();
+    WT_EQ(web_adsb_init(&A), 0);
+    feed_ac("a1b2c3", "TST123", T - 30);
+    feed_ac("~00abcd", "EMG7", T - 20);
+    H.adsb = &A;
+    char sql[4096];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO adsb_aircraft VALUES ('a1b2c3',0,%lld,%lld,%lld,2,5,'TST123','2201','A3',"
+        "'adsb_icao',0,12000,34000,451.2,-18.4,2210,1);"
+        "INSERT INTO adsb_aircraft VALUES ('0d0e0f',0,%lld,%lld,%lld,1,2,'OLD9',NULL,'A1',"
+        "'mode_s',0,NULL,NULL,NULL,NULL,NULL,0);"
+        "INSERT INTO adsb_sightings (last_seen,hex,heard,flight,squawk,emergency,category,"
+        "on_ground,alt_baro,alt_band,gs,track,lat,lon,rssi,messages,source_type)"
+        " VALUES (%lld,'a1b2c3',%lld,'TST123','2201','none','A3',0,34000,16,451.2,271.5,"
+        "10.12345,20.54321,-18.4,2210,'adsb_icao');",
+        T - 7200, T - 3600, T - 5400, T - 10 * DY, T - 9 * DY, T - 10 * DY, T - 3600, T - 3600);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO peer_sightings (peer,kind,key,label,vendor,rssi,first_seen,last_seen,extra)"
+        " VALUES"
+        " ('beta','aircraft','a1b2c3','TST123','A3',-20,%lld,%lld,"
+        "  '{\"visit_first\":%lld,\"squawk\":\"2201\",\"emergency\":\"none\",\"on_ground\":false,"
+        "\"alt\":34000}'),"
+        " ('gamma','aircraft','a1b2c3','TST123','A3',-25,%lld,%lld,'{\"on_ground\":false}'),"
+        " ('beta','aircraft','b0b001','PEER1','A1',-21,%lld,%lld,"
+        "  '{\"visit_first\":%lld,\"squawk\":\"1200\",\"emergency\":\"none\",\"on_ground\":false,"
+        "\"alt\":4500,\"gs\":120.5,\"track\":90.0,\"rssi\":-21.3,\"messages\":77,"
+        "\"lat\":10.50000,\"lon\":20.25000,\"pos_ts\":%lld,\"pos_prev\":%lld,\"pos_alt\":4400}'),"
+        " ('beta','aircraft','0d0e0f','OLD9','A1',NULL,%lld,%lld,'{\"on_ground\":false}'),"
+        " ('gamma','aircraft','~00cc01','<b>\"x','A7',NULL,%lld,%lld,"
+        "  '{\"squawk\":\"7700\",\"emergency\":\"general\",\"on_ground\":true}'),"
+        " ('beta','aircraft','b0b002','STALE2','',NULL,%lld,%lld,'{\"on_ground\":false}'),"
+        " ('old','aircraft','dddd03','GONE','',NULL,%lld,%lld,'{}'),"
+        " ('beta','aircraft','NOTHEX','BAD','',NULL,%lld,%lld,'{}');",
+        T - 900, T - 40, T - 900, T - 800, T - 45,
+        T - 600, T - 10, T - 600, T - 15, T - 60,
+        T - 500, T - 100, T - 400, T - 50,
+        T - 3 * DY - 100, T - 3 * DY, T - 300, T - 10, T - 300, T - 10);
+    WT_EQ(sql_on(g_store, sql), 0);
+}
+
+static void adsb_down(void) {
+    H.adsb = NULL;
+    web_adsb_destroy(&A);
+    down();
+}
+
+/* The panel's table: the local rows as they were, a1b2c3 with each
+ * peer's site; the peers' fresh aircraft after them, grey, only what
+ * their lines held; 0d0e0f is not in the panel, so a peer's row of it is
+ * remote here; b0b002 too old for a table of now; the counts the
+ * panel's own. The panel check in held_here() cannot be isolated here:
+ * every address the panel holds is on its one page, so it is matched as
+ * a local row first; the inventory test below carries that guard. */
+static void test_adsb_merge(void) {
+    adsb_up();
+    int st;
+    const char *b = get("/api/adsb", "", &st, NULL);
+    WT_EQ(st, 200);
+    WT_HAS(b, "\"total\":2,\"live\":2,\"with_pos\":2,\"emergency\":0,\"rows\":[");
+    WT_HAS(b, "\"sites\":[{\"site\":\"beta\",\"label\":\"beta-site\",\"first_seen\":1792626300,"
+              "\"last_seen\":1792627160},{\"site\":\"gamma\",\"label\":null,"
+              "\"first_seen\":1792626400,\"last_seen\":1792627155}]}");
+    WT_HAS(b, "{\"hex\":\"b0b001\",\"non_icao\":0,\"flight\":\"PEER1\",\"squawk\":\"1200\","
+              "\"category\":\"A1\",\"emergency\":\"none\",\"on_ground\":0,\"alt\":4500,"
+              "\"gs\":120.5,\"track\":90.0,\"lat\":10.50000,\"lon\":20.25000,"
+              "\"pos_ts\":1792627185,\"rssi\":-21.3,\"messages\":77,\"first_seen\":1792626600,"
+              "\"last_seen\":1792627190,\"remote\":true,\"site\":\"beta\","
+              "\"site_label\":\"beta-site\",\"sites\":[");
+    WT_EQ(count_of(b, "\"remote\":true"), 3);
+    WT_HAS(b, "{\"hex\":\"0d0e0f\",");
+    WT_HAS(b, "{\"hex\":\"~00cc01\",\"non_icao\":1,");
+    WT_ASSERT(!strstr(b, "b0b002"));
+    WT_ASSERT(!strstr(b, "dddd03"));
+    WT_ASSERT(!strstr(b, "NOTHEX"));
+    WT_EQ(count_of(b, "\"hex\":\"a1b2c3\""), 1);
+    /* A remote row claims nothing only this decoder knows. */
+    const char *r1 = strstr(b, "{\"hex\":\"b0b001\"");
+    WT_ASSERT(r1 && !strstr(r1, "\"track_pts\"") && !strstr(r1, "\"state\"") &&
+              !strstr(r1, "\"alt_baro\"") && !strstr(r1, "\"alert\""));
+    /* After every local row. */
+    const char *l2 = strstr(b, "{\"hex\":\"~00abcd\"");
+    WT_ASSERT(l2 && r1 && l2 < r1);
+    WT_HAS(b, ",\"fleet\":{\"peers\":[{\"site\":\"beta\",\"label\":\"beta-site\"},"
+              "{\"site\":\"gamma\",\"label\":null}],\"remote\":3,\"remote_cap\":100,"
+              "\"remote_more\":false,\"partial\":false,\"remote_off\":null}}");
+    /* The hostile callsign, escaped. */
+    WT_ASSERT(!strstr(b, "<b>"));
+    WT_HAS(b, "\"flight\":\"\\u003cb\\u003e\\\"x\"");
+    /* A table limit= cut ends nothing: no remote rows on it. */
+    b = get("/api/adsb", "limit=1", &st, NULL);
+    WT_EQ(st, 200);
+    WT_EQ(count_of(b, "\"remote\":true"), 0);
+    WT_HAS(b, "\"remote_off\":\"not_last_page\"");
+    adsb_down();
+}
+
+/* The inventory: sloth.db's rows over days=, the peers' addresses
+ * neither sloth.db nor the panel holds after them; 0d0e0f is held
+ * (sloth.db, outside the window) so never remote. q a hex or callsign
+ * prefix, any case. ~00abcd is the panel's and not yet sloth.db's: held,
+ * never remote. Seen red with held_here() skipping sloth.db (0d0e0f then
+ * a remote row) and with it skipping the panel (~00abcd then one). */
+static void test_adsb_seen_merge(void) {
+    adsb_up();
+    WT_EQ(sql_on(g_store, "INSERT INTO peer_sightings (peer,kind,key,label,vendor,rssi,"
+                          "first_seen,last_seen,extra) VALUES ('beta','aircraft','~00abcd',"
+                          "'EMG7','A1',NULL,1792627000,1792627100,'{}')"), 0);
+    int st;
+    const char *b = get("/api/adsb/seen", "", &st, NULL);
+    WT_EQ(st, 200);
+    WT_HAS(b, "\"total\":1,\"more\":false");
+    WT_HAS(b, "{\"hex\":\"a1b2c3\",");
+    WT_HAS(b, "\"sites\":[{\"site\":\"beta\",");
+    WT_HAS(b, "{\"hex\":\"b0b001\",\"non_icao\":0,\"first_seen\":1792626600,"
+              "\"last_seen\":1792627190,\"flight\":\"PEER1\",\"squawk\":\"1200\","
+              "\"category\":\"A1\",\"alt\":4500,\"messages\":77,\"remote\":true,");
+    WT_HAS(b, "{\"hex\":\"b0b002\",");
+    WT_HAS(b, "{\"hex\":\"~00cc01\",");
+    WT_ASSERT(!strstr(b, "0d0e0f"));
+    WT_ASSERT(!strstr(b, "~00abcd"));
+    WT_EQ(count_of(b, "\"remote\":true"), 3);
+    const char *r1 = strstr(b, "{\"hex\":\"b0b001\"");
+    WT_ASSERT(r1 && !strstr(r1, "\"visits\"") && !strstr(r1, "\"alt_max\"") &&
+              !strstr(r1, "\"lat\""));
+    b = get("/api/adsb/seen", "days=1", &st, NULL);
+    WT_ASSERT(!strstr(b, "b0b002"));
+    WT_EQ(count_of(b, "\"remote\":true"), 2);
+    b = get("/api/adsb/seen", "q=B0B", &st, NULL);
+    WT_EQ(count_of(b, "\"remote\":true"), 2);
+    WT_ASSERT(!strstr(b, "~00cc01"));
+    b = get("/api/adsb/seen", "q=peer", &st, NULL);
+    WT_EQ(count_of(b, "\"remote\":true"), 1);
+    WT_HAS(b, "\"b0b001\"");
+    adsb_down();
+}
+
+/* fleet=0 is each ADS-B route's own answer byte for byte, as is no peer
+ * configured; nothing merges under Monitor. */
+static void test_adsb_local_only(void) {
+    adsb_up();
+    static char a[65536], c[65536];
+    static const char *const P[][2] = {
+        { "/api/adsb", "" }, { "/api/adsb", "limit=1" }, { "/api/adsb/seen", "" },
+        { "/api/adsb/aircraft", "hex=b0b001" }, { "/api/adsb/aircraft", "hex=a1b2c3" },
+    };
+    for (size_t i = 0; i < sizeof(P) / sizeof(P[0]); i++) {
+        int s1, s2;
+        size_t l1 = 0, l2 = 0;
+        char q[128];
+        snprintf(q, sizeof(q), "%s%sfleet=0", P[i][1], P[i][1][0] ? "&" : "");
+        const char *x = get(P[i][0], q, &s1, &l1);
+        memcpy(a, x, l1 + 1);
+        M4.fleet = NULL;
+        const char *y = get(P[i][0], P[i][1], &s2, &l2);
+        memcpy(c, y, l2 + 1);
+        M4.fleet = &F;
+        WT_EQ(s1, 200);
+        WT_EQ(s1, s2);
+        WT_ASSERT(l1 == l2 && !memcmp(a, c, l1));
+        WT_ASSERT(!strstr(a, "\"fleet\":"));
+        int np = F.npeer;
+        F.npeer = 0;
+        y = get(P[i][0], P[i][1], &s2, &l2);
+        F.npeer = np;
+        WT_ASSERT(l1 == l2 && !memcmp(a, y, l1));
+    }
+    int st;
+    const char *b = get("/api/adsb", "scope=monitor", &st, NULL);
+    WT_EQ(st, 200);
+    WT_ASSERT(!strstr(b, "\"fleet\":"));
+    b = get("/api/adsb", "fleet=2", &st, NULL);
+    WT_EQ(st, 400);
+    WT_HAS(b, "bad_fleet");
+    adsb_down();
+}
+
+/* At most WEB_FV_REMOTE_MAX remote aircraft, said. */
+static void test_adsb_cap(void) {
+    adsb_up();
+    sqlite3 *h = NULL;
+    WT_EQ(sqlite3_open(g_store, &h), SQLITE_OK);
+    sqlite3_exec(h, "BEGIN", NULL, NULL, NULL);
+    for (int i = 0; i < 150; i++) {
+        char sql[256];
+        snprintf(sql, sizeof(sql),
+                 "INSERT INTO peer_sightings (peer,kind,key,label,vendor,rssi,first_seen,"
+                 "last_seen,extra) VALUES ('gamma','aircraft','e0%04x','','',NULL,%lld,%lld,"
+                 "'{\"on_ground\":false}')", i, T - 400, T - 300 + i);
+        WT_EQ(sqlite3_exec(h, sql, NULL, NULL, NULL), SQLITE_OK);
+    }
+    sqlite3_exec(h, "COMMIT", NULL, NULL, NULL);
+    sqlite3_close(h);
+    int st;
+    const char *b = get("/api/adsb", "", &st, NULL);
+    WT_EQ(st, 200);
+    WT_EQ(count_of(b, "\"remote\":true"), WEB_FV_REMOTE_MAX);
+    WT_HAS(b, "\"remote\":100,\"remote_cap\":100,\"remote_more\":true");
+    WT_EQ(count_of(b, "\"hex\":\"a1b2c3\""), 1);
+    WT_EQ(count_of(b, "\"hex\":\"~00abcd\""), 1);
+    b = get("/api/adsb/seen", "", &st, NULL);
+    WT_EQ(st, 200);
+    WT_EQ(count_of(b, "\"remote\":true"), WEB_FV_REMOTE_MAX);
+    WT_HAS(b, "\"remote_more\":true");
+    adsb_down();
+}
+
+/* The detail: an address only a peer heard answers 200 with each
+ * host's row and the note naming them; its sightings stay this site's
+ * (none). One this site holds says remote false; one nobody heard is
+ * the route's own answer. Seen red with the panel check removed from
+ * web_fv_aircraft() (~00abcd, the panel's only, then read remote). */
+static void test_adsb_detail(void) {
+    adsb_up();
+    int st;
+    const char *b = get("/api/adsb/aircraft", "hex=b0b001", &st, NULL);
+    WT_EQ(st, 200);
+    WT_HAS(b, "\"aircraft\":null");
+    WT_HAS(b, "\"sightings\":[]");
+    WT_HAS(b, "\"fleet\":{\"remote\":true,\"site\":\"beta\",\"site_label\":\"beta-site\","
+              "\"note\":\"seen at beta-site\",\"rows\":[{\"site\":\"beta\",\"label\":\"beta-site\","
+              "\"kind\":\"aircraft\",\"first_seen\":1792626600,\"last_seen\":1792627190,"
+              "\"visit_first\":1792626600,\"flight\":\"PEER1\",\"squawk\":\"1200\","
+              "\"category\":\"A1\",\"emergency\":\"none\",\"on_ground\":false,\"alt\":4500,"
+              "\"gs\":120.5,\"track\":90.0,\"rssi\":-21.3,\"messages\":77,\"lat\":10.50000,"
+              "\"lon\":20.25000,\"pos_ts\":1792627185,\"pos_prev\":1792627140,\"pos_alt\":4400}]}");
+    WT_ASSERT(!strstr(b, "not heard"));
+    b = get("/api/adsb/aircraft", "hex=a1b2c3", &st, NULL);
+    WT_EQ(st, 200);
+    WT_HAS(b, "\"fleet\":{\"remote\":false,");
+    WT_HAS(b, "\"note\":null");
+    WT_EQ(count_of(b, "\"kind\":\"aircraft\""), 2);
+    b = get("/api/adsb/aircraft", "hex=~00cc01", &st, NULL);
+    WT_EQ(st, 200);
+    WT_HAS(b, "\"note\":\"seen at gamma\"");
+    WT_ASSERT(!strstr(b, "<b>"));
+    /* Held in sloth.db only (gone from the panel): not remote. */
+    b = get("/api/adsb/aircraft", "hex=0d0e0f", &st, NULL);
+    WT_HAS(b, "\"fleet\":{\"remote\":false,");
+    b = get("/api/adsb/aircraft", "hex=eeeeee", &st, NULL);
+    WT_EQ(st, 200);
+    WT_ASSERT(!strstr(b, "\"fleet\""));
+    /* The panel's own (not in sloth.db yet) is this site's too. */
+    sql_on(g_store, "INSERT INTO peer_sightings (peer,kind,key,label,vendor,rssi,first_seen,"
+                    "last_seen,extra) VALUES ('beta','aircraft','~00abcd','EMG7','A1',NULL,"
+                    "1792627000,1792627100,'{}')");
+    b = get("/api/adsb/aircraft", "hex=~00abcd", &st, NULL);
+    WT_HAS(b, "\"aircraft\":null");
+    WT_HAS(b, "\"fleet\":{\"remote\":false,");
+    adsb_down();
+}
+
+/* The export's aircraft are sloth.db's, never a peer's. Seen red with a
+ * peer's address inserted into sloth.db's adsb_aircraft. */
+static void test_export_carries_no_peer_aircraft(void) {
+    adsb_up();
+    web_fleet_src_t src = { &SDB, &B, NULL, NULL, NULL, &A };
+    char *body = NULL;
+    size_t len = 0;
+    int st = 0;
+    WT_EQ(web_fleet_export_route(&src, "since=0&gnss=1&adsb=1", T, &body, &len, &st), 0);
+    WT_EQ(st, 200);
+    WT_ASSERT(body != NULL);
+    if (body) {
+        char *t = realloc(body, len + 1);
+        if (t) { body = t; body[len] = '\0'; }
+        WT_HAS(body, "{\"type\":\"aircraft\",\"hex\":\"a1b2c3\"");
+        WT_ASSERT(!strstr(body, "b0b001"));
+        WT_ASSERT(!strstr(body, "~00cc01"));
+        WT_ASSERT(!strstr(body, "PEER1"));
+        free(body);
+    }
+    adsb_down();
+}
+
 #endif
 
 void run_fleetview_tests(void) {
@@ -770,5 +1109,11 @@ void run_fleetview_tests(void) {
     WT_RUN(test_probes_local_only);
     WT_RUN(test_probes_cap);
     WT_RUN(test_probe_drawer);
+    WT_RUN(test_adsb_merge);
+    WT_RUN(test_adsb_seen_merge);
+    WT_RUN(test_adsb_local_only);
+    WT_RUN(test_adsb_cap);
+    WT_RUN(test_adsb_detail);
+    WT_RUN(test_export_carries_no_peer_aircraft);
 #endif
 }

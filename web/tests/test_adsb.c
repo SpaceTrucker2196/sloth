@@ -452,8 +452,9 @@ static void test_adsb_alert_link_page(void) {
         "      kv.appendChild(el(\"dt\", \"\", \"alert\"));\n"
         "      var dd = el(\"dd\", \"\");\n"
         "      dd.appendChild(mk);\n");
-    WT_HAS(p, "  function init(h) { H = h; }\n\n  window.SlothAdsb = { init: init, show: show, select: select };");
-    WT_HAS(p, "  if (window.SlothAdsb) SlothAdsb.init({ go: go });");
+    WT_HAS(p, "  function init(h) { H = h; }\n");
+    WT_HAS(p, "  window.SlothAdsb = { init: init, show: show, select: select, refresh: refresh };");
+    WT_HAS(p, "  if (window.SlothAdsb) SlothAdsb.init({ go: go, fvMark: fvMark, fvName: fvName,\n");
     /* The id the page sends is the route's own shape (app.js ALERT_ID_RE
      * takes s or d; a row only ever names a stream incident). */
     WT_HAS(p, "  var ALERT_ID_RE = /^[sd][0-9A-Za-z]{1,24}$/;");

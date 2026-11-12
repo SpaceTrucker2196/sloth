@@ -62,8 +62,9 @@ static void test_rfhist_page(void) {
     WT_HAS(p, "    getJSON(\"/api/gnss/seen?days=\" + encodeURIComponent(seenDays())).then(function (j) {");
     WT_HAS(p, "    getJSON(\"/api/gnss/sat?gnssid=\" + gnssid + \"&prn=\" + prn + \"&days=\" + encodeURIComponent(seenDays())).then(function (j) {");
     WT_HAS(p, "    getJSON(\"/api/adsb/seen?days=\" + encodeURIComponent(seenDays()) + \"&limit=\" + SEEN_PAGE +\n"
-              "            \"&offset=\" + off + (q ? \"&q=\" + encodeURIComponent(q) : \"\")).then(function (j) {");
-    WT_HAS(p, "    getJSON(\"/api/adsb/aircraft?hex=\" + encodeURIComponent(hex) + \"&days=\" + encodeURIComponent(seenDays())).then(function (j) {");
+              "            \"&offset=\" + off + (q ? \"&q=\" + encodeURIComponent(q) : \"\") + fvq()).then(function (j) {");
+    WT_HAS(p, "    getJSON(\"/api/adsb/aircraft?hex=\" + encodeURIComponent(hex) + \"&days=\" + encodeURIComponent(seenDays()) +\n"
+              "            fvq()).then(function (j) {");
     WT_HAS(p, "    getJSON(\"/api/gnss/tracks?hours=\" + encodeURIComponent(trailHours())).then(function (j) {");
     WT_HAS(p, "<select id=\"gnss-trail-hours\">");
     WT_HAS(p, "      g.fillText(s.id || (s.gnss.charAt(0) + (num(s.svid) ? s.svid : s.prn)), x, y - 9);");

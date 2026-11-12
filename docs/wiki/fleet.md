@@ -69,7 +69,7 @@ Martinovic's ADS-B security survey, section V-F; the 4/3-earth radio
 horizon) and `research/adsb/emergency-squawks.md` (ADS-B carries no
 authentication).
 
-**Last updated**: 2026-11-11 (#192 I7 review: an aircraft read that did not run is a cut, never an empty list; a peer read at its row cap or a comparison out of room reads as cut; a sector's reach the median of its hourly farthest; no antenna height credited and B's own altitude required; a position's time bounded by `pos_prev`, widening the window and the mobility allowance); 2026-11-11 (#192 I7: aircraft across the sites, the export's `adsb=1` (`adsb_rx`, `aircraft` lines), peer_sightings kinds `aircraft` and `adsb`, `/api/fleet/aircraft`, the overview's `aircraft`, the Fleet tab's aircraft panel with each receiver's coverage plot); 2026-11-11 (#192 I6 review: no quiet peer before a pull past the window's end; a span never bridged across a sample that was not observing; `rx` only with the drop test's history; the sample events kept for the week across a restart; a sample event never quiet on incidents alone; `gnss_complete`, so a pre-v11 `sloth.db`, a timeout or the cap is no coverage; an eph of 0 no bound; the UI's "local" worded as seen at one site while the others watched); 2026-11-11 (#192 I6: GNSS regional or local, the baseline and clock checks, `/api/fleet/gnss`, the export's `gnss=1`, `--peer-gnss-region-km`, the Fleet tab's GNSS panel); 2026-11-11 (#192 I5 review: the least-squares fix damped and refused when unsettled; `nearest` with its difference's sigma and `within_band`; the export's probe reading only within 120 s of its row and not on 5 or 6 GHz; a 5 GHz probe no calibration link and modelled at 5 GHz; an address two sites claim no link); 2026-11-11 (#192 I5: locating emitters from two or more sites' signal strength, `/api/fleet/locate`, the own-radio calibration and `own=1`, the overview's `calibration`, the map's located emitters and metre scale; a stored 0 dBm is no reading, and an ARP-only device takes its probe reading); 2026-11-11 (#192 F2 review: the alert backfill past the reader's 20,000-row scan, an F1 peer pulled without `next=1`, the shared list's verdicts in one pass); 2026-11-11 (#192 F2: the Fleet tab, `/api/fleet/overview`, `/api/fleet/shared`, the backfill); 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
+**Last updated**: 2026-11-12 (the merged views reach the ADS-B tab: `/api/adsb` and `/api/adsb/seen` carry the peers' `aircraft` rows, `/api/adsb/aircraft` names the hosts); 2026-11-11 (#192 I7 review: an aircraft read that did not run is a cut, never an empty list; a peer read at its row cap or a comparison out of room reads as cut; a sector's reach the median of its hourly farthest; no antenna height credited and B's own altitude required; a position's time bounded by `pos_prev`, widening the window and the mobility allowance); 2026-11-11 (#192 I7: aircraft across the sites, the export's `adsb=1` (`adsb_rx`, `aircraft` lines), peer_sightings kinds `aircraft` and `adsb`, `/api/fleet/aircraft`, the overview's `aircraft`, the Fleet tab's aircraft panel with each receiver's coverage plot); 2026-11-11 (#192 I6 review: no quiet peer before a pull past the window's end; a span never bridged across a sample that was not observing; `rx` only with the drop test's history; the sample events kept for the week across a restart; a sample event never quiet on incidents alone; `gnss_complete`, so a pre-v11 `sloth.db`, a timeout or the cap is no coverage; an eph of 0 no bound; the UI's "local" worded as seen at one site while the others watched); 2026-11-11 (#192 I6: GNSS regional or local, the baseline and clock checks, `/api/fleet/gnss`, the export's `gnss=1`, `--peer-gnss-region-km`, the Fleet tab's GNSS panel); 2026-11-11 (#192 I5 review: the least-squares fix damped and refused when unsettled; `nearest` with its difference's sigma and `within_band`; the export's probe reading only within 120 s of its row and not on 5 or 6 GHz; a 5 GHz probe no calibration link and modelled at 5 GHz; an address two sites claim no link); 2026-11-11 (#192 I5: locating emitters from two or more sites' signal strength, `/api/fleet/locate`, the own-radio calibration and `own=1`, the overview's `calibration`, the map's located emitters and metre scale; a stored 0 dBm is no reading, and an ARP-only device takes its probe reading); 2026-11-11 (#192 F2 review: the alert backfill past the reader's 20,000-row scan, an F1 peer pulled without `next=1`, the shared list's verdicts in one pass); 2026-11-11 (#192 F2: the Fleet tab, `/api/fleet/overview`, `/api/fleet/shared`, the backfill); 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
 
 ## What travels, and what never does
 
@@ -885,6 +885,43 @@ when. A local station or network another host also heard gets the
 a peer sends the SSIDs a station asked for but not the whole population
 they are weighed against (`N`, `df`), so mixing them in would invent a
 figure; `/api/probes/shared` and `/api/probes/groups` never merge.
+
+The **ADS-B** tab merges the aircraft I7 brings in (`peer_sightings`
+kind `aircraft`, above): `/api/adsb` (the decoder's table) and
+`/api/adsb/seen` (`sloth.db`'s inventory).
+
+- The table is the decoder's now, so only a peer's aircraft last seen
+  within the panel's own expiry (660 s, two of sloth's 300 s write
+  heartbeats and a margin) plus one `--peer-interval-secs` are listed,
+  newest first after this site's rows; the inventory takes the peers'
+  aircraft last seen in its `days=` window, and its `q` (a hex or
+  callsign prefix) applies to them. An address the panel lists (live or
+  gone) is never a remote row in either; in the inventory neither is
+  one `sloth.db`'s `adsb_aircraft` holds, whatever the window.
+- A grey aircraft carries what the peer's aircraft line held: address,
+  callsign, squawk, category, emergency word, on-ground, its newest
+  altitude as `alt` (barometric else geometric, the line does not say
+  which, so neither `alt_baro` nor `alt_geom` is claimed), ground speed,
+  track, position and its time, RSSI, messages and the times. The
+  decoder's state, source type, rates, band, record count, the alert link
+  and the track, and the inventory's visits, sightings, ranges and
+  maxima, are this site's only and absent (`-` on the page). The row has
+  no altitude colour and no signal meter.
+- The positions plot draws a peer's aircraft as a grey ring at the last
+  position its host sent, labelled with the callsign (else address) and
+  the host, with no altitude colour, heading tick or track: a peer sends
+  one position, not a track, and nothing is drawn as if heard here.
+- `/api/adsb/aircraft?hex=` gains `fleet`: each host's row with every
+  member its line carried (`visit_first`, `pos_prev`, `pos_alt` too) and
+  null for one it did not. Where neither `sloth.db` nor the panel holds
+  the address, `remote` is true and the note names the hosts; the answer
+  is 200 as it always was, `aircraft` null and `sightings` this site's
+  own (none). The detail panel lists each host's figures; notes stay on
+  what this site heard.
+- The emergency count, `live`, `with_pos` and the ADSB_EMERGENCY links
+  stay the panel's. I7's cross-check (`/api/fleet/aircraft`, the Fleet
+  tab's aircraft panel) is untouched and still the only place a
+  verdict is made.
 
 The other hosts' rows are display only. They never reach risk scoring,
 alerts, anomalies, baselines, series, triage, the Overview's tiles, the

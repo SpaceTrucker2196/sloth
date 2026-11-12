@@ -66,7 +66,7 @@ and Mode S surveillance, whose example messages are the known-answer
 tests. ICAO Annex 10 Vol. IV and RTCA DO-260B were **not** read; what
 is said here of them comes through those two.
 
-**Last updated**: 2026-11-11 (#192 I7: the owner's fleet compares its ADS-B receivers, `/api/fleet/aircraft`, [[fleet]]); 2026-11-09 (#186: `--adsb beast://`, the decoder's Beast output, decoded in sloth: CRC, ghost suppression, CPR, the TC 28 emergency word); 2026-11-09 (#186: `--adsb sbs://`, the decoder's SBS output, loopback, read-only; the `AF_INET` drop-in note); 2026-11-08 (#186: `ADSB_EMERGENCY`, flag only; slothweb's ADS-B tab marks an aircraft with an open one; the `packaging/` note on `/run/readsb`); 2026-11-07 (the `[^]` TUI aircraft view, the `adsb` health-strip token, and `gps_bearing_deg()` beside `gps_distance_m()`); 2026-11-05 (`--db`: schema v12, `adsb_aircraft` and `adsb_sightings`; slothweb's "aircraft seen" history and each aircraft's recorded track and altitude profile); 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
+**Last updated**: 2026-11-12 (other sloth hosts' aircraft in the tab, grey, with the host named; [[fleet]] "The merged views"); 2026-11-11 (#192 I7: the owner's fleet compares its ADS-B receivers, `/api/fleet/aircraft`, [[fleet]]); 2026-11-09 (#186: `--adsb beast://`, the decoder's Beast output, decoded in sloth: CRC, ghost suppression, CPR, the TC 28 emergency word); 2026-11-09 (#186: `--adsb sbs://`, the decoder's SBS output, loopback, read-only; the `AF_INET` drop-in note); 2026-11-08 (#186: `ADSB_EMERGENCY`, flag only; slothweb's ADS-B tab marks an aircraft with an open one; the `packaging/` note on `/run/readsb`); 2026-11-07 (the `[^]` TUI aircraft view, the `adsb` health-strip token, and `gps_bearing_deg()` beside `gps_distance_m()`); 2026-11-05 (`--db`: schema v12, `adsb_aircraft` and `adsb_sightings`; slothweb's "aircraft seen" history and each aircraft's recorded track and altitude profile); 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
 
 ---
 
@@ -630,6 +630,20 @@ An opt-in for a non-loopback SBS or Beast source; from Beast, the
 surface position (TC 5-8 movement and CPR), Gillham (Q = 0) altitudes,
 DF0/DF16 (ACAS) and Comm-B (DF20/21 MB) contents, and a receiver-relative
 CPR decode bounded by a configured range.
+
+## Other sloth hosts in the ADS-B tab
+
+With a `--peer` configured and the request Hybrid's, the tab's aircraft
+table and its "aircraft seen" inventory also list the aircraft another
+sloth host's receiver heard and this one did not, in grey with that
+host's name, holding only what the host's I7 aircraft line carried (no
+decoder state, rates, signal meter, alert link or track); an aircraft
+both heard gets `+name`. The plot shows such an aircraft as a grey ring
+at its host's last position, labelled with the host, never with a track
+or altitude colour. A "This site / All sites" choice beside the table
+(hidden without a peer) asks with `fleet=0` for this decoder's answer
+alone. Display only: the counts, the emergency links and the export stay
+this site's. [[fleet]] "The merged views" has the rules.
 
 ## Related pages
 

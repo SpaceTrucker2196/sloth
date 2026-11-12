@@ -12,10 +12,24 @@
 // adsb_aircraft record, which sloth writes only on a change of altitude
 // band, position cell, squawk, emergency, callsign or category (or the
 // 300 s heartbeat): the page says so rather than implying a live feed.
+// The other sloth hosts (--peer; web_fleetview.h, owner request
+// 2026-11-11): with All sites the table and the inventory carry the
+// aircraft only a peer heard, in the grey state (--tui-dim, no altitude
+// or signal colour) with the host's name beside the address, and a
+// local aircraft a peer also heard gets "+name". On the plot a peer's
+// aircraft is its last position only, grey, labelled with its host: a
+// peer sends no track, so none is drawn as if heard here. Its detail
+// names the hosts and each one's figures. Peer strings are textContent
+// and fillText only.
 (function () {
   "use strict";
   var POLL_MS = 5000, ALT_SPAN = 45000, RSSI_LO = -50;
   var timer = 0, gen = 0, last = null, sel = null;
+  // H (app.js's helpers) is declared with the alert link below.
+  function fvq() { return H && H.fvQuery ? H.fvQuery("adsb") : ""; }
+  function fvMark(a) { return H && H.fvMark ? H.fvMark(a) : null; }
+  function fvName(x) { return H && H.fvName ? H.fvName(x) : String(x && x.site || "?"); }
+  function remote(a) { return a && a.remote === true; }
 
   function $(id) { return document.getElementById(id); }
   function el(tag, cls, text) {
@@ -47,7 +61,10 @@
   // interference, 7600 radio failure, 7700 emergency), shown, not judged.
   var SPECIAL = { "7500": "unlawful interference", "7600": "radio failure", "7700": "emergency" };
   function emerg(a) { return a.state === "live" && a.emergency && a.emergency !== "none"; }
-  function altOf(a) { return num(a.alt_baro) ? a.alt_baro : num(a.alt_geom) ? a.alt_geom : null; }
+  // A peer's row has one "alt" (its newest, barometric else geometric).
+  function altOf(a) {
+    return num(a.alt_baro) ? a.alt_baro : num(a.alt_geom) ? a.alt_geom : num(a.alt) ? a.alt : null;
+  }
   function altText(a) {
     if (a.on_ground) return "ground";
     var v = altOf(a);
@@ -152,7 +169,7 @@
     { k: "sg", label: "SIGNAL", w: 10, min: 5, type: "num", val: val("rssi") },
     { k: "ms", label: "MSGS", w: 7, min: 4, num: true, type: "num", val: val("messages") },
     { k: "sr", label: "SOURCE", w: 10, min: 4, type: "text", val: function (a) { return a.source_type || ""; } },
-    { k: "st", label: "STATE", w: 5, min: 4, type: "text", val: function (a) { return a.state; } },
+    { k: "st", label: "STATE", w: 5, min: 4, type: "text", val: function (a) { return a.state || ""; } },
     { k: "ag", label: "HEARD", w: 6, min: 3, type: "time", val: val("last_seen") },
     { k: "ak", label: "ALERT", w: 6, min: 5, type: "num", val: function (a) { var al = alertOf(a); return al ? al.sev + 1 : 0; } }
   ];
@@ -181,12 +198,44 @@
   // A row under the columns: bright when it has a position, normal
   // without, dim once gone; an emergency or a reserved squawk in the
   // peak heat colour on its own cells (text colour only, no row tint).
+  // An aircraft only another sloth host heard: grey throughout, the
+  // host's name after the address, what this decoder alone knows "-".
+  function remoteRow(a, now) {
+    var r = el("div", "adsbrow dt-row remote" + (sel === a.hex ? " on" : ""));
+    var hx = cell("c-hx", a.hex);
+    var fm = fvMark(a);
+    if (fm) hx.appendChild(fm);
+    r.appendChild(hx);
+    r.appendChild(cell("c-fl", a.flight || "-"));
+    r.appendChild(cell("c-sq", a.squawk || "-"));
+    r.appendChild(cell("c-ct", a.category || "-"));
+    r.appendChild(cell("c-al n", altText(a)));
+    r.appendChild(cell("c-vs n", "-"));
+    r.appendChild(cell("c-gs n", fx(a.gs, 0)));
+    r.appendChild(cell("c-tk n", fx(a.track, 0)));
+    r.appendChild(cell("c-ps", num(a.lat) ? a.lat.toFixed(3) + ", " + a.lon.toFixed(3) : "-"));
+    r.appendChild(cell("c-rs n", fx(a.rssi, 1)));
+    r.appendChild(cell("c-sg", "-"));
+    r.appendChild(cell("c-ms n", num(a.messages) ? a.messages : "-"));
+    r.appendChild(cell("c-sr", "-"));
+    r.appendChild(cell("c-st", "-"));
+    r.appendChild(cell("c-ag", age(a.last_seen, now)));
+    r.appendChild(cell("c-ak", "-"));
+    r.tabIndex = 0;
+    function pick() { sel = a.hex; remoteDetail(a, now); drawRows(); histLoad(a.hex); }
+    r.addEventListener("click", pick);
+    r.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+    return r;
+  }
   function row(a, now) {
+    if (remote(a)) return remoteRow(a, now);
     var on = sel === a.hex;
     var cls = a.state === "gone" ? "d-dim" : num(a.lat) ? "d-bright" : "d-normal";
     var r = el("div", "adsbrow dt-row " + cls + (on ? " on" : ""));
     r.appendChild(cell("c-hx", a.hex));
     if (window.SlothSubNotes) window.SlothSubNotes.mark(r.firstChild, "aircraft", a.hex);
+    var plus = fvMark(a);
+    if (plus) r.firstChild.appendChild(plus);
     r.appendChild(cell("c-fl" + (emerg(a) ? " h3" : ""), a.flight || "-"));
     r.appendChild(cell("c-sq" + (SPECIAL[a.squawk] || emerg(a) ? " h3" : ""), a.squawk || "-"));
     r.appendChild(cell("c-ct", a.category || "-"));
@@ -218,7 +267,10 @@
     var t = table();
     var ordered = t ? t.sort(rows, true) : rows.slice();
     var body = clear($("adsb-rows"));
-    set("adsb-count", j.live + " live" + (j.total > j.live ? ", " + (j.total - j.live) + " gone" : ""));
+    var nrem = rows.filter(remote).length;
+    set("adsb-count", j.live + " live" + (j.total > j.live ? ", " + (j.total - j.live) + " gone" : "") +
+      (nrem ? ", " + nrem + " heard by other sloth hosts (grey)" +
+              (j.fleet && j.fleet.remote_more ? ", the first " + nrem : "") : ""));
     ordered.forEach(function (a) { body.appendChild(row(a, now)); });
   }
 
@@ -262,6 +314,53 @@
       dd.appendChild(el("span", "d-dim", " ADSB_EMERGENCY, flag only: ADS-B is unauthenticated and sloth cannot verify it"));
       kv.appendChild(dd);
     }
+  }
+  // A peer's aircraft: what its newest row says, under the host that
+  // heard it; each host's own figures follow from /api/adsb/aircraft.
+  function remoteDetail(a, now) {
+    var box = $("adsb-detail");
+    box.hidden = false;
+    set("adsb-detail-name", label(a) + (a.flight ? " (" + a.hex + ")" : "") + ", heard by " +
+      (a.sites || []).map(fvName).join(", "));
+    var kv = clear($("adsb-detail-kv"));
+    // Notes are on what this site heard: none on another host's aircraft.
+    if (window.SlothSubNotes) window.SlothSubNotes.show("adsb", "aircraft", null);
+    [["address", a.hex + (a.non_icao ? " (non-ICAO: TIS-B or similar)" : " (ICAO 24-bit)")],
+     ["heard by", (a.sites || []).map(fvName).join(", ") || fvName(a)],
+     ["callsign", a.flight || "-"],
+     ["squawk", a.squawk ? a.squawk + (SPECIAL[a.squawk] ? " (reserved: " + SPECIAL[a.squawk] + ")" : "") : "-"],
+     ["emergency", a.emergency || "- (not sent)"],
+     ["category", a.category || "-"],
+     ["altitude", a.on_ground ? "on the ground" : num(a.alt) ? a.alt + " ft (that host's newest)" : "-"],
+     ["ground speed", num(a.gs) ? a.gs.toFixed(1) + " kt" : null],
+     ["track", num(a.track) ? a.track.toFixed(1) + " deg true" : null],
+     ["position", num(a.lat) ? a.lat.toFixed(5) + ", " + a.lon.toFixed(5) + (num(a.pos_ts) ? " (" + age(a.pos_ts, now) + " ago)" : "") : "-"],
+     ["RSSI", num(a.rssi) ? a.rssi.toFixed(1) + " dBFS at that host" : null],
+     ["messages", num(a.messages) ? String(a.messages) : null],
+     ["first seen", age(a.first_seen, now) + " ago"],
+     ["last heard", age(a.last_seen, now) + " ago"]
+    ].forEach(function (p) {
+      if (p[1] === null) return;
+      kv.appendChild(el("dt", "", p[0]));
+      kv.appendChild(el("dd", "d-dim", p[1]));
+    });
+  }
+  // What each other sloth host reported of the aircraft (the detail
+  // route's "fleet"), one line a host.
+  function fleetLines(kv, f) {
+    if (!f || !Array.isArray(f.rows) || !f.rows.length) return;
+    kv.appendChild(el("dt", "", f.remote ? "other sloth hosts" : "also heard by"));
+    kv.appendChild(el("dd", "d-dim", f.remote && typeof f.note === "string" ? f.note : ""));
+    f.rows.forEach(function (x) {
+      var t = [x.flight ? "callsign " + x.flight : null, x.squawk ? "squawk " + x.squawk : null,
+               x.on_ground ? "on the ground" : num(x.alt) ? x.alt + " ft" : null,
+               num(x.lat) ? x.lat.toFixed(3) + ", " + x.lon.toFixed(3) : null,
+               num(x.gs) ? x.gs.toFixed(0) + " kt" : null,
+               H && H.stamp ? "first " + H.stamp(x.first_seen) : null,
+               H && H.stamp ? "last " + H.stamp(x.last_seen) : null];
+      kv.appendChild(el("dt", "fv-host", fvName(x)));
+      kv.appendChild(el("dd", "d-dim", t.filter(function (s) { return s !== null; }).join(", ")));
+    });
   }
   function closeDetail() {
     $("adsb-detail").hidden = true;
@@ -337,6 +436,18 @@
       }
     }
     (j.rows || []).forEach(function (a) {
+      // Another host's aircraft: its last position only, grey, no
+      // altitude colour, named by its host; no track.
+      if (remote(a)) {
+        if (!num(a.lat)) return;
+        var rx = X(a.lon), ry = Y(a.lat);
+        g.globalAlpha = 1;
+        g.fillStyle = dim; g.strokeStyle = dim;
+        g.beginPath(); g.arc(rx, ry, sel === a.hex ? 5 : 3, 0, Math.PI * 2); g.stroke();
+        g.textAlign = "left";
+        g.fillText(label(a) + " · " + fvName(a), rx + 7, ry - 6);
+        return;
+      }
       var tp = a.track_pts || [];
       var gone = a.state === "gone", picked = sel === a.hex;
       g.globalAlpha = gone ? 0.35 : 1;
@@ -370,7 +481,8 @@
 
   function load() {
     var my = ++gen;
-    getJSON("/api/adsb").then(function (j) {
+    // This site: fleet=0, the panel's own answer; All sites: the server's default.
+    getJSON("/api/adsb" + fvq().replace(/^&/, "?")).then(function (j) {
       if (my !== gen || !visible()) return;
       if (j.out_of_scope) return;
       last = j;
@@ -380,7 +492,7 @@
       plot(j);
       if (sel) {
         var cur = rows.filter(function (a) { return a.hex === sel; })[0];
-        if (cur) detail(cur, num(j.now) ? j.now : Math.floor(Date.now() / 1000));
+        if (cur) (remote(cur) ? remoteDetail : detail)(cur, num(j.now) ? j.now : Math.floor(Date.now() / 1000));
       }
     }).catch(function (e) {
       if (my !== gen) return;
@@ -426,11 +538,16 @@
     var ordered = t ? t.sort(seenRows, true) : seenRows.slice();
     var body = clear($("adsb-seen-rows"));
     set("adsb-seen-count", j.have === false ? "sloth.db has no adsb_aircraft yet (sloth 12+ with --db and --adsb)" :
-      seenRows.length + (seenMore ? "+" : "") + " in " + (j.days === 1 ? "24 h" : j.days + " days") + (j.q ? " matching " + j.q : ""));
+      seenRows.filter(function (a) { return !remote(a); }).length + (seenMore ? "+" : "") + " in " +
+      (j.days === 1 ? "24 h" : j.days + " days") + (j.q ? " matching " + j.q : "") +
+      (seenRows.some(remote) ? ", " + seenRows.filter(remote).length + " heard only by other sloth hosts (grey)" : ""));
     $("adsb-seen-more").hidden = !seenMore;
     ordered.forEach(function (a) {
+      if (remote(a)) { body.appendChild(seenRemote(a)); return; }
       var r = el("div", "histrow dt-row d-normal" + (histHex === a.hex ? " on" : ""));
       r.appendChild(cell("c-hx", a.hex));
+      var plus = fvMark(a);
+      if (plus) r.firstChild.appendChild(plus);
       r.appendChild(cell("c-fl" + (a.emergency_seen ? " h3" : ""), a.flight || "-"));
       r.appendChild(cell("c-sq" + (SPECIAL[a.squawk] ? " h3" : ""), a.squawk || "-"));
       r.appendChild(cell("c-ct", a.category || "-"));
@@ -447,7 +564,7 @@
       function pick() {
         sel = a.hex;
         var live = (rows || []).filter(function (x) { return x.hex === a.hex; })[0];
-        if (live) detail(live, num(last && last.now) ? last.now : Math.floor(Date.now() / 1000));
+        if (live) (remote(live) ? remoteDetail : detail)(live, num(last && last.now) ? last.now : Math.floor(Date.now() / 1000));
         else histOnly(a);
         drawRows();
         histLoad(a.hex);
@@ -457,6 +574,39 @@
       body.appendChild(r);
     });
   }
+  // An address only another sloth host listed in the window: grey, its
+  // host named; the counts and ranges only sloth.db here holds are "-".
+  function seenRemote(a) {
+    var r = el("div", "histrow dt-row remote" + (histHex === a.hex ? " on" : ""));
+    var hx = cell("c-hx", a.hex);
+    var fm = fvMark(a);
+    if (fm) hx.appendChild(fm);
+    r.appendChild(hx);
+    r.appendChild(cell("c-fl", a.flight || "-"));
+    r.appendChild(cell("c-sq", a.squawk || "-"));
+    r.appendChild(cell("c-ct", a.category || "-"));
+    r.appendChild(cell("c-fs", when(a.first_seen)));
+    r.appendChild(cell("c-ls", when(a.last_seen)));
+    r.appendChild(cell("c-vi n", "-"));
+    r.appendChild(cell("c-si n", "-"));
+    r.appendChild(cell("c-al n", num(a.alt) ? String(a.alt) : "-"));
+    r.appendChild(cell("c-gs n", "-"));
+    r.appendChild(cell("c-rs n", "-"));
+    r.appendChild(cell("c-em", "-"));
+    r.tabIndex = 0;
+    function pick() {
+      sel = a.hex;
+      var live = (rows || []).filter(function (x) { return x.hex === a.hex; })[0];
+      if (live && remote(live)) remoteDetail(live, num(last && last.now) ? last.now : Math.floor(Date.now() / 1000));
+      else if (live) detail(live, num(last && last.now) ? last.now : Math.floor(Date.now() / 1000));
+      else histOnly(a);
+      drawRows();
+      histLoad(a.hex);
+    }
+    r.addEventListener("click", pick);
+    r.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+    return r;
+  }
   function seenDays() { var s = $("adsb-seen-days"); return s ? s.value : "7"; }
   function seenQ() { var q = $("adsb-seen-q"); return q ? q.value.trim() : ""; }
   function loadSeen(more) {
@@ -465,7 +615,7 @@
     var off = more ? seenRows.length : 0, q = seenQ();
     if (q && !/^~?[0-9A-Za-z]{1,8}$/.test(q)) { set("adsb-seen-count", "search: letters and digits only"); return; }
     getJSON("/api/adsb/seen?days=" + encodeURIComponent(seenDays()) + "&limit=" + SEEN_PAGE +
-            "&offset=" + off + (q ? "&q=" + encodeURIComponent(q) : "")).then(function (j) {
+            "&offset=" + off + (q ? "&q=" + encodeURIComponent(q) : "") + fvq()).then(function (j) {
       if (my !== seenGen) return;
       if (j.out_of_scope) return;
       seenLast = j;
@@ -481,7 +631,8 @@
   // inventory row alone.
   function histOnly(a) {
     $("adsb-detail").hidden = false;
-    set("adsb-detail-name", (a.flight || a.hex) + (a.flight ? " (" + a.hex + ")" : "") + ", not listed now");
+    set("adsb-detail-name", (a.flight || a.hex) + (a.flight ? " (" + a.hex + ")" : "") +
+      (remote(a) ? ", heard by " + (a.sites || []).map(fvName).join(", ") : ", not listed now"));
     clear($("adsb-detail-kv"));
   }
   function histLoad(hex) {
@@ -489,12 +640,15 @@
     histPts = [];
     var my = ++histGen;
     set("adsb-hist-note", "loading");
-    getJSON("/api/adsb/aircraft?hex=" + encodeURIComponent(hex) + "&days=" + encodeURIComponent(seenDays())).then(function (j) {
+    getJSON("/api/adsb/aircraft?hex=" + encodeURIComponent(hex) + "&days=" + encodeURIComponent(seenDays()) +
+            fvq()).then(function (j) {
       if (my !== histGen || j.out_of_scope) return;
       histPts = j.sightings || [];
       var a = j.aircraft, kv = clear($("adsb-hist-kv"));
       if (!a) {
-        set("adsb-hist-note", j.have === false ? "sloth.db has no adsb_aircraft yet" : "not in sloth.db yet");
+        set("adsb-hist-note", j.fleet && j.fleet.remote && typeof j.fleet.note === "string"
+          ? "nothing recorded here: " + j.fleet.note
+          : j.have === false ? "sloth.db has no adsb_aircraft yet" : "not in sloth.db yet");
       } else {
         set("adsb-hist-note", histPts.length + " recorded sightings in " + (j.days === 1 ? "24 h" : j.days + " days"));
         [["first seen", when(a.first_seen)],
@@ -519,6 +673,7 @@
         if (Object.keys(calls).length > 1) { kv.appendChild(el("dt", "", "callsigns")); kv.appendChild(el("dd", "", Object.keys(calls).join(", "))); }
         if (Object.keys(sqs).length > 1) { kv.appendChild(el("dt", "", "squawks")); kv.appendChild(el("dd", "", Object.keys(sqs).join(", "))); }
       }
+      fleetLines(kv, j.fleet);
       profile(histPts);
       drawSeen();
       plot(last);
@@ -570,7 +725,7 @@
     if (typeof hex !== "string" || !/^~?[0-9a-f]{6}$/.test(hex)) return;
     sel = hex;
     var cur = rows.filter(function (a) { return a.hex === hex; })[0];
-    if (cur) detail(cur, num(last && last.now) ? last.now : Math.floor(Date.now() / 1000));
+    if (cur) (remote(cur) ? remoteDetail : detail)(cur, num(last && last.now) ? last.now : Math.floor(Date.now() / 1000));
     drawRows();
     histLoad(hex);
     if (last) plot(last);
@@ -601,5 +756,13 @@
   // app.js's helpers, lent once: go() for the alert link.
   function init(h) { H = h; }
 
-  window.SlothAdsb = { init: init, show: show, select: select };
+  // The sites choice changed (app.js): every list asked again.
+  function refresh() {
+    if (!$("v-adsb")) return;
+    load();
+    loadSeen(false);
+    if (histHex) histLoad(histHex);
+  }
+
+  window.SlothAdsb = { init: init, show: show, select: select, refresh: refresh };
 })();
