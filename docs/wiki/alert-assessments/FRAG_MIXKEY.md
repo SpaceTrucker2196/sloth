@@ -1,7 +1,7 @@
 ---
 type: FRAG_MIXKEY
 technique: T1557
-rule_file: src/alerts/rules_twin.c:742 rule_fragattack()
+rule_file: src/alerts/rules_twin.c:794 rule_fragattack()
 count_semantics: per rule evaluation, not per reassembly - fire() bumps evaluations/count on every alerts_update() tick (src/alerts/engine.c:479-480; at most POLL_MS 250 ms apart, include/sloth.h:28, shortened by event wakes, so 4 ticks/s is a floor) while the BSS row's cumulative mixed_key counter is > 0 (src/alerts/rules_twin.c:713); the counter is incremented once per continuation fragment that meets the condition (src/fragattack.c:366-368, retransmissions included) and never decays, so one hit holds the CRIT open for the row's lifetime and count = ticks elapsed. The detail's leading integer counts fragments, not reassemblies.
 severity_assessment: agree, as a receiver-side design flaw with no conforming transmitter behaviour - two encrypted fragments of one MSDU separated by a PTK install the AP told this station to perform cannot have been encrypted under the same key, so CRIT on the first hit is defensible. The caveat is the evidence sloth actually holds: a session keyed on (BSSID, SA, DA, TID) with no sequence number and no age, so the "reassembly" may be a stale fragment 0 and an unrelated continuation either side of an ordinary reconnect.
 false_positive_risk: medium - the generation only moves on a new-ANonce M3, and the paper says most APs never rekey by default, so in practice the counter advances at reconnects; a session left open by a missed last fragment on a hopping radio, followed by the client reassociating and sloth then hearing a continuation whose fragment 0 it missed, is an ordinary sequence that fires this rule. The same event trips FRAG_CACHE, which is the fingerprint.

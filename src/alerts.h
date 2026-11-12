@@ -242,7 +242,33 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
  * the name it means to copy once, at a time the gap did not count
  * (inside the wait after the original was first heard, or while the
  * sensor moved), then fell silent for BEACON_AGE_SECS, is a return when
- * it starts in earnest. */
+ * it starts in earnest.
+ *
+ * ── Two devices that are meant to be there (#188, 2026-11-12) ─
+ *
+ * The sibling test answers "one device or two". Two of the issue's
+ * five non-sibling CRIT pairs were two devices, and benign anyway:
+ *
+ *   - `carrier_ssid`: a carrier's offload or roaming SSID ("Spectrum
+ *     Mobile" from two customers' Spectrum routers). Every subscriber's
+ *     gateway broadcasts it by design, so a second vendor, a second
+ *     firmware and a late arrival are what the next customer's router
+ *     looks like, and they cannot tell it from a copy. Context, not a
+ *     suppressor: TWIN_C_CARRIER_SSID comes off the confidence, which
+ *     leaves every soft combination under TWIN_CRIT_MIN_CONF and inside
+ *     slothweb's 20 % mute, and a hard signal still carries the row to
+ *     CRIT. Exact names only (rules_twin.c), so a home network called
+ *     "XFINITY-Den" is scored like any other.
+ *   - `faint`: a half whose strongest reading in the window is at or
+ *     under TWIN_PROX_FLOOR_DBM, or that the table has heard on fewer
+ *     than `twin.crit_min_beacons` beacons (the issue's ISP pair: -100
+ *     dBm, one or two frames each). Not evidence either way, so it
+ *     moves no weight; it keeps a soft signal from carrying the row to
+ *     CRIT. A copy sloth can barely hear is no threat to the clients
+ *     around sloth, and a fingerprint read off one or two frames at
+ *     the decode margin is not one sloth has been able to read twice.
+ *     0 in a reading (the table's "unseen") is "cannot say" and does
+ *     not count as faint, the convention first_seen follows. */
 #define TWIN_W_DIFF_OUI      20   /* cross-vendor: weak, and forgeable */
 #define TWIN_W_IE_HASH       35   /* vendor-IE fingerprints disagree */
 #define TWIN_W_ATTACKER_OUI  40   /* Hak5 / Espressif OUI present */
@@ -261,6 +287,11 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
                                    * operator-supplied, so not forgeable */
 #define TWIN_C_NBR_CLAIM     30   /* 802.11k neighbour claim — unauthenticated */
 #define TWIN_C_SAME_OUI      15   /* same vendor, or a copied OUI */
+/* Enough to take the strongest soft sum a pair can reach with a
+ * locally administered half or two vendors (35 + 20 = 55) to 20, the
+ * mute line, and no further: the row stays, it is not CRIT. */
+#define TWIN_C_CARRIER_SSID  35   /* a carrier SSID every subscriber's
+                                   * gateway broadcasts (#188) */
 #define TWIN_CONF_MIN         5
 #define TWIN_CONF_MAX        95
 /* The least confidence a soft-signal CRIT may carry (#188). 50 is the
@@ -293,6 +324,19 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
  * hearing the original. The knob's floor is 30 s so it cannot be set
  * under one worst hop pass or into the sibling window. */
 #define TWIN_LATE_ARRIVAL_DEFAULT_S 120
+/* The beacon floor of a soft-signal CRIT: `twin.crit_min_beacons`
+ * (#188). Below the decode margin is TWIN_PROX_FLOOR_DBM's argument;
+ * the count is the other way to be barely heard. An AP in steady
+ * earshot is heard on at least one beacon a pass of the hop list (a
+ * dwell is 100 ms or more and APs beacon every 102.4 ms), so 5 is five
+ * passes, under two minutes at the default list's worst 22 s. A copy
+ * that has stood on the air that long has given far more; the issue's
+ * ISP pair had given one or two. */
+#define TWIN_CRIT_MIN_BEACONS_DEFAULT 5
+/* Floor under which an RSSI reading is "barely heard" (#189, and since
+ * 2026-11-12 the `faint` test above). The reasoning is beside its use
+ * in rule_evil_twin_proximity (src/alerts/rules_twin.c). */
+#define TWIN_PROX_FLOOR_DBM (-92)
 
 typedef struct {
     int diff_oui;
@@ -307,6 +351,8 @@ typedef struct {
                           * candidate: band steering, no weight (#188) */
     int sibling;         /* one device's radios on two bands (#188) */
     int nbr_claim;       /* either side advertises the other (802.11k) */
+    int carrier_ssid;    /* a carrier SSID many gateways share (#188) */
+    int faint;           /* a half barely heard: no soft CRIT (#188) */
     int inv_mismatch;    /* a half is not approved for an inventoried SSID */
     int inv_approved;    /* both halves approved for an inventoried SSID */
     int inv_consulted;   /* an inventory file was loaded at all (#89 slice 3) —

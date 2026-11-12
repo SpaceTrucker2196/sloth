@@ -174,6 +174,50 @@ static int twin_pair_is_sibling(const beacon_ap_t *a, const beacon_ap_t *b) {
     return gap <= TWIN_SIBLING_WINDOW_S;
 }
 
+/* ── Two devices that are meant to be there (#188, 2026-11-12) ─
+ * Why each exists: src/alerts.h. */
+#define TWIN_CRIT_MIN_BEACONS ((int)tune_val(TUNE_TWIN_CRIT_MIN_BEACONS))
+
+static int ascii_ieq(const char *a, const char *b);
+
+/* Carrier offload and roaming SSIDs: every subscriber's gateway
+ * broadcasts the name, so two vendors under it are two customers.
+ * "Spectrum Mobile" is the issue's field pair (two customers'
+ * Spectrum routers); the rest are the carrier rows of
+ * g_open_hotspot_ssids below, the names OPEN_SETUP_AP already treats as
+ * shared by design. Venue hotspots and guest networks are not here: one
+ * operator runs each, which is what a twin of one copies. Exact, case
+ * folded: a per-site suffix makes a name somebody's own network. */
+static const char *const g_carrier_ssids[] = {
+    "Spectrum Mobile",
+    "SpectrumWiFi",
+    "xfinitywifi",
+    "XFINITY",
+    "CableWiFi",
+    "CoxWiFi",
+    "Cox Mobile",
+    "optimumwifi",
+    "attwifi",
+};
+
+static int twin_ssid_is_carrier(const char *ssid) {
+    for (size_t i = 0; i < sizeof(g_carrier_ssids) / sizeof(g_carrier_ssids[0]);
+         i++)
+        if (ascii_ieq(ssid, g_carrier_ssids[i])) return 1;
+    return 0;
+}
+
+/* Heard at the decode margin, or on too few beacons to have been read
+ * twice. The strongest reading in the RSSI window, or the newest when
+ * the window has aged out; 0 in either is "unseen" and so is a
+ * frame_count of 0, which only a hand-built entry has (the table
+ * starts every entry at 1). */
+static int twin_ap_faint(const beacon_ap_t *ap) {
+    int peak = ap->rssi_max_60s ? ap->rssi_max_60s : ap->signal_dbm;
+    if (peak && peak <= TWIN_PROX_FLOOR_DBM) return 1;
+    return ap->frame_count > 0 && ap->frame_count < TWIN_CRIT_MIN_BEACONS;
+}
+
 /* ── The copy arrives after the original (#188, ruling 3b) ────
  * The conditions and why each exists: src/alerts.h. */
 #define TWIN_LATE_ARRIVAL_S ((time_t)tune_val(TUNE_TWIN_LATE_ARRIVAL_S))
@@ -441,6 +485,11 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
 
     if (ev.nbr_claim) ev.context += TWIN_C_NBR_CLAIM;
     if (ev.same_oui)  ev.context += TWIN_C_SAME_OUI;
+    /* Below the sibling return, like everything observed: one device's
+     * radios are no pair to explain. Both halves carry the one SSID. */
+    ev.carrier_ssid = twin_ssid_is_carrier(a->ssid);
+    if (ev.carrier_ssid) ev.context += TWIN_C_CARRIER_SSID;
+    ev.faint = twin_ap_faint(a) || twin_ap_faint(b);
 
     ev.confidence = clamp_conf(ev.positive - ev.context);
     if (out) *out = ev;
@@ -461,16 +510,19 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
 }
 
 /* One short, bounded phrase per context signal. ALERT_DETAIL_LEN is 320
- * and the longest EVIL_TWIN detail is 264 (the late-arrival and
+ * and the longest EVIL_TWIN detail is 285 (the late-arrival and
  * same-OUI phrases cannot both appear;
  * test_twin_detail_fits_with_every_phrase). The BTM
  * steer is not here: it gets its own note naming the steering AP, which
- * is the actionable half. */
+ * is the actionable half. The longest note is 84. */
+#define TWIN_NOTE_LEN 112
 static void twin_evidence_note(char *out, size_t n, const twin_evidence_t *ev) {
-    snprintf(out, n, "%s%s%s%s",
+    snprintf(out, n, "%s%s%s%s%s%s",
              ev->inv_mismatch ? " +not in inventory"           : "",
              ev->late_arrival ? " +late-arrival"               : "",
              ev->same_oui     ? " +same-vendor-OUI"            : "",
+             ev->carrier_ssid ? " +carrier SSID"               : "",
+             ev->faint        ? " +faint"                      : "",
              ev->nbr_claim    ? " +802.11k claim (unverified)" : "");
 }
 
@@ -1596,7 +1648,7 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
                 twin_evidence_score(s, a, b, now, &ev);
                 int conf = clamp_conf(TWIN_W_WEAK_CLONE + ev.positive -
                                       ev.context);
-                char note[80];
+                char note[TWIN_NOTE_LEN];
                 twin_evidence_note(note, sizeof(note), &ev);
 
                 /* Both radios declared by the operator (#89 slice 2).
@@ -1745,14 +1797,20 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
              * the bar with one cross-device signal beside it: a
              * different globally administered OUI, or the copy having
              * arrived after the original (+late-arrival), which is the
-             * only one a locally administered address can show. */
+             * only one a locally administered address can show.
+             *
+             * And both halves have to have been heard in earnest
+             * (`faint`, 2026-11-12): the issue's last benign CRIT was
+             * two vendors at -100 dBm, one or two beacons each. A
+             * carrier SSID needs no test here; its context deduction
+             * already leaves every soft sum under the bar. */
             if (!ev.hard && sev > ALERT_SEV_WARN &&
-                ev.confidence < TWIN_CRIT_MIN_CONF)
+                (ev.confidence < TWIN_CRIT_MIN_CONF || ev.faint))
                 sev = ALERT_SEV_WARN;
 
             char key[ALERT_KEY_LEN];
             char detail[ALERT_DETAIL_LEN];
-            char note[80];
+            char note[TWIN_NOTE_LEN];
             /* Canonical pair key (#89). `twin-fp` stays the rule id so
              * the CRIT `twin` key for the same pair still coexists, but
              * the identity is now the ordered BSSID pair rather than the
@@ -1922,9 +1980,15 @@ void rule_ssid_confusion(const sloth_state_t *s, time_t now) {
  * to hold before it is reported.
  *
  *   1. The BSSID has a twin candidate, by the definition rule_evil_twin
- *      itself uses (twin_pair_is_candidate). Either half qualifies: an
- *      unattributed pair has no accused half to prefer, and the
- *      original getting louder beside a copy is still worth a row.
+ *      itself uses (twin_pair_is_candidate), and is not the half that
+ *      pair clears. When the attribution ladder (twin_choose_sides: the
+ *      inventory, --my-bssid, a chain taint, an attacker-tool OUI) has
+ *      named an impostor, only the impostor qualifies (2026-11-12, the
+ *      issue's "preferably the accused half"): the operator's own AP
+ *      getting louder is a client walking past it, and a row naming it
+ *      would point at the wrong radio. An unattributed pair has no
+ *      accused half, so either qualifies there, which is also what the
+ *      ident export calls TWIN_UNATTRIBUTED (#192).
  *   2. The low end of the swing is above TWIN_PROX_FLOOR_DBM.
  *   3. The sensor has not itself moved during the window. */
 #define EVIL_TWIN_PROXIMITY_DBM ((int)tune_val(TUNE_EVIL_TWIN_PROXIMITY_DBM))
@@ -1937,8 +2001,8 @@ void rule_ssid_confusion(const sloth_state_t *s, time_t now) {
  * by fading, and "min" is the weakest one that happened to get through
  * rather than a level the AP sat at. -92 is the issue's figure and it
  * is where that margin runs out. A window whose minimum is at or under
- * it is "barely heard", not "came closer". */
-#define TWIN_PROX_FLOOR_DBM (-92)
+ * it is "barely heard", not "came closer". TWIN_PROX_FLOOR_DBM itself
+ * is in src/alerts.h since 2026-11-12: the scorer's `faint` reads it. */
 
 /* Sensor speed, in m/s, from which every AP's RSSI is expected to
  * swing. Twice the 0.5 m/s under which src/gps.c's own speed band calls
@@ -1990,11 +2054,19 @@ static int twin_pair_is_candidate(const sloth_state_t *s, const beacon_ap_t *a,
     return twin_evidence_score(s, a, b, now, NULL);
 }
 
+/* Half `i` of some candidate pair that the ladder did not clear. A
+ * real half of one pair can still be the unattributed half of another,
+ * so every pair is asked, not the first. */
 static int twin_has_candidate(const sloth_state_t *s, int i, time_t now) {
-    for (int j = 0; j < s->beacon_count; j++)
-        if (j != i && twin_pair_is_candidate(s, &s->beacon_aps[i],
-                                             &s->beacon_aps[j], now))
-            return 1;
+    const beacon_ap_t *a = &s->beacon_aps[i];
+    for (int j = 0; j < s->beacon_count; j++) {
+        if (j == i) continue;
+        const beacon_ap_t *b = &s->beacon_aps[j];
+        if (!twin_pair_is_candidate(s, a, b, now)) continue;
+        const beacon_ap_t *real = NULL, *twin = NULL;
+        if (twin_choose_sides(a, b, &real, &twin) && twin != a) continue;
+        return 1;
+    }
     return 0;
 }
 

@@ -1,7 +1,7 @@
 ---
 type: CAPTIVE_PORTAL
 technique: T1557
-rule_file: src/alerts/rules_twin.c:675 rule_captive_portal() (kit path cp_fire_kit() at :592)
+rule_file: src/alerts/rules_twin.c:727 rule_captive_portal() (kit path cp_fire_kit() at :708)
 count_semantics: per tick per in-window event - rule_captive_portal() calls fire() once for every ring event younger than 600 s, and probe events are not deduplicated at record time (cp_record_ex() appends a slot per interception; only kit events refresh one slot per kit+server+client, src/captive_portal.c:369-406), so a key with N in-window events gains N increments per alerts_update() pass (default poll 250 ms); fire() bumps evaluations/count on each call for the open key (engine.c:478-479). Neither per tick nor per probe: the count is ticks x live events sharing the key. Each tick the key's severity and detail end up as those of the last event processed - the oldest in-window one, since cp_snapshot() copies newest-first (captive_portal.c:408-418) - and fire() overwrites `sev` rather than keeping the maximum.
 severity_assessment: agree - the #169 grading is the right fix. A wrong connectivity-check answer alone is LOW (hotels and guest Wi-Fi do exactly this), CRIT only on a --my-ssid/--my-bssid network, from a live evil-twin BSS, or when the client was served a named kit page; DNS_UNEXPECTED sits one grade lower throughout. Kit pages are always CRIT, which is right.
 false_positive_risk: high for the LOW tier, low for the CRIT tier - the base finding ("the probe answer was wrong") fires on every legitimate captive portal, which is why it is LOW and the detail says so; the CRIT contexts (own network, evil twin, kit page) are what carry real confidence.
