@@ -5,7 +5,8 @@
  * page's half, web/ui/radar.js, pinned by whole functions as #171 V1's
  * review asked: the projection, the painters, the kept camera, the
  * scope and estimate sentences, the nav's place, the three select()
- * hooks the dome's panel calls.
+ * hooks the dome's panel calls, the fleet areas (test_radar_fleet_js,
+ * its own absence assertions named there).
  *
  * Absence assertions, each seen red under a named mutation and
  * restored: the Local out_of_scope answer with route_radar()'s
@@ -449,6 +450,7 @@ static void test_radar_page(void) {
         "radar-head", "radar-note", "radar-cam", "radar-reset", "radar-north", "radar-top",
         "radar-zin", "radar-zout", "radar-side", "radar-side-name", "radar-side-kv",
         "radar-side-list", "radar-open", "radar-side-close", "radar-cap", "radar-full",
+        "radar-fleet",
     };
     for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
         char want[64];
@@ -527,7 +529,7 @@ static void test_radar_page(void) {
             WT_LACKS(view, "<textarea");
             WT_LACKS(view, "aria-pressed");
             WT_LACKS(view, "aria-checked");
-            WT_EQ(count(view, "<button type=\"button\" id=\"radar-"), 8);   /* + full screen */
+            WT_EQ(count(view, "<button type=\"button\" id=\"radar-"), 9);   /* + full screen, fleet areas */
             WT_EQ(count(view, "<canvas"), 1);
             free(view);
         }
@@ -739,6 +741,9 @@ static void test_radar_scope_and_caption(void) {
     WT_HAS(p, "    if (local) {\n"
               "      S.adsb = S.aprs = S.radar = S.atrk = null;\n"
               "      S.radarAt = S.atrkAt = 0;\n"
+              "      S.fleet = null;\n"
+              "      S.fleetAt = 0;\n"
+              "      fleetBtn();\n"
               "      after();\n"
               "      return;\n"
               "    }");
@@ -755,7 +760,7 @@ static void test_radar_scope_and_caption(void) {
         WT_EQ(count(mod, "H.getJSON(\"/api/gnss/tracks?hours=\" + TRAIL_H)"), 1);
         WT_EQ(count(mod, "H.getJSON(\"/api/aprs?call=\" + encodeURIComponent(call))"), 1);
         WT_EQ(count(mod, "H.getJSON(\"/api/aprs/tracks?hours=\" + ATRK_H)"), 1);
-        WT_EQ(count(mod, "H.getJSON("), 7);
+        WT_EQ(count(mod, "H.getJSON("), 8);
         WT_HAS(mod, "  var POLL_MS = 5000, RADAR_MS = 10000, TRAIL_MS = 60000, TRAIL_H = 6;");
         free(mod);
     }
@@ -963,7 +968,7 @@ static void test_radar_devices_js(void) {
               "    g.arc(x, y, s, 0, Math.PI * 2);\n"
               "    g.fill();\n"
               "  }");
-    WT_HAS(p, "    var shown = { ble: 0, wifi: 0 };\n"
+    WT_HAS(p, "    var shown = { ble: 0, wifi: 0 }, fhot = hotAddrs(true);\n"
               "    [[\"wifi\", \"R\"], [\"ble\", \"L\"]].forEach(function (fam) {\n"
               "      var list = (S.radar && S.radar.devs && S.radar.devs[fam[0]]) || [];\n"
               "      list.forEach(function (dv, idx) {\n"
@@ -985,6 +990,7 @@ static void test_radar_devices_js(void) {
               "        g.fillStyle = col;\n"
               "        if (ble) dot(g, p.x, p.y, 3 * dpr); else square(g, p.x, p.y, 3 * dpr);\n"
               "        g.globalAlpha = 1;\n"
+              "        if (fhot.indexOf(String(ble ? dv.addr : dv.mac).toLowerCase()) >= 0) { g.strokeStyle = T.ink; ring(g, p.x, p.y, 6 * dpr); }\n"
               "        S.marks.push({ x: p.x, y: p.y, kind: fam[0], key: key, ref: dv });\n"
               "        if (idx < LABEL_N || on || hov)\n"
               "          want.push({ x: p.x, y: p.y, col: fam[1], text: devLabel(fam[0], dv), pri: on || hov ? PRI.sel : PRI.dev,\n"
@@ -1019,7 +1025,7 @@ static void test_radar_devices_js(void) {
     WT_HAS(p, "      if (!dr) {\n"
               "        // Hover: a device dot under the pointer shows its label.\n"
               "        var pt = canvasPoint(ev, cv), pk = pickAt(pt[0], pt[1]);\n"
-              "        var hv = pk && (pk.kind === \"ble\" || pk.kind === \"wifi\") ? pk : null;\n"
+              "        var hv = pk && (pk.kind === \"ble\" || pk.kind === \"wifi\" || pk.kind === \"fleet\") ? pk : null;\n"
               "        var was = S.hover ? S.hover.kind + \"|\" + S.hover.key : \"\", now = hv ? hv.kind + \"|\" + hv.key : \"\";\n"
               "        if (was !== now) { S.hover = hv; dirty(); }\n"
               "        return;\n"
@@ -1037,6 +1043,290 @@ static void test_radar_devices_js(void) {
         WT_LACKS(mod, "function labels(");
         free(mod);
     }
+}
+
+/* The fleet areas (owner request 2026-11-11: "when multiple sloths exist
+ * on the network use that for better location in the radar view. just
+ * make light transparent overlays for best guesses of the area the
+ * signal may be coming from"), whole: /api/fleet/locate's three kinds
+ * every 30 s; each located row as the area its figures give (a
+ * least-squares fix's disc, else where every site's one-sigma band
+ * overlaps, else the nearer site's side within its band, else nothing),
+ * every shape in metres from the sensor through place() and project();
+ * one translucent --data fill a clip, the alpha shared out over the
+ * areas so overlaps read darker; drawn before every mark; the toggle
+ * kept only when off and hidden without a peer; the link between an
+ * area and its device dot; picked after marks and rings; the panel.
+ *
+ * What the pins do not prove: the geometry was run, not just read, with
+ * a stub canvas against the live answers of 2026-11-11 (W9FJC and
+ * beta-site 10.5 m apart: 133 of 141 rows drawn, 55 as overlapping
+ * bands, 78 as a side, 8 with none; every projected point finite, every
+ * alpha in 0..1; no area with the peers taken out of the answers).
+ *
+ * Absence assertions, each seen red under a named mutation and
+ * restored: the Local block with a loadFleet() call added inside it (a
+ * Local dome fetched the passive radios' fleet); drawFleet() before the
+ * marks with its call moved after the device block (the order); the
+ * toggle's one prefSet with a second `H.prefSet("radar.fleet", true)`
+ * added to init(). */
+static void test_radar_fleet_js(void) {
+    const char *p = (const char *)web_page;
+    WT_HAS(p, "  function gpt(e, n) {\n"
+              "    return place(Math.atan2(e, n) * 180 / Math.PI, 0, Math.sqrt(e * e + n * n));\n"
+              "  ");
+    WT_HAS(p, "  function enu(c, lat, lon) {\n"
+              "    var g = geo(c.lat, c.lon, lat, lon), a = g.az * Math.PI / 180;\n"
+              "    return { e: g.range * Math.sin(a), n: g.range * Math.cos(a) };\n"
+              "  ");
+    WT_HAS(p, "  function bandsMeet(lo1, hi1, lo2, hi2, b) {\n"
+              "    return hi1 + hi2 >= b && lo1 - hi2 <= b && lo2 - hi1 <= b;\n"
+              "  ");
+    WT_HAS(p, "  function fleetAreas(ans, c, n) {\n"
+              "    var out = [];\n"
+              "    (ans || []).forEach(function (j) {\n"
+              "      if (!j || !Array.isArray(j.sites) || !Array.isArray(j.rows)) return;\n"
+              "      var at = Object.create(null);\n"
+              "      j.sites.forEach(function (s) {\n"
+              "        if (s && typeof s.site === \"string\" && num(s.lat) && num(s.lon)) at[s.site] = enu(c, s.lat, s.lon);\n"
+              "      });\n"
+              "      j.rows.forEach(function (r) {\n"
+              "        if (!r || typeof r.key !== \"string\" || !Array.isArray(r.sites)) return;\n"
+              "        var ss = r.sites.filter(function (s) { return s && at[s.site] && num(s.lo_m) && num(s.hi_m) && s.hi_m > 0; });\n"
+              "        if (ss.length < 2) { n.none++; return; }\n"
+              "        var a = { id: j.kind + \"|\" + r.key, kind: j.kind, key: r.key, row: r, form: \"\", shapes: [], half: null, anchor: null };\n"
+              "        var cd = (Array.isArray(r.candidates) ? r.candidates : []).filter(function (q) {\n"
+              "          return q && num(q.lat) && num(q.lon) && num(q.radius_m) && q.radius_m > 0;\n"
+              "        });\n"
+              "        var meet = true, i, k;\n"
+              "        for (i = 0; i < ss.length; i++)\n"
+              "          for (k = 0; k < i; k++) {\n"
+              "            var A = at[ss[i].site], B = at[ss[k].site];\n"
+              "            if (!bandsMeet(ss[i].lo_m, ss[i].hi_m, ss[k].lo_m, ss[k].hi_m, Math.sqrt((A.e - B.e) * (A.e - B.e) + (A.n - B.n) * (A.n - B.n)))) meet = false;\n"
+              "          }\n"
+              "        if (r.method === \"least_squares\" && cd.length) {\n"
+              "          var p = enu(c, cd[0].lat, cd[0].lon);\n"
+              "          a.form = \"fix\";\n"
+              "          a.shapes.push({ e: p.e, n: p.n, lo: 0, hi: cd[0].radius_m });\n"
+              "          a.anchor = p;\n"
+              "        } else if (meet) {\n"
+              "          a.form = \"bands\";\n"
+              "          ss.forEach(function (s) { var q = at[s.site]; a.shapes.push({ e: q.e, n: q.n, lo: s.lo_m, hi: s.hi_m }); });\n"
+              "          // Along the first two sites' line at the ratio of their ranges:\n"
+              "          // inside the lens where the bands overlap on it.\n"
+              "          var s0 = a.shapes[0], s1 = a.shapes[1], r0 = (s0.lo + s0.hi) / 2, r1 = (s1.lo + s1.hi) / 2;\n"
+              "          var t = r0 / Math.max(1e-9, r0 + r1);\n"
+              "          a.anchor = cd.length ? enu(c, cd[0].lat, cd[0].lon) : { e: s0.e + (s1.e - s0.e) * t, n: s0.n + (s1.n - s0.n) * t };\n"
+              "        } else {\n"
+              "          var nr = r.nearest, NA = nr && at[nr.site], NB = nr && at[nr.than];\n"
+              "          var mine = ss.filter(function (s) { return nr && s.site === nr.site; })[0];\n"
+              "          if (!NA || !NB || !mine || nr.within_band !== false || nr.site === nr.than) { n.none++; return; }\n"
+              "          var dx = NA.e - NB.e, dy = NA.n - NB.n, dl = Math.sqrt(dx * dx + dy * dy) || 1;\n"
+              "          a.form = \"side\";\n"
+              "          a.shapes.push({ e: NA.e, n: NA.n, lo: 0, hi: mine.hi_m });\n"
+              "          a.half = { ae: NA.e, an: NA.n, be: NB.e, bn: NB.n };\n"
+              "          a.anchor = { e: NA.e + dx / dl * mine.hi_m / 2, n: NA.n + dy / dl * mine.hi_m / 2 };\n"
+              "        }\n"
+              "        n[a.form]++;\n"
+              "        out.push(a);\n"
+              "      });\n"
+              "    });\n"
+              "    return out;\n"
+              "  ");
+    WT_HAS(p, "  function circleTo(path, cam, e, n, r) {\n"
+              "    for (var i = 0; i <= FLEET_SEG; i++) {\n"
+              "      var t = 2 * Math.PI * i / FLEET_SEG, q = project(gpt(e + r * Math.sin(t), n + r * Math.cos(t)), cam);\n"
+              "      if (i) path.lineTo(q.x, q.y); else path.moveTo(q.x, q.y);\n"
+              "    }\n"
+              "    path.closePath();\n"
+              "  ");
+    WT_HAS(p, "  function halfTo(path, cam, h, L) {\n"
+              "    var dx = h.ae - h.be, dy = h.an - h.bn, b = Math.sqrt(dx * dx + dy * dy) || 1, ux = dx / b, uy = dy / b;\n"
+              "    var mx = (h.ae + h.be) / 2, my = (h.an + h.bn) / 2;\n"
+              "    var cs = [[mx - uy * L, my + ux * L], [mx - uy * L + ux * L, my + ux * L + uy * L],\n"
+              "              [mx + uy * L + ux * L, my - ux * L + uy * L], [mx + uy * L, my - ux * L]];\n"
+              "    for (var k = 0; k < 4; k++) {\n"
+              "      var p0 = cs[k], p1 = cs[(k + 1) % 4];\n"
+              "      for (var i = 0; i < FLEET_SEG; i++) {\n"
+              "        var f = i / FLEET_SEG, q = project(gpt(p0[0] + (p1[0] - p0[0]) * f, p0[1] + (p1[1] - p0[1]) * f), cam);\n"
+              "        if (k || i) path.lineTo(q.x, q.y); else path.moveTo(q.x, q.y);\n"
+              "      }\n"
+              "    }\n"
+              "    path.closePath();\n"
+              "  ");
+    WT_HAS(p, "  function areaPaths(a, cam) {\n"
+              "    var ps = a.shapes.map(function (s) {\n"
+              "      var p = new Path2D();\n"
+              "      circleTo(p, cam, s.e, s.n, s.hi);\n"
+              "      if (s.lo > 0) circleTo(p, cam, s.e, s.n, s.lo);\n"
+              "      return p;\n"
+              "    });\n"
+              "    if (a.half) {\n"
+              "      var h = new Path2D();\n"
+              "      halfTo(h, cam, a.half, 2 * a.shapes[0].hi + 10);\n"
+              "      ps.push(h);\n"
+              "    }\n"
+              "    return ps;\n"
+              "  ");
+    WT_HAS(p, "  function areaHit(a, g, x, y) {\n"
+              "    if (!a.paths || !a.paths.length) return false;\n"
+              "    for (var i = 0; i < a.paths.length; i++) if (!g.isPointInPath(a.paths[i], x, y, \"evenodd\")) return false;\n"
+              "    return true;\n"
+              "  ");
+    WT_HAS(p, "  function hotAddrs(fleet) {\n"
+              "    var out = [];\n"
+              "    [S.hover, S.sel].forEach(function (s) {\n"
+              "      if (!s) return;\n"
+              "      if (fleet && s.kind === \"fleet\") out.push(s.key.slice(s.key.indexOf(\"|\") + 1).toLowerCase());\n"
+              "      if (!fleet && (s.kind === \"wifi\" || s.kind === \"ble\")) out.push(String(s.key).split(\"/\")[0].toLowerCase());\n"
+              "    });\n"
+              "    return out;\n"
+              "  ");
+    WT_HAS(p, "  function siteWord(n) { return n === \"self\" ? \"this site\" : String(n); }");
+    WT_HAS(p, "  function areaLabel(a) {\n"
+              "    var r = a.row, id = r.label || r.key;\n"
+              "    id = id.length > 17 ? id.slice(0, 16) + \"\\u2026\" : id;\n"
+              "    return id + \" \\u00b7 \" + (a.form === \"fix\" ? \"fix \\u00b1\" + metres(a.shapes[0].hi)\n"
+              "                             : a.form === \"bands\" ? \"bands of \" + a.shapes.length + \" sites\"\n"
+              "                             : \"nearer \" + siteWord(r.nearest.site)) +\n"
+              "           (num(r.band_m) ? \", band \\u00b1\" + metres(r.band_m) : \"\") + (r.coarse ? \", coarse\" : \"\");\n"
+              "  ");
+    WT_HAS(p, "  function fleetPeers() {\n"
+              "    return !!S.fleet && S.fleet.some(function (j) {\n"
+              "      return !!j && Array.isArray(j.sites) && j.sites.some(function (s) { return s && s.site !== \"self\"; });\n"
+              "    });\n"
+              "  ");
+    WT_HAS(p, "  function fleetBtn() {\n"
+              "    var b = $(\"radar-fleet\");\n"
+              "    if (!b) return;\n"
+              "    b.hidden = !fleetPeers();\n"
+              "    b.textContent = S.fleetOn ? \"fleet areas on\" : \"fleet areas off\";\n"
+              "  ");
+    WT_HAS(p, "  function drawFleet(g, cam, c, T, W, Hh, dpr, want, placed) {\n"
+              "    S.areas = [];\n"
+              "    var n = { fix: 0, bands: 0, side: 0, none: 0 };\n"
+              "    placed.fleet = n;\n"
+              "    if (!S.fleetOn || !c || !fleetPeers()) return;\n"
+              "    var areas = fleetAreas(S.fleet, c, n), al = Math.min(FLEET_A_MAX, FLEET_A_SUM / Math.max(1, areas.length));\n"
+              "    var dhot = hotAddrs(false);\n"
+              "    areas.forEach(function (a) {\n"
+              "      var ps = areaPaths(a, cam), on = isSel(\"fleet\", a.id);\n"
+              "      var hov = !!S.hover && S.hover.kind === \"fleet\" && S.hover.key === a.id;\n"
+              "      var lk = dhot.indexOf(a.key.toLowerCase()) >= 0;\n"
+              "      a.paths = ps;\n"
+              "      g.save();\n"
+              "      ps.forEach(function (p) { g.clip(p, \"evenodd\"); });\n"
+              "      g.globalAlpha = (a.form === \"side\" ? FLEET_WASH : 1) * (on || hov || lk ? Math.max(0.2, al) : al);\n"
+              "      g.fillStyle = on ? T.signal : T.data;\n"
+              "      g.fillRect(0, 0, W, Hh);\n"
+              "      g.restore();\n"
+              "      if (on || hov || lk) {\n"
+              "        g.globalAlpha = 0.6;\n"
+              "        g.strokeStyle = on ? T.signal : T.ink;\n"
+              "        g.lineWidth = dpr;\n"
+              "        ps.forEach(function (p) { g.stroke(p); });\n"
+              "        g.globalAlpha = 1;\n"
+              "        var q = project(gpt(a.anchor.e, a.anchor.n), cam);\n"
+              "        want.push({ x: q.x, y: q.y, text: areaLabel(a), pri: PRI.sel, color: on ? T.signal : T.ink, alpha: 1 });\n"
+              "      }\n"
+              "      S.areas.push(a);\n"
+              "    });\n"
+              "    var seen = Object.create(null);\n"
+              "    g.strokeStyle = T.muted;\n"
+              "    g.lineWidth = dpr;\n"
+              "    S.fleet.forEach(function (j) {\n"
+              "      ((j && j.sites) || []).forEach(function (s) {\n"
+              "        if (!s || s.site === \"self\" || seen[s.site] || !num(s.lat) || !num(s.lon)) return;\n"
+              "        seen[s.site] = 1;\n"
+              "        var q = enu(c, s.lat, s.lon), p = project(gpt(q.e, q.n), cam);\n"
+              "        g.strokeRect(p.x - 3 * dpr, p.y - 3 * dpr, 6 * dpr, 6 * dpr);\n"
+              "        want.push({ x: p.x, y: p.y, text: s.site, pri: PRI.aprs, color: T.muted, alpha: 1 });\n"
+              "      });\n"
+              "    });\n"
+              "  ");
+    WT_HAS(p, "  function loadFleet() {\n"
+              "    S.fleetAt = Date.now();\n"
+              "    S.fleetErr = \"\";\n"
+              "    var fg = ++S.fgen;\n"
+              "    Promise.all(FLEET_KINDS.map(function (k) {\n"
+              "      return H.getJSON(\"/api/fleet/locate?kind=\" + k + \"&limit=\" + FLEET_LIMIT).catch(function (e) {\n"
+              "        if (fg === S.fgen) S.fleetErr = msg(e);\n"
+              "        return null;\n"
+              "      });\n"
+              "    })).then(function (all) {\n"
+              "      if (fg !== S.fgen) return;\n"
+              "      S.fleet = all;\n"
+              "      fleetBtn();\n"
+              "      after();\n"
+              "    });\n"
+              "  ");
+    WT_HAS(p, "  var FLEET_KINDS = [\"wifi\", \"ap\", \"ble\"], FLEET_MS = 30000, FLEET_LIMIT = 100, FLEET_SEG = 72;\n"
+              "  var FLEET_A_MAX = 0.08, FLEET_A_SUM = 1, FLEET_WASH = 0.5;");
+    WT_HAS(p, "    if (s.kind === \"fleet\") return S.areas.filter(function (a) { return a.id === s.key; })[0] || null;");
+    WT_HAS(p, "    if (best) return best;\n"
+              "    // A fleet area last, the one drawn on top first: it is wide.\n"
+              "    var g = $(\"radar-dome\").getContext(\"2d\");\n"
+              "    for (i = S.areas.length - 1; g && i >= 0; i--) if (areaHit(S.areas[i], g, px, py)) return { kind: \"fleet\", key: S.areas[i].id };\n"
+              "    return null;");
+    WT_HAS(p, "    if (local) {\n"
+              "      S.adsb = S.aprs = S.radar = S.atrk = null;\n"
+              "      S.radarAt = S.atrkAt = 0;\n"
+              "      S.fleet = null;\n"
+              "      S.fleetAt = 0;\n"
+              "      fleetBtn();\n"
+              "      after();\n"
+              "      return;\n"
+              "    }\n"
+              "    if (Date.now() - S.fleetAt > FLEET_MS) loadFleet();");
+    WT_HAS(p, "    S.fleetOn = H.prefGet(\"radar.fleet\") !== false;");
+    WT_HAS(p, "    $(\"radar-fleet\").addEventListener(\"click\", function () {\n"
+              "      S.fleetOn = !S.fleetOn;\n"
+              "      H.prefSet(\"radar.fleet\", S.fleetOn ? null : false);\n"
+              "      if (!S.fleetOn && S.sel && S.sel.kind === \"fleet\") select(null);\n"
+              "      fleetBtn();\n"
+              "      dirty();\n"
+              "    });\n"
+              "    fleetBtn();");
+    WT_HAS(p, "    else if (s.kind === \"fleet\") H.show(\"fleet\");");
+    WT_HAS(p, "        [\"area drawn\", ref.form === \"fix\" ? \"the least-squares fix, \\u00b1\" + metres(ref.shapes[0].hi)\n"
+              "                       : ref.form === \"bands\" ? \"where every site's one-sigma band overlaps\"\n"
+              "                       : \"the nearer site's side, within its band\"],");
+    WT_HAS(p, "        [\"placement\", \"range from signal strength at each sloth (ITU-R P.1238, power assumed): where it may be, not where it is\"]]));");
+    WT_HAS(p, "                     \" with no side; each where it may be, not where it is\");");
+    char *mod = module(p);
+    WT_ASSERT(mod != NULL);
+    if (mod) {
+        /* Under Local nothing of the fleet is fetched: the passive
+         * radios' rows are not Local's. */
+        const char *lb = strstr(mod, "    if (local) {\n"), *le = lb ? strstr(lb, "\n    }\n") : NULL;
+        WT_ASSERT(lb && le);
+        if (lb && le) {
+            char *blk = malloc((size_t)(le - lb) + 1);
+            WT_ASSERT(blk != NULL);
+            if (blk) {
+                memcpy(blk, lb, (size_t)(le - lb));
+                blk[le - lb] = '\0';
+                WT_LACKS(blk, "loadFleet(");
+                free(blk);
+            }
+        }
+        /* Under every mark: after the dome's meridians, before the band
+         * rings, the devices, the satellites, aircraft and APRS. */
+        const char *df = strstr(mod, "    drawFleet(g, cam, c, T, W, Hh, dpr, want, placed);\n");
+        const char *mer = strstr(mod, "      polyline(g, mer);\n");
+        const char *rings = strstr(mod, "    [[\"wifi\", \"Wi-Fi \"], [\"ble\", \"BLE \"]].forEach(function (fam) {");
+        const char *devs = strstr(mod, "    var shown = { ble: 0, wifi: 0 }, fhot = hotAddrs(true);");
+        WT_ASSERT(df && mer && rings && devs && mer < df && df < rings && rings < devs);
+        WT_EQ(count(mod, "drawFleet("), 2);
+        /* The one kept setting, written only to clear or to say off. */
+        WT_EQ(count(mod, "prefSet(\"radar.fleet\""), 1);
+        WT_EQ(count(mod, "H.getJSON(\"/api/fleet/locate?kind=\" + k + \"&limit=\" + FLEET_LIMIT)"), 1);
+        /* The device dot's half of the link. */
+        WT_HAS(mod, "        if (fhot.indexOf(String(ble ? dv.addr : dv.mac).toLowerCase()) >= 0) { g.strokeStyle = T.ink; ring(g, p.x, p.y, 6 * dpr); }\n");
+        free(mod);
+    }
+    /* The toggle, hidden until a peer is in an answer. */
+    WT_HAS(p, "          <button type=\"button\" id=\"radar-fleet\" hidden>fleet areas on</button>\n");
 }
 
 /* The APRS window and trails (owner request 2026-11-06: "a setting that
@@ -1271,6 +1561,7 @@ void run_radar_tests(void) {
     WT_RUN(test_radar_projection_js);
     WT_RUN(test_radar_devices_js);
     WT_RUN(test_radar_aprs_js);
+    WT_RUN(test_radar_fleet_js);
     WT_RUN(test_radar_marks_are_shapes);
     WT_RUN(test_radar_prefs);
     WT_RUN(test_radar_scope_and_caption);

@@ -1186,6 +1186,40 @@ screen length `6 + 14·log10(1 + kt/10)` px, at most 30, in the mark's
 colour; the ▲ points the same way, and the label adds `250 kt 090°`.
 A speed of 0 or none draws no tick.
 
+**Fleet areas** (owner request 2026-11-11: "when multiple sloths exist
+on the network use that for better location in the radar view. just
+make light transparent overlays for best guesses of the area the signal
+may be coming from"). With a `--peer`, the module reads
+`/api/fleet/locate` for `wifi`, `ap` and `ble` every 30 s (100 rows a
+kind; "Locating emitters" in `docs/wiki/fleet.md`) and draws
+each located emitter as a light translucent area on the ground, the
+shape its figures honestly give: with three or more sites and a
+least-squares fix, the disc of the fix's radius; else, when every pair
+of the sites' one-sigma range bands meet, the region where all the
+bands (each an annulus `lo_m`..`hi_m` about its site) overlap; else,
+when the nearer site is outside the difference's sigma
+(`within_band: false`), a fainter wash (half the alpha) over that
+site's half of the plane, out to its band's outer edge; else nothing,
+counted. Every shape is in metres from this sensor and goes through the
+dome's own `place()` and `project()`, so a circle is drawn in 72 steps
+and bends on the log range as the rings do. Each area is one `--data`
+fill through its clip, the alpha shared out (1 over the areas drawn, at
+most 0.08) so overlaps read darker and a hundred areas still leave the
+marks readable; they are drawn after the dome and before every mark.
+The other sites are hollow □ with their name. Hover or tap an area for
+its label (key, `bands of 2 sites` / `fix ±r` / `nearer SITE`, the
+band, `coarse`) and, picked, the side panel: each site's RSSI, range
+and band, the nearer site by dB, the method, the area's form and the
+baseline, "open in Fleet". A device dot on the north axis and its area
+are linked: hover or pick one and the other is outlined (the dot
+ringed). The **fleet areas** button (`radar-fleet`) hides them, kept as
+`radar.fleet` only when off; it is hidden while no answer names a site
+other than this one, and under Local nothing of the fleet is fetched.
+At W9FJC and beta-site (10.5 m apart on 2026-11-11) 133 of 141 located
+rows drew: 55 as overlapping bands (outer radius median 40 m), 78 as a
+side (median 12 m), 8 with no side; at that baseline they are where an
+emitter may be, not where it is, and the caption says so.
+
 **The centre** is the GPS fix when `gnss.fix` is a 2D/3D fix within 60
 s, else the position `sensor_health` carries (`/api/gnss` `loc`: the
 last fix or `--location`), else the header says "no sensor position:
@@ -1197,7 +1231,7 @@ skips `/api/adsb`, `/api/aprs` and `/api/radar` and the header says
 Wi-Fi monitor and BLE are the passive radios' — switch to Monitor or
 Hybrid". Every fetch is the page's scoped `getJSON`; `/api/gnss` and
 the two decoders every 5 s, `/api/radar` every 10 s (the devices are
-current), the trails every 60 s. **Picking**: a tap (under 4 px of travel) takes the nearest mark
+current), `/api/fleet/locate` every 30 s, the trails every 60 s. **Picking**: a tap (under 4 px of travel) takes the nearest mark
 within 8 px, else the nearest ring by its ellipse distance; the side
 panel (textContent only) gives the identity, the exact bearing, ground
 range, altitude and elevation angle, the signal, lat/lon for an aircraft
