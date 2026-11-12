@@ -28,7 +28,8 @@
 
 /* ── the tools ─────────────────────────────────────────────────────── */
 
-enum { K_GET, K_GET_PATH, K_TRIAGE, K_NOTE_ADD, K_NOTE_RETRACT, K_LINK, K_UNLINK };
+enum { K_GET, K_GET_PATH, K_TRIAGE, K_NOTE_ADD, K_NOTE_RETRACT, K_LINK, K_UNLINK, K_BULK,
+       K_INC_ADD, K_INC_MEMBER, K_INC_CLOSE };
 
 typedef struct {
     const char *name;
@@ -51,6 +52,13 @@ typedef struct {
                                    "host's own interfaces carried)." }
 #define A_LIMIT { "limit", 'i', 0, "Rows in this page (default 25)." }
 #define A_OFFSET { "offset", 'i', 0, "Rows to skip: the next page starts at offset + limit." }
+/* An incident's standing filter (#198): what an alert must be to join. */
+#define A_FILTER { "type", 's', 0, "Filter: an alert type's name, e.g. WPA_DOWNGRADE." }, \
+                 { "ip", 's', 0, "Filter: the IP address the alert names." }, \
+                 { "mac", 's', 0, "Filter: the MAC (or BSSID) the alert names, when it names no IP." }, \
+                 { "from", 'i', 0, "Filter: alerts that began at or after this Unix time." }, \
+                 { "to", 'i', 0, "Filter: alerts that began at or before this Unix time." }
+#define A_INC_IDS { "ids", 's', 0, "Comma-separated alert ids (s... or d...), at most 100." }
 
 static const tool_t TOOLS[] = {
     { "sloth_health", K_GET, "GET /api/health",
@@ -154,6 +162,13 @@ static const tool_t TOOLS[] = {
                         "gnss: gnssid.prn. aircraft: six hex digits. aprs: a callsign." },
         { "before", 'i', 0, "The next page: a note number, from the previous answer's next." },
         { NULL, 0, 0, NULL } } },
+    { "sloth_incident_list", K_GET, "GET /api/frrs/incidents",
+      "The incidents: many alerts triaged as one, each with its title, state, note, who opened "
+      "it (via manual or agent) and its counts; with id, one incident with its members (alerts "
+      "by id, and standing filters). An alert's own triage says which incident it is in "
+      "(sloth_triage_states).",
+      { { "id", 'i', 0, "One incident's number (then without state)." },
+        { "state", 's', 0, "open, closed or all (the default)." }, { NULL, 0, 0, NULL } } },
     { "sloth_glossary", K_GET, "GET /api/glossary",
       "What each field and unit in these answers means. Read it before interpreting a field "
       "you have not seen.", { { NULL, 0, 0, NULL } } },
@@ -189,6 +204,34 @@ static const tool_t TOOLS[] = {
       "(not_agent_link).",
       { { "from", 's', 1, "Either end of the link." },
         { "link", 'i', 1, "The link's number, from sloth_links." }, { NULL, 0, 0, NULL } } },
+    { "sloth_triage_bulk", K_BULK, "POST /api/frrs/triage/bulk",
+      "Record one triage decision on up to 100 alerts or anomalies at once, each as "
+      "sloth_set_triage would, under this agent's name, marked via agent; one write against "
+      "the rate limit. Each id's outcome is in results: one that fails does not stop the rest.",
+      { { "ids", 's', 1, "Comma-separated alert ids and anomaly tids, at most 100." },
+        { "state", 's', 1, "untriaged (clear), false, noise, incident or known." },
+        { "note", 's', 0, "Why, at most 240 bytes." }, { NULL, 0, 0, NULL } } },
+    { "sloth_incident_add", K_INC_ADD, "POST /api/frrs/incident",
+      "Open an incident: one verdict over many alerts, given by id and/or by a standing filter "
+      "that also takes alerts that arrive later, until it is closed. Its alerts read as its "
+      "state unless one has its own later verdict. Marked via agent.",
+      { { "title", 's', 1, "What the incident is, at most 96 bytes." },
+        { "state", 's', 1, "false, noise, incident or known." },
+        { "note", 's', 0, "Why, at most 240 bytes." }, A_INC_IDS, A_FILTER, { NULL, 0, 0, NULL } } },
+    { "sloth_incident_member", K_INC_MEMBER, "POST /api/frrs/incident",
+      "Change an open incident's members, one change a call: add alerts by id, add a standing "
+      "filter, or remove a member by its number (only one an agent added: not_agent_member).",
+      { { "incident", 'i', 1, "The incident's number." }, A_INC_IDS, A_FILTER,
+        { "remove", 'i', 0, "A member's number, from sloth_incident_list with id." },
+        { NULL, 0, 0, NULL } } },
+    { "sloth_incident_close", K_INC_CLOSE, "POST /api/frrs/incident",
+      "Close an incident an agent opened (one the operator opened is refused: "
+      "not_agent_incident). Its filters then take no alert that begins later; its alerts keep "
+      "reading its state. A close is a recorded row, never a delete.",
+      { { "incident", 'i', 1, "The incident's number." },
+        { "state", 's', 0, "The state it closes at: false, noise, incident or known (default: "
+                           "the state it was opened with)." },
+        { "note", 's', 0, "Why, at most 240 bytes." }, { NULL, 0, 0, NULL } } },
 };
 #define NTOOLS ((int)(sizeof(TOOLS) / sizeof(TOOLS[0])))
 
@@ -428,6 +471,16 @@ static void body_str(mj_sb_t *b, const char *member, const tool_t *t, const args
     mj_sb_str(b, v->s[a]);
 }
 
+/* An integer member of a write's body, when the argument was given. */
+static void body_int(mj_sb_t *b, const char *member, const tool_t *t, const args_t *v) {
+    int a = arg_at(t, member);
+    if (a < 0 || !v->have[a]) return;
+    mj_sb_raw(b, ",\"");
+    mj_sb_raw(b, member);
+    mj_sb_raw(b, "\":");
+    mj_sb_int(b, v->i[a]);
+}
+
 /* The HTTP request of one call into rq. 0, or -1 with *why. */
 static int request_build(const mcp_cfg_t *c, const tool_t *t, const args_t *v, mj_sb_t *rq,
                          const char **why) {
@@ -496,6 +549,31 @@ static int request_build(const mcp_cfg_t *c, const tool_t *t, const args_t *v, m
         body_str(&b, "from", t, v, "from");
         body_str(&b, "to", t, v, "to");
         body_str(&b, "note", t, v, "note");
+        break;
+    case K_BULK:
+        mj_sb_raw(&b, "{\"by\":");
+        mj_sb_str(&b, c->agent);
+        body_str(&b, "ids", t, v, "ids");
+        body_str(&b, "state", t, v, "state");
+        body_str(&b, "note", t, v, "note");
+        break;
+    case K_INC_ADD:
+    case K_INC_MEMBER:
+    case K_INC_CLOSE:
+        mj_sb_raw(&b, t->kind == K_INC_ADD ? "{\"op\":\"add\",\"by\":"
+                    : t->kind == K_INC_MEMBER ? "{\"op\":\"member\",\"by\":" : "{\"op\":\"close\",\"by\":");
+        mj_sb_str(&b, c->agent);
+        body_int(&b, "incident", t, v);
+        body_str(&b, "title", t, v, "title");
+        body_str(&b, "state", t, v, "state");
+        body_str(&b, "note", t, v, "note");
+        body_str(&b, "ids", t, v, "ids");
+        body_str(&b, "type", t, v, "type");
+        body_str(&b, "ip", t, v, "ip");
+        body_str(&b, "mac", t, v, "mac");
+        body_int(&b, "from", t, v);
+        body_int(&b, "to", t, v);
+        body_int(&b, "remove", t, v);
         break;
     default: /* K_UNLINK */
         mj_sb_raw(&b, "{\"op\":\"remove\",\"by\":");

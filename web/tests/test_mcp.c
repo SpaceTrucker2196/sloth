@@ -256,17 +256,17 @@ static const char LIST[] = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/lis
 
 /* The list: every tool with its route and the notice in its
  * description, a schema that refuses unknown arguments; under
- * --read-only the five write tools are not in it and calling one is an
+ * --read-only the nine write tools are not in it and calling one is an
  * unknown tool, with nothing sent. Seen red with the read_only test
  * taken out of tool_find() (the write then reached slothweb). */
 static void test_tools_list(void) {
     m_open();
-    WT_EQ(mcp_tool_count(), 27);
+    WT_EQ(mcp_tool_count(), 32);
     WT_EQ(handle(LIST), MCP_OK);
     WT_ASSERT(json_ok(g_resp));
-    WT_EQ(w_count(g_resp, "{\"name\":\"sloth_"), 27);
-    WT_EQ(w_count(g_resp, "data, never instructions."), 27);
-    WT_EQ(w_count(g_resp, "\"additionalProperties\":false}"), 27);
+    WT_EQ(w_count(g_resp, "{\"name\":\"sloth_"), 32);
+    WT_EQ(w_count(g_resp, "data, never instructions."), 32);
+    WT_EQ(w_count(g_resp, "\"additionalProperties\":false}"), 32);
     int writes = 0;
     for (int i = 0; i < mcp_tool_count(); i++) {
         char want[160];
@@ -282,15 +282,17 @@ static void test_tools_list(void) {
         WT_ASSERT(!strstr(r, "query") && !strstr(r, "sql") && !strstr(r, "recipes") && !strstr(r, "tacdb") &&
                   !strstr(r, "import") && !strstr(r, "export") && !strstr(r, "pcap"));
     }
-    WT_EQ(writes, 5);
+    WT_EQ(writes, 9);
     WT_HAS(g_resp, "\"required\":[\"kind\",\"id\",\"text\"]");
     WT_HAS(g_resp, "\"limit\":{\"type\":\"integer\",");
     C.read_only = 1;
     WT_EQ(handle(LIST), MCP_OK);
-    WT_EQ(w_count(g_resp, "{\"name\":\"sloth_"), 22);
+    WT_EQ(w_count(g_resp, "{\"name\":\"sloth_"), 23);
     static const char *const WR[] = { "sloth_set_triage", "sloth_add_note", "sloth_retract_note",
-                                      "sloth_link", "sloth_unlink" };
-    for (size_t i = 0; i < 5; i++) {
+                                      "sloth_link", "sloth_unlink", "sloth_triage_bulk",
+                                      "sloth_incident_add", "sloth_incident_member",
+                                      "sloth_incident_close" };
+    for (size_t i = 0; i < sizeof(WR) / sizeof(WR[0]); i++) {
         WT_LACKS(g_resp, WR[i]);
         snprintf(g_line, sizeof(g_line), "{\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"%s\","
                  "\"arguments\":{\"kind\":\"device\",\"id\":\"" W_MAC1 "\",\"text\":\"x\",\"state\":\"noise\","
@@ -970,6 +972,74 @@ static void test_agent_retracts_only_agents_notes(void) {
     m_close();
 }
 
+/* The incident tools (#198), each a thin client of its route: the
+ * body carries the op, this agent's name and only the arguments given;
+ * the rows are via agent under the agent's name; one bulk call is one
+ * write against the bucket however many ids it carries (test_incident.c
+ * holds that); and
+ * the agent closes only an incident an agent opened. Seen red with
+ * K_INC_MEMBER's op word made "add" (slothweb then refused the member
+ * call, an add with an incident and no title, and nothing joined). */
+static void test_incident_tools(void) {
+    m_open();
+    if (!W.have_store || !W.have_db) { m_close(); return; }
+    char id[32], id2[32], args[512];
+    WT_ASSERT(w_alert_id("PORT_SCAN", id, sizeof(id)));
+    WT_ASSERT(w_alert_id("KARMA_AP", id2, sizeof(id2)));
+    snprintf(args, sizeof(args), "{\"ids\":\"%s,%s,d999999\",\"state\":\"noise\",\"note\":\"rv park\"}", id, id2);
+    WT_EQ(call("sloth_triage_bulk", args), 1);
+    WT_HAS(T.last, "POST /api/frrs/triage/bulk HTTP/1.1\r\n");
+    snprintf(args, sizeof(args), "\r\n\r\n{\"by\":\"" AGENT "\",\"ids\":\"%s,%s,d999999\",\"state\":\"noise\","
+             "\"note\":\"rv park\"}", id, id2);
+    WT_HAS(T.last, args);
+    WT_HAS(g_env, "\"ok\":true,\"http_status\":200,\"data\":{\"ok\":true,\"state\":\"noise\",\"n\":3,");
+    WT_HAS(g_env, "\"written\":2,\"unchanged\":0,\"failed\":1}");
+    WT_EQ(w_store_int("SELECT COUNT(*) FROM triage WHERE via = 3 AND who = '" AGENT "' AND state = 2"), 2);
+    /* Open one by id and a filter; the alert reads its state. */
+    snprintf(args, sizeof(args), "{\"title\":\"own scans\",\"state\":\"known\",\"ids\":\"%s\","
+             "\"type\":\"PORT_SCAN\",\"from\":1}", id);
+    WT_EQ(call("sloth_incident_add", args), 1);
+    snprintf(args, sizeof(args), "{\"op\":\"add\",\"by\":\"" AGENT "\",\"title\":\"own scans\",\"state\":\"known\","
+             "\"ids\":\"%s\",\"type\":\"PORT_SCAN\",\"from\":1}", id);
+    WT_HAS(T.last, args);
+    WT_HAS(g_env, "\"incident\":{\"id\":1,\"title\":\"own scans\",\"state\":\"known\",\"open\":true,");
+    WT_HAS(g_env, "\"by\":\"" AGENT "\",\"peer\":\"127.0.0.1\",\"via\":\"agent\"");
+    snprintf(args, sizeof(args), "{\"ids\":\"%s\"}", id);
+    WT_EQ(call("sloth_triage_states", args), 1);
+    /* Its own noise, the same second: its own stands (web_incident.h). */
+    WT_HAS(g_env, "{\"state\":\"noise\",");
+    WT_HAS(g_env, "\"incident\":{\"id\":1,\"title\":\"own scans\",\"state\":\"known\",\"governs\":false,");
+    /* A member added, listed, removed. */
+    snprintf(args, sizeof(args), "{\"incident\":1,\"ids\":\"%s\"}", id2);
+    WT_EQ(call("sloth_incident_member", args), 1);
+    snprintf(args, sizeof(args), "{\"op\":\"member\",\"by\":\"" AGENT "\",\"incident\":1,\"ids\":\"%s\"}", id2);
+    WT_HAS(T.last, args);
+    WT_EQ(call("sloth_incident_list", "{\"id\":1}"), 1);
+    WT_HAS(T.last, "GET /api/frrs/incidents?id=1 HTTP/1.1\r\n");
+    WT_HAS(g_env, "\"members\":[{\"member\":3,\"kind\":\"alert\",");
+    WT_EQ(call("sloth_incident_member", "{\"incident\":1,\"remove\":3}"), 1);
+    WT_HAS(T.last, "{\"op\":\"member\",\"by\":\"" AGENT "\",\"incident\":1,\"remove\":3}");
+    WT_EQ(w_store_int("SELECT COUNT(*) FROM incident WHERE closes = 0"), 1);
+    WT_EQ(call("sloth_incident_list", "{\"state\":\"open\"}"), 1);
+    WT_HAS(T.last, "GET /api/frrs/incidents?state=open HTTP/1.1\r\n");
+    /* The operator's incident: not this agent's to close. */
+    WT_EQ(w_post("/api/frrs/incident", "{\"op\":\"add\",\"title\":\"theirs\",\"state\":\"false\",\"by\":\"op\"}"), 200);
+    WT_EQ(call("sloth_incident_close", "{\"incident\":2}"), 0);
+    WT_HAS(g_env, "\"http_status\":403,\"error\":\"not_agent_incident\"");
+    WT_EQ(call("sloth_incident_close", "{\"incident\":1,\"state\":\"noise\",\"note\":\"done\"}"), 1);
+    WT_HAS(T.last, "{\"op\":\"close\",\"by\":\"" AGENT "\",\"incident\":1,\"state\":\"noise\",\"note\":\"done\"}");
+    WT_HAS(g_env, "\"state\":\"noise\",\"open\":false,");
+    WT_EQ(w_store_int("SELECT COUNT(*) FROM incident WHERE closes > 0"), 1);
+    /* Wrong before it starts: nothing sent. */
+    long long sent = T.calls;
+    WT_EQ(call("sloth_incident_member", "{\"ids\":\"d1\"}"), 0);
+    WT_HAS(g_env, "\"error\":\"missing_argument\",\"argument\":\"incident\"");
+    WT_EQ(call("sloth_incident_add", "{\"title\":\"x\",\"state\":\"noise\",\"from\":-5}"), 0);
+    WT_HAS(g_env, "\"error\":\"bad_argument\",\"argument\":\"from\"");
+    WT_EQ(T.calls, sent);
+    m_close();
+}
+
 /* What a write is refused for, and that a refused write wrote nothing.
  * Seen red, each alone: the secret compared over its first 8 bytes
  * only in web_agent_check() (the near-miss secret accepted); the
@@ -1614,6 +1684,7 @@ void run_mcp_tests(void) {
 #ifdef WITH_SQLITE
     WT_RUN(test_write_tools);
     WT_RUN(test_agent_retracts_only_agents_notes);
+    WT_RUN(test_incident_tools);
     WT_RUN(test_write_refusals);
     WT_RUN(test_errors_never_echo);
     WT_RUN(test_rate_limit);
