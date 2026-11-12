@@ -138,6 +138,7 @@ static const char *const KEPT_ELSEWHERE[] = {
     "w-sites",    /* fleet.aps */
     "b-sites",    /* fleet.ble */
     "pr-sites",   /* fleet.probes */
+    "adsb-sites", /* fleet.adsb */
 };
 static const char *const NOT_KEPT[] = {
     "q-recipe",   /* an action: it fills the SQL box, whose text is kept */

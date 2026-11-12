@@ -1018,7 +1018,9 @@
       after();
       return;
     }
-    H.getJSON("/api/adsb").then(function (j) {
+    // fleet=0: the dome is this receiver's sky; another sloth host's
+    // aircraft (the ADS-B tab's grey rows) has no bearing from here.
+    H.getJSON("/api/adsb?fleet=0").then(function (j) {
       if (my !== S.gen) return;
       S.adsb = j.out_of_scope ? null : j;
       after();

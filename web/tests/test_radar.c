@@ -749,7 +749,7 @@ static void test_radar_scope_and_caption(void) {
          * fetch of its own. */
         WT_LACKS(mod, "fetch(");
         WT_EQ(count(mod, "H.getJSON(\"/api/gnss\")"), 1);
-        WT_EQ(count(mod, "H.getJSON(\"/api/adsb\")"), 1);
+        WT_EQ(count(mod, "H.getJSON(\"/api/adsb?fleet=0\")"), 1);
         WT_EQ(count(mod, "H.getJSON(\"/api/aprs\")"), 1);
         WT_EQ(count(mod, "H.getJSON(\"/api/radar\")"), 1);
         WT_EQ(count(mod, "H.getJSON(\"/api/gnss/tracks?hours=\" + TRAIL_H)"), 1);
@@ -766,14 +766,14 @@ static void test_radar_scope_and_caption(void) {
  * leaves one it does not for the next load. */
 static void test_select_hooks(void) {
     const char *p = (const char *)web_page;
-    WT_HAS(p, "  window.SlothAdsb = { init: init, show: show, select: select };");
+    WT_HAS(p, "  window.SlothAdsb = { init: init, show: show, select: select, refresh: refresh };");
     WT_HAS(p, "  window.SlothGnss = { show: show, select: select };");
     WT_HAS(p, "  window.SlothAprs = { show: show, select: select };");
     WT_HAS(p, "  function select(hex) {\n"
               "    if (typeof hex !== \"string\" || !/^~?[0-9a-f]{6}$/.test(hex)) return;\n"
               "    sel = hex;\n"
               "    var cur = rows.filter(function (a) { return a.hex === hex; })[0];\n"
-              "    if (cur) detail(cur, num(last && last.now) ? last.now : Math.floor(Date.now() / 1000));\n"
+              "    if (cur) (remote(cur) ? remoteDetail : detail)(cur, num(last && last.now) ? last.now : Math.floor(Date.now() / 1000));\n"
               "    drawRows();\n"
               "    histLoad(hex);\n"
               "    if (last) plot(last);\n"
