@@ -13,7 +13,12 @@ static int     g_bssid_n;
 static uint8_t g_known[MAX_KNOWN_MACS][6];
 static int     g_known_n;
 static uint8_t g_self[MAX_SELF_MACS][6];
+static uint64_t g_self_touch[MAX_SELF_MACS];  /* g_self_clock at last confirm */
+static uint64_t g_self_clock;
 static int     g_self_n;
+/* ownership_self_scan_due() */
+static int      g_scan_any;
+static uint64_t g_scan_sig, g_scan_ms;
 
 /* Bounded, printable copy of operator-supplied text for an error line
  * (#137). The roster is a file, and the bad line about to be echoed is
@@ -210,13 +215,59 @@ int ownership_self_add(const uint8_t mac[6]) {
     /* Group bit: no host's own unicast address has it, so a record
      * carrying one is a reporting artefact. Covers broadcast too. */
     if (mac[0] & 0x01) return 0;
+    g_self_clock++;
     for (int i = 0; i < g_self_n; i++)
-        if (memcmp(g_self[i], mac, 6) == 0) return 1;   /* idempotent */
+        if (memcmp(g_self[i], mac, 6) == 0) {           /* idempotent */
+            g_self_touch[i] = g_self_clock;
+            return 1;
+        }
     /* Silent when full, unlike the operator-supplied rosters: nobody
      * typed this in, so there is no input to correct, and a line per
-     * poll about a veth that did not fit would be the whole log. */
-    if (g_self_n >= MAX_SELF_MACS) return 0;
-    memcpy(g_self[g_self_n++], mac, 6);
+     * poll about a veth that did not fit would be the whole log. The
+     * stalest entry gives way (MAX_SELF_MACS says why). */
+    int slot = g_self_n;
+    if (g_self_n >= MAX_SELF_MACS) {
+        slot = 0;
+        for (int i = 1; i < g_self_n; i++)
+            if (g_self_touch[i] < g_self_touch[slot]) slot = i;
+    } else {
+        g_self_n++;
+    }
+    memcpy(g_self[slot], mac, 6);
+    g_self_touch[slot] = g_self_clock;
+    return 1;
+}
+
+int ownership_self_add_list(const uint8_t (*macs)[6], int n) {
+    int added = 0;
+    if (!macs || n <= 0) return 0;
+    for (int i = 0; i < n; i++)
+        if (ownership_self_add(macs[i])) added++;
+    return added;
+}
+
+int ownership_self_scan_due(const iface_stat_t *ifaces, int count,
+                            uint64_t mono_ms) {
+    /* FNV-1a over each row's name and address: a renamed, added,
+     * removed or re-addressed interface changes it; counters do not. */
+    uint64_t h = 1469598103934665603ull;
+    if (ifaces && count > 0) {
+        if (count > MAX_IFACES) count = MAX_IFACES;
+        for (int i = 0; i < count; i++) {
+            const uint8_t *p = (const uint8_t *)ifaces[i].name;
+            for (size_t k = 0; k < sizeof(ifaces[i].name) && p[k]; k++)
+                h = (h ^ p[k]) * 1099511628211ull;
+            h = (h ^ 0xffu) * 1099511628211ull;
+            for (int k = 0; k < 6; k++)
+                h = (h ^ ifaces[i].mac[k]) * 1099511628211ull;
+        }
+    }
+    if (g_scan_any && h == g_scan_sig && mono_ms >= g_scan_ms &&
+        mono_ms - g_scan_ms < SELF_RESCAN_MS)
+        return 0;
+    g_scan_any = 1;
+    g_scan_sig = h;
+    g_scan_ms  = mono_ms;
     return 1;
 }
 
@@ -259,6 +310,10 @@ void ownership_clear(void) {
     g_bssid_n = 0;
     g_known_n = 0;
     g_self_n  = 0;
+    g_self_clock = 0;
+    g_scan_any = 0;
+    g_scan_sig = g_scan_ms = 0;
+    memset(g_self_touch, 0, sizeof(g_self_touch));
     memset(g_ssids,  0, sizeof(g_ssids));
     memset(g_bssids, 0, sizeof(g_bssids));
     memset(g_known,  0, sizeof(g_known));

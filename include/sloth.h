@@ -4270,6 +4270,14 @@ typedef struct {
      * platform with neither tree: every reading is then absent. */
     int  (*sys_read)(const char *path, char *buf, int cap);
     int  (*sys_list)(const char *dir, char *names, int name_sz, int max);
+    /* The host's own link-layer addresses beyond the one per
+     * get_ifaces() row (#183): permanent addresses of interfaces that
+     * are using another, every Wi-Fi phy's address pool, and wireless
+     * devices with no netdev (a P2P device). Up to max unique unicast
+     * addresses into out; returns how many. Read-only. NULL where the
+     * platform has no such source: the get_ifaces() rows then are the
+     * whole self roster. */
+    int  (*get_self_macs)(uint8_t (*out)[6], int max);
 } platform_ops_t;
 
 extern platform_ops_t g_platform;

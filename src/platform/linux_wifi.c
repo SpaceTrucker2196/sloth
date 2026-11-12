@@ -20,6 +20,7 @@
 #include "beacon_snoop.h"
 #include "observe.h"
 #include "platform/linux_wifi.h"
+#include "platform/linux_self.h"
 #include "sloth_clock.h"
 #include "wifi_freq.h"
 
@@ -695,6 +696,71 @@ int linux_wifi_set_channel(const char *iface, int freq_mhz) {
     }
     close(fd);
     return rc;
+}
+
+/* ── Every wireless device's own address (#183) ──────────── */
+
+int linux_wifi_parse_wdev_macs(const void *buf, size_t len, int family,
+                               uint8_t (*out)[6], int max, int n, int *done) {
+    if (!buf) return n;
+    const struct nlmsghdr *nlh = (const struct nlmsghdr *)buf;
+    int rem = len > 0x7fffffff ? 0x7fffffff : (int)len;
+    for (; NLMSG_OK(nlh, rem); nlh = NLMSG_NEXT(nlh, rem)) {
+        if (nlh->nlmsg_type == NLMSG_DONE || nlh->nlmsg_type == NLMSG_ERROR) {
+            if (done) *done = 1;
+            return n;
+        }
+        if ((int)nlh->nlmsg_type != family) continue;
+        if (nlh->nlmsg_len < NLMSG_HDRLEN + GENL_HDRLEN) continue;
+        const struct genlmsghdr *gh = (const struct genlmsghdr *)NLMSG_DATA(nlh);
+        if (gh->cmd != NL80211_CMD_NEW_INTERFACE) continue;
+        int arem = (int)nlh->nlmsg_len - NLMSG_HDRLEN - GENL_HDRLEN;
+        struct nlattr *a = (struct nlattr *)((char *)gh + GENL_HDRLEN);
+        for (; na_ok(a, arem); a = na_next(a, &arem)) {
+            if (NA_TYPE(a) == NL80211_ATTR_MAC &&
+                (int)a->nla_len == (int)NA_HDRLEN + 6)
+                n = linux_self_append(out, max, n, (const uint8_t *)NA_DATA(a));
+        }
+    }
+    return n;
+}
+
+int linux_wifi_get_wdev_macs(uint8_t (*out)[6], int max, int n) {
+    if (!out || n >= max) return n;
+    int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_GENERIC);
+    if (fd < 0) return n;
+    int family = get_nl80211_id(fd);
+    if (family < 0) { close(fd); return n; }
+
+    struct timeval tv = { 0, 200000 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    uint8_t sbuf[NLMSG_HDRLEN + GENL_HDRLEN];
+    memset(sbuf, 0, sizeof(sbuf));
+    struct nlmsghdr   *nlh = (struct nlmsghdr *)sbuf;
+    struct genlmsghdr *gh  = (struct genlmsghdr *)NLMSG_DATA(nlh);
+    nlh->nlmsg_len   = (uint32_t)sizeof(sbuf);
+    nlh->nlmsg_type  = (uint16_t)family;
+    nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+    nlh->nlmsg_seq   = 4;
+    gh->cmd          = NL80211_CMD_GET_INTERFACE;
+
+    struct sockaddr_nl sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.nl_family = AF_NETLINK;
+    if (sendto(fd, sbuf, sizeof(sbuf), 0, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+        close(fd);
+        return n;
+    }
+    static uint8_t rbuf[16 * 1024];
+    int done = 0;
+    while (!done) {
+        ssize_t r = recv(fd, rbuf, sizeof(rbuf), 0);
+        if (r <= 0) break;
+        n = linux_wifi_parse_wdev_macs(rbuf, (size_t)r, family, out, max, n, &done);
+    }
+    close(fd);
+    return n;
 }
 
 #endif /* WITH_WIFI */

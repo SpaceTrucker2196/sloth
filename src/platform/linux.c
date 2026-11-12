@@ -12,6 +12,7 @@
 #include "platform/linux_dhcp.h"
 #include "platform/linux_tcpdiag.h"
 #include "platform/linux_neigh.h"
+#include "platform/linux_self.h"
 #include "sloth_clock.h"
 #include "sys_status.h"
 
@@ -143,6 +144,10 @@ int linux_wifi_set_channel(const char *iface, int freq_mhz) {
     (void)iface; (void)freq_mhz;
     return -EOPNOTSUPP;   /* no nl80211 without WITH_WIFI */
 }
+int linux_wifi_get_wdev_macs(uint8_t (*out)[6], int max, int n) {
+    (void)out; (void)max;
+    return n;             /* rtnetlink and sysfs still name every netdev */
+}
 #endif
 
 /* ── Neighbour table ───────────────────────────────────── */
@@ -196,6 +201,7 @@ platform_ops_t g_platform = {
     linux_wifi_set_channel,
     sys_io_read_file,   /* src/sys_status.c: regular files only */
     sys_io_list_dir,
+    linux_get_self_macs, /* platform/linux_self.c (#183) */
 };
 
 #endif /* PLATFORM_LINUX */
