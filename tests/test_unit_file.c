@@ -342,6 +342,12 @@ static void test_unit_executes_installed_paths_only(void) {
     const char *pre = uf_value(lines, n, "ExecStartPre");
     ASSERT(pre != NULL);
     if (pre) ASSERT(strncmp(pre, "+/usr/local/sbin/sloth-monitor-up ", 34) == 0);
+
+    /* sloth opens the radio the helper prepared, by the same variable,
+     * not the first type-803 netdev discovery finds: a second radio in
+     * monitor mode on the host must not be taken for the sensor. */
+    if (pre) ASSERT(strstr(pre, " ${SLOTH_IFACE}") != NULL);
+    if (start) ASSERT(strstr(start, "--monitor-iface ${SLOTH_IFACE} ") != NULL);
     free(buf);
 }
 

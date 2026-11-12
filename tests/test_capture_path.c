@@ -7,6 +7,8 @@
 #include <pcap.h>            /* DLT_* — this binary links libpcap by design */
 #include <netinet/in.h>      /* IPPROTO_TCP */
 #include <net/if.h>          /* if_nametoindex: pin "lo" for the scope-poll case */
+#include <sys/stat.h>        /* mkdir: the fake /sys/class/net tree */
+#include <unistd.h>          /* rmdir */
 #include "runner.h"
 #include "sloth.h"
 #include "capture/capture.h"
@@ -684,6 +686,146 @@ static void test_retarget_ignores_an_empty_name(void) {
     probe_set_iface(&g_s, "");
     ASSERT_STR(g_s.probe_err, "");
     ASSERT_STR(g_s.probe_iface, "wlan1");
+}
+
+/* -- --monitor-iface: pin the monitor radio ----------------------
+ *
+ * Discovery takes the first type-803 netdev in readdir order; a second
+ * radio in monitor mode beside the sensor can win that. The pin opens
+ * exactly the named radio or nothing. Selection is driven over a fake
+ * /sys/class/net tree through probe_test_set_sysfs_net(), so no radio
+ * is needed; every name is one no host has, so the pcap_open_live()
+ * the selection leads to fails, and its "pcap(NAME)" error is what
+ * says which radio was chosen. MISSION section 2: nothing is opened. */
+
+static char g_fake_net[256];
+
+static void fake_netdev(const char *name, const char *type) {
+    char p[400];
+    snprintf(p, sizeof(p), "%s/%s", g_fake_net, name);
+    ASSERT_EQ(mkdir(p, 0700), 0);
+    if (!type) return;
+    snprintf(p, sizeof(p), "%s/%s/type", g_fake_net, name);
+    FILE *f = fopen(p, "w");
+    ASSERT(f != NULL);
+    if (f) { fprintf(f, "%s\n", type); fclose(f); }
+}
+
+/* The tree every case starts from: two radios in monitor mode and one
+ * Ethernet-typed netdev. */
+static void pin_setup(const char *pin) {
+    const char *tmp = getenv("TMPDIR");
+    snprintf(g_fake_net, sizeof(g_fake_net), "%s/sloth_pin_XXXXXX",
+             tmp && tmp[0] ? tmp : "/tmp");
+    ASSERT(mkdtemp(g_fake_net) != NULL);
+    fake_netdev("zzq_mon_a", "803");
+    fake_netdev("zzq_mon_b", "803");
+    fake_netdev("zzq_eth0", "1");
+    probe_test_set_sysfs_net(g_fake_net);
+    probe_set_monitor_pin(pin);
+    memset(&g_s, 0, sizeof(g_s));
+}
+
+static void pin_teardown(void) {
+    static const char *names[] = { "zzq_mon_a", "zzq_mon_b", "zzq_eth0",
+                                   "zzq_notype" };
+    char p[400];
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        snprintf(p, sizeof(p), "%s/%s/type", g_fake_net, names[i]);
+        (void)remove(p);
+        snprintf(p, sizeof(p), "%s/%s", g_fake_net, names[i]);
+        (void)rmdir(p);
+    }
+    (void)rmdir(g_fake_net);
+    probe_test_set_sysfs_net(NULL);
+    probe_set_monitor_pin(NULL);
+    probe_stop();
+}
+
+static void test_a_pinned_radio_is_chosen_over_any_other(void) {
+    /* Both radios are pinned in turn, so whichever readdir yields first,
+       one of the two would name the wrong radio if the pin were ignored
+       in favour of discovery. Seen to fail: with select_monitor_iface()
+       skipping the pin branch, one of the two comes back naming the
+       other radio. */
+    static const char *pins[] = { "zzq_mon_a", "zzq_mon_b" };
+    for (int i = 0; i < 2; i++) {
+        pin_setup(pins[i]);
+        ASSERT_STR(probe_monitor_pin(), pins[i]);
+        probe_open(&g_s);
+        char want[32];
+        snprintf(want, sizeof(want), "pcap(%s)", pins[i]);
+        ASSERT_EQ(strncmp(g_s.probe_err, want, strlen(want)), 0);
+        pin_teardown();
+    }
+}
+
+static void test_a_pinned_radio_not_in_monitor_mode_has_no_fallback(void) {
+    /* Two type-803 radios are present, so a fallback would have one to
+       open. Seen to fail: with the not-803 branch changed to fall
+       through to find_monitor_iface(), probe_err comes back
+       "pcap(zzq_mon_?): ..." and both assertions below go red. */
+    pin_setup("zzq_eth0");
+    probe_open(&g_s);
+    ASSERT_STR(g_s.probe_err,
+               "monitor iface zzq_eth0 is not in monitor mode (type 1)");
+    ASSERT(strstr(g_s.probe_err, "zzq_mon_") == NULL);
+    ASSERT_STR(g_s.probe_iface, "");
+    pin_teardown();
+}
+
+static void test_a_missing_pinned_radio_has_no_fallback(void) {
+    /* Seen to fail the same way: with the not-found branch falling
+       through to discovery, probe_err names a zzq_mon_ radio. */
+    pin_setup("zzq_gone");
+    probe_open(&g_s);
+    ASSERT_STR(g_s.probe_err, "monitor iface zzq_gone not found");
+    ASSERT(strstr(g_s.probe_err, "zzq_mon_") == NULL);
+    ASSERT_STR(g_s.probe_iface, "");
+    pin_teardown();
+}
+
+static void test_a_pinned_radio_with_no_type_is_refused(void) {
+    pin_setup("zzq_notype");
+    fake_netdev("zzq_notype", NULL);
+    probe_open(&g_s);
+    ASSERT_STR(g_s.probe_err, "monitor iface zzq_notype: type unreadable");
+    pin_teardown();
+}
+
+static void test_unpinned_discovery_is_unchanged(void) {
+    /* No pin: the first type-803 netdev, as before. The tree has two, so
+       either may come first; what is pinned is that one of them is
+       chosen and the Ethernet-typed netdev is not. */
+    pin_setup(NULL);
+    ASSERT_STR(probe_monitor_pin(), "");
+    probe_open(&g_s);
+    ASSERT_EQ(strncmp(g_s.probe_err, "pcap(zzq_mon_", 13), 0);
+    pin_teardown();
+
+    /* And with no radio in monitor mode, the discovery message. */
+    pin_setup(NULL);
+    probe_test_set_sysfs_net("/nonexistent/sloth_pin");
+    probe_open(&g_s);
+    ASSERT_STR(g_s.probe_err, "no monitor-mode iface found (need type 803)");
+    pin_teardown();
+}
+
+static void test_a_pinned_radio_refuses_a_retarget_elsewhere(void) {
+    pin_setup("zzq_mon_a");
+    snprintf(g_s.probe_iface, sizeof(g_s.probe_iface), "zzq_mon_a");
+    probe_set_iface(&g_s, NO_SUCH_IF);
+    ASSERT_STR(g_s.probe_err,
+               NO_SUCH_IF " refused: --monitor-iface pins zzq_mon_a");
+    ASSERT_STR(g_s.probe_iface, "zzq_mon_a");
+    pin_teardown();
+
+    /* Control: a retarget onto the pinned name itself is not refused by
+       the pin, so it reaches the open and fails there. */
+    pin_setup(NO_SUCH_IF);
+    probe_set_iface(&g_s, NO_SUCH_IF);
+    ASSERT_EQ(strncmp(g_s.probe_err, "pcap(", 5), 0);
+    pin_teardown();
 }
 
 /* ── Monitor dispatch seam — issue #92 ───────────────────────
@@ -3818,6 +3960,14 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_scope_refuses_a_deselected_pinned_interface);
     RUN_TEST(test_no_allow_list_admits_any_ifindex);
     RUN_TEST(test_scope_poll_reads_a_dead_worker_as_no_capture);
+
+    TEST_SUITE("capture path: --monitor-iface pins the radio");
+    RUN_TEST(test_a_pinned_radio_is_chosen_over_any_other);
+    RUN_TEST(test_a_pinned_radio_not_in_monitor_mode_has_no_fallback);
+    RUN_TEST(test_a_missing_pinned_radio_has_no_fallback);
+    RUN_TEST(test_a_pinned_radio_with_no_type_is_refused);
+    RUN_TEST(test_unpinned_discovery_is_unchanged);
+    RUN_TEST(test_a_pinned_radio_refuses_a_retarget_elsewhere);
 
     TEST_SUITE("monitor dispatch seam: real on_probe_frame (#92)");
     RUN_TEST(test_monitor_seam_admits_a_wellformed_frame);

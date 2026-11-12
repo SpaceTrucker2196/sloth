@@ -41,6 +41,8 @@
 
 #ifdef PLATFORM_LINUX
 #  include <dirent.h>
+#  include <limits.h>      /* PATH_MAX for the sysfs seam */
+#  include <sys/stat.h>
 #endif
 
 /* ── Internal client table ───────────────────────────────── */
@@ -147,9 +149,59 @@ static sloth_state_t *g_state   = NULL;
 
 /* ── Monitor interface discovery ─────────────────────────── */
 
+/* --monitor-iface NAME: the operator's declaration of which radio is
+ * the sensor. Without it, find_monitor_iface() takes the first type-803
+ * netdev in readdir order, which is not a stable order and on a host
+ * with a second radio in monitor mode (a bench attacker beside the
+ * sensor) may be the wrong one. File-static, not a sloth_state_t field:
+ * that struct sits within a few hundred bytes of the test stack limit,
+ * and nothing but this file reads it.
+ *
+ * This is NOT the --iface allow-list. The owner ruled on 2026-10-04
+ * that the monitor stream stays outside --iface; this flag names the
+ * radio, it does not scope the IP stream, and an absent pin keeps the
+ * discovery behaviour unchanged. */
+static char g_pin_iface[16];
+
+/* Test seam: where the netdev type files are read from. A test points
+ * it at a temp tree so the selection logic runs with no radio. */
+static const char *g_sysfs_net = "/sys/class/net";
+
+void probe_set_monitor_pin(const char *name) {
+    snprintf(g_pin_iface, sizeof(g_pin_iface), "%s", name ? name : "");
+}
+
+const char *probe_monitor_pin(void) { return g_pin_iface; }
+
+void probe_test_set_sysfs_net(const char *root) {
+    g_sysfs_net = root ? root : "/sys/class/net";
+}
+
 #ifdef PLATFORM_LINUX
+/* ARPHRD_* of a netdev from <root>/<name>/type: the type, -1 when the
+ * netdev does not exist, -2 when it exists but the type is unreadable. */
+static int iface_type(const char *name) {
+    char path[PATH_MAX];
+    /* %.15s: kernel names are under IFNAMSIZ, and every caller has
+     * already bounded the name. The precision restates that guard at
+     * the call site: at -O0 gcc cannot propagate a guard from the
+     * caller, and -Wformat-truncation fails the build — which is how
+     * the #95 capture-path target found the same pattern here before. */
+    int n = snprintf(path, sizeof(path), "%s/%.15s", g_sysfs_net, name);
+    if (n < 0 || (size_t)n >= sizeof(path)) return -1;
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    snprintf(path, sizeof(path), "%s/%.15s/type", g_sysfs_net, name);
+    FILE *f = fopen(path, "r");
+    if (!f) return -2;
+    int type = 0;
+    int ok = fscanf(f, "%d", &type) == 1;
+    fclose(f);
+    return ok ? type : -2;
+}
+
 static int find_monitor_iface(char *buf, int sz) {
-    DIR *d = opendir("/sys/class/net");
+    DIR *d = opendir(g_sysfs_net);
     if (!d) return 0;
     struct dirent *e;
     while ((e = readdir(d))) {
@@ -159,31 +211,52 @@ static int find_monitor_iface(char *buf, int sz) {
          * snprintf buffers below. */
         size_t nlen = strlen(e->d_name);
         if (nlen >= 16) continue;
-        char path[128];
-        /* The %.15s precision restates the nlen guard above at the call
-         * site. The guard alone is enough at -O2, where gcc propagates
-         * it; at -O0 it cannot, and -Wformat-truncation fails the build
-         * — which is how the #95 capture-path target found this. Better
-         * to bound the conversion than to rely on the optimiser seeing
-         * a guard fifteen lines up. */
-        snprintf(path, sizeof(path), "/sys/class/net/%.15s/type", e->d_name);
-        FILE *f = fopen(path, "r");
-        if (!f) continue;
-        int type = 0;
-        if (fscanf(f, "%d", &type) == 1 && type == 803) { /* ARPHRD_IEEE80211_RADIOTAP */
-            fclose(f);
+        if (iface_type(e->d_name) == 803) { /* ARPHRD_IEEE80211_RADIOTAP */
             snprintf(buf, sz, "%s", e->d_name);
             closedir(d);
             return 1;
         }
-        fclose(f);
     }
     closedir(d);
     return 0;
 }
 #else
+static int iface_type(const char *name) { (void)name; return -1; }
 static int find_monitor_iface(char *buf, int sz) { (void)buf; (void)sz; return 0; }
 #endif
+
+/* The radio probe_open() will open: the pin when one is set, and then
+ * only the pin — a pinned radio that is missing or not in monitor mode
+ * is an error, never a reason to go and find another, because the one
+ * found could be exactly the radio the operator pinned against. With
+ * no pin, discovery as before. 1 with buf set, or 0 with err set. */
+static int select_monitor_iface(char *buf, int sz, char *err, size_t errsz) {
+    if (g_pin_iface[0]) {
+        int type = iface_type(g_pin_iface);
+        if (type == -1) {
+            snprintf(err, errsz, "monitor iface %.15s not found", g_pin_iface);
+            return 0;
+        }
+        if (type == -2) {
+            snprintf(err, errsz, "monitor iface %.15s: type unreadable",
+                     g_pin_iface);
+            return 0;
+        }
+        if (type != 803) {
+            snprintf(err, errsz,
+                     "monitor iface %.15s is not in monitor mode (type %d)",
+                     g_pin_iface, type);
+            return 0;
+        }
+        snprintf(buf, sz, "%s", g_pin_iface);
+        return 1;
+    }
+    if (!find_monitor_iface(buf, sz)) {
+        snprintf(err, errsz, "no monitor-mode iface found (need type 803)");
+        return 0;
+    }
+    return 1;
+}
 
 /* Radiotap decoding lives in src/radiotap.c so it can be unit-tested —
  * this file is compiled only under WITH_PCAP and is not in the test
@@ -920,14 +993,13 @@ void probe_open(sloth_state_t *s) {
     s->probe_err[0] = '\0';
 
     char iface[16] = "";
-    if (!find_monitor_iface(iface, sizeof(iface))) {
-        snprintf(s->probe_err, sizeof(s->probe_err),
-                 "no monitor-mode iface found (need type 803)");
+    if (!select_monitor_iface(iface, sizeof(iface),
+                              s->probe_err, sizeof(s->probe_err)))
         return;
-    }
 
     /* find_monitor_iface() walks netdevs, which a Bluetooth controller
-     * is not; checked anyway so no open path is without it (#144). */
+     * is not, and main() refuses one as a pin; checked anyway so no open
+     * path is without it (#144). */
     if (bt_dev_is_raw_hci(iface)) {
         snprintf(s->probe_err, sizeof(s->probe_err),
                  "%.15s refused: raw HCI device", iface);
@@ -1036,6 +1108,17 @@ void probe_set_iface(sloth_state_t *s, const char *iface) {
     if (bt_dev_is_raw_hci(iface)) {
         snprintf(s->probe_err, sizeof(s->probe_err),
                  "%.15s refused: raw HCI device", iface);
+        return;
+    }
+
+    /* A pinned radio (--monitor-iface) is an operator declaration of
+     * which radio is the sensor, so [m] cannot move it elsewhere — the
+     * same shape as the allow-list refusal below, and before anything
+     * is stopped for the same reason. */
+    if (g_pin_iface[0] && strcmp(iface, g_pin_iface) != 0) {
+        snprintf(s->probe_err, sizeof(s->probe_err),
+                 "%.15s refused: --monitor-iface pins %.15s",
+                 iface, g_pin_iface);
         return;
     }
 

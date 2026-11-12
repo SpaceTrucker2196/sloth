@@ -149,6 +149,7 @@ message in the journal.
 ExecStartPre=+/usr/local/sbin/sloth-monitor-up ${SLOTH_IFACE}
 ExecStart=/usr/local/bin/sloth \
     --headless \
+    --monitor-iface ${SLOTH_IFACE} \
     --hop \
     --db /var/lib/sloth/sloth.db --db-interval-secs 1 \
     --pcap-dir /var/lib/sloth/pcap \
@@ -171,6 +172,16 @@ ExecStart=/usr/local/bin/sloth \
   The helper is idempotent: if `/sys/class/net/$IF/type` is already
   `803` it exits 0 without touching the link, so a restart does not flap
   the radio.
+- **`--monitor-iface ${SLOTH_IFACE}`** Open exactly the radio the
+  helper just prepared. Without it sloth takes the first type-803
+  interface in `/sys/class/net` readdir order, and a second radio in
+  monitor mode on the same host (a bench attacker beside the sensor)
+  can be that one. A pinned radio that is missing or not in monitor
+  mode is not replaced by discovery: the run continues without 802.11
+  capture and `sensor_health.monitor_err` says why. `${…}` braces keep
+  it one word. It is not `--iface`: the allow-list scopes the IP
+  stream and, by the owner's 2026-10-04 ruling, does not reach the
+  monitor radio ([[cli-reference]]).
 - **`--headless --hop`** No TUI; retune the receiver across channels
   (needs `CAP_NET_ADMIN` per retune, which is why the capability stays
   for the lifetime of the process rather than being dropped after
