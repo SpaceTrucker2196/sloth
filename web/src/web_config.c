@@ -282,7 +282,8 @@ void web_usage(FILE *out) {
         "                [--web-serve-evidence-pcap[=remote]]\n"
         "                [--peer NAME=URL]... [--peer-interval-secs N]\n"
         "                [--peer-allow-outside-tailnet]\n"
-        "                [--peer-gnss-region-km N] [--help]\n"
+        "                [--peer-gnss-region-km N] [--my-ssid SSID]...\n"
+        "                [--my-bssid MAC]... [--help]\n"
         "\n"
         "  --socket SPEC         sloth's data socket to read: unix:PATH or\n"
         "                        tcp:A.B.C.D:PORT / tcp:[V6]:PORT, literal\n"
@@ -382,6 +383,12 @@ void web_usage(FILE *out) {
         "  --peer-gnss-region-km N  a GNSS event at two sites at most this\n"
         "                        far apart is regional (default 50,\n"
         "                        1..20000; docs/wiki/fleet.md).\n"
+        "  --my-ssid SSID        one of this site's own networks, as sloth's\n"
+        "                        --my-ssid (repeatable, at most 16): named to a\n"
+        "                        peer that asks, for the fleet's identity\n"
+        "                        findings (docs/wiki/fleet.md).\n"
+        "  --my-bssid MAC        one of this site's own APs, as sloth's\n"
+        "                        --my-bssid (repeatable, at most 16).\n"
         "  --help                this text.\n"
         "\n"
         "Routes (GET and HEAD): / (the page), /api/health, /api/live,\n"
@@ -395,6 +402,7 @@ void web_usage(FILE *out) {
         "/api/ble/alerts, /api/ble/ADDR (the BLE view),\n"
         "/api/alerts, /api/alert, /api/pcap/frames, /api/pcap and\n"
         "/api/fleet/export (GET only), /api/fleet/peers, /api/fleet/gnss,\n"
+        "/api/fleet/findings (GET only),\n"
         "/events (Server-Sent Events); with --web-allow-sql, /api/query\n"
         "(GET only) and /api/recipes. POST only to the eight /api/frrs\n"
         "write routes, same-origin, unless --web-read-only. Any other\n"
@@ -519,6 +527,34 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
                 fprintf(err, "slothweb: --peer-gnss-region-km %s: want a whole number "
                              "from 1 to %d\n", v, WEB_FG_REGION_KM_MAX);
                 return -1;
+            }
+        } else if (!strcmp(a, "--my-ssid") || !strcmp(a, "--my-bssid")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            web_fleet_mine_t *m = &c->mine;
+            int ssid = !strcmp(a, "--my-ssid");
+            if ((ssid ? m->nssid : m->nbssid) >= WEB_FLEET_MINE_MAX) {
+                fprintf(err, "slothweb: %s: at most %d\n", a, WEB_FLEET_MINE_MAX);
+                return -1;
+            }
+            if (ssid) {
+                if (!web_fleet_ssid_ok(v)) {
+                    fprintf(err, "slothweb: --my-ssid: want 1 to %d octets with no control "
+                                 "character\n", WEB_FLEET_SSID_MAX);
+                    return -1;
+                }
+                snprintf(m->ssid[m->nssid++], sizeof(m->ssid[0]), "%s", v);
+            } else {
+                char mac[WEB_KEY_MAX + 1];
+                if (web_key_mac(v, mac) != 0) {
+                    fprintf(err, "slothweb: --my-bssid %s: want aa:bb:cc:dd:ee:ff\n", v);
+                    return -1;
+                }
+                memcpy(m->bssid[m->nbssid], mac, WEB_FLEET_MAC_SZ - 1);
+                m->bssid[m->nbssid++][WEB_FLEET_MAC_SZ - 1] = '\0';
             }
         } else if (!strcmp(a, "--web-serve-evidence-pcap")) {
             c->serve_evidence_pcap = 1;

@@ -14,6 +14,7 @@
 #include "web_fleetadsb.h"
 #include "web_fleetgnss.h"
 #include "web_fleetview.h"
+#include "web_fleetid.h"
 #include "web_locate.h"
 #include "web_bundle.h"
 #include "web_flows.h"
@@ -1415,6 +1416,7 @@ static int route_fleet_export(const web_req_t *rq, const web_health_t *h, char *
     web_fleet_src_t src = {
         h->m4 ? h->m4->sdb : NULL, h->ble, h->gnss, h->m4 ? h->m4->frrs : NULL,
         h->m4 && h->m4->fleet ? h->m4->fleet->own_csv : NULL, h->adsb,
+        h->m4 && h->m4->fleet ? &h->m4->fleet->mine : NULL, h->m4 ? h->m4->chain : NULL,
     };
     char *body = NULL;
     size_t bl = 0;
@@ -1502,6 +1504,7 @@ static int route_fleet_overview(const web_req_t *rq, const web_health_t *h, char
     web_fleet_src_t src = {
         h->m4 ? h->m4->sdb : NULL, h->ble, h->gnss, h->m4 ? h->m4->frrs : NULL,
         h->m4 && h->m4->fleet ? h->m4->fleet->own_csv : NULL, h->adsb,
+        h->m4 && h->m4->fleet ? &h->m4->fleet->mine : NULL, h->m4 ? h->m4->chain : NULL,
     };
     if (qlong(rq)) {
         status = 400;
@@ -1548,6 +1551,7 @@ static int route_fleet_heap(const web_req_t *rq, const web_health_t *h, char *ou
     web_fleet_src_t src = {
         h->m4 ? h->m4->sdb : NULL, h->ble, h->gnss, h->m4 ? h->m4->frrs : NULL,
         h->m4 && h->m4->fleet ? h->m4->fleet->own_csv : NULL, h->adsb,
+        h->m4 && h->m4->fleet ? &h->m4->fleet->mine : NULL, h->m4 ? h->m4->chain : NULL,
     };
     char *body = NULL;
     size_t bl = 0;
@@ -1921,6 +1925,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_fleet_heap(rq, h, out, outsz, r, web_fleet_gnss_route);
         if (!strcmp(rq->path, "/api/fleet/aircraft"))
             return route_fleet_heap(rq, h, out, outsz, r, web_fleet_aircraft_route);
+        if (!strcmp(rq->path, "/api/fleet/findings"))
+            return route_fleet_heap(rq, h, out, outsz, r, web_fleet_findings_route);
         /* Without --web-allow-sql neither exists: a 404 like any path. */
         if (h->sql && h->sql->enabled) {
             if (!strcmp(rq->path, "/api/query"))

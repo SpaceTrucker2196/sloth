@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -622,6 +623,17 @@ int web_sdb_bssid_assocs(web_sdb_conn_t *c, const char *bssid,
                          long long from, long long to, int max,
                          web_sdb_item_fn fn, void *ctx) {
     (void)c; (void)bssid; (void)from; (void)to; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
+int web_sdb_ap_attacks(web_sdb_conn_t *c, long long from, long long to, int max,
+                       web_sdb_item_fn fn, void *ctx) {
+    (void)c; (void)from; (void)to; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
+int web_sdb_ssid_probers(web_sdb_conn_t *c, const char *ssid, long long from, int max,
+                         web_sdb_item_fn fn, void *ctx, long long *nrandom) {
+    (void)c; (void)ssid; (void)from; (void)max; (void)fn; (void)ctx;
+    *nrandom = 0;
     return -1;
 }
 int web_sdb_sessions(web_sdb_conn_t *c, web_sdb_session_t *out, int max) {
@@ -2295,6 +2307,64 @@ int web_sdb_bssid_assocs(web_sdb_conn_t *c, const char *bssid,
                           " first_seen < ?3 ORDER BY first_seen LIMIT ?4",
                        bssid, from, to, max, fn, ctx);
 }
+
+int web_sdb_ap_attacks(web_sdb_conn_t *c, long long from, long long to, int max,
+                       web_sdb_item_fn fn, void *ctx) {
+    if (!(c->feats & WEB_QF_ALERTS) || !(c->feats & WEB_QF_BEACON)) return 0;
+    char sql[2048];
+    /* The key in each branch's join and WHERE only, at a fixed field
+     * (alert_pair_key()'s two BSSIDs straight after "twin:" or
+     * "twin-fp:", karma_alert_key()'s one after "karma:"), as
+     * web_sdb_chain_stages() reads it; the BSSID that comes back is
+     * beacon_aps' own column, so the result holds no byte of the key. */
+#define AB_BRANCH(TY, PFX, PL, POS) \
+    " SELECT b.bssid AS bssid, a.type AS type, a.sev AS sev, a.count AS cnt," \
+    " a.first_seen AS fs, a.last_seen AS ls FROM alerts a JOIN beacon_aps b ON" \
+    " b.bssid = substr(a.key, " #POS ", 17) WHERE a.type = " #TY " AND" \
+    " substr(a.key, 1, " #PL ") = '" PFX "' AND a.last_seen >= ?2 AND a.last_seen < ?3"
+    snprintf(sql, sizeof(sql),
+             "SELECT bssid, '', type, max(sev), sum(cnt), min(fs), max(ls) FROM ("
+             AB_BRANCH(%d, "twin:", 5, 6) " UNION ALL"
+             AB_BRANCH(%d, "twin:", 5, 24) " UNION ALL"
+             AB_BRANCH(%d, "twin-fp:", 8, 9) " UNION ALL"
+             AB_BRANCH(%d, "twin-fp:", 8, 27) " UNION ALL"
+             AB_BRANCH(%d, "karma:", 6, 7)
+             ") GROUP BY bssid, type ORDER BY bssid, type LIMIT ?4",
+             WEB_ALERT_EVIL_TWIN, WEB_ALERT_EVIL_TWIN, WEB_ALERT_EVIL_TWIN,
+             WEB_ALERT_EVIL_TWIN, WEB_ALERT_KARMA_AP);
+#undef AB_BRANCH
+    c->pred_ok = 1;
+    int n = items_range(c, sql, NULL, from, to, max, fn, ctx);
+    c->pred_ok = 0;
+    return n;
+}
+
+/* A MAC whose first octet has the locally administered bit: its second
+ * hex digit is one of these. */
+#define LA_DIGITS "('2','3','6','7','a','b','e','f','A','B','E','F')"
+
+int web_sdb_ssid_probers(web_sdb_conn_t *c, const char *ssid, long long from, int max,
+                         web_sdb_item_fn fn, void *ctx, long long *nrandom) {
+    *nrandom = 0;
+    if (!(c->feats & WEB_QF_PNL)) return 0;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db, "SELECT COUNT(*) FROM pnl_ssids WHERE ssid = ?1 AND"
+                           " last_seen >= ?2 AND substr(mac, 2, 1) IN " LA_DIGITS,
+                           -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_text(st, 1, ssid, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 2, from);
+    int rc = sqlite3_step(st);
+    if (rc == SQLITE_ROW) *nrandom = sqlite3_column_int64(st, 0);
+    sqlite3_finalize(st);
+    if (rc != SQLITE_ROW) return -1;
+    return items_range(c, "SELECT mac, '', 0, 0, NULL, first_seen, last_seen FROM pnl_ssids"
+                          " WHERE ssid = ?1 AND last_seen >= ?2 AND last_seen < ?3 AND"
+                          " substr(mac, 2, 1) NOT IN " LA_DIGITS
+                          " ORDER BY last_seen DESC, mac LIMIT ?4",
+                       ssid, from, LLONG_MAX / 2, max, fn, ctx);
+}
+#undef LA_DIGITS
 
 static int sessions_ok(web_sdb_conn_t *c) {
     static const char *const k[] = { "id", "started", "ended", "site_label",

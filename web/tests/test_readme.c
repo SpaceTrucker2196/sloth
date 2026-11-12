@@ -140,6 +140,8 @@ static const char *const NOTICE[] = {
     "agent writes: ",
     /* the fleet (web_fleet.h): what is served and which peers are pulled */
     "fleet: pulling ", "fleet: /api/fleet/export served ",
+    /* and which own networks this site names (#192 I2, I3) */
+    "fleet: this site's own networks ",
 };
 static const struct { const char *file, *start; } RUNTIME[] = {
     { "web_ingest.c", "socket: " }, { "web_ingest.c", "fcntl: " },

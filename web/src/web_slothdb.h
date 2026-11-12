@@ -484,6 +484,22 @@ int  web_sdb_chain_stages(web_sdb_conn_t *c, const char *bssid,
 int  web_sdb_bssid_assocs(web_sdb_conn_t *c, const char *bssid,
                           long long from, long long to, int max,
                           web_sdb_item_fn fn, void *ctx);
+/* #192 I4 (web_fleetid.h): each beacon_aps BSSID that an EVIL_TWIN key
+ * (either half of a twin: or twin-fp: pair) or a KARMA_AP key (karma:)
+ * with last_seen in [from, to) names as a transmitter, matched at the
+ * key's fields as web_sdb_chain_stages() matches them, never as a
+ * substring: a = the BSSID (beacon_aps', so no byte of the key is a
+ * result), n1 = type, n2 = the highest sev, n3 = the sum of count,
+ * first_seen the earliest, last_seen the latest. One item per (BSSID,
+ * type), by BSSID then type, at most max. */
+int  web_sdb_ap_attacks(web_sdb_conn_t *c, long long from, long long to, int max,
+                        web_sdb_item_fn fn, void *ctx);
+/* #192 I2: the clients whose probe list (pnl_ssids) names ssid, last
+ * seen at or after from, newest first, at most max: a = the MAC. Only
+ * globally administered MACs are given; *nrandom gets how many locally
+ * administered (randomised) ones were left out. */
+int  web_sdb_ssid_probers(web_sdb_conn_t *c, const char *ssid, long long from, int max,
+                          web_sdb_item_fn fn, void *ctx, long long *nrandom);
 
 typedef struct {
     long long id, started, ended;    /* ended -1: never recorded */

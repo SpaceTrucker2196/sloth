@@ -106,5 +106,6 @@ void run_locate_tests(void);             /* tests/test_locate.c (#192 I5) */
 void run_fleetgnss_tests(void);          /* tests/test_fleetgnss.c (#192 I6) */
 void run_fleetview_tests(void);          /* tests/test_fleetview.c (2026-11-11) */
 void run_fleetadsb_tests(void);          /* tests/test_fleetadsb.c (#192 I7) */
+void run_fleetid_tests(void);            /* tests/test_fleetid.c (#192 I2-I4, I8) */
 
 #endif

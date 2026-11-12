@@ -28,6 +28,15 @@
  * peer's receiver (web_locate.h); only asked for, so an older importer
  * never meets the member.
  *
+ * With ident=1 (#192 I2-I4, I8, web_fleetid.h) the whole export also
+ * names this site's own networks (own_net lines, counted on the end
+ * line), and each ap line carries the attacker-fingerprint material
+ * slothweb holds for it: the beacon's IE-order and vendor-IE hashes and
+ * WPS strings from the stream's ledger, and the AP-impersonation alerts
+ * sloth.db holds naming that BSSID as a transmitter. A page asked with
+ * ident=1 carries the ap members too. Only asked for, so an older
+ * importer never meets a member it does not know.
+ *
  * Every member of every line is named in web_fleet_members[] and in no
  * other place: the writer emits those names only, the reader refuses a
  * line holding any other, and the suite holds each name to
@@ -141,6 +150,15 @@
  * WEB_FLEET_NOGNSS_S. */
 #define WEB_FLEET_CAP_GNSSEV     256
 #define WEB_FLEET_NOGNSS_S       3600
+/* The identity findings' export (#192 I2-I4, I8, web_fleetid.h), asked
+ * for with ident=1: this site's own networks (own_net lines) and each
+ * AP row's attacker-fingerprint members. An older export refuses
+ * ident=1; it is then asked without it for WEB_FLEET_NOIDENT_S. */
+#define WEB_FLEET_NOIDENT_S      3600
+/* This site's own networks (--my-ssid, --my-bssid on slothweb, as on
+ * sloth): at most WEB_FLEET_MINE_MAX of each, an SSID of 1..32 octets. */
+#define WEB_FLEET_MINE_MAX       16
+#define WEB_FLEET_SSID_MAX       32
 
 enum { WEB_FK_WIFI = 0, WEB_FK_BLE, WEB_FK_AP, WEB_FK_PROBE, WEB_FK_ALERT,
        WEB_FK_VERDICT, WEB_FK_COUNT };
@@ -204,6 +222,7 @@ typedef struct {
     long long no_own_until;                /* an F2 peer: no own=1 until then */
     long long no_gnss_until;               /* an I5 peer: no gnss=1 until then */
     long long no_adsb_until;               /* an I6 peer: no adsb=1 until then */
+    long long no_ident_until;              /* an I7 peer: no ident=1 until then */
     /* The peer's own radios, as its last full answer named them (own=1;
      * memory only: the next pull after a restart names them again). */
     int       nown;
@@ -217,6 +236,19 @@ typedef struct {
 struct sqlite3;
 struct web_gnss;
 struct web_fg;
+struct web_chain;
+
+/* A site's own networks (#192 I2, I3): the SSIDs and BSSIDs its
+ * operator names with --my-ssid and --my-bssid, each SSID 1..32 octets
+ * with no control character, each BSSID canonical. */
+typedef struct {
+    int  nssid, nbssid;
+    char ssid[WEB_FLEET_MINE_MAX][WEB_FLEET_SSID_MAX + 1];
+    char bssid[WEB_FLEET_MINE_MAX][WEB_FLEET_MAC_SZ];
+} web_fleet_mine_t;
+
+/* An SSID --my-ssid takes: 1..32 octets, none a control character. */
+int  web_fleet_ssid_ok(const char *s);
 
 typedef struct web_fleet {
     pthread_mutex_t   mu;                  /* guards peer[] and the counts */
@@ -234,6 +266,9 @@ typedef struct web_fleet {
     int               nown;
     char              own[WEB_FLEET_OWN_MAX][WEB_FLEET_MAC_SZ];
     char              own_csv[WEB_FLEET_OWN_MAX * WEB_FLEET_MAC_SZ];
+    /* This site's own networks (#192 I2, I3; set before start, read
+     * without the lock after that). */
+    web_fleet_mine_t  mine;
     /* GNSS across the sites (#192 I6, web_fleetgnss.h): this site's
      * receiver (set before start; NULL none), the region a peer must be
      * within to make an event regional (--peer-gnss-region-km), and the
@@ -310,6 +345,10 @@ typedef struct {
     struct web_frrs    *frrs;
     const char         *own_csv;   /* this site's radios (own=1), may be NULL */
     struct web_adsb    *adsb;      /* the receiver's summary (adsb=1, #192 I7) */
+    const web_fleet_mine_t *mine;  /* this site's own networks (ident=1), may be NULL */
+    /* The stream's twin attribution (web_chain.h): which half of an
+     * EVIL_TWIN pair is the impostor, for ident=1's attacks; may be NULL. */
+    struct web_chain   *chain;
 } web_fleet_src_t;
 
 /* /api/fleet/export: a heap body the caller frees, in *body. 0 with

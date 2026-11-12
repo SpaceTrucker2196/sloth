@@ -508,7 +508,7 @@ static void test_drawers(void) {
  * into sloth.db's devices (the export then carried bb:01). */
 static void test_export_carries_no_peer_row(void) {
     up();
-    web_fleet_src_t src = { &SDB, &B, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { .sdb = &SDB, .ble = &B };
     char *body = NULL;
     size_t len = 0;
     int st = 0;
@@ -1071,7 +1071,7 @@ static void test_adsb_detail(void) {
  * peer's address inserted into sloth.db's adsb_aircraft. */
 static void test_export_carries_no_peer_aircraft(void) {
     adsb_up();
-    web_fleet_src_t src = { &SDB, &B, NULL, NULL, NULL, &A };
+    web_fleet_src_t src = { .sdb = &SDB, .ble = &B, .adsb = &A };
     char *body = NULL;
     size_t len = 0;
     int st = 0;

@@ -647,6 +647,33 @@ int web_frrs_rf(web_frrs_t *f, int bssid, const char *mac, web_frrs_rf_t *out) {
     return got;
 }
 
+static void fp_str(char *out, size_t cap, const char *s) {
+    out[0] = '\0';
+    size_t n = strlen(s);
+    if (n == 0 || n >= cap) return;
+    for (size_t i = 0; i < n; i++)
+        if ((unsigned char)s[i] < 0x20 || (unsigned char)s[i] > 0x7e) return;
+    memcpy(out, s, n + 1);
+}
+
+int web_frrs_fp(web_frrs_t *f, const char *bssid, web_frrs_fp_t *out) {
+    memset(out, 0, sizeof(*out));
+    if (!f || !f->led || !f->lmu_init || !bssid) return 0;
+    int got = 0;
+    pthread_mutex_lock(&f->lmu);
+    const frrs_bss_t *b = frrs_led_bss(f, bssid);
+    if (b && b->has_b) {
+        got = 1;
+        if (strcmp(b->ie_order_hash, "0")) fp_str(out->ie, sizeof(out->ie), b->ie_order_hash);
+        fp_str(out->vie, sizeof(out->vie), b->vendor_ies_hash);
+        fp_str(out->wps_manuf, sizeof(out->wps_manuf), b->wps_manufacturer);
+        fp_str(out->wps_model, sizeof(out->wps_model), b->wps_model_name);
+        fp_str(out->wps_num, sizeof(out->wps_num), b->wps_model_number);
+    }
+    pthread_mutex_unlock(&f->lmu);
+    return got;
+}
+
 /* The estimate's metres and trend into row, for the census. */
 static void census_est(const frrs_est_t *e, web_frrs_rf_row_t *row) {
     static const char *const TREND[] = { "approaching", "steady", "leaving",

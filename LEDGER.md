@@ -329,3 +329,5 @@
 | bbf99b6 | 2026-11-11T21:11:40Z | claude-opus-5-5 | 10 | 2619 | 930685 | 6447 | 0.2901 | Never read a peer as quiet before it could have answered (#192 I6 review) |
 | 13b1599 | 2026-11-11T22:51:23Z | claude-opus-5-5 | 46 | 10999 | 4676640 | 19068 | 1.3080 | Compare the fleet's ADS-B receivers aircraft by aircraft (#192 I7) |
 | 4a03e26 | 2026-11-11T23:48:01Z | claude-opus-5-5 | 6 | 2255 | 517887 | 5800 | 0.1951 | Close the aircraft cross-check's paths to a false unconfirmed (#192 I7 review) |
+| 034c94f | 2026-11-12T00:59:40Z | claude-opus-5-5 | 12 | 5464 | 1339764 | 11488 | 0.4692 | Read each site's identity against the other's across the fleet (#192 I2, I3, I4, I8) |
+| 793b213 | 2026-11-12T01:44:39Z | claude-opus-5-5 | 6 | 2417 | 303500 | 255627 | 2.1541 | Name an evil twin's attacker only when sloth attributed it (#192 I2-I4 review) |
