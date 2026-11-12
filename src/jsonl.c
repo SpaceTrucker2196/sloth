@@ -42,6 +42,7 @@
 #include "reg_obs.h"           /* wifi_regulatory (#101 slice B) */
 #include "camera_join.h"       /* device_class_label() (#106 round 2) */
 #include "rf_distance.h"       /* est_dist_* (2026-10-26) */
+#include "probe_latency.h"     /* beacon.probe_lat (JSONL 1.6.0, #187 S3) */
 
 static FILE           *g_fp;
 /* Open refusal reason and write-failure count (#87), under g_mu. */
@@ -958,6 +959,32 @@ void jsonl_emit_devices(const sloth_state_t *s) {
     }
 }
 
+/* beacon.probe_lat (JSONL 1.6.0, #187 S3): this BSSID's probe-response
+ * latency, the nearest-rank figures over its last PLAT_SAMPLES pairs per
+ * kind (probe_latency.h). Absent until a pair was recorded, so a consumer
+ * can tell "not measured" from a figure. An observation only: no cited
+ * threshold exists and nothing in sloth reads it for a verdict.
+ *
+ * Change-only emission: `beacon` has no change-only signature — it is
+ * written on every pass — so these raw microseconds sign nothing. Should
+ * the record gain one, they stay out of it (agents/AGENTS.md): a median
+ * moves on nearly every new pair. */
+static void emit_probe_lat(char *buf, int *off, const uint8_t bssid[6]) {
+    probe_latency_row_t pl;
+    if (!probe_latency_get(bssid, &pl) || pl.src == PLAT_SRC_NONE) return;
+    const plat_stats_t *d = &pl.kind[PLAT_KIND_DIRECTED];
+    const plat_stats_t *w = &pl.kind[PLAT_KIND_WILDCARD];
+    if (d->n == 0 && w->n == 0) return;
+    appendf(buf, LINEBUF, off,
+            ",\"probe_lat\":{\"src\":\"%s\",\"n_dir\":%u,\"med_dir_us\":%u,"
+            "\"p10_dir_us\":%u,\"p90_dir_us\":%u,\"min_dir_us\":%u,"
+            "\"n_wild\":%u,\"med_wild_us\":%u}",
+            pl.src == PLAT_SRC_TSFT ? "tsft" : "pcap",
+            (unsigned)d->n, (unsigned)d->med_us, (unsigned)d->p10_us,
+            (unsigned)d->p90_us, (unsigned)d->min_us,
+            (unsigned)w->n, (unsigned)w->med_us);
+}
+
 void jsonl_emit_beacons(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
     time_t now = sloth_wall();
@@ -1070,6 +1097,9 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
                             k ? "," : "", nb, n->channel, n->phy_type);
         }
         appendf(buf, LINEBUF, &off, "]");
+        /* Additive (JSONL 1.6.0, #187 S3), last so every earlier field
+         * keeps its position. */
+        emit_probe_lat(buf, &off, e->bssid);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }

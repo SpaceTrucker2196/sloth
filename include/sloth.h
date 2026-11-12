@@ -46,7 +46,7 @@
  * stream's history — the records predate the field by many releases. A
  * `sensor_health` line with no `jsonl_version` is from a stream written
  * before this version and says nothing more than that. */
-#define SLOTH_JSONL_VERSION "1.5.0"
+#define SLOTH_JSONL_VERSION "1.6.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
