@@ -416,6 +416,57 @@ static void test_karma_context_note(void) {
     ASSERT_STR(v.names, "pair+oui");
 }
 
+/* #151, owner decision 2026-11-12: one vocabulary. Every confidence a
+ * tool row can report maps to a tier, and the word printed in the
+ * attribution is that tier's word as the verdict spells it. HIGH maps
+ * to suspected, not corroborated: one row is one signal class. Seen red
+ * with HIGH mapped to HW_TIER_CORROBORATED in hw_tier_of_tool_conf()
+ * (the HIGH line), and with tool_confidence_name() given back "high"
+ * (the word check), each then restored. */
+static void test_tool_confidence_maps_onto_the_tiers(void) {
+    ASSERT_EQ((int)hw_tier_of_tool_conf(TOOL_CONF_NONE), (int)HW_TIER_NONE);
+    ASSERT_EQ((int)hw_tier_of_tool_conf(TOOL_CONF_LOW),
+              (int)HW_TIER_SUSPECTED);
+    ASSERT_EQ((int)hw_tier_of_tool_conf(TOOL_CONF_MED),
+              (int)HW_TIER_SUSPECTED);
+    ASSERT_EQ((int)hw_tier_of_tool_conf(TOOL_CONF_HIGH),
+              (int)HW_TIER_SUSPECTED);
+    for (int c = TOOL_CONF_NONE; c <= TOOL_CONF_HIGH; c++) {
+        char l[40], n[32];
+        hw_verdict_format(hw_tier_of_tool_conf((sloth_tool_conf_t)c),
+                          SLOTH_TOOL_PINEAPPLE_MK7, HW_SIG_TOOL,
+                          l, sizeof(l), n, sizeof(n));
+        const char *w = tool_confidence_name((sloth_tool_conf_t)c);
+        if (!w[0]) { ASSERT_STR(l, ""); continue; }
+        size_t wl = strlen(w);
+        ASSERT(strncmp(l, w, wl) == 0 && l[wl] == '-');
+    }
+    /* Nothing the operator reads says low, med or high any more: the
+     * attribution carries no confidence word at all, so the tier is
+     * stated once, by the verdict. Seen red with the "%.20s/%s%s"
+     * format restored in tool_attribution_format(), then restored. */
+    sloth_tool_sig_t row = *shipped(SLOTH_TOOL_PINEAPPLE_MK7);
+    char a[48];
+    for (int c = TOOL_CONF_LOW; c <= TOOL_CONF_HIGH; c++) {
+        tool_attribution_format(a, sizeof(a), &row, (sloth_tool_conf_t)c);
+        ASSERT(strchr(a, '/') == NULL);
+        ASSERT(strstr(a, "low") == NULL && strstr(a, "med") == NULL &&
+               strstr(a, "high") == NULL);
+    }
+}
+
+/* The test seam reaches the matcher, and NULL restores the empty
+ * shipped table. */
+static void test_stack_test_table_seam(void) {
+    hw_stack_row_t r = good_row();
+    ASSERT(hw_stack_match(r.ie_order_hash, r.ie_order_count, NULL) == NULL);
+    hw_stack_test_table(&r, 1);
+    ASSERT(hw_stack_match(r.ie_order_hash, r.ie_order_count, NULL) == &r);
+    hw_stack_test_table(NULL, 0);
+    ASSERT(hw_stack_match(r.ie_order_hash, r.ie_order_count, NULL) == NULL);
+    ASSERT_EQ(hw_stack_count(), 0);
+}
+
 void run_attack_hw_tests(void) {
     TEST_SUITE("attack-hardware stack table (#151)");
     RUN_TEST(test_stack_table_ships_empty);
@@ -441,4 +492,6 @@ void run_attack_hw_tests(void) {
     RUN_TEST(test_every_tool_has_a_slug);
     RUN_TEST(test_verdict_format_round_trips);
     RUN_TEST(test_karma_context_note);
+    RUN_TEST(test_tool_confidence_maps_onto_the_tiers);
+    RUN_TEST(test_stack_test_table_seam);
 }

@@ -34,6 +34,14 @@ static const hw_stack_row_t HW_STACKS[] = {
 #define HW_STACK_ROWS \
     ((int)(sizeof(HW_STACKS) / sizeof(HW_STACKS[0])) - 1)
 
+static const hw_stack_row_t *g_stack_rows = HW_STACKS;
+static int g_stack_n = HW_STACK_ROWS;
+
+void hw_stack_test_table(const hw_stack_row_t *rows, int n) {
+    g_stack_rows = rows ? rows : HW_STACKS;
+    g_stack_n    = rows ? n : HW_STACK_ROWS;
+}
+
 int hw_stack_count(void) { return HW_STACK_ROWS; }
 
 const hw_stack_row_t *hw_stack_at(int i) {
@@ -91,7 +99,7 @@ const hw_stack_row_t *hw_stack_match_table(const hw_stack_row_t *rows,
 
 const hw_stack_row_t *hw_stack_match(uint32_t hash, uint16_t count,
                                      int *ambiguous) {
-    return hw_stack_match_table(HW_STACKS, HW_STACK_ROWS, hash, count,
+    return hw_stack_match_table(g_stack_rows, g_stack_n, hash, count,
                                 ambiguous);
 }
 
@@ -221,6 +229,16 @@ void hw_verdict_eval(const hw_inputs_t *in, hw_verdict_t *out) {
     hw_verdict_format(out->tier, out->device, out->signals,
                       out->label, sizeof(out->label),
                       out->names, sizeof(out->names));
+}
+
+hw_tier_t hw_tier_of_tool_conf(sloth_tool_conf_t conf) {
+    switch (conf) {
+    case TOOL_CONF_LOW:
+    case TOOL_CONF_MED:
+    case TOOL_CONF_HIGH: return HW_TIER_SUSPECTED;
+    case TOOL_CONF_NONE: break;
+    }
+    return HW_TIER_NONE;
 }
 
 void hw_verdict_format(int tier, int device, int signals,

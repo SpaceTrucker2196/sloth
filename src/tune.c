@@ -310,6 +310,9 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
      * threshold above what a row can hold would never fire. */
     { "karma.forge_ssids",          KARMA_FORGE_SSID_MIN_DEFAULT, 2, KARMA_FORGE_MAX_SSIDS, "distinct never-beaconed SSIDs one BSSID answered directed probes for" },
     { "karma.forge_window_s",       KARMA_FORGE_WINDOW_DEFAULT_S, 10, 86400, "seconds an answered SSID stays on the forge row" },
+    /* #187, 2026-11-12. The ceiling is the default forge window: an
+     * association later than the row keeps its names is never read. */
+    { "karma.forge_assoc_s",        KARMA_FORGE_ASSOC_DEFAULT_S, 5, KARMA_FORGE_WINDOW_DEFAULT_S, "seconds after a forged probe answer in which the answered station's association under that name makes KARMA_PROBE_FORGE CRIT" },
     /* #172 (src/harvest_track.h argues each default). The BSSID count's
      * ceiling is the per-station target table, the deauth count's floor
      * 1 (one frame is a legitimate setting, if a noisy one), and the

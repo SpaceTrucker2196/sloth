@@ -1,20 +1,20 @@
 ---
 type: KARMA_PROBE_FORGE
 technique: T1557
-rule_file: src/alerts/rules_twin.c:2240 rule_karma_probe_forge() (capture side karma_observe_frame(), counting karma_forged_ssids(), both in src/karma_detect.c; tune rows karma.forge_ssids and karma.forge_window_s in src/tune.c)
+rule_file: src/alerts/rules_twin.c:2257 rule_karma_probe_forge() (capture side karma_observe_frame(), counting karma_forged_ssids(), capture karma_forge_captured(), all in src/karma_detect.c; tune rows karma.forge_ssids, karma.forge_window_s and karma.forge_assoc_s in src/tune.c)
 count_semantics: per poll while the forge row holds >= karma.forge_ssids never-beaconed answered SSIDs, one fire per answering BSSID; the row ages names out after karma.forge_window_s (600 s) of no further answer, so the incident outlives the last forged answer by at most the window. Not per frame
-severity_assessment: agree - WARN for one station's directed probes answered with two names the BSSID never beaconed; CRIT when two distinct stations were answered, or when the BSSID is also a KARMA_AP beacon fan-out (the issue's S1 + S2)
+severity_assessment: agree - WARN while the radio only forges answers (to one station or several, with or without a KARMA_AP beacon fan-out); CRIT when a station was captured: sent a forged answer for a name, associated to the BSSID under that name within karma.forge_assoc_s, and granted (owner decision on #187, 2026-11-12)
 false_positive_risk: low - an honest BSS answers only for its own SSID, and that answer (hidden or not) is filtered before the table; the residual is unverified gear behaviour (an 802.11ax Multiple BSSID transmitter writing a nontransmitted SSID into its own response), for which karma.forge_ssids is the knob
 noise_verdict: not measured - new rule (#187 S2, 2026-11-11); no reference-host firing data yet
 prevalence: the mechanism is the original KARMA (2005) and a standard airbase-ng option [1][2]; modern clients that stopped sending directed probes for their whole preferred list give it less to see [1]
-tuning: [karma.forge_ssids (2, 2..8); karma.forge_window_s (600, 10..86400); the 5 s request/response pairing bound is protocol, not a knob]
+tuning: [karma.forge_ssids (2, 2..8); karma.forge_window_s (600, 10..86400); karma.forge_assoc_s (60, 5..600); the 5 s request/response pairing bound is protocol, not a knob]
 researched: 2026-11-11
 ---
 ## What the rule checks
 
 The capture side, `karma_observe_frame()` (`src/karma_detect.c`), is fed every Probe Request and every Probe Response by `src/capture/probe.c`. A directed Probe Request (non-empty SSID, unicast SA) is remembered in a 128-entry ring. A Probe Response is recorded on its BSSID's forge row only when its DA is a station whose directed probe for exactly that SSID arrived within `KARMA_FORGE_PAIR_S` (5 s, monotonic clock), and the SSID is not the BSSID's current name per `beacon_find_ssid()`. The capture path reveals a hidden AP's name from its probe response before this check, so a hidden AP answering for its own name is filtered.
 
-`rule_karma_probe_forge()` (`src/alerts/rules_twin.c:2164`) walks the snapshot (`s->karma_forge`) and calls `karma_forged_ssids()`: the row's SSIDs that are neither the BSSID's current name nor anywhere in its beacon `ssid_history[]`. With no beacon row for the BSSID, or a history at `MAX_AP_SSID_HISTORY` (8), the answer is 0. At `karma.forge_ssids` (2) or more the rule fires; CRIT when the forged answers went to `KARMA_FORGE_STA_CRIT` (2) distinct stations, or when the same BSSID beacons `karma.ssid_thresh` (3) or more SSIDs. Key `karmaforge:<bssid>`. Evidence: the newest answering Probe Response per forged name.
+`rule_karma_probe_forge()` (`src/alerts/rules_twin.c:2257`) walks the snapshot (`s->karma_forge`) and calls `karma_forged_ssids()`: the row's SSIDs that are neither the BSSID's current name nor anywhere in its beacon `ssid_history[]`. With no beacon row for the BSSID, or a history at `MAX_AP_SSID_HISTORY` (8), the answer is 0. At `karma.forge_ssids` (2) or more the rule fires, WARN. It is CRIT only when `karma_forge_captured()` finds a captured station: one the row sent a forged answer naming SSID X, whose association request to this BSSID asked for X (`assoc_req_t.requested_ssid`) no earlier than its first such answer and at most `karma.forge_assoc_s` (60 s) after its newest, and that the BSSID granted (an `assoc_t` row: association response status 0 or a key installed, seen no earlier than the first answer). The per-(SSID, station) first and newest answer times are on the row (`ans_first`/`ans_last`). Two stations answered, or the BSSID also beaconing `karma.ssid_thresh` (3) or more SSIDs, are reported (`to K stations`, `+beacon fan-out`) and stay WARN. Key `karmaforge:<bssid>`. Evidence: the newest answering Probe Response per forged name.
 
 ## The mechanism
 
@@ -22,7 +22,7 @@ Dai Zovi and Macaulay built KARMA as "a special access point that responded to a
 
 ## Evidence that proves it
 
-The finding is the set of answers: a Probe Response from one BSSID naming SSID A to a station that had just asked for A, and another naming B, where neither A nor B was ever beaconed by that BSSID and neither is its name. The cited frames are those responses. The counts (names forged, stations answered, beacon fan-out) are on the stream as the BSSID's `karma_suspect` record (JSONL 1.3.0, the `[y]` row) and on slothweb's WiFi view in the "lures and key harvesting" card; slothweb still withholds this alert's detail, because the rule formats a variable named `fan_note` and its audit refuses the word "note". CRIT adds that the answers reached different stations (different people's private network names from one radio), or that the same radio is also beaconing a pool of names.
+The finding is the set of answers: a Probe Response from one BSSID naming SSID A to a station that had just asked for A, and another naming B, where neither A nor B was ever beaconed by that BSSID and neither is its name. The cited frames are those responses. The counts (names forged, stations answered, beacon fan-out) are on the stream as the BSSID's `karma_suspect` record (JSONL 1.3.0, the `[y]` row) and on slothweb's WiFi view in the "lures and key harvesting" card; slothweb shows this alert's detail since 2026-11-12, when the rule's `fan_note` (a word its audit refuses) became `fan`. CRIT adds the victim: a station that took a forged name and was let in, named as ` +captured <sta>`. Forging to many stations, or beside a beacon fan-out, is more bait, not a capture.
 
 What refutes it: the BSSID beaconing those names later (the `-C` mode of airbase-ng, [2]) moves it to `KARMA_AP`'s fan-out instead, and the names stop counting as forged here; a hidden AP's own name never counts.
 
@@ -33,7 +33,7 @@ What refutes it: the BSSID beaconing those names later (the `-C` mode of airbase
 
 ## Assessment
 
-The rule fills a stated gap rather than adding a parallel signal: `KARMA_AP`'s assessment records that the probe-response-only KARMA radio is out of its sight. Severity is conservative for a protocol-level observation. WARN on one station leaves room for the unverified MBSSID case above; CRIT requires a second independent station or the beacon fan-out. The issue's latency signal (S3) is not built because no primary source for its threshold was found.
+The rule fills a stated gap rather than adding a parallel signal: `KARMA_AP`'s assessment records that the probe-response-only KARMA radio is out of its sight. Severity follows the owner's 2026-11-12 decision: WARN is bait offered, CRIT a victim captured. That also leaves the unverified MBSSID case above at WARN, since a station joining a real MBSSID profile asks for that profile's own name, which a correct transmitter beacons. The issue's latency signal (S3) is not built because no primary source for its threshold was found.
 
 ## Bibliography
 
@@ -43,4 +43,4 @@ The rule fills a stated gap rather than adding a parallel signal: `KARMA_AP`'s a
 
 ## Verification notes
 
-Written 2026-11-11 with the rule, against `src/alerts/rules_twin.c:2164`, `src/karma_detect.{c,h}` and `src/capture/probe.c`. Quotations in [1] were read from the PDF's extracted text and in [2] from the page on the date given. The tests are `tests/test_karma.c :: test_forge_*`: hand-built frames per IEEE 802.11-2020 §9.3.3.3, §9.3.3.10, §9.3.3.11 and §9.4.2.2, run through the capture path's observer order.
+Written 2026-11-11 with the rule, against `src/alerts/rules_twin.c:2164`, `src/karma_detect.{c,h}` and `src/capture/probe.c`. Revised 2026-11-12 for the severity decision, against `:2257`; the capture tests are `test_forge_captured_station_is_crit` and `test_forge_no_capture_without_each_part`. Quotations in [1] were read from the PDF's extracted text and in [2] from the page on the date given. The tests are `tests/test_karma.c :: test_forge_*`: hand-built frames per IEEE 802.11-2020 §9.3.3.3, §9.3.3.10, §9.3.3.11 and §9.4.2.2, run through the capture path's observer order.

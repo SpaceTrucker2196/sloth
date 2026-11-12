@@ -414,11 +414,17 @@ static void forge_note(const uint8_t bssid[6], const uint8_t sta[6],
         snprintf(r->ssids[k], sizeof(r->ssids[k]), "%s", ssid);
         r->ssid_ev[k]       = 0;
         r->ssid_sta_mask[k] = 0;
+        memset(r->ans_first[k], 0, sizeof(r->ans_first[k]));
+        memset(r->ans_last[k], 0, sizeof(r->ans_last[k]));
     }
     f->ssid_ms[k]   = now_ms;
     r->ssid_last[k] = wall;
     if (ev) r->ssid_ev[k] = ev;
-    if (si >= 0) r->ssid_sta_mask[k] |= (uint8_t)(1u << si);
+    if (si >= 0) {
+        r->ssid_sta_mask[k] |= (uint8_t)(1u << si);
+        if (!r->ans_first[k][si]) r->ans_first[k][si] = wall;
+        r->ans_last[k][si] = wall;
+    }
 }
 
 void karma_observe_frame(const dot11_frame_t *f, const char *ssid) {
@@ -490,8 +496,14 @@ void karma_forge_snapshot(sloth_state_t *s) {
                     r->ssid_last[k]     = r->ssid_last[last];
                     r->ssid_ev[k]       = r->ssid_ev[last];
                     r->ssid_sta_mask[k] = r->ssid_sta_mask[last];
+                    memcpy(r->ans_first[k], r->ans_first[last],
+                           sizeof(r->ans_first[k]));
+                    memcpy(r->ans_last[k], r->ans_last[last],
+                           sizeof(r->ans_last[k]));
                     f->ssid_ms[k]       = f->ssid_ms[last];
                 }
+                memset(r->ans_first[last], 0, sizeof(r->ans_first[last]));
+                memset(r->ans_last[last], 0, sizeof(r->ans_last[last]));
                 r->n_ssids--;
             } else {
                 k++;
@@ -512,22 +524,88 @@ void karma_forge_snapshot(sloth_state_t *s) {
     pthread_mutex_unlock(&g_forge_mu);
 }
 
-int karma_forged_ssids(const sloth_state_t *s, const karma_forge_t *r,
-                       int *sta_n_out, uint64_t *ev_out, int ev_max,
-                       int *ev_n) {
-    if (sta_n_out) *sta_n_out = 0;
-    if (ev_n) *ev_n = 0;
-    if (!s || !r) return 0;
+/* The beacon row `forged` is judged against, or NULL when "never
+ * beaconed" cannot be said: no beacon on file (this radio never heard
+ * the BSSID beacon at all), or a saturated history (a name past the cap
+ * was dropped unrecorded, not unbeaconed). */
+static const beacon_ap_t *forge_beacon_row(const sloth_state_t *s,
+                                           const karma_forge_t *r) {
     const beacon_ap_t *a = NULL;
     for (int i = 0; i < s->beacon_count; i++)
         if (memcmp(s->beacon_aps[i].bssid, r->bssid, 6) == 0) {
             a = &s->beacon_aps[i];
             break;
         }
-    /* No beacon on file: "never beaconed" cannot be said of a BSSID this
-     * radio never heard beacon at all. A saturated history: a name past
-     * the cap was dropped unrecorded, not unbeaconed. */
-    if (!a || a->ssid_history_n >= MAX_AP_SSID_HISTORY) return 0;
+    if (!a || a->ssid_history_n >= MAX_AP_SSID_HISTORY) return NULL;
+    return a;
+}
+
+/* 1 when `name` counts as forged against beacon row `a`: neither the
+ * BSSID's current name nor anywhere in its beacon history. */
+static int forge_name_forged(const beacon_ap_t *a, const char *name) {
+    if (!name[0]) return 0;
+    if (a->ssid[0] && strcmp(a->ssid, name) == 0) return 0;
+    for (int h = 0; h < a->ssid_history_n; h++)
+        if (strcmp(a->ssid_history[h], name) == 0) return 0;
+    return 1;
+}
+
+int karma_forge_captured(const sloth_state_t *s, const karma_forge_t *r,
+                         uint8_t sta_out[6]) {
+    if (sta_out) memset(sta_out, 0, 6);
+    if (!s || !r) return 0;
+    const beacon_ap_t *a = forge_beacon_row(s, r);
+    if (!a) return 0;
+    time_t win = KARMA_FORGE_ASSOC_S;
+    int nn = r->n_ssids < KARMA_FORGE_MAX_SSIDS ? r->n_ssids
+                                                : KARMA_FORGE_MAX_SSIDS;
+    int ns = r->n_sta < KARMA_FORGE_MAX_STA ? r->n_sta : KARMA_FORGE_MAX_STA;
+    for (int k = 0; k < nn; k++) {
+        if (!forge_name_forged(a, r->ssids[k])) continue;
+        for (int si = 0; si < ns; si++) {
+            /* 0 = this station was never sent an answer naming this
+             * SSID (set with its ssid_sta_mask bit, cleared with it). */
+            time_t first = r->ans_first[k][si], last = r->ans_last[k][si];
+            if (!first) continue;
+            /* The ask: this station, this BSSID, under the forged name,
+             * no earlier than the first forged answer it received and no
+             * later than the window after the newest. */
+            int asked = 0;
+            for (int q = 0; q < s->assoc_req_count && !asked; q++) {
+                const assoc_req_t *rq = &s->assoc_reqs[q];
+                if (memcmp(rq->bssid, r->bssid, 6) != 0) continue;
+                if (memcmp(rq->sta, r->sta[si], 6) != 0) continue;
+                if (strcmp(rq->requested_ssid, r->ssids[k]) != 0) continue;
+                if (rq->ts < first || rq->ts > last + win) continue;
+                asked = 1;
+            }
+            if (!asked) continue;
+            /* The grant: an association response with status 0, or the
+             * AP installing a key (assoc_t), seen no earlier than the
+             * first answer. A request alone is the station trying; the
+             * AP accepting it is the station captured. */
+            for (int g = 0; g < s->assoc_count; g++) {
+                const assoc_t *as = &s->assocs[g];
+                if (memcmp(as->bssid, r->bssid, 6) != 0) continue;
+                if (memcmp(as->sta_mac, r->sta[si], 6) != 0) continue;
+                if (as->source == ASSOC_SRC_UNKNOWN) continue;
+                if (as->last_seen < first) continue;
+                if (sta_out) memcpy(sta_out, r->sta[si], 6);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+int karma_forged_ssids(const sloth_state_t *s, const karma_forge_t *r,
+                       int *sta_n_out, uint64_t *ev_out, int ev_max,
+                       int *ev_n) {
+    if (sta_n_out) *sta_n_out = 0;
+    if (ev_n) *ev_n = 0;
+    if (!s || !r) return 0;
+    const beacon_ap_t *a = forge_beacon_row(s, r);
+    if (!a) return 0;
 
     int forged = 0;
     unsigned sta_mask = 0;
@@ -535,12 +613,7 @@ int karma_forged_ssids(const sloth_state_t *s, const karma_forge_t *r,
                                                 : KARMA_FORGE_MAX_SSIDS;
     for (int k = 0; k < nn; k++) {
         const char *name = r->ssids[k];
-        if (!name[0]) continue;
-        if (a->ssid[0] && strcmp(a->ssid, name) == 0) continue;
-        int beaconed = 0;
-        for (int h = 0; h < a->ssid_history_n; h++)
-            if (strcmp(a->ssid_history[h], name) == 0) { beaconed = 1; break; }
-        if (beaconed) continue;
+        if (!forge_name_forged(a, name)) continue;
         forged++;
         sta_mask |= r->ssid_sta_mask[k];
         if (ev_out && ev_n && r->ssid_ev[k] && *ev_n < ev_max)

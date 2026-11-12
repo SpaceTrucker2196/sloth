@@ -239,13 +239,17 @@ unsigned long karma_forge_evictions(void);
 #define KARMA_FORGE_WINDOW_DEFAULT_S 600
 #define KARMA_FORGE_WINDOW_S ((time_t)tune_val(TUNE_KARMA_FORGE_WINDOW_S))
 
-/* Distinct stations whose own probes drew forged answers before the
- * alert is CRIT without the fan-out corroborator. One station's
- * directed probes answered twice by one radio is already the KARMA
- * shape; the same radio answering *different* people's private network
- * names is the mechanism the 2005 paper describes, and no AP
- * misconfiguration produces it. */
-#define KARMA_FORGE_STA_CRIT 2
+/* How long after the newest forged answer to a station that station's
+ * association request, under the forged name, still counts as the
+ * answer having worked (#187, owner decision 2026-11-12: CRIT is a
+ * station captured, not bait offered). A station that took the bait
+ * associates within seconds of the probe exchange: authentication and
+ * association follow the scan directly (IEEE 802.11-2020 §11.3). The
+ * request must also come no earlier than the first forged answer it
+ * received, so an association older than the lure is never credited
+ * to it. A judgement, not a cited value; tunable: karma.forge_assoc_s. */
+#define KARMA_FORGE_ASSOC_DEFAULT_S 60
+#define KARMA_FORGE_ASSOC_S ((time_t)tune_val(TUNE_KARMA_FORGE_ASSOC_S))
 
 /* How many of this row's SSIDs its BSSID answered without ever
  * beaconing them, judged against s->beacon_aps[] (#187 S2). 0 when the
@@ -262,5 +266,21 @@ unsigned long karma_forge_evictions(void);
 int karma_forged_ssids(const sloth_state_t *s, const karma_forge_t *r,
                        int *sta_n_out, uint64_t *ev_out, int ev_max,
                        int *ev_n);
+
+/* A station captured by this row's forging (#187): a station that was
+ * sent a forged answer naming SSID X (one karma_forged_ssids() counts),
+ * then asked this BSSID to associate under X (assoc_req_t,
+ * requested_ssid == X) no earlier than its first such answer and at
+ * most KARMA_FORGE_ASSOC_S after its newest, and that the BSSID then
+ * granted (an assoc_t row: association response status 0, or a key
+ * installed) no earlier than that first answer. 1 with the station's
+ * MAC in `sta_out` (zeroed otherwise; may be NULL), else 0. Unknowable
+ * where karma_forged_ssids() is (no beacon row, saturated history): 0.
+ *
+ * The one input that makes KARMA_PROBE_FORGE CRIT. Forging alone, to
+ * any number of stations, with or without a beacon fan-out, is bait
+ * offered, and stays WARN. */
+int karma_forge_captured(const sloth_state_t *s, const karma_forge_t *r,
+                         uint8_t sta_out[6]);
 
 #endif /* KARMA_DETECT_H */

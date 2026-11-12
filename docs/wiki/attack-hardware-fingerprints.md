@@ -10,8 +10,10 @@ IE-order table (the mechanism and its capture guard; **no rows**, because
 no row can be sourced without a capture), the Pineapple setup-AP pairing
 (from Hak5's own documentation), and a verdict layer that turns the
 inputs into `none` / `suspected-<device>` / `corroborated-<device>` on the
-`KARMA_AP` detail and as two JSONL fields. Nothing here raises an alert
-or moves a severity.
+`KARMA_AP` detail and as two JSONL fields. Nothing here raises an alert.
+Since the owner's 2026-11-12 rulings a `corroborated` verdict makes
+`KARMA_AP` CRIT, and the tool signature's old `low/med/high` word is
+mapped onto these tiers, so one vocabulary reaches the operator.
 
 **Sources**: `src/attack_hw.c`, `src/attack_hw.h`,
 `src/alerts/rules_twin.c` (`rule_karma_ap`), `src/alerts/engine.c`
@@ -25,7 +27,9 @@ or moves a severity.
 IEEE 802.11-2020 §9.3.3.2, §9.4.1.3, §9.4.1.10, §11.1.3; Wi-Fi Simple
 Configuration Technical Specification v2.0 §7.7, §12.
 
-**Last updated**: 2026-11-12 (#151: the stack table mechanism, the
+**Last updated**: 2026-11-12 (#151 owner rulings: `low/med/high` mapped
+onto the tiers, `corroborated` raises `KARMA_AP` to CRIT), 2026-11-12
+(#151: the stack table mechanism, the
 Pineapple setup-AP pairing, the verdict layer), 2026-10-20
 
 ## What #151 built (2026-11-12)
@@ -96,8 +100,9 @@ two-radio pattern still waits on a capture of a configured MK7 with
 PineAP and the management AP both up.
 
 The pairing enriches a `KARMA_AP` that already fired: the detail gains
-`+setup-AP Pineapple_1a2b@<bssid>`. It never raises an alert and never
-moves severity or confidence.
+`+setup-AP Pineapple_1a2b@<bssid>`. It never raises an alert, and alone
+it moves neither severity nor confidence; as one of the two classes
+behind a `corroborated` verdict it can make the alert CRIT (below).
 
 ### 3. The verdict layer
 
@@ -122,13 +127,14 @@ Tiers:
 So `corroborated` is **unreachable on live data today**: no input is
 capture-backed. That is plan #145's standard applied, not a gap: the
 honest ceiling is `suspected` until a capture backs a row. Tests reach
-`corroborated` with synthetic capture-backed rows.
+`corroborated` with synthetic capture-backed rows, and since the
+2026-11-12 ruling a `corroborated` verdict makes `KARMA_AP` CRIT.
 
 The tier lands in two places. In the `KARMA_AP` detail as
 `hw:suspected-pineapple-mk7`, after the tool attribution. In JSONL as
 `hw_verdict` and `hw_signals` (`"oui+pair"`) on `alert` and every
 `alert.*` record, omitted when there is none (`jsonl_version` 1.4.0,
-[[jsonl-schema]]). The alert stores three bytes (`hw_tier`, `hw_device`,
+[[jsonl-schema]]; 1.5.0 dropped the tool attribution's confidence word). The alert stores three bytes (`hw_tier`, `hw_device`,
 `hw_signals`) that sat in padding; both surfaces render through
 `hw_verdict_format()`, so the detail and the record cannot spell a
 verdict two ways.
@@ -146,17 +152,36 @@ the `hw_note` buffer in the detail format, and
 `fire_stage_hw_verdict()` before `fire_inv()`. The stage is a one-shot
 the next `fire_inv()` stamps and clears, so the other fourteen
 `fire_inv()` callers are untouched and nothing else inherits a verdict.
+Since 2026-11-12 a fifth: `hw_corrob` (the tier is `corroborated`) in
+the CRIT gate.
 
-### Owner rulings still needed
+### Owner rulings, 2026-11-12
 
-- **Two vocabularies.** `tool_fingerprint.c` reports `low/med/high`, and
-  the verdict reports `suspected/corroborated`. #151 asks whether `high`
-  maps to `corroborated` or is renamed. Unchanged here: both still reach
-  the operator.
-- **Severity policy.** The verdict moves neither severity nor
-  confidence. Whether a `corroborated` verdict should escalate
-  `KARMA_AP` (as `tool_verified` already does) is an owner call; it can
-  only matter once a capture-backed row exists.
+- **One vocabulary.** `tool_fingerprint.c`'s `low/med/high` count the
+  beacon fields one signature row compared; the tiers count independent
+  signal classes. The mapping: no match is `none`; `low`, `med` and
+  `high` are all `suspected`, because one row is one class at any field
+  count and `corroborated` needs two, one capture-backed.
+  `hw_tier_of_tool_conf()` states it, `tool_confidence_name()` returns
+  the tier's word, and `tests/test_attack_hw.c ::
+  test_tool_confidence_maps_onto_the_tiers` holds them together. The
+  word would be `suspected` on every match, so the attribution no longer
+  prints one (`[ESP32 Marauder? provisional]`, was `/med?`); the tier is
+  stated once, by ` hw:<tier>-<device>` and `hw_verdict`. That changed
+  `karma_suspect`'s `tool` value form: `jsonl_version` 1.5.0
+  ([[jsonl-schema]]). The field count stays internal, where it ranks
+  rows and caps an UNVERIFIED row.
+- **Severity.** A `corroborated` verdict makes `KARMA_AP` CRIT
+  (`rule_karma_ap()`, beside the PNL, deauth-chain and verified-tool
+  corroborators). Confidence does not move. `suspected` stays context
+  only: one input naming a device is a lead, not a tie to this radio. It
+  cannot fire on live data until a capture-backed row exists (#199);
+  `tests/test_alerts.c :: test_karma_corroborated_verdict_is_crit`
+  reaches it with a synthetic capture-backed stack row put in front of
+  the matcher by the test seam `hw_stack_test_table()`.
+
+### Still open
+
 - **Surfaces.** The tier is on the Alerts view through the detail. The
   `[b]` detail and the `[A]` view #77 proposed are not built (plan #145
   ruling 3: no new views by default).

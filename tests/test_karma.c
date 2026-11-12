@@ -337,14 +337,14 @@ static void test_tool_attribution_marked_provisional(void) {
     b->fp.flags  = AP_FP_FLAG_ESPRESSIF_OUI;   /* and no HT */
     karma_update(&s);
     ASSERT_EQ(s.karma_count, 1);
-    ASSERT_STR(s.karma_aps[0].tool, "ESP32 Marauder/med? provisional");
+    ASSERT_STR(s.karma_aps[0].tool, "ESP32 Marauder? provisional");
     /* Display only: an UNVERIFIED guess is not corroboration, so it
      * must not move the ranking score. */
     ASSERT_EQ(s.karma_aps[0].score, 1);
 
     char out[8192];
     capture_karma(&s, out, sizeof(out));
-    ASSERT(strstr(out, "[ESP32 Marauder/med? provisional]") != NULL);
+    ASSERT(strstr(out, "[ESP32 Marauder? provisional]") != NULL);
     ASSERT(strstr(out, "UNVERIFIED signature") != NULL);
 
     /* No match, no attribution — and nothing provisional on the row. */
@@ -508,7 +508,7 @@ static void test_view_legend_states_the_corroboration_rule(void) {
  * karma_fit_tail()'s label-shortening branch removed (the bracket is
  * clipped and the "? provisional" marker lost).
  *
- * A clipped label ends in "~", or "[ES/med? ...]" passes for a whole
+ * A clipped label ends in "~", or "[ES? ...]" passes for a whole
  * tool name: unclipped_cut is seen to fail with the "~" dropped from the
  * kept-some format, and again with the bare-marker branch printing a
  * one-letter stub instead, each then restored. */
@@ -530,14 +530,16 @@ static void test_view_full_page_fits_a_100x33_terminal(void) {
         k->deauth_chain    = 1;
         k->score           = 99;
         /* Even rows a one-digit age, so the label keeps some of
-         * itself (the "~" branch); odd rows the 14-day age, so it
-         * keeps none (the bare-marker branch). */
-        k->last_seen       = (i & 1) ? now - 1234567 : now - 4;
+         * itself (the "~" branch); odd rows an age of 123456 days, so
+         * it keeps none (the bare-marker branch). Until #151 dropped
+         * the "/conf" from the attribution a 14-day age was enough;
+         * the four cells that freed now go to the label. */
+        k->last_seen       = (i & 1) ? now - 123456L * 86400 : now - 4;
         snprintf(k->top_ssid, sizeof(k->top_ssid), "%s",
                  "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345");
         snprintf(k->tool, sizeof(k->tool), "%s",
-                 (i & 1) ? "Twenty-char-label-XX/high? provisional"
-                         : "ESP32 Marauder/med? provisional");
+                 (i & 1) ? "Twenty-char-label-XX? provisional"
+                         : "ESP32 Marauder? provisional");
     }
     s.karma_sel = 3;          /* the reverse-video branch draws too */
 
@@ -562,12 +564,12 @@ static void test_view_full_page_fits_a_100x33_terminal(void) {
             rows++;
             if (!strstr(line, "? provisional]")) unmarked++;
             /* A label that is not whole must say it was cut. */
-            if (!strstr(line, "[ESP32 Marauder/") &&
-                !strstr(line, "[Twenty-char-label-XX/") &&
-                !strstr(line, "~/"))
+            if (!strstr(line, "[ESP32 Marauder?") &&
+                !strstr(line, "[Twenty-char-label-XX?") &&
+                !strstr(line, "~?"))
                 unclipped_cut++;
-            if (strstr(line, "[ESP~/med? provisional]")) kept_some++;
-            if (strstr(line, "[~/high? provisional]"))       kept_none++;
+            if (strstr(line, "[ESP") && strstr(line, "~? provisional]")) kept_some++;
+            if (strstr(line, "[~? provisional]"))       kept_none++;
         }
     }
     int leg = runner_screen_find(" PNL = SSIDs");
@@ -896,10 +898,12 @@ static void test_forge_classic_karma_warns(void) {
     fd_end();
 }
 
-/* One radio answering two different stations' private names: CRIT.
- * Seen to fail with KARMA_FORGE_STA_CRIT raised to 3 and with the
- * gate's >= made >, each then restored. */
-static void test_forge_two_stations_is_crit(void) {
+/* One radio answering two different stations' private names is still
+ * bait offered: WARN (owner decision on #187, 2026-11-12), with the
+ * station count in the detail and a tail that says no one was taken.
+ * Seen red with the pre-decision gate (`stations >= 2` CRIT) put back
+ * in rule_karma_probe_forge(), then restored. */
+static void test_forge_two_stations_stays_warn(void) {
     fd_begin();
     static sloth_state_t s; memset(&s, 0, sizeof s);
     fd_send_beacon(FD_LURE, "default");
@@ -909,16 +913,19 @@ static void test_forge_two_stations_is_crit(void) {
     int i = fd_find(&s, ALERT_TYPE_KARMA_PROBE_FORGE);
     ASSERT(i >= 0);
     if (i >= 0) {
-        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
-        ASSERT(strstr(s.alerts[i].detail, "to 2 stations") != NULL);
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT(strstr(s.alerts[i].detail, "to 2 stations - forging only, "
+                                          "no station associated") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "+captured") == NULL);
     }
     fd_end();
 }
 
 /* The issue's joint rule, S1 + S2: the same BSSID beacon-fans past
- * KARMA_SSID_THRESH and forges answers. CRIT on one station. Seen to
- * fail with the fan-out term removed from the gate, then restored. */
-static void test_forge_with_beacon_fanout_is_crit(void) {
+ * KARMA_SSID_THRESH and forges answers. Reported, and WARN: the fan-out
+ * is more bait. Seen red with the fan-out term put back in the CRIT
+ * gate, then restored. */
+static void test_forge_with_beacon_fanout_stays_warn(void) {
     fd_begin();
     static sloth_state_t s; memset(&s, 0, sizeof s);
     fd_send_beacon(FD_LURE, "FreeWiFi");
@@ -930,12 +937,144 @@ static void test_forge_with_beacon_fanout_is_crit(void) {
     int i = fd_find(&s, ALERT_TYPE_KARMA_PROBE_FORGE);
     ASSERT(i >= 0);
     if (i >= 0) {
-        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
-        ASSERT(strstr(s.alerts[i].detail, "+beacon fan-out") != NULL);
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT(strstr(s.alerts[i].detail, "+beacon fan-out - forging only")
+               != NULL);
         ASSERT(strstr(s.alerts[i].detail, "(beacons 3)") != NULL);
     }
     /* Both kinds, one radio: the fan-out is KARMA_AP's own finding. */
     ASSERT(fd_find(&s, ALERT_TYPE_KARMA_AP) >= 0);
+    fd_end();
+}
+
+/* ── A station captured (#187, owner decision 2026-11-12) ──
+ *
+ * The lure: FD_LURE beacons "default" and answers FD_STA_A's directed
+ * probes for HomeNet and CorpNet. The association tables are seeded on
+ * the snapshot as the poll would have them; the answers carry real wall
+ * time (fd_begin() stubs only the monotonic clock), so `now` read after
+ * them is at or after the first answer and inside the window. */
+static void fd_lure_station_a(void) {
+    fd_send_beacon(FD_LURE, "default");
+    fd_asked_and_answered(FD_STA_A, FD_LURE, "HomeNet");
+    fd_asked_and_answered(FD_STA_A, FD_LURE, "CorpNet");
+}
+
+static void fd_seed_ask(sloth_state_t *s, const uint8_t sta[6],
+                        const char *ssid, time_t ts) {
+    assoc_req_t *r = &s->assoc_reqs[s->assoc_req_count++];
+    memset(r, 0, sizeof(*r));
+    memcpy(r->sta, sta, 6);
+    memcpy(r->bssid, FD_LURE, 6);
+    snprintf(r->requested_ssid, sizeof(r->requested_ssid), "%s", ssid);
+    r->ts = ts;
+}
+
+static void fd_seed_grant(sloth_state_t *s, const uint8_t sta[6], time_t ts) {
+    assoc_t *g = &s->assocs[s->assoc_count++];
+    memset(g, 0, sizeof(*g));
+    memcpy(g->bssid, FD_LURE, 6);
+    memcpy(g->sta_mac, sta, 6);
+    g->source     = ASSOC_SRC_ASSOC;
+    g->first_seen = ts;
+    g->last_seen  = ts;
+}
+
+static int fd_forge_sev(sloth_state_t *s) {
+    alerts_update(s);
+    int i = fd_find(s, ALERT_TYPE_KARMA_PROBE_FORGE);
+    return i >= 0 ? (int)s->alerts[i].sev : -1;
+}
+
+/* Answered for HomeNet, asked to join as HomeNet, granted: CRIT, the
+ * station named, no WARN tail. */
+static void test_forge_captured_station_is_crit(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    fd_lure_station_a();
+    beacon_snapshot(&s);
+    karma_forge_snapshot(&s);
+    time_t now = time(NULL);
+    fd_seed_ask(&s, FD_STA_A, "HomeNet", now);
+    fd_seed_grant(&s, FD_STA_A, now);
+    uint8_t who[6];
+    ASSERT_EQ(karma_forge_captured(&s, &s.karma_forge[0], who), 1);
+    ASSERT_EQ(memcmp(who, FD_STA_A, 6), 0);
+    alerts_update(&s);
+    int i = fd_find(&s, ALERT_TYPE_KARMA_PROBE_FORGE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail,
+                      "to 1 stations +captured 02:aa:00:00:00:01") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, " - ") == NULL);
+    }
+    fd_end();
+}
+
+/* Each part of the capture, removed alone, leaves WARN. Seen red, one
+ * mutation at a time in karma_forge_captured(), each then restored:
+ *   - the grant loop replaced by `return 1` after the ask (request only);
+ *   - the requested_ssid comparison dropped (joined under its own name);
+ *   - the `rq->ts > last + win` bound dropped (too late);
+ *   - the `rq->ts < first` bound dropped (before the lure).
+ * The last case, a station the row answered for another name joining
+ * under a name it was never sent, is guarded twice: `!first` skips the
+ * pair, and its zero times put any request outside the window. Neither
+ * alone reddens it; it was seen red with both removed, then restored. */
+static void test_forge_no_capture_without_each_part(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    fd_lure_station_a();
+    beacon_snapshot(&s);
+    karma_forge_snapshot(&s);
+    time_t now = time(NULL);
+    const karma_forge_t *r = &s.karma_forge[0];
+    time_t first = 0, last = 0;
+    for (int k = 0; k < r->n_ssids; k++)
+        if (strcmp(r->ssids[k], "HomeNet") == 0) {
+            first = r->ans_first[k][0];
+            last  = r->ans_last[k][0];
+        }
+    ASSERT(first > 0 && last >= first);
+
+    /* Forging alone. */
+    ASSERT_EQ(fd_forge_sev(&s), (int)ALERT_SEV_WARN);
+
+    /* The station asked, the AP never granted. */
+    fd_seed_ask(&s, FD_STA_A, "HomeNet", now);
+    ASSERT_EQ(fd_forge_sev(&s), (int)ALERT_SEV_WARN);
+
+    /* Granted, but the ask was for the radio's own beaconed name. */
+    s.assoc_req_count = 0;
+    fd_seed_ask(&s, FD_STA_A, "default", now);
+    fd_seed_grant(&s, FD_STA_A, now);
+    ASSERT_EQ(fd_forge_sev(&s), (int)ALERT_SEV_WARN);
+
+    /* Under the forged name, but past the window after the newest
+     * answer; then the knob widened over it. */
+    s.assoc_req_count = 0;
+    fd_seed_ask(&s, FD_STA_A, "HomeNet",
+                last + (time_t)KARMA_FORGE_ASSOC_DEFAULT_S + 1);
+    ASSERT_EQ(fd_forge_sev(&s), (int)ALERT_SEV_WARN);
+    ASSERT_EQ(tune_set_id(TUNE_KARMA_FORGE_ASSOC_S,
+                          KARMA_FORGE_ASSOC_DEFAULT_S + 5), 1);
+    ASSERT_EQ(fd_forge_sev(&s), (int)ALERT_SEV_CRIT);
+    tune_reset();
+
+    /* Before the first forged answer: an older association. */
+    s.assoc_req_count = 0;
+    fd_seed_ask(&s, FD_STA_A, "HomeNet", first - 1);
+    ASSERT_EQ(fd_forge_sev(&s), (int)ALERT_SEV_WARN);
+
+    /* A station answered only for CafeNet, joining as HomeNet. */
+    fd_asked_and_answered(FD_STA_B, FD_LURE, "CafeNet");
+    karma_forge_snapshot(&s);
+    s.assoc_req_count = 0;
+    s.assoc_count = 0;
+    fd_seed_ask(&s, FD_STA_B, "HomeNet", now);
+    fd_seed_grant(&s, FD_STA_B, now);
+    ASSERT_EQ(fd_forge_sev(&s), (int)ALERT_SEV_WARN);
     fd_end();
 }
 
@@ -1334,8 +1473,10 @@ void run_karma_tests(void) {
     RUN_TEST(test_ranking);
     RUN_TEST(test_sel_clamps);
     RUN_TEST(test_forge_classic_karma_warns);
-    RUN_TEST(test_forge_two_stations_is_crit);
-    RUN_TEST(test_forge_with_beacon_fanout_is_crit);
+    RUN_TEST(test_forge_two_stations_stays_warn);
+    RUN_TEST(test_forge_with_beacon_fanout_stays_warn);
+    RUN_TEST(test_forge_captured_station_is_crit);
+    RUN_TEST(test_forge_no_capture_without_each_part);
     RUN_TEST(test_forge_count_boundary);
     RUN_TEST(test_forge_hidden_ssid_ap_is_not_forging);
     RUN_TEST(test_forge_legitimate_aps_do_not_fire);

@@ -72,10 +72,13 @@ const web_adf_t web_alert_detail_audited[] = {
       " ew is adsb_emergency_name()'s literal from sloth's own k_emerg[] table or \"-\""
       " (src/alerts/rules_adsb.c)" },
     /* 2026-11-12: the key-harvest kinds the WiFi view's card
-     * (web/ui/lure.js) sits beside, and the sensor's own-state kinds.
-     * KARMA_PROBE_FORGE stays off: its detail formats a variable named
-     * fan_note, which the banned word "note" refuses, and the rename is
-     * in rules_twin.c. */
+     * (web/ui/lure.js) sits beside, and the sensor's own-state kinds. */
+    /* #187, 2026-11-12: on once rules_twin.c renamed fan_note (the
+     * banned word "note") to fan. Every other %s is bssid_str or sta (a
+     * MAC as the rule formats it) or a literal. */
+    { "KARMA_PROBE_FORGE", "fan tail",
+      "fan is the literal \" +beacon fan-out\" or \"\"; tail is \"\" or one of two literals,"
+      " both just above the detail (src/alerts/rules_twin.c)" },
     { "PMKID_HARVEST", "tail",
       "tail is one of two literals just above the detail (src/alerts/rules_harvest.c)" },
     { "HANDSHAKE_HARVEST", "tail",

@@ -495,6 +495,20 @@ const char  *twin_class_label(twin_class_t c);
                                     * collapses identically. So this earns a
                                     * little confidence and proves nothing on
                                     * its own. */
+#define KARMA_W_IE_VARIETY    15   /* SUBTRACTED (#187, owner decision
+                                    * 2026-11-12): the advertised SSIDs came
+                                    * back with 2 or more distinct, all-known
+                                    * IE fingerprints. A PineAP-style radio
+                                    * answers every name with one IE set; an
+                                    * address presenting a different security
+                                    * posture per name looks like a genuine
+                                    * multi-SSID AP. The converse of the
+                                    * collapse and the better-founded half
+                                    * (research/papers/mbssid-per-bss-ie-
+                                    * variation.md), so it outweighs the
+                                    * collapse's +10. Confidence only, never
+                                    * severity: a corroborated lure that
+                                    * varies its IEs is still corroborated. */
 #define KARMA_W_TOOL_VERIFIED 30   /* a capture-backed tool signature match */
 #define KARMA_W_TOOL_UNVERIF  10   /* an UNVERIFIED signature guess only */
 #define KARMA_W_PMKID         10   /* PMKID observed — informational, not

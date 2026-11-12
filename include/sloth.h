@@ -46,7 +46,7 @@
  * stream's history — the records predate the field by many releases. A
  * `sensor_health` line with no `jsonl_version` is from a stream written
  * before this version and says nothing more than that. */
-#define SLOTH_JSONL_VERSION "1.4.0"
+#define SLOTH_JSONL_VERSION "1.5.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
@@ -1911,6 +1911,11 @@ typedef struct {
     uint64_t ssid_ev[KARMA_FORGE_MAX_SSIDS];   /* newest answering frame, 0 none */
     /* bit i = sta[i] received an answer naming this SSID */
     uint8_t  ssid_sta_mask[KARMA_FORGE_MAX_SSIDS];
+    /* Wall time of the first and newest answer naming SSID k sent to
+     * sta[i], 0 = none (#187: the window an association by that station
+     * under that name is read against, karma_forge_captured()). */
+    time_t   ans_first[KARMA_FORGE_MAX_SSIDS][KARMA_FORGE_MAX_STA];
+    time_t   ans_last[KARMA_FORGE_MAX_SSIDS][KARMA_FORGE_MAX_STA];
     int      n_ssids;
     uint8_t  sta[KARMA_FORGE_MAX_STA][6];
     int      n_sta;

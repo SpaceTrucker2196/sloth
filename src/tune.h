@@ -194,6 +194,8 @@ typedef enum {
        src/karma_detect.h. */
     TUNE_KARMA_FORGE_SSIDS,
     TUNE_KARMA_FORGE_WINDOW_S,
+    /* #187, 2026-11-12: the association window that makes it CRIT. */
+    TUNE_KARMA_FORGE_ASSOC_S,
     /* #172: PMKID_HARVEST and HANDSHAKE_HARVEST. Each default is argued
        in src/harvest_track.h; none comes from a source. */
     TUNE_HARVEST_WINDOW_S,
