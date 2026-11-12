@@ -1,25 +1,166 @@
-# Attack-hardware fingerprints (#77)
+# Attack-hardware fingerprints (#77, #151)
 
 **Summary**: What sloth measures about the radio stack behind an AP, and
-what it does not yet conclude from it. Issue #77 asked sloth to name the
-attack hardware (Pineapple, ESP32 Marauder, eaphammer rigs) from passive
-802.11 observables. The spec-derivable half shipped as measurements:
-the beacon IE-order hash, beacon TBTT jitter, and the WPS/WSC vendor
-strings from beacons and from the M1/M2 registration exchange. The half
-that needs real numbers off real firmware (a known-stack table, the
-two-radio Pineapple pattern, a verdict layer) has no primary source in
-this tree. It is written up below, ready to file as one issue that waits
-on owner-supplied rig captures.
+what it concludes from it. Issue #77 asked sloth to name the attack
+hardware (Pineapple, ESP32 Marauder, eaphammer rigs) from passive 802.11
+observables. The spec-derivable half shipped as measurements: the beacon
+IE-order hash, beacon TBTT jitter, and the WPS/WSC vendor strings. #151
+then built what could be built from public sources: a known-stack
+IE-order table (the mechanism and its capture guard; **no rows**, because
+no row can be sourced without a capture), the Pineapple setup-AP pairing
+(from Hak5's own documentation), and a verdict layer that turns the
+inputs into `none` / `suspected-<device>` / `corroborated-<device>` on the
+`KARMA_AP` detail and as two JSONL fields. Nothing here raises an alert
+or moves a severity.
 
-**Sources**: `src/beacon_snoop.c`, `src/views/beacon.c`
+**Sources**: `src/attack_hw.c`, `src/attack_hw.h`,
+`src/alerts/rules_twin.c` (`rule_karma_ap`), `src/alerts/engine.c`
+(`fire_stage_hw_verdict`), `src/jsonl.c` (`emit_hw_verdict`),
+`src/beacon_snoop.c`, `src/views/beacon.c`
 (`draw_detail_stack_measures`), `src/eap_parse.c` (`wsc_take_vendor_str`),
 `src/eap_parse.h`, `src/tool_fingerprint.c`, `include/sloth.h`
 (`ap_fingerprint_t`, `ap_beacon_timing_t`), `docs/views/beacons.md`,
-`docs/wiki/jsonl-schema.md`, issue #77, plan #145 (rulings 1-3).
+`docs/wiki/jsonl-schema.md`, `research/tools/wifi-pineapple-mk7.md`,
+`tests/test_attack_hw.c`, issues #77 and #151, plan #145 (rulings 1-3).
 IEEE 802.11-2020 §9.3.3.2, §9.4.1.3, §9.4.1.10, §11.1.3; Wi-Fi Simple
 Configuration Technical Specification v2.0 §7.7, §12.
 
-**Last updated**: 2026-10-20
+**Last updated**: 2026-11-12 (#151: the stack table mechanism, the
+Pineapple setup-AP pairing, the verdict layer), 2026-10-20
+
+## What #151 built (2026-11-12)
+
+### 1. The known-stack IE-order table: mechanism, guard, no rows
+
+`HW_STACKS[]` in `src/attack_hw.c` maps an (`ie_order_hash`,
+`ie_order_count`) pair to the stack that emitted it, and to an attack
+device or `SLOTH_TOOL_UNKNOWN` for a production stack. It ships empty.
+
+A row's values are the order hash of one firmware build's beacons. No
+specification or vendor document states that order, and #151's standard
+is a capture per row: named hardware, named firmware, band, the
+capture's SHA-256 in the row. `hw_stack_row_valid()` enforces it: a
+non-zero hash and count, a label, an id, an evidence string that is not
+`UNVERIFIED` (this table, unlike `TOOL_SIGNATURES`, admits no research
+rows), and a 64-character lowercase-hex `capture_sha256`. A test holds
+every shipped row to it, and the validator is proven on synthetic rows
+so the first real row meets a guard already seen to refuse.
+
+The matcher pins hash **and** count. A hash of 0 ("not decoded") never
+matches. When two rows match one observation, which is a collision #151
+says must arrive as a second row, the answer is no match plus an
+`ambiguous` flag, never whichever row comes first. Transient elements
+(CSA, Quiet, ECSA, Channel Switch Wrapper, Quiet Channel) are already
+outside the hash (`beacon_snoop.c`), so a beacon taken mid-channel-switch
+reaches the same row as a steady one; a test drives the real parser
+with both.
+
+**Rows wanted, none sourced.** One capture each, with firmware version
+and band, ideally from two units:
+
+| Stack | Device | Why it is not in the table |
+|---|---|---|
+| Cisco IOS-XE (Catalyst 9800 APs) | production | no public capture or document gives the element order |
+| Aruba OS | production | same |
+| Ubiquiti UniFi | production | same |
+| MikroTik RouterOS | production | same |
+| OpenWrt / hostapd defaults | production | the element set, and so the hash, depends on configuration (HT/VHT/HE, WMM, RSN, 11k/v); a row read off source would be a guess about the configuration and a research row, which this table refuses |
+| Pineapple MK7 PineAP | `pineapple-mk7` | needs a capture (#151 item 1) |
+| ESP32 Marauder | `esp32-marauder` | the firmware's source is public, but which frames each lure mode emits, and in what element order on the air, is not documented; a row read off source would be a research row, which this table refuses. Needs a capture |
+
+### 2. The Pineapple setup-AP pairing
+
+Hak5's Mark VII documentation says that during setup the device "serves
+an Open AP" whose "SSID ... is `Pineapple_XXXX`, where the 'XXXX' is the
+last 4 characters of the devices MAC address", and that the network
+"will disappear after setup is complete"
+(`research/tools/wifi-pineapple-mk7.md`).
+
+`hw_pineapple_pair()` pairs a `KARMA_AP` BSSID with a **different** BSSID
+in the beacon table, seen within `BEACON_AGE_SECS`, whose SSID is exactly
+`Pineapple_` plus four hex digits (`Pineapple_Guest` and
+`Pineapple_12345` do not pair). Whether the suffix equals either
+BSSID's low 16 bits is recorded and not required: the docs do not say
+which interface's MAC "the devices MAC address" is. The KARMA BSSID never
+pairs with itself. A legitimate dual-band enterprise AP (two adjacent
+BSSIDs, one SSID) does not pair; that is #151's negative acceptance test,
+`test_dual_band_enterprise_ap_does_not_pair`.
+
+This is narrower than the "two-radio pattern" #151 asks for, and
+deliberately so. Adjacent MACs, a shared IE-order hash, the channel
+relation, and timing between PineAP's echoes and the second radio's
+traffic are not documented anywhere public, so none of them is required
+or scored. By the vendor's own account the setup network exists only
+until setup completes, so this will rarely fire in the field. The full
+two-radio pattern still waits on a capture of a configured MK7 with
+PineAP and the management AP both up.
+
+The pairing enriches a `KARMA_AP` that already fired: the detail gains
+`+setup-AP Pineapple_1a2b@<bssid>`. It never raises an alert and never
+moves severity or confidence.
+
+### 3. The verdict layer
+
+`hw_verdict_eval()` combines up to four signal classes for one BSSID:
+
+| Class | Input | Capture-backed? |
+|---|---|---|
+| `tool` | a `TOOL_SIGNATURES` row match | only if the row is not `unverified`; **none is** today |
+| `stack` | a known-stack table hit | yes, by the validator; **the table is empty** |
+| `pair` | the Pineapple setup-AP pairing | no (vendor docs) |
+| `oui` | a Hak5 OUI on the BSSID, read as Pineapple | no (registry). Not counted when the tool row itself requires an OUI flag: the Pineapple row *is* the Hak5 OUI, and counting both would corroborate a device from one observation. An Espressif OUI names no device and is not an input |
+
+Tiers:
+
+- `none`: nothing names a device, or two devices tie.
+- `suspected-<device>`: at least one class names it.
+- `corroborated-<device>`: two or more classes name it, at least one of
+  them capture-backed, and nothing names another device or a production
+  stack (a production-stack hit means the IE emitter is not attack
+  hardware, so it caps the tier).
+
+So `corroborated` is **unreachable on live data today**: no input is
+capture-backed. That is plan #145's standard applied, not a gap: the
+honest ceiling is `suspected` until a capture backs a row. Tests reach
+`corroborated` with synthetic capture-backed rows.
+
+The tier lands in two places. In the `KARMA_AP` detail as
+`hw:suspected-pineapple-mk7`, after the tool attribution. In JSONL as
+`hw_verdict` and `hw_signals` (`"oui+pair"`) on `alert` and every
+`alert.*` record, omitted when there is none (`jsonl_version` 1.4.0,
+[[jsonl-schema]]). The alert stores three bytes (`hw_tier`, `hw_device`,
+`hw_signals`) that sat in padding; both surfaces render through
+`hw_verdict_format()`, so the detail and the record cannot spell a
+verdict two ways.
+
+Not inputs, though #151 lists them: **WPS/WSC vendor strings** and
+**TBTT jitter**. No public source maps a string or a jitter figure to an
+attack device, so they stay measurements. The `[b]` detail does not show
+the tier yet (see below).
+
+### The hook in `rules_twin.c`
+
+Four lines in `rule_karma_ap()`: one call to `hw_karma_context()` (in
+`src/attack_hw.c`, which does the stack lookup, pairing, verdict and note),
+the `hw_note` buffer in the detail format, and
+`fire_stage_hw_verdict()` before `fire_inv()`. The stage is a one-shot
+the next `fire_inv()` stamps and clears, so the other fourteen
+`fire_inv()` callers are untouched and nothing else inherits a verdict.
+
+### Owner rulings still needed
+
+- **Two vocabularies.** `tool_fingerprint.c` reports `low/med/high`, and
+  the verdict reports `suspected/corroborated`. #151 asks whether `high`
+  maps to `corroborated` or is renamed. Unchanged here: both still reach
+  the operator.
+- **Severity policy.** The verdict moves neither severity nor
+  confidence. Whether a `corroborated` verdict should escalate
+  `KARMA_AP` (as `tool_verified` already does) is an owner call; it can
+  only matter once a capture-backed row exists.
+- **Surfaces.** The tier is on the Alerts view through the detail. The
+  `[b]` detail and the `[A]` view #77 proposed are not built (plan #145
+  ruling 3: no new views by default).
+- **TBTT threshold** (#151 item 4): still needs the jitter captures.
 
 ## What ships: measurements
 
@@ -109,9 +250,8 @@ flagged `UNVERIFIED` and capped at `med`.
 
 ## Waiting on captures
 
-The text below is the refile for the capture-gated remainder of #77,
-written to be filed as one issue as-is. The labels to use are
-`needs-pcap-fixture`, `detector` and `enhancement`.
+The text below was filed as #151 (2026-10-20). What #151 could build
+without captures is above; the rest of it still waits on them.
 
 ---
 
@@ -205,7 +345,8 @@ provenance question as the stack table.
 
 - [[tool-fingerprints]]: the signature-row mechanism, its two
   UNVERIFIED rows, and why the table does not grow without captures.
-- [[jsonl-schema]]: the `beacon` record fields named above.
+- [[jsonl-schema]]: the `beacon` record fields named above, and the
+  `hw_verdict` / `hw_signals` alert fields.
 - [[enterprise-rogue]]: the WPA-Enterprise detectors the deferred CN
   sniff would join.
-- [[alerts]]: the surface any verdict tier would land on.
+- [[alerts]]: `KARMA_AP`, the alert the verdict tier lands on.

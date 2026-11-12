@@ -199,6 +199,7 @@ void run_dot11_frame_tests(void);
 void run_mle_tests(void);
 void run_mle_bss_tests(void);
 void run_tool_fingerprint_tests(void);
+void run_attack_hw_tests(void);
 void run_captive_portal_tests(void);
 void run_fragattack_tests(void);
 void run_research_ingest_tests(void);
@@ -405,6 +406,7 @@ int main(void) {
     run_mle_tests();
     run_mle_bss_tests();
     run_tool_fingerprint_tests();
+    run_attack_hw_tests();
     run_captive_portal_tests();
     run_fragattack_tests();
     run_research_ingest_tests();

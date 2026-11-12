@@ -16,6 +16,7 @@
 #include "tune.h"
 #include "capture/probe.h"
 #include "alerts.h"
+#include "attack_hw.h"
 #include "wired_attach.h"
 #include "secure_file.h"
 #include "beacon_snoop.h"
@@ -495,6 +496,17 @@ static void emit_signature(char *buf, int *off, const alert_t *a) {
     kv_str(buf, LINEBUF, off, "signature_evidence", a->sig_evidence);
 }
 
+/* Attack-hardware verdict (#151), additive, both record families.
+ * Omitted when there is none, like the signature fields above. */
+static void emit_hw_verdict(char *buf, int *off, const alert_t *a) {
+    char label[40], names[32];
+    hw_verdict_format(a->hw_tier, a->hw_device, a->hw_signals,
+                      label, sizeof(label), names, sizeof(names));
+    if (!label[0]) return;
+    kv_str(buf, LINEBUF, off, "hw_verdict", label);
+    kv_str(buf, LINEBUF, off, "hw_signals", names);
+}
+
 /* Evidence-ring citations (#92), additive, shared by both record
  * families for the same reason as the signature fields above. Indexed
  * keys rather than a JSON array, matching the existing convention for a
@@ -563,6 +575,7 @@ void jsonl_emit_alert(const alert_t *a) {
         kv_str(buf, LINEBUF, &off, "inventory", a->inventory);
     emit_pair_axes(buf, &off, a);
     emit_signature(buf, &off, a);
+    emit_hw_verdict(buf, &off, a);
     emit_evidence(buf, &off, a);
     /* Join key into the lifecycle stream (#98), additive. A consumer
      * that only knows `alert` sees exactly the record it always saw
@@ -620,6 +633,7 @@ void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
         kv_str(buf, LINEBUF, &off, "inventory", a->inventory);
     emit_pair_axes(buf, &off, a);
     emit_signature(buf, &off, a);
+    emit_hw_verdict(buf, &off, a);
     emit_evidence(buf, &off, a);
     if (a->match_ip[0]) {
         kv_str(buf, LINEBUF, &off, "match_ip", a->match_ip);

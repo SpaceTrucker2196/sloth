@@ -1224,6 +1224,9 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
         int tool_unverified = tool_row && tool_row->unverified;
         int tool_verified   = tool_row && !tool_row->unverified;
 
+        hw_verdict_t hwv;   /* #151: detail + JSONL only, never sev/conf */
+        char hw_note[80];   /* longest form is 74 */
+        hw_karma_context(s, a, tool_row, now, &hwv, hw_note, sizeof(hw_note));
         alert_sev_t sev = ALERT_SEV_WARN;
         if (pnl_corrob || deauth || tool_verified) sev = ALERT_SEV_CRIT;
 
@@ -1289,9 +1292,9 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
          * cannot drift — see karma_alert_key(). */
         karma_alert_key(a->bssid, key, sizeof(key));
         snprintf(detail, sizeof(detail),
-                 "KARMA BSSID %s: %d SSIDs%s%s%s%s%s, conf %d%%%s",
+                 "KARMA BSSID %s: %d SSIDs%s%s%s%s%s%s, conf %d%%%s",
                  bssid_str, a->ssid_history_n, ie_note, pnl_note,
-                 chain_note, pmkid_note, tool_note, confidence,
+                 chain_note, pmkid_note, tool_note, hw_note, confidence,
                  sev == ALERT_SEV_WARN ? " - candidate, uncorroborated" : "");
         /* The newest frame carrying each distinct SSID (#92 slice 4):
          * the finding is that set, so one frame per SSID is its
@@ -1301,6 +1304,7 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
         int hn = a->ssid_history_n < MAX_AP_SSID_HISTORY
                ? a->ssid_history_n : MAX_AP_SSID_HISTORY;
         ev_cite_merge(evid, &ev_n, ALERT_EVIDENCE_IDS, a->ssid_history_ev, hn);
+        fire_stage_hw_verdict(hwv.tier, hwv.device, hwv.signals);
         fire_inv(ALERT_TYPE_KARMA_AP, sev, confidence, NULL,
                  TWIN_CLASS_UNKNOWN, WIRED_ATTACH_UNKNOWN, tool_row,
                  evid, ev_n,

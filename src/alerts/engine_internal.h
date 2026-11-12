@@ -13,6 +13,7 @@
 #include <time.h>
 #include "alerts.h"
 #include "tool_fingerprint.h"
+#include "attack_hw.h"   /* rule_karma_ap's #151 hook */
 
 /* src/alerts/engine.c — the engine's entry points for a rule. */
 void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
@@ -23,6 +24,12 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
               const char *key,
               const char *match_ip, uint16_t match_port,
               time_t now);
+/* Stage an attack-hardware verdict (#151) for the NEXT fire_inv()
+ * only, which stamps it on the incident and clears the stage. Every
+ * other fire stamps it empty. A stage rather than another fire_inv()
+ * parameter so the fourteen other call sites stay untouched; the one
+ * caller (rule_karma_ap) stages immediately before its fire_inv(). */
+void fire_stage_hw_verdict(int tier, int device, int signals);
 void fire_conf(alert_type_t type, alert_sev_t sev, int confidence,
                const char *title, const char *detail,
                const char *key,

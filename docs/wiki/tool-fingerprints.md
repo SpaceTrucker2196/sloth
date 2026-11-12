@@ -283,5 +283,7 @@ two-flag row.
 - [`docs/wiki/enterprise-rogue.md`](enterprise-rogue.md) — `eaphammer`
   and `hostapd-wpe` from the 802.1X side.
 - [`docs/wiki/attack-hardware-fingerprints.md`](attack-hardware-fingerprints.md) — the
-  #77 stack measurements, and the capture-gated stack table and verdict
-  layer this table would feed.
+  #77 stack measurements, the #151 stack table (empty, capture-gated),
+  the Pineapple setup-AP pairing, and the verdict layer this table feeds
+  as its `tool` input. A row here that pins the Hak5 OUI is the `oui`
+  input restated, so the verdict counts it once.
