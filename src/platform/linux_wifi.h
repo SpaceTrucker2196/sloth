@@ -43,6 +43,18 @@ int linux_wifi_get_stations(wifi_sta_t *out, int max);
    See MISSION.md §2 for the governing rule, and issues #22 and #84. */
 int linux_wifi_set_channel(const char *iface, int freq_mhz);
 
+/* #183: the address of every wireless device the host has, from an
+   NL80211_CMD_GET_INTERFACE dump, appended to out[n..max) through
+   linux_self_append(). This is the only source that names a wireless
+   device with no netdev (wpa_supplicant's P2P device, NAN), whose
+   locally administered address sends probes the monitor radio hears.
+   Returns the new n; n unchanged without nl80211 or WITH_WIFI. The
+   parser is pure: `family` is the resolved nl80211 id, and *done is
+   set on NLMSG_DONE or NLMSG_ERROR. */
+int linux_wifi_parse_wdev_macs(const void *buf, size_t len, int family,
+                               uint8_t (*out)[6], int max, int n, int *done);
+int linux_wifi_get_wdev_macs(uint8_t (*out)[6], int max, int n);
+
 /* Decode the reply to an NLM_F_ACK request: 0 for an ACK, the kernel's
    negative errno for a refusal, -EIO for anything that is not a
    well-formed NLMSG_ERROR. Pure, so the errno plumbing is testable with

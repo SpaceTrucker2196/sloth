@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-11-12 (#197: `ATTACK_PATH` and `ATTACK_TOOL_UA` judge HTTP requests only; a paired response no longer fires a second key on the server). 2026-11-12 (#188, #189: `EVIL_TWIN` holds a soft-signal row under a carrier SSID or with a barely heard half at WARN; `EVIL_TWIN_PROXIMITY` reports only the accused half of an attributed pair). **Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
+**Last updated**: 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#197: `ATTACK_PATH` and `ATTACK_TOOL_UA` judge HTTP requests only; a paired response no longer fires a second key on the server). 2026-11-12 (#188, #189: `EVIL_TWIN` holds a soft-signal row under a carrier SSID or with a barely heard half at WARN; `EVIL_TWIN_PROXIMITY` reports only the accused half of an attributed pair). **Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
 
@@ -338,6 +338,59 @@ suppress" but "can the adversary reach the input". With no inventory
 configured nothing above applies and the heuristics are exactly as
 slice 1 left them — an operator who never writes a file must not
 silently lose detection.
+
+### The sensor's own addresses (#183)
+
+The other input that does not arrive over the air is the host's own
+interfaces. The **self roster** (`src/ownership.c`) holds every
+link-layer address this host owns, so a rule can tell "the sensor did
+this" from "a stranger did this". `MY_NETWORK_RECON` and
+`UNKNOWN_DEVICE` exonerate on it (`ownership_is_own_device()`, which also
+answers for `--known-mac`); `PM_FORGE`, `RECURRING_TRANSIT` and
+`BLOCKACK_ATTACK` still fire on it, one step lower and tagged
+`self (the sensor's own radio)`; device risk sets bit 64 (`SELF`, #191).
+No flag fills it. The PLATFORM poll stage (`st_platform_net()`,
+`src/poll.c`), which runs ahead of every rule, adds:
+
+- **every `iface` row's address, every tick** (`ownership_self_sync_ifaces()`):
+  Ethernet, the managed card, the monitor radio, bridges. An interface
+  that appears mid-run is rostered on the tick it appears, and an
+  address NetworkManager's per-connection randomisation gives the card
+  is the row's address, so it is rostered too.
+- **what the rows do not carry** (`g_platform.get_self_macs`, Linux:
+  `src/platform/linux_self.c`), asked on the first tick, whenever the
+  interface set's names or addresses change, and every 30 s
+  (`SELF_RESCAN_MS`) otherwise:
+  - every netdev's `IFLA_ADDRESS` **and `IFLA_PERM_ADDRESS`** from an
+    rtnetlink `RTM_GETLINK` dump: no `MAX_IFACES` (32) cap, and the
+    burned-in address of a card currently on a randomised or cloned one,
+    which it returns to when the setting changes;
+  - each Wi-Fi phy's `/sys/class/ieee80211/<phy>/macaddress` and
+    `addresses` pool: the address a monitor vif, AP or second station
+    created later will be given;
+  - every wireless device in an nl80211 `NL80211_CMD_GET_INTERFACE`
+    dump (`linux_wifi_get_wdev_macs()`, `WITH_WIFI` only), which is the
+    one source that names a device with **no netdev**: wpa_supplicant's
+    P2P device (`p2p-dev-wlan0`), whose locally administered address
+    sends P2P discovery probes, and NAN.
+
+All three are reads; nothing is configured (MISSION §2). An all-zero
+address and any address with the group bit set are refused. Entries are
+not removed when a poll misses them (an exoneration that blinks is worse
+than one slightly stale); the roster holds 128 (`MAX_SELF_MACS`) and,
+when full, the address confirmed least recently gives way, so the card's
+newest randomised address is never the one refused. The BSD, Windows and
+stub platforms have no `get_self_macs`: their `iface` rows are the whole
+roster.
+
+**Not covered: per-scan random addresses.** When a managed card scans
+with `NL80211_SCAN_FLAG_RANDOM_ADDR`, mac80211 or the firmware draws a
+fresh address per scan and no interface the kernel exposes ever holds
+it: neither rtnetlink, nl80211's interface dump nor sysfs names it, and
+the scan request and its notification carry the mask, not the address.
+Those probes are exonerated only by seqnum correlation to an associated
+address, as before. `ATTACK_PATH` keys on an IP and has no self tag; the
+sensor keeps no roster of its own IP addresses.
 
 ### Two radios are not always two devices, nor two devices a twin (#188, #189)
 

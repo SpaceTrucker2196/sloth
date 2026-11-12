@@ -261,6 +261,7 @@ void run_mqtt_snoop_tests(void);
 void run_capture_tests(void);
 void run_tui_palette_tests(void);
 void run_ownership_tests(void);
+void run_self_macs_tests(void);
 void run_inventory_tests(void);
 void run_wired_attach_tests(void);
 void run_db_tests(void);
@@ -465,6 +466,7 @@ int main(void) {
     run_capture_tests();
     run_tui_palette_tests();
     run_ownership_tests();
+    run_self_macs_tests();
     run_inventory_tests();
     run_wired_attach_tests();
     run_db_tests();

@@ -54,6 +54,14 @@ typedef struct {
     char           sys_watch[24];
     int            sys_watch_hits;
 
+    /* get_self_macs (#183): the host's own addresses beyond the iface
+       rows. Served as given (the real source dedupes; this lets a test
+       hand the roster a duplicate). Calls are counted so a test can
+       assert the PLATFORM stage's throttle. */
+    uint8_t        self_macs[16][6];
+    int            self_mac_count;
+    int            self_mac_calls;
+
     int            tick;   /* incremented by scenario_simulate_step() */
 } fake_net_t;
 

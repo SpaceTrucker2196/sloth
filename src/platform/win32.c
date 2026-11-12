@@ -34,6 +34,7 @@ platform_ops_t g_platform = {
     win32_cleanup,
     win32_set_channel,
     NULL, NULL,   /* sys_read, sys_list: no /proc or /sys tree here */
+    NULL,         /* get_self_macs: get_ifaces() rows are the self roster */
 };
 
 #endif /* PLATFORM_WIN32 */

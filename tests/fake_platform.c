@@ -141,6 +141,14 @@ static int fake_sys_list(const char *dir, char *names, int name_sz, int max) {
     return any ? n : -1;
 }
 
+static int fake_get_self_macs(uint8_t (*out)[6], int max) {
+    g_fake_net.self_mac_calls++;
+    int n = g_fake_net.self_mac_count < max ? g_fake_net.self_mac_count : max;
+    if (n > 16) n = 16;
+    if (n > 0) memcpy(out, g_fake_net.self_macs, (size_t)n * 6);
+    return n;
+}
+
 static void fake_init(void)    {}
 static void fake_cleanup(void) {}
 
@@ -157,4 +165,5 @@ platform_ops_t g_platform = {
     fake_set_channel,   /* #91: errno injected through g_fake_net */
     fake_sys_read,      /* src/sys_status.h: text fed by fake_sys_put() */
     fake_sys_list,
+    fake_get_self_macs, /* #183: fed through g_fake_net.self_macs */
 };

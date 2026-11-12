@@ -78,7 +78,6 @@
 /* ── PLATFORM ─────────────────────────────────────────────── */
 
 static void st_platform_net(sloth_state_t *s, const poll_ctx_t *ctx) {
-    (void)ctx;
     s->iface_count = g_platform.get_ifaces(s->ifaces, MAX_IFACES);
     /* #183: every address this host answers on, into the self roster,
      * from the records that already carry them. Here rather than at
@@ -89,6 +88,17 @@ static void st_platform_net(sloth_state_t *s, const poll_ctx_t *ctx) {
      * address. No syscall is added - this reads what get_ifaces()
      * returned (MISSION §2). */
     ownership_self_sync_ifaces(s->ifaces, s->iface_count);
+    /* The addresses those rows do not carry: a card's permanent address
+     * while it uses a randomised one, each phy's address pool (the one
+     * a monitor vif created later will take), and wireless devices with
+     * no netdev, such as a P2P device probing from a locally
+     * administered address. Throttled, see ownership_self_scan_due(). */
+    if (g_platform.get_self_macs &&
+        ownership_self_scan_due(s->ifaces, s->iface_count, ctx->mono_ms)) {
+        uint8_t own[MAX_SELF_MACS][6];
+        int n = g_platform.get_self_macs(own, MAX_SELF_MACS);
+        ownership_self_add_list((const uint8_t (*)[6])own, n);
+    }
     s->conn_count  = g_platform.get_conns(s->conns, MAX_CONNS);
 #ifdef WITH_WIFI
     s->ap_count       = g_platform.wifi_scan(s->aps, MAX_WIFI_APS);

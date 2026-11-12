@@ -790,8 +790,10 @@ Sources: `research/mitre/T1095.md`
    host's own and the finding is still open, say so on the issue - that
    is a bug in the self roster, not a lead.
 3. Check whether it is a *randomised* address belonging to one of the
-   host's own radios. A managed card scans with rotating MACs that the
-   `iface` records never name, so the self roster cannot see them; they
+   host's own radios. The self roster holds every address an interface
+   or wireless device of the host has or can be given (a P2P device, a
+   phy's pool, a card's permanent address), but a managed card's
+   per-scan random MACs belong to no interface, so it cannot see them; they
    are exonerated only when seqnum correlation ties one to an address
    that is associated. The `[j]` view is where that link shows.
 

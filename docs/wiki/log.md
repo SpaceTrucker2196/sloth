@@ -6992,3 +6992,19 @@ The last two benign CRIT shapes of #188 are WARN: a carrier SSID every subscribe
 - 2026-11-12 — [[slothweb]] (owner request "when multiple sloths exist on the network use that for better location in the radar view"): the Radar tab's fleet areas. With a `--peer`, `/api/fleet/locate` for `wifi`, `ap` and `ble` every 30 s, each located emitter drawn as a light translucent `--data` area on the dome's ground through its own log projection: a least-squares fix's disc, else where every site's one-sigma band overlaps, else a fainter wash over the nearer site's side when `nearest` is outside its sigma, else nothing; the alpha shared out over the areas so overlaps read darker, under every mark; peer sites as hollow squares; hover or tap for the key, form and band and a side panel; a device dot and its area linked; the **fleet areas** button, `radar.fleet` kept only when off, hidden with no peer; nothing fetched under Local. No route and no schema change. Updated [[fleet]] and `web/README.md`.
 - 2026-11-12 — [[slothweb]] Radar fleet areas, review: the nearer-side wash reaches past its site's disc (sites more than twice the band plus 20 m apart drew nothing); an overlap's label sits inside it; a tap takes an area only with nothing picked, so tapping off the marks still clears; `/api/fleet/locate` fetched only with a peer in `/api/health` and the button on; stacked alpha capped at a third of `--data`; "may be within" in place of "fix" on the label.
 - 2026-11-12 — [[posture-report]] (#190, the rest): `--report-interval` and `SIGUSR1` now also keep `snapshot.live.txt` beside `--snapshot-out` (hidden `.tmp`, `fsync`, rename; `# session<TAB>running`; removed when the shutdown snapshot is written), so the AP inventory is current on a long-running sensor while `snapshot.txt`, which the shipped unit also reads as `--baseline-in`, still moves only at a clean stop. `--report-interval` with only `--snapshot-out` is accepted. New knob `report.retain_days` (90, `0..3650`, 0 = forever) deletes per-session records and `.unclean` files at start and shutdown, only with `--report-interval` or `--report-history`. A TSan test drives a beacon writer thread against forced live writes. The posture page's Cadence section, which still said "written once at exit", now lists every file. [[cli-reference]], [[deployment]].
+
+## 2026-11-12 — the self roster takes what the iface rows do not carry (#183)
+
+The self roster was one address per `/proc/net/dev` row, capped at 32.
+A new platform op, `get_self_macs` (Linux: `src/platform/linux_self.c`),
+adds every netdev's `IFLA_ADDRESS` and `IFLA_PERM_ADDRESS` from an
+rtnetlink dump, each Wi-Fi phy's sysfs `macaddress` and `addresses`
+pool, and every wireless device in nl80211's interface dump, which is
+the only source for a device with no netdev (a P2P device probing from
+its locally administered address). Asked on the first tick, on any
+change to the interface set, and every 30 s. The roster grows from 64
+to 128 and, when full, drops the least recently confirmed address
+instead of refusing the newest. Per-scan random addresses belong to no
+interface and stay uncovered. BSD, Windows and the stub have no source
+beyond their rows. [[alerts]], [[cli-reference]],
+`alert-assessments/MY_NETWORK_RECON.md`, [[alert-remediation]].

@@ -119,8 +119,8 @@ int ownership_known_count(void);
  * renamed, replugged or momentarily absent interface), and an
  * exoneration that blinks is worse than one that is slightly stale —
  * the address does not stop being the host's own because one read of
- * /sys missed it. Entries are therefore added and never removed, for
- * the life of the process.
+ * /sys missed it. Entries are therefore never removed because they went
+ * missing; the one way out is the bound below.
  *
  * Kept separate from the operator's roster rather than folded into it,
  * because `ownership_known_count()` is a *gate*: rule_unknown_device is
@@ -129,9 +129,15 @@ int ownership_known_count(void);
  * that had designated only an SSID. */
 
 /* A host carries more addresses than it has radios — bridges, veths and
- * docker interfaces all report one. Bounded like every other table
- * here; past the bound, later interfaces are not rostered. */
-#define MAX_SELF_MACS 64
+ * docker interfaces all report one, and a Wi-Fi phy lists an address
+ * pool besides. Bounded like every other table here. When full, the
+ * address confirmed least recently makes room: per-connection MAC
+ * randomisation gives the managed card a new address on every
+ * association, and over a long run the address in use now matters
+ * more than one the card dropped a month ago. (Until #183's second
+ * slice the bound refused the newcomer, which on that host is the
+ * card's current address.) */
+#define MAX_SELF_MACS 128
 
 /* Register one of the host's own addresses. Rejects an all-zero address
  * (iface_stat_t.mac uses it for "unknown", and loopback really is zero)
@@ -148,6 +154,23 @@ int ownership_self_sync_ifaces(const iface_stat_t *ifaces, int count);
 
 int ownership_is_self_mac(const uint8_t mac[6]);
 int ownership_self_count(void);
+
+/* Register a list of addresses from g_platform.get_self_macs(): the
+ * permanent addresses, phy pools and netdev-less wireless devices that
+ * the iface rows do not carry. Same rules as ownership_self_add().
+ * Returns how many are rostered. */
+int ownership_self_add_list(const uint8_t (*macs)[6], int n);
+
+/* Whether the PLATFORM phase should ask get_self_macs() this tick: on
+ * the first call, whenever the interface set (names and addresses)
+ * differs from the last call that said yes, and otherwise every
+ * SELF_RESCAN_MS — a P2P device or a phy has no row in the interface
+ * set, so a change to one is only seen on the timer. Two netlink dumps
+ * and a few sysfs reads are cheap, but not per tick for an answer that
+ * changes a few times a day. ownership_clear() resets it. */
+#define SELF_RESCAN_MS 30000u
+int ownership_self_scan_due(const iface_stat_t *ifaces, int count,
+                            uint64_t mono_ms);
 
 /* "Ours": on the operator's roster, or one of the sensor's own
  * addresses. This is what the exonerations consult, so that the two
