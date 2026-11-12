@@ -98,3 +98,7 @@ data/
 /web/data/vendors/*
 !/web/data/vendors/*.md
 !/web/data/vendors/REFERENCE_HOST.txt
+
+# Bench captures from tools/lab/lab_capture.sh (#199): pcaps and their
+# sidecars are evidence kept on the bench hosts, never committed.
+/lab/
