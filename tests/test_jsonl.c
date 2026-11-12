@@ -9,6 +9,7 @@
 #include <sys/resource.h>
 #include "runner.h"
 #include "sloth.h"
+#include "attack_hw.h"
 #include "jsonl.h"
 #include "sensor_health.h"
 #include "dns.h"
@@ -729,6 +730,36 @@ static void test_emit_alert_omits_signature_when_no_tool_matched(void) {
     ASSERT(!contains(body, "signature_version"));
     ASSERT(!contains(body, "validated"));
     ASSERT(!contains(body, "signature_evidence"));
+}
+
+/* #151: the attack-hardware verdict, on both record families when
+ * there is one, absent (not empty) when there is none. */
+static void test_emit_alert_carries_hw_verdict(void) {
+    open_fresh();
+    alert_t a; fill_karma_alert(&a);
+    a.hw_tier    = HW_TIER_SUSPECTED;
+    a.hw_device  = SLOTH_TOOL_PINEAPPLE_MK7;
+    a.hw_signals = HW_SIG_PAIR | HW_SIG_OUI;
+    jsonl_emit_alert(&a);
+    jsonl_emit_alert_event(&a, "alert.create", a.last_seen, -1, NULL);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT_EQ(count_occ(body,
+              "\"hw_verdict\":\"suspected-pineapple-mk7\""), 2);
+    ASSERT_EQ(count_occ(body, "\"hw_signals\":\"pair+oui\""), 2);
+
+    open_fresh();
+    fill_karma_alert(&a);
+    jsonl_emit_alert(&a);
+    jsonl_emit_alert_event(&a, "alert.create", a.last_seen, -1, NULL);
+    jsonl_close();
+    body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT(!contains(body, "hw_verdict"));
+    ASSERT(!contains(body, "hw_signals"));
 }
 
 /* #92: per-export outcome rides the lifecycle event, alongside
@@ -2891,6 +2922,7 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_alert_carries_unverified_signature);
     RUN_TEST(test_emit_alert_carries_validated_signature);
     RUN_TEST(test_emit_alert_omits_signature_when_no_tool_matched);
+    RUN_TEST(test_emit_alert_carries_hw_verdict);
     RUN_TEST(test_emit_alert_carries_evidence_ids);
     RUN_TEST(test_emit_alert_omits_evidence_when_none_cited);
     RUN_TEST(test_emit_alert_evidence_clamped_to_array_size);

@@ -46,7 +46,7 @@
  * stream's history — the records predate the field by many releases. A
  * `sensor_health` line with no `jsonl_version` is from a stream written
  * before this version and says nothing more than that. */
-#define SLOTH_JSONL_VERSION "1.3.0"
+#define SLOTH_JSONL_VERSION "1.4.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
@@ -1086,6 +1086,19 @@ typedef struct {
     char         sig_version[24];
     char         sig_evidence[160];
     uint8_t      sig_validated;    /* 1 only for a capture-backed row */
+
+    /* Attack-hardware verdict (#151, src/attack_hw.h): hw_tier_t,
+     * sloth_tool_id_t and HW_SIG_* bits, rendered to the JSONL
+     * `hw_verdict` / `hw_signals` strings by hw_verdict_format() at
+     * emit time. Bytes, not strings, and in what was padding after
+     * sig_validated: sloth_state_t sits a few hundred bytes under the
+     * point where tests that return it by value overflow an 8 MB stack
+     * (72 bytes of strings x MAX_ALERTS crossed it). hw_tier 0 = no
+     * verdict, and both fields are then omitted. KARMA_AP is the only
+     * producer. Descriptive only: never moves sev or confidence. */
+    uint8_t      hw_tier;
+    uint8_t      hw_device;
+    uint8_t      hw_signals;
 
     /* ── Incident lifecycle (#98) ────────────────────────────
      * One *incident* is one continuous run of a dedup key: it opens on

@@ -124,6 +124,7 @@ CORE_COMMON_SRCS = \
        src/netstr.c          \
        src/mle.c             \
        src/tool_fingerprint.c \
+       src/attack_hw.c       \
        src/captive_portal.c  \
        src/wifi_snapshot.c   \
        src/wifi_assess.c     \

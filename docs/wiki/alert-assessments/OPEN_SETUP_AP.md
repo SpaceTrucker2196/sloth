@@ -1,7 +1,7 @@
 ---
 type: OPEN_SETUP_AP
 technique: ""
-rule_file: src/alerts/rules_twin.c:1426 of rule_open_setup_ap()
+rule_file: src/alerts/rules_twin.c:1430 of rule_open_setup_ap()
 count_semantics: per poll tick (POLL_MS 250 ms default, include/sloth.h:28) on which an OPEN beacon_ap row with a matching setup-prefix SSID is still in the beacon table; fire() bumps `evaluations` (= `count`) once per alerts_update() call under the key, not per beacon frame (src/alerts/engine.c:478-479). Rows age out after BEACON_AGE_SECS (300 s, include/sloth.h:1297), so count ~ 4 x seconds the device stayed in setup mode and in range.
 severity_assessment: agree - WARN is right for an exposure that nobody has yet been seen to use; the harm needs a second party to join the SoftAP, which sloth cannot see from the beacon.
 false_positive_risk: medium - every hit is a real open AP with a setup-shaped name, but "mid-setup for two minutes" and "abandoned in setup mode for a year" fire identically, and the prefix table has four rows (SETUP-, roborock-vacuum-, NETGEAR_EXT, HP-Print-) whose provenance is field observation rather than a vendor document.

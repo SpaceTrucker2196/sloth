@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
+#include "attack_hw.h"
 #include "runner.h"
 #include "tui.h"
 #include "jsonl.h"
@@ -4556,6 +4557,55 @@ static void test_karma_three_ssids_fires(void) {
     ASSERT(idx >= 0);
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
     ASSERT(strstr(s.alerts[idx].detail, "uncorroborated") != NULL);
+}
+
+static void test_karma_pineapple_pairing_is_context_only(void) {
+    /* #151: a Pineapple setup AP beside a KARMA candidate is named in
+     * the detail and the verdict fields, and moves neither severity nor
+     * confidence. Run once without the setup AP and once with it. */
+    uint8_t lure[6]  = {0x02,0x11,0x22,0x33,0x00,0x01};
+    uint8_t setup[6] = {0x02,0x11,0x22,0x33,0x1a,0x2b};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_karma_ap(&s, lure, ssids, 3);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    if (idx < 0) return;
+    int sev0 = (int)s.alerts[idx].sev, conf0 = s.alerts[idx].confidence;
+    ASSERT_EQ((int)s.alerts[idx].hw_tier, (int)HW_TIER_NONE);
+    ASSERT(strstr(s.alerts[idx].detail, "hw:") == NULL);
+
+    alerts_clear();
+    seed_state(&s);
+    seed_karma_ap(&s, lure, ssids, 3);
+    const char *one[] = { "Pineapple_1A2B" };
+    seed_karma_ap(&s, setup, one, 1);
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    if (idx < 0) return;
+    ASSERT_EQ((int)s.alerts[idx].sev, sev0);
+    ASSERT_EQ((int)s.alerts[idx].confidence, conf0);
+    ASSERT(strstr(s.alerts[idx].detail,
+                  " +setup-AP Pineapple_1A2B@02:11:22:33:1a:2b") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "hw:suspected-pineapple-mk7") != NULL);
+    ASSERT_EQ((int)s.alerts[idx].hw_tier, (int)HW_TIER_SUSPECTED);
+    ASSERT_EQ((int)s.alerts[idx].hw_device, (int)SLOTH_TOOL_PINEAPPLE_MK7);
+    ASSERT_EQ((int)s.alerts[idx].hw_signals, (int)HW_SIG_PAIR);
+    /* The stage is consumed by the KARMA fire: the next fire from any
+     * other source must not inherit it. Seen red with the clear in
+     * stamp_hw_verdict() removed. */
+    alerts_fire_for_test(ALERT_TYPE_PORT_SCAN, ALERT_SEV_WARN,
+                         "hw151:inherit", "d", NULL, 0);
+    alerts_update(&s);
+    int ps = -1;
+    for (int i = 0; i < s.alert_count; i++)
+        if (!strcmp(s.alerts[i].key, "hw151:inherit")) ps = i;
+    ASSERT(ps >= 0);
+    if (ps >= 0) ASSERT_EQ((int)s.alerts[ps].hw_tier, (int)HW_TIER_NONE);
 }
 
 static void test_karma_names_the_tool_from_fingerprint_flags(void) {
@@ -13356,6 +13406,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_e2e_full_attack_chain);
     RUN_TEST(test_e2e_clean_baseline_no_alerts);
     RUN_TEST(test_karma_three_ssids_fires);
+    RUN_TEST(test_karma_pineapple_pairing_is_context_only);
     RUN_TEST(test_karma_names_the_tool_from_fingerprint_flags);
     RUN_TEST(test_karma_two_ssids_no_fire);
     RUN_TEST(test_karma_one_ssid_no_fire);

@@ -460,6 +460,24 @@ static void stamp_evidence(alert_t *a, const uint64_t *ev_ids, int ev_n) {
     a->evidence_id_count = (uint8_t)ev_n;
 }
 
+static uint8_t g_hw_tier, g_hw_device, g_hw_signals;
+
+void fire_stage_hw_verdict(int tier, int device, int signals) {
+    g_hw_tier    = (uint8_t)tier;
+    g_hw_device  = (uint8_t)device;
+    g_hw_signals = (uint8_t)signals;
+}
+
+/* Refreshed on every evaluation, like stamp_signature(): a pairing can
+ * appear or age out inside one incident. Consumes the stage so a later
+ * fire from any other rule cannot inherit it. */
+static void stamp_hw_verdict(alert_t *a) {
+    a->hw_tier    = g_hw_tier;
+    a->hw_device  = g_hw_device;
+    a->hw_signals = g_hw_signals;
+    g_hw_tier = g_hw_device = g_hw_signals = 0;
+}
+
 void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
               const char *inv_hash, int ap_class, int wired,
               const sloth_tool_sig_t *tool_row,
@@ -471,7 +489,10 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
     /* An empty key is a builder overflow (alert_key.h) that the rule
      * did not check. Every such fire would share one incident, which is
      * the merge the builder exists to prevent — drop it instead. */
-    if (!key || !key[0]) return;
+    if (!key || !key[0]) {
+        g_hw_tier = g_hw_device = g_hw_signals = 0;
+        return;
+    }
     uint64_t mono = sloth_mono_ms();
     uint64_t sig  = alert_detail_sig(detail);
     /* Looked up as it will be stored. Before #112 an over-long key was
@@ -524,6 +545,7 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
          * evidence to a signature it no longer satisfies. The tool
          * note in `detail` moves with it, so the change is emitted. */
         stamp_signature(a, tool_row);
+        stamp_hw_verdict(a);
         stamp_evidence(a, ev_ids, ev_n);
 
         if (sev != prev) {
@@ -589,6 +611,7 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
     a->ap_class     = (uint8_t)ap_class;
     a->wired_attach = (uint8_t)wired;
     stamp_signature(a, tool_row);
+    stamp_hw_verdict(a);
     stamp_evidence(a, ev_ids, ev_n);
     if (match_ip && match_ip[0])
         snprintf(a->match_ip, sizeof(a->match_ip), "%s", match_ip);
