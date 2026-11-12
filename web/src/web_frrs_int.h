@@ -264,6 +264,23 @@ int  frrs_relate_post(const web_m4_t *m, web_live_t *live, const web_jrec_t *r,
 int  frrs_device_held(const web_m4_t *m, web_live_t *live, web_sdb_conn_t *c, const char *mac);
 int  frrs_ble_held(const web_m4_t *m, const char *id);
 
+/* ── bulk triage and the incidents (web_incident.c, #198) ────────── */
+
+/* The incident a finding is a member of, over its own triage *t (as
+ * tri_lookup() read it): the inc_* members set, and when the incident's
+ * state governs (web_incident.h), the state, ts, via, note, who and
+ * peer replaced by the incident's decision and prev_state by the
+ * finding's own state. 1 a member, 0 none (t untouched), -1. Never an
+ * anomaly's. */
+int  frrs_inc_overlay(web_frrs_t *f, const tri_subj_t *s, web_tri_t *t);
+/* A comma-separated list of alert and anomaly ids (as /api/frrs/states
+ * takes them, a comma only), each once (a repeat is dropped), into ids:
+ * 0, -1 malformed, -2 more than max distinct. */
+int  frrs_ids_parse(const char *in, char ids[][32], int max, int *n);
+/* sloth.db for a request that resolves many ids: 1 with *c open (the
+ * caller closes it), 0 none (nothing to close). */
+int  frrs_sdb_open(const web_m4_t *m, long long now_s, web_sdb_conn_t *c);
+
 /* A member check: every member of r is in allowed (a NULL-ended list)
  * and none is a nested value; else *bad names the first that is not. */
 int  frrs_members_ok(const web_jrec_t *r, const char *const *allowed, const char **bad);

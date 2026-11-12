@@ -85,15 +85,23 @@ typedef struct {
     /* triage= (web_frrs.h, docs/web-frrs-spec.md §5.4): 0 not given,
      * else 1 with tri the WEB_TRI_* state or WEB_TRI_F_* group. */
     int       has_tri, tri;
+    /* incident= (web_incident.h, #198): 0 not given, else 1 with inc
+     * the incident's id, INC_F_NONE (rows in none) or INC_F_ANY (rows
+     * in one). Given, the triage join runs (triage=any when triage= is
+     * not also given): membership is read with the triage. */
+    int       has_inc;
+    long long inc;
 } aq_t;
 
+enum { INC_F_NONE = -1, INC_F_ANY = -2 };
+
 static int parse_list(const char *query, aq_t *a, char *err, size_t errsz) {
-    web_param_t ps[8] = {
+    web_param_t ps[9] = {
         { "state", "", 0 }, { "sev", "", 0 }, { "type", "", 0 }, { "q", "", 0 },
         { "window", "", 0 }, { "limit", "", 0 }, { "offset", "", 0 },
-        { "triage", "", 0 },
+        { "triage", "", 0 }, { "incident", "", 0 },
     };
-    if (web_params_parse(query, ps, 8, err, errsz) != 0) return -1;
+    if (web_params_parse(query, ps, 9, err, errsz) != 0) return -1;
     memset(a, 0, sizeof(*a));
     a->type = -1;
     a->window = WEB_ALERTS_WINDOW_S;
@@ -155,7 +163,25 @@ static int parse_list(const char *query, aq_t *a, char *err, size_t errsz) {
         a->tri = web_frrs_filter_find(ps[7].val);
         if (a->tri == WEB_TRI_F_BAD) { snprintf(err, errsz, "bad_triage"); return -1; }
     }
+    if (ps[8].seen) {
+        a->has_inc = 1;
+        if (!strcmp(ps[8].val, "none")) a->inc = INC_F_NONE;
+        else if (!strcmp(ps[8].val, "any")) a->inc = INC_F_ANY;
+        else if (decimal(ps[8].val, 1, 999999999999LL, &a->inc) != 0) {
+            snprintf(err, errsz, "bad_incident");
+            return -1;
+        }
+        if (!a->has_tri) { a->has_tri = 1; a->tri = WEB_TRI_F_ANY; }
+    }
     return 0;
+}
+
+/* Does a row's incident pass incident=? */
+static int inc_pass(const aq_t *a, long long inc) {
+    if (!a->has_inc) return 1;
+    if (a->inc == INC_F_NONE) return inc == 0;
+    if (a->inc == INC_F_ANY) return inc > 0;
+    return inc == a->inc;
 }
 
 /* Does a stream incident pass the filters? */
@@ -188,6 +214,10 @@ typedef struct {
     /* Its triage, under triage= only (web_frrs.h). */
     int       tri_state, tri_via;
     long long tri_ts;
+    /* Its incident (web_incident.h), 0 none: only when it has one is it
+     * in the row's triage. */
+    long long inc_id;
+    int       inc_governs, inc_auto;
 } row_t;
 
 /* Severity, then observations, then the newest change; never count
@@ -315,6 +345,13 @@ static void row_json(web_jw_t *w, const row_t *r, int first, int tri) {
         else web_jw_raw(w, "null");
         web_jw_raw(w, ",\"ts\":");
         if (r->tri_state) web_jw_int(w, r->tri_ts); else web_jw_raw(w, "null");
+        if (r->inc_id > 0) {
+            web_jw_raw(w, ",\"incident\":{\"id\":");
+            web_jw_int(w, r->inc_id);
+            web_jw_raw(w, ",\"governs\":"); web_jw_raw(w, r->inc_governs ? "true" : "false");
+            web_jw_raw(w, ",\"auto\":");    web_jw_raw(w, r->inc_auto ? "true" : "false");
+            web_jw_raw(w, "}");
+        }
         web_jw_raw(w, "}");
     }
     web_jw_raw(w, "}");
@@ -400,7 +437,7 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
     long long want = a.offset + a.limit + 1;
     /* Under a triage filter the rows it drops are dropped after the
      * read, so the read takes as many as a page could reach. */
-    if (a.has_tri && a.tri != WEB_TRI_F_ANY)
+    if ((a.has_tri && a.tri != WEB_TRI_F_ANY) || a.has_inc)
         want = WEB_ALERTS_OFFSET_MAX + WEB_ALERTS_LIMIT_MAX + 1;
     int ngroups = 0, db_more = 0;
     web_sdb_conn_t c;
@@ -473,8 +510,14 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
                     r->tri_state = t.state;
                     r->tri_via = t.via;
                     r->tri_ts = t.ts;
+                    r->inc_id = t.inc_id;
+                    r->inc_governs = t.inc_governs;
+                    r->inc_auto = t.inc_auto;
                 }
             }
+            /* incident= narrows the rows the counts are over: the counts
+             * say what the rows shown hold, before the triage filter. */
+            if (!inc_pass(&a, r->inc_id)) continue;
             tri_n[r->tri_state]++;
             if (!web_frrs_filter_pass(a.tri, r->tri_state)) continue;
             if (i < open_rows) oo++;

@@ -49,8 +49,19 @@
  *            ("same device, within 10 minutes": a passive sensor
  *            corroborates, it does not confirm).
  *
+ *   Bulk     (#198) POST /api/frrs/triage/bulk: one state and note on
+ *            up to WEB_FRRS_BULK_MAX alert or anomaly ids, each written
+ *            through the same rules, rows and folds as one
+ *            /api/frrs/triage would write it, at the token cost of one
+ *            POST; each id's outcome is in the answer, so one that
+ *            fails never hides the others.
+ *   Incidents  (#198, web_incident.c) many alerts triaged as one: an
+ *            incident's state is what its members read as, unless a
+ *            member has a decided row of its own at or after the
+ *            incident's decision (web_incident.h says why).
+ *
  * The write surface is slothweb's first (every other route is GET or
- * HEAD) and is deliberately narrow: POST only, to the eight paths
+ * HEAD) and is deliberately narrow: POST only, to the ten paths
  * web_http_post_path() names, which answer nothing else (a GET there is
  * 405 Allow: POST); JSON bodies of at most WEB_POST_MAX bytes
  * (WEB_IMPORT_MAX for the import); Content-Type checked; the Origin
@@ -147,6 +158,14 @@
 /* /api/frrs/states takes at most this many ids (the query bound,
  * WEB_QUERY_ROUTE_MAX, holds sixteen of the longest). */
 #define WEB_FRRS_IDS_MAX      16
+/* POST /api/frrs/triage/bulk (#198): one verdict on at most this many
+ * ids, sent as one comma-separated string member (the body decoder
+ * keeps no array) of at most WEB_FRRS_BULK_IDS_LEN bytes, at the write
+ * cost of one POST. The incidents' member lists take the same bound. */
+#define WEB_FRRS_BULK_MAX     100
+#define WEB_FRRS_BULK_IDS_LEN 2600
+/* An incident's title (web_incident.h). */
+#define WEB_INC_TITLE_MAX     96
 /* The lists a record shows. */
 #define WEB_FRRS_LIST         8
 /* Suggestions listed at most, in evidence order. */
@@ -221,6 +240,15 @@ typedef struct {
      * episode than the one held now. */
     int       anom, carried;
     long long episode;
+    /* The incident the finding is a member of (web_incident.h), inc_id
+     * 0 for none: its title and state, whether that state is the one
+     * shown above (inc_governs: the finding has no decided row of its
+     * own at or after the incident's decision), and how it joined
+     * (inc_filter: by a standing filter, not by its id; inc_auto: by a
+     * filter set before the alert began, "auto-joined"). */
+    long long inc_id;
+    int       inc_state, inc_governs, inc_filter, inc_auto;
+    char      inc_title[WEB_INC_TITLE_MAX + 1];
 } web_tri_t;
 
 /* What names one alert to the triage join: its id as the alert routes
@@ -250,6 +278,7 @@ typedef struct {
     unsigned long links_made, links_removed;
     unsigned long notes_added, notes_retracted, notes_folded;
     unsigned long refused_agent, agent_writes;
+    unsigned long bulk_posts, incidents_opened, incidents_closed;
 } web_frrs_stats_t;
 
 struct web_frrs_led;

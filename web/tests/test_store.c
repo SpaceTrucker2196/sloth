@@ -61,12 +61,13 @@ static void test_schema_text_guardrail(void) {
     const char *v9 = web_store_step_sql(8);
     const char *v10 = web_store_step_sql(9);
     const char *v11 = web_store_step_sql(10);
-    WT_ASSERT(meta && v1 && v2 && v3 && v4 && v5 && v6 && v7 && v8 && v9 && v10 && v11);
-    if (!v11) return;
-    WT_ASSERT(web_store_step_sql(11) == NULL);    /* v11 is current */
-    WT_EQ(WEB_STORE_SCHEMA, 11);
-    const char *both[12] = { meta, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11 };
-    for (int k = 0; k < 12; k++) {
+    const char *v12 = web_store_step_sql(11);
+    WT_ASSERT(meta && v1 && v2 && v3 && v4 && v5 && v6 && v7 && v8 && v9 && v10 && v11 && v12);
+    if (!v12) return;
+    WT_ASSERT(web_store_step_sql(12) == NULL);    /* v12 is current */
+    WT_EQ(WEB_STORE_SCHEMA, 12);
+    const char *both[13] = { meta, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12 };
+    for (int k = 0; k < 13; k++) {
         for (size_t i = 0; i < NFORBIDDEN; i++) {
             if (!strcmp(FORBIDDEN[i], "mic")) {
                 WT_ASSERT(strstr(both[k], "  mic ") == NULL);
@@ -191,6 +192,21 @@ static void test_schema_text_guardrail(void) {
                 "  mask INTEGER NOT NULL DEFAULT 0,\n  done INTEGER NOT NULL DEFAULT 0\n);\n");
     WT_ASSERT(strstr(v11, "IF NOT EXISTS") == NULL);
     WT_ASSERT(strstr(v11, "ALTER") == NULL);
+    /* v12 (#198): the incidents' two tables, one partial unique index
+     * (one close row per incident) and five indexes on the members,
+     * nothing else; the triage table is not touched (a member reads its
+     * incident's state, nothing is copied into triage). */
+    creates = semis = 0;
+    for (const char *p = v12; (p = strstr(p, "CREATE ")); p++) creates++;
+    for (const char *p = v12; *p; p++) semis += *p == ';';
+    WT_EQ(creates, 8);
+    WT_EQ(semis, 8);
+    WT_HAS(v12, "CREATE TABLE incident (\n");
+    WT_HAS(v12, "CREATE TABLE incident_member (\n");
+    WT_HAS(v12, "CREATE UNIQUE INDEX incident_closes ON incident (closes) WHERE closes > 0;\n");
+    WT_HAS(v12, "  removes    INTEGER NOT NULL DEFAULT 0,\n");
+    WT_ASSERT(strstr(v12, "triage") == NULL);
+    WT_ASSERT(strstr(v12, "IF NOT EXISTS") == NULL);
     /* Not IF NOT EXISTS: a step must fail on a name already taken. */
     WT_ASSERT(strstr(v1, "IF NOT EXISTS") == NULL);
     WT_ASSERT(strstr(v2, "IF NOT EXISTS") == NULL);
@@ -335,7 +351,7 @@ static void test_no_column_can_hold_secret_material(void) {
     }
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master m,"
                      " pragma_table_info(m.name) c WHERE m.type='table'"
-                     " AND UPPER(c.type)='TEXT'"), 71);
+                     " AND UPPER(c.type)='TEXT'"), 79);
     /* meta (name, value), series (metric, key), baseline (metric, key),
      * episode (kind, metric, key, evidence), fanout (key, hist),
      * reported (kind, key), passive_ptr (ip, name) and chmix (channel,
@@ -381,7 +397,11 @@ static void test_no_column_can_hold_secret_material(void) {
      * SSID's octets, "gnssid.prn", an ICAO address or a callsign, each
      * validated whole to its kind's format; and text and a name from
      * the validated POST body; test_subnotes.c holds the stream out of
-     * them). */
+     * them). The v12 tables (web_incident.h) add eight: incident
+     * (title, note, who, peer) and incident_member (subject, addr, who,
+     * peer): an alert's triage subject, a canonical address, and
+     * operator- or agent-typed text from the validated POST body;
+     * test_incident.c holds the stream out of them. */
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master m,"
                      " pragma_table_info(m.name) c WHERE m.type='table'"
                      " AND UPPER(c.type)='BLOB'"), 0);
@@ -1243,7 +1263,9 @@ static void test_v10_file_is_migrated(void) {
     WT_EQ(web_store_cover_prune(&S, 7200), 0);
     WT_EQ(web_store_cover_get(&S, 3600, &m, &done), 0);
     web_store_close(&S);
-    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 11);
+    /* Through v11 and on to the current version in the one open (v12
+     * since the incidents; test_v11_file_is_migrated holds that step). */
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), WEB_STORE_SCHEMA);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name='anom_cover'"), 1);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM pragma_table_info('anom_cover')"), 3);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM anom_cover WHERE hour=7200 AND mask=0 AND done=1"), 1);
@@ -1251,7 +1273,7 @@ static void test_v10_file_is_migrated(void) {
     /* Opened again, nothing runs a second time. */
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
     web_store_close(&S);
-    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 11);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), WEB_STORE_SCHEMA);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM anom_cover"), 1);
     v10_rows_as_written(p, tri_cols);
     rm_store(p);
@@ -1279,19 +1301,118 @@ static void test_v10_failed_step_leaves_file_unchanged(void) {
     rm_store(p);
 }
 
+/* A v11 file as the hour coverage slice writes it: the v10 file, the
+ * v11 step and two coverage rows, stamped v11. */
+static void make_v11(const char *p, const char *extra) {
+    char sql[4096];
+    make_v10(p, "");
+    snprintf(sql, sizeof(sql), "%s INSERT INTO anom_cover (hour, mask, done) VALUES"
+             " (3600, 7, 1), (7200, 5, 0);"
+             " UPDATE meta SET value='11' WHERE name='schema_version'; %s",
+             web_store_step_sql(10), extra);
+    raw_exec(p, sql);
+}
+
+/* sql run on the file and refused by it (a constraint): 1, else 0. */
+static int raw_refused(const char *path, const char *sql) {
+    sqlite3 *h = NULL;
+    int rc = SQLITE_OK;
+    if (sqlite3_open(path, &h) == SQLITE_OK) rc = sqlite3_exec(h, sql, NULL, NULL, NULL);
+    sqlite3_close(h);
+    return rc == SQLITE_CONSTRAINT;
+}
+
+/* v11 -> v12 adds incident and incident_member, empty, and changes
+ * nothing that was there: everything the v10 file held and both
+ * coverage rows, column for column. The new tables take the rows
+ * web_incident.c writes (an incident, its close, an alert member, a
+ * filter and the removal of the filter) with every other column its
+ * default, and the partial index keeps an incident to one close. Seen
+ * red with removes written without its default (the filter's insert
+ * then failed NOT NULL and its count read 0). */
+static void test_v11_file_is_migrated(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "v11.db");
+    make_v11(p, "");
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 11);
+    long long tri_cols = raw_int(p, "SELECT COUNT(*) FROM pragma_table_info('triage')");
+    v10_rows_as_written(p, tri_cols);
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 12);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM pragma_table_info('incident')"), 9);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM pragma_table_info('incident_member')"), 16);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM incident"), 0);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM incident_member"), 0);
+    v10_rows_as_written(p, tri_cols);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM anom_cover WHERE hour=3600 AND mask=7 AND done=1"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM anom_cover WHERE hour=7200 AND mask=5 AND done=0"), 1);
+    raw_exec(p, "INSERT INTO incident (title, state, ts) VALUES ('test campaign', 4, 1300);"
+                "INSERT INTO incident (closes, state, ts) VALUES (1, 4, 1400);"
+                "INSERT INTO incident_member (incident, subject, finding, type, addr, ts)"
+                " VALUES (1, 'd7', 7, 3, '10.0.0.9', 1310);"
+                "INSERT INTO incident_member (incident, kind, type, ts) VALUES (1, 1, 3, 1320);"
+                "INSERT INTO incident_member (incident, kind, removes, ts) VALUES (1, 1, 2, 1330);");
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM incident WHERE id=1 AND closes=0 AND"
+                     " title='test campaign' AND state=4 AND note='' AND who='' AND via=0"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM incident_member WHERE kind=1 AND type=3 AND addr=''"
+                     " AND t_from=0 AND t_to=0 AND removes=0 AND finding IS NULL"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM incident_member WHERE kind=0 AND subject='d7' AND"
+                     " finding=7 AND port=0 AND first_seen=0 AND via=0"), 1);
+    /* A second close of the same incident is refused by the index. */
+    WT_EQ(raw_refused(p, "INSERT INTO incident (closes, state, ts) VALUES (1, 2, 1500);"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM incident WHERE closes=1"), 1);
+    /* Opened again, nothing runs a second time. */
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 12);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM incident_member"), 3);
+    v10_rows_as_written(p, tri_cols);
+    rm_store(p);
+}
+
+/* The v11 step's failure: a v11 file already holding the name
+ * incident_member_desc (an index of its own on minute) fails the step
+ * at its sixth statement, after both tables were made. It stays at
+ * v11, keeps that index and every row, and is left without either
+ * table: the step's earlier statements roll back with it. Seen red with
+ * the migration's ROLLBACK replaced by COMMIT (incident was left
+ * behind: the table count read 2). */
+static void test_v11_failed_step_leaves_file_unchanged(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "v11bad.db");
+    make_v11(p, "CREATE INDEX incident_member_desc ON minute (t);");
+    long long tri_cols = raw_int(p, "SELECT COUNT(*) FROM pragma_table_info('triage')");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), -1);
+    WT_HAS(err, "unchanged from v11");
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 11);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND"
+                     " name IN ('incident','incident_member')"), 0);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE"
+                     " name='incident_member_desc' AND tbl_name='minute'"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM anom_cover"), 2);
+    v10_rows_as_written(p, tri_cols);
+    rm_store(p);
+}
+
 /* The whole chain from a v7 file in one open: v7 -> v8 (the fleet's)
- * -> v9 (the links') -> v10 (the notes') -> v11 (the hour coverage),
- * each step's objects there and the v7 rows as they were. */
-static void test_v7_file_reaches_v11_in_one_open(void) {
+ * -> v9 (the links') -> v10 (the notes') -> v11 (the hour coverage)
+ * -> v12 (the incidents), each step's objects there and the v7 rows as
+ * they were. */
+static void test_v7_file_reaches_v12_in_one_open(void) {
     char p[128], err[512];
     path_in(p, sizeof(p), "v7chain.db");
     make_v7(p, "");
     WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 7);
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
     web_store_close(&S);
-    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 11);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 12);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name='anom_cover'"), 1);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM anom_cover"), 0);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name IN"
+                     " ('incident','incident_member','incident_closes')"), 3);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM incident"), 0);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name IN"
                      " ('peer_sites','peer_sightings','peer_sightings_last')"), 3);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name IN"
@@ -1745,9 +1866,9 @@ static void refused_untouched(const char *p, const char *want) {
  * left exactly as it was. */
 static void test_newer_file_refused(void) {
     char p[128];
-    path_in(p, sizeof(p), "v12.db");
+    path_in(p, sizeof(p), "v13.db");
     raw_exec(p, "CREATE TABLE meta (name TEXT PRIMARY KEY, value TEXT NOT NULL);"
-                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','12');"
+                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','13');"
                 "CREATE TABLE future (x INTEGER);");
     refused_untouched(p, "newer slothweb");
     rm_store(p);
@@ -2883,7 +3004,9 @@ void run_store_tests(void) {
     WT_RUN(test_v9_failed_step_leaves_file_unchanged);
     WT_RUN(test_v10_file_is_migrated);
     WT_RUN(test_v10_failed_step_leaves_file_unchanged);
-    WT_RUN(test_v7_file_reaches_v11_in_one_open);
+    WT_RUN(test_v11_file_is_migrated);
+    WT_RUN(test_v11_failed_step_leaves_file_unchanged);
+    WT_RUN(test_v7_file_reaches_v12_in_one_open);
     WT_RUN(test_mix_rows_round_trip);
     WT_RUN(test_mix_retention_and_cap);
     WT_RUN(test_mix_cut_keeps_buckets_whole);

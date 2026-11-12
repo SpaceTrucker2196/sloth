@@ -919,7 +919,7 @@ static void test_write_tools(void) {
     snprintf(args, sizeof(args), "{\"op\":\"remove\",\"from\":\"%s\",\"link\":2}", tid);
     WT_EQ(w_post("/api/frrs/relate", args), 200);
     WT_EQ(w_get("/api/health", ""), 200);
-    WT_HAS(w_body(), "\"agent\":{\"enabled\":true,\"writes\":5,\"refused\":0}}");
+    WT_HAS(w_body(), "\"agent\":{\"enabled\":true,\"writes\":5,\"refused\":0},\"bulk_posts\":");
     WT_LACKS(w_body(), W.f.agent_secret);            /* never the secret itself */
     m_close();
 }
@@ -1262,7 +1262,7 @@ static void test_whose_write(void) {
     WT_EQ(w_store_int("SELECT COUNT(*) FROM note"), 2);
     WT_EQ(w_store_int("SELECT COUNT(*) FROM note WHERE via = 3"), 1);
     WT_EQ(w_get("/api/health", ""), 200);
-    WT_HAS(w_body(), "\"agent\":{\"enabled\":true,\"writes\":1,\"refused\":9}}");
+    WT_HAS(w_body(), "\"agent\":{\"enabled\":true,\"writes\":1,\"refused\":9},\"bulk_posts\":");
     m_close();
 }
 

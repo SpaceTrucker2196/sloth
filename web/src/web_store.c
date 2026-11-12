@@ -498,6 +498,60 @@ static const char STEP_V11_SQL[] =
     "  done INTEGER NOT NULL DEFAULT 0\n"
     ");\n";
 
+/* v11 -> v12 (#198: triage many alerts as one): the operator's
+ * incidents, web_incident.h. incident is one row per incident opened
+ * (closes 0: its title, the state its members read as, the note, who,
+ * from where, how written, when) and one per incident closed (closes
+ * the id of the row it closes, with the state it closed at and the
+ * closing note): a close is a row, as a triage clear is, and the
+ * partial unique index keeps it to one. incident_member is one row per
+ * member added (kind 0 an alert, filed as a triage row files one: its
+ * subject, the finding when sloth.db names it, and the descriptor that
+ * outlives a rebuild of sloth.db; kind 1 a standing filter: an alert
+ * type or -1 any, an address or '' any, and a first_seen window, 0
+ * open at either end) and one per member removed (removes the id of
+ * the row it takes back, never a delete). Every column has a default
+ * but the clock and the state; via is the triage table's own values.
+ * Additive: two new tables and their indexes, nothing that exists is
+ * changed. Plain CREATE: a file already holding one of these names
+ * fails the step and stays at v11. */
+static const char STEP_V12_SQL[] =
+    "CREATE TABLE incident (\n"
+    "  id     INTEGER PRIMARY KEY,\n"
+    "  closes INTEGER NOT NULL DEFAULT 0,\n"
+    "  title  TEXT NOT NULL DEFAULT '',\n"
+    "  state  INTEGER NOT NULL,\n"
+    "  note   TEXT NOT NULL DEFAULT '',\n"
+    "  who    TEXT NOT NULL DEFAULT '',\n"
+    "  peer   TEXT NOT NULL DEFAULT '',\n"
+    "  via    INTEGER NOT NULL DEFAULT 0,\n"
+    "  ts     INTEGER NOT NULL\n"
+    ");\n"
+    "CREATE UNIQUE INDEX incident_closes ON incident (closes) WHERE closes > 0;\n"
+    "CREATE TABLE incident_member (\n"
+    "  id         INTEGER PRIMARY KEY,\n"
+    "  incident   INTEGER NOT NULL,\n"
+    "  kind       INTEGER NOT NULL DEFAULT 0,\n"
+    "  subject    TEXT NOT NULL DEFAULT '',\n"
+    "  finding    INTEGER,\n"
+    "  type       INTEGER NOT NULL DEFAULT -1,\n"
+    "  addr       TEXT NOT NULL DEFAULT '',\n"
+    "  port       INTEGER NOT NULL DEFAULT 0,\n"
+    "  first_seen INTEGER NOT NULL DEFAULT 0,\n"
+    "  t_from     INTEGER NOT NULL DEFAULT 0,\n"
+    "  t_to       INTEGER NOT NULL DEFAULT 0,\n"
+    "  who        TEXT NOT NULL DEFAULT '',\n"
+    "  peer       TEXT NOT NULL DEFAULT '',\n"
+    "  via        INTEGER NOT NULL DEFAULT 0,\n"
+    "  removes    INTEGER NOT NULL DEFAULT 0,\n"
+    "  ts         INTEGER NOT NULL\n"
+    ");\n"
+    "CREATE INDEX incident_member_of ON incident_member (incident, id);\n"
+    "CREATE INDEX incident_member_subject ON incident_member (subject);\n"
+    "CREATE INDEX incident_member_finding ON incident_member (finding);\n"
+    "CREATE INDEX incident_member_desc ON incident_member (type, addr, port, first_seen);\n"
+    "CREATE INDEX incident_member_removes ON incident_member (removes);\n";
+
 typedef struct {
     int         from;
     const char *sql;
@@ -518,6 +572,7 @@ static const web_step_t STEPS[] = {
     { 8, STEP_V9_SQL, "created anom_subject and relation" },
     { 9, STEP_V10_SQL, "created note and added relation.via" },
     { 10, STEP_V11_SQL, "created anom_cover" },
+    { 11, STEP_V12_SQL, "created incident and incident_member" },
 };
 #define STEP_N ((int)(sizeof(STEPS) / sizeof(STEPS[0])))
 
