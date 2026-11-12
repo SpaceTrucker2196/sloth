@@ -334,3 +334,4 @@
 | 4129f32 | 2026-11-12T04:52:22Z | claude-opus-5-5 | 148 | 26777 | 20271481 | 77126 | 5.2074 | slothweb header shows host name |
 | 2744f9b | 2026-11-12T05:18:06Z | claude-opus-5-5 | 34 | 6449 | 4734423 | 10670 | 1.1614 | Radar: fleet areas where other sloths locate an emitter |
 | 2e1da1a | 2026-11-12T05:45:10Z | claude-opus-5-5 | 6 | 2025 | 740224 | 5364 | 0.2315 | Radar fleet areas: side wash reach, tap clears, fetch only with a peer |
+| cf2d5787 | 2026-11-12T12:33:31Z | claude-opus-5 | 342 | 130524 | 26206928 | 492176 | 21.2900 | #197 — ATTACK_PATH attributed to the request half, not the victim |
