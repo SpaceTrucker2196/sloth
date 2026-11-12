@@ -26,12 +26,14 @@
     return m.toFixed(m < 100 ? 1 : 0) + " m";
   }
   function words(s) { return String(s || "").replace(/_/g, " "); }
-  // A site as the panel names it: its label, else its peer name; this
-  // site's label with "(here)".
+  // A site as the panel names it: its label and host name (owner rule
+  // 2026-11-12), else its peer name; this site's with "(here)".
   function siteName(name) {
     var s = S.sites[name];
-    if (name === "self") return s && s.label ? s.label + " (here)" : "this site";
-    return s && s.label ? s.label : name;
+    var l = s && s.label ? s.label : "", h = s && s.host ? s.host : "";
+    var n = l && h && l !== h ? l + " (" + h + ")" : l || h;
+    if (name === "self") return n ? n + " (here)" : "this site";
+    return n || name;
   }
   // A MAC opens its drawer; anything else (a fingerprint, an SSID) is text.
   function keyEl(k) {
@@ -115,7 +117,7 @@
       H.set("fid-config", j.configure || "");
       var c = j.counts, own = j.sites.map(function (s) {
         return siteName(s.site) + " " + (s.offered ? s.own_ssids.length + " SSID, " + s.own_bssids.length +
-               " BSSID" : "not offered (older build)");
+               " BSSID" : "own networks not shared (they stay at that site)");
       });
       var pairs = j.pairs.map(function (p) {
         return siteName(p.a) + " - " + siteName(p.b) + " " + (p.co_located === null ? "no position" :

@@ -25,9 +25,11 @@
 #include "web_config.h"
 #include "web_adsb.h"
 #include "web_alertkb.h"
+#include "web_ble.h"
 #include "web_fleet.h"
 #include "web_fleetadsb.h"
 #include "web_fleetgnss.h"
+#include "web_fleetshare.h"
 #include "web_frrs.h"
 #include "web_jsonl.h"
 #include "web_gnss.h"
@@ -733,9 +735,9 @@ static void up(void) {
         "%lld,%lld);"
         "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,technique,"
         "match_ip,match_port,count) VALUES ('pmkid:0e:ee:ee:ee:ee:01:deadbeefcafe',%lld,"
-        "%lld,5,1,'PMKID exposed','pmkid=deadbeefcafe0123','T1557',NULL,NULL,1);",
+        "%lld,%d,1,'PMKID exposed','pmkid=deadbeefcafe0123','T1557',NULL,NULL,1);",
         T - 50, T - 50, T - 50, T - 45, T - 44, T - 40, T - 30, T - 40, T - 30, T - 70,
-        T - 60);
+        T - 60, web_akb_find("PMKID_HARVEST"));
     WT_EQ(sdb_exec(g_db, sql), 0);
     web_slothdb_init(&SDB, g_db, NULL);
     char err[512];
@@ -744,8 +746,11 @@ static void up(void) {
         "INSERT INTO triage (subject,finding,type,addr,port,first_seen,state,ts,note,"
         "who,peer) VALUES ('x12:%lld',NULL,12,'10.0.1.5',21,%lld,4,%lld,"
         "'triage-note-marker','op-marker','127.0.0.1'),"
-        " ('x0:%lld',NULL,0,'10.0.0.7',0,%lld,1,%lld,'','','127.0.0.1');",
-        T - 100, T - 100, T - 90, T - 30 * DY, T - 30 * DY, T - 20 * DY);
+        " ('x0:%lld',NULL,0,'10.0.0.7',0,%lld,1,%lld,'','','127.0.0.1'),"
+        /* A finding the radio heard, on a radio address: it travels. */
+        " ('x1:%lld',NULL,%d,'0e:77:00:00:00:01',0,%lld,4,%lld,'','','127.0.0.1');",
+        T - 100, T - 100, T - 90, T - 30 * DY, T - 30 * DY, T - 20 * DY,
+        T - 95, web_akb_find("DEAUTH_FLOOD"), T - 95, T - 85);
     WT_EQ(sql_on(g_store, sql), 0);
     WT_EQ(web_frrs_init(&FR, &S, NULL, 1, err, sizeof(err)), 0);
 }
@@ -794,11 +799,18 @@ static void test_export_withholds_secrets(void) {
               "\"is_ap\":false,");
     WT_HAS(b, "{\"type\":\"probe\",\"mac\":\"da:a1:19:00:00:01\",\"ssid\":\"HomeNet\",");
     WT_HAS(b, "{\"type\":\"probe\",\"mac\":\"da:a1:19:00:00:01\",\"ssid\":\"CafeFree\",");
-    WT_HAS(b, "{\"type\":\"alert\",\"alert_type\":");
-    WT_HAS(b, ",\"title\":\"FTP login in cleartext\",\"ip\":\"10.0.1.5\",\"sev\":2,\"count\":3,");
-    WT_HAS(b, ",\"title\":\"PMKID exposed\",");
-    WT_HAS(b, "{\"type\":\"verdict\",\"alert_type\":");
-    WT_HAS(b, ",\"addr\":\"10.0.1.5\",\"port\":21,");
+    /* The host name and the rule (owner, 2026-11-12). */
+    WT_HAS(b, ",\"hostname\":");
+    WT_HAS(b, ",\"share_rule\":\"monitor_only\"}\n");
+    /* An alert the radio heard travels, with no address; a cleartext
+     * credential is the IP capture's and its verdict on an IP too: they
+     * stay here (test_fleetshare.c holds the rule itself). */
+    WT_HAS(b, "{\"type\":\"alert\",\"alert_type\":\"PMKID_HARVEST\",");
+    WT_HAS(b, ",\"title\":\"PMKID exposed\",\"ip\":null,");
+    WT_LACKS(b, "FTP login in cleartext");
+    WT_LACKS(b, "10.0.1.5");
+    WT_HAS(b, "{\"type\":\"verdict\",\"alert_type\":\"DEAUTH_FLOOD\",\"addr\":"
+              "\"0e:77:00:00:00:01\",\"port\":0,");
     WT_HAS(b, ",\"state\":\"known\",");
     WT_HAS(b, "\"complete\":true}\n");
     /* The things that must never travel. */
@@ -826,7 +838,7 @@ static void test_export_withholds_secrets(void) {
         p = nl ? nl + 1 : p + n;
     }
     free(rec);
-    WT_ASSERT(lines >= 15);
+    WT_ASSERT(lines >= 12);   /* six devices the radio heard, two probes, an alert, a verdict */
     /* The importer takes what the exporter writes. */
     web_fleet_t f;
     web_fleet_peer_cfg_t pc;
@@ -838,7 +850,7 @@ static void test_export_withholds_secrets(void) {
     if (rc) fprintf(stderr, "    ingest: %s\n", err);
     WT_EQ(rc, 0);
     WT_EQ(rts, T);
-    WT_ASSERT(rows >= 12);
+    WT_ASSERT(rows >= 10);
     web_fleet_destroy(&f);
     free(b);
     down();
@@ -854,7 +866,9 @@ static void test_export_since(void) {
     WT_EQ(st, 200);
     if (b) {
         WT_HAS(b, "\"mac\":\"da:a1:19:00:00:01\"");       /* seen 1 h ago */
-        WT_HAS(b, "\"mac\":\"00:11:22:33:44:55\"");       /* 10 s ago */
+        /* 10 s ago, but known only from the LAN (ARP, DHCP, mDNS): never
+         * sent, whatever since says (owner rule 2026-11-12). */
+        WT_LACKS(b, "\"mac\":\"00:11:22:33:44:55\"");
         WT_LACKS(b, "\"mac\":\"da:a1:19:00:00:02\"");     /* 30 h ago */
         WT_LACKS(b, "\"mac\":\"f2:11:22:00:00:06\"");     /* 23 h ago */
         WT_LACKS(b, "\"mac\":\"da:a1:19:00:00:07\"");     /* 24 h ago */
@@ -917,18 +931,25 @@ static void test_export_sends_only_what_the_importer_takes(void) {
     up();
     char sql[1024];
     snprintf(sql, sizeof(sql),
-        "INSERT INTO devices (mac,vendor,is_ap,signal_dbm,first_seen,last_seen) VALUES"
-        " ('02:0b:ad:00:00:60','Odd',0,60,%lld,%lld),"
-        " ('02:0b:ad:00:00:61','Odd',0,-50,%lld,%lld),"
-        " ('02:0b:ad:00:00:62','Arp',0,0,%lld,%lld),"
-        " ('02:0b:ad:00:00:63','Old',0,0,%lld,%lld),"
-        " ('02:0b:ad:00:00:64','Five',0,0,%lld,%lld);"
+        /* sources 16: each heard probing (the export sends what the radio
+         * heard, owner rule 2026-11-12). */
+        "INSERT INTO devices (mac,vendor,is_ap,signal_dbm,sources,first_seen,last_seen) VALUES"
+        " ('02:0b:ad:00:00:60','Odd',0,60,16,%lld,%lld),"
+        " ('02:0b:ad:00:00:61','Odd',0,-50,16,%lld,%lld),"
+        " ('02:0b:ad:00:00:62','Arp',0,0,16,%lld,%lld),"
+        " ('02:0b:ad:00:00:63','Old',0,0,16,%lld,%lld),"
+        " ('02:0b:ad:00:00:64','Five',0,0,16,%lld,%lld);"
         "INSERT INTO probe_clients (mac,ssid,signal_dbm,channel,first_seen,last_seen)"
         " VALUES ('02:0b:ad:00:00:62','',-52,6,%lld,%lld),"
         " ('02:0b:ad:00:00:63','',-53,6,%lld,%lld),"
-        " ('02:0b:ad:00:00:64','',-54,36,%lld,%lld);",
+        " ('02:0b:ad:00:00:64','',-54,36,%lld,%lld);"
+        /* 63 heard associating since its probe: its row's last_seen moves
+         * past the probe's reading. */
+        "INSERT INTO assocs (bssid,sta_mac,ssid,source,first_seen,last_seen) VALUES"
+        " ('0a:0b:ad:00:00:01','02:0b:ad:00:00:63','',2,%lld,%lld);",
         T - 100, T - 20, T - 5, T - 30, T - 100, T - 20, T - 100, T - 20, T - 100, T - 20,
-        T - 100, T - 40, T - 900, T - 20 - WEB_LOC_WINDOW_S - 1, T - 100, T - 20);
+        T - 100, T - 40, T - 900, T - 20 - WEB_LOC_WINDOW_S - 1, T - 100, T - 20,
+        T - 100, T - 20);
     WT_EQ(sdb_exec(g_db, sql), 0);
     int st = 0;
     char *b = export(0, NULL, &st);
@@ -939,12 +960,13 @@ static void test_export_sends_only_what_the_importer_takes(void) {
         WT_HAS(b, "\"mac\":\"02:0b:ad:00:00:60\",\"vendor\":\"Odd\",\"ssid\":null,"
                   "\"rssi\":null,");
         WT_LACKS(b, "02:0b:ad:00:00:61");
-        /* An ARP row's 0 travels as the probe's reading (#192 I5; seen
+        /* A client's 0 travels as the probe's reading (#192 I5; seen
          * red with the export's fallback removed: "rssi":null). */
         WT_HAS(b, "\"mac\":\"02:0b:ad:00:00:62\",\"vendor\":\"Arp\",\"ssid\":null,"
                   "\"rssi\":-52,");
-        /* Not a probe older than the window before the row's last_seen,
-         * which the importer would pair as current, nor one on 5 GHz,
+        /* Not a probe older than the window before the row's last_seen
+         * (63's association moved it), which the importer would pair as
+         * current, nor one on 5 GHz,
          * which it would model at 2.4 (#192 I5 review; seen red with
          * each condition removed: -53 and -54). */
         WT_HAS(b, "\"mac\":\"02:0b:ad:00:00:63\",\"vendor\":\"Old\",\"ssid\":null,"
@@ -1039,10 +1061,15 @@ static int pull_with(const char *resp, int raw, char *req, size_t reqsz) {
     return rc;
 }
 
-#define HDR(gen) "{\"type\":\"fleet_export\",\"fleet_export_version\":1,\"generated\":" #gen \
+#define HDR_PRE(gen) "{\"type\":\"fleet_export\",\"fleet_export_version\":1,\"generated\":" #gen \
     ",\"since\":0,\"site_label\":\"beta-site\",\"slothweb_version\":\"1.8.6\"," \
     "\"sloth_version\":null,\"sloth_db\":\"open\",\"lat\":41.8781136,\"lon\":-87.6297982," \
-    "\"alt_m\":181.0,\"pos_source\":\"fixed\",\"pos_ts\":" #gen ",\"pos_age_s\":0}\n"
+    "\"alt_m\":181.0,\"pos_source\":\"fixed\",\"pos_ts\":" #gen ",\"pos_age_s\":0"
+/* A peer of this build: its host name and the monitor-only rule
+ * (owner, 2026-11-12). HDR_OLD: a build before the rule, which states
+ * neither. */
+#define HDR(gen) HDR_PRE(gen) ",\"hostname\":\"beta-host\",\"share_rule\":\"monitor_only\"}\n"
+#define HDR_OLD(gen) HDR_PRE(gen) "}\n"
 
 static const char GOOD[] =
     HDR(1792627000)
@@ -1144,6 +1171,9 @@ static void test_pull_good_and_upsert(void) {
                       " key='receiver' AND label='fixed'"), 1);
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='alert' AND"
                       " key='0123456789abcdef' AND label='Evil twin'"), 1);
+    /* The peer's host name, beside its site (owner rule 2026-11-12). */
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name='fleet.host.beta' AND"
+                      " value='beta-host'"), 1);
 
     rc = pull_with(GOOD2, 0, req, sizeof(req));
     WT_EQ(rc, 0);
@@ -1185,10 +1215,12 @@ static void test_pull_good_and_upsert(void) {
     WT_EQ(web_route(&rq, &h, 1, out, sizeof(out), &r), 0);
     out[r.out_len] = '\0';
     WT_EQ(r.status, 200);
-    WT_HAS(out, ",\"fleet\":{\"export\":true,\"export_version\":1,\"interval_s\":60,"
+    WT_HAS(out, ",\"fleet\":{\"export\":true,\"export_version\":1,\"share_rule\":"
+                "\"monitor_only\",\"interval_s\":60,"
                 "\"outside_tailnet\":true,\"peers\":[{\"name\":\"beta\",\"url\":"
                 "\"http://127.0.0.1:1\",\"last_ok_age_s\":30,\"last_attempt_age_s\":30,"
-                "\"last_error\":null,\"rows\":1,\"pulls\":3,\"failures\":0}]}");
+                "\"last_error\":null,\"rows\":1,\"pulls\":3,\"failures\":0,"
+                "\"refused_by_rule\":0}]}");
     snprintf(rq.path, sizeof(rq.path), "/api/fleet/peers");
     WT_EQ(web_route(&rq, &h, 1, out, sizeof(out), &r), 0);
     out[r.out_len] = '\0';
@@ -1198,8 +1230,8 @@ static void test_pull_good_and_upsert(void) {
                 "\"beta-site\",");
     WT_HAS(out, ",\"lat\":41.8781136,\"lon\":-87.6297982,\"alt_m\":181.0,\"pos_source\":"
                 "\"fixed\",");
-    WT_HAS(out, ",\"counts\":{\"alert\":1,\"ap\":1,\"ble\":1,\"gnss\":1,\"probe\":1,"
-                "\"verdict\":1,\"wifi\":1}}");
+    WT_HAS(out, ",\"rows_last\":1,\"host\":\"beta-host\",\"counts\":{\"alert\":1,\"ap\":1,"
+                "\"ble\":1,\"gnss\":1,\"probe\":1,\"verdict\":1,\"wifi\":1}}");
     snprintf(rq.query, sizeof(rq.query), "x=1");
     WT_EQ(web_route(&rq, &h, 1, out, sizeof(out), &r), 0);
     WT_EQ(r.status, 400);
@@ -1536,6 +1568,14 @@ static void here_down(peer_srv_t *srv, pthread_t th) {
 
 static long long here_q(const char *sql) { return q1(g_here_web, sql); }
 
+/* What of up()'s files the monitor-only rule sends (owner, 2026-11-12):
+ * the devices the radio heard (sources BEACON or PROBE), the alerts and
+ * verdicts of an allow-listed type (sdb_seed()'s 3 and 12 and up()'s
+ * triage type 0 are the IP capture's: withheld). */
+#define SENT_DEVICES "SELECT COUNT(*) FROM devices WHERE (sources & 24) <> 0"
+#define SENT_ALERTS  "SELECT COUNT(DISTINCT type||'|'||title) FROM alerts WHERE type NOT IN (3,12)"
+#define SENT_VERDICTS "SELECT COUNT(DISTINCT subject) FROM triage WHERE type NOT IN (0,12)"
+
 /* More of each pageable kind than one answer carries, most of them in
  * ties on last_seen across the cut, all of them older than the next
  * pull's window: the first pull takes the newest of each and one page
@@ -1556,8 +1596,8 @@ static void test_backfill_after_a_cut(void) {
     char sql[4096];
     snprintf(sql, sizeof(sql),
         "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<4499)"
-        " INSERT INTO devices (mac,vendor,is_ap,signal_dbm,first_seen,last_seen)"
-        " SELECT printf('02:aa:00:00:%%02x:%%02x', i/256, i%%256),'Bulk',0,-60,%lld,"
+        " INSERT INTO devices (mac,vendor,is_ap,signal_dbm,sources,first_seen,last_seen)"
+        " SELECT printf('02:aa:00:00:%%02x:%%02x', i/256, i%%256),'Bulk',0,-60,16,%lld,"
         " %lld-(i%%4) FROM n;"
         "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<1299)"
         " INSERT INTO beacon_aps (bssid,ssid,channel,signal_dbm,first_seen,last_seen)"
@@ -1565,19 +1605,19 @@ static void test_backfill_after_a_cut(void) {
         " %lld-(i%%3) FROM n;"
         "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<1099)"
         " INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,technique,count)"
-        " SELECT 'bulk:'||i,%lld,%lld-(i%%5),3,1,'bulk alert '||i,'T1557',1 FROM n;",
+        " SELECT 'bulk:'||i,%lld,%lld-(i%%5),1,1,'bulk alert '||i,'T1557',1 FROM n;",
         T - 5000, T - 1000, T - 5000, T - 2000, T - 4000, T - 3000);
     WT_EQ(sdb_exec(g_db, sql), 0);
     snprintf(sql, sizeof(sql),
         "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<1099)"
         " INSERT INTO triage (subject,finding,type,addr,port,first_seen,state,ts,note,who,peer)"
-        " SELECT 'b'||i,NULL,12,printf('10.9.%%d.%%d', i/256, i%%256),0,%lld,4,%lld-(i%%5),"
+        " SELECT 'b'||i,NULL,1,printf('0e:99:00:00:%%02x:%%02x', i/256, i%%256),0,%lld,4,%lld-(i%%5),"
         "'','','127.0.0.1' FROM n;", T - 4000, T - 3000);
     WT_EQ(sql_on(g_store, sql), 0);
-    long long want_wifi = q1(g_db, "SELECT COUNT(*) FROM devices");
+    long long want_wifi = q1(g_db, SENT_DEVICES);
     long long want_ap = q1(g_db, "SELECT COUNT(*) FROM beacon_aps");
-    long long want_alert = q1(g_db, "SELECT COUNT(DISTINCT type||'|'||title) FROM alerts");
-    long long want_verdict = q1(g_store, "SELECT COUNT(DISTINCT subject) FROM triage");
+    long long want_alert = q1(g_db, SENT_ALERTS);
+    long long want_verdict = q1(g_store, SENT_VERDICTS);
     WT_ASSERT(want_wifi > 2 * WEB_FLEET_CAP_WIFI && want_ap > WEB_FLEET_CAP_AP &&
               want_alert > WEB_FLEET_CAP_ALERT && want_verdict > WEB_FLEET_CAP_VERDICT);
 
@@ -1685,8 +1725,8 @@ static void test_backfill_cut_every_pull(void) {
     char sql[1024];
     snprintf(sql, sizeof(sql),
         "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<9999)"
-        " INSERT INTO devices (mac,vendor,is_ap,signal_dbm,first_seen,last_seen)"
-        " SELECT printf('02:aa:00:00:%%02x:%%02x', i/256, i%%256),'Bulk',0,-60,%lld,"
+        " INSERT INTO devices (mac,vendor,is_ap,signal_dbm,sources,first_seen,last_seen)"
+        " SELECT printf('02:aa:00:00:%%02x:%%02x', i/256, i%%256),'Bulk',0,-60,16,%lld,"
         " %lld-(i%%7) FROM n;", T - 9000, T - 5000);
     WT_EQ(sdb_exec(g_db, sql), 0);
     /* up()'s own devices that the first answer carried, newer than these. */
@@ -1697,8 +1737,8 @@ static void test_backfill_cut_every_pull(void) {
         if (k > 0) {
             snprintf(sql, sizeof(sql),
                 "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<2099)"
-                " INSERT INTO devices (mac,vendor,is_ap,signal_dbm,first_seen,last_seen)"
-                " SELECT printf('02:b%d:00:00:%%02x:%%02x', i/256, i%%256),'New',0,-60,%lld,"
+                " INSERT INTO devices (mac,vendor,is_ap,signal_dbm,sources,first_seen,last_seen)"
+                " SELECT printf('02:b%d:00:00:%%02x:%%02x', i/256, i%%256),'New',0,-60,16,%lld,"
                 " %lld-(i%%3) FROM n;", k, now - 300, now - 200);
             WT_EQ(sdb_exec(g_db, sql), 0);
         }
@@ -1731,7 +1771,7 @@ static void test_backfill_cut_every_pull(void) {
     WT_EQ(F.peer[0].page_failures, 0);
     WT_EQ(F.peer[0].bf[WEB_FK_WIFI].active, 0);
     WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi'"),
-          q1(g_db, "SELECT COUNT(*) FROM devices"));
+          q1(g_db, SENT_DEVICES));
     WT_EQ(here_q("SELECT COUNT(*) FROM meta WHERE name LIKE 'fleet.backfill.%'"), 0);
     here_down(&srv, th);
 }
@@ -1751,8 +1791,8 @@ static void test_backfill_merge_past_bound(void) {
     char sql[1024];
     snprintf(sql, sizeof(sql),
         "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<2999)"
-        " INSERT INTO devices (mac,vendor,is_ap,signal_dbm,first_seen,last_seen)"
-        " SELECT printf('02:aa:00:00:%%02x:%%02x', i/256, i%%256),'Bulk',0,-60,%lld,"
+        " INSERT INTO devices (mac,vendor,is_ap,signal_dbm,sources,first_seen,last_seen)"
+        " SELECT printf('02:aa:00:00:%%02x:%%02x', i/256, i%%256),'Bulk',0,-60,16,%lld,"
         " %lld-(i%%7) FROM n;", T - 9000, T - 5000);
     WT_EQ(sdb_exec(g_db, sql), 0);
     F.pages_per_pull = 0;
@@ -1762,8 +1802,8 @@ static void test_backfill_merge_past_bound(void) {
         if (k > 0 && k < 6) {
             snprintf(sql, sizeof(sql),
                 "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<2099)"
-                " INSERT INTO devices (mac,vendor,is_ap,signal_dbm,first_seen,last_seen)"
-                " SELECT printf('02:b%d:00:00:%%02x:%%02x', i/256, i%%256),'New',0,-60,%lld,"
+                " INSERT INTO devices (mac,vendor,is_ap,signal_dbm,sources,first_seen,last_seen)"
+                " SELECT printf('02:b%d:00:00:%%02x:%%02x', i/256, i%%256),'New',0,-60,16,%lld,"
                 " %lld-(i%%3) FROM n;", k, now - 300, now - 200);
             WT_EQ(sdb_exec(g_db, sql), 0);
         }
@@ -1787,7 +1827,7 @@ static void test_backfill_merge_past_bound(void) {
     WT_EQ(F.peer[0].page_failures, 0);
     WT_EQ(b->active, 0);
     WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi'"),
-          q1(g_db, "SELECT COUNT(*) FROM devices"));
+          q1(g_db, SENT_DEVICES));
     WT_EQ(here_q("SELECT COUNT(*) FROM meta WHERE name LIKE 'fleet.backfill.%'"), 0);
     here_down(&srv, th);
 }
@@ -1863,21 +1903,21 @@ static void test_backfill_alerts_past_the_scan(void) {
     snprintf(sql, sizeof(sql),
         "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<2)"
         " INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,technique,count)"
-        " SELECT 'hot:'||i,%lld,%lld,3,1,'hot alert '||i,'T1557',7000 FROM n;"
+        " SELECT 'hot:'||i,%lld,%lld,1,1,'hot alert '||i,'T1557',7000 FROM n;"
         "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<20999)"
         " INSERT INTO alert_incidents (key,incident_id,type,first_seen,last_seen,sev,"
-        "peak_sev,count,observations) SELECT 'hot:'||(i%%3),printf('%%016x',i),3,"
+        "peak_sev,count,observations) SELECT 'hot:'||(i%%3),printf('%%016x',i),1,"
         "%lld-(i/3)-10,%lld-(i/3),1,1,1,1 FROM n;"
         "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<1499)"
         " INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,technique,count)"
-        " SELECT 'cold:'||i,%lld-i-10,%lld-i,3,1,'cold alert '||i,'T1557',1 FROM n;"
+        " SELECT 'cold:'||i,%lld-i-10,%lld-i,1,1,'cold alert '||i,'T1557',1 FROM n;"
         "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<1499)"
         " INSERT INTO alert_incidents (key,incident_id,type,first_seen,last_seen,sev,"
-        "peak_sev,count,observations) SELECT 'cold:'||i,'0000000000000001',3,%lld-i-10,"
+        "peak_sev,count,observations) SELECT 'cold:'||i,'0000000000000001',1,%lld-i-10,"
         "%lld-i,1,1,1,1 FROM n;",
         T - 8100, T - 1000, T - 1000, T - 1000, T - 9000, T - 9000, T - 9000, T - 9000);
     WT_EQ(sdb_exec(g_db, sql), 0);
-    long long want = q1(g_db, "SELECT COUNT(DISTINCT type||'|'||title) FROM alerts");
+    long long want = q1(g_db, SENT_ALERTS);
     WT_ASSERT(want > 1500);
     F.pages_per_pull = 4;
     /* The peer is an F2 build (#192 I5 review): own=1 refused, asked
@@ -1995,17 +2035,20 @@ static void test_export_pages(void) {
         WT_HAS(b, "\"next_wifi\":null");
     }
     free(b);
-    /* own=1 (#192 I5): the header names this site's radios, or says
-     * none. */
+    /* own=1 (#192 I5): taken, but the header never names this site's
+     * radios (owner rule 2026-11-12: the managed card is a station of
+     * the local network): none, whatever the host has. Seen red with
+     * the header writing x->own_csv again. */
     g_own_csv = "02:00:5e:00:00:0a,02:00:5e:00:00:0b";
     b = export(0, "since=0&next=1&own=1", &st);
     WT_EQ(st, 200);
-    if (b) WT_HAS(b, ",\"pos_age_s\":null,\"own_macs\":\"02:00:5e:00:00:0a,02:00:5e:00:00:0b\"}\n");
+    if (b) WT_HAS(b, ",\"pos_age_s\":null,\"own_macs\":null,\"hostname\":");
+    if (b) WT_LACKS(b, "02:00:5e:00:00:0");
     free(b);
     g_own_csv = NULL;
     b = export(0, "since=0&own=1", &st);
     WT_EQ(st, 200);
-    if (b) WT_HAS(b, ",\"own_macs\":null}\n");
+    if (b) WT_HAS(b, ",\"own_macs\":null,");
     free(b);
     static const struct { const char *q, *why; } bad[] = {
         { "since=0&own=2", "bad_own" }, { "since=0&own=1&own=1", "unknown_parameter" },
@@ -2051,8 +2094,8 @@ static void test_overview_and_shared(void) {
      * triaged too (its own wins), one it has not (the peer's shown). */
     snprintf(sql, sizeof(sql),
         "INSERT INTO triage (subject,finding,type,addr,port,first_seen,state,ts,note,who,"
-        "peer) VALUES ('p3a',NULL,3,'da:a1:19:00:00:01',0,%lld,2,%lld,'','',''),"
-        " ('p3b',NULL,3,'da:a1:19:00:00:04',0,%lld,3,%lld,'','','');",
+        "peer) VALUES ('p3a',NULL,1,'da:a1:19:00:00:01',0,%lld,2,%lld,'','',''),"
+        " ('p3b',NULL,1,'da:a1:19:00:00:04',0,%lld,3,%lld,'','','');",
         T - 600, T - 590, T - 600, T - 580);
     WT_EQ(sql_on(g_store, sql), 0);
     WT_EQ(web_fleet_pull_one(&F, 0, T + 5), 0);
@@ -2110,11 +2153,17 @@ static void test_overview_and_shared(void) {
     WT_EQ(web_route(&rq, &h, 1, out, sizeof(out), &r), 0);
     out[r.out_len] = '\0';
     WT_EQ(r.status, 200);
-    WT_HAS(out, "{\"local\":{\"name\":\"self\",\"label\":null,\"sloth_db\":\"open\",\"lat\":null,");
+    WT_HAS(out, "{\"local\":{\"name\":\"self\",\"label\":null,\"host\":");
+    WT_HAS(out, ",\"share_rule\":\"monitor_only\",\"sloth_db\":\"open\",\"lat\":null,");
     WT_HAS(out, ",\"store\":true,\"configured\":1,\"peers\":[{\"name\":\"beta\",\"configured\":true,");
     WT_HAS(out, ",\"last_ok_age_s\":60,\"last_attempt_age_s\":60,\"last_error\":null,"
                 "\"skew_s\":-5,");
-    WT_HAS(out, ",\"counts\":{\"wifi\":9,\"ble\":0,\"ap\":0,\"probe\":2,");
+    /* Six of up()'s nine devices: the three the LAN alone knows stay
+     * there (owner rule 2026-11-12). */
+    WT_HAS(out, ",\"counts\":{\"wifi\":6,\"ble\":0,\"ap\":0,\"probe\":2,");
+    WT_HAS(out, ",\"host\":");
+    WT_HAS(out, ",\"share_rule\":\"monitor_only\",");
+    WT_HAS(out, ",\"refused_by_rule\":0,\"refused_by_rule_total\":0,");
     WT_HAS(out, "{\"name\":\"old\",\"configured\":false,");
     WT_HAS(out, "\"distances\":[{\"a\":\"beta\",\"b\":\"old\",\"m\":2326925.0}]");
     snprintf(rq.query, sizeof(rq.query), "x=1");
@@ -2211,8 +2260,9 @@ static void test_pull_own_radios(void) {
     srv.src.own_csv = "02:00:5e:00:00:0b";
     WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
     WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1&ident=1"));
-    WT_EQ(F.peer[0].nown, 1);
-    WT_ASSERT(!strcmp(F.peer[0].own[0], "02:00:5e:00:00:0b"));
+    /* The peer has a radio, but its export never names it (owner rule
+     * 2026-11-12): "none", which replaces what it named before. */
+    WT_EQ(F.peer[0].nown, 0);
     WT_EQ(F.peer[0].own_at, T);
     /* Now an F2 build: own=1 refused, next=1 kept. */
     srv.f2 = 1;
@@ -2234,8 +2284,8 @@ static void test_pull_own_radios(void) {
     WT_ASSERT(F.peer[0].no_own_until > T + 60);
     WT_EQ(F.peer[0].no_next_until, 0);
     WT_EQ(F.peer[0].failures, 0);
-    /* Not named this time: the radios named before stay. */
-    WT_EQ(F.peer[0].nown, 1);
+    /* Not named this time either. */
+    WT_EQ(F.peer[0].nown, 0);
     /* Within the hour, one request, without own=1. */
     n0 = srv.n;
     WT_EQ(web_fleet_pull_one(&F, 0, T + 120), 0);
@@ -2610,7 +2660,9 @@ static void test_read_own_many_and_again(void) {
     WT_EQ(st, 200);
     char *b = body ? realloc(body, len + 1) : NULL;
     if (b) b[len] = '\0'; else free(body);
-    WT_HAS(b, "\"own_macs\":\"00:c0:ca:bb:51:82,24:41:8c:30:97:a1,00:c0:ca:00:00:09\"");
+    /* ...and the export never names it (owner rule 2026-11-12). */
+    WT_HAS(b, "\"own_macs\":null");
+    WT_LACKS(b, "00:c0:ca:bb:51:82");
     free(b);
     web_fleet_destroy(&f);
     for (int i = 0; i < 1000; i++) {
@@ -3791,7 +3843,10 @@ static void test_ident_pull_from_an_i7_peer(void) {
     WT_EQ(web_fleet_pull_one(&F, 0, T + 60 + WEB_FLEET_NOIDENT_S), 0);
     WT_EQ(srv.n, n0 + 1);
     WT_HAS(srv.req[n0], "&adsb=1&ident=1");
-    WT_EQ(here_q("SELECT COUNT(*) FROM meta WHERE name='fleet.ident.beta'"), 1);
+    /* No own networks' meta row: a site's own networks never travel
+     * (owner rule 2026-11-12), so there is nothing of them to date. */
+    WT_EQ(here_q("SELECT COUNT(*) FROM meta WHERE name='fleet.ident.beta'"), 0);
+    WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net'"), 0);
     here_down(&srv, th);
 }
 
@@ -3944,6 +3999,382 @@ static void test_adsb_route(void) {
     web_gnss_destroy(&GB);
     web_gnss_destroy(&GS);
 }
+
+/* ── the monitor-only rule (owner, 2026-11-12; web_fleetshare.h) ───── */
+
+static void ble_adv(web_ble_t *b, const char *addr, const char *name, long long last) {
+    static web_jrec_t r;
+    char line[2048];
+    snprintf(line, sizeof(line),
+             "{\"type\":\"ble_device\",\"ts\":%lld,\"addr\":\"%s\",\"addr_type\":0,"
+             "\"sensor\":\"ble\",\"iface\":\"bluetooth-monitor\",\"adapter\":0,\"sampled\":0,"
+             "\"channel\":-1,\"last_pdu\":\"ADV_IND\",\"pdu_mask\":1,\"name\":\"%s\","
+             "\"name_complete\":1,\"uuid16\":-1,\"mfr_id\":-1,\"mfr_subtype\":-1,"
+             "\"svc_data_uuid16\":-1,\"appearance\":-1,\"hid\":0,\"tx_power\":-128,"
+             "\"flags\":-1,\"has_rssi\":1,\"rssi\":-60,\"rssi_best\":-55,\"adv_count\":5,"
+             "\"watch_category\":\"\",\"ext_adv\":0,\"primary_phy\":0,\"secondary_phy\":0,"
+             "\"adv_sid\":-1,\"first_seen\":%lld,\"last_seen\":%lld}",
+             last, addr, name, last - 100, last);
+    WT_EQ(web_jl_parse(line, strlen(line), &r), WEB_JL_OK);
+    web_ble_record(b, &r, 1000);
+}
+
+/* One sensor holding every case of the rule: what its monitor radio,
+ * BLE receiver, GNSS receiver and ADS-B SDR heard passively travels;
+ * what its own interfaces learned, and its local network, never do.
+ *
+ *   travels   :01, a passer-by heard probing (its probe for Elsewhere);
+ *             :a1, a neighbour's AP (beacon); the BLE advertiser; the
+ *             receiver and the aircraft; a deauth flood on :a1 (no
+ *             address); a verdict on :a1; the host name and the rule.
+ *   withheld  :b1, known from ARP alone (its address, its DHCP name);
+ *             :c1, heard probing but also on the LAN (the both-ways
+ *             device: the whole row, its address and name with it);
+ *             :d1, the AP the managed card is associated to (wifi_aps
+ *             status 1, wifi_stas); :d2, the same network's other BSS
+ *             (its SSID); :e1, a station associated to :d2, and its
+ *             probe for JoinedNet; :01's probe for JoinedNet; :f1 and
+ *             OwnSsidNet, --my-bssid and --my-ssid, and no own_net line
+ *             for them; :98, rostered (DEV_RISK_SELF); :99, this host's
+ *             own radio, and own_macs; a deauth flood whose key names
+ *             :d1, a twin alert whose title names JoinedNet; the IP
+ *             capture's alerts (PORT_SCAN, ARP_SPOOF, CAPTIVE_PORTAL),
+ *             MY_NETWORK_RECON; verdicts on :d1, on an IP, of PORT_SCAN.
+ *
+ * The importer takes the answer whole and refuses none of it. Each
+ * absence was seen red with its guard mutated: web_fleet_share_dev()
+ * returning 1 (:c1, :d1, :d2, :f1, :f2, :98, :99 sent), xp_dev()'s
+ * association check skipped (:e1 sent, :d2 as its BSSID), xp_ap()'s
+ * local test removed (:d1, :d2, JoinedNet, :f1, OwnLab, :f2, OwnSsidNet
+ * sent), web_fleet_alert_shareable() returning 1 (the IP capture's
+ * alerts and MY_NETWORK_RECON sent), the alert key check skipped
+ * (marker-joined sent), the alert title check and the verdict's local
+ * address check removed (Evil twin of JoinedNet, the :d1 verdict sent),
+ * xp_pnl()'s SSID test removed (JoinedNet sent as :01's probe), the
+ * own_macs member written from the radio list (own_macs named). */
+static void test_export_monitor_only(void) {
+    up();
+    peer_sky(g_db);
+    const int dea = web_akb_find("DEAUTH_FLOOD"), twin = web_akb_find("EVIL_TWIN"),
+              scan = web_akb_find("PORT_SCAN"), arp = web_akb_find("ARP_SPOOF"),
+              portal = web_akb_find("CAPTIVE_PORTAL"), recon = web_akb_find("MY_NETWORK_RECON");
+    WT_ASSERT(dea >= 0 && twin >= 0 && scan >= 0 && arp >= 0 && portal >= 0 && recon >= 0);
+    const long long a = T - 900, z = T - 60;
+    char *sql = malloc(16384);
+    WT_ASSERT(sql != NULL);
+    if (!sql) { down(); return; }
+    snprintf(sql, 16384,
+        "INSERT INTO devices (mac,ip,hostname,vendor,last_ssid,is_ap,signal_dbm,sources,"
+        "risk_signals,first_seen,last_seen) VALUES"
+        " ('0e:51:00:00:00:01',NULL,NULL,'Mon','Elsewhere',0,-61,16,0,%lld,%lld),"
+        " ('0e:51:00:00:00:a1',NULL,NULL,'Nbr',NULL,1,-70,8,0,%lld,%lld),"
+        " ('0e:51:00:00:00:b1','192.168.7.20','lan-only-marker','Lan',NULL,0,NULL,3,0,%lld,%lld),"
+        " ('0e:51:00:00:00:c1','192.168.7.21','both-host-marker','Both','Elsewhere',0,-55,17,0,"
+        "%lld,%lld),"
+        " ('0e:51:00:00:00:d1',NULL,NULL,'Join',NULL,1,-40,8,0,%lld,%lld),"
+        " ('0e:51:00:00:00:d2',NULL,NULL,'Join',NULL,1,-48,8,0,%lld,%lld),"
+        " ('0e:51:00:00:00:e1',NULL,NULL,'Sta','JoinedNet',0,-50,16,0,%lld,%lld),"
+        " ('0e:51:00:00:00:f1',NULL,NULL,'Own',NULL,1,-45,8,0,%lld,%lld),"
+        " ('0e:51:00:00:00:f2',NULL,NULL,'Own',NULL,1,-47,8,0,%lld,%lld),"
+        " ('0e:51:00:00:00:98',NULL,NULL,'Self',NULL,0,-30,16,64,%lld,%lld),"
+        " ('0e:51:00:00:00:99',NULL,NULL,'Radio',NULL,0,-20,16,0,%lld,%lld);"
+        "INSERT INTO arp (ip,mac,iface,first_seen,last_seen) VALUES"
+        " ('192.168.7.20','0e:51:00:00:00:b1','wlan0',%lld,%lld),"
+        " ('192.168.7.21','0e:51:00:00:00:c1','wlan0',%lld,%lld);"
+        "INSERT INTO dhcp_leases (ip,hostname,expire,first_seen,last_seen) VALUES"
+        " ('192.168.7.20','lan-dhcp-marker',0,%lld,%lld);"
+        "INSERT INTO probe_clients (mac,ssid,signal_dbm,channel,first_seen,last_seen) VALUES"
+        " ('0e:51:00:00:00:01','Elsewhere',-61,6,%lld,%lld),"
+        " ('0e:51:00:00:00:c1','Elsewhere',-55,6,%lld,%lld),"
+        " ('0e:51:00:00:00:e1','JoinedNet',-50,6,%lld,%lld),"
+        " ('0e:51:00:00:00:98','',-30,6,%lld,%lld),"
+        " ('0e:51:00:00:00:99','',-20,6,%lld,%lld);"
+        "INSERT INTO pnl_ssids (mac,ssid,first_seen,last_seen) VALUES"
+        " ('0e:51:00:00:00:01','Elsewhere',%lld,%lld),"
+        " ('0e:51:00:00:00:01','JoinedNet',%lld,%lld),"
+        " ('0e:51:00:00:00:c1','Elsewhere',%lld,%lld),"
+        " ('0e:51:00:00:00:e1','JoinedNet',%lld,%lld);"
+        "INSERT INTO beacon_aps (bssid,ssid,signal_dbm,channel,enc,first_seen,last_seen) VALUES"
+        " ('0e:51:00:00:00:a1','Neighbour',-70,1,'WPA2',%lld,%lld),"
+        " ('0e:51:00:00:00:d1','JoinedNet',-40,6,'WPA2',%lld,%lld),"
+        " ('0e:51:00:00:00:d2','JoinedNet',-48,36,'WPA2',%lld,%lld),"
+        " ('0e:51:00:00:00:f1','OwnLab',-45,11,'WPA2',%lld,%lld),"
+        " ('0e:51:00:00:00:f2','OwnSsidNet',-47,11,'WPA2',%lld,%lld);"
+        "INSERT INTO wifi_aps (bssid,ssid,signal_dbm,channel,enc,status,first_seen,last_seen)"
+        " VALUES ('0e:51:00:00:00:d1','JoinedNet',-40,6,'WPA2',1,%lld,%lld),"
+        " ('0e:51:00:00:00:a1','Neighbour',-70,1,'WPA2',-1,%lld,%lld);"
+        "INSERT INTO wifi_stas (mac,signal_dbm,first_seen,last_seen) VALUES"
+        " ('0e:51:00:00:00:d1',-40,%lld,%lld);"
+        "INSERT INTO assocs (bssid,sta_mac,ssid,source,first_seen,last_seen) VALUES"
+        " ('0e:51:00:00:00:d2','0e:51:00:00:00:e1','',2,%lld,%lld);"
+        "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,technique,count) VALUES"
+        " ('deauth:0e:51:00:00:00:a1@ff:ff:ff:ff:ff:ff',%lld,%lld,%d,1,'Deauth on a neighbour',"
+        "'T1498.001',4),"
+        " ('deauth:0e:51:00:00:00:d1@ff:ff:ff:ff:ff:ff',%lld,%lld,%d,1,'marker-joined',"
+        "'T1498.001',4),"
+        " ('twin:0e:51:00:00:00:a1:0e:51:00:00:00:a2',%lld,%lld,%d,1,'Evil twin of JoinedNet',"
+        "'T1557',1),"
+        " ('scan:192.168.7.20',%lld,%lld,%d,1,'Port scan marker','T1046',1),"
+        " ('arp:192.168.7.21',%lld,%lld,%d,2,'ARP spoof marker','T1557.002',1),"
+        " ('portal:x',%lld,%lld,%d,2,'Captive marker','T1557',1),"
+        " ('recon:x',%lld,%lld,%d,1,'Recon marker','T1595',1);",
+        a, z, a, z, a, z, a, z, a, z, a, z, a, z, a, z, a, z, a, z, a, z,
+        a, z, a, z, a, z,
+        a, z, a, z, a, z, a, z, a, z,
+        a, z, a, z, a, z, a, z,
+        a, z, a, z, a, z, a, z, a, z,
+        a, z, a, z, a, z, a, z,
+        a, z, dea, a, z, dea, a, z, twin, a, z, scan, a, z, arp, a, z, portal, a, z, recon);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    snprintf(sql, 16384,
+        "INSERT INTO triage (subject,finding,type,addr,port,first_seen,state,ts,note,who,peer)"
+        " VALUES ('m1',NULL,%d,'0e:51:00:00:00:a1',0,%lld,4,%lld,'','',''),"
+        " ('m2',NULL,%d,'0e:51:00:00:00:d1',0,%lld,4,%lld,'','',''),"
+        " ('m3',NULL,%d,'192.168.7.20',0,%lld,3,%lld,'','',''),"
+        " ('m4',NULL,%d,'0e:51:00:00:00:a2',0,%lld,3,%lld,'','','');",
+        dea, a, z, dea, a, z, dea, a, z, scan, a, z);
+    WT_EQ(sql_on(g_store, sql), 0);
+    free(sql);
+    web_ble_t B;
+    WT_EQ(web_ble_init(&B, 0), 0);
+    ble_adv(&B, "02:de:00:00:00:51", "tag51", T - 10);
+    web_gnss_t G;
+    site_at(&G, BETA_LAT, BETA_LON);
+    web_adsb_t A;
+    WT_EQ(web_adsb_init(&A), 0);
+    adsb_rx(&A, T, 2247900);
+    web_fleet_mine_t mine;
+    memset(&mine, 0, sizeof(mine));
+    snprintf(mine.ssid[0], sizeof(mine.ssid[0]), "OwnSsidNet");
+    mine.nssid = 1;
+    snprintf(mine.bssid[0], sizeof(mine.bssid[0]), "0e:51:00:00:00:f1");
+    mine.nbssid = 1;
+    web_fleet_src_t src = { &SDB, &B, &G, &FR, "0e:51:00:00:00:99", &A, &mine, NULL };
+    char *b = export_q(&src, "since=0&next=1&own=1&gnss=1&adsb=1&ident=1");
+    WT_ASSERT(b != NULL);
+    if (b) {
+        /* What travels. */
+        WT_HAS(b, ",\"hostname\":");
+        WT_HAS(b, ",\"share_rule\":\"monitor_only\"}\n");
+        WT_HAS(b, ",\"own_macs\":null,");
+        WT_HAS(b, "{\"type\":\"wifi\",\"mac\":\"0e:51:00:00:00:01\",\"vendor\":\"Mon\","
+                  "\"ssid\":\"Elsewhere\",\"rssi\":-61,");
+        WT_HAS(b, "{\"type\":\"probe\",\"mac\":\"0e:51:00:00:00:01\",\"ssid\":\"Elsewhere\",");
+        WT_HAS(b, "{\"type\":\"ap\",\"bssid\":\"0e:51:00:00:00:a1\",\"ssid\":\"Neighbour\",");
+        WT_HAS(b, "{\"type\":\"wifi\",\"mac\":\"0e:51:00:00:00:a1\",");
+        WT_HAS(b, "{\"type\":\"ble\",\"addr\":\"02:de:00:00:00:51\",");
+        WT_HAS(b, ",\"lat\":33.3291000,");        /* the sensor's position */
+        WT_HAS(b, "{\"type\":\"adsb_rx\",");
+        WT_HAS(b, "{\"type\":\"aircraft\",\"hex\":\"a00001\",");
+        WT_HAS(b, ",\"title\":\"Deauth on a neighbour\",\"ip\":null,");
+        WT_HAS(b, "{\"type\":\"verdict\",\"alert_type\":\"DEAUTH_FLOOD\",\"addr\":"
+                  "\"0e:51:00:00:00:a1\",");
+        /* What never does. */
+        static const char *const never[] = {
+            "0e:51:00:00:00:b1", "lan-only-marker", "lan-dhcp-marker", "192.168.7.",
+            "0e:51:00:00:00:c1", "both-host-marker",
+            "0e:51:00:00:00:d1", "0e:51:00:00:00:d2", "JoinedNet",
+            "0e:51:00:00:00:e1",
+            "0e:51:00:00:00:f1", "OwnLab", "0e:51:00:00:00:f2", "OwnSsidNet", "own_net",
+            "0e:51:00:00:00:98", "0e:51:00:00:00:99",
+            "marker-joined", "Evil twin of", "Port scan marker", "ARP spoof marker",
+            "Captive marker", "Recon marker", "\"PORT_SCAN\"", "\"ARP_SPOOF\"",
+            "\"CAPTIVE_PORTAL\"", "\"MY_NETWORK_RECON\"",
+        };
+        for (size_t i = 0; i < sizeof(never) / sizeof(never[0]); i++) {
+            if (strstr(b, never[i])) fprintf(stderr, "    sent: %s\n", never[i]);
+            WT_LACKS(b, never[i]);
+        }
+        /* The importer takes it all and refuses none of it. */
+        web_fleet_t f;
+        web_fleet_peer_cfg_t pc;
+        char err[200];
+        WT_EQ(web_fleet_parse_peer("beta=http://100.64.0.2:8770", &pc, err, sizeof(err)), 0);
+        web_fleet_init(&f, &pc, 1, 60, 0, &S);
+        WT_EQ(web_store_open_aux(&S, &f.wr, err, sizeof(err)), 0);
+        long long rows = 0, rts = 0;
+        int rc = web_fleet_ingest(&f, 0, b, strlen(b), T, 1, &rows, &rts, err, sizeof(err));
+        if (rc) fprintf(stderr, "    ingest: %s\n", err);
+        WT_EQ(rc, 0);
+        WT_EQ(f.peer[0].refused_last, 0);
+        web_fleet_destroy(&f);
+        free(b);
+    }
+    /* A page is held to the same rule. */
+    b = export_q(&src, "since=0&kind=wifi&after=4102444800~&ident=1");
+    if (b) {
+        WT_HAS(b, "\"mac\":\"0e:51:00:00:00:01\"");
+        WT_LACKS(b, "0e:51:00:00:00:c1");
+        WT_LACKS(b, "0e:51:00:00:00:e1");
+        free(b);
+    }
+    web_adsb_destroy(&A);
+    web_gnss_destroy(&G);
+    web_ble_destroy(&B);
+    down();
+}
+
+/* The local network cannot be read (here: its scan table cut past the
+ * bound is the same path as a failed read): no sloth.db row and no
+ * verdict is sent, and those kinds say they are cut, never "none".
+ * Seen red with the export's cut of the unjudged kinds removed
+ * (truncated_wifi and truncated_alert false). */
+static void test_export_local_unknown_withholds(void) {
+    up();
+    char *sql = malloc(4096);
+    WT_ASSERT(sql != NULL);
+    if (!sql) { down(); return; }
+    snprintf(sql, 4096,
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<%d)"
+        " INSERT INTO wifi_aps (bssid,ssid,status,first_seen,last_seen)"
+        " SELECT printf('0e:52:00:00:%%02x:%%02x', i/256, i%%256),'n'||i,1,%lld,%lld FROM n;",
+        WEB_FLEET_LOCAL_SSIDS, T - 100, T - 50);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    free(sql);
+    int st = 0;
+    char *b = export(0, "since=0&next=1", &st);
+    WT_EQ(st, 200);
+    if (b) {
+        WT_LACKS(b, "{\"type\":\"wifi\"");
+        WT_LACKS(b, "{\"type\":\"probe\"");
+        WT_LACKS(b, "{\"type\":\"alert\"");
+        WT_LACKS(b, "{\"type\":\"verdict\"");
+        WT_HAS(b, "\"truncated_wifi\":true,");
+        WT_HAS(b, "\"truncated_alert\":true,");
+        WT_HAS(b, "\"truncated_verdict\":true,");
+        free(b);
+    }
+    down();
+}
+
+/* A hostile or older peer cannot plant local-network data here: each
+ * forbidden shape is checked like any line (the answer is taken), then
+ * refused, counted and never stored; an answer that does not state the
+ * rule has its wifi, ap and probe rows refused, the rest kept. Seen red
+ * with put_line()'s refusal removed (every one of them stored). */
+static void test_ingest_refuses_forbidden(void) {
+    pull_up();
+    static const char HOSTILE[] =
+        HDR_PRE(1792627000) ",\"own_macs\":\"02:00:5e:00:00:0a\",\"hostname\":\"beta-host\","
+        "\"share_rule\":\"monitor_only\"}\n"
+        "{\"type\":\"own_net\",\"ssid\":\"BetaNet\",\"bssid\":null}\n"
+        "{\"type\":\"alert\",\"alert_type\":\"PORT_SCAN\",\"ty\":0,\"fingerprint\":"
+        "\"00000000000000a1\",\"title\":\"wired-marker\",\"ip\":null,\"sev\":1,\"count\":1,"
+        "\"first_seen\":1792620000,\"last_seen\":1792626000}\n"
+        "{\"type\":\"alert\",\"alert_type\":\"DEAUTH_FLOOD\",\"ty\":1,\"fingerprint\":"
+        "\"00000000000000a2\",\"title\":\"ip-marker\",\"ip\":\"10.1.2.3\",\"sev\":1,\"count\":1,"
+        "\"first_seen\":1792620000,\"last_seen\":1792626000}\n"
+        "{\"type\":\"alert\",\"alert_type\":null,\"ty\":1,\"fingerprint\":"
+        "\"00000000000000a4\",\"title\":\"untyped-marker\",\"ip\":null,\"sev\":1,\"count\":1,"
+        "\"first_seen\":1792620000,\"last_seen\":1792626000}\n"
+        "{\"type\":\"alert\",\"alert_type\":\"DEAUTH_FLOOD\",\"ty\":1,\"fingerprint\":"
+        "\"00000000000000a3\",\"title\":\"radio-marker\",\"ip\":null,\"sev\":1,\"count\":1,"
+        "\"first_seen\":1792620000,\"last_seen\":1792626000}\n"
+        "{\"type\":\"verdict\",\"alert_type\":\"PORT_SCAN\",\"addr\":\"0e:00:00:00:00:01\","
+        "\"port\":0,\"alert_first_seen\":1792620000,\"state\":\"known\",\"ts\":1792626100}\n"
+        "{\"type\":\"verdict\",\"alert_type\":\"DEAUTH_FLOOD\",\"addr\":\"10.1.2.3\","
+        "\"port\":0,\"alert_first_seen\":1792620000,\"state\":\"known\",\"ts\":1792626100}\n"
+        "{\"type\":\"verdict\",\"alert_type\":\"DEAUTH_FLOOD\",\"addr\":\"0e:00:00:00:00:02\","
+        "\"port\":0,\"alert_first_seen\":1792620000,\"state\":\"known\",\"ts\":1792626100}\n"
+        "{\"type\":\"fleet_end\",\"rows\":7,\"wifi\":0,\"ble\":0,\"ap\":0,\"probe\":0,\"alert\":4,"
+        "\"verdict\":3,\"own_net\":1,\"complete\":true}\n";
+    WT_EQ(pull_with(HOSTILE, 0, NULL, 0), 0);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net'"), 0);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='alert'"), 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE label='radio-marker'"), 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='verdict'"), 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='verdict' AND"
+                      " key LIKE 'DEAUTH_FLOOD|0e:00:00:00:00:02|%'"), 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE extra LIKE '%10.1.2.3%'"
+                      " OR key LIKE '%10.1.2.3%'"), 0);
+    WT_EQ(F.peer[0].nown, 0);              /* the own_macs refused */
+    WT_EQ(F.peer[0].refused_last, 7);      /* own_macs, own_net, 3 alerts, 2 verdicts */
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sites WHERE rows_last=2"), 1);
+
+    /* An answer that does not state the rule: wifi, ap, probe refused,
+     * the allow-listed alert kept. */
+    static const char OLD[] =
+        HDR_OLD(1792627100)
+        "{\"type\":\"wifi\",\"mac\":\"02:00:00:00:00:51\",\"vendor\":null,\"ssid\":null,"
+        "\"rssi\":null,\"bssid\":null,\"is_ap\":false,\"first_seen\":1792620000,"
+        "\"last_seen\":1792626000}\n"
+        "{\"type\":\"ap\",\"bssid\":\"0e:00:00:00:00:52\",\"ssid\":\"OldHome\",\"channel\":6,"
+        "\"enc\":\"WPA2\",\"vendor\":null,\"rssi\":-40,\"first_seen\":1792500000,"
+        "\"last_seen\":1792626900}\n"
+        "{\"type\":\"probe\",\"mac\":\"02:00:00:00:00:51\",\"ssid\":\"OldHome\","
+        "\"first_seen\":1792610000,\"last_seen\":1792626000}\n"
+        "{\"type\":\"alert\",\"alert_type\":\"DEAUTH_FLOOD\",\"ty\":1,\"fingerprint\":"
+        "\"00000000000000a5\",\"title\":\"old-radio-marker\",\"ip\":null,\"sev\":1,\"count\":1,"
+        "\"first_seen\":1792620000,\"last_seen\":1792626000}\n"
+        "{\"type\":\"fleet_end\",\"rows\":4,\"wifi\":1,\"ble\":0,\"ap\":1,\"probe\":1,\"alert\":1,"
+        "\"verdict\":0,\"complete\":true}\n";
+    WT_EQ(pull_with(OLD, 0, NULL, 0), 0);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind IN ('wifi','ap','probe')"), 0);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE label='old-radio-marker'"), 1);
+    WT_EQ(F.peer[0].refused_last, 3);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name='fleet.host.beta'"), 0);
+    pull_down();
+}
+
+/* What an earlier build stored that the rule forbids is purged once at
+ * start, counted; what it allows stays; each peer is asked again from
+ * the start. A second start purges nothing, so rows stored since (from
+ * peers that filter them) stay. Seen red with the "done" mark not
+ * written (the second run then purged the new wifi row). */
+static void test_purge_once(void) {
+    pull_up();
+    static const char ROWS[] =
+        "INSERT INTO peer_sites (peer,url,label,remote_ts) VALUES"
+        " ('beta','http://100.64.0.2:8770','beta-site',1792627000);"
+        "INSERT INTO peer_sightings (peer,kind,key,label,first_seen,last_seen,extra) VALUES"
+        " ('beta','own_net','ssid:BetaNet','BetaNet',1,2,'{\"bssid\":null}'),"
+        " ('beta','wifi','02:00:00:00:00:61','',1,2,'{\"bssid\":null,\"is_ap\":false}'),"
+        " ('beta','ap','0e:00:00:00:00:61','Home',1,2,'{\"channel\":6,\"enc\":\"WPA2\"}'),"
+        " ('beta','probe','02:00:00:00:00:61|Home','Home',1,2,'{\"mac\":\"02:00:00:00:00:61\"}'),"
+        " ('beta','alert','00000000000000b1','scan',1,2,'{\"alert_type\":\"PORT_SCAN\",\"ty\":0,"
+        "\"ip\":null,\"sev\":1,\"count\":1}'),"
+        " ('beta','alert','00000000000000b2','ip',1,2,'{\"alert_type\":\"DEAUTH_FLOOD\",\"ty\":1,"
+        "\"ip\":\"10.1.2.3\",\"sev\":1,\"count\":1}'),"
+        " ('beta','alert','00000000000000b3','keep',1,2,'{\"alert_type\":\"DEAUTH_FLOOD\","
+        "\"ty\":1,\"ip\":null,\"sev\":1,\"count\":1}'),"
+        " ('beta','verdict','PORT_SCAN|0e:00:00:00:00:62|0|1','known',1,1,"
+        "'{\"alert_type\":\"PORT_SCAN\",\"addr\":\"0e:00:00:00:00:62\",\"port\":0,"
+        "\"alert_first_seen\":1}'),"
+        " ('beta','verdict','DEAUTH_FLOOD|10.1.2.3|0|1','known',1,1,"
+        "'{\"alert_type\":\"DEAUTH_FLOOD\",\"addr\":\"10.1.2.3\",\"port\":0,"
+        "\"alert_first_seen\":1}'),"
+        " ('beta','verdict','DEAUTH_FLOOD|0e:00:00:00:00:63|0|1','known',1,1,"
+        "'{\"alert_type\":\"DEAUTH_FLOOD\",\"addr\":\"0e:00:00:00:00:63\",\"port\":0,"
+        "\"alert_first_seen\":1}'),"
+        " ('beta','ble','c0:ff:ee:00:00:61','tag',1,2,'{\"addr_type\":\"r\"}'),"
+        " ('beta','gnss','receiver','fixed',1,2,'{}');"
+        "INSERT INTO meta (name,value) VALUES ('fleet.ident.beta','1792627000 1'),"
+        " ('fleet.backfill.beta.wifi','0 1~x'), ('fleet.backfill.beta.alert','0 1~');";
+    WT_EQ(sql_on(g_store, ROWS), 0);
+    web_fleet_purge_t pg;
+    WT_EQ(web_fleet_purge(&F, T, &pg), 0);
+    WT_EQ(pg.own_net, 1);
+    WT_EQ(pg.alert, 2);
+    WT_EQ(pg.verdict, 2);
+    WT_EQ(pg.rows, 3);
+    WT_EQ(pg.meta, 2);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings"), 4);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE label='keep'"), 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE key LIKE"
+                      " 'DEAUTH_FLOOD|0e:00:00:00:00:63|%'"), 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind IN ('ble','gnss')"), 2);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name LIKE 'fleet.ident.%' OR"
+                      " name='fleet.backfill.beta.wifi'"), 0);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name='fleet.backfill.beta.alert'"), 1);
+    WT_EQ(q1(g_store, "SELECT remote_ts FROM peer_sites WHERE peer='beta'"), 0);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name='fleet.rule.monitor_only'"), 1);
+    /* Once: a row stored since stays. */
+    WT_EQ(sql_on(g_store, "INSERT INTO peer_sightings (peer,kind,key,first_seen,last_seen)"
+                          " VALUES ('beta','wifi','02:00:00:00:00:64',1,2);"), 0);
+    WT_EQ(web_fleet_purge(&F, T + 60, &pg), 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi'"), 1);
+    pull_down();
+}
 #endif
 
 void run_fleet_tests(void) {
@@ -3954,6 +4385,10 @@ void run_fleet_tests(void) {
     WT_RUN(test_export_withholds_secrets);
     WT_RUN(test_export_since);
     WT_RUN(test_export_sends_only_what_the_importer_takes);
+    WT_RUN(test_export_monitor_only);
+    WT_RUN(test_export_local_unknown_withholds);
+    WT_RUN(test_ingest_refuses_forbidden);
+    WT_RUN(test_purge_once);
     WT_RUN(test_pull_good_and_upsert);
     WT_RUN(test_pull_refusals);
     WT_RUN(test_pull_trickle_is_cut_off);

@@ -218,6 +218,15 @@ Run the dark-factory converge loop on GitHub issue #$ARGUMENTS.
 9. **Report.** Comment on the issue: what shipped, flagged decisions,
    risk score, metrics row.
 
-Escalate (stop, do not push) on: any MISSION.md conflict, any
+**Fleet sharing is monitor data only (owner hard rule, 2026-11-12).**
+An order that touches the fleet export, the importer or anything a peer
+receives obeys agents/AGENTS.md "Fleet sharing: monitor data only": only
+what was heard passively over the air travels, never the host's local
+network or what its own interfaces learned, every export names its host,
+and the tests named there stay green unweakened. An order that would
+relax it is not converged: escalate.
+
+Escalate (stop, do not push) on: any MISSION.md conflict, any change
+that relaxes the fleet monitor-only rule, any
 autonomy-contract §4.3 trigger, or three consecutive converge
 iterations with no progress.

@@ -373,6 +373,46 @@ overwritten. Full mechanism: `docs/wiki/wiki-maintenance.md`.
   iface (height = iface_count), conn + top-hosts (= 2H), packets (= 2H),
   three 3-panel rows at H each, dns/icmp at H. Min terminal 100×33.
 
+## Fleet sharing: monitor data only (owner hard rule, 2026-11-12)
+
+The owner's words: "when sloth shares data include the local host name
+and also only share passively monitored data, do not share information
+on the local wifi network the client is connected to via authenticated
+wifi. only share monitor data by a hard rule in the agent instructions.
+local network data should only be stored on local clients on the local
+network." [ADR 0009](../docs/wiki/adr/0009-fleet-monitor-only.md)
+supersedes ADR 0008's "full fidelity". This is a hard rule: no issue,
+converge run or review may relax it; only the owner can.
+
+- **Share only what was heard passively over the air** (monitor radio,
+  BLE receivers, GNSS receiver, ADS-B SDR). Never what the host's own
+  interfaces or the wire learned: ARP, DHCP, mDNS, NBNS, DNS, HTTP, TLS,
+  flows, IP addresses, host names, the managed card's scan and station
+  dump.
+- **Never share the local network**: the network the host is joined to
+  (its SSIDs, every BSSID carrying them, its stations), `--my-ssid` /
+  `--my-bssid`, the host's own radios, the roster. Keep them local.
+- **Fail closed.** A field whose provenance is unknown does not travel;
+  a new alert type is withheld until classified.
+- **Every export names its host** (`hostname`) and states the rule
+  (`share_rule`).
+- **The importer refuses what the rule forbids**, from any peer.
+
+Enforcement points (change them only with the owner): the allow-list
+and the local network in `web/src/web_fleetshare.c`
+(`web_fleet_share_alerts[]`, `web_fleet_local_build()`,
+`web_fleet_share_dev()`, `web_fleet_share_refuses()`); the export's
+row writers and Monitor-scope device read in `web/src/web_fleet.c`
+(`xp_dev()`, `xp_ap()`, `xp_pnl()`, `xp_alert()`, `xp_verdict()`,
+`xp_header()`); the importer's `check_line()` / `put_line()` and the
+one-time `web_fleet_purge()`. Tests that must stay green and whose
+absence assertions were each seen red under a mutation:
+`web/tests/test_fleetshare.c` (every `sloth_alerts.def` row classified,
+the importer's rule shape by shape) and `web/tests/test_fleet.c`
+(`test_export_monitor_only`, `test_export_local_unknown_withholds`,
+`test_ingest_refuses_forbidden`, `test_purge_once`). A change that
+makes one of them pass by weakening it breaks the rule.
+
 ## Hard "don't"s
 
 - Don't run destructive git ops (`reset --hard`, `push --force`, branch

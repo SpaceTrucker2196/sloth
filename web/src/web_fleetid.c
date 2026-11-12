@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "rf_model.h"
 #include "web_alertkb.h"
@@ -669,6 +670,26 @@ static int by_rank(const void *pa, const void *pb) {
     return strcmp(a->key, b->key);
 }
 
+/* I2, I3 with a peer as the owner: its own networks never reach this
+ * site (owner rule 2026-11-12), so who probed for them and where they
+ * were heard cannot be judged. Said, once a peer and check, rather than
+ * left as an empty list that reads as "nothing found". */
+static void run_unshared(const web_fid_site_t *s, int n, acc_t *x) {
+    static const int SUBS[] = { WEB_FID_PROBE_OTHER, WEB_FID_OWN_BSSID, WEB_FID_FOREIGN_BSSID };
+    for (int b = 0; b < n; b++) {
+        if (!s[b].own_unshared || s[b].self) continue;
+        for (size_t k = 0; k < sizeof(SUBS) / sizeof(SUBS[0]); k++) {
+            web_fid_t *f = add(x, SUBS[k], s[b].name);
+            if (!f) continue;
+            f->applicable = 0;
+            f->reason = "no_own_networks_shared";
+            f->note = "unavailable: own networks are not shared (owner rule 2026-11-12); "
+                      "the check runs with this site as the owner only";
+            leg(f, b, "", "owner");
+        }
+    }
+}
+
 int web_fid_run(const web_fid_site_t *sites, int n, web_fid_t *out, int max) {
     acc_t x;
     memset(&x, 0, sizeof(x));
@@ -677,6 +698,7 @@ int web_fid_run(const web_fid_site_t *sites, int n, web_fid_t *out, int max) {
     if (!sites || n <= 0 || !out || max <= 0) return 0;
     run_i2(sites, n, &x);
     run_i3(sites, n, &x);
+    run_unshared(sites, n, &x);
     run_two_places(sites, n, &x);
     run_i4(sites, n, &x);
     run_i8(sites, n, &x);
@@ -842,8 +864,15 @@ static void self_site(fctx_t *x, web_fleet_t *f, const web_fleet_src_t *src, lon
     s->self = 1;
     s->offered = 1;
     s->own_ts = now_s;
+    /* This site's own networks are its own to use here (owner rule
+     * 2026-11-12: kept local, never sent). */
     if (src && src->mine) s->mine = *src->mine;
     else if (f) s->mine = f->mine;
+    char hn[256];
+    if (gethostname(hn, sizeof(hn)) == 0) {
+        hn[sizeof(hn) - 1] = '\0';
+        if (web_fleet_host_ok(hn)) scpy(s->host, sizeof(s->host), hn);
+    }
     if (src && src->gnss) {
         web_loc_t loc;
         web_gnss_sh_t sh;
@@ -943,17 +972,18 @@ static void text_of(sqlite3_stmt *st, int col, char *out, size_t cap) {
  * names is needed before the probes are read). */
 static void peer_heads(fctx_t *x, web_store_t *st, long long now_s) {
     pthread_mutex_lock(&st->rmu);
-    sqlite3_stmt *ps = NULL, *mt = NULL, *on = NULL;
+    sqlite3_stmt *ps = NULL, *mt = NULL;
     int ok = sqlite3_prepare_v2(st->rd, "SELECT label,lat,lon,remote_ts,last_ok FROM peer_sites"
                                 " WHERE peer=?1", -1, &ps, NULL) == SQLITE_OK &&
              sqlite3_prepare_v2(st->rd, "SELECT value FROM meta WHERE name=?1", -1, &mt,
-                                NULL) == SQLITE_OK &&
-             sqlite3_prepare_v2(st->rd, "SELECT key,label FROM peer_sightings WHERE peer=?1"
-                                " AND kind='own_net' ORDER BY key LIMIT 64", -1, &on,
                                 NULL) == SQLITE_OK;
     if (!ok) x->partial = 1;
+    (void)now_s;
     for (int i = 1; ok && i < x->n; i++) {
         web_fid_site_t *s = &x->s[i];
+        /* A peer's own networks never reach this site (owner rule
+         * 2026-11-12): none is read, and none was kept after the purge. */
+        s->own_unshared = 1;
         sqlite3_reset(ps);
         sqlite3_bind_text(ps, 1, s->name, -1, SQLITE_TRANSIENT);
         if (sqlite3_step(ps) == SQLITE_ROW) {
@@ -969,41 +999,13 @@ static void peer_heads(fctx_t *x, web_store_t *st, long long now_s) {
             x->skew[i] = rts > 0 && lok > 0 ? rts - lok : 0;
         }
         char nm[96];
-        snprintf(nm, sizeof(nm), "fleet.ident.%s", s->name);
+        snprintf(nm, sizeof(nm), "fleet.host.%s", s->name);
         sqlite3_reset(mt);
         sqlite3_bind_text(mt, 1, nm, -1, SQLITE_TRANSIENT);
-        if (sqlite3_step(mt) == SQLITE_ROW) {
-            const unsigned char *v = sqlite3_column_text(mt, 0);
-            long long g = 0, cnt = 0;
-            if (v && sscanf((const char *)v, "%lld %lld", &g, &cnt) == 2 && g > 0 && g <= T_MAX) {
-                s->offered = 1;
-                s->own_ts = g - x->skew[i];
-                x->own_n[i] = cnt;
-                /* Named more than a day ago and not since (#196): the
-                 * peer stopped offering them or stopped answering; its
-                 * networks are no longer taken as its own. */
-                s->own_expired = now_s - s->own_ts > WEB_FLEET_OWN_STALE_S;
-            }
-        }
-        if (s->own_expired) continue;
-        sqlite3_reset(on);
-        sqlite3_bind_text(on, 1, s->name, -1, SQLITE_TRANSIENT);
-        while (sqlite3_step(on) == SQLITE_ROW) {
-            char key[WEB_FLEET_STR_MAX + 8], lab[WEB_FLEET_STR_MAX + 1];
-            text_of(on, 0, key, sizeof(key));
-            text_of(on, 1, lab, sizeof(lab));
-            char mac[WEB_KEY_MAX + 1];
-            if (!strncmp(key, "ssid:", 5) && web_fleet_ssid_ok(lab) &&
-                s->mine.nssid < WEB_FLEET_MINE_MAX)
-                scpy(s->mine.ssid[s->mine.nssid++], WEB_FLEET_SSID_MAX + 1, lab);
-            else if (!strncmp(key, "bssid:", 6) && web_key_mac(key + 6, mac) == 0 &&
-                     s->mine.nbssid < WEB_FLEET_MINE_MAX)
-                scpy(s->mine.bssid[s->mine.nbssid++], WEB_FLEET_MAC_SZ, mac);
-        }
+        if (sqlite3_step(mt) == SQLITE_ROW) text_of(mt, 0, s->host, sizeof(s->host));
     }
     sqlite3_finalize(ps);
     sqlite3_finalize(mt);
-    sqlite3_finalize(on);
     pthread_mutex_unlock(&st->rmu);
 }
 
@@ -1183,9 +1185,10 @@ static int any_named(const fctx_t *x) {
 }
 
 static const char CONFIGURE[] =
-    "no site names its own networks: give the slothweb at each site --my-ssid and "
+    "this site names no networks of its own: give this slothweb --my-ssid and "
     "--my-bssid (repeatable; the values its sloth is given, since slothweb does not "
-    "read sloth's), so a peer can tell your networks from any other (docs/wiki/fleet.md)";
+    "read sloth's), so what a peer sends can be told against them; each site's own "
+    "networks stay at that site (owner rule 2026-11-12, docs/wiki/fleet.md)";
 
 void web_fid_overview_json(web_fleet_t *f, const web_fleet_src_t *src, long long now_s,
                            web_jw_t *w) {
@@ -1212,11 +1215,13 @@ static void site_json(web_jw_t *w, const fctx_t *x, int i, long long now_s) {
     int fl = web_fid_floor(s);
     web_jw_raw(w, "{\"site\":");        web_jw_str(w, s->name);
     web_jw_raw(w, ",\"label\":");       jstr(w, s->label);
+    web_jw_raw(w, ",\"host\":");        jstr(w, s->host);
     web_jw_raw(w, ",\"lat\":");         jnum(w, s->has_pos, s->lat, 7);
     web_jw_raw(w, ",\"lon\":");         jnum(w, s->has_pos, s->lon, 7);
-    /* offered: the site's own networks reached this one (an older peer
-     * build never sends them). */
+    /* offered: the site's own networks reached this one; never a peer's
+     * since the monitor-only rule (own_shared false, 2026-11-12). */
     web_jw_raw(w, ",\"offered\":");     web_jw_raw(w, s->offered ? "true" : "false");
+    web_jw_raw(w, ",\"own_shared\":");  web_jw_raw(w, s->own_unshared ? "false" : "true");
     web_jw_raw(w, ",\"own_age_s\":");
     if (s->offered && !s->self) web_jw_int(w, now_s > s->own_ts ? now_s - s->own_ts : 0);
     else web_jw_raw(w, s->self ? "0" : "null");
