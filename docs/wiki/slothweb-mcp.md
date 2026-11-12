@@ -9,8 +9,8 @@ type: reference
 **Summary**: `slothweb-mcp` is a small C program an MCP client (an
 OpenClaw agent, Claude Code) launches on the same machine as slothweb.
 It speaks newline-delimited JSON-RPC on stdin/stdout and is a thin
-client of slothweb's HTTP API on loopback: 22 read tools, each one GET
-of an existing route, and 5 write tools, each one POST to one of three
+client of slothweb's HTTP API on loopback: 23 read tools, each one GET
+of an existing route, and 9 write tools, each one POST to one of five
 existing write routes. It holds no database handle, opens no file but
 the agent secret its arguments name, and can do nothing slothweb's
 routes cannot. slothweb's own validation decides every write. A write
@@ -25,7 +25,7 @@ or from another writer is data in a named field, never an instruction.
 `web_frrs_route()`), `web/src/web_notes.h`, `web/tests/test_mcp.c`,
 `research/mcp/` (the precedent), the owner's request of 2026-11-11.
 
-**Last updated**: 2026-11-11 (`--from-loopback` for a slothweb on the
+**Last updated**: 2026-11-12 (#198: `sloth_triage_bulk`, `sloth_incident_add`, `sloth_incident_member`, `sloth_incident_close` and `sloth_incident_list`; an agent closes only an agent's incident, `403 not_agent_incident`, and removes only an agent's member, `403 not_agent_member`; 32 tools); 2026-11-11 (`--from-loopback` for a slothweb on the
 host's Tailscale address, and an agent on another host through ssh,
 section 7); 2026-11-11 (an agent takes back only agents' notes,
 owner ruling: `403 not_agent_note`, as links); 2026-11-11 (the secret readable through a group,
@@ -55,7 +55,7 @@ out of it so the protocol has tests. Differences, each for a reason:
 | Data | opens `research.db` itself | no file: asks slothweb over loopback HTTP |
 | Result | prose the server writes around its hits | one JSON document; slothweb's answer under `"data"`, untouched but for its bounds |
 | `\uXXXX` in a request | Latin-1 only | decoded to UTF-8, surrogate pairs included (a note may hold any character) |
-| Writes | none | three routes, authenticated |
+| Writes | none | five routes, authenticated |
 | Tested in | `sloth_test` | `slothweb_test` (it needs slothweb's routes) |
 
 ```sh
@@ -134,6 +134,7 @@ slothweb validates them.
 | `sloth_triage_history` | `GET /api/frrs/history` | `id` (required: an alert id or an anomaly tid) |
 | `sloth_links` | `GET /api/frrs/related` | `id` (required): the links, and under `suggest` the candidates slothweb offers and has not stored |
 | `sloth_notes` | `GET /api/frrs/notes` | `kind`, `id` (required), `before` |
+| `sloth_incident_list` | `GET /api/frrs/incidents` | `id` (one incident with its members) or `state` (`open`, `closed`, `all`) |
 | `sloth_glossary` | `GET /api/glossary` | none: what each field and unit means |
 
 Not exposed, on purpose: `/api/query` and `/api/recipes` (the SQL box),
@@ -142,7 +143,7 @@ fleet routes, `/events`. `test_mcp.c` holds the table to that.
 
 ### Write tools
 
-Exactly five, each through an existing POST route. The body is built
+Exactly nine, each through an existing POST route. The body is built
 from the arguments and the configured name; nothing else is added and
 nothing is validated here beyond what is needed to build it.
 
@@ -153,6 +154,10 @@ nothing is validated here beyond what is needed to build it.
 | `sloth_retract_note` | `POST /api/frrs/note` | `{"op":"retract","by","kind","id","text","note"}` | `kind`, `id`, `note` required; `reason`. An agent's note only (`403 not_agent_note`) |
 | `sloth_link` | `POST /api/frrs/relate` | `{"op":"add","by","from","to","note"}` | `from`, `to` required; `note` |
 | `sloth_unlink` | `POST /api/frrs/relate` | `{"op":"remove","by","from","link"}` | `from`, `link` required |
+| `sloth_triage_bulk` | `POST /api/frrs/triage/bulk` | `{"by","ids","state","note"}` | `ids` (up to 100, comma-separated), `state` required; `note`. One write against the rate limit; each id's outcome in `results` |
+| `sloth_incident_add` | `POST /api/frrs/incident` | `{"op":"add","by","title","state","note","ids","type","ip","mac","from","to"}` | `title`, `state` (`false`, `noise`, `incident`, `known`) required; `note`, `ids`, and a standing filter (`type`, `ip` or `mac`, `from`, `to`) that also takes alerts arriving later |
+| `sloth_incident_member` | `POST /api/frrs/incident` | `{"op":"member","by","incident",…}` | `incident` required; one of `ids`, a filter, or `remove` (a member's number). An agent's member only for `remove` (`403 not_agent_member`) |
+| `sloth_incident_close` | `POST /api/frrs/incident` | `{"op":"close","by","incident","state","note"}` | `incident` required; `state`, `note`. An agent's incident only (`403 not_agent_incident`) |
 
 A note on an alert or an anomaly is its triage note: `sloth_set_triage`.
 `sloth_add_note` is for a device, a BLE advertiser, an SSID, a
@@ -161,7 +166,7 @@ devices and the rest").
 
 ## 4. The write model
 
-**What an agent may write.** Triage rows, notes, links: the three
+**What an agent may write.** Triage rows (one or many), incidents, notes, links: the five
 routes above. slothweb refuses the TACDB routes and the import to the
 agent's path (`403 agent_path`), so the secret opens less than the page
 does. An agent's row always carries a name (`400 missing_by` without
@@ -359,7 +364,7 @@ sudo install -m 755 slothweb-mcp /usr/local/bin/slothweb-mcp
 
 ```sh
 openclaw mcp set slothweb '{"command":"/usr/local/bin/slothweb-mcp","args":["--read-only"]}'
-openclaw mcp probe          # lists the 22 read tools
+openclaw mcp probe          # lists the 23 read tools
 ```
 
 **With writes** (owner ruling 2026-11-11: the secret is read through a
@@ -391,7 +396,7 @@ id -nG | tr ' ' '\n' | grep -x slothweb-agent
 head -c 0 /run/slothweb/agent.secret && echo readable
 # 5. Register it as the operator's own user: no sudo, no -u.
 openclaw mcp set slothweb '{"command":"/usr/local/bin/slothweb-mcp","args":["--agent","claw-triage","--secret-file","/run/slothweb/agent.secret"]}'
-openclaw mcp probe          # lists 27 tools
+openclaw mcp probe          # lists 32 tools
 ```
 
 If `/etc/default/slothweb` already sets `SLOTHWEB_ARGS`, add both flags

@@ -19,6 +19,7 @@
 #include "web_alertdb.h"
 #include "web_alertkb.h"
 #include "web_history.h"
+#include "web_incident.h"
 #include "web_metrics.h"
 #include "web_notes.h"
 #include "web_scope.h"
@@ -1128,7 +1129,10 @@ int web_frrs_triage_any(web_frrs_t *f) {
     if (!f || !f->wr) return 0;
     sqlite3_stmt *s = NULL;
     int any = 0;
-    if (sqlite3_prepare_v2(f->wr, "SELECT EXISTS (SELECT 1 FROM triage)", -1, &s, NULL) == SQLITE_OK &&
+    /* An incident's members read as triaged with no row of their own
+     * (web_incident.h), so the join's shortcut asks both tables. */
+    if (sqlite3_prepare_v2(f->wr, "SELECT EXISTS (SELECT 1 FROM triage) OR"
+                           " EXISTS (SELECT 1 FROM incident)", -1, &s, NULL) == SQLITE_OK &&
         sqlite3_step(s) == SQLITE_ROW)
         any = sqlite3_column_int(s, 0);
     sqlite3_finalize(s);
@@ -1287,7 +1291,11 @@ int web_frrs_triage_find(web_frrs_t *f, web_sdb_conn_t *c, const web_tri_q_t *q,
     if (!f || !f->wr) return 0;
     tri_subj_t s;
     if (subj_of_q(c, q, &s) != 0) return -1;
-    return tri_lookup(f, &s, out);
+    int got = tri_lookup(f, &s, out);
+    if (got < 0) return -1;
+    int ov = frrs_inc_overlay(f, &s, out);
+    if (ov < 0) return -1;
+    return got || ov;
 }
 
 /* Resolve an alert id a request names to its subject, as the routes
@@ -1361,23 +1369,32 @@ int frrs_resolve_alert(const web_m4_t *m, web_live_t *live, web_sdb_conn_t *cin,
     return rc;
 }
 
-static int resolve_id(const web_m4_t *m, web_live_t *live, const char *id, long long now_s,
-                      tri_subj_t *s) {
-    return frrs_resolve_alert(m, live, NULL, id, now_s, s, NULL);
-}
-
 /* An id of either kind, as the triage routes take it: an alert's, or an
  * anomaly's ("a" and sixteen hex digits), whose descriptor is then in
  * *an. 1, 0 no such finding, -1, -2 (an anomaly id whose stored
  * descriptor is not the engine's: frrs_anom_resolve()). */
-static int resolve_any(const web_m4_t *m, web_live_t *live, const char *id, long long now_s,
-                       tri_subj_t *s, frrs_anom_t *an) {
+static int resolve_any_c(const web_m4_t *m, web_live_t *live, web_sdb_conn_t *c, const char *id,
+                         long long now_s, tri_subj_t *s, frrs_anom_t *an) {
     memset(an, 0, sizeof(*an));
-    if (!frrs_anom_id_ok(id)) return resolve_id(m, live, id, now_s, s);
+    if (!frrs_anom_id_ok(id)) return frrs_resolve_alert(m, live, c, id, now_s, s, NULL);
     memset(s, 0, sizeof(*s));
     int r = frrs_anom_resolve(m, id, an);
     if (r == 1) frrs_anom_subj(an, s);
     return r;
+}
+
+static int resolve_any(const web_m4_t *m, web_live_t *live, const char *id, long long now_s,
+                       tri_subj_t *s, frrs_anom_t *an) {
+    return resolve_any_c(m, live, NULL, id, now_s, s, an);
+}
+
+int frrs_sdb_open(const web_m4_t *m, long long now_s, web_sdb_conn_t *c) {
+    char err[200];
+    memset(c, 0, sizeof(*c));
+    if (!m || !m->sdb || !m->sdb->configured) return 0;
+    if (web_slothdb_open(m->sdb, c, WEB_SDB_HTTP_MS, now_s, err, sizeof(err)) == 0) return 1;
+    web_slothdb_close(c);
+    return 0;
 }
 
 int frrs_tri_current(web_frrs_t *f, const tri_subj_t *s, web_tri_t *out) {
@@ -1421,6 +1438,18 @@ static void tri_json(web_jw_t *w, const web_tri_t *t, int full) {
         web_jw_int(w, t->episode);
         web_jw_raw(w, ",\"carried\":");
         web_jw_raw(w, t->carried ? "true" : "false");
+    }
+    /* Only when there is one (web_incident.h): an alert in no incident
+     * is answered exactly as before. */
+    if (t->inc_id > 0) {
+        web_jw_raw(w, ",\"incident\":{\"id\":");
+        web_jw_int(w, t->inc_id);
+        web_jw_raw(w, ",\"title\":");   web_jw_str(w, t->inc_title);
+        web_jw_raw(w, ",\"state\":");   web_jw_str(w, web_frrs_state_word(t->inc_state));
+        web_jw_raw(w, ",\"governs\":"); web_jw_raw(w, t->inc_governs ? "true" : "false");
+        web_jw_raw(w, ",\"joined\":");  web_jw_str(w, t->inc_filter ? "filter" : "member");
+        web_jw_raw(w, ",\"auto\":");    web_jw_raw(w, t->inc_auto ? "true" : "false");
+        web_jw_raw(w, "}");
     }
     web_jw_raw(w, "}");
 }
@@ -1483,6 +1512,10 @@ static int route_states(const web_m4_t *m, web_live_t *live, const char *query, 
         type[i] = r > 0 ? s.type : -1;
         if (r <= 0) { memcpy(gone[ngone++], ids[i], 32); continue; }
         if (any) got = tri_lookup(f, &s, &t);
+        if (got >= 0 && any) {
+            int ov = frrs_inc_overlay(f, &s, &t);
+            got = ov < 0 ? -1 : got || ov;
+        }
         if (got < 0) return frrs_error(500, "store_error", NULL, body, cap, len, status);
         if (got > 0 && t.state != WEB_TRI_UNTRIAGED) {
             web_jw_raw(&w, first ? "" : ",");
@@ -1594,6 +1627,10 @@ static int route_history(const web_m4_t *m, web_live_t *live, const char *query,
     web_frrs_t *f = m->frrs;
     web_tri_t t;
     int got = f ? tri_lookup(f, &s, &t) : 0;
+    if (got >= 0 && f) {
+        int ov = frrs_inc_overlay(f, &s, &t);
+        got = ov < 0 ? -1 : got || ov;
+    }
     if (got < 0) return frrs_error(500, "store_error", NULL, body, cap, len, status);
     const web_akb_t *k = s.anom ? NULL : web_akb_get(s.type);
     web_jw_t w;
@@ -2147,11 +2184,77 @@ int frrs_text_refused(const web_jrec_t *r, const char *member, size_t max, const
     return 0;
 }
 
+/* One id's write, as POST /api/frrs/triage makes it and the bulk route
+ * makes each of its ids: 0 with *s, *unchanged and *now (its triage
+ * after, an incident's state shown when it governs) set, else the
+ * refusal's status with its word in *why and the member it is about in
+ * *member (NULL none). state is a WEB_TRI_* value or 100, "follow
+ * recommended". c is an open sloth.db connection or NULL. */
+static int tri_apply(const web_m4_t *m, web_live_t *live, web_sdb_conn_t *c, const char *id,
+                     int state, const char *note, const char *by, const char *peer, int via,
+                     long long now_s, tri_subj_t *s, int *unchanged, web_tri_t *now,
+                     const char **why, const char **member) {
+    *member = NULL;
+    frrs_anom_t an;
+    int rr = resolve_any_c(m, live, c, id, now_s, s, &an);
+    if (rr == -2) { *why = "id_collision"; *member = "id"; return 409; }
+    if (rr < 0) { *why = "read_failed"; return 503; }
+    if (rr == 0) {
+        *why = frrs_anom_id_ok(id) ? "no_such_anomaly" : "no_such_alert";
+        *member = "id";
+        return 404;
+    }
+    web_frrs_t *f = m->frrs;
+    char basis[WEB_FRRS_BASIS_MAX + 1] = "";
+    if (state == 100 && s->anom) { *why = "no_recommendation"; return 409; }
+    if (state == 100) {
+        state = web_frrs_recommend(f, s->type, basis, sizeof(basis), NULL);
+        if (state == WEB_TRI_UNTRIAGED) { *why = "no_recommendation"; return 409; }
+        via = WEB_TRI_VIA_RECOMMENDED;
+    }
+    web_tri_t cur;
+    if (tri_lookup(f, s, &cur) < 0) { *why = "store_error"; return 500; }
+    /* The state it already has, and no note that is new: nothing to
+     * record, so no row (a double click, or a clear of an untriaged
+     * alert, never spends its history). */
+    *unchanged = state == cur.state && (!note[0] || !strcmp(note, cur.note));
+    /* An anomaly's decided state carried from an earlier episode is not
+     * this episode's until it is said again: saying it is a row. */
+    if (*unchanged && cur.carried && cur.state != WEB_TRI_UNTRIAGED) *unchanged = 0;
+    if (*unchanged) {
+        stat_inc(f, &f->st.triage_unchanged);
+    } else {
+        /* What an anomaly's id names is kept beside its first row: the
+         * engine forgets the episode after a day, the note stays. */
+        if (s->anom) {
+            int g = frrs_anom_register(f, &an, now_s, why);
+            if (g != 0) return g > 0 ? 507 : 500;
+        }
+        int w = tri_write(f, s, state, cur.state, via, basis, note, by, peer, now_s, why);
+        if (w != 0) return w > 0 ? 507 : !strcmp(*why, "store_busy") ? 503 : 500;
+    }
+    if (tri_lookup(f, s, now) < 0 || frrs_inc_overlay(f, s, now) < 0) {
+        *why = "store_error";
+        return 500;
+    }
+    return 0;
+}
+
+/* A state word as the triage routes take it: the WEB_TRI_* value, 100
+ * for "recommended" (the page's button: an agent names the state it
+ * means), or -1. */
+static int state_of(const char *sw, int via) {
+    int state = -1;
+    for (int k = 0; k < WEB_TRI_COUNT; k++) if (!strcmp(sw, STATE_WORD[k])) state = k;
+    if (!strcmp(sw, "recommended") && via != WEB_TRI_VIA_AGENT) state = 100;
+    return state;
+}
+
 static int post_triage(const web_m4_t *m, web_live_t *live, const web_jrec_t *r,
                        const char *peer, int via, long long now_s, char *body, size_t cap,
                        size_t *len, int *status) {
     static const char *const MEMBERS[] = { "id", "state", "note", "by", NULL };
-    const char *bad = NULL, *why = NULL;
+    const char *bad = NULL, *why = NULL, *member = NULL;
     if (!frrs_members_ok(r, MEMBERS, &bad))
         return frrs_error(400, "unknown_member", bad, body, cap, len, status);
     char id[32], sw[16], note[WEB_FRRS_NOTE_MAX + 1], by[WEB_FRRS_BY_MAX + 1];
@@ -2164,57 +2267,14 @@ static int post_triage(const web_m4_t *m, web_live_t *live, const web_jrec_t *r,
     if (!frrs_text(r, "by", WEB_FRRS_BY_MAX, by, &why))
         return frrs_text_refused(r, "by", WEB_FRRS_BY_MAX, why, body, cap, len, status);
     if (!id[0]) return frrs_error(400, "missing_id", "id", body, cap, len, status);
-    int state = -1;
-    for (int s = 0; s < WEB_TRI_COUNT; s++) if (!strcmp(sw, STATE_WORD[s])) state = s;
-    /* "Follow recommended" is the page's button and records via
-     * recommended; an agent's row is via agent and nothing else, so it
-     * names the state it means. */
-    if (!strcmp(sw, "recommended") && via != WEB_TRI_VIA_AGENT) state = 100;
+    int state = state_of(sw, via);
     if (state < 0) return frrs_error(400, "bad_state", "state", body, cap, len, status);
     tri_subj_t s;
-    frrs_anom_t an;
-    int rr = resolve_any(m, live, id, now_s, &s, &an);
-    if (rr == -2) return frrs_error(409, "id_collision", "id", body, cap, len, status);
-    if (rr < 0) return frrs_error(503, "read_failed", NULL, body, cap, len, status);
-    if (rr == 0)
-        return frrs_error(404, frrs_anom_id_ok(id) ? "no_such_anomaly" : "no_such_alert", "id",
-                          body, cap, len, status);
-    web_frrs_t *f = m->frrs;
-    char basis[WEB_FRRS_BASIS_MAX + 1] = "";
-    if (state == 100 && s.anom)
-        return frrs_error(409, "no_recommendation", NULL, body, cap, len, status);
-    if (state == 100) {
-        state = web_frrs_recommend(f, s.type, basis, sizeof(basis), NULL);
-        if (state == WEB_TRI_UNTRIAGED)
-            return frrs_error(409, "no_recommendation", NULL, body, cap, len, status);
-        via = WEB_TRI_VIA_RECOMMENDED;
-    }
-    web_tri_t cur;
-    if (tri_lookup(f, &s, &cur) < 0) return frrs_error(500, "store_error", NULL, body, cap, len, status);
-    /* The state it already has, and no note that is new: nothing to
-     * record, so no row (a double click, or a clear of an untriaged
-     * alert, never spends its history). */
-    int unchanged = state == cur.state && (!note[0] || !strcmp(note, cur.note));
-    /* An anomaly's decided state carried from an earlier episode is not
-     * this episode's until it is said again: saying it is a row. */
-    if (unchanged && cur.carried && cur.state != WEB_TRI_UNTRIAGED) unchanged = 0;
-    if (unchanged) {
-        stat_inc(f, &f->st.triage_unchanged);
-    } else {
-        /* What an anomaly's id names is kept beside its first row: the
-         * engine forgets the episode after a day, the note stays. */
-        if (s.anom) {
-            int g = frrs_anom_register(f, &an, now_s, &why);
-            if (g != 0)
-                return frrs_error(g > 0 ? 507 : 500, why, NULL, body, cap, len, status);
-        }
-        int w = tri_write(f, &s, state, cur.state, via, basis, note, by, peer, now_s, &why);
-        if (w != 0)
-            return frrs_error(w > 0 ? 507 : !strcmp(why, "store_busy") ? 503 : 500, why, NULL,
-                              body, cap, len, status);
-    }
     web_tri_t now;
-    if (tri_lookup(f, &s, &now) < 0) return frrs_error(500, "store_error", NULL, body, cap, len, status);
+    int unchanged = 0;
+    int st = tri_apply(m, live, NULL, id, state, note, by, peer, via, now_s, &s, &unchanged, &now,
+                       &why, &member);
+    if (st) return frrs_error(st, why, member, body, cap, len, status);
     web_jw_t jw;
     web_jw_init(&jw, body, cap);
     web_jw_raw(&jw, "{\"ok\":true,\"id\":");  web_jw_str(&jw, id);
@@ -2222,6 +2282,108 @@ static int post_triage(const web_m4_t *m, web_live_t *live, const web_jrec_t *r,
     web_jw_raw(&jw, ",\"unchanged\":");       web_jw_raw(&jw, unchanged ? "true" : "false");
     web_jw_raw(&jw, ",\"current\":");
     tri_json(&jw, &now, 1);
+    web_jw_raw(&jw, "}\n");
+    if (jw.overflow) return -1;
+    *len = jw.len;
+    *status = 200;
+    return 0;
+}
+
+int frrs_ids_parse(const char *in, char ids[][32], int max, int *n) {
+    *n = 0;
+    const char *p = in;
+    if (!*p) return -1;
+    for (;;) {
+        size_t l = strcspn(p, ",");
+        if (l < 2 || l > 25) return -1;
+        char id[32];
+        memcpy(id, p, l);
+        id[l] = '\0';
+        for (size_t i = 0; i < l; i++) if (!isalnum((unsigned char)id[i])) return -1;
+        if (id[0] != 's' && id[0] != 'd' && !frrs_anom_id_ok(id)) return -1;
+        int dup = 0;
+        for (int i = 0; i < *n && !dup; i++) dup = !strcmp(ids[i], id);
+        if (!dup) {
+            if (*n >= max) return -2;
+            memcpy(ids[(*n)++], id, l + 1);
+        }
+        if (!p[l]) break;
+        p += l + 1;
+        if (!*p) return -1;
+    }
+    return 0;
+}
+
+/* POST /api/frrs/triage/bulk (#198): one state, note and name on many
+ * ids, each written by tri_apply() exactly as /api/frrs/triage writes
+ * one (its own transaction, its own folds, its own "unchanged"), the
+ * whole at the token cost of one POST. A refusal of the request (a
+ * member, the list) is the whole answer; a refusal of one id is that
+ * id's entry in "results" and the others go on. */
+static int post_bulk(const web_m4_t *m, web_live_t *live, const web_jrec_t *r,
+                     const char *peer, int via, long long now_s, char *body, size_t cap,
+                     size_t *len, int *status) {
+    static const char *const MEMBERS[] = { "ids", "state", "note", "by", NULL };
+    const char *bad = NULL, *why = NULL;
+    if (!frrs_members_ok(r, MEMBERS, &bad))
+        return frrs_error(400, "unknown_member", bad, body, cap, len, status);
+    char list[WEB_FRRS_BULK_IDS_LEN + 1], sw[16], note[WEB_FRRS_NOTE_MAX + 1];
+    char by[WEB_FRRS_BY_MAX + 1];
+    if (!frrs_text(r, "ids", WEB_FRRS_BULK_IDS_LEN, list, &why))
+        return frrs_text_refused(r, "ids", WEB_FRRS_BULK_IDS_LEN, why, body, cap, len, status);
+    if (!frrs_text(r, "state", 12, sw, &why))
+        return frrs_error(400, why, "state", body, cap, len, status);
+    if (!frrs_text(r, "note", WEB_FRRS_NOTE_MAX, note, &why))
+        return frrs_text_refused(r, "note", WEB_FRRS_NOTE_MAX, why, body, cap, len, status);
+    if (!frrs_text(r, "by", WEB_FRRS_BY_MAX, by, &why))
+        return frrs_text_refused(r, "by", WEB_FRRS_BY_MAX, why, body, cap, len, status);
+    if (!list[0]) return frrs_error(400, "missing_ids", "ids", body, cap, len, status);
+    int state = state_of(sw, via);
+    if (state < 0) return frrs_error(400, "bad_state", "state", body, cap, len, status);
+    char (*ids)[32] = malloc(sizeof(char[WEB_FRRS_BULK_MAX][32]));
+    if (!ids) return -1;
+    int n = 0, pr = frrs_ids_parse(list, ids, WEB_FRRS_BULK_MAX, &n);
+    if (pr != 0) {
+        free(ids);
+        return frrs_error(400, pr == -2 ? "too_many_ids" : "bad_ids", "ids", body, cap, len, status);
+    }
+    web_frrs_t *f = m->frrs;
+    stat_inc(f, &f->st.bulk_posts);
+    web_sdb_conn_t c;
+    int have_c = frrs_sdb_open(m, now_s, &c);
+    int written = 0, same = 0, failed = 0;
+    web_jw_t jw;
+    web_jw_init(&jw, body, cap);
+    web_jw_raw(&jw, "{\"ok\":true,\"state\":");  web_jw_str(&jw, sw);
+    web_jw_raw(&jw, ",\"n\":");                  web_jw_int(&jw, n);
+    web_jw_raw(&jw, ",\"results\":[");
+    for (int i = 0; i < n; i++) {
+        tri_subj_t s;
+        web_tri_t now;
+        int unchanged = 0;
+        const char *member = NULL;
+        int st = tri_apply(m, live, have_c ? &c : NULL, ids[i], state, note, by, peer, via, now_s,
+                           &s, &unchanged, &now, &why, &member);
+        web_jw_raw(&jw, i ? ",{\"id\":" : "{\"id\":");
+        web_jw_str(&jw, ids[i]);
+        if (st) {
+            failed++;
+            web_jw_raw(&jw, ",\"ok\":false,\"status\":"); web_jw_int(&jw, st);
+            web_jw_raw(&jw, ",\"error\":");               web_jw_str(&jw, why);
+            web_jw_raw(&jw, "}");
+            continue;
+        }
+        if (unchanged) same++; else written++;
+        web_jw_raw(&jw, ",\"ok\":true,\"unchanged\":"); web_jw_raw(&jw, unchanged ? "true" : "false");
+        web_jw_raw(&jw, ",\"current\":");
+        tri_json(&jw, &now, 0);
+        web_jw_raw(&jw, "}");
+    }
+    if (have_c) web_slothdb_close(&c);
+    free(ids);
+    web_jw_raw(&jw, "],\"written\":");  web_jw_int(&jw, written);
+    web_jw_raw(&jw, ",\"unchanged\":"); web_jw_int(&jw, same);
+    web_jw_raw(&jw, ",\"failed\":");    web_jw_int(&jw, failed);
     web_jw_raw(&jw, "}\n");
     if (jw.overflow) return -1;
     *len = jw.len;
@@ -2489,7 +2651,7 @@ static const char *const GET_PATHS[] = {
     "/api/frrs/states", "/api/frrs/history", "/api/frrs/summary", "/api/frrs/recommend",
     "/api/frrs/report", "/api/frrs/report/alert", "/api/frrs/tacdb", "/api/frrs/tacdb/view",
     "/api/frrs/suggest", "/api/frrs/export", "/api/frrs/related",
-    "/api/frrs/notes", "/api/frrs/notes/marks", NULL,
+    "/api/frrs/notes", "/api/frrs/notes/marks", "/api/frrs/incidents", NULL,
 };
 
 int web_frrs_path(const char *path) {
@@ -2534,6 +2696,9 @@ int web_frrs_route(const web_m4_t *m, web_live_t *live, const web_req_t *rq,
             return web_notes_get(m, live, q, now_s, body, cap, len, status);
         if (!strcmp(p, "/api/frrs/notes/marks"))
             return web_notes_marks(m, q, body, cap, len, status);
+        if (!strcmp(p, "/api/frrs/incidents"))
+            return strncmp(q, "id=", 3) ? web_incident_list(m, q, body, cap, len, status)
+                                        : web_incident_get(m, q, body, cap, len, status);
         if (!strcmp(p, "/api/frrs/export")) {
             if (q[0]) return frrs_error(400, "unknown_parameter", NULL, body, cap, len, status);
             int rc = frrs_export(m, now_s, big, biglen, body, cap, len, status);
@@ -2561,7 +2726,8 @@ int web_frrs_route(const web_m4_t *m, web_live_t *live, const web_req_t *rq,
     int agent = web_agent_check(f->agent_secret, rq, &awhy);
     if (agent < 0) return frrs_error(403, awhy, NULL, body, cap, len, status);
     if (agent && strcmp(rq->path, "/api/frrs/triage") && strcmp(rq->path, "/api/frrs/relate") &&
-        strcmp(rq->path, "/api/frrs/note"))
+        strcmp(rq->path, "/api/frrs/note") && strcmp(rq->path, "/api/frrs/triage/bulk") &&
+        strcmp(rq->path, "/api/frrs/incident"))
         return frrs_error(403, "agent_path", NULL, body, cap, len, status);
     if (!strcmp(rq->path, "/api/frrs/import")) {
         int rc = frrs_import(m, rq, now_s, body, cap, len, status);
@@ -2590,6 +2756,10 @@ int web_frrs_route(const web_m4_t *m, web_live_t *live, const web_req_t *rq,
     }
     if (!strcmp(rq->path, "/api/frrs/triage"))
         rc = post_triage(m, live, r, rq->peer, via, now_s, body, cap, len, status);
+    else if (!strcmp(rq->path, "/api/frrs/triage/bulk"))
+        rc = post_bulk(m, live, r, rq->peer, via, now_s, body, cap, len, status);
+    else if (!strcmp(rq->path, "/api/frrs/incident"))
+        rc = web_incident_post(m, live, r, rq->peer, via, now_s, body, cap, len, status);
     else if (!strcmp(rq->path, "/api/frrs/relate"))
         rc = frrs_relate_post(m, live, r, rq->peer, via, now_s, body, cap, len, status);
     else if (!strcmp(rq->path, "/api/frrs/note"))
@@ -2719,6 +2889,13 @@ void web_frrs_health(web_frrs_t *f, web_jw_t *w) {
     web_jw_raw(w, f->agent_secret[0] ? "true" : "false");
     web_jw_raw(w, ",\"writes\":");    web_jw_int(w, (long long)s.agent_writes);
     web_jw_raw(w, ",\"refused\":");   web_jw_int(w, (long long)s.refused_agent);
+    web_jw_raw(w, "}");
+    /* Bulk triage and the incidents (web_incident.h): additive, last. */
+    web_jw_raw(w, ",\"bulk_posts\":"); web_jw_int(w, (long long)s.bulk_posts);
+    web_jw_raw(w, ",\"incidents\":{\"rows\":");
+    jw_count(w, web_incident_rows(f));
+    web_jw_raw(w, ",\"opened\":");    web_jw_int(w, (long long)s.incidents_opened);
+    web_jw_raw(w, ",\"closed\":");    web_jw_int(w, (long long)s.incidents_closed);
     web_jw_raw(w, "}");
     web_jw_raw(w, "}");
 }

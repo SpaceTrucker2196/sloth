@@ -139,6 +139,7 @@ static const char *const KEPT_ELSEWHERE[] = {
     "b-sites",    /* fleet.ble */
     "pr-sites",   /* fleet.probes */
     "adsb-sites", /* fleet.adsb */
+    "inc-group",  /* inc.group, by incident.js: kept only when turned off */
 };
 static const char *const NOT_KEPT[] = {
     "q-recipe",   /* an action: it fills the SQL box, whose text is kept */
@@ -155,6 +156,10 @@ static const char *const NOT_KEPT[] = {
      * written */
     "subnotes-dev-text", "subnotes-ble-text", "subnotes-ssid-text", "subnotes-gnss-text",
     "subnotes-adsb-text", "subnotes-aprs-text",
+    /* web/ui/incident.js's forms: one bulk verdict's note and one new
+     * incident's title and state, emptied once written; whether closed
+     * incidents are listed, a look */
+    "inc-note", "inc-title", "inc-state", "inc-closed",
 };
 
 static int listed(const char *id, const char *const *l, size_t n) {
@@ -236,6 +241,7 @@ static void test_every_control_is_decided(void) {
     WT_HAS(p, "if (A.key < 0) A.key = Math.max(0, A.keys.indexOf(actKey(m.name)));");
     WT_HAS(p, "H.prefSet(\"ctl.al-triage\", $(\"al-triage\").value);");
     WT_HAS(p, "H.prefSet(\"frrs.by\", $(\"frrs-by\").value || null);");
+    WT_HAS(p, "H.prefSet(\"inc.group\", $(\"inc-group\").checked ? null : false);");
     WT_HAS(p, "H.prefSet(\"frrs.tacdb.q\", $(\"tc-q\").value || null);");
     /* A kept value only where the control can hold it. */
     WT_HAS(p, "for (var i = 0; i < c.options.length; i++) if (c.options[i].value === v) return true;");
@@ -306,6 +312,9 @@ static const char *const TOGGLE_JS[] = {   /* the script's ARIA state, each a li
      * the picked key, which is not kept (a pick is a look, not a setting) */
     "      b.ariaPressed = S.pick === r.key ? \"true\" : \"false\";",
     "      bs[i].ariaPressed = on ? \"true\" : \"false\";",
+    /* incident.js's selection box on an alert row: pressed while the
+     * alert is selected, which is not kept (a selection is one action's) */
+    "    b.ariaPressed = on ? \"true\" : \"false\";",
 };
 
 static void test_every_toggle_is_decided(void) {

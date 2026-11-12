@@ -189,6 +189,11 @@ var SlothFrrs = (function () {
     if (st && st.via === "import") c.appendChild(el("span", "d-dim", " (imp.)"));
     // A state an agent set through slothweb-mcp, wherever a chip is drawn.
     if (st && st.via === "agent") c.appendChild(el("span", "d-dim", " (agent)"));
+    // A member of an incident (#198, incident.js): its number, and
+    // whether the state is the incident's or the alert's own later one.
+    if (st && st.incident && num(st.incident.id))
+      c.appendChild(el("span", "d-dim", " (inc. #" + st.incident.id + (st.incident.governs ? "" : ", own") +
+                       (st.incident.auto ? ", auto" : "") + ")"));
     return c;
   }
   function act(id, state, note, msg) {
@@ -287,7 +292,7 @@ var SlothFrrs = (function () {
     S.reg[id] = places.filter(function (p) { return p.row && p.row.isConnected; });
     if (!S.reg[id].length) { delete S.reg[id]; return; }
     S.reg[id].forEach(function (p) {
-      if (p.a) p.a.triage = { state: st.state, via: st.via || null, ts: st.ts || null };
+      if (p.a) p.a.triage = { state: st.state, via: st.via || null, ts: st.ts || null, incident: st.incident || null };
       if (p.cell) { clear(p.cell); p.cell.appendChild(chip(st)); }
       if (p.line) {
         clear(p.line);
@@ -349,7 +354,7 @@ var SlothFrrs = (function () {
     f.appendChild(line);
     if (!H || !a || typeof a.id !== "string" || !ID_RE.test(a.id)) return f;
     if (a.triage && typeof a.triage.state === "string")
-      S.st[a.id] = { state: a.triage.state, via: a.triage.via, ts: a.triage.ts };
+      S.st[a.id] = { state: a.triage.state, via: a.triage.via, ts: a.triage.ts, incident: a.triage.incident || null };
     if (typeof a.type_name === "string") S.types[a.id] = a.type_name;
     S.seen[a.id] = Date.now();
     reg(a.id, { row: row, cell: c, line: line, a: a });
@@ -457,6 +462,7 @@ var SlothFrrs = (function () {
                                (h.current.peer || "?") + " · " + stamp(h.current.ts)));
             if (h.current.note) cur.appendChild(el("div", "prose", h.current.note));
           }
+          if (window.SlothIncident) SlothIncident.alertLine(cur, h.current);
           var bb = $("frrs-tri-btns");
           clear(bb);
           bb.appendChild(buttons(id, msg, true));

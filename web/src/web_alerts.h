@@ -26,6 +26,11 @@
  *                 open incidents are listed whatever their age
  *         limit   1..WEB_ALERTS_LIMIT_MAX (default WEB_ALERTS_LIMIT)
  *         offset  0..WEB_ALERTS_OFFSET_MAX
+ *         incident  none | any | an incident's id (web_incident.h,
+ *                 #198): the rows in no incident, in one, or in that
+ *                 one; runs the triage join (triage=any unless triage=
+ *                 is given too), and a row in an incident carries
+ *                 "incident" {id, governs, auto} in its triage
  *       Each row: id ("s<handle>", slothweb's handle for a stream
  *       incident, web_live.h, or "d<rowid>"; never alerts.key nor
  *       sloth's incident_id, which inverts to the key's hash), state,

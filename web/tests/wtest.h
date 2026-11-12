@@ -84,6 +84,7 @@ void run_glyph_tests(void);
 void run_rf_tests(void);
 void run_frrs_tests(void);
 void run_notes_tests(void);              /* tests/test_notes.c (2026-11-11) */
+void run_incident_tests(void);           /* tests/test_incident.c (#198) */
 void run_ble_tests(void);
 void run_gnss_tests(void);               /* tests/test_gnss.c (2026-11-02) */
 void run_sysstat_tests(void);            /* tests/test_sysstat.c (2026-11-11) */
