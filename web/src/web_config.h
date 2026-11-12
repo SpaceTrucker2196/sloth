@@ -75,6 +75,9 @@ typedef struct {
     int      peer_interval_s;      /* --peer-interval-secs */
     int      peer_outside;         /* --peer-allow-outside-tailnet */
     int      peer_gnss_region_km;  /* --peer-gnss-region-km (#192 I6) */
+    /* This site's own networks (#192 I2, I3): --my-ssid, --my-bssid,
+     * repeatable, the words sloth uses; none by default. */
+    web_fleet_mine_t mine;
 } web_config_t;
 
 void web_config_defaults(web_config_t *c);

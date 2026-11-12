@@ -1304,6 +1304,8 @@
     if (v === "radar" && window.SlothRadar) SlothRadar.show();
     // The Fleet view (fleet.js, its own module): a no-op when not loaded.
     if (v === "fleet" && window.SlothFleet) SlothFleet.show();
+    // Identity across the sites (fleetid.js, its own module, #192 I2-I8).
+    if (v === "fleet" && window.SlothFleetId) SlothFleetId.show();
     if (v === "alerts") alertsView();
     if (v === "alert") alertView();
     if (v === "records") recordsView();
@@ -5726,6 +5728,8 @@
   // The Fleet view (web/ui/fleet.js): the page's helpers, lent once.
   if (window.SlothFleet) SlothFleet.init({ el: el, set: set, getJSON: getJSON, errText: errText,
     stamp: stamp, openDrawer: openDrawer, openBleDrawer: openBleDrawer });
+  if (window.SlothFleetId) SlothFleetId.init({ el: el, set: set, getJSON: getJSON, errText: errText,
+    stamp: stamp, openDrawer: openDrawer });
 
   // The ADS-B view (web/ui/adsb.js): go() for its alert links (#186).
   if (window.SlothAdsb) SlothAdsb.init({ go: go });

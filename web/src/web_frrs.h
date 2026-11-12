@@ -248,6 +248,18 @@ typedef struct {
 } web_frrs_rf_t;
 int  web_frrs_rf(web_frrs_t *f, int bssid, const char *mac, web_frrs_rf_t *out);
 
+/* The beacon fingerprint the ledger holds for a BSSID (#192 I4,
+ * web_fleetid.h): its ie_order_hash and vendor_ies_hash as sloth wrote
+ * them, decimal ("" when the record carried none, and ie "" for sloth's
+ * 0, "not decoded"), and its three WPS strings, each kept only when it is
+ * printable ASCII of at most 32 bytes. 1 when the ledger holds a beacon
+ * of bssid (canonical), else 0. */
+typedef struct {
+    char ie[24], vie[24];
+    char wps_manuf[33], wps_model[33], wps_num[33];
+} web_frrs_fp_t;
+int  web_frrs_fp(web_frrs_t *f, const char *bssid, web_frrs_fp_t *out);
+
 /* The Wi-Fi band census for /api/radar (web_radar.h, 2026-11-06): every
  * BSSID with a beacon (kind "ap": its SSID) and every station with a
  * probe_client (kind "sta") the ledger holds, each with the record's

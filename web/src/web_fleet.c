@@ -22,6 +22,7 @@
 #include "web_bledev.h"
 #include "web_fleetadsb.h"
 #include "web_fleetgnss.h"
+#include "web_fleetid.h"
 #include "web_frrs.h"
 #include "web_gnss.h"
 #include "web_jsonl.h"
@@ -107,9 +108,12 @@ static const char *const M_WIFI[] = {
 static const char *const M_BLE[] = {
     "ble", "addr", "addr_type", "name", "class", "rssi", "first_seen",
     "last_seen", NULL };
+/* From ie_fp on (#192 I4), sent for ident=1 only: the beacon's
+ * fingerprint and the AP-impersonation alerts naming the BSSID. */
 static const char *const M_AP[] = {
     "ap", "bssid", "ssid", "channel", "enc", "vendor", "rssi", "first_seen",
-    "last_seen", NULL };
+    "last_seen", "ie_fp", "vie_fp", "wps_manuf", "wps_model", "wps_num",
+    "attacks", "attack_first", "attack_last", NULL };
 static const char *const M_PROBE[] = {
     "probe", "mac", "ssid", "first_seen", "last_seen", NULL };
 static const char *const M_ALERT[] = {
@@ -123,7 +127,9 @@ static const char *const M_END[] = {
     "truncated_wifi", "truncated_ble", "truncated_ap", "truncated_probe",
     "truncated_alert", "truncated_verdict", "next_wifi", "next_ap", "next_alert",
     "next_verdict", "gnss_event", "gnss_complete", "aircraft", "truncated_aircraft",
-    "complete", NULL };
+    "own_net", "complete", NULL };
+/* One of this site's own networks (#192 I2, I3), for ident=1 only. */
+static const char *const M_OWNNET[] = { "own_net", "ssid", "bssid", NULL };
 /* This site's ADS-B receiver and its demonstrated coverage (#192 I7),
  * for adsb=1 only: r<deg> the farthest position heard in the 30-degree
  * sector from that bearing, n<deg> the positions in it. */
@@ -142,7 +148,7 @@ static const char *const M_AIRCRAFT[] = {
 
 const char *const *const web_fleet_members[] = {
     M_HDR, M_GNSS, M_WIFI, M_BLE, M_AP, M_PROBE, M_ALERT, M_VERDICT, M_END, M_GEV,
-    M_ADSBRX, M_AIRCRAFT,
+    M_ADSBRX, M_AIRCRAFT, M_OWNNET,
 };
 const size_t web_fleet_members_n = sizeof(web_fleet_members) / sizeof(web_fleet_members[0]);
 
@@ -310,6 +316,7 @@ typedef struct {
     int       own;                   /* own=1: the header names this site's radios */
     int       gnss;                  /* gnss=1: the fix, the incidents (#192 I6) */
     int       adsb;                  /* adsb=1: the receiver, the aircraft (#192 I7) */
+    int       ident;                 /* ident=1: own networks, AP fingerprints (#192 I4) */
     int       only;                  /* -1 every kind, else the page's WEB_FK_* */
     int       has_after;
     long long after_ts;
@@ -344,6 +351,10 @@ typedef struct {
     int         gev_n, gev_cut;      /* gnss_event lines (gnss=1) */
     int         gev_all;             /* every one of the week's was read and sent */
     int         ac_n, ac_cut;        /* aircraft lines (adsb=1) */
+    struct web_frrs *frrs;           /* the beacon ledger, for ident=1's fingerprints */
+    web_fid_atk_t *atk;              /* the attack alerts by BSSID (ident=1) */
+    int         natk;
+    int         own_n;               /* own_net lines (ident=1) */
 } xp_t;
 
 static void set_cur(xp_t *x, int k, long long ts, const char *tok) {
@@ -542,6 +553,25 @@ static int xp_ap(void *ctx, const web_sdb_ap_t *a) {
     else web_jw_raw(w, "null");
     jk(w, M_AP, "first_seen"); web_jw_int(w, a->first_seen);
     jk(w, M_AP, "last_seen");  web_jw_int(w, a->last_seen);
+    /* The fingerprint and the attacks (#192 I4), for ident=1: an older
+     * importer refuses a member it does not know. */
+    if (x->q->ident) {
+        web_frrs_fp_t fp;
+        web_frrs_fp(x->frrs, bssid, &fp);
+        jk(w, M_AP, "ie_fp");   jstr_or_null(w, fp.ie);
+        jk(w, M_AP, "vie_fp");  jstr_or_null(w, fp.vie);
+        jk(w, M_AP, "wps_manuf"); jstr_or_null(w, fp.wps_manuf);
+        jk(w, M_AP, "wps_model"); jstr_or_null(w, fp.wps_model);
+        jk(w, M_AP, "wps_num");   jstr_or_null(w, fp.wps_num);
+        const web_fid_atk_t *at = web_fid_atk_find(x->atk, x->natk, bssid);
+        char words[WEB_FID_ATK_STR] = "";
+        if (at) web_fid_atk_words(at->types, words, sizeof(words));
+        jk(w, M_AP, "attacks");      jstr_or_null(w, words);
+        jk(w, M_AP, "attack_first");
+        if (at) web_jw_int(w, at->first); else web_jw_raw(w, "null");
+        jk(w, M_AP, "attack_last");
+        if (at) web_jw_int(w, at->last); else web_jw_raw(w, "null");
+    }
     int r = row_end(x, WEB_FK_AP, mark);
     if (r == 1) set_cur(x, WEB_FK_AP, a->last_seen, a->bssid);
     return r <= 0;
@@ -814,9 +844,10 @@ static int kind_of_word(const char *s, size_t n) {
     return -1;
 }
 
-/* since=EPOCH, next=1, own=1, gnss=1, adsb=1, kind=wifi|ap|alert|verdict,
- * after=CURSOR (with kind), each at most once, nothing else. gnss=1
- * (#192 I6) and adsb=1 (#192 I7) the same way as own=1. own=1 (#192 I5) asks
+/* since=EPOCH, next=1, own=1, gnss=1, adsb=1, ident=1,
+ * kind=wifi|ap|alert|verdict, after=CURSOR (with kind), each at most
+ * once, nothing else. gnss=1 (#192 I6), adsb=1 (#192 I7) and ident=1
+ * (#192 I4; a page may carry it too) the same way as own=1. own=1 (#192 I5) asks
  * for the header's own_macs: an older puller never sends it, so it never
  * meets a member it does not know, and an older export refuses it as an
  * unknown parameter, which the puller takes as "not offered". */
@@ -850,6 +881,9 @@ static int parse_query(const char *q, xq_t *x, const char **why) {
         } else if (kl == 4 && !strncmp(p, "adsb", 4) && !x->adsb) {
             if (vl != 1 || v[0] != '1') { *why = "bad_adsb"; return -1; }
             x->adsb = 1;
+        } else if (kl == 5 && !strncmp(p, "ident", 5) && !x->ident) {
+            if (vl != 1 || v[0] != '1') { *why = "bad_ident"; return -1; }
+            x->ident = 1;
         } else if (kl == 4 && !strncmp(p, "kind", 4) && !seen_kind) {
             seen_kind = 1;
             int k = kind_of_word(v, vl);
@@ -904,6 +938,7 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
     x.rec = rec;
     x.alert_after_rid = LLONG_MAX;
     x.own_csv = src->own_csv;
+    x.frrs = src->frrs;
     if (xq.only == WEB_FK_ALERT && xq.has_after && xq.after_tok[0]) {
         long long r = 0;
         for (const char *p = xq.after_tok; *p >= '0' && *p <= '9' && r < LLONG_MAX / 20; p++)
@@ -992,6 +1027,25 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
         if (!w.overflow && !line_takes(&x, gmark, "gnss")) w.len = gmark;
         else web_jw_raw(&w, "\n");
     }
+    /* This site's own networks (#192 I2, I3): ident=1, the whole export
+     * only, every one whatever `since` says (they are configuration, and
+     * an answer that names them replaces what the peer named before). */
+    if (xq.ident && xq.only < 0 && !w.overflow && src->mine) {
+        const web_fleet_mine_t *m = src->mine;
+        for (int i = 0; i < m->nssid + m->nbssid && !w.overflow; i++) {
+            size_t omark = w.len;
+            web_jw_raw(&w, "{\"type\":\"own_net\"");
+            jk(&w, M_OWNNET, "ssid");
+            jstr_or_null(&w, i < m->nssid ? m->ssid[i] : NULL);
+            jk(&w, M_OWNNET, "bssid");
+            jstr_or_null(&w, i < m->nssid ? NULL : m->bssid[i - m->nssid]);
+            web_jw_raw(&w, "}");
+            if (w.overflow) break;
+            if (!line_takes(&x, omark, "own_net")) { w.len = omark; continue; }
+            web_jw_raw(&w, "\n");
+            x.own_n++;
+        }
+    }
     int fault = w.overflow;
     int ac_read = 0;                 /* the aircraft read ran (adsb=1) */
 
@@ -1000,6 +1054,12 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
     int all = xq.only < 0;
 #define WANT(k) (all || xq.only == (k))
 #define AFTER(k) (xq.only == (k) && xq.has_after)
+    /* The AP-impersonation alerts by BSSID (#192 I4), for the ap lines'
+     * attacks: one read, before them. A read that fails sends none. */
+    if (have_c && !fault && xq.ident && WANT(WEB_FK_AP)) {
+        int na = web_fid_atk_read(&c, now_s - WEB_FID_WINDOW_S, &x.atk);
+        x.natk = na > 0 ? na : 0;
+    }
     if (have_c && !fault) {
         if (WANT(WEB_FK_WIFI) &&
             (AFTER(WEB_FK_WIFI)
@@ -1158,9 +1218,14 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
         jk(&w, M_END, "truncated_aircraft");
         web_jw_raw(&w, x.ac_cut ? "true" : "false");
     }
+    if (xq.ident && all) {
+        jk(&w, M_END, "own_net");
+        web_jw_int(&w, x.own_n);
+    }
     jk(&w, M_END, "complete"); web_jw_raw(&w, "true");
     web_jw_raw(&w, "}\n");
     free(rec);
+    free(x.atk);
     if (fault || w.overflow) {
         *len = web_series_error_json("export_failed", buf, WEB_FLEET_EXPORT_MAX);
         *status = 503;
@@ -1362,6 +1427,14 @@ fail:
 }
 
 /* ── a site's own radios (#192 I5) ──────────────────────────────── */
+
+int web_fleet_ssid_ok(const char *s) {
+    size_t n = s ? strlen(s) : 0;
+    if (n == 0 || n > WEB_FLEET_SSID_MAX) return 0;
+    for (size_t i = 0; i < n; i++)
+        if ((unsigned char)s[i] < 0x20 || (unsigned char)s[i] == 0x7f) return 0;
+    return 1;
+}
 
 int web_fleet_own_parse(const char *csv, char own[][WEB_FLEET_MAC_SZ], int *n) {
     *n = 0;
@@ -1681,6 +1754,47 @@ static int rx_row(const web_jrec_t *r, frow_t *o, web_jw_t *w, int *fst) {
     return 0;
 }
 
+/* A hash member: null, or 1..WEB_FID_HASH_MAX decimal digits. */
+static int v_hash(const web_jrec_t *r, const char *k, char *out, size_t cap) {
+    int g = v_str(r, k, WEB_FID_HASH_MAX, out, cap);
+    if (g == 1 && (out[0] == '\0' || strspn(out, "0123456789") != strlen(out))) return -1;
+    return g;
+}
+
+/* An ap line's ident=1 members (#192 I4) into extra, each when sent:
+ * the hashes, the WPS strings (printable, at most WEB_FID_WPS_MAX), and
+ * the attacks with both their times (first at most last) or none of the
+ * three. 0, or -1 for a value out of range. */
+static int ap_ident(const web_jrec_t *r, web_jw_t *w, int *fst) {
+    char ie[WEB_FID_HASH_MAX + 1], vie[WEB_FID_HASH_MAX + 1];
+    char wps[3][WEB_FID_WPS_MAX + 1], atk[WEB_FLEET_STR_MAX + 1];
+    static const char *const WK[3] = { "wps_manuf", "wps_model", "wps_num" };
+    int gi = v_hash(r, "ie_fp", ie, sizeof(ie)), gv = v_hash(r, "vie_fp", vie, sizeof(vie));
+    if (gi < 0 || gv < 0) return -1;
+    int gw[3];
+    for (int i = 0; i < 3; i++) {
+        gw[i] = v_print(r, WK[i], WEB_FID_WPS_MAX, wps[i], sizeof(wps[i]));
+        if (gw[i] < 0) return -1;
+    }
+    long long af = 0, al = 0;
+    unsigned types = 0;
+    int ga = v_str(r, "attacks", WEB_FID_ATK_STR - 1, atk, sizeof(atk));
+    int gf = v_int(r, "attack_first", 0, T_MAX, &af), gl = v_int(r, "attack_last", 0, T_MAX, &al);
+    if (ga < 0 || gf < 0 || gl < 0 || (ga == 1) != (gf == 1) || (ga == 1) != (gl == 1) ||
+        (ga == 1 && (web_fid_atk_parse(atk, &types) != 0 || !types || af > al)))
+        return -1;
+    if (gi == 1) { ex_key(w, fst, "ie_fp");  web_jw_str(w, ie); }
+    if (gv == 1) { ex_key(w, fst, "vie_fp"); web_jw_str(w, vie); }
+    for (int i = 0; i < 3; i++)
+        if (gw[i] == 1) { ex_key(w, fst, WK[i]); web_jw_str(w, wps[i]); }
+    if (ga == 1) {
+        ex_key(w, fst, "attacks");      web_jw_str(w, atk);
+        ex_key(w, fst, "attack_first"); web_jw_int(w, af);
+        ex_key(w, fst, "attack_last");  web_jw_int(w, al);
+    }
+    return 0;
+}
+
 /* One data line into a row. 0, or -1 with why. */
 static int row_of(const web_jrec_t *r, const char *type, frow_t *o, const char **why) {
     memset(o, 0, sizeof(o[0]));
@@ -1728,6 +1842,27 @@ static int row_of(const web_jrec_t *r, const char *type, frow_t *o, const char *
         if (v > 0) web_jw_int(&w, v); else web_jw_raw(&w, "null");
         ex_key(&w, &fst, "enc");
         jstr_or_null(&w, a);
+        /* The fingerprint and the attacks (#192 I4, ident=1): each added
+         * to extra only when sent, so a row from an older export keeps
+         * exactly the members it had. */
+        if (ap_ident(r, &w, &fst) != 0) return -1;
+    } else if (!strcmp(type, "own_net")) {
+        /* One of the peer's own networks (#192 I2, I3): kind -5, keyed
+         * by what it names. */
+        o->kind = -5;
+        char bs[WEB_KEY_MAX + 1] = "";
+        int gs = v_str(r, "ssid", WEB_FLEET_SSID_MAX, o->label, sizeof(o->label));
+        int gb = 0;
+        if (web_jl_get(r, "bssid") && web_jl_get(r, "bssid")->kind != WEB_J_NULL)
+            gb = v_mac(r, "bssid", bs);
+        if (gs < 0 || gb < 0 || (gs == 1) == (gb == 1) ||
+            (gs == 1 && !web_fleet_ssid_ok(o->label)))
+            return -1;
+        if (gs == 1) snprintf(o->key, sizeof(o->key), "ssid:%s", o->label);
+        else snprintf(o->key, sizeof(o->key), "bssid:%s", bs);
+        ex_begin(&w, o->extra, sizeof(o->extra));
+        ex_key(&w, &fst, "bssid");
+        jstr_or_null(&w, bs);
     } else if (!strcmp(type, "probe")) {
         o->kind = WEB_FK_PROBE;
         char mac[WEB_KEY_MAX + 1];
@@ -1935,6 +2070,8 @@ typedef struct {
     int       gev_complete;          /* and said they were all of them */
     long long ac;                    /* aircraft lines (#192 I7) */
     int       has_ac_end, ac_trunc;  /* the end line counted them; cut */
+    long long own;                   /* own_net lines (#192 I2, I3) */
+    int       has_own_end;           /* the end line counted them (ident=1) */
     int       has_gnss;              /* a gnss line, into gs */
     web_fg_sample_t gs;
     int       has_next[WEB_FK_COUNT];
@@ -2048,6 +2185,14 @@ static int check_line(void *ctx, const web_jrec_t *r, long long idx, const char 
         }
         k->has_ac_end = ga == 1;
         k->ac_trunc = at;
+        /* The own networks' count, for ident=1 only (#192 I2, I3). */
+        int go = v_int(r, "own_net", 0, 2 * WEB_FLEET_MINE_MAX, &v);
+        if (go < 0 || (go == 1 && v != k->own) || (go == 0 && k->own > 0)) {
+            snprintf(k->err, k->errsz, "the end line's own_net count is not the "
+                     "lines sent: refused");
+            return -1;
+        }
+        k->has_own_end = go == 1;
         k->seen_end = 1;
         return 0;
     }
@@ -2067,6 +2212,8 @@ static int check_line(void *ctx, const web_jrec_t *r, long long idx, const char 
         k->ac++;
     } else if (row.kind == -4) {
         /* the receiver: stored as it is */
+    } else if (row.kind == -5) {
+        k->own++;
     } else {
         gnss_sample(r, &k->gs);
         k->has_gnss = 1;
@@ -2104,12 +2251,15 @@ static int put_line(void *ctx, const web_jrec_t *r, long long idx, const char *t
     /* A receiver line with no summary (coverage alone): kept as of the
      * answer, so the age bound does not take it at once. */
     if (row.kind == -4 && row.last <= 0) row.first = row.last = p->gen;
+    /* An own network is as of the answer that named it. */
+    if (row.kind == -5) row.first = row.last = p->gen;
     sqlite3_stmt *s = p->up;
     sqlite3_reset(s);
     sqlite3_bind_text(s, 1, p->peer, -1, SQLITE_STATIC);
     sqlite3_bind_text(s, 2, row.kind >= 0 ? KIND_WORD[row.kind]
                             : row.kind == -2 ? "gnss_event" : row.kind == -3 ? "aircraft"
-                            : row.kind == -4 ? "adsb" : "gnss", -1, SQLITE_STATIC);
+                            : row.kind == -4 ? "adsb" : row.kind == -5 ? "own_net" : "gnss",
+                      -1, SQLITE_STATIC);
     sqlite3_bind_text(s, 3, row.key, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(s, 4, row.label, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(s, 5, row.vendor, -1, SQLITE_TRANSIENT);
@@ -2229,6 +2379,24 @@ static int ac_meta_write(sqlite3 *db, const char *peer, const chk_t *k) {
     return ok ? 0 : -1;
 }
 
+/* meta "fleet.ident.<peer>": "<generated> <own_net count>" of the
+ * peer's newest answer to ident=1 (#192 I2, I3, web_fleetid.h). */
+static int ident_meta_write(sqlite3 *db, const char *peer, const chk_t *k) {
+    char nm[96], v[64];
+    snprintf(nm, sizeof(nm), "fleet.ident.%s", peer);
+    snprintf(v, sizeof(v), "%lld %lld", k->hdr.generated, k->own);
+    sqlite3_stmt *s = NULL;
+    int ok = sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO meta (name,value) VALUES (?1,?2)",
+                                -1, &s, NULL) == SQLITE_OK;
+    if (ok) {
+        sqlite3_bind_text(s, 1, nm, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(s, 2, v, -1, SQLITE_TRANSIENT);
+        ok = sqlite3_step(s) == SQLITE_DONE;
+    }
+    sqlite3_finalize(s);
+    return ok ? 0 : -1;
+}
+
 static int store_answer(web_fleet_t *f, const web_fleet_peer_cfg_t *pc, const chk_t *k,
                         const char *body, size_t len, web_jrec_t *rec, long long now_s,
                         int page, const web_fleet_bf_t *bf, char *err, size_t errsz) {
@@ -2244,8 +2412,14 @@ static int store_answer(web_fleet_t *f, const web_fleet_peer_cfg_t *pc, const ch
     p.gen = k->hdr.generated;
     long long nl;
     char e2[WEB_FLEET_ERR_MAX + 1];
-    int ok = sqlite3_prepare_v2(db, UPSERT_SQL, -1, &p.up, NULL) == SQLITE_OK &&
-             walk(body, len, rec, put_line, &p, &nl, e2, sizeof(e2)) == 0 && !p.failed;
+    /* An answer that names the peer's own networks (#192 I2, I3)
+     * replaces what it named before: one it no longer names is gone. */
+    int ok = !(page < 0 && k->has_own_end) ||
+             (run1(db, "DELETE FROM peer_sightings WHERE peer=?1 AND kind='own_net' AND"
+                       " last_seen<=?2", pc->name, T_MAX) == 0 &&
+              ident_meta_write(db, pc->name, k) == 0);
+    ok = ok && sqlite3_prepare_v2(db, UPSERT_SQL, -1, &p.up, NULL) == SQLITE_OK &&
+         walk(body, len, rec, put_line, &p, &nl, e2, sizeof(e2)) == 0 && !p.failed;
     sqlite3_finalize(p.up);
     sqlite3_stmt *s = NULL;
     /* A page is the same answer's older rows: the site, its clock and
@@ -2472,7 +2646,14 @@ static void backfill_pages(web_fleet_t *f, int i, long long now_s) {
         pthread_mutex_unlock(&f->mu);
         if (!bf.active) break;
         char q[160], err[WEB_FLEET_ERR_MAX + 1] = "", e2[WEB_FLEET_ERR_MAX - 31];
-        snprintf(q, sizeof(q), "since=%lld&kind=%s&after=%s", bf.floor, KIND_WORD[k], bf.cur);
+        /* An ap page carries the fingerprint members too (#192 I4) when
+         * the peer offers ident=1, so a backfilled row is the same row. */
+        pthread_mutex_lock(&f->mu);
+        int ident = k == WEB_FK_AP && p->no_ident_until <= now_s && p->no_adsb_until <= now_s &&
+                    p->no_gnss_until <= now_s && p->no_own_until <= now_s;
+        pthread_mutex_unlock(&f->mu);
+        snprintf(q, sizeof(q), "since=%lld&kind=%s&after=%s%s", bf.floor, KIND_WORD[k], bf.cur,
+                 ident ? "&ident=1" : "");
         char *body = NULL;
         size_t len = 0;
         long long rows = 0, remote = 0;
@@ -2522,16 +2703,19 @@ int web_fleet_pull_one(web_fleet_t *f, int i, long long now_s) {
          * Its answers carry no cursor, so nothing is backfilled from it
          * until it is upgraded. own=1 the same way (#192 I5, an F2
          * export refuses it; WEB_FLEET_NOOWN_S), gnss=1 (#192 I6, an I5
-         * export; WEB_FLEET_NOGNSS_S) and adsb=1 (#192 I7, an I6 export;
-         * WEB_FA_NOADSB_S): each refusal drops the newest flag and asks
-         * again, down to since= alone. */
-        static const char *const LEVEL_Q[5] = {
+         * export; WEB_FLEET_NOGNSS_S), adsb=1 (#192 I7, an I6 export;
+         * WEB_FA_NOADSB_S) and ident=1 (#192 I4, an I7 export;
+         * WEB_FLEET_NOIDENT_S): each refusal drops the newest flag and
+         * asks again, down to since= alone. */
+        static const char *const LEVEL_Q[6] = {
             "since=%lld", "since=%lld&next=1", "since=%lld&next=1&own=1",
             "since=%lld&next=1&own=1&gnss=1", "since=%lld&next=1&own=1&gnss=1&adsb=1",
+            "since=%lld&next=1&own=1&gnss=1&adsb=1&ident=1",
         };
         pthread_mutex_lock(&f->mu);
         int lv = p->no_next_until > now_s ? 0 : p->no_own_until > now_s ? 1
-               : p->no_gnss_until > now_s ? 2 : p->no_adsb_until > now_s ? 3 : 4;
+               : p->no_gnss_until > now_s ? 2 : p->no_adsb_until > now_s ? 3
+               : p->no_ident_until > now_s ? 4 : 5;
         pthread_mutex_unlock(&f->mu);
         char q[96];
         int g;
@@ -2541,9 +2725,11 @@ int web_fleet_pull_one(web_fleet_t *f, int i, long long now_s) {
             g = http_get(f, &p->cfg, q, &body, &len, err, sizeof(err), lv > 0 ? &unk : NULL);
             if (g == 0 || !unk || lv == 0) break;
             pthread_mutex_lock(&f->mu);
-            long long until = now_s + (lv == 4 ? WEB_FA_NOADSB_S : lv == 3 ? WEB_FLEET_NOGNSS_S
+            long long until = now_s + (lv == 5 ? WEB_FLEET_NOIDENT_S : lv == 4 ? WEB_FA_NOADSB_S
+                                       : lv == 3 ? WEB_FLEET_NOGNSS_S
                                        : lv == 2 ? WEB_FLEET_NOOWN_S : WEB_FLEET_NONEXT_S);
-            if (lv == 4) p->no_adsb_until = until;
+            if (lv == 5) p->no_ident_until = until;
+            else if (lv == 4) p->no_adsb_until = until;
             else if (lv == 3) p->no_gnss_until = until;
             else if (lv == 2) p->no_own_until = until;
             else p->no_next_until = until;
@@ -3127,6 +3313,9 @@ int web_fleet_overview_route(web_fleet_t *f, const web_fleet_src_t *src, const c
     /* The compact aircraft verdicts (#192 I7, web_fleetadsb.h). */
     web_jw_raw(&w, ",\"aircraft\":");
     web_fa_overview_json(f, src, now_s, &w);
+    /* The identity findings by class (#192 I2, I3, I4, I8, web_fleetid.h). */
+    web_jw_raw(&w, ",\"findings\":");
+    web_fid_overview_json(f, src, now_s, &w);
     /* Every pair of sites with a position, this one named "self". */
     web_jw_raw(&w, ",\"distances\":[");
     int nd = 0;

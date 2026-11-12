@@ -162,7 +162,9 @@ the Wi-Fi it watches:
 - [[fleet]] — the owner's own sensors sharing over the tailnet (#192,
   ADR 0008): slothweb's `/api/fleet/export`, the `--peer` pull into
   slothweb.db v8 (`peer_sites`, `peer_sightings`), what never travels,
-  and the cross-site inferences the later slices build on it.
+  and the cross-site inferences built on it: emitters located (I5), GNSS
+  regional or local (I6), aircraft cross-checked (I7) and the identity
+  findings (I2, I3, I4, I8).
 - [[capture-scope]] — slothweb's Monitor / Hybrid / Local switch: what
   the passive monitor radio heard, what the host's own interfaces
   carried, or both; how each record, alert, metric, interface and

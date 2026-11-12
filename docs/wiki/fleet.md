@@ -32,7 +32,12 @@ I7 compares the sites' ADS-B receivers (`/api/fleet/aircraft`): each
 aircraft confirmed, unconfirmed (a second receiver that demonstrably
 hears that sector did not hear it), out of that receiver's coverage, or
 undetermined, which is every aircraft while the fleet has one receiver;
-the identity inferences across sites (F3) come next.
+and the identity findings (I2, I3, I4, I8; `/api/fleet/findings`) read
+one site's devices, networks and verdicts against another's: a client
+probing for another site's own network, a site's own BSSID or SSID heard
+where its network cannot reach, one BSSID at two places at once, one
+attack tool's beacon fingerprint at two sites in order, and one address
+triaged known at one site and incident at another.
 
 **Sources**: `web/src/web_fleet.h`, `web/src/web_fleet.c` (the export,
 the member allow-list, the HTTP/1.1 client, the ingest and its checks,
@@ -52,7 +57,11 @@ health member), `web/src/web_frrs.c` (`web_frrs_verdicts()`),
 (I7), `web/src/web_slothdb.c` (`web_sdb_adsb_fleet()`,
 `web_sdb_adsb_positions()`),
 `web/tests/test_fleet.c`, `web/tests/test_locate.c`, `web/tests/test_fleetgnss.c`,
-`web/tests/test_fleetadsb.c`,
+`web/tests/test_fleetadsb.c`, `web/src/web_fleetid.h`,
+`web/src/web_fleetid.c` (I2, I3, I4, I8), `web/src/web_slothdb.c`
+(`web_sdb_ap_attacks()`, `web_sdb_ssid_probers()`), `web/src/web_frrs.c`
+(`web_frrs_fp()`), `web/ui/fleetid.js`, `web/ui/fleetid.css`,
+`web/tests/test_fleetid.c`,
 `web/tests/test_store.c`
 (`test_v7_file_is_migrated`), `web/README.md` ("Fleet"),
 [ADR 0008](adr/0008-own-fleet.md), [ADR 0006](adr/0006-sharing-is-opt-in.md),
@@ -67,9 +76,14 @@ error); for I6 `research/gnss/jamming-detection.md`,
 `research/adsb/multi-receiver-verification.md` (Strohmeier, Lenders and
 Martinovic's ADS-B security survey, section V-F; the 4/3-earth radio
 horizon) and `research/adsb/emergency-squawks.md` (ADS-B carries no
-authentication).
+authentication); for the identity findings `research/mitre/T1595.md`,
+`research/mitre/T1557.md`, `research/mitre/T1557-004.md`,
+`research/cve/2023-52424.md`, `research/papers/mbssid-per-bss-ie-variation.md`,
+`research/papers/rssi-distance-estimation.md`,
+`docs/wiki/alert-assessments/MY_NETWORK_RECON.md` and
+[[mac-randomisation]].
 
-**Last updated**: 2026-11-11 (#192 I7 review: an aircraft read that did not run is a cut, never an empty list; a peer read at its row cap or a comparison out of room reads as cut; a sector's reach the median of its hourly farthest; no antenna height credited and B's own altitude required; a position's time bounded by `pos_prev`, widening the window and the mobility allowance); 2026-11-11 (#192 I7: aircraft across the sites, the export's `adsb=1` (`adsb_rx`, `aircraft` lines), peer_sightings kinds `aircraft` and `adsb`, `/api/fleet/aircraft`, the overview's `aircraft`, the Fleet tab's aircraft panel with each receiver's coverage plot); 2026-11-11 (#192 I6 review: no quiet peer before a pull past the window's end; a span never bridged across a sample that was not observing; `rx` only with the drop test's history; the sample events kept for the week across a restart; a sample event never quiet on incidents alone; `gnss_complete`, so a pre-v11 `sloth.db`, a timeout or the cap is no coverage; an eph of 0 no bound; the UI's "local" worded as seen at one site while the others watched); 2026-11-11 (#192 I6: GNSS regional or local, the baseline and clock checks, `/api/fleet/gnss`, the export's `gnss=1`, `--peer-gnss-region-km`, the Fleet tab's GNSS panel); 2026-11-11 (#192 I5 review: the least-squares fix damped and refused when unsettled; `nearest` with its difference's sigma and `within_band`; the export's probe reading only within 120 s of its row and not on 5 or 6 GHz; a 5 GHz probe no calibration link and modelled at 5 GHz; an address two sites claim no link); 2026-11-11 (#192 I5: locating emitters from two or more sites' signal strength, `/api/fleet/locate`, the own-radio calibration and `own=1`, the overview's `calibration`, the map's located emitters and metre scale; a stored 0 dBm is no reading, and an ARP-only device takes its probe reading); 2026-11-11 (#192 F2 review: the alert backfill past the reader's 20,000-row scan, an F1 peer pulled without `next=1`, the shared list's verdicts in one pass); 2026-11-11 (#192 F2: the Fleet tab, `/api/fleet/overview`, `/api/fleet/shared`, the backfill); 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
+**Last updated**: 2026-11-11 (#192 I2, I3, I4, I8: identity across the sites, the export's `ident=1` (`own_net` lines; `ie_fp`, `vie_fp`, `wps_manuf`, `wps_model`, `wps_num`, `attacks`, `attack_first`, `attack_last` on ap lines), peer_sightings kind `own_net`, meta `fleet.ident.<peer>`, slothweb's `--my-ssid` and `--my-bssid`, `/api/fleet/findings`, the overview's `findings`, the Fleet tab's identity panel); 2026-11-11 (#192 I7 review: an aircraft read that did not run is a cut, never an empty list; a peer read at its row cap or a comparison out of room reads as cut; a sector's reach the median of its hourly farthest; no antenna height credited and B's own altitude required; a position's time bounded by `pos_prev`, widening the window and the mobility allowance); 2026-11-11 (#192 I7: aircraft across the sites, the export's `adsb=1` (`adsb_rx`, `aircraft` lines), peer_sightings kinds `aircraft` and `adsb`, `/api/fleet/aircraft`, the overview's `aircraft`, the Fleet tab's aircraft panel with each receiver's coverage plot); 2026-11-11 (#192 I6 review: no quiet peer before a pull past the window's end; a span never bridged across a sample that was not observing; `rx` only with the drop test's history; the sample events kept for the week across a restart; a sample event never quiet on incidents alone; `gnss_complete`, so a pre-v11 `sloth.db`, a timeout or the cap is no coverage; an eph of 0 no bound; the UI's "local" worded as seen at one site while the others watched); 2026-11-11 (#192 I6: GNSS regional or local, the baseline and clock checks, `/api/fleet/gnss`, the export's `gnss=1`, `--peer-gnss-region-km`, the Fleet tab's GNSS panel); 2026-11-11 (#192 I5 review: the least-squares fix damped and refused when unsettled; `nearest` with its difference's sigma and `within_band`; the export's probe reading only within 120 s of its row and not on 5 or 6 GHz; a 5 GHz probe no calibration link and modelled at 5 GHz; an address two sites claim no link); 2026-11-11 (#192 I5: locating emitters from two or more sites' signal strength, `/api/fleet/locate`, the own-radio calibration and `own=1`, the overview's `calibration`, the map's located emitters and metre scale; a stored 0 dBm is no reading, and an ARP-only device takes its probe reading); 2026-11-11 (#192 F2 review: the alert backfill past the reader's 20,000-row scan, an F1 peer pulled without `next=1`, the shared list's verdicts in one pass); 2026-11-11 (#192 F2: the Fleet tab, `/api/fleet/overview`, `/api/fleet/shared`, the backfill); 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
 
 ## What travels, and what never does
 
@@ -90,6 +104,8 @@ export carries, each kind newest first and bounded:
 | `ble` | slothweb's BLE table | address and its type, local name, device class, RSSI, times | 1,024 |
 | `alert` | sloth.db `alerts` | type, title, a fingerprint of type and title, match IP, severity, count, times | 1,000 |
 | `verdict` | slothweb.db `triage` | the finding's descriptor (type, address, port, first seen) and its current state | 1,000 |
+| `own_net` (`ident=1`) | slothweb's `--my-ssid`, `--my-bssid` | one of this site's own networks: `ssid` or `bssid`, the other null | 16 |
+| `ap`, more (`ident=1`) | the FRRS ledger (the stream's latest beacon); sloth.db `alerts` | `ie_fp`, `vie_fp`, `wps_manuf`, `wps_model`, `wps_num`, `attacks`, `attack_first`, `attack_last` | the ap cap |
 
 The export holds every line it writes to the importer's own checks
 (below) before sending it, because one line the importer refuses
@@ -118,7 +134,7 @@ it. The fingerprint is therefore coarser than the key: two findings of
 one type with the same title (most of sloth's titles are the type's
 name) share it. Matching the same tool across sites by IE-order or
 vendor-IE hash (#192 I4) needs those hashes exported as their own
-members, which F3 will add.
+members, which `ident=1` adds (below, "Identity across the sites").
 
 ## The transport
 
@@ -455,7 +471,7 @@ probing for the other's network (I2), one site's own SSID or BSSID at
 the other (I3), the same attack tool at both (I4), an emitter both hear
 (I5), a GNSS event regional or local (I6), an ADS-B cross-check (I7),
 verdicts shared (I8) and peer health (I9). F1 stores what they need;
-I5 and I6 are built (above and below);
+I5, I6, I7 and I2, I3, I4, I8 are built (above and below);
 each inference is a slothweb fleet finding, not a sloth alert, and is
 held to the cited-basis rule when it lands.
 
@@ -838,6 +854,164 @@ only), so the fleet has one receiver and every aircraft reads
 on synthetic two-receiver data and is honestly inert until a second
 site runs `--adsb`.
 
+## Identity across the sites (I2, I3, I4, I8)
+
+What one site's devices, networks and verdicts say about another
+site's. Four classes, each a slothweb fleet finding (not a sloth alert,
+not in `sloth.db`, not in JSONL), each with the sites it names, the part
+each played, its times, whether it applies at the sites' spacing and
+why not, and its basis. I1 (the follower) is not in this slice.
+
+**The two sites today are 16.8 m apart.** At that spacing "seen at both
+sites" is the norm, not a finding, so every check that rests on distance
+is computed from the distance and the sites' reach and says
+`co_located` (not applicable) until the sites are far enough apart that
+one site's network cannot be heard at the other; the checks that do not
+rest on distance (I2, I8) apply at any spacing.
+
+**Own networks.** A site's own networks are what its operator names.
+sloth's `--my-ssid` and `--my-bssid` are not in `sloth.db` or the
+stream, so slothweb takes the same two flags (repeatable, at most 8 of
+each; an SSID 1 to 32 octets with no control character, a BSSID six hex
+octets) and names them on stderr. On 2026-11-11 W9FJC's sloth runs with
+`--my-ssid CeilingCatHD --my-bssid 28:25:5f:19:0e:1c` and beta-site's
+names none; neither slothweb is given them yet, so the route answers
+`configure` with how to, and every class that needs them is empty until
+they are. List every BSSID of the network (each band and VAP): W9FJC
+hears CeilingCatHD from `..:0e:14`, `..:0e:18` and `..:0e:1c`, and the
+two unnamed are reported as the owner's own AP heard elsewhere ("not
+named by --my-bssid") rather than as a foreign one.
+
+**What travels.** With `ident=1` (asked for only; an I7 export refuses
+it, and the puller asks again with `adsb=1` and not with `ident=1` for
+the hour, `WEB_FLEET_NOIDENT_S`) the whole export adds one `own_net`
+line per own network (`ssid` or `bssid`, the other null), whatever
+`since` says, counted on the end line as `own_net`; and every `ap` line,
+whole export or page, carries:
+
+| Member | From | Value |
+|---|---|---|
+| `ie_fp` | the FRRS ledger's latest beacon of the BSSID (`ie_order_hash`) | decimal, 1..20 digits; null when the ledger holds no beacon of it or sloth's 0 ("not decoded") |
+| `vie_fp` | the same beacon's `vendor_ies_hash` | decimal, 1..20 digits, or null |
+| `wps_manuf`, `wps_model`, `wps_num` | its WPS manufacturer, model name and model number | printable ASCII, at most 32 bytes, or null |
+| `attacks` | sloth.db `alerts`: an `EVIL_TWIN` key (`twin:` or `twin-fp:`, either half of the pair) or a `KARMA_AP` key (`karma:`) naming the BSSID at its field, last seen in the last 30 days | `EVIL_TWIN`, `KARMA_AP` or both, comma-separated, or null |
+| `attack_first`, `attack_last` | those alerts' earliest first seen and latest last seen | epoch seconds, both or neither, first at most last |
+
+(The members are named `_fp`, not `_hash`: `web_secret.h` withholds any
+name holding "hash".) The key is matched in the reader's statement only,
+at the field `alert_pair_key()` and `karma_alert_key()` put the BSSID,
+joined to `beacon_aps`, so the BSSID that comes back is `beacon_aps`'
+own column and no byte of a key is ever a result. The importer holds
+each member to the ranges above and refuses the whole answer for one
+out of range; each is added to the row's `extra` only when sent, so a
+row from an older export keeps exactly the members it had. Stored as
+peer_sightings kind `own_net` (key `ssid:<ssid>` or `bssid:<mac>`); an
+answer that counts its own networks replaces what the peer named
+before; and meta `fleet.ident.<peer>`, `"<generated> <count>"` of the
+peer's newest such answer. No schema step.
+
+**Reach.** A site's reach is how far an AP at sloth's assumed 20 dBm
+(`RF_PTX_AP_ASSUMED`) is heard down to that site's floor, the weakest AP
+signal it holds (-100 dBm when none; clamped to -100..-40), less a 20 dB
+margin (twice the 2.4 GHz shadow-fading and assumed-power sigmas, 8 and
+6 dB, together: `src/rf_model.h`), by the ITU-R P.1238 model at 2.4 GHz,
+N 2.8 (`research/papers/rssi-distance-estimation.md`): about 3.8 km at
+-100 dBm, 2.5 km at -95. An AP's distance from a sensor that hears it at
+a signal is the same model at that signal less the margin (28 m at -40
+dBm). The model is an indoor one and the margin and the floor are
+choices, each toward a longer reach, so toward "not applicable".
+
+**The classes.**
+
+- **I2 `probe_other_site`.** A client at site A whose probe list names
+  an SSID site B names as its own, and A does not (a shared SSID is A's
+  own sensor's question, `MY_NETWORK_RECON`): it has been at B. A
+  directed probe names a network the client has joined, in the clear,
+  and following a target by its preferred networks is reconnaissance
+  (`docs/wiki/alert-assessments/MY_NETWORK_RECON.md`,
+  `research/mitre/T1595.md`). A locally administered MAC (a randomised
+  probe address, one handset minting many: [[mac-randomisation]]) is left
+  out and counted (`randomised`); a client either site triaged `known`
+  is exonerated (shown last, not counted). At co-located sites the
+  finding is noted: the client may live at or near both. This site's
+  probes come from `pnl_ssids` (`web_sdb_ssid_probers()`), a peer's from
+  its probe rows; the last 30 days.
+- **I3 `own_bssid_elsewhere`.** B hears a BSSID A names as its own, or
+  one A hears carrying A's own SSID: applies when the sites are further
+  apart than that AP's distance from A's sensor (from A's own reading,
+  else A's reach) plus B's reach. A site's own AP is fixed there; heard
+  where it cannot reach, the address is being transmitted by something
+  else (`research/mitre/T1557.md`).
+- **I3 `own_ssid_foreign_bssid`.** B hears A's own SSID from a BSSID A
+  does not name (A naming at least one, else `no_own_bssid`) and B does
+  not name as its own: applies when the sites are further apart than A's
+  network's extent (the farthest of A's own APs from A's sensor) plus B's
+  reach. An SSID is bound to nothing (`research/cve/2023-52424.md`); a
+  network's name broadcast where it cannot reach is its evil-twin or
+  KARMA lure (`research/mitre/T1557.md`, `research/mitre/T1557-004.md`).
+- **I3 `bssid_two_places`.** One BSSID (not a site's own) heard at two
+  sites whose last sightings are within 600 s, the sites further apart
+  than both reaches together: one transmitter cannot be in both places.
+  Listed only when it applies; at co-located sites it is every AP.
+- **I4 `tool_travel`.** One beacon fingerprint, the IE-order hash and
+  the vendor-IE hash together, on an AP an `attacks` member names, at two
+  or more sites, the sites ordered by their first attack. A fingerprint
+  alone is weak: uniform configuration is the default and common router
+  models share one (`research/papers/mbssid-per-bss-ie-variation.md`), so
+  a site counts only where an attack alert names the AP; a site's own
+  BSSID, or one any site triaged known, false or noise, never counts.
+  Applies when one pair of the sites is further apart than both reaches;
+  co-located, one transmitter may simply be heard at both.
+- **I8 `verdict_conflict`.** One address triaged `known` at one site and
+  `incident` at another. Every verdict a peer sent is also listed beside
+  this site's for the same address, each labelled with its site
+  (`verdicts`): shown, and never written into this site's triage, which
+  stays local (ADR 0008). A verdict is per finding (type, address, port,
+  first seen); a site's verdict on an address is its newest.
+
+**`GET /api/fleet/findings?kind=I2|I3|I4|I8&limit=N`** (100, 1..500; GET
+only): `local` (sloth.db: `open`, `partial`, `unavailable`, `none`),
+`store`, `configure` (null, or how to name the own networks when no site
+names any), `sites` (each one's label, position, `offered` (its own
+networks reached here; false for an older build), `own_age_s`, its own
+SSIDs and BSSIDs, APs held, `fingerprinted`, `attacked`, probes read,
+`randomised`, verdicts, `floor_dbm`, `reach_m`, `skew_s`), `pairs` (each
+pair's distance, both reaches and `co_located`, null without a
+position), `counts` (`I2`, `I3`, `I4`, `I8` that apply, then
+`not_applicable` and `exonerated`), `findings` (each: `id`, `class`,
+`kind`, `key`, `ssid`, `alert_type` for I8, `sites`, `first_seen`,
+`last_seen`, `applicable`, `reason`, `note`, `exonerated`, `distance_m`,
+`bound_m`, `evidence` (per site: its role (`prober`, `owner`,
+`observer`, `tool`, `verdict`), the address there, its times and signal,
+its verdict, the attacks naming it and its WPS strings for I4) and
+`basis`), `total`, `partial`, `verdicts` and `basis` (each kind's, and
+`thresholds`). `/api/fleet/overview` gains `findings`: the counts,
+`total`, `own_named` and `partial`.
+
+**Limits, stated.** `EVIL_TWIN` names both halves of a pair and sloth.db
+does not say which is the impostor (the stream's `twin_episode` does,
+`web_chain.h`, and is not read here), so the real AP of a twin pair
+carries `EVIL_TWIN` too; `KARMA_AP` fires on legitimate APs as well
+(W9FJC's own `..:0e:1c` among them on 2026-11-11). The own-BSSID
+exclusion and the both-sites rule are what keep that from becoming I4;
+it is a lead, never a detection. The fingerprint is the ledger's, which
+holds the 512 most recently beaconing BSSIDs since slothweb started
+(refilled by the stream's re-broadcast), so an AP not heard lately has
+none. Stations carry no fingerprint member: sloth holds no attack alert
+keyed by a client at a field the reader can match.
+
+**On the live fleet** (2026-11-11, this build over copies of W9FJC's
+sloth.db and slothweb.db, given W9FJC's own network): beta-site (an I7
+build, so `offered` false) held 467 probe rows for CeilingCatHD, 452 of
+them randomised; the other 15 are I2 findings at beta-site, one
+exonerated (triaged known); `..:0e:1c`, `..:0e:14` and `..:0e:18` heard
+at beta-site are three I3 `own_bssid_elsewhere`, not applicable (16.8 m
+apart); no I4 (beta-site sends no fingerprint until it runs this build)
+and no I8 (no address triaged known at one site and incident at the
+other). W9FJC's export with `ident=1` sent 2 `own_net` lines and 1,000
+ap lines, 246 of them with `attacks` (190 `EVIL_TWIN`, 25 `KARMA_AP`, 31
+both).
+
 ## Related pages
 
 - [ADR 0008 — own fleet](adr/0008-own-fleet.md)
@@ -847,5 +1021,6 @@ site runs `--adsb`.
 - [[rf-distance]] — the single-sensor RSSI distance whose model I5 uses.
 - [[gnss]] — the receiver summary.
 - [[adsb]] — the receiver the aircraft cross-check (I7) compares.
+- [[mac-randomisation]] — why I2 leaves a randomised probe address out.
 - [[data-socket-exposure]] — the other network surface and its rules.
 - [[threat-model]]

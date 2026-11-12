@@ -754,7 +754,7 @@ static void down(void) {
 }
 
 static char *export(long long since_q, const char *query, int *status) {
-    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, g_own_csv, NULL };
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, g_own_csv, NULL, NULL };
     char q[64];
     if (!query) snprintf(q, sizeof(q), "since=%lld", since_q);
     char *body = NULL;
@@ -1119,7 +1119,7 @@ static void test_pull_good_and_upsert(void) {
     int rc = pull_with(GOOD, 0, req, sizeof(req));
     if (rc) fprintf(stderr, "    pull: %s\n", F.peer[0].last_error);
     WT_EQ(rc, 0);
-    WT_HAS(req, "GET /api/fleet/export?since=0&next=1&own=1&gnss=1&adsb=1 HTTP/1.1\r\n");
+    WT_HAS(req, "GET /api/fleet/export?since=0&next=1&own=1&gnss=1&adsb=1&ident=1 HTTP/1.1\r\n");
     WT_HAS(req, "Host: 127.0.0.1:");
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sites WHERE peer='beta' AND"
                       " label='beta-site' AND pos_source='fixed' AND lat>41.87 AND"
@@ -1143,7 +1143,7 @@ static void test_pull_good_and_upsert(void) {
 
     rc = pull_with(GOOD2, 0, req, sizeof(req));
     WT_EQ(rc, 0);
-    WT_HAS(req, "GET /api/fleet/export?since=1792626880&next=1&own=1&gnss=1&adsb=1 HTTP/1.1\r\n");
+    WT_HAS(req, "GET /api/fleet/export?since=1792626880&next=1&own=1&gnss=1&adsb=1&ident=1 HTTP/1.1\r\n");
     WT_EQ(sightings(), 7);
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi' AND"
                       " key='da:a1:19:00:00:01' AND label='CafeFree' AND rssi=-60"
@@ -1406,6 +1406,7 @@ typedef struct {
     int       f2;                     /* answer as an F2 export: a 400 for own= */
     int       i5;                     /* answer as an I5 export: a 400 for gnss= */
     int       i6;                     /* answer as an I6 export: a 400 for adsb= */
+    int       i7;                     /* answer as an I7 export: a 400 for ident= */
     pthread_mutex_t mu;               /* guards stop */
     char      req[24][256];
     web_fleet_src_t src;
@@ -1449,7 +1450,8 @@ static void *serve_export(void *arg) {
         size_t bl = 0;
         int st = 0;
         if ((s->f1 && strchr(query, '&')) || (s->f2 && strstr(query, "own=")) ||
-            (s->i5 && strstr(query, "gnss=")) || (s->i6 && strstr(query, "adsb="))) {
+            (s->i5 && strstr(query, "gnss=")) || (s->i6 && strstr(query, "adsb=")) ||
+            (s->i7 && strstr(query, "ident="))) {
             /* F1's parse_since(): since= alone, else unknown_parameter. */
             body = malloc(64);
             if (body) bl = (size_t)snprintf(body, 64, "{\"error\":\"unknown_parameter\"}");
@@ -1573,7 +1575,7 @@ static void test_backfill_after_a_cut(void) {
     if (F.peer[0].last_error[0]) fprintf(stderr, "    pull 1: %s\n", F.peer[0].last_error);
     /* The whole export, then one page of each cut kind from its floor. */
     WT_ASSERT(srv.n == 5);
-    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1"));
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1&ident=1"));
     WT_ASSERT(!strncmp(srv.req[1], "since=0&kind=wifi&after=", 24));
     WT_ASSERT(!strncmp(srv.req[2], "since=0&kind=ap&after=", 22));
     WT_ASSERT(!strncmp(srv.req[3], "since=0&kind=alert&after=", 25));
@@ -1629,7 +1631,8 @@ static void test_backfill_after_a_cut(void) {
     /* The incremental pull asks only for what is new; the page goes on
      * from the cursor. */
     char want[64];
-    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1&adsb=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1&adsb=1&ident=1",
+             T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[5], want));
     WT_ASSERT(!strncmp(srv.req[6], "since=0&kind=wifi&after=", 24));
     WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi'"), want_wifi);
@@ -1687,12 +1690,13 @@ static void test_backfill_alerts_past_the_scan(void) {
     WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
     /* The first answer was cut by the scan, not the cap: fewer keys than
      * the cap, and a backfill. */
-    WT_ASSERT(srv.n >= 5);
-    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1"));
-    WT_ASSERT(!strcmp(srv.req[1], "since=0&next=1&own=1&gnss=1"));
-    WT_ASSERT(!strcmp(srv.req[2], "since=0&next=1&own=1"));
-    WT_ASSERT(!strcmp(srv.req[3], "since=0&next=1"));
-    WT_ASSERT(!strncmp(srv.req[4], "since=0&kind=alert&after=", 25));
+    WT_ASSERT(srv.n >= 6);
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1&ident=1"));
+    WT_ASSERT(!strcmp(srv.req[1], "since=0&next=1&own=1&gnss=1&adsb=1"));
+    WT_ASSERT(!strcmp(srv.req[2], "since=0&next=1&own=1&gnss=1"));
+    WT_ASSERT(!strcmp(srv.req[3], "since=0&next=1&own=1"));
+    WT_ASSERT(!strcmp(srv.req[4], "since=0&next=1"));
+    WT_ASSERT(!strncmp(srv.req[5], "since=0&kind=alert&after=", 25));
     for (int i = 0; i < 6 && F.peer[0].bf[WEB_FK_ALERT].active; i++)
         WT_EQ(web_fleet_pull_one(&F, 0, T + 60 * (i + 1)), 0);
     WT_EQ(F.peer[0].bf[WEB_FK_ALERT].active, 0);
@@ -1721,29 +1725,30 @@ static void test_pull_from_an_f1_peer(void) {
     int rc = web_fleet_pull_one(&F, 0, T);
     if (rc) fprintf(stderr, "    pull: %s\n", F.peer[0].last_error);
     WT_EQ(rc, 0);
-    /* adsb=1 refused, gnss=1 refused, own=1 refused, then next=1
-     * refused, then plain (#192 I5 put own=1 in front, I6 gnss=1, I7
-     * adsb=1). */
-    WT_ASSERT(srv.n == 5);
-    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1"));
-    WT_ASSERT(!strcmp(srv.req[1], "since=0&next=1&own=1&gnss=1"));
-    WT_ASSERT(!strcmp(srv.req[2], "since=0&next=1&own=1"));
-    WT_ASSERT(!strcmp(srv.req[3], "since=0&next=1"));
-    WT_ASSERT(!strcmp(srv.req[4], "since=0"));
+    /* ident=1 refused, adsb=1 refused, gnss=1 refused, own=1 refused,
+     * then next=1 refused, then plain (#192 I5 put own=1 in front, I6
+     * gnss=1, I7 adsb=1, I4 ident=1). */
+    WT_ASSERT(srv.n == 6);
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1&ident=1"));
+    WT_ASSERT(!strcmp(srv.req[1], "since=0&next=1&own=1&gnss=1&adsb=1"));
+    WT_ASSERT(!strcmp(srv.req[2], "since=0&next=1&own=1&gnss=1"));
+    WT_ASSERT(!strcmp(srv.req[3], "since=0&next=1&own=1"));
+    WT_ASSERT(!strcmp(srv.req[4], "since=0&next=1"));
+    WT_ASSERT(!strcmp(srv.req[5], "since=0"));
     WT_ASSERT(here_q("SELECT COUNT(*) FROM peer_sightings WHERE peer='beta'") > 0);
     WT_EQ(F.peer[0].failures, 0);
     WT_EQ(F.peer[0].last_error[0], '\0');
     WT_ASSERT(F.peer[0].no_next_until > T);
     /* Within the hour: plain at once, one request. */
     WT_EQ(web_fleet_pull_one(&F, 0, T + 60), 0);
-    WT_ASSERT(srv.n == 6);
+    WT_ASSERT(srv.n == 7);
     char want[64];
     snprintf(want, sizeof(want), "since=%lld", T - WEB_FLEET_OVERLAP_S);
-    WT_ASSERT(!strcmp(srv.req[5], want));
+    WT_ASSERT(!strcmp(srv.req[6], want));
     web_m4_t m4;
     memset(&m4, 0, sizeof(m4));
     m4.fleet = &F;
-    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     static char body[65536];
     size_t len = 0;
     int st = 0;
@@ -1755,8 +1760,8 @@ static void test_pull_from_an_f1_peer(void) {
      * upgraded meanwhile). */
     srv.f1 = 0;
     WT_EQ(web_fleet_pull_one(&F, 0, T + 60 + WEB_FLEET_NONEXT_S), 0);
-    WT_ASSERT(srv.n == 7);
-    WT_ASSERT(strstr(srv.req[6], "&next=1&own=1&gnss=1&adsb=1") != NULL);
+    WT_ASSERT(srv.n == 8);
+    WT_ASSERT(strstr(srv.req[7], "&next=1&own=1&gnss=1&adsb=1&ident=1") != NULL);
     here_down(&srv, th);
 }
 
@@ -2007,7 +2012,7 @@ static void test_pull_own_radios(void) {
     here_up(&srv, &th);
     srv.src.own_csv = "02:00:5e:00:00:0b";
     WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
-    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1"));
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1&ident=1"));
     WT_EQ(F.peer[0].nown, 1);
     WT_ASSERT(!strcmp(F.peer[0].own[0], "02:00:5e:00:00:0b"));
     WT_EQ(F.peer[0].own_at, T);
@@ -2015,16 +2020,19 @@ static void test_pull_own_radios(void) {
     srv.f2 = 1;
     int n0 = srv.n;
     WT_EQ(web_fleet_pull_one(&F, 0, T + 60), 0);
-    WT_ASSERT(srv.n >= n0 + 4);
+    WT_ASSERT(srv.n >= n0 + 5);
     char want[64];
-    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1&adsb=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1&adsb=1&ident=1",
+             T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[n0], want));
-    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1&adsb=1", T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[n0 + 1], want));
-    snprintf(want, sizeof(want), "since=%lld&next=1&own=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1", T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[n0 + 2], want));
-    snprintf(want, sizeof(want), "since=%lld&next=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1", T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[n0 + 3], want));
+    snprintf(want, sizeof(want), "since=%lld&next=1", T - WEB_FLEET_OVERLAP_S);
+    WT_ASSERT(!strcmp(srv.req[n0 + 4], want));
     WT_ASSERT(F.peer[0].no_own_until > T + 60);
     WT_EQ(F.peer[0].no_next_until, 0);
     WT_EQ(F.peer[0].failures, 0);
@@ -2121,7 +2129,7 @@ static void test_locate_route(void) {
     G.loc.lon = -111.87006;
     G.loc.ts = T;
     snprintf(G.loc.src, sizeof(G.loc.src), "fixed");
-    web_fleet_src_t src = { &here, NULL, &G, NULL, NULL, NULL };
+    web_fleet_src_t src = { &here, NULL, &G, NULL, NULL, NULL, NULL };
 
     char *b = NULL;
     size_t bl = 0;
@@ -2404,7 +2412,7 @@ static void test_gnss_export(void) {
     web_gnss_t *g = malloc(sizeof(*g));
     WT_ASSERT(g && web_gnss_init(g) == 0);
     gnss_feed(g, T - 5, 33.32922, -111.87006, -60);
-    web_fleet_src_t src = { &SDB, NULL, g, &FR, NULL, NULL };
+    web_fleet_src_t src = { &SDB, NULL, g, &FR, NULL, NULL, NULL };
     char *body = NULL;
     size_t len = 0;
     int st = 0;
@@ -2537,7 +2545,7 @@ static void test_gnss_pull_and_mixed_versions(void) {
     gnss_feed(g, T - 5, 33.32910, -111.86995, 20);
     srv.src.gnss = g;
     WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
-    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1"));
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1&ident=1"));
     char sql[256];
     snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM peer_sightings WHERE kind='gnss_event'"
              " AND key='GNSS_JAMMING|%lld' AND last_seen=%lld AND extra LIKE '%%\"count\":7%%'",
@@ -2562,14 +2570,17 @@ static void test_gnss_pull_and_mixed_versions(void) {
     srv.i5 = 1;
     int n0 = srv.n;
     WT_EQ(web_fleet_pull_one(&F, 0, T + 60), 0);
-    WT_ASSERT(srv.n >= n0 + 3);
+    WT_ASSERT(srv.n >= n0 + 4);
     char want[96];
-    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1&adsb=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1&adsb=1&ident=1",
+             T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[n0], want));
-    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1&adsb=1", T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[n0 + 1], want));
-    snprintf(want, sizeof(want), "since=%lld&next=1&own=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1", T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[n0 + 2], want));
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1", T - WEB_FLEET_OVERLAP_S);
+    WT_ASSERT(!strcmp(srv.req[n0 + 3], want));
     WT_ASSERT(F.peer[0].no_gnss_until > T + 60);
     WT_EQ(F.peer[0].no_own_until, 0);
     WT_EQ(F.peer[0].failures, 0);
@@ -2697,7 +2708,7 @@ static void test_gnss_route(void) {
         T, T, T + 100, T - 2850, T - 2850, T - 2750, T - 500, T - 500, T - 500);
     WT_EQ(sql_on(g_store, sql), 0);
     gnss_two_sites(&F, T - 7200, T);
-    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL };
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL, NULL };
     char *b = gnss_get(&src, "", T);
     WT_HAS(b, "\"local\":\"open\"");
     WT_HAS(b, "\"window_s\":120,\"gap_s\":150,\"region_m\":50000,");
@@ -2817,7 +2828,7 @@ static void test_gnss_route(void) {
     WT_HAS(b, "\"why\":\"no_current_fix\"");
     WT_LACKS(b, "\"moved\":[\"beta\"]");
     free(b);
-    web_fleet_src_t nos = { NULL, NULL, NULL, &FR, NULL, NULL };
+    web_fleet_src_t nos = { NULL, NULL, NULL, &FR, NULL, NULL, NULL };
     b = gnss_get(&nos, "", T + 60);
     WT_HAS(b, "\"local\":\"none\"");
     snprintf(want, sizeof(want), "{\"site\":\"beta\",\"type\":\"GNSS_TIME_JUMP\",\"class\":"
@@ -2853,7 +2864,7 @@ static void test_gnss_sample_events(void) {
         if (t == T + 60) {
             /* At T the indicator's window has not closed at beta's last
              * pull: no quiet peer yet. */
-            char *b0 = gnss_get(&(web_fleet_src_t){ NULL, NULL, NULL, NULL, NULL, NULL }, "", T);
+            char *b0 = gnss_get(&(web_fleet_src_t){ NULL, NULL, NULL, NULL, NULL, NULL, NULL }, "", T);
             char want0[512];
             snprintf(want0, sizeof(want0), "{\"site\":\"self\",\"type\":\"JAM_IND\",\"class\":"
                      "\"interference\",\"source\":\"sample\",\"first_seen\":%lld,"
@@ -2872,7 +2883,7 @@ static void test_gnss_sample_events(void) {
             web_fg_add(F.fg, sl[i], &s, 150);
         }
     }
-    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     char *b = gnss_get(&src, "", T + 120);
     char want[512];
     snprintf(want, sizeof(want), "{\"site\":\"self\",\"type\":\"CN0_DROP\",\"class\":"
@@ -2936,7 +2947,7 @@ static void test_gnss_state_survives_a_restart(void) {
     WT_EQ(F.fg->site[b].se_a[0], T + 30);
     /* With the references back, the baseline needs only a fresh fix. */
     gnss_two_sites(&F, T + 60, T + 60);
-    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL };
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL, NULL };
     char *body = gnss_get(&src, "", T + 60);
     WT_HAS(body, "\"verdict\":\"within\"");
     free(body);
@@ -3070,7 +3081,7 @@ static void test_adsb_export(void) {
     web_adsb_t A;
     WT_EQ(web_adsb_init(&A), 0);
     adsb_rx(&A, T - 30, 2247000);
-    web_fleet_src_t src = { &SDB, NULL, &G, &FR, NULL, &A };
+    web_fleet_src_t src = { &SDB, NULL, &G, &FR, NULL, &A, NULL };
     char *b0 = export_q(&src, "since=0&adsb=1");
     free(b0);
     adsb_rx(&A, T, 2247900);
@@ -3116,7 +3127,7 @@ static void test_adsb_export(void) {
      * the aircraft, not read, are cut - never an empty list the
      * comparison would take as "heard none" (seen red, false, with the
      * !ac_read clause removed from the export). */
-    web_fleet_src_t none = { NULL, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t none = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     b = export_q(&none, "since=0&adsb=1");
     if (b) {
         WT_LACKS(b, "adsb_rx");
@@ -3282,7 +3293,7 @@ static void test_adsb_pull_and_mixed_versions(void) {
     srv.src.gnss = &G;
     srv.src.adsb = &A;
     WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
-    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1"));
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1&ident=1"));
     WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='aircraft'"), 3);
     WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='adsb' AND key='receiver'"
                  " AND label='live' AND extra LIKE '%\"positions\":14,%'"), 1);
@@ -3302,12 +3313,15 @@ static void test_adsb_pull_and_mixed_versions(void) {
     srv.i6 = 1;
     int n0 = srv.n;
     WT_EQ(web_fleet_pull_one(&F, 0, T + 120), 0);
-    WT_ASSERT(srv.n >= n0 + 2);
+    WT_ASSERT(srv.n >= n0 + 3);
     char want[96];
-    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1&adsb=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1&adsb=1&ident=1",
+             T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[n0], want));
-    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1&adsb=1", T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[n0 + 1], want));
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1", T - WEB_FLEET_OVERLAP_S);
+    WT_ASSERT(!strcmp(srv.req[n0 + 2], want));
     WT_ASSERT(F.peer[0].no_adsb_until > T + 120);
     WT_EQ(F.peer[0].no_gnss_until, 0);
     WT_EQ(F.peer[0].failures, 0);
@@ -3321,6 +3335,45 @@ static void test_adsb_pull_and_mixed_versions(void) {
     here_down(&srv, th);
     web_adsb_destroy(&A);
     web_gnss_destroy(&G);
+}
+
+/* This puller against an I7 peer (#192 I4), whose export refuses
+ * ident=1: asked again at once without it and stored, and asked without
+ * it for WEB_FLEET_NOIDENT_S, then with it again. The I7 answer carries
+ * no own_net and no fingerprint member, which this importer takes as it
+ * takes any older answer. Seen red with the ident retry's
+ * `p->no_ident_until = until` removed (the next pull asked with ident=1
+ * again, two requests). */
+static void test_ident_pull_from_an_i7_peer(void) {
+    peer_srv_t srv;
+    pthread_t th;
+    here_up(&srv, &th);
+    srv.i7 = 1;
+    WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
+    WT_EQ(srv.n, 2);
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1&ident=1"));
+    WT_ASSERT(!strcmp(srv.req[1], "since=0&next=1&own=1&gnss=1&adsb=1"));
+    WT_ASSERT(F.peer[0].no_ident_until > T);
+    WT_EQ(F.peer[0].no_adsb_until, 0);
+    WT_EQ(F.peer[0].failures, 0);
+    WT_ASSERT(here_q("SELECT COUNT(*) FROM peer_sightings WHERE peer='beta'") > 0);
+    WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net'"), 0);
+    WT_EQ(here_q("SELECT COUNT(*) FROM meta WHERE name='fleet.ident.beta'"), 0);
+    /* Within the hour: one request, without ident=1. */
+    int n0 = srv.n;
+    WT_EQ(web_fleet_pull_one(&F, 0, T + 60), 0);
+    WT_EQ(srv.n, n0 + 1);
+    WT_LACKS(srv.req[n0], "ident=");
+    WT_HAS(srv.req[n0], "&adsb=1");
+    /* Upgraded meanwhile: after the hour, with ident=1, and the own
+     * networks' meta row written (this peer names none). */
+    srv.i7 = 0;
+    n0 = srv.n;
+    WT_EQ(web_fleet_pull_one(&F, 0, T + 60 + WEB_FLEET_NOIDENT_S), 0);
+    WT_EQ(srv.n, n0 + 1);
+    WT_HAS(srv.req[n0], "&adsb=1&ident=1");
+    WT_EQ(here_q("SELECT COUNT(*) FROM meta WHERE name='fleet.ident.beta'"), 1);
+    here_down(&srv, th);
 }
 
 static char *aircraft_get(const web_fleet_src_t *src, const char *q) {
@@ -3368,7 +3421,7 @@ static void test_adsb_route(void) {
     WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
     web_slothdb_t here;
     web_slothdb_init(&here, g_here_db, NULL);
-    web_fleet_src_t src = { &here, NULL, &GS, NULL, NULL, NULL };
+    web_fleet_src_t src = { &here, NULL, &GS, NULL, NULL, NULL, NULL };
     char *b = aircraft_get(&src, "");
     WT_ASSERT(b != NULL);
     if (b) {
@@ -3504,6 +3557,7 @@ void run_fleet_tests(void) {
     WT_RUN(test_adsb_import_refusals);
     WT_RUN(test_adsb_pull_and_mixed_versions);
     WT_RUN(test_adsb_route);
+    WT_RUN(test_ident_pull_from_an_i7_peer);
 #endif
     WT_RUN(test_distance);
     WT_RUN(test_fleet_page);
