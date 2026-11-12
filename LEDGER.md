@@ -332,3 +332,5 @@
 | 034c94f | 2026-11-12T00:59:40Z | claude-opus-5-5 | 12 | 5464 | 1339764 | 11488 | 0.4692 | Read each site's identity against the other's across the fleet (#192 I2, I3, I4, I8) |
 | 793b213 | 2026-11-12T01:44:39Z | claude-opus-5-5 | 6 | 2417 | 303500 | 255627 | 2.1541 | Name an evil twin's attacker only when sloth attributed it (#192 I2-I4 review) |
 | 4129f32 | 2026-11-12T04:52:22Z | claude-opus-5-5 | 148 | 26777 | 20271481 | 77126 | 5.2074 | slothweb header shows host name |
+| 2744f9b | 2026-11-12T05:18:06Z | claude-opus-5-5 | 34 | 6449 | 4734423 | 10670 | 1.1614 | Radar: fleet areas where other sloths locate an emitter |
+| 2e1da1a | 2026-11-12T05:45:10Z | claude-opus-5-5 | 6 | 2025 | 740224 | 5364 | 0.2315 | Radar fleet areas: side wash reach, tap clears, fetch only with a peer |
