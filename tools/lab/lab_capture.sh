@@ -302,7 +302,7 @@ s0=$(date -u +%s)
 "$@" >"$dir/.$test_id-$stamp.log" 2>&1 &
 cpid=$!
 trap 'kill -TERM "$cpid" 2>/dev/null' INT TERM HUP
-stopped=tool-exit
+stopped="tool-exit"
 while kill -0 "$cpid" 2>/dev/null; do
     now=$(date -u +%s)
     if [ "$((now - s0))" -ge "$dur" ]; then stopped=duration; break; fi
