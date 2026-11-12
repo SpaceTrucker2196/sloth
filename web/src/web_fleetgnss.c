@@ -177,9 +177,13 @@ static void se_note(web_fg_site_t *s, unsigned char flag, long long t, long long
 
 
 /* The reference's median against the one last announced (#196): first
- * had, it is the anchor; past WEB_FG_K x eph from it, the move is
- * recorded and the median is the anchor from then. Once a
- * WEB_FG_REF_EVERY_S, so the sort is cheap. */
+ * had, it is the anchor; past WEB_FG_K x eph from it at two reference
+ * samples running, the second within that bound of the first, the move
+ * is recorded and the median is the anchor from then. One sample past
+ * is not enough: when a re-sited receiver's fixes reach half the count,
+ * the median of an even count is the midpoint of the two places for one
+ * sample, which would announce half the move and then the other half.
+ * Once a WEB_FG_REF_EVERY_S, so the sort is cheap. */
 static void ref_note(web_fg_site_t *s, long long t, double eph) {
     if (s->nref < WEB_FG_REF_MIN) return;
     double *a = malloc(sizeof(double) * (size_t)s->nref);
@@ -194,11 +198,19 @@ static void ref_note(web_fg_site_t *s, long long t, double eph) {
                 s->anc_lon = lo;
             } else {
                 double d = web_fleet_dist_m(s->anc_lat, s->anc_lon, la, lo);
-                if (d > WEB_FG_K * eph) {
+                if (d <= WEB_FG_K * eph) {
+                    s->has_pend = 0;
+                } else if (s->has_pend && web_fleet_dist_m(s->pend_lat, s->pend_lon, la, lo) <=
+                                              WEB_FG_K * eph) {
                     s->moved_at = t;
                     s->moved_m = d;
                     s->anc_lat = la;
                     s->anc_lon = lo;
+                    s->has_pend = 0;
+                } else {
+                    s->has_pend = 1;
+                    s->pend_lat = la;
+                    s->pend_lon = lo;
                 }
             }
         }

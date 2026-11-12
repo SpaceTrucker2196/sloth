@@ -5479,8 +5479,8 @@ receiver as its last sample said (`fresh`, `incidents` offered,
 600 s, from 6 on: `n`, `lat`, `lon`, `displacement_m` of the fix now,
 `bound_m` = 3 x eph, `outside`), `reference_moved_at` and
 `reference_moved_m` (#196: when the reference last re-anchored, the
-median having moved past the bound from the one last announced, and
-how far; null until then) and `time` (the offset now against the
+median having moved past the bound from the one last announced and
+settled there for two reference samples, and how far; null until then) and `time` (the offset now against the
 median of the hour before, `step_ms`, `stepped` at 1000 ms or more; a
 peer's skew the same way, measured at the request's middle in ms,
 `skew_step_s`, `skew_step_ms`, `rtt_ms`, `skew_moved` at 2 s plus half

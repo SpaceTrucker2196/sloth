@@ -231,7 +231,7 @@ int main(int argc, char **argv) {
                    have_store ? &g_store : NULL);
     /* This host's own radios (#192 I5): named to a peer that asks with
      * own=1, and the transmitters at a known position that calibrate a
-     * peer's receiver. Read from /sys once, before any thread. */
+     * peer's receiver. Read from /sys here, again every 10 min (#196). */
     web_fleet_read_own(&g_fleet, NULL);
     /* GNSS across the sites (#192 I6): this host's receiver, sampled by
      * the pull thread beside each peer's. */

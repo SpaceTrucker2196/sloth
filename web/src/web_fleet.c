@@ -2859,14 +2859,16 @@ int web_fleet_pull_one(web_fleet_t *f, int i, long long now_s) {
     if (i < 0 || i >= f->npeer) return -1;
     web_fleet_peer_t *p = &f->peer[i];
     /* The skew's clock (#196): the wall clock in ms at this start when
-     * now_s is that clock's second (the thread's call), else now_s's
-     * second itself (a test's fixed now); the request's place in time is
-     * then measured on the monotonic clock from here. */
+     * now_s is that clock (the thread's call; within a second, as the
+     * second can turn between the caller's time() and this read), else
+     * now_s's second itself (a test's fixed now); the request's place in
+     * time is then measured on the monotonic clock from here. */
     long long t0 = mono_ms(), base_ms = now_s * 1000;
     {
         struct timespec wt;
         clock_gettime(CLOCK_REALTIME, &wt);
-        if ((long long)wt.tv_sec == now_s) base_ms += wt.tv_nsec / 1000000;
+        long long ws = (long long)wt.tv_sec;
+        if (ws == now_s || ws == now_s + 1) base_ms = ws * 1000 + wt.tv_nsec / 1000000;
     }
     xclk_t ck = { base_ms, 0 };
     pthread_mutex_lock(&f->mu);

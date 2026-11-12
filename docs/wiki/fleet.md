@@ -562,13 +562,17 @@ site:
   eph above 0), the last 1,008 (a week); the coordinate-wise median of them,
   from 6 on (an hour). A move held for more than half the week becomes
   the new reference, and is then no longer flagged as a displacement.
-  It is announced instead (#196): each time the median moves further
-  from the reference last announced than 3 x the newest fix's eph (the
-  site's own bound), the move is recorded (`reference_moved_at`, this
-  site's clock, and `reference_moved_m`) and the moved median becomes
-  the announced reference. A re-siting is therefore said once or twice
-  (the median of an even count lies between the two places, so it can
-  step there on the way), and a slow drag-off is said each time it has
+  It is announced instead (#196): when the median lies further from
+  the reference last announced than 3 x the newest fix's eph (the
+  site's own bound) at two reference samples running, the second within
+  that bound of the first, the move is recorded (`reference_moved_at`,
+  this site's clock, and `reference_moved_m`) and the moved median
+  becomes the announced reference. The second sample is there because
+  the median of an even count lies between the two places for one
+  sample on the way: without it a re-siting would be said twice, at
+  half its distance each time. A re-siting is therefore said once, at
+  its whole distance and one reference sample (600 s) after the median
+  reaches the new place, and a slow drag-off is said each time it has
   moved past the bound. It is in `meta` `fleet.gnssref.<site>`
   (`"<lat> <lon> <moved_at> <moved_m>"`), a row of its own so an
   earlier build still reads `fleet.gnss.<site>`.
@@ -802,8 +806,9 @@ gone before the cut is never fetched. A cut answer makes its site
 undetermined (`cut`) for the times up to it plus the heartbeat, which
 the two-hour list leaves behind on its own, and never `unconfirmed`, so
 the I7 rule that an incomplete read never yields a silence holds without
-a backfill. At beta-site's measured rate (1,047 aircraft in 24 h) only
-the first pull's six hours could reach the 1,000 cap.
+a backfill. At beta-site's measured rate (1,047 aircraft in 24 h) even
+the first pull's six hours (about 260 at that rate) is well under the
+1,000 cap; a cut is a busier site or a read out of `sloth.db`'s budget.
 
 **The store.** `peer_sightings` kind `aircraft` (key the address, label
 the callsign, vendor the category, `extra` the rest) and kind `adsb` (key

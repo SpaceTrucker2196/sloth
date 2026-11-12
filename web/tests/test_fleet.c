@@ -1736,6 +1736,62 @@ static void test_backfill_cut_every_pull(void) {
     here_down(&srv, th);
 }
 
+/* Past WEB_FLEET_BF_SEGS suspended segments (#196): a peer cut at six
+ * pulls running with no page fetched between them (pages_per_pull 0)
+ * holds the paged segment and four suspended, and the sixth cut is
+ * merged into the paged one (the older floor, the new cursor). The five
+ * segments survive a restart through meta (five pairs read back), and
+ * once pages are fetched again every row arrives and nothing stays
+ * running. Seen red with the merge taking the new gap's floor alone
+ * (the fifth pull's 100-row gap was never fetched). */
+static void test_backfill_merge_past_bound(void) {
+    peer_srv_t srv;
+    pthread_t th;
+    here_up(&srv, &th);
+    char sql[1024];
+    snprintf(sql, sizeof(sql),
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<2999)"
+        " INSERT INTO devices (mac,vendor,is_ap,signal_dbm,first_seen,last_seen)"
+        " SELECT printf('02:aa:00:00:%%02x:%%02x', i/256, i%%256),'Bulk',0,-60,%lld,"
+        " %lld-(i%%7) FROM n;", T - 9000, T - 5000);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    F.pages_per_pull = 0;
+    web_fleet_bf_t *b = &F.peer[0].bf[WEB_FK_WIFI];
+    for (int k = 0; k < 7; k++) {
+        long long now = T + 600LL * k;
+        if (k > 0 && k < 6) {
+            snprintf(sql, sizeof(sql),
+                "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<2099)"
+                " INSERT INTO devices (mac,vendor,is_ap,signal_dbm,first_seen,last_seen)"
+                " SELECT printf('02:b%d:00:00:%%02x:%%02x', i/256, i%%256),'New',0,-60,%lld,"
+                " %lld-(i%%3) FROM n;", k, now - 300, now - 200);
+            WT_EQ(sdb_exec(g_db, sql), 0);
+        }
+        if (k == 6) F.pages_per_pull = 64;
+        srv_set(&srv, now, 0);
+        int rc = web_fleet_pull_one(&F, 0, now);
+        if (rc) fprintf(stderr, "    pull %d: %s\n", k, F.peer[0].last_error);
+        WT_EQ(rc, 0);
+        if (k < 5) WT_EQ(b->nold, k);
+        if (k == 5) {
+            WT_EQ(b->active, 1);
+            WT_EQ(b->nold, WEB_FLEET_BF_SEGS);
+            WT_EQ(b->floor, T + 600LL * 3 - WEB_FLEET_OVERLAP_S);
+            memset(F.peer[0].bf, 0, sizeof(F.peer[0].bf));
+            web_fleet_load(&F);
+            WT_EQ(b->active, 1);
+            WT_EQ(b->nold, WEB_FLEET_BF_SEGS);
+            WT_EQ(b->old[0].floor, 0);
+        }
+    }
+    WT_EQ(F.peer[0].page_failures, 0);
+    WT_EQ(b->active, 0);
+    WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi'"),
+          q1(g_db, "SELECT COUNT(*) FROM devices"));
+    WT_EQ(here_q("SELECT COUNT(*) FROM meta WHERE name LIKE 'fleet.backfill.%'"), 0);
+    here_down(&srv, th);
+}
+
 /* The backfill's suspended segments survive a restart through meta, in
  * order, and a value an earlier build wrote (one pair) still reads; a
  * value with more pairs than kept, or a bad cursor anywhere, is not
@@ -3249,12 +3305,14 @@ static void test_gnss_state_survives_a_restart(void) {
  * fixes at A ten times, a reference sample each 600 s, then at B 100 m
  * north. The reference median stays at A through nine fixes at B; at
  * ten of twenty it is the midpoint (the median of an even count), 50 m
- * on, and at eleven it is B, another 50 m: each step past the 13.5 m
- * bound is announced. The route says when and how far, and the
+ * on, and at eleven it is B. The move is announced once, at its whole
+ * 100 m, when the median has settled on B (eleven and twelve), never as
+ * the halfway 50 m. The route says when and how far, and the
  * record survives a restart through meta "fleet.gnssref.beta" (a build
  * before it reads "fleet.gnss.beta" unchanged). Seen red with ref_note()
  * not called (reference_moved_at stayed null while the reference sat on
- * B) and with the move's test made always false (the same). */
+ * B), with the move's test made always false (the same), and with the
+ * settling dropped (50.0 at the midpoint, then 50.0 again). */
 static void test_gnss_reference_moved(void) {
     up();
     web_fleet_peer_cfg_t pc;
@@ -3271,8 +3329,8 @@ static void test_gnss_reference_moved(void) {
     s.lon = -111.86995;
     web_fleet_src_t none;
     memset(&none, 0, sizeof(none));
-    long long t = T - 21 * 600;
-    for (int k = 0; k < 21; k++, t += 600) {
+    long long t = T - 22 * 600;
+    for (int k = 0; k < 22; k++, t += 600) {
         s.t = s.gts = s.fix_ts = t;
         s.lat = 33.32910 + (k < 10 ? 0 : 100.0 / 111194.9);
         web_fg_add(F.fg, sl, &s, 1300);
@@ -3281,9 +3339,10 @@ static void test_gnss_reference_moved(void) {
             WT_HAS(b, "\"reference_moved_at\":null,\"reference_moved_m\":null");
             WT_HAS(b, "\"reference\":{\"n\":19,\"lat\":33.3291000,");
         }
-        if (k >= 19) {
+        if (k == 20) WT_HAS(b, "\"reference_moved_at\":null,\"reference_moved_m\":null");
+        if (k >= 21) {
             char want[96];
-            snprintf(want, sizeof(want), "\"reference_moved_at\":%lld,\"reference_moved_m\":50.0",
+            snprintf(want, sizeof(want), "\"reference_moved_at\":%lld,\"reference_moved_m\":100.0",
                      t);
             WT_HAS(b, want);
         }
@@ -3300,7 +3359,7 @@ static void test_gnss_reference_moved(void) {
     web_fleet_load(&F);
     sl = web_fg_slot(F.fg, "beta");
     WT_EQ(F.fg->site[sl].moved_at, at);
-    WT_ASSERT(fabs(F.fg->site[sl].moved_m - 50.0) < 0.1);
+    WT_ASSERT(fabs(F.fg->site[sl].moved_m - 100.0) < 0.1);
     WT_EQ(F.fg->site[sl].has_anc, 1);
     /* A value it did not write is not taken. */
     web_fg_site_t z;
@@ -3903,6 +3962,7 @@ void run_fleet_tests(void) {
     WT_RUN(test_backfill_after_a_cut);
     WT_RUN(test_backfill_alerts_past_the_scan);
     WT_RUN(test_backfill_cut_every_pull);
+    WT_RUN(test_backfill_merge_past_bound);
     WT_RUN(test_backfill_segments_meta);
     WT_RUN(test_pull_from_an_f1_peer);
     WT_RUN(test_overview_and_shared);
