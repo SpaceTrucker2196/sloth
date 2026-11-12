@@ -1834,7 +1834,8 @@ static void test_g5_sun_phases_at_london(void) {
         WT_ASSERT(!strcmp(g.m[i].kind, "cell"));
         int p = -1;
         for (int k = 0; k < 4; k++) if (!strcmp(g.m[i].tok, SUN_TOKENS[k])) p = k;
-        if (p < 0) { WT_ASSERT(p >= 0); continue; }
+        WT_ASSERT(p >= 0);
+        if (p < 0) continue;
         c[p]++;
         if (no < 8 && (!no || order[no - 1] != p)) order[no++] = p;
         /* Only the token moved: the geometry is the plain strip's. */

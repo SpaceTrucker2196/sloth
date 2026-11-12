@@ -572,7 +572,9 @@ static void test_secret_file_group(void) {
     gid_t g = other_group(&distinct);
     if (!distinct) printf("  (no supplementary group: the file's group is the primary one)\n");
     /* The name resolves to the id; an unknown name is refused. */
-    struct group *gr = getgrgid(g);
+    struct group grb, *gr = NULL;
+    char grbuf[4096];
+    if (getgrgid_r(g, &grb, grbuf, sizeof(grbuf), &gr) != 0) gr = NULL;
     WT_ASSERT(gr != NULL);
     gid_t r = (gid_t)-1;
     if (gr) {

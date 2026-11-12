@@ -1445,7 +1445,7 @@ cppcheck:
 	  --enable=warning,portability,performance,information \
 	  --error-exitcode=1 \
 	  --suppressions-list=tests/cppcheck.supp \
-	  $(CPPCHECK_DEFS) -Iinclude -Isrc -Iresearch -Iweb/src -Iweb/tests -Iweb/tools \
+	  $(CPPCHECK_DEFS) -Iinclude -Isrc -Iresearch -Iweb/src -Iweb/tests -Iweb/tools -Iweb/mcp \
 	  -i src/platform/bsd.c -i src/platform/win32.c -i src/platform/stub.c \
 	  src research web
 

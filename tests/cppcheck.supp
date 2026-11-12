@@ -53,6 +53,9 @@ checkLevelNormal:src/main.c
 readdirCalled:src/capture/probe.c
 readdirCalled:src/platform/linux_pid.c
 readdirCalled:src/platform/linux_dhcp.c
+# sys_io_list_dir() (the host status, 2026-11-11): a local opendir()
+# DIR*, closed in the same function.
+readdirCalled:src/sys_status.c
 # The alert knowledge generator walks research/ at build time and the
 # detail audit test reads src/alerts/, each a single-threaded program
 # with a local DIR* closed in the same function.
