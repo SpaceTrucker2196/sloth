@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "web_alerts.h"
 #include "web_assets.h"
@@ -391,6 +392,18 @@ static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
     web_jw_int(&w, h->sse_clients);
     web_jw_raw(&w, ",\"tick_seq\":");
     web_jw_int(&w, (long long)h->tick_seq);
+    /* The page header names the host it is looking at, so two sites'
+     * pages open side by side cannot be mistaken for each other. */
+    {
+        char hn[256];
+        web_jw_raw(&w, ",\"hostname\":");
+        if (gethostname(hn, sizeof(hn)) == 0) {
+            hn[sizeof(hn) - 1] = '\0';
+            web_jw_str(&w, hn);
+        } else {
+            web_jw_raw(&w, "null");
+        }
+    }
     /* Triage and the FRRS record (web_frrs.h): additive, last, and only
      * when the module is attached, so the answer without it is as it
      * was. */

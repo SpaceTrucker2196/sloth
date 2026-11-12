@@ -5,6 +5,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "sha256.h"
 #include "web_assets.h"
@@ -496,18 +497,24 @@ static void test_health_json(void) {
     WT_EQ(r.status, 200);
     WT_EQ(r.kind, WEB_R_ONESHOT);
     WT_ASSERT(r.body == NULL);
-    static const char body[] =
+    /* The host name is this machine's, so the exact answer is built
+     * with it (a host name needs no JSON escaping). */
+    char hn[256];
+    WT_EQ(gethostname(hn, sizeof(hn)), 0);
+    hn[sizeof(hn) - 1] = '\0';
+    char body[1024];
+    snprintf(body, sizeof(body),
         "{\"service\":\"slothweb\",\"milestone\":\"M6\",\"uptime_s\":42,"
         "\"socket\":\"none\",\"last_record_age_s\":null,"
         "\"db\":\"none\",\"db_schema\":null,\"db_rows\":null,"
         "\"db_supported\":[1,13],\"sql\":false,"
         "\"store\":\"none\",\"anomaly\":null,\"sse_clients\":2,"
-        "\"tick_seq\":17}\n";
+        "\"tick_seq\":17,\"hostname\":\"%s\"}\n", hn);
     WT_HAS(out, "Content-Type: application/json\r\n");
     WT_HAS(out, "Cache-Control: no-store\r\n");
     WT_HAS(out, "Content-Security-Policy: default-src 'none'");
     char cl[64];
-    snprintf(cl, sizeof(cl), "Content-Length: %zu\r\n", sizeof(body) - 1);
+    snprintf(cl, sizeof(cl), "Content-Length: %zu\r\n", strlen(body));
     WT_HAS(out, cl);
     char *sep = strstr(out, "\r\n\r\n");
     WT_ASSERT(sep && !strcmp(sep + 4, body));
@@ -516,7 +523,7 @@ static void test_health_json(void) {
     web_resp_t hr;
     req(&rq, "/api/health", 1);
     WT_EQ(web_route(&rq, &H, 1, head, sizeof(head), &hr), 0);
-    WT_EQ(hr.out_len, r.out_len - (sizeof(body) - 1));
+    WT_EQ(hr.out_len, r.out_len - (strlen(body)));
     WT_ASSERT(!memcmp(head, out, hr.out_len));
 }
 

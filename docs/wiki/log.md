@@ -6981,3 +6981,4 @@ it is not kept. Item 1 (judge the step on gpsd's `TOFF`) still waits on
 the owner's ruling on `?WATCH={"pps":true}`; no newer reference-host
 figures in `noise_verdict`, the host's sloth.db not read. Updated
 [[gnss]], `alert-assessments/GNSS_TIME_JUMP.md`.
+- 2026-11-12 — slothweb page header shows the host name (`/api/health` gains `hostname`) in place of the "M6" milestone label.
