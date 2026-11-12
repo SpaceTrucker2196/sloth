@@ -474,7 +474,7 @@ static void test_drawers(void) {
  * into sloth.db's devices (the export then carried bb:01). */
 static void test_export_carries_no_peer_row(void) {
     up();
-    web_fleet_src_t src = { &SDB, &B, NULL, NULL, NULL };
+    web_fleet_src_t src = { &SDB, &B, NULL, NULL, NULL, NULL };
     char *body = NULL;
     size_t len = 0;
     int st = 0;
