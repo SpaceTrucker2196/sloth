@@ -175,6 +175,50 @@ static void se_note(web_fg_site_t *s, unsigned char flag, long long t, long long
     }
 }
 
+
+/* The reference's median against the one last announced (#196): first
+ * had, it is the anchor; past WEB_FG_K x eph from it at two reference
+ * samples running, the second within that bound of the first, the move
+ * is recorded and the median is the anchor from then. One sample past
+ * is not enough: when a re-sited receiver's fixes reach half the count,
+ * the median of an even count is the midpoint of the two places for one
+ * sample, which would announce half the move and then the other half.
+ * Once a WEB_FG_REF_EVERY_S, so the sort is cheap. */
+static void ref_note(web_fg_site_t *s, long long t, double eph) {
+    if (s->nref < WEB_FG_REF_MIN) return;
+    double *a = malloc(sizeof(double) * (size_t)s->nref);
+    double *b = malloc(sizeof(double) * (size_t)s->nref);
+    if (a && b) {
+        for (int i = 0; i < s->nref; i++) { a[i] = s->ref_lat[i]; b[i] = s->ref_lon[i]; }
+        double la = med_d(a, s->nref), lo = med_d(b, s->nref);
+        if (isfinite(la) && isfinite(lo)) {
+            if (!s->has_anc) {
+                s->has_anc = 1;
+                s->anc_lat = la;
+                s->anc_lon = lo;
+            } else {
+                double d = web_fleet_dist_m(s->anc_lat, s->anc_lon, la, lo);
+                if (d <= WEB_FG_K * eph) {
+                    s->has_pend = 0;
+                } else if (s->has_pend && web_fleet_dist_m(s->pend_lat, s->pend_lon, la, lo) <=
+                                              WEB_FG_K * eph) {
+                    s->moved_at = t;
+                    s->moved_m = d;
+                    s->anc_lat = la;
+                    s->anc_lon = lo;
+                    s->has_pend = 0;
+                } else {
+                    s->has_pend = 1;
+                    s->pend_lat = la;
+                    s->pend_lon = lo;
+                }
+            }
+        }
+    }
+    free(a);
+    free(b);
+}
+
 void web_fg_add(web_fg_t *g, int slot, const web_fg_sample_t *smp, long long gap_s) {
     if (!g || slot < 0 || slot >= WEB_FG_SITES) return;
     web_fg_site_t *s = &g->site[slot];
@@ -196,6 +240,7 @@ void web_fg_add(web_fg_t *g, int slot, const web_fg_sample_t *smp, long long gap
         s->rhead = (s->rhead + 1) % WEB_FG_REF;
         if (s->nref < WEB_FG_REF) s->nref++;
         s->last_ref = r.t;
+        ref_note(s, r.t, r.eph);
     }
     s->dirty = 1;
 }
@@ -312,6 +357,35 @@ int web_fg_state_parse(web_fg_site_t *s, const char *text) {
     return ok ? 0 : -1;
 }
 
+int web_fg_ref_text(const web_fg_site_t *s, char *out, size_t cap) {
+    if (!s->has_anc) return -1;
+    int n = snprintf(out, cap, "%.7f %.7f %lld %.1f", s->anc_lat, s->anc_lon, s->moved_at,
+                     s->moved_m);
+    return n < 0 || (size_t)n >= cap ? -1 : n;
+}
+
+int web_fg_ref_parse(web_fg_site_t *s, const char *text) {
+    if (!text || !*text) return -1;
+    char *e;
+    const char *p = text;
+    double la = strtod(p, &e);
+    if (e == p || *e != ' ' || !isfinite(la) || la < -90 || la > 90) return -1;
+    p = e;
+    double lo = strtod(p, &e);
+    if (e == p || *e != ' ' || !isfinite(lo) || lo < -180 || lo > 180) return -1;
+    p = e;
+    long long mt = 0;
+    if (take_ll(&p, 0, T_MAX, &mt) != 0) return -1;
+    double mm = 0;
+    if (take_d(&p, 0, 4.1e7, &mm) != 0 || *p) return -1;
+    s->has_anc = 1;
+    s->anc_lat = la;
+    s->anc_lon = lo;
+    s->moved_at = mt;
+    s->moved_m = mm;
+    return 0;
+}
+
 #define STATE_MAX (64u << 10)
 
 void web_fg_meta_load(web_fleet_t *f) {
@@ -334,6 +408,15 @@ void web_fg_meta_load(web_fleet_t *f) {
         pthread_mutex_lock(&f->mu);
         int sl = web_fg_slot(f->fg, nm);
         if (sl >= 0) web_fg_state_parse(&f->fg->site[sl], v);
+        pthread_mutex_unlock(&f->mu);
+        /* The announced reference, its own row (#196). */
+        snprintf(key, sizeof(key), "fleet.gnssref.%s", nm);
+        sqlite3_reset(q);
+        sqlite3_bind_text(q, 1, key, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(q) != SQLITE_ROW) continue;
+        v = (const char *)sqlite3_column_text(q, 0);
+        pthread_mutex_lock(&f->mu);
+        if (sl >= 0) web_fg_ref_parse(&f->fg->site[sl], v);
         pthread_mutex_unlock(&f->mu);
     }
     sqlite3_finalize(q);
@@ -363,8 +446,11 @@ static void meta_save(web_fleet_t *f, long long now_s) {
         int go = s->used && s->dirty && (s->saved_at == 0 ||
                                          now_s - s->saved_at >= WEB_FG_REF_EVERY_S);
         int n = go ? web_fg_state_text(s, buf, STATE_MAX) : -1;
+        char rv[96], rkey[64];
+        int rn = n >= 0 ? web_fg_ref_text(s, rv, sizeof(rv)) : -1;
         if (n >= 0) {
             snprintf(key, sizeof(key), "fleet.gnss.%s", s->name);
+            snprintf(rkey, sizeof(rkey), "fleet.gnssref.%s", s->name);
             s->dirty = 0;
             s->saved_at = now_s;
         }
@@ -373,6 +459,11 @@ static void meta_save(web_fleet_t *f, long long now_s) {
         sqlite3_reset(up);
         sqlite3_bind_text(up, 1, key, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(up, 2, buf, n, SQLITE_TRANSIENT);
+        sqlite3_step(up);
+        if (rn < 0) continue;
+        sqlite3_reset(up);
+        sqlite3_bind_text(up, 1, rkey, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(up, 2, rv, rn, SQLITE_TRANSIENT);
         sqlite3_step(up);
     }
     sqlite3_finalize(up);
@@ -514,6 +605,8 @@ typedef struct {
     int       has_ref;
     int       nref;
     double    ref_lat, ref_lon;
+    long long moved_at;              /* the reference re-anchored (#196), 0 never */
+    double    moved_m;
     int       has_cur;               /* a fresh fix with eph */
     web_fg_sample_t cur;
     double    disp, bound;
@@ -522,7 +615,9 @@ typedef struct {
     long long off_ref, off_now, off_step;
     int       stepped;
     int       has_sref;
-    long long skew_ref, skew_now, skew_step;
+    long long skew_ref, skew_now, skew_step;     /* s, rounded from the ms */
+    long long skew_step_ms, rtt_ms;              /* rtt_ms -1: not measured */
+    int       skew_moved;
     int       nrx, nev;
     long long rx_s[WEB_FG_SPANS], rx_e[WEB_FG_SPANS], ev_s[WEB_FG_SPANS], ev_e[WEB_FG_SPANS];
     web_fg_cov_t cov;
@@ -569,6 +664,11 @@ static void sample_events(gctx_t *x, int si, const web_fg_site_t *fs) {
         add_event(x, si, W[fs->se_w[i] & 1], fs->se_a[i], fs->se_b[i], 0, 1);
 }
 
+/* ms to the nearest whole second, halves away from zero. */
+static long long round_s(long long ms) {
+    return ms >= 0 ? (ms + 500) / 1000 : -((-ms + 500) / 1000);
+}
+
 /* One site's figures from its samples, under f->mu. */
 static void site_figures(gctx_t *x, int si, const web_fg_site_t *fs) {
     gsite_t *g = &x->s[si];
@@ -582,6 +682,8 @@ static void site_figures(gctx_t *x, int si, const web_fg_site_t *fs) {
         g->has_now = 1;
         g->now = fs->ring[(fs->head + WEB_FG_RING - 1) % WEB_FG_RING];
     }
+    g->moved_at = fs->moved_at;
+    g->moved_m = fs->moved_m;
     if (fs->nref >= WEB_FG_REF_MIN) {
         double *a = malloc(sizeof(double) * (size_t)fs->nref);
         double *b = malloc(sizeof(double) * (size_t)fs->nref);
@@ -618,7 +720,7 @@ static void site_figures(gctx_t *x, int si, const web_fg_site_t *fs) {
             const web_fg_sample_t *r = &fs->ring[(fs->head + WEB_FG_RING - fs->n + j) % WEB_FG_RING];
             if (!r->fresh || r->t < g->now.t - WEB_FG_HIST_S || r->t >= g->now.t) continue;
             if (r->has_off) o[no++] = r->off_ms;
-            k[nk++] = r->skew;
+            k[nk++] = r->has_ms ? r->skew_ms : r->skew * 1000;
         }
         if (g->now.has_off && no >= WEB_FG_HIST_MIN) {
             g->has_tref = 1;
@@ -627,11 +729,21 @@ static void site_figures(gctx_t *x, int si, const web_fg_site_t *fs) {
             g->off_step = g->off_now - g->off_ref;
             g->stepped = g->off_step >= WEB_FG_TIME_STEP_MS || g->off_step <= -WEB_FG_TIME_STEP_MS;
         }
+        /* The skew in ms against its median of the hour before; a step
+         * counts at WEB_FG_SKEW_STEP_S plus half the newest request's
+         * round trip, the most the request's own time can move it
+         * (#196: a slow pull no longer reads as a clock that moved). */
         if (si > 0 && nk >= WEB_FG_HIST_MIN) {
+            long long ref = med_ll(k, nk);
+            long long now = g->now.has_ms ? g->now.skew_ms : g->now.skew * 1000;
             g->has_sref = 1;
-            g->skew_ref = med_ll(k, nk);
-            g->skew_now = g->now.skew;
+            g->skew_step_ms = now - ref;
+            g->rtt_ms = g->now.has_ms ? g->now.rtt_ms : -1;
+            g->skew_ref = round_s(ref);
+            g->skew_now = round_s(now);
             g->skew_step = g->skew_now - g->skew_ref;
+            long long lim = WEB_FG_SKEW_STEP_S * 1000LL + (g->rtt_ms > 0 ? g->rtt_ms / 2 : 0);
+            g->skew_moved = g->skew_step_ms >= lim || g->skew_step_ms <= -lim;
         }
         free(o);
         free(k);
@@ -932,6 +1044,10 @@ static void site_json(web_jw_t *w, const gctx_t *x, int i, long long now_s) {
     } else {
         web_jw_raw(w, "null");
     }
+    /* When the reference last moved and how far (#196): a move held past
+     * half the week becomes the reference, and this says it did. */
+    web_jw_raw(w, ",\"reference_moved_at\":"); jll(w, g->moved_at > 0, g->moved_at);
+    web_jw_raw(w, ",\"reference_moved_m\":");  jnum(w, g->moved_at > 0, g->moved_m, 1);
     web_jw_raw(w, ",\"time\":");
     if (g->has_tref || g->has_sref) {
         web_jw_raw(w, "{\"ref_ms\":");   jll(w, g->has_tref, g->off_ref);
@@ -940,9 +1056,10 @@ static void site_json(web_jw_t *w, const gctx_t *x, int i, long long now_s) {
         web_jw_raw(w, ",\"stepped\":");  web_jw_raw(w, g->has_tref && g->stepped ? "true" : "false");
         web_jw_raw(w, ",\"skew_ref_s\":");  jll(w, g->has_sref, g->skew_ref);
         web_jw_raw(w, ",\"skew_step_s\":"); jll(w, g->has_sref, g->skew_step);
+        web_jw_raw(w, ",\"skew_step_ms\":"); jll(w, g->has_sref, g->skew_step_ms);
+        web_jw_raw(w, ",\"rtt_ms\":");      jll(w, g->has_sref && g->rtt_ms >= 0, g->rtt_ms);
         web_jw_raw(w, ",\"skew_moved\":");
-        web_jw_raw(w, g->has_sref && (g->skew_step >= WEB_FG_SKEW_STEP_S ||
-                                      g->skew_step <= -WEB_FG_SKEW_STEP_S) ? "true" : "false");
+        web_jw_raw(w, g->has_sref && g->skew_moved ? "true" : "false");
         web_jw_raw(w, "}");
     } else {
         web_jw_raw(w, "null");

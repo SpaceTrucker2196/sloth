@@ -267,10 +267,7 @@ static void sites_load(web_fleet_t *f, const web_fleet_src_t *src, long long now
     me->has_pos = loc.has;
     me->lat = loc.lat;
     me->lon = loc.lon;
-    if (f) {
-        me->nown = f->nown;
-        memcpy(me->own, f->own, sizeof(me->own));
-    }
+    if (f) me->nown = web_fleet_own_get(f, me->own);
 #ifdef WITH_SQLITE
     web_store_t *s = f ? f->store : NULL;
     if (s && s->rd) {

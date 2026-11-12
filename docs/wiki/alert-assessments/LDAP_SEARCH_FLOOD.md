@@ -1,7 +1,7 @@
 ---
 type: LDAP_SEARCH_FLOOD
 technique: T1087.002
-rule_file: src/alerts/rules_wired.c:1024 rule_ldap_search_flood()
+rule_file: src/alerts/rules_wired.c:1026 rule_ldap_search_flood()
 count_semantics: per rule evaluation - one increment per alerts_update() tick (poll.c:310; the wait between ticks is at most POLL_MS 250 ms, include/sloth.h:28 - the loop wakes early on alert fires and --refresh-ms can shorten it, so 4 ticks/s is a floor, not a fixed cadence) for each client IP in the 64-row ldap_event table whose lifetime search_count is at or above the threshold; the counter is never windowed down and the table has no time expiry (STAB_OLDEST, src/ldap_snoop.c:19-20, no stab_expire call), so once a source crosses 50 it fires every tick until 64 newer LDAP clients evict its row, and engine count = (qualifying sources) x (ticks they remain)
 severity_assessment: agree, with one caveat - CRIT fits what the rule names, bulk directory collection from one workstation, which is the first step of almost every AD intrusion [1], [2]; the caveat is that the threshold is a lifetime total per source, not a rate, so any long-lived legitimate bulk reader (identity sync, monitoring, backup, address book) crosses it eventually and then stands as a permanent CRIT, and the rule has no way to tell the two apart [1]
 false_positive_risk: medium - legitimate bulk readers are common and the corpus says every one of them will trigger this rule [1]; what separates them from SharpHound is the account doing the reading, which is in the directory's logs rather than on the wire, and the lifetime counter means even a slow reader eventually qualifies

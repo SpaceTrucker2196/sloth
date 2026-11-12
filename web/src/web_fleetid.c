@@ -942,7 +942,6 @@ static void text_of(sqlite3_stmt *st, int col, char *out, size_t cap) {
 /* Each peer's site row and own networks (first pass: what every site
  * names is needed before the probes are read). */
 static void peer_heads(fctx_t *x, web_store_t *st, long long now_s) {
-    (void)now_s;
     pthread_mutex_lock(&st->rmu);
     sqlite3_stmt *ps = NULL, *mt = NULL, *on = NULL;
     int ok = sqlite3_prepare_v2(st->rd, "SELECT label,lat,lon,remote_ts,last_ok FROM peer_sites"
@@ -980,8 +979,13 @@ static void peer_heads(fctx_t *x, web_store_t *st, long long now_s) {
                 s->offered = 1;
                 s->own_ts = g - x->skew[i];
                 x->own_n[i] = cnt;
+                /* Named more than a day ago and not since (#196): the
+                 * peer stopped offering them or stopped answering; its
+                 * networks are no longer taken as its own. */
+                s->own_expired = now_s - s->own_ts > WEB_FLEET_OWN_STALE_S;
             }
         }
+        if (s->own_expired) continue;
         sqlite3_reset(on);
         sqlite3_bind_text(on, 1, s->name, -1, SQLITE_TRANSIENT);
         while (sqlite3_step(on) == SQLITE_ROW) {
@@ -1216,6 +1220,7 @@ static void site_json(web_jw_t *w, const fctx_t *x, int i, long long now_s) {
     web_jw_raw(w, ",\"own_age_s\":");
     if (s->offered && !s->self) web_jw_int(w, now_s > s->own_ts ? now_s - s->own_ts : 0);
     else web_jw_raw(w, s->self ? "0" : "null");
+    web_jw_raw(w, ",\"own_expired\":"); web_jw_raw(w, s->own_expired ? "true" : "false");
     web_jw_raw(w, ",\"own_ssids\":[");
     for (int k = 0; k < s->mine.nssid; k++) {
         if (k) web_jw_raw(w, ",");

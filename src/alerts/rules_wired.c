@@ -19,6 +19,7 @@
 #include "beacon_detect.h"
 #include "dga.h"
 #include "alert_key.h"
+#include "http_log.h"   /* http_entry_is_request() — the ring's halves (#197) */
 #include "rules.h"
 #include "engine_internal.h"
 
@@ -282,17 +283,13 @@ static const char *attack_path_match(const char *path) {
     return NULL;
 }
 
-/* Requests only (#197). A paired response carries its request's host
- * and path (http_log_pair_response()) but its src is the server, so
- * matching it re-fired every probe as path:<server>:<label>: the victim
- * named as its own attacker at CRIT, with match_ip, and so the per-alert
- * pcap and ALERT_TAGGED, pointed at the victim. The asking is the
- * finding and the client is the one who asked; the response is not a
- * second actor. */
 void rule_attack_path(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->http_log_count; i++) {
         const http_log_entry_t *e = &s->http_log[i];
-        if (e->is_response) continue;
+        /* The path names who asked, so only the request half can be
+         * attributed: see http_entry_is_request() in src/http_log.h
+         * for what a response's src and path mean together (#197). */
+        if (!http_entry_is_request(e)) continue;
         const char *label = attack_path_match(e->path);
         if (!label) continue;
         char key[ALERT_KEY_LEN];
@@ -380,15 +377,20 @@ void rule_attack_tool_ua(const sloth_state_t *s, time_t now) {
     if (n > MAX_HTTP_LOG) n = MAX_HTTP_LOG;
     /* The needle walk is the expensive part; one pass, then pointer
      * compares (labels are table entries, so equal labels are equal
-     * pointers). */
+     * pointers).
+     *
+     * Request half only, for the same reason as rule_attack_path():
+     * the tool is attributed to the endpoint that ran it. A response
+     * off the wire carries no User-Agent — parse_response never fills
+     * the field and pair_response copies only host and path — so this
+     * is explicit rather than load-bearing today, and it keeps the
+     * grouping loops below (which key on src) from ever counting a
+     * server's row as one of its client's requests (#197). */
     const char *labels[MAX_HTTP_LOG];
-    /* Requests only (#197): the response parser keeps no User-Agent, so
-     * a response cannot match today, but its src is the server and a
-     * parser that later kept a header there must not key the server as
-     * the tool. */
     for (int i = 0; i < n; i++)
-        labels[i] = s->http_log[i].is_response ? NULL
-                  : attack_tool_ua_match(s->http_log[i].user_agent);
+        labels[i] = http_entry_is_request(&s->http_log[i])
+                        ? attack_tool_ua_match(s->http_log[i].user_agent)
+                        : NULL;
 
     for (int i = 0; i < n; i++) {
         const http_log_entry_t *e = &s->http_log[i];

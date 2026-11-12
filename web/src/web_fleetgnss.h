@@ -26,7 +26,12 @@
  *             event while its coverage stays.
  *   reference at most one fix a WEB_FG_REF_EVERY_S, the last WEB_FG_REF
  *             of them (a week): the site's reference position is their
- *             coordinate-wise median, used from WEB_FG_REF_MIN on.
+ *             coordinate-wise median, used from WEB_FG_REF_MIN on. A
+ *             move held past half the week becomes the reference; when
+ *             the median has moved past the newest fix's bound and
+ *             settled there it is recorded (moved_at, moved_m) and the
+ *             route says so, so a re-anchored reference is never silent
+ *             (#196).
  *
  * All three are kept in slothweb.db's meta table ("fleet.gnss.<site>"), so
  * a restart keeps them; no schema step. The ring is not: the C/N0 and
@@ -97,7 +102,7 @@
 #define WEB_FG_JAM_IND       128
 #define WEB_FG_HIST_S        3600
 #define WEB_FG_HIST_MIN      10
-#define WEB_FG_SKEW_STEP_S   2
+#define WEB_FG_SKEW_STEP_S   2          /* plus half the newest request's round trip */
 #define WEB_FG_EVENTS_S      (7LL * 86400)
 #define WEB_FG_EV_MAX        512
 #define WEB_FG_REGION_KM_DEF 50
@@ -121,6 +126,12 @@ typedef struct {
     long long t;                     /* this site's clock at the read */
     long long gts;                   /* the summary's ts, the site's clock */
     long long skew;                  /* the site's clock less this one's (0 here) */
+    /* The skew measured (#196): the peer's generated, taken as the middle
+     * of its whole second, less this site's clock at the middle of the
+     * request, and the request's round trip (monotonic). has_ms 0: a
+     * sample without them (this site's own, a test's), judged on skew. */
+    int       has_ms;
+    long long skew_ms, rtt_ms;
     int       fresh;                 /* summary at most WEB_FG_FRESH_S old */
     int       evok;                  /* sloth.db open and incidents offered */
     char      state[16];
@@ -150,6 +161,22 @@ typedef struct {
     long long ref_ts[WEB_FG_REF];
     double    ref_lat[WEB_FG_REF], ref_lon[WEB_FG_REF];
     long long last_ref, saved_at;
+    /* The reference as last announced (#196): the median when it was
+     * first had, moved to the median again once that median lies
+     * further from it than WEB_FG_K x the newest fix's eph and has
+     * settled there (the median a reference sample before within that
+     * bound of it too), which is a held move turning into the new
+     * reference (half the week's fixes: about 3.5 days). Settled, so a
+     * re-siting is said once and at its whole distance: the median of an
+     * even count stops for one sample halfway between the two places.
+     * moved_at the sample's time (0 never), moved_m how far. Kept in
+     * meta "fleet.gnssref.<site>"; pend (the unsettled median) is not. */
+    int       has_anc;
+    double    anc_lat, anc_lon;
+    long long moved_at;
+    double    moved_m;
+    int       has_pend;
+    double    pend_lat, pend_lon;
     /* The sample events, oldest first: [a, b] and the word (0 JAM_IND,
      * 1 CN0_DROP); se_open the run each word's next flagged sample may
      * extend (-1 none). */
@@ -180,6 +207,11 @@ void web_fg_add(web_fg_t *g, int slot, const web_fg_sample_t *s, long long gap_s
  * it was). */
 int  web_fg_state_text(const web_fg_site_t *s, char *out, size_t cap);
 int  web_fg_state_parse(web_fg_site_t *s, const char *text);
+/* The announced reference (#196): "<lat> <lon> <moved_at> <moved_m>"
+ * and back (0, -1 left as it was); a separate meta row, so a build
+ * before it still reads the state above. */
+int  web_fg_ref_text(const web_fg_site_t *s, char *out, size_t cap);
+int  web_fg_ref_parse(web_fg_site_t *s, const char *text);
 
 /* An event to classify. a, b and the coverage are this site's clock. */
 typedef struct {

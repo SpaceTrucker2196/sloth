@@ -1,7 +1,7 @@
 ---
 type: DNS_TUNNEL
 technique: T1071.004
-rule_file: src/alerts/rules_wired.c:473 (rule_dns_tunnel)
+rule_file: src/alerts/rules_wired.c:475 (rule_dns_tunnel)
 count_semantics: per poll tick (default 250 ms) per 2-label parent domain whose recent-query bucket meets both thresholds; `count` aliases `evaluations` (engine.c:478-479). Not per query - the rule re-buckets the DNS log each tick and the parent fires again while the window still holds enough qualifying queries. The DNS log is a 256-entry ring (MAX_DNS_LOG), so only the last 256 queries are ever in scope
 severity_assessment: agree - CRIT. A parent domain receiving a sustained burst of long high-entropy subdomains is a strong single-source signal, and the detail is honest about being a shape not an intent
 false_positive_risk: medium - CDNs, anti-abuse/reputation services, some telemetry and a few security products legitimately emit long encoded subdomains to one parent; the source corpus warns of exactly this

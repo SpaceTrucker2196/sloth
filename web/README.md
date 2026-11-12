@@ -5501,6 +5501,10 @@ is never cut. The state is in slothweb.db's `meta` table
 transaction that stores the rows, and read back at start. A page's
 refusal is `backfill KIND: ...` in `last_error` and leaves the
 backfill to the next pull, as does a page that did not move its cursor.
+A whole answer cut again while a backfill runs (#196) suspends the
+segment being paged with its own cursor and pages the new gap first,
+then resumes it, so a peer cut at every pull still gets through its
+backlog (at most 4 suspended; the meta value lists every segment).
 An alert answer whose reader's 20,000-row scan did not reach the floor
 is cut too, its cursor the scan's oldest `last_seen` (`<ts>~`), and a
 page scans only the rows at or before its cursor. A peer whose export
@@ -5552,8 +5556,9 @@ counted by kind.
 `configured`, `peers` (each `peer_sites` row or configured peer: its
 position, `last_ok_age_s`, `last_attempt_age_s`, `last_error`, `skew_s`
 = the peer's clock at its last good answer less this one's then,
+`rtt_ms` = the last good pull's round trip (#196),
 `remote_version`, `rows_last`, `counts` by kind, `backfill` per running
-kind with `floor` and `cursor`, `pages`, `page_failures`, `pages_refused`, `distance_m`),
+kind with `floor`, `cursor` and `segments`, `pages`, `page_failures`, `pages_refused`, `distance_m`),
 `calibration` (#192 I5: each site with a position, its count of own
 radios, and its receiver's `state`, `offset_db` and links, as below)
 and `distances` (every pair of sites with a position, haversine metres,
@@ -5591,7 +5596,8 @@ that has not settled within 500 damped steps is no candidate. `sites` lists each
 with a position, `too_far` (none other within 2 km) and its receiver's
 `calibration`: from another site's own radio heard at a known distance
 (`own=1` on the export names a site's radios, read from
-`/sys/class/net` at start), an offset bounded at +/-20 dB applied to
+`/sys/class/net` at start and every 10 minutes after, every entry
+looked at; #196), an offset bounded at +/-20 dB applied to
 2.4 GHz Wi-Fi rows only. Then `scanned`, `keys`, `looked_up`,
 `unpaired`, `stale`, `partial`. The model, the band and what it is worth
 at a 17 m baseline: [docs/wiki/fleet.md](../docs/wiki/fleet.md).
@@ -5613,9 +5619,14 @@ receiver as its last sample said (`fresh`, `incidents` offered,
 `time_offset_ms`, `skew_s`, the `fix` with `eph` and `hdop`), its
 `reference` (the coordinate-wise median of up to a week of fixes, one a
 600 s, from 6 on: `n`, `lat`, `lon`, `displacement_m` of the fix now,
-`bound_m` = 3 x eph, `outside`) and `time` (the offset now against the
+`bound_m` = 3 x eph, `outside`), `reference_moved_at` and
+`reference_moved_m` (#196: when the reference last re-anchored, the
+median having moved past the bound from the one last announced and
+settled there for two reference samples, and how far; null until then) and `time` (the offset now against the
 median of the hour before, `step_ms`, `stepped` at 1000 ms or more; a
-peer's skew the same way, `skew_step_s`, `skew_moved` at 2 s or more).
+peer's skew the same way, measured at the request's middle in ms,
+`skew_step_s`, `skew_step_ms`, `rtt_ms`, `skew_moved` at 2 s plus half
+the round trip or more).
 `baseline`: each pair, `ref_m` between the references, `now_m` between
 the fixes now, `delta_m`, `bound_m` = 3 x (eph + eph), `verdict`
 (`within`, `outside`, `undetermined` with `why`) and `moved` (each site
@@ -5700,7 +5711,9 @@ and `basis`. `/api/fleet/overview` gains `findings`: the counts,
 
 The export's `ident=1` (#192 I4) adds an `own_net` line per network
 `--my-ssid` and `--my-bssid` name (the end line's `own_net` counts
-them, and an answer that does replaces what the peer named before), and
+them, and an answer that does replaces what the peer named before; a
+day after the peer's last such answer they are no longer counted,
+`own_expired`, and its rows are dropped: #196), and
 to every `ap` line `ie_fp`, `vie_fp` (the beacon's IE-order and
 vendor-IE hashes from the FRRS ledger), `wps_manuf`, `wps_model`,
 `wps_num`, and `attacks`, `attack_first`, `attack_last` (the

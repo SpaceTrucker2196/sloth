@@ -1,7 +1,7 @@
 ---
 type: ARP_SPOOF
 technique: T1557.002
-rule_file: src/alerts/rules_wired.c:121 rule_arp_spoof()
+rule_file: src/alerts/rules_wired.c:122 rule_arp_spoof()
 count_semantics: per rule evaluation, but this rule fires only on change - one increment per alerts_update() tick (at most POLL_MS 250 ms apart) on which an IP in the sensor's own /proc/net/arp shows a MAC different from the recorded baseline; the rule then overwrites the baseline (rules_wired.c:160) so a single change yields count 1 and the incident idles 300 s to resolve; a binding that flaps re-fires on each tick it is seen to differ from the last recorded MAC, so count = number of observed flips, not ticks open
 severity_assessment: too high as a blanket - CRIT is warranted when the contested IP is the sensor's default gateway or resolver; a DHCP lease moved to a new machine, a VRRP/HSRP failover, or a dual-homed host produces the identical observation and is not an attack
 false_positive_risk: high - "one IP, two MACs over time" is also what lease reassignment, first-hop redundancy and a laptop moving wired-to-wireless produce by design

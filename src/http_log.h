@@ -66,6 +66,37 @@ int http_log_pair_response(http_log_entry_t *resp);
  * copy of the literal that could drift from it. */
 #define HTTP_FLOW_MAX 64
 
+/* ── Direction is part of a record, and so is attribution (#197) ──
+ *
+ * One ring holds both halves of a conversation: requests from
+ * http_log_parse(), responses from http_log_parse_response(). On a
+ * request, `src` is the endpoint that chose `host` and `path`. On a
+ * response, `src` is the **server** — and http_log_pair_response() has
+ * deliberately copied the request's `host` and `path` onto it, so those
+ * three fields describe two different endpoints. That is the point of
+ * the pairing and it is not a defect; what is a defect is reading the
+ * three together without asking which half you have.
+ *
+ * So a consumer that attributes a path or a host to the endpoint that
+ * *asked for it* walks requests only, and says so with this predicate.
+ * #197 is what it cost not to: rule_attack_path() keyed `path:%s` on
+ * `e->src` for every ring entry, so every malicious request fired a
+ * second CRIT naming the victim as its own attacker — the ring is
+ * newest-first, so the victim's row was the one the operator saw first
+ * — and pointed `match_ip`, and with it `--pcap-dir` export and the
+ * device's ALERT_TAGGED risk bit, at the victim.
+ *
+ * A predicate rather than a filter inside the ring, because the ring is
+ * right to carry both: the [h] view renders them interleaved and
+ * cp_check_response() wants responses and nothing else. The contract is
+ * "say which half you mean", and this is how a caller says it. It is
+ * not a claim that a response's other fields are meaningless — status,
+ * body and the paired path are exactly why #71 recorded responses. */
+static inline int http_entry_is_request(const http_log_entry_t *e)
+{
+    return e && !e->is_response;
+}
+
 /* Append entry to the rolling log (thread-safe). */
 void http_log_record(const http_log_entry_t *e);
 

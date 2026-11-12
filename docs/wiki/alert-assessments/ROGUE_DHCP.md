@@ -1,7 +1,7 @@
 ---
 type: ROGUE_DHCP
 technique: T1557
-rule_file: src/alerts/rules_wired.c:847 rule_rogue_dhcp()
+rule_file: src/alerts/rules_wired.c:849 rule_rogue_dhcp()
 count_semantics: per rule evaluation - one increment per alerts_update() tick (at most 250 ms apart) while two or more distinct DHCP server identifiers (option 54) are present across the 128-row per-client DHCP event table; the sorted server set is the dedup key, so one incident persists while both identifiers remain on any client row
 severity_assessment: too high as a blanket - CRIT fits a server nobody deployed handing out a gateway or resolver; RFC 2131 explicitly permits multiple overlapping servers for reliability, and the rule has no baseline to tell the two apart
 false_positive_risk: medium - a failover pair or split scope fires permanently; a home router or phone hotspot plugged in by mistake fires too and is the ordinary case, not an adversary

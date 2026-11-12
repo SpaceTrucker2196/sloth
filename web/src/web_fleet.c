@@ -41,6 +41,7 @@
 #endif
 
 #define T_MAX 4102444800LL           /* 2100-01-01: no clock reads later */
+static void own_csv_copy(const char *csv, char *out, size_t cap);   /* the own radios, #196 */
 #define AFTER_K(q, k) ((q).only == (k) && (q).has_after)
 
 /* ── the members ───────────────────────────────────────────────────── */
@@ -937,7 +938,10 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
     x.soft = WEB_FLEET_EXPORT_MAX - 4096;
     x.rec = rec;
     x.alert_after_rid = LLONG_MAX;
-    x.own_csv = src->own_csv;
+    /* The own-radio list may be re-read meanwhile (#196): a copy. */
+    char own_copy[WEB_FLEET_OWN_MAX * WEB_FLEET_MAC_SZ];
+    own_csv_copy(src->own_csv, own_copy, sizeof(own_copy));
+    x.own_csv = src->own_csv ? own_copy : NULL;
     x.frrs = src->frrs;
     if (xq.only == WEB_FK_ALERT && xq.has_after && xq.after_tok[0]) {
         long long r = 0;
@@ -1459,41 +1463,46 @@ int web_fleet_own_parse(const char *csv, char own[][WEB_FLEET_MAC_SZ], int *n) {
     return 0;
 }
 
-static int by_str(const void *a, const void *b) {
-    return strcmp(*(const char *const *)a, *(const char *const *)b);
+/* The own-radio list (#196): written by web_fleet_read_own() and
+ * web_fleet_own_tick(), read by the export (any HTTP thread) and the
+ * locate route, so every access goes under this lock. One per process:
+ * the export is handed the list, not the fleet. */
+static pthread_mutex_t own_mu = PTHREAD_MUTEX_INITIALIZER;
+static web_fleet_t *own_owner;
+
+typedef struct {
+    char name[64];
+    char mac[WEB_FLEET_MAC_SZ];
+} own_cand_t;
+
+static int by_cand(const void *a, const void *b) {
+    return strcmp(((const own_cand_t *)a)->name, ((const own_cand_t *)b)->name);
 }
 
-int web_fleet_read_own(web_fleet_t *f, const char *sysfs) {
-    f->nown = 0;
-    f->own_csv[0] = '\0';
+/* The read itself, into own/csv: every directory entry is looked at
+ * (#196: a host with many container veths had its radios past the first
+ * 64 entries readdir() gave), and only the physical interfaces, which
+ * are few, are kept and sorted. */
+static int own_scan(const char *sysfs, char own[][WEB_FLEET_MAC_SZ], char *csv, size_t csvsz) {
+    int nown = 0;
+    csv[0] = '\0';
     char dir[256];
-    snprintf(dir, sizeof(dir), "%s/class/net", sysfs ? sysfs : "/sys");
+    snprintf(dir, sizeof(dir), "%s/class/net", sysfs[0] ? sysfs : "/sys");
     DIR *d = opendir(dir);
     if (!d) return 0;
-    /* Interface names in order, so the list does not move between
-     * starts: at most 64 looked at. */
-    char names[64][64];
-    const char *ord[64] = { 0 };
-    int nn = 0;
+    own_cand_t *c = NULL;
+    size_t nc = 0, cap = 0;
     struct dirent *e;
-    while ((e = readdir(d)) && nn < 64) {
+    while ((e = readdir(d))) {
         size_t l = strlen(e->d_name);
-        if (e->d_name[0] == '.' || l >= sizeof(names[0])) continue;
-        memcpy(names[nn], e->d_name, l + 1);
-        ord[nn] = names[nn];
-        nn++;
-    }
-    closedir(d);
-    qsort(ord, (size_t)nn, sizeof(ord[0]), by_str);
-    size_t used = 0;
-    for (int i = 0; i < nn && f->nown < WEB_FLEET_OWN_MAX; i++) {
-        char p[384], a[64] = "", k[WEB_KEY_MAX + 1];
+        if (e->d_name[0] == '.' || l >= sizeof(c[0].name)) continue;
+        char p[576], a[64] = "", k[WEB_KEY_MAX + 1];
         struct stat st;
         /* A physical interface only (it has a device): a bridge, a tunnel
          * or a container's veth puts nothing on the air. */
-        snprintf(p, sizeof(p), "%s/%s/device", dir, ord[i]);
+        snprintf(p, sizeof(p), "%s/%s/device", dir, e->d_name);
         if (stat(p, &st) != 0) continue;
-        snprintf(p, sizeof(p), "%s/%s/address", dir, ord[i]);
+        snprintf(p, sizeof(p), "%s/%s/address", dir, e->d_name);
         FILE *fp = fopen(p, "r");
         if (!fp) continue;
         if (!fgets(a, sizeof(a), fp)) a[0] = '\0';
@@ -1502,14 +1511,85 @@ int web_fleet_read_own(web_fleet_t *f, const char *sysfs) {
         if (web_key_mac(a, k) != 0 || !strcmp(k, "00:00:00:00:00:00") ||
             (strtoul(k, NULL, 16) & 1u))
             continue;
-        int dup = 0;
-        for (int j = 0; j < f->nown; j++) dup |= !strcmp(f->own[j], k);
-        if (dup) continue;
-        memcpy(f->own[f->nown++], k, WEB_FLEET_MAC_SZ);
-        used += (size_t)snprintf(f->own_csv + used, sizeof(f->own_csv) - used, "%s%s",
-                                 used ? "," : "", k);
+        if (nc == cap) {
+            size_t nc2 = cap ? cap * 2 : 16;
+            own_cand_t *g = nc2 <= 65536 ? realloc(c, nc2 * sizeof(*c)) : NULL;
+            if (!g) break;
+            c = g;
+            cap = nc2;
+        }
+        memcpy(c[nc].name, e->d_name, l + 1);
+        memcpy(c[nc].mac, k, WEB_FLEET_MAC_SZ);
+        nc++;
     }
-    return f->nown;
+    closedir(d);
+    /* In name order, so the list does not move between reads. */
+    if (nc > 1) qsort(c, nc, sizeof(*c), by_cand);
+    size_t used = 0;
+    for (size_t i = 0; i < nc && nown < WEB_FLEET_OWN_MAX; i++) {
+        int dup = 0;
+        for (int j = 0; j < nown; j++) dup |= !strcmp(own[j], c[i].mac);
+        if (dup) continue;
+        memcpy(own[nown++], c[i].mac, WEB_FLEET_MAC_SZ);
+        used += (size_t)snprintf(csv + used, csvsz - used, "%s%s", used ? "," : "", c[i].mac);
+    }
+    free(c);
+    return nown;
+}
+
+int web_fleet_read_own(web_fleet_t *f, const char *sysfs) {
+    char own[WEB_FLEET_OWN_MAX][WEB_FLEET_MAC_SZ], csv[sizeof(f->own_csv)];
+    char path[sizeof(f->own_sysfs)];
+    snprintf(path, sizeof(path), "%s", sysfs ? sysfs : "");
+    int n = own_scan(path, own, csv, sizeof(csv));
+    pthread_mutex_lock(&own_mu);
+    memcpy(f->own_sysfs, path, sizeof(path));
+    memcpy(f->own, own, sizeof(own));
+    memcpy(f->own_csv, csv, sizeof(csv));
+    f->nown = n;
+    f->own_read = 1;
+    f->own_read_at = 0;
+    own_owner = f;
+    pthread_mutex_unlock(&own_mu);
+    return n;
+}
+
+/* Under own_mu. */
+static void own_tick_locked(web_fleet_t *f, long long now_s) {
+    if (!f->own_read) return;
+    if (f->own_read_at == 0 || now_s < f->own_read_at) {
+        f->own_read_at = now_s;
+        return;
+    }
+    if (now_s - f->own_read_at < WEB_FLEET_OWN_REREAD_S) return;
+    f->own_read_at = now_s;
+    f->nown = own_scan(f->own_sysfs, f->own, f->own_csv, sizeof(f->own_csv));
+}
+
+void web_fleet_own_tick(web_fleet_t *f, long long now_s) {
+    pthread_mutex_lock(&own_mu);
+    own_tick_locked(f, now_s);
+    pthread_mutex_unlock(&own_mu);
+}
+
+int web_fleet_own_get(web_fleet_t *f, char own[][WEB_FLEET_MAC_SZ]) {
+    pthread_mutex_lock(&own_mu);
+    int n = f->nown;
+    memcpy(own, f->own, sizeof(f->own));
+    pthread_mutex_unlock(&own_mu);
+    return n;
+}
+
+/* The export's copy of the list it was handed: the fleet's own list,
+ * re-read first when due (a slothweb with no --peer has no pull thread
+ * to do it), or whatever string a caller passed. */
+static void own_csv_copy(const char *csv, char *out, size_t cap) {
+    out[0] = '\0';
+    if (!csv) return;
+    pthread_mutex_lock(&own_mu);
+    if (own_owner && csv == own_owner->own_csv) own_tick_locked(own_owner, (long long)time(NULL));
+    snprintf(out, cap, "%s", csv);
+    pthread_mutex_unlock(&own_mu);
 }
 
 /* ── the ingest: check whole, then store ───────────────────────────── */
@@ -2299,13 +2379,19 @@ static int bf_meta_write(sqlite3 *db, const char *peer, const web_fleet_bf_t *bf
                                 NULL) == SQLITE_OK;
     for (int k = 0; ok && k < WEB_FK_COUNT; k++) {
         if (!web_fleet_kind_pages(k)) continue;
-        char nm[96], v[WEB_FLEET_CUR_MAX + 32];
+        char nm[96], v[(WEB_FLEET_BF_SEGS + 1) * (WEB_FLEET_CUR_MAX + 24)];
         bf_meta_name(nm, sizeof(nm), peer, k);
         sqlite3_stmt *s = bf[k].active ? up : del;
         sqlite3_reset(s);
         sqlite3_bind_text(s, 1, nm, -1, SQLITE_TRANSIENT);
         if (bf[k].active) {
-            snprintf(v, sizeof(v), "%lld %s", bf[k].floor, bf[k].cur);
+            /* The segment being paged first, then the suspended ones,
+             * newest first: "<floor> <cursor>" each, one space apart. A
+             * value of one pair is what an earlier build wrote. */
+            size_t o = (size_t)snprintf(v, sizeof(v), "%lld %s", bf[k].floor, bf[k].cur);
+            for (int j = bf[k].nold - 1; j >= 0 && o < sizeof(v); j--)
+                o += (size_t)snprintf(v + o, sizeof(v) - o, " %lld %s", bf[k].old[j].floor,
+                                      bf[k].old[j].cur);
             sqlite3_bind_text(s, 2, v, -1, SQLITE_TRANSIENT);
         }
         ok = sqlite3_step(s) == SQLITE_DONE;
@@ -2313,6 +2399,26 @@ static int bf_meta_write(sqlite3 *db, const char *peer, const web_fleet_bf_t *bf
     sqlite3_finalize(up);
     sqlite3_finalize(del);
     return ok ? 0 : -1;
+}
+
+/* One "<floor> <cursor>" pair of a meta value at *pp: 0 with *pp past it
+ * (at its end or the space before the next pair), -1 for anything this
+ * file did not write. */
+static int bf_pair(const char **pp, long long *fl, char *cur, size_t cap) {
+    const char *p = *pp, *v = p;
+    *fl = 0;
+    while (*p >= '0' && *p <= '9' && *fl < T_MAX) *fl = *fl * 10 + (*p++ - '0');
+    if (p == v || *p != ' ') return -1;
+    const char *c = ++p;
+    size_t n = strcspn(c, " ");
+    char tmp[WEB_FLEET_CUR_MAX + 1];
+    if (n > WEB_FLEET_CUR_MAX || n >= cap) return -1;
+    memcpy(tmp, c, n);
+    tmp[n] = '\0';
+    if (!web_fleet_cursor_ok(tmp)) return -1;
+    memcpy(cur, tmp, n + 1);
+    *pp = c + n;
+    return 0;
 }
 
 static void bf_meta_read(sqlite3 *db, const char *peer, web_fleet_bf_t *bf) {
@@ -2330,17 +2436,25 @@ static void bf_meta_read(sqlite3 *db, const char *peer, web_fleet_bf_t *bf) {
         sqlite3_reset(s);
         sqlite3_bind_text(s, 1, nm, -1, SQLITE_TRANSIENT);
         if (sqlite3_step(s) != SQLITE_ROW) continue;
-        const char *v = (const char *)sqlite3_column_text(s, 0);
-        long long fl = 0;
-        const char *p = v;
-        while (p && *p >= '0' && *p <= '9' && fl < T_MAX) fl = fl * 10 + (*p++ - '0');
-        /* Only a value this file wrote: a floor, one space, a cursor. */
-        if (!p || p == v || *p != ' ' || !web_fleet_cursor_ok(p + 1) ||
-            strlen(p + 1) > WEB_FLEET_CUR_MAX)
-            continue;
-        bf[k].active = 1;
-        bf[k].floor = fl;
-        snprintf(bf[k].cur, sizeof(bf[k].cur), "%s", p + 1);
+        const char *p = (const char *)sqlite3_column_text(s, 0);
+        if (!p) continue;
+        /* Only a value this file wrote: pairs of a floor and a cursor,
+         * the one being paged first, at most WEB_FLEET_BF_SEGS more. */
+        web_fleet_bf_t b;
+        memset(&b, 0, sizeof(b));
+        web_fleet_seg_t seg[WEB_FLEET_BF_SEGS];
+        int ns = 0, ok = bf_pair(&p, &b.floor, b.cur, sizeof(b.cur)) == 0;
+        while (ok && *p == ' ') {
+            p++;
+            ok = ns < WEB_FLEET_BF_SEGS &&
+                 bf_pair(&p, &seg[ns].floor, seg[ns].cur, sizeof(seg[ns].cur)) == 0;
+            if (ok) ns++;
+        }
+        if (!ok || *p) continue;
+        b.active = 1;
+        b.nold = ns;
+        for (int j = 0; j < ns; j++) b.old[ns - 1 - j] = seg[j];
+        bf[k] = b;
     }
     sqlite3_finalize(s);
 }
@@ -2397,6 +2511,24 @@ static int ident_meta_write(sqlite3 *db, const char *peer, const chk_t *k) {
     return ok ? 0 : -1;
 }
 
+/* The generated of the peer's newest answer to ident=1, 0 none. */
+static long long ident_meta_gen(sqlite3 *db, const char *peer) {
+    char nm[96];
+    snprintf(nm, sizeof(nm), "fleet.ident.%s", peer);
+    sqlite3_stmt *s = NULL;
+    long long g = 0, c = 0;
+    if (sqlite3_prepare_v2(db, "SELECT value FROM meta WHERE name=?1", -1, &s, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(s, 1, nm, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(s) == SQLITE_ROW) {
+            const unsigned char *t = sqlite3_column_text(s, 0);
+            if (!t || sscanf((const char *)t, "%lld %lld", &g, &c) != 2 || g < 0 || g > T_MAX)
+                g = 0;
+        }
+    }
+    sqlite3_finalize(s);
+    return g;
+}
+
 static int store_answer(web_fleet_t *f, const web_fleet_peer_cfg_t *pc, const chk_t *k,
                         const char *body, size_t len, web_jrec_t *rec, long long now_s,
                         int page, const web_fleet_bf_t *bf, char *err, size_t errsz) {
@@ -2418,6 +2550,16 @@ static int store_answer(web_fleet_t *f, const web_fleet_peer_cfg_t *pc, const ch
              (run1(db, "DELETE FROM peer_sightings WHERE peer=?1 AND kind='own_net' AND"
                        " last_seen<=?2", pc->name, T_MAX) == 0 &&
               ident_meta_write(db, pc->name, k) == 0);
+    /* A whole answer without them (the peer stopped offering ident=1):
+     * what it named is dropped once its newest such answer is
+     * WEB_FLEET_OWN_STALE_S old by the peer's own clock (#196). The meta
+     * row stays, so the age is still shown. */
+    if (ok && page < 0 && !k->has_own_end) {
+        long long ig = ident_meta_gen(db, pc->name);
+        if (ig > 0 && k->hdr.generated - ig > WEB_FLEET_OWN_STALE_S)
+            ok = run1(db, "DELETE FROM peer_sightings WHERE peer=?1 AND kind='own_net' AND"
+                          " last_seen<=?2", pc->name, T_MAX) == 0;
+    }
     ok = ok && sqlite3_prepare_v2(db, UPSERT_SQL, -1, &p.up, NULL) == SQLITE_OK &&
          walk(body, len, rec, put_line, &p, &nl, e2, sizeof(e2)) == 0 && !p.failed;
     sqlite3_finalize(p.up);
@@ -2522,10 +2664,12 @@ static void store_failure(web_fleet_t *f, const web_fleet_peer_cfg_t *pc, long l
 
 #endif
 
-/* The backfill after an answer: a whole export's cut kind starts one
- * (or, while one runs, widens it to the older floor and restarts it from
- * the new cut, which covers both gaps); a page's kind moves its cursor
- * on, or ends when the page was not cut. */
+/* The backfill after an answer: a whole export's cut kind starts one,
+ * or, while one runs, suspends the segment being paged (its cursor kept)
+ * and pages the new gap first (#196; merged into the paged segment once
+ * WEB_FLEET_BF_SEGS are suspended); a page's kind moves its cursor on,
+ * or, when the page was not cut, resumes the newest suspended segment
+ * or ends. */
 static void bf_next(const web_fleet_bf_t *old, const chk_t *k, int page,
                     long long since_asked, web_fleet_bf_t *nb) {
     for (int j = 0; j < WEB_FK_COUNT; j++) {
@@ -2533,13 +2677,26 @@ static void bf_next(const web_fleet_bf_t *old, const chk_t *k, int page,
         if (!web_fleet_kind_pages(j)) continue;
         if (page < 0) {
             if (!k->has_next[j]) continue;
-            nb[j].floor = old[j].active && old[j].floor < since_asked ? old[j].floor
-                                                                       : since_asked;
+            if (!old[j].active) {
+                nb[j].floor = since_asked;
+            } else if (old[j].nold < WEB_FLEET_BF_SEGS) {
+                web_fleet_seg_t *sg = &nb[j].old[nb[j].nold++];
+                sg->floor = old[j].floor;
+                snprintf(sg->cur, sizeof(sg->cur), "%s", old[j].cur);
+                nb[j].floor = since_asked;
+            } else {
+                nb[j].floor = old[j].floor < since_asked ? old[j].floor : since_asked;
+            }
             nb[j].active = 1;
             snprintf(nb[j].cur, sizeof(nb[j].cur), "%s", k->next[j]);
         } else if (j == page) {
             if (k->has_next[j]) {
                 snprintf(nb[j].cur, sizeof(nb[j].cur), "%s", k->next[j]);
+            } else if (nb[j].nold > 0) {
+                const web_fleet_seg_t *sg = &nb[j].old[--nb[j].nold];
+                nb[j].floor = sg->floor;
+                snprintf(nb[j].cur, sizeof(nb[j].cur), "%s", sg->cur);
+                memset(&nb[j].old[nb[j].nold], 0, sizeof(nb[j].old[0]));
             } else {
                 memset(&nb[j], 0, sizeof(nb[j]));
             }
@@ -2547,9 +2704,16 @@ static void bf_next(const web_fleet_bf_t *old, const chk_t *k, int page,
     }
 }
 
+/* A request's clock (#196): this site's wall clock at the middle of the
+ * request, ms, and its round trip on the monotonic clock. */
+typedef struct {
+    long long mid_ms, rtt_ms;
+} xclk_t;
+
 static int ingest(web_fleet_t *f, int i, const char *body, size_t len,
                   long long now_s, int write, int page, long long since_asked,
-                  long long *rows, long long *remote_ts, char *err, size_t errsz) {
+                  const xclk_t *ck, long long *rows, long long *remote_ts, char *err,
+                  size_t errsz) {
     *rows = 0;
     *remote_ts = 0;
     if (i < 0 || i >= f->npeer) {
@@ -2591,6 +2755,7 @@ static int ingest(web_fleet_t *f, int i, const char *body, size_t len,
         if (rc == 0) {
             pthread_mutex_lock(&f->mu);
             memcpy(f->peer[i].bf, nb, sizeof(nb));
+            if (page < 0 && ck) f->peer[i].rtt_ms = ck->rtt_ms;
             if (page < 0 && k.hdr.has_own) {
                 memcpy(f->peer[i].own, k.hdr.own, sizeof(f->peer[i].own));
                 f->peer[i].nown = k.hdr.nown;
@@ -2607,6 +2772,13 @@ static int ingest(web_fleet_t *f, int i, const char *body, size_t len,
                     if (!k.has_gnss) gs.sats_used = gs.sats_view = gs.jam = -1;
                     gs.t = now_s;
                     gs.skew = k.hdr.generated - now_s;
+                    /* generated is a whole second, truncated: its middle
+                     * is the estimate, against the request's own. */
+                    if (ck) {
+                        gs.has_ms = 1;
+                        gs.skew_ms = k.hdr.generated * 1000 + 500 - ck->mid_ms;
+                        gs.rtt_ms = ck->rtt_ms;
+                    }
                     gs.fresh = k.has_gnss && gs.gts > 0 && gs.gts <= k.hdr.generated + 5 &&
                                k.hdr.generated - gs.gts <= WEB_FG_FRESH_S;
                     gs.evok = gs.fresh && k.hdr.sdb_open && k.gev_complete;
@@ -2629,7 +2801,7 @@ static int ingest(web_fleet_t *f, int i, const char *body, size_t len,
 int web_fleet_ingest(web_fleet_t *f, int i, const char *body, size_t len,
                      long long now_s, int write, long long *rows,
                      long long *remote_ts, char *err, size_t errsz) {
-    return ingest(f, i, body, len, now_s, write, -1, 0, rows, remote_ts, err, errsz);
+    return ingest(f, i, body, len, now_s, write, -1, 0, NULL, rows, remote_ts, err, errsz);
 }
 
 /* The pages of each kind with a backfill running, after a good pull: at
@@ -2659,7 +2831,8 @@ static void backfill_pages(web_fleet_t *f, int i, long long now_s) {
         long long rows = 0, remote = 0;
         int rc = -1;
         if (http_get(f, &p->cfg, q, &body, &len, e2, sizeof(e2), NULL) == 0)
-            rc = ingest(f, i, body, len, now_s, 1, k, bf.floor, &rows, &remote, e2, sizeof(e2));
+            rc = ingest(f, i, body, len, now_s, 1, k, bf.floor, NULL, &rows, &remote, e2,
+                        sizeof(e2));
         free(body);
         if (rc != 0) {
             snprintf(err, sizeof(err), "backfill %s: %s", KIND_WORD[k], e2);
@@ -2685,6 +2858,19 @@ static void backfill_pages(web_fleet_t *f, int i, long long now_s) {
 int web_fleet_pull_one(web_fleet_t *f, int i, long long now_s) {
     if (i < 0 || i >= f->npeer) return -1;
     web_fleet_peer_t *p = &f->peer[i];
+    /* The skew's clock (#196): the wall clock in ms at this start when
+     * now_s is that clock (the thread's call; within a second, as the
+     * second can turn between the caller's time() and this read), else
+     * now_s's second itself (a test's fixed now); the request's place in
+     * time is then measured on the monotonic clock from here. */
+    long long t0 = mono_ms(), base_ms = now_s * 1000;
+    {
+        struct timespec wt;
+        clock_gettime(CLOCK_REALTIME, &wt);
+        long long ws = (long long)wt.tv_sec;
+        if (ws == now_s || ws == now_s + 1) base_ms = ws * 1000 + wt.tv_nsec / 1000000;
+    }
+    xclk_t ck = { base_ms, 0 };
     pthread_mutex_lock(&f->mu);
     long long since = p->remote_ts > WEB_FLEET_OVERLAP_S ? p->remote_ts - WEB_FLEET_OVERLAP_S : 0;
     p->last_attempt = now_s;
@@ -2722,7 +2908,11 @@ int web_fleet_pull_one(web_fleet_t *f, int i, long long now_s) {
         for (;;) {
             snprintf(q, sizeof(q), LEVEL_Q[lv], since);
             int unk = 0;
+            long long ta = mono_ms();
             g = http_get(f, &p->cfg, q, &body, &len, err, sizeof(err), lv > 0 ? &unk : NULL);
+            long long tb = mono_ms();
+            ck.rtt_ms = tb - ta;
+            ck.mid_ms = base_ms + (ta - t0) + ck.rtt_ms / 2;
             if (g == 0 || !unk || lv == 0) break;
             pthread_mutex_lock(&f->mu);
             long long until = now_s + (lv == 5 ? WEB_FLEET_NOIDENT_S : lv == 4 ? WEB_FA_NOADSB_S
@@ -2738,7 +2928,8 @@ int web_fleet_pull_one(web_fleet_t *f, int i, long long now_s) {
         }
         int plain = lv == 0;
         if (g == 0)
-            rc = ingest(f, i, body, len, now_s, 1, -1, since, &rows, &remote, err, sizeof(err));
+            rc = ingest(f, i, body, len, now_s, 1, -1, since, &ck, &rows, &remote, err,
+                        sizeof(err));
         if (rc == 0 && plain) skip_pages = 1;
     }
     free(body);
@@ -2771,6 +2962,7 @@ void web_fleet_init(web_fleet_t *f, const web_fleet_peer_cfg_t *peers, int n,
     pthread_cond_init(&f->cv, &ca);
     pthread_condattr_destroy(&ca);
     if (n > WEB_FLEET_PEERS) n = WEB_FLEET_PEERS;
+    for (int i = 0; i < WEB_FLEET_PEERS; i++) f->peer[i].rtt_ms = -1;
     for (int i = 0; i < n; i++) f->peer[i].cfg = peers[i];
     f->npeer = n < 0 ? 0 : n;
     f->interval_s = interval_s > 0 ? interval_s : WEB_FLEET_INTERVAL_DEF;
@@ -2790,6 +2982,9 @@ static void *pull_main(void *arg) {
         for (int i = 0; i < f->npeer && !stopping(f); i++)
             web_fleet_pull_one(f, i, (long long)time(NULL));
         if (!stopping(f)) web_fleet_gnss_tick(f, (long long)time(NULL));
+        /* The own radios, re-read every WEB_FLEET_OWN_REREAD_S (#196): an
+         * adapter plugged in after the start is named without a restart. */
+        if (!stopping(f)) web_fleet_own_tick(f, (long long)time(NULL));
         pthread_mutex_lock(&f->mu);
         long long until = mono_ms() + (long long)f->interval_s * 1000;
         while (!f->stop) {
@@ -2871,6 +3066,9 @@ void web_fleet_stop(web_fleet_t *f) {
 
 void web_fleet_destroy(web_fleet_t *f) {
     web_fleet_stop(f);
+    pthread_mutex_lock(&own_mu);
+    if (own_owner == f) own_owner = NULL;
+    pthread_mutex_unlock(&own_mu);
 #ifdef WITH_SQLITE
     if (f->wr) sqlite3_close(f->wr);
 #endif
@@ -3262,6 +3460,18 @@ int web_fleet_overview_route(web_fleet_t *f, const web_fleet_src_t *src, const c
         web_jw_raw(&w, ",\"skew_s\":");
         if (o->remote_ts > 0 && o->last_ok > 0) web_jw_int(&w, o->remote_ts - o->last_ok);
         else web_jw_raw(&w, "null");
+        /* The last good pull's round trip (#196): the skew is measured
+         * at its middle, so it is good to about half of this. */
+        web_jw_raw(&w, ",\"rtt_ms\":");
+        {
+            long long rtt = -1;
+            if (f && o->cfg_i >= 0) {
+                pthread_mutex_lock(&f->mu);
+                rtt = f->peer[o->cfg_i].rtt_ms;
+                pthread_mutex_unlock(&f->mu);
+            }
+            if (rtt >= 0) web_jw_int(&w, rtt); else web_jw_raw(&w, "null");
+        }
         web_jw_raw(&w, ",\"remote_version\":");     jstr_or_null(&w, o->version);
         web_jw_raw(&w, ",\"rows_last\":");          web_jw_int(&w, o->rows_last);
         web_jw_raw(&w, ",\"counts\":{");
@@ -3288,6 +3498,10 @@ int web_fleet_overview_route(web_fleet_t *f, const web_fleet_src_t *src, const c
                 web_jw_int(&w, p->bf[k].floor);
                 web_jw_raw(&w, ",\"cursor\":");
                 web_jw_str(&w, p->bf[k].cur);
+                /* The gaps still to page, the one being paged included
+                 * (more than one: a later cut's gap came first, #196). */
+                web_jw_raw(&w, ",\"segments\":");
+                web_jw_int(&w, 1 + p->bf[k].nold);
                 web_jw_raw(&w, "}");
             }
             pthread_mutex_unlock(&f->mu);

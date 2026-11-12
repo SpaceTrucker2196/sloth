@@ -83,7 +83,7 @@ authentication); for the identity findings `research/mitre/T1595.md`,
 `docs/wiki/alert-assessments/MY_NETWORK_RECON.md` and
 [[mac-randomisation]].
 
-**Last updated**: 2026-11-12 (the Radar tab draws `/api/fleet/locate` as translucent areas: band overlap, fix disc or nearer-side wash); 2026-11-12 (the merged views reach the ADS-B tab: `/api/adsb` and `/api/adsb/seen` carry the peers' `aircraft` rows, `/api/adsb/aircraft` names the hosts); 2026-11-11 (#192 I2, I3, I4, I8 review: `EVIL_TWIN` only for the impostor half the stream attributed, `TWIN_UNATTRIBUTED` for either half otherwise and not counted by I4; I2 not applicable at co-located sites; I2 and I4 leads (`lead`); 16 own networks of each kind, as sloth); 2026-11-11 (#192 I2, I3, I4, I8: identity across the sites, the export's `ident=1` (`own_net` lines; `ie_fp`, `vie_fp`, `wps_manuf`, `wps_model`, `wps_num`, `attacks`, `attack_first`, `attack_last` on ap lines), peer_sightings kind `own_net`, meta `fleet.ident.<peer>`, slothweb's `--my-ssid` and `--my-bssid`, `/api/fleet/findings`, the overview's `findings`, the Fleet tab's identity panel); 
+**Last updated**: 2026-11-12 (#196 known limits: a backfill cut at every pull pages the new gap first and resumes the older segment from its own cursor; the GNSS reference's re-anchoring recorded and shown, `reference_moved_at`, `reference_moved_m`; the skew measured at the request's middle with its round trip, `skew_moved` judged against 2 s plus half of it; the own-radio list re-read every 10 min with no 64-entry cap; a peer's own networks expired a day after its last ident answer, `own_expired`; aircraft still have no backfill, and why); 2026-11-12 (the Radar tab draws `/api/fleet/locate` as translucent areas: band overlap, fix disc or nearer-side wash); 2026-11-12 (the merged views reach the ADS-B tab: `/api/adsb` and `/api/adsb/seen` carry the peers' `aircraft` rows, `/api/adsb/aircraft` names the hosts); 2026-11-11 (#192 I2, I3, I4, I8 review: `EVIL_TWIN` only for the impostor half the stream attributed, `TWIN_UNATTRIBUTED` for either half otherwise and not counted by I4; I2 not applicable at co-located sites; I2 and I4 leads (`lead`); 16 own networks of each kind, as sloth); 2026-11-11 (#192 I2, I3, I4, I8: identity across the sites, the export's `ident=1` (`own_net` lines; `ie_fp`, `vie_fp`, `wps_manuf`, `wps_model`, `wps_num`, `attacks`, `attack_first`, `attack_last` on ap lines), peer_sightings kind `own_net`, meta `fleet.ident.<peer>`, slothweb's `--my-ssid` and `--my-bssid`, `/api/fleet/findings`, the overview's `findings`, the Fleet tab's identity panel); 
 ## What travels, and what never does
 
 ADR 0008 amends ADR 0006 for one case: between sensors the same
@@ -215,11 +215,27 @@ The state is kept in slothweb.db's `meta` table, one row a peer and
 kind (`fleet.backfill.NAME.KIND`, the floor and the cursor), written in
 the same transaction as the rows it follows and read back at start, so
 a restart resumes a backfill rather than lose its rows; there is no new
-column and no schema step. A whole export cut again while a backfill
-runs restarts that kind's backfill from the new cut, with the older of
-the two floors, which fetches some rows twice and loses none. A page
-that does not move its cursor (the peer's read ran out of its budget
-first) is asked again at the next pull, not again in the same one.
+column and no schema step.
+
+A whole export cut again while a backfill runs (#196) leaves a new gap,
+from that answer's `since` to its cut, above the segment being paged.
+That segment is suspended with its own floor and cursor and the new gap
+is paged first; when a gap's page is not cut, the newest suspended
+segment resumes from its cursor. The meta value is then every segment,
+the one being paged first: `"<floor> <cursor> <floor> <cursor> ..."`
+(a value of one pair, as an earlier build wrote, still reads). Each
+pull's own gap is finished before older work and no page re-reads rows
+already paged, so a peer cut at every pull still reaches its oldest
+rows as long as one pull's gap takes fewer pages than a pull fetches
+(4); before, each new cut restarted the backfill from itself at the
+older floor, and a kind cut at every pull re-read the same newest pages
+and never got past about four. At most 4 segments are suspended; a cut
+past that is merged into the segment being paged (the older floor, the
+new cursor), which re-reads that segment's paged rows and loses none.
+`web/tests/test_fleet.c` cuts a peer at every pull and holds all 10,000
+older rows arriving at a page a pull. A page that does not move its
+cursor (the peer's read ran out of its budget first) is asked again at
+the next pull, not again in the same one.
 
 Alerts need one more step. The reader takes its keys from the newest
 20,000 rows of the range (`WEB_SDB_ALERT_SCAN`), and on a busy sensor
@@ -287,8 +303,10 @@ the position as the peer last reported it (`pos_age_s` by the peer's own
 clock), `last_ok_age_s`, `last_attempt_age_s`, `last_error`, `skew_s`
 (the peer's clock at its last good answer less this one's then:
 positive, the peer runs ahead; within one pull's duration of the
-truth), `remote_version`, `rows_last`, `counts` by kind, `backfill`
-(each running kind's `floor` and `cursor`), `pages`, `page_failures`,
+truth), `rtt_ms` (the last good pull's round trip on the monotonic
+clock, null before one; #196), `remote_version`, `rows_last`, `counts`
+by kind, `backfill` (each running kind's `floor`, `cursor` and
+`segments`, the gaps still to page with the one being paged), `pages`, `page_failures`,
 `pages_refused` (the peer's export refused `next=1`: an F1 build, pulled
 without it) and `distance_m` from this site. `distances` lists every pair of sites
 with a position (`a`, `b`, `m`), this site named `self`: the haversine
@@ -335,7 +353,13 @@ term). At 2.4 GHz that is 11.7 dB uncalibrated, a factor of 2.6 in
 distance each way, and 10 dB calibrated, 2.3. A "17 m" range is 7-38 m.
 
 **Calibration.** Each slothweb reads its host's own radios (the
-physical interfaces under `/sys/class/net`, at start) and names them to
+physical interfaces under `/sys/class/net`: every entry looked at, the
+ones with a `device` link kept and sorted by name, at most 8) at start
+and again every 10 minutes (#196: the pull thread once a round, and the
+export itself when due, so a slothweb with no `--peer` keeps it too; an
+adapter plugged in later is named without a restart, and a host's
+radios are no longer missed behind the first 64 entries a host with
+many container veths lists) and names them to
 a peer that asks with `own=1` (the header's `own_macs`). A receiver
 that hears another site's own radio has one link of known length: the
 haversine between the two sites. Its offset is the measured path loss
@@ -518,7 +542,10 @@ this site, the pull thread takes one sample of each receiver: fresh when
 its summary is at most 660 s old (two of sloth's 300 s heartbeats and a
 margin), the state, satellites, mean and tracked-median C/N0, jamming
 indicator, clock offset, the fix, and a peer's skew (its `generated`
-less this site's clock). From them, per site:
+less this site's clock), in ms with the request's round trip (#196:
+`generated` is a whole second, so its middle, less this site's clock at
+the middle of the request, timed on the monotonic clock). From them, per
+site:
 
 - *coverage*: the spans of this site's clock over which the site was
   seen observing, `rx` (its receiver fresh, a sky listed, its tracked
@@ -534,9 +561,21 @@ less this site's clock). From them, per site:
 - a *reference position*: one fix a 600 s (fresh, mode 2 or 3, with an
   eph above 0), the last 1,008 (a week); the coordinate-wise median of them,
   from 6 on (an hour). A move held for more than half the week becomes
-  the new reference, and is then no longer flagged: the route gives the
-  reference's `n`, not the time it last moved, so a slow drag-off or a
-  real re-siting both settle in silently after 3.5 days.
+  the new reference, and is then no longer flagged as a displacement.
+  It is announced instead (#196): when the median lies further from
+  the reference last announced than 3 x the newest fix's eph (the
+  site's own bound) at two reference samples running, the second within
+  that bound of the first, the move is recorded (`reference_moved_at`,
+  this site's clock, and `reference_moved_m`) and the moved median
+  becomes the announced reference. The second sample is there because
+  the median of an even count lies between the two places for one
+  sample on the way: without it a re-siting would be said twice, at
+  half its distance each time. A re-siting is therefore said once, at
+  its whole distance and one reference sample (600 s) after the median
+  reaches the new place, and a slow drag-off is said each time it has
+  moved past the bound. It is in `meta` `fleet.gnssref.<site>`
+  (`"<lat> <lon> <moved_at> <moved_m>"`), a row of its own so an
+  earlier build still reads `fleet.gnss.<site>`.
 
 Coverage, the sample events and the reference are kept in
 `slothweb.db`'s `meta` table (`fleet.gnss.<site>`, written at most every
@@ -639,8 +678,13 @@ moves both sites alike keeps the distance and moves both references.
 receiver's clock against its host's) now against its median of the hour
 before; a step of 1000 ms or more at one site and not at the other
 names that site (`time` verdict `one_site`). A peer's skew (its clock
-against this one's at the pull, whole seconds) is shown beside it,
-against its own median: a step in the offset with the skew still is
+against this one's at the middle of the request, in ms; #196) is shown
+beside it, against its own median, and `skew_moved` is a step of at
+least 2 s plus half the newest pull's round trip: the request's own
+time can put the peer's `generated` anywhere within it, so a slow pull
+(a peer that took 5 s to answer: a 3 s step at the middle, inside
+2 s + 2.5 s) is not read as a clock that moved; the 2 s still absorbs
+`generated`'s whole second. A step in the offset with the skew still is
 the receiver; a skew that moved is a host clock, but the skew is a
 difference and does not say whose: this site's or the peer's. Where a
 host is disciplined from its own receiver (W9FJC), that receiver's time
@@ -660,8 +704,10 @@ time research says of any jump test.
 before v11; any but `open` leaves this site never quiet for an incident), `store`, the constants
 (`window_s`, `gap_s`, `region_m`, `fresh_s`, `k`, `time_step_ms`,
 `cn0_drop_db`, `jam_ind`, `ref_min`), `sites` (each receiver as its last
-sample said, its `reference` and `time`, `covered_since`,
-`observed_since`), `baseline` (each pair: `ref_m`, `now_m`, `delta_m`,
+sample said, its `reference`, `reference_moved_at` and
+`reference_moved_m` (null until the reference has moved; #196), its
+`time` (with `skew_step_ms` and `rtt_ms` beside `skew_ref_s`,
+`skew_step_s` and `skew_moved`), `covered_since`, `observed_since`), `baseline` (each pair: `ref_m`, `now_m`, `delta_m`,
 `bound_m`, `verdict` `within`/`outside`/`undetermined` with `why`,
 `moved`), `position` and `time` (`consistent`, `one_site` with `site`,
 `several`, or `undetermined` with fewer than two sites evaluated),
@@ -748,10 +794,21 @@ export refuses it, and the puller asks again with `gnss=1` and not with
   refused line, out of `sloth.db`'s budget, or not read at all (no
   `sloth.db`). An empty list is never passed off as a complete one.
 
-No cursor and no backfill: the comparison needs the last two hours,
-which at beta-site's measured rate (1,047 aircraft in 24 h) is far below
-the cap; a cut answer instead makes its site undetermined over the time
-it covered.
+No cursor and no backfill, by decision (#196). A page would need a
+keyset reader over `adsb_aircraft` in `web_slothdb.c`, a new
+`next_aircraft` end-line member and a rule for when a backfilled range
+stops counting as cut; and it buys little. The rows a cap cuts are the
+least recently seen, older than every row sent, and the comparison
+needs only the last two hours. An aircraft still in the air is written
+again at least every 300 s (sloth's heartbeat), so its row moves above
+any cut and arrives with the next incremental pull; only one already
+gone before the cut is never fetched. A cut answer makes its site
+undetermined (`cut`) for the times up to it plus the heartbeat, which
+the two-hour list leaves behind on its own, and never `unconfirmed`, so
+the I7 rule that an incomplete read never yields a silence holds without
+a backfill. At beta-site's measured rate (1,047 aircraft in 24 h) even
+the first pull's six hours (about 260 at that rate) is well under the
+1,000 cap; a cut is a busier site or a read out of `sloth.db`'s budget.
 
 **The store.** `peer_sightings` kind `aircraft` (key the address, label
 the callsign, vendor the category, `extra` the rest) and kind `adsb` (key
@@ -921,7 +978,13 @@ row from an older export keeps exactly the members it had. Stored as
 peer_sightings kind `own_net` (key `ssid:<ssid>` or `bssid:<mac>`); an
 answer that counts its own networks replaces what the peer named
 before; and meta `fleet.ident.<peer>`, `"<generated> <count>"` of the
-peer's newest such answer. No schema step.
+peer's newest such answer. No schema step. A peer that stops offering
+`ident=1` (a downgrade, or `--my-ssid` removed there) or stops
+answering no longer names its networks for ever (#196): the findings
+stop counting them once that answer is a day old by this site's clock
+(`own_expired`, with `own_age_s`), and the first whole answer without
+them more than a day after it by the peer's clock drops its `own_net`
+rows; the meta row stays, so the age still shows.
 
 **Reach.** A site's reach is how far an AP at sloth's assumed 20 dBm
 (`RF_PTX_AP_ASSUMED`) is heard down to that site's floor, the weakest AP
@@ -993,8 +1056,10 @@ choices, each toward a longer reach, so toward "not applicable".
 only): `local` (sloth.db: `open`, `partial`, `unavailable`, `none`),
 `store`, `configure` (null, or how to name the own networks when no site
 names any), `sites` (each one's label, position, `offered` (its own
-networks reached here; false for an older build), `own_age_s`, its own
-SSIDs and BSSIDs, APs held, `fingerprinted`, `attacked`, probes read,
+networks reached here; false for an older build), `own_age_s`,
+`own_expired` (#196: its last answer naming them is more than a day
+old by this site's clock, so they are not counted), its own SSIDs and
+BSSIDs, APs held, `fingerprinted`, `attacked`, probes read,
 `randomised`, verdicts, `floor_dbm`, `reach_m`, `skew_s`), `pairs` (each
 pair's distance, both reaches and `co_located`, null without a
 position), `counts` (`I2`, `I3`, `I4`, `I8` that apply, then

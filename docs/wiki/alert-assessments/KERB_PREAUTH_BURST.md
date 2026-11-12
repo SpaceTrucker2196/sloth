@@ -1,7 +1,7 @@
 ---
 type: KERB_PREAUTH_BURST
 technique: T1110.003
-rule_file: src/alerts/rules_wired.c:994 rule_kerb_preauth_burst()
+rule_file: src/alerts/rules_wired.c:996 rule_kerb_preauth_burst()
 count_semantics: per rule evaluation - one increment per alerts_update() tick (poll.c:296; the wait between ticks is at most POLL_MS 250 ms, include/sloth.h:28 - the loop wakes early on alert fires and --refresh-ms can shorten it, so 4 ticks/s is a floor, not a fixed cadence) while a client in the 64-row kerb_event table has an aggregate preauth_failed_count at or above the threshold; the counter is a running per-source aggregate that is never windowed down, so once a source crosses the threshold the incident fires every tick until the row ages out, and engine count = (qualifying sources) x (ticks they remain)
 severity_assessment: agree, with one caveat - CRIT fits a password-spray indicator in an AD environment; the caveat is that a service account with a stale password produces the identical signature indefinitely, so the responder must confirm it spans many principals, not one
 false_positive_risk: medium - a broken automation with a wrong password is the single most common benign trigger and looks the same at a count level; the principal spread is what separates them, and the rule does not gate on it
