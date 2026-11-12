@@ -4257,6 +4257,8 @@ slothweb's first. Eight paths take POST, and nothing else does:
 |---|---|---|
 | `/api/frrs/triage` | `{"id":"d1234","state":"noise","note":"…","by":"…"}`; `id` an alert's or an anomaly's (`a` and sixteen hex digits, the `tid` of `/api/anomalies`); `state` one of `untriaged`, `false`, `noise`, `incident`, `known`, `recommended` | appends a row; `recommended` takes the assessment's state, `409 no_recommendation` when it names none (always, for an anomaly: no assessment judges an anomaly rule) |
 | `/api/frrs/relate` | `{"op":"add","from":"a…","to":"d1234"\|"a…"\|"aa:bb:cc:dd:ee:ff"\|"aa:bb:cc:dd:ee:ff/1","note":"…","by":"…"}`, `{"op":"remove","from":"<either end>","link":7}` | a link between an anomaly and anything, or an alert and a device ([Anomaly triage and links](#anomaly-triage-and-links)); answers the `from` end's `/api/frrs/related` |
+| `/api/frrs/triage/bulk` | `{"ids":"d1,s2,a…","state":"noise","note":"…","by":"…"}` | one state on up to 100 ids at one token, each written as `/api/frrs/triage` writes it, each id's outcome in `results` ([Incidents and bulk triage](#incidents-and-bulk-triage)) |
+| `/api/frrs/incident` | `{"op":"add"\|"member"\|"close",…}` | an incident opened, its members changed, or it closed ([Incidents and bulk triage](#incidents-and-bulk-triage)) |
 | `/api/frrs/note` | `{"op":"add","kind":"device"\|"ble"\|"ssid"\|"gnss"\|"aircraft"\|"aprs","id":"…","text":"…","by":"…"}`, `{"op":"retract","kind":…,"id":…,"note":7,"text":"<why>","by":"…"}` | a plain note on a subject held now, or the row that takes one back ([Notes on devices and the rest](#notes-on-devices-and-the-rest)); answers the subject's `/api/frrs/notes` |
 | `/api/frrs/tacdb/unit` | `{"op":"create","name":"home","kind":"site","parent":null,"note":"…"}`, `{"op":"update","id":1,…}`, `{"op":"delete"\|"restore","id":1}` | |
 | `/api/frrs/tacdb/platform` | `{"op":"create","nomenclature":"work laptop","class":"laptop","unit":1,"vendor":"…","note":"…","emitter_kind":"sta","emitter_addr":"…"}`, `update`, `delete`, `restore`, `{"op":"confirm","suggest":"<token>","unit":1}` | |
@@ -4389,6 +4391,7 @@ mid-merge rolls the whole file back.
 | `/api/frrs/suggest` | `limit=` | `{"note","suggestions":[{token,rule,rule_name,kind,a,b,role_b,class,confidence,last_seen,nomenclature,evidence}]}` |
 | `/api/frrs/related` | `id=` an alert's id, an anomaly's, a MAC or a BLE address `/` type (a held BLE end of a link also carries `"iface"`, the sensor its drawer opens by) | `{"id","kind":"alert"\|"anomaly"\|"device"\|"ble","label","held","store","writes","window_s":600,"links_cap":32,"links":[{"link","dir":"to"\|"from","kind","id","label","held","note","by","peer","ts","triage":{…}\|null}],"links_more","suggest":[{"kind","id","label","basis","first_seen","last_seen"}],"suggest_note","alerts_reached"}` and, for a device, `"anomalies":[{"id","label","anomaly":{…},"triage"}]` ([Anomaly triage and links](#anomaly-triage-and-links)) |
 | `/api/frrs/notes` | `kind=`, `id=`, `before=` a note's number | `{"kind","id","held":true\|false\|null,"store","writes","cap":64,"text_max":240,"rows","live","folded","notes":[{"note","ts","text","by","peer","via":"manual"\|"agent","retracted":null\|{"ts","reason","by","peer","via"}}],"more","next"}`; an SSID's also `"ssid"`, `"ssid_k"`, `"ssid_np"`, its display form ([Notes on devices and the rest](#notes-on-devices-and-the-rest)) |
+| `/api/frrs/incidents` | `state=open\|closed\|all`, or `id=N` | the incidents newest first, or one with its members ([Incidents and bulk triage](#incidents-and-bulk-triage)) |
 | `/api/frrs/notes/marks` | `kind=`, `ids=` up to 24, comma-separated, not percent-encoded | `{"kind","store","marks":{"<id>":{"n","agent","ts"}}}`: the ids holding a standing note |
 | `/api/frrs/export` | none | `slothweb-tacdb.jsonl` (attachment, the import's format above): a header line, every live unit (parents first), platform and emitter, every dismissal, every alert's triage row by its descriptor (an anomaly's rows and the links stay on this sensor), an `end` line counting the lines and saying `complete`; deleted rows stay on this sensor; `507 export_too_large` past 8 MiB |
 
@@ -4772,6 +4775,114 @@ both caps and that only retracted notes fold; the marks; ids beginning
 `a`, `d` and `s` read as their kind's; `via` on links and refused as a
 request member; the bundle and the glossary; nothing off the stream in
 the table; the write over a socket; and `subnotes.js`.
+
+## Incidents and bulk triage
+
+(#198, 2026-11-12) On one field sensor 952 untriaged alerts came down to
+five causes, and the only way to say so was 952 `POST /api/frrs/triage`
+calls, 33 minutes at the write limit. Two answers, the smaller first.
+`web/src/web_incident.h` is the reference for the incidents.
+
+**Bulk triage.** `POST /api/frrs/triage/bulk`
+`{"ids":"d12,s3f,a0123456789abcdef","state":"noise","note":"…","by":"…"}`:
+one state, note and name on up to 100 alert or anomaly ids (one
+comma-separated string member, at most 2,600 bytes: the body decoder
+keeps no array), at the token cost of **one** POST. Each id is written
+exactly as `/api/frrs/triage` would write it (its own row, transaction,
+folds, `"unchanged"` for a state it already has, `via`, the 240-byte
+note rule); a repeated id is one. The answer is
+`{"ok":true,"state","n","results":[{"id","ok":true,"unchanged","current":{…}}|{"id","ok":false,"status","error"}],"written","unchanged","failed"}`:
+an id that fails (`no_such_alert`, `triage_full`, …) is its own entry
+and the others go on. The list is refused whole (`400 bad_ids`,
+`too_many_ids`, `missing_ids`) before anything is written.
+
+**Incidents.** An incident is one verdict over many alerts: a title (at
+most 96 bytes), a state (`false`, `noise`, `incident` or `known`; never
+`untriaged`), a note, who, from where, when, `via`. Its members are
+alerts by id (resolved and filed as a triage row files one, so a member
+survives the stream handle aging out and a rebuild of `sloth.db`) and
+standing filters: an alert type, an address (`ip` or `mac`: the address
+the alert's triage descriptor names, its IP, else the MAC in its key)
+and a first_seen window (`from`, `to`, Unix seconds, either open), at
+least one of the three, at most 8 live on one incident. An alert a
+filter takes is a member whenever it began, until the incident is
+closed; one that began after the filter was set is **auto-joined**, and
+after the close a filter takes no alert that began later. Membership is
+read, never written: an alert joining costs no write.
+
+**What a member reads as** (decided for #198): its own newest triage row
+when that row is a decision (not a clear) at or after the incident's
+decision (its open, or its close when it has one), else the incident's
+state, note, who and `via`. The newer statement wins; on the same second
+the alert's own, the more specific one. Clearing its own row returns it
+to the incident. An alert in two incidents reads the one decided last.
+Anomalies are not members (an anomaly's id already names every episode
+of it). The fleet export's verdicts are the triage rows alone.
+
+**Where it shows.** A member's triage (on `/api/frrs/states`,
+`/api/frrs/history`'s `current`, `POST /api/frrs/triage`'s and the bulk
+route's `current`) gains `"incident":{"id","title","state","governs","joined":"member"|"filter","auto"}`,
+and an `/api/alerts?triage=` row's `triage` gains
+`"incident":{"id","governs","auto"}`; `governs` false means its own
+later verdict stands. Only a member carries it: every answer about an
+alert in no incident is byte for byte what it was before
+(`test_incident.c :: test_untouched_without_an_incident`).
+`/api/alerts` takes `incident=none|any|<id>` (the rows in no incident,
+in one, in that one), which runs the triage join; the triage counts are
+then over those rows. `/api/frrs/summary`'s open counts and the
+`triage=` filter count a member as its incident's state.
+
+**Routes.**
+
+| Route | Body or parameters | Answer |
+|---|---|---|
+| `POST /api/frrs/incident` | `{"op":"add","title","state","note","by"[,"ids":"d1,s2"][,"type"][,"ip"\|"mac"][,"from"][,"to"]}` | the incident and, with ids, each id's entry in `results` |
+| `POST /api/frrs/incident` | `{"op":"member","incident":N,"ids":"…"}`, `{"op":"member","incident":N,"type":…,…}` or `{"op":"member","incident":N,"remove":M}`, one change a call | `unchanged` for a member already there or already removed; `409 incident_closed` |
+| `POST /api/frrs/incident` | `{"op":"close","incident":N[,"state"][,"note"],"by"}` | the close is a row (one per incident); a second close is `unchanged` |
+| `GET /api/frrs/incidents` | `state=open\|closed\|all` | `{"store","writes","cap","title_max","ids_max","incidents":[{"id","title","state","open","decided","ts","opened_state","note","by","peer","via","closed":null\|{"ts","state","note","by","peer","via"},"alerts","filters"}],"more"}`, newest first, at most 200 |
+| `GET /api/frrs/incidents` | `id=N` | `{"store","writes","incident":{…},"members":[{"member","kind":"alert","id","type","addr","port","first_seen",…}\|{"member","kind":"filter","type","addr","from","to",…}],"more","removed"}` |
+
+A close takes the next id of the `incident` table, so incident numbers
+have gaps after a close. Each write is one token, `/api/health`'s
+`frrs` gains `bulk_posts` and `incidents` (`rows`, `opened`, `closed`).
+Append-only: nothing is deleted or rewritten; a removal is a row naming
+the member (`removes`), a close a row naming the incident (`closes`).
+Bounds: 1,024 incidents, 20,000 member rows, 4,096 on one incident, 8
+live filters on one; past any of them a write is `507` (these rows are
+the operator's and never fold).
+
+**The agent's path.** `slothweb-mcp` writes all of it (`via: agent`).
+An agent opens incidents, adds members to any open one, removes only
+members an agent added (`403 not_agent_member`) and closes only
+incidents an agent opened (`403 not_agent_incident`): a judgement call
+for #198, mirroring the notes and links rule, so an agent never ends
+the operator's statement.
+
+**slothweb.db v12.** Two tables, `incident` (`id`, `closes`, `title`,
+`state`, `note`, `who`, `peer`, `via`, `ts`; a partial unique index keeps
+one close per incident) and `incident_member` (`id`, `incident`, `kind`
+0 an alert or 1 a filter, `subject`, `finding`, `type`, `addr`, `port`,
+`first_seen`, `t_from`, `t_to`, `who`, `peer`, `via`, `removes`, `ts`)
+with five indexes. Additive, one transaction; a v11 file is migrated in
+place and a failed step leaves it at v11 (`test_store.c ::
+test_v11_file_is_migrated`, `test_v11_failed_step_leaves_file_unchanged`).
+
+**The page.** The Alerts page's incidents panel (`web/ui/incident.js`,
+`incident.css`): one row per incident (state chip, number, title, its
+alert count by id and filter, who, when, `close`), opened to its filters
+and its alerts drawn as the list draws them, each removable when added
+by id. "Group the list by incident" (on by default, kept as
+`inc.group`) asks the list for `incident=none`, so the list holds only
+the alerts in no incident. A toggle box on every alert row selects it;
+the selection takes a bulk verdict (100 ids a POST), opens an incident,
+or joins an open one. "From the list's type or address" opens one whose
+filter is the type picked and an address typed in the search, the
+window as when they began; what a filter cannot hold (severity, state,
+other words) is said, not dropped. A member's chip says `(inc. #N)`,
+`, own` when its own later verdict stands, `, auto` when auto-joined;
+the alert page says which incident it is in and links to it
+(`#alerts?incident=N`). Every value by `textContent`; the theme's
+tokens only, so light and dark follow.
 
 ## BLE
 

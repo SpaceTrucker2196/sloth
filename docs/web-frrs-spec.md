@@ -451,6 +451,34 @@ when known. `test_frrs.c :: test_finding_is_set_once` asserts a second
 resolution attempt changes nothing (the statement is `UPDATE triage SET
 finding = ? WHERE subject = ? AND finding IS NULL`).
 
+### 3.7 Incidents and bulk triage (#198, slothweb.db v12)
+
+Many alerts triaged as one. `web/src/web_incident.h` is the reference,
+`web/README.md` "Incidents and bulk triage" the API. In this document's
+terms: an incident is a decided state (§3.1's four, never untriaged)
+with a title and a note over members that are alerts (filed by §3.1's
+subject, finding and descriptor, so a member is the same alert its
+triage rows are) or standing filters (type, the descriptor's address,
+a first_seen window). A member reads as the incident's state unless it
+has its own decided row at or after the incident's decision (its open,
+or its close); a clear of its own row returns it to the incident.
+Nothing is copied into `triage`: membership is read at each triage
+read, and an alert in no incident is answered byte for byte as before.
+Append-only: a close and a member's removal are rows. Bounds: 1,024
+incidents, 20,000 member rows, 4,096 on one incident, 8 live filters;
+past them `507`, never a fold. The agent's path opens incidents and adds
+members, removes only an agent's members (`403 not_agent_member`) and
+closes only an agent's incidents (`403 not_agent_incident`).
+
+`POST /api/frrs/triage/bulk` writes up to 100 ids through the single
+route's own code (§5.3 after the gate, per id), at one token: the
+bucket's cost is per request, so the operator who triaged 952 alerts in
+33 minutes does it in ten POSTs.
+
+slothweb.db v11 → v12 adds `incident` and `incident_member` and their
+indexes; additive, one `BEGIN IMMEDIATE`, tested on a v11 file and on
+the failure that leaves one at v11.
+
 ## 4. The derivations: every field, its sloth source
 
 Each field below is rendered as **value**, its **source** (the sloth
@@ -588,6 +616,8 @@ addresses), a refusal a `400` with a reason word of slothweb's own.
 | Route | Body | Effect |
 |---|---|---|
 | `POST /api/frrs/triage` | `{"id":"d1234","state":"noise","note":"…","by":"…"}` or `{"id":"…","state":"recommended"}` | appends a row (none, `"unchanged":true`, when the state is the current one and no new note comes with it); `state` `untriaged` clears; `recommended` resolves §3.1's table and refuses `409 no_recommendation` when it yields none |
+| `POST /api/frrs/triage/bulk` | `{"ids":"d1,s2,a…","state":"noise","note":"…","by":"…"}` | (#198) each of up to 100 ids written as `POST /api/frrs/triage` writes one, its outcome in `results`; one token for the whole (§3.7) |
+| `POST /api/frrs/incident` | `{"op":"add"\|"member"\|"close",…}` | (#198) §3.7 |
 | `POST /api/frrs/tacdb/unit` | `{"op":"create","parent":null,"name":"…","kind":"site","note":"…"}` / `{"op":"update","id":1,…}` / `{"op":"delete","id":1}` / `{"op":"restore","id":1}` | |
 | `POST /api/frrs/tacdb/platform` | `{"op":"create","nomenclature":"…","class":"phone","unit":1,"vendor":"…","note":"…","emitters":[{"kind":"sta","addr":"…","role":"primary","label":"…"}]}` / `update` / `delete` / `restore` / `{"op":"confirm","suggest":"<token>"}` | `confirm` takes a suggestion token from `/api/frrs/suggest` (slothweb's own, the rule and the addresses hashed with the process nonce, so a stale token is refused) |
 | `POST /api/frrs/tacdb/emitter` | `{"op":"add","platform":1,"kind":"ble","addr":"…/1","role":"primary","label":"…"}` / `move` / `remove` / `restore` | a live `(kind, addr)` on another platform is `409 emitter_owned` naming it |
