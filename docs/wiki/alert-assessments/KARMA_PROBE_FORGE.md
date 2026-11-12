@@ -1,7 +1,7 @@
 ---
 type: KARMA_PROBE_FORGE
 technique: T1557
-rule_file: src/alerts/rules_twin.c:2257 rule_karma_probe_forge() (capture side karma_observe_frame(), counting karma_forged_ssids(), capture karma_forge_captured(), all in src/karma_detect.c; tune rows karma.forge_ssids, karma.forge_window_s and karma.forge_assoc_s in src/tune.c)
+rule_file: src/alerts/rules_twin.c:2296 rule_karma_probe_forge() (capture side karma_observe_frame(), counting karma_forged_ssids(), capture karma_forge_captured(), all in src/karma_detect.c; tune rows karma.forge_ssids, karma.forge_window_s and karma.forge_assoc_s in src/tune.c)
 count_semantics: per poll while the forge row holds >= karma.forge_ssids never-beaconed answered SSIDs, one fire per answering BSSID; the row ages names out after karma.forge_window_s (600 s) of no further answer, so the incident outlives the last forged answer by at most the window. Not per frame
 severity_assessment: agree - WARN while the radio only forges answers (to one station or several, with or without a KARMA_AP beacon fan-out); CRIT when a station was captured: sent a forged answer for a name, associated to the BSSID under that name within karma.forge_assoc_s, and granted (owner decision on #187, 2026-11-12)
 false_positive_risk: low - an honest BSS answers only for its own SSID, and that answer (hidden or not) is filtered before the table; the residual is unverified gear behaviour (an 802.11ax Multiple BSSID transmitter writing a nontransmitted SSID into its own response), for which karma.forge_ssids is the knob

@@ -696,8 +696,44 @@ static void sens_mon_add(web_live_t *l, const char *name) {
     mon_rebuild(l);
 }
 
+/* sensor_health's twin193_<name> members (#193), in the order sloth
+ * writes them after twin193_since. */
+static const char *const C193[WEB_LIVE_C193_N] = {
+    "floods", "floods_chain", "named", "late_laa", "coincide",
+    "excl_carrier", "excl_faint", "excl_sibling", "excl_any"
+};
+
+/* A count off the stream: a non-negative integer of sane size, else 0.
+ * The stream is untrusted (web_jsonl.h), and a hostile line must not
+ * be able to drive the cross-session total negative or overflow it. */
+#define C193_MAX 1000000000000LL
+static long long c193_val(const web_jrec_t *r, const char *key) {
+    const web_jfield_t *f = web_jl_get(r, key);
+    if (!f || f->kind != WEB_J_INT || f->i < 0 || f->i > C193_MAX) return 0;
+    return f->i;
+}
+
+static void c193_record(web_live_t *l, const web_jrec_t *r) {
+    const web_jfield_t *f = web_jl_get(r, "twin193_since");
+    if (!f || f->kind != WEB_J_INT || f->i < 0) return;
+    /* A new sloth session: fold the last one's counts into the base. A
+     * since of 0 is a sloth that has not run a pass yet; it neither
+     * folds nor replaces the stamp. */
+    if (l->c193_seen && f->i && l->c193_since && f->i != l->c193_since)
+        for (int k = 0; k < WEB_LIVE_C193_N; k++)
+            if (l->c193_base[k] < C193_MAX) l->c193_base[k] += l->c193[k];
+    if (f->i) l->c193_since = f->i;
+    l->c193_seen = 1;
+    for (int k = 0; k < WEB_LIVE_C193_N; k++) {
+        char key[40];
+        snprintf(key, sizeof(key), "twin193_%s", C193[k]);
+        l->c193[k] = c193_val(r, key);
+    }
+}
+
 static void sensor_record(web_live_t *l, const web_jrec_t *r, long long ts,
                           long long now_ms) {
+    c193_record(l, r);
     l->sh_seen = 1;
     l->sh_ms = now_ms;
     l->sh_ts = ts;
@@ -1119,6 +1155,24 @@ size_t web_live_json_scoped(web_live_t *l, const web_scope_ctx_t *sc,
         web_jw_raw(&w, ",\"monitor_exit\":"); web_jw_str(&w, l->mon_exit);
         web_jw_raw(&w, ",\"scope\":"); web_jw_str(&w, l->scope);
         web_jw_raw(&w, ",\"scope_not_enforced\":"); web_jw_int(&w, l->scope_ne);
+    }
+    /* #193 field data: this sloth session's counts and the total over
+     * the sessions this slothweb has seen. Absent from an older sloth. */
+    if (l->c193_seen) {
+        web_jw_raw(&w, ",\"twin193\":{\"since\":"); web_jw_int(&w, l->c193_since);
+        web_jw_raw(&w, ",\"session\":{");
+        for (int k = 0; k < WEB_LIVE_C193_N; k++) {
+            if (k) web_jw_raw(&w, ",");
+            web_jw_key(&w, C193[k]);
+            web_jw_int(&w, l->c193[k]);
+        }
+        web_jw_raw(&w, "},\"total\":{");
+        for (int k = 0; k < WEB_LIVE_C193_N; k++) {
+            if (k) web_jw_raw(&w, ",");
+            web_jw_key(&w, C193[k]);
+            web_jw_int(&w, l->c193_base[k] + l->c193[k]);
+        }
+        web_jw_raw(&w, "}}");
     }
     web_jw_raw(&w, "}");
 

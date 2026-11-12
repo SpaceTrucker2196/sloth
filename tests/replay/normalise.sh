@@ -38,7 +38,7 @@
 
 set -eu
 
-TIME_KEYS='ts|ts_sec|first_seen|last_seen|first_detected|last_evaluated|first_observed|last_observed|flood_last|capture_last_frame_ts|monitor_last_frame_ts|btmon_last_frame_ts'
+TIME_KEYS='ts|ts_sec|first_seen|last_seen|first_detected|last_evaluated|first_observed|last_observed|flood_last|capture_last_frame_ts|monitor_last_frame_ts|btmon_last_frame_ts|twin193_since'
 ID_KEYS='incident_id|event_id'
 HOST_KEYS='rss_kb|rss_hwm_kb|sqlite_mem_kb|sqlite_mem_hwm_kb|malloc_kb|fd_count|libs|capture_stale_secs|monitor_stale_secs|btmon_stale_secs|ble_own_tx_secs|pcap_path|age_s|disk_free_mb|disk_total_mb|disk_band'
 STR='"([^"\\]|\\.)*"'

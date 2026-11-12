@@ -6031,6 +6031,23 @@
                      ["monitor", s.monitor_iface ? s.monitor_iface + (s.monitor_open ? (s.monitor_running ? " running" : " stopped") : " not open") +
                                  (s.monitor_exit ? ", " + s.monitor_exit : "") : null],
                      ["scope", s.scope ? s.scope + (s.scope_not_enforced ? ", not enforced" : "") : null]]);
+        // #193 field data (sensor_health twin193_*): counts, no verdict.
+        // "session" is this sloth run; "total" adds the runs this
+        // slothweb has seen since it started.
+        var c = s.twin193;
+        if (c && c.session && c.total) {
+          var cf = function (o) {
+            return o.coincide + " of " + o.floods_chain + " examined floods (" + o.floods + " floods, " +
+                   o.named + " named by the chain); excluded: carrier " + o.excl_carrier + ", faint " +
+                   o.excl_faint + ", sibling " + o.excl_sibling + ", any " + o.excl_any +
+                   "; late LAA copies " + o.late_laa;
+          };
+          box.appendChild(el("div", "label", "twin-chain field data (#193, sensor_health twin193_*)"));
+          kvList(box, [["this session", cf(c.session)],
+                       ["since", num(c.since) && c.since > 0 ? stamp(c.since) : "no pass yet"],
+                       ["all sessions seen", cf(c.total)],
+                       ["reading", "a flood that met a late locally administered same-SSID copy the chain rule left unnamed; measurement only"]]);
+        }
         // The Bluetooth source (web_ble.h): the btmon_* stream, the
         // ble_* decode and scan state, the own-transmission state, the
         // btcap_* Ubertooth block and the banded rotation hints, as the

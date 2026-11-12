@@ -37,6 +37,7 @@
 #include "ev_cite.h"
 #include "sloth_compat.h"
 #include "wifi_freq.h"
+#include "twin_field.h"   /* #193 field data, read-only hooks */
 
 /* ── Frame citations (#92 slice 4) ────────────────────────────
  *
@@ -264,6 +265,28 @@ static int twin_pair_late_arrival(const beacon_ap_t *a, const beacon_ap_t *b) {
     if (g_twin_moved_at &&
         late->first_seen - g_twin_moved_at < TWIN_LATE_ARRIVAL_S)
         return 0;
+    return 1;
+}
+
+/* #193 field data (twin_field.h). Reads the predicates above and
+ * writes nothing: the chain rule's verdict never depends on it. */
+int twin_late_laa_copy(const beacon_ap_t *orig, const beacon_ap_t *copy,
+                       unsigned *excl) {
+    if (excl) *excl = 0;
+    if (!orig || !copy || orig == copy) return 0;
+    if (!orig->ssid[0] || strcmp(orig->ssid, copy->ssid) != 0) return 0;
+    if (memcmp(orig->bssid, copy->bssid, 6) == 0) return 0;
+    if (!bssid_is_laa(copy->bssid)) return 0;
+    if (!orig->first_seen || copy->first_seen <= orig->first_seen) return 0;
+    if (!twin_pair_late_arrival(orig, copy)) return 0;
+    if (excl) {
+        if (twin_ssid_is_carrier(orig->ssid))
+            *excl |= TWIN_FIELD_EXCL_CARRIER;
+        if (twin_ap_faint(orig) || twin_ap_faint(copy))
+            *excl |= TWIN_FIELD_EXCL_FAINT;
+        if (twin_pair_is_sibling(orig, copy))
+            *excl |= TWIN_FIELD_EXCL_SIBLING;
+    }
     return 1;
 }
 
@@ -2155,6 +2178,8 @@ void rule_evil_twin_proximity(const sloth_state_t *s, time_t now) {
 #define DEAUTH_TWIN_WIN_SECS ((int)tune_val(TUNE_DEAUTH_TWIN_WIN_SECS))
 
 void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
+    /* #193 field data: counts only, nothing below reads them. */
+    twin_field_begin(s, now);
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
         if (!a->ssid[0]) continue;
@@ -2173,6 +2198,8 @@ void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
         /* Find the same-SSID + same-cipher second transmitter — that's
          * the rogue half. Loop covers both i<j and j<i so a deauth
          * targeting either AP picks up its twin partner. */
+        int fired = 0, shape = 0;
+        unsigned shape_excl = 0;
         for (int j = 0; j < s->beacon_count; j++) {
             if (i == j) continue;
             const beacon_ap_t *b = &s->beacon_aps[j];
@@ -2182,7 +2209,17 @@ void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
             if (!bssid_is_laa(a->bssid) && !bssid_is_laa(b->bssid) &&
                 memcmp(a->bssid, b->bssid, 3) == 0)
                 continue;
-            if (!twin_evidence_score(s, a, b, now, NULL)) continue;
+            twin_evidence_t ev;
+            if (!twin_evidence_score(s, a, b, now, &ev)) {
+                /* #193: the pair this rule leaves unnamed, observed. */
+                unsigned x = 0;
+                if (!shape && !ev.inv_approved && twin_field_enabled() &&
+                    twin_late_laa_copy(a, b, &x)) {
+                    shape = 1;
+                    shape_excl = x;
+                }
+                continue;
+            }
 
             taint_mark(b->bssid, now);
 
@@ -2217,8 +2254,10 @@ void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
                           flood->evidence_ids + skip, dn - skip);
             fire_ev(ALERT_TYPE_EVIL_TWIN, ALERT_SEV_CRIT, evid, ev_n,
                     "EVIL_TWIN", detail, key, NULL, 0, now);
+            fired = 1;
             break;
         }
+        twin_field_flood(a->bssid, fired, shape, shape_excl);
     }
 }
 

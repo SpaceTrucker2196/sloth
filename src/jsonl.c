@@ -43,6 +43,7 @@
 #include "camera_join.h"       /* device_class_label() (#106 round 2) */
 #include "rf_distance.h"       /* est_dist_* (2026-10-26) */
 #include "probe_latency.h"     /* beacon.probe_lat (JSONL 1.6.0, #187 S3) */
+#include "alerts/twin_field.h" /* sensor_health twin193_* (JSONL 1.7.0, #193) */
 
 static FILE           *g_fp;
 /* Open refusal reason and write-failure count (#87), under g_mu. */
@@ -2802,6 +2803,31 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "aprs_rotations", (long long)a->rotations);
         kv_int(buf, LINEBUF, &off, "aprs_read_errors", (long long)a->read_errors);
         kv_str(buf, LINEBUF, &off, "aprs_err", a->err);
+    }
+    /* #193 field data (JSONL 1.7.0, src/alerts/twin_field.h): how often
+     * a deauth flood met a late locally administered same-SSID copy the
+     * chain rule left unnamed, with its denominators. Appended after the
+     * flag-gated blocks and before jsonl_version, which stays last
+     * (test_jsonl.c pins it). Outside `sig`: lifetime counts that ride
+     * the heartbeat, the way the parse faults do; nothing waits on
+     * them. Integers only. */
+    {
+        twin_field_counts_t tf;
+        twin_field_counts(&tf);
+        kv_int(buf, LINEBUF, &off, "twin193_since",    (long long)tf.since);
+        kv_int(buf, LINEBUF, &off, "twin193_floods",   (long long)tf.floods);
+        kv_int(buf, LINEBUF, &off, "twin193_floods_chain",
+               (long long)tf.floods_chain);
+        kv_int(buf, LINEBUF, &off, "twin193_named",    (long long)tf.named);
+        kv_int(buf, LINEBUF, &off, "twin193_late_laa", (long long)tf.late_laa);
+        kv_int(buf, LINEBUF, &off, "twin193_coincide", (long long)tf.coincide);
+        kv_int(buf, LINEBUF, &off, "twin193_excl_carrier",
+               (long long)tf.excl_carrier);
+        kv_int(buf, LINEBUF, &off, "twin193_excl_faint",
+               (long long)tf.excl_faint);
+        kv_int(buf, LINEBUF, &off, "twin193_excl_sibling",
+               (long long)tf.excl_sibling);
+        kv_int(buf, LINEBUF, &off, "twin193_excl_any", (long long)tf.excl_any);
     }
     /* The record stream's own contract version (ADR 0007, #185 item 3),
      * appended after the flag-gated blocks above so every earlier field

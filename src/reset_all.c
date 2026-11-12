@@ -81,6 +81,7 @@
 #include "views/dashboard.h"
 #include "views/procs.h"
 #include "tune.h"
+#include "alerts/twin_field.h"
 #include "twins.h"
 #include "wifi_baseline.h"
 #include "wired_attach.h"

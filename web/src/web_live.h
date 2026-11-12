@@ -57,6 +57,8 @@
 /* sensor_health is change-only with a 300 s heartbeat
  * (JSONL_HEARTBEAT_SECS), so silence up to that long is normal. */
 #define WEB_LIVE_SH_STALE_MS 330000
+/* sensor_health's twin193_* counters (#193), in web_live.c's C193[]. */
+#define WEB_LIVE_C193_N     9
 #define WEB_LIVE_ERR_MAX    160
 #define WEB_LIVE_SPEC_MAX   128
 
@@ -278,6 +280,19 @@ typedef struct web_live_s {
     char      cap_iface[WEB_LIVE_SH_STR + 1], mon_iface[WEB_LIVE_SH_STR + 1];
     char      cap_exit[WEB_LIVE_SH_STR + 1], mon_exit[WEB_LIVE_SH_STR + 1];
     char      scope[WEB_LIVE_SH_STR + 1];
+    /* #193 field data, sensor_health's twin193_* (JSONL 1.7.0,
+     * src/alerts/twin_field.h): counts only, read-only here, no verdict
+     * of slothweb's reads them. c193 is the latest record's, which is
+     * one sloth session's; c193_base sums the sessions before it, folded
+     * in when twin193_since changes (a sloth restart), so base + c193
+     * is the total this slothweb has seen. In memory: a slothweb
+     * restart starts the total again. c193_seen 0 until a record
+     * carried twin193_since (an older sloth never does). Integers, so
+     * nothing here is a string off the air. */
+    int       c193_seen;
+    long long c193_since;
+    long long c193[WEB_LIVE_C193_N];
+    long long c193_base[WEB_LIVE_C193_N];
 
     /* recent records */
     web_live_rec_t     ring[WEB_LIVE_RING];
