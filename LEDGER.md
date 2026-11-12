@@ -336,3 +336,5 @@
 | 2e1da1a | 2026-11-12T05:45:10Z | claude-opus-5-5 | 6 | 2025 | 740224 | 5364 | 0.2315 | Radar fleet areas: side wash reach, tap clears, fetch only with a peer |
 | cf2d5787 | 2026-11-12T12:33:31Z | claude-opus-5 | 342 | 130524 | 26206928 | 492176 | 21.2900 | #197 — ATTACK_PATH attributed to the request half, not the victim |
 | 1367e59 | 2026-11-12T15:40:09Z | claude-opus-5-5 | 32 | 6287 | 3562607 | 735215 | 6.7201 | Close #196's fleet known limits: backfill, skew, reference, radios, own_net |
+| 1cde00f | 2026-11-12T19:25:30Z | claude-opus-5-5 | 82 | 17739 | 13656360 | 413398 | 6.3936 | Measure probe-response latency per BSSID, observation only (#187 S3) |
+| 0587203 | 2026-11-12T19:49:35Z | claude-opus-5-5 | 10 | 2338 | 1298092 | 6710 | 0.3601 | #187 S3 review: first answer per request, Retry-only requests void |
