@@ -186,9 +186,9 @@ static void test_attribution_labels_unverified_as_provisional(void) {
         "test-u", "research-test" };
     char buf[48];
     tool_attribution_format(buf, sizeof(buf), &v, TOOL_CONF_HIGH);
-    ASSERT_STR(buf, "hostapd-mana/high");
+    ASSERT_STR(buf, "hostapd-mana");
     tool_attribution_format(buf, sizeof(buf), &u, TOOL_CONF_MED);
-    ASSERT_STR(buf, "hostapd-mana/med? provisional");
+    ASSERT_STR(buf, "hostapd-mana? provisional");
     tool_attribution_format(buf, sizeof(buf), NULL, TOOL_CONF_MED);
     ASSERT_STR(buf, "");
 
@@ -381,10 +381,14 @@ static void test_every_tool_id_has_a_name(void) {
     ASSERT_STR(tool_name(SLOTH_TOOL_UNKNOWN), "");
 }
 
+/* #151, owner decision 2026-11-12: the field-count tiers print as the
+ * verdict tier one tool row alone supports. Seen red with HIGH mapped
+ * back to "high", then restored. tests/test_attack_hw.c holds the word
+ * to hw_tier_of_tool_conf(). */
 static void test_confidence_names(void) {
-    ASSERT_STR(tool_confidence_name(TOOL_CONF_LOW),  "low");
-    ASSERT_STR(tool_confidence_name(TOOL_CONF_MED),  "med");
-    ASSERT_STR(tool_confidence_name(TOOL_CONF_HIGH), "high");
+    ASSERT_STR(tool_confidence_name(TOOL_CONF_LOW),  "suspected");
+    ASSERT_STR(tool_confidence_name(TOOL_CONF_MED),  "suspected");
+    ASSERT_STR(tool_confidence_name(TOOL_CONF_HIGH), "suspected");
     ASSERT_STR(tool_confidence_name(TOOL_CONF_NONE), "");
 }
 

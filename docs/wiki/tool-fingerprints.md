@@ -107,11 +107,26 @@ unverified row safe to ship: it enriches a `KARMA_AP` alert, it never
 raises one — and since #90, `tool_fingerprint_match()`'s `unverified`
 output means it never escalates one to CRIT either. The alert detail
 and the `[y]` KARMA view mark a match from an UNVERIFIED row with a
-trailing `?` and the word `provisional` (`[ESP32 Marauder/med?
+trailing `?` and the word `provisional` (`[ESP32 Marauder?
 provisional]`) — the `?` is the convention the interface view uses for
 an unconfirmed channel retune (#91), and the word is there because a
 lone `?` is easy to read past. Both surfaces render through one helper,
 `tool_attribution_format()`, so they cannot disagree.
+
+**No confidence word since 2026-11-12** (#151, owner decision: one
+vocabulary). The attribution used to read `label/low`, `/med` or
+`/high`, the count of beacon fields the row compared, beside the
+attack-hardware verdict's `suspected` / `corroborated`. The mapping:
+`none` is no match; `low`, `med` and `high` are all `suspected`, because
+one row is one signal class however many of its fields agree, and
+`corroborated` needs two independent classes, one capture-backed
+([[attack-hardware-fingerprints]]). The word would therefore be the same
+on every match, so the attribution drops it and the tier is printed once,
+by the verdict (` hw:suspected-<device>` in the `KARMA_AP` detail,
+`hw_verdict` in JSONL). `sloth_tool_conf_t` still ranks rows and caps an
+UNVERIFIED row at `MED` internally; `tool_confidence_name()` returns the
+tier word and `hw_tier_of_tool_conf()` the tier, and
+`tests/test_attack_hw.c` holds the two together.
 
 The same provenance leaves sloth as fields, not only prose (#90): every
 `alert` and `alert.*` record a row shaped carries `signature_id`,

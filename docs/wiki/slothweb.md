@@ -2435,9 +2435,10 @@ The detail audit (`web/src/web_alertfmt.c`) now lists `PMKID_HARVEST`,
 two sensor rules bind every `%s` to a plain variable the audit can
 follow (`rules_sensor.c`: `sname`, `more`, and the source rule's
 buffer renamed `msg`, since `o->detail` shares the buffer's name).
-`KARMA_PROBE_FORGE` stays withheld: its rule formats `fan_note`, a name
-the audit's banned word "note" refuses, and the rename belongs to
-`rules_twin.c`.
+`KARMA_PROBE_FORGE` joined the list on 2026-11-12 (#187): its rule
+formatted `fan_note`, a name the audit's banned word "note" refuses, and
+was withheld until `rules_twin.c` renamed it `fan`. Its other `%s`
+arguments are the BSSID, a captured station's MAC (`sta`) and literals.
 
 ## Tests
 

@@ -38,7 +38,7 @@ static void fmt_mac(const uint8_t mac[6], char *buf, int sz) {
  * the row has.
  *
  * What gives way, in order: the SSID down to KARMA_SSID_MIN, then the
- * tool label. The "/conf? provisional" tail of the attribution is kept
+ * tool label. The "? provisional" tail of the attribution is kept
  * whole for as long as anything of the label fits, because that word is
  * what tells the operator the name is unverified (#90); a clipped label
  * ends in "~" so a stub is never read as a name. Only below that is the
@@ -72,19 +72,21 @@ static void karma_fit_tail(const karma_ap_t *k, const char *age, int room,
     tool[0] = '\0';
     if (!full[0] || rem <= 0) return;
     if (t_len <= rem) { snprintf(tool, tool_sz, "%s", full); return; }
-    const char *slash = strrchr(k->tool, '/');
-    int tail_len = slash ? (int)strlen(slash) : 0;
+    /* The marker tail, when there is one (#151 dropped the "/conf"
+     * that used to lead it). */
+    const char *mark = strstr(k->tool, "? provisional");
+    int tail_len = mark ? (int)strlen(mark) : 0;
     int label_w  = rem - 4 - tail_len;               /* "  [" + "]" */
-    if (slash && label_w >= 1) {
-        /* A clipped label is marked: "[ES/med? ...]" reads as the whole
+    if (mark && label_w >= 1) {
+        /* A clipped label is marked: "[ES? ...]" reads as the whole
          * name of some tool, not a cut "ESP32 Marauder". Below
          * KARMA_LABEL_MIN kept characters the stub says nothing, so
          * only the marker is left. */
         if (label_w > KARMA_LABEL_MIN)
-            snprintf(tool, tool_sz, "  [%.*s~%s]", label_w - 1, k->tool, slash);
+            snprintf(tool, tool_sz, "  [%.*s~%s]", label_w - 1, k->tool, mark);
         else    /* k->tool is 48 bytes; the bound only satisfies -Wformat-truncation */
             snprintf(tool, tool_sz, "  [~%.*s]",
-                     tail_len < 59 ? tail_len : 59, slash);
+                     tail_len < 59 ? tail_len : 59, mark);
         return;
     }
     snprintf(tool, tool_sz, "%.*s", rem, full);
@@ -251,7 +253,7 @@ void view_karma_draw(const sloth_state_t *s) {
     TPRINT(" PNL = SSIDs probed, >=%d on one station;"
            " chain = deauth-then-lure on shared victim; FR = forged\n",
            KARMA_PNL_CORROB_MIN);
-    TPRINT(" [tool/conf? provisional] = UNVERIFIED signature, no capture:"
+    TPRINT(" [tool? provisional] = UNVERIFIED signature, no capture:"
            " a hypothesis, not an identification\n");
     tui_normal();
 }

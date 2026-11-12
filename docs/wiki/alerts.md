@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-11-12 (#194: `EVIL_TWIN`'s late-arrival memory compares the radio and ignores APs born in a beacon flood). 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#187, #172: the evidence behind `KARMA_AP`, `KARMA_PROBE_FORGE`, `PMKID_HARVEST` and `HANDSHAKE_HARVEST` on the stream as `karma_suspect`, `harvest_station`, `harvest_chain`, JSONL 1.3.0, and as slothweb's WiFi card; slothweb shows the detail of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`). **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
+**Last updated**: 2026-11-12 (#187, #151 owner decisions: `KARMA_PROBE_FORGE` CRIT only on a captured station; `KARMA_AP` IE variety -15 confidence and CRIT on a `corroborated` hardware verdict). 2026-11-12 (#194: `EVIL_TWIN`'s late-arrival memory compares the radio and ignores APs born in a beacon flood). 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#187, #172: the evidence behind `KARMA_AP`, `KARMA_PROBE_FORGE`, `PMKID_HARVEST` and `HANDSHAKE_HARVEST` on the stream as `karma_suspect`, `harvest_station`, `harvest_chain`, JSONL 1.3.0, and as slothweb's WiFi card; slothweb shows the detail of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`). **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
 
 ---
@@ -231,9 +231,13 @@ both numbers: `EVIL_TWIN` is the first, reported as **suspected
 impersonation** with a percentage rather than as an established fact;
 `KARMA_AP` is the second (#90) — a bare SSID-count candidate is WARN,
 uncorroborated, and escalates to CRIT only when a PNL match on **one**
-station, a shared-victim deauth-then-lure chain, or a verified tool
-signature match ties the pattern to that specific BSSID rather than
-coincidence. The PNL escalator wants at least `KARMA_PNL_CORROB_MIN`
+station, a shared-victim deauth-then-lure chain, a verified tool
+signature match, or (since 2026-11-12, #151) a `corroborated`
+attack-hardware verdict ties the pattern to that specific BSSID rather
+than coincidence. A `suspected` verdict stays context. IE variety (the
+advertised SSIDs carrying two or more distinct postures, `+IE variety`)
+lowers its confidence by 15 (#187): one PineAP-style radio answers every
+name with one IE set. The PNL escalator wants at least `KARMA_PNL_CORROB_MIN`
 = 2 of the advertised SSIDs in a *single* station's list: PineAP
 Beacon Response answers one station's probes for its whole remembered
 list, whereas the union over every nearby client is a description of
@@ -249,10 +253,14 @@ Request", `airbase-ng -P` — which beacons one name and answers the rest,
 never becomes a candidate. The new rule reads Probe Responses instead:
 one BSSID answering a station's **directed** probe (paired by DA and
 SSID within 5 s) for an SSID that is not its own name and that it has
-never beaconed. `karma.forge_ssids` (2) such names is WARN; two distinct
-stations answered, or the same BSSID also fanning out beacons past
-`karma.ssid_thresh` (the issue's joint S1 + S2), is CRIT. It asserts
-what it observed, so it carries no confidence percentage. Basis:
+never beaconed. `karma.forge_ssids` (2) such names is WARN, and it
+stays WARN for as long as the radio only forges, whatever the number of
+stations answered or a beacon fan-out beside it (owner decision,
+2026-11-12). CRIT is a station captured: one that was sent a forged
+answer for a name, asked the BSSID to associate under that name within
+`karma.forge_assoc_s` (60 s) of it, and was granted (` +captured
+<sta>`). It asserts what it observed, so it carries no confidence
+percentage. Basis:
 `research/papers/daizovi-macaulay-2005-karma.md`,
 `research/tools/airbase-ng.md`; the row is in
 [`docs/views/alerts.md`](../views/alerts.md).
@@ -1083,7 +1091,7 @@ one.
 | `WPS_PBC_RACE` | fires above 2 / 120 s | `--wps-pbc-concurrent N` |
 | `WPS_PIXIE_PROBE` | 60 s of silence after M3 with no M4 | `--tune wps.pixie_silence_s=N` |
 | `WPS_PIXIE_LIKELY_SUCCESS` | 24 h look-back from a completed run | `--tune wps.pixie_success_window_s=N` |
-| `KARMA_PROBE_FORGE` | 2 never-beaconed SSIDs answered, 600 s | `--tune karma.forge_ssids=N`, `--tune karma.forge_window_s=N` |
+| `KARMA_PROBE_FORGE` | 2 never-beaconed SSIDs answered, 600 s; CRIT on an association within 60 s | `--tune karma.forge_ssids=N`, `--tune karma.forge_window_s=N`, `--tune karma.forge_assoc_s=N` |
 | `PMKID_HARVEST` | 3 BSSIDs, 50 % unanswered, 900 s | `--tune harvest.min_bssids=N`, `harvest.unanswered_pct=N`, `harvest.window_s=N` |
 | `HANDSHAKE_HARVEST` | 2 deauths, fresh M1/M2 within 30 s | `--tune harvest.deauth_min=N`, `harvest.reconnect_s=N`, `harvest.window_s=N` |
 

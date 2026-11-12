@@ -4742,6 +4742,66 @@ static void test_karma_pineapple_pairing_is_context_only(void) {
     if (ps >= 0) ASSERT_EQ((int)s.alerts[ps].hw_tier, (int)HW_TIER_NONE);
 }
 
+/* #151, owner decision 2026-11-12: a `corroborated` verdict makes
+ * KARMA_AP CRIT; `suspected` stays context. No shipped input is
+ * capture-backed, so the verdict is reached with a synthetic
+ * capture-backed stack row put in front of the matcher through
+ * hw_stack_test_table(). Stack row (backed) + setup-AP pairing is two
+ * classes: corroborated, CRIT, confidence unchanged. The stack row
+ * alone is one class: suspected, WARN. Seen red with `|| hw_corrob`
+ * removed from rule_karma_ap()'s gate (the first case), and with the
+ * gate widened to `hwv.tier >= HW_TIER_SUSPECTED` (the second, and the
+ * pairing test above), each then restored. */
+static void test_karma_corroborated_verdict_is_crit(void) {
+    static const hw_stack_row_t rows[] = {
+        { 0x5eed1510u, 9, SLOTH_TOOL_PINEAPPLE_MK7, "synthetic PineAP stack",
+          "test only, synthetic capture-backed row",
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "test-151" },
+    };
+    ASSERT(hw_stack_row_valid(&rows[0]));
+    uint8_t lure[6]  = {0x02,0x11,0x22,0x33,0x00,0x01};
+    uint8_t setup[6] = {0x02,0x11,0x22,0x33,0x1a,0x2b};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    hw_stack_test_table(rows, 1);
+
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_karma_ap(&s, lure, ssids, 3);
+    s.beacon_aps[0].fp.ie_order_hash  = 0x5eed1510u;
+    s.beacon_aps[0].fp.ie_order_count = 9;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    int conf0 = idx >= 0 ? s.alerts[idx].confidence : -1;
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].hw_tier, (int)HW_TIER_SUSPECTED);
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+        ASSERT(strstr(s.alerts[idx].detail, "hw:suspected-pineapple-mk7")
+               != NULL);
+    }
+
+    alerts_clear();
+    seed_state(&s);
+    seed_karma_ap(&s, lure, ssids, 3);
+    s.beacon_aps[0].fp.ie_order_hash  = 0x5eed1510u;
+    s.beacon_aps[0].fp.ie_order_count = 9;
+    const char *one[] = { "Pineapple_1A2B" };
+    seed_karma_ap(&s, setup, one, 1);
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].hw_tier, (int)HW_TIER_CORROBORATED);
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+        ASSERT_EQ(s.alerts[idx].confidence, conf0);
+        ASSERT(strstr(s.alerts[idx].detail,
+                      "hw:corroborated-pineapple-mk7") != NULL);
+        ASSERT(strstr(s.alerts[idx].detail, "uncorroborated") == NULL);
+    }
+    hw_stack_test_table(NULL, 0);
+}
+
 static void test_karma_names_the_tool_from_fingerprint_flags(void) {
     /* The signature table's one row keys on ap_fingerprint_t flags, and
      * nothing else in the suite proves those reach the matcher. Without
@@ -4764,12 +4824,12 @@ static void test_karma_names_the_tool_from_fingerprint_flags(void) {
          * so rather than let a confidence label speak for it (#90).
          * With nothing else corroborating, an UNVERIFIED guess alone
          * must not escalate severity either. */
-        ASSERT(strstr(s.alerts[idx].detail, "Marauder/med?") != NULL);
+        ASSERT(strstr(s.alerts[idx].detail, "Marauder?") != NULL);
         ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
         /* The "?" alone is easy to read past — the word is there too,
          * and the provenance travels as fields, not only prose (#90). */
         ASSERT(strstr(s.alerts[idx].detail,
-                      "[ESP32 Marauder/med? provisional]") != NULL);
+                      "[ESP32 Marauder? provisional]") != NULL);
         ASSERT_STR(s.alerts[idx].sig_id, "esp32-marauder-01");
         ASSERT_STR(s.alerts[idx].sig_version, "research-2026-09-04");
         ASSERT_EQ((int)s.alerts[idx].sig_validated, 0);
@@ -5011,16 +5071,17 @@ static void test_karma_ie_collapse_pays_confidence_not_severity(void) {
     ASSERT(strstr(s.alerts[i].detail, "uncorroborated") != NULL);
 }
 
-static void test_karma_ie_variety_pays_nothing_and_says_so(void) {
-    /* The converse reading, and the sharper one: a BSSID whose
-       advertised SSIDs carry genuinely different postures is doing
-       something a single spoofing radio does not. It earns no weight —
-       asserted as the exact bare threshold value, so a mutation that
-       pays KARMA_W_IE_COLLAPSE whenever the count is merely *known*
-       (`if (ie_fps)` rather than `if (ie_collapse)`) reddens here — and
-       the count is printed anyway, because a signal that only appears
-       when it incriminates tells the operator nothing about the times
-       it did not. */
+static void test_karma_ie_variety_lowers_confidence(void) {
+    /* The converse reading, and the sharper one (#187, owner decision
+       2026-11-12): a BSSID whose advertised SSIDs carry genuinely
+       different postures is doing something a single PineAP-style
+       radio, which answers every name with one IE set, does not. It
+       costs KARMA_W_IE_VARIETY (15) confidence and is named in the
+       detail. A station corroborates here so the number sits clear of
+       KARMA_CONF_MIN's clamp: 20 + 25 - 15 = 30, exact, so a mutation
+       that drops the subtraction (45) or pays the collapse instead (55)
+       reddens. Seen red with `confidence -= KARMA_W_IE_VARIETY` removed
+       from rule_karma_ap(), then restored. */
     alerts_clear();
     sloth_state_t s; seed_state(&s);
     uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
@@ -5030,12 +5091,48 @@ static void test_karma_ie_variety_pays_nothing_and_says_so(void) {
     b->ssid_history_fp[0] = 0x11111111u;
     b->ssid_history_fp[1] = 0x22222222u;
     b->ssid_history_fp[2] = 0x33333333u;
+    pnl_client_t *cli = &s.pnl_clients[s.pnl_count++];
+    memset(cli, 0, sizeof(*cli));
+    cli->mac[0] = 0x02; cli->mac[5] = 0x10;
+    snprintf(cli->ssids[0], 33, "corp");
+    snprintf(cli->ssids[1], 33, "corp-guest");
+    cli->ssid_count = 2;
     alerts_update(&s);
     int i = find_alert(&s, ALERT_TYPE_KARMA_AP);
     ASSERT(i >= 0);
     if (i < 0) return;
-    ASSERT_EQ((int)s.alerts[i].confidence, KARMA_W_SSID_THRESH);
-    ASSERT(strstr(s.alerts[i].detail, ", 3 IE fingerprints") != NULL);
+    ASSERT_EQ((int)s.alerts[i].confidence,
+              KARMA_W_SSID_THRESH + KARMA_W_PNL_OVERLAP - KARMA_W_IE_VARIETY);
+    ASSERT(strstr(s.alerts[i].detail, ", 3 IE fingerprints +IE variety")
+           != NULL);
+    /* Confidence only: the corroborating station still makes it CRIT. */
+    ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+}
+
+static void test_karma_uniform_ies_cost_no_confidence(void) {
+    /* The same corroborated candidate with one posture behind every
+       name: no variety, no subtraction, no marker. Seen red with the
+       variety test widened to `ie_fps >= 1`, then restored. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "corp", "corp-guest", "corp-iot" };
+    seed_karma_ap(&s, bssid, ssids, 3);
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count - 1];
+    for (int k = 0; k < 3; k++) b->ssid_history_fp[k] = 0x5a5a5a5au;
+    pnl_client_t *cli = &s.pnl_clients[s.pnl_count++];
+    memset(cli, 0, sizeof(*cli));
+    cli->mac[0] = 0x02; cli->mac[5] = 0x10;
+    snprintf(cli->ssids[0], 33, "corp");
+    snprintf(cli->ssids[1], 33, "corp-guest");
+    cli->ssid_count = 2;
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    ASSERT_EQ((int)s.alerts[i].confidence,
+              KARMA_W_SSID_THRESH + KARMA_W_PNL_OVERLAP + KARMA_W_IE_COLLAPSE);
+    ASSERT(strstr(s.alerts[i].detail, "IE variety") == NULL);
 }
 
 static void test_karma_unknown_fingerprints_state_nothing(void) {
@@ -5056,6 +5153,7 @@ static void test_karma_unknown_fingerprints_state_nothing(void) {
     ASSERT(i >= 0);
     if (i < 0) return;
     ASSERT(strstr(s.alerts[i].detail, "IE fingerprint") == NULL);
+    ASSERT(strstr(s.alerts[i].detail, "IE variety") == NULL);
     ASSERT_EQ((int)s.alerts[i].confidence, KARMA_W_SSID_THRESH);
 }
 
@@ -13608,6 +13706,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_e2e_clean_baseline_no_alerts);
     RUN_TEST(test_karma_three_ssids_fires);
     RUN_TEST(test_karma_pineapple_pairing_is_context_only);
+    RUN_TEST(test_karma_corroborated_verdict_is_crit);
     RUN_TEST(test_karma_names_the_tool_from_fingerprint_flags);
     RUN_TEST(test_karma_two_ssids_no_fire);
     RUN_TEST(test_karma_one_ssid_no_fire);
@@ -13616,7 +13715,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_karma_pnl_hits_spread_across_clients_no_escalation);
     RUN_TEST(test_karma_confidence_keys_on_the_corroborated_station);
     RUN_TEST(test_karma_ie_collapse_pays_confidence_not_severity);
-    RUN_TEST(test_karma_ie_variety_pays_nothing_and_says_so);
+    RUN_TEST(test_karma_ie_variety_lowers_confidence);
+    RUN_TEST(test_karma_uniform_ies_cost_no_confidence);
     RUN_TEST(test_karma_unknown_fingerprints_state_nothing);
     RUN_TEST(test_karma_detail_names_the_corroborating_station);
     RUN_TEST(test_karma_alert_key_is_the_shared_one);

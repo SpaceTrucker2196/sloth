@@ -167,8 +167,10 @@ const sloth_tool_sig_t *tool_fingerprint_match_row_table(
         const sloth_tool_obs_t *obs, sloth_tool_conf_t *conf);
 
 /* The operator-facing attribution for a matched row, written to `buf`
- * without brackets: `ESP32 Marauder/med` for a capture-backed row,
- * `ESP32 Marauder/med? provisional` for an UNVERIFIED one (#90). The
+ * without brackets: `ESP32 Marauder` for a capture-backed row,
+ * `ESP32 Marauder? provisional` for an UNVERIFIED one (#90). `conf` is
+ * not printed since #151's 2026-11-12 mapping (tool_confidence_name()
+ * below); it stays in the signature for callers. The
  * alert detail and the [y] KARMA view both render through this, so the
  * two surfaces cannot disagree about whether an identification is
  * provisional. The label is truncated to 20 characters. Writes "" for
@@ -192,7 +194,25 @@ const sloth_tool_sig_t *tool_signature_at(int i);
 /* Display name for a tool id; "" for SLOTH_TOOL_UNKNOWN. */
 const char *tool_name(sloth_tool_id_t id);
 
-/* Short confidence label — "low" / "med" / "high", "" for none. */
+/* The operator's word for a match confidence, in the attack-hardware
+ * verdict's vocabulary (#151, owner decision 2026-11-12: one vocabulary
+ * reaches the operator, not two). "" for TOOL_CONF_NONE, "suspected"
+ * for LOW, MED and HIGH alike.
+ *
+ * The mapping, and why all three land on one tier: `low` / `med` /
+ * `high` count how many beacon fields one signature row compared.
+ * The verdict tiers (src/attack_hw.h) count independent signal classes:
+ * `suspected` is one input naming a device, `corroborated` is two or
+ * more, one of them capture-backed. A tool row is one input however
+ * many of its fields agree, so its match alone is `suspected` at any
+ * field count, and `corroborated` is only ever the verdict layer's word.
+ * The field count stays internal (sloth_tool_conf_t), where it still
+ * ranks rows and caps an UNVERIFIED row; it is no longer printed, and
+ * since the word would be the same for every match the attribution
+ * carries none (tool_attribution_format()). The tier reaches the
+ * operator once, as the verdict's `hw:suspected-<device>`.
+ * attack_hw.h's hw_tier_of_tool_conf() states the same map as tiers,
+ * and tests/test_attack_hw.c holds the two to each other. */
 const char *tool_confidence_name(sloth_tool_conf_t c);
 
 #endif /* TOOL_FINGERPRINT_H */

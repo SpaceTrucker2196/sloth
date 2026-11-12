@@ -1224,11 +1224,17 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
         int tool_unverified = tool_row && tool_row->unverified;
         int tool_verified   = tool_row && !tool_row->unverified;
 
-        hw_verdict_t hwv;   /* #151: detail + JSONL only, never sev/conf */
+        /* #151: in the detail and JSONL, and since the owner's
+         * 2026-11-12 decision a `corroborated` verdict is CRIT. Never
+         * confidence. `suspected` stays context only: one input naming
+         * a device is a lead, not a tie to this candidate. */
+        hw_verdict_t hwv;
         char hw_note[80];   /* longest form is 74 */
         hw_karma_context(s, a, tool_row, now, &hwv, hw_note, sizeof(hw_note));
+        int hw_corrob = hwv.tier == HW_TIER_CORROBORATED;
         alert_sev_t sev = ALERT_SEV_WARN;
-        if (pnl_corrob || deauth || tool_verified) sev = ALERT_SEV_CRIT;
+        if (pnl_corrob || deauth || tool_verified || hw_corrob)
+            sev = ALERT_SEV_CRIT;
 
         int confidence = KARMA_W_SSID_THRESH;
         /* Confidence keys on the same measure as severity. Paying the
@@ -1241,6 +1247,12 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
          * collapses the same way, so this cannot be what turns a
          * candidate into a finding. See KARMA_W_IE_COLLAPSE. */
         if (ie_collapse) confidence += KARMA_W_IE_COLLAPSE;
+        /* The converse (#187, 2026-11-12): variety argues against one
+         * spoofing radio. karma_ie_distinct_fp() answers 0 for an
+         * incompletely fingerprinted set, so "unknown" never reads as
+         * variety. */
+        int ie_variety = ie_fps >= 2;
+        if (ie_variety) confidence -= KARMA_W_IE_VARIETY;
         if (tool_row)
             confidence += tool_unverified ? KARMA_W_TOOL_UNVERIF
                                           : KARMA_W_TOOL_VERIFIED;
@@ -1271,7 +1283,7 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
          * known, because "0 IE fingerprints" would read as a finding. */
         if (ie_collapse)
             snprintf(ie_note, sizeof(ie_note), ", 1 IE fingerprint");
-        else if (ie_fps > 1)
+        else if (ie_variety)
             snprintf(ie_note, sizeof(ie_note), ", %d IE fingerprints",
                      ie_fps);
         if (deauth)
@@ -1292,8 +1304,10 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
          * cannot drift — see karma_alert_key(). */
         karma_alert_key(a->bssid, key, sizeof(key));
         snprintf(detail, sizeof(detail),
-                 "KARMA BSSID %s: %d SSIDs%s%s%s%s%s%s, conf %d%%%s",
-                 bssid_str, a->ssid_history_n, ie_note, pnl_note,
+                 "KARMA BSSID %s: %d SSIDs%s%s%s%s%s%s%s, conf %d%%%s",
+                 bssid_str, a->ssid_history_n, ie_note,
+                 /* Named where it lowers the number (#187). */
+                 ie_variety ? " +IE variety" : "", pnl_note,
                  chain_note, pmkid_note, tool_note, hw_note, confidence,
                  sev == ALERT_SEV_WARN ? " - candidate, uncorroborated" : "");
         /* The newest frame carrying each distinct SSID (#92 slice 4):
@@ -2225,14 +2239,17 @@ void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
  * KARMA_SSID_THRESH) and the radio this catches beacons one name: as
  * evidence on KARMA_AP it would only ever be read for BSSIDs that are
  * already candidates, which is exactly the population that does not
- * need it. The issue's joint rule lands here instead, as the CRIT gate.
+ * need it. The issue's joint rule lands here instead, as context.
  *
- * Severity. WARN at karma.forge_ssids (default 2) never-beaconed names
- * answered. CRIT when the answers went to KARMA_FORGE_STA_CRIT (2)
- * distinct stations — one radio answering different people's private
- * network names is the mechanism itself, not a quirk one client can
- * trigger — or when the same BSSID is also beacon-fanning past
- * KARMA_SSID_THRESH, the issue's S1 + S2. The issue's S3 (response
+ * Severity (owner decision on #187, 2026-11-12). WARN at
+ * karma.forge_ssids (default 2) never-beaconed names answered, for as
+ * long as the radio only forges answers: to one station or to several,
+ * and with or without the same BSSID beacon-fanning past
+ * KARMA_SSID_THRESH (the issue's S1 + S2). Those are reported in the
+ * detail and are bait offered. CRIT when a station was captured:
+ * karma_forge_captured(), a station that received a forged answer for
+ * a name, asked this BSSID to associate under that name within
+ * karma.forge_assoc_s, and was granted. The issue's S3 (response
  * latency) is not built: no primary source for its threshold was found
  * (docs/views/karma.md). Its S4 (IE collapse) does not escalate here
  * either, for the reason KARMA_AP gives: a renamed BSS collapses the
@@ -2255,22 +2272,33 @@ void rule_karma_probe_forge(const sloth_state_t *s, time_t now) {
                 break;
             }
         int fanout = beaconed >= KARMA_SSID_THRESH;
-        alert_sev_t sev = (fanout || stations >= KARMA_FORGE_STA_CRIT)
-                        ? ALERT_SEV_CRIT : ALERT_SEV_WARN;
+        uint8_t victim[6];
+        int captured = karma_forge_captured(s, r, victim);
+        alert_sev_t sev = captured ? ALERT_SEV_CRIT : ALERT_SEV_WARN;
 
-        char bssid_str[20];
+        char bssid_str[20], sta[20];
         snprintf(bssid_str, sizeof(bssid_str),
                  "%02x:%02x:%02x:%02x:%02x:%02x",
                  r->bssid[0], r->bssid[1], r->bssid[2],
                  r->bssid[3], r->bssid[4], r->bssid[5]);
-        const char *fan_note = fanout ? " +beacon fan-out" : "";
-        const char *tail = sev == ALERT_SEV_WARN
-                         ? " - one station, uncorroborated" : "";
+        snprintf(sta, sizeof(sta), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 victim[0], victim[1], victim[2],
+                 victim[3], victim[4], victim[5]);
+        /* "fan", not "fan_note": slothweb's detail audit refuses any
+         * field named for free text, "note" included, and withheld this
+         * kind's detail for it. */
+        const char *fan  = fanout ? " +beacon fan-out" : "";
+        const char *tail = captured ? ""
+                         : (stations < 2 && !fanout)
+                         ? " - one station, uncorroborated"
+                         : " - forging only, no station associated";
         char detail[ALERT_DETAIL_LEN];
         snprintf(detail, sizeof(detail),
                  "KARMA forge BSSID %s: answered directed probes for %d "
-                 "SSIDs it never beaconed (beacons %d), to %d stations%s%s",
-                 bssid_str, forged, beaconed, stations, fan_note, tail);
+                 "SSIDs it never beaconed (beacons %d), to %d stations%s"
+                 "%s%s%s",
+                 bssid_str, forged, beaconed, stations, fan,
+                 captured ? " +captured " : "", captured ? sta : "", tail);
 
         char key[ALERT_KEY_LEN];
         akey_t k;

@@ -14,9 +14,10 @@
  * Plan #145's evidence standard governs all three. A passive sensor
  * corroborates, it never confirms: the top tier is
  * `corroborated-<device>`, never `identified-` and never `CONFIRMED_`.
- * Nothing here raises an alert or moves a severity. It describes an
- * alert that already fired (KARMA_AP), in the detail and as two
- * additive JSONL fields.
+ * Nothing here raises an alert. It describes an alert that already
+ * fired (KARMA_AP), in the detail and as two additive JSONL fields; and
+ * since the owner's 2026-11-12 decision a `corroborated` verdict makes
+ * that KARMA_AP CRIT (rule_karma_ap()). `suspected` moves nothing.
  *
  * docs/wiki/attack-hardware-fingerprints.md has the provenance of
  * every input and the list of what is still missing. */
@@ -71,6 +72,14 @@ const hw_stack_row_t *hw_stack_match(uint32_t hash, uint16_t count,
 const hw_stack_row_t *hw_stack_match_table(const hw_stack_row_t *rows,
                                            int n, uint32_t hash,
                                            uint16_t count, int *ambiguous);
+
+/* Test seam: make hw_stack_match() walk `rows` (n of them) instead of
+ * the shipped table; NULL restores it. Exists because the shipped table
+ * is empty, so no capture-backed stack row can reach rule_karma_ap()
+ * otherwise, and #151's severity decision has to be seen to act on one.
+ * The rows are the caller's and must outlive the override. Nothing
+ * outside tests/ calls it. */
+void hw_stack_test_table(const hw_stack_row_t *rows, int n);
 
 /* ── 2. Pineapple setup-AP pairing ─────────────────────────
  *
@@ -174,6 +183,14 @@ typedef struct {
 } hw_verdict_t;
 
 void hw_verdict_eval(const hw_inputs_t *in, hw_verdict_t *out);
+
+/* The tier a tool-signature match alone supports, by its confidence
+ * (#151, owner decision 2026-11-12): NONE -> none; LOW, MED, HIGH ->
+ * suspected. A row is one signal class whatever its field count, and
+ * `corroborated` needs two (above). tool_confidence_name() prints the
+ * word of this tier, so the attribution `[label/suspected]` and the
+ * verdict `hw:suspected-<device>` speak one vocabulary. */
+hw_tier_t hw_tier_of_tool_conf(sloth_tool_conf_t conf);
 
 /* The whole #151 enrichment for one KARMA_AP BSSID, in one call so
  * rule_karma_ap() carries a hook rather than the logic: looks the

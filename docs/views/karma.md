@@ -65,7 +65,10 @@ Per candidate:
   count is the AP showing genuinely different security postures per
   name, which a single spoofing radio does not do. That is why the
   count is printed in both directions rather than only when it
-  incriminates. It earns no confidence today (see "Open" below).
+  incriminates. Since 2026-11-12 (#187, owner decision) it costs the
+  `KARMA_AP` alert 15 confidence (`KARMA_W_IE_VARIETY`, named
+  `+IE variety` in the detail) whenever two or more distinct, all-known
+  fingerprints are present; this view's score is unchanged.
   Basis: `research/papers/mbssid-per-bss-ie-variation.md`.
 - **chain** — a **shared-victim** deauth-then-lure chain (#90): a
   station deauthed off a *different* BSSID within the 60 s window
@@ -102,9 +105,9 @@ Per candidate:
   ranked strongest-first. The PNL term uses the single-station count,
   not the PNL column's union, so the ranking and the `KARMA_AP` alert's
   CRIT gate cannot disagree about one BSSID (#90).
-- **tool** — a trailing `[label/conf]` when the tool-signature table
+- **tool** — a trailing `[label]` when the tool-signature table
   names the candidate ([[tool-fingerprints]]). A row with no capture
-  behind it renders as `[ESP32 Marauder/med? provisional]` (#90): a
+  behind it renders as `[ESP32 Marauder? provisional]` (#90): a
   hypothesis sloth is willing to state, not an identification. Same
   text as the `KARMA_AP` alert detail — both come from
   `tool_attribution_format()`. Display only: it does not move the
@@ -113,8 +116,9 @@ Per candidate:
 
 The same signals drive the `KARMA_AP` alert in `[v] Alerts`, which adds
 a `confidence` percentage and escalates WARN→CRIT only when a
-single-station PNL match, the deauth chain, or a verified tool match
-corroborates the bare SSID count (#90) — this view is the ranked, browsable surface for
+single-station PNL match, the deauth chain, a verified tool match or a
+`corroborated` attack-hardware verdict (#151, 2026-11-12) corroborates
+the bare SSID count (#90) — this view is the ranked, browsable surface for
 the same underlying signals, not a mirror of the alert's severity. The
 IE count and the collapse judgement come from `karma_ie_distinct_fp()`
 and `karma_ie_collapsed()` (`src/karma_detect.h`), which this view and
@@ -129,12 +133,9 @@ numbers about one BSSID — the same reason the PNL measures are shared.
   answering through hostapd is plausibly *slower* than firmware, not
   faster), was found. Without one the threshold would be a guess.
 
-- IE **variety** earns no confidence. It is the better-founded half of
-  the signal (it argues against one spoofing radio, where collapse is
-  consistent with the benign rename), but spending confidence *down*
-  on it would change what every existing uncorroborated candidate
-  reports, so #187's S4 slice left it reported-only. A negative weight
-  is a separate proposal.
+- IE **variety** in the `[y]` score. The alert spends it as negative
+  confidence since 2026-11-12; the ranking score here does not, so a
+  varied candidate ranks where it did.
 - Collapse is reported per BSSID over the whole SSID history, with no
   time dimension: an AP renamed twice a year ago and a radio cycling
   three names this minute produce the same cell.
@@ -148,9 +149,9 @@ numbers about one BSSID — the same reason the PNL measures are shared.
  -----------------  -----  ----  ----  --  -----  --  -----  ---------------
  00:11:22:33:44:55      7     4  80%   1   YES    -       7  Starbucks (2s)
  02:13:37:00:00:01      1     0  0%    1   -      2       4  default (1s)
- 24:6f:28:33:44:55      3     0  0%    3   -      -       1  ACME-Cor (4s)  [ESP~/med? provisional]
+ 24:6f:28:33:44:55      3     0  0%    3   -      -       1  ACME-Cor (4s)  [ESP32 M~? provisional]
  PNL = SSIDs probed, >=2 on one station; chain = deauth-then-lure on shared victim; FR = forged
- [tool/conf? provisional] = UNVERIFIED signature, no capture: a hypothesis, not an identification
+ [tool? provisional] = UNVERIFIED signature, no capture: a hypothesis, not an identification
 ```
 
 The BSSID is bright; PNL and chain go bright when non-zero to draw the
@@ -163,15 +164,17 @@ legend. The legend used to be left out of that budget, so a full table
 pushed it off the bottom — the line saying a tool name is a hypothesis.
 Each row's tail is fitted to the terminal width so it never reaches the
 last column and wraps: the top SSID gives way first, down to 8
-characters, then the tool *label*; the `/conf? provisional` part of the
+characters, then the tool *label*; the `? provisional` part of the
 attribution is kept whole while any of the label fits, because that is
 the part that says the name is unverified. A clipped label ends in `~`
 so a stub is never read as the name of some other tool, and below three
 kept characters only the `~` is left. The mockup above is drawn at 100
 columns, so its third row (`ACME-Corp`, `ESP32 Marauder`) shows the fit.
 With a long SSID and an old age a row can read
-`ABCDEFGH (14d)  [~/high? provisional]` (an age of a day or more prints in
-whole days since #187 S2 took four cells for FR); the full attribution is
+`ABCDEFGH (14d)  [Twenty~? provisional]` (an age of a day or more prints in
+whole days since #187 S2 took four cells for FR; the attribution has had
+no `/conf` word since #151's 2026-11-12 mapping, so the label keeps the
+four cells that freed); the full attribution is
 in the `KARMA_AP` alert detail and on a wider terminal. Pinned by
 `tests/test_karma.c :: test_view_full_page_fits_a_100x33_terminal`,
 which draws through `tui_draw()` on a 100x33 offscreen screen.
@@ -200,7 +203,8 @@ which draws through `tui_draw()` on a 100x33 offscreen screen.
 - **FR ≥ 2** — this BSSID told stations it was networks they asked for
   by name, and it has never beaconed those names. That is the KARMA
   mechanism itself, not a property of the beacons; `KARMA_PROBE_FORGE`
-  is CRIT once two different stations were answered.
+  fires WARN on it, and is CRIT once a station that was sent a forged
+  name associated under it and was let in (#187, 2026-11-12).
 
 - **Two or more PNL hits on one station** — the AP is beaconing
   several of the networks *one* nearby device is looking for. That is
