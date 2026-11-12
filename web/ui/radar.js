@@ -17,7 +17,10 @@
 // bearing for them (web_frrs_report.c, src/position_track.h). Marks are
 // shapes, not hues (R1, R10): satellite ◇, aircraft ▲, APRS ○, Wi-Fi a
 // solid ring, BLE a dashed one; the one accent (--signal) is the
-// selection. No gradients, shadows or fills on the chrome (R8). Every
+// selection. No gradients, shadows or fills on the chrome (R8). With
+// another sloth on the network, the fleet areas (owner request
+// 2026-11-11): each emitter two or more sites heard, from
+// /api/fleet/locate, as a light translucent area where it may be. Every
 // DOM string goes through textContent; a peer string on the canvas is
 // drawn with fillText (adsb.js's precedent) and never becomes markup.
 // Owner ruling 2026-11-06: the dome has no character-cell form, so it
@@ -50,7 +53,8 @@
   var S = { yaw: 0, pitch: PITCH_DFLT, zoom: 1, gnss: null, adsb: null, aprs: null, radar: null, trails: null,
             sel: null, selTrack: null, marks: [], rings: [], raf: 0, timer: 0, gen: 0, rgen: 0, tgen: 0,
             sgen: 0, radarAt: 0, trailAt: 0, cam: null, drag: null, errs: {}, placed: null, labelPicks: [],
-            hover: null, atrk: null, atrkAt: 0, agen: 0, atrkErr: "", aents: [] };
+            hover: null, atrk: null, atrkAt: 0, agen: 0, atrkErr: "", aents: [],
+            fleet: null, fleetAt: 0, fgen: 0, fleetOn: true, fleetErr: "", areas: [], fpeers: -1 };
   // The APRS window (owner request 2026-11-06, "a setting that defaults
   // to one hour for APRS objects"): an entity stays on the dome while its
   // newest packet of any kind is younger than this; every packet resets
@@ -63,6 +67,22 @@
   // draws, only the LABEL_N most recently heard carry a label; any
   // other shows its label while hovered or selected.
   var LABEL_N = 10;
+  // Fleet areas (owner request 2026-11-11: "when multiple sloths exist on
+  // the network use that for better location in the radar view. just
+  // make light transparent overlays for best guesses of the area the
+  // signal may be coming from"): /api/fleet/locate for each kind every
+  // 30 s, at most 100 rows a kind; a circle on the ground in FLEET_SEG
+  // steps. The fill's alpha is FLEET_A_SUM shared out over the areas
+  // drawn, at most FLEET_A_MAX: however many stack on one spot, their
+  // sum stays under 1 - e^-0.4, a third of --data, so the faint device
+  // rings drawn over them still read (at a sum of 1 the 133 areas of
+  // 2026-11-11, all within 40 m of the centre, made it two thirds); a
+  // side-only wash at FLEET_WASH of that. Fetched only with a peer
+  // configured (/api/health's fleet.peers, read once), the toggle on
+  // and the tab shown.
+  var FLEET_KINDS = ["wifi", "ap", "ble"], FLEET_MS = 30000, FLEET_LIMIT = 100, FLEET_SEG = 72;
+  var FLEET_A_MAX = 0.08, FLEET_A_SUM = 0.4, FLEET_WASH = 0.5;
+  var FLEET_KIND = { wifi: "Wi-Fi station", ap: "Wi-Fi access point", ble: "BLE advertiser" };
 
   function $(id) { return document.getElementById(id); }
   function num(v) { return typeof v === "number" && isFinite(v); }
@@ -218,6 +238,231 @@
     return id + " ~" + metres(devM(dv)) + (gl ? " " + gl : "");
   }
 
+  // ── fleet areas: other sloths' readings (/api/fleet/locate) ──────
+  // Every shape is in east/north metres from this sensor, and reaches
+  // the screen through place() and project() like every other mark: a
+  // circle on the ground is not round on the log range, and is drawn as
+  // FLEET_SEG points, not as an ellipse.
+  function gpt(e, n) {
+    return place(Math.atan2(e, n) * 180 / Math.PI, 0, Math.sqrt(e * e + n * n));
+  }
+  function enu(c, lat, lon) {
+    var g = geo(c.lat, c.lon, lat, lon), a = g.az * Math.PI / 180;
+    return { e: g.range * Math.sin(a), n: g.range * Math.cos(a) };
+  }
+  // Two one-sigma bands [lo, hi] about centres b metres apart share a
+  // point: some r1 and r2 in them with |r1 - r2| <= b <= r1 + r2.
+  function bandsMeet(lo1, hi1, lo2, hi2, b) {
+    return hi1 + hi2 >= b && lo1 - hi2 <= b && lo2 - hi1 <= b;
+  }
+  // The areas from the three answers, one per located row, by what the
+  // row honestly gives: a least-squares fix, the disc of its radius
+  // ("fix"); else, when every pair of the sites' bands meet, the
+  // intersection of the bands, each an annulus lo..hi about its site
+  // ("bands"); else, when the nearer site is outside the difference's
+  // sigma, a wash over the nearer site's half of the plane within its
+  // band's outer edge ("side"); else nothing (n.none counts it).
+  function fleetAreas(ans, c, n) {
+    var out = [];
+    (ans || []).forEach(function (j) {
+      if (!j || !Array.isArray(j.sites) || !Array.isArray(j.rows)) return;
+      var at = Object.create(null);
+      j.sites.forEach(function (s) {
+        if (s && typeof s.site === "string" && num(s.lat) && num(s.lon)) at[s.site] = enu(c, s.lat, s.lon);
+      });
+      j.rows.forEach(function (r) {
+        if (!r || typeof r.key !== "string" || !Array.isArray(r.sites)) return;
+        var ss = r.sites.filter(function (s) { return s && at[s.site] && num(s.lo_m) && num(s.hi_m) && s.hi_m > 0; });
+        if (ss.length < 2) { n.none++; return; }
+        var a = { id: j.kind + "|" + r.key, kind: j.kind, key: r.key, row: r, form: "", shapes: [], half: null, anchor: null };
+        var cd = (Array.isArray(r.candidates) ? r.candidates : []).filter(function (q) {
+          return q && num(q.lat) && num(q.lon) && num(q.radius_m) && q.radius_m > 0;
+        });
+        var meet = true, i, k;
+        for (i = 0; i < ss.length; i++)
+          for (k = 0; k < i; k++) {
+            var A = at[ss[i].site], B = at[ss[k].site];
+            if (!bandsMeet(ss[i].lo_m, ss[i].hi_m, ss[k].lo_m, ss[k].hi_m, Math.sqrt((A.e - B.e) * (A.e - B.e) + (A.n - B.n) * (A.n - B.n)))) meet = false;
+          }
+        if (r.method === "least_squares" && cd.length) {
+          var p = enu(c, cd[0].lat, cd[0].lon);
+          a.form = "fix";
+          a.shapes.push({ e: p.e, n: p.n, lo: 0, hi: cd[0].radius_m });
+          a.anchor = p;
+        } else if (meet) {
+          a.form = "bands";
+          ss.forEach(function (s) { var q = at[s.site]; a.shapes.push({ e: q.e, n: q.n, lo: s.lo_m, hi: s.hi_m }); });
+          a.anchor = cd.length ? enu(c, cd[0].lat, cd[0].lon) : bandsAnchor(a.shapes);
+        } else {
+          var nr = r.nearest, NA = nr && at[nr.site], NB = nr && at[nr.than];
+          var mine = ss.filter(function (s) { return nr && s.site === nr.site; })[0];
+          if (!NA || !NB || !mine || nr.within_band !== false || nr.site === nr.than) { n.none++; return; }
+          var dx = NA.e - NB.e, dy = NA.n - NB.n, dl = Math.sqrt(dx * dx + dy * dy) || 1;
+          a.form = "side";
+          a.shapes.push({ e: NA.e, n: NA.n, lo: 0, hi: mine.hi_m });
+          a.half = { ae: NA.e, an: NA.n, be: NB.e, bn: NB.n };
+          a.anchor = { e: NA.e + dx / dl * mine.hi_m / 2, n: NA.n + dy / dl * mine.hi_m / 2 };
+        }
+        n[a.form]++;
+        out.push(a);
+      });
+    });
+    return out;
+  }
+  // The label's place for an overlap with no candidate (the range
+  // circles do not cross): the point on the first site's mid-band circle
+  // furthest inside every band, so the label sits on its area and not,
+  // as a point along the sites' line would when one band encloses the
+  // other site, outside it.
+  function bandsAnchor(sh) {
+    var s0 = sh[0], rm = (s0.lo + s0.hi) / 2, best = null, bv = -Infinity;
+    for (var i = 0; i < FLEET_SEG; i++) {
+      var t = 2 * Math.PI * i / FLEET_SEG, e = s0.e + rm * Math.sin(t), n = s0.n + rm * Math.cos(t), v = Infinity;
+      // The least room left inside any other band, as a share of its width.
+      for (var k = 1; k < sh.length; k++) {
+        var d = Math.sqrt((e - sh[k].e) * (e - sh[k].e) + (n - sh[k].n) * (n - sh[k].n));
+        v = Math.min(v, Math.min(d - sh[k].lo, sh[k].hi - d) / (sh[k].hi - sh[k].lo || 1));
+      }
+      if (v > bv) { bv = v; best = { e: e, n: n }; }
+    }
+    return best;
+  }
+  // A ground circle of r metres about (e, n) as one closed subpath.
+  function circleTo(path, cam, e, n, r) {
+    for (var i = 0; i <= FLEET_SEG; i++) {
+      var t = 2 * Math.PI * i / FLEET_SEG, q = project(gpt(e + r * Math.sin(t), n + r * Math.cos(t)), cam);
+      if (i) path.lineTo(q.x, q.y); else path.moveTo(q.x, q.y);
+    }
+    path.closePath();
+  }
+  // The half-plane nearer A than B, L metres each way of the bisector,
+  // its four edges in FLEET_SEG steps each (a straight line on the
+  // ground bends on the log range).
+  function halfTo(path, cam, h, L) {
+    var dx = h.ae - h.be, dy = h.an - h.bn, b = Math.sqrt(dx * dx + dy * dy) || 1, ux = dx / b, uy = dy / b;
+    var mx = (h.ae + h.be) / 2, my = (h.an + h.bn) / 2;
+    var cs = [[mx - uy * L, my + ux * L], [mx - uy * L + ux * L, my + ux * L + uy * L],
+              [mx + uy * L + ux * L, my - ux * L + uy * L], [mx + uy * L, my - ux * L]];
+    for (var k = 0; k < 4; k++) {
+      var p0 = cs[k], p1 = cs[(k + 1) % 4];
+      for (var i = 0; i < FLEET_SEG; i++) {
+        var f = i / FLEET_SEG, q = project(gpt(p0[0] + (p1[0] - p0[0]) * f, p0[1] + (p1[1] - p0[1]) * f), cam);
+        if (k || i) path.lineTo(q.x, q.y); else path.moveTo(q.x, q.y);
+      }
+    }
+    path.closePath();
+  }
+  // One Path2D a shape (an annulus is its two circles under evenodd),
+  // and the half-plane's: the area is where every one holds. The
+  // half-plane reaches past the far edge of the nearer site's disc,
+  // which is half the baseline plus its radius from the bisector: a
+  // reach of twice the radius alone left no area at all once the sites
+  // were more than twice the radius plus 20 m apart.
+  function areaPaths(a, cam) {
+    var ps = a.shapes.map(function (s) {
+      var p = new Path2D();
+      circleTo(p, cam, s.e, s.n, s.hi);
+      if (s.lo > 0) circleTo(p, cam, s.e, s.n, s.lo);
+      return p;
+    });
+    if (a.half) {
+      var h = new Path2D();
+      var hb = Math.sqrt((a.half.ae - a.half.be) * (a.half.ae - a.half.be) + (a.half.an - a.half.bn) * (a.half.an - a.half.bn));
+      halfTo(h, cam, a.half, hb / 2 + a.shapes[0].hi + 10);
+      ps.push(h);
+    }
+    return ps;
+  }
+  function areaHit(a, g, x, y) {
+    if (!a.paths || !a.paths.length) return false;
+    for (var i = 0; i < a.paths.length; i++) if (!g.isPointInPath(a.paths[i], x, y, "evenodd")) return false;
+    return true;
+  }
+  // The link between a device's dot and its fleet area: the addresses
+  // the pointer and the pick are on, of one side (fleet: an area's key;
+  // else a Wi-Fi or BLE dot's address), lower case.
+  function hotAddrs(fleet) {
+    var out = [];
+    [S.hover, S.sel].forEach(function (s) {
+      if (!s) return;
+      if (fleet && s.kind === "fleet") out.push(s.key.slice(s.key.indexOf("|") + 1).toLowerCase());
+      if (!fleet && (s.kind === "wifi" || s.kind === "ble")) out.push(String(s.key).split("/")[0].toLowerCase());
+    });
+    return out;
+  }
+  // A row names this site "self" (web_locate.c); the page says so.
+  function siteWord(n) { return n === "self" ? "this site" : String(n); }
+  function areaLabel(a) {
+    var r = a.row, id = r.label || r.key;
+    id = id.length > 17 ? id.slice(0, 16) + "\u2026" : id;
+    return id + " \u00b7 " + (a.form === "fix" ? "may be within " + metres(a.shapes[0].hi)
+                             : a.form === "bands" ? "bands of " + a.shapes.length + " sites"
+                             : "nearer " + siteWord(r.nearest.site)) +
+           (num(r.band_m) ? ", band \u00b1" + metres(r.band_m) : "") + (r.coarse ? ", coarse" : "");
+  }
+  // Any answer naming a site other than this one: the toggle's reason
+  // to exist.
+  function fleetPeers() {
+    return !!S.fleet && S.fleet.some(function (j) {
+      return !!j && Array.isArray(j.sites) && j.sites.some(function (s) { return s && s.site !== "self"; });
+    });
+  }
+  // Worth asking: a peer configured, the toggle on, not Local.
+  function fleetWanted() { return S.fpeers > 0 && S.fleetOn && H.scope() !== "local"; }
+  function fleetBtn() {
+    var b = $("radar-fleet");
+    if (!b) return;
+    b.hidden = !(S.fpeers > 0) || H.scope() === "local";
+    b.textContent = S.fleetOn ? "fleet areas on" : "fleet areas off";
+  }
+  // Drawn under every mark, after the ground and the dome: each area
+  // its clip of every path filled once in --data at the shared alpha,
+  // so overlaps read darker; the hovered or picked one, or one whose
+  // device dot is, outlined. Then the other sites, a hollow □ and the
+  // name.
+  function drawFleet(g, cam, c, T, W, Hh, dpr, want, placed) {
+    S.areas = [];
+    var n = { fix: 0, bands: 0, side: 0, none: 0 };
+    placed.fleet = n;
+    if (!S.fleetOn || !c || !fleetPeers()) return;
+    var areas = fleetAreas(S.fleet, c, n), al = Math.min(FLEET_A_MAX, FLEET_A_SUM / Math.max(1, areas.length));
+    var dhot = hotAddrs(false);
+    areas.forEach(function (a) {
+      var ps = areaPaths(a, cam), on = isSel("fleet", a.id);
+      var hov = !!S.hover && S.hover.kind === "fleet" && S.hover.key === a.id;
+      var lk = dhot.indexOf(a.key.toLowerCase()) >= 0;
+      a.paths = ps;
+      g.save();
+      ps.forEach(function (p) { g.clip(p, "evenodd"); });
+      g.globalAlpha = (a.form === "side" ? FLEET_WASH : 1) * (on || hov || lk ? Math.max(0.2, al) : al);
+      g.fillStyle = on ? T.signal : T.data;
+      g.fillRect(0, 0, W, Hh);
+      g.restore();
+      if (on || hov || lk) {
+        g.globalAlpha = 0.6;
+        g.strokeStyle = on ? T.signal : T.ink;
+        g.lineWidth = dpr;
+        ps.forEach(function (p) { g.stroke(p); });
+        g.globalAlpha = 1;
+        var q = project(gpt(a.anchor.e, a.anchor.n), cam);
+        want.push({ x: q.x, y: q.y, text: areaLabel(a), pri: PRI.sel, color: on ? T.signal : T.ink, alpha: 1 });
+      }
+      S.areas.push(a);
+    });
+    var seen = Object.create(null);
+    g.strokeStyle = T.muted;
+    g.lineWidth = dpr;
+    S.fleet.forEach(function (j) {
+      ((j && j.sites) || []).forEach(function (s) {
+        if (!s || s.site === "self" || seen[s.site] || !num(s.lat) || !num(s.lon)) return;
+        seen[s.site] = 1;
+        var q = enu(c, s.lat, s.lon), p = project(gpt(q.e, q.n), cam);
+        g.strokeRect(p.x - 3 * dpr, p.y - 3 * dpr, 6 * dpr, 6 * dpr);
+        want.push({ x: p.x, y: p.y, text: s.site, pri: PRI.aprs, color: T.muted, alpha: 1 });
+      });
+    });
+  }
+
   // ── the sensor's position: the fix, else --location, else none ───
   function centre() {
     var j = S.gnss;
@@ -267,6 +512,7 @@
       var fam = S.radar && S.radar[s.key.fam];
       return fam && fam.bands ? fam.bands[BANDS[s.key.band]] || null : null;
     }
+    if (s.kind === "fleet") return S.areas.filter(function (a) { return a.id === s.key; })[0] || null;
     return null;
   }
   function select(kind, key) {
@@ -578,6 +824,8 @@
       for (var el = 0; el <= 90; el += 5) mer.push(project(place(b, el, R_MAX), cam));
       polyline(g, mer);
     }
+    drawFleet(g, cam, c, T, W, Hh, dpr, want, placed);
+    g.globalAlpha = 1;
 
     // The Wi-Fi and BLE band rings on the ground, counted: Wi-Fi solid,
     // BLE dashed, each at the band's nominal radius, faint (the devices
@@ -612,7 +860,7 @@
     // distance (the band's nominal radius when the record carried no
     // metres): ■ Wi-Fi, ● BLE, each with its own faint ring (Wi-Fi
     // solid, BLE dashed); their labels stack in two columns.
-    var shown = { ble: 0, wifi: 0 };
+    var shown = { ble: 0, wifi: 0 }, fhot = hotAddrs(true);
     [["wifi", "R"], ["ble", "L"]].forEach(function (fam) {
       var list = (S.radar && S.radar.devs && S.radar.devs[fam[0]]) || [];
       list.forEach(function (dv, idx) {
@@ -634,6 +882,7 @@
         g.fillStyle = col;
         if (ble) dot(g, p.x, p.y, 3 * dpr); else square(g, p.x, p.y, 3 * dpr);
         g.globalAlpha = 1;
+        if (fhot.indexOf(String(ble ? dv.addr : dv.mac).toLowerCase()) >= 0) { g.strokeStyle = T.ink; ring(g, p.x, p.y, 6 * dpr); }
         S.marks.push({ x: p.x, y: p.y, kind: fam[0], key: key, ref: dv });
         if (idx < LABEL_N || on || hov)
           want.push({ x: p.x, y: p.y, col: fam[1], text: devLabel(fam[0], dv), pri: on || hov ? PRI.sel : PRI.dev,
@@ -773,7 +1022,7 @@
   }
 
   // ── picking: the nearest mark within 8 px, else the nearest ring ──
-  function pickAt(px, py) {
+  function pickAt(px, py, areas) {
     var cam = S.cam;
     if (!cam) return null;
     var lim = PICK_PX * cam.dpr, best = null, bd = lim;
@@ -792,7 +1041,14 @@
       var dd = ringDist(px, py, r.r, cam);
       if (dd <= bd) { bd = dd; best = { kind: "ring", key: { fam: r.fam, band: r.band } }; }
     });
-    return best;
+    if (best || !areas) return best;
+    // A fleet area last, the one drawn on top first: it is wide, and only
+    // when the caller asks (hover always; a tap only with nothing picked,
+    // so a tap off every mark still clears the panel where the areas
+    // cover the centre).
+    var g = $("radar-dome").getContext("2d");
+    for (i = S.areas.length - 1; g && i >= 0; i--) if (areaHit(S.areas[i], g, px, py)) return { kind: "fleet", key: S.areas[i].id };
+    return null;
   }
   function canvasPoint(ev, cv) {
     var bx = cv.getBoundingClientRect();
@@ -915,6 +1171,25 @@
       });
       list.appendChild(ol);
       openTab(ble ? "BLE Devices" : "Devices");
+    } else if (s.kind === "fleet") {
+      var fr = ref.row, nr = fr.nearest || {};
+      H.set("radar-side-name", (fr.label ? "\"" + fr.label + "\" " : "") + fr.key);
+      var rows = [["family", (FLEET_KIND[ref.kind] || ref.kind) + ", heard at " + fr.sites.length + " sites"]];
+      fr.sites.forEach(function (st) {
+        rows.push([siteWord(st.site), st.rssi + " dBm, ~" + metres(st.range_m) + " (" + metres(st.lo_m) + " to " + metres(st.hi_m) +
+                   ", \u00b1" + st.sigma_db + " dB" + (st.calibrated ? "" : ", receiver not calibrated") + ")"]);
+      });
+      kvRows(kv, rows.concat([
+        ["nearer", nr.within_band ? "neither (" + nr.by_db + " dB, inside \u00b1" + nr.sigma_db + ")"
+                                  : siteWord(nr.site) + " by " + nr.by_db + " dB (\u00b1" + nr.sigma_db + ") than " + siteWord(nr.than)],
+        ["method", String(fr.method).replace("_", " ") + ", " + (fr.candidates || []).length + " candidates"],
+        ["area drawn", ref.form === "fix" ? "a least-squares fit's disc, radius " + metres(ref.shapes[0].hi)
+                       : ref.form === "bands" ? "where every site's one-sigma band overlaps"
+                       : "the nearer site's side, within its band"],
+        ["band", "\u00b1" + metres(fr.band_m) + " over a " + metres(fr.baseline_m) + " baseline" + (fr.coarse ? ": coarse, a side not a point" : "")],
+        ["last heard", age(now - fr.age_s, now) + " ago"],
+        ["placement", "range from signal strength at each sloth (ITU-R P.1238, power assumed): where it may be, not where it is"]]));
+      openTab("Fleet");
     }
   }
   // "open in <tab>": the family's tab, then its own selection.
@@ -927,6 +1202,7 @@
     else if (s.kind === "ring") H.show(s.key.fam === "ble" ? "ble" : "devices");
     else if (s.kind === "ble") { H.show("ble"); H.openBleDrawer(ref.addr, ref.addr_type, ref.iface); }
     else if (s.kind === "wifi") { H.show("devices"); H.openDrawer(ref.mac); }
+    else if (s.kind === "fleet") H.show("fleet");
   }
 
   // ── the header and the caption (R9) ──────────────────────────────
@@ -974,6 +1250,14 @@
       parts.push("ticks are speed and heading (aircraft gs/track, APRS speed/course); Wi-Fi and BLE have neither, " +
                  "their arrow is sloth's trend (\u2198 approaching, \u2192 steady, \u2197 leaving)");
       parts.push("distance from signal strength is an estimate; a ring is where the device may be, not where it is");
+      var fn = p.fleet || { fix: 0, bands: 0, side: 0, none: 0 };
+      if (S.fpeers > 0)
+        parts.push(!S.fleetOn ? "fleet areas off" : !fleetPeers() ? "fleet areas: no other sloth with a position yet"
+                   : !c ? "fleet areas need a sensor position"
+                   : "fleet areas from /api/fleet/locate 30 s: " + (fn.fix + fn.bands + fn.side) + " drawn (" + fn.bands +
+                     " where the sites' bands overlap, " + fn.fix + " least-squares discs, " + fn.side + " a side only), " + fn.none +
+                     " with no side; each where it may be, not where it is");
+      if (S.fleetErr) parts.push("fleet: " + S.fleetErr);
     } else {
       parts.push("Local: the passive radios' families are not read");
     }
@@ -991,6 +1275,24 @@
       S.selTrack = j.station && Array.isArray(j.station.track_pts) ? j.station.track_pts : null;
       dirty();
     }).catch(function () { /* the mark still shows; the next poll retries */ });
+  }
+  // The three kinds at once; an answer that fails is left out and named
+  // in the caption.
+  function loadFleet() {
+    S.fleetAt = Date.now();
+    S.fleetErr = "";
+    var fg = ++S.fgen;
+    Promise.all(FLEET_KINDS.map(function (k) {
+      return H.getJSON("/api/fleet/locate?kind=" + k + "&limit=" + FLEET_LIMIT).catch(function (e) {
+        if (fg === S.fgen) S.fleetErr = msg(e);
+        return null;
+      });
+    })).then(function (all) {
+      if (fg !== S.fgen) return;
+      S.fleet = all;
+      fleetBtn();
+      after();
+    });
   }
   function load() {
     if (!H || !visible()) return;
@@ -1015,9 +1317,22 @@
     if (local) {
       S.adsb = S.aprs = S.radar = S.atrk = null;
       S.radarAt = S.atrkAt = 0;
+      S.fleet = null;
+      S.fleetAt = 0;
+      fleetBtn();
       after();
       return;
     }
+    // The peers, once a page: the fleet is read only with one.
+    if (S.fpeers === -1) {
+      S.fpeers = -2;
+      H.getJSON("/api/health").then(function (j) {
+        S.fpeers = j && j.fleet && Array.isArray(j.fleet.peers) ? j.fleet.peers.length : 0;
+        fleetBtn();
+        if (fleetWanted() && visible()) loadFleet();
+      }).catch(function () { S.fpeers = -1; });
+    }
+    if (fleetWanted() && Date.now() - S.fleetAt > FLEET_MS) loadFleet();
     // fleet=0: the dome is this receiver's sky; another sloth host's
     // aircraft (the ADS-B tab's grey rows) has no bearing from here.
     H.getJSON("/api/adsb?fleet=0").then(function (j) {
@@ -1095,6 +1410,8 @@
     S.yaw = prefNum("radar.yaw", 0, 360, 0);
     S.pitch = prefNum("radar.pitch", PITCH_MIN, PITCH_MAX, PITCH_DFLT);
     S.zoom = prefNum("radar.zoom", ZOOM_MIN, ZOOM_MAX, 1);
+    // Kept only when off: absent is on.
+    S.fleetOn = H.prefGet("radar.fleet") !== false;
     var cv = $("radar-dome");
     if (!cv) return;
     cv.tabIndex = 0;
@@ -1111,8 +1428,8 @@
       var dr = S.drag;
       if (!dr) {
         // Hover: a device dot under the pointer shows its label.
-        var pt = canvasPoint(ev, cv), pk = pickAt(pt[0], pt[1]);
-        var hv = pk && (pk.kind === "ble" || pk.kind === "wifi") ? pk : null;
+        var pt = canvasPoint(ev, cv), pk = pickAt(pt[0], pt[1], true);
+        var hv = pk && (pk.kind === "ble" || pk.kind === "wifi" || pk.kind === "fleet") ? pk : null;
         var was = S.hover ? S.hover.kind + "|" + S.hover.key : "", now = hv ? hv.kind + "|" + hv.key : "";
         if (was !== now) { S.hover = hv; dirty(); }
         return;
@@ -1130,7 +1447,7 @@
       if (!dr) return;
       S.drag = null;
       if (dr.moved < TAP_PX && ev.type === "pointerup") {
-        var pt = canvasPoint(ev, cv), hit = pickAt(pt[0], pt[1]);
+        var pt = canvasPoint(ev, cv), hit = pickAt(pt[0], pt[1], !S.sel);
         if (hit) select(hit.kind, hit.key); else select(null);
       } else {
         savePrefs();
@@ -1173,6 +1490,15 @@
     $("radar-open").addEventListener("click", openSel);
     // The APRS window: the entities read again and the dome redrawn.
     $("radar-aprs-win").addEventListener("change", function () { S.atrkAt = 0; load(); dirty(); });
+    $("radar-fleet").addEventListener("click", function () {
+      S.fleetOn = !S.fleetOn;
+      H.prefSet("radar.fleet", S.fleetOn ? null : false);
+      if (!S.fleetOn && S.sel && S.sel.kind === "fleet") select(null);
+      if (fleetWanted() && Date.now() - S.fleetAt > FLEET_MS) loadFleet();
+      fleetBtn();
+      dirty();
+    });
+    fleetBtn();
     var fb = $("radar-full");
     fb.hidden = !document.fullscreenEnabled;
     fb.addEventListener("click", toggleFull);

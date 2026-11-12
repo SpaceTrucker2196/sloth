@@ -48,7 +48,7 @@ the pull thread, `/api/fleet/peers`), `web/src/web_store.c` (`STEP_V8_SQL`),
 health member), `web/src/web_frrs.c` (`web_frrs_verdicts()`),
 `web/src/web_gnss.c` (`web_gnss_site()`), `web/src/web_secret.h`,
 `web/src/web_slothdb.c` (`web_sdb_devices_after()`, `web_sdb_aps_after()`,
-`web_sdb_seen()`), `web/ui/fleet.js`, `web/ui/fleet.css`,
+`web_sdb_seen()`), `web/ui/fleet.js`, `web/ui/fleet.css`, `web/ui/radar.js` (the Radar's fleet areas),
 `web/src/web_locate.h`, `web/src/web_locate.c` (I5), `src/rf_model.h`,
 `src/rf_model.c` (the path-loss model both sloth and slothweb link),
 `web/src/web_fleetgnss.h`, `web/src/web_fleetgnss.c` (I6),
@@ -83,7 +83,7 @@ authentication); for the identity findings `research/mitre/T1595.md`,
 `docs/wiki/alert-assessments/MY_NETWORK_RECON.md` and
 [[mac-randomisation]].
 
-**Last updated**: 2026-11-12 (the merged views reach the ADS-B tab: `/api/adsb` and `/api/adsb/seen` carry the peers' `aircraft` rows, `/api/adsb/aircraft` names the hosts); 2026-11-11 (#192 I2, I3, I4, I8 review: `EVIL_TWIN` only for the impostor half the stream attributed, `TWIN_UNATTRIBUTED` for either half otherwise and not counted by I4; I2 not applicable at co-located sites; I2 and I4 leads (`lead`); 16 own networks of each kind, as sloth); 2026-11-11 (#192 I2, I3, I4, I8: identity across the sites, the export's `ident=1` (`own_net` lines; `ie_fp`, `vie_fp`, `wps_manuf`, `wps_model`, `wps_num`, `attacks`, `attack_first`, `attack_last` on ap lines), peer_sightings kind `own_net`, meta `fleet.ident.<peer>`, slothweb's `--my-ssid` and `--my-bssid`, `/api/fleet/findings`, the overview's `findings`, the Fleet tab's identity panel); 
+**Last updated**: 2026-11-12 (the Radar tab draws `/api/fleet/locate` as translucent areas: band overlap, fix disc or nearer-side wash); 2026-11-12 (the merged views reach the ADS-B tab: `/api/adsb` and `/api/adsb/seen` carry the peers' `aircraft` rows, `/api/adsb/aircraft` names the hosts); 2026-11-11 (#192 I2, I3, I4, I8 review: `EVIL_TWIN` only for the impostor half the stream attributed, `TWIN_UNATTRIBUTED` for either half otherwise and not counted by I4; I2 not applicable at co-located sites; I2 and I4 leads (`lead`); 16 own networks of each kind, as sloth); 2026-11-11 (#192 I2, I3, I4, I8: identity across the sites, the export's `ident=1` (`own_net` lines; `ie_fp`, `vie_fp`, `wps_manuf`, `wps_model`, `wps_num`, `attacks`, `attack_first`, `attack_last` on ap lines), peer_sightings kind `own_net`, meta `fleet.ident.<peer>`, slothweb's `--my-ssid` and `--my-bssid`, `/api/fleet/findings`, the overview's `findings`, the Fleet tab's identity panel); 
 ## What travels, and what never does
 
 ADR 0008 amends ADR 0006 for one case: between sensors the same
@@ -445,6 +445,18 @@ the sites with their ranges, the nearer site by dB with that
 difference's sigma ("neither" when the difference is inside it), the
 method, and
 "coarse" when the band exceeds the baseline.
+
+On the Radar tab ([[slothweb]], `web/ui/radar.js`, 2026-11-12): the
+three kinds' answers as light translucent areas on the dome's ground,
+centred on this sensor and through its log range. A least-squares fix
+is the disc of its radius; two sites give the region where both
+one-sigma bands (`lo_m`..`hi_m` about each site) overlap, which exists
+even when the range circles themselves do not cross; when the bands do
+not meet and `nearest` is outside its sigma, a fainter wash over the
+nearer site's half of the plane within its band; otherwise nothing.
+Overlaps read darker; a device dot on the dome's north axis and its
+area are linked on hover. `web/README.md` "Radar" has the rules and the
+live counts.
 
 ## The store: slothweb.db v8
 
