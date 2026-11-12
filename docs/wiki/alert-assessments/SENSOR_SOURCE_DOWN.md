@@ -1,7 +1,7 @@
 ---
 type: SENSOR_SOURCE_DOWN
 technique: ""
-rule_file: src/alerts/rules_sensor.c:152 rule_sensor_source_down()
+rule_file: src/alerts/rules_sensor.c:157 rule_sensor_source_down()
 count_semantics: per rule evaluation - one fire() per alerts_update() tick per configured source that is open or past its hold (down 10 s, or not ok 300 s). One key per source (`srcdown:<name>`); the detail carries the state, the reader's own word and the freshness band, never an age in seconds, so `observations` moves only when one of those changes.
 severity_assessment: agree - CRIT for the monitor radio and the IP capture, whose loss leaves the sensor silent on its whole 802.11 or wired domain while the views look like a quiet network; WARN for the Bluetooth, GNSS, ADS-B and APRS sources, which each feed one domain beside them.
 false_positive_risk: low - the input is sloth's own reader state (source_status); the holds keep a reconnect that succeeds within seconds and a short lull out. A wired capture on a segment that is genuinely silent for five minutes would fire, which is the rule saying exactly what it measures.
@@ -24,7 +24,8 @@ None. An own-operational-state kind (`tests/test_research_corpus.c :: test_own_s
 
 - the alert detail: source name, kind, endpoint, state, the reader's own word (`not open`, `exit: iface_gone: ...`, `error: connection refused`, `no frame yet`) and the freshness band;
 - the `source_status` row, written the moment its state changes, and the `sys_status` batch's `sources_down` (docs/wiki/jsonl-schema.md);
-- `sensor_health`'s per-stream liveness fields for the pcap streams.
+- `sensor_health`'s per-stream liveness fields for the pcap streams;
+- slothweb's Alerts view, which shows the detail since 2026-11-12 (`web/src/web_alertfmt.c`: every field the host's own text, the same strings the `source_status` row carries).
 
 ## Benign causes
 

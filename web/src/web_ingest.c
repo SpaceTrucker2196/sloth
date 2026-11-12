@@ -19,6 +19,7 @@
 #include "web_ble.h"
 #include "web_adsb.h"
 #include "web_aprs.h"
+#include "web_lure.h"
 #include "web_sysstat.h"
 #include "web_gnss.h"
 #include "web_metrics.h"
@@ -140,6 +141,7 @@ static void one_line(web_feed_t *f, web_live_t *l, long long now_ms) {
         if (f->adsb) web_adsb_record(f->adsb, &f->rec, now_ms);
         if (f->aprs) web_aprs_record(f->aprs, &f->rec, now_ms);
         if (f->sys) web_sys_record(f->sys, &f->rec, now_ms);
+        if (f->lure) web_lure_record(f->lure, &f->rec, now_ms);
         if (f->chain) web_chain_record(f->chain, &f->rec);
     } else {
         web_live_decode_error(l, e, now_ms);
@@ -392,6 +394,10 @@ void web_ingest_set_aprs(web_ingest_t *g, struct web_aprs *a) {
 
 void web_ingest_set_sys(web_ingest_t *g, struct web_sys *y) {
     g->feed.sys = y;
+}
+
+void web_ingest_set_lure(web_ingest_t *g, struct web_lure *l) {
+    g->feed.lure = l;
 }
 
 void web_ingest_set_chain(web_ingest_t *g, struct web_chain *c) {

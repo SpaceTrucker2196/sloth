@@ -22,7 +22,7 @@ Steube's 2018 disclosure: the attack "is performed on the RSN IE ... of a single
 
 ## Evidence that proves it
 
-One station, several BSSIDs, each having been asked to associate and each having answered with an M1, none answered; CRIT adds that the M1s carried PMKIDs. The cited frames are those M1s. The EAPOL `[e]` view shows them as a run of `M1` rows to one STA.
+One station, several BSSIDs, each having been asked to associate and each having answered with an M1, none answered; CRIT adds that the M1s carried PMKIDs. The cited frames are those M1s. The EAPOL `[e]` view shows them as a run of `M1` rows to one STA. The station's counts (asked, M1s, unanswered, with the PMKID KDE, answered) are on the stream as the `harvest_station` record (JSONL 1.3.0) and on slothweb's WiFi view in the "lures and key harvesting" card, whose detail slothweb also shows on the alert since 2026-11-12.
 
 What refutes it: the station's M2s appearing (a real client whose M2s the sensor missed briefly), or the station being the operator's own device failing to join.
 

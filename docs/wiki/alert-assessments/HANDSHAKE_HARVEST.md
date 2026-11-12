@@ -22,7 +22,7 @@ hcxdumptool's README: "Disconnecting a CLIENT from an associated ACCESS POINT to
 
 ## Evidence that proves it
 
-The deauth frames claimed from the AP, then the victim's fresh M1/M2 pair with that AP within seconds; for CRIT, the same for a second station. The `[a]` Deauth and `[e]` EAPOL views show both halves.
+The deauth frames claimed from the AP, then the victim's fresh M1/M2 pair with that AP within seconds; for CRIT, the same for a second station. The `[a]` Deauth and `[e]` EAPOL views show both halves. The BSSID's counts (victims, the deauths before them) are on the stream as the `harvest_chain` record (JSONL 1.3.0), the victims as a count only, and on slothweb's WiFi view in the "lures and key harvesting" card; slothweb shows the alert's detail since 2026-11-12.
 
 ## Benign causes
 

@@ -1024,6 +1024,35 @@ static int route_sys(const web_req_t *rq, const web_health_t *h,
     return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
+/* /api/lures (web_lure.h): the KARMA and key-harvest evidence sloth's
+ * rules read. The monitor radio's, so Monitor's and Hybrid's; under
+ * Local the query is checked, then the one out_of_scope answer. */
+static int route_lures(const web_req_t *rq, const web_health_t *h,
+                       char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = web_lure_route(h->lure, rq->query, h->wall_s, h->now_ms, none_here,
+                            body, cap, &bl, &status);
+        if (rc == 0 && none_here && status == 200) bl = web_lure_out_of_scope_json(body, cap);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
 /* /api/aprs (web_aprs.h): the stations a local Dire Wolf decodes. Its
  * receiver is a passive radio, as the decoder's SDR for ADS-B, so
  * Monitor's and Hybrid's; under Local the query is checked, then the
@@ -1899,6 +1928,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_aprs(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/sys"))
             return route_sys(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/lures"))
+            return route_lures(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/radar"))
             return route_radar(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/ble"))

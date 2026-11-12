@@ -55,6 +55,7 @@
 @include radar.js
 @include ssid.js
 @include probes.js
+@include lure.js
 @include syshealth.js
 @include fleet.js
 @include fleetid.js
@@ -582,6 +583,16 @@
       <div id="w-aps"></div>
       </div>
       <div class="sub">an SSID anywhere on the page is selectable: a click, or Enter on it, opens its detail (its access points, the clients on it and asking for it, its presence, alerts and twin and karma findings). Nearest first by default (sloth.db's last signal); a square after the SSID for each SSID the BSSID has beaconed, in the warning colour above one (KARMA, multi-VAP), with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers. The dBm column is an S-meter: the lit run is the last reading, the number beside it its S reading and dBm. <span class="smkey"></span></div>
+    </section>
+    <!-- KARMA and key harvesting (web/ui/lure.js, #187 / #172): the
+         counts sloth's rules read, from the stream. -->
+    <section class="panel" id="w-lure">
+      <div class="label">lures and key harvesting</div>
+      <div class="sub" id="w-lure-state" aria-live="polite"></div>
+      <div class="hscroll"><table class="qt" id="w-lure-karma" aria-label="KARMA suspects: beacon fan-out, or answers to directed probes for names never beaconed" hidden></table></div>
+      <div class="hscroll"><table class="qt" id="w-lure-sta" aria-label="stations whose association requests drew M1s they left unanswered" hidden></table></div>
+      <div class="hscroll"><table class="qt" id="w-lure-chain" aria-label="BSSIDs whose claimed deauths were followed by a victim's fresh handshake" hidden></table></div>
+      <div class="sub">from sloth's stream (JSONL 1.3.0: karma_suspect, harvest_station, harvest_chain), the tables its rules read, as they stand now; nothing is sent. KARMA: ssids the BSSID beaconed, postures the distinct security postures behind them (one for several names: the IE collapse, weak evidence), forged the names it answered a station's directed probe for and never beaconed, to stations how many stations those answers went to, pnl the most of its names one station asks for, lure chain a station deauthed elsewhere and lured here, score the [y] view's. Stations: BSSIDs asked to associate, how many answered with an M1, the M1s left with no M2, those carrying a PMKID KDE, and the BSSIDs it did answer. Chains: stations knocked off and captured reconnecting through a fresh M1/M2, and the deauths before them. Counts, not a verdict: whether a row crossed its rule's threshold is the alert's (KARMA_AP, KARMA_PROBE_FORGE, PMKID_HARVEST, HANDSHAKE_HARVEST in the Alerts view).</div>
     </section>
     <section class="panel">
       <div class="label">chains <span class="sub" id="w-ch-note"></span></div>
