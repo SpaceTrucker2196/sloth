@@ -1679,6 +1679,10 @@ typedef struct {
      * 0 is BEACON_ARRIVAL_NEW so a hand-built entry is an arrival.
      * Sits in what was padding: sloth_state_t does not grow. */
     uint8_t  arrival;
+    /* First heard while the new-BSSID rate was at a beacon flood
+     * (#194): the table does not remember it when it drops it, so a
+     * flood cannot fill the memory above. Padding, like `arrival`. */
+    uint8_t  flood_born;
     time_t   last_seen;
     int      frame_count;
     /* Evil-twin fingerprint surface. Populated incrementally:

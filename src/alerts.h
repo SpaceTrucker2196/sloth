@@ -218,7 +218,8 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
  *     (beacon_ap_t.arrival). The table rebuilds an entry it dropped,
  *     for age or for room, under a new first_seen, so it keeps a
  *     memory of what it has dropped (src/beacon_snoop.c) and an AP
- *     that comes back is a return, not an arrival. An entry that
+ *     that comes back as the same radio (band, enc, vendor IEs; #194)
+ *     is a return, not an arrival. An entry that
  *     memory cannot vouch for, because it has overflowed, is not
  *     counted either;
  *   - the pair already has positive evidence. It corroborates and never

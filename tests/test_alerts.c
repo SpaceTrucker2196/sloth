@@ -9214,6 +9214,73 @@ static void test_twin_chain_reads_no_oui_from_a_local_address(void) {
     ASSERT_EQ(evil_twin_bssid_is_tainted(aruba), 1);
 }
 
+/* #194, announce ahead, end to end through the real table: the copy
+ * sends one beacon under the victim's name early, on 5 GHz, falls
+ * silent past BEACON_AGE_SECS, and starts on the victim's band with
+ * other vendor IEs ten minutes after the victim was first heard. It
+ * was a return, WARN at 35 %; it is an arrival, CRIT at 55. Beside
+ * it, the same announcement on the band it starts on: still a return
+ * (the residual the assessment states).
+ *
+ * Mutation (2026-11-12): the band test removed from recall_arrival();
+ * the first block read RETURN, WARN at 35. */
+static void test_twin_an_announcement_as_another_radio_is_no_alibi(void) {
+    uint8_t r1[6]    = {0x80,0xd0,0x4a,0x10,0x20,0x30};
+    uint8_t rogue[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+    static sloth_state_t s;
+    static beacon_rsn_t rr, rc;
+    memset(&rr, 0, sizeof(rr));
+    memset(&rc, 0, sizeof(rc));
+    rr.fp.vendor_ies_hash = 0x1111u;
+    rc.fp.vendor_ies_hash = 0x2222u;
+
+    for (int pass = 0; pass < 2; pass++) {
+        int announce_ch = pass == 0 ? 36 : 6;
+        alerts_clear(); beacon_clear();
+        sloth_clock_test_set(tw_mono, tw_wall);
+        g_tw_wall = 1700000000;
+        g_tw_mono = 5000000;
+
+        beacon_record(r1, "Riverside", -60, 6, "WPA2", 100, &rr);
+        tw_tick(5);
+        beacon_record(rogue, "Riverside", -70, announce_ch, "WPA2", 100, &rc);
+        for (int k = 0; k < 6; k++) {
+            tw_tick(100);
+            beacon_record(r1, "Riverside", -60, 6, "WPA2", 100, &rr);
+            seed_state(&s);
+            beacon_snapshot(&s);
+        }
+        ASSERT_EQ(s.beacon_count, 1);
+
+        for (int k = 0; k < TWIN_CRIT_MIN_BEACONS_DEFAULT; k++)
+            beacon_record(rogue, "Riverside", -60, 6, "WPA2", 100, &rc);
+        tw_tick(1);
+        beacon_record(r1, "Riverside", -60, 6, "WPA2", 100, &rr);
+        seed_state(&s);
+        beacon_snapshot(&s);
+        int i1 = tw_slot(&s, r1), i2 = tw_slot(&s, rogue);
+        ASSERT(i1 >= 0 && i2 >= 0);
+        if (i1 < 0 || i2 < 0) break;
+
+        alerts_update(&s);
+        int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+        ASSERT(idx >= 0);
+        if (idx < 0) break;
+        if (pass == 0) {
+            ASSERT_EQ((int)s.beacon_aps[i2].arrival, BEACON_ARRIVAL_NEW);
+            ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+            ASSERT_EQ(s.alerts[idx].confidence, 55);
+            ASSERT(strstr(s.alerts[idx].detail, " +late-arrival") != NULL);
+        } else {
+            ASSERT_EQ((int)s.beacon_aps[i2].arrival, BEACON_ARRIVAL_RETURN);
+            ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+            ASSERT_EQ(s.alerts[idx].confidence, 35);
+        }
+    }
+    sloth_clock_test_set(NULL, NULL);
+    alerts_clear(); beacon_clear();
+}
+
 /* ── The issue's field pairs, end to end (#188, 2026-11-12) ────
  *
  * Every representative pair #188 names, benign and real, through
@@ -13685,6 +13752,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_twin_detail_fits_with_every_phrase);
     RUN_TEST(test_twin_chain_does_not_name_a_devices_own_radio);
     RUN_TEST(test_twin_chain_reads_no_oui_from_a_local_address);
+    RUN_TEST(test_twin_an_announcement_as_another_radio_is_no_alibi);
     RUN_TEST(test_twin_issue_188_field_pairs_classify);
     RUN_TEST(test_twin_carrier_ssid_is_context);
     RUN_TEST(test_twin_faint_bounds);

@@ -4097,6 +4097,206 @@ static void test_recall_stat_on_sys_status(void) {
     beacon_clear();
 }
 
+/* ── Two ways round the memory (#194) ──────────────────────────
+ *
+ * Announce ahead: one beacon under the name to be copied, sent as some
+ * other radio (another band, another security, no or other vendor
+ * IEs), then silence, made the real start a return. A memory keeps the
+ * radio as well as the name, and a return is a return only as the
+ * same radio. */
+static void rc_hear_as(const uint8_t bssid[6], const char *ssid, int ch,
+                       const char *enc, uint32_t vhash) {
+    static beacon_rsn_t rsn;
+    memset(&rsn, 0, sizeof(rsn));
+    rsn.fp.vendor_ies_hash = vhash;
+    beacon_record(bssid, ssid, -60, ch, enc, 100, &rsn);
+}
+
+/* Mutations (2026-11-12), each red here:
+ *   - the band test removed from recall_arrival(): the 5 GHz row read
+ *     RETURN; made to ignore an unknown band in the memory as well
+ *     (`r->band != WIFI_BAND_UNKNOWN &&`): the channel-0 announcement
+ *     row read RETURN;
+ *   - the enc test removed: the WPA3 row read RETURN;
+ *   - the vendor-IE test removed: the other-IEs row and the
+ *     no-IEs-announcement row read RETURN; made to ignore an unknown
+ *     hash in the memory (`r->vendor_ies_hash &&`): the
+ *     no-IEs-announcement row alone;
+ *   - the rename stamp moved back above the vendor-IE merge in
+ *     beacon_record_ev(): the renamed row read RETURN. */
+static void test_recall_a_return_is_the_same_radio(void) {
+    static sloth_state_t s;
+    const uint8_t x[6] = { 0x02, 0x9a, 0x3c, 0x71, 0x5e, 0x10 };
+
+    /* The same radio: a return, also on another channel of its band,
+     * when this beacon carries no vendor IEs, and on channel 0. */
+    rc_start();
+    rc_hear_as(x, "CorpWiFi", 6, "WPA2", 0xaaaa);
+    rc_age_out(&s);
+    rc_hear_as(x, "CorpWiFi", 11, "WPA2", 0xaaaa);
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_RETURN);
+    rc_age_out(&s);
+    rc_hear_as(x, "CorpWiFi", 0, "WPA2", 0xaaaa);    /* band unknown */
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_RETURN);
+    /* Heard on channel 6 again before it drops, so the memory keeps
+     * 2.4 GHz; then back with no vendor IEs in its beacon. */
+    rc_hear_as(x, "CorpWiFi", 6, "WPA2", 0xaaaa);
+    rc_age_out(&s);
+    rc_hear_as(x, "CorpWiFi", 6, "WPA2", 0);
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_RETURN);
+
+    /* Announced on 2.4 GHz, started on 5 GHz. */
+    rc_start();
+    rc_hear_as(x, "CorpWiFi", 6, "WPA2", 0xaaaa);
+    rc_age_out(&s);
+    rc_hear_as(x, "CorpWiFi", 36, "WPA2", 0xaaaa);
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_NEW);
+
+    /* Announced under another security. */
+    rc_start();
+    rc_hear_as(x, "CorpWiFi", 6, "WPA3", 0xaaaa);
+    rc_age_out(&s);
+    rc_hear_as(x, "CorpWiFi", 6, "WPA2", 0xaaaa);
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_NEW);
+
+    /* Announced with other vendor IEs, and with none. */
+    rc_start();
+    rc_hear_as(x, "CorpWiFi", 6, "WPA2", 0xbbbb);
+    rc_age_out(&s);
+    rc_hear_as(x, "CorpWiFi", 6, "WPA2", 0xaaaa);
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_NEW);
+    rc_start();
+    rc_hear_as(x, "CorpWiFi", 6, "WPA2", 0);
+    rc_age_out(&s);
+    rc_hear_as(x, "CorpWiFi", 6, "WPA2", 0xaaaa);
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_NEW);
+
+    /* Announced on channel 0, a band nobody can name. */
+    rc_start();
+    rc_hear_as(x, "CorpWiFi", 0, "WPA2", 0xaaaa);
+    rc_age_out(&s);
+    rc_hear_as(x, "CorpWiFi", 6, "WPA2", 0xaaaa);
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_NEW);
+
+    /* A live entry that takes a remembered name is judged on the radio
+     * this beacon shows, not the one its old name had. */
+    rc_start();
+    rc_hear_as(x, "CorpWiFi", 6, "WPA2", 0xaaaa);
+    rc_age_out(&s);
+    rc_hear_as(x, "decoy", 6, "WPA2", 0xaaaa);
+    rc_hear_as(x, "CorpWiFi", 6, "WPA2", 0xbbbb);
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_NEW);
+    rc_hear_as(x, "decoy2", 6, "WPA2", 0xaaaa);
+    rc_hear_as(x, "CorpWiFi", 6, "WPA2", 0xaaaa);
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_RETURN);
+
+    sloth_clock_test_set(NULL, NULL);
+    beacon_clear();
+}
+
+/* `n` distinct BSSIDs in one wall-clock second: b[3] = tag, b[4..5] =
+ * index. Over beacon.flood_thresh (40 in 10 s) once settled. */
+static void rc_burst(uint8_t tag, int n) {
+    uint8_t b[6] = { 0x06, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    b[3] = tag;
+    for (int i = 0; i < n; i++) {
+        b[4] = (uint8_t)(i >> 8); b[5] = (uint8_t)i;
+        rc_hear(b, "net");
+    }
+}
+static int rc_burst_arrival(sloth_state_t *s, uint8_t tag, int i) {
+    uint8_t b[6] = { 0x06, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    b[3] = tag; b[4] = (uint8_t)(i >> 8); b[5] = (uint8_t)i;
+    rc_hear(b, "net");
+    return rc_arrival(s, b);
+}
+
+/* Beacon flood: about 4,400 beacons from random addresses overflowed
+ * the ring and turned the late-arrival signal off for a day. An entry
+ * first heard while the new-BSSID rate is at a flood is not
+ * remembered; the first minute after the table was empty is exempt,
+ * up to a table's worth of entries, since everything in range arrives
+ * at once at sensor start. Literals: 40 is beacon.flood_thresh, 60 s
+ * BEACON_RECALL_SETTLE_S, 256 MAX_BEACON_APS.
+ *
+ * Mutations (2026-11-12), each red here:
+ *   - the `ap->flood_born` return removed from recall_note_dropped():
+ *     the flooded rows read RETURN, the memory overflowed and the
+ *     never-heard row read UNSURE;
+ *   - the settle removed (`settled` always 1): the sensor-start rows
+ *     and the after-a-dead-zone row read NEW (and the three overflow
+ *     tests above, which drop a table's worth at a time);
+ *   - the table's-worth cap removed (`g_listen_new > MAX_BEACON_APS`):
+ *     the 300th of the start burst read RETURN;
+ *   - the restart on an empty table removed (`|| g_count == 1`): the
+ *     after-a-dead-zone row read NEW (and the three overflow tests);
+ *   - `>=` the threshold made `>`: the 40th of the flood read RETURN. */
+static void test_recall_a_flood_is_not_remembered(void) {
+    static sloth_state_t s;
+    beacon_recall_stat_t st;
+    const uint8_t home[6] = { 0x80, 0xd0, 0x4a, 0x10, 0x20, 0x31 };
+    const uint8_t u1[6]   = { 0x0a, 0x00, 0x00, 0x00, 0x00, 0x11 };
+
+    /* Sensor start in a dense street: 300 in one second. The first
+     * table's worth is remembered; past it, a burst is a flood. */
+    rc_start();
+    rc_burst(1, 300);
+    rc_age_out(&s);
+    ASSERT_EQ(rc_burst_arrival(&s, 1, 0), BEACON_ARRIVAL_RETURN);
+    ASSERT_EQ(rc_burst_arrival(&s, 1, 255), BEACON_ARRIVAL_RETURN);
+    ASSERT_EQ(rc_burst_arrival(&s, 1, 299), BEACON_ARRIVAL_NEW);
+
+    /* Settled: one AP heard for a minute and more, then a flood. The
+     * 39 before the rate reaches 40 are remembered; from the 40th on,
+     * nothing. */
+    rc_start();
+    rc_hear(home, "home");
+    for (int k = 0; k < 7; k++) {
+        g_rc_wall += 10; g_rc_mono += 10000;
+        rc_hear(home, "home");
+    }
+    rc_burst(2, 50);
+    rc_age_out(&s);
+    ASSERT_EQ(rc_burst_arrival(&s, 2, 38), BEACON_ARRIVAL_RETURN);
+    ASSERT_EQ(rc_burst_arrival(&s, 2, 39), BEACON_ARRIVAL_NEW);
+    ASSERT_EQ(rc_burst_arrival(&s, 2, 49), BEACON_ARRIVAL_NEW);
+    /* The AP that was there before is still a return. */
+    rc_hear(home, "home");
+    ASSERT_EQ(rc_arrival(&s, home), BEACON_ARRIVAL_RETURN);
+
+    /* The issue's flood: 4,400 random addresses, the table full and
+     * churning, the AP heard throughout. The memory does not fill, and
+     * a BSSID never heard is still an arrival. */
+    rc_start();
+    rc_hear(home, "home");
+    g_rc_wall += 61; g_rc_mono += 61000;
+    for (int r = 0; r < 44; r++) {
+        rc_burst((uint8_t)(0x40 + r), 100);
+        rc_hear(home, "home");
+        g_rc_wall += 1; g_rc_mono += 1000;
+    }
+    beacon_recall_stat(&st, g_rc_mono);
+    ASSERT(st.slots < 256);
+    ASSERT_EQ(st.overflowed, 0);
+    rc_age_out(&s);
+    rc_hear(u1, "net");
+    ASSERT_EQ(rc_arrival(&s, u1), BEACON_ARRIVAL_NEW);
+    ASSERT_EQ(rc_burst_arrival(&s, 0x50, 70), BEACON_ARRIVAL_NEW);
+    rc_hear(home, "home");
+    ASSERT_EQ(rc_arrival(&s, home), BEACON_ARRIVAL_RETURN);
+
+    /* After a dead zone (the table empty) the street ahead is heard
+     * at once: a sensor start again, not a flood. */
+    rc_age_out(&s);
+    ASSERT_EQ(s.beacon_count, 0);
+    rc_burst(3, 100);
+    rc_age_out(&s);
+    ASSERT_EQ(rc_burst_arrival(&s, 3, 99), BEACON_ARRIVAL_RETURN);
+
+    sloth_clock_test_set(NULL, NULL);
+    beacon_clear();
+}
+
 /* #138: the SSID is stored through netstr_copy() at the one choke point,
  * dot11_ie_ssid_copy(). '\n' (which ncurses acts on — a row-spoofing
  * SSID) and DEL become '?'. Mutation-proved: restoring the memcpy in
@@ -4335,6 +4535,8 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_recall_overflow_fails_quiet);
     RUN_TEST(test_recall_stat_reports_the_overflow);
     RUN_TEST(test_recall_stat_on_sys_status);
+    RUN_TEST(test_recall_a_return_is_the_same_radio);
+    RUN_TEST(test_recall_a_flood_is_not_remembered);
     RUN_TEST(test_parse_ssid_control_octets_stored_as_marks);
     RUN_TEST(test_parse_ssid_high_octets_kept);
 }

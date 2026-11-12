@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#187, #172: the evidence behind `KARMA_AP`, `KARMA_PROBE_FORGE`, `PMKID_HARVEST` and `HANDSHAKE_HARVEST` on the stream as `karma_suspect`, `harvest_station`, `harvest_chain`, JSONL 1.3.0, and as slothweb's WiFi card; slothweb shows the detail of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`). **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
+**Last updated**: 2026-11-12 (#194: `EVIL_TWIN`'s late-arrival memory compares the radio and ignores APs born in a beacon flood). 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#187, #172: the evidence behind `KARMA_AP`, `KARMA_PROBE_FORGE`, `PMKID_HARVEST` and `HANDSHAKE_HARVEST` on the stream as `karma_suspect`, `harvest_station`, `harvest_chain`, JSONL 1.3.0, and as slothweb's WiFi card; slothweb shows the detail of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`). **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
 
 ---
@@ -425,6 +425,15 @@ the weights in `src/alerts.h`) now asks before it weighs:
   barely heard, its strongest reading at or under -92 dBm or fewer than
   `twin.crit_min_beacons` (5) beacons heard, keeps a soft row at WARN,
   `+faint`.
+
+- **Arrived, or came back? (#194, 2026-11-12)** The table's memory of
+  dropped APs keeps band, `enc` and vendor-IE hash, so a return as
+  another radio is an arrival and an early announcement on another
+  band, security or IEs is no alibi; it does not remember APs first
+  heard during a beacon flood, so a flood no longer switches the
+  late-arrival signal off. The chain still does not name a locally
+  administered copy with no evidence of its own (#193, open by owner
+  ruling pending field data).
 
 Hard signals (attacker-tool OUI, a BTM steer from another device, an
 inventory mismatch, the deauth-then-twin chain) are untouched by every
