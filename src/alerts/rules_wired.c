@@ -282,9 +282,17 @@ static const char *attack_path_match(const char *path) {
     return NULL;
 }
 
+/* Requests only (#197). A paired response carries its request's host
+ * and path (http_log_pair_response()) but its src is the server, so
+ * matching it re-fired every probe as path:<server>:<label>: the victim
+ * named as its own attacker at CRIT, with match_ip, and so the per-alert
+ * pcap and ALERT_TAGGED, pointed at the victim. The asking is the
+ * finding and the client is the one who asked; the response is not a
+ * second actor. */
 void rule_attack_path(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->http_log_count; i++) {
         const http_log_entry_t *e = &s->http_log[i];
+        if (e->is_response) continue;
         const char *label = attack_path_match(e->path);
         if (!label) continue;
         char key[ALERT_KEY_LEN];
@@ -374,8 +382,13 @@ void rule_attack_tool_ua(const sloth_state_t *s, time_t now) {
      * compares (labels are table entries, so equal labels are equal
      * pointers). */
     const char *labels[MAX_HTTP_LOG];
+    /* Requests only (#197): the response parser keeps no User-Agent, so
+     * a response cannot match today, but its src is the server and a
+     * parser that later kept a header there must not key the server as
+     * the tool. */
     for (int i = 0; i < n; i++)
-        labels[i] = attack_tool_ua_match(s->http_log[i].user_agent);
+        labels[i] = s->http_log[i].is_response ? NULL
+                  : attack_tool_ua_match(s->http_log[i].user_agent);
 
     for (int i = 0; i < n; i++) {
         const http_log_entry_t *e = &s->http_log[i];

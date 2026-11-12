@@ -1,7 +1,7 @@
 ---
 type: BEACONING
 technique: T1071
-rule_file: src/alerts/rules_wired.c:1549 (rule_beaconing); helpers src/beacon_detect.c; beacon_fire_track rules_wired.c:1363 (fire at :1382) / beacon_fire_overflow rules_wired.c:1391 (fire at :1416)
+rule_file: src/alerts/rules_wired.c:1562 (rule_beaconing); helpers src/beacon_detect.c; beacon_fire_track rules_wired.c:1363 (fire at :1382) / beacon_fire_overflow rules_wired.c:1391 (fire at :1416)
 count_semantics: per poll tick (default 250 ms) per open per-destination finding - each strong (remote_ip, remote_port) track that holds a seat fires once per tick (key `beacon:<ip>:<port>`), and all strong tracks past the cap fire once per tick as the single `beacon-overflow` finding; `count` is tick re-evaluations while the track stays strong, not per packet, flow or callout
 severity_assessment: agree - WARN is correct; periodicity is a shape, not an intent (update checkers, telemetry and NTP beacon by design), and the destination matters more than the rhythm
 false_positive_risk: high - any well-behaved periodic client (NTP, telemetry, update pollers, keepalives, dashboards on a timer) is periodic by design and can satisfy v1/v2; the detector is explicit that it reports a shape

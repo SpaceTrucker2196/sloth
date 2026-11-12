@@ -1,7 +1,7 @@
 ---
 type: SMB1_USE
 technique: T1210
-rule_file: src/alerts/rules_wired.c:946 rule_smb1_use()
+rule_file: src/alerts/rules_wired.c:959 rule_smb1_use()
 count_semantics: Since #173 the session's packet count enters the detail exact below ten and by decade above (`count_bucket()`) instead of `count=%d`, so a busy SMBv1 session moves `observations` once per decade rather than every tick; `count` and the session row's LRU-not-time residency are unchanged: per rule evaluation - one increment per alerts_update() tick (poll.c:296; the wait between ticks is at most POLL_MS 250 ms, include/sloth.h:28 - the loop wakes early on alert fires and --refresh-ms can shorten it, so 4 ticks/s is a floor, not a fixed cadence) for each (client, server, port) session in the 64-row SMB table whose recorded dialect is SMB1; the dialect is sticky to SMB1 once seen, so an idle flow keeps firing every tick until the session row is LRU-evicted - the table is STAB_OLDEST with no time expiry (smb_snoop.c:23; no stab_expire call), so a row leaves only when 64 newer sessions push it out, and a single SMB1 exchange on a quiet segment fires for the life of the process; and count = (SMB1 sessions) x (ticks they remain in the table)
 severity_assessment: agree - CRIT is defensible: the finding is the exposed surface (SMBv1 reachable at all), the protocol has been deprecated since 2014 and off by default since 2017, and the exploit class (EternalBlue) is unauthenticated RCE [2], [3], [5], [6]
 false_positive_risk: low - SMBv1 on the wire is rare and real; it is almost always a legacy device doing its job, which is a true finding, not a false one [1], [6]

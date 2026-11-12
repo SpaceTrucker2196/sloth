@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-11-11 (`SENSOR_UNDERVOLT`, `SENSOR_SOURCE_DOWN`: the sensor's own host and sources, `src/alerts/rules_sensor.c`). 2026-11-11 (#172: `PMKID_HARVEST`, `HANDSHAKE_HARVEST`). 2026-11-11 (#187 S2: `KARMA_PROBE_FORGE`, directed probe-response forgery). 2026-11-09 (#182: `GNSS_TIME_JUMP` late-read guard). 2026-11-08 (#186: `ADSB_EMERGENCY`, `src/alerts/rules_adsb.c`). 2026-11-03 (#173: a detail carries only what moves with the evidence; per-rule fixes listed under *Incident lifecycle*). 2026-11-03 (the four GNSS rules: `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, `src/alerts/rules_gnss.c`). 2026-10-27 (per-type research assessments in [alert-assessments/](alert-assessments/README.md)). 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
+**Last updated**: 2026-11-12 (#197: `ATTACK_PATH` and `ATTACK_TOOL_UA` judge HTTP requests only; a paired response no longer fires a second key on the server). 2026-11-11 (`SENSOR_UNDERVOLT`, `SENSOR_SOURCE_DOWN`: the sensor's own host and sources, `src/alerts/rules_sensor.c`). 2026-11-11 (#172: `PMKID_HARVEST`, `HANDSHAKE_HARVEST`). 2026-11-11 (#187 S2: `KARMA_PROBE_FORGE`, directed probe-response forgery). 2026-11-09 (#182: `GNSS_TIME_JUMP` late-read guard). 2026-11-08 (#186: `ADSB_EMERGENCY`, `src/alerts/rules_adsb.c`). 2026-11-03 (#173: a detail carries only what moves with the evidence; per-rule fixes listed under *Incident lifecycle*). 2026-11-03 (the four GNSS rules: `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, `src/alerts/rules_gnss.c`). 2026-10-27 (per-type research assessments in [alert-assessments/](alert-assessments/README.md)). 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
 **Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
@@ -486,6 +486,13 @@ the headline rules per tier:
   `ATTACK_TOOL_UA`, `PMKID_HARVEST`, `HANDSHAKE_HARVEST`,
   `ATTACK_PATH`, `WPS_PIN_BRUTE`, `WPS_PBC_RACE`,
   `WPS_PIXIE_LIKELY_SUCCESS`
+
+The two HTTP rules, `ATTACK_PATH` and `ATTACK_TOOL_UA`, judge requests
+only and key on the client that sent them (#197). A paired response row
+in the HTTP ring carries its request's host and path but is sourced from
+the server, and `ATTACK_PATH` used to fire it as a second CRIT naming
+the server as its own attacker; see
+[alert-assessments/ATTACK_PATH](alert-assessments/ATTACK_PATH.md).
 
 ### Own operational state
 

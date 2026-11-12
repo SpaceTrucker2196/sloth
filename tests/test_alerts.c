@@ -16,6 +16,7 @@
 #include "wifi_assess.h"
 #include "sloth.h"
 #include "alerts.h"
+#include "http_log.h"
 #include "sensor_health.h"
 #include "views/alerts.h"
 #include "beacon_snoop.h"
@@ -4211,6 +4212,104 @@ static void test_attack_path_normal_no_fire(void) {
     add_http_path(&s, "10.0.0.5", "example.com", "/api/v1/users/42");
     alerts_update(&s);
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_ATTACK_PATH), -1);
+}
+
+/* #197: a paired response carries its request's host and path with src
+ * = the server, and the rule used to fire it as path:<server>:<label>.
+ * The pair goes through the production path — request parser, ring,
+ * flow pairing, response parser, snapshot — so the response row has
+ * exactly what capture.c gives it. Bytes are RFC 9112 messages: a
+ * request-line (§3) and a status-line (§4), each with field lines (§5)
+ * and the empty line that ends them. */
+#define AP_CLI "192.168.1.242"
+#define AP_SRV "192.168.1.245"
+
+static const char AP_REQ[] =
+    "GET /uir//etc/passwd HTTP/1.1\r\n"
+    "Host: 192.168.1.245\r\n"
+    "User-Agent: Mozilla/5.0\r\n"
+    "\r\n";
+static const char AP_RESP[] =
+    "HTTP/1.1 404 Not Found\r\n"
+    "Content-Length: 0\r\n"
+    "\r\n";
+
+/* Records the request (unless resp_only) and its response the way
+ * try_http() does, then snapshots the ring into s. Returns whether the
+ * response was paired. */
+static int ap_wire(sloth_state_t *s, int resp_only) {
+    http_log_clear();
+    http_log_entry_t rq, rs;
+    if (http_log_parse((const uint8_t *)AP_REQ, (int)strlen(AP_REQ),
+                       AP_CLI, &rq) != 1) return -1;
+    snprintf(rq.dst, sizeof(rq.dst), "%s", AP_SRV);
+    rq.src_port = 50123; rq.dst_port = 80;
+    if (!resp_only) http_log_record(&rq);
+    if (http_log_parse_response((const uint8_t *)AP_RESP, (int)strlen(AP_RESP),
+                                AP_SRV, &rs) != 1) return -2;
+    snprintf(rs.dst, sizeof(rs.dst), "%s", AP_CLI);
+    rs.src_port = 80; rs.dst_port = 50123;
+    int paired = http_log_pair_response(&rs);
+    if (resp_only) {
+        /* No request reached the ring, so the flow table never saw
+         * one: give the response the path by hand — the case is a
+         * response row that names the exploit path with no request
+         * beside it, which is what eviction of the request leaves. */
+        snprintf(rs.host, sizeof(rs.host), "%s", AP_SRV);
+        snprintf(rs.path, sizeof(rs.path), "%s", "/uir//etc/passwd");
+    }
+    http_log_record(&rs);
+    http_log_snapshot(s);
+    return paired;
+}
+
+static void test_attack_path_pair_fires_once_on_client(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT_EQ(ap_wire(&s, 0), 1);
+    ASSERT_EQ(s.http_log_count, 2);
+    /* The precondition the bug needs: the response row names the path
+     * and is sourced from the server. */
+    int resp = s.http_log[0].is_response ? 0 : 1;
+    ASSERT(s.http_log[resp].is_response);
+    ASSERT(strcmp(s.http_log[resp].src, AP_SRV) == 0);
+    ASSERT(strcmp(s.http_log[resp].path, "/uir//etc/passwd") == 0);
+    alerts_update(&s);
+    int nap = 0;
+    for (int k = 0; k < s.alert_count; k++)
+        if (s.alerts[k].type == ALERT_TYPE_ATTACK_PATH) nap++;
+    ASSERT_EQ(nap, 1);
+    int i = find_alert(&s, ALERT_TYPE_ATTACK_PATH);
+    ASSERT(i >= 0);
+    ASSERT(strcmp(s.alerts[i].key, "path:" AP_CLI ":etc/passwd") == 0);
+    ASSERT(strcmp(s.alerts[i].match_ip, AP_CLI) == 0);
+    for (int k = 0; k < s.alert_count; k++)
+        ASSERT(strstr(s.alerts[k].key, "path:" AP_SRV ":") == NULL);
+    http_log_clear();
+}
+
+static void test_attack_path_response_only_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT_EQ(ap_wire(&s, 1), 0);
+    ASSERT_EQ(s.http_log_count, 1);
+    ASSERT(s.http_log[0].is_response);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ATTACK_PATH), -1);
+    http_log_clear();
+}
+
+/* The same guard on ATTACK_TOOL_UA: a response row with a tool's name
+ * where a User-Agent would be (the parser keeps none today; this is the
+ * row a future one would make) never keys the server as the tool. */
+static void test_attack_tool_ua_response_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_http(&s, AP_SRV, AP_SRV, "sqlmap/1.7");
+    s.http_log[0].is_response = 1;
+    s.http_log[0].status = 200;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ATTACK_TOOL_UA), -1);
 }
 
 static void test_attack_tool_ua_sqlmap_fires(void) {
@@ -12921,6 +13020,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_attack_path_log4shell_fires);
     RUN_TEST(test_attack_path_xss_fires);
     RUN_TEST(test_attack_path_normal_no_fire);
+    RUN_TEST(test_attack_path_pair_fires_once_on_client);
+    RUN_TEST(test_attack_path_response_only_no_fire);
+    RUN_TEST(test_attack_tool_ua_response_no_fire);
     RUN_TEST(test_weak_tls_tls10_fires);
     RUN_TEST(test_weak_tls_sslv3_fires);
     RUN_TEST(test_weak_tls_tls13_no_fire);
