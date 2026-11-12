@@ -11,6 +11,7 @@
 #include "filter.h"
 #include "geo.h"
 #include "ip_owner.h"
+#include "tui_glyph.h"
 
 #define ALERTS_PAGE 30
 /* Rows under the table: the blank line and the enrichment line
@@ -179,6 +180,63 @@ static void draw_alert_detail(const sloth_state_t *s) {
     tui_dim(); TPRINT("\n [Enter / Esc] back to alerts list   [c] clear all alerts\n");
 }
 
+/* G7's TUI form (#195; docs/web-visual-spec.md §5 G7): incidents begun
+ * in the last hour, one rug lane per severity, `▁`..`█` by the count in
+ * each column on a scale every lane shares, in the severity's colour
+ * (R1: severity on alert lanes). A lane with nothing begun is not drawn
+ * (P3), and with nothing at all the block is its caption (R5). The web
+ * draws the same per-severity ticks under History's rug. */
+#define RUG_WINDOW_S 3600
+#define RUG_LABEL_W  8      /* "  crit  " */
+
+static int rug_cells(void) {
+#ifdef WITH_NCURSES
+    int c = (COLS > 0 ? COLS : 100) - RUG_LABEL_W - 6;
+#else
+    int c = 60;
+#endif
+    return c < 12 ? 12 : c > 60 ? 60 : c;
+}
+
+static void draw_begun_rug(const sloth_state_t *s) {
+    static const char *const lane[3] = { "low", "warn", "crit" };
+    time_t now = sloth_wall(), from = now - RUG_WINDOW_S;
+    int cells = rug_cells();
+    time_t t[3][MAX_ALERTS];
+    int nt[3] = { 0, 0, 0 }, bins[3][60], max = 0, total = 0;
+    for (int i = 0; i < s->alert_count && i < MAX_ALERTS; i++) {
+        const alert_t *a = &s->alerts[i];
+        int sv = a->sev == ALERT_SEV_CRIT ? 2 : a->sev == ALERT_SEV_WARN ? 1 : 0;
+        if (a->first_detected >= from && a->first_detected <= now)
+            t[sv][nt[sv]++] = a->first_detected;
+    }
+    for (int k = 0; k < 3; k++) {
+        /* `to` is one past now so an incident opened this second counts. */
+        int m = tg_rug_bin(t[k], nt[k], from, now + 1, bins[k], cells);
+        if (m > max) max = m;
+        total += nt[k];
+    }
+    tui_dim();
+    if (!total) {
+        TPRINT(" begun: none in the last %d min\n", RUG_WINDOW_S / 60);
+        return;
+    }
+    for (int k = 2; k >= 0; k--) {
+        if (!nt[k]) continue;
+        tg_tone_apply(tg_sev_tone(k)); TPRINT("  %-4s  ", lane[k]);
+        for (int c = 0; c < cells; c++) {
+            tg_cell_t cell = tg_rug_cell(bins[k][c], max, tg_sev_tone(k));
+            tg_tone_apply(cell.tone);
+            TPRINT("%s", cell.glyph);
+        }
+        tui_dim(); TPRINT(" %d\n", nt[k]);
+    }
+    tui_dim();
+    TPRINT(" begun: incidents opened, last %d min in %d-s columns, tallest"
+           " %d; from the alert table\n", RUG_WINDOW_S / 60,
+           RUG_WINDOW_S / cells, max);
+}
+
 void view_alerts_draw(const sloth_state_t *s) {
     if (s->alert_detail) { draw_alert_detail(s); return; }
 
@@ -200,6 +258,7 @@ void view_alerts_draw(const sloth_state_t *s) {
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear  (newest first)");
     tui_filter_status(s);
     TPRINT("\n");
+    draw_begun_rug(s);
 
     tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();

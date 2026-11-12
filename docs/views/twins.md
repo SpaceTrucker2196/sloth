@@ -177,6 +177,35 @@ The columns are headed "BSSID A / B" rather than "Real / Twin" for the
 same reason. The old headings stated a verdict on every row, including
 the rows where sloth had none.
 
+### The chain lanes (#195)
+
+Under the table, the selected pair's attack chain as G8's TUI form
+(`docs/web-visual-spec.md` §5 G8): one 24-cell lane per stage in the
+order the chain runs, on one time axis from the earliest stage (at
+least ten minutes, at most a day) to now.
+
+```
+ ── chain of the selected pair, by stage ──
+  deauth LOW   ──────────▌▌▌▌▌▌▌▌▌▌▌▌▌▌
+  twin CRIT    ────────────●━━━━━━━━━━●
+  assoc        ──────────────────●─────
+  karma WARN   ────────────────●━━━●───
+               22:03              22:13  10 min, 1 assoc
+  links: deauth taint, attack in progress; impostor attributed
+```
+
+An EVIL_TWIN or KARMA_AP incident is `━` from its open to its last
+observation, `●` at an end inside the window, in the severity it
+reached, which the lane's label also says. The alert's key is matched
+at its BSSID fields only (`twin:` / `twin-fp:` pair keys, `karma:`),
+never as a substring, the way slothweb's `/api/wifi/chain` reads it, so
+an SSID or the text across a pair's two halves never joins a chain.
+Deauth streams addressed to either BSSID are `▌` across their span and
+associations to either `●` at their first frame, in the normal ink, with
+the DEAUTH_FLOOD severity as the deauth lane's word. The links sloth
+made (the deauth taint, the attribution) are words on the last line.
+The lanes take seven rows, which the table's page budget leaves for them.
+
 ## What's normal
 
 - Zero rows. Most networks do not host a same-SSID pair carrying any

@@ -13,6 +13,7 @@
 #include "sys_status.h"
 #include "position_track.h"
 #include "history.h"
+#include "dev_how.h"
 #include "bandwidth.h"
 #include "views/conns.h"
 #include "views/stats.h"
@@ -246,6 +247,7 @@ static void st_channel_rf(sloth_state_t *s, const poll_ctx_t *ctx) {
      * refreshed, so the channel rows lagged the beacon view by a tick. */
     channel_summary_update(s);
     ctrl_snapshot(s);   /* annotates the channel rows built above (#64) */
+    channel_hz_update(s, ctx->wall);   /* G3's minutes, from those totals (#195) */
     rf_quality_snapshot(s, ctx->wall);
 }
 #endif
@@ -403,8 +405,8 @@ static void st_alert_hot(sloth_state_t *s, const poll_ctx_t *ctx) {
 }
 
 static void st_devices_hosts(sloth_state_t *s, const poll_ctx_t *ctx) {
-    (void)ctx;
     devices_update(s);
+    dev_how_observe(s, ctx->wall);   /* G4's TUI grid (#195) */
     top_hosts_update(s);
 }
 

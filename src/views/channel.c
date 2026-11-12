@@ -6,6 +6,7 @@
 #include "tui.h"
 #include "views/channel.h"
 #include "rf_quality.h"
+#include "tui_glyph.h"
 
 /* Per-channel activity summary. Answers the operator's "where should
  * I park my monitor adapter?" question by aggregating APs + associated
@@ -86,6 +87,94 @@ void channel_summary_update(sloth_state_t *s) {
     if (s->channel_sel >= n && n > 0) s->channel_sel = n - 1;
 }
 
+/* ── G3 history (#195) ─────────────────────────────────────
+ * Poll thread only, as channel_summary_update() is. cells[] is oldest
+ * first and its last cell is the minute `minute`. */
+typedef struct {
+    int      channel;
+    long     minute;
+    uint32_t last_total;
+    uint32_t max;
+    uint32_t cells[CHAN_HZ_CELLS];
+} chan_hz_t;
+
+static chan_hz_t g_hz[MAX_CHAN_ENTRIES];
+static int       g_hz_n;
+
+static chan_hz_t *hz_find(int ch, int make, long minute) {
+    for (int i = 0; i < g_hz_n; i++)
+        if (g_hz[i].channel == ch) return &g_hz[i];
+    if (!make) return NULL;
+    int slot;
+    if (g_hz_n < MAX_CHAN_ENTRIES) {
+        slot = g_hz_n++;
+    } else {                                   /* full: the stalest */
+        slot = 0;
+        for (int i = 1; i < g_hz_n; i++)
+            if (g_hz[i].minute < g_hz[slot].minute) slot = i;
+    }
+    chan_hz_t *e = &g_hz[slot];
+    memset(e, 0, sizeof(*e));
+    e->channel = ch;
+    e->minute  = minute;
+    for (int i = 0; i < CHAN_HZ_CELLS; i++) e->cells[i] = TG_HZ_UNSEEN;
+    e->cells[CHAN_HZ_CELLS - 1] = 0;
+    return e;
+}
+
+void channel_hz_update(const sloth_state_t *s, time_t now) {
+    if (!s || now <= 0) return;
+    long minute = (long)(now / CHAN_HZ_CELL_S);
+    for (int i = 0; i < s->channel_count; i++) {
+        const channel_summary_t *c = &s->channels[i];
+        chan_hz_t *e = hz_find(c->channel, 0, minute);
+        if (!e) {
+            /* The first sighting sets the baseline only: the total so
+             * far was counted before this history began. */
+            e = hz_find(c->channel, 1, minute);
+            e->last_total = c->ctrl_total;
+            continue;
+        }
+        long step = minute - e->minute;
+        if (step >= CHAN_HZ_CELLS) {
+            for (int k = 0; k < CHAN_HZ_CELLS; k++) e->cells[k] = 0;
+        } else if (step > 0) {
+            memmove(e->cells, e->cells + step,
+                    sizeof(uint32_t) * (size_t)(CHAN_HZ_CELLS - step));
+            for (long k = CHAN_HZ_CELLS - step; k < CHAN_HZ_CELLS; k++)
+                e->cells[k] = 0;
+        }
+        if (step > 0) e->minute = minute;
+        /* ctrl_frames.c evicts its stalest channel when full; the
+         * total then restarts from zero and is all new. */
+        uint32_t d = c->ctrl_total >= e->last_total
+                   ? c->ctrl_total - e->last_total : c->ctrl_total;
+        e->last_total = c->ctrl_total;
+        uint32_t *cur = &e->cells[CHAN_HZ_CELLS - 1];
+        if (*cur == TG_HZ_UNSEEN) *cur = 0;
+        *cur = UINT32_MAX - 1 - *cur < d ? UINT32_MAX - 1 : *cur + d;
+        if (*cur > e->max) e->max = *cur;
+    }
+}
+
+int channel_hz_cells(int channel, uint32_t out[CHAN_HZ_CELLS],
+                     uint32_t *max) {
+    const chan_hz_t *e = hz_find(channel, 0, 0);
+    *max = 0;
+    if (!e) {
+        for (int i = 0; i < CHAN_HZ_CELLS; i++) out[i] = TG_HZ_UNSEEN;
+        return 0;
+    }
+    memcpy(out, e->cells, sizeof(e->cells));
+    *max = e->max;
+    return 1;
+}
+
+void channel_hz_clear(void) {
+    memset(g_hz, 0, sizeof(g_hz));
+    g_hz_n = 0;
+}
+
 void view_channel_draw(const sloth_state_t *s) {
     int total_aps = 0, total_clients = 0;
     int active = 0;
@@ -108,16 +197,20 @@ void view_channel_draw(const sloth_state_t *s) {
     }
     TPRINT("\n");
 
+    /* The table is cut at the edge rather than wrapped (#150), so an
+     * 80-column screen loses the strip, not every row below it. */
+    tui_clip_rows(1);
     tui_dim();
     TPRINT(" %-5s  %-7s  %4s  %4s  %4s  %-20s  %6s  %6s  %4s  %s\n",
            "Ch", "Band", "APs", "STAs", "Best", "Top SSID", "retry",
-           "ctrl", "age", "activity");
+           "ctrl", "age", "ctrl/min, last 24 min");
     TPRINT(" %-5s  %-7s  %4s  %4s  %4s  %-20s  %6s  %6s  %4s  %s\n",
            "-----", "-------", "----", "----", "----",
-           "--------------------", "------", "------", "----", "--------");
+           "--------------------", "------", "------", "----", "------------------------");
     tui_normal();
 
     if (s->channel_count == 0) {
+        tui_clip_rows(0);    /* the advice below wraps on purpose */
         tui_dim();
         TPRINT("  (no channel activity observed yet)\n");
         if (s->probe_iface[0])
@@ -129,17 +222,9 @@ void view_channel_draw(const sloth_state_t *s) {
         return;
     }
 
-    /* Find max activity for the bar scaling. */
-    int max_a = 1;
-    for (int i = 0; i < s->channel_count; i++) {
-        int a = s->channels[i].ap_count + s->channels[i].assoc_count;
-        if (a > max_a) max_a = a;
-    }
-
     time_t now = sloth_wall();
     for (int i = 0; i < s->channel_count; i++) {
         const channel_summary_t *c = &s->channels[i];
-        int activity = c->ap_count + c->assoc_count;
         long age = (long)(now - c->last_seen);
         if (age < 0)     age = 0;
         if (age > 99999) age = 99999;
@@ -216,17 +301,31 @@ void view_channel_draw(const sloth_state_t *s) {
 
         tui_dim(); TPRINT("  %4s  ", age_buf);
 
-        /* Activity bar. */
-        int bar = (int)((double)activity / (double)max_a * 24.0 + 0.5);
-        if (bar > 24) bar = 24;
-        if (bar < 0)  bar = 0;
-        tui_bright();
-        for (int b = 0; b < bar;     b++) TPRINT("\xe2\x96\x88");  /* █ */
+        /* G3, the horizon strip (#195): control frames a minute over the
+         * last CHAN_HZ_CELLS minutes on the channel's own scale, 0 to
+         * its busiest minute so far, which is printed. It replaced the
+         * activity bar, which drew APs + STAs against the busiest row:
+         * the two numbers are in their own columns, and "when" is what
+         * no column said. */
+        uint32_t hz[CHAN_HZ_CELLS], hz_max = 0;
+        channel_hz_cells(c->channel, hz, &hz_max);
+        for (int b = 0; b < CHAN_HZ_CELLS; b++) {
+            tg_cell_t cell = tg_hz_cell(hz[b], hz_max);
+            if (cell.tone == TG_NONE) tui_normal(); else tg_tone_apply(cell.tone);
+            TPRINT("%s", cell.glyph);
+        }
         tui_dim();
-        for (int b = bar; b < 24;    b++) TPRINT("\xe2\x96\x91");  /* ░ */
+        if (hz_max) TPRINT(" %u", (unsigned)hz_max);
         tui_normal();
         TPRINT("\n");
     }
+    tui_clip_rows(0);
+    /* R9's caption line: source, window, scale. */
+    tui_dim();
+    TPRINT(" ctrl: control frames a minute, last %d min, each row 0 to its"
+           " busiest minute (the number); \xe2\x96\x84 to half, \xe2\x96\x88"
+           " above, _ none counted (also: tuned elsewhere), blank before"
+           " this run watched\n", CHAN_HZ_CELLS);
     tui_normal();
 }
 

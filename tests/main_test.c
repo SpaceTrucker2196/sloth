@@ -260,6 +260,7 @@ void run_snmp_snoop_tests(void);
 void run_mqtt_snoop_tests(void);
 void run_capture_tests(void);
 void run_tui_palette_tests(void);
+void run_tui_glyph_tests(void);
 void run_ownership_tests(void);
 void run_self_macs_tests(void);
 void run_jsonl_lures_tests(void);
@@ -466,6 +467,7 @@ int main(void) {
     run_mqtt_snoop_tests();
     run_capture_tests();
     run_tui_palette_tests();
+    run_tui_glyph_tests();
     run_ownership_tests();
     run_self_macs_tests();
     run_jsonl_lures_tests();

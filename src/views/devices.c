@@ -10,6 +10,8 @@
 #include "camera_join.h"
 #include "sloth_clock.h"
 #include "rf_distance.h"
+#include "tui_glyph.h"
+#include "dev_how.h"
 
 #define DEV_PAGE 30
 
@@ -216,6 +218,95 @@ static int joined(const sloth_state_t *s, const device_t *d, time_t when,
            == CAM_JOIN_OK;
 }
 
+/* G2's TUI form (#195; docs/web-visual-spec.md §5 G2): the S-meter as
+ * the emitter report prints it, on the scale of the band the reading
+ * was heard on, then the S reading and the dBm, always both. The web's
+ * two peak-hold ticks are the window's least and greatest reading,
+ * which a character row cannot place between segments, so they are
+ * written out: the raw samples the distance estimate holds, the same
+ * window the web's drawer reads its range from. */
+static void dl_smeter(dl_t *b, const device_t *d) {
+    if (d->signal_dbm == 0) return;          /* no monitor-mode reading */
+    if (rows_left() <= 2) { b->dropped++; return; }
+    int known = 0, radio = d->dist.radio;
+    int s9 = tg_sm_s9(radio, &known);
+    tg_cell_t c[TG_SM_CELLS];
+    int n = tg_sm_cells(d->signal_dbm, s9, c);
+    char word[12];
+    tg_sm_word(d->signal_dbm, s9, word, sizeof(word));
+    tui_dim(); TPRINT("  Signal   ");
+    for (int i = 0; i < n; i++) { tg_tone_apply(c[i].tone); TPRINT("%s", c[i].glyph); }
+    tui_bright(); TPRINT("  %-6s %4d dBm", word, (int)d->signal_dbm);
+    tui_dim();
+    if (known) TPRINT("  %s scale", tg_sm_band(radio));
+    else       TPRINT("  band unknown: 2.4 GHz scale");
+    if (tg_sm_clamped(d->signal_dbm, s9)) TPRINT(", past the face");
+    TPRINT("\n");
+
+    int lo = 0, hi = 0, k = 0;
+    for (int i = 0; i < d->dist.raw_n && i < RF_RAW_MAX; i++) {
+        int v = d->dist.raw_dbm[i];
+        if (v == 0) continue;
+        if (!k || v < lo) lo = v;
+        if (!k || v > hi) hi = v;
+        k++;
+    }
+    if (k > 1 && hi > lo) {
+        char wl[12], wh[12];
+        tg_sm_word(lo, s9, wl, sizeof(wl));
+        tg_sm_word(hi, s9, wh, sizeof(wh));
+        dl(b, -1, "           range %s %d to %s %d dBm over the last %d"
+           " samples", wl, lo, wh, hi, k);
+    }
+}
+
+/* G4's TUI form (#195; docs/web-visual-spec.md §5 G4): the 7 by 24
+ * hour-of-week grid in `▪` at four heat levels, by the share of the
+ * watched hours the device was seen in, against the grid's largest
+ * share (printed). An hour this run never watched is blank and one it
+ * watched with the device absent is `·` (R5). Last in the detail, and
+ * drawn whole or not at all: on a short screen it is the block that is
+ * counted, not the camera evidence above it. */
+#define HOW_ROWS 10   /* title, ruler, seven days, caption */
+
+static void dl_how(dl_t *b, const device_t *d) {
+    static const char *const day[7] =
+        { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
+    if (mac_zero(d->mac)) return;            /* no key to count it by */
+    if (rows_left() < HOW_ROWS + 2) { b->dropped += HOW_ROWS; return; }
+    uint16_t pres[DEV_HOW_CELLS], wat[DEV_HOW_CELLS];
+    dev_how_get(d->mac, pres, wat);
+    double max = 0.0;
+    int watched = 0, seen = 0;
+    for (int i = 0; i < DEV_HOW_CELLS; i++) {
+        if (!wat[i]) continue;
+        watched++;
+        double sh = (double)pres[i] / (double)wat[i];
+        if (sh > 0.0) seen++;
+        if (sh > max) max = sh;
+    }
+    dl_title(b, "HOUR OF WEEK (this run, local time)");
+    tui_dim();
+    TPRINT("       0     6     12    18\n");
+    for (int r = 0; r < 7; r++) {
+        tui_dim(); TPRINT("  %s ", day[r]);
+        for (int h = 0; h < 24; h++) {
+            int c = r * 24 + h;
+            double sh = wat[c] ? (double)pres[c] / (double)wat[c] : 0.0;
+            tg_cell_t cell = tg_how_cell(wat[c] > 0, sh, max);
+            tg_tone_apply(cell.tone);
+            TPRINT("%s", cell.glyph);
+        }
+        TPRINT("\n");
+    }
+    if (watched == 0)
+        dl(b, -1, "  no data: no hour watched yet");
+    else
+        dl(b, -1, "  seen in %d of %d hours watched; max %.0f%% of an hour's"
+           " watches; blank not watched, \xc2\xb7 absent; empty after a"
+           " restart", seen, watched, max * 100.0);
+}
+
 static void draw_device_detail(const sloth_state_t *s) {
     dl_t b = { dev_cols() - 1, 0 };
     if (b.width < 20) b.width = 20;
@@ -285,6 +376,7 @@ static void draw_device_detail(const sloth_state_t *s) {
     if (mac_zero(d->mac))
         dl(&b, 0, "  Keyed by IP only: no link-layer address was seen for"
            " this camera");
+    dl_smeter(&b, d);
     if (d->dist.valid) {
         char dd[96];
         rf_dist_describe(&d->dist, dd, sizeof(dd));
@@ -404,6 +496,8 @@ static void draw_device_detail(const sloth_state_t *s) {
                r->auth_scheme[0] ? r->auth_scheme : "-", r->path);
         }
     }
+
+    dl_how(&b, d);
 
     if (b.dropped) {
         tui_dim();

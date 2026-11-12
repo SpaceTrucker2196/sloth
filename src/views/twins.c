@@ -11,6 +11,7 @@
  * Same form src/views/alerts.c already uses. */
 #include "../alerts.h"
 #include "../wired_attach.h"
+#include "tui_glyph.h"
 
 #define TWINS_PAGE 30
 /* Rows the legend under the table takes: flags, class and wired, two
@@ -56,6 +57,159 @@ static twins_plan_t twins_plan(int cols) {
 static void fmt_mac(const uint8_t mac[6], char *buf, int sz) {
     snprintf(buf, sz, "%02x:%02x:%02x:%02x:%02x:%02x",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+/* ── G8, the chain lanes for the selected pair (#195) ─────────
+ * docs/web-visual-spec.md §5 G8's TUI form: one lane per stage in the
+ * order the chain runs, on one time axis ending now. An EVIL_TWIN or
+ * KARMA_AP incident naming either BSSID at its key's fixed fields
+ * (alert_pair_key()'s two after "twin:" / "twin-fp:", karma_alert_key()'s
+ * one after "karma:"; never a substring, as web_sdb_chain_stages() reads
+ * them) is `━` from open to last observation, `●` at an end inside the
+ * window, in the severity it reached. A deauth stream addressed to
+ * either BSSID is `▌` across its span; an association to either is `●`
+ * at its first frame; both in the one ink, with the DEAUTH_FLOOD
+ * severity as the lane's word. The links sloth made are words under
+ * the lanes. */
+#define CHAIN_ROWS   7      /* title, four lanes, axis, links */
+#define CHAIN_CELLS 24
+#define CHAIN_MIN_S 600
+#define CHAIN_MAX_S 86400
+
+static int key_bssid_at(const char *key, size_t off, const char *mac) {
+    return strlen(key) >= off + 17 && strncmp(key + off, mac, 17) == 0;
+}
+
+/* Which BSSID of the pair (1 or 2) the key names at its fixed fields,
+ * or 0. */
+static int stage_key_names(const alert_t *a, const char *m1, const char *m2) {
+    const char *k = a->key;
+    const char *m[2] = { m1, m2 };
+    for (int i = 0; i < 2; i++) {
+        if (a->type == ALERT_TYPE_EVIL_TWIN) {
+            if (strncmp(k, "twin:", 5) == 0 &&
+                (key_bssid_at(k, 5, m[i]) || key_bssid_at(k, 23, m[i])))
+                return i + 1;
+            if (strncmp(k, "twin-fp:", 8) == 0 &&
+                (key_bssid_at(k, 8, m[i]) || key_bssid_at(k, 26, m[i])))
+                return i + 1;
+        } else if (a->type == ALERT_TYPE_KARMA_AP) {
+            if (strncmp(k, "karma:", 6) == 0 && key_bssid_at(k, 6, m[i]))
+                return i + 1;
+        } else if (a->type == ALERT_TYPE_DEAUTH_FLOOD) {
+            const char *at = strrchr(k, '@');
+            if (strncmp(k, "deauth:", 7) == 0 && at && strcmp(at + 1, m[i]) == 0)
+                return i + 1;
+        }
+    }
+    return 0;
+}
+
+static void draw_lane(const char *name, int sev, const tg_lane_t *l) {
+    char label[16];
+    if (sev >= 0)
+        snprintf(label, sizeof(label), "%s %s", name,
+                 sev == ALERT_SEV_CRIT ? "CRIT" : sev == ALERT_SEV_WARN ? "WARN" : "LOW");
+    else
+        snprintf(label, sizeof(label), "%s", name);
+    if (sev >= 0) tg_tone_apply(tg_sev_tone(sev)); else tui_dim();
+    TPRINT("  %-12s ", label);
+    for (int i = 0; i < l->n; i++) {
+        tg_tone_apply(l->cell[i].tone);
+        TPRINT("%s", l->cell[i].glyph);
+    }
+    TPRINT("\n");
+}
+
+static void draw_chain(const sloth_state_t *s, const twin_episode_t *e) {
+    char m1[20], m2[20];
+    fmt_mac(e->real_bssid, m1, sizeof(m1));
+    fmt_mac(e->twin_bssid, m2, sizeof(m2));
+    time_t now = sloth_wall(), first = now;
+
+    /* The axis: from the earliest stage seen (at least ten minutes, at
+     * most a day) to now. */
+    for (int i = 0; i < s->alert_count && i < MAX_ALERTS; i++) {
+        const alert_t *a = &s->alerts[i];
+        if (stage_key_names(a, m1, m2) && a->first_detected > 0 &&
+            a->first_detected < first)
+            first = a->first_detected;
+    }
+    for (int i = 0; i < s->deauth_count && i < MAX_DEAUTH_ENTRIES; i++) {
+        const deauth_event_t *d = &s->deauth_events[i];
+        if ((!memcmp(d->bssid, e->real_bssid, 6) || !memcmp(d->bssid, e->twin_bssid, 6)) &&
+            d->first_seen > 0 && d->first_seen < first)
+            first = d->first_seen;
+    }
+    time_t span = now - first;
+    if (span < CHAIN_MIN_S) span = CHAIN_MIN_S;
+    if (span > CHAIN_MAX_S) span = CHAIN_MAX_S;
+    time_t from = now - span;
+
+    tg_lane_t deauth, twin, assoc, karma;
+    tg_lane_init(&deauth, CHAIN_CELLS);
+    tg_lane_init(&twin,   CHAIN_CELLS);
+    tg_lane_init(&assoc,  CHAIN_CELLS);
+    tg_lane_init(&karma,  CHAIN_CELLS);
+    int sev_d = -1, sev_t = -1, sev_k = -1, nassoc = 0;
+
+    for (int i = 0; i < s->deauth_count && i < MAX_DEAUTH_ENTRIES; i++) {
+        const deauth_event_t *d = &s->deauth_events[i];
+        if (memcmp(d->bssid, e->real_bssid, 6) && memcmp(d->bssid, e->twin_bssid, 6))
+            continue;
+        int a = tg_lane_col(&deauth, d->first_seen < from ? from : d->first_seen, from, now);
+        int b = tg_lane_col(&deauth, d->last_seen, from, now);
+        for (int c = a; a >= 0 && b >= 0 && c <= b; c++) {
+            deauth.cell[c].glyph = "\xe2\x96\x8c";   /* ▌ */
+            deauth.cell[c].tone  = TG_NORMAL;
+        }
+    }
+    for (int i = 0; i < s->assoc_count && i < MAX_ASSOC_ENTRIES; i++) {
+        const assoc_t *as = &s->assocs[i];
+        if (memcmp(as->bssid, e->real_bssid, 6) && memcmp(as->bssid, e->twin_bssid, 6))
+            continue;
+        if (as->first_seen >= from) nassoc++;
+        tg_lane_mark(&assoc, as->first_seen, from, now, "\xe2\x97\x8f", TG_NORMAL);
+    }
+    for (int i = 0; i < s->alert_count && i < MAX_ALERTS; i++) {
+        const alert_t *a = &s->alerts[i];
+        if (!stage_key_names(a, m1, m2)) continue;
+        int sv = (int)a->sev;
+        if (a->type == ALERT_TYPE_DEAUTH_FLOOD) {
+            if (sv > sev_d) sev_d = sv;
+        } else {
+            tg_lane_t *l = a->type == ALERT_TYPE_EVIL_TWIN ? &twin : &karma;
+            int *ms = a->type == ALERT_TYPE_EVIL_TWIN ? &sev_t : &sev_k;
+            if (sv > *ms) *ms = sv;
+            tg_lane_bar(l, a->first_detected, a->last_seen, from, now,
+                        tg_sev_tone(sv));
+        }
+    }
+
+    tui_dim();
+    /* The pair is the highlighted row above; its BSSIDs are not
+     * repeated, so a search for one finds the table row alone. */
+    TPRINT(" \xe2\x94\x80\xe2\x94\x80 chain of the selected pair, by stage"
+           " \xe2\x94\x80\xe2\x94\x80\n");
+    draw_lane("deauth", sev_d, &deauth);
+    draw_lane("twin",   sev_t, &twin);
+    draw_lane("assoc",  -1,    &assoc);
+    draw_lane("karma",  sev_k, &karma);
+    char t0[8], tm_buf[8];
+    struct tm tm;
+    if (localtime_r(&from, &tm)) strftime(t0, sizeof(t0), "%H:%M", &tm);
+    else snprintf(t0, sizeof(t0), "?");
+    if (localtime_r(&now, &tm)) strftime(tm_buf, sizeof(tm_buf), "%H:%M", &tm);
+    else snprintf(tm_buf, sizeof(tm_buf), "?");
+    tui_dim();
+    TPRINT("  %-12s %-*s%s  %ld min, %d assoc\n", "", CHAIN_CELLS - 5, t0,
+           tm_buf, (long)(span / 60), nassoc);
+    /* The links sloth made, in words (P9, P11). */
+    TPRINT("  links: %s; %s\n",
+           e->attack_in_progress ? "deauth taint, attack in progress"
+                                 : "no deauth taint",
+           e->attributed ? "impostor attributed" : "unattributed");
+    tui_normal();
 }
 
 void view_twins_draw(const sloth_state_t *s) {
@@ -125,7 +279,7 @@ void view_twins_draw(const sloth_state_t *s) {
         return;
     }
 
-    int page = view_page_budget(TWINS_LEGEND_ROWS, TWINS_PAGE);
+    int page = view_page_budget(TWINS_LEGEND_ROWS + CHAIN_ROWS, TWINS_PAGE);
     int top = s->twin_episode_sel - page / 2;
     if (top + page > s->twin_episode_count) top = s->twin_episode_count - page;
     if (top < 0) top = 0;
@@ -244,6 +398,9 @@ void view_twins_draw(const sloth_state_t *s) {
 #endif
     }
     tui_normal();
+
+    if (s->twin_episode_sel >= 0 && s->twin_episode_sel < s->twin_episode_count)
+        draw_chain(s, &s->twin_episodes[s->twin_episode_sel]);
 
     /* Legend */
     tui_dim();
