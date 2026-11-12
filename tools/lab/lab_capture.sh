@@ -34,12 +34,13 @@
 # Exit 2, with the reason, and nothing captured, when:
 #   - a required tool is missing (tcpdump or dumpcap, ethtool, python3,
 #     sha256sum or shasum);
-#   - IFACE is one sloth captures on: named by --iface in a running
-#     sloth's command line, SLOTH_IFACE or an --iface in /etc/default/sloth,
-#     or holding one of a running sloth's packet sockets. sloth with no
-#     --iface takes the first type-803 interface /sys/class/net lists, so
-#     the sockets are the only proof; when they cannot be read (not
-#     root), that is a refusal too;
+#   - IFACE is one sloth captures on: named by --iface or --monitor-iface
+#     in a running sloth's command line, SLOTH_IFACE or an --iface /
+#     --monitor-iface in /etc/default/sloth, or holding one of a running
+#     sloth's packet sockets. A sloth with no --monitor-iface takes the
+#     first type-803 interface /sys/class/net lists, so the sockets are
+#     the only proof; when they cannot be read (not root), that is a
+#     refusal too;
 #   - IFACE is not in monitor mode (/sys/class/net/IFACE/type 803 or 804);
 #   - chipset or firmware cannot be named and was not given;
 #   - the output directory cannot be written, or the pcap already exists.
@@ -146,8 +147,8 @@ if [ -r "$DEFAULT_SLOTH" ]; then
     # shellcheck disable=SC2086 # word splitting is how systemd reads it
     set -- $conf_args
     while [ $# -gt 0 ]; do
-        if [ "$1" = --iface ] && [ "${2:-}" = "$iface" ]; then
-            refuse "$iface is an --iface in $DEFAULT_SLOTH's SLOTH_ARGS"
+        if { [ "$1" = --iface ] || [ "$1" = --monitor-iface ]; } && [ "${2:-}" = "$iface" ]; then
+            refuse "$iface is an $1 in $DEFAULT_SLOTH's SLOTH_ARGS"
         fi
         shift
     done
@@ -168,8 +169,8 @@ for d in "$PROC"/[0-9]*; do
     slothpids="$slothpids $pid"
     prev=
     for a in $(tr '\0' '\n' < "$d/cmdline" | tr -c '[:alnum:]_.:/=\n-' '_'); do
-        [ "$prev" = --iface ] && [ "$a" = "$iface" ] &&
-            refuse "$iface is an --iface of the running sloth (pid $pid)"
+        { [ "$prev" = --iface ] || [ "$prev" = --monitor-iface ]; } && [ "$a" = "$iface" ] &&
+            refuse "$iface is an $prev of the running sloth (pid $pid)"
         prev=$a
     done
     # The packet sockets: /proc/PID/net/packet's Iface (ifindex) per
