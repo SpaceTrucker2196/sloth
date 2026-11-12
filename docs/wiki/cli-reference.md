@@ -614,10 +614,10 @@ An unknown or incomplete argument exits `2`.
 Since 2026-11-11 (#192 I2, I3) slothweb takes `--my-ssid SSID` and
 `--my-bssid MAC` too (repeatable, at most 16 of each, as sloth), the same values as
 sloth's flags of those names, which `sloth.db` and the stream do not
-carry: this site's own networks, the baseline of the fleet's identity
-findings (`/api/fleet/findings`) and part of the local network the
-fleet export never sends (since 2026-11-12, the owner's monitor-only
-rule, ADR 0009: kept here, never named to a peer). An SSID of 0 or more than 32 octets or with a
+carry: this site's own networks, named to a peer that asks with
+`ident=1` (they travel under the owner's monitor-only rule, ADR 0009)
+and the baseline of the fleet's identity findings
+(`/api/fleet/findings`). An SSID of 0 or more than 32 octets or with a
 control character, a BSSID that is not six hex octets, or a seventeenth of
 either exits `2`; any given is announced on stderr. Set both: slothweb
 does not read sloth's flags, so a network named to one and not the other

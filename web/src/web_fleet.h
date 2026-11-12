@@ -24,35 +24,37 @@
  * the aircraft it heard (aircraft lines), counted on the end line.
  *
  * Monitor data only (owner hard rule, 2026-11-12; web_fleetshare.h,
- * docs/wiki/adr/0009-fleet-monitor-only.md). A row travels only when
- * this site learned it passively over the air: devices are read in the
- * Monitor scope (web_scope.h: no address, no name, the radio's own
- * first and last seen and signal); a device, AP, probed SSID, alert or
- * verdict of this host's local network (the managed card's joined
- * network and every BSSID carrying its SSID, its station dump, every
- * MAC the neighbour table held, --my-ssid / --my-bssid, this host's own
- * radios, the roster) is withheld whole; an alert or verdict travels
- * only for a type on the allow-list, with no address. When the local
- * network cannot be read, no sloth.db row and no verdict is sent and
- * those kinds say they are cut. The header names this host
- * (hostname) and the rule (share_rule); the importer refuses what the
- * rule forbids from any peer, and the rows only a sender can judge
- * (wifi, ap, probe) from an answer that does not state it.
+ * docs/wiki/adr/0009-fleet-monitor-only.md). The rule is provenance:
+ * what this site heard in monitor mode travels ("anything that is thru
+ * monitor mode is game"), what it learned through the joined network
+ * or the wire never does. Devices are read in the Monitor scope
+ * (web_scope.h: no address, no name, the radio's own first and last
+ * seen and signal), so a device the LAN also knows travels with what
+ * the radio heard of it alone, and one only the LAN or the managed
+ * card's station dump knows is withheld; so are the host's own radios
+ * and the roster (DEV_RISK_SELF). Every AP the radio heard beacon and
+ * every probe travels, the joined network's included. An alert or a
+ * verdict travels only for a type on the allow-list, with no IP
+ * address. The header names this host (hostname) and the rule
+ * (share_rule, "monitor_only/2"); the importer refuses what the rule
+ * forbids from any peer, and the rows only a sender can judge (wifi,
+ * ap, probe) from an answer that does not state a rule.
  *
- * With own=1 (#192 I5) the header carries own_macs, and since the rule
- * always as null: this site's radios are its stations on the local
- * network. An older peer's are refused. Only asked for, so an older
- * importer never meets the member.
+ * With own=1 (#192 I5) the header also names this site's monitor radios
+ * (own_macs), the transmitters at a known position that calibrate a
+ * peer's receiver (web_locate.h); never the managed card (this host's
+ * station on the joined network) or a radio whose role is not known
+ * (web_fleet_read_own()). Only asked for, so an older importer never
+ * meets the member.
  *
- * With ident=1 (#192 I2-I4, I8, web_fleetid.h) each ap line carries the
- * attacker-fingerprint material
+ * With ident=1 (#192 I2-I4, I8, web_fleetid.h) the whole export also
+ * names this site's own networks (own_net lines, counted on the end
+ * line), and each ap line carries the attacker-fingerprint material
  * slothweb holds for it: the beacon's IE-order and vendor-IE hashes and
  * WPS strings from the stream's ledger, and the AP-impersonation alerts
  * sloth.db holds naming that BSSID as a transmitter. A page asked with
  * ident=1 carries the ap members too. Only asked for, so an older
- * importer never meets a member it does not know. This site's own
- * networks (own_net lines) are no longer sent (the rule), and an older
- * peer's are refused.
+ * importer never meets a member it does not know.
  *
  * Every member of every line is named in web_fleet_members[] and in no
  * other place: the writer emits those names only, the reader refuses a
@@ -324,6 +326,9 @@ typedef struct web_fleet {
     char              own_sysfs[192];
     char              own[WEB_FLEET_OWN_MAX][WEB_FLEET_MAC_SZ];
     char              own_csv[WEB_FLEET_OWN_MAX * WEB_FLEET_MAC_SZ];
+    /* The monitor radios among them (own=1's own_macs; owner rule
+     * 2026-11-12: never the managed card), the same size as own_csv. */
+    char              own_mon_csv[WEB_FLEET_OWN_MAX * WEB_FLEET_MAC_SZ];
     /* This site's own networks (#192 I2, I3; set before start, read
      * without the lock after that). */
     web_fleet_mine_t  mine;
@@ -345,8 +350,12 @@ typedef struct web_fleet {
 int  web_fleet_own_parse(const char *csv, char own[][WEB_FLEET_MAC_SZ], int *n);
 /* This host's own radios: the address of each physical interface under
  * SYSFS/class/net (sysfs NULL: /sys), every entry looked at, sorted by
- * interface name, at most WEB_FLEET_OWN_MAX, into f->own and f->own_csv;
- * the path is kept for the re-reads. A read of the host's own files,
+ * interface name, at most WEB_FLEET_OWN_MAX, into f->own and f->own_csv,
+ * and the monitor radios among them into f->own_mon_csv: an interface
+ * whose class/net/<if>/type is an 802.11 monitor link type (801..803),
+ * an address no other interface holds; a managed card, a wired port or
+ * an interface whose type cannot be read is not one. The path is kept
+ * for the re-reads. A read of the host's own files,
  * nothing on a network. The count. */
 int  web_fleet_read_own(web_fleet_t *f, const char *sysfs);
 /* Read the list again when WEB_FLEET_OWN_REREAD_S have passed since the
@@ -372,14 +381,18 @@ void web_fleet_load(web_fleet_t *f);
 void web_fleet_destroy(web_fleet_t *f);
 
 /* The monitor-only rule's purge of what an earlier build stored (owner,
- * 2026-11-12; web_fleetshare.h): once, at start, every peer's own_net
- * rows, its alert and verdict rows the rule refuses, its wifi, ap and
- * probe rows (from exports that did not filter them; the peer's clock
- * and wifi/ap backfill are reset, so the next pull asks again from the
- * start) and the ident meta, in one transaction, marked done in meta
- * "fleet.rule.monitor_only". */
+ * 2026-11-12; web_fleetshare.h): once, at start. A store no build of
+ * the rule purged: every peer's alert and verdict rows the rule refuses
+ * and its wifi, ap and probe rows (from exports that did not filter
+ * them). Every store: each peer's clock (remote_ts) and wifi, ap, alert
+ * and verdict backfill reset, so the next pull asks again from the
+ * start for what the provenance rule ("monitor_only/2") now lets travel
+ * (own_net, the joined network as heard over the air). Nothing the rule
+ * allows is deleted. In one transaction, marked done in meta
+ * "fleet.rule.monitor_only.v2". */
 typedef struct {
-    long long own_net, alert, verdict, rows, meta;
+    long long alert, verdict, rows, meta, sites;
+    int       first;                 /* the store had no purge before */
 } web_fleet_purge_t;
 /* Over f->wr when open, else a connection of its own. 0 purged, 1
  * already done before, -1 failed (nothing changed). Logged to stderr
@@ -430,6 +443,10 @@ typedef struct {
     /* The stream's twin attribution (web_chain.h): which half of an
      * EVIL_TWIN pair is the impostor, for ident=1's attacks; may be NULL. */
     struct web_chain   *chain;
+    /* This site's monitor radios (own=1's own_macs), may be NULL: none
+     * named. own_csv's other radios are never named (owner rule
+     * 2026-11-12). */
+    const char         *own_mon_csv;
 } web_fleet_src_t;
 
 /* /api/fleet/export: a heap body the caller frees, in *body. 0 with

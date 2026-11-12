@@ -418,40 +418,6 @@ typedef int (*web_sdb_card_sta_fn)(void *ctx, const web_sdb_card_sta_t *a);
  * file has no such table, -1. */
 int web_sdb_card_aps(web_sdb_conn_t *c, long long limit, web_sdb_card_ap_fn fn,
                      void *ctx);
-
-/* The fleet export's local network (owner rule 2026-11-12,
- * web_fleetshare.h): what sloth.db says this host is itself part of,
- * through its managed card and its own interfaces, never the monitor
- * radio. what:
- *   WEB_SDB_LN_JOINED  the managed card's scan rows it is authenticated,
- *                      associated or IBSS-joined to (wifi_aps.status >= 0;
- *                      a = bssid, b = ssid)
- *   WEB_SDB_LN_LINK    its station dump (wifi_stas: the AP it is a client
- *                      of, or its own clients in AP mode; a = mac)
- *   WEB_SDB_LN_ARP     every MAC the neighbour table ever held (a = mac)
- *   WEB_SDB_LN_SSID    the beacon_aps BSSIDs that carried SSID arg, now
- *                      or before (a = bssid)
- * At most max rows to fn; the count, 0 when the file has no such table,
- * -1 on an error. */
-enum { WEB_SDB_LN_JOINED = 0, WEB_SDB_LN_LINK, WEB_SDB_LN_ARP, WEB_SDB_LN_SSID };
-int web_sdb_local_net(web_sdb_conn_t *c, int what, const char *arg, int max,
-                      web_sdb_item_fn fn, void *ctx);
-/* Does the key of the alerts row rid (web_sdb_item_t.rid) hold any of
- * needles[0..n) as a substring? The key is read in the predicate only,
- * as web_sdb_ap_attacks() reads it; nothing of it comes back. One
- * statement a chunk of WEB_SDB_KEYCHK_CHUNK needles, prepared once.
- * 1, 0, or -1 on an error. */
-#define WEB_SDB_KEYCHK_CHUNK 64
-#define WEB_SDB_KEYCHK_MAX   64          /* chunks: 4,096 needles */
-typedef struct {
-    web_sdb_conn_t *c;
-    int             nst;
-    void           *st[WEB_SDB_KEYCHK_MAX];
-} web_sdb_keychk_t;
-int  web_sdb_keychk_open(web_sdb_keychk_t *k, web_sdb_conn_t *c, const char *const *needles,
-                         int n);
-int  web_sdb_keychk(web_sdb_keychk_t *k, long long rid);
-void web_sdb_keychk_close(web_sdb_keychk_t *k);
 int web_sdb_card_stas(web_sdb_conn_t *c, long long limit, web_sdb_card_sta_fn fn,
                       void *ctx);
 

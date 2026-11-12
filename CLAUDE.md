@@ -26,12 +26,13 @@ quietly inside a feature commit.
 
 ## Fleet sharing: monitor data only (owner hard rule, 2026-11-12)
 
-- Share with peers only what sloth heard passively over the air (monitor
-  radio, BLE, GNSS, ADS-B). Never what the host's own interfaces or the
-  wire learned (ARP, DHCP, mDNS, DNS, flows, IPs, host names).
-- Never share the local network the host is joined to: its SSIDs and
-  BSSIDs, its stations, `--my-ssid` / `--my-bssid`, the host's own
-  radios. Local network data stays on the local host.
+- Share what sloth heard in monitor mode. Never share what it learned
+  through the joined network or the wire.
+- Monitor radio, BLE, GNSS, ADS-B: everything they heard travels, the
+  joined network's APs and stations as heard over the air included
+  (owner: "anything that is thru monitor mode is game").
+- ARP, DHCP, mDNS, DNS, flows, IPs, host names, the managed card's scan,
+  station dump and MAC: never. A row known only that way never travels.
 - Fail closed; every export names its host; the importer refuses what
   the rule forbids.
 - Only the owner relaxes this. Enforcement points and the tests that

@@ -1,8 +1,8 @@
 /* Fleet sharing: monitor data only (owner hard rule, 2026-11-12;
  * web/src/web_fleetshare.h). The alert-type classification held to
  * include/sloth_alerts.def and to the capture scope's tags
- * (web_scope.c), the importer's rule shape by shape, and the local
- * network's set. The export and the store, end to end, are
+ * (web_scope.c), the importer's rule shape by shape, and which device
+ * rows travel. The export and the store, end to end, are
  * web/tests/test_fleet.c's (test_export_monitor_only,
  * test_ingest_refuses_forbidden, test_purge_once). */
 #include <stdio.h>
@@ -93,11 +93,11 @@ static void test_every_alert_type_is_classified(void) {
     WT_EQ(web_fleet_alert_shareable(NULL), 0);
     WT_EQ(web_fleet_alert_shareable(""), 0);
     WT_EQ(web_fleet_alert_shareable("NOT_A_TYPE"), 0);
-    /* The three heard on the air but about the operator's own networks,
-     * or sloth's own state, are withheld though the scope tags them
-     * Monitor or META. */
-    WT_EQ(web_fleet_alert_shareable("MY_NETWORK_RECON"), 0);
-    WT_EQ(web_fleet_alert_shareable("UNKNOWN_DEVICE"), 0);
+    /* Heard on the air and judged against the operator's own networks
+     * and roster: the radio's (the provenance rule). sloth's own state
+     * is withheld though the scope tags it META. */
+    WT_EQ(web_fleet_alert_shareable("MY_NETWORK_RECON"), 1);
+    WT_EQ(web_fleet_alert_shareable("UNKNOWN_DEVICE"), 1);
     WT_EQ(web_fleet_alert_shareable("NO_MONITOR_MODE"), 0);
     WT_EQ(web_fleet_alert_shareable("CAPTIVE_PORTAL"), 0);
     WT_EQ(web_fleet_alert_shareable("CAM_SETUP_OUI"), 1);
@@ -109,10 +109,12 @@ static const char *refuses(const char *line, int attested) {
     return web_fleet_share_refuses(web_jl_str(&r, "type"), &r, attested);
 }
 
-/* The importer's rule, shape by shape. Seen red with the own_net
- * refusal removed and with the attested test made to pass. */
+/* The importer's rule, shape by shape: own_net is taken (it travels
+ * under the provenance rule, from an answer with or without the rule).
+ * Seen red with own_net refused again. */
 static void test_refuses(void) {
-    WT_ASSERT(refuses("{\"type\":\"own_net\",\"ssid\":\"A\",\"bssid\":null}", 1) != NULL);
+    WT_ASSERT(refuses("{\"type\":\"own_net\",\"ssid\":\"A\",\"bssid\":null}", 1) == NULL);
+    WT_ASSERT(refuses("{\"type\":\"own_net\",\"ssid\":\"A\",\"bssid\":null}", 0) == NULL);
     WT_ASSERT(refuses("{\"type\":\"wifi\",\"mac\":\"02:00:00:00:00:01\"}", 1) == NULL);
     WT_ASSERT(refuses("{\"type\":\"wifi\",\"mac\":\"02:00:00:00:00:01\"}", 0) != NULL);
     WT_ASSERT(refuses("{\"type\":\"ap\",\"bssid\":\"02:00:00:00:00:01\"}", 0) != NULL);
@@ -136,55 +138,56 @@ static void test_refuses(void) {
                       "\"addr\":\"0e:00:00:00:00:01\"}", 1) != NULL);
 }
 
-/* The local network's set without sloth.db: the operator's own networks
- * and this host's own radios; an address in any case, an SSID exact, a
- * title naming one. A malformed radio list makes the set unknown. */
-static void test_local_set(void) {
-    web_fleet_mine_t m;
-    memset(&m, 0, sizeof(m));
-    snprintf(m.ssid[0], sizeof(m.ssid[0]), "HomeNet");
-    m.nssid = 1;
-    snprintf(m.bssid[0], sizeof(m.bssid[0]), "0e:00:00:00:00:01");
-    m.nbssid = 1;
-    web_fleet_local_t l;
-    WT_EQ(web_fleet_local_build(&l, NULL, &m, "02:00:5e:00:00:0a"), 0);
-    WT_EQ(l.ok, 1);
-    WT_EQ(web_fleet_local_addr(&l, "0E:00:00:00:00:01"), 1);
-    WT_EQ(web_fleet_local_addr(&l, "02:00:5e:00:00:0a"), 1);
-    WT_EQ(web_fleet_local_addr(&l, "02:00:5e:00:00:0b"), 0);
-    WT_EQ(web_fleet_local_addr(&l, "not-a-mac"), 0);
-    WT_EQ(web_fleet_local_ssid(&l, "HomeNet"), 1);
-    WT_EQ(web_fleet_local_ssid(&l, "homenet"), 0);
-    WT_EQ(web_fleet_local_names(&l, "Evil twin of HomeNet"), 1);
-    WT_EQ(web_fleet_local_names(&l, "Evil twin"), 0);
-    const char *nd[8];
-    WT_EQ(web_fleet_local_needles(&l, nd, 8), 2);
+/* Which share_rule values attest: both cuts of the rule, nothing else. */
+static void test_rule_words(void) {
+    WT_EQ(web_fleet_share_rule_ok("monitor_only/2"), 1);
+    WT_EQ(web_fleet_share_rule_ok("monitor_only"), 1);
+    WT_EQ(web_fleet_share_rule_ok("monitor_only/3"), 0);
+    WT_EQ(web_fleet_share_rule_ok(""), 0);
+    WT_EQ(web_fleet_share_rule_ok(NULL), 0);
+    WT_EQ(strcmp(WEB_FLEET_SHARE_RULE, "monitor_only/2"), 0);
+}
+
+/* A device row travels when the radio heard it, whatever the LAN knows
+ * of it; not when only the LAN or the station dump knows it, when it
+ * carries an address or a name, when it is the host's own or rostered
+ * (DEV_RISK_SELF), or when it is one of the host's own radios. Seen red
+ * with the sources, DEV_RISK_SELF and own-radio tests removed in turn
+ * (the address and name test cannot be isolated through the export,
+ * whose Monitor scope never reads either). */
+static void test_share_dev(void) {
+    char self[2][WEB_FLEET_MAC_SZ];
+    snprintf(self[0], sizeof(self[0]), "02:00:5e:00:00:0a");
+    snprintf(self[1], sizeof(self[1]), "02:00:5e:00:00:0b");
     web_sdb_dev_t d;
     memset(&d, 0, sizeof(d));
     snprintf(d.mac, sizeof(d.mac), "0e:00:00:00:00:99");
-    d.sources = 16;
-    WT_EQ(web_fleet_share_dev(&l, &d), 1);
-    d.sources = 1;                       /* ARP alone */
-    WT_EQ(web_fleet_share_dev(&l, &d), 0);
+    d.sources = 16;                      /* a probe */
+    WT_EQ(web_fleet_share_dev(&d, (const char (*)[WEB_FLEET_MAC_SZ])self, 2), 1);
+    d.sources = 8;                       /* a beacon: the joined AP's too */
+    WT_EQ(web_fleet_share_dev(&d, (const char (*)[WEB_FLEET_MAC_SZ])self, 2), 1);
+    d.sources = 64;                      /* a camera sign on a beacon */
+    WT_EQ(web_fleet_share_dev(&d, (const char (*)[WEB_FLEET_MAC_SZ])self, 2), 1);
+    d.sources = 1 | 2 | 4 | 32;          /* ARP, DHCP, mDNS, the station dump */
+    WT_EQ(web_fleet_share_dev(&d, (const char (*)[WEB_FLEET_MAC_SZ])self, 2), 0);
     d.sources = 16;
     d.risk_signals = 64;                 /* DEV_RISK_SELF */
-    WT_EQ(web_fleet_share_dev(&l, &d), 0);
+    WT_EQ(web_fleet_share_dev(&d, (const char (*)[WEB_FLEET_MAC_SZ])self, 2), 0);
     d.risk_signals = 0;
+    snprintf(d.ip, sizeof(d.ip), "192.168.7.20");
+    WT_EQ(web_fleet_share_dev(&d, (const char (*)[WEB_FLEET_MAC_SZ])self, 2), 0);
+    d.ip[0] = '\0';
     snprintf(d.hostname, sizeof(d.hostname), "laptop");
-    WT_EQ(web_fleet_share_dev(&l, &d), 0);
+    WT_EQ(web_fleet_share_dev(&d, (const char (*)[WEB_FLEET_MAC_SZ])self, 2), 0);
     d.hostname[0] = '\0';
-    snprintf(d.mac, sizeof(d.mac), "02:00:5e:00:00:0a");
-    WT_EQ(web_fleet_share_dev(&l, &d), 0);
-    web_fleet_local_free(&l);
-    WT_EQ(web_fleet_local_build(&l, NULL, &m, "garbage"), -1);
-    WT_EQ(l.ok, 0);
-    snprintf(d.mac, sizeof(d.mac), "0e:00:00:00:00:99");
-    WT_EQ(web_fleet_share_dev(&l, &d), 0);
-    web_fleet_local_free(&l);
+    snprintf(d.mac, sizeof(d.mac), "02:00:5E:00:00:0B");   /* an own radio, any case */
+    WT_EQ(web_fleet_share_dev(&d, (const char (*)[WEB_FLEET_MAC_SZ])self, 2), 0);
+    WT_EQ(web_fleet_share_dev(&d, (const char (*)[WEB_FLEET_MAC_SZ])self, 1), 1);
 }
 
 void run_fleetshare_tests(void) {
     WT_RUN(test_every_alert_type_is_classified);
     WT_RUN(test_refuses);
-    WT_RUN(test_local_set);
+    WT_RUN(test_rule_words);
+    WT_RUN(test_share_dev);
 }

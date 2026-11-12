@@ -667,6 +667,7 @@ static web_slothdb_t SDB;
 static web_frrs_t    FR;
 /* This site's radios as the export names them for own=1 (#192 I5). */
 static const char   *g_own_csv;
+static const char   *g_own_mon_csv;
 
 static void rm_dir(void) {
     static const char *const names[] = {
@@ -763,7 +764,7 @@ static void down(void) {
 }
 
 static char *export(long long since_q, const char *query, int *status) {
-    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, g_own_csv, NULL, NULL, NULL };
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, g_own_csv, NULL, NULL, NULL, g_own_mon_csv };
     char q[64];
     if (!query) snprintf(q, sizeof(q), "since=%lld", since_q);
     char *body = NULL;
@@ -801,7 +802,7 @@ static void test_export_withholds_secrets(void) {
     WT_HAS(b, "{\"type\":\"probe\",\"mac\":\"da:a1:19:00:00:01\",\"ssid\":\"CafeFree\",");
     /* The host name and the rule (owner, 2026-11-12). */
     WT_HAS(b, ",\"hostname\":");
-    WT_HAS(b, ",\"share_rule\":\"monitor_only\"}\n");
+    WT_HAS(b, ",\"share_rule\":\"monitor_only/2\"}\n");
     /* An alert the radio heard travels, with no address; a cleartext
      * credential is the IP capture's and its verdict on an IP too: they
      * stay here (test_fleetshare.c holds the rule itself). */
@@ -1068,7 +1069,7 @@ static int pull_with(const char *resp, int raw, char *req, size_t reqsz) {
 /* A peer of this build: its host name and the monitor-only rule
  * (owner, 2026-11-12). HDR_OLD: a build before the rule, which states
  * neither. */
-#define HDR(gen) HDR_PRE(gen) ",\"hostname\":\"beta-host\",\"share_rule\":\"monitor_only\"}\n"
+#define HDR(gen) HDR_PRE(gen) ",\"hostname\":\"beta-host\",\"share_rule\":\"monitor_only/2\"}\n"
 #define HDR_OLD(gen) HDR_PRE(gen) "}\n"
 
 static const char GOOD[] =
@@ -1216,7 +1217,7 @@ static void test_pull_good_and_upsert(void) {
     out[r.out_len] = '\0';
     WT_EQ(r.status, 200);
     WT_HAS(out, ",\"fleet\":{\"export\":true,\"export_version\":1,\"share_rule\":"
-                "\"monitor_only\",\"interval_s\":60,"
+                "\"monitor_only/2\",\"interval_s\":60,"
                 "\"outside_tailnet\":true,\"peers\":[{\"name\":\"beta\",\"url\":"
                 "\"http://127.0.0.1:1\",\"last_ok_age_s\":30,\"last_attempt_age_s\":30,"
                 "\"last_error\":null,\"rows\":1,\"pulls\":3,\"failures\":0,"
@@ -1986,7 +1987,7 @@ static void test_pull_from_an_f1_peer(void) {
     web_m4_t m4;
     memset(&m4, 0, sizeof(m4));
     m4.fleet = &F;
-    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     static char body[65536];
     size_t len = 0;
     int st = 0;
@@ -2035,14 +2036,21 @@ static void test_export_pages(void) {
         WT_HAS(b, "\"next_wifi\":null");
     }
     free(b);
-    /* own=1 (#192 I5): taken, but the header never names this site's
-     * radios (owner rule 2026-11-12: the managed card is a station of
-     * the local network): none, whatever the host has. Seen red with
-     * the header writing x->own_csv again. */
+    /* own=1 (#192 I5): the header names this site's monitor radios, or
+     * says none; never its other radios (owner rule 2026-11-12: the
+     * managed card is its station on the joined network). Seen red with
+     * the header writing x->own_csv (the managed card :0b then named). */
     g_own_csv = "02:00:5e:00:00:0a,02:00:5e:00:00:0b";
+    g_own_mon_csv = "02:00:5e:00:00:0a";
     b = export(0, "since=0&next=1&own=1", &st);
     WT_EQ(st, 200);
-    if (b) WT_HAS(b, ",\"pos_age_s\":null,\"own_macs\":null,\"hostname\":");
+    if (b) WT_HAS(b, ",\"pos_age_s\":null,\"own_macs\":\"02:00:5e:00:00:0a\",\"hostname\":");
+    if (b) WT_LACKS(b, "02:00:5e:00:00:0b");
+    free(b);
+    g_own_mon_csv = NULL;
+    b = export(0, "since=0&next=1&own=1", &st);
+    WT_EQ(st, 200);
+    if (b) WT_HAS(b, ",\"own_macs\":null,");
     if (b) WT_LACKS(b, "02:00:5e:00:00:0");
     free(b);
     g_own_csv = NULL;
@@ -2154,7 +2162,7 @@ static void test_overview_and_shared(void) {
     out[r.out_len] = '\0';
     WT_EQ(r.status, 200);
     WT_HAS(out, "{\"local\":{\"name\":\"self\",\"label\":null,\"host\":");
-    WT_HAS(out, ",\"share_rule\":\"monitor_only\",\"sloth_db\":\"open\",\"lat\":null,");
+    WT_HAS(out, ",\"share_rule\":\"monitor_only/2\",\"sloth_db\":\"open\",\"lat\":null,");
     WT_HAS(out, ",\"store\":true,\"configured\":1,\"peers\":[{\"name\":\"beta\",\"configured\":true,");
     WT_HAS(out, ",\"last_ok_age_s\":60,\"last_attempt_age_s\":60,\"last_error\":null,"
                 "\"skew_s\":-5,");
@@ -2162,7 +2170,7 @@ static void test_overview_and_shared(void) {
      * there (owner rule 2026-11-12). */
     WT_HAS(out, ",\"counts\":{\"wifi\":6,\"ble\":0,\"ap\":0,\"probe\":2,");
     WT_HAS(out, ",\"host\":");
-    WT_HAS(out, ",\"share_rule\":\"monitor_only\",");
+    WT_HAS(out, ",\"share_rule\":\"monitor_only/2\",");
     WT_HAS(out, ",\"refused_by_rule\":0,\"refused_by_rule_total\":0,");
     WT_HAS(out, "{\"name\":\"old\",\"configured\":false,");
     WT_HAS(out, "\"distances\":[{\"a\":\"beta\",\"b\":\"old\",\"m\":2326925.0}]");
@@ -2257,12 +2265,13 @@ static void test_pull_own_radios(void) {
     peer_srv_t srv;
     pthread_t th;
     here_up(&srv, &th);
-    srv.src.own_csv = "02:00:5e:00:00:0b";
+    srv.src.own_csv = "02:00:5e:00:00:0b,02:00:5e:00:00:0c";
+    srv.src.own_mon_csv = "02:00:5e:00:00:0b";
     WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
     WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1&ident=1"));
-    /* The peer has a radio, but its export never names it (owner rule
-     * 2026-11-12): "none", which replaces what it named before. */
-    WT_EQ(F.peer[0].nown, 0);
+    /* Its monitor radio, never its managed card (:0c). */
+    WT_EQ(F.peer[0].nown, 1);
+    WT_ASSERT(!strcmp(F.peer[0].own[0], "02:00:5e:00:00:0b"));
     WT_EQ(F.peer[0].own_at, T);
     /* Now an F2 build: own=1 refused, next=1 kept. */
     srv.f2 = 1;
@@ -2284,8 +2293,8 @@ static void test_pull_own_radios(void) {
     WT_ASSERT(F.peer[0].no_own_until > T + 60);
     WT_EQ(F.peer[0].no_next_until, 0);
     WT_EQ(F.peer[0].failures, 0);
-    /* Not named this time either. */
-    WT_EQ(F.peer[0].nown, 0);
+    /* Not named this time: the radios named before stay. */
+    WT_EQ(F.peer[0].nown, 1);
     /* Within the hour, one request, without own=1. */
     n0 = srv.n;
     WT_EQ(web_fleet_pull_one(&F, 0, T + 120), 0);
@@ -2377,7 +2386,7 @@ static void test_locate_route(void) {
     G.loc.lon = -111.87006;
     G.loc.ts = T;
     snprintf(G.loc.src, sizeof(G.loc.src), "fixed");
-    web_fleet_src_t src = { &here, NULL, &G, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { &here, NULL, &G, NULL, NULL, NULL, NULL, NULL, NULL };
 
     char *b = NULL;
     size_t bl = 0;
@@ -2542,15 +2551,28 @@ static void test_locate_route(void) {
 /* The host's own radios from a sysfs tree built here: physical
  * interfaces only (a device link), sorted by name, all-zero and group
  * addresses refused. Seen red with the device test removed (the bridge's
- * address then listed). */
+ * address then listed).
+ *
+ * The monitor radios among them (own=1's own_macs, owner rule
+ * 2026-11-12): alfa0 in monitor mode (type 803) and mon2 (type 801)
+ * only. Not wlan1, the managed card (type 1); not eth0 (wired, type 1);
+ * not wlan3, whose type cannot be read (its role unknown); not wlan4mon,
+ * a monitor vif sharing the managed card wlan4's address (the address
+ * is the managed card's). Seen red with own_is_monitor() returning 1
+ * (wlan1, eth0, wlan3 named), with its unreadable-file branch returning
+ * 1 (wlan3 named) and with the shared-address test removed (wlan4's
+ * address named). */
 static void test_read_own(void) {
     char d[TEST_TMP_MAX], p[TEST_TMP_MAX + 96];
     snprintf(d, sizeof(d), "%s/slothweb-sysfs-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(d) != NULL);
-    static const struct { const char *name, *addr; int phys; } ifs[] = {
-        { "wlan1", "24:41:8c:30:97:a1\n", 1 }, { "alfa0", "00:c0:ca:bb:51:82\n", 1 },
-        { "br0", "02:42:ac:11:00:01\n", 0 }, { "lo", "00:00:00:00:00:00\n", 1 },
-        { "mc0", "01:00:5e:00:00:01\n", 1 },
+    static const struct { const char *name, *addr; int phys; const char *type; } ifs[] = {
+        { "wlan1", "24:41:8c:30:97:a1\n", 1, "1\n" }, { "alfa0", "00:c0:ca:bb:51:82\n", 1, "803\n" },
+        { "br0", "02:42:ac:11:00:01\n", 0, "1\n" }, { "lo", "00:00:00:00:00:00\n", 1, "772\n" },
+        { "mc0", "01:00:5e:00:00:01\n", 1, "803\n" }, { "eth0", "90:e8:d4:00:00:01\n", 1, "1\n" },
+        { "mon2", "00:c0:ca:00:00:02\n", 1, "801\n" }, { "wlan3", "00:c0:ca:00:00:03\n", 1, NULL },
+        { "wlan4", "00:c0:ca:00:00:04\n", 1, "1\n" },
+        { "wlan4mon", "00:c0:ca:00:00:04\n", 1, "803\n" },
     };
     snprintf(p, sizeof(p), "%s/class", d);
     mkdir(p, 0700);
@@ -2566,13 +2588,24 @@ static void test_read_own(void) {
             snprintf(p, sizeof(p), "%s/class/net/%s/device", d, ifs[i].name);
             mkdir(p, 0700);
         }
+        if (ifs[i].type) {
+            snprintf(p, sizeof(p), "%s/class/net/%s/type", d, ifs[i].name);
+            fp = fopen(p, "w");
+            if (fp) { fputs(ifs[i].type, fp); fclose(fp); }
+        }
     }
     web_fleet_t f;
     web_fleet_init(&f, NULL, 0, 60, 0, NULL);
-    WT_EQ(web_fleet_read_own(&f, d), 2);
-    WT_ASSERT(!strcmp(f.own_csv, "00:c0:ca:bb:51:82,24:41:8c:30:97:a1"));
+    WT_EQ(web_fleet_read_own(&f, d), 6);
+    WT_ASSERT(!strcmp(f.own_csv, "00:c0:ca:bb:51:82,90:e8:d4:00:00:01,00:c0:ca:00:00:02,"
+                                 "24:41:8c:30:97:a1,00:c0:ca:00:00:03,00:c0:ca:00:00:04"));
+    if (strcmp(f.own_mon_csv, "00:c0:ca:bb:51:82,00:c0:ca:00:00:02"))
+        fprintf(stderr, "    own_mon_csv: %s\n", f.own_mon_csv);
+    WT_ASSERT(!strcmp(f.own_mon_csv, "00:c0:ca:bb:51:82,00:c0:ca:00:00:02"));
     web_fleet_destroy(&f);
     for (size_t i = 0; i < sizeof(ifs) / sizeof(ifs[0]); i++) {
+        snprintf(p, sizeof(p), "%s/class/net/%s/type", d, ifs[i].name);
+        unlink(p);
         snprintf(p, sizeof(p), "%s/class/net/%s/address", d, ifs[i].name);
         unlink(p);
         snprintf(p, sizeof(p), "%s/class/net/%s/device", d, ifs[i].name);
@@ -2653,6 +2686,7 @@ static void test_read_own_many_and_again(void) {
     web_fleet_src_t src;
     memset(&src, 0, sizeof(src));
     src.own_csv = f.own_csv;
+    src.own_mon_csv = f.own_mon_csv;
     char *body = NULL;
     size_t len = 0;
     int st = 0;
@@ -2660,7 +2694,8 @@ static void test_read_own_many_and_again(void) {
     WT_EQ(st, 200);
     char *b = body ? realloc(body, len + 1) : NULL;
     if (b) b[len] = '\0'; else free(body);
-    /* ...and the export never names it (owner rule 2026-11-12). */
+    /* ...its monitor radios only (owner rule 2026-11-12): none here, no
+     * type file says one is in monitor mode. */
     WT_HAS(b, "\"own_macs\":null");
     WT_LACKS(b, "00:c0:ca:bb:51:82");
     free(b);
@@ -2752,7 +2787,7 @@ static void test_gnss_export(void) {
     web_gnss_t *g = malloc(sizeof(*g));
     WT_ASSERT(g && web_gnss_init(g) == 0);
     gnss_feed(g, T - 5, 33.32922, -111.87006, -60);
-    web_fleet_src_t src = { &SDB, NULL, g, &FR, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { &SDB, NULL, g, &FR, NULL, NULL, NULL, NULL, NULL };
     char *body = NULL;
     size_t len = 0;
     int st = 0;
@@ -3105,7 +3140,7 @@ static void test_gnss_route(void) {
         T, T, T + 100, T - 2850, T - 2850, T - 2750, T - 500, T - 500, T - 500);
     WT_EQ(sql_on(g_store, sql), 0);
     gnss_two_sites(&F, T - 7200, T);
-    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL, NULL, NULL, NULL };
     char *b = gnss_get(&src, "", T);
     WT_HAS(b, "\"local\":\"open\"");
     WT_HAS(b, "\"window_s\":120,\"gap_s\":150,\"region_m\":50000,");
@@ -3226,7 +3261,7 @@ static void test_gnss_route(void) {
     WT_HAS(b, "\"why\":\"no_current_fix\"");
     WT_LACKS(b, "\"moved\":[\"beta\"]");
     free(b);
-    web_fleet_src_t nos = { NULL, NULL, NULL, &FR, NULL, NULL, NULL, NULL };
+    web_fleet_src_t nos = { NULL, NULL, NULL, &FR, NULL, NULL, NULL, NULL, NULL };
     b = gnss_get(&nos, "", T + 60);
     WT_HAS(b, "\"local\":\"none\"");
     snprintf(want, sizeof(want), "{\"site\":\"beta\",\"type\":\"GNSS_TIME_JUMP\",\"class\":"
@@ -3262,7 +3297,7 @@ static void test_gnss_sample_events(void) {
         if (t == T + 60) {
             /* At T the indicator's window has not closed at beta's last
              * pull: no quiet peer yet. */
-            char *b0 = gnss_get(&(web_fleet_src_t){ NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL }, "", T);
+            char *b0 = gnss_get(&(web_fleet_src_t){ NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL }, "", T);
             char want0[512];
             snprintf(want0, sizeof(want0), "{\"site\":\"self\",\"type\":\"JAM_IND\",\"class\":"
                      "\"interference\",\"source\":\"sample\",\"first_seen\":%lld,"
@@ -3281,7 +3316,7 @@ static void test_gnss_sample_events(void) {
             web_fg_add(F.fg, sl[i], &s, 150);
         }
     }
-    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     char *b = gnss_get(&src, "", T + 120);
     char want[512];
     snprintf(want, sizeof(want), "{\"site\":\"self\",\"type\":\"CN0_DROP\",\"class\":"
@@ -3345,7 +3380,7 @@ static void test_gnss_state_survives_a_restart(void) {
     WT_EQ(F.fg->site[b].se_a[0], T + 30);
     /* With the references back, the baseline needs only a fresh fix. */
     gnss_two_sites(&F, T + 60, T + 60);
-    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL, NULL, NULL, NULL };
     char *body = gnss_get(&src, "", T + 60);
     WT_HAS(body, "\"verdict\":\"within\"");
     free(body);
@@ -3552,7 +3587,7 @@ static void test_adsb_export(void) {
     web_adsb_t A;
     WT_EQ(web_adsb_init(&A), 0);
     adsb_rx(&A, T - 30, 2247000);
-    web_fleet_src_t src = { &SDB, NULL, &G, &FR, NULL, &A, NULL, NULL };
+    web_fleet_src_t src = { &SDB, NULL, &G, &FR, NULL, &A, NULL, NULL, NULL };
     char *b0 = export_q(&src, "since=0&adsb=1");
     free(b0);
     adsb_rx(&A, T, 2247900);
@@ -3598,7 +3633,7 @@ static void test_adsb_export(void) {
      * the aircraft, not read, are cut - never an empty list the
      * comparison would take as "heard none" (seen red, false, with the
      * !ac_read clause removed from the export). */
-    web_fleet_src_t none = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t none = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     b = export_q(&none, "since=0&adsb=1");
     if (b) {
         WT_LACKS(b, "adsb_rx");
@@ -3843,10 +3878,7 @@ static void test_ident_pull_from_an_i7_peer(void) {
     WT_EQ(web_fleet_pull_one(&F, 0, T + 60 + WEB_FLEET_NOIDENT_S), 0);
     WT_EQ(srv.n, n0 + 1);
     WT_HAS(srv.req[n0], "&adsb=1&ident=1");
-    /* No own networks' meta row: a site's own networks never travel
-     * (owner rule 2026-11-12), so there is nothing of them to date. */
-    WT_EQ(here_q("SELECT COUNT(*) FROM meta WHERE name='fleet.ident.beta'"), 0);
-    WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net'"), 0);
+    WT_EQ(here_q("SELECT COUNT(*) FROM meta WHERE name='fleet.ident.beta'"), 1);
     here_down(&srv, th);
 }
 
@@ -3895,7 +3927,7 @@ static void test_adsb_route(void) {
     WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
     web_slothdb_t here;
     web_slothdb_init(&here, g_here_db, NULL);
-    web_fleet_src_t src = { &here, NULL, &GS, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { &here, NULL, &GS, NULL, NULL, NULL, NULL, NULL, NULL };
     char *b = aircraft_get(&src, "");
     WT_ASSERT(b != NULL);
     if (b) {
@@ -4019,39 +4051,44 @@ static void ble_adv(web_ble_t *b, const char *addr, const char *name, long long 
     web_ble_record(b, &r, 1000);
 }
 
-/* One sensor holding every case of the rule: what its monitor radio,
- * BLE receiver, GNSS receiver and ADS-B SDR heard passively travels;
- * what its own interfaces learned, and its local network, never do.
+/* One sensor holding every case of the rule (owner, 2026-11-12: share
+ * what sloth heard in monitor mode, never what it learned through the
+ * joined network or the wire; "anything that is thru monitor mode is
+ * game"):
  *
- *   travels   :01, a passer-by heard probing (its probe for Elsewhere);
- *             :a1, a neighbour's AP (beacon); the BLE advertiser; the
- *             receiver and the aircraft; a deauth flood on :a1 (no
- *             address); a verdict on :a1; the host name and the rule.
- *   withheld  :b1, known from ARP alone (its address, its DHCP name);
- *             :c1, heard probing but also on the LAN (the both-ways
- *             device: the whole row, its address and name with it);
- *             :d1, the AP the managed card is associated to (wifi_aps
- *             status 1, wifi_stas); :d2, the same network's other BSS
- *             (its SSID); :e1, a station associated to :d2, and its
- *             probe for JoinedNet; :01's probe for JoinedNet; :f1 and
- *             OwnSsidNet, --my-bssid and --my-ssid, and no own_net line
- *             for them; :98, rostered (DEV_RISK_SELF); :99, this host's
- *             own radio, and own_macs; a deauth flood whose key names
- *             :d1, a twin alert whose title names JoinedNet; the IP
- *             capture's alerts (PORT_SCAN, ARP_SPOOF, CAPTIVE_PORTAL),
- *             MY_NETWORK_RECON; verdicts on :d1, on an IP, of PORT_SCAN.
+ *   travels   :01, a passer-by heard probing, both its probes (Elsewhere
+ *             and JoinedNet); :a1, a neighbour's AP; :c1, heard probing
+ *             and also on the LAN (the both-ways device), with what the
+ *             radio heard of it alone (its probe's last_seen, not the ARP
+ *             table's); :d1, the AP the managed card is associated to,
+ *             and :d2, the same network's other BSS, as heard beaconing;
+ *             :e1, a station heard associating to :d2 (its bssid) and its
+ *             probe for JoinedNet; :f1 and :f2 (OwnLab, OwnSsidNet) as
+ *             heard; own_net lines for --my-ssid and --my-bssid; the
+ *             monitor radio :97 as own_macs; the BLE advertiser; the
+ *             receiver and the aircraft; deauth floods on :a1 and on :d1,
+ *             the twin naming JoinedNet, MY_NETWORK_RECON; verdicts on :a1
+ *             and :d1; the host name and the rule.
+ *   withheld  :b1, known from ARP alone (its address, its DHCP name); :c1's
+ *             address and host name and its ARP-moved last_seen; :98,
+ *             rostered (DEV_RISK_SELF); :99, the managed card (an own
+ *             radio, not a monitor one), as a wifi row and in own_macs;
+ *             the IP capture's alerts (PORT_SCAN, ARP_SPOOF,
+ *             CAPTIVE_PORTAL); verdicts on an IP and of PORT_SCAN; the
+ *             managed card's scan status.
  *
  * The importer takes the answer whole and refuses none of it. Each
- * absence was seen red with its guard mutated: web_fleet_share_dev()
- * returning 1 (:c1, :d1, :d2, :f1, :f2, :98, :99 sent), xp_dev()'s
- * association check skipped (:e1 sent, :d2 as its BSSID), xp_ap()'s
- * local test removed (:d1, :d2, JoinedNet, :f1, OwnLab, :f2, OwnSsidNet
- * sent), web_fleet_alert_shareable() returning 1 (the IP capture's
- * alerts and MY_NETWORK_RECON sent), the alert key check skipped
- * (marker-joined sent), the alert title check and the verdict's local
- * address check removed (Evil twin of JoinedNet, the :d1 verdict sent),
- * xp_pnl()'s SSID test removed (JoinedNet sent as :01's probe), the
- * own_macs member written from the radio list (own_macs named). */
+ * absence was seen red with its guard mutated: web_fleet_share_dev()'s
+ * DEV_RISK_SELF test removed (:98 sent), its own-radio test removed
+ * (:99 sent), its call skipped (both sent), the header's own_macs
+ * written from own_csv (:99 named), web_fleet_alert_shareable()
+ * returning 1 (the IP capture's alerts sent), xp_verdict()'s address
+ * test removed (the verdict on 192.168.7.20 sent). The Monitor scope's
+ * read dropped sends :c1 not at all (its address then withholds it)
+ * and the last_seen check goes red with it. :b1 (ARP only) is held out
+ * twice, by the scope's member filter and by the share test's sources
+ * check, so no single mutation sends it here; the sources check alone
+ * is test_fleetshare.c's test_share_dev. */
 static void test_export_monitor_only(void) {
     up();
     peer_sky(g_db);
@@ -4059,7 +4096,7 @@ static void test_export_monitor_only(void) {
               scan = web_akb_find("PORT_SCAN"), arp = web_akb_find("ARP_SPOOF"),
               portal = web_akb_find("CAPTIVE_PORTAL"), recon = web_akb_find("MY_NETWORK_RECON");
     WT_ASSERT(dea >= 0 && twin >= 0 && scan >= 0 && arp >= 0 && portal >= 0 && recon >= 0);
-    const long long a = T - 900, z = T - 60;
+    const long long a = T - 900, z = T - 60, h = T - 300;
     char *sql = malloc(16384);
     WT_ASSERT(sql != NULL);
     if (!sql) { down(); return; }
@@ -4071,7 +4108,7 @@ static void test_export_monitor_only(void) {
         " ('0e:51:00:00:00:b1','192.168.7.20','lan-only-marker','Lan',NULL,0,NULL,3,0,%lld,%lld),"
         " ('0e:51:00:00:00:c1','192.168.7.21','both-host-marker','Both','Elsewhere',0,-55,17,0,"
         "%lld,%lld),"
-        " ('0e:51:00:00:00:d1',NULL,NULL,'Join',NULL,1,-40,8,0,%lld,%lld),"
+        " ('0e:51:00:00:00:d1',NULL,NULL,'Join',NULL,1,-40,8|32,0,%lld,%lld),"
         " ('0e:51:00:00:00:d2',NULL,NULL,'Join',NULL,1,-48,8,0,%lld,%lld),"
         " ('0e:51:00:00:00:e1',NULL,NULL,'Sta','JoinedNet',0,-50,16,0,%lld,%lld),"
         " ('0e:51:00:00:00:f1',NULL,NULL,'Own',NULL,1,-45,8,0,%lld,%lld),"
@@ -4120,8 +4157,8 @@ static void test_export_monitor_only(void) {
         " ('recon:x',%lld,%lld,%d,1,'Recon marker','T1595',1);",
         a, z, a, z, a, z, a, z, a, z, a, z, a, z, a, z, a, z, a, z, a, z,
         a, z, a, z, a, z,
-        a, z, a, z, a, z, a, z, a, z,
-        a, z, a, z, a, z, a, z,
+        a, z, a, h, a, z, a, z, a, z,
+        a, z, a, z, a, h, a, z,
         a, z, a, z, a, z, a, z, a, z,
         a, z, a, z, a, z, a, z,
         a, z, dea, a, z, dea, a, z, twin, a, z, scan, a, z, arp, a, z, portal, a, z, recon);
@@ -4149,42 +4186,68 @@ static void test_export_monitor_only(void) {
     mine.nssid = 1;
     snprintf(mine.bssid[0], sizeof(mine.bssid[0]), "0e:51:00:00:00:f1");
     mine.nbssid = 1;
-    web_fleet_src_t src = { &SDB, &B, &G, &FR, "0e:51:00:00:00:99", &A, &mine, NULL };
+    web_fleet_src_t src = { &SDB, &B, &G, &FR, "0e:51:00:00:00:97,0e:51:00:00:00:99", &A, &mine,
+                            NULL, "0e:51:00:00:00:97" };
     char *b = export_q(&src, "since=0&next=1&own=1&gnss=1&adsb=1&ident=1");
     WT_ASSERT(b != NULL);
     if (b) {
         /* What travels. */
+        char want[160];
         WT_HAS(b, ",\"hostname\":");
-        WT_HAS(b, ",\"share_rule\":\"monitor_only\"}\n");
-        WT_HAS(b, ",\"own_macs\":null,");
+        WT_HAS(b, ",\"share_rule\":\"monitor_only/2\"}\n");
+        WT_HAS(b, ",\"own_macs\":\"0e:51:00:00:00:97\",");
         WT_HAS(b, "{\"type\":\"wifi\",\"mac\":\"0e:51:00:00:00:01\",\"vendor\":\"Mon\","
                   "\"ssid\":\"Elsewhere\",\"rssi\":-61,");
         WT_HAS(b, "{\"type\":\"probe\",\"mac\":\"0e:51:00:00:00:01\",\"ssid\":\"Elsewhere\",");
+        WT_HAS(b, "{\"type\":\"probe\",\"mac\":\"0e:51:00:00:00:01\",\"ssid\":\"JoinedNet\",");
         WT_HAS(b, "{\"type\":\"ap\",\"bssid\":\"0e:51:00:00:00:a1\",\"ssid\":\"Neighbour\",");
         WT_HAS(b, "{\"type\":\"wifi\",\"mac\":\"0e:51:00:00:00:a1\",");
+        /* The both-ways device: the radio's figures, nothing of the LAN. */
+        snprintf(want, sizeof(want), "{\"type\":\"wifi\",\"mac\":\"0e:51:00:00:00:c1\","
+                 "\"vendor\":\"Both\",\"ssid\":\"Elsewhere\",");
+        WT_HAS(b, want);
+        snprintf(want, sizeof(want), "\"is_ap\":false,\"first_seen\":%lld,\"last_seen\":%lld}", a, h);
+        WT_HAS(b, want);
+        /* The joined network as heard over the air. */
+        WT_HAS(b, "{\"type\":\"ap\",\"bssid\":\"0e:51:00:00:00:d1\",\"ssid\":\"JoinedNet\",");
+        WT_HAS(b, "{\"type\":\"ap\",\"bssid\":\"0e:51:00:00:00:d2\",\"ssid\":\"JoinedNet\",");
+        WT_HAS(b, "{\"type\":\"wifi\",\"mac\":\"0e:51:00:00:00:d1\",");
+        WT_HAS(b, "{\"type\":\"wifi\",\"mac\":\"0e:51:00:00:00:e1\",\"vendor\":\"Sta\","
+                  "\"ssid\":\"JoinedNet\",");
+        WT_HAS(b, "\"bssid\":\"0e:51:00:00:00:d2\",\"is_ap\":false,");
+        WT_HAS(b, "{\"type\":\"probe\",\"mac\":\"0e:51:00:00:00:e1\",\"ssid\":\"JoinedNet\",");
+        WT_HAS(b, "{\"type\":\"ap\",\"bssid\":\"0e:51:00:00:00:f1\",\"ssid\":\"OwnLab\",");
+        WT_HAS(b, "{\"type\":\"ap\",\"bssid\":\"0e:51:00:00:00:f2\",\"ssid\":\"OwnSsidNet\",");
+        /* The operator's own networks (I2, I3's baseline). */
+        WT_HAS(b, "{\"type\":\"own_net\",\"ssid\":\"OwnSsidNet\",\"bssid\":null}\n");
+        WT_HAS(b, "{\"type\":\"own_net\",\"ssid\":null,\"bssid\":\"0e:51:00:00:00:f1\"}\n");
+        WT_HAS(b, ",\"own_net\":2,\"complete\":true}");
         WT_HAS(b, "{\"type\":\"ble\",\"addr\":\"02:de:00:00:00:51\",");
         WT_HAS(b, ",\"lat\":33.3291000,");        /* the sensor's position */
         WT_HAS(b, "{\"type\":\"adsb_rx\",");
         WT_HAS(b, "{\"type\":\"aircraft\",\"hex\":\"a00001\",");
         WT_HAS(b, ",\"title\":\"Deauth on a neighbour\",\"ip\":null,");
+        WT_HAS(b, ",\"title\":\"marker-joined\",\"ip\":null,");
+        WT_HAS(b, ",\"title\":\"Evil twin of JoinedNet\",\"ip\":null,");
+        WT_HAS(b, "{\"type\":\"alert\",\"alert_type\":\"MY_NETWORK_RECON\",");
         WT_HAS(b, "{\"type\":\"verdict\",\"alert_type\":\"DEAUTH_FLOOD\",\"addr\":"
                   "\"0e:51:00:00:00:a1\",");
+        WT_HAS(b, "{\"type\":\"verdict\",\"alert_type\":\"DEAUTH_FLOOD\",\"addr\":"
+                  "\"0e:51:00:00:00:d1\",");
         /* What never does. */
         static const char *const never[] = {
             "0e:51:00:00:00:b1", "lan-only-marker", "lan-dhcp-marker", "192.168.7.",
-            "0e:51:00:00:00:c1", "both-host-marker",
-            "0e:51:00:00:00:d1", "0e:51:00:00:00:d2", "JoinedNet",
-            "0e:51:00:00:00:e1",
-            "0e:51:00:00:00:f1", "OwnLab", "0e:51:00:00:00:f2", "OwnSsidNet", "own_net",
-            "0e:51:00:00:00:98", "0e:51:00:00:00:99",
-            "marker-joined", "Evil twin of", "Port scan marker", "ARP spoof marker",
-            "Captive marker", "Recon marker", "\"PORT_SCAN\"", "\"ARP_SPOOF\"",
-            "\"CAPTIVE_PORTAL\"", "\"MY_NETWORK_RECON\"",
+            "both-host-marker", "0e:51:00:00:00:98", "0e:51:00:00:00:99",
+            "Port scan marker", "ARP spoof marker", "Captive marker", "\"PORT_SCAN\"",
+            "\"ARP_SPOOF\"", "\"CAPTIVE_PORTAL\"", "\"status\"",
         };
         for (size_t i = 0; i < sizeof(never) / sizeof(never[0]); i++) {
             if (strstr(b, never[i])) fprintf(stderr, "    sent: %s\n", never[i]);
             WT_LACKS(b, never[i]);
         }
+        snprintf(want, sizeof(want), "\"last_seen\":%lld}\n{\"type\":\"probe\",\"mac\":"
+                 "\"0e:51:00:00:00:c1\"", z);
+        WT_LACKS(b, want);                    /* the ARP table's last_seen */
         /* The importer takes it all and refuses none of it. */
         web_fleet_t f;
         web_fleet_peer_cfg_t pc;
@@ -4197,6 +4260,10 @@ static void test_export_monitor_only(void) {
         if (rc) fprintf(stderr, "    ingest: %s\n", err);
         WT_EQ(rc, 0);
         WT_EQ(f.peer[0].refused_last, 0);
+        WT_EQ(f.peer[0].nown, 1);             /* the monitor radio */
+        WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net'"), 2);
+        WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='ap' AND"
+                          " label='JoinedNet'"), 2);
         web_fleet_destroy(&f);
         free(b);
     }
@@ -4204,8 +4271,12 @@ static void test_export_monitor_only(void) {
     b = export_q(&src, "since=0&kind=wifi&after=4102444800~&ident=1");
     if (b) {
         WT_HAS(b, "\"mac\":\"0e:51:00:00:00:01\"");
-        WT_LACKS(b, "0e:51:00:00:00:c1");
-        WT_LACKS(b, "0e:51:00:00:00:e1");
+        WT_HAS(b, "\"mac\":\"0e:51:00:00:00:c1\"");
+        WT_HAS(b, "\"mac\":\"0e:51:00:00:00:e1\"");
+        WT_LACKS(b, "0e:51:00:00:00:b1");
+        WT_LACKS(b, "0e:51:00:00:00:98");
+        WT_LACKS(b, "0e:51:00:00:00:99");
+        WT_LACKS(b, "own_net");               /* the whole export only */
         free(b);
     }
     web_adsb_destroy(&A);
@@ -4214,49 +4285,19 @@ static void test_export_monitor_only(void) {
     down();
 }
 
-/* The local network cannot be read (here: its scan table cut past the
- * bound is the same path as a failed read): no sloth.db row and no
- * verdict is sent, and those kinds say they are cut, never "none".
- * Seen red with the export's cut of the unjudged kinds removed
- * (truncated_wifi and truncated_alert false). */
-static void test_export_local_unknown_withholds(void) {
-    up();
-    char *sql = malloc(4096);
-    WT_ASSERT(sql != NULL);
-    if (!sql) { down(); return; }
-    snprintf(sql, 4096,
-        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<%d)"
-        " INSERT INTO wifi_aps (bssid,ssid,status,first_seen,last_seen)"
-        " SELECT printf('0e:52:00:00:%%02x:%%02x', i/256, i%%256),'n'||i,1,%lld,%lld FROM n;",
-        WEB_FLEET_LOCAL_SSIDS, T - 100, T - 50);
-    WT_EQ(sdb_exec(g_db, sql), 0);
-    free(sql);
-    int st = 0;
-    char *b = export(0, "since=0&next=1", &st);
-    WT_EQ(st, 200);
-    if (b) {
-        WT_LACKS(b, "{\"type\":\"wifi\"");
-        WT_LACKS(b, "{\"type\":\"probe\"");
-        WT_LACKS(b, "{\"type\":\"alert\"");
-        WT_LACKS(b, "{\"type\":\"verdict\"");
-        WT_HAS(b, "\"truncated_wifi\":true,");
-        WT_HAS(b, "\"truncated_alert\":true,");
-        WT_HAS(b, "\"truncated_verdict\":true,");
-        free(b);
-    }
-    down();
-}
-
 /* A hostile or older peer cannot plant local-network data here: each
  * forbidden shape is checked like any line (the answer is taken), then
- * refused, counted and never stored; an answer that does not state the
- * rule has its wifi, ap and probe rows refused, the rest kept. Seen red
- * with put_line()'s refusal removed (every one of them stored). */
+ * refused, counted and never stored; what the provenance rule allows
+ * (own_net, the monitor radios in own_macs, an allow-listed alert, a
+ * verdict on a MAC) is kept. An answer that does not state the rule has
+ * its wifi, ap and probe rows and its own_macs refused, the rest kept.
+ * Seen red with put_line()'s refusal removed (every one of them stored)
+ * and with own_net refused again (BetaNet not kept). */
 static void test_ingest_refuses_forbidden(void) {
     pull_up();
     static const char HOSTILE[] =
         HDR_PRE(1792627000) ",\"own_macs\":\"02:00:5e:00:00:0a\",\"hostname\":\"beta-host\","
-        "\"share_rule\":\"monitor_only\"}\n"
+        "\"share_rule\":\"monitor_only/2\"}\n"
         "{\"type\":\"own_net\",\"ssid\":\"BetaNet\",\"bssid\":null}\n"
         "{\"type\":\"alert\",\"alert_type\":\"PORT_SCAN\",\"ty\":0,\"fingerprint\":"
         "\"00000000000000a1\",\"title\":\"wired-marker\",\"ip\":null,\"sev\":1,\"count\":1,"
@@ -4279,7 +4320,9 @@ static void test_ingest_refuses_forbidden(void) {
         "{\"type\":\"fleet_end\",\"rows\":7,\"wifi\":0,\"ble\":0,\"ap\":0,\"probe\":0,\"alert\":4,"
         "\"verdict\":3,\"own_net\":1,\"complete\":true}\n";
     WT_EQ(pull_with(HOSTILE, 0, NULL, 0), 0);
-    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net'"), 0);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net' AND"
+                      " label='BetaNet'"), 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name='fleet.ident.beta'"), 1);
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='alert'"), 1);
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE label='radio-marker'"), 1);
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='verdict'"), 1);
@@ -4287,14 +4330,29 @@ static void test_ingest_refuses_forbidden(void) {
                       " key LIKE 'DEAUTH_FLOOD|0e:00:00:00:00:02|%'"), 1);
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE extra LIKE '%10.1.2.3%'"
                       " OR key LIKE '%10.1.2.3%'"), 0);
-    WT_EQ(F.peer[0].nown, 0);              /* the own_macs refused */
-    WT_EQ(F.peer[0].refused_last, 7);      /* own_macs, own_net, 3 alerts, 2 verdicts */
+    WT_EQ(F.peer[0].nown, 1);              /* the monitor radio kept */
+    WT_EQ(F.peer[0].refused_last, 5);      /* 3 alerts, 2 verdicts */
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sites WHERE rows_last=2"), 1);
 
-    /* An answer that does not state the rule: wifi, ap, probe refused,
-     * the allow-listed alert kept. */
+    /* The first cut of the rule ("monitor_only") is attested too: its
+     * rows are kept. */
+    static const char V1[] =
+        HDR_PRE(1792627050) ",\"hostname\":\"beta-host\",\"share_rule\":\"monitor_only\"}\n"
+        "{\"type\":\"ap\",\"bssid\":\"0e:00:00:00:00:53\",\"ssid\":\"V1Net\",\"channel\":6,"
+        "\"enc\":\"WPA2\",\"vendor\":null,\"rssi\":-40,\"first_seen\":1792500000,"
+        "\"last_seen\":1792626900}\n"
+        "{\"type\":\"fleet_end\",\"rows\":1,\"wifi\":0,\"ble\":0,\"ap\":1,\"probe\":0,\"alert\":0,"
+        "\"verdict\":0,\"complete\":true}\n";
+    WT_EQ(pull_with(V1, 0, NULL, 0), 0);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='ap' AND label='V1Net'"), 1);
+    WT_EQ(F.peer[0].refused_last, 0);
+
+    /* An answer that does not state the rule: wifi, ap, probe and its
+     * radios (a build before the rule named the managed card with them)
+     * refused, the allow-listed alert and own_net kept. */
     static const char OLD[] =
-        HDR_OLD(1792627100)
+        HDR_PRE(1792627100) ",\"own_macs\":\"02:00:5e:00:00:0c\"}\n"
+        "{\"type\":\"own_net\",\"ssid\":\"OldNet\",\"bssid\":null}\n"
         "{\"type\":\"wifi\",\"mac\":\"02:00:00:00:00:51\",\"vendor\":null,\"ssid\":null,"
         "\"rssi\":null,\"bssid\":null,\"is_ap\":false,\"first_seen\":1792620000,"
         "\"last_seen\":1792626000}\n"
@@ -4307,72 +4365,138 @@ static void test_ingest_refuses_forbidden(void) {
         "\"00000000000000a5\",\"title\":\"old-radio-marker\",\"ip\":null,\"sev\":1,\"count\":1,"
         "\"first_seen\":1792620000,\"last_seen\":1792626000}\n"
         "{\"type\":\"fleet_end\",\"rows\":4,\"wifi\":1,\"ble\":0,\"ap\":1,\"probe\":1,\"alert\":1,"
-        "\"verdict\":0,\"complete\":true}\n";
+        "\"verdict\":0,\"own_net\":1,\"complete\":true}\n";
     WT_EQ(pull_with(OLD, 0, NULL, 0), 0);
-    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind IN ('wifi','ap','probe')"), 0);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind IN ('wifi','probe')"), 0);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE label='OldHome'"), 0);
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE label='old-radio-marker'"), 1);
-    WT_EQ(F.peer[0].refused_last, 3);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net' AND"
+                      " label='OldNet'"), 1);
+    WT_EQ(F.peer[0].nown, 0);              /* its radios refused: none named */
+    WT_EQ(F.peer[0].refused_last, 4);      /* own_macs, wifi, ap, probe */
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name='fleet.host.beta'"), 0);
     pull_down();
 }
 
+static const char PURGE_ROWS[] =
+    "INSERT INTO peer_sites (peer,url,label,remote_ts) VALUES"
+    " ('beta','http://100.64.0.2:8770','beta-site',1792627000);"
+    "INSERT INTO peer_sightings (peer,kind,key,label,first_seen,last_seen,extra) VALUES"
+    " ('beta','own_net','ssid:BetaNet','BetaNet',1,2,'{\"bssid\":null}'),"
+    " ('beta','wifi','02:00:00:00:00:61','',1,2,'{\"bssid\":null,\"is_ap\":false}'),"
+    " ('beta','ap','0e:00:00:00:00:61','Home',1,2,'{\"channel\":6,\"enc\":\"WPA2\"}'),"
+    " ('beta','probe','02:00:00:00:00:61|Home','Home',1,2,'{\"mac\":\"02:00:00:00:00:61\"}'),"
+    " ('beta','alert','00000000000000b1','scan',1,2,'{\"alert_type\":\"PORT_SCAN\",\"ty\":0,"
+    "\"ip\":null,\"sev\":1,\"count\":1}'),"
+    " ('beta','alert','00000000000000b2','ip',1,2,'{\"alert_type\":\"DEAUTH_FLOOD\",\"ty\":1,"
+    "\"ip\":\"10.1.2.3\",\"sev\":1,\"count\":1}'),"
+    " ('beta','alert','00000000000000b3','keep',1,2,'{\"alert_type\":\"DEAUTH_FLOOD\","
+    "\"ty\":1,\"ip\":null,\"sev\":1,\"count\":1}'),"
+    " ('beta','alert','00000000000000b4','recon',1,2,'{\"alert_type\":\"MY_NETWORK_RECON\","
+    "\"ty\":1,\"ip\":null,\"sev\":1,\"count\":1}'),"
+    " ('beta','verdict','PORT_SCAN|0e:00:00:00:00:62|0|1','known',1,1,"
+    "'{\"alert_type\":\"PORT_SCAN\",\"addr\":\"0e:00:00:00:00:62\",\"port\":0,"
+    "\"alert_first_seen\":1}'),"
+    " ('beta','verdict','DEAUTH_FLOOD|10.1.2.3|0|1','known',1,1,"
+    "'{\"alert_type\":\"DEAUTH_FLOOD\",\"addr\":\"10.1.2.3\",\"port\":0,"
+    "\"alert_first_seen\":1}'),"
+    " ('beta','verdict','DEAUTH_FLOOD|0e:00:00:00:00:63|0|1','known',1,1,"
+    "'{\"alert_type\":\"DEAUTH_FLOOD\",\"addr\":\"0e:00:00:00:00:63\",\"port\":0,"
+    "\"alert_first_seen\":1}'),"
+    " ('beta','ble','c0:ff:ee:00:00:61','tag',1,2,'{\"addr_type\":\"r\"}'),"
+    " ('beta','gnss','receiver','fixed',1,2,'{}');"
+    "INSERT INTO meta (name,value) VALUES ('fleet.ident.beta','1792627000 1'),"
+    " ('fleet.backfill.beta.wifi','0 1~x'), ('fleet.backfill.beta.alert','0 1~'),"
+    " ('fleet.backfill.beta.ble','0 1~');";
+
 /* What an earlier build stored that the rule forbids is purged once at
- * start, counted; what it allows stays; each peer is asked again from
- * the start. A second start purges nothing, so rows stored since (from
- * peers that filter them) stay. Seen red with the "done" mark not
- * written (the second run then purged the new wifi row). */
+ * start, counted; what the provenance rule allows stays (own_net and
+ * the ident meta, a MY_NETWORK_RECON alert, a verdict on a MAC); each
+ * peer is asked again from the start. A second start purges nothing, so
+ * rows stored since (from peers that filter them) stay. Seen red with
+ * the v2 "done" mark not written (the second run then purged again and
+ * reset the peer's clock). */
 static void test_purge_once(void) {
     pull_up();
-    static const char ROWS[] =
-        "INSERT INTO peer_sites (peer,url,label,remote_ts) VALUES"
-        " ('beta','http://100.64.0.2:8770','beta-site',1792627000);"
-        "INSERT INTO peer_sightings (peer,kind,key,label,first_seen,last_seen,extra) VALUES"
-        " ('beta','own_net','ssid:BetaNet','BetaNet',1,2,'{\"bssid\":null}'),"
-        " ('beta','wifi','02:00:00:00:00:61','',1,2,'{\"bssid\":null,\"is_ap\":false}'),"
-        " ('beta','ap','0e:00:00:00:00:61','Home',1,2,'{\"channel\":6,\"enc\":\"WPA2\"}'),"
-        " ('beta','probe','02:00:00:00:00:61|Home','Home',1,2,'{\"mac\":\"02:00:00:00:00:61\"}'),"
-        " ('beta','alert','00000000000000b1','scan',1,2,'{\"alert_type\":\"PORT_SCAN\",\"ty\":0,"
-        "\"ip\":null,\"sev\":1,\"count\":1}'),"
-        " ('beta','alert','00000000000000b2','ip',1,2,'{\"alert_type\":\"DEAUTH_FLOOD\",\"ty\":1,"
-        "\"ip\":\"10.1.2.3\",\"sev\":1,\"count\":1}'),"
-        " ('beta','alert','00000000000000b3','keep',1,2,'{\"alert_type\":\"DEAUTH_FLOOD\","
-        "\"ty\":1,\"ip\":null,\"sev\":1,\"count\":1}'),"
-        " ('beta','verdict','PORT_SCAN|0e:00:00:00:00:62|0|1','known',1,1,"
-        "'{\"alert_type\":\"PORT_SCAN\",\"addr\":\"0e:00:00:00:00:62\",\"port\":0,"
-        "\"alert_first_seen\":1}'),"
-        " ('beta','verdict','DEAUTH_FLOOD|10.1.2.3|0|1','known',1,1,"
-        "'{\"alert_type\":\"DEAUTH_FLOOD\",\"addr\":\"10.1.2.3\",\"port\":0,"
-        "\"alert_first_seen\":1}'),"
-        " ('beta','verdict','DEAUTH_FLOOD|0e:00:00:00:00:63|0|1','known',1,1,"
-        "'{\"alert_type\":\"DEAUTH_FLOOD\",\"addr\":\"0e:00:00:00:00:63\",\"port\":0,"
-        "\"alert_first_seen\":1}'),"
-        " ('beta','ble','c0:ff:ee:00:00:61','tag',1,2,'{\"addr_type\":\"r\"}'),"
-        " ('beta','gnss','receiver','fixed',1,2,'{}');"
-        "INSERT INTO meta (name,value) VALUES ('fleet.ident.beta','1792627000 1'),"
-        " ('fleet.backfill.beta.wifi','0 1~x'), ('fleet.backfill.beta.alert','0 1~');";
-    WT_EQ(sql_on(g_store, ROWS), 0);
+    WT_EQ(sql_on(g_store, PURGE_ROWS), 0);
     web_fleet_purge_t pg;
     WT_EQ(web_fleet_purge(&F, T, &pg), 0);
-    WT_EQ(pg.own_net, 1);
+    WT_EQ(pg.first, 1);
     WT_EQ(pg.alert, 2);
     WT_EQ(pg.verdict, 2);
     WT_EQ(pg.rows, 3);
     WT_EQ(pg.meta, 2);
-    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings"), 4);
-    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE label='keep'"), 1);
+    WT_EQ(pg.sites, 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings"), 6);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE label IN ('keep','recon')"), 2);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net'"), 1);
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE key LIKE"
                       " 'DEAUTH_FLOOD|0e:00:00:00:00:63|%'"), 1);
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind IN ('ble','gnss')"), 2);
-    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name LIKE 'fleet.ident.%' OR"
-                      " name='fleet.backfill.beta.wifi'"), 0);
-    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name='fleet.backfill.beta.alert'"), 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name='fleet.ident.beta'"), 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name LIKE 'fleet.backfill.beta.%'"), 1);
     WT_EQ(q1(g_store, "SELECT remote_ts FROM peer_sites WHERE peer='beta'"), 0);
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name='fleet.rule.monitor_only'"), 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name='fleet.rule.monitor_only.v2'"), 1);
     /* Once: a row stored since stays. */
     WT_EQ(sql_on(g_store, "INSERT INTO peer_sightings (peer,kind,key,first_seen,last_seen)"
-                          " VALUES ('beta','wifi','02:00:00:00:00:64',1,2);"), 0);
+                          " VALUES ('beta','wifi','02:00:00:00:00:64',1,2);"
+                          "UPDATE peer_sites SET remote_ts=1792627100;"), 0);
     WT_EQ(web_fleet_purge(&F, T + 60, &pg), 1);
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi'"), 1);
+    WT_EQ(q1(g_store, "SELECT remote_ts FROM peer_sites WHERE peer='beta'"), 1792627100);
+    pull_down();
+}
+
+/* A store the rule's first cut ("monitor_only") already purged: the
+ * second (the provenance rule) deletes nothing it now allows and nothing
+ * the first left (rows stored since came from filtered exports), and
+ * resets each peer's clock and backfill so the peer is asked again from
+ * the start for the joined network, the own networks and radios it
+ * withheld before. Seen red with the reset left to the first purge only
+ * (remote_ts stayed) and with the first purge's row deletion run again
+ * (the filtered wifi row gone). */
+static void test_purge_v2_repulls(void) {
+    pull_up();
+    WT_EQ(sql_on(g_store,
+        "INSERT INTO peer_sites (peer,url,label,remote_ts) VALUES"
+        " ('beta','http://100.64.0.2:8770','beta-site',1792627000);"
+        "INSERT INTO peer_sightings (peer,kind,key,label,first_seen,last_seen,extra) VALUES"
+        " ('beta','wifi','02:00:00:00:00:71','',1,2,'{\"bssid\":null,\"is_ap\":false}'),"
+        " ('beta','ap','0e:00:00:00:00:71','Away',1,2,'{\"channel\":6,\"enc\":\"WPA2\"}'),"
+        " ('beta','alert','00000000000000c1','keep',1,2,'{\"alert_type\":\"DEAUTH_FLOOD\","
+        "\"ty\":1,\"ip\":null,\"sev\":1,\"count\":1}');"
+        "INSERT INTO meta (name,value) VALUES ('fleet.rule.monitor_only','1792600000'),"
+        " ('fleet.backfill.beta.alert','0 1~'), ('fleet.backfill.beta.verdict','0 1~');"), 0);
+    web_fleet_purge_t pg;
+    WT_EQ(web_fleet_purge(&F, T, &pg), 0);
+    WT_EQ(pg.first, 0);
+    WT_EQ(pg.rows + pg.alert + pg.verdict, 0);
+    WT_EQ(pg.meta, 2);
+    WT_EQ(pg.sites, 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings"), 3);
+    WT_EQ(q1(g_store, "SELECT remote_ts FROM peer_sites WHERE peer='beta'"), 0);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name LIKE 'fleet.backfill.%'"), 0);
+    WT_EQ(q1(g_store, "SELECT value FROM meta WHERE name='fleet.rule.monitor_only'"), 1792600000);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name='fleet.rule.monitor_only.v2'"), 1);
+    /* The next pull asks from the start, and the peer's own networks
+     * and joined network are stored. */
+    static const char NOW[] =
+        HDR_PRE(1792627200) ",\"own_macs\":\"02:00:5e:00:00:0b\",\"hostname\":\"beta-host\","
+        "\"share_rule\":\"monitor_only/2\"}\n"
+        "{\"type\":\"own_net\",\"ssid\":\"BetaNet\",\"bssid\":null}\n"
+        "{\"type\":\"ap\",\"bssid\":\"0e:00:00:00:00:72\",\"ssid\":\"BetaNet\",\"channel\":6,"
+        "\"enc\":\"WPA2\",\"vendor\":null,\"rssi\":-40,\"first_seen\":1792500000,"
+        "\"last_seen\":1792626900}\n"
+        "{\"type\":\"fleet_end\",\"rows\":1,\"wifi\":0,\"ble\":0,\"ap\":1,\"probe\":0,\"alert\":0,"
+        "\"verdict\":0,\"own_net\":1,\"complete\":true}\n";
+    char req[512] = "";
+    WT_EQ(pull_with(NOW, 0, req, sizeof(req)), 0);
+    WT_HAS(req, "since=0&");
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='own_net'"), 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='ap' AND"
+                      " label='BetaNet'"), 1);
+    WT_EQ(F.peer[0].nown, 1);
     pull_down();
 }
 #endif
@@ -4386,9 +4510,9 @@ void run_fleet_tests(void) {
     WT_RUN(test_export_since);
     WT_RUN(test_export_sends_only_what_the_importer_takes);
     WT_RUN(test_export_monitor_only);
-    WT_RUN(test_export_local_unknown_withholds);
     WT_RUN(test_ingest_refuses_forbidden);
     WT_RUN(test_purge_once);
+    WT_RUN(test_purge_v2_repulls);
     WT_RUN(test_pull_good_and_upsert);
     WT_RUN(test_pull_refusals);
     WT_RUN(test_pull_trickle_is_cut_off);

@@ -117,7 +117,7 @@
       H.set("fid-config", j.configure || "");
       var c = j.counts, own = j.sites.map(function (s) {
         return siteName(s.site) + " " + (s.offered ? s.own_ssids.length + " SSID, " + s.own_bssids.length +
-               " BSSID" : "own networks not shared (they stay at that site)");
+               " BSSID" : "not offered (older build)");
       });
       var pairs = j.pairs.map(function (p) {
         return siteName(p.a) + " - " + siteName(p.b) + " " + (p.co_located === null ? "no position" :

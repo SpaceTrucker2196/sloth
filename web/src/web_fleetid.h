@@ -7,17 +7,21 @@
  * The export (ident=1; an I7 export refuses it and the puller falls back
  * for WEB_FLEET_NOIDENT_S, as for adsb=1):
  *
- *   own_net lines            no longer sent, and refused from an older
- *                            peer (owner rule 2026-11-12,
- *                            web_fleetshare.h): a site's own networks
- *                            are its local network. slothweb's
- *                            --my-ssid and --my-bssid name this site's
- *                            own for its own findings only. The checks
- *                            that take a peer as the owner (I2, I3's own
- *                            BSSID and own SSID) answer not applicable,
+ *   {"type":"own_net",...}   one line per network this site's operator
+ *                            names as its own (slothweb's --my-ssid and
+ *                            --my-bssid, the words sloth uses): ssid or
+ *                            bssid, the other null. The whole export only,
+ *                            whatever `since` says; the end line counts
+ *                            them ("own_net"), and an answer that does
+ *                            replaces what the peer named before. They
+ *                            travel under the monitor-only rule (owner,
+ *                            2026-11-12: configuration about what the
+ *                            radio hears, which is "game"). A peer that
+ *                            names none: the checks that take it as the
+ *                            owner (I2, I3's own BSSID and own SSID)
+ *                            answer not applicable,
  *                            "no_own_networks_shared", one finding per
- *                            peer and check; with this site as the
- *                            owner they run as before.
+ *                            peer and check.
  *   ap lines gain            ie_fp and vie_fp (the beacon's IE-order
  *                            and vendor-IE hashes, decimal, from the
  *                            stream's FRRS ledger; null when the ledger
@@ -37,10 +41,11 @@
  *                            kept kinds' earliest first seen and latest
  *                            last seen.
  *
- * The store: the ap rows' extra with the new members added only when
- * sent (the existing members unchanged). No schema step. The own_net
- * rows and the "fleet.ident.<peer>" meta an earlier build kept are
- * purged once (web_fleet_purge()).
+ * The store: peer_sightings kind "own_net" (key "ssid:<ssid>" or
+ * "bssid:<mac>", label the SSID), the ap rows' extra with the new
+ * members added only when sent (the existing members unchanged); and
+ * meta "fleet.ident.<peer>": "<generated> <own_net count>" of the
+ * peer's newest ident answer. No schema step.
  *
  * The findings (web_fid_run()), every site against every other, times
  * in this site's clock (a peer's less its skew):
@@ -202,10 +207,10 @@ typedef struct {
     int       own_expired;               /* offered last more than
                                             WEB_FLEET_OWN_STALE_S ago: its own
                                             networks no longer counted (#196) */
-    /* Its own networks are not shared (owner rule 2026-11-12: a peer's
-     * never travel), so the checks that take that site as the owner
-     * answer not applicable, "no_own_networks_shared", rather than
-     * nothing. Every peer; never this site, whose own are its own. */
+    /* A peer that names no networks of its own (none sent, or expired):
+     * the checks that take it as the owner (I2, I3's own BSSID and own
+     * SSID) answer not applicable, "no_own_networks_shared", rather than
+     * nothing. Never this site. */
     int       own_unshared;
     char      host[WEB_FLEET_HOST_MAX + 1];  /* its host name, "" unknown */
     web_fleet_mine_t mine;
