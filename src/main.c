@@ -165,6 +165,26 @@ static void on_signal(int sig) { (void)sig; g_quit = 1; }
 static volatile sig_atomic_t g_report_now = 0;
 static void on_report_signal(int sig) { (void)sig; g_report_now = 1; }
 
+/* report.retain_days over the per-session files beside each report
+ * path (#190). A failure is announced and the run carries on: the
+ * records are the operator's to keep, and a sweep that could not run
+ * costs disk, not data. */
+static void prune_report_records(const char *md, const char *json) {
+    const char *paths[2] = { md, json };
+    unsigned days = (unsigned)tune_val(TUNE_REPORT_RETAIN_DAYS);
+    for (int k = 0; k < 2; k++) {
+        if (!paths[k]) continue;
+        char err[SFILE_ERR_MAX];
+        int n = posture_prune_records(paths[k], days, sloth_wall(),
+                                      err, sizeof(err));
+        if (n > 0)
+            fprintf(stderr, "sloth: report.retain_days=%u: removed %d "
+                            "session record(s) beside %s\n", days, n, paths[k]);
+        else if (n < 0)
+            fprintf(stderr, "sloth: report.retain_days sweep: %s\n", err);
+    }
+}
+
 #ifdef WITH_PCAP
 /* Advance the channel scheduler once per poll: attribute the packets seen
  * since the last tick to the current channel, then retune the monitor
@@ -751,6 +771,8 @@ static void print_usage(const char *argv0) {
             "                     on exit, write a passive AP-inventory snapshot\n"
             "                     (BSSID/SSID/security/channel/vendor) for repeat\n"
             "                     site assessments. No pcap — normalised text.\n"
+            "                     With --report-interval, also kept live as\n"
+            "                     FILE.live.txt (see below).\n"
             "  --baseline-in FILE on exit, diff the current AP inventory against a\n"
             "                     prior --snapshot-out file (new/gone/changed APs).\n"
             "  --site-label TEXT  operator label stamped into --snapshot-out.\n"
@@ -771,10 +793,13 @@ static void print_usage(const char *argv0) {
             "                     interval. Removed when the session signs\n"
             "                     off; one left by a killed session is kept\n"
             "                     as FILE.<UTC>.unclean.md, never replaced.\n"
+            "                     With --snapshot-out, also keeps\n"
+            "                     SNAP.live.txt the same way.\n"
             "  --report-history   on exit, also keep this session's report as\n"
             "                     FILE.<UTC session start>.md (and .json), so\n"
             "                     a restart does not replace the last record.\n"
-            "                     Never overwritten; not pruned by sloth.\n"
+            "                     Never overwritten; deleted after\n"
+            "                     --tune report.retain_days (default 90).\n"
             "  --check-manifest FILE\n"
             "                     read a locally-populated release manifest\n"
             "                     (JSON) and show \"update available\" in the\n"
@@ -1168,10 +1193,17 @@ int main(int argc, char **argv) {
     /* The two #190 flags qualify --report / --report-json. Given alone
      * they would do nothing, and a sensor the operator believes is
      * keeping reports while it keeps none is the failure to refuse. */
-    if ((report_interval || report_history) && !report_md && !report_json) {
-        fprintf(stderr, "sloth: %s needs --report or --report-json: there "
-                        "is no report to write\n",
-                report_interval ? "--report-interval" : "--report-history");
+    if (report_history && !report_md && !report_json) {
+        fprintf(stderr, "sloth: --report-history needs --report or "
+                        "--report-json: there is no report to write\n");
+        return 2;
+    }
+    /* --report-interval also keeps a live --snapshot-out, so a snapshot
+     * alone is something for it to write. */
+    if (report_interval && !report_md && !report_json && !snapshot_out) {
+        fprintf(stderr, "sloth: --report-interval needs --report, "
+                        "--report-json or --snapshot-out: there is no "
+                        "report to write\n");
         return 2;
     }
     if (eapol_dir && !collect_hs) {
@@ -1886,6 +1918,13 @@ int main(int argc, char **argv) {
     posture_live_t live_report;
     posture_live_init(&live_report, report_md, report_json, report_interval,
                       session_start, g_research);
+    if (snapshot_out)
+        posture_live_snapshot(&live_report, snapshot_out, site_label);
+    /* Per-session files past report.retain_days (#190). Only on a run
+     * using the flags that create them, so a one-shot --report user's
+     * directory is never swept. */
+    int report_prune = report_interval || report_history;
+    if (report_prune) prune_report_records(report_md, report_json);
 
     int  first_poll = 1;
     long ticks_done = 0;
@@ -1966,8 +2005,9 @@ int main(int argc, char **argv) {
 
     /* Posture reports (roadmap #16 phase 5): rollup of alerts by
      * ATT&CK technique, cleartext exposures, and high-risk devices.
-     * Written once at shutdown so the artifact represents a signed-off
-     * session record — not a partial mid-run snapshot. */
+     * Written here at shutdown so the artifact represents a signed-off
+     * session record; the mid-run copies are the separate live files
+     * (#190, posture_live_tick() above). */
     /* Reports name exposed credentials and high-risk devices: written
      * 0600, and an existing report must already be private — it is
      * validated before truncation, so a refused one is left as it was
@@ -2029,6 +2069,11 @@ int main(int argc, char **argv) {
                                 "(record skipped)\n", err);
         }
     }
+    /* Again on the way out: a sensor that runs for months between
+     * restarts would otherwise only age records out at its next start.
+     * This session's own record was just written (mtime now), so it is
+     * never inside a window of a day or more. */
+    if (report_prune) prune_report_records(report_md, report_json);
 
     /* Site snapshot export/import (#27) — passive AP inventory, no pcap. */
     if (baseline_in) {
@@ -2044,10 +2089,12 @@ int main(int argc, char **argv) {
      * carries the path, so it is not printed twice. */
     if (snapshot_out) {
         if (wifi_snapshot_write(&g_state, snapshot_out, site_label,
-                                (long)sloth_wall()) == 0)
+                                (long)sloth_wall()) == 0) {
             fprintf(stderr, "sloth: site snapshot -> %s (%d APs)\n",
                     snapshot_out, g_state.beacon_count);
-        else
+            /* Superseded, as the live report is by its signed-off one. */
+            posture_live_retire_snapshot(&live_report);
+        } else
             fprintf(stderr, "sloth: could not write snapshot %s\n",
                     wifi_snapshot_error());
     }

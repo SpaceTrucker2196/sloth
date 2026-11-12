@@ -85,6 +85,10 @@ readdirCalled:src/sensor_health.c
 # ever opened, read and closed on the main thread (startup, then the
 # poll loop's alert_pcap_maintain()); no second thread sees it.
 readdirCalled:src/alert_pcap.c
+# #190's report.retain_days sweep: posture_prune_records() opendir()s
+# the report's directory into a local DIR* and closedir()s it before
+# returning, on the main thread at start and at shutdown.
+readdirCalled:src/posture.c
 readdirCalled:research/ingest/main.c
 # #160's clean-WAL refusal test: dir_list() opendir()s its own temporary
 # directory into a local DIR* and closedir()s it before returning, on

@@ -24,6 +24,17 @@ int wifi_snapshot_write(const sloth_state_t *s, const char *path,
                         const char *label, long now);
 const char *wifi_snapshot_error(void);
 
+/* The same inventory written while the session runs (#190), to `live`
+ * (the caller derives it: snapshot.txt -> snapshot.live.txt). Rendered
+ * to a hidden ".<name>.tmp" beside it (0600, O_EXCL), synced, and
+ * renamed over `live`, so a reader sees the previous complete file or
+ * the new one, never a partial. Marked "# session\trunning". 0, or -1
+ * with `err` filled: the previous live file is then left as it was and
+ * no temporary remains. Main thread only, like wifi_snapshot_write(). */
+int wifi_snapshot_write_live(const sloth_state_t *s, const char *live,
+                             const char *label, long now,
+                             char *err, size_t errsz);
+
 /* Compare the current AP inventory against the baseline snapshot at
  * `baseline_path` and write a drift report (new APs, disappeared APs,
  * changed security/channel) to `out`. Returns the number of differences,

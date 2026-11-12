@@ -53,6 +53,9 @@ int posture_render_json(FILE *out, const sloth_state_t *s, time_t session_start)
 
 #define POSTURE_PATH_MAX 1024
 
+/* report.retain_days default (#190), in src/tune.c. */
+#define POSTURE_DEFAULT_RETAIN_DAYS 90
+
 typedef struct {
     const char       *md_path;      /* --report      or NULL */
     const char       *json_path;    /* --report-json or NULL */
@@ -63,6 +66,9 @@ typedef struct {
     int               md_adopted;   /* an earlier session's live file has */
     int               json_adopted; /*   been set aside (or there was none) */
     sfile_fail_t      fail;         /* counted; the first is printed once */
+    const char       *snap_path;    /* --snapshot-out or NULL (#190) */
+    const char       *snap_label;   /* --site-label, may be NULL */
+    sfile_fail_t      snap_fail;    /* the live snapshot's own latch */
 } posture_live_t;
 
 /* The names derived from an operator path. 0, or -1 when `path` has no
@@ -74,6 +80,16 @@ int posture_session_path(const char *path, time_t session_start,
 void posture_live_init(posture_live_t *L, const char *md_path,
                        const char *json_path, unsigned interval_s,
                        time_t session_start, struct rq_handle *research);
+
+/* Also keep a live copy of the --snapshot-out AP inventory on the same
+ * cadence (#190): snapshot.txt -> snapshot.live.txt, through
+ * wifi_snapshot_write_live(). The live copy never touches the
+ * --snapshot-out file itself, so a --baseline-in pointed at that file
+ * still compares against the last signed-off session. Unlike a live
+ * report, a live snapshot left by a killed session is simply replaced:
+ * it is an inventory, not a session record. */
+void posture_live_snapshot(posture_live_t *L, const char *path,
+                           const char *label);
 
 /* Called once per poll tick. Writes the live report(s) when the
  * interval has elapsed on the monotonic clock, or at once when `force`
@@ -92,6 +108,21 @@ int posture_live_tick(posture_live_t *L, const sloth_state_t *s, int force);
  * remove: it is an earlier, killed session's, and is set aside as
  * .unclean first (left in place if that fails). */
 void posture_live_retire(posture_live_t *L, int json);
+
+/* After the shutdown --snapshot-out write succeeded: the live snapshot
+ * is superseded and removed. */
+void posture_live_retire_snapshot(posture_live_t *L);
+
+/* Retention for the per-session files beside `path` (#190): every
+ * report.<stamp>.md, report.<stamp>.unclean.md and their _N variants
+ * whose mtime is `days` or more before `now` is deleted. Only names of
+ * exactly that shape are considered, regular files owned by the
+ * effective uid, nothing followed (unlinkat removes the name). The
+ * operator's report and the live file never match. `days` 0 keeps
+ * everything. Returns the number removed, or -1 when the directory
+ * cannot be read or a delete failed (`err` names the first). */
+int posture_prune_records(const char *path, unsigned days, time_t now,
+                          char *err, size_t errsz);
 
 /* Write this session's own record beside `path` (`json` picks the
  * renderer). The name written is returned in name_out. 0, or -1 with

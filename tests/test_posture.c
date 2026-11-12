@@ -11,6 +11,11 @@
 #include "sloth_clock.h"
 #include "query.h"
 #include "tmp_dir.h"
+#include <pthread.h>
+#include <sys/time.h>
+#include "beacon_snoop.h"
+#include "wifi_snapshot.h"
+#include "tune.h"
 
 /* Roadmap #16 phase 5 — posture report export.
  *
@@ -857,7 +862,268 @@ static void test_retire_keeps_a_killed_sessions_live_report(void) {
     pl_close(&e);
 }
 
+/* ── Live snapshot, record retention, the capture race (#190) ──────── */
+
+static void pl_seed_ap(sloth_state_t *s, uint8_t last, const char *ssid) {
+    beacon_ap_t *a = &s->beacon_aps[s->beacon_count++];
+    memset(a, 0, sizeof(*a));
+    a->bssid[0] = 0x02; a->bssid[5] = last;
+    snprintf(a->ssid, sizeof(a->ssid), "%s", ssid);
+    snprintf(a->enc,  sizeof(a->enc),  "WPA2");
+    a->channel = 6;
+}
+
+static void test_live_snapshot_beside_the_snapshot(void) {
+    pl_env_t e;
+    ASSERT_EQ(pl_open(&e), 0);
+    if (!e.dir[0]) return;
+    char snap[TEST_TMP_MAX + 32], live[TEST_TMP_MAX + 40], tmp[TEST_TMP_MAX + 48];
+    snprintf(snap, sizeof(snap), "%s/snapshot.txt", e.dir);
+    snprintf(live, sizeof(live), "%s/snapshot.live.txt", e.dir);
+    snprintf(tmp,  sizeof(tmp),  "%s/.snapshot.live.txt.tmp", e.dir);
+    /* Last session's signed-off snapshot, which the shipped unit also
+     * reads back as --baseline-in: a live write must not move it. */
+    FILE *fp = fopen(snap, "w");
+    ASSERT(fp);
+    if (fp) { fputs("SIGNED OFF\n", fp); fclose(fp); }
+    /* A crash mid-write left the temporary; it is ours to replace. */
+    fp = fopen(tmp, "w");
+    ASSERT(fp);
+    if (fp) { fputs("# sloth-snap", fp); fclose(fp); }
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    pl_seed_ap(&s, 1, "Lobby");
+    posture_live_t L;
+    /* No report path at all: --snapshot-out alone is enough to tick. */
+    posture_live_init(&L, NULL, NULL, 60, 1700000000, NULL);
+    posture_live_snapshot(&L, snap, "site\tA");
+    g_pl_mono_ms += 59999;
+    ASSERT_EQ(posture_live_tick(&L, &s, 0), 0);
+    ASSERT(!pl_exists(live));
+    g_pl_mono_ms += 1;
+    ASSERT_EQ(posture_live_tick(&L, &s, 0), 1);
+
+    const char *r = pl_slurp(live);
+    ASSERT(contains(r, "# sloth-snapshot v1\n"));
+    ASSERT(contains(r, "# label\tsite\\tA\n"));
+    ASSERT(contains(r, "# session\trunning\n"));
+    ASSERT(contains(r, "# count\t1\n"));
+    ASSERT(pl_ends_with(r, "02:00:00:00:00:01\tLobby\tWPA2\t6\t-\t0\t-\n"));
+    struct stat st;
+    ASSERT_EQ(stat(live, &st), 0);
+    ASSERT_EQ((int)(st.st_mode & 0777), 0600);
+    ASSERT(!pl_exists(tmp));
+    ASSERT_STR(pl_slurp(snap), "SIGNED OFF\n");
+    ASSERT_EQ(pl_count(e.dir, NULL, NULL, 0), 2);
+
+    /* Still a baseline: the diff reader skips the extra header line. */
+    ASSERT_EQ(wifi_snapshot_diff(&s, live, stderr), 0);
+
+    /* SIGUSR1 rewrites it at once with the state as it now is. */
+    pl_seed_ap(&s, 2, "Annex");
+    ASSERT_EQ(posture_live_tick(&L, &s, 1), 1);
+    ASSERT(contains(pl_slurp(live), "# count\t2\n"));
+
+    /* The shutdown snapshot supersedes it; only the live name goes. */
+    posture_live_retire_snapshot(&L);
+    ASSERT(!pl_exists(live));
+    ASSERT(pl_exists(snap));
+    pl_close(&e);
+}
+
+static void test_live_snapshot_failure_is_counted_apart(void) {
+    pl_env_t e;
+    ASSERT_EQ(pl_open(&e), 0);
+    if (!e.dir[0]) return;
+    char snap[TEST_TMP_MAX + 32], live[TEST_TMP_MAX + 40];
+    snprintf(snap, sizeof(snap), "%s/snapshot.txt", e.dir);
+    snprintf(live, sizeof(live), "%s/snapshot.live.txt", e.dir);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    posture_live_t L;
+    posture_live_init(&L, e.md, NULL, 60, 1700000000, NULL);
+    posture_live_snapshot(&L, snap, NULL);
+    /* A directory at the live name makes the rename fail. The report
+     * beside it is still written, and the failure is the snapshot's. */
+    ASSERT_EQ(mkdir(live, 0700), 0);
+    ASSERT_EQ(posture_live_tick(&L, &s, 1), -1);
+    ASSERT(pl_exists(e.live_md));
+    ASSERT_EQ(L.fail.failures, 0);
+    ASSERT_EQ(L.snap_fail.failures, 1);
+    ASSERT(contains(L.snap_fail.last, "rename failed"));
+    /* The live report and the directory, and no temporary. */
+    char found[TEST_TMP_MAX + 96];
+    ASSERT_EQ(pl_count(e.dir, ".tmp", found, sizeof(found)), 2);
+    ASSERT_STR(found, "");
+    pl_close(&e);
+}
+
+static void pl_touch(const char *dir, const char *name, time_t mtime) {
+    char p[TEST_TMP_MAX + 96];
+    snprintf(p, sizeof(p), "%s/%s", dir, name);
+    FILE *fp = fopen(p, "w");
+    ASSERT(fp);
+    if (!fp) return;
+    fputs("x\n", fp);
+    fclose(fp);
+    struct timeval tv[2] = { { mtime, 0 }, { mtime, 0 } };
+    ASSERT_EQ(utimes(p, tv), 0);
+}
+
+static int pl_has(const char *dir, const char *name) {
+    char p[TEST_TMP_MAX + 96];
+    snprintf(p, sizeof(p), "%s/%s", dir, name);
+    return pl_exists(p);
+}
+
+static void test_prune_removes_only_old_session_records(void) {
+    pl_env_t e;
+    ASSERT_EQ(pl_open(&e), 0);
+    if (!e.dir[0]) return;
+    const time_t now = 1700000000, day = 86400;
+    const time_t old = now - 90 * day, young = now - 89 * day;
+    /* Old, and each a shape sloth creates: deleted. */
+    pl_touch(e.dir, "report.20230816T000000Z.md", old);
+    pl_touch(e.dir, "report.20230816T000000Z_2.md", old);
+    pl_touch(e.dir, "report.20230816T000000Z_99.md", old);
+    pl_touch(e.dir, "report.20230816T000000Z.unclean.md", old);
+    pl_touch(e.dir, "report.20230816T000000Z.unclean_3.md", old);
+    /* Old, but not a record of this report: kept. */
+    pl_touch(e.dir, "report.md", old);
+    pl_touch(e.dir, "report.live.md", old);
+    pl_touch(e.dir, "report.20230816T000000Z.json", old);
+    pl_touch(e.dir, "report.20230816T000000Z.md.bak", old);
+    pl_touch(e.dir, "report.2023081T000000Z.md", old);
+    pl_touch(e.dir, "report.20230816T000000Z_100.md", old);
+    pl_touch(e.dir, "report.20230816X000000Z.md", old);
+    pl_touch(e.dir, "notes.20230816T000000Z.md", old);
+    pl_touch(e.dir, "myreport.20230816T000000Z.md", old);
+    /* A record, but inside the window: kept. */
+    pl_touch(e.dir, "report.20230817T000000Z.md", young);
+    /* A symlink with a record's name is never followed or removed. */
+    char target[TEST_TMP_MAX + 96], link_[TEST_TMP_MAX + 96];
+    snprintf(target, sizeof(target), "%s/report.md", e.dir);
+    snprintf(link_,  sizeof(link_),  "%s/report.20230815T000000Z.md", e.dir);
+    ASSERT_EQ(symlink(target, link_), 0);
+
+    char err[SFILE_ERR_MAX] = "";
+    ASSERT_EQ(posture_prune_records(e.md, 0, now, err, sizeof(err)), 0);
+    ASSERT_EQ(pl_count(e.dir, NULL, NULL, 0), 16);
+    ASSERT_EQ(posture_prune_records(e.md, 90, now, err, sizeof(err)), 5);
+    ASSERT_EQ(pl_count(e.dir, NULL, NULL, 0), 11);
+    ASSERT(!pl_has(e.dir, "report.20230816T000000Z.md"));
+    ASSERT(!pl_has(e.dir, "report.20230816T000000Z.unclean_3.md"));
+    ASSERT(pl_has(e.dir, "report.md"));
+    ASSERT(pl_has(e.dir, "report.live.md"));
+    ASSERT(pl_has(e.dir, "report.20230816T000000Z.json"));
+    ASSERT(pl_has(e.dir, "report.20230817T000000Z.md"));
+    ASSERT(pl_has(e.dir, "report.20230815T000000Z.md"));
+    ASSERT(pl_exists(target));
+
+    /* The JSON path sweeps its own records and nothing else. */
+    ASSERT_EQ(posture_prune_records(e.json, 90, now, err, sizeof(err)), 1);
+    ASSERT_EQ(pl_count(e.dir, NULL, NULL, 0), 10);
+
+    /* A report in the working directory is a bare name. */
+    ASSERT_EQ(posture_prune_records("dir/", 90, now, err, sizeof(err)), -1);
+    pl_close(&e);
+}
+
+static void test_report_retain_days_knob(void) {
+    tune_reset();
+    ASSERT_STR(tune_spec(TUNE_REPORT_RETAIN_DAYS)->name, "report.retain_days");
+    ASSERT_EQ((long long)tune_val(TUNE_REPORT_RETAIN_DAYS), 90);
+    ASSERT_EQ((long long)tune_spec(TUNE_REPORT_RETAIN_DAYS)->lo, 0);
+    ASSERT_EQ((long long)tune_spec(TUNE_REPORT_RETAIN_DAYS)->hi, 3650);
+    ASSERT_EQ(tune_set_id(TUNE_REPORT_RETAIN_DAYS, 3651), 0);
+    ASSERT_EQ(tune_set_id(TUNE_REPORT_RETAIN_DAYS, 0), 1);
+    ASSERT_EQ((long long)tune_val(TUNE_REPORT_RETAIN_DAYS), 0);
+    tune_reset();
+}
+
+/* The capture side of the race: the monitor thread's beacon path, as
+ * on_probe_frame() drives it, for as long as the main thread is
+ * writing live files. */
+typedef struct { pthread_mutex_t mu; int stop; long frames; } pl_race_t;
+
+static int pl_race_stopped(pl_race_t *r) {
+    pthread_mutex_lock(&r->mu);
+    int v = r->stop;
+    pthread_mutex_unlock(&r->mu);
+    return v;
+}
+
+static void *pl_race_writer(void *arg) {
+    pl_race_t *r = arg;
+    uint8_t bssid[6] = { 0x02, 0, 0, 0, 0, 0 };
+    while (!pl_race_stopped(r)) {
+        bssid[5] = (uint8_t)(r->frames & 0x3f);
+        beacon_record(bssid, "RaceNet", (int8_t)-40, 6, "WPA2", 102, NULL);
+        r->frames++;
+    }
+    return NULL;
+}
+
+static void test_live_writes_do_not_race_the_capture_thread(void) {
+    /* The live tick runs on the main thread after poll_data(), which
+     * copies the capture modules' tables into sloth_state_t under their
+     * own locks; the renderers read only that copy. This drives the
+     * real pair (beacon_record on a second thread, beacon_snapshot then
+     * a forced posture_live_tick on this one) so `make test` under
+     * -fsanitize=thread reports any read of a module table that skipped
+     * the lock. Seen to fail (2026-11-12): with the writer thread also
+     * calling beacon_snapshot(&s), i.e. the state the tick renders
+     * written off the main thread, TSan reports a race between
+     * beacon_snapshot() and render_md() -> wifi_assess(). Run TSan
+     * with ASLR off on this kernel (setarch -R) or it aborts with
+     * "unexpected memory mapping" before any test. */
+    pl_env_t e;
+    ASSERT_EQ(pl_open(&e), 0);
+    if (!e.dir[0]) return;
+    char snap[TEST_TMP_MAX + 32];
+    snprintf(snap, sizeof(snap), "%s/snapshot.txt", e.dir);
+    beacon_clear();
+    static sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    posture_live_t L;
+    posture_live_init(&L, e.md, e.json, 60, 1700000000, NULL);
+    posture_live_snapshot(&L, snap, "race");
+
+    pl_race_t r;
+    memset(&r, 0, sizeof(r));
+    pthread_mutex_init(&r.mu, NULL);
+    pthread_t th;
+    ASSERT_EQ(pthread_create(&th, NULL, pl_race_writer, &r), 0);
+    int bad = 0;
+    for (int i = 0; i < 40; i++) {
+        beacon_snapshot(&s);
+        if (posture_live_tick(&L, &s, 1) != 3) bad++;
+    }
+    pthread_mutex_lock(&r.mu);
+    r.stop = 1;
+    pthread_mutex_unlock(&r.mu);
+    ASSERT_EQ(pthread_join(th, NULL), 0);
+    pthread_mutex_destroy(&r.mu);
+    ASSERT_EQ(bad, 0);
+    ASSERT(r.frames > 0);
+    beacon_snapshot(&s);
+    ASSERT_EQ(posture_live_tick(&L, &s, 1), 3);
+    char live[TEST_TMP_MAX + 40];
+    snprintf(live, sizeof(live), "%s/snapshot.live.txt", e.dir);
+    ASSERT(contains(pl_slurp(live), "RaceNet"));
+    /* Exactly the three live files: no temporary survived a write. */
+    ASSERT_EQ(pl_count(e.dir, NULL, NULL, 0), 3);
+    beacon_clear();
+    pl_close(&e);
+}
+
 void run_posture_tests(void) {
+    TEST_SUITE("posture: live snapshot, retention, capture race (#190)");
+    RUN_TEST(test_live_snapshot_beside_the_snapshot);
+    RUN_TEST(test_live_snapshot_failure_is_counted_apart);
+    RUN_TEST(test_prune_removes_only_old_session_records);
+    RUN_TEST(test_report_retain_days_knob);
+    RUN_TEST(test_live_writes_do_not_race_the_capture_thread);
+
     TEST_SUITE("posture: live report and session records (#190)");
     RUN_TEST(test_live_and_session_names);
     RUN_TEST(test_final_report_is_not_marked_running);

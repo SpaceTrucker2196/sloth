@@ -20,6 +20,7 @@
 #include "db.h"
 #include "eapol_log.h"
 #include "karma_detect.h"
+#include "posture.h"
 #include "harvest_track.h"
 #include "presence.h"
 #include "rf_distance.h"
@@ -319,6 +320,15 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "harvest.unanswered_pct",     HARVEST_UNANSWERED_PCT_DEFAULT, 1, 100, "percent of a station's M1-answering BSSIDs left without an M2" },
     { "harvest.deauth_min",         HARVEST_DEAUTH_MIN_DEFAULT, 1, 1000, "distinct deauth/disassoc frames claimed from the BSSID before a fresh M1/M2" },
     { "harvest.reconnect_s",        HARVEST_RECONNECT_DEFAULT_S, 1, 600, "seconds from the last such frame to the fresh M1/M2 pair" },
+    /* #190: report.<start>.md / report.<mtime>.unclean.md beside
+     * --report, the files --report-history and the live report's
+     * killed-session hand-off create. One small file per session, so
+     * the window is generous: a quarter of records. Swept at start and
+     * at shutdown, and only on a run using --report-interval or
+     * --report-history. 0 keeps them forever, the meaning 0 has on
+     * pcap.retain_days and handshake.retention_days; the cap is theirs
+     * (ten years). */
+    { "report.retain_days",         POSTURE_DEFAULT_RETAIN_DAYS, 0, 3650, "days per-session report records are kept beside --report, 0 for forever" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

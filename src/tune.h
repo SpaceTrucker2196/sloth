@@ -201,6 +201,9 @@ typedef enum {
     TUNE_HARVEST_UNANSWERED_PCT,
     TUNE_HARVEST_DEAUTH_MIN,
     TUNE_HARVEST_RECONNECT_S,
+    /* #190: age window for the per-session report files. Retention, not
+       a detector threshold — see the row in tune.c. */
+    TUNE_REPORT_RETAIN_DAYS,
     TUNE_COUNT
 } tune_id_t;
 

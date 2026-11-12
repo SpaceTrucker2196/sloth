@@ -75,8 +75,10 @@ ExecStartPre=+/usr/local/sbin/sloth-monitor-up ${SLOTH_IFACE}
 # only on SIGTERM, so on a sensor that runs for days it described the
 # session before last, and each restart replaced it. Every five minutes
 # report.live.md / .json now carry the running session, and each clean
-# stop also leaves report.<UTC start>.md / .json. sloth does not prune
-# the per-session files (a few KiB per restart); clear old ones by hand.
+# stop also leaves report.<UTC start>.md / .json, deleted after
+# report.retain_days (default 90). snapshot.live.txt carries the running
+# AP inventory on the same cadence; snapshot.txt, the baseline, still
+# moves only at a clean stop.
 ExecStart=/usr/local/bin/sloth \
     --headless \
     --hop \

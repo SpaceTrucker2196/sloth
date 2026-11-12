@@ -8,6 +8,7 @@
  * same renderers also feed a separate live file while the session runs
  * (the last section of this file). */
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>
@@ -22,6 +23,7 @@
 #include "alerts.h"
 #include "wifi_assess.h"
 #include "wifi_baseline.h"
+#include "wifi_snapshot.h"
 
 /* An IP-only camera device record (#106 round 2) has an all-zero MAC;
  * it is printed as `none`, the same way the JSONL device record does,
@@ -672,7 +674,8 @@ static int live_write_one(posture_live_t *L, const sloth_state_t *s,
 }
 
 int posture_live_tick(posture_live_t *L, const sloth_state_t *s, int force) {
-    if (!L || !s || (!L->md_path && !L->json_path)) return 0;
+    if (!L || !s || (!L->md_path && !L->json_path && !L->snap_path))
+        return 0;
     uint64_t now = sloth_mono_ms();
     if (!force && (L->interval_s == 0 ||
                    now - L->last_ms < (uint64_t)L->interval_s * 1000u))
@@ -692,7 +695,102 @@ int posture_live_tick(posture_live_t *L, const sloth_state_t *s, int force) {
                            err, sizeof(err)) == 0) wrote++;
         else { bad = 1; sfile_fail(&L->fail, "live report", err); }
     }
+    if (L->snap_path) {
+        char live[POSTURE_PATH_MAX];
+        int rc = -1;
+        if (posture_live_path(L->snap_path, live, sizeof(live)) != 0)
+            snprintf(err, sizeof(err), "%.200s: bad or over-long path",
+                     L->snap_path);
+        else
+            rc = wifi_snapshot_write_live(s, live, L->snap_label,
+                                          (long)sloth_wall(),
+                                          err, sizeof(err));
+        if (rc == 0) wrote++;
+        else { bad = 1; sfile_fail(&L->snap_fail, "live snapshot", err); }
+    }
     return bad ? -1 : wrote;
+}
+
+void posture_live_snapshot(posture_live_t *L, const char *path,
+                           const char *label) {
+    L->snap_path  = path;
+    L->snap_label = label;
+}
+
+void posture_live_retire_snapshot(posture_live_t *L) {
+    char live[POSTURE_PATH_MAX];
+    if (!L->snap_path ||
+        posture_live_path(L->snap_path, live, sizeof(live)) != 0) return;
+    (void)unlink(live);
+}
+
+/* "<stem>.YYYYMMDDTHHMMSSZ[.unclean][_N]<ext>" for this report path:
+ * the shapes posture_session_record() and adopt_orphan() create, and
+ * nothing else. N is 2..99 without a leading zero. */
+static int is_record_name(const char *name, const char *stem, size_t stem_len,
+                          const char *ext) {
+    if (strncmp(name, stem, stem_len) != 0 || name[stem_len] != '.') return 0;
+    const char *p = name + stem_len + 1;
+    for (int i = 0; i < 16; i++) {
+        char c = p[i];
+        int ok = i == 8  ? c == 'T'
+               : i == 15 ? c == 'Z'
+               : (c >= '0' && c <= '9');
+        if (!ok) return 0;
+    }
+    p += 16;
+    if (!strncmp(p, ".unclean", 8)) p += 8;
+    if (p[0] == '_') {
+        if (p[1] < '1' || p[1] > '9') return 0;
+        p += 2;
+        if (*p >= '0' && *p <= '9') p++;
+    }
+    return strcmp(p, ext) == 0;
+}
+
+int posture_prune_records(const char *path, unsigned days, time_t now,
+                          char *err, size_t errsz) {
+    size_t base, ext;
+    if (days == 0) return 0;
+    if (path_split(path, &base, &ext) != 0) {
+        snprintf(err, errsz, "%.200s: bad path", path ? path : "?");
+        return -1;
+    }
+    char dir[POSTURE_PATH_MAX];
+    if (base == 0) snprintf(dir, sizeof(dir), ".");
+    else if (!fits(snprintf(dir, sizeof(dir), "%.*s", (int)base, path),
+                   sizeof(dir))) {
+        snprintf(err, errsz, "%.200s: path too long", path);
+        return -1;
+    }
+    DIR *d = opendir(dir);
+    if (!d) {
+        snprintf(err, errsz, "%.200s: %s", dir, strerror(errno));
+        return -1;
+    }
+    const char *stem = path + base;
+    size_t stem_len  = ext - base;
+    const char *xt   = path + ext;
+    time_t cutoff    = now - (time_t)days * 86400;
+    uid_t me         = geteuid();
+    int removed = 0, bad = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (!is_record_name(e->d_name, stem, stem_len, xt)) continue;
+        struct stat st;
+        if (fstatat(dirfd(d), e->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0 ||
+            !S_ISREG(st.st_mode) || st.st_uid != me ||
+            st.st_mtime > cutoff)
+            continue;
+        if (unlinkat(dirfd(d), e->d_name, 0) == 0) removed++;
+        else if (!bad) {
+            bad = 1;
+            snprintf(err, errsz, "%.200s/%.80s: %s", dir, e->d_name,
+                     strerror(errno));
+        }
+    }
+    closedir(d);
+    return bad ? -1 : removed;
 }
 
 void posture_live_retire(posture_live_t *L, int json) {

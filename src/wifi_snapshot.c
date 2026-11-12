@@ -4,9 +4,11 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <unistd.h>
 
-/* No mutex, unlike jsonl's: the snapshot is written once at shutdown
- * on the main thread, so nothing races the reason buffer. */
+/* No mutex, unlike jsonl's: the snapshot is written on the main thread
+ * only (at shutdown, and since #190 by the live tick after poll_data()),
+ * so nothing races the reason buffer. */
 static sfile_fail_t g_fail;
 
 const char *wifi_snapshot_error(void) { return g_fail.last; }
@@ -121,6 +123,37 @@ static void bssid_str(const uint8_t *b, char *out, int sz) {
              b[0], b[1], b[2], b[3], b[4], b[5]);
 }
 
+/* The file body. `live` adds one header line (#190): the diff reader
+ * skips every '#' line, so a live file still reads as a baseline, but a
+ * person or a script looking at it can tell it is not the shutdown
+ * snapshot. */
+static void emit(FILE *f, const sloth_state_t *s, const char *label,
+                 long now, int live) {
+    fprintf(f, "# sloth-snapshot v1\n");
+    /* The label is the operator's, but a newline in it would still start
+     * a row in the next run's baseline, so it takes the same escape. */
+    char lab[256];
+    field_escape(label, lab, sizeof(lab));
+    fprintf(f, "# label\t%s\n", lab);
+    fprintf(f, "# ts\t%ld\n", now);
+    if (live) fprintf(f, "# session\trunning\n");
+    fprintf(f, "# count\t%d\n", s->beacon_count);
+    fprintf(f, "# bssid\tssid\tenc\tchannel\takm\tmfp\tvendor\n");
+
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *a = &s->beacon_aps[i];
+        /* 32 octets at four bytes per \xHH, plus the NUL. */
+        char bss[20], ssid[32 * 4 + 1], enc[16], akm[32], vendor[32];
+        bssid_str(a->bssid, bss, sizeof(bss));
+        field_escape(a->ssid, ssid, sizeof(ssid));
+        safe_field(a->enc,    enc,    sizeof(enc));
+        safe_field(a->akm,    akm,    sizeof(akm));
+        safe_field(a->vendor, vendor, sizeof(vendor));
+        fprintf(f, "%s\t%s\t%s\t%d\t%s\t%d\t%s\n",
+                bss, ssid, enc, a->channel, akm, a->mfp, vendor);
+    }
+}
+
 int wifi_snapshot_write(const sloth_state_t *s, const char *path,
                         const char *label, long now) {
     /* Reset BEFORE the argument guard, not after: wifi_snapshot_error()
@@ -139,29 +172,7 @@ int wifi_snapshot_write(const sloth_state_t *s, const char *path,
     FILE *f = sfile_fopen(AT_FDCWD, path, SFILE_TRUNC,
                           g_fail.last, sizeof(g_fail.last));
     if (!f) return -1;
-
-    fprintf(f, "# sloth-snapshot v1\n");
-    /* The label is the operator's, but a newline in it would still start
-     * a row in the next run's baseline, so it takes the same escape. */
-    char lab[256];
-    field_escape(label, lab, sizeof(lab));
-    fprintf(f, "# label\t%s\n", lab);
-    fprintf(f, "# ts\t%ld\n", now);
-    fprintf(f, "# count\t%d\n", s->beacon_count);
-    fprintf(f, "# bssid\tssid\tenc\tchannel\takm\tmfp\tvendor\n");
-
-    for (int i = 0; i < s->beacon_count; i++) {
-        const beacon_ap_t *a = &s->beacon_aps[i];
-        /* 32 octets at four bytes per \xHH, plus the NUL. */
-        char bss[20], ssid[32 * 4 + 1], enc[16], akm[32], vendor[32];
-        bssid_str(a->bssid, bss, sizeof(bss));
-        field_escape(a->ssid, ssid, sizeof(ssid));
-        safe_field(a->enc,    enc,    sizeof(enc));
-        safe_field(a->akm,    akm,    sizeof(akm));
-        safe_field(a->vendor, vendor, sizeof(vendor));
-        fprintf(f, "%s\t%s\t%s\t%d\t%s\t%d\t%s\n",
-                bss, ssid, enc, a->channel, akm, a->mfp, vendor);
-    }
+    emit(f, s, label, now, 0);
     /* sfile_fclose folds in ferror, the flush and the close, so a
      * failure anywhere in the fprintf run above surfaces here — which
      * is why the individual writes stay unchecked. Before this the
@@ -169,6 +180,52 @@ int wifi_snapshot_write(const sloth_state_t *s, const char *path,
      * to the operator as written. */
     return sfile_fclose(f, path, g_fail.last, sizeof(g_fail.last)) == 0
            ? 0 : -1;
+}
+
+int wifi_snapshot_write_live(const sloth_state_t *s, const char *live,
+                             const char *label, long now,
+                             char *err, size_t errsz) {
+    if (!s || !live || !err || errsz == 0) return -1;
+    /* ".<name>.tmp" in the live file's own directory: rename(2) is only
+     * atomic within one filesystem, and the leading dot keeps the
+     * temporary out of a glob for the snapshot. */
+    const char *slash = strrchr(live, '/');
+    size_t base = slash ? (size_t)(slash - live) + 1 : 0;
+    char tmp[1100];
+    int n = snprintf(tmp, sizeof(tmp), "%.*s.%s.tmp",
+                     (int)base, live, live + base);
+    if (!live[base] || n < 0 || (size_t)n >= sizeof(tmp)) {
+        snprintf(err, errsz, "%.200s: bad or over-long path", live);
+        return -1;
+    }
+    /* A temporary of this name is ours, left by a crash mid-write: the
+     * unlink removes the name without following it, and O_EXCL then
+     * guarantees the file written is one this call created, 0600. */
+    (void)unlink(tmp);
+    FILE *f = sfile_fopen(AT_FDCWD, tmp, SFILE_EXCL, err, errsz);
+    if (!f) return -1;
+    emit(f, s, label, now, 1);
+    /* On disk before it is visible: a rename that survives a power cut
+     * while the data does not is how a zero-length file appears. */
+    int sync_bad = fflush(f) != 0 || fsync(fileno(f)) != 0;
+    int sync_err = errno;
+    if (sfile_fclose(f, live, err, errsz) != 0) {
+        (void)unlink(tmp);
+        return -1;
+    }
+    if (sync_bad) {
+        snprintf(err, errsz, "%.200s: write failed: %s", live,
+                 strerror(sync_err));
+        (void)unlink(tmp);
+        return -1;
+    }
+    if (rename(tmp, live) != 0) {
+        snprintf(err, errsz, "%.200s: rename failed: %s", live,
+                 strerror(errno));
+        (void)unlink(tmp);
+        return -1;
+    }
+    return 0;
 }
 
 /* Parsed baseline AP — only the fields we diff on. */
