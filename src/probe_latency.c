@@ -8,6 +8,11 @@
 #include <pthread.h>
 #include <string.h>
 
+/* BSSIDs remembered per request as having answered it. A wildcard probe
+ * is answered by every AP in range; past this many, a further BSSID's
+ * answer cannot be told from a repeat and is refused (resp_untracked). */
+#define PLAT_ANS_MAX 16
+
 typedef struct {
     uint8_t  sta[6];
     uint8_t  addr3[6];
@@ -19,9 +24,16 @@ typedef struct {
     int      has_tsft;
     uint64_t tsft_us;
     int64_t  pcap_us;
-    int      dup;            /* heard twice under one seq: unpairable */
+    int      dup;            /* heard twice under one seq, or heard only
+                              * as a retransmission: unpairable */
     int      answered;       /* some BSSID's answer was paired with it */
     int      used;
+    /* Every BSSID seen answering this request, paired or not: a second
+     * answer from one of them is an extra, however many other answers
+     * (to this request or others) came between. */
+    uint8_t  ans[PLAT_ANS_MAX][6];
+    int      n_ans;
+    int      ans_full;       /* a BSSID did not fit: membership unknown */
 } plat_req_t;
 
 typedef struct {
@@ -32,11 +44,6 @@ typedef struct {
     uint32_t smp[PLAT_KIND_COUNT][PLAT_SAMPLES];
     int      n[PLAT_KIND_COUNT];
     int      head[PLAT_KIND_COUNT];
-    /* The request this BSSID last answered: a second response to it is
-     * an extra, not a latency. */
-    uint8_t  last_sta[6];
-    int      last_seq;
-    uint64_t last_dwell;
 } plat_row_t;
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -96,8 +103,21 @@ static plat_row_t *row_get(const uint8_t bssid[6]) {
     }
     memset(r, 0, sizeof(*r));
     memcpy(r->bssid, bssid, 6);
-    r->last_seq = -1;
     return r;
+}
+
+/* 1 = this BSSID answered q before, 0 = it did not, -1 = unknown (the
+ * list overflowed and it is not in it). */
+static int req_answered_by(const plat_req_t *q, const uint8_t bssid[6]) {
+    for (int i = 0; i < q->n_ans; i++)
+        if (memcmp(q->ans[i], bssid, 6) == 0) return 1;
+    return q->ans_full ? -1 : 0;
+}
+
+static void req_mark_answered(plat_req_t *q, const uint8_t bssid[6]) {
+    if (req_answered_by(q, bssid) != 0) return;
+    if (q->n_ans < PLAT_ANS_MAX) memcpy(q->ans[q->n_ans++], bssid, 6);
+    else                         q->ans_full = 1;
 }
 
 static int req_live(const plat_req_t *q, int64_t now_us) {
@@ -139,6 +159,14 @@ static void on_request(const dot11_frame_t *f, const plat_clock_t *clk,
     q->tsft_us  = clk->tsft_us;
     q->pcap_us  = now;
     q->used     = 1;
+    /* Retry set with no earlier copy heard: the AP may have answered the
+     * copy that was missed, so the request's time is not the one the
+     * answer was to. Kept (so its answers are counted, not "unpaired"),
+     * never paired. */
+    if (f->retry) {
+        q->dup = 1;
+        bump(&g_ct.req_retry);
+    }
 }
 
 static void row_add(plat_row_t *r, int kind, uint32_t us, int src,
@@ -167,14 +195,12 @@ static void on_response(const dot11_frame_t *f, const plat_clock_t *clk,
      * Capability(2) (§9.3.3.11), then elements. */
     if (blen < 12) return;
     if (!mac_unicast(f->da) || !mac_unicast(f->bssid)) return;
-    if (f->retry) { bump(&g_ct.resp_retry); return; }
     char ssid[33];
     dot11_ie_ssid(body + 12, blen - 12, ssid, NULL);
 
     int64_t now = pcap_us_of(clk);
-    plat_row_t *existing = row_find(f->bssid);
-    plat_req_t *hit = NULL;
-    int cands = 0, extra = 0, backwards = 0;
+    plat_req_t *cand[PLAT_PENDING];
+    int cands = 0, extra = 0, untracked = 0, backwards = 0;
     for (int i = 0; i < PLAT_PENDING; i++) {
         plat_req_t *q = &g_req[i];
         if (!q->used || q->dwell != g_dwell) continue;
@@ -190,21 +216,25 @@ static void on_response(const dot11_frame_t *f, const plat_clock_t *clk,
             backwards = 1;
             continue;
         }
-        if (existing && existing->last_seq == q->seq &&
-            existing->last_dwell == q->dwell &&
-            memcmp(existing->last_sta, q->sta, 6) == 0) {
-            extra = 1;
-            continue;
-        }
-        cands++;
-        hit = q;
+        const int by = req_answered_by(q, f->bssid);
+        if (by == 1)  { extra = 1;     continue; }
+        if (by == -1) { untracked = 1; continue; }
+        cand[cands++] = q;
     }
+    /* Whatever happens to this answer, the BSSID has now answered every
+     * request it could have been to: a later answer from it to any of
+     * them is not a first answer. A Retry-set copy proves an earlier
+     * copy was sent, so it marks too. */
+    for (int i = 0; i < cands; i++) req_mark_answered(cand[i], f->bssid);
+    if (f->retry) { bump(&g_ct.resp_retry); return; }
     if (cands == 0) {
         if (extra)          bump(&g_ct.resp_extra);
+        else if (untracked) bump(&g_ct.resp_untracked);
         else if (backwards) bump(&g_ct.clock_backwards);
         else                bump(&g_ct.resp_unpaired);
         return;
     }
+    plat_req_t *hit = cand[0];
     if (cands > 1 || hit->dup) { bump(&g_ct.resp_ambiguous); return; }
 
     int      src;
@@ -219,9 +249,6 @@ static void on_response(const dot11_frame_t *f, const plat_clock_t *clk,
     if (us > PLAT_PAIR_MAX_US) { bump(&g_ct.resp_unpaired); return; }
 
     plat_row_t *r = row_get(f->bssid);
-    memcpy(r->last_sta, hit->sta, 6);
-    r->last_seq   = hit->seq;
-    r->last_dwell = hit->dwell;
     hit->answered = 1;
     row_add(r, hit->wildcard ? PLAT_KIND_WILDCARD : PLAT_KIND_DIRECTED,
             (uint32_t)us, src, (time_t)clk->ts_sec);

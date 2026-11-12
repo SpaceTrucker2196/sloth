@@ -27,7 +27,7 @@ issues #77, #151 and #187, plan #145 (rulings 1-3).
 IEEE 802.11-2020 §9.3.3.2, §9.4.1.3, §9.4.1.10, §11.1.3; Wi-Fi Simple
 Configuration Technical Specification v2.0 §7.7, §12.
 
-**Last updated**: 2026-11-12 (#187 S3: probe-response latency, measured
+**Last updated**: 2026-11-12 (#187 S3 review: first answer tracked per request, Retry-only requests voided), 2026-11-12 (#187 S3: probe-response latency, measured
 only), 2026-11-12 (#151: the stack table mechanism, the
 Pineapple setup-AP pairing, the verdict layer), 2026-10-20
 
@@ -254,10 +254,14 @@ wildcard probes separately. It is fed once per monitor frame from
   BSSID row.
 - **A pair counts only** inside one dwell (dwells are numbered from the
   radiotap frequency, so a `--hop` retune between the two frames voids
-  it); against a request heard once under its sequence number; from a
-  first transmission (Retry clear); as the BSSID's first answer to that
-  request (hostapd-mana answers a wildcard probe once per remembered
-  SSID, airbase-ng sends a broadcast-probe answer three times); naming
+  it whenever anything was heard on the other channel; a silent
+  excursion and back inside 200 ms is not seen); against a request
+  heard once under its sequence number and not only as a retransmission;
+  from a first transmission (Retry clear); as the BSSID's first answer
+  to that request that sloth heard (hostapd-mana answers a wildcard
+  probe once per remembered SSID, airbase-ng sends a broadcast-probe
+  answer three times; each request remembers up to 16 answering
+  BSSIDs, counting ambiguous and Retry-set answers as answers); naming
   the requested SSID; within 200 ms. Each refusal is tallied.
 - **Bounds.** 64 pending requests and 128 BSSID rows, oldest evicted and
   counted. The tally is module-local (`probe_latency_counters()`): an

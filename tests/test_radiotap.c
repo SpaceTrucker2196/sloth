@@ -202,6 +202,35 @@ static void test_extended_present_bitmap_is_skipped_correctly(void) {
     ASSERT_EQ(rt.has_signal, 1);
 }
 
+/* TSFT after one extended word (the shape mac80211 emits with more
+ * than one present word): the bitmaps end at offset 12, so TSFT is
+ * padded to 16 and the signal byte follows at 24. Octets chosen so a
+ * TSFT read at 12 (no pad) gives a different value and moves the
+ * signal. Review of #187 S3. */
+static void test_tsft_after_extended_bitmap_is_aligned(void) {
+    uint8_t buf[64];
+    memset(buf, 0, sizeof buf);
+    uint32_t w0 = (1u << RT_BIT_EXT) | (1u << RT_BIT_TSFT) |
+                  (1u << RT_BIT_DBM_ANTSIGNAL);
+    int len = 8 + 4 + 4 + 8 + 1;
+    buf[2] = (uint8_t)len;
+    buf[4] = (uint8_t)(w0 & 0xff);
+    buf[5] = (uint8_t)((w0 >> 8) & 0xff);
+    buf[6] = (uint8_t)((w0 >> 16) & 0xff);
+    buf[7] = (uint8_t)((w0 >> 24) & 0xff);
+    /* word1 = 0 at 8..11; pad 12..15 set non-zero so a missing pad is
+     * read into the value. */
+    buf[12] = 0xee; buf[13] = 0xee; buf[14] = 0xee; buf[15] = 0xee;
+    for (int i = 0; i < 8; i++) buf[16 + i] = (uint8_t)(0x11 * (i + 1));
+    buf[24] = (uint8_t)(int8_t)-58;
+
+    radiotap_info_t rt;
+    ASSERT_EQ(radiotap_parse(buf, len, &rt), 1);
+    ASSERT_EQ(rt.has_tsft, 1);
+    ASSERT(rt.tsft_us == 0x8877665544332211ULL);
+    ASSERT_EQ((int)rt.signal_dbm, -58);
+}
+
 /* Two chained extended words. */
 static void test_two_extended_bitmaps(void) {
     uint8_t buf[64];
@@ -351,6 +380,7 @@ void run_radiotap_tests(void) {
     TEST_SUITE("radiotap: extended present bitmaps");
     RUN_TEST(test_extended_present_bitmap_is_skipped_correctly);
     RUN_TEST(test_two_extended_bitmaps);
+    RUN_TEST(test_tsft_after_extended_bitmap_is_aligned);
     RUN_TEST(test_truncated_extended_bitmap_rejected);
 
     TEST_SUITE("radiotap: malformed input");

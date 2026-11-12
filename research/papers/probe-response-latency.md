@@ -53,18 +53,26 @@ nothing about modern APs, many of which answer probes in firmware.
 **hostapd-mana** (`src/ap/beacon.c`, `handle_probe_req()`, read at
 GitHub HEAD `d8d9e2127e88957302ccf4dd89d90842b8251fc7`, 2026-11-12):
 
-- With `enable_mana`, a directed probe for any SSID is answered by
-  `hostapd_gen_probe_resp(hapd, elems.ssid, …)` — the requested name —
-  and sent with `hostapd_drv_send_mlme()`. Without mana the same
-  function is called with the configured SSID. **It is the same
+- With `enable_mana`, a directed probe for any SSID sets
+  `params.mana_ssid = elems.ssid` — the requested name — and calls
+  `hostapd_send_probe_resp_from_params()`, which builds the frame with
+  `hostapd_gen_probe_resp(hapd, params)` and sends it with
+  `hostapd_drv_send_mlme()`. Without mana the same function runs with
+  `mana_ssid` unset, so the configured SSID is used. **It is the same
   userspace path, through the same driver call, that stock hostapd uses
-  to answer probes on any driver without probe-response offload.** The
-  MANA code adds hash lookups (`HASH_FIND_STR` on the SSID or station
-  table) and logging in front of it; nothing that is measured or
-  claimed to be measurable.
-- For a **wildcard** probe it iterates the station's remembered SSIDs
-  ("MANA iterate") and sends one response per name, back to back. Only
-  the first of those is a latency; the rest are serialisation.
+  to answer probes on any driver without probe-response offload.** What
+  MANA adds in front of it in this file is a call to
+  `mana_probe_process_request()` (in MANA's own `mana/probe.c`, not
+  read: the raw path at that commit did not resolve) and debug logging;
+  nothing in `beacon.c` is measured or claimed to be measurable.
+- For a **wildcard** probe, when `mana_probe_process_request()` sets
+  `iterate`, it walks the station's remembered SSIDs
+  (`mana_probe_iter_hash()`, "MANA: Generating broadcast response for
+  SSID") and sends one response per name, back to back. Only the first
+  of those is a latency; the rest are serialisation.
+- `hostapd_send_probe_resp_from_params()` sets the no-ack policy when
+  the request was a wildcard sent to the broadcast address ("to avoid
+  excessive retries"), so those answers are never retransmitted.
 - The file also contains `hostapd_probe_resp_offloads()`, which applies
   only when the driver advertises `WPA_DRIVER_FLAGS_PROBE_RESP_OFFLOAD`.
   A firmware that answers probes itself answers for the configured

@@ -185,6 +185,93 @@ static void test_extra_answers_are_not_latencies(void) {
     ASSERT_EQ((int)ct().resp_extra, 2);
 }
 
+/* The BSSID's first answer is remembered on the request, not on the
+ * BSSID's row: a second answer that arrives after the same BSSID
+ * answered some other station is still an extra. hostapd-mana's
+ * per-SSID burst to one station can interleave with its answer to
+ * another (review of #187 S3: seen red while only the row's last
+ * answered request was remembered — the burst's second answer paired
+ * as a 1.5 ms latency). */
+static void test_extra_answer_after_interleaved_pair(void) {
+    mk_preq(STA, BC, "", 100, 0);                  feed(F24, 1000000, T0);
+    mk_preq(STA2, BC, "", 300, 0);                 feed(F24, 1000200, T0 + 200);
+    mk_presp(STA, AP1, "home", 7, 0);              feed(F24, 1001000, T0 + 1000);
+    mk_presp(STA2, AP1, "home", 8, 0);             feed(F24, 1001200, T0 + 1200);
+    mk_presp(STA, AP1, "work", 9, 0);              feed(F24, 1001500, T0 + 1500);
+    probe_latency_row_t r;
+    ASSERT_EQ(probe_latency_get(AP1, &r), 1);
+    ASSERT_EQ((int)r.kind[PLAT_KIND_WILDCARD].n, 2);
+    ASSERT_EQ((int)r.kind[PLAT_KIND_WILDCARD].p90_us, 1000);
+    ASSERT_EQ((int)ct().resp_extra, 1);
+}
+
+/* A Retry-set response proves the BSSID already sent a first copy, so a
+ * later first-transmission answer from it to the same request is an
+ * extra, not its latency (review of #187 S3: seen red while the retry
+ * was only counted — the later answer paired). */
+static void test_retry_response_marks_the_request_answered(void) {
+    mk_preq(STA, BC, "", 100, 0);                  feed(F24, 1000000, T0);
+    mk_presp(STA, AP1, "home", 7, FB_RETRY);       feed(F24, 1002000, T0 + 2000);
+    mk_presp(STA, AP1, "work", 8, 0);              feed(F24, 1002600, T0 + 2600);
+    probe_latency_row_t r;
+    ASSERT_EQ(probe_latency_get(AP1, &r), 0);
+    ASSERT_EQ((int)ct().resp_retry, 1);
+    ASSERT_EQ((int)ct().resp_extra, 1);
+}
+
+/* An ambiguous answer still answered one of its candidates, so the
+ * BSSID's next answer to either is not a first answer: the wildcard and
+ * the directed probe are both marked. Seen red with only an unambiguous
+ * paired request marked (the "work" answer then paired against the
+ * wildcard at 1.8 ms). */
+static void test_ambiguous_answer_marks_every_candidate(void) {
+    mk_preq(STA, BC, "", 100, 0);                  feed(F24, 1000000, T0);
+    mk_preq(STA, BC, "home", 101, 0);              feed(F24, 1000300, T0 + 300);
+    mk_presp(STA, AP1, "home", 7, 0);              feed(F24, 1001000, T0 + 1000);
+    mk_presp(STA, AP1, "work", 8, 0);              feed(F24, 1001800, T0 + 1800);
+    probe_latency_row_t r;
+    ASSERT_EQ(probe_latency_get(AP1, &r), 0);
+    ASSERT_EQ((int)ct().resp_ambiguous, 1);
+    ASSERT_EQ((int)ct().resp_extra, 1);
+}
+
+/* A wildcard probe is answered by every AP in range, and the request
+ * remembers 16 of them. The 17th still pairs (it is not in the list and
+ * the list was not yet full); from then on a BSSID not in the list
+ * cannot be told from a repeat and is refused, while a listed one
+ * repeating is still an extra. Seen red with the overflow ignored in
+ * req_answered_by() (the 18th paired). */
+static void test_answer_list_overflow_is_refused(void) {
+    mk_preq(STA, BC, "", 100, 0);                  feed(F24, 1000000, T0);
+    uint8_t ap[6] = {0x02,0x00,0x5e,0x30,0x00,0x00};
+    for (int i = 0; i < 18; i++) {
+        ap[5] = (uint8_t)i;
+        mk_presp(STA, ap, "x", 10 + i, 0);
+        feed(F24, 1001000 + (uint64_t)i * 100, T0 + 1000 + i * 100);
+    }
+    ap[5] = 0;
+    mk_presp(STA, ap, "y", 40, 0);                 feed(F24, 1003000, T0 + 3000);
+    ASSERT_EQ((int)ct().pairs, 17);
+    ASSERT_EQ((int)ct().resp_untracked, 1);
+    ASSERT_EQ((int)ct().resp_extra, 1);
+    probe_latency_row_t r;
+    ap[5] = 17;
+    ASSERT_EQ(probe_latency_get(ap, &r), 0);
+}
+
+/* A request heard only as its retransmission (Retry set, first copy
+ * missed): the AP may have answered the copy sloth did not hear, so the
+ * pair would be timed from the wrong frame. Void, and counted (review
+ * of #187 S3: seen red without the Retry check in on_request()). */
+static void test_request_heard_only_as_retry_is_void(void) {
+    mk_preq(STA, AP1, "corp-net", 100, FB_RETRY);  feed(F24, 1001500, T0 + 1500);
+    mk_presp(STA, AP1, "corp-net", 7, 0);          feed(F24, 1003000, T0 + 3000);
+    probe_latency_row_t r;
+    ASSERT_EQ(probe_latency_get(AP1, &r), 0);
+    ASSERT_EQ((int)ct().req_retry, 1);
+    ASSERT_EQ((int)ct().resp_ambiguous, 1);
+}
+
 /* Two live requests the one response could answer: no pair. */
 static void test_two_candidates_are_ambiguous(void) {
     mk_preq(STA, BC, "", 100, 0);                  feed(F24, 1000000, T0);
@@ -395,6 +482,11 @@ void run_probe_latency_tests(void) {
     RUN_TEST(test_response_retry_is_ignored);
     RUN_TEST(test_request_retransmission_voids_the_pair);
     RUN_TEST(test_extra_answers_are_not_latencies);
+    RUN_TEST(test_extra_answer_after_interleaved_pair);
+    RUN_TEST(test_retry_response_marks_the_request_answered);
+    RUN_TEST(test_ambiguous_answer_marks_every_candidate);
+    RUN_TEST(test_answer_list_overflow_is_refused);
+    RUN_TEST(test_request_heard_only_as_retry_is_void);
     RUN_TEST(test_two_candidates_are_ambiguous);
     RUN_TEST(test_channel_retune_invalidates);
     RUN_TEST(test_no_frequency_never_pairs);

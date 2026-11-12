@@ -36,17 +36,28 @@
  * Validity. A pair is formed only when:
  *   - both frames were heard in ONE dwell: the module numbers dwells
  *     from the radiotap frequency of every frame it is shown, so a
- *     --hop retune between request and response voids the pair (and a
- *     frame with no frequency cannot be placed in a dwell at all);
+ *     --hop retune between request and response voids the pair when
+ *     any frame was heard on the other channel (and a frame with no
+ *     frequency cannot be placed in a dwell at all). A retune away and
+ *     back inside 200 ms during which no frame at all was heard is not
+ *     seen; with the hopper's 100 ms minimum dwell that needs a
+ *     two-channel hop list and one silent dwell;
  *   - the request is the only live, unambiguous candidate: a request
  *     heard twice under one sequence number (a retransmission — which
- *     copy the AP answered is unknowable) is voided, and two distinct
- *     live requests that the same response could answer void the pair;
+ *     copy the AP answered is unknowable), or heard only as a
+ *     retransmission (Retry set, first copy missed), is voided, and two
+ *     distinct live requests that the same response could answer void
+ *     the pair;
  *   - the response is a first transmission (Retry clear), and is the
  *     first answer this BSSID gave that request (hostapd-mana answers a
  *     wildcard probe with one response per remembered SSID, airbase-ng
  *     sends a broadcast-probe answer three times; only the first is a
- *     latency);
+ *     latency). Each request remembers up to 16 BSSIDs that answered
+ *     it — paired, ambiguous or Retry-set alike, since each proves an
+ *     earlier answer — and refuses an unlisted BSSID once that list has
+ *     overflowed. An answer sloth did not hear at all (lost, bad FCS)
+ *     cannot be known, so a later one from that BSSID can still pair:
+ *     the figure is the first answer HEARD;
  *   - the response names the requested SSID (or the request was a
  *     wildcard), and a request addressed to one BSSID is answered by it;
  *   - 0 <= latency <= PLAT_PAIR_MAX_US.
@@ -104,6 +115,8 @@ typedef struct {
     uint64_t no_freq;          /* frames with no radiotap frequency */
     uint64_t dwells;           /* dwell boundaries seen (frequency changes) */
     uint64_t req_dup;          /* request heard again under one seq: voided */
+    uint64_t req_retry;        /* request heard only as a retransmission: voided */
+    uint64_t resp_untracked;   /* request answered by more BSSIDs than tracked */
     uint64_t resp_retry;       /* response with Retry set: ignored */
     uint64_t resp_extra;       /* 2nd+ answer by one BSSID to one request */
     uint64_t resp_ambiguous;   /* >1 live request could be the one answered */
