@@ -688,7 +688,7 @@ the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
    "fed":6020,"zero_fed":1311,"deletes_lost":0},
  "ident":{"macs":30,"mac_cap":512,"mac_evictions":0,"ips":24,"ip_cap":256,
    "ip_evictions":0,"dns_matched":12,"dns_unmatched":3,"query_overwrites":0},
- "sse_clients":1,"tick_seq":12}
+ "sse_clients":1,"tick_seq":12,"hostname":"W9FJC"}
 ```
 
 `socket` is `connecting`, `connected` or `retrying` (waiting out a

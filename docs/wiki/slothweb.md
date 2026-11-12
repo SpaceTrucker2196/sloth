@@ -304,7 +304,9 @@ with `If-None-Match`, answered `304` until a rebuild changes the page.
 JSON with `service`, `milestone`, `uptime_s`, `sse_clients` and
 `tick_seq`, plus `socket`, `last_record_age_s`, `db`, `db_schema` and
 `db_rows`, which are `"none"` or `null` until M1 and M4 have something
-to report. `Cache-Control: no-store`.
+to report, and `hostname` (the machine slothweb runs on, from
+`gethostname()`, or `null`), which the page header shows after "sloth · web"
+so two sites' pages cannot be mistaken for each other. `Cache-Control: no-store`.
 
 ### `/events`
 

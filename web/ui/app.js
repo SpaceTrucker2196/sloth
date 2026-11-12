@@ -1337,7 +1337,7 @@
         else if (view === "ble") bleLoad();
         else if (view === "probes" && window.SlothProbes) SlothProbes.show();
       }
-      set("milestone", h.milestone);
+      set("hostname", h.hostname || "");
       dbAge(h);
       // The SQL box exists only when the server was started with
       // --web-allow-sql; otherwise it is never drawn and never asked.

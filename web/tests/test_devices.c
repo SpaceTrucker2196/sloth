@@ -143,7 +143,9 @@ static void test_page_carries_the_m4_views(void) {
     /* No active lookup anywhere on the page (the 2026-10-21 ruling). */
     WT_LACKS(p, "ACTIVE QUERY");
     WT_LACKS(p, "active-rdns");
-    WT_HAS(p, "<span id=\"milestone\">M6</span>");
+    WT_HAS(p, "<span id=\"hostname\"></span>");
+    WT_HAS(p, "set(\"hostname\", h.hostname || \"\");");
+    WT_LACKS(p, "<span id=\"milestone\">");
 }
 
 
