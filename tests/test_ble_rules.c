@@ -910,6 +910,79 @@ static void test_watch_drops_count_groups_not_rows_past_the_cap(void) {
     sloth_clock_test_set(NULL, NULL);
 }
 
+/* Fill every group slot with BLE_FINDINGS_MAX distinct recent groups on
+ * BT_MONITOR_DEVICE; returns the next free row. */
+static int fill_watch_groups(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    int n = 0;
+    for (; n < BLE_FINDINGS_MAX; n++) {
+        ble_device_t *d = &g_s.ble_devices[n];
+        addr_n(d->addr, 0x800 + (unsigned)n);
+        d->addr_type = 1;
+        d->last_seen = g_wall - 1;
+        snprintf(d->sensor_iface, sizeof(d->sensor_iface), "%s", BT_MONITOR_DEVICE);
+        snprintf(d->watch_cat, sizeof(d->watch_cat), "cat%d", n);
+    }
+    return n;
+}
+
+static void put_watch_row(int n, unsigned a, const char *ifc,
+                          const char *cat, time_t last_seen) {
+    ble_device_t *d = &g_s.ble_devices[n];
+    addr_n(d->addr, a);
+    d->addr_type = 1;
+    d->last_seen = last_seen;
+    snprintf(d->sensor_iface, sizeof(d->sensor_iface), "%s", ifc);
+    snprintf(d->watch_cat, sizeof(d->watch_cat), "%s", cat);
+}
+
+/* The group is (iface, category), so one category on two sensors past
+ * the cap is two groups lost, not one. Rows: "late" on the monitor,
+ * then "late" on a second iface.
+ * Seen to fail: with the sensor_iface comparison dropped from the
+ * `seen` scan, dropped reads 1 (the second sensor's group taken for
+ * the first's). */
+static void test_watch_drops_split_one_category_by_sensor(void) {
+    pin_clocks();
+    int n = fill_watch_groups();
+    put_watch_row(n++, 0x900, BT_MONITOR_DEVICE, "late", g_wall - 1);
+    put_watch_row(n++, 0x901, "ubertooth1", "late", g_wall - 1);
+    g_s.ble_device_count = n;
+    static ble_finding_t f[BLE_FINDINGS_MAX];
+    int dropped = -1;
+    ASSERT_EQ(ble_findings_build(&g_s, g_wall, f, BLE_FINDINGS_MAX, &dropped),
+              BLE_FINDINGS_MAX);
+    ASSERT_EQ(dropped, 2);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* A stale row of a group does not stand in for it: a group with no
+ * recent row never took a slot and was never counted, so its first
+ * RECENT row past the cap is the one that counts. The stale row sits
+ * before the cap-filling rows, as an old advertiser's row would.
+ * Seen to fail: with the recency test dropped from the `seen` scan,
+ * dropped reads 0 (the stale row taken as the group already counted). */
+static void test_watch_drops_ignore_a_stale_row_of_the_group(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    put_watch_row(0, 0x700, BT_MONITOR_DEVICE, "late",
+                  g_wall - BLE_WATCH_RECENT_SECS - 5);
+    int n = 1;
+    for (int k = 0; k < BLE_FINDINGS_MAX; k++, n++) {
+        char cat[16];
+        snprintf(cat, sizeof(cat), "cat%d", k);
+        put_watch_row(n, 0x800 + (unsigned)k, BT_MONITOR_DEVICE, cat, g_wall - 1);
+    }
+    put_watch_row(n++, 0x900, BT_MONITOR_DEVICE, "late", g_wall - 1);
+    g_s.ble_device_count = n;
+    static ble_finding_t f[BLE_FINDINGS_MAX];
+    int dropped = -1;
+    ASSERT_EQ(ble_findings_build(&g_s, g_wall, f, BLE_FINDINGS_MAX, &dropped),
+              BLE_FINDINGS_MAX);
+    ASSERT_EQ(dropped, 1);
+    sloth_clock_test_set(NULL, NULL);
+}
+
 /* ── BLE_WATCHLIST ────────────────────────────────────────────────── */
 
 /* Test fixtures, not shipped rows (see the file comment). */
@@ -1445,6 +1518,8 @@ void run_ble_rules_tests(void) {
     RUN_TEST(test_hid_rotation_first_window_is_per_sensor);
     RUN_TEST(test_dropped_counts_every_finding_past_the_cap);
     RUN_TEST(test_watch_drops_count_groups_not_rows_past_the_cap);
+    RUN_TEST(test_watch_drops_split_one_category_by_sensor);
+    RUN_TEST(test_watch_drops_ignore_a_stale_row_of_the_group);
     RUN_TEST(test_shipped_table_is_empty_and_never_fires);
     RUN_TEST(test_categories_route_from_the_in_test_table);
     RUN_TEST(test_a_row_without_a_source_is_refused);
