@@ -1630,10 +1630,12 @@ projection: a least-squares fix's disc; else where every site's
 one-sigma range band overlaps; else, when one site is nearer beyond the
 difference's sigma, a fainter wash over its side; else nothing. One
 `--data` fill per area with the alpha shared out so overlaps read
-darker, under every mark; the other sites as hollow squares; hover or
-tap for the key, form and band; a device dot and its area linked; a
-**fleet areas** button kept as `radar.fleet` only when off and hidden
-with no peer. `web/ui/radar.js`, `web/tests/test_radar.c`
+darker, under every mark; the other sites as hollow squares; hover,
+or tap with nothing picked, for the key, form and band (with something
+picked a tap off the marks clears it, areas or not); a device dot and
+its area linked; a **fleet areas** button kept as `radar.fleet` only
+when off and hidden with no peer in `/api/health`'s `fleet.peers`,
+which is read once; nothing fetched with no peer or the button off. `web/ui/radar.js`, `web/tests/test_radar.c`
 (`test_radar_fleet_js`); `web/README.md` "Radar" has the rules.
 
 ## Triage and the FRRS record (2026-11-01)

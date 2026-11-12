@@ -1203,18 +1203,26 @@ site's half of the plane, out to its band's outer edge; else nothing,
 counted. Every shape is in metres from this sensor and goes through the
 dome's own `place()` and `project()`, so a circle is drawn in 72 steps
 and bends on the log range as the rings do. Each area is one `--data`
-fill through its clip, the alpha shared out (1 over the areas drawn, at
-most 0.08) so overlaps read darker and a hundred areas still leave the
-marks readable; they are drawn after the dome and before every mark.
-The other sites are hollow □ with their name. Hover or tap an area for
-its label (key, `bands of 2 sites` / `fix ±r` / `nearer SITE`, the
-band, `coarse`) and, picked, the side panel: each site's RSSI, range
+fill through its clip, the alpha shared out (0.4 over the areas drawn,
+at most 0.08) so overlaps read darker and however many stack on one
+spot stay under a third of `--data` (1 - e^-0.4), the faint device
+rings still readable over them; they are drawn after the dome and
+before every mark. The nearer-side wash is that site's disc cut by the
+perpendicular bisector, the cut reaching past the disc's far edge.
+The other sites are hollow □ with their name. Hover an area, or tap it
+with nothing picked, for its label (key, `bands of 2 sites` / `may be
+within r` / `nearer SITE`, the band, `coarse`) and, picked, the side
+panel; a tap is not taken by an area while something is picked, so
+tapping off the marks still clears the panel where a hundred areas
+cover the centre. The panel: each site's RSSI, range
 and band, the nearer site by dB, the method, the area's form and the
 baseline, "open in Fleet". A device dot on the north axis and its area
 are linked: hover or pick one and the other is outlined (the dot
 ringed). The **fleet areas** button (`radar-fleet`) hides them, kept as
-`radar.fleet` only when off; it is hidden while no answer names a site
-other than this one, and under Local nothing of the fleet is fetched.
+`radar.fleet` only when off. `/api/health` is read once a page for
+`fleet.peers`: with none the button is hidden and nothing of the fleet
+is fetched, nor with the button off, the tab hidden or under Local
+(three requests per 30 s otherwise).
 At W9FJC and beta-site (10.5 m apart on 2026-11-11) 133 of 141 located
 rows drew: 55 as overlapping bands (outer radius median 40 m), 78 as a
 side (median 12 m), 8 with no side; at that baseline they are where an
@@ -1231,8 +1239,11 @@ skips `/api/adsb`, `/api/aprs` and `/api/radar` and the header says
 Wi-Fi monitor and BLE are the passive radios' — switch to Monitor or
 Hybrid". Every fetch is the page's scoped `getJSON`; `/api/gnss` and
 the two decoders every 5 s, `/api/radar` every 10 s (the devices are
-current), `/api/fleet/locate` every 30 s, the trails every 60 s. **Picking**: a tap (under 4 px of travel) takes the nearest mark
-within 8 px, else the nearest ring by its ellipse distance; the side
+current), `/api/fleet/locate` every 30 s (only with a peer, the fleet
+areas on), the trails every 60 s. **Picking**: a tap (under 4 px of travel) takes the nearest mark
+within 8 px, else the nearest ring by its ellipse distance, else, with
+nothing picked, the fleet area under it; with something picked, a tap
+off every mark and ring clears it; the side
 panel (textContent only) gives the identity, the exact bearing, ground
 range, altitude and elevation angle, the signal, lat/lon for an aircraft
 or a station, last seen, and for a ring the family, the band's metre
