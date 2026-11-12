@@ -782,6 +782,89 @@ static void test_time_jump_reader_lag_onset_judged_live_does_not_fire(void) {
     end();
 }
 
+/* Reads late by a lateness that moves from fix to fix (#182, 2026-11-12):
+ * late[k] ms after epoch k, then caught up through a short queue. Each
+ * read is mono 1000 + late[k] - late[k-1] after the one before it, so
+ * the lateness can fall at most 999 ms a read; the receiver keeps its
+ * 1 Hz. live evaluates after every read, so no
+ * judgement sees the catch-up first. */
+static void varying_lag(const long long *late, int n, int live) {
+    begin();
+    fixopt_t o = nominal_fix();
+    fixes(10, &o);
+    evaluate();
+    long long prev = 0;
+    for (int k = 0; k < n; k++) {
+        ASSERT(late[k] > prev - 1000);  /* a read cannot precede the last */
+        fix_read(&o, (uint64_t)(1000 + late[k] - prev), 1000);
+        prev = late[k];
+        if (live) evaluate();
+    }
+    while (prev > 0) {                  /* drain, at most 999 ms a read */
+        long long next = prev > 999 ? prev - 999 : 0;
+        fix_read(&o, (uint64_t)(1000 + next - prev), 1000);
+        prev = next;
+        if (live) evaluate();
+    }
+    fixes(5, &o);
+    evaluate();
+}
+
+/* A starved reader's lateness is rarely one figure. Here it wanders
+ * 800..2200 ms with jumps of up to 1.3 s between fixes, and separately
+ * jitters 1.4..1.6 s, each read within 200 ms of the last so no single
+ * pair is out of the ordinary: against the anchor every one is a step
+ * of a second or more that the next fix holds to half the threshold
+ * for most of the run. Neither may fire, judged at once or read by
+ * read. Seen red, all four runs, with the late-read guard in
+ * rule_gnss_time_jump() removed; the queued-read skip and the hold do
+ * not catch either. A pseudo-random sweep of 3,000 such runs
+ * (lateness 0..3 s as random walks, plateaus and abrupt changes, each
+ * judged at once or live) was silent on the same tree; it is not kept,
+ * these cases are its shapes. */
+static void test_time_jump_varying_reader_lag_does_not_fire(void) {
+    static const long long wander[] = {
+        1500, 900, 2200, 1300, 1800, 1700, 800, 1900, 2100, 1400
+    };
+    static const long long jitter[] = {
+        1500, 1400, 1600, 1450, 1550, 1400, 1600, 1500, 1420, 1580
+    };
+    int nw = (int)(sizeof(wander) / sizeof(wander[0]));
+    int nj = (int)(sizeof(jitter) / sizeof(jitter[0]));
+    for (int live = 0; live <= 1; live++) {
+        varying_lag(wander, nw, live);
+        ASSERT_EQ(find_type(ALERT_TYPE_GNSS_TIME_JUMP), -1);
+        end();
+        varying_lag(jitter, nj, live);
+        ASSERT_EQ(find_type(ALERT_TYPE_GNSS_TIME_JUMP), -1);
+        end();
+    }
+}
+
+/* The guard costs no real step once the reads are on time again: after
+ * the wandering lag above has cleared, the receiver's clock moving 5 s
+ * at the ordinary cadence still fires, judged live. Seen red with the
+ * late-read branch made unconditional (every fix after the anchor
+ * skipped), which also proves the case above is not silent for want of
+ * judging anything. */
+static void test_time_jump_step_after_varying_lag_fires(void) {
+    static const long long wander[] = {
+        1500, 900, 2200, 1300, 1800, 1700, 800, 1900, 2100, 1400
+    };
+    varying_lag(wander, (int)(sizeof(wander) / sizeof(wander[0])), 1);
+    ASSERT_EQ(find_type(ALERT_TYPE_GNSS_TIME_JUMP), -1);
+    fixopt_t o = nominal_fix();
+    g_rx += 5000;
+    for (int k = 0; k < 3; k++) {
+        fix(&o);
+        evaluate();
+    }
+    int i = find_type(ALERT_TYPE_GNSS_TIME_JUMP);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT(strstr(g_s.alerts[i].detail, "stepped +5000 ms") != NULL);
+    end();
+}
+
 /* A real step during ordinary 1 Hz reads, with the late-read guard in
  * place: the forward and backward steps fire (as in
  * test_time_jump_fires / _backward_step_fires) and the detail carries
@@ -1281,6 +1364,8 @@ void run_gnss_rules_tests(void) {
     RUN_TEST(test_time_jump_host_suspend_does_not_fire);
     RUN_TEST(test_time_jump_sustained_reader_lag_does_not_fire);
     RUN_TEST(test_time_jump_reader_lag_onset_judged_live_does_not_fire);
+    RUN_TEST(test_time_jump_varying_reader_lag_does_not_fire);
+    RUN_TEST(test_time_jump_step_after_varying_lag_fires);
     RUN_TEST(test_time_jump_detail_carries_both_gaps);
     RUN_TEST(test_time_jump_standing_lag_is_rebased);
     RUN_TEST(test_time_jump_receiver_nudge_does_not_blind_the_rule);
