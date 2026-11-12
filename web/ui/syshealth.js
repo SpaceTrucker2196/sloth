@@ -39,6 +39,8 @@
   function clear(n) { while (n && n.firstChild) n.removeChild(n.firstChild); return n; }
   function set(id, text) { var e = $(id); if (e) e.textContent = String(text); }
   function visible() { var v = $("v-health"); return v && !v.hidden; }
+  // Degrees C, as sloth reads them, to the F the page shows.
+  function cToF(c) { return c * 9 / 5 + 32; }
   function fx(v, dp) { return num(v) ? v.toFixed(dp) : null; }
   var ABSENT = "not reported by this host";
 
@@ -255,7 +257,7 @@
          num(y.disk_free_mb) ? "of " + H.fmt(y.disk_total_mb / 1024) + " GB under the " + (y.disk_for || "output") + " path" +
                                (y.disk_band ? ", " + bandWord(y.disk_band) : "") : "", stale);
     tile(box, "uptime", num(y.uptime_s) ? H.dur(y.uptime_s) : null, "the sensor host's", stale);
-    tile(box, "hottest", num(y.temp_max_c) ? fx(y.temp_max_c, 1) + " \u00b0C" : null,
+    tile(box, "hottest", num(y.temp_max_c) ? fx(cToF(y.temp_max_c), 1) + " \u00b0F" : null,
          (y.temp_max_id || "") + (y.temp_band ? ", " + bandWord(y.temp_band) : ""), stale);
     tile(box, "under-voltage", y.undervolt === 1 ? "\u2715 LOW" : y.undervolt === 0 ? "\u25cf ok" : null,
          y.undervolt === 1 ? "the firmware's under-voltage alarm is set" : "the firmware's alarm is clear",
@@ -263,7 +265,7 @@
     (j.sensors || []).forEach(function (s) {
       var name = s.label ? s.label + " (" + s.id + ")" : s.id;
       if (s.class === "temp")
-        tile(box, "temp " + s.id, num(s.c) ? fx(s.c, 1) + " \u00b0C" : null, name, stale);
+        tile(box, "temp " + s.id, num(s.c) ? fx(cToF(s.c), 1) + " \u00b0F" : null, name, stale);
       else if (s.class === "volt")
         tile(box, "volt " + s.id, num(s.v) ? fx(s.v, 3) + " V" : s.alarm === 1 ? "\u2715 LOW" : s.alarm === 0 ? "\u25cf ok" : null,
              name + (s.alarm === 1 ? ", low-voltage alarm set" : s.alarm === 0 ? ", alarm clear" : "") +
@@ -351,12 +353,12 @@
       { g: "host", name: "cpu", metric: "sys.cpu", key: "", unit: "%", eps: 5, fixed: [0, 100] },
       { g: "host", name: "memory used", metric: "sys.mem_used", key: "", unit: "%", eps: 2, fixed: [0, 100] },
       { g: "host", name: "sloth rss", metric: "sys.rss", key: "", unit: "kB", eps: 1024 },
-      { g: "temperature", name: "hottest", metric: "sys.temp", key: "hottest", unit: "\u00b0C", eps: 1, share: "temp" }
+      { g: "temperature", name: "hottest", metric: "sys.temp", key: "hottest", unit: "\u00b0F", conv: cToF, eps: 1, share: "temp" }
     ];
     (j.sensors || []).forEach(function (s) {
       if (!s.key) return;
       if (s.class === "temp")
-        r.push({ g: "temperature", name: s.label || s.id, metric: "sys.temp", key: s.key, unit: "\u00b0C", eps: 1, share: "temp" });
+        r.push({ g: "temperature", name: s.label || s.id, metric: "sys.temp", key: s.key, unit: "\u00b0F", conv: cToF, eps: 1, share: "temp" });
       else if (num(s.v))
         r.push({ g: "voltage", name: s.label || s.id, metric: "sys.volt", key: s.key, unit: "V", eps: 0.05 });
     });
@@ -408,8 +410,11 @@
     // A counter's bucket sum names its bucket: "3 frames" is one thing
     // per minute and another per hour.
     var unit = w.counter ? w.unit + " per " + glyph.dur(s.step) : w.unit;
-    ui.words.textContent = H.fmt(last) + " " + unit + ", " +
-      (b ? "band " + H.fmt(Math.max(0, b[0])) + " to " + H.fmt(b[1]) : "band warming") + ", " +
+    // A temperature is kept and judged in degrees C; only its words are
+    // in F (owner, 2026-11-12). The glyph is the series' shape, unitless.
+    var cv = w.conv || function (v) { return v; };
+    ui.words.textContent = H.fmt(cv(last)) + " " + unit + ", " +
+      (b ? "band " + H.fmt(cv(Math.max(0, b[0]))) + " to " + H.fmt(cv(b[1])) : "band warming") + ", " +
       (t.word === "warming" ? "trend warming (" + t.n + " samples)" : t.word + " over " + (gw.shrunk ? gw.text : WINS[String(to - from)] || glyph.dur(to - from)));
     return pts.length;
   }
