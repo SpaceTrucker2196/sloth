@@ -15,6 +15,7 @@
 @include page.css
 @include frrs.css
 @include notes.css
+@include incident.css
 @include subnotes.css
 @include location.css
 @include gnss.css
@@ -44,6 +45,7 @@
 @include bundle.js
 @include notes.js
 @include subnotes.js
+@include incident.js
 @include app.js
 @include location.js
 @include gnss.js
@@ -695,6 +697,37 @@
         <option value="34560000">400 d</option>
       </select></label>
       <span class="sub" id="al-note"></span>
+    </section>
+    <!-- Incidents, the selection and the bulk verdict (web/ui/incident.js, #198). -->
+    <section class="panel" id="inc-panel" hidden>
+      <div class="label">incidents <span class="sub" id="inc-count"></span>
+        <label class="sub"><input type="checkbox" id="inc-group" checked> group the list by incident</label>
+        <label class="sub"><input type="checkbox" id="inc-closed"> closed ones too</label></div>
+      <div id="inc-rows"></div>
+      <div class="inc-bar tri-form" id="inc-bar">
+        <span class="sub" id="inc-sel-n"></span>
+        <button type="button" id="inc-sel-all">select all shown</button>
+        <button type="button" id="inc-sel-none">clear the selection</button>
+        <span class="inc-bulk">verdict on the selection
+          <button type="button" class="tri-b sev1" id="inc-bulk-false">false</button>
+          <button type="button" class="tri-b sev0" id="inc-bulk-noise">noise</button>
+          <button type="button" class="tri-b sev2" id="inc-bulk-incident">incident</button>
+          <button type="button" class="tri-b tri-known" id="inc-bulk-known">known</button></span>
+        <label>note <input type="text" id="inc-note" maxlength="240" spellcheck="false" autocomplete="off" placeholder="optional, kept with each row"></label>
+      </div>
+      <div class="inc-bar tri-form">
+        <label>new incident <input type="text" id="inc-title" maxlength="96" spellcheck="false" autocomplete="off" placeholder="title, e.g. own test campaign"></label>
+        <label>state <select id="inc-state">
+          <option value="false">false</option>
+          <option value="noise">noise</option>
+          <option value="incident">incident</option>
+          <option value="known" selected>known (known good)</option>
+        </select></label>
+        <button type="button" id="inc-new-sel">from the selection</button>
+        <button type="button" id="inc-new-filter">from the list's type or address</button>
+      </div>
+      <div class="sub" id="inc-msg" role="status"></div>
+      <div class="sub">An incident is one verdict over many alerts: those added by id, and those its filter (a type, an address, when they began) takes, new ones included until it is closed ("auto" on the chip: began after the filter). An alert with its own later verdict keeps it. Grouped, the list below shows only the alerts in no incident. Kept in slothweb's store, never sent to sloth; a close or a removal is a new row.</div>
     </section>
     <section class="panel">
       <div class="label">open first, then closed <span class="sub" id="al-count"></span> <span class="dt-tools" id="al-tools"></span></div>

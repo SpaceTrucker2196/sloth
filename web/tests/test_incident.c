@@ -159,14 +159,14 @@ static int post_as(const char *path, const char *body, int agent, int tick) {
 }
 static int post(const char *path, const char *body) { return post_as(path, body, 0, 1); }
 
-#ifdef WITH_SQLITE
-static int apost(const char *path, const char *body) { return post_as(path, body, 1, 1); }
-
 static int count_of(const char *s, const char *w) {
     int n = 0;
     for (const char *q = strstr(s, w); q; q = strstr(q + 1, w)) n++;
     return n;
 }
+
+#ifdef WITH_SQLITE
+static int apost(const char *path, const char *body) { return post_as(path, body, 1, 1); }
 
 static long long json_int(const char *b, const char *key) {
     char k[64];
@@ -799,7 +799,118 @@ static void test_nothing_from_the_stream_stored(void) {
 
 /* ── the page ──────────────────────────────────────────────────────── */
 
+/* incident.js between its first line and its last, as the page inlines
+ * it; NULL when it is not there. The caller frees it. */
+static char *module(void) {
+    const char *p = (const char *)web_page;
+    const char *a = strstr(p, "var SlothIncident = (function () {");
+    const char *b = a ? strstr(a, "\n})();") : NULL;
+    if (!a || !b) return NULL;
+    size_t n = (size_t)(b - a);
+    char *m = malloc(n + 1);
+    if (!m) return NULL;
+    memcpy(m, a, n);
+    m[n] = '\0';
+    return m;
+}
+
+/* The module: no sink that parses markup, no attribute or link built
+ * from a value, no control made by script (a toggle button selects),
+ * one write path (SlothFrrs's post) to the two routes, and the
+ * functions that draw stored text or decide what is selected pinned
+ * whole; app.js's and frrs.js's hooks, each a guarded call; the
+ * panel's containers in the page; the page under embed.c's PAGE_MAX.
+ * Seen red with `d.innerHTML = i.title;` put in alertLine() (the sink
+ * list and the pinned function both) and with pick()'s ID_RE test
+ * dropped (the pinned function). */
+static void test_page_module(void) {
+    char *m = module();
+    WT_ASSERT(m != NULL);
+    if (!m) return;
+    static const char *const SINK[] = {
+        "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "setAttribute(",
+        "eval(", "new Function", ".href =", ".src =", "createElement(", "http://", "https://",
+        "window.open", "location.assign", "fetch(", "dataset", "el(\"input\"", "el(\"select\"",
+    };
+    for (size_t i = 0; i < sizeof(SINK) / sizeof(SINK[0]); i++) WT_LACKS(m, SINK[i]);
+    WT_EQ(count_of(m, "F.post("), 4);
+    WT_EQ(count_of(m, "F.post(\"/api/frrs/triage/bulk\", b)"), 1);
+    WT_EQ(count_of(m, "F.post(\"/api/frrs/incident\", b)"), 3);
+    WT_HAS(m,
+        "  function pick(t, a) {\n"
+        "    if (!H || !t || !a || typeof a.id !== \"string\" || !ID_RE.test(a.id)) return;\n"
+        "    // A toggle button, not a checkbox: the page makes no form control\n"
+        "    // from script (test_prefs.c's census of every control).\n"
+        "    S.picks = S.picks.filter(function (k) { return k.cb.isConnected; });\n"
+        "    var cb = el(\"button\", \"inc-pick\", \"\");\n"
+        "    cb.type = \"button\";\n"
+        "    S.picks.push({ cb: cb, id: a.id });\n"
+        "    mark(cb, !!S.sel[a.id]);\n"
+        "    cb.ariaLabel = \"select this alert\";\n"
+        "    cb.addEventListener(\"keydown\", function (e) { e.stopPropagation(); });\n"
+        "    cb.addEventListener(\"click\", function (e) {\n"
+        "      e.stopPropagation();\n"
+        "      e.preventDefault();\n"
+        "      if (S.sel[a.id]) delete S.sel[a.id]; else S.sel[a.id] = true;\n"
+        "      mark(cb, !!S.sel[a.id]);\n"
+        "      barCount();\n"
+        "    });\n"
+        "    t.insertBefore(cb, t.firstChild);\n"
+        "  }\n");
+    WT_HAS(m,
+        "  function alertLine(box, st) {\n"
+        "    if (!H || !box || !st || !st.incident || !num(st.incident.id)) return;\n"
+        "    var i = st.incident, d = el(\"div\", \"sub inc-of\");\n"
+        "    d.appendChild(el(\"span\", \"\", \"member of incident #\" + i.id + \" \"));\n"
+        "    d.appendChild(el(\"span\", \"d-bright\", typeof i.title === \"string\" ? i.title : \"\"));\n");
+    WT_HAS(m,
+        "  function filterText(m) {\n"
+        "    var p = [];\n"
+        "    p.push(typeof m.type === \"string\" ? m.type : \"any type\");\n"
+        "    if (m.addr) p.push(m.addr);\n");
+    WT_HAS(m, "    row.appendChild(el(\"span\", \"d-bright inc-title\", inc.title));\n");
+    WT_HAS(m, "  function q(p) { if (H && grouped()) p.push(\"incident=none\"); }\n");
+    free(m);
+    const char *p = (const char *)web_page;
+    /* app.js's hooks and frrs.js's, each guarded. */
+    WT_HAS(p, "    if (window.SlothIncident) SlothIncident.q(p);\n    return p.join(\"&\");");
+    WT_HAS(p, "    if (window.SlothIncident) SlothIncident.pick(t, a);\n    row.appendChild(t);");
+    WT_HAS(p, "      if (window.SlothIncident) SlothIncident.loaded(j);");
+    WT_HAS(p, "    if (window.SlothIncident) SlothIncident.show(VP);");
+    WT_HAS(p, "  if (window.SlothIncident) SlothIncident.init({ el: el, getJSON: getJSON, prefGet: prefGet,");
+    WT_HAS(p, "          if (window.SlothIncident) SlothIncident.alertLine(cur, h.current);");
+    WT_HAS(p, "  var PARAMS = { \"alerts\": [\"state\", \"sev\", \"type\", \"q\", \"triage\", \"incident\"],");
+    /* The chip says the incident wherever it is drawn. */
+    WT_HAS(p, "    if (st && st.incident && num(st.incident.id))\n"
+              "      c.appendChild(el(\"span\", \"d-dim\", \" (inc. #\" + st.incident.id + (st.incident.governs ? \"\" : \", own\") +\n"
+              "                       (st.incident.auto ? \", auto\" : \"\") + \")\"));");
+    /* The containers, once each; the bounds the server holds. */
+    static const char *const IDS[] = {
+        "id=\"inc-panel\"", "id=\"inc-rows\"", "id=\"inc-group\"", "id=\"inc-closed\"",
+        "id=\"inc-sel-n\"", "id=\"inc-sel-all\"", "id=\"inc-sel-none\"", "id=\"inc-bulk-false\"",
+        "id=\"inc-bulk-noise\"", "id=\"inc-bulk-incident\"", "id=\"inc-bulk-known\"",
+        "id=\"inc-new-sel\"", "id=\"inc-new-filter\"", "id=\"inc-msg\"",
+    };
+    for (size_t i = 0; i < sizeof(IDS) / sizeof(IDS[0]); i++) WT_EQ(count_of(p, IDS[i]), 1);
+    char want[96];
+    snprintf(want, sizeof(want), "id=\"inc-title\" maxlength=\"%d\"", WEB_INC_TITLE_MAX);
+    WT_EQ(count_of(p, want), 1);
+    snprintf(want, sizeof(want), "id=\"inc-note\" maxlength=\"%d\"", WEB_FRRS_NOTE_MAX);
+    WT_EQ(count_of(p, want), 1);
+    snprintf(want, sizeof(want), "var BULK_MAX = %d,", WEB_FRRS_BULK_MAX);
+    WT_HAS(p, want);
+    /* Light and dark: no colour of its own, only the theme's tokens. */
+    const char *css = strstr(p, "/* Incidents, the selection and the bulk verdict on the Alerts page");
+    const char *ce = css ? strstr(css, ".inc-msg:empty") : NULL;
+    WT_ASSERT(css && ce);
+    int hex = 0;
+    for (const char *c = css; css && ce && c < ce; c++) hex += *c == '#';
+    WT_EQ(hex, 0);
+    WT_ASSERT(web_page_len < 2 * 1024 * 1024);
+}
+
 void run_incident_tests(void) {
+    WT_RUN(test_page_module);
     WT_RUN(test_without_a_store);
 #ifdef WITH_SQLITE
     WT_RUN(test_bulk_triage);

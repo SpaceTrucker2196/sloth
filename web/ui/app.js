@@ -1370,7 +1370,7 @@
   var NAV_OF = { "alert": "alerts", "records": "overview", "health": "overview" };
   // The parameters each view takes from the address, and nothing else:
   // what a drill-down link (an Overview tile) or a reload hands it.
-  var PARAMS = { "alerts": ["state", "sev", "type", "q", "triage"], "alert": ["id"], "tacdb": ["id"],
+  var PARAMS = { "alerts": ["state", "sev", "type", "q", "triage", "incident"], "alert": ["id"], "tacdb": ["id"],
                  "devices": ["q"], "anomalies": ["state"], "activity": ["focus"],
                  "ble": ["q"] };
   var view = "overview", VP = {};
@@ -4903,6 +4903,7 @@
     p.push("limit=50");
     if (off) p.push("offset=" + off);
     if (window.SlothFrrs) SlothFrrs.q(p);
+    if (window.SlothIncident) SlothIncident.q(p);
     return p.join("&");
   }
 
@@ -4932,6 +4933,7 @@
           q: typeof VP.q === "string" ? (VP.q.trim().split(/\s+/)[0] || "") : "" }
       : null;
     $("al-filter").hidden = true;
+    if (window.SlothIncident) SlothIncident.show(VP);
     alertsLoad(true);
     if (!ALP.timer) ALP.timer = setInterval(function () { if (view === "alerts" && !ALP.offset) alertsLoad(true); }, 10000);
   }
@@ -4959,6 +4961,7 @@
     if (typeof a.type_name === "string" && a.type_name !== a.title)
       t.appendChild(el("span", "d-dim", "  " + a.type_name));
     t.appendChild(el("span", "d-dim", "  " + (a.state === "recorded" ? "sloth.db" : a.state)));
+    if (window.SlothIncident) SlothIncident.pick(t, a);
     row.appendChild(t);
     row.appendChild(el("span", "d-normal", a.technique === null ? "-" : String(a.technique)));
     var host = el("span", "");
@@ -5074,6 +5077,7 @@
       $("al-more").hidden = !j.more || !num(j.next_offset);
       if (fresh) typeOptions(j.types);
       alertsBanner(j);
+      if (window.SlothIncident) SlothIncident.loaded(j);
       set("al-count", ALP.offset + " of " + j.total + (j.total_more ? "+" : "") + " shown, " +
           j.open + " open");
       var sc = j.scan || {};
@@ -6096,6 +6100,12 @@
   if (window.SlothFrrs) SlothFrrs.init({ el: el, getJSON: getJSON, DataTable: DataTable,
     prefGet: prefGet, prefSet: prefSet, stamp: stamp, shortStamp: shortStamp, go: go, show: show,
     openDrawer: openDrawer, alertsReload: function () { alertsLoad(true); } });
+
+  // Incidents, the selection and the bulk verdict (web/ui/incident.js):
+  // the page's helpers, lent once.
+  if (window.SlothIncident) SlothIncident.init({ el: el, getJSON: getJSON, prefGet: prefGet,
+    prefSet: prefSet, shortStamp: shortStamp, go: go, alertRow: alertRow,
+    alertsReload: function () { alertsLoad(true); } });
 
   // Anomaly triage and the links (web/ui/notes.js): the page's helpers, lent once.
   if (window.SlothNotes) SlothNotes.init({ el: el, getJSON: getJSON, prefGet: prefGet, stamp: stamp,

@@ -1,0 +1,17 @@
+/* Incidents, the selection and the bulk verdict on the Alerts page
+ * (web/ui/incident.js, issue 198). Its own file, so the slices changing
+ * page.css in parallel do not meet it. Only the page's tokens and
+ * frrs.css's triage classes: no new colour, so light and dark follow
+ * the theme as every other panel does. */
+.inc-row { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; font-size: 12px; border-top: 1px dotted var(--rule); padding: 3px 0; overflow-wrap: anywhere; min-width: 0; }
+.inc-title { min-width: 0; }
+button.inc-tg { font-size: 11px; padding: 0 6px; letter-spacing: 0; }
+.inc-body { margin: 0 0 6px 6px; padding: 2px 0 2px 12px; border-left: 2px solid var(--rule); min-width: 0; overflow-x: auto; }
+.inc-filter { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; font-size: 12px; overflow-wrap: anywhere; }
+.inc-bar { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin-top: 6px; font-size: 12px; }
+.inc-bulk { display: inline-flex; flex-wrap: wrap; gap: 2px 4px; align-items: center; }
+button.inc-pick { margin: 0 6px 0 0; padding: 0 4px; font-size: 11px; letter-spacing: 0; line-height: 1.2; }
+button.inc-pick[aria-pressed=true] { color: var(--phosphor-hi); border-color: var(--brass); }
+button.inc-rm { margin-left: 8px; }
+.inc-of { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: baseline; }
+.inc-msg:empty { display: none; }
