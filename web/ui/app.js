@@ -188,8 +188,8 @@
   }
 
   // ── the merged views (web_fleetview.h; owner request 2026-11-11) ──
-  // The WiFi Devices list, the AP table and the BLE advertisers carry
-  // the peers' rows (--peer): a row only another sloth host heard is
+  // The WiFi Devices list, the AP table, the BLE advertisers and the
+  // Probes tab's stations and networks carry the peers' rows (--peer): a row only another sloth host heard is
   // drawn in the grey state (--tui-dim, no hash hue) with that host's
   // name small beside its address; a local row another host also heard
   // gets a small "+name". Each view's "This site / All sites" choice is
@@ -197,7 +197,7 @@
   // hidden while no peer is configured. A peer's strings came over the
   // network from another slothweb: textContent only, cut for the cell.
   var FV = { peers: [] };
-  var FV_SEL = { devices: "d-sites", aps: "w-sites", ble: "b-sites" };
+  var FV_SEL = { devices: "d-sites", aps: "w-sites", ble: "b-sites", probes: "pr-sites" };
   function fvAll(v) { return FV.peers.length > 0 && $(FV_SEL[v]).value !== "here"; }
   // The query's tail: fleet=0 for This site, nothing for All sites (the
   // server's default), nothing at all while there is no peer.
@@ -230,10 +230,12 @@
     rows.forEach(function (d) { if (d.remote === true) r++; });
     return { local: rows.length - r, remote: r };
   }
-  // The drawer's section for what the other hosts reported.
+  // The drawer's section for what the other hosts reported: a
+  // device's rows, its rows as an AP, and the networks each host heard
+  // it probe for.
   function fvDrawer(box, f) {
     if (!f) return;
-    var rows = (f.rows || []).concat(f.ap_rows || []);
+    var rows = (f.rows || []).concat(f.ap_rows || [], f.probe_rows || []);
     if (!rows.length) return;
     box.appendChild(el("div", "label", f.remote ? "other sloth hosts (" + f.note + ")"
                                                 : "also heard by other sloth hosts"));
@@ -241,7 +243,8 @@
       var line = el("div", "fv-line");
       line.appendChild(el("span", "fv-host", fvCut(fvName(x))));
       var t = [x.kind === "ap" ? "as an AP" : null,
-               x.ssid ? "ssid " + x.ssid : null, x.name ? "name " + x.name : null,
+               x.kind === "probe" ? "probed for " + x.ssid : x.ssid ? "ssid " + x.ssid : null,
+               x.name ? "name " + x.name : null,
                x.vendor ? "vendor " + x.vendor : null, x.class ? "class " + x.class : null,
                num(x.signal) ? x.signal + " dBm" : num(x.rssi) ? x.rssi + " dBm" : null,
                num(x.channel) ? "ch " + x.channel : null, x.enc ? x.enc : null,
@@ -1330,6 +1333,7 @@
         if (view === "devices") devices();
         else if (view === "wifi") wifiAps();
         else if (view === "ble") bleLoad();
+        else if (view === "probes" && window.SlothProbes) SlothProbes.show();
       }
       set("milestone", h.milestone);
       dbAge(h);
@@ -4044,6 +4048,10 @@
   $("w-sites").addEventListener("change", function () { prefSet("fleet.aps", this.value); wifiAps(); });
   $("d-sites").addEventListener("change", function () { prefSet("fleet.devices", this.value); devices(); });
   $("b-sites").addEventListener("change", function () { prefSet("fleet.ble", this.value); bleLoad(); });
+  $("pr-sites").addEventListener("change", function () {
+    prefSet("fleet.probes", this.value);
+    if (window.SlothProbes) SlothProbes.show();
+  });
 
   // ── Flows (§8.9, M6) ──────────────────────────────────────────────
   // sloth.db's protocol tables, one tab each (/api/flows, paged), and
@@ -6107,7 +6115,8 @@
   if (window.SlothProbes) SlothProbes.init({ el: el, getJSON: getJSON, errText: errText,
     keyColor: keyColor, shortStamp: shortStamp, drawStrip: drawStrip, DataTable: DataTable,
     ssidSpan: ssidSpan, openDrawer: openDrawer, show: show, scope: function () { return SCOPE; },
-    prefGet: prefGet, prefSet: prefSet });
+    prefGet: prefGet, prefSet: prefSet, fvMark: fvMark, fvName: fvName, fvSplit: fvSplit,
+    fvQuery: fvQuery, fvAll: fvAll });
 
   // The BLE Devices waterfall (web/ui/bledev.js): the page's helpers, lent once.
   if (window.SlothBleDev) SlothBleDev.init({ el: el, set: set, getJSON: getJSON, theme: theme,

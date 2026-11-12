@@ -699,6 +699,23 @@ other sloth hosts' rows beside this site's (`web/src/web_fleetview.c`,
 - Hybrid only: a peer's row carries no capture path, so under Monitor or
   Local nothing is merged.
 
+The **Probes** tab merges the same way (`/api/probes/clients`,
+`/api/probes/ssids`). A station another host heard probing that this
+site has no probe record of at all is a grey row with that host's name:
+its address, the networks the peers heard it ask for, and when; frames,
+directed probes, signal, channel, the OS and PHY labels, the presence
+strip and every tie (a devices row, an association, a sequence-number
+sibling) are this site's records and show `-`. Clicking it opens the
+device drawer, which lists each host and the networks each heard it ask
+for. A network only other hosts heard asked for is a grey row whose
+counts (stations asking, randomised, the APs beaconing it, uncommon,
+yours) are `-`; clicking it lists each host that heard it asked for and
+when. A local station or network another host also heard gets the
+`+name` mark. The similarity panel and the groups stay this site's own:
+a peer sends the SSIDs a station asked for but not the whole population
+they are weighed against (`N`, `df`), so mixing them in would invent a
+figure; `/api/probes/shared` and `/api/probes/groups` never merge.
+
 The other hosts' rows are display only. They never reach risk scoring,
 alerts, anomalies, baselines, series, triage, the Overview's tiles, the
 detail audit or `/api/fleet/export`, which reads `sloth.db` and the BLE

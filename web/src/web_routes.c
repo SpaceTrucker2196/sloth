@@ -734,7 +734,7 @@ static int route_m4(const web_req_t *rq, const web_health_t *h, int which,
     }
     /* The peers' rows (web_fleetview.h), after the route has answered. */
     if (rc == 0 && bl && which != M4_LOOKUP && h->fleet_merge) {
-        web_fv_src_t fs = { m->sdb, h->ble };
+        web_fv_src_t fs = { m->sdb, h->ble, m->oui };
         if (which == M4_DEVICES && status == 200)
             web_fv_list(m->fleet, &fs, WEB_FV_DEVICES, rq->query, h->wall_s, body, cap, &bl);
         else if (which == M4_DEVICE)
@@ -821,9 +821,15 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
         web_m4_t mc = *m;
         mc.check_only = none_here != NULL;
         rc = F[which](&mc, rq->query, h->wall_s, body, cap, &bl, &status);
-        if (rc == 0 && which == M5_APS && !none_here && status == 200 && h->fleet_merge) {
-            web_fv_src_t fs = { m->sdb, h->ble };
-            web_fv_list(m->fleet, &fs, WEB_FV_APS, rq->query, h->wall_s, body, cap, &bl);
+        /* The Probes view's clients and SSIDs merge too; shared and
+         * groups are this sensor's similarity and never do. */
+        if (rc == 0 && !none_here && status == 200 && h->fleet_merge &&
+            (which == M5_APS || which == PR_CLIENTS || which == PR_SSIDS)) {
+            web_fv_src_t fs = { m->sdb, h->ble, m->oui };
+            web_fv_list(m->fleet, &fs,
+                        which == M5_APS ? WEB_FV_APS
+                        : which == PR_CLIENTS ? WEB_FV_PROBE_CLIENTS : WEB_FV_PROBE_SSIDS,
+                        rq->query, h->wall_s, body, cap, &bl);
         }
         if (rc == 0 && none_here && status == 200) {
             web_jw_t w;
@@ -1079,7 +1085,7 @@ static int route_ble(const web_req_t *rq, const web_health_t *h, int which,
                                       cap, &bl, &status);
         if (rc == 0 && which != BLE_ALERTS && !none_here && h->fleet_merge) {
             web_fleet_t *fl = h->m4 ? h->m4->fleet : NULL;
-            web_fv_src_t fs = { h->m4 ? h->m4->sdb : NULL, h->ble };
+            web_fv_src_t fs = { h->m4 ? h->m4->sdb : NULL, h->ble, h->m4 ? h->m4->oui : NULL };
             if (which == BLE_DEVICES && status == 200)
                 web_fv_list(fl, &fs, WEB_FV_BLE, rq->query, h->wall_s, body, cap, &bl);
             else if (which == BLE_DEVICE)
@@ -1696,7 +1702,7 @@ int web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
     return route_paths(rq, h, sse_room, out, outsz, r);
 }
 
-enum { MG_DEVICES, MG_DEVICE, MG_APS, MG_BLE, MG_BLEDEV };
+enum { MG_DEVICES, MG_DEVICE, MG_APS, MG_BLE, MG_BLEDEV, MG_PRCLIENTS, MG_PRSSIDS };
 
 /* The merged views (web_fleetview.h): fleet= taken out of the query as
  * scope= is, the route answered as before on the rest, and the peers'
@@ -1734,6 +1740,8 @@ static int route_merged(const web_req_t *rq, const web_health_t *h, int which,
     case MG_DEVICE:  rc = route_m4(use, &hh, M4_DEVICE, arg, out, outsz, r); break;
     case MG_APS:     rc = route_m5(use, &hh, M5_APS, out, outsz, r); break;
     case MG_BLE:     rc = route_ble(use, &hh, BLE_DEVICES, NULL, out, outsz, r); break;
+    case MG_PRCLIENTS: rc = route_m5(use, &hh, PR_CLIENTS, out, outsz, r); break;
+    case MG_PRSSIDS: rc = route_m5(use, &hh, PR_SSIDS, out, outsz, r); break;
     default:         rc = route_ble(use, &hh, BLE_DEVICE, arg, out, outsz, r); break;
     }
     free(q);
@@ -1801,6 +1809,10 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_merged(rq, h, MG_DEVICE, rq->path + 12, out, outsz, r);
         if (!strcmp(rq->path, "/api/wifi/aps"))
             return route_merged(rq, h, MG_APS, NULL, out, outsz, r);
+        if (!strcmp(rq->path, "/api/probes/clients"))
+            return route_merged(rq, h, MG_PRCLIENTS, NULL, out, outsz, r);
+        if (!strcmp(rq->path, "/api/probes/ssids"))
+            return route_merged(rq, h, MG_PRSSIDS, NULL, out, outsz, r);
         static const struct { const char *path; int which; } M5[] = {
             { "/api/wifi/channels", M5_CHANNELS },
             { "/api/wifi/deauth", M5_DEAUTH },
@@ -1827,8 +1839,6 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             /* One SSID's detail (web_ssidview.h). */
             { "/api/wifi/ssid", M5_SSID },
             /* The Probes view (web_probes.h). */
-            { "/api/probes/clients", PR_CLIENTS },
-            { "/api/probes/ssids", PR_SSIDS },
             { "/api/probes/shared", PR_SHARED },
             { "/api/probes/groups", PR_GROUPS },
         };

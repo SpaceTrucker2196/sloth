@@ -6,7 +6,8 @@
 //   SlothProbes.init(h)   once, main()'s helpers lent: el, getJSON
 //                         (scoped), errText, keyColor, shortStamp,
 //                         drawStrip, DataTable, ssidSpan, openDrawer,
-//                         show, scope, prefGet, prefSet
+//                         show, scope, prefGet, prefSet, and the merged
+//                         views' fvMark, fvQuery, fvAll, fvSplit, fvName
 //   SlothProbes.show()    when the view shows: loads its four panels
 // Four panels, top to bottom: the stations heard probing, the stations
 // probing for the same networks as the one picked, the networks asked
@@ -22,10 +23,21 @@
 // The similarity is the server's (its formula is in the caption). It
 // says two stations probe for the same networks, never that they have
 // one owner. Every DOM string is set with textContent.
+// The other sloth hosts (--peer; web_fleetview.h, owner request
+// 2026-11-11): with "All sites" the stations and the networks lists
+// carry what the peers heard, a station or a network only another host
+// heard in the grey state with that host's name, a local one another
+// host also heard with "+name". A grey station opens its device drawer
+// (the hosts and the networks each heard it ask for); a grey network
+// lists its hosts under its row. Neither feeds the similarity, the
+// groups or any count here: those are this sensor's alone. A peer's
+// strings came over the network: textContent only.
 (function () {
   "use strict";
   var H = null;
-  var P = { gen: 0, sgen: 0, rows: [], ss: [], from: null, sel: "", total: 0, more: false, next: 0 };
+  var P = { gen: 0, sgen: 0, rows: [], ss: [], from: null, sel: "", total: 0, more: false, next: 0,
+            ssOpen: null, ssJ: null };
+  var SS_FV_MAX = 500;
   var PAGE = 50, ROWS_MAX = 500, CELLS = 144, CELL_S = 600;
   var SORTS = { "last": "last heard first", "first": "first heard first", "ssids": "most networks first",
                 "frames": "most frames first", "signal": "nearest first", "mac": "by address" };
@@ -139,9 +151,43 @@
       ] });
   }
 
+  // A station only another sloth host heard: grey, its host named, its
+  // networks as that host heard them, the columns only sloth.db has
+  // "-"; a click opens its device drawer, which names the hosts.
+  function clientRemote(d) {
+    var row = H.el("div", "prrow dt-row go remote");
+    row.role = "row";
+    row.tabIndex = 0;
+    var mc = H.el("span", "");
+    var sw = H.el("span", "sw");
+    sw.style.background = "var(--tui-dim)";
+    mc.appendChild(sw);
+    mc.appendChild(H.el("span", "", (d.random ? "~" : "") + d.mac));
+    mc.appendChild(H.fvMark(d));
+    row.appendChild(mc);
+    row.appendChild(H.el("span", "", who(d)));
+    var ss = H.el("span", "prss");
+    (d.ssids || []).forEach(function (s, i) {
+      if (i) ss.appendChild(document.createTextNode(", "));
+      ss.appendChild(H.el("span", "", String(s.ssid)));
+    });
+    if (d.ssid_count > (d.ssids || []).length) ss.appendChild(H.el("span", "", " +" + (d.ssid_count - d.ssids.length) + " more"));
+    row.appendChild(ss);
+    row.appendChild(H.el("span", "n", num(d.ssid_count) ? String(d.ssid_count) : "-"));
+    ["n", "n", "n"].forEach(function (c) { row.appendChild(H.el("span", c, "-")); });
+    var cv = document.createElement("canvas");
+    row.appendChild(cv);
+    row.appendChild(H.el("span", "prtie", "-"));
+    row.appendChild(H.el("span", "", H.shortStamp(d.last_seen)));
+    row.addEventListener("click", function () { H.openDrawer(String(d.mac)); });
+    H.drawStrip(cv, null, CELLS, -1);
+    return row;
+  }
+
   function clientsDraw() {
     var box = clear("pr-cl");
     DTC.sort(P.rows).forEach(function (d) {
+      if (d.remote === true) { box.appendChild(clientRemote(d)); return; }
       var row = H.el("div", "prrow dt-row go" + (d.mac === P.sel ? " hl" : ""));
       row.role = "row";
       row.tabIndex = 0;
@@ -155,6 +201,8 @@
       sw.style.background = H.keyColor(String(d.mac));
       mc.appendChild(sw);
       mc.appendChild(H.el("span", d.random ? "rnd d-dim" : "d-dim", (d.random ? "~" : "") + d.mac));
+      var fm = H.fvMark(d);
+      if (fm) mc.appendChild(fm);
       row.appendChild(mc);
       row.appendChild(H.el("span", d.random || d.vendor === null ? "d-dim" : "d-bright", who(d)));
       var ss = H.el("span", "prss");
@@ -177,8 +225,15 @@
     });
   }
 
+  // The remote rows' part of a caption: how many, in grey, and whether
+  // the cap cut them; "" with none.
+  function fvWords(fs, fl) {
+    return fs.remote ? fs.remote + " heard only by other sloth hosts, in grey" +
+                       (fl && fl.remote_more ? " (the first " + fs.remote + ")" : "") : "";
+  }
+
   function clientsCaption(j, d, sort) {
-    var n = P.rows.length;
+    var fs = H.fvSplit(P.rows), n = fs.local, fw = fvWords(fs, j && j.fleet);
     $("pr-cl-cap").textContent = glyph.caption({
       source: "sloth.db probe_clients, pnl_clients, pnl_ssids", window: winWord(d),
       scale: "frames: every probe request sloth counted for the station; directed: those naming a " +
@@ -186,7 +241,8 @@
       n: n,
       state: !n ? "no station heard probing in the window"
                 : n < P.total ? n + " of " + P.total + " stations, " + SORTS[sort]
-                : (j && j.seq_read === false ? "the newest correlations only" : "") });
+                : (j && j.seq_read === false ? "the newest correlations only" : "") }) +
+      (fw ? "; " + fw : "");
     $("pr-cl-more").hidden = !P.more || n >= ROWS_MAX;
   }
 
@@ -194,7 +250,7 @@
     var d = days(), sort = sortOf("pr-cl-sort", SORTS, "last");
     var off = append ? P.next : 0;
     H.getJSON("/api/probes/clients?days=" + d + "&sort=" + encodeURIComponent(sort) + "&limit=" + PAGE +
-              "&offset=" + off).then(function (j) {
+              "&offset=" + off + H.fvQuery("probes")).then(function (j) {
       if (gen !== P.gen || j.out_of_scope) return;
       P.rows = append ? P.rows.concat(j.rows || []) : (j.rows || []);
       P.from = num(j.presence_from) ? j.presence_from : null;
@@ -212,13 +268,42 @@
     });
   }
 
+  // A network only another sloth host heard asked for: grey, its host
+  // named, the counts only sloth.db has "-"; a click lists, under it,
+  // each host that heard it and when.
+  function ssidRemote(box, s) {
+    var key = String(s.ssid), open = P.ssOpen === key;
+    var row = H.el("div", "prsrow dt-row go remote");
+    row.tabIndex = 0;
+    var c = H.el("span", "", key);
+    c.appendChild(H.fvMark(s));
+    row.appendChild(c);
+    ["n", "n", ""].forEach(function (k) { row.appendChild(H.el("span", k, "-")); });
+    row.appendChild(H.el("span", "", H.shortStamp(s.first_seen)));
+    row.appendChild(H.el("span", "", H.shortStamp(s.last_seen)));
+    row.title = "asked for at " + (s.sites || []).map(H.fvName).join(", ") + ": click for each host";
+    row.addEventListener("click", function () { P.ssOpen = open ? null : key; ssidsDraw(); });
+    box.appendChild(row);
+    if (!open) return;
+    (s.sites || []).forEach(function (x) {
+      var line = H.el("div", "fv-line");
+      line.appendChild(H.el("span", "fv-host", H.fvName(x)));
+      line.appendChild(H.el("span", "d-dim", "  heard it asked for, first " + H.shortStamp(x.first_seen) +
+                            ", last " + H.shortStamp(x.last_seen)));
+      box.appendChild(line);
+    });
+  }
+
   function ssidsDraw() {
     var box = clear("pr-ss");
     DTS.sort(P.ss).forEach(function (s) {
+      if (s.remote === true) { ssidRemote(box, s); return; }
       var row = H.el("div", "prsrow dt-row");
       var c = H.el("span", "");
       c.appendChild(H.ssidSpan(String(s.ssid), s.ssid_k, s.ssid_np));
       if (s.designated === true) c.appendChild(H.el("span", "d-bright", " yours"));
+      var fm = H.fvMark(s);
+      if (fm) c.appendChild(fm);
       row.appendChild(c);
       row.appendChild(H.el("span", "n d-normal", String(s.clients)));
       row.appendChild(H.el("span", "n d-dim", String(s.random)));
@@ -246,19 +331,34 @@
 
   function ssidsLoad(gen) {
     var d = days(), sort = sortOf("pr-ss-sort", SS_SORTS, "clients");
-    H.getJSON("/api/probes/ssids?days=" + d + "&sort=" + encodeURIComponent(sort) + "&limit=100")
+    var path = "/api/probes/ssids?days=" + d + "&sort=" + encodeURIComponent(sort) + "&limit=100" +
+               H.fvQuery("probes");
+    // All sites: the other hosts' networks ride the page that ends this
+    // site's list, so the pages are read on to it (at most SS_FV_MAX of
+    // this site's); This site is the one page it always was.
+    var all = H.fvAll("probes"), acc = [];
+    function ssPage(off) {
+      return H.getJSON(path + (off ? "&offset=" + off : "")).then(function (j) {
+        acc = acc.concat(j.rows || []);
+        if (all && j.more && num(j.next_offset) && acc.length < SS_FV_MAX) return ssPage(j.next_offset);
+        j.rows = acc;
+        return j;
+      });
+    }
+    ssPage(0)
       .then(function (j) {
         if (gen !== P.gen || j.out_of_scope) return;
         P.ss = j.rows || [];
         ssidsDraw();
-        var n = P.ss.length;
+        var fs = H.fvSplit(P.ss), n = fs.local, fw = fvWords(fs, j.fleet);
         $("pr-ss-cap").textContent = glyph.caption({
           source: "sloth.db pnl_ssids by name, beacon_aps for the access points", window: winWord(d),
           scale: "stations: distinct MACs asking for it, of " + j.clients + " that named a network; " +
                  designatedCaption(j),
           n: n,
           state: !n ? "no network asked for by name in the window"
-                    : n < j.total ? n + " of " + j.total + " networks, " + SS_SORTS[sort] : "" });
+                    : n < j.total ? n + " of " + j.total + " networks, " + SS_SORTS[sort] : "" }) +
+          (fw ? "; " + fw : "");
       }).catch(function (e) {
         if (gen !== P.gen) return;
         P.ss = [];

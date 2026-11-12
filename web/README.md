@@ -529,7 +529,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/wifi/aps?sort=&dir=&limit=&offset=&fleet=` | `200` JSON, a page of sloth.db's beacon_aps, with the peers' rows unless `fleet=0` ([Fleet](#fleet)); `400`; `503` with no `--sloth-db` or sloth.db unreadable |
    | `GET /api/wifi/local?limit=` | `200` JSON, the managed Wi-Fi card's own scan (sloth.db `wifi_aps`, newest first, at most 100) and link (`wifi_stas`, at most 32); out of scope under Monitor; `400`; `503` as above |
    | `GET /api/wifi/ssid?ssid=` | `200` JSON, one SSID's detail ([An SSID's detail](#an-ssids-detail)): its access points now and once, the stations associated to it and asking for it, its 24 h presence, its KARMA and twin findings and the alerts naming it; `ssid` is the base64url of its octets, or `-` for the hidden (empty) SSID; out of scope under Local; `400` `missing_ssid`, `bad_ssid`; `503` as above |
-   | `GET /api/probes/clients?days=&sort=&limit=&offset=`, `/api/probes/ssids?days=&sort=&limit=&offset=` | `200` JSON, the Probes tab ([Probes](#probes)): the stations heard probing with the networks each asked for by name, and the networks asked for with how many stations ask; `days` 0 (all sloth.db retains) or 1..400, default 30; `limit` 1..100; each with `total` beside `count`; out of scope under Local; `400` `bad_days`, `bad_sort`, `bad_limit`, `bad_offset`; `503` as above |
+   | `GET /api/probes/clients?days=&sort=&limit=&offset=&fleet=`, `/api/probes/ssids?days=&sort=&limit=&offset=&fleet=` | `200` JSON, the Probes tab ([Probes](#probes)): the stations heard probing with the networks each asked for by name, and the networks asked for with how many stations ask; `days` 0 (all sloth.db retains) or 1..400, default 30; `limit` 1..100; each with `total` beside `count`; with the peers' rows unless `fleet=0` ([Fleet](#fleet)); out of scope under Local; `400` `bad_days`, `bad_sort`, `bad_limit`, `bad_offset`; `503` as above |
    | `GET /api/probes/shared?mac=&days=&min=`, `/api/probes/groups?days=&min=` | `200` JSON, the stations probing for the same networks as `mac`, ranked by the similarity, and the groups of stations linked by shared uncommon networks; `min` 1..8, default 2; out of scope under Local; `400` `missing_mac`, `bad_mac`, `bad_min`, `bad_days`; `503` as above |
    | `GET /api/history/overview`, `/api/history/devices`, `/api/history/alerts`, `/api/history/flows` (`?from=&to=` and their own) | `200` JSON, the History view's reads of sloth.db; `400`; `503` as above |
    | `GET /api/sessions`, `/api/sessions/new?id=` | `200` JSON, the survey sessions and one's "new since the previous session"; `404` for a session sloth.db does not have |
@@ -5457,9 +5457,10 @@ the mark the distance now) and the classified events. The other
 inferences across sites are F3 and F4.
 
 **The merged views** (owner request 2026-11-11;
-`web/src/web_fleetview.h`). `/api/devices`, `/api/wifi/aps` and
-`/api/ble` carry the peers' rows, and `/api/device/{mac}` and
-`/api/ble/{addr}` answer for an address only a peer heard. Each takes
+`web/src/web_fleetview.h`). `/api/devices`, `/api/wifi/aps`,
+`/api/ble`, `/api/probes/clients` and `/api/probes/ssids` carry the
+peers' rows, and `/api/device/{mac}` and `/api/ble/{addr}` answer for an
+address only a peer heard. Each takes
 `fleet=0|1`, taken out of the query before the route's own parser as
 `scope=` is: `fleet=0` is the route's own answer byte for byte; `fleet=1`
 or none merges when a `--peer` is configured and the request is Hybrid
@@ -5488,6 +5489,26 @@ they were.
   when every term is one they can answer (free text, `vendor:`, `mac:`,
   `ssid:`, `random:`, `seen:`, `first:`); any other term leaves them out.
   `/api/ble`'s `q` is the address prefix or the name.
+- The Probes tab's two lists read the peers' `probe` rows (a client's
+  MAC and the SSID it asked for by name; one naming none is passed
+  over) last seen in the route's `days` window, and sort the remote rows
+  by the route's `sort` (`frames`, `signal` and `clients` read as empty,
+  so by last seen). A remote **station** (`/api/probes/clients`) is one
+  with no `probe_clients` or `pnl_clients` row here at any time: `mac`,
+  `random`, `vendor` (this site's OUI table, as a local row's),
+  `first_seen` and `last_seen` (the earliest and latest over the peers'
+  rows), `ssid_count` and `ssids` (the distinct SSIDs the peers heard it
+  ask for, the newest 16, each with its times) and `ssids_more`;
+  `frames`, `directed`, `signal`, `channel`, `os`, `phy`, `device` and
+  `assoc` are `null`, `siblings`, `siblings_total` and `presence`
+  absent. A remote **network** (`/api/probes/ssids`) is an SSID no
+  `pnl_ssids` row here names at any time: `ssid` (and its display
+  members) and the times; `clients`, `random`, `aps`, `ap_signal`,
+  `uncommon` and `designated` are `null`. A row's `sites` has one entry
+  a peer however many of its rows match (the earliest `first_seen`, the
+  latest `last_seen`). `/api/probes/shared` and `/api/probes/groups`
+  are never merged and take no `fleet=`: the similarity, `N`, `df` and
+  the groups are this site's `pnl_ssids` alone.
 - `fleet`, the answer's last member: `peers` (`site`, `label`), `remote`
   (the rows added), `remote_cap`, `remote_more` (more were cut by the cap
   or the room), `partial` (the 4,000 newest peer rows were read, or the
@@ -5499,9 +5520,12 @@ they were.
   times, `ssid`, `vendor`, `signal`, `is_ap` and `bssid` or `channel`
   and `enc`), with `remote` true when `sloth.db` has no record of it and
   `note` naming each host that saw it, `"seen at beta-site, gamma"` (its
-  label, else its `--peer` name). `/api/ble/{addr}` the same; an address
-  only a peer reported is a `200` with no local row in place of the
-  `404`.
+  label, else its `--peer` name). Its `fleet` also carries
+  `probe_rows`, each peer's probe rows of the MAC (`site`, `label`,
+  `kind` `"probe"`, the times and the `ssid` asked for; at most 64,
+  newest first), so a station only a peer heard probing opens a drawer
+  too. `/api/ble/{addr}` the same; an address only a peer reported is a
+  `200` with no local row in place of the `404`.
 
 The remote rows are display only: no risk, alert, anomaly, baseline,
 series, triage, tile count or detail audit reads them, and
@@ -5511,7 +5535,12 @@ series, triage, tile count or detail audit reads them, and
 (`--tui-dim`, no hash hue) with the host's name beside the address, a
 local row another host heard with a small `+name`; each view has a
 "This site / All sites" choice kept in the browser (`fleet.devices`,
-`fleet.aps`, `fleet.ble`), All sites by default and hidden with no peer.
+`fleet.aps`, `fleet.ble`, `fleet.probes`), All sites by default and
+hidden with no peer. In the Probes tab a grey station opens its device
+drawer and a grey network lists, under its row, each host that heard it
+asked for and when; with All sites the networks list reads on past its
+first page, as the AP table does, so the remote rows that ride the last
+page arrive.
 
 ## Capture scope
 

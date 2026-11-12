@@ -672,14 +672,16 @@ static void test_page_probes(void) {
      * page's one table implementation. */
     WT_HAS(p, "H.getJSON(\"/api/probes/clients?days=\" + d + \"&sort=\" + encodeURIComponent(sort) + "
               "\"&limit=\" + PAGE +");
-    WT_HAS(p, "H.getJSON(\"/api/probes/ssids?days=\" + d + \"&sort=\" + encodeURIComponent(sort) + "
-              "\"&limit=100\")");
+    WT_HAS(p, "var path = \"/api/probes/ssids?days=\" + d + \"&sort=\" + encodeURIComponent(sort) + "
+              "\"&limit=100\" +\n               H.fvQuery(\"probes\");");
+    WT_HAS(p, "      return H.getJSON(path + (off ? \"&offset=\" + off : \"\")).then(function (j) {");
     WT_HAS(p, "H.getJSON(\"/api/probes/groups?days=\" + d + \"&min=\" + minShared()).then(");
     WT_HAS(p, "DTC = H.DataTable({ id: \"prclients\", label: \"stations heard probing\",");
     WT_HAS(p, "DTS = H.DataTable({ id: \"prssids\", label: \"networks asked for\",");
     /* N of M when a page is not the whole. */
     WT_HAS(p, ": n < P.total ? n + \" of \" + P.total + \" stations, \" + SORTS[sort]");
-    WT_HAS(p, ": n < j.total ? n + \" of \" + j.total + \" networks, \" + SS_SORTS[sort] : \"\" });");
+    WT_HAS(p, ": n < j.total ? n + \" of \" + j.total + \" networks, \" + SS_SORTS[sort] : \"\" }) +\n"
+              "          (fw ? \"; \" + fw : \"\");");
     WT_HAS(p, "state: (n < j.total ? n + \" of \" + j.total + \" stations, the most similar\" : \"\") +");
     WT_HAS(p, "(j.capped ? \"; capped: \" + j.ssids_read + \" of \" + j.ssids_uncommon + "
               "\" uncommon networks read\" : \"\") });");

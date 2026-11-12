@@ -59,8 +59,9 @@
  * box runs what it is given.
  *
  * The merged views (web_fleetview.h): /api/devices, /api/device/{mac},
- * /api/wifi/aps, /api/ble and /api/ble/{addr} take fleet=0|1 the same
- * way, taken out before the route's parser. fleet=0 is the route's own
+ * /api/wifi/aps, /api/ble, /api/ble/{addr}, /api/probes/clients and
+ * /api/probes/ssids take fleet=0|1 the same way (/api/probes/shared and
+ * /api/probes/groups never merge: the similarity is this sensor's), taken out before the route's parser. fleet=0 is the route's own
  * answer byte for byte; otherwise, with a --peer configured and the
  * request Hybrid, the peers' rows are merged into it. Anything else is
  * a 400 "bad_fleet".

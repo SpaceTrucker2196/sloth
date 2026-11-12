@@ -10,6 +10,8 @@
  *   /api/ble          kind ble, keyed by the address
  *   /api/device/{mac} kind wifi, then ap
  *   /api/ble/{addr}   kind ble
+ *   /api/probes/clients  kind probe, keyed by the probing client's MAC
+ *   /api/probes/ssids    kind probe, keyed by the SSID asked for
  *
  * A list answer's local rows are the route's own, byte for byte, and
  * one that a peer also reported gains "sites": [{site, first_seen,
@@ -29,6 +31,21 @@
  * out and says so. The answer's top-level "fleet" member says what was
  * done: the peers, the remote rows and whether more were cut
  * ("remote_more"), the cap, and why none were added ("remote_off").
+ *
+ * The Probes view's two lists take a probe row (a client's MAC, in its
+ * extra, and the SSID it asked for, its label) in the route's window
+ * (days=, the peer's own first and last seen). A client a peer heard
+ * probing that this sensor has no probe_clients or pnl_clients row of
+ * is a remote client row: its MAC, the SSIDs the peers heard it ask for
+ * (the newest WEB_PROBE_ROW_SSIDS and their count) and the times; the
+ * members only sloth.db can give (frames, directed, signal, channel,
+ * os, phy, device, assoc) are null, and siblings and presence absent.
+ * An SSID a peer heard asked for that no pnl_ssids row here names is a
+ * remote SSID row: the name and the times; clients, random, aps,
+ * ap_signal, uncommon and designated are null. A row's "sites" is per
+ * peer: the earliest first_seen and the latest last_seen of its rows.
+ * /api/probes/shared and /api/probes/groups are never merged: the
+ * similarity is this sensor's, over sloth.db's rows alone.
  *
  * Remote rows are display only. They are added after the route has
  * answered and feed nothing: no risk, alert, anomaly, baseline, series,
@@ -51,6 +68,7 @@
 
 #include <stddef.h>
 
+#include "web_oui.h"
 #include "web_scope.h"
 
 struct web_fleet;
@@ -61,11 +79,13 @@ struct web_ble;
  * first (more are left unread, "partial"). */
 #define WEB_FV_REMOTE_MAX 100
 #define WEB_FV_SCAN       4000
+#define WEB_FV_DRAWER_PROBES 64
 
 /* fleet= in a query: absent, fleet=1, fleet=0. */
 enum { WEB_FV_DEFAULT = 0, WEB_FV_ON, WEB_FV_OFF };
 /* The merged lists. */
-enum { WEB_FV_DEVICES = 0, WEB_FV_APS, WEB_FV_BLE };
+enum { WEB_FV_DEVICES = 0, WEB_FV_APS, WEB_FV_BLE, WEB_FV_PROBE_CLIENTS,
+       WEB_FV_PROBE_SSIDS };
 
 /* query with its fleet=... pair taken out into rest (the other pairs
  * byte for byte, as web_scope_take() leaves them), *mode set. 0, or -1
@@ -81,6 +101,9 @@ int  web_fv_on(const struct web_fleet *f, int mode, const web_scope_ctx_t *sc);
 typedef struct {
     struct web_slothdb *sdb;       /* which keys this sensor holds */
     struct web_ble     *ble;
+    const web_oui_tab_t *oui;      /* a remote probe client's vendor, as
+                                      the route names a local one's; NULL
+                                      none */
 } web_fv_src_t;
 
 /* A list route's 200 answer (body, *len bytes of cap) with the peers'
@@ -97,7 +120,10 @@ void web_fv_list(struct web_fleet *f, const web_fv_src_t *src, int view,
  * this sensor has no record of it (device: "record" null; BLE: the
  * route's 404), "remote": true and the note "seen at NAME[, NAME...]",
  * each the host's label from peer_sites, else its --peer name; the BLE
- * 404 becomes a 200 with no local row. */
+ * 404 becomes a 200 with no local row. The device drawer's "fleet" also
+ * carries "probe_rows": each peer's probe rows of the MAC (the SSID it
+ * asked for, first and last seen), at most WEB_FV_DRAWER_PROBES, newest
+ * first, so a client only a peer heard probing has a drawer too. */
 void web_fv_detail(struct web_fleet *f, int ble, const char *path_key,
                    long long now_s, char *body, size_t cap, size_t *len,
                    int *status);

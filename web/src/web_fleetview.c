@@ -13,6 +13,7 @@
 #include "web_json.h"
 #include "web_jsonl.h"
 #include "web_metrics.h"
+#include "web_probes.h"
 #include "web_query.h"
 #include "web_series.h"
 #include "web_slothdb.h"
@@ -105,7 +106,11 @@ typedef struct {
     char label[WEB_FLEET_STR_MAX + 1];
 } fv_site_t;
 
-static const char *KIND[] = { "wifi", "ap", "ble" };
+static const char *KIND[] = { "wifi", "ap", "ble", "probe", "probe" };
+
+static int is_probe(int view) {
+    return view == WEB_FV_PROBE_CLIENTS || view == WEB_FV_PROBE_SSIDS;
+}
 
 /* A canonical MAC, as the importer keys every row of these kinds; a row
  * that is not one is passed over. */
@@ -172,17 +177,25 @@ static void extra_of(web_jrec_t *r, const char *extra, int view, fv_row_t *o) {
             o->channel = (int)f->i;
         const char *e = web_jl_str(r, "enc");
         if (e) web_utf8_copy(o->enc, sizeof(o->enc) - 1, e);
+    } else if (is_probe(view)) {
+        /* The probing client's MAC: the row's key is "mac|ssid". */
+        const char *m = web_jl_str(r, "mac");
+        if (m && mac_ok(m)) snprintf(o->bssid, sizeof(o->bssid), "%s", m);
     } else {
         const char *t = web_jl_str(r, "addr_type");
         if (t && strlen(t) == 1 && isalpha((unsigned char)t[0])) o->atype = t[0];
     }
 }
 
-/* The configured peers' rows of the view's kind (key NULL: every key,
- * newest first, at most max; else the one key's). Their number; -1 when
- * memory was short. *partial when more were left unread. */
+/* The configured peers' rows of the view's kind last seen at or after
+ * since (key NULL: every key, newest first, at most max; else the one
+ * key's, a probe row's by its client's MAC). Their number; -1 when
+ * memory was short. *partial when more were left unread. A probe row's
+ * key is read back as its client's MAC, its label the SSID, and one
+ * naming no SSID (a wildcard) is passed over, as the route refuses it. */
 static int read_rows(web_fleet_t *f, const fv_site_t *st, int nst, int view,
-                     const char *key, fv_row_t *rows, int max, int *partial) {
+                     const char *key, long long since, fv_row_t *rows, int max,
+                     int *partial) {
     *partial = 0;
     web_store_t *s = f->store;
     if (!s || !s->rd || max <= 0) return 0;
@@ -191,15 +204,30 @@ static int read_rows(web_fleet_t *f, const fv_site_t *st, int nst, int view,
     int n = 0;
     pthread_mutex_lock(&s->rmu);
     sqlite3_stmt *q = NULL;
-    const char *sql = key
+    int pr = is_probe(view);
+    const char *sql = key && pr
         ? "SELECT key,peer,label,vendor,rssi,first_seen,last_seen,extra FROM peer_sightings"
-          " WHERE kind=?1 AND key=?2 ORDER BY last_seen DESC LIMIT ?3"
+          " WHERE kind=?1 AND key>=?2 AND key<?5 AND last_seen>=?4"
+          " ORDER BY last_seen DESC LIMIT ?3"
+        : key
+        ? "SELECT key,peer,label,vendor,rssi,first_seen,last_seen,extra FROM peer_sightings"
+          " WHERE kind=?1 AND key=?2 AND last_seen>=?4 ORDER BY last_seen DESC LIMIT ?3"
         : "SELECT key,peer,label,vendor,rssi,first_seen,last_seen,extra FROM peer_sightings"
-          " WHERE kind=?1 ORDER BY last_seen DESC LIMIT ?3";
+          " WHERE kind=?1 AND last_seen>=?4 ORDER BY last_seen DESC LIMIT ?3";
     if (sqlite3_prepare_v2(s->rd, sql, -1, &q, NULL) == SQLITE_OK) {
         sqlite3_bind_text(q, 1, KIND[view], -1, SQLITE_STATIC);
-        if (key) sqlite3_bind_text(q, 2, key, -1, SQLITE_TRANSIENT);
+        if (key && pr) {
+            /* "mac|" up to, not including, "mac}": the MAC's every SSID. */
+            char lo[WEB_KEY_MAX + 2], hi[WEB_KEY_MAX + 2];
+            snprintf(lo, sizeof(lo), "%s|", key);
+            snprintf(hi, sizeof(hi), "%s}", key);
+            sqlite3_bind_text(q, 2, lo, -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(q, 5, hi, -1, SQLITE_TRANSIENT);
+        } else if (key) {
+            sqlite3_bind_text(q, 2, key, -1, SQLITE_TRANSIENT);
+        }
         sqlite3_bind_int(q, 3, max + 1);
+        sqlite3_bind_int64(q, 4, since);
         int seen = 0;
         while (sqlite3_step(q) == SQLITE_ROW) {
             if (seen++ >= max) { *partial = 1; break; }
@@ -207,10 +235,18 @@ static int read_rows(web_fleet_t *f, const fv_site_t *st, int nst, int view,
             memset(r, 0, sizeof(*r));
             copy_col(q, 0, r->key, sizeof(r->key));
             copy_col(q, 1, r->peer, sizeof(r->peer));
+            copy_col(q, 2, r->label, sizeof(r->label));
+            const unsigned char *ex = sqlite3_column_text(q, 7);
+            if (pr) {
+                r->key[0] = '\0';
+                if (ex) extra_of(jr, (const char *)ex, view, r);
+                snprintf(r->key, sizeof(r->key), "%s", r->bssid);
+                r->bssid[0] = '\0';
+                if (!r->label[0] || (key && strcmp(r->key, key))) continue;
+            }
             /* A peer no longer named keeps its rows until the age limit;
              * the merged views show the fleet as configured. */
             if (!mac_ok(r->key) || site_of(st, nst, r->peer) < 0) continue;
-            copy_col(q, 2, r->label, sizeof(r->label));
             copy_col(q, 3, r->vendor, sizeof(r->vendor));
             /* sloth's 0 is "never heard on the air", not a reading
              * (#192 I5), as /api/fleet/shared reads it. */
@@ -219,8 +255,7 @@ static int read_rows(web_fleet_t *f, const fv_site_t *st, int nst, int view,
             r->rssi = sqlite3_column_int(q, 4);
             r->first = sqlite3_column_int64(q, 5);
             r->last = sqlite3_column_int64(q, 6);
-            const unsigned char *ex = sqlite3_column_text(q, 7);
-            if (ex) extra_of(jr, (const char *)ex, view, r);
+            if (ex && !pr) extra_of(jr, (const char *)ex, view, r);
             n++;
         }
     }
@@ -301,6 +336,7 @@ typedef struct {
     size_t more_s, more_e;
     size_t rec_s, rec_e;            /* "record" (the device drawer) */
     char   key[WEB_KEY_MAX + 1];
+    size_t key_s, key_e;            /* the key member's value, any length */
 } top_t;
 
 static int name_is(const char *name, size_t nl, const char *w) {
@@ -316,7 +352,10 @@ static void top_member(void *ctx, const char *name, size_t nl, size_t vs, size_t
 
 static void row_member(void *ctx, const char *name, size_t nl, size_t vs, size_t ve) {
     top_t *t = ctx;
-    if (!name_is(name, nl, t->want) || t->s[vs] != '"' || ve - vs - 2 > WEB_KEY_MAX) return;
+    if (!name_is(name, nl, t->want) || t->s[vs] != '"') return;
+    t->key_s = vs;
+    t->key_e = ve;
+    if (ve - vs - 2 > WEB_KEY_MAX) return;
     memcpy(t->key, t->s + vs + 1, ve - vs - 2);
     t->key[ve - vs - 2] = '\0';
 }
@@ -334,8 +373,12 @@ static void splice(web_jw_t *w, const char *s, size_t n) {
 /* ── a group of rows of one key ──────────────────────────────────────── */
 
 typedef struct {
-    int at, n;                      /* rows[at..at+n), newest first */
+    int at, n;                      /* rows[at..at+n), newest first (a
+                                       probe client's: by SSID) */
     int local;                      /* a row on this page */
+    long long first, last;          /* what the group sorts by */
+    int nss;                        /* a probe client's distinct SSIDs */
+    uint64_t h;                     /* a probe SSID's display form, hashed */
 } fv_group_t;
 
 static int by_key_last(const void *pa, const void *pb) {
@@ -344,6 +387,48 @@ static int by_key_last(const void *pa, const void *pb) {
     if (c) return c;
     if (a->last != b->last) return a->last > b->last ? -1 : 1;
     return strcmp(a->peer, b->peer);
+}
+
+/* A probe client's rows: by MAC, then SSID, so each SSID's rows sit
+ * together. */
+static int by_key_label(const void *pa, const void *pb) {
+    const fv_row_t *a = pa, *b = pb;
+    int c = strcmp(a->key, b->key);
+    if (c) return c;
+    if ((c = strcmp(a->label, b->label))) return c;
+    if (a->last != b->last) return a->last > b->last ? -1 : 1;
+    return strcmp(a->peer, b->peer);
+}
+
+/* A probe SSID's rows: by the SSID, newest first. */
+static int by_label_last(const void *pa, const void *pb) {
+    const fv_row_t *a = pa, *b = pb;
+    int c = strcmp(a->label, b->label);
+    if (c) return c;
+    if (a->last != b->last) return a->last > b->last ? -1 : 1;
+    if ((c = strcmp(a->peer, b->peer))) return c;
+    return strcmp(a->key, b->key);
+}
+
+/* A row's group key: a probe SSID's is its label. */
+static const char *gkey(int view, const fv_row_t *r) {
+    return view == WEB_FV_PROBE_SSIDS ? r->label : r->key;
+}
+
+static uint64_t fnv64(const char *s, size_t n) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    for (size_t i = 0; i < n; i++) { h ^= (unsigned char)s[i]; h *= 0x100000001b3ULL; }
+    return h;
+}
+
+/* The SSID's value as web_jw_ssid() writes it, into buf; its length, 0
+ * when it did not fit. A local row's "ssid" is matched on these bytes,
+ * so the display form decides, never a decoding of it. */
+static size_t ssid_json(const char *ssid, char *buf, size_t cap) {
+    web_jw_t w;
+    web_jw_init(&w, buf, cap);
+    web_jw_ssid(&w, ssid);
+    return w.overflow ? 0 : w.len;
 }
 
 static void jstr_or_null(web_jw_t *w, const char *s) {
@@ -356,7 +441,41 @@ static const char *site_word(const fv_site_t *st, int nst, const char *peer) {
     return i >= 0 && st[i].label[0] ? st[i].label : peer;
 }
 
-static void sites_json(web_jw_t *w, const fv_row_t *r, int n, const fv_site_t *st, int nst) {
+/* r[0..n), one key's rows, as one per peer (the earliest first_seen,
+ * the latest last_seen, the newest row's other members), newest first:
+ * a probe key has a row per SSID or per client. Their number. */
+static int per_site(const fv_row_t *r, int n, fv_row_t *out) {
+    int k = 0;
+    for (int i = 0; i < n; i++) {
+        int j = 0;
+        while (j < k && strcmp(out[j].peer, r[i].peer)) j++;
+        if (j == k) {
+            if (k == WEB_FLEET_PEERS) continue;
+            out[k++] = r[i];
+            continue;
+        }
+        if (r[i].first < out[j].first) out[j].first = r[i].first;
+        if (r[i].last > out[j].last) {
+            long long fs = out[j].first;
+            out[j] = r[i];
+            out[j].first = fs;
+        }
+    }
+    for (int i = 1; i < k; i++)
+        for (int j = i; j > 0 && (out[j].last > out[j - 1].last ||
+                                  (out[j].last == out[j - 1].last &&
+                                   strcmp(out[j].peer, out[j - 1].peer) < 0)); j--) {
+            fv_row_t t = out[j];
+            out[j] = out[j - 1];
+            out[j - 1] = t;
+        }
+    return k;
+}
+
+static void sites_json(web_jw_t *w, const fv_row_t *rows, int nrows, const fv_site_t *st,
+                       int nst) {
+    fv_row_t r[WEB_FLEET_PEERS];
+    int n = per_site(rows, nrows, r);
     web_jw_raw(w, "\"sites\":[");
     for (int i = 0; i < n; i++) {
         int k = site_of(st, nst, r[i].peer);
@@ -395,11 +514,85 @@ static const char *ble_class_slug(const char *word) {
     return NULL;
 }
 
-/* One remote-only row (r[0..n), newest first) under the route's names. */
-static void remote_json(web_jw_t *w, int view, const fv_row_t *r, int n,
-                        const fv_site_t *st, int nst) {
+/* A remote probe client's SSIDs: the newest WEB_PROBE_ROW_SSIDS of
+ * r[0..n) (sorted by SSID), each with its earliest first_seen and latest
+ * last_seen over the peers, as the route lists a local client's. */
+static void probe_ssids_json(web_jw_t *w, const fv_row_t *r, int n, int nss) {
+    struct { int at; long long first, last; } top[WEB_PROBE_ROW_SSIDS];
+    int nt = 0;
+    for (int i = 0; i < n;) {
+        int j = i + 1;
+        long long fs = r[i].first, ls = r[i].last;
+        while (j < n && !strcmp(r[j].label, r[i].label)) {
+            if (r[j].first < fs) fs = r[j].first;
+            if (r[j].last > ls) ls = r[j].last;
+            j++;
+        }
+        /* Newest first, then by name: an insertion into the kept few. */
+        int at = nt;
+        while (at > 0 && (top[at - 1].last < ls ||
+                          (top[at - 1].last == ls && strcmp(r[top[at - 1].at].label, r[i].label) > 0)))
+            at--;
+        if (at < WEB_PROBE_ROW_SSIDS) {
+            int last = nt < WEB_PROBE_ROW_SSIDS ? nt : WEB_PROBE_ROW_SSIDS - 1;
+            for (int k = last; k > at; k--) top[k] = top[k - 1];
+            top[at].at = i;
+            top[at].first = fs;
+            top[at].last = ls;
+            if (nt < WEB_PROBE_ROW_SSIDS) nt++;
+        }
+        i = j;
+    }
+    web_jw_raw(w, ",\"ssid_count\":"); web_jw_int(w, nss);
+    web_jw_raw(w, ",\"ssids\":[");
+    for (int k = 0; k < nt; k++) {
+        web_jw_raw(w, k ? ",{\"ssid\":" : "{\"ssid\":");
+        web_jw_ssid(w, r[top[k].at].label);
+        web_jw_ssid_meta(w, "ssid", r[top[k].at].label);
+        web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, top[k].first);
+        web_jw_raw(w, ",\"last_seen\":");  web_jw_int(w, top[k].last);
+        web_jw_raw(w, "}");
+    }
+    web_jw_raw(w, "],\"ssids_more\":"); web_jw_raw(w, nss > nt ? "true" : "false");
+}
+
+/* One remote-only row (r[0..n), its group g) under the route's names. */
+static void remote_json(web_jw_t *w, int view, const fv_row_t *r, int n, const fv_group_t *g,
+                        const web_fv_src_t *src, const fv_site_t *st, int nst) {
     const fv_row_t *h = &r[0];
-    if (view == WEB_FV_DEVICES) {
+    for (int i = 1; i < n; i++) if (r[i].last > h->last) h = &r[i];
+    if (view == WEB_FV_PROBE_CLIENTS) {
+        /* What sloth.db alone can say of a client is null: no frame
+         * count, signal, channel, OS or PHY label, devices row or
+         * association, and no seqnum siblings or presence strip. The
+         * vendor is this site's OUI table's, as a local row's. */
+        int rnd = (hexv((unsigned char)h->key[1]) & 2) != 0;
+        uint8_t mb[6];
+        web_oui_hit_t hit;
+        web_jw_raw(w, "{\"mac\":");      web_jw_str(w, h->key);
+        web_jw_raw(w, ",\"random\":");   web_jw_raw(w, rnd ? "true" : "false");
+        web_jw_raw(w, ",\"vendor\":");
+        if (src && src->oui && !rnd && web_oui_mac_bytes(h->key, mb) == 0 &&
+            web_oui_lookup(src->oui, mb, &hit))
+            web_jw_str(w, hit.name);
+        else
+            web_jw_raw(w, "null");
+        web_jw_raw(w, ",\"frames\":null,\"directed\":null,\"signal\":null,\"channel\":null,"
+                      "\"os\":null,\"phy\":null");
+        web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, g->first);
+        web_jw_raw(w, ",\"last_seen\":");  web_jw_int(w, g->last);
+        probe_ssids_json(w, r, n, g->nss);
+        web_jw_raw(w, ",\"device\":null,\"assoc\":null");
+    } else if (view == WEB_FV_PROBE_SSIDS) {
+        /* Every count is this site's (stations, randomised, the APs
+         * beaconing it, uncommon, designated): null. */
+        web_jw_raw(w, "{\"ssid\":");    web_jw_ssid(w, h->label);
+        web_jw_ssid_meta(w, "ssid", h->label);
+        web_jw_raw(w, ",\"clients\":null,\"random\":null");
+        web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, g->first);
+        web_jw_raw(w, ",\"last_seen\":");  web_jw_int(w, g->last);
+        web_jw_raw(w, ",\"aps\":null,\"ap_signal\":null,\"uncommon\":null,\"designated\":null");
+    } else if (view == WEB_FV_DEVICES) {
         uint8_t b0 = (uint8_t)(hexv((unsigned char)h->key[0]) << 4 | hexv((unsigned char)h->key[1]));
         web_jw_raw(w, "{\"mac\":");      web_jw_str(w, h->key);
         web_jw_raw(w, ",\"random\":");   web_jw_raw(w, (b0 & 2) ? "true" : "false");
@@ -558,7 +751,8 @@ static int ble_matches(const char *q, const fv_row_t *r) {
 }
 
 /* What a route's sort word orders by, for a peer's row. */
-enum { F_NONE = 0, F_LAST, F_FIRST, F_KEY, F_VENDOR, F_LABEL, F_SIGNAL, F_CHANNEL, F_ENC };
+enum { F_NONE = 0, F_LAST, F_FIRST, F_KEY, F_VENDOR, F_LABEL, F_SIGNAL, F_CHANNEL, F_ENC,
+       F_NSS };
 typedef struct { const char *word; int field, dir; } fv_sort_t;
 
 /* Each route's words with its default direction (-1 descending), as
@@ -571,13 +765,22 @@ static const fv_sort_t SORT_AP[] = {
     { "last", F_LAST, -1 }, { "first", F_FIRST, -1 }, { "bssid", F_KEY, 1 },
     { "ssid", F_LABEL, 1 }, { "channel", F_CHANNEL, 1 }, { "signal", F_SIGNAL, -1 },
     { "enc", F_ENC, 1 }, { NULL, 0, 0 } };
+/* web_probes.c's words: a column only sloth.db has (frames, signal,
+ * clients) reads as empty, so the remote rows fall back to last seen. */
+static const fv_sort_t SORT_PCL[] = {
+    { "last", F_LAST, -1 }, { "first", F_FIRST, 1 }, { "ssids", F_NSS, -1 },
+    { "frames", F_NONE, -1 }, { "signal", F_NONE, -1 }, { "mac", F_KEY, 1 },
+    { NULL, 0, 0 } };
+static const fv_sort_t SORT_PSS[] = {
+    { "clients", F_NONE, -1 }, { "last", F_LAST, -1 }, { "first", F_FIRST, 1 },
+    { "ssid", F_LABEL, 1 }, { NULL, 0, 0 } };
 static const fv_sort_t SORT_BLE[] = {
     { "last", F_LAST, -1 }, { "first", F_FIRST, -1 }, { "rssi", F_SIGNAL, -1 },
     { "addr", F_KEY, 1 }, { "name", F_LABEL, 1 }, { NULL, 0, 0 } };
 
 typedef struct {
     const fv_row_t *rows;
-    int field, dir, ci;
+    int field, dir, ci, view;
 } fv_order_t;
 
 static fv_order_t g_ord;           /* one HTTP thread: qsort's context */
@@ -609,8 +812,9 @@ static int by_order(const void *pa, const void *pb) {
     if (ea != eb) return ea ? 1 : -1;
     if (!ea) {
         switch (f) {
-        case F_LAST:    r = (a->last > b->last) - (a->last < b->last); break;
-        case F_FIRST:   r = (a->first > b->first) - (a->first < b->first); break;
+        case F_LAST:    r = (ga->last > gb->last) - (ga->last < gb->last); break;
+        case F_FIRST:   r = (ga->first > gb->first) - (ga->first < gb->first); break;
+        case F_NSS:     r = ga->nss - gb->nss; break;
         case F_KEY:     r = strcmp(a->key, b->key); break;
         case F_VENDOR:  r = strcmp(a->vendor, b->vendor); break;
         case F_LABEL:   r = g_ord.ci ? ci_cmp(a->label, b->label) : strcmp(a->label, b->label); break;
@@ -621,14 +825,14 @@ static int by_order(const void *pa, const void *pb) {
         }
         if (r) return r * g_ord.dir;
     }
-    if (a->last != b->last) return a->last > b->last ? -1 : 1;
-    return strcmp(a->key, b->key);
+    if (ga->last != gb->last) return ga->last > gb->last ? -1 : 1;
+    return strcmp(gkey(g_ord.view, a), gkey(g_ord.view, b));
 }
 
 /* Is the key held by this sensor anywhere (whatever page or filter)?
  * 1, 0, or -1 when it could not be told (the read's budget ran out). */
 static int held_here(int view, const web_fv_src_t *src, web_sdb_conn_t *c, int have_c,
-                     const char *key) {
+                     sqlite3_stmt *pq, const char *key) {
     if (view == WEB_FV_BLE) {
         uint8_t a[6];
         for (int i = 0; i < 6; i++)
@@ -637,6 +841,16 @@ static int held_here(int view, const web_fv_src_t *src, web_sdb_conn_t *c, int h
         return src->ble && web_ble_addr_info(src->ble, a, &cand) == 1;
     }
     if (!have_c || web_sdb_spent(c)) return -1;
+    if (is_probe(view)) {
+        /* A probe client sloth.db has a probe_clients or pnl_clients row
+         * of, an SSID a pnl_ssids row names: whatever the window. */
+        if (!pq) return -1;
+        sqlite3_reset(pq);
+        sqlite3_bind_text(pq, 1, key, -1, SQLITE_TRANSIENT);
+        int rc = sqlite3_step(pq);
+        if (c->timed_out) return -1;
+        return rc == SQLITE_ROW ? 1 : rc == SQLITE_DONE ? 0 : -1;
+    }
     web_sdb_item_t it;
     int rc = web_sdb_seen(c, view == WEB_FV_APS ? WEB_SEEN_AP : WEB_SEEN_DEVICE, key, NULL, &it);
     return rc < 0 ? -1 : rc > 0;
@@ -669,7 +883,7 @@ static void fleet_member(web_jw_t *w, const fv_site_t *st, int nst, int nremote,
 
 void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *query,
                  long long now_s, char *body, size_t cap, size_t *len) {
-    if (!f || view < 0 || view > WEB_FV_BLE || !*len || *len > cap) return;
+    if (!f || view < 0 || view > WEB_FV_PROBE_SSIDS || !*len || *len > cap) return;
     web_query_t *q = NULL;
     int *pick = NULL;
     const char *s = body;
@@ -688,22 +902,51 @@ void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *
     char *out = malloc(cap);
     if (!rows || !g || !el || !out) goto done;
     int partial = 0;
-    int nr = read_rows(f, st, nst, view, NULL, rows, WEB_FV_SCAN, &partial);
+    /* The Probes lists' window, as the route reads days= (it has already
+     * refused a bad one): the peers' rows last seen in it. */
+    long long since = 0;
+    if (is_probe(view)) {
+        char dv[16];
+        long long days = WEB_PROBE_DAYS;
+        if (qparam(query, "days", 0, dv, sizeof(dv)) && dv[0]) days = atoll(dv);
+        since = days > 0 ? now_s - days * 86400 : 0;
+    }
+    int nr = read_rows(f, st, nst, view, NULL, since, rows, WEB_FV_SCAN, &partial);
     if (nr < 0) goto done;
-    qsort(rows, (size_t)nr, sizeof(*rows), by_key_last);
+    qsort(rows, (size_t)nr, sizeof(*rows),
+          view == WEB_FV_PROBE_CLIENTS ? by_key_label
+          : view == WEB_FV_PROBE_SSIDS ? by_label_last : by_key_last);
     int ng = 0;
     for (int i = 0; i < nr;) {
         int j = i + 1;
-        while (j < nr && !strcmp(rows[j].key, rows[i].key)) j++;
+        while (j < nr && !strcmp(gkey(view, &rows[j]), gkey(view, &rows[i]))) j++;
         g[ng].at = i;
         g[ng].n = j - i;
         g[ng].local = 0;
+        g[ng].first = rows[i].first;
+        g[ng].last = rows[i].last;
+        g[ng].nss = 0;
+        g[ng].h = 0;
+        if (is_probe(view)) {
+            /* A probe key's rows are per SSID or per client: its times
+             * are the earliest and the latest of them. */
+            for (int k = i; k < j; k++) {
+                if (rows[k].first < g[ng].first) g[ng].first = rows[k].first;
+                if (rows[k].last > g[ng].last) g[ng].last = rows[k].last;
+                if (k == i || strcmp(rows[k].label, rows[k - 1].label)) g[ng].nss++;
+            }
+        }
+        if (view == WEB_FV_PROBE_SSIDS) {
+            char sj[WEB_SSID_JSON_MAX(WEB_FLEET_STR_MAX)];
+            size_t sl = ssid_json(rows[i].label, sj, sizeof(sj));
+            g[ng].h = sl ? fnv64(sj, sl) : 0;
+        }
         ng++;
         i = j;
     }
 
     /* The page's rows, each matched to its key's group. */
-    static const char *const KEYM[] = { "mac", "bssid", "addr" };
+    static const char *const KEYM[] = { "mac", "bssid", "addr", "mac", "ssid" };
     int nel = 0;
     size_t i = ws(s, t.rows_s + 1, t.rows_e);
     if (i < t.rows_e && s[i] != ']') {
@@ -717,7 +960,22 @@ void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *
             el[nel].s = i;
             el[nel].e = ee;
             el[nel].at = el[nel].n = 0;
-            if (rt.key[0]) {
+            if (view == WEB_FV_PROBE_SSIDS && rt.key_e) {
+                /* The SSID as the route wrote it, against each group's
+                 * written the same way. */
+                uint64_t hv = fnv64(s + rt.key_s, rt.key_e - rt.key_s);
+                for (int k = 0; k < ng; k++) {
+                    char sj[WEB_SSID_JSON_MAX(WEB_FLEET_STR_MAX)];
+                    size_t sl;
+                    if (g[k].h != hv) continue;
+                    sl = ssid_json(rows[g[k].at].label, sj, sizeof(sj));
+                    if (sl != rt.key_e - rt.key_s || memcmp(sj, s + rt.key_s, sl)) continue;
+                    el[nel].at = g[k].at;
+                    el[nel].n = g[k].n;
+                    g[k].local = 1;
+                    break;
+                }
+            } else if (rt.key[0]) {
                 int lo = 0, hi = ng - 1;
                 while (lo <= hi) {
                     int mid = (lo + hi) / 2, c = strcmp(rows[g[mid].at].key, rt.key);
@@ -765,7 +1023,9 @@ void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *
                 continue;
             g[nc++] = g[k];
         }
-        const fv_sort_t *so = view == WEB_FV_DEVICES ? SORT_DEV : view == WEB_FV_APS ? SORT_AP : SORT_BLE;
+        const fv_sort_t *so = view == WEB_FV_DEVICES ? SORT_DEV : view == WEB_FV_APS ? SORT_AP
+                            : view == WEB_FV_PROBE_CLIENTS ? SORT_PCL
+                            : view == WEB_FV_PROBE_SSIDS ? SORT_PSS : SORT_BLE;
         char sw[16], dw[8];
         qparam(query, "sort", 0, sw, sizeof(sw));
         qparam(query, "dir", 0, dw, sizeof(dw));
@@ -773,7 +1033,8 @@ void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *
         g_ord.field = F_NONE;
         g_ord.dir = -1;
         g_ord.ci = view == WEB_FV_BLE;
-        if (!sw[0]) snprintf(sw, sizeof(sw), "last");
+        g_ord.view = view;
+        if (!sw[0]) snprintf(sw, sizeof(sw), "%s", view == WEB_FV_PROBE_SSIDS ? "clients" : "last");
         for (int k = 0; so[k].word; k++)
             if (!strcmp(so[k].word, sw)) { g_ord.field = so[k].field; g_ord.dir = so[k].dir; }
         if (!strcmp(dw, "asc")) g_ord.dir = 1;
@@ -784,6 +1045,7 @@ void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *
         web_sdb_conn_t c;
         memset(&c, 0, sizeof(c));
         int have_c = 0;
+        sqlite3_stmt *pq = NULL;
         if (view != WEB_FV_BLE && nc) {
             char oerr[WEB_SDB_ERR_MAX];
             if (src && src->sdb && src->sdb->configured &&
@@ -792,13 +1054,25 @@ void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *
             else
                 off = "sloth_db";
         }
+        if (have_c && is_probe(view)) {
+            const char *hq = view == WEB_FV_PROBE_CLIENTS
+                ? "SELECT 1 FROM probe_clients WHERE mac = ?1"
+                  " UNION ALL SELECT 1 FROM pnl_clients WHERE mac = ?1 LIMIT 1"
+                : "SELECT 1 FROM pnl_ssids WHERE ssid = ?1 LIMIT 1";
+            if (sqlite3_prepare_v2(c.db, hq, -1, &pq, NULL) != SQLITE_OK) {
+                sqlite3_finalize(pq);
+                pq = NULL;
+                off = "sloth_db";
+            }
+        }
         for (int k = 0; !off && k < nc; k++) {
-            int hr = held_here(view, src, &c, have_c, rows[g[k].at].key);
+            int hr = held_here(view, src, &c, have_c, pq, gkey(view, &rows[g[k].at]));
             if (hr < 0) { partial = 1; cut = 1; break; }
             if (hr) continue;
             if (npick == WEB_FV_REMOTE_MAX) { cut = 1; break; }
             pick[npick++] = k;
         }
+        sqlite3_finalize(pq);
         if (have_c) web_slothdb_close(&c);
     }
 
@@ -827,7 +1101,7 @@ void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *
         for (int k = 0; k < nrem; k++) {
             if (nel || k) web_jw_raw(&w, ",");
             const fv_group_t *x = &g[pick[k]];
-            remote_json(&w, view, &rows[x->at], x->n, st, nst);
+            remote_json(&w, view, &rows[x->at], x->n, x, src, st, nst);
         }
         splice(&w, s + close, root_e - 1 - close);
         fleet_member(&w, st, nst, nrem, cut || nrem < npick, partial, off);
@@ -881,7 +1155,11 @@ static void detail_rows(web_jw_t *w, const char *name, int view, const fv_row_t 
         web_jw_raw(w, ",\"kind\":");       web_jw_str(w, KIND[view]);
         web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, x->first);
         web_jw_raw(w, ",\"last_seen\":");  web_jw_int(w, x->last);
-        if (view == WEB_FV_BLE) {
+        if (is_probe(view)) {
+            /* A probe row: the SSID the client asked for, nothing more. */
+            web_jw_raw(w, ",\"ssid\":");   web_jw_ssid(w, x->label);
+            web_jw_ssid_meta(w, "ssid", x->label);
+        } else if (view == WEB_FV_BLE) {
             web_jw_raw(w, ",\"name\":");   jstr_or_null(w, x->label);
             web_jw_raw(w, ",\"class\":");  jstr_or_null(w, ble_class_slug(x->vendor));
             web_jw_raw(w, ",\"rssi\":");   signal_json(w, x);
@@ -921,7 +1199,7 @@ static void seen_at(web_jw_t *w, const fv_row_t *r, int n, const fv_site_t *st, 
 }
 
 static void fleet_detail(web_jw_t *w, int remote, const fv_row_t *r, int n, int nwifi,
-                         const fv_site_t *st, int nst) {
+                         int nap, const fv_site_t *st, int nst) {
     web_jw_raw(w, "\"fleet\":{\"remote\":");
     web_jw_raw(w, remote ? "true" : "false");
     int nb = 0;                                 /* the host that saw it last */
@@ -933,11 +1211,15 @@ static void fleet_detail(web_jw_t *w, int remote, const fv_row_t *r, int n, int 
     web_jw_raw(w, ",\"note\":");
     if (remote) seen_at(w, r, n, st, nst); else web_jw_raw(w, "null");
     web_jw_raw(w, ",");
-    /* A device's rows are the wifi rows, then the AP rows of the MAC. */
+    /* A device's rows are the wifi rows, the AP rows, then the probe
+     * rows of the MAC. */
     if (nwifi >= 0) {
         detail_rows(w, "rows", WEB_FV_DEVICES, r, nwifi, st, nst);
         web_jw_raw(w, ",");
-        detail_rows(w, "ap_rows", WEB_FV_APS, r + nwifi, n - nwifi, st, nst);
+        detail_rows(w, "ap_rows", WEB_FV_APS, r + nwifi, nap, st, nst);
+        web_jw_raw(w, ",");
+        detail_rows(w, "probe_rows", WEB_FV_PROBE_CLIENTS, r + nwifi + nap, n - nwifi - nap,
+                    st, nst);
     } else {
         detail_rows(w, "rows", WEB_FV_BLE, r, n, st, nst);
     }
@@ -951,24 +1233,29 @@ void web_fv_detail(web_fleet_t *f, int ble, const char *path_key, long long now_
     fv_site_t st[WEB_FLEET_PEERS];
     int nst = read_sites(f, st);
     enum { PER = 2 * WEB_FLEET_PEERS };
-    fv_row_t *rows = malloc(sizeof(*rows) * 2 * PER);
+    fv_row_t *rows = malloc(sizeof(*rows) * (2 * PER + WEB_FV_DRAWER_PROBES));
     char *out = malloc(cap);
     if (!rows || !out) goto done;
-    int partial, nw, na = 0;
-    nw = read_rows(f, st, nst, ble ? WEB_FV_BLE : WEB_FV_DEVICES, key, rows, PER, &partial);
+    int partial, nw, na = 0, np = 0;
+    nw = read_rows(f, st, nst, ble ? WEB_FV_BLE : WEB_FV_DEVICES, key, 0, rows, PER, &partial);
     if (nw < 0) goto done;
     if (!ble) {
-        na = read_rows(f, st, nst, WEB_FV_APS, key, rows + nw, PER, &partial);
+        na = read_rows(f, st, nst, WEB_FV_APS, key, 0, rows + nw, PER, &partial);
         if (na < 0) goto done;
+        /* The SSIDs a peer heard the MAC probe for: a client only a peer
+         * heard probing opens here from the Probes view. */
+        np = read_rows(f, st, nst, WEB_FV_PROBE_CLIENTS, key, 0, rows + nw + na,
+                       WEB_FV_DRAWER_PROBES, &partial);
+        if (np < 0) goto done;
     }
-    if (nw + na == 0) goto done;
+    if (nw + na + np == 0) goto done;
     web_jw_t w;
     web_jw_init(&w, out, cap);
     if (ble && *status == 404) {
-        /* Not heard here: the peers' rows only, none of this sensor's. */
+        /* No row of this sensor's: the peers' rows only. */
         web_jw_raw(&w, "{\"now\":");  web_jw_int(&w, now_s);
         web_jw_raw(&w, ",\"rows\":[],\"alerts\":[],\"count\":0,");
-        fleet_detail(&w, 1, rows, nw, -1, st, nst);
+        fleet_detail(&w, 1, rows, nw, -1, 0, st, nst);
         web_jw_raw(&w, "}\n");
     } else {
         top_t t;
@@ -979,8 +1266,8 @@ void web_fv_detail(web_fleet_t *f, int ble, const char *path_key, long long now_
         int remote = !ble && t.rec_e - t.rec_s == 4 && !memcmp(body + t.rec_s, "null", 4);
         splice(&w, body, root_e - 1);
         web_jw_raw(&w, ",");
-        if (ble) fleet_detail(&w, 0, rows, nw, -1, st, nst);
-        else fleet_detail(&w, remote, rows, nw + na, nw, st, nst);
+        if (ble) fleet_detail(&w, 0, rows, nw, -1, 0, st, nst);
+        else fleet_detail(&w, remote, rows, nw + na + np, nw, na, st, nst);
         splice(&w, body + root_e - 1, *len - (root_e - 1));
     }
     if (w.overflow) goto done;

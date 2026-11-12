@@ -2500,10 +2500,12 @@ static void test_the_page_carries_the_sun(void) {
     /* ... and there is no other: eight calls and the definition in
      * app.js (the eighth clears a grey row another sloth host heard,
      * which has no presence here), the SSID drawer's two and the Probes
-     * rows' one, and syshealth.js's own definition and call. */
+     * rows' two (the second clears a grey station's strip the same way),
+     * and syshealth.js's own definition and call. */
+    WT_HAS(p, "    H.drawStrip(cv, null, CELLS, -1);\n    return row;");
     int calls = 0;
     for (const char *q = p; (q = strstr(q, "drawStrip(")) != NULL; q += 10) calls++;
-    WT_EQ(calls, 14);
+    WT_EQ(calls, 15);
     int g5s = 0;
     for (const char *q = p; (q = strstr(q, "glyph.g5(")) != NULL; q += 9) g5s++;
     WT_EQ(g5s, 3);    /* paintStrip()'s, the one presence painter; syshealth.js's state strip and the comment naming it */
