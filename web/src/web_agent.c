@@ -54,7 +54,11 @@ int web_agent_group_resolve(const char *name, gid_t *gid, char *err, size_t errs
         if (rc == 0 && res) *gid = gr.gr_gid;
         free(buf);
         if (rc == 0 && res) return 0;
-        if (rc == 0) snprintf(err, errsz, "--web-agent-group %s: no such group", name);
+        /* Not found is 0 with no result, or, from some NSS modules
+         * (winbind on w9fjc), one of the codes getgrnam_r(3) lists for
+         * "the given name was not found". */
+        if (rc == 0 || rc == ENOENT || rc == ESRCH || rc == EBADF || rc == EPERM)
+            snprintf(err, errsz, "--web-agent-group %s: no such group", name);
         else snprintf(err, errsz, "--web-agent-group %s: %s", name, strerror(rc));
         return -1;
     }
