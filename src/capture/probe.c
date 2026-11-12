@@ -25,6 +25,7 @@
 #include "sloth_clock.h"
 #include "probe_pnl.h"
 #include "karma_detect.h"         /* directed probe-response forgery (#187 S2) */
+#include "probe_latency.h"        /* probe-response latency, observation only (#187 S3) */
 #include "eapol_log.h"
 #include "fragattack.h"
 #include "pm_forge.h"
@@ -417,6 +418,16 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * and a frame that failed its FCS is still evidence the channel is
      * struggling even though its contents are untrustworthy. */
     rf_quality_observe(channel, band, fr.retry ? 1 : 0, rt.bad_fcs, fts);
+
+    /* Probe-response latency (#187 S3). Shown every frame, ahead of the
+     * FCS gate, because it numbers dwells from the radio frequency of
+     * all of them; it pairs only good-FCS Probe Request / Response.
+     * TSFT when radiotap carries it, the pcap stamp otherwise. */
+    {
+        const plat_clock_t pclk = { rt.freq_mhz, rt.has_tsft, rt.tsft_us,
+                                    (long)fv.ts_sec, (long)fv.ts_usec };
+        probe_latency_observe(&fr, &pclk);
+    }
 
     /* Log every frame for the monitor packets band, before the per-type
      * dispatch. The view hands out addr2 only where the frame has one —

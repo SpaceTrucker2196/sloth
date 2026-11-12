@@ -237,6 +237,7 @@ void run_queue_evict_tests(void);
 void run_wifi_merge_tests(void);
 void run_twins_tests(void);
 void run_karma_tests(void);
+void run_probe_latency_tests(void);
 void run_harvest_track_tests(void);
 void run_rogue_radius_tests(void);
 void run_help_tests(void);
@@ -445,6 +446,7 @@ int main(void) {
     run_wifi_merge_tests();
     run_twins_tests();
     run_karma_tests();
+    run_probe_latency_tests();
     run_harvest_track_tests();
     run_rogue_radius_tests();
     run_help_tests();

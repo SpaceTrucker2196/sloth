@@ -143,6 +143,7 @@ CORE_COMMON_SRCS = \
        src/twins.c           \
        src/views/twins.c     \
        src/karma_detect.c    \
+       src/probe_latency.c   \
        src/harvest_track.c   \
        src/views/karma.c     \
        src/views/rogue_radius.c \

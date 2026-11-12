@@ -106,7 +106,8 @@ the Wi-Fi it watches:
   hash, TBTT jitter, WPS/WSC vendor strings) and their zero-reading
   rules on `[b]`; #151's stack table (empty, capture-gated), Pineapple
   setup-AP pairing and `suspected`/`corroborated` verdict on
-  `KARMA_AP`; and what still waits on captures.
+  `KARMA_AP`; #187 S3's probe-response latency (measured, no
+  verdict); and what still waits on captures.
 - [[enterprise-rogue]] — the two halves of the WPA-Enterprise problem:
   `ROGUE_RADIUS` (#31, the AP) and `PEAP_NO_SERVER_CERT` (#65,
   CVE-2023-52160, your own fleet).

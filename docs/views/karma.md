@@ -123,11 +123,16 @@ numbers about one BSSID — the same reason the PNL measures are shared.
 
 ## Open
 
-- **#187 S3, probe-response latency, is not built.** The issue proposes
+- **#187 S3, probe-response latency, is measured but feeds nothing
+  here.** `src/probe_latency.c` keeps per-BSSID latency statistics
+  (`docs/wiki/attack-hardware-fingerprints.md`). The issue proposes
   a median answer under 2 ms as a confirmer; no primary source for that
-  figure, or for the direction of the difference (a user-space soft AP
-  answering through hostapd is plausibly *slower* than firmware, not
-  faster), was found. Without one the threshold would be a guess.
+  figure, or for the direction of the difference, was found
+  (`research/papers/probe-response-latency.md`: the lure tools answer
+  through the same userspace path stock hostapd uses without
+  probe-response offload). It is not in the score, not in the alert, and
+  not a column of this view: at 100x33 the row has no five cells to
+  spare without cutting the tool attribution below its minimum.
 
 - IE **variety** earns no confidence. It is the better-founded half of
   the signal (it argues against one spoofing radio, where collapse is

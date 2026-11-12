@@ -35,6 +35,7 @@
 #include "http_log.h"       /* IP-layer cases reach the payload parsers (#132) */
 #include "kerb_snoop.h"
 #include "snmp_snoop.h"
+#include "probe_latency.h"   /* the monitor callback reaches it, with TSFT (#187 S3) */
 
 /* ── Real pcap_dispatch → on_packet path — issue #95 ─────────
  *
@@ -1119,6 +1120,63 @@ static void test_fcs_is_stripped_before_the_frame_is_recorded(void) {
     mon_frame_snapshot(&g_s);
     ASSERT_EQ((int)g_s.mon_frames[0].len, mpdu);
     probe_pnl_clear();
+}
+
+/* ── Probe-response latency through the real callback (#187 S3) ──
+ *
+ * A Probe Request (§9.3.3.10) and the Probe Response (§9.3.3.11) to it,
+ * each behind a radiotap header with CHANNEL and TSFT. The test
+ * savefile stamps record i at i * 1000 µs inside one second
+ * (capture_test_savefile()), so the pcap clock says 1000 µs and a figure
+ * of 2345 µs can only have come from radiotap. Without TSFT the same
+ * pair reads the pcap 1000 µs. Seen red with on_probe_frame() passing
+ * has_tsft = 0 (2345 became 1000, src PCAP). */
+static int plat_frame(uint8_t *f, int cap, int sub, uint64_t tsft) {
+    static const uint8_t sta[6] = { 0x02, 0x00, 0x5e, 0x51, 0x00, 0x01 };
+    static const uint8_t ap[6]  = { 0x02, 0x00, 0x5e, 0x51, 0x00, 0x02 };
+    static const uint8_t bc[6]  = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    fb_t b; fb_init(&b, f, cap);
+    fb_rt_t rt; memset(&rt, 0, sizeof rt);
+    rt.has_channel = 1; rt.freq_mhz = 2437;
+    rt.has_tsft = tsft != 0; rt.tsft_us = tsft;
+    fb_radiotap(&b, &rt);
+    if (sub == 4) {
+        fb_mgmt(&b, 4, 0, bc, sta, bc, 0x0100, 0);
+    } else {
+        fb_mgmt(&b, 5, 0, sta, ap, ap, 0x0200, 0);
+        fb_beacon_fixed(&b, 0, 100, 0x0001);
+    }
+    fb_ssid(&b, "plat-net");
+    ASSERT(fb_ok(&b));
+    return b.len;
+}
+
+static void test_probe_latency_reads_radiotap_tsft(void) {
+    static const uint8_t ap[6] = { 0x02, 0x00, 0x5e, 0x51, 0x00, 0x02 };
+    uint8_t q[96], r[96];
+    const uint8_t *fs[2] = { q, r };
+    int ls[2];
+    uint32_t ts[2] = { 1700000000u, 1700000000u };
+    probe_latency_row_t row;
+
+    probe_latency_reset();
+    ls[0] = plat_frame(q, (int)sizeof q, 4, 9000000);
+    ls[1] = plat_frame(r, (int)sizeof r, 5, 9002345);
+    memset(&g_s, 0, sizeof(g_s)); probe_clear();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 2), 2);
+    ASSERT_EQ(probe_latency_get(ap, &row), 1);
+    ASSERT_EQ(row.src, PLAT_SRC_TSFT);
+    ASSERT_EQ((int)row.kind[PLAT_KIND_DIRECTED].med_us, 2345);
+
+    probe_latency_reset();
+    ls[0] = plat_frame(q, (int)sizeof q, 4, 0);
+    ls[1] = plat_frame(r, (int)sizeof r, 5, 0);
+    memset(&g_s, 0, sizeof(g_s)); probe_clear();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 2), 2);
+    ASSERT_EQ(probe_latency_get(ap, &row), 1);
+    ASSERT_EQ(row.src, PLAT_SRC_PCAP);
+    ASSERT_EQ((int)row.kind[PLAT_KIND_DIRECTED].med_us, 1000);
+    probe_latency_reset();
 }
 
 /* ── DATAPAD on the IP side (#122) ───────────────────────────
@@ -3773,6 +3831,7 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_probe_request_ssid_33_is_clamped_to_32);
     RUN_TEST(test_assoc_response_ssid_33_is_clamped_to_32);
     RUN_TEST(test_fcs_is_stripped_before_the_frame_is_recorded);
+    RUN_TEST(test_probe_latency_reads_radiotap_tsft);
     RUN_TEST(test_radiotap_datapad_frame_reaches_the_ip_decoder);
     RUN_TEST(test_an_fcs_beacon_walks_no_phantom_element);
     RUN_TEST(test_a_datapad_eapol_m1_reaches_the_collector);

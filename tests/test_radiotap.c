@@ -134,6 +134,32 @@ static void test_multiple_fields_in_bit_order(void) {
     ASSERT_EQ((int)rt.signal_dbm, -67);
 }
 
+/* TSFT (#187 S3): u64 little-endian, microseconds of the receiver's
+ * TSF at the MPDU's first bit (radiotap.org TSFT). Octets chosen so a
+ * byte-order slip or a 32-bit truncation reads a different value. */
+static void test_tsft_value_is_read(void) {
+    uint8_t body[8] = { 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01 };
+    uint8_t buf[64];
+    int len = rt_build(buf, 1u << RT_BIT_TSFT, body, 8);
+    radiotap_info_t rt;
+    ASSERT_EQ(radiotap_parse(buf, len, &rt), 1);
+    ASSERT_EQ(rt.has_tsft, 1);
+    ASSERT(rt.tsft_us == 0x0102030405060708ULL);
+}
+
+/* Present bit set, header ends inside the field: accepted (the partial
+ * header rule) but no TSFT is claimed. Seen red with the length check
+ * in front of the read removed. */
+static void test_tsft_truncated_is_absent(void) {
+    uint8_t body[4] = { 1, 2, 3, 4 };
+    uint8_t buf[64];
+    int len = rt_build(buf, 1u << RT_BIT_TSFT, body, 4);
+    radiotap_info_t rt;
+    ASSERT_EQ(radiotap_parse(buf, len, &rt), 1);
+    ASSERT_EQ(rt.has_tsft, 0);
+    ASSERT(rt.tsft_us == 0);
+}
+
 /* TSFT is 8-byte aligned, which shifts everything after it. Getting
  * the padding wrong silently misreads every later field. */
 static void test_tsft_alignment_shifts_later_fields(void) {
@@ -313,6 +339,8 @@ static void test_freq_to_band_unmapped_is_unknown(void) {
 void run_radiotap_tests(void) {
     TEST_SUITE("radiotap: field decoding");
     RUN_TEST(test_signal_only);
+    RUN_TEST(test_tsft_value_is_read);
+    RUN_TEST(test_tsft_truncated_is_absent);
     RUN_TEST(test_channel_maps_frequency);
     RUN_TEST(test_flags_bad_fcs);
     RUN_TEST(test_flags_fcs_and_datapad);

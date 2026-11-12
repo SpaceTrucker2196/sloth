@@ -53,6 +53,16 @@ int radiotap_parse(const uint8_t *buf, int len, radiotap_info_t *out) {
      * describe the fields we read. */
     if (pres & (1u << RT_BIT_TSFT)) {
         off = RT_PAD(off, 8);
+        /* Read since #187 S3 (probe_latency.c); skipped before. The
+         * receiver's own TSF, in microseconds, at the first bit of the
+         * MPDU (radiotap.org TSFT). A header cut inside the field is
+         * not a refusal: the fields after it are simply not read, the
+         * same partial-header rule as FLAGS below. */
+        if (off + 8 > (int)rt_len) return 1;
+        uint64_t t = 0;
+        for (int i = 7; i >= 0; i--) t = (t << 8) | buf[off + i];
+        out->tsft_us  = t;
+        out->has_tsft = 1;
         off += 8;
     }
     if (pres & (1u << RT_BIT_FLAGS)) {
