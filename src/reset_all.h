@@ -117,6 +117,7 @@
     X(wifi_baseline_clear) \
     X(wired_attach_clear) \
     X(view_procs_fold_clear) \
+    X(view_eapol_group_reset) \
     X(wps_track_clear)
 
 void sloth_reset_all(void);

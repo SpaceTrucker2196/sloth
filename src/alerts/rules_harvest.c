@@ -42,7 +42,13 @@ static void mac_str(const uint8_t m[6], char out[20]) {
  * a PMKID KDE, and the station sent no M2 to any BSSID it asked. A
  * station that holds a key answers with an M2; one that never does,
  * while several APs hand it the one value Steube showed can be attacked
- * offline, has collected crackable material from each of them. */
+ * offline, has collected crackable material from each of them.
+ *
+ * The detail names the station row's cluster (#172 follow-up), the id
+ * its EAPOL records and harvest_station record carry, and, when a
+ * QUEUE_EVICT release landed on one of its (BSSID, station) pairs
+ * inside the window, that pair: Framing Frames and the harvest in one
+ * incident (harvest_track.h, "Clusters"). Severity does not move. */
 void rule_pmkid_harvest(const sloth_state_t *s, time_t now) {
     int min_bssids = HARVEST_MIN_BSSIDS;
     int pct        = HARVEST_UNANSWERED_PCT;
@@ -62,16 +68,31 @@ void rule_pmkid_harvest(const sloth_state_t *s, time_t now) {
         int solicited  = h->solicited;
         int pmkids     = h->pmkid_unanswered;
         int answered   = h->answered;
+        unsigned cluster = (unsigned)h->cluster_id;
+        int qevict = h->qevict;
         const char *tail = corroborated
                          ? " - PMKIDs handed to a station that never answered"
                          : " - solicitation pattern, uncorroborated";
         char detail[ALERT_DETAIL_LEN];
-        snprintf(detail, sizeof detail,
-                 "PMKID harvest STA %s: %d of %d BSSIDs that answered its "
-                 "association with an M1 got no M2 (%d asked, %d with "
-                 "PMKID, %d answered)%s",
-                 sta, unanswered, m1_bssids, solicited, pmkids, answered,
-                 tail);
+        if (qevict > 0) {
+            char tgt[20];
+            mac_str(h->qevict_bssid, tgt);
+            snprintf(detail, sizeof detail,
+                     "PMKID harvest STA %s: %d of %d BSSIDs that answered "
+                     "its association with an M1 got no M2 (%d asked, %d "
+                     "with PMKID, %d answered)%s - cluster #%u - "
+                     "QUEUE_EVICT release on %s at %s in the window "
+                     "(%d pairs)",
+                     sta, unanswered, m1_bssids, solicited, pmkids,
+                     answered, tail, cluster, sta, tgt, qevict);
+        } else {
+            snprintf(detail, sizeof detail,
+                     "PMKID harvest STA %s: %d of %d BSSIDs that answered "
+                     "its association with an M1 got no M2 (%d asked, %d "
+                     "with PMKID, %d answered)%s - cluster #%u",
+                     sta, unanswered, m1_bssids, solicited, pmkids,
+                     answered, tail, cluster);
+        }
 
         char key[ALERT_KEY_LEN];
         akey_t k;
@@ -96,7 +117,12 @@ void rule_pmkid_harvest(const sloth_state_t *s, time_t now) {
  * BSSID inside the window, the harvesting run across a BSS's clients.
  * Fires alongside DEAUTH_FLOOD when a burst is also a flood: the two
  * report different things (an outage, a captured handshake), and the
- * engine has no cross-kind suppression to lean on. */
+ * engine has no cross-kind suppression to lean on.
+ *
+ * The detail names the chain's cluster and, when a victim's queue was
+ * released on this BSSID inside the window (QUEUE_EVICT), that victim:
+ * the deauthentication that knocked it off is the session change that
+ * route of Framing Frames waits for. Severity does not move. */
 void rule_handshake_harvest(const sloth_state_t *s, time_t now) {
     for (int i = 0; s->harvest_chain && i < s->harvest_chain_count; i++) {
         const harvest_chain_t *c = &s->harvest_chain[i];
@@ -109,14 +135,28 @@ void rule_handshake_harvest(const sloth_state_t *s, time_t now) {
         int victims = c->victims;
         int frames  = c->deauth_frames;
         int recon   = (int)HARVEST_RECONNECT_S;
+        unsigned cluster = (unsigned)c->cluster_id;
+        int qevict = c->qevict;
         const char *tail = sev == ALERT_SEV_WARN
                          ? " - one station, uncorroborated" : "";
         char detail[ALERT_DETAIL_LEN];
-        snprintf(detail, sizeof detail,
-                 "Handshake harvest BSSID %s: %d stations reconnected "
-                 "through a fresh M1/M2 within %d s of %d deauths claimed "
-                 "from the AP%s",
-                 bssid, victims, recon, frames, tail);
+        if (qevict > 0) {
+            char psta[20];
+            mac_str(c->qevict_sta, psta);
+            snprintf(detail, sizeof detail,
+                     "Handshake harvest BSSID %s: %d stations reconnected "
+                     "through a fresh M1/M2 within %d s of %d deauths "
+                     "claimed from the AP%s - cluster #%u - QUEUE_EVICT "
+                     "release on %s at %s in the window (%d victims)",
+                     bssid, victims, recon, frames, tail, cluster, psta,
+                     bssid, qevict);
+        } else {
+            snprintf(detail, sizeof detail,
+                     "Handshake harvest BSSID %s: %d stations reconnected "
+                     "through a fresh M1/M2 within %d s of %d deauths "
+                     "claimed from the AP%s - cluster #%u",
+                     bssid, victims, recon, frames, tail, cluster);
+        }
 
         char key[ALERT_KEY_LEN];
         akey_t k;

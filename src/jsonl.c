@@ -1100,6 +1100,18 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
         /* Additive (JSONL 1.6.0, #187 S3), last so every earlier field
          * keeps its position. */
         emit_probe_lat(buf, &off, e->bssid);
+        /* Additive (JSONL 1.7.0, #172): the harvest-friendly posture,
+         * present only once this BSSID was heard handing out the PMKID
+         * KDE in an M1 — 1 with a PSK-family AKM on its beacon (the
+         * value is attackable offline, Steube 2018), 0 without one (SAE
+         * or 802.1X: the KDE is there but the PMK is not the
+         * passphrase's). Absent means not observed, never "no". The
+         * name avoids slothweb's credential words (web_secret.c). */
+        {
+            int hp = harvest_posture_psk(e->bssid, e->akm_bits);
+            if (hp >= 0)
+                kv_int(buf, LINEBUF, &off, "harvest_posture", hp);
+        }
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -1661,6 +1673,13 @@ void jsonl_emit_eapol_events(const sloth_state_t *s) {
                                                  e->assoc_evidence ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "signal_dbm", e->signal_dbm);
         kv_int(buf, LINEBUF, &off, "channel",    e->channel);
+        /* Additive (JSONL 1.7.0, #172): the harvest tracker's row this
+         * message was counted in, 0 for none. Joins the frame to the
+         * harvest_station / harvest_chain record and the alert detail
+         * that name the same cluster; non-zero alone is not a finding
+         * (eapol_event_t.harvest_cluster_id). */
+        kv_int(buf, LINEBUF, &off, "harvest_cluster_id",
+                                                 (long long)e->harvest_cluster_id);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -2946,6 +2965,8 @@ void jsonl_emit_lures(const sloth_state_t *s) {
         sig = sig_int(sig, h->pmkid_unanswered);
         sig = sig_int(sig, h->answered);
         sig = sig_int(sig, h->dropped);
+        sig = sig_int(sig, (long long)h->cluster_id);
+        sig = sig_int(sig, h->qevict);
         if (sig == 0) sig = 1;
         if (!jsonl_changed(JD_HARVEST_STA, h->sta, 6, sig, now)) continue;
         start_obj(buf, LINEBUF, &off, "harvest_station", now);
@@ -2959,6 +2980,12 @@ void jsonl_emit_lures(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "dropped", h->dropped);
         kv_int(buf, LINEBUF, &off, "first_seen", (long long)h->first_seen);
         kv_int(buf, LINEBUF, &off, "last_seen", (long long)h->last_seen);
+        /* Additive (JSONL 1.7.0): the row's cluster, the id its eapol
+         * records and its alert detail carry, and how many of its
+         * (BSSID, station) pairs had a QUEUE_EVICT release inside the
+         * window. A count, as the rest of the record. */
+        kv_int(buf, LINEBUF, &off, "cluster_id", (long long)h->cluster_id);
+        kv_int(buf, LINEBUF, &off, "qevict", h->qevict);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -2972,6 +2999,8 @@ void jsonl_emit_lures(const sloth_state_t *s) {
         uint64_t sig = sig_int(FNV64_OFFSET, c->victims);
         sig = sig_int(sig, c->deauth_frames);
         sig = sig_int(sig, c->dropped);
+        sig = sig_int(sig, (long long)c->cluster_id);
+        sig = sig_int(sig, c->qevict);
         if (sig == 0) sig = 1;
         if (!jsonl_changed(JD_HARVEST_CHAIN, c->bssid, 6, sig, now)) continue;
         start_obj(buf, LINEBUF, &off, "harvest_chain", now);
@@ -2982,6 +3011,10 @@ void jsonl_emit_lures(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "dropped", c->dropped);
         kv_int(buf, LINEBUF, &off, "first_seen", (long long)c->first_seen);
         kv_int(buf, LINEBUF, &off, "last_seen", (long long)c->last_seen);
+        /* Additive (JSONL 1.7.0), as harvest_station's: a victim count,
+         * never the victim's address. */
+        kv_int(buf, LINEBUF, &off, "cluster_id", (long long)c->cluster_id);
+        kv_int(buf, LINEBUF, &off, "qevict", c->qevict);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }

@@ -843,13 +843,16 @@ int eapol_observe_frame(const dot11_frame_t *f,
      * record passed it. The M1/M3/M4 branches set it above where it has
      * a meaning; on an M1 nothing has been compared yet. */
     ev.handshake_progress = p->progress;
-    push_event(&ev);
 
     /* The harvest tracker (#172) counts what this classification
-     * found; it changes nothing here. A message that travelled the
-     * wrong way returned above and is not counted. Its lock is a leaf. */
-    harvest_note_eapol(bssid, sta, msg, msg == 1 && has_pmkid, fresh_pair,
-                       f->event_id);
+     * found; it changes nothing here but the record's cluster id, which
+     * is why it runs before the event is pushed. A message that
+     * travelled the wrong way returned above and is not counted. Its
+     * lock is a leaf. */
+    ev.harvest_cluster_id =
+        harvest_note_eapol(bssid, sta, msg, msg == 1 && has_pmkid,
+                           fresh_pair, f->event_id);
+    push_event(&ev);
 
     if (ev.assoc_evidence)
         assoc_observe(ev.bssid, ev.sta_mac,

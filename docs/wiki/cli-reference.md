@@ -466,6 +466,7 @@ descriptions: [[views-catalog]].
 | `Enter` | (Interfaces / Packets) open detail panel; (Devices) open the device detail — camera signal trail, ONVIF scopes, mDNS, SSDP `SERVER`, RTSP exposure; `Enter` / `Esc` returns ([[camera-detection]]); (BLE) open every decoded field of the selected advertiser, `Enter` / `Esc` returns ([[ble]]) |
 | `f` | (Conns / Packets) cycle filter |
 | `s` | (Conns) cycle sort |
+| `g` | (EAPOL) show the selected row's harvest cluster alone, with a one-line summary; again for every row. Claimed over the global Devices switch (#172, `docs/views/eapol.md`) |
 
 A view can *claim* a key the global switch also uses; see
 `src/view_route.c` and the "add a view" checklist in `AGENTS.md`.

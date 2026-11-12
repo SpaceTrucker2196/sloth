@@ -12,6 +12,8 @@
 #include "sloth_clock.h"
 #include "tune.h"
 #include "frame_build.h"
+#include "queue_evict.h"
+#include "rsn_ie.h"
 
 /* PMKID_HARVEST and HANDSHAKE_HARVEST (#172).
  *
@@ -695,6 +697,293 @@ static void test_collector_records_are_unchanged(void) {
     hv_end();
 }
 
+/* ── Clusters, the QUEUE_EVICT mark and the AP posture (#172 follow-up,
+ * 2026-11-12) ─────────────────────────────────────────────────────── */
+
+/* The cluster tests read the collector's ring and the wall clock, so
+ * the wall follows the test's monotonic clock (hv_now()) and the
+ * QUEUE_EVICT table is cleared on both sides. */
+static void hc_begin(void) {
+    hv_begin();
+    sloth_clock_test_set(hv_mono, hv_now);
+    queue_evict_clear();
+}
+
+static void hc_end(void) {
+    queue_evict_clear();
+    hv_end();
+}
+
+/* The collector's ring, newest first, into s (hv_poll() memsets s). */
+static void hc_ring(sloth_state_t *s) { eapol_snapshot(s); }
+
+/* A QUEUE_EVICT release on (bssid, sta) at hv_now(): a reassociation
+ * then three distinct QoS Data frames AP -> STA (FromDS, A1 = STA,
+ * A2 = A3 = BSSID, §9.3.2.1 Table 9-26) inside 100 ms, which is
+ * queue_evict.min_frames inside queue_evict.window_ms. */
+static void hc_release(const uint8_t bssid[6], const uint8_t sta[6]) {
+    time_t sec = hv_now();
+    queue_evict_note_session_change(bssid, sta, QUEUE_EVICT_SRC_REASSOC,
+                                    sec, 0);
+    for (int i = 0; i < 3; i++) {
+        uint8_t f[26];
+        memset(f, 0, sizeof f);
+        f[0] = (uint8_t)((0x08 << 4) | (2 << 2));   /* QoS Data */
+        f[1] = 0x02;                                /* FromDS */
+        memcpy(f + 4,  sta,   6);
+        memcpy(f + 10, bssid, 6);
+        memcpy(f + 16, bssid, 6);
+        f[22] = (uint8_t)(((200 + i) & 0x0f) << 4);
+        f[23] = (uint8_t)(((200 + i) >> 4) & 0xff);
+        queue_evict_observe_downlink(f, (int)sizeof f, sec,
+                                     (long)(10 + i) * 1000);
+    }
+    queue_evict_t q;
+    ASSERT(queue_evict_lookup(bssid, sta, &q));
+    ASSERT_EQ((int)q.release_count, 1);
+}
+
+static int detail_has(const sloth_state_t *s, alert_type_t t,
+                      const char *needle) {
+    int i = hv_find(s, t);
+    return i >= 0 && strstr(s->alerts[i].detail, needle) != NULL;
+}
+
+/* One soliciting station is one cluster: every M1 it was handed
+ * carries the id its harvest row and the alert detail name; another
+ * station's rows carry another. An M1 to a station that never asked is
+ * counted nowhere and carries 0 — seen red (that M1 carried the
+ * station's id) with harvest_note_eapol() taking the id from the
+ * station row before the target lookup, then restored. */
+static void test_cluster_id_joins_frames_row_and_alert(void) {
+    hc_begin();
+    static sloth_state_t s;
+    hv_solicit(HCX, 1, 3, 1);
+    uint8_t b9[6]; ap(b9, 9);
+    hv_eapol(HCX, b9, 1, 1, 0x09, 1, 0, 0);     /* never asked b9 */
+    uint8_t b4[6]; ap(b4, 4);
+    hv_assoc_req(PHONE, b4, 0);
+    hv_m1m2(PHONE, b4, 1, 0);
+    PAST_GRACE();
+    hv_poll(&s);
+    hc_ring(&s);
+
+    ASSERT_EQ(s.harvest_sta_count, 2);
+    uint32_t hcx = 0, phone = 0;
+    for (int i = 0; i < s.harvest_sta_count; i++) {
+        if (!memcmp(s.harvest_sta[i].sta, HCX, 6))
+            hcx = s.harvest_sta[i].cluster_id;
+        if (!memcmp(s.harvest_sta[i].sta, PHONE, 6))
+            phone = s.harvest_sta[i].cluster_id;
+    }
+    ASSERT(hcx != 0);
+    ASSERT(phone != 0);
+    ASSERT(hcx != phone);
+    ASSERT(harvest_find_sta_cluster(&s, hcx) != NULL);
+    ASSERT(harvest_find_sta_cluster(&s, 0) == NULL);
+
+    int hcx_rows = 0, stray = -1, phone_rows = 0;
+    for (int i = 0; i < s.eapol_count; i++) {
+        const eapol_event_t *e = &s.eapol_events[i];
+        if (!memcmp(e->sta_mac, HCX, 6) && !memcmp(e->bssid, b9, 6))
+            stray = (int)e->harvest_cluster_id;
+        else if (!memcmp(e->sta_mac, HCX, 6)) {
+            ASSERT_EQ(e->harvest_cluster_id, hcx);
+            hcx_rows++;
+        } else if (!memcmp(e->sta_mac, PHONE, 6)) {
+            ASSERT_EQ(e->harvest_cluster_id, phone);
+            phone_rows++;
+        }
+    }
+    ASSERT_EQ(hcx_rows, 3);
+    ASSERT_EQ(phone_rows, 2);                   /* its M1 and its M2 */
+    ASSERT_EQ(stray, 0);
+
+    char want[32];
+    snprintf(want, sizeof want, "- cluster #%u", (unsigned)hcx);
+    ASSERT(detail_has(&s, ALERT_TYPE_PMKID_HARVEST, want));
+    ASSERT(!detail_has(&s, ALERT_TYPE_PMKID_HARVEST, "QUEUE_EVICT"));
+    hc_end();
+}
+
+/* The window's end is a new cluster: the issue's (sta, window_start)
+ * key. A station whose row aged out and that solicits again is not
+ * the old incident. */
+static void test_cluster_is_new_after_the_window(void) {
+    hc_begin();
+    static sloth_state_t s;
+    hv_solicit(HCX, 1, 3, 0);
+    hv_poll(&s);
+    ASSERT_EQ(s.harvest_sta_count, 1);
+    uint32_t first = s.harvest_sta_count ? s.harvest_sta[0].cluster_id : 0;
+    hv_advance_ms(900001);
+    hv_poll(&s);
+    ASSERT_EQ(s.harvest_sta_count, 0);
+    hv_solicit(HCX, 1, 3, 0);
+    hv_poll(&s);
+    ASSERT_EQ(s.harvest_sta_count, 1);
+    if (s.harvest_sta_count == 1) {
+        ASSERT(s.harvest_sta[0].cluster_id != 0);
+        ASSERT(s.harvest_sta[0].cluster_id != first);
+    }
+    hc_end();
+}
+
+/* The M2 that joined a victim to a chain carries the chain's cluster,
+ * not the victim's own station row (it reassociated, so it has one,
+ * holding that M2 as an answer). Seen red with the chain's id not
+ * overriding the station row's, then restored. The M1 before it was
+ * not yet chain evidence and keeps the station row's. */
+static void test_chained_m2_carries_the_chain_cluster(void) {
+    hc_begin();
+    static sloth_state_t s;
+    uint8_t b[6]; ap(b, 1);
+    hv_deauth(PHONE, b, b);
+    hv_deauth(PHONE, b, b);
+    hv_advance_ms(1000);
+    hv_assoc_req(PHONE, b, 1);
+    hv_m1m2(PHONE, b, 5, 0);
+    hv_poll(&s);
+    hc_ring(&s);
+    ASSERT_EQ(s.harvest_chain_count, 1);
+    ASSERT_EQ(s.harvest_sta_count, 1);
+    uint32_t chain = s.harvest_chain_count ? s.harvest_chain[0].cluster_id : 0;
+    uint32_t row   = s.harvest_sta_count ? s.harvest_sta[0].cluster_id : 0;
+    ASSERT(chain != 0);
+    ASSERT(row != 0);
+    ASSERT(chain != row);
+    ASSERT(harvest_find_chain_cluster(&s, chain) != NULL);
+    int m1 = -1, m2 = -1;
+    for (int i = 0; i < s.eapol_count; i++) {
+        if (s.eapol_events[i].msg_num == 1) m1 = (int)s.eapol_events[i].harvest_cluster_id;
+        if (s.eapol_events[i].msg_num == 2) m2 = (int)s.eapol_events[i].harvest_cluster_id;
+    }
+    ASSERT_EQ(m2, (int)chain);
+    ASSERT_EQ(m1, (int)row);
+    char want[32];
+    snprintf(want, sizeof want, "- cluster #%u", (unsigned)chain);
+    ASSERT(detail_has(&s, ALERT_TYPE_HANDSHAKE_HARVEST, want));
+    hc_end();
+}
+
+/* A QUEUE_EVICT release on one of the harvesting station's own pairs
+ * marks its cluster and names the pair in the PMKID_HARVEST detail;
+ * severity stays where the harvest put it. Not on another station's
+ * pair (seen red with qe_pair()'s station test removed), not on the
+ * station at a BSSID it never asked (seen red with the target match
+ * replaced by any BSSID of the station — the release below is at b9),
+ * and not past the window (seen red with qe_pair() returning 1 past
+ * win_s), each restored. */
+static void test_queue_evict_marks_the_station_cluster(void) {
+    hc_begin();
+    static sloth_state_t s;
+    uint8_t b2[6]; ap(b2, 2);
+    uint8_t b9[6]; ap(b9, 9);
+    hc_release(b2, PHONE);                  /* another station's pair */
+    hc_release(b9, HCX);                    /* a BSSID HCX never asked */
+    hv_solicit(HCX, 1, 3, 0);
+    PAST_GRACE();
+    hv_poll(&s);
+    ASSERT_EQ(s.harvest_sta_count, 1);
+    if (s.harvest_sta_count == 1) ASSERT_EQ(s.harvest_sta[0].qevict, 0);
+    ASSERT(!detail_has(&s, ALERT_TYPE_PMKID_HARVEST, "QUEUE_EVICT"));
+
+    hc_release(b2, HCX);                    /* HCX's own pair */
+    hv_poll(&s);
+    ASSERT_EQ(s.harvest_sta_count, 1);
+    if (s.harvest_sta_count == 1) {
+        ASSERT_EQ(s.harvest_sta[0].qevict, 1);
+        ASSERT(!memcmp(s.harvest_sta[0].qevict_bssid, b2, 6));
+    }
+    ASSERT(detail_has(&s, ALERT_TYPE_PMKID_HARVEST,
+                      "QUEUE_EVICT release on 02:cc:00:00:00:01 at "
+                      "02:00:5e:00:01:02 in the window (1 pairs)"));
+    int i = hv_find(&s, ALERT_TYPE_PMKID_HARVEST);
+    if (i >= 0) ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+
+    /* The release is now older than harvest.window_s; the solicitation
+     * is kept live by a fresh request so only the release ages. */
+    hv_advance_ms(900000 - 1000);
+    hv_solicit(HCX, 1, 3, 0);
+    PAST_GRACE();
+    hv_poll(&s);
+    ASSERT_EQ(s.harvest_sta_count, 1);
+    if (s.harvest_sta_count == 1) ASSERT_EQ(s.harvest_sta[0].qevict, 0);
+    hc_end();
+}
+
+/* The chain's mark: a victim's queue released on the chain's BSSID.
+ * Seen red with the chain loop matching the BSSID alone (the PHONE2
+ * release below then counts), then restored. */
+static void test_queue_evict_marks_the_chain_cluster(void) {
+    hc_begin();
+    static sloth_state_t s;
+    uint8_t b[6]; ap(b, 1);
+    hc_release(b, PHONE2);                  /* not a victim */
+    hv_deauth(PHONE, b, b);
+    hv_deauth(PHONE, b, b);
+    hv_advance_ms(1000);
+    hv_m1m2(PHONE, b, 5, 0);
+    hv_poll(&s);
+    ASSERT_EQ(s.harvest_chain_count, 1);
+    if (s.harvest_chain_count == 1) ASSERT_EQ(s.harvest_chain[0].qevict, 0);
+    hc_release(b, PHONE);
+    hv_poll(&s);
+    if (s.harvest_chain_count == 1) {
+        ASSERT_EQ(s.harvest_chain[0].qevict, 1);
+        ASSERT(!memcmp(s.harvest_chain[0].qevict_sta, PHONE, 6));
+    }
+    ASSERT(detail_has(&s, ALERT_TYPE_HANDSHAKE_HARVEST,
+                      "QUEUE_EVICT release on 02:dd:00:00:00:01 at "
+                      "02:00:5e:00:01:01 in the window (1 victims)"));
+    hc_end();
+}
+
+/* The posture: a BSSID heard handing the PMKID KDE to a station in M1,
+ * any station, asked or not. An M1 without the KDE does not set it
+ * (seen red with ap_note() on every M1, then restored). The PSK test is
+ * the AKM's: PSK, FT-PSK and PSK-SHA256 are passphrase targets, SAE is
+ * not. */
+static void test_ap_posture(void) {
+    hc_begin();
+    uint8_t b1[6]; ap(b1, 1);
+    uint8_t b2[6]; ap(b2, 2);
+    uint8_t b3[6]; ap(b3, 3);
+    hv_eapol(PHONE, b1, 1, 1, 0x01, 1, 0, 0);   /* KDE, never asked */
+    hv_eapol(PHONE, b2, 1, 1, 0x02, 0, 0, 0);   /* no KDE */
+    ASSERT_EQ(harvest_ap_posture(b1), 1);
+    ASSERT_EQ(harvest_ap_posture(b2), 0);
+    ASSERT_EQ(harvest_ap_posture(b3), 0);
+    ASSERT_EQ(harvest_posture_psk(b1, RSN_AKM_PSK), 1);
+    ASSERT_EQ(harvest_posture_psk(b1, RSN_AKM_FT_PSK), 1);
+    ASSERT_EQ(harvest_posture_psk(b1, RSN_AKM_PSK_SHA256 | RSN_AKM_SAE), 1);
+    ASSERT_EQ(harvest_posture_psk(b1, RSN_AKM_SAE), 0);
+    ASSERT_EQ(harvest_posture_psk(b1, 0), 0);
+    ASSERT_EQ(harvest_posture_psk(b2, RSN_AKM_PSK), -1);
+    /* A KDE in an M2 is the station's Key Data, not the AP's offer. */
+    hv_eapol(PHONE, b3, 2, 1, 0x03, 1, 0, 0);
+    ASSERT_EQ(harvest_ap_posture(b3), 0);
+    harvest_clear();
+    ASSERT_EQ(harvest_ap_posture(b1), 0);
+    hc_end();
+}
+
+/* The posture table is bounded and evicts the least recently heard. */
+static void test_ap_posture_is_bounded(void) {
+    hc_begin();
+    for (int i = 0; i < HARVEST_MAX_AP + 1; i++) {
+        uint8_t b[6] = {0x02,0x00,0x5e,0x00,0x02,(uint8_t)i};
+        hv_eapol(PHONE, b, 1, 1, (uint8_t)i, 1, 0, 0);
+        hv_advance_ms(10);
+    }
+    uint8_t first[6] = {0x02,0x00,0x5e,0x00,0x02,0x00};
+    uint8_t last[6]  = {0x02,0x00,0x5e,0x00,0x02,(uint8_t)HARVEST_MAX_AP};
+    ASSERT_EQ(harvest_ap_posture(first), 0);
+    ASSERT_EQ(harvest_ap_posture(last), 1);
+    ASSERT(harvest_evictions() >= 1);
+    hc_end();
+}
+
 void run_harvest_track_tests(void) {
     TEST_SUITE("PMKID / handshake harvesting (#172)");
     RUN_TEST(test_clientless_solicitation_warns);
@@ -715,4 +1004,11 @@ void run_harvest_track_tests(void) {
     RUN_TEST(test_not_a_harvested_handshake);
     RUN_TEST(test_chain_ages_out);
     RUN_TEST(test_collector_records_are_unchanged);
+    RUN_TEST(test_cluster_id_joins_frames_row_and_alert);
+    RUN_TEST(test_cluster_is_new_after_the_window);
+    RUN_TEST(test_chained_m2_carries_the_chain_cluster);
+    RUN_TEST(test_queue_evict_marks_the_station_cluster);
+    RUN_TEST(test_queue_evict_marks_the_chain_cluster);
+    RUN_TEST(test_ap_posture);
+    RUN_TEST(test_ap_posture_is_bounded);
 }

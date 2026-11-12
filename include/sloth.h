@@ -46,7 +46,7 @@
  * stream's history — the records predate the field by many releases. A
  * `sensor_health` line with no `jsonl_version` is from a stream written
  * before this version and says nothing more than that. */
-#define SLOTH_JSONL_VERSION "1.6.0"
+#define SLOTH_JSONL_VERSION "1.7.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
@@ -2713,6 +2713,12 @@ typedef struct {
     uint8_t  bssid[6];
     uint8_t  sta_mac[6];
     char     ssid[33];
+    /* Here rather than beside `channel`, so it fills the byte of padding
+     * after ssid and the struct stays the size it was: the record is
+     * held MAX_EAPOL_EVENTS times in sloth_state_t, which sits near the
+     * test stack's limit, and harvest_cluster_id below takes the four
+     * bytes this move freed. */
+    int8_t   signal_dbm;
     time_t   ts;
     int      msg_num;
     int      has_pmkid;
@@ -2724,8 +2730,17 @@ typedef struct {
     int      handshake_progress;
     int      replay_counter_ok;
     int      assoc_evidence;
-    int8_t   signal_dbm;
     int      channel;
+    /* The harvest tracker's row this message was counted in (#172), 0
+     * for none: the station row (PMKID_HARVEST's subject) for an M1 or
+     * M2 between a station and a BSSID it asked to associate with, or
+     * the BSSID's deauth-then-reconnect chain (HANDSHAKE_HARVEST's) for
+     * the M2 that completed a chained pair, which takes precedence.
+     * Non-zero is not a finding: every station that associates has a
+     * row. It is one when a harvest_station / harvest_chain record or
+     * a PMKID_HARVEST / HANDSHAKE_HARVEST detail names the same id.
+     * src/harvest_track.h. */
+    uint32_t harvest_cluster_id;
 } eapol_event_t;
 
 /* ── Packets ────────────────────────────────────────────── */

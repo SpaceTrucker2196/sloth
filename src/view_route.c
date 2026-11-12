@@ -35,6 +35,10 @@ int view_claims_key(view_t v, int key) {
         /* Tab cycles dashboard panels; the global tab handler would
          * otherwise cycle *views*. */
         return key == '\t';
+    case VIEW_EAPOL:
+        /* 'g' groups one harvest cluster's rows (#172). Collides with
+         * the global Devices switch. */
+        return key == 'g' || key == 'G';
     default:
         return 0;
     }
