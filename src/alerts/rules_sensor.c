@@ -101,15 +101,20 @@ void rule_sensor_undervolt(const sloth_state_t *s, time_t now) {
         if (!r->has_alarm || !r->alarm) continue;
         if (!first) first = r; else others++;
     }
+    /* Each %s a plain variable, so slothweb's detail audit
+     * (web/tests/test_alertfmt.c) can follow it: sid and sname are the
+     * host kernel's hwmon id and the driver's name for the input, never
+     * a remote's text; more is one of three literals. */
     const char *sid = first ? first->id : "?";
-    const char *slabel = first && first->label[0] ? first->label : "no label";
+    const char *sname = first && first->label[0] ? first->label : "no label";
+    const char *more = !others ? ""
+                     : others == 1 ? ", and 1 other sensor" : ", and more sensors";
     char detail[ALERT_DETAIL_LEN];
     snprintf(detail, sizeof(detail),
-             "under-voltage alarm on %s (%s)%s%s: the host's supply is below "
+             "under-voltage alarm on %s (%s)%s: the host's supply is below "
              "what the board needs; brown-outs corrupt SD cards and can "
              "wedge USB radios - check the power supply and cable",
-             sid, slabel, others ? ", and " : "",
-             others ? (others == 1 ? "1 other sensor" : "more sensors") : "");
+             sid, sname, more);
     fire(ALERT_TYPE_SENSOR_UNDERVOLT, ALERT_SEV_WARN, "SENSOR_UNDERVOLT",
          detail, key, NULL, 0, now);
     h->open = 1;
@@ -191,15 +196,17 @@ void rule_sensor_source_down(const sloth_state_t *s, time_t now) {
         const char *state = sys_src_state_name(o->state);
         const char *band = sys_age_band_name(sys_age_band(o->age_s));
         const char *ep = o->endpoint[0] ? o->endpoint : "-";
+        /* msg, not detail: slothweb's audit follows the buffer by name,
+         * and o->detail (the reader's own words, "why") shares it. */
         const char *why = o->detail[0] ? o->detail : "-";
-        char detail[ALERT_DETAIL_LEN];
-        snprintf(detail, sizeof(detail),
+        char msg[ALERT_DETAIL_LEN];
+        snprintf(msg, sizeof(msg),
                  "configured source %s (%s, %s) is %s: %s; last delivery %s%s",
                  o->name, o->kind, ep, state, why, band,
                  main_fn ? " - the sensor is blind on this source's whole "
                            "domain while it is gone" : "");
         fire(ALERT_TYPE_SENSOR_SOURCE_DOWN, main_fn ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
-             "SENSOR_SOURCE_DOWN", detail, key, NULL, 0, now);
+             "SENSOR_SOURCE_DOWN", msg, key, NULL, 0, now);
         h->open = 1;
     }
 }

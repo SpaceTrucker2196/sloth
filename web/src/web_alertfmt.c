@@ -71,6 +71,28 @@ const web_adf_t web_alert_detail_audited[] = {
       " position an SSID holds; sq is the squawk, 4 octal digits (squawk_ok()) or \"-\";"
       " ew is adsb_emergency_name()'s literal from sloth's own k_emerg[] table or \"-\""
       " (src/alerts/rules_adsb.c)" },
+    /* 2026-11-12: the key-harvest kinds the WiFi view's card
+     * (web/ui/lure.js) sits beside, and the sensor's own-state kinds.
+     * KARMA_PROBE_FORGE stays off: its detail formats a variable named
+     * fan_note, which the banned word "note" refuses, and the rename is
+     * in rules_twin.c. */
+    { "PMKID_HARVEST", "tail",
+      "tail is one of two literals just above the detail (src/alerts/rules_harvest.c)" },
+    { "HANDSHAKE_HARVEST", "tail",
+      "tail is one of two literals just above the detail (src/alerts/rules_harvest.c)" },
+    { "SENSOR_UNDERVOLT", "sid sname more",
+      "sid is the hwmon input's id as sloth names it from sysfs (\"hwmon1/in0\") or \"?\";"
+      " sname the driver's name for the input (its inN_label file) or \"no label\", the host"
+      " kernel's text, not a remote's; more one of three literals (src/alerts/rules_sensor.c)."
+      " The same id and label reach slothweb's Sensor health page on sys_sensor records" },
+    { "SENSOR_SOURCE_DOWN", "name kind ep state why band",
+      "name and kind are sloth's own source table words (sys_status.c's SYS_SRC_* rows); ep the"
+      " source's endpoint as configured (an interface name, a device path, gpsd's or a decoder's"
+      " host:port, the operator's own flag value) or \"-\"; state and band the literals"
+      " sys_src_state_name() and sys_age_band_name() return; why the reader's own status word and"
+      " error, written by sloth (src/sys_status.c, \"no frame yet\", a gpsd state and its errno"
+      " text) or \"-\". Each is the source_status record's endpoint, detail and state, which"
+      " slothweb's Sensor health page already shows (src/alerts/rules_sensor.c)" },
 };
 const size_t web_alert_detail_audited_n =
     sizeof(web_alert_detail_audited) / sizeof(web_alert_detail_audited[0]);

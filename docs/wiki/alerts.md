@@ -10,8 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#197: `ATTACK_PATH` and `ATTACK_TOOL_UA` judge HTTP requests only; a paired response no longer fires a second key on the server). 2026-11-12 (#188, #189: `EVIL_TWIN` holds a soft-signal row under a carrier SSID or with a barely heard half at WARN; `EVIL_TWIN_PROXIMITY` reports only the accused half of an attributed pair). **Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
-**Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
+**Last updated**: 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#187, #172: the evidence behind `KARMA_AP`, `KARMA_PROBE_FORGE`, `PMKID_HARVEST` and `HANDSHAKE_HARVEST` on the stream as `karma_suspect`, `harvest_station`, `harvest_chain`, JSONL 1.3.0, and as slothweb's WiFi card; slothweb shows the detail of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`). **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
 
 ---
@@ -269,6 +268,15 @@ BSSID). Both are built to see what the flood rules miss: a harvest
 paced under their thresholds. Nothing transmits, and the handshake
 capture and export are unchanged. Every threshold is a judgement,
 labelled and tunable; the sources describe the mechanism, not a count.
+
+The tables the KARMA and harvest rules read (`KARMA_AP` and `KARMA_PROBE_FORGE`'s
+`[y]` rows, the harvest tracker's stations and chains) are on the stream
+since JSONL 1.3.0 as `karma_suspect`, `harvest_station` and
+`harvest_chain` ([[jsonl-schema]], *Credential lures*): the counts, one
+record per row, change-only, and a `gone` record when a row leaves its
+table. slothweb's WiFi view shows them as the "lures and key harvesting"
+card beside the access points ([[slothweb]]); the alert stays the
+verdict, the card the counts behind it.
 
 Since #187 the same rule also reports the **IE-fingerprint collapse**:
 how many distinct IE fingerprints the advertised SSIDs came back with,
@@ -650,6 +658,12 @@ create/resolve pair per toggle.
   for the rest, which each feed one domain beside them. A source not
   configured never fires. The detail carries the reader's own word, the
   state and the freshness band, never an age in seconds (#173).
+
+Both details are on slothweb's audited list since 2026-11-12
+(`web/src/web_alertfmt.c`), so its Alerts view shows them rather than
+withholding them: every field is the host's own text (an hwmon id and
+its driver's label; a source's name, kind, endpoint and reader's word,
+the strings its `source_status` row already carries to slothweb).
 
 ### Bluetooth Low Energy advertisements (#144 slice 4)
 

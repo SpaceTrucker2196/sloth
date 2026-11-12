@@ -26,7 +26,7 @@ Why it matters to a sensor: a supply below the board's minimum is how SD cards g
 
 - the alert detail (node id and driver);
 - the `sys_status` record's `undervolt` field and the `sys_sensor` row of class `volt` with `alarm` 1, in the batch written at once when the alarm goes from 0 to 1 (docs/wiki/jsonl-schema.md, *Host status and the source inventory*);
-- slothweb's Sensor health page, which charts `sys.undervolt`.
+- slothweb's Sensor health page, which charts `sys.undervolt`, and its Alerts view, which shows the detail since 2026-11-12 (`web/src/web_alertfmt.c`: the hwmon id and the driver's label are the host kernel's text).
 
 To confirm on the host: `cat /sys/class/hwmon/hwmon*/in*_lcrit_alarm`, and the kernel log.
 

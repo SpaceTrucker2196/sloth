@@ -1414,6 +1414,8 @@
     if (v === "radar" && window.SlothRadar) SlothRadar.show();
     // The Probes view (probes.js, its own module): a no-op when not loaded.
     if (v === "probes" && window.SlothProbes) SlothProbes.show();
+    // The KARMA and key-harvest card (lure.js, its own module): a no-op when not loaded.
+    if (v === "wifi" && window.SlothLure) SlothLure.show();
     // The Fleet view (fleet.js, its own module): a no-op when not loaded.
     if (v === "fleet" && window.SlothFleet) SlothFleet.show();
     // Identity across the sites (fleetid.js, its own module, #192 I2-I8).
@@ -6124,6 +6126,9 @@
     ssidSpan: ssidSpan, openDrawer: openDrawer, show: show, scope: function () { return SCOPE; },
     prefGet: prefGet, prefSet: prefSet, fvMark: fvMark, fvName: fvName, fvSplit: fvSplit,
     fvQuery: fvQuery, fvAll: fvAll });
+
+  // The WiFi view's KARMA and key-harvest card (web/ui/lure.js): the page's helpers, lent once.
+  if (window.SlothLure) SlothLure.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp });
 
   // The BLE Devices waterfall (web/ui/bledev.js): the page's helpers, lent once.
   if (window.SlothBleDev) SlothBleDev.init({ el: el, set: set, getJSON: getJSON, theme: theme,

@@ -113,7 +113,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-12 (#198: many alerts triaged as one: `POST /api/frrs/triage/bulk` (100 ids at one token), incidents (`POST /api/frrs/incident`, `GET /api/frrs/incidents`, members by id or by a standing filter that auto-joins new alerts, the incident's state read by its members unless one has its own later verdict), `/api/alerts`'s `incident=`, slothweb.db v12 with its migration, the Alerts page's incidents panel, selection and bulk verdict (`web/ui/incident.js`), five `slothweb-mcp` tools; [[slothweb-mcp]]); 2026-11-12 (the Radar tab's fleet areas: each emitter two or more sloth hosts located drawn as a light translucent area on the dome, from `/api/fleet/locate`; [[fleet]]); listed source cited and read, the generator's refusals tested, the
+**Last updated**: 2026-11-12 (#187, #172: the WiFi view's "lures and key harvesting" card from sloth's `karma_suspect`, `harvest_station` and `harvest_chain` records (JSONL 1.3.0), `/api/lures`, `web_lure.c`; the details of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN` shown), 2026-11-12 (#198: many alerts triaged as one: `POST /api/frrs/triage/bulk` (100 ids at one token), incidents (`POST /api/frrs/incident`, `GET /api/frrs/incidents`, members by id or by a standing filter that auto-joins new alerts, the incident's state read by its members unless one has its own later verdict), `/api/alerts`'s `incident=`, slothweb.db v12 with its migration, the Alerts page's incidents panel, selection and bulk verdict (`web/ui/incident.js`), five `slothweb-mcp` tools; [[slothweb-mcp]]); 2026-11-12 (the Radar tab's fleet areas: each emitter two or more sloth hosts located drawn as a light translucent area on the dome, from `/api/fleet/locate`; [[fleet]]); listed source cited and read, the generator's refusals tested, the
 reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
 set: <!-- count:vendors -->276<!-- /count --> entries, most of the
 reference host's vendors covered and the rest pending, `COVERAGE.md`); 2026-10-27 (sensor location: the alert page's "where the sensor was", the drawer's scatter, `/api/positions` with GeoJSON and GPX, the stream decoder keeping sloth's `loc` object, sloth.db v9 read; [[location]]); 2026-10-27 (an alert's proof: `--pcap-dir`, the capture decoded and hash-checked, the assessment and bibliography, the drawer's rows as tap targets); 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (the vendor
@@ -2397,6 +2397,47 @@ left), shown in the browser's zone. `/api/sys` carries it as
 `quiet_s`, `quiet_until`), `null` from a sloth older than 1.2.0; a
 member out of range, or quiet without an overflow, drops the block and
 keeps the rest of the batch.
+
+## Lures and key harvesting (2026-11-12)
+
+#187 and #172 left the KARMA and key-harvest evidence in the TUI and
+the alerts: an alert said a rule fired, nothing said what it counted.
+sloth now writes the rules' tables to the stream (JSONL 1.3.0,
+[[jsonl-schema]] *Credential lures*): `karma_suspect` per `[y]` row,
+`harvest_station` per station that left an M1 unanswered,
+`harvest_chain` per BSSID whose claimed deauths were followed by a
+victim's fresh handshake. Change-only, with a `gone` record when a row
+leaves sloth's table; counts only (no victim address, no forged-name
+list).
+
+slothweb keeps the newest record per key (`web/src/web_lure.c`, fed
+from the ingest beside the host status), bounded at sloth's table sizes
+(64, 32, 16), and answers `/api/lures`; a record with a malformed or
+out-of-range member is refused whole and counted. A row not refreshed
+for 11 minutes (two heartbeats and a minute: a sloth that stopped, or
+restarted without it) is left out of the answer and counted as
+`stale`. Because sloth writes nothing while its tables are empty, the
+answer also carries `reported`, from `sensor_health`'s
+`jsonl_version`: `true` from 1.3.0 (an empty card is "none"), `false`
+before it ("this sloth does not report these"), `null` before any
+sensor_health ("not known").
+
+The card (`web/ui/lure.js`) sits on the WiFi view between the access
+points and the chains: three tables of the counts, the state sentence
+above them, polled every 15 s while the view shows. Counts, not a
+verdict: whether a row crossed its rule's (possibly tuned) threshold is
+the alert's. The monitor radio's, so hidden under Local with the rest of
+the view; `/api/lures` answers `out_of_scope` there. Every string is
+`textContent`; the SSID and tool name are the air's.
+
+The detail audit (`web/src/web_alertfmt.c`) now lists `PMKID_HARVEST`,
+`HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`. The
+two sensor rules bind every `%s` to a plain variable the audit can
+follow (`rules_sensor.c`: `sname`, `more`, and the source rule's
+buffer renamed `msg`, since `o->detail` shares the buffer's name).
+`KARMA_PROBE_FORGE` stays withheld: its rule formats `fan_note`, a name
+the audit's banned word "note" refuses, and the rename belongs to
+`rules_twin.c`.
 
 ## Tests
 

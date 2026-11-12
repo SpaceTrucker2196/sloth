@@ -60,6 +60,7 @@ static web_gnss_t     g_gnss;
 static web_adsb_t     g_adsb;
 static web_aprs_t     g_aprs;
 static web_sys_t      g_sys;
+static web_lure_t     g_lure;
 static web_chain_t    g_chain;
 static web_fleet_t    g_fleet;
 
@@ -141,6 +142,7 @@ int main(int argc, char **argv) {
         web_adsb_init(&g_adsb) != 0 ||
         web_aprs_init(&g_aprs) != 0 ||
         web_sys_init(&g_sys) != 0 ||
+        web_lure_init(&g_lure) != 0 ||
         web_chain_init(&g_chain) != 0) {
         fprintf(stderr, "slothweb: time series: out of memory\n");
         return 1;
@@ -279,6 +281,7 @@ int main(int argc, char **argv) {
     web_server_set_adsb(&g_srv, &g_adsb);
     web_server_set_aprs(&g_srv, &g_aprs);
     web_server_set_sys(&g_srv, &g_sys);
+    web_server_set_lure(&g_srv, &g_lure);
     web_ingest_set_metrics(&g_ingest, &g_metrics);
     web_ingest_set_frrs(&g_ingest, &g_frrs);
     web_ingest_set_ble(&g_ingest, &g_ble);
@@ -286,6 +289,7 @@ int main(int argc, char **argv) {
     web_ingest_set_adsb(&g_ingest, &g_adsb);
     web_ingest_set_aprs(&g_ingest, &g_aprs);
     web_ingest_set_sys(&g_ingest, &g_sys);
+    web_ingest_set_lure(&g_ingest, &g_lure);
     /* The designated networks the SSID, Probes and WiFi routes mark. */
     web_own_bind(&g_sys.own);
     web_ingest_set_chain(&g_ingest, &g_chain);
@@ -450,6 +454,7 @@ int main(int argc, char **argv) {
     web_adsb_destroy(&g_adsb);
     web_aprs_destroy(&g_aprs);
     web_sys_destroy(&g_sys);
+    web_lure_destroy(&g_lure);
     web_chain_destroy(&g_chain);
     web_rollup_destroy(&g_rollup);
     web_anomaly_destroy(&g_anomaly);

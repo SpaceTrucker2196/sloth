@@ -22,7 +22,7 @@ Dai Zovi and Macaulay built KARMA as "a special access point that responded to a
 
 ## Evidence that proves it
 
-The finding is the set of answers: a Probe Response from one BSSID naming SSID A to a station that had just asked for A, and another naming B, where neither A nor B was ever beaconed by that BSSID and neither is its name. The cited frames are those responses. CRIT adds that the answers reached different stations (different people's private network names from one radio), or that the same radio is also beaconing a pool of names.
+The finding is the set of answers: a Probe Response from one BSSID naming SSID A to a station that had just asked for A, and another naming B, where neither A nor B was ever beaconed by that BSSID and neither is its name. The cited frames are those responses. The counts (names forged, stations answered, beacon fan-out) are on the stream as the BSSID's `karma_suspect` record (JSONL 1.3.0, the `[y]` row) and on slothweb's WiFi view in the "lures and key harvesting" card; slothweb still withholds this alert's detail, because the rule formats a variable named `fan_note` and its audit refuses the word "note". CRIT adds that the answers reached different stations (different people's private network names from one radio), or that the same radio is also beaconing a pool of names.
 
 What refutes it: the BSSID beaconing those names later (the `-C` mode of airbase-ng, [2]) moves it to `KARMA_AP`'s fan-out instead, and the names stop counting as forged here; a hidden AP's own name never counts.
 

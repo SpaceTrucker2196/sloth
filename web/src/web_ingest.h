@@ -59,6 +59,7 @@ struct web_gnss;
 struct web_adsb;
 struct web_aprs;
 struct web_sys;
+struct web_lure;
 struct web_chain;
 
 typedef struct {
@@ -80,6 +81,8 @@ typedef struct {
     struct web_aprs *aprs;
     /* The sensor's host status (web_sysstat.h), when set. */
     struct web_sys *sys;
+    /* The KARMA and key-harvest evidence (web_lure.h), when set. */
+    struct web_lure *lure;
     /* G8's links, the stream's twin_episode (web_chain.h), when set. */
     struct web_chain *chain;
     char       line[WEB_JL_MAX_LINE + 1];
@@ -124,6 +127,9 @@ void web_ingest_set_adsb(web_ingest_t *g, struct web_adsb *a);
 void web_ingest_set_aprs(web_ingest_t *g, struct web_aprs *a);
 /* Feed the sensor's host status as well. Call before web_ingest_start(). */
 void web_ingest_set_sys(web_ingest_t *g, struct web_sys *y);
+/* Feed the KARMA and key-harvest evidence as well. Call before
+ * web_ingest_start(). */
+void web_ingest_set_lure(web_ingest_t *g, struct web_lure *l);
 /* Feed G8's links as well. Call before web_ingest_start(). */
 void web_ingest_set_chain(web_ingest_t *g, struct web_chain *c);
 /* Stop and join it; safe to call when it never started. */
