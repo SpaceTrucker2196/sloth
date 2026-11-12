@@ -1,7 +1,7 @@
 ---
 type: CLEARTEXT_CRED
 technique: T1040
-rule_file: src/alerts/rules_wired.c:186 rule_cleartext_cred()
+rule_file: src/alerts/rules_wired.c:187 rule_cleartext_cred()
 count_semantics: per rule evaluation - exactly one fire() per row of the 64-row cleartext_creds ring per alerts_update() tick (poll.c:310; the wait between ticks is at most POLL_MS 250 ms, include/sloth.h:28 - the loop wakes early on alert fires and --refresh-ms can shorten it, so 4 ticks/s is a floor, not a fixed cadence), because the ring coalesces on (src, dst, dst_port, protocol, username) (cleartext_creds.c:40-53, :83-88) and the key carries that same tuple, so no two rows share a key; a row never expires by time and leaves only when the ring is full and a fresh tuple evicts the oldest timestamp (cleartext_creds.c:55-62, :90), so on a quiet segment one observed login fires every tick for the life of the process, count = (rows) x (ticks they remain), and a reopen needs the row to be gone (restart or eviction) and the credential to be seen again
 severity_assessment: agree - WARN fits: a credential in the clear is a policy failure that is true whether or not anyone was listening, and sloth proves the exposure by having read it [1], [2]; it is not a live intrusion, and CRIT would make the common legacy-device case page like one
 false_positive_risk: low - FTP USER/PASS, POP3 USER/PASS, IMAP LOGIN, SMTP AUTH PLAIN and HTTP Basic carry the credential in the clear by their specifications [3], [4], [5], [6], [7]; the misreads are a username that is not a secret (an anonymous FTP login, a throwaway account on a LAN appliance), and even then the alert is right that the protocol carried it

@@ -1,7 +1,7 @@
 ---
 type: BGP_NOTIFICATION_BURST
 technique: T1499
-rule_file: src/alerts/rules_wired.c:1045 rule_bgp_notification_burst()
+rule_file: src/alerts/rules_wired.c:1060 rule_bgp_notification_burst()
 count_semantics: per rule evaluation - one increment per alerts_update() tick (poll.c:310; the wait between ticks is at most POLL_MS 250 ms, include/sloth.h:28 - the loop wakes early on alert fires and --refresh-ms can shorten it, so 4 ticks/s is a floor, not a fixed cadence) for each peer pair in the 32-row bgp_session table whose lifetime notification_count is at or above the threshold; the counter is never windowed down and the table has no time expiry (STAB_OLDEST, src/bgp_snoop.c:21-22, no stab_expire call), so once a pair has recorded 3 NOTIFICATIONs it fires every tick until 32 newer pairs evict its row, and engine count = (qualifying pairs) x (ticks they remain)
 severity_assessment: agree for the shape, caution on the label - three NOTIFICATIONs on one peering is genuinely rare in healthy operation and each one tears the session down [3], so surfacing it is defensible; but the honest reading of most firings is a flapping peer with a real link or configuration problem, which the corpus itself names as common [1], and the detail string's "hijack-precursor" is the rarer case, not the likely one
 false_positive_risk: medium - a flapping peer produces this honestly and often [1]; the counter is a lifetime total with no window, so three resets spread across the row's life (a maintenance window, a config push, a hold-timer expiry) qualify as readily as three in a minute, and a retransmitted segment carrying a NOTIFICATION is counted again

@@ -1,7 +1,7 @@
 ---
 type: SNMP_COMMUNITY_BRUTE
 technique: T1110.001
-rule_file: src/alerts/rules_wired.c:1147 rule_snmp_community_brute()
+rule_file: src/alerts/rules_wired.c:1162 rule_snmp_community_brute()
 count_semantics: per rule evaluation - one increment per alerts_update() tick (poll.c:310; the wait between ticks is at most POLL_MS 250 ms, include/sloth.h:28 - the loop wakes early on alert fires and --refresh-ms can shorten it, so 4 ticks/s is a floor, not a fixed cadence) for each (querier, agent) pair in the 48-row snmp_flow table whose community_count - the number of distinct community strings seen on the pair, capped at 8 - is at or above the threshold; the set is never cleared and the table has no time expiry (STAB_OLDEST, src/snmp_snoop.c:21-22, no stab_expire call), so once a pair has shown 5 distinct communities it fires every tick until 48 newer pairs evict its row or the process restarts, and engine count = (qualifying pairs) x (ticks they remain)
 severity_assessment: agree - CRIT is proportionate: a legitimate collector uses one community per agent, so five distinct strings from one source to one agent is a signature no benign baseline produces, and the community is the whole of SNMPv1/v2c authentication, carried in cleartext [3]; the lifetime set is less of a problem here than for the connection-count siblings because distinct strings do not accumulate through ordinary use
 false_positive_risk: low - the measure is distinct strings, not volume, so a monitoring host polling all day stays at 1; the realistic benign triggers are the operator's own discovery tooling trying a community list, or a collector reconfigured a few times, both of which are findings about configuration rather than noise

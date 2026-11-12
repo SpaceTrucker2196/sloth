@@ -1,7 +1,7 @@
 ---
 type: PORT_SCAN
 technique: T1046
-rule_file: src/alerts/rules_wired.c:27 (rule_port_scan)
+rule_file: src/alerts/rules_wired.c:28 (rule_port_scan)
 count_semantics: per poll tick (default 250 ms, POLL_MS include/sloth.h:28; --refresh-ms) while the source's scan_entry stays flagged in s->scan_entries - not per connection, packet or port; `observations` moves only when the detail (the port count) changes
 severity_assessment: agree - LOW is right for reconnaissance that reaches only this host's own listening ports; the rule cannot see anything worse than "touched N services"
 false_positive_risk: medium - a legitimate client that opens many services on this host (a browser against a local web stack, a monitoring/vuln scanner, a CDN-less mesh peer) counts the same as nmap; but the private-source exclusion removes most LAN noise

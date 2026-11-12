@@ -1,7 +1,7 @@
 ---
 type: WEAK_TLS
 technique: T1600
-rule_file: src/alerts/rules_wired.c:215 rule_weak_tls()
+rule_file: src/alerts/rules_wired.c:216 rule_weak_tls()
 count_semantics: per rule evaluation - one fire() per tls_log entry whose tls_ver is "TLS 1.0" or "TLS 1.1", per alerts_update() tick (poll.c:310; the wait between ticks is at most POLL_MS 250 ms, include/sloth.h:28 - the loop wakes early on alert fires and --refresh-ms can shorten it, so 4 ticks/s is a floor, not a fixed cadence), so count = sum over ticks of the entries in the 256-row TLS ring that share (src, version); a client that repeats weak ClientHellos holds several rows at once and each adds one per tick; a row has no time expiry and leaves only when 256 newer ClientHellos push it out (tls_log.c:430-441), the key resolves 300 s after the last tick that found one (ALERT_RESOLVE_AFTER_S, include/sloth.h:860) and reopens on the next weak ClientHello from that client
 severity_assessment: agree - WARN fits a posture finding: RFC 8996 makes negotiating 1.0 and 1.1 a MUST NOT, but a deprecated version is not a broken one, and the rule sees the offer, not the negotiated session [1], [2]; the comment's SSLv2/SSLv3 coverage is not real (ver_string() never emits those strings), so the finding is exactly "this client offered nothing above TLS 1.1"
 false_positive_risk: low - a ClientHello whose highest offered version is 1.0 or 1.1 is a true statement about that client, and the common trigger (embedded gear, an old library) is a real exposure rather than a false one [1]; the only misread is a TLS-audit tool deliberately offering old versions, which the ClientHello cannot distinguish

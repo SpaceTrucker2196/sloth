@@ -1,7 +1,7 @@
 ---
 type: ROGUE_RA
 technique: T1557
-rule_file: src/alerts/rules_wired.c:896 rule_rogue_ra()
+rule_file: src/alerts/rules_wired.c:911 rule_rogue_ra()
 count_semantics: per rule evaluation - one increment per alerts_update() tick (poll.c:296; the wait between ticks is at most POLL_MS 250 ms, include/sloth.h:28 - the loop wakes early on alert fires and --refresh-ms can shorten it, so 4 ticks/s is a floor, not a fixed cadence) while two or more distinct IPv6 sources with a non-zero router lifetime are present in the 16-row RA tracker; the comma-joined sorted router list is the key, so one incident persists while both routers keep advertising
 severity_assessment: too high as a blanket - CRIT fits an unsanctioned router injecting a default route (the SLAAC-attack / Slaacers case); a first-hop redundancy pair or two legitimate uplinks produce the same two-router observation; note that mitm6 in its default form advertises router lifetime 0 and is excluded by this rule's lifetime gate, so the best-known IPv6 interposition tool is not what this rule catches
 false_positive_risk: medium - redundant routers and transient host-originated RAs (Windows ICS, 6to4) trip it; the rule has no baseline

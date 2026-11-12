@@ -1,7 +1,7 @@
 ---
 type: DGA_DOMAIN
 technique: T1568.002
-rule_file: src/alerts/rules_wired.c:1219 rule_dga_domain()
+rule_file: src/alerts/rules_wired.c:1234 rule_dga_domain()
 count_semantics: Since #173: per rule evaluation per name - one fire per qname per alerts_update() tick however many ring slots hold it, with the detail and `match_ip` taken from the newest *query* for the name (the resolver is named, as `answered`, only when the ring holds nothing but responses); `observations` moves when a client queries the name again, not on every tick. Before #173, the mechanism the reference-host figure measured: per rule evaluation - one increment per alerts_update() tick (poll.c:296; the wait between ticks is at most POLL_MS 250 ms, include/sloth.h:28 - the loop wakes early on alert fires and --refresh-ms can shorten it, so 4 ticks/s is a floor, not a fixed cadence) for every dns_log ring entry whose qname trips dga_is_suspicious(); a name present in k of the 256 ring slots adds k per tick for as long as those slots survive, so count measures ring residency x ticks, not lookups
 severity_assessment: agree - WARN is right for a heuristic on a single name with no corroboration; the code comment (rules_wired.c:78-79) already positions it above the LOW NXDOMAIN_BURST and below the CRIT threat-intel matchers
 false_positive_risk: high - any 10+ char label with two of {entropy > 3.0, consonant run >= 4, >= 30% digits} fires; CDN, telemetry, hash-labelled and browser-probe names routinely qualify

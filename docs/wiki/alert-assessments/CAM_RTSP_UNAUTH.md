@@ -1,7 +1,7 @@
 ---
 type: CAM_RTSP_UNAUTH
 technique: ""
-rule_file: src/alerts/rules_wired.c:1665 of rule_cam_rtsp_unauth()
+rule_file: src/alerts/rules_wired.c:1680 of rule_cam_rtsp_unauth()
 count_semantics: per poll tick (POLL_MS 250 ms) in which at least one `rtsp_stream_t` row for the server IP has `anon_ok > 0`; one incident per server IP (`cam-rtsp:<ip>`). `observations` rises only when the detail changes - a new anonymous path, or the eviction of one from the 32-row stream table. A repeat DESCRIBE on a known path moves neither the key nor the detail.
 severity_assessment: agree - WARN; it corroborates anonymous stream access from one DESCRIBE/200 exchange and cannot see whether SETUP or PLAY was authenticated, so CRIT would overclaim. The same level as CAM_WS_DISCOVERY.
 false_positive_risk: low-medium - the exchange itself is read exactly (CSeq-paired, Authorization presence checked, 401-before-200 excluded, credential URIs dropped), but "no authentication on the wire" can still be a server that authenticates later in the session or filters by source address.

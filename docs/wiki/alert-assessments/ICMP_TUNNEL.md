@@ -1,7 +1,7 @@
 ---
 type: ICMP_TUNNEL
 technique: T1095
-rule_file: src/alerts/rules_wired.c:525 (rule_icmp_tunnel)
+rule_file: src/alerts/rules_wired.c:540 (rule_icmp_tunnel)
 count_semantics: per poll tick, over a sliding window of distinct oversized Echo Requests. Each tick the rule rebuilds per-(src,dst) buckets from the last ICMP_TUNNEL_WINDOW_S (60 s) of the icmp_log ring and fires when a bucket holds >= ICMP_TUNNEL_THRESHOLD (8) oversized Echo Requests; `count` then increments once per tick the condition holds (engine.c:478-479), ~4/s. So the trigger counts packets (within a 60 s window), but `count` counts time-while-standing. The window slides, so a steady tunnel keeps the bucket full and the alert standing. Cadence caveat: ~4 ticks/s is the default `POLL_MS`; `--refresh-ms` changes it, and a keypress or a *new* incident or escalation (engine.c:526 and :608 wake the loop early; a standing re-assertion does not) adds an extra tick, so the hours-of-standing figures derived from it are approximate, not exact.
 severity_assessment: agree - WARN is right. The rule proves an oversized-Echo pattern, which is a strong covert-channel indicator but has documented benign causes (ping -s, PMTU testing, vendor keepalives); it would be over-claiming to call metadata-only evidence CRIT, and the research note stresses sloth reads only the ICMP length, never the payload.
 false_positive_risk: medium - the two gates (payload >= 64 B past the echo header, and >= 8 from one pair in 60 s) exclude interactive ping (56/32 B) and a single stray large ping, but sustained large-payload diagnostics (ping -s, MTU path testing) trip it honestly; entropy would separate them but the rule does not read the payload.

@@ -35,6 +35,7 @@
 #include "ctrl_frames.h"
 #include "tune.h"
 #include "dns_log.h"
+#include "http_log.h"
 #include "threat_intel.h"
 #include "tmp_dir.h"
 
@@ -4241,6 +4242,139 @@ static void test_attack_tool_ua_normal_browser_no_fire(void) {
              "curl/8.4.0");
     alerts_update(&s);
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_ATTACK_TOOL_UA), -1);
+}
+
+/* ── #197: a response is not an attacker ─────────────────────
+ *
+ * s->http_log carries both halves of a conversation, and
+ * http_log_pair_response() copies the *request's* host and path onto
+ * the response so a consumer knows what was answered. The response's
+ * src is the server. So a rule that keys a path on e->src for every
+ * ring entry fires a second CRIT naming the victim as its own
+ * attacker, and points match_ip — and with it --pcap-dir export and
+ * the device's ALERT_TAGGED risk bit — at the victim.
+ *
+ * Both halves go through the production parsers, the real flow
+ * pairing and http_log_snapshot(), from bytes in RFC 9112 message
+ * syntax (§3 request-line, §4 status-line, §5 field lines, §6 body).
+ * A hand-filled entry with is_response set would not prove that
+ * pairing is what carries the path across, and the pairing is the
+ * whole mechanism — so ap_seed_pair() asserts the misattributed entry
+ * is really in the snapshot before any rule looks at it. Without that
+ * precondition an "it does not fire" assertion is green for the
+ * wrong reason. */
+#define AP_CLI "192.168.1.242"
+#define AP_SRV "192.168.1.245"
+
+static const char AP_REQ_PASSWD[] =
+    "GET /uir//etc/passwd HTTP/1.1\r\n"
+    "Host: 192.168.1.245\r\n"
+    "User-Agent: Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/115.0\r\n"
+    "Accept: */*\r\n"
+    "\r\n";
+static const char AP_RESP_404[] =
+    "HTTP/1.1 404 Not Found\r\n"
+    "Server: nginx\r\n"
+    "Content-Type: text/html\r\n"
+    "Content-Length: 9\r\n"
+    "\r\n"
+    "not here\n";
+
+/* One request/response pair on one flow, into s->http_log.
+ *
+ * `ua`, when non-NULL, is written over the parsed User-Agent of
+ * **both** halves. On the request that is just a header value the
+ * fixture chooses. On the response it is a field the wire cannot
+ * produce today — http_log_parse_response() never fills user_agent
+ * and http_log_pair_response() copies only host and path — and it is
+ * written deliberately, because it is the only way a test can see
+ * rule_attack_tool_ua()'s direction check at all. The alternative is
+ * a guard no test can distinguish from its own absence, which is the
+ * thing agents/AGENTS.md says not to claim coverage for. What the
+ * fixture models is the contract — "src and user_agent describe the
+ * same endpoint only on a request" — not an observed frame. */
+static void ap_seed_pair(sloth_state_t *s, const char *ua) {
+    http_log_clear();
+    http_log_entry_t rq, rs;
+
+    ASSERT(http_log_parse((const uint8_t *)AP_REQ_PASSWD,
+                          (int)strlen(AP_REQ_PASSWD), AP_CLI, &rq));
+    snprintf(rq.dst, sizeof(rq.dst), "%s", AP_SRV);
+    rq.src_port = 50123; rq.dst_port = 80;
+    if (ua) snprintf(rq.user_agent, sizeof(rq.user_agent), "%s", ua);
+    http_log_record(&rq);
+
+    ASSERT(http_log_parse_response((const uint8_t *)AP_RESP_404,
+                                   (int)strlen(AP_RESP_404), AP_SRV, &rs));
+    snprintf(rs.dst, sizeof(rs.dst), "%s", AP_CLI);
+    rs.src_port = 80; rs.dst_port = 50123;
+    /* The pairing is the precondition, not a detail: it is what puts
+     * the client's path on a server-sourced entry. */
+    ASSERT(http_log_pair_response(&rs));
+    if (ua) snprintf(rs.user_agent, sizeof(rs.user_agent), "%s", ua);
+    http_log_record(&rs);
+
+    http_log_snapshot(s);
+    /* Newest first, so index 0 is the response. */
+    ASSERT_EQ(s->http_log_count, 2);
+    ASSERT_EQ(s->http_log[0].is_response, 1);
+    ASSERT_STR(s->http_log[0].src,  AP_SRV);
+    ASSERT_STR(s->http_log[0].path, "/uir//etc/passwd");
+    ASSERT_EQ(s->http_log[1].is_response, 0);
+    ASSERT_STR(s->http_log[1].src,  AP_CLI);
+    ASSERT_STR(s->http_log[1].path, "/uir//etc/passwd");
+}
+
+static int ap_count_type(const sloth_state_t *s, alert_type_t ty) {
+    int n = 0;
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == ty) n++;
+    return n;
+}
+
+/* The issue's acceptance criterion: one pair, one key, and the key
+ * names the client. */
+static void test_attack_path_response_is_not_an_attacker(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    ap_seed_pair(&s, NULL);
+    alerts_update(&s);
+
+    ASSERT_EQ(ap_count_type(&s, ALERT_TYPE_ATTACK_PATH), 1);
+    int idx = find_alert(&s, ALERT_TYPE_ATTACK_PATH);
+    ASSERT(idx >= 0);
+    if (idx < 0) return;
+    ASSERT_STR(s.alerts[idx].key, "path:" AP_CLI ":etc/passwd");
+    /* match_ip is what --pcap-dir and ALERT_TAGGED follow. */
+    ASSERT_STR(s.alerts[idx].match_ip, AP_CLI);
+    for (int i = 0; i < s.alert_count; i++)
+        if (s.alerts[i].type == ALERT_TYPE_ATTACK_PATH)
+            ASSERT(strstr(s.alerts[i].key, AP_SRV) == NULL);
+}
+
+/* The sibling rule on the same ring. The claim is the same one and a
+ * different rule: the tool belongs to the endpoint that ran it, so a
+ * server-sourced entry carrying the request's fields must not become a
+ * second key. See ap_seed_pair() for why the response half of this
+ * fixture carries a User-Agent the wire would not give it, and what
+ * that does and does not model. Mutation that reddens this and
+ * nothing else: drop the http_entry_is_request() test from the label
+ * pass in rule_attack_tool_ua(). */
+static void test_attack_tool_ua_response_is_not_an_attacker(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    ap_seed_pair(&s, "sqlmap/1.7.5#stable (http://sqlmap.org)");
+    alerts_update(&s);
+
+    ASSERT_EQ(ap_count_type(&s, ALERT_TYPE_ATTACK_TOOL_UA), 1);
+    int idx = find_alert(&s, ALERT_TYPE_ATTACK_TOOL_UA);
+    ASSERT(idx >= 0);
+    if (idx < 0) return;
+    ASSERT_STR(s.alerts[idx].match_ip, AP_CLI);
+    ASSERT(strstr(s.alerts[idx].key, AP_CLI) != NULL);
+    for (int i = 0; i < s.alert_count; i++)
+        if (s.alerts[i].type == ALERT_TYPE_ATTACK_TOOL_UA)
+            ASSERT(strstr(s.alerts[i].key, AP_SRV) == NULL);
 }
 
 /* ── Probe flood ─────────────────────────────────────────── */
@@ -12916,6 +13050,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_attack_tool_ua_sqlmap_fires);
     RUN_TEST(test_attack_tool_ua_nmap_case_insensitive);
     RUN_TEST(test_attack_tool_ua_normal_browser_no_fire);
+    RUN_TEST(test_attack_path_response_is_not_an_attacker);
+    RUN_TEST(test_attack_tool_ua_response_is_not_an_attacker);
     RUN_TEST(test_attack_path_traversal_fires);
     RUN_TEST(test_attack_path_sqli_fires);
     RUN_TEST(test_attack_path_log4shell_fires);

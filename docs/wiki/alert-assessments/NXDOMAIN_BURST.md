@@ -1,7 +1,7 @@
 ---
 type: NXDOMAIN_BURST
 technique: T1071.004
-rule_file: src/alerts/rules_wired.c:43 (rule_nxdomain_burst)
+rule_file: src/alerts/rules_wired.c:44 (rule_nxdomain_burst)
 count_semantics: per poll tick (default 250 ms) while a source still has >= ALERT_NXDOMAIN_THRESH NXDOMAIN responses inside the trailing ALERT_NXDOMAIN_WINDOW_S = 60 s of dns_log; the rule recounts the whole window every tick, so `count` is tick re-evaluations, not NXDOMAIN packets - the packet count is in the detail
 severity_assessment: agree - LOW is correct; an NXDOMAIN burst is a side effect, not an intent, and the dedicated DGA_DOMAIN / DNS_TUNNEL rules carry the WARN/CRIT shapes
 false_positive_risk: high - browsers (Chromium's random-hostname interception probes), misconfigured search domains, dead CDNs/typos and offline mDNS/SRV lookups all produce NXDOMAIN bursts from one source
