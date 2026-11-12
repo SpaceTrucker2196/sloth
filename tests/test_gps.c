@@ -294,6 +294,78 @@ static void test_gpsd_other_and_malformed(void) {
     ASSERT_EQ(gpsd_json_parse(S(""), &m), -1);
 }
 
+/* The one line sloth sends gpsd, byte for byte (#182, owner ruling
+ * 2026-11-12: "pps":true added so gpsd sends TOFF). A change to it is a
+ * change to what sloth puts on the wire and must show up here. */
+static void test_gpsd_watch_line_bytes(void) {
+    static const char want[] =
+        "?WATCH={\"enable\":true,\"json\":true,\"pps\":true}\n";
+    ASSERT_EQ(sizeof(GPSD_WATCH_LINE), sizeof(want));
+    ASSERT_EQ(memcmp(GPSD_WATCH_LINE, want, sizeof(want)), 0);
+    ASSERT_EQ(strlen(GPSD_WATCH_LINE), 46);
+    /* One line: the newline is the last byte and the only one. */
+    ASSERT(strchr(GPSD_WATCH_LINE, '\n') == GPSD_WATCH_LINE + 45);
+}
+
+/* gpsd_json(5)'s own TOFF example, and a PPS: TOFF read to the
+ * millisecond (nanoseconds truncated), PPS well-formed and not read. */
+static void test_gpsd_toff_parsed(void) {
+    gpsd_msg_t m;
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TOFF\",\"device\":\"/dev/ttyUSB0\","
+                                "\"real_sec\":1330212592,\"real_nsec\":343182,"
+                                "\"clock_sec\":1330212592,\"clock_nsec\":343184,"
+                                "\"precision\":-2}"), &m), 1);
+    ASSERT_EQ(m.cls, GPSD_CLS_TOFF);
+    ASSERT_EQ(m.toff_real_ms, 1330212592000LL);
+    ASSERT_EQ(m.toff_clock_ms, 1330212592000LL);
+    /* Key order is gpsd's business; a receiver 1.4 s behind the host. */
+    ASSERT_EQ(gpsd_json_parse(S("{\"clock_nsec\":900000000,\"clock_sec\":1800000001,"
+                                "\"class\":\"TOFF\",\"real_nsec\":499999999,"
+                                "\"real_sec\":1800000000}"), &m), 1);
+    ASSERT_EQ(m.cls, GPSD_CLS_TOFF);
+    ASSERT_EQ(m.toff_real_ms - m.toff_clock_ms, -1401LL);
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"PPS\",\"device\":\"/dev/ttyUSB0\","
+                                "\"real_sec\":1330212592,\"real_nsec\":0,"
+                                "\"clock_sec\":1330212592,\"clock_nsec\":3,"
+                                "\"precision\":-20,\"shm\":\"NTP2\"}"), &m), 0);
+    ASSERT_EQ(m.cls, GPSD_CLS_OTHER);
+}
+
+/* A TOFF sloth cannot measure from is refused as a parse error, never
+ * clamped into an offset: a field missing, fractional, negative, a
+ * nanosecond count of a whole second or more, seconds past the year
+ * 3000 or overflowing, a string where a number belongs, and a line over
+ * GPSD_MAX_LINE. */
+static void test_gpsd_toff_malformed_refused(void) {
+    gpsd_msg_t m;
+#define TOFF4(rs, rn, cs, cn) \
+    "{\"class\":\"TOFF\",\"real_sec\":" rs ",\"real_nsec\":" rn \
+    ",\"clock_sec\":" cs ",\"clock_nsec\":" cn "}"
+    ASSERT_EQ(gpsd_json_parse(S(TOFF4("1800000000", "0", "1800000000", "999999999")), &m), 1);
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TOFF\",\"real_sec\":1800000000,"
+                                "\"real_nsec\":0,\"clock_sec\":1800000000}"), &m), -1);
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TOFF\",\"real_nsec\":0,"
+                                "\"clock_sec\":1800000000,\"clock_nsec\":0}"), &m), -1);
+    ASSERT_EQ(gpsd_json_parse(S(TOFF4("1800000000.5", "0", "1800000000", "0")), &m), -1);
+    ASSERT_EQ(gpsd_json_parse(S(TOFF4("-1", "0", "1800000000", "0")), &m), -1);
+    ASSERT_EQ(gpsd_json_parse(S(TOFF4("1800000000", "1000000000", "1800000000", "0")), &m), -1);
+    ASSERT_EQ(gpsd_json_parse(S(TOFF4("1800000000", "0", "1800000000", "-5")), &m), -1);
+    ASSERT_EQ(gpsd_json_parse(S(TOFF4("32503680001", "0", "1800000000", "0")), &m), -1);
+    ASSERT_EQ(gpsd_json_parse(S(TOFF4("1e300", "0", "1800000000", "0")), &m), -1);
+    ASSERT_EQ(gpsd_json_parse(S(TOFF4("1800000000", "0", "1e400", "0")), &m), -1);
+    ASSERT_EQ(gpsd_json_parse(S(TOFF4("\"1800000000\"", "0", "1800000000", "0")), &m), -1);
+#undef TOFF4
+    static char big[GPSD_MAX_LINE + 64];
+    const char *head = "{\"class\":\"TOFF\",\"real_sec\":1800000000,\"real_nsec\":0,"
+                       "\"clock_sec\":1800000000,\"clock_nsec\":0,\"device\":\"";
+    size_t hl = strlen(head);
+    memcpy(big, head, hl);
+    memset(big + hl, 'a', sizeof(big) - hl - 3);
+    memcpy(big + sizeof(big) - 3, "\"}", 2);
+    big[sizeof(big) - 1] = '\0';
+    ASSERT_EQ(gpsd_json_parse(big, strlen(big), &m), -1);
+}
+
 /* ── --gps SPEC ────────────────────────────────────────────── */
 
 static void test_gps_spec_serial_and_gpsd(void) {
@@ -2585,6 +2657,9 @@ void run_gps_tests(void) {
     RUN_TEST(test_gpsd_tpv_reordered);
     RUN_TEST(test_gpsd_sky_skips_nested);
     RUN_TEST(test_gpsd_other_and_malformed);
+    RUN_TEST(test_gpsd_watch_line_bytes);
+    RUN_TEST(test_gpsd_toff_parsed);
+    RUN_TEST(test_gpsd_toff_malformed_refused);
     TEST_SUITE("gps: --gps SPEC and --location");
     RUN_TEST(test_gps_spec_serial_and_gpsd);
     RUN_TEST(test_gps_spec_refusals);

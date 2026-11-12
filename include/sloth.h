@@ -3307,11 +3307,30 @@ typedef struct {
     uint8_t  usat, nsat;
     uint8_t  mode;             /* the TPV's mode: 0..1 no fix */
 } gnss_sec_pt_t;
+/* One gpsd TOFF (#182, 2026-11-12): the receiver's time against gpsd's
+ * clock as gpsd stamped them, and the host's clocks when sloth read it.
+ * GNSS_TIME_JUMP judges a step on consecutive TOFFs when gpsd sends
+ * them; gpsd does not send one per TPV (the reference site: 7 TOFF to
+ * 14 TPV in 5 s), so TOFFs are never paired with fixes. */
+#define GNSS_TOFF_HIST 64
+typedef struct {
+    uint64_t  seq;             /* TOFFs read, lifetime */
+    uint64_t  mono_ms;         /* host monotonic ms at sloth's read */
+    long long wall_ms;         /* host wall ms at sloth's read */
+    long long real_ms;         /* TOFF real: the receiver's time, unix ms */
+    long long off_ms;          /* TOFF real - clock, ms */
+    int       leap;            /* the newest TPV's leapseconds, -1 absent */
+    int       reacq;           /* the first TOFF since sloth started, since
+                                * a TPV said no fix, or since the source was
+                                * lost: nothing before it to step from */
+} gnss_toff_pt_t;
 typedef struct {
     gnss_fix_pt_t fixes[GNSS_FIX_HIST];
     int           fix_n, fix_head;     /* head: the next slot written */
     gnss_sec_pt_t secs[GNSS_SERIES_S];
     int           sec_n, sec_head;
+    gnss_toff_pt_t toffs[GNSS_TOFF_HIST];
+    int           toff_n, toff_head;
 } gnss_hist_t;
 
 /* ── ADS-B aircraft (#26, slice 1, 2026-11-05) ───────────────────────

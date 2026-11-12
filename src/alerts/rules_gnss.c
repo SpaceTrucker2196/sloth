@@ -73,6 +73,18 @@
  * never judging again. The GNSS_BACKLOG_MAX_MS figure, a reader
  * seconds behind; a judgement, no source gives one. */
 #define GNSS_LATE_REBASE_MS   30000
+/* A fix is judged on gpsd's TOFF, not on its own read time, when a TOFF
+ * was read within this of it (#182). gpsd sends TOFF "on each cycle"
+ * (gpsd_json(5)) but not one per TPV: the reference site read 7 TOFF to
+ * 14 TPV in 5 s, so a TOFF is not paired with a fix, only taken as
+ * proof the TOFF measure is running. Three cycles at 1 Hz: one skipped
+ * TOFF does not drop a fix to the read-time measure. A judgement. */
+#define GNSS_TOFF_FRESH_MS    3000
+/* Two TOFFs further apart than this on the host's monotonic clock are
+ * not stepped across: gpsd stopped sending, and the host clock's slew
+ * over the gap is not known. GNSS_LIVE_MS, the figure for a receiver no
+ * longer heard. */
+#define GNSS_TOFF_GAP_MS      GNSS_LIVE_MS
 
 /* What the rules remember between ticks. Fix pairs are judged once:
  * each rule keeps the TPV count of the newest fix it has judged. A fix
@@ -91,6 +103,11 @@ static struct {
     /* Host monotonic ms of the first fix of the current run read late
      * against the anchor (read_lateness()), 0 when none is running. */
     uint64_t      late_mono;
+    /* The TOFF measure's own reference and the TOFF count of the newest
+     * TOFF judged (#182): the same rules, on gpsd's stamps. */
+    uint64_t       toff_seq;
+    int            has_toff_anchor;
+    gnss_toff_pt_t toff_anchor;
     /* GNSS_JAMMING: the baseline a collapse was measured against, held
      * while the mean stays down so a standing jam does not resolve the
      * moment its own collapse ages into the baseline. */
@@ -161,17 +178,16 @@ static long long host_step(const gnss_fix_pt_t *a, const gnss_fix_pt_t *b) {
  *                inserted, in case leapseconds changes on a later TPV.
  *   rollover     a date error of a whole multiple of 1024 weeks: "a
  *                fault, not an attack". */
-static int time_step_benign(const gnss_fix_pt_t *a, const gnss_fix_pt_t *b,
-                            long long step) {
+static int step_benign(int leap_a, int leap_b, long long rx_b, long long step) {
     long long whole = (step >= 0 ? step + 500 : step - 500) / 1000;
     long long frac = llabs_(step - whole * 1000);
     if (whole != 0 && frac <= GNSS_LEAP_TOL_MS) {
-        if (a->leap >= 0 && b->leap >= 0 && a->leap != b->leap &&
-            whole == -(long long)(b->leap - a->leap))
+        if (leap_a >= 0 && leap_b >= 0 && leap_a != leap_b &&
+            whole == -(long long)(leap_b - leap_a))
             return 1;
-        if (a->leap < 0 && b->leap >= 0 && llabs_(whole) <= b->leap)
+        if (leap_a < 0 && leap_b >= 0 && llabs_(whole) <= leap_b)
             return 1;
-        long long tod = b->rx_time_ms % 86400000LL;
+        long long tod = rx_b % 86400000LL;
         if (tod < 0) tod += 86400000LL;
         if (llabs_(whole) == 1 && (tod <= 2000 || tod >= 86400000LL - 2000))
             return 1;
@@ -182,6 +198,11 @@ static int time_step_benign(const gnss_fix_pt_t *a, const gnss_fix_pt_t *b,
             return 2;
     }
     return 0;
+}
+
+static int time_step_benign(const gnss_fix_pt_t *a, const gnss_fix_pt_t *b,
+                            long long step) {
+    return step_benign(a->leap, b->leap, b->rx_time_ms, step);
 }
 
 /* Elapsed seconds between the host's receipt of two fixes on the
@@ -507,6 +528,28 @@ void rule_gnss_jamming(const sloth_state_t *s, time_t now) {
  * out, so an NTP step or an operator's `date -s` on the host moves
  * time_off_ms and never fires this; the detail reports both.
  *
+ * Two measures (#182, owner ruling 2026-11-12), and the detail names
+ * the one that judged:
+ *   - TOFF, primary. gpsd sends TOFF under ?WATCH "pps":true: the
+ *     receiver's time for the cycle (real) and gpsd's clock when the
+ *     cycle's first message arrived (clock), both stamped by gpsd
+ *     (gpsd_json(5)). real - clock moves only when the receiver's time
+ *     or the host's clock moves; sloth's read latency is not in it. The
+ *     step between consecutive TOFFs is the change of real - clock plus
+ *     the host's wall-against-monotonic step between sloth's two reads
+ *     (read together, so latency-free too), i.e. the receiver against
+ *     the monotonic clock as below, judged with the same hold, benign
+ *     shapes and suspend test (toff_judge()). TOFFs are never paired
+ *     with fixes: gpsd sends fewer TOFFs than TPVs.
+ *   - Read time, the fallback for a fix with no TOFF read within
+ *     GNSS_TOFF_FRESH_MS (an older gpsd, a receiver gpsd times no cycle
+ *     for): everything below, unchanged. While TOFF judges, each fix is
+ *     only taken as the read-time anchor, so the fallback starts from a
+ *     fresh reference when TOFF stops.
+ * A remote gpsd (--gps-allow-remote) stamps clock on its own host, so a
+ * step of that host's clock reads as a TOFF step; on loopback, gpsd's
+ * clock is the host's and its step is taken out.
+ *
  * mono_b is when sloth read the TPV, not when the receiver produced it,
  * so read latency enters the step. Latency only ever makes a fix look
  * late, and the rule meets each way it does:
@@ -564,18 +607,105 @@ static void set_anchor(const gnss_fix_pt_t *p) {
     g_gnss.late_mono = 0;
 }
 
+static const gnss_toff_pt_t *toff_at(const gnss_hist_t *h, int i) {
+    return &h->toffs[(h->toff_head - h->toff_n + i + 2 * GNSS_TOFF_HIST) % GNSS_TOFF_HIST];
+}
+
+/* The host's wall clock against its monotonic one at sloth's two reads. */
+static long long toff_host_step(const gnss_toff_pt_t *a, const gnss_toff_pt_t *b) {
+    return (b->wall_ms - (long long)b->mono_ms) - (a->wall_ms - (long long)a->mono_ms);
+}
+
+/* The receiver's step between two TOFFs against the host's monotonic
+ * clock: the change of gpsd's real - clock, with the host's wall step
+ * added back since gpsd's clock is the host's wall clock. */
+static long long toff_step(const gnss_toff_pt_t *a, const gnss_toff_pt_t *b) {
+    return (b->off_ms - a->off_ms) + toff_host_step(a, b);
+}
+
+/* b can be stepped to from a: nothing between them broke the run. */
+static int toff_pair_ok(const gnss_toff_pt_t *a, const gnss_toff_pt_t *b) {
+    return !b->reacq && b->mono_ms >= a->mono_ms &&
+           b->mono_ms - a->mono_ms <= GNSS_TOFF_GAP_MS;
+}
+
+/* A TOFF was read within GNSS_TOFF_FRESH_MS of mono: the fix read then
+ * is TOFF's to judge. */
+static int toff_covers(const gnss_hist_t *h, uint64_t mono) {
+    for (int i = h->toff_n - 1; i >= 0; i--) {
+        uint64_t t = toff_at(h, i)->mono_ms;
+        uint64_t d = t > mono ? t - mono : mono - t;
+        if (d <= GNSS_TOFF_FRESH_MS) return 1;
+        if (t + GNSS_TOFF_FRESH_MS < mono) return 0;  /* older from here */
+    }
+    return 0;
+}
+
+static void set_toff_anchor(const gnss_toff_pt_t *p) {
+    g_gnss.toff_anchor = *p;
+    g_gnss.has_toff_anchor = 1;
+}
+
+/* GNSS_TIME_JUMP on consecutive TOFFs: from the anchor (the last TOFF
+ * accepted), a step of at least thr that holds, within half of it, on
+ * the next TOFF. No queue or late-read guard: no read time is in it. */
+static void toff_judge(const gnss_hist_t *h, long long thr, time_t now) {
+    for (int i = 0; i < h->toff_n; i++) {
+        const gnss_toff_pt_t *b = toff_at(h, i);
+        if (b->seq <= g_gnss.toff_seq) continue;
+        const gnss_toff_pt_t *a = g_gnss.has_toff_anchor ? &g_gnss.toff_anchor : NULL;
+        if (b->mono_ms <= g_gnss.forget_mono || !a || !toff_pair_ok(a, b)) {
+            set_toff_anchor(b);
+            g_gnss.toff_seq = b->seq;
+            continue;
+        }
+        long long step = toff_step(a, b);
+        long long hs = toff_host_step(a, b);
+        if (llabs_(step) < thr || step_benign(a->leap, b->leap, b->real_ms, step) ||
+            (hs >= thr && llabs_(step - hs) < thr / 2)) {
+            set_toff_anchor(b);
+            g_gnss.toff_seq = b->seq;
+            continue;
+        }
+        if (i + 1 >= h->toff_n) break;          /* judge b on the next */
+        const gnss_toff_pt_t *c = toff_at(h, i + 1);
+        g_gnss.toff_seq = b->seq;
+        if (!toff_pair_ok(b, c)) continue;
+        if (llabs_(toff_step(b, c)) >= thr / 2) continue;
+
+        char key[32];
+        akey_t ak;
+        akey_begin(&ak, key, sizeof(key), "gnsstime");
+        if (!akey_end(&ak)[0]) return;
+        long long real_gap = b->real_ms - a->real_ms;
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(detail, sizeof(detail),
+                 "judged on gpsd TOFF: receiver time stepped %+lld ms against "
+                 "the host's monotonic clock, held on the next TOFF; gpsd's "
+                 "receiver-minus-clock offset %+lld -> %+lld ms, TOFFs %lld ms "
+                 "apart in receiver time; host clock step %+lld ms; leap %d -> %d, "
+                 "not a leap second or week rollover",
+                 step, a->off_ms, b->off_ms, real_gap, hs, a->leap, b->leap);
+        set_toff_anchor(b);
+        fire(ALERT_TYPE_GNSS_TIME_JUMP, ALERT_SEV_WARN, "GNSS_TIME_JUMP",
+             detail, key, NULL, 0, now);
+    }
+}
+
 void rule_gnss_time_jump(const sloth_state_t *s, time_t now) {
     const gnss_hist_t *h = s->gnss_hist ? s->gnss_hist : &g_empty;
     const long long thr = (long long)tune_val(TUNE_GNSS_TIME_JUMP_MS);
     const long long iv = fix_interval_ms(h);
+    toff_judge(h, thr, now);
     for (int i = 0; i < h->fix_n; i++) {
         const gnss_fix_pt_t *b = fix_at(h, i);
         if (b->seq <= g_gnss.time_seq) continue;
         const gnss_fix_pt_t *a = g_gnss.has_anchor ? &g_gnss.anchor : NULL;
         /* Nothing to step from: b is the new reference. A fix from
-         * before alerts_clear() is a reference and never a finding. */
+         * before alerts_clear() is a reference and never a finding. A
+         * fix TOFF covers is TOFF's to judge (#182): only the anchor. */
         if (b->mono_ms <= g_gnss.forget_mono || b->reacq || !a ||
-            !time_pair_ok(a, b)) {
+            !time_pair_ok(a, b) || toff_covers(h, b->mono_ms)) {
             set_anchor(b);
             g_gnss.time_seq = b->seq;
             continue;
@@ -619,6 +749,7 @@ void rule_gnss_time_jump(const sloth_state_t *s, time_t now) {
         long long rx_gap = b->rx_time_ms - a->rx_time_ms;
         char detail[ALERT_DETAIL_LEN];
         snprintf(detail, sizeof(detail),
+                 "judged on read time, no TOFF: "
                  "receiver time stepped %+lld ms against the host's monotonic "
                  "clock, held on the next fix; reads %lld ms apart, receiver "
                  "times %lld ms apart, fix interval %lld ms; "
