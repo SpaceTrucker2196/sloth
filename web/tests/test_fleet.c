@@ -23,8 +23,10 @@
 
 #include "web_assets.h"
 #include "web_config.h"
+#include "web_adsb.h"
 #include "web_alertkb.h"
 #include "web_fleet.h"
+#include "web_fleetadsb.h"
 #include "web_fleetgnss.h"
 #include "web_frrs.h"
 #include "web_jsonl.h"
@@ -241,13 +243,15 @@ static int count_of(const char *s, const char *needle) {
 /* The tab after TACDB, its click, show()'s hook, the init line with the
  * helpers lent, the view and its ids; the map is the page's own <svg>
  * drawn with the elements' length properties (no attribute writes, no
- * namespace URL in the page); the module fetches nothing but the four
- * routes (#192 I6 added /api/fleet/gnss). Pinned by whole functions
+ * namespace URL in the page); the module fetches nothing but the five
+ * routes (#192 I6 added /api/fleet/gnss, I7 /api/fleet/aircraft). Pinned by whole functions
  * (#171 V1's review): the projection (fitted to the sites and the
  * located candidates' radii, #192 I5), the metre scale bar, the located
  * emitters' layer, a site's bar on the shared axis, the device link, the
  * SVG element maker, the poll, and the GNSS panel's gauge, event rows
- * and load (#192 I6). The fetch census was seen red with a third getJSON
+ * and load (#192 I6), the coverage plot, the aircraft rows and their
+ * load (#192 I7; the plot is drawn into an <svg> the module makes, so
+ * the view's markup still holds one). The fetch census was seen red with a third getJSON
  * ("/api/fleet/peers") added to loadOverview(), and with a fetch("/x")
  * added to load(); the one-control census with a second <select
  * id="fleet-x"> added to v-fleet; the token-only colours with the
@@ -268,7 +272,8 @@ static void test_fleet_page(void) {
         "fleet-head", "fleet-empty", "fleet-map", "fleet-map-g", "fleet-map-note",
         "fleet-cards", "fleet-shared-note", "fleet-kind", "fleet-shared-rows", "fleet-axis",
         "fleet-loc-note", "fleet-loc-rows", "fleet-gnss-note", "fleet-gnss-sites",
-        "fleet-gnss-base", "fleet-gnss-rows",
+        "fleet-gnss-base", "fleet-gnss-rows", "fleet-ac-note", "fleet-ac-sites",
+        "fleet-ac-rows",
     };
     char *mod = fleet_module(p);
     WT_ASSERT(mod != NULL);
@@ -493,12 +498,108 @@ static void test_fleet_page(void) {
               "    });\n"
               "  ");
     WT_HAS(mod,
+              "  function polar(s) {\n"
+              "    var svg = svgEl(\"svg\", \"fleet-polar\");\n"
+              "    var c = POLAR / 2, max = num(s.range_max_m) && s.range_max_m > 0 ? s.range_max_m : 0;\n"
+              "    [1, 2, 3].forEach(function (k) {\n"
+              "      var r = svgEl(\"circle\", \"fleet-pring\");\n"
+              "      r.cx.baseVal.value = c; r.cy.baseVal.value = c; r.r.baseVal.value = POLAR_R * k / 3;\n"
+              "      svg.appendChild(r);\n"
+              "    });\n"
+              "    if (max) {\n"
+              "      var poly = svgEl(\"polygon\", \"fleet-pcov\"), host = $(\"fleet-map\");\n"
+              "      s.sectors.forEach(function (sec) {\n"
+              "        var r = num(sec.max_m) ? POLAR_R * sec.max_m / max : 0;\n"
+              "        [sec.from, sec.from + 30].forEach(function (deg) {\n"
+              "          var p = host.createSVGPoint(), a = deg * Math.PI / 180;\n"
+              "          p.x = c + r * Math.sin(a); p.y = c - r * Math.cos(a);\n"
+              "          poly.points.appendItem(p);\n"
+              "        });\n"
+              "      });\n"
+              "      svg.appendChild(poly);\n"
+              "    }\n"
+              "    var me = svgEl(\"circle\", \"fleet-pself\");\n"
+              "    me.cx.baseVal.value = c; me.cy.baseVal.value = c; me.r.baseVal.value = 3;\n"
+              "    svg.appendChild(me);\n"
+              "    var n = svgEl(\"text\", \"fleet-pt\");\n"
+              "    n.x.baseVal.appendItem(svgLen(c)); n.y.baseVal.appendItem(svgLen(10));\n"
+              "    n.textContent = \"N\";\n"
+              "    svg.appendChild(n);\n"
+              "    var t = svgEl(\"text\", \"fleet-pt\");\n"
+              "    t.x.baseVal.appendItem(svgLen(c)); t.y.baseVal.appendItem(svgLen(POLAR - 2));\n"
+              "    t.textContent = max ? \"outer ring \" + dist(max) : \"no position decoded\";\n"
+              "    svg.appendChild(t);\n"
+              "    return svg;\n"
+              "  }\n");
+    WT_HAS(mod,
+              "  function acCards(j) {\n"
+              "    var box = $(\"fleet-ac-sites\");\n"
+              "    while (box.firstChild) box.removeChild(box.firstChild);\n"
+              "    j.sites.forEach(function (s) {\n"
+              "      if (!s.receiver) return;\n"
+              "      var c = H.el(\"div\", \"fleet-card\");\n"
+              "      c.appendChild(H.el(\"div\", \"fleet-card-h\", siteName(s.site)));\n"
+              "      var dl = H.el(\"dl\");\n"
+              "      kv(dl, \"decoder\", s.state ? (s.source || \"-\") + \", \" + s.state + (num(s.summary_age_s) ? \", \" + age(s.summary_age_s) : \"\")\n"
+              "         : \"no summary\", !s.fresh);\n"
+              "      kv(dl, \"now\", num(s.aircraft_now) ? s.aircraft_now + \" aircraft\" + (num(s.msg_rate) ? \", \" + s.msg_rate + \" msg/s\" : \"\") : \"-\");\n"
+              "      kv(dl, \"coverage\", s.positions + \" positions over \" + Math.round(j.cov_window_s / 3600) + \" h\" +\n"
+              "         (num(s.range_max_m) ? \", farthest \" + dist(s.range_max_m) : \"\") + (s.cov_complete ? \"\" : \" (partial)\"));\n"
+              "      kv(dl, \"data to\", num(s.through_age_s) ? age(s.through_age_s) : \"never\", !num(s.through_age_s) || s.through_age_s > 300);\n"
+              "      c.appendChild(dl);\n"
+              "      c.appendChild(polar(s));\n"
+              "      box.appendChild(c);\n"
+              "    });\n"
+              "    if (!box.firstChild) box.appendChild(H.el(\"div\", \"sub\", \"no site has an ADS-B receiver (sloth --adsb)\"));\n"
+              "  }\n");
+    WT_HAS(mod,
+              "  function acRows(j) {\n"
+              "    var box = $(\"fleet-ac-rows\");\n"
+              "    while (box.firstChild) box.removeChild(box.firstChild);\n"
+              "    j.aircraft.forEach(function (a) {\n"
+              "      var row = H.el(\"div\", \"fleet-ac\");\n"
+              "      row.appendChild(H.el(\"span\", \"\", a.hex + (a.flight ? \" \" + a.flight : \"\") + (a.emergency ? \" (\" + a.emergency + \")\" : \"\")));\n"
+              "      row.appendChild(H.el(\"span\", \"\", (num(a.alt) ? a.alt + \" ft\" : \"-\") + (num(a.pos_ts) ? \", \" + H.stamp(a.pos_ts) : \", no position\") +\n"
+              "                           (a.ref ? \" by \" + siteName(a.ref) : \"\")));\n"
+              "      row.appendChild(H.el(\"span\", \"\", a.seen.map(function (s) {\n"
+              "        return siteName(s.site) + (num(s.range_m) ? \" \" + dist(s.range_m) : \"\") + \" to \" + H.stamp(s.last_seen);\n"
+              "      }).join(\"; \")));\n"
+              "      var v = H.el(\"span\", \"fleet-v \" + a.verdict, a.verdict.replace(/_/g, \" \") + (a.why ? \" (\" + a.why.replace(/_/g, \" \") + \")\" : \"\") +\n"
+              "                   (a.inconsistent ? \"; positions \" + dist(a.separation_m) + \" apart, more than it could fly\" : \"\"));\n"
+              "      v.title = a.inconsistent ? j.basis.inconsistent : a.verdict === \"unconfirmed\" ? j.basis.unconfirmed : j.basis.thresholds;\n"
+              "      row.appendChild(v);\n"
+              "      row.appendChild(H.el(\"span\", \"\", a.peers.map(function (p) {\n"
+              "        return siteName(p.site) + \": \" + p.state.replace(/_/g, \" \") + (num(p.dist_m) ? \" at \" + dist(p.dist_m) +\n"
+              "               (num(p.sector_max_m) ? \" (reaches \" + dist(p.sector_max_m) + \" there)\" : \"\") : \"\");\n"
+              "      }).join(\"; \") || \"no other receiver\"));\n"
+              "      box.appendChild(row);\n"
+              "    });\n");
+    WT_HAS(mod,
+              "  function loadAircraft() {\n"
+              "    var gen = ++S.agen;\n"
+              "    return H.getJSON(\"/api/fleet/aircraft?limit=100\").then(function (j) {\n"
+              "      if (gen !== S.agen) return;\n"
+              "      acCards(j);\n"
+              "      acRows(j);\n"
+              "      var c = j.counts, rx = j.sites.filter(function (s) { return s.receiver; }).map(function (s) { return siteName(s.site); });\n"
+              "      H.set(\"fleet-ac-note\", (j.single_receiver\n"
+              "        ? (rx.length ? \"one receiver in the fleet (\" + rx.join(\", \") + \"): \" : \"no receiver: \") +\n"
+              "          \"every aircraft is undetermined until a second site decodes ADS-B; \"\n"
+              "        : j.receivers + \" receivers; \") + j.total + \" aircraft in \" + Math.round(j.list_s / 3600) + \" h: \" +\n"
+              "        c.confirmed + \" confirmed, \" + c.unconfirmed + \" unconfirmed, \" + c.out_of_peer_coverage + \" out of coverage, \" +\n"
+              "        c.undetermined + \" undetermined\" + (c.inconsistent ? \", \" + c.inconsistent + \" with inconsistent positions\" : \"\") +\n"
+              "        (j.partial ? \"; partial\" : \"\"));\n"
+              "    }).catch(function (e) {\n"
+              "      if (gen === S.agen) H.set(\"fleet-ac-note\", H.errText(e.message));\n"
+              "    });\n");
+    WT_HAS(mod,
               "  function load() {\n"
-              "    loadOverview().then(loadLocate).then(loadShared).then(loadGnss);\n"
+              "    loadOverview().then(loadLocate).then(loadShared).then(loadGnss).then(loadAircraft);\n"
               "  }");
-    /* The module's fetches: the four routes, through the page's getJSON,
+    /* The module's fetches: the five routes, through the page's getJSON,
      * and nothing else. */
-    WT_EQ(count_of(mod, "getJSON("), 4);
+    WT_EQ(count_of(mod, "getJSON("), 5);
+    WT_HAS(mod, "H.getJSON(\"/api/fleet/aircraft?limit=100\")");
     WT_HAS(mod, "H.getJSON(\"/api/fleet/gnss?limit=50\")");
     WT_HAS(mod, "H.getJSON(\"/api/fleet/overview\")");
     WT_HAS(mod, "H.getJSON(\"/api/fleet/locate?kind=\" + kind + \"&limit=50\")");
@@ -529,8 +630,8 @@ static void test_fleet_page(void) {
     const char *rjs = strstr(p, "// slothweb: the Radar view"), *fjs = strstr(p, "// slothweb: the Fleet view");
     WT_ASSERT(rjs && fjs && rjs < fjs);
     /* Colours by token only, so the light theme follows: to the end of
-     * the GNSS panel's rules (#192 I6). */
-    const char *c0 = fcss, *c1 = fcss ? strstr(fcss, ".fleet-v.undetermined {") : NULL;
+     * the aircraft panel's rules (#192 I6, I7). */
+    const char *c0 = fcss, *c1 = fcss ? strstr(fcss, ".fleet-v.out_of_peer_coverage {") : NULL;
     WT_ASSERT(c0 && c1);
     if (c0 && c1) {
         size_t n = (size_t)(c1 - c0);
@@ -653,7 +754,7 @@ static void down(void) {
 }
 
 static char *export(long long since_q, const char *query, int *status) {
-    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, g_own_csv };
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, g_own_csv, NULL };
     char q[64];
     if (!query) snprintf(q, sizeof(q), "since=%lld", since_q);
     char *body = NULL;
@@ -1018,7 +1119,7 @@ static void test_pull_good_and_upsert(void) {
     int rc = pull_with(GOOD, 0, req, sizeof(req));
     if (rc) fprintf(stderr, "    pull: %s\n", F.peer[0].last_error);
     WT_EQ(rc, 0);
-    WT_HAS(req, "GET /api/fleet/export?since=0&next=1&own=1&gnss=1 HTTP/1.1\r\n");
+    WT_HAS(req, "GET /api/fleet/export?since=0&next=1&own=1&gnss=1&adsb=1 HTTP/1.1\r\n");
     WT_HAS(req, "Host: 127.0.0.1:");
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sites WHERE peer='beta' AND"
                       " label='beta-site' AND pos_source='fixed' AND lat>41.87 AND"
@@ -1042,7 +1143,7 @@ static void test_pull_good_and_upsert(void) {
 
     rc = pull_with(GOOD2, 0, req, sizeof(req));
     WT_EQ(rc, 0);
-    WT_HAS(req, "GET /api/fleet/export?since=1792626880&next=1&own=1&gnss=1 HTTP/1.1\r\n");
+    WT_HAS(req, "GET /api/fleet/export?since=1792626880&next=1&own=1&gnss=1&adsb=1 HTTP/1.1\r\n");
     WT_EQ(sightings(), 7);
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi' AND"
                       " key='da:a1:19:00:00:01' AND label='CafeFree' AND rssi=-60"
@@ -1304,6 +1405,7 @@ typedef struct {
     int       f1;                     /* answer as an F1 export: a 400 for any '&' */
     int       f2;                     /* answer as an F2 export: a 400 for own= */
     int       i5;                     /* answer as an I5 export: a 400 for gnss= */
+    int       i6;                     /* answer as an I6 export: a 400 for adsb= */
     pthread_mutex_t mu;               /* guards stop */
     char      req[24][256];
     web_fleet_src_t src;
@@ -1347,7 +1449,7 @@ static void *serve_export(void *arg) {
         size_t bl = 0;
         int st = 0;
         if ((s->f1 && strchr(query, '&')) || (s->f2 && strstr(query, "own=")) ||
-            (s->i5 && strstr(query, "gnss="))) {
+            (s->i5 && strstr(query, "gnss=")) || (s->i6 && strstr(query, "adsb="))) {
             /* F1's parse_since(): since= alone, else unknown_parameter. */
             body = malloc(64);
             if (body) bl = (size_t)snprintf(body, 64, "{\"error\":\"unknown_parameter\"}");
@@ -1471,7 +1573,7 @@ static void test_backfill_after_a_cut(void) {
     if (F.peer[0].last_error[0]) fprintf(stderr, "    pull 1: %s\n", F.peer[0].last_error);
     /* The whole export, then one page of each cut kind from its floor. */
     WT_ASSERT(srv.n == 5);
-    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1"));
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1"));
     WT_ASSERT(!strncmp(srv.req[1], "since=0&kind=wifi&after=", 24));
     WT_ASSERT(!strncmp(srv.req[2], "since=0&kind=ap&after=", 22));
     WT_ASSERT(!strncmp(srv.req[3], "since=0&kind=alert&after=", 25));
@@ -1527,7 +1629,7 @@ static void test_backfill_after_a_cut(void) {
     /* The incremental pull asks only for what is new; the page goes on
      * from the cursor. */
     char want[64];
-    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1&adsb=1", T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[5], want));
     WT_ASSERT(!strncmp(srv.req[6], "since=0&kind=wifi&after=", 24));
     WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi'"), want_wifi);
@@ -1585,11 +1687,12 @@ static void test_backfill_alerts_past_the_scan(void) {
     WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
     /* The first answer was cut by the scan, not the cap: fewer keys than
      * the cap, and a backfill. */
-    WT_ASSERT(srv.n >= 4);
-    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1"));
-    WT_ASSERT(!strcmp(srv.req[1], "since=0&next=1&own=1"));
-    WT_ASSERT(!strcmp(srv.req[2], "since=0&next=1"));
-    WT_ASSERT(!strncmp(srv.req[3], "since=0&kind=alert&after=", 25));
+    WT_ASSERT(srv.n >= 5);
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1"));
+    WT_ASSERT(!strcmp(srv.req[1], "since=0&next=1&own=1&gnss=1"));
+    WT_ASSERT(!strcmp(srv.req[2], "since=0&next=1&own=1"));
+    WT_ASSERT(!strcmp(srv.req[3], "since=0&next=1"));
+    WT_ASSERT(!strncmp(srv.req[4], "since=0&kind=alert&after=", 25));
     for (int i = 0; i < 6 && F.peer[0].bf[WEB_FK_ALERT].active; i++)
         WT_EQ(web_fleet_pull_one(&F, 0, T + 60 * (i + 1)), 0);
     WT_EQ(F.peer[0].bf[WEB_FK_ALERT].active, 0);
@@ -1618,27 +1721,29 @@ static void test_pull_from_an_f1_peer(void) {
     int rc = web_fleet_pull_one(&F, 0, T);
     if (rc) fprintf(stderr, "    pull: %s\n", F.peer[0].last_error);
     WT_EQ(rc, 0);
-    /* gnss=1 refused, own=1 refused, then next=1 refused, then plain
-     * (#192 I5 put own=1 in front, I6 gnss=1). */
-    WT_ASSERT(srv.n == 4);
-    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1"));
-    WT_ASSERT(!strcmp(srv.req[1], "since=0&next=1&own=1"));
-    WT_ASSERT(!strcmp(srv.req[2], "since=0&next=1"));
-    WT_ASSERT(!strcmp(srv.req[3], "since=0"));
+    /* adsb=1 refused, gnss=1 refused, own=1 refused, then next=1
+     * refused, then plain (#192 I5 put own=1 in front, I6 gnss=1, I7
+     * adsb=1). */
+    WT_ASSERT(srv.n == 5);
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1"));
+    WT_ASSERT(!strcmp(srv.req[1], "since=0&next=1&own=1&gnss=1"));
+    WT_ASSERT(!strcmp(srv.req[2], "since=0&next=1&own=1"));
+    WT_ASSERT(!strcmp(srv.req[3], "since=0&next=1"));
+    WT_ASSERT(!strcmp(srv.req[4], "since=0"));
     WT_ASSERT(here_q("SELECT COUNT(*) FROM peer_sightings WHERE peer='beta'") > 0);
     WT_EQ(F.peer[0].failures, 0);
     WT_EQ(F.peer[0].last_error[0], '\0');
     WT_ASSERT(F.peer[0].no_next_until > T);
     /* Within the hour: plain at once, one request. */
     WT_EQ(web_fleet_pull_one(&F, 0, T + 60), 0);
-    WT_ASSERT(srv.n == 5);
+    WT_ASSERT(srv.n == 6);
     char want[64];
     snprintf(want, sizeof(want), "since=%lld", T - WEB_FLEET_OVERLAP_S);
-    WT_ASSERT(!strcmp(srv.req[4], want));
+    WT_ASSERT(!strcmp(srv.req[5], want));
     web_m4_t m4;
     memset(&m4, 0, sizeof(m4));
     m4.fleet = &F;
-    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL };
     static char body[65536];
     size_t len = 0;
     int st = 0;
@@ -1650,8 +1755,8 @@ static void test_pull_from_an_f1_peer(void) {
      * upgraded meanwhile). */
     srv.f1 = 0;
     WT_EQ(web_fleet_pull_one(&F, 0, T + 60 + WEB_FLEET_NONEXT_S), 0);
-    WT_ASSERT(srv.n == 6);
-    WT_ASSERT(strstr(srv.req[5], "&next=1&own=1&gnss=1") != NULL);
+    WT_ASSERT(srv.n == 7);
+    WT_ASSERT(strstr(srv.req[6], "&next=1&own=1&gnss=1&adsb=1") != NULL);
     here_down(&srv, th);
 }
 
@@ -1902,7 +2007,7 @@ static void test_pull_own_radios(void) {
     here_up(&srv, &th);
     srv.src.own_csv = "02:00:5e:00:00:0b";
     WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
-    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1"));
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1"));
     WT_EQ(F.peer[0].nown, 1);
     WT_ASSERT(!strcmp(F.peer[0].own[0], "02:00:5e:00:00:0b"));
     WT_EQ(F.peer[0].own_at, T);
@@ -1910,14 +2015,16 @@ static void test_pull_own_radios(void) {
     srv.f2 = 1;
     int n0 = srv.n;
     WT_EQ(web_fleet_pull_one(&F, 0, T + 60), 0);
-    WT_ASSERT(srv.n >= n0 + 3);
+    WT_ASSERT(srv.n >= n0 + 4);
     char want[64];
-    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1&adsb=1", T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[n0], want));
-    snprintf(want, sizeof(want), "since=%lld&next=1&own=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1", T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[n0 + 1], want));
-    snprintf(want, sizeof(want), "since=%lld&next=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1", T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[n0 + 2], want));
+    snprintf(want, sizeof(want), "since=%lld&next=1", T - WEB_FLEET_OVERLAP_S);
+    WT_ASSERT(!strcmp(srv.req[n0 + 3], want));
     WT_ASSERT(F.peer[0].no_own_until > T + 60);
     WT_EQ(F.peer[0].no_next_until, 0);
     WT_EQ(F.peer[0].failures, 0);
@@ -2014,7 +2121,7 @@ static void test_locate_route(void) {
     G.loc.lon = -111.87006;
     G.loc.ts = T;
     snprintf(G.loc.src, sizeof(G.loc.src), "fixed");
-    web_fleet_src_t src = { &here, NULL, &G, NULL, NULL };
+    web_fleet_src_t src = { &here, NULL, &G, NULL, NULL, NULL };
 
     char *b = NULL;
     size_t bl = 0;
@@ -2297,7 +2404,7 @@ static void test_gnss_export(void) {
     web_gnss_t *g = malloc(sizeof(*g));
     WT_ASSERT(g && web_gnss_init(g) == 0);
     gnss_feed(g, T - 5, 33.32922, -111.87006, -60);
-    web_fleet_src_t src = { &SDB, NULL, g, &FR, NULL };
+    web_fleet_src_t src = { &SDB, NULL, g, &FR, NULL, NULL };
     char *body = NULL;
     size_t len = 0;
     int st = 0;
@@ -2430,7 +2537,7 @@ static void test_gnss_pull_and_mixed_versions(void) {
     gnss_feed(g, T - 5, 33.32910, -111.86995, 20);
     srv.src.gnss = g;
     WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
-    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1"));
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1"));
     char sql[256];
     snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM peer_sightings WHERE kind='gnss_event'"
              " AND key='GNSS_JAMMING|%lld' AND last_seen=%lld AND extra LIKE '%%\"count\":7%%'",
@@ -2455,12 +2562,14 @@ static void test_gnss_pull_and_mixed_versions(void) {
     srv.i5 = 1;
     int n0 = srv.n;
     WT_EQ(web_fleet_pull_one(&F, 0, T + 60), 0);
-    WT_ASSERT(srv.n >= n0 + 2);
+    WT_ASSERT(srv.n >= n0 + 3);
     char want[96];
-    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1&adsb=1", T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[n0], want));
-    snprintf(want, sizeof(want), "since=%lld&next=1&own=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1", T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[n0 + 1], want));
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1", T - WEB_FLEET_OVERLAP_S);
+    WT_ASSERT(!strcmp(srv.req[n0 + 2], want));
     WT_ASSERT(F.peer[0].no_gnss_until > T + 60);
     WT_EQ(F.peer[0].no_own_until, 0);
     WT_EQ(F.peer[0].failures, 0);
@@ -2588,7 +2697,7 @@ static void test_gnss_route(void) {
         T, T, T + 100, T - 2850, T - 2850, T - 2750, T - 500, T - 500, T - 500);
     WT_EQ(sql_on(g_store, sql), 0);
     gnss_two_sites(&F, T - 7200, T);
-    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL };
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL };
     char *b = gnss_get(&src, "", T);
     WT_HAS(b, "\"local\":\"open\"");
     WT_HAS(b, "\"window_s\":120,\"gap_s\":150,\"region_m\":50000,");
@@ -2708,7 +2817,7 @@ static void test_gnss_route(void) {
     WT_HAS(b, "\"why\":\"no_current_fix\"");
     WT_LACKS(b, "\"moved\":[\"beta\"]");
     free(b);
-    web_fleet_src_t nos = { NULL, NULL, NULL, &FR, NULL };
+    web_fleet_src_t nos = { NULL, NULL, NULL, &FR, NULL, NULL };
     b = gnss_get(&nos, "", T + 60);
     WT_HAS(b, "\"local\":\"none\"");
     snprintf(want, sizeof(want), "{\"site\":\"beta\",\"type\":\"GNSS_TIME_JUMP\",\"class\":"
@@ -2744,7 +2853,7 @@ static void test_gnss_sample_events(void) {
         if (t == T + 60) {
             /* At T the indicator's window has not closed at beta's last
              * pull: no quiet peer yet. */
-            char *b0 = gnss_get(&(web_fleet_src_t){ NULL, NULL, NULL, NULL, NULL }, "", T);
+            char *b0 = gnss_get(&(web_fleet_src_t){ NULL, NULL, NULL, NULL, NULL, NULL }, "", T);
             char want0[512];
             snprintf(want0, sizeof(want0), "{\"site\":\"self\",\"type\":\"JAM_IND\",\"class\":"
                      "\"interference\",\"source\":\"sample\",\"first_seen\":%lld,"
@@ -2763,7 +2872,7 @@ static void test_gnss_sample_events(void) {
             web_fg_add(F.fg, sl[i], &s, 150);
         }
     }
-    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL };
     char *b = gnss_get(&src, "", T + 120);
     char want[512];
     snprintf(want, sizeof(want), "{\"site\":\"self\",\"type\":\"CN0_DROP\",\"class\":"
@@ -2827,12 +2936,541 @@ static void test_gnss_state_survives_a_restart(void) {
     WT_EQ(F.fg->site[b].se_a[0], T + 30);
     /* With the references back, the baseline needs only a fresh fix. */
     gnss_two_sites(&F, T + 60, T + 60);
-    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL };
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL };
     char *body = gnss_get(&src, "", T + 60);
     WT_HAS(body, "\"verdict\":\"within\"");
     free(body);
     web_fleet_destroy(&F);
     down();
+}
+
+/* ── #192 I7: aircraft across the sites ────────────────────────────── */
+
+#define AC_MDEG 111194.9              /* metres in a degree of latitude */
+#define BETA_LAT 33.32910
+#define BETA_LON (-111.86995)
+#define SELF_LAT 33.32922
+#define SELF_LON (-111.87006)
+
+/* One adsb_aircraft row and its sightings as sloth writes them. */
+static void ac_put(const char *db, const char *hex, long long first, long long vf,
+                   long long last, const char *flight) {
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO adsb_aircraft (hex,non_icao,first_seen,last_seen,visit_first,visits,"
+        "sightings,flight,squawk,category,source_type,messages,pos_seen) VALUES"
+        " ('%s',%d,%lld,%lld,%lld,1,1,'%s','4175','A3','adsb_icao',307,1);",
+        hex, hex[0] == '~', first, last, vf, flight);
+    WT_EQ(sdb_exec(db, sql), 0);
+}
+
+/* A sighting north of (lat0, lon0) at north_m, or with no position
+ * (north_m < 0). */
+static void ac_sight(const char *db, const char *hex, long long ts, double lat0, double lon0,
+                     double north_m, int alt, const char *gs, int ground) {
+    char sql[640], pos[96] = "NULL,NULL";
+    if (north_m >= 0)
+        snprintf(pos, sizeof(pos), "%.7f,%.7f", lat0 + north_m / AC_MDEG, lon0);
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO adsb_sightings (last_seen,hex,heard,flight,squawk,emergency,category,"
+        "on_ground,alt_baro,alt_band,gs,track,lat,lon,rssi,messages,source_type) VALUES"
+        " (%lld,'%s',%lld,'SWA4754','4175','none','A3',%d,%d,9,%s,136.0,%s,-20.1,300,"
+        "'adsb_icao');", ts, hex, ts, ground, alt, gs, pos);
+    WT_EQ(sdb_exec(db, sql), 0);
+}
+
+static void adsb_rx(web_adsb_t *a, long long ts, long long msgs) {
+    pthread_mutex_lock(&a->mu);
+    a->sh.seen = 1;
+    a->sh.ts = ts;
+    snprintf(a->sh.state, sizeof(a->sh.state), "live");
+    snprintf(a->sh.src, sizeof(a->sh.src), "file:/run/readsb/aircraft.json");
+    a->sh.aircraft = 13;
+    a->sh.messages = msgs;
+    pthread_mutex_unlock(&a->mu);
+}
+
+static void site_at(web_gnss_t *g, double lat, double lon) {
+    WT_EQ(web_gnss_init(g), 0);
+    g->loc.has = 1;
+    g->loc.lat = lat;
+    g->loc.lon = lon;
+    g->loc.has_alt = 1;
+    g->loc.alt_m = 364.6;
+    g->loc.ts = T;
+    snprintf(g->loc.src, sizeof(g->loc.src), "fixed");
+}
+
+/* The peer's sky in sloth.db: a00001 (this visit's newest position at
+ * T-500, 20 km north, then a newer sighting with no position), a00002
+ * (its only position from an earlier visit: none sent), a00004 (gs
+ * stored as infinity: sent as null), a0000f (last seen 7 h ago: not
+ * sent), and the coverage: ten positions 30 km north, one 60 km north
+ * on the ground and one 2 days old (neither counted). */
+static void peer_sky(const char *db) {
+    ac_put(db, "a00001", T - 5000, T - 900, T - 100, "SWA4754");
+    ac_sight(db, "a00001", T - 900, BETA_LAT, BETA_LON, 15000, 5000, "250.0", 0);
+    ac_sight(db, "a00001", T - 500, BETA_LAT, BETA_LON, 20000, 8875, "279.4", 0);
+    ac_sight(db, "a00001", T - 100, BETA_LAT, BETA_LON, -1, 9000, "280.0", 0);
+    ac_put(db, "a00002", T - 4100, T - 300, T - 200, "SKW6344");
+    ac_sight(db, "a00002", T - 4000, BETA_LAT, BETA_LON, 25000, 9000, "300.0", 0);
+    ac_sight(db, "a00002", T - 250, BETA_LAT, BETA_LON, -1, 9000, "300.0", 0);
+    ac_put(db, "a00004", T - 400, T - 400, T - 300, "ASI72");
+    ac_sight(db, "a00004", T - 300, BETA_LAT, BETA_LON, 5000, 2000, "9e999", 0);
+    ac_put(db, "a0000f", T - 30000, T - 30000, T - 7 * 3600, "OLD1");
+    for (int i = 0; i < 10; i++)
+        ac_sight(db, "a0000f", T - 7 * 3600 - 60 * i, BETA_LAT, BETA_LON, 30000, 30000, "400.0", 0);
+    ac_sight(db, "a00004", T - 380, BETA_LAT, BETA_LON, 60000, 0, "10.0", 1);
+    ac_sight(db, "a00004", T - 2 * DY, BETA_LAT, BETA_LON, 70000, 30000, "400.0", 0);
+}
+
+static char *export_q(const web_fleet_src_t *src, const char *q) {
+    char *body = NULL;
+    size_t len = 0;
+    int st = 0;
+    WT_EQ(web_fleet_export_route(src, q, T, &body, &len, &st), 0);
+    WT_EQ(st, 200);
+    if (!body) return NULL;
+    char *t = realloc(body, len + 1);
+    if (!t) { free(body); return NULL; }
+    t[len] = '\0';
+    return t;
+}
+
+static int ingest_ok(const char *b) {
+    web_fleet_t f;
+    web_fleet_peer_cfg_t pc;
+    char err[160];
+    WT_EQ(web_fleet_parse_peer("beta=http://100.64.0.2:8770", &pc, err, sizeof(err)), 0);
+    web_fleet_init(&f, &pc, 1, 60, 0, NULL);
+    long long rows = 0, rts = 0;
+    int rc = web_fleet_ingest(&f, 0, b, strlen(b), T, 0, &rows, &rts, err, sizeof(err));
+    if (rc) fprintf(stderr, "    ingest: %s\n", err);
+    web_fleet_destroy(&f);
+    return rc;
+}
+
+/* The export with adsb=1: the receiver's summary (its source's kind, not
+ * its path; messages/s between two summaries 30 s apart) and its
+ * coverage (fourteen airborne positions, the farthest 30 km north; one
+ * on the ground and one two days old not counted), and the aircraft changed in the
+ * last 6 h with the current visit's newest position, every figure range
+ * checked, nothing not finite, counted on the end line; the importer
+ * takes it whole. Without adsb=1 none of it is sent: an I6 importer
+ * refuses a member it does not know (seen red with the aircraft read's
+ * `xq.adsb &&` dropped). A row the importer would refuse (a squawk of
+ * 8888) is left out and the kind marked truncated, the rest still sent
+ * (seen red with opt_end()'s line_takes() made to pass: the 8888 row
+ * sent and the whole answer refused). */
+static void test_adsb_export(void) {
+    up();
+    peer_sky(g_db);
+    web_gnss_t G;
+    site_at(&G, BETA_LAT, BETA_LON);
+    web_adsb_t A;
+    WT_EQ(web_adsb_init(&A), 0);
+    adsb_rx(&A, T - 30, 2247000);
+    web_fleet_src_t src = { &SDB, NULL, &G, &FR, NULL, &A };
+    char *b0 = export_q(&src, "since=0&adsb=1");
+    free(b0);
+    adsb_rx(&A, T, 2247900);
+    char *b = export_q(&src, "since=0&adsb=1");
+    WT_ASSERT(b != NULL);
+    if (b) {
+        WT_HAS(b, "{\"type\":\"adsb_rx\",\"source\":\"file\",\"state\":\"live\",\"ts\":");
+        WT_HAS(b, ",\"aircraft\":13,\"messages\":2247900,\"msg_rate\":30.0,\"window_s\":86400,"
+                  "\"positions\":14,\"cov_complete\":true,\"range_max_m\":30000,"
+                  "\"r000\":25000,\"r030\":null,");
+        WT_HAS(b, ",\"n000\":14,\"n030\":0,");
+        WT_LACKS(b, "/run/readsb");
+        char want[640];
+        snprintf(want, sizeof(want),
+            "{\"type\":\"aircraft\",\"hex\":\"a00001\",\"flight\":\"SWA4754\",\"squawk\":\"4175\","
+            "\"category\":\"A3\",\"emergency\":\"none\",\"alt\":9000,\"on_ground\":false,"
+            "\"gs\":280.0,\"track\":136.0,\"rssi\":-20.1,\"messages\":300,\"lat\":33.50896,"
+            "\"lon\":-111.86995,\"pos_ts\":%lld,\"pos_prev\":%lld,\"pos_alt\":8875,"
+            "\"first_seen\":%lld,\"visit_first\":%lld,\"last_seen\":%lld}\n",
+            T - 500, T - 900, T - 5000, T - 900, T - 100);
+        WT_HAS(b, want);
+        WT_HAS(b, "{\"type\":\"aircraft\",\"hex\":\"a00002\",\"flight\":\"SKW6344\"");
+        WT_HAS(b, "\"lat\":null,\"lon\":null,\"pos_ts\":null,\"pos_prev\":null,\"pos_alt\":null,");
+        WT_HAS(b, "{\"type\":\"aircraft\",\"hex\":\"a00004\",\"flight\":\"ASI72\"");
+        WT_HAS(b, "\"gs\":null");
+        WT_LACKS(b, "a0000f");
+        WT_LACKS(b, "inf");
+        WT_LACKS(b, "nan");
+        WT_HAS(b, ",\"aircraft\":3,\"truncated_aircraft\":false,\"complete\":true}\n");
+        WT_EQ(ingest_ok(b), 0);
+        free(b);
+    }
+    /* Without adsb=1: the I6 answer. */
+    b = export_q(&src, "since=0&next=1&own=1&gnss=1");
+    WT_ASSERT(b != NULL);
+    if (b) {
+        WT_LACKS(b, "adsb_rx");
+        WT_LACKS(b, "\"type\":\"aircraft\"");
+        WT_LACKS(b, "truncated_aircraft");
+        free(b);
+    }
+    /* No receiver summary and no sloth.db: no adsb_rx line at all, and
+     * the aircraft, not read, are cut - never an empty list the
+     * comparison would take as "heard none" (seen red, false, with the
+     * !ac_read clause removed from the export). */
+    web_fleet_src_t none = { NULL, NULL, NULL, NULL, NULL, NULL };
+    b = export_q(&none, "since=0&adsb=1");
+    if (b) {
+        WT_LACKS(b, "adsb_rx");
+        WT_HAS(b, ",\"aircraft\":0,\"truncated_aircraft\":true,");
+        free(b);
+    }
+    /* A row the importer would refuse. */
+    char sql[256];
+    snprintf(sql, sizeof(sql), "UPDATE adsb_aircraft SET squawk='8888' WHERE hex='a00002';"
+             "UPDATE adsb_sightings SET squawk='8888' WHERE hex='a00002';");
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    b = export_q(&src, "since=0&adsb=1");
+    if (b) {
+        WT_LACKS(b, "a00002");
+        WT_HAS(b, "\"hex\":\"a00001\"");
+        WT_HAS(b, ",\"aircraft\":2,\"truncated_aircraft\":true,");
+        WT_EQ(ingest_ok(b), 0);
+        free(b);
+    }
+    web_adsb_destroy(&A);
+    web_gnss_destroy(&G);
+    down();
+}
+
+static const char AC_LINE[] =
+    "{\"type\":\"aircraft\",\"hex\":\"a00001\",\"flight\":\"SWA4754\",\"squawk\":\"4175\","
+    "\"category\":\"A3\",\"emergency\":\"none\",\"alt\":9000,\"on_ground\":false,"
+    "\"gs\":280.0,\"track\":136.0,\"rssi\":-20.1,\"messages\":300,\"lat\":33.50897,"
+    "\"lon\":-111.86995,\"pos_ts\":1792626500,\"pos_prev\":1792626400,\"pos_alt\":8875,"
+    "\"first_seen\":1792622000,"
+    "\"visit_first\":1792626100,\"last_seen\":1792626900}\n";
+#define END_AC(n, cut) "{\"type\":\"fleet_end\",\"rows\":0,\"wifi\":0,\"ble\":0,\"ap\":0," \
+    "\"probe\":0,\"alert\":0,\"verdict\":0,\"truncated_wifi\":false,\"truncated_ble\":false," \
+    "\"truncated_ap\":false,\"truncated_probe\":false,\"truncated_alert\":false," \
+    "\"truncated_verdict\":false,\"aircraft\":" #n ",\"truncated_aircraft\":" #cut "," \
+    "\"complete\":true}\n"
+
+/* The importer's checks on the new lines, each refusing the whole
+ * answer and writing nothing: an upper-case address, a squawk not four
+ * octal digits, a position without its time or the time's lower bound,
+ * a lower bound past the time, a position time past the row's last
+ * seen, an altitude out of range,
+ * an infinite RSSI, a member the type may not carry, a count that is not
+ * the lines sent, aircraft lines with no count, a cut without a count,
+ * a receiver line's sector out of range. Then the good answer is stored
+ * as kind aircraft and kind adsb, and meta holds the answer's clock. */
+static void test_adsb_import_refusals(void) {
+    pull_up();
+    static char body[4096];
+    struct { const char *from, *to; const char *end; } bad[] = {
+        { "\"hex\":\"a00001\"", "\"hex\":\"A00001\"", END_AC(1, false) },
+        { "\"squawk\":\"4175\"", "\"squawk\":\"8888\"", END_AC(1, false) },
+        { "\"pos_ts\":1792626500", "\"pos_ts\":null", END_AC(1, false) },
+        { "\"pos_prev\":1792626400", "\"pos_prev\":null", END_AC(1, false) },
+        { "\"pos_prev\":1792626400", "\"pos_prev\":1792626501", END_AC(1, false) },
+        { "\"pos_ts\":1792626500", "\"pos_ts\":1792626901", END_AC(1, false) },
+        { "\"alt\":9000", "\"alt\":200000", END_AC(1, false) },
+        { "\"rssi\":-20.1", "\"rssi\":1e999", END_AC(1, false) },
+        { "\"track\":136.0", "\"track\":136.0,\"x\":1", END_AC(1, false) },
+        { "\"emergency\":\"none\"", "\"emergency\":\"panic\"", END_AC(1, false) },
+        { NULL, NULL, END_AC(2, false) },
+        { NULL, NULL, "{\"type\":\"fleet_end\",\"rows\":0,\"wifi\":0,\"ble\":0,\"ap\":0,"
+          "\"probe\":0,\"alert\":0,\"verdict\":0,\"truncated_wifi\":false,"
+          "\"truncated_ble\":false,\"truncated_ap\":false,\"truncated_probe\":false,"
+          "\"truncated_alert\":false,\"truncated_verdict\":false,\"complete\":true}\n" },
+        { NULL, NULL, "{\"type\":\"fleet_end\",\"rows\":0,\"wifi\":0,\"ble\":0,\"ap\":0,"
+          "\"probe\":0,\"alert\":0,\"verdict\":0,\"truncated_wifi\":false,"
+          "\"truncated_ble\":false,\"truncated_ap\":false,\"truncated_probe\":false,"
+          "\"truncated_alert\":false,\"truncated_verdict\":false,\"aircraft\":1,"
+          "\"complete\":true}\n" },
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        char line[1024];
+        snprintf(line, sizeof(line), "%s", AC_LINE);
+        if (bad[i].from) {
+            char *at = strstr(line, bad[i].from);
+            WT_ASSERT(at != NULL);
+            if (!at) continue;
+            char tail[1024];
+            snprintf(tail, sizeof(tail), "%s", at + strlen(bad[i].from));
+            snprintf(at, sizeof(line) - (size_t)(at - line), "%s%s", bad[i].to, tail);
+        }
+        snprintf(body, sizeof(body), "%s%s%s", HDR(1792627000), line, bad[i].end);
+        int rc = pull_with(body, 0, NULL, 0);
+        if (rc == 0) fprintf(stderr, "    case %zu taken\n", i);
+        WT_EQ(rc, -1);
+        WT_EQ(sightings(), 0);
+    }
+    static const char RX_BAD[] =
+        "{\"type\":\"adsb_rx\",\"source\":\"file\",\"state\":\"live\",\"ts\":1792626990,"
+        "\"aircraft\":13,\"messages\":2247900,\"msg_rate\":30.0,\"window_s\":86400,"
+        "\"positions\":12,\"cov_complete\":true,\"range_max_m\":30000,\"r000\":3000000,"
+        "\"r030\":null,\"r060\":null,\"r090\":null,\"r120\":null,\"r150\":null,\"r180\":null,"
+        "\"r210\":null,\"r240\":null,\"r270\":null,\"r300\":null,\"r330\":null,\"n000\":12,"
+        "\"n030\":0,\"n060\":0,\"n090\":0,\"n120\":0,\"n150\":0,\"n180\":0,\"n210\":0,"
+        "\"n240\":0,\"n270\":0,\"n300\":0,\"n330\":0}\n";
+    snprintf(body, sizeof(body), "%s%s%s", HDR(1792627000), RX_BAD, END_AC(0, false));
+    WT_EQ(pull_with(body, 0, NULL, 0), -1);
+    WT_EQ(sightings(), 0);
+    /* Good: the receiver and the aircraft, cut. */
+    char rx[2048];
+    snprintf(rx, sizeof(rx), "%s", RX_BAD);
+    char *r0 = strstr(rx, "\"r000\":3000000");
+    WT_ASSERT(r0 != NULL);
+    if (r0) memcpy(r0, "\"r000\":  30000", 14);
+    snprintf(body, sizeof(body), "%s%s%s%s", HDR(1792627000), rx, AC_LINE, END_AC(1, true));
+    int rc = pull_with(body, 0, NULL, 0);
+    if (rc) fprintf(stderr, "    pull: %s\n", F.peer[0].last_error);
+    WT_EQ(rc, 0);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='aircraft' AND"
+                      " key='a00001' AND label='SWA4754' AND vendor='A3' AND rssi=-20 AND"
+                      " first_seen=1792622000 AND last_seen=1792626900 AND"
+                      " extra LIKE '{\"visit_first\":1792626100,\"squawk\":\"4175\",%'"
+                      " AND extra LIKE '%\"pos_ts\":1792626500,\"pos_prev\":1792626400,\"pos_alt\":8875}'"), 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='adsb' AND"
+                      " key='receiver' AND label='live' AND vendor='file' AND"
+                      " last_seen=1792626990 AND extra LIKE '%\"r000\":30000,\"n000\":12,%'"), 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name='fleet.adsb.beta' AND"
+                      " value='1792627000 1792627000'"), 1);
+    /* Coverage with no decoder summary: kept as of the answer (seen red
+     * with put_line()'s receiver clause removed: the age bound took the
+     * row at once), the cut kept from the answer before. */
+    static char rx2[2048];
+    snprintf(rx2, sizeof(rx2), "%s", rx);
+    char *s0 = strstr(rx2, "\"source\":\"file\",\"state\":\"live\",\"ts\":1792626990,");
+    WT_ASSERT(s0 != NULL);
+    if (s0) {
+        const char *tail = s0 + strlen("\"source\":\"file\",\"state\":\"live\",\"ts\":1792626990,");
+        char rest[2048];
+        snprintf(rest, sizeof(rest), "%s", tail);
+        snprintf(s0, sizeof(rx2) - (size_t)(s0 - rx2), "\"source\":null,\"state\":null,"
+                 "\"ts\":null,%s", rest);
+    }
+    WT_EQ(sql_on(g_store, "DELETE FROM peer_sightings WHERE kind='adsb'"), 0);
+    snprintf(body, sizeof(body), "%s%s%s", HDR(1792640000), rx2, END_AC(0, false));
+    rc = pull_with(body, 0, NULL, 0);
+    if (rc) fprintf(stderr, "    pull: %s\n", F.peer[0].last_error);
+    WT_EQ(rc, 0);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='adsb' AND"
+                      " label='' AND last_seen=1792640000"), 1);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name='fleet.adsb.beta' AND"
+                      " value='1792640000 1792627000'"), 1);
+    pull_down();
+}
+
+/* The pull asks adsb=1 and stores the receiver and the aircraft, the
+ * second answer widening the first; an I6 peer refuses adsb=1, is asked
+ * again with gnss=1 (an I6-shaped answer, stored as before, the aircraft
+ * kept) and not asked with adsb=1 for the hour; the meta clock moves
+ * only with an answer that carried aircraft. The fallback was seen red
+ * with the adsb level's retry removed (every pull against an older peer
+ * failed, here and in each mixed-version test above). */
+static void test_adsb_pull_and_mixed_versions(void) {
+    peer_srv_t srv;
+    pthread_t th;
+    here_up(&srv, &th);
+    peer_sky(g_db);
+    web_gnss_t G;
+    site_at(&G, BETA_LAT, BETA_LON);
+    web_adsb_t A;
+    WT_EQ(web_adsb_init(&A), 0);
+    adsb_rx(&A, T - 10, 2247000);
+    srv.src.gnss = &G;
+    srv.src.adsb = &A;
+    WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1&adsb=1"));
+    WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='aircraft'"), 3);
+    WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='adsb' AND key='receiver'"
+                 " AND label='live' AND extra LIKE '%\"positions\":14,%'"), 1);
+    char sql[256];
+    snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM meta WHERE name='fleet.adsb.beta' AND"
+             " value='%lld 0'", T);
+    WT_EQ(here_q(sql), 1);
+    /* Heard again: the row widens, its first seen kept. */
+    snprintf(sql, sizeof(sql), "UPDATE adsb_aircraft SET last_seen=%lld,first_seen=%lld"
+             " WHERE hex='a00001';", T + 30, T - 100);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    WT_EQ(web_fleet_pull_one(&F, 0, T + 60), 0);
+    snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM peer_sightings WHERE kind='aircraft' AND"
+             " key='a00001' AND first_seen=%lld AND last_seen=%lld", T - 5000, T + 30);
+    WT_EQ(here_q(sql), 1);
+    /* Now an I6 build. */
+    srv.i6 = 1;
+    int n0 = srv.n;
+    WT_EQ(web_fleet_pull_one(&F, 0, T + 120), 0);
+    WT_ASSERT(srv.n >= n0 + 2);
+    char want[96];
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1&adsb=1", T - WEB_FLEET_OVERLAP_S);
+    WT_ASSERT(!strcmp(srv.req[n0], want));
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1", T - WEB_FLEET_OVERLAP_S);
+    WT_ASSERT(!strcmp(srv.req[n0 + 1], want));
+    WT_ASSERT(F.peer[0].no_adsb_until > T + 120);
+    WT_EQ(F.peer[0].no_gnss_until, 0);
+    WT_EQ(F.peer[0].failures, 0);
+    WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='aircraft'"), 3);
+    /* Within the hour: one request, without adsb=1. */
+    n0 = srv.n;
+    WT_EQ(web_fleet_pull_one(&F, 0, T + 180), 0);
+    WT_EQ(srv.n, n0 + 1);
+    WT_LACKS(srv.req[n0], "adsb=");
+    WT_HAS(srv.req[n0], "&gnss=1");
+    here_down(&srv, th);
+    web_adsb_destroy(&A);
+    web_gnss_destroy(&G);
+}
+
+static char *aircraft_get(const web_fleet_src_t *src, const char *q) {
+    char *b = NULL;
+    size_t bl = 0;
+    int st = 0;
+    WT_EQ(web_fleet_aircraft_route(&F, src, q, T, &b, &bl, &st), 0);
+    WT_EQ(st, 200);
+    if (b && bl) b[bl - 1] = '\0';
+    return b;
+}
+
+/* The route over two receivers 16.8 m apart: beta, pulled, and this
+ * site's sloth.db. Before this site has heard anything it is not a
+ * receiver, and every aircraft reads undetermined, single_receiver, as
+ * the live fleet does today. Then this site's sky: twelve aircraft over
+ * the last hour (its activity), ten of them placed 30 to 50 km north
+ * (its demonstrated north sector), and a00001 heard at the same time as
+ * beta. a00001 is confirmed; a00002, 20 km north where this site hears
+ * to 50 km while hearing others, unconfirmed; a00003, 45 km north,
+ * beyond 0.8 of that, out of this site's coverage; a00004, positioned
+ * 20 s ago, pending this site's next data. The overview carries the
+ * counts. */
+static void test_adsb_route(void) {
+    peer_srv_t srv;
+    pthread_t th;
+    here_up(&srv, &th);
+    WT_EQ(sdb_make(g_here_db, db_schema_version(), 0), 0);
+    ac_put(g_db, "a00001", T - 900, T - 900, T - 100, "SWA4754");
+    ac_sight(g_db, "a00001", T - 500, BETA_LAT, BETA_LON, 20000, 10000, "280.0", 0);
+    ac_put(g_db, "a00002", T - 1500, T - 1500, T - 1100, "GHOST1");
+    ac_sight(g_db, "a00002", T - 1200, BETA_LAT, BETA_LON, 20000, 10000, "280.0", 0);
+    ac_put(g_db, "a00003", T - 1500, T - 1500, T - 1100, "FAR1");
+    ac_sight(g_db, "a00003", T - 1200, BETA_LAT, BETA_LON, 45000, 10000, "280.0", 0);
+    ac_put(g_db, "a00004", T - 60, T - 60, T - 20, "NEW1");
+    ac_sight(g_db, "a00004", T - 20, BETA_LAT, BETA_LON, 20000, 10000, "280.0", 0);
+    web_gnss_t GB, GS;
+    site_at(&GB, BETA_LAT, BETA_LON);
+    site_at(&GS, SELF_LAT, SELF_LON);
+    web_adsb_t A;
+    WT_EQ(web_adsb_init(&A), 0);
+    adsb_rx(&A, T - 10, 2247000);
+    srv.src.gnss = &GB;
+    srv.src.adsb = &A;
+    WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
+    web_slothdb_t here;
+    web_slothdb_init(&here, g_here_db, NULL);
+    web_fleet_src_t src = { &here, NULL, &GS, NULL, NULL, NULL };
+    char *b = aircraft_get(&src, "");
+    WT_ASSERT(b != NULL);
+    if (b) {
+        WT_HAS(b, ",\"receivers\":1,\"single_receiver\":true,");
+        WT_HAS(b, "\"counts\":{\"undetermined\":4,\"confirmed\":0,\"unconfirmed\":0,"
+                  "\"out_of_peer_coverage\":0,\"inconsistent\":0}");
+        WT_HAS(b, "{\"hex\":\"a00002\",\"flight\":\"GHOST1\"");
+        WT_HAS(b, "\"verdict\":\"undetermined\",\"why\":\"single_receiver\",\"ref\":\"beta\"");
+        WT_LACKS(b, "\"verdict\":\"unconfirmed\"");
+        WT_HAS(b, "{\"site\":\"beta\",\"label\":null,\"receiver\":true,\"source\":\"file\","
+                  "\"state\":\"live\",\"summary_age_s\":10,\"fresh\":true,");
+        free(b);
+    }
+    /* This site's sky. */
+    for (int i = 0; i < 12; i++) {
+        char hex[8];
+        snprintf(hex, sizeof(hex), "c%05d", i);
+        ac_put(g_here_db, hex, T - 3000, T - 3000, T - 100, "LOCAL");
+        if (i < 10)
+            ac_sight(g_here_db, hex, T - 2000 + i, SELF_LAT, SELF_LON, 30000 + 2000 * i,
+                     20000, "300.0", 0);
+    }
+    ac_put(g_here_db, "a00001", T - 800, T - 800, T - 150, "SWA4754");
+    ac_sight(g_here_db, "a00001", T - 450, SELF_LAT, SELF_LON, 20500, 10000, "280.0", 0);
+    b = aircraft_get(&src, "limit=200");
+    WT_ASSERT(b != NULL);
+    if (b) {
+        WT_HAS(b, ",\"receivers\":2,\"single_receiver\":false,");
+        WT_HAS(b, "{\"site\":\"self\",\"label\":null,\"receiver\":true,");
+        WT_HAS(b, ",\"positions\":11,\"cov_complete\":true,\"range_max_m\":48000,"
+                  "\"sectors\":[{\"from\":0,\"max_m\":48000,\"n\":11},");
+        /* The unconfirmed first. */
+        WT_HAS(b, "\"aircraft\":[{\"hex\":\"a00002\",\"flight\":\"GHOST1\"");
+        WT_HAS(b, "\"verdict\":\"unconfirmed\",\"why\":null,\"ref\":\"beta\"");
+        WT_HAS(b, "\"peers\":[{\"site\":\"self\",\"state\":\"should_have_heard\",\"dist_m\":19986,"
+                  "\"sector_max_m\":48000,\"horizon_m\":");
+        static const struct { const char *hex, *verdict; } want[] = {
+            { "a00001", "\"verdict\":\"confirmed\",\"why\":null,\"ref\":\"self\"" },
+            { "a00002", "\"verdict\":\"unconfirmed\",\"why\":null,\"ref\":\"beta\"" },
+            { "a00003", "\"verdict\":\"out_of_peer_coverage\",\"why\":null,\"ref\":\"beta\"" },
+            { "a00004", "\"verdict\":\"undetermined\",\"why\":\"pending\",\"ref\":\"beta\"" },
+        };
+        for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+            char at[32];
+            snprintf(at, sizeof(at), "{\"hex\":\"%s\"", want[i].hex);
+            const char *o = strstr(b, at);
+            WT_ASSERT(o != NULL);
+            if (!o) continue;
+            const char *nx = strstr(o + 1, "{\"hex\":");
+            size_t n = nx ? (size_t)(nx - o) : strlen(o);
+            char *one = malloc(n + 1);
+            if (!one) continue;
+            memcpy(one, o, n);
+            one[n] = '\0';
+            WT_HAS(one, want[i].verdict);
+            free(one);
+        }
+        WT_LACKS(b, "nan");
+        WT_LACKS(b, "inf");
+        free(b);
+    }
+    static char ov[131072];
+    size_t len = 0;
+    int st = 0;
+    WT_EQ(web_fleet_overview_route(&F, &src, "", T, ov, sizeof(ov) - 1, &len, &st), 0);
+    ov[len] = '\0';
+    WT_EQ(st, 200);
+    WT_HAS(ov, ",\"aircraft\":{\"receivers\":2,\"single_receiver\":false,\"aircraft\":16,");
+    WT_HAS(ov, "\"unconfirmed\":1,");
+    /* A peer's read filled to its cap: its older rows may be left out,
+     * so its silence reads as a cut answer, never as "did not hear"
+     * (seen red, beta's cut_age_s null, with peer_rows()'s cap test
+     * removed). */
+    char ins[512];
+    snprintf(ins, sizeof(ins), "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n"
+             " WHERE i < %d) INSERT INTO peer_sightings (peer,kind,key,first_seen,last_seen)"
+             " SELECT 'beta', 'aircraft', printf('b%%05x', i), %lld, %lld FROM n",
+             WEB_FA_ROWS_PER_PEER, T + 100, T + 100);
+    WT_EQ(sql_on(g_here_web, ins), 0);
+    b = aircraft_get(&src, "limit=1");
+    WT_ASSERT(b != NULL);
+    if (b) {
+        const char *bs = strstr(b, "{\"site\":\"beta\"");
+        WT_ASSERT(bs != NULL);
+        const char *ce = bs ? strstr(bs, "\"cut_age_s\":") : NULL;
+        WT_ASSERT(ce != NULL && !strncmp(ce, "\"cut_age_s\":0,", 14));
+        free(b);
+    }
+    /* The limit's bounds. */
+    char *e = NULL;
+    size_t el = 0;
+    WT_EQ(web_fleet_aircraft_route(&F, &src, "limit=0", T, &e, &el, &st), 0);
+    WT_EQ(st, 400);
+    free(e);
+    WT_EQ(web_fleet_aircraft_route(&F, &src, "x=1", T, &e, &el, &st), 0);
+    WT_EQ(st, 400);
+    free(e);
+    web_slothdb_destroy(&here);
+    here_down(&srv, th);
+    web_adsb_destroy(&A);
+    web_gnss_destroy(&GB);
+    web_gnss_destroy(&GS);
 }
 #endif
 
@@ -2862,6 +3500,10 @@ void run_fleet_tests(void) {
     WT_RUN(test_gnss_route);
     WT_RUN(test_gnss_sample_events);
     WT_RUN(test_gnss_state_survives_a_restart);
+    WT_RUN(test_adsb_export);
+    WT_RUN(test_adsb_import_refusals);
+    WT_RUN(test_adsb_pull_and_mixed_versions);
+    WT_RUN(test_adsb_route);
 #endif
     WT_RUN(test_distance);
     WT_RUN(test_fleet_page);

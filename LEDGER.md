@@ -327,3 +327,5 @@
 | 6b273fd | 2026-11-11T19:39:00Z | claude-opus-5-5 | 58 | 3343 | 3614268 | 14974 | 0.9097 | #192 I5 review: LM least squares, 2.4 GHz calibration, probe time bound, nearer sigma |
 | 95a754c | 2026-11-11T20:31:56Z | claude-opus-5-5 | 12 | 4599 | 1110535 | 8968 | 0.3859 | Classify GNSS events across sites as regional, local or undetermined (#192 I6) |
 | bbf99b6 | 2026-11-11T21:11:40Z | claude-opus-5-5 | 10 | 2619 | 930685 | 6447 | 0.2901 | Never read a peer as quiet before it could have answered (#192 I6 review) |
+| 13b1599 | 2026-11-11T22:51:23Z | claude-opus-5-5 | 46 | 10999 | 4676640 | 19068 | 1.3080 | Compare the fleet's ADS-B receivers aircraft by aircraft (#192 I7) |
+| 4a03e26 | 2026-11-11T23:48:01Z | claude-opus-5-5 | 6 | 2255 | 517887 | 5800 | 0.1951 | Close the aircraft cross-check's paths to a false unconfirmed (#192 I7 review) |

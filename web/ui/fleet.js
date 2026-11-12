@@ -15,7 +15,11 @@
 // and the candidates, so at a 17 m baseline it is drawn in metres. GNSS
 // across the sites (#192 I6, /api/fleet/gnss): each site's receiver, the
 // baseline between static sites against its bound, and the GNSS events
-// classified regional, local or undetermined. Every
+// classified regional, local or undetermined. Aircraft across the sites
+// (#192 I7, /api/fleet/aircraft): each ADS-B receiver with a polar plot
+// of its demonstrated coverage, and each aircraft with the sites that
+// heard it and its verdict (confirmed, unconfirmed, out of coverage,
+// undetermined). Every
 // peer string goes in as textContent; SVG geometry is set through the
 // elements' own length properties.
 (function () {
@@ -25,7 +29,8 @@
   var MAP_W = 600, MAP_H = 300, PAD = 56;
   var KINDS = ["wifi", "ble", "ap", "probe"];
   var M_DEG = 111194.9;               // metres in a degree of latitude (IUGG mean radius)
-  var S = { timer: 0, gen: 0, sgen: 0, lgen: 0, ggen: 0, ov: null, loc: null, pick: "" };
+  var S = { timer: 0, gen: 0, sgen: 0, lgen: 0, ggen: 0, agen: 0, ov: null, loc: null, pick: "" };
+  var POLAR = 150, POLAR_R = 62;      // the coverage plot's size and radius, px
 
   function $(id) { return document.getElementById(id); }
   // The namespace from the page's own <svg>: the page names no URL.
@@ -475,8 +480,107 @@
     });
   }
 
+  // Aircraft across the sites: a card per receiver with its coverage
+  // drawn north up and clockwise (each sector's reach, the median of its
+  // hourly farthest decode, scaled to the farthest single decode, the
+  // outer ring; rings at a third, two thirds and the whole),
+  // and a row per aircraft.
+  function polar(s) {
+    var svg = svgEl("svg", "fleet-polar");
+    var c = POLAR / 2, max = num(s.range_max_m) && s.range_max_m > 0 ? s.range_max_m : 0;
+    [1, 2, 3].forEach(function (k) {
+      var r = svgEl("circle", "fleet-pring");
+      r.cx.baseVal.value = c; r.cy.baseVal.value = c; r.r.baseVal.value = POLAR_R * k / 3;
+      svg.appendChild(r);
+    });
+    if (max) {
+      var poly = svgEl("polygon", "fleet-pcov"), host = $("fleet-map");
+      s.sectors.forEach(function (sec) {
+        var r = num(sec.max_m) ? POLAR_R * sec.max_m / max : 0;
+        [sec.from, sec.from + 30].forEach(function (deg) {
+          var p = host.createSVGPoint(), a = deg * Math.PI / 180;
+          p.x = c + r * Math.sin(a); p.y = c - r * Math.cos(a);
+          poly.points.appendItem(p);
+        });
+      });
+      svg.appendChild(poly);
+    }
+    var me = svgEl("circle", "fleet-pself");
+    me.cx.baseVal.value = c; me.cy.baseVal.value = c; me.r.baseVal.value = 3;
+    svg.appendChild(me);
+    var n = svgEl("text", "fleet-pt");
+    n.x.baseVal.appendItem(svgLen(c)); n.y.baseVal.appendItem(svgLen(10));
+    n.textContent = "N";
+    svg.appendChild(n);
+    var t = svgEl("text", "fleet-pt");
+    t.x.baseVal.appendItem(svgLen(c)); t.y.baseVal.appendItem(svgLen(POLAR - 2));
+    t.textContent = max ? "outer ring " + dist(max) : "no position decoded";
+    svg.appendChild(t);
+    return svg;
+  }
+  function acCards(j) {
+    var box = $("fleet-ac-sites");
+    while (box.firstChild) box.removeChild(box.firstChild);
+    j.sites.forEach(function (s) {
+      if (!s.receiver) return;
+      var c = H.el("div", "fleet-card");
+      c.appendChild(H.el("div", "fleet-card-h", siteName(s.site)));
+      var dl = H.el("dl");
+      kv(dl, "decoder", s.state ? (s.source || "-") + ", " + s.state + (num(s.summary_age_s) ? ", " + age(s.summary_age_s) : "")
+         : "no summary", !s.fresh);
+      kv(dl, "now", num(s.aircraft_now) ? s.aircraft_now + " aircraft" + (num(s.msg_rate) ? ", " + s.msg_rate + " msg/s" : "") : "-");
+      kv(dl, "coverage", s.positions + " positions over " + Math.round(j.cov_window_s / 3600) + " h" +
+         (num(s.range_max_m) ? ", farthest " + dist(s.range_max_m) : "") + (s.cov_complete ? "" : " (partial)"));
+      kv(dl, "data to", num(s.through_age_s) ? age(s.through_age_s) : "never", !num(s.through_age_s) || s.through_age_s > 300);
+      c.appendChild(dl);
+      c.appendChild(polar(s));
+      box.appendChild(c);
+    });
+    if (!box.firstChild) box.appendChild(H.el("div", "sub", "no site has an ADS-B receiver (sloth --adsb)"));
+  }
+  function acRows(j) {
+    var box = $("fleet-ac-rows");
+    while (box.firstChild) box.removeChild(box.firstChild);
+    j.aircraft.forEach(function (a) {
+      var row = H.el("div", "fleet-ac");
+      row.appendChild(H.el("span", "", a.hex + (a.flight ? " " + a.flight : "") + (a.emergency ? " (" + a.emergency + ")" : "")));
+      row.appendChild(H.el("span", "", (num(a.alt) ? a.alt + " ft" : "-") + (num(a.pos_ts) ? ", " + H.stamp(a.pos_ts) : ", no position") +
+                           (a.ref ? " by " + siteName(a.ref) : "")));
+      row.appendChild(H.el("span", "", a.seen.map(function (s) {
+        return siteName(s.site) + (num(s.range_m) ? " " + dist(s.range_m) : "") + " to " + H.stamp(s.last_seen);
+      }).join("; ")));
+      var v = H.el("span", "fleet-v " + a.verdict, a.verdict.replace(/_/g, " ") + (a.why ? " (" + a.why.replace(/_/g, " ") + ")" : "") +
+                   (a.inconsistent ? "; positions " + dist(a.separation_m) + " apart, more than it could fly" : ""));
+      v.title = a.inconsistent ? j.basis.inconsistent : a.verdict === "unconfirmed" ? j.basis.unconfirmed : j.basis.thresholds;
+      row.appendChild(v);
+      row.appendChild(H.el("span", "", a.peers.map(function (p) {
+        return siteName(p.site) + ": " + p.state.replace(/_/g, " ") + (num(p.dist_m) ? " at " + dist(p.dist_m) +
+               (num(p.sector_max_m) ? " (reaches " + dist(p.sector_max_m) + " there)" : "") : "");
+      }).join("; ") || "no other receiver"));
+      box.appendChild(row);
+    });
+  }
+  function loadAircraft() {
+    var gen = ++S.agen;
+    return H.getJSON("/api/fleet/aircraft?limit=100").then(function (j) {
+      if (gen !== S.agen) return;
+      acCards(j);
+      acRows(j);
+      var c = j.counts, rx = j.sites.filter(function (s) { return s.receiver; }).map(function (s) { return siteName(s.site); });
+      H.set("fleet-ac-note", (j.single_receiver
+        ? (rx.length ? "one receiver in the fleet (" + rx.join(", ") + "): " : "no receiver: ") +
+          "every aircraft is undetermined until a second site decodes ADS-B; "
+        : j.receivers + " receivers; ") + j.total + " aircraft in " + Math.round(j.list_s / 3600) + " h: " +
+        c.confirmed + " confirmed, " + c.unconfirmed + " unconfirmed, " + c.out_of_peer_coverage + " out of coverage, " +
+        c.undetermined + " undetermined" + (c.inconsistent ? ", " + c.inconsistent + " with inconsistent positions" : "") +
+        (j.partial ? "; partial" : ""));
+    }).catch(function (e) {
+      if (gen === S.agen) H.set("fleet-ac-note", H.errText(e.message));
+    });
+  }
+
   function load() {
-    loadOverview().then(loadLocate).then(loadShared).then(loadGnss);
+    loadOverview().then(loadLocate).then(loadShared).then(loadGnss).then(loadAircraft);
   }
   function show() {
     load();

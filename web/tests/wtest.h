@@ -105,5 +105,6 @@ void run_mcp_tests(void);                /* tests/test_mcp.c (2026-11-11) */
 void run_locate_tests(void);             /* tests/test_locate.c (#192 I5) */
 void run_fleetgnss_tests(void);          /* tests/test_fleetgnss.c (#192 I6) */
 void run_fleetview_tests(void);          /* tests/test_fleetview.c (2026-11-11) */
+void run_fleetadsb_tests(void);          /* tests/test_fleetadsb.c (#192 I7) */
 
 #endif
