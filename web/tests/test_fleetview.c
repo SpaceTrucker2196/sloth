@@ -366,13 +366,19 @@ static void test_devices_filters_and_pages(void) {
     b = get("/api/devices", "q=-vendor%3AEvil+seen%3A%3C1h", &st, NULL);
     WT_EQ(count_of(b, "\"remote\":true"), 2);
     WT_ASSERT(!strstr(b, "bb:00:00:00:00:01"));
+    /* The first page carries them, however much of the local list is
+     * left (a field sensor's last page is a deep offset that times out
+     * first); a later page carries none, so none is read twice. */
     b = get("/api/devices", "limit=1", &st, NULL);
     WT_HAS(b, "\"more\":true");
-    WT_EQ(count_of(b, "\"remote\":true"), 0);
-    WT_HAS(b, "\"remote_off\":\"not_last_page\"");
+    WT_EQ(count_of(b, "\"remote\":true"), 3);
+    WT_HAS(b, "\"remote_off\":null");
+    b = get("/api/devices", "limit=1&offset=0", &st, NULL);
+    WT_EQ(count_of(b, "\"remote\":true"), 3);
     b = get("/api/devices", "limit=2&offset=2", &st, NULL);
     WT_HAS(b, "\"more\":false");
-    WT_EQ(count_of(b, "\"remote\":true"), 3);
+    WT_EQ(count_of(b, "\"remote\":true"), 0);
+    WT_HAS(b, "\"remote_off\":\"not_first_page\"");
     down();
 }
 
@@ -643,11 +649,14 @@ static void test_probe_clients_merge(void) {
     r1 = strstr(b, "{\"mac\":\"bb:00:00:00:00:11\"");
     r4 = strstr(b, "{\"mac\":\"bb:00:00:00:00:14\"");
     WT_ASSERT(r1 && r4 && r1 < r4);
-    /* A page that does not end the list carries none. */
+    /* The first page carries them though the list goes on; a later
+     * page carries none. */
     b = get("/api/probes/clients", "days=0&limit=1", &st, NULL);
     WT_HAS(b, "\"more\":true");
+    WT_EQ(count_of(b, "\"remote\":true"), 3);
+    b = get("/api/probes/clients", "days=0&limit=1&offset=1", &st, NULL);
     WT_EQ(count_of(b, "\"remote\":true"), 0);
-    WT_HAS(b, "\"remote_off\":\"not_last_page\"");
+    WT_HAS(b, "\"remote_off\":\"not_first_page\"");
     down();
 }
 
@@ -904,11 +913,11 @@ static void test_adsb_merge(void) {
     /* The hostile callsign, escaped. */
     WT_ASSERT(!strstr(b, "<b>"));
     WT_HAS(b, "\"flight\":\"\\u003cb\\u003e\\\"x\"");
-    /* A table limit= cut ends nothing: no remote rows on it. */
+    /* /api/adsb pages nothing: a table limit= cut still carries them. */
     b = get("/api/adsb", "limit=1", &st, NULL);
     WT_EQ(st, 200);
-    WT_EQ(count_of(b, "\"remote\":true"), 0);
-    WT_HAS(b, "\"remote_off\":\"not_last_page\"");
+    WT_EQ(count_of(b, "\"remote\":true"), 3);
+    WT_HAS(b, "\"remote_off\":null");
     adsb_down();
 }
 

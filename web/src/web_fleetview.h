@@ -20,8 +20,7 @@
  * one that a peer also reported gains "sites": [{site, first_seen,
  * last_seen, label}] of each peer that did (label: the site's own
  * name from peer_sites, null when it sent none). The peers' other keys follow the
- * local rows on the page that ends the local list (the one answering
- * "more": false), as rows with "remote": true, "site" (the peer that
+ * local rows on the first page (no offset=, or offset=0), as rows with "remote": true, "site" (the peer that
  * heard it last) and "sites", holding only what peer_sightings holds
  * under the route's own member names: a member a peer cannot supply is
  * absent, never made up. A key this sensor holds anywhere (sloth.db's

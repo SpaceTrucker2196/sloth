@@ -2685,7 +2685,7 @@
         rows = rows.concat(j.rows || []);
         var more = !!j.more;
         if (more && num(j.next_offset) && rows.length < DEV_MAX) return page(j.next_offset);
-        // Another host's rows ride the last page, after this site's;
+        // Another host's rows ride the first page, after this site's;
         // DEV_MAX bounds this site's.
         var rem = rows.filter(function (d) { return d.remote === true; });
         if (rem.length) rows = rows.filter(function (d) { return d.remote !== true; });
@@ -3317,7 +3317,6 @@
   var WF = { gen: 0, heat: null, mix: null, rows: [], cur: null, apEls: new Map(), geo: null,
              g3max: {}, g3of: "", cl: [], clFrom: null };
   var AP_SORTS = { "signal": 1, "last": 1, "ssids": 1, "karma": 1, "bssid": 1 };
-  var AP_FV_MAX = 500;
   var BAND_WORD = { "2.4": "2.4 GHz", "5": "5 GHz", "6": "6 GHz" };
 
   function wifiWindow() {
@@ -3763,19 +3762,9 @@
     if (wd) sort = wd.sort;
     var path = "/api/wifi/aps?limit=100&sort=" + encodeURIComponent(sort) + (wd ? "&dir=" + wd.dir : "") +
                fvQuery("aps");
-    // All sites: the other hosts' APs ride the page that ends this
-    // site's list, so the pages are read on to it (at most AP_FV_MAX
-    // rows of this site's); This site is the one page it always was.
-    var all = fvAll("aps"), acc = [];
-    function apPage(off) {
-      return getJSON(path + (off ? "&offset=" + off : "")).then(function (j) {
-        acc = acc.concat(j.rows || []);
-        if (all && j.more && num(j.next_offset) && acc.length < AP_FV_MAX) return apPage(j.next_offset);
-        j.rows = acc;
-        return j;
-      });
-    }
-    apPage(0).then(function (j) {
+    // All sites: the other hosts' APs ride this first page, after this
+    // site's.
+    getJSON(path).then(function (j) {
       if (gen !== WF.gen) return;
       var box = $("w-aps");
       while (box.firstChild) box.removeChild(box.firstChild);

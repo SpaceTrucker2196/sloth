@@ -5559,8 +5559,9 @@ they were.
 - A local row a peer also reported gains `sites`: `[{site, label,
   first_seen, last_seen}]`, one a peer (`label` the name its export
   sent, `null` for none).
-- The peers' other keys follow the local rows on the page that ends the
-  local list (`"more": false`), at most 100 (`WEB_FV_REMOTE_MAX`), as
+- The peers' other keys follow the local rows on the first page (no
+  `offset`, or `offset=0`; on 2026-11-12 the page that ended the local
+  list, which a field sensor's deep offsets time out before), at most 100 (`WEB_FV_REMOTE_MAX`), as
   rows with `"remote": true`, `site` (the peer that heard it last),
   `site_label` and `sites`, in the route's own sort (a column a peer
   sends nothing for reads as empty, then by last seen). They hold only
@@ -5622,7 +5623,7 @@ they were.
   (the rows added), `remote_cap`, `remote_more` (more were cut by the cap
   or the room), `partial` (the 4,000 newest peer rows were read, or the
   budget stopped the check against `sloth.db`), `remote_off` (`null`,
-  `not_last_page`, `query` or `sloth_db`). `count`, `total` and every
+  `not_first_page`, `query` or `sloth_db`). `count`, `total` and every
   other figure stay this site's own.
 - `/api/device/{mac}` gains `fleet` where a peer reported the MAC (as a
   client, `rows`, or as an AP, `ap_rows`: each `site`, `label`, the
@@ -5656,9 +5657,7 @@ local row another host heard with a small `+name`; each view has a
 `fleet.aps`, `fleet.ble`, `fleet.probes`, `fleet.adsb`), All sites by
 default and hidden with no peer. In the Probes tab a grey station opens its device
 drawer and a grey network lists, under its row, each host that heard it
-asked for and when; with All sites the networks list reads on past its
-first page, as the AP table does, so the remote rows that ride the last
-page arrive. In the ADS-B tab a grey aircraft has no altitude colour or
+asked for and when. In the ADS-B tab a grey aircraft has no altitude colour or
 signal meter; the positions plot draws it as a grey ring at the last
 position its host sent, labelled with the host, with no track or
 heading tick; its detail lists each host's figures and takes no notes.

@@ -674,7 +674,7 @@ static void test_page_probes(void) {
               "\"&limit=\" + PAGE +");
     WT_HAS(p, "var path = \"/api/probes/ssids?days=\" + d + \"&sort=\" + encodeURIComponent(sort) + "
               "\"&limit=100\" +\n               H.fvQuery(\"probes\");");
-    WT_HAS(p, "      return H.getJSON(path + (off ? \"&offset=\" + off : \"\")).then(function (j) {");
+    WT_HAS(p, "    H.getJSON(path)\n");
     WT_HAS(p, "H.getJSON(\"/api/probes/groups?days=\" + d + \"&min=\" + minShared()).then(");
     WT_HAS(p, "DTC = H.DataTable({ id: \"prclients\", label: \"stations heard probing\",");
     WT_HAS(p, "DTS = H.DataTable({ id: \"prssids\", label: \"networks asked for\",");

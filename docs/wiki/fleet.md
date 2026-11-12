@@ -1046,8 +1046,8 @@ other sloth hosts' rows beside this site's (`web/src/web_fleetview.c`,
   (address, SSID or name, vendor or class, signal, times); the columns
   only this site has (risk, z, anomalies, presence, sources, IP, name)
   are `-`. A peer's 0 dBm is no reading.
-- At most 100 such rows an answer, on the page that ends this site's
-  list, sorted by the view's own column among themselves. A key this
+- At most 100 such rows an answer, on the first page (no `offset`, or
+  `offset=0`), after this site's rows, sorted by the view's own column among themselves. A key this
   site holds anywhere is never one of them, whatever the filter.
 - Each view has a "This site / All sites" choice, kept in the browser,
   All sites by default and hidden while no `--peer` is configured. This

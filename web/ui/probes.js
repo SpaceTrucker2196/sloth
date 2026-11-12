@@ -37,7 +37,6 @@
   var H = null;
   var P = { gen: 0, sgen: 0, rows: [], ss: [], from: null, sel: "", total: 0, more: false, next: 0,
             ssOpen: null, ssJ: null };
-  var SS_FV_MAX = 500;
   var PAGE = 50, ROWS_MAX = 500, CELLS = 144, CELL_S = 600;
   var SORTS = { "last": "last heard first", "first": "first heard first", "ssids": "most networks first",
                 "frames": "most frames first", "signal": "nearest first", "mac": "by address" };
@@ -333,19 +332,9 @@
     var d = days(), sort = sortOf("pr-ss-sort", SS_SORTS, "clients");
     var path = "/api/probes/ssids?days=" + d + "&sort=" + encodeURIComponent(sort) + "&limit=100" +
                H.fvQuery("probes");
-    // All sites: the other hosts' networks ride the page that ends this
-    // site's list, so the pages are read on to it (at most SS_FV_MAX of
-    // this site's); This site is the one page it always was.
-    var all = H.fvAll("probes"), acc = [];
-    function ssPage(off) {
-      return H.getJSON(path + (off ? "&offset=" + off : "")).then(function (j) {
-        acc = acc.concat(j.rows || []);
-        if (all && j.more && num(j.next_offset) && acc.length < SS_FV_MAX) return ssPage(j.next_offset);
-        j.rows = acc;
-        return j;
-      });
-    }
-    ssPage(0)
+    // All sites: the other hosts' networks ride this first page, after
+    // this site's.
+    H.getJSON(path)
       .then(function (j) {
         if (gen !== P.gen || j.out_of_scope) return;
         P.ss = j.rows || [];

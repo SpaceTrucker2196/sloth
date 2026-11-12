@@ -1147,19 +1147,18 @@ void web_fv_list(web_fleet_t *f, const web_fv_src_t *src, int view, const char *
         }
     }
 
-    /* The remote rows: on the page that ends the local list, the
-     * filter's, in the route's order, none this sensor holds. */
+    /* The remote rows: on the first page (offset 0, the one every view
+     * reads), the filter's, in the route's order, none this sensor holds
+     * anywhere, so no later page repeats one. Not the page that ends the
+     * local list: on a field sensor's sloth.db (70,000 probing clients)
+     * that page is a thousand requests away and a deep offset times out
+     * first. /api/adsb pages nothing: every answer is its first. */
     const char *off = NULL;
-    int last_page = t.more_e && t.more_e - t.more_s == 5 && !memcmp(s + t.more_s, "false", 5);
-    if (view == WEB_FV_ADSB) {
-        /* /api/adsb pages nothing: its list ends when limit= cut none. */
-        char tv[24] = "";
-        if (t.tot_e > t.tot_s && t.tot_e - t.tot_s < sizeof(tv))
-            memcpy(tv, s + t.tot_s, t.tot_e - t.tot_s);
-        last_page = tv[0] && atoll(tv) == (long long)nel;
-    }
+    char ov[24] = "";
+    qparam(query, "offset", 0, ov, sizeof(ov));
+    int first_page = !ov[0] || !strcmp(ov, "0");
     char qv[WEB_Q_LEN + 1] = "";
-    if (!last_page) off = "not_last_page";
+    if (!first_page) off = "not_first_page";
     if (!off && view == WEB_FV_DEVICES) {
         q = malloc(sizeof(*q));
         char err[48];
