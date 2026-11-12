@@ -27,6 +27,7 @@
 #include "views/procs.h"
 #include "sensor_health.h"
 #include "ownership.h"
+#include "harvest_track.h"    /* harvest_station, harvest_chain (JSONL 1.3.0) */
 #include "sys_status.h"
 #include "ble_hci.h"        /* Bluetooth host source names (#144 slice 2) */
 #include "bt_stream.h"      /* Ubertooth stream state names (#144 slice 3) */
@@ -103,7 +104,8 @@ static jsonl_dedup_slot_t g_dedup[JSONL_DEDUP_SLOTS];
 /* Snapshot event "kinds" — one per deduped emitter. */
 enum { JD_PNL = 1, JD_SEQNUM, JD_SENSOR_HEALTH, JD_WIFI_REG,
        JD_BLE_DEVICE, JD_BLE_ALERT, JD_GNSS_FIX, JD_GNSS_SKY, JD_GNSS_SAT,
-       JD_ADSB_AIRCRAFT, JD_APRS_STATION, JD_OWNERSHIP };
+       JD_ADSB_AIRCRAFT, JD_APRS_STATION, JD_OWNERSHIP,
+       JD_KARMA_SUSPECT, JD_HARVEST_STA, JD_HARVEST_CHAIN };
 
 static uint64_t fnv1a(const void *data, size_t n, uint64_t h) {
     const unsigned char *p = (const unsigned char *)data;
@@ -2772,6 +2774,181 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     emit_line(buf);
 }
 
+/* ── credential-lure findings (JSONL 1.3.0, #187 / #172) ─────────────
+ *
+ * The evidence tables behind KARMA_AP / KARMA_PROBE_FORGE (s->karma_aps,
+ * karma_update()) and PMKID_HARVEST / HANDSHAKE_HARVEST
+ * (s->harvest_sta, s->harvest_chain, harvest_snapshot()), one record per
+ * row, so a consumer can show what the rules judged and not only that
+ * they fired: the alert record says "this BSSID, CRIT"; these say "it
+ * answered for 3 names it never beaconed, to 2 stations".
+ *
+ *   karma_suspect    one per [y] row: a BSSID beacon-fanning past
+ *                    karma.ssid_thresh, or answering directed probes
+ *                    for names it never beaconed. The [y] view's columns.
+ *   harvest_station  one per soliciting station with at least one M1
+ *                    left unanswered. A station whose every M1 drew an
+ *                    M2 is a station joining its network, and the table
+ *                    holds a row for every station that asked anything;
+ *                    it is not written.
+ *   harvest_chain    one per BSSID whose claimed deauths were followed
+ *                    by a victim's fresh M1/M2 (every row of the table).
+ *
+ * Counts only. A victim's address, the stations a forging BSSID
+ * answered and the SSIDs it answered for stay in the TUI and the alert
+ * evidence; the record says how many. Member names avoid the credential
+ * words slothweb's readers hold every name to (web/src/web_secret.c):
+ * `unanswered_kde` for the M1s that carried the PMKID KDE, `disconnects`
+ * for the deauthentication and disassociation frames, `lure_chain` for
+ * the deauth-then-lure flag.
+ *
+ * Change-only on the shared cache, signed on every count and string and
+ * never on a timestamp, so a row writes when its evidence moves and on
+ * the 300 s heartbeat. A row that leaves its table (aged out, evicted,
+ * or a station whose unanswered M1s aged to none) is written once more
+ * as `"state":"gone"` with its key alone, so a consumer drops it rather
+ * than holding it until its own timeout. Every other row says
+ * `"state":"live"`. */
+enum { LURE_KARMA, LURE_STA, LURE_CHAIN, LURE_KINDS };
+#define LURE_PREV_MAX MAX_KARMA_APS
+static uint8_t g_lure_prev[LURE_KINDS][LURE_PREV_MAX][6];
+static int     g_lure_prev_n[LURE_KINDS];
+
+static const char *const LURE_TYPE[LURE_KINDS] = {
+    "karma_suspect", "harvest_station", "harvest_chain" };
+static const char *const LURE_KEYM[LURE_KINDS] = { "bssid", "sta", "bssid" };
+static const uint8_t LURE_JD[LURE_KINDS] = {
+    JD_KARMA_SUSPECT, JD_HARVEST_STA, JD_HARVEST_CHAIN };
+
+static int lure_has(const uint8_t (*keys)[6], int n, const uint8_t k[6]) {
+    for (int i = 0; i < n; i++)
+        if (!memcmp(keys[i], k, 6)) return 1;
+    return 0;
+}
+
+/* The rows of `kind` now (cur, n) against those written last pass:
+ * each one missing now goes out as gone, and cur becomes the
+ * remembered set. The cache slot is re-signed with 0, which no live
+ * row carries, so a row that returns with the same counts is written
+ * again. */
+static void lure_retire(int kind, const uint8_t (*cur)[6], int n, time_t now) {
+    char buf[256]; int off = 0;
+    for (int i = 0; i < g_lure_prev_n[kind]; i++) {
+        const uint8_t *k = g_lure_prev[kind][i];
+        if (lure_has(cur, n, k)) continue;
+        (void)jsonl_changed(LURE_JD[kind], k, 6, 0, now);
+        start_obj(buf, (int)sizeof(buf), &off, LURE_TYPE[kind], now);
+        kv_mac(buf, (int)sizeof(buf), &off, LURE_KEYM[kind], k);
+        kv_str(buf, (int)sizeof(buf), &off, "state", "gone");
+        end_obj(buf, (int)sizeof(buf), &off);
+        emit_line(buf);
+    }
+    if (n > 0) memcpy(g_lure_prev[kind], cur, (size_t)n * 6);
+    g_lure_prev_n[kind] = n;
+}
+
+static uint64_t sig_int(uint64_t h, long long v) { return fnv1a(&v, sizeof(v), h); }
+static uint64_t sig_str(uint64_t h, const char *v) { return fnv1a(v, strlen(v) + 1, h); }
+
+void jsonl_emit_lures(const sloth_state_t *s) {
+    if (!s || !any_sink()) return;
+    time_t now = sloth_wall();
+    char buf[LINEBUF]; int off = 0;
+    uint8_t cur[LURE_PREV_MAX][6];
+    int n = 0;
+
+    for (int i = 0; i < s->karma_count && n < LURE_PREV_MAX; i++) {
+        const karma_ap_t *k = &s->karma_aps[i];
+        memcpy(cur[n++], k->bssid, 6);
+        uint64_t sig = sig_int(FNV64_OFFSET, k->ssid_count);
+        sig = sig_int(sig, k->ie_fp_distinct);
+        sig = sig_int(sig, k->ie_uniform);
+        sig = sig_int(sig, k->forged);
+        sig = sig_int(sig, k->forge_stations);
+        sig = sig_int(sig, k->pnl_best);
+        sig = sig_int(sig, k->deauth_chain);
+        sig = sig_int(sig, k->score);
+        sig = sig_str(sig, k->top_ssid);
+        sig = sig_str(sig, k->tool);
+        if (sig == 0) sig = 1;              /* 0 is a retired row's */
+        if (!jsonl_changed(JD_KARMA_SUSPECT, k->bssid, 6, sig, now)) continue;
+        start_obj(buf, LINEBUF, &off, "karma_suspect", now);
+        kv_mac(buf, LINEBUF, &off, "bssid", k->bssid);
+        kv_str(buf, LINEBUF, &off, "state", "live");
+        kv_int(buf, LINEBUF, &off, "ssids", k->ssid_count);
+        kv_int(buf, LINEBUF, &off, "ie_postures", k->ie_fp_distinct);
+        kv_int(buf, LINEBUF, &off, "ie_collapsed", k->ie_uniform ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "forged", k->forged);
+        kv_int(buf, LINEBUF, &off, "forge_stations", k->forge_stations);
+        kv_int(buf, LINEBUF, &off, "pnl_best", k->pnl_best);
+        kv_int(buf, LINEBUF, &off, "lure_chain", k->deauth_chain ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "score", k->score);
+        kv_str(buf, LINEBUF, &off, "top_ssid", k->top_ssid);
+        kv_str(buf, LINEBUF, &off, "tool", k->tool);
+        kv_int(buf, LINEBUF, &off, "last_seen", (long long)k->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+    lure_retire(LURE_KARMA, (const uint8_t (*)[6])cur, n, now);
+
+    n = 0;
+    for (int i = 0; s->harvest_sta && i < s->harvest_sta_count; i++) {
+        const harvest_sta_t *h = &s->harvest_sta[i];
+        if (h->unanswered < 1 || n >= LURE_PREV_MAX) continue;
+        memcpy(cur[n++], h->sta, 6);
+        uint64_t sig = sig_int(FNV64_OFFSET, h->solicited);
+        sig = sig_int(sig, h->m1_bssids);
+        sig = sig_int(sig, h->unanswered);
+        sig = sig_int(sig, h->pmkid_unanswered);
+        sig = sig_int(sig, h->answered);
+        sig = sig_int(sig, h->dropped);
+        if (sig == 0) sig = 1;
+        if (!jsonl_changed(JD_HARVEST_STA, h->sta, 6, sig, now)) continue;
+        start_obj(buf, LINEBUF, &off, "harvest_station", now);
+        kv_mac(buf, LINEBUF, &off, "sta", h->sta);
+        kv_str(buf, LINEBUF, &off, "state", "live");
+        kv_int(buf, LINEBUF, &off, "asked", h->solicited);
+        kv_int(buf, LINEBUF, &off, "m1_bssids", h->m1_bssids);
+        kv_int(buf, LINEBUF, &off, "unanswered", h->unanswered);
+        kv_int(buf, LINEBUF, &off, "unanswered_kde", h->pmkid_unanswered);
+        kv_int(buf, LINEBUF, &off, "answered", h->answered);
+        kv_int(buf, LINEBUF, &off, "dropped", h->dropped);
+        kv_int(buf, LINEBUF, &off, "first_seen", (long long)h->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen", (long long)h->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+    lure_retire(LURE_STA, (const uint8_t (*)[6])cur, n, now);
+
+    n = 0;
+    for (int i = 0; s->harvest_chain && i < s->harvest_chain_count &&
+                    n < LURE_PREV_MAX; i++) {
+        const harvest_chain_t *c = &s->harvest_chain[i];
+        memcpy(cur[n++], c->bssid, 6);
+        uint64_t sig = sig_int(FNV64_OFFSET, c->victims);
+        sig = sig_int(sig, c->deauth_frames);
+        sig = sig_int(sig, c->dropped);
+        if (sig == 0) sig = 1;
+        if (!jsonl_changed(JD_HARVEST_CHAIN, c->bssid, 6, sig, now)) continue;
+        start_obj(buf, LINEBUF, &off, "harvest_chain", now);
+        kv_mac(buf, LINEBUF, &off, "bssid", c->bssid);
+        kv_str(buf, LINEBUF, &off, "state", "live");
+        kv_int(buf, LINEBUF, &off, "victims", c->victims);
+        kv_int(buf, LINEBUF, &off, "disconnects", c->deauth_frames);
+        kv_int(buf, LINEBUF, &off, "dropped", c->dropped);
+        kv_int(buf, LINEBUF, &off, "first_seen", (long long)c->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen", (long long)c->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+    lure_retire(LURE_CHAIN, (const uint8_t (*)[6])cur, n, now);
+}
+
+void jsonl_lures_reset(void) {
+    memset(g_lure_prev, 0, sizeof(g_lure_prev));
+    memset(g_lure_prev_n, 0, sizeof(g_lure_prev_n));
+}
+
 /* ── ownership (2026-11-11) ─────────────────────────────────────────
  *
  * The operator's designated networks, so a consumer (slothweb's SSID
@@ -3479,6 +3656,8 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     sys_status_emit              (s);
     /* The operator's designated networks: change-only, a heartbeat. */
     jsonl_emit_ownership         ();
+    /* The KARMA and key-harvest evidence tables (JSONL 1.3.0). */
+    jsonl_emit_lures             (s);
     /* Last: the sensor's self-report about this tick, after every
      * observation in it has been emitted (#91 slice 3). */
     jsonl_emit_sensor_health     (s);

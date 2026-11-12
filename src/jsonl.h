@@ -142,6 +142,13 @@ void jsonl_emit_sensor_health (const sloth_state_t *s);
  * that connects late has it within one heartbeat. */
 void jsonl_emit_ownership(void);
 
+/* The KARMA and key-harvest evidence tables (#187, #172), JSONL 1.3.0:
+ * `karma_suspect`, `harvest_station`, `harvest_chain`, change-only per
+ * row, and a `"state":"gone"` record when a row leaves its table.
+ * jsonl_lures_reset() forgets the rows written (tests). */
+void jsonl_emit_lures(const sloth_state_t *s);
+void jsonl_lures_reset(void);
+
 /* One flat record built from a field list, for a module that shapes
  * its own records (src/sys_status.c: sys_status, sys_sensor,
  * source_status, receiver_hw). Strings go through the same escaping as
