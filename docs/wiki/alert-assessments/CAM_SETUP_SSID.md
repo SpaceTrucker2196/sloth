@@ -1,7 +1,7 @@
 ---
 type: CAM_SETUP_SSID
 technique: ""
-rule_file: src/alerts/rules_twin.c:1452 of rule_cam_setup_ssid(); prefix table src/camera_vendor.c:665 (g_camera_setup_ssid_pats); matcher cam_setup_ssid() at :694
+rule_file: src/alerts/rules_twin.c:1504 of rule_cam_setup_ssid(); prefix table src/camera_vendor.c:665 (g_camera_setup_ssid_pats); matcher cam_setup_ssid() at :694
 count_semantics: per rule tick (one alerts_update() pass, POLL_MS=250 ms default) on which a beacon_ap row whose SSID matches a camera-vendor setup prefix is still in the beacon table. Keyed per BSSID, so one incident with a rising count per camera, not one per beacon frame. `fire()` bumps `evaluations` (= `count`) once per alerts_update() under the key (engine.c:478).
 severity_assessment: agree - WARN. It reports a camera's own provisioning exposure (its first-boot password likely still unchanged), not an adversary; higher would overclaim, lower would bury a genuine exposure window.
 false_positive_risk: low-medium - every hit is a real beacon carrying a vendor-documented setup-SoftAP prefix, so the match is precise; the "false" part is only that a configured camera can re-advertise this name after a factory reset, a re-pair, or because an installer left the AP on. The rule says "provisioning state not observed" for exactly this reason.

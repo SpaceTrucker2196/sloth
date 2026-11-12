@@ -3474,6 +3474,76 @@ static void test_evil_twin_proximity_open_pair_is_no_candidate(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
 }
 
+/* An attributed pair reports the swing of its accused half only (#189,
+ * 2026-11-12): the impostor getting louder corroborates the EVIL_TWIN
+ * row; the original getting louder is a client walking past it.
+ *
+ * Attributed two ways the ladder knows: an attacker-tool OUI, and the
+ * chain's taint. Then the real half of the first pair joins a second,
+ * unattributed pair under the same name, and its swing counts again:
+ * twin_has_candidate asks every pair, not the first.
+ *
+ * Mutation (2026-11-12): the twin_choose_sides() test removed from
+ * twin_has_candidate; the first two blocks counted 2 rows each. With
+ * `return 0` for `continue` on an attributed real half, the third block
+ * lost its row. */
+static void test_evil_twin_proximity_only_the_accused_half(void) {
+    uint8_t real[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t esp[6]  = {0x24,0x0a,0xc4,0x44,0x55,0x66};   /* Espressif */
+    uint8_t copy[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+    uint8_t third[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    char want[40];
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", real, "WPA2");
+    add_beacon(&s, "CorpWiFi", esp,  "WPA2");
+    for (int k = 0; k < 2; k++) {
+        s.beacon_aps[k].rssi_min_60s = -80;
+        s.beacon_aps[k].rssi_max_60s = -55;
+    }
+    alerts_update(&s);
+    ASSERT_EQ(prox_count(&s), 1);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY);
+    ASSERT(idx >= 0);
+    if (idx >= 0)
+        ASSERT(strstr(s.alerts[idx].key, "twin-prox:24:0a:c4:44:55:66") != NULL);
+
+    /* The taint, on a pair with no tool OUI: the copy is accused. */
+    alerts_clear();
+    static sloth_state_t t; seed_state(&t);
+    add_beacon(&t, "CorpWiFi", real, "WPA2");
+    add_beacon(&t, "CorpWiFi", copy, "WPA2");
+    for (int k = 0; k < 2; k++) {
+        t.beacon_aps[k].rssi_min_60s = -80;
+        t.beacon_aps[k].rssi_max_60s = -55;
+    }
+    alerts_update(&t);
+    ASSERT_EQ(prox_count(&t), 2);       /* unattributed: either half */
+    alerts_clear();
+    evil_twin_taint_mark_for_test(copy);
+    alerts_update(&t);
+    ASSERT_EQ(prox_count(&t), 1);
+    idx = find_alert(&t, ALERT_TYPE_EVIL_TWIN_PROXIMITY);
+    snprintf(want, sizeof(want), "twin-prox:3c:52:a1:01:02:03");
+    ASSERT(idx >= 0 && strstr(t.alerts[idx].key, want) != NULL);
+    evil_twin_taint_clear();
+
+    /* The real half of the Espressif pair is also half of an
+     * unattributed one (two vendors, one band, different vendor IEs). */
+    alerts_clear();
+    add_beacon(&s, "CorpWiFi", third, "WPA2");
+    s.beacon_aps[0].fp.vendor_ies_hash = 0x1111u;
+    s.beacon_aps[2].fp.vendor_ies_hash = 0x2222u;
+    alerts_update(&s);
+    snprintf(want, sizeof(want), "twin-prox:a8:bb:cc:01:02:03");
+    int found = 0;
+    for (int k = 0; k < s.alert_count; k++)
+        if (s.alerts[k].type == ALERT_TYPE_EVIL_TWIN_PROXIMITY &&
+            strstr(s.alerts[k].key, want) != NULL) found = 1;
+    ASSERT_EQ(found, 1);
+}
+
 /* ── Evil-twin Phase 4: attack-chain correlation ──────────── */
 
 /* Recent deauth flood targeting the SSID's "real" half AND a
@@ -8529,16 +8599,22 @@ static void test_twin_late_arrival_needs_a_name_new_to_the_session(void) {
     ASSERT_EQ(late_of(&s, now), 1);
 }
 
-/* The field shape, end to end through the real table: the carrier
- * offload SSID of the issue, two customers' routers, one on a vendor's
- * address and one on a locally administered one, one band, different
- * vendor IEs. The second falls silent for longer than the table keeps
- * an entry and comes back ten minutes after the first was first heard.
- * It was CRIT at 55 % on that; it is the WARN at 35 % it was before
- * the signal existed.
+/* The field shape, end to end through the real table: two routers,
+ * one on a vendor's address and one on a locally administered one, one
+ * band, different vendor IEs. The second falls silent for longer than
+ * the table keeps an entry and comes back ten minutes after the first
+ * was first heard. It was CRIT at 55 % on that; it is the WARN at 35 %
+ * it was before the signal existed.
  *
  * And the true positive beside it: the same original, and a BSSID the
  * session has never heard, appearing at the same moment. CRIT, 55.
+ *
+ * The issue's pair was under a carrier SSID ("Spectrum Mobile"). Since
+ * 2026-11-12 that name is context of its own and would decide both
+ * blocks (test_twin_carrier_ssid_is_context), so this test, which is
+ * about the arrival stamp, uses a name of no carrier's. The copy is
+ * heard on the beacons a soft CRIT needs (`twin.crit_min_beacons`); on
+ * one it is `faint`.
  *
  * The clocks are stubbed so the table can age without the test
  * sleeping. Channel and vendor-IE hash are set on the snapshot, as
@@ -8575,23 +8651,24 @@ static void test_twin_an_ap_that_returns_is_not_a_late_arrival(void) {
         g_tw_wall = 1700000000;
         g_tw_mono = 5000000;
 
-        beacon_record(r1, "Spectrum Mobile", -60, 6, "WPA2", 100, NULL);
+        beacon_record(r1, "Riverside", -60, 6, "WPA2", 100, NULL);
         if (pass == 0) {
             tw_tick(5);
-            beacon_record(r2, "Spectrum Mobile", -88, 6, "WPA2", 100, NULL);
+            beacon_record(r2, "Riverside", -88, 6, "WPA2", 100, NULL);
         }
         /* The first router is heard throughout; the second is not. */
         for (int k = 0; k < 6; k++) {
             tw_tick(100);
-            beacon_record(r1, "Spectrum Mobile", -60, 6, "WPA2", 100, NULL);
+            beacon_record(r1, "Riverside", -60, 6, "WPA2", 100, NULL);
             seed_state(&s);
             beacon_snapshot(&s);
         }
         ASSERT_EQ(s.beacon_count, 1);           /* r2 aged out, if it was there */
 
-        beacon_record(second, "Spectrum Mobile", -88, 6, "WPA2", 100, NULL);
+        for (int k = 0; k < TWIN_CRIT_MIN_BEACONS_DEFAULT; k++)
+            beacon_record(second, "Riverside", -88, 6, "WPA2", 100, NULL);
         tw_tick(1);
-        beacon_record(r1, "Spectrum Mobile", -60, 6, "WPA2", 100, NULL);
+        beacon_record(r1, "Riverside", -60, 6, "WPA2", 100, NULL);
         seed_state(&s);
         beacon_snapshot(&s);
         ASSERT_EQ(s.beacon_count, 2);
@@ -8698,6 +8775,44 @@ static void test_twin_detail_fits_with_every_phrase(void) {
         ASSERT_EQ((long long)n, 261);
         ASSERT(strstr(d, " - BSSID not in the approved inventory"
                          " +not in inventory +late-arrival"
+                         " +802.11k claim (unverified)"
+                         " +btm-steered by 5c:11:22:33:44:55") != NULL);
+        ASSERT(n >= 25 &&
+               strcmp(d + n - 25, " [class=impostor wired=?]") == 0);
+    }
+    no_inventory();
+
+    /* The first row again under a carrier SSID, with the unapproved half
+     * barely heard (2026-11-12): both notes besides every other. A
+     * carrier name is at most 15 octets, so this is the longest detail
+     * that can occur, 284; a 16-octet name could not carry the carrier
+     * note, and the 285 that rules_twin.c allows for is that bound. */
+    static const char *INV_CARRIER =
+        "{\"version\":\"2026-09-25.1\",\"site\":\"hq-3f\","
+        "\"networks\":[{\"ssid\":\"Spectrum Mobile\","
+        "\"security_profile\":\"wpa2-enterprise\","
+        "\"bssids\":[\"a8:bb:cc:00:11:22\"]}]}";
+    ASSERT_EQ(use_inventory(INV_CARRIER), 1);
+    alerts_clear();
+    static sloth_state_t w; seed_state(&w);
+    add_beacon(&w, "Spectrum Mobile", ok,  "WPA2");
+    add_beacon(&w, "Spectrum Mobile", bad, "WPA2");
+    twin_radio(&w, 0, 6, t0,       0x1111u);
+    twin_radio(&w, 1, 6, t0 + 600, 0x2222u);
+    w.beacon_aps[1].signal_dbm = -100;
+    add_neighbor(&w, ok, bad);
+    seed_steer(&w, steerer, bad, 1);
+    alerts_update(&w);
+    idx = find_alert(&w, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        const char *d = w.alerts[idx].detail;
+        size_t n = strlen(d);
+        ASSERT_EQ((long long)n, 284);
+        ASSERT_EQ((int)w.alerts[idx].sev, (int)ALERT_SEV_CRIT);   /* hard */
+        ASSERT(strstr(d, " - BSSID not in the approved inventory"
+                         " +not in inventory +same-vendor-OUI"
+                         " +carrier SSID +faint"
                          " +802.11k claim (unverified)"
                          " +btm-steered by 5c:11:22:33:44:55") != NULL);
         ASSERT(n >= 25 &&
@@ -8913,6 +9028,278 @@ static void test_twin_chain_reads_no_oui_from_a_local_address(void) {
     alerts_update(&v);
     ASSERT(chain_alert(&v) >= 0);
     ASSERT_EQ(evil_twin_bssid_is_tainted(aruba), 1);
+}
+
+/* ── The issue's field pairs, end to end (#188, 2026-11-12) ────
+ *
+ * Every representative pair #188 names, benign and real, through
+ * alerts_update, with the worst EVIL_TWIN row (the pair rule's; the
+ * chain is checked on its own key) each one leaves. The halves are
+ * well heard unless the case is about being barely heard: -60 dBm and
+ * 50 beacons, which no gate here reads as faint. */
+
+/* The worst pair row's severity, -1 for none; its confidence in *conf. */
+static int twin_worst(const sloth_state_t *s, int *conf) {
+    int worst = -1;
+    *conf = -1;
+    for (int k = 0; k < s->alert_count; k++) {
+        if (s->alerts[k].type != ALERT_TYPE_EVIL_TWIN) continue;
+        if (strstr(s->alerts[k].key, "twin-chain:") != NULL) continue;
+        if ((int)s->alerts[k].sev > worst) {
+            worst = (int)s->alerts[k].sev;
+            *conf = s->alerts[k].confidence;
+        }
+    }
+    return worst;
+}
+
+typedef struct {
+    const char *what, *ssid;
+    uint8_t a[6], b[6];
+    int ch_a, ch_b;
+    int gap_s;            /* b first heard this long after a */
+    uint32_t hash_a, hash_b;
+    int sig_b, frames_b;  /* a is always well heard */
+    int self_steer;       /* b steers a client to a, under B2 */
+    int want_sev;         /* -1 none, else the worst row's severity */
+    int want_conf;        /* -1 any */
+} twin_case_t;
+
+static const twin_case_t TWIN_CASES[] = {
+    /* Benign: one device's radios. */
+    { "residential router A, 2.4/5 GHz", "HomeNet",
+      {0x28,0x25,0x5f,0x10,0x20,0x14}, {0x28,0x25,0x5f,0x10,0x20,0x1c},
+      6, 157, 2, 0x1111u, 0x2222u, -60, 50, 0, -1, -1 },
+    { "residential router B, :ef -> :f0 carry", "HomeNet",
+      {0xc8,0xc7,0x50,0x12,0x34,0xef}, {0xc8,0xc7,0x50,0x12,0x35,0xf0},
+      1, 36, 1, 0x1111u, 0x2222u, -60, 50, 0, -1, -1 },
+    { "GM hotspot, complemented octets 1-2", "CHEVROLET1234",
+      {0x02,0x47,0x43,0xa1,0xb2,0xc3}, {0x02,0xb8,0xbc,0xa1,0xb2,0xc3},
+      6, 149, 1, 0x1111u, 0x2222u, -60, 50, 0, -1, -1 },
+    { "GM hotspot, flipped nibble", "myChevrolet",
+      {0x02,0x24,0xa5,0xa1,0xb2,0xc3}, {0x02,0x49,0xa5,0xa1,0xb2,0xc3},
+      2, 44, 3, 0x1111u, 0x2222u, -60, 50, 0, -1, -1 },
+    { "VW hotspot", "VW_WLAN",
+      {0x1a,0x48,0xca,0x91,0x22,0x33}, {0x1a,0x48,0xca,0xf1,0x22,0x33},
+      6, 40, 2, 0x1111u, 0x2222u, -60, 50, 0, -1, -1 },
+    { "T-Mobile gateway band-steering itself", "TMOBILE-1234",
+      {0x64,0x67,0x72,0x10,0x20,0xe6}, {0x64,0x67,0x72,0x10,0x20,0xe7},
+      6, 6, 0, 0x1111u, 0x1111u, -60, 50, 1, -1, -1 },
+    /* Benign: two devices meant to be there. */
+    { "same-OUI mesh nodes, one channel", "ASUS-Mesh",
+      {0xe8,0x9c,0x25,0x01,0x02,0x03}, {0xe8,0x9c,0x25,0x0a,0x0b,0x0c},
+      11, 11, 600, 0x1111u, 0x2222u, -60, 50, 0,
+      ALERT_SEV_WARN, TWIN_W_IE_HASH - TWIN_C_SAME_OUI },
+    { "carrier offload SSID, two customers' routers", "Spectrum Mobile",
+      {0x80,0xd0,0x4a,0x10,0x20,0x30}, {0xe2,0xdb,0xd1,0x40,0x50,0x60},
+      6, 6, 600, 0x1111u, 0x2222u, -60, 50, 0,
+      ALERT_SEV_WARN,
+      TWIN_W_IE_HASH + TWIN_W_LATE_ARRIVAL - TWIN_C_CARRIER_SSID },
+    { "ISP pair at -100 dBm, two beacons", "MyISP-Home",
+      {0x00,0x11,0x22,0x33,0x44,0x55}, {0x3c,0x52,0xa1,0x01,0x02,0x03},
+      6, 6, 600, 0x1111u, 0x2222u, -100, 2, 0,
+      ALERT_SEV_WARN, TWIN_W_DIFF_OUI + TWIN_W_IE_HASH },
+    /* Real: a second transmitter. */
+    { "two vendors, one band, different vendor IEs", "CorpWiFi",
+      {0x00,0x11,0x22,0x33,0x44,0x55}, {0x3c,0x52,0xa1,0x01,0x02,0x03},
+      6, 6, 600, 0x1111u, 0x2222u, -60, 50, 0,
+      ALERT_SEV_CRIT, TWIN_W_DIFF_OUI + TWIN_W_IE_HASH },
+    { "locally administered copy, late, different vendor IEs", "CorpWiFi",
+      {0x00,0x11,0x22,0x33,0x44,0x55}, {0x02,0x9a,0x3c,0x71,0x5e,0x08},
+      6, 6, 600, 0x1111u, 0x2222u, -60, 50, 0,
+      ALERT_SEV_CRIT, TWIN_W_IE_HASH + TWIN_W_LATE_ARRIVAL },
+    { "attacker-tool OUI, barely heard", "CorpWiFi",
+      {0xa8,0xbb,0xcc,0x01,0x02,0x03}, {0x24,0x0a,0xc4,0x44,0x55,0x66},
+      6, 6, 600, 0x1111u, 0x1111u, -100, 1, 0, ALERT_SEV_CRIT, -1 },
+    { "attacker-tool OUI under a carrier SSID", "xfinitywifi",
+      {0xa8,0xbb,0xcc,0x01,0x02,0x03}, {0x24,0x0a,0xc4,0x44,0x55,0x66},
+      6, 6, 600, 0x1111u, 0x1111u, -60, 50, 0, ALERT_SEV_CRIT, -1 },
+};
+
+/* Mutations (2026-11-12), each red here and nowhere else in this test:
+ *   - the carrier context weight dropped from twin_evidence_score: the
+ *     carrier row read CRIT at 55;
+ *   - `|| ev.faint` dropped from the CRIT gate: the -100 dBm row read
+ *     CRIT at 55.
+ * The six one-device rows are #188's first change and were already
+ * pinned one by one; they are here so the issue's list reads whole. */
+static void test_twin_issue_188_field_pairs_classify(void) {
+    time_t t0 = time(NULL) - 3600;
+    static sloth_state_t s;
+    for (size_t c = 0; c < sizeof(TWIN_CASES) / sizeof(TWIN_CASES[0]); c++) {
+        const twin_case_t *tc = &TWIN_CASES[c];
+        alerts_clear();
+        seed_state(&s);
+        add_beacon(&s, tc->ssid, tc->a, "WPA2");
+        add_beacon(&s, tc->ssid, tc->b, "WPA2");
+        twin_radio(&s, 0, tc->ch_a, t0,             tc->hash_a);
+        twin_radio(&s, 1, tc->ch_b, t0 + tc->gap_s, tc->hash_b);
+        s.beacon_aps[0].frame_count = 50;
+        s.beacon_aps[1].frame_count = tc->frames_b;
+        s.beacon_aps[1].signal_dbm  = (int8_t)tc->sig_b;
+        if (tc->self_steer) seed_steer(&s, tc->b, tc->a, 3);
+        alerts_update(&s);
+        int conf = -1;
+        int sev = twin_worst(&s, &conf);
+        if (sev != tc->want_sev ||
+            (tc->want_conf >= 0 && conf != tc->want_conf))
+            fprintf(stderr, "    %s: sev %d conf %d, want %d / %d\n",
+                    tc->what, sev, conf, tc->want_sev, tc->want_conf);
+        ASSERT_EQ(sev, tc->want_sev);
+        if (tc->want_conf >= 0) ASSERT_EQ(conf, tc->want_conf);
+    }
+
+    /* The deauth-then-twin chain, the issue's other real shape: CRIT on
+     * its own key, the copy named and tainted. */
+    alerts_clear();
+    seed_state(&s);
+    uint8_t real[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t twin[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "Cafe-Net", real, "WPA2");
+    add_beacon(&s, "Cafe-Net", twin, "WPA2");
+    s.beacon_aps[0].frame_count = s.beacon_aps[1].frame_count = 50;
+    chain_flood(&s, real);
+    alerts_update(&s);
+    int k = chain_alert(&s);
+    ASSERT(k >= 0);
+    if (k >= 0) ASSERT_EQ((int)s.alerts[k].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(twin), 1);
+    evil_twin_taint_clear();
+}
+
+/* `carrier_ssid`: exact names, case folded, context and nothing else.
+ *
+ * Mutation (2026-11-12): twin_ssid_is_carrier() as a case-sensitive
+ * prefix match (strncmp); the "spectrum mobile", "Spectrum Mobile 5G"
+ * and "XFINITY-Den" rows went red. With the TWIN_C_CARRIER_SSID line
+ * dropped from the scorer, every carrier row went red. */
+static void test_twin_carrier_ssid_is_context(void) {
+    uint8_t a[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t b[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+    static const struct { const char *ssid; int carrier; } N[] = {
+        { "Spectrum Mobile",    1 },
+        { "spectrum mobile",    1 },
+        { "XFINITY",            1 },
+        { "attwifi",            1 },
+        { "Spectrum Mobile 5G", 0 },
+        { "XFINITY-Den",        0 },
+        { "Starbucks WiFi",     0 },
+        { "HomeNet",            0 },
+    };
+    time_t now = time(NULL);
+    static sloth_state_t s;
+    for (size_t i = 0; i < sizeof(N) / sizeof(N[0]); i++) {
+        alerts_clear();
+        seed_state(&s);
+        add_beacon(&s, N[i].ssid, a, "WPA2");
+        add_beacon(&s, N[i].ssid, b, "WPA2");
+        twin_radio(&s, 0, 6, now - 3600, 0x1111u);
+        twin_radio(&s, 1, 6, now - 3000, 0x2222u);
+        twin_evidence_t ev;
+        ASSERT_EQ(twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1],
+                                      now, &ev), 1);
+        if (ev.carrier_ssid != N[i].carrier)
+            fprintf(stderr, "    '%s': carrier %d\n", N[i].ssid, ev.carrier_ssid);
+        ASSERT_EQ(ev.carrier_ssid, N[i].carrier);
+        ASSERT_EQ(ev.context, N[i].carrier ? TWIN_C_CARRIER_SSID : 0);
+        /* Context: the pair is still a candidate and the row still
+         * stands, at WARN under a carrier name and CRIT otherwise. */
+        alerts_update(&s);
+        int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+        ASSERT(idx >= 0);
+        if (idx < 0) continue;
+        ASSERT_EQ((int)s.alerts[idx].sev,
+                  N[i].carrier ? (int)ALERT_SEV_WARN : (int)ALERT_SEV_CRIT);
+        ASSERT_EQ(strstr(s.alerts[idx].detail, " +carrier SSID") != NULL,
+                  N[i].carrier);
+    }
+
+    /* A hard signal is not answered by the name: a steer at the pair
+     * from an unrelated address carries a carrier-SSID row to CRIT. */
+    alerts_clear();
+    seed_state(&s);
+    uint8_t steerer[6] = {0x5c,0x11,0x22,0x33,0x44,0x55};
+    add_beacon(&s, "Spectrum Mobile", a, "WPA2");
+    add_beacon(&s, "Spectrum Mobile", b, "WPA2");
+    seed_steer(&s, steerer, b, 3);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    if (idx >= 0) ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+/* `faint`: the bounds of "barely heard", and that it moves no weight.
+ *
+ * Mutations (2026-11-12): `<` for `<=` against TWIN_PROX_FLOOR_DBM; the
+ * -92 assertion went red. `<=` for `<` against the beacon floor; the
+ * exactly-at-the-floor and the knob-at-1 assertions went red, and so did
+ * test_twin_an_ap_that_returns_is_not_a_late_arrival, whose copy is
+ * heard on exactly that many. With twin_ap_faint() reading signal_dbm
+ * before rssi_max_60s the window-peak assertion went red. */
+static void test_twin_faint_bounds(void) {
+    uint8_t a[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t b[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+    time_t now = time(NULL);
+    static sloth_state_t s;
+    seed_state(&s);
+    add_beacon(&s, "CorpWiFi", a, "WPA2");
+    add_beacon(&s, "CorpWiFi", b, "WPA2");
+    twin_radio(&s, 0, 6, now - 3600, 0x1111u);
+    twin_radio(&s, 1, 6, now - 3000, 0x2222u);
+    beacon_ap_t *bb = &s.beacon_aps[1];
+    twin_evidence_t ev;
+#define FAINT() (twin_evidence_score(&s, &s.beacon_aps[0], bb, now, &ev), \
+                 ev.faint)
+
+    bb->frame_count = 50;
+    bb->signal_dbm = -92;  ASSERT_EQ(FAINT(), 1);
+    bb->signal_dbm = -91;  ASSERT_EQ(FAINT(), 0);
+    ASSERT_EQ(ev.confidence, TWIN_W_DIFF_OUI + TWIN_W_IE_HASH);
+    bb->signal_dbm = -100; ASSERT_EQ(FAINT(), 1);
+    ASSERT_EQ(ev.confidence, TWIN_W_DIFF_OUI + TWIN_W_IE_HASH);  /* no weight */
+    /* The window's peak is the reading, not the newest beacon. */
+    bb->rssi_min_60s = -100; bb->rssi_max_60s = -80;
+    ASSERT_EQ(FAINT(), 0);
+    bb->rssi_min_60s = bb->rssi_max_60s = 0;
+    bb->signal_dbm = 0;    ASSERT_EQ(FAINT(), 0);   /* unseen */
+    bb->signal_dbm = -60;
+
+    bb->frame_count = TWIN_CRIT_MIN_BEACONS_DEFAULT - 1; ASSERT_EQ(FAINT(), 1);
+    bb->frame_count = TWIN_CRIT_MIN_BEACONS_DEFAULT;     ASSERT_EQ(FAINT(), 0);
+    bb->frame_count = 0;                                 ASSERT_EQ(FAINT(), 0);
+    /* Either half. */
+    bb->frame_count = 50;
+    s.beacon_aps[0].frame_count = 1;                     ASSERT_EQ(FAINT(), 1);
+    s.beacon_aps[0].frame_count = 50;
+
+    /* The knob. */
+    ASSERT_EQ(tune_set_id(TUNE_TWIN_CRIT_MIN_BEACONS, 1), 1);
+    bb->frame_count = 1;                                 ASSERT_EQ(FAINT(), 0);
+    ASSERT_EQ(tune_set_id(TUNE_TWIN_CRIT_MIN_BEACONS, 100), 1);
+    bb->frame_count = 99;                                ASSERT_EQ(FAINT(), 1);
+    tune_reset();
+#undef FAINT
+
+    /* On the row: WARN at the same confidence, and named. */
+    alerts_clear();
+    bb->frame_count = 2;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+        ASSERT_EQ(s.alerts[idx].confidence, TWIN_W_DIFF_OUI + TWIN_W_IE_HASH);
+        ASSERT(strstr(s.alerts[idx].detail, " +faint") != NULL);
+    }
+    alerts_clear();
+    bb->frame_count = 50;
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[idx].detail, "faint") == NULL);
+    }
 }
 
 /* ── Open device-onboarding SoftAP (#80) ──────────────────
@@ -12957,6 +13344,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_evil_twin_proximity_quiet_while_the_sensor_moves);
     RUN_TEST(test_evil_twin_proximity_moving_boundaries);
     RUN_TEST(test_evil_twin_proximity_open_pair_is_no_candidate);
+    RUN_TEST(test_evil_twin_proximity_only_the_accused_half);
     RUN_TEST(test_evil_twin_attack_chain_fires_crit);
     RUN_TEST(test_evil_twin_attack_chain_stale_deauth_no_fire);
     RUN_TEST(test_evil_twin_attack_chain_no_twin_no_fire);
@@ -13110,6 +13498,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_twin_detail_fits_with_every_phrase);
     RUN_TEST(test_twin_chain_does_not_name_a_devices_own_radio);
     RUN_TEST(test_twin_chain_reads_no_oui_from_a_local_address);
+    RUN_TEST(test_twin_issue_188_field_pairs_classify);
+    RUN_TEST(test_twin_carrier_ssid_is_context);
+    RUN_TEST(test_twin_faint_bounds);
 
     TEST_SUITE("alerts: open device-onboarding SoftAP (#80)");
     RUN_TEST(test_open_setup_ap_fires);

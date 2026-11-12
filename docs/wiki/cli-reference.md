@@ -198,6 +198,12 @@ Threshold of the `--adsb` rule ([[alerts]] § ADS-B, `src/alerts/rules_adsb.c`; 
 |------|---------|-------|---------|
 | `twin.late_arrival_s` | 120 | 30..86400 | `EVIL_TWIN`: seconds the later-heard half of a same-SSID pair must be first heard after the earlier half before `+late-arrival` (+20 confidence, only on a pair with a locally administered half) counts, and the wait after the sensor was last moving (GNSS, 1 m/s or more) before any arrival counts. 120 is five worst passes of the default 11-channel hop list (22 s each); the floor keeps it above one such pass and above the 10 s in which one device's two radios are first heard. An AP that drops out and returns is not an arrival whatever this is set to ([[alerts]], `docs/wiki/alert-assessments/EVIL_TWIN.md`) |
 
+#### Knob added 2026-11-12 (`EVIL_TWIN` faint half, #188)
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `twin.crit_min_beacons` | 5 | 1..1000 | `EVIL_TWIN`: beacons the beacon table must have heard from each half of a same-security pair before a row resting only on soft signals may be CRIT; fewer, or a strongest reading at or under -92 dBm, is `+faint` and WARN. Five is five passes of the hop list for an AP in steady earshot (a dwell is 100 ms or more, APs beacon every 102.4 ms), under two minutes at the default list's worst 22 s. Hard signals are not gated ([[alerts]], `docs/wiki/alert-assessments/EVIL_TWIN.md`) |
+
 #### Knobs added 2026-11-11 (`KARMA_PROBE_FORGE`, #187 S2)
 
 | Knob | Default | Range | Meaning |

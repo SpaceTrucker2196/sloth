@@ -10,8 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-11-12 (#197: `ATTACK_PATH` and `ATTACK_TOOL_UA` judge HTTP requests only; a paired response no longer fires a second key on the server). 2026-11-11 (`SENSOR_UNDERVOLT`, `SENSOR_SOURCE_DOWN`: the sensor's own host and sources, `src/alerts/rules_sensor.c`). 2026-11-11 (#172: `PMKID_HARVEST`, `HANDSHAKE_HARVEST`). 2026-11-11 (#187 S2: `KARMA_PROBE_FORGE`, directed probe-response forgery). 2026-11-09 (#182: `GNSS_TIME_JUMP` late-read guard). 2026-11-08 (#186: `ADSB_EMERGENCY`, `src/alerts/rules_adsb.c`). 2026-11-03 (#173: a detail carries only what moves with the evidence; per-rule fixes listed under *Incident lifecycle*). 2026-11-03 (the four GNSS rules: `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, `src/alerts/rules_gnss.c`). 2026-10-27 (per-type research assessments in [alert-assessments/](alert-assessments/README.md)). 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
-**Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
+**Last updated**: 2026-11-12 (#197: `ATTACK_PATH` and `ATTACK_TOOL_UA` judge HTTP requests only; a paired response no longer fires a second key on the server). 2026-11-12 (#188, #189: `EVIL_TWIN` holds a soft-signal row under a carrier SSID or with a barely heard half at WARN; `EVIL_TWIN_PROXIMITY` reports only the accused half of an attributed pair). **Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
 
@@ -339,6 +338,40 @@ suppress" but "can the adversary reach the input". With no inventory
 configured nothing above applies and the heuristics are exactly as
 slice 1 left them — an operator who never writes a file must not
 silently lose detection.
+
+### Two radios are not always two devices, nor two devices a twin (#188, #189)
+
+A field sensor's week of CRIT `EVIL_TWIN` rows (#188) were all benign:
+33 of 38 pairs one device's 2.4 and 5 GHz radios, the rest a same-OUI
+mesh, a carrier offload SSID from two customers' routers, and an ISP
+pair heard at -100 dBm on one or two beacons. The scorer
+(`twin_evidence_score()`, `src/alerts/rules_twin.c`; reasoning beside
+the weights in `src/alerts.h`) now asks before it weighs:
+
+- **One device?** BSSIDs at most two bytes apart, on two bands, first
+  heard within 10 s, are one device and no pair. An OUI is read only
+  from a globally administered address, and vendor-IE fingerprints are
+  compared only within one band. A BTM steer from a sibling address is
+  band steering and carries no weight.
+- **How sure, before CRIT?** A row resting only on soft signals needs
+  50 % confidence: a same-band vendor-IE mismatch beside a second
+  vendor's OUI, or beside a late arrival where a half is locally
+  administered (`twin.late_arrival_s`).
+- **Two devices meant to be there? (2026-11-12)** A carrier SSID every
+  subscriber's gateway broadcasts (exact names: `Spectrum Mobile`,
+  `xfinitywifi`, `XFINITY`, `CableWiFi`, ...) is -35 context,
+  `+carrier SSID`, which leaves every soft sum under the bar. A half
+  barely heard, its strongest reading at or under -92 dBm or fewer than
+  `twin.crit_min_beacons` (5) beacons heard, keeps a soft row at WARN,
+  `+faint`.
+
+Hard signals (attacker-tool OUI, a BTM steer from another device, an
+inventory mismatch, the deauth-then-twin chain) are untouched by every
+one of these. `EVIL_TWIN_PROXIMITY` (#189) is reported only for a BSSID
+in such a pair, with its swing's minimum above -92 dBm and the sensor
+not moving, and since 2026-11-12, on a pair the attribution ladder has
+attributed, only for the accused half. Per-pair outcomes and costs:
+`docs/wiki/alert-assessments/EVIL_TWIN.md`, `EVIL_TWIN_PROXIMITY.md`.
 
 ### Corroboration before intent (#94)
 

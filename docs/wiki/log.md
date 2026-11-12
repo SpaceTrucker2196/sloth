@@ -6982,3 +6982,9 @@ the owner's ruling on `?WATCH={"pps":true}`; no newer reference-host
 figures in `noise_verdict`, the host's sloth.db not read. Updated
 [[gnss]], `alert-assessments/GNSS_TIME_JUMP.md`.
 - 2026-11-12 — slothweb page header shows the host name (`/api/health` gains `hostname`) in place of the "M6" milestone label.
+
+## 2026-11-12 — EVIL_TWIN: two devices meant to be there; EVIL_TWIN_PROXIMITY on the accused half (#188, #189)
+
+**Source**: issues #188 and #189 (field sensor, 2026-11-04 to 2026-11-10).
+
+The last two benign CRIT shapes of #188 are WARN: a carrier SSID every subscriber's gateway broadcasts (`carrier_ssid`, -35 context, `+carrier SSID`; exact names) and a pair with a barely heard half (`faint`: strongest reading at or under -92 dBm, or fewer than the new knob `twin.crit_min_beacons` (5) beacons; `+faint`, gates a soft CRIT and moves no weight). Hard signals are untouched. `EVIL_TWIN_PROXIMITY` on an attributed pair now reports only the accused half (#189's "preferably the accused half"); an unattributed pair still reports either. [[alerts]], [[cli-reference]], `alert-assessments/EVIL_TWIN.md`, `alert-assessments/EVIL_TWIN_PROXIMITY.md`.

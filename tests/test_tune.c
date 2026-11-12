@@ -80,6 +80,16 @@ static void test_specs_match_enum_order(void) {
     /* A day, as documented; unpinned until 2026-11-11, when a ceiling
      * of 3600 passed the suite. */
     ASSERT_EQ((long long)tune_spec(TUNE_TWIN_LATE_ARRIVAL_S)->hi, 86400);
+    /* #188, 2026-11-12: beacons from each half before a soft-signal
+     * EVIL_TWIN may be CRIT. 1 already switches the count off (every
+     * table entry has heard one), so 0 is refused rather than being a
+     * second spelling of it. */
+    ASSERT_STR(tune_spec(TUNE_TWIN_CRIT_MIN_BEACONS)->name, "twin.crit_min_beacons");
+    ASSERT_EQ((long long)tune_val(TUNE_TWIN_CRIT_MIN_BEACONS), 5);
+    ASSERT_EQ((long long)tune_spec(TUNE_TWIN_CRIT_MIN_BEACONS)->lo, 1);
+    ASSERT_EQ((long long)tune_spec(TUNE_TWIN_CRIT_MIN_BEACONS)->hi, 1000);
+    ASSERT_EQ(tune_set_id(TUNE_TWIN_CRIT_MIN_BEACONS, 0), 0);
+    ASSERT_EQ((long long)tune_val(TUNE_TWIN_CRIT_MIN_BEACONS), 5);
     ASSERT_STR(tune_spec(TUNE_RECON_SUSTAIN_PROBES)->name, "recon.sustain_probes");
     ASSERT_STR(tune_spec(TUNE_SOCKET_MAX_PER_PEER)->name, "socket.max_per_peer");
     ASSERT_STR(tune_spec(TUNE_SOCKET_IDLE_SECS)->name, "socket.idle_secs");
