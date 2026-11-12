@@ -143,6 +143,11 @@ typedef enum {
     /* #180: the per-BSSID AP-identity table the FragAttacks rules ask
      * "is this address the AP?" of. Appended. */
     SH_EVICT_FRAG_AP_IDENT, /* src/fragattack.c — least-recently-beaconing BSSID's AP MLD binding dropped */
+    /* #187 S3 export (JSONL 1.6.0): the probe-response latency tables.
+     * One kind for both: a live, unanswered Probe Request overwritten
+     * in the 64-slot pending ring, and the oldest of 128 BSSID rows
+     * dropped. probe_latency_counters() keeps the split. Appended. */
+    SH_EVICT_PROBE_LATENCY, /* src/probe_latency.c — live unanswered request overwritten, or oldest BSSID row dropped */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 
@@ -187,7 +192,8 @@ uint64_t sh_evict_total_tables(void);
  * "frag_session", "frag_assoc", "frag_mpdu", "ndp_ra", "rogue_radius",
  * "ssdp_device", "onvif_device", "smtp_flow", "eapol_pending",
  * "deauth_obs", "deauth_victim", "rtsp_exchange", "rtsp_stream",
- * "lan_role", "ble_device", "bredr_lap", "ble_flood", "frag_ap_ident".
+ * "lan_role", "ble_device", "bredr_lap", "ble_flood", "frag_ap_ident",
+ * "probe_latency".
  * Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 

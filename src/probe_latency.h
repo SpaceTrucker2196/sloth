@@ -67,9 +67,9 @@
  * (directed, wildcard); the statistics are over those.
  *
  * Bounds. PLAT_PENDING requests and PLAT_MAX_BSS rows, both evicting the
- * oldest and tallying it. The tally is module-local for now: an
- * SH_EVICT_* kind would add an `evict_*` member to the sensor_health
- * JSONL record, and that change waits for the JSONL 1.6.0 bump.
+ * oldest and tallying it: both in probe_latency_counters() (the split)
+ * and, since JSONL 1.6.0, as SH_EVICT_PROBE_LATENCY (sensor_health's
+ * `evict_probe_latency`, the sum of the two).
  *
  * Thread model: probe_latency_observe() runs on the monitor capture
  * thread; every reader runs on the poll / UI thread. One mutex. */

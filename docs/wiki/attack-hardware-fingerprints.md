@@ -29,7 +29,8 @@ issues #77, #151 and #187, plan #145 (rulings 1-3).
 IEEE 802.11-2020 §9.3.3.2, §9.4.1.3, §9.4.1.10, §11.1.3; Wi-Fi Simple
 Configuration Technical Specification v2.0 §7.7, §12.
 
-**Last updated**: 2026-11-12 (#151 owner rulings: `low/med/high` mapped
+**Last updated**: 2026-11-12 (#187 S3 export: `beacon.probe_lat` and
+`evict_probe_latency`, JSONL 1.6.0), 2026-11-12 (#151 owner rulings: `low/med/high` mapped
 onto the tiers, `corroborated` raises `KARMA_AP` to CRIT), 2026-11-12
 (#187 S3 review: first answer tracked per request, Retry-only requests
 voided), 2026-11-12 (#187 S3: probe-response latency, measured only),
@@ -290,13 +291,16 @@ wildcard probes separately. It is fed once per monitor frame from
   BSSIDs, counting ambiguous and Retry-set answers as answers); naming
   the requested SSID; within 200 ms. Each refusal is tallied.
 - **Bounds.** 64 pending requests and 128 BSSID rows, oldest evicted and
-  counted. The tally is module-local (`probe_latency_counters()`): an
-  `SH_EVICT_*` kind would add a sensor-health JSONL member, which waits
-  for the next JSONL version.
-- **Not exported or shown yet.** No JSONL member, no sloth.db column, no
-  TUI column; the accessor is `probe_latency_get()` /
-  `probe_latency_snapshot()`. The `[y]` view has no room for a column
-  at 100x33 without dropping the tool attribution's minimum.
+  counted: the split in `probe_latency_counters()`, the sum since JSONL
+  1.6.0 as `sensor_health`'s `evict_probe_latency`
+  (`SH_EVICT_PROBE_LATENCY`).
+- **Exported on the JSONL stream only.** Since JSONL 1.6.0 the `beacon`
+  record carries `probe_lat` (clock, directed count, min / p10 / median
+  / p90, wildcard count and median), absent until a pair was measured
+  ([[jsonl-schema]]). No sloth.db column, so slothweb (which reads its
+  AP model from sloth.db) does not show it, and the fleet export does
+  not carry it; no TUI column: the `[y]` view has no room for one at
+  100x33 without dropping the tool attribution's minimum.
 
 **Observation only: no cited threshold, not used in any verdict.** #187
 proposed a median under 2 ms as a KARMA confirmer.

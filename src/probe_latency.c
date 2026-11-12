@@ -4,6 +4,7 @@
 
 #include "probe_latency.h"
 #include "dot11_ie.h"
+#include "sensor_health.h"
 
 #include <pthread.h>
 #include <string.h>
@@ -100,6 +101,7 @@ static plat_row_t *row_get(const uint8_t bssid[6]) {
             if (g_row[i].last_seen < g_row[old].last_seen) old = i;
         r = &g_row[old];
         bump(&g_ct.evict_bss);
+        sh_evict_note(SH_EVICT_PROBE_LATENCY);
     }
     memset(r, 0, sizeof(*r));
     memcpy(r->bssid, bssid, 6);
@@ -145,8 +147,10 @@ static void on_request(const dot11_frame_t *f, const plat_clock_t *clk,
 
     plat_req_t *q = &g_req[g_req_head];
     g_req_head = (g_req_head + 1) % PLAT_PENDING;
-    if (req_live(q, now) && !q->answered && !q->dup)
+    if (req_live(q, now) && !q->answered && !q->dup) {
         bump(&g_ct.evict_pending);
+        sh_evict_note(SH_EVICT_PROBE_LATENCY);
+    }
     memset(q, 0, sizeof(*q));
     memcpy(q->sta, f->sa, 6);
     if (f->bssid) memcpy(q->addr3, f->bssid, 6);

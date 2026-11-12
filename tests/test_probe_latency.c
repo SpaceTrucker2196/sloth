@@ -17,6 +17,11 @@
 #include "probe_latency.h"
 #include "dot11_frame.h"
 #include "frame_build.h"
+#include "sensor_health.h"
+#include "jsonl.h"
+#include "sloth.h"
+#include "tmp_dir.h"
+#include <unistd.h>
 
 static const uint8_t BC[6]   = {0xff,0xff,0xff,0xff,0xff,0xff};
 static const uint8_t STA[6]  = {0x02,0x00,0x5e,0x10,0x00,0x01};
@@ -402,9 +407,14 @@ static void test_one_clock_per_row(void) {
     ASSERT_EQ((int)ct().src_mismatch, 1);
 }
 
-/* Both tables are bounded and every loss is tallied. Seen red with the
- * evict_bss bump removed (tally 0). */
+/* Both tables are bounded and every loss is tallied, module-local and
+ * (JSONL 1.6.0) as sensor_health's evict_probe_latency. Seen red with
+ * the evict_bss bump removed (tally 0), and with either sh_evict_note()
+ * call removed (the sensor_health delta 0). */
 static void test_tables_are_bounded(void) {
+    ASSERT_STR(sh_evict_name(SH_EVICT_PROBE_LATENCY), "probe_latency");
+    ASSERT(!sh_evict_is_flow_ring(SH_EVICT_PROBE_LATENCY));
+    uint64_t sh0 = sh_evict_count(SH_EVICT_PROBE_LATENCY);
     for (int i = 0; i <= PLAT_MAX_BSS; i++) {
         uint8_t ap[6] = {0x02, 0x00, 0x5e, 0x30, (uint8_t)(i >> 8), (uint8_t)i};
         pair_once(ap, i + 1, 1000, 1);
@@ -412,6 +422,7 @@ static void test_tables_are_bounded(void) {
     probe_latency_row_t rows[PLAT_MAX_BSS + 4];
     ASSERT_EQ(probe_latency_snapshot(rows, PLAT_MAX_BSS + 4), PLAT_MAX_BSS);
     ASSERT_EQ((int)ct().evict_bss, 1);
+    ASSERT_EQ((long long)(sh_evict_count(SH_EVICT_PROBE_LATENCY) - sh0), 1);
     const uint8_t first[6] = {0x02, 0x00, 0x5e, 0x30, 0, 0};
     probe_latency_row_t r;
     ASSERT_EQ(probe_latency_get(first, &r), 0);
@@ -425,6 +436,161 @@ static void test_tables_are_bounded(void) {
         feed(F24, 1000000 + (uint64_t)i * 10, T0 + i * 10);
     }
     ASSERT_EQ((int)ct().evict_pending, 1);
+    ASSERT_EQ((long long)(sh_evict_count(SH_EVICT_PROBE_LATENCY) - sh0), 2);
+}
+
+/* ── beacon.probe_lat (JSONL 1.6.0) ─────────────────────────────── */
+
+static char g_jpath[TEST_TMP_MAX];
+
+static void jsonl_fresh(void) {
+    int fd = mkstemp(test_tmp_tpl(g_jpath, sizeof(g_jpath), "sloth_plat_XXXXXX"));
+    if (fd >= 0) close(fd);
+    jsonl_close();
+    unlink(g_jpath);
+    ASSERT(jsonl_open(g_jpath));
+}
+
+/* Closes the sink and returns the file (static, NUL-terminated); the
+ * temp file is removed. */
+static const char *jsonl_take(size_t *n_out) {
+    static char body[32768];
+    jsonl_close();
+    FILE *fp = fopen(g_jpath, "r");
+    size_t n = fp ? fread(body, 1, sizeof(body) - 1, fp) : 0;
+    if (fp) fclose(fp);
+    body[n] = '\0';
+    unlink(g_jpath);
+    if (n_out) *n_out = n;
+    return body;
+}
+
+static void emit_one_beacon(sloth_state_t *s, const uint8_t bssid[6]) {
+    memset(s, 0, sizeof(*s));
+    beacon_ap_t *b = &s->beacon_aps[s->beacon_count++];
+    memcpy(b->bssid, bssid, 6);
+    snprintf(b->ssid, sizeof(b->ssid), "corp-net");
+    jsonl_emit_beacons(s);
+}
+
+/* A measured BSSID carries probe_lat, last in the record, with the
+ * nearest-rank figures probe_latency_get() reports; the clock is named.
+ * Ten directed pairs 1..10 ms on TSFT: min 1000, p10 1000, lower median
+ * 5000, p90 9000. Then a wildcard pair of 700 µs. */
+static void test_jsonl_beacon_carries_probe_lat(void) {
+    for (int i = 1; i <= 10; i++) pair_once(AP1, i, (uint32_t)(i * 1000), 1);
+    int64_t t = T0 + 50 * 300000LL;
+    mk_preq(STA, BC, "", 0x123, 0);           feed(F24, (uint64_t)t, t);
+    mk_presp(STA, AP1, "corp-net", 9, 0);     feed(F24, (uint64_t)t + 700, t + 700);
+
+    static sloth_state_t s;
+    jsonl_fresh();
+    emit_one_beacon(&s, AP1);
+    size_t n = 0;
+    const char *body = jsonl_take(&n);
+    ASSERT(strstr(body, "\"type\":\"beacon\"") != NULL);
+    ASSERT(strstr(body,
+        ",\"probe_lat\":{\"src\":\"tsft\",\"n_dir\":10,\"med_dir_us\":5000,"
+        "\"p10_dir_us\":1000,\"p90_dir_us\":9000,\"min_dir_us\":1000,"
+        "\"n_wild\":1,\"med_wild_us\":700}}\n") != NULL);
+}
+
+/* The pcap clock is named as such. */
+static void test_jsonl_probe_lat_names_the_pcap_clock(void) {
+    pair_once(AP1, 1, 2500, 0);
+    static sloth_state_t s;
+    jsonl_fresh();
+    emit_one_beacon(&s, AP1);
+    const char *body = jsonl_take(NULL);
+    ASSERT(strstr(body, "\"probe_lat\":{\"src\":\"pcap\",\"n_dir\":1,"
+                        "\"med_dir_us\":2500,") != NULL);
+}
+
+/* Unmeasured is absent, never zeros: a BSSID with no row, and one whose
+ * only answer was refused (Retry set), both write no probe_lat. Seen
+ * red with emit_probe_lat() ignoring probe_latency_get()'s "no row"
+ * (a zeroed row then wrote `"src":"pcap"` and zeros). */
+static void test_jsonl_probe_lat_absent_when_unmeasured(void) {
+    static sloth_state_t s;
+    jsonl_fresh();
+    emit_one_beacon(&s, AP1);
+    const char *body = jsonl_take(NULL);
+    ASSERT(strstr(body, "\"type\":\"beacon\"") != NULL);
+    ASSERT(strstr(body, "probe_lat") == NULL);
+
+    mk_preq(STA, BC, "corp-net", 5, 0);         feed(F24, 7000000, T0);
+    mk_presp(STA, AP2, "corp-net", 6, FB_RETRY); feed(F24, 7001000, T0 + 1000);
+    probe_latency_row_t r;
+    ASSERT_EQ(probe_latency_get(AP2, &r), 0);
+    jsonl_fresh();
+    emit_one_beacon(&s, AP2);
+    body = jsonl_take(NULL);
+    ASSERT(strstr(body, "probe_lat") == NULL);
+}
+
+/* `beacon` is written on every pass with no change-only signature, so
+ * probe_lat's raw microseconds cannot defeat a suppression: two passes
+ * with the same figures write two records, and a new pair changes the
+ * next record's figures. Pinned so that if `beacon` ever gains a
+ * signature, this test is where the bucketing question gets asked. */
+static void test_jsonl_beacon_is_per_pass_with_probe_lat(void) {
+    pair_once(AP1, 1, 1000, 1);
+    static sloth_state_t s;
+    jsonl_fresh();
+    emit_one_beacon(&s, AP1);
+    jsonl_emit_beacons(&s);
+    pair_once(AP1, 2, 3000, 1);
+    jsonl_emit_beacons(&s);
+    const char *body = jsonl_take(NULL);
+    int lines = 0;
+    for (const char *p = body; (p = strstr(p, "\"type\":\"beacon\"")); p++) lines++;
+    ASSERT_EQ(lines, 3);
+    ASSERT(strstr(body, "\"n_dir\":1,\"med_dir_us\":1000,") != NULL);
+    ASSERT(strstr(body, "\"n_dir\":2,\"med_dir_us\":1000,\"p10_dir_us\":1000,"
+                        "\"p90_dir_us\":3000,") != NULL);
+}
+
+/* The hostile-AP worst case of test_jsonl.c, with probe_lat present:
+ * the record still comes out whole, ending in probe_lat's own "}}". */
+static void fill_ctl(char *dst, size_t sz) {
+    memset(dst, 0x01, sz - 1);
+    dst[sz - 1] = '\0';
+}
+
+static void test_jsonl_probe_lat_fits_the_worst_case_beacon(void) {
+    pair_once(AP1, 1, 199999, 1);
+    static sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count++];
+    memcpy(b->bssid, AP1, 6);
+    fill_ctl(b->ssid, sizeof(b->ssid));
+    fill_ctl(b->enc, sizeof(b->enc));
+    fill_ctl(b->pairwise, sizeof(b->pairwise));
+    fill_ctl(b->group, sizeof(b->group));
+    fill_ctl(b->akm, sizeof(b->akm));
+    fill_ctl(b->vendor, sizeof(b->vendor));
+    fill_ctl(b->wps_manufacturer, sizeof(b->wps_manufacturer));
+    fill_ctl(b->wps_model_name, sizeof(b->wps_model_name));
+    fill_ctl(b->wps_model_number, sizeof(b->wps_model_number));
+    fill_ctl(b->wps_serial, sizeof(b->wps_serial));
+    fill_ctl(b->phy, sizeof(b->phy));
+    for (int k = 0; k < MAX_AP_SSID_HISTORY; k++)
+        fill_ctl(b->ssid_history[k], sizeof(b->ssid_history[k]));
+    b->ssid_history_n = MAX_AP_SSID_HISTORY;
+    b->has_qbss = 1;
+    b->fuzz_ie_overruns = 1;
+    for (int k = 0; k < MAX_AP_NEIGHBORS; k++) {
+        memset(b->neighbors[k].bssid, 0xff, 6);
+        b->neighbors[k].channel  = -2147483647 - 1;
+        b->neighbors[k].phy_type = -2147483647 - 1;
+    }
+    b->neighbor_count = MAX_AP_NEIGHBORS;
+    jsonl_fresh();
+    jsonl_emit_beacons(&s);
+    size_t n = 0;
+    const char *body = jsonl_take(&n);
+    ASSERT(n > 0 && n < 8192);
+    ASSERT(strstr(body, "\"med_wild_us\":0}}\n") != NULL);
+    ASSERT(n >= 3 && strcmp(body + n - 3, "}}\n") == 0);
 }
 
 /* The capture thread writes while the poll thread reads. Seen red under
@@ -496,5 +662,10 @@ void run_probe_latency_tests(void) {
     RUN_TEST(test_stats_and_window);
     RUN_TEST(test_one_clock_per_row);
     RUN_TEST(test_tables_are_bounded);
+    RUN_TEST(test_jsonl_beacon_carries_probe_lat);
+    RUN_TEST(test_jsonl_probe_lat_names_the_pcap_clock);
+    RUN_TEST(test_jsonl_probe_lat_absent_when_unmeasured);
+    RUN_TEST(test_jsonl_beacon_is_per_pass_with_probe_lat);
+    RUN_TEST(test_jsonl_probe_lat_fits_the_worst_case_beacon);
     RUN_TEST(test_reader_and_writer_threads);
 }

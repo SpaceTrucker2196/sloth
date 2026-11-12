@@ -338,3 +338,4 @@
 | 1367e59 | 2026-11-12T15:40:09Z | claude-opus-5-5 | 32 | 6287 | 3562607 | 735215 | 6.7201 | Close #196's fleet known limits: backfill, skew, reference, radios, own_net |
 | 1cde00f | 2026-11-12T19:25:30Z | claude-opus-5-5 | 82 | 17739 | 13656360 | 413398 | 6.3936 | Measure probe-response latency per BSSID, observation only (#187 S3) |
 | 0587203 | 2026-11-12T19:49:35Z | claude-opus-5-5 | 10 | 2338 | 1298092 | 6710 | 0.3601 | #187 S3 review: first answer per request, Retry-only requests void |
+| f08488f | 2026-11-12T21:42:44Z | claude-opus-5-5 | 52 | 8459 | 8481742 | 17659 | 2.0070 | #187 S3 export: beacon.probe_lat, evict_probe_latency (JSONL 1.6.0) |
