@@ -8,6 +8,7 @@
 #include "rf_model.h"
 #include "web_alertkb.h"
 #include "web_ble.h"
+#include "web_chain.h"
 #include "web_frrs.h"
 #include "web_gnss.h"
 #include "web_jsonl.h"
@@ -56,14 +57,13 @@ int web_fid_class_find(const char *s, size_t n) {
 
 /* ── the attacks naming a BSSID ────────────────────────────────────── */
 
-/* The two kinds whose key names an AP transmitter at a field
- * (web_sdb_ap_attacks()): bit 0 EVIL_TWIN, bit 1 KARMA_AP. */
-static const char *const ATK_WORD[2] = { "EVIL_TWIN", "KARMA_AP" };
+/* The words of the WEB_FID_ATK_* bits, in bit order. */
+static const char *const ATK_WORD[3] = { "EVIL_TWIN", "KARMA_AP", "TWIN_UNATTRIBUTED" };
 
 void web_fid_atk_words(unsigned types, char *out, size_t cap) {
     size_t o = 0;
     out[0] = '\0';
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         if (!(types & (1u << i))) continue;
         int k = snprintf(out + o, cap - o, "%s%s", o ? "," : "", ATK_WORD[i]);
         if (k < 0 || (size_t)k >= cap - o) { out[0] = '\0'; return; }
@@ -77,7 +77,7 @@ int web_fid_atk_parse(const char *s, unsigned *types) {
     for (const char *p = s;;) {
         size_t n = strcspn(p, ",");
         int hit = -1;
-        for (int i = 0; i < 2; i++)
+        for (int i = 0; i < 3; i++)
             if (strlen(ATK_WORD[i]) == n && !strncmp(ATK_WORD[i], p, n)) hit = i;
         if (hit < 0 || (*types & (1u << hit))) return -1;
         *types |= 1u << hit;
@@ -85,6 +85,8 @@ int web_fid_atk_parse(const char *s, unsigned *types) {
         if (!*p) break;
         p++;
     }
+    /* One pair's half is either attributed the impostor or not. */
+    if ((*types & WEB_FID_ATK_TWIN) && (*types & WEB_FID_ATK_UNATTR)) return -1;
     return 0;
 }
 
@@ -97,8 +99,8 @@ static int atk_take(void *ctx, const web_sdb_item_t *it) {
     atk_acc_t *x = ctx;
     char mac[WEB_KEY_MAX + 1];
     if (web_key_mac(it->a, mac) != 0) return 0;
-    unsigned bit = it->n1 == WEB_ALERT_EVIL_TWIN ? 1u : it->n1 == WEB_ALERT_KARMA_AP ? 2u : 0u;
-    if (!bit) return 0;
+    int t = it->n1 == WEB_ALERT_EVIL_TWIN ? 0 : it->n1 == WEB_ALERT_KARMA_AP ? 1 : -1;
+    if (t < 0) return 0;
     /* Rows come by BSSID then type: one BSSID's types are adjacent. */
     web_fid_atk_t *e = x->n > 0 && !strcmp(x->a[x->n - 1].bssid, mac) ? &x->a[x->n - 1] : NULL;
     if (!e) {
@@ -106,12 +108,10 @@ static int atk_take(void *ctx, const web_sdb_item_t *it) {
         e = &x->a[x->n++];
         memset(e, 0, sizeof(*e));
         scpy(e->bssid, sizeof(e->bssid), mac);
-        e->first = it->first_seen;
-        e->last = it->last_seen;
     }
-    e->types |= bit;
-    if (it->first_seen < e->first) e->first = it->first_seen;
-    if (it->last_seen > e->last) e->last = it->last_seen;
+    if (!e->tl[t] || it->first_seen < e->tf[t]) e->tf[t] = it->first_seen;
+    if (!e->tl[t] || it->last_seen > e->tl[t]) e->tl[t] = it->last_seen;
+    if (e->tf[t] > e->tl[t]) e->tf[t] = e->tl[t];
     return 0;
 }
 
@@ -119,7 +119,26 @@ static int by_atk(const void *pa, const void *pb) {
     return strcmp(((const web_fid_atk_t *)pa)->bssid, ((const web_fid_atk_t *)pb)->bssid);
 }
 
-int web_fid_atk_read(web_sdb_conn_t *c, long long from, web_fid_atk_t **out) {
+/* An EVIL_TWIN BSSID's part, by the stream's attribution of the pairs
+ * naming it since from: WEB_FID_ATK_TWIN when one attributed pair names
+ * it the impostor, 0 when the attributed pairs name it only the real AP,
+ * WEB_FID_ATK_UNATTR when no pair naming it is attributed. */
+static unsigned twin_part(struct web_chain *chain, const char *bssid, long long from) {
+    if (!chain) return WEB_FID_ATK_UNATTR;
+    web_chain_pair_t lk[WEB_CHAIN_LINKS];
+    long long since = 0;
+    int nl = web_chain_links(chain, bssid, from, T_MAX, lk, WEB_CHAIN_LINKS, &since);
+    int real = 0;
+    for (int i = 0; i < nl; i++) {
+        if (!lk[i].attributed) continue;
+        if (!strcmp(lk[i].twin, bssid)) return WEB_FID_ATK_TWIN;
+        if (!strcmp(lk[i].real, bssid)) real = 1;
+    }
+    return real ? 0 : WEB_FID_ATK_UNATTR;
+}
+
+int web_fid_atk_read(web_sdb_conn_t *c, long long from, struct web_chain *chain,
+                     web_fid_atk_t **out) {
     *out = NULL;
     atk_acc_t x;
     x.a = malloc(sizeof(web_fid_atk_t) * WEB_FID_ATK_MAX);
@@ -128,8 +147,20 @@ int web_fid_atk_read(web_sdb_conn_t *c, long long from, web_fid_atk_t **out) {
     /* Two items a BSSID at most, so twice the cap covers it. */
     int r = web_sdb_ap_attacks(c, from, T_MAX, 2 * WEB_FID_ATK_MAX, atk_take, &x);
     if (r < 0) { free(x.a); return -1; }
-    for (int i = 0; i < x.n; i++)
-        if (x.a[i].first > x.a[i].last) x.a[i].first = x.a[i].last;
+    int o = 0;
+    for (int i = 0; i < x.n; i++) {
+        web_fid_atk_t *e = &x.a[i];
+        unsigned tw = e->tl[0] ? twin_part(chain, e->bssid, from) : 0;
+        e->types = tw | (e->tl[1] ? WEB_FID_ATK_KARMA : 0u);
+        if (!e->types) continue;          /* only the real half of a twin pair */
+        /* The times of the kinds kept: the real half's twin alert is not
+         * this AP's attack. */
+        int t0 = tw != 0, t1 = e->tl[1] != 0;
+        e->first = t0 && t1 ? (e->tf[0] < e->tf[1] ? e->tf[0] : e->tf[1]) : t0 ? e->tf[0] : e->tf[1];
+        e->last = t0 && t1 ? (e->tl[0] > e->tl[1] ? e->tl[0] : e->tl[1]) : t0 ? e->tl[0] : e->tl[1];
+        x.a[o++] = *e;
+    }
+    x.n = o;
     qsort(x.a, (size_t)x.n, sizeof(x.a[0]), by_atk);
     *out = x.a;
     return x.n;
@@ -340,13 +371,25 @@ static void run_i2(const web_fid_site_t *s, int n, acc_t *x) {
                 leg(f, b, ssid, "owner");
                 verdict_legs(f, s, n, pr->mac);
                 f->exonerated = known_anywhere(s, n, pr->mac);
+                /* A lead: an SSID names a network only as uniquely as
+                 * its name, and at sites within each other's reach a
+                 * client near one is near the other, so it says nothing
+                 * about having been at b. */
+                f->lead = 1;
+                f->note = "a lead: the client has joined a network of this name, which is "
+                          "the other site's only if the name is unique to it";
                 double d;
                 if (site_dist(&s[a], &s[b], &d)) {
                     f->has_dist = 1;
                     f->dist_m = d;
                     f->bound_m = web_fid_reach_m(web_fid_floor(&s[a])) +
                                  web_fid_reach_m(web_fid_floor(&s[b]));
-                    if (d <= f->bound_m) f->note = "co_located: the client may live at or near both sites";
+                    if (d <= f->bound_m) {
+                        f->applicable = 0;
+                        f->reason = "co_located";
+                        f->note = "the client may live at or near both sites; probing "
+                                  "the other's network is then the norm";
+                    }
                 }
             }
         }
@@ -492,7 +535,7 @@ static void run_i4(const web_fid_site_t *s, int n, acc_t *x) {
             /* No attack alert at this site: the fingerprint counts for
              * nothing here. An own BSSID, or one any site triaged out,
              * is not a tool. */
-            if (!a->ie[0] || !a->atk || own_anywhere(s, n, a->bssid) ||
+            if (!a->ie[0] || !(a->atk & WEB_FID_ATK_ATTACKER) || own_anywhere(s, n, a->bssid) ||
                 out_anywhere(s, n, a->bssid))
                 continue;
             cand_t *e = &c[nc++];
@@ -510,6 +553,9 @@ static void run_i4(const web_fid_site_t *s, int n, acc_t *x) {
         if (sites >= 2) {
             web_fid_t *f = add(x, WEB_FID_TOOL, c[g].fp);
             if (f) {
+                f->lead = 1;
+                f->note = "a lead, not a detection: the same beacon fingerprint on an AP "
+                          "sloth named the attacker at each site; confirm it on the air";
                 f->first = T_MAX;
                 last_site = -1;
                 for (int k = g; k < h; k++) {
@@ -833,7 +879,7 @@ static void self_rows(fctx_t *x, const web_fleet_src_t *src, long long now_s) {
         scpy(s->label, sizeof(s->label), ss.label);
     long long from = now_s - WEB_FID_WINDOW_S;
     web_fid_atk_t *atk = NULL;
-    int natk = web_fid_atk_read(&c, from, &atk);
+    int natk = web_fid_atk_read(&c, from, src->chain, &atk);
     if (natk < 0) { natk = 0; x->local = "partial"; }
     s->ap = malloc(sizeof(web_fid_ap_t) * WEB_FID_AP_MAX);
     if (s->ap) {
@@ -1134,8 +1180,8 @@ static int any_named(const fctx_t *x) {
 
 static const char CONFIGURE[] =
     "no site names its own networks: give the slothweb at each site --my-ssid and "
-    "--my-bssid (repeatable; the values its sloth is given), so a peer can tell "
-    "your networks from any other (docs/wiki/fleet.md)";
+    "--my-bssid (repeatable; the values its sloth is given, since slothweb does not "
+    "read sloth's), so a peer can tell your networks from any other (docs/wiki/fleet.md)";
 
 void web_fid_overview_json(web_fleet_t *f, const web_fleet_src_t *src, long long now_s,
                            web_jw_t *w) {
@@ -1182,7 +1228,7 @@ static void site_json(web_jw_t *w, const fctx_t *x, int i, long long now_s) {
     }
     web_jw_raw(w, "],\"aps\":");        web_jw_int(w, s->nap);
     int fp = 0, atk = 0;
-    for (int k = 0; k < s->nap; k++) { fp += s->ap[k].ie[0] != 0; atk += s->ap[k].atk != 0; }
+    for (int k = 0; k < s->nap; k++) { fp += s->ap[k].ie[0] != 0; atk += (s->ap[k].atk & WEB_FID_ATK_ATTACKER) != 0; }
     web_jw_raw(w, ",\"fingerprinted\":"); web_jw_int(w, fp);
     web_jw_raw(w, ",\"attacked\":");    web_jw_int(w, atk);
     web_jw_raw(w, ",\"probes\":");      web_jw_int(w, s->nprobe);
@@ -1199,8 +1245,10 @@ static const char *const BASIS[WEB_FID_NSUB] = {
     /* probe_other_site */
     "A directed probe request names a network the client has joined, in the clear "
     "(docs/wiki/alert-assessments/MY_NETWORK_RECON.md), so a client at one site "
-    "probing another site's own SSID has been at that site; tracking a target by its "
-    "preferred networks is reconnaissance (research/mitre/T1595.md). Randomised probe "
+    "probing another site's own SSID has joined a network of that name: the other "
+    "site's, if the name is unique to it. A lead, not a detection; tracking a target "
+    "by its preferred networks is reconnaissance (research/mitre/T1595.md). Not "
+    "applicable where the sites are within each other's reach. Randomised probe "
     "addresses are left out: one handset mints many (docs/wiki/mac-randomisation.md).",
     /* own_bssid_elsewhere */
     "A site's own AP is fixed at that site; heard at a site its signal cannot reach "
@@ -1216,11 +1264,13 @@ static const char *const BASIS[WEB_FID_NSUB] = {
     "reaches (src/rf_model.h, research/papers/rssi-distance-estimation.md): one BSSID "
     "heard at both within 10 minutes is two transmitters sharing it.",
     /* tool_travel */
-    "The same beacon fingerprint (IE order and vendor IEs) on an AP that an "
-    "AP-impersonation alert (EVIL_TWIN, KARMA_AP) names, at two sites, in order: the "
-    "same hardware and configuration attacking at both. A fingerprint is weak alone "
+    "The same beacon fingerprint (IE order and vendor IEs) on an AP that sloth names "
+    "the attacker (KARMA_AP, or the impostor half of an EVIL_TWIN pair the stream "
+    "attributed) at two sites, in order: possibly the same hardware and configuration "
+    "at both. A lead, not a detection. A fingerprint is weak alone "
     "(research/papers/mbssid-per-bss-ie-variation.md: uniform configuration is the "
-    "default), so a site counts only where an attack alert names the AP.",
+    "default), so a site counts only where an attack alert names the AP the attacker; "
+    "an unattributed twin pair names both halves and counts at neither.",
     /* verdict_conflict */
     "The operator triaged the same address known at one site and incident at the "
     "other: one of the two judgements needs a second look. Shown, never applied here.",
@@ -1252,6 +1302,7 @@ static void finding_json(web_jw_t *w, const fctx_t *x, const web_fid_t *f) {
     web_jw_raw(w, "],\"first_seen\":"); web_jw_int(w, f->first);
     web_jw_raw(w, ",\"last_seen\":");   web_jw_int(w, f->last);
     web_jw_raw(w, ",\"applicable\":");  web_jw_raw(w, f->applicable ? "true" : "false");
+    web_jw_raw(w, ",\"lead\":");        web_jw_raw(w, f->lead ? "true" : "false");
     web_jw_raw(w, ",\"reason\":");      jstr(w, f->reason);
     web_jw_raw(w, ",\"note\":");        jstr(w, f->note);
     web_jw_raw(w, ",\"exonerated\":");  web_jw_raw(w, f->exonerated ? "true" : "false");
@@ -1465,7 +1516,7 @@ int web_fleet_findings_route(web_fleet_t *f, const web_fleet_src_t *src, const c
     web_jw_str(&w, "Choices, no source: a site's reach is an AP at sloth's assumed 20 dBm "
                    "heard down to the weakest AP signal that site holds (-100 dBm when none) "
                    "less a 20 dB margin, twice the 2.4 GHz shadow-fading and assumed-power "
-                   "sigmas together (src/rf_model.h), at 2.4 GHz; an AP's distance from a "
+                   "sigmas (8 and 6 dB) root-sum-squared (src/rf_model.h), at 2.4 GHz; an AP's distance from a "
                    "sensor that hears it, the same model at its signal less the margin; one "
                    "BSSID at two sites within 600 s is simultaneous; the last 30 days of "
                    "rows; a fingerprint is the IE-order and vendor-IE hashes together; "

@@ -271,7 +271,7 @@ thread fails; slothweb is not running after either.
 | `slothweb: --peer: at most N peers` | Eight peers at most. |
 | `slothweb: --peer-interval-secs V: want a whole number from N to N` | 10 to 3600 seconds; the default is 60. |
 | `slothweb: --peer-gnss-region-km V: want a whole number from 1 to N` | 1 to 20000 km; the default is 50. |
-| `slothweb: --my-ssid: at most N`, `--my-bssid: at most N` | At most 8 of each: name the networks a peer could meet. |
+| `slothweb: --my-ssid: at most N`, `--my-bssid: at most N` | At most 16 of each, as sloth: name the networks a peer could meet. |
 | `slothweb: --my-ssid: want 1 to N octets with no control character` | The SSID as sloth's `--my-ssid` takes it, 1 to 32 octets. |
 | `slothweb: --my-bssid V: want aa:bb:cc:dd:ee:ff` | A MAC address, six octets in hex separated by colons. |
 | `slothweb: --strict refuses --peer.` | Pulling a peer is a network service, which `--strict` refuses; drop one of the two. |
@@ -484,7 +484,7 @@ milestone (W0, M0 to M6; tracker #102).
 | `--peer NAME=URL` | Pull another of the operator's own slothwebs ([Fleet](#fleet), ADR 0008): its `/api/fleet/export`, into this store's `peer_sites` and `peer_sightings`. Repeatable, at most 8. `URL` is `http://A.B.C.D[:PORT]` (port 80 when absent), a literal address in the tailnet, `100.64.0.0/10`; a name is never resolved, and an address outside the tailnet is refused (exit 2) unless `--peer-allow-outside-tailnet` is given. Off by default; each peer is named on stderr at start. Needs a `WITH_SQLITE` build; `--strict` refuses it. |
 | `--peer-interval-secs N` | Seconds between pulls, 10..3600, default 60. |
 | `--peer-gnss-region-km N` | A GNSS event at two sites at most this far apart is regional ([Fleet](#fleet), #192 I6), 1..20000, default 50. A choice, not a sourced figure: how far a ground-level source reaches is not in the corpus. |
-| `--my-ssid SSID`, `--my-bssid MAC` | This site's own networks, the values its sloth is given with the same flags (repeatable, at most 8 of each; [Fleet](#fleet), #192 I2, I3). Named in `/api/fleet/export` to a peer that asks with `ident=1`, and the baseline of the identity findings: a client elsewhere probing for them, this network's BSSID or SSID heard where it cannot reach. None by default; named on stderr at start. |
+| `--my-ssid SSID`, `--my-bssid MAC` | This site's own networks, the values its sloth is given with the same flags (repeatable, at most 16 of each, as sloth; [Fleet](#fleet), #192 I2, I3). Named in `/api/fleet/export` to a peer that asks with `ident=1`, and the baseline of the identity findings: a client elsewhere probing for them, this network's BSSID or SSID heard where it cannot reach. None by default; named on stderr at start. |
 | `--peer-allow-outside-tailnet` | Allow a `--peer` address outside `100.64.0.0/10` (a LAN peer, a loopback test). There is no TLS: the link you chose is the only protection, and each such peer is announced as a warning. |
 | `--help` | Usage. |
 
@@ -4343,13 +4343,15 @@ puller asks again with `gnss=1` and not with `adsb=1` for the hour.
 **`/api/fleet/findings?kind=I2|I3|I4|I8&limit=N`** (#192 I2, I3, I4, I8;
 GET only, limit 100, 1..500; `web/src/web_fleetid.h`): identity across
 the sites. `I2` a client at one site probing for an SSID another site
-names as its own (randomised probe addresses left out and counted, a
-client triaged known exonerated); `I3` a site's own BSSID, or its own
+names as its own (a lead: an SSID is only as unique as its name; not
+applicable at co-located sites; randomised probe addresses left out and
+counted, a client triaged known exonerated); `I3` a site's own BSSID, or its own
 SSID from a BSSID it does not name, heard where its network cannot
 reach, and one BSSID heard at two sites within 600 s further apart than
 both reach together; `I4` one beacon fingerprint (IE-order and vendor-IE
-hash) on an AP an `EVIL_TWIN` or `KARMA_AP` alert names, at two sites,
-in order; `I8` one address triaged known at one site and incident at
+hash) on an AP sloth names the attacker (`KARMA_AP`, or the impostor half
+of an `EVIL_TWIN` pair the stream's `twin_episode` attributed), at two
+sites, in order: a lead, never a detection; `I8` one address triaged known at one site and incident at
 another. A site's reach is an AP at 20 dBm heard down to its weakest AP
 signal less 20 dB (`src/rf_model.h`); a check that needs distance says
 `co_located` within it (the owner's sites are 16.8 m apart) or
@@ -4358,7 +4360,8 @@ own networks when no site does), `sites` (each one's own networks,
 `offered`, floor, reach, counts), `pairs` (distance, reaches,
 `co_located`), `counts` (each class that applies, `not_applicable`,
 `exonerated`), `findings` (each `id`, `class`, `kind`, `key`, `ssid`,
-`sites`, times, `applicable`, `reason`, `note`, `exonerated`,
+`sites`, times, `applicable`, `lead` (I2 and I4: an inference to
+confirm), `reason`, `note`, `exonerated`,
 `distance_m`, `bound_m`, `evidence` per site and `basis`), `total`,
 `partial`, `verdicts` (every address a peer sent a verdict on, each
 site's state beside it: shown, never written into this site's triage)
@@ -4372,7 +4375,10 @@ to every `ap` line `ie_fp`, `vie_fp` (the beacon's IE-order and
 vendor-IE hashes from the FRRS ledger), `wps_manuf`, `wps_model`,
 `wps_num`, and `attacks`, `attack_first`, `attack_last` (the
 `EVIL_TWIN` and `KARMA_AP` alerts of the last 30 days naming that BSSID
-at a key field). An I7 export refuses it; the puller asks again with
+at a key field: `KARMA_AP`; `EVIL_TWIN` only for the impostor half of a
+pair the stream's `twin_episode` attributed, `web_chain.h`;
+`TWIN_UNATTRIBUTED` for either half of a pair it did not; the real half
+of an attributed pair neither). An I7 export refuses it; the puller asks again with
 `adsb=1` and not with `ident=1` for the hour.
 
 **The Fleet tab** (after TACDB, `web/ui/fleet.js`): the sites on an SVG

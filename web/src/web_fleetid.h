@@ -21,12 +21,17 @@
  *                            wps_manuf, wps_model, wps_num (its WPS
  *                            strings, printable, at most 32 bytes), and
  *                            attacks, attack_first, attack_last: the
- *                            AP-impersonation alert types sloth.db holds
+ *                            AP-impersonation alerts sloth.db holds
  *                            naming that BSSID as a transmitter in the
- *                            last WEB_FID_WINDOW_S (EVIL_TWIN, either half
- *                            of a twin: or twin-fp: pair; KARMA_AP), a
- *                            comma list of type names, and their earliest
- *                            first seen and latest last seen.
+ *                            last WEB_FID_WINDOW_S, a comma list:
+ *                            KARMA_AP; EVIL_TWIN when the stream's
+ *                            twin_episode attributed it the impostor
+ *                            half of a twin: or twin-fp: pair,
+ *                            TWIN_UNATTRIBUTED when no pair naming it
+ *                            was attributed (the real half of an
+ *                            attributed pair carries neither); and the
+ *                            kept kinds' earliest first seen and latest
+ *                            last seen.
  *
  * The store: peer_sightings kind "own_net" (key "ssid:<ssid>" or
  * "bssid:<mac>", label the SSID), the ap rows' extra with the new
@@ -43,8 +48,10 @@
  *                            client a site has triaged known is
  *                            exonerated; a locally administered MAC (a
  *                            randomised probe address) is left out and
- *                            counted. At co-located sites, noted: the
- *                            client may live at both.
+ *                            counted. A lead (an SSID is only as unique
+ *                            as its name); not applicable ("co_located")
+ *                            at sites within each other's reach, where
+ *                            the client may live at both.
  *   I3 own_bssid_elsewhere   B hears a BSSID A names as its own (or one
  *                            A hears carrying A's own SSID) where A's AP
  *                            cannot reach: the distance between the sites
@@ -59,12 +66,14 @@
  *                            further apart than both reaches together:
  *                            a cloned MAC. Listed only when applicable.
  *   I4 tool_travel           one beacon fingerprint (IE-order hash and
- *                            vendor-IE hash equal) on an AP associated
- *                            with an AP-impersonation alert at two or
- *                            more sites, in order of each site's first
- *                            attack. A fingerprint with no attack alert
+ *                            vendor-IE hash equal) on an AP sloth names
+ *                            the attacker (EVIL_TWIN attributed, or
+ *                            KARMA_AP) at two or more sites, in order of
+ *                            each site's first attack. A lead, never a
+ *                            detection. A fingerprint with no such alert
  *                            at a site counts for nothing there (common
- *                            router fingerprints co-occur everywhere);
+ *                            router fingerprints co-occur everywhere),
+ *                            nor does TWIN_UNATTRIBUTED (either half);
  *                            an own BSSID or one any site triaged known,
  *                            false or noise is left out.
  *   I8 verdict_conflict      one address triaged known at one site and
@@ -75,8 +84,9 @@
  *
  * Reach: an AP at sloth's assumed 20 dBm heard down to the site's floor
  * (the weakest AP signal it holds, -100 dBm when none) less a 20 dB
- * margin (twice the 2.4 GHz shadow-fading and assumed-power sigmas
- * together), by src/rf_model.h's P.1238 model at 2.4 GHz. A check that
+ * margin (twice the 2.4 GHz shadow-fading and assumed-power sigmas,
+ * 8 and 6 dB, root-sum-squared), by src/rf_model.h's P.1238 model at
+ * 2.4 GHz. A check that
  * needs distance says "co_located" (not applicable) when the sites are
  * within it, and "no_position" when a site has none. */
 #ifndef SLOTHWEB_FLEETID_H
@@ -114,20 +124,38 @@ const char *web_fid_sub_word(int s);
 /* "I2", "I3", "I4", "I8" -> the class; -1 otherwise. */
 int  web_fid_class_find(const char *s, size_t n);
 
-/* The AP-impersonation alerts naming one BSSID (web_fid_atk_read()). */
+/* The AP-impersonation alerts naming one BSSID (web_fid_atk_read()).
+ * An EVIL_TWIN key names both halves of its pair in canonical byte
+ * order, so it does not say which is the impostor; the stream's
+ * twin_episode does when sloth attributed it (web_chain.h). Bit 0
+ * EVIL_TWIN: the impostor half of an attributed pair; bit 2
+ * TWIN_UNATTRIBUTED: a half of a pair whose impostor sloth did not
+ * attribute (either half may be the real AP); the real half of an
+ * attributed pair carries neither. Bit 1 KARMA_AP: its key names the
+ * one AP that answered. */
+#define WEB_FID_ATK_TWIN      1u
+#define WEB_FID_ATK_KARMA     2u
+#define WEB_FID_ATK_UNATTR    4u
+/* The bits that name the BSSID as the attacker (I4 counts only these). */
+#define WEB_FID_ATK_ATTACKER  (WEB_FID_ATK_TWIN | WEB_FID_ATK_KARMA)
 typedef struct {
     char      bssid[WEB_FLEET_MAC_SZ];
-    unsigned  types;                     /* bit 0 EVIL_TWIN, bit 1 KARMA_AP */
-    long long first, last;
+    unsigned  types;                     /* WEB_FID_ATK_* */
+    long long first, last;               /* over the types kept */
+    long long tf[2], tl[2];              /* per raw type (0 twin, 1 karma); 0 none */
 } web_fid_atk_t;
+struct web_chain;
 /* Every beacon_aps BSSID an EVIL_TWIN or KARMA_AP key in [from, now]
- * names as a transmitter (web_sdb_ap_attacks()), sorted by BSSID, into
- * a heap array of at most WEB_FID_ATK_MAX. The count, -1 on an error. */
-int  web_fid_atk_read(web_sdb_conn_t *c, long long from, web_fid_atk_t **out);
+ * names as a transmitter (web_sdb_ap_attacks()), each EVIL_TWIN one
+ * attributed through chain (NULL: none is), sorted by BSSID, into a
+ * heap array of at most WEB_FID_ATK_MAX. The count, -1 on an error. */
+int  web_fid_atk_read(web_sdb_conn_t *c, long long from, struct web_chain *chain,
+                      web_fid_atk_t **out);
 const web_fid_atk_t *web_fid_atk_find(const web_fid_atk_t *a, int n, const char *bssid);
 /* The type list of a mask, "EVIL_TWIN,KARMA_AP", into out. */
 void web_fid_atk_words(unsigned types, char *out, size_t cap);
-/* The mask of a list a peer sent: -1 when a word is not one of the two. */
+/* The mask of a list a peer sent: -1 when a word is not one of the
+ * three, repeats, or EVIL_TWIN comes with TWIN_UNATTRIBUTED. */
 int  web_fid_atk_parse(const char *s, unsigned *types);
 
 /* One AP as a site holds it. */
@@ -204,6 +232,7 @@ typedef struct {
     char      ssid[WEB_FLEET_SSID_MAX + 1];
     char      vtype[48];                 /* I8: the alert type of the newest verdict */
     int       applicable;
+    int       lead;                      /* I2, I4: an inference to confirm, never a detection */
     const char *reason;                  /* why not applicable, or NULL */
     const char *note;
     int       exonerated;

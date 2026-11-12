@@ -26,7 +26,7 @@ only that each flag and key is here.
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-11-11 (slothweb's `--my-ssid` and `--my-bssid`, [[fleet]], #192 I2, I3); 2026-11-11 (slothweb's `--peer-gnss-region-km`, [[fleet]], #192 I6); 2026-11-10 (slothweb's `--peer`, `--peer-interval-secs`, `--peer-allow-outside-tailnet`, [[fleet]], #192 F1); 2026-11-09 (`--adsb beast://`, the decoder's Beast output, #186); 2026-11-09 (`--adsb sbs://`, the decoder's SBS output, #186); 2026-11-08 (`adsb.emerg_hold_s`, #186); 2026-11-07 (the `^` ADS-B view key, [[adsb]]); 2026-11-05 (`--aprs SPEC`, [[aprs]], and its exit-2 refusals); 2026-11-05 (`--adsb SPEC`, [[adsb]], and its exit-2 refusals); 2026-11-03 (the twelve `gnss.*` knobs of the four GNSS rules); 2026-11-02 (the `#` GNSS view key, [[gnss]]); 2026-11-02 (slothweb's `--web-serve-evidence-pcap[=remote]`); 2026-10-27 (a pointer to slothweb's flags, `--pcap-dir` among them); 2026-10-27 (`--location`, `--gps`, `--gps-allow-remote`, `--gps-baud`, the `gps.*` knobs, the exit-2 refusals); 2026-10-26 (`make install-service` writes `/etc/default/sloth` only where absent); 2026-10-26 (`sloth-ble-scan` review: the bind wait, `--down` on an unregistered hciN, exit 1 causes); 2026-10-26 (`sloth-ble-scan`, its `--down` and `--delay`, and the units `make install-service` adds); 2026-10-26 (the five `rf.*` distance knobs); 2026-10-26 (#170: `--db-compact-alerts`, and its review: the un-checkpointed SRC refusal, the immutable read, DST's owner); 2026-10-26 (#166: `pcap.retain_days`, the `--pcap-dir` age sweep); 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
+**Last updated**: 2026-11-11 (slothweb's `--my-ssid` and `--my-bssid` at most 16 of each, as sloth; set both, #192 I2-I4 review); 2026-11-11 (slothweb's `--my-ssid` and `--my-bssid`, [[fleet]], #192 I2, I3); 2026-11-11 (slothweb's `--peer-gnss-region-km`, [[fleet]], #192 I6); 2026-11-10 (slothweb's `--peer`, `--peer-interval-secs`, `--peer-allow-outside-tailnet`, [[fleet]], #192 F1); 2026-11-09 (`--adsb beast://`, the decoder's Beast output, #186); 2026-11-09 (`--adsb sbs://`, the decoder's SBS output, #186); 2026-11-08 (`adsb.emerg_hold_s`, #186); 2026-11-07 (the `^` ADS-B view key, [[adsb]]); 2026-11-05 (`--aprs SPEC`, [[aprs]], and its exit-2 refusals); 2026-11-05 (`--adsb SPEC`, [[adsb]], and its exit-2 refusals); 2026-11-03 (the twelve `gnss.*` knobs of the four GNSS rules); 2026-11-02 (the `#` GNSS view key, [[gnss]]); 2026-11-02 (slothweb's `--web-serve-evidence-pcap[=remote]`); 2026-10-27 (a pointer to slothweb's flags, `--pcap-dir` among them); 2026-10-27 (`--location`, `--gps`, `--gps-allow-remote`, `--gps-baud`, the `gps.*` knobs, the exit-2 refusals); 2026-10-26 (`make install-service` writes `/etc/default/sloth` only where absent); 2026-10-26 (`sloth-ble-scan` review: the bind wait, `--down` on an unregistered hciN, exit 1 causes); 2026-10-26 (`sloth-ble-scan`, its `--down` and `--delay`, and the units `make install-service` adds); 2026-10-26 (the five `rf.*` distance knobs); 2026-10-26 (#170: `--db-compact-alerts`, and its review: the un-checkpointed SRC refusal, the immutable read, DST's owner); 2026-10-26 (#166: `pcap.retain_days`, the `--pcap-dir` age sweep); 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
 
 ---
 
@@ -530,13 +530,16 @@ into its own store; a peer outside the tailnet, or any under
 event seen at both within 120 s to be called regional; a value outside
 the range exits `2`.
 Since 2026-11-11 (#192 I2, I3) slothweb takes `--my-ssid SSID` and
-`--my-bssid MAC` too (repeatable, at most 8 of each), the same values as
+`--my-bssid MAC` too (repeatable, at most 16 of each, as sloth), the same values as
 sloth's flags of those names, which `sloth.db` and the stream do not
 carry: this site's own networks, named to a peer that asks with
 `ident=1` and the baseline of the fleet's identity findings
 (`/api/fleet/findings`). An SSID of 0 or more than 32 octets or with a
-control character, a BSSID that is not six hex octets, or a ninth of
-either exits `2`; any given is announced on stderr.
+control character, a BSSID that is not six hex octets, or a seventeenth of
+either exits `2`; any given is announced on stderr. Set both: slothweb
+does not read sloth's flags, so a network named to one and not the other
+is the sensor's own to sloth and a stranger's to the fleet, or the
+reverse.
 
 ## Build variants (Makefile)
 

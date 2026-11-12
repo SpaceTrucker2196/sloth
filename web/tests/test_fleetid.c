@@ -16,6 +16,8 @@
 
 #include "rf_model.h"
 #include "web_assets.h"
+#include "web_chain.h"
+#include "web_config.h"
 #include "web_fleet.h"
 #include "web_fleetid.h"
 #include "web_frrs.h"
@@ -72,6 +74,70 @@ static void test_reach(void) {
     WT_EQ(web_fid_floor(&s), WEB_FID_FLOOR_MAX);
 }
 
+/* --my-ssid and --my-bssid: up to 16 of each, as sloth; an SSID of 1
+ * to 32 octets with no control character (DEL included), a BSSID six
+ * hex octets kept canonical; anything else, or a seventeenth, refused. */
+static int my_parse(web_config_t *c, const char *const *args, char *err, size_t errsz) {
+    char *argv[48];
+    int argc = 0;
+    argv[argc++] = (char *)"slothweb";
+    for (int i = 0; args[i] && argc < 47; i++) argv[argc++] = (char *)args[i];
+    argv[argc] = NULL;
+    char *out = NULL, *eb = NULL;
+    size_t ol = 0, el = 0;
+    FILE *o = open_memstream(&out, &ol), *e = open_memstream(&eb, &el);
+    int rc = web_config_parse(c, argc, argv, o, e);
+    fclose(o);
+    fclose(e);
+    snprintf(err, errsz, "%s", eb ? eb : "");
+    free(out);
+    free(eb);
+    return rc;
+}
+
+static void test_my_flags(void) {
+    web_config_t *c = malloc(sizeof(*c));
+    WT_ASSERT(c != NULL);
+    if (!c) return;
+    char err[256];
+    static const char *const ok[] = { "--my-ssid", "Cafe Net \xc3\xa9", "--my-bssid",
+                                      "AA:BB:CC:DD:EE:0F", NULL };
+    WT_EQ(my_parse(c, ok, err, sizeof(err)), 0);
+    WT_EQ(c->mine.nssid, 1);
+    WT_EQ(c->mine.nbssid, 1);
+    WT_ASSERT(!strcmp(c->mine.ssid[0], "Cafe Net \xc3\xa9"));
+    WT_ASSERT(!strcmp(c->mine.bssid[0], "aa:bb:cc:dd:ee:0f"));
+    static const char *const bad[][3] = {
+        { "--my-ssid", "", NULL },
+        { "--my-ssid", "123456789012345678901234567890123", NULL },
+        { "--my-ssid", "a\tb", NULL },
+        { "--my-ssid", "a\x7f", NULL },
+        { "--my-bssid", "aa:bb:cc:dd:ee", NULL },
+        { "--my-bssid", "aa:bb:cc:dd:ee:fg", NULL },
+        { "--my-bssid", NULL, NULL },
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
+        WT_EQ(my_parse(c, bad[i], err, sizeof(err)), -1);
+    WT_EQ(my_parse(c, (const char *const[]){ "--my-ssid",
+                   "123456789012345678901234567890AB", NULL }, err, sizeof(err)), 0);
+    const char *many[40];
+    char names[17][8];
+    int k = 0;
+    for (int i = 0; i < 17; i++) {
+        snprintf(names[i], sizeof(names[i]), "n%d", i);
+        many[k++] = "--my-ssid";
+        many[k++] = names[i];
+    }
+    many[k] = NULL;
+    many[32] = NULL;                     /* sixteen */
+    WT_EQ(my_parse(c, many, err, sizeof(err)), 0);
+    WT_EQ(c->mine.nssid, 16);
+    many[32] = "--my-ssid";              /* seventeen */
+    WT_EQ(my_parse(c, many, err, sizeof(err)), -1);
+    WT_ASSERT(strstr(err, "at most 16") != NULL);
+    free(c);
+}
+
 static void test_words(void) {
     WT_EQ(web_fid_class_find("I2", 2), WEB_FID_I2);
     WT_EQ(web_fid_class_find("I8", 2), WEB_FID_I8);
@@ -86,6 +152,11 @@ static void test_words(void) {
     WT_EQ(web_fid_atk_parse("DEAUTH_FLOOD", &t), -1);
     WT_EQ(web_fid_atk_parse("", &t), -1);
     WT_EQ(web_fid_atk_parse("KARMA_AP,", &t), -1);
+    /* An unattributed half is a third word; one half is attributed or
+     * it is not, never both. */
+    WT_EQ(web_fid_atk_parse("KARMA_AP,TWIN_UNATTRIBUTED", &t), 0);
+    WT_EQ(t, WEB_FID_ATK_KARMA | WEB_FID_ATK_UNATTR);
+    WT_EQ(web_fid_atk_parse("EVIL_TWIN,TWIN_UNATTRIBUTED", &t), -1);
     char w[64];
     web_fid_atk_words(3, w, sizeof(w));
     WT_ASSERT(!strcmp(w, "EVIL_TWIN,KARMA_AP"));
@@ -182,8 +253,10 @@ static const web_fid_t *find_sub(int n, int sub) {
     return NULL;
 }
 
-/* I2: a client at self probing for beta's own SSID. Applicable at any
- * spacing; at 16.8 m noted (the client may live at both). An SSID that
+/* I2: a client at self probing for beta's own SSID. Always a lead;
+ * applicable 55 km apart and with no position, not applicable
+ * (co_located) at 16.8 m, where the client may live at both (seen red
+ * with run_i2()'s `f->applicable = 0` dropped). An SSID that
  * is self's own too is self's own question, not a finding. A client
  * either site triaged known is exonerated, the other states not. The
  * exoneration was seen red with run_i2()'s `f->exonerated =
@@ -206,7 +279,9 @@ static void test_i2(void) {
         WT_EQ(f->cls, WEB_FID_I2);
         WT_ASSERT(!strcmp(f->key, "00:11:22:33:44:55"));
         WT_ASSERT(!strcmp(f->ssid, "BetaNet"));
-        WT_EQ(f->applicable, 1);
+        WT_EQ(f->applicable, far);
+        WT_EQ(f->lead, 1);
+        WT_ASSERT(far ? f->reason == NULL : f->reason && !strcmp(f->reason, "co_located"));
         WT_EQ(f->exonerated, 0);
         WT_EQ(f->nleg, 2);
         WT_EQ(f->leg[0].site, 0);
@@ -215,8 +290,13 @@ static void test_i2(void) {
         WT_ASSERT(!strcmp(f->leg[1].role, "owner"));
         WT_EQ(f->first, T - 3000);
         WT_EQ(f->has_dist, 1);
-        if (far) WT_ASSERT(f->note == NULL);
-        else WT_ASSERT(f->note && strstr(f->note, "co_located"));
+        WT_ASSERT(f->note && strstr(f->note, far ? "a lead" : "live at or near both"));
+        /* No position at either: still a lead, applicable, no distance. */
+        S2[1].has_pos = 0;
+        n = run();
+        f = find_sub(n, WEB_FID_PROBE_OTHER);
+        WT_ASSERT(f && f->applicable && f->lead && !f->has_dist && f->reason == NULL);
+        S2[1].has_pos = 1;
         /* Triaged incident at beta: shown, not exonerated. */
         ver_in(1, "00:11:22:33:44:55", WEB_TRI_INCIDENT, T - 50);
         n = run();
@@ -357,8 +437,14 @@ static void test_i4(void) {
         WT_EQ(f->last, T - 400);
         WT_EQ(f->applicable, far);
         if (!far) WT_ASSERT(!strcmp(f->reason, "co_located"));
+        WT_EQ(f->lead, 1);
         /* The same fingerprint with no attack alert at self. */
         a->atk = 0;
+        WT_EQ(count_sub(run(), WEB_FID_TOOL), 0);
+        /* Only a half of an unattributed twin pair at self: either half
+         * may be the real AP, so it counts for nothing (seen red with
+         * run_i4()'s WEB_FID_ATK_ATTACKER mask widened to every bit). */
+        a->atk = WEB_FID_ATK_UNATTR;
         WT_EQ(count_sub(run(), WEB_FID_TOOL), 0);
         a->atk = 2;
         /* Self's own BSSID. */
@@ -582,7 +668,7 @@ static char *peer_export(const char *q) {
     PEER_MINE.nssid = 1;
     snprintf(PEER_MINE.bssid[0], 18, "0b:00:00:00:00:b1");
     PEER_MINE.nbssid = 1;
-    web_fleet_src_t src = { &PSDB, NULL, &PG, &PFR, NULL, NULL, &PEER_MINE };
+    web_fleet_src_t src = { &PSDB, NULL, &PG, &PFR, NULL, NULL, &PEER_MINE, NULL };
     char *body = NULL;
     size_t len = 0;
     int st = 0;
@@ -648,7 +734,7 @@ static void test_export_ident(void) {
     char *e = NULL;
     size_t el = 0;
     int st = 0;
-    web_fleet_src_t src = { &PSDB, NULL, &PG, &PFR, NULL, NULL, NULL };
+    web_fleet_src_t src = { &PSDB, NULL, &PG, &PFR, NULL, NULL, NULL, NULL };
     WT_EQ(web_fleet_export_route(&src, "since=0&ident=2", T, &e, &el, &st), 0);
     WT_EQ(st, 400);
     free(e);
@@ -758,10 +844,111 @@ static void test_own_net_replaced(void) {
     down();
 }
 
+/* EVIL_TWIN's key names both halves of a pair; which is the impostor is
+ * the stream's (web_chain.h). Peer's 0e:..:01 (KARMA_AP too) and
+ * 0e:..:02 under one twin: key: with no chain, or no attributed
+ * episode, each is TWIN_UNATTRIBUTED; attributed, the impostor carries
+ * EVIL_TWIN and the real half neither, its attack times its own
+ * karma ones only. Seen red with twin_part() returning
+ * WEB_FID_ATK_TWIN for every half (the real half then EVIL_TWIN). */
+static char *export_chain(web_chain_t *ch) {
+    web_fleet_src_t src = { &PSDB, NULL, &PG, &PFR, NULL, NULL, NULL, ch };
+    char *body = NULL;
+    size_t len = 0;
+    int st = 0;
+    WT_EQ(web_fleet_export_route(&src, "since=0&ident=1", T, &body, &len, &st), 0);
+    WT_EQ(st, 200);
+    if (!body) return NULL;
+    char *t = realloc(body, len + 1);
+    if (!t) { free(body); return NULL; }
+    t[len] = '\0';
+    return t;
+}
+
+static void chain_ep(web_chain_t *ch, const char *real, const char *twin, int attributed) {
+    char line[512];
+    web_jrec_t *r = malloc(sizeof(*r));
+    WT_ASSERT(r != NULL);
+    if (!r) return;
+    snprintf(line, sizeof(line),
+             "{\"type\":\"twin_episode\",\"ts\":%lld,\"ssid\":\"Starbucks\",\"real_bssid\":"
+             "\"%s\",\"twin_bssid\":\"%s\",\"enc\":\"WPA2\",\"real_rssi\":-70,\"twin_rssi\":-45,"
+             "\"rssi_swing_dbm\":25,\"attack_in_progress\":0,\"attacker_oui\":0,"
+             "\"hash_mismatch\":0,\"attributed\":%d}", T - 2500, real, twin, attributed);
+    WT_EQ(web_jl_parse(line, strlen(line), r), WEB_JL_OK);
+    web_chain_record(ch, r);
+    free(r);
+}
+
+static void test_export_twin_attribution(void) {
+    up();
+    alert_row(g_peer_db, "twin:0e:00:00:00:00:01:0e:00:00:00:00:02::WPA2/WPA2", WEB_ALERT_EVIL_TWIN,
+              T - 3000, T - 2000);
+    char k01[160], k02[160], none[160];
+    snprintf(none, sizeof(none), "\"attacks\":null,\"attack_first\":null,\"attack_last\":null}");
+    /* No chain: both halves unattributed. */
+    char *b = export_chain(NULL);
+    WT_ASSERT(b != NULL);
+    if (b) {
+        snprintf(k01, sizeof(k01), "\"attacks\":\"KARMA_AP,TWIN_UNATTRIBUTED\",\"attack_first\":"
+                 "%lld,\"attack_last\":%lld}", T - 9000, T - 2000);
+        snprintf(k02, sizeof(k02), "\"attacks\":\"TWIN_UNATTRIBUTED\",\"attack_first\":%lld,"
+                 "\"attack_last\":%lld}", T - 3000, T - 2000);
+        WT_HAS(b, k01);
+        WT_HAS(b, k02);
+        WT_LACKS(b, "\"attacks\":\"EVIL_TWIN");
+        char err[200];
+        WT_EQ(ingest(b, 0, err, sizeof(err)), 0);
+        free(b);
+    }
+    web_chain_t ch;
+    WT_EQ(web_chain_init(&ch), 0);
+    /* An unattributed episode: the same. */
+    chain_ep(&ch, "0e:00:00:00:00:01", "0e:00:00:00:00:02", 0);
+    b = export_chain(&ch);
+    if (b) {
+        WT_HAS(b, k01);
+        WT_HAS(b, k02);
+        free(b);
+    }
+    /* Attributed, 0e:..:02 the impostor: it alone carries EVIL_TWIN;
+     * 0e:..:01 keeps its own KARMA_AP and its own times. */
+    chain_ep(&ch, "0e:00:00:00:00:01", "0e:00:00:00:00:02", 1);
+    b = export_chain(&ch);
+    if (b) {
+        snprintf(k01, sizeof(k01), "\"attacks\":\"KARMA_AP\",\"attack_first\":%lld,"
+                 "\"attack_last\":%lld}", T - 9000, T - 8000);
+        snprintf(k02, sizeof(k02), "\"attacks\":\"EVIL_TWIN\",\"attack_first\":%lld,"
+                 "\"attack_last\":%lld}", T - 3000, T - 2000);
+        WT_HAS(b, k01);
+        WT_HAS(b, k02);
+        WT_LACKS(b, "UNATTRIBUTED");
+        free(b);
+    }
+    web_chain_destroy(&ch);
+    /* Attributed the other way: 0e:..:02 is the real AP, and no attack
+     * names it. */
+    WT_EQ(web_chain_init(&ch), 0);
+    chain_ep(&ch, "0e:00:00:00:00:02", "0e:00:00:00:00:01", 1);
+    b = export_chain(&ch);
+    if (b) {
+        snprintf(k01, sizeof(k01), "\"attacks\":\"EVIL_TWIN,KARMA_AP\",\"attack_first\":%lld,"
+                 "\"attack_last\":%lld}", T - 9000, T - 2000);
+        WT_HAS(b, k01);
+        const char *q = strstr(b, "\"bssid\":\"0e:00:00:00:00:02\"");
+        const char *nl = q ? strchr(q, '\n') : NULL;
+        const char *at = q ? strstr(q, none) : NULL;
+        WT_ASSERT(q && nl && at && at < nl);
+        free(b);
+    }
+    web_chain_destroy(&ch);
+    down();
+}
+
 static char *findings(const char *q, int *st) {
     web_fleet_mine_t mine;
     memset(&mine, 0, sizeof(mine));
-    web_fleet_src_t src = { &HSDB, NULL, &HG, &HFR, NULL, NULL, &mine };
+    web_fleet_src_t src = { &HSDB, NULL, &HG, &HFR, NULL, NULL, &mine, NULL };
     char *b = NULL;
     size_t len = 0;
     WT_EQ(web_fleet_findings_route(&F, &src, q, T, &b, &len, st), 0);
@@ -827,6 +1014,7 @@ static void test_findings_route(void) {
     if (b) {
         WT_LACKS(b, "\"class\":\"I2\"");
         WT_HAS(b, "\"total\":1,");
+        WT_HAS(b, "\"applicable\":true,\"lead\":true,");
         free(b);
     }
     static const char *const badq[] = { "kind=I5", "limit=0", "limit=501", "x=1", "kind=I2&kind=I3" };
@@ -836,7 +1024,7 @@ static void test_findings_route(void) {
         free(b);
     }
     /* The overview's counts. */
-    web_fleet_src_t src = { &HSDB, NULL, &HG, &HFR, NULL, NULL, NULL };
+    web_fleet_src_t src = { &HSDB, NULL, &HG, &HFR, NULL, NULL, NULL, NULL };
     static char ov[1 << 17];
     size_t ol = 0;
     WT_EQ(web_fleet_overview_route(&F, &src, "", T, ov, sizeof(ov) - 1, &ol, &st), 0);
@@ -945,7 +1133,7 @@ static void test_fleetid_page(void) {
               "    if (!f.applicable)\n"
               "      return \"not applicable: \" + words(f.reason) + (num(f.distance_m) ? \" (\" + dist(f.distance_m) +\n"
               "             (num(f.bound_m) ? \", reach \" + dist(f.bound_m) : \"\") + \")\" : \"\");\n"
-              "    return \"applies\" + (num(f.distance_m) ? \" (\" + dist(f.distance_m) +\n"
+              "    return (f.lead ? \"a lead to confirm\" : \"applies\") + (num(f.distance_m) ? \" (\" + dist(f.distance_m) +\n"
               "           (num(f.bound_m) ? \" apart, reach \" + dist(f.bound_m) : \" apart\") + \")\" : \"\");\n"
               "  }\n");
     WT_HAS(mod,
@@ -954,7 +1142,7 @@ static void test_fleetid_page(void) {
               "    while (box.firstChild) box.removeChild(box.firstChild);\n"
               "    j.findings.forEach(function (f) {\n"
               "      var row = H.el(\"div\", \"fid-row\" + (f.applicable && !f.exonerated ? \"\" : \" dim\"));\n"
-              "      var c = H.el(\"span\", \"fid-class\", f.class + \" \" + words(f.kind));\n"
+              "      var c = H.el(\"span\", \"fid-class\", f.class + \" \" + words(f.kind) + (f.lead ? \" (lead)\" : \"\"));\n"
               "      c.title = f.basis;\n"
               "      row.appendChild(c);\n"
               "      var k = H.el(\"span\", \"\");\n"
@@ -1039,10 +1227,12 @@ void run_fleetid_tests(void) {
     WT_RUN(test_i8);
     WT_RUN(test_room);
     WT_RUN(test_fleetid_page);
+    WT_RUN(test_my_flags);
 #ifdef WITH_SQLITE
     WT_RUN(test_export_ident);
     WT_RUN(test_ident_import_bounds);
     WT_RUN(test_own_net_replaced);
+    WT_RUN(test_export_twin_attribution);
     WT_RUN(test_findings_route);
     WT_RUN(test_findings_unconfigured);
 #endif

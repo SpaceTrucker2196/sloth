@@ -754,7 +754,7 @@ static void down(void) {
 }
 
 static char *export(long long since_q, const char *query, int *status) {
-    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, g_own_csv, NULL, NULL };
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, g_own_csv, NULL, NULL, NULL };
     char q[64];
     if (!query) snprintf(q, sizeof(q), "since=%lld", since_q);
     char *body = NULL;
@@ -1748,7 +1748,7 @@ static void test_pull_from_an_f1_peer(void) {
     web_m4_t m4;
     memset(&m4, 0, sizeof(m4));
     m4.fleet = &F;
-    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     static char body[65536];
     size_t len = 0;
     int st = 0;
@@ -2129,7 +2129,7 @@ static void test_locate_route(void) {
     G.loc.lon = -111.87006;
     G.loc.ts = T;
     snprintf(G.loc.src, sizeof(G.loc.src), "fixed");
-    web_fleet_src_t src = { &here, NULL, &G, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { &here, NULL, &G, NULL, NULL, NULL, NULL, NULL };
 
     char *b = NULL;
     size_t bl = 0;
@@ -2412,7 +2412,7 @@ static void test_gnss_export(void) {
     web_gnss_t *g = malloc(sizeof(*g));
     WT_ASSERT(g && web_gnss_init(g) == 0);
     gnss_feed(g, T - 5, 33.32922, -111.87006, -60);
-    web_fleet_src_t src = { &SDB, NULL, g, &FR, NULL, NULL, NULL };
+    web_fleet_src_t src = { &SDB, NULL, g, &FR, NULL, NULL, NULL, NULL };
     char *body = NULL;
     size_t len = 0;
     int st = 0;
@@ -2708,7 +2708,7 @@ static void test_gnss_route(void) {
         T, T, T + 100, T - 2850, T - 2850, T - 2750, T - 500, T - 500, T - 500);
     WT_EQ(sql_on(g_store, sql), 0);
     gnss_two_sites(&F, T - 7200, T);
-    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL, NULL };
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL, NULL, NULL };
     char *b = gnss_get(&src, "", T);
     WT_HAS(b, "\"local\":\"open\"");
     WT_HAS(b, "\"window_s\":120,\"gap_s\":150,\"region_m\":50000,");
@@ -2828,7 +2828,7 @@ static void test_gnss_route(void) {
     WT_HAS(b, "\"why\":\"no_current_fix\"");
     WT_LACKS(b, "\"moved\":[\"beta\"]");
     free(b);
-    web_fleet_src_t nos = { NULL, NULL, NULL, &FR, NULL, NULL, NULL };
+    web_fleet_src_t nos = { NULL, NULL, NULL, &FR, NULL, NULL, NULL, NULL };
     b = gnss_get(&nos, "", T + 60);
     WT_HAS(b, "\"local\":\"none\"");
     snprintf(want, sizeof(want), "{\"site\":\"beta\",\"type\":\"GNSS_TIME_JUMP\",\"class\":"
@@ -2864,7 +2864,7 @@ static void test_gnss_sample_events(void) {
         if (t == T + 60) {
             /* At T the indicator's window has not closed at beta's last
              * pull: no quiet peer yet. */
-            char *b0 = gnss_get(&(web_fleet_src_t){ NULL, NULL, NULL, NULL, NULL, NULL, NULL }, "", T);
+            char *b0 = gnss_get(&(web_fleet_src_t){ NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL }, "", T);
             char want0[512];
             snprintf(want0, sizeof(want0), "{\"site\":\"self\",\"type\":\"JAM_IND\",\"class\":"
                      "\"interference\",\"source\":\"sample\",\"first_seen\":%lld,"
@@ -2883,7 +2883,7 @@ static void test_gnss_sample_events(void) {
             web_fg_add(F.fg, sl[i], &s, 150);
         }
     }
-    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     char *b = gnss_get(&src, "", T + 120);
     char want[512];
     snprintf(want, sizeof(want), "{\"site\":\"self\",\"type\":\"CN0_DROP\",\"class\":"
@@ -2947,7 +2947,7 @@ static void test_gnss_state_survives_a_restart(void) {
     WT_EQ(F.fg->site[b].se_a[0], T + 30);
     /* With the references back, the baseline needs only a fresh fix. */
     gnss_two_sites(&F, T + 60, T + 60);
-    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL, NULL };
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL, NULL, NULL };
     char *body = gnss_get(&src, "", T + 60);
     WT_HAS(body, "\"verdict\":\"within\"");
     free(body);
@@ -3081,7 +3081,7 @@ static void test_adsb_export(void) {
     web_adsb_t A;
     WT_EQ(web_adsb_init(&A), 0);
     adsb_rx(&A, T - 30, 2247000);
-    web_fleet_src_t src = { &SDB, NULL, &G, &FR, NULL, &A, NULL };
+    web_fleet_src_t src = { &SDB, NULL, &G, &FR, NULL, &A, NULL, NULL };
     char *b0 = export_q(&src, "since=0&adsb=1");
     free(b0);
     adsb_rx(&A, T, 2247900);
@@ -3127,7 +3127,7 @@ static void test_adsb_export(void) {
      * the aircraft, not read, are cut - never an empty list the
      * comparison would take as "heard none" (seen red, false, with the
      * !ac_read clause removed from the export). */
-    web_fleet_src_t none = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t none = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     b = export_q(&none, "since=0&adsb=1");
     if (b) {
         WT_LACKS(b, "adsb_rx");
@@ -3421,7 +3421,7 @@ static void test_adsb_route(void) {
     WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
     web_slothdb_t here;
     web_slothdb_init(&here, g_here_db, NULL);
-    web_fleet_src_t src = { &here, NULL, &GS, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { &here, NULL, &GS, NULL, NULL, NULL, NULL, NULL };
     char *b = aircraft_get(&src, "");
     WT_ASSERT(b != NULL);
     if (b) {

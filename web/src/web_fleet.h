@@ -157,7 +157,7 @@
 #define WEB_FLEET_NOIDENT_S      3600
 /* This site's own networks (--my-ssid, --my-bssid on slothweb, as on
  * sloth): at most WEB_FLEET_MINE_MAX of each, an SSID of 1..32 octets. */
-#define WEB_FLEET_MINE_MAX       8
+#define WEB_FLEET_MINE_MAX       16
 #define WEB_FLEET_SSID_MAX       32
 
 enum { WEB_FK_WIFI = 0, WEB_FK_BLE, WEB_FK_AP, WEB_FK_PROBE, WEB_FK_ALERT,
@@ -236,6 +236,7 @@ typedef struct {
 struct sqlite3;
 struct web_gnss;
 struct web_fg;
+struct web_chain;
 
 /* A site's own networks (#192 I2, I3): the SSIDs and BSSIDs its
  * operator names with --my-ssid and --my-bssid, each SSID 1..32 octets
@@ -345,6 +346,9 @@ typedef struct {
     const char         *own_csv;   /* this site's radios (own=1), may be NULL */
     struct web_adsb    *adsb;      /* the receiver's summary (adsb=1, #192 I7) */
     const web_fleet_mine_t *mine;  /* this site's own networks (ident=1), may be NULL */
+    /* The stream's twin attribution (web_chain.h): which half of an
+     * EVIL_TWIN pair is the impostor, for ident=1's attacks; may be NULL. */
+    struct web_chain   *chain;
 } web_fleet_src_t;
 
 /* /api/fleet/export: a heap body the caller frees, in *body. 0 with

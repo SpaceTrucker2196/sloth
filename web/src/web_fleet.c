@@ -1057,7 +1057,7 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
     /* The AP-impersonation alerts by BSSID (#192 I4), for the ap lines'
      * attacks: one read, before them. A read that fails sends none. */
     if (have_c && !fault && xq.ident && WANT(WEB_FK_AP)) {
-        int na = web_fid_atk_read(&c, now_s - WEB_FID_WINDOW_S, &x.atk);
+        int na = web_fid_atk_read(&c, now_s - WEB_FID_WINDOW_S, src->chain, &x.atk);
         x.natk = na > 0 ? na : 0;
     }
     if (have_c && !fault) {

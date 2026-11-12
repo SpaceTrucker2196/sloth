@@ -61,7 +61,7 @@
     if (!f.applicable)
       return "not applicable: " + words(f.reason) + (num(f.distance_m) ? " (" + dist(f.distance_m) +
              (num(f.bound_m) ? ", reach " + dist(f.bound_m) : "") + ")" : "");
-    return "applies" + (num(f.distance_m) ? " (" + dist(f.distance_m) +
+    return (f.lead ? "a lead to confirm" : "applies") + (num(f.distance_m) ? " (" + dist(f.distance_m) +
            (num(f.bound_m) ? " apart, reach " + dist(f.bound_m) : " apart") + ")" : "");
   }
   function rows(j) {
@@ -69,7 +69,7 @@
     while (box.firstChild) box.removeChild(box.firstChild);
     j.findings.forEach(function (f) {
       var row = H.el("div", "fid-row" + (f.applicable && !f.exonerated ? "" : " dim"));
-      var c = H.el("span", "fid-class", f.class + " " + words(f.kind));
+      var c = H.el("span", "fid-class", f.class + " " + words(f.kind) + (f.lead ? " (lead)" : ""));
       c.title = f.basis;
       row.appendChild(c);
       var k = H.el("span", "");

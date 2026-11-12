@@ -1305,7 +1305,7 @@ static int route_fleet_export(const web_req_t *rq, const web_health_t *h, char *
     web_fleet_src_t src = {
         h->m4 ? h->m4->sdb : NULL, h->ble, h->gnss, h->m4 ? h->m4->frrs : NULL,
         h->m4 && h->m4->fleet ? h->m4->fleet->own_csv : NULL, h->adsb,
-        h->m4 && h->m4->fleet ? &h->m4->fleet->mine : NULL,
+        h->m4 && h->m4->fleet ? &h->m4->fleet->mine : NULL, h->m4 ? h->m4->chain : NULL,
     };
     char *body = NULL;
     size_t bl = 0;
@@ -1371,7 +1371,7 @@ static int route_fleet_overview(const web_req_t *rq, const web_health_t *h, char
     web_fleet_src_t src = {
         h->m4 ? h->m4->sdb : NULL, h->ble, h->gnss, h->m4 ? h->m4->frrs : NULL,
         h->m4 && h->m4->fleet ? h->m4->fleet->own_csv : NULL, h->adsb,
-        h->m4 && h->m4->fleet ? &h->m4->fleet->mine : NULL,
+        h->m4 && h->m4->fleet ? &h->m4->fleet->mine : NULL, h->m4 ? h->m4->chain : NULL,
     };
     if (qlong(rq)) {
         status = 400;
@@ -1418,7 +1418,7 @@ static int route_fleet_heap(const web_req_t *rq, const web_health_t *h, char *ou
     web_fleet_src_t src = {
         h->m4 ? h->m4->sdb : NULL, h->ble, h->gnss, h->m4 ? h->m4->frrs : NULL,
         h->m4 && h->m4->fleet ? h->m4->fleet->own_csv : NULL, h->adsb,
-        h->m4 && h->m4->fleet ? &h->m4->fleet->mine : NULL,
+        h->m4 && h->m4->fleet ? &h->m4->fleet->mine : NULL, h->m4 ? h->m4->chain : NULL,
     };
     char *body = NULL;
     size_t bl = 0;
