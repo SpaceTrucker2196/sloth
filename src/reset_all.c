@@ -57,6 +57,7 @@
 #include "ownership.h"
 #include "pm_forge.h"
 #include "probe_pnl.h"
+#include "probe_latency.h"
 #include "capture/probe.h"
 #include "queue_evict.h"
 #include "quic_log.h"

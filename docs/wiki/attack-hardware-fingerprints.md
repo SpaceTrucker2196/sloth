@@ -23,13 +23,17 @@ mapped onto these tiers, so one vocabulary reaches the operator.
 `src/eap_parse.h`, `src/tool_fingerprint.c`, `include/sloth.h`
 (`ap_fingerprint_t`, `ap_beacon_timing_t`), `docs/views/beacons.md`,
 `docs/wiki/jsonl-schema.md`, `research/tools/wifi-pineapple-mk7.md`,
-`tests/test_attack_hw.c`, issues #77 and #151, plan #145 (rulings 1-3).
+`tests/test_attack_hw.c`, `src/probe_latency.c`, `src/probe_latency.h`,
+`tests/test_probe_latency.c`, `research/papers/probe-response-latency.md`,
+issues #77, #151 and #187, plan #145 (rulings 1-3).
 IEEE 802.11-2020 §9.3.3.2, §9.4.1.3, §9.4.1.10, §11.1.3; Wi-Fi Simple
 Configuration Technical Specification v2.0 §7.7, §12.
 
 **Last updated**: 2026-11-12 (#151 owner rulings: `low/med/high` mapped
 onto the tiers, `corroborated` raises `KARMA_AP` to CRIT), 2026-11-12
-(#151: the stack table mechanism, the
+(#187 S3 review: first answer tracked per request, Retry-only requests
+voided), 2026-11-12 (#187 S3: probe-response latency, measured only),
+2026-11-12 (#151: the stack table mechanism, the
 Pineapple setup-AP pairing, the verdict layer), 2026-10-20
 
 ## What #151 built (2026-11-12)
@@ -260,6 +264,51 @@ PIN or Pixie-Dust session. `eap_wsc_parse()` now fills
 These fields are measurement only. No rule reads them, and this slice
 adds no JSONL or TUI output for them. The #82 session timeline is
 where they would naturally be shown.
+
+## Probe-response latency (#187 S3): measured, no verdict
+
+`src/probe_latency.c` pairs a station's Probe Request with the Probe
+Response a BSSID addresses back to it and keeps, per BSSID, the count,
+minimum, p10, median and p90 over its last 32 pairs, directed and
+wildcard probes separately. It is fed once per monitor frame from
+`src/capture/probe.c`.
+
+- **Clock.** Radiotap TSFT on both frames when the radio supplies it
+  (the receiver's own TSF at each MPDU's first bit, 1 µs, no host
+  jitter); otherwise the pcap stamp on both (host receive time, driver
+  and USB batching inside it). Never one of each, and one clock per
+  BSSID row.
+- **A pair counts only** inside one dwell (dwells are numbered from the
+  radiotap frequency, so a `--hop` retune between the two frames voids
+  it whenever anything was heard on the other channel; a silent
+  excursion and back inside 200 ms is not seen); against a request
+  heard once under its sequence number and not only as a retransmission;
+  from a first transmission (Retry clear); as the BSSID's first answer
+  to that request that sloth heard (hostapd-mana answers a wildcard
+  probe once per remembered SSID, airbase-ng sends a broadcast-probe
+  answer three times; each request remembers up to 16 answering
+  BSSIDs, counting ambiguous and Retry-set answers as answers); naming
+  the requested SSID; within 200 ms. Each refusal is tallied.
+- **Bounds.** 64 pending requests and 128 BSSID rows, oldest evicted and
+  counted. The tally is module-local (`probe_latency_counters()`): an
+  `SH_EVICT_*` kind would add a sensor-health JSONL member, which waits
+  for the next JSONL version.
+- **Not exported or shown yet.** No JSONL member, no sloth.db column, no
+  TUI column; the accessor is `probe_latency_get()` /
+  `probe_latency_snapshot()`. The `[y]` view has no room for a column
+  at 100x33 without dropping the tool attribution's minimum.
+
+**Observation only: no cited threshold, not used in any verdict.** #187
+proposed a median under 2 ms as a KARMA confirmer.
+`research/papers/probe-response-latency.md` records what was read: a
+2003 legitimate-AP baseline (Mishra, Shin & Arbaugh: every response
+within 9-15 ms per network) and the lure tools' source, which answers
+through the same userspace path stock hostapd uses on a driver without
+probe-response offload. No source gives a lure a direction or a
+magnitude, and the plausible offload difference runs the other way
+(firmware faster). `rule_karma_ap()` and `KARMA_PROBE_FORGE` do not read
+it. A threshold needs a source or sloth's own captures of a known lure
+beside known APs on one radio.
 
 ## What does not ship, and why
 
