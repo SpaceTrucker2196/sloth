@@ -172,6 +172,52 @@
     return { max: glyph.g7Max(lanes), lanes: rows.length, busy: all.length };
   }
 
+  // §6.3's chains panel, the probe-flood rug (#195; V3 left it for want
+  // of the alert type on the page, which /api/alerts now takes by name).
+  // rows are /api/alerts' PROBE_FLOOD rows, one per alert key; a lane
+  // per severity that has any, in that severity's colour (R1: severity
+  // on alert lanes), top lane the worst. A tick where a key was first
+  // seen, its height the keys begun in the column on one scale for every
+  // lane (R3); an underline from the key's first to its last sighting,
+  // which is the finding's span, quiet gaps between its incidents
+  // included (the caption says so). None in the window: the canvas
+  // collapses and the caption says so (F16). Returns {max, lanes, keys}.
+  var SEV_TOK = ["--sev-low", "--sev-warn", "--sev-crit"];
+  var SEV_LANE = ["low", "warn", "crit"];
+  function floodRug(c, rows, from, to, cols) {
+    var col_s = (to - from) / cols, lanes = [], names = [], keys = 0;
+    function col(t) { return Math.max(0, Math.min(cols - 1, Math.floor((t - from) / col_s))); }
+    for (var sv = 2; sv >= 0; sv--) {
+      var counts = [], spans = [], i;
+      for (i = 0; i < cols; i++) counts.push(0);
+      for (i = 0; rows && i < rows.length; i++) {
+        var r = rows[i];
+        if (r.sev !== sv || !num(r.first_seen) || !num(r.last_seen)) continue;
+        if (r.last_seen < from || r.first_seen >= to) continue;
+        if (r.first_seen >= from) counts[col(r.first_seen)]++;
+        spans.push([col(r.first_seen), col(r.last_seen)]);
+      }
+      if (!spans.length) continue;
+      keys += spans.length;
+      lanes.push({ counts: counts, token: SEV_TOK[sv], spans: spans, spanToken: SEV_TOK[sv] });
+      names.push(SEV_LANE[sv]);
+    }
+    c.hidden = !lanes.length;
+    if (!lanes.length) return { max: 0, lanes: 0, keys: 0 };
+    c.style.height = lanes.length * (LANE + GAP) + "px";
+    var gw = Math.max(1, c.clientWidth - BSS);
+    glyph.paint(c, shift(glyph.g7(lanes, { w: gw, h: c.clientHeight, lane: LANE, gap: GAP }), BSS, 0),
+                H.tok);
+    var dpr = window.devicePixelRatio || 1, g = c.getContext("2d");
+    g.font = 10 * dpr + "px " + H.css("--font-mono");
+    g.textBaseline = "middle";
+    names.forEach(function (n, k) {
+      g.fillStyle = H.tok(lanes[k].token);
+      g.fillText(n, 2 * dpr, (k * (LANE + GAP) + LANE / 2) * dpr);
+    });
+    return { max: glyph.g7Max(lanes), lanes: lanes.length, keys: keys };
+  }
+
   window.SlothAir = { init: function (h) { H = h; }, horizon: horizon, drill: drill, rug: rug,
-                      ROW: ROW };
+                      floodRug: floodRug, ROW: ROW };
 })();

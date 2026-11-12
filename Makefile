@@ -31,6 +31,8 @@ CORE_COMMON_SRCS = \
        src/worker_thread.c \
        src/view_labels.c   \
        src/tui_palette.c   \
+       src/tui_glyph.c     \
+       src/dev_how.c       \
        src/ownership.c     \
        src/inventory.c     \
        src/wired_attach.c  \

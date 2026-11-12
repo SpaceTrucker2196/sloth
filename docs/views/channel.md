@@ -93,15 +93,36 @@ riding on the other's traffic.
 ## View
 
 ```
- Ch     Band     APs  STAs  Best  Top SSID               retry    ctrl   age  activity
- -----  -------  ---- ----  ----  --------------------  ------  ----  --------
- 6      2.4GHz      7    12   -41  CorpWiFi                 61%    2s  ████████████████████████
- 1      2.4GHz      4     3   -58  Guest-Net                14%    3s  ██████████
- 11     2.4GHz      3     1   -67  BT-Hub-4A                 8%    5s  ██████
- 36     5GHz        5     9   -49  CorpWiFi-5                3%    2s  ████████████████
- 149    5GHz        2     0   -71  (hidden)                   -   19s  ██
- 37     6GHz        1     0   -74  CorpWiFi-6E                -   41s  █
+ Ch     Band     APs  STAs  Best  Top SSID               retry    ctrl   age  ctrl/min, last 24 min
+ -----  -------  ---- ----  ----  --------------------  ------  ------  ----  ------------------------
+ 6      2.4GHz      7    12   -41  CorpWiFi                 61%   18342    2s  ▄▄▄▄█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ 1204
+ 1      2.4GHz      4     3   -58  Guest-Net                14%    2210    3s  ▄_▄▄▄_▄▄▄▄_▄▄▄▄▄▄_▄▄▄▄▄▄ 310
+ 11     2.4GHz      3     1   -67  BT-Hub-4A                 8%     601    5s  _▄__▄___▄___▄___▄___▄__ 41
+ 36     5GHz        5     9   -49  CorpWiFi-5                3%    9001    2s  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄██████ 980
+ 149    5GHz        2     0   -71  (hidden)                   -       -   19s              ____________
+ 37     6GHz        1     0   -74  CorpWiFi-6E                -       -   41s                         _
+ ctrl: control frames a minute, last 24 min, each row 0 to its busiest minute (the number); ▄ to
+ half, █ above, _ none counted (also: tuned elsewhere), blank before this run watched
 ```
+
+The last column is G3's TUI form (#195; `docs/web-visual-spec.md` §5
+G3): a horizon strip of the control frames counted on the channel each
+minute, the deltas of the cumulative `ctrl` count, oldest on the left.
+Each row is on its own absolute scale, 0 to its busiest minute so far,
+printed after the strip; that maximum grows and never shrinks while
+sloth runs (R11). A minute up to half of it is `▄` in the normal ink,
+above half `█` in the warm heat colour, so a channel "unusually busy
+for itself" is the one with a run of `█`. `_` is a minute with nothing
+counted, which on a hopping radio is also a minute tuned elsewhere; a
+blank is a minute before this run first saw the channel's row, so "none
+counted" and "not watched" are different marks (R5). The history is
+held in memory (`channel_hz_update()`, `src/views/channel.c`) and is
+empty after a restart.
+
+It replaced the activity bar, which drew APs + STAs against the busiest
+row: both numbers are in their own columns, and *when* was what no
+column said. The table is cut at the screen edge rather than wrapped,
+so at 80 columns the strip is lost and every row stays on its line.
 
 ## Control-frame volume (#64)
 

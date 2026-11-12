@@ -194,6 +194,41 @@ against its neighbours. No credential appears anywhere on this screen:
 sloth never stores one (the `cleartext_creds` guardrail), and
 default-credential matching is struck by owner ruling (#145).
 
+#### Signal and hour of week (#195)
+
+Two of the slothweb glyphs have their character-cell forms here
+(`docs/web-visual-spec.md` §5 G2 and G4, rule R12). A record with a
+monitor-mode reading carries the S-meter after its first lines, on the
+scale of the band its distance estimate was made for (S9 = -47 dBm at
+2.4 GHz and BLE, -54 at 5 GHz, -56 at 6 GHz; 6 dB an S-unit, then +10
+and +20 over S9), and the window's least and greatest reading in words,
+from the raw samples the distance estimate holds. A record with no band
+reads on the 2.4 GHz row and says so. Last in the detail, the 7 by 24
+hour-of-week grid (Monday first, local time): `▪` at four heat levels
+by the share of the watched hours the device was seen in, against the
+grid's largest share; `·` an hour watched with the device absent; blank
+an hour this run has not watched. The TUI keeps no baseline across
+restarts (`src/dev_how.c`), so the grid is this run's and the caption
+says so. It is drawn whole or not at all, so on a short screen it is
+the block counted on the last line, not the camera evidence above it.
+At 80 by 24, from `tests/test_tui_glyph.c`:
+
+```
+ ── DEVICE DETAIL ──  [Enter/Esc] back
+  MAC 02:00:00:00:00:42   IP -   OUI vendor ?   Src -------
+  Class    -
+  Signals  - - - - - -
+  Signal   ███████▁▁ ▁▁  S7      -61 dBm  5 GHz scale
+           range S6 -70 to S8 -58 dBm over the last 3 samples
+ ── HOUR OF WEEK (this run, local time) ──
+       0     6     12    18
+  Mon
+  Tue                       ▪
+  Wed
+  ...
+  seen in 1 of 1 hours watched; max 100% of an hour's watches; blank not watched, · absent; ...
+```
+
 ## Risk bucket
 
 The `Risk` column shows a bucket derived from independently observable

@@ -590,7 +590,7 @@ static const fit_case_t C_PACKETS = { "packets", VIEW_PACKETS, seed_packets, "10
 #endif
 static const fit_case_t C_WIFI    = { "wifi",    VIEW_WIFI,    seed_wifi,    "02:fa:", 0, NULL, 0 };
 static const fit_case_t C_PROBE   = { "probe",   VIEW_PROBE,   seed_probe,   "02:fa:", 0, NULL, 0 };
-static const fit_case_t C_TWINS   = { "twins",   VIEW_TWINS,   seed_twins,   "02:fa:", 6,
+static const fit_case_t C_TWINS   = { "twins",   VIEW_TWINS,   seed_twins,   "02:fa:", 6 + 7, /* legend + chain lanes (#195) */
                                       "needs controller/switch/DHCP correlation", 0 };
 static const fit_case_t C_BEACON  = { "beacon",  VIEW_BEACON,  seed_beacon,  "02:fa:", 1, "RRM surveys:", 0 };
 static const fit_case_t C_RADIUS  = { "rogue_radius", VIEW_ROGUE_RADIUS, seed_rogue_radius, "02:fa:", 2,

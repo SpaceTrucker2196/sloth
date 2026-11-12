@@ -1156,6 +1156,40 @@ static void chain_row(const web_m4_t *m, web_sdb_conn_t *conn, int have_db,
     web_jw_raw(w, "}");
 }
 
+/* #195: a BSSID sloth.db holds an EVIL_TWIN or KARMA_AP row for in the
+ * window is a candidate though no deauth key names it (a twin raised
+ * without a deauth flood). web_sdb_ap_attacks() gives one item per
+ * (BSSID, type), beacon_aps' BSSID; each BSSID it names is moved, or
+ * added, to the front of the rows, ahead of the deauth-only ones, so
+ * the WEB_WIFI_CHAINS rows read are the ones an alert names before the
+ * merely busy ones. The front is then put in deauth order. */
+typedef struct { krow_t *rows; int n, max, front; } atk_rows_t;
+
+static int add_attacked(void *ctx, const web_sdb_item_t *it) {
+    atk_rows_t *x = ctx;
+    char mac[WEB_KEY_MAX + 1];
+    if (web_key_mac(it->a, mac) != 0) return 0;
+    int at = -1;
+    for (int i = 0; i < x->n && at < 0; i++)
+        if (!strcmp(x->rows[i].key, mac)) at = i;
+    if (at >= 0 && at < x->front) return 0;          /* already in front */
+    krow_t r;
+    if (at >= 0) {
+        r = x->rows[at];
+        memmove(&x->rows[x->front + 1], &x->rows[x->front],
+                (size_t)(at - x->front) * sizeof(*x->rows));
+    } else {
+        if (x->n >= x->max) return 1;
+        memset(&r, 0, sizeof(r));
+        snprintf(r.key, sizeof(r.key), "%s", mac);
+        memmove(&x->rows[x->front + 1], &x->rows[x->front],
+                (size_t)(x->n - x->front) * sizeof(*x->rows));
+        x->n++;
+    }
+    x->rows[x->front++] = r;
+    return 0;
+}
+
 int web_wifi_chain_route(const web_m4_t *m, const char *query,
                          long long now_s, char *body, size_t cap,
                          size_t *len, int *status) {
@@ -1203,6 +1237,14 @@ int web_wifi_chain_route(const web_m4_t *m, const char *query,
     int have_db = m->sdb && m->sdb->configured &&
                   web_slothdb_open(m->sdb, &conn, WEB_SDB_HTTP_MS, now_s, oerr,
                                    sizeof(oerr)) == 0;
+    if (!one[0] && have_db) {
+        atk_rows_t ar = { b.rows, nk, GRID_KEYS, 0 };
+        /* A failed read leaves the deauth candidates as they were; the
+         * row's own stage reads below say whether sloth.db answered. */
+        (void)web_sdb_ap_attacks(&conn, g.from, g.to, 2 * GRID_KEYS, add_attacked, &ar);
+        nk = ar.n;
+        qsort(b.rows, (size_t)ar.front, sizeof(*b.rows), by_total);
+    }
     web_sdb_stats_t sst;
     memset(&sst, 0, sizeof(sst));
     if (m->sdb) web_slothdb_stats(m->sdb, &sst);

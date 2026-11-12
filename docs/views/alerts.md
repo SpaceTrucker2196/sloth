@@ -316,6 +316,10 @@ own feed for production.
 
 ```
  ── Alerts: 2 crit 1 warn 2 low 5 total ────────────────────────
+  crit                                                       ▄    █ 2
+  warn                   ▄                                          1
+  low     ▄                           ▄                             2
+ begun: incidents opened, last 60 min in 60-s columns, tallest 2; from the alert table
  Time      Sev   Title            n    Detail
  22:01:01  CRIT  THREAT_IP        1    connection to 192.0.2.66:443 (demo IOC 192.0.2.66)
  22:01:01  CRIT  THREAT_DOMAIN    4    192.168.1.5 queried malware.testing.com (demo IOC ...)
@@ -334,6 +338,16 @@ happened (see "Counters and timestamps" above).
 
 The footer below the table shows enrichment for the selected alert:
 RIR region (from the `/8` table) and embedded hosting-org lookup.
+
+**Begun** (#195). Above the table, G7's TUI form
+(`docs/web-visual-spec.md` §5 G7): the incidents opened in the last
+hour as a rug, one lane per severity in its colour, a column's height
+(`▁` to `█`) its count on a scale every lane shares, the tallest
+printed. A lane with nothing begun is not drawn, and with nothing at
+all the block is one line, `begun: none in the last 60 min`. The
+columns flex with the width (12 to 60). It reads the alert table, so an
+incident the table has already dropped is not on it. slothweb draws the
+same lanes for PROBE_FLOOD on the WiFi view's chains panel.
 
 **Location** (2026-10-27). With `--location` or `--gps`, Enter's
 detail panel carries one more line, where the sensor was as the

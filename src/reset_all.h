@@ -46,10 +46,12 @@
     X(cleartext_creds_reset) \
     X(cp_clear) \
     X(csa_clear) \
+    X(channel_hz_clear) \
     X(ctrl_clear) \
     X(dashboard_info_clear) \
     X(data_socket_cleanup) \
     X(db_close) \
+    X(dev_how_clear) \
     X(deauth_clear) \
     X(dhcp_snoop_clear) \
     X(dns_log_clear) \

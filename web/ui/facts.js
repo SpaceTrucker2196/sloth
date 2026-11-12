@@ -15,6 +15,7 @@
 //   SlothFacts.paint()    paint again from what was read, for a canvas
 //                         that was hidden (zero wide) when it was read
 //   SlothFacts.words(pts, band, f)  G1's words, for app.js's own tiles
+// refresh() also draws the Records panel's per-type G1s (#195, §6.1).
 // Same-origin relative paths only, through the page's scoped getJSON.
 (function () {
   "use strict";
@@ -98,7 +99,7 @@
     if (f.num && $(f.num))
       H.set(f.num, g && g.pts.length ? H.fmt(g.pts[g.pts.length - 1][1]) : "-");
   }
-  function paint() { FACTS.forEach(paintOne); }
+  function paint() { FACTS.forEach(paintOne); typesPaint(); }
 
   function refresh() {
     if (!H) return;
@@ -110,6 +111,7 @@
     // R11 keeps a scale across refreshes, not across scopes: another
     // scope's series is other data, and a Hybrid top would flatten it.
     if (S.scaleOf !== H.scope()) { S.scale = {}; S.scaleOf = H.scope(); }
+    typesRefresh();
     FACTS.forEach(function (f) {
       if (!held(f)) { S.got[f.id] = null; S.scale[f.id] = null; paintOne(f); return; }
       Promise.all([H.series(f.metric, "", tier, from, to), H.baseline(f.metric, "")]).then(function (r) {
@@ -128,6 +130,81 @@
         S.got[f.id] = { pts: [], band: null, err: true };
         paintOne(f);
       });
+    });
+  }
+
+  // §6.1's Records header (#195): records.rate by type, a 40 px G1 each
+  // for the TYPES_SHOWN busiest types of the last hour, so a burst in
+  // one type (a deauth flood) shows before it scrolls out of the
+  // ticker. The keys come most recently seen first (/api/keys); the
+  // first TYPES_READ are read, ranked by their hour's sum, largest
+  // first. Each glyph keeps its own scale (R11) and its number is the
+  // last bucket's rate (R7); the caption says the rest (R9). A type's
+  // name is the server's checked key, and is only ever textContent.
+  var TYPES_READ = 8, TYPES_SHOWN = 4;
+  var T = { gen: 0, got: [], scale: {}, scaleOf: "", total: 0, err: false };
+
+  function typesPaint() {
+    var box = $("ticker-types"), cap = $("ticker-types-note");
+    if (!box) return;
+    while (box.firstChild) box.removeChild(box.firstChild);
+    T.got.slice(0, TYPES_SHOWN).forEach(function (g) {
+      var sp = document.createElement("span");
+      sp.className = "rct";
+      var k = document.createElement("span");
+      k.className = "rct-k";
+      k.textContent = g.key;
+      var c = document.createElement("canvas");
+      c.className = "sg";
+      c.ariaLabel = g.key + " records per second, 1 h";
+      var v = document.createElement("b");
+      v.textContent = g.pts.length ? H.fmt(g.pts[g.pts.length - 1][1]) : "-";
+      sp.appendChild(k); sp.appendChild(c); sp.appendChild(v);
+      box.appendChild(sp);
+      if (c.clientWidth)
+        glyph.paint(c, glyph.g1(g.pts, g.band, { w: c.clientWidth, h: c.clientHeight,
+          from: g.from, to: g.to, step: g.step, sens: H.sens(), scale: T.scale[g.key] }), H.tok);
+    });
+    if (cap)
+      cap.textContent = T.err ? "records.rate by type: unavailable"
+        : !T.total ? "records.rate by type: no types yet"
+        : glyph.caption({ source: "records.rate by type", window: "1 h", tier: "fine",
+                          scale: "own, rec/s", n: Math.min(TYPES_SHOWN, T.got.length) + " of " +
+                          T.total + " types, busiest first" });
+  }
+
+  function typesRefresh() {
+    if (!$("ticker-types")) return;
+    var gen = ++T.gen;
+    var now = Math.floor(Date.now() / 1000), step = 10;
+    var to = now - now % step + step, from = to - 3600;
+    if (T.scaleOf !== H.scope()) { T.scale = {}; T.scaleOf = H.scope(); }
+    H.getJSON("/api/keys?metric=records.rate").then(function (j) {
+      var ks = (j.keys || []).filter(function (k) { return typeof k.key === "string"; })
+                             .slice(0, TYPES_READ);
+      T.total = num(j.total) ? j.total : ks.length;
+      return Promise.all(ks.map(function (k) {
+        return Promise.all([H.series("records.rate", k.key, "fine", from, to),
+                            H.baseline("records.rate", k.key)]).then(function (r) {
+          var s = r[0], ps = perSec(s.points, H.bands(s.points, r[1], s.kind, s.step), s.step);
+          var sum = 0;
+          ps.pts.forEach(function (p) { if (num(p[1])) sum += p[1]; });
+          var gw = glyph.win(ps.pts, from, to);
+          return { key: k.key, pts: ps.pts, band: ps.band, from: gw.from, to: gw.to,
+                   step: s.step, sum: sum };
+        }).catch(function () { return null; });
+      }));
+    }).then(function (rows) {
+      if (gen !== T.gen) return;
+      T.err = false;
+      T.got = (rows || []).filter(function (g) { return g && g.sum > 0; })
+        .sort(function (a, b) { return b.sum - a.sum || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0); });
+      T.got.forEach(function (g) { T.scale[g.key] = glyph.scale(g.pts, g.band, T.scale[g.key] || null); });
+      typesPaint();
+    }).catch(function () {
+      if (gen !== T.gen) return;
+      T.err = true; T.got = [];
+      typesPaint();
     });
   }
 
