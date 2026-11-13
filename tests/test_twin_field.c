@@ -324,7 +324,8 @@ static void test_sensor_health_carries_the_counts(void) {
              "\"twin193_named\":0,\"twin193_late_laa\":1,"
              "\"twin193_coincide\":1,\"twin193_excl_carrier\":0,"
              "\"twin193_excl_faint\":0,\"twin193_excl_sibling\":0,"
-             "\"twin193_excl_any\":0,\"jsonl_version\":\"%s\"}\n",
+             "\"twin193_excl_any\":0,\"db_max_mb\":-1,"
+             "\"jsonl_version\":\"%s\"}\n",
              (long long)c.since, SLOTH_JSONL_VERSION);
     ASSERT(strstr(body, want) != NULL);
 }
