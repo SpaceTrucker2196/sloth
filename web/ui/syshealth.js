@@ -3,9 +3,13 @@
 // and the source inventory"). window.SlothSysHealth, two hooks app.js
 // calls:
 //   SlothSysHealth.init(h)   once, main()'s helpers lent
-//   SlothSysHealth.show()    when the health view shows: loads /api/sys
+//   SlothSysHealth.show(p)   when the health view shows: loads /api/sys
 //                            into the sy-* containers, draws the trends,
-//                            and keeps both current while it is visible
+//                            and keeps both current while it is visible;
+//                            p.focus "db" scrolls to the storage trends
+// and a third, from the Overview's records tile (2026-11-12):
+//   SlothSysHealth.tile()    the stores' size line and sloth.db's 30 d
+//                            G1 with its limit, in the k-db-* elements
 // Three panels: every source and attached receiver as two tables (each
 // app.js's DataTable), the host's status as tiles, and the trends: G1
 // over its hour-of-week band for each figure, G5 as a source's up/down
@@ -25,7 +29,7 @@
   var POLL_MS = 15000, TREND_MS = 300000, CELLS = 96, MIN_N = 12;
   var WINS = { "3600": "1 h", "21600": "6 h", "86400": "24 h", "604800": "7 d", "2592000": "30 d" };
   var S = { gen: 0, tgen: 0, timer: 0, ttimer: 0, last: null, rows: [], hw: [],
-            scale: {}, scaleOf: "", trendAt: 0 };
+            scale: {}, scaleOf: "", trendAt: 0, focus: false, tgen2: 0, tscale: null };
   var ST = null, HT = null;
 
   function $(id) { return document.getElementById(id); }
@@ -134,6 +138,27 @@
     return { cells: cells, seen: seen, on: on, drops: drops };
   }
 
+  // The two SQLite stores (web_sysstat.h, 2026-11-12): a size against
+  // its limit in words. The server says the band (80 % near, 95 %
+  // full); the page words it. A limit of 0 is "no limit" and draws no
+  // rule; one sloth has not said is said to be unknown, never guessed.
+  var DB_NAME = { "sloth": "sloth.db", "slothweb": "slothweb.db" };
+  var DB_BAND = { "near": "near the limit", "full": "at the limit: the oldest rows are being trimmed" };
+  function dbLimitText(d) {
+    if (d.limit_state === "set" && num(d.limit_mb)) return "limit " + H.fmt(d.limit_mb) + " MB";
+    if (d.limit_state === "unlimited") return "no limit";
+    if (d.limit_state === "no_db") return "sloth writes no database (no --db)";
+    return "limit not reported by this sensor";
+  }
+  function dbLine(d) {
+    var name = DB_NAME[d.key] || d.key;
+    if (!d.configured) return name + " not configured";
+    if (!d.present || !num(d.mb)) return name + " not found";
+    return name + " " + H.fmt(d.mb) + (d.limit_state === "set" && num(d.limit_mb)
+      ? " of " + H.fmt(d.limit_mb) + " MB" + (num(d.used_pct) ? " (" + Math.round(d.used_pct) + " %)" : "")
+      : " MB, " + dbLimitText(d));
+  }
+
   // \u2500\u2500 the tables \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   // A state's mark is a shape and a word, never colour alone (R10).
   var MARK = { "ok": "\u25cf ok", "stale": "\u25d0 stale", "down": "\u2715 down",
@@ -239,9 +264,24 @@
     box.appendChild(t);
   }
   function bandWord(b) { return b ? "band: " + b : ""; }
+  // A tile per configured store, stream or none: slothweb measures them
+  // itself, so they are shown even with no sys_status.
+  function dbTiles(box, j) {
+    (j.storage || []).forEach(function (d) {
+      if (!d.configured) return;
+      var name = DB_NAME[d.key] || d.key, have = d.present && num(d.mb);
+      var v = !have ? "\u2715 not found" : d.limit_state === "set" && num(d.used_pct)
+        ? H.fmt(d.mb) + " MB (" + Math.round(d.used_pct) + " %)" : H.fmt(d.mb) + " MB";
+      var bits = [have ? dbLimitText(d) + (d.limit_from ? " (" + d.limit_from + ")" : "")
+                       : (d.file || name) + ": no file at the configured path"];
+      if (have && num(d.wal_bytes) && d.wal_bytes > 0) bits.push("WAL " + H.fmt(d.wal_bytes / 1048576) + " MB");
+      if (d.band) bits.push(bandWord(DB_BAND[d.band] || d.band));
+      tile(box, name, v, bits.join(", "), !have || d.band === "near" || d.band === "full" ? "health-bad" : "");
+    });
+  }
   function drawTiles(j) {
     var box = clear($("sy-tiles")), y = j.system;
-    if (!y) return;
+    if (!y) { dbTiles(box, j); return; }
     var stale = j.stale ? " stale" : "";
     tile(box, "cpu", num(y.cpu_pct) ? fx(y.cpu_pct, 1) + " %" : null,
          [bandWord(y.cpu_band), num(y.cpu_iowait_pct) ? "iowait " + fx(y.cpu_iowait_pct, 1) + " %" : ""]
@@ -275,6 +315,7 @@
              [s.label, s.status, num(s.capacity) && num(s.v) ? fx(s.v, 3) + " V" : ""]
                .filter(function (x) { return x; }).join(", "), stale);
     });
+    dbTiles(box, j);
   }
 
   // The beacon memory behind EVIL_TWIN's late-arrival signal, one line
@@ -364,6 +405,14 @@
     });
     if (j.system && num(j.system.undervolt))
       r.push({ g: "voltage", name: "under-voltage alarm", metric: "sys.undervolt", key: "", strip: "alarm" });
+    // The stores, on 0 to their limit with the limit drawn (base and
+    // limit); no hour-of-week band, which says nothing of a file's size.
+    (j.storage || []).forEach(function (d) {
+      if (!d.configured) return;
+      var lim = d.limit_state === "set" && num(d.limit_mb) && d.limit_mb > 0 ? d.limit_mb : null;
+      r.push({ g: "storage", name: DB_NAME[d.key] || d.key, metric: "sys.db_mb", key: d.key, unit: "MB", eps: 1,
+               noband: true, limit: lim, base: lim ? [0, lim] : null, lword: dbLimitText(d) });
+    });
     r.push({ g: "stream", name: "capture drops", metric: "sensor.drops", key: "", unit: "frames", eps: 1, counter: true });
     r.push({ g: "stream", name: "records", metric: "records.total", key: "", unit: "rec/s", eps: 1, perSec: true });
     (j.sources || []).forEach(function (s) {
@@ -401,9 +450,9 @@
     var id = w.metric + "|" + w.key;
     // R11: grown to hold the data, never shrunk on a refresh; R3: one
     // scale for a set, or the unit's own.
-    S.scale[id] = w.fixed ? w.fixed : shared || glyph.scale(pts, bd, S.scale[id] || null);
+    S.scale[id] = w.fixed ? w.fixed : shared || glyph.scale(pts, bd, S.scale[id] || w.base || null);
     glyph.paint(ui.c, glyph.g1(pts, bd, { w: ui.c.clientWidth, h: ui.c.clientHeight, from: gw.from, to: gw.to,
-      step: step, sens: H.sens(), scale: S.scale[id] }), H.tok);
+      step: step, sens: H.sens(), scale: S.scale[id], limit: w.limit }), H.tok);
     if (!pts.length) { ui.words.textContent = "no data: nothing reported in this window"; return; }
     var last = pts[pts.length - 1][1], t = trendOf(pts, from, to, w.eps);
     var b = bd && bd[bd.length - 1];
@@ -414,8 +463,9 @@
     // in F (owner, 2026-11-12). The glyph is the series' shape, unitless.
     var cv = w.conv || function (v) { return v; };
     ui.words.textContent = H.fmt(cv(last)) + " " + unit + ", " +
-      (b ? "band " + H.fmt(cv(Math.max(0, b[0]))) + " to " + H.fmt(cv(b[1])) : "band warming") + ", " +
-      (t.word === "warming" ? "trend warming (" + t.n + " samples)" : t.word + " over " + (gw.shrunk ? gw.text : WINS[String(to - from)] || glyph.dur(to - from)));
+      (w.noband ? "" : (b ? "band " + H.fmt(cv(Math.max(0, b[0]))) + " to " + H.fmt(cv(b[1])) : "band warming") + ", ") +
+      (t.word === "warming" ? "trend warming (" + t.n + " samples)" : t.word + " over " + (gw.shrunk ? gw.text : WINS[String(to - from)] || glyph.dur(to - from))) +
+      (w.lword ? ", " + w.lword + (w.limit ? " (the rule)" : "") : "");
     return pts.length;
   }
   function drawStrip(w, ui, s, from, to) {
@@ -449,14 +499,20 @@
     var temps = [], tempUi = [];
     function cap() {
       set("sy-trend-cap", glyph.caption({ source: "sys.*, source.*, sensor.drops, records.total", window: WINS[String(win)],
-        tier: tier, scale: "temperatures on one scale, cpu and memory 0 to 100 %, the rest each on its own (the units differ)",
+        tier: tier, scale: "temperatures on one scale, cpu and memory 0 to 100 %, a store 0 to its limit (the rule), " +
+          "the rest each on its own (the units differ)",
         n: n, state: done < want.length ? "loading" : "trend: the last third's median against the first third's, " +
           "past the series' own spread; warming under " + MIN_N + " samples or half the window" }));
     }
     want.forEach(function (w) {
-      if (w.g !== group) { group = w.g; box.appendChild(el("div", "label sy-tgroup", group)); }
+      if (w.g !== group) {
+        group = w.g;
+        var gl = box.appendChild(el("div", "label sy-tgroup", group));
+        // From the records tile: the storage rows in view, once.
+        if (group === "storage" && S.focus) { S.focus = false; gl.scrollIntoView(); }
+      }
       var ui = trendRow(box, w);
-      Promise.all([seriesOf(w.metric, w.key, tier, from, to), w.strip ? null : baselineOf(w.metric, w.key)])
+      Promise.all([seriesOf(w.metric, w.key, tier, from, to), w.strip || w.noband ? null : baselineOf(w.metric, w.key)])
         .then(function (r) {
           if (gen !== S.tgen) return;
           if (w.strip) n += drawStrip(w, ui, r[0], from, to) || 0;
@@ -481,8 +537,9 @@
     cap();
   }
 
-  function show() {
+  function show(p) {
     if (!H) return;
+    S.focus = !!(p && p.focus === "db");
     if (!S.timer) S.timer = setInterval(function () { if (visible()) load(); }, POLL_MS);
     S.trendAt = 0;
     load();
@@ -494,7 +551,52 @@
     var kept = H.prefGet("ctl.sy-win");
     if (typeof kept === "string" && WINS[kept]) w.value = kept;
     w.addEventListener("change", function () { H.prefSet("ctl.sy-win", w.value); trends(); });
+    var k = $("k-db");
+    if (k) k.addEventListener("click", toTrend);
   }
 
-  window.SlothSysHealth = { init: init, show: show };
+  // \u2500\u2500 the Overview's records tile \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  // A line per store under the tile's own figures, and sloth.db's size
+  // over 30 days (the hour tier; 24 h of the fine tier with no store) as
+  // G1 on 0 to its limit with the limit drawn: the long view of whether
+  // the file will reach its ceiling. slothweb.db's when slothweb has no
+  // sloth.db. A click goes to the health view's storage trends, not to
+  // the tile's own records view.
+  var TILE_WIN = 2592000;
+  function tile() {
+    if (!H || !$("k-db")) return;
+    var gen = ++S.tgen2;
+    getJSON("/api/sys").then(function (j) {
+      if (gen !== S.tgen2) return;
+      var st = (j.storage || []).filter(function (d) { return d.configured; });
+      set("k-db-sub", st.length ? st.map(dbLine).join(", ") : "no store configured");
+      var d = st.filter(function (x) { return x.key === "sloth"; })[0] || st[0];
+      var c = $("k-db-spark");
+      if (!d || !c) return;
+      var lim = d.limit_state === "set" && num(d.limit_mb) && d.limit_mb > 0 ? d.limit_mb : null;
+      var tier = H.storeOn() ? "hour" : "fine", step = tier === "hour" ? 3600 : 10;
+      var win = tier === "hour" ? TILE_WIN : 86400;
+      var now = Math.floor(Date.now() / 1000), to = now - now % step + step, from = to - win;
+      c.ariaLabel = (DB_NAME[d.key] || d.key) + "'s size on disk, " + glyph.dur(win) +
+                    (lim ? ", on 0 to its limit, the limit drawn" : ", " + dbLimitText(d));
+      return seriesOf("sys.db_mb", d.key, tier, from, to).then(function (s) {
+        if (gen !== S.tgen2) return;
+        var gw = glyph.win(s.points, from, to);
+        S.tscale = glyph.scale(s.points, null, S.tscale || (lim ? [0, lim] : null));
+        glyph.paint(c, glyph.g1(s.points, null, { w: c.clientWidth, h: c.clientHeight, from: gw.from, to: gw.to,
+          step: s.step || step, sens: H.sens(), scale: S.tscale, limit: lim }), H.tok);
+      });
+    }).catch(function () {
+      if (gen !== S.tgen2) return;
+      set("k-db-sub", "store sizes unavailable");
+    });
+  }
+  function toTrend(e) {
+    // Inside the tile's link: this part goes elsewhere.
+    e.preventDefault();
+    e.stopPropagation();
+    location.hash = "#health?focus=db";
+  }
+
+  window.SlothSysHealth = { init: init, show: show, tile: tile };
 })();

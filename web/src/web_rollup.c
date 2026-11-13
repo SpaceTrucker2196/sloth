@@ -140,6 +140,10 @@ const web_metric_t web_metric_defs[WM_COUNT] = {
                     "source_status state by name: 1 ok, 0 stale or down; not "
                     "sampled while not_configured (a bucket's min says whether "
                     "it was up throughout)", "0/1" },
+    [WM_SYS_DB_MB] = { "sys.db_mb", WEB_MK_GAUGE, WEB_KC_SYS, "sys",
+                       "slothweb's own stat() of sloth.db (key \"sloth\") and "
+                       "slothweb.db (key \"slothweb\"), the main file plus its "
+                       "-wal, when a sys_status arrives", "MB" },
 };
 
 int web_metric_is_rssi(int metric) {

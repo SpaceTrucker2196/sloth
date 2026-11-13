@@ -44,6 +44,7 @@
 #include "rf_distance.h"       /* est_dist_* (2026-10-26) */
 #include "probe_latency.h"     /* beacon.probe_lat (JSONL 1.6.0, #187 S3) */
 #include "alerts/twin_field.h" /* sensor_health twin193_* (JSONL 1.7.0, #193) */
+#include "db.h"                /* sensor_health db_max_mb (JSONL 1.7.0) */
 
 static FILE           *g_fp;
 /* Open refusal reason and write-failure count (#87), under g_mu. */
@@ -2301,6 +2302,9 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         int      aprs_configured, aprs_state, aprs_missing;
         int      aprs_read_err_any, aprs_bad_any, aprs_overflow_any;
         int      aprs_err_any;
+        /* --db's size ceiling (JSONL 1.7.0): a tune knob, so it moves
+         * only when the operator moves it. */
+        int      db_max_mb;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -2365,6 +2369,8 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.scope_gen   = s->scope_health.generation;
     sig.scope_dropped = capture_out_of_scope_dropped();
     sig.tuned         = tune_non_default();
+    const int db_cap_mb = db_is_open() ? db_max_mb() : -1;
+    sig.db_max_mb     = db_cap_mb;
     sig.mon_bad_clock = mon_bad_clock_total();
     /* The STATE, never the raw seconds. stale_secs ticks up every
      * second, so putting it in the change-only signature would make
@@ -2858,6 +2864,13 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
      * which is the point — a consumer holding one record can tell which
      * contract it was written under without a second source, and the
      * sensor that wrote it may be long gone. */
+    /* --db's size ceiling, db.max_mb in MiB (JSONL 1.7.0, additive):
+     * 0 unlimited, -1 with no database open. Its own member because
+     * `tuned` names only a non-default value and is cut at 256 bytes,
+     * so a consumer could not always tell the default from "not said";
+     * slothweb draws it as the limit on sloth.db's size. Before
+     * jsonl_version, which stays last. */
+    kv_int(buf, LINEBUF, &off, "db_max_mb", db_cap_mb);
     kv_str(buf, LINEBUF, &off, "jsonl_version", SLOTH_JSONL_VERSION);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);

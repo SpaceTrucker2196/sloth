@@ -278,6 +278,10 @@ void web_metrics_set_ble(web_metrics_t *m, struct web_ble *ble) {
     m->ble = ble;
 }
 
+void web_metrics_set_sys(web_metrics_t *m, struct web_sys *sys) {
+    m->sys = sys;
+}
+
 /* d frames from the transmitter at field on the record's channel. */
 static void mix_add(web_metrics_t *m, const web_jrec_t *r, const char *field,
                     int kind, const char *band, double d, long long now) {
@@ -664,6 +668,8 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
     } else if (!strncmp(t, "sys_s", 5) || !strcmp(t, "source_status")) {
         /* The sensor's host status and sources (web_sysstat.h). */
         web_sys_metrics(m->ru, r, now);
+        /* The stores' size, on sloth's minute cadence. */
+        if (m->sys && !strcmp(t, "sys_status")) web_sys_db_metrics(m->sys, m->ru, now);
     } else if (!strcmp(t, "sensor_health")) {
         /* The tick's own drops, libpcap's and the NIC's, on both
          * capture workers: already a delta (sloth's own pcap_stats()

@@ -2,7 +2,9 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "web_series.h"
 
@@ -12,6 +14,8 @@ int web_sys_init(web_sys_t *y) {
     memset(y, 0, sizeof(*y));
     y->undervolt = -1;
     y->sensor_seq = y->hw_seq = -1;
+    y->web_max_mb = -1;
+    y->db_sampled_s = -1;
     if (web_own_init(&y->own) != 0) return -1;
     return pthread_mutex_init(&y->mu, NULL) == 0 ? 0 : -1;
 }
@@ -66,6 +70,48 @@ void web_sys_keep(char *out, size_t cap, const char *s) {
     }
     memcpy(out, tmp, n);
     out[n] = '\0';
+}
+
+/* ── the two stores ──────────────────────────────────────────────── */
+
+void web_sys_set_dbs(web_sys_t *y, const char *sloth_db, const char *web_db, int web_max_mb) {
+    snprintf(y->db_path[WEB_SYS_DB_SLOTH], sizeof(y->db_path[0]), "%s", sloth_db ? sloth_db : "");
+    snprintf(y->db_path[WEB_SYS_DB_WEB], sizeof(y->db_path[0]), "%s", web_db ? web_db : "");
+    y->web_max_mb = web_db && web_db[0] ? web_max_mb : -1;
+}
+
+int web_sys_db_size(const char *path, long long *main_b, long long *wal_b) {
+    struct stat st;
+    char wal[4100];
+    *main_b = *wal_b = 0;
+    if (!path || !path[0] || stat(path, &st) != 0 || !S_ISREG(st.st_mode)) return -1;
+    *main_b = (long long)st.st_size;
+    int n = snprintf(wal, sizeof(wal), "%s-wal", path);
+    if (n > 0 && (size_t)n < sizeof(wal) && stat(wal, &st) == 0 && S_ISREG(st.st_mode))
+        *wal_b = (long long)st.st_size;
+    return 0;
+}
+
+static const char *const DB_KEY[WEB_SYS_DBS] = { "sloth", "slothweb" };
+
+void web_sys_db_metrics(web_sys_t *y, web_rollup_t *ru, long long now_s) {
+    if (!y || !ru) return;
+    pthread_mutex_lock(&y->mu);
+    int due = y->db_sampled_s < 0 || now_s / WEB_FINE_S != y->db_sampled_s / WEB_FINE_S;
+    if (due) y->db_sampled_s = now_s;
+    pthread_mutex_unlock(&y->mu);
+    if (!due) return;
+    for (int i = 0; i < WEB_SYS_DBS; i++) {
+        long long mb, wb;
+        if (web_sys_db_size(y->db_path[i], &mb, &wb) != 0) continue;
+        web_rollup_add(ru, WM_SYS_DB_MB, DB_KEY[i], (double)(mb + wb) / (1024.0 * 1024.0), now_s);
+    }
+}
+
+const char *web_sys_db_band(double mb, long long limit_mb) {
+    if (limit_mb <= 0 || !isfinite(mb)) return NULL;
+    double pct = 100.0 * mb / (double)limit_mb;
+    return pct >= WEB_SYS_DB_FULL_PCT ? "full" : pct >= WEB_SYS_DB_NEAR_PCT ? "near" : "ok";
 }
 
 /* ── record members, range-checked ───────────────────────────────── */
@@ -256,6 +302,52 @@ static void hw_apply(web_sys_t *y, const web_jrec_t *r) {
     h->known = jll(r, "known", 0, 1, &v) ? (int)v : 0;
 }
 
+/* sloth's db.max_mb from a sensor_health (web_sysstat.h): its own
+ * member, or an older sloth's `tuned` list. A record that says neither
+ * leaves what was known. */
+static void health_apply(web_sys_t *y, const web_jrec_t *r) {
+    long long v, n;
+    if (jll(r, "db_max_mb", -1, WEB_SLOTH_DB_MAX_MB_MAX, &v)) {
+        y->sloth_lim = v < 0 ? WEB_SYS_LIM_NO_DB : WEB_SYS_LIM_SAID;
+        y->sloth_max_mb = v < 0 ? 0 : v;
+        return;
+    }
+    const char *t = web_jl_str(r, "tuned");
+    if (!t || !jll(r, "tuned_count", 0, 1 << 16, &n)) return;
+    /* "a.b=1,db.max_mb=1024,c=2": the knob at the start or after a
+     * comma, its value all digits up to the next comma or the end. */
+    long long items = t[0] ? 1 : 0;
+    for (const char *p = t; *p; p++) if (*p == ',') items++;
+    for (const char *p = t; p && *p;) {
+        if (!strncmp(p, "db.max_mb=", 10)) {
+            const char *d = p + 10;
+            long long k = 0;
+            int nd = 0;
+            while (*d >= '0' && *d <= '9' && nd < 8) { k = k * 10 + (*d - '0'); d++; nd++; }
+            if (nd && (!*d || *d == ',') && k <= WEB_SLOTH_DB_MAX_MB_MAX) {
+                y->sloth_lim = WEB_SYS_LIM_TUNED;
+                y->sloth_max_mb = k;
+                return;
+            }
+            /* Named but unreadable: not the default either. */
+            y->sloth_lim = WEB_SYS_LIM_UNKNOWN;
+            y->sloth_max_mb = 0;
+            return;
+        }
+        const char *c = strchr(p, ',');
+        p = c ? c + 1 : NULL;
+    }
+    /* Not named: the default only when the list is whole (sloth cuts it
+     * at 256 bytes, and a cut list may have dropped the knob). */
+    if (items == n) {
+        y->sloth_lim = WEB_SYS_LIM_DEFAULT;
+        y->sloth_max_mb = WEB_SLOTH_DB_DEFAULT_MAX_MB;
+    } else {
+        y->sloth_lim = WEB_SYS_LIM_UNKNOWN;
+        y->sloth_max_mb = 0;
+    }
+}
+
 static int which(const char *t) {
     if (!t) return 0;
     if (!strcmp(t, "sys_status")) return 1;
@@ -267,7 +359,14 @@ static int which(const char *t) {
 
 void web_sys_record(web_sys_t *y, const web_jrec_t *r, long long now_ms) {
     if (y) web_own_record(&y->own, r, now_ms);
-    int w = which(web_jl_str(r, "type"));
+    const char *type = web_jl_str(r, "type");
+    if (y && type && !strcmp(type, "sensor_health")) {
+        pthread_mutex_lock(&y->mu);
+        health_apply(y, r);
+        pthread_mutex_unlock(&y->mu);
+        return;
+    }
+    int w = which(type);
     if (!y || !w) return;
     long long ts = web_jl_int(r, "ts", 0);
     pthread_mutex_lock(&y->mu);
@@ -456,6 +555,50 @@ int web_sys_route(web_sys_t *y, const char *query, long long now_s, long long no
         web_jw_raw(&w, ",\"product\":"); jw_strnull(&w, h->product);
         web_jw_raw(&w, ",\"driver\":"); jw_strnull(&w, h->driver);
         web_jw_raw(&w, ",\"ifaces\":"); jw_strnull(&w, h->ifaces);
+        web_jw_raw(&w, "}");
+    }
+    /* The two stores, measured now, stream or none. */
+    web_jw_raw(&w, "],\"storage\":[");
+    for (int i = 0; i < WEB_SYS_DBS; i++) {
+        const char *path = y->db_path[i];
+        long long mb_b = 0, wb_b = 0;
+        int there = web_sys_db_size(path, &mb_b, &wb_b) == 0;
+        double mb = (double)(mb_b + wb_b) / (1024.0 * 1024.0);
+        /* The limit, and how it is known: "set" or "unlimited" with
+         * where it came from, "unknown" (sloth has not said), "no_db"
+         * (sloth says it writes no database). */
+        long long lim = 0;
+        int known = 0;
+        const char *state = "unknown", *from = NULL;
+        if (i == WEB_SYS_DB_WEB) {
+            if (y->web_max_mb >= 0) { known = 1; lim = y->web_max_mb; from = "--web-max-mb"; }
+        } else if (y->sloth_lim == WEB_SYS_LIM_NO_DB) {
+            state = "no_db";
+            from = "sensor_health";
+        } else if (y->sloth_lim != WEB_SYS_LIM_UNKNOWN) {
+            known = 1;
+            lim = y->sloth_max_mb;
+            from = y->sloth_lim == WEB_SYS_LIM_SAID ? "sensor_health"
+                 : y->sloth_lim == WEB_SYS_LIM_TUNED ? "tuned" : "default";
+        }
+        if (known) state = lim > 0 ? "set" : "unlimited";
+        const char *slash = strrchr(path, '/');
+        char file[64];
+        web_sys_keep(file, sizeof(file), slash ? slash + 1 : path);
+        const char *band = there && lim > 0 ? web_sys_db_band(mb, lim) : NULL;
+        web_jw_raw(&w, i ? ",{\"key\":" : "{\"key\":"); web_jw_str(&w, DB_KEY[i]);
+        web_jw_raw(&w, ",\"configured\":"); web_jw_raw(&w, path[0] ? "true" : "false");
+        web_jw_raw(&w, ",\"file\":"); jw_strnull(&w, file);
+        web_jw_raw(&w, ",\"present\":"); web_jw_raw(&w, there ? "true" : "false");
+        web_jw_raw(&w, ",\"mb\":"); jw_num(&w, there, mb, 1);
+        web_jw_raw(&w, ",\"main_bytes\":"); jw_ll(&w, there, mb_b);
+        web_jw_raw(&w, ",\"wal_bytes\":"); jw_ll(&w, there, wb_b);
+        web_jw_raw(&w, ",\"limit_mb\":"); jw_ll(&w, known, lim);
+        web_jw_raw(&w, ",\"limit_state\":"); web_jw_str(&w, state);
+        web_jw_raw(&w, ",\"limit_from\":"); jw_strnull(&w, from);
+        web_jw_raw(&w, ",\"used_pct\":");
+        jw_num(&w, band != NULL, 100.0 * mb / (double)(lim > 0 ? lim : 1), 1);
+        web_jw_raw(&w, ",\"band\":"); jw_strnull(&w, band);
         web_jw_raw(&w, "}");
     }
     web_jw_raw(&w, "],\"records\":"); web_jw_int(&w, (long long)y->records);

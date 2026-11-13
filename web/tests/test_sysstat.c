@@ -22,7 +22,10 @@
 #include "web_routes.h"
 #include "web_scope.h"
 #include "web_sysstat.h"
+#include "wt_tmp.h"
 #include "wtest.h"
+
+#include <fcntl.h>
 
 #define T 1800000060LL
 
@@ -201,6 +204,12 @@ static void test_sys_nothing_yet(void) {
     WT_HAS(b, "{\"now\":1800000065,\"scope_note\":\"every scope: sloth's own state\",\"seen\":false,"
               "\"ts\":null,\"age_s\":null,\"seq\":null,\"interval_s\":null,\"stale\":false,"
               "\"system\":null,\"beacon_recall\":null,\"sensors\":[],\"sources\":[],\"receivers\":[],"
+              "\"storage\":[{\"key\":\"sloth\",\"configured\":false,\"file\":null,\"present\":false,"
+              "\"mb\":null,\"main_bytes\":null,\"wal_bytes\":null,\"limit_mb\":null,\"limit_state\":\"unknown\","
+              "\"limit_from\":null,\"used_pct\":null,\"band\":null},{\"key\":\"slothweb\",\"configured\":false,"
+              "\"file\":null,\"present\":false,\"mb\":null,\"main_bytes\":null,\"wal_bytes\":null,"
+              "\"limit_mb\":null,\"limit_state\":\"unknown\",\"limit_from\":null,\"used_pct\":null,"
+              "\"band\":null}],"
               "\"records\":0,\"rejected\":0,\"overflow\":0}");
     /* No module at all is a 503, not an empty answer. */
     H.sys = NULL;
@@ -256,8 +265,9 @@ static void test_sys_ingest_and_route(void) {
               "\"driver\":\"dvb_usb_rtl28xxu\",\"ifaces\":null},"
               "{\"key\":\"net:wlan0\",\"kind\":\"wifi\",\"bus\":\"sdio\",\"id\":\"02d0:a9a6\","
               "\"known\":0,\"desc\":null,\"vendor\":null,\"product\":null,"
-              "\"driver\":\"brcmfmac\",\"ifaces\":\"wlan0\"}],"
-              "\"records\":11,\"rejected\":0,\"overflow\":0}");
+              "\"driver\":\"brcmfmac\",\"ifaces\":\"wlan0\"}],\"storage\":[{\"key\":\"sloth\","
+              "\"configured\":false,");
+    WT_HAS(b, "\"band\":null}],\"records\":11,\"rejected\":0,\"overflow\":0}");
 }
 
 /* A host with neither /proc nor /sys reports no figure, and slothweb
@@ -624,6 +634,270 @@ static void test_sys_metrics(void) {
     web_rollup_destroy(&ru);
 }
 
+/* ── the two stores (2026-11-12) ─────────────────────────────────── */
+
+static char g_dbdir[TEST_TMP_MAX];
+
+static void db_dir(void) {
+    g_dbdir[0] = '\0';                  /* a fresh template every time */
+    test_tmp_tpl(g_dbdir, sizeof(g_dbdir), "sysdb_XXXXXX");
+    WT_ASSERT(mkdtemp(g_dbdir) != NULL);
+}
+
+/* A file of exactly n bytes (sparse: stat() says n). */
+static void sized(const char *dir, const char *name, long long n) {
+    char path[TEST_TMP_MAX + 32];
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
+    int fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0600);
+    WT_ASSERT(fd >= 0);
+    if (fd < 0) return;
+    WT_EQ(ftruncate(fd, (off_t)n), 0);
+    close(fd);
+}
+
+static void dbpath(char *out, size_t cap, const char *name) {
+    snprintf(out, cap, "%s/%s", g_dbdir, name);
+}
+
+/* The size is the main file plus its -wal, stat()ed; the -shm is not
+ * data. Missing, a directory and "" are not a size. Seen red with the
+ * -wal left out (3 MiB, not 4), and with S_ISREG dropped (a directory's
+ * own size reported as a store's). */
+static void test_sys_db_size(void) {
+    char a[TEST_TMP_MAX + 32], b[TEST_TMP_MAX + 32], d[TEST_TMP_MAX + 32];
+    long long m = -1, w = -1;
+    db_dir();
+    sized(g_dbdir, "a.db", 3LL << 20);
+    sized(g_dbdir, "a.db-wal", 1LL << 20);
+    sized(g_dbdir, "a.db-shm", 32768);
+    sized(g_dbdir, "b.db", 4096);
+    dbpath(a, sizeof(a), "a.db");
+    dbpath(b, sizeof(b), "b.db");
+    dbpath(d, sizeof(d), "nope.db");
+    WT_EQ(web_sys_db_size(a, &m, &w), 0);
+    WT_EQ(m, 3LL << 20);
+    WT_EQ(w, 1LL << 20);
+    WT_EQ(web_sys_db_size(b, &m, &w), 0);         /* no -wal: 0, not an error */
+    WT_EQ(m, 4096);
+    WT_EQ(w, 0);
+    WT_EQ(web_sys_db_size(d, &m, &w), -1);
+    WT_EQ(m, 0);
+    WT_EQ(web_sys_db_size(g_dbdir, &m, &w), -1);  /* a directory */
+    WT_EQ(web_sys_db_size("", &m, &w), -1);
+    WT_EQ(web_sys_db_size(NULL, &m, &w), -1);
+    WT_ASSERT(web_sys_db_band(10, 0) == NULL);    /* no limit: no band */
+    WT_ASSERT(!strcmp(web_sys_db_band(79.9, 100), "ok"));
+    WT_ASSERT(!strcmp(web_sys_db_band(80, 100), "near"));
+    WT_ASSERT(!strcmp(web_sys_db_band(94.9, 100), "near"));
+    WT_ASSERT(!strcmp(web_sys_db_band(95, 100), "full"));
+    WT_ASSERT(!strcmp(web_sys_db_band(300, 100), "full"));
+    WT_ASSERT(web_sys_db_band(NAN, 100) == NULL);
+    test_rm_tree(g_dbdir);
+}
+
+/* A sensor_health line with these members after the fixed head. */
+static void health_line(const char *members) {
+    char line[512];
+    snprintf(line, sizeof(line), "{\"type\":\"sensor_health\",\"ts\":1800000060,%s}", members);
+    feed(line);
+}
+
+static int starts(const char *s, const char *prefix) {
+    return !strncmp(s, prefix, strlen(prefix));
+}
+
+static const char *storage_of(const char *key) {
+    char want[48];
+    snprintf(want, sizeof(want), "{\"key\":\"%s\",", key);
+    const char *b = strstr(body_of(g_out), "\"storage\":[");
+    return b ? strstr(b, want) : NULL;
+}
+
+/* The limits: slothweb's own --web-max-mb; sloth's from sensor_health's
+ * db_max_mb (JSONL 1.7.0), 0 unlimited and -1 no database, else an
+ * older sloth's tuned list. Hostile values leave what was known. Each
+ * seen red: the tuned fallback taking a cut list's silence for the
+ * default (a list of two items under tuned_count 3 said 512); a
+ * db_max_mb out of range taken (99999999999); "db.max_mb=12abc" read
+ * as 12. */
+static void test_sys_db_limits(void) {
+    char sp[TEST_TMP_MAX + 32], wp[TEST_TMP_MAX + 32];
+    web_health_t H;
+    fresh();
+    db_dir();
+    sized(g_dbdir, "sloth.db", 400LL << 20);
+    sized(g_dbdir, "sloth.db-wal", 12LL << 20);
+    sized(g_dbdir, "slothweb.db", 250LL << 20);
+    dbpath(sp, sizeof(sp), "sloth.db");
+    dbpath(wp, sizeof(wp), "slothweb.db");
+    web_sys_set_dbs(&Y, sp, wp, 256);
+    health(&H, T + 5);
+    /* Measured with no stream at all; sloth's limit not said yet. */
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    const char *e = storage_of("sloth");
+    WT_ASSERT(e != NULL);
+    if (e) WT_ASSERT(starts(e, "{\"key\":\"sloth\",\"configured\":true,\"file\":\"sloth.db\",\"present\":true,"
+                                 "\"mb\":412.0,\"main_bytes\":419430400,\"wal_bytes\":12582912,\"limit_mb\":null,"
+                                 "\"limit_state\":\"unknown\",\"limit_from\":null,\"used_pct\":null,\"band\":null}"));
+    e = storage_of("slothweb");
+    WT_ASSERT(e != NULL);
+    /* 250 of 256: 97.7 %, full. */
+    if (e) WT_ASSERT(starts(e, "{\"key\":\"slothweb\",\"configured\":true,\"file\":\"slothweb.db\",\"present\":true,"
+                                 "\"mb\":250.0,\"main_bytes\":262144000,\"wal_bytes\":0,\"limit_mb\":256,"
+                                 "\"limit_state\":\"set\",\"limit_from\":\"--web-max-mb\",\"used_pct\":97.7,"
+                                 "\"band\":\"full\"}"));
+    /* sensor_health's own member. */
+    health_line("\"tuned_count\":0,\"tuned\":\"\",\"db_max_mb\":1024,\"jsonl_version\":\"1.7.0\"");
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    e = storage_of("sloth");
+    WT_ASSERT(e && strstr(e, "\"limit_mb\":1024,\"limit_state\":\"set\",\"limit_from\":\"sensor_health\","
+                             "\"used_pct\":40.2,\"band\":\"ok\"}"));
+    /* 412 of 500 is 82.4 %: near. */
+    health_line("\"db_max_mb\":500");
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    e = storage_of("sloth");
+    WT_ASSERT(e && strstr(e, "\"limit_mb\":500,\"limit_state\":\"set\",\"limit_from\":\"sensor_health\","
+                             "\"used_pct\":82.4,\"band\":\"near\"}"));
+    /* 0 is unlimited: no percentage, no band. */
+    health_line("\"db_max_mb\":0");
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    e = storage_of("sloth");
+    WT_ASSERT(e && strstr(e, "\"limit_mb\":0,\"limit_state\":\"unlimited\",\"limit_from\":\"sensor_health\","
+                             "\"used_pct\":null,\"band\":null}"));
+    /* -1: sloth writes no database; the file is still measured. */
+    health_line("\"db_max_mb\":-1");
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    e = storage_of("sloth");
+    WT_ASSERT(e && strstr(e, "\"mb\":412.0,"));
+    WT_ASSERT(e && strstr(e, "\"limit_mb\":null,\"limit_state\":\"no_db\",\"limit_from\":\"sensor_health\","
+                             "\"used_pct\":null,\"band\":null}"));
+    /* Hostile db_max_mb: not a number, out of range, a float. None is
+     * taken; with no tuned list beside it, what was known stays. */
+    health_line("\"db_max_mb\":1024");
+    health_line("\"db_max_mb\":\"9\"");
+    health_line("\"db_max_mb\":99999999999");
+    health_line("\"db_max_mb\":-7");
+    health_line("\"db_max_mb\":12.5");
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    e = storage_of("sloth");
+    WT_ASSERT(e && strstr(e, "\"limit_mb\":1024,\"limit_state\":\"set\",\"limit_from\":\"sensor_health\""));
+    /* An older sloth (no db_max_mb): the knob in tuned. */
+    health_line("\"tuned_count\":2,\"tuned\":\"ssh.brute_force=25,db.max_mb=2048\"");
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    e = storage_of("sloth");
+    WT_ASSERT(e && strstr(e, "\"limit_mb\":2048,\"limit_state\":\"set\",\"limit_from\":\"tuned\""));
+    /* A whole list without it: the default. */
+    health_line("\"tuned_count\":1,\"tuned\":\"ssh.brute_force=25\"");
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    e = storage_of("sloth");
+    WT_ASSERT(e && strstr(e, "\"limit_mb\":512,\"limit_state\":\"set\",\"limit_from\":\"default\""));
+    health_line("\"tuned_count\":0,\"tuned\":\"\"");
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    WT_ASSERT(storage_of("sloth") && strstr(storage_of("sloth"), "\"limit_from\":\"default\""));
+    /* A cut list (three knobs, two named) may have dropped it: unknown. */
+    health_line("\"tuned_count\":3,\"tuned\":\"a.b=1,c.d=2\"");
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    e = storage_of("sloth");
+    WT_ASSERT(e && strstr(e, "\"limit_mb\":null,\"limit_state\":\"unknown\",\"limit_from\":null"));
+    /* A malformed value is not read as its digits; nor a knob whose
+     * name only ends in db.max_mb. */
+    health_line("\"tuned_count\":1,\"tuned\":\"db.max_mb=12abc\"");
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    WT_ASSERT(storage_of("sloth") && strstr(storage_of("sloth"), "\"limit_state\":\"unknown\""));
+    health_line("\"tuned_count\":1,\"tuned\":\"xdb.max_mb=64\"");
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    WT_ASSERT(storage_of("sloth") && strstr(storage_of("sloth"), "\"limit_mb\":512,"));
+    /* A sensor_health is not counted as one of this module's records. */
+    WT_HAS(body_of(g_out), "\"records\":0,");
+    /* The file gone: measured as not there, limit kept. */
+    char gone[TEST_TMP_MAX + 32];
+    dbpath(gone, sizeof(gone), "sloth.db");
+    unlink(gone);
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    e = storage_of("sloth");
+    WT_ASSERT(e && strstr(e, "\"present\":false,\"mb\":null,\"main_bytes\":null,\"wal_bytes\":null,"
+                             "\"limit_mb\":512,\"limit_state\":\"set\",\"limit_from\":\"default\","
+                             "\"used_pct\":null,\"band\":null}"));
+    /* A hostile file name is kept to its JSON budget and escaped. */
+    test_rm_tree(g_dbdir);
+    web_sys_set_dbs(&Y, "/x/<b>\"q\".db", "", 256);
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    e = storage_of("sloth");
+    WT_ASSERT(e && strstr(e, "\"file\":\"\\u003cb\\u003e\\\"q\\\".db\""));
+    /* No store opened: not configured, and no --web-max-mb claimed. */
+    e = storage_of("slothweb");
+    WT_ASSERT(e && strstr(e, "\"configured\":false,\"file\":null,\"present\":false"));
+    WT_ASSERT(e && strstr(e, "\"limit_mb\":null,\"limit_state\":\"unknown\""));
+    fresh();
+}
+
+/* sys.db_mb: sampled on sys_status for each store that is there, at
+ * most once a fine bucket, and recorded at every tier (the 30 d and
+ * 400 d tiers are what the records tile and the long trend read). Seen
+ * red with the once-a-bucket test removed (n 2 in the first bucket);
+ * the no-sys and other-record absences are stated, not claimed. */
+static void test_sys_db_metrics(void) {
+    char sp[TEST_TMP_MAX + 32], wp[TEST_TMP_MAX + 32];
+    web_rollup_t ru;
+    web_metrics_t m;
+    web_point_t p;
+    char err[128];
+    fresh();
+    db_dir();
+    sized(g_dbdir, "sloth.db", 3LL << 20);
+    sized(g_dbdir, "sloth.db-wal", 1LL << 20);
+    dbpath(sp, sizeof(sp), "sloth.db");
+    dbpath(wp, sizeof(wp), "slothweb.db");            /* not there */
+    web_sys_set_dbs(&Y, sp, wp, 256);
+    g_clock = T;
+    WT_EQ(web_rollup_init(&ru, 64, 1, err, sizeof(err)), 0);
+    WT_EQ(web_metrics_init(&m, &ru, clock_fn, NULL), 0);
+    /* No sys wired: nothing. */
+    mrec(&m, STATUS);
+    WT_ASSERT(!web_rollup_has(&ru, WM_SYS_DB_MB, "sloth"));
+    web_metrics_set_sys(&m, &Y);
+    WT_EQ(web_metric_find("sys.db_mb"), WM_SYS_DB_MB);
+    WT_EQ(web_metric_defs[WM_SYS_DB_MB].kclass, WEB_KC_SYS);
+    WT_EQ(web_metric_defs[WM_SYS_DB_MB].kind, WEB_MK_GAUGE);
+    /* Another record type samples nothing. */
+    mrec(&m, TEMP0);
+    WT_ASSERT(!web_rollup_has(&ru, WM_SYS_DB_MB, "sloth"));
+    mrec(&m, STATUS);
+    mrec(&m, STATUS);                                /* the same bucket */
+    WT_EQ(point(&ru, WM_SYS_DB_MB, "sloth", &p), 1);
+    WT_ASSERT(fabs(web_point_value(WM_SYS_DB_MB, &p) - 4.0) < 1e-9);
+    WT_EQ(p.n, 1);
+    /* A store that is not there is a gap, never a zero. */
+    WT_ASSERT(!web_rollup_has(&ru, WM_SYS_DB_MB, "slothweb"));
+    /* It grows; the next minute's sample says so. */
+    sized(g_dbdir, "sloth.db", 5LL << 20);
+    sized(g_dbdir, "slothweb.db", 2LL << 20);
+    g_clock = T + 60;
+    mrec(&m, STATUS);
+    WT_EQ(point(&ru, WM_SYS_DB_MB, "sloth", &p), 1);
+    WT_ASSERT(fabs(web_point_value(WM_SYS_DB_MB, &p) - 6.0) < 1e-9);
+    WT_ASSERT(web_rollup_has(&ru, WM_SYS_DB_MB, "slothweb"));
+    /* An hour on: every tier has closed a bucket of it. */
+    web_rollup_close_due(&ru, T + 2 * 3600);
+    static web_qrow_t q[WEB_QUEUE_ROWS];
+    size_t n = web_rollup_take(&ru, q, WEB_QUEUE_ROWS);
+    int seen[WEB_TIER_COUNT] = { 0, 0, 0 };
+    double hour_mean = -1;
+    for (size_t i = 0; i < n; i++) {
+        if (q[i].metric != WM_SYS_DB_MB || strcmp(q[i].key, "sloth")) continue;
+        seen[q[i].tier]++;
+        if (q[i].tier == WEB_TIER_HOUR) hour_mean = q[i].sum / (double)q[i].n;
+    }
+    WT_EQ(seen[WEB_TIER_FINE], 2);
+    WT_EQ(seen[WEB_TIER_MINUTE], 2);
+    WT_EQ(seen[WEB_TIER_HOUR], 1);
+    WT_ASSERT(fabs(hour_mean - 5.0) < 1e-9);
+    web_metrics_destroy(&m);
+    web_rollup_destroy(&ru);
+    test_rm_tree(g_dbdir);
+    fresh();
+}
+
 /* ── the page's words: syshealth.js's pure half, ported ──────────── */
 
 #define CELLS 96
@@ -838,7 +1112,7 @@ static void test_sys_strip_rule(void) {
 static char *module_text(void) {
     const char *p = (const char *)web_page;
     const char *a = strstr(p, "// slothweb: the sensor's host status on the Sensor health view\n");
-    const char *b = a ? strstr(a, "  window.SlothSysHealth = { init: init, show: show };\n})();") : NULL;
+    const char *b = a ? strstr(a, "  window.SlothSysHealth = { init: init, show: show, tile: tile };\n})();") : NULL;
     WT_ASSERT(a != NULL && b != NULL);
     if (!a || !b) return NULL;
     size_t n = (size_t)(b - a);
@@ -864,7 +1138,7 @@ static void test_sys_page(void) {
     WT_HAS(p, "<option value=\"86400\" selected>24 h</option>\n        <option value=\"604800\">7 d</option>\n"
               "        <option value=\"2592000\">30 d</option>\n      </select></label></div>");
     /* app.js's two hooks, and nothing else of this module's in it. */
-    WT_HAS(p, "    if (v === \"health\" && window.SlothSysHealth) SlothSysHealth.show();\n");
+    WT_HAS(p, "    if (v === \"health\" && window.SlothSysHealth) SlothSysHealth.show(VP);\n");
     WT_HAS(p, "  if (window.SlothSysHealth) SlothSysHealth.init({ fmt: fmt, dur: dur, tok: tok, bands: bands,\n"
               "    sens: function () { return sens; }, storeOn: function () { return A.storeOn; },\n"
               "    prefGet: prefGet, prefSet: prefSet });\n");
@@ -898,7 +1172,9 @@ static void test_sys_page(void) {
     WT_HAS(m, "    t.appendChild(el(\"div\", \"sub\", value === null ? ABSENT : sub || \"\"));");
     /* The state strip is G5, called; the series G1 on a kept scale. */
     WT_HAS(m, "    glyph.paint(ui.c, glyph.g5(st.cells, { w: ui.c.clientWidth, h: ui.c.clientHeight, first: -1 }), H.tok);");
-    WT_HAS(m, "    S.scale[id] = w.fixed ? w.fixed : shared || glyph.scale(pts, bd, S.scale[id] || null);");
+    WT_HAS(m, "    S.scale[id] = w.fixed ? w.fixed : shared || glyph.scale(pts, bd, S.scale[id] || w.base || null);\n"
+              "    glyph.paint(ui.c, glyph.g1(pts, bd, { w: ui.c.clientWidth, h: ui.c.clientHeight, from: gw.from, to: gw.to,\n"
+              "      step: step, sens: H.sens(), scale: S.scale[id], limit: w.limit }), H.tok);");
     WT_HAS(m, "            var sh = temps.length ? glyph.shared(sets, S.scale.temp || null) : null;");
     /* With no report at all, the page says what that means. */
     WT_HAS(m, "or slothweb is reading a copied sloth.db with no live stream: sloth.db holds none of this, ");
@@ -924,6 +1200,62 @@ static void test_sys_page(void) {
               "    e.className = \"sub\" + (b && b.quiet ? \" health-bad\" : \"\");\n"
               "  }\n");
     WT_HAS(m, "    drawTiles(j);\n    drawRecall(j);\n");
+    /* The stores (2026-11-12): a tile each, a trend row each on 0 to
+     * the limit with the limit drawn, and the records tile's line and
+     * 30 d glyph. Each pinned whole, so a change to any of them fails
+     * here (the pins are presence checks; no absence is claimed).
+     */
+    WT_HAS(m, "  function dbLimitText(d) {\n"
+              "    if (d.limit_state === \"set\" && num(d.limit_mb)) return \"limit \" + H.fmt(d.limit_mb) + \" MB\";\n"
+              "    if (d.limit_state === \"unlimited\") return \"no limit\";\n"
+              "    if (d.limit_state === \"no_db\") return \"sloth writes no database (no --db)\";\n"
+              "    return \"limit not reported by this sensor\";\n"
+              "  }\n"
+              "  function dbLine(d) {\n"
+              "    var name = DB_NAME[d.key] || d.key;\n"
+              "    if (!d.configured) return name + \" not configured\";\n"
+              "    if (!d.present || !num(d.mb)) return name + \" not found\";\n"
+              "    return name + \" \" + H.fmt(d.mb) + (d.limit_state === \"set\" && num(d.limit_mb)\n"
+              "      ? \" of \" + H.fmt(d.limit_mb) + \" MB\" + (num(d.used_pct) ? \" (\" + Math.round(d.used_pct) + \" %)\" : \"\")\n"
+              "      : \" MB, \" + dbLimitText(d));\n"
+              "  }\n");
+    WT_HAS(m, "  var DB_BAND = { \"near\": \"near the limit\", \"full\": \"at the limit: the oldest rows are being trimmed\" };");
+    WT_HAS(m, "      tile(box, name, v, bits.join(\", \"), !have || d.band === \"near\" || d.band === \"full\" ? \"health-bad\" : \"\");");
+    WT_HAS(m, "    if (!y) { dbTiles(box, j); return; }");
+    WT_HAS(m, "    dbTiles(box, j);\n  }\n");
+    WT_HAS(m, "      var lim = d.limit_state === \"set\" && num(d.limit_mb) && d.limit_mb > 0 ? d.limit_mb : null;\n"
+              "      r.push({ g: \"storage\", name: DB_NAME[d.key] || d.key, metric: \"sys.db_mb\", key: d.key, unit: \"MB\", eps: 1,\n"
+              "               noband: true, limit: lim, base: lim ? [0, lim] : null, lword: dbLimitText(d) });");
+    WT_HAS(m, "        if (group === \"storage\" && S.focus) { S.focus = false; gl.scrollIntoView(); }");
+    WT_HAS(m, "      return seriesOf(\"sys.db_mb\", d.key, tier, from, to).then(function (s) {\n"
+              "        if (gen !== S.tgen2) return;\n"
+              "        var gw = glyph.win(s.points, from, to);\n"
+              "        S.tscale = glyph.scale(s.points, null, S.tscale || (lim ? [0, lim] : null));\n"
+              "        glyph.paint(c, glyph.g1(s.points, null, { w: c.clientWidth, h: c.clientHeight, from: gw.from, to: gw.to,\n"
+              "          step: s.step || step, sens: H.sens(), scale: S.tscale, limit: lim }), H.tok);\n");
+    WT_HAS(m, "      var tier = H.storeOn() ? \"hour\" : \"fine\", step = tier === \"hour\" ? 3600 : 10;\n"
+              "      var win = tier === \"hour\" ? TILE_WIN : 86400;\n");
+    WT_HAS(m, "  var TILE_WIN = 2592000;");
+    WT_HAS(m, "  function toTrend(e) {\n"
+              "    // Inside the tile's link: this part goes elsewhere.\n"
+              "    e.preventDefault();\n"
+              "    e.stopPropagation();\n"
+              "    location.hash = \"#health?focus=db\";\n"
+              "  }\n");
+    WT_HAS(m, "    var k = $(\"k-db\");\n    if (k) k.addEventListener(\"click\", toTrend);\n");
+    WT_HAS(m, "    S.focus = !!(p && p.focus === \"db\");");
+    /* The records tile keeps its own G1 and gains the stores' block,
+     * after it and inside the tile. */
+    const char *rt = strstr(p, "<a class=\"tile hud\" id=\"t-rate\" href=\"#records\">");
+    const char *rg = rt ? strstr(rt, "<canvas class=\"spark\" id=\"k-rate-spark\"") : NULL;
+    const char *kd = rt ? strstr(rt, "<span class=\"k-db\" id=\"k-db\"") : NULL;
+    const char *ke = rt ? strstr(rt, "</a>") : NULL;
+    WT_ASSERT(rt && rg && kd && ke && rg < kd && kd < ke);
+    WT_HAS(p, "          <span class=\"sub\" id=\"k-db-sub\">-</span>\n"
+              "          <canvas class=\"spark k-db-spark\" id=\"k-db-spark\" aria-label=\"sloth.db's size on disk, 30 d, with its limit\"></canvas>\n"
+              "        </span>\n      </a>");
+    WT_HAS(p, "    if (window.SlothSysHealth) SlothSysHealth.tile();\n");
+    WT_HAS(p, "\"activity\": [\"focus\"], \"health\": [\"focus\"],\n");
     /* Past 24 h needs the store's hour tier, and says so without one. */
     WT_HAS(m, "    if (win > 86400) return H.storeOn() ? \"hour\" : null;");
     free(m);
@@ -941,6 +1273,9 @@ void run_sysstat_tests(void) {
     WT_RUN(test_sys_beacon_recall);
     WT_RUN(test_sys_hostile);
     WT_RUN(test_sys_metrics);
+    WT_RUN(test_sys_db_size);
+    WT_RUN(test_sys_db_limits);
+    WT_RUN(test_sys_db_metrics);
     WT_RUN(test_sys_page_pure_half_is_pinned);
     WT_RUN(test_sys_trend_rule);
     WT_RUN(test_sys_strip_rule);

@@ -166,6 +166,10 @@ int main(int argc, char **argv) {
     web_metrics_set_mix(&g_metrics, &g_chmix);
     web_metrics_set_blemix(&g_metrics, &g_blemix);
     web_metrics_set_ble(&g_metrics, &g_ble);
+    /* The two stores' size (web_sysstat.h): sloth.db as configured,
+     * slothweb.db only when it opened, with its --web-max-mb. */
+    web_sys_set_dbs(&g_sys, cfg.sloth_db, have_store ? cfg.store_path : "", cfg.max_mb);
+    web_metrics_set_sys(&g_metrics, &g_sys);
     web_metrics_set_live(&g_metrics, &g_live);
     web_metrics_set_anomaly(&g_metrics, &g_anomaly);
     web_tsdb_set_mix(&g_tsdb, &g_chmix);

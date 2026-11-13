@@ -1378,7 +1378,7 @@
   // The parameters each view takes from the address, and nothing else:
   // what a drill-down link (an Overview tile) or a reload hands it.
   var PARAMS = { "alerts": ["state", "sev", "type", "q", "triage", "incident"], "alert": ["id"], "tacdb": ["id"],
-                 "devices": ["q"], "anomalies": ["state"], "activity": ["focus"],
+                 "devices": ["q"], "anomalies": ["state"], "activity": ["focus"], "health": ["focus"],
                  "ble": ["q"] };
   var view = "overview", VP = {};
   function hashQuery(v, p) {
@@ -1432,7 +1432,7 @@
     if (v === "records") recordsView();
     if (v === "health") healthView();
     // The host's status (syshealth.js, its own module): a no-op when not loaded.
-    if (v === "health" && window.SlothSysHealth) SlothSysHealth.show();
+    if (v === "health" && window.SlothSysHealth) SlothSysHealth.show(VP);
     if (DB_VIEWS.indexOf(v) >= 0) dbFresh();
     scopeView(v);
     // A tab's view is kept, for an address that names none; a
@@ -2074,6 +2074,8 @@
     // G1 on every other tile and on the strip (web/ui/facts.js, F1);
     // ble.devices is one of them now.
     if (window.SlothFacts) SlothFacts.refresh();
+    // The records tile's store sizes (syshealth.js, its own module).
+    if (window.SlothSysHealth) SlothSysHealth.tile();
     getJSON("/api/keys?metric=iface.rx_rate").then(function (j) {
       var ks = j.keys || [];
       // The keys are the scope's (the server's /api/keys): under

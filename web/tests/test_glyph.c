@@ -171,6 +171,8 @@ typedef struct {
     const double *scale;                       /* NULL for a fresh scale */
     int shade_on;                              /* V1, F13: an episode's window */
     double shade[2];
+    int limit_on;                              /* a reference value (a store's limit) */
+    double limit;
 } gopt_t;
 
 static void gl_dash(gmarks_t *g, double w, double h) {
@@ -209,6 +211,8 @@ static void gl_g1(const double (*pts)[2], int n, const double (*band)[4],
             gm_push(g, "band", bx, GY(band[i][1]), bw,
                     GY(band[i][0]) - GY(band[i][1]), "--data");
     }
+    if (o->limit_on && isfinite(o->limit) && o->limit >= lo && o->limit <= hi)
+        gm_push(g, "limit", 0, GY(o->limit), w, 1, "--sev-warn");
     double gap = step * 2.5;
     int dots = n < 5;
     double max = 0;
@@ -1141,6 +1145,16 @@ static void test_the_page_carries_the_ported_js(void) {
     /* V1: G1's words, the episode shade, the shared scale, the sort,
      * G4. */
     WT_HAS(p, "    return b > a ? \"\\u2191\" : b < a ? \"\\u2193\" : \"\\u2192\";");
+    /* The limit rule (2026-11-12), whole. */
+    WT_HAS(p, "      if (bw > 0) m.push([\"band\", bx, Y(b[1]), bw, Y(b[0]) - Y(b[1]), \"--data\"]);\n"
+              "    }\n"
+              "    // A reference value, opt.limit (a store's size limit, 2026-11-12):\n"
+              "    // one --sev-warn rule across the glyph at its height, under the\n"
+              "    // line, and only where the scale holds it. A caller that wants it\n"
+              "    // seen grows the scale to it (scale(pts, band, [0, limit])).\n"
+              "    if (gnum(opt.limit) && opt.limit >= lo && opt.limit <= hi)\n"
+              "      m.push([\"limit\", 0, Y(opt.limit), w, 1, \"--sev-warn\"]);\n"
+              "    var gap = step * GAP_STEPS, dots = pts.length < DOTS_BELOW, max = 0;\n");
     WT_HAS(p, "      var sa = X(Math.max(sh[0], from)), sb = X(Math.min(sh[1] + step, to));\n"
               "      if (sb > sa) m.push([\"shade\", sa, 0, Math.max(1, sb - sa), h, \"--signal\"]);");
     WT_HAS(p, "    for (var i = 0; sets && i < sets.length; i++) r = scale(sets[i].pts, sets[i].band, r);\n"
@@ -2672,6 +2686,55 @@ static void test_g1_episode_shade(void) {
     /* The line and the last value are unchanged by it. */
     WT_EQ(gm_count(&g, "line"), 5);
     WT_EQ(gm_count(&g, "last"), 1);
+}
+
+/* A reference value on G1 (2026-11-12, a store's size limit): one
+ * --sev-warn rule across the whole glyph at the limit's height, under
+ * the line, only where the scale holds it. A scale grown to [0, limit]
+ * puts it at the top. Seen red with the port's lo/hi test dropped (a
+ * rule drawn off the glyph). The order against the line is pinned,
+ * not seen red. The absence with no limit given is the JS's gnum()
+ * test; the port's limit_on mirrors it and is stated, not claimed. */
+static void test_g1_limit_line(void) {
+    double pts[6][2] = {{1000,10},{1010,20},{1020,30},{1030,40},{1040,50},{1050,60}};
+    gmarks_t g;
+    gopt_t o = g1opt();
+    gl_g1(pts, 6, NULL, NULL, &o, &g);
+    WT_EQ(gm_count(&g, "limit"), 0);
+    /* Inside the data's own scale (0..60): at its height. */
+    o.limit_on = 1; o.limit = 30;
+    gl_g1(pts, 6, NULL, NULL, &o, &g);
+    WT_EQ(gm_count(&g, "limit"), 1);
+    gmark_t lm = gm_get(&g, "limit");
+    WT_ASSERT(near(lm.x, 0) && near(lm.w, 100) && near(lm.h, 1));
+    WT_ASSERT(near(lm.y, 18 - 30.0 / 60 * 18));
+    WT_ASSERT(!strcmp(lm.tok, "--sev-warn"));
+    /* Under the line: before the first line mark. */
+    int li = -1, ll = -1;
+    for (int i = 0; i < g.n; i++) {
+        if (!strcmp(g.m[i].kind, "limit") && li < 0) li = i;
+        if (!strcmp(g.m[i].kind, "line") && ll < 0) ll = i;
+    }
+    WT_ASSERT(li >= 0 && ll >= 0 && li < ll);
+    /* Off the scale: not drawn at the edge, not drawn at all. */
+    o.limit = 1024;
+    gl_g1(pts, 6, NULL, NULL, &o, &g);
+    WT_EQ(gm_count(&g, "limit"), 0);
+    /* The caller's scale grown to [0, limit]: the rule at the top and
+     * the data low in the glyph. */
+    double lo, hi, prev[2] = { 0, 1024 };
+    gl_scale(pts, 6, NULL, NULL, prev, &lo, &hi);
+    WT_ASSERT(near(lo, 0) && near(hi, 1024));
+    double sc[2] = { lo, hi };
+    o.scale = sc;
+    gl_g1(pts, 6, NULL, NULL, &o, &g);
+    WT_EQ(gm_count(&g, "limit"), 1);
+    WT_ASSERT(near(gm_get(&g, "limit").y, 0));
+    WT_ASSERT(near(gm_get(&g, "last").y, 18 - 60.0 / 1024 * 18));
+    /* No data is still the dash alone. */
+    gl_g1(NULL, 0, NULL, NULL, &o, &g);
+    WT_EQ(g.n, 1);
+    WT_EQ(gm_count(&g, "dash"), 1);
 }
 
 /* R3, F6, §9: a shared-scale stack has one maximum, so the small key's
@@ -5051,6 +5114,7 @@ void run_glyph_tests(void) {
     WT_RUN(test_g6_reads_in_greyscale);
     WT_RUN(test_g1_words_trend);
     WT_RUN(test_g1_episode_shade);
+    WT_RUN(test_g1_limit_line);
     WT_RUN(test_shared_scale_has_one_maximum);
     WT_RUN(test_multiples_sort);
     WT_RUN(test_g4_warming_is_plain_rule);
