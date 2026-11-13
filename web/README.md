@@ -260,6 +260,7 @@ thread fails; slothweb is not running after either.
 | `slothweb: --sloth-db: empty or too long a path`, `--store: empty or too long a path`, `--pcap-dir: empty or too long a path` | Give a path, shorter than 4,080 bytes. |
 | `slothweb: --pcap-dir: at most N (the sensor's --pcap-dir and its --eapol-dir)` | Two directories at most: the sensor's `--pcap-dir`, and its `--eapol-dir` when it runs `--collect-handshakes`. |
 | `slothweb: --pcap-dir PATH given twice` | Name each directory once. |
+| `slothweb: --spectrum-dir: want an absolute path, under N bytes`, `--spectrum-request: want an absolute path, under N bytes` | The Spectrum tab's two paths are absolute, as the units that share them name them: `/var/lib/sloth-sdrsweep` and `/run/slothweb/sdrsweep.request` by default ([docs/wiki/sdr-sweep.md](../docs/wiki/sdr-sweep.md)). |
 | `slothweb: --web-serve-evidence-pcap with --web-allow-remote would hand remote peers evidence pcaps` | An evidence pcap (`<incident>-<event>-<RULE>.pcap`, from the sensor's `--eapol-dir`) may hold EAPOL/PMKID handshake material, so serving it to remote peers takes its own spelling: `--web-serve-evidence-pcap=remote`. Or drop one of the two flags. Exit 2. |
 | `slothweb: --sloth-db needs SQLite; this slothweb was built with WITH_SQLITE=0`, `--store needs SQLite; this slothweb was built with WITH_SQLITE=0`, `--web-allow-sql needs SQLite; this slothweb was built with WITH_SQLITE=0` | Rebuild with `make web` (SQLite is the default), or drop the flag. |
 | `slothweb: --sloth-db and --store name the same file (PATH): sloth.db is sloth's, the store is slothweb's own` | Point `--store` somewhere else. |
@@ -504,6 +505,8 @@ milestone (W0, M0 to M6; tracker #102).
 | `--peer-gnss-region-km N` | A GNSS event at two sites at most this far apart is regional ([Fleet](#fleet), #192 I6), 1..20000, default 50. A choice, not a sourced figure: how far a ground-level source reaches is not in the corpus. |
 | `--my-ssid SSID`, `--my-bssid MAC` | This site's own networks, the values its sloth is given with the same flags (repeatable, at most 16 of each, as sloth; [Fleet](#fleet), #192 I2, I3). Named in `/api/fleet/export` to a peer that asks with `ident=1` (they travel under the monitor-only rule, ADR 0009), and the baseline of the identity findings: a client elsewhere probing for them, this network's BSSID or SSID heard where it cannot reach. None by default; named on stderr at start. |
 | `--peer-allow-outside-tailnet` | Allow a `--peer` address outside `100.64.0.0/10` (a LAN peer, a loopback test). There is no TLS: the link you chose is the only protection, and each such peer is announced as a warning. |
+| `--spectrum-dir DIR` | `sloth-sdrsweep`'s state directory, read-only, for the Spectrum tab ([Spectrum](#spectrum)); default `/var/lib/sloth-sdrsweep`. Absolute. A directory that is not there is the tab's "not installed". |
+| `--spectrum-request PATH` | The empty file `POST /api/spectrum/run` creates, which `sloth-sdrsweep.path` watches ([Spectrum](#spectrum)); default `/run/slothweb/sdrsweep.request`, inside the unit's `RuntimeDirectory`. Absolute. |
 | `--help` | Usage. |
 
 Exit status: `0` after `SIGINT`/`SIGTERM`, `1` when the bind fails or
@@ -564,6 +567,8 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/gnss/sat?gnssid=&prn=&days=` | `200` JSON, one satellite's `gnss_sightings` over the window, oldest first, at most 400, as `[ts, el, az, cn0, used, health]`; `400` `bad_gnssid` / `bad_prn` / `bad_days` |
    | `GET /api/adsb/seen?days=&limit=&offset=&q=&fleet=` | `200` JSON from sloth.db's `adsb_aircraft`: the aircraft last seen in the last `days` (default 7), newest first, `limit` (1..100) from `offset`, `more` when there are others; with the peers' aircraft unless `fleet=0` ([Fleet](#fleet)); `q` a hex or callsign prefix (letters and digits, a leading `~`; anything else `400` `bad_q`); `"have":false` from a file older than v12; Monitor's and Hybrid's (Local `out_of_scope`, the query checked) |
    | `GET /api/adsb/aircraft?hex=&days=&fleet=` | `200` JSON, one aircraft's inventory row (`null` when not in the file) and its `adsb_sightings` over the window, oldest first, at most 400, as compact rows named in `cols`; with `fleet` naming the other hosts that heard it unless `fleet=0` ([Fleet](#fleet)); `400` `bad_hex` for anything but sloth's six lower-case hex digits (optionally `~`) |
+   | `GET /api/spectrum`, `GET /api/spectrum?status=1` | `200` JSON, the Spectrum tab ([Spectrum](#spectrum)): the sweep helper's status (`installed`, `state`, `running`, `queued`, `can_run`, `why_not`, `retry_after`, `status.json`'s members) and, without `status=1`, `"sweep"`: `sloth-sdrsweep`'s `latest.json` re-serialised by a strict reader, or `null` with `sweep_error` `too_large` (over 4 MiB), `invalid` or `unreadable`. Any other query `400`. Local: the status and `"out_of_scope":true` |
+   | `POST /api/spectrum/run` | ask for one sweep: the write gate, then an empty request file for `sloth-sdrsweep.path`; `202`, `409 running` or `queued`, `429 cooldown` with `Retry-After`, `503 not_installed` or `request_failed`; the body is not read; an agent header `403`; GET there `405 Allow: POST`; `--web-read-only` `405` |
    | `GET /api/aprs?limit=&call=` | `200` JSON, the APRS tab ([APRS](#aprs)): the `sensor_health` aprs block and the stations (live before gone, the most recently heard first, without tracks; `limit` 1..1024; as many as fit the 64 KB answer, `"cut":true` when the buffer stopped the list, `shown` how many); with `call=` (an AX.25 callsign) that one station with `track_pts` (`[ts, lat, lon]`, its last 32 positions) and `packets_recent` (its last 16 packets as rows named by `packet_cols`), `"station":null` when not kept. Under Local the query is checked, then `out_of_scope`. `400` names an unknown parameter, `bad_limit`, `bad_call` |
    | `GET /api/aprs/tracks?hours=` | `200` JSON, the Radar tab's APRS entities from sloth.db's `aprs_packets` (needs `--sloth-db`) over the last `hours` (1..24, default 24): stations by source call and, as entities of their own, objects and items by their name with the station that reported them as `via`; newest first, each a compact row named by `cols` (`key`, `object`, `via`, `symbol`, `last_seen` its newest packet of any kind, the newest position's `lat`, `lon`, `alt_m`, `speed_kt`, `course`, `pos_ts`, `moving`, the newest non-empty `status` and `comment` cut to 64, and `pts`, a moving entity's trail `[ts, lat, lon]` of at most 48 points, `[]` when stationary); at most 300, while a worst-case row still fits the 64 KB answer, `cut` when more; `bucket_s`; `"have":false` from a file older than v13; `400` `bad_hours` or an unknown parameter; Monitor's and Hybrid's (Local `out_of_scope`, the query checked) |
    | `GET /api/aprs/seen?days=&limit=&offset=&q=` | `200` JSON from sloth.db's `aprs_stations` (needs `--sloth-db`): the stations last heard in the last `days` (1..400, default 7), newest first, `limit` (1..100) a page from `offset`, `more` when another page follows; `q` a callsign prefix of `[0-9A-Za-z-]` (at most 9, upper-cased; anything else `400 bad_q`); the comment cut to 48. A file older than v13 answers `"have":false` and an empty list. Monitor's and Hybrid's |
@@ -1345,6 +1350,47 @@ and SSID escaped to six bytes a character) is 43.8 KB, held under 48 KB
 by `test_radar.c`. It takes
 no parameter (any is `400`), Local answers `out_of_scope` with the query
 checked, and a half whose table is not attached is `null`.
+
+## Spectrum
+
+The Spectrum tab (2026-11-13, owner request; [docs/wiki/sdr-sweep.md](../docs/wiki/sdr-sweep.md),
+`web_spectrum.c`, `web/ui/spectrum.js`) shows the last run of
+`sloth-sdrsweep`, a separate helper that sweeps an SDR the operator
+dedicated across 0.5-2000 MHz for about a minute. slothweb never drives
+the radio: it reads the helper's `latest.json` and `status.json`
+(`--spectrum-dir`), and its one write, the **Run 1-min sweep** button,
+creates an empty request file (`--spectrum-request`) that the
+operator's `sloth-sdrsweep.path` turns into a start. The request carries
+nothing; the POST's body is not read. The button asks first (the
+receiver is taken for about a minute; on a sensor where APRS shares it,
+APRS pauses ~1 min), then shows the run's row and step from
+`/api/spectrum?status=1` every 3 s, and is disabled with a countdown
+inside the cooldown (`429`).
+
+The waterfall is isometric, on a plain canvas: frequency across (log by
+default, a checkbox for linear), each sweep a row, the newest in front
+and older ones receding up and to the right, height and colour the
+max-hold level in dBFS (the palette's four heat stops, darkened toward
+the panel at the foot of each column so the rows read as a solid). Zoom
+presets (Full, HF 0.5-30, VHF 30-300, UHF 300-1000, L-band 1000-2000),
+a drag across the plot to zoom, a double-click for Full. Under it, a
+band-allocation strip (the US table, 47 CFR 2.106 simplified, for
+orientation: the sensor may be elsewhere). Above the ridges, labels on
+the N strongest peaks in view (frequency and band; a `clock harmonic?`
+dashed and marked `?`, an `internal` spur dim and marked `int`, the
+helper's own words in the list). Hovering names the frequency, the
+level, its SNR over that row's floor, the band and the nearest peak. The
+peak list under the plot is the canvas's words, every peak in view. The
+configured antenna is named in the header: a 2 m/70 cm antenna makes HF
+and L-band look empty, and the reader should know why.
+
+Everything read is another account's output: `latest.json` is opened
+without following a link, read only as a regular file of at most 4 MiB,
+and parsed by a strict reader that writes every string again through
+slothweb's escaper and checks every number against RFC 8259's grammar
+(nesting at most eight deep), so nothing of the file reaches the answer
+unescaped; `status.json` is one flat object through the stream's own
+decoder. A GET never writes. Tests: `web/tests/test_spectrum.c`.
 
 ## Lures and key harvesting
 

@@ -96,6 +96,9 @@ typedef struct {
     struct web_gnss     *gnss;
     struct web_adsb     *adsb;
     struct web_aprs     *aprs;
+    /* The Spectrum tab's state directory and request file
+     * (web_spectrum.h); NULL: /api/spectrum is 404. */
+    const struct web_spectrum *spectrum;
 } web_m4_t;
 
 /* In a route, once its parameters are checked: under check_only, an

@@ -1369,6 +1369,8 @@
                "lookup", "tacdb", "ble", "gnss", "adsb", "aprs", "radar", "fleet"];
   // The Probes view (web/ui/probes.js), a tab of its own.
   VIEWS.push("probes");
+  // The Spectrum tab (web/ui/spectrum.js), a tab of its own.
+  VIEWS.push("spectrum");
   // The views with a tab, and the drill-downs: the Alerts page (6),
   // an alert's page, the record ticker by type, the sensor's health.
   var NAV = VIEWS.concat(["alerts"]);
@@ -1417,6 +1419,8 @@
     if (v === "adsb" && window.SlothAdsb) SlothAdsb.show();
     // The APRS panel (aprs.js, its own module): a no-op when not loaded.
     if (v === "aprs" && window.SlothAprs) SlothAprs.show();
+    // The Spectrum tab (spectrum.js, its own module): a no-op when not loaded.
+    if (v === "spectrum" && window.SlothSpectrum) SlothSpectrum.show();
     // The Radar view (radar.js, its own module): a no-op when not loaded.
     if (v === "radar" && window.SlothRadar) SlothRadar.show();
     // The Probes view (probes.js, its own module): a no-op when not loaded.
@@ -1513,6 +1517,7 @@
   $("nav-gnss").addEventListener("click", function () { show("gnss"); });
   $("nav-adsb").addEventListener("click", function () { show("adsb"); });
   $("nav-aprs").addEventListener("click", function () { show("aprs"); });
+  $("nav-spectrum").addEventListener("click", function () { show("spectrum"); });
   $("nav-radar").addEventListener("click", function () { show("radar"); });
   $("nav-probes").addEventListener("click", function () { show("probes"); });
   $("nav-fleet").addEventListener("click", function () { show("fleet"); });

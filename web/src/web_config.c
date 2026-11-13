@@ -1,4 +1,5 @@
 #include "web_config.h"
+#include "web_spectrum.h"
 
 #include "web_slothdb.h"
 
@@ -35,6 +36,8 @@ void web_config_defaults(web_config_t *c) {
     c->retain_days = WEB_DEFAULT_RETAIN_DAYS;
     c->peer_interval_s = WEB_FLEET_INTERVAL_DEF;
     c->peer_gnss_region_km = WEB_FG_REGION_KM_DEF;
+    snprintf(c->spectrum_dir, sizeof(c->spectrum_dir), "%s", WEB_SPECTRUM_DIR);
+    snprintf(c->spectrum_request, sizeof(c->spectrum_request), "%s", WEB_SPECTRUM_REQUEST);
 }
 
 /* A decimal in [lo, hi], digits only. */
@@ -283,7 +286,8 @@ void web_usage(FILE *out) {
         "                [--peer NAME=URL]... [--peer-interval-secs N]\n"
         "                [--peer-allow-outside-tailnet]\n"
         "                [--peer-gnss-region-km N] [--my-ssid SSID]...\n"
-        "                [--my-bssid MAC]... [--help]\n"
+        "                [--my-bssid MAC]... [--spectrum-dir DIR]\n"
+        "                [--spectrum-request PATH] [--help]\n"
         "\n"
         "  --socket SPEC         sloth's data socket to read: unix:PATH or\n"
         "                        tcp:A.B.C.D:PORT / tcp:[V6]:PORT, literal\n"
@@ -364,6 +368,13 @@ void web_usage(FILE *out) {
         "                        Evidence pcaps (from --eapol-dir) are\n"
         "                        listed but withheld: they may hold\n"
         "                        EAPOL/PMKID handshake material.\n"
+        "  --spectrum-dir DIR    sloth-sdrsweep's state directory, read only\n"
+        "                        (default " WEB_SPECTRUM_DIR "):\n"
+        "                        the Spectrum tab's sweep and run status.\n"
+        "  --spectrum-request PATH\n"
+        "                        the empty file POST /api/spectrum/run\n"
+        "                        creates for sloth-sdrsweep.path (default\n"
+        "                        " WEB_SPECTRUM_REQUEST ").\n"
         "  --web-serve-evidence-pcap[=remote]\n"
         "                        serve evidence pcaps too; announced on\n"
         "                        stderr. With --web-allow-remote it is\n"
@@ -569,6 +580,22 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
                 fprintf(err, "slothweb: %s\n", msg);
                 return -1;
             }
+        } else if (!strcmp(a, "--spectrum-dir") || !strcmp(a, "--spectrum-request")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            int dir = !strcmp(a, "--spectrum-dir");
+            char *dst = dir ? c->spectrum_dir : c->spectrum_request;
+            /* Absolute, so the unit's sandbox and the path unit can name
+             * the same file; room left for "/latest.json". */
+            if (v[0] != '/' || strlen(v) >= sizeof(c->spectrum_dir) - 32) {
+                fprintf(err, "slothweb: %s: want an absolute path, under %zu bytes\n", a,
+                        sizeof(c->spectrum_dir) - 32);
+                return -1;
+            }
+            snprintf(dst, sizeof(c->spectrum_dir), "%s", v);
         } else if (!strcmp(a, "--pcap-dir")) {
             if (i + 1 >= argc) {
                 fprintf(err, "slothweb: %s needs an argument\n", a);

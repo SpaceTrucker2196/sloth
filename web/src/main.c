@@ -33,6 +33,7 @@
 #include "web_ptr.h"
 #include "web_rollup.h"
 #include "web_server.h"
+#include "web_spectrum.h"
 #include "web_slothdb.h"
 #include "web_sqlbox.h"
 #include "web_store.h"
@@ -59,6 +60,7 @@ static web_ble_t      g_ble;
 static web_gnss_t     g_gnss;
 static web_adsb_t     g_adsb;
 static web_aprs_t     g_aprs;
+static web_spectrum_t g_spectrum;
 static web_sys_t      g_sys;
 static web_lure_t     g_lure;
 static web_chain_t    g_chain;
@@ -256,6 +258,10 @@ int main(int argc, char **argv) {
     g_m4.gnss = &g_gnss;
     g_m4.adsb = &g_adsb;
     g_m4.aprs = &g_aprs;
+    /* The Spectrum tab reads sloth-sdrsweep's directory and can create
+     * one request file (web_spectrum.h); it never drives the radio. */
+    web_spectrum_init(&g_spectrum, cfg.spectrum_dir, cfg.spectrum_request);
+    g_m4.spectrum = &g_spectrum;
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));

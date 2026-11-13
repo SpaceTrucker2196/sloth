@@ -1,0 +1,114 @@
+# sloth-sdrsweep.service — one ~1-minute receive-only sweep of an SDR,
+# for slothweb's Spectrum tab.
+#
+# Installed by `sudo make install-service` to /etc/systemd/system, never
+# enabled by it; the helper is placed by `sudo make install` (only when
+# the build found SoapySDR). Recipe: docs/wiki/deployment.md, "SDR
+# sweep"; why it exists and why it is consistent with MISSION.md §2:
+# docs/wiki/sdr-sweep.md and the header of src/sdrsweep/main.c.
+#
+# Started by sloth-sdrsweep.path when slothweb creates the request file
+# (POST /api/spectrum/run), or by hand: `systemctl start
+# sloth-sdrsweep`. The request carries nothing: the helper reads its
+# settings from /etc/default/sloth-sdrsweep and nowhere else.
+#
+# A receiver another service holds (an APRS or ADS-B decoder) is that
+# service's until this one takes it: add a drop-in naming it, with
+# Conflicts= and an ExecStopPost= that starts it again
+# (docs/wiki/deployment.md has the recipe). This unit names no such
+# service itself; which one shares the radio is the site's business.
+
+[Unit]
+Description=sloth one-minute SDR sweep (receive only, for slothweb's Spectrum tab)
+Documentation=https://github.com/SpaceTrucker2196/sloth/wiki/sdr-sweep
+Documentation=https://github.com/SpaceTrucker2196/sloth/wiki/deployment
+
+[Service]
+Type=oneshot
+
+# Its own account (packaging/systemd/sloth-sdrsweep.sysusers.conf), not
+# DynamicUser=: a dynamic user's StateDirectory lives under
+# /var/lib/private, which is 0700, and slothweb (User=sloth) has to read
+# what this writes. Not User=sloth either: the helper has no business
+# near the sensor's database and evidence in /var/lib/sloth.
+User=sloth-sdrsweep
+Group=sloth-sdrsweep
+
+# The site's settings: SLOTH_SDRSWEEP_DEVICE, _ANTENNA, _GAIN, _F_LO_MHZ,
+# _F_HI_MHZ, _DURATION, _COOLDOWN. One variable each rather than one
+# argument string, because systemd splits $VAR on spaces and an antenna
+# is called "Antenna A".
+EnvironmentFile=-/etc/default/sloth-sdrsweep
+
+# latest.json, prev.json, status.json and spurs.json: world-readable,
+# because slothweb runs as another account. Nothing in them is the
+# sensor's: a spectrum, the receiver's name, the run's times.
+StateDirectory=sloth-sdrsweep
+StateDirectoryMode=0755
+UMask=0022
+
+# The request that started this run is consumed before it runs, so the
+# path unit re-arms: a request made during the run starts another (which
+# the cooldown then refuses). As root (`+`): /run/slothweb is slothweb's
+# directory, 0711, and this account cannot write it.
+ExecStartPre=+/bin/rm -f /run/slothweb/sdrsweep.request
+ExecStart=/usr/local/sbin/sloth-sdrsweep --out /var/lib/sloth-sdrsweep
+
+# The run is ~60 s plus at most one sweep (~20 s) plus up to 10 s waiting
+# for the device. On SIGTERM the helper finishes the step it is on,
+# deactivates and closes the stream and releases the device; a SIGKILL
+# mid-close wedges the SDRplay API service until it is restarted, so the
+# stop timeout is far longer than the close ever takes.
+TimeoutStartSec=300
+TimeoutStopSec=60
+KillSignal=SIGTERM
+
+# ── Privilege ────────────────────────────────────────────────────────────
+# None. The SDRplay API's client library talks to the root
+# sdrplay_apiService through POSIX shared memory in /dev/shm (shm_open,
+# mmap: no socket, no device node); the service does the USB. Other
+# SoapySDR drivers open their device nodes and need DeviceAllow= and a
+# group in a drop-in.
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=true
+
+# ── Filesystem ───────────────────────────────────────────────────────────
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# The private /dev keeps the host's /dev/shm (checked 2026-11-13 in a
+# transient unit: the SDRplay service's Glbl\sdrSrv* objects are
+# listed under PrivateDevices=yes).
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+
+# ── Kernel surface ───────────────────────────────────────────────────────
+# No network: the only IPC is shared memory. AF_UNIX stays because
+# SoapySDR loads every module in its search path, and one that probes
+# for a socket gets EAFNOSUPPORT rather than a crash.
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+RestrictNamespaces=true
+# Not RestrictRealtime=, and @resources is not filtered: vendor SDR
+# libraries raise their reader threads' priority, and a refusal there is
+# a failure mode nobody has measured on every driver.
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
+
+# ── Resources ────────────────────────────────────────────────────────────
+# ~30 MB of per-bin accumulators for 0.5-2000 MHz at 976 Hz, the
+# sample buffers, and whatever the driver allocates.
+MemoryMax=256M
+TasksMax=32

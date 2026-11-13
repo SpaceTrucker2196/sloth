@@ -1,0 +1,24 @@
+/* The Spectrum tab (spectrum.js, web_spectrum.h). The waterfall's
+ * colours are the palette's heat stops, read by the script at each
+ * draw; here only the chrome. */
+.specline { font-size: 12px; white-space: pre-wrap; margin: 2px 0 6px; }
+.specline > span.h1 { color: var(--heat-1); }
+.specline > span.h3 { color: var(--heat-3); }
+.specline > span.d-dim { color: var(--tui-dim); }
+.spec-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 12px; margin: 4px 0; }
+.spec-tools button.on { border-color: var(--signal); color: var(--signal); }
+#spec-zoom { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.spec-wrap { position: relative; }
+/* The waterfall sets its own pixel size from this box (spectrum.js draw()). */
+#spec-plot { display: block; width: 100%; height: 460px; cursor: crosshair; }
+.spec-tip { position: absolute; z-index: 2; max-width: 230px; padding: 4px 6px; font-size: 11px;
+  background: var(--panel); border: 1px solid var(--rule-hi); border-radius: var(--radius-sm);
+  pointer-events: none; }
+.spec-tip .d-dim { color: var(--tui-dim); }
+.specrow { display: grid; grid-template-columns: 11ch 9ch 8ch 8ch 7ch 5ch minmax(16ch, 1fr) 16ch;
+  gap: 0 1ch; font-size: 12px; padding: 1px 0 1px 4px; border-bottom: 1px dotted var(--rule); }
+.specrow.dhead { color: var(--muted); }
+/* A clock harmonic is a guess and an internal spur is the receiver's
+ * own: both dimmed, the words in NOTE carry which. */
+.specrow.clk { color: var(--muted); }
+.specrow.int { color: var(--faint); text-decoration: line-through; }

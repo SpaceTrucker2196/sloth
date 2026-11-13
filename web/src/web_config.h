@@ -84,6 +84,12 @@ typedef struct {
     /* This site's own networks (#192 I2, I3): --my-ssid, --my-bssid,
      * repeatable, the words sloth uses; none by default. */
     web_fleet_mine_t mine;
+    /* The Spectrum tab (web_spectrum.h): sloth-sdrsweep's state
+     * directory, read, and the request file slothweb creates. Defaults
+     * WEB_SPECTRUM_DIR and WEB_SPECTRUM_REQUEST, the installed units'
+     * paths. */
+    char     spectrum_dir[1024];      /* --spectrum-dir */
+    char     spectrum_request[1024];  /* --spectrum-request */
 } web_config_t;
 
 void web_config_defaults(web_config_t *c);

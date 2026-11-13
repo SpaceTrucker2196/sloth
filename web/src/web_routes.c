@@ -31,6 +31,7 @@
 #include "web_radar.h"
 #include "web_allkeys.h"
 #include "web_ssidview.h"
+#include "web_spectrum.h"
 
 static int route_scoped(const web_req_t *rq, const web_health_t *h,
                         int sse_room, char *out, size_t outsz, web_resp_t *r);
@@ -1085,6 +1086,104 @@ static int route_aprs(const web_req_t *rq, const web_health_t *h,
     return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
+/* /api/spectrum and /api/spectrum/run (web_spectrum.h): the latest
+ * sweep, and the request for another. The read path answers GET and
+ * HEAD and the write path POST only: a GET can never write. A POST the
+ * server did not gate before reading its body (a direct call) is gated
+ * here, by the write surface's own gate. */
+static int spectrum_json(const web_req_t *rq, int status, const char *body, size_t bl,
+                         const char *extra, char *out, size_t outsz, web_resp_t *r) {
+    char hdr[WEB_LIVE_HDR_RESERVE];
+    size_t hl;
+    if (fit(snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: no-store\r\n"
+        "%s"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", status, web_http_reason(status), bl, extra), sizeof(hdr), &hl) != 0)
+        return -1;
+    if (hl + bl > outsz) return -1;
+    r->status = status;
+    memmove(out + hl, body, rq->is_head ? 0 : bl);
+    memcpy(out, hdr, hl);
+    r->out_len = hl + (rq->is_head ? 0 : bl);
+    return 0;
+}
+
+static int route_spectrum(const web_req_t *rq, const web_health_t *h, int run,
+                          char *out, size_t outsz, web_resp_t *r) {
+    const web_spectrum_t *sp = h->m4 ? h->m4->spectrum : NULL;
+    if (!sp) {
+        r->status = 404;
+        r->out_len = web_http_response(404, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE, bl = 0;
+    char extra[96] = "";
+    int status = 200;
+    if (run != rq->is_post) {
+        snprintf(extra, sizeof(extra), "Allow: %s\r\n", run ? "POST" : "GET, HEAD");
+        bl = (size_t)snprintf(body, cap, "{\"error\":\"method_not_allowed\"}\n");
+        return spectrum_json(rq, 405, body, bl, extra, out, outsz, r);
+    }
+    if (run) {
+        if (!rq->gated) {
+            const char *why = NULL;
+            int g = web_frrs_gate(h->m4->frrs, rq, h->now_ms, &why, extra, sizeof(extra));
+            if (g) {
+                bl = (size_t)snprintf(body, cap, "{\"error\":\"%s\"}\n", why ? why : "refused");
+                return spectrum_json(rq, g, body, bl, extra, out, outsz, r);
+            }
+        }
+        if (web_spectrum_run(sp, h->wall_s, body, cap, &bl, &status, extra, sizeof(extra)) != 0) {
+            r->status = 503;
+            r->out_len = web_http_response(503, rq->is_head, out, outsz);
+            return r->out_len ? 0 : -1;
+        }
+        return spectrum_json(rq, status, body, bl, extra, out, outsz, r);
+    }
+    if (qlong(rq)) {
+        bl = web_series_error_json("query_too_long", body, cap);
+        if (!bl) return -1;
+        return json_answer(rq, h, 400, bl, out, outsz, r);
+    }
+    int none_here = h->sc && h->sc->scope == WEB_SCOPE_LOCAL;
+    char *big = NULL;
+    if (web_spectrum_get(sp, rq->query, h->wall_s, none_here, &big, &bl, &status) != 0 || !big) {
+        free(big);
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    if (fit(snprintf(out, outsz,
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: no-store\r\n"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", status, web_http_reason(status), bl), outsz, &r->out_len) != 0) {
+        free(big);
+        return -1;
+    }
+    r->status = status;
+    if (rq->is_head) {
+        free(big);
+        return 0;
+    }
+    r->body = (const unsigned char *)big;
+    r->body_owned = (unsigned char *)big;
+    r->body_len = bl;
+    return 0;
+}
+
 /* /api/radar (web_radar.h): the Radar view's Wi-Fi and BLE band census,
  * from the BLE tables and the FRRS ledger (h->m4->frrs). Both are
  * passive radio, so Monitor's and Hybrid's; under Local the query is
@@ -1932,6 +2031,10 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_merged(rq, h, MG_ADSB, NULL, out, outsz, r);
         if (!strcmp(rq->path, "/api/aprs"))
             return route_aprs(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/spectrum"))
+            return route_spectrum(rq, h, 0, out, outsz, r);
+        if (!strcmp(rq->path, "/api/spectrum/run"))
+            return route_spectrum(rq, h, 1, out, outsz, r);
         if (!strcmp(rq->path, "/api/sys"))
             return route_sys(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/lures"))

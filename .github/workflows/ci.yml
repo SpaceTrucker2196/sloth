@@ -25,11 +25,14 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
+      # libsoapysdr-dev: sloth-sdrsweep (src/sdrsweep/) is built only
+      # where pkg-config finds SoapySDR, so without it this job's six
+      # -Werror configs would never compile the helper.
       - name: Install dependencies
-        run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
+        run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev libsoapysdr-dev
 
       - name: Build
-        run: make
+        run: make && test -x sloth-sdrsweep
 
       - name: Test
         run: make test

@@ -1,0 +1,35 @@
+# /etc/default/sloth-sdrsweep — site configuration for
+# sloth-sdrsweep.service (docs/wiki/sdr-sweep.md).
+#
+# Read by systemd as an EnvironmentFile: KEY=value, one per line, no
+# shell expansion and no quoting (a value may contain spaces). `make
+# install-service` installs this file only when there is none, so an
+# edited copy is never replaced. Every line is optional; the values
+# below are the helper's own defaults, for an SDRplay RSPdx-R2.
+#
+# Nothing a browser sends reaches these: slothweb's "Run" button only
+# creates a request file, and the helper reads this file and its unit's
+# command line, never the request.
+#
+# The SoapySDR device string. Add serial=... when more than one is
+# attached (`SoapySDRUtil --find`); the string form, not key/value
+# pairs, is what opens an SDRplay through SoapySDRPlay3.
+#SLOTH_SDRSWEEP_DEVICE=driver=sdrplay
+#
+# The receive port the antenna is on. slothweb shows this name, so a
+# reader of the waterfall knows why bands far from the antenna's design
+# look empty.
+#SLOTH_SDRSWEEP_ANTENNA=Antenna A
+#
+# Fixed gain, gain mode off: SoapySDRPlay3's element names, in dB of
+# reduction (more IFGR is less gain).
+#SLOTH_SDRSWEEP_GAIN=IFGR=40,RFGR=3
+#
+# The span, in MHz, clamped to the device's tuning range.
+#SLOTH_SDRSWEEP_F_LO_MHZ=0.5
+#SLOTH_SDRSWEEP_F_HI_MHZ=2000
+#
+# Seconds of whole sweeps (each one a row of the waterfall), and the
+# least time, in seconds, between the end of one run and the next.
+#SLOTH_SDRSWEEP_DURATION=60
+#SLOTH_SDRSWEEP_COOLDOWN=600

@@ -841,26 +841,37 @@ void frrs_stat_inc(web_frrs_t *f, unsigned long *c) { stat_inc(f, c); }
 int web_frrs_gate(web_frrs_t *f, const web_req_t *rq, long long now_ms,
                   const char **why, char *extra, size_t extracap) {
     extra[0] = '\0';
-    if (!f) { *why = "no_store"; return 503; }
+    /* The Spectrum tab's request (web_spectrum.h) writes no store, so it
+     * is gated without one; every other write needs slothweb.db. */
+    int spectrum = !strcmp(rq->path, "/api/spectrum/run");
+    if (!f && !spectrum) { *why = "no_store"; return 503; }
     /* Whose write: a request with the agent header is held to the
      * agent's rule and no other, and one without it to the browser's,
      * unchanged (web_agent.h). A refused agent header is never tried
      * again as a browser's. */
-    int agent = web_agent_check(f->agent_secret, rq, why);
+    int agent = web_agent_check(f ? f->agent_secret : "", rq, why);
     if (agent < 0) {
-        stat_inc(f, &f->st.refused_agent);
+        if (f) stat_inc(f, &f->st.refused_agent);
         return 403;
     }
+    /* The radio is the operator's: no agent starts a sweep. */
+    if (agent && spectrum) { *why = "agent_path"; return 403; }
     if (!agent && !web_frrs_origin_ok(rq)) {
-        stat_inc(f, &f->st.refused_origin);
+        if (f) stat_inc(f, &f->st.refused_origin);
         *why = "bad_origin";
         return 403;
     }
     if (!agent && (rq->fetch_site_long ||
         (rq->fetch_site[0] && strcmp(rq->fetch_site, "same-origin") && strcmp(rq->fetch_site, "none")))) {
-        stat_inc(f, &f->st.refused_origin);
+        if (f) stat_inc(f, &f->st.refused_origin);
         *why = "bad_fetch_site";
         return 403;
+    }
+    /* Without a store there is no bucket either; the sweep's own
+     * cooldown bounds it (web_spectrum.h). */
+    if (!f) {
+        if (!web_frrs_ctype_ok(rq)) { *why = "bad_content_type"; return 415; }
+        return 0;
     }
     int cost = !strcmp(rq->path, "/api/frrs/import") ? WEB_FRRS_IMPORT_COST : 1;
     /* An agent's writes draw on a bucket of their own for the peer: it

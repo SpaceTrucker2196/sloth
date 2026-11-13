@@ -59,6 +59,10 @@ static const char *const POST_PATHS[] = {
     "/api/frrs/triage", "/api/frrs/tacdb/unit", "/api/frrs/tacdb/platform",
     "/api/frrs/tacdb/emitter", "/api/frrs/tacdb/dismiss", "/api/frrs/import",
     "/api/frrs/relate", "/api/frrs/note", "/api/frrs/triage/bulk", "/api/frrs/incident",
+    /* The Spectrum tab's one control (web_spectrum.h): it creates an
+     * empty request file in slothweb's own runtime directory, which
+     * the operator's sloth-sdrsweep.path acts on. */
+    "/api/spectrum/run",
     NULL
 };
 
@@ -320,6 +324,7 @@ int web_http_classify(const char *buf, size_t len, int *is_head) {
 const char *web_http_reason(int status) {
     switch (status) {
     case 200: return "OK";
+    case 202: return "Accepted";
     case 304: return "Not Modified";
     case 400: return "Bad Request";
     case 403: return "Forbidden";

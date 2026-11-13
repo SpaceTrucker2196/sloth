@@ -21,6 +21,7 @@
 @include gnss.css
 @include adsb.css
 @include aprs.css
+@include spectrum.css
 @include bledev.css
 @include radar.css
 @include allkeys.css
@@ -51,6 +52,7 @@
 @include gnss.js
 @include adsb.js
 @include aprs.js
+@include spectrum.js
 @include bledev.js
 @include radar.js
 @include ssid.js
@@ -87,6 +89,7 @@
       <li><button type="button" class="go" id="nav-radar">Radar</button></li>
       <li><button type="button" class="go" id="nav-tacdb">TACDB</button></li>
       <li><button type="button" class="go" id="nav-fleet">Fleet</button></li>
+      <li><button type="button" class="go" id="nav-spectrum">Spectrum</button></li>
     </ol></nav>
     <div class="scope">
       <div class="scope-g" id="scope" role="radiogroup" aria-label="capture scope: what the views show, by how it was captured">
@@ -503,6 +506,35 @@
       <div class="hscroll" id="aprs-seen-box"><div class="histrow dhead" id="aprs-seen-thead"></div><div id="aprs-seen-rows"></div></div>
       <div><button type="button" id="aprs-seen-more" hidden>more</button></div>
       <div class="sub" id="aprs-seen-note">every source callsign heard in the window, from sloth.db's aprs_stations (one row per call, kept as long as sloth's --db retention keeps entities): first and last heard, visits (each time it came back after an hour unheard), packets, whether it was ever heard direct, the best level, the last via, position, symbol and comment. Click a row for its history.</div>
+    </section>
+   </div>
+   <div id="v-spectrum" hidden>
+    <section class="panel">
+      <div class="label">spectrum <span class="sub" id="spec-meta"></span></div>
+      <div class="specline" id="spec-head" role="status" aria-label="sweep helper status"></div>
+      <div class="spec-tools">
+        <button type="button" id="spec-run" disabled aria-describedby="spec-run-note">Run 1-min sweep</button>
+        <span class="sub" id="spec-msg" role="status"></span>
+        <span class="sub" id="spec-err" role="alert"></span>
+      </div>
+      <span class="sub" id="spec-run-note">sloth-sdrsweep, a separate receive-only helper, sweeps the receiver the operator dedicated (antenna: <span id="spec-antenna">the configured antenna</span>) from 0.5 to 2000 MHz for about a minute; each whole sweep is one row. Running it takes the receiver for that minute: a decoder that shares it pauses ~1 min (APRS, where it is the one sharing). One run at a time, and one per cooldown. slothweb only asks: the request carries no setting, the helper reads the operator's /etc/default/sloth-sdrsweep. Bands far from the antenna's design look weak or empty.</span>
+    </section>
+    <section class="panel">
+      <div class="spec-tools">
+        <span id="spec-zoom" role="group" aria-label="zoom presets"></span>
+        <label><input type="checkbox" id="spec-log" checked> log frequency axis</label>
+        <label>label the <select id="spec-topn" aria-label="how many peaks to label"><option value="6">6</option><option value="12" selected>12</option><option value="24">24</option><option value="48">48</option></select> strongest peaks</label>
+      </div>
+      <div class="spec-wrap">
+        <canvas id="spec-plot" aria-label="isometric waterfall of the last sweep: frequency across, older sweeps receding up and to the right, height and colour the max-hold level in dBFS; the peak list below holds the same peaks as text" aria-describedby="spec-plot-note"></canvas>
+        <div class="spec-tip" id="spec-tip" role="tooltip" hidden></div>
+      </div>
+      <div class="sub" id="spec-plot-note">each row is one whole sweep's max-hold per 100 kHz, the newest in front; drag across the plot to zoom, double-click for the full span. The strip under the axis is the US frequency allocation table (47 CFR 2.106), simplified, for orientation only. A label marked ? sits on a multiple of the receiver's 24 MHz clock (a guess, dashed); one marked int matched a spur the receiver shows with no antenna (dim). Hover for the level, its SNR over that row's floor and the band.</div>
+    </section>
+    <section class="panel">
+      <div class="label">peaks <span class="sub" id="spec-peaks-count"></span></div>
+      <div class="hscroll" id="spec-peaks"></div>
+      <div class="sub">found at the FFT's full resolution (about 1 kHz) across the whole run: a frame-averaged level 6 dB over its step's floor on average, or a max-hold 16 dB over it in any row; neighbours within 50 kHz are one peak. SNR in dB over the step's median floor; dBFS with a full-scale tone at 0; ROWS the sweeps it was seen in. Observation only: no row here is a finding.</div>
     </section>
    </div>
    <div id="v-radar" hidden>
