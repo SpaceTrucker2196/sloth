@@ -341,3 +341,5 @@
 | f08488f | 2026-11-12T21:42:44Z | claude-opus-5-5 | 52 | 8459 | 8481742 | 17659 | 2.0070 | #187 S3 export: beacon.probe_lat, evict_probe_latency (JSONL 1.6.0) |
 | 3bdc863 | 2026-11-12T22:10:07Z | claude-opus-5-5 | 42 | 9059 | 8405609 | 20330 | 2.0251 | --monitor-iface: pin the 802.11 capture radio |
 | 693c829 | 2026-11-13T02:21:03Z | claude-opus-5-5 | 120 | 19197 | 8830158 | 217219 | 3.8882 | #200 /api/alerts filtered paging ends |
+| 3118b54d | 2026-11-13T02:09:15Z | claude-opus-5-5 | 150 | 28901 | 6734311 | 187998 | 5.9704 | expect.sh: end the alerts paging loop on an empty page or a stuck next_offset |
+| c023cf62 | 2026-11-13T02:45:54Z | claude-opus-5-5 | 662 | 258181 | 68276373 | 728589 | 45.3796 | Radar: devices at their most probable point, fleet areas as polygons, Wi-Fi hues |
