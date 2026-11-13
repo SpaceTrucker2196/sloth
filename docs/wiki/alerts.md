@@ -276,6 +276,15 @@ BSSID). Both are built to see what the flood rules miss: a harvest
 paced under their thresholds. Nothing transmits, and the handshake
 capture and export are unchanged. Every threshold is a judgement,
 labelled and tunable; the sources describe the mechanism, not a count.
+Since 2026-11-12 each tracker row is a numbered cluster: the alert
+detail ends `cluster #N`, the EAPOL records it counted carry the same
+number as `harvest_cluster_id` (JSONL 1.7.0) and the `[e]` view's `[g]`
+groups them. A `QUEUE_EVICT` release (Framing Frames, CVE-2022-47522)
+on one of the cluster's own (BSSID, station) pairs inside the window is
+named in the detail so the two incidents are read together; it moves no
+severity. Separately, an AP heard handing out the PMKID KDE in M1 with a
+PSK-family AKM is flagged harvest-friendly (`beacon.harvest_posture`,
+the `[e]` header) — a posture, not an alert.
 
 The tables the KARMA and harvest rules read (`KARMA_AP` and `KARMA_PROBE_FORGE`'s
 `[y]` rows, the harvest tracker's stations and chains) are on the stream

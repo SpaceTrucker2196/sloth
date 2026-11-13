@@ -32,6 +32,7 @@
 #include "views/dashboard.h"
 #include "views/pnl.h"
 #include "views/eapol.h"
+#include "harvest_track.h"
 #include "views/seqnum.h"
 #include "views/assoc.h"
 #include "views/channel.h"
@@ -388,6 +389,118 @@ static void test_eapol_view_renders_a_seeded_row(void) {
     ASSERT_EQ(tui_test_is_reverse(y, 1), 1);
 }
 
+/* The EAPOL view's cluster column and [g] drill-down (#172). Three
+ * rows: two M1s of cluster 7 (a station row with unanswered M1s, a
+ * finding) to two BSSIDs, one row of cluster 8 to another station. [g]
+ * on a cluster-7 row shows its rows alone under the summary line; the
+ * cluster-8 row is gone from the screen (seen red with row_shown()
+ * returning 1, then restored, which also turns the cursor assertions
+ * red); [g] again shows every row. [g] on a row with no cluster groups
+ * nothing: 0 is the every-row value, so that case holds by construction
+ * and its assertions pin it rather than guard a branch. */
+static void test_eapol_view_groups_a_cluster(void) {
+    static harvest_sta_t hs[1];
+    memset(hs, 0, sizeof(hs));
+    sloth_state_t *s = fresh(VIEW_EAPOL);
+    view_eapol_group_reset();
+    const uint8_t hcx[6]   = {0x02, 0xcc, 0x00, 0x00, 0x00, 0x01};
+    const uint8_t phone[6] = {0x02, 0xdd, 0x00, 0x00, 0x00, 0x01};
+    time_t now = time(NULL);
+    for (int i = 0; i < 4; i++) {
+        eapol_event_t *e = &s->eapol_events[i];
+        const uint8_t b[6] = {0x02, 0x00, 0x5e, 0x00, 0x01, (uint8_t)(i + 1)};
+        memcpy(e->bssid, b, 6);
+        memcpy(e->sta_mac, i == 2 ? phone : hcx, 6);
+        snprintf(e->ssid, sizeof(e->ssid), "Grp-%d", i);
+        e->msg_num   = 1;
+        e->has_pmkid = i != 2;
+        e->channel   = 6;
+        e->ts        = now - (i == 1 ? 75 : 0);
+        e->harvest_cluster_id = i == 2 ? 8 : (i == 3 ? 0 : 7);
+    }
+    s->eapol_count = 4;
+    memcpy(hs[0].sta, hcx, 6);
+    hs[0].cluster_id = 7;
+    hs[0].m1_bssids  = 2;
+    hs[0].unanswered = 2;
+    s->harvest_sta = hs;
+    s->harvest_sta_count = 1;
+
+    tui_draw(s);
+    ASSERT_SCREEN_HAS("clust");
+    int y0 = runner_screen_find("Grp-0");
+    ASSERT(y0 >= 0);
+    ASSERT_LINE_HAS(y0, "#7");
+    int y2 = runner_screen_find("Grp-2");
+    ASSERT(y2 >= 0);
+    ASSERT_LINE_HAS(y2, "#8");
+    ASSERT_SCREEN_LACKS("cluster #7");
+
+    /* A row with no cluster: nothing to group. */
+    s->eapol_sel = 3;
+    view_eapol_key(s, 'g');
+    ASSERT_EQ((int)view_eapol_group(), 0);
+    tui_draw(s);
+    ASSERT(runner_screen_find("Grp-2") >= 0);
+    ASSERT(runner_screen_find("Grp-3") >= 0);
+
+    s->eapol_sel = 0;
+    view_eapol_key(s, 'g');
+    ASSERT_EQ((int)view_eapol_group(), 7);
+    tui_draw(s);
+    ASSERT_SCREEN_HAS("cluster #7: STA 02:cc:00:00:00:01, 2 BSSIDs, 2 PMKID, "
+                      "1m15s, 2 rows - 2 of 2 M1s unanswered");
+    ASSERT(runner_screen_find("Grp-0") >= 0);
+    ASSERT(runner_screen_find("Grp-1") >= 0);
+    ASSERT_SCREEN_LACKS("Grp-2");
+    ASSERT_SCREEN_LACKS("Grp-3");
+
+    /* The cursor moves between the cluster's rows only. */
+    view_eapol_key(s, SLOTH_KEY_DOWN);
+    ASSERT_EQ(s->eapol_sel, 1);
+    view_eapol_key(s, SLOTH_KEY_DOWN);
+    ASSERT_EQ(s->eapol_sel, 1);
+    view_eapol_key(s, SLOTH_KEY_UP);
+    ASSERT_EQ(s->eapol_sel, 0);
+
+    view_eapol_key(s, 'g');
+    ASSERT_EQ((int)view_eapol_group(), 0);
+    tui_draw(s);
+    ASSERT(runner_screen_find("Grp-2") >= 0);
+    ASSERT_SCREEN_LACKS("cluster #7");
+    view_eapol_group_reset();
+}
+
+/* The selected row's AP posture: an AP heard handing out the PMKID KDE
+ * in M1, named harvest-friendly when its beacon offers a PSK-family
+ * AKM, and nothing for an AP never heard doing it. */
+static void test_eapol_view_names_the_ap_posture(void) {
+    harvest_clear();
+    sloth_state_t *s = fresh(VIEW_EAPOL);
+    view_eapol_group_reset();
+    const uint8_t ap[6]  = {0x02, 0x00, 0x5e, 0x00, 0x07, 0x01};
+    const uint8_t sta[6] = {0x02, 0xdd, 0x00, 0x00, 0x00, 0x07};
+    eapol_event_t *e = &s->eapol_events[0];
+    memcpy(e->bssid, ap, 6);
+    memcpy(e->sta_mac, sta, 6);
+    e->msg_num = 1;
+    e->ts = time(NULL);
+    s->eapol_count = 1;
+    memcpy(s->beacon_aps[0].bssid, ap, 6);
+    s->beacon_aps[0].akm_bits = 1u << 2;          /* 00-0F-AC:2 PSK */
+    s->beacon_count = 1;
+    tui_draw(s);
+    ASSERT_SCREEN_LACKS("harvest-friendly");
+    (void)harvest_note_eapol(ap, sta, 1, 1, 0, 0);
+    tui_draw(s);
+    ASSERT_SCREEN_HAS("AP 02:00:5e:00:07:01: harvest-friendly");
+    s->beacon_aps[0].akm_bits = 1u << 8;          /* 00-0F-AC:8 SAE */
+    tui_draw(s);
+    ASSERT_SCREEN_LACKS("harvest-friendly");
+    ASSERT_SCREEN_HAS("no PSK AKM on its beacon");
+    harvest_clear();
+}
+
 /* ── ASSERT(1) ratchet ───────────────────────────────────────
  *
  * A view test that ends in ASSERT(1) proves the draw returned, nothing
@@ -489,6 +602,8 @@ void run_views_render_tests(void) {
     RUN_TEST(test_the_tab_bar_wraps_without_splitting_a_label);
     RUN_TEST(test_channel_view_renders_a_seeded_row);
     RUN_TEST(test_eapol_view_renders_a_seeded_row);
+    RUN_TEST(test_eapol_view_groups_a_cluster);
+    RUN_TEST(test_eapol_view_names_the_ap_posture);
     RUN_TEST(test_no_smoke_asserts_in_converted_files);
     RUN_TEST(test_smoke_asserts_do_not_grow);
 }

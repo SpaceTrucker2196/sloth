@@ -56,6 +56,11 @@
 #define HARVEST_MAX_VICTIMS   8
 /* Evidence-ring IDs kept per exported row. */
 #define HARVEST_EV_IDS        8
+/* BSSIDs heard handing a station an M1 that carried the PMKID KDE, the
+ * harvest-friendly posture (harvest_ap_posture()). Full: least recently
+ * heard. 64, MAX_KARMA_APS's size: a property of APs in range, not of
+ * every station. */
+#define HARVEST_MAX_AP       64
 
 /* ── Thresholds (each argued here; registry rows in src/tune.c) ──
  *
@@ -115,6 +120,32 @@
  * is the harvesting run. Not tunable. */
 #define HARVEST_CHAIN_CRIT_VICTIMS 2
 
+/* ── Clusters (#172 follow-up, 2026-11-12) ─────────────────────
+ *
+ * Each station row and each chain row carries a cluster id, a uint32_t
+ * from one counter, never 0, assigned when the row is created and never
+ * reused while the process runs: a row that ages out of the window and
+ * comes back is a new cluster, which is the issue's (sta_mac,
+ * window_start) key without a second table. The id rides on:
+ *   - every eapol record the tracker counted (eapol_event_t.
+ *     harvest_cluster_id, from harvest_note_eapol()'s return);
+ *   - the harvest_station / harvest_chain records (`cluster_id`);
+ *   - the PMKID_HARVEST / HANDSHAKE_HARVEST details ("cluster #N"),
+ * so the alert, the evidence table and the EAPOL frames join on one
+ * number, and the EAPOL view's [g] groups the frames of one cluster.
+ *
+ * QUEUE_EVICT correlation. Framing Frames (CVE-2022-47522) reassociates
+ * under a station's address so the AP releases the station's queued
+ * frames; a harvester doing that solicits an M1 from the same AP in the
+ * same exchange. A cluster is marked when a QUEUE_EVICT release
+ * (src/queue_evict.h) on one of its own (BSSID, station) pairs — a
+ * target the station asked, or a chain's victim on the chain's BSSID —
+ * happened within harvest.window_s. The mark is a count and the newest
+ * pair, read by the rules into the detail so one incident names both;
+ * it moves no severity, because an uncorroborated release is how an
+ * ordinary roam looks (rule_queue_evict()), and two weak signals on one
+ * roam are not a strong one. */
+
 /* One soliciting station, as the PMKID_HARVEST rule reads it. Every
  * count is over the BSSIDs this station sent a (re)association request
  * to inside the window: the request is what proves the station was
@@ -131,6 +162,9 @@ typedef struct harvest_sta_s {
     int      ev_n;
     time_t   first_seen;
     time_t   last_seen;
+    uint32_t cluster_id;
+    int      qevict;            /* targets with a QUEUE_EVICT release */
+    uint8_t  qevict_bssid[6];   /* the newest of them */
 } harvest_sta_t;
 
 /* One BSSID's deauth-then-handshake chain, as HANDSHAKE_HARVEST reads
@@ -145,6 +179,9 @@ typedef struct harvest_chain_s {
     int      ev_n;
     time_t   first_seen;
     time_t   last_seen;
+    uint32_t cluster_id;
+    int      qevict;                           /* victims with a release */
+    uint8_t  qevict_sta[6];                    /* the newest of them */
 } harvest_chain_t;
 
 /* A (re)association request from `sta` to `bssid`. Opens the station's
@@ -155,9 +192,31 @@ void harvest_note_assoc_req(const uint8_t sta[6], const uint8_t bssid[6]);
  * when an M1 carried a PMKID KDE; `fresh_pair` when an M2 just
  * completed a new M1/M2 pair (the collector's candidate_message_pair,
  * replay counter checked), once per attempt; `ev` the frame's
- * evidence-ring ID or 0. */
-void harvest_note_eapol(const uint8_t bssid[6], const uint8_t sta[6],
-                        int msg, int pmkid, int fresh_pair, uint64_t ev);
+ * evidence-ring ID or 0. Returns the cluster the message was counted
+ * in, 0 for none (eapol_event_t.harvest_cluster_id): the chain's for
+ * the M2 that joined a victim to it, else the station row's for an M1
+ * or M2 on a target the station asked. An M3 or M4 is counted nowhere. */
+uint32_t harvest_note_eapol(const uint8_t bssid[6], const uint8_t sta[6],
+                            int msg, int pmkid, int fresh_pair, uint64_t ev);
+
+/* Harvest-friendly AP posture (#172): 1 when `bssid` has been heard
+ * sending an M1 that carried the PMKID KDE, to any station, 0 when not
+ * (or never heard). A property of the AP, not an attacker signal: an AP
+ * that hands the KDE to whoever associates hands it to a harvester too,
+ * and Steube's attack needs nothing else [steube-2018-pmkid.md, "If an
+ * AP recieves our association request packet and supports sending
+ * PMKID"]. Whether that value is attackable offline is the AKM's to
+ * say — a PSK-family AKM derives the PMK from the passphrase; SAE and
+ * 802.1X do not — so a reader combines this with the beacon's akm_bits
+ * (harvest_posture_psk()). No ageing beyond HARVEST_MAX_AP's eviction:
+ * a posture is a configuration, not an event. */
+int harvest_ap_posture(const uint8_t bssid[6]);
+
+/* The posture as the beacon record and the EAPOL view state it: -1 when
+ * `bssid` was never heard handing out the KDE, 1 when it was and
+ * `akm_bits` (00-0F-AC types, rsn_ie.h) offers a PSK-family AKM, 0 when
+ * it was but offers none (SAE, 802.1X, or no RSN element on file). */
+int harvest_posture_psk(const uint8_t bssid[6], uint32_t akm_bits);
 
 /* One distinct (non-retransmitted) deauthentication or disassociation
  * frame. Only frames whose transmitter address is the BSSID count —
@@ -171,6 +230,12 @@ void harvest_note_deauth(const uint8_t bssid[6], const uint8_t src[6],
  * module's per-poll copies (pointers, for the stack reason
  * s->karma_forge is one). */
 void harvest_snapshot(sloth_state_t *s);
+/* The published row of cluster `id` (this poll's copies), NULL when no
+ * live row has it: the EAPOL view's [g] summary. Poll thread. */
+const harvest_sta_t   *harvest_find_sta_cluster(const sloth_state_t *s,
+                                                uint32_t id);
+const harvest_chain_t *harvest_find_chain_cluster(const sloth_state_t *s,
+                                                  uint32_t id);
 void harvest_clear(void);
 /* Rows, targets, notes and victims displaced by the bounds since the
  * last clear. */

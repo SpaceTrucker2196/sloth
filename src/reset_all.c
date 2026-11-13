@@ -80,6 +80,7 @@
 #include "views/channel.h"
 #include "views/dashboard.h"
 #include "views/procs.h"
+#include "views/eapol.h"
 #include "tune.h"
 #include "twins.h"
 #include "wifi_baseline.h"

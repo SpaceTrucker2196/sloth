@@ -241,18 +241,70 @@ silently treated as "no key data".
 ## View
 
 ```
- EAPOL events: 5 (2 PMKID / 1 full handshake)  [up/dn] navigate  [c] clear
-
- age       msg  BSSID              STA                ch   sig  notes
- --------  ---  -----------------  -----------------  ---  ----  --------------------------------
- 12s       M2   c8:0a:a9:1b:2c:3d  a0:b1:c2:d3:e4:f5  6    -52  PMKID + full handshake
- 13s       M1   c8:0a:a9:1b:2c:3d  a0:b1:c2:d3:e4:f5  6    -52  PMKID (offline-crackable M1)
- 47s       M1   d8:5d:4c:5e:6f:70  ff:ff:ff:ff:ff:ff  11   -71  M1: AP advertised ANonce
- 2m        M2   00:11:22:33:44:55  02:aa:bb:cc:dd:ee  1    -64  M2: STA replied (need M1 for cracking)
+ EAPOL events: 5 (2 PMKID / 1 full handshake)  [up/dn] navigate  [g] group cluster  [c] clear
+ AP c8:0a:a9:1b:2c:3d: harvest-friendly - sends the PMKID KDE in M1 to any station that associates, PSK AKM
+ age       msg  BSSID              SSID                  STA                 ch   sig  clust   notes
+ --------  ---  -----------------  --------------------  -----------------  ---  ----  ------  ----------------------
+ 12s       M2   c8:0a:a9:1b:2c:3d  HomeNet               a0:b1:c2:d3:e4:f5    6   -52  #3      PMKID + full handshake
+ 13s       M1   c8:0a:a9:1b:2c:3d  HomeNet               a0:b1:c2:d3:e4:f5    6   -52  #3      PMKID (offline-crackable M1)
+ 47s       M1   d8:5d:4c:5e:6f:70  (?)                   02:cc:00:00:00:01   11   -71  #5      PMKID (offline-crackable M1)
+ 2m        M2   00:11:22:33:44:55  CafeGuest             02:aa:bb:cc:dd:ee    1   -64  -       M2: STA replied (need M1 for cracking)
 ```
 
 Prize rows (PMKID, complete handshake) render in heat-red so they
 stand out.
+
+### Harvest clusters and `[g]` (#172)
+
+`clust` is the harvest tracker's cluster the frame was counted in
+(`eapol_event_t.harvest_cluster_id`, `src/harvest_track.h`), `-` for
+none:
+
+- the **station row**, for an M1 or M2 between a station and a BSSID it
+  sent a (re)association request to — `PMKID_HARVEST`'s subject;
+- the BSSID's **deauth-then-reconnect chain**, for the M2 that joined a
+  victim to it — `HANDSHAKE_HARVEST`'s subject. This wins over the
+  victim's own station row.
+
+M3 and M4 are counted nowhere. Every associating station has a row, so
+a number alone is not a finding: it is heat-red while the cluster is
+one this poll (a station row with an M1 left unanswered, or a chain).
+The same number is the alert detail's `cluster #N` and the stream's
+`cluster_id` on `harvest_station` / `harvest_chain` and
+`harvest_cluster_id` on `eapol` (JSONL 1.7.0). A row that ages out of
+`harvest.window_s` and comes back is a new cluster.
+
+`[g]` on a row with a cluster shows that cluster's rows alone, under a
+one-line summary built from them; up/down then move between those rows,
+and `[g]` again shows every row. On a row with no cluster it does
+nothing. The view claims `g` over the global Devices switch
+(`src/view_route.c`).
+
+```
+ cluster #5: STA 02:cc:00:00:00:01, 4 BSSIDs, 3 PMKID, 2m40s, 4 rows - 4 of 4 M1s unanswered - QUEUE_EVICT on the same pair  [g] all rows
+```
+
+The summary names the station when one station is in the cluster (the
+clientless shape), else the station count and, for one BSSID, the BSSID
+(the chain shape); PMKID-bearing M1s; the span from the oldest to the
+newest row; and, while the tracker's row is live, its verdict counts.
+`QUEUE_EVICT on the same pair` appears when a Framing Frames
+(CVE-2022-47522) queue release landed on one of the cluster's own
+(BSSID, station) pairs within the window: the harvest's detail then
+names that pair, which is the `QUEUE_EVICT` alert's key, so the two
+incidents are read together. Rows that have left the 256-row ring are
+not in the summary.
+
+### Harvest-friendly AP posture (#172)
+
+When the selected row's AP has been heard sending the PMKID KDE in an
+M1, to any station, the line under the header says so. With a
+PSK-family AKM on its beacon (PSK, FT-PSK, PSK-SHA256) it reads
+**harvest-friendly**: the AP hands whoever associates the one value
+Steube's 2018 attack needs (`research/papers/steube-2018-pmkid.md`).
+With only SAE or 802.1X it says the KDE is sent but is not a passphrase
+target. A hygiene finding about the AP, not an attacker signal; no
+alert reads it. The stream carries it as `beacon.harvest_posture`.
 
 ## What's normal
 
@@ -280,9 +332,9 @@ stand out.
   to associate and collects each M1. Since #172 this is
   `PMKID_HARVEST` (three BSSIDs left unanswered; CRIT when three of
   them handed over a PMKID and the station answered none). In this view
-  it reads as a column of `M1` rows, one STA, many BSSIDs, no `M2`.
-  The view itself gains no mark: the alert names the station, and the
-  rows are already filterable by it.
+  it reads as a column of `M1` rows, one STA, many BSSIDs, no `M2`,
+  all with one heat-red `clust` number; `[g]` on any of them shows the
+  run alone with its summary.
 
 ## What's suspicious (defensive)
 

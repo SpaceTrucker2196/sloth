@@ -875,6 +875,16 @@ void test_view_claims_dashboard_tab(void) {
     ASSERT_EQ(view_claims_key(VIEW_DASH, 's'), 0);
 }
 
+/* The EAPOL view's [g] groups one harvest cluster (#172); without the
+ * claim the global Devices switch would take the key. Seen red with
+ * the VIEW_EAPOL case removed from view_claims_key(), then restored. */
+void test_view_claims_eapol_group_key(void) {
+    ASSERT(view_claims_key(VIEW_EAPOL, 'g'));
+    ASSERT(view_claims_key(VIEW_EAPOL, 'G'));
+    ASSERT_EQ(view_claims_key(VIEW_EAPOL, 'd'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_DEVICES, 'g'), 0);
+}
+
 void test_view_claims_no_claim_defaults(void) {
     /* A view without an entry in the table doesn't claim anything —
      * the global switch still owns every letter for it. */
@@ -908,6 +918,7 @@ void run_state_tests(void) {
     RUN_TEST(test_view_claims_packets_local_keys);
     RUN_TEST(test_view_claims_stats_reset_key);
     RUN_TEST(test_view_claims_dashboard_tab);
+    RUN_TEST(test_view_claims_eapol_group_key);
     RUN_TEST(test_view_claims_no_claim_defaults);
     RUN_TEST(test_view_claims_non_shadow_keys_unclaimed);
 
