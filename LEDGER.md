@@ -340,3 +340,4 @@
 | 0587203 | 2026-11-12T19:49:35Z | claude-opus-5-5 | 10 | 2338 | 1298092 | 6710 | 0.3601 | #187 S3 review: first answer per request, Retry-only requests void |
 | f08488f | 2026-11-12T21:42:44Z | claude-opus-5-5 | 52 | 8459 | 8481742 | 17659 | 2.0070 | #187 S3 export: beacon.probe_lat, evict_probe_latency (JSONL 1.6.0) |
 | 3bdc863 | 2026-11-12T22:10:07Z | claude-opus-5-5 | 42 | 9059 | 8405609 | 20330 | 2.0251 | --monitor-iface: pin the 802.11 capture radio |
+| 693c829 | 2026-11-13T02:21:03Z | claude-opus-5-5 | 120 | 19197 | 8830158 | 217219 | 3.8882 | #200 /api/alerts filtered paging ends |
