@@ -2418,8 +2418,9 @@ static void test_page_module(void) {
     const char *re = al ? strstr(al, "ALERT_ID_RE.test(id)") : NULL;
     const char *hk = al ? strstr(al, "SlothFrrs.link(li, id)") : NULL;
     WT_ASSERT(al && re && hk && re < hk);
-    /* the definition, its five callers, and frrs.js's header naming it */
-    WT_EQ(count_of(p, "alertLink(li, "), 7);
+    /* the definition, its five callers, frrs.js's header naming it, and
+     * karma.js's alert rows (#187), lent the function */
+    WT_EQ(count_of(p, "alertLink(li, "), 8);
     /* Each hook point, one guarded call in app.js. */
     static const char *const HOOK[] = {
         "if (window.SlothFrrs) SlothFrrs.link(li, id);",

@@ -1024,10 +1024,11 @@ static int route_sys(const web_req_t *rq, const web_health_t *h,
     return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
-/* /api/lures (web_lure.h): the KARMA and key-harvest evidence sloth's
- * rules read. The monitor radio's, so Monitor's and Hybrid's; under
- * Local the query is checked, then the one out_of_scope answer. */
-static int route_lures(const web_req_t *rq, const web_health_t *h,
+/* /api/lures and /api/lures/bssid (web_lure.h): the KARMA and
+ * key-harvest evidence sloth's rules read, and one BSSID's KARMA
+ * detail. The monitor radio's, so Monitor's and Hybrid's; under Local
+ * the query is checked, then the one out_of_scope answer. */
+static int route_lures(const web_req_t *rq, const web_health_t *h, int one,
                        char *out, size_t outsz, web_resp_t *r) {
     if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
     char *body = out + WEB_LIVE_HDR_RESERVE;
@@ -1041,8 +1042,10 @@ static int route_lures(const web_req_t *rq, const web_health_t *h,
         bl = web_series_error_json("query_too_long", body, cap);
         rc = bl ? 0 : -1;
     } else {
-        rc = web_lure_route(h->lure, rq->query, h->wall_s, h->now_ms, none_here,
-                            body, cap, &bl, &status);
+        rc = one ? web_lure_bssid_route(h->lure, h->live, rq->query, h->wall_s, h->now_ms,
+                                        none_here, body, cap, &bl, &status)
+                 : web_lure_route(h->lure, rq->query, h->wall_s, h->now_ms, none_here,
+                                  body, cap, &bl, &status);
         if (rc == 0 && none_here && status == 200) bl = web_lure_out_of_scope_json(body, cap);
     }
     if (rc != 0 || bl == 0) {
@@ -1932,7 +1935,9 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
         if (!strcmp(rq->path, "/api/sys"))
             return route_sys(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/lures"))
-            return route_lures(rq, h, out, outsz, r);
+            return route_lures(rq, h, 0, out, outsz, r);
+        if (!strcmp(rq->path, "/api/lures/bssid"))
+            return route_lures(rq, h, 1, out, outsz, r);
         if (!strcmp(rq->path, "/api/radar"))
             return route_radar(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/ble"))

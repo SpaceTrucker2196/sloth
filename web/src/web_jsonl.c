@@ -243,15 +243,22 @@ static int value(jp_t *j, int depth, web_jfield_t *f) {
     return 0;
 }
 
-/* One level of one named object kept (2026-10-27): sloth's alert
- * records carry the sensor's position as "loc":{...}, and its scalar
- * members are kept as top-level fields named "loc.<member>" (nested
- * containers inside it are still checked and skipped). Only "loc", and
- * that is what keeps the text bound: a composite key "loc.<m>" plus its
- * NUL is never longer than the member's source `"<m>":v,`, so the
- * record's text still fits the line. The duplicate check covers the
- * composites too, so a hostile top-level "loc.lat" cannot shadow one. */
-static int flatten_loc(jp_t *j, web_jrec_t *r) {
+/* One level of a named object kept, for two names only (the member
+ * allow-list): sloth's alert records carry the sensor's position as
+ * "loc":{...} (2026-10-27), and its beacon records the probe-response
+ * latency as "probe_lat":{...} (JSONL 1.6.0, #187 S3). Their scalar
+ * members are kept as top-level fields named "<name>.<member>"
+ * ("loc.lat", "probe_lat.n_dir"); nested containers inside are still
+ * checked and skipped. The record's text stays bound: a composite key
+ * "loc.<m>" plus its NUL is never longer than the member's source
+ * `"<m>":v,`, and for the longer "probe_lat." prefix what is left of
+ * the line is checked before each member (nothing after this point
+ * decodes to more octets than its source), refused whole as
+ * WEB_JL_ELONG past it, which no sloth line (8 KB) reaches. The
+ * duplicate check covers the composites too, so a hostile top-level
+ * "loc.lat" or "probe_lat.n_dir" cannot shadow one. */
+static int flatten_obj(jp_t *j, web_jrec_t *r, const char *prefix) {
+    size_t plen = strlen(prefix);
     j->p++;                                   /* the '{' */
     ws(j);
     if (j->p < j->end && *j->p == '}') { j->p++; return 0; }
@@ -259,9 +266,11 @@ static int flatten_loc(jp_t *j, web_jrec_t *r) {
         ws(j);
         if (j->p >= j->end || *j->p != '"') return fail(j, WEB_JL_ESYNTAX);
         if (r->n >= WEB_JL_MAX_FIELDS) return fail(j, WEB_JL_EFIELDS);
+        if (r->tlen + plen + (size_t)(j->end - j->p) > WEB_JL_MAX_LINE)
+            return fail(j, WEB_JL_ELONG);
         web_jfield_t *f = &r->f[r->n];
         size_t kstart = r->tlen;
-        emit(j, 1, (const unsigned char *)"loc.", 4);
+        emit(j, 1, (const unsigned char *)prefix, plen);
         const char *member;
         size_t ml;
         if (string(j, 1, &member, &ml) != 0) return -1;
@@ -314,11 +323,13 @@ int web_jl_parse(const char *line, size_t len, web_jrec_t *r) {
             j.p++;
             ws(&j);
             const char *key = f->key;
-            if (!strcmp(key, "loc") && j.p < j.end && *j.p == '{') {
+            const char *flat = !strcmp(key, "loc") ? "loc."
+                             : !strcmp(key, "probe_lat") ? "probe_lat." : NULL;
+            if (flat && j.p < j.end && *j.p == '{') {
                 f->kind = WEB_J_NEST;
                 f->str = NULL; f->slen = 0; f->i = 0; f->d = 0;
                 r->n++;
-                if (flatten_loc(&j, r) != 0) return j.err;
+                if (flatten_obj(&j, r, flat) != 0) return j.err;
             } else {
                 if (value(&j, 1, f) != 0) return j.err;
                 f->key = key;

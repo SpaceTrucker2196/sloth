@@ -11,7 +11,8 @@
 // that left M1s unanswered, and the BSSIDs whose claimed deauths were
 // followed by a victim's fresh handshake. The counts the rules read,
 // not a verdict: whether a row crossed its rule's threshold is the
-// alert's to say, and the Alerts view has it.
+// alert's to say, and the Alerts view has it. A KARMA row's BSSID is a
+// button to its detail (karma.js) when that module is on the page.
 // Every string shown is the sensor's, and an SSID or a tool name behind
 // it came over the air: textContent only, no markup sink, no attribute
 // written from a value.
@@ -73,7 +74,9 @@
                   "answered", "first", "last"];
   var CHAIN_HEAD = ["bssid", "victims", "deauths", "first", "last"];
 
-  function table(id, head, rows, cells) {
+  // first, when given, makes the first cell's node of its value (a
+  // KARMA row's BSSID: the button to its detail, karma.js).
+  function table(id, head, rows, cells, first) {
     var t = clear($(id));
     if (!t) return;
     t.hidden = !rows.length;
@@ -84,15 +87,22 @@
     for (var r = 0; r < rows.length; r++) {
       var c = cells(rows[r]);
       tr = el("tr");
-      for (var k = 0; k < c.length; k++) tr.appendChild(el("td", null, c[k]));
+      for (var k = 0; k < c.length; k++) {
+        var td = el("td", null, k === 0 && first ? null : c[k]);
+        if (k === 0 && first) td.appendChild(first(c[k]));
+        tr.appendChild(td);
+      }
       t.appendChild(tr);
     }
+  }
+  function karmaFirst(v) {
+    return window.SlothKarma ? SlothKarma.button(String(v)) : document.createTextNode(String(v));
   }
 
   function draw(j) {
     var st = $("w-lure-state");
     if (st) st.textContent = stateText(j);
-    table("w-lure-karma", KARMA_HEAD, (j && j.karma) || [], karmaCells);
+    table("w-lure-karma", KARMA_HEAD, (j && j.karma) || [], karmaCells, karmaFirst);
     table("w-lure-sta", STA_HEAD, (j && j.stations) || [], staCells);
     table("w-lure-chain", CHAIN_HEAD, (j && j.chains) || [], chainCells);
   }
