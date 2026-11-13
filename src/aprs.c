@@ -350,6 +350,10 @@ static struct {
     time_t         last_read, last_packet;
     uint64_t       bytes, lines, packets, bad, overflow, expired;
     uint64_t       truncations, rotations, read_errors;
+    time_t         first_read;     /* wall of this run's first good read */
+    uint32_t       freq_hz;        /* --aprs-freq, 0 none */
+    int            silent_set, silent_after_s;  /* --aprs-silent-hours */
+    int            region;         /* the last region derived, held */
     uint64_t       seq;            /* the newest packet's */
     int            ring_head, ring_n;
     aprs_packet_t  ring[APRS_PKT_RING];
@@ -448,6 +452,7 @@ int aprs_feed_line(const char *line, size_t n, time_t wall, uint64_t mono_ms) {
 
 void aprs_note_read(time_t wall, uint64_t bytes, int rotated, int truncated) {
     pthread_mutex_lock(&g_mu);
+    if (!g.ever_read) g.first_read = wall;
     g.ever_read = 1;
     g.missing = 0;
     g.err[0] = '\0';
@@ -482,7 +487,6 @@ void aprs_note_bad_line(void) {
 
 void aprs_health_poll(sloth_state_t *s, time_t wall, uint64_t mono_ms) {
     if (!s) return;
-    (void)wall;
     aprs_health_t *h = &s->aprs;
     memset(h, 0, sizeof(*h));
     int ngone = 0, npk = 0;
@@ -520,6 +524,23 @@ void aprs_health_poll(sloth_state_t *s, time_t wall, uint64_t mono_ms) {
     else if (g.err[0])              h->state = APRS_ERROR;
     else if (!g.ever_read || g.missing) h->state = APRS_WAITING;
     else                            h->state = APRS_LIVE;
+    /* #204. The region from this tick's position, else the one held. */
+    {
+        int rg = aprs_region_of(s->gps.has_loc, s->gps.loc_lat, s->gps.loc_lon);
+        if (rg != APRS_REGION_NONE) g.region = rg;
+        h->region = g.region;
+        h->region_hz = aprs_region_hz(g.region);
+        h->freq_hz = g.freq_hz;
+        h->freq_mismatch = aprs_freq_mismatch(g.freq_hz, h->region_hz);
+        h->silent_after_s = g.silent_set ? g.silent_after_s : APRS_SILENT_S_DEFAULT;
+        if (g.ever_read)
+            h->quiet_since = g.last_packet > g.first_read ? g.last_packet
+                                                          : g.first_read;
+        /* A decoder clock ahead of the host's reads as not quiet yet. */
+        h->silent = h->state == APRS_LIVE && h->silent_after_s > 0 &&
+                    h->quiet_since > 0 && wall > h->quiet_since &&
+                    wall - h->quiet_since >= h->silent_after_s;
+    }
     memcpy(g_snap, g.rows, sizeof(g.rows[0]) * (size_t)g.n);
     s->aprs_count = g.n;
     int start = (g.ring_head + APRS_PKT_RING - g.ring_n) % APRS_PKT_RING;
@@ -536,6 +557,106 @@ void aprs_health_poll(sloth_state_t *s, time_t wall, uint64_t mono_ms) {
 void aprs_reset(void) {
     pthread_mutex_lock(&g_mu);
     memset(&g, 0, sizeof(g));
+    pthread_mutex_unlock(&g_mu);
+}
+
+/* ── The region (#204) ─────────────────────────────────────────── */
+
+typedef struct { double lat0, lat1, lon0, lon1; int region; } region_box_t;
+
+/* Most specific first: the first box holding the point wins, so the
+ * overlaps resolve by order (Hokkaido before the Russia box). Edges
+ * inclusive. */
+static const region_box_t REGION_BOXES[] = {
+    /* New Zealand: the main islands and Stewart Island; the Chathams
+     * (176.5 W) and the Kermadecs across the antimeridian. */
+    { -53.0, -29.0,  165.0,  180.0, APRS_REGION_NZ },
+    { -53.0, -29.0, -180.0, -175.0, APRS_REGION_NZ },
+    /* Australia: the mainland and Tasmania, Cape York to 10 S so New
+     * Guinea's south coast and Timor stay out. */
+    { -45.0, -10.0,  112.0,  160.0, APRS_REGION_AU },
+    /* Japan: Honshu (west edge east of Korea, north edge south of
+     * Vladivostok), Hokkaido, Kyushu (south of Busan), the Ryukyus
+     * (east of Taiwan). */
+    {  33.0,  41.6,  130.8,  142.2, APRS_REGION_JP },
+    {  41.3,  45.6,  139.3,  146.0, APRS_REGION_JP },
+    {  30.9,  34.0,  128.5,  132.0, APRS_REGION_JP },
+    {  24.0,  30.9,  122.9,  131.5, APRS_REGION_JP },
+    /* Brazil: the north-east bulk, the western Amazon, the south. */
+    { -20.0,   5.3,  -60.0,  -34.7, APRS_REGION_BR },
+    { -11.0,   2.0,  -74.0,  -60.0, APRS_REGION_BR },
+    { -34.0, -20.0,  -55.0,  -39.0, APRS_REGION_BR },
+    /* North America: Central America's north to the Arctic, the
+     * Aleutians to Newfoundland; Hawaii is inside. */
+    {  14.0,  72.0, -180.0,  -50.0, APRS_REGION_NA },
+    /* IARU Region 1: Europe, Africa and the Middle East west of 60 E;
+     * the Azores; Russia and northern Kazakhstan east of it. */
+    { -35.0,  82.0,  -25.0,   60.0, APRS_REGION_IARU1 },
+    {  36.0,  40.5,  -32.0,  -24.0, APRS_REGION_IARU1 },
+    {  50.0,  82.0,   60.0,  180.0, APRS_REGION_IARU1 },
+};
+
+int aprs_region_of(int has_fix, double lat, double lon) {
+    if (!has_fix || !in_range(lat, -90, 90) || !in_range(lon, -180, 180))
+        return APRS_REGION_NONE;
+    for (size_t i = 0; i < sizeof(REGION_BOXES) / sizeof(REGION_BOXES[0]); i++) {
+        const region_box_t *b = &REGION_BOXES[i];
+        if (lat >= b->lat0 && lat <= b->lat1 && lon >= b->lon0 && lon <= b->lon1)
+            return b->region;
+    }
+    return APRS_REGION_UNKNOWN;
+}
+
+uint32_t aprs_region_hz(int region) {
+    switch (region) {
+    case APRS_REGION_NA:    return 144390000u;
+    case APRS_REGION_IARU1: return 144800000u;
+    case APRS_REGION_AU:    return 145175000u;
+    case APRS_REGION_NZ:    return 144575000u;
+    case APRS_REGION_JP:    return 144640000u;
+    case APRS_REGION_BR:    return 145570000u;
+    default:                return 0;
+    }
+}
+
+const char *aprs_region_name(int region) {
+    switch (region) {
+    case APRS_REGION_UNKNOWN: return "unknown";
+    case APRS_REGION_NA:      return "north-america";
+    case APRS_REGION_IARU1:   return "iaru-r1";
+    case APRS_REGION_AU:      return "australia";
+    case APRS_REGION_NZ:      return "new-zealand";
+    case APRS_REGION_JP:      return "japan";
+    case APRS_REGION_BR:      return "brazil";
+    default:                  return "none";
+    }
+}
+
+int aprs_freq_parse(const char *s, uint32_t *out) {
+    if (!s || !out) return -1;
+    uint64_t v = 0;
+    size_t i = 0;
+    for (; s[i]; i++) {
+        if (s[i] < '0' || s[i] > '9' || i >= 10) return -1;
+        v = v * 10 + (uint64_t)(s[i] - '0');
+    }
+    if (i == 0 || v < APRS_FREQ_MIN_HZ || v > APRS_FREQ_MAX_HZ) return -1;
+    *out = (uint32_t)v;
+    return 0;
+}
+
+int aprs_freq_mismatch(uint32_t declared_hz, uint32_t region_hz) {
+    if (!declared_hz || !region_hz) return 0;
+    uint32_t d = declared_hz > region_hz ? declared_hz - region_hz
+                                         : region_hz - declared_hz;
+    return d > APRS_FREQ_TOL_HZ;
+}
+
+void aprs_set_expect(uint32_t freq_hz, int silent_after_s) {
+    pthread_mutex_lock(&g_mu);
+    g.freq_hz = freq_hz;
+    g.silent_set = 1;
+    g.silent_after_s = silent_after_s < 0 ? 0 : silent_after_s;
     pthread_mutex_unlock(&g_mu);
 }
 

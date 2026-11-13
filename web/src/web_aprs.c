@@ -291,6 +291,21 @@ static void sh_apply(web_aprs_t *a, const web_jrec_t *r, long long ts) {
     C("aprs_read_errors", read_errors);
 #undef C
     jtext(r, "aprs_err", WEB_APRS_ERR_MAX, h.err);
+    /* #204. The region only from sloth's own list (src/aprs.c
+     * aprs_region_name()); a channel only inside the 2 m band. */
+    static const char *const REGIONS[] = {
+        "none", "unknown", "north-america", "iaru-r1", "australia",
+        "new-zealand", "japan", "brazil"
+    };
+    const char *rg = web_jl_str(r, "aprs_region");
+    for (size_t i = 0; rg && i < sizeof(REGIONS) / sizeof(REGIONS[0]); i++)
+        if (!strcmp(rg, REGIONS[i])) snprintf(h.region, sizeof(h.region), "%s", REGIONS[i]);
+    h.region_hz = jint(r, "aprs_region_hz", 144000000, 148000000, &v) ? v : 0;
+    h.freq_hz = jint(r, "aprs_freq_hz", 144000000, 148000000, &v) ? v : 0;
+    h.freq_mismatch = jint(r, "aprs_freq_mismatch", 0, 1, &v) && v == 1;
+    h.silent = jint(r, "aprs_silent", 0, 1, &v) && v == 1;
+    h.silent_after_s = jint(r, "aprs_silent_after_s", 0, 168 * 3600, &v) ? v : 0;
+    h.quiet_since = jint(r, "aprs_quiet_since", 0, T_MAX, &v) ? v : 0;
     a->sh = h;
     if (!a->src[0]) take_src(a->src, h.src);
 }
@@ -411,6 +426,15 @@ static void sensor_json(web_jw_t *w, const web_aprs_sh_t *h) {
     web_jw_raw(w, ",\"rotations\":"); web_jw_int(w, h->rotations);
     web_jw_raw(w, ",\"read_errors\":"); web_jw_int(w, h->read_errors);
     web_jw_raw(w, ",\"err\":"); web_jw_str(w, h->err);
+    /* #204: null region when sloth sent none (an older sloth). */
+    web_jw_raw(w, ",\"region\":");
+    if (h->region[0]) web_jw_str(w, h->region); else web_jw_raw(w, "null");
+    web_jw_raw(w, ",\"region_hz\":"); web_jw_int(w, h->region_hz);
+    web_jw_raw(w, ",\"freq_hz\":"); web_jw_int(w, h->freq_hz);
+    web_jw_raw(w, ",\"freq_mismatch\":"); web_jw_int(w, h->freq_mismatch);
+    web_jw_raw(w, ",\"silent\":"); web_jw_int(w, h->silent);
+    web_jw_raw(w, ",\"silent_after_s\":"); web_jw_int(w, h->silent_after_s);
+    web_jw_raw(w, ",\"quiet_since\":"); web_jw_int(w, h->quiet_since);
     web_jw_raw(w, "}");
 }
 

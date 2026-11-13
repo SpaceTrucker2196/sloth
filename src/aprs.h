@@ -113,8 +113,92 @@ void aprs_note_bad_line(void);
 
 /* Retire stations unheard for APRS_EXPIRE_S (by the monotonic clock),
  * then copy the health, the table, the stations just retired and the
- * packet ring into s. PH_PLATFORM, beside adsb_health_poll(). */
+ * packet ring into s. PH_PLATFORM, beside adsb_health_poll(), and after
+ * gps_health_poll(): the region comes from this tick's s->gps (the
+ * arbitrated position: a fresh fix, else --location). Only the region
+ * and its frequency are kept, never the position. With no position the
+ * region last derived this run is held (a sensor does not change
+ * continent between fixes, and a GPS dropout must not flap it). */
 void aprs_health_poll(sloth_state_t *s, time_t wall, uint64_t mono_ms);
+
+/* ── The region and the decoder's frequency (#204, 2026-11-13) ────
+ *
+ * APRS has no one channel: each region's national societies chose one
+ * 2 m frequency, and a decoder on the wrong one hears nothing at all.
+ * sloth cannot tell which one Dire Wolf is on (it reads a file), so it
+ * derives what the channel SHOULD be from where the sensor is, and the
+ * operator may declare what the decoder IS configured for
+ * (--aprs-freq). A disagreement is reported, never acted on: sloth
+ * never touches the radio.
+ *
+ * The table is the owner's (#204): the regional APRS channels as
+ * aprs.org's frequency list and the national band plans give them
+ * (ARRL / TAPR, the IARU Region 1 VHF band plan, WIA, NZART, JARL,
+ * LABRE). Anywhere else has no entry: sloth names no default rather
+ * than guess one.
+ *
+ * The boxes are coarse rectangles, checked most specific first. They
+ * are right in the interior of each region and approximate near a
+ * border (a point in Paraguay can read "brazil", one on Ulleungdo
+ * "japan"); a sensor near a border is what --aprs-freq is for. */
+typedef enum {
+    APRS_REGION_NONE = 0,      /* no position: nothing to derive from */
+    APRS_REGION_UNKNOWN,       /* a position outside every box: no default */
+    APRS_REGION_NA,            /* North America, 144.390 */
+    APRS_REGION_IARU1,         /* IARU Region 1 (Europe, Africa, the Middle East, Russia), 144.800 */
+    APRS_REGION_AU,            /* Australia, 145.175 */
+    APRS_REGION_NZ,            /* New Zealand, 144.575 */
+    APRS_REGION_JP,            /* Japan, 144.640 */
+    APRS_REGION_BR             /* Brazil, 145.570 */
+} aprs_region_t;
+
+/* The region a position falls in. Pure: has_fix 0, or a latitude /
+ * longitude that is not finite or outside +-90 / +-180, is NONE; a
+ * position in no box is UNKNOWN. */
+int         aprs_region_of(int has_fix, double lat, double lon);
+/* Its APRS frequency in Hz; 0 for NONE and UNKNOWN. */
+uint32_t    aprs_region_hz(int region);
+/* "none", "unknown", "north-america", "iaru-r1", "australia",
+ * "new-zealand", "japan", "brazil". Part of the sensor_health
+ * contract. */
+const char *aprs_region_name(int region);
+
+/* --aprs-freq HZ: what the decoder is configured for, in the 2 m band
+ * (144..148 MHz), or 0. The CONFIGURED value (/etc/default/aprs's
+ * APRS_FREQ on the reference host), not rx_fm's hardware tune, which
+ * sits fs/4 above it and is normal. */
+#define APRS_FREQ_MIN_HZ   144000000u
+#define APRS_FREQ_MAX_HZ   148000000u
+/* A declared frequency within this of the region's is the same channel.
+ * Half of 12.5 kHz, the narrowest 2 m channel spacing in the six band
+ * plans: anything further off is another channel. */
+#define APRS_FREQ_TOL_HZ   6250u
+/* Parse an --aprs-freq argument: decimal Hz only, in range. 0 or -1. */
+int  aprs_freq_parse(const char *s, uint32_t *out);
+/* 1 when both are known and further apart than APRS_FREQ_TOL_HZ. */
+int  aprs_freq_mismatch(uint32_t declared_hz, uint32_t region_hz);
+
+/* A silent decoder: the log configured and readable (live) and no
+ * packet for this long.
+ *
+ * Why 6 h: the existing state says an hour of quiet is normal (a fixed
+ * station beacons every 10 to 30 minutes, the New-N paradigm's
+ * guidance for a fixed station being 30 minutes; a rural site can hear
+ * one station). Digipeaters and igates beacon
+ * their own position on that cadence all day, so a receiver that hears
+ * even one of them hears something in any 6 h window. Six hours is six
+ * times the quiet hour sloth already tolerates, short enough to catch a
+ * dead receive chain the same day, and far from a single quiet night
+ * hour. The reference host's log sat at 0 bytes for two days
+ * (2026-11-11 to 13) and nothing said so. --aprs-silent-hours sets it;
+ * 0 turns it off. */
+#define APRS_SILENT_S_DEFAULT  (6 * 3600)
+#define APRS_SILENT_H_MAX      168   /* a week */
+
+/* The run's settings: the declared frequency (0 none) and the silence
+ * threshold in seconds (0 off). Before the reader starts; aprs_reset()
+ * restores the defaults (0 Hz, APRS_SILENT_S_DEFAULT). */
+void aprs_set_expect(uint32_t freq_hz, int silent_after_s);
 
 /* Back to nothing configured. Tests and sloth_reset_all(). */
 void aprs_reset(void);

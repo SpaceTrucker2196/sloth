@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -811,6 +812,319 @@ static void test_sensor_health_aprs_block(void) {
     aprs_reset();
 }
 
+/* ── The region, the declared frequency, the silent decoder (#204) ──
+ *
+ * The points are city centres and open sea picked to sit inside a
+ * region or on either side of a box edge; none is a sensor's position.
+ * An edge is inclusive, so each edge is tested on it and 0.01 degree
+ * outside.
+ *
+ * Absence assertions, each seen red under a named mutation and
+ * restored: the no-fix case with aprs_region_of()'s !has_fix test
+ * removed (a stale 0,0 or an old position read as a region); silent
+ * outside live with the APRS_LIVE term dropped (an error read as
+ * silent); the position kept out of the sensor_health block with a
+ * loc_lat member added to it. */
+
+#define R(lat, lon) aprs_region_of(1, (lat), (lon))
+
+static void test_region_no_fix(void) {
+    ASSERT_EQ(aprs_region_of(0, 41.9, -87.6), APRS_REGION_NONE);
+    ASSERT_EQ(aprs_region_of(0, 0.0, 0.0), APRS_REGION_NONE);
+    ASSERT_EQ(R(NAN, -87.6), APRS_REGION_NONE);
+    ASSERT_EQ(R(90.01, 0.0), APRS_REGION_NONE);
+    ASSERT_EQ(R(0.0, -180.01), APRS_REGION_NONE);
+    ASSERT_EQ(aprs_region_hz(APRS_REGION_NONE), 0u);
+    ASSERT_STR(aprs_region_name(APRS_REGION_NONE), "none");
+    ASSERT_STR(aprs_region_name(99), "none");
+    /* A position in no box: no default frequency. */
+    ASSERT_EQ(R(39.9, 116.4), APRS_REGION_UNKNOWN);      /* Beijing */
+    ASSERT_EQ(R(28.6, 77.2), APRS_REGION_UNKNOWN);       /* Delhi */
+    ASSERT_EQ(R(0.0, -150.0), APRS_REGION_UNKNOWN);      /* mid-Pacific */
+    ASSERT_EQ(aprs_region_hz(APRS_REGION_UNKNOWN), 0u);
+    ASSERT_STR(aprs_region_name(APRS_REGION_UNKNOWN), "unknown");
+}
+
+static void test_region_table(void) {
+    ASSERT_EQ(aprs_region_hz(APRS_REGION_NA), 144390000u);
+    ASSERT_EQ(aprs_region_hz(APRS_REGION_IARU1), 144800000u);
+    ASSERT_EQ(aprs_region_hz(APRS_REGION_AU), 145175000u);
+    ASSERT_EQ(aprs_region_hz(APRS_REGION_NZ), 144575000u);
+    ASSERT_EQ(aprs_region_hz(APRS_REGION_JP), 144640000u);
+    ASSERT_EQ(aprs_region_hz(APRS_REGION_BR), 145570000u);
+    ASSERT_STR(aprs_region_name(APRS_REGION_NA), "north-america");
+    ASSERT_STR(aprs_region_name(APRS_REGION_IARU1), "iaru-r1");
+    ASSERT_STR(aprs_region_name(APRS_REGION_AU), "australia");
+    ASSERT_STR(aprs_region_name(APRS_REGION_NZ), "new-zealand");
+    ASSERT_STR(aprs_region_name(APRS_REGION_JP), "japan");
+    ASSERT_STR(aprs_region_name(APRS_REGION_BR), "brazil");
+}
+
+static void test_region_north_america(void) {
+    ASSERT_EQ(R(41.9, -87.6), APRS_REGION_NA);           /* Chicago */
+    ASSERT_EQ(R(21.3, -157.8), APRS_REGION_NA);          /* Honolulu */
+    ASSERT_EQ(R(61.2, -149.9), APRS_REGION_NA);          /* Anchorage */
+    ASSERT_EQ(R(19.4, -99.1), APRS_REGION_NA);           /* Mexico City */
+    ASSERT_EQ(R(14.0, -90.0), APRS_REGION_NA);           /* the south edge */
+    ASSERT_EQ(R(13.99, -90.0), APRS_REGION_UNKNOWN);
+    ASSERT_EQ(R(47.5, -50.0), APRS_REGION_NA);           /* the east edge */
+    ASSERT_EQ(R(47.5, -49.99), APRS_REGION_UNKNOWN);
+    ASSERT_EQ(R(72.0, -100.0), APRS_REGION_NA);          /* the north edge */
+    ASSERT_EQ(R(72.01, -100.0), APRS_REGION_UNKNOWN);
+}
+
+static void test_region_iaru1(void) {
+    ASSERT_EQ(R(51.5, -0.1), APRS_REGION_IARU1);         /* London */
+    ASSERT_EQ(R(-26.2, 28.0), APRS_REGION_IARU1);        /* Johannesburg */
+    ASSERT_EQ(R(55.75, 37.6), APRS_REGION_IARU1);        /* Moscow */
+    ASSERT_EQ(R(55.0, 82.9), APRS_REGION_IARU1);         /* Novosibirsk */
+    ASSERT_EQ(R(37.74, -25.67), APRS_REGION_IARU1);      /* Ponta Delgada */
+    ASSERT_EQ(R(0.0, -25.0), APRS_REGION_IARU1);         /* the west edge */
+    ASSERT_EQ(R(0.0, -25.01), APRS_REGION_UNKNOWN);
+    ASSERT_EQ(R(-35.0, 20.0), APRS_REGION_IARU1);        /* the south edge */
+    ASSERT_EQ(R(-35.01, 20.0), APRS_REGION_UNKNOWN);
+    ASSERT_EQ(R(45.0, 60.0), APRS_REGION_IARU1);         /* the east edge */
+    ASSERT_EQ(R(45.0, 60.01), APRS_REGION_UNKNOWN);      /* under the Russia box */
+    ASSERT_EQ(R(50.0, 100.0), APRS_REGION_IARU1);        /* the Russia box's edge */
+    ASSERT_EQ(R(49.99, 100.0), APRS_REGION_UNKNOWN);
+}
+
+static void test_region_australia_nz(void) {
+    ASSERT_EQ(R(-33.87, 151.2), APRS_REGION_AU);         /* Sydney */
+    ASSERT_EQ(R(-31.95, 115.86), APRS_REGION_AU);        /* Perth */
+    ASSERT_EQ(R(-42.9, 147.3), APRS_REGION_AU);          /* Hobart */
+    ASSERT_EQ(R(-10.0, 142.0), APRS_REGION_AU);          /* Cape York */
+    ASSERT_EQ(R(-9.99, 142.0), APRS_REGION_UNKNOWN);     /* Torres Strait, PNG side */
+    ASSERT_EQ(R(-40.0, 160.0), APRS_REGION_AU);          /* the east edge */
+    ASSERT_EQ(R(-40.0, 160.01), APRS_REGION_UNKNOWN);    /* the Tasman Sea */
+    ASSERT_EQ(R(-41.29, 174.78), APRS_REGION_NZ);        /* Wellington */
+    ASSERT_EQ(R(-36.85, 174.76), APRS_REGION_NZ);        /* Auckland */
+    ASSERT_EQ(R(-43.95, -176.55), APRS_REGION_NZ);       /* the Chathams */
+    ASSERT_EQ(R(-40.0, 165.0), APRS_REGION_NZ);          /* the west edge */
+    ASSERT_EQ(R(-40.0, 164.99), APRS_REGION_UNKNOWN);
+    ASSERT_EQ(R(-40.0, -175.0), APRS_REGION_NZ);         /* past the antimeridian */
+    ASSERT_EQ(R(-40.0, -174.99), APRS_REGION_UNKNOWN);
+}
+
+static void test_region_japan(void) {
+    ASSERT_EQ(R(35.68, 139.69), APRS_REGION_JP);         /* Tokyo */
+    ASSERT_EQ(R(43.06, 141.35), APRS_REGION_JP);         /* Sapporo */
+    ASSERT_EQ(R(45.4, 141.7), APRS_REGION_JP);           /* Wakkanai */
+    ASSERT_EQ(R(33.59, 130.40), APRS_REGION_JP);         /* Fukuoka */
+    ASSERT_EQ(R(26.21, 127.68), APRS_REGION_JP);         /* Naha */
+    ASSERT_EQ(R(37.57, 126.98), APRS_REGION_UNKNOWN);    /* Seoul */
+    ASSERT_EQ(R(35.18, 129.08), APRS_REGION_UNKNOWN);    /* Busan */
+    ASSERT_EQ(R(43.12, 131.89), APRS_REGION_UNKNOWN);    /* Vladivostok */
+    ASSERT_EQ(R(25.03, 121.56), APRS_REGION_UNKNOWN);    /* Taipei */
+    ASSERT_EQ(R(24.4, 122.9), APRS_REGION_JP);           /* the Ryukyus' west edge */
+    ASSERT_EQ(R(24.4, 122.89), APRS_REGION_UNKNOWN);
+}
+
+static void test_region_brazil(void) {
+    ASSERT_EQ(R(-23.55, -46.63), APRS_REGION_BR);        /* Sao Paulo */
+    ASSERT_EQ(R(-15.79, -47.88), APRS_REGION_BR);        /* Brasilia */
+    ASSERT_EQ(R(-3.12, -60.02), APRS_REGION_BR);         /* Manaus */
+    ASSERT_EQ(R(-30.03, -51.23), APRS_REGION_BR);        /* Porto Alegre */
+    ASSERT_EQ(R(-8.05, -34.9), APRS_REGION_BR);          /* Recife */
+    ASSERT_EQ(R(-8.05, -34.69), APRS_REGION_UNKNOWN);    /* the Atlantic */
+    ASSERT_EQ(R(-34.6, -58.4), APRS_REGION_UNKNOWN);     /* Buenos Aires */
+    ASSERT_EQ(R(-33.45, -70.67), APRS_REGION_UNKNOWN);   /* Santiago */
+    ASSERT_EQ(R(-12.05, -77.04), APRS_REGION_UNKNOWN);   /* Lima */
+    ASSERT_EQ(R(-34.0, -50.0), APRS_REGION_BR);          /* the south edge */
+    ASSERT_EQ(R(-34.01, -50.0), APRS_REGION_UNKNOWN);
+}
+
+#undef R
+
+static void test_freq_parse_and_mismatch(void) {
+    uint32_t f = 0;
+    ASSERT_EQ(aprs_freq_parse("144390000", &f), 0);
+    ASSERT_EQ(f, 144390000u);
+    ASSERT_EQ(aprs_freq_parse("144000000", &f), 0);
+    ASSERT_EQ(aprs_freq_parse("148000000", &f), 0);
+    ASSERT_EQ(aprs_freq_parse("143999999", &f), -1);
+    ASSERT_EQ(aprs_freq_parse("148000001", &f), -1);
+    ASSERT_EQ(aprs_freq_parse("144.390", &f), -1);       /* Hz, not MHz */
+    ASSERT_EQ(aprs_freq_parse("144390000 ", &f), -1);
+    ASSERT_EQ(aprs_freq_parse("+144390000", &f), -1);
+    ASSERT_EQ(aprs_freq_parse("", &f), -1);
+    ASSERT_EQ(aprs_freq_parse("99999999999", &f), -1);
+    ASSERT_EQ(aprs_freq_parse(NULL, &f), -1);
+    ASSERT_EQ(f, 148000000u);                            /* refusals leave it */
+
+    ASSERT_EQ(aprs_freq_mismatch(0, 144390000u), 0);     /* not declared */
+    ASSERT_EQ(aprs_freq_mismatch(144390000u, 0), 0);     /* no region */
+    ASSERT_EQ(aprs_freq_mismatch(144390000u, 144390000u), 0);
+    ASSERT_EQ(aprs_freq_mismatch(144390000u + APRS_FREQ_TOL_HZ, 144390000u), 0);
+    ASSERT_EQ(aprs_freq_mismatch(144390000u - APRS_FREQ_TOL_HZ, 144390000u), 0);
+    ASSERT_EQ(aprs_freq_mismatch(144390000u + APRS_FREQ_TOL_HZ + 1, 144390000u), 1);
+    ASSERT_EQ(aprs_freq_mismatch(144390000u - APRS_FREQ_TOL_HZ - 1, 144390000u), 1);
+    ASSERT_EQ(aprs_freq_mismatch(144800000u, 144390000u), 1);
+    /* rx_fm's hardware tune (fs/4 above) is not what this compares. */
+    ASSERT_EQ(aprs_freq_mismatch(144894000u, 144390000u), 1);
+}
+
+/* The region follows this tick's position and is held through a loss
+ * of it; only the region and its Hz reach the health. A declared
+ * frequency off the region's channel is a mismatch. */
+static void test_health_region_and_mismatch(void) {
+    aprs_reset();
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    aprs_set_source("file:/x");
+    aprs_set_expect(144800000u, APRS_SILENT_S_DEFAULT);
+    aprs_health_poll(&s, 1793930000, 1000);
+    ASSERT_EQ(s.aprs.region, APRS_REGION_NONE);
+    ASSERT_EQ(s.aprs.region_hz, 0u);
+    ASSERT_EQ(s.aprs.freq_hz, 144800000u);
+    ASSERT_EQ(s.aprs.freq_mismatch, 0);                  /* nothing to judge */
+
+    s.gps.has_loc = 1; s.gps.loc_lat = 41.9; s.gps.loc_lon = -87.6;
+    aprs_health_poll(&s, 1793930001, 2000);
+    ASSERT_EQ(s.aprs.region, APRS_REGION_NA);
+    ASSERT_EQ(s.aprs.region_hz, 144390000u);
+    ASSERT_EQ(s.aprs.freq_mismatch, 1);
+
+    s.gps.has_loc = 0;                                   /* the fix is lost */
+    aprs_health_poll(&s, 1793930002, 3000);
+    ASSERT_EQ(s.aprs.region, APRS_REGION_NA);            /* held */
+    ASSERT_EQ(s.aprs.freq_mismatch, 1);
+
+    s.gps.has_loc = 1; s.gps.loc_lat = 51.5; s.gps.loc_lon = -0.1;
+    aprs_health_poll(&s, 1793930003, 4000);
+    ASSERT_EQ(s.aprs.region, APRS_REGION_IARU1);
+    ASSERT_EQ(s.aprs.freq_mismatch, 0);
+
+    aprs_set_expect(0, APRS_SILENT_S_DEFAULT);           /* none declared */
+    aprs_health_poll(&s, 1793930004, 5000);
+    ASSERT_EQ(s.aprs.freq_hz, 0u);
+    ASSERT_EQ(s.aprs.freq_mismatch, 0);
+
+    aprs_reset();                                        /* forgets the region */
+    s.gps.has_loc = 0;
+    aprs_health_poll(&s, 1793930005, 6000);
+    ASSERT_EQ(s.aprs.region, APRS_REGION_NONE);
+    ASSERT_EQ(s.aprs.silent_after_s, APRS_SILENT_S_DEFAULT);
+}
+
+/* Silent: live, and no packet for the threshold, counted from the
+ * newest packet or this run's first read, whichever is later. Never
+ * while waiting or in error, never with the threshold 0. */
+static void test_health_silent(void) {
+    const time_t t0 = 1793930000;
+    aprs_reset();
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    aprs_set_source("file:/x");
+    aprs_health_poll(&s, t0 + 7 * 3600, 1000);
+    ASSERT_EQ(s.aprs.state, APRS_WAITING);
+    ASSERT_EQ(s.aprs.silent, 0);                         /* never read */
+    ASSERT_EQ((long long)s.aprs.quiet_since, 0LL);
+
+    aprs_note_read(t0, 0, 0, 0);                         /* an empty log */
+    aprs_health_poll(&s, t0 + APRS_SILENT_S_DEFAULT - 1, 2000);
+    ASSERT_EQ(s.aprs.state, APRS_LIVE);
+    ASSERT_EQ((long long)s.aprs.quiet_since, (long long)t0);
+    ASSERT_EQ(s.aprs.silent, 0);
+    aprs_health_poll(&s, t0 + APRS_SILENT_S_DEFAULT, 3000);
+    ASSERT_EQ(s.aprs.silent, 1);
+
+    /* A packet re-arms it from its own time. */
+    aprs_packet_t p;
+    ASSERT_EQ(aprs_line_parse(L_FIXED, strlen(L_FIXED), &p), 1);
+    p.utime = t0 + APRS_SILENT_S_DEFAULT;
+    aprs_feed_packet(&p, p.utime, 4000);
+    aprs_health_poll(&s, t0 + APRS_SILENT_S_DEFAULT + 60, 5000);
+    ASSERT_EQ((long long)s.aprs.quiet_since, (long long)p.utime);
+    ASSERT_EQ(s.aprs.silent, 0);
+    aprs_health_poll(&s, p.utime + APRS_SILENT_S_DEFAULT, 6000);
+    ASSERT_EQ(s.aprs.silent, 1);
+
+    /* An error is said by the state, not by silent. */
+    aprs_note_read_error("read: Input/output error");
+    aprs_health_poll(&s, p.utime + APRS_SILENT_S_DEFAULT, 7000);
+    ASSERT_EQ(s.aprs.state, APRS_ERROR);
+    ASSERT_EQ(s.aprs.silent, 0);
+    aprs_note_read(p.utime + 1, 0, 0, 0);
+
+    /* The threshold is the flag's; 0 turns it off. */
+    aprs_set_expect(0, 3600);
+    aprs_health_poll(&s, p.utime + 3600, 8000);
+    ASSERT_EQ(s.aprs.silent_after_s, 3600);
+    ASSERT_EQ(s.aprs.silent, 1);
+    aprs_set_expect(0, 0);
+    aprs_health_poll(&s, p.utime + 30 * 86400, 9000);
+    ASSERT_EQ(s.aprs.silent_after_s, 0);
+    ASSERT_EQ(s.aprs.silent, 0);
+
+    /* A decoder clock ahead of the host is not quiet yet. */
+    aprs_set_expect(0, 3600);
+    p.utime = t0 + 40 * 86400;
+    aprs_feed_packet(&p, p.utime, 10000);
+    aprs_health_poll(&s, t0 + 39 * 86400, 11000);
+    ASSERT_EQ(s.aprs.silent, 0);
+    aprs_reset();
+}
+
+/* The additive sensor_health fields: region and Hz, the declared
+ * frequency, the two findings, the threshold and quiet_since, after the
+ * twin193 block and before db_max_mb. Never the position in them; a
+ * silent flip is a line of its own (it is signed), quiet_since is not. */
+static void test_sensor_health_region_fields(void) {
+    g_wall = 1793930000; g_mono = 3000000;
+    sloth_clock_test_set(t_mono, t_wall);
+    aprs_reset();
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    aprs_set_source("file:/x");
+    aprs_set_expect(144800000u, 3600);
+    s.gps.has_loc = 1; s.gps.loc_lat = 41.9; s.gps.loc_lon = -87.6;
+    jl_open();
+    aprs_note_read(g_wall, 0, 0, 0);
+    aprs_health_poll(&s, g_wall, g_mono);
+    jsonl_emit_sensor_health(&s);
+    for (int i = 0; i < 3601; i++) {                     /* one quiet hour */
+        g_wall++; g_mono += 1000;
+        aprs_note_read(g_wall, 0, 0, 0);
+        aprs_health_poll(&s, g_wall, g_mono);
+        jsonl_emit_sensor_health(&s);
+    }
+    jsonl_close();
+    char *b = read_all(g_jl);
+    ASSERT(b != NULL);
+    if (b) {
+        /* The first line, then the silent flip; the 300 s heartbeat
+         * lines between them. */
+        ASSERT(strstr(b, "\"aprs_region\":\"north-america\","
+                         "\"aprs_region_hz\":144390000,"
+                         "\"aprs_freq_hz\":144800000,"
+                         "\"aprs_freq_mismatch\":1,\"aprs_silent\":0,"
+                         "\"aprs_silent_after_s\":3600,"
+                         "\"aprs_quiet_since\":1793930000,\"db_max_mb\":") != NULL);
+        ASSERT(strstr(b, "\"aprs_silent\":1,\"aprs_silent_after_s\":3600,"
+                         "\"aprs_quiet_since\":1793930000,") != NULL);
+        ASSERT(strstr(b, "\"twin193_excl_any\":0,\"aprs_region\":") != NULL);
+        ASSERT(count_of(b, "\"type\":\"sensor_health\"") <= 3601 / 300 + 2);
+        /* The block carries no position of its own. */
+        const char *rg = strstr(b, "\"aprs_region\"");
+        const char *end = rg ? strstr(rg, "\"db_max_mb\"") : NULL;
+        ASSERT(rg && end);
+        if (rg && end) {
+            char blk[512];
+            size_t n = (size_t)(end - rg) < sizeof(blk) - 1 ? (size_t)(end - rg)
+                                                            : sizeof(blk) - 1;
+            memcpy(blk, rg, n);
+            blk[n] = '\0';
+            ASSERT(strstr(blk, "lat") == NULL);
+            ASSERT(strstr(blk, "lon") == NULL);
+            ASSERT(strstr(blk, "41.9") == NULL);
+        }
+    }
+    unlink(g_jl);
+    sloth_clock_test_set(NULL, NULL);
+    aprs_reset();
+}
+
 void run_aprs_tests(void) {
     TEST_SUITE("aprs — Dire Wolf's packet log (2026-11-05)");
     RUN_TEST(test_fixed_station_line);
@@ -834,4 +1148,15 @@ void run_aprs_tests(void) {
     RUN_TEST(test_sensor_registry_aprs);
     RUN_TEST(test_jsonl_packets_and_stations);
     RUN_TEST(test_sensor_health_aprs_block);
+    RUN_TEST(test_region_no_fix);
+    RUN_TEST(test_region_table);
+    RUN_TEST(test_region_north_america);
+    RUN_TEST(test_region_iaru1);
+    RUN_TEST(test_region_australia_nz);
+    RUN_TEST(test_region_japan);
+    RUN_TEST(test_region_brazil);
+    RUN_TEST(test_freq_parse_and_mismatch);
+    RUN_TEST(test_health_region_and_mismatch);
+    RUN_TEST(test_health_silent);
+    RUN_TEST(test_sensor_health_region_fields);
 }

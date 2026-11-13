@@ -135,7 +135,9 @@ static void test_aprs_ingest_and_route(void) {
               "\"ts\":1793930100,\"state\":\"live\",\"src\":\"file:/var/lib/direwolf/aprs.log\","
               "\"missing\":0,\"last_read\":1793930099,\"last_packet\":1793930060,\"stations\":2,"
               "\"bytes\":4096,\"lines\":12,\"packets\":11,\"bad_lines\":1,\"overflow\":0,"
-              "\"expired\":3,\"truncations\":1,\"rotations\":0,\"read_errors\":0,\"err\":\"\"},"
+              "\"expired\":3,\"truncations\":1,\"rotations\":0,\"read_errors\":0,\"err\":\"\","
+              "\"region\":null,\"region_hz\":0,\"freq_hz\":0,\"freq_mismatch\":0,\"silent\":0,"
+              "\"silent_after_s\":0,\"quiet_since\":0},"
               "\"total\":2,\"live\":2,\"with_pos\":2,\"heard_direct\":1,\"stations\":["
               "{\"call\":\"N0TEST-5\",\"state\":\"live\",\"first_seen\":1793930035,"
               "\"last_seen\":1793930069,\"packets\":2,\"via\":\"N0CALL-1\",\"direct\":0,"
@@ -177,6 +179,85 @@ static void test_aprs_ingest_and_route(void) {
                            "\"aged\":0,\"rejected\":0,\"sensor\":null,\"total\":0,\"live\":0,"
                            "\"with_pos\":0,\"heard_direct\":0,\"stations\":[],\"shown\":0,"
                            "\"cut\":false}");
+}
+
+/* #204: the region block as jsonl_emit_sensor_health() appends it
+ * (tests/test_aprs.c test_sensor_health_region_fields pins that shape):
+ * kept and served; a region not in sloth's list, a channel outside the
+ * 2 m band and a flag outside 0/1 are absent, never taken. A sloth from
+ * before #204 writes none of it and the sensor says region null. Seen
+ * red with the REGIONS check removed from sh_apply() (the made-up name
+ * was served) and with the Hz range widened to 0..1e12. */
+static const char SH204[] =
+    "{\"type\":\"sensor_health\",\"ts\":1793930100,\"capture_iface\":\"any\","
+    "\"aprs_state\":\"live\",\"aprs_src\":\"file:/var/lib/direwolf/aprs.log\","
+    "\"aprs_missing\":0,\"aprs_last_read\":1793930099,\"aprs_last_packet\":0,"
+    "\"aprs_stations\":0,\"aprs_bytes\":0,\"aprs_lines\":0,\"aprs_packets\":0,"
+    "\"aprs_bad_lines\":0,\"aprs_overflow\":0,\"aprs_expired\":0,\"aprs_truncations\":0,"
+    "\"aprs_rotations\":0,\"aprs_read_errors\":0,\"aprs_err\":\"\","
+    "\"twin193_excl_any\":0,\"aprs_region\":\"north-america\",\"aprs_region_hz\":144390000,"
+    "\"aprs_freq_hz\":144800000,\"aprs_freq_mismatch\":1,\"aprs_silent\":1,"
+    "\"aprs_silent_after_s\":21600,\"aprs_quiet_since\":1793900000,\"db_max_mb\":-1,"
+    "\"jsonl_version\":\"1.7.0\"}";
+
+static void test_aprs_region_and_silent(void) {
+    fresh();
+    feed(SH204);
+    web_health_t H;
+    health(&H, T);
+    WT_EQ(route(&H, "/api/aprs", ""), 200);
+    WT_HAS(body_of(g_out), "\"err\":\"\",\"region\":\"north-america\",\"region_hz\":144390000,"
+                           "\"freq_hz\":144800000,\"freq_mismatch\":1,\"silent\":1,"
+                           "\"silent_after_s\":21600,\"quiet_since\":1793900000}");
+    /* Hostile values: each absent. */
+    fresh();
+    feed("{\"type\":\"sensor_health\",\"ts\":1793930100,\"aprs_state\":\"live\","
+         "\"aprs_region\":\"<b>atlantis</b>\",\"aprs_region_hz\":915000000,"
+         "\"aprs_freq_hz\":-1,\"aprs_freq_mismatch\":2,\"aprs_silent\":7,"
+         "\"aprs_silent_after_s\":99999999,\"aprs_quiet_since\":-5}");
+    WT_EQ(route(&H, "/api/aprs", ""), 200);
+    WT_HAS(body_of(g_out), "\"region\":null,\"region_hz\":0,\"freq_hz\":0,\"freq_mismatch\":0,"
+                           "\"silent\":0,\"silent_after_s\":0,\"quiet_since\":0}");
+    WT_LACKS(body_of(g_out), "atlantis");
+    /* No position reaches the page through the block: the line's
+     * loc_* are not read by the panel. */
+    fresh();
+    feed("{\"type\":\"sensor_health\",\"ts\":1793930100,\"loc_lat\":10.00000,"
+         "\"loc_lon\":-20.00000,\"aprs_state\":\"live\",\"aprs_region\":\"unknown\","
+         "\"aprs_region_hz\":0}");
+    WT_EQ(route(&H, "/api/aprs", ""), 200);
+    WT_HAS(body_of(g_out), "\"region\":\"unknown\",\"region_hz\":0,");
+    WT_LACKS(body_of(g_out), "-20.0");
+}
+
+/* The page: the notice container, the two notices' wording, and the
+ * hard-coded channel gone from the note. */
+static void test_aprs_page_region(void) {
+    const char *p = (const char *)web_page;
+    WT_HAS(p, "<div class=\"aprsline aprs-notice\" id=\"aprs-notice\" role=\"status\" hidden></div>");
+    WT_HAS(p, ".aprs-notice { color: var(--sev-warn); font-weight: bold; }");
+    WT_HAS(p, "      n.appendChild(el(\"div\", \"\", \"silent for \" + (hrs === null ? \"?\" : hrs) + \"h: the decoder's log is readable but no packet arrived\" +");
+    WT_HAS(p, "      n.appendChild(el(\"div\", \"\", \"frequency mismatch: the decoder is declared on \" + mhz(s.freq_hz) +");
+    WT_HAS(p, "    if (s.region === \"unknown\") return \"  region unknown (no APRS channel known here)\";");
+    WT_HAS(p, "    n.hidden = !any;");
+    const char *note = strstr(p, "id=\"aprs-note\"");
+    WT_ASSERT(note != NULL);
+    if (note) {
+        const char *end = strstr(note, "</span>");
+        WT_ASSERT(end != NULL);
+        if (end) {
+            size_t n = (size_t)(end - note);
+            char *t = malloc(n + 1);
+            WT_ASSERT(t != NULL);
+            if (t) {
+                memcpy(t, note, n);
+                t[n] = '\0';
+                WT_LACKS(t, "144.390");
+                WT_HAS(t, "--aprs-freq");
+                free(t);
+            }
+        }
+    }
 }
 
 /* Every string and figure is checked: a call that is not an AX.25 call
@@ -771,6 +852,8 @@ void run_aprs_tests(void) {
     WT_RUN(test_aprs_scope);
     WT_RUN(test_aprs_call_rule_is_sloths);
     WT_RUN(test_aprs_page);
+    WT_RUN(test_aprs_region_and_silent);
+    WT_RUN(test_aprs_page_region);
     WT_RUN(test_aprshist_no_db);
 #ifdef WITH_SQLITE
     WT_RUN(test_aprshist_seen_and_station);

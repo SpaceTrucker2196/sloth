@@ -1,6 +1,6 @@
 ---
 name: aprs
-description: APRS stations — --aprs tails the packet log a local Dire Wolf decoder (144.390 MHz) already writes; the CSV parser, the station table and its one-hour expiry, the aprs sensor, sensor_health's aprs_* fields, the aprs_packet and change-only aprs_station records, sloth.db v13's aprs_stations / aprs_packets, and slothweb's APRS tab
+description: APRS stations — --aprs tails the packet log a local Dire Wolf decoder already writes, on the APRS channel of the region the GNSS fix is in (144.390 MHz in North America); --aprs-freq and the silent-decoder check; the CSV parser, the station table and its one-hour expiry, the aprs sensor, sensor_health's aprs_* fields, the aprs_packet and change-only aprs_station records, sloth.db v13's aprs_stations / aprs_packets, and slothweb's APRS tab
 type: reference
 ---
 
@@ -8,7 +8,9 @@ type: reference
 
 **Summary**: `--aprs SPEC` points sloth at the packet log that a local,
 already-running Dire Wolf writes (`direwolf -L FILE`): one CSV line per
-APRS packet it decoded off 144.390 MHz. sloth turns each line into a
+APRS packet it decoded off the region's APRS channel (144.390 MHz in
+North America, 144.800 in IARU Region 1; sloth derives which from its
+GNSS position and checks it against the operator's `--aprs-freq`). sloth turns each line into a
 typed packet and keeps one row per source callsign heard: last heard,
 packets, heard direct or through which digipeater, audio level, the
 position, speed, course and altitude it reported, its symbol, comment,
@@ -16,8 +18,10 @@ status and system. sloth is **receive-only and file-only**: it never
 opens, tunes or talks to the radio, the SDR or Dire Wolf, and uses no
 network. It writes an `aprs_packet` record per packet and a change-only
 `aprs_station` record per station, keeps both in sloth.db (schema v13)
-with `--db`, and slothweb shows them on its APRS tab. No TUI view and
-no alert rule.
+with `--db`, and slothweb shows them on its APRS tab. It also says
+when the decoder has gone **silent** (the log readable, no packet for
+6 h by default) and when the declared frequency is not the region's
+channel. No TUI view and no alert rule.
 
 **Sources**: `src/aprs.h`, `src/aprs.c` (line parser, spec, station
 table, packet ring, cell and signature), `src/capture/aprs_reader.h`,
@@ -26,7 +30,8 @@ table, packet ring, cell and signature), `src/capture/aprs_reader.h`,
 `src/poll.c` (`aprs_health_poll()` in the health stage, `SENSOR_APRS`
 in the sensors stage), `src/jsonl.c` (`jsonl_emit_aprs()`, the `aprs_*`
 appends in `jsonl_emit_sensor_health()`), `src/db.c` (`write_aprs()`),
-`src/db_schema.c` (v13), `src/main.c` (`--aprs`); slothweb
+`src/db_schema.c` (v13), `src/main.c` (`--aprs`, `--aprs-freq`,
+`--aprs-silent-hours`); slothweb
 `web/src/web_aprs.c`, `web/src/web_aprshist.c`, `web/src/web_slothdb.c`,
 `web/ui/aprs.js`; tests `tests/test_aprs.c`, `tests/test_db.c`,
 `tests/fuzz/fuzz_aprs_line.c`, `web/tests/test_aprs.c`. Format
@@ -35,7 +40,7 @@ references: the Dire Wolf User Guide ("Logging") and `src/log.c`
 (APRS101.pdf) for the data type indicators (ch. 5), objects and items
 (ch. 11) and the symbol tables (ch. 20, appendix 2).
 
-**Last updated**: 2026-11-06 (the Radar tab: stations and, by name, objects and items as entities of their own, kept for the `APRS for` window after their newest packet, with status, comment and a moving one's 24 h trail, from `/api/aprs/tracks`); 2026-11-05 (shipped: the feed, the table, JSONL, sloth.db v13, slothweb's APRS tab and history).
+**Last updated**: 2026-11-13 (#204: the APRS region and channel derived from the GNSS position, `--aprs-freq` and its mismatch, the silent decoder after `--aprs-silent-hours` (default 6), the `sensor_health` fields and the APRS tab's notices; the beta-site log sat at 0 bytes from 2026-11-11 with nothing saying so); 2026-11-06 (the Radar tab: stations and, by name, objects and items as entities of their own, kept for the `APRS for` window after their newest packet, with status, comment and a moving one's 24 h trail, from `/api/aprs/tracks`); 2026-11-05 (shipped: the feed, the table, JSONL, sloth.db v13, slothweb's APRS tab and history).
 
 ---
 
@@ -43,8 +48,8 @@ references: the Dire Wolf User Guide ("Logging") and `src/log.c`
 
 [[non-ip-sensors]] asks every family seven questions:
 
-1. **Observable passively**: what Dire Wolf already decoded off
-   144.390 MHz (the North American APRS frequency): AX.25 UI frames
+1. **Observable passively**: what Dire Wolf already decoded off the
+   region's APRS channel (below; 144.390 MHz in North America): AX.25 UI frames
    carrying APRS position, status, message, object and telemetry
    reports - the lines in its packet log.
 2. **Hardware**: a receiver Dire Wolf demodulates (on the reference
@@ -102,6 +107,70 @@ newline. Blank lines (Dire Wolf leaves them between records) and the
 header are skipped and are not bad. A missing file is a state
 (`waiting`), not an error; an unreadable path or one that is not a
 regular file is `error`, counted.
+
+## The channel (#204)
+
+APRS has no single frequency: each region chose one 2 m channel, and a
+decoder on another one hears nothing at all. sloth reads a file, so it
+cannot see which channel Dire Wolf is on. Instead it derives which
+channel it **should** be from where the sensor is, and the operator may
+declare which one it **is**.
+
+| region (`aprs_region`) | channel |
+|---|---|
+| `north-america` | 144.390 MHz |
+| `iaru-r1` (Europe, Africa, the Middle East, Russia) | 144.800 MHz |
+| `australia` | 145.175 MHz |
+| `new-zealand` | 144.575 MHz |
+| `japan` | 144.640 MHz |
+| `brazil` | 145.570 MHz |
+| `unknown` (a position in none of them) | none: sloth names no default |
+| `none` (no position this run) | none |
+
+`aprs_region_of()` (`src/aprs.c`) is a pure function over coarse
+latitude / longitude rectangles, checked most specific first (New
+Zealand, Australia, Japan, Brazil, North America, Region 1). Inside a
+region it is right; near a border it is approximate (a point in
+Paraguay can read `brazil`, one on Ulleungdo `japan`), and
+`tests/test_aprs.c` pins both sides of every edge. The position is the
+one every other stamp uses, `s->gps`'s arbitrated `loc_*` (a fresh fix,
+else `--location`), read through sloth's own GNSS path, so no gpsd
+client tool (`gpspipe`) is needed. Without a position the region last
+derived this run is held: a sensor does not change continent between
+fixes. **Only the region's name and channel are kept and written,
+never the position it came from**; sloth records no location beyond
+what `sensor_health`'s `loc_*` already carried.
+
+`--aprs-freq HZ` declares what the decoder is **configured** for, in
+Hz. On the reference host that is `APRS_FREQ` in `/etc/default/aprs`
+(read by the host's own `aprs.service`, `rx_fm | direwolf`, which is not
+in this repo): pass the same number, e.g. `--aprs-freq 144390000`. It
+is **not** `rx_fm`'s reported hardware tune: that sits fs/4 above the
+target (2.016 MS/s / 4 = 504 kHz, so about 144.894 MHz for 144.390) and
+still demodulates the target; comparing it would flag a correct
+decoder. When both are known and more than 6.25 kHz apart (half the
+narrowest 2 m channel spacing) `aprs_freq_mismatch` is 1 and slothweb
+says "frequency mismatch". sloth never changes the decoder's frequency
+and ships no tool that does: receive-only, file-only, as before.
+
+## Silent
+
+A quiet hour is normal (a fixed station beacons every 10 to 30
+minutes), which is why `aprs_state` stays `live` whatever the file
+holds. A receive chain that died (an antenna port, a gain setting, a
+wrong channel) looks exactly the same, and on 2026-11-13 the reference
+host's log had been 0 bytes since the 2026-11-11 rotation with nothing
+saying so. So `aprs_silent` is 1 when the state is `live` and no packet
+arrived for `--aprs-silent-hours` (default **6**; 0 off, at most 168),
+counted from `aprs_quiet_since`: the newest packet's `utime`, or this
+run's first good read when that is later. The reader starts at the
+file's end, so a restart re-arms the clock rather than inheriting a
+silence it did not watch. Six hours is six times the quiet hour the
+state already tolerates, long enough that a rural site hearing one
+digipeater's half-hourly beacon never trips it, and short enough to
+catch a dead chain the same day. A missing file (`waiting`, Dire Wolf
+not yet having written its first packet) and an `error` are said by
+the state, not by `silent`.
 
 ## The parser
 
@@ -214,10 +283,13 @@ fields.
 `aprs_src`, `aprs_missing`, `aprs_last_read`, `aprs_last_packet`,
 `aprs_stations`, `aprs_bytes`, `aprs_lines`, `aprs_packets`,
 `aprs_bad_lines`, `aprs_overflow`, `aprs_expired`, `aprs_truncations`,
-`aprs_rotations`, `aprs_read_errors`, `aprs_err`. The signature takes
-the state, the missing flag and none/some bands of the read errors, bad
-lines, overflow and the error text; the counts and times are written,
-not signed.
+`aprs_rotations`, `aprs_read_errors`, `aprs_err`; and, after the
+`twin193_*` block (#204), `aprs_region`, `aprs_region_hz`,
+`aprs_freq_hz`, `aprs_freq_mismatch`, `aprs_silent`,
+`aprs_silent_after_s`, `aprs_quiet_since`. The signature takes the
+state, the missing flag, none/some bands of the read errors, bad lines,
+overflow and the error text, the region, the mismatch and the silent
+flag; the counts and times are written, not signed.
 
 ## `--db`: `aprs_stations` and `aprs_packets` (schema v13)
 
@@ -252,7 +324,10 @@ and its packets (oldest first, the newest 400 that fit, `cut` when the
 oldest were left out). The page (`web/ui/aprs.js`) draws the decoder's
 health line, the station table, a north-up position plot (no map tiles,
 nothing fetched; the selected station's track solid, its recorded
-positions dashed), a detail panel and the "stations seen" table. Dire
+positions dashed), a detail panel and the "stations seen" table. The
+health line names the region and its channel (or the declared
+frequency), and a notice says "silent for Xh" or "frequency mismatch"
+when `sensor_health` does. Dire
 Wolf's receiver is a passive radio, so all of it is Monitor's and
 Hybrid's; under Local the routes check the query and answer
 `out_of_scope`. Full description in
@@ -292,5 +367,6 @@ other than Dire Wolf's log.
 - [[adsb]] — the ADS-B family, built the same way.
 - [[jsonl-schema]] — `aprs_packet`, `aprs_station`, `sensor_health`'s `aprs_*`.
 - [[sqlite-schema]] — `aprs_stations`, `aprs_packets` (v13).
-- [[cli-reference]] — `--aprs`.
+- [[cli-reference]] — `--aprs`, `--aprs-freq`, `--aprs-silent-hours`.
+- [[gnss]] — the position the region is derived from.
 - [[slothweb]] — the APRS tab.

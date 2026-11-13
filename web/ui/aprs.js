@@ -62,6 +62,31 @@
     });
   }
 
+  // ── #204: the region's channel, the declared one, the notices ─────
+  function mhz(hz) { return num(hz) && hz > 0 ? (hz / 1e6).toFixed(3) + " MHz" : "-"; }
+  function regionText(s) {
+    if (!s || s.region === null || s.region === undefined) return "";
+    if (s.region === "none") return "  region: no position yet";
+    if (s.region === "unknown") return "  region unknown (no APRS channel known here)";
+    return "  region " + s.region + " " + mhz(s.region_hz);
+  }
+  function notices(s, now) {
+    var n = clear($("aprs-notice")), any = false;
+    if (s && s.silent) {
+      var hrs = num(s.quiet_since) && s.quiet_since > 0 ? Math.floor((now - s.quiet_since) / 3600) : null;
+      n.appendChild(el("div", "", "silent for " + (hrs === null ? "?" : hrs) + "h: the decoder's log is readable but no packet arrived" +
+        (num(s.quiet_since) && s.quiet_since > 0 ? " since " + when(s.quiet_since) : "") +
+        " (threshold " + Math.round((s.silent_after_s || 0) / 3600) + "h). Check the antenna, the gain and the frequency."));
+      any = true;
+    }
+    if (s && s.freq_mismatch) {
+      n.appendChild(el("div", "", "frequency mismatch: the decoder is declared on " + mhz(s.freq_hz) +
+        " (--aprs-freq), but the APRS channel for region " + s.region + " is " + mhz(s.region_hz) + "."));
+      any = true;
+    }
+    n.hidden = !any;
+  }
+
   // ── the header: the decoder's sensor_health and the table's counts ─
   function header(j) {
     var now = nowOf(j), s = j.sensor;
@@ -72,6 +97,7 @@
       e.hidden = false;
       e.textContent = "no aprs records yet: sloth needs --aprs /var/lib/direwolf/aprs.log (Dire Wolf's -L packet log), docs/wiki/aprs.md";
       $("aprs-head2").textContent = "";
+      notices(null, now);
       return;
     }
     $("aprs-empty").hidden = true;
@@ -86,6 +112,9 @@
     h.appendChild(el("span", "d-dim", "  src " + (j.src || (s && s.src) || "-") +
       (s && s.last_packet ? "  last packet " + age(s.last_packet, now) + " ago" : "") +
       (s ? "  health " + age(s.ts, now) + " ago" : "")));
+    if (s && s.region !== null && s.region !== undefined)
+      h.appendChild(el("span", "", regionText(s) + (num(s.freq_hz) && s.freq_hz > 0 ? "  decoder declared " + mhz(s.freq_hz) : "")));
+    notices(s, now);
     var h2 = clear($("aprs-head2"));
     if (!s) return;
     h2.appendChild(el("span", "", "packets " + s.packets + "  lines " + s.lines + "  expired " + s.expired +

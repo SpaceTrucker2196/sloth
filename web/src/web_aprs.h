@@ -1,6 +1,9 @@
 /* slothweb's APRS panel (2026-11-05, docs/wiki/aprs.md): the stations a
- * local Dire Wolf decodes on 144.390 MHz, as sloth reports them, kept
- * by slothweb from the stream.
+ * local Dire Wolf decodes on its region's APRS channel (sloth derives
+ * the region from its GNSS position and names it and the channel in
+ * sensor_health's aprs_region / aprs_region_hz; the operator may
+ * declare the decoder's configured frequency with --aprs-freq, #204),
+ * as sloth reports them, kept by slothweb from the stream.
  *
  * sloth writes one `aprs_packet` record per decoded packet and one
  * change-only `aprs_station` record per station (src/jsonl.c
@@ -108,6 +111,15 @@ typedef struct {
     long long last_read, last_packet, stations, bytes, lines, packets;
     long long bad_lines, overflow, expired, truncations, rotations, read_errors;
     char      err[WEB_APRS_ERR_MAX + 1];
+    /* #204: the region sloth derived from its GNSS position and its
+     * channel, the decoder's declared frequency, and the two findings.
+     * region "" when the line carried none (an older sloth) or a name
+     * not in sloth's list; the Hz 0 when absent or outside 144..148 MHz.
+     * No position: sloth writes none in these fields. */
+    char      region[16];
+    long long region_hz, freq_hz;
+    int       freq_mismatch, silent;
+    long long silent_after_s, quiet_since;
 } web_aprs_sh_t;
 
 typedef struct web_aprs {

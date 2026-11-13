@@ -1028,7 +1028,9 @@ nothing. The incident is Monitor's, as the records are.
 ## APRS
 
 The APRS tab (2026-11-05) is the stations a local Dire Wolf decodes on
-144.390 MHz, as sloth reports them ([aprs](../docs/wiki/aprs.md)): with
+the region's APRS channel (144.390 MHz in North America, 144.800 in
+IARU Region 1; sloth derives the region from its GNSS position, #204),
+as sloth reports them ([aprs](../docs/wiki/aprs.md)): with
 `--aprs`, sloth tails Dire Wolf's `-L` packet log (one CSV line per
 packet; it never talks to the radio or to Dire Wolf) and writes one
 `aprs_packet` record per packet and one change-only `aprs_station`
@@ -1046,7 +1048,13 @@ object's or item's position belongs to the object, never to its sender.
 The page (`web/ui/aprs.js`, `window.SlothAprs`, containers `aprs-*`,
 one hook in `app.js`) draws a header from the decoder's health (the log
 file's state, stations live / with a position / heard direct, the last
-packet's age, line, packet, bad-line, rotation and truncation counts),
+packet's age, line, packet, bad-line, rotation and truncation counts;
+the region and its channel from `aprs_region` / `aprs_region_hz`, or
+"region unknown" / "no position yet", and the decoder's declared
+frequency from `--aprs-freq` when given), a notice line when
+`sensor_health` says the decoder is silent ("silent for Xh: the log is
+readable but no packet arrived", from `aprs_quiet_since`) or that the
+declared frequency is not the region's channel ("frequency mismatch"),
 the station table (app.js's DataTable: CALL, SYM, LAST HEARD, PACKETS,
 VIA - `direct` or the digipeater -, POSITION, SPD, CRS, ALT, LEVEL
 heat-graded over 0..100, COMMENT, SYSTEM), a position plot (north up,

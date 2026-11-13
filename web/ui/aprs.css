@@ -1,6 +1,9 @@
 /* The APRS panel (aprs.js, web_aprs.h). Colours are the palette's:
  * heat for the audio level; text colour only, no row tint. */
 .aprsline { font-size: 12px; white-space: pre-wrap; margin: 2px 0 6px; }
+/* #204: the silent-decoder and frequency-mismatch notice. Words carry
+ * it; the colour only repeats it. */
+.aprs-notice { color: var(--sev-warn); font-weight: bold; }
 /* The station table is app.js's DataTable (.dt .dt-row has the tracks);
  * the row's own look is the ADS-B row's. */
 .aprsrow { font-size: 12px; padding: 2px 0 2px 4px; border-left: 3px solid transparent; border-bottom: 1px dotted var(--rule); cursor: pointer; }

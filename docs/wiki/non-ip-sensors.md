@@ -164,7 +164,7 @@ Ordered roughly by how cleanly they fit the passive filter (easiest first).
   `packaging/` note on running beside readsb on 2026-11-08, `sbs://`
   and `beast://` input on 2026-11-09. See [[adsb]].
 
-### APRS (144.390 MHz) — shipped
+### APRS (the region's 2 m channel, 144.390 MHz in North America) — shipped
 - **Observe**: APRS packets a local Dire Wolf decoded (position, status,
   message, object, telemetry reports): source and heard-via callsigns,
   audio level, data type, symbol, position, speed, course, altitude,

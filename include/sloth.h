@@ -3454,9 +3454,12 @@ typedef struct {
 } adsb_health_t;
 
 /* ── APRS stations (#26 family, 2026-11-05) ──────────────────────────
- * What a local, already-running Dire Wolf decoding 144.390 MHz writes
- * to its packet log (-L FILE, one CSV line per decoded packet), tailed
- * by --aprs (docs/wiki/aprs.md). sloth never opens, tunes or talks to
+ * What a local, already-running Dire Wolf writes to its packet log
+ * (-L FILE, one CSV line per decoded packet), tailed by --aprs
+ * (docs/wiki/aprs.md). The channel is the region's (144.390 MHz in
+ * North America, 144.800 in IARU Region 1, ...: src/aprs.h's table,
+ * #204), which sloth derives from the GNSS fix and checks against the
+ * operator's --aprs-freq; the decoder's own setting is host config. sloth never opens, tunes or talks to
  * the radio, the SDR or Dire Wolf, and uses no network: it reads a
  * file. Field meanings and units are Dire Wolf's (User Guide, "Logging",
  * and src/log.c, wb2osz/direwolf 1.7): speed knots, course degrees,
@@ -3520,7 +3523,10 @@ typedef struct {
 
 /* The --aprs source's health. A quiet channel is not a fault: APRS can
  * be silent for an hour, so the state says whether the file is there
- * and readable, never whether anything was heard lately. */
+ * and readable, never whether anything was heard lately. A channel
+ * quiet for far longer than that is said separately, by `silent`
+ * (#204): the state stays live, because the file is fine; it is the
+ * receive chain upstream of it that is not. */
 typedef enum {
     APRS_NONE = 0, APRS_WAITING, APRS_LIVE, APRS_ERROR
 } aprs_state_t;
@@ -3543,6 +3549,20 @@ typedef struct {
     uint64_t rotations;        /* a new file at the path */
     uint64_t read_errors;      /* opens / reads that failed */
     int      stations;         /* rows now */
+    /* #204: the channel the sensor's position says, and what the
+     * operator says the decoder is on. Region and Hz only: the position
+     * they came from is s->gps's and is never copied here. */
+    int      region;           /* aprs_region_t (src/aprs.h) */
+    uint32_t region_hz;        /* its channel, 0 none */
+    uint32_t freq_hz;          /* --aprs-freq, 0 not declared */
+    int      freq_mismatch;    /* both known and on different channels */
+    /* No packet for silent_after_s while live. quiet_since is when the
+     * quiet began: the newest packet's utime, or the first good read
+     * of this run when that is later (the reader starts at the file's
+     * end, so a restart re-arms the clock); 0 before a read. */
+    int      silent;
+    int      silent_after_s;   /* 0 off */
+    time_t   quiet_since;
 } aprs_health_t;
 
 typedef struct {

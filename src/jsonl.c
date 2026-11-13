@@ -2302,6 +2302,10 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         int      aprs_configured, aprs_state, aprs_missing;
         int      aprs_read_err_any, aprs_bad_any, aprs_overflow_any;
         int      aprs_err_any;
+        /* #204: the region (rare: it moves with the continent), the
+         * mismatch and the silent flag. Never quiet_since: it moves with
+         * every packet. */
+        int      aprs_region, aprs_freq_mismatch, aprs_silent;
         /* --db's size ceiling (JSONL 1.7.0): a tune knob, so it moves
          * only when the operator moves it. */
         int      db_max_mb;
@@ -2443,6 +2447,9 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.aprs_bad_any       = s->aprs.bad_lines > 0;
     sig.aprs_overflow_any  = s->aprs.overflow > 0;
     sig.aprs_err_any       = s->aprs.err[0] != '\0';
+    sig.aprs_region        = s->aprs.configured ? s->aprs.region : 0;
+    sig.aprs_freq_mismatch = s->aprs.configured ? s->aprs.freq_mismatch : 0;
+    sig.aprs_silent        = s->aprs.configured ? s->aprs.silent : 0;
     const int pcap_on = alert_pcap_enabled();
     sig.pcap_swept_band     = pcap_on ? decade_band(alert_pcap_swept()) : -1;
     sig.pcap_sweep_err_band = pcap_on
@@ -2853,6 +2860,23 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "twin193_excl_sibling",
                (long long)tf.excl_sibling);
         kv_int(buf, LINEBUF, &off, "twin193_excl_any", (long long)tf.excl_any);
+    }
+    /* #204, additive: the APRS region and channel the sensor's position
+     * says, the decoder's declared frequency and the two findings. ONLY
+     * with --aprs; after the twin193 block and before db_max_mb, so
+     * every earlier field keeps its place and the db_max_mb /
+     * jsonl_version tail stays as test_jsonl.c pins it. The region's
+     * name and Hz only: the position it came from (loc_lat / loc_lon,
+     * which sloth already writes) is not repeated or kept here. */
+    if (s->aprs.configured) {
+        const aprs_health_t *a = &s->aprs;
+        kv_str(buf, LINEBUF, &off, "aprs_region", aprs_region_name(a->region));
+        kv_int(buf, LINEBUF, &off, "aprs_region_hz", (long long)a->region_hz);
+        kv_int(buf, LINEBUF, &off, "aprs_freq_hz", (long long)a->freq_hz);
+        kv_int(buf, LINEBUF, &off, "aprs_freq_mismatch", a->freq_mismatch);
+        kv_int(buf, LINEBUF, &off, "aprs_silent", a->silent);
+        kv_int(buf, LINEBUF, &off, "aprs_silent_after_s", a->silent_after_s);
+        kv_int(buf, LINEBUF, &off, "aprs_quiet_since", (long long)a->quiet_since);
     }
     /* The record stream's own contract version (ADR 0007, #185 item 3),
      * appended after the flag-gated blocks above so every earlier field

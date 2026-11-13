@@ -347,7 +347,8 @@ static void print_usage(const char *argv0) {
             "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
             "       [--bt-monitor] [--bt-capture PATH] [--ble-rotation-hints]\n"
             "       [--location LAT,LON[,ALT]] [--gps SPEC] [--gps-allow-remote]\n"
-            "       [--gps-baud N] [--adsb SPEC] [--aprs SPEC]\n"
+            "       [--gps-baud N] [--adsb SPEC] [--aprs SPEC] [--aprs-freq HZ]\n"
+            "       [--aprs-silent-hours N]\n"
             "       [--user NAME] [--no-privdrop]\n"
             "       [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
@@ -629,6 +630,15 @@ static void print_usage(const char *argv0) {
             "                     startup; sloth never touches the radio or\n"
             "                     Dire Wolf and uses no network. Refused\n"
             "                     with --replay.\n"
+            "  --aprs-freq HZ     the frequency the Dire Wolf decoder is\n"
+            "                     CONFIGURED for, in Hz (144000000..148000000;\n"
+            "                     not rx_fm's hardware tune). sensor_health\n"
+            "                     flags it when it is not the APRS channel of\n"
+            "                     the region the GNSS fix is in. Needs --aprs.\n"
+            "  --aprs-silent-hours N\n"
+            "                     report the decoder silent when its log is\n"
+            "                     readable but no packet arrived for N hours\n"
+            "                     (1..168, default 6; 0 off). Needs --aprs.\n"
             "  --ble-rotation-hints\n"
             "                     INTERNAL USE ONLY, off by default: link\n"
             "                     private BLE addresses that may be one\n"
@@ -871,6 +881,8 @@ int main(int argc, char **argv) {
     int         gps_baud     = 0;        /* --gps-baud N; 0 = 9600 */
     const char *adsb_arg     = NULL;     /* --adsb SPEC (#26 slice 1) */
     const char *aprs_arg     = NULL;     /* --aprs SPEC (2026-11-05) */
+    uint32_t    aprs_freq    = 0;        /* --aprs-freq HZ (#204) */
+    int         aprs_silent_h = -1;      /* --aprs-silent-hours N, -1 default */
     const char *replay_arg   = NULL;     /* --replay FILE[,FILE] (#119) */
     long        max_ticks    = 0;        /* --ticks N; 0 = run until quit */
     time_t      session_start = sloth_wall();
@@ -1013,6 +1025,22 @@ int main(int argc, char **argv) {
             adsb_arg = argv[++i];
         } else if (!strcmp(argv[i], "--aprs") && i + 1 < argc) {
             aprs_arg = argv[++i];
+        } else if (!strcmp(argv[i], "--aprs-freq") && i + 1 < argc) {
+            if (aprs_freq_parse(argv[++i], &aprs_freq) != 0) {
+                fprintf(stderr, "sloth: --aprs-freq %s: want the decoder's "
+                                "configured frequency in Hz, 144000000.."
+                                "148000000 (e.g. 144390000)\n", argv[i]);
+                return 2;
+            }
+        } else if (!strcmp(argv[i], "--aprs-silent-hours") && i + 1 < argc) {
+            char *end = NULL;
+            long h = strtol(argv[++i], &end, 10);
+            if (!end || end == argv[i] || *end || h < 0 || h > APRS_SILENT_H_MAX) {
+                fprintf(stderr, "sloth: --aprs-silent-hours %s: want 0 (off) "
+                                "to %d\n", argv[i], APRS_SILENT_H_MAX);
+                return 2;
+            }
+            aprs_silent_h = (int)h;
         } else if (!strcmp(argv[i], "--gps-allow-remote")) {
             gps_allow_remote = 1;
         } else if (!strcmp(argv[i], "--gps-baud") && i + 1 < argc) {
@@ -1367,6 +1395,12 @@ int main(int argc, char **argv) {
         if (aprs_spec_parse(aprs_arg, apath, sizeof(apath), NULL, 0) == 0)
             fprintf(stderr, "sloth: --aprs tailing %s from its end "
                             "(read-only; no radio, no network)\n", apath);
+        aprs_set_expect(aprs_freq, aprs_silent_h < 0 ? APRS_SILENT_S_DEFAULT
+                                                     : aprs_silent_h * 3600);
+    } else if (aprs_freq || aprs_silent_h >= 0) {
+        fprintf(stderr, "sloth: --aprs-freq and --aprs-silent-hours "
+                        "describe the --aprs decoder: give --aprs\n");
+        return 2;
     }
 
     char replay_paths[REPLAY_MAX_FILES][REPLAY_PATH_MAX];

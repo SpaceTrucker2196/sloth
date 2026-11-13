@@ -462,8 +462,9 @@
     <section class="panel">
       <div class="aprsline" id="aprs-head" aria-label="aprs decoder"></div>
       <div class="aprsline d-dim" id="aprs-head2"></div>
+      <div class="aprsline aprs-notice" id="aprs-notice" role="status" hidden></div>
       <div class="aprsline d-dim" id="aprs-empty" hidden></div>
-      <span class="sub" id="aprs-note">sloth's aprs_packet and aprs_station records off the --aprs Dire Wolf packet log (144.390 MHz), kept by slothweb in memory: each station's last heard, via, level, comment and position follow its packets. Receive-only: sloth reads a file and never touches the radio or Dire Wolf. Positions are what each station broadcast, unverified (APRS authenticates nothing). Observation only: no row here is a finding.</span>
+      <span class="sub" id="aprs-note">sloth's aprs_packet and aprs_station records off the --aprs Dire Wolf packet log (on the APRS channel of the region sloth's GNSS position is in, or the frequency the operator declared with --aprs-freq; the line above names it), kept by slothweb in memory: each station's last heard, via, level, comment and position follow its packets. Receive-only: sloth reads a file and never touches the radio or Dire Wolf. Positions are what each station broadcast, unverified (APRS authenticates nothing). Observation only: no row here is a finding.</span>
     </section>
     <section class="panel">
       <div class="label">stations <span class="sub" id="aprs-count"></span> <span class="dt-tools" id="aprs-tools"></span></div>
