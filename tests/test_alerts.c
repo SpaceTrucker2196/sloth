@@ -5861,6 +5861,15 @@ static void test_bgp_notification_burst_per_peer_pair(void) {
 
 /* ── SSH brute force ────────────────────────────────────── */
 
+/* #202: rule_ssh_brute_force() reads e->brute_count — banners inside
+ * the sliding ssh.brute_window_s window, kept current by
+ * ssh_snoop_snapshot() from a private ring (src/ssh_snoop.c) — not
+ * the lifetime banner_count. The real windowing arithmetic (a spread
+ * sweep staying low, a burst crossing threshold, an idle flow decaying
+ * back down) is exercised against that ring directly in
+ * tests/test_ssh_snoop.c; here brute_count is seeded alongside
+ * banner_count so these threshold-mapping tests keep exercising the
+ * same shape they always did. */
 static void seed_ssh_flow(sloth_state_t *s, const char *src_ip,
                            const char *dst_ip, int banner_count) {
     if (s->ssh_flow_count >= MAX_SSH_FLOWS) return;
@@ -5871,7 +5880,35 @@ static void seed_ssh_flow(sloth_state_t *s, const char *src_ip,
     snprintf(e->server_banner, sizeof(e->server_banner),
              "SSH-2.0-OpenSSH_8.9");
     e->banner_count = banner_count;
+    e->brute_count  = banner_count;
     e->last_seen    = time(NULL);
+}
+
+/* Once the window has decayed (ssh_snoop_snapshot() would report a
+ * lower brute_count on the next tick, per test_ssh_snoop.c), the rule
+ * must stop re-asserting the incident — `evaluations` (bumped once
+ * per fire() call, #98) must not move on a tick where brute_count is
+ * back under threshold. Pre-#202 the rule read the lifetime
+ * banner_count, which cannot fall while the row exists, so it fired
+ * on literally every tick forever (one reference host: 131,014 fires
+ * on 10 real logins). */
+static void test_ssh_brute_force_idle_flow_stops(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_ssh_flow(&s, "10.0.0.5", "10.0.0.10", 10);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_SSH_BRUTE_FORCE);
+    ASSERT(idx >= 0);
+    if (idx < 0) return;
+    uint32_t evals_before = s.alerts[idx].evaluations;
+
+    /* No new banners landed; the flow's window has aged out. */
+    s.ssh_flows[0].brute_count = 0;
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_SSH_BRUTE_FORCE);
+    ASSERT(idx >= 0);
+    if (idx >= 0)
+        ASSERT_EQ((int)s.alerts[idx].evaluations, (int)evals_before);
 }
 
 static void test_ssh_brute_force_fires_at_threshold(void) {
@@ -5911,6 +5948,8 @@ static void test_ssh_brute_force_per_pair(void) {
 
 /* ── RDP brute force ────────────────────────────────────── */
 
+/* #202: same fix as SSH above — e->brute_count mirrors
+ * connect_req_count here for the same reason. */
 static void seed_rdp_flow(sloth_state_t *s, const char *src_ip,
                            const char *dst_ip, int cr_count,
                            const char *cookie) {
@@ -5922,7 +5961,27 @@ static void seed_rdp_flow(sloth_state_t *s, const char *src_ip,
     if (cookie) snprintf(e->last_cookie, sizeof(e->last_cookie),
                           "%s", cookie);
     e->connect_req_count = cr_count;
+    e->brute_count       = cr_count;
     e->last_seen         = time(NULL);
+}
+
+/* Same shape as SSH's sibling test above. */
+static void test_rdp_brute_force_idle_flow_stops(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_rdp_flow(&s, "203.0.113.7", "10.0.0.20", 10, "administrator");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RDP_BRUTE_FORCE);
+    ASSERT(idx >= 0);
+    if (idx < 0) return;
+    uint32_t evals_before = s.alerts[idx].evaluations;
+
+    s.rdp_flows[0].brute_count = 0;
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_RDP_BRUTE_FORCE);
+    ASSERT(idx >= 0);
+    if (idx >= 0)
+        ASSERT_EQ((int)s.alerts[idx].evaluations, (int)evals_before);
 }
 
 static void test_rdp_brute_force_fires_at_threshold(void) {
@@ -13544,9 +13603,11 @@ void run_alerts_tests(void) {
     RUN_TEST(test_bgp_notification_burst_fires_at_threshold);
     RUN_TEST(test_bgp_notification_burst_below_threshold_no_fire);
     RUN_TEST(test_bgp_notification_burst_per_peer_pair);
+    RUN_TEST(test_ssh_brute_force_idle_flow_stops);
     RUN_TEST(test_ssh_brute_force_fires_at_threshold);
     RUN_TEST(test_ssh_brute_force_below_threshold_no_fire);
     RUN_TEST(test_ssh_brute_force_per_pair);
+    RUN_TEST(test_rdp_brute_force_idle_flow_stops);
     RUN_TEST(test_rdp_brute_force_fires_at_threshold);
     RUN_TEST(test_rdp_brute_force_below_threshold_no_fire);
     RUN_TEST(test_rdp_brute_force_per_pair);

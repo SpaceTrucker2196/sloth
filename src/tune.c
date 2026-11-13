@@ -66,8 +66,17 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "kerb.preauth_burst",         5,   2,   1000,   "pre-auth failures" },
     { "ldap.search_flood",          50,  2,   10000,  "searches" },
     { "bgp.notification_burst",     3,   2,   1000,   "NOTIFICATIONs" },
-    { "ssh.brute_force",            10,  2,   1000,   "attempts" },
-    { "rdp.brute_force",            10,  2,   1000,   "attempts" },
+    /* #202: windowed, like deauth/probe — the ring holds at most
+     * FLOOD_WIN_CAP recent events, so a threshold past it could never
+     * be reached and would silently disable the rule. 1000 was never
+     * reachable even before #202 (MAX_SSH_FLOWS/MAX_RDP_FLOWS churn
+     * long before one pair's lifetime count got there), so the lower
+     * bound is a correction, not a behaviour change for anyone who set
+     * one under 32. */
+    { "ssh.brute_force",            10,  2,   FLOOD_WIN_CAP, "attempts in the window" },
+    { "rdp.brute_force",            10,  2,   FLOOD_WIN_CAP, "attempts in the window" },
+    { "ssh.brute_window_s",         60,  5,   3600,   "seconds (sliding)" },
+    { "rdp.brute_window_s",         60,  5,   3600,   "seconds (sliding)" },
     { "snmp.community_brute",       5,   2,   1000,   "communities tried" },
     { "mqtt.brute_connects",        10,  2,   1000,   "CONNECTs" },
     { "mqtt.brute_fails",           5,   2,   1000,   "refused CONNECTs" },

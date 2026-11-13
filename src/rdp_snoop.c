@@ -5,8 +5,18 @@
 #include "rdp_snoop.h"
 #include "sloth_clock.h"
 #include "stab.h"
+#include "flood_window.h"
+#include "tune.h"
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* Same shape as ssh_snoop.c's ssh_row_t (#202): the window stays out
+ * of rdp_flow_t itself, which is copied wholesale into
+ * sloth_state_t. */
+typedef struct {
+    rdp_flow_t     pub;
+    flood_window_t win;
+} rdp_row_t;
 
 /* Bounded table (#110): STAB_OLDEST, so a spray of new keys churns
  * the table and is tallied, but can never make it allocate or refuse.
@@ -15,10 +25,11 @@ static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
  * STAB_OLDEST. */
 typedef struct { const char *src_ip, *dst_ip; } rdp_key_t;
 static int key_eq(const void *row, const void *key) {
-    const rdp_flow_t *e = row; const rdp_key_t *k = key;
-    return strcmp(e->src_ip, k->src_ip) == 0 && strcmp(e->dst_ip, k->dst_ip) == 0;
+    const rdp_row_t *e = row; const rdp_key_t *k = key;
+    return strcmp(e->pub.src_ip, k->src_ip) == 0 &&
+           strcmp(e->pub.dst_ip, k->dst_ip) == 0;
 }
-STAB_DECL(g_tbl, rdp_flow_t, MAX_RDP_FLOWS, last_seen, STAB_OLDEST,
+STAB_DECL(g_tbl, rdp_row_t, MAX_RDP_FLOWS, pub.last_seen, STAB_OLDEST,
           SH_EVICT_RDP_FLOW, NULL, key_eq);
 
 /* RFC 1006 §6 — TPKT envelope:
@@ -147,28 +158,43 @@ int rdp_snoop_observe(const char *src_ip, uint16_t src_port,
         extract_neg_req_protocols(user_data, user_len, &protos);
     }
 
-    time_t now = sloth_wall();
+    time_t   now    = sloth_wall();
+    uint64_t now_ms = sloth_mono_ms();
     pthread_mutex_lock(&g_mu);
     rdp_key_t key = { client_ip, server_ip };
     int created;
-    rdp_flow_t *e = stab_get(&g_tbl, &key, now, &created);
+    rdp_row_t *e = stab_get(&g_tbl, &key, now, &created);
     if (created) {
-        snprintf(e->src_ip, sizeof(e->src_ip), "%s", client_ip);
-        snprintf(e->dst_ip, sizeof(e->dst_ip), "%s", server_ip);
+        snprintf(e->pub.src_ip, sizeof(e->pub.src_ip), "%s", client_ip);
+        snprintf(e->pub.dst_ip, sizeof(e->pub.dst_ip), "%s", server_ip);
     }
-    if (e->first_seen == 0) e->first_seen = now;
-    e->last_seen = now;
-    e->connect_req_count++;
+    if (e->pub.first_seen == 0) e->pub.first_seen = now;
+    e->pub.last_seen = now;
+    e->pub.connect_req_count++;
+    /* #202: same fix as ssh_flow_t — the sliding window
+     * RDP_BRUTE_FORCE reads, so an idle pair's rate decays instead of
+     * connect_req_count's lifetime total only ever climbing. */
+    flood_window_note(&e->win, now_ms, (int)tune_val(TUNE_RDP_BRUTE_FORCE),
+                      (uint32_t)tune_val(TUNE_RDP_BRUTE_WINDOW_S) * 1000u);
     if (cookie[0])
-        snprintf(e->last_cookie, sizeof(e->last_cookie), "%s", cookie);
-    e->proto_mask |= protos;
+        snprintf(e->pub.last_cookie, sizeof(e->pub.last_cookie), "%s", cookie);
+    e->pub.proto_mask |= protos;
     pthread_mutex_unlock(&g_mu);
     return 1;
 }
 
 void rdp_snoop_snapshot(sloth_state_t *s) {
+    static rdp_row_t tmp[MAX_RDP_FLOWS];   /* static: off the caller's stack */
+    uint64_t now_ms = sloth_mono_ms();
+    uint32_t win_ms = (uint32_t)tune_val(TUNE_RDP_BRUTE_WINDOW_S) * 1000u;
     pthread_mutex_lock(&g_mu);
-    s->rdp_flow_count = stab_snapshot(&g_tbl, s->rdp_flows, MAX_RDP_FLOWS);
+    int n = stab_snapshot(&g_tbl, tmp, MAX_RDP_FLOWS);
+    s->rdp_flow_count = n;
+    for (int i = 0; i < n; i++) {
+        s->rdp_flows[i] = tmp[i].pub;
+        s->rdp_flows[i].brute_count =
+            flood_window_count(&tmp[i].win, now_ms, win_ms);
+    }
     pthread_mutex_unlock(&g_mu);
 }
 

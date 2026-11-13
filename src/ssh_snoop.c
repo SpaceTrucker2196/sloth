@@ -5,8 +5,24 @@
 #include "ssh_snoop.h"
 #include "sloth_clock.h"
 #include "stab.h"
+#include "flood_window.h"
+#include "tune.h"
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* The table's row carries the exported ssh_flow_t plus the private
+ * sliding window SSH_BRUTE_FORCE reads (#202). The window
+ * (flood_window_t, 272 bytes with its 32-entry ring) stays out of
+ * ssh_flow_t itself: that struct is copied wholesale into
+ * sloth_state_t, which is already multiple megabytes and gets copied
+ * by value in several places, so growing every one of its 64 rows by
+ * 272 bytes is a real cost for a field no rule outside this file
+ * reads. ssh_snoop_snapshot() below exports only the one int the
+ * rule needs. */
+typedef struct {
+    ssh_flow_t     pub;
+    flood_window_t win;
+} ssh_row_t;
 
 /* Bounded table (#110): STAB_OLDEST, so a spray of new keys churns
  * the table and is tallied, but can never make it allocate or refuse.
@@ -15,10 +31,11 @@ static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
  * STAB_OLDEST. */
 typedef struct { const char *src_ip, *dst_ip; } ssh_key_t;
 static int key_eq(const void *row, const void *key) {
-    const ssh_flow_t *e = row; const ssh_key_t *k = key;
-    return strcmp(e->src_ip, k->src_ip) == 0 && strcmp(e->dst_ip, k->dst_ip) == 0;
+    const ssh_row_t *e = row; const ssh_key_t *k = key;
+    return strcmp(e->pub.src_ip, k->src_ip) == 0 &&
+           strcmp(e->pub.dst_ip, k->dst_ip) == 0;
 }
-STAB_DECL(g_tbl, ssh_flow_t, MAX_SSH_FLOWS, last_seen, STAB_OLDEST,
+STAB_DECL(g_tbl, ssh_row_t, MAX_SSH_FLOWS, pub.last_seen, STAB_OLDEST,
           SH_EVICT_SSH_FLOW, NULL, key_eq);
 
 /* RFC 4253 §4.2 — the protocol version exchange string takes the
@@ -81,19 +98,25 @@ int ssh_snoop_observe(const char *src_ip, uint16_t src_port,
         return 0;
     }
 
-    time_t now = sloth_wall();
+    time_t   now    = sloth_wall();
+    uint64_t now_ms = sloth_mono_ms();
     pthread_mutex_lock(&g_mu);
     ssh_key_t key = { client_ip, server_ip };
     int created;
-    ssh_flow_t *e = stab_get(&g_tbl, &key, now, &created);
+    ssh_row_t *e = stab_get(&g_tbl, &key, now, &created);
     if (created) {
-        snprintf(e->src_ip, sizeof(e->src_ip), "%s", client_ip);
-        snprintf(e->dst_ip, sizeof(e->dst_ip), "%s", server_ip);
+        snprintf(e->pub.src_ip, sizeof(e->pub.src_ip), "%s", client_ip);
+        snprintf(e->pub.dst_ip, sizeof(e->pub.dst_ip), "%s", server_ip);
     }
-    if (e->first_seen == 0) e->first_seen = now;
-    e->last_seen = now;
-    e->banner_count++;
-    copy_banner(e->server_banner, sizeof(e->server_banner), payload, len);
+    if (e->pub.first_seen == 0) e->pub.first_seen = now;
+    e->pub.last_seen = now;
+    e->pub.banner_count++;
+    /* #202: note this banner in the sliding window SSH_BRUTE_FORCE
+     * actually reads, so an idle pair's rate decays instead of the
+     * lifetime count (banner_count, above) only ever climbing. */
+    flood_window_note(&e->win, now_ms, (int)tune_val(TUNE_SSH_BRUTE_FORCE),
+                      (uint32_t)tune_val(TUNE_SSH_BRUTE_WINDOW_S) * 1000u);
+    copy_banner(e->pub.server_banner, sizeof(e->pub.server_banner), payload, len);
     pthread_mutex_unlock(&g_mu);
 
     (void)dst_port;
@@ -101,8 +124,17 @@ int ssh_snoop_observe(const char *src_ip, uint16_t src_port,
 }
 
 void ssh_snoop_snapshot(sloth_state_t *s) {
+    static ssh_row_t tmp[MAX_SSH_FLOWS];   /* static: off the caller's stack */
+    uint64_t now_ms = sloth_mono_ms();
+    uint32_t win_ms = (uint32_t)tune_val(TUNE_SSH_BRUTE_WINDOW_S) * 1000u;
     pthread_mutex_lock(&g_mu);
-    s->ssh_flow_count = stab_snapshot(&g_tbl, s->ssh_flows, MAX_SSH_FLOWS);
+    int n = stab_snapshot(&g_tbl, tmp, MAX_SSH_FLOWS);
+    s->ssh_flow_count = n;
+    for (int i = 0; i < n; i++) {
+        s->ssh_flows[i] = tmp[i].pub;
+        s->ssh_flows[i].brute_count =
+            flood_window_count(&tmp[i].win, now_ms, win_ms);
+    }
     pthread_mutex_unlock(&g_mu);
 }
 

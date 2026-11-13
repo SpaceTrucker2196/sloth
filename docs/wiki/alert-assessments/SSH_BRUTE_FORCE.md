@@ -1,15 +1,35 @@
 ---
 type: SSH_BRUTE_FORCE
 technique: T1110.001
-rule_file: src/alerts/rules_wired.c:1095 rule_ssh_brute_force()
+rule_file: src/alerts/rules_wired.c:1108 rule_ssh_brute_force()
 count_semantics: per rule evaluation - one increment per alerts_update() tick (poll.c:310; the wait between ticks is at most POLL_MS 250 ms, include/sloth.h:28 - the loop wakes early on alert fires and --refresh-ms can shorten it, so 4 ticks/s is a floor, not a fixed cadence) for each (client, server) pair in the 64-row ssh_flow table whose lifetime banner_count is at or above the threshold; banner_count is the number of server identification strings seen on the pair, one per TCP connection that reached the SSH handshake, successful or not; it is never windowed down and the table has no time expiry (STAB_OLDEST, src/ssh_snoop.c:21-22, no stab_expire call), so once a pair has reached 10 connections it fires every tick until 64 newer pairs evict its row or the process restarts, and engine count = (qualifying pairs) x (ticks they remain)
 severity_assessment: disagree in part - CRIT fits the thing the name promises (an automated credential attack against a shell) but the rule does not measure that; it measures the lifetime number of SSH connections between two hosts, successful ones included, with no time window, so a cron rsync, a CI runner, an IDE remote session or any scripted scp reaches 10 within its first day and stands thereafter; a windowed count (N banners in M seconds) would justify CRIT, the lifetime total justifies WARN
 false_positive_risk: high - the threshold is a lifetime total, the counter includes successful sessions, and the row has no expiry, so every legitimate automation that opens many short SSH sessions to one server crosses it; the four keys on the reference host reopened five times, which is the pattern of a routine job re-crossing 10 after each sensor restart, not of four separate incidents
 noise_verdict: noisy in count and likely noisy in findings on the reference host - 64,873,479 fires on 4 keys, max CRIT, 5 reopens; ~16.2M evaluations per key, which at the 4 ticks/s floor would be ~47 days, longer than the 18-day span between first and last seen, so the loop averaged roughly 10 ticks/s (early wake on a host with several standing alerts predicts this); four (client, server) pairs ever qualified, which is the shape of a few hosts that routinely open many SSH sessions to one server, not of a sweep; recommend the alert page show banner_count, first_seen and last_seen from the ssh_flow record and treat engine count as residency time
 prevalence: SSH password guessing is a first-class ATT&CK sub-technique that names SSH (22/TCP) first in its list of targeted services [2], with examples of Chaos and Kinsing targeting SSH for initial access [7]; hydra attacks "SSH (v1 and v2)" among dozens of protocols [4] and fail2ban exists because the attack is common enough to need an automatic ban after 5 failures in 10 minutes [5], [6]; no fetched source quantifies a field rate, so none is claimed
-tuning: [ssh.brute_force (TUNE_SSH_BRUTE_FORCE, default 10, range 2..1000; alias none - set via --tune)]
+tuning: [ssh.brute_force (TUNE_SSH_BRUTE_FORCE, default 10, range 2..32; alias none - set via --tune), ssh.brute_window_s (TUNE_SSH_BRUTE_WINDOW_S, default 60, range 5..3600; set via --tune)]
 researched: 2026-11-03
 ---
+## Resolved 2026-11-13 (#202)
+
+Everything below this note describes the rule as it stood on
+2026-11-03 and is kept as the record of the defect this assessment
+found and its field impact (64,873,479 fires on 4 keys). As of #202
+the rule reads a per-flow sliding window (`e->win`,
+`flood_window_count()`, `src/alerts/rules_wired.c`) rather than
+`banner_count`'s lifetime total: `ssh.brute_force` (still default
+**10**) is now a count *inside* `ssh.brute_window_s` (new, default
+**60 s**), and the window's own ring caps both the count and the
+knob's range at **32** (`FLOOD_WIN_CAP`, down from the old 1000,
+which a windowed count could never reach anyway). `banner_count`
+itself is unchanged and still exported for operator context; no rule
+reads it any more. A pair that goes quiet now resolves the incident
+within the window plus the engine's normal 300 s resolve floor,
+instead of re-firing on every tick until eviction or a restart. See
+[[ssh-snoop]].
+
+---
+
 ## What the rule checks
 
 Input: `s->ssh_flows`, the SSH flow table of `MAX_SSH_FLOWS` = 64 rows keyed by **(client IP, server IP)** (`include/sloth.h:349-373`; `src/ssh_snoop.c:16-22`). `ssh_snoop_observe()` takes any TCP payload with 22 on either side (`:62`; dispatched from `src/capture/capture.c:749-754`) and tests whether it starts with the literal `SSH-` and has a second `-` within the first 12 bytes (`:32-40`) - the RFC 4253 §4.2 identification string `SSH-protoversion-softwareversion SP comments CR LF`, which "both sides MUST send" once the connection is established, and after which "Key exchange will begin immediately" [3]. Only the **server's** string is counted: a payload from source port 22 increments `banner_count` on the (client = dst, server = src) row and overwrites `server_banner`; the client's string is seen and discarded, because counting both would double every connection (`:65-82`, `:95-96`). Each TCP connection produces exactly one server banner, so `banner_count` is the number of connections that reached the SSH handshake. Nothing after the banner is visible - authentication happens inside the encrypted transport - so the count includes connections that authenticated successfully just as it includes ones that failed (`docs/wiki/ssh-snoop.md:111-116`). The observer keeps no per-connection state, so a retransmitted banner segment counts again. SSH on a port other than 22 is not observed (`:62`). The counter is a lifetime total for the row; nothing decays it.

@@ -385,15 +385,27 @@ typedef struct {
  * the SSH handshake. SSH brute-force tools (hydra, medusa, ncrack)
  * open many connections per second; legitimate users open one and
  * stay connected. Tier 1 counts banners observed per (src_ip,
- * dst_ip) and fires SSH_BRUTE_FORCE when the count crosses the
- * threshold — without ever decrypting anything, because brute-force
- * is a TCP-shape signal, not a payload signal. */
+ * dst_ip); SSH_BRUTE_FORCE fires on `brute_count` — banners inside
+ * the sliding ssh.brute_window_s seconds, kept current by
+ * ssh_snoop.c's private flood_window_t ring — not on banner_count's
+ * lifetime total (#202: a lifetime count never decays, so a handful
+ * of ordinary reconnects over weeks eventually reads as a standing
+ * brute force that eviction is the only thing that ever clears). The
+ * ring itself stays private to ssh_snoop.c rather than living here:
+ * sloth_state_t is already multiple megabytes and is copied by value
+ * in several places, so this struct holds the one int the rule
+ * needs, not the 272-byte ring that produced it. banner_count stays
+ * a lifetime tally for operator context — "how much SSH has this
+ * pair ever done" — but no rule reads it. Never decrypts anything
+ * either way: brute-force is a TCP-shape signal, not a payload
+ * signal. */
 #define MAX_SSH_FLOWS 64
 
 typedef struct {
     char     src_ip[46];           /* client (initiator of TCP) */
     char     dst_ip[46];           /* server (the SSHd target)  */
-    int      banner_count;         /* TCP flows that reached banner */
+    int      banner_count;         /* lifetime; informational only */
+    int      brute_count;          /* banners inside ssh.brute_window_s (#202) */
     char     server_banner[80];    /* last banner string seen   */
     time_t   first_seen;
     time_t   last_seen;
@@ -411,8 +423,12 @@ typedef struct {
  * Tier 1 counts X.224 CR TPDUs per (client_ip, server_ip), keeps
  * the latest mstshash cookie value (the username the attacker is
  * guessing against), and bitmasks the requested protocols. That's
- * enough for the brute-force alert which catches xfreerdp-loop /
- * NLBrute / Crowbar without seeing the encrypted auth. */
+ * enough for the brute-force alert, which catches xfreerdp-loop /
+ * NLBrute / Crowbar off `brute_count` — CRs inside the sliding
+ * rdp.brute_window_s seconds, same mechanism and same reason as
+ * ssh_flow_t's brute_count above — not off connect_req_count's
+ * lifetime total (#202). connect_req_count remains a lifetime tally
+ * for operator context; no rule reads it. */
 #define MAX_RDP_FLOWS 64
 
 #define RDP_PROTO_RDP        0x01u   /* vanilla legacy RDP   */
@@ -423,7 +439,8 @@ typedef struct {
 typedef struct {
     char     src_ip[46];           /* client (TCP initiator) */
     char     dst_ip[46];           /* server (the RDP target) */
-    int      connect_req_count;    /* X.224 CR TPDUs observed */
+    int      connect_req_count;    /* lifetime; informational only */
+    int      brute_count;          /* CRs inside rdp.brute_window_s (#202) */
     char     last_cookie[64];      /* last mstshash username seen */
     uint8_t  proto_mask;           /* OR of RDP_PROTO_* observed  */
     time_t   first_seen;

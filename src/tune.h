@@ -59,6 +59,10 @@ typedef enum {
     TUNE_BGP_NOTIFICATION_BURST,
     TUNE_SSH_BRUTE_FORCE,
     TUNE_RDP_BRUTE_FORCE,
+    /* #202: the sliding window ssh.brute_force / rdp.brute_force count
+     * inside, in seconds. See src/flood_window.h. */
+    TUNE_SSH_BRUTE_WINDOW_S,
+    TUNE_RDP_BRUTE_WINDOW_S,
     TUNE_SNMP_COMMUNITY_BRUTE,
     TUNE_MQTT_BRUTE_CONNECTS,
     TUNE_MQTT_BRUTE_FAILS,

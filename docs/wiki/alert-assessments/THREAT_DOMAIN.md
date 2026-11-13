@@ -1,7 +1,7 @@
 ---
 type: THREAT_DOMAIN
 technique: T1071.004
-rule_file: src/alerts/rules_wired.c:1279 (rule_threat_domain)
+rule_file: src/alerts/rules_wired.c:1298 (rule_threat_domain)
 count_semantics: per poll tick (default 250 ms) per matched IOC - the rule fires once per distinct matched IOC string each tick a dns_log row still matches it (key `threat-d:<ioc>`), so `count` is tick re-evaluations while the matching query stays in the DNS ring, not per query packet
 severity_assessment: agree in principle (CRIT for a confirmed-bad name is correct) - BUT with the shipped list it is moot: the list is synthetic demo data that matches nothing in real traffic, so the real severity question only exists once an operator loads a feed
 false_positive_risk: low in mechanism (exact suffix match on a label boundary, cut-name rows skipped) - the risk is staleness of whatever feed replaces the demo list, not matching error

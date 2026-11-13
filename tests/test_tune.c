@@ -54,6 +54,8 @@ static void test_defaults_are_the_shipped_values(void) {
     ASSERT_EQ((long long)tune_val(TUNE_BGP_NOTIFICATION_BURST), 3);
     ASSERT_EQ((long long)tune_val(TUNE_SSH_BRUTE_FORCE), 10);
     ASSERT_EQ((long long)tune_val(TUNE_RDP_BRUTE_FORCE), 10);
+    ASSERT_EQ((long long)tune_val(TUNE_SSH_BRUTE_WINDOW_S), 60);
+    ASSERT_EQ((long long)tune_val(TUNE_RDP_BRUTE_WINDOW_S), 60);
     ASSERT_EQ((long long)tune_val(TUNE_SNMP_COMMUNITY_BRUTE), 5);
     ASSERT_EQ((long long)tune_val(TUNE_MQTT_BRUTE_CONNECTS), 10);
     ASSERT_EQ((long long)tune_val(TUNE_MQTT_BRUTE_FAILS), 5);
@@ -71,6 +73,12 @@ static void test_specs_match_enum_order(void) {
     tune_reset();
     ASSERT_STR(tune_spec(TUNE_KARMA_SSID_THRESH)->name, "karma.ssid_thresh");
     ASSERT_STR(tune_spec(TUNE_SSH_BRUTE_FORCE)->name, "ssh.brute_force");
+    /* #202: windowed now, bound to the ring cap rather than the old
+     * 1000 a lifetime count never actually reached. */
+    ASSERT_EQ((long long)tune_spec(TUNE_SSH_BRUTE_FORCE)->hi, FLOOD_WIN_CAP);
+    ASSERT_EQ((long long)tune_spec(TUNE_RDP_BRUTE_FORCE)->hi, FLOOD_WIN_CAP);
+    ASSERT_STR(tune_spec(TUNE_SSH_BRUTE_WINDOW_S)->name, "ssh.brute_window_s");
+    ASSERT_STR(tune_spec(TUNE_RDP_BRUTE_WINDOW_S)->name, "rdp.brute_window_s");
     ASSERT_STR(tune_spec(TUNE_MQTT_BRUTE_FAILS)->name, "mqtt.brute_fails");
     ASSERT_STR(tune_spec(TUNE_TWIN_STEER_WINDOW_S)->name, "twin.steer_window_s");
     ASSERT_STR(tune_spec(TUNE_TWIN_LATE_ARRIVAL_S)->name, "twin.late_arrival_s");

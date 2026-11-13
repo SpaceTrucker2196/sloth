@@ -1,14 +1,31 @@
 ---
 type: RDP_BRUTE_FORCE
 technique: T1110.001
-rule_file: src/alerts/rules_wired.c:1128 rule_rdp_brute_force()
+rule_file: src/alerts/rules_wired.c:1146 rule_rdp_brute_force()
 count_semantics: per rule evaluation - one increment per alerts_update() tick (poll.c:310; the wait between ticks is at most POLL_MS 250 ms, include/sloth.h:28 - the loop wakes early on alert fires and --refresh-ms can shorten it, so 4 ticks/s is a floor, not a fixed cadence) for each (client, server) pair in the 64-row rdp_flow table whose lifetime connect_req_count is at or above the threshold; connect_req_count is the number of X.224 Connection Request PDUs seen on the pair, one per TCP connection that began the RDP connection sequence, successful or not; it is never windowed down and the table has no time expiry (STAB_OLDEST, src/rdp_snoop.c:21-22, no stab_expire call), so once a pair has reached 10 connections it fires every tick until 64 newer pairs evict its row or the process restarts, and engine count = (qualifying pairs) x (ticks they remain)
 severity_assessment: agree, with the same structural caveat as SSH_BRUTE_FORCE - CRIT fits an RDP credential attack, which the FBI describes as a common path to intrusion [5], and RDP has a weaker benign baseline than SSH (a human opens one session and stays, there is no RDP equivalent of a cron scp), so a lifetime count of 10 is more often meaningful; but the count has no time window and includes successful sessions, so a user who reconnects daily to the same server for two weeks reaches it too
 false_positive_risk: medium - lower than SSH because scripted short RDP sessions are rare, but the lifetime counter still turns routine daily reconnects into a standing incident within weeks, and the cookie only names the last user, so a shared jump host looks like one client cycling usernames
 noise_verdict: not seen on the reference host - host is null, consistent with no RDP on the monitored segment (no Windows hosts accepting 3389, or sessions on a VLAN the sensor does not see); on a segment with Windows servers the lifetime counter means every administrator workstation eventually holds a standing incident against each server it manages, so the operator should expect one key per (admin, server) pair and read the cookie and the rate before treating a new key as an attack
 prevalence: RDP password guessing is a first-class ATT&CK sub-technique that lists RDP / Terminal Services (3389/TCP) among targeted services [2], Fox Kitten "has brute forced RDP credentials" [7], and the FBI's 2018 PSA says actors "have developed methods of identifying and exploiting vulnerable RDP sessions over the Internet" with weak passwords "vulnerable to brute-force attacks and dictionary attacks" [5]; hydra and crowbar both support RDP [4], [6]; no fetched source quantifies a field rate, so none is claimed
-tuning: [rdp.brute_force (TUNE_RDP_BRUTE_FORCE, default 10, range 2..1000; alias none - set via --tune)]
+tuning: [rdp.brute_force (TUNE_RDP_BRUTE_FORCE, default 10, range 2..32; alias none - set via --tune), rdp.brute_window_s (TUNE_RDP_BRUTE_WINDOW_S, default 60, range 5..3600; set via --tune)]
 researched: 2026-11-03
+---
+## Resolved 2026-11-13 (#202)
+
+Everything below this note describes the rule as it stood on
+2026-11-03 and is kept as the record of this assessment's finding
+("the fix is the window" — see the last line of "Sufficient to act
+on alone?" below). As of #202 the rule reads a per-flow sliding
+window (`e->win`, `flood_window_count()`,
+`src/alerts/rules_wired.c`) rather than `connect_req_count`'s
+lifetime total: `rdp.brute_force` (still default **10**) is now a
+count *inside* `rdp.brute_window_s` (new, default **60 s**), and the
+window's own ring caps both the count and the knob's range at **32**
+(`FLOOD_WIN_CAP`). `connect_req_count` itself is unchanged and still
+exported for operator context; no rule reads it any more. The same
+fix landed for `SSH_BRUTE_FORCE` in the same change — see
+[[rdp-snoop]] and the SSH_BRUTE_FORCE assessment's own resolved note.
+
 ---
 ## What the rule checks
 

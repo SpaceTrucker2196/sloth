@@ -1079,31 +1079,45 @@ void rule_bgp_notification_burst(const sloth_state_t *s, time_t now) {
 }
 
 /* SSH brute force: ten or more SSH banner exchanges between one
- * client and one server. SSH brute-force tools (hydra, medusa,
- * ncrack) open many TCP connections per second and complete the
- * banner exchange each time before testing creds; a legitimate
- * user opens one and stays. The signal is the *connection*
- * cadence, not the encrypted auth payload — which we never see.
+ * client and one server inside the sliding ssh.brute_window_s
+ * window. SSH brute-force tools (hydra, medusa, ncrack) open many
+ * TCP connections per second and complete the banner exchange each
+ * time before testing creds; a legitimate user opens one and stays.
+ * The signal is the *connection* cadence, not the encrypted auth
+ * payload — which we never see.
  *
  * Why 10: a normal user might re-connect a handful of times in a
  * session after network blips. Ten distinct banner exchanges to
- * the same server inside the active window is unambiguous
- * brute-force shape. fail2ban's default ban threshold is 5 with a
- * wider window; we're a bit higher to stay surprise-free. */
+ * the same server inside the window is unambiguous brute-force
+ * shape. fail2ban's default ban threshold is 5 with a wider window;
+ * we're a bit higher to stay surprise-free.
+ *
+ * #202: this used to threshold e->banner_count, a lifetime total
+ * that never decayed — once a routine pair crossed 10 banners ever,
+ * the rule re-fired every tick until the row was evicted or the
+ * process restarted (one reference host logged 131,014 fires on 10
+ * ordinary key-auth logins). e->brute_count is kept current by
+ * ssh_snoop_snapshot() every tick from a private sliding window
+ * (src/ssh_snoop.c) — "how many banners landed in the last
+ * ssh.brute_window_s seconds" — so it falls back under the threshold
+ * on its own, and the alert resolves the same way every other engine
+ * incident does, once the flow goes quiet, with no eviction or
+ * restart required. */
 #define SSH_BRUTE_FORCE_THRESHOLD ((int)tune_val(TUNE_SSH_BRUTE_FORCE))
 
 void rule_ssh_brute_force(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->ssh_flow_count; i++) {
         const ssh_flow_t *e = &s->ssh_flows[i];
-        if (e->banner_count < SSH_BRUTE_FORCE_THRESHOLD) continue;
+        if (e->brute_count < SSH_BRUTE_FORCE_THRESHOLD) continue;
 
         char key[ALERT_KEY_LEN];
         snprintf(key, sizeof(key), "ssh-brute:%.39s->%.39s",
                  e->src_ip, e->dst_ip);
         char detail[ALERT_DETAIL_LEN];
         snprintf(detail, sizeof(detail),
-                 "%s->%s: %d SSH banners (brute-force; %.30s)",
-                 e->src_ip, e->dst_ip, e->banner_count,
+                 "%s->%s: %d SSH banners in %ds (brute-force; %.30s)",
+                 e->src_ip, e->dst_ip, e->brute_count,
+                 (int)tune_val(TUNE_SSH_BRUTE_WINDOW_S),
                  e->server_banner[0] ? e->server_banner : "(none)");
         fire(ALERT_TYPE_SSH_BRUTE_FORCE, ALERT_SEV_CRIT,
              "SSH_BRUTE_FORCE", detail, key,
@@ -1111,32 +1125,37 @@ void rule_ssh_brute_force(const sloth_state_t *s, time_t now) {
     }
 }
 
-/* RDP brute force: ten or more X.224 Connection Requests from
- * one client to one server. xfreerdp-loop, NLBrute, and Crowbar
- * all open a fresh TCP connection per credential attempt and
- * complete the TPKT/X.224 negotiation each time. A legitimate
- * user opens one and stays. The signal is the connection
- * cadence; the encrypted CredSSP/TLS payload underneath stays
- * opaque and we never need it.
+/* RDP brute force: ten or more X.224 Connection Requests from one
+ * client to one server inside the sliding rdp.brute_window_s
+ * window. xfreerdp-loop, NLBrute, and Crowbar all open a fresh TCP
+ * connection per credential attempt and complete the TPKT/X.224
+ * negotiation each time. A legitimate user opens one and stays. The
+ * signal is the connection cadence; the encrypted CredSSP/TLS
+ * payload underneath stays opaque and we never need it.
  *
  * Why 10: matches the SSH threshold for the same reason —
  * generous enough for laptops behind NAT that re-connect a few
  * times after sleep/wake, well below what brute-force tools
- * produce in their first minute. */
+ * produce in their first minute.
+ *
+ * #202: same fix as SSH above — connect_req_count was a lifetime
+ * total with no window, so the rule re-fired forever once a routine
+ * pair crossed 10 connections ever. See rule_ssh_brute_force(). */
 #define RDP_BRUTE_FORCE_THRESHOLD ((int)tune_val(TUNE_RDP_BRUTE_FORCE))
 
 void rule_rdp_brute_force(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->rdp_flow_count; i++) {
         const rdp_flow_t *e = &s->rdp_flows[i];
-        if (e->connect_req_count < RDP_BRUTE_FORCE_THRESHOLD) continue;
+        if (e->brute_count < RDP_BRUTE_FORCE_THRESHOLD) continue;
 
         char key[ALERT_KEY_LEN];
         snprintf(key, sizeof(key), "rdp-brute:%.39s->%.39s",
                  e->src_ip, e->dst_ip);
         char detail[ALERT_DETAIL_LEN];
         snprintf(detail, sizeof(detail),
-                 "%s->%s: %d RDP CRs (brute-force; user=%.20s)",
-                 e->src_ip, e->dst_ip, e->connect_req_count,
+                 "%s->%s: %d RDP CRs in %ds (brute-force; user=%.20s)",
+                 e->src_ip, e->dst_ip, e->brute_count,
+                 (int)tune_val(TUNE_RDP_BRUTE_WINDOW_S),
                  e->last_cookie[0] ? e->last_cookie : "?");
         fire(ALERT_TYPE_RDP_BRUTE_FORCE, ALERT_SEV_CRIT,
              "RDP_BRUTE_FORCE", detail, key,
