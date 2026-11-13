@@ -475,6 +475,62 @@ static void test_sensor_health_liveness(void) {
     done();
 }
 
+/* #193 field data: sensor_health's twin193_* counts reach /api/live
+ * as this sloth session's and as the total over the sessions seen, a
+ * new twin193_since folding the last session in. Seen red 2026-11-12
+ * with the fold removed (total equal to the session after the restart)
+ * and with c193_val() accepting a negative count. */
+static void sh193(long long now_ms, long long since, long long base) {
+    char line[1024];
+    snprintf(line, sizeof(line),
+             "{\"type\":\"sensor_health\",\"ts\":5,\"capture_open\":1,"
+             "\"capture_running\":1,\"jsonl_version\":\"1.7.0\","
+             "\"twin193_since\":%lld,\"twin193_floods\":%lld,"
+             "\"twin193_floods_chain\":%lld,\"twin193_named\":%lld,"
+             "\"twin193_late_laa\":%lld,\"twin193_coincide\":%lld,"
+             "\"twin193_excl_carrier\":%lld,\"twin193_excl_faint\":%lld,"
+             "\"twin193_excl_sibling\":%lld,\"twin193_excl_any\":%lld}\n",
+             since, base + 8, base + 7, base + 6, base + 5, base + 4,
+             base + 3, base + 2, base + 1, base);
+    feed_at(line, now_ms);
+}
+
+static void test_sensor_health_twin193(void) {
+    fresh();
+    /* An older sloth: no twin193 object at all. */
+    feed_at("{\"type\":\"sensor_health\",\"ts\":5,\"capture_open\":1}\n", 1000);
+    WT_LACKS(live_json(), "twin193");
+
+    sh193(1000, 1700000000, 10);
+    const char *j = live_json();
+    WT_HAS(j, "\"twin193\":{\"since\":1700000000,\"session\":{\"floods\":18,"
+              "\"floods_chain\":17,\"named\":16,\"late_laa\":15,\"coincide\":14,"
+              "\"excl_carrier\":13,\"excl_faint\":12,\"excl_sibling\":11,"
+              "\"excl_any\":10},\"total\":{\"floods\":18,");
+    /* The same session moving on replaces, never adds. */
+    sh193(2000, 1700000000, 20);
+    WT_HAS(live_json(), "\"total\":{\"floods\":28,\"floods_chain\":27,");
+    /* A sloth restart: a new since. The total keeps the last session. */
+    sh193(3000, 1700000500, 0);
+    j = live_json();
+    WT_HAS(j, "\"session\":{\"floods\":8,");
+    WT_HAS(j, "\"total\":{\"floods\":36,\"floods_chain\":34,\"named\":32,"
+              "\"late_laa\":30,\"coincide\":28,\"excl_carrier\":26,"
+              "\"excl_faint\":24,\"excl_sibling\":22,\"excl_any\":20}");
+    /* A sloth that has run no pass yet says since 0: no fold, no stamp. */
+    sh193(4000, 0, 0);
+    WT_HAS(live_json(), "\"since\":1700000500,");
+    WT_HAS(live_json(), "\"total\":{\"floods\":36,");
+    /* A hostile count is read as 0, not subtracted. */
+    feed_at("{\"type\":\"sensor_health\",\"ts\":5,\"twin193_since\":1700000500,"
+            "\"twin193_floods\":-99,\"twin193_coincide\":\"7\"}\n", 5000);
+    j = live_json();
+    WT_HAS(j, "\"session\":{\"floods\":0,");
+    WT_HAS(j, "\"total\":{\"floods\":28,");
+    WT_LACKS(j, "-99");
+    done();
+}
+
 /* ── the recent ring ──────────────────────────────────────────────── */
 
 static void test_recent_ring(void) {
@@ -633,6 +689,21 @@ static void test_worst_case_live_fits(void) {
              "\"scope\":\"%s\",\"capture_open\":1,\"monitor_open\":1}\n",
              big, big, big, big, big);
     feed(line);
+    /* #193's counts at their cap, over two sessions so the total is at
+     * twice it. */
+    for (int k = 0; k < 2; k++) {
+        snprintf(line, sizeof(line),
+                 "{\"type\":\"sensor_health\",\"ts\":1,\"capture_iface\":\"%s\","
+                 "\"monitor_iface\":\"%s\",\"capture_exit\":\"%s\",\"monitor_exit\":\"%s\","
+                 "\"scope\":\"%s\",\"capture_open\":1,\"monitor_open\":1,"
+                 "\"twin193_since\":%d,\"twin193_floods\":1000000000000,"
+                 "\"twin193_floods_chain\":1000000000000,\"twin193_named\":1000000000000,"
+                 "\"twin193_late_laa\":1000000000000,\"twin193_coincide\":1000000000000,"
+                 "\"twin193_excl_carrier\":1000000000000,\"twin193_excl_faint\":1000000000000,"
+                 "\"twin193_excl_sibling\":1000000000000,\"twin193_excl_any\":1000000000000}\n",
+                 big, big, big, big, big, 2000000000 + k);
+        feed(line);
+    }
     size_t n = web_live_json(&g_live, g_json,
                              WEB_SSE_MAX_UNSENT - WEB_LIVE_HDR_RESERVE, 1000);
     WT_ASSERT(n > 0);
@@ -769,6 +840,7 @@ void run_live_tests(void) {
     WT_RUN(test_types_counted_by_plausible_name);
     WT_RUN(test_records_per_second);
     WT_RUN(test_sensor_health_liveness);
+    WT_RUN(test_sensor_health_twin193);
     WT_RUN(test_recent_ring);
     WT_RUN(test_hostile_strings_are_escaped);
     WT_RUN(test_ticker_cut_is_on_a_code_point);

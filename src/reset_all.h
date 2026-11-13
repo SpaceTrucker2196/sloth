@@ -113,6 +113,7 @@
     X(tui_alert_hot_clear) \
     X(tui_reset) \
     X(tune_reset) \
+    X(twin_field_reset) \
     X(twins_clear) \
     X(wifi_baseline_clear) \
     X(wired_attach_clear) \

@@ -154,6 +154,7 @@ CORE_COMMON_SRCS = \
        src/alerts/rules_wired.c \
        src/alerts/rules_wifi_mgmt.c \
        src/alerts/rules_twin.c \
+       src/alerts/twin_field.c \
        src/alerts/rules_camera.c \
        src/alerts/rules_harvest.c \
        src/tune.c src/fs_capacity.c            \
