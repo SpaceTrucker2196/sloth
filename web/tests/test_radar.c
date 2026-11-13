@@ -807,10 +807,19 @@ static void test_select_hooks(void) {
               "          else { H.show(\"devices\"); H.openDrawer(dv.mac); }");
 }
 
-/* The devices on the north axis, the label layout and the velocity
- * tick (owner request 2026-11-06), whole: the layout's four functions,
- * the tick's four, the device helpers and painters, the device, aircraft
- * and APRS draw blocks, picking a stacked label first, "open in".
+/* The devices, the label layout and the velocity tick (owner request
+ * 2026-11-06), whole: the layout's three functions, the tick's four,
+ * the device helpers and painters, the device, aircraft and APRS draw
+ * blocks, picking a label first, "open in". The devices left the north
+ * axis on 2026-11-13 (owner: "instead of on the n/s axis in the radar
+ * use the data to plot the most probably point location. color code the
+ * wifi points"): a device with a fleet area solid at its most probable
+ * point, one without hollow on its distance ring at an angle from its
+ * address's hash (addrAngle()), a Wi-Fi mark in its address's hue
+ * (wifiHue(), --rw-0..4), ■ station ◆ AP ● BLE (devMark()); the
+ * labels placed free, the two stacked columns (stackColumn()) gone; the
+ * panel's placement rows (devPlace()) and the caption's located and
+ * unlocated counts.
  *
  * What the pins prove and what they do not: a C test cannot run the
  * script, so "no label ever overlaps another" is held by construction
@@ -820,7 +829,9 @@ static void test_select_hooks(void) {
  * the placers propose, a drawn label never touches another. The pins do
  * not prove the layout is good (how many labels find room): that was
  * measured by hand with a stub canvas (50 + 50 devices, 67 of the
- * labels drawn on an 800 x 440 canvas, 0 overlapping). Seen red with a
+ * labels drawn on an 800 x 440 canvas, 0 overlapping), for the column
+ * layout of 2026-11-06; the free layout of 2026-11-13 holds the same
+ * invariant by the same put() and was not re-measured. Seen red with a
  * second fillText added to draw() (the count) and with put()'s boxHit
  * test dropped (the drawLabels pin). */
 static void test_radar_devices_js(void) {
@@ -832,14 +843,41 @@ static void test_radar_devices_js(void) {
               "    }\n"
               "    return false;\n"
               "  }");
-    WT_HAS(p, "  function stackColumn(ys, h, gap, top, bottom) {\n"
-              "    var out = [], n = ys.length, step = h + gap, i;\n"
-              "    for (i = 0; i < n; i++) out.push(Math.max(ys[i], top, i ? out[i - 1] + step : top));\n"
-              "    if (n && out[n - 1] > bottom) {\n"
-              "      out[n - 1] = bottom;\n"
-              "      for (i = n - 2; i >= 0; i--) out[i] = Math.min(out[i], out[i + 1] - step);\n"
-              "    }\n"
-              "    return out;\n"
+    WT_HAS(p, "  function addrHash(ad) {\n"
+              "    var h = 2166136261;\n"
+              "    for (var i = 0; i < ad.length; i++) { h ^= ad.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }\n"
+              "    return h;\n"
+              "  }");
+    WT_HAS(p, "  function wifiHue(ad) { return \"--rw-\" + addrHash(ad) % RW_N; }\n"
+              "  // A device with no area has no bearing: its hollow mark's angle (deg)\n"
+              "  // is arbitrary, from the hash's upper bits, so it does not follow the hue.\n"
+              "  function addrAngle(ad) { return (addrHash(ad) >>> 8) % 360; }\n"
+              "  // A device's mark: \xe2\x96\xa0 a Wi-Fi station, \xe2\x97\x86 an access point, \xe2\x97\x8f BLE; solid\n"
+              "  // when located (its fleet area's most probable point), hollow when only\n"
+              "  // its distance is known. Shape says the family and the kind, fill says\n"
+              "  // located, so neither rests on the hue (R10).\n"
+              "  function devMark(g, kind, x, y, s, solid) {\n"
+              "    if (kind === \"ble\") { if (solid) dot(g, x, y, s); else ring(g, x, y, s); }\n"
+              "    else if (kind === \"ap\") diamond(g, x, y, s * 1.4, solid);\n"
+              "    else if (solid) square(g, x, y, s);\n"
+              "    else g.strokeRect(x - s, y - s, 2 * s, 2 * s);\n"
+              "  }");
+    WT_HAS(p, "  function addrAngle(ad) { return (addrHash(ad) >>> 8) % 360; }\n"
+              "  // A device's mark: \xe2\x96\xa0 a Wi-Fi station, \xe2\x97\x86 an access point, \xe2\x97\x8f BLE; solid\n"
+              "  // when located (its fleet area's most probable point), hollow when only\n"
+              "  // its distance is known. Shape says the family and the kind, fill says\n"
+              "  // located, so neither rests on the hue (R10).\n"
+              "  function devMark(g, kind, x, y, s, solid) {\n"
+              "    if (kind === \"ble\") { if (solid) dot(g, x, y, s); else ring(g, x, y, s); }\n"
+              "    else if (kind === \"ap\") diamond(g, x, y, s * 1.4, solid);\n"
+              "    else if (solid) square(g, x, y, s);\n"
+              "    else g.strokeRect(x - s, y - s, 2 * s, 2 * s);\n"
+              "  }");
+    WT_HAS(p, "  function devMark(g, kind, x, y, s, solid) {\n"
+              "    if (kind === \"ble\") { if (solid) dot(g, x, y, s); else ring(g, x, y, s); }\n"
+              "    else if (kind === \"ap\") diamond(g, x, y, s * 1.4, solid);\n"
+              "    else if (solid) square(g, x, y, s);\n"
+              "    else g.strokeRect(x - s, y - s, 2 * s, 2 * s);\n"
               "  }");
     WT_HAS(p, "  function candidates(x, y, w, h, r, left) {\n"
               "    var D = left ? [[-1, -1], [-1, 1], [-1, 0], [1, -1], [1, 1], [1, 0], [0, -1], [0, 1]]\n"
@@ -851,7 +889,7 @@ static void test_radar_devices_js(void) {
               "    });\n"
               "  }");
     WT_HAS(p, "  function drawLabels(g, want, dpr, W, Hh, T, blocked) {\n"
-              "    var boxes = (blocked || []).slice(), h = 12 * dpr, gap = 2 * dpr;\n"
+              "    var boxes = (blocked || []).slice(), h = 12 * dpr;\n"
               "    g.textAlign = \"left\";\n"
               "    g.textBaseline = \"top\";\n"
               "    want.forEach(function (w) { w.w = g.measureText(w.text).width; });\n"
@@ -886,29 +924,16 @@ static void test_radar_devices_js(void) {
               "        greedy(w);\n"
               "        return;\n"
               "      }\n"
-              "      if (w.pri > PRI.aprs) return;\n"
+              "      // A device's label (it has a pick) may take a leader too: crowded\n"
+              "      // marks are where its label is the easier handle.\n"
+              "      if (w.pri > PRI.aprs && !w.pick) return;\n"
               "      cs = candidates(w.x, w.y, w.w, h, 30 * dpr, w.left);\n"
               "      for (k = 0; k < cs.length; k++) if (put(w, cs[k], true)) return;\n"
-              "    }\n"
-              "    function column(items, right) {\n"
-              "      if (!items.length) return;\n"
-              "      items.sort(function (a, b) { return a.y - b.y; });\n"
-              "      var xs = items.map(function (w) { return w.x; }), ws = items.map(function (w) { return w.w; });\n"
-              "      var maxw = Math.max.apply(null, ws);\n"
-              "      var cx = right ? Math.min(Math.max.apply(null, xs) + 10 * dpr, W - maxw - 2 * dpr)\n"
-              "                     : Math.max(Math.min.apply(null, xs) - 10 * dpr, maxw + 2 * dpr);\n"
-              "      var ys = stackColumn(items.map(function (w) { return w.y + h / 2; }), h, gap, h, Hh);\n"
-              "      items.forEach(function (w, i) {\n"
-              "        put(w, { x0: right ? cx : cx - w.w, x1: right ? cx + w.w : cx, y0: ys[i] - h, y1: ys[i] }, true);\n"
-              "      });\n"
               "    }\n"
               "    want.filter(function (w) { return w.fixed; }).forEach(function (w) {\n"
               "      put(w, { x0: w.x - w.w / 2, y0: w.y - h / 2, x1: w.x + w.w / 2, y1: w.y + h / 2 }, false);\n"
               "    });\n"
-              "    want.filter(function (w) { return !w.fixed && !w.col && w.pri <= PRI.aprs; }).forEach(greedy);\n"
-              "    column(want.filter(function (w) { return w.col === \"R\"; }), true);\n"
-              "    column(want.filter(function (w) { return w.col === \"L\"; }), false);\n"
-              "    want.filter(function (w) { return !w.fixed && !w.col && w.pri > PRI.aprs; }).forEach(greedy);\n"
+              "    want.filter(function (w) { return !w.fixed; }).forEach(greedy);\n"
               "  }");
     WT_HAS(p, "  function tickDir(az, m, hdg, cam) {\n"
               "    var d = Math.PI / 180, s = Math.max(1, m * 0.02);\n"
@@ -968,38 +993,83 @@ static void test_radar_devices_js(void) {
               "    g.arc(x, y, s, 0, Math.PI * 2);\n"
               "    g.fill();\n"
               "  }");
-    WT_HAS(p, "    var shown = { ble: 0, wifi: 0 }, fhot = hotAddrs(true);\n"
-              "    [[\"wifi\", \"R\"], [\"ble\", \"L\"]].forEach(function (fam) {\n"
-              "      var list = (S.radar && S.radar.devs && S.radar.devs[fam[0]]) || [];\n"
+    WT_HAS(p, "    // Wi-Fi and BLE devices (owner request 2026-11-13: \"instead of on the\n"
+              "    // n/s axis in the radar use the data to plot the most probably point\n"
+              "    // location\"), each family's 50 most recently heard. One another sloth\n"
+              "    // also heard has a fleet area: its mark is solid at the area's most\n"
+              "    // probable point (areaGeom()). One only this sensor heard has no\n"
+              "    // bearing at all: a hollow mark on its own faint distance ring (the\n"
+              "    // band's nominal radius when the record carried no metres) at an\n"
+              "    // angle from its address's hash, so a solid mark always means\n"
+              "    // located and a hollow one's angle means nothing. devMark()'s shapes;\n"
+              "    // a Wi-Fi mark in its address's hue, the same as its polygon's, BLE\n"
+              "    // in the one neutral ink; the selection in the accent. Then every\n"
+              "    // other area's point (an emitter located but not among the 50): the\n"
+              "    // same solid mark, picked as its area. Labels go to the placer free,\n"
+              "    // not in columns: the marks no longer share a line.\n"
+              "    var shown = { ble: 0, wifi: 0 }, fhot = hotAddrs(true), byAddr = Object.create(null), claimed = Object.create(null);\n"
+              "    var loc = { wifi: 0, ble: 0, wifiNo: 0, bleNo: 0, sMin: 0, sMax: 0 };\n"
+              "    S.devArea = Object.create(null);\n"
+              "    S.areas.forEach(function (a) {\n"
+              "      var k = (a.kind === \"ble\" ? \"ble|\" : \"wifi|\") + a.key.toLowerCase();\n"
+              "      if (!byAddr[k]) byAddr[k] = a;\n"
+              "    });\n"
+              "    function located(fam, a) {\n"
+              "      var ns = a.row.sites.length;\n"
+              "      loc[fam]++;\n"
+              "      loc.sMin = loc.sMin ? Math.min(loc.sMin, ns) : ns;\n"
+              "      loc.sMax = Math.max(loc.sMax, ns);\n"
+              "    }\n"
+              "    [\"wifi\", \"ble\"].forEach(function (fam) {\n"
+              "      var list = (S.radar && S.radar.devs && S.radar.devs[fam]) || [];\n"
               "      list.forEach(function (dv, idx) {\n"
-              "        var m = devM(dv);\n"
-              "        if (!num(m)) return;\n"
-              "        shown[fam[0]]++;\n"
-              "        var key = devKey(fam[0], dv), on = isSel(fam[0], key), ble = fam[0] === \"ble\";\n"
-              "        var hov = !!S.hover && S.hover.kind === fam[0] && S.hover.key === key;\n"
-              "        var old = stale(ble ? dv.last_seen : dv.ts, now), col = on ? T.signal : T.normal;\n"
-              "        if (ble) g.setLineDash([6, 4]); else g.setLineDash([]);\n"
-              "        g.lineWidth = 1;\n"
-              "        g.globalAlpha = on ? 0.6 : old ? 0.06 : 0.15;\n"
-              "        g.strokeStyle = col;\n"
-              "        groundPath(g, cam, rn(m), 0);\n"
-              "        g.stroke();\n"
-              "        g.setLineDash([]);\n"
-              "        var p = project(place(0, 0, m), cam);\n"
+              "        var m = devM(dv), ble = fam === \"ble\", ad = String((ble ? dv.addr : dv.mac) || \"\").toLowerCase();\n"
+              "        var a = byAddr[fam + \"|\" + ad] || null;\n"
+              "        if (!a && !num(m)) return;\n"
+              "        shown[fam]++;\n"
+              "        var key = devKey(fam, dv), on = isSel(fam, key);\n"
+              "        var hov = !!S.hover && S.hover.kind === fam && S.hover.key === key;\n"
+              "        var old = stale(ble ? dv.last_seen : dv.ts, now), col = on ? T.signal : ble ? T.normal : H.tok(wifiHue(ad)), p;\n"
+              "        if (a) {\n"
+              "          claimed[a.id] = 1;\n"
+              "          S.devArea[fam + \"|\" + key] = a;\n"
+              "          located(fam, a);\n"
+              "          p = project(gpt(a.pt.e, a.pt.n), cam);\n"
+              "        } else {\n"
+              "          loc[fam + \"No\"]++;\n"
+              "          if (ble) g.setLineDash([6, 4]); else g.setLineDash([]);\n"
+              "          g.lineWidth = 1;\n"
+              "          g.globalAlpha = on ? 0.6 : old ? 0.06 : 0.15;\n"
+              "          g.strokeStyle = col;\n"
+              "          groundPath(g, cam, rn(m), 0);\n"
+              "          g.stroke();\n"
+              "          g.setLineDash([]);\n"
+              "          p = project(place(addrAngle(ad), 0, m), cam);\n"
+              "        }\n"
               "        g.globalAlpha = old ? 0.35 : 1;\n"
               "        g.fillStyle = col;\n"
-              "        if (ble) dot(g, p.x, p.y, 3 * dpr); else square(g, p.x, p.y, 3 * dpr);\n"
+              "        g.strokeStyle = col;\n"
+              "        g.lineWidth = 1.5 * dpr;\n"
+              "        devMark(g, ble ? \"ble\" : dv.kind === \"ap\" ? \"ap\" : \"sta\", p.x, p.y, 3 * dpr, !!a);\n"
+              "        g.lineWidth = dpr;\n"
               "        g.globalAlpha = 1;\n"
-              "        if (fhot.indexOf(String(ble ? dv.addr : dv.mac).toLowerCase()) >= 0) { g.strokeStyle = T.ink; ring(g, p.x, p.y, 6 * dpr); }\n"
-              "        S.marks.push({ x: p.x, y: p.y, kind: fam[0], key: key, ref: dv });\n"
+              "        if (fhot.indexOf(ad) >= 0) { g.strokeStyle = T.ink; ring(g, p.x, p.y, 6 * dpr); }\n"
+              "        S.marks.push({ x: p.x, y: p.y, kind: fam, key: key, ref: dv });\n"
               "        if (idx < LABEL_N || on || hov)\n"
-              "          want.push({ x: p.x, y: p.y, col: fam[1], text: devLabel(fam[0], dv), pri: on || hov ? PRI.sel : PRI.dev,\n"
+              "          want.push({ x: p.x, y: p.y, text: devLabel(fam, dv), pri: on || hov ? PRI.sel : PRI.dev,\n"
               "                      color: on ? T.signal : hov ? T.ink : T.muted, alpha: old && !hov ? 0.35 : 1,\n"
-              "                      pick: { kind: fam[0], key: key } });\n"
+              "                      pick: { kind: fam, key: key } });\n"
               "      });\n"
               "    });\n"
-              "    g.lineWidth = dpr;\n"
-              "");
+              "    S.areas.forEach(function (a) {\n"
+              "      if (claimed[a.id]) return;\n"
+              "      var fam = a.kind === \"ble\" ? \"ble\" : \"wifi\", on = isSel(\"fleet\", a.id), p = project(gpt(a.pt.e, a.pt.n), cam);\n"
+              "      located(fam, a);\n"
+              "      g.fillStyle = g.strokeStyle = on ? T.signal : fam === \"ble\" ? T.normal : areaInk(a, T);\n"
+              "      devMark(g, fam === \"ble\" ? \"ble\" : a.kind === \"ap\" ? \"ap\" : \"sta\", p.x, p.y, 3 * dpr, true);\n"
+              "      S.marks.push({ x: p.x, y: p.y, kind: \"fleet\", key: a.id, ref: a });\n"
+              "    });\n"
+              "    g.lineWidth = dpr;");
     WT_HAS(p, "      var mv = num(a.gs) && a.gs > 0 && num(a.track);\n"
               "      var dir = num(a.track) ? tickDir(L.az, L.range, a.track, cam) : null;\n"
               "      tri(g, p.x, p.y, 6 * dpr, dir ? Math.atan2(dir.dy, dir.dx) / d + 90 : 0, true);\n"
@@ -1007,7 +1077,7 @@ static void test_radar_devices_js(void) {
     WT_HAS(p, "      var mv = num(e.speed_kt) && e.speed_kt > 0 && num(e.course);\n"
               "      var dir = mv ? tickDir(L.az, L.range, e.course, cam) : null;\n"
               "      if (dir) velTick(g, p, dir, e.speed_kt, dpr);");
-    WT_HAS(p, "    // A device's stacked label is its handle where dots crowd the axis.\n"
+    WT_HAS(p, "    // A device's label is its handle where marks crowd.\n"
               "    for (var i = 0; i < S.labelPicks.length; i++) {\n"
               "      var b = S.labelPicks[i].box;\n"
               "      if (px >= b.x0 && px <= b.x1 && py >= b.y0 && py <= b.y1) return S.labelPicks[i].pick;\n"
@@ -1031,8 +1101,29 @@ static void test_radar_devices_js(void) {
               "        return;\n"
               "      }");
     WT_HAS(p, "    cv.addEventListener(\"pointerleave\", function () { if (S.hover) { S.hover = null; dirty(); } });");
-    WT_HAS(p, "                  [\"placement\", \"distance from signal strength; no bearing: drawn on the north axis\"]]);");
-    WT_HAS(p, "                   (rd.wifi ? rd.wifi.estimated : 0) + \" Wi-Fi shown (most recent), on the north axis: no bearing\");");
+    WT_HAS(p, "  function devPlace(fam, key) {\n"
+              "    var a = S.devArea[fam + \"|\" + key];\n"
+              "    if (!a) return [[\"placement\", \"distance from signal strength at this site only, no bearing: a hollow mark on its distance ring \" +\n"
+              "                                  \"at an arbitrary angle (from its address); only the distance is an estimate\"]];\n"
+              "    var ns = a.row.sites.length, rg = Math.sqrt(a.pt.e * a.pt.e + a.pt.n * a.pt.n);\n"
+              "    var az = (Math.atan2(a.pt.e, a.pt.n) * 180 / Math.PI + 360) % 360;\n"
+              "    return [[\"placement\", \"solid: the most probable point of its fleet area, from \" + ns + \" sites\" +\n"
+              "                          (a.form === \"fix\" ? \" (the least-squares fix)\"\n"
+              "                           : a.form === \"bands\" ? \" (where the sites' bands make it likeliest\" +\n"
+              "                                                  (ns === 2 ? \"; its mirror across the line between the two sites is as likely)\" : \")\")\n"
+              "                           : \" (the middle of the nearer site's side: a side, not a point)\") +\n"
+              "                          \"; where it most likely is, not where it is\"],\n"
+              "            [\"probable point\", metres(rg) + \" from this sensor, bearing \" + deg(az, 0) + \" true\"]];\n"
+              "  }");
+    WT_HAS(p, "                  [\"last seen\", age(isBle ? ref.last_seen : ref.ts, now) + \" ago\"]].concat(devPlace(s.kind, s.key)));");
+    WT_HAS(p, "        parts.push(\"devices: \" + (p.ble || 0) + \" of \" + (rd.ble ? rd.ble.estimated : 0) + \" BLE, \" + (p.wifi || 0) + \" of \" +\n"
+              "                   (rd.wifi ? rd.wifi.estimated : 0) + \" Wi-Fi listed (most recent)\");\n"
+              "        var lc = p.loc || { wifi: 0, ble: 0, wifiNo: 0, bleNo: 0, sMin: 0, sMax: 0 };\n"
+              "        parts.push(\"located (solid, at the most probable point of a fleet area\" +\n"
+              "                   (lc.sMax ? \", from \" + (lc.sMin === lc.sMax ? lc.sMax : lc.sMin + \"\\u2013\" + lc.sMax) + \" sites\" : \"\") + \"): \" +\n"
+              "                   lc.wifi + \" Wi-Fi, \" + lc.ble + \" BLE; unlocated (hollow, this site only): \" + lc.wifiNo + \" Wi-Fi, \" + lc.bleNo +\n"
+              "                   \" BLE, each on its distance ring at an arbitrary angle: only the distance is an estimate\");\n"
+              "        parts.push(\"Wi-Fi mark and area share a hue from the address (\\u25a0 station, \\u25c6 access point), BLE \\u25cf in one ink\");");
     WT_HAS(p, "      parts.push(\"ticks are speed and heading (aircraft gs/track, APRS speed/course); Wi-Fi and BLE have neither, \" +\n"
               "                 \"their arrow is sloth's trend (\\u2198 approaching, \\u2192 steady, \\u2197 leaving)\");");
     char *mod = module(p);
@@ -1079,7 +1170,27 @@ static void test_radar_devices_js(void) {
  * half-plane on the nearer site's side in both axes, an anchor inside
  * both bands where the old point on the sites' line fell 16 m outside
  * one, and the side wash of a site 200 m from its peer with a 20 m band,
- * which the old reach (twice the radius plus 10 m) left with no area. */
+ * which the old reach (twice the radius plus 10 m) left with no area.
+ *
+ * The polygons and the most probable point (owner request 2026-11-13:
+ * "use the data to plot the most probably point location ... light
+ * transparent polygons for the shape of the estimated location
+ * polygon"), whole: the margin field (areaMargin()), its grid
+ * (areaGrid(), at most 67^2 samples), the marching-squares trace into
+ * closed rings (traceRings(), a traced boundary and not a convex hull:
+ * the region has holes), the Gaussian score and its argmax or weighted
+ * mean (bandScore(), likePoint()), each form's polygon and point
+ * (areaGeom()), the screen path filled and hit evenodd (areaPath(),
+ * areaHit()), computed once an answer (fleetGeo()), a Wi-Fi area in its
+ * address's hue (areaInk()). The clip-and-fillRect painters (circleTo(),
+ * halfTo(), areaPaths()) are gone. Run in node with the functions cut
+ * out of the module (2026-11-13): sites 8.6 m apart, bands 3-10 m here
+ * and 5-15 m at the peer, traced as two rings (the region and the 3 m
+ * hole round this sensor), the polygon's evenodd test agreeing with the
+ * field at every one of 20,000 random points more than 0.3 m from the
+ * edge; the same for a fix's disc, a side, three sites, and two narrow
+ * bands traced as two lobes; the point inside the region in each, the
+ * server's candidate kept when inside; at most 5 ms an area. */
 static void test_radar_fleet_js(void) {
     const char *p = (const char *)web_page;
     WT_HAS(p, "  function gpt(e, n) {\n"
@@ -1117,49 +1228,33 @@ static void test_radar_fleet_js(void) {
               "        if (r.method === \"least_squares\" && cd.length) {\n"
               "          var p = enu(c, cd[0].lat, cd[0].lon);\n"
               "          a.form = \"fix\";\n"
-              "          a.shapes.push({ e: p.e, n: p.n, lo: 0, hi: cd[0].radius_m });\n"
+              "          a.shapes.push({ e: p.e, n: p.n, lo: 0, hi: cd[0].radius_m, r: 0 });\n"
               "          a.anchor = p;\n"
               "        } else if (meet) {\n"
               "          a.form = \"bands\";\n"
-              "          ss.forEach(function (s) { var q = at[s.site]; a.shapes.push({ e: q.e, n: q.n, lo: s.lo_m, hi: s.hi_m }); });\n"
-              "          a.anchor = cd.length ? enu(c, cd[0].lat, cd[0].lon) : bandsAnchor(a.shapes);\n"
+              "          // r: the range the site's reading gives (inside lo..hi), else the band's middle.\n"
+              "          ss.forEach(function (s) {\n"
+              "            var q = at[s.site], mid = num(s.range_m) && s.range_m >= s.lo_m && s.range_m <= s.hi_m ? s.range_m : (s.lo_m + s.hi_m) / 2;\n"
+              "            a.shapes.push({ e: q.e, n: q.n, lo: s.lo_m, hi: s.hi_m, r: mid });\n"
+              "          });\n"
+              "          a.cand = cd.length ? enu(c, cd[0].lat, cd[0].lon) : null;\n"
+              "          a.anchor = a.cand || bandsAnchor(a.shapes);\n"
               "        } else {\n"
               "          var nr = r.nearest, NA = nr && at[nr.site], NB = nr && at[nr.than];\n"
               "          var mine = ss.filter(function (s) { return nr && s.site === nr.site; })[0];\n"
               "          if (!NA || !NB || !mine || nr.within_band !== false || nr.site === nr.than) { n.none++; return; }\n"
               "          var dx = NA.e - NB.e, dy = NA.n - NB.n, dl = Math.sqrt(dx * dx + dy * dy) || 1;\n"
               "          a.form = \"side\";\n"
-              "          a.shapes.push({ e: NA.e, n: NA.n, lo: 0, hi: mine.hi_m });\n"
+              "          a.shapes.push({ e: NA.e, n: NA.n, lo: 0, hi: mine.hi_m, r: 0 });\n"
               "          a.half = { ae: NA.e, an: NA.n, be: NB.e, bn: NB.n };\n"
               "          a.anchor = { e: NA.e + dx / dl * mine.hi_m / 2, n: NA.n + dy / dl * mine.hi_m / 2 };\n"
               "        }\n"
               "        n[a.form]++;\n"
-              "        out.push(a);\n"
+              "        out.push(areaGeom(a));\n"
               "      });\n"
               "    });\n"
               "    return out;\n"
-              "  ");
-    WT_HAS(p, "  function circleTo(path, cam, e, n, r) {\n"
-              "    for (var i = 0; i <= FLEET_SEG; i++) {\n"
-              "      var t = 2 * Math.PI * i / FLEET_SEG, q = project(gpt(e + r * Math.sin(t), n + r * Math.cos(t)), cam);\n"
-              "      if (i) path.lineTo(q.x, q.y); else path.moveTo(q.x, q.y);\n"
-              "    }\n"
-              "    path.closePath();\n"
-              "  ");
-    WT_HAS(p, "  function halfTo(path, cam, h, L) {\n"
-              "    var dx = h.ae - h.be, dy = h.an - h.bn, b = Math.sqrt(dx * dx + dy * dy) || 1, ux = dx / b, uy = dy / b;\n"
-              "    var mx = (h.ae + h.be) / 2, my = (h.an + h.bn) / 2;\n"
-              "    var cs = [[mx - uy * L, my + ux * L], [mx - uy * L + ux * L, my + ux * L + uy * L],\n"
-              "              [mx + uy * L + ux * L, my - ux * L + uy * L], [mx + uy * L, my - ux * L]];\n"
-              "    for (var k = 0; k < 4; k++) {\n"
-              "      var p0 = cs[k], p1 = cs[(k + 1) % 4];\n"
-              "      for (var i = 0; i < FLEET_SEG; i++) {\n"
-              "        var f = i / FLEET_SEG, q = project(gpt(p0[0] + (p1[0] - p0[0]) * f, p0[1] + (p1[1] - p0[1]) * f), cam);\n"
-              "        if (k || i) path.lineTo(q.x, q.y); else path.moveTo(q.x, q.y);\n"
-              "      }\n"
-              "    }\n"
-              "    path.closePath();\n"
-              "  ");
+              "  }");
     WT_HAS(p, "  function bandsAnchor(sh) {\n"
               "    var s0 = sh[0], rm = (s0.lo + s0.hi) / 2, best = null, bv = -Infinity;\n"
               "    for (var i = 0; i < FLEET_SEG; i++) {\n"
@@ -1173,26 +1268,153 @@ static void test_radar_fleet_js(void) {
               "    }\n"
               "    return best;\n"
               "  ");
-    WT_HAS(p, "  function areaPaths(a, cam) {\n"
-              "    var ps = a.shapes.map(function (s) {\n"
-              "      var p = new Path2D();\n"
-              "      circleTo(p, cam, s.e, s.n, s.hi);\n"
-              "      if (s.lo > 0) circleTo(p, cam, s.e, s.n, s.lo);\n"
-              "      return p;\n"
-              "    });\n"
-              "    if (a.half) {\n"
-              "      var h = new Path2D();\n"
-              "      var hb = Math.sqrt((a.half.ae - a.half.be) * (a.half.ae - a.half.be) + (a.half.an - a.half.bn) * (a.half.an - a.half.bn));\n"
-              "      halfTo(h, cam, a.half, hb / 2 + a.shapes[0].hi + 10);\n"
-              "      ps.push(h);\n"
+    WT_HAS(p, "  function areaMargin(a, e, n) {\n"
+              "    var v = Infinity, i, s, d;\n"
+              "    for (i = 0; i < a.shapes.length; i++) {\n"
+              "      s = a.shapes[i];\n"
+              "      d = Math.sqrt((e - s.e) * (e - s.e) + (n - s.n) * (n - s.n));\n"
+              "      v = Math.min(v, s.hi - d, s.lo > 0 ? d - s.lo : Infinity);\n"
               "    }\n"
-              "    return ps;\n"
-              "  ");
+              "    if (a.half) {\n"
+              "      var h = a.half, dx = h.ae - h.be, dy = h.an - h.bn, b = Math.sqrt(dx * dx + dy * dy) || 1;\n"
+              "      v = Math.min(v, ((e - (h.ae + h.be) / 2) * dx + (n - (h.an + h.bn) / 2) * dy) / b);\n"
+              "    }\n"
+              "    return v;\n"
+              "  }");
+    WT_HAS(p, "  function areaGrid(a) {\n"
+              "    var e0 = -Infinity, e1 = Infinity, n0 = -Infinity, n1 = Infinity, w = Infinity;\n"
+              "    a.shapes.forEach(function (s) {\n"
+              "      e0 = Math.max(e0, s.e - s.hi); e1 = Math.min(e1, s.e + s.hi);\n"
+              "      n0 = Math.max(n0, s.n - s.hi); n1 = Math.min(n1, s.n + s.hi);\n"
+              "      w = Math.min(w, s.lo > 0 ? s.hi - s.lo : s.hi);\n"
+              "    });\n"
+              "    if (!(e1 > e0) || !(n1 > n0) || !(w > 0)) return null;\n"
+              "    var span = Math.max(e1 - e0, n1 - n0);\n"
+              "    var st = span / Math.min(FLEET_GRID_MAX, Math.max(FLEET_GRID, Math.ceil(3 * span / w)));\n"
+              "    var g = { e0: e0 - st, n0: n0 - st, st: st, ne: Math.ceil((e1 - e0) / st - 1e-9) + 2,\n"
+              "              nn: Math.ceil((n1 - n0) / st - 1e-9) + 2, v: [] };\n"
+              "    for (var j = 0; j <= g.nn; j++)\n"
+              "      for (var i = 0; i <= g.ne; i++) g.v.push(areaMargin(a, g.e0 + i * st, g.n0 + j * st));\n"
+              "    return g;\n"
+              "  }");
+    WT_HAS(p, "  function traceRings(g) {\n"
+              "    var W = g.ne + 1, adj = Object.create(null), at = Object.create(null), done = Object.create(null), rings = [];\n"
+              "    function vx(i, j) { return g.v[j * W + i]; }\n"
+              "    function cross(id) {\n"
+              "      if (!at[id]) {\n"
+              "        var k = id >> 1, i = k % W, j = (k - i) / W, i2 = id & 1 ? i : i + 1, j2 = id & 1 ? j + 1 : j;\n"
+              "        var a = vx(i, j), t = a / (a - vx(i2, j2));\n"
+              "        at[id] = { e: g.e0 + (i + (i2 - i) * t) * g.st, n: g.n0 + (j + (j2 - j) * t) * g.st };\n"
+              "      }\n"
+              "      return id;\n"
+              "    }\n"
+              "    function seg(p, q) { (adj[p] = adj[p] || []).push(q); (adj[q] = adj[q] || []).push(p); }\n"
+              "    for (var j = 0; j < g.nn; j++)\n"
+              "      for (var i = 0; i < g.ne; i++) {\n"
+              "        var A = vx(i, j) > 0, B = vx(i + 1, j) > 0, C = vx(i + 1, j + 1) > 0, D = vx(i, j + 1) > 0;\n"
+              "        if (A === B && B === C && C === D) continue;\n"
+              "        // The cell's edges bottom, right, top, left; those it crosses.\n"
+              "        var E = [2 * (j * W + i), 2 * (j * W + i + 1) + 1, 2 * ((j + 1) * W + i), 2 * (j * W + i) + 1];\n"
+              "        var x = [A !== B, B !== C, D !== C, A !== D], on = [];\n"
+              "        for (var k = 0; k < 4; k++) if (x[k]) on.push(cross(E[k]));\n"
+              "        if (on.length === 2) { seg(on[0], on[1]); continue; }\n"
+              "        // A saddle: two diagonal corners in. With the centre in, the\n"
+              "        // corners out are cut off; with it out, the corners in.\n"
+              "        var mid = vx(i, j) + vx(i + 1, j) + vx(i + 1, j + 1) + vx(i, j + 1) > 0;\n"
+              "        if (A === mid) { seg(on[0], on[1]); seg(on[2], on[3]); }\n"
+              "        else { seg(on[3], on[0]); seg(on[1], on[2]); }\n"
+              "      }\n"
+              "    Object.keys(adj).forEach(function (k0) {\n"
+              "      var cur = +k0, prev = -1, ring = [];\n"
+              "      while (!done[cur]) {\n"
+              "        done[cur] = 1;\n"
+              "        ring.push(at[cur]);\n"
+              "        var nb = adj[cur], nx = nb[0] === prev ? nb[1] : nb[0];\n"
+              "        prev = cur;\n"
+              "        cur = nx;\n"
+              "      }\n"
+              "      if (ring.length >= 3) rings.push(ring);\n"
+              "    });\n"
+              "    return rings;\n"
+              "  }");
+    WT_HAS(p, "  function bandScore(a, e, n) {\n"
+              "    var l = 0;\n"
+              "    for (var k = 0; k < a.shapes.length; k++) {\n"
+              "      var s = a.shapes[k], sg = (s.hi - s.lo) / 2 || 1;\n"
+              "      var d = Math.sqrt((e - s.e) * (e - s.e) + (n - s.n) * (n - s.n)) - s.r;\n"
+              "      l -= d * d / (2 * sg * sg);\n"
+              "    }\n"
+              "    return l;\n"
+              "  }");
+    WT_HAS(p, "  function likePoint(a, g) {\n"
+              "    var best = null, bv = -Infinity, ls = [], i, j;\n"
+              "    for (j = 0; j <= g.nn; j++)\n"
+              "      for (i = 0; i <= g.ne; i++) {\n"
+              "        if (!(g.v[j * (g.ne + 1) + i] > 0)) continue;\n"
+              "        var e = g.e0 + i * g.st, n = g.n0 + j * g.st, l = bandScore(a, e, n);\n"
+              "        ls.push([e, n, l]);\n"
+              "        if (l > bv) { bv = l; best = { e: e, n: n }; }\n"
+              "      }\n"
+              "    if (!best) return null;\n"
+              "    var we = 0, wn = 0, ws = 0;\n"
+              "    ls.forEach(function (q) { var w = Math.exp(q[2] - bv); we += w * q[0]; wn += w * q[1]; ws += w; });\n"
+              "    var m = { e: we / ws, n: wn / ws };\n"
+              "    return areaMargin(a, m.e, m.n) > 0 && bandScore(a, m.e, m.n) >= bv - 0.5 ? m : best;\n"
+              "  }");
+    WT_HAS(p, "  function areaGeom(a) {\n"
+              "    if (a.form === \"fix\") {\n"
+              "      var s = a.shapes[0], ring = [];\n"
+              "      for (var i = 0; i < FLEET_SEG; i++) {\n"
+              "        var t = 2 * Math.PI * i / FLEET_SEG;\n"
+              "        ring.push({ e: s.e + s.hi * Math.sin(t), n: s.n + s.hi * Math.cos(t) });\n"
+              "      }\n"
+              "      a.rings = [ring];\n"
+              "      a.pt = { e: s.e, n: s.n };\n"
+              "      return a;\n"
+              "    }\n"
+              "    var g = areaGrid(a);\n"
+              "    a.rings = g ? traceRings(g) : [];\n"
+              "    if (a.form === \"bands\")\n"
+              "      a.pt = a.cand && areaMargin(a, a.cand.e, a.cand.n) > 0 ? a.cand : (g && likePoint(a, g)) || a.anchor;\n"
+              "    else a.pt = a.anchor;\n"
+              "    return a;\n"
+              "  }");
+    WT_HAS(p, "  function areaPath(a, cam) {\n"
+              "    var p = new Path2D();\n"
+              "    a.rings.forEach(function (r) {\n"
+              "      r.forEach(function (q, i) {\n"
+              "        var s = project(gpt(q.e, q.n), cam);\n"
+              "        if (i) p.lineTo(s.x, s.y); else p.moveTo(s.x, s.y);\n"
+              "      });\n"
+              "      p.closePath();\n"
+              "    });\n"
+              "    return p;\n"
+              "  }");
     WT_HAS(p, "  function areaHit(a, g, x, y) {\n"
-              "    if (!a.paths || !a.paths.length) return false;\n"
-              "    for (var i = 0; i < a.paths.length; i++) if (!g.isPointInPath(a.paths[i], x, y, \"evenodd\")) return false;\n"
-              "    return true;\n"
-              "  ");
+              "    return !!a.path && a.rings.length > 0 && g.isPointInPath(a.path, x, y, \"evenodd\");\n"
+              "  }");
+    WT_HAS(p, "  function fleetGeo(c, n) {\n"
+              "    var m = S.fgeo, f;\n"
+              "    if (!m || m.fleet !== S.fleet || m.lat !== c.lat || m.lon !== c.lon) {\n"
+              "      var k = { fix: 0, bands: 0, side: 0, none: 0 };\n"
+              "      m = S.fgeo = { fleet: S.fleet, lat: c.lat, lon: c.lon, n: k, areas: fleetAreas(S.fleet, c, k) };\n"
+              "    }\n"
+              "    for (f in m.n) n[f] = m.n[f];\n"
+              "    return m.areas;\n"
+              "  }");
+    WT_HAS(p, "  function areaInk(a, T) { return a.kind === \"ble\" ? T.data : H.tok(wifiHue(a.key.toLowerCase())); }\n"
+              "  // The link between a device's dot and its fleet area: the addresses\n"
+              "  // the pointer and the pick are on, of one side (fleet: an area's key;\n"
+              "  // else a Wi-Fi or BLE dot's address), lower case.\n"
+              "  function hotAddrs(fleet) {\n"
+              "    var out = [];\n"
+              "    [S.hover, S.sel].forEach(function (s) {\n"
+              "      if (!s) return;\n"
+              "      if (fleet && s.kind === \"fleet\") out.push(s.key.slice(s.key.indexOf(\"|\") + 1).toLowerCase());\n"
+              "      if (!fleet && (s.kind === \"wifi\" || s.kind === \"ble\")) out.push(String(s.key).split(\"/\")[0].toLowerCase());\n"
+              "    });\n"
+              "    return out;\n"
+              "  }");
     WT_HAS(p, "  function hotAddrs(fleet) {\n"
               "    var out = [];\n"
               "    [S.hover, S.sel].forEach(function (s) {\n"
@@ -1228,26 +1450,23 @@ static void test_radar_fleet_js(void) {
               "    var n = { fix: 0, bands: 0, side: 0, none: 0 };\n"
               "    placed.fleet = n;\n"
               "    if (!S.fleetOn || !c || !fleetPeers()) return;\n"
-              "    var areas = fleetAreas(S.fleet, c, n), al = Math.min(FLEET_A_MAX, FLEET_A_SUM / Math.max(1, areas.length));\n"
+              "    var areas = fleetGeo(c, n), al = Math.min(FLEET_A_MAX, FLEET_A_SUM / Math.max(1, areas.length));\n"
               "    var dhot = hotAddrs(false);\n"
               "    areas.forEach(function (a) {\n"
-              "      var ps = areaPaths(a, cam), on = isSel(\"fleet\", a.id);\n"
+              "      var p = areaPath(a, cam), on = isSel(\"fleet\", a.id), ink = on ? T.signal : areaInk(a, T);\n"
               "      var hov = !!S.hover && S.hover.kind === \"fleet\" && S.hover.key === a.id;\n"
               "      var lk = dhot.indexOf(a.key.toLowerCase()) >= 0;\n"
-              "      a.paths = ps;\n"
-              "      g.save();\n"
-              "      ps.forEach(function (p) { g.clip(p, \"evenodd\"); });\n"
+              "      a.path = p;\n"
               "      g.globalAlpha = (a.form === \"side\" ? FLEET_WASH : 1) * (on || hov || lk ? Math.max(0.2, al) : al);\n"
-              "      g.fillStyle = on ? T.signal : T.data;\n"
-              "      g.fillRect(0, 0, W, Hh);\n"
-              "      g.restore();\n"
+              "      g.fillStyle = ink;\n"
+              "      g.fill(p, \"evenodd\");\n"
+              "      g.globalAlpha = on || hov || lk ? 0.6 : FLEET_EDGE_A;\n"
+              "      g.strokeStyle = on || !(hov || lk) ? ink : T.ink;\n"
+              "      g.lineWidth = dpr;\n"
+              "      g.stroke(p);\n"
+              "      g.globalAlpha = 1;\n"
               "      if (on || hov || lk) {\n"
-              "        g.globalAlpha = 0.6;\n"
-              "        g.strokeStyle = on ? T.signal : T.ink;\n"
-              "        g.lineWidth = dpr;\n"
-              "        ps.forEach(function (p) { g.stroke(p); });\n"
-              "        g.globalAlpha = 1;\n"
-              "        var q = project(gpt(a.anchor.e, a.anchor.n), cam);\n"
+              "        var q = project(gpt(a.pt.e, a.pt.n), cam);\n"
               "        want.push({ x: q.x, y: q.y, text: areaLabel(a), pri: PRI.sel, color: on ? T.signal : T.ink, alpha: 1 });\n"
               "      }\n"
               "      S.areas.push(a);\n"
@@ -1264,7 +1483,7 @@ static void test_radar_fleet_js(void) {
               "        want.push({ x: p.x, y: p.y, text: s.site, pri: PRI.aprs, color: T.muted, alpha: 1 });\n"
               "      });\n"
               "    });\n"
-              "  ");
+              "  }");
     WT_HAS(p, "  function loadFleet() {\n"
               "    S.fleetAt = Date.now();\n"
               "    S.fleetErr = \"\";\n"
@@ -1283,6 +1502,7 @@ static void test_radar_fleet_js(void) {
               "  ");
     WT_HAS(p, "  var FLEET_KINDS = [\"wifi\", \"ap\", \"ble\"], FLEET_MS = 30000, FLEET_LIMIT = 100, FLEET_SEG = 72;\n"
               "  var FLEET_A_MAX = 0.08, FLEET_A_SUM = 0.4, FLEET_WASH = 0.5;");
+    WT_HAS(p, "  var FLEET_GRID = 48, FLEET_GRID_MAX = 64, FLEET_EDGE_A = 0.25, RW_N = 5;");
     WT_HAS(p, "    if (s.kind === \"fleet\") return S.areas.filter(function (a) { return a.id === s.key; })[0] || null;");
     WT_HAS(p, "  function pickAt(px, py, areas) {");
     WT_HAS(p, "    if (best || !areas) return best;\n"
@@ -1328,8 +1548,12 @@ static void test_radar_fleet_js(void) {
               "    fleetBtn();");
     WT_HAS(p, "    else if (s.kind === \"fleet\") H.show(\"fleet\");");
     WT_HAS(p, "        [\"area drawn\", ref.form === \"fix\" ? \"a least-squares fit's disc, radius \" + metres(ref.shapes[0].hi)\n"
-              "                       : ref.form === \"bands\" ? \"where every site's one-sigma band overlaps\"\n"
-              "                       : \"the nearer site's side, within its band\"],");
+              "                       : ref.form === \"bands\" ? \"where every site's one-sigma band overlaps, its outline traced\"\n"
+              "                       : \"the nearer site's side, within its band\"],\n"
+              "        [\"probable point\", ref.form === \"fix\" ? \"the fit's centre\"\n"
+              "                           : ref.form === \"bands\" ? (ref.cand && ref.pt === ref.cand ? \"the server's candidate\" : \"the likeliest of the area's samples\") +\n"
+              "                                                    \" (one Gaussian a site about its range, sigma half its band)\"\n"
+              "                           : \"half the radius into the nearer site's side\"],");
     WT_HAS(p, "        [\"placement\", \"range from signal strength at each sloth (ITU-R P.1238, power assumed): where it may be, not where it is\"]]));");
     WT_HAS(p, "      if (S.fpeers > 0)\n"
               "        parts.push(!S.fleetOn ? \"fleet areas off\" : !fleetPeers() ? \"fleet areas: no other sloth with a position yet\"\n"
@@ -1359,7 +1583,7 @@ static void test_radar_fleet_js(void) {
         const char *df = strstr(mod, "    drawFleet(g, cam, c, T, W, Hh, dpr, want, placed);\n");
         const char *mer = strstr(mod, "      polyline(g, mer);\n");
         const char *rings = strstr(mod, "    [[\"wifi\", \"Wi-Fi \"], [\"ble\", \"BLE \"]].forEach(function (fam) {");
-        const char *devs = strstr(mod, "    var shown = { ble: 0, wifi: 0 }, fhot = hotAddrs(true);");
+        const char *devs = strstr(mod, "    var shown = { ble: 0, wifi: 0 }, fhot = hotAddrs(true), byAddr = Object.create(null), claimed = Object.create(null);");
         WT_ASSERT(df && mer && rings && devs && mer < df && df < rings && rings < devs);
         WT_EQ(count(mod, "drawFleet("), 2);
         /* The one kept setting, written only to clear or to say off. */
@@ -1372,11 +1596,16 @@ static void test_radar_fleet_js(void) {
         WT_EQ(count(mod, "fleetWanted() && "), 3);
         WT_EQ(count(mod, "H.getJSON(\"/api/health\")"), 1);
         /* The device dot's half of the link. */
-        WT_HAS(mod, "        if (fhot.indexOf(String(ble ? dv.addr : dv.mac).toLowerCase()) >= 0) { g.strokeStyle = T.ink; ring(g, p.x, p.y, 6 * dpr); }\n");
+        WT_HAS(mod, "        if (fhot.indexOf(ad) >= 0) { g.strokeStyle = T.ink; ring(g, p.x, p.y, 6 * dpr); }\n");
         free(mod);
     }
     /* The toggle, hidden until a peer is in an answer. */
     WT_HAS(p, "          <button type=\"button\" id=\"radar-fleet\" hidden>fleet areas on</button>\n");
+    /* The Wi-Fi hues, both themes (palette.c holds them apart). */
+    WT_HAS(p, "  --rw-0: #7b94ff;  --rw-1: #d08aff;  --rw-2: #ff7ab8;\n"
+              "  --rw-3: #b0e070;  --rw-4: #c09090;\n");
+    WT_HAS(p, "  --rw-0: #1f4fe0;  --rw-1: #9a2ac8;  --rw-2: #b5206a;\n"
+              "  --rw-3: #4d8a00;  --rw-4: #8a5a5a;\n");
 }
 
 /* The APRS window and trails (owner request 2026-11-06: "a setting that

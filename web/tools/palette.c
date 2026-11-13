@@ -613,6 +613,51 @@ static int sun_apart(void) {
     return bad ? -1 : 0;
 }
 
+/* ── the Radar's Wi-Fi hues (owner request 2026-11-13) ────────────── */
+
+/* theme.css writes the five --rw-* tokens for both themes. A device mark
+ * and its translucent polygon on the dome, so a graphic: 3:1 on both
+ * grounds (WCAG 1.4.11). Categorical, so held 15 apart, the chart hues'
+ * floor; and 20 from every hue the dome already means something by:
+ * the selection (--signal), the heat ramp's live steps (aircraft
+ * altitude; --heat-3 the alarm ring), BLE's ink (--tui-normal) and its
+ * areas' (--data), and --ink (the hover ring, the sensor). */
+#define RW_APART_MIN 15.0
+#define RW_RESERVED_MIN 20.0
+#define NRW 5
+#define NRW_OTHER 7
+static const char *const RW_NAME[NRW + NRW_OTHER] = {
+    "--rw-0", "--rw-1", "--rw-2", "--rw-3", "--rw-4",
+    "--signal", "--heat-1", "--heat-2", "--heat-3", "--tui-normal", "--data", "--ink" };
+
+static int rw_apart(void) {
+    rgb_t c[2][NRW + NRW_OTHER];
+    int bad = 0;
+    for (int i = 0; i < NRW + NRW_OTHER; i++)
+        for (int t = 0; t < 2; t++) c[t][i] = need(RW_NAME[i], t);
+    for (int i = 0; i < NRW; i++)
+        for (int t = 0; t < 2; t++) {
+            double rb = contrast(c[t][i], need("--bg", t)), rp = contrast(c[t][i], need("--panel", t));
+            if (rb < SUN_GFX_MIN || rp < SUN_GFX_MIN) {
+                fprintf(stderr, "palette: %s is %.2f:1 on --bg and %.2f:1 on --panel (%s), "
+                                "under %.0f:1\n", RW_NAME[i], rb, rp, t ? "light" : "dark",
+                        SUN_GFX_MIN);
+                bad = 1;
+            }
+        }
+    for (int i = 0; i < NRW; i++)
+        for (int j = i + 1; j < NRW + NRW_OTHER; j++) {
+            double d0 = de2000(c[0][i], c[0][j]), d1 = de2000(c[1][i], c[1][j]);
+            double lim = j < NRW ? RW_APART_MIN : RW_RESERVED_MIN;
+            if (d0 < lim || d1 < lim) {
+                fprintf(stderr, "palette: %s and %s are %.1f (dark) / %.1f (light) apart, "
+                                "under %.0f\n", RW_NAME[i], RW_NAME[j], d0, d1, lim);
+                bad = 1;
+            }
+        }
+    return bad ? -1 : 0;
+}
+
 static int compute(void) {
     rgb_t lbg = need("--bg", 1), lpanel = need("--panel", 1), dbg = need("--bg", 0);
     for (int i = 0; i < g_ntok; i++) {
@@ -643,7 +688,8 @@ static int compute(void) {
     g_mon[0][1] = light_ground(g_mon[0][0], dbg, lbg);
     for (int i = 1; i < NMON; i++) g_mon[i][1] = light_variant(g_mon[i][0], g_mon[0][1], g_mon[0][1]);
     if (chart_apart() != 0) return -1;
-    return sun_apart();
+    if (sun_apart() != 0) return -1;
+    return rw_apart();
 }
 
 /* ── output ────────────────────────────────────────────────────────── */
@@ -801,6 +847,30 @@ static int emit_contrast(void) {
             printf("| `%s`, `%s` | %.1f | %.1f |\n", SUN_NAME[i], SUN_NAME[j],
                    de2000(need(SUN_NAME[i], 0), need(SUN_NAME[j], 0)),
                    de2000(need(SUN_NAME[i], 1), need(SUN_NAME[j], 1)));
+    printf("\nThe Radar's Wi-Fi hues (2026-11-13), graphics (`*` under %.0f:1), and how far "
+           "apart (CIEDE2000) they and the dome's reserved hues are; under %.0f between two of "
+           "them, or %.0f from a reserved one, fails the build:\n\n"
+           "| token | dark | on --bg | on --panel | light | on --bg | on --panel |\n"
+           "|---|---|---|---|---|---|---|\n", SUN_GFX_MIN, RW_APART_MIN, RW_RESERVED_MIN);
+    for (int i = 0; i < NRW; i++) {
+        char a[8], b[8];
+        rgb_t d = need(RW_NAME[i], 0), l = need(RW_NAME[i], 1);
+        hex(d, a);
+        hex(l, b);
+        double r[4] = { contrast(d, need("--bg", 0)), contrast(d, need("--panel", 0)),
+                        contrast(l, need("--bg", 1)), contrast(l, need("--panel", 1)) };
+        printf("| `%s` | `%s` | %.2f%s | %.2f%s | `%s` | %.2f%s | %.2f%s |\n", RW_NAME[i],
+               a, r[0], r[0] < SUN_GFX_MIN ? " *" : "", r[1], r[1] < SUN_GFX_MIN ? " *" : "",
+               b, r[2], r[2] < SUN_GFX_MIN ? " *" : "", r[3], r[3] < SUN_GFX_MIN ? " *" : "");
+    }
+    printf("\nPairs closer than 30 in either theme:\n\n| hues | dark | light |\n|---|---|---|\n");
+    for (int i = 0; i < NRW; i++)
+        for (int j = i + 1; j < NRW + NRW_OTHER; j++) {
+            double d0 = de2000(need(RW_NAME[i], 0), need(RW_NAME[j], 0));
+            double d1 = de2000(need(RW_NAME[i], 1), need(RW_NAME[j], 1));
+            if (d0 < 30 || d1 < 30)
+                printf("| `%s`, `%s` | %.1f | %.1f |\n", RW_NAME[i], RW_NAME[j], d0, d1);
+        }
     printf("\nMonitor rows, on `--mon-bg` (`");
     for (int t = 0; t < 2; t++) {
         char h[8];

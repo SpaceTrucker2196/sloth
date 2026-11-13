@@ -1092,8 +1092,8 @@ honestly has:
 | GNSS satellites (`/api/gnss`) | azimuth, elevation | ◇ on the rim shell at its az/el; filled when in the solution, C/N0 on the heat ramp, an unhealthy one ringed; the `/api/gnss/tracks` trail behind it |
 | ADS-B aircraft (`/api/adsb`) | lat, lon, altitude, track, kept track | ▲ rotated to its track at its true bearing and elevation angle, a drop line to its ground foot, the kept track through the same mapping; altitude on the heat ramp, an emergency or a reserved squawk ringed and worded |
 | APRS stations (`/api/aprs`) | lat, lon, altitude as broadcast | ○ at its true bearing, `--heat-2` when heard direct; the selected station's kept track |
-| Wi-Fi APs and stations (`/api/radar`) | sloth's distance estimate (metres, band, trend), no bearing | the 50 most recently heard with an estimate as ■ on the **north axis** at their own distance, each with its own faint solid ring; and one fainter solid ring per band on the ground, labelled `Wi-Fi room 7` |
-| BLE advertisers (`/api/radar`) | sloth's distance estimate, no bearing | the 50 most recently heard with an estimate as ● on the north axis, each with its own faint dashed ring; and one fainter dashed ring per band, labelled `BLE room 12` |
+| Wi-Fi APs and stations (`/api/radar`) | sloth's distance estimate (metres, band, trend), no bearing | the 50 most recently heard as ■ (station) or ◆ (AP) in a hue from the MAC: solid at the most probable point of its fleet area when another sloth heard it too, else hollow on its own faint solid distance ring at an arbitrary angle; and one fainter solid ring per band on the ground, labelled `Wi-Fi room 7` |
+| BLE advertisers (`/api/radar`) | sloth's distance estimate, no bearing | the 50 most recently heard as ● in one ink, solid at its fleet area's most probable point, else hollow on its own faint dashed distance ring at an arbitrary angle; and one fainter dashed ring per band, labelled `BLE room 12` |
 
 The dome is the page (owner request, 2026-11-06): on the Radar tab the
 canvas fills the window below the tab bar, and the header, the camera
@@ -1124,7 +1124,33 @@ north up, `t` plan view and `Escape`; five buttons mirror them for
 touch. The dome is drawn only when something changed, through one
 `requestAnimationFrame`, never on an idle loop.
 
-**Devices on the north axis** (owner request 2026-11-06: "add
+**Devices at their most probable point** (owner request 2026-11-13:
+"instead of on the n/s axis in the radar use the data to plot the most
+probably point location. color code the wifi points and light
+transparent polygons for the shape of the estimated location
+polygon"). The north axis below is history. A device another sloth also
+heard is drawn **solid** at the most probable point of its fleet area
+(the fit's centre for a least-squares fix; for overlapping bands the
+server's candidate when it lies in the region, else the likeliest of
+the region's grid samples, each scored by one Gaussian a site about its
+range with sigma half its band, or their weighted mean when that is
+inside and nearly as likely; half the radius into the nearer site's
+side for a wash). One only this sensor heard is **hollow**, on its own
+faint distance ring at an angle from a hash of its address: that angle
+means nothing, only the distance is an estimate, and the side panel
+and the caption say so. ■ Wi-Fi station, ◆ access point, ● BLE. A Wi-Fi
+mark and its polygon share one of five hues, `--rw-0..4`, by a hash of
+the MAC, stable across polls (owner ruling over R10 for this view; the
+values and their distances are in the Design tables, and
+`web/tools/palette.c` fails the build if two come within 15 CIEDE2000 or
+one within 20 of `--signal`, the heat ramp, `--tui-normal`, `--data` or
+`--ink`, or if one is under 3:1 on either ground, in either theme). BLE
+keeps the one ink. Labels go beside their marks through the same
+greedy placer (with a leader when only the third radius has room); the
+two stacked columns are gone. The caption counts located (solid, from N
+sites) and unlocated (hollow) devices per family.
+
+**Devices on the north axis** (superseded 2026-11-13; owner request 2026-11-06: "add
 Bluetooth and Wi-Fi devices; since we have no azimuth or location for
 them, plot them along the north axis as a dot and label, with a light
 transparent ring showing the distance"). Of each family, the 50 most
@@ -1225,7 +1251,18 @@ panel; a tap is not taken by an area while something is picked, so
 tapping off the marks still clears the panel where a hundred areas
 cover the centre. The panel: each site's RSSI, range
 and band, the nearer site by dB, the method, the area's form and the
-baseline, "open in Fleet". A device dot on the north axis and its area
+baseline, "open in Fleet". **Polygons** (2026-11-13): each area is an
+explicit polygon, a fix's disc in 72 points, an overlap of bands or a
+side wash traced by marching squares over a grid of the region's
+margin field (48 to 64 cells on the box's longer side, at most 67²
+samples, computed once an answer) into closed rings filled and
+hit-tested even-odd, in place of the clip and `fillRect` above. Traced
+rather than a convex hull: with the sites 8.6 m apart and bands of 3–10
+m and 5–15 m the region is an annulus with a bite out of it, and a hull
+would fill the 3 m hole round this sensor and the peer's 5 m one, the
+places both readings rule out. A Wi-Fi area is filled in its address's
+hue, a BLE area in `--data`, at the same shared alpha, and outlined
+1 px at 0.25 in the same ink. A device mark at its area's point and its area
 are linked: hover or pick one and the other is outlined (the dot
 ringed). The **fleet areas** button (`radar-fleet`) hides them, kept as
 `radar.fleet` only when off. `/api/health` is read once a page for
@@ -7125,6 +7162,36 @@ The sun's phases on the presence strip (G5), graphics (`*` under 3:1), and how f
 | `--sun-set`, `--signal` | 43.3 | 39.8 |
 | `--sun-set`, `--heat-2` | 44.8 | 41.4 |
 | `--sun-set`, `--faint` | 29.7 | 26.9 |
+
+The Radar's Wi-Fi hues (2026-11-13), graphics (`*` under 3:1), and how far apart (CIEDE2000) they and the dome's reserved hues are; under 15 between two of them, or 20 from a reserved one, fails the build:
+
+| token | dark | on --bg | on --panel | light | on --bg | on --panel |
+|---|---|---|---|---|---|---|
+| `--rw-0` | `#7b94ff` | 7.38 | 7.06 | `#1f4fe0` | 5.67 | 6.35 |
+| `--rw-1` | `#d08aff` | 8.60 | 8.22 | `#9a2ac8` | 5.21 | 5.84 |
+| `--rw-2` | `#ff7ab8` | 8.57 | 8.19 | `#b5206a` | 5.46 | 6.11 |
+| `--rw-3` | `#b0e070` | 13.49 | 12.89 | `#4d8a00` | 3.73 | 4.17 |
+| `--rw-4` | `#c09090` | 7.49 | 7.16 | `#8a5a5a` | 5.00 | 5.60 |
+
+Pairs closer than 30 in either theme:
+
+| hues | dark | light |
+|---|---|---|
+| `--rw-0`, `--rw-1` | 18.2 | 18.1 |
+| `--rw-0`, `--data` | 33.2 | 20.1 |
+| `--rw-0`, `--ink` | 29.7 | 32.4 |
+| `--rw-1`, `--rw-2` | 17.8 | 19.6 |
+| `--rw-1`, `--rw-4` | 26.4 | 28.8 |
+| `--rw-1`, `--ink` | 26.5 | 32.3 |
+| `--rw-2`, `--rw-4` | 17.6 | 17.3 |
+| `--rw-2`, `--heat-3` | 32.8 | 27.7 |
+| `--rw-2`, `--ink` | 27.5 | 30.2 |
+| `--rw-3`, `--heat-1` | 23.7 | 21.9 |
+| `--rw-3`, `--tui-normal` | 21.7 | 22.1 |
+| `--rw-4`, `--signal` | 25.6 | 23.7 |
+| `--rw-4`, `--heat-2` | 27.0 | 22.8 |
+| `--rw-4`, `--heat-3` | 25.9 | 21.8 |
+| `--rw-4`, `--ink` | 24.0 | 26.7 |
 
 Monitor rows, on `--mon-bg` (`#303030` dark, `#c5c2ba` light):
 
