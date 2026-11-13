@@ -346,3 +346,4 @@
 | f9b2c259 | 2026-11-13T00:54:37Z | claude-fable-5-2,claude-opus-5-5 | 23770 | 13338724 | 3121829470 | 85006555 | 2547.1000 | Session 01F8QWbv 2026-11-11..13, 118 commits through f9b2c259 (incl. builder age |
 | 3b588f6 | 2026-11-13T16:01:53Z | claude-opus-5-5 | 288 | 45039 | 19318242 | 480776 | 8.6118 | Known receivers: SDRplay RSP2..RSPdx-R2 |
 | 360d5e91 | 2026-11-13T17:45:25Z | claude-opus-5-5 | 236 | 93786 | 17478000 | 548795 | 15.1541 | APRS region/channel from GNSS fix; flag wrong or silent decoder (#204) |
+| c5bf0d2f | 2026-11-13T20:34:49Z | claude-opus-5-5 | 334 | 117304 | 22599558 | 266961 | 16.9037 | APRS positions as an ATC-style radar scope centred on the sensor |
