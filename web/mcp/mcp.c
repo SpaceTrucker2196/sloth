@@ -113,6 +113,19 @@ static const tool_t TOOLS[] = {
                           "list answer gives for it), or - for the hidden SSID. Not its "
                           "display form." },
         A_SCOPE, { NULL, 0, 0, NULL } } },
+    { "sloth_lures", K_GET, "GET /api/lures",
+      "The KARMA and key-harvest evidence sloth's rules read, as the tables stand now: "
+      "BSSIDs fanning out beacon SSIDs or answering directed probes for names they never "
+      "beaconed (counts, IE postures, score, top SSID, tool), stations leaving M1s "
+      "unanswered, and deauth-then-handshake chains. Counts, not verdicts: the alerts say "
+      "which crossed a threshold. Monitor and hybrid scopes only.",
+      { A_SCOPE, { NULL, 0, 0, NULL } } },
+    { "sloth_lure_bssid", K_GET, "GET /api/lures/bssid",
+      "One BSSID's KARMA detail: its karma_suspect row now and its changes over time, the "
+      "KARMA_AP and KARMA_PROBE_FORGE alerts naming it (ids for sloth_alert and "
+      "sloth_triage_states), the attack-hardware verdict and its signals, and the "
+      "probe-response latency if sloth measured it (an observation used in no verdict).",
+      { { "bssid", 's', 1, "The BSSID, aa:bb:cc:dd:ee:ff." }, A_SCOPE, { NULL, 0, 0, NULL } } },
     { "sloth_probe_clients", K_GET, "GET /api/probes/clients",
       "Stations heard probing, one page, with the networks each asked for.",
       { { "days", 'i', 0, "Window in days." }, { "sort", 's', 0, "The column to sort on." },

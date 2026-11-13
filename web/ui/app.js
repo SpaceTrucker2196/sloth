@@ -3170,6 +3170,7 @@
     if (window.SlothLocation) window.SlothLocation.drawer(mac);
     // G8 when the device is a BSSID with more than one stage (§6.8).
     if (window.SlothChain) SlothChain.drawer(mac);
+    if (window.SlothKarma) SlothKarma.drawer(null);
     getJSON("/api/device/" + encodeURIComponent(mac)).then(function (j) {
       if (gen !== DR.gen) return;
       var box = $("dr-body");
@@ -3186,6 +3187,8 @@
         set("dr-note", typeof j.fleet.note === "string" ? j.fleet.note : "");
         $("dr-sw").style.background = "var(--tui-dim)";
       }
+      // Its KARMA line (karma.js): "-" on another host's row.
+      if (window.SlothKarma) SlothKarma.drawer(mac, fr);
       var r = j.record, dt = r && r.detail ? r.detail : {};
       kvList(box, ouiPairs(j.oui).concat(r ? [
         ["ip", ipVal(r.ip, IP_SRC.dev)],
@@ -3769,9 +3772,10 @@
     // reach 2 at most (base and IEs); 3 is the least a candidate scores
     // once the PNL or a deauth chain corroborates it, the alert's CRIT
     // gate, so the tick is at 3.
+    // Another host's row carries no lure data: "-" whatever it holds.
     var km = row.appendChild(el("span", "c-km"));
-    if (a.karma) SlothRf.bullet(km, a.karma.score, { max: 7, ranges: [3, 7], threshold: 3 },
-                                "karma " + a.karma.score, "warn");
+    if (a.karma && !rem) SlothRf.bullet(km, a.karma.score, { max: 7, ranges: [3, 7], threshold: 3 },
+                                        "karma " + a.karma.score, "warn");
     else km.appendChild(el("span", "d-dim", "-"));
     row.appendChild(el("span", "c-ls d-dim", shortStamp(a.last_seen)));
     var box = el("div", "apbox");
@@ -6211,6 +6215,9 @@
 
   // The WiFi view's KARMA and key-harvest card (web/ui/lure.js): the page's helpers, lent once.
   if (window.SlothLure) SlothLure.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp });
+  // One BSSID's KARMA detail (web/ui/karma.js): the page's helpers, lent once.
+  if (window.SlothKarma) SlothKarma.init({ getJSON: getJSON, errText: errText, keyColor: keyColor,
+    stamp: stamp, shortStamp: shortStamp, kvList: kvList, alertLink: alertLink });
 
   // The BLE Devices waterfall (web/ui/bledev.js): the page's helpers, lent once.
   if (window.SlothBleDev) SlothBleDev.init({ el: el, set: set, getJSON: getJSON, theme: theme,

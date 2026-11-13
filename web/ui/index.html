@@ -56,6 +56,7 @@
 @include ssid.js
 @include probes.js
 @include lure.js
+@include karma.js
 @include syshealth.js
 @include fleet.js
 @include fleetid.js
@@ -595,7 +596,7 @@
       <div class="hscroll"><table class="qt" id="w-lure-karma" aria-label="KARMA suspects: beacon fan-out, or answers to directed probes for names never beaconed" hidden></table></div>
       <div class="hscroll"><table class="qt" id="w-lure-sta" aria-label="stations whose association requests drew M1s they left unanswered" hidden></table></div>
       <div class="hscroll"><table class="qt" id="w-lure-chain" aria-label="BSSIDs whose claimed deauths were followed by a victim's fresh handshake" hidden></table></div>
-      <div class="sub">from sloth's stream (JSONL 1.3.0: karma_suspect, harvest_station, harvest_chain), the tables its rules read, as they stand now; nothing is sent. KARMA: ssids the BSSID beaconed, postures the distinct security postures behind them (one for several names: the IE collapse, weak evidence), forged the names it answered a station's directed probe for and never beaconed, to stations how many stations those answers went to, pnl the most of its names one station asks for, lure chain a station deauthed elsewhere and lured here, score the [y] view's. Stations: BSSIDs asked to associate, how many answered with an M1, the M1s left with no M2, those carrying a PMKID KDE, and the BSSIDs it did answer. Chains: stations knocked off and captured reconnecting through a fresh M1/M2, and the deauths before them. Counts, not a verdict: whether a row crossed its rule's threshold is the alert's (KARMA_AP, KARMA_PROBE_FORGE, PMKID_HARVEST, HANDSHAKE_HARVEST in the Alerts view).</div>
+      <div class="sub">from sloth's stream (JSONL 1.3.0: karma_suspect, harvest_station, harvest_chain), the tables its rules read, as they stand now; nothing is sent. A KARMA row's BSSID opens its detail (its row over time, its alerts, the hardware verdict, the probe-response latency). KARMA: ssids the BSSID beaconed, postures the distinct security postures behind them (one for several names: the IE collapse, weak evidence), forged the names it answered a station's directed probe for and never beaconed, to stations how many stations those answers went to, pnl the most of its names one station asks for, lure chain a station deauthed elsewhere and lured here, score the [y] view's. Stations: BSSIDs asked to associate, how many answered with an M1, the M1s left with no M2, those carrying a PMKID KDE, and the BSSIDs it did answer. Chains: stations knocked off and captured reconnecting through a fresh M1/M2, and the deauths before them. Counts, not a verdict: whether a row crossed its rule's threshold is the alert's (KARMA_AP, KARMA_PROBE_FORGE, PMKID_HARVEST, HANDSHAKE_HARVEST in the Alerts view).</div>
     </section>
     <section class="panel">
       <div class="label">chains <span class="sub" id="w-ch-note"></span></div>
@@ -1182,6 +1183,8 @@
     <div class="label">24 h presence, 10 min cells <span class="sub" id="dr-sun"></span></div>
     <canvas class="strip" id="dr-strip" aria-label="presence over the last 24 hours"></canvas>
     <div id="dr-rf"></div>
+    <!-- The BSSID's KARMA evidence, a line and its detail (web/ui/karma.js). -->
+    <div class="sub" id="dr-karma" hidden></div>
     <div id="dr-chain" hidden>
       <div class="label">attack chain, 24 h <span class="sub" id="dr-chain-note"></span></div>
       <canvas class="chain" id="dr-chain-c" aria-label="the attack chain on this bssid over the last 24 hours"></canvas>
@@ -1298,6 +1301,24 @@
       </div>
       <div class="sub tri-msg" id="subnotes-ssid-msg"></div>
     </div>
+  </aside>
+  <!-- One BSSID's KARMA detail (web/ui/karma.js, #187): what sloth's
+       stream holds for it, /api/lures/bssid. -->
+  <aside class="drawer" id="kdrawer" hidden aria-label="karma detail">
+    <div class="dr-hd">
+      <span class="d-dim">KARMA</span>
+      <span class="sw" id="kdr-sw"></span>
+      <b id="kdr-bssid" class="d-normal">-</b>
+      <span class="sub" id="kdr-note" aria-live="polite"></span>
+      <button type="button" id="kdr-close">close</button>
+    </div>
+    <div id="kdr-body"></div>
+    <div class="label">alerts naming it</div>
+    <ol class="lst" id="kdr-alerts"></ol>
+    <div class="sub" id="kdr-alerts-note"></div>
+    <div class="label">its row over time <span class="sub" id="kdr-hist-note"></span></div>
+    <div class="hscroll"><table class="qt" id="kdr-hist" aria-label="each change of this BSSID's karma_suspect row: when, and the counts sloth sent" hidden></table></div>
+    <div class="sub">from sloth's stream, as it sent it; nothing is sent. Each change of the row is kept from the first record that said it (from) to the newest that repeated it (to); the newest 16, from this connection. Alerts: KARMA_AP and KARMA_PROBE_FORGE incidents whose key names this BSSID, open and recently closed; each opens its alert page with its triage. Hardware: the attack-hardware verdict on the newest KARMA_AP record (suspected or corroborated, and the signal classes behind it). Probe response: the time from a station's probe request to this BSSID's response, as its beacon record carries it (JSONL 1.6.0); an observation sloth uses in no verdict, with no threshold. Counts, not a verdict: whether a count crossed a threshold is the alert's.</div>
   </aside>
   <footer class="foot" aria-label="slothweb">
     <span>sock <b id="sock">-</b></span>

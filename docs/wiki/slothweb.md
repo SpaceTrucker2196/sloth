@@ -113,7 +113,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-12 (#187, #172: the WiFi view's "lures and key harvesting" card from sloth's `karma_suspect`, `harvest_station` and `harvest_chain` records (JSONL 1.3.0), `/api/lures`, `web_lure.c`; the details of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN` shown), 2026-11-12 (#198: many alerts triaged as one: `POST /api/frrs/triage/bulk` (100 ids at one token), incidents (`POST /api/frrs/incident`, `GET /api/frrs/incidents`, members by id or by a standing filter that auto-joins new alerts, the incident's state read by its members unless one has its own later verdict), `/api/alerts`'s `incident=`, slothweb.db v12 with its migration, the Alerts page's incidents panel, selection and bulk verdict (`web/ui/incident.js`), five `slothweb-mcp` tools; [[slothweb-mcp]]); 2026-11-12 (the Radar tab's fleet areas: each emitter two or more sloth hosts located drawn as a light translucent area on the dome, from `/api/fleet/locate`; [[fleet]]); listed source cited and read, the generator's refusals tested, the
+**Last updated**: 2026-11-12 (#187: one BSSID's KARMA detail, `/api/lures/bssid` and `web/ui/karma.js`, from the lures card and the device drawer: its `karma_suspect` row over time, its `KARMA_AP` / `KARMA_PROBE_FORGE` incidents, the `hw_verdict` and the beacon's `probe_lat` (JSONL 1.6.0, now kept by the decoder beside `loc`); `slothweb-mcp`'s `sloth_lures` and `sloth_lure_bssid`), 2026-11-12 (#187, #172: the WiFi view's "lures and key harvesting" card from sloth's `karma_suspect`, `harvest_station` and `harvest_chain` records (JSONL 1.3.0), `/api/lures`, `web_lure.c`; the details of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN` shown), 2026-11-12 (#198: many alerts triaged as one: `POST /api/frrs/triage/bulk` (100 ids at one token), incidents (`POST /api/frrs/incident`, `GET /api/frrs/incidents`, members by id or by a standing filter that auto-joins new alerts, the incident's state read by its members unless one has its own later verdict), `/api/alerts`'s `incident=`, slothweb.db v12 with its migration, the Alerts page's incidents panel, selection and bulk verdict (`web/ui/incident.js`), five `slothweb-mcp` tools; [[slothweb-mcp]]); 2026-11-12 (the Radar tab's fleet areas: each emitter two or more sloth hosts located drawn as a light translucent area on the dome, from `/api/fleet/locate`; [[fleet]]); listed source cited and read, the generator's refusals tested, the
 reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
 set: <!-- count:vendors -->276<!-- /count --> entries, most of the
 reference host's vendors covered and the rest pending, `COVERAGE.md`); 2026-10-27 (sensor location: the alert page's "where the sensor was", the drawer's scatter, `/api/positions` with GeoJSON and GPX, the stream decoder keeping sloth's `loc` object, sloth.db v9 read; [[location]]); 2026-10-27 (an alert's proof: `--pcap-dir`, the capture decoded and hash-checked, the assessment and bibliography, the drawer's rows as tap targets); 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (the vendor
@@ -2439,6 +2439,45 @@ buffer renamed `msg`, since `o->detail` shares the buffer's name).
 formatted `fan_note`, a name the audit's banned word "note" refuses, and
 was withheld until `rules_twin.c` renamed it `fan`. Its other `%s`
 arguments are the BSSID, a captured station's MAC (`sta`) and literals.
+
+### One BSSID's KARMA detail (2026-11-12, #187)
+
+The card's BSSIDs, and the device drawer of a BSSID the stream holds
+lure evidence for, open a drawer (`web/ui/karma.js`) from
+`/api/lures/bssid?bssid=` (`web_lure_bssid_route()` in
+`web/src/web_lure.c`). It shows what sloth sent and nothing inferred:
+
+- **the row over time**: each `karma_suspect` record whose counts or
+  strings moved is a change; a heartbeat repeating the newest only
+  stretches it (`ts` to `ts_last`), as sloth's own change-only
+  signature leaves times out. The newest 16 changes per BSSID for 64
+  BSSIDs (sloth's `MAX_KARMA_APS`), the least recently written given up
+  first. They outlive sloth's `gone`, so the drawer says when the row
+  left; a row back after it starts a new change.
+- **the alerts**: the stream's open and recently closed `KARMA_AP` and
+  `KARMA_PROBE_FORGE` incidents whose key is exactly `karma:<bssid>` or
+  `karmaforge:<bssid>` (`akey_mac()`'s and `karma_alert_key()`'s
+  shapes), by slothweb's handle, the alert page's id; each row carries
+  its triage through `alertLink()`. sloth.db's older rows are on the
+  Alerts page, not here.
+- **the hardware verdict**: `hw_verdict` / `hw_signals` (#151) as the
+  newest `KARMA_AP` record carries them; a record without them is "no
+  verdict now". Only sloth's words are kept (`suspected-` or
+  `corroborated-` then `[a-z0-9-]`, signals `[a-z+]`, 47 octets);
+  anything else is refused whole and counted.
+- **the probe-response latency**: the `beacon` record's `probe_lat`
+  (JSONL 1.6.0, #187 S3). The decoder (`web/src/web_jsonl.c`) keeps
+  that object's scalars as `probe_lat.<member>`, the second name on its
+  allow-list beside `loc`; the longer prefix is checked against the
+  line's remaining length before each member, so the record's text
+  still cannot outgrow the line (`WEB_JL_ELONG` past it). None of the
+  member names holds a word `web_secret.h` withholds. 256 BSSIDs,
+  least recently written given up first; a beacon without the member
+  drops what was held. sloth uses it in no verdict and the page says so.
+
+Monitor's and Hybrid's, `out_of_scope` under Local, as `/api/lures`. A
+row only another sloth host heard (grey, `remote`) carries no lure
+data: its AP table cell and its drawer line read `-`.
 
 ## Tests
 

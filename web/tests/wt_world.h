@@ -28,6 +28,7 @@
 #include "web_gnss.h"
 #include "web_ingest.h"
 #include "web_live.h"
+#include "web_lure.h"
 #include "web_notes.h"
 #include "web_routes.h"
 #include "web_server.h"
@@ -64,6 +65,7 @@ typedef struct {
     web_gnss_t     gnss;
     web_adsb_t     adsb;
     web_aprs_t     aprs;
+    web_lure_t     lure;
     web_m4_t       m4;
     web_health_t   h;
 } w_env_t;
@@ -91,6 +93,7 @@ static inline void w_to_frrs(const web_jrec_t *r) { web_frrs_record(&W.f, r); }
 static inline void w_to_gnss(const web_jrec_t *r) { web_gnss_record(&W.gnss, r, 1000); }
 static inline void w_to_adsb(const web_jrec_t *r) { web_adsb_record(&W.adsb, r, 1000); }
 static inline void w_to_aprs(const web_jrec_t *r) { web_aprs_record(&W.aprs, r, 1000); }
+static inline void w_to_lure(const web_jrec_t *r) { web_lure_record(&W.lure, r, 1000); }
 
 /* One BLE advertiser into the ledger, its name whatever the test says
  * (a hostile one included: the caller escapes it for JSON). */
@@ -137,6 +140,8 @@ static inline void w_open(int writes) {
     WT_EQ(web_gnss_init(&W.gnss), 0);
     WT_EQ(web_adsb_init(&W.adsb), 0);
     WT_EQ(web_aprs_init(&W.aprs), 0);
+    WT_EQ(web_lure_init(&W.lure), 0);
+    W.h.lure = &W.lure;
     W.m4.gnss = &W.gnss;
     W.m4.adsb = &W.adsb;
     W.m4.aprs = &W.aprs;
@@ -183,6 +188,7 @@ static inline void w_close(void) {
     web_gnss_destroy(&W.gnss);
     web_adsb_destroy(&W.adsb);
     web_aprs_destroy(&W.aprs);
+    web_lure_destroy(&W.lure);
     web_anomaly_destroy(&W.an);
     web_baseline_destroy(&W.bl);
     web_frrs_destroy(&W.f);
@@ -358,6 +364,7 @@ static inline int w_srv_start(w_running_t *r, web_config_t *c) {
     web_server_set_gnss(r->s, &W.gnss);
     web_server_set_adsb(r->s, &W.adsb);
     web_server_set_aprs(r->s, &W.aprs);
+    web_server_set_lure(r->s, &W.lure);
     if (pthread_create(&r->th, NULL, w_server_main, r) != 0) return -1;
     return 0;
 }
