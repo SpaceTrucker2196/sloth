@@ -526,7 +526,11 @@
       statusLine(j);
       var s = j.state + (j.running ? "r" : "") + (j.queued ? "q" : "");
       if (full) { take(j.sweep); sweepMeta(); draw(); peakList(); }
-      else if (lastState && lastState !== s && !j.running && !j.queued) { lastState = s; poll(true); return; }
+      else if (lastState && lastState !== s && !j.running && !j.queued) {
+        /* The run the button queued has ended: its "queued" note is stale. */
+        set("spec-msg", "");
+        lastState = s; poll(true); return;
+      }
       if (j.sweep_error) set("spec-err", "the latest sweep could not be read: " + j.sweep_error);
       else if (full) set("spec-err", "");
       lastState = s;
