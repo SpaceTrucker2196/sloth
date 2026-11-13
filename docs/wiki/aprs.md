@@ -40,7 +40,7 @@ references: the Dire Wolf User Guide ("Logging") and `src/log.c`
 (APRS101.pdf) for the data type indicators (ch. 5), objects and items
 (ch. 11) and the symbol tables (ch. 20, appendix 2).
 
-**Last updated**: 2026-11-13 (#204: the APRS region and channel derived from the GNSS position, `--aprs-freq` and its mismatch, the silent decoder after `--aprs-silent-hours` (default 6), the `sensor_health` fields and the APRS tab's notices; the beta-site log sat at 0 bytes from 2026-11-11 with nothing saying so); 2026-11-06 (the Radar tab: stations and, by name, objects and items as entities of their own, kept for the `APRS for` window after their newest packet, with status, comment and a moving one's 24 h trail, from `/api/aprs/tracks`); 2026-11-05 (shipped: the feed, the table, JSONL, sloth.db v13, slothweb's APRS tab and history).
+**Last updated**: 2026-11-13 (the positions panel as an ATC-style radar scope centred on the sensor); 2026-11-13 (#204: the APRS region and channel derived from the GNSS position, `--aprs-freq` and its mismatch, the silent decoder after `--aprs-silent-hours` (default 6), the `sensor_health` fields and the APRS tab's notices; the beta-site log sat at 0 bytes from 2026-11-11 with nothing saying so); 2026-11-06 (the Radar tab: stations and, by name, objects and items as entities of their own, kept for the `APRS for` window after their newest packet, with status, comment and a moving one's 24 h trail, from `/api/aprs/tracks`); 2026-11-05 (shipped: the feed, the table, JSONL, sloth.db v13, slothweb's APRS tab and history).
 
 ---
 
@@ -322,9 +322,12 @@ the stations heard in the window (100 a page, `q` a callsign prefix of
 `[0-9A-Za-z-]`), and `/api/aprs/station?call=&days=`, one station's row
 and its packets (oldest first, the newest 400 that fit, `cut` when the
 oldest were left out). The page (`web/ui/aprs.js`) draws the decoder's
-health line, the station table, a north-up position plot (no map tiles,
-nothing fetched; the selected station's track solid, its recorded
-positions dashed), a detail panel and the "stations seen" table. The
+health line, the station table, a radar scope centred on the sensor's
+GNSS position (ATC style, owner request 2026-11-13: range rings, a
+bearing rose, a sweep with afterglow, velocity leaders and data blocks;
+no map tiles, nothing fetched; the selected station's track solid, its
+recorded positions dotted; the fitted north-up plot when there is no
+position), a detail panel and the "stations seen" table. The
 health line names the region and its channel (or the declared
 frequency), and a notice says "silent for Xh" or "frequency mismatch"
 when `sensor_health` does. Dire

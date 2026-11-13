@@ -1057,10 +1057,25 @@ readable but no packet arrived", from `aprs_quiet_since`) or that the
 declared frequency is not the region's channel ("frequency mismatch"),
 the station table (app.js's DataTable: CALL, SYM, LAST HEARD, PACKETS,
 VIA - `direct` or the digipeater -, POSITION, SPD, CRS, ALT, LEVEL
-heat-graded over 0..100, COMMENT, SYSTEM), a position plot (north up,
-no map tiles and nothing fetched: each station at its last position,
-brighter when heard direct, the selected one with its kept track solid
-and its recorded positions dashed, a km scale bar) and a detail panel
+heat-graded over 0..100, COMMENT, SYSTEM), a radar scope (owner request
+2026-11-13: "look like an air traffic control radar with our GPS
+location in the center"; `scope()` in `aprs.js`): centred on the sensor
+(`/api/gnss`, the Radar's rule: a fix under 60 s old, else the last fix,
+else `--location`), north up, no map tiles and nothing fetched, each
+station at its great-circle bearing and ground range from the sensor;
+five range rings named on the north line, a bearing rose (5/10/30°
+ticks, labels every 30°), a 6 s sweep that re-lights each blip with an
+afterglow decaying to 0.35 (stepped alpha, no gradient; still under
+`prefers-reduced-motion`), a velocity leader to the 5-minute projected
+position, and an ATC data block (callsign; course and speed; altitude).
+`range` (`aprs-range`, kept by `keepCtl`) is auto or 2 to 500 km; auto
+is the smallest step holding 80 % of the live stations, the rest on the
+rim with "N km out". Solid blip heard direct, hollow via a digipeater,
+the selection `--signal` with its kept track solid and its recorded
+positions dotted; a click on a blip selects it. The sensor's own
+coordinates are never drawn (`test_aprs_page_scope` counts them). With
+no position at all the old fitted plot draws instead, and its note says
+why and a detail panel
 on click with its figures, its recent packets and its history. Every
 comment, status and system string is a transmitter's free text, shown
 with `textContent` only. Dire Wolf's receiver is a passive radio, so

@@ -264,15 +264,228 @@
     drawRows(); drawSeen(); plot(last);
   }
 
-  // ── the plot: positions, north up, no map ────────────────────────
+  // ── the scope: positions on an ATC-style radar ───────────────────
+  // Owner request 2026-11-13: "i want the positions view in aprs to look
+  // like an air traffic control radar with our GPS loctioin in the
+  // center". A plan position indicator centred on this sensor
+  // (/api/gnss: a fresh fix, else the last fix, else --location, the
+  // rule radar.js's centre() uses), north up, each station at its true
+  // great-circle bearing and ground range from the sensor (azimuthal
+  // equidistant, so a ring is a true distance). Range rings, a bearing
+  // rose, a sweep whose pass re-lights each blip with a phosphor
+  // afterglow (stepped alpha, no gradient: R8), a velocity leader to
+  // where the station would be in LEAD_S at its reported course and
+  // speed, and a data block: callsign, course and speed, altitude.
+  // Marks keep radar.js's APRS shape (circle; solid heard direct, hollow
+  // via a digipeater), the selection is the one accent (--signal). The
+  // sensor's own coordinates are never written on the canvas. With no
+  // position at all the plot falls back to plotFit(), fitted to the
+  // stations as before. prefers-reduced-motion stops the sweep.
+  var EARTH_M = 6371008.8, FIX_FRESH_S = 60, SWEEP_MS = 6000, GLOW_MS = 2000, LEAD_S = 300;
+  var PICK_PX = 10, FRAME_MS = 33, RANGE_DFLT_KM = 25, RINGS = 5, AUTO_SHARE = 0.8;
+  var RANGES_KM = [2, 5, 10, 25, 50, 100, 250, 500];
+  var gnss = null, gnssGen = 0, raf = 0, frameAt = 0, pj = null, marks = [], noteWas = null;
+  var mq = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+  function still() { return !!(mq && mq.matches); }
+  function setNote(t) { if (t !== noteWas) { noteWas = t; set("aprs-plot-note", t); } }
+  function pad3(d) { return ("00" + d).slice(-3); }
+  function kmText(v) {
+    return v < 1 ? Math.round(v * 1000) + " m" : (v < 10 && v % 1 ? v.toFixed(1) : String(Math.round(v))) + " km";
+  }
+  // The sensor's position: the fix, else --location, else none.
+  function centre() {
+    var j = gnss;
+    if (!j) return null;
+    var now = nowOf(j), f = j.fix, l = j.loc;
+    if (f && num(f.mode) && f.mode >= 2 && num(f.lat) && num(f.lon) && num(f.ts) && now - f.ts <= FIX_FRESH_S)
+      return { lat: f.lat, lon: f.lon, from: "gps fix", age: now - f.ts };
+    if (l && num(l.lat) && num(l.lon))
+      return { lat: l.lat, lon: l.lon, from: l["src"] === "gps" ? "last gps fix" : "--location",
+               age: num(l.ts) ? now - l.ts : null };
+    return null;
+  }
+  // Great-circle ground range (m) and initial bearing (deg true).
+  function geo(lat0, lon0, lat, lon) {
+    var d = Math.PI / 180, p0 = lat0 * d, p1 = lat * d, dl = (lon - lon0) * d, dp = p1 - p0;
+    var a = Math.sin(dp / 2) * Math.sin(dp / 2) + Math.cos(p0) * Math.cos(p1) * Math.sin(dl / 2) * Math.sin(dl / 2);
+    var range = 2 * EARTH_M * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));
+    var y = Math.sin(dl) * Math.cos(p1), x = Math.cos(p0) * Math.sin(p1) - Math.sin(p0) * Math.cos(p1) * Math.cos(dl);
+    return { range: range, az: (Math.atan2(y, x) / d + 360) % 360 };
+  }
+  // The range select's km, or auto: the smallest step holding AUTO_SHARE
+  // of the live stations with a position, so one far digipeated station
+  // does not shrink the rest to the centre; the others sit on the rim
+  // with their distance, gone ones too.
+  function rangeKm(tg) {
+    var s = $("aprs-range"), v = s ? Number(s.value) : 0;
+    if (RANGES_KM.indexOf(v) >= 0) return v;
+    var ks = tg.filter(function (o) { return o.a.state !== "gone"; }).map(function (o) { return o.km; })
+      .sort(function (x, y) { return x - y; });
+    if (!ks.length) return RANGE_DFLT_KM;
+    var far = ks[Math.max(0, Math.ceil(ks.length * AUTO_SHARE) - 1)];
+    for (var i = 0; i < RANGES_KM.length; i++) if (RANGES_KM[i] >= far * 1.08) return RANGES_KM[i];
+    return RANGES_KM[RANGES_KM.length - 1];
+  }
+  function scope(j, ctr, t) {
+    var c = $("aprs-plot");
+    if (!c) return;
+    var dpr = window.devicePixelRatio || 1;
+    var W = Math.max(240, c.clientWidth || 480), H = Math.max(320, Math.min(620, Math.round(W * 0.8)));
+    if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) {
+      c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); c.style.height = H + "px";
+    }
+    var g = c.getContext("2d");
+    if (!g) return;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+    var ph = cssVar("--phosphor", "#6bffcc"), phd = cssVar("--phosphor-dim", "#2b8f74");
+    var hot = cssVar("--signal", "currentColor"), ink = cssVar("--ink", "currentColor");
+    var cx = W / 2, cy = H / 2, R = Math.min(W, H) / 2 - 30, d2r = Math.PI / 180;
+    var tg = [];
+    (j.stations || []).forEach(function (a) {
+      if (!num(a.lat) || !num(a.lon)) return;
+      var q = geo(ctr.lat, ctr.lon, a.lat, a.lon);
+      tg.push({ a: a, az: q.az, km: q.range / 1000 });
+    });
+    var rk = rangeKm(tg), pxKm = R / rk;
+    function P(az, km) {
+      var r = Math.min(km, rk) * pxKm;
+      return { x: cx + r * Math.sin(az * d2r), y: cy - r * Math.cos(az * d2r) };
+    }
+    function PL(lat, lon) { var q = geo(ctr.lat, ctr.lon, lat, lon); return P(q.az, q.range / 1000); }
+    // Rings, the outer one the range, each named on the north line.
+    g.lineWidth = 1; g.strokeStyle = phd; g.fillStyle = phd; g.font = "10px monospace";
+    var i, dg;
+    for (i = 1; i <= RINGS; i++) {
+      g.globalAlpha = i === RINGS ? 0.9 : 0.5;
+      g.beginPath(); g.arc(cx, cy, R * i / RINGS, 0, Math.PI * 2); g.stroke();
+    }
+    g.globalAlpha = 0.9; g.textAlign = "left"; g.textBaseline = "bottom";
+    for (i = 1; i <= RINGS; i++) g.fillText(kmText(rk * i / RINGS), cx + 3, cy - R * i / RINGS - 1);
+    g.globalAlpha = 0.25;
+    g.beginPath(); g.moveTo(cx - R, cy); g.lineTo(cx + R, cy); g.moveTo(cx, cy - R); g.lineTo(cx, cy + R); g.stroke();
+    // The bearing rose: 5, 10 and 30 degree ticks outside the rim.
+    g.globalAlpha = 0.8;
+    for (dg = 0; dg < 360; dg += 5) {
+      var sn = Math.sin(dg * d2r), cs = Math.cos(dg * d2r), len = dg % 30 === 0 ? 9 : dg % 10 === 0 ? 6 : 3;
+      g.beginPath(); g.moveTo(cx + R * sn, cy - R * cs); g.lineTo(cx + (R + len) * sn, cy - (R + len) * cs); g.stroke();
+    }
+    g.fillStyle = ph; g.textAlign = "center"; g.textBaseline = "middle";
+    for (dg = 0; dg < 360; dg += 30)
+      g.fillText(dg === 0 ? "N" : pad3(dg), cx + (R + 19) * Math.sin(dg * d2r), cy - (R + 19) * Math.cos(dg * d2r));
+    // The sweep: one line and three fading steps behind it.
+    var sw = still() ? -1 : (t % SWEEP_MS) / SWEEP_MS * 360;
+    if (sw >= 0) {
+      g.strokeStyle = ph;
+      [[0, 0.9, 1.5], [2, 0.35, 1], [4, 0.18, 1], [7, 0.08, 1]].forEach(function (s) {
+        var a = (sw - s[0]) * d2r;
+        g.globalAlpha = s[1]; g.lineWidth = s[2];
+        g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + R * Math.sin(a), cy - R * Math.cos(a)); g.stroke();
+      });
+      g.lineWidth = 1;
+    }
+    // Afterglow: full as the sweep passes, decaying to 0.35 by its return.
+    function glow(az) {
+      if (sw < 0) return 1;
+      var ms = ((sw - az + 360) % 360) / 360 * SWEEP_MS;
+      return 0.35 + 0.65 * Math.exp(-ms / GLOW_MS);
+    }
+    // The selected station's history: the session track solid, sloth.db's
+    // dotted, as the fitted plot draws them.
+    var trk = selLive && selLive.call === sel ? (selLive.track_pts || []).map(function (p) { return [p[1], p[2]]; }) : [];
+    var rec = histCall && histCall === sel ? histPts.filter(function (p) { return num(p[5]) && num(p[6]); })
+      .map(function (p) { return [p[5], p[6]]; }) : [];
+    g.globalAlpha = 0.7; g.fillStyle = hot;
+    rec.forEach(function (p) { var q = PL(p[0], p[1]); g.fillRect(q.x - 1, q.y - 1, 2, 2); });
+    if (trk.length > 1) {
+      g.strokeStyle = hot; g.lineWidth = 1.5; g.globalAlpha = 0.9;
+      g.beginPath();
+      trk.forEach(function (p, k) { var q = PL(p[0], p[1]); if (k) g.lineTo(q.x, q.y); else g.moveTo(q.x, q.y); });
+      g.stroke(); g.lineWidth = 1;
+    }
+    // The sensor: a cross at the centre.
+    g.globalAlpha = 1; g.strokeStyle = ink;
+    g.beginPath(); g.moveTo(cx - 5, cy); g.lineTo(cx + 5, cy); g.moveTo(cx, cy - 5); g.lineTo(cx, cy + 5); g.stroke();
+    // Targets, the selection last so it draws on top.
+    var beyond = 0;
+    tg.sort(function (x, y) { return (x.a.call === sel) - (y.a.call === sel); });
+    g.font = "11px monospace"; g.textAlign = "left"; g.textBaseline = "alphabetic";
+    tg.forEach(function (o) {
+      var a = o.a, p = P(o.az, o.km), out = o.km > rk, picked = sel === a.call;
+      if (out) beyond++;
+      var col = picked ? hot : a.heard_direct ? ph : phd;
+      var al = glow(o.az) * (a.state === "gone" ? 0.45 : 1) * (out ? 0.6 : 1);
+      g.globalAlpha = al; g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 1.5;
+      g.beginPath(); g.arc(p.x, p.y, picked ? 5 : 3.5, 0, Math.PI * 2);
+      if (a.heard_direct || picked) g.fill(); else g.stroke();
+      var moving = num(a.course) && num(a.speed_kt) && a.speed_kt > 0;
+      if (moving && !out) {
+        var L = Math.max(8, a.speed_kt * 1.852 * LEAD_S / 3600 * pxKm), ca = a.course * d2r;
+        g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(p.x + L * Math.sin(ca), p.y - L * Math.cos(ca)); g.stroke();
+      }
+      // The data block, up and right on a short leader.
+      g.lineWidth = 1; g.globalAlpha = Math.max(al, picked ? 1 : 0.55);
+      g.beginPath(); g.moveTo(p.x + 4, p.y - 4); g.lineTo(p.x + 11, p.y - 11); g.stroke();
+      var lines = [a.call];
+      if (moving) lines.push(pad3(Math.round(a.course) % 360) + " " + Math.round(a.speed_kt) + "kt");
+      if (num(a.alt_m)) lines.push(Math.round(a.alt_m) + " m");
+      if (out) lines.push(kmText(o.km) + " out");
+      g.fillStyle = picked ? hot : ink;
+      lines.forEach(function (s, k) { g.fillText(s, p.x + 13, p.y - 12 + k * 12 - (lines.length - 1) * 12); });
+      marks.push({ x: p.x, y: p.y, call: a.call });
+    });
+    g.globalAlpha = 1;
+    if (!tg.length) {
+      g.fillStyle = cssVar("--tui-dim", "#888"); g.textAlign = "center";
+      g.fillText("no station with a position", cx, cy + 22);
+    }
+    setNote("centred on this sensor (" + ctr.from + (num(ctr.age) ? ", " + age(nowOf(gnss) - ctr.age, nowOf(gnss)) + " old" : "") +
+            "), range " + kmText(rk) + ", rings " + kmText(rk / RINGS) +
+            (beyond ? ", " + beyond + " beyond range on the rim" : ""));
+  }
+  function frame(t) {
+    raf = 0;
+    if (!visible() || document.hidden || !pj) return;
+    if (t - frameAt >= FRAME_MS || still()) {
+      frameAt = t;
+      marks = [];
+      var ctr = centre();
+      if (!ctr) { plotFit(pj); return; }
+      scope(pj, ctr, t);
+    }
+    if (!still()) raf = requestAnimationFrame(frame);
+  }
+  function plot(j) {
+    if (!j) return;
+    pj = j;
+    if (still() || !raf) { if (raf) cancelAnimationFrame(raf); raf = requestAnimationFrame(frame); }
+  }
+  function loadGnss() {
+    var my = ++gnssGen;
+    getJSON("/api/gnss").then(function (j) {
+      if (my !== gnssGen || !j || j.out_of_scope) return;
+      gnss = j;
+      plot(last);
+    }).catch(function () { /* no position: the fitted plot */ });
+  }
+  var plotCanvas = $("aprs-plot");
+  if (plotCanvas) plotCanvas.addEventListener("click", function (e) {
+    var r = plotCanvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, best = null, bd = PICK_PX * PICK_PX;
+    marks.forEach(function (m) { var dd = (m.x - x) * (m.x - x) + (m.y - y) * (m.y - y); if (dd <= bd) { bd = dd; best = m; } });
+    if (best) select(best.call);
+  });
+  var rangeSel = $("aprs-range");
+  if (rangeSel) rangeSel.addEventListener("change", function () { plot(last); });
+
+  // ── the fitted plot: no sensor position, north up, no map ────────
   // Equirectangular around the stations' own centre, longitude scaled by
   // cos(latitude) so distances read true near the middle; a km scale bar.
-  function plot(j) {
+  function plotFit(j) {
     var c = $("aprs-plot");
     if (!c || !j) return;
     var dpr = window.devicePixelRatio || 1;
     var W = Math.max(240, c.clientWidth || 480), H = 360;
-    c.width = W * dpr; c.height = H * dpr;
+    c.width = W * dpr; c.height = H * dpr; c.style.height = H + "px";
     var g = c.getContext("2d");
     if (!g) return;
     g.scale(dpr, dpr);
@@ -290,7 +503,7 @@
       g.fillStyle = dim;
       g.textAlign = "center";
       g.fillText("no station with a position", W / 2, H / 2);
-      set("aprs-plot-note", "");
+      setNote("no sensor position (no gps fix, no --location)");
       return;
     }
     var la0 = 90, la1 = -90, lo0 = 180, lo1 = -180;
@@ -336,6 +549,7 @@
       }
       g.fillStyle = cssVar("--ink", "currentColor");
       g.fillText(a.call, x + 7, y - 6);
+      marks.push({ x: x, y: y, call: a.call });
       g.globalAlpha = 1;
     });
     if (rec.length && !(j.stations || []).some(function (a) { return a.call === sel && num(a.lat); })) {
@@ -344,11 +558,12 @@
       g.beginPath(); g.arc(X(lp[1]), Y(lp[0]), 4, 0, Math.PI * 2); g.fill();
       g.fillText(sel + " (recorded)", X(lp[1]) + 7, Y(lp[0]) - 6);
     }
-    set("aprs-plot-note", "about " + Math.round(spanY * 111) + " km north to south");
+    setNote("no sensor position (no gps fix, no --location): fitted to the stations, about " + Math.round(spanY * 111) + " km north to south");
   }
 
   function load() {
     var my = ++gen;
+    loadGnss();
     getJSON("/api/aprs").then(function (j) {
       if (my !== gen || !visible()) return;
       if (j.out_of_scope) return;

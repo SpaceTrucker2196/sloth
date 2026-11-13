@@ -844,6 +844,85 @@ static void test_aprshist_older_file(void) {
 
 #endif
 
+/* The positions scope (owner request 2026-11-13: an ATC-style radar
+ * with the sensor at the centre). Whole functions pinned (#171 V1: a
+ * single pinned line misses mutations of its neighbours): the centre
+ * is radar.js's rule (fresh fix, else last fix, else --location), the
+ * bearing and range are great-circle, auto range holds AUTO_SHARE of
+ * the live stations, the afterglow stays in 0.35..1, no position falls
+ * back to the fitted plot, reduced motion stops the sweep. And the
+ * sensor's coordinates are never drawn: scope() names ctr.lat and
+ * ctr.lon only in its two geo() calls (seen red with a fillText of
+ * ctr.lat added). */
+static void test_aprs_page_scope(void) {
+    const char *p = (const char *)web_page;
+    WT_HAS(p, "<canvas id=\"aprs-plot\" class=\"heat\" aria-label=\"aprs station positions on a radar scope centred on this sensor, north up\"></canvas>");
+    WT_HAS(p, "<label class=\"sub\">range <select id=\"aprs-range\"><option value=\"0\" selected>auto</option>");
+    WT_HAS(p, "  var RANGES_KM = [2, 5, 10, 25, 50, 100, 250, 500];");
+    WT_HAS(p, "  var PICK_PX = 10, FRAME_MS = 33, RANGE_DFLT_KM = 25, RINGS = 5, AUTO_SHARE = 0.8;");
+    WT_HAS(p, "  var mq = window.matchMedia ? window.matchMedia(\"(prefers-reduced-motion: reduce)\") : null;");
+    WT_HAS(p, "  function centre() {\n"
+              "    var j = gnss;\n"
+              "    if (!j) return null;\n"
+              "    var now = nowOf(j), f = j.fix, l = j.loc;\n"
+              "    if (f && num(f.mode) && f.mode >= 2 && num(f.lat) && num(f.lon) && num(f.ts) && now - f.ts <= FIX_FRESH_S)\n"
+              "      return { lat: f.lat, lon: f.lon, from: \"gps fix\", age: now - f.ts };\n"
+              "    if (l && num(l.lat) && num(l.lon))\n"
+              "      return { lat: l.lat, lon: l.lon, from: l[\"src\"] === \"gps\" ? \"last gps fix\" : \"--location\",\n"
+              "               age: num(l.ts) ? now - l.ts : null };\n"
+              "    return null;\n"
+              "  }");
+    WT_HAS(p, "  function geo(lat0, lon0, lat, lon) {\n"
+              "    var d = Math.PI / 180, p0 = lat0 * d, p1 = lat * d, dl = (lon - lon0) * d, dp = p1 - p0;\n"
+              "    var a = Math.sin(dp / 2) * Math.sin(dp / 2) + Math.cos(p0) * Math.cos(p1) * Math.sin(dl / 2) * Math.sin(dl / 2);\n"
+              "    var range = 2 * EARTH_M * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));\n"
+              "    var y = Math.sin(dl) * Math.cos(p1), x = Math.cos(p0) * Math.sin(p1) - Math.sin(p0) * Math.cos(p1) * Math.cos(dl);\n"
+              "    return { range: range, az: (Math.atan2(y, x) / d + 360) % 360 };\n"
+              "  }");
+    WT_HAS(p, "  function rangeKm(tg) {\n"
+              "    var s = $(\"aprs-range\"), v = s ? Number(s.value) : 0;\n"
+              "    if (RANGES_KM.indexOf(v) >= 0) return v;\n"
+              "    var ks = tg.filter(function (o) { return o.a.state !== \"gone\"; }).map(function (o) { return o.km; })\n"
+              "      .sort(function (x, y) { return x - y; });\n"
+              "    if (!ks.length) return RANGE_DFLT_KM;\n"
+              "    var far = ks[Math.max(0, Math.ceil(ks.length * AUTO_SHARE) - 1)];\n"
+              "    for (var i = 0; i < RANGES_KM.length; i++) if (RANGES_KM[i] >= far * 1.08) return RANGES_KM[i];\n"
+              "    return RANGES_KM[RANGES_KM.length - 1];\n"
+              "  }");
+    WT_HAS(p, "    function glow(az) {\n"
+              "      if (sw < 0) return 1;\n"
+              "      var ms = ((sw - az + 360) % 360) / 360 * SWEEP_MS;\n"
+              "      return 0.35 + 0.65 * Math.exp(-ms / GLOW_MS);\n"
+              "    }");
+    WT_HAS(p, "  function frame(t) {\n"
+              "    raf = 0;\n"
+              "    if (!visible() || document.hidden || !pj) return;\n"
+              "    if (t - frameAt >= FRAME_MS || still()) {\n"
+              "      frameAt = t;\n"
+              "      marks = [];\n"
+              "      var ctr = centre();\n"
+              "      if (!ctr) { plotFit(pj); return; }\n"
+              "      scope(pj, ctr, t);\n"
+              "    }\n"
+              "    if (!still()) raf = requestAnimationFrame(frame);\n"
+              "  }\n"
+              "");
+    WT_HAS(p, "    getJSON(\"/api/gnss\").then(function (j) {");
+    WT_HAS(p, "  function load() {\n    var my = ++gen;\n    loadGnss();\n");
+    const char *a = strstr(p, "  function scope(j, ctr, t) {");
+    const char *b = a ? strstr(a, "\n  function frame(t) {") : NULL;
+    WT_ASSERT(a != NULL && b != NULL);
+    if (a && b) {
+        int lat = 0, lon = 0;
+        for (const char *q = a; q < b; q++) {
+            if (!strncmp(q, "ctr.lat", 7)) lat++;
+            if (!strncmp(q, "ctr.lon", 7)) lon++;
+        }
+        WT_EQ(lat, 2);
+        WT_EQ(lon, 2);
+    }
+}
+
 void run_aprs_tests(void) {
     WT_RUN(test_aprs_ingest_and_route);
     WT_RUN(test_aprs_ranges_and_refusals);
@@ -854,6 +933,7 @@ void run_aprs_tests(void) {
     WT_RUN(test_aprs_page);
     WT_RUN(test_aprs_region_and_silent);
     WT_RUN(test_aprs_page_region);
+    WT_RUN(test_aprs_page_scope);
     WT_RUN(test_aprshist_no_db);
 #ifdef WITH_SQLITE
     WT_RUN(test_aprshist_seen_and_station);
