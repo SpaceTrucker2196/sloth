@@ -26,6 +26,7 @@
 #include "fake_platform.h"
 #include "jsonl_ptr_fixture.h"
 #include "tmp_dir.h"
+#include "db.h"
 
 /* Each test opens a fresh temp file, exercises the emitter, then reads
  * the file back and asserts on the recorded line(s). */
@@ -1915,6 +1916,54 @@ static void test_emit_sensor_health_reports_the_jsonl_contract_version(void) {
     if (aprs && ver) ASSERT(aprs < ver);
 }
 
+/* JSONL 1.7.0: --db's size ceiling, db.max_mb, on every sensor_health
+ * line, before jsonl_version (which stays last): -1 with no database
+ * open, else the knob, 0 for unlimited. slothweb draws it as the limit
+ * on sloth.db's size. Seen red with the member written as db_max_mb()
+ * unconditionally (0, "unlimited", with no database open), and with it
+ * left out of `sig` (a moved ceiling wrote no line: the second emit
+ * below came back empty). */
+static void test_emit_sensor_health_reports_db_max_mb(void) {
+    open_fresh();
+    sh_evict_reset();
+    sh_parse_fault_reset();
+    sloth_state_t s; seed_health(&s);
+    db_close();
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    char want[96];
+    snprintf(want, sizeof(want), "\"db_max_mb\":-1,\"jsonl_version\":\"%s\"}\n",
+             SLOTH_JSONL_VERSION);
+    ASSERT(contains(body, want));
+#ifdef WITH_SQLITE
+    char dbp[TEST_TMP_MAX];
+    int fd = mkstemp(test_tmp_tpl(dbp, sizeof(dbp), "sloth_jsonl_db_XXXXXX"));
+    if (fd >= 0) close(fd);
+    unlink(dbp);
+    ASSERT_EQ(db_open(dbp), 1);
+    int was = db_max_mb();
+    db_set_max_mb(1024);
+    open_fresh();
+    jsonl_emit_sensor_health(&s);
+    /* A moved ceiling is a change worth a line. */
+    db_set_max_mb(0);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (body) {
+        ASSERT(contains(body, "\"db_max_mb\":1024,"));
+        ASSERT(contains(body, "\"db_max_mb\":0,"));
+    }
+    db_set_max_mb(was);
+    db_close();
+    unlink(dbp);
+#endif
+}
+
 /* The macro's form IS the bump rule, so it is pinned rather than
  * trusted: three numeric components and nothing after them, and MAJOR
  * 1. MINOR and PATCH are free to move — that is a slice's call under
@@ -2976,6 +3025,7 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_sensor_health_parse_faults);
     RUN_TEST(test_emit_sensor_health_carries_loaded_libs);
     RUN_TEST(test_emit_sensor_health_reports_the_jsonl_contract_version);
+    RUN_TEST(test_emit_sensor_health_reports_db_max_mb);
     RUN_TEST(test_jsonl_contract_version_is_a_major_1_semver);
     RUN_TEST(test_sensor_health_parse_faults_do_not_re_emit);
     RUN_TEST(test_emit_sensor_health_memory_fields);

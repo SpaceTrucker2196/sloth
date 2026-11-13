@@ -113,7 +113,7 @@ var glyph = (function () {
   // G1, the band sparkline. pts are [t, v] oldest first; band is the
   // same length, each [lo, hi, mean, sd] or null where the cell is
   // warming, or null for no band at all. opt: {w, h, from, to, step,
-  // sens, scale, shade} — shade is an anomaly episode's [first, last]
+  // sens, scale, shade, limit} — shade is an anomaly episode's [first, last]
   // (F13), drawn under everything else and clipped to the window.
   function g1(pts, band, opt) {
     var m = [], w = opt.w, h = opt.h, i, b;
@@ -137,6 +137,12 @@ var glyph = (function () {
       var bw = Math.min(Math.max(1, X(pts[i][0] + step) - bx), Math.max(0, w - bx));
       if (bw > 0) m.push(["band", bx, Y(b[1]), bw, Y(b[0]) - Y(b[1]), "--data"]);
     }
+    // A reference value, opt.limit (a store's size limit, 2026-11-12):
+    // one --sev-warn rule across the glyph at its height, under the
+    // line, and only where the scale holds it. A caller that wants it
+    // seen grows the scale to it (scale(pts, band, [0, limit])).
+    if (gnum(opt.limit) && opt.limit >= lo && opt.limit <= hi)
+      m.push(["limit", 0, Y(opt.limit), w, 1, "--sev-warn"]);
     var gap = step * GAP_STEPS, dots = pts.length < DOTS_BELOW, max = 0;
     for (i = 0; i < pts.length; i++) if (pts[i][1] > max) max = pts[i][1];
     for (i = 1; i < pts.length; i++) {

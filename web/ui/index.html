@@ -183,6 +183,10 @@
         <canvas class="spark" id="k-rate-spark" aria-label="records per second, 24 h, over their baseline band"></canvas>
         <div class="sub gw" id="k-rate-w">-</div>
         <div class="sub" id="k-rate-sub">-</div>
+        <span class="k-db" id="k-db" title="sloth.db and slothweb.db on disk (the file and its WAL) against their limits; the glyph is sloth.db over 30 d, the rule its db.max_mb. Opens the storage trends on Sensor health">
+          <span class="sub" id="k-db-sub">-</span>
+          <canvas class="spark k-db-spark" id="k-db-spark" aria-label="sloth.db's size on disk, 30 d, with its limit"></canvas>
+        </span>
       </a>
       <a class="tile hud" id="t-ble" href="#ble">
         <div class="label">ble advertisers</div>

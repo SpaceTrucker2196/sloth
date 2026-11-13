@@ -198,6 +198,10 @@ enum {
      * scored by the anomaly engine. */
     WM_SYS_CPU, WM_SYS_MEM_USED, WM_SYS_RSS, WM_SYS_UNDERVOLT,
     WM_SYS_TEMP, WM_SYS_VOLT, WM_SRC_RATE, WM_SRC_UP,
+    /* The two SQLite stores' size on disk (web_sysstat.h, 2026-11-12),
+     * keyed "sloth" and "slothweb" in the "sys" class; sampled by
+     * slothweb itself (stat()) when a sys_status arrives. */
+    WM_SYS_DB_MB,
     WM_COUNT
 };
 

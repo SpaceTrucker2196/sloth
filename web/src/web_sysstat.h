@@ -38,7 +38,23 @@
  *
  * sloth's own state, so every scope's, as sensor_health is. With no
  * live stream (slothweb reading a copied sloth.db) nothing arrives and
- * /api/sys says "seen":false: sloth.db holds none of this. */
+ * /api/sys says "seen":false: sloth.db holds none of this.
+ *
+ * The two SQLite stores (2026-11-12, owner: "track sloth db usage"):
+ * sloth.db (--sloth-db, which slothweb only ever reads) and slothweb's
+ * own slothweb.db (--store). Each one's size on disk is the main file
+ * plus its -wal, stat()ed and never opened (the -shm is an index of the
+ * WAL in shared memory, not data). Its limit: slothweb's own
+ * --web-max-mb, which it knows; sloth's db.max_mb, which it learns from
+ * the stream: sensor_health's db_max_mb (JSONL 1.7.0), or, from an
+ * older sloth, the `tuned` list (the knob when it is named there, the
+ * default when the list is whole and does not name it, else unknown).
+ * 0 is unlimited and draws no limit. The series is sys.db_mb, keyed
+ * "sloth" and "slothweb", sampled when a sys_status arrives (once a
+ * minute) and at most once a fine bucket, so a peer repeating
+ * sys_status cannot make slothweb stat() faster than that. A store
+ * that is not there is not sampled: a gap, never a zero. /api/sys
+ * measures afresh on every request, stream or none. */
 #ifndef SLOTHWEB_SYSSTAT_H
 #define SLOTHWEB_SYSSTAT_H
 
@@ -88,6 +104,24 @@ typedef struct {
     int       known;
 } web_sys_hw_t;
 
+/* The two stores (indices into web_sys_t's db_path). */
+enum { WEB_SYS_DB_SLOTH = 0, WEB_SYS_DB_WEB, WEB_SYS_DBS };
+/* A store's band by its share of its limit: "near" from this, "full"
+ * from the next. sloth trims observations once over its ceiling and
+ * slothweb its oldest rows, so "full" is a store being trimmed, not
+ * one about to fail; "near" is the time to raise the knob if the
+ * history matters. */
+#define WEB_SYS_DB_NEAR_PCT 80
+#define WEB_SYS_DB_FULL_PCT 95
+/* sloth's default db.max_mb (src/db.h DB_DEFAULT_MAX_MB): what an
+ * older sloth's whole `tuned` list means when it does not name it. */
+#define WEB_SLOTH_DB_DEFAULT_MAX_MB 512
+/* sloth's own bound on the knob (src/tune.c). */
+#define WEB_SLOTH_DB_MAX_MB_MAX     4194304
+/* What slothweb knows of sloth's ceiling. */
+enum { WEB_SYS_LIM_UNKNOWN = 0, WEB_SYS_LIM_SAID, WEB_SYS_LIM_TUNED,
+       WEB_SYS_LIM_DEFAULT, WEB_SYS_LIM_NO_DB };
+
 typedef struct web_sys {
     pthread_mutex_t mu;
     int       seen;              /* a sys_status was read */
@@ -114,6 +148,16 @@ typedef struct web_sys {
     /* The operator's designated networks (web_own.h): sloth's own
      * configuration, fed by the same ingest hook as the host status. */
     web_own_t own;
+    /* The stores (web_sys_set_dbs()): set before any thread starts and
+     * never written after, so read without the lock. "" for one that
+     * is not configured. web_max_mb is --web-max-mb. */
+    char      db_path[WEB_SYS_DBS][4096];
+    int       web_max_mb;
+    /* sloth's db.max_mb, under the lock: how it is known (WEB_SYS_LIM_*)
+     * and the value when it is. */
+    int       sloth_lim;
+    long long sloth_max_mb;
+    long long db_sampled_s;      /* the last sys.db_mb sample; -1 none */
 } web_sys_t;
 
 int  web_sys_init(web_sys_t *y);
@@ -125,6 +169,24 @@ void web_sys_record(web_sys_t *y, const web_jrec_t *r, long long now_ms);
 /* The same four types into the rollup (web_metrics.c's one call). A
  * figure out of range is not sampled; an absent one is not a zero. */
 void web_sys_metrics(web_rollup_t *ru, const web_jrec_t *r, long long now_s);
+
+/* The stores whose size is tracked: sloth_db (--sloth-db) and web_db
+ * (the store slothweb opened, "" or NULL when it has none) and the
+ * latter's --web-max-mb. Before any thread starts. */
+void web_sys_set_dbs(web_sys_t *y, const char *sloth_db, const char *web_db, int web_max_mb);
+
+/* A store's size on disk: the main file's bytes and its -wal's (0
+ * when there is none). stat() only. 0, or -1 when path is not a
+ * regular file (missing, a directory, unreadable). */
+int  web_sys_db_size(const char *path, long long *main_b, long long *wal_b);
+
+/* sys.db_mb for each store that is there, at most once a fine bucket
+ * (web_metrics.c calls it on every sys_status). */
+void web_sys_db_metrics(web_sys_t *y, web_rollup_t *ru, long long now_s);
+
+/* The band word for a size against a limit: "ok", "near", "full";
+ * NULL when there is no limit to be near (limit_mb <= 0). */
+const char *web_sys_db_band(double mb, long long limit_mb);
 
 /* The "sys" key kind: 1..WEB_KEY_MAX bytes of [a-z0-9_.-] after
  * lower-casing and '/' to '.', so "hwmon1/temp2" is "hwmon1.temp2".

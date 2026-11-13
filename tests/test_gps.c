@@ -2180,7 +2180,7 @@ static void test_sensor_health_loc_members(void) {
          * inserted between. */
         ASSERT(strstr(b, "\"gps_err\":\"\",\"loc_lat\":10.00000,\"loc_lon\":20.00000,"
                          "\"loc_alt_m\":30.0,\"loc_src\":\"fixed\","
-                         "\"jsonl_version\":") != NULL);
+                         "\"db_max_mb\":-1,\"jsonl_version\":") != NULL);
     }
     unlink(g_jl);
     /* --gps with a fix: gps, after gnss_jam; ten TPVs wandering inside
@@ -2212,7 +2212,7 @@ static void test_sensor_health_loc_members(void) {
         /* Successor anchor, for the reason given above. */
         ASSERT(strstr(b, ",\"loc_lat\":51.50000,\"loc_lon\":-0.10000,"
                          "\"loc_alt_m\":12.0,\"loc_src\":\"gps\","
-                         "\"jsonl_version\":") != NULL);
+                         "\"db_max_mb\":-1,\"jsonl_version\":") != NULL);
         ASSERT(strstr(b, "\"loc_lat\":51.51100,") != NULL);
         ASSERT_EQ(count_of(b, "\"type\":\"sensor_health\""), 2);
     }
@@ -2256,7 +2256,7 @@ static void test_sensor_health_gnss_block(void) {
          * GNSS tail is no longer the end of the record (#185 item 3). */
         ASSERT(strstr(b, "\"gps_err\":\"\",\"gnss_sats_in_view\":4,\"gnss_sats_used\":2,"
                          "\"gnss_cn0_mean\":31.3,\"gnss_jam\":-1,"
-                         "\"jsonl_version\":") != NULL);
+                         "\"db_max_mb\":-1,\"jsonl_version\":") != NULL);
         ASSERT(strstr(b, "gnss_time_offset_ms") == NULL);
     }
     unlink(g_jl);

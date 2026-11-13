@@ -95,6 +95,7 @@ struct web_chmix;
 struct web_live_s;
 struct web_anomaly;
 struct web_ble;
+struct web_sys;
 
 typedef struct web_metrics {
     web_rollup_t *ru;
@@ -104,6 +105,7 @@ typedef struct web_metrics {
     struct web_anomaly *anomaly; /* live.anomalies_open, or NULL */
     struct web_chmix *blemix;    /* the BLE view's class mix, or NULL */
     struct web_ble   *ble;       /* ble.class.advertisers' rows, or NULL */
+    struct web_sys   *sys;       /* sys.db_mb's stores (web_sysstat.h), or NULL */
     web_clock_fn  clock;
     void         *clock_ctx;
 
@@ -152,6 +154,8 @@ void web_metrics_set_anomaly(web_metrics_t *m, struct web_anomaly *anomaly);
  * ble.class.advertisers. Either may be NULL. */
 void web_metrics_set_blemix(web_metrics_t *m, struct web_chmix *mix);
 void web_metrics_set_ble(web_metrics_t *m, struct web_ble *ble);
+/* The stores sys.db_mb measures (web_sysstat.h), sampled on sys_status. */
+void web_metrics_set_sys(web_metrics_t *m, struct web_sys *sys);
 
 /* Key canonicalisers; out holds WEB_KEY_MAX + 1. 0, or -1 when s is not
  * one. Also what /api/series checks its key parameter with. */
