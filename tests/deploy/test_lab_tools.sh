@@ -275,5 +275,40 @@ ex http://192.0.2.10:8080 4 L0; rc_is $? 2 "test L0 refused"
 printf 'not json' > "$base/junk.json"
 ex --alerts-json "$base/junk.json" - 4 L2; rc_is $? 2 "non-JSON answer refused"
 
+# The paging loop over a stub curl that answers from the URL's offset:
+# #200's answers (an empty page with more:true and the same next_offset)
+# must end the loop, and a real second page must still be read.
+cat > "$bin/curl" <<'STUB'
+#!/bin/sh
+out= url=
+while [ $# -gt 0 ]; do
+    case $1 in -o) out=$2; shift 2 ;; http*) url=$1; shift ;; *) shift ;; esac
+done
+exec python3 -I -c '
+import json, os, re, sys
+url, out = sys.argv[1:]
+mode = os.environ.get("LAB_STUB_MODE", "")
+if "/api/frrs/incidents" in url:
+    json.dump({"store": "open", "incident": {"id": 4, "title": "lab", "state": "incident",
+               "open": True}, "members": [], "more": False}, open(out, "w")); sys.exit(0)
+off = int(re.search(r"offset=(\d+)", url).group(1))
+def page(types, more, nxt):
+    rows = [{"id": "a%d" % i, "type": 0, "type_name": t} for i, t in enumerate(types)]
+    return {"now": 1, "rows": rows, "count": len(rows), "total": 2, "more": more, "next_offset": nxt}
+if mode == "loop200":
+    d = page(["EVIL_TWIN", "EVIL_TWIN_PROXIMITY"], True, 2) if off == 0 else page([], True, 2)
+else:
+    d = page(["EVIL_TWIN"], True, 1) if off == 0 else page(["DEAUTH_FLOOD"], False, None)
+json.dump(d, open(out, "w"))' "$url" "$out"
+STUB
+chmod +x "$bin/curl"
+env PATH="$bin" LAB_STUB_MODE=loop200 sh "$exp" http://192.0.2.10:8080 4 L2 > "$base/o" 2>&1
+rc_is $? 0 "#200 answers end the paging loop"
+check "$base/o" "PASS        EVIL_TWIN (alerts)" "#200 first page still read"
+env PATH="$bin" LAB_STUB_MODE=two sh "$exp" http://192.0.2.10:8080 4 L2 > "$base/o" 2>&1
+rc_is $? 0 "two pages read"
+check "$base/o" "unexpected  DEAUTH_FLOOD" "second page read"
+rm -f "$bin/curl"
+
 echo "lab-tools-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

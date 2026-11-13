@@ -104,11 +104,16 @@ else
     while :; do
         get "/api/alerts?incident=$inc&state=all&window=34560000&limit=100&offset=$off" \
             "$tmp/alerts.$page" || err "GET /api/alerts failed"
+        # A page that brings no rows, or a next_offset that does not move
+        # past this one, is the last page: slothweb before #200's fix
+        # answered more:true with the same next_offset forever.
         off=$(python3 -I -c '
 import json, sys
 d = json.load(open(sys.argv[1]))
 n = d.get("next_offset")
-print(n if d.get("more") and isinstance(n, int) else "")' "$tmp/alerts.$page") ||
+ok = d.get("more") is True and isinstance(n, int) and not isinstance(n, bool) \
+     and n > int(sys.argv[2]) and len(d.get("rows") or []) > 0
+print(n if ok else "")' "$tmp/alerts.$page" "$off") ||
             err "/api/alerts answered something that is not its JSON"
         [ -n "$off" ] || break
         page=$((page + 1))
