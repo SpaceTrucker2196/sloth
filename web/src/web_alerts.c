@@ -437,7 +437,8 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
     long long want = a.offset + a.limit + 1;
     /* Under a triage filter the rows it drops are dropped after the
      * read, so the read takes as many as a page could reach. */
-    if ((a.has_tri && a.tri != WEB_TRI_F_ANY) || a.has_inc)
+    int post_filter = (a.has_tri && a.tri != WEB_TRI_F_ANY) || a.has_inc;
+    if (post_filter)
         want = WEB_ALERTS_OFFSET_MAX + WEB_ALERTS_LIMIT_MAX + 1;
     int ngroups = 0, db_more = 0;
     web_sdb_conn_t c;
@@ -567,7 +568,12 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
         shown++;
     }
     long long next = a.offset + shown;
-    int more = next < total || db_more;
+    /* Under a post-read filter the read already reached every offset a
+     * page can ask for, so sloth.db holding more groups beyond it is
+     * "total_more", never another page (#200: "more" stayed true with
+     * next_offset repeating). And a page that showed nothing never
+     * names a next one: a client paging by next_offset always ends. */
+    int more = shown > 0 && (next < total || (db_more && !post_filter));
     web_jw_raw(&w, "],\"count\":");   web_jw_int(&w, shown);
     web_jw_raw(&w, ",\"total\":");    web_jw_int(&w, total);
     web_jw_raw(&w, ",\"total_more\":"); web_jw_raw(&w, db_more || st.capped ? "true" : "false");

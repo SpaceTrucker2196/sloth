@@ -1074,6 +1074,81 @@ static void test_filters_reach_past_the_cap(void) {
     unlink(p);
 }
 
+/* #200: under a post-read filter (triage= other than any, incident=)
+ * sloth.db is read as far as any page can reach, so sloth.db holding
+ * more groups than that read is "total_more", never another page; and
+ * a page that shows nothing never names a next one. On 3,000 groups
+ * the filtered answers that match nothing say "more":false, and paging
+ * any filtered query by next_offset ends within ceil(total/limit)+1
+ * calls. Seen red with "more" back to next < total || db_more (the
+ * empty pages answered "more":true,"next_offset":0, the field's loop).
+ * The shown > 0 guard alone is not isolated here: a page shows nothing
+ * with rows left only when the body buffer is full, which no test
+ * reaches. */
+static void test_filtered_paging_ends(void) {
+    char p[160];
+    snprintf(p, sizeof(p), "%s/page.db", g_dir);
+    WT_EQ(sdb_make(p, db_schema_version(), 0), 0);
+    WT_EQ(fill(p, 3000, 1), 0);
+    web_slothdb_t s2;
+    web_slothdb_init(&s2, p, NULL);
+    web_m4_t m2;
+    memset(&m2, 0, sizeof(m2));
+    m2.sdb = &s2;
+    web_health_t h2 = H;
+    h2.m4 = &m2;
+    h2.live = NULL;
+    /* Unfiltered, sloth.db's groups past the page are another page. */
+    WT_EQ(route(&h2, "/api/alerts", "window=2592000&limit=100&offset=1000"), 200);
+    WT_HAS(body_of(g_out), "\"more\":true,\"next_offset\":null");
+    WT_EQ(route(&h2, "/api/alerts", "window=2592000&limit=100"), 200);
+    WT_HAS(body_of(g_out), "\"more\":true,\"next_offset\":100");
+    /* Filters that keep nothing: no rows, and no next page. */
+    static const char *const none[] = { "window=2592000&triage=known",
+                                        "window=2592000&incident=1",
+                                        "window=2592000&incident=1&offset=2",
+                                        "window=2592000&triage=known&offset=40" };
+    for (size_t i = 0; i < sizeof(none) / sizeof(none[0]); i++) {
+        WT_EQ(route(&h2, "/api/alerts", none[i]), 200);
+        const char *b = body_of(g_out);
+        WT_EQ(rows_of(b), 0);
+        if (!strstr(b, "\"more\":false,\"next_offset\":null"))
+            fprintf(stderr, "    /api/alerts?%s pages on\n", none[i]);
+        WT_HAS(b, "\"more\":false,\"next_offset\":null");
+        WT_HAS(b, "\"total_more\":true");
+    }
+    /* Filters that keep every row: the pages end, by next_offset. */
+    static const char *const all[] = { "triage=untriaged", "incident=none",
+                                       "incident=none&triage=untriaged" };
+    for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); i++) {
+        long long off = 0, total = -1;
+        int calls = 0, ended = 0;
+        while (calls < 20) {
+            char q[160];
+            snprintf(q, sizeof(q), "window=2592000&limit=100&offset=%lld&%s", off, all[i]);
+            WT_EQ(route(&h2, "/api/alerts", q), 200);
+            calls++;
+            const char *b = body_of(g_out);
+            total = num_of(b, "total");
+            const char *n = strstr(b, "\"next_offset\":");
+            if (!n || !strncmp(n + 14, "null", 4)) {
+                WT_HAS(b, "\"more\":false");
+                ended = 1;
+                break;
+            }
+            long long next = strtoll(n + 14, NULL, 10);
+            WT_ASSERT(next > off);
+            if (next <= off) break;
+            off = next;
+        }
+        if (!ended) fprintf(stderr, "    /api/alerts?%s never ends\n", all[i]);
+        WT_ASSERT(ended);
+        WT_ASSERT(total > 0 && calls <= (int)((total + 99) / 100) + 1);
+    }
+    web_slothdb_destroy(&s2);
+    unlink(p);
+}
+
 /* ── the Overview's tiles, on the demo's data ────────────────────────── */
 
 int    demo_make_db(const char *path, long long now);
@@ -1484,6 +1559,7 @@ void run_alerts_tests(void) {
     WT_RUN(test_every_type_renders);
     WT_RUN(test_lists_stay_bounded);
     WT_RUN(test_filters_reach_past_the_cap);
+    WT_RUN(test_filtered_paging_ends);
     WT_RUN(test_tiles_equal_their_views_on_demo_data);
     down();
     up();

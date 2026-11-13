@@ -40,7 +40,11 @@
  *       matching sloth.db rows were read ("scan"): the filters apply
  *       inside the bounded read, at most WEB_ADB_SCAN_CAP rows newest
  *       first, and the answer says when it stopped there and the oldest
- *       last_seen it reached ("oldest").
+ *       last_seen it reached ("oldest"). "more" and "next_offset" name
+ *       another page only when one has rows: a page that showed none
+ *       never does, and under incident= or triage= (other than any),
+ *       which filter after the read, sloth.db holding groups past the
+ *       read is "total_more", not another page (#200).
  *   /api/alert?id=
  *       one alert, everything the detail page shows: what it is, why it
  *       matters and how to investigate and fix it (web_alertkb.h), the
