@@ -225,8 +225,9 @@ void sys_clean_str(const char *text, int len, char *out, int cap);
 int sys_held_band(int prev, double v, const double *edges, int n, double margin);
 
 /* The known-receiver table. Every row's ID is from the USB ID
- * repository (linux-usb.org usb.ids, version 2024.03.18); see the table
- * for what each kind means. */
+ * repository (linux-usb.org usb.ids, 2024.03.18 and 2026.06.26) or,
+ * for two SDRplay models usb.ids lacks, systemd's software-radio hwdb;
+ * see the table for which and for what each kind means. */
 typedef struct {
     uint16_t    vid, pid;
     const char *kind;

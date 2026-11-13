@@ -1679,7 +1679,9 @@ One per attached receiver, per batch; rescanned once a minute. At most
 
 What is listed: a USB device whose ID is in the table
 (`sys_usb_table[]`; every ID and name from the USB ID repository,
-linux-usb.org `usb.ids` 2024.03.18), every wireless network interface,
+linux-usb.org `usb.ids` 2024.03.18 and 2026.06.26, or for the SDRplay
+RSP1B and RSPdx-R2, which `usb.ids` lacks, systemd's
+`hwdb.d/70-software-radio.hwdb`), every wireless network interface,
 and every Bluetooth controller. A USB device not in the table is not
 listed — this is a receiver inventory, not a USB dump. `serial` is a
 USB-serial bridge (PL2303, CP210x, FT232, CH340): GNSS pucks and TNCs

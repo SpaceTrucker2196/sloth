@@ -357,6 +357,11 @@ static void test_usb_table(void) {
     e = sys_usb_lookup(0x1546, 0x01a7);
     ASSERT(e != NULL);
     if (e) ASSERT_STR(e->kind, "gnss");
+    /* beta-site's APRS receiver (2026-11-13): missing from the table,
+     * it was missing from the attached receivers. */
+    e = sys_usb_lookup(0x1df7, 0x3060);
+    ASSERT(e != NULL);
+    if (e) { ASSERT_STR(e->kind, "sdr"); ASSERT_STR(e->name, "SDRplay RSPdx-R2"); }
     ASSERT(sys_usb_lookup(0x046d, 0xc31c) == NULL);   /* a keyboard */
     ASSERT(sys_usb_lookup(0, 0) == NULL);
     static const char *const kinds[] = { "sdr", "gnss", "serial", "wifi", "bluetooth",

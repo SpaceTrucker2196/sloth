@@ -22,8 +22,12 @@
 /* ── The known-receiver table ────────────────────────────────────────
  *
  * Source for every ID and name: the USB ID repository, linux-usb.org
- * usb.ids, version 2024.03.18 (the names are that file's, shortened).
- * An ID that file does not carry is not here, however well known.
+ * usb.ids, version 2024.03.18 (the names are that file's, shortened),
+ * and for the SDRplay rows from the RSP2 on, version 2026.06.26. The
+ * RSP1B and RSPdx-R2 are not in usb.ids at 2026.06.26; their IDs and
+ * names are systemd's hwdb.d/70-software-radio.hwdb (systemd 257),
+ * which tags them ID_SOFTWARE_RADIO. An ID neither carries is not
+ * here, however well known.
  *
  * Kinds:
  *   sdr                a software-defined radio. What it is tuned to is
@@ -48,6 +52,11 @@ const sys_usb_id_t sys_usb_table[] = {
     { 0x1d50, 0xcc15, "sdr", "rad1o badge (HackRF-compatible)" },
     { 0x1df7, 0x2500, "sdr", "SDRplay RSP1" },
     { 0x1df7, 0x3000, "sdr", "SDRplay RSP1a" },
+    { 0x1df7, 0x3010, "sdr", "SDRplay RSP2/RSP2pro" },
+    { 0x1df7, 0x3020, "sdr", "SDRplay RSPduo" },
+    { 0x1df7, 0x3030, "sdr", "SDRplay RSPdx" },
+    { 0x1df7, 0x3050, "sdr", "SDRplay RSP1B" },
+    { 0x1df7, 0x3060, "sdr", "SDRplay RSPdx-R2" },
     { 0x1d50, 0x6108, "sdr", "Myriad-RF LimeSDR" },
     { 0x2cf0, 0x5246, "sdr", "Nuand bladeRF" },
     { 0x2cf0, 0x5250, "sdr", "Nuand bladeRF 2.0 micro" },
