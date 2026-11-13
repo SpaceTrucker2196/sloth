@@ -343,3 +343,4 @@
 | 693c829 | 2026-11-13T02:21:03Z | claude-opus-5-5 | 120 | 19197 | 8830158 | 217219 | 3.8882 | #200 /api/alerts filtered paging ends |
 | 3118b54d | 2026-11-13T02:09:15Z | claude-opus-5-5 | 150 | 28901 | 6734311 | 187998 | 5.9704 | expect.sh: end the alerts paging loop on an empty page or a stuck next_offset |
 | c023cf62 | 2026-11-13T02:45:54Z | claude-opus-5-5 | 662 | 258181 | 68276373 | 728589 | 45.3796 | Radar: devices at their most probable point, fleet areas as polygons, Wi-Fi hues |
+| f9b2c259 | 2026-11-13T00:54:37Z | claude-fable-5-2,claude-opus-5-5 | 23770 | 13338724 | 3121829470 | 85006555 | 2547.1000 | Session 01F8QWbv 2026-11-11..13, 118 commits through f9b2c259 (incl. builder age |
