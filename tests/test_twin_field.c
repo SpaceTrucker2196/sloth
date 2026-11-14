@@ -307,7 +307,12 @@ static void test_sensor_health_carries_the_counts(void) {
     if (fd >= 0) close(fd);
     jsonl_close();
     unlink(path);
-    ASSERT(jsonl_open(path));
+    /* Say why when the open is refused: CI's ASan job refused it on
+     * 089b46e9 and printed nothing (the file is the test's own). */
+    int opened = jsonl_open(path);
+    if (!opened) fprintf(stderr, "    jsonl_open(%s): %s\n", path,
+                         jsonl_error() ? jsonl_error() : "?");
+    ASSERT(opened);
     jsonl_emit_sensor_health(&s);
     jsonl_close();
     static char body[32768];
