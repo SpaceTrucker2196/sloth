@@ -1,14 +1,37 @@
 ---
 type: MQTT_BROKER_BRUTE
 technique: T1110.001
-rule_file: src/alerts/rules_wired.c:1215 rule_mqtt_broker_brute()
+rule_file: src/alerts/rules_wired.c:1233 rule_mqtt_broker_brute()
 count_semantics: per rule evaluation - one increment per alerts_update() tick (poll.c:310; the wait between ticks is at most POLL_MS 250 ms, include/sloth.h:28 - the loop wakes early on alert fires and --refresh-ms can shorten it, so 4 ticks/s is a floor, not a fixed cadence) for each (client, broker) pair in the 32-row mqtt_flow table whose lifetime connect_count is at or above MQTT_BROKER_BRUTE_CONNECTS OR whose connack_fail_count is at or above MQTT_BROKER_BRUTE_FAILS; both counters are lifetime totals, never windowed down, and the table has no time expiry (STAB_OLDEST, src/mqtt_snoop.c:21-22, no stab_expire call), so once a pair trips either threshold it fires every tick until 32 newer pairs evict its row or the process restarts, and engine count = (qualifying pairs) x (ticks they remain)
 severity_assessment: agree on the CONNACK-fail path, disagree in part on the connect-count path - the connack_fail_count >= 5 path is specific (the broker has explicitly refused five times), so CRIT is justified; the connect_count >= 10 path has the same flaw as SSH and RDP, a lifetime connection total with no window that a reconnecting device reaches on its own, so for that path alone WARN would fit the evidence better
 false_positive_risk: medium - the CONNACK-fail path is low-risk because explicit auth refusals are rare in steady state, but the connect-count path fires on any device that reconnects often (a flaky link, aggressive keepalive, a boot loop), and the CONNACK failure decode assumes v3.1.1 reason-code semantics for every flow, so a v5 broker's non-failure reason codes can be miscounted
 noise_verdict: not seen on the reference host - host is null, consistent with no cleartext MQTT on the monitored segment (no broker on 1883, or TLS-only on 8883 which is opaque); on an IoT segment the connect-count path would stand as an incident for every chatty reconnecting device, so the alert page should separate the two paths and show which one tripped, since they carry very different confidence
 prevalence: MQTT is named with its own brute-force rule in the corpus under T1110.001 [1]; CONNACK return code 4 "bad user name or password" and 5 "not authorized" are the explicit failure signals the OASIS v3.1.1 spec defines [3], and T1110.001 lists credential guessing against network services generally [2]; the wiki frames the IoT-broker attack surface around Mirai-class sweeps reusing SSH wordlists, and the Mirai study documents that family brute-forcing a 62-credential dictionary against IoT devices [4]; no fetched source quantifies an MQTT field rate, so none is claimed
-tuning: [mqtt.brute_connects (TUNE_MQTT_BRUTE_CONNECTS, default 10, range 2..1000; alias none - set via --tune), mqtt.brute_fails (TUNE_MQTT_BRUTE_FAILS, default 5, range 2..1000; alias none - set via --tune)]
+tuning: [mqtt.brute_connects (TUNE_MQTT_BRUTE_CONNECTS, default 10, range 2..32; alias none - set via --tune), mqtt.brute_fails (TUNE_MQTT_BRUTE_FAILS, default 5, range 2..32; alias none - set via --tune), mqtt.brute_window_s (TUNE_MQTT_BRUTE_WINDOW_S, default 60, range 5..3600; set via --tune)]
 researched: 2026-11-03
+---
+## Resolved 2026-11-13 (#203)
+
+Everything below this note describes the rule as it stood on
+2026-11-03 and is kept as the record of what this assessment found
+(the connect-count path's lifetime total "has the same flaw as SSH
+and RDP"). As of #203 both paths read a per-flow sliding window
+instead of a lifetime total: `brute_connects` (CONNECTs) and
+`brute_fails` (refused CONNACKs), each from its own private
+`flood_window_t` ring in `src/mqtt_snoop.c`, recomputed with
+`flood_window_count()` on every `mqtt_snoop_snapshot()`. Two rings,
+not one, so the either-path trip is unchanged and a burst on one path
+never counts toward the other. `mqtt.brute_connects` (default
+**10**) and `mqtt.brute_fails` (default **5**) are now counts
+*inside* `mqtt.brute_window_s` (new, default **60 s**); both ranges
+drop from 1000 to **32** (`FLOOD_WIN_CAP`). `connect_count` /
+`connack_fail_count` are unchanged and still exported for operator
+context; no rule reads them. A reconnecting device now has to
+reconnect ten times inside a minute, not ten times ever, and a pair
+that goes quiet resolves within the window plus the 300 s resolve
+floor. The v3.1.1-only CONNACK decode noted below is unchanged. See
+[[mqtt-snoop]].
+
 ---
 ## What the rule checks
 

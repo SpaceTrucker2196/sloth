@@ -18,7 +18,8 @@ Sloth's SNMP pass parses the outer BER envelope on UDP/161 and
 UDP/162, extracts the version, the community string, and the
 PDU tag, and aggregates per (src_ip, dst_ip). Tier 1 fires
 `SNMP_COMMUNITY_BRUTE` when one source tries five or more
-distinct community strings against one destination — the
+distinct community strings against one destination inside the
+sliding `snmp.brute_window_s` window (60 s default; #203) — the
 exact shape of `snmpwalk -c <wordlist>` and the metasploit
 `auxiliary/scanner/snmp/snmp_login` module.
 
@@ -27,7 +28,7 @@ dispatch in `capture.c` was a separate copy that had lost the SNMP
 arm, so a sweep over IPv6 produced no `snmp_flow` and no alert. There
 is now one dispatch for both.
 
-**Last updated**: 2026-10-19 (#132: SNMP over IPv6)
+**Last updated**: 2026-11-13 (#203: windowed threshold); 2026-10-19 (#132: SNMP over IPv6)
 
 ## What we detect
 
@@ -74,13 +75,13 @@ oldest-by-last-seen evicted.
 
 ```
 SNMP_COMMUNITY_BRUTE: 10.0.0.5->10.0.0.10: 7 SNMP communities
-tried (last=private)
+tried in 60s (last=private)
 ```
 
 | Field | Value |
 |-------|-------|
 | Severity | CRIT |
-| Threshold | `community_count ≥ 5` per (src_ip, dst_ip) |
+| Threshold | ≥5 new communities inside a sliding 60 s window (`snmp.community_brute` / `snmp.brute_window_s`), per (src_ip, dst_ip) |
 | Dedup key | `snmp-brute:<src>-><dst>` |
 | `match_ip` | `src_ip` (the guesser) |
 | `match_port` | 161 |
@@ -91,6 +92,18 @@ site-specific token. Even an operator typing the wrong string
 a couple times stays well below 5. Metasploit's default
 community wordlist starts with `public / private / cisco /
 community / admin` — five hits trips immediately.
+
+The `snmp_flow` record's `community_count` is a **lifetime** tally
+of distinct strings (capped at 8) kept for operator context; it
+never decays and the rule does not read it. Before #203 the rule
+thresholded it directly, so a pair that had ever shown five
+communities re-fired the alert on every tick until eviction or a
+restart — #202's bug in SSH/RDP. The rule now reads `brute_count`:
+communities first seen on the pair inside the window, from a
+private ring in `src/snmp_snoop.c`. A string already seen is never
+new again, so only genuinely new guesses count. The knob's upper
+bound is 32 (`FLOOD_WIN_CAP`), but because the set saturates at 8,
+values above 8 cannot fire.
 
 ## What's normal
 
@@ -105,7 +118,8 @@ community / admin` — five hits trips immediately.
 
 ## What's suspicious
 
-- `community_count ≥ 5` from one source — fires the alert.
+- ≥5 new communities inside the 60 s window from one source —
+  fires the alert. It resolves on its own once the sweep stops.
 - `set_count > 0` after a brute-force window — the attacker
   found a writable community and is rewriting agent config.
   Not currently a dedicated alert; the `snmp_flow` records

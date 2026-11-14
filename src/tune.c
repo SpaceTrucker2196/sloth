@@ -77,9 +77,15 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "rdp.brute_force",            10,  2,   FLOOD_WIN_CAP, "attempts in the window" },
     { "ssh.brute_window_s",         60,  5,   3600,   "seconds (sliding)" },
     { "rdp.brute_window_s",         60,  5,   3600,   "seconds (sliding)" },
-    { "snmp.community_brute",       5,   2,   1000,   "communities tried" },
-    { "mqtt.brute_connects",        10,  2,   1000,   "CONNECTs" },
-    { "mqtt.brute_fails",           5,   2,   1000,   "refused CONNECTs" },
+    /* #203: windowed, same correction as ssh/rdp above — a threshold
+     * past FLOOD_WIN_CAP could never be reached. snmp.community_brute
+     * is further limited in practice by MAX_SNMP_COMMUNITIES (8): a
+     * flow records, and so notes, at most 8 distinct communities. */
+    { "snmp.community_brute",       5,   2,   FLOOD_WIN_CAP, "communities tried in the window" },
+    { "mqtt.brute_connects",        10,  2,   FLOOD_WIN_CAP, "CONNECTs in the window" },
+    { "mqtt.brute_fails",           5,   2,   FLOOD_WIN_CAP, "refused CONNECTs in the window" },
+    { "snmp.brute_window_s",        60,  5,   3600,   "seconds (sliding)" },
+    { "mqtt.brute_window_s",        60,  5,   3600,   "seconds (sliding)" },
     /* lo is 1, not 2 like the counts above: these three inherit the
      * contract alerts_set_wps_* published in d652502, which rejects
      * "zero or less" and accepts 1. Widening a shipped CLI validation

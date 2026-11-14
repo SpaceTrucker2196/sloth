@@ -5,6 +5,7 @@
 #include "snmp_snoop.h"
 #include <stdio.h>
 #include "sensor_health.h"
+#include "sloth_clock.h"
 
 /* SNMP v1/v2c messages built from raw ASN.1 BER per RFC 1157 §4.1
  * and RFC 1901 §3. We never feed the parser its own encoder output.
@@ -260,6 +261,85 @@ static void test_snmp_table_full_evicts_oldest_and_tallies(void) {
     ASSERT_EQ(have_first, 0);
 }
 
+/* ── Brute-force window (#203) ──────────────────────────── */
+/* Same fix as ssh/rdp (#202): community_count stays a lifetime tally of
+ * distinct communities; SNMP_COMMUNITY_BRUTE reads brute_count, the
+ * new communities first seen inside the sliding snmp.brute_window_s
+ * window, noted at observe time into a private ring and recomputed by
+ * snmp_snoop_snapshot() on an injected clock. Both tests below were
+ * seen red with the snapshot reverted to
+ * `brute_count = tmp[i].pub.community_count`. */
+static uint64_t g_nsw_mono;
+static time_t   g_nsw_wall;
+static uint64_t nsw_mono(void) { return g_nsw_mono; }
+static time_t   nsw_wall(void) { return g_nsw_wall; }
+
+static void observe_comm(const char *comm) {
+    uint8_t buf[64];
+    int n = build_snmp_msg(buf, 1, comm, 0xA0);
+    snmp_snoop_observe("10.0.0.5", 49152, "10.0.0.10", 161, buf, n);
+}
+
+static void test_window_holds_recent_communities_only(void) {
+    snmp_snoop_clear();
+    g_nsw_mono = 1000000; g_nsw_wall = 1700000000;
+    sloth_clock_test_set(nsw_mono, nsw_wall);
+
+    /* A wordlist sweep: five communities, 1 s apart — the default
+     * snmp.community_brute threshold, inside the default 60 s window. */
+    const char *words[] = { "public", "private", "cisco", "community", "admin" };
+    for (int i = 0; i < 5; i++) {
+        if (i > 0) { g_nsw_mono += 1000; g_nsw_wall += 1; }
+        observe_comm(words[i]);
+    }
+    /* A repeat of a known community is not a new guess. */
+    observe_comm("public");
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    snmp_snoop_snapshot(&s);
+    ASSERT_EQ(s.snmp_flow_count, 1);
+    ASSERT_EQ(s.snmp_flows[0].community_count, 5);   /* lifetime */
+    ASSERT_EQ(s.snmp_flows[0].brute_count, 5);       /* in the window */
+
+    /* Past the default 60 s window with no new community: decays. */
+    g_nsw_mono += 70000; g_nsw_wall += 70;
+    snmp_snoop_snapshot(&s);
+    ASSERT_EQ(s.snmp_flows[0].brute_count, 0);
+    ASSERT_EQ(s.snmp_flows[0].community_count, 5);   /* still not decayed */
+
+    /* One new community starts a fresh window of 1. */
+    observe_comm("test");
+    snmp_snoop_snapshot(&s);
+    ASSERT_EQ(s.snmp_flows[0].brute_count, 1);
+    ASSERT_EQ(s.snmp_flows[0].community_count, 6);
+
+    sloth_clock_test_set(NULL, NULL);
+    snmp_snoop_clear();
+}
+
+/* MAX_SNMP_COMMUNITIES (8) distinct communities, 600 s apart: past the
+ * default threshold (5) lifetime, but never two inside one 60 s
+ * window. Pre-#203 the lifetime count read as a sweep. */
+static void test_window_ignores_widely_spaced_communities(void) {
+    snmp_snoop_clear();
+    g_nsw_mono = 1000000; g_nsw_wall = 1700000000;
+    sloth_clock_test_set(nsw_mono, nsw_wall);
+
+    sloth_state_t s;
+    char comm[8];
+    for (int i = 0; i < MAX_SNMP_COMMUNITIES; i++) {
+        if (i > 0) { g_nsw_mono += 600000; g_nsw_wall += 600; }
+        snprintf(comm, sizeof(comm), "c%d", i);
+        observe_comm(comm);
+        memset(&s, 0, sizeof(s));
+        snmp_snoop_snapshot(&s);
+        ASSERT_EQ(s.snmp_flows[0].brute_count, 1);
+    }
+    ASSERT_EQ(s.snmp_flows[0].community_count, MAX_SNMP_COMMUNITIES);
+
+    sloth_clock_test_set(NULL, NULL);
+    snmp_snoop_clear();
+}
+
 void run_snmp_snoop_tests(void) {
     TEST_SUITE("snmp_snoop: PDU-type detection");
     RUN_TEST(test_detects_get_request);
@@ -283,4 +363,8 @@ void run_snmp_snoop_tests(void) {
     RUN_TEST(test_unknown_pdu_tag_rejected);
     RUN_TEST(test_community_with_nul_byte_rejected);
     RUN_TEST(test_snmp_table_full_evicts_oldest_and_tallies);
+
+    TEST_SUITE("snmp_snoop: brute-force window (#203)");
+    RUN_TEST(test_window_holds_recent_communities_only);
+    RUN_TEST(test_window_ignores_widely_spaced_communities);
 }

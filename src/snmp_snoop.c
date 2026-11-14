@@ -5,8 +5,20 @@
 #include "snmp_snoop.h"
 #include "sloth_clock.h"
 #include "stab.h"
+#include "flood_window.h"
+#include "tune.h"
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* Same shape as ssh_snoop.c's ssh_row_t (#202, #203): the table's row
+ * carries the exported snmp_flow_t plus the private sliding window
+ * SNMP_COMMUNITY_BRUTE reads. The 272-byte ring stays out of
+ * snmp_flow_t, which is copied wholesale into sloth_state_t;
+ * snmp_snoop_snapshot() exports only the one int the rule needs. */
+typedef struct {
+    snmp_flow_t    pub;
+    flood_window_t win;
+} snmp_row_t;
 
 /* Bounded table (#110): STAB_OLDEST, so a spray of new keys churns
  * the table and is tallied, but can never make it allocate or refuse.
@@ -15,10 +27,11 @@ static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
  * STAB_OLDEST. */
 typedef struct { const char *src_ip, *dst_ip; } snmp_key_t;
 static int key_eq(const void *row, const void *key) {
-    const snmp_flow_t *e = row; const snmp_key_t *k = key;
-    return strcmp(e->src_ip, k->src_ip) == 0 && strcmp(e->dst_ip, k->dst_ip) == 0;
+    const snmp_row_t *e = row; const snmp_key_t *k = key;
+    return strcmp(e->pub.src_ip, k->src_ip) == 0 &&
+           strcmp(e->pub.dst_ip, k->dst_ip) == 0;
 }
-STAB_DECL(g_tbl, snmp_flow_t, MAX_SNMP_FLOWS, last_seen, STAB_OLDEST,
+STAB_DECL(g_tbl, snmp_row_t, MAX_SNMP_FLOWS, pub.last_seen, STAB_OLDEST,
           SH_EVICT_SNMP_FLOW, NULL, key_eq);
 
 /* SNMP message (RFC 1157 §4.1 v1, RFC 1901 §3 v2c):
@@ -76,7 +89,9 @@ static int ber_len(const uint8_t *p, int len, int *consumed) {
     return v;
 }
 
-static void record_community(snmp_flow_t *e, const char *community) {
+static void record_community(snmp_row_t *r, const char *community,
+                             uint64_t now_ms) {
+    snmp_flow_t *e = &r->pub;
     if (!community || !community[0]) return;
     snprintf(e->last_community, sizeof(e->last_community), "%s", community);
     for (int i = 0; i < e->community_count; i++) {
@@ -86,6 +101,12 @@ static void record_community(snmp_flow_t *e, const char *community) {
     snprintf(e->communities[e->community_count],
              sizeof(e->communities[0]), "%s", community);
     e->community_count++;
+    /* #203: note the new community in the sliding window
+     * SNMP_COMMUNITY_BRUTE reads, so an idle pair's rate decays instead
+     * of community_count's lifetime total standing as a sweep forever. */
+    flood_window_note(&r->win, now_ms,
+                      (int)tune_val(TUNE_SNMP_COMMUNITY_BRUTE),
+                      (uint32_t)tune_val(TUNE_SNMP_BRUTE_WINDOW_S) * 1000u);
 }
 
 int snmp_snoop_observe(const char *src_ip, uint16_t src_port,
@@ -166,11 +187,13 @@ int snmp_snoop_observe(const char *src_ip, uint16_t src_port,
     }
     (void)dst_port;
 
-    time_t now = sloth_wall();
+    time_t   now    = sloth_wall();
+    uint64_t now_ms = sloth_mono_ms();
     pthread_mutex_lock(&g_mu);
     snmp_key_t key = { flow_src, flow_dst };
     int created;
-    snmp_flow_t *e = stab_get(&g_tbl, &key, now, &created);
+    snmp_row_t *r = stab_get(&g_tbl, &key, now, &created);
+    snmp_flow_t *e = &r->pub;
     if (created) {
         snprintf(e->src_ip, sizeof(e->src_ip), "%s", flow_src);
         snprintf(e->dst_ip, sizeof(e->dst_ip), "%s", flow_dst);
@@ -178,7 +201,7 @@ int snmp_snoop_observe(const char *src_ip, uint16_t src_port,
     if (e->first_seen == 0) e->first_seen = now;
     e->last_seen = now;
     e->version   = version;
-    record_community(e, community);
+    record_community(r, community, now_ms);
     switch (pdu_tag) {
     case PDU_GET:      e->get_count++;      break;
     case PDU_GETNEXT:  e->getnext_count++;  break;
@@ -195,8 +218,17 @@ int snmp_snoop_observe(const char *src_ip, uint16_t src_port,
 }
 
 void snmp_snoop_snapshot(sloth_state_t *s) {
+    static snmp_row_t tmp[MAX_SNMP_FLOWS];   /* static: off the caller's stack */
+    uint64_t now_ms = sloth_mono_ms();
+    uint32_t win_ms = (uint32_t)tune_val(TUNE_SNMP_BRUTE_WINDOW_S) * 1000u;
     pthread_mutex_lock(&g_mu);
-    s->snmp_flow_count = stab_snapshot(&g_tbl, s->snmp_flows, MAX_SNMP_FLOWS);
+    int n = stab_snapshot(&g_tbl, tmp, MAX_SNMP_FLOWS);
+    s->snmp_flow_count = n;
+    for (int i = 0; i < n; i++) {
+        s->snmp_flows[i] = tmp[i].pub;
+        s->snmp_flows[i].brute_count =
+            flood_window_count(&tmp[i].win, now_ms, win_ms);
+    }
     pthread_mutex_unlock(&g_mu);
 }
 

@@ -59,6 +59,8 @@ static void test_defaults_are_the_shipped_values(void) {
     ASSERT_EQ((long long)tune_val(TUNE_SNMP_COMMUNITY_BRUTE), 5);
     ASSERT_EQ((long long)tune_val(TUNE_MQTT_BRUTE_CONNECTS), 10);
     ASSERT_EQ((long long)tune_val(TUNE_MQTT_BRUTE_FAILS), 5);
+    ASSERT_EQ((long long)tune_val(TUNE_SNMP_BRUTE_WINDOW_S), 60);
+    ASSERT_EQ((long long)tune_val(TUNE_MQTT_BRUTE_WINDOW_S), 60);
     /* #135: 4 slots per peer of 16; idle = 3 × JSONL_HEARTBEAT_SECS. */
     ASSERT_EQ((long long)tune_val(TUNE_SOCKET_MAX_PER_PEER), 4);
     ASSERT_EQ((long long)tune_val(TUNE_SOCKET_IDLE_SECS), 900);
@@ -79,6 +81,12 @@ static void test_specs_match_enum_order(void) {
     ASSERT_EQ((long long)tune_spec(TUNE_RDP_BRUTE_FORCE)->hi, FLOOD_WIN_CAP);
     ASSERT_STR(tune_spec(TUNE_SSH_BRUTE_WINDOW_S)->name, "ssh.brute_window_s");
     ASSERT_STR(tune_spec(TUNE_RDP_BRUTE_WINDOW_S)->name, "rdp.brute_window_s");
+    /* #203: the same correction for the SNMP/MQTT brute thresholds. */
+    ASSERT_EQ((long long)tune_spec(TUNE_SNMP_COMMUNITY_BRUTE)->hi, FLOOD_WIN_CAP);
+    ASSERT_EQ((long long)tune_spec(TUNE_MQTT_BRUTE_CONNECTS)->hi, FLOOD_WIN_CAP);
+    ASSERT_EQ((long long)tune_spec(TUNE_MQTT_BRUTE_FAILS)->hi, FLOOD_WIN_CAP);
+    ASSERT_STR(tune_spec(TUNE_SNMP_BRUTE_WINDOW_S)->name, "snmp.brute_window_s");
+    ASSERT_STR(tune_spec(TUNE_MQTT_BRUTE_WINDOW_S)->name, "mqtt.brute_window_s");
     ASSERT_STR(tune_spec(TUNE_MQTT_BRUTE_FAILS)->name, "mqtt.brute_fails");
     ASSERT_STR(tune_spec(TUNE_TWIN_STEER_WINDOW_S)->name, "twin.steer_window_s");
     ASSERT_STR(tune_spec(TUNE_TWIN_LATE_ARRIVAL_S)->name, "twin.late_arrival_s");
@@ -298,7 +306,7 @@ static void test_reset_restores_every_default(void) {
     tune_reset();
     char err[160];
     ASSERT_EQ(tune_set("karma.ssid_thresh=6", err, sizeof(err)), 0);
-    ASSERT_EQ(tune_set("mqtt.brute_fails=99", err, sizeof(err)), 0);
+    ASSERT_EQ(tune_set("mqtt.brute_fails=20", err, sizeof(err)), 0);
     ASSERT_EQ(tune_non_default(), 2);
     tune_reset();
     ASSERT_EQ(tune_non_default(), 0);

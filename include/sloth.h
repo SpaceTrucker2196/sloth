@@ -462,7 +462,14 @@ typedef struct {
  * Set requests are tracked separately because they're rare in
  * monitoring traffic — almost every legitimate SNMP query is a
  * Get/GetNext/GetBulk. A Set with a guessed community is the
- * post-exploitation config-rewrite step. */
+ * post-exploitation config-rewrite step.
+ *
+ * SNMP_COMMUNITY_BRUTE fires on `brute_count` — new communities first
+ * seen inside the sliding snmp.brute_window_s seconds, kept current by
+ * snmp_snoop.c's private flood_window_t ring — not on community_count's
+ * lifetime total (#203, the same bug as #202: a lifetime count never
+ * decays, so the rule re-fired every tick until eviction or restart).
+ * community_count stays as operator context; no rule reads it. */
 #define MAX_SNMP_FLOWS         48
 #define MAX_SNMP_COMMUNITIES    8
 #define SNMP_COMMUNITY_LEN     32
@@ -477,7 +484,8 @@ typedef struct {
     int      response_count;       /* GetResponse              */
     int      trap_count;           /* Trap (v1) / SNMPv2-Trap  */
     int      version;              /* 0=v1, 1=v2c, 3=v3        */
-    int      community_count;      /* unique communities seen  */
+    int      community_count;      /* lifetime unique; informational */
+    int      brute_count;          /* new communities in snmp.brute_window_s (#203) */
     char     communities[MAX_SNMP_COMMUNITIES][SNMP_COMMUNITY_LEN];
     char     last_community[SNMP_COMMUNITY_LEN];
     time_t   first_seen;
@@ -501,7 +509,13 @@ typedef struct {
  *   - CONNACK reason codes — code 4 in v3 / 0x86 in v5 = bad
  *     credentials. A high failure count is the explicit signal,
  *     even quieter than the connect-count threshold.
- *   - Protocol-level (3 / 4 / 5) for asset inventory. */
+ *   - Protocol-level (3 / 4 / 5) for asset inventory.
+ *
+ * MQTT_BROKER_BRUTE fires on `brute_connects` / `brute_fails` — CONNECTs
+ * and refused CONNACKs inside the sliding mqtt.brute_window_s seconds,
+ * each from its own private ring in mqtt_snoop.c — not on the lifetime
+ * connect_count / connack_fail_count, which never decay (#203, same bug
+ * as #202). The lifetime counts stay as operator context. */
 #define MAX_MQTT_FLOWS   32
 #define MQTT_USERNAME_LEN 32
 
@@ -510,6 +524,8 @@ typedef struct {
     char     dst_ip[46];           /* MQTT broker                    */
     int      connect_count;        /* CONNECT packets observed       */
     int      connack_fail_count;   /* bad-auth CONNACK responses     */
+    int      brute_connects;       /* CONNECTs in mqtt.brute_window_s (#203) */
+    int      brute_fails;          /* refused CONNACKs in the window (#203)  */
     int      subscribe_count;      /* SUBSCRIBE packets              */
     int      publish_count;        /* PUBLISH packets                */
     int      proto_level;          /* last seen: 3 / 4 / 5           */

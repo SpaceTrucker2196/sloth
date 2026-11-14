@@ -22,9 +22,9 @@ Sloth's MQTT pass parses the cleartext Control Packet fixed
 header on TCP/1883, recognises CONNECT / CONNACK / SUBSCRIBE /
 PUBLISH, walks the CONNECT payload to pull the username when
 present, and reads the CONNACK reason code to count auth
-failures. Fires `MQTT_BROKER_BRUTE` on either path:
-`connect_count ≥ 10` OR `connack_fail_count ≥ 5` per (client,
-broker).
+failures. Fires `MQTT_BROKER_BRUTE` on either path: ≥10
+CONNECTs OR ≥5 refused CONNACKs per (client, broker) inside the
+sliding `mqtt.brute_window_s` window (60 s default; #203).
 
 ## What we detect
 
@@ -70,14 +70,14 @@ oldest-by-last-seen evicted.
 ## Alert: `MQTT_BROKER_BRUTE`
 
 ```
-MQTT_BROKER_BRUTE: 203.0.113.7->10.0.0.10: 47 CONNECTs / 12 fails
-(user=admin)
+MQTT_BROKER_BRUTE: 203.0.113.7->10.0.0.10: 27 CONNECTs / 12 fails
+in 60s (user=admin)
 ```
 
 | Field | Value |
 |-------|-------|
 | Severity | CRIT |
-| Threshold | `connect_count ≥ 10` OR `connack_fail_count ≥ 5` |
+| Threshold | ≥10 CONNECTs OR ≥5 refused CONNACKs inside a sliding 60 s window (`mqtt.brute_connects` / `mqtt.brute_fails` / `mqtt.brute_window_s`) |
 | Dedup key | `mqtt-brute:<client>-><broker>` |
 | `match_ip` | `src_ip` (the attacking client) |
 | `match_port` | 1883 |
@@ -92,6 +92,16 @@ Two thresholds because there are two distinct attack shapes:
   times. Lower threshold because it's stronger evidence — the
   broker has explicitly rejected. Catches paced attackers who
   stay under the connection-count radar.
+
+Each path has its own window (`brute_connects`, `brute_fails` on
+the `mqtt_flow` record, each from a private ring in
+`src/mqtt_snoop.c`), so a burst on one never counts toward the
+other. `connect_count` / `connack_fail_count` stay as **lifetime**
+tallies for operator context; they never decay and the rule does
+not read them. Before #203 it did, so a device that had ever
+reconnected ten times stood as a CRIT on every tick until eviction
+or a restart — #202's bug in SSH/RDP. Both thresholds' upper bound
+is 32 (`FLOOD_WIN_CAP`), the ring size.
 
 ## What's normal
 
@@ -109,8 +119,10 @@ Two thresholds because there are two distinct attack shapes:
 
 ## What's suspicious
 
-- `connect_count ≥ 10` — fires the alert.
-- `connack_fail_count ≥ 5` — fires the alert independently.
+- ≥10 CONNECTs inside the 60 s window — fires the alert.
+- ≥5 refused CONNACKs inside the window — fires the alert
+  independently. Either resolves on its own once the pair goes
+  quiet.
   A scanner getting 5 explicit rejections is unambiguous.
 - `connect_count` very high with `publish_count == 0` and
   `subscribe_count == 0` — client never moves past auth.

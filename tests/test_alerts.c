@@ -6032,6 +6032,12 @@ static void test_rdp_brute_force_no_cookie(void) {
 
 /* ── SNMP community brute force ─────────────────────────── */
 
+/* #203: same fix as SSH/RDP (#202) — rule_snmp_community_brute()
+ * reads e->brute_count, new communities inside the sliding
+ * snmp.brute_window_s window (kept by snmp_snoop_snapshot(), exercised
+ * against the real ring in tests/test_snmp_snoop.c), not the lifetime
+ * community_count. Seeded alongside it here so these threshold tests
+ * keep their shape. */
 static void seed_snmp_flow(sloth_state_t *s, const char *src_ip,
                             const char *dst_ip, int community_count,
                             const char *last_comm) {
@@ -6041,9 +6047,33 @@ static void seed_snmp_flow(sloth_state_t *s, const char *src_ip,
     snprintf(e->src_ip, sizeof(e->src_ip), "%s", src_ip);
     snprintf(e->dst_ip, sizeof(e->dst_ip), "%s", dst_ip);
     e->community_count = community_count;
+    e->brute_count     = community_count;
     if (last_comm) snprintf(e->last_community, sizeof(e->last_community),
                              "%s", last_comm);
     e->last_seen = time(NULL);
+}
+
+/* Once the window has decayed, the rule must stop re-asserting the
+ * incident: `evaluations` holds flat on a tick where brute_count is
+ * back under threshold while the lifetime community_count still reads
+ * 5. Seen red with the rule reverted to `e->community_count <
+ * SNMP_COMMUNITY_BRUTE_THRESHOLD` (evaluations 1 -> 2). */
+static void test_snmp_community_brute_idle_flow_stops(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_snmp_flow(&s, "10.0.0.5", "10.0.0.10", 5, "private");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_SNMP_COMMUNITY_BRUTE);
+    ASSERT(idx >= 0);
+    if (idx < 0) return;
+    uint32_t evals_before = s.alerts[idx].evaluations;
+
+    s.snmp_flows[0].brute_count = 0;   /* window aged out */
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_SNMP_COMMUNITY_BRUTE);
+    ASSERT(idx >= 0);
+    if (idx >= 0)
+        ASSERT_EQ((int)s.alerts[idx].evaluations, (int)evals_before);
 }
 
 static void test_snmp_community_brute_fires_at_threshold(void) {
@@ -6083,6 +6113,10 @@ static void test_snmp_community_brute_per_pair(void) {
 
 /* ── MQTT broker brute force ────────────────────────────── */
 
+/* #203: the rule reads brute_connects / brute_fails, each from its own
+ * window in mqtt_snoop.c (tests/test_mqtt_snoop.c drives the rings),
+ * not the lifetime connect_count / connack_fail_count. Seeded alongside
+ * them here so the threshold tests keep their shape. */
 static void seed_mqtt_flow(sloth_state_t *s, const char *src_ip,
                             const char *dst_ip, int connect_count,
                             int fail_count, const char *user) {
@@ -6093,11 +6127,41 @@ static void seed_mqtt_flow(sloth_state_t *s, const char *src_ip,
     snprintf(e->dst_ip, sizeof(e->dst_ip), "%s", dst_ip);
     e->connect_count      = connect_count;
     e->connack_fail_count = fail_count;
+    e->brute_connects     = connect_count;
+    e->brute_fails        = fail_count;
     e->proto_level        = 4;
     if (user) snprintf(e->last_username, sizeof(e->last_username),
                         "%s", user);
     e->last_seen = time(NULL);
 }
+
+/* Fire on one path, age that path's window out, and the rule must not
+ * re-assert the incident (`evaluations` flat). One test per path, so
+ * each half of the trip condition is pinned on its own: seen red with
+ * `e->connect_count >= MQTT_BROKER_BRUTE_CONNECTS` restored (connect
+ * test, evaluations 1 -> 2) and, separately, with
+ * `e->connack_fail_count >= MQTT_BROKER_BRUTE_FAILS` restored (fail
+ * test, same). */
+static void mqtt_idle_path_stops(int connects, int fails) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_mqtt_flow(&s, "10.0.0.5", "10.0.0.10", connects, fails, "admin");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MQTT_BROKER_BRUTE);
+    ASSERT(idx >= 0);
+    if (idx < 0) return;
+    uint32_t evals_before = s.alerts[idx].evaluations;
+
+    s.mqtt_flows[0].brute_connects = 0;   /* windows aged out */
+    s.mqtt_flows[0].brute_fails    = 0;
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_MQTT_BROKER_BRUTE);
+    ASSERT(idx >= 0);
+    if (idx >= 0)
+        ASSERT_EQ((int)s.alerts[idx].evaluations, (int)evals_before);
+}
+static void test_mqtt_brute_idle_connects_stop(void) { mqtt_idle_path_stops(10, 0); }
+static void test_mqtt_brute_idle_fails_stop(void)    { mqtt_idle_path_stops(0, 5); }
 
 static void test_mqtt_brute_fires_at_connect_threshold(void) {
     alerts_clear();
@@ -13612,9 +13676,12 @@ void run_alerts_tests(void) {
     RUN_TEST(test_rdp_brute_force_below_threshold_no_fire);
     RUN_TEST(test_rdp_brute_force_per_pair);
     RUN_TEST(test_rdp_brute_force_no_cookie);
+    RUN_TEST(test_snmp_community_brute_idle_flow_stops);
     RUN_TEST(test_snmp_community_brute_fires_at_threshold);
     RUN_TEST(test_snmp_community_brute_below_threshold_no_fire);
     RUN_TEST(test_snmp_community_brute_per_pair);
+    RUN_TEST(test_mqtt_brute_idle_connects_stop);
+    RUN_TEST(test_mqtt_brute_idle_fails_stop);
     RUN_TEST(test_mqtt_brute_fires_at_connect_threshold);
     RUN_TEST(test_mqtt_brute_fires_at_fail_threshold);
     RUN_TEST(test_mqtt_brute_below_both_thresholds_no_fire);

@@ -66,6 +66,10 @@ typedef enum {
     TUNE_SNMP_COMMUNITY_BRUTE,
     TUNE_MQTT_BRUTE_CONNECTS,
     TUNE_MQTT_BRUTE_FAILS,
+    /* #203: the sliding window snmp.community_brute and
+     * mqtt.brute_connects / mqtt.brute_fails count inside, in seconds. */
+    TUNE_SNMP_BRUTE_WINDOW_S,
+    TUNE_MQTT_BRUTE_WINDOW_S,
     /* #82's own three, folded in 2026-10-05. They shipped first as
      * --wps-pin-brute-cycles / --wps-lockout-cycles /
      * --wps-pbc-concurrent in d652502, which answered the same owner

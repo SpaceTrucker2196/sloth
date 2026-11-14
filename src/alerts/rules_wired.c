@@ -1175,21 +1175,30 @@ void rule_rdp_brute_force(const sloth_state_t *s, time_t now) {
  * agent it queries. Even an operator typing the wrong string a
  * couple times stays well below 5. metasploit's default list
  * starts with public/private/cisco/community/admin — five hits
- * trips immediately. */
+ * trips immediately.
+ *
+ * #203: this used to threshold e->community_count, a lifetime total
+ * that never decayed — the same bug #202 fixed for SSH/RDP. Once a
+ * pair had ever tried five communities the rule re-fired every tick
+ * until eviction or restart. e->brute_count is the count of new
+ * communities first seen inside the last snmp.brute_window_s seconds,
+ * kept current by snmp_snoop_snapshot() from a private ring
+ * (src/snmp_snoop.c), so the incident resolves once the sweep stops. */
 #define SNMP_COMMUNITY_BRUTE_THRESHOLD ((int)tune_val(TUNE_SNMP_COMMUNITY_BRUTE))
 
 void rule_snmp_community_brute(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->snmp_flow_count; i++) {
         const snmp_flow_t *e = &s->snmp_flows[i];
-        if (e->community_count < SNMP_COMMUNITY_BRUTE_THRESHOLD) continue;
+        if (e->brute_count < SNMP_COMMUNITY_BRUTE_THRESHOLD) continue;
 
         char key[ALERT_KEY_LEN];
         snprintf(key, sizeof(key), "snmp-brute:%.39s->%.39s",
                  e->src_ip, e->dst_ip);
         char detail[ALERT_DETAIL_LEN];
         snprintf(detail, sizeof(detail),
-                 "%s->%s: %d SNMP communities tried (last=%.16s)",
-                 e->src_ip, e->dst_ip, e->community_count,
+                 "%s->%s: %d SNMP communities tried in %ds (last=%.16s)",
+                 e->src_ip, e->dst_ip, e->brute_count,
+                 (int)tune_val(TUNE_SNMP_BRUTE_WINDOW_S),
                  e->last_community[0] ? e->last_community : "?");
         fire(ALERT_TYPE_SNMP_COMMUNITY_BRUTE, ALERT_SEV_CRIT,
              "SNMP_COMMUNITY_BRUTE", detail, key,
@@ -1208,15 +1217,24 @@ void rule_snmp_community_brute(const sloth_state_t *s, time_t now) {
  * Why 10 / 5: matches the SSH brute threshold for CONNECT count
  * (same connection-cadence reasoning) and a tighter 5 for explicit
  * CONNACK failures — the broker telling us "wrong" five times is
- * stronger evidence than just connection volume. */
+ * stronger evidence than just connection volume.
+ *
+ * #203: both paths used to threshold lifetime totals
+ * (connect_count / connack_fail_count) that never decayed, so a
+ * routine client that reconnected ten times ever stood as a CRIT
+ * forever — #202's bug. Each path now reads its own window,
+ * brute_connects / brute_fails, the CONNECTs and refused CONNACKs
+ * inside the last mqtt.brute_window_s seconds, kept by
+ * mqtt_snoop_snapshot() from two private rings (src/mqtt_snoop.c).
+ * Two rings, not one, so the either-path semantics are unchanged. */
 #define MQTT_BROKER_BRUTE_CONNECTS ((int)tune_val(TUNE_MQTT_BRUTE_CONNECTS))
 #define MQTT_BROKER_BRUTE_FAILS ((int)tune_val(TUNE_MQTT_BRUTE_FAILS))
 
 void rule_mqtt_broker_brute(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->mqtt_flow_count; i++) {
         const mqtt_flow_t *e = &s->mqtt_flows[i];
-        int trip = (e->connect_count      >= MQTT_BROKER_BRUTE_CONNECTS)
-                || (e->connack_fail_count >= MQTT_BROKER_BRUTE_FAILS);
+        int trip = (e->brute_connects >= MQTT_BROKER_BRUTE_CONNECTS)
+                || (e->brute_fails    >= MQTT_BROKER_BRUTE_FAILS);
         if (!trip) continue;
 
         char key[ALERT_KEY_LEN];
@@ -1224,9 +1242,10 @@ void rule_mqtt_broker_brute(const sloth_state_t *s, time_t now) {
                  e->src_ip, e->dst_ip);
         char detail[ALERT_DETAIL_LEN];
         snprintf(detail, sizeof(detail),
-                 "%s->%s: %d CONNECTs / %d fails (user=%.16s)",
+                 "%s->%s: %d CONNECTs / %d fails in %ds (user=%.16s)",
                  e->src_ip, e->dst_ip,
-                 e->connect_count, e->connack_fail_count,
+                 e->brute_connects, e->brute_fails,
+                 (int)tune_val(TUNE_MQTT_BRUTE_WINDOW_S),
                  e->last_username[0] ? e->last_username : "?");
         fire(ALERT_TYPE_MQTT_BROKER_BRUTE, ALERT_SEV_CRIT,
              "MQTT_BROKER_BRUTE", detail, key,
