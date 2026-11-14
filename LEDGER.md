@@ -350,3 +350,4 @@
 | 8bcefe1 | 2026-11-14T00:18:32Z | claude-opus-5-5 | 20 | 3955 | 1400117 | 208569 | 2.0278 | #203 SNMP/MQTT brute windowing (8bcefe13) |
 | af901a0 | 2026-11-14T00:26:34Z | claude-opus-5-5 | 10 | 1257 | 715260 | 5168 | 0.2096 | #203 SNMP/MQTT brute windowing (af901a06) |
 | c72fb41d | 2026-11-14T01:18:04Z | claude-opus-5-5 | 390 | 166394 | 48635941 | 1435604 | 42.8358 | ADS-B radar scope on shared ppi.js; sdrsweep fail-closed cooldown; cppcheck entr |
+| ede113e5 | 2026-11-14T13:05:19Z | claude-opus-5 | 574 | 219426 | 80711875 | 693200 | 52.7765 | #208 — rtl_433 JSON event log as a passive sub-GHz sensor (slice 1) |
