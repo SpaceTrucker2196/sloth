@@ -79,8 +79,8 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "rdp.brute_window_s",         60,  5,   3600,   "seconds (sliding)" },
     /* #203: windowed, same correction as ssh/rdp above — a threshold
      * past FLOOD_WIN_CAP could never be reached. snmp.community_brute
-     * is further limited in practice by MAX_SNMP_COMMUNITIES (8): a
-     * flow records, and so notes, at most 8 distinct communities. */
+     * notes guesses the full 8-entry community set cannot hold too, so
+     * the whole 2..32 range is reachable. */
     { "snmp.community_brute",       5,   2,   FLOOD_WIN_CAP, "communities tried in the window" },
     { "mqtt.brute_connects",        10,  2,   FLOOD_WIN_CAP, "CONNECTs in the window" },
     { "mqtt.brute_fails",           5,   2,   FLOOD_WIN_CAP, "refused CONNECTs in the window" },

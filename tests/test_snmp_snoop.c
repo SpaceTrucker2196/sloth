@@ -340,6 +340,50 @@ static void test_window_ignores_widely_spaced_communities(void) {
     snmp_snoop_clear();
 }
 
+/* The stored set saturates at MAX_SNMP_COMMUNITIES (8), but a guess
+ * the set does not hold is still a guess: a second sweep after the
+ * first filled the set must still count. Seen red with the window
+ * note only where community_count increments (brute_count 0, so a
+ * scanner that came back an hour later with a fresh list never
+ * re-fired). A string the set cannot hold, used for a whole walk,
+ * counts once and not per packet: seen red with the change-from-last
+ * guard removed (brute_count 20). */
+static void test_window_counts_new_guesses_past_full_set(void) {
+    snmp_snoop_clear();
+    g_nsw_mono = 1000000; g_nsw_wall = 1700000000;
+    sloth_clock_test_set(nsw_mono, nsw_wall);
+
+    sloth_state_t s;
+    char comm[8];
+    for (int i = 0; i < MAX_SNMP_COMMUNITIES; i++) {
+        snprintf(comm, sizeof(comm), "a%d", i);
+        observe_comm(comm);
+    }
+    g_nsw_mono += 3600000; g_nsw_wall += 3600;
+    for (int i = 0; i < 6; i++) {
+        g_nsw_mono += 500; g_nsw_wall += 1;
+        snprintf(comm, sizeof(comm), "b%d", i);
+        observe_comm(comm);
+    }
+    memset(&s, 0, sizeof(s));
+    snmp_snoop_snapshot(&s);
+    ASSERT_EQ(s.snmp_flows[0].community_count, MAX_SNMP_COMMUNITIES);
+    ASSERT_EQ(s.snmp_flows[0].brute_count, 6);
+
+    /* A walk on one string the full set cannot hold. */
+    g_nsw_mono += 3600000; g_nsw_wall += 3600;
+    for (int i = 0; i < 20; i++) {
+        g_nsw_mono += 100;
+        observe_comm("walker");
+    }
+    memset(&s, 0, sizeof(s));
+    snmp_snoop_snapshot(&s);
+    ASSERT_EQ(s.snmp_flows[0].brute_count, 1);
+
+    sloth_clock_test_set(NULL, NULL);
+    snmp_snoop_clear();
+}
+
 void run_snmp_snoop_tests(void) {
     TEST_SUITE("snmp_snoop: PDU-type detection");
     RUN_TEST(test_detects_get_request);
@@ -367,4 +411,5 @@ void run_snmp_snoop_tests(void) {
     TEST_SUITE("snmp_snoop: brute-force window (#203)");
     RUN_TEST(test_window_holds_recent_communities_only);
     RUN_TEST(test_window_ignores_widely_spaced_communities);
+    RUN_TEST(test_window_counts_new_guesses_past_full_set);
 }

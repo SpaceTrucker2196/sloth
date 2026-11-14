@@ -464,8 +464,9 @@ typedef struct {
  * Get/GetNext/GetBulk. A Set with a guessed community is the
  * post-exploitation config-rewrite step.
  *
- * SNMP_COMMUNITY_BRUTE fires on `brute_count` — new communities first
- * seen inside the sliding snmp.brute_window_s seconds, kept current by
+ * SNMP_COMMUNITY_BRUTE fires on `brute_count` — community guesses not
+ * already in communities[] (past a full set, once per change of
+ * string) inside the sliding snmp.brute_window_s seconds, kept current by
  * snmp_snoop.c's private flood_window_t ring — not on community_count's
  * lifetime total (#203, the same bug as #202: a lifetime count never
  * decays, so the rule re-fired every tick until eviction or restart).

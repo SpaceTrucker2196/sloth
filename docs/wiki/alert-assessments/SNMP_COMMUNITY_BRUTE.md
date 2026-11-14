@@ -7,7 +7,7 @@ severity_assessment: agree - CRIT is proportionate: a legitimate collector uses 
 false_positive_risk: low - the measure is distinct strings, not volume, so a monitoring host polling all day stays at 1; the realistic benign triggers are the operator's own discovery tooling trying a community list, or a collector reconfigured a few times, both of which are findings about configuration rather than noise
 noise_verdict: not seen on the reference host - host is null, consistent with no SNMP community sweeps on the monitored segment during the window; a deployed sensor would see one standing incident per (scanner, agent) pair for the life of the row after a single sweep, which is the right thing to surface; one tuning trap - community_count saturates at MAX_SNMP_COMMUNITIES 8 (include/sloth.h:423; src/snmp_snoop.c:85), so any snmp.community_brute value above 8 silences the rule entirely although the tune range allows up to 1000
 prevalence: SNMP is named among T1110.001's targeted services, "SNMP (161/UDP and 162/TCP/UDP)" [2]; the tools are commodity - onesixtyone sends "all SNMP requests as fast as it can" with a 10 ms default inter-packet wait [4], nmap's snmp-brute "Attempts to find an SNMP community string by brute force guessing" from a bundled list [5], hydra covers "SNMP v1+v2+v3" [6]; no fetched source quantifies a field rate, so none is claimed
-tuning: [snmp.community_brute (TUNE_SNMP_COMMUNITY_BRUTE, default 5, range 2..32; alias none - set via --tune; values above 8 can never fire because a flow records, and so windows, at most MAX_SNMP_COMMUNITIES 8 distinct communities), snmp.brute_window_s (TUNE_SNMP_BRUTE_WINDOW_S, default 60, range 5..3600; set via --tune)]
+tuning: [snmp.community_brute (TUNE_SNMP_COMMUNITY_BRUTE, default 5, range 2..32; alias none - set via --tune; the whole range is reachable: past the 8-entry stored set, an unstored string still counts once per change of community), snmp.brute_window_s (TUNE_SNMP_BRUTE_WINDOW_S, default 60, range 5..3600; set via --tune)]
 researched: 2026-11-03
 ---
 ## Resolved 2026-11-13 (#203)
@@ -22,8 +22,11 @@ per-flow sliding window (a private `flood_window_t` ring in
 total: `snmp.community_brute` (still default **5**) is now a count
 *inside* `snmp.brute_window_s` (new, default **60 s**), and the
 knob's range drops from 1000 to **32** (`FLOOD_WIN_CAP`). The
-saturation trap above still holds: the distinct-string set still caps
-at 8, so values 9..32 cannot fire. `community_count` is unchanged and
+saturation trap above is gone: the stored set still caps at 8, but a
+string it does not hold is still noted as a guess (once per change of
+community, so a walk on one string counts once), so 9..32 can fire and
+a scanner's second sweep after the set filled is still seen.
+`community_count` is unchanged and
 still exported for operator context; no rule reads it. A pair whose
 sweep stops now resolves the incident within the window plus the
 engine's 300 s resolve floor, instead of re-firing every tick until

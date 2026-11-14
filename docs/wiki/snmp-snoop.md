@@ -101,9 +101,11 @@ communities re-fired the alert on every tick until eviction or a
 restart — #202's bug in SSH/RDP. The rule now reads `brute_count`:
 communities first seen on the pair inside the window, from a
 private ring in `src/snmp_snoop.c`. A string already seen is never
-new again, so only genuinely new guesses count. The knob's upper
-bound is 32 (`FLOOD_WIN_CAP`), but because the set saturates at 8,
-values above 8 cannot fire.
+new again, so only genuinely new guesses count. Once the stored set
+is full (8), a string it does not hold still counts as a guess, once
+per change of community rather than per packet, so a second sweep
+after the first is still seen and a walk on one unstored string
+counts once. The knob's upper bound is 32 (`FLOOD_WIN_CAP`).
 
 ## What's normal
 

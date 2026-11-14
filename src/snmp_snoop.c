@@ -93,17 +93,26 @@ static void record_community(snmp_row_t *r, const char *community,
                              uint64_t now_ms) {
     snmp_flow_t *e = &r->pub;
     if (!community || !community[0]) return;
+    int changed = strcmp(e->last_community, community) != 0;
     snprintf(e->last_community, sizeof(e->last_community), "%s", community);
     for (int i = 0; i < e->community_count; i++) {
         if (strcmp(e->communities[i], community) == 0) return;
     }
-    if (e->community_count >= MAX_SNMP_COMMUNITIES) return;
-    snprintf(e->communities[e->community_count],
-             sizeof(e->communities[0]), "%s", community);
-    e->community_count++;
-    /* #203: note the new community in the sliding window
-     * SNMP_COMMUNITY_BRUTE reads, so an idle pair's rate decays instead
-     * of community_count's lifetime total standing as a sweep forever. */
+    if (e->community_count < MAX_SNMP_COMMUNITIES) {
+        snprintf(e->communities[e->community_count],
+                 sizeof(e->communities[0]), "%s", community);
+        e->community_count++;
+    } else if (!changed) {
+        /* Set full, and this string cannot join it: a walk on it would
+         * otherwise note every packet as a new guess. */
+        return;
+    }
+    /* #203: note the guess in the sliding window SNMP_COMMUNITY_BRUTE
+     * reads, so an idle pair's rate decays instead of community_count's
+     * lifetime total standing as a sweep forever. A guess the full set
+     * does not hold still counts: noting only where community_count
+     * increments left a pair blind to every later sweep once one sweep
+     * had filled the set. */
     flood_window_note(&r->win, now_ms,
                       (int)tune_val(TUNE_SNMP_COMMUNITY_BRUTE),
                       (uint32_t)tune_val(TUNE_SNMP_BRUTE_WINDOW_S) * 1000u);
