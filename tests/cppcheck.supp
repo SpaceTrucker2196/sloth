@@ -60,6 +60,9 @@ readdirCalled:src/sys_status.c
 # detail audit test reads src/alerts/, each a single-threaded program
 # with a local DIR* closed in the same function.
 readdirCalled:web/tools/alertkb.c
+# test_spectrum.c counts the files the sweep helper left: a single-
+# threaded test with a local opendir() DIR*, closed in the same function.
+readdirCalled:web/tests/test_spectrum.c
 readdirCalled:web/tools/alertasm.c
 readdirCalled:web/src/web_pcapdir.c
 # web_fleet_read_own() (#192 I5): one DIR of /sys/class/net, read once
@@ -137,6 +140,9 @@ uninitvar:src/tls_log.c
 # fdopen() failure leaves fd open (POSIX), so the close(fd) on that path
 # is the only close, not a second one.
 doubleFree:src/secure_file.c
+# The same in sloth-sdrsweep's write_atomic(): fdopen() failure leaves
+# fd open (POSIX), so close(fd) on that path is the only close.
+doubleFree:src/sdrsweep/main.c
 # Band heights / panel widths start equal on purpose; each is a separate
 # layout knob so one can be tuned without touching the others.
 duplicateAssignExpression:src/views/dashboard.c
