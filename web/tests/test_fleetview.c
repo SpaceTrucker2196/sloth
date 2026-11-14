@@ -135,8 +135,15 @@ static void test_page(void) {
               "        g.beginPath(); g.arc(rx, ry, sel === a.hex ? 5 : 3, 0, Math.PI * 2); g.stroke();\n"
               "        g.textAlign = \"left\";\n"
               "        g.fillText(label(a) + \" · \" + fvName(a), rx + 7, ry - 6);\n"
+              "        if (ppi) ppi.mark(rx, ry, a.hex);\n"
               "        return;\n"
               "      }\n");
+    /* The radar scope (ppi.js): another host's aircraft a grey hollow
+     * triangle named by its host, no track, no altitude colour. */
+    WT_HAS(p, "        if (remote(a))\n"
+              "          return { id: a.hex, lat: a.lat, lon: a.lon, picked: picked, fill: false, shape: \"tri\", heading: a.track,\n"
+              "                   color: picked ? hot : dim, textColor: picked ? hot : dim, lines: [label(a), \"+ \" + fvName(a)] };\n");
+    WT_HAS(p, "    rows.forEach(function (a) {\n      if (remote(a)) return;\n");
     WT_HAS(p, "      fleetLines(kv, j.fleet);");
     WT_LACKS(p, "innerHTML");
     WT_LACKS(p, "not heard here");

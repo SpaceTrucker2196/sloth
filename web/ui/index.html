@@ -50,6 +50,7 @@
 @include app.js
 @include location.js
 @include gnss.js
+@include ppi.js
 @include adsb.js
 @include aprs.js
 @include spectrum.js
@@ -429,9 +430,9 @@
       <div class="sub">one row per address the decoder lists; an emergency first, then live before gone, the most recently heard first. A column header sorts, drag its right edge to resize. Bright rows have a position, dim rows are gone (kept 10 minutes); altitude is heat-graded over 45,000 ft and RSSI over -50..0 dBFS; the signal cell is a meter of ten 5 dB segments over the same -50..0 dBFS (the decoder's level against its own full scale, not dBm, so it has no S-units). The emergency status and the reserved squawks 7500 / 7600 / 7700 show in the peak colour as the decoder reports them. Click a row for its figures. With All sites, a grey row is an aircraft only another sloth host heard, its host named beside the address and only what that host sent (no state, rate, signal meter or alert); "+name" marks one this decoder lists that another host also heard.</div>
     </section>
     <section class="panel">
-      <div class="label">positions <span class="sub" id="adsb-plot-note"></span></div>
-      <canvas id="adsb-plot" class="heat" aria-label="aircraft positions and tracks, north up"></canvas>
-      <div class="sub">north up, no map: each aircraft at its last position with a heading tick, its track from the positions its records carried, coloured by altitude; the label is callsign (else address) and flight level. An aircraft only another sloth host heard is a grey ring at the last position that host sent, labelled with the host: no track and no altitude colour.</div>
+      <div class="label">positions <span class="sub" id="adsb-plot-note"></span> <label class="sub">range <select id="adsb-range"><option value="0" selected>auto</option><option value="5">5 NM</option><option value="10">10 NM</option><option value="20">20 NM</option><option value="40">40 NM</option><option value="60">60 NM</option><option value="100">100 NM</option><option value="150">150 NM</option><option value="250">250 NM</option></select></label></div>
+      <canvas id="adsb-plot" class="heat" aria-label="aircraft positions on a radar scope centred on this sensor, north up"></canvas>
+      <div class="sub">a radar scope centred on this sensor (its gps fix, else its last fix, else --location; with none, fitted to the aircraft), north up, no map: each aircraft at its true bearing and distance from the sensor, five range rings in nautical miles (auto: the smallest range holding 80% of this decoder's live aircraft; one beyond it sits on the rim with its distance), the sweep re-lighting each target as it passes (still under reduced motion). A ▲ points along the aircraft's track, coloured by altitude over 45,000 ft (dim on the ground); the line ahead of it is where it would be in one minute at its ground speed; the dots behind are its kept positions in their altitude colours. The data block is callsign (else address), then altitude in hundreds of feet with ↑ or ↓ when climbing or descending faster than 300 ft/min, and ground speed in knots; an emergency or a 7500 / 7600 / 7700 squawk adds a line and a ring in the peak colour. Click a target to select it; the selected one is amber with its track as a line and its recorded track as dots. An aircraft only another sloth host heard is a grey hollow ▲ named by its host.</div>
     </section>
     <section class="panel" id="adsb-detail" hidden>
       <div class="label">aircraft <span class="sub" id="adsb-detail-name"></span> <button type="button" id="adsb-detail-close">close</button></div>

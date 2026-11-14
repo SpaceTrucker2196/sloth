@@ -66,7 +66,7 @@ and Mode S surveillance, whose example messages are the known-answer
 tests. ICAO Annex 10 Vol. IV and RTCA DO-260B were **not** read; what
 is said here of them comes through those two.
 
-**Last updated**: 2026-11-12 (other sloth hosts' aircraft in the tab, grey, with the host named; [[fleet]] "The merged views"); 2026-11-11 (#192 I7: the owner's fleet compares its ADS-B receivers, `/api/fleet/aircraft`, [[fleet]]); 2026-11-09 (#186: `--adsb beast://`, the decoder's Beast output, decoded in sloth: CRC, ghost suppression, CPR, the TC 28 emergency word); 2026-11-09 (#186: `--adsb sbs://`, the decoder's SBS output, loopback, read-only; the `AF_INET` drop-in note); 2026-11-08 (#186: `ADSB_EMERGENCY`, flag only; slothweb's ADS-B tab marks an aircraft with an open one; the `packaging/` note on `/run/readsb`); 2026-11-07 (the `[^]` TUI aircraft view, the `adsb` health-strip token, and `gps_bearing_deg()` beside `gps_distance_m()`); 2026-11-05 (`--db`: schema v12, `adsb_aircraft` and `adsb_sightings`; slothweb's "aircraft seen" history and each aircraft's recorded track and altitude profile); 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
+**Last updated**: 2026-11-14 (the positions panel as an ATC-style radar scope centred on the sensor, shared with APRS through `web/ui/ppi.js`); 2026-11-12 (other sloth hosts' aircraft in the tab, grey, with the host named; [[fleet]] "The merged views"); 2026-11-11 (#192 I7: the owner's fleet compares its ADS-B receivers, `/api/fleet/aircraft`, [[fleet]]); 2026-11-09 (#186: `--adsb beast://`, the decoder's Beast output, decoded in sloth: CRC, ghost suppression, CPR, the TC 28 emergency word); 2026-11-09 (#186: `--adsb sbs://`, the decoder's SBS output, loopback, read-only; the `AF_INET` drop-in note); 2026-11-08 (#186: `ADSB_EMERGENCY`, flag only; slothweb's ADS-B tab marks an aircraft with an open one; the `packaging/` note on `/run/readsb`); 2026-11-07 (the `[^]` TUI aircraft view, the `adsb` health-strip token, and `gps_bearing_deg()` beside `gps_distance_m()`); 2026-11-05 (`--db`: schema v12, `adsb_aircraft` and `adsb_sightings`; slothweb's "aircraft seen" history and each aircraft's recorded track and altitude profile); 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
 
 ---
 
@@ -496,8 +496,13 @@ memory (`web/src/web_adsb.c`, `/api/adsb`): up to 512 rows, a gone row
 kept dimmed for 600 s, a live row with no record for 660 s dropped as
 aged, each row's last 32 positions as its track. The page
 (`web/ui/adsb.js`) draws the decoder's health line, the aircraft table,
-a north-up position plot with the tracks coloured by altitude (no map
-tiles, nothing fetched) and a detail panel. Because the records are
+an ATC-style radar scope centred on the sensor's GNSS position (owner
+request 2026-11-13; `web/ui/ppi.js`, shared with APRS: range rings in
+nautical miles, a bearing rose, a sweep with afterglow, each aircraft a
+▲ on its track coloured by altitude with a 1-minute leader, history
+dots and a data block of callsign, altitude in hundreds of feet with a
+climb or descent arrow, ground speed and any emergency; no map tiles,
+nothing fetched; the fitted north-up plot when there is no position) and a detail panel. Because the records are
 change-only, a row's altitude and position are as of its last record:
 within its band and cell, not the decoder's latest second. The SDR is a
 passive radio, so the records are Monitor's, as BLE's are; under Local
@@ -638,7 +643,7 @@ table and its "aircraft seen" inventory also list the aircraft another
 sloth host's receiver heard and this one did not, in grey with that
 host's name, holding only what the host's I7 aircraft line carried (no
 decoder state, rates, signal meter, alert link or track); an aircraft
-both heard gets `+name`. The plot shows such an aircraft as a grey ring
+both heard gets `+name`. The scope shows such an aircraft as a grey hollow ▲ (the fitted plot a grey ring)
 at its host's last position, labelled with the host, never with a track
 or altitude colour. A "This site / All sites" choice beside the table
 (hidden without a peer) asks with `fleet=0` for this decoder's answer

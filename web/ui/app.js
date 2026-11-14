@@ -994,7 +994,7 @@
   ["n-win", "a-win", "d-q", "d-sort", "l-q", "w-grid", "w-metric", "w-win", "w-sort", "al-state", "al-sev",
    "al-q", "al-win", "f-win", "f-sort", "f-ip", "f-mode", "ev-filter",
    "q-sql", "b-q", "b-sort", "bledev-win", "bledev-metric", "bledev-n",
-   "gnss-seen-days", "adsb-seen-days", "adsb-seen-q", "gnss-trail-hours",
+   "gnss-seen-days", "adsb-seen-days", "adsb-seen-q", "adsb-range", "gnss-trail-hours",
    "aprs-seen-days", "aprs-seen-q", "aprs-range", "radar-aprs-win", "fleet-kind"].forEach(keepCtl);
   // Filled from the server's answer, so put back where it is filled.
   $("al-type").addEventListener("change", function () { ctlSave("al-type"); });

@@ -460,7 +460,61 @@ static void test_adsb_alert_link_page(void) {
     WT_HAS(p, "  var ALERT_ID_RE = /^[sd][0-9A-Za-z]{1,24}$/;");
 }
 
+/* Count of `needle` between `from` and the first `to` after it in the
+ * page, or -1 when either is missing. */
+static int count_in(const char *p, const char *from, const char *to, const char *needle) {
+    const char *a = strstr(p, from), *b = a ? strstr(a + 1, to) : NULL;
+    if (!a || !b) return -1;
+    int n = 0;
+    for (const char *q = a; q < b; q++) if (!strncmp(q, needle, strlen(needle))) n++;
+    return n;
+}
+
+/* The ADS-B positions scope (owner request 2026-11-13: "a radar type
+ * display to ads-b like aprs has"): ppi.js (pinned in test_aprs.c) in
+ * nautical miles, the ATC data block (altitude in hundreds of feet with
+ * a climb or descent arrow past 300 ft/min, ground speed, an emergency
+ * or reserved squawk line), the 1-minute leader, the range control. Its
+ * spec and frame never name the sensor's coordinates (seen red with a
+ * ctr.lat added to frameDraw's note). */
+static void test_adsb_page_scope(void) {
+    const char *p = (const char *)web_page;
+    WT_HAS(p, "<canvas id=\"adsb-plot\" class=\"heat\" aria-label=\"aircraft positions on a radar scope centred on this sensor, north up\"></canvas>");
+    WT_HAS(p, "<label class=\"sub\">range <select id=\"adsb-range\"><option value=\"0\" selected>auto</option>");
+    WT_HAS(p, "  var LEAD_S = 60, RANGE_DFLT_NM = 60, AUTO_SHARE = 0.8, CLIMB_FPM = 300;");
+    WT_HAS(p, "  var RANGES_NM = [5, 10, 20, 40, 60, 100, 150, 250];");
+    WT_HAS(p, "  var NM = { name: \"NM\", km: 1.852 };");
+    WT_HAS(p, "  function rangeNm(ctr, list) {\n"
+              "    var s = $(\"adsb-range\"), v = s ? Number(s.value) : 0;\n"
+              "    if (RANGES_NM.indexOf(v) >= 0) return v;\n"
+              "    var d = list.filter(function (a) { return !remote(a) && a.state !== \"gone\" && num(a.lat) && num(a.lon); })\n"
+              "      .map(function (a) { return SlothPPI.geo(ctr.lat, ctr.lon, a.lat, a.lon).range / 1852; });\n"
+              "    return SlothPPI.autoRange(d, RANGES_NM, AUTO_SHARE, RANGE_DFLT_NM);\n"
+              "  }");
+    WT_HAS(p, "  function block(a) {\n"
+              "    var aa = altOf(a), rt = rateOf(a), lines = [label(a)];\n"
+              "    var alt = a.on_ground ? \"GND\" : num(aa) ? SlothPPI.pad3(Math.max(0, Math.round(aa / 100))) : \"---\";\n"
+              "    var arrow = !a.on_ground && num(rt) ? (rt >= CLIMB_FPM ? \"↑\" : rt <= -CLIMB_FPM ? \"↓\" : \" \") : \" \";\n"
+              "    lines.push(alt + arrow + \" \" + (num(a.gs) ? Math.round(a.gs) : \"---\"));\n"
+              "    if (emerg(a)) lines.push(String(a.emergency).toUpperCase());\n"
+              "    else if (SPECIAL[a.squawk]) lines.push(a.squawk + \" \" + SPECIAL[a.squawk]);\n"
+              "    return lines;\n"
+              "  }");
+    WT_HAS(p, "  function frameDraw(t) {\n"
+              "    var ctr = SlothPPI.centre(gnss);\n"
+              "    if (!ctr) { plotFit(pj); return false; }\n"
+              "    var r = ppi.scope(scopeSpec(pj, ctr), t);\n"
+              "    if (r) setNote(\"centred on this sensor (\" + ctr.from + (num(ctr.age) ? \", \" + age(nowOf(gnss) - ctr.age, nowOf(gnss)) + \" old\" : \"\") +\n"
+              "                   \"), range \" + r.range + \" NM, rings \" + SlothPPI.fmt(r.range / 5) + \" NM\" +\n"
+              "                   (r.beyond ? \", \" + r.beyond + \" beyond range on the rim\" : \"\"));\n"
+              "    return true;\n"
+              "  }");
+    WT_HAS(p, "  function load() {\n    var my = ++gen;\n    loadGnss();\n");
+    WT_EQ(count_in(p, "  function scopeSpec(j, ctr) {\n    var hot = ", "\n  function plot(j) {", "ctr.l"), 0);
+}
+
 void run_adsb_tests(void) {
+    WT_RUN(test_adsb_page_scope);
     WT_RUN(test_adsb_ingest_and_route);
     WT_RUN(test_adsb_ranges_and_refusals);
     WT_RUN(test_adsb_gone_and_age);

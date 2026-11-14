@@ -15,7 +15,8 @@
 .adsbrow > span.h2 { color: var(--heat-2); }
 .adsbrow > span.h3 { color: var(--heat-3); }
 .adsbrow > span.d-dim { color: var(--tui-dim); }
-#adsb-plot { display: block; width: 100%; height: 360px; }
+/* The scope sets its own height from its width (ppi.js). */
+#adsb-plot { display: block; width: 100%; height: 420px; cursor: crosshair; }
 .adsb-kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; font-size: 12px; margin: 4px 0; }
 .adsb-kv dt { opacity: 0.7; }
 .adsb-kv dd { margin: 0; }

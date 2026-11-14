@@ -368,16 +368,118 @@
     drawRows(); drawSeen(); plot(last);
   }
 
-  // ── the plot: positions and tracks, north up, no map ─────────────
+  // ── the scope: positions on an ATC-style radar ───────────────────
+  // Owner request 2026-11-13: "we were supposed to be adding a radar
+  // type display to ads-b like aprs has". The scope is ppi.js
+  // (window.SlothPPI), shared with APRS: centred on the sensor
+  // (/api/gnss), north up, rings in nautical miles as ATC reads them, a
+  // sweep with afterglow. ADS-B's part: each aircraft a ▲ turned to its
+  // track, coloured by altitude on the heat ramp over 45,000 ft (dim on
+  // the ground, the selection --signal), a 1-minute velocity leader, the
+  // ATC data block (callsign, else address; altitude in hundreds of feet
+  // with ↑ / ↓ past 300 ft/min, and ground speed; an emergency or a
+  // reserved squawk on its own line, ringed in --heat-3), every aircraft's
+  // kept positions as history dots in their altitude colours, the
+  // selected one's as a line and its sloth.db track as dots. Another
+  // host's aircraft is a grey hollow ▲ named by its host. With no
+  // position at all, plotFit().
+  var LEAD_S = 60, RANGE_DFLT_NM = 60, AUTO_SHARE = 0.8, CLIMB_FPM = 300;
+  var RANGES_NM = [5, 10, 20, 40, 60, 100, 150, 250];
+  var NM = { name: "NM", km: 1.852 };
+  var gnss = null, gnssGen = 0, pj = null, noteWas = null, ppi = null;
+  function nowOf(j) { return j && num(j.now) ? j.now : Math.floor(Date.now() / 1000); }
+  function setNote(t) { if (t !== noteWas) { noteWas = t; set("adsb-plot-note", t); } }
+  // The range select's NM, or auto: the smallest step holding AUTO_SHARE
+  // of this decoder's live aircraft with a position.
+  function rangeNm(ctr, list) {
+    var s = $("adsb-range"), v = s ? Number(s.value) : 0;
+    if (RANGES_NM.indexOf(v) >= 0) return v;
+    var d = list.filter(function (a) { return !remote(a) && a.state !== "gone" && num(a.lat) && num(a.lon); })
+      .map(function (a) { return SlothPPI.geo(ctr.lat, ctr.lon, a.lat, a.lon).range / 1852; });
+    return SlothPPI.autoRange(d, RANGES_NM, AUTO_SHARE, RANGE_DFLT_NM);
+  }
+  function block(a) {
+    var aa = altOf(a), rt = rateOf(a), lines = [label(a)];
+    var alt = a.on_ground ? "GND" : num(aa) ? SlothPPI.pad3(Math.max(0, Math.round(aa / 100))) : "---";
+    var arrow = !a.on_ground && num(rt) ? (rt >= CLIMB_FPM ? "↑" : rt <= -CLIMB_FPM ? "↓" : " ") : " ";
+    lines.push(alt + arrow + " " + (num(a.gs) ? Math.round(a.gs) : "---"));
+    if (emerg(a)) lines.push(String(a.emergency).toUpperCase());
+    else if (SPECIAL[a.squawk]) lines.push(a.squawk + " " + SPECIAL[a.squawk]);
+    return lines;
+  }
+  function scopeSpec(j, ctr) {
+    var hot = cssVar("--signal", "currentColor"), dim = cssVar("--tui-dim", "#888"), alarm = cssVar("--heat-3", "#f00");
+    var rows = j.rows || [], tracks = [];
+    rows.forEach(function (a) {
+      if (remote(a)) return;
+      var pts = (a.track_pts || []).map(function (p) {
+        return [p[1], p[2], heatColor(num(p[3]) ? Math.max(0, p[3]) / ALT_SPAN : 0)];
+      });
+      tracks.push({ pts: pts, style: sel === a.hex ? "line" : "dots", alpha: a.state === "gone" ? 0.25 : 0.55 });
+    });
+    if (histHex && histHex === sel)
+      tracks.push({ pts: histPts.filter(function (p) { return num(p[3]) && num(p[4]); }).map(function (p) {
+        return [p[3], p[4], heatColor(num(p[2]) ? Math.max(0, p[2]) / ALT_SPAN : 0)];
+      }), style: "dots", alpha: 0.7 });
+    return {
+      centre: ctr, range: rangeNm(ctr, rows), unit: NM, empty: "no aircraft with a position",
+      tracks: tracks,
+      targets: rows.map(function (a) {
+        var picked = sel === a.hex, aa = altOf(a);
+        if (remote(a))
+          return { id: a.hex, lat: a.lat, lon: a.lon, picked: picked, fill: false, shape: "tri", heading: a.track,
+                   color: picked ? hot : dim, textColor: picked ? hot : dim, lines: [label(a), "+ " + fvName(a)] };
+        var col = picked ? hot : a.on_ground ? dim : heatColor(num(aa) ? Math.max(0, aa) / ALT_SPAN : 0);
+        var alarmed = emerg(a) || !!SPECIAL[a.squawk];
+        return { id: a.hex, lat: a.lat, lon: a.lon, picked: picked, fill: true, shape: "tri", heading: a.track,
+                 color: col, textColor: picked ? hot : alarmed ? alarm : null, ring: alarmed ? alarm : null,
+                 alpha: a.state === "gone" ? 0.45 : 1,
+                 lead: !a.on_ground && num(a.track) && num(a.gs) ? { course: a.track, kt: a.gs, s: LEAD_S } : null,
+                 lines: block(a) };
+      })
+    };
+  }
+  function frameDraw(t) {
+    var ctr = SlothPPI.centre(gnss);
+    if (!ctr) { plotFit(pj); return false; }
+    var r = ppi.scope(scopeSpec(pj, ctr), t);
+    if (r) setNote("centred on this sensor (" + ctr.from + (num(ctr.age) ? ", " + age(nowOf(gnss) - ctr.age, nowOf(gnss)) + " old" : "") +
+                   "), range " + r.range + " NM, rings " + SlothPPI.fmt(r.range / 5) + " NM" +
+                   (r.beyond ? ", " + r.beyond + " beyond range on the rim" : ""));
+    return true;
+  }
+  function plot(j) {
+    if (!j) return;
+    pj = j;
+    if (!ppi) {
+      var c = $("adsb-plot");
+      if (!c || !window.SlothPPI) { plotFit(j); return; }
+      ppi = SlothPPI.make(c, visible);
+      ppi.onPick = function (hex) { select(hex); };
+    }
+    ppi.draw(frameDraw);
+  }
+  function loadGnss() {
+    var my = ++gnssGen;
+    getJSON("/api/gnss").then(function (j) {
+      if (my !== gnssGen || !j || j.out_of_scope) return;
+      gnss = j;
+      plot(last);
+    }).catch(function () { /* no position: the fitted plot */ });
+  }
+  var rangeSel = $("adsb-range");
+  if (rangeSel) rangeSel.addEventListener("change", function () { plot(last); });
+
+  // ── the fitted plot: no sensor position, north up, no map ────────
   // Equirectangular around the rows' own centre, longitude scaled by
   // cos(latitude) so distances read true near the middle; a scale bar
   // in km. Colour is altitude on the heat ramp over 45,000 ft.
-  function plot(j) {
+  function plotFit(j) {
     var c = $("adsb-plot");
     if (!c || !j) return;
     var dpr = window.devicePixelRatio || 1;
     var W = Math.max(240, c.clientWidth || 480), H = 360;
-    c.width = W * dpr; c.height = H * dpr;
+    c.width = W * dpr; c.height = H * dpr; c.style.height = H + "px";
     var g = c.getContext("2d");
     if (!g) return;
     g.scale(dpr, dpr);
@@ -397,7 +499,7 @@
       g.fillStyle = dim;
       g.textAlign = "center";
       g.fillText("no aircraft with a position", W / 2, H / 2);
-      set("adsb-plot-note", "");
+      setNote("no sensor position (no gps fix, no --location)");
       return;
     }
     var la0 = 90, la1 = -90, lo0 = 180, lo1 = -180;
@@ -446,6 +548,7 @@
         g.beginPath(); g.arc(rx, ry, sel === a.hex ? 5 : 3, 0, Math.PI * 2); g.stroke();
         g.textAlign = "left";
         g.fillText(label(a) + " · " + fvName(a), rx + 7, ry - 6);
+        if (ppi) ppi.mark(rx, ry, a.hex);
         return;
       }
       var tp = a.track_pts || [];
@@ -474,13 +577,15 @@
       g.fillStyle = cssVar("--ink", "currentColor");
       g.textAlign = "left";
       g.fillText(label(a) + (num(aa) && !a.on_ground ? " " + Math.round(aa / 100) : ""), x + 7, y - 6);
+      if (ppi) ppi.mark(x, y, a.hex);
       g.globalAlpha = 1;
     });
-    set("adsb-plot-note", "about " + Math.round(spanY * 111) + " km north to south");
+    setNote("no sensor position (no gps fix, no --location): fitted to the aircraft, about " + Math.round(spanY * 111) + " km north to south");
   }
 
   function load() {
     var my = ++gen;
+    loadGnss();
     // This site: fleet=0, the panel's own answer; All sites: the server's default.
     getJSON("/api/adsb" + fvq().replace(/^&/, "?")).then(function (j) {
       if (my !== gen || !visible()) return;

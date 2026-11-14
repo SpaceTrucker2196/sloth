@@ -970,7 +970,7 @@ static void test_page(void) {
     WT_HAS(p, "        [\"distance (est)\", num(d.rssi) ? (d.est ? d.est.describe : \"no estimate\") : null],");
     /* Kept controls, the scope, the strip, the Health block. */
     WT_HAS(p, "\"q-sql\", \"b-q\", \"b-sort\", \"bledev-win\", \"bledev-metric\", \"bledev-n\",\n"
-              "   \"gnss-seen-days\", \"adsb-seen-days\", \"adsb-seen-q\", \"gnss-trail-hours\",\n"
+              "   \"gnss-seen-days\", \"adsb-seen-days\", \"adsb-seen-q\", \"adsb-range\", \"gnss-trail-hours\",\n"
               "   \"aprs-seen-days\", \"aprs-seen-q\", \"aprs-range\", \"radar-aprs-win\", \"fleet-kind\"].forEach(keepCtl);");
     /* The BLE Devices waterfall (web/ui/bledev.js): its module after
      * app.js, its four hooks guarded (reset since the 2026-11-02

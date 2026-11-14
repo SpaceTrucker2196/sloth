@@ -844,27 +844,40 @@ static void test_aprshist_older_file(void) {
 
 #endif
 
+/* Count of `needle` between `from` and the first `to` after it in the
+ * page, or -1 when either is missing. */
+static int count_in(const char *p, const char *from, const char *to, const char *needle) {
+    const char *a = strstr(p, from), *b = a ? strstr(a + 1, to) : NULL;
+    if (!a || !b) return -1;
+    int n = 0;
+    for (const char *q = a; q < b; q++) if (!strncmp(q, needle, strlen(needle))) n++;
+    return n;
+}
+
 /* The positions scope (owner request 2026-11-13: an ATC-style radar
- * with the sensor at the centre). Whole functions pinned (#171 V1: a
- * single pinned line misses mutations of its neighbours): the centre
- * is radar.js's rule (fresh fix, else last fix, else --location), the
- * bearing and range are great-circle, auto range holds AUTO_SHARE of
- * the live stations, the afterglow stays in 0.35..1, no position falls
- * back to the fitted plot, reduced motion stops the sweep. And the
- * sensor's coordinates are never drawn: scope() names ctr.lat and
- * ctr.lon only in its two geo() calls (seen red with a fillText of
- * ctr.lat added). */
+ * with the sensor at the centre). ppi.js is shared with ADS-B; its
+ * whole functions are pinned here (#171 V1: a pinned line misses its
+ * neighbours' mutations): the centre is radar.js's rule (fresh fix,
+ * else last fix, else --location), bearing and range are great-circle,
+ * auto range holds `share` of the distances, the afterglow stays in
+ * 0.35..1, a static fallback stops the loop, reduced motion stops the
+ * sweep. The sensor's coordinates are never drawn: ppi.js's scope()
+ * names ctr.lat and ctr.lon only in its two geo() calls, and APRS's
+ * spec and frame never name them (seen red with a fillText(ctr.lat...)
+ * added to scope()). */
 static void test_aprs_page_scope(void) {
     const char *p = (const char *)web_page;
+    WT_HAS(p, "  window.SlothPPI = { centre: centre, geo: geo, autoRange: autoRange, make: make, still: still, fmt: fmt, pad3: pad3 };");
     WT_HAS(p, "<canvas id=\"aprs-plot\" class=\"heat\" aria-label=\"aprs station positions on a radar scope centred on this sensor, north up\"></canvas>");
     WT_HAS(p, "<label class=\"sub\">range <select id=\"aprs-range\"><option value=\"0\" selected>auto</option>");
-    WT_HAS(p, "  var RANGES_KM = [2, 5, 10, 25, 50, 100, 250, 500];");
-    WT_HAS(p, "  var PICK_PX = 10, FRAME_MS = 33, RANGE_DFLT_KM = 25, RINGS = 5, AUTO_SHARE = 0.8;");
+    WT_HAS(p, "  var EARTH_M = 6371008.8, FIX_FRESH_S = 60, SWEEP_MS = 6000, GLOW_MS = 2000;");
+    WT_HAS(p, "  var PICK_PX = 10, FRAME_MS = 33, RINGS = 5;");
     WT_HAS(p, "  var mq = window.matchMedia ? window.matchMedia(\"(prefers-reduced-motion: reduce)\") : null;");
-    WT_HAS(p, "  function centre() {\n"
-              "    var j = gnss;\n"
+    WT_HAS(p, "  var RANGES_KM = [2, 5, 10, 25, 50, 100, 250, 500];");
+    WT_HAS(p, "  var LEAD_S = 300, RANGE_DFLT_KM = 25, AUTO_SHARE = 0.8;");
+    WT_HAS(p, "  function centre(j) {\n"
               "    if (!j) return null;\n"
-              "    var now = nowOf(j), f = j.fix, l = j.loc;\n"
+              "    var now = num(j.now) ? j.now : Math.floor(Date.now() / 1000), f = j.fix, l = j.loc;\n"
               "    if (f && num(f.mode) && f.mode >= 2 && num(f.lat) && num(f.lon) && num(f.ts) && now - f.ts <= FIX_FRESH_S)\n"
               "      return { lat: f.lat, lon: f.lon, from: \"gps fix\", age: now - f.ts };\n"
               "    if (l && num(l.lat) && num(l.lon))\n"
@@ -879,48 +892,49 @@ static void test_aprs_page_scope(void) {
               "    var y = Math.sin(dl) * Math.cos(p1), x = Math.cos(p0) * Math.sin(p1) - Math.sin(p0) * Math.cos(p1) * Math.cos(dl);\n"
               "    return { range: range, az: (Math.atan2(y, x) / d + 360) % 360 };\n"
               "  }");
-    WT_HAS(p, "  function rangeKm(tg) {\n"
+    WT_HAS(p, "  function autoRange(d, ranges, share, dflt) {\n"
+              "    var ks = d.filter(num).sort(function (x, y) { return x - y; });\n"
+              "    if (!ks.length) return dflt;\n"
+              "    var far = ks[Math.max(0, Math.ceil(ks.length * share) - 1)];\n"
+              "    for (var i = 0; i < ranges.length; i++) if (ranges[i] >= far * 1.08) return ranges[i];\n"
+              "    return ranges[ranges.length - 1];\n"
+              "  }");
+    WT_HAS(p, "      function glow(az) {\n"
+              "        if (sw < 0) return 1;\n"
+              "        var ms = ((sw - az + 360) % 360) / 360 * SWEEP_MS;\n"
+              "        return 0.35 + 0.65 * Math.exp(-ms / GLOW_MS);\n"
+              "      }");
+    WT_HAS(p, "    function frame(t) {\n"
+              "      raf = 0;\n"
+              "      if (!drawFn || !visible() || document.hidden) return;\n"
+              "      if (t - frameAt >= FRAME_MS || still()) {\n"
+              "        frameAt = t;\n"
+              "        marks = [];\n"
+              "        if (drawFn(t) === false) return;   // the static fallback: no sweep\n"
+              "      }\n"
+              "      if (!still()) raf = requestAnimationFrame(frame);\n"
+              "    }\n"
+              "");
+    WT_HAS(p, "  function rangeKm(ctr, list) {\n"
               "    var s = $(\"aprs-range\"), v = s ? Number(s.value) : 0;\n"
               "    if (RANGES_KM.indexOf(v) >= 0) return v;\n"
-              "    var ks = tg.filter(function (o) { return o.a.state !== \"gone\"; }).map(function (o) { return o.km; })\n"
-              "      .sort(function (x, y) { return x - y; });\n"
-              "    if (!ks.length) return RANGE_DFLT_KM;\n"
-              "    var far = ks[Math.max(0, Math.ceil(ks.length * AUTO_SHARE) - 1)];\n"
-              "    for (var i = 0; i < RANGES_KM.length; i++) if (RANGES_KM[i] >= far * 1.08) return RANGES_KM[i];\n"
-              "    return RANGES_KM[RANGES_KM.length - 1];\n"
+              "    var d = list.filter(function (a) { return a.state !== \"gone\" && num(a.lat) && num(a.lon); })\n"
+              "      .map(function (a) { return SlothPPI.geo(ctr.lat, ctr.lon, a.lat, a.lon).range / 1000; });\n"
+              "    return SlothPPI.autoRange(d, RANGES_KM, AUTO_SHARE, RANGE_DFLT_KM);\n"
               "  }");
-    WT_HAS(p, "    function glow(az) {\n"
-              "      if (sw < 0) return 1;\n"
-              "      var ms = ((sw - az + 360) % 360) / 360 * SWEEP_MS;\n"
-              "      return 0.35 + 0.65 * Math.exp(-ms / GLOW_MS);\n"
-              "    }");
-    WT_HAS(p, "  function frame(t) {\n"
-              "    raf = 0;\n"
-              "    if (!visible() || document.hidden || !pj) return;\n"
-              "    if (t - frameAt >= FRAME_MS || still()) {\n"
-              "      frameAt = t;\n"
-              "      marks = [];\n"
-              "      var ctr = centre();\n"
-              "      if (!ctr) { plotFit(pj); return; }\n"
-              "      scope(pj, ctr, t);\n"
-              "    }\n"
-              "    if (!still()) raf = requestAnimationFrame(frame);\n"
-              "  }\n"
-              "");
-    WT_HAS(p, "    getJSON(\"/api/gnss\").then(function (j) {");
+    WT_HAS(p, "  function frameDraw(t) {\n"
+              "    var ctr = SlothPPI.centre(gnss);\n"
+              "    if (!ctr) { plotFit(pj); return false; }\n"
+              "    var r = ppi.scope(scopeSpec(pj, ctr), t);\n"
+              "    if (r) setNote(\"centred on this sensor (\" + ctr.from + (num(ctr.age) ? \", \" + age(nowOf(gnss) - ctr.age, nowOf(gnss)) + \" old\" : \"\") +\n"
+              "                   \"), range \" + r.range + \" km, rings \" + SlothPPI.fmt(r.range / 5) + \" km\" +\n"
+              "                   (r.beyond ? \", \" + r.beyond + \" beyond range on the rim\" : \"\"));\n"
+              "    return true;\n"
+              "  }");
     WT_HAS(p, "  function load() {\n    var my = ++gen;\n    loadGnss();\n");
-    const char *a = strstr(p, "  function scope(j, ctr, t) {");
-    const char *b = a ? strstr(a, "\n  function frame(t) {") : NULL;
-    WT_ASSERT(a != NULL && b != NULL);
-    if (a && b) {
-        int lat = 0, lon = 0;
-        for (const char *q = a; q < b; q++) {
-            if (!strncmp(q, "ctr.lat", 7)) lat++;
-            if (!strncmp(q, "ctr.lon", 7)) lon++;
-        }
-        WT_EQ(lat, 2);
-        WT_EQ(lon, 2);
-    }
+    WT_EQ(count_in(p, "    function scope(spec, t) {", "\n    canvas.addEventListener(", "ctr.lat"), 2);
+    WT_EQ(count_in(p, "    function scope(spec, t) {", "\n    canvas.addEventListener(", "ctr.lon"), 2);
+    WT_EQ(count_in(p, "  function scopeSpec(j, ctr) {\n    var ph = ", "\n  function plot(j) {", "ctr.l"), 0);
 }
 
 void run_aprs_tests(void) {

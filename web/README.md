@@ -995,10 +995,20 @@ DataTable; rows bright with a position, dim once gone; altitude
 heat-graded over 45,000 ft, RSSI over -50..0 dBFS with
 [the meter](#the-s-meter-2026-11-11) on that range beside it; an
 emergency status and the reserved squawks 7500 / 7600 / 7700 in the
-peak colour as the decoder reports them, text only), a position plot
-(north up, no map tiles and nothing fetched: each aircraft at its last
-position with a heading tick and its kept track coloured by altitude,
-a km scale bar) and a detail panel on click. The decoder's SDR is a
+peak colour as the decoder reports them, text only), a radar scope
+(owner request 2026-11-13: "a radar type display to ads-b like aprs
+has"; `web/ui/ppi.js`, shared with APRS, below) and a detail panel on
+click. The scope is centred on the sensor and ranged in nautical miles
+(`adsb-range`, kept by `keepCtl`: auto, the smallest step holding 80 %
+of this decoder's live aircraft, or 5 to 250 NM); each aircraft a ▲
+turned to its track, coloured by altitude on the heat ramp over
+45,000 ft (dim on the ground), with a 1-minute velocity leader, its kept
+positions as history dots in their altitude colours (the selected one's
+as a line, its sloth.db track as dots) and an ATC data block: callsign
+(else address); altitude in hundreds of feet with ↑ / ↓ past 300 ft/min
+and ground speed in knots; an emergency or a 7500 / 7600 / 7700 squawk
+on a third line, ringed in `--heat-3`. With no sensor position the old
+fitted plot (north up, a km scale bar) draws instead. The decoder's SDR is a
 passive radio, so `adsb_aircraft` is Monitor's like `ble_device`; under
 Local the view shows its scope note.
 
@@ -1064,7 +1074,8 @@ the station table (app.js's DataTable: CALL, SYM, LAST HEARD, PACKETS,
 VIA - `direct` or the digipeater -, POSITION, SPD, CRS, ALT, LEVEL
 heat-graded over 0..100, COMMENT, SYSTEM), a radar scope (owner request
 2026-11-13: "look like an air traffic control radar with our GPS
-location in the center"; `scope()` in `aprs.js`): centred on the sensor
+location in the center"; `web/ui/ppi.js`, `window.SlothPPI`, shared
+with ADS-B, and `scopeSpec()` in `aprs.js`): centred on the sensor
 (`/api/gnss`, the Radar's rule: a fix under 60 s old, else the last fix,
 else `--location`), north up, no map tiles and nothing fetched, each
 station at its great-circle bearing and ground range from the sensor;
@@ -1078,7 +1089,8 @@ is the smallest step holding 80 % of the live stations, the rest on the
 rim with "N km out". Solid blip heard direct, hollow via a digipeater,
 the selection `--signal` with its kept track solid and its recorded
 positions dotted; a click on a blip selects it. The sensor's own
-coordinates are never drawn (`test_aprs_page_scope` counts them). With
+coordinates are never drawn (`test_aprs_page_scope` counts them in
+`ppi.js`'s `scope()`, `test_adsb_page_scope` in ADS-B's spec). With
 no position at all the old fitted plot draws instead, and its note says
 why and a detail panel
 on click with its figures, its recent packets and its history. Every
@@ -6083,9 +6095,9 @@ local row another host heard with a small `+name`; each view has a
 default and hidden with no peer. In the Probes tab a grey station opens its device
 drawer and a grey network lists, under its row, each host that heard it
 asked for and when. In the ADS-B tab a grey aircraft has no altitude colour or
-signal meter; the positions plot draws it as a grey ring at the last
-position its host sent, labelled with the host, with no track or
-heading tick; its detail lists each host's figures and takes no notes.
+signal meter; the radar scope draws it as a grey hollow ▲ at the last
+position its host sent, named by its host, with no track or altitude
+colour (the fitted plot, with no sensor position: a grey ring); its detail lists each host's figures and takes no notes.
 The Radar dome asks `/api/adsb?fleet=0`: another host's aircraft has no
 bearing or elevation from this site.
 
