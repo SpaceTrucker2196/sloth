@@ -351,3 +351,5 @@
 | af901a0 | 2026-11-14T00:26:34Z | claude-opus-5-5 | 10 | 1257 | 715260 | 5168 | 0.2096 | #203 SNMP/MQTT brute windowing (af901a06) |
 | c72fb41d | 2026-11-14T01:18:04Z | claude-opus-5-5 | 390 | 166394 | 48635941 | 1435604 | 42.8358 | ADS-B radar scope on shared ppi.js; sdrsweep fail-closed cooldown; cppcheck entr |
 | ede113e5 | 2026-11-14T13:05:19Z | claude-opus-5 | 574 | 219426 | 80711875 | 693200 | 52.7765 | #208 — rtl_433 JSON event log as a passive sub-GHz sensor (slice 1) |
+| b56d646 | 2026-11-14T13:55:51Z | claude-fable-5-1, claude-opus-5-5 | 176 | 12992 | 2958173 | 160942 | 3.3863 | #208 rtl_433 passive sub-GHz sensor (--rtl433) + review |
+| 265d406 | 2026-11-14T16:03:19Z | claude-opus-5-5 | 56 | 15581 | 3104196 | 27974 | 1.1565 | #208 slothweb rtl_433 tab + /api/rtl433, review fixes (dedup key, stale sensor, tests) |
