@@ -65,7 +65,10 @@ start. sloth and slothweb never touch the radio.
   none within the cooldown after the last (429 with `Retry-After`;
   10 minutes by default, `SLOTH_SDRSWEEP_COOLDOWN`). The helper applies
   the cooldown itself too, from its own `status.json`, for a start that
-  did not come through slothweb.
+  did not come through slothweb, and fails closed: a `status.json` that
+  is there but unreadable or not its own (no `state`) refuses the run
+  (exit 3) instead of reading as "no previous run"; only a missing file,
+  the first run, passes.
 
 This is the second control slothweb has (the first is the triage
 write surface, docs/web-frrs-spec.md); the owner approved it on

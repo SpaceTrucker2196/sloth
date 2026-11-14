@@ -387,6 +387,16 @@ int main(int argc, char **argv) {
     char path[1200];
     snprintf(path, sizeof(path), "%s/status.json", o.out);
     char *prev = slurp(path, 65536);
+    /* Fail closed: a record that is there but unreadable, or not this
+     * helper's (no "state"), could hide a run that just ended, so it
+     * refuses rather than reads as "no previous run". Only a missing
+     * file, the first run, passes unread. */
+    if (!o.calibrate && o.cooldown > 0 && access(path, F_OK) == 0 &&
+        (!prev || !strstr(prev, "\"state\""))) {
+        fprintf(stderr, ME ": refused: %s is there but unreadable; remove it to run\n", path);
+        free(prev);
+        return 3;
+    }
     if (prev && !o.calibrate && o.cooldown > 0) {
         double ended = sdrs_json_num(prev, "ended", 0);
         double wait = ended + o.cooldown - now_s();
