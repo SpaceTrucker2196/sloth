@@ -10,6 +10,7 @@
 #include "gps.h"
 #include "adsb.h"
 #include "aprs.h"
+#include "rtl433.h"
 #include "sys_status.h"
 #include "position_track.h"
 #include "history.h"
@@ -132,6 +133,11 @@ static void st_health(sloth_state_t *s, const poll_ctx_t *ctx) {
     /* --aprs: expire the stations unheard for an hour and copy the
      * table and the packet ring, before anything this tick reads them. */
     aprs_health_poll(s, ctx->wall, ctx->mono_ms);
+    /* --rtl433 (#208): copy the sub-GHz device table and its health,
+     * before anything this tick reads them. No expiry: a device heard
+     * once is a real observation of the band, and only the table
+     * filling removes a row. */
+    rtl433_health_poll(s, ctx->wall);
     /* Host status and the source inventory (src/sys_status.h): after
      * the per-source polls above, whose state it reads. */
     sys_status_poll(s, ctx->wall, ctx->mono_ms);
@@ -362,6 +368,21 @@ static void st_sensors(sloth_state_t *s, const poll_ctx_t *ctx) {
         else
             sensor_set_state(ap, s->aprs.packets ? SENSOR_STATE_ACTIVE
                                                  : SENSOR_STATE_PRESENT);
+    }
+    /* rtl_433 (#208): the --rtl433 event log, observing decoded
+     * messages. The same rule as APRS - an unreadable file is the
+     * registry's ERROR, a missing one (rtl_433 creates it with its
+     * first decode) and a quiet band are not. After the APRS decoder,
+     * for the same id-slot reason. */
+    if (s->rtl433.configured) {
+        sensor_t *rt = sensor_register(s, SENSOR_RTL433, "rtl_433 decoder",
+                                       s->rtl433.src, ctx->wall);
+        sensor_observe(rt, s->rtl433.msgs, ctx->wall);
+        if (s->rtl433.state == RTL433_ERROR)
+            sensor_set_state(rt, SENSOR_STATE_ERROR);
+        else
+            sensor_set_state(rt, s->rtl433.msgs ? SENSOR_STATE_ACTIVE
+                                                : SENSOR_STATE_PRESENT);
     }
 }
 

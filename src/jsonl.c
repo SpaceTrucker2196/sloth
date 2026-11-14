@@ -10,6 +10,7 @@
 #include "gps.h"
 #include "adsb.h"
 #include "aprs.h"
+#include "rtl433.h"
 #include "position_track.h"
 #include "sloth_clock.h"
 #include "netstr.h"
@@ -108,7 +109,7 @@ static jsonl_dedup_slot_t g_dedup[JSONL_DEDUP_SLOTS];
 /* Snapshot event "kinds" — one per deduped emitter. */
 enum { JD_PNL = 1, JD_SEQNUM, JD_SENSOR_HEALTH, JD_WIFI_REG,
        JD_BLE_DEVICE, JD_BLE_ALERT, JD_GNSS_FIX, JD_GNSS_SKY, JD_GNSS_SAT,
-       JD_ADSB_AIRCRAFT, JD_APRS_STATION, JD_OWNERSHIP,
+       JD_ADSB_AIRCRAFT, JD_APRS_STATION, JD_RTL433_DEVICE, JD_OWNERSHIP,
        JD_KARMA_SUSPECT, JD_HARVEST_STA, JD_HARVEST_CHAIN };
 
 static uint64_t fnv1a(const void *data, size_t n, uint64_t h) {
@@ -220,7 +221,7 @@ static void appendf(char *buf, int sz, int *off, const char *fmt, ...) {
 /* JSON string body (RFC 8259 §7). Output is always valid UTF-8 (#138):
  * the input is decoded per RFC 3629 (netstr_utf8_decode), and
  *   - each octet that does not start a well-formed sequence → \ufffd;
- *   - C0, DEL and C1 (U+0000..U+001F, U+007F..U+009F) → \u00XX — C1 is
+ *   - C0, DEL and C1 (U+0000..U+001F, U+007F..U+009F) → \u00YY — C1 is
  *     legal raw in JSON, but U+009B is CSI to a terminal that tails the
  *     log, so it leaves here as six ASCII octets;
  *   - U+2028 / U+2029 → \u2028 / \u2029 (raw, they end a line in
@@ -303,7 +304,7 @@ static void emit_line(const char *line) {
 
 /* Sized for the hostile worst case, not the typical one. Beacon and
  * PNL records carry attacker-chosen SSID / WPS strings that
- * json_escape can expand 6x (\u00XX): a beacon with every string
+ * json_escape can expand 6x (\u00YY): a beacon with every string
  * field full runs ~4.5 KiB, a PNL client with 16 probed SSIDs ~3.4
  * KiB. At the old 2048 a hostile AP overflowed the buffer. appendf
  * keeps any future overrun in bounds; this keeps it from truncating. */
@@ -2306,6 +2307,14 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
          * mismatch and the silent flag. Never quiet_since: it moves with
          * every packet. */
         int      aprs_region, aprs_freq_mismatch, aprs_silent;
+        /* --rtl433 (#208): the source's state (waiting / live / error;
+         * a quiet band is live) and none/some bands of the tallies and
+         * the error. Never the line, message, byte or device counts,
+         * nor last_read: each moves with every poll or decode. */
+        int      rtl433_configured, rtl433_state, rtl433_missing;
+        int      rtl433_read_err_any, rtl433_bad_any, rtl433_evicted_any;
+        int      rtl433_other_keys_any, rtl433_bad_values_any;
+        int      rtl433_err_any;
         /* --db's size ceiling (JSONL 1.7.0): a tune knob, so it moves
          * only when the operator moves it. */
         int      db_max_mb;
@@ -2450,6 +2459,15 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.aprs_region        = s->aprs.configured ? s->aprs.region : 0;
     sig.aprs_freq_mismatch = s->aprs.configured ? s->aprs.freq_mismatch : 0;
     sig.aprs_silent        = s->aprs.configured ? s->aprs.silent : 0;
+    sig.rtl433_configured  = s->rtl433.configured;
+    sig.rtl433_state       = s->rtl433.state;
+    sig.rtl433_missing     = s->rtl433.missing;
+    sig.rtl433_read_err_any  = s->rtl433.read_errors > 0;
+    sig.rtl433_bad_any       = s->rtl433.bad_lines > 0;
+    sig.rtl433_evicted_any   = s->rtl433.evicted > 0;
+    sig.rtl433_other_keys_any = s->rtl433.other_keys > 0;
+    sig.rtl433_bad_values_any = s->rtl433.bad_values > 0;
+    sig.rtl433_err_any       = s->rtl433.err[0] != '\0';
     const int pcap_on = alert_pcap_enabled();
     sig.pcap_swept_band     = pcap_on ? decade_band(alert_pcap_swept()) : -1;
     sig.pcap_sweep_err_band = pcap_on
@@ -2878,6 +2896,41 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "aprs_silent_after_s", a->silent_after_s);
         kv_int(buf, LINEBUF, &off, "aprs_quiet_since", (long long)a->quiet_since);
     }
+    /* #208, additive (JSONL 1.8.0): the --rtl433 source's health. ONLY
+     * with --rtl433, so a run without it writes exactly what it wrote
+     * before; appended after the aprs block and before db_max_mb, so
+     * every earlier field keeps its place and the db_max_mb /
+     * jsonl_version tail stays as test_jsonl.c pins it.
+     *
+     * `rtl433_other_keys` is the measured size of the gap src/rtl433.h
+     * names: keys the decoder wrote that this slice does not store. A
+     * rising value is not a fault, it is the per-model field set of
+     * whatever is on the air. */
+    if (s->rtl433.configured) {
+        const rtl433_health_t *r = &s->rtl433;
+        kv_str(buf, LINEBUF, &off, "rtl433_state", rtl433_state_name(r->state));
+        kv_str(buf, LINEBUF, &off, "rtl433_src", r->src);
+        kv_int(buf, LINEBUF, &off, "rtl433_missing", r->missing);
+        kv_int(buf, LINEBUF, &off, "rtl433_last_read", (long long)r->last_read);
+        kv_int(buf, LINEBUF, &off, "rtl433_last_msg", (long long)r->last_msg);
+        kv_int(buf, LINEBUF, &off, "rtl433_devices", r->devices);
+        kv_int(buf, LINEBUF, &off, "rtl433_bytes", (long long)r->bytes);
+        kv_int(buf, LINEBUF, &off, "rtl433_lines", (long long)r->lines);
+        kv_int(buf, LINEBUF, &off, "rtl433_msgs", (long long)r->msgs);
+        kv_int(buf, LINEBUF, &off, "rtl433_bad_lines", (long long)r->bad_lines);
+        for (int k = 0; k < RTL433_REJ_COUNT; k++) {
+            char key[32];
+            snprintf(key, sizeof(key), "rtl433_rej_%s", rtl433_reject_name(k));
+            kv_int(buf, LINEBUF, &off, key, (long long)r->rej[k]);
+        }
+        kv_int(buf, LINEBUF, &off, "rtl433_bad_values", (long long)r->bad_values);
+        kv_int(buf, LINEBUF, &off, "rtl433_other_keys", (long long)r->other_keys);
+        kv_int(buf, LINEBUF, &off, "rtl433_evicted", (long long)r->evicted);
+        kv_int(buf, LINEBUF, &off, "rtl433_truncations", (long long)r->truncations);
+        kv_int(buf, LINEBUF, &off, "rtl433_rotations", (long long)r->rotations);
+        kv_int(buf, LINEBUF, &off, "rtl433_read_errors", (long long)r->read_errors);
+        kv_str(buf, LINEBUF, &off, "rtl433_err", r->err);
+    }
     /* The record stream's own contract version (ADR 0007, #185 item 3),
      * appended after the flag-gated blocks above so every earlier field
      * keeps its name and position — a version field is worth less than
@@ -3100,7 +3153,7 @@ void jsonl_lures_reset(void) {
  * .. `bssid_15`) beside their counts, rather than an array: slothweb's
  * decoder keeps top-level scalars only, and the bounds are sloth's own
  * (MAX_MY_SSIDS, MAX_MY_BSSIDS). An SSID goes through the same escaping
- * as every string (json_escape: a control byte as \u00XX, an octet
+ * as every string (json_escape: a control byte as \u00YY, an octet
  * that is not UTF-8 as \ufffd), the operator's text as given, which is
  * exactly what ownership_is_my_ssid() compares against: a designation
  * with a control byte in it matches no stored SSID (those hold '?'),
@@ -3486,6 +3539,84 @@ void jsonl_emit_aprs(const sloth_state_t *s) {
     }
 }
 
+/* ── rtl_433 sub-GHz devices (#208, 2026-11-14) ──────────────────────
+ *
+ * rtl433_device: one record per (model, id) row, change-only on
+ * rtl433_device_sig() - the key, first_seen (an evicted row that comes
+ * back is a new row), the row's discrete facts, and every continuous
+ * value as the band src/rtl433.h defines - plus the 300 s heartbeat
+ * while the row stays. There is no "gone" record: the table retires
+ * nothing by age (a device heard once is a real observation of the
+ * band), so a row leaves only by eviction, which `rtl433_evicted` in
+ * sensor_health counts.
+ *
+ * `msgs`, `last_seen`, `snr`, `noise` and `other_keys` are WRITTEN and
+ * not signed: each moves with every decode, and signing one would turn
+ * this into the per-decode firehose agents/AGENTS.md forbids - one TPMS
+ * on a kerbside sensor writes a line every few seconds for as long as
+ * the car is parked within earshot.
+ *
+ * A temperature or pressure goes out under the key it arrived under
+ * (`temperature_C`, `pressure_kPa`, ...), never converted: see
+ * include/sloth.h's rtl433_temp_unit_t. Figures without %f
+ * (gps_fmt_fixed; locale). */
+
+static void emit_rtl433_device(const rtl433_device_t *d, const char *src,
+                               time_t now) {
+    char buf[LINEBUF]; int off = 0;
+    start_obj(buf, LINEBUF, &off, "rtl433_device", now);
+    kv_str(buf, LINEBUF, &off, "src", src);
+    kv_str(buf, LINEBUF, &off, "model", d->model);
+    kv_str(buf, LINEBUF, &off, "id", d->id);
+    kv_int(buf, LINEBUF, &off, "first_seen", (long long)d->first_seen);
+    kv_int(buf, LINEBUF, &off, "last_seen", (long long)d->last_seen);
+    kv_int(buf, LINEBUF, &off, "msgs", (long long)d->msgs);
+    kv_str_opt(buf, &off, "dev_type", d->type);
+    kv_str_opt(buf, &off, "subtype", d->subtype);
+    kv_str_opt(buf, &off, "channel", d->channel);
+    kv_str_opt(buf, &off, "mic", d->mic);
+    kv_str_opt(buf, &off, "mod", d->mod);
+    if (d->protocol >= 0) kv_int(buf, LINEBUF, &off, "protocol", d->protocol);
+    if (d->has_freq)  kv_fixed(buf, &off, "freq_mhz", d->freq_mhz, 3);
+    if (d->has_freq2) kv_fixed(buf, &off, "freq2_mhz", d->freq2_mhz, 3);
+    if (d->has_rssi)  kv_fixed(buf, &off, "rssi", d->rssi_db, 1);
+    if (d->has_snr)   kv_fixed(buf, &off, "snr", d->snr_db, 1);
+    if (d->has_noise) kv_fixed(buf, &off, "noise", d->noise_db, 1);
+    if (d->has_battery) kv_fixed(buf, &off, "battery_ok", d->battery_ok, 1);
+    if (d->has_temp) {
+        char key[20];
+        snprintf(key, sizeof(key), "temperature_%s",
+                 rtl433_temp_unit_name(d->temp_unit));
+        kv_fixed(buf, &off, key, d->temp, 1);
+    }
+    if (d->has_humidity) kv_fixed(buf, &off, "humidity", d->humidity, 1);
+    if (d->has_pressure) {
+        char key[20];
+        snprintf(key, sizeof(key), "pressure_%s",
+                 rtl433_pres_unit_name(d->pres_unit));
+        kv_fixed(buf, &off, key, d->pressure, 1);
+    }
+    kv_int(buf, LINEBUF, &off, "other_keys", (long long)d->other_keys);
+    end_obj(buf, LINEBUF, &off);
+    emit_line(buf);
+}
+
+void jsonl_emit_rtl433(const sloth_state_t *s) {
+    if (!any_sink() || !s || !s->rtl433.configured) return;
+    time_t now = sloth_wall();
+    for (int i = 0; s->rtl433_rows && i < s->rtl433_count; i++) {
+        const rtl433_device_t *d = &s->rtl433_rows[i];
+        /* The key is both halves: two models may share an id, and the
+         * row is only a row when both match (rtl433.c dev_key_eq). */
+        char key[RTL433_MODEL_MAX + RTL433_ID_MAX + 2];
+        snprintf(key, sizeof(key), "%s\x1f%s", d->model, d->id);
+        if (!jsonl_changed(JD_RTL433_DEVICE, key, strlen(key),
+                           rtl433_device_sig(d), now))
+            continue;
+        emit_rtl433_device(d, s->rtl433.src, now);
+    }
+}
+
 /* ── BLE (#144 slice 4) ─────────────────────────────────────────────
  *
  * ble_device: one record per advertiser row, change-only. The
@@ -3791,6 +3922,7 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_gnss              (s);   /* 2026-11-02 */
     jsonl_emit_adsb              (s);   /* #26 slice 1 */
     jsonl_emit_aprs              (s);   /* 2026-11-05 */
+    jsonl_emit_rtl433            (s);   /* #208 */
     /* The host's status and the source inventory (src/sys_status.h):
      * a batch on its own cadence, nothing on most ticks. */
     sys_status_emit              (s);

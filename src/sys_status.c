@@ -14,6 +14,7 @@
 #include "fs_capacity.h"
 #include "gps.h"
 #include "jsonl.h"
+#include "rtl433.h"
 #include "sensor_health.h"
 #include "sloth_clock.h"
 
@@ -440,8 +441,8 @@ static struct {
     char      cap_wireless_for[32];
     char      disk_dir[256];
     char      disk_what[8];
-    /* Per source: when its count last advanced (gnss and aprs keep no
-     * arrival clock of their own), and what was last written. */
+    /* Per source: when its count last advanced (gnss, aprs and rtl433
+     * keep no arrival clock of their own), and what was last written. */
     struct {
         int      tracked;
         uint64_t track_count, advance_ms;
@@ -1036,6 +1037,25 @@ static void fill_sources(const sloth_state_t *s, uint64_t mono_ms) {
          * however old the last packet; its age says how quiet. */
         o->state = a->state == APRS_LIVE ? SYS_ST_OK
                  : a->state == APRS_ERROR ? SYS_ST_DOWN : SYS_ST_STALE;
+    }
+
+    o = &g.snap.src[SYS_SRC_RTL433];
+    o->name = "rtl433"; o->flag = "--rtl433"; o->unit = "messages";
+    o->age_s = -1;
+    snprintf(o->kind, sizeof(o->kind), "sub-ghz");
+    if (s->rtl433.configured) {
+        const rtl433_health_t *r = &s->rtl433;
+        snprintf(o->endpoint, sizeof(o->endpoint), "%s", r->src);
+        o->count = r->msgs; o->errors = r->read_errors + r->bad_lines;
+        o->age_s = track_age(SYS_SRC_RTL433, r->msgs, mono_ms);
+        snprintf(o->detail, sizeof(o->detail), "%s%s%s%.60s",
+                 rtl433_state_name(r->state),
+                 r->missing ? " (file not there yet)" : "",
+                 r->err[0] ? ": " : "", r->err);
+        /* A quiet band is not a fault (rtl433_health_t): live stays ok
+         * however old the last decode; its age says how quiet. */
+        o->state = r->state == RTL433_LIVE ? SYS_ST_OK
+                 : r->state == RTL433_ERROR ? SYS_ST_DOWN : SYS_ST_STALE;
     }
 
     for (int i = 0; i < SYS_SRC_COUNT; i++) {

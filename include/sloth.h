@@ -46,7 +46,7 @@
  * stream's history — the records predate the field by many releases. A
  * `sensor_health` line with no `jsonl_version` is from a stream written
  * before this version and says nothing more than that. */
-#define SLOTH_JSONL_VERSION "1.7.0"
+#define SLOTH_JSONL_VERSION "1.8.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
@@ -2817,6 +2817,7 @@ typedef enum {
     SENSOR_WIFI = 0, SENSOR_BLE, SENSOR_ZIGBEE, SENSOR_SDR,
     SENSOR_GPS, SENSOR_ADSB, SENSOR_MESHTASTIC, SENSOR_CAN,
     SENSOR_APRS,              /* appended: the kind number is persisted */
+    SENSOR_RTL433,            /* appended: the kind number is persisted */
     SENSOR_KIND_COUNT
 } sensor_kind_t;
 typedef enum {
@@ -3582,6 +3583,141 @@ typedef struct {
     time_t   quiet_since;
 } aprs_health_t;
 
+/* ── rtl_433 sub-GHz devices (#208, 2026-11-14) ──────────────────────
+ * What a local, already-running rtl_433 writes to its JSON event log
+ * (`-F json`, one JSON object per decode), tailed by --rtl433
+ * (docs/wiki/rtl433.md). sloth never opens, tunes, hops or runs the
+ * SDR, and uses no network: it reads a file, the same shape as --aprs
+ * and --adsb. Receive-only, as the decoder is.
+ *
+ * Field meanings and units are rtl_433's own, from the two documents
+ * src/rtl433.h cites: `docs/DATA_FORMAT.md` (the message, common-device
+ * and sensor data fields) and `src/r_api.c` (the `-M protocol` and
+ * `-M level` metadata). Kept by src/rtl433.c under its lock and copied
+ * once per poll by rtl433_health_poll(): the pointer on sloth_state_t
+ * names that copy. */
+#define RTL433_MAX_DEVICES 256
+#define RTL433_MODEL_MAX   32   /* DATA_FORMAT.md: "less than 32 characters" */
+#define RTL433_ID_MAX      16   /* DATA_FORMAT.md: "less than 16 characters" */
+#define RTL433_TYPE_MAX    16   /* type / subtype ("TPMS", a sensor function) */
+#define RTL433_MOD_MAX     8    /* r_api.c writes "ASK", "FSK" or "LoRa" */
+#define RTL433_MIC_MAX     12   /* "CRC", "CHECKSUM", "PARITY" */
+
+/* A temperature or pressure keeps the UNIT OF THE KEY it arrived under.
+ * DATA_FORMAT.md's rule is `<Type>_<Unit>` "in sensors native units
+ * insofar possible with no conversion", and rtl_433 converts only when
+ * asked (`-C si`), so converting here would publish a figure the
+ * decoder never wrote. The unit travels with the value instead. */
+typedef enum {
+    RTL433_TEMP_NONE = 0, RTL433_TEMP_C, RTL433_TEMP_F
+} rtl433_temp_unit_t;
+typedef enum {
+    RTL433_PRES_NONE = 0, RTL433_PRES_KPA, RTL433_PRES_HPA, RTL433_PRES_PSI
+} rtl433_pres_unit_t;
+
+/* The allow-listed content of one decoded line. Every field but model
+ * and id is optional; an absent one is absent, never 0. */
+typedef struct {
+    /* Identity (DATA_FORMAT.md, "Message Data"). model and id are the
+     * table's key, so a line without both is refused, not kept partly. */
+    char     model[RTL433_MODEL_MAX + 1];
+    char     id[RTL433_ID_MAX + 1];      /* as written; an integer id
+                                          * formatted without decimals */
+    char     type[RTL433_TYPE_MAX + 1];      /* "TPMS" today, "" absent */
+    char     subtype[RTL433_TYPE_MAX + 1];   /* function in a shared protocol */
+    char     channel[RTL433_ID_MAX + 1];     /* secondary id, as written */
+    char     mic[RTL433_MIC_MAX + 1];        /* the documented three only */
+    int      protocol;                       /* -M protocol, -1 absent */
+    /* -M level (r_api.c): one `freq` for an ASK or LoRa decode, `freq1`
+     * and `freq2` for FSK — the branches there are exclusive, so one
+     * field holds whichever single frequency the line carried. */
+    char     mod[RTL433_MOD_MAX + 1];        /* "ASK" / "FSK" / "LoRa" */
+    uint8_t  has_freq, has_freq2, has_rssi, has_snr, has_noise;
+    double   freq_mhz, freq2_mhz;            /* MHz */
+    double   rssi_db, snr_db, noise_db;      /* dB */
+    /* Decoded values, the documented common and sensor fields only
+     * (DATA_FORMAT.md). The per-model keys are NOT here: see
+     * src/rtl433.h for why one observation is not a type. */
+    uint8_t  has_battery, has_temp, has_humidity, has_pressure;
+    double   battery_ok;                     /* 0 empty .. 1 full */
+    double   temp;      uint8_t temp_unit;   /* rtl433_temp_unit_t */
+    double   humidity;                       /* % relative */
+    double   pressure;  uint8_t pres_unit;   /* rtl433_pres_unit_t */
+    /* Keys that are on no list: counted so the gap is measured, never
+     * stored. A value present but out of range leaves its field absent
+     * and is counted in bad_values, never clamped. */
+    uint16_t other_keys;
+    uint16_t bad_values;
+} rtl433_msg_t;
+
+/* One (model, id) row. first_seen / last_seen are the HOST's clock at
+ * the read, never the decoder's `time`: that field's format follows
+ * rtl_433's -M time options and its locale, and nothing in the file
+ * says which were used, so a row's clock would be unknowable. */
+typedef struct {
+    char     model[RTL433_MODEL_MAX + 1];    /* the key, with id */
+    char     id[RTL433_ID_MAX + 1];
+    time_t   first_seen;
+    time_t   last_seen;                      /* the eviction order */
+    uint32_t msgs;                           /* lines merged into this row */
+    uint64_t other_keys;                     /* summed over those lines */
+    /* The newest line's values, each absent until one carried it. */
+    char     type[RTL433_TYPE_MAX + 1];
+    char     subtype[RTL433_TYPE_MAX + 1];
+    char     channel[RTL433_ID_MAX + 1];
+    char     mic[RTL433_MIC_MAX + 1];
+    char     mod[RTL433_MOD_MAX + 1];
+    int      protocol;
+    uint8_t  has_freq, has_freq2, has_rssi, has_snr, has_noise;
+    double   freq_mhz, freq2_mhz, rssi_db, snr_db, noise_db;
+    uint8_t  has_battery, has_temp, has_humidity, has_pressure;
+    double   battery_ok;
+    double   temp;      uint8_t temp_unit;
+    double   humidity;
+    double   pressure;  uint8_t pres_unit;
+} rtl433_device_t;
+
+/* Why a line was refused. Each has its own counter, because "bad lines
+ * are climbing" and "the decoder is writing objects sloth cannot key"
+ * are different faults and the operator acts on them differently. */
+typedef enum {
+    RTL433_REJ_OVERSIZE = 0,   /* longer than RTL433_MAX_LINE */
+    RTL433_REJ_NOT_OBJECT,     /* not one JSON object, or trailing bytes */
+    RTL433_REJ_MALFORMED,      /* a JSON syntax error inside the object */
+    RTL433_REJ_NO_MODEL,       /* no usable `model` */
+    RTL433_REJ_NO_ID,          /* no usable `id` */
+    RTL433_REJ_COUNT
+} rtl433_reject_t;
+
+/* The --rtl433 source's health. A quiet band is not a fault: a street
+ * with no passing TPMS is silent for hours, so the state says whether
+ * the file is there and readable, never whether anything was heard. */
+typedef enum {
+    RTL433_NONE = 0, RTL433_WAITING, RTL433_LIVE, RTL433_ERROR
+} rtl433_state_t;
+
+typedef struct {
+    int      configured;
+    int      state;            /* rtl433_state_t */
+    int      missing;          /* the file is not there (yet) */
+    char     src[48];          /* "file:/var/lib/rtl_433/events.jsonl" */
+    char     err[96];          /* the last read failure, "" none */
+    time_t   last_read;        /* wall of the last good poll, 0 never */
+    time_t   last_msg;         /* wall of the newest accepted line, 0 none */
+    uint64_t bytes;            /* read from the file */
+    uint64_t lines;            /* complete non-blank lines */
+    uint64_t msgs;             /* lines parsed into a message */
+    uint64_t bad_lines;        /* refused: the sum of rej[] */
+    uint64_t rej[RTL433_REJ_COUNT];
+    uint64_t bad_values;       /* fields left absent for being out of range */
+    uint64_t other_keys;       /* allow-list misses across every line */
+    uint64_t evicted;          /* rows dropped from the device table */
+    uint64_t truncations;      /* the file shrank under the offset */
+    uint64_t rotations;        /* a new file at the path */
+    uint64_t read_errors;      /* opens / reads that failed */
+    int      devices;          /* rows now */
+} rtl433_health_t;
+
 typedef struct {
     int      configured;       /* --bt-capture given */
     int      state;            /* bt_cap_state_t */
@@ -4116,6 +4252,12 @@ typedef struct {
     int              aprs_gone_count;
     const aprs_packet_t  *aprs_pkts;
     int              aprs_pkt_count;
+    /* rtl_433 (#208, 2026-11-14): the --rtl433 source's health and the
+     * device table, filled by rtl433_health_poll(); NULL before the
+     * first poll. */
+    rtl433_health_t  rtl433;
+    const rtl433_device_t *rtl433_rows;
+    int              rtl433_count;
     bredr_lap_t      bredr_laps[MAX_BREDR_LAPS];
     int              bredr_lap_count;
 

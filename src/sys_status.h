@@ -113,6 +113,9 @@ typedef struct {
 typedef enum {
     SYS_SRC_CAPTURE = 0, SYS_SRC_MONITOR, SYS_SRC_BTMON, SYS_SRC_BTCAP,
     SYS_SRC_GNSS, SYS_SRC_ADSB, SYS_SRC_APRS,
+    SYS_SRC_RTL433,         /* appended: a source's slot is its id in the
+                             * source_status stream and in the
+                             * SENSOR_SOURCE_DOWN hold state */
     SYS_SRC_COUNT
 } sys_src_id_t;
 

@@ -462,7 +462,7 @@ static void test_bare_host_reports_nothing_as_zero(void) {
     ASSERT_EQ(count_of(b, "\"type\":\"sys_status\""), 1);
     const char *l = line_of(b, "sys_status", NULL);
     ASSERT(strstr(l, "\"seq\":1,\"interval_s\":60,") != NULL);
-    ASSERT(strstr(l, "\"temps\":0,\"volts\":0,\"power\":0,\"sources\":7,"
+    ASSERT(strstr(l, "\"temps\":0,\"volts\":0,\"power\":0,\"sources\":8,"
                      "\"sources_configured\":0,\"sources_ok\":0,\"sources_down\":0,"
                      "\"receivers\":0,\"beacon_recall_slots\":0,\"beacon_recall_max\":4096,"
                      "\"beacon_recall_overflowed\":0,\"beacon_recall_quiet\":0}") != NULL);
@@ -485,7 +485,7 @@ static void test_bare_host_reports_nothing_as_zero(void) {
     ASSERT_EQ(count_of(b, "\"type\":\"source_status\""), SYS_SRC_COUNT);
     ASSERT_EQ(count_of(b, "\"state\":\"not_configured\""), SYS_SRC_COUNT);
     static const char *const names[] = { "capture", "monitor", "btmon", "btcap",
-                                         "gnss", "adsb", "aprs" };
+                                         "gnss", "adsb", "aprs", "rtl433" };
     for (int i = 0; i < SYS_SRC_COUNT; i++) {
         char want[40];
         snprintf(want, sizeof(want), "\"name\":\"%s\"", names[i]);

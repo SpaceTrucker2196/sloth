@@ -260,6 +260,10 @@ CORE_COMMON_SRCS += src/adsb.c src/adsb_beast.c src/capture/adsb_reader.c
 # table are pure; the reader tails a local file and needs neither
 # libpcap nor SQLite.
 CORE_COMMON_SRCS += src/aprs.c src/capture/aprs_reader.c
+# --rtl433 (#208, 2026-11-14): rtl_433's JSON event-log parser and the
+# device table are pure; the reader tails a local file and needs neither
+# libpcap nor SQLite.
+CORE_COMMON_SRCS += src/rtl433.c src/capture/rtl433_reader.c
 
 # Feature-gated core sources, grouped by the flag that gates them.
 # CORE_SRCS_ALL is their union with the common list: the test and fuzz

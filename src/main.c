@@ -137,6 +137,8 @@
 #include "capture/adsb_reader.h"
 #include "aprs.h"                /* --aprs (2026-11-05) */
 #include "capture/aprs_reader.h"
+#include "rtl433.h"              /* --rtl433 (#208, 2026-11-14) */
+#include "capture/rtl433_reader.h"
 #include "ble_hci.h"
 
 static sloth_state_t g_state;
@@ -348,7 +350,7 @@ static void print_usage(const char *argv0) {
             "       [--bt-monitor] [--bt-capture PATH] [--ble-rotation-hints]\n"
             "       [--location LAT,LON[,ALT]] [--gps SPEC] [--gps-allow-remote]\n"
             "       [--gps-baud N] [--adsb SPEC] [--aprs SPEC] [--aprs-freq HZ]\n"
-            "       [--aprs-silent-hours N]\n"
+            "       [--aprs-silent-hours N] [--rtl433 SPEC]\n"
             "       [--user NAME] [--no-privdrop]\n"
             "       [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
@@ -639,6 +641,13 @@ static void print_usage(const char *argv0) {
             "                     report the decoder silent when its log is\n"
             "                     readable but no packet arrived for N hours\n"
             "                     (1..168, default 6; 0 off). Needs --aprs.\n"
+            "  --rtl433 SPEC      tail the JSON event log a local rtl_433\n"
+            "                     already writes (rtl_433 -F json):\n"
+            "                       /path/events.jsonl or file:///path\n"
+            "                     Checked once a second, from its end at\n"
+            "                     startup; sloth never opens, tunes, hops or\n"
+            "                     runs the SDR and uses no network. Refused\n"
+            "                     with --replay.\n"
             "  --ble-rotation-hints\n"
             "                     INTERNAL USE ONLY, off by default: link\n"
             "                     private BLE addresses that may be one\n"
@@ -883,6 +892,7 @@ int main(int argc, char **argv) {
     const char *aprs_arg     = NULL;     /* --aprs SPEC (2026-11-05) */
     uint32_t    aprs_freq    = 0;        /* --aprs-freq HZ (#204) */
     int         aprs_silent_h = -1;      /* --aprs-silent-hours N, -1 default */
+    const char *rtl433_arg   = NULL;     /* --rtl433 SPEC (#208) */
     const char *replay_arg   = NULL;     /* --replay FILE[,FILE] (#119) */
     long        max_ticks    = 0;        /* --ticks N; 0 = run until quit */
     time_t      session_start = sloth_wall();
@@ -1025,6 +1035,8 @@ int main(int argc, char **argv) {
             adsb_arg = argv[++i];
         } else if (!strcmp(argv[i], "--aprs") && i + 1 < argc) {
             aprs_arg = argv[++i];
+        } else if (!strcmp(argv[i], "--rtl433") && i + 1 < argc) {
+            rtl433_arg = argv[++i];
         } else if (!strcmp(argv[i], "--aprs-freq") && i + 1 < argc) {
             if (aprs_freq_parse(argv[++i], &aprs_freq) != 0) {
                 fprintf(stderr, "sloth: --aprs-freq %s: want the decoder's "
@@ -1401,6 +1413,25 @@ int main(int argc, char **argv) {
         fprintf(stderr, "sloth: --aprs-freq and --aprs-silent-hours "
                         "describe the --aprs decoder: give --aprs\n");
         return 2;
+    }
+    /* --rtl433 (#208): the SPEC only, as --aprs. rtl_433 creates its
+     * event log with its first decode, so a file not there yet is a
+     * state. sloth reads the file and never the SDR. */
+    if (rtl433_arg) {
+        char rerr[200];
+        if (replay_arg) {
+            fprintf(stderr, "sloth: --replay reads savefiles, not a live "
+                            "decoder: --rtl433 does not apply\n");
+            return 2;
+        }
+        if (rtl433_reader_configure(rtl433_arg, rerr, sizeof(rerr)) != 0) {
+            fprintf(stderr, "sloth: --rtl433 %s: %s\n", rtl433_arg, rerr);
+            return 2;
+        }
+        char rpath[256];
+        if (rtl433_spec_parse(rtl433_arg, rpath, sizeof(rpath), NULL, 0) == 0)
+            fprintf(stderr, "sloth: --rtl433 tailing %s from its end "
+                            "(read-only; no SDR, no network)\n", rpath);
     }
 
     char replay_paths[REPLAY_MAX_FILES][REPLAY_PATH_MAX];
@@ -1986,6 +2017,7 @@ int main(int argc, char **argv) {
     gps_reader_run();   /* after the drop: gpsd is dialled from here */
     adsb_reader_run();  /* after the drop: the file is read as the run's account */
     aprs_reader_run();  /* after the drop: likewise */
+    rtl433_reader_run();  /* after the drop: likewise */
     event_wake_init();
     updater_init(check_manifest);
     if (headless) {
@@ -2082,6 +2114,7 @@ int main(int argc, char **argv) {
     gps_reader_stop();
     adsb_reader_stop();
     aprs_reader_stop();
+    rtl433_reader_stop();
 #ifdef WITH_PCAP
     probe_stop();
     capture_stop();

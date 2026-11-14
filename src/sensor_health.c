@@ -144,6 +144,7 @@ const char *sh_evict_name(sh_evict_t kind) {
     case SH_EVICT_BLE_FLOOD:     return "ble_flood";
     case SH_EVICT_FRAG_AP_IDENT: return "frag_ap_ident";
     case SH_EVICT_PROBE_LATENCY: return "probe_latency";
+    case SH_EVICT_RTL433:        return "rtl433";
     case SH_EVICT_KIND_COUNT:  break;
     }
     return "";

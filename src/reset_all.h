@@ -96,6 +96,7 @@
     X(rf_calibration_reset) \
     X(rf_quality_clear) \
     X(rrm_clear) \
+    X(rtl433_reset) \
     X(rtsp_snoop_clear) \
     X(saq_clear) \
     X(seqnum_clear) \

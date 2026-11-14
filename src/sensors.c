@@ -4,7 +4,7 @@
 
 static const char *KIND[SENSOR_KIND_COUNT] = {
     "wifi", "ble", "zigbee", "sdr", "gps", "adsb", "meshtastic", "can",
-    "aprs"
+    "aprs", "rtl433"
 };
 
 const char *sensor_kind_name(int kind) {
@@ -25,10 +25,22 @@ sensor_t *sensor_register(sloth_state_t *s, sensor_kind_t kind,
                           const char *name, const char *iface, time_t now) {
     if (!s) return NULL;
     const char *ifc = iface ? iface : "";
+    /* Look up what would be STORED, not what was passed. The row's
+     * iface is a truncated copy, so comparing the caller's full string
+     * against it never matched for a source id of 32 bytes or more: the
+     * same source re-registered on every poll, filled the 16 slots and
+     * then got NULL, which stops its observation count dead while the
+     * first (permanently PRESENT) row is the one every reader finds.
+     * Found on #208, whose source label on the reference host
+     * ("file:/var/lib/rtl_433/events.jsonl") is 34 bytes; --aprs's is
+     * 31 and so never reached it. Two sources agreeing in the first
+     * 31 bytes now share a row, which is what storing a truncated id
+     * already meant. */
+    char want[sizeof(((sensor_t *)0)->iface)];
+    snprintf(want, sizeof(want), "%s", ifc);
     for (int i = 0; i < s->sensor_count; i++) {
         sensor_t *sn = &s->sensors[i];
-        if (sn->kind == (int)kind &&
-            strncmp(sn->iface, ifc, sizeof(sn->iface)) == 0)
+        if (sn->kind == (int)kind && strcmp(sn->iface, want) == 0)
             return sn;
     }
     if (s->sensor_count >= MAX_SENSORS) return NULL;

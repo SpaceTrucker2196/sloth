@@ -148,6 +148,11 @@ typedef enum {
      * in the 64-slot pending ring, and the oldest of 128 BSSID rows
      * dropped. probe_latency_counters() keeps the split. Appended. */
     SH_EVICT_PROBE_LATENCY, /* src/probe_latency.c — live unanswered request overwritten, or oldest BSSID row dropped */
+    /* #208 (JSONL 1.8.0): the rtl_433 sub-GHz device table. Appended.
+     * STAB_OLDEST for the same reason as the BLE advertiser table: a
+     * (model, id) pair is whatever a transmitter puts on the air, so
+     * the key space is the band's and not sloth's. */
+    SH_EVICT_RTL433,        /* src/rtl433.c — least-recently-heard (model, id) device dropped */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 
@@ -193,7 +198,7 @@ uint64_t sh_evict_total_tables(void);
  * "ssdp_device", "onvif_device", "smtp_flow", "eapol_pending",
  * "deauth_obs", "deauth_victim", "rtsp_exchange", "rtsp_stream",
  * "lan_role", "ble_device", "bredr_lap", "ble_flood", "frag_ap_ident",
- * "probe_latency".
+ * "probe_latency", "rtl433".
  * Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 
