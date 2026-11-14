@@ -347,3 +347,5 @@
 | 3b588f6 | 2026-11-13T16:01:53Z | claude-opus-5-5 | 288 | 45039 | 19318242 | 480776 | 8.6118 | Known receivers: SDRplay RSP2..RSPdx-R2 |
 | 360d5e91 | 2026-11-13T17:45:25Z | claude-opus-5-5 | 236 | 93786 | 17478000 | 548795 | 15.1541 | APRS region/channel from GNSS fix; flag wrong or silent decoder (#204) |
 | c5bf0d2f | 2026-11-13T20:34:49Z | claude-opus-5-5 | 334 | 117304 | 22599558 | 266961 | 16.9037 | APRS positions as an ATC-style radar scope centred on the sensor |
+| 8bcefe1 | 2026-11-14T00:18:32Z | claude-opus-5-5 | 20 | 3955 | 1400117 | 208569 | 2.0278 | #203 SNMP/MQTT brute windowing (8bcefe13) |
+| af901a0 | 2026-11-14T00:26:34Z | claude-opus-5-5 | 10 | 1257 | 715260 | 5168 | 0.2096 | #203 SNMP/MQTT brute windowing (af901a06) |
