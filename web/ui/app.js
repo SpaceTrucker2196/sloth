@@ -1371,6 +1371,8 @@
   VIEWS.push("probes");
   // The Spectrum tab (web/ui/spectrum.js), a tab of its own.
   VIEWS.push("spectrum");
+  // The rtl_433 tab (web/ui/rtl433.js, #208), a tab of its own.
+  VIEWS.push("rtl433");
   // The views with a tab, and the drill-downs: the Alerts page (6),
   // an alert's page, the record ticker by type, the sensor's health.
   var NAV = VIEWS.concat(["alerts"]);
@@ -1421,6 +1423,8 @@
     if (v === "aprs" && window.SlothAprs) SlothAprs.show();
     // The Spectrum tab (spectrum.js, its own module): a no-op when not loaded.
     if (v === "spectrum" && window.SlothSpectrum) SlothSpectrum.show();
+    // The rtl_433 tab (rtl433.js, its own module): a no-op when not loaded.
+    if (v === "rtl433" && window.SlothRtl433) SlothRtl433.show();
     // The Radar view (radar.js, its own module): a no-op when not loaded.
     if (v === "radar" && window.SlothRadar) SlothRadar.show();
     // The Probes view (probes.js, its own module): a no-op when not loaded.
@@ -1518,6 +1522,7 @@
   $("nav-adsb").addEventListener("click", function () { show("adsb"); });
   $("nav-aprs").addEventListener("click", function () { show("aprs"); });
   $("nav-spectrum").addEventListener("click", function () { show("spectrum"); });
+  $("nav-rtl433").addEventListener("click", function () { show("rtl433"); });
   $("nav-radar").addEventListener("click", function () { show("radar"); });
   $("nav-probes").addEventListener("click", function () { show("probes"); });
   $("nav-fleet").addEventListener("click", function () { show("fleet"); });
@@ -6222,6 +6227,8 @@
 
   // The WiFi view's KARMA and key-harvest card (web/ui/lure.js): the page's helpers, lent once.
   if (window.SlothLure) SlothLure.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp });
+  // The rtl_433 tab (web/ui/rtl433.js): the page's helpers, lent once.
+  if (window.SlothRtl433) SlothRtl433.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp });
   // One BSSID's KARMA detail (web/ui/karma.js): the page's helpers, lent once.
   if (window.SlothKarma) SlothKarma.init({ getJSON: getJSON, errText: errText, keyColor: keyColor,
     stamp: stamp, shortStamp: shortStamp, kvList: kvList, alertLink: alertLink });

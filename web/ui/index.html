@@ -53,6 +53,7 @@
 @include ppi.js
 @include adsb.js
 @include aprs.js
+@include rtl433.js
 @include spectrum.js
 @include bledev.js
 @include radar.js
@@ -91,6 +92,7 @@
       <li><button type="button" class="go" id="nav-tacdb">TACDB</button></li>
       <li><button type="button" class="go" id="nav-fleet">Fleet</button></li>
       <li><button type="button" class="go" id="nav-spectrum">Spectrum</button></li>
+      <li><button type="button" class="go" id="nav-rtl433">rtl_433</button></li>
     </ol></nav>
     <div class="scope">
       <div class="scope-g" id="scope" role="radiogroup" aria-label="capture scope: what the views show, by how it was captured">
@@ -657,6 +659,16 @@
       <div id="w-cl"></div>
       </div>
       <div class="sub">sloth.db's devices with a probe_clients row last seen in the window, nearest first: the dBm column with sloth's own distance words, and the 24 h presence; click a row for its drawer. The dBm column is an S-meter: the lit run is the last reading, the number beside it its S reading and dBm. <span class="smkey"></span>. The networks each asks for, and who asks for the same ones: <button type="button" class="dt-reset" id="w-probes-go">the Probes tab</button></div>
+    </section>
+   </div>
+   <!-- The rtl_433 tab (web/ui/rtl433.js, #208): the devices a local
+        rtl_433 decodes, from the stream. -->
+   <div id="v-rtl433" hidden>
+    <section class="panel" id="r4">
+      <div class="label">rtl_433 devices</div>
+      <div class="sub" id="r4-state" aria-live="polite"></div>
+      <div class="hscroll"><table class="qt" id="r4-rows" aria-label="the devices the rtl_433 decoder heard: model, id, type, decodes, first and last heard, frequency, signal and readings" hidden></table></div>
+      <div class="sub">sloth's rtl433_device records off the --rtl433 event log a local rtl_433 writes (433.92 MHz on the reference site: car tyre-pressure sensors, weather stations, remotes, door and motion sensors), kept by slothweb in memory: one row per decoder model and device id, dropped here 11 minutes after sloth last reported it (sloth reports every device it keeps at least every 5 minutes). sloth writes a device again when its RSSI moves 3 dB, its frequency a whole MHz or a reading a whole unit, so the figures are the last ones written, not the last decode. Temperatures and pressures are in the unit the sensor sent, never converted. Receive-only: sloth reads a file and never touches the SDR or rtl_433. Anything in range can transmit what a decoder accepts, and a tyre sensor's id follows its car: observation only, no row is a finding, and none of it is shared with other sloths.</div>
     </section>
    </div>
    <div id="v-probes" hidden>

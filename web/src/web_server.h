@@ -32,6 +32,7 @@
 #include "web_tsdb.h"
 #include "web_adsb.h"
 #include "web_aprs.h"
+#include "web_rtl433.h"
 #include "web_sysstat.h"
 #include "web_lure.h"
 #include "web_gnss.h"
@@ -134,6 +135,7 @@ typedef struct {
     web_gnss_t     *gnss;     /* NULL: no GNSS panel; set before run */
     web_adsb_t     *adsb;     /* NULL: no ADS-B panel; set before run */
     web_aprs_t     *aprs;     /* NULL: no APRS panel; set before run */
+    web_rtl433_t   *rtl433;   /* NULL: no rtl_433 tab; set before run */
     web_sys_t      *sys;      /* NULL: no host status; set before run */
     web_lure_t     *lure;     /* NULL: no lure evidence; set before run */
     int             sql_conn; /* the slot waiting on the box, or -1 */
@@ -187,6 +189,8 @@ void     web_server_set_gnss(web_server_t *s, web_gnss_t *g);
 void     web_server_set_adsb(web_server_t *s, web_adsb_t *a);
 /* The APRS panel (web_aprs.h) the route answers from; NULL for none. */
 void     web_server_set_aprs(web_server_t *s, web_aprs_t *a);
+/* The rtl_433 devices (web_rtl433.h) the route answers from; NULL for none. */
+void     web_server_set_rtl433(web_server_t *s, web_rtl433_t *a);
 /* The sensor's host status (web_sysstat.h) /api/sys answers from; NULL for none. */
 void     web_server_set_sys(web_server_t *s, web_sys_t *y);
 /* The KARMA and key-harvest evidence (web_lure.h) /api/lures answers

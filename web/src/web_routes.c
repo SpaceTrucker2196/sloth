@@ -389,6 +389,11 @@ static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
         web_jw_raw(&w, ",\"aprs\":");
         web_aprs_health_json(h->aprs, &w);
     }
+    /* The rtl_433 tab (web_rtl433.h), likewise only when kept. */
+    if (h->rtl433) {
+        web_jw_raw(&w, ",\"rtl433\":");
+        web_rtl433_health_json(h->rtl433, &w);
+    }
     web_jw_raw(&w, ",\"sse_clients\":");
     web_jw_int(&w, h->sse_clients);
     web_jw_raw(&w, ",\"tick_seq\":");
@@ -1077,6 +1082,34 @@ static int route_aprs(const web_req_t *rq, const web_health_t *h,
     } else {
         rc = web_aprs_route(h->aprs, rq->query, h->wall_s, none_here, body, cap, &bl, &status);
         if (rc == 0 && none_here && status == 200) bl = web_aprs_out_of_scope_json(body, cap);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/rtl433 (web_rtl433.h): the devices a local rtl_433 decodes. Its
+ * SDR is a passive radio, as APRS's, so Monitor's and Hybrid's; under
+ * Local the query is checked, then the one out_of_scope answer. */
+static int route_rtl433(const web_req_t *rq, const web_health_t *h,
+                        char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = web_rtl433_route(h->rtl433, rq->query, h->wall_s, none_here, body, cap, &bl, &status);
+        if (rc == 0 && none_here && status == 200) bl = web_rtl433_out_of_scope_json(body, cap);
     }
     if (rc != 0 || bl == 0) {
         r->status = 503;
@@ -2031,6 +2064,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_merged(rq, h, MG_ADSB, NULL, out, outsz, r);
         if (!strcmp(rq->path, "/api/aprs"))
             return route_aprs(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/rtl433"))
+            return route_rtl433(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/spectrum"))
             return route_spectrum(rq, h, 0, out, outsz, r);
         if (!strcmp(rq->path, "/api/spectrum/run"))

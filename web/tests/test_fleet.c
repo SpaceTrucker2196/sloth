@@ -4285,6 +4285,41 @@ static void test_export_monitor_only(void) {
     down();
 }
 
+/* #208: rtl_433 devices are withheld from the fleet until the owner
+ * classifies them (ADR 0009, fail closed; docs/wiki/rtl433.md). The
+ * export has no writer for them; a peer answer carrying one is refused
+ * whole, nothing stored. The same answer without the line is taken, so
+ * the refusal is the line's. Pending owner classification (#208).
+ * Seen red with walk() skipping an rtl433_device line instead of
+ * refusing it (the answer taken, its ap row stored). */
+static void test_ingest_refuses_rtl433(void) {
+    pull_up();
+    static const char AP[] =
+        "{\"type\":\"ap\",\"bssid\":\"0e:00:00:00:00:53\",\"ssid\":\"V1Net\",\"channel\":6,"
+        "\"enc\":\"WPA2\",\"vendor\":null,\"rssi\":-40,\"first_seen\":1792500000,"
+        "\"last_seen\":1792626900}\n";
+    static const char R433[] =
+        "{\"type\":\"rtl433_device\",\"src\":\"file:/x\",\"model\":\"Testco-TP01\","
+        "\"id\":\"1a2b3c\",\"first_seen\":1792500000,\"last_seen\":1792626900,"
+        "\"msgs\":3,\"dev_type\":\"TPMS\",\"other_keys\":0}\n";
+    static const char END[] =
+        "{\"type\":\"fleet_end\",\"rows\":1,\"wifi\":0,\"ble\":0,\"ap\":1,\"probe\":0,\"alert\":0,"
+        "\"verdict\":0,\"complete\":true}\n";
+    char body[4096];
+    snprintf(body, sizeof(body), "%s%s%s%s", HDR(1792627050), AP, R433, END);
+    WT_EQ(pull_with(body, 0, NULL, 0), -1);
+    WT_EQ(sightings(), 0);
+    if (!strstr(F.peer[0].last_error, "line 3: unknown type"))
+        fprintf(stderr, "    pull: %s\n", F.peer[0].last_error);
+    WT_ASSERT(strstr(F.peer[0].last_error, "line 3: unknown type") != NULL);
+    snprintf(body, sizeof(body), "%s%s%s", HDR(1792627100), AP, END);
+    int rc = pull_with(body, 0, NULL, 0);
+    if (rc) fprintf(stderr, "    pull: %s\n", F.peer[0].last_error);
+    WT_EQ(rc, 0);
+    WT_EQ(sightings(), 1);
+    pull_down();
+}
+
 /* A hostile or older peer cannot plant local-network data here: each
  * forbidden shape is checked like any line (the answer is taken), then
  * refused, counted and never stored; what the provenance rule allows
@@ -4511,6 +4546,7 @@ void run_fleet_tests(void) {
     WT_RUN(test_export_sends_only_what_the_importer_takes);
     WT_RUN(test_export_monitor_only);
     WT_RUN(test_ingest_refuses_forbidden);
+    WT_RUN(test_ingest_refuses_rtl433);
     WT_RUN(test_purge_once);
     WT_RUN(test_purge_v2_repulls);
     WT_RUN(test_pull_good_and_upsert);

@@ -82,6 +82,7 @@
 #include "web_ble.h"
 #include "web_adsb.h"
 #include "web_aprs.h"
+#include "web_rtl433.h"
 #include "web_sysstat.h"
 #include "web_lure.h"
 #include "web_gnss.h"
@@ -111,6 +112,7 @@ typedef struct {
     web_gnss_t    *gnss;      /* NULL: no GNSS panel (web_gnss.h) */
     web_adsb_t    *adsb;      /* NULL: no ADS-B panel (web_adsb.h) */
     web_aprs_t    *aprs;      /* NULL: no APRS panel (web_aprs.h) */
+    web_rtl433_t  *rtl433;    /* NULL: no rtl_433 tab (web_rtl433.h) */
     web_sys_t     *sys;       /* NULL: no host status (web_sysstat.h) */
     web_lure_t    *lure;      /* NULL: no lure evidence (web_lure.h) */
     int            fleet_merge; /* merge the peers' rows (web_fleetview.h);

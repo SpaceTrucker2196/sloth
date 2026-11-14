@@ -58,6 +58,7 @@ struct web_ble;
 struct web_gnss;
 struct web_adsb;
 struct web_aprs;
+struct web_rtl433;
 struct web_sys;
 struct web_lure;
 struct web_chain;
@@ -79,6 +80,8 @@ typedef struct {
     struct web_adsb *adsb;
     /* The APRS panel (web_aprs.h), when set. */
     struct web_aprs *aprs;
+    /* The rtl_433 devices (web_rtl433.h), when set. */
+    struct web_rtl433 *rtl433;
     /* The sensor's host status (web_sysstat.h), when set. */
     struct web_sys *sys;
     /* The KARMA and key-harvest evidence (web_lure.h), when set. */
@@ -125,6 +128,8 @@ void web_ingest_set_gnss(web_ingest_t *g, struct web_gnss *n);
 void web_ingest_set_adsb(web_ingest_t *g, struct web_adsb *a);
 /* Feed the APRS panel as well. Call before web_ingest_start(). */
 void web_ingest_set_aprs(web_ingest_t *g, struct web_aprs *a);
+/* Feed the rtl_433 devices as well. Call before web_ingest_start(). */
+void web_ingest_set_rtl433(web_ingest_t *g, struct web_rtl433 *a);
 /* Feed the sensor's host status as well. Call before web_ingest_start(). */
 void web_ingest_set_sys(web_ingest_t *g, struct web_sys *y);
 /* Feed the KARMA and key-harvest evidence as well. Call before

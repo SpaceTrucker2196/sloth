@@ -50,6 +50,8 @@ static const struct { const char *t; int tag; } RTYPES[] = {
     { "adsb_aircraft", M },
     /* the APRS decoder's receiver (web_aprs.h): passive radio, as BLE */
     { "aprs_packet", M }, { "aprs_station", M },
+    /* the rtl_433 decoder's SDR (web_rtl433.h): passive radio, as BLE */
+    { "rtl433_device", M },
     /* the IP capture (src/capture/capture.c) */
     { "dns", LI }, { "tls", LI }, { "quic", LI }, { "http", LI }, { "ntp", LI },
     { "icmp", LI }, { "packet", LI },
