@@ -353,3 +353,4 @@
 | ede113e5 | 2026-11-14T13:05:19Z | claude-opus-5 | 574 | 219426 | 80711875 | 693200 | 52.7765 | #208 — rtl_433 JSON event log as a passive sub-GHz sensor (slice 1) |
 | b56d646 | 2026-11-14T13:55:51Z | claude-fable-5-1, claude-opus-5-5 | 176 | 12992 | 2958173 | 160942 | 3.3863 | #208 rtl_433 passive sub-GHz sensor (--rtl433) + review |
 | 265d406 | 2026-11-14T16:03:19Z | claude-opus-5-5 | 56 | 15581 | 3104196 | 27974 | 1.1565 | #208 slothweb rtl_433 tab + /api/rtl433, review fixes (dedup key, stale sensor, tests) |
+| ec8a9d0 | 2026-11-14T16:34:29Z | claude-fable-5-1, claude-opus-5-5 | 252 | 28396 | 12699051 | 135230 | 5.4107 | CI ASan twin_field jsonl_open diagnostic; W9FJC ADS-B/APRS setup; deploy 85579c66 |
