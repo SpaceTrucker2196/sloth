@@ -3607,10 +3607,18 @@ void jsonl_emit_rtl433(const sloth_state_t *s) {
     for (int i = 0; s->rtl433_rows && i < s->rtl433_count; i++) {
         const rtl433_device_t *d = &s->rtl433_rows[i];
         /* The key is both halves: two models may share an id, and the
-         * row is only a row when both match (rtl433.c dev_key_eq). */
-        char key[RTL433_MODEL_MAX + RTL433_ID_MAX + 2];
-        snprintf(key, sizeof(key), "%s\x1f%s", d->model, d->id);
-        if (!jsonl_changed(JD_RTL433_DEVICE, key, strlen(key),
+         * row is only a row when both match (rtl433.c dev_key_eq).
+         * Hashed to the dedup slot's JSONL_DEDUP_KEYLEN bytes rather
+         * than passed raw: jsonl_changed() keeps only the first 16
+         * bytes, and a model of 15 or more ("Schrader-EG53MA4") would
+         * leave no byte of the id, so two such sensors would share one
+         * slot and each tick would write both (#208 review). */
+        uint64_t hk[2];
+        hk[0] = fnv1a(d->model, strlen(d->model), FNV64_OFFSET);
+        hk[1] = fnv1a(d->id, strlen(d->id), fnv1a("\x1f", 1, hk[0]));
+        uint8_t key[sizeof(hk)];
+        memcpy(key, hk, sizeof(key));
+        if (!jsonl_changed(JD_RTL433_DEVICE, key, sizeof(key),
                            rtl433_device_sig(d), now))
             continue;
         emit_rtl433_device(d, s->rtl433.src, now);

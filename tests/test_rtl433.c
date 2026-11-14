@@ -1071,6 +1071,39 @@ static void test_jsonl_device_change_only(void) {
     rtl433_reset();
 }
 
+/* Two sensors of one long model are two dedup slots: each writes once
+ * and then stays quiet. jsonl_changed() keeps 16 key bytes, and the raw
+ * "model\x1fid" of a 17-byte model kept none of the id, so the two
+ * shared a slot, each sig evicted the other's, and every tick wrote
+ * both (#208 review).
+ *
+ * Absence assertion seen red under the mutation that restores the raw
+ * key in jsonl_emit_rtl433() (each device written again on every tick),
+ * restored. */
+static void test_jsonl_long_model_keys_distinct(void) {
+    g_wall = 1793940000; g_mono = 3000000;
+    sloth_clock_test_set(t_mono, t_wall);
+    rtl433_reset();
+    rtl433_set_source("file:/x");
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    jl_open();
+    ASSERT_EQ(feed("{\"model\":\"Testco-LONGMODEL1\",\"id\":\"a1\",\"rssi\":-5.000}", g_wall), 1);
+    ASSERT_EQ(feed("{\"model\":\"Testco-LONGMODEL1\",\"id\":\"a2\",\"rssi\":-5.000}", g_wall), 1);
+    for (int i = 0; i < 6; i++) tick(&s);
+    jsonl_close();
+    char *b = read_all(g_jl);
+    ASSERT(b != NULL);
+    if (b) {
+        ASSERT_EQ(count_of(b, "\"type\":\"rtl433_device\""), 2);
+        ASSERT_EQ(count_of(b, "\"id\":\"a1\""), 1);
+        ASSERT_EQ(count_of(b, "\"id\":\"a2\""), 1);
+    }
+    unlink(g_jl);
+    sloth_clock_test_set(NULL, NULL);
+    rtl433_reset();
+}
+
 /* sensor_health carries rtl433_* ONLY with --rtl433, and signs the
  * state and none/some bands, never the counters: ten seconds of decodes
  * and reads are no line, a read error is one.
@@ -1163,5 +1196,6 @@ void run_rtl433_tests(void) {
     RUN_TEST(test_reader_refuses_bad_spec);
     RUN_TEST(test_sensor_registry_rtl433);
     RUN_TEST(test_jsonl_device_change_only);
+    RUN_TEST(test_jsonl_long_model_keys_distinct);
     RUN_TEST(test_sensor_health_rtl433_block);
 }

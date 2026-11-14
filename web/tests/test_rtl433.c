@@ -11,7 +11,17 @@
  * device_apply()'s temperature bound widened to 1e6 (the 900.0 landed
  * on the row); the two-unit refusal with junit()'s `hits != 1` made
  * `hits < 1` (a pressure was kept from an ambiguous record); the aging
- * with age_out()'s TTL test removed (the silent row stayed). */
+ * with age_out()'s TTL test removed (the silent row stayed). Added in
+ * the #208 review, each likewise seen red and restored: the same-key
+ * replace with jtext()'s and then jword()'s `out[0] = '\0'` removed (D1's
+ * dev_type, then its mic and mod, stayed); the cleared sensor block
+ * with sh_apply()'s memset removed (the old "live" block stayed); the
+ * -273.2 boundary with the bound put back at -273.15 (temperature
+ * null); the refusals with clean()'s `c == '\\'` and then `c > 0x7e`
+ * removed, the model cap widened by one, and first_seen's range widened
+ * below 0 and above T_MAX (rejected 11 of 12, each); the eviction with
+ * row_new()'s `x->ts < lru->ts` reversed (000000 stayed in the
+ * listing). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -138,10 +148,25 @@ static void test_rtl433_ingest_and_route(void) {
          "\"model\":\"Testco-TP01\",\"id\":\"1a2b3c\",\"first_seen\":1794654500,"
          "\"last_seen\":1794654690,\"msgs\":7,\"rssi\":-6.1,\"other_keys\":4}");
     WT_EQ(route(&H, "/api/rtl433", "limit=1"), 200);
+    /* The whole row: every field D1 carried and this record omits is
+     * cleared, not kept from D1. */
     WT_HAS(body_of(g_out), "{\"model\":\"Testco-TP01\",\"id\":\"1a2b3c\",\"first_seen\":1794654500,"
-                           "\"last_seen\":1794654690,\"msgs\":7,");
-    WT_HAS(body_of(g_out), "\"rssi\":-6.1,");
-    WT_HAS(body_of(g_out), "\"records\":2}");
+                           "\"last_seen\":1794654690,\"msgs\":7,\"dev_type\":\"\",\"subtype\":\"\","
+                           "\"channel\":\"\",\"mic\":\"\",\"mod\":\"\",\"protocol\":null,"
+                           "\"freq_mhz\":null,\"freq2_mhz\":null,\"rssi\":-6.1,\"snr\":null,"
+                           "\"noise\":null,\"battery_ok\":null,\"temperature\":null,\"temp_unit\":\"\","
+                           "\"humidity\":null,\"pressure\":null,\"pres_unit\":\"\",\"other_keys\":4,"
+                           "\"ts\":1794654700,\"records\":2}");
+    /* sloth restarted without --rtl433: its next sensor_health has no
+     * block, and the old "live" one does not stand. */
+    WT_EQ(route(&H, "/api/rtl433", "limit=1"), 200);
+    WT_HAS(body_of(g_out), "\"sensor\":{\"ts\":1794654600,\"state\":\"live\",");
+    feed("{\"type\":\"sensor_health\",\"ts\":1794654800,\"capture_iface\":\"any\"}");
+    WT_EQ(route(&H, "/api/rtl433", "limit=1"), 200);
+    WT_HAS(body_of(g_out), "\"sensor\":null,");
+    WT_LACKS(body_of(g_out), "\"live\"");
+    WT_EQ(route(&H, "/api/health", ""), 200);
+    WT_HAS(body_of(g_out), "\"sensor_seen\":0}");
     /* A sensor_health without the block (no --rtl433): the sensor null. */
     fresh();
     feed("{\"type\":\"sensor_health\",\"ts\":1794654600,\"capture_iface\":\"any\"}");
@@ -163,6 +188,15 @@ static void test_rtl433_ranges_and_refusals(void) {
     feed("{\"type\":\"rtl433_device\",\"ts\":1,\"model\":\"X\\u0001\",\"id\":\"1\",\"first_seen\":1}");
     feed("{\"type\":\"rtl433_device\",\"ts\":1,\"model\":\"X\",\"id\":\"12345678901234567\",\"first_seen\":1}");
     feed("{\"type\":\"rtl433_device\",\"ts\":1,\"model\":\"X\",\"id\":1,\"first_seen\":1}");
+    /* A backslash; a byte above 0x7e (the parser decodes \u00e9 to
+     * UTF-8); a model one byte over sloth's 32; first_seen below 0 and
+     * above T_MAX. */
+    feed("{\"type\":\"rtl433_device\",\"ts\":1,\"model\":\"X\\\\Y\",\"id\":\"1\",\"first_seen\":1}");
+    feed("{\"type\":\"rtl433_device\",\"ts\":1,\"model\":\"X\\u00e9\",\"id\":\"1\",\"first_seen\":1}");
+    feed("{\"type\":\"rtl433_device\",\"ts\":1,\"model\":\"Testco-ABCDEFGHIJKLMNOPQRSTUVWXYZ\","
+         "\"id\":\"1\",\"first_seen\":1}");
+    feed("{\"type\":\"rtl433_device\",\"ts\":1,\"model\":\"X\",\"id\":\"1\",\"first_seen\":-1}");
+    feed("{\"type\":\"rtl433_device\",\"ts\":1,\"model\":\"X\",\"id\":\"1\",\"first_seen\":1099511627777}");
     feed("{\"type\":\"rtl433_device\",\"ts\":1,\"model\":\"X\",\"id\":\"1\",\"first_seen\":1,"
          "\"temperature_C\":900.0e3,\"humidity\":101.0,\"battery_ok\":2.0,\"rssi\":-999.0,"
          "\"freq_mhz\":0.0,\"protocol\":70000,\"pressure_kPa\":200.0,\"pressure_psi\":29.0,"
@@ -171,7 +205,7 @@ static void test_rtl433_ranges_and_refusals(void) {
     health(&H, 10);
     WT_EQ(route(&H, "/api/rtl433", ""), 200);
     const char *b = body_of(g_out);
-    WT_HAS(b, "\"rejected\":7,");
+    WT_HAS(b, "\"rejected\":12,");
     WT_HAS(b, "\"total\":1,");
     WT_HAS(b, "\"dev_type\":\"\",");
     WT_HAS(b, "\"mic\":\"\",\"mod\":\"\",\"protocol\":null,\"freq_mhz\":null,");
@@ -181,6 +215,12 @@ static void test_rtl433_ranges_and_refusals(void) {
     WT_LACKS(b, "900");
     WT_LACKS(b, "200.0");
     WT_LACKS(b, "script");
+    /* sloth's lowest temperature as it writes it: -273.15 is in its
+     * range and comes out to 1 dp as -273.2. */
+    feed("{\"type\":\"rtl433_device\",\"ts\":2,\"model\":\"X\",\"id\":\"1\",\"first_seen\":1,"
+         "\"temperature_C\":-273.2}");
+    WT_EQ(route(&H, "/api/rtl433", ""), 200);
+    WT_HAS(body_of(g_out), "\"temperature\":-273.2,\"temp_unit\":\"C\",");
     WT_EQ(route(&H, "/api/rtl433", "limit=0"), 400);
     WT_EQ(route(&H, "/api/rtl433", "limit=513"), 400);
     WT_EQ(route(&H, "/api/rtl433", "call=X"), 400);
@@ -216,14 +256,19 @@ static void test_rtl433_age(void) {
     WT_HAS(body_of(g_out), "\"records\":1}");
 }
 
+/* The 513th key evicts the row least recently reported (by record ts),
+ * not the one last heard longest ago: each row's last_seen runs the
+ * other way to its ts, so the evicted 000000 would list first and the
+ * listing's cut cannot hide it. */
 static void test_rtl433_eviction(void) {
     fresh();
     static char line[512];
     for (int i = 0; i < WEB_RTL433_ROWS + 1; i++) {
+        long long ls = i < WEB_RTL433_ROWS ? T + 1000 - i : T + 2000;
         snprintf(line, sizeof(line),
                  "{\"type\":\"rtl433_device\",\"ts\":%lld,\"model\":\"Testco-TP01\","
                  "\"id\":\"%06x\",\"first_seen\":%lld,\"last_seen\":%lld,\"msgs\":1,"
-                 "\"other_keys\":0}", T + i, i, T, T + i);
+                 "\"other_keys\":0}", T + i, i, T, ls);
         feed(line);
     }
     web_health_t H;
@@ -233,8 +278,11 @@ static void test_rtl433_eviction(void) {
     WT_HAS(b, "\"evictions\":1,");
     WT_HAS(b, "\"total\":512,");
     WT_EQ(route(&H, "/api/rtl433", ""), 200);
-    WT_LACKS(body_of(g_out), "\"id\":\"000000\"");
-    WT_HAS(body_of(g_out), "\"id\":\"000200\"");
+    b = body_of(g_out);
+    WT_LACKS(b, "\"id\":\"000000\"");
+    WT_HAS(b, "\"devices\":[{\"model\":\"Testco-TP01\",\"id\":\"000200\",");
+    WT_HAS(b, "},{\"model\":\"Testco-TP01\",\"id\":\"000001\",");
+    WT_HAS(b, "\"cut\":true}");
 }
 
 /* The decoder's SDR is passive radio: Monitor's record and a poll

@@ -168,7 +168,9 @@ static void device_apply(web_rtl433_t *a, const web_jrec_t *r, long long ts) {
     x->has_noise = jnum(r, "noise", -200, 200, &x->noise);
     x->has_battery = jnum(r, "battery_ok", 0, 1, &x->battery_ok);
     x->has_humidity = jnum(r, "humidity", 0, 100, &x->humidity);
-    x->has_temp = junit(r, TEMP_KEYS, TEMP_UNITS, NOF(TEMP_KEYS), -273.15, 1000,
+    /* -273.2, not sloth's -273.15: sloth accepts -273.15 and writes it
+     * to 1 dp rounding the magnitude half up, as -273.2 (#208 review). */
+    x->has_temp = junit(r, TEMP_KEYS, TEMP_UNITS, NOF(TEMP_KEYS), -273.2, 1000,
                         &x->temp, x->temp_unit, sizeof(x->temp_unit));
     x->has_pressure = junit(r, PRES_KEYS, PRES_UNITS, NOF(PRES_KEYS), 0, 1000000,
                             &x->pressure, x->pres_unit, sizeof(x->pres_unit));
@@ -183,9 +185,14 @@ static const char *const REJ[WEB_RTL433_REJ_COUNT] = {
 };
 
 static void sh_apply(web_rtl433_t *a, const web_jrec_t *r, long long ts) {
-    /* Only a sensor_health carrying the block: a sloth with no --rtl433
-     * writes none of it, and the tab then says "no decoder". */
-    if (!web_jl_get(r, "rtl433_state")) return;
+    /* sloth writes the block on every sensor_health while --rtl433 is
+     * set and on none without it, so a sensor_health without it is a
+     * sloth with no decoder (restarted without the flag): the block is
+     * cleared and the tab says "no decoder", not the old state. */
+    if (!web_jl_get(r, "rtl433_state")) {
+        memset(&a->sh, 0, sizeof(a->sh));
+        return;
+    }
     web_rtl433_sh_t h;
     memset(&h, 0, sizeof(h));
     h.seen = 1;
