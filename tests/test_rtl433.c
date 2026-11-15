@@ -1130,8 +1130,10 @@ static void test_sensor_health_rtl433_block(void) {
         ASSERT(strstr(b, "\"rtl433_") == NULL);
         /* The eviction breakout is written on every run, flag or not. */
         ASSERT(strstr(b, "\"evict_rtl433\":0") != NULL);
-        /* The stream's version moved with the added record. */
-        ASSERT(strstr(b, "\"jsonl_version\":\"1.8.0\"") != NULL);
+        /* The stream's version moved with the added record (1.8.0), and
+         * has moved since: 1.9.0 is sensor_health's `daemon` (#213). At
+         * least the MINOR this record arrived in, never before it. */
+        ASSERT(strstr(b, "\"jsonl_version\":\"1.9.0\"") != NULL);
     }
     unlink(g_jl);
 
@@ -1167,7 +1169,7 @@ static void test_sensor_health_rtl433_block(void) {
         ASSERT(strstr(b, "\"rtl433_state\":\"error\"") != NULL);
         ASSERT(strstr(b, "\"rtl433_err\":\"read: Input/output error\"") != NULL);
         /* The block sits before the tail test_jsonl.c pins. */
-        ASSERT(strstr(b, "\"rtl433_err\":\"\",\"db_max_mb\":") != NULL);
+        ASSERT(strstr(b, "\"rtl433_err\":\"\",\"daemon\":\"wifi\",\"db_max_mb\":") != NULL);
     }
     unlink(g_jl);
     sloth_clock_test_set(NULL, NULL);

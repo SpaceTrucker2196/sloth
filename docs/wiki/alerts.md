@@ -32,9 +32,17 @@ type: reference
   | `rules_mle.c` | the 802.11be Multi-Link Element rules: five keyed by MLD MAC, two by BSSID (#104) |
 
   `src/alerts.h` is the public API and did not change.
-- **Rule order is a table (#118).** `alerts_update()` derives the
-  Wi-Fi posture (`wifi_downgrade_update()`), then runs
-  `g_alert_rules[]` from `src/alerts/rules_table.c` in order. The
+- **Rule order is a table (#118), and the table is data the daemon
+  selects (#213).** `alerts_update()` derives the Wi-Fi posture
+  (`wifi_downgrade_update()`), then runs `g_alert_rules[]`, the rows of
+  the selected table, in order. `sloth` selects the whole table
+  (`g_alert_table_sloth`, `src/alerts/rules_table.c`, through
+  `capture_side_install()`); sloth-rf selects `g_alert_table_rf`
+  (`src/alerts/rules_table_rf.c`): the four GNSS rules,
+  `ADSB_EMERGENCY` and `SENSOR_SOURCE_DOWN`, a subsequence of the whole
+  one, and not `SENSOR_UNDERVOLT` (owner ruling 2026-11-15). A table
+  also brings its rules' `*_forget()` functions and the pcap exporters,
+  so the engine names no rule file and no exporter. The
   order is the one the hand-written call sequence had, copied verbatim,
   and it is load-bearing: JSONL events within one tick reach the stream
   in this order; `rule_evil_twin_attack_chain` taints the rogue half of

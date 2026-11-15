@@ -1100,7 +1100,8 @@ static void test_sensor_health_region_fields(void) {
                          "\"aprs_freq_hz\":144800000,"
                          "\"aprs_freq_mismatch\":1,\"aprs_silent\":0,"
                          "\"aprs_silent_after_s\":3600,"
-                         "\"aprs_quiet_since\":1793930000,\"db_max_mb\":") != NULL);
+                         "\"aprs_quiet_since\":1793930000,"
+                     "\"daemon\":\"wifi\",\"db_max_mb\":") != NULL);
         ASSERT(strstr(b, "\"aprs_silent\":1,\"aprs_silent_after_s\":3600,"
                          "\"aprs_quiet_since\":1793930000,") != NULL);
         ASSERT(strstr(b, "\"twin193_excl_any\":0,\"aprs_region\":") != NULL);

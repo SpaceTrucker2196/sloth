@@ -373,16 +373,6 @@ twin_class_t twin_classify(const twin_evidence_t *ev) {
     return TWIN_CLASS_UNKNOWN;
 }
 
-const char *twin_class_label(twin_class_t c) {
-    switch (c) {
-    case TWIN_CLASS_IMPERSONATOR: return "impostor";
-    case TWIN_CLASS_NEIGHBOR:     return "neighbor";
-    case TWIN_CLASS_DECLARED:     return "declared";
-    case TWIN_CLASS_UNKNOWN:
-    default:                      return "?";
-    }
-}
-
 void alert_pair_key(char *out, size_t n, const char *rule_id,
                     const uint8_t bssid_a[6], const uint8_t bssid_b[6],
                     const char *site, const char *security_profile) {

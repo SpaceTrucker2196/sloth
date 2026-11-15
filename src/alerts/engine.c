@@ -14,15 +14,36 @@
 #include "wifi_assess.h"
 #include "tool_fingerprint.h"
 #include "jsonl.h"
-#include "alert_pcap.h"
-#include "evidence_export.h"
 #include "secure_file.h"   /* SFILE_ERR_MAX */
 #include "wired_attach.h"
 #include "event_wake.h"
 #include "sloth_clock.h"
 #include "rules.h"
 #include "engine_internal.h"
+#include "evidence_export.h"   /* EVX_REFUSED only: the exporter is the table's */
 #include "gps.h"
+
+/* The table this process runs (#213). The application selects it once,
+ * before the first tick: `sloth` its whole table (g_alert_table_sloth,
+ * src/alerts/rules_table.c), sloth-rf the RF one (g_alert_table_rf,
+ * src/alerts/rules_table_rf.c). The engine names neither, so linking it
+ * does not link a rule file: a table brings its own rows, the per-rule
+ * history its rows keep, and the pcap exporters. Until one is selected
+ * there are no rows and the engine only ages what it holds.
+ *
+ * g_alert_rules / g_alert_rule_count are the selected table's rows, the
+ * names alerts_update() and tests/test_alert_rules.c have always read. */
+static const alert_rule_table_t *g_table;
+const alert_rule_t *g_alert_rules;
+int                 g_alert_rule_count;
+
+void alerts_set_table(const alert_rule_table_t *t) {
+    g_table            = t;
+    g_alert_rules      = t ? t->rules : NULL;
+    g_alert_rule_count = t ? t->count : 0;
+}
+
+const alert_rule_table_t *alerts_table(void) { return g_table; }
 
 /* Engine state: deduped alert ring.
  *
@@ -771,6 +792,21 @@ const char *alert_type_name(alert_type_t type) {
     return alert_names[type];
 }
 
+/* The label of alert_t.ap_class. Here, beside the other names of an
+ * alert's own members, and not with twin_classify() in rules_twin.c,
+ * since #213: the alert record prints it (src/jsonl_core.c), and a
+ * daemon that writes alert records must not need the twin rules for a
+ * four-word table. */
+const char *twin_class_label(twin_class_t c) {
+    switch (c) {
+    case TWIN_CLASS_IMPERSONATOR: return "impostor";
+    case TWIN_CLASS_NEIGHBOR:     return "neighbor";
+    case TWIN_CLASS_DECLARED:     return "declared";
+    case TWIN_CLASS_UNKNOWN:
+    default:                      return "?";
+    }
+}
+
 /* ── Snapshot ────────────────────────────────────────────── */
 
 /* Copy engine into s->alerts newest-first. */
@@ -823,19 +859,20 @@ static int dump_alert_evidence(const alert_t *a, char *path, size_t pathsz) {
     const char *rule = alert_type_name(a->type);
     static const char pfx[] = "ALERT_TYPE_";
     if (strncmp(rule, pfx, sizeof(pfx) - 1) == 0) rule += sizeof(pfx) - 1;
-    if (evidence_export_alert_name(a->incident_id, a->evidence_ids[0],
-                                   rule,
-                                   name, sizeof(name)) != 0)
+    const alert_exporter_t *x = g_table->exporter;
+    if (x->ev_alert_name(a->incident_id, a->evidence_ids[0],
+                         rule,
+                         name, sizeof(name)) != 0)
         return -1;
     int n = a->evidence_id_count;
     if (n > ALERT_EVIDENCE_IDS) n = ALERT_EVIDENCE_IDS;
     char used[sizeof(name) + 8];
-    int written = evidence_export_pcap_unique(name, a->evidence_ids, n,
-                                              NULL, a->incident_id, rule,
-                                              &a->loc,
-                                              used, sizeof(used),
-                                              err, sizeof(err));
-    if (written > 0 && evidence_export_path(used, path, pathsz) != 0)
+    int written = x->ev_pcap_unique(name, a->evidence_ids, n,
+                                    NULL, a->incident_id, rule,
+                                    &a->loc,
+                                    used, sizeof(used),
+                                    err, sizeof(err));
+    if (written > 0 && x->ev_path(used, path, pathsz) != 0)
         snprintf(path, pathsz, "%s", used);
     return written;
 }
@@ -904,8 +941,13 @@ static int pcap_cooldown_active(const alert_side_t *sd, time_t now, int secs) {
 }
 
 static void dump_new_alert_pcaps(const sloth_state_t *s, time_t now) {
-    const int ip_on = alert_pcap_enabled();
-    const int ev_on = evidence_export_enabled();
+    /* The exporters are the table's (#213): both write captured frames,
+     * so a table with no capture behind it names none and nothing here
+     * runs. dump_alert_evidence() is reached only past this line. */
+    const alert_exporter_t *x = g_table ? g_table->exporter : NULL;
+    if (!x) return;
+    const int ip_on = x->ip_enabled();
+    const int ev_on = x->ev_enabled();
     if (!ip_on && !ev_on) return;
     const int min_sev = (int)tune_val(TUNE_PCAP_MIN_SEVERITY);
     const int cool    = (int)tune_val(TUNE_PCAP_KEY_COOLDOWN_SECS);
@@ -927,9 +969,9 @@ static void dump_new_alert_pcaps(const sloth_state_t *s, time_t now) {
         }
         int written = ev
             ? dump_alert_evidence(a, a->pcap_path, sizeof(a->pcap_path))
-            : alert_pcap_dump(s, a, a->pcap_path, sizeof(a->pcap_path));
+            : x->ip_dump(s, a, a->pcap_path, sizeof(a->pcap_path));
         if (ev && written == 0 && ip_on && a->match_ip[0])
-            written = alert_pcap_dump(s, a, a->pcap_path, sizeof(a->pcap_path));
+            written = x->ip_dump(s, a, a->pcap_path, sizeof(a->pcap_path));
         if (written < 0) {
             a->pcap_write_failures++;
             a->pcap_path[0] = '\0';
@@ -976,11 +1018,14 @@ void alerts_update(sloth_state_t *s) {
     /* Evidence clock — the #88 seam, so the whole engine can be driven
      * deterministically from tests without sleeping. */
     time_t now = sloth_wall();
-    /* Derive posture before any rule reads it (#62). */
+    /* Derive posture before any rule reads it (#62). Unconditional: a
+     * pass over s->beacon_aps that writes s alone (src/wifi_assess.c
+     * calls nothing), so in a daemon with no radio it walks an empty
+     * table. */
     wifi_downgrade_update(s);
-    /* Every rule, in src/alerts/rules_table.c's order. That order is
+    /* Every rule of the selected table, in its order. That order is
      * load-bearing (JSONL order within a tick, the twin taint, the
-     * posture above) and the table says why (#118). */
+     * posture above) and src/alerts/rules_table.c says why (#118). */
     for (int i = 0; i < g_alert_rule_count; i++)
         g_alert_rules[i].fn(s, now);
     expire_incidents(now, sloth_mono_ms());
@@ -1010,10 +1055,8 @@ void alerts_clear(void) {
     g_side_clock = 0;
     /* Reset per-rule history too so tests (and the user pressing 'c')
      * get a fully clean slate. */
-    rules_wired_forget();
-    rules_gnss_forget();
-    rules_adsb_forget();
-    rules_twin_forget();
-    rules_sensor_forget();
+    if (g_table)
+        for (int i = 0; i < g_table->forget_count; i++)
+            g_table->forget[i]();
     evil_twin_taint_clear();
 }

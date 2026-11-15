@@ -364,11 +364,15 @@ static void test_union_table_is_the_order_sloth_always_ran(void) {
 }
 
 /* Position in the union of the stage `st` (same name, same body, same
- * phase), or -1. */
+ * phase), or -1. One stage is exempt from "same body" since #213: the
+ * RF half's "jsonl" is poll_st_jsonl_rf, because the union's writes the
+ * capture's records and a daemon with no capture cannot link them. It
+ * keeps the union's name, phase and place. */
 static int union_pos(const poll_stage_t *st) {
     int i = poll_stage_index(&g_poll_sloth, st->name);
     if (i < 0) return -1;
-    if (g_poll_sloth.stages[i].fn != st->fn) return -1;
+    if (g_poll_sloth.stages[i].fn != st->fn && st->fn != poll_st_jsonl_rf)
+        return -1;
     if (g_poll_sloth.stages[i].phase != st->phase) return -1;
     return i;
 }
@@ -380,7 +384,8 @@ static int table_has(const poll_table_t *t, const char *name) {
 /* The two halves are the union, cut: each is a subsequence of it (the
  * same stage bodies in the same relative order), the Wi-Fi half is the
  * union without exactly the two RF stages, the RF half is exactly its
- * eight, and no union stage is in neither. */
+ * nine, and no union stage is in neither. Nine since #213: "positions"
+ * joined on the ruling that both daemons write the sensor's track. */
 static void test_halves_are_the_union_in_order(void) {
     const poll_table_t *halves[] = { &g_poll_wifi, &g_poll_rf };
     for (int k = 0; k < 2; k++) {
@@ -407,12 +412,26 @@ static void test_halves_are_the_union_in_order(void) {
     /* RF: exactly these, so a capture stage cannot ride in unnoticed. */
     static const char *const rf[] = {
         "health_gnss", "health_rf", "health_host",
-        "sensors_gnss", "sensors_rf", "alerts", "jsonl", "db"
+        "sensors_gnss", "sensors_rf", "alerts", "positions", "jsonl", "db"
     };
     int n = (int)(sizeof(rf) / sizeof(rf[0]));
     ASSERT_EQ(g_poll_rf.count, n);
     for (int i = 0; i < n && i < g_poll_rf.count; i++)
         ASSERT_STR(g_poll_rf.stages[i].name, rf[i]);
+    /* The one stage whose body is the half's own, and only that one:
+     * the exemption in union_pos() is for it and must not widen. */
+    int own = 0;
+    for (int i = 0; i < g_poll_rf.count; i++) {
+        int u = poll_stage_index(&g_poll_sloth, g_poll_rf.stages[i].name);
+        if (u >= 0 && g_poll_sloth.stages[u].fn != g_poll_rf.stages[i].fn) {
+            own++;
+            ASSERT_STR(g_poll_rf.stages[i].name, "jsonl");
+        }
+    }
+    ASSERT_EQ(own, 1);
+    int j = poll_stage_index(&g_poll_rf, "jsonl");
+    ASSERT(j >= 0 && g_poll_rf.stages[j].fn == poll_st_jsonl_rf);
+    ASSERT(poll_st_jsonl_rf != poll_st_jsonl);
 }
 
 /* The two orders poll.h calls part of the contract, in every table that

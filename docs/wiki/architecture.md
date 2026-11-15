@@ -8,15 +8,17 @@ type: reference
 
 **Summary**: How sloth's source is organised: header → CLI → platform vtable → capture pipeline → per-protocol parsers → state → views.
 
-**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `tests/tmp_dir.h`, `tests/test_tmp_dir.c`, `tests/main_test.c`, `web/tests/wt_tmp.h`, `web/tests/web_test_main.c`, `src/sloth_clock.h`, `src/poll.h`, `src/poll.c`, `src/poll_core.c`, `src/poll_gnss.c`, `src/poll_rf.c`, `src/run_flag.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `src/worker_thread.c`, `tests/test_worker_thread.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
+**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `tests/tmp_dir.h`, `tests/test_tmp_dir.c`, `tests/main_test.c`, `web/tests/wt_tmp.h`, `web/tests/web_test_main.c`, `src/sloth_clock.h`, `src/poll.h`, `src/poll.c`, `src/poll_core.c`, `src/poll_gnss.c`, `src/poll_rf.c`, `src/run_flag.h`, `tests/test_poll.c`, `src/rf/main.c`, `src/rf/rf_args.c`, `src/rf/platform_rf.c`, `src/capture_side.h`, `src/alerts/rules.h`, `src/alerts/rules_table_rf.c`, `src/jsonl_internal.h`, `src/sys_status.h`, `src/daemon_start.h`, `tests/test_rf_build.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `src/worker_thread.c`, `tests/test_worker_thread.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-11-15 (#212: source groups, the run flag's own file, the stage table as data); 2026-11-03 (#180: fragattack's sixth table, no new lock edge); 2026-11-02 (the system map: sensor, BLE scan helper, slothweb and its stores); 2026-10-27 (temporary files: the leak guard, interrupts and a long TMPDIR; #95, #118, #141, #132, #130, #109)
+**Last updated**: 2026-11-15 (#213: `sloth-rf`, the second daemon; the capture side as data the shared services take; the `nm` gate on its link); 2026-11-15 (#212: source groups, the run flag's own file, the stage table as data); 2026-11-03 (#180: fragattack's sixth table, no new lock edge); 2026-11-02 (the system map: sensor, BLE scan helper, slothweb and its stores); 2026-10-27 (temporary files: the leak guard, interrupts and a long TMPDIR; #95, #118, #141, #132, #130, #109)
 
 ---
 
 ## System map
 
 How the pieces connect at run time: three receive-only inputs, the sensor, and slothweb, which reads the sensor's stream and its `sloth.db` (read-only) and keeps its own store. Every arrow is a read or a local hand-off; nothing here transmits onto a monitored network (`MISSION.md` §2).
+
+Since #213 the sensor has a second daemon, `sloth-rf`, drawn below the first: it reads what the SDR decoders and a GNSS receiver produce and has its own stream and its own database. It is built and not yet deployed: slothweb reads only `sloth` until #214, and until cutover (#216) `sloth` still takes the same four inputs itself ([[architecture-rf-split]], [ADR 0010](adr/0010-wifi-rf-daemons.md)).
 
 ```mermaid
 flowchart LR
@@ -42,6 +44,13 @@ flowchart LR
       db[("sloth.db<br/>src/db.c")]
       pcap[("alert pcaps +<br/>evidence manifests")]
     end
+    dec["decoders, each its own process<br/>readsb · Dire Wolf · rtl_433 · gpsd"]
+    subgraph rf["sloth-rf — headless, no capture linked (src/rf/)"]
+      rfread["file and loopback readers<br/>src/capture/{gps,adsb,aprs,rtl433}_reader.c"]
+      rfstate["state + RF rules + engine<br/>g_poll_rf, g_alert_table_rf"]
+      rfsock["data socket<br/>unix:/run/sloth-rf/sloth-rf.sock"]
+      rfdb[("sloth-rf.db<br/>sloth's DDL, RF tables")]
+    end
     subgraph web["slothweb — slothweb.service, user sloth, read-only on sloth.db"]
       ingest["stream ingest + live state<br/>web/src/web_ingest.c, web_live.c"]
       sdb["sloth.db reader<br/>web/src/web_slothdb.c"]
@@ -55,7 +64,12 @@ flowchart LR
 
   research[("research corpus<br/>research/, research.db")]
   browser(("Browser on the<br/>allow list (Tailscale)"))
+  sdr(("SDR receivers +<br/>GNSS receiver"))
 
+  sdr --> dec
+  dec -- "aircraft.json · aprs.log ·<br/>events.jsonl · gpsd :2947" --> rfread
+  rfread --> rfstate --> rfsock
+  rfstate --> rfdb
   wifi --> probe
   net --> cap
   net --> plat
@@ -85,7 +99,12 @@ include/sloth_alert.h      -- alert_type_t, ALERT_TYPE_COUNT, alert_type_name(),
 include/sloth_alerts.def   -- the alert-type list: one X(ID, technique) row per rule
 include/sloth_compat.h     -- SLOTH_STATIC_ASSERT, the C99 compile-time assertion
 tools/docs_counts.sh       -- `make docs-counts`: rewrites the prose counts from the .defs
-src/main.c                 -- CLI, signal handlers, poll loop
+src/main.c                 -- `sloth`: CLI, signal handlers, poll loop
+src/rf/main.c, rf_args.c   -- `sloth-rf` (#213): its CLI and headless poll loop
+src/rf/platform_rf.c       -- sloth-rf's platform vtable: two file reads, nothing else
+src/capture_side.c         -- what `sloth` registers with the services both daemons share
+src/daemon_start.c, gnss_flags.c, rf_flags.c
+                           -- the flag checks and start-up steps both mains call
 src/tui.c / tui.h          -- ncurses rendering, colour init, key polling (ANSI fallback)
 src/platform/linux*.c      -- rtnetlink, nl80211, /proc readers, INET_DIAG
 src/capture/capture.c      -- libpcap thread; dispatches to per-protocol parsers
@@ -232,11 +251,13 @@ Since #115 every binary is derived from one set of source lists in the
   - `RF_SRCS` — only ADS-B, APRS or rtl_433: `src/adsb.c`,
     `src/adsb_beast.c`, `src/aprs.c`, `src/rtl433.c`, their
     `src/capture/*_reader.c`, `src/alerts/rules_adsb.c`,
-    `src/views/adsb.c`, `src/poll_rf.c`. What sloth-rf will own.
+    `src/views/adsb.c`, `src/poll_rf.c`, and since #213
+    `src/jsonl_rf.c`, `src/alerts/rules_table_rf.c` and
+    `src/rf_flags.c`. What sloth-rf owns.
   - `GNSS_SRCS` — only the `--gps` / `--location` receiver:
     `src/gps.c`, `src/capture/gps_reader.c`, `src/position_track.c`,
-    `src/alerts/rules_gnss.c`, `src/views/gnss.c`, `src/poll_gnss.c`.
-    Both daemons link it.
+    `src/alerts/rules_gnss.c`, `src/views/gnss.c`, `src/poll_gnss.c`,
+    `src/gnss_flags.c`. Both daemons link it.
   - `CORE_BASE_SRCS` — the rest: the Wi-Fi, wired and BLE modules and
     what both daemons share (the alert engine, JSONL, the clock, the
     run flag, the poll runner). `src/sys_status.c` and
@@ -245,8 +266,56 @@ Since #115 every binary is derived from one set of source lists in the
   The test for the first two is the include graph, not the topic: a
   file belongs there only if nothing in the base has to move with it.
   Every consumer still reads the union, so `sloth`, the test, no-flag,
-  bench and fuzz builds link what they linked before; no binary is
-  built from a group alone yet (#213).
+  bench and fuzz builds link what they linked before.
+- **`sloth-rf` (#213)** is linked from three objects of its own
+  (`RF_APP_SRCS`: `src/rf/main.c`, `src/rf/rf_args.c`,
+  `src/rf/platform_rf.c`) and the same `libsloth_core.a`, so only the
+  archive members something references come in: 46 of them, against
+  159 before the seams below were cut, and no libpcap, ncurses or
+  resolver. There is no second source list. `RF_LDFLAGS` is `LDFLAGS`
+  without `-lpcap` and the curses library; the binary's `DT_NEEDED` is
+  libm, libsqlite3 and libc. Built by `make`, removed by `make clean`,
+  relinked through its own stamp (`build/sloth-rf.link`); not
+  installed yet (#215).
+- **The `nm` gate on it** (`check_rf_no_capture`, beside
+  `check_no_hci_builder`, which runs on it too): after the link, the
+  binary must import no `pcap_*`, `getnameinfo`, `initscr` or
+  `newterm`, and must define none of a list of sloth's own entry
+  points - `capture_open`, `capture_run`, `capture_start`,
+  `probe_open`, `probe_run`, `bt_monitor_open`, `bt_capture_run`,
+  `ble_mon_ingest`, `bt_stream_feed`, `btle_ll_parse`, `replay_run`,
+  `dot11_frame_decode`, `radiotap_parse`, `beacon_parse_frame`,
+  `deauth_parse_frame`, `eapol_observe_frame`, `evidence_ring_init`,
+  `alert_pcap_dump`, `evidence_export_pcap_unique`, `linux_wifi_scan`,
+  `linux_wifi_set_channel`, `linux_wifi_get_stations`,
+  `linux_get_ifaces`, `linux_get_conns`, `dns_init`, `dns_resolve`,
+  `tui_init`. A failure deletes the binary. It is checked on the link
+  because a Makefile list cannot see one new call from a shared file
+  pulling a capture module in. `tests/test_rf_build.c` holds every
+  name on the list to a definition in the tree (a renamed symbol would
+  otherwise stop guarding) and the shared files to including no
+  capture header.
+- **The capture side is data (#213).** Linking the alert engine,
+  `sys_status` or the JSONL writer used to link the capture, because
+  each named its modules. Each now takes that part from the daemon:
+
+  | Service | What it no longer names | Where it comes from |
+  |---|---|---|
+  | Alert engine (`src/alerts/engine.c`) | the rule table, the rules' `*_forget()`, the two pcap exporters | the selected `alert_rule_table_t` (`src/alerts/rules.h`): `g_alert_table_sloth` or `g_alert_table_rf` |
+  | `sys_status` (`src/sys_status.c`) | the capture, monitor, btmon and btcap source rows; the beacon-recall sample | `sys_status_set_capture_side()`; the rows are `src/sys_status_capture.c` |
+  | Memory sample (`src/sensor_health.c`) | the resolver's call count | `sh_set_resolver_calls_fn()` |
+  | JSONL (`src/jsonl.c`) | split in three: the sink, builders, alert records and shared `sensor_health` blocks are `src/jsonl_core.c`; the GNSS, ADS-B, APRS and rtl_433 records are `src/jsonl_rf.c`; the capture's records stay in `src/jsonl.c` | link: a daemon references the files it needs (`src/jsonl_internal.h`) |
+  | Poll (`src/poll_core.c`) | the EMIT stage and `persist_health_poll()` | `src/poll.c` (`sloth`), `src/poll_rf.c` (`poll_st_jsonl_rf`) |
+  | `libver` | `pcap_lib_version()` | `src/libver_pcap.c`; `libver_format_libs()` takes the word |
+  | Platform | `src/platform/linux.c`'s vtable | `src/rf/platform_rf.c`: `sys_read` and `sys_list` only |
+
+  `sloth` hands all of the first three over in one call,
+  `capture_side_install()` (`src/capture_side.c`), first thing in
+  `main()`; the test binary calls it before every test. sloth-rf does
+  not link that file: it selects its own rule table and registers
+  nothing, which is what "no capture" means to the three services.
+  [[architecture-rf-split]] lists each seam with the symbol that
+  forced it.
 - The worker run flag (`capture_run_flag_t`, #95) is `src/run_flag.c`
   / `run_flag.h` since #212. It was defined in `src/capture/capture.c`,
   so the GNSS, ADS-B, APRS and rtl_433 readers needed the capture
@@ -325,18 +394,29 @@ The table is data the application supplies (#212). There are three
 |---|---|---|---|
 | `g_poll_sloth` | every stage, in the order the one table always had | `src/poll.c` | `sloth` |
 | `g_poll_wifi` | `g_poll_sloth` without `health_rf` and `sensors_rf` | `src/poll.c` | nothing yet (sloth-wifi at cutover) |
-| `g_poll_rf` | `health_gnss`, `health_rf`, `health_host`, `sensors_gnss`, `sensors_rf`, `alerts`, `jsonl`, `db` | `src/poll_rf.c` | nothing yet (sloth-rf, #213) |
+| `g_poll_rf` | `health_gnss`, `health_rf`, `health_host`, `sensors_gnss`, `sensors_rf`, `alerts`, `positions`, `jsonl`, `db` | `src/poll_rf.c` | `sloth-rf` (#213, `src/rf/main.c`) |
 
 The stage bodies are split the same way: the Wi-Fi, wired and BLE
 stages in `src/poll.c`, the receiver's in `src/poll_gnss.c`, the
-decoders' in `src/poll_rf.c`, and the runner with the four stages every
-table carries (`health_host`, `alerts`, `jsonl`, `db`) in
-`src/poll_core.c`. Two former stages became several, with the calls in
+decoders' in `src/poll_rf.c`, and the runner with the three stages
+every table carries with one body (`health_host`, `alerts`, `db`) in
+`src/poll_core.c`. Two more are in every table since #213:
+`positions` (`poll_st_positions()`, `src/poll_gnss.c`), on the ruling
+that both daemons write the sensor's own track, and `jsonl`, which is
+one stage name with two bodies: `poll_st_jsonl()` in `src/poll.c`
+writes the capture's records and so cannot be linked without the
+capture, and `poll_st_jsonl_rf()` in `src/poll_rf.c` writes sloth-rf's
+(`jsonl_emit_state_rf()`). `tests/test_poll.c` holds that this is the
+only stage whose body differs between the union and a half.
+
+Two former stages became several, with the calls in
 the order the single functions made them:
 
-- `health` → `health_capture` (capture, monitor and Bluetooth workers),
+- `health` → `health_capture` (capture, monitor and Bluetooth workers,
+  and since #213 `persist_health_poll()`, two of whose three sinks are
+  the capture's exporters),
   `health_gnss`, `health_rf` (ADS-B, APRS, rtl_433), `health_host`
-  (`sys_status_poll()`, persist health), `capture_scope`. The receiver
+  (`sys_status_poll()`), `capture_scope`. The receiver
   runs before the decoders because the APRS region check reads
   `s->gps`; the host status runs after both because it reads every
   source's state.
@@ -398,6 +478,17 @@ poll.
 | capture worker | `capture_run()` (`src/capture/capture.c`) | a libpcap handle is open on the capture interface(s) |
 | probe worker | `probe_run()` and the `[m]` retarget in `probe_set_iface()` (`src/capture/probe.c`) | a monitor-mode radio is open |
 | DNS worker | `dns_init()` (`src/dns.c`) | only under `--allow-active`; never under the default or `--strict` policy |
+| GNSS reader | `gps_reader_run()` (`src/capture/gps_reader.c`) | `--gps`; in `sloth` and in `sloth-rf` |
+| ADS-B, APRS, rtl_433 readers | `adsb_reader_run()`, `aprs_reader_run()`, `rtl433_reader_run()` (`src/capture/*_reader.c`) | their flag; in `sloth` and in `sloth-rf` |
+
+`sloth-rf` (#213) is its main thread and up to four of those reader
+threads, and nothing else: no capture, probe or DNS worker exists in
+it, because none is linked. Its main thread runs `g_poll_rf`,
+`data_socket_tick()` and the wait, and stops the readers in `sloth`'s
+order (GNSS, ADS-B, APRS, rtl_433) before closing the sinks. SIGINT and
+SIGTERM set its quit flag as they do `sloth`'s; SIGUSR1, which is
+`sloth`'s report signal and whose default action is to terminate, is
+ignored.
 
 Every one of them is created through `worker_thread_create()`
 (`src/worker_thread.c`), which blocks SIGINT, SIGTERM and SIGUSR1 in the creating

@@ -159,6 +159,8 @@ void jsonl_emit_ownership(void);
  * jsonl_lures_reset() forgets the rows written (tests). */
 void jsonl_emit_lures(const sloth_state_t *s);
 void jsonl_lures_reset(void);
+/* Forget which aprs_packet was last written (src/jsonl_rf.c). */
+void jsonl_aprs_reset(void);
 
 /* One flat record built from a field list, for a module that shapes
  * its own records (src/sys_status.c: sys_status, sys_sensor,
@@ -181,6 +183,16 @@ void jsonl_emit_fields(const char *type, time_t ts, const jsonl_field_t *f, int 
  * Connections and twin_episode are emitted separately because they
  * predate this set; this function is purely additive. */
 void jsonl_emit_state_snapshots(sloth_state_t *s);
+
+/* sloth-rf's tick (#213, src/jsonl_rf.c): the sensor registry, the GNSS,
+ * ADS-B, APRS and rtl_433 records, the host status and its source rows,
+ * and jsonl_emit_sensor_health_rf() last. The same emitters `sloth`
+ * runs for those records, so the two daemons write them alike. */
+void jsonl_emit_state_rf(sloth_state_t *s);
+/* sloth-rf's sensor_health: the blocks a daemon with no capture writes,
+ * and "daemon":"rf". `sloth`'s is jsonl_emit_sensor_health(), with
+ * "daemon":"wifi". */
+void jsonl_emit_sensor_health_rf(const sloth_state_t *s);
 
 /* Clear the change-only emission cache (issue #42) so the next snapshot
  * re-emits a full baseline. Called on sink (re)open; exposed for tests. */

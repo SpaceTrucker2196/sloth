@@ -23,8 +23,61 @@ typedef struct {
     alert_rule_fn fn;
 } alert_rule_t;
 
-extern const alert_rule_t g_alert_rules[];
-extern const int          g_alert_rule_count;
+/* The per-alert pcap exporters, as the engine calls them (#213). Both
+ * write captured frames: src/alert_pcap.c the IP packets of a match_ip
+ * (--pcap-dir), src/evidence_export.c the 802.11 frames an alert cites
+ * (--collect-handshakes and --eapol-dir). They belong to the table and
+ * not to the engine so that a daemon with no capture links neither. */
+struct loc_stamp;
+typedef struct {
+    int (*ip_enabled)(void);
+    int (*ip_dump)(const sloth_state_t *s, const alert_t *a,
+                   char *out_path, int out_sz);
+    int (*ev_enabled)(void);
+    int (*ev_alert_name)(const char *incident_id, uint64_t event_id,
+                         const char *rule, char *out, size_t outsz);
+    int (*ev_pcap_unique)(const char *name, const uint64_t *ids, int n,
+                          int *skipped,
+                          const char *incident_id, const char *rule,
+                          const struct loc_stamp *loc,
+                          char *name_out, size_t name_outsz,
+                          char *err, size_t errsz);
+    int (*ev_path)(const char *name, char *out, size_t outsz);
+} alert_exporter_t;
+
+/* A rule table is data the application selects (#213), as its poll
+ * stage table is (src/poll.h): the rows in run order, the functions
+ * that drop the history those rows keep between ticks (alerts_clear()
+ * calls each), and the exporters, NULL for none.
+ *
+ *   g_alert_table_sloth  every rule - what `sloth` runs    rules_table.c
+ *   g_alert_table_rf     the GNSS rules, ADSB_EMERGENCY and
+ *                        SENSOR_SOURCE_DOWN - sloth-rf      rules_table_rf.c
+ *
+ * The second is a subsequence of the first; tests/test_rf_rules.c holds
+ * it to that. SENSOR_UNDERVOLT is not in it: the host has one supply,
+ * and on a host running both daemons only the one with the capture
+ * reports it (owner ruling 2026-11-15, ADR 0010). */
+typedef struct {
+    const alert_rule_t        *rules;
+    int                        count;
+    void               (*const *forget)(void);
+    int                        forget_count;
+    const alert_exporter_t    *exporter;
+} alert_rule_table_t;
+
+extern const alert_rule_table_t g_alert_table_sloth;
+extern const alert_rule_table_t g_alert_table_rf;
+
+/* Select the table alerts_update() runs. Once, at start, before the
+ * first tick and on the thread that ticks; NULL selects none. */
+void alerts_set_table(const alert_rule_table_t *t);
+const alert_rule_table_t *alerts_table(void);
+
+/* The selected table's rows (src/alerts/engine.c): NULL and 0 until a
+ * table is selected. */
+extern const alert_rule_t *g_alert_rules;
+extern int                 g_alert_rule_count;
 
 /* src/alerts/rules_wired.c */
 void rule_port_scan(const sloth_state_t *s, time_t now);

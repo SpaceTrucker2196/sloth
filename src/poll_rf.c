@@ -4,12 +4,14 @@
 #include "rtl433.h"
 #include "victron.h"
 #include "sensors.h"
+#include "jsonl.h"
 
 /* The RF decoders' poll stages and the RF table (#212): ADS-B, APRS and
- * rtl_433. What sloth-rf will run (#211); today `sloth` runs the two
- * stages from its own table (g_poll_sloth, src/poll.c) and nothing
- * passes g_poll_rf but the tests. Nothing here, or reachable from the
- * table below, is a capture stage. */
+ * rtl_433. sloth-rf passes g_poll_rf (#213, src/rf/main.c); `sloth`
+ * runs the first two stages from its own table (g_poll_sloth,
+ * src/poll.c). Nothing here, or reachable from the table below, is a
+ * capture stage, and the Makefile's `nm` gate on sloth-rf is what holds
+ * that. */
 
 void poll_st_health_rf(sloth_state_t *s, const poll_ctx_t *ctx) {
     /* --adsb (#26 slice 1): expire the aircraft the decoder stopped
@@ -89,12 +91,22 @@ void poll_st_sensors_rf(sloth_state_t *s, const poll_ctx_t *ctx) {
     }
 }
 
-/* The RF half: the receiver and the decoders, the host's own state, the
- * alert engine and the two sinks. health_gnss stays ahead of health_rf
- * (the APRS region check) and health_host behind both (it reads them).
- * A first cut for the tests to run; #213 owns what sloth-rf finally
- * passes, the "positions" stage included - which daemon writes
- * sensor_positions is not ruled on (ADR 0010). */
+void poll_st_jsonl_rf(sloth_state_t *s, const poll_ctx_t *ctx) {
+    (void)ctx;
+    /* sloth-rf's EMIT stage (#213): the records this daemon has, through
+     * the emitters `sloth` uses for the same ones. Last before durable
+     * state, for the reason poll_st_jsonl() gives. */
+    jsonl_emit_state_rf(s);
+}
+
+/* The RF half, which sloth-rf runs: the receiver and the decoders, the
+ * host's own state, the alert engine (over the table the daemon
+ * selected, src/alerts/rules_table_rf.c), the sensor's own track and
+ * the two sinks. health_gnss stays ahead of health_rf (the APRS region
+ * check) and health_host behind both (it reads them). "positions" is
+ * here since the 2026-11-15 ruling that both daemons write
+ * sensor_positions (ADR 0010); "jsonl" is this daemon's own stage under
+ * the union's name. */
 static const poll_stage_t rf_stages[] = {
     { "health_gnss",  PH_PLATFORM, poll_st_health_gnss  },
     { "health_rf",    PH_PLATFORM, poll_st_health_rf    },
@@ -105,7 +117,9 @@ static const poll_stage_t rf_stages[] = {
 
     { "alerts",       PH_ALERTS,   poll_st_alerts       },
 
-    { "jsonl",        PH_EMIT,     poll_st_jsonl        },
+    { "positions",    PH_POST,     poll_st_positions    },
+
+    { "jsonl",        PH_EMIT,     poll_st_jsonl_rf     },
 
     { "db",           PH_DURABLE,  poll_st_db           },
 };

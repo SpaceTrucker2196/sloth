@@ -10,7 +10,6 @@
 #include <sqlite3.h>
 #endif
 #include "sensor_health.h"
-#include "dns.h"
 
 /* Table-overflow tally — contract and rationale in sensor_health.h.
  *
@@ -294,6 +293,13 @@ static long long count_fds(void) {
     return n > 0 ? n - 1 : 0;
 }
 
+/* Where the resolver's lifetime call count comes from (#213). The
+ * resolver is src/dns.c, the one module in the tree that can put a
+ * query on the wire, so this file does not name it: the daemon that
+ * has a resolver hands its counter over (src/capture_side.c), and one
+ * that has none reports -1, "not measured". */
+static long long (*g_resolver_calls)(void);
+
 void sh_mem_sample(sh_mem_t *out) {
     memset(out, 0, sizeof(*out));
     sample_status(out);
@@ -316,7 +322,9 @@ void sh_mem_sample(sh_mem_t *out) {
     out->malloc_kb = -1;
 #endif
     out->fd_count = count_fds();
-    dns_resolver_stats_t ds;
-    dns_resolver_stats(&ds);
-    out->resolver_calls = (long long)ds.getnameinfo_calls;
+    out->resolver_calls = g_resolver_calls ? g_resolver_calls() : -1;
+}
+
+void sh_set_resolver_calls_fn(long long (*fn)(void)) {
+    g_resolver_calls = fn;
 }

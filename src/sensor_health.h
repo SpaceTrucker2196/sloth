@@ -306,6 +306,11 @@ typedef struct {
 /* Fill *out from this process. Never fails; unmeasurable fields are -1. */
 void sh_mem_sample(sh_mem_t *out);
 
+/* The source of sh_mem_t.resolver_calls (#213): the count comes from
+ * the daemon that has a resolver, registered once at start
+ * (src/capture_side.c). Unregistered, the field reads -1. */
+void sh_set_resolver_calls_fn(long long (*fn)(void));
+
 /* Pull VmRSS / VmHWM (kB) out of /proc/self/status text. Split out so
  * the parse is tested against hand-built text rather than whatever the
  * host's kernel happens to print. `len` bounds the read; the text need

@@ -72,6 +72,7 @@
     X(ip_index_clear) \
     X(jsonl_dedup_reset) \
     X(jsonl_lures_reset) \
+    X(jsonl_aprs_reset) \
     X(lan_role_clear) \
     X(postrack_clear) \
     X(karma_forge_clear) \

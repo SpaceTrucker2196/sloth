@@ -752,8 +752,9 @@ static void test_sys_db_limits(void) {
     e = storage_of("sloth");
     WT_ASSERT(e && strstr(e, "\"limit_mb\":1024,\"limit_state\":\"set\",\"limit_from\":\"sensor_health\","
                              "\"used_pct\":40.2,\"band\":\"ok\"}"));
-    /* 412 of 500 is 82.4 %: near. */
-    health_line("\"db_max_mb\":500");
+    /* 412 of 500 is 82.4 %: near. As JSONL 1.9.0 writes the tail
+     * (#213): `daemon` ahead of db_max_mb, which is still read. */
+    health_line("\"daemon\":\"wifi\",\"db_max_mb\":500,\"jsonl_version\":\"1.9.0\"");
     WT_EQ(route(&H, "/api/sys", ""), 200);
     e = storage_of("sloth");
     WT_ASSERT(e && strstr(e, "\"limit_mb\":500,\"limit_state\":\"set\",\"limit_from\":\"sensor_health\","

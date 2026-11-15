@@ -17,7 +17,7 @@ mapped onto these tiers, so one vocabulary reaches the operator.
 
 **Sources**: `src/attack_hw.c`, `src/attack_hw.h`,
 `src/alerts/rules_twin.c` (`rule_karma_ap`), `src/alerts/engine.c`
-(`fire_stage_hw_verdict`), `src/jsonl.c` (`emit_hw_verdict`),
+(`fire_stage_hw_verdict`), `src/jsonl_core.c` (`emit_hw_verdict`),
 `src/beacon_snoop.c`, `src/views/beacon.c`
 (`draw_detail_stack_measures`), `src/eap_parse.c` (`wsc_take_vendor_str`),
 `src/eap_parse.h`, `src/tool_fingerprint.c`, `include/sloth.h`

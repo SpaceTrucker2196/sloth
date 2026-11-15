@@ -464,7 +464,7 @@ Recorded here rather than implied away:
 
 - **A failing sink is visible on every view, dashboard included.**
   `persist_health_poll()` (`src/persist_health.c`, polled once per tick
-  from `src/main.c`) snapshots the three sinks' lifetime write-failure
+  in `src/poll.c`'s `health_capture` stage) snapshots the three sinks' lifetime write-failure
   counts, and `persist_badge()` renders `!persist jsonl:N pcap:N
   eapol:N` — failing sinks only — on the tab bar at full alert heat in
   both front ends (`draw_tabbar` in `src/tui.c`, ncurses and ANSI).
@@ -544,7 +544,7 @@ Recorded here rather than implied away:
   (`src/secure_file.c`) increments that sink's counter and prints one
   stderr line behind a `reported` latch, and the next write is
   attempted anyway: the JSONL sink `clearerr()`s the stream on purpose
-  ("keep trying: a full disk may drain", `src/jsonl.c`), while
+  ("keep trying: a full disk may drain", `src/jsonl_core.c`), while
   per-alert pcap and EAPOL exports open a fresh file per export
   (`src/alert_pcap.c`, `src/eapol_log.c`). Counters rise, the badge
   grows, and the sink keeps trying at full rate — nothing throttles,

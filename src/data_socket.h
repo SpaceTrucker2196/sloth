@@ -100,6 +100,17 @@ int  data_socket_default_dir_ok(const char *dir, char *err, size_t errsz);
 void data_socket_default_refusal(const char *why, uid_t euid,
                                  char *out, size_t outsz);
 
+/* The same refusal for another daemon's default (#213): sloth-rf's bare
+ * flag means DATA_SOCKET_RF_DEFAULT_SPEC, in a runtime directory of its
+ * own, and is refused in the same words when that directory is not fit.
+ * data_socket_default_refusal() is this with `sloth`'s three values. */
+#define DATA_SOCKET_RF_DEFAULT_DIR  "/run/sloth-rf"
+#define DATA_SOCKET_RF_DEFAULT_SPEC "unix:" DATA_SOCKET_RF_DEFAULT_DIR "/sloth-rf.sock"
+void data_socket_default_refusal_at(const char *spec, const char *dir,
+                                    const char *runtime_dir,
+                                    const char *why, uid_t euid,
+                                    char *out, size_t outsz);
+
 /* Call from the main poll loop. Accepts any pending connections,
  * flushes queued bytes to clients that have become writable, and
  * disconnects clients stalled past DATA_SOCKET_STALL_SECS or idle past

@@ -7,6 +7,7 @@
 #include "reset_all.h"
 #include "sloth_clock.h"
 #include "tui.h"
+#include "capture_side.h"
 
 /* Shared counters — all test files reference these via extern */
 int g_pass      = 0;
@@ -19,6 +20,11 @@ int g_test_total = 0;
  * clock restored — whether or not the test remembers to ask for it.
  * A test with its own extra setup still runs it after this. */
 static void default_test_setup(void) {
+    /* The suite is `sloth`'s: the whole rule table, the capture's
+     * source rows, the resolver's count (#213). Re-installed before
+     * every test, so one that selects sloth-rf's table to hold it to
+     * something cannot leave it selected for the next. */
+    capture_side_install();
     sloth_reset_all();
     sloth_clock_test_set(NULL, NULL);
     tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
@@ -180,6 +186,12 @@ void run_filter_tests(void);
 void run_alert_pcap_tests(void);
 void run_alert_key_tests(void);
 void run_alert_rules_tests(void);
+void run_rf_args_tests(void);
+void run_rf_rules_tests(void);
+void run_rf_jsonl_tests(void);
+void run_rf_loop_tests(void);
+void run_rf_db_tests(void);
+void run_rf_build_tests(void);
 void run_ip_owner_tests(void);
 void run_dashboard_tests(void);
 void run_ip_color_tests(void);
@@ -391,6 +403,13 @@ int main(void) {
     run_alert_pcap_tests();
     run_alert_key_tests();
     run_alert_rules_tests();
+    /* #213: sloth-rf, the RF daemon beside sloth. */
+    run_rf_args_tests();
+    run_rf_rules_tests();
+    run_rf_jsonl_tests();
+    run_rf_loop_tests();
+    run_rf_db_tests();
+    run_rf_build_tests();
     run_ip_owner_tests();
     run_dashboard_tests();
     run_ip_color_tests();

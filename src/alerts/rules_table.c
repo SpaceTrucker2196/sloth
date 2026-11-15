@@ -20,10 +20,13 @@
  * here, at the position its dependencies need; the end is the right
  * answer when it has none. */
 #include "rules.h"
+#include "engine_internal.h"
+#include "alert_pcap.h"
+#include "evidence_export.h"
 
 #define R(fn) { #fn, fn }
 
-const alert_rule_t g_alert_rules[] = {
+static const alert_rule_t sloth_rules[] = {
     R(rule_port_scan),
     R(rule_deauth_flood),
     R(rule_nxdomain_burst),
@@ -127,5 +130,33 @@ const alert_rule_t g_alert_rules[] = {
 
 #undef R
 
-const int g_alert_rule_count =
-    (int)(sizeof(g_alert_rules) / sizeof(g_alert_rules[0]));
+/* What alerts_clear() drops beside the engine's own state: the history
+ * these rows keep between ticks. Order is the one the engine always
+ * called them in; none reads another's. */
+static void (*const sloth_forget[])(void) = {
+    rules_wired_forget,
+    rules_gnss_forget,
+    rules_adsb_forget,
+    rules_twin_forget,
+    rules_sensor_forget,
+};
+
+/* The two per-alert pcap exporters (src/alerts/rules.h says why they are
+ * the table's). */
+static const alert_exporter_t sloth_exporter = {
+    alert_pcap_enabled,
+    alert_pcap_dump,
+    evidence_export_enabled,
+    evidence_export_alert_name,
+    evidence_export_pcap_unique,
+    evidence_export_path,
+};
+
+/* The table `sloth` selects (src/main.c), and the test binary with it. */
+const alert_rule_table_t g_alert_table_sloth = {
+    sloth_rules,
+    (int)(sizeof(sloth_rules) / sizeof(sloth_rules[0])),
+    sloth_forget,
+    (int)(sizeof(sloth_forget) / sizeof(sloth_forget[0])),
+    &sloth_exporter,
+};

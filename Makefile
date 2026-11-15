@@ -82,6 +82,7 @@ CORE_BASE_SRCS = \
        src/posture.c       \
        src/version.c       \
        src/libver.c        \
+       src/libver_pcap.c   \
        src/updater.c       \
        src/oui.c           \
        src/services.c      \
@@ -158,6 +159,8 @@ CORE_BASE_SRCS = \
        src/sensors.c         \
        src/sensor_health.c   \
        src/sys_status.c      \
+       src/sys_status_capture.c \
+       src/capture_side.c    \
        src/stab.c            \
        src/persist_health.c  \
        src/wps_track.c       \
@@ -189,6 +192,7 @@ CORE_BASE_SRCS = \
        src/views/devices.c   \
        src/beacon_detect.c   \
        src/jsonl.c           \
+       src/jsonl_core.c      \
        src/formatter.c       \
        src/data_socket.c     \
        src/discovery.c       \
@@ -271,6 +275,9 @@ CORE_BASE_SRCS += src/poll.c src/poll_core.c
 # The worker run flag (#95), out of capture.c since #212 so a reader
 # thread does not need the capture module to have a stop flag.
 CORE_BASE_SRCS += src/run_flag.c
+# #213: the start-up steps both daemons take alike (--tune, the
+# privilege drop, the three sinks), out of src/main.c.
+CORE_BASE_SRCS += src/daemon_start.c
 
 # ── The GNSS group (#212) ───────────────────────────────────────────────────
 # --location / --gps (2026-10-27): the parsers and the arbitration state
@@ -281,6 +288,9 @@ GNSS_SRCS += src/alerts/rules_gnss.c
 # GNSS observation (2026-11-02): the [#] view over the --gps receiver's sky.
 GNSS_SRCS += src/views/gnss.c
 GNSS_SRCS += src/poll_gnss.c
+# #213: the --location / --gps flags' checks, out of src/main.c so both
+# daemons' mains call one copy.
+GNSS_SRCS += src/gnss_flags.c
 
 # ── The RF group (#212) ─────────────────────────────────────────────────────
 # --adsb (#26 slice 1, 2026-11-05): the aircraft.json parser and table are
@@ -303,8 +313,14 @@ RF_SRCS += src/rtl433.c src/capture/rtl433_reader.c
 # parser and table are pure; the reader tails a local file. Not sloth-va:
 # nothing under src/va/ is named here (tests/test_va.c).
 RF_SRCS += src/victron.c src/capture/victron_reader.c
-# The RF poll stages and the table sloth-rf will pass (#212).
+# The RF poll stages and the table sloth-rf passes (#212, #213).
 RF_SRCS += src/poll_rf.c
+# #213: the receiver's and the decoders' JSONL records, out of
+# src/jsonl.c so a daemon with no capture links them, and the rule table
+# sloth-rf selects.
+RF_SRCS += src/jsonl_rf.c src/alerts/rules_table_rf.c
+# #213: the decoder flags' checks, out of src/main.c for the same reason.
+RF_SRCS += src/rf_flags.c
 
 # The union every consumer reads. Order is base, GNSS, RF; nothing
 # depends on it (the objects go into an archive).
@@ -661,6 +677,91 @@ endif
 sloth-va: $(VA_SRCS) $(VA_HDRS) $(OBJDIR)/.flags
 	$(CC) $(CFLAGS) -iquote src $(SDBUS_CFLAGS) -o $@ $(VA_SRCS) \
 	      $(filter -pie -Wl%,$(LDFLAGS)) $(SDBUS_LIBS)
+# ── sloth-rf (#213, ADR 0010) ──────────────────────────────────────────────
+# The RF half of the sensor as a daemon of its own: the GNSS receiver and
+# the ADS-B, APRS and rtl_433 decoders' files, with the alert engine, the
+# JSONL writer and the database `sloth` uses for the same records. Built
+# beside `sloth` by a plain `make`; not installed yet (packaging is #215).
+#
+# Its three own sources are compiled like any object (per config, behind
+# the flag stamp), and everything else comes out of libsloth_core.a, so
+# only the members something references are linked. That is the whole
+# mechanism: there is no second source list to keep in step, and what
+# keeps the capture out is that nothing sloth-rf references leads to it.
+# check_rf_no_capture, below, holds the link to that.
+#
+# No -lpcap and no ncurses on its link line, whatever the config: it
+# references neither, and naming them would put them in DT_NEEDED.
+RF_APP_SRCS   = src/rf/main.c src/rf/rf_args.c src/rf/platform_rf.c
+RF_APP_OBJS   = $(RF_APP_SRCS:%.c=$(OBJDIR)/%.o)
+RF_TARGET     = sloth-rf
+RF_LINK_STAMP = build/sloth-rf.link
+RF_LDFLAGS    = $(filter-out -lpcap -lncursesw -lncurses,$(LDFLAGS))
+
+$(RF_LINK_STAMP): STAMP = $(OBJDIR) $(CC) $(CFLAGS) $(RF_LDFLAGS)
+
+$(RF_TARGET): $(RF_APP_OBJS) $(CORE_LIB) $(RF_LINK_STAMP)
+	$(CC) $(CFLAGS) -o $@ $(filter-out $(RF_LINK_STAMP),$^) $(RF_LDFLAGS)
+	$(check_no_hci_builder)
+	$(check_rf_no_capture)
+
+# MISSION.md §2 and ADR 0010: sloth-rf opens no radio and links no
+# capture. Checked on the linked binary, as check_no_hci_builder is and
+# for the same reason: what a Makefile list says is not what the linker
+# did, and one new call from a shared file (src/sys_status.c,
+# src/jsonl_core.c, src/db.c, src/alerts/engine.c, a rule file) into a
+# capture module would pull that module, and through it the rest, into
+# this binary without a line of this file changing. That is not
+# hypothetical: before #213 cut the seams, linking these same roots
+# pulled 159 archive members and libpcap; after, 46 and none.
+#
+# Two lists, both explicit.
+#   RF_FORBID_IMPORTS: dynamic symbols it must not import. Any libpcap
+#     call; getnameinfo, the resolver's (src/dns.c is the one module
+#     that can put a query on the wire); and ncurses, which a headless
+#     daemon has no use for.
+#   RF_FORBID_DEFS: sloth's own entry points, one or two per module
+#     that must stay out, chosen because nothing can use the module
+#     without them - the IP capture, the 802.11 monitor and its frame
+#     decoders, the Bluetooth HCI monitor and the Ubertooth stream, the
+#     savefile replay, the evidence ring and the two pcap exporters, the
+#     platform backend (nl80211, rtnetlink, INET_DIAG; sloth-rf's own
+#     g_platform, src/rf/platform_rf.c, reads files and nothing else),
+#     the resolver and the terminal.
+# A name on the second list that is renamed stops guarding, so
+# tests/test_rf_build.c holds every one of them to being defined in the
+# tree today.
+#
+# A failure deletes the binary, so the next `make` cannot call it up to
+# date.
+RF_FORBID_IMPORTS = pcap_[a-z_]+ getnameinfo initscr newterm
+RF_FORBID_DEFS    = capture_open capture_run capture_start \
+                    probe_open probe_run \
+                    bt_monitor_open bt_capture_run ble_mon_ingest \
+                    bt_stream_feed btle_ll_parse \
+                    replay_run \
+                    dot11_frame_decode radiotap_parse beacon_parse_frame \
+                    deauth_parse_frame eapol_observe_frame \
+                    evidence_ring_init alert_pcap_dump \
+                    evidence_export_pcap_unique \
+                    linux_wifi_scan linux_wifi_set_channel \
+                    linux_wifi_get_stations \
+                    linux_get_ifaces linux_get_conns \
+                    dns_init dns_resolve \
+                    tui_init
+rf_empty :=
+rf_space := $(rf_empty) $(rf_empty)
+RF_FORBID_IMPORTS_RE = ^_?($(subst $(rf_space),|,$(strip $(RF_FORBID_IMPORTS))))$$
+RF_FORBID_DEFS_RE    = ^_?($(subst $(rf_space),|,$(strip $(RF_FORBID_DEFS))))$$
+define check_rf_no_capture
+	@syms=$$(nm $@) || { echo "$@: nm failed; cannot check for the capture" >&2; rm -f $@; exit 1; }; \
+	 bad=$$(printf '%s\n' "$$syms" | awk 'NF == 2 && $$1 == "U" { sub(/@.*/, "", $$2); if ($$2 ~ /$(RF_FORBID_IMPORTS_RE)/) print $$2 }' | sort -u | head -n 4 | tr '\n' ' '); \
+	 [ -z "$$bad" ] || { echo "$@: imports $$bad- sloth-rf links no libpcap, no resolver and no terminal (MISSION.md §2, ADR 0010); a shared file has grown a call into a capture module" >&2; rm -f $@; exit 1; }; \
+	 bad=$$(printf '%s\n' "$$syms" | awk 'NF == 3 && $$2 != "U" && $$3 ~ /$(RF_FORBID_DEFS_RE)/ { print $$3 }' | sort -u | head -n 4 | tr '\n' ' '); \
+	 [ -z "$$bad" ] || { echo "$@: links $$bad- sloth-rf links no capture, 802.11, Bluetooth, nl80211, resolver or terminal code (MISSION.md §2, ADR 0010); cut the dependency, do not shorten this list" >&2; rm -f $@; exit 1; }
+endef
+
+all: $(RF_TARGET)
 
 # The helpers join `all` here, below their definitions: make expands a
 # rule's prerequisites when it reads the rule, so naming them on the
@@ -1127,7 +1228,7 @@ endif
 # translation unit has always been compiled with.
 TEST_SRCS        = $(wildcard tests/*.c)
 TEST_ONLY_SRCS   = src/reset_all.c src/ble_scan/ble_scan_cmd.c \
-                   src/sdrsweep/sdrsweep_dsp.c \
+                   src/sdrsweep/sdrsweep_dsp.c src/rf/rf_args.c \
                    src/va/va_victron.c src/va/va_conf.c src/va/va_aes.c \
                    $(filter-out %/main.c research/query.c src/libver.c,$(RESEARCH_SRCS) $(MCP_SRCS))
 TEST_CORE_SRCS   = $(CORE_SRCS_ALL) src/tui.c $(TEST_ONLY_SRCS)
@@ -1231,6 +1332,11 @@ bench: $(BENCH_BINS)
 # run it only when the diff `make replay-check` shows is the intended
 # one, and say so in the commit.
 #
+# replay-check also runs sloth-rf (#213) beside sloth on the command
+# lines both refuse - the receiver's and the decoders' flags, --tune,
+# --ticks, --strict with a routable --data-socket - and fails unless
+# both exit 2 with the same words (tests/replay/rf_refusals.sh).
+#
 # --refresh-ms 100 only shortens the wait between ticks. The normalised
 # output was checked identical at 100 and 1000 ms before this was set.
 REPLAY_DIR    ?= build/replay
@@ -1258,7 +1364,7 @@ replay-run: $(TARGET) $(REPLAY_GEN)
 	    --ticks $(REPLAY_TICKS) --refresh-ms 100
 	sh tests/replay/normalise.sh < $(REPLAY_RUN)/out.jsonl > $(REPLAY_RUN)/norm.jsonl
 
-replay-check: replay-run
+replay-check: replay-run $(RF_TARGET)
 	diff -u $(REPLAY_GOLDEN) $(REPLAY_RUN)/norm.jsonl
 	@./$(TARGET) --headless --replay /nonexistent.pcap --allow-active >/dev/null 2>&1; \
 	  rc=$$?; if [ $$rc -ne 2 ]; then \
@@ -1284,6 +1390,7 @@ replay-check: replay-run
 	@./$(TARGET) --headless --ticks 1 --no-privdrop --bt-capture $(REPLAY_RUN) >/dev/null 2>&1; \
 	  rc=$$?; if [ $$rc -ne 2 ]; then \
 	    echo "replay-check: --bt-capture DIR exited $$rc, want 2 (not a file or FIFO)" >&2; exit 1; fi
+	@sh tests/replay/rf_refusals.sh ./$(TARGET) ./$(RF_TARGET)
 	@echo "replay-check: $$(wc -l < $(REPLAY_GOLDEN)) records match $(REPLAY_GOLDEN)"
 
 replay-golden: replay-run
@@ -1592,6 +1699,7 @@ clean:
 	rm -rf build
 	rm -f $(TARGET) $(TEST_BIN) $(NOFLAGS_BIN) research_ingest sloth-research-mcp
 	rm -f slothweb slothweb_test slothweb-mcp sloth-ble-scan sloth-sdrsweep sloth-va
+	rm -f sloth-rf
 	rm -f sloth_test_pcap   # the pre-#116 capture-path binary
 	rm -f $(patsubst %.c,%.o,$(CORE_SRCS_ALL) $(APP_SRCS) $(TEST_ONLY_SRCS) $(wildcard tests/*.c))
 
@@ -1604,7 +1712,7 @@ clean:
 	@rm -f $@
 	$(AR) rcs $@ $(filter %.o,$^)
 
-STAMPS = $(LINK_STAMP) \
+STAMPS = $(LINK_STAMP) $(RF_LINK_STAMP) \
          $(foreach d,$(OBJDIR) $(TEST_OBJDIR) $(NOFLAGS_OBJDIR) $(FUZZ_OBJDIR) $(FUZZ_PCAP_OBJDIR),$(d)/.flags $(d)/.members)
 
 .PHONY: FORCE
@@ -1613,7 +1721,7 @@ $(STAMPS): FORCE
 
 # Header dependencies written by -MMD. Absent until the first compile,
 # which has to rebuild everything anyway.
--include $(wildcard $(patsubst %.o,%.d,$(APP_OBJS) $(CORE_OBJS) $(TEST_OBJS) $(TEST_CORE_OBJS) \
+-include $(wildcard $(patsubst %.o,%.d,$(APP_OBJS) $(RF_APP_OBJS) $(CORE_OBJS) $(TEST_OBJS) $(TEST_CORE_OBJS) \
                     $(NOFLAGS_OBJS) $(NOFLAGS_CORE_OBJS) $(FUZZ_CORE_OBJS) \
                     $(FUZZ_PCAP_CORE_OBJS)))
 

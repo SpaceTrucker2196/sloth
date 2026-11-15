@@ -25,7 +25,7 @@ monitored network (MISSION §2); `--gps gpsd://` sends gpsd one
 `--gps` SPEC, the arbitration state), `src/capture/gps_reader.h`,
 `src/capture/gps_reader.c` (the serial / gpsd worker),
 `src/position_track.h`, `src/position_track.c`, `src/alerts/engine.c`
-(`fire_inv()`), `src/jsonl.c` (`emit_loc()`, `gps_*`),
+(`fire_inv()`), `src/jsonl_core.c` (`emit_loc()`, `jsonl_sh_gps()`: `gps_*`),
 `src/evidence_manifest.c`, `src/db.c`, `src/db_schema.c` (schema v9),
 `src/main.c`, `src/views/alerts.c`, `src/views/iface.c`,
 `packaging/systemd/sloth-sensor.service.d/gps.conf`,

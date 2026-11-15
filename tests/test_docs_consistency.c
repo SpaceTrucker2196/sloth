@@ -1738,6 +1738,7 @@ static int dc_opt_char(unsigned char c) {
            (c >= '0' && c <= '9') || c == '-' || c == '_';
 }
 
+#define DC_RF_ARGS   "src/rf/rf_args.c"
 #define DC_ARGV_OPEN "strcmp(argv[i], \"--"
 #define DC_DOC_OPEN  "`--"
 
@@ -1924,6 +1925,30 @@ static void test_every_cli_flag_is_in_wiki_reference(void) {
     }
     ASSERT_EQ(missing, 0);
     free(src);
+
+    /* The second daemon (#213): sloth-rf's argv loop is src/rf/rf_args.c,
+     * spelled the same way, and its flags are documented on the same
+     * page. --jsonl is the one it parses that sloth does not. */
+    char *rf = slurp(DC_RF_ARGS);
+    ASSERT(rf != NULL);
+    if (rf) {
+        int rn = dc_scan_argv_opts(rf, opts);
+        ASSERT_GE(rn, 20);
+        int has_jsonl = 0;
+        missing = 0;
+        for (int i = 0; i < rn; i++) {
+            char want[DC_OPT_LEN + 8];
+            snprintf(want, sizeof(want), "`--%s`", opts[i]);
+            if (!strcmp(opts[i], "jsonl")) has_jsonl = 1;
+            if (strstr(ref, want)) continue;
+            missing++;
+            fprintf(stderr, "    %s parses --%s; %s does not document "
+                            "it\n", DC_RF_ARGS, opts[i], DC_CLI_REF);
+        }
+        ASSERT_EQ(missing, 0);
+        ASSERT(has_jsonl);
+        free(rf);
+    }
     free(ref);
 }
 
@@ -1943,15 +1968,25 @@ static void test_wiki_reference_documents_no_dead_flag(void) {
      * dead at once. */
     char parsed[DC_MAX_OPTS][DC_OPT_LEN];
     int  pn = dc_scan_argv_opts(src, parsed);
+    /* A documented flag is alive when either daemon parses it (#213):
+     * the page has a sloth-rf table since that binary exists. */
+    static char rf_parsed[DC_MAX_OPTS][DC_OPT_LEN];
+    char *rf = slurp(DC_RF_ARGS);
+    ASSERT(rf != NULL);
+    int  rn = rf ? dc_scan_argv_opts(rf, rf_parsed) : 0;
+    free(rf);
     int dead = 0;
     for (int i = 0; i < n; i++) {
         int found = 0;
         for (int j = 0; j < pn && !found; j++)
             if (!strcmp(parsed[j], opts[i])) found = 1;
+        for (int j = 0; j < rn && !found; j++)
+            if (!strcmp(rf_parsed[j], opts[i])) found = 1;
         if (found) continue;
         dead++;
-        fprintf(stderr, "    %s documents --%s; src/main.c parses no "
-                        "such option\n", DC_CLI_REF, opts[i]);
+        fprintf(stderr, "    %s documents --%s; neither src/main.c nor "
+                        "%s parses such an option\n", DC_CLI_REF, opts[i],
+                DC_RF_ARGS);
     }
     ASSERT_EQ(dead, 0);
     free(src);

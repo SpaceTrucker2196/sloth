@@ -144,6 +144,9 @@ No record field can hold a PIN, a key or a raw advertisement byte.
 
 sloth reads the file as a passive source, the same shape as `--rtl433`
 ([[cli-reference]]): `--victron /var/lib/sloth-va/victron.jsonl`.
+`sloth-rf` takes the same flag through the same code (#213, ADR 0010:
+`src/rf_flags.c`, `src/jsonl_rf.c`), so until cutover give it to one of
+the two daemons, not both.
 `src/victron.c` parses each line against an allow-list of value names
 with bounds (out of range absent and counted, never clamped; other
 names counted and dropped; the device's own `label` never kept) into

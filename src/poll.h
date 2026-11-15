@@ -88,7 +88,8 @@ typedef struct {
  *   g_poll_sloth  every stage - what `sloth` runs today    src/poll.c
  *   g_poll_wifi   g_poll_sloth without the RF stages       src/poll.c
  *   g_poll_rf     the receiver, the decoders, the engine
- *                 and the sinks; no capture stage          src/poll_rf.c
+ *                 and the sinks; no capture stage - what
+ *                 sloth-rf runs (#213)                     src/poll_rf.c
  *
  * The first is the union of the other two, in the order the one table
  * had, and tests/test_poll.c holds all three to that. */
@@ -104,10 +105,14 @@ extern const poll_table_t g_poll_rf;
 /* The stages more than one table carries, so more than one file names
  * them. Everything else is static beside its table.
  *
- *   health_gnss, sensors_gnss   src/poll_gnss.c   both daemons
+ *   health_gnss, sensors_gnss,
+ *   positions                   src/poll_gnss.c   both daemons
  *   health_rf, sensors_rf       src/poll_rf.c     sloth-rf (and `sloth`)
- *   health_host, alerts,
- *   jsonl, db                   src/poll_core.c   both daemons
+ *   health_host, alerts, db     src/poll_core.c   both daemons
+ *   jsonl                       src/poll.c        `sloth`: the capture's
+ *                                                 records (poll_st_jsonl)
+ *                               src/poll_rf.c     sloth-rf: its own
+ *                                                 (poll_st_jsonl_rf)
  *
  * Two orders are part of the contract and every table keeps them:
  * health_gnss before health_rf (the APRS region check reads s->gps),
@@ -121,7 +126,9 @@ void poll_st_health_rf(sloth_state_t *s, const poll_ctx_t *ctx);
 void poll_st_sensors_rf(sloth_state_t *s, const poll_ctx_t *ctx);
 void poll_st_health_host(sloth_state_t *s, const poll_ctx_t *ctx);
 void poll_st_alerts(sloth_state_t *s, const poll_ctx_t *ctx);
+void poll_st_positions(sloth_state_t *s, const poll_ctx_t *ctx);
 void poll_st_jsonl(sloth_state_t *s, const poll_ctx_t *ctx);
+void poll_st_jsonl_rf(sloth_state_t *s, const poll_ctx_t *ctx);
 void poll_st_db(sloth_state_t *s, const poll_ctx_t *ctx);
 
 /* Fill ctx's clocks from the seam; research and hooks are left NULL. */

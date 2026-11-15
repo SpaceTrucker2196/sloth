@@ -312,6 +312,8 @@ make test                     # the whole suite (no root, no terminal, no networ
 make mutate                   # mutation-test the suite itself (verify the verifier)
 ```
 
+`make` builds four binaries: `sloth`, the monitor; `sloth-rf`, the RF half of the sensor as a headless daemon of its own (ADS-B, APRS, rtl_433 and GNSS from decoders that are already running; no capture, no radio, nothing transmitted; [flags](docs/wiki/cli-reference.md#sloth-rf), built but not yet installed, [ADR 0010](docs/wiki/adr/0010-wifi-rf-daemons.md)); and on Linux the two operator helpers `sloth-ble-scan` and, where SoapySDR is installed, `sloth-sdrsweep`. `make test` builds `sloth_test`.
+
 Requires `libpcap-dev` and `libncursesw-dev` for the full build. The test build needs neither. The mutate target is opt-in and offline — see [`docs/wiki/mutation-testing.md`](docs/wiki/mutation-testing.md).
 
 ## Keybindings
@@ -627,7 +629,8 @@ Packet decode runs in a dedicated pcap thread. The eight log modules each have a
 include/sloth.h            shared types: state, packet, conn, alert, device, ...
 include/sloth_views.def    the view list; enum, labels, keys and dispatch expand from it
 include/sloth_alerts.def   the alert-type list; enum, names and ATT&CK techniques expand from it
-src/main.c                 CLI, signal handlers, main loop
+src/main.c                 sloth: CLI, signal handlers, main loop
+src/rf/                    sloth-rf: its CLI, headless loop and file-only platform
 src/tui.c                  ncurses / ANSI rendering, key polling
 src/platform/linux*.c      Linux backends (rtnetlink, nl80211, /proc, INET_DIAG)
 src/capture/capture.c      libpcap thread; per-protocol parser dispatch

@@ -114,13 +114,11 @@
 #include "rf_quality.h"
 #include "presence.h"
 #include "tui_palette.h"
-#include <sys/select.h>
 #include "db.h"
 #include "discovery.h"
 #include "dns.h"
 #include "observe.h"
 #include "privdrop.h"
-#include <pwd.h>
 #include "scan.h"
 #include "capture/probe.h"     /* self-stubbing without WITH_PCAP */
 #ifdef WITH_PCAP
@@ -142,6 +140,10 @@
 #include "victron.h"             /* --victron (2026-11-15) */
 #include "capture/victron_reader.h"
 #include "ble_hci.h"
+#include "capture_side.h"
+#include "daemon_start.h"
+#include "gnss_flags.h"
+#include "rf_flags.h"
 
 static sloth_state_t g_state;
 /* Written from on_signal(), so the type is the one C99 7.14.1.1 allows a
@@ -210,20 +212,6 @@ static void chanhop_drive(sloth_state_t *s) {
     chanhop_service(&g_chanhop, s, now_ms, delta);
 }
 #endif
-
-/* Wait out a poll interval without touching the terminal (#50).
- * Mirrors tui_poll_key's wake behaviour so headless and interactive
- * runs have the same cadence — an alert wakes both early. */
-static void headless_wait(int timeout_ms, int wake_fd) {
-    struct timeval tv;
-    tv.tv_sec  = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    if (wake_fd < 0) { select(0, NULL, NULL, NULL, &tv); return; }
-    fd_set rfds;
-    FD_ZERO(&rfds);
-    FD_SET(wake_fd, &rfds);
-    select(wake_fd + 1, &rfds, NULL, NULL, &tv);
-}
 
 /* The research corpus (#73), NULL when --with-research was not given
  * or the corpus could not be opened. Passed explicitly to the one
@@ -860,6 +848,10 @@ static int tune_alias(const char *flag, tune_id_t id, const char *value) {
 }
 
 int main(int argc, char **argv) {
+    /* This is the daemon with the capture (#213): the whole rule table,
+     * the capture's source rows and the resolver's count go to the
+     * services sloth-rf shares, before anything can tick. */
+    capture_side_install();
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
     signal(SIGUSR1, on_report_signal);
@@ -893,16 +885,13 @@ int main(int argc, char **argv) {
     int         bt_monitor   = 0;        /* --bt-monitor (#144 slice 2) */
     const char *bt_capture   = NULL;     /* --bt-capture PATH (#144 slice 3) */
     int         ble_rotation_hints = 0;  /* --ble-rotation-hints (#156) */
-    const char *location_arg = NULL;     /* --location LAT,LON[,ALT] (2026-10-27) */
-    const char *gps_arg      = NULL;     /* --gps SPEC (2026-10-27) */
-    int         gps_allow_remote = 0;    /* --gps-allow-remote */
-    int         gps_baud     = 0;        /* --gps-baud N; 0 = 9600 */
-    const char *adsb_arg     = NULL;     /* --adsb SPEC (#26 slice 1) */
-    const char *aprs_arg     = NULL;     /* --aprs SPEC (2026-11-05) */
-    uint32_t    aprs_freq    = 0;        /* --aprs-freq HZ (#204) */
-    int         aprs_silent_h = -1;      /* --aprs-silent-hours N, -1 default */
-    const char *rtl433_arg   = NULL;     /* --rtl433 SPEC (#208) */
-    const char *victron_arg  = NULL;     /* --victron SPEC (2026-11-15) */
+    /* --location, --gps, --gps-allow-remote, --gps-baud (2026-10-27) and
+     * --adsb (#26), --aprs, --aprs-freq, --aprs-silent-hours (#204),
+     * --rtl433 (#208), --victron (2026-11-15). The two structs and what
+     * checks them are shared with sloth-rf (#213): src/gnss_flags.h,
+     * src/rf_flags.h. */
+    gnss_flags_t gnss_flags = { NULL, NULL, 0, 0 };
+    rf_flags_t   rf_flags   = RF_FLAGS_INIT;
     const char *replay_arg   = NULL;     /* --replay FILE[,FILE] (#119) */
     long        max_ticks    = 0;        /* --ticks N; 0 = run until quit */
     time_t      session_start = sloth_wall();
@@ -947,17 +936,13 @@ int main(int argc, char **argv) {
             if (i + 1 < argc && argv[i + 1][0] != '-') {
                 data_socket = argv[++i];
             } else {
-                char why[256];
-                int  ok = data_socket_default_dir_ok(DATA_SOCKET_DEFAULT_DIR,
-                                                     why, sizeof(why));
-                data_socket = data_socket_default_spec(ok);
-                if (!data_socket) {
-                    char msg[768];
-                    data_socket_default_refusal(why, geteuid(),
-                                                msg, sizeof(msg));
-                    fputs(msg, stderr);
-                    return 2;
-                }
+                /* The spec is the pure resolver's (never a literal here,
+                 * never TCP); the helper checks the directory and prints
+                 * the refusal, and is shared with sloth-rf (#213). */
+                data_socket = daemon_data_socket_default(
+                    DATA_SOCKET_DEFAULT_DIR, data_socket_default_spec(1),
+                    "sloth");
+                if (!data_socket) return 2;
             }
         } else if (!strcmp(argv[i], "--refresh-ms") && i + 1 < argc) {
             char *endp = NULL;
@@ -1038,62 +1023,37 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--ble-rotation-hints")) {
             ble_rotation_hints = 1;
         } else if (!strcmp(argv[i], "--location") && i + 1 < argc) {
-            location_arg = argv[++i];
+            gnss_flags.location = argv[++i];
         } else if (!strcmp(argv[i], "--gps") && i + 1 < argc) {
-            gps_arg = argv[++i];
+            gnss_flags.gps = argv[++i];
         } else if (!strcmp(argv[i], "--adsb") && i + 1 < argc) {
-            adsb_arg = argv[++i];
+            rf_flags.adsb = argv[++i];
         } else if (!strcmp(argv[i], "--aprs") && i + 1 < argc) {
-            aprs_arg = argv[++i];
+            rf_flags.aprs = argv[++i];
         } else if (!strcmp(argv[i], "--rtl433") && i + 1 < argc) {
-            rtl433_arg = argv[++i];
+            rf_flags.rtl433 = argv[++i];
         } else if (!strcmp(argv[i], "--victron") && i + 1 < argc) {
-            victron_arg = argv[++i];
+            rf_flags.victron = argv[++i];
         } else if (!strcmp(argv[i], "--aprs-freq") && i + 1 < argc) {
-            if (aprs_freq_parse(argv[++i], &aprs_freq) != 0) {
-                fprintf(stderr, "sloth: --aprs-freq %s: want the decoder's "
-                                "configured frequency in Hz, 144000000.."
-                                "148000000 (e.g. 144390000)\n", argv[i]);
+            if (rf_flag_aprs_freq(argv[++i], &rf_flags.aprs_freq) != 0)
                 return 2;
-            }
         } else if (!strcmp(argv[i], "--aprs-silent-hours") && i + 1 < argc) {
-            char *end = NULL;
-            long h = strtol(argv[++i], &end, 10);
-            if (!end || end == argv[i] || *end || h < 0 || h > APRS_SILENT_H_MAX) {
-                fprintf(stderr, "sloth: --aprs-silent-hours %s: want 0 (off) "
-                                "to %d\n", argv[i], APRS_SILENT_H_MAX);
+            if (rf_flag_aprs_silent_hours(argv[++i],
+                                          &rf_flags.aprs_silent_h) != 0)
                 return 2;
-            }
-            aprs_silent_h = (int)h;
         } else if (!strcmp(argv[i], "--gps-allow-remote")) {
-            gps_allow_remote = 1;
+            gnss_flags.allow_remote = 1;
         } else if (!strcmp(argv[i], "--gps-baud") && i + 1 < argc) {
-            char *end = NULL;
-            long b = strtol(argv[++i], &end, 10);
-            if (!end || *end || !gps_reader_baud_ok((int)b)) {
-                fprintf(stderr, "sloth: --gps-baud %s: want 4800, 9600, "
-                                "19200, 38400, 57600 or 115200\n", argv[i]);
-                return 2;
-            }
-            gps_baud = (int)b;
+            if (gnss_flag_baud(argv[++i], &gnss_flags.baud) != 0) return 2;
         } else if (!strcmp(argv[i], "--hop")) {
             g_hop_enabled = 1;
         } else if (!strcmp(argv[i], "--tune-list")) {
             tune_print_list(stdout);
             return 0;
         } else if (!strcmp(argv[i], "--tune")) {
-            if (i + 1 >= argc) {
-                fprintf(stderr, "sloth: --tune needs name=value "
-                                "(see --tune-list)\n");
+            if (daemon_flag_tune(i + 1 < argc ? argv[i + 1] : NULL) != 0)
                 return 2;
-            }
-            char terr[160];
-            if (tune_set(argv[++i], terr, sizeof(terr)) != 0) {
-                /* A mistyped knob exits rather than running with the
-                 * default the operator thought they had changed (#82). */
-                fprintf(stderr, "sloth: --tune %s\n", terr);
-                return 2;
-            }
+            i++;
         } else if (!strcmp(argv[i], "--allow-active")) {
             allow_active = 1;
         } else if (!strcmp(argv[i], "--user") && i + 1 < argc) {
@@ -1191,15 +1151,7 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--replay") && i + 1 < argc) {
             replay_arg = argv[++i];
         } else if (!strcmp(argv[i], "--ticks") && i + 1 < argc) {
-            /* Strict, like --tune: a batch job that ran forever because
-             * "3x" parsed as 0 would hang the CI step it was written for. */
-            char *end = NULL;
-            long v = strtol(argv[++i], &end, 10);
-            if (!end || *end || end == argv[i] || v < 1 || v > 1000000) {
-                fprintf(stderr, "sloth: --ticks %s: want 1..1000000\n", argv[i]);
-                return 2;
-            }
-            max_ticks = v;
+            if (daemon_flag_ticks(argv[++i], &max_ticks) != 0) return 2;
         } else if (!strcmp(argv[i], "--no-color") ||
                    !strcmp(argv[i], "--no-colour")) {
             tui_set_color(0);
@@ -1321,149 +1273,14 @@ int main(int argc, char **argv) {
         return 2;
     }
 #endif
-    /* 2026-10-27: --location is validated here so a mistyped position
-     * exits before anything opens; --gps is checked for shape and
-     * scope here and opened just before the privilege drop. */
-    if (location_arg) {
-        char lerr[160];
-        if (gps_location_parse_fixed(location_arg, lerr, sizeof(lerr)) != 0) {
-            fprintf(stderr, "sloth: --location %s: %s\n", location_arg, lerr);
-            return 2;
-        }
-        fprintf(stderr, "sloth: --location fixed sensor position %s (WGS84): "
-                        "stamped on new alert incidents in the JSONL log, "
-                        "--db and the evidence manifests\n", location_arg);
-    }
-    if (gps_baud && !gps_arg) {
-        fprintf(stderr, "sloth: --gps-baud needs --gps /dev/...\n");
+    /* The receiver's flags, then the decoders': --location and --gps
+     * for shape and scope (the receiver is opened just before the
+     * privilege drop), each decoder's SPEC and nothing else. Shared
+     * with sloth-rf, so the two refuse alike (#213). */
+    if (gnss_flags_check(&gnss_flags, strict_lock, replay_arg != NULL) != 0)
         return 2;
-    }
-    if (gps_arg) {
-        gps_spec_t gsp;
-        char gerr[160];
-        if (gps_spec_parse(gps_arg, &gsp, gerr, sizeof(gerr)) != 0) {
-            fprintf(stderr, "sloth: --gps %s: %s\n", gps_arg, gerr);
-            return 2;
-        }
-        if (replay_arg) {
-            fprintf(stderr, "sloth: --replay reads savefiles, not a live "
-                            "receiver: --gps does not apply (--location "
-                            "does)\n");
-            return 2;
-        }
-        if (gps_spec_is_remote(&gsp) && strict_lock) {
-            fprintf(stderr, "sloth: --strict refuses a remote gpsd (%s): "
-                            "use gpsd://127.0.0.1 or a serial device, or "
-                            "drop --strict\n", gsp.host);
-            return 2;
-        }
-        if (gps_spec_is_remote(&gsp) && !gps_allow_remote) {
-            fprintf(stderr, "sloth: --gps %s is not loopback; pass "
-                            "--gps-allow-remote to read a remote gpsd\n",
-                    gps_arg);
-            return 2;
-        }
-        if (gps_baud && gsp.kind != GPS_SPEC_SERIAL) {
-            fprintf(stderr, "sloth: --gps-baud applies to a serial "
-                            "--gps /dev/... only\n");
-            return 2;
-        }
-    } else if (gps_allow_remote) {
-        fprintf(stderr, "sloth: --gps-allow-remote ignored: no --gps\n");
-    }
-    /* #26 slice 1: --adsb. Only the SPEC is checked here: the file is
-     * opened by the worker each poll, after the drop, and a decoder
-     * that has not written it yet is a state (waiting / error), not a
-     * refusal. */
-    if (adsb_arg) {
-        char aerr[200];
-        if (replay_arg) {
-            fprintf(stderr, "sloth: --replay reads savefiles, not a live "
-                            "decoder: --adsb does not apply\n");
-            return 2;
-        }
-        if (adsb_reader_configure(adsb_arg, aerr, sizeof(aerr)) != 0) {
-            fprintf(stderr, "sloth: --adsb %s: %s\n", adsb_arg, aerr);
-            return 2;
-        }
-        adsb_spec_t asp;
-        if (adsb_spec_parse(adsb_arg, &asp, NULL, 0) == 0) {
-            if (asp.kind == ADSB_SPEC_SBS || asp.kind == ADSB_SPEC_BEAST)
-                /* MISSION.md section 2: a network-using input is announced. */
-                fprintf(stderr, "sloth: --adsb connecting to the decoder's "
-                                "%s output at %s%s%s:%d over TCP after the "
-                                "privilege drop (loopback; read-only: sloth "
-                                "sends nothing on the socket; no SDR)\n",
-                        asp.kind == ADSB_SPEC_BEAST ? "Beast" : "SBS",
-                        strchr(asp.host, ':') ? "[" : "", asp.host,
-                        strchr(asp.host, ':') ? "]" : "", asp.port);
-            else
-                fprintf(stderr, "sloth: --adsb reading %s about once a second "
-                                "(read-only; no SDR, no network)\n", asp.path);
-        }
-    }
-    /* --aprs: the SPEC only, as --adsb; Dire Wolf creates its log with
-     * its first packet, so a file not there yet is a state. */
-    if (aprs_arg) {
-        char aerr[200];
-        if (replay_arg) {
-            fprintf(stderr, "sloth: --replay reads savefiles, not a live "
-                            "decoder: --aprs does not apply\n");
-            return 2;
-        }
-        if (aprs_reader_configure(aprs_arg, aerr, sizeof(aerr)) != 0) {
-            fprintf(stderr, "sloth: --aprs %s: %s\n", aprs_arg, aerr);
-            return 2;
-        }
-        char apath[256];
-        if (aprs_spec_parse(aprs_arg, apath, sizeof(apath), NULL, 0) == 0)
-            fprintf(stderr, "sloth: --aprs tailing %s from its end "
-                            "(read-only; no radio, no network)\n", apath);
-        aprs_set_expect(aprs_freq, aprs_silent_h < 0 ? APRS_SILENT_S_DEFAULT
-                                                     : aprs_silent_h * 3600);
-    } else if (aprs_freq || aprs_silent_h >= 0) {
-        fprintf(stderr, "sloth: --aprs-freq and --aprs-silent-hours "
-                        "describe the --aprs decoder: give --aprs\n");
+    if (rf_flags_check(&rf_flags, replay_arg != NULL) != 0)
         return 2;
-    }
-    /* --rtl433 (#208): the SPEC only, as --aprs. rtl_433 creates its
-     * event log with its first decode, so a file not there yet is a
-     * state. sloth reads the file and never the SDR. */
-    if (rtl433_arg) {
-        char rerr[200];
-        if (replay_arg) {
-            fprintf(stderr, "sloth: --replay reads savefiles, not a live "
-                            "decoder: --rtl433 does not apply\n");
-            return 2;
-        }
-        if (rtl433_reader_configure(rtl433_arg, rerr, sizeof(rerr)) != 0) {
-            fprintf(stderr, "sloth: --rtl433 %s: %s\n", rtl433_arg, rerr);
-            return 2;
-        }
-        char rpath[256];
-        if (rtl433_spec_parse(rtl433_arg, rpath, sizeof(rpath), NULL, 0) == 0)
-            fprintf(stderr, "sloth: --rtl433 tailing %s from its end "
-                            "(read-only; no SDR, no network)\n", rpath);
-    }
-    /* --victron: sloth-va's output, as --rtl433. sloth-va is the
-     * component that connects to the devices (ADR 0011); sloth only
-     * reads what it wrote, and creates nothing at the path. */
-    if (victron_arg) {
-        char verr[200];
-        if (replay_arg) {
-            fprintf(stderr, "sloth: --replay reads savefiles, not a live "
-                            "source: --victron does not apply\n");
-            return 2;
-        }
-        if (victron_reader_configure(victron_arg, verr, sizeof(verr)) != 0) {
-            fprintf(stderr, "sloth: --victron %s: %s\n", victron_arg, verr);
-            return 2;
-        }
-        char vpath[256];
-        if (victron_spec_parse(victron_arg, vpath, sizeof(vpath), NULL, 0) == 0)
-            fprintf(stderr, "sloth: --victron tailing %s from its end "
-                            "(read-only; sloth-va's file, no Bluetooth)\n", vpath);
-    }
 
     char replay_paths[REPLAY_MAX_FILES][REPLAY_PATH_MAX];
     int  replay_count = 0;
@@ -1552,23 +1369,7 @@ int main(int argc, char **argv) {
                         "strict observation for this run\n");
         return prof.exit_code;
     case OBSERVE_PROFILE_REFUSE_ROUTABLE_SOCKET_UNDER_STRICT:
-        /* #84, owner ruling 2026-10-06. The loopback default
-         * (tcp:127.0.0.1:8765) and a unix: path keep working, because
-         * neither leaves the host and README has published bare
-         * `--strict --data-socket` as usable.
-         *
-         * --data-socket-allow-remote does not override this: that flag
-         * is how an operator says "expose this to the LAN", --strict is
-         * how they say "not on this run", and a lock another flag can
-         * override is not a lock. */
-        fprintf(stderr,
-                "sloth: --strict refuses a routable --data-socket (%s).\n"
-                "       A routable listener transmits to whoever connects, "
-                "which is what\n"
-                "       --strict declines for this run. Bind loopback "
-                "(tcp:127.0.0.1:PORT)\n"
-                "       or a unix: path, or drop --strict.\n",
-                data_socket);
+        daemon_strict_socket_refusal(data_socket);
         return prof.exit_code;
     case OBSERVE_PROFILE_OK:
         break;
@@ -1600,35 +1401,13 @@ int main(int argc, char **argv) {
      * Applied below, between the capture opens (which need the
      * privilege) and the sinks (which must be created as the account
      * the run will live as). */
-    privdrop_req_t pd_req;
-    memset(&pd_req, 0, sizeof(pd_req));
-    privdrop_probe(&pd_req);
-    pd_req.hop          = g_hop_enabled;
-    pd_req.allow_active = prof.active_allowed;
-    pd_req.no_privdrop  = no_privdrop;
-    pd_req.user_given   = privdrop_user != NULL;
-    if (!privdrop_user) privdrop_user = PRIVDROP_DEFAULT_USER;
-    {
-        /* The reentrant form: nothing is threaded yet, but nothing here
-         * should depend on that staying true. A lookup error (not just
-         * "no such account") reads as unresolved, which refuses an
-         * explicit --user and announces the default case. */
-        static char pwbuf[16384];
-        struct passwd pwd, *pw = NULL;
-        if (getpwnam_r(privdrop_user, &pwd, pwbuf, sizeof(pwbuf), &pw) != 0)
-            pw = NULL;
-        if (pw) {
-            pd_req.user_resolved = 1;
-            pd_req.uid           = pw->pw_uid;
-            pd_req.gid           = pw->pw_gid;
-        }
-    }
+    privdrop_req_t  pd_req;
     privdrop_plan_t pd_plan;
-    privdrop_resolve(&pd_req, &pd_plan);
-    if (pd_plan.exit_code != 0) {
-        fprintf(stderr, "sloth: %s (--user %s)\n", pd_plan.reason,
-                privdrop_user);
-        return pd_plan.exit_code;
+    {
+        int pd_rc = daemon_privdrop_plan(&privdrop_user, no_privdrop,
+                                         g_hop_enabled, prof.active_allowed,
+                                         &pd_req, &pd_plan);
+        if (pd_rc != 0) return pd_rc;
     }
 
     memset(&g_state, 0, sizeof(g_state));
@@ -1775,31 +1554,17 @@ int main(int argc, char **argv) {
             fprintf(stderr, "sloth: %s\n", capture_scope_reason(v));
     }
 
-    /* 2026-10-27: --gps. A serial receiver is opened here, before the
-     * drop, because the drop clears supplementary groups and the device
-     * is usually group dialout; gpsd is only recorded here and dialled
-     * by the worker after the drop. Read-only either way except for the
-     * one ?WATCH line gpsd needs, which is announced. */
-    if (gps_arg) {
-        char gerr[320];
-        if (gps_reader_configure(gps_arg, gps_allow_remote, gps_baud,
-                                 gerr, sizeof(gerr)) != 0) {
-            fprintf(stderr, "sloth: --gps %s\n", gerr);
+    /* --gps: the receiver, before the drop (src/gnss_flags.h says why
+     * a serial device has to be opened on this side of it). */
+    if (gnss_flags_open(&gnss_flags) != 0) {
 #ifdef WITH_PCAP
-            probe_stop();
-            capture_stop();
-            bt_monitor_stop();
-            bt_capture_stop();
+        probe_stop();
+        capture_stop();
+        bt_monitor_stop();
+        bt_capture_stop();
 #endif
-            g_platform.cleanup();
-            return 2;
-        }
-        gps_spec_t gsp;
-        char ann[400];
-        if (gps_spec_parse(gps_arg, &gsp, NULL, 0) == 0) {
-            gps_spec_announce(&gsp, ann, sizeof(ann));
-            fprintf(stderr, "sloth: --gps %s\n", ann);
-        }
+        g_platform.cleanup();
+        return 2;
     }
 
     /* #140: drop here — every handle that needs CAP_NET_RAW is open,
@@ -1810,26 +1575,16 @@ int main(int argc, char **argv) {
      * sink after it is opened as the account the run lives as, so
      * secure_file's ownership check holds against that account. A
      * failed step fails closed: half-dropped is not a state to run in. */
-    {
-        char pd_err[160];
-        if (privdrop_apply(&pd_plan, pd_err, sizeof(pd_err)) != 0) {
-            fprintf(stderr, "sloth: privilege drop failed: %s — refusing "
-                            "to run (--no-privdrop to keep privileges)\n",
-                    pd_err);
+    if (daemon_privdrop_apply(&pd_req, &pd_plan, privdrop_user) != 0) {
 #ifdef WITH_PCAP
-            probe_stop();
-            capture_stop();
-            bt_monitor_stop();
-            bt_capture_stop();
+        probe_stop();
+        capture_stop();
+        bt_monitor_stop();
+        bt_capture_stop();
 #endif
-            gps_reader_stop();
-            g_platform.cleanup();
-            return 2;
-        }
-        char pd_msg[320];
-        privdrop_describe(&pd_req, &pd_plan, privdrop_user, pd_msg,
-                          sizeof(pd_msg));
-        if (pd_msg[0]) fprintf(stderr, "%s\n", pd_msg);
+        gps_reader_stop();
+        g_platform.cleanup();
+        return 2;
     }
     dns_init();
 
@@ -1897,53 +1652,16 @@ int main(int argc, char **argv) {
                     "retention disabled (--handshake-retention 0): artifacts "
                     "are kept until you delete them\n", eapol_dir);
     }
-    if (jsonl_path) {
-        if (!jsonl_open(jsonl_path)) {
-            fprintf(stderr, "sloth: could not open jsonl output %s\n",
-                    jsonl_error());
-            return 1;
-        }
-    }
+    if (jsonl_path && daemon_open_jsonl(jsonl_path) != 0) return 1;
     /* sys_status reports the filesystem its output lands on: the
      * database's, else the JSONL file's. */
     sys_status_set_disk_path(db_path ? db_path : jsonl_path, db_path ? "db" : "jsonl");
-    if (db_path) {
-        if (!db_open(db_path)) {
-            /* Diagnostic already printed. A DB the operator explicitly
-             * asked for and which cannot be opened is a startup error,
-             * not something to silently continue without. */
-            return 1;
-        }
-        fprintf(stderr,
-                "sloth: db %s (schema v%d, every %ds, retain %dd, max %dMiB)\n",
-                db_path, DB_SCHEMA_VERSION, db_interval(),
-                db_retain_days(), db_max_mb());
-        /* Record the visit so a later run can answer "what is new since
-         * last time" (#56). --site-label already carries the operator's
-         * name for the site, so reuse it rather than inventing one. */
-        db_session_begin(site_label, session_start);
-        if (db_previous_session_end() > 0)
-            fprintf(stderr, "sloth: previous visit ended %ld\n",
-                    (long)db_previous_session_end());
-    }
+    if (db_path && daemon_open_db(db_path, site_label, session_start) != 0)
+        return 1;
     if (data_socket) {
-        if (data_socket_init_ex(data_socket, ds_allow_remote) != 0) {
-            /* error already printed by data_socket_init_ex */
+        if (daemon_open_data_socket(data_socket, ds_allow_remote,
+                                    DATA_SOCKET_DEFAULT_SPEC) != 0)
             return 1;
-        }
-        fprintf(stderr, "sloth: data-socket listening on %s\n", data_socket);
-        /* #135: a loopback TCP listener authenticates nobody — every
-         * local account can connect to 127.0.0.1 (CWE-306) — where a
-         * unix: path is created 0600 and the kernel vouches for the
-         * peer's uid. Announced, not changed: the bare-flag default
-         * above is #136's ruling, and MISSION §2 asks that an exposure
-         * be said out loud rather than silently inherited. */
-        if (strncmp(data_socket, "tcp:", 4) == 0 &&
-            data_socket_spec_is_remote(data_socket) == 0)
-            fprintf(stderr,
-                    "sloth: data-socket %s is readable by every local account; "
-                    "prefer unix:/run/sloth/sloth.sock (0600, kernel-checked peer)\n",
-                    data_socket);
         /* #29: advertise the socket over mDNS so the sloth-ios client can
          * discover it by name — but only when it's bound to a routable
          * address (loopback/unix publish nothing) and the operator hasn't
@@ -2131,7 +1849,7 @@ int main(int argc, char **argv) {
             /* No draw, no key read, no termios. Just wait out the poll
              * interval — honouring the wake fd so an alert still shortens
              * the cycle exactly as it does interactively. */
-            headless_wait(g_state.poll_ms, event_wake_fd());
+            daemon_wait(g_state.poll_ms, event_wake_fd());
             event_wake_drain();
         } else {
             tui_draw(&g_state);

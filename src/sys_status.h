@@ -194,6 +194,39 @@ void sys_status_emit(const sloth_state_t *s);
  * -o). `what` is "db" or "jsonl". NULL or "" clears it. */
 void sys_status_set_disk_path(const char *path, const char *what);
 
+/* ── The capture side (#213) ─────────────────────────────────────────
+ *
+ * Four of the source rows (capture, monitor, btmon, btcap) and the
+ * beacon-recall sample describe the libpcap capture and what hangs off
+ * it. They are filled by src/sys_status_capture.c, which this file does
+ * not name, so a daemon with no capture (sloth-rf, ADR 0010) links
+ * sys_status without linking the capture. The daemon that has one
+ * registers it once at start (src/capture_side.c).
+ *
+ * Unregistered, those four rows stay unnamed (name NULL): no
+ * source_status is written for them, sys_status's `sources` counts only
+ * the named rows, and SENSOR_SOURCE_DOWN never judges them. "This
+ * daemon has no monitor radio" is not "the monitor radio is not
+ * configured": the second is a statement about the host, and on a host
+ * running both daemons it would be false. */
+typedef struct {
+    /* Fill src[SYS_SRC_CAPTURE..SYS_SRC_BTCAP]; `src` has SYS_SRC_COUNT
+     * rows, zeroed. */
+    void (*fill)(const sloth_state_t *s, sys_source_t *src);
+    /* beacon_recall_stat(), src/beacon_snoop.h. */
+    void (*recall)(beacon_recall_stat_t *out, uint64_t now_ms);
+} sys_capture_side_t;
+void sys_status_set_capture_side(const sys_capture_side_t *c);
+
+/* For a row filler: tie a source to the receiver sysfs says owns
+ * `iface` (hw, desc, driver), and whether the last receiver scan found
+ * `iface` to be a wireless netdev. */
+void sys_status_tie(sys_source_t *o, const char *iface);
+int  sys_status_cap_wireless(const char *iface);
+
+/* src/sys_status_capture.c: the capture side's row filler. */
+void sys_status_capture_fill(const sloth_state_t *s, sys_source_t *src);
+
 const sys_snapshot_t *sys_status_get(void);
 void sys_status_reset(void);
 

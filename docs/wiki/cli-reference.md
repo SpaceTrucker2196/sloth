@@ -20,13 +20,16 @@ red suite, and so is the reverse. The flag *descriptions* are not gated —
 only that each flag and key is here.
 
 **Sources**: `src/main.c` (`print_usage`, `main` argv loop, `handle_key`),
+`src/rf/rf_args.c` and `src/rf/main.c` (sloth-rf), `src/gnss_flags.c`,
+`src/rf_flags.c` and `src/daemon_start.c` (the flag checks both daemons
+call), `tests/replay/rf_refusals.sh`,
 `include/sloth_views.def` (expanded by `src/view_labels.c`),
 `include/sloth.h`; `src/persist_health.c`
 (`persist_badge`), `src/tui.c` (`draw_tabbar`, both front ends) and
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-11-15 (`--victron SPEC`: tail the JSONL the `sloth-va` helper writes, the owner's Victron readings; file-only, sloth connects to nothing); 2026-11-14 (`--rtl433 SPEC`, #208: tail the JSON event log a local rtl_433 already writes, as a passive sub-GHz sensor; file-only, no SDR and no network); 2026-11-13 (`--aprs-freq HZ` and `--aprs-silent-hours N`, #204: the decoder's declared frequency against the GNSS-derived region, and the silent-decoder threshold); 2026-11-12 (`--monitor-iface NAME` pins the monitor radio); 2026-11-12 (`--gps gpsd://`: the one line sent is `?WATCH={"enable":true,"json":true,"pps":true}`, #182; `report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); 2026-11-12 (`karma.forge_assoc_s`, #187); 2026-11-12 (`report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); ---
+**Last updated**: 2026-11-15 (#213: the `sloth-rf` section, the second daemon's flags, `--victron` among them; the receiver's and decoders' flag checks are one copy both mains call); 2026-11-15 (`--victron SPEC`: tail the JSONL the `sloth-va` helper writes, the owner's Victron readings; file-only, sloth connects to nothing); 2026-11-14 (`--rtl433 SPEC`, #208: tail the JSON event log a local rtl_433 already writes, as a passive sub-GHz sensor; file-only, no SDR and no network); 2026-11-13 (`--aprs-freq HZ` and `--aprs-silent-hours N`, #204: the decoder's declared frequency against the GNSS-derived region, and the silent-decoder threshold); 2026-11-12 (`--monitor-iface NAME` pins the monitor radio); 2026-11-12 (`--gps gpsd://`: the one line sent is `?WATCH={"enable":true,"json":true,"pps":true}`, #182; `report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); 2026-11-12 (`karma.forge_assoc_s`, #187); 2026-11-12 (`report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); ---
 
 ## Synopsis
 
@@ -525,8 +528,8 @@ prefer whichever suits their consumer:
   failed: <reason>`, behind a `reported` latch (`src/secure_file.c`);
 - `storage_failures` plus the per-sink `storage_jsonl_failures` /
   `storage_pcap_failures` / `storage_eapol_failures` on every
-  `sensor_health` record, and `pcap_write_failures` on an alert record
-  (`src/jsonl.c`);
+  `sensor_health` record (`src/jsonl.c`, `src/jsonl_core.c`), and
+  `pcap_write_failures` on an alert record (`src/jsonl_core.c`);
 - `pcap_dir_free_mb` and `pcap_dir_free_inodes` on `sensor_health`,
   which is the only one that says anything *before* a write fails.
 
@@ -550,6 +553,88 @@ only a configured `storage.*` floor refuses anything in advance. See
 | `0` | Clean exit (incl. `--version`, `--help`, and the end of a `--ticks N` run). |
 | `1` | A `--replay` file that cannot be opened, is not a savefile, has a datalink with no route, or is damaged part-way (#119). |
 | `2` | Bad argument, or a fail-closed refusal (`--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--strict` with a routable `--data-socket`, `--eapol-dir` without `--collect-handshakes`, `--pcap-dir` and `--eapol-dir` naming one directory (#166), a `--handshake-retention` value outside `0..36500`, a `--correlate-retain`/`--db-*`/`--wps-*` value that is not an integer inside its knob's range (#120), a `--user` naming no account or needing root it does not have, `--user` with `--no-privdrop`, a privilege drop that failed or did not read back, `--iface` naming a raw HCI device `bluetoothN`, a `--monitor-iface` given twice, not an interface name, naming `bluetoothN`, with `--replay` or in a `WITH_PCAP=0` build, `--bt-monitor` with `--replay` or in a `WITH_PCAP=0` build, a `--location` outside its ranges, a malformed `--gps` SPEC, `--gps` with `--replay`, a `--gps` device that cannot be opened, a non-loopback gpsd without `--gps-allow-remote` or under `--strict`, a `--gps-baud` outside its list, a malformed or unsupported `--adsb` SPEC (a non-loopback `sbs://` or `beast://` host), `--adsb` with `--replay`, a malformed `--aprs` SPEC, `--aprs` with `--replay`, a malformed `--rtl433` SPEC, `--rtl433` with `--replay`, a malformed `--victron` SPEC, `--victron` with `--replay`). |
+
+## sloth-rf
+
+`sloth-rf` is the RF half of the sensor as a daemon of its own (#213,
+[ADR 0010](adr/0010-wifi-rf-daemons.md), [[architecture-rf-split]]): it
+reads a GNSS receiver, the files or loopback sockets that readsb,
+Dire Wolf and rtl_433 write and the file `sloth-va` writes, and makes the JSONL records, database rows
+and alerts `sloth` makes from the same inputs. It opens no radio, tunes
+no SDR and transmits nothing (`MISSION.md` §2); the one line it writes
+to a peer is gpsd's `?WATCH`, announced. It has no terminal interface:
+slothweb is its interface, once slothweb reads a second daemon (#214).
+
+It is built by a plain `make` beside `sloth` and is **not installed
+yet**: the unit and the migrate tool are #215. Until cutover (#216)
+`sloth` keeps every flag below too, so the two must not be pointed at
+one serial GPS (a serial device opens once; both can read gpsd).
+
+Every flag `sloth-rf` shares with `sloth` is read and refused by the
+same function (`src/gnss_flags.c`, `src/rf_flags.c`,
+`src/daemon_start.c`), so the meaning, the refusal text and the exit
+code are those of the `sloth` rows above. The messages say `sloth:` in
+both daemons: it is the prefix every shared module already prints, and
+it is what makes the two refusals the same bytes. `make replay-check`
+runs both binaries on 22 refused command lines and compares stderr
+(`tests/replay/rf_refusals.sh`).
+
+| Flag | Arg | Default | Effect |
+|------|-----|---------|--------|
+| `--adsb` | `SPEC` | off | As `sloth`'s (Location group above; [[adsb]]). |
+| `--aprs` | `SPEC` | off | As `sloth`'s ([[aprs]]). |
+| `--aprs-freq` | `HZ` | not declared | As `sloth`'s. Needs `--aprs`. |
+| `--aprs-silent-hours` | `N` | `6` | As `sloth`'s. Needs `--aprs`. |
+| `--rtl433` | `SPEC` | off | As `sloth`'s ([[rtl433]]). |
+| `--victron` | `SPEC` | off | As `sloth`'s ([[victron]]): the file `sloth-va` writes, read only. This daemon opens no Bluetooth socket; `sloth-va` is the component that connects (ADR 0011). |
+| `--gps` | `SPEC` | off | As `sloth`'s ([[gnss]], [[location]]). Here it also feeds the `gnss_fix` / `gnss_sky` / `gnss_sat` records and the four `GNSS_*` rules, which are sloth-rf's after cutover. A serial device is opened before the privilege drop, as in `sloth`. |
+| `--gps-allow-remote` | — | off | As `sloth`'s. `--strict` refuses a remote gpsd regardless. |
+| `--gps-baud` | `N` | 9600 | As `sloth`'s. |
+| `--location` | `LAT,LON[,ALT]` | off | As `sloth`'s. Stamps this daemon's alerts and gives the APRS region check a position without a receiver. |
+| `--jsonl` | `FILE` | off | Append the JSONL record stream to `FILE`: `sloth`'s `-o` / `--out`, which sloth-rf also accepts as spellings of the same flag. Created 0600; an existing file must be private and the run's own. |
+| `--db` | `FILE` | off | A SQLite database with sloth's own DDL and `DB_SCHEMA_VERSION` ([[sqlite-schema]]). The `gnss_*`, `adsb_*`, `aprs_*`, `sensors`, `alerts` / `alert_incidents`, `sessions` and `sensor_positions` tables fill; every capture table (`devices`, `device_positions`, `beacon_aps`, …) stays empty, because no stage of this daemon builds a device. The `--db-*` alias flags are not taken: use `--tune db.max_mb=N`, `db.retain_days=N`, `db.interval_secs=N`. |
+| `--site-label` | `TEXT` | — | Label for the `--db` session row. |
+| `--data-socket` | `[SPEC]` | off | As `sloth`'s, with its own default: bare, it is `unix:/run/sloth-rf/sloth-rf.sock`, refused (exit 2, with the remedy naming `RuntimeDirectory=sloth-rf`) when `/run/sloth-rf` is absent or not owned by root or this user. Never TCP by default, and never advertised over mDNS. |
+| `--data-socket-allow-remote` | — | off | As `sloth`'s. |
+| `--strict` | — | off | Refuses a remote gpsd and a routable `--data-socket`, as in `sloth`. The rest of what `--strict` locks in `sloth` (the resolver, the scan trigger) does not exist here. |
+| `--tune` | `NAME=VALUE` | — | As `sloth`'s; the registry is shared, so `--tune-list` prints every knob, of which this daemon reads the `gps.*`, `gnss.*`, `adsb.*`, `db.*` and `socket.*` ones. |
+| `--tune-list` | — | — | Print every knob, then exit 0. |
+| `--user` | `NAME` | `sloth` | As `sloth`'s. Nothing here keeps a capability after the drop. |
+| `--no-privdrop` | — | off | As `sloth`'s. |
+| `--ticks` | `N` | run until a signal | Exit 0 after `N` poll ticks. |
+| `--version`, `-V` | — | — | `sloth-rf <version>` and the loaded sqlite. No `pcap:` line: it loads no libpcap. |
+| `--help`, `-h` | — | — | Usage, on stderr; exit 0. |
+
+Anything else is `unknown argument:` and exit 2, including every flag
+of `sloth`'s capture (`--iface`, `--hop`, `--allow-active`,
+`--bt-monitor`, `--replay`, `--pcap-dir`, `--headless`, …): a daemon
+that accepted `--hop` and did nothing would read as one that can retune
+a radio.
+
+What it writes, and how that differs from `sloth`'s stream:
+
+- **Records**: `gnss_fix`, `gnss_sky`, `gnss_sat`, `adsb_aircraft`,
+  `aprs_packet`, `aprs_station`, `rtl433_device`, `victron_device`
+  (with `--victron`), `sensor`, `alert` and the `alert.*` lifecycle,
+  `sys_status`, `sys_sensor`, `receiver_hw`, `source_status` and
+  `sensor_health`. The first seven are the bytes `sloth` writes for the
+  same input (`tests/test_rf_loop.c`); `victron_device` is written by
+  the function `sloth` calls (`src/jsonl_rf.c`).
+- **`sensor_health`** says `"daemon":"rf"` and carries the process,
+  receiver and decoder blocks only ([[jsonl-schema]]).
+- **`source_status`** has four rows (`gnss`, `adsb`, `aprs`, `rtl433`),
+  not eight (`--victron` has no row in either daemon yet); `sys_status`'s `sources` counts them.
+- **Alerts**: `GNSS_JAMMING`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`,
+  `GNSS_SPOOF_SUSPECT`, `ADSB_EMERGENCY` and `SENSOR_SOURCE_DOWN` for
+  its four sources. Not `SENSOR_UNDERVOLT` (owner ruling 2026-11-15:
+  the host has one supply and the daemon with the capture reports it).
+- **Signals**: SIGINT and SIGTERM stop it cleanly (readers, then the
+  sinks, in `sloth`'s order). SIGUSR1 is ignored; `sloth` writes its
+  report on it and this daemon has none.
+
+Exit codes are `sloth`'s: `0` clean (and `--help`, `--version`,
+`--tune-list`, the end of `--ticks N`), `1` a sink that could not be
+opened, `2` a bad argument or a fail-closed refusal.
 
 ## slothweb
 

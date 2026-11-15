@@ -1,26 +1,17 @@
-/* Loaded-library versions and the runtime sqlite floor (#142). */
+/* Loaded-library versions and the runtime sqlite floor (#142). The
+ * libpcap half is src/libver_pcap.c (#213): src/db.c needs the floor
+ * below, and a daemon with a database and no capture must not link
+ * libpcap to get it. */
 
 #include "libver.h"
 
 #include <stdio.h>
 
-#ifdef WITH_PCAP
-#include <pcap.h>
-#endif
 #ifdef WITH_SQLITE
 #include <sqlite3.h>
 #endif
 
 static int g_sqlite_override;
-
-const char *libver_pcap(void) {
-#ifdef WITH_PCAP
-    const char *v = pcap_lib_version();
-    return v ? v : "unknown";
-#else
-    return "none";
-#endif
-}
 
 const char *libver_sqlite(void) {
 #ifdef WITH_SQLITE
@@ -31,10 +22,10 @@ const char *libver_sqlite(void) {
 #endif
 }
 
-int libver_format(char *buf, size_t n) {
+int libver_format_libs(char *buf, size_t n, const char *pcap) {
     if (!buf || n == 0) return 0;
     return snprintf(buf, n, "pcap: %s; sqlite: %s",
-                    libver_pcap(), libver_sqlite());
+                    pcap ? pcap : "none", libver_sqlite());
 }
 
 int libver_sqlite_floor_ok(int version_number) {

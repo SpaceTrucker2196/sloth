@@ -2,9 +2,7 @@
 #include "poll.h"
 #include "sloth_clock.h"
 #include "sys_status.h"
-#include "persist_health.h"
 #include "alerts.h"
-#include "jsonl.h"
 #include "db.h"
 
 /* The poll runner, and the stages every daemon's table carries (#212).
@@ -12,7 +10,14 @@
  * Nothing here names a source. The Wi-Fi, wired and BLE stages are
  * src/poll.c, the GNSS ones src/poll_gnss.c and the RF ones
  * src/poll_rf.c, so a table built from this file and the last two does
- * not pull the capture stages in with it. */
+ * not pull the capture stages in with it.
+ *
+ * Two things left this file in #213, when sloth-rf was first linked and
+ * `nm` showed what "shared" had been pulling. The EMIT stage: it calls
+ * src/jsonl.c, the capture's records, so `sloth`'s is in src/poll.c and
+ * sloth-rf's in src/poll_rf.c, both under the stage name "jsonl". And
+ * persist_health_poll(), which reads the pcap and handshake exporters'
+ * failure counts: it is in src/poll.c's health_capture now. */
 
 /* ── PLATFORM ─────────────────────────────────────────────── */
 
@@ -21,8 +26,6 @@ void poll_st_health_host(sloth_state_t *s, const poll_ctx_t *ctx) {
      * the per-source polls, whose state it reads - every table places
      * this stage behind its health_* stages. */
     sys_status_poll(s, ctx->wall, ctx->mono_ms);
-    /* #96: per-sink write-failure counts, for the cannot-persist badge. */
-    persist_health_poll(&s->persist_health);
 }
 
 /* ── ALERTS ───────────────────────────────────────────────── */
@@ -30,19 +33,6 @@ void poll_st_health_host(sloth_state_t *s, const poll_ctx_t *ctx) {
 void poll_st_alerts(sloth_state_t *s, const poll_ctx_t *ctx) {
     (void)ctx;
     alerts_update(s);
-}
-
-/* ── EMIT ─────────────────────────────────────────────────── */
-
-void poll_st_jsonl(sloth_state_t *s, const poll_ctx_t *ctx) {
-    (void)ctx;
-    /* Last before durable state (#113): every state record now describes
-     * this tick. It used to run ahead of the snapshot block, so beacons,
-     * deauths, probe clients, PNL, devices, top hosts, sensors and the
-     * merged Wi-Fi model all reached the stream one tick late. */
-    jsonl_emit_connections(s);
-    jsonl_emit_twin_episodes(s);
-    jsonl_emit_state_snapshots(s);
 }
 
 /* ── DURABLE ──────────────────────────────────────────────── */

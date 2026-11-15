@@ -190,7 +190,9 @@ Two deliberate choices:
 
 An alert that cites evidence-ring frames now writes them out.
 `dump_new_alert_pcaps()` (`src/alerts/engine.c`) picks the exporter per
-incident: `evidence_id_count > 0` goes to `evidence_export_pcap()`,
+incident (both reached through the selected rule table's
+`alert_exporter_t` since #213, so a daemon with no capture links
+neither; sloth-rf's table names none and exports nothing): `evidence_id_count > 0` goes to `evidence_export_pcap()`,
 otherwise a `match_ip` goes to `alert_pcap_dump()` (§1). Before this the
 loop skipped any alert without a `match_ip`, so a DEAUTH_FLOOD CRIT —
 IDs on the alert, every flag set — wrote zero frames.

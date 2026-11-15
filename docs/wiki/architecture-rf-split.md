@@ -26,7 +26,7 @@ naming every place the tree and #211 disagree.
 `packaging/bin/sloth-migrate-sensor`, `tests/test_unit_file.c`,
 `tests/deploy/`, issues #211 to #217.
 
-**Last updated**: 2026-11-15
+**Last updated**: 2026-11-15 (#213, S2 landed: §10, the seams it cut, and what of §§2 to 4 it made stale); 2026-11-15 (S0, and the notes on S1)
 
 This page is a measurement, not a plan. It is slice S0's deliverable
 (#211) and it exists so that S1 to S6 cut along lines someone has
@@ -56,6 +56,37 @@ landed, so these describe the parent of that commit and not the tree:
   `RF_SRCS`; every RF file is still in `sloth` and in `sloth_test`.
 - **`alerts_update()`** is called from `poll_st_alerts()` in
   `src/poll_core.c`, not from `src/poll.c`.
+
+S2 (#213) has landed as well: `sloth-rf` exists, beside `sloth`, which
+keeps every flag. §10 is what it cut and why. It made these stale too:
+
+- **§2.3's flags and §4.1's `src/main.c` row.** The checks for
+  `--location`, `--gps`, `--gps-allow-remote`, `--gps-baud` are
+  `src/gnss_flags.c`, those for `--adsb`, `--aprs`, `--aprs-freq`,
+  `--aprs-silent-hours`, `--rtl433` are `src/rf_flags.c`, and the
+  privilege drop, `--tune`, `--ticks` and the three sinks' start-up are
+  `src/daemon_start.c`; `src/main.c` and `src/rf/main.c` call them.
+- **§3's JSONL and `sensor_health` rows, §4.1's `src/jsonl.c` rows,
+  and the `src/jsonl.c` count in §4.3.** The sink, the cache
+  (`g_dedup[]`), `any_sink()`, the builders and the alert and `sensor`
+  records are `src/jsonl_core.c`; `jsonl_emit_gnss()`, `_adsb()`,
+  `_aprs()`, `_rtl433()` and `g_aprs_cursor` are `src/jsonl_rf.c`.
+  `sensor_health` is assembled from blocks (`src/jsonl_internal.h`):
+  `sloth`'s assembly is still `jsonl_emit_sensor_health()` in
+  `src/jsonl.c`, sloth-rf's is `jsonl_emit_sensor_health_rf()`.
+- **§3's rule-table row and §2.3's rule rows.** `g_alert_rules[]` is
+  the rows of whichever table the daemon selected; the 93 are
+  `g_alert_table_sloth`.
+- **§3.1's `SYS_SRC_*` paragraph and §4.1's `src/sys_status.c` row.**
+  `sys_status_poll()` fills the GNSS, ADS-B, APRS and rtl_433 rows
+  itself; the other four are `sys_status_capture_fill()` in
+  `src/sys_status_capture.c`, registered by the daemon that has a
+  capture.
+- **§3's poll-loop row and the note above on `poll_st_alerts()`.**
+  `g_poll_rf` has nine stages; `poll_st_jsonl()` is in `src/poll.c`.
+- **§9 item 4 is no longer only a question for 2.0.0.** sloth-rf
+  writes its own four `source_status` rows and its own sensors from
+  slot 0 today; the numbering is the shared enum's.
 
 [[architecture]] has the current layout.
 
@@ -483,7 +514,7 @@ From `gh issue list`, titles as filed.
 |---|---|---|
 | S0 | #211 | The tracking issue, [ADR 0010](adr/0010-wifi-rf-daemons.md), this page. |
 | S1 | #212 | Build seam: source groups, run flag out of `capture.c`, poll stage table per app. No behaviour change. |
-| S2 | #213 | The `sloth-rf` binary: readers, RF rules, own JSONL socket and database. Additive. |
+| S2 | #213 | The `sloth-rf` binary: readers, RF rules, own JSONL socket and database. Additive. **Landed 2026-11-15; §10.** |
 | S3 | #214 | slothweb reads two daemons: `--rf-socket` and `--rf-db`. |
 | S4 | #215 | Packaging: `sloth-rf.service` and `sloth-migrate-rf`. |
 | S5 | #216 | Cutover: `sloth-wifi` rename, RF leaves the Wi-Fi daemon, JSONL 2.0.0. |
@@ -545,6 +576,66 @@ does not decide.
 8. **`sloth-sensor.service` is bound to the monitor radio.** The RF
    readers stop with it today (§7). Not a disagreement, but the
    strongest packaging argument for the split and absent from #211.
+
+---
+
+## 10. What S2 cut (#213)
+
+`sloth-rf` is three objects of its own and `libsloth_core.a`. Linking
+the roots it needs - the three poll files, the four readers, the data
+socket, the privilege drop, `tune` - against the archive as it stood
+after S1 pulled 159 members and libpcap, because the services §3 calls
+"once per process" each named the capture. The table is every
+dependency that had to go, with the symbol that carried it (from `nm`
+on the archive), in the order the link showed them. After: 46 members,
+and `DT_NEEDED` of libm, libsqlite3 and libc.
+
+| Shared object | Pulled, through | Cut |
+|---|---|---|
+| `engine.o` | `rules_table.o` (`g_alert_rules`, `g_alert_rule_count`), and through its 93 rows every rule file and every module a rule reads | The table is data the daemon selects: `alert_rule_table_t`, `alerts_set_table()` (`src/alerts/rules.h`). `g_alert_rules` / `g_alert_rule_count` are now the selected table's rows, defined in `engine.c`. `sloth`: `g_alert_table_sloth`, the same 93 rows in the same order. sloth-rf: `g_alert_table_rf` (`src/alerts/rules_table_rf.c`). |
+| `engine.o` | `rules_wired.o`, `rules_twin.o` (`rules_wired_forget`, `rules_twin_forget`, called from `alerts_clear()`) | The `*_forget()` list is the table's. |
+| `engine.o` | `alert_pcap.o`, `evidence_export.o` (`alert_pcap_dump`, `evidence_export_pcap_unique`, …), and through them `eapol_log.o` and the evidence ring | The two exporters are the table's (`alert_exporter_t`); sloth-rf's table names none. |
+| `jsonl_core.o` (the alert record) | `rules_twin.o` (`twin_class_label`) | The four-word label moved to `engine.c`, beside `alert_type_name()`. This shifted `rules_twin.c` by ten lines; the 20 assessments citing it were repointed. |
+| `jsonl.o` | nearly every capture module: `capture.o`, `probe.o`, `ble_hci.o`, `bt_stream.o`, `beacon_snoop.o`, `eapol_log.o`, `alert_pcap.o`, `procs.o`, … (any reference to `jsonl.o` linked all of it) | Three files (`src/jsonl_internal.h`): `jsonl_core.c`, `jsonl_rf.c`, and `jsonl.c` for the capture's records. `sensor_health` is written in blocks so both daemons' records come from the same functions. |
+| `poll_core.o` | `jsonl.o` (`jsonl_emit_connections`, `jsonl_emit_twin_episodes`, `jsonl_emit_state_snapshots` in `poll_st_jsonl()`) | `poll_st_jsonl()` moved to `src/poll.c`; sloth-rf's stage is `poll_st_jsonl_rf()`. |
+| `poll_core.o` | `persist_health.o`, and through it `alert_pcap.o` and `eapol_log.o` (`alert_pcap_failures`, `eapol_export_failures`) | `persist_health_poll()` moved from `health_host` to `src/poll.c`'s `health_capture`. Same phase; the counts move later in the tick. |
+| `sys_status.o` | `capture.o` (`capture_exit_name`), `bt_stream.o` (`bt_cap_state_name`), `beacon_snoop.o` (`beacon_recall_stat`) | The four capture rows are `src/sys_status_capture.c` and the recall sample a function pointer, both handed over by `sys_status_set_capture_side()`. Unregistered, the rows are unnamed: not written, not counted, not judged. |
+| `sys_status.o` | `g_platform`, defined in `src/platform/linux.c` with the nl80211 backend | sloth-rf defines its own vtable, `src/rf/platform_rf.c`: `sys_read` and `sys_list`, every other slot NULL. |
+| `sensor_health.o` | `dns.o` (`dns_resolver_stats` in `sh_mem_sample()`), the resolver | `sh_set_resolver_calls_fn()`; unregistered, `resolver_calls` is -1. |
+| `db.o` | `libver.o`, and through `libver_pcap()` libpcap itself (`pcap_lib_version`) | `libver_pcap()` and `libver_format()` are `src/libver_pcap.c`; `libver_format_libs()` takes the libpcap word. |
+
+`sloth` hands the first, third and the two `sys_status` / `sensor_health`
+parts over in one call, `capture_side_install()` (`src/capture_side.c`).
+
+What was **not** cut, and is linked into sloth-rf: `wifi_assess.o`
+(`alerts_update()` still calls `wifi_downgrade_update()`, a pass over
+`s->beacon_aps` that calls nothing; `tests/test_alert_rules.c` pins the
+call's place in the function), `attack_hw.o` and `wifi_oui_attacker.o`
+(the alert record formats the hardware verdict), `wired_attach.o` (a
+label), `ownership.o` and `presence.o` (`db.o`). None opens, parses or
+captures anything; they are tables and labels over state this daemon
+never fills. `rules_sensor.o` carries `rule_sensor_undervolt()` beside
+`rule_sensor_source_down()`; it is linked and not in sloth-rf's table.
+
+The Makefile's `check_rf_no_capture` holds the result on every link
+([[architecture]], Build layout), and was seen to fail both ways: with a
+call into `bt_stream.c` added to `src/jsonl_rf.c` (the definitions
+list), and with `libver_format()` used there and `-lpcap` put back on
+the link line (the imports list).
+
+Rulings applied: both daemons write `sensor_positions` (the
+`positions` stage is in `g_poll_rf`; `device_positions` stays empty
+there because no stage of that table builds a device);
+`SENSOR_UNDERVOLT` is not in `g_alert_table_rf`.
+
+Left for later slices: slothweb does not read sloth-rf (S3); nothing is
+installed and there is no unit (S4); `sloth` still takes the RF flags,
+so a host must not point both at one serial GPS (S5). Two things S2
+found that no slice names yet: `agents/risk_score.sh` scores deletions
+in `src/jsonl.c` and names it as the forensic-output path, and does
+not know `src/jsonl_core.c` or `src/jsonl_rf.c`; and the readers'
+messages and the shared flag checks say `sloth:` in sloth-rf, which is
+right while they are one copy and wants a decision at cutover.
 
 ---
 

@@ -112,6 +112,14 @@ static void test_lure_reported(void) {
     WT_EQ(web_lure_reported(&L), 1);
     feed("{\"type\":\"sensor_health\",\"ts\":1,\"jsonl_version\":\"1.10.0\"}");
     WT_EQ(web_lure_reported(&L), 1);
+    /* JSONL 1.9.0 (#213): sensor_health names its daemon, ahead of the
+     * db_max_mb / jsonl_version tail. A member this reader does not
+     * know is passed over and the version after it is still read. */
+    feed("{\"type\":\"sensor_health\",\"ts\":1,\"daemon\":\"wifi\",\"db_max_mb\":-1,"
+         "\"jsonl_version\":\"1.9.0\"}");
+    WT_EQ(web_lure_reported(&L), 1);
+    WT_EQ(route("", MONO0), 200);
+    WT_HAS(body(), "\"jsonl_version\":\"1.9.0\"");
 }
 
 /* The three rows on the route, every member, the SSID through the JSON

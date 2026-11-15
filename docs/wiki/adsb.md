@@ -28,9 +28,9 @@ last open items.
 signature), `src/capture/adsb_reader.h`, `src/capture/adsb_reader.c`
 (the per-poll file read), `include/sloth.h` (`adsb_aircraft_t`,
 `adsb_health_t`), `src/poll_rf.c` (`adsb_health_poll()` in the
-`health_rf` stage, `SENSOR_ADSB` in the `sensors_rf` stage), `src/jsonl.c`
-(`jsonl_emit_adsb()`, the `adsb_*` appends in
-`jsonl_emit_sensor_health()`), `src/main.c` (`--adsb`); tests
+`health_rf` stage, `SENSOR_ADSB` in the `sensors_rf` stage), `src/jsonl_rf.c`
+(`jsonl_emit_adsb()`, and `jsonl_sh_adsb()`, the `adsb_*` block of
+`sensor_health`), `src/main.c` (`--adsb`); tests
 `tests/test_adsb.c`, `tests/fuzz/fuzz_adsb_doc.c`; the alert
 `src/alerts/rules_adsb.c`, `tests/test_adsb_rules.c`,
 `research/adsb/emergency-squawks.md`; for `sbs://`

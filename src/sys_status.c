@@ -8,9 +8,6 @@
 #include "sys_status.h"
 #include "adsb.h"
 #include "aprs.h"
-#include "ble_hci.h"
-#include "bt_stream.h"
-#include "capture/capture.h"
 #include "fs_capacity.h"
 #include "gps.h"
 #include "jsonl.h"
@@ -453,6 +450,15 @@ static struct {
     } st[SYS_SRC_COUNT];
 } g;
 
+/* The capture side (src/sys_status.h), apart from `g` so that
+ * sys_status_reset() does not drop it: it is the binary's shape, not a
+ * run's state. */
+static const sys_capture_side_t *g_capture_side;
+
+void sys_status_set_capture_side(const sys_capture_side_t *c) {
+    g_capture_side = c;
+}
+
 /* The "absent" values a zeroed struct does not have. Separate from the
  * reset so the first poll of a process does not clear the disk path
  * main() set before it. */
@@ -635,8 +641,13 @@ static void sample_system(void) {
         if (sn->hottest < 0 || sn->temp[i].val > sn->temp[sn->hottest].val)
             sn->hottest = i;
 
-    beacon_recall_stat(&sn->recall, sloth_mono_ms());
-    sn->has_recall = 1;
+    /* The forgotten-BSSID memory is the monitor radio's; without a
+     * capture side there is none to sample and the batch omits it. */
+    sn->has_recall = 0;
+    if (g_capture_side && g_capture_side->recall) {
+        g_capture_side->recall(&sn->recall, sloth_mono_ms());
+        sn->has_recall = 1;
+    }
 
     sn->temp_band = sn->hottest < 0 ? -1
         : sys_held_band(sn->temp_band, sn->temp[sn->hottest].val, TEMP_EDGES, 3, 2.0);
@@ -876,27 +887,7 @@ static long long track_age(int i, uint64_t count, uint64_t mono_ms) {
     return (long long)((mono_ms - g.st[i].advance_ms) / 1000u);
 }
 
-static void pcap_source(sys_source_t *o, const capture_health_t *h, const char *err) {
-    o->count  = h->ps_recv;
-    o->errors = h->ps_drop + h->ps_ifdrop;
-    o->age_s  = h->stale_secs;
-    if (!h->open) {
-        o->state = SYS_ST_DOWN;
-        snprintf(o->detail, sizeof(o->detail), "%s", err && err[0] ? err : "not open");
-    } else if (!h->running) {
-        o->state = SYS_ST_DOWN;
-        snprintf(o->detail, sizeof(o->detail), "exit: %s%s%.60s",
-                 capture_exit_name((capture_exit_t)h->exit_reason),
-                 h->exit_detail[0] ? ": " : "", h->exit_detail);
-    } else if (h->stale_secs < 0) {
-        o->state = SYS_ST_STALE;
-        snprintf(o->detail, sizeof(o->detail), "no frame yet");
-    } else {
-        o->state = h->stale_secs > SYS_SRC_STALE_S ? SYS_ST_STALE : SYS_ST_OK;
-    }
-}
-
-static void tie(sys_source_t *o, const char *iface) {
+void sys_status_tie(sys_source_t *o, const char *iface) {
     int k = hw_claims(&g.snap, iface);
     if (k < 0) return;
     const sys_hw_t *h = &g.snap.hw[k];
@@ -905,77 +896,20 @@ static void tie(sys_source_t *o, const char *iface) {
     snprintf(o->driver, sizeof(o->driver), "%s", h->driver);
 }
 
+int sys_status_cap_wireless(const char *iface) {
+    return g.cap_wireless && iface && !strcmp(g.cap_wireless_for, iface);
+}
+
 static void fill_sources(const sloth_state_t *s, uint64_t mono_ms) {
     sys_source_t *o;
     memset(g.snap.src, 0, sizeof(g.snap.src));
 
-    o = &g.snap.src[SYS_SRC_CAPTURE];
-    o->name = "capture"; o->flag = "--iface"; o->unit = "frames";
-    o->age_s = -1;
-    snprintf(o->endpoint, sizeof(o->endpoint), "%s", s->pkt_iface);
-    snprintf(o->kind, sizeof(o->kind), "%s",
-             s->pkt_linktype == 127 ? "wifi-monitor"
-             : (g.cap_wireless && !strcmp(g.cap_wireless_for, s->pkt_iface))
-               ? "wifi-managed" : "ip-capture");
-    if (!s->pkt_iface[0]) {
-#ifdef WITH_PCAP
-        snprintf(o->detail, sizeof(o->detail), "no capture interface");
-#else
-        snprintf(o->detail, sizeof(o->detail), "built without libpcap");
-#endif
-    } else {
-        pcap_source(o, &s->cap_health, "");
-        tie(o, s->pkt_iface);
-    }
-
-    o = &g.snap.src[SYS_SRC_MONITOR];
-    o->name = "monitor"; o->flag = "a monitor-mode interface"; o->unit = "frames";
-    o->age_s = -1;
-    snprintf(o->kind, sizeof(o->kind), "wifi-monitor");
-    snprintf(o->endpoint, sizeof(o->endpoint), "%s", s->probe_iface);
-    if (!s->probe_iface[0]) {
-#ifdef WITH_PCAP
-        snprintf(o->detail, sizeof(o->detail), "%s",
-                 s->probe_err[0] ? s->probe_err : "no monitor-mode interface found");
-#else
-        snprintf(o->detail, sizeof(o->detail), "built without libpcap");
-#endif
-    } else {
-        pcap_source(o, &s->mon_health, s->probe_err);
-        tie(o, s->probe_iface);
-    }
-
-    o = &g.snap.src[SYS_SRC_BTMON];
-    o->name = "btmon"; o->flag = "--bt-monitor"; o->unit = "records";
-    o->age_s = -1;
-    snprintf(o->kind, sizeof(o->kind), "bluetooth");
-    snprintf(o->endpoint, sizeof(o->endpoint), "%s", s->bt_iface);
-    if (!s->bt_iface[0]) {
-        snprintf(o->detail, sizeof(o->detail), "%s", s->bt_err);
-    } else {
-        /* The monitor channel carries every controller: no one hci to
-         * tie it to. */
-        pcap_source(o, &s->bt_health, s->bt_err);
-        o->count  = s->ble_host.records;
-        o->errors = s->ble_host.malformed;
-    }
-
-    o = &g.snap.src[SYS_SRC_BTCAP];
-    o->name = "btcap"; o->flag = "--bt-capture"; o->unit = "records";
-    o->age_s = -1;
-    snprintf(o->kind, sizeof(o->kind), "bluetooth-sniffer");
-    if (s->btcap.configured) {
-        const bt_capture_health_t *c = &s->btcap;
-        snprintf(o->endpoint, sizeof(o->endpoint), "%s", BT_CAPTURE_IFACE);
-        o->count = c->recv; o->errors = c->drop; o->age_s = c->stale_secs;
-        snprintf(o->detail, sizeof(o->detail), "%s%s%.70s", bt_cap_state_name(c->state),
-                 c->err[0] ? ": " : "", c->err);
-        if (c->state == BT_CAP_STREAMING)
-            o->state = (c->stale_secs < 0 || c->stale_secs > SYS_SRC_STALE_S)
-                       ? SYS_ST_STALE : SYS_ST_OK;
-        else
-            o->state = c->state == BT_CAP_WAITING ? SYS_ST_STALE : SYS_ST_DOWN;
-    }
+    /* The capture, the monitor radio and the two Bluetooth sources are
+     * the capture side's rows (src/sys_status_capture.c). A daemon with
+     * none leaves them unnamed, and an unnamed row is not written and
+     * not judged. */
+    if (g_capture_side && g_capture_side->fill)
+        g_capture_side->fill(s, g.snap.src);
 
     o = &g.snap.src[SYS_SRC_GNSS];
     o->name = "gnss"; o->flag = "--gps"; o->unit = "sentences";
@@ -1001,7 +935,7 @@ static void fill_sources(const sloth_state_t *s, uint64_t mono_ms) {
         /* Only a serial device names its hardware; gpsd is an endpoint. */
         if (!strncmp(p->src, "nmea:/dev/", 10)) {
             const char *base = strrchr(p->src, '/');
-            if (base) tie(o, base + 1);
+            if (base) sys_status_tie(o, base + 1);
         }
     } else if (s->gps.has_fixed) {
         snprintf(o->detail, sizeof(o->detail), "--location only: a fixed position, no receiver");
@@ -1186,8 +1120,11 @@ static void emit_reading(const char *cls, const sys_reading_t *r, time_t wall) {
 static void emit_batch(time_t wall, uint64_t now_ms) {
     sys_snapshot_t *sn = &g.snap;
     sn->seq++;
-    int ok = 0, down = 0, conf = 0;
+    /* `named`: the rows this daemon has. All SYS_SRC_COUNT of them with
+     * a capture side, its own four without (#213). */
+    int ok = 0, down = 0, conf = 0, named = 0;
     for (int i = 0; i < SYS_SRC_COUNT; i++) {
+        if (sn->src[i].name) named++;
         if (sn->src[i].state != SYS_ST_NOT_CONFIGURED) conf++;
         if (sn->src[i].state == SYS_ST_OK) ok++;
         if (sn->src[i].state == SYS_ST_DOWN) down++;
@@ -1227,7 +1164,7 @@ static void emit_batch(time_t wall, uint64_t now_ms) {
     f_int(&l, "volts", sn->nvolt);
     if (sn->has_undervolt) f_int(&l, "undervolt", sn->undervolt);
     f_int(&l, "power", sn->npower);
-    f_int(&l, "sources", SYS_SRC_COUNT);
+    f_int(&l, "sources", named);
     f_int(&l, "sources_configured", conf);
     f_int(&l, "sources_ok", ok);
     f_int(&l, "sources_down", down);
@@ -1246,7 +1183,8 @@ static void emit_batch(time_t wall, uint64_t now_ms) {
     for (int i = 0; i < sn->ntemp; i++)  emit_reading("temp", &sn->temp[i], wall);
     for (int i = 0; i < sn->nvolt; i++)  emit_reading("volt", &sn->volt[i], wall);
     for (int i = 0; i < sn->npower; i++) emit_reading("power", &sn->power[i], wall);
-    for (int i = 0; i < SYS_SRC_COUNT; i++) emit_source(i, wall, now_ms);
+    for (int i = 0; i < SYS_SRC_COUNT; i++)
+        if (sn->src[i].name) emit_source(i, wall, now_ms);
     for (int i = 0; i < sn->nhw; i++) {
         const sys_hw_t *h = &sn->hw[i];
         fl_t r = { .n = 0 };
@@ -1283,5 +1221,6 @@ void sys_status_emit(const sloth_state_t *s) {
     uint64_t now_ms = sloth_mono_ms();
     if (g.batch_due) { emit_batch(wall, now_ms); return; }
     for (int i = 0; i < SYS_SRC_COUNT; i++)
-        if (g.st[i].sig != g.st[i].sig_emitted) emit_source(i, wall, now_ms);
+        if (g.snap.src[i].name && g.st[i].sig != g.st[i].sig_emitted)
+            emit_source(i, wall, now_ms);
 }

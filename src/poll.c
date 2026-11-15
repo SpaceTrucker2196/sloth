@@ -4,7 +4,8 @@
 #include "capture/bt_monitor.h"
 #include "bt_stream.h"
 #include "ble_hci.h"
-#include "position_track.h"
+#include "persist_health.h"
+#include "jsonl.h"
 #include "history.h"
 #include "dev_how.h"
 #include "bandwidth.h"
@@ -125,6 +126,12 @@ static void st_health_capture(sloth_state_t *s, const poll_ctx_t *ctx) {
     capture_health_poll(&s->cap_health);
     probe_health_poll(&s->mon_health);
     bt_monitor_health_poll(&s->bt_health);   /* #144 slice 2 */
+    /* #96: per-sink write-failure counts, for the cannot-persist badge.
+     * Here since #213 and not in health_host: two of the three sinks it
+     * reads are the pcap and handshake exporters, which only a daemon
+     * with a capture links. The counts move in ALERTS and EMIT, so
+     * where in PLATFORM they are read changes nothing. */
+    persist_health_poll(&s->persist_health);
 }
 
 static void st_capture_scope(sloth_state_t *s, const poll_ctx_t *ctx) {
@@ -363,15 +370,24 @@ static void st_devices_hosts(sloth_state_t *s, const poll_ctx_t *ctx) {
     top_hosts_update(s);
 }
 
-/* --gps (2026-10-27): after devices_update(), so the sample reads this
- * tick's last_seen and signal. A no-op without a fresh GPS fix and a
- * --db to drain the queue. */
-static void st_positions(sloth_state_t *s, const poll_ctx_t *ctx) {
-    postrack_tick(s, ctx->wall);
-}
-
 static void st_chanhop(sloth_state_t *s, const poll_ctx_t *ctx) {
     if (ctx->chanhop) ctx->chanhop(s);
+}
+
+/* ── EMIT ─────────────────────────────────────────────────── */
+
+/* `sloth`'s EMIT stage, here since #213: it writes the capture's records
+ * (src/jsonl.c), so it cannot live with the stages every table shares.
+ * sloth-rf's is poll_st_jsonl_rf() in src/poll_rf.c. */
+void poll_st_jsonl(sloth_state_t *s, const poll_ctx_t *ctx) {
+    (void)ctx;
+    /* Last before durable state (#113): every state record now describes
+     * this tick. It used to run ahead of the snapshot block, so beacons,
+     * deauths, probe clients, PNL, devices, top hosts, sensors and the
+     * merged Wi-Fi model all reached the stream one tick late. */
+    jsonl_emit_connections(s);
+    jsonl_emit_twin_episodes(s);
+    jsonl_emit_state_snapshots(s);
 }
 
 /* ── the tables ───────────────────────────────────────────── */
@@ -415,7 +431,7 @@ static const poll_stage_t sloth_stages[] = {
     { "karma",             PH_POST,     st_karma             },
     { "alert_hot",         PH_POST,     st_alert_hot         },
     { "devices_hosts",     PH_POST,     st_devices_hosts     },
-    { "positions",         PH_POST,     st_positions         },
+    { "positions",         PH_POST,     poll_st_positions    },
     { "chanhop",           PH_POST,     st_chanhop           },
 
     { "jsonl",             PH_EMIT,     poll_st_jsonl        },
@@ -466,7 +482,7 @@ static const poll_stage_t wifi_stages[] = {
     { "karma",             PH_POST,     st_karma             },
     { "alert_hot",         PH_POST,     st_alert_hot         },
     { "devices_hosts",     PH_POST,     st_devices_hosts     },
-    { "positions",         PH_POST,     st_positions         },
+    { "positions",         PH_POST,     poll_st_positions    },
     { "chanhop",           PH_POST,     st_chanhop           },
 
     { "jsonl",             PH_EMIT,     poll_st_jsonl        },
