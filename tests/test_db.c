@@ -25,6 +25,7 @@
 #include "tmp_dir.h"
 #include "adsb.h"
 #include "aprs.h"
+#include "victron.h"
 #include "gps.h"
 #include "position_track.h"
 
@@ -205,7 +206,11 @@ static void test_schema_tables_have_seen_columns(void) {
                                           "adsb_sightings (",
                                           /* aprs_packets (v13): one packet
                                            * per row, a sample. */
-                                          "aprs_packets (" };
+                                          "aprs_packets (",
+                                          /* victron_readings (v15): one
+                                           * write of a device's values
+                                           * per row, a sample. */
+                                          "victron_readings (" };
 
     int tables = 0, entities = 0, with_both = 0;
     for (const char *p = strstr(sql, "CREATE TABLE"); p;
@@ -3747,6 +3752,203 @@ static void test_v13_migration_failure_leaves_file_unchanged(void) {
     unlink(db_path);
 }
 
+/* ── Schema v15: the Victron tables ────────────────────────────── */
+
+/* A v14 file: a current file with the two Victron tables (and their
+ * indexes) dropped and the stamp set to 14, which is exactly a v14
+ * file's shape, since v14 -> v15 adds nothing to an existing table.
+ * One alert row rides along to show the step leaves data alone. */
+static void write_v14_file(void) {
+    fresh_db();
+    db_close();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "DROP TABLE victron_devices; DROP TABLE victron_readings;"
+        "INSERT INTO alerts (key,type,sev,title,count,first_seen,last_seen)"
+        " VALUES ('v14-key',1,1,'v14-row',7,1600000000,1600000100);"
+        "UPDATE meta SET value='14' WHERE key='schema_version';",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+}
+
+/* v14 -> v15 is a stamp: victron_devices and victron_readings and their
+ * indexes arrive with the unconditional schema, empty, and the alert
+ * row reads as it was. Seen to fail with the { 14, ... } step removed
+ * from g_steps[] (the static chain check refuses the build). */
+static void test_v14_file_migrates_additively(void) {
+    write_v14_file();
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    " AND name LIKE 'victron_%'"), 0);
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, DB_VER_STR);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    " AND name IN ('victron_devices','victron_readings')"), 2);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
+                    " AND name IN ('idx_victron_devices_last_seen',"
+                    "'idx_victron_readings_last_seen','idx_victron_readings_mac')"), 3);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM victron_readings"), 0);
+    ASSERT_EQ(q_int("SELECT count FROM alerts WHERE key='v14-key'"), 7);
+    q_text("SELECT title FROM alerts WHERE key='v14-key'", v, sizeof(v));
+    ASSERT_STR(v, "v14-row");
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v14 file whose stamp cannot be written stays v14 with neither
+ * Victron table and its alert row as it was. Seen red with
+ * migrate_step()'s return ignored in migrate_from() (db_open returned 1
+ * and the tables appeared beside a v14 stamp). */
+static void test_v14_migration_failure_leaves_file_unchanged(void) {
+    write_v14_file();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TRIGGER refuse_v15 BEFORE UPDATE ON meta"
+        " WHEN NEW.key='schema_version' AND NEW.value='15'"
+        " BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[32];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "14");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    " AND name IN ('victron_devices','victron_readings')"), 0);
+    ASSERT_EQ(q_int("SELECT count FROM alerts WHERE key='v14-key'"), 7);
+    unlink(db_path);
+}
+
+/* Every victron_readings value column is a name on sloth's allow-list,
+ * every allow-listed name has its column, and the table has exactly
+ * those beside last_seen, mac, src and rssi. */
+static void test_victron_columns_match_the_allow_list(void) {
+    fresh_db();
+    int n = 0;
+    for (; db_victron_col(n); n++) {
+        const char *unit = NULL;
+        ASSERT(victron_value_known(db_victron_col(n), &unit));
+        char q[160];
+        snprintf(q, sizeof(q), "SELECT COUNT(*) FROM pragma_table_info('victron_readings')"
+                               " WHERE name='%s'", db_victron_col(n));
+        ASSERT_EQ(q_int(q), 1);
+        /* An enumeration has no unit, a measurement has one. */
+        ASSERT_EQ(n >= DB_VICTRON_FIRST_ENUM, unit && !unit[0]);
+    }
+    ASSERT_EQ(n, DB_VICTRON_NCOLS);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('victron_readings')"), n + 4);
+    db_close();
+    unlink(db_path);
+}
+
+static void vdev(victron_device_t *d, const char *mac) {
+    memset(d, 0, sizeof(*d));
+    snprintf(d->mac, sizeof(d->mac), "%s", mac);
+    d->first_seen = 1793930000;
+    d->last_seen = 1793930000;
+}
+
+static void vval(victron_device_t *d, const char *name, double v) {
+    for (int i = 0; i < d->nvals; i++)
+        if (!strcmp(d->vals[i].name, name)) { d->vals[i].v = v; return; }
+    snprintf(d->vals[d->nvals].name, sizeof(d->vals[0].name), "%s", name);
+    d->vals[d->nvals++].v = v;
+}
+
+/* The Victron writer: an inventory row per device and a reading row
+ * per DB_VICTRON_MIN_S at most while records with values keep coming;
+ * NULL for a value never heard; `src` the path of the newest values; a
+ * session with no values moves the inventory (outcome, services) and
+ * writes no reading. Seen red with write_victron()'s DB_VICTRON_MIN_S
+ * test removed (a reading row every tick: 4, not 2, after the first
+ * minute) and with the readings-advanced test removed (a reading row
+ * written with nothing new, once the minute had passed). */
+static void test_victron_tables_written(void) {
+    fresh_db();
+    static victron_device_t dv[2];
+    vdev(&dv[0], "c7:fe:23:b1:1c:5f");
+    snprintf(dv[0].serial, sizeof(dv[0].serial), "HQ2501YV9FU");
+    snprintf(dv[0].model, sizeof(dv[0].model), "BMV-712 Smart");
+    snprintf(dv[0].record, sizeof(dv[0].record), "battery_monitor");
+    dv[0].readings = 1; dv[0].last_readout = 1793930000;
+    dv[0].has_rssi = 1; dv[0].rssi = -71;
+    vval(&dv[0], "voltage_v", 13.2);
+    vval(&dv[0], "soc_pct", 87.5);
+    vval(&dv[0], "alarm_reason", 0);
+    vdev(&dv[1], "e4:b9:aa:47:57:1f");
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    s.victron.configured = 1;
+    s.victron_rows = dv;
+    s.victron_count = 2;
+    db_tick(&s, 1793930001);
+    /* The dongle has taken no record yet: no row of any kind. */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM victron_devices"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM victron_readings"), 1);
+    char v[96];
+    q_text("SELECT serial FROM victron_devices WHERE mac='c7:fe:23:b1:1c:5f'", v, sizeof(v));
+    ASSERT_STR(v, "HQ2501YV9FU");
+    ASSERT_EQ(q_int("SELECT last_gatt IS NULL FROM victron_devices"), 1);
+    q_text("SELECT src FROM victron_readings", v, sizeof(v));
+    ASSERT_STR(v, "readout");
+    ASSERT_EQ(q_int("SELECT CAST(ROUND(voltage_v*10) AS INTEGER) FROM victron_readings"), 132);
+    ASSERT_EQ(q_int("SELECT current_a IS NULL FROM victron_readings"), 1);
+    ASSERT_EQ(q_int("SELECT alarm_reason FROM victron_readings"), 0);
+    ASSERT_EQ(q_int("SELECT typeof(alarm_reason)='integer' FROM victron_readings"), 1);
+    ASSERT_EQ(q_int("SELECT rssi FROM victron_readings"), -71);
+    /* Readouts every 30 s: one more row only once a minute has passed. */
+    dv[0].readings = 2; dv[0].last_seen = 1793930030; vval(&dv[0], "voltage_v", 13.1);
+    db_tick(&s, 1793930031);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM victron_readings"), 1);
+    dv[0].readings = 3; dv[0].last_seen = 1793930060; vval(&dv[0], "voltage_v", 13.0);
+    db_tick(&s, 1793930061);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM victron_readings"), 2);
+    ASSERT_EQ(q_int("SELECT MAX(last_seen) FROM victron_readings"), 1793930060);
+    ASSERT_EQ(q_int("SELECT readings FROM victron_devices"), 3);
+    /* Nothing new: nothing written, however long. */
+    db_tick(&s, 1793930200);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM victron_readings"), 2);
+    /* The dongle's session finds no supported service: the inventory
+     * gains it with its outcome and service list, no reading row. */
+    dv[1].sessions = 1; dv[1].last_gatt = 1793930210; dv[1].last_seen = 1793930210;
+    snprintf(dv[1].session, sizeof(dv[1].session), "no_supported_service");
+    snprintf(dv[1].services, sizeof(dv[1].services), "306b0001-b081-4037-83dc-e59fcc3cdfd0");
+    db_tick(&s, 1793930211);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM victron_devices"), 2);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM victron_readings"), 2);
+    q_text("SELECT services FROM victron_devices WHERE mac='e4:b9:aa:47:57:1f'", v, sizeof(v));
+    ASSERT_STR(v, "306b0001-b081-4037-83dc-e59fcc3cdfd0");
+    q_text("SELECT session FROM victron_devices WHERE mac='e4:b9:aa:47:57:1f'", v, sizeof(v));
+    ASSERT_STR(v, "no_supported_service");
+    /* A GATT session with values on the BMV: src gatt, power kept. */
+    dv[0].readings = 4; dv[0].sessions = 1; dv[0].vals_gatt = 1;
+    dv[0].last_gatt = 1793930300; dv[0].last_seen = 1793930300;
+    snprintf(dv[0].session, sizeof(dv[0].session), "ok");
+    vval(&dv[0], "power_w", -19.5);
+    db_tick(&s, 1793930301);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM victron_readings"), 3);
+    q_text("SELECT src FROM victron_readings ORDER BY last_seen DESC LIMIT 1", v, sizeof(v));
+    ASSERT_STR(v, "gatt");
+    ASSERT_EQ(q_int("SELECT CAST(ROUND(power_w*10) AS INTEGER) FROM victron_readings"
+                    " ORDER BY last_seen DESC LIMIT 1"), -195);
+    ASSERT_EQ(q_int("SELECT last_gatt FROM victron_devices WHERE mac='c7:fe:23:b1:1c:5f'"),
+              1793930300);
+    ASSERT_EQ(q_int("SELECT first_seen FROM victron_devices WHERE mac='c7:fe:23:b1:1c:5f'"),
+              1793930000);
+    /* Not configured: nothing. */
+    s.victron.configured = 0;
+    dv[0].readings = 5; dv[0].last_seen = 1793930400;
+    db_tick(&s, 1793930401);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM victron_readings"), 3);
+    db_close();
+    unlink(db_path);
+}
+
 static void aprs_pkt(aprs_packet_t *p, uint64_t seq, time_t ut, const char *src,
                      const char *heard, char dti, int level) {
     memset(p, 0, sizeof(*p));
@@ -5029,6 +5231,10 @@ void run_db_tests(void) {
     RUN_TEST(test_v12_file_migrates_additively);
     RUN_TEST(test_v12_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_aprs_tables_written);
+    RUN_TEST(test_v14_file_migrates_additively);
+    RUN_TEST(test_v14_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_victron_columns_match_the_allow_list);
+    RUN_TEST(test_victron_tables_written);
     RUN_TEST(test_device_ip_joined_camera_columns_follow_latest);
     RUN_TEST(test_device_mac_keyed_camera_columns_are_sticky);
     RUN_TEST(test_ip_only_camera_record_is_not_persisted);

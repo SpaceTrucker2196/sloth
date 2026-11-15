@@ -1131,9 +1131,10 @@ static void test_sensor_health_rtl433_block(void) {
         /* The eviction breakout is written on every run, flag or not. */
         ASSERT(strstr(b, "\"evict_rtl433\":0") != NULL);
         /* The stream's version moved with the added record (1.8.0), and
-         * has moved since: 1.9.0 is sensor_health's `daemon` (#213). At
-         * least the MINOR this record arrived in, never before it. */
-        ASSERT(strstr(b, "\"jsonl_version\":\"1.9.0\"") != NULL);
+         * has moved since: 1.9.0 is sensor_health's `daemon` (#213),
+         * 1.10.0 victron_device's `services` and `values_src`. The
+         * current version, whichever slice moved it last. */
+        ASSERT(strstr(b, "\"jsonl_version\":\"" SLOTH_JSONL_VERSION "\"") != NULL);
     }
     unlink(g_jl);
 

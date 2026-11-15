@@ -35,7 +35,12 @@
  *     the array and crashed the suite, which is red but not a clean
  *     reading, so the count is the mutation named here;
  *   - test_sensor_health_block: `if (s->victron.configured)` removed
- *     from the block in jsonl.c (victron_* written without the flag).
+ *     from the block in jsonl.c (victron_* written without the flag);
+ *   - test_services_kept_as_uuids: services_take()'s charset test
+ *     removed (a list with a quote and a space kept);
+ *   - test_services_follow_the_session: the services copy in merge()
+ *     made conditional on a non-empty list (the next session's empty
+ *     list left the old one standing).
  */
 
 #define L_BMV "{\"type\":\"victron\",\"t\":1763200000,\"source\":\"readout\"," \
@@ -241,6 +246,81 @@ static void test_table_sticky(void) {
     ASSERT_EQ(s.victron_count, 0);
 }
 
+/* sloth-va lists a session's services only for no_supported_service
+ * (docs/wiki/victron.md); sloth keeps that list as lower-case UUIDs
+ * joined by ',' and nothing else. A list with any other byte, or longer
+ * than sloth-va's cap, is absent rather than cleaned or cut. */
+static void test_services_kept_as_uuids(void) {
+    victron_msg_t m;
+    int why;
+    const char *ok = "{\"type\":\"victron\",\"source\":\"gatt\",\"mac\":\"e4:b9:aa:47:57:1f\","
+                     "\"session\":\"no_supported_service\","
+                     "\"services\":\"306B0001-B081-4037-83DC-E59FCC3CDFD0,00001800-0000-1000-8000-00805f9b34fb\","
+                     "\"values\":{}}";
+    ASSERT_EQ(victron_line_parse(ok, strlen(ok), &m, &why), 1);
+    ASSERT_STR(m.services, "306b0001-b081-4037-83dc-e59fcc3cdfd0,"
+                           "00001800-0000-1000-8000-00805f9b34fb");
+    const char *bad = "{\"type\":\"victron\",\"source\":\"gatt\",\"mac\":\"e4:b9:aa:47:57:1f\","
+                      "\"services\":\"306b0001 \\\"x\",\"values\":{}}";
+    ASSERT_EQ(victron_line_parse(bad, strlen(bad), &m, &why), 1);
+    ASSERT_STR(m.services, "");
+    /* One byte over the cap: absent, not cut to fit. */
+    static char line[VICTRON_MAX_LINE];
+    char list[VICTRON_SERVICES_MAX + 2];
+    memset(list, 'a', VICTRON_SERVICES_MAX + 1);
+    list[VICTRON_SERVICES_MAX + 1] = '\0';
+    snprintf(line, sizeof(line), "{\"type\":\"victron\",\"source\":\"gatt\","
+             "\"mac\":\"e4:b9:aa:47:57:1f\",\"services\":\"%s\",\"values\":{}}", list);
+    ASSERT_EQ(victron_line_parse(line, strlen(line), &m, &why), 1);
+    ASSERT_STR(m.services, "");
+    list[VICTRON_SERVICES_MAX] = '\0';
+    snprintf(line, sizeof(line), "{\"type\":\"victron\",\"source\":\"gatt\","
+             "\"mac\":\"e4:b9:aa:47:57:1f\",\"services\":\"%s\",\"values\":{}}", list);
+    ASSERT_EQ(victron_line_parse(line, strlen(line), &m, &why), 1);
+    ASSERT_EQ((long long)strlen(m.services), VICTRON_SERVICES_MAX);
+}
+
+/* The list is the newest session's: a later session that names none
+ * clears it, a readout leaves it. vals_gatt follows the newest record
+ * that carried values, not a value-less session. The record carries
+ * both, and a change of either is a change. */
+static void test_services_follow_the_session(void) {
+    victron_reset();
+    victron_set_source("file:/x");
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    const char *nss = "{\"type\":\"victron\",\"source\":\"gatt\",\"mac\":\"c7:fe:23:b1:1c:5f\","
+                      "\"session\":\"no_supported_service\","
+                      "\"services\":\"306b0001-b081-4037-83dc-e59fcc3cdfd0\",\"values\":{}}";
+    const char *to = "{\"type\":\"victron\",\"source\":\"gatt\",\"mac\":\"c7:fe:23:b1:1c:5f\","
+                     "\"session\":\"timeout\",\"values\":{}}";
+    ASSERT_EQ(victron_feed_line(L_BMV, strlen(L_BMV), 1000), 1);
+    victron_health_poll(&s, 1000);
+    ASSERT_EQ(s.victron_rows[0].vals_gatt, 0);
+    uint64_t sig0 = victron_device_sig(&s.victron_rows[0]);
+    ASSERT_EQ(victron_feed_line(nss, strlen(nss), 1100), 1);
+    victron_health_poll(&s, 1100);
+    ASSERT_STR(s.victron_rows[0].services, "306b0001-b081-4037-83dc-e59fcc3cdfd0");
+    ASSERT_EQ(s.victron_rows[0].vals_gatt, 0);        /* no values in that session */
+    uint64_t sig1 = victron_device_sig(&s.victron_rows[0]);
+    ASSERT(sig1 != sig0);
+    ASSERT_EQ(victron_feed_line(L_BMV, strlen(L_BMV), 1130), 1);
+    victron_health_poll(&s, 1130);
+    ASSERT_STR(s.victron_rows[0].services, "306b0001-b081-4037-83dc-e59fcc3cdfd0");
+    ASSERT_EQ(victron_feed_line(to, strlen(to), 1400), 1);
+    victron_health_poll(&s, 1400);
+    ASSERT_STR(s.victron_rows[0].services, "");
+    ASSERT_STR(s.victron_rows[0].session, "timeout");
+    ASSERT_EQ(victron_feed_line(L_GATT, strlen(L_GATT), 1700), 1);
+    victron_health_poll(&s, 1700);
+    ASSERT_EQ(s.victron_rows[0].vals_gatt, 1);
+    uint64_t sig2 = victron_device_sig(&s.victron_rows[0]);
+    victron_device_t d = s.victron_rows[0];
+    d.vals_gatt = 0;
+    ASSERT(victron_device_sig(&d) != sig2);
+    victron_reset();
+}
+
 static void test_table_refuses_a_17th(void) {
     victron_reset();
     victron_set_source("file:/x");
@@ -442,6 +522,9 @@ static void test_jsonl_device_change_only(void) {
                          "\"record\":\"battery_monitor\"") != NULL);
         ASSERT(strstr(b, "\"soc_pct\":87.500") != NULL);
         ASSERT(strstr(b, "\"session\":\"ok\"") != NULL);
+        ASSERT(strstr(b, "\"values_src\":\"readout\"") != NULL);
+        ASSERT(strstr(b, "\"values_src\":\"gatt\"") != NULL);
+        ASSERT(strstr(b, "\"services\"") == NULL);              /* none listed */
         ASSERT(strstr(b, "BMV-712 \\\"x") == NULL);           /* the label never */
     }
     unlink(g_jl);
@@ -494,6 +577,8 @@ void run_victron_tests(void) {
     RUN_TEST(test_reads_sloth_va_records);
     RUN_TEST(test_spec_parse);
     RUN_TEST(test_table_sticky);
+    RUN_TEST(test_services_kept_as_uuids);
+    RUN_TEST(test_services_follow_the_session);
     RUN_TEST(test_table_refuses_a_17th);
     RUN_TEST(test_signature_bands);
     RUN_TEST(test_reader_tails_a_file);

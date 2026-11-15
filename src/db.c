@@ -81,6 +81,8 @@ static const char *const TIER_OBSERVATION[] = {
     "adsb_sightings",
     /* APRS (schema v13): one row per packet. */
     "aprs_packets",
+    /* Victron (schema v15): a device's values, one row a minute at most. */
+    "victron_readings",
 };
 
 /* 3x — the inventory. "Which devices were on this network in March"
@@ -96,6 +98,8 @@ static const char *const TIER_ENTITY[] = {
     "adsb_aircraft",
     /* APRS (schema v13): every source callsign ever heard. */
     "aprs_stations",
+    /* Victron (schema v15): every device address sloth-va wrote. */
+    "victron_devices",
 };
 
 /* 12x — the findings. These are why the operator kept the file. */
@@ -147,6 +151,7 @@ enum {
     ST_GNSS_FIX, ST_GNSS_SIGHT,
     ST_ADSB_AC, ST_ADSB_SIGHT,
     ST_APRS_STN, ST_APRS_PKT,
+    ST_VICTRON_DEV, ST_VICTRON_READ,
     ST_COUNT
 };
 
@@ -178,6 +183,15 @@ static struct {
 /* APRS (schema v13): the newest packet seq write_aprs() has written
  * (src/aprs.c's ring), cleared by db_open(). */
 static uint64_t g_aprs_seq;
+
+/* Victron (schema v15): write_victron()'s memory, one slot per row
+ * sloth can hold, cleared by db_open(). */
+static struct {
+    char     mac[18];
+    int      used;
+    uint64_t readings, sessions, facts;
+    time_t   dev_ts, read_ts;
+} g_victron_mem[VICTRON_MAX_DEVICES];
 
 /* The ST_DEVICE upsert spells the MAC-keyed camera bits as literals. */
 #if CAM_SIG_SETUP_SSID != 2 || CAM_SIG_SETUP_OUI != 16
@@ -729,6 +743,35 @@ static const char *const SQL[ST_COUNT] = {
     "  comment=COALESCE(excluded.comment, aprs_stations.comment),"
     "  status=COALESCE(excluded.status, aprs_stations.status),"
     "  system=COALESCE(excluded.system, aprs_stations.system)",
+/* Victron (schema v15). The inventory keeps the earliest first_seen
+ * and the latest last_seen; every other column is the newest sloth's
+ * table held (the counts are sloth's since it started, not a sum), and
+ * services is the newest session's list, cleared by a session that
+ * listed none. */
+[ST_VICTRON_DEV] =
+    "INSERT INTO victron_devices (mac,first_seen,last_seen,serial,model,record,"
+    "session,services,last_readout,last_gatt,readings,sessions,rssi) VALUES"
+    " (?1,?2,?3,NULLIF(?4,''),NULLIF(?5,''),NULLIF(?6,''),NULLIF(?7,''),"
+    "NULLIF(?8,''),NULLIF(?9,0),NULLIF(?10,0),?11,?12,?13)"
+    " ON CONFLICT(mac) DO UPDATE SET"
+    "  first_seen=MIN(victron_devices.first_seen, excluded.first_seen),"
+    "  last_seen=MAX(victron_devices.last_seen, excluded.last_seen),"
+    "  serial=COALESCE(excluded.serial, victron_devices.serial),"
+    "  model=COALESCE(excluded.model, victron_devices.model),"
+    "  record=COALESCE(excluded.record, victron_devices.record),"
+    "  session=COALESCE(excluded.session, victron_devices.session),"
+    "  services=excluded.services,"
+    "  last_readout=COALESCE(MAX(victron_devices.last_readout, excluded.last_readout),"
+    "    victron_devices.last_readout, excluded.last_readout),"
+    "  last_gatt=COALESCE(MAX(victron_devices.last_gatt, excluded.last_gatt),"
+    "    victron_devices.last_gatt, excluded.last_gatt),"
+    "  readings=excluded.readings, sessions=excluded.sessions,"
+    "  rssi=COALESCE(excluded.rssi, victron_devices.rssi)",
+[ST_VICTRON_READ] =
+    "INSERT INTO victron_readings (last_seen,mac,src,rssi,voltage_v,aux_voltage_v,"
+    "mid_voltage_v,input_v,output_v,current_a,power_w,consumed_ah,soc_pct,ttg_min,"
+    "temperature_c,alarm_reason,aux_input,device_state,charger_error,off_reason)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
 [ST_APRS_PKT] =
     "INSERT INTO aprs_packets (last_seen,source,heard,dti,name,symbol,lat,lon,"
     "speed_kt,course,alt_m,level,status,comment) VALUES (?1,?2,NULLIF(?3,''),"
@@ -1097,6 +1140,9 @@ static const db_step_t g_steps[] = {
       " stamp only" },
     { 13, db_schema_migrate_v13_sql, TABLES_BEACON_APS,
       "beacon_aps gained operating_width" },
+    { 14, db_schema_migrate_v14_sql, TABLES_NONE,
+      "victron_devices and victron_readings ride the unconditional schema;"
+      " stamp only" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
@@ -1241,6 +1287,7 @@ int db_open(const char *path) {
     memset(g_gnss_sat_mem, 0, sizeof(g_gnss_sat_mem));
     memset(g_adsb_mem, 0, sizeof(g_adsb_mem));
     g_aprs_seq = 0;
+    memset(g_victron_mem, 0, sizeof(g_victron_mem));
     /* The #error above checks the headers; this checks the library the
      * dynamic linker actually loaded, which can be older on a host the
      * binary was copied to (#142). Before anything touches the path:
@@ -2130,6 +2177,101 @@ static void write_adsb(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* The discrete facts of a row, hashed: a move writes the inventory row
+ * without waiting out DB_VICTRON_MIN_S. */
+static uint64_t victron_facts(const victron_device_t *d) {
+    uint64_t h = 1469598103934665603ULL;
+    const char *f[] = { d->serial, d->model, d->record, d->session, d->services };
+    for (size_t k = 0; k < sizeof(f) / sizeof(f[0]); k++) {
+        for (const char *p = f[k]; *p; p++) {
+            h ^= (unsigned char)*p;
+            h *= 1099511628211ULL;
+        }
+        h ^= 0xff;
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+/* One victron_devices upsert when sloth's row took a record since the
+ * last write and DB_VICTRON_MIN_S has passed or a discrete fact
+ * (serial, model, record type, session outcome, services) moved; one
+ * victron_readings row when it took a record WITH values and
+ * DB_VICTRON_MIN_S has passed since the device's last one. Bounded by
+ * construction: a reading row a minute per device at most, and
+ * VICTRON_MAX_DEVICES devices. */
+static void write_victron(const sloth_state_t *s, time_t now) {
+    if (!s->victron.configured || !s->victron_rows) return;
+    for (int i = 0; i < s->victron_count && i < VICTRON_MAX_DEVICES; i++) {
+        const victron_device_t *d = &s->victron_rows[i];
+        int slot = -1, free_slot = -1;
+        for (int j = 0; j < VICTRON_MAX_DEVICES; j++) {
+            if (g_victron_mem[j].used && !strcmp(g_victron_mem[j].mac, d->mac)) {
+                slot = j;
+                break;
+            }
+            if (free_slot < 0 && !g_victron_mem[j].used) free_slot = j;
+        }
+        if (slot < 0) {
+            /* As many slots as sloth keeps rows, and sloth never
+             * replaces a row, so a free one is always there. */
+            if (free_slot < 0) continue;
+            slot = free_slot;
+            memset(&g_victron_mem[slot], 0, sizeof(g_victron_mem[slot]));
+            g_victron_mem[slot].used = 1;
+            snprintf(g_victron_mem[slot].mac, sizeof(g_victron_mem[slot].mac), "%s", d->mac);
+        }
+        uint64_t facts = victron_facts(d);
+        int moved = d->readings != g_victron_mem[slot].readings ||
+                    d->sessions != g_victron_mem[slot].sessions;
+        int due = !g_victron_mem[slot].dev_ts ||
+                  now - g_victron_mem[slot].dev_ts >= DB_VICTRON_MIN_S;
+        if (moved && (due || facts != g_victron_mem[slot].facts)) {
+            sqlite3_stmt *st = g_st[ST_VICTRON_DEV];
+            bind_txt(st, 1, d->mac);
+            sqlite3_bind_int64(st, 2, (sqlite3_int64)(d->first_seen ? d->first_seen : now));
+            sqlite3_bind_int64(st, 3, (sqlite3_int64)(d->last_seen ? d->last_seen : now));
+            bind_txt(st, 4, d->serial);
+            bind_txt(st, 5, d->model);
+            bind_txt(st, 6, d->record);
+            bind_txt(st, 7, d->session);
+            bind_txt(st, 8, d->services);
+            sqlite3_bind_int64(st, 9, (sqlite3_int64)d->last_readout);
+            sqlite3_bind_int64(st, 10, (sqlite3_int64)d->last_gatt);
+            sqlite3_bind_int64(st, 11, (sqlite3_int64)d->readings);
+            sqlite3_bind_int64(st, 12, (sqlite3_int64)d->sessions);
+            if (d->has_rssi) sqlite3_bind_int(st, 13, d->rssi);
+            step_reset(ST_VICTRON_DEV);
+            g_victron_mem[slot].dev_ts = now;
+            g_victron_mem[slot].facts = facts;
+            g_victron_mem[slot].sessions = d->sessions;
+            /* readings advances below, with the row it gates. */
+        }
+        if (d->readings != g_victron_mem[slot].readings && d->nvals > 0 &&
+            (!g_victron_mem[slot].read_ts ||
+             now - g_victron_mem[slot].read_ts >= DB_VICTRON_MIN_S)) {
+            sqlite3_stmt *st = g_st[ST_VICTRON_READ];
+            sqlite3_bind_int64(st, 1, (sqlite3_int64)(d->last_seen ? d->last_seen : now));
+            bind_txt(st, 2, d->mac);
+            bind_txt(st, 3, d->vals_gatt ? "gatt" : "readout");
+            if (d->has_rssi) sqlite3_bind_int(st, 4, d->rssi);
+            for (int c = 0; db_victron_col(c); c++) {
+                for (int v = 0; v < d->nvals && v < VICTRON_MAX_VALS; v++) {
+                    if (strcmp(d->vals[v].name, db_victron_col(c))) continue;
+                    if (c >= DB_VICTRON_FIRST_ENUM)
+                        sqlite3_bind_int64(st, 5 + c, (sqlite3_int64)d->vals[v].v);
+                    else
+                        sqlite3_bind_double(st, 5 + c, d->vals[v].v);
+                    break;
+                }
+            }
+            step_reset(ST_VICTRON_READ);
+            g_victron_mem[slot].read_ts = now;
+            g_victron_mem[slot].readings = d->readings;
+        }
+    }
+}
+
 /* APRS (schema v13): one aprs_packets row and one aprs_stations
  * upsert per packet past this writer's own cursor, off src/aprs.c's
  * ring (APRS_PKT_RING, the newest kept), so a packet reaches the file
@@ -2791,6 +2933,7 @@ void db_tick(const sloth_state_t *s, time_t now) {
     write_gnss           (s, now);
     write_adsb           (s, now);
     write_aprs           (s);
+    write_victron        (s, now);
 
     if (g_disabled) {
         exec("ROLLBACK", "rollback");

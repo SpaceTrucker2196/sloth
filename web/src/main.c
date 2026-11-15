@@ -62,6 +62,7 @@ static web_gnss_t     g_gnss;
 static web_adsb_t     g_adsb;
 static web_aprs_t     g_aprs;
 static web_rtl433_t   g_rtl433;
+static web_victron_t  g_victron;
 static web_spectrum_t g_spectrum;
 static web_camera_t g_camera;
 static web_sys_t      g_sys;
@@ -147,6 +148,7 @@ int main(int argc, char **argv) {
         web_adsb_init(&g_adsb) != 0 ||
         web_aprs_init(&g_aprs) != 0 ||
         web_rtl433_init(&g_rtl433) != 0 ||
+        web_victron_init(&g_victron) != 0 ||
         web_sys_init(&g_sys) != 0 ||
         web_lure_init(&g_lure) != 0 ||
         web_chain_init(&g_chain) != 0) {
@@ -303,6 +305,7 @@ int main(int argc, char **argv) {
     web_server_set_adsb(&g_srv, &g_adsb);
     web_server_set_aprs(&g_srv, &g_aprs);
     web_server_set_rtl433(&g_srv, &g_rtl433);
+    web_server_set_victron(&g_srv, &g_victron);
     web_server_set_sys(&g_srv, &g_sys);
     web_server_set_lure(&g_srv, &g_lure);
     web_ingest_set_metrics(&g_ingest, &g_metrics);
@@ -312,6 +315,7 @@ int main(int argc, char **argv) {
     web_ingest_set_adsb(&g_ingest, &g_adsb);
     web_ingest_set_aprs(&g_ingest, &g_aprs);
     web_ingest_set_rtl433(&g_ingest, &g_rtl433);
+    web_ingest_set_victron(&g_ingest, &g_victron);
     web_ingest_set_sys(&g_ingest, &g_sys);
     web_ingest_set_lure(&g_ingest, &g_lure);
     /* The designated networks the SSID, Probes and WiFi routes mark. */
@@ -478,6 +482,7 @@ int main(int argc, char **argv) {
     web_adsb_destroy(&g_adsb);
     web_aprs_destroy(&g_aprs);
     web_rtl433_destroy(&g_rtl433);
+    web_victron_destroy(&g_victron);
     web_sys_destroy(&g_sys);
     web_lure_destroy(&g_lure);
     web_chain_destroy(&g_chain);

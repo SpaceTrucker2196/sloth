@@ -22,6 +22,7 @@
 @include adsb.css
 @include aprs.css
 @include spectrum.css
+@include victron.css
 @include camera.css
 @include bledev.css
 @include radar.css
@@ -55,6 +56,7 @@
 @include adsb.js
 @include aprs.js
 @include rtl433.js
+@include victron.js
 @include spectrum.js
 @include camera.js
 @include bledev.js
@@ -95,6 +97,7 @@
       <li><button type="button" class="go" id="nav-fleet">Fleet</button></li>
       <li><button type="button" class="go" id="nav-spectrum">Spectrum</button></li>
       <li><button type="button" class="go" id="nav-rtl433">rtl_433</button></li>
+      <li><button type="button" class="go" id="nav-victron">Victron</button></li>
       <li><button type="button" class="go" id="nav-camera">Camera</button></li>
     </ol></nav>
     <div class="scope">
@@ -681,6 +684,22 @@
       <div class="sub" id="r4-state" aria-live="polite"></div>
       <div class="hscroll"><table class="qt" id="r4-rows" aria-label="the devices the rtl_433 decoder heard: model, id, type, decodes, first and last heard, frequency, signal and readings" hidden></table></div>
       <div class="sub">sloth's rtl433_device records off the --rtl433 event log a local rtl_433 writes (433.92 MHz on the reference site: car tyre-pressure sensors, weather stations, remotes, door and motion sensors), kept by slothweb in memory: one row per decoder model and device id, dropped here 11 minutes after sloth last reported it (sloth reports every device it keeps at least every 5 minutes). sloth writes a device again when its RSSI moves 3 dB, its frequency a whole MHz or a reading a whole unit, so the figures are the last ones written, not the last decode. Temperatures and pressures are in the unit the sensor sent, never converted. Receive-only: sloth reads a file and never touches the SDR or rtl_433. Anything in range can transmit what a decoder accepts, and a tyre sensor's id follows its car: observation only, no row is a finding, and none of it is shared with other sloths.</div>
+    </section>
+   </div>
+   <!-- The Victron tab (web/ui/victron.js): the owner's Victron devices
+        off sloth-va's file, live from the stream, history from sloth.db. -->
+   <div id="v-victron" hidden>
+    <section class="panel" id="vc">
+      <div class="label">Victron devices</div>
+      <div class="sub" id="vc-state" aria-live="polite"></div>
+      <div class="vc-tools"><label>history <select id="vc-hours">
+        <option value="6">6 h</option>
+        <option value="24" selected>24 h</option>
+        <option value="168">7 d</option>
+        <option value="720">30 d</option>
+      </select></label></div>
+      <div id="vc-cards"></div>
+      <div class="sub">sloth's victron_device records off the --victron file sloth-va writes, kept by slothweb in memory, one card per device address; the charts are sloth.db's victron_readings (at most one row a minute per device), each bucket's mean as the line over its min..max. sloth writes a device again when a value moves a band (0.1 V, 1 A, 1 Ah, 1 %, 10 W, 1 C, 10 min) or every 5 minutes, so a live card can be up to 5 minutes old; past 6 minutes (11 for a device heard only through GATT sessions) it is marked STALE and its figures shown in the stale colour. Values are the last one of each kind sloth-va reported, from its Instant Readout decode or a GATT session (the card says which delivered the newest). sloth reads a file and connects to nothing; sloth-va transmits for the GATT sessions (ADR 0011). None of it is shared with other sloths.</div>
     </section>
    </div>
    <div id="v-probes" hidden>

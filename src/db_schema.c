@@ -960,6 +960,62 @@ static const char SCHEMA_SQL[] =
     "CREATE INDEX IF NOT EXISTS idx_aprs_packets_source"
     " ON aprs_packets(source, last_seen);\n"
 
+    /* Victron (schema v15, docs/wiki/victron.md): what --victron read
+     * from sloth-va's file. victron_devices is the inventory, one row
+     * per device address (the entity tier): the owner's serial and
+     * sloth-va's model name when known, the newest Instant Readout
+     * record type, GATT session outcome and that session's service
+     * list, when each path last delivered, and sloth's own counts since
+     * it started. victron_readings is one row per write of a device's
+     * values (the observation tier), at most one a DB_VICTRON_MIN_S per
+     * device: the latest of each allow-listed value as sloth's table
+     * held it (sticky, so a value a record did not carry is the last one
+     * that did), NULL never heard, and `src` the path the newest values
+     * came from. No column holds a PIN, a key or the device's own name. */
+    "CREATE TABLE IF NOT EXISTS victron_devices ("
+    "  mac          TEXT PRIMARY KEY,"
+    "  first_seen   INTEGER NOT NULL,"
+    "  last_seen    INTEGER NOT NULL,"
+    "  serial       TEXT,"
+    "  model        TEXT,"
+    "  record       TEXT,"
+    "  session      TEXT,"
+    "  services     TEXT,"
+    "  last_readout INTEGER,"
+    "  last_gatt    INTEGER,"
+    "  readings     INTEGER NOT NULL DEFAULT 0,"
+    "  sessions     INTEGER NOT NULL DEFAULT 0,"
+    "  rssi         INTEGER"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_victron_devices_last_seen"
+    " ON victron_devices(last_seen);\n"
+    "CREATE TABLE IF NOT EXISTS victron_readings ("
+    "  last_seen     INTEGER NOT NULL,"
+    "  mac           TEXT NOT NULL,"
+    "  src           TEXT NOT NULL,"
+    "  rssi          INTEGER,"
+    "  voltage_v     REAL,"
+    "  aux_voltage_v REAL,"
+    "  mid_voltage_v REAL,"
+    "  input_v       REAL,"
+    "  output_v      REAL,"
+    "  current_a     REAL,"
+    "  power_w       REAL,"
+    "  consumed_ah   REAL,"
+    "  soc_pct       REAL,"
+    "  ttg_min       REAL,"
+    "  temperature_c REAL,"
+    "  alarm_reason  INTEGER,"
+    "  aux_input     INTEGER,"
+    "  device_state  INTEGER,"
+    "  charger_error INTEGER,"
+    "  off_reason    INTEGER"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_victron_readings_last_seen"
+    " ON victron_readings(last_seen);\n"
+    "CREATE INDEX IF NOT EXISTS idx_victron_readings_mac"
+    " ON victron_readings(mac, last_seen);\n"
+
     "CREATE TABLE IF NOT EXISTS sensors ("
     "  kind       INTEGER NOT NULL,"
     "  iface      TEXT NOT NULL,"
@@ -1105,6 +1161,30 @@ static const char MIGRATE_V13_SQL[] =
     "ALTER TABLE beacon_aps ADD COLUMN operating_width INTEGER NOT NULL"
     " DEFAULT 0;\n";
 
+/* Victron (schema v15): the victron_readings value columns in table
+ * order (bound from ?5 by db.c's write_victron()); each is the value of
+ * that name on sloth's allow-list (src/victron.c VALS[];
+ * tests/test_db.c holds the two equal). From DB_VICTRON_FIRST_ENUM on
+ * they are enumerations, stored as integers. slothweb's history route
+ * reads the same list, so a column it names is one sloth writes. */
+static const char *const VICTRON_COLS[] = {
+    "voltage_v", "aux_voltage_v", "mid_voltage_v", "input_v", "output_v",
+    "current_a", "power_w", "consumed_ah", "soc_pct", "ttg_min",
+    "temperature_c", "alarm_reason", "aux_input", "device_state",
+    "charger_error", "off_reason",
+};
+
+const char *db_victron_col(int i) {
+    int n = (int)(sizeof(VICTRON_COLS) / sizeof(VICTRON_COLS[0]));
+    return i >= 0 && i < n ? VICTRON_COLS[i] : NULL;
+}
+
+/* v14 -> v15 (2026-11-15, docs/wiki/victron.md): no ALTER.
+ * victron_devices and victron_readings are new tables on the
+ * unconditional schema; the step is the stamp, as v12 -> v13 was.
+ * Nothing is backfilled: no earlier file recorded a Victron reading. */
+static const char MIGRATE_V14_SQL[] = "";
+
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
 int db_schema_version(void)            { return DB_SCHEMA_VERSION; }
@@ -1121,3 +1201,4 @@ const char *db_schema_migrate_v10_sql(void) { return MIGRATE_V10_SQL; }
 const char *db_schema_migrate_v11_sql(void) { return MIGRATE_V11_SQL; }
 const char *db_schema_migrate_v12_sql(void) { return MIGRATE_V12_SQL; }
 const char *db_schema_migrate_v13_sql(void) { return MIGRATE_V13_SQL; }
+const char *db_schema_migrate_v14_sql(void) { return MIGRATE_V14_SQL; }

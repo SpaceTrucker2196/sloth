@@ -20,6 +20,7 @@
 #include "web_adsb.h"
 #include "web_aprs.h"
 #include "web_rtl433.h"
+#include "web_victron.h"
 #include "web_lure.h"
 #include "web_sysstat.h"
 #include "web_gnss.h"
@@ -142,6 +143,7 @@ static void one_line(web_feed_t *f, web_live_t *l, long long now_ms) {
         if (f->adsb) web_adsb_record(f->adsb, &f->rec, now_ms);
         if (f->aprs) web_aprs_record(f->aprs, &f->rec, now_ms);
         if (f->rtl433) web_rtl433_record(f->rtl433, &f->rec, now_ms);
+        if (f->victron) web_victron_record(f->victron, &f->rec, now_ms);
         if (f->sys) web_sys_record(f->sys, &f->rec, now_ms);
         if (f->lure) web_lure_record(f->lure, &f->rec, now_ms);
         if (f->chain) web_chain_record(f->chain, &f->rec);
@@ -396,6 +398,10 @@ void web_ingest_set_aprs(web_ingest_t *g, struct web_aprs *a) {
 
 void web_ingest_set_rtl433(web_ingest_t *g, struct web_rtl433 *a) {
     g->feed.rtl433 = a;
+}
+
+void web_ingest_set_victron(web_ingest_t *g, struct web_victron *a) {
+    g->feed.victron = a;
 }
 
 void web_ingest_set_sys(web_ingest_t *g, struct web_sys *y) {

@@ -116,6 +116,7 @@ typedef enum {
     SYS_SRC_RTL433,         /* appended: a source's slot is its id in the
                              * source_status stream and in the
                              * SENSOR_SOURCE_DOWN hold state */
+    SYS_SRC_VICTRON,        /* appended (2026-11-15): sloth-va's file */
     SYS_SRC_COUNT
 } sys_src_id_t;
 

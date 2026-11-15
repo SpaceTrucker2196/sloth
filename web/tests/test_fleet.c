@@ -4320,6 +4320,45 @@ static void test_ingest_refuses_rtl433(void) {
     pull_down();
 }
 
+/* Victron (2026-11-15): sloth-va's devices are withheld from the fleet
+ * (ADR 0009, fail closed; docs/wiki/victron.md). A GATT session's values
+ * came through an authenticated connection, never monitor provenance;
+ * the victron_device record carries both paths' values merged (sloth's
+ * table is sticky), so no row can be told safe; and the owner has not
+ * classified the Instant Readout half. The export has no writer for the
+ * kind; a peer answer carrying one is refused whole, readout-sourced or
+ * not, nothing stored; the same answer without the line is taken.
+ * Seen red with walk() skipping a victron_device line instead of
+ * refusing it (the answer taken, its ap row stored). */
+static void test_ingest_refuses_victron(void) {
+    pull_up();
+    static const char AP[] =
+        "{\"type\":\"ap\",\"bssid\":\"0e:00:00:00:00:54\",\"ssid\":\"V2Net\",\"channel\":6,"
+        "\"enc\":\"WPA2\",\"vendor\":null,\"rssi\":-40,\"first_seen\":1792500000,"
+        "\"last_seen\":1792626900}\n";
+    static const char VIC[] =
+        "{\"type\":\"victron_device\",\"src\":\"file:/x\",\"mac\":\"c7:fe:23:b1:1c:5f\","
+        "\"serial\":\"HQ0000TEST1\",\"first_seen\":1792500000,\"last_seen\":1792626900,"
+        "\"last_readout\":1792626900,\"last_gatt\":0,\"readings\":3,\"sessions\":0,"
+        "\"values_src\":\"readout\",\"soc_pct\":87.500}\n";
+    static const char END[] =
+        "{\"type\":\"fleet_end\",\"rows\":1,\"wifi\":0,\"ble\":0,\"ap\":1,\"probe\":0,\"alert\":0,"
+        "\"verdict\":0,\"complete\":true}\n";
+    char body[4096];
+    snprintf(body, sizeof(body), "%s%s%s%s", HDR(1792627050), AP, VIC, END);
+    WT_EQ(pull_with(body, 0, NULL, 0), -1);
+    WT_EQ(sightings(), 0);
+    if (!strstr(F.peer[0].last_error, "line 3: unknown type"))
+        fprintf(stderr, "    pull: %s\n", F.peer[0].last_error);
+    WT_ASSERT(strstr(F.peer[0].last_error, "line 3: unknown type") != NULL);
+    snprintf(body, sizeof(body), "%s%s%s", HDR(1792627100), AP, END);
+    int rc = pull_with(body, 0, NULL, 0);
+    if (rc) fprintf(stderr, "    pull: %s\n", F.peer[0].last_error);
+    WT_EQ(rc, 0);
+    WT_EQ(sightings(), 1);
+    pull_down();
+}
+
 /* A hostile or older peer cannot plant local-network data here: each
  * forbidden shape is checked like any line (the answer is taken), then
  * refused, counted and never stored; what the provenance rule allows
@@ -4547,6 +4586,7 @@ void run_fleet_tests(void) {
     WT_RUN(test_export_monitor_only);
     WT_RUN(test_ingest_refuses_forbidden);
     WT_RUN(test_ingest_refuses_rtl433);
+    WT_RUN(test_ingest_refuses_victron);
     WT_RUN(test_purge_once);
     WT_RUN(test_purge_v2_repulls);
     WT_RUN(test_pull_good_and_upsert);

@@ -14,6 +14,7 @@
 #include "rtl433.h"
 #include "sensor_health.h"
 #include "sloth_clock.h"
+#include "victron.h"
 
 /* Contract, rationale and what is deliberately absent: sys_status.h. */
 
@@ -438,8 +439,8 @@ static struct {
     char      cap_wireless_for[32];
     char      disk_dir[256];
     char      disk_what[8];
-    /* Per source: when its count last advanced (gnss, aprs and rtl433
-     * keep no arrival clock of their own), and what was last written. */
+    /* Per source: when its count last advanced (gnss, aprs, rtl433 and
+     * victron keep no arrival clock of their own), and what was last written. */
     struct {
         int      tracked;
         uint64_t track_count, advance_ms;
@@ -990,6 +991,28 @@ static void fill_sources(const sloth_state_t *s, uint64_t mono_ms) {
          * however old the last decode; its age says how quiet. */
         o->state = r->state == RTL433_LIVE ? SYS_ST_OK
                  : r->state == RTL433_ERROR ? SYS_ST_DOWN : SYS_ST_STALE;
+    }
+
+    o = &g.snap.src[SYS_SRC_VICTRON];
+    o->name = "victron"; o->flag = "--victron"; o->unit = "records";
+    o->age_s = -1;
+    snprintf(o->kind, sizeof(o->kind), "victron");
+    if (s->victron.configured) {
+        const victron_health_t *v = &s->victron;
+        snprintf(o->endpoint, sizeof(o->endpoint), "%s", v->src);
+        o->count = v->records; o->errors = v->read_errors + v->bad_lines;
+        o->age_s = track_age(SYS_SRC_VICTRON, v->records, mono_ms);
+        snprintf(o->detail, sizeof(o->detail), "%s%s%s%.60s",
+                 victron_state_name(v->state),
+                 v->missing ? " (file not there yet)" : "",
+                 v->err[0] ? ": " : "", v->err);
+        /* Quiet is not a fault (victron_health_t): sloth-va writes
+         * nothing while the devices are out of range, so live stays ok
+         * however old the last record; its age says how quiet. A file
+         * that is not there yet (sloth-va not started, or no record
+         * yet) is stale, so it is held and then reported. */
+        o->state = v->state == VICTRON_LIVE ? SYS_ST_OK
+                 : v->state == VICTRON_ERROR ? SYS_ST_DOWN : SYS_ST_STALE;
     }
 
     for (int i = 0; i < SYS_SRC_COUNT; i++) {

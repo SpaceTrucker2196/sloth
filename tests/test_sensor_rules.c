@@ -317,6 +317,32 @@ static void test_flapping_source_is_one_incident(void) {
     end();
 }
 
+/* --victron (2026-11-15): sloth-va's file is a source like any other.
+ * A read error held SENSOR_SRC_DOWN_HOLD_S opens WARN naming the file;
+ * a live but quiet file never opens. The quiet half seen red with the
+ * row's VICTRON_LIVE mapped to SYS_ST_STALE (srcdown:victron opened on
+ * a live file). */
+static void test_victron_source_down(void) {
+    begin();
+    g_s.victron.configured = 1;
+    snprintf(g_s.victron.src, sizeof(g_s.victron.src), "file:/var/lib/sloth-va/victron.jsonl");
+    g_s.victron.state = VICTRON_LIVE;
+    ticks(SENSOR_SRC_STALE_S + 60);
+    ASSERT(open_of(ALERT_TYPE_SENSOR_SOURCE_DOWN, "srcdown:victron") == NULL);
+    g_s.victron.state = VICTRON_ERROR;
+    snprintf(g_s.victron.err, sizeof(g_s.victron.err), "read: Permission denied");
+    ticks(SENSOR_SRC_DOWN_HOLD_S + 1);
+    const alert_t *a = open_of(ALERT_TYPE_SENSOR_SOURCE_DOWN, "srcdown:victron");
+    ASSERT(a != NULL);
+    if (a) {
+        ASSERT_EQ(a->sev, ALERT_SEV_WARN);
+        ASSERT(strstr(a->detail, "victron (victron, file:/var/lib/sloth-va/victron.jsonl)")
+               != NULL);
+        ASSERT(strstr(a->detail, "error: read: Permission denied") != NULL);
+    }
+    end();
+}
+
 /* A source the command line did not enable never fires, however its
  * reader's fields read. The bare state lists all seven not_configured.
  * Seen red with the not_configured branch removed (the rows then
@@ -344,5 +370,6 @@ void run_sensor_rules_tests(void) {
     RUN_TEST(test_recovery_clears);
     RUN_TEST(test_down_then_stale_is_one_incident);
     RUN_TEST(test_flapping_source_is_one_incident);
+    RUN_TEST(test_victron_source_down);
     RUN_TEST(test_not_configured_never_fires);
 }

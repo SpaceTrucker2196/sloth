@@ -26,7 +26,7 @@ naming every place the tree and #211 disagree.
 `packaging/bin/sloth-migrate-sensor`, `tests/test_unit_file.c`,
 `tests/deploy/`, issues #211 to #217.
 
-**Last updated**: 2026-11-15 (#213 review: §10's member count measured at 49, and what the `nm` gate missed and now holds); 2026-11-15 (#213, S2 landed: §10, the seams it cut, and what of §§2 to 4 it made stale); 2026-11-15 (S0, and the notes on S1)
+**Last updated**: 2026-11-15 ([[victron]]: sloth-rf's fifth `source_status` row, `victron`), 2026-11-15 (#213 review: §10's member count measured at 49, and what the `nm` gate missed and now holds); 2026-11-15 (#213, S2 landed: §10, the seams it cut, and what of §§2 to 4 it made stale); 2026-11-15 (S0, and the notes on S1)
 
 This page is a measurement, not a plan. It is slice S0's deliverable
 (#211) and it exists so that S1 to S6 cut along lines someone has
@@ -85,7 +85,8 @@ keeps every flag. §10 is what it cut and why. It made these stale too:
 - **§3's poll-loop row and the note above on `poll_st_alerts()`.**
   `g_poll_rf` has nine stages; `poll_st_jsonl()` is in `src/poll.c`.
 - **§9 item 4 is no longer only a question for 2.0.0.** sloth-rf
-  writes its own four `source_status` rows and its own sensors from
+  writes its own five `source_status` rows (`victron` the fifth since
+  JSONL 1.10.0) and its own sensors from
   slot 0 today; the numbering is the shared enum's.
 
 [[architecture]] has the current layout.

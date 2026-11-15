@@ -29,7 +29,9 @@
  *     its bound; out of range is absent and counted (bad_values), never
  *     clamped; any other name is counted (other_keys) and dropped;
  *   - strings are cleaned to a small charset and cut; "label" (the
- *     device's own name) and "services" are not stored;
+ *     device's own name) is not stored; "services" is kept only as
+ *     comma-separated UUIDs ([0-9a-f-], at most VICTRON_SERVICES_MAX
+ *     bytes), anything else leaves it absent;
  *   - the row is keyed by the address, which must be aa:bb:cc:dd:ee:ff;
  *   - the table holds VICTRON_MAX_DEVICES rows and REFUSES a 17th
  *     address (counted, table_full) rather than evicting: the owner has
@@ -51,6 +53,7 @@ typedef struct {
     char     model[32];
     char     record[24];
     char     session[24];
+    char     services[VICTRON_SERVICES_MAX + 1];
     int      gatt;             /* source "gatt"; 0 "readout" */
     int      has_rssi;
     int      rssi;
@@ -84,7 +87,8 @@ void victron_reset(void);
 const char *victron_state_name(int state);   /* "none", "waiting", "live", "error" */
 
 /* The victron_device record's change signature: the key, first_seen,
- * the discrete facts (serial, model, record, session, which values are
+ * the discrete facts (serial, model, record, session, services, which
+ * source the newest values came from (vals_gatt), which values are
  * present) and each value as a band - voltages to 0.1 V, currents and
  * Ah to 1, SOC to 1 %, power to 10 W, temperature to 1 C, TTG to 10
  * min; the enumerations (state, error, off reason, alarm, aux input)

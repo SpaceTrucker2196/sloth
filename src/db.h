@@ -111,7 +111,16 @@
  * 80+80), so a reader can draw a BSS's occupied bandwidth instead of
  * assuming 20 MHz. The v13 -> v14 step is a single ALTER TABLE ADD
  * COLUMN, default 0. No existing column or value changes. */
-#define DB_SCHEMA_VERSION 14
+/* Bumped to 15 on 2026-11-15 (docs/wiki/victron.md): victron_devices
+ * and victron_readings are new tables and ride the unconditional
+ * schema; the v14 -> v15 step is a stamp alone. No existing table
+ * changes. */
+#define DB_SCHEMA_VERSION 15
+
+/* The least time between two victron_readings rows of one device.
+ * sloth-va writes a readout every 30 s and a session every 300 s; one
+ * row a minute keeps a month of three devices near 130k rows. */
+#define DB_VICTRON_MIN_S 60
 
 /* The incidents kept per key in alert_incidents (#175), newest first
  * by first_seen. A key evicted under pressure re-fires as a new
@@ -429,5 +438,16 @@ const char *db_schema_migrate_v11_sql(void);
 const char *db_schema_migrate_v12_sql(void);
 /* v13 -> v14 (#207 slice 1): ALTER TABLE beacon_aps ADD COLUMN only. */
 const char *db_schema_migrate_v13_sql(void);
+/* v14 -> v15 (Victron): no ALTER - victron_devices and
+ * victron_readings are new tables and ride the unconditional schema. An
+ * empty statement list. */
+const char *db_schema_migrate_v14_sql(void);
+
+/* victron_readings' value column `i` (0 from voltage_v, in table order),
+ * NULL past the last. From DB_VICTRON_FIRST_ENUM on, an enumeration
+ * stored as an integer. */
+#define DB_VICTRON_FIRST_ENUM 11
+#define DB_VICTRON_NCOLS      16
+const char *db_victron_col(int i);
 
 #endif /* SLOTH_DB_H */

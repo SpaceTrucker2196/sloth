@@ -82,7 +82,7 @@
 #include "web_secret.h"
 
 #define WEB_SDB_SCHEMA_MIN 1
-#define WEB_SDB_SCHEMA_MAX 14
+#define WEB_SDB_SCHEMA_MAX 15
 #define WEB_SDB_BUSY_MS    100
 #define WEB_SDB_HTTP_MS    250       /* a request's budget */
 /* /api/history/overview's alone. It counts every device and alert
@@ -913,5 +913,26 @@ typedef struct {
 } web_sdb_aprs_trk_t;
 int  web_sdb_aprs_tracks(web_sdb_conn_t *c, long long from, long long bucket_s,
                          web_sdb_aprs_trk_t *out, int max, int *more);
+
+/* ── a Victron device's values, over time (2026-11-15) ───────────────
+ *
+ * The Victron tab's history (web_victron.h /api/victron/history):
+ * sloth.db's victron_readings (v15), one device's one value column,
+ * rows at or after `from` grouped into buckets of bucket_s seconds
+ * (each bucket's start, aligned to the epoch), oldest first, at most
+ * max: per bucket the mean, minimum and maximum of the rows that carry
+ * the value, how many did, and how many of those were written while the
+ * newest values were a GATT session's. `col` must be a victron_readings
+ * column on web_sdb_allow[] (the caller passes its allow-list's name,
+ * never a request's text); anything else, and a file older than the
+ * table, answers 0 buckets. One index range scan (mac, last_seen).
+ * Buckets, or -1. */
+typedef struct {
+    long long t, n, gatt;
+    double    mean, min, max;
+} web_sdb_vic_pt_t;
+int  web_sdb_victron_history(web_sdb_conn_t *c, const char *mac, const char *col,
+                             long long from, long long bucket_s,
+                             web_sdb_vic_pt_t *out, int max);
 
 #endif

@@ -470,6 +470,7 @@ static void emit_victron_device(const victron_device_t *d, const char *src,
     kv_str_opt(buf, &off, "model", d->model);
     kv_str_opt(buf, &off, "record", d->record);
     kv_str_opt(buf, &off, "session", d->session);
+    kv_str_opt(buf, &off, "services", d->services);
     kv_int(buf, LINEBUF, &off, "first_seen", (long long)d->first_seen);
     kv_int(buf, LINEBUF, &off, "last_seen", (long long)d->last_seen);
     kv_int(buf, LINEBUF, &off, "last_readout", (long long)d->last_readout);
@@ -477,6 +478,12 @@ static void emit_victron_device(const victron_device_t *d, const char *src,
     kv_int(buf, LINEBUF, &off, "readings", (long long)d->readings);
     kv_int(buf, LINEBUF, &off, "sessions", (long long)d->sessions);
     if (d->has_rssi) kv_int(buf, LINEBUF, &off, "rssi", d->rssi);
+    /* Which of sloth-va's two paths the newest values came from (JSONL
+     * 1.10.0): the fleet rule turns on it (a GATT reading is an
+     * authenticated connection's, never monitor provenance) and so does
+     * slothweb's Victron tab. */
+    if (d->nvals > 0)
+        kv_str(buf, LINEBUF, &off, "values_src", d->vals_gatt ? "gatt" : "readout");
     for (int i = 0; i < d->nvals; i++)
         kv_fixed(buf, &off, d->vals[i].name, d->vals[i].v, 3);
     end_obj(buf, LINEBUF, &off);

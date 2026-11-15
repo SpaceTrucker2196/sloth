@@ -14,13 +14,21 @@ it and links none of it.
 
 **Sources**: `src/va/main.c`, `src/va/va_victron.c`, `src/va/va_conf.c`,
 `src/va/va_aes.c`, `tests/test_va.c`, `src/victron.c`,
-`src/capture/victron_reader.c`, `tests/test_victron.c`,
+`src/capture/victron_reader.c`, `tests/test_victron.c`, `src/db.c`
+(`write_victron()`), `src/db_schema.c`, `src/sys_status.c`,
+`web/src/web_victron.c`, `web/ui/victron.js`, `web/ui/victron.css`,
+`web/tests/test_victron.c`, `web/tests/test_fleet.c`,
 `packaging/systemd/sloth-va.service`,
 `packaging/systemd/sloth-va.sysusers.conf`, `packaging/default/sloth-va`,
 `Makefile` (`sloth-va`, `WITH_SDBUS`),
 `research/victron/instant-readout-and-gatt.md`.
 
-**Last updated**: 2026-11-15 (`--victron`: sloth's reader of the file,
+**Last updated**: 2026-11-15 (the web: slothweb's Victron tab,
+`/api/victron` and `/api/victron/history`; sloth.db v15
+`victron_devices` / `victron_readings`; the `victron` `source_status`
+row, so `SENSOR_SOURCE_DOWN` covers the file; the fleet decision,
+withheld whole; `victron_device` gains `services` and `values_src`,
+JSONL 1.10.0), 2026-11-15 (`--victron`: sloth's reader of the file,
 the `victron` sensor, `victron_device` and `sensor_health`'s `victron_*`),
 2026-11-15 (new: the helper, its files, its scan and session behaviour,
 the per-device support table).
@@ -158,11 +166,84 @@ gains kind `victron` ("Victron (sloth-va)"); `sensor_health` gains the
 device's latest values ([[jsonl-schema]]). sloth opens no Bluetooth
 socket for this and decrypts nothing; the file is all it sees.
 
-Not yet: a `sloth.db` table (history), slothweb's Victron tab, a
-`source_status` row (so `SENSOR_SOURCE_DOWN` does not cover it), and
-the fleet classification of `victron_device` (fail closed: it does not
-travel; a GATT reading is not monitor-mode provenance under ADR 0009,
-an Instant Readout one arguably is - the owner's call).
+sloth keeps, per device, the newest GATT session's service list
+(`services`: lower-case UUIDs joined by `,`, only when every byte is
+`[0-9a-fA-F-,]` and it fits sloth-va's 400-byte cap, otherwise absent;
+a later session without a list clears it) and which path delivered the
+newest record that carried values (`values_src`, `readout` or `gatt`).
+Values stay sticky across the two paths: a GATT session's `power_w`
+and a readout's `soc_pct` sit on one row, so a row's values are a mix
+whenever both paths deliver.
+
+### History: sloth.db v15
+
+With `--db`, `write_victron()` keeps `victron_devices` (one row per
+address: serial, model, record type, the newest session outcome and
+its services, when each path last delivered, sloth's counts) and
+`victron_readings` (each value under its own column, `src` the path of
+the newest values), at most one reading row a minute per device
+(`DB_VICTRON_MIN_S`), observation tier for the readings and entity
+tier for the inventory, so `--db-retain-days` and `--db-max-mb` apply
+as to every other table. Schema and the stamp-only v14 → v15 step:
+[[sqlite-schema]].
+
+### Source health
+
+`source_status` has a `victron` row, in `sloth`'s stream and sloth-rf's (`--victron`, kind `victron`,
+unit `records`): `live` is `ok` however quiet (sloth-va writes nothing
+while the devices are out of range), a file not there yet is `stale`,
+a read error `down`. `SENSOR_SOURCE_DOWN` reads that row like any
+other source's, so a broken file opens a WARN
+(`tests/test_sensor_rules.c test_victron_source_down`).
+
+### Fleet: withheld
+
+`victron_device` does not travel, and the importer refuses a peer's
+answer carrying one whole (`web/tests/test_fleet.c
+test_ingest_refuses_victron`). The rule (ADR 0009, CLAUDE.md) is
+provenance: a GATT session's values came through an authenticated
+connection, never monitor mode, so they never travel. An Instant
+Readout value is a passively heard advertisement, but sloth's row
+merges both paths' values, so no record can be shown to hold readout
+values only; the record is withheld whole, fail closed, until the
+owner classifies the readout half and a record that carries only it
+exists.
+
+### slothweb: the Victron tab
+
+A tab after rtl_433 (`web/ui/victron.js`, `web/ui/victron.css`), from
+`web_victron.c`:
+
+- `GET /api/victron?limit=` — the sensor block (the `victron_*`
+  members) and one entry per device, the most recently heard first:
+  address, serial, model, record type, `values_src`, `first_seen`,
+  `last_seen`, `last_readout`, `last_gatt`, `age_s`, `stale_after_s`,
+  `stale`, the counts, the last `session` and its `services` split into
+  a list, `rssi`, and `values` as `{name: {v, unit}}`. Kept in memory
+  from the stream, up to 32 rows, a row with no record for 660 s
+  dropped. Stale: sloth writes a device on a banded change or the 300 s
+  heartbeat, so a live device's newest record can be 300 s old; past
+  360 s (660 s for a device heard only through GATT sessions) it is
+  `stale`, and the tab marks the card and its figures.
+- `GET /api/victron/history?mac=&metric=&hours=` — one value of one
+  device over the last 1..720 hours (default 24) from sloth.db's
+  `victron_readings`: at most 240 buckets of at least 60 s, each
+  `[t, mean, min, max, n, gatt]` (gatt: the bucket's rows written while
+  the newest values were a GATT session's). `metric` must be one of
+  sloth's 16 value names; anything else is 400 `bad_metric`. A file
+  older than v15 answers `have:false` and no points.
+- Cards: a battery monitor shows voltage, current, state of charge,
+  consumed Ah, time to go, alarm (and power, starter or midpoint
+  voltage or temperature when present); a DC-DC charger its state
+  ([VED]'s names, as sloth-va's), error, input and output voltage and
+  off reason; any other device what values it has, and every card the
+  last GATT session's outcome with its service list. Charts: V, A and
+  SOC for a battery monitor, input and output V for a charger, each the
+  bucket means as a line over their min..max, scaled to the data (not
+  from zero) with the range in the caption, painted by `glyph.paint()`.
+- Scope: Monitor's and Hybrid's (the rtl_433 and APRS precedent);
+  under Local both routes answer `out_of_scope` once the query is
+  checked.
 
 ## Options
 
@@ -191,3 +272,5 @@ against the schedule after deploying).
 - [[deployment]] §10 — install, the BlueZ settings, the undo
 - [[ble]] — `--bt-monitor`, `BT_OWN_TRANSMIT`, `sloth-ble-scan`
 - [[rtl433]] — the file-source pattern sloth's reader follows
+- [[sqlite-schema]] — `victron_devices` and `victron_readings` (v15)
+- [[slothweb]] — the Victron tab

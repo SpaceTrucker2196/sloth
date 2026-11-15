@@ -462,7 +462,7 @@ static void test_bare_host_reports_nothing_as_zero(void) {
     ASSERT_EQ(count_of(b, "\"type\":\"sys_status\""), 1);
     const char *l = line_of(b, "sys_status", NULL);
     ASSERT(strstr(l, "\"seq\":1,\"interval_s\":60,") != NULL);
-    ASSERT(strstr(l, "\"temps\":0,\"volts\":0,\"power\":0,\"sources\":8,"
+    ASSERT(strstr(l, "\"temps\":0,\"volts\":0,\"power\":0,\"sources\":9,"
                      "\"sources_configured\":0,\"sources_ok\":0,\"sources_down\":0,"
                      "\"receivers\":0,\"beacon_recall_slots\":0,\"beacon_recall_max\":4096,"
                      "\"beacon_recall_overflowed\":0,\"beacon_recall_quiet\":0}") != NULL);
@@ -485,7 +485,8 @@ static void test_bare_host_reports_nothing_as_zero(void) {
     ASSERT_EQ(count_of(b, "\"type\":\"source_status\""), SYS_SRC_COUNT);
     ASSERT_EQ(count_of(b, "\"state\":\"not_configured\""), SYS_SRC_COUNT);
     static const char *const names[] = { "capture", "monitor", "btmon", "btcap",
-                                         "gnss", "adsb", "aprs", "rtl433" };
+                                         "gnss", "adsb", "aprs", "rtl433",
+                                         "victron" };
     for (int i = 0; i < SYS_SRC_COUNT; i++) {
         char want[40];
         snprintf(want, sizeof(want), "\"name\":\"%s\"", names[i]);
@@ -1145,6 +1146,38 @@ static void test_source_age_from_count(void) {
     done();
 }
 
+/* --victron (2026-11-15): the source_status row SENSOR_SOURCE_DOWN
+ * reads. Live is ok however quiet (sloth-va writes nothing while the
+ * devices are out of range); a file not there yet is stale; a read
+ * error is down. Seen red with the row's `configured` guard removed
+ * (the row read waiting, so stale, on a run without --victron). */
+static void test_victron_source_row(void) {
+    TEST_STATE(s);
+    fresh(&s);
+    tick(&s, 0);
+    ASSERT_EQ(src(SYS_SRC_VICTRON)->state, SYS_ST_NOT_CONFIGURED);
+    ASSERT_STR(src(SYS_SRC_VICTRON)->name, "victron");
+    ASSERT_STR(src(SYS_SRC_VICTRON)->flag, "--victron");
+    s.victron.configured = 1; s.victron.state = VICTRON_WAITING; s.victron.missing = 1;
+    snprintf(s.victron.src, sizeof(s.victron.src), "file:/var/lib/sloth-va/victron.jsonl");
+    tick(&s, 1000);
+    ASSERT_EQ(src(SYS_SRC_VICTRON)->state, SYS_ST_STALE);
+    ASSERT_STR(src(SYS_SRC_VICTRON)->detail, "waiting (file not there yet)");
+    ASSERT_STR(src(SYS_SRC_VICTRON)->endpoint, "file:/var/lib/sloth-va/victron.jsonl");
+    s.victron.state = VICTRON_LIVE; s.victron.missing = 0; s.victron.records = 3;
+    tick(&s, 2000);
+    ASSERT_EQ(src(SYS_SRC_VICTRON)->state, SYS_ST_OK);
+    ASSERT_EQ(src(SYS_SRC_VICTRON)->count, 3u);
+    tick(&s, 2000 + 3600000);
+    ASSERT_EQ(src(SYS_SRC_VICTRON)->state, SYS_ST_OK);          /* quiet, still ok */
+    s.victron.state = VICTRON_ERROR; s.victron.read_errors = 1;
+    snprintf(s.victron.err, sizeof(s.victron.err), "read: Permission denied");
+    tick(&s, 2000 + 3601000);
+    ASSERT_EQ(src(SYS_SRC_VICTRON)->state, SYS_ST_DOWN);
+    ASSERT_STR(src(SYS_SRC_VICTRON)->detail, "error: read: Permission denied");
+    done();
+}
+
 /* A source is tied to a receiver only where sysfs says so. */
 static void test_source_ties(void) {
     TEST_STATE(s);
@@ -1433,6 +1466,7 @@ void run_sys_status_tests(void) {
     RUN_TEST(test_hostile_device_strings);
     RUN_TEST(test_source_states);
     RUN_TEST(test_source_age_from_count);
+    RUN_TEST(test_victron_source_row);
     RUN_TEST(test_source_ties);
     RUN_TEST(test_no_path_outside_proc_and_sys);
     RUN_TEST(test_cadence_is_a_minute_not_a_firehose);

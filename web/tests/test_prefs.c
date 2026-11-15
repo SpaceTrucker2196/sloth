@@ -147,6 +147,7 @@ static const char *const NOT_KEPT[] = {
      * which a reload fetches anew */
     "spec-log", "spec-topn",
     "ak-filter",  /* allkeys.js's legend filter: a look at one metric's keys */
+    "vc-hours",   /* victron.js's chart window: a look, 24 h again on a reload */
     /* web/ui/frrs.js's forms: each the fields of one change to write,
      * emptied once written, not a setting */
     "frrs-note", "tc-u-name", "tc-u-kind", "tc-u-parent", "tc-p-nom", "tc-p-class",

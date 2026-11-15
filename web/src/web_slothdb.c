@@ -164,6 +164,24 @@ const web_sdb_col_t web_sdb_allow[] = {
     { "aprs_packets", "speed_kt", 13, 1, 0 },     { "aprs_packets", "course", 13, 1, 0 },
     { "aprs_packets", "alt_m", 13, 1, 0 },        { "aprs_packets", "level", 13, 1, 0 },
     { "aprs_packets", "status", 13, 1, 0 },       { "aprs_packets", "comment", 13, 1, 0 },
+    /* v15: the --victron file's readings (docs/wiki/victron.md). The
+     * owner's own devices' figures, sloth's charset-checked address and
+     * the path word; nothing a third party chose but the address. */
+    { "victron_readings", "last_seen", 15, 1, 0 },  { "victron_readings", "mac", 15, 1, 0 },
+    { "victron_readings", "src", 15, 1, 0 },        { "victron_readings", "rssi", 15, 1, 0 },
+    { "victron_readings", "voltage_v", 15, 1, 0 },
+    { "victron_readings", "aux_voltage_v", 15, 1, 0 },
+    { "victron_readings", "mid_voltage_v", 15, 1, 0 },
+    { "victron_readings", "input_v", 15, 1, 0 },    { "victron_readings", "output_v", 15, 1, 0 },
+    { "victron_readings", "current_a", 15, 1, 0 },  { "victron_readings", "power_w", 15, 1, 0 },
+    { "victron_readings", "consumed_ah", 15, 1, 0 },
+    { "victron_readings", "soc_pct", 15, 1, 0 },    { "victron_readings", "ttg_min", 15, 1, 0 },
+    { "victron_readings", "temperature_c", 15, 1, 0 },
+    { "victron_readings", "alarm_reason", 15, 1, 0 },
+    { "victron_readings", "aux_input", 15, 1, 0 },
+    { "victron_readings", "device_state", 15, 1, 0 },
+    { "victron_readings", "charger_error", 15, 1, 0 },
+    { "victron_readings", "off_reason", 15, 1, 0 },
     /* v11 (#175): one row per incident beside the per-finding alerts
      * row. The key is the alerts key and as predicate-only as that one;
      * so is sloth's incident_id, a hash over the key (web_alerts.h never
@@ -803,6 +821,12 @@ int web_sdb_aprs_tracks(web_sdb_conn_t *c, long long from, long long bucket_s,
                         web_sdb_aprs_trk_t *out, int max, int *more) {
     (void)c; (void)from; (void)bucket_s; (void)out; (void)max;
     if (more) *more = 0;
+    return -1;
+}
+int web_sdb_victron_history(web_sdb_conn_t *c, const char *mac, const char *col,
+                            long long from, long long bucket_s,
+                            web_sdb_vic_pt_t *out, int max) {
+    (void)c; (void)mac; (void)col; (void)from; (void)bucket_s; (void)out; (void)max;
     return -1;
 }
 int web_sdb_spent(web_sdb_conn_t *c) { (void)c; return 1; }
@@ -3856,6 +3880,55 @@ int web_sdb_aprs_tracks(web_sdb_conn_t *c, long long from, long long bucket_s,
     }
     return n;
 }
+/* ── Victron (v15) ───────────────────────────────────────────────── */
+
+/* A victron_readings column web_sdb_allow[] lists, by name: the only
+ * text this file ever splices into a statement here, and only after
+ * this check. */
+static int victron_col_ok(const char *col) {
+    if (!col || !*col || strlen(col) > 24) return 0;
+    for (size_t i = 0; i < web_sdb_allow_n; i++)
+        if (!strcmp(web_sdb_allow[i].table, "victron_readings") &&
+            !strcmp(web_sdb_allow[i].column, col))
+            return strcmp(col, "mac") && strcmp(col, "src") && strcmp(col, "last_seen");
+    return 0;
+}
+
+int web_sdb_victron_history(web_sdb_conn_t *c, const char *mac, const char *col,
+                            long long from, long long bucket_s,
+                            web_sdb_vic_pt_t *out, int max) {
+    if (!victron_col_ok(col) || bucket_s < 1 || max < 1) return 0;
+    const char *k[] = { "last_seen", "mac", "src", col, NULL };
+    if (!have_all(c, "victron_readings", k)) return 0;
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+             /* The mean as SUM / COUNT: the authorizer's function list
+              * (FUNCS[]) has no avg, and needs none for this. */
+             "SELECT (last_seen / ?3) * ?3 AS b, COUNT(%s), SUM(%s) * 1.0 / COUNT(%s),"
+             " MIN(%s), MAX(%s), SUM(src = 'gatt') FROM victron_readings"
+             " WHERE mac = ?1 AND last_seen >= ?2 AND %s IS NOT NULL"
+             " GROUP BY b ORDER BY b LIMIT ?4", col, col, col, col, col, col);
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_text(st, 1, mac, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 2, from);
+    sqlite3_bind_int64(st, 3, bucket_s);
+    sqlite3_bind_int(st, 4, max);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW && n < max) {
+        web_sdb_vic_pt_t *p = &out[n++];
+        p->t = sqlite3_column_int64(st, 0);
+        p->n = sqlite3_column_int64(st, 1);
+        p->mean = sqlite3_column_double(st, 2);
+        p->min = sqlite3_column_double(st, 3);
+        p->max = sqlite3_column_double(st, 4);
+        p->gatt = sqlite3_column_int64(st, 5);
+    }
+    if (rc == SQLITE_ROW) rc = SQLITE_DONE;
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
 #undef TEXT
 
 #endif /* WITH_SQLITE */

@@ -158,6 +158,10 @@ void web_server_set_rtl433(web_server_t *s, web_rtl433_t *a) {
     s->rtl433 = a;
 }
 
+void web_server_set_victron(web_server_t *s, web_victron_t *a) {
+    s->victron = a;
+}
+
 void web_server_set_sys(web_server_t *s, web_sys_t *y) {
     s->sys = y;
 }
@@ -253,6 +257,7 @@ static void health_now(web_server_t *s, web_health_t *h) {
     h->adsb        = s->adsb;
     h->aprs        = s->aprs;
     h->rtl433      = s->rtl433;
+    h->victron     = s->victron;
     h->sys         = s->sys;
     h->lure        = s->lure;
     h->sql         = s->sql;

@@ -395,6 +395,11 @@ static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
         web_jw_raw(&w, ",\"rtl433\":");
         web_rtl433_health_json(h->rtl433, &w);
     }
+    /* The Victron tab (web_victron.h), likewise only when kept. */
+    if (h->victron) {
+        web_jw_raw(&w, ",\"victron\":");
+        web_victron_health_json(h->victron, &w);
+    }
     web_jw_raw(&w, ",\"sse_clients\":");
     web_jw_int(&w, h->sse_clients);
     web_jw_raw(&w, ",\"tick_seq\":");
@@ -774,7 +779,7 @@ enum { M5_CHANNELS, M5_DEAUTH, M5_APS, M5_OVERVIEW, M5_HDEVICES, M5_HALERTS,
        M5_HFLOWS, M5_SESSIONS, M5_SESSIONS_NEW, M6_FLOWS, M6_GRAPH, M5_WLOCAL,
        M5_CHAIN, RF_GNSS_SEEN, RF_GNSS_SAT, RF_ADSB_SEEN, RF_ADSB_AC, RF_GNSS_TRACKS,
        RF_APRS_SEEN, RF_APRS_STN, RF_APRS_TRK, M5_SSID,
-       PR_CLIENTS, PR_SSIDS, PR_SHARED, PR_GROUPS };
+       PR_CLIENTS, PR_SSIDS, PR_SHARED, PR_GROUPS, RF_VICTRON_HIST };
 
 /* The WiFi and History routes (M5, web_wifi.h, web_history.h) and the
  * Flows routes (M6, web_flows.h): the same shape as route_m4(). */
@@ -800,6 +805,7 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
         web_aprs_seen_route, web_aprs_station_route, web_aprs_tracks_route,
         web_ssid_route, web_probes_clients_route, web_probes_ssids_route,
         web_probes_shared_route, web_probes_groups_route,
+        web_victron_history_route,
     };
     /* A view a capture scope holds nothing of (web_scope.h): the WiFi
      * view's channels, deauths and APs are the monitor radio's, its card
@@ -830,6 +836,9 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
                                     which == RF_APRS_TRK)
             ? "APRS stations are the Dire Wolf decoder's (--aprs), a passive "
               "radio; the host's own interfaces carried none"
+        : sc == WEB_SCOPE_LOCAL && which == RF_VICTRON_HIST
+            ? "Victron devices are sloth-va's file (--victron), read off its "
+              "Bluetooth receiver; the host's own interfaces carried none"
         : sc == WEB_SCOPE_LOCAL && which >= M5_SSID && which <= PR_GROUPS
             ? "an SSID's beacons and the probe requests asking for it are the "
               "passive monitor radio's; the host's own interfaces carried none "
@@ -1083,6 +1092,36 @@ static int route_aprs(const web_req_t *rq, const web_health_t *h,
     } else {
         rc = web_aprs_route(h->aprs, rq->query, h->wall_s, none_here, body, cap, &bl, &status);
         if (rc == 0 && none_here && status == 200) bl = web_aprs_out_of_scope_json(body, cap);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/victron (web_victron.h): the owner's Victron devices off
+ * sloth-va's file. The rtl_433 and APRS precedent: a receiver's data,
+ * Monitor's and Hybrid's; under Local the query is checked, then the
+ * one out_of_scope answer. */
+static int route_victron(const web_req_t *rq, const web_health_t *h,
+                         char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = web_victron_route(h->victron, rq->query, h->wall_s, none_here, body, cap,
+                               &bl, &status);
+        if (rc == 0 && none_here && status == 200) bl = web_victron_out_of_scope_json(body, cap);
     }
     if (rc != 0 || bl == 0) {
         r->status = 503;
@@ -2088,6 +2127,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             { "/api/aprs/seen", RF_APRS_SEEN },
             { "/api/aprs/station", RF_APRS_STN },
             { "/api/aprs/tracks", RF_APRS_TRK },
+            /* Victron history (web_victron.h): sloth.db's. */
+            { "/api/victron/history", RF_VICTRON_HIST },
             { "/api/wifi/local", M5_WLOCAL },
             { "/api/history/overview", M5_OVERVIEW },
             { "/api/history/devices", M5_HDEVICES },
@@ -2122,6 +2163,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_aprs(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/rtl433"))
             return route_rtl433(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/victron"))
+            return route_victron(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/spectrum"))
             return route_spectrum(rq, h, 0, out, outsz, r);
         if (!strcmp(rq->path, "/api/camera.jpg"))

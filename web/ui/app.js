@@ -1373,6 +1373,8 @@
   VIEWS.push("spectrum");
   // The rtl_433 tab (web/ui/rtl433.js, #208), a tab of its own.
   VIEWS.push("rtl433");
+  // The Victron tab (web/ui/victron.js), a tab of its own.
+  VIEWS.push("victron");
   // The Camera tab (web/ui/camera.js), a tab of its own.
   VIEWS.push("camera");
   // The views with a tab, and the drill-downs: the Alerts page (6),
@@ -1427,6 +1429,8 @@
     if (v === "spectrum" && window.SlothSpectrum) SlothSpectrum.show({ prefGet: prefGet, prefSet: prefSet });
     // The rtl_433 tab (rtl433.js, its own module): a no-op when not loaded.
     if (v === "rtl433" && window.SlothRtl433) SlothRtl433.show();
+    // The Victron tab (victron.js, its own module): a no-op when not loaded.
+    if (v === "victron" && window.SlothVictron) SlothVictron.show();
     // The Camera tab (camera.js, its own module): a no-op when not loaded.
     if (v === "camera" && window.SlothCamera) SlothCamera.show();
     // The Radar view (radar.js, its own module): a no-op when not loaded.
@@ -1527,6 +1531,7 @@
   $("nav-aprs").addEventListener("click", function () { show("aprs"); });
   $("nav-spectrum").addEventListener("click", function () { show("spectrum"); });
   $("nav-rtl433").addEventListener("click", function () { show("rtl433"); });
+  $("nav-victron").addEventListener("click", function () { show("victron"); });
   $("nav-camera").addEventListener("click", function () { show("camera"); });
   $("nav-radar").addEventListener("click", function () { show("radar"); });
   $("nav-probes").addEventListener("click", function () { show("probes"); });
@@ -6234,6 +6239,9 @@
   if (window.SlothLure) SlothLure.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp });
   // The rtl_433 tab (web/ui/rtl433.js): the page's helpers, lent once.
   if (window.SlothRtl433) SlothRtl433.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp });
+  // The Victron tab (web/ui/victron.js): the page's helpers, lent once.
+  if (window.SlothVictron) SlothVictron.init({ getJSON: getJSON, errText: errText,
+    shortStamp: shortStamp, tok: tok });
   // One BSSID's KARMA detail (web/ui/karma.js): the page's helpers, lent once.
   if (window.SlothKarma) SlothKarma.init({ getJSON: getJSON, errText: errText, keyColor: keyColor,
     stamp: stamp, shortStamp: shortStamp, kvList: kvList, alertLink: alertLink });

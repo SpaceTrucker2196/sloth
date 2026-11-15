@@ -46,7 +46,7 @@
  * stream's history — the records predate the field by many releases. A
  * `sensor_health` line with no `jsonl_version` is from a stream written
  * before this version and says nothing more than that. */
-#define SLOTH_JSONL_VERSION "1.9.0"
+#define SLOTH_JSONL_VERSION "1.10.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
@@ -3728,6 +3728,8 @@ typedef struct {
  * (sticky: a record without a value does not erase it). */
 #define VICTRON_MAX_DEVICES 16
 #define VICTRON_MAX_VALS    16
+/* sloth-va's cap on a session's service list (va_record_jsonl()). */
+#define VICTRON_SERVICES_MAX 400
 
 typedef struct {
     char     name[24];         /* an allow-listed name, unit-suffixed */
@@ -3740,12 +3742,18 @@ typedef struct {
     char     model[32];        /* sloth-va's model name, "" none */
     char     record[24];       /* the Instant Readout record type, "" none */
     char     session[24];      /* the newest GATT session's outcome, "" none */
+    char     services[VICTRON_SERVICES_MAX + 1];
+                               /* that session's service UUIDs, comma
+                                * separated, lower case; "" none (sloth-va
+                                * lists them only for no_supported_service) */
     int      has_rssi;
     int      rssi;
     time_t   first_seen, last_seen;   /* host clock at the read */
     time_t   last_readout, last_gatt; /* 0 never */
     uint64_t readings;         /* records with at least one value */
     uint64_t sessions;         /* gatt records */
+    int      vals_gatt;        /* the newest record WITH values was a GATT
+                                * session's (1) or a readout's (0) */
     int      nvals;
     victron_val_t vals[VICTRON_MAX_VALS];
 } victron_device_t;

@@ -191,6 +191,25 @@ static int mac_ok(const char *m) {
     return 1;
 }
 
+/* sloth-va's service list (va_record_jsonl()): UUIDs joined by ','.
+ * Kept lower-cased only when every byte is [0-9a-fA-F-,] and it fits;
+ * otherwise "" - a list with anything else in it is not one sloth-va
+ * wrote, and a cut list would name a UUID that was not there. */
+static void services_take(const char *v, char *out, size_t outsz) {
+    size_t n = strlen(v);
+    out[0] = '\0';
+    if (n == 0 || n >= outsz) return;
+    for (size_t i = 0; i < n; i++) {
+        char c = v[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+              (c >= 'A' && c <= 'F') || c == '-' || c == ','))
+            return;
+    }
+    for (size_t i = 0; i < n; i++)
+        out[i] = (char)((v[i] >= 'A' && v[i] <= 'F') ? v[i] + 32 : v[i]);
+    out[n] = '\0';
+}
+
 static int reject(int *why, int code) {
     if (why) *why = code;
     return -1;
@@ -267,6 +286,12 @@ int victron_line_parse(const char *line, size_t n, victron_msg_t *m, int *why) {
             if (jnum(&c, &d) != 0) return reject(why, VICTRON_REJ_MALFORMED);
             if (isfinite(d) && d >= -127 && d <= 20) { m->has_rssi = 1; m->rssi = (int)d; }
             else m->bad_values++;
+        } else if (!strcmp(k, "services") && c.p < c.e && *c.p == '"') {
+            /* Read one byte past the cap, so an over-long list is seen
+             * as over-long rather than cut to fit. */
+            char big[VICTRON_SERVICES_MAX + 2];
+            if (jstr(&c, big, sizeof(big)) != 0) return reject(why, VICTRON_REJ_MALFORMED);
+            services_take(big, m->services, sizeof(m->services));
         } else if ((!strcmp(k, "type") || !strcmp(k, "source") || !strcmp(k, "mac") ||
                     !strcmp(k, "serial") || !strcmp(k, "model") || !strcmp(k, "record") ||
                     !strcmp(k, "session")) && c.p < c.e && *c.p == '"') {
@@ -374,6 +399,8 @@ uint64_t victron_device_sig(const victron_device_t *d) {
     h = mix_str(h, d->model);
     h = mix_str(h, d->record);
     h = mix_str(h, d->session);
+    h = mix_str(h, d->services);
+    h = mix64(h, d->vals_gatt);
     /* Values in allow-list order, so the order records arrived in does
      * not move the signature. */
     for (int i = 0; i < NVALS; i++) {
@@ -423,10 +450,14 @@ static void merge(victron_device_t *d, const victron_msg_t *m, time_t wall) {
         d->sessions++;
         d->last_gatt = wall;
         if (m->session[0]) put(d->session, sizeof(d->session), m->session);
+        /* The list belongs to the session that wrote it: a session that
+         * names none (sloth-va lists them only when it found no
+         * supported service) clears the last one. */
+        put(d->services, sizeof(d->services), m->services);
     } else {
         d->last_readout = wall;
     }
-    if (m->nvals > 0) d->readings++;
+    if (m->nvals > 0) { d->readings++; d->vals_gatt = m->gatt; }
     for (int i = 0; i < m->nvals; i++) {
         int at = -1;
         for (int j = 0; j < d->nvals; j++)

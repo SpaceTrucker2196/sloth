@@ -52,6 +52,10 @@ static const struct { const char *t; int tag; } RTYPES[] = {
     { "aprs_packet", M }, { "aprs_station", M },
     /* the rtl_433 decoder's SDR (web_rtl433.h): passive radio, as BLE */
     { "rtl433_device", M },
+    /* sloth-va's file (web_victron.h): a Bluetooth receiver's, Monitor's
+     * by the rtl_433 and APRS precedent; never the host's own
+     * interfaces'. Display only: the fleet withholds it regardless. */
+    { "victron_device", M },
     /* the IP capture (src/capture/capture.c) */
     { "dns", LI }, { "tls", LI }, { "quic", LI }, { "http", LI }, { "ntp", LI },
     { "icmp", LI }, { "packet", LI },

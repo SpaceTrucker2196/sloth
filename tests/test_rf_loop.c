@@ -257,8 +257,8 @@ static void test_rf_stream_is_only_its_own(void) {
     ASSERT(strstr(b, "\"name\":\"btcap\"") == NULL);
     ASSERT(strstr(a, "\"name\":\"capture\"") != NULL);
     ASSERT(strstr(a, "\"name\":\"monitor\"") != NULL);
-    static const char *const own[] = { "gnss", "adsb", "aprs", "rtl433" };
-    for (int i = 0; i < 4; i++) {
+    static const char *const own[] = { "gnss", "adsb", "aprs", "rtl433", "victron" };
+    for (int i = 0; i < 5; i++) {
         char want[48];
         snprintf(want, sizeof(want), "\"name\":\"%s\",", own[i]);
         ASSERT(strstr(b, want) != NULL);
@@ -267,9 +267,10 @@ static void test_rf_stream_is_only_its_own(void) {
      * name either. (Seen red with the `name` guards taken out of
      * src/sys_status.c's emit path: four nameless rows a batch.) */
     ASSERT(strstr(b, "\"name\":\"\"") == NULL);
-    /* sys_status counts the rows the daemon has. */
-    ASSERT(strstr(b, "\"sources\":4,\"sources_configured\":4,") != NULL);
-    ASSERT(strstr(a, "\"sources\":8,") != NULL);
+    /* sys_status counts the rows the daemon has (victron's among them
+     * since JSONL 1.10.0, not configured in this scenario). */
+    ASSERT(strstr(b, "\"sources\":5,\"sources_configured\":4,") != NULL);
+    ASSERT(strstr(a, "\"sources\":9,") != NULL);
 
     /* sys_status's beacon-recall block is the beacon table's, which
      * this daemon does not have: absent, not zero
