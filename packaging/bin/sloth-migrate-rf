@@ -37,15 +37,23 @@
 #     original, sloth-rf's first. If anything fails, both files are left
 #     as they were.
 #   - A second run finds nothing to do, says so, and writes nothing.
-#   - Refused: --gps naming a serial device (a path under /dev). After
-#     the split both daemons read GNSS and a serial device opens once;
-#     the fix is gpsd, which holds the receiver and serves both.
+#   - Refused: --gps naming a serial device, which is any value that
+#     starts with '/' (sloth reads every such value as a device, under
+#     /dev or not). After the split both daemons read GNSS and a serial
+#     device opens once; the fix is gpsd, which holds the receiver and
+#     serves both.
 #   - Refused unless --force: an /etc/default/sloth-rf that already has
 #     one of these flags with another value, or an RF decoder flag that
 #     /etc/default/sloth does not have while it has others to move.
 #   - Refused: quoting inside either value (one pair of quotes around
 #     the whole value is kept), a flag given twice, a flag with no
-#     value, two SLOTH_ARGS= lines in one file.
+#     value, two SLOTH_ARGS= lines in one file. Blanks between the
+#     name and the '=' are read as systemd reads them (the line is
+#     live) and the line is written back without them.
+#   - Refused: either file being a symbolic link. The rename would put
+#     a regular file where the link was and leave the file it points to
+#     with the old flags. Name that file instead: env DEFAULTS=<file> for
+#     the sensor's, RF_DEFAULTS=<file> for sloth-rf's.
 #   - Refused under --apply: no sloth-rf binary or no sloth-rf.service
 #     installed. Moving the flags to a daemon that is not there would
 #     stop the decoders' records at the next restart.
@@ -102,10 +110,13 @@ refuse() { echo "$ME: REFUSED: $*" >&2; echo "$ME: nothing was changed" >&2; exi
 
 # ── Reading a defaults file ──────────────────────────────────────────────
 # Every value of VAR= in FILE, one per line. Comment lines do not match:
-# the name has to start the line, after blanks only.
+# the name has to start the line, after blanks only. Blanks between the
+# name and the '=' and after the '=' are allowed, because systemd allows
+# them: it trims the name and skips to the value, so "VAR = value" is a
+# live line for the unit.
 read_var() {   # read_var FILE VAR
     RV_VAR=$2 awk '
-        BEGIN { re = "^[ \t]*" ENVIRON["RV_VAR"] "=" }
+        BEGIN { re = "^[ \t]*" ENVIRON["RV_VAR"] "[ \t]*=[ \t]*" }
         $0 ~ re { sub(re, ""); sub(/[ \t]+$/, ""); print }
     ' "$1"
 }
@@ -132,7 +143,7 @@ unquote() {
 rewrite_var() {   # rewrite_var FILE VAR VALUE QUOTE
     RW_VAR=$2 RW_VAL=$3 RW_Q=$4 awk '
         BEGIN {
-            re = "^[ \t]*" ENVIRON["RW_VAR"] "="
+            re = "^[ \t]*" ENVIRON["RW_VAR"] "[ \t]*="
             line = ENVIRON["RW_VAR"] "=" ENVIRON["RW_Q"] ENVIRON["RW_VAL"] ENVIRON["RW_Q"]
         }
         $0 ~ re && !done { print line; done = 1; next }
@@ -225,7 +236,9 @@ plan() {
             for (i = 1; i <= N["s"]; i++) if (K["s", i] == "move") nmove++
             if (("s", "--gps") in AT) {
                 v = V["s", AT["s", "--gps"]]
-                if (v ~ /^\/dev\//) print "SERIAL\t" v
+                # src/gps.c gps_spec_parse(): a spec that starts with
+                # "/" is a serial device, wherever the path leads.
+                if (v ~ /^\//) print "SERIAL\t" v
             }
 
             for (i = 1; i <= N["r"]; i++) {
@@ -280,6 +293,13 @@ plan_get() {   # every text of KEY, one per line
 }
 
 # ── Read ─────────────────────────────────────────────────────────────────
+# A link is refused before anything is read: the rename at the end
+# replaces the name, not the file the link points to.
+is_link() {
+    [ ! -L "$1" ] || refuse "$1 is a symbolic link. This tool renames a new file over the original, which would replace the link and leave the file it points to with the old flags. Run it on that file: sudo env $2=<the file the link points to> $ME"
+}
+is_link "$DEFAULTS" DEFAULTS
+is_link "$RF_DEFAULTS" RF_DEFAULTS
 [ -f "$DEFAULTS" ] || refuse "no $DEFAULTS: there is no Wi-Fi sensor configuration to migrate from"
 [ -r "$DEFAULTS" ] || refuse "cannot read $DEFAULTS"
 [ "$(read_var "$DEFAULTS" SLOTH_ARGS | wc -l)" -le 1 ] ||
@@ -410,11 +430,14 @@ fi
 [ "$(read_var "$S_TMP" SLOTH_ARGS)" = "$S_Q$NEW_S$S_Q" ] || fail "$S_TMP does not read back as written"
 [ "$(read_var "$R_TMP" SLOTH_RF_ARGS)" = "$R_Q$NEW_RF$R_Q" ] || fail "$R_TMP does not read back as written"
 
-"$CP" -p "$DEFAULTS" "$S_BAK" || fail "cannot back up $DEFAULTS to $S_BAK"
+# The flag before the copy: neither name existed a moment ago (tested
+# above), so whatever is there after a failed or interrupted cp is this
+# run's to remove.
 MADE_S_BAK=1
+"$CP" -p "$DEFAULTS" "$S_BAK" || fail "cannot back up $DEFAULTS to $S_BAK"
 if [ "$RF_EXISTS" -eq 1 ]; then
-    "$CP" -p "$RF_DEFAULTS" "$R_BAK" || fail "cannot back up $RF_DEFAULTS to $R_BAK"
     MADE_R_BAK=1
+    "$CP" -p "$RF_DEFAULTS" "$R_BAK" || fail "cannot back up $RF_DEFAULTS to $R_BAK"
 fi
 cmp -s "$DEFAULTS" "$S_BAK" || fail "$S_BAK is not a copy of $DEFAULTS"
 [ "$RF_EXISTS" -eq 0 ] || cmp -s "$RF_DEFAULTS" "$R_BAK" || fail "$R_BAK is not a copy of $RF_DEFAULTS"

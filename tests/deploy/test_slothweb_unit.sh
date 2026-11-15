@@ -37,6 +37,49 @@ n=$(grep -c '^SystemCallFilter=[^~]' "$unit")
 if [ "$n" -eq 2 ]; then pass=$((pass + 1));
 else fail=$((fail + 1)); echo "  FAIL $n allow lines, want 2 (@system-service, fchown)"; fi
 
+# The unit and the slothweb it runs agree (#215 review). slothweb exits
+# on an option it does not know, so a unit installed over an older
+# binary is a web UI that never starts. `make install-service` compares
+# every --flag on ExecStart with the installed slothweb and refuses,
+# before writing anything, when one is missing; with no slothweb
+# installed there is nothing to disagree with. Staged under a scratch
+# DESTDIR; the "binary" is a text file holding the flags. Seen red with
+# the check removed from the recipe (the unit was installed over the
+# short binary), and with sloth-rf.service installed unconditionally.
+flags=$(sed -n '/^ExecStart=/,/[^\\]$/p' "$unit" | grep -o -e '--[a-z][a-z0-9-]*')
+last=$(printf '%s\n' "$flags" | tail -n 1)
+stage=$(mktemp -d "${TMPDIR:-/tmp}/sloth-unit-stage.XXXXXX") || exit 2
+svc() { make -s install-service DESTDIR="$stage/$1" > "$stage/$1.out" 2>&1; }
+if [ "$(printf '%s\n' "$flags" | wc -l)" -ge 4 ]; then pass=$((pass + 1));
+else fail=$((fail + 1)); echo "  FAIL the unit's ExecStart flags were not read: '$flags'"; fi
+# No slothweb installed.
+if svc none && [ -f "$stage/none/etc/systemd/system/slothweb.service" ]; then pass=$((pass + 1));
+else fail=$((fail + 1)); echo "  FAIL install-service with no slothweb installed: $(cat "$stage/none.out")"; fi
+# sloth-rf.service only beside its binary: slothweb.service Wants= it,
+# and a unit with nothing to run fails at every start of slothweb.
+if [ ! -e "$stage/none/etc/systemd/system/sloth-rf.service" ] &&
+   grep -qF "sloth-rf.service was NOT installed" "$stage/none.out"; then pass=$((pass + 1));
+else fail=$((fail + 1)); echo "  FAIL sloth-rf.service installed with no sloth-rf binary, or not said: $(cat "$stage/none.out")"; fi
+# An installed slothweb that lacks one flag.
+mkdir -p "$stage/old/usr/local/bin"
+printf '%s\n' "$flags" | grep -vxF -e "$last" > "$stage/old/usr/local/bin/slothweb"
+if svc old; then fail=$((fail + 1)); echo "  FAIL install-service over a slothweb without $last succeeded";
+else pass=$((pass + 1)); fi
+if grep -qF -e "does not know $last" "$stage/old.out"; then pass=$((pass + 1));
+else fail=$((fail + 1)); echo "  FAIL the refusal does not name $last: $(cat "$stage/old.out")"; fi
+if [ ! -e "$stage/old/etc" ] && [ ! -e "$stage/old/usr/lib" ]; then pass=$((pass + 1));
+else fail=$((fail + 1)); echo "  FAIL the refused install-service wrote: $(find "$stage/old" -type f)"; fi
+# One that has them all, with sloth-rf beside it.
+mkdir -p "$stage/new/usr/local/bin"
+printf '%s\n' "$flags" > "$stage/new/usr/local/bin/slothweb"
+printf '#!/bin/sh\n' > "$stage/new/usr/local/bin/sloth-rf"
+chmod 755 "$stage/new/usr/local/bin/sloth-rf"
+if svc new && [ -f "$stage/new/etc/systemd/system/slothweb.service" ] &&
+   [ -f "$stage/new/etc/systemd/system/sloth-rf.service" ] &&
+   [ ! -e "$stage/new/etc/systemd/system/sloth-rf.service.tmp" ]; then pass=$((pass + 1));
+else fail=$((fail + 1)); echo "  FAIL install-service beside a current slothweb and sloth-rf: $(cat "$stage/new.out")"; fi
+rm -rf "$stage"
+
 # The filter itself, on a live user manager.
 if command -v systemd-run >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 &&
    systemd-run --user --wait --quiet /bin/true >/dev/null 2>&1; then

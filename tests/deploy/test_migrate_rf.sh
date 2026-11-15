@@ -14,19 +14,27 @@
 # read as the value, no systemctl is ever run, a file-only move prints
 # no AF_INET step, nothing to migrate creates no file) were each seen to
 # fail under a mutation of the tool before this file claimed them:
-# docs/wiki/log.md, the #215 entry, names each one.
+# docs/wiki/log.md, the #215 entry, names each one. The review's cases
+# (the section "Review of #215") say beside each what was removed from
+# the tool to see it fail.
 #
 # check() evals its first argument, so the single-quoted expressions are
 # meant not to expand here (SC2016) and the variables they read look
 # unused to shellcheck (SC2034).
 # shellcheck disable=SC2016,SC2034
 set -u
+# The modes asserted below (0640, 0664, 0644) are what the tool keeps or
+# sets, whatever the caller's umask is.
+umask 022
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 TOOL=$REPO/packaging/bin/sloth-migrate-rf
 # The shell the tool runs under: TOOL_SH="busybox sh" or "bash --posix"
 # checks it stays POSIX.
 TOOL_SH=${TOOL_SH:-sh}
+# The awk the garbling stub hands every other call to.
+REAL_AWK=$(command -v awk) || exit 1
+TAB=$(printf '\t')
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/sloth-rf-deploy-test.XXXXXX") || exit 1
 # KEEP=1 leaves the scratch tree behind for inspection.
 [ -n "${KEEP:-}" ] || trap 'chmod -R u+w "$SCRATCH" 2>/dev/null; rm -rf "$SCRATCH"' EXIT
@@ -42,8 +50,8 @@ check() { if eval "$1"; then ok; else bad "$2"; fi; }
 
 # Invented paths and an invented position, never a real site's.
 ADSB=/run/readsb/aircraft.json
-APRS=/var/lib/direwolf/packets.log
-R433=/var/lib/rtl_433/events.json
+APRS=/var/lib/direwolf/aprs.log
+R433=/var/lib/rtl_433/events.jsonl
 GPSD=gpsd://127.0.0.1:2947
 LOC=10.5,-20.25,30
 
@@ -106,9 +114,10 @@ run() {
     RC=$?
 }
 
-# Every file under the root: path, mode and content.
+# Every file under the root: path, mode and content; a symbolic link by
+# what it points to.
 tree_hash() {
-    (cd "$1" && find . \( -type f -o -type d \) -exec ls -ld {} + | awk '{ print $1, $NF }' | LC_ALL=C sort
+    (cd "$1" && find . \( -type f -o -type d -o -type l \) -exec ls -ld {} + | awk '{ print $1, $NF }' | LC_ALL=C sort
      find . -type f -exec sha256sum {} + | LC_ALL=C sort) | sha256sum
 }
 args_of() {   # args_of FILE VAR -> the value of its one live line
@@ -383,6 +392,209 @@ MVSTUB=
 STAMP=20261115-120100
 run --apply
 check '[ "$RC" -eq 0 ] && [ -e "$R" ] && [ "$(backups)" = "$S.bak.20261115-120100 " ]' "the run after a failure: exit $RC, backups $(backups): $(cat "$W/out")"
+
+# ── Review of #215 ───────────────────────────────────────────────────────
+# Each case says what was removed from the tool to see it fail.
+
+# A serial GPS is any --gps value that starts with '/': src/gps.c
+# gps_spec_parse() reads every such spec as a device, not only one under
+# /dev (a link to the tty kept elsewhere, a doubled slash). Red with the
+# test put back to "under /dev/".
+refusal serial-slashes "SLOTH_ARGS=--adsb $ADSB --gps //dev/ttyACM0" "names the serial device //dev/ttyACM0" --apply
+refusal serial-link "SLOTH_ARGS=--adsb $ADSB --gps /etc/gps0" "names the serial device /etc/gps0" --apply
+refusal serial-eq "SLOTH_ARGS=--gps=/srv/gnss/tty0" "names the serial device /srv/gnss/tty0"
+
+# Blanks before '=': systemd drops them from the name, so the line is
+# live for the unit and has to be for the tool. Red with the name
+# required to touch the '=': "nothing to migrate" for the first, a
+# second SLOTH_RF_ARGS= line appended for the second, the conflict and
+# the second line not seen for the last two.
+setup blank-eq "SLOTH_ARGS = --adsb $ADSB --site-label x"
+run --apply
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+check '! grep -qF "nothing to migrate" "$W/out"' "a live 'SLOTH_ARGS =' line was not read: $(cat "$W/out")"
+check '[ "$(args_of "$S" SLOTH_ARGS)" = "--site-label x" ]' "SLOTH_ARGS after: $(grep SLOTH_ARGS "$S")"
+check '[ "$(grep -c "^[ $TAB]*SLOTH_ARGS[ $TAB]*=" "$S")" -eq 1 ]' "not exactly one live SLOTH_ARGS line: $(grep SLOTH_ARGS "$S")"
+check '[ "$(args_of "$R" SLOTH_RF_ARGS)" = "--adsb $ADSB" ]' "SLOTH_RF_ARGS after: $(args_of "$R" SLOTH_RF_ARGS)"
+setup blank-eq-rf "SLOTH_ARGS=--adsb $ADSB"
+rf_defaults "SLOTH_RF_ARGS${TAB}=${TAB}--strict"
+run --apply
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+check '[ "$(args_of "$R" SLOTH_RF_ARGS)" = "--strict --adsb $ADSB" ]' "SLOTH_RF_ARGS after: $(grep SLOTH_RF_ARGS "$R")"
+check '[ "$(grep -c "^[ $TAB]*SLOTH_RF_ARGS[ $TAB]*=" "$R")" -eq 1 ]' "not exactly one live SLOTH_RF_ARGS line: $(grep SLOTH_RF_ARGS "$R")"
+PREP='rf_defaults "SLOTH_RF_ARGS = --adsb sbs://127.0.0.1:30003"'
+refusal blank-eq-conflict "SLOTH_ARGS=--adsb $ADSB" "already carries different RF flags" --apply
+PREP='echo "SLOTH_ARGS = --aprs $APRS" >> "$S"'
+refusal blank-eq-two-lines "SLOTH_ARGS=--adsb $ADSB" "more than one SLOTH_ARGS= line" --apply
+PREP=
+
+# A defaults file that is a symbolic link: the rename would put a
+# regular file where the link was and leave what it points to (a
+# config-managed tree, say) with the old flags, to come back at the next
+# sync. Refused; the file it points to is named to the tool instead. Red
+# with each -L test removed: exit 0, the link gone, the target unchanged.
+PREP='mkdir "$ROOT/etc/sloth" && mv "$S" "$ROOT/etc/sloth/sensor.env" && ln -s ../sloth/sensor.env "$S"'
+refusal link "SLOTH_ARGS=--adsb $ADSB --site-label x" "is a symbolic link" --apply
+check '[ -L "$S" ]' "the link was replaced by a file"
+check 'grep -qxF "SLOTH_ARGS=--adsb $ADSB --site-label x" "$ROOT/etc/sloth/sensor.env"' "the link's target changed"
+check 'grep -qF " DEFAULTS=" "$W/out"' "the refusal does not say how to name the target: $(cat "$W/out")"
+refusal link-dry "SLOTH_ARGS=--adsb $ADSB" "is a symbolic link"
+PREP='rf_defaults "SLOTH_RF_ARGS=" && mv "$R" "$ROOT/etc/rf.env" && ln -s ../rf.env "$R"'
+refusal link-rf "SLOTH_ARGS=--adsb $ADSB" "is a symbolic link" --apply
+check '[ -L "$R" ] && grep -qxF "SLOTH_RF_ARGS=" "$ROOT/etc/rf.env"' "sloth-rf's link or its target changed"
+check 'grep -qF " RF_DEFAULTS=" "$W/out"' "the refusal does not say how to name the target: $(cat "$W/out")"
+# One that points nowhere is still a link a rename would replace.
+PREP='ln -s ../nowhere "$R"'
+refusal link-rf-dangling "SLOTH_ARGS=--adsb $ADSB" "is a symbolic link" --apply
+check '[ -L "$R" ]' "the dangling link was replaced"
+PREP=
+# Named by its target, as the refusal says, the same file migrates and
+# the link still points at it.
+setup link-target "SLOTH_ARGS=--adsb $ADSB --site-label x"
+mkdir "$ROOT/etc/sloth" && mv "$S" "$ROOT/etc/sloth/sensor.env" && ln -s ../sloth/sensor.env "$S"
+# shellcheck disable=SC2086  # TOOL_SH may be two words
+env PATH="$W/stub:$PATH" ROOT="$ROOT" STAMP="$STAMP" DEFAULTS="$ROOT/etc/sloth/sensor.env" \
+    $TOOL_SH "$TOOL" --apply > "$W/out" 2>&1
+RC=$?
+check '[ "$RC" -eq 0 ] && [ -L "$S" ] && [ "$(args_of "$S" SLOTH_ARGS)" = "--site-label x" ]' "by its target: exit $RC: $(cat "$W/out")"
+check '[ -f "$ROOT/etc/sloth/sensor.env.bak.20261115-120000" ]' "the backup is not beside the target"
+
+# A backup is never overwritten: one of this second's name is already
+# there. Red with either "already exists" test removed (the earlier
+# backup is then written over, and a later failure would delete it).
+PREP='echo earlier > "$S.bak.20261115-120000"'
+refusal bak-exists "SLOTH_ARGS=--adsb $ADSB" "a backup is never overwritten" --apply
+check '[ "$(cat "$S.bak.20261115-120000")" = earlier ]' "the earlier backup was overwritten"
+PREP='rf_defaults "SLOTH_RF_ARGS=" && echo earlier > "$R.bak.20261115-120000"'
+refusal bak-exists-rf "SLOTH_ARGS=--adsb $ADSB" "a backup is never overwritten" --apply
+check '[ "$(cat "$R.bak.20261115-120000")" = earlier ]' "sloth-rf's earlier backup was overwritten"
+# The rules the header gives for both files, in sloth-rf's: two lines, a
+# flag twice, not a regular file. Red with each test limited to the
+# sensor's file, or removed.
+PREP='rf_defaults "SLOTH_RF_ARGS=--strict" && echo "SLOTH_RF_ARGS=--adsb $ADSB" >> "$R"'
+refusal two-lines-rf "SLOTH_ARGS=--adsb $ADSB" "more than one SLOTH_RF_ARGS= line" --apply
+PREP='rf_defaults "SLOTH_RF_ARGS=--adsb $ADSB --adsb $ADSB"'
+refusal twice-rf "SLOTH_ARGS=--adsb $ADSB" "--adsb is given twice in $SCRATCH/refuse-twice-rf/root/etc/default/sloth-rf" --apply
+PREP='mkdir "$R"'
+refusal not-a-file-rf "SLOTH_ARGS=--adsb $ADSB" "is not a regular file" --apply
+PREP=
+
+# One pair of single quotes, as one pair of double quotes: kept. Red
+# with the single-quote arm of unquote() removed (refused as inner
+# quoting).
+setup squoted "SLOTH_ARGS='--site-label test-sensor --adsb $ADSB'"
+run --apply
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+check 'grep -qxF "SLOTH_ARGS='\''--site-label test-sensor'\''" "$S"' "the single quotes were not kept: $(args_of "$S" SLOTH_ARGS)"
+check 'grep -qxF "SLOTH_RF_ARGS=--adsb $ADSB" "$R"' "SLOTH_RF_ARGS: $(args_of "$R" SLOTH_RF_ARGS)"
+# beast:// is a TCP socket as sbs:// is. Red with (sbs|beast) cut to (sbs).
+setup beast "SLOTH_ARGS=--adsb beast://127.0.0.1:30005"
+run --apply
+check 'grep -qF "sloth-rf-gps.conf" "$W/out"' "no AF_INET step for --adsb beast://: $(cat "$W/out")"
+
+# cp -p: the rewritten files and the backups keep the mode the site
+# gave them. 0664 under umask 022, because a plain cp would make 0644 of
+# it (0640 above survives a plain cp, so it showed nothing). The owner
+# is the other half of -p and cannot be seen without root. Red with -p
+# dropped from each of the four cp lines in turn.
+setup mode "SLOTH_ARGS=--adsb $ADSB --site-label x"
+rf_defaults "SLOTH_RF_ARGS=--strict"
+chmod 664 "$S" "$R"
+run --apply
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+for f in "$S" "$R" "$S.bak.20261115-120000" "$R.bak.20261115-120000"; do
+    check '[ -n "$(find "$f" -perm 664)" ]' "the mode of $f is not 0664"
+done
+
+# A stub awk that garbles the one rewrite it is told to and is the real
+# awk for every other call, so what the tool wrote does not read back.
+garbling() {   # garbling SLOTH_ARGS|SLOTH_RF_ARGS|render
+    cat > "$W/stub/awk" <<EOF
+#!/bin/sh
+if [ "\${RW_VAR:-}" = "$1" ] || { [ "$1" = render ] && [ -n "\${MR_STAMP:-}" ]; }; then
+    echo "SLOTH_ARGS=--garbled"; echo "SLOTH_RF_ARGS=--garbled"; exit 0
+fi
+exec "$REAL_AWK" "\$@"
+EOF
+    chmod 755 "$W/stub/awk"
+}
+# Red with each "does not read back as written" test removed: the
+# garbled file was renamed into place, exit 0.
+setup fail-readback "$ALL"
+garbling SLOTH_ARGS
+failure
+check 'grep -qF "does not read back as written" "$W/out"' "not the read-back failure: $(cat "$W/out")"
+setup fail-readback-rf "$ALL"
+rf_defaults "SLOTH_RF_ARGS=--strict"
+garbling SLOTH_RF_ARGS
+failure
+check 'grep -qF "does not read back as written" "$W/out"' "not the read-back failure: $(cat "$W/out")"
+setup fail-readback-new "$ALL"
+garbling render
+failure
+check 'grep -qF "does not read back as written" "$W/out"' "not the read-back failure: $(cat "$W/out")"
+
+# A cp that succeeds and leaves a damaged copy on its Nth call: the
+# backup is compared with its file before anything is renamed. Red with
+# each cmp removed (exit 0 over a backup that is not the file).
+damaging() {   # damaging N -> path of the stub
+    f=$W/stub/damaging-cp
+    cat > "$f" <<EOF
+#!/bin/sh
+n=\$(cat "$W/calls-cp" 2>/dev/null || echo 0)
+n=\$((n + 1))
+echo \$n > "$W/calls-cp"
+cp "\$@" || exit 1
+[ \$n -ne $1 ] || { for a in "\$@"; do last=\$a; done; echo damaged >> "\$last"; }
+EOF
+    chmod 755 "$f"
+    echo "$f"
+}
+# cp calls without an /etc/default/sloth-rf: the sensor's temporary, its
+# backup. With one: both temporaries, then both backups.
+setup fail-bad-backup "$ALL"
+CPSTUB=$(damaging 2)
+failure
+check 'grep -qF "is not a copy of" "$W/out"' "not the backup comparison: $(cat "$W/out")"
+setup fail-bad-backup-rf "$ALL"
+rf_defaults "SLOTH_RF_ARGS=--strict"
+CPSTUB=$(damaging 4)
+failure
+check 'grep -qF "is not a copy of" "$W/out"' "not the backup comparison: $(cat "$W/out")"
+
+# A signal. Before the renames it is a failure like any other: the
+# temporaries and this run's backup are removed. The stub cp signals the
+# tool (its parent) while making the backup. Red with the first trap
+# removed: killed, exit 143, the temporary left behind.
+signalling() {   # signalling mv|cp N -> the stub signals the tool on its Nth call, then does the work
+    f=$W/stub/signalling-$1
+    cat > "$f" <<EOF
+#!/bin/sh
+n=\$(cat "$W/calls-$1" 2>/dev/null || echo 0)
+n=\$((n + 1))
+echo \$n > "$W/calls-$1"
+[ \$n -ne $2 ] || kill -TERM \$PPID
+exec $1 "\$@"
+EOF
+    chmod 755 "$f"
+    echo "$f"
+}
+setup signal-before "$ALL"
+CPSTUB=$(signalling cp 2)
+failure
+check 'grep -qF "interrupted" "$W/out"' "not the interrupt: $(cat "$W/out")"
+# Between the two renames it is held off: stopping there would leave
+# sloth-rf's file written and the sensor's not. The stub mv signals the
+# tool during the first rename; both files are written and the run ends
+# 0. Red with the second trap removed: exit 1 saying "both files are as
+# they were" with sloth-rf's file renamed into place.
+setup signal-between "$ALL"
+rm -f "$W"/calls-*
+MVSTUB=$(signalling mv 1)
+run --apply
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+check '[ "$(args_of "$S" SLOTH_ARGS)" = "--site-label test-sensor --gps $GPSD --gps-allow-remote --location $LOC --my-ssid TestNet" ]' "SLOTH_ARGS after a signal between the renames: $(args_of "$S" SLOTH_ARGS)"
+check '[ -e "$R" ] && [ -z "$(litter)" ] && [ "$(backups)" = "$S.bak.20261115-120000 " ]' "after a signal between the renames: litter $(litter), backups $(backups)"
 
 # ── No checkout beside the tool (run from /usr/local/sbin) ───────────────
 setup no-template "SLOTH_ARGS=--rtl433 $R433"

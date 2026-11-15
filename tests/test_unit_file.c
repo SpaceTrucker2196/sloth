@@ -825,6 +825,27 @@ static void test_web_unit_sandbox(void) {
      * stops, or is not installed at all. */
     ASSERT(uf_any_has(lines, n, "After", "sloth-rf.service"));
     ASSERT(uf_any_has(lines, n, "Wants", "sloth-rf.service"));
+    /* Wants= starts any unit that is installed, enabled or not
+     * (systemd.unit(5): "will be started if the configuring unit is").
+     * The unit's comment and the deployment page said "where it is
+     * installed and enabled", which made `enable` look like the
+     * operator's switch when it is not (#215 review). Both now say what
+     * happens and how to keep sloth-rf off. */
+    {
+        char *raw = uf_slurp(UF_PATH_WEB_UNIT);
+        char *doc = uf_slurp(UF_PATH_WIKI);
+        ASSERT(raw != NULL);
+        ASSERT(doc != NULL);
+        if (raw && doc) {
+            ASSERT(strstr(raw, "installed and enabled") == NULL);
+            ASSERT(strstr(doc, "where it is installed and enabled") == NULL);
+            ASSERT(strstr(raw, "enabled or not") != NULL);
+            ASSERT(strstr(doc, "Starting slothweb starts sloth-rf") != NULL);
+            ASSERT(strstr(doc, "systemctl mask sloth-rf") != NULL);
+        }
+        free(raw);
+        free(doc);
+    }
     static const char *const strong[] = { "Requires", "BindsTo", "Requisite", "PartOf" };
     for (size_t i = 0; i < sizeof(strong) / sizeof(strong[0]); i++) {
         if (uf_value(lines, n, strong[i]))
@@ -1873,6 +1894,7 @@ static void test_makefile_installs_rf(void) {
     int in_install = 0, in_service = 0, in_deploy = 0;
     int bin = 0, bin_unguarded = 0, tool = 0, unit = 0, defaults_nc = 0;
     int defaults_b = 0, defaults_plain = 0, dropin = 0, lint = 0, lint_test = 0, runs = 0;
+    int unit_unguarded = 0;
     for (int i = 0; i < n; i++) {
         const char *l = lines[i];
         if (!uf_is_recipe(l)) {
@@ -1893,8 +1915,17 @@ static void test_makefile_installs_rf(void) {
         }
         if (in_install && strstr(l, "install -m 755 " UF_PATH_RF_MIGRATE " ") &&
             strstr(l, "$(DESTDIR)$(PREFIX)/sbin/sloth-migrate-rf")) tool = 1;
-        if (in_service && strstr(l, UF_PATH_RF_UNIT) &&
-            strstr(l, "$(DESTDIR)$(UNITDIR)/sloth-rf.service")) unit = 1;
+        /* The unit only where `make install` has put the binary it
+         * runs. slothweb.service Wants= it, so a unit with no binary
+         * would fail 203/EXEC at every start of slothweb (#215 review).
+         * Every recipe line that writes the unit carries the guard. */
+        if (in_service && strstr(l, "$(DESTDIR)$(UNITDIR)/sloth-rf.service")) {
+            if (strncmp(l, "\t[ ! -x $(DESTDIR)$(PREFIX)/bin/sloth-rf ] || {", 47) == 0) {
+                if (strstr(l, UF_PATH_RF_UNIT)) unit = 1;
+            } else {
+                unit_unguarded = 1;
+            }
+        }
         if (in_service && strstr(l, UF_PATH_RF_DEFAULTS " ")) {
             if (strstr(l, "[ -e $(DESTDIR)$(DEFAULTDIR)/sloth-rf ] ||")) defaults_nc = 1;
             else defaults_plain = 1;
@@ -1908,6 +1939,7 @@ static void test_makefile_installs_rf(void) {
     ASSERT(!bin_unguarded);
     ASSERT(tool);
     ASSERT(unit);
+    ASSERT(!unit_unguarded);
     ASSERT(defaults_nc);
     ASSERT(!defaults_plain);
     ASSERT(!defaults_b);
@@ -1915,6 +1947,62 @@ static void test_makefile_installs_rf(void) {
     ASSERT(lint);
     ASSERT(lint_test);
     ASSERT(runs);
+    free(buf);
+}
+
+/* slothweb.service and the slothweb it runs are installed by two
+ * targets, and slothweb exits on an option it does not know: a unit
+ * ahead of its binary is a web UI that restarts every five seconds and
+ * never serves. That was this slice as built, since --rf-socket and
+ * --rf-db are #214's (#215 review). Both targets now compare the two
+ * before writing anything: `install` the tree's slothweb, and
+ * `install-service` the installed one, where there is one. The list is
+ * read from the unit, so a flag added to ExecStart is covered without
+ * touching the Makefile. tests/deploy/test_slothweb_unit.sh runs
+ * install-service against a staged binary; this pins the text. */
+static void test_makefile_keeps_slothweb_unit_and_binary_agreeing(void) {
+    char *buf = uf_slurp("Makefile");
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    static char *lines[UF_MAX_MAKE_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_MAKE_LINES);
+    ASSERT_LT(n, UF_MAX_MAKE_LINES);
+    int in_install = 0, in_service = 0, recipe_no = 0;
+    int flags_var = 0, chk_install = 0, chk_service = 0;
+    int first_write_install = 0, first_write_service = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        if (!uf_is_recipe(l)) {
+            in_install = strncmp(l, "install:", 8) == 0;
+            in_service = strncmp(l, "install-service:", 16) == 0;
+            recipe_no = 0;
+            if (strncmp(l, "WEB_UNIT_FLAGS", 14) == 0 &&
+                strstr(l, "/^ExecStart=/") && strstr(l, UF_PATH_WEB_UNIT) &&
+                strstr(l, "grep -o -e '--[a-z][a-z0-9-]*'")) flags_var = 1;
+            continue;
+        }
+        recipe_no++;
+        int checks = strstr(l, "$$($(WEB_UNIT_FLAGS))") && strstr(l, "grep -aqF -e \"$$f\"") &&
+                     strstr(l, "exit 1");
+        /* The first line of either recipe that writes: `install ...`
+         * or a redirection. The check comes before it. */
+        int writes = strncmp(l, "\tinstall ", 9) == 0 || strstr(l, " > $(DESTDIR)") != NULL;
+        if (in_install) {
+            if (checks && strstr(l, "\" slothweb ||") && !first_write_install) chk_install = 1;
+            if (writes && !first_write_install) first_write_install = recipe_no;
+        }
+        if (in_service) {
+            if (checks && strstr(l, "b=$(DESTDIR)$(PREFIX)/bin/slothweb;") &&
+                strstr(l, "[ ! -e \"$$b\" ] ||") && strstr(l, "\"$$b\" ||") &&
+                !first_write_service) chk_service = 1;
+            if (writes && !first_write_service) first_write_service = recipe_no;
+        }
+    }
+    ASSERT(flags_var);
+    ASSERT(chk_install);
+    ASSERT(chk_service);
+    ASSERT_GT(first_write_install, 1);
+    ASSERT_GT(first_write_service, 1);
     free(buf);
 }
 
@@ -1953,4 +2041,5 @@ void run_unit_file_tests(void) {
     RUN_TEST(test_rf_defaults_file);
     RUN_TEST(test_rf_dropin_is_inert_and_scoped);
     RUN_TEST(test_makefile_installs_rf);
+    RUN_TEST(test_makefile_keeps_slothweb_unit_and_binary_agreeing);
 }

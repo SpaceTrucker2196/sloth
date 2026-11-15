@@ -35,7 +35,7 @@ account, no capability, no radio, its own `/run/sloth-rf` and
 `packaging/systemd/sloth-rf.service`, `packaging/systemd/sloth-rf.service.d/gps.conf`, `packaging/default/sloth-rf`,
 `packaging/bin/sloth-migrate-rf`, `tests/deploy/test_migrate_rf.sh`, [ADR 0010](adr/0010-wifi-rf-daemons.md).
 
-**Last updated**: 2026-11-15 (§10: `sloth-rf.service` key by key, its inert `gps.conf` drop-in, reading other services' files, and moving the RF decoders with `sloth-migrate-rf`; §2 and §6: slothweb's `--rf-socket` / `--rf-db`, `ReadOnlyPaths=-/var/lib/sloth-rf`, `Wants=sloth-rf.service`; #215), 2026-11-13 (§9: `sloth-sdrsweep.{service,path}`, its account and defaults file, and the drop-in for a receiver another service holds; `make` now builds the helpers it names, `sloth-ble-scan` included), 2026-11-12 (the unit's `snapshot.live.txt` and `report.retain_days`, #190), 2026-11-11 (§5.1: the beacon memory's state on `sys_status`, JSONL 1.2.0), 2026-11-11 (§6: `RuntimeDirectory=slothweb`, mode `0711`, for the agent secret, and `fchown` given back to slothweb's filter, for `--web-agent-group`; [[slothweb-mcp]] §7), 2026-11-11 (§5.1: host status under the unit; no unit key changes), 2026-11-02 (§7.2: uncomment the whole block, the `[Service]` line included, and what the one-line mistake looks like; §7.3: GPS time into the host clock through gpsd and ntpsec's SHM refclock, as done on the reference host); 2026-11-02 (§6: `slothweb.service` passes `--web-assessments` the copy `make install` puts in `share/sloth/alert-assessments`); 2026-10-27 (§6: `--pcap-dir /var/lib/sloth/pcap` for the alert page's capture, an example in `/etc/default/slothweb`); 2026-10-27 (§7.2: the inert `gps.conf` drop-in for `--gps`, why `PrivateDevices=true` hides the receiver, `dialout`, the gpsd variant); 2026-10-26 (§2, §7.1 integration: `/etc/default/sloth` no-clobber like slothweb's, units still replaced; `[Service]` of the scan unit an allow-list; the reference host's hand-made `10-bluetooth-monitor.conf` removed in §7.1 and after §4.4's migration, so one drop-in grants `AF_BLUETOOTH`); 2026-10-26 (§7 review: the sensor's `AF_BLUETOOTH` moved to an opt-in drop-in; `Conflicts=` in both directions and the mask required; what stopping bluetoothd sends; `WantedBy=` pulls the scan in, `PartOf=` carries restarts, measured; the boot-time bind wait; the journal check); 2026-10-26 (§7 BLE capture: `sloth-ble-scan.service`, `AF_BLUETOOTH` for `--bt-monitor` in the sensor's unit, the migration carries `--bt-monitor`); 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
+**Last updated**: 2026-11-15 (#215 review: `Wants=sloth-rf.service` starts sloth-rf with slothweb, enabled or not, and `sloth-rf.service` is installed only beside its binary; `make install` and `install-service` refuse a slothweb that lacks a flag `slothweb.service` passes; `sloth-migrate-rf` refuses any `--gps /…`, a symbolic link, and reads `SLOTH_ARGS = …`), 2026-11-15 (§10: `sloth-rf.service` key by key, its inert `gps.conf` drop-in, reading other services' files, and moving the RF decoders with `sloth-migrate-rf`; §2 and §6: slothweb's `--rf-socket` / `--rf-db`, `ReadOnlyPaths=-/var/lib/sloth-rf`, `Wants=sloth-rf.service`; #215), 2026-11-13 (§9: `sloth-sdrsweep.{service,path}`, its account and defaults file, and the drop-in for a receiver another service holds; `make` now builds the helpers it names, `sloth-ble-scan` included), 2026-11-12 (the unit's `snapshot.live.txt` and `report.retain_days`, #190), 2026-11-11 (§5.1: the beacon memory's state on `sys_status`, JSONL 1.2.0), 2026-11-11 (§6: `RuntimeDirectory=slothweb`, mode `0711`, for the agent secret, and `fchown` given back to slothweb's filter, for `--web-agent-group`; [[slothweb-mcp]] §7), 2026-11-11 (§5.1: host status under the unit; no unit key changes), 2026-11-02 (§7.2: uncomment the whole block, the `[Service]` line included, and what the one-line mistake looks like; §7.3: GPS time into the host clock through gpsd and ntpsec's SHM refclock, as done on the reference host); 2026-11-02 (§6: `slothweb.service` passes `--web-assessments` the copy `make install` puts in `share/sloth/alert-assessments`); 2026-10-27 (§6: `--pcap-dir /var/lib/sloth/pcap` for the alert page's capture, an example in `/etc/default/slothweb`); 2026-10-27 (§7.2: the inert `gps.conf` drop-in for `--gps`, why `PrivateDevices=true` hides the receiver, `dialout`, the gpsd variant); 2026-10-26 (§2, §7.1 integration: `/etc/default/sloth` no-clobber like slothweb's, units still replaced; `[Service]` of the scan unit an allow-list; the reference host's hand-made `10-bluetooth-monitor.conf` removed in §7.1 and after §4.4's migration, so one drop-in grants `AF_BLUETOOTH`); 2026-10-26 (§7 review: the sensor's `AF_BLUETOOTH` moved to an opt-in drop-in; `Conflicts=` in both directions and the mask required; what stopping bluetoothd sends; `WantedBy=` pulls the scan in, `PartOf=` carries restarts, measured; the boot-time bind wait; the journal check); 2026-10-26 (§7 BLE capture: `sloth-ble-scan.service`, `AF_BLUETOOTH` for `--bt-monitor` in the sensor's unit, the migration carries `--bt-monitor`); 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
 
 **Last updated**: 2026-11-15 (§10: `sloth-va.service`, its account, credentials and defaults file, one controller for it and another for `sloth-ble-scan`, the BlueZ settings, the reference host's commands and the undo), 2026-11-15 (§9: `sloth-sdrsweep-auto.timer`, a sweep every 5 minutes for the Spectrum ranges, §9.2; the helper's default cooldown 600 s to 150 s; `SuccessExitStatus=3`; the run's `history/` records), 2026-11-13 (§9: `sloth-sdrsweep.{service,path}`, its account and defaults file, and the drop-in for a receiver another service holds; `make` now builds the helpers it names, `sloth-ble-scan` included), 2026-11-12 (the unit's `snapshot.live.txt` and `report.retain_days`, #190), 2026-11-11 (§5.1: the beacon memory's state on `sys_status`, JSONL 1.2.0), 2026-11-11 (§6: `RuntimeDirectory=slothweb`, mode `0711`, for the agent secret, and `fchown` given back to slothweb's filter, for `--web-agent-group`; [[slothweb-mcp]] §7), 2026-11-11 (§5.1: host status under the unit; no unit key changes), 2026-11-02 (§7.2: uncomment the whole block, the `[Service]` line included, and what the one-line mistake looks like; §7.3: GPS time into the host clock through gpsd and ntpsec's SHM refclock, as done on the reference host); 2026-11-02 (§6: `slothweb.service` passes `--web-assessments` the copy `make install` puts in `share/sloth/alert-assessments`); 2026-10-27 (§6: `--pcap-dir /var/lib/sloth/pcap` for the alert page's capture, an example in `/etc/default/slothweb`); 2026-10-27 (§7.2: the inert `gps.conf` drop-in for `--gps`, why `PrivateDevices=true` hides the receiver, `dialout`, the gpsd variant); 2026-10-26 (§2, §7.1 integration: `/etc/default/sloth` no-clobber like slothweb's, units still replaced; `[Service]` of the scan unit an allow-list; the reference host's hand-made `10-bluetooth-monitor.conf` removed in §7.1 and after §4.4's migration, so one drop-in grants `AF_BLUETOOTH`); 2026-10-26 (§7 review: the sensor's `AF_BLUETOOTH` moved to an opt-in drop-in; `Conflicts=` in both directions and the mask required; what stopping bluetoothd sends; `WantedBy=` pulls the scan in, `PartOf=` carries restarts, measured; the boot-time bind wait; the journal check); 2026-10-26 (§7 BLE capture: `sloth-ble-scan.service`, `AF_BLUETOOTH` for `--bt-monitor` in the sensor's unit, the migration carries `--bt-monitor`); 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
 
@@ -97,7 +97,7 @@ depth on top of this, not a prerequisite for it.
 | `install-service` | `packaging/systemd/sloth-sensor.service.d/gps.conf` | `/usr/local/share/sloth/sloth-sensor-gps.conf` | 0644 | the serial device or `AF_INET` for `--gps` (§7.2); every directive commented, so even a copy nobody edited changes nothing |
 | `install` | `sloth-rf`, when the tree has built one | `/usr/local/bin/sloth-rf` | 0755 | what `sloth-rf.service` runs (§10); `[ ! -x sloth-rf ] ||`, so a tree without the binary still installs |
 | `install` | `packaging/bin/sloth-migrate-rf` | `/usr/local/sbin/sloth-migrate-rf` | 0755 | moves the RF decoder flags between the two defaults files (§10.4); an operator tool, run by hand |
-| `install-service` | `packaging/systemd/sloth-rf.service` | `/etc/systemd/system/sloth-rf.service` | 0644 | §10, rewritten as for the others; installed, **not enabled** |
+| `install-service` | `packaging/systemd/sloth-rf.service` | `/etc/systemd/system/sloth-rf.service` | 0644 | §10, rewritten as for the others; **only where `/usr/local/bin/sloth-rf` is installed** (`[ ! -x … ] ||`, and install-service says when it skipped it), and **not enabled**. `slothweb.service` `Wants=` it, so a unit with no binary would fail `203/EXEC` at every start of slothweb |
 | `install-service` | `packaging/default/sloth-rf` | `/etc/default/sloth-rf` | 0644, only if absent | the site's `SLOTH_RF_ARGS`, shipped empty; never replaced |
 | `install-service` | `packaging/systemd/sloth-rf.service.d/gps.conf` | `/usr/local/share/sloth/sloth-rf-gps.conf` | 0644 | `AF_INET` for gpsd and for `--adsb sbs://` / `beast://`, or a serial receiver (§10.3); placed **inert**, every directive commented |
 
@@ -894,8 +894,8 @@ SystemCallFilter=fchown fchown32
 | `After=`, `Wants=sloth-sensor.service` | Starting slothweb starts the sensor; `Wants=`, not `Requires=`, so a sensor restart (or its radio unplugged) leaves the UI serving history and saying the stream is retrying. |
 | `--socket unix:/run/sloth/sloth.sock` | The sensor's unix socket (§4.2). `connect()` on a socket in a read-only mount works: the read-only check covers files, directories and links, not sockets. |
 | `--sloth-db /var/lib/sloth/sloth.db` | Read in place, never copied. With the sensor running both `-wal` and `-shm` exist, so slothweb opens it as a WAL reader with `readonly_shm=1` and never creates a file beside it (`web/src/web_slothdb.h`); `/api/health` says `"db_mode":"wal"`. `web/tests/test_slothdb.c :: test_same_uid_reader_beside_a_writing_sloth` holds the deployment's shape: a `0700` directory and `0600` files, made `0500` and `0400` for the reads (the read-only mount, by mode), a writer of the same uid committing between them, each commit seen. It does not pin `readonly_shm`: with the `-shm` unwritable SQLite opens it read-only either way, as under the mount; `test_crashed_sloth_restarts_beside_a_reader` goes red without it. |
-| `After=`, `Wants=sloth-rf.service` (#215) | The RF daemon the same way: ordered after it and pulling it in where it is installed and enabled. `Wants=` on a unit that is not installed is ignored, so slothweb starts unchanged on a host with no `sloth-rf.service`. No `Requires=`, `BindsTo=`, `Requisite=` or `PartOf=` towards either daemon; `tests/test_unit_file.c` fails on any of them. |
-| `--rf-socket unix:/run/sloth-rf/sloth-rf.sock`, `--rf-db /var/lib/sloth-rf/sloth-rf.db` (#214, #215) | sloth-rf's stream and database (§10), fixed in the unit like the sensor's. The unit assumes what #214 specifies ("the same checks as `--socket` / `--sloth-db`"): a socket that is not there is retried and a database that is not there is reported missing, so slothweb serves on a host where sloth-rf is not installed or not running. With `--rf-socket` given, the ADS-B, APRS, rtl_433 and GNSS pages are fed from sloth-rf alone (#214), which is why a host whose decoders are still on the sensor's command line migrates them in the same sitting as it installs this unit (§10.4). |
+| `After=`, `Wants=sloth-rf.service` (#215) | The RF daemon the same way. Starting slothweb starts sloth-rf wherever `sloth-rf.service` is installed, **enabled or not**: `Wants=` starts any unit that is loaded, and `systemctl enable sloth-rf` only adds a start at boot of its own. A sloth-rf nobody configured runs with the empty `SLOTH_RF_ARGS` of `/etc/default/sloth-rf` and creates `/run/sloth-rf` and `/var/lib/sloth-rf`; `systemctl mask sloth-rf` is what keeps it off. `Wants=` on a unit that is not installed is ignored, and `make install-service` installs `sloth-rf.service` only beside its binary (§2), so slothweb starts unchanged on a host with no sloth-rf. No `Requires=`, `BindsTo=`, `Requisite=` or `PartOf=` towards either daemon; `tests/test_unit_file.c` fails on any of them. |
+| `--rf-socket unix:/run/sloth-rf/sloth-rf.sock`, `--rf-db /var/lib/sloth-rf/sloth-rf.db` (#214, #215) | sloth-rf's stream and database (§10), fixed in the unit like the sensor's. The unit assumes what #214 specifies ("the same checks as `--socket` / `--sloth-db`"): a socket that is not there is retried and a database that is not there is reported missing, so slothweb serves on a host where sloth-rf is not installed or not running. With `--rf-socket` given, the ADS-B, APRS, rtl_433 and GNSS pages are fed from sloth-rf alone (#214), which is why a host whose decoders are still on the sensor's command line migrates them in the same sitting as it installs this unit (§10.4). A slothweb that does not know a flag exits on it, so the unit and the binary are replaced together or not at all: `make install` refuses a `./slothweb` that lacks any `--flag` on this unit's `ExecStart`, and `make install-service` refuses, before writing anything, where the installed `/usr/local/bin/slothweb` lacks one (`tests/deploy/test_slothweb_unit.sh` stages both). The test is that the flag's text is in the binary. |
 | `ReadOnlyPaths=-/var/lib/sloth-rf` | As for `/var/lib/sloth`, on a line of its own: read-only, and the `-` because the directory does not exist until `sloth-rf.service` has started once. |
 | `--store /var/lib/slothweb/slothweb.db` | slothweb's own file, in its own `StateDirectory`, never inside the sensor's. |
 | `RuntimeDirectory=slothweb`, `RuntimeDirectoryMode=0711` | Where the agent secret goes when `/etc/default/slothweb` asks for one (`--web-agent-secret /run/slothweb/agent.secret --web-agent-group slothweb-agent`, [[slothweb-mcp]] §7). The state directory is `0700`, so the operator's user could not reach a file in it whatever the file's mode; `0711` lets anyone pass through to a name they already know, and nobody but `sloth` list or create in it, so the file's own `0640` and its group are the boundary. Empty without the flag. systemd removes it at every stop, so a killed slothweb leaves no secret behind. |
@@ -1534,9 +1534,14 @@ RF flags, so a host migrates when its operator chooses to.
 
 `make install` places `/usr/local/bin/sloth-rf` when the tree has built
 one, and `sloth-migrate-rf` in `/usr/local/sbin`. `make install-service`
-installs the unit and, only where there is none, `/etc/default/sloth-rf`.
-**The unit is never enabled by make.** Neither daemon needs the other: a
-host with only SDRs, or only a GPS, enables `sloth-rf.service` alone.
+installs the unit where that binary is installed (so `make install`
+comes first) and, only where there is none, `/etc/default/sloth-rf`.
+**The unit is never enabled by make**, but enabling is not the only
+thing that starts it: `slothweb.service` `Wants=` it (§6), so on a host
+that runs slothweb, sloth-rf starts whenever slothweb does, reading
+whatever `/etc/default/sloth-rf` names (nothing, as shipped).
+`systemctl mask sloth-rf` keeps it off. Neither daemon needs the other:
+a host with only SDRs, or only a GPS, enables `sloth-rf.service` alone.
 
 ### 10.1 The unit, key by key
 
@@ -1679,9 +1684,11 @@ Its rules, each held by `tests/deploy/test_migrate_rf.sh`:
   and the temporaries and this run's backups are removed (exit 1).
 - **Idempotent.** A second run finds nothing to do, says so, and writes
   nothing, not even a backup.
-- **A serial GPS is refused** (`--gps /dev/…`), in the dry run too.
-  After the split both daemons read GNSS and a serial device opens
-  once. The fix is gpsd: it holds the receiver and serves both. Move
+- **A serial GPS is refused**, in the dry run too: any `--gps` value
+  that starts with `/`, since sloth reads every such value as a device
+  (`src/gps.c`), under `/dev` or not. After the split both daemons read
+  GNSS and a serial device opens once. The fix is gpsd: it holds the
+  receiver and serves both. Move
   the sensor to `--gps gpsd://127.0.0.1:2947` first (dropping
   `--gps-baud`, and swapping the serial block of the sensor's `gps.conf`
   for its gpsd block, §7.2), confirm it still has a fix, then run the
@@ -1699,7 +1706,15 @@ Its rules, each held by `tests/deploy/test_migrate_rf.sh`:
 - **Refused, because it cannot be split the way systemd splits it:**
   quoting or a backslash inside the value (one pair of quotes around
   the whole value is kept), a flag given twice, a flag with no value,
-  two `SLOTH_ARGS=` lines.
+  two `SLOTH_ARGS=` lines. `SLOTH_ARGS = …`, with blanks before the
+  `=`, is read as systemd reads it (the line is live) and written back
+  without them.
+- **A symbolic link is refused**, for either file. The rename would put
+  a regular file where the link was and leave the file it points to
+  (in a config-managed tree, say) with the old flags, to return at the
+  next sync. Name that file to the tool instead:
+  `sudo env DEFAULTS=/path/to/the/file sloth-migrate-rf` (`RF_DEFAULTS=`
+  for sloth-rf's).
 
 Exit status: 0 migrated, already migrated, nothing to migrate or a dry
 run; 1 failed, both files as they were; 2 refused, nothing changed.
@@ -1710,8 +1725,11 @@ GNSS pages from sloth-rf alone (#214): between installing the new units
 and step 5 those pages have no source, so do not stop halfway.
 
 ```sh
-# 1. Build as yourself, install as root. install-service replaces the
-#    units and leaves the /etc/default files that exist as they are.
+# 1. Build as yourself, install as root, in this order: install-service
+#    installs sloth-rf.service only beside the binary install placed,
+#    and refuses a slothweb.service the installed slothweb cannot run.
+#    It replaces the units and leaves the /etc/default files that exist
+#    as they are.
 make && make web
 sudo make install && sudo make install-service
 sudo systemd-sysusers          # the sloth account, if this host is new
@@ -1746,7 +1764,9 @@ If a source reads as down in the journal, §10.2 (the file's group) and
 Undoing it: copy each backup back over its file (where
 `/etc/default/sloth-rf` had no backup, empty its `SLOTH_RF_ARGS=`),
 `sudo systemctl disable --now sloth-rf.service`, and restart
-`sloth-sensor` and `slothweb`. Until the cutover (#216) the Wi-Fi
+`sloth-sensor` and `slothweb` (which starts sloth-rf again through
+`Wants=`, with nothing to read; `sudo systemctl mask sloth-rf` if it is
+to stay down). Until the cutover (#216) the Wi-Fi
 sensor reads the decoders again; slothweb's unit still passes
 `--rf-socket`, so its RF pages stay empty until sloth-rf runs again or
 that flag is taken out in a drop-in.

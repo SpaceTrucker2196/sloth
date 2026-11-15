@@ -26,14 +26,14 @@
 #                         /usr/local/share/sloth/sloth-rf-gps.conf.
 #   --aprs PATH           the packet log a local Dire Wolf writes
 #                         (direwolf -L FILE; wiki: aprs), e.g.
-#                         --aprs /var/lib/direwolf/packets.log
+#                         --aprs /var/lib/direwolf/aprs.log
 #   --aprs-freq HZ        the frequency that decoder is configured for,
 #                         e.g. --aprs-freq 144390000
 #   --aprs-silent-hours N report the decoder silent after N hours with
 #                         no packet (default 6)
 #   --rtl433 PATH         the JSON event log a local rtl_433 writes
 #                         (rtl_433 -F json:FILE; wiki: rtl433), e.g.
-#                         --rtl433 /var/lib/rtl_433/events.json
+#                         --rtl433 /var/lib/rtl_433/events.jsonl
 #   --gps gpsd://127.0.0.1:2947
 #                         the GNSS receiver, through gpsd (needs the same
 #                         AF_INET drop-in). On a host that also runs the

@@ -31,10 +31,14 @@ Documentation=https://github.com/SpaceTrucker2196/sloth/wiki/deployment
 After=sloth-sensor.service
 Wants=sloth-sensor.service
 # The RF daemon the same way (#215, ADR 0010): ordered after it and
-# pulling it in where it is installed and enabled, never Requires=.
-# Wants= on a unit that is not installed is ignored, so this unit starts
-# unchanged on a host with no sloth-rf.service; a stop or a crash of
-# sloth-rf leaves the UI up.
+# wanting it, never Requires=. As for the sensor, Wants= starts
+# sloth-rf.service whenever this unit starts, wherever that unit is
+# installed, enabled or not: `systemctl enable sloth-rf` only adds a
+# start at boot of its own, and `systemctl mask sloth-rf` is what keeps
+# it off. Wants= on a unit that is not installed is ignored, and make
+# installs sloth-rf.service only beside its binary, so this unit starts
+# unchanged on a host with no sloth-rf; a stop or a crash of sloth-rf
+# leaves the UI up.
 After=sloth-rf.service
 Wants=sloth-rf.service
 
@@ -86,6 +90,11 @@ RuntimeDirectoryMode=0711
 # (#214), so a host whose decoders are still on the Wi-Fi sensor's
 # command line moves them with sloth-migrate-rf in the same sitting as
 # this unit is installed (docs/wiki/deployment.md §10.4).
+#
+# A slothweb that does not know one of the flags below exits on it. So
+# `make install` refuses a ./slothweb that lacks one, and `make
+# install-service` refuses to put this file beside an installed
+# slothweb that lacks one: the two are replaced together or not at all.
 ExecStart=/usr/local/bin/slothweb \
     --socket unix:/run/sloth/sloth.sock \
     --sloth-db /var/lib/sloth/sloth.db \

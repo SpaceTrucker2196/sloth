@@ -1814,10 +1814,23 @@ $(STAMPS): FORCE
 # sloth-rf (#215, ADR 0010) is installed when the tree has built one
 # (`[ ! -x sloth-rf ] ||`: the binary is #213's, and a tree without it
 # still installs), with sloth-migrate-rf beside the other operator tools
-# in sbin. sloth-rf.service goes in like sloth-ble-scan.service:
-# installed, never enabled here. Its defaults file is no-clobber like
-# the others, and its AF_INET / serial drop-in goes to share/sloth inert
-# as the sensor's gps.conf does.
+# in sbin. sloth-rf.service is never enabled here, and goes in only
+# where `make install` has placed the binary it runs
+# (`[ ! -x $(DESTDIR)$(PREFIX)/bin/sloth-rf ] ||`): slothweb.service
+# Wants= it, and Wants= starts any unit that is installed, enabled or
+# not, so a unit with no binary behind it would fail 203/EXEC at every
+# start of slothweb and leave the host degraded. Its defaults file is
+# no-clobber like the others, and its AF_INET / serial drop-in goes to
+# share/sloth inert as the sensor's gps.conf does.
+# A unit and the binary it runs are one artefact in two files, put in
+# place by two targets, and slothweb exits on an option it does not
+# know. So neither target leaves the pair disagreeing: `install` refuses
+# a ./slothweb that lacks a flag slothweb.service passes (a tree whose
+# unit is ahead of its source; --rf-socket and --rf-db are #214's), and
+# `install-service` refuses, before it writes anything, when the
+# slothweb already installed lacks one (the unit replaced without `make
+# web && sudo make install`). $(WEB_UNIT_FLAGS) is every --flag on the
+# unit's ExecStart; the test is that the flag's text is in the binary.
 # The units are written for PREFIX=/usr/local; a different prefix is
 # substituted at install time so the text in packaging/ stays the one
 # tests/test_unit_file.c scans.
@@ -1825,11 +1838,14 @@ DESTDIR     ?=
 UNITDIR     ?= /etc/systemd/system
 SYSUSERSDIR ?= /usr/lib/sysusers.d
 DEFAULTDIR  ?= /etc/default
+WEB_UNIT_FLAGS = sed -n '/^ExecStart=/,/[^\\]$$/p' packaging/systemd/slothweb.service | grep -o -e '--[a-z][a-z0-9-]*'
 
 install: $(TARGET) $(BLE_SCAN_BIN) $(SDRSWEEP_BIN) $(VA_BIN)
 	@[ -x slothweb ] || { echo "install: no ./slothweb; run 'make web' first (as yourself, not under sudo)" >&2; exit 1; }
 	@new=$$(find web/src web/ui web/tools web/data $(WEB_RECIPES_MD) Makefile -type f -newer slothweb 2>/dev/null | head -n 1); \
 	  [ -z "$$new" ] || { echo "install: ./slothweb is older than $$new; run 'make web' first (as yourself, not under sudo)" >&2; exit 1; }
+	@for f in $$($(WEB_UNIT_FLAGS)); do grep -aqF -e "$$f" slothweb || { \
+	    echo "install: ./slothweb does not know $$f, which packaging/systemd/slothweb.service passes; slothweb.service would not start. Nothing was installed (this tree's unit is ahead of its slothweb)" >&2; exit 1; }; done
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/sbin $(DESTDIR)$(PREFIX)/share/sloth
 	install -m 755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET)
 	install -m 755 slothweb $(DESTDIR)$(PREFIX)/bin/slothweb
@@ -1845,6 +1861,8 @@ install: $(TARGET) $(BLE_SCAN_BIN) $(SDRSWEEP_BIN) $(VA_BIN)
 
 .PHONY: install-service
 install-service:
+	@b=$(DESTDIR)$(PREFIX)/bin/slothweb; [ ! -e "$$b" ] || for f in $$($(WEB_UNIT_FLAGS)); do grep -aqF -e "$$f" "$$b" || { \
+	    echo "install-service: $$b does not know $$f, which the new slothweb.service passes; the web UI would not start. Nothing was installed: run 'make web' and 'sudo make install' from this tree first" >&2; exit 1; }; done
 	install -d $(DESTDIR)$(UNITDIR) $(DESTDIR)$(SYSUSERSDIR) $(DESTDIR)$(DEFAULTDIR)
 	sed -e 's|/usr/local/|$(PREFIX)/|g' packaging/systemd/sloth-sensor.service \
 	    > $(DESTDIR)$(UNITDIR)/sloth-sensor.service.tmp
@@ -1883,10 +1901,11 @@ install-service:
 	    $(DESTDIR)$(PREFIX)/share/sloth/sloth-sensor-gps.conf
 	[ -e $(DESTDIR)$(DEFAULTDIR)/slothweb ] || \
 	    install -m 644 packaging/default/slothweb $(DESTDIR)$(DEFAULTDIR)/slothweb
-	sed -e 's|/usr/local/|$(PREFIX)/|g' packaging/systemd/sloth-rf.service \
-	    > $(DESTDIR)$(UNITDIR)/sloth-rf.service.tmp
-	install -m 644 $(DESTDIR)$(UNITDIR)/sloth-rf.service.tmp $(DESTDIR)$(UNITDIR)/sloth-rf.service
-	rm -f $(DESTDIR)$(UNITDIR)/sloth-rf.service.tmp
+	[ ! -x $(DESTDIR)$(PREFIX)/bin/sloth-rf ] || { \
+	    sed -e 's|/usr/local/|$(PREFIX)/|g' packaging/systemd/sloth-rf.service \
+	        > $(DESTDIR)$(UNITDIR)/sloth-rf.service.tmp && \
+	    install -m 644 $(DESTDIR)$(UNITDIR)/sloth-rf.service.tmp $(DESTDIR)$(UNITDIR)/sloth-rf.service && \
+	    rm -f $(DESTDIR)$(UNITDIR)/sloth-rf.service.tmp; }
 	[ -e $(DESTDIR)$(DEFAULTDIR)/sloth-rf ] || \
 	    install -m 644 packaging/default/sloth-rf $(DESTDIR)$(DEFAULTDIR)/sloth-rf
 	install -D -m 644 packaging/systemd/sloth-rf.service.d/gps.conf \
@@ -1906,8 +1925,11 @@ install-service:
 	@echo "  sloth-va.service (Victron reader; TRANSMITS) is installed, not enabled; it needs"
 	@echo "  bluetoothd and its own controller: docs/wiki/deployment.md, Victron (sloth-va),"
 	@echo "  then 'systemd-sysusers && systemctl enable --now sloth-va'"
-	@echo "  sloth-rf.service is installed, not enabled; slothweb.service now reads sloth-rf's socket"
-	@echo "  and database for the ADS-B, APRS, rtl_433 and GNSS pages. A host whose /etc/default/sloth"
+	@[ -x $(DESTDIR)$(PREFIX)/bin/sloth-rf ] || \
+	    echo "  sloth-rf.service was NOT installed: no $(DESTDIR)$(PREFIX)/bin/sloth-rf ('sudo make install' first)"
+	@echo "  sloth-rf.service, where installed, is not enabled, but slothweb.service Wants= it: starting"
+	@echo "  slothweb starts sloth-rf ('systemctl mask sloth-rf' keeps it off). slothweb now reads sloth-rf's"
+	@echo "  socket and database for the ADS-B, APRS, rtl_433 and GNSS pages. A host whose /etc/default/sloth"
 	@echo "  still has --adsb, --aprs or --rtl433 moves them now: sloth-migrate-rf (dry run), then"
 	@echo "  sloth-migrate-rf --apply and the commands it prints: docs/wiki/deployment.md §10.4"
 	@echo "  (migration from a build-tree unit: docs/wiki/deployment.md)"
