@@ -110,7 +110,19 @@ Not decided by #211, and not from the inventory (found while writing
 this record):
 
 - How long the `sloth` symlink stays. #211 says "for a release" and
-  names no version. OPEN — needs owner ruling.
+  names no version. **Ruled 2026-11-15: it stays** ("keep it for now")
+  — no end date; removing it takes a new ruling.
+
+Ruled after this record was written:
+
+- **`slothweb.service` keeps `Wants=sloth-rf.service`** (2026-11-15, on
+  #215's review: "if there are sdr's it should use it"). A host with
+  sloth-rf installed runs it whenever slothweb starts; `systemctl mask
+  sloth-rf` keeps it off.
+- **sloth-rf takes `-o` / `--out` only**, not `--jsonl` (2026-11-15):
+  both daemons accept the same spellings.
+- **Victron** (`--victron`, ADR 0011, d5d2153f) is an RF-side file
+  source and is read by sloth-rf like the other three decoders.
 
 ## Consequences
 
