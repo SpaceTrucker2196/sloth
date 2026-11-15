@@ -358,3 +358,5 @@
 | d22b810 | 2026-11-15T16:55:54Z | claude-fable-5-1, claude-fable-5-2 | 168 | 27444 | 2581065 | 227123 | 5.9335 | ADR 0010 and the wifi/rf coupling inventory (#211 S0) |
 | b7ceb81 | 2026-11-15T17:20:45Z | claude-fable-5-2 | 8 | 1189 | 530613 | 1876 | 0.1838 | Build seam for the wifi/rf split: source groups, run flag, poll stage table (#212) |
 | c78796d | 2026-11-15T19:16:45Z | claude-fable-5-1, claude-fable-5-2 | 94 | 11179 | 4780308 | 215976 | 5.0406 | agents: name the three source groups, not CORE_COMMON_SRCS (#212) |
+| 7579b5b | 2026-11-15T21:38:55Z | claude-fable-5-2 | 146 | 37752 | 13512413 | 72116 | 5.3676 | sloth-rf: the RF daemon beside sloth, sensor_health names its daemon (#213) |
+| 1cc07cb | 2026-11-15T22:08:00Z | claude-fable-5-2 | 28 | 6816 | 3261325 | 17199 | 1.2003 | Fix red main: sweep-history leak, readdir suppressions, bound check |
