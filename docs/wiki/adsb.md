@@ -27,8 +27,8 @@ last open items.
 **Sources**: `src/adsb.h`, `src/adsb.c` (parser, spec, table, bands,
 signature), `src/capture/adsb_reader.h`, `src/capture/adsb_reader.c`
 (the per-poll file read), `include/sloth.h` (`adsb_aircraft_t`,
-`adsb_health_t`), `src/poll.c` (`adsb_health_poll()` in the health
-stage, `SENSOR_ADSB` in the sensors stage), `src/jsonl.c`
+`adsb_health_t`), `src/poll_rf.c` (`adsb_health_poll()` in the
+`health_rf` stage, `SENSOR_ADSB` in the `sensors_rf` stage), `src/jsonl.c`
 (`jsonl_emit_adsb()`, the `adsb_*` appends in
 `jsonl_emit_sensor_health()`), `src/main.c` (`--adsb`); tests
 `tests/test_adsb.c`, `tests/fuzz/fuzz_adsb_doc.c`; the alert

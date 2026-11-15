@@ -21,7 +21,7 @@ from the kernel socket table, not from remote-chosen text), detail
 `match_port = 0`.
 
 The table is built by `scan_update()` (`src/scan.c:53-110`), which runs
-in the DERIVE phase of every poll tick (`src/poll.c:214`) over the
+in the DERIVE phase of every poll tick (`src/poll.c:251`) over the
 host's own TCP socket snapshot (`s->conns`, from INET_DIAG with every
 state requested, `src/platform/linux_tcpdiag.c:32`):
 

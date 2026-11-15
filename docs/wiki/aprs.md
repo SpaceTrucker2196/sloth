@@ -27,8 +27,8 @@ channel. No TUI view and no alert rule.
 table, packet ring, cell and signature), `src/capture/aprs_reader.h`,
 `src/capture/aprs_reader.c` (the tail), `include/sloth.h`
 (`aprs_packet_t`, `aprs_station_t`, `aprs_health_t`, `SENSOR_APRS`),
-`src/poll.c` (`aprs_health_poll()` in the health stage, `SENSOR_APRS`
-in the sensors stage), `src/jsonl.c` (`jsonl_emit_aprs()`, the `aprs_*`
+`src/poll_rf.c` (`aprs_health_poll()` in the `health_rf` stage,
+`SENSOR_APRS` in the `sensors_rf` stage), `src/jsonl.c` (`jsonl_emit_aprs()`, the `aprs_*`
 appends in `jsonl_emit_sensor_health()`), `src/db.c` (`write_aprs()`),
 `src/db_schema.c` (v13), `src/main.c` (`--aprs`, `--aprs-freq`,
 `--aprs-silent-hours`); slothweb

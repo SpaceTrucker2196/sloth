@@ -35,14 +35,29 @@ looked at. The decision it serves is
 tree is the authority and §9 says so.
 
 It measures the tree as it stood before any slice. S1 (#212) has since
-landed, so three things below describe the parent of that commit and
-not the tree: §5 (the run flag is `src/run_flag.c` now, and the four
-readers include `run_flag.h`), the stage-table row of §3 with every
-`src/poll.c` line number (the table is data: `g_poll_sloth`,
-`g_poll_wifi`, `g_poll_rf`; the GNSS and RF stages are
-`src/poll_gnss.c` and `src/poll_rf.c`), and the `Makefile` line numbers
-of §2.1 (`RF_SRCS`, `GNSS_SRCS`). [[architecture]] has the current
-layout.
+landed, so these describe the parent of that commit and not the tree:
+
+- **§5.** The run flag is `src/run_flag.c` now, and the four readers
+  include `run_flag.h`.
+- **Every `src/poll.c` line number, and the stage-table row of §3.**
+  The table is data: `g_poll_sloth`, `g_poll_wifi`, `g_poll_rf`.
+- **Every sentence that names `st_health()` or `st_sensors()` as the
+  one function** (§2.2, §3.1, §4.1's `src/poll.c` row, §4.2, §9 item
+  1). `st_health()` is five stages: `health_capture` in `src/poll.c`,
+  `health_gnss` (`poll_st_health_gnss()`, `src/poll_gnss.c`),
+  `health_rf` (`poll_st_health_rf()`, `src/poll_rf.c`), `health_host`
+  (`poll_st_health_host()`, `src/poll_core.c`) and `capture_scope`.
+  `st_sensors()` is three: `st_sensors_wifi()` in `src/poll.c`,
+  `poll_st_sensors_gnss()` and `poll_st_sensors_rf()`. The calls and
+  their order are the ones written below; `aprs_health_poll()` still
+  runs after `gps_health_poll()`.
+- **§2.1's "There is one list" and its `Makefile` line numbers.**
+  `CORE_COMMON_SRCS` is the union of `CORE_BASE_SRCS`, `GNSS_SRCS` and
+  `RF_SRCS`; every RF file is still in `sloth` and in `sloth_test`.
+- **`alerts_update()`** is called from `poll_st_alerts()` in
+  `src/poll_core.c`, not from `src/poll.c`.
+
+[[architecture]] has the current layout.
 
 Line numbers are those of commit `3148c553`. They move; the commands do
 not.
@@ -108,7 +123,7 @@ grep -nE '"devices"|FROM devices' web/src/web_slothdb.c
 git ls-files packaging
 grep -nE '^(ExecStart|RuntimeDirectory|StateDirectory|User|After|Wants|BindsTo|ReadOnlyPaths|RestrictAddressFamilies)' \
   packaging/systemd/sloth-sensor.service packaging/systemd/slothweb.service
-sed -n '250,311p' packaging/bin/sloth-migrate-sensor
+sed -n '250,309p' packaging/bin/sloth-migrate-sensor
 grep -rnE '/usr/local/s?bin/sloth\b' tests packaging Makefile
 
 # (g) the slices
@@ -271,7 +286,7 @@ From (c). "Wi-Fi-side" here is everything outside `src/gps.c`,
 | `src/jsonl.c:2430` to 2444, 2768 to 2815 | `s->gps` | `sensor_health`'s `gps_*`, `gnss_*` and `loc_*` members and their part of the change signature. |
 | `src/sys_status.c:984` to 1006 | `s->gps`, `gps_state_name()` | The `SYS_SRC_GNSS` row of `source_status`. |
 | `src/poll.c:337` to 340 | `s->gps.has_gps`, `.src`, `.sentences` | The GNSS row of `s->sensors[]`. |
-| `src/main.c:1061`, 1317 to 1348, 1754 to 1794 | `gps_spec_parse()`, `gps_location_parse_fixed()`, `gps_reader_configure()` | Flag parsing and start-up. |
+| `src/main.c:1061`, 1317 to 1348, 1754 to 1794 | `gps_reader_baud_ok()` (1061, the `--gps-baud` parse), `gps_location_parse_fixed()` (1317), `gps_spec_parse()` (1332, 1768), `gps_reader_configure()` (1754) | Flag parsing and start-up. |
 
 The GNSS records and tables themselves are written from
 `src/jsonl.c:3236` (`jsonl_emit_gnss`) and `src/db.c:1983`
@@ -325,9 +340,9 @@ Every reader thread uses it for its `g_running`:
 | `src/capture/aprs_reader.c` | 10 | 22 |
 | `src/capture/rtl433_reader.c` | 10 | 22 |
 | `src/capture/bt_capture.c` | 15 | 27 |
-| `src/capture/bt_monitor.c` | — | 29 |
-| `src/capture/probe.c` | — | 145 |
-| `src/capture/capture.c` | — | 548 |
+| `src/capture/bt_monitor.c` | 15 | 29 |
+| `src/capture/probe.c` | 13 | 145 |
+| `src/capture/capture.c` | 3 | 548 |
 
 So the four RF readers, which need nothing else from the capture, link
 against the capture's translation unit for three small functions. A
@@ -437,7 +452,7 @@ export reads will sit in a second file.
   `ReadOnlyPaths=-/var/lib/sloth` (92). One socket, one database, one
   sensor unit, one read-only state directory.
 - **The migrate tool's flag allow-list**
-  (`packaging/bin/sloth-migrate-sensor`, the `case "$f"` at 260 to 311).
+  (`packaging/bin/sloth-migrate-sensor`, the `case "$f"` at 260 to 309).
   The binary must be named `sloth` (`case "$(basename "$1")"`, 252 to
   255). Absorbed: `--headless`, `--no-discovery`, `--hop`; dropped:
   `--no-privdrop`; relocated: `--db`, `--pcap-dir`, `--report`,
@@ -445,7 +460,7 @@ export reads will sit in a second file.
   `--data-socket` (unix, or tcp with `--data-socket-unix`); carried:
   `--bt-monitor`, `--my-ssid`, `--my-bssid`, `--site-label`, `--site`,
   `--known-mac`, `--iface`, `--db-interval-secs`, `--db-retain-days`,
-  `--db-max-mb`, `--correlate-retain`. Anything else is refused (309).
+  `--db-max-mb`, `--correlate-retain`. Anything else is refused (307 to 308).
   No RF flag is on the list: `grep -nE 'adsb|aprs|rtl433|--gps|--location'`
   on the script finds nothing. It reads the binary at
   `$ROOT$PREFIX/bin/sloth` (86) and the socket at
@@ -495,7 +510,7 @@ does not decide.
    `gnss_*` members beside the `loc_*` ones #211's table does name.
    Whether sloth-wifi keeps reporting a GNSS source row and the `gps_*`
    / `gnss_*` health members, or only `loc_*`, is not stated.
-   OPEN — needs owner ruling.
+   OPEN — needs owner ruling (recorded in ADR 0010).
 2. **`sensor_positions` is in neither column.** `position_track.c`
    writes it with `device_positions` from one fix; #211 assigns
    `device_positions` to sloth-wifi and the `gnss_*` tables to sloth-rf.

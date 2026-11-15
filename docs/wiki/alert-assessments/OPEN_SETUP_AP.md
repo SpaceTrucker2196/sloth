@@ -94,7 +94,7 @@ Code (re-read `src/alerts/rules_twin.c:1100-1210`, `src/alerts/rules_table.c`, `
 - Corrected `fire()`'s evaluation bump to engine.c:478-479 (was 476-478); `a->count` is the compat alias of `evaluations` at 479.
 - `ALERT_RESOLVE_AFTER_S` is a define at include/sloth.h:860 (300 s); engine.c:44 is the contract comment. Added the value and the define location.
 - Beacon rows do age out at `BEACON_AGE_SECS` (beacon_snoop.c:1522), so the resolve path described holds.
-- `alerts_update()` runs once per `poll_tick()` (src/poll.c:296), so count = ticks. POLL_MS's own comment (sloth.h:28) notes the loop also wakes early on alert fires, so "~4/s" is the default-cadence figure, not a guarantee.
+- `alerts_update()` runs once per `poll_tick()` (src/poll_core.c:32), so count = ticks. POLL_MS's own comment (sloth.h:28) notes the loop also wakes early on alert fires, so "~4/s" is the default-cadence figure, not a guarantee.
 - Slot 48 in `rules_table.c` is line 48 of the file; the table starts at line 26, so it is the 22nd rule in run order. The text says "slot 48" meaning the file line; left as is since the file line is what a reader greps for.
 - Noise arithmetic: 4 ticks/s x 86,400 s = 345,600, matching "~350,000".
 

@@ -73,18 +73,23 @@ Relation to the other records:
 - **Orthogonal to [ADR 0001](0001-three-repos.md) and #184.** That
   programme splits repositories (sensor, dashboard, intelligence); this
   one splits the sensor process, inside this repository.
-- **[ADR 0005](0005-no-runtime-dependency.md) holds between the
-  daemons.** Neither depends on the other at run time: each has its own
-  unit, store and socket, and each links its own copy of the gpsd
-  reader rather than asking the other for a position.
+- **[ADR 0005](0005-no-runtime-dependency.md) is about other
+  components** (`sloth`, `sloth-dash`, `sloth-comintd`; #184 §2,
+  decision 5) and #211 does not extend it. What #211 rules has the
+  same effect between the two daemons, and is recorded as a
+  consequence below, not as a decision of its own.
 
 Not in this programme (#211): a Meshtastic decoder, a sloth-rf terminal
 UI, an rtl_433 table in the database, fleet classification of rtl_433
 or APRS.
 
 Not decided by #211, found while measuring the tree
-([inventory](../architecture-rf-split.md) §9):
+([inventory](../architecture-rf-split.md) §9, items 1 to 3):
 
+- Whether sloth-wifi keeps reporting a GNSS source row
+  (`SYS_SRC_GNSS`, the GNSS row of `s->sensors[]`) and
+  `sensor_health`'s `gps_*` / `gnss_*` members, or only the `loc_*`
+  ones #211's table names. OPEN — needs owner ruling.
 - Which daemon writes `sensor_positions`. #211 names `device_positions`
   (sloth-wifi) and the `gnss_*` tables (sloth-rf); the sensor's own
   track is written by the same module as `device_positions` and is in
@@ -93,6 +98,10 @@ Not decided by #211, found while measuring the tree
   fires from both daemons on a host that runs both. #211 gives sloth-rf
   the two `SENSOR_*` alerts "for its own sources" and sloth-wifi
   "everything else". OPEN — needs owner ruling.
+
+Not decided by #211, and not from the inventory (found while writing
+this record):
+
 - How long the `sloth` symlink stays. #211 says "for a release" and
   names no version. OPEN — needs owner ruling.
 
@@ -102,6 +111,10 @@ Accepted:
 
 - A host that wants both halves runs two units and two processes; a
   host with only SDRs, or only a GPS, runs sloth-rf alone.
+- Neither daemon needs the other at run time. This is derived from the
+  rulings, not ruled in its own words: each has its own unit, store and
+  socket, and each links its own copy of the gpsd reader rather than
+  asking the other for a position.
 - sloth-rf needs its own `--gps` / `--location`: the APRS region check
   reads the position, and after the split that position is its own
   reader's, not sloth-wifi's.

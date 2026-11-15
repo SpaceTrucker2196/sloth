@@ -26,7 +26,7 @@ device is never written to.
 GST, `gpsd_time_parse()`, the sky / fix state, `gps_gnss_*_sig()`),
 `src/sloth_clock.c` (`sloth_wall_ms()`), `src/views/gnss.c`,
 `src/jsonl.c` (`jsonl_emit_gnss()`, the `gnss_*` appends in
-`jsonl_emit_sensor_health()`), `src/poll.c` (`SENSOR_GPS`), `src/db.c`
+`jsonl_emit_sensor_health()`), `src/poll_gnss.c` (`SENSOR_GPS`), `src/db.c`
 (`write_gnss()`), `src/db_schema.c` (v10), `web/src/web_gnss.c`,
 `web/ui/gnss.js`, `src/alerts/rules_gnss.c`; tests `tests/test_gps.c` ("GNSS observation"),
 `tests/test_gnss_rules.c` (the GNSS rules),
