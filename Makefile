@@ -1668,6 +1668,7 @@ install-service:
 	install -m 644 $(DESTDIR)$(UNITDIR)/sloth-sdrsweep.service.tmp $(DESTDIR)$(UNITDIR)/sloth-sdrsweep.service
 	rm -f $(DESTDIR)$(UNITDIR)/sloth-sdrsweep.service.tmp
 	install -m 644 packaging/systemd/sloth-sdrsweep.path $(DESTDIR)$(UNITDIR)/sloth-sdrsweep.path
+	install -m 644 packaging/systemd/sloth-sdrsweep-auto.timer $(DESTDIR)$(UNITDIR)/sloth-sdrsweep-auto.timer
 	install -m 644 packaging/systemd/sloth-sdrsweep.sysusers.conf $(DESTDIR)$(SYSUSERSDIR)/sloth-sdrsweep.conf
 	[ -e $(DESTDIR)$(DEFAULTDIR)/sloth-sdrsweep ] || \
 	    install -m 644 packaging/default/sloth-sdrsweep $(DESTDIR)$(DEFAULTDIR)/sloth-sdrsweep
@@ -1687,6 +1688,8 @@ install-service:
 	@echo "  sloth-sdrsweep.{service,path} are installed, not enabled; the Spectrum tab's button"
 	@echo "  needs systemd-sysusers and 'systemctl enable --now sloth-sdrsweep.path':"
 	@echo "  docs/wiki/deployment.md, SDR sweep (a shared receiver needs a drop-in there)"
+	@echo "  sloth-sdrsweep-auto.timer (a sweep every 5 min, for the Spectrum ranges) is installed,"
+	@echo "  not enabled: 'systemctl enable --now sloth-sdrsweep-auto.timer'"
 	@echo "  (migration from a build-tree unit: docs/wiki/deployment.md)"
 
 # ── Deploy tooling test (#153) ───────────────────────────────────────────────

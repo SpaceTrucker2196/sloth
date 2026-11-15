@@ -1,0 +1,38 @@
+# sloth-sdrsweep-auto.timer — a sweep every 5 minutes, for the Spectrum
+# tab's 1 h ... 24 h ranges (docs/wiki/sdr-sweep.md, "Scheduled sweeps").
+#
+# It starts sloth-sdrsweep.service itself: the same unit the Run button's
+# path unit starts, so the same account, sandbox, settings
+# (/etc/default/sloth-sdrsweep) and any site drop-in in
+# /etc/systemd/system/sloth-sdrsweep.service.d/ (a Conflicts= with the
+# decoder sharing the receiver, and its ExecStopPost= restart) apply to
+# a scheduled run exactly as to a manual one.
+#
+# It does not pile up. The service is a oneshot: a start while a run is
+# still going joins that run rather than queueing a second, and a start
+# inside the helper's cooldown (150 s from the end of the last run by
+# default, under the 5-minute period) is refused by the helper with exit
+# 3, which the service counts as success. Wall-clock slots (:00, :05,
+# ...) rather than OnUnitActiveSec=, so a missing run shows as a gap at
+# a predictable place, and Persistent=false so a boot does not fire the
+# slots it slept through.
+#
+# The cost: a receiver shared with a decoder (APRS, rtl_433) is taken
+# for about a minute in every five, ~20% of the time.
+#
+# Installed by `sudo make install-service`, never enabled by it:
+#   systemctl enable --now sloth-sdrsweep-auto.timer
+
+[Unit]
+Description=sloth SDR sweep every 5 minutes (for slothweb's Spectrum ranges)
+Documentation=https://github.com/SpaceTrucker2196/sloth/wiki/sdr-sweep
+
+[Timer]
+OnCalendar=*:0/5
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+Unit=sloth-sdrsweep.service
+
+[Install]
+WantedBy=timers.target

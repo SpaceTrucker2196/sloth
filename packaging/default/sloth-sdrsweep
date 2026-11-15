@@ -31,5 +31,8 @@
 #
 # Seconds of whole sweeps (each one a row of the waterfall), and the
 # least time, in seconds, between the end of one run and the next.
+# Keep the cooldown under the timer's 5 minutes less a run (~90 s) if
+# sloth-sdrsweep-auto.timer is enabled, or its runs are refused; slothweb
+# refuses a Run press within 120 s of the last run whatever this says.
 #SLOTH_SDRSWEEP_DURATION=60
-#SLOTH_SDRSWEEP_COOLDOWN=600
+#SLOTH_SDRSWEEP_COOLDOWN=150

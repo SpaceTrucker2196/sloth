@@ -28,7 +28,7 @@ sensor runs, installed but never enabled by make.
 `src/secure_file.c`, `src/data_socket.c`, `src/privdrop.c`, `tests/test_privdrop.c`, `MISSION.md` §2,
 `packaging/systemd/sloth-ble-scan.service`, `src/ble_scan/main.c`, `src/ble_scan/ble_scan_cmd.c`, `tests/test_ble_scan.c`.
 
-**Last updated**: 2026-11-13 (§9: `sloth-sdrsweep.{service,path}`, its account and defaults file, and the drop-in for a receiver another service holds; `make` now builds the helpers it names, `sloth-ble-scan` included), 2026-11-12 (the unit's `snapshot.live.txt` and `report.retain_days`, #190), 2026-11-11 (§5.1: the beacon memory's state on `sys_status`, JSONL 1.2.0), 2026-11-11 (§6: `RuntimeDirectory=slothweb`, mode `0711`, for the agent secret, and `fchown` given back to slothweb's filter, for `--web-agent-group`; [[slothweb-mcp]] §7), 2026-11-11 (§5.1: host status under the unit; no unit key changes), 2026-11-02 (§7.2: uncomment the whole block, the `[Service]` line included, and what the one-line mistake looks like; §7.3: GPS time into the host clock through gpsd and ntpsec's SHM refclock, as done on the reference host); 2026-11-02 (§6: `slothweb.service` passes `--web-assessments` the copy `make install` puts in `share/sloth/alert-assessments`); 2026-10-27 (§6: `--pcap-dir /var/lib/sloth/pcap` for the alert page's capture, an example in `/etc/default/slothweb`); 2026-10-27 (§7.2: the inert `gps.conf` drop-in for `--gps`, why `PrivateDevices=true` hides the receiver, `dialout`, the gpsd variant); 2026-10-26 (§2, §7.1 integration: `/etc/default/sloth` no-clobber like slothweb's, units still replaced; `[Service]` of the scan unit an allow-list; the reference host's hand-made `10-bluetooth-monitor.conf` removed in §7.1 and after §4.4's migration, so one drop-in grants `AF_BLUETOOTH`); 2026-10-26 (§7 review: the sensor's `AF_BLUETOOTH` moved to an opt-in drop-in; `Conflicts=` in both directions and the mask required; what stopping bluetoothd sends; `WantedBy=` pulls the scan in, `PartOf=` carries restarts, measured; the boot-time bind wait; the journal check); 2026-10-26 (§7 BLE capture: `sloth-ble-scan.service`, `AF_BLUETOOTH` for `--bt-monitor` in the sensor's unit, the migration carries `--bt-monitor`); 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
+**Last updated**: 2026-11-15 (§9: `sloth-sdrsweep-auto.timer`, a sweep every 5 minutes for the Spectrum ranges, §9.2; the helper's default cooldown 600 s to 150 s; `SuccessExitStatus=3`; the run's `history/` records), 2026-11-13 (§9: `sloth-sdrsweep.{service,path}`, its account and defaults file, and the drop-in for a receiver another service holds; `make` now builds the helpers it names, `sloth-ble-scan` included), 2026-11-12 (the unit's `snapshot.live.txt` and `report.retain_days`, #190), 2026-11-11 (§5.1: the beacon memory's state on `sys_status`, JSONL 1.2.0), 2026-11-11 (§6: `RuntimeDirectory=slothweb`, mode `0711`, for the agent secret, and `fchown` given back to slothweb's filter, for `--web-agent-group`; [[slothweb-mcp]] §7), 2026-11-11 (§5.1: host status under the unit; no unit key changes), 2026-11-02 (§7.2: uncomment the whole block, the `[Service]` line included, and what the one-line mistake looks like; §7.3: GPS time into the host clock through gpsd and ntpsec's SHM refclock, as done on the reference host); 2026-11-02 (§6: `slothweb.service` passes `--web-assessments` the copy `make install` puts in `share/sloth/alert-assessments`); 2026-10-27 (§6: `--pcap-dir /var/lib/sloth/pcap` for the alert page's capture, an example in `/etc/default/slothweb`); 2026-10-27 (§7.2: the inert `gps.conf` drop-in for `--gps`, why `PrivateDevices=true` hides the receiver, `dialout`, the gpsd variant); 2026-10-26 (§2, §7.1 integration: `/etc/default/sloth` no-clobber like slothweb's, units still replaced; `[Service]` of the scan unit an allow-list; the reference host's hand-made `10-bluetooth-monitor.conf` removed in §7.1 and after §4.4's migration, so one drop-in grants `AF_BLUETOOTH`); 2026-10-26 (§7 review: the sensor's `AF_BLUETOOTH` moved to an opt-in drop-in; `Conflicts=` in both directions and the mask required; what stopping bluetoothd sends; `WantedBy=` pulls the scan in, `PartOf=` carries restarts, measured; the boot-time bind wait; the journal check); 2026-10-26 (§7 BLE capture: `sloth-ble-scan.service`, `AF_BLUETOOTH` for `--bt-monitor` in the sensor's unit, the migration carries `--bt-monitor`); 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
 
 ---
 
@@ -1254,17 +1254,22 @@ make install-service` installs, and never enables:
   account can read it). `TimeoutStopSec=60`: the helper deactivates and
   closes the stream and releases the device on `SIGTERM`, and a
   `SIGKILL` in the middle of that wedges the SDRplay API service until
-  `systemctl restart sdrplay`. No `[Install]`: the path unit starts it.
+  `systemctl restart sdrplay`. No `[Install]`: the path unit and the
+  timer start it. `SuccessExitStatus=3`: a start the helper refuses
+  inside its cooldown ran nothing and is not a failure.
 - `sloth-sdrsweep.path` - `PathExists=/run/slothweb/sdrsweep.request`,
   the file `POST /api/spectrum/run` creates in slothweb's own runtime
   directory; the service removes it (as root, `ExecStartPre=+`) before
   it runs, which re-arms the path.
+- `sloth-sdrsweep-auto.timer` - starts the same service every 5
+  minutes (§9.2).
 - `/usr/lib/sysusers.d/sloth-sdrsweep.conf` - the account. Its own, not
   `DynamicUser=` (a dynamic user's state directory sits under the 0700
   `/var/lib/private`, where slothweb cannot read it) and not `sloth`
   (the helper has no business in the sensor's `/var/lib/sloth`).
 - `/etc/default/sloth-sdrsweep`, only where there is none - the device,
-  the antenna port, the gain, the span, the duration and the cooldown,
+  the antenna port, the gain, the span, the duration and the cooldown
+  (150 s by default; 600 s before 2026-11-15),
   one `SLOTH_SDRSWEEP_*` variable each (an antenna is called
   "Antenna A", and systemd splits `$VAR` on spaces).
 
@@ -1315,6 +1320,38 @@ stops the sweep (cleanly, by `SIGTERM`). The decoder is gone for about
 a minute plus its own restart; the Spectrum tab's confirmation says so.
 The helper waits up to 10 s for the device after the decoder stops, in
 case the API service has not released it yet.
+
+### 9.2 A sweep every 5 minutes
+
+The Spectrum tab's 1 h to 24 h ranges draw one row per run from the
+helper's `history/` ([[sdr-sweep]], "History"); without a schedule they
+hold only the runs someone asked for. `sloth-sdrsweep-auto.timer`
+starts `sloth-sdrsweep.service` at :00, :05, :10, ... It starts the
+service, not the path unit, so a drop-in from §9.1 applies to the
+scheduled runs exactly as to the button's.
+
+```
+sudo make install-service            # installs the timer (never enables it)
+sudo systemctl daemon-reload
+grep COOLDOWN /etc/default/sloth-sdrsweep   # nothing set, or a value <= ~200
+sudo systemctl enable --now sloth-sdrsweep-auto.timer
+systemctl list-timers sloth-sdrsweep-auto.timer
+ls /var/lib/sloth-sdrsweep/history/  # a record per run after the next slot
+```
+
+The cooldown counts from the end of one run to the next start, so it
+must stay under the 5-minute period less a run (50-90 s): the default
+is 150 s. A file that still sets `SLOTH_SDRSWEEP_COOLDOWN=600` makes
+the helper refuse every other slot (exit 3; with a §9.1 drop-in each
+refused slot still stops and restarts the decoder for a moment). The
+Run button keeps its own floor: slothweb refuses a press within 120 s
+of the last run's end whatever the cooldown.
+
+The trade: a receiver shared with a decoder is taken about a minute in
+every five, ~20% of the time. Disable with `sudo systemctl disable
+--now sloth-sdrsweep-auto.timer`; the history then ages out within 25 h
+(the helper prunes it after each run, so a last run's records stay
+until the next run prunes them).
 
 ## Related pages
 

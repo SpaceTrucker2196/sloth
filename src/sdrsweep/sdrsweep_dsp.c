@@ -1,9 +1,12 @@
 /* sloth-sdrsweep's pure half; sdrsweep_dsp.h says what and why. */
 #include "sdrsweep/sdrsweep_dsp.h"
 
+#include <dirent.h>
+#include <errno.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -398,6 +401,25 @@ static void kv_str(FILE *f, const char *k, const char *v) {
     fputc(',', f);
 }
 
+/* "peaks":[...], each peak on a line of its own (sdrs_parse_cal()). */
+static void put_peaks(FILE *f, const sdrs_peak_t *peaks, int npeaks) {
+    fputs("\"peaks\":[", f);
+    for (int i = 0; i < npeaks; i++) {
+        const sdrs_peak_t *p = &peaks[i];
+        fprintf(f, "%s\n{\"freq_hz\":%.0f,\"width_hz\":%.0f,\"snr_avg\":", i ? "," : "",
+                p->freq_hz, p->width_hz);
+        num(f, p->snr_avg, 1);
+        fputs(",\"snr_peak\":", f);
+        num(f, p->snr_peak, 1);
+        fputs(",\"dbfs\":", f);
+        num(f, p->dbfs, 1);
+        fprintf(f, ",\"rows\":%d,\"note\":", p->rows);
+        sdrs_json_str(f, sdrs_note_name(p->note));
+        fputc('}', f);
+    }
+    fputc(']', f);
+}
+
 int sdrs_write_json(FILE *f, const sdrs_meta_t *m, const sdrs_run_t *r,
                     const sdrs_row_t *rows, int nrows,
                     const sdrs_peak_t *peaks, int npeaks) {
@@ -435,21 +457,9 @@ int sdrs_write_json(FILE *f, const sdrs_meta_t *m, const sdrs_run_t *r,
         fprintf(f, ",\"data\":\"%s\"}", b64);
     }
     free(b64);
-    fputs("],\n\"peaks\":[", f);
-    for (int i = 0; i < npeaks; i++) {
-        const sdrs_peak_t *p = &peaks[i];
-        fprintf(f, "%s\n{\"freq_hz\":%.0f,\"width_hz\":%.0f,\"snr_avg\":", i ? "," : "",
-                p->freq_hz, p->width_hz);
-        num(f, p->snr_avg, 1);
-        fputs(",\"snr_peak\":", f);
-        num(f, p->snr_peak, 1);
-        fputs(",\"dbfs\":", f);
-        num(f, p->dbfs, 1);
-        fprintf(f, ",\"rows\":%d,\"note\":", p->rows);
-        sdrs_json_str(f, sdrs_note_name(p->note));
-        fputc('}', f);
-    }
-    fputs("]}\n", f);
+    fputs("],\n", f);
+    put_peaks(f, peaks, npeaks);
+    fputs("}\n", f);
     return ferror(f) ? -1 : 0;
 }
 
@@ -489,4 +499,118 @@ int sdrs_parse_cal(const char *text, sdrs_peak_t *out, int max) {
         l = nl ? nl + 1 : NULL;
     }
     return n;
+}
+
+/* ── the history (docs/wiki/sdr-sweep.md "History") ── */
+
+void sdrs_hist_row(const sdrs_row_t *rows, int nrows, int ndisp, uint8_t *out) {
+    memset(out, 0, (size_t)ndisp);
+    for (int i = 0; i < nrows; i++)
+        for (int j = 0; j < ndisp; j++)
+            if (rows[i].q[j] > out[j]) out[j] = rows[i].q[j];
+}
+
+float sdrs_hist_floor(const sdrs_row_t *rows, int nrows) {
+    float v[SDRS_ROWS_MAX];
+    int n = 0;
+    for (int i = 0; i < nrows && n < SDRS_ROWS_MAX; i++)
+        if (!isnan(rows[i].floor) && !isinf(rows[i].floor)) v[n++] = rows[i].floor;
+    return n ? sdrs_median(v, n, v) : NAN;
+}
+
+int sdrs_hist_name(char *out, size_t cap, double started) {
+    if (!(started >= 0 && started < 1e12)) return -1;
+    int n = snprintf(out, cap, "%lld.json", (long long)floor(started));
+    return n > 0 && (size_t)n < cap ? 0 : -1;
+}
+
+int sdrs_write_hist(FILE *f, const sdrs_meta_t *m, const sdrs_run_t *r,
+                    const sdrs_row_t *rows, int nrows,
+                    const sdrs_peak_t *peaks, int npeaks) {
+    if (nrows < 1 || r->ndisp < 1) return -1;
+    uint8_t *q = malloc((size_t)r->ndisp);
+    char *b64 = malloc(4 * ((size_t)r->ndisp / 3 + 1) + 1);
+    /* The strongest SDRS_HIST_PEAKS by peak SNR, in frequency order:
+     * the labels a window can show, at a sixth of the bytes of 400. */
+    if (npeaks < 0) npeaks = 0;
+    int np = npeaks < SDRS_HIST_PEAKS ? npeaks : SDRS_HIST_PEAKS;
+    sdrs_peak_t *top = malloc(sizeof(*top) * (size_t)(npeaks > 0 ? npeaks : 1));
+    if (!q || !b64 || !top) { free(q); free(b64); free(top); return -1; }
+    if (npeaks > 0) memcpy(top, peaks, sizeof(*top) * (size_t)npeaks);
+    if (npeaks > np) qsort(top, (size_t)npeaks, sizeof(*top), cmp_snr_desc);
+    if (np > 1) qsort(top, (size_t)np, sizeof(*top), cmp_freq);
+    sdrs_hist_row(rows, nrows, r->ndisp, q);
+    sdrs_b64(q, (size_t)r->ndisp, b64);
+    fputs("{\"version\":1,\"kind\":\"history\",", f);
+    kv_str(f, "mode", m->mode);
+    fprintf(f, "\"complete\":%s,\"started\":", m->complete ? "true" : "false");
+    num(f, m->started, 3);
+    fputs(",\"ended\":", f);
+    num(f, m->ended, 3);
+    fputs(",\"t_first\":", f);
+    num(f, rows[0].t, 3);
+    fputs(",\"t_last\":", f);
+    num(f, rows[nrows - 1].t, 3);
+    fputc(',', f);
+    kv_str(f, "antenna", m->antenna);
+    fprintf(f, "\"rows\":%d,\"floor\":", nrows);
+    num(f, sdrs_hist_floor(rows, nrows), 1);
+    fprintf(f, ",\"f_lo\":%.0f,\"f_hi\":%.0f,\"bin_hz\":%.0f,\"bins\":%d,",
+            r->plan.f_lo, r->plan.f_hi, r->disp_hz, r->ndisp);
+    fprintf(f, "\"quant\":{\"offset_db\":%.1f,\"step_db\":%.1f},\n\"data\":\"%s\",\n",
+            SDRS_Q_OFFSET_DB, SDRS_Q_STEP_DB, b64);
+    put_peaks(f, top, np);
+    fputs("}\n", f);
+    free(q); free(b64); free(top);
+    return ferror(f) ? -1 : 0;
+}
+
+/* The time a history file's name carries: digits then ".json", nothing
+ * else (a ".N.json.tmp" the writer left, or anything an operator put
+ * there, is not a record and is left alone). -1 when not one. */
+static long long hist_time(const char *name) {
+    long long t = 0;
+    int d = 0;
+    for (; *name >= '0' && *name <= '9'; name++, d++) {
+        if (d >= 12) return -1;
+        t = t * 10 + (*name - '0');
+    }
+    return d && !strcmp(name, ".json") ? t : -1;
+}
+
+static int cmp_ll(const void *a, const void *b) {
+    long long x = *(const long long *)a, y = *(const long long *)b;
+    return (x > y) - (x < y);
+}
+
+int sdrs_hist_prune(const char *dir, double now, double max_age, int max_files) {
+    DIR *d = opendir(dir);
+    if (!d) return -1;
+    size_t n = 0, cap = 0;
+    long long *ts = NULL;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        long long t = hist_time(e->d_name);
+        if (t < 0) continue;
+        if (n == cap) {
+            size_t nc = cap ? cap * 2 : 512;
+            long long *g = realloc(ts, nc * sizeof(*ts));
+            if (!g) break;
+            ts = g;
+            cap = nc;
+        }
+        ts[n++] = t;
+    }
+    closedir(d);
+    if (n) qsort(ts, n, sizeof(*ts), cmp_ll);
+    int removed = 0;
+    for (size_t i = 0; i < n; i++) {
+        /* Oldest first: past the age, or one too many for the count. */
+        if (!((double)ts[i] < now - max_age || n - i > (size_t)max_files)) break;
+        char path[2048];
+        snprintf(path, sizeof(path), "%s/%lld.json", dir, ts[i]);
+        if (unlink(path) == 0 || errno == ENOENT) removed++;
+    }
+    free(ts);
+    return removed;
 }

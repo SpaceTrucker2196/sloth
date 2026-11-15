@@ -531,19 +531,20 @@
         <span class="sub" id="spec-msg" role="status"></span>
         <span class="sub" id="spec-err" role="alert"></span>
       </div>
-      <span class="sub" id="spec-run-note">sloth-sdrsweep, a separate receive-only helper, sweeps the receiver the operator dedicated (antenna: <span id="spec-antenna">the configured antenna</span>) from 0.5 to 2000 MHz for about a minute; each whole sweep is one row. Running it takes the receiver for that minute: a decoder that shares it pauses ~1 min (APRS, where it is the one sharing). One run at a time, and one per cooldown. slothweb only asks: the request carries no setting, the helper reads the operator's /etc/default/sloth-sdrsweep. Bands far from the antenna's design look weak or empty.</span>
+      <span class="sub" id="spec-run-note">sloth-sdrsweep, a separate receive-only helper, sweeps the receiver the operator dedicated (antenna: <span id="spec-antenna">the configured antenna</span>) from 0.5 to 2000 MHz for about a minute; each whole sweep is one row. Running it takes the receiver for that minute: a decoder that shares it pauses ~1 min (APRS, where it is the one sharing). One run at a time, and none within the cooldown (at least 2 minutes) after the last; with the operator's 5-minute timer enabled the receiver is taken about a minute in every five. slothweb only asks: the request carries no setting, the helper reads the operator's /etc/default/sloth-sdrsweep. Bands far from the antenna's design look weak or empty.</span>
     </section>
     <section class="panel">
       <div class="spec-tools">
+        <span id="spec-range" role="group" aria-label="time range"></span>
         <span id="spec-zoom" role="group" aria-label="zoom presets"></span>
         <label><input type="checkbox" id="spec-log" checked> log frequency axis</label>
         <label>label the <select id="spec-topn" aria-label="how many peaks to label"><option value="6">6</option><option value="12" selected>12</option><option value="24">24</option><option value="48">48</option></select> strongest peaks</label>
       </div>
       <div class="spec-wrap">
-        <canvas id="spec-plot" aria-label="isometric waterfall of the last sweep: frequency across, older sweeps receding up and to the right, height and colour the max-hold level in dBFS; the peak list below holds the same peaks as text" aria-describedby="spec-plot-note"></canvas>
+        <canvas id="spec-plot" aria-label="isometric waterfall of the chosen range: frequency across, older runs receding up and to the right, height and colour the max-hold level in dBFS; the peak list below holds the same peaks as text" aria-describedby="spec-plot-note"></canvas>
         <div class="spec-tip" id="spec-tip" role="tooltip" hidden></div>
       </div>
-      <div class="sub" id="spec-plot-note">each row is one whole sweep's max-hold per 100 kHz, the newest in front; drag across the plot to zoom, double-click for the full span. The strip under the axis is the US frequency allocation table (47 CFR 2.106), simplified, for orientation only. A label marked ? sits on a multiple of the receiver's 24 MHz clock (a guess, dashed); one marked int matched a spur the receiver shows with no antenna (dim). Hover for the level, its SNR over that row's floor and the band.</div>
+      <div class="sub" id="spec-plot-note">each row is one run's max-hold per 100 kHz (pooled to wider bins in the long ranges so the page stays small), the newest in front; in 1 h to 24 h the rows sit at their time, a hatched stretch marked on the time axis is where runs are missing. Until runs are recorded, last 3 scans shows the latest run's own sweeps. Runs are recorded every 5 minutes when the operator enables sloth-sdrsweep-auto.timer. Drag across the plot to zoom, double-click for the full span. The strip under the axis is the US frequency allocation table (47 CFR 2.106), simplified, for orientation only. A label marked ? sits on a multiple of the receiver's 24 MHz clock (a guess, dashed); one marked int matched a spur the receiver shows with no antenna (dim). Hover for the level, its SNR over that row's floor and the band.</div>
     </section>
     <section class="panel">
       <div class="label">peaks <span class="sub" id="spec-peaks-count"></span></div>

@@ -4,7 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
+#include <unistd.h>
 #include "runner.h"
+#include "tmp_dir.h"
 #include "sdrsweep/sdrsweep_dsp.h"
 
 /*
@@ -35,6 +37,14 @@
  *     src/sdrsweep/sdrsweep_dsp.c appended to CORE_COMMON_SRCS;
  *   - test_units_name_no_site_service: `Conflicts=aprs.service` added to
  *     packaging/systemd/sloth-sdrsweep.service.
+ * And, for the history (docs/wiki/log.md, the 2026-11-15
+ * spectrum-ranges entry):
+ *   - test_hist_prune: hist_time()'s `!strcmp(name, ".json")` made a
+ *     prefix match (".json.tmp" and ".jsonx" names counted as records,
+ *     the counts went wrong) and, separately, the `n - i > max_files`
+ *     half of the prune test dropped (the count bound kept all four);
+ *   - test_hist_record: the snr-descending qsort before the cut to
+ *     SDRS_HIST_PEAKS dropped (the six weakest peaks were kept).
  */
 
 static uint32_t g_lcg;
@@ -584,6 +594,160 @@ static void test_units_name_no_site_service(void) {
     free(svc); free(path); free(mk);
 }
 
+/* ── the history ── */
+
+/* One record per run: the rows' max per bin (0 only where every row had
+ * none), the median floor, the run's times and grid, and the strongest
+ * SDRS_HIST_PEAKS peaks by peak SNR, in frequency order. */
+static void test_hist_record(void) {
+    sdrs_plan_t p = { 100e6, 100.8e6, T_RATE, 0.8e6, 10e3, 1e6, 3e9, TN };
+    sdrs_run_t r;
+    ASSERT_EQ(sdrs_run_init(&r, &p, 100e3), 0);
+    ASSERT_EQ(r.ndisp, 8);
+    uint8_t a[8] = { 0, 10, 200, 3, 0, 0, 0, 220 };
+    uint8_t b[8] = { 0, 30, 100, 3, 0, 9, 0, 1 };
+    uint8_t c[8] = { 0, 20, 150, 4, 0, 0, 0, 2 };
+    sdrs_row_t rows[3] = { { 1700000000.25, -90.0f, a }, { 1700000016.5, NAN, b },
+                           { 1700000033.75, -80.0f, c } };
+    /* Max per bin: 0,30,200,4,0,9,0,220 = AB7IBAAJANw= by RFC 4648. */
+    uint8_t mx[8];
+    sdrs_hist_row(rows, 3, 8, mx);
+    static const uint8_t want[8] = { 0, 30, 200, 4, 0, 9, 0, 220 };
+    ASSERT(memcmp(mx, want, 8) == 0);
+    /* Median of the finite floors -90 and -80: -85. */
+    ASSERT_NEAR(sdrs_hist_floor(rows, 3), -85.0, 1e-4);
+    ASSERT(isnan(sdrs_hist_floor(rows + 1, 1)));
+    /* 70 peaks, peak SNR rising with the index and frequency falling:
+     * the 64 kept are indices 6..69, written lowest frequency first. */
+    enum { NP = 70 };
+    sdrs_peak_t pk[NP];
+    for (int i = 0; i < NP; i++) {
+        memset(&pk[i], 0, sizeof(pk[i]));
+        pk[i].freq_hz = 200e6 - i * 1e6;
+        pk[i].snr_peak = (float)i;
+        pk[i].dbfs = -60;
+        pk[i].rows = 1;
+    }
+    sdrs_meta_t m = { "sweep", 1, 1700000000.0, 1700000050.5, "driver=sdrplay", "SDRplay",
+                      "RSPdx-R2", "1", "Antenna \"A\"", "IFGR=40,RFGR=3",
+                      8e6, 7e6, 6e6, 25e3, 8192, 16, 60, 0 };
+    char *buf = NULL;
+    size_t len = 0;
+    FILE *f = open_memstream(&buf, &len);
+    ASSERT(f != NULL);
+    if (!f) { sdrs_run_free(&r); return; }
+    ASSERT_EQ(sdrs_write_hist(f, &m, &r, rows, 3, pk, NP), 0);
+    fclose(f);
+    static const char head[] = "{\"version\":1,\"kind\":\"history\",\"mode\":\"sweep\","
+                               "\"complete\":true,\"started\":1700000000.000,"
+                               "\"ended\":1700000050.500,\"t_first\":1700000000.250,"
+                               "\"t_last\":1700000033.750,\"antenna\":\"Antenna \\\"A\\\"\","
+                               "\"rows\":3,\"floor\":-85.0,\"f_lo\":100000000,"
+                               "\"f_hi\":100800000,\"bin_hz\":100000,\"bins\":8,"
+                               "\"quant\":{\"offset_db\":-130.0,\"step_db\":0.5},\n"
+                               "\"data\":\"AB7IBAAJANw=\",\n\"peaks\":[\n";
+    ASSERT(strncmp(buf, head, sizeof(head) - 1) == 0);
+    int n = 0;
+    double last = 0;
+    for (const char *s = strstr(buf, "{\"freq_hz\":"); s; s = strstr(s + 1, "{\"freq_hz\":")) {
+        double fq = sdrs_json_num(s, "freq_hz", -1), snr = sdrs_json_num(s, "snr_peak", -1);
+        ASSERT(fq > last);              /* frequency order */
+        ASSERT_GE(snr, 6);              /* none of the six weakest */
+        last = fq;
+        n++;
+    }
+    ASSERT_EQ(n, SDRS_HIST_PEAKS);
+    ASSERT(buf[len - 1] == '\n' && buf[len - 2] == '}');
+    /* No rows is no record. */
+    free(buf);
+    buf = NULL;
+    FILE *g = open_memstream(&buf, &len);
+    if (g) { ASSERT_EQ(sdrs_write_hist(g, &m, &r, rows, 0, pk, 0), -1); fclose(g); }
+    free(buf);
+    char name[32];
+    ASSERT_EQ(sdrs_hist_name(name, sizeof(name), 1700000000.999), 0);
+    ASSERT_STR(name, "1700000000.json");
+    ASSERT_EQ(sdrs_hist_name(name, sizeof(name), -1), -1);
+    ASSERT_EQ(sdrs_hist_name(name, sizeof(name), NAN), -1);
+    sdrs_run_free(&r);
+}
+
+static int hist_touch(const char *dir, const char *name) {
+    char p[TEST_TMP_MAX + 64];
+    snprintf(p, sizeof(p), "%s/%s", dir, name);
+    FILE *f = fopen(p, "w");
+    if (!f) return -1;
+    fputs("{}\n", f);
+    return fclose(f);
+}
+
+static int hist_has(const char *dir, const char *name) {
+    char p[TEST_TMP_MAX + 64];
+    snprintf(p, sizeof(p), "%s/%s", dir, name);
+    return access(p, F_OK) == 0;
+}
+
+/* Past the age goes, then the oldest past the count; a name that is not
+ * "<digits>.json" is never touched, whatever its age. */
+static void test_hist_prune(void) {
+    char dir[TEST_TMP_MAX];
+    snprintf(dir, sizeof(dir), "%s/sdrs-hist-XXXXXX", test_tmpdir());
+    ASSERT(mkdtemp(dir) != NULL);
+    const double now = 1700100000;
+    /* 1700000000 is 100000 s old (> 25 h): goes. The rest are inside. */
+    static const char *const recs[] = { "1700000000.json", "1700020000.json",
+                                        "1700090000.json", "1700095000.json",
+                                        "1700099000.json" };
+    static const char *const other[] = { "1600000000.json.tmp", ".1600000000.json.tmp",
+                                         "x1600000000.json", "1600000000.jsonx",
+                                         "1234567890123.json", "notes" };
+    for (size_t i = 0; i < 5; i++) ASSERT_EQ(hist_touch(dir, recs[i]), 0);
+    for (size_t i = 0; i < 6; i++) ASSERT_EQ(hist_touch(dir, other[i]), 0);
+    ASSERT_EQ(sdrs_hist_prune(dir, now, SDRS_HIST_MAX_AGE_S, 400), 1);
+    ASSERT(!hist_has(dir, recs[0]));
+    for (size_t i = 1; i < 5; i++) ASSERT(hist_has(dir, recs[i]));
+    for (size_t i = 0; i < 6; i++) ASSERT(hist_has(dir, other[i]));
+    /* The count: two kept, the newest two. */
+    ASSERT_EQ(sdrs_hist_prune(dir, now, SDRS_HIST_MAX_AGE_S, 2), 2);
+    ASSERT(!hist_has(dir, recs[1]) && !hist_has(dir, recs[2]));
+    ASSERT(hist_has(dir, recs[3]) && hist_has(dir, recs[4]));
+    ASSERT_EQ(sdrs_hist_prune(dir, now, SDRS_HIST_MAX_AGE_S, 2), 0);
+    for (size_t i = 0; i < 6; i++) ASSERT(hist_has(dir, other[i]));
+    char missing[TEST_TMP_MAX + 16];
+    snprintf(missing, sizeof(missing), "%s/none", dir);
+    ASSERT_EQ(sdrs_hist_prune(missing, now, 1, 1), -1);
+    ASSERT_EQ(test_rm_tree(dir), 0);
+}
+
+/* The schedule and the cooldown agree: the timer starts the same
+ * service the path unit does (so a site's drop-in applies to both), is
+ * installed and not enabled, a refused start is not a failed one, and
+ * the default cooldown leaves room for a run inside the 5-minute
+ * period. */
+static void test_auto_timer(void) {
+    char *tm = slurp("packaging/systemd/sloth-sdrsweep-auto.timer");
+    char *svc = slurp("packaging/systemd/sloth-sdrsweep.service");
+    char *mk = slurp("Makefile");
+    char *mc = slurp("src/sdrsweep/main.c");
+    ASSERT(tm && svc && mk && mc);
+    if (!tm || !svc || !mk || !mc) { free(tm); free(svc); free(mk); free(mc); return; }
+    ASSERT(strstr(tm, "\nUnit=sloth-sdrsweep.service\n") != NULL);
+    ASSERT(strstr(tm, "\nOnCalendar=*:0/5\n") != NULL);
+    ASSERT(strstr(tm, "\nPersistent=false\n") != NULL);
+    ASSERT(strstr(tm, "\nWantedBy=timers.target\n") != NULL);
+    ASSERT(strstr(svc, "\nSuccessExitStatus=3\n") != NULL);
+    ASSERT(strstr(mk, "packaging/systemd/sloth-sdrsweep-auto.timer $(DESTDIR)$(UNITDIR)/sloth-sdrsweep-auto.timer") != NULL);
+    ASSERT(strstr(mk, "\tsystemctl enable") == NULL);
+    /* 300 s period - a run of at most ~90 s > the default cooldown. */
+    const char *c = strstr(mc, "o->cooldown = ");
+    ASSERT(c != NULL);
+    if (c) {
+        double cd = atof(c + 14);
+        ASSERT(cd >= 60 && cd <= 300 - 90);
+    }
+    free(tm); free(svc); free(mk); free(mc);
+}
+
 void run_sdrsweep_tests(void) {
     TEST_SUITE("sloth-sdrsweep (SDR sweep helper, pure half)");
     RUN_TEST(test_fft_matches_the_definition);
@@ -603,4 +767,7 @@ void run_sdrsweep_tests(void) {
     RUN_TEST(test_helper_never_transmits);
     RUN_TEST(test_helper_is_not_linked_into_sloth_or_slothweb);
     RUN_TEST(test_units_name_no_site_service);
+    RUN_TEST(test_hist_record);
+    RUN_TEST(test_hist_prune);
+    RUN_TEST(test_auto_timer);
 }

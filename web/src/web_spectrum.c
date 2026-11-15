@@ -1,6 +1,7 @@
 /* slothweb's Spectrum tab; web_spectrum.h says what and why. */
 #include "web_spectrum.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
@@ -195,6 +196,498 @@ int web_spectrum_copy_json(web_jw_t *w, const char *in, size_t n) {
     return rc == 0 && !w->overflow ? 0 : -1;
 }
 
+/* ── the ranges: sloth-sdrsweep's history directory ── */
+
+static const struct { const char *name; long long secs; } RANGES[] = {
+    { "last3", 0 }, { "1h", 3600 }, { "5h", 5 * 3600 }, { "12h", 12 * 3600 }, { "24h", 24 * 3600 },
+};
+
+int web_spectrum_range(const char *name, long long *secs) {
+    for (size_t i = 0; i < sizeof(RANGES) / sizeof(RANGES[0]); i++)
+        if (name && !strcmp(name, RANGES[i].name)) { *secs = RANGES[i].secs; return 0; }
+    return -1;
+}
+
+int web_spectrum_pool(long long rows, long long bins) {
+    if (rows < 1 || bins < 1) return 1;
+    long long cells = rows * bins;
+    long long k = (cells + WEB_SPECTRUM_HIST_CELLS - 1) / WEB_SPECTRUM_HIST_CELLS;
+    return k < 1 ? 1 : k > bins ? (int)bins : (int)k;
+}
+
+/* The time a record's name carries: digits and ".json" only, as the
+ * helper names them (sdrs_hist_name()); -1 for anything else. */
+static long long hist_time(const char *name) {
+    long long t = 0;
+    int d = 0;
+    for (; *name >= '0' && *name <= '9'; name++, d++) {
+        if (d >= 12) return -1;
+        t = t * 10 + (*name - '0');
+    }
+    return d && !strcmp(name, ".json") ? t : -1;
+}
+
+enum {
+    K_VERSION = 1 << 0, K_STARTED = 1 << 1, K_ENDED = 1 << 2, K_FLOOR = 1 << 3,
+    K_FLO = 1 << 4, K_FHI = 1 << 5, K_BINHZ = 1 << 6, K_BINS = 1 << 7, K_QUANT = 1 << 8,
+    K_DATA = 1 << 9, K_ROWS = 1 << 10, K_PEAKS = 1 << 11, K_COMPLETE = 1 << 12,
+    K_ANTENNA = 1 << 13,
+};
+#define K_NEED (K_VERSION | K_STARTED | K_ENDED | K_FLO | K_FHI | K_BINHZ | K_BINS | K_QUANT | \
+                K_DATA | K_ROWS)
+
+typedef struct {
+    double    started, ended, floor, f_lo, f_hi, bin_hz, qoff, qstep, version;
+    double    rows, bins;
+    int       complete;
+    char     *data;          /* the base64, decoded from its JSON string */
+    size_t    dlen;
+    size_t    ps, pe;        /* the "peaks" value's span in the file */
+    char      antenna[64];
+    size_t    alen;
+    unsigned  seen;
+} hrec_t;
+
+/* A value checked by the strict reader and thrown away: the scratch
+ * writer is rewound after it. */
+static int jc_skip(jc_t *c, int depth) {
+    size_t mark = c->w->len;
+    int rc = jc_value(c, depth);
+    c->w->len = mark;
+    return rc || c->w->overflow ? -1 : 0;
+}
+
+/* A finite number (or, when allowed, null as NAN). */
+static int jc_num(jc_t *c, double *out, int allow_null) {
+    jc_ws(c);
+    if (allow_null && c->p < c->e && *c->p == 'n') {
+        if (jc_skip(c, WEB_SPECTRUM_DEPTH - 1)) return -1;
+        *out = NAN;
+        return 0;
+    }
+    const char *s = c->p;
+    size_t mark = c->w->len;
+    if (jc_number(c)) return -1;
+    c->w->len = mark;
+    char num[48];
+    size_t n = (size_t)(c->p - s);
+    memcpy(num, s, n);
+    num[n] = '\0';
+    double d = strtod(num, NULL);
+    if (isnan(d) || isinf(d)) return -1;
+    *out = d;
+    return 0;
+}
+
+/* The member name at c->p into key (cap bytes): a longer one becomes
+ * "" (no member this reader wants is that long). */
+static int jc_key(jc_t *c, char *key, size_t cap) {
+    size_t len;
+    jc_ws(c);
+    if (jc_string(c, &len)) return -1;
+    if (len < cap && !memchr(c->tmp, '\0', len)) {
+        memcpy(key, c->tmp, len);
+        key[len] = '\0';
+    } else {
+        key[0] = '\0';
+    }
+    jc_ws(c);
+    if (c->p >= c->e || *c->p != ':') return -1;
+    c->p++;
+    return 0;
+}
+
+static int hist_quant(jc_t *c, hrec_t *h) {
+    jc_ws(c);
+    if (c->p >= c->e || *c->p != '{') return -1;
+    c->p++;
+    int got = 0;
+    for (;;) {
+        char key[32];
+        if (jc_key(c, key, sizeof(key))) return -1;
+        if (!strcmp(key, "offset_db")) {
+            if (got & 1 || jc_num(c, &h->qoff, 0)) return -1;
+            got |= 1;
+        } else if (!strcmp(key, "step_db")) {
+            if (got & 2 || jc_num(c, &h->qstep, 0)) return -1;
+            got |= 2;
+        } else if (jc_skip(c, 2)) {
+            return -1;
+        }
+        jc_ws(c);
+        if (c->p >= c->e) return -1;
+        if (*c->p == ',') { c->p++; continue; }
+        if (*c->p == '}') { c->p++; return got == 3 ? 0 : -1; }
+        return -1;
+    }
+}
+
+/* One record, whole: every value checked by the strict reader, the ones
+ * this answer uses kept. 0, or -1 (h->data is then freed). */
+static int hist_parse(const char *text, size_t n, web_jw_t *scratch, hrec_t *h) {
+    memset(h, 0, sizeof(*h));
+    h->floor = NAN;
+    h->complete = 1;
+    jc_t c = { text, text + n, scratch, malloc(n + 1) };
+    if (!c.tmp) return -1;
+    int rc = -1;
+    jc_ws(&c);
+    if (c.p >= c.e || *c.p != '{') goto out;
+    c.p++;
+    for (;;) {
+        char key[32];
+        if (jc_key(&c, key, sizeof(key))) goto out;
+        static const struct { const char *k; unsigned bit; } K[] = {
+            { "version", K_VERSION }, { "started", K_STARTED }, { "ended", K_ENDED },
+            { "floor", K_FLOOR }, { "f_lo", K_FLO }, { "f_hi", K_FHI }, { "bin_hz", K_BINHZ },
+            { "bins", K_BINS }, { "quant", K_QUANT }, { "data", K_DATA }, { "rows", K_ROWS },
+            { "peaks", K_PEAKS }, { "complete", K_COMPLETE }, { "antenna", K_ANTENNA },
+        };
+        unsigned bit = 0;
+        for (size_t i = 0; i < sizeof(K) / sizeof(K[0]); i++)
+            if (!strcmp(key, K[i].k)) bit = K[i].bit;
+        /* A member twice is refused: which one counts is what a
+         * hostile file would like to choose. */
+        if (bit & h->seen) goto out;
+        h->seen |= bit;
+        int r = 0;
+        size_t len;
+        switch (bit) {
+        case K_VERSION:  r = jc_num(&c, &h->version, 0); break;
+        case K_STARTED:  r = jc_num(&c, &h->started, 0); break;
+        case K_ENDED:    r = jc_num(&c, &h->ended, 0); break;
+        case K_FLOOR:    r = jc_num(&c, &h->floor, 1); break;
+        case K_FLO:      r = jc_num(&c, &h->f_lo, 0); break;
+        case K_FHI:      r = jc_num(&c, &h->f_hi, 0); break;
+        case K_BINHZ:    r = jc_num(&c, &h->bin_hz, 0); break;
+        case K_BINS:     r = jc_num(&c, &h->bins, 0); break;
+        case K_ROWS:     r = jc_num(&c, &h->rows, 0); break;
+        case K_QUANT:    r = hist_quant(&c, h); break;
+        case K_COMPLETE:
+            jc_ws(&c);
+            if (c.e - c.p >= 4 && !memcmp(c.p, "true", 4)) { h->complete = 1; c.p += 4; }
+            else if (c.e - c.p >= 5 && !memcmp(c.p, "false", 5)) { h->complete = 0; c.p += 5; }
+            else r = -1;
+            break;
+        case K_ANTENNA:
+            jc_ws(&c);
+            r = jc_string(&c, &len);
+            if (!r) {
+                h->alen = len < sizeof(h->antenna) ? len : sizeof(h->antenna) - 1;
+                memcpy(h->antenna, c.tmp, h->alen);
+            }
+            break;
+        case K_DATA:
+            jc_ws(&c);
+            r = jc_string(&c, &len);
+            if (!r) {
+                h->data = malloc(len + 1);
+                if (!h->data) { r = -1; break; }
+                memcpy(h->data, c.tmp, len);
+                h->dlen = len;
+            }
+            break;
+        case K_PEAKS:
+            jc_ws(&c);
+            h->ps = (size_t)(c.p - text);
+            r = c.p < c.e && *c.p == '[' ? jc_skip(&c, 1) : -1;
+            h->pe = (size_t)(c.p - text);
+            break;
+        default:
+            r = jc_skip(&c, 1);
+        }
+        if (r) goto out;
+        jc_ws(&c);
+        if (c.p >= c.e) goto out;
+        if (*c.p == ',') { c.p++; continue; }
+        if (*c.p == '}') { c.p++; break; }
+        goto out;
+    }
+    jc_ws(&c);
+    if (c.p != c.e || (h->seen & K_NEED) != K_NEED) goto out;
+    /* The shape this reader can draw: version 1, a grid that is one,
+     * whole numbers where counts are meant. */
+    if (h->version != 1 || h->started <= 0 || !(h->f_hi > h->f_lo) || !(h->bin_hz > 0) ||
+        !(h->bins >= 1 && h->bins <= WEB_SPECTRUM_BINS_MAX) || h->bins != floor(h->bins) ||
+        !(h->rows >= 1 && h->rows <= 1000) || h->rows != floor(h->rows) || !(h->qstep > 0))
+        goto out;
+    rc = 0;
+out:
+    free(c.tmp);
+    if (rc) { free(h->data); h->data = NULL; }
+    return rc;
+}
+
+static int b64v(unsigned char ch) {
+    if (ch >= 'A' && ch <= 'Z') return ch - 'A';
+    if (ch >= 'a' && ch <= 'z') return ch - 'a' + 26;
+    if (ch >= '0' && ch <= '9') return ch - '0' + 52;
+    if (ch == '+') return 62;
+    if (ch == '/') return 63;
+    return -1;
+}
+
+int web_spectrum_b64_decode(const char *s, size_t n, uint8_t *out, size_t want) {
+    if (n != 4 * ((want + 2) / 3)) return -1;
+    size_t o = 0;
+    for (size_t i = 0; i < n; i += 4) {
+        int v[4], pad = 0;
+        for (int k = 0; k < 4; k++) {
+            unsigned char ch = (unsigned char)s[i + k];
+            /* "=" only as the last one or two of the last quantum. */
+            if (ch == '=' && i + 4 == n && k >= 2) { v[k] = 0; pad++; continue; }
+            if (pad || (v[k] = b64v(ch)) < 0) return -1;
+        }
+        unsigned x = (unsigned)v[0] << 18 | (unsigned)v[1] << 12 | (unsigned)v[2] << 6 | (unsigned)v[3];
+        int bytes = 3 - pad;
+        if (o + (size_t)bytes > want) return -1;
+        out[o++] = (uint8_t)(x >> 16);
+        if (bytes > 1) out[o++] = (uint8_t)(x >> 8);
+        if (bytes > 2) out[o++] = (uint8_t)x;
+    }
+    return o == want ? 0 : -1;
+}
+
+static void jw_b64(web_jw_t *w, const uint8_t *in, size_t n) {
+    static const char A[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    char chunk[4 * 256 + 1];
+    size_t o = 0;
+    web_jw_raw(w, "\"");
+    for (size_t i = 0; i < n; i += 3) {
+        unsigned x = (unsigned)in[i] << 16;
+        if (i + 1 < n) x |= (unsigned)in[i + 1] << 8;
+        if (i + 2 < n) x |= in[i + 2];
+        chunk[o++] = A[x >> 18 & 63];
+        chunk[o++] = A[x >> 12 & 63];
+        chunk[o++] = i + 1 < n ? A[x >> 6 & 63] : '=';
+        chunk[o++] = i + 2 < n ? A[x & 63] : '=';
+        if (o == sizeof(chunk) - 1) { chunk[o] = '\0'; web_jw_raw(w, chunk); o = 0; }
+    }
+    chunk[o] = '\0';
+    web_jw_raw(w, chunk);
+    web_jw_raw(w, "\"");
+}
+
+/* A number this file computed or checked, written by printf: never the
+ * file's own bytes. NAN as null. */
+static void jw_dbl(web_jw_t *w, double v, int prec) {
+    char b[64];
+    if (isnan(v) || isinf(v)) { web_jw_raw(w, "null"); return; }
+    snprintf(b, sizeof(b), "%.*f", prec, v);
+    web_jw_raw(w, b);
+}
+
+typedef struct {
+    double t, ended, floor;
+    long long rows;
+    int complete;
+} hrow_t;
+
+static int cmp_ll_desc(const void *a, const void *b) {
+    long long x = *(const long long *)a, y = *(const long long *)b;
+    return (x < y) - (x > y);
+}
+
+/* A regular file in the history directory, by name, never through a
+ * link: NULL when it is not one, or is over max. */
+static char *slurp_at(int dfd, const char *name, long max, size_t *len) {
+    int fd = openat(dfd, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (fd < 0) return NULL;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size > max) { close(fd); return NULL; }
+    char *b = malloc((size_t)st.st_size + 1);
+    size_t n = 0;
+    while (b && n < (size_t)st.st_size) {
+        ssize_t r = read(fd, b + n, (size_t)st.st_size - n);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) break;
+        n += (size_t)r;
+    }
+    close(fd);
+    if (!b) return NULL;
+    b[n] = '\0';
+    *len = n;
+    return b;
+}
+
+/* The window's rows into a malloc'd "sweep" object (*out, *outlen), or
+ * *out NULL when no record in it could be read. *runs and *skipped
+ * count the records used and those refused (unreadable, invalid, or on
+ * another grid than the newest). 0, or -1 when out of memory. */
+static int hist_window(const web_spectrum_t *sp, const char *rname, long long secs,
+                       long long now_s, char **out, size_t *outlen, int *runs, int *skipped) {
+    *out = NULL;
+    *outlen = 0;
+    *runs = 0;
+    *skipped = 0;
+    char path[1100];
+    snprintf(path, sizeof(path), "%s/" WEB_SPECTRUM_HIST_DIR, sp->dir);
+    int dfd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (dfd < 0) return 0;
+    DIR *d = fdopendir(dup(dfd));
+    if (!d) { close(dfd); return 0; }
+    long long *ts = NULL;
+    size_t n = 0, cap = 0;
+    struct dirent *e;
+    int rc = -1;
+    while ((e = readdir(d))) {
+        long long t = hist_time(e->d_name);
+        /* The window by the name's time; the record's own "started" is
+         * checked against it again once read. */
+        if (t < 0 || (secs && (t < now_s - secs || t > now_s + 300))) continue;
+        if (n == cap) {
+            size_t nc = cap ? cap * 2 : 64;
+            long long *g = realloc(ts, nc * sizeof(*ts));
+            if (!g) { closedir(d); close(dfd); free(ts); return -1; }
+            ts = g;
+            cap = nc;
+        }
+        ts[n++] = t;
+    }
+    closedir(d);
+    if (n) qsort(ts, n, sizeof(*ts), cmp_ll_desc);
+    /* Newest first, at most WEB_SPECTRUM_HIST_MAX_RUNS of them; last3
+     * reads on past bad records, a bounded number of them. */
+    size_t want = secs ? n : 3, tries = secs ? n : 3 + 16;
+    if (want > WEB_SPECTRUM_HIST_MAX_RUNS) want = WEB_SPECTRUM_HIST_MAX_RUNS;
+    if (tries > WEB_SPECTRUM_HIST_MAX_RUNS) tries = WEB_SPECTRUM_HIST_MAX_RUNS;
+
+    hrec_t g0;                       /* the newest good record: the grid */
+    char *g0text = NULL;
+    memset(&g0, 0, sizeof(g0));
+    uint8_t *cells = NULL, *q = NULL;
+    hrow_t *meta = NULL;
+    char *scratch = NULL;
+    size_t scap = 0;
+    int k = 1;
+    long long ob = 0;                /* bins out */
+    int used = 0;
+    for (size_t i = 0; i < n && i < tries && (size_t)used < want; i++) {
+        char name[32];
+        snprintf(name, sizeof(name), "%lld.json", ts[i]);
+        size_t tl = 0;
+        char *text = slurp_at(dfd, name, WEB_SPECTRUM_HIST_MAX_BYTES, &tl);
+        if (!text) { (*skipped)++; continue; }
+        size_t need = tl * WEB_JW_EXPAND + 64;
+        if (need > scap) {
+            char *g = realloc(scratch, need);
+            if (!g) { free(text); goto done; }
+            scratch = g;
+            scap = need;
+        }
+        web_jw_t sw;
+        web_jw_init(&sw, scratch, scap);
+        hrec_t h;
+        if (hist_parse(text, tl, &sw, &h) != 0 ||
+            (secs && (h.started < (double)(now_s - secs) || h.started > (double)(now_s + 300)))) {
+            free(text);
+            (*skipped)++;
+            continue;
+        }
+        if (!used) {
+            /* The newest record sets the grid and the pooling, sized for
+             * every candidate so the cells never grow. */
+            k = web_spectrum_pool((long long)want, (long long)h.bins);
+            ob = ((long long)h.bins + k - 1) / k;
+            cells = malloc(want * (size_t)ob);
+            q = malloc((size_t)h.bins);
+            meta = malloc(want * sizeof(*meta));
+            if (!cells || !q || !meta) { free(text); free(h.data); goto done; }
+        } else if (h.f_lo != g0.f_lo || h.f_hi != g0.f_hi || h.bin_hz != g0.bin_hz ||
+                   h.bins != g0.bins || h.qoff != g0.qoff || h.qstep != g0.qstep) {
+            /* Another grid (the operator changed the span): not this
+             * window's rows. */
+            free(text); free(h.data);
+            (*skipped)++;
+            continue;
+        }
+        if (web_spectrum_b64_decode(h.data, h.dlen, q, (size_t)h.bins) != 0) {
+            free(text); free(h.data);
+            if (!used) { free(cells); free(q); free(meta); cells = NULL; q = NULL; meta = NULL; }
+            (*skipped)++;
+            continue;
+        }
+        free(h.data);
+        h.data = NULL;
+        /* Max-pool k bins into one: a narrow carrier survives the
+         * pooling, it only gets wider. */
+        uint8_t *row = cells + (size_t)used * (size_t)ob;
+        for (long long j = 0; j < ob; j++) {
+            uint8_t m = 0;
+            long long a = j * k, b = a + k < (long long)h.bins ? a + k : (long long)h.bins;
+            for (long long x = a; x < b; x++) if (q[x] > m) m = q[x];
+            row[j] = m;
+        }
+        meta[used] = (hrow_t){ h.started, h.ended, h.floor, (long long)h.rows, h.complete };
+        if (!used) { g0 = h; g0text = text; } else free(text);
+        used++;
+    }
+    rc = 0;
+    if (!used) goto done;
+    /* Every row's base64 and its numbers, the newest record's peaks
+     * re-serialised (six-fold at worst) and its antenna. */
+    size_t ocap = 4096 + (size_t)used * (4 * ((size_t)ob / 3 + 1) + 256) +
+                  (g0.pe - g0.ps) * WEB_JW_EXPAND + sizeof(g0.antenna) * WEB_JW_EXPAND;
+    char *o = malloc(ocap);
+    if (!o) { rc = -1; goto done; }
+    web_jw_t w;
+    web_jw_init(&w, o, ocap);
+    web_jw_raw(&w, "{\"version\":1,\"mode\":\"history\",\"range\":");
+    web_jw_str(&w, rname);
+    web_jw_raw(&w, ",\"from\":");
+    web_jw_int(&w, secs ? now_s - secs : (long long)floor(meta[used - 1].t));
+    web_jw_raw(&w, ",\"to\":");
+    web_jw_int(&w, now_s);
+    web_jw_raw(&w, ",\"runs\":");
+    web_jw_int(&w, used);
+    web_jw_raw(&w, ",\"skipped\":");
+    web_jw_int(&w, *skipped);
+    web_jw_raw(&w, ",\"pool\":");
+    web_jw_int(&w, k);
+    web_jw_raw(&w, ",\"f_lo\":");    jw_dbl(&w, g0.f_lo, 0);
+    web_jw_raw(&w, ",\"f_hi\":");    jw_dbl(&w, g0.f_hi, 0);
+    web_jw_raw(&w, ",\"bin_hz\":");  jw_dbl(&w, g0.bin_hz * k, 0);
+    web_jw_raw(&w, ",\"bins\":");    web_jw_int(&w, ob);
+    web_jw_raw(&w, ",\"quant\":{\"offset_db\":"); jw_dbl(&w, g0.qoff, 1);
+    web_jw_raw(&w, ",\"step_db\":"); jw_dbl(&w, g0.qstep, 2);
+    web_jw_raw(&w, "},\"antenna\":");
+    web_jw_strn(&w, g0.antenna, g0.alen);
+    web_jw_raw(&w, ",\"started\":"); jw_dbl(&w, meta[used - 1].t, 3);
+    web_jw_raw(&w, ",\"ended\":");   jw_dbl(&w, meta[0].ended, 3);
+    web_jw_raw(&w, ",\"rows\":[");
+    for (int i = used - 1; i >= 0; i--) {           /* oldest first */
+        web_jw_raw(&w, i == used - 1 ? "\n{\"t\":" : ",\n{\"t\":");
+        jw_dbl(&w, meta[i].t, 3);
+        web_jw_raw(&w, ",\"ended\":");
+        jw_dbl(&w, meta[i].ended, 3);
+        web_jw_raw(&w, ",\"floor\":");
+        jw_dbl(&w, meta[i].floor, 1);
+        web_jw_raw(&w, ",\"rows\":");
+        web_jw_int(&w, meta[i].rows);
+        web_jw_raw(&w, meta[i].complete ? ",\"complete\":true,\"data\":" : ",\"complete\":false,\"data\":");
+        jw_b64(&w, cells + (size_t)i * (size_t)ob, (size_t)ob);
+        web_jw_raw(&w, "}");
+    }
+    web_jw_raw(&w, "],\"peaks\":");
+    size_t pmark = w.len;
+    if (!(g0.seen & K_PEAKS) || web_spectrum_copy_json(&w, g0text + g0.ps, g0.pe - g0.ps) != 0) {
+        w.len = pmark;
+        w.overflow = 0;
+        o[pmark] = '\0';
+        web_jw_raw(&w, "[]");
+    }
+    web_jw_raw(&w, "}");
+    if (w.overflow) { free(o); rc = -1; goto done; }
+    *out = o;
+    *outlen = w.len;
+    *runs = used;
+done:
+    free(g0text);
+    free(cells); free(q); free(meta); free(scratch); free(ts);
+    close(dfd);
+    return rc;
+}
+
 /* ── the state directory ── */
 
 /* A regular file of at most max bytes, NUL-terminated. NULL and *why
@@ -274,6 +767,11 @@ static void read_state(const web_spectrum_t *sp, long long now_s, st_t *s) {
             s->ended = num_or(r, "ended", 0);
             s->next_allowed = num_or(r, "next_allowed", 0);
             s->cooldown = num_or(r, "cooldown", 0);
+            /* slothweb's own floor under the helper's cooldown, so a
+             * cooldown the operator set short (or 0) still cannot turn
+             * the Run button into a way to hold the receiver. */
+            if (s->ended > 0 && s->ended + WEB_SPECTRUM_MIN_GAP_S > s->next_allowed)
+                s->next_allowed = s->ended + WEB_SPECTRUM_MIN_GAP_S;
             s->row = web_jl_int(r, "row", 0);
             s->step = web_jl_int(r, "step", 0);
             s->steps = web_jl_int(r, "steps", 0);
@@ -348,17 +846,27 @@ int web_spectrum_get(const web_spectrum_t *sp, const char *query, long long now_
     *body = NULL;
     *len = 0;
     int status_only = 0;
+    const char *rname = NULL;
+    long long secs = 0;
     if (query && query[0]) {
-        if (strcmp(query, "status=1") != 0) {
-            static const char E[] = "{\"error\":\"unknown_parameter\"}\n";
-            *body = malloc(sizeof(E));
+        const char *err = "{\"error\":\"unknown_parameter\"}\n";
+        if (!strncmp(query, "range=", 6)) {
+            rname = query + 6;
+            if (web_spectrum_range(rname, &secs) != 0) err = "{\"error\":\"unknown_range\"}\n";
+            else err = NULL;
+        } else if (!strcmp(query, "status=1")) {
+            status_only = 1;
+            err = NULL;
+        }
+        if (err) {
+            size_t el = strlen(err);
+            *body = malloc(el + 1);
             if (!*body) return -1;
-            memcpy(*body, E, sizeof(E));
-            *len = sizeof(E) - 1;
+            memcpy(*body, err, el + 1);
+            *len = el;
             *status = 400;
             return 0;
         }
-        status_only = 1;
     }
     if (out_of_scope) status_only = 1;
     st_t s;
@@ -366,6 +874,39 @@ int web_spectrum_get(const web_spectrum_t *sp, const char *query, long long now_
     char *doc = NULL;
     size_t dl = 0;
     const char *why = "absent";
+    if (rname && !status_only) {
+        char *hist = NULL;
+        size_t hl = 0;
+        int runs = 0, skipped = 0;
+        if (s.installed &&
+            hist_window(sp, rname, secs, now_s, &hist, &hl, &runs, &skipped) != 0)
+            return -1;
+        size_t cap = 4096 + hl;
+        char *out = malloc(cap);
+        if (!out) { free(hist); return -1; }
+        web_jw_t w;
+        web_jw_init(&w, out, cap);
+        web_jw_raw(&w, "{");
+        status_json(&w, &s, now_s);
+        web_jw_raw(&w, ",\"range\":");
+        web_jw_str(&w, rname);
+        web_jw_raw(&w, ",\"runs\":");
+        web_jw_int(&w, runs);
+        web_jw_raw(&w, ",\"skipped\":");
+        web_jw_int(&w, skipped);
+        web_jw_raw(&w, ",\"sweep\":");
+        /* hist is this file's own writer's output (hist_window()):
+         * every value in it was re-serialised there. */
+        if (hist) web_jw_raw(&w, hist);
+        else web_jw_raw(&w, "null");
+        web_jw_raw(&w, "}\n");
+        free(hist);
+        if (w.overflow) { free(out); return -1; }
+        *body = out;
+        *len = w.len;
+        *status = 200;
+        return 0;
+    }
     if (!status_only && s.installed) {
         char path[1100];
         snprintf(path, sizeof(path), "%s/latest.json", sp->dir);

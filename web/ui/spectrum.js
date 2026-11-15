@@ -5,10 +5,15 @@
 //                          and polls the run's status while one is queued
 //                          or running
 // The sweep is sloth-sdrsweep's: about a minute of whole sweeps of a
-// receiver the operator dedicated, each sweep one time row. It is drawn
-// as an isometric waterfall on a plain canvas (no library can load under
-// the page's CSP, and none is wanted): frequency across, older rows
-// receding up and to the right, height and colour the max-hold level.
+// receiver the operator dedicated. A range (last 3 scans, 1 h, 5 h,
+// 12 h, 24 h; GET /api/spectrum?range=) is one row per run from the
+// helper's history, each that run's max-hold; before there is any
+// history, last 3 scans falls back to the latest run's own sweeps, one
+// row each. It is drawn as an isometric waterfall on a plain canvas (no
+// library can load under the page's CSP, and none is wanted): frequency
+// across, older rows receding up and to the right (by their time in a
+// range, so a missing run is a visible gap), height and colour the
+// max-hold level.
 // Same-origin relative paths only; every string shown goes through
 // textContent, and the canvas draws text with fillText. The one write is
 // POST /api/spectrum/run, which carries no parameter: the helper's
@@ -18,6 +23,8 @@
   var POLL_MS = 3000, IDLE_MS = 30000;
   var timer = 0, gen = 0, doc = null, rows = [], st = null, lastState = "";
   var view = { lo: 0, hi: 0, log: true }, drag = null, hover = null, geo = null;
+  var RANGES = [["last3", "last 3 scans"], ["1h", "1 h"], ["5h", "5 h"], ["12h", "12 h"], ["24h", "24 h"]];
+  var range = "last3", lastEnded = null;
 
   function $(id) { return document.getElementById(id); }
   function el(tag, cls, text) {
@@ -126,7 +133,10 @@
     for (var i = 0; i < sweep.rows.length; i++) {
       var r = sweep.rows[i];
       if (!r || typeof r.data !== "string") continue;
-      try { rows.push({ t: r.t, floor: r.floor, q: decode(r.data, sweep.bins) }); } catch (e) { /* skipped */ }
+      try {
+        rows.push({ t: r.t, floor: r.floor, ended: r.ended, rows: r.rows, complete: r.complete,
+                    q: decode(r.data, sweep.bins) });
+      } catch (e) { /* skipped */ }
     }
     if (!(view.hi > view.lo) || view.lo < doc.f_lo || view.hi > doc.f_hi) { view.lo = doc.f_lo; view.hi = doc.f_hi; }
   }
@@ -196,18 +206,30 @@
 
   // ── the waterfall ────────────────────────────────────────────────
   // Geometry: the newest row in front, along the bottom; each older one
-  // DX right and DY up. Painted back to front, so a front ridge hides
-  // what is behind it, as a 3-D surface would.
+  // further back, right and up, by its age (a range: rows sit at their
+  // time, so a missing run is a gap where it should be) or by its index
+  // (the last 3 scans, a single run's sweeps). The depth the rows take
+  // grows and the ridge height shrinks with the row count, so 3 rows
+  // are tall ridges and 288 a terrain. Painted back to front, each
+  // column filled down to its own baseline, so a front ridge hides what
+  // is behind it, as a 3-D surface would; past ~24 rows only every few
+  // ridges get an outline, so a dense range reads as a surface and not
+  // a hairball. The picture is drawn once into an offscreen canvas;
+  // hover and drag paint over a copy of it.
   function levelRange() {
-    var lo = Infinity, hi = -Infinity;
+    if (doc && doc._lr) return doc._lr;
+    var lo = Infinity, hi = -Infinity, qmax = 0;
     for (var i = 0; i < rows.length; i++) {
       if (num(rows[i].floor)) lo = Math.min(lo, rows[i].floor);
       var q = rows[i].q;
-      for (var j = 0; j < q.length; j++) if (q[j] && qDb(q[j]) > hi) hi = qDb(q[j]);
+      for (var j = 0; j < q.length; j++) if (q[j] > qmax) qmax = q[j];
     }
+    if (qmax) hi = qDb(qmax);
     if (!isFinite(lo)) lo = -110;
     if (!isFinite(hi) || hi < lo + 20) hi = lo + 20;
-    return [lo - 3, hi + 2];
+    var lr = [lo - 3, hi + 2];
+    if (doc) doc._lr = lr;
+    return lr;
   }
   // The highest level in display bins [a, b] of one row.
   function colMax(q, a, b) {
@@ -216,6 +238,36 @@
     return m;
   }
   function binOf(hz) { return Math.floor((hz - doc.f_lo) / doc.bin_hz); }
+  function timed() { return doc && doc.mode === "history" && range !== "last3" && num(doc.from) && num(doc.to) && doc.to > doc.from; }
+  // Each row's depth, 0 the front (now, or the newest) to 1 the back.
+  function depthOf(i) {
+    if (timed()) return Math.max(0, Math.min(1, (doc.to - rows[i].t) / (doc.to - doc.from)));
+    return rows.length > 1 ? (rows.length - 1 - i) / (rows.length - 1) : 0;
+  }
+  function hhmm(ts) {
+    var d = new Date(ts * 1000), p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+  // The usual spacing of the runs, and the stretches past 1.8 times it
+  // with none: [from, to] pairs, the window's edges included.
+  function gaps() {
+    var out = [];
+    if (!timed()) return out;
+    var dt = [];
+    for (var i = 1; i < rows.length; i++) dt.push(rows[i].t - rows[i - 1].t);
+    dt.sort(function (a, b) { return a - b; });
+    var med = dt.length ? Math.max(60, dt[Math.floor(dt.length / 2)]) : 300, lim = med * 1.8;
+    var prev = doc.from;
+    for (i = 0; i <= rows.length; i++) {
+      var t = i < rows.length ? rows[i].t : doc.to;
+      if (t - prev > lim) out.push([prev + (i ? med / 2 : 0), t - (i < rows.length ? med / 2 : 0)]);
+      prev = t;
+    }
+    return out;
+  }
+
+  var off = null, dirty = true;
+  function invalidate() { dirty = true; }
 
   function draw() {
     var cv = $("spec-plot");
@@ -223,7 +275,33 @@
     var dpr = window.devicePixelRatio || 1, W = cv.clientWidth || 800, Hh = cv.clientHeight || 460;
     if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(Hh * dpr)) {
       cv.width = Math.round(W * dpr); cv.height = Math.round(Hh * dpr);
+      dirty = true;
     }
+    if (!off) off = document.createElement("canvas");
+    if (dirty || off.width !== cv.width || off.height !== cv.height) {
+      off.width = cv.width; off.height = cv.height;
+      render(off, dpr, W, Hh);
+      dirty = false;
+    }
+    var g = cv.getContext("2d");
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, cv.width, cv.height);
+    g.drawImage(off, 0, 0);
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (!geo) return;
+    var T = theme(g);
+    if (drag && drag.x1 !== undefined) {
+      g.fillStyle = css(rgbOf(g, T.signal), 0.15);
+      g.fillRect(Math.min(drag.x0, drag.x1), geo.top - 10, Math.abs(drag.x1 - drag.x0), geo.base0 - geo.top + 10);
+    }
+    if (hover) {
+      g.strokeStyle = T.signal; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(hover.x, hover.oy); g.lineTo(hover.x, hover.oy - geo.RH); g.stroke();
+      g.beginPath(); g.moveTo(hover.ox, hover.oy + 0.5); g.lineTo(hover.ox + geo.PW, hover.oy + 0.5); g.stroke();
+    }
+  }
+
+  function render(cv, dpr, W, Hh) {
     var g = cv.getContext("2d");
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     var T = theme(g);
@@ -231,64 +309,139 @@
     g.font = "11px " + cssVar("--font-mono", "monospace");
     if (!doc || !rows.length) {
       g.fillStyle = T.muted;
-      g.fillText(doc ? "the sweep has no rows" : "no sweep yet", 16, 24);
+      g.fillText(doc ? "the sweep has no rows" : range === "last3" ? "no sweep yet" :
+                 "no run recorded in this range yet (sloth-sdrsweep-auto.timer records one every 5 min)", 16, 24);
       geo = null;
       return;
     }
-    var n = rows.length, L = 46, R = 70, top = 70, bottom = 54;
-    var DX = Math.min(28, (W - L - R) * 0.04), DY = Math.min(30, (Hh - top - bottom) * 0.12);
-    var PW = Math.max(100, W - L - R - DX * (n - 1)), base0 = Hh - bottom;
-    var RH = Math.max(60, base0 - top - DY * (n - 1));
-    var lr = levelRange(), span = lr[1] - lr[0];
-    geo = { L: L, PW: PW, DX: DX, DY: DY, base0: base0, RH: RH, n: n, lr: lr };
-    // The floor grid: each row's baseline, and the level scale at left.
-    g.strokeStyle = T.rule; g.lineWidth = 1;
-    for (var k = 0; k < n; k++) {
-      var by = base0 - k * DY + 0.5, bx = L + k * DX;
-      g.beginPath(); g.moveTo(bx, by); g.lineTo(bx + PW, by); g.stroke();
+    var n = rows.length, L = 46, R = timed() ? 112 : 70, top = 70, bottom = 54, avail = Hh - top - bottom;
+    var DXT, DYT;
+    if (timed() || n > 12) {
+      // A range: the depth axis is time, its share of the height growing
+      // with the rows it holds (3 runs ~30%, 288 ~65%).
+      var share = Math.min(0.65, 0.3 + 0.07 * Math.log(Math.max(n, 3) / 3) / Math.LN2);
+      DYT = avail * share; DXT = Math.min((W - L - R) * 0.16, DYT * 0.9);
+    } else {
+      // A few rows: the original ridge spacing.
+      DXT = Math.min(28, (W - L - R) * 0.04) * (n - 1); DYT = Math.min(30, avail * 0.12) * (n - 1);
     }
-    g.beginPath(); g.moveTo(L, base0); g.lineTo(L + (n - 1) * DX, base0 - (n - 1) * DY);
-    g.moveTo(L + PW, base0); g.lineTo(L + PW + (n - 1) * DX, base0 - (n - 1) * DY); g.stroke();
+    var PW = Math.max(100, W - L - R - DXT), base0 = Hh - bottom;
+    var RH = Math.max(40, base0 - top - DYT);
+    var lr = levelRange(), span = lr[1] - lr[0];
+    var order = [];
+    for (var i = 0; i < n; i++) order.push(i);
+    order.sort(function (a, b) { return depthOf(b) - depthOf(a); });   // back first
+    geo = { L: L, PW: PW, DXT: DXT, DYT: DYT, base0: base0, RH: RH, n: n, lr: lr, top: top,
+            rowOx: [], rowOy: [], ridges: [], cols: 0, front: [] };
+    function ox(d) { return L + d * DXT; }
+    function oy(d) { return base0 - d * DYT; }
+    // The floor: its two side rails, the gaps where scheduled runs are
+    // missing (hatched), and the level scale at left.
+    g.strokeStyle = T.rule; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(L, base0); g.lineTo(L + DXT, base0 - DYT);
+    g.moveTo(L + PW, base0); g.lineTo(L + PW + DXT, base0 - DYT); g.stroke();
+    var gp = gaps();
+    for (var k = 0; k < gp.length; k++) {
+      var d0 = (doc.to - gp[k][1]) / (doc.to - doc.from), d1 = (doc.to - gp[k][0]) / (doc.to - doc.from);
+      g.fillStyle = css(rgbOf(g, T.faint), 0.18);
+      g.beginPath();
+      g.moveTo(ox(d0), oy(d0)); g.lineTo(ox(d0) + PW, oy(d0)); g.lineTo(ox(d1) + PW, oy(d1)); g.lineTo(ox(d1), oy(d1));
+      g.closePath(); g.fill();
+    }
+    g.strokeStyle = T.rule;
     g.fillStyle = T.muted; g.textAlign = "right";
-    for (var d = Math.ceil(lr[0] / 10) * 10; d <= lr[1]; d += 10) {
-      var yy = base0 - (d - lr[0]) / span * RH;
-      g.fillText(String(d), L - 4, yy + 3);
+    for (var db0 = Math.ceil(lr[0] / 10) * 10; db0 <= lr[1]; db0 += 10) {
+      var yy = base0 - (db0 - lr[0]) / span * RH;
+      g.fillText(String(db0), L - 4, yy + 3);
       g.beginPath(); g.moveTo(L - 2, yy); g.lineTo(L, yy); g.stroke();
     }
     g.save(); g.translate(10, base0 - RH / 2); g.rotate(-Math.PI / 2); g.textAlign = "center";
     g.fillText("dBFS (max-hold)", 0, 0); g.restore();
-    // Rows, back (oldest) to front (newest).
-    var cols = Math.max(50, Math.floor(PW));
+    // Rows, back to front. Colour strings are cached per level step:
+    // a 24 h range paints a few hundred thousand columns.
+    var cols = Math.max(50, Math.floor(PW / (n > 120 ? 2 : 1)));
+    geo.cols = cols;
     var bins = new Array(cols + 1);
     for (var c = 0; c <= cols; c++) bins[c] = Math.max(0, Math.min(doc.bins - 1, binOf(hzOf(c / cols))));
-    for (k = n - 1; k >= 0; k--) {
-      var row = rows[n - 1 - k], ox = L + k * DX, oy = base0 - k * DY, ridge = [];
+    // A dense range darkens each column's body and gives its top a cap
+    // in the full heat colour, so every ridge keeps an edge against the
+    // one behind it.
+    var dense = n > 24, pal = [], cap = [];
+    for (k = 0; k <= 64; k++) {
+      pal.push(css(mix(T.bg, heatRGB(T, k / 64), dense ? 0.12 + 0.5 * k / 64 : 0.35 + 0.65 * k / 64)));
+      cap.push(css(heatRGB(T, k / 64)));
+    }
+    var every = n <= 24 ? 1 : Math.ceil(n / 24), lastLabel = -Infinity;
+    for (var r = 0; r < n; r++) {
+      var idx = order[r], row = rows[idx], d = depthOf(idx), x0 = ox(d), y0 = oy(d), ridge = new Float32Array(cols);
+      var front = r === n - 1;
       for (c = 0; c < cols; c++) {
         var a = bins[c], b = Math.max(a, bins[c + 1] - 1);
-        var q = colMax(row.q, a, b), db = q ? qDb(q) : lr[0];
-        var f = Math.max(0, Math.min(1, (db - lr[0]) / span));
-        ridge.push(f);
-        var x = ox + c * PW / cols, w = PW / cols + 0.6, hpx = f * RH;
-        // The column: the heat colour of its level, darkened toward the
-        // panel at the bottom so the surface reads as a solid.
-        g.fillStyle = css(mix(T.bg, heatRGB(T, f), 0.35 + 0.65 * f));
-        g.fillRect(x, oy - hpx, w, hpx);
+        var q = colMax(row.q, a, b), f = q ? Math.max(0, Math.min(1, (qDb(q) - lr[0]) / span)) : 0;
+        ridge[c] = f;
+        var hpx = f * RH;
+        if (hpx < 0.5) continue;
+        g.fillStyle = pal[Math.round(f * 64)];
+        g.fillRect(x0 + c * PW / cols, y0 - hpx, PW / cols + 0.6, hpx);
+        if (dense) { g.fillStyle = cap[Math.round(f * 64)]; g.fillRect(x0 + c * PW / cols, y0 - hpx, PW / cols + 0.6, Math.min(1.5, hpx)); }
       }
-      g.beginPath();
-      for (c = 0; c < cols; c++) {
-        var px = ox + (c + 0.5) * PW / cols, py = oy - ridge[c] * RH;
-        if (c) g.lineTo(px, py); else g.moveTo(px, py);
+      geo.rowOx[idx] = x0; geo.rowOy[idx] = y0; geo.ridges[idx] = ridge;
+      // The baseline under the ridge, so a quiet run still shows as a row.
+      g.strokeStyle = T.rule; g.lineWidth = 1;
+      if (n <= 48 || front) { g.beginPath(); g.moveTo(x0, y0 + 0.5); g.lineTo(x0 + PW, y0 + 0.5); g.stroke(); }
+      if (front || (n - 1 - r) % every === 0) {
+        g.beginPath();
+        for (c = 0; c < cols; c++) {
+          var px = x0 + (c + 0.5) * PW / cols, py = y0 - ridge[c] * RH;
+          if (c) g.lineTo(px, py); else g.moveTo(px, py);
+        }
+        g.strokeStyle = front ? T.ink : css(heatRGB(T, 0.6), n > 24 ? 0.55 : 0.9);
+        g.lineWidth = front ? 1 : 0.8;
+        g.stroke();
       }
-      g.strokeStyle = k === 0 ? T.ink : css(heatRGB(T, 0.6), 0.9);
-      g.lineWidth = k === 0 ? 1 : 0.8;
-      g.stroke();
+      if (!timed() && num(row.t) && y0 - lastLabel >= 12) {
+        g.fillStyle = T.muted; g.textAlign = "left";
+        g.fillText(doc.mode === "history" ? hhmm(row.t) : clock(row.t), x0 + PW + 6, y0 - 2);
+        lastLabel = y0;
+      }
+    }
+    // The time axis, over the rows so no ridge hides it: HH:MM at round
+    // times a label height apart, and each gap dashed along it.
+    g.fillStyle = T.muted; g.textAlign = "left";
+    if (timed()) {
+      for (k = 0; k < gp.length; k++) {
+        var e0 = (doc.to - gp[k][1]) / (doc.to - doc.from), e1 = (doc.to - gp[k][0]) / (doc.to - doc.from);
+        g.strokeStyle = T.signal; g.lineWidth = 2; g.setLineDash([3, 3]);
+        g.beginPath(); g.moveTo(ox(e0) + PW + 6, oy(e0)); g.lineTo(ox(e1) + PW + 6, oy(e1)); g.stroke();
+        g.setLineDash([]); g.lineWidth = 1;
+        if (oy(e0) - oy(e1) > 12) {
+          g.fillStyle = T.signal; g.textAlign = "left";
+          g.fillText("no runs", ox((e0 + e1) / 2) + PW + 52, oy((e0 + e1) / 2) + 3);
+        }
+      }
       g.fillStyle = T.muted; g.textAlign = "left";
-      g.fillText(num(row.t) ? clock(row.t) : "", ox + PW + 6, oy - 2);
+      var spanS = doc.to - doc.from, steps = [5, 10, 15, 30, 60, 120, 180, 240, 360], stepS = 21600;
+      for (k = 0; k < steps.length; k++) if (steps[k] * 60 / spanS * DYT >= 16) { stepS = steps[k] * 60; break; }
+      // The first whole local minute that is a multiple of the step
+      // (local by the Date's own hours and minutes: the page's one
+      // offset read is glyph.js's).
+      var t0 = Math.ceil(doc.from / 60) * 60, stepM = stepS / 60;
+      for (var m = 0; m < stepM; m++, t0 += 60) {
+        var dl = new Date(t0 * 1000);
+        if ((dl.getHours() * 60 + dl.getMinutes()) % stepM === 0) break;
+      }
+      for (var t = t0; t <= doc.to; t += stepS) {
+        var dd = (doc.to - t) / spanS;
+        g.strokeStyle = T.rule;
+        g.beginPath(); g.moveTo(ox(dd), oy(dd)); g.lineTo(ox(dd) - 4, oy(dd) + 2);
+        g.moveTo(ox(dd) + PW + 4, oy(dd)); g.lineTo(ox(dd) + PW + 9, oy(dd)); g.stroke();
+        g.fillText(hhmm(t), ox(dd) + PW + 12, oy(dd) + 3);
+      }
     }
     // The frequency axis under the front row, and the band strip.
     g.fillStyle = T.muted; g.strokeStyle = T.rule; g.textAlign = "center";
     var tk = ticks(), lastX = -100;
-    for (var i = 0; i < tk.length; i++) {
+    for (i = 0; i < tk.length; i++) {
       var tx = L + fracOf(tk[i]) * PW;
       g.beginPath(); g.moveTo(tx, base0); g.lineTo(tx, base0 + 4); g.stroke();
       if (tx - lastX > 40) { g.fillText(tickText(tk[i]), tx, base0 + 15); lastX = tx; }
@@ -296,14 +449,6 @@
     g.textAlign = "right"; g.fillText("MHz", L + PW, base0 + 28);
     bandStrip(g, T, L, base0 + 32, PW);
     peakLabels(g, T, lr, span);
-    if (drag && drag.x1 !== undefined) {
-      g.fillStyle = css(rgbOf(g, T.signal), 0.15);
-      g.fillRect(Math.min(drag.x0, drag.x1), top - 10, Math.abs(drag.x1 - drag.x0), base0 - top + 10);
-    }
-    if (hover) {
-      g.strokeStyle = T.signal; g.lineWidth = 1;
-      g.beginPath(); g.moveTo(hover.x, hover.oy); g.lineTo(hover.x, hover.oy - RH); g.stroke();
-    }
   }
 
   function bandStrip(g, T, x0, y, PW) {
@@ -366,34 +511,42 @@
   }
 
   // ── hover and zoom ───────────────────────────────────────────────
-  function rowAt(y) {
-    // The row whose ridge band (its baseline up to RH above it) holds
-    // y, frontmost first; else the nearest baseline.
-    for (var k = 0; k < geo.n; k++) {
-      var oy = geo.base0 - k * geo.DY;
-      if (y <= oy + 2 && y >= oy - geo.RH * 0.35) return k;
+  // The row under the pointer is the frontmost whose painted column
+  // covers it (what the eye sees there); off every column, the row
+  // whose baseline is nearest.
+  function rowAt(x, y) {
+    var best = -1, bestD = Infinity, order = [];
+    for (var i = 0; i < rows.length; i++) if (geo.ridges[i]) order.push(i);
+    order.sort(function (a, b) { return geo.rowOy[b] - geo.rowOy[a]; });   // front first
+    for (var k = 0; k < order.length; k++) {
+      var idx = order[k], f = (x - geo.rowOx[idx]) / geo.PW;
+      if (f < 0 || f > 1) continue;
+      var c = Math.min(geo.cols - 1, Math.floor(f * geo.cols)), oy = geo.rowOy[idx];
+      if (y <= oy + 1 && y >= oy - Math.max(2, geo.ridges[idx][c] * geo.RH)) return idx;
+      var dd = Math.abs(y - oy);
+      if (dd < bestD) { bestD = dd; best = idx; }
     }
-    return 0;
+    return best;
   }
   function onMove(ev) {
     if (!geo || !doc) return;
     var r = ev.currentTarget.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
     if (drag) { drag.x1 = Math.max(geo.L, Math.min(geo.L + geo.PW, x)); draw(); return; }
-    var k = rowAt(y), ox = geo.L + k * geo.DX, f = (x - ox) / geo.PW;
-    var tip = $("spec-tip");
-    if (f < 0 || f > 1) { hover = null; tip.hidden = true; draw(); return; }
-    var hz = hzOf(f), row = rows[geo.n - 1 - k];
-    var cols = Math.max(50, Math.floor(geo.PW)), c = Math.floor(f * cols);
+    var tip = $("spec-tip"), idx = rowAt(x, y);
+    if (idx < 0) { hover = null; tip.hidden = true; draw(); return; }
+    var ox = geo.rowOx[idx], f = (x - ox) / geo.PW, row = rows[idx];
+    var hz = hzOf(f), cols = geo.cols, c = Math.min(cols - 1, Math.floor(f * cols));
     var a = Math.max(0, binOf(hzOf(c / cols))), b = Math.max(a, Math.min(doc.bins - 1, binOf(hzOf((c + 1) / cols)) - 1));
     var q = colMax(row.q, a, b), db = qDb(q);
-    hover = { x: ox + f * geo.PW, oy: geo.base0 - k * geo.DY };
+    hover = { x: ox + f * geo.PW, ox: ox, oy: geo.rowOy[idx] };
     clear(tip);
     tip.appendChild(el("div", "", mhz(hz) + (bandOf(hz) ? "  " + bandOf(hz) : "")));
     tip.appendChild(el("div", "", "level " + (db === null ? "below " + qOff() : db.toFixed(1)) + " dBFS" +
       (num(row.floor) && db !== null ? "  SNR " + (db - row.floor).toFixed(1) + " dB" : "")));
-    tip.appendChild(el("div", "d-dim", "row " + (num(row.t) ? clock(row.t) : "-") + "  floor " +
-      (num(row.floor) ? row.floor.toFixed(1) : "-") + " dBFS"));
-    var near = nearestPeak(hz, (hzOf((c + 3) / cols) - hzOf((c - 2) / cols)));
+    var what = doc.mode === "history" ? "run " + when(row.t) + (num(row.rows) ? ", " + row.rows + " sweeps" : "") +
+      (row.complete === false ? ", stopped early" : "") : "row " + (num(row.t) ? clock(row.t) : "-");
+    tip.appendChild(el("div", "d-dim", what + "  floor " + (num(row.floor) ? row.floor.toFixed(1) : "-") + " dBFS"));
+    var near = doc.mode !== "history" || idx === rows.length - 1 ? nearestPeak(hz, (hzOf((c + 3) / cols) - hzOf((c - 2) / cols))) : null;
     if (near) tip.appendChild(el("div", near.note === "internal" ? "d-dim" : "",
       "peak " + mhz(near.freq_hz) + "  SNR avg " + near.snr_avg + " / peak " + near.snr_peak + " dB" +
       (near.note ? "  (" + near.note + ")" : "")));
@@ -423,7 +576,7 @@
     drag = null;
     if (d.x1 !== undefined && Math.abs(d.x1 - d.x0) > 4) {
       var a = hzOf((Math.min(d.x0, d.x1) - geo.L) / geo.PW), b = hzOf((Math.max(d.x0, d.x1) - geo.L) / geo.PW);
-      if (b - a > doc.bin_hz * 4) { view.lo = a; view.hi = b; preset(-1); }
+      if (b - a > doc.bin_hz * 4) { view.lo = a; view.hi = b; preset(-1); invalidate(); }
     }
     draw();
     peakList();
@@ -432,14 +585,15 @@
 
   // The preset in force is pressed; a drag-zoom presses none. Not kept:
   // a zoom is a look at one sweep, not a setting.
-  function preset(k) {
-    var bs = $("spec-zoom").getElementsByTagName("button");
+  function pressed(id, k) {
+    var bs = $(id).getElementsByTagName("button");
     for (var i = 0; i < bs.length; i++) {
       var on = i === k;
       bs[i].className = on ? "on" : "go";
       bs[i].ariaPressed = on ? "true" : "false";
     }
   }
+  function preset(k) { pressed("spec-zoom", k); }
   function zoomTo(i) {
     if (!doc) return;
     var p = PRESETS[i];
@@ -447,14 +601,34 @@
     view.hi = p[2] ? Math.min(doc.f_hi, p[2]) : doc.f_hi;
     if (!(view.hi > view.lo)) { view.lo = doc.f_lo; view.hi = doc.f_hi; }
     preset(i);
+    invalidate();
     draw();
     peakList();
+  }
+
+  // ── the range: kept per viewer, like every other control ─────────
+  // Through app.js's store (H.prefGet / H.prefSet, slothweb.v1.*), so
+  // "reset settings" clears it and a blocked store is the default, last
+  // 3 scans, which is kept as no value at all.
+  var H = null;
+  function rangeLoad() {
+    var v = H ? H.prefGet("spectrum.range") : null;
+    for (var i = 0; i < RANGES.length; i++) if (RANGES[i][0] === v) return v;
+    return "last3";
+  }
+  function rangeTo(i) {
+    range = RANGES[i][0];
+    if (H) H.prefSet("spectrum.range", range === "last3" ? null : range);
+    pressed("spec-range", i);
+    gen++;
+    poll(true);
   }
 
   // ── the peak list: the canvas's words, for every peak in view ────
   function peakList() {
     var box = clear($("spec-peaks")), p = peaksInView();
-    set("spec-peaks-count", doc ? p.length + " in view of " + (doc.peaks ? doc.peaks.length : 0) : "");
+    set("spec-peaks-count", doc ? p.length + " in view of " + (doc.peaks ? doc.peaks.length : 0) +
+      (doc.mode === "history" ? ", the newest run's " + (doc.peaks ? doc.peaks.length : 0) + " strongest" : "") : "");
     if (!p.length) { box.appendChild(el("div", "sub", doc ? "no peak in view" : "")); return; }
     var h = el("div", "specrow dhead");
     ["FREQ MHz", "WIDTH kHz", "SNR avg", "SNR peak", "dBFS", "ROWS", "BAND", "NOTE"].forEach(function (t) { h.appendChild(el("span", "", t)); });
@@ -501,33 +675,74 @@
     else if (s.queued) b.textContent = "queued...";
     else b.textContent = "Run 1-min sweep";
     b.title = s.can_run ? "start one sweep now (the receiver is taken for about a minute)" :
-      s.why_not === "cooldown" ? "one run per cooldown (" + mmss(s.cooldown || 600) + ") so the shared receiver is not monopolised" :
+      s.why_not === "cooldown" ? "one run per cooldown (" + mmss(Math.max(s.cooldown || 0, 120)) + ") so the shared receiver is not monopolised" :
       "a run is " + (s.why_not || "not possible");
   }
 
-  function sweepMeta() {
+  function rangeName() {
+    for (var i = 0; i < RANGES.length; i++) if (RANGES[i][0] === range) return RANGES[i][1];
+    return range;
+  }
+  function sweepMeta(fallback) {
     var m = clear($("spec-meta"));
-    if (!doc) { m.appendChild(el("span", "d-dim", "no sweep yet: press Run, or start sloth-sdrsweep.service")); return; }
-    m.appendChild(el("span", "", mhz(doc.f_lo, 1) + " to " + mhz(doc.f_hi, 0) + ", " + rows.length + " rows of " +
-      doc.steps + " steps, " + when(doc.started) + " to " + clock(doc.ended) +
-      (doc.complete === false ? " (stopped early)" : "")));
-    m.appendChild(el("span", "d-dim", "  " + (doc.hardware || doc.driver || "") + (doc.serial ? " " + doc.serial : "") +
-      ", antenna " + (doc.antenna || "-") + ", gain " + (doc.gain || "-") + ", " + (doc.sample_rate / 1e6) + " MS/s, " +
-      (doc.nfft || "?") + "-point FFT, " + (doc.frames || "?") + " frames a step" +
-      (doc.calibrated ? ", spurs calibrated" : ", no spur calibration")));
+    if (!doc) {
+      m.appendChild(el("span", "d-dim", range === "last3" ? "no sweep yet: press Run, or start sloth-sdrsweep.service" :
+        rangeName() + ": no run recorded in it yet"));
+      return;
+    }
+    if (doc.mode === "history") {
+      var kHz = doc.bin_hz / 1e3;
+      m.appendChild(el("span", "", rangeName() + ": " + rows.length + (rows.length === 1 ? " run" : " runs") + ", " +
+        when(doc.started) + " to " + clock(doc.ended) + ", each row one run's max-hold per " +
+        (kHz >= 1000 ? (kHz / 1e3) + " MHz" : kHz + " kHz") +
+        (doc.pool > 1 ? " (" + doc.pool + " bins pooled to fit)" : "")));
+      m.appendChild(el("span", "d-dim", "  " + mhz(doc.f_lo, 1) + " to " + mhz(doc.f_hi, 0) + ", antenna " + (doc.antenna || "-") +
+        (doc.skipped ? ", " + doc.skipped + " record(s) unreadable or on another span, left out" : "")));
+    } else {
+      m.appendChild(el("span", "", mhz(doc.f_lo, 1) + " to " + mhz(doc.f_hi, 0) + ", " + rows.length + " rows of " +
+        doc.steps + " steps, " + when(doc.started) + " to " + clock(doc.ended) +
+        (doc.complete === false ? " (stopped early)" : "")));
+      m.appendChild(el("span", "d-dim", "  " + (doc.hardware || doc.driver || "") + (doc.serial ? " " + doc.serial : "") +
+        ", antenna " + (doc.antenna || "-") + ", gain " + (doc.gain || "-") + ", " + (doc.sample_rate / 1e6) + " MS/s, " +
+        (doc.nfft || "?") + "-point FFT, " + (doc.frames || "?") + " frames a step" +
+        (doc.calibrated ? ", spurs calibrated" : ", no spur calibration")));
+      if (fallback) m.appendChild(el("span", "d-dim", "  (no run history yet: the latest run's own sweeps, one row each)"));
+    }
     set("spec-antenna", doc.antenna || "the configured antenna");
   }
 
+  function show(j, fallback) {
+    take(j.sweep);
+    invalidate();
+    sweepMeta(fallback);
+    draw();
+    peakList();
+  }
   function poll(full) {
     var g = gen;
-    getJSON("/api/spectrum" + (full ? "" : "?status=1")).then(function (j) {
+    getJSON("/api/spectrum" + (full ? "?range=" + encodeURIComponent(range) : "?status=1")).then(function (j) {
       if (g !== gen) return;
       st = j;
       statusLine(j);
       var s = j.state + (j.running ? "r" : "") + (j.queued ? "q" : "");
-      if (full) { take(j.sweep); sweepMeta(); draw(); peakList(); }
-      else if (lastState && lastState !== s && !j.running && !j.queued) {
-        /* The run the button queued has ended: its "queued" note is stale. */
+      if (full) {
+        lastEnded = j.ended;
+        // Before the helper kept history, last 3 scans has nothing:
+        // show the latest run as the tab always did.
+        if (!j.sweep && range === "last3" && !j.out_of_scope) {
+          return getJSON("/api/spectrum").then(function (k) {
+            if (g !== gen) return;
+            show(k, true);
+            if (k.sweep_error) set("spec-err", "the latest sweep could not be read: " + k.sweep_error);
+            else set("spec-err", "");
+            lastState = s;
+            schedule(j.running || j.queued ? POLL_MS : j.why_not === "cooldown" ? 1000 : IDLE_MS);
+          });
+        }
+        show(j, false);
+      } else if ((lastState && lastState !== s && !j.running && !j.queued) ||
+                 (num(j.ended) && num(lastEnded) && j.ended !== lastEnded)) {
+        /* A run (the button's or the timer's) has ended: draw it. */
         set("spec-msg", "");
         lastState = s; poll(true); return;
       }
@@ -568,6 +783,15 @@
   function wire() {
     if (wired) return;
     wired = true;
+    range = rangeLoad();
+    var rg = $("spec-range");
+    RANGES.forEach(function (p, i) {
+      var b = el("button", "go", p[1]);
+      b.type = "button";
+      b.addEventListener("click", function () { rangeTo(i); });
+      rg.appendChild(b);
+      if (p[0] === range) pressed("spec-range", i);
+    });
     var z = $("spec-zoom");
     PRESETS.forEach(function (p, i) {
       var b = el("button", "go", p[0]);
@@ -577,8 +801,8 @@
     });
     preset(0);
     var lg = $("spec-log");
-    lg.addEventListener("change", function () { view.log = lg.checked; draw(); });
-    $("spec-topn").addEventListener("change", draw);
+    lg.addEventListener("change", function () { view.log = lg.checked; invalidate(); draw(); });
+    $("spec-topn").addEventListener("change", function () { invalidate(); draw(); });
     $("spec-run").addEventListener("click", run);
     var cv = $("spec-plot");
     cv.addEventListener("mousemove", onMove);
@@ -586,16 +810,18 @@
     cv.addEventListener("mouseup", onUp);
     cv.addEventListener("mouseleave", onLeave);
     cv.addEventListener("dblclick", function () { zoomTo(0); });
-    window.addEventListener("resize", function () { if (visible()) draw(); });
+    window.addEventListener("resize", function () { if (visible()) { invalidate(); draw(); } });
   }
 
   window.SlothSpectrum = {
-    show: function () {
+    // h: app.js's prefGet and prefSet.
+    show: function (h) {
+      if (h && !H) H = h;
       wire();
       gen++;
       lastState = "";
       poll(true);
     },
-    redraw: function () { if (visible()) draw(); }
+    redraw: function () { if (visible()) { invalidate(); draw(); } }
   };
 })();

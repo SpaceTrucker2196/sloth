@@ -8,7 +8,8 @@
 # docs/wiki/sdr-sweep.md and the header of src/sdrsweep/main.c.
 #
 # Started by sloth-sdrsweep.path when slothweb creates the request file
-# (POST /api/spectrum/run), or by hand: `systemctl start
+# (POST /api/spectrum/run), by sloth-sdrsweep-auto.timer every 5 minutes
+# when the operator enables it, or by hand: `systemctl start
 # sloth-sdrsweep`. The request carries nothing: the helper reads its
 # settings from /etc/default/sloth-sdrsweep and nowhere else.
 #
@@ -40,9 +41,9 @@ Group=sloth-sdrsweep
 # is called "Antenna A".
 EnvironmentFile=-/etc/default/sloth-sdrsweep
 
-# latest.json, prev.json, status.json and spurs.json: world-readable,
-# because slothweb runs as another account. Nothing in them is the
-# sensor's: a spectrum, the receiver's name, the run's times.
+# latest.json, prev.json, status.json, spurs.json and history/:
+# world-readable, because slothweb runs as another account. Nothing in
+# them is the sensor's: a spectrum, the receiver's name, the run's times.
 StateDirectory=sloth-sdrsweep
 StateDirectoryMode=0755
 UMask=0022
@@ -60,6 +61,9 @@ ExecStart=/usr/local/sbin/sloth-sdrsweep --out /var/lib/sloth-sdrsweep
 # mid-close wedges the SDRplay API service until it is restarted, so the
 # stop timeout is far longer than the close ever takes.
 TimeoutStartSec=300
+# Exit 3 is the helper refusing a start inside its cooldown (a timer slot
+# just after a manual run): nothing ran, nothing failed.
+SuccessExitStatus=3
 TimeoutStopSec=60
 KillSignal=SIGTERM
 

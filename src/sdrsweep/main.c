@@ -37,6 +37,10 @@
  * Usage: sloth-sdrsweep [options]; --help lists them. Settings come
  * from SLOTH_SDRSWEEP_* in the environment (the unit's EnvironmentFile)
  * and are overridden by the command line.
+ * After a sweep run it also writes a compact record of the run into
+ * <out>/history/ and prunes that directory (sdrsweep_dsp.h, "the
+ * history"); slothweb's 1 h ... 24 h ranges read it.
+ *
  * Exit: 0 done or stopped by a signal, 1 failure, 2 usage, 3 refused
  * (the cooldown since the last run has not passed). */
 
@@ -94,7 +98,7 @@ static void usage(FILE *f) {
         "  --frames N         FFT frames per step (16)\n"
         "  --settle-ms MS     samples discarded after each retune (30)\n"
         "  --duration S       repeat whole sweeps until this passes (60)\n"
-        "  --cooldown S       refuse within this long of the last run (600; 0 off)\n"
+        "  --cooldown S       refuse within this long of the last run (150; 0 off)\n"
         "  --out DIR          state directory (/var/lib/sloth-sdrsweep)\n"
         "  --calibrate        one sweep of an unconnected port: writes spurs.json\n"
         "Each setting also reads SLOTH_SDRSWEEP_<NAME> from the environment\n"
@@ -174,7 +178,12 @@ static int parse_opts(opts_t *o, int argc, char **argv) {
      * (the tail of a gamma(4) at 3.65x its mean), several hundred false
      * bins a sweep; of 16, on none (docs/wiki/sdr-sweep.md). */
     o->frames = 16;
-    o->duration = 60; o->cooldown = 600;
+    /* 150 s from the end of one run to the next start: short enough
+     * that sloth-sdrsweep-auto.timer's run every 5 minutes (a ~50-90 s
+     * run, then >= 210 s idle) is never refused, long enough that the
+     * Run button cannot hold a shared receiver more than about a third
+     * of the time (docs/wiki/sdr-sweep.md "Scheduled sweeps"). */
+    o->duration = 60; o->cooldown = 150;
     static const struct { const char *env, *name; } E[] = {
         { "SLOTH_SDRSWEEP_DEVICE", "device" }, { "SLOTH_SDRSWEEP_ANTENNA", "antenna" },
         { "SLOTH_SDRSWEEP_GAIN", "gain" }, { "SLOTH_SDRSWEEP_F_LO_MHZ", "f-lo" },
@@ -306,6 +315,30 @@ typedef struct {
 static int doc_writer(FILE *f, void *ctx) {
     const doc_t *d = ctx;
     return sdrs_write_json(f, d->m, d->r, d->rows, d->nrows, d->peaks, d->npeaks);
+}
+
+static int hist_writer(FILE *f, void *ctx) {
+    const doc_t *d = ctx;
+    return sdrs_write_hist(f, d->m, d->r, d->rows, d->nrows, d->peaks, d->npeaks);
+}
+
+/* The run's record in <out>/history, then the directory pruned. Not the
+ * run's failure when it does not work: latest.json is written, and the
+ * ranges only miss one row (said on stderr, so the journal has it). */
+static void put_history(const opts_t *o, const doc_t *d) {
+    char dir[1100], name[32];
+    snprintf(dir, sizeof(dir), "%s/" SDRS_HIST_DIR, o->out);
+    if (mkdir(dir, 0755) != 0 && errno != EEXIST) {
+        fprintf(stderr, ME ": %s: %s\n", dir, strerror(errno));
+        return;
+    }
+    if (sdrs_hist_name(name, sizeof(name), d->m->started) != 0 ||
+        write_atomic(dir, name, hist_writer, (void *)d, NULL) != 0) {
+        fprintf(stderr, ME ": no history record for this run\n");
+        return;
+    }
+    int gone = sdrs_hist_prune(dir, now_s(), SDRS_HIST_MAX_AGE_S, SDRS_HIST_MAX_FILES);
+    if (gone > 0) fprintf(stderr, ME ": pruned %d history record(s)\n", gone);
 }
 
 /* ── the radio ── */
@@ -612,9 +645,11 @@ out:
             if (o.calibrate ? write_atomic(o.out, "spurs.json", doc_writer, &d, NULL)
                             : write_atomic(o.out, "latest.json", doc_writer, &d, "prev.json"))
                 fail = "write";
-            else
+            else {
                 fprintf(stderr, ME ": wrote %d rows, %d peaks to %s/%s\n", nrows, np, o.out,
                         o.calibrate ? "spurs.json" : "latest.json");
+                if (!o.calibrate) put_history(&o, &d);
+            }
         }
         free(peaks);
     }

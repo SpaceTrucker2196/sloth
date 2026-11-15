@@ -1424,7 +1424,7 @@
     // The APRS panel (aprs.js, its own module): a no-op when not loaded.
     if (v === "aprs" && window.SlothAprs) SlothAprs.show();
     // The Spectrum tab (spectrum.js, its own module): a no-op when not loaded.
-    if (v === "spectrum" && window.SlothSpectrum) SlothSpectrum.show();
+    if (v === "spectrum" && window.SlothSpectrum) SlothSpectrum.show({ prefGet: prefGet, prefSet: prefSet });
     // The rtl_433 tab (rtl433.js, its own module): a no-op when not loaded.
     if (v === "rtl433" && window.SlothRtl433) SlothRtl433.show();
     // The Camera tab (camera.js, its own module): a no-op when not loaded.

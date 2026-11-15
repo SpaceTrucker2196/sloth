@@ -567,7 +567,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/gnss/sat?gnssid=&prn=&days=` | `200` JSON, one satellite's `gnss_sightings` over the window, oldest first, at most 400, as `[ts, el, az, cn0, used, health]`; `400` `bad_gnssid` / `bad_prn` / `bad_days` |
    | `GET /api/adsb/seen?days=&limit=&offset=&q=&fleet=` | `200` JSON from sloth.db's `adsb_aircraft`: the aircraft last seen in the last `days` (default 7), newest first, `limit` (1..100) from `offset`, `more` when there are others; with the peers' aircraft unless `fleet=0` ([Fleet](#fleet)); `q` a hex or callsign prefix (letters and digits, a leading `~`; anything else `400` `bad_q`); `"have":false` from a file older than v12; Monitor's and Hybrid's (Local `out_of_scope`, the query checked) |
    | `GET /api/adsb/aircraft?hex=&days=&fleet=` | `200` JSON, one aircraft's inventory row (`null` when not in the file) and its `adsb_sightings` over the window, oldest first, at most 400, as compact rows named in `cols`; with `fleet` naming the other hosts that heard it unless `fleet=0` ([Fleet](#fleet)); `400` `bad_hex` for anything but sloth's six lower-case hex digits (optionally `~`) |
-   | `GET /api/spectrum`, `GET /api/spectrum?status=1` | `200` JSON, the Spectrum tab ([Spectrum](#spectrum)): the sweep helper's status (`installed`, `state`, `running`, `queued`, `can_run`, `why_not`, `retry_after`, `status.json`'s members) and, without `status=1`, `"sweep"`: `sloth-sdrsweep`'s `latest.json` re-serialised by a strict reader, or `null` with `sweep_error` `too_large` (over 4 MiB), `invalid` or `unreadable`. Any other query `400`. Local: the status and `"out_of_scope":true` |
+   | `GET /api/spectrum`, `GET /api/spectrum?status=1` | `200` JSON, the Spectrum tab ([Spectrum](#spectrum)): the sweep helper's status (`installed`, `state`, `running`, `queued`, `can_run`, `why_not`, `retry_after`, `status.json`'s members) and, without `status=1`, `"sweep"`: `sloth-sdrsweep`'s `latest.json` re-serialised by a strict reader, or `null` with `sweep_error` `too_large` (over 4 MiB), `invalid` or `unreadable`. `?range=last3`, `1h`, `5h`, `12h` or `24h`: `"range"`, `"runs"`, `"skipped"` and `"sweep"` with `"mode":"history"`, one row per run from the helper's `history/`, max-pooled to stay near 2 MB ([Spectrum](#spectrum)); another range `400 unknown_range`. Any other query `400`. Local: the status and `"out_of_scope":true` |
    | `POST /api/spectrum/run` | ask for one sweep: the write gate, then an empty request file for `sloth-sdrsweep.path`; `202`, `409 running` or `queued`, `429 cooldown` with `Retry-After`, `503 not_installed` or `request_failed`; the body is not read; an agent header `403`; GET there `405 Allow: POST`; `--web-read-only` `405` |
    | `GET /api/aprs?limit=&call=` | `200` JSON, the APRS tab ([APRS](#aprs)): the `sensor_health` aprs block and the stations (live before gone, the most recently heard first, without tracks; `limit` 1..1024; as many as fit the 64 KB answer, `"cut":true` when the buffer stopped the list, `shown` how many); with `call=` (an AX.25 callsign) that one station with `track_pts` (`[ts, lat, lon]`, its last 32 positions) and `packets_recent` (its last 16 packets as rows named by `packet_cols`), `"station":null` when not kept. Under Local the query is checked, then `out_of_scope`. `400` names an unknown parameter, `bad_limit`, `bad_call` |
    | `GET /api/aprs/tracks?hours=` | `200` JSON, the Radar tab's APRS entities from sloth.db's `aprs_packets` (needs `--sloth-db`) over the last `hours` (1..24, default 24): stations by source call and, as entities of their own, objects and items by their name with the station that reported them as `via`; newest first, each a compact row named by `cols` (`key`, `object`, `via`, `symbol`, `last_seen` its newest packet of any kind, the newest position's `lat`, `lon`, `alt_m`, `speed_kt`, `course`, `pos_ts`, `moving`, the newest non-empty `status` and `comment` cut to 64, and `pts`, a moving entity's trail `[ts, lat, lon]` of at most 48 points, `[]` when stationary); at most 300, while a worst-case row still fits the 64 KB answer, `cut` when more; `bucket_s`; `"have":false` from a file older than v13; `400` `bad_hours` or an unknown parameter; Monitor's and Hybrid's (Local `out_of_scope`, the query checked) |
@@ -1377,7 +1377,30 @@ nothing; the POST's body is not read. The button asks first (the
 receiver is taken for about a minute; on a sensor where APRS shares it,
 APRS pauses ~1 min), then shows the run's row and step from
 `/api/spectrum?status=1` every 3 s, and is disabled with a countdown
-inside the cooldown (`429`).
+inside the cooldown (`429`; at least 120 s after the last run's end,
+whatever the helper's cooldown).
+
+**Ranges** (2026-11-15, owner request: "last 3 scans, 1 hour, 5 hours,
+12 hours, 24 hours. keep the display isometric and readable"): a
+selector over the waterfall, kept per browser
+(`slothweb.v1.spectrum.range`), reads `/api/spectrum?range=`. After each
+run the helper writes a one-row record of it (the run's max-hold, the
+median floor, the 64 strongest peaks) into `history/`, kept 25 h;
+`sloth-sdrsweep-auto.timer`, when the operator enables it, makes that a
+run every 5 minutes. Each range is one row per run: last 3 scans the
+three newest records (until there are any, the latest run's own sweeps,
+as before), the others the runs that started in the window. slothweb
+reads each record whole through the same strict reader and skips, and
+counts, any it cannot use (a member twice, base64 not exactly the
+grid's bins, a link, another span); long windows are max-pooled (24 h of
+288 runs: four 100 kHz bins to one) so the answer stays near 2 MB. In
+1 h to 24 h the rows sit at their time along the depth axis (HH:MM at
+round intervals), and a stretch without runs is hatched on the floor
+and dashed on the time axis; the depth the rows take grows and the ridge
+height shrinks with their count, and past 24 rows each column gets a
+bright cap over a darker body and only every few ridges an outline, so
+a day of runs reads as a surface. Hover names the run under the
+pointer. Details: [docs/wiki/sdr-sweep.md](../docs/wiki/sdr-sweep.md).
 
 The waterfall is isometric, on a plain canvas: frequency across (log by
 default, a checkbox for linear), each sweep a row, the newest in front

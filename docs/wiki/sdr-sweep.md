@@ -21,16 +21,23 @@ frequency across, time receding diagonally, height and colour the
 level - with a US band-allocation strip and labels on the strongest
 peaks. Its "Run 1-min sweep" button is `POST /api/spectrum/run`, which
 creates an empty request file that `sloth-sdrsweep.path` turns into a
-start. sloth and slothweb never touch the radio.
+start; `sloth-sdrsweep-auto.timer`, when the operator enables it, starts
+the same service every 5 minutes. After each run the helper also keeps a
+one-row record of it in `history/`, and the tab's range selector (last 3
+scans, 1 h, 5 h, 12 h, 24 h) draws those records, one row per run, by
+their time. sloth and slothweb never touch the radio.
 
 **Sources**: `src/sdrsweep/main.c`, `src/sdrsweep/sdrsweep_dsp.{c,h}`,
 `tests/test_sdrsweep.c`, `packaging/systemd/sloth-sdrsweep.{service,path}`,
+`packaging/systemd/sloth-sdrsweep-auto.timer`,
 `packaging/systemd/sloth-sdrsweep.sysusers.conf`,
 `packaging/default/sloth-sdrsweep`, `web/src/web_spectrum.{c,h}`,
 `web/tests/test_spectrum.c`, `web/ui/spectrum.{js,css}`, `Makefile`
 ("sloth-sdrsweep").
 
-**Last updated**: 2026-11-13 (first version).
+**Last updated**: 2026-11-15 (scheduled sweeps every 5 minutes, the
+history directory and the tab's ranges; default cooldown 600 s to
+150 s, slothweb's own 120 s floor); 2026-11-13 (first version).
 
 ## Why it is consistent with MISSION.md §2
 
@@ -63,7 +70,11 @@ start. sloth and slothweb never touch the radio.
   header is refused: the radio is the operator's.
 - **It cannot be used to hog the radio.** One run at a time (409), and
   none within the cooldown after the last (429 with `Retry-After`;
-  10 minutes by default, `SLOTH_SDRSWEEP_COOLDOWN`). The helper applies
+  150 s by default, `SLOTH_SDRSWEEP_COOLDOWN`; slothweb refuses a press
+  within 120 s of the last run's end whatever the cooldown says, so an
+  operator's `COOLDOWN=0` does not hand the browser the receiver). A
+  run is about a minute, so the button can hold the receiver at most
+  about a third of the time. The helper applies
   the cooldown itself too, from its own `status.json`, for a start that
   did not come through slothweb, and fails closed: a `status.json` that
   is there but unreadable or not its own (no `state`) refuses the run
@@ -139,6 +150,8 @@ a temporary file, fsync, rename):
   while sweeping), `ended` and `next_allowed` once the device was opened,
   `cooldown`, `row`, `step`, `steps`, `antenna`, and `error` when failed.
 - `spurs.json` - the calibration, same format as `latest.json`.
+- `history/<started, whole seconds>.json` - one record per sweep run
+  (below, "History").
 
 `latest.json`:
 
@@ -167,6 +180,55 @@ signal stopped the run early (the rows completed are kept; a cut row is
 kept only when it is the only one). Each peak is on a line of its own,
 which is what the calibration reader parses.
 
+## History
+
+After writing `latest.json`, a sweep run (not a calibration) writes one
+compact record of itself into `history/` (atomically, as above) and
+prunes the directory (`sdrs_write_hist()`, `sdrs_hist_prune()`):
+
+```
+{"version":1,"kind":"history","mode":"sweep","complete":true,
+ "started":1763040000.250,"ended":1763040048.900,"t_first":...,"t_last":...,
+ "antenna":"Antenna A","rows":3,"floor":-95.2,"f_lo":500000,
+ "f_hi":2000000000,"bin_hz":100000,"bins":19995,
+ "quant":{"offset_db":-130.0,"step_db":0.5},
+ "data":"<base64: the max over the run's rows, per display bin>",
+ "peaks":[ ...the 64 strongest by peak SNR, in frequency order... ]}
+```
+
+`floor` is the median of the rows' floors. Records older than 25 h
+(24 h and a margin) go, then the oldest while more than 400 are left;
+only names of digits plus `.json` are ever touched. Size, computed from
+a real run's `latest.json` on Beta-Site (2026-11-15, 19,995 bins, 400
+peaks found): 33.8 KB a record (26.7 KB of base64, 6.8 KB of peaks),
+so 288 runs a day is 9.7 MB and the 400-record cap 13.5 MB. A record
+that cannot be written is said on stderr and does not fail the run.
+
+## Scheduled sweeps
+
+`sloth-sdrsweep-auto.timer` (installed, not enabled) starts
+`sloth-sdrsweep.service` at :00, :05, :10, ... (`OnCalendar=*:0/5`,
+`Persistent=false`). It starts the service itself rather than creating
+slothweb's request file, so the run is exactly the Run button's: the
+same account, sandbox and settings, and a site's drop-in in
+`sloth-sdrsweep.service.d/` (the `Conflicts=` with a decoder sharing the
+receiver and the `ExecStopPost=` that restarts it) applies to it too.
+It does not pile up: a start while a run is going joins that run (a
+oneshot), and a start inside the cooldown is refused by the helper with
+exit 3, which the service counts as success (`SuccessExitStatus=3`).
+
+The cooldown is why the default moved from 600 s to 150 s: it counts
+from the end of one run to the next start, and a 5-minute period less a
+run of 50-90 s leaves 210-250 s. Keep `SLOTH_SDRSWEEP_COOLDOWN` under
+about 200 s with the timer enabled, or its runs are refused (each one
+still briefly stops and restarts a service the drop-in names).
+`tests/test_sdrsweep.c :: test_auto_timer` holds the default under the
+period less 90 s.
+
+The cost: a receiver shared with a decoder is taken about a minute in
+every five, roughly 20% of the time (the owner accepted this for the
+SDRplay shared with APRS, 2026-11-15).
+
 ## slothweb
 
 - `GET /api/spectrum`: the status (`installed`, `state`, `running`,
@@ -185,10 +247,50 @@ which is what the calibration reader parses.
 - `--spectrum-dir DIR` (default `/var/lib/sloth-sdrsweep`) and
   `--spectrum-request PATH` (default `/run/slothweb/sdrsweep.request`,
   inside the unit's `RuntimeDirectory`), both absolute.
+- `GET /api/spectrum?range=R`, R one of `last3`, `1h`, `5h`, `12h`,
+  `24h` (anything else 400 `unknown_range`): the status, then `"range"`,
+  `"runs"`, `"skipped"`, and `"sweep"`: a document shaped like
+  `latest.json` with `"mode":"history"`, `"from"` and `"to"` (the
+  window), `"pool"`, one row per run oldest first (`t` its start,
+  `ended`, `floor`, `rows`, `complete`, `data`) and the newest run's
+  peaks; `null` when no record could be read. `last3` is the three
+  newest records whatever their age, one max-hold row each (not their
+  full sweep rows: a record keeps one row, which is what keeps a day of
+  them at ~10 MB; until there are records the tab falls back to
+  `latest.json`, whose rows are the latest run's sweeps). The other
+  ranges are the records that started in the last R, read newest first,
+  at most 600. Every record is read whole by the strict reader: a
+  member twice, a bad number, base64 that is not exactly `bins` bytes, a
+  link, a non-regular file, over 512 KiB, version not 1: skipped and
+  counted in `skipped`, never fatal. The newest good record sets the
+  grid; one on another span (the operator changed it) is skipped. A
+  record must be in the window by its name and by its own `started`.
+  Long windows are max-pooled: k neighbouring bins become one, k =
+  ceil(runs x bins / 1.5 M) (`web_spectrum_pool()`), so with 19,995
+  bins 1 h and 5 h are unpooled, 12 h is in pairs (200 kHz), 24 h in
+  fours (400 kHz) and the body stays under about 2 MB (measured: 24 h,
+  273 records, 1.85 MB in 73 ms; 12 h 1.75 MB; 5 h 1.29 MB). Max, not
+  mean: a narrow carrier survives pooling and only gets wider. The
+  answer without `range` is unchanged.
 
 The tab: the run button (with a confirmation that the receiver is taken
 for about a minute, which pauses APRS for that minute on a sensor where
-the two share it) and the run's state; the waterfall with a log/linear
+the two share it) and the run's state; the range selector (last 3
+scans by default, kept per browser as `slothweb.v1.spectrum.range`); the
+waterfall. In 1 h to 24 h the rows sit at their start time along the
+depth axis, which is labelled HH:MM at round intervals at least a label
+apart, and a stretch with no run (longer than 1.8 times the usual
+spacing, the window's edges included) is hatched on the floor and
+dashed on the time axis with "no runs". The depth the rows take grows
+and the ridge height shrinks with the row count (3 rows are tall
+ridges, 288 a terrain); rows are painted back to front, each column
+down to its own baseline so nearer ridges hide what is behind them, and
+past 24 rows the column bodies darken under a bright cap and only every
+few ridges get an outline, so a dense range does not turn into a
+hairball. The picture is drawn once into an offscreen canvas and the
+hover line and drag box over a copy of it. Hover names the run under
+the pointer (the frontmost whose painted column covers it), its time,
+sweep count and floor. The waterfall has a log/linear
 frequency axis (log by default), zoom presets (Full, HF 0.5-30, VHF
 30-300, UHF 300-1000, L-band 1000-2000) and drag-to-zoom (double-click
 for Full); a band-allocation strip (the US table, 47 CFR 2.106,
@@ -204,8 +306,8 @@ L-band look empty, and the reader should know why.
 
 - It does not demodulate, decode or record anything; a level per bin is
   all it keeps.
-- It does not run on a schedule. A timer unit could start it; none
-  ships.
+- It does not run on a schedule unless the operator enables
+  `sloth-sdrsweep-auto.timer`.
 - It does not share the receiver gracefully by itself: a drop-in stops
   the service that holds it and starts it again afterwards
   ([[deployment]] §9).

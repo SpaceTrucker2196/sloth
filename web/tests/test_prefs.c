@@ -304,6 +304,8 @@ static const struct toggle TOGGLES[] = {
     { "f-tabs",     "          prefSet(\"flows.proto\", p);" },
     { "a-scale",    "    prefSet(\"act.scale\", A.ownScale ? \"own\" : null);" },
     { "ak-mode",    "      H.prefSet(\"act.allkeys\", S.on ? true : null);" },
+    /* spectrum.js's range, last 3 scans kept as no value */
+    { "spec-range", "    if (H) H.prefSet(\"spectrum.range\", range === \"last3\" ? null : range);" },
 };
 static const char *const TOGGLE_JS[] = {   /* the script's ARIA state, each a listed toggle's */
     "      b.ariaChecked = on ? \"true\" : \"false\";",

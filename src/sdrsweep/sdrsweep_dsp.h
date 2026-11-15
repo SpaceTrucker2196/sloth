@@ -201,4 +201,35 @@ int    sdrs_parse_cal(const char *text, sdrs_peak_t *out, int max);
 /* The number after "key": in text, or def when absent or not a number. */
 double sdrs_json_num(const char *text, const char *key, double def);
 
+/* ── the history (docs/wiki/sdr-sweep.md "History") ──
+ *
+ * After every sweep run the helper also writes one compact record into
+ * <out>/SDRS_HIST_DIR/<started, whole seconds>.json: the run's rows
+ * folded into one max-hold row, the median of their floors, the run's
+ * times, the grid, and its SDRS_HIST_PEAKS strongest peaks. slothweb's
+ * ranges (GET /api/spectrum?range=1h, ...) read these, one row per run.
+ * Records older than SDRS_HIST_MAX_AGE_S, and the oldest past
+ * SDRS_HIST_MAX_FILES, are removed after each write; the wiki page has
+ * the sizes measured. */
+#define SDRS_HIST_DIR        "history"
+#define SDRS_HIST_PEAKS      64
+#define SDRS_HIST_MAX_AGE_S  (25 * 3600.0)  /* 24 h and a margin */
+#define SDRS_HIST_MAX_FILES  400            /* 288 a day, and manual runs */
+
+/* out[j] = the highest of rows[*].q[j] (0, "no data", only where every
+ * row has none). */
+void   sdrs_hist_row(const sdrs_row_t *rows, int nrows, int ndisp, uint8_t *out);
+/* The median of the rows' finite floors, NAN when none is. */
+float  sdrs_hist_floor(const sdrs_row_t *rows, int nrows);
+/* "<whole seconds>.json" for a run that started at started: 0, or -1. */
+int    sdrs_hist_name(char *out, size_t cap, double started);
+/* The record. 0, or -1 (no rows, no memory, a write error). */
+int    sdrs_write_hist(FILE *f, const sdrs_meta_t *m, const sdrs_run_t *r,
+                       const sdrs_row_t *rows, int nrows,
+                       const sdrs_peak_t *peaks, int npeaks);
+/* Remove the records in dir (names "<digits>.json" only) whose time is
+ * before now - max_age, then the oldest while more than max_files are
+ * left. The count removed, or -1 when dir cannot be read. */
+int    sdrs_hist_prune(const char *dir, double now, double max_age, int max_files);
+
 #endif

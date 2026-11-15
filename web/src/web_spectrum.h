@@ -11,6 +11,15 @@
  *   GET /api/spectrum            the status, and the latest sweep under
  *                                "sweep" (null when there is none)
  *   GET /api/spectrum?status=1   the status alone, for polling a run
+ *   GET /api/spectrum?range=R    R one of last3, 1h, 5h, 12h, 24h: the
+ *                                status, "range", "runs", "skipped", and
+ *                                under "sweep" a document of the same
+ *                                shape as a sweep's, "mode":"history",
+ *                                with one row per run from the helper's
+ *                                history directory (the last 3 runs, or
+ *                                the runs that started in the last R),
+ *                                oldest first; null when none could be
+ *                                read. 400 "unknown_range" for another R.
  *   POST /api/spectrum/run       ask for a run: creates the request
  *                                file (--spectrum-request), which
  *                                sloth-sdrsweep.path watches. 202, or
@@ -34,11 +43,30 @@
  * "sweep_error":"invalid". status.json is one flat object
  * (web_jl_parse()). A "running" status not updated for
  * WEB_SPECTRUM_STALE_S is reported as stale, not running: the helper
- * writes it at least once a second while it sweeps. */
+ * writes it at least once a second while it sweeps.
+ *
+ * The ranges read <dir>/history/<digits>.json (the helper's history
+ * records, docs/wiki/sdr-sweep.md "History"), each a regular file of at most WEB_SPECTRUM_HIST_MAX_BYTES
+ * opened without following a link, parsed whole by the same strict
+ * reader (a member twice, a bad number, base64 that is not exactly the
+ * grid's bins: the record is skipped and counted, never fatal). The
+ * newest good record sets the grid; a record on another grid (the span
+ * was changed) is skipped. Long windows are max-pooled: k neighbouring
+ * bins become one (web_spectrum_pool()), so rows x bins stays under
+ * WEB_SPECTRUM_HIST_CELLS, about 2 MB of base64, whatever the window.
+ * Every number and string in the answer is written by this file (the
+ * peaks of the newest record through web_spectrum_copy_json()).
+ *
+ * The Run button cannot start a run within WEB_SPECTRUM_MIN_GAP_S of
+ * the last one's end, whatever cooldown the helper's status names: the
+ * 5-minute timer (sloth-sdrsweep-auto.timer) needs the helper's own
+ * cooldown short, and this keeps a browser from holding a shared
+ * receiver anyway. */
 #ifndef SLOTHWEB_SPECTRUM_H
 #define SLOTHWEB_SPECTRUM_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "web_json.h"
 
@@ -47,6 +75,15 @@
 #define WEB_SPECTRUM_MAX_BYTES  (4L << 20)
 #define WEB_SPECTRUM_STALE_S    30
 #define WEB_SPECTRUM_DEPTH      8
+#define WEB_SPECTRUM_MIN_GAP_S  120
+#define WEB_SPECTRUM_HIST_DIR   "history"
+#define WEB_SPECTRUM_HIST_MAX_BYTES (512L << 10)
+/* Records read for one answer: 288 a day at one per 5 minutes, and the
+ * helper keeps at most 400. */
+#define WEB_SPECTRUM_HIST_MAX_RUNS 600
+/* Rows x bins of an answer before base64 (4/3 of it on the wire). */
+#define WEB_SPECTRUM_HIST_CELLS 1500000LL
+#define WEB_SPECTRUM_BINS_MAX   200000
 
 typedef struct web_spectrum {
     char dir[1024];
@@ -67,6 +104,16 @@ int  web_spectrum_get(const web_spectrum_t *sp, const char *query, long long now
  * Retry-After line into extra on a 429. 0, or -1 when nothing fit. */
 int  web_spectrum_run(const web_spectrum_t *sp, long long now_s, char *body, size_t cap,
                       size_t *len, int *status, char *extra, size_t extracap);
+
+/* A range's name to its length in seconds (0 for last3): 0, or -1 when
+ * it is not one. */
+int  web_spectrum_range(const char *name, long long *secs);
+/* How many neighbouring bins one answer bin max-pools so rows x bins
+ * stays within WEB_SPECTRUM_HIST_CELLS: 1 or more. */
+int  web_spectrum_pool(long long rows, long long bins);
+/* Strict RFC 4648 base64 of exactly want bytes (padding required, no
+ * whitespace): 0, or -1. */
+int  web_spectrum_b64_decode(const char *s, size_t n, uint8_t *out, size_t want);
 
 /* Re-serialise the JSON value in in[0..n) into w: strings decoded and
  * written again by web_jw_strn(), numbers checked against RFC 8259's
