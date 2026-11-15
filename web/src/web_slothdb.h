@@ -82,7 +82,7 @@
 #include "web_secret.h"
 
 #define WEB_SDB_SCHEMA_MIN 1
-#define WEB_SDB_SCHEMA_MAX 13
+#define WEB_SDB_SCHEMA_MAX 14
 #define WEB_SDB_BUSY_MS    100
 #define WEB_SDB_HTTP_MS    250       /* a request's budget */
 /* /api/history/overview's alone. It counts every device and alert
@@ -386,6 +386,7 @@ typedef struct {
     char      phy[WEB_SDB_TEXT_MAX + 1];
     int       has_signal, signal_dbm;
     long long channel, akm_bits, mfp, downgrade, has_wps;
+    long long operating_width;     /* sloth_ch_width_t; 0 = not decoded */
     long long first_seen, last_seen;
     long long ssid_count;            /* beacon_ap_ssids rows */
     int       has_karma;             /* a karma_candidates row */

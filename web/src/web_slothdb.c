@@ -187,6 +187,7 @@ const web_sdb_col_t web_sdb_allow[] = {
     { "beacon_aps", "akm_bits", 1, 0, 0 }, { "beacon_aps", "mfp", 1, 0, 0 },
     { "beacon_aps", "downgrade_flags", 1, 0, 0 }, { "beacon_aps", "vendor", 1, 0, 0 },
     { "beacon_aps", "phy", 1, 0, 0 },    { "beacon_aps", "has_wps", 1, 0, 0 },
+    { "beacon_aps", "operating_width", 1, 0, 0 },
     { "beacon_aps", "first_seen", 1, 0, 0 }, { "beacon_aps", "last_seen", 1, 0, 0 },
     { "beacon_ap_ssids", "bssid", 1, 0, 0 }, { "beacon_ap_ssids", "ssid", 1, 0, 0 },
     { "beacon_ap_ssids", "first_seen", 1, 0, 0 },
@@ -1933,8 +1934,8 @@ static int aps_q(web_sdb_conn_t *c, int sort, long long limit, long long offset,
                  void *ctx) {
     static const char *const want[] = {
         "bssid", "ssid", "signal_dbm", "channel", "enc", "akm", "akm_bits",
-        "mfp", "downgrade_flags", "vendor", "phy", "has_wps", "first_seen",
-        "last_seen", NULL };
+        "mfp", "downgrade_flags", "vendor", "phy", "has_wps",
+        "operating_width", "first_seen", "last_seen", NULL };
     if (!have_all(c, "beacon_aps", want)) return 0;
     static const char *const ORDER[WEB_AP_SORT_COUNT] = {
         " ORDER BY a.last_seen DESC, a.bssid",
@@ -1975,8 +1976,8 @@ static int aps_q(web_sdb_conn_t *c, int sort, long long limit, long long offset,
     snprintf(sql, sizeof(sql),
         "SELECT a.bssid, a.ssid, a.signal_dbm, a.channel, a.enc, a.akm,"
         " a.akm_bits, a.mfp, a.downgrade_flags, a.vendor, a.phy, a.has_wps,"
-        " a.first_seen, a.last_seen, %s, %s FROM beacon_aps a%s%s%s LIMIT ?1"
-        " OFFSET ?2",
+        " a.first_seen, a.last_seen, %s, %s, a.operating_width"
+        " FROM beacon_aps a%s%s%s LIMIT ?1 OFFSET ?2",
         ss ? "(SELECT count(*) FROM beacon_ap_ssids s WHERE s.bssid = a.bssid)"
            : "0",
         km ? "k.score, k.ssid_count, k.pnl_overlap, k.ie_uniform" : "NULL, 0, 0, 0",
@@ -2017,6 +2018,7 @@ static int aps_q(web_sdb_conn_t *c, int sort, long long limit, long long offset,
         a.k_ssids = sqlite3_column_int64(st, 16);
         a.k_overlap = sqlite3_column_int64(st, 17);
         a.k_ie_uniform = sqlite3_column_int64(st, 18);
+        a.operating_width = sqlite3_column_int64(st, 19);
         n++;
         if (fn(ctx, &a)) { rc = SQLITE_DONE; break; }
     }

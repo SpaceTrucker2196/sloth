@@ -156,6 +156,12 @@ static const char SCHEMA_SQL[] =
      * to have been recorded in March. */
     "  downgrade_flags INTEGER NOT NULL DEFAULT 0,"
     "  akm_bits    INTEGER NOT NULL DEFAULT 0,"
+    /* sloth_ch_width_t (#66's in-memory field, #207's persisted one):
+     * 0 unknown, else MHz, 8080 for 80+80 non-contiguous. Upgrade-only,
+     * like the in-memory merge in beacon_snoop.c — a beacon that omits
+     * the operation IE it last carried does not erase what a fuller
+     * one already established. */
+    "  operating_width INTEGER NOT NULL DEFAULT 0,"
     "  revealed    INTEGER NOT NULL DEFAULT 0,"
     "  frame_count INTEGER NOT NULL DEFAULT 0,"
     "  has_qbss    INTEGER NOT NULL DEFAULT 0,"
@@ -1090,6 +1096,15 @@ static const char MIGRATE_V11_SQL[] = "";
  * packet. */
 static const char MIGRATE_V12_SQL[] = "";
 
+/* v13 -> v14 (#207 slice 1): beacon_aps gains operating_width, the
+ * sloth_ch_width_t column that lets a reader draw a BSS's occupied
+ * bandwidth instead of assuming 20 MHz. Additive, default 0 (unknown):
+ * an older row simply has no width yet, which is the honest state for
+ * a BSS this build never re-heard a beacon from. */
+static const char MIGRATE_V13_SQL[] =
+    "ALTER TABLE beacon_aps ADD COLUMN operating_width INTEGER NOT NULL"
+    " DEFAULT 0;\n";
+
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
 int db_schema_version(void)            { return DB_SCHEMA_VERSION; }
@@ -1105,3 +1120,4 @@ const char *db_schema_migrate_v9_sql(void) { return MIGRATE_V9_SQL; }
 const char *db_schema_migrate_v10_sql(void) { return MIGRATE_V10_SQL; }
 const char *db_schema_migrate_v11_sql(void) { return MIGRATE_V11_SQL; }
 const char *db_schema_migrate_v12_sql(void) { return MIGRATE_V12_SQL; }
+const char *db_schema_migrate_v13_sql(void) { return MIGRATE_V13_SQL; }

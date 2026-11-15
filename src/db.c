@@ -277,9 +277,9 @@ static const char *const SQL[ST_COUNT] = {
     "INSERT INTO beacon_aps (bssid,ssid,signal_dbm,channel,enc,beacon_ms,"
     "pairwise,group_ciph,akm,mfp,vendor,has_wps,wps_state,wps_locked,phy,"
     "revealed,frame_count,has_qbss,qbss_stations,qbss_chan_util,"
-    "downgrade_flags,akm_bits,first_seen,last_seen)"
+    "downgrade_flags,akm_bits,operating_width,first_seen,last_seen)"
     " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,"
-    "?18,?19,?20,?21,?22,?23,?24)"
+    "?18,?19,?20,?21,?22,?23,?24,?25)"
     " ON CONFLICT(bssid) DO UPDATE SET"
     "  ssid=excluded.ssid, signal_dbm=excluded.signal_dbm,"
     "  channel=excluded.channel, enc=excluded.enc,"
@@ -296,6 +296,10 @@ static const char *const SQL[ST_COUNT] = {
      * reasoning as assoc_reqs.downgrade_flags. */
     "  downgrade_flags=(beacon_aps.downgrade_flags|excluded.downgrade_flags),"
     "  akm_bits=(beacon_aps.akm_bits|excluded.akm_bits),"
+    /* Upgrade-only, matching beacon_snoop.c's in-memory merge: a beacon
+     * that omits the operation IE it last carried does not erase a
+     * width a fuller one already established. */
+    "  operating_width=MAX(beacon_aps.operating_width,excluded.operating_width),"
     "  first_seen=MIN(beacon_aps.first_seen,excluded.first_seen),"
     "  last_seen=MAX(beacon_aps.last_seen,excluded.last_seen)",
 [ST_BEACON_SSID] =
@@ -1059,6 +1063,7 @@ static const char *const TABLES_V3_BATCH[]      =
 static const char *const TABLES_KARMA[]    = { "karma_candidates", NULL };
 static const char *const TABLES_DEVICES[]  = { "devices", NULL };
 static const char *const TABLES_ALERTS[]   = { "alerts", NULL };
+static const char *const TABLES_BEACON_APS[] = { "beacon_aps", NULL };
 
 static const db_step_t g_steps[] = {
     { 1, db_schema_migrate_v1_sql, TABLES_PROBE_CLIENTS,
@@ -1090,6 +1095,8 @@ static const db_step_t g_steps[] = {
     { 12, db_schema_migrate_v12_sql, TABLES_NONE,
       "aprs_stations and aprs_packets ride the unconditional schema;"
       " stamp only" },
+    { 13, db_schema_migrate_v13_sql, TABLES_BEACON_APS,
+      "beacon_aps gained operating_width" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
@@ -1485,8 +1492,9 @@ static void write_beacons(const sloth_state_t *s, time_t now) {
         sqlite3_bind_int(st, 20, b->qbss_chan_util);
         sqlite3_bind_int  (st, 21, b->downgrade_flags);
         sqlite3_bind_int64(st, 22, (sqlite3_int64)b->akm_bits);
-        sqlite3_bind_int64(st, 23, (sqlite3_int64)last);
+        sqlite3_bind_int  (st, 23, b->operating_width);
         sqlite3_bind_int64(st, 24, (sqlite3_int64)last);
+        sqlite3_bind_int64(st, 25, (sqlite3_int64)last);
         step_reset(ST_BEACON_AP);
 
         int n = b->ssid_history_n;

@@ -604,11 +604,11 @@ static void test_ap_table(void) {
     long long bits = (1LL << 2) | (1LL << 8) | (1LL << 24) | (1LL << 30);
     snprintf(sql, sizeof(sql),
         "INSERT INTO beacon_aps (bssid,ssid,signal_dbm,channel,enc,akm,mfp,vendor,"
-        "has_wps,phy,downgrade_flags,akm_bits,first_seen,last_seen) VALUES"
-        " ('0a:00:00:00:00:01','Cafe',-50,6,'WPA3','PSK,SAE',1,'Acme',1,'ax',13,%lld,%lld,%lld),"
-        " ('0a:00:00:00:00:02',NULL,NULL,36,'OPEN','',0,NULL,0,NULL,0,0,%lld,%lld),"
+        "has_wps,phy,downgrade_flags,akm_bits,operating_width,first_seen,last_seen) VALUES"
+        " ('0a:00:00:00:00:01','Cafe',-50,6,'WPA3','PSK,SAE',1,'Acme',1,'ax',13,%lld,80,%lld,%lld),"
+        " ('0a:00:00:00:00:02',NULL,NULL,36,'OPEN','',0,NULL,0,NULL,0,0,0,%lld,%lld),"
         " ('0a:00:00:00:00:03','<script>x</script>',-80,11,'WPA2','PSK',2,NULL,0,"
-        "NULL,0,4,%lld,%lld);"
+        "NULL,0,4,8080,%lld,%lld);"
         "INSERT INTO beacon_ap_ssids (bssid,ssid,first_seen,last_seen) VALUES"
         " ('0a:00:00:00:00:01','Cafe',%lld,%lld), ('0a:00:00:00:00:01','FreeWiFi',%lld,%lld),"
         " ('0a:00:00:00:00:01','attwifi',%lld,%lld), ('0a:00:00:00:00:03','<script>x</script>',%lld,%lld);"
@@ -626,7 +626,8 @@ static void test_ap_table(void) {
     const char *a3 = ap_row(b, "0a:00:00:00:00:03");
     WT_ASSERT(a1 && a2 && a3 && a1 < a2 && a2 < a3);   /* last_seen DESC */
     WT_HAS(a1, "{\"bssid\":\"0a:00:00:00:00:01\",\"ssid\":\"Cafe\",\"signal\":-50,"
-               "\"channel\":6,\"enc\":\"WPA3\",\"akm\":\"PSK,SAE\",\"akm_bits\":1090519300,"
+               "\"channel\":6,\"operating_width\":80,\"enc\":\"WPA3\","
+               "\"akm\":\"PSK,SAE\",\"akm_bits\":1090519300,"
                "\"akm_names\":[\"PSK\",\"SAE\",\"SAE-EXT-KEY\",\"AKM-30\"],\"mfp\":1,"
                "\"mfp_word\":\"capable\",\"downgrade\":13,\"downgrade_names\":"
                "[\"SAE/PSK transition\",\"MFP optional\",\"WPA1 alongside RSN\"],"
@@ -642,7 +643,8 @@ static void test_ap_table(void) {
                "\"band\":null,\"trend\":null,\"est_src\":null,\"radio\":null},\"ssid_k\":4,"
                "\"ssid_np\":false,\"designated\":null}");
     WT_HAS(a2, "{\"bssid\":\"0a:00:00:00:00:02\",\"ssid\":null,\"signal\":null,"
-               "\"channel\":36,\"enc\":\"OPEN\",\"akm\":null,\"akm_bits\":0,"
+               "\"channel\":36,\"operating_width\":0,\"enc\":\"OPEN\","
+               "\"akm\":null,\"akm_bits\":0,"
                "\"akm_names\":[],\"mfp\":0,\"mfp_word\":\"off\",\"downgrade\":0,"
                "\"downgrade_names\":[],");
     WT_HAS(a2, "\"ssid_count\":0,\"multi_ssid\":false,\"ssids\":[],\"ssids_more\":false,"
@@ -650,6 +652,9 @@ static void test_ap_table(void) {
     WT_HAS(a2, "\"est_src\":null,\"radio\":null},\"ssid_k\":0,\"ssid_np\":false,\"designated\":null}");
     WT_HAS(a3, "\"ssid\":\"\\u003cscript\\u003ex\\u003c/script\\u003e\"");
     WT_HAS(a3, "\"mfp_word\":\"required\"");
+    /* 80+80 (8080) is an unrecognised-looking number but a real
+     * sloth_ch_width_t value; it must reach the wire unclamped. */
+    WT_HAS(a3, "\"operating_width\":8080");
     WT_LACKS(b, "<script>");
     WT_HAS(b, "\"count\":3,\"more\":false,\"next_offset\":null}");
     /* With sloth's `ownership` record (web_own.h) an AP is yours by its
@@ -721,9 +726,10 @@ static void test_ap_worst_case_fits(void) {
     static char sql[16384];
     size_t o = (size_t)snprintf(sql, sizeof(sql),
         "INSERT INTO beacon_aps (bssid,ssid,signal_dbm,channel,enc,akm,mfp,vendor,"
-        "has_wps,phy,downgrade_flags,akm_bits,first_seen,last_seen) VALUES"
+        "has_wps,phy,downgrade_flags,akm_bits,operating_width,first_seen,"
+        "last_seen) VALUES"
         " ('0a:00:00:00:00:09','%s',-50,165,'%s','%s',2,'%s',1,'%s',255,4294967295,"
-        "1000000000,9999999999);"
+        "8080,1000000000,9999999999);"
         "INSERT INTO karma_candidates (bssid,ssid_count,pnl_overlap,pnl_best,"
         "pnl_jaccard_ppm,ie_uniform,deauth_chain,score,top_ssid,first_seen,last_seen)"
         " VALUES ('0a:00:00:00:00:09',999999999,999999999,1,1,1,1,999999999,'x',1,1);",

@@ -42,7 +42,8 @@
  *       karma it has; "read" false when a sloth.db read failed.
  *   /api/wifi/aps?sort=&limit=&offset=
  *       sloth.db's beacon_aps through the M4 allow-list: SSID, channel,
- *       signal, the encryption and AKM sloth wrote and the AKM bits
+ *       operating_width (sloth_ch_width_t: 0 unknown, else MHz, 8080 for
+ *       80+80), signal, the encryption and AKM sloth wrote and the AKM bits
  *       decoded to the 802.11 suite names (src/rsn_ie.c's), MFP, the
  *       downgrade flags decoded (include/sloth.h WPA_DG_*), WPS, the
  *       SSID history (beacon_ap_ssids, at most WEB_WIFI_SSIDS, newest

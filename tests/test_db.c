@@ -2310,6 +2310,34 @@ static void test_downgrade_flags_accumulate_on_the_ap(void) {
     unlink(db_path);
 }
 
+/* #207 slice 1: operating_width is upgrade-only, the same reasoning as
+ * downgrade_flags above and the in-memory merge in beacon_snoop.c — a
+ * beacon that stops carrying the operation IE it last carried (or one
+ * that was decoded from a narrower one) must not erase a wider width
+ * this file already recorded for the BSSID. */
+static void test_operating_width_never_regresses(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_ap_t *a = &s.beacon_aps[s.beacon_count++];
+    memset(a, 0, sizeof(*a));
+    a->bssid[5] = 0x78;
+    snprintf(a->enc, sizeof(a->enc), "WPA3");
+    a->operating_width = CH_WIDTH_80;
+    a->last_seen = 1700000000;
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT operating_width FROM beacon_aps"), CH_WIDTH_80);
+
+    a->operating_width = CH_WIDTH_20;  /* a later beacon with no VHT IE */
+    db_tick(&s, 1700000100);
+    ASSERT_EQ(q_int("SELECT operating_width FROM beacon_aps"), CH_WIDTH_80);
+
+    a->operating_width = CH_WIDTH_160;  /* genuinely wider later */
+    db_tick(&s, 1700000200);
+    ASSERT_EQ(q_int("SELECT operating_width FROM beacon_aps"), CH_WIDTH_160);
+    db_close();
+    unlink(db_path);
+}
+
 static void test_phy_confirmed_never_regresses(void) {
     /* Corroboration is a fact about the device. A later probe-only
      * observation does not retract it. */
@@ -3635,6 +3663,90 @@ static void test_v12_migration_failure_leaves_file_unchanged(void) {
     unlink(db_path);
 }
 
+/* ── Schema v14: beacon_aps.operating_width (#207 slice 1) ─────── */
+
+/* A v13 file predates operating_width: fresh_db() already writes the
+ * current (v14) unconditional schema, which would make the ALTER
+ * below fail on a duplicate column, so this fixture is built by hand
+ * at beacon_aps' real v13 shape rather than by stamp-bumping a current
+ * file (write_v12_file()'s trick, which only works for a stamp-only
+ * step). */
+static void write_v13_file(void) {
+    db_close();
+    unlink(db_path);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "INSERT INTO meta VALUES('schema_version','13');"
+        "CREATE TABLE beacon_aps (bssid TEXT PRIMARY KEY, ssid TEXT,"
+        " signal_dbm INTEGER, channel INTEGER, enc TEXT, beacon_ms INTEGER,"
+        " pairwise TEXT, group_ciph TEXT, akm TEXT, mfp INTEGER,"
+        " vendor TEXT, has_wps INTEGER NOT NULL DEFAULT 0,"
+        " wps_state INTEGER, wps_locked INTEGER, phy TEXT,"
+        " downgrade_flags INTEGER NOT NULL DEFAULT 0,"
+        " akm_bits INTEGER NOT NULL DEFAULT 0,"
+        " revealed INTEGER NOT NULL DEFAULT 0,"
+        " frame_count INTEGER NOT NULL DEFAULT 0,"
+        " has_qbss INTEGER NOT NULL DEFAULT 0, qbss_stations INTEGER,"
+        " qbss_chan_util INTEGER, first_seen INTEGER NOT NULL,"
+        " last_seen INTEGER NOT NULL);"
+        "INSERT INTO beacon_aps (bssid,ssid,channel,akm_bits,first_seen,"
+        " last_seen) VALUES ('aa:bb:cc:dd:ee:56','OldWidthAP',44,2,"
+        " 1600000000,1600000500);",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    chmod(db_path, 0600);
+}
+
+/* v13 -> v14 (#207 slice 1): operating_width is added with default 0
+ * and the row's other columns are untouched. Seen to fail with the
+ * { 13, ... } step removed from g_steps[] (the static chain check
+ * refuses the build). */
+static void test_v13_file_migrates_additively(void) {
+    write_v13_file();
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, DB_VER_STR);
+    ASSERT_EQ(q_int("SELECT operating_width FROM beacon_aps"
+                    " WHERE bssid='aa:bb:cc:dd:ee:56'"), 0);
+    ASSERT_EQ(q_int("SELECT akm_bits FROM beacon_aps"
+                    " WHERE bssid='aa:bb:cc:dd:ee:56'"), 2);
+    q_text("SELECT ssid FROM beacon_aps WHERE bssid='aa:bb:cc:dd:ee:56'",
+           v, sizeof(v));
+    ASSERT_STR(v, "OldWidthAP");
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v13 file whose stamp cannot be written stays v13 with no
+ * operating_width column. Seen red with migrate_step()'s return
+ * ignored in migrate_from(). */
+static void test_v13_migration_failure_leaves_file_unchanged(void) {
+    write_v13_file();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TRIGGER refuse_v14 BEFORE UPDATE ON meta"
+        " WHEN NEW.key='schema_version' AND NEW.value='14'"
+        " BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[32];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "13");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('beacon_aps')"
+                    " WHERE name='operating_width'"), 0);
+    ASSERT_EQ(q_int("SELECT akm_bits FROM beacon_aps"
+                    " WHERE bssid='aa:bb:cc:dd:ee:56'"), 2);
+    unlink(db_path);
+}
+
 static void aprs_pkt(aprs_packet_t *p, uint64_t seq, time_t ut, const char *src,
                      const char *heard, char dti, int level) {
     memset(p, 0, sizeof(*p));
@@ -4948,6 +5060,9 @@ void run_db_tests(void) {
     RUN_TEST(test_v5_karma_pnl_best_column_exists);
     RUN_TEST(test_v4_columns_exist);
     RUN_TEST(test_downgrade_flags_accumulate_on_the_ap);
+    RUN_TEST(test_operating_width_never_regresses);
+    RUN_TEST(test_v13_file_migrates_additively);
+    RUN_TEST(test_v13_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_phy_confirmed_never_regresses);
     RUN_TEST(test_nocert_counters_never_regress);
     RUN_TEST(test_v4_columns_carry_no_key_material);

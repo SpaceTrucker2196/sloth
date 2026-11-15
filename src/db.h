@@ -106,7 +106,12 @@
 /* Bumped to 13 on 2026-11-05 (docs/wiki/aprs.md): aprs_stations and
  * aprs_packets are new tables and ride the unconditional schema; the
  * v12 -> v13 step is a stamp alone. No existing table changes. */
-#define DB_SCHEMA_VERSION 13
+/* Bumped to 14 on 2026-11-15 (#207 slice 1): beacon_aps gains
+ * operating_width (sloth_ch_width_t: 0 unknown, else MHz, 8080 for
+ * 80+80), so a reader can draw a BSS's occupied bandwidth instead of
+ * assuming 20 MHz. The v13 -> v14 step is a single ALTER TABLE ADD
+ * COLUMN, default 0. No existing column or value changes. */
+#define DB_SCHEMA_VERSION 14
 
 /* The incidents kept per key in alert_incidents (#175), newest first
  * by first_seen. A key evicted under pressure re-fires as a new
@@ -422,5 +427,7 @@ const char *db_schema_migrate_v11_sql(void);
 /* v12 -> v13 (APRS): no ALTER - aprs_stations and aprs_packets are new
  * tables and ride the unconditional schema. An empty statement list. */
 const char *db_schema_migrate_v12_sql(void);
+/* v13 -> v14 (#207 slice 1): ALTER TABLE beacon_aps ADD COLUMN only. */
+const char *db_schema_migrate_v13_sql(void);
 
 #endif /* SLOTH_DB_H */

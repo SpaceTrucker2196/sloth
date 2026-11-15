@@ -1329,6 +1329,11 @@ static void ap_json(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *c,
                                                   : a->signal_dbm);
     else web_jw_raw(w, "null");
     web_jw_raw(w, ",\"channel\":");  web_jw_int(w, a->channel & 0xffff);
+    /* sloth_ch_width_t: 0 unknown, else MHz, 8080 for 80+80
+     * non-contiguous (src/views/beacon.c's "36/80+"). Never clamped: an
+     * unrecognised value is still the width sloth decoded. */
+    web_jw_raw(w, ",\"operating_width\":");
+    web_jw_int(w, a->operating_width);
     web_jw_raw(w, ",\"enc\":");      jw_text_or_null(w, a->enc);
     web_jw_raw(w, ",\"akm\":");      jw_text_or_null(w, a->akm);
     unsigned long long bits = (unsigned long long)a->akm_bits & 0xffffffffULL;
