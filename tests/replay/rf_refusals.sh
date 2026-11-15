@@ -69,6 +69,20 @@ same --ticks 0
 same --strict --data-socket tcp:192.0.2.1:9 --data-socket-allow-remote
 same --user root --no-privdrop
 
+# --jsonl is neither daemon's (owner ruling 2026-11-15; sloth-rf took
+# it as a spelling of -o until then). Each prints its own usage after
+# the first line, so that line and the exit code are what is compared.
+n=$((n + 1))
+a=$("$sloth" --jsonl /nonexistent/x.jsonl 2>&1 >/dev/null </dev/null); ra=$?
+b=$("$rf" --jsonl /nonexistent/x.jsonl 2>&1 >/dev/null </dev/null); rb=$?
+if [ "$ra" -ne 2 ] || [ "$rb" -ne 2 ]; then
+    echo "rf-refusals: --jsonl exited $ra (sloth) and $rb (sloth-rf), want 2 and 2" >&2; fail=1
+fi
+if [ "$(printf '%s\n' "$a" | head -n 1)" != "unknown argument: --jsonl" ] ||
+   [ "$(printf '%s\n' "$b" | head -n 1)" != "unknown argument: --jsonl" ]; then
+    echo "rf-refusals: --jsonl was not refused as unknown by both" >&2; fail=1
+fi
+
 # The capture's flags are not sloth-rf's.
 for flag in --hop --allow-active --monitor-only --bt-monitor --headless; do
     n=$((n + 1))

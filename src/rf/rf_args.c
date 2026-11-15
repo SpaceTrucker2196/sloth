@@ -79,8 +79,6 @@ void rf_usage(FILE *fp, const char *argv0) {
             "  -o, --out FILE     append the JSONL record stream to FILE\n"
             "                     (created 0600; an existing FILE must be\n"
             "                     private and yours, never a symlink).\n"
-            "                     --jsonl FILE is the same flag here; sloth\n"
-            "                     does not take that spelling.\n"
             "  --db FILE          persist to a SQLite database with sloth's\n"
             "                     own schema. The GNSS, ADS-B and APRS\n"
             "                     tables, the alerts and the sensor's own\n"
@@ -132,11 +130,10 @@ int rf_args_parse(int argc, char **argv, rf_args_t *a) {
          * loops by that shape to hold the CLI reference to what is
          * parsed. */
         const int has = i + 1 < argc;
-        /* -o / --out is sloth's spelling and the one the usage and the
-         * warnings name, so a command line written from this daemon's
-         * help works on sloth. --jsonl is an extra spelling of this
-         * daemon's only. */
-        if ((!strcmp(argv[i], "--jsonl") || !strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && has) {
+        /* -o / --out, sloth's spellings and no other: the two daemons
+         * take the same flags (owner ruling 2026-11-15), so a command
+         * line written for one is read the same way by the other. */
+        if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && has) {
             a->jsonl_path = argv[++i];
         } else if (!strcmp(argv[i], "--db") && has) {
             a->db_path = argv[++i];

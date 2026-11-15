@@ -317,11 +317,20 @@ static void test_strict_holds_the_data_socket(void) {
     ASSERT_EQ(RUN("--data-socket", "tcp:192.0.2.1:9"), -1);
 }
 
-/* The sinks and the rest: three spellings of the JSONL flag, --db,
- * --site-label, --user, --no-privdrop. */
+/* The sinks and the rest: sloth's two spellings of the JSONL flag,
+ * --db, --site-label, --user, --no-privdrop.
+ *
+ * --jsonl is not one of them (owner ruling 2026-11-15: both daemons
+ * take the same flags). sloth-rf took it as a third spelling until
+ * then; it is refused now the way sloth refuses it, as an unknown
+ * argument, exit 2, with the usage, and nothing is set. (Seen red with
+ * the alias still in rf_args_parse(): -1, and the path taken.) */
 static void test_sinks_and_account(void) {
-    ASSERT_EQ(RUN("--jsonl", "/nonexistent/a.jsonl"), -1);
-    ASSERT_STR(g_a.jsonl_path, "/nonexistent/a.jsonl");
+    ASSERT_EQ(RUN("--jsonl", "/nonexistent/a.jsonl"), 2);
+    ASSERT_EQ(strncmp(g_text, "unknown argument: --jsonl\nusage: sloth-rf ", 42), 0);
+    ASSERT(g_a.jsonl_path == NULL);
+    ASSERT_EQ(RUN("--help"), 0);
+    ASSERT(strstr(g_text, "--jsonl") == NULL);
     ASSERT_EQ(RUN("-o", "/nonexistent/b.jsonl"), -1);
     ASSERT_STR(g_a.jsonl_path, "/nonexistent/b.jsonl");
     ASSERT_EQ(RUN("--out", "/nonexistent/c.jsonl"), -1);

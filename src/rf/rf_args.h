@@ -15,7 +15,7 @@
  * compares what they print. */
 
 typedef struct {
-    const char  *jsonl_path;      /* --jsonl FILE (also -o, --out) */
+    const char  *jsonl_path;      /* -o FILE, --out FILE */
     const char  *db_path;         /* --db FILE */
     const char  *data_socket;     /* --data-socket [SPEC] */
     int          ds_allow_remote; /* --data-socket-allow-remote */

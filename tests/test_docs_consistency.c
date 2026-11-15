@@ -1928,7 +1928,9 @@ static void test_every_cli_flag_is_in_wiki_reference(void) {
 
     /* The second daemon (#213): sloth-rf's argv loop is src/rf/rf_args.c,
      * spelled the same way, and its flags are documented on the same
-     * page. --jsonl is the one it parses that sloth does not. */
+     * page. It parses no flag sloth does not: --jsonl was one until
+     * the owner's ruling of 2026-11-15 and must not come back. (Seen
+     * red with the alias still parsed.) */
     char *rf = slurp(DC_RF_ARGS);
     ASSERT(rf != NULL);
     if (rf) {
@@ -1946,7 +1948,7 @@ static void test_every_cli_flag_is_in_wiki_reference(void) {
                             "it\n", DC_RF_ARGS, opts[i], DC_CLI_REF);
         }
         ASSERT_EQ(missing, 0);
-        ASSERT(has_jsonl);
+        ASSERT(!has_jsonl);
         free(rf);
     }
     free(ref);
