@@ -34,6 +34,7 @@ sloth-research-mcp
 # The passive-scan helper (src/ble_scan/), built by `make` on Linux.
 /sloth-ble-scan
 /sloth-sdrsweep
+/sloth-va
 
 
 # libFuzzer writes its reproducers into the working directory, so a

@@ -32,6 +32,7 @@ before Stage 1 starts.
 | [0008](0008-own-fleet.md) | The owner's own sensors share at full fidelity over the tailnet (#192) | Accepted |
 | [0009](0009-fleet-monitor-only.md) | Fleet sharing carries monitor data only and names its host (owner rule 2026-11-12) | Accepted; supersedes 0008's "What travels" |
 | [0010](0010-wifi-rf-daemons.md) | The sensor is two daemons, `sloth-wifi` and `sloth-rf`, in one repository (#211; owner rulings 2026-11-14 and 2026-11-15) | Accepted |
+| [0011](0011-sloth-va-transmits.md) | `sloth-va`, a separate helper that connects to the owner's Victron devices, beside a sloth that stays passive (owner request 2026-11-15) | Accepted |
 
 ## Related pages
 

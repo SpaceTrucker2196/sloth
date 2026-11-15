@@ -627,11 +627,42 @@ sloth-sdrsweep: $(SDRSWEEP_SRCS) $(SDRSWEEP_HDRS) $(OBJDIR)/.flags
 	$(CC) $(CFLAGS) -iquote src $(SOAPY_CFLAGS) -o $@ $(SDRSWEEP_SRCS) \
 	      $(filter -pie -Wl%,$(LDFLAGS)) $(SOAPY_LIBS) -lm
 
+# ── sloth-va ───────────────────────────────────────────────────────────────
+# The Victron reader (docs/wiki/victron.md, ADR 0011): decodes the owner's
+# Victron Instant Readout advertisements and holds short GATT sessions
+# with them through BlueZ, appending JSONL that sloth reads with
+# --victron. It TRANSMITS (LE connections, pairing), so it is a separate
+# binary under its own account, like sloth-ble-scan: nothing under
+# src/va/ is in a list `sloth` or `slothweb` is built from, and
+# tests/test_va.c checks that it stays out. Its pure half (decode, AES,
+# parsers, record) is linked into sloth_test through TEST_ONLY_SRCS.
+#
+# Built when pkg-config finds libsystemd (sd-bus; WITH_SDBUS=auto);
+# WITH_SDBUS=0 skips it, WITH_SDBUS=1 makes a missing libsystemd an
+# error. Rebuilt when the config's flag stamp moves.
+WITH_SDBUS ?= auto
+VA_SRCS = src/va/main.c src/va/va_victron.c src/va/va_conf.c src/va/va_aes.c src/sloth_clock.c
+VA_HDRS = src/va/va_victron.h src/va/va_conf.h src/va/va_aes.h src/sloth_clock.h
+ifeq ($(UNAME),Linux)
+ifeq ($(WITH_SDBUS),auto)
+    override WITH_SDBUS := $(shell $(PKG_CONFIG) --exists libsystemd 2>/dev/null && echo 1 || echo 0)
+endif
+endif
+ifeq ($(WITH_SDBUS),1)
+    VA_BIN        = sloth-va
+    SDBUS_CFLAGS := $(shell $(PKG_CONFIG) --cflags libsystemd 2>/dev/null)
+    SDBUS_LIBS   := $(shell $(PKG_CONFIG) --libs libsystemd 2>/dev/null || echo -lsystemd)
+endif
+
+sloth-va: $(VA_SRCS) $(VA_HDRS) $(OBJDIR)/.flags
+	$(CC) $(CFLAGS) -iquote src $(SDBUS_CFLAGS) -o $@ $(VA_SRCS) \
+	      $(filter -pie -Wl%,$(LDFLAGS)) $(SDBUS_LIBS)
+
 # The helpers join `all` here, below their definitions: make expands a
 # rule's prerequisites when it reads the rule, so naming them on the
 # `all:` line above, before BLE_SCAN_BIN was set, added nothing, and
 # sloth-ble-scan was built only by `install` until 2026-11-13.
-all: $(BLE_SCAN_BIN) $(SDRSWEEP_BIN)
+all: $(BLE_SCAN_BIN) $(SDRSWEEP_BIN) $(VA_BIN)
 
 # Minimal build for embedded targets (no ncurses, no pcap, no sqlite)
 embedded:
@@ -1093,6 +1124,7 @@ endif
 TEST_SRCS        = $(wildcard tests/*.c)
 TEST_ONLY_SRCS   = src/reset_all.c src/ble_scan/ble_scan_cmd.c \
                    src/sdrsweep/sdrsweep_dsp.c \
+                   src/va/va_victron.c src/va/va_conf.c src/va/va_aes.c \
                    $(filter-out %/main.c research/query.c src/libver.c,$(RESEARCH_SRCS) $(MCP_SRCS))
 TEST_CORE_SRCS   = $(CORE_SRCS_ALL) src/tui.c $(TEST_ONLY_SRCS)
 TEST_INCS        = -Iinclude -Isrc -Itests -Iresearch/ingest -Iresearch -Iresearch/mcp
@@ -1555,7 +1587,7 @@ mutate:
 clean:
 	rm -rf build
 	rm -f $(TARGET) $(TEST_BIN) $(NOFLAGS_BIN) research_ingest sloth-research-mcp
-	rm -f slothweb slothweb_test slothweb-mcp sloth-ble-scan sloth-sdrsweep
+	rm -f slothweb slothweb_test slothweb-mcp sloth-ble-scan sloth-sdrsweep sloth-va
 	rm -f sloth_test_pcap   # the pre-#116 capture-path binary
 	rm -f $(patsubst %.c,%.o,$(CORE_SRCS_ALL) $(APP_SRCS) $(TEST_ONLY_SRCS) $(wildcard tests/*.c))
 
@@ -1631,7 +1663,7 @@ UNITDIR     ?= /etc/systemd/system
 SYSUSERSDIR ?= /usr/lib/sysusers.d
 DEFAULTDIR  ?= /etc/default
 
-install: $(TARGET) $(BLE_SCAN_BIN) $(SDRSWEEP_BIN)
+install: $(TARGET) $(BLE_SCAN_BIN) $(SDRSWEEP_BIN) $(VA_BIN)
 	@[ -x slothweb ] || { echo "install: no ./slothweb; run 'make web' first (as yourself, not under sudo)" >&2; exit 1; }
 	@new=$$(find web/src web/ui web/tools web/data $(WEB_RECIPES_MD) Makefile -type f -newer slothweb 2>/dev/null | head -n 1); \
 	  [ -z "$$new" ] || { echo "install: ./slothweb is older than $$new; run 'make web' first (as yourself, not under sudo)" >&2; exit 1; }
@@ -1641,6 +1673,7 @@ install: $(TARGET) $(BLE_SCAN_BIN) $(SDRSWEEP_BIN)
 	install -m 755 packaging/bin/sloth-monitor-up $(DESTDIR)$(PREFIX)/sbin/sloth-monitor-up
 	[ -z "$(BLE_SCAN_BIN)" ] || install -m 755 sloth-ble-scan $(DESTDIR)$(PREFIX)/sbin/sloth-ble-scan
 	[ -z "$(SDRSWEEP_BIN)" ] || install -m 755 sloth-sdrsweep $(DESTDIR)$(PREFIX)/sbin/sloth-sdrsweep
+	[ -z "$(VA_BIN)" ] || install -m 755 sloth-va $(DESTDIR)$(PREFIX)/sbin/sloth-va
 	install -m 644 research.db $(DESTDIR)$(PREFIX)/share/sloth/research.db
 	install -d $(DESTDIR)$(PREFIX)/share/sloth/alert-assessments
 	install -m 644 $(filter-out %/README.md,$(wildcard docs/wiki/alert-assessments/*.md)) $(DESTDIR)$(PREFIX)/share/sloth/alert-assessments/
@@ -1672,6 +1705,13 @@ install-service:
 	install -m 644 packaging/systemd/sloth-sdrsweep.sysusers.conf $(DESTDIR)$(SYSUSERSDIR)/sloth-sdrsweep.conf
 	[ -e $(DESTDIR)$(DEFAULTDIR)/sloth-sdrsweep ] || \
 	    install -m 644 packaging/default/sloth-sdrsweep $(DESTDIR)$(DEFAULTDIR)/sloth-sdrsweep
+	sed -e 's|/usr/local/|$(PREFIX)/|g' packaging/systemd/sloth-va.service \
+	    > $(DESTDIR)$(UNITDIR)/sloth-va.service.tmp
+	install -m 644 $(DESTDIR)$(UNITDIR)/sloth-va.service.tmp $(DESTDIR)$(UNITDIR)/sloth-va.service
+	rm -f $(DESTDIR)$(UNITDIR)/sloth-va.service.tmp
+	install -m 644 packaging/systemd/sloth-va.sysusers.conf $(DESTDIR)$(SYSUSERSDIR)/sloth-va.conf
+	[ -e $(DESTDIR)$(DEFAULTDIR)/sloth-va ] || \
+	    install -m 644 packaging/default/sloth-va $(DESTDIR)$(DEFAULTDIR)/sloth-va
 	install -D -m 644 packaging/systemd/sloth-sensor.service.d/bt-monitor.conf \
 	    $(DESTDIR)$(PREFIX)/share/sloth/sloth-sensor-bt-monitor.conf
 	install -D -m 644 packaging/systemd/sloth-sensor.service.d/gps.conf \
@@ -1690,6 +1730,9 @@ install-service:
 	@echo "  docs/wiki/deployment.md, SDR sweep (a shared receiver needs a drop-in there)"
 	@echo "  sloth-sdrsweep-auto.timer (a sweep every 5 min, for the Spectrum ranges) is installed,"
 	@echo "  not enabled: 'systemctl enable --now sloth-sdrsweep-auto.timer'"
+	@echo "  sloth-va.service (Victron reader; TRANSMITS) is installed, not enabled; it needs"
+	@echo "  bluetoothd and its own controller: docs/wiki/deployment.md, Victron (sloth-va),"
+	@echo "  then 'systemd-sysusers && systemctl enable --now sloth-va'"
 	@echo "  (migration from a build-tree unit: docs/wiki/deployment.md)"
 
 # ── Deploy tooling test (#153) ───────────────────────────────────────────────

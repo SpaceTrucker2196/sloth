@@ -26,9 +26,9 @@ sensor runs, installed but never enabled by make.
 `Makefile` (`install`, `install-service`, `deploy-test`),
 `tests/test_unit_file.c`, `tests/deploy/test_migrate_sensor.sh`,
 `src/secure_file.c`, `src/data_socket.c`, `src/privdrop.c`, `tests/test_privdrop.c`, `MISSION.md` §2,
-`packaging/systemd/sloth-ble-scan.service`, `src/ble_scan/main.c`, `src/ble_scan/ble_scan_cmd.c`, `tests/test_ble_scan.c`.
+`packaging/systemd/sloth-ble-scan.service`, `src/ble_scan/main.c`, `src/ble_scan/ble_scan_cmd.c`, `tests/test_ble_scan.c`, `packaging/systemd/sloth-va.service`, `packaging/systemd/sloth-va.sysusers.conf`, `packaging/default/sloth-va`.
 
-**Last updated**: 2026-11-15 (§9: `sloth-sdrsweep-auto.timer`, a sweep every 5 minutes for the Spectrum ranges, §9.2; the helper's default cooldown 600 s to 150 s; `SuccessExitStatus=3`; the run's `history/` records), 2026-11-13 (§9: `sloth-sdrsweep.{service,path}`, its account and defaults file, and the drop-in for a receiver another service holds; `make` now builds the helpers it names, `sloth-ble-scan` included), 2026-11-12 (the unit's `snapshot.live.txt` and `report.retain_days`, #190), 2026-11-11 (§5.1: the beacon memory's state on `sys_status`, JSONL 1.2.0), 2026-11-11 (§6: `RuntimeDirectory=slothweb`, mode `0711`, for the agent secret, and `fchown` given back to slothweb's filter, for `--web-agent-group`; [[slothweb-mcp]] §7), 2026-11-11 (§5.1: host status under the unit; no unit key changes), 2026-11-02 (§7.2: uncomment the whole block, the `[Service]` line included, and what the one-line mistake looks like; §7.3: GPS time into the host clock through gpsd and ntpsec's SHM refclock, as done on the reference host); 2026-11-02 (§6: `slothweb.service` passes `--web-assessments` the copy `make install` puts in `share/sloth/alert-assessments`); 2026-10-27 (§6: `--pcap-dir /var/lib/sloth/pcap` for the alert page's capture, an example in `/etc/default/slothweb`); 2026-10-27 (§7.2: the inert `gps.conf` drop-in for `--gps`, why `PrivateDevices=true` hides the receiver, `dialout`, the gpsd variant); 2026-10-26 (§2, §7.1 integration: `/etc/default/sloth` no-clobber like slothweb's, units still replaced; `[Service]` of the scan unit an allow-list; the reference host's hand-made `10-bluetooth-monitor.conf` removed in §7.1 and after §4.4's migration, so one drop-in grants `AF_BLUETOOTH`); 2026-10-26 (§7 review: the sensor's `AF_BLUETOOTH` moved to an opt-in drop-in; `Conflicts=` in both directions and the mask required; what stopping bluetoothd sends; `WantedBy=` pulls the scan in, `PartOf=` carries restarts, measured; the boot-time bind wait; the journal check); 2026-10-26 (§7 BLE capture: `sloth-ble-scan.service`, `AF_BLUETOOTH` for `--bt-monitor` in the sensor's unit, the migration carries `--bt-monitor`); 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
+**Last updated**: 2026-11-15 (§10: `sloth-va.service`, its account, credentials and defaults file, one controller for it and another for `sloth-ble-scan`, the BlueZ settings, the reference host's commands and the undo), 2026-11-15 (§9: `sloth-sdrsweep-auto.timer`, a sweep every 5 minutes for the Spectrum ranges, §9.2; the helper's default cooldown 600 s to 150 s; `SuccessExitStatus=3`; the run's `history/` records), 2026-11-13 (§9: `sloth-sdrsweep.{service,path}`, its account and defaults file, and the drop-in for a receiver another service holds; `make` now builds the helpers it names, `sloth-ble-scan` included), 2026-11-12 (the unit's `snapshot.live.txt` and `report.retain_days`, #190), 2026-11-11 (§5.1: the beacon memory's state on `sys_status`, JSONL 1.2.0), 2026-11-11 (§6: `RuntimeDirectory=slothweb`, mode `0711`, for the agent secret, and `fchown` given back to slothweb's filter, for `--web-agent-group`; [[slothweb-mcp]] §7), 2026-11-11 (§5.1: host status under the unit; no unit key changes), 2026-11-02 (§7.2: uncomment the whole block, the `[Service]` line included, and what the one-line mistake looks like; §7.3: GPS time into the host clock through gpsd and ntpsec's SHM refclock, as done on the reference host); 2026-11-02 (§6: `slothweb.service` passes `--web-assessments` the copy `make install` puts in `share/sloth/alert-assessments`); 2026-10-27 (§6: `--pcap-dir /var/lib/sloth/pcap` for the alert page's capture, an example in `/etc/default/slothweb`); 2026-10-27 (§7.2: the inert `gps.conf` drop-in for `--gps`, why `PrivateDevices=true` hides the receiver, `dialout`, the gpsd variant); 2026-10-26 (§2, §7.1 integration: `/etc/default/sloth` no-clobber like slothweb's, units still replaced; `[Service]` of the scan unit an allow-list; the reference host's hand-made `10-bluetooth-monitor.conf` removed in §7.1 and after §4.4's migration, so one drop-in grants `AF_BLUETOOTH`); 2026-10-26 (§7 review: the sensor's `AF_BLUETOOTH` moved to an opt-in drop-in; `Conflicts=` in both directions and the mask required; what stopping bluetoothd sends; `WantedBy=` pulls the scan in, `PartOf=` carries restarts, measured; the boot-time bind wait; the journal check); 2026-10-26 (§7 BLE capture: `sloth-ble-scan.service`, `AF_BLUETOOTH` for `--bt-monitor` in the sensor's unit, the migration carries `--bt-monitor`); 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
 
 ---
 
@@ -1353,9 +1353,134 @@ every five, ~20% of the time. Disable with `sudo systemctl disable
 (the helper prunes it after each run, so a last run's records stay
 until the next run prunes them).
 
+## 10. Victron: `sloth-va`
+
+The Victron reader ([[victron]]; why a transmitting helper is allowed
+beside a passive sloth: [ADR 0011](adr/0011-sloth-va-transmits.md)).
+Built where `pkg-config` finds libsystemd (`libsystemd-dev`;
+`WITH_SDBUS=0` skips it, `WITH_SDBUS=1` makes a missing library an
+error), so `sudo make install` places `/usr/local/sbin/sloth-va` only
+then. `sudo make install-service` installs, and never enables:
+
+- `sloth-va.service` - `User=sloth-va`, no capability,
+  `RestrictAddressFamilies=AF_UNIX` and `PrivateNetwork=true` (it only
+  talks to bluetoothd over the system bus; it never opens a Bluetooth
+  socket), `Requires=`/`After=bluetooth.service`,
+  `LoadCredential=` for `/etc/sloth/victron-va.conf` and
+  `/etc/sloth/victron.keys` (the files stay root 0600; the service gets
+  private copies), `StateDirectory=sloth-va` 0755 with `UMask=0022` so
+  sloth's account can read `victron.jsonl`. `WantedBy=multi-user.target`.
+- `/usr/lib/sysusers.d/sloth-va.conf` - the account.
+- `/etc/default/sloth-va`, only where there is none -
+  `SLOTH_VA_ADAPTER`, the controller by address.
+
+### 10.1 One controller for sloth-va, another for sloth-ble-scan
+
+sloth-va drives its controller through BlueZ, so bluetoothd must run.
+`sloth-ble-scan` takes its controller away from the kernel stack
+through the HCI user channel and, as shipped, `Conflicts=bluetooth.service`
+(§7). They cannot share one controller, and today they cannot run at
+the same time at all: starting sloth-va starts bluetooth, which stops
+sloth-ble-scan. That is the state on the reference host on 2026-11-15
+(sloth-ble-scan stopped and disabled by the owner; a second adapter is
+planned for it).
+
+- **sloth-va** is pinned by address: `SLOTH_VA_ADAPTER=AA:BB:CC:DD:EE:FF`
+  in `/etc/default/sloth-va` (`bluetoothctl list` prints each
+  controller's address). hciN follows probe order and can change across
+  a reboot or a replug; an address cannot. With no match sloth-va exits
+  1 and systemd retries.
+- **sloth-ble-scan** takes `hciN` only (`SLOTH_BLE_HCI`, §7). Running it
+  on the second adapter beside bluetoothd needs two changes that are not
+  made yet, and are the follow-up when that adapter arrives: an address
+  option for the helper (the HCIGETDEVINFO ioctl gives each index's
+  address, no capability needed), and its unit's `Conflicts=bluetooth.service`
+  replaced by keeping bluetoothd off that controller (`AutoEnable=false`
+  below leaves a controller unpowered; the user-channel bind then takes
+  it from the management interface). Until then, check the pairing by
+  hand after every boot: `bluetoothctl list` shows which address
+  bluetoothd holds.
+
+sloth's `--bt-monitor` reads every controller's monitor channel, so it
+sees sloth-va's controller as well as the scan controller.
+
+### 10.2 BlueZ settings
+
+In `/etc/bluetooth/main.conf` (back it up first):
+
+```
+[General]
+# The AdvertisementMonitor API sloth-va uses for a passive scan is
+# marked experimental in BlueZ (org.bluez.AdvertisementMonitorManager1).
+Experimental = true
+# LE only: a dual-mode controller otherwise page-scans for BR/EDR,
+# which sloth reports as BT_OWN_TRANSMIT scan_enable, standing.
+ControllerMode = le
+
+[Policy]
+# Leave controllers off until a client powers one (sloth-va powers
+# its own). Keeps bluetoothd from bringing up a second adapter meant
+# for sloth-ble-scan.
+AutoEnable = false
+```
+
+### 10.3 The owner's commands (reference host, hci0 = E8:EA:6A:BD:F1:06)
+
+```
+make && make web                                  # as yourself
+sudo make install && sudo make install-service
+sudo systemd-sysusers && sudo systemctl daemon-reload
+
+# the secrets: both files, root 0600 (an empty victron.keys = GATT only)
+sudo install -m 600 -o root -g root /dev/null /etc/sloth/victron.keys   # only if absent
+sudoedit /etc/sloth/victron.keys                  # MAC KEY lines
+sudoedit /etc/sloth/victron-va.conf               # SERIAL PIN [MAC]; the dongle needs its MAC
+sudo /usr/local/sbin/sloth-va --check --config /etc/sloth/victron-va.conf \
+     --keys /etc/sloth/victron.keys               # counts and bad line numbers, no secrets
+
+# BlueZ
+sudo cp -a /etc/bluetooth/main.conf /etc/bluetooth/main.conf.bak-$(date +%F)
+sudoedit /etc/bluetooth/main.conf                 # §10.2
+sudo systemctl disable --now sloth-ble-scan       # already done on 2026-11-15
+sudo systemctl unmask bluetooth.service
+sudo systemctl restart bluetooth
+bluetoothctl list                                 # note the controller's address
+
+echo 'SLOTH_VA_ADAPTER=E8:EA:6A:BD:F1:06' | sudo tee /etc/default/sloth-va
+sudo systemctl enable --now sloth-va
+journalctl -u sloth-va -f                         # "advertisement monitor active", sessions
+tail -f /var/lib/sloth-va/victron.jsonl
+```
+
+What to expect: within a minute, `readout` records for the two devices
+in `victron.keys`; a `learn` session for each whose name BlueZ has not
+seen; then a `gatt` record per configured device every five minutes —
+`ok` with values if the device has the 65970000 service, else
+`no_supported_service` and its service list. In sloth (with
+`--bt-monitor`): `ble_scan_mode` `passive`, and `BT_OWN_TRANSMIT` WARN
+`le_connect` on the controller, re-asserted by each session (ADR 0011
+says why it is meant to fire). The first session with each device pairs;
+the bond is kept in `/var/lib/bluetooth`.
+
+### 10.4 Undoing it
+
+```
+sudo systemctl disable --now sloth-va
+bluetoothctl devices Paired                       # then, per Victron device:
+bluetoothctl remove c7:fe:23:b1:1c:5f             # drops the bond
+sudo cp -a /etc/bluetooth/main.conf.bak-YYYY-MM-DD /etc/bluetooth/main.conf
+sudo systemctl stop bluetooth && sudo systemctl mask bluetooth.service
+sudo systemctl enable --now sloth-ble-scan        # back to §7's passive scan on hci0
+sudo rm -rf /var/lib/sloth-va                     # readings and learned.map; no secret
+```
+
+The secret files are the owner's and stay. `/etc/default/sloth-va` and
+the account may stay (`sudo userdel sloth-va` removes the account).
+
 ## Related pages
 
 - [[sdr-sweep]] — §9: what `sloth-sdrsweep` does and why it is consistent with MISSION §2
+- [[victron]] — §10: what `sloth-va` reads and sends; [ADR 0011](adr/0011-sloth-va-transmits.md) for why it may transmit
 - [[data-socket-exposure]] — the `unix:` trust boundary the unit relies on
 - [[monitor-mode]] — what `sloth-monitor-up` prepares and why sloth never does
 - [[ble]] — what `--bt-monitor` decodes, and why `sloth-ble-scan` is consistent with MISSION §2

@@ -1,0 +1,112 @@
+# sloth-va.service — read the owner's Victron devices over Bluetooth LE.
+#
+# THIS SERVICE TRANSMITS: scheduled LE connections and pairing with the
+# devices listed in /etc/sloth/victron-va.conf, nothing else. Why that
+# is allowed and how it is bounded: docs/wiki/adr/0011-sloth-va-transmits.md.
+# What it does and how to deploy it: docs/wiki/victron.md and
+# docs/wiki/deployment.md, "Victron (sloth-va)".
+#
+# Installed by `sudo make install-service` to /etc/systemd/system, never
+# enabled by it; the helper is placed by `sudo make install` (only when
+# the build found libsystemd).
+#
+# It talks to BlueZ over the system bus and owns no socket of its own:
+# bluetoothd drives the controller. Which controller is the setting
+# SLOTH_VA_ADAPTER in /etc/default/sloth-va, by address (stable) or
+# hciN (probe order, not stable). sloth-ble-scan must hold a DIFFERENT
+# controller; as shipped it Conflicts=bluetooth.service, so starting
+# this unit (which Requires= bluetooth) stops sloth-ble-scan until that
+# unit is given its own adapter (docs/wiki/deployment.md says how).
+
+[Unit]
+Description=sloth-va Victron reader (Instant Readout + scheduled GATT; transmits)
+Documentation=https://github.com/SpaceTrucker2196/sloth/wiki/victron
+Documentation=https://github.com/SpaceTrucker2196/sloth/wiki/deployment
+Requires=bluetooth.service
+After=bluetooth.service
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+
+# Its own account (packaging/systemd/sloth-va.sysusers.conf), not
+# DynamicUser=: sloth (User=sloth) reads the JSONL this writes, and a
+# dynamic user's StateDirectory sits under /var/lib/private (0700).
+User=sloth-va
+Group=sloth-va
+
+# The secrets stay root:root 0600 where the owner put them; systemd hands
+# this service private copies under $CREDENTIALS_DIRECTORY, readable by
+# it alone and gone when it stops. Both files must exist (systemd fails
+# the start on a missing LoadCredential= source); an empty one is fine
+# and means readout-only or GATT-only.
+LoadCredential=victron-va.conf:/etc/sloth/victron-va.conf
+LoadCredential=victron.keys:/etc/sloth/victron.keys
+
+# SLOTH_VA_ADAPTER=AA:BB:CC:DD:EE:FF (or hciN). Other options: a drop-in
+# overriding ExecStart= (sloth-va --help).
+EnvironmentFile=-/etc/default/sloth-va
+ExecStart=/usr/local/sbin/sloth-va
+
+# victron.jsonl (0644, sloth reads it) and learned.map (MAC SERIAL; no
+# secret). Neither holds a PIN, a key or a raw advertisement.
+StateDirectory=sloth-va
+StateDirectoryMode=0755
+UMask=0022
+
+# ── Privilege ────────────────────────────────────────────────────────────
+# None: everything goes through bluetoothd. BlueZ's D-Bus policy lets any
+# local account call org.bluez; pairing needs no capability.
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=true
+
+# ── Filesystem ───────────────────────────────────────────────────────────
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+
+# ── Kernel surface ───────────────────────────────────────────────────────
+# The system bus is a filesystem AF_UNIX socket, which a private network
+# namespace still reaches. No Bluetooth socket family: the helper never
+# touches the controller itself.
+RestrictAddressFamilies=AF_UNIX
+PrivateNetwork=true
+IPAddressDeny=any
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+# ── Resources ────────────────────────────────────────────────────────────
+MemoryMax=32M
+TasksMax=8
+
+# SIGTERM: the helper drops any open link and withdraws its monitor and
+# agent before it exits.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# A failure (BlueZ gone, the adapter missing) restarts; bad files or a
+# usage error (exit 2) do not.
+Restart=on-failure
+RestartSec=30
+RestartPreventExitStatus=2
+
+[Install]
+WantedBy=multi-user.target
