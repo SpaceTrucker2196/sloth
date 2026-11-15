@@ -17,12 +17,23 @@ pcap stream, then surfaces what it sees through <!-- count:views -->38<!-- /coun
 threat-intel matcher whose shipped IOC list is **synthetic demo data**,
 optional per-alert pcap dumps, and an optional JSONL forensic log.
 
-Single binary `sloth`. Test binary `sloth_test`.
+Two daemons from one tree since #211 (ADR 0010): `sloth`, the Wi-Fi /
+LAN / BLE monitor (renamed `sloth-wifi` at #216's cutover), and
+`sloth-rf`, the headless reader for the SDR decoders' output (ADS-B,
+APRS, rtl_433, Victron) and GNSS. Both link `libsloth_core.a`; an `nm`
+gate (`check_rf_no_capture`) keeps capture, 802.11 and BLE-capture code
+out of `sloth-rf`. Test binary `sloth_test`.
 
 ## Architecture
 
 - `include/sloth.h` — central header: shared structs, the `view_t` enum.
 - `src/main.c` — CLI, signal handlers, main poll loop.
+- `src/rf/main.c`, `rf_args.c`, `platform_rf.c` — the `sloth-rf` daemon:
+  its argv parser, loop and two-function platform table. Flag
+  validation both daemons share is in `src/rf_flags.c`,
+  `src/gnss_flags.c` and `src/daemon_start.c`.
+- `src/poll_core.c`, `poll.c`, `poll_gnss.c`, `poll_rf.c` — the poll
+  stages and the per-daemon stage tables (`g_poll_sloth`, `g_poll_rf`).
 - `src/tui.c` + `tui.h` — ncurses rendering, colour pair init, key
   polling. ANSI fallback when built without ncurses.
 - `src/platform/linux*.c` — Linux backends (rtnetlink, nl80211, /proc
@@ -32,7 +43,12 @@ Single binary `sloth`. Test binary `sloth_test`.
 - `src/{dns,tls,quic,http,ntp,icmp}_log.c` — ring buffers + per-record
   snapshot.
 - `src/{alerts,beacon_detect,devices,threat_intel,filter,jsonl,alert_pcap,
-  top_hosts,ip_color,ip_owner}.c` — synthesis + export.
+  top_hosts,ip_color,ip_owner}.c` — synthesis + export. The JSONL
+  writer is three files: `jsonl_core.c` (sink, dedup, the shared
+  `sensor_health` blocks), `jsonl_rf.c` (the RF and GNSS records) and
+  `jsonl.c` (the capture's records). The alert rule table is selected
+  by the daemon (`alerts_set_table()`; `rules_table.c`,
+  `rules_table_rf.c`).
 - `src/views/*.c` — one file per VIEW_*. The dashboard composites
   several panels into one grid.
 - `src/md5.c` — embedded MD5 for JA3 (verified against RFC 1321 vectors).
