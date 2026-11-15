@@ -268,7 +268,7 @@ static void sb_fmt(sb_t *s, const char *fmt, double v) {
  * the line or smuggle invalid UTF-8 through. */
 static void sb_str(sb_t *s, const char *t, size_t max) {
     sb_raw(s, "\"", 1);
-    for (size_t i = 0; t[i] && i < max; i++) {
+    for (size_t i = 0; i < max && t[i]; i++) {
         unsigned char c = (unsigned char)t[i];
         char e[8];
         if (c == '"' || c == '\\') { e[0] = '\\'; e[1] = (char)c; sb_raw(s, e, 2); }

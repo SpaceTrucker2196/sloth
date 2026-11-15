@@ -381,6 +381,9 @@ static int hist_parse(const char *text, size_t n, web_jw_t *scratch, hrec_t *h) 
             jc_ws(&c);
             r = jc_string(&c, &len);
             if (!r) {
+                /* A repeated "data" key: the last one wins, and the
+                 * first is not leaked. */
+                free(h->data);
                 h->data = malloc(len + 1);
                 if (!h->data) { r = -1; break; }
                 memcpy(h->data, c.tmp, len);
@@ -578,8 +581,14 @@ static int hist_window(const web_spectrum_t *sp, const char *rname, long long se
         web_jw_t sw;
         web_jw_init(&sw, scratch, scap);
         hrec_t h;
-        if (hist_parse(text, tl, &sw, &h) != 0 ||
-            (secs && (h.started < (double)(now_s - secs) || h.started > (double)(now_s + 300)))) {
+        if (hist_parse(text, tl, &sw, &h) != 0) {
+            free(text);
+            (*skipped)++;
+            continue;
+        }
+        if (secs && (h.started < (double)(now_s - secs) || h.started > (double)(now_s + 300))) {
+            /* Parsed, so it owns its data, but outside the window. */
+            free(h.data);
             free(text);
             (*skipped)++;
             continue;

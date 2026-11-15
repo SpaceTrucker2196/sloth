@@ -63,6 +63,12 @@ readdirCalled:web/tools/alertkb.c
 # test_spectrum.c counts the files the sweep helper left: a single-
 # threaded test with a local opendir() DIR*, closed in the same function.
 readdirCalled:web/tests/test_spectrum.c
+# The sweep history (2026-11-15): sdrs_hist_prune() walks the history
+# directory with a local opendir() DIR*, and hist_window() one from
+# fdopendir() on its own dup of the directory fd; each is closed in the
+# same function.
+readdirCalled:src/sdrsweep/sdrsweep_dsp.c
+readdirCalled:web/src/web_spectrum.c
 readdirCalled:web/tools/alertasm.c
 readdirCalled:web/src/web_pcapdir.c
 # web_fleet_read_own() (#192 I5): one DIR of /sys/class/net, read once
