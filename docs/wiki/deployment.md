@@ -1450,6 +1450,27 @@ echo 'SLOTH_VA_ADAPTER=E8:EA:6A:BD:F1:06' | sudo tee /etc/default/sloth-va
 sudo systemctl enable --now sloth-va
 journalctl -u sloth-va -f                         # "advertisement monitor active", sessions
 tail -f /var/lib/sloth-va/victron.jsonl
+
+# rotation: sloth-va opens the file for every record, so a plain
+# rename rotation needs no signal, and sloth's reader follows the new file
+sudo tee /etc/logrotate.d/sloth-va >/dev/null <<'EOF'
+/var/lib/sloth-va/victron.jsonl {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    su sloth-va sloth-va
+    create 0644 sloth-va sloth-va
+}
+EOF
+
+# sloth reads the file (no unit change: ProtectSystem=strict leaves /var
+# readable, and the directory is 0755, the file 0644)
+sudo cp -a /etc/default/sloth /etc/default/sloth.bak-$(date +%F)-victron
+sudoedit /etc/default/sloth            # SLOTH_ARGS += --victron /var/lib/sloth-va/victron.jsonl
+sudo systemctl restart sloth-sensor
 ```
 
 What to expect: within a minute, `readout` records for the two devices
@@ -1471,6 +1492,9 @@ bluetoothctl remove c7:fe:23:b1:1c:5f             # drops the bond
 sudo cp -a /etc/bluetooth/main.conf.bak-YYYY-MM-DD /etc/bluetooth/main.conf
 sudo systemctl stop bluetooth && sudo systemctl mask bluetooth.service
 sudo systemctl enable --now sloth-ble-scan        # back to §7's passive scan on hci0
+sudo cp -a /etc/default/sloth.bak-YYYY-MM-DD-victron /etc/default/sloth  # drop --victron
+sudo systemctl restart sloth-sensor
+sudo rm -f /etc/logrotate.d/sloth-va
 sudo rm -rf /var/lib/sloth-va                     # readings and learned.map; no secret
 ```
 

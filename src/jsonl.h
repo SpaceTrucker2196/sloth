@@ -125,6 +125,11 @@ void jsonl_emit_aprs          (const sloth_state_t *s);
  * age. A no-op without --rtl433. */
 void jsonl_emit_rtl433        (const sloth_state_t *s);
 
+/* Victron (--victron): one victron_device per address row of sloth-va's
+ * file, change-only on victron_device_sig() plus the heartbeat. A no-op
+ * without --victron. */
+void jsonl_emit_victron       (const sloth_state_t *s);
+
 /* Sensor self-report (#91 slice 3). Unlike every emitter above this is a
  * SINGLETON, not one line per table row: "healthy with no detections"
  * and "not observing" were indistinguishable precisely because an idle

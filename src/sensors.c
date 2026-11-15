@@ -4,7 +4,7 @@
 
 static const char *KIND[SENSOR_KIND_COUNT] = {
     "wifi", "ble", "zigbee", "sdr", "gps", "adsb", "meshtastic", "can",
-    "aprs", "rtl433"
+    "aprs", "rtl433", "victron"
 };
 
 const char *sensor_kind_name(int kind) {

@@ -13,13 +13,17 @@ allowed, and how it is bounded and announced, is
 it and links none of it.
 
 **Sources**: `src/va/main.c`, `src/va/va_victron.c`, `src/va/va_conf.c`,
-`src/va/va_aes.c`, `tests/test_va.c`, `packaging/systemd/sloth-va.service`,
+`src/va/va_aes.c`, `tests/test_va.c`, `src/victron.c`,
+`src/capture/victron_reader.c`, `tests/test_victron.c`,
+`packaging/systemd/sloth-va.service`,
 `packaging/systemd/sloth-va.sysusers.conf`, `packaging/default/sloth-va`,
 `Makefile` (`sloth-va`, `WITH_SDBUS`),
 `research/victron/instant-readout-and-gatt.md`.
 
-**Last updated**: 2026-11-15 (new: the helper, its files, its scan and
-session behaviour, the per-device support table).
+**Last updated**: 2026-11-15 (`--victron`: sloth's reader of the file,
+the `victron` sensor, `victron_device` and `sensor_health`'s `victron_*`),
+2026-11-15 (new: the helper, its files, its scan and session behaviour,
+the per-device support table).
 
 ## What it reads, per device
 
@@ -135,6 +139,27 @@ One line per reading or session, `type` `victron`:
   `pair_failed`, `services_unresolved`, `timeout`, `bluez_error`.
 
 No record field can hold a PIN, a key or a raw advertisement byte.
+
+## sloth's side: `--victron`
+
+sloth reads the file as a passive source, the same shape as `--rtl433`
+([[cli-reference]]): `--victron /var/lib/sloth-va/victron.jsonl`.
+`src/victron.c` parses each line against an allow-list of value names
+with bounds (out of range absent and counted, never clamped; other
+names counted and dropped; the device's own `label` never kept) into
+one row per address, at most 16 (a 17th is refused and counted, not
+evicted). `src/capture/victron_reader.c` tails the file once a second
+from its end, following rotation and truncation. The sensor registry
+gains kind `victron` ("Victron (sloth-va)"); `sensor_health` gains the
+`victron_*` block; the change-only `victron_device` record carries each
+device's latest values ([[jsonl-schema]]). sloth opens no Bluetooth
+socket for this and decrypts nothing; the file is all it sees.
+
+Not yet: a `sloth.db` table (history), slothweb's Victron tab, a
+`source_status` row (so `SENSOR_SOURCE_DOWN` does not cover it), and
+the fleet classification of `victron_device` (fail closed: it does not
+travel; a GATT reading is not monitor-mode provenance under ADR 0009,
+an Instant Readout one arguably is - the owner's call).
 
 ## Options
 

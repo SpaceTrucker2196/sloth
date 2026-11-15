@@ -2,6 +2,7 @@
 #include "adsb.h"
 #include "aprs.h"
 #include "rtl433.h"
+#include "victron.h"
 #include "sensors.h"
 
 /* The RF decoders' poll stages and the RF table (#212): ADS-B, APRS and
@@ -22,6 +23,8 @@ void poll_st_health_rf(sloth_state_t *s, const poll_ctx_t *ctx) {
      * once is a real observation of the band, and only the table
      * filling removes a row. */
     rtl433_health_poll(s, ctx->wall);
+    /* --victron: copy sloth-va's device table and the file's health. */
+    victron_health_poll(s, ctx->wall);
 }
 
 void poll_st_sensors_rf(sloth_state_t *s, const poll_ctx_t *ctx) {
@@ -69,6 +72,20 @@ void poll_st_sensors_rf(sloth_state_t *s, const poll_ctx_t *ctx) {
         else
             sensor_set_state(rt, s->rtl433.msgs ? SENSOR_STATE_ACTIVE
                                                 : SENSOR_STATE_PRESENT);
+    }
+    /* Victron: sloth-va's JSONL, observing records. The same rule as
+     * rtl_433: an unreadable file is ERROR, a missing one (sloth-va
+     * creates it with its first reading) and a quiet one are not. After
+     * rtl_433, for the same id-slot reason. */
+    if (s->victron.configured) {
+        sensor_t *vi = sensor_register(s, SENSOR_VICTRON, "Victron (sloth-va)",
+                                       s->victron.src, ctx->wall);
+        sensor_observe(vi, s->victron.records, ctx->wall);
+        if (s->victron.state == VICTRON_ERROR)
+            sensor_set_state(vi, SENSOR_STATE_ERROR);
+        else
+            sensor_set_state(vi, s->victron.records ? SENSOR_STATE_ACTIVE
+                                                    : SENSOR_STATE_PRESENT);
     }
 }
 

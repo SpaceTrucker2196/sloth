@@ -139,6 +139,7 @@ void run_ble_rotation_tests(void);        /* tests/test_ble_rotation.c (#156 ite
 void run_ble_scan_tests(void);            /* tests/test_ble_scan.c (sloth-ble-scan) */
 void run_sdrsweep_tests(void);            /* tests/test_sdrsweep.c (sloth-sdrsweep) */
 void run_va_tests(void);                  /* tests/test_va.c (sloth-va) */
+void run_victron_tests(void);             /* tests/test_victron.c (--victron) */
 void run_tmp_dir_tests(void);             /* tests/test_tmp_dir.c */
 void run_deauth_snoop_tests(void);
 void run_flood_window_tests(void);
@@ -508,6 +509,7 @@ int main(void) {
     run_ble_scan_tests();
     run_sdrsweep_tests();
     run_va_tests();
+    run_victron_tests();
     run_tmp_dir_tests();
 
     tui_offscreen_end();

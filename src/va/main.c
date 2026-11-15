@@ -1110,11 +1110,15 @@ int main(int argc, char **argv) {
     if (g.gatt_on && bluez_call("/org/bluez", "org.bluez.AgentManager1", "RegisterAgent",
                                 "os", AGENT_PATH, "KeyboardOnly") < 0)
         logf_("no pairing agent: sessions with an unbonded device will fail to pair");
-    if (g.nkey > 0 && bluez_call(g.adapter, "org.bluez.AdvertisementMonitorManager1", "RegisterMonitor",
-                                 "o", APP_ROOT, NULL) < 0)
+    /* Always, keys or not: the monitor's passive scan is also how BlueZ
+     * comes to hold a Device1 object for a GATT-only device (the
+     * dongle), and a device it does not hold is never searched for. */
+    if (bluez_call(g.adapter, "org.bluez.AdvertisementMonitorManager1", "RegisterMonitor",
+                   "o", APP_ROOT, NULL) < 0)
         logf_("AdvertisementMonitorManager1 unavailable (bluetoothd needs Experimental = true "
-              "in main.conf, or -E): no Instant Readout. This helper never falls back to "
-              "discovery, which scans actively");
+              "in main.conf, or -E): no Instant Readout, and only devices BlueZ already "
+              "knows are reached. This helper never falls back to discovery, which scans "
+              "actively");
 
     sd_event_source *tick = NULL;
     sd_event_add_time_relative(g.ev, &tick, CLOCK_MONOTONIC, (uint64_t)TICK_S * 1000000ull, 0,
@@ -1129,8 +1133,7 @@ int main(int argc, char **argv) {
         g.s.pending = NULL;
         bluez_call(g.peer[g.s.peer].path, "org.bluez.Device1", "Disconnect", NULL, NULL, NULL);
     }
-    if (g.nkey > 0)
-        bluez_call(g.adapter, "org.bluez.AdvertisementMonitorManager1", "UnregisterMonitor", "o", APP_ROOT, NULL);
+    bluez_call(g.adapter, "org.bluez.AdvertisementMonitorManager1", "UnregisterMonitor", "o", APP_ROOT, NULL);
     if (g.gatt_on)
         bluez_call("/org/bluez", "org.bluez.AgentManager1", "UnregisterAgent", "o", AGENT_PATH, NULL);
     va_wipe(g.dev, sizeof(g.dev));

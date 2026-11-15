@@ -1711,9 +1711,9 @@ static void test_alert_rule_row_scanner(void) {
 #define DC_CLI_REF       "docs/wiki/cli-reference.md"
 #define DC_MAX_OPTS      128
 #define DC_OPT_LEN       48
-/* Measured, not recalled: src/main.c parses 45 distinct long options and
- * DC_CLI_REF backticks all 45 (both directions, zero missing). */
-#define DC_MIN_LONG_OPTS 45
+/* Measured, not recalled: src/main.c parses 46 distinct long options and
+ * DC_CLI_REF backticks all 46 (both directions, zero missing). */
+#define DC_MIN_LONG_OPTS 46
 
 /* The long-option name charset.
  *

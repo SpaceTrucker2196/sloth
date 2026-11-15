@@ -2818,6 +2818,7 @@ typedef enum {
     SENSOR_GPS, SENSOR_ADSB, SENSOR_MESHTASTIC, SENSOR_CAN,
     SENSOR_APRS,              /* appended: the kind number is persisted */
     SENSOR_RTL433,            /* appended: the kind number is persisted */
+    SENSOR_VICTRON,           /* appended: the kind number is persisted */
     SENSOR_KIND_COUNT
 } sensor_kind_t;
 typedef enum {
@@ -3718,6 +3719,69 @@ typedef struct {
     int      devices;          /* rows now */
 } rtl433_health_t;
 
+/* ── Victron devices: --victron (2026-11-15) ─────────────────────────
+ *
+ * The JSONL file sloth-va writes (docs/wiki/victron.md), tailed by
+ * --victron. sloth decrypts nothing and connects to nothing: sloth-va
+ * did, under ADR 0011; this is its output, read as a file. One row per
+ * device address, the latest value of each allow-listed reading kept
+ * (sticky: a record without a value does not erase it). */
+#define VICTRON_MAX_DEVICES 16
+#define VICTRON_MAX_VALS    16
+
+typedef struct {
+    char     name[24];         /* an allow-listed name, unit-suffixed */
+    double   v;
+} victron_val_t;
+
+typedef struct {
+    char     mac[18];          /* "c7:fe:23:b1:1c:5f" */
+    char     serial[24];       /* the owner's serial sloth-va mapped, "" none */
+    char     model[32];        /* sloth-va's model name, "" none */
+    char     record[24];       /* the Instant Readout record type, "" none */
+    char     session[24];      /* the newest GATT session's outcome, "" none */
+    int      has_rssi;
+    int      rssi;
+    time_t   first_seen, last_seen;   /* host clock at the read */
+    time_t   last_readout, last_gatt; /* 0 never */
+    uint64_t readings;         /* records with at least one value */
+    uint64_t sessions;         /* gatt records */
+    int      nvals;
+    victron_val_t vals[VICTRON_MAX_VALS];
+} victron_device_t;
+
+/* Why a line was refused; each its own counter. */
+typedef enum {
+    VICTRON_REJ_OVERSIZE = 0,  /* longer than VICTRON_MAX_LINE */
+    VICTRON_REJ_NOT_OBJECT,    /* not one JSON object, or trailing bytes */
+    VICTRON_REJ_MALFORMED,     /* a JSON syntax error */
+    VICTRON_REJ_NOT_VICTRON,   /* no "type":"victron", or an unknown source */
+    VICTRON_REJ_NO_MAC,        /* no usable address */
+    VICTRON_REJ_COUNT
+} victron_reject_t;
+
+/* The source's health. Quiet is not a fault: sloth-va writes nothing
+ * while the devices are out of range. */
+typedef enum {
+    VICTRON_NONE = 0, VICTRON_WAITING, VICTRON_LIVE, VICTRON_ERROR
+} victron_state_t;
+
+typedef struct {
+    int      configured;
+    int      state;            /* victron_state_t */
+    int      missing;          /* the file is not there (yet) */
+    char     src[48];          /* "file:/var/lib/sloth-va/victron.jsonl" */
+    char     err[96];          /* the last read failure, "" none */
+    time_t   last_read, last_rec;
+    uint64_t bytes, lines, records, bad_lines;
+    uint64_t rej[VICTRON_REJ_COUNT];
+    uint64_t bad_values;       /* values left absent for being out of range */
+    uint64_t other_keys;       /* value names not on the allow-list */
+    uint64_t table_full;       /* records for a 17th address, dropped */
+    uint64_t truncations, rotations, read_errors;
+    int      devices;
+} victron_health_t;
+
 typedef struct {
     int      configured;       /* --bt-capture given */
     int      state;            /* bt_cap_state_t */
@@ -4258,6 +4322,12 @@ typedef struct {
     rtl433_health_t  rtl433;
     const rtl433_device_t *rtl433_rows;
     int              rtl433_count;
+    /* Victron (2026-11-15): the --victron file's health and the device
+     * table, filled by victron_health_poll(); NULL before the first
+     * poll. */
+    victron_health_t victron;
+    const victron_device_t *victron_rows;
+    int              victron_count;
     bredr_lap_t      bredr_laps[MAX_BREDR_LAPS];
     int              bredr_lap_count;
 

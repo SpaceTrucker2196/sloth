@@ -925,7 +925,7 @@ static void test_sensor_registry_rtl433(void) {
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ACTIVE);
     /* SENSOR_RTL433 is appended, so every earlier kind keeps its
      * number: the kind is persisted (include/sloth.h). */
-    ASSERT_EQ(SENSOR_RTL433, SENSOR_KIND_COUNT - 1);
+    ASSERT_EQ(SENSOR_RTL433, SENSOR_VICTRON - 1);
     ASSERT_EQ(SENSOR_APRS, SENSOR_RTL433 - 1);
     ASSERT_STR(sensor_kind_name(SENSOR_KIND_COUNT), "?");
     sloth_clock_test_set(NULL, NULL);

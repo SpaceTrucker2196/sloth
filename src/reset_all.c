@@ -6,6 +6,7 @@
 #include "adsb.h"
 #include "aprs.h"
 #include "rtl433.h"
+#include "victron.h"
 #include "alerts.h"
 #include "assoc_track.h"
 #include "gps.h"

@@ -11,6 +11,7 @@
 #include "adsb.h"
 #include "aprs.h"
 #include "rtl433.h"
+#include "victron.h"
 #include "position_track.h"
 #include "sloth_clock.h"
 #include "netstr.h"
@@ -110,7 +111,8 @@ static jsonl_dedup_slot_t g_dedup[JSONL_DEDUP_SLOTS];
 enum { JD_PNL = 1, JD_SEQNUM, JD_SENSOR_HEALTH, JD_WIFI_REG,
        JD_BLE_DEVICE, JD_BLE_ALERT, JD_GNSS_FIX, JD_GNSS_SKY, JD_GNSS_SAT,
        JD_ADSB_AIRCRAFT, JD_APRS_STATION, JD_RTL433_DEVICE, JD_OWNERSHIP,
-       JD_KARMA_SUSPECT, JD_HARVEST_STA, JD_HARVEST_CHAIN };
+       JD_KARMA_SUSPECT, JD_HARVEST_STA, JD_HARVEST_CHAIN,
+       JD_VICTRON_DEVICE };
 
 static uint64_t fnv1a(const void *data, size_t n, uint64_t h) {
     const unsigned char *p = (const unsigned char *)data;
@@ -2315,6 +2317,10 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         int      rtl433_read_err_any, rtl433_bad_any, rtl433_evicted_any;
         int      rtl433_other_keys_any, rtl433_bad_values_any;
         int      rtl433_err_any;
+        /* --victron: the same shape as rtl433's. */
+        int      victron_configured, victron_state, victron_missing;
+        int      victron_read_err_any, victron_bad_any, victron_full_any;
+        int      victron_other_keys_any, victron_bad_values_any, victron_err_any;
         /* --db's size ceiling (JSONL 1.7.0): a tune knob, so it moves
          * only when the operator moves it. */
         int      db_max_mb;
@@ -2468,6 +2474,15 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.rtl433_other_keys_any = s->rtl433.other_keys > 0;
     sig.rtl433_bad_values_any = s->rtl433.bad_values > 0;
     sig.rtl433_err_any       = s->rtl433.err[0] != '\0';
+    sig.victron_configured   = s->victron.configured;
+    sig.victron_state        = s->victron.state;
+    sig.victron_missing      = s->victron.missing;
+    sig.victron_read_err_any = s->victron.read_errors > 0;
+    sig.victron_bad_any      = s->victron.bad_lines > 0;
+    sig.victron_full_any     = s->victron.table_full > 0;
+    sig.victron_other_keys_any = s->victron.other_keys > 0;
+    sig.victron_bad_values_any = s->victron.bad_values > 0;
+    sig.victron_err_any      = s->victron.err[0] != '\0';
     const int pcap_on = alert_pcap_enabled();
     sig.pcap_swept_band     = pcap_on ? decade_band(alert_pcap_swept()) : -1;
     sig.pcap_sweep_err_band = pcap_on
@@ -2930,6 +2945,35 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "rtl433_rotations", (long long)r->rotations);
         kv_int(buf, LINEBUF, &off, "rtl433_read_errors", (long long)r->read_errors);
         kv_str(buf, LINEBUF, &off, "rtl433_err", r->err);
+    }
+    /* --victron (2026-11-15, additive; the MINOR bump is pending, see
+     * docs/wiki/jsonl-schema.md "Versioning"): sloth-va's file. ONLY
+     * with --victron, appended after the rtl433 block and before
+     * db_max_mb, for the reason that block gives. */
+    if (s->victron.configured) {
+        const victron_health_t *v = &s->victron;
+        kv_str(buf, LINEBUF, &off, "victron_state", victron_state_name(v->state));
+        kv_str(buf, LINEBUF, &off, "victron_src", v->src);
+        kv_int(buf, LINEBUF, &off, "victron_missing", v->missing);
+        kv_int(buf, LINEBUF, &off, "victron_last_read", (long long)v->last_read);
+        kv_int(buf, LINEBUF, &off, "victron_last_rec", (long long)v->last_rec);
+        kv_int(buf, LINEBUF, &off, "victron_devices", v->devices);
+        kv_int(buf, LINEBUF, &off, "victron_bytes", (long long)v->bytes);
+        kv_int(buf, LINEBUF, &off, "victron_lines", (long long)v->lines);
+        kv_int(buf, LINEBUF, &off, "victron_records", (long long)v->records);
+        kv_int(buf, LINEBUF, &off, "victron_bad_lines", (long long)v->bad_lines);
+        for (int k = 0; k < VICTRON_REJ_COUNT; k++) {
+            char key[32];
+            snprintf(key, sizeof(key), "victron_rej_%s", victron_reject_name(k));
+            kv_int(buf, LINEBUF, &off, key, (long long)v->rej[k]);
+        }
+        kv_int(buf, LINEBUF, &off, "victron_bad_values", (long long)v->bad_values);
+        kv_int(buf, LINEBUF, &off, "victron_other_keys", (long long)v->other_keys);
+        kv_int(buf, LINEBUF, &off, "victron_table_full", (long long)v->table_full);
+        kv_int(buf, LINEBUF, &off, "victron_truncations", (long long)v->truncations);
+        kv_int(buf, LINEBUF, &off, "victron_rotations", (long long)v->rotations);
+        kv_int(buf, LINEBUF, &off, "victron_read_errors", (long long)v->read_errors);
+        kv_str(buf, LINEBUF, &off, "victron_err", v->err);
     }
     /* The record stream's own contract version (ADR 0007, #185 item 3),
      * appended after the flag-gated blocks above so every earlier field
@@ -3625,6 +3669,55 @@ void jsonl_emit_rtl433(const sloth_state_t *s) {
     }
 }
 
+/* ── Victron devices (--victron, 2026-11-15) ────────────────────────
+ *
+ * victron_device: one record per address row of sloth-va's file,
+ * change-only on victron_device_sig() (values banded there) plus the
+ * 300 s heartbeat. `readings`, `sessions`, `last_seen` and `rssi` are
+ * written and not signed: each moves with every record sloth-va
+ * appends. Values go out under sloth-va's unit-suffixed names. No
+ * "gone" record: the table retires nothing. */
+
+static void emit_victron_device(const victron_device_t *d, const char *src,
+                                time_t now) {
+    char buf[LINEBUF]; int off = 0;
+    start_obj(buf, LINEBUF, &off, "victron_device", now);
+    kv_str(buf, LINEBUF, &off, "src", src);
+    kv_str(buf, LINEBUF, &off, "mac", d->mac);
+    kv_str_opt(buf, &off, "serial", d->serial);
+    kv_str_opt(buf, &off, "model", d->model);
+    kv_str_opt(buf, &off, "record", d->record);
+    kv_str_opt(buf, &off, "session", d->session);
+    kv_int(buf, LINEBUF, &off, "first_seen", (long long)d->first_seen);
+    kv_int(buf, LINEBUF, &off, "last_seen", (long long)d->last_seen);
+    kv_int(buf, LINEBUF, &off, "last_readout", (long long)d->last_readout);
+    kv_int(buf, LINEBUF, &off, "last_gatt", (long long)d->last_gatt);
+    kv_int(buf, LINEBUF, &off, "readings", (long long)d->readings);
+    kv_int(buf, LINEBUF, &off, "sessions", (long long)d->sessions);
+    if (d->has_rssi) kv_int(buf, LINEBUF, &off, "rssi", d->rssi);
+    for (int i = 0; i < d->nvals; i++)
+        kv_fixed(buf, &off, d->vals[i].name, d->vals[i].v, 3);
+    end_obj(buf, LINEBUF, &off);
+    emit_line(buf);
+}
+
+void jsonl_emit_victron(const sloth_state_t *s) {
+    if (!any_sink() || !s || !s->victron.configured) return;
+    time_t now = sloth_wall();
+    for (int i = 0; s->victron_rows && i < s->victron_count; i++) {
+        const victron_device_t *d = &s->victron_rows[i];
+        /* Hashed, not the 17-byte text: jsonl_changed() keeps 16 bytes
+         * of a key, which would drop the address's last digit. */
+        uint64_t hk = fnv1a(d->mac, strlen(d->mac), FNV64_OFFSET);
+        uint8_t key[sizeof(hk)];
+        memcpy(key, &hk, sizeof(key));
+        if (!jsonl_changed(JD_VICTRON_DEVICE, key, sizeof(key),
+                           victron_device_sig(d), now))
+            continue;
+        emit_victron_device(d, s->victron.src, now);
+    }
+}
+
 /* ── BLE (#144 slice 4) ─────────────────────────────────────────────
  *
  * ble_device: one record per advertiser row, change-only. The
@@ -3931,6 +4024,7 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_adsb              (s);   /* #26 slice 1 */
     jsonl_emit_aprs              (s);   /* 2026-11-05 */
     jsonl_emit_rtl433            (s);   /* #208 */
+    jsonl_emit_victron           (s);   /* --victron */
     /* The host's status and the source inventory (src/sys_status.h):
      * a batch on its own cadence, nothing on most ticks. */
     sys_status_emit              (s);

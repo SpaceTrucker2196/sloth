@@ -139,6 +139,8 @@
 #include "capture/aprs_reader.h"
 #include "rtl433.h"              /* --rtl433 (#208, 2026-11-14) */
 #include "capture/rtl433_reader.h"
+#include "victron.h"             /* --victron (2026-11-15) */
+#include "capture/victron_reader.h"
 #include "ble_hci.h"
 
 static sloth_state_t g_state;
@@ -351,7 +353,7 @@ static void print_usage(const char *argv0) {
             "       [--bt-monitor] [--bt-capture PATH] [--ble-rotation-hints]\n"
             "       [--location LAT,LON[,ALT]] [--gps SPEC] [--gps-allow-remote]\n"
             "       [--gps-baud N] [--adsb SPEC] [--aprs SPEC] [--aprs-freq HZ]\n"
-            "       [--aprs-silent-hours N] [--rtl433 SPEC]\n"
+            "       [--aprs-silent-hours N] [--rtl433 SPEC] [--victron SPEC]\n"
             "       [--user NAME] [--no-privdrop]\n"
             "       [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
@@ -649,6 +651,12 @@ static void print_usage(const char *argv0) {
             "                     startup; sloth never opens, tunes, hops or\n"
             "                     runs the SDR and uses no network. Refused\n"
             "                     with --replay.\n"
+            "  --victron SPEC     tail the JSONL the sloth-va helper writes\n"
+            "                     (Victron readings): /path/victron.jsonl or\n"
+            "                     file:///path. Checked once a second, from\n"
+            "                     its end at startup; sloth reads the file\n"
+            "                     only (sloth-va is what connects). Refused\n"
+            "                     with --replay.\n"
             "  --ble-rotation-hints\n"
             "                     INTERNAL USE ONLY, off by default: link\n"
             "                     private BLE addresses that may be one\n"
@@ -894,6 +902,7 @@ int main(int argc, char **argv) {
     uint32_t    aprs_freq    = 0;        /* --aprs-freq HZ (#204) */
     int         aprs_silent_h = -1;      /* --aprs-silent-hours N, -1 default */
     const char *rtl433_arg   = NULL;     /* --rtl433 SPEC (#208) */
+    const char *victron_arg  = NULL;     /* --victron SPEC (2026-11-15) */
     const char *replay_arg   = NULL;     /* --replay FILE[,FILE] (#119) */
     long        max_ticks    = 0;        /* --ticks N; 0 = run until quit */
     time_t      session_start = sloth_wall();
@@ -1038,6 +1047,8 @@ int main(int argc, char **argv) {
             aprs_arg = argv[++i];
         } else if (!strcmp(argv[i], "--rtl433") && i + 1 < argc) {
             rtl433_arg = argv[++i];
+        } else if (!strcmp(argv[i], "--victron") && i + 1 < argc) {
+            victron_arg = argv[++i];
         } else if (!strcmp(argv[i], "--aprs-freq") && i + 1 < argc) {
             if (aprs_freq_parse(argv[++i], &aprs_freq) != 0) {
                 fprintf(stderr, "sloth: --aprs-freq %s: want the decoder's "
@@ -1433,6 +1444,25 @@ int main(int argc, char **argv) {
         if (rtl433_spec_parse(rtl433_arg, rpath, sizeof(rpath), NULL, 0) == 0)
             fprintf(stderr, "sloth: --rtl433 tailing %s from its end "
                             "(read-only; no SDR, no network)\n", rpath);
+    }
+    /* --victron: sloth-va's output, as --rtl433. sloth-va is the
+     * component that connects to the devices (ADR 0011); sloth only
+     * reads what it wrote, and creates nothing at the path. */
+    if (victron_arg) {
+        char verr[200];
+        if (replay_arg) {
+            fprintf(stderr, "sloth: --replay reads savefiles, not a live "
+                            "source: --victron does not apply\n");
+            return 2;
+        }
+        if (victron_reader_configure(victron_arg, verr, sizeof(verr)) != 0) {
+            fprintf(stderr, "sloth: --victron %s: %s\n", victron_arg, verr);
+            return 2;
+        }
+        char vpath[256];
+        if (victron_spec_parse(victron_arg, vpath, sizeof(vpath), NULL, 0) == 0)
+            fprintf(stderr, "sloth: --victron tailing %s from its end "
+                            "(read-only; sloth-va's file, no Bluetooth)\n", vpath);
     }
 
     char replay_paths[REPLAY_MAX_FILES][REPLAY_PATH_MAX];
@@ -2019,6 +2049,7 @@ int main(int argc, char **argv) {
     adsb_reader_run();  /* after the drop: the file is read as the run's account */
     aprs_reader_run();  /* after the drop: likewise */
     rtl433_reader_run();  /* after the drop: likewise */
+    victron_reader_run(); /* after the drop: likewise */
     event_wake_init();
     updater_init(check_manifest);
     if (headless) {
@@ -2116,6 +2147,7 @@ int main(int argc, char **argv) {
     adsb_reader_stop();
     aprs_reader_stop();
     rtl433_reader_stop();
+    victron_reader_stop();
 #ifdef WITH_PCAP
     probe_stop();
     capture_stop();

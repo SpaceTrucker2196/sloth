@@ -299,6 +299,10 @@ RF_SRCS += src/aprs.c src/capture/aprs_reader.c
 # device table are pure; the reader tails a local file and needs neither
 # libpcap nor SQLite.
 RF_SRCS += src/rtl433.c src/capture/rtl433_reader.c
+# --victron (2026-11-15): sloth-va's JSONL (docs/wiki/victron.md). The
+# parser and table are pure; the reader tails a local file. Not sloth-va:
+# nothing under src/va/ is named here (tests/test_va.c).
+RF_SRCS += src/victron.c src/capture/victron_reader.c
 # The RF poll stages and the table sloth-rf will pass (#212).
 RF_SRCS += src/poll_rf.c
 
