@@ -83,8 +83,10 @@ Single binary `sloth`. Test binary `sloth_test`.
   (93f8c38, 2026-10-26). The sanitized capture-path run is the one that
   caught a 900-byte stack over-read in a test helper on 2026-10-15 after
   every other local gate was green. Source lists are derived since #115
-  - a new `src/*.c` goes in `CORE_COMMON_SRCS` once, and tests and fuzz
-  harnesses are picked up by wildcard.
+  - a new `src/*.c` goes once in the group it belongs to (`RF_SRCS`,
+  `GNSS_SRCS`, otherwise `CORE_BASE_SRCS`; since #212
+  `CORE_COMMON_SRCS` is their union and an addition to it is
+  discarded), and tests and fuzz harnesses are picked up by wildcard.
 
   What the script does that a loop in a shell did not, each from a run
   that went wrong (its header comment has the dates): one run per tree
@@ -447,7 +449,8 @@ weakening it breaks the rule.
    if the view needs a snapshot; prefer an accessor on the module.
 3. Add the data type / log entry struct.
 4. Create `src/views/<name>.c` + `.h` with `view_<name>_draw` and
-   `view_<name>_key`. Add the `.c` to `CORE_COMMON_SRCS` once.
+   `view_<name>_key`. Add the `.c` once to its source group (`CORE_BASE_SRCS`, or
+   `GNSS_SRCS` / `RF_SRCS` for a view of those families).
 5. If the view has any *view-local* action bound to a letter that the
    global switch already uses, add a claim in `src/view_route.c ::
    view_claims_key()` and cover it in `tests/test_state.c` (#13).
