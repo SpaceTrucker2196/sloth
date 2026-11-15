@@ -1373,6 +1373,8 @@
   VIEWS.push("spectrum");
   // The rtl_433 tab (web/ui/rtl433.js, #208), a tab of its own.
   VIEWS.push("rtl433");
+  // The Camera tab (web/ui/camera.js), a tab of its own.
+  VIEWS.push("camera");
   // The views with a tab, and the drill-downs: the Alerts page (6),
   // an alert's page, the record ticker by type, the sensor's health.
   var NAV = VIEWS.concat(["alerts"]);
@@ -1425,6 +1427,8 @@
     if (v === "spectrum" && window.SlothSpectrum) SlothSpectrum.show();
     // The rtl_433 tab (rtl433.js, its own module): a no-op when not loaded.
     if (v === "rtl433" && window.SlothRtl433) SlothRtl433.show();
+    // The Camera tab (camera.js, its own module): a no-op when not loaded.
+    if (v === "camera" && window.SlothCamera) SlothCamera.show();
     // The Radar view (radar.js, its own module): a no-op when not loaded.
     if (v === "radar" && window.SlothRadar) SlothRadar.show();
     // The Probes view (probes.js, its own module): a no-op when not loaded.
@@ -1523,6 +1527,7 @@
   $("nav-aprs").addEventListener("click", function () { show("aprs"); });
   $("nav-spectrum").addEventListener("click", function () { show("spectrum"); });
   $("nav-rtl433").addEventListener("click", function () { show("rtl433"); });
+  $("nav-camera").addEventListener("click", function () { show("camera"); });
   $("nav-radar").addEventListener("click", function () { show("radar"); });
   $("nav-probes").addEventListener("click", function () { show("probes"); });
   $("nav-fleet").addEventListener("click", function () { show("fleet"); });

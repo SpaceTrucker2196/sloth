@@ -33,6 +33,7 @@
 #include "web_ptr.h"
 #include "web_rollup.h"
 #include "web_server.h"
+#include "web_camera.h"
 #include "web_spectrum.h"
 #include "web_slothdb.h"
 #include "web_sqlbox.h"
@@ -62,6 +63,7 @@ static web_adsb_t     g_adsb;
 static web_aprs_t     g_aprs;
 static web_rtl433_t   g_rtl433;
 static web_spectrum_t g_spectrum;
+static web_camera_t g_camera;
 static web_sys_t      g_sys;
 static web_lure_t     g_lure;
 static web_chain_t    g_chain;
@@ -264,6 +266,10 @@ int main(int argc, char **argv) {
      * one request file (web_spectrum.h); it never drives the radio. */
     web_spectrum_init(&g_spectrum, cfg.spectrum_dir, cfg.spectrum_request);
     g_m4.spectrum = &g_spectrum;
+    /* The Camera tab reads the capture helper's latest.jpg
+     * (web_camera.h); it never drives the camera. */
+    web_camera_init(&g_camera, cfg.camera_dir);
+    g_m4.camera = &g_camera;
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));

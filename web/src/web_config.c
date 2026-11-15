@@ -1,4 +1,5 @@
 #include "web_config.h"
+#include "web_camera.h"
 #include "web_spectrum.h"
 
 #include "web_slothdb.h"
@@ -38,6 +39,7 @@ void web_config_defaults(web_config_t *c) {
     c->peer_gnss_region_km = WEB_FG_REGION_KM_DEF;
     snprintf(c->spectrum_dir, sizeof(c->spectrum_dir), "%s", WEB_SPECTRUM_DIR);
     snprintf(c->spectrum_request, sizeof(c->spectrum_request), "%s", WEB_SPECTRUM_REQUEST);
+    snprintf(c->camera_dir, sizeof(c->camera_dir), "%s", WEB_CAMERA_DIR);
 }
 
 /* A decimal in [lo, hi], digits only. */
@@ -287,7 +289,7 @@ void web_usage(FILE *out) {
         "                [--peer-allow-outside-tailnet]\n"
         "                [--peer-gnss-region-km N] [--my-ssid SSID]...\n"
         "                [--my-bssid MAC]... [--spectrum-dir DIR]\n"
-        "                [--spectrum-request PATH] [--help]\n"
+        "                [--spectrum-request PATH] [--camera-dir DIR] [--help]\n"
         "\n"
         "  --socket SPEC         sloth's data socket to read: unix:PATH or\n"
         "                        tcp:A.B.C.D:PORT / tcp:[V6]:PORT, literal\n"
@@ -375,6 +377,9 @@ void web_usage(FILE *out) {
         "                        the empty file POST /api/spectrum/run\n"
         "                        creates for sloth-sdrsweep.path (default\n"
         "                        " WEB_SPECTRUM_REQUEST ").\n"
+        "  --camera-dir DIR      the camera helper's state directory, read\n"
+        "                        only (default " WEB_CAMERA_DIR "): the\n"
+        "                        Camera tab's latest.jpg.\n"
         "  --web-serve-evidence-pcap[=remote]\n"
         "                        serve evidence pcaps too; announced on\n"
         "                        stderr. With --web-allow-remote it is\n"
@@ -596,6 +601,20 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
                 return -1;
             }
             snprintf(dst, sizeof(c->spectrum_dir), "%s", v);
+        } else if (!strcmp(a, "--camera-dir")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            /* Absolute, so the unit's sandbox names the same directory;
+             * room left for "/latest.jpg". */
+            if (v[0] != '/' || strlen(v) >= sizeof(c->camera_dir) - 32) {
+                fprintf(err, "slothweb: %s: want an absolute path, under %zu bytes\n", a,
+                        sizeof(c->camera_dir) - 32);
+                return -1;
+            }
+            snprintf(c->camera_dir, sizeof(c->camera_dir), "%s", v);
         } else if (!strcmp(a, "--pcap-dir")) {
             if (i + 1 >= argc) {
                 fprintf(err, "slothweb: %s needs an argument\n", a);

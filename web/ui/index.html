@@ -22,6 +22,7 @@
 @include adsb.css
 @include aprs.css
 @include spectrum.css
+@include camera.css
 @include bledev.css
 @include radar.css
 @include allkeys.css
@@ -55,6 +56,7 @@
 @include aprs.js
 @include rtl433.js
 @include spectrum.js
+@include camera.js
 @include bledev.js
 @include radar.js
 @include ssid.js
@@ -93,6 +95,7 @@
       <li><button type="button" class="go" id="nav-fleet">Fleet</button></li>
       <li><button type="button" class="go" id="nav-spectrum">Spectrum</button></li>
       <li><button type="button" class="go" id="nav-rtl433">rtl_433</button></li>
+      <li><button type="button" class="go" id="nav-camera">Camera</button></li>
     </ol></nav>
     <div class="scope">
       <div class="scope-g" id="scope" role="radiogroup" aria-label="capture scope: what the views show, by how it was captured">
@@ -509,6 +512,14 @@
       <div class="hscroll" id="aprs-seen-box"><div class="histrow dhead" id="aprs-seen-thead"></div><div id="aprs-seen-rows"></div></div>
       <div><button type="button" id="aprs-seen-more" hidden>more</button></div>
       <div class="sub" id="aprs-seen-note">every source callsign heard in the window, from sloth.db's aprs_stations (one row per call, kept as long as sloth's --db retention keeps entities): first and last heard, visits (each time it came back after an hour unheard), packets, whether it was ever heard direct, the best level, the last via, position, symbol and comment. Click a row for its history.</div>
+    </section>
+   </div>
+   <div id="v-camera" hidden>
+    <section class="panel">
+      <div class="label">camera <span class="sub" id="cam-meta" role="status"></span></div>
+      <span class="sub" id="cam-err" role="alert"></span>
+      <canvas id="cam-img" role="img" aria-label="the camera's latest still" hidden></canvas>
+      <span class="sub">the latest still a separate capture helper wrote (latest.jpg in slothweb's --camera-dir); refreshed every 5 s while this tab is open. slothweb only reads the file, it never drives the camera.</span>
     </section>
    </div>
    <div id="v-spectrum" hidden>

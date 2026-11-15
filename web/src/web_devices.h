@@ -99,6 +99,9 @@ typedef struct {
     /* The Spectrum tab's state directory and request file
      * (web_spectrum.h); NULL: /api/spectrum is 404. */
     const struct web_spectrum *spectrum;
+    /* The Camera tab's state directory (web_camera.h); NULL:
+     * /api/camera.jpg is 404. */
+    const struct web_camera *camera;
 } web_m4_t;
 
 /* In a route, once its parameters are checked: under check_only, an

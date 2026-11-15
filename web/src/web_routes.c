@@ -31,6 +31,7 @@
 #include "web_radar.h"
 #include "web_allkeys.h"
 #include "web_ssidview.h"
+#include "web_camera.h"
 #include "web_spectrum.h"
 
 static int route_scoped(const web_req_t *rq, const web_health_t *h,
@@ -1119,6 +1120,61 @@ static int route_rtl433(const web_req_t *rq, const web_health_t *h,
     return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
+static int spectrum_json(const web_req_t *rq, int status, const char *body, size_t bl,
+                         const char *extra, char *out, size_t outsz, web_resp_t *r);
+
+/* /api/camera.jpg (web_camera.h): the capture helper's latest still.
+ * GET and HEAD only; a POST is 405 before anything is read. The body is
+ * the file's own heap copy, handed over as r->body_owned; an error is a
+ * small JSON body like the Spectrum routes'. */
+static int route_camera(const web_req_t *rq, const web_health_t *h, char *out,
+                        size_t outsz, web_resp_t *r) {
+    const web_camera_t *cam = h->m4 ? h->m4->camera : NULL;
+    unsigned char *data = NULL;
+    size_t dn = 0;
+    long long mt = 0;
+    int status = 404;
+    if (rq->is_post) {
+        static const char na[] = "{\"error\":\"method_not_allowed\"}\n";
+        return spectrum_json(rq, 405, na, sizeof(na) - 1, "Allow: GET, HEAD\r\n", out, outsz, r);
+    }
+    if (cam && web_camera_get(cam, &data, &dn, &mt, &status) != 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    if (status != 200) {
+        const char *body = status == 404 ? "{\"error\":\"no_image\"}\n"
+                                         : "{\"error\":\"invalid\"}\n";
+        return spectrum_json(rq, status, body, strlen(body), "", out, outsz, r);
+    }
+    long long age = h->wall_s - mt;
+    if (age < 0) age = 0;
+    if (fit(snprintf(out, outsz,
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: image/jpeg\r\n"
+        "Content-Length: %zu\r\n"
+        "X-Sloth-Captured: %lld\r\n"
+        "X-Sloth-Age: %lld\r\n"
+        "Cache-Control: no-store\r\n"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", dn, mt, age), outsz, &r->out_len) != 0) {
+        free(data);
+        return -1;
+    }
+    r->status = 200;
+    if (rq->is_head) {
+        free(data);
+        return 0;
+    }
+    r->body = data;
+    r->body_owned = data;
+    r->body_len = dn;
+    return 0;
+}
+
 /* /api/spectrum and /api/spectrum/run (web_spectrum.h): the latest
  * sweep, and the request for another. The read path answers GET and
  * HEAD and the write path POST only: a GET can never write. A POST the
@@ -2068,6 +2124,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_rtl433(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/spectrum"))
             return route_spectrum(rq, h, 0, out, outsz, r);
+        if (!strcmp(rq->path, "/api/camera.jpg"))
+            return route_camera(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/spectrum/run"))
             return route_spectrum(rq, h, 1, out, outsz, r);
         if (!strcmp(rq->path, "/api/sys"))
