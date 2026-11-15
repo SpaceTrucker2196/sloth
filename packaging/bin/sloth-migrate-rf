@@ -1,0 +1,470 @@
+#!/bin/sh
+# sloth-migrate-rf — move the RF decoders' flags from the Wi-Fi sensor's
+# defaults file to sloth-rf's (#215, ADR 0010).
+#
+# The owner runs this as root, once, on a host whose Wi-Fi sensor still
+# reads the decoders, after `make install` and `make install-service`
+# have placed sloth-rf and sloth-rf.service:
+#
+#   sudo sloth-migrate-rf            # dry run: read the before and after
+#   sudo sloth-migrate-rf --apply    # then write them
+#
+# Options (any order):
+#
+#   --apply          write the two files. Without it nothing is written.
+#   --dry-run, -n    the default, spelled out
+#   --force          merge into an /etc/default/sloth-rf that already
+#                    carries different RF flags; where both files name a
+#                    flag, /etc/default/sloth's value wins
+#   -h, --help       this text
+#
+# What it does to SLOTH_ARGS in /etc/default/sloth:
+#
+#   MOVED to SLOTH_RF_ARGS in /etc/default/sloth-rf, with their values,
+#   as "--flag value" or "--flag=value", whichever the file has:
+#     --adsb  --aprs  --aprs-freq  --aprs-silent-hours  --rtl433
+#   COPIED, so both daemons have them (both read GNSS: owner ruling of
+#   2026-11-15, ADR 0010):
+#     --gps  --gps-allow-remote  --gps-baud  --location
+#   Every other flag stays where it is, and flags /etc/default/sloth-rf
+#   already has are kept.
+#
+# Rules:
+#
+#   - Both files are backed up first, beside themselves, as
+#     <file>.bak.<YYYYMMDD-HHMMSS>.
+#   - Each file is written to a temporary beside it and renamed over the
+#     original, sloth-rf's first. If anything fails, both files are left
+#     as they were.
+#   - A second run finds nothing to do, says so, and writes nothing.
+#   - Refused: --gps naming a serial device (a path under /dev). After
+#     the split both daemons read GNSS and a serial device opens once;
+#     the fix is gpsd, which holds the receiver and serves both.
+#   - Refused unless --force: an /etc/default/sloth-rf that already has
+#     one of these flags with another value, or an RF decoder flag that
+#     /etc/default/sloth does not have while it has others to move.
+#   - Refused: quoting inside either value (one pair of quotes around
+#     the whole value is kept), a flag given twice, a flag with no
+#     value, two SLOTH_ARGS= lines in one file.
+#   - Refused under --apply: no sloth-rf binary or no sloth-rf.service
+#     installed. Moving the flags to a daemon that is not there would
+#     stop the decoders' records at the next restart.
+#
+# It never starts, stops or restarts a service. It prints the commands
+# for the operator to run.
+#
+# Every path is an environment variable (ROOT prefixes each host path)
+# so tests/deploy/test_migrate_rf.sh can run it unprivileged against a
+# scratch root. Exit status: 0 migrated, already migrated, nothing to
+# migrate, or a dry run; 1 failed (both files as they were); 2 refused
+# (nothing changed). Recipe: docs/wiki/deployment.md §10.4.
+set -u
+
+ME=sloth-migrate-rf
+HERE=$(cd "$(dirname "$0")" && pwd)
+
+# ── Paths (ROOT prefixes every host path the tool reads or writes) ───────
+ROOT=${ROOT:-}
+PREFIX=${PREFIX:-/usr/local}
+SLOTH_SRC=${SLOTH_SRC:-$(cd "$HERE/../.." && pwd)}
+DEFAULTS=${DEFAULTS:-$ROOT/etc/default/sloth}
+RF_DEFAULTS=${RF_DEFAULTS:-$ROOT/etc/default/sloth-rf}
+# The template is read only when /etc/default/sloth-rf does not exist.
+# Run from /usr/local/sbin there is no checkout beside the tool; a short
+# file is written instead.
+RF_DEFAULTS_TEMPLATE=${RF_DEFAULTS_TEMPLATE:-$SLOTH_SRC/packaging/default/sloth-rf}
+RF_BIN=${RF_BIN:-$ROOT$PREFIX/bin/sloth-rf}
+RF_UNIT=${RF_UNIT:-$ROOT/etc/systemd/system/sloth-rf.service}
+STAMP=${STAMP:-$(date +%Y%m%d-%H%M%S)}
+
+# ── Commands ─────────────────────────────────────────────────────────────
+MV=${MV:-mv}
+CP=${CP:-cp}
+
+APPLY=0
+FORCE=0
+for a in "$@"; do
+    case "$a" in
+        --apply) APPLY=1 ;;
+        --dry-run|-n) APPLY=0 ;;
+        --force) FORCE=1 ;;
+        -h|--help)
+            # The header comment, however long it grows.
+            awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
+            exit 0 ;;
+        *) echo "$ME: unknown argument '$a' (use --apply, --dry-run, --force, or nothing)" >&2
+           echo "$ME: nothing was changed" >&2; exit 2 ;;
+    esac
+done
+
+say()    { echo "$ME: $*"; }
+refuse() { echo "$ME: REFUSED: $*" >&2; echo "$ME: nothing was changed" >&2; exit 2; }
+
+# ── Reading a defaults file ──────────────────────────────────────────────
+# Every value of VAR= in FILE, one per line. Comment lines do not match:
+# the name has to start the line, after blanks only.
+read_var() {   # read_var FILE VAR
+    RV_VAR=$2 awk '
+        BEGIN { re = "^[ \t]*" ENVIRON["RV_VAR"] "=" }
+        $0 ~ re { sub(re, ""); sub(/[ \t]+$/, ""); print }
+    ' "$1"
+}
+
+# systemd strips one pair of quotes around an EnvironmentFile value and
+# the unit then splits $VAR on whitespace, so "--a 1 --b 2" in quotes is
+# what an operator may well have written. Anything else with a quote or
+# a backslash in it is not something this tool can split the way
+# systemd would. Sets UQ_VAL and UQ_Q (the quote to write back).
+unquote() {
+    UQ_VAL=$1
+    UQ_Q=
+    case "$UQ_VAL" in
+        \"*\") UQ_Q=\"; UQ_VAL=${UQ_VAL#\"}; UQ_VAL=${UQ_VAL%\"} ;;
+        \'*\') UQ_Q=\'; UQ_VAL=${UQ_VAL#\'}; UQ_VAL=${UQ_VAL%\'} ;;
+    esac
+    case "$UQ_VAL" in
+        *\"*|*\'*|*\\*) return 1 ;;
+    esac
+    return 0
+}
+
+# FILE with its VAR= line carrying VALUE (appended when it has none).
+rewrite_var() {   # rewrite_var FILE VAR VALUE QUOTE
+    RW_VAR=$2 RW_VAL=$3 RW_Q=$4 awk '
+        BEGIN {
+            re = "^[ \t]*" ENVIRON["RW_VAR"] "="
+            line = ENVIRON["RW_VAR"] "=" ENVIRON["RW_Q"] ENVIRON["RW_VAL"] ENVIRON["RW_Q"]
+        }
+        $0 ~ re && !done { print line; done = 1; next }
+        { print }
+        END { if (!done) print line }
+    ' "$1"
+}
+
+# A new /etc/default/sloth-rf: the shipped template with its
+# SLOTH_RF_ARGS= line filled in, as sloth-migrate-sensor renders
+# /etc/default/sloth.
+render_rf_defaults() {
+    if [ -r "$RF_DEFAULTS_TEMPLATE" ]; then
+        MR_ARGS=$NEW_RF MR_FROM=$DEFAULTS MR_STAMP=$STAMP awk '
+            NR == 1 {
+                print "# Written by sloth-migrate-rf (" ENVIRON["MR_STAMP"] ") from the flags in"
+                print "# " ENVIRON["MR_FROM"] " (#215). The template is packaging/default/sloth-rf."
+            }
+            /^SLOTH_RF_ARGS=/ { print "SLOTH_RF_ARGS=" ENVIRON["MR_ARGS"]; done = 1; next }
+            { print }
+            END { if (!done) print "SLOTH_RF_ARGS=" ENVIRON["MR_ARGS"] }
+        ' "$RF_DEFAULTS_TEMPLATE"
+    else
+        echo "# /etc/default/sloth-rf — site configuration for sloth-rf.service (#215)."
+        echo "# Written by sloth-migrate-rf ($STAMP) from the flags in"
+        echo "# $DEFAULTS. Flags: docs/wiki/deployment.md §10."
+        echo "SLOTH_RF_ARGS=$NEW_RF"
+    fi
+}
+
+# ── The plan ─────────────────────────────────────────────────────────────
+# One pass over both argument lists. Output is one "KEY<TAB>text" line
+# per fact: ERR (cannot be split), SERIAL (the device), CONFLICT, MOVED,
+# COPIED, OLD_SLOTH / OLD_RF (the lists as read, single-spaced),
+# SLOTH / RF (the lists to write), INET (sloth-rf will need AF_INET),
+# HAD (sloth-rf's file already had one of these flags).
+plan() {
+    MR_SLOTH=$S_ARGS MR_RF=$R_ARGS MR_SNAME=$DEFAULTS MR_RNAME=$RF_DEFAULTS awk '
+        function kind(f) {
+            if (f == "--adsb" || f == "--aprs" || f == "--aprs-freq" ||
+                f == "--aprs-silent-hours" || f == "--rtl433") return "move"
+            if (f == "--gps" || f == "--gps-baud" || f == "--location") return "copy"
+            if (f == "--gps-allow-remote") return "bool"
+            return ""
+        }
+        function err(m) { print "ERR\t" m; bad = 1 }
+        # K kind, F flag, V value, T the text as written, AT where a flag is.
+        function parse(w, s, where,    tok, n, i, m, f, k, v, t, eq, h) {
+            n = split(s, tok, " ")
+            m = 0
+            for (i = 1; i <= n; i++) {
+                f = tok[i]; t = f; v = ""
+                eq = index(f, "=")
+                h = (eq > 1) ? kind(substr(f, 1, eq - 1)) : ""
+                if (h == "move" || h == "copy") {
+                    k = h; v = substr(f, eq + 1); f = substr(f, 1, eq - 1)
+                    if (v == "") { err(f "= in " where " has no value"); continue }
+                } else if (kind(f) == "move" || kind(f) == "copy") {
+                    k = kind(f)
+                    if (i == n) { err(f " in " where " has no value"); continue }
+                    v = tok[++i]; t = f " " v
+                } else if (kind(f) == "bool") {
+                    k = "copy"
+                } else {
+                    k = "other"; f = ""
+                }
+                m++
+                K[w, m] = k; F[w, m] = f; V[w, m] = v; T[w, m] = t
+                if (k != "other") {
+                    if ((w, f) in AT) err(f " is given twice in " where)
+                    AT[w, f] = m
+                }
+            }
+            N[w] = m
+        }
+        function joined(w,    i, out) {
+            out = ""
+            for (i = 1; i <= N[w]; i++) out = out (out == "" ? "" : " ") T[w, i]
+            return out
+        }
+        BEGIN {
+            sname = ENVIRON["MR_SNAME"]; rname = ENVIRON["MR_RNAME"]
+            parse("s", ENVIRON["MR_SLOTH"], sname)
+            parse("r", ENVIRON["MR_RF"], rname)
+            if (bad) exit
+            print "OLD_SLOTH\t" joined("s")
+            print "OLD_RF\t" joined("r")
+
+            nmove = 0
+            for (i = 1; i <= N["s"]; i++) if (K["s", i] == "move") nmove++
+            if (("s", "--gps") in AT) {
+                v = V["s", AT["s", "--gps"]]
+                if (v ~ /^\/dev\//) print "SERIAL\t" v
+            }
+
+            for (i = 1; i <= N["r"]; i++) {
+                k = K["r", i]; f = F["r", i]
+                if (k == "other") continue
+                print "HAD\t" f
+                if (("s", f) in AT) {
+                    j = AT["s", f]
+                    if (V["s", j] != V["r", i])
+                        print "CONFLICT\t" rname " has \"" T["r", i] "\", " sname " has \"" T["s", j] "\""
+                } else if (k == "move" && nmove > 0) {
+                    print "CONFLICT\t" rname " has \"" T["r", i] "\", which " sname " does not"
+                }
+            }
+
+            out = ""
+            for (i = 1; i <= N["s"]; i++) {
+                if (K["s", i] == "move") { print "MOVED\t" T["s", i]; continue }
+                out = out (out == "" ? "" : " ") T["s", i]
+            }
+            print "SLOTH\t" out
+
+            out = ""
+            for (i = 1; i <= N["r"]; i++) {
+                t = T["r", i]; f = F["r", i]
+                if (K["r", i] != "other" && (("s", f) in AT)) {
+                    j = AT["s", f]
+                    if (V["s", j] != V["r", i]) {
+                        t = T["s", j]
+                        if (K["s", j] == "copy") print "COPIED\t" t
+                    }
+                }
+                out = out (out == "" ? "" : " ") t
+            }
+            for (i = 1; i <= N["s"]; i++) {
+                if (K["s", i] == "other") continue
+                if (("r", F["s", i]) in AT) continue
+                out = out (out == "" ? "" : " ") T["s", i]
+                if (K["s", i] == "copy") print "COPIED\t" T["s", i]
+            }
+            print "RF\t" out
+
+            parse("x", out, "the result")
+            if (("x", "--gps") in AT && V["x", AT["x", "--gps"]] ~ /^gpsd:/) print "INET\t--gps gpsd://"
+            if (("x", "--adsb") in AT && V["x", AT["x", "--adsb"]] ~ /^(sbs|beast):/)
+                print "INET\t--adsb " V["x", AT["x", "--adsb"]]
+        }
+    '
+}
+plan_get() {   # every text of KEY, one per line
+    printf '%s\n' "$PLAN" | PG_KEY=$1 awk -F '\t' '$1 == ENVIRON["PG_KEY"] { print substr($0, length($1) + 2) }'
+}
+
+# ── Read ─────────────────────────────────────────────────────────────────
+[ -f "$DEFAULTS" ] || refuse "no $DEFAULTS: there is no Wi-Fi sensor configuration to migrate from"
+[ -r "$DEFAULTS" ] || refuse "cannot read $DEFAULTS"
+[ "$(read_var "$DEFAULTS" SLOTH_ARGS | wc -l)" -le 1 ] ||
+    refuse "$DEFAULTS has more than one SLOTH_ARGS= line; systemd takes the last, and this tool will not guess: leave one"
+unquote "$(read_var "$DEFAULTS" SLOTH_ARGS)" ||
+    refuse "SLOTH_ARGS in $DEFAULTS has quoting or a backslash inside the value; this tool cannot split it as systemd would"
+S_ARGS=$UQ_VAL
+S_Q=$UQ_Q
+
+RF_EXISTS=0
+R_ARGS=
+R_Q=
+if [ -e "$RF_DEFAULTS" ]; then
+    RF_EXISTS=1
+    [ -f "$RF_DEFAULTS" ] || refuse "$RF_DEFAULTS is not a regular file"
+    [ -r "$RF_DEFAULTS" ] || refuse "cannot read $RF_DEFAULTS"
+    [ "$(read_var "$RF_DEFAULTS" SLOTH_RF_ARGS | wc -l)" -le 1 ] ||
+        refuse "$RF_DEFAULTS has more than one SLOTH_RF_ARGS= line; leave one"
+    unquote "$(read_var "$RF_DEFAULTS" SLOTH_RF_ARGS)" ||
+        refuse "SLOTH_RF_ARGS in $RF_DEFAULTS has quoting or a backslash inside the value; this tool cannot split it as systemd would"
+    R_ARGS=$UQ_VAL
+    R_Q=$UQ_Q
+fi
+
+PLAN=$(plan) || { echo "$ME: FAILED: could not read the flags (awk)" >&2; exit 1; }
+
+# ── Refusals ─────────────────────────────────────────────────────────────
+e=$(plan_get ERR)
+[ -z "$e" ] || refuse "$(printf '%s' "$e" | tr '\n' ';' | sed 's/;/; /g')"
+
+OLD_S=$(plan_get OLD_SLOTH)
+OLD_RF=$(plan_get OLD_RF)
+NEW_S=$(plan_get SLOTH)
+NEW_RF=$(plan_get RF)
+
+dev=$(plan_get SERIAL)
+[ -z "$dev" ] || refuse "--gps in $DEFAULTS names the serial device $dev. After the split both daemons read GNSS, and a serial device opens once, so sloth-rf could not have it too. The fix is gpsd: let gpsd hold $dev, change SLOTH_ARGS to --gps gpsd://127.0.0.1:2947 (dropping --gps-baud), give sloth-sensor.service the gpsd block of its gps.conf drop-in, check the sensor still has a fix, then run this again (docs/wiki/deployment.md §10.4)"
+
+c=$(plan_get CONFLICT)
+if [ -n "$c" ]; then
+    if [ "$FORCE" -eq 1 ]; then
+        say "--force: merging over what $RF_DEFAULTS has; $DEFAULTS wins where both name a flag"
+        printf '%s\n' "$c" | sed "s/^/$ME:   /"
+    else
+        echo "$ME: $RF_DEFAULTS already carries different RF flags:" >&2
+        printf '%s\n' "$c" | sed "s/^/$ME:   /" >&2
+        refuse "edit one of the two files so they agree, or run again with --force to merge ($DEFAULTS wins where both name a flag)"
+    fi
+fi
+
+# ── Nothing to do ────────────────────────────────────────────────────────
+if [ "$NEW_S" = "$OLD_S" ] && [ "$NEW_RF" = "$OLD_RF" ]; then
+    if [ -n "$(plan_get HAD)" ]; then
+        say "already migrated: SLOTH_ARGS in $DEFAULTS has no RF decoder flag left, and $RF_DEFAULTS already has the GNSS flags it would copy"
+    else
+        say "nothing to migrate: SLOTH_ARGS in $DEFAULTS has no RF decoder flag and no GNSS flag"
+    fi
+    say "nothing to do; nothing was changed"
+    exit 0
+fi
+
+# ── Before and after ─────────────────────────────────────────────────────
+say "$DEFAULTS"
+echo "  before: SLOTH_ARGS=$S_Q$OLD_S$S_Q"
+echo "  after:  SLOTH_ARGS=$S_Q$NEW_S$S_Q"
+if [ "$RF_EXISTS" -eq 1 ]; then
+    say "$RF_DEFAULTS"
+    echo "  before: SLOTH_RF_ARGS=$R_Q$OLD_RF$R_Q"
+else
+    say "$RF_DEFAULTS (not there yet; written from the template)"
+    echo "  before: (no file)"
+fi
+echo "  after:  SLOTH_RF_ARGS=$R_Q$NEW_RF$R_Q"
+m=$(plan_get MOVED)
+[ -z "$m" ] || { say "moved to sloth-rf:"; printf '%s\n' "$m" | sed 's/^/  /'; }
+m=$(plan_get COPIED)
+[ -z "$m" ] || { say "copied to sloth-rf (both daemons read GNSS):"; printf '%s\n' "$m" | sed 's/^/  /'; }
+
+# Moving the flags to a daemon that is not installed stops the decoders'
+# records at the next restart of the sensor.
+MISSING=
+[ -x "$RF_BIN" ] || MISSING="no executable $RF_BIN (make, then sudo make install)"
+[ -f "$RF_UNIT" ] || MISSING="${MISSING:+$MISSING; }no $RF_UNIT (sudo make install-service)"
+
+if [ "$APPLY" -eq 0 ]; then
+    [ -z "$MISSING" ] || say "note: --apply would REFUSE: $MISSING"
+    say "dry run; nothing was changed. Run again with --apply to write both files."
+    exit 0
+fi
+[ -z "$MISSING" ] || refuse "$MISSING"
+
+# ── Write ────────────────────────────────────────────────────────────────
+S_TMP=$DEFAULTS.tmp.$$
+R_TMP=$RF_DEFAULTS.tmp.$$
+S_BAK=$DEFAULTS.bak.$STAMP
+R_BAK=$RF_DEFAULTS.bak.$STAMP
+MADE_S_BAK=0
+MADE_R_BAK=0
+
+# Until the first rename nothing but this tool's own files exists to
+# undo: the temporaries and the backups it made.
+undo_prepared() {
+    rm -f "$S_TMP" "$R_TMP"
+    [ "$MADE_S_BAK" -eq 0 ] || rm -f "$S_BAK"
+    [ "$MADE_R_BAK" -eq 0 ] || rm -f "$R_BAK"
+}
+fail() {
+    echo "$ME: FAILED: $*" >&2
+    undo_prepared
+    echo "$ME: both files are as they were; nothing was changed" >&2
+    exit 1
+}
+trap 'fail "interrupted"' HUP INT TERM
+
+[ ! -e "$S_BAK" ] || refuse "$S_BAK already exists; a backup is never overwritten (wait a second and run again)"
+[ ! -e "$R_BAK" ] || refuse "$R_BAK already exists; a backup is never overwritten (wait a second and run again)"
+
+# The temporaries, complete and checked, before any backup or rename.
+# cp -p first so the rewritten sensor file keeps its owner and mode.
+"$CP" -p "$DEFAULTS" "$S_TMP" 2>/dev/null || fail "cannot write $S_TMP"
+rewrite_var "$DEFAULTS" SLOTH_ARGS "$NEW_S" "$S_Q" > "$S_TMP" || fail "cannot write $S_TMP"
+if [ "$RF_EXISTS" -eq 1 ]; then
+    "$CP" -p "$RF_DEFAULTS" "$R_TMP" 2>/dev/null || fail "cannot write $R_TMP"
+    rewrite_var "$RF_DEFAULTS" SLOTH_RF_ARGS "$NEW_RF" "$R_Q" > "$R_TMP" || fail "cannot write $R_TMP"
+else
+    { render_rf_defaults > "$R_TMP" && chmod 644 "$R_TMP"; } 2>/dev/null || fail "cannot write $R_TMP"
+fi
+[ "$(read_var "$S_TMP" SLOTH_ARGS)" = "$S_Q$NEW_S$S_Q" ] || fail "$S_TMP does not read back as written"
+[ "$(read_var "$R_TMP" SLOTH_RF_ARGS)" = "$R_Q$NEW_RF$R_Q" ] || fail "$R_TMP does not read back as written"
+
+"$CP" -p "$DEFAULTS" "$S_BAK" || fail "cannot back up $DEFAULTS to $S_BAK"
+MADE_S_BAK=1
+if [ "$RF_EXISTS" -eq 1 ]; then
+    "$CP" -p "$RF_DEFAULTS" "$R_BAK" || fail "cannot back up $RF_DEFAULTS to $R_BAK"
+    MADE_R_BAK=1
+fi
+cmp -s "$DEFAULTS" "$S_BAK" || fail "$S_BAK is not a copy of $DEFAULTS"
+[ "$RF_EXISTS" -eq 0 ] || cmp -s "$RF_DEFAULTS" "$R_BAK" || fail "$R_BAK is not a copy of $RF_DEFAULTS"
+
+# The two renames. sloth-rf's first: until the second one the flags are
+# in both files, which loses nothing. A signal between them is held off;
+# a second rename that fails puts sloth-rf's file back.
+trap '' HUP INT TERM
+"$MV" "$R_TMP" "$RF_DEFAULTS" || fail "cannot rename $R_TMP over $RF_DEFAULTS"
+if ! "$MV" "$S_TMP" "$DEFAULTS"; then
+    echo "$ME: FAILED: cannot rename $S_TMP over $DEFAULTS" >&2
+    if [ "$RF_EXISTS" -eq 1 ]; then
+        if ! { "$CP" -p "$R_BAK" "$R_TMP" && "$MV" "$R_TMP" "$RF_DEFAULTS"; }; then
+            echo "$ME: could NOT put $RF_DEFAULTS back; its previous content is $R_BAK" >&2
+            rm -f "$S_TMP" "$R_TMP"
+            exit 1
+        fi
+    else
+        if ! rm -f "$RF_DEFAULTS"; then
+            echo "$ME: could NOT remove the new $RF_DEFAULTS; remove it by hand" >&2
+            rm -f "$S_TMP"
+            exit 1
+        fi
+    fi
+    undo_prepared
+    echo "$ME: both files are as they were; nothing was changed" >&2
+    exit 1
+fi
+trap - HUP INT TERM
+
+say "backup: $S_BAK"
+[ "$RF_EXISTS" -eq 0 ] || say "backup: $R_BAK"
+say "wrote $RF_DEFAULTS and $DEFAULTS"
+say "no service was started or restarted. Next, as root:"
+inet=$(plan_get INET)
+if [ -n "$inet" ]; then
+    echo "  # sloth-rf.service allows AF_UNIX only, and these read a TCP socket:"
+    printf '%s\n' "$inet" | sed 's/^/  #   /'
+    echo "  # so, unless it is there already, enable the gpsd block of its drop-in"
+    echo "  # (the whole block, its [Service] line included):"
+    echo "  install -D -m 644 $PREFIX/share/sloth/sloth-rf-gps.conf /etc/systemd/system/sloth-rf.service.d/gps.conf"
+    echo "  sudoedit /etc/systemd/system/sloth-rf.service.d/gps.conf"
+fi
+echo "  systemctl daemon-reload"
+echo "  systemctl enable --now sloth-rf.service"
+echo "  systemctl restart sloth-sensor.service"
+echo "  systemctl restart slothweb.service"
+if [ "$RF_EXISTS" -eq 1 ]; then
+    say "to undo: copy each backup back over its file, then restart the same units"
+else
+    say "to undo: copy the backup back over $DEFAULTS, empty SLOTH_RF_ARGS in $RF_DEFAULTS, then restart the same units"
+fi
+exit 0

@@ -1,0 +1,57 @@
+# /etc/default/sloth-rf — site configuration for sloth-rf.service (#215).
+#
+# Read by systemd as an EnvironmentFile: KEY=value, one per line, no
+# shell expansion. `make install-service` installs this file only when
+# there is none, so an edited copy is never replaced. A host whose
+# decoders are still read by the Wi-Fi sensor gets its flags moved here
+# by `sloth-migrate-rf --apply`, from /etc/default/sloth
+# (docs/wiki/deployment.md §10.4).
+#
+# The unit fixes two paths (--db /var/lib/sloth-rf/sloth-rf.db and
+# --data-socket unix:/run/sloth-rf/sloth-rf.sock); the sandbox admits no
+# others, so they do not go here.
+#
+# Extra arguments appended to ExecStart, split on whitespace. These are
+# the inputs: with none of them sloth-rf has nothing to read.
+#   --adsb PATH           a local readsb's aircraft.json (wiki: adsb), e.g.
+#                         --adsb /run/readsb/aircraft.json. The unit
+#                         admits /run/readsb read-only; the sloth user
+#                         still needs the file's mode or group to allow
+#                         the read.
+#   --adsb sbs://127.0.0.1:30003
+#   --adsb beast://127.0.0.1:30005
+#                         the decoder's SBS or Beast output instead
+#                         (loopback only, read-only). These need AF_INET:
+#                         the gpsd block of
+#                         /usr/local/share/sloth/sloth-rf-gps.conf.
+#   --aprs PATH           the packet log a local Dire Wolf writes
+#                         (direwolf -L FILE; wiki: aprs), e.g.
+#                         --aprs /var/lib/direwolf/packets.log
+#   --aprs-freq HZ        the frequency that decoder is configured for,
+#                         e.g. --aprs-freq 144390000
+#   --aprs-silent-hours N report the decoder silent after N hours with
+#                         no packet (default 6)
+#   --rtl433 PATH         the JSON event log a local rtl_433 writes
+#                         (rtl_433 -F json:FILE; wiki: rtl433), e.g.
+#                         --rtl433 /var/lib/rtl_433/events.json
+#   --gps gpsd://127.0.0.1:2947
+#                         the GNSS receiver, through gpsd (needs the same
+#                         AF_INET drop-in). On a host that also runs the
+#                         Wi-Fi sensor with --gps, both must use gpsd: a
+#                         serial receiver opens once.
+#   --gps /dev/ttyACM0    a serial NMEA receiver read directly, only
+#                         where sloth-rf is its one reader (the serial
+#                         block of the same drop-in)
+#   --gps-baud N          serial speed for --gps /dev/... (default 9600)
+#   --gps-allow-remote    permit a gpsd that is not on loopback
+#   --location LAT,LON[,ALT]
+#                         a fixed position instead of, or behind, --gps:
+#                         WGS84 decimal degrees and metres
+#   --jsonl FILE          also write the records to a file. Off by
+#                         default; /var/lib/sloth-rf is the only place
+#                         the sandbox lets the daemon write.
+#   --strict              the fail-closed profile (wiki: cli-reference)
+#   --site-label LABEL    name stamped on what this daemon reports
+# Example:
+#   SLOTH_RF_ARGS=--adsb /run/readsb/aircraft.json --gps gpsd://127.0.0.1:2947 --site-label attic-sensor
+SLOTH_RF_ARGS=

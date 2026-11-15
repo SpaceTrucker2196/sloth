@@ -30,6 +30,13 @@ Documentation=https://github.com/SpaceTrucker2196/sloth/wiki/deployment
 # which keeps serving the history and says the stream is retrying.
 After=sloth-sensor.service
 Wants=sloth-sensor.service
+# The RF daemon the same way (#215, ADR 0010): ordered after it and
+# pulling it in where it is installed and enabled, never Requires=.
+# Wants= on a unit that is not installed is ignored, so this unit starts
+# unchanged on a host with no sloth-rf.service; a stop or a crash of
+# sloth-rf leaves the UI up.
+After=sloth-rf.service
+Wants=sloth-rf.service
 
 [Service]
 Type=simple
@@ -68,9 +75,22 @@ RuntimeDirectoryMode=0711
 # install` puts under share/sloth, read-only data "follow recommended"
 # reads (absent there: "no recommendation yet"). $SLOTHWEB_ARGS carries
 # the bind and the allowed peers (packaging/default/slothweb).
+#
+# --rf-socket and --rf-db (#214) are sloth-rf's socket and database,
+# fixed here for the same reason. Assumed of slothweb, from #214 ("the
+# same checks as --socket / --sloth-db"): a socket that is not there is
+# retried, and a database that is not there is reported missing, as the
+# Wi-Fi sensor's are, so slothweb starts and serves on a host where
+# sloth-rf is not installed or not running. With --rf-socket given, the
+# ADS-B, APRS, rtl_433 and GNSS pages are fed from sloth-rf alone
+# (#214), so a host whose decoders are still on the Wi-Fi sensor's
+# command line moves them with sloth-migrate-rf in the same sitting as
+# this unit is installed (docs/wiki/deployment.md §10.4).
 ExecStart=/usr/local/bin/slothweb \
     --socket unix:/run/sloth/sloth.sock \
     --sloth-db /var/lib/sloth/sloth.db \
+    --rf-socket unix:/run/sloth-rf/sloth-rf.sock \
+    --rf-db /var/lib/sloth-rf/sloth-rf.db \
     --store /var/lib/slothweb/slothweb.db \
     --web-assessments /usr/local/share/sloth/alert-assessments \
     $SLOTHWEB_ARGS
@@ -88,8 +108,11 @@ NoNewPrivileges=true
 # where the sensor has never started the directory is not there yet, and
 # without it the namespace setup fails (226/NAMESPACE) instead of
 # slothweb starting and saying sloth.db is missing.
+# /var/lib/sloth-rf the same, with the same '-': it does not exist until
+# sloth-rf.service has started once.
 ProtectSystem=strict
 ReadOnlyPaths=-/var/lib/sloth
+ReadOnlyPaths=-/var/lib/sloth-rf
 ProtectHome=yes
 PrivateTmp=true
 PrivateDevices=true

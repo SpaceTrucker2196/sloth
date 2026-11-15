@@ -549,7 +549,7 @@ web_preflight() {
     while [ $# -gt 0 ]; do
         f=$1; shift
         case "$f" in
-            --socket|--sloth-db|--store)
+            --socket|--sloth-db|--store|--rf-socket|--rf-db)
                 refuse "SLOTHWEB_ARGS in $wd gives $f; slothweb.service fixes it (its sandbox admits no other path) and a second one would win: remove it" ;;
             --web-bind)
                 [ $# -ge 1 ] || refuse "--web-bind in $wd needs a value"

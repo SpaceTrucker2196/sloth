@@ -44,6 +44,10 @@
 #define UF_PATH_WEB_DEFAULTS "packaging/default/slothweb"
 #define UF_PATH_BLE_UNIT "packaging/systemd/sloth-ble-scan.service"
 #define UF_PATH_BT_DROPIN "packaging/systemd/sloth-sensor.service.d/bt-monitor.conf"
+#define UF_PATH_RF_UNIT  "packaging/systemd/sloth-rf.service"
+#define UF_PATH_RF_DEFAULTS "packaging/default/sloth-rf"
+#define UF_PATH_RF_DROPIN "packaging/systemd/sloth-rf.service.d/gps.conf"
+#define UF_PATH_RF_MIGRATE "packaging/bin/sloth-migrate-rf"
 #define UF_MAX_LINES     512
 
 static char *uf_slurp(const char *path) {
@@ -651,6 +655,10 @@ static void test_defaults_file_is_an_environment_file(void) {
     free(buf);
 }
 
+/* Defined with the sloth-ble-scan tests below; slothweb's unit needs it
+ * too since it names two daemons on separate After= / Wants= lines. */
+static int uf_any_has(char *lines[], int n, const char *key, const char *tok);
+
 /* ── slothweb.service (#153) ──
  *
  * The web UI's unit: the same account as the sensor (it reads the
@@ -788,6 +796,42 @@ static void test_web_unit_sandbox(void) {
         }
     }
     ASSERT(!uf_has_token(uf_value(lines, n, "StateDirectory"), "sloth"));
+
+    /* sloth-rf's directory (#215) the same way: read-only, with the
+     * '-' (it does not exist until sloth-rf.service has started once),
+     * never writable, never this unit's state or runtime directory.
+     * ReadOnlyPaths= is given on more than one line, so every line is
+     * read. */
+    int rf_ro = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (strncmp(l, "ReadOnlyPaths=", 14) == 0) {
+            if (uf_has_token(l + 14, "-/var/lib/sloth-rf")) rf_ro = 1;
+            /* Without the '-' a host with no sloth-rf fails 226/NAMESPACE. */
+            ASSERT(!uf_has_token(l + 14, "/var/lib/sloth-rf"));
+        }
+        if (strncmp(l, "ReadWritePaths=", 15) == 0)
+            ASSERT(!uf_path_under(l + 15, "/var/lib/sloth-rf"));
+        if (strncmp(l, "StateDirectory=", 15) == 0 ||
+            strncmp(l, "RuntimeDirectory=", 17) == 0)
+            ASSERT(!uf_has_token(strchr(l, '=') + 1, "sloth-rf"));
+    }
+    ASSERT(rf_ro);
+
+    /* Ordered after sloth-rf and pulling it in, as for the sensor, and
+     * nothing stronger towards either daemon: Requires=, BindsTo=,
+     * Requisite= or PartOf= would stop or refuse the UI when a daemon
+     * stops, or is not installed at all. */
+    ASSERT(uf_any_has(lines, n, "After", "sloth-rf.service"));
+    ASSERT(uf_any_has(lines, n, "Wants", "sloth-rf.service"));
+    static const char *const strong[] = { "Requires", "BindsTo", "Requisite", "PartOf" };
+    for (size_t i = 0; i < sizeof(strong) / sizeof(strong[0]); i++) {
+        if (uf_value(lines, n, strong[i]))
+            fprintf(stderr, "    slothweb unit: %s=%s\n", strong[i],
+                    uf_value(lines, n, strong[i]));
+        ASSERT(uf_value(lines, n, strong[i]) == NULL);
+    }
     free(buf);
 }
 
@@ -807,6 +851,11 @@ static void test_web_unit_execstart(void) {
         ASSERT(strstr(start, "--socket unix:/run/sloth/sloth.sock") != NULL);
         ASSERT(strstr(start, "--sloth-db /var/lib/sloth/sloth.db") != NULL);
         ASSERT(strstr(start, "--store /var/lib/slothweb/slothweb.db") != NULL);
+        /* sloth-rf's socket and database (#215), at the paths
+         * sloth-rf.service fixes (test_rf_unit_execstart has the other
+         * end of each). */
+        ASSERT(strstr(start, "--rf-socket unix:/run/sloth-rf/sloth-rf.sock ") != NULL);
+        ASSERT(strstr(start, "--rf-db /var/lib/sloth-rf/sloth-rf.db ") != NULL);
         ASSERT(uf_has_token(start, "$SLOTHWEB_ARGS"));
         /* "Follow recommended" from the copy make install puts there
          * (test_makefile_install_targets), so a deployed slothweb is
@@ -820,7 +869,8 @@ static void test_web_unit_execstart(void) {
         ASSERT(!uf_has_token(start, "--web-allow-sql"));
         /* The deployment page names every flag the unit runs with. */
         static const char *const flags[] = { "--socket", "--sloth-db", "--store",
-                                             "--web-assessments" };
+                                             "--web-assessments",
+                                             "--rf-socket", "--rf-db" };
         for (size_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++) {
             if (!uf_doc_names_flag(doc, flags[i]))
                 fprintf(stderr, "    %s does not name slothweb flag %s\n",
@@ -1473,6 +1523,401 @@ static void test_makefile_install_targets(void) {
     free(buf);
 }
 
+/* ── sloth-rf.service (#215, ADR 0010) ──
+ *
+ * The RF decoders' daemon. What has to stay true: it is the sloth
+ * account (slothweb reads its socket and database) with no capability
+ * at all, since it opens no capture; it is tied to no network device
+ * and has no monitor-mode helper; its runtime and state directories are
+ * its own, because systemd removes a unit's RuntimeDirectory= when the
+ * unit stops and a shared /run/sloth would take the Wi-Fi sensor's
+ * socket with it; it reaches AF_UNIX and nothing else until the
+ * operator's drop-in says otherwise; and it names no other sloth unit,
+ * so neither daemon needs the other. Each absence below was seen red
+ * under a one-line mutation of the unit (docs/wiki/log.md, the #215
+ * entry, names them). */
+
+static void test_rf_unit_runs_as_sloth_with_no_capabilities(void) {
+    char *buf = uf_slurp(UF_PATH_RF_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    /* Raw scans, comments included, before uf_logical_lines() cuts buf. */
+    ASSERT(strstr(buf, "/home/") == NULL);
+    ASSERT(strstr(buf, "CAP_") == NULL);
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    ASSERT_GT(n, 0);
+    ASSERT_LT(n, UF_MAX_LINES);
+
+    ASSERT_EQ(uf_count(lines, n, "User"), 1);
+    ASSERT_STR(uf_req(lines, n, "User"), "sloth");
+    ASSERT_EQ(uf_count(lines, n, "Group"), 1);
+    ASSERT_STR(uf_req(lines, n, "Group"), "sloth");
+    ASSERT(uf_value(lines, n, "DynamicUser") == NULL);
+    /* Reading another service's files is the file's group, decided on
+     * the host in a drop-in; the shipped unit joins none. */
+    ASSERT(uf_value(lines, n, "SupplementaryGroups") == NULL);
+
+    /* Present and empty: an absent CapabilityBoundingSet= is the full
+     * set, not none. Given once, since a second line merges in. */
+    const char *bound = uf_value(lines, n, "CapabilityBoundingSet");
+    const char *amb   = uf_value(lines, n, "AmbientCapabilities");
+    if (bound && bound[0])
+        fprintf(stderr, "    sloth-rf unit: CapabilityBoundingSet=%s, want empty\n", bound);
+    if (amb && amb[0])
+        fprintf(stderr, "    sloth-rf unit: AmbientCapabilities=%s, want empty\n", amb);
+    ASSERT(bound != NULL && bound[0] == '\0');
+    ASSERT(amb != NULL && amb[0] == '\0');
+    ASSERT_EQ(uf_count(lines, n, "CapabilityBoundingSet"), 1);
+    ASSERT_EQ(uf_count(lines, n, "AmbientCapabilities"), 1);
+    ASSERT_STR(uf_req(lines, n, "NoNewPrivileges"), "true");
+    free(buf);
+}
+
+static void test_rf_unit_is_bound_to_nothing(void) {
+    char *buf = uf_slurp(UF_PATH_RF_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+
+    /* No radio: nothing waits for, or dies with, a network device, and
+     * nothing runs before the daemon as root. No other unit either:
+     * [Unit] carries no dependency or ordering key at all, so neither
+     * daemon needs the other and slothweb is not this unit's concern. */
+    static const char *const none[] = {
+        "BindsTo", "Requires", "Requisite", "PartOf", "Wants", "After",
+        "Before", "Upholds", "Conflicts", "ExecStartPre", "ExecStartPost",
+    };
+    for (size_t i = 0; i < sizeof(none) / sizeof(none[0]); i++) {
+        if (uf_value(lines, n, none[i]))
+            fprintf(stderr, "    sloth-rf unit: %s=%s\n", none[i],
+                    uf_value(lines, n, none[i]));
+        ASSERT(uf_value(lines, n, none[i]) == NULL);
+    }
+    /* On directives only: the comments say what the unit is not. */
+    int directives = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (!uf_is_directive(l)) continue;
+        directives++;
+        if (strstr(l, ".device") || strstr(l, "sys-subsystem-net") ||
+            strstr(l, "SLOTH_IFACE") || strstr(l, "sloth-monitor-up") ||
+            strstr(l, "sloth-sensor") || strstr(l, "slothweb"))
+            fprintf(stderr, "    sloth-rf unit: %s\n", l);
+        ASSERT(strstr(l, ".device") == NULL);
+        ASSERT(strstr(l, "sys-subsystem-net") == NULL);
+        ASSERT(strstr(l, "SLOTH_IFACE") == NULL);
+        ASSERT(strstr(l, "sloth-monitor-up") == NULL);
+        ASSERT(strstr(l, "sloth-sensor") == NULL);
+        ASSERT(strstr(l, "slothweb") == NULL);
+    }
+    ASSERT_GT(directives, 30);
+    /* Started at boot once the operator enables it, by nothing else. */
+    ASSERT_EQ(uf_count(lines, n, "WantedBy"), 1);
+    ASSERT_STR(uf_req(lines, n, "WantedBy"), "multi-user.target");
+    free(buf);
+}
+
+static void test_rf_unit_sandbox(void) {
+    char *buf = uf_slurp(UF_PATH_RF_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+
+    /* The sensor's list (test_unit_sandbox_keys_present), key for key;
+     * what differs is the identity of the directories and Restart=. */
+    static const struct { const char *key, *val; } want[] = {
+        { "ProtectSystem",            "strict"    },
+        { "ProtectHome",              "true"      },
+        { "PrivateTmp",               "true"      },
+        { "PrivateDevices",           "true"      },
+        { "ProtectKernelTunables",    "true"      },
+        { "ProtectKernelModules",     "true"      },
+        { "ProtectKernelLogs",        "true"      },
+        { "ProtectControlGroups",     "true"      },
+        { "ProtectClock",             "true"      },
+        { "ProtectHostname",          "true"      },
+        { "ProtectProc",              "invisible" },
+        { "RestrictNamespaces",       "true"      },
+        { "RestrictRealtime",         "true"      },
+        { "RestrictSUIDSGID",         "true"      },
+        { "LockPersonality",          "true"      },
+        { "MemoryDenyWriteExecute",   "true"      },
+        { "SystemCallArchitectures",  "native"    },
+        { "SystemCallErrorNumber",    "EPERM"     },
+        { "Restart",                  "on-failure" },
+        { "KillSignal",               "SIGTERM"   },
+        { "StateDirectory",           "sloth-rf"  },
+        { "StateDirectoryMode",       "0700"      },
+        { "RuntimeDirectory",         "sloth-rf"  },
+        { "RuntimeDirectoryMode",     "0750"      },
+        { "WorkingDirectory",         "/var/lib/sloth-rf" },
+        { "UMask",                    "0077"      },
+        { "EnvironmentFile",          "-/etc/default/sloth-rf" },
+        { "Environment",              "SLOTH_RF_ARGS=" },
+    };
+    for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+        const char *v = uf_value(lines, n, want[i].key);
+        if (!v || strcmp(v, want[i].val) != 0)
+            fprintf(stderr, "    sloth-rf unit: %s=%s wanted, got %s\n",
+                    want[i].key, want[i].val, v ? v : "(absent)");
+        ASSERT(v != NULL && strcmp(v, want[i].val) == 0);
+    }
+    /* Its own directories, each named once: a second RuntimeDirectory=
+     * line adds to the list, and `sloth` on it is the Wi-Fi sensor's
+     * /run/sloth, which systemd would then remove at every stop of this
+     * unit, the sensor's socket with it. */
+    ASSERT_EQ(uf_count(lines, n, "RuntimeDirectory"), 1);
+    ASSERT_EQ(uf_count(lines, n, "StateDirectory"), 1);
+    ASSERT(!uf_has_token(uf_value(lines, n, "RuntimeDirectory"), "sloth"));
+    ASSERT(!uf_has_token(uf_value(lines, n, "StateDirectory"), "sloth"));
+
+    /* AF_UNIX and nothing else: no capture (AF_PACKET), no netlink, and
+     * no IP family until the operator's drop-in adds one. Given once: a
+     * second allow-list line merges in. */
+    static const char *const fams[] = { "AF_UNIX" };
+    const char *fam = uf_value(lines, n, "RestrictAddressFamilies");
+    if (fam && !uf_tokens_within(fam, fams, 1))
+        fprintf(stderr, "    sloth-rf unit: RestrictAddressFamilies=%s\n", fam);
+    ASSERT(uf_tokens_within(fam, fams, 1));
+    ASSERT_EQ(uf_count(lines, n, "RestrictAddressFamilies"), 1);
+
+    /* What other programs write: read-only, each with the '-' that
+     * lets the unit start on a host without that decoder, and nothing
+     * writable beyond the state and runtime directories. */
+    static const char *const ro[] = {
+        "-/run/readsb", "-/var/lib/direwolf", "-/var/lib/rtl_433",
+    };
+    const char *rop = uf_value(lines, n, "ReadOnlyPaths");
+    ASSERT_EQ(uf_count(lines, n, "ReadOnlyPaths"), 1);
+    ASSERT(uf_tokens_within(rop, ro, 3));
+    for (size_t i = 0; i < sizeof(ro) / sizeof(ro[0]); i++)
+        ASSERT(uf_has_token(rop, ro[i]));
+    ASSERT(uf_value(lines, n, "ReadWritePaths") == NULL);
+    ASSERT(uf_value(lines, n, "BindPaths") == NULL);
+    ASSERT(uf_value(lines, n, "DeviceAllow") == NULL);
+
+    /* Allow-list plus deny-list, and capset back after the deny, as
+     * for the sensor: the privilege drop ends in a capset and fails
+     * closed without it. Three lines and no fourth: any other allow
+     * line after the deny takes something back out of @privileged. */
+    int allow_seen = 0, deny_at = -1, capset_at = -1;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (strncmp(l, "SystemCallFilter=", 17) != 0) continue;
+        if (uf_has_token(l + 17, "@system-service")) allow_seen = 1;
+        if (uf_has_token(l + 17, "~@privileged")) deny_at = i;
+        if (l[17] != '~' && uf_has_token(l + 17, "capset")) capset_at = i;
+    }
+    ASSERT(allow_seen);
+    ASSERT(deny_at >= 0);
+    ASSERT(capset_at > deny_at);
+    ASSERT_EQ(uf_count(lines, n, "SystemCallFilter"), 3);
+
+    ASSERT(uf_value(lines, n, "MemoryMax") != NULL);
+    ASSERT(uf_value(lines, n, "TasksMax") != NULL);
+    free(buf);
+}
+
+static void test_rf_unit_execstart(void) {
+    char *buf = uf_slurp(UF_PATH_RF_UNIT);
+    char *doc = uf_slurp(UF_PATH_WIKI);
+    ASSERT(buf != NULL);
+    ASSERT(doc != NULL);
+    if (!buf || !doc) { free(buf); free(doc); return; }
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    const char *start = uf_value(lines, n, "ExecStart");
+    ASSERT(start != NULL);
+    ASSERT_EQ(uf_count(lines, n, "ExecStart"), 1);
+    if (start) {
+        /* Its own binary, not the Wi-Fi sensor's, from the root-owned
+         * prefix. */
+        ASSERT(strncmp(start, "/usr/local/bin/sloth-rf ", 24) == 0);
+        ASSERT(strstr(start, "--db /var/lib/sloth-rf/sloth-rf.db ") != NULL);
+        ASSERT(strstr(start, "--data-socket unix:/run/sloth-rf/sloth-rf.sock ") != NULL);
+        ASSERT(uf_has_token(start, "$SLOTH_RF_ARGS"));
+        /* The socket stays a unix: path (the unit has no IP family),
+         * and nothing of the Wi-Fi sensor's is named. */
+        ASSERT(strstr(start, "tcp:") == NULL);
+        ASSERT(strstr(start, "/run/sloth/") == NULL);
+        ASSERT(strstr(start, "/var/lib/sloth/") == NULL);
+        /* The inputs are the site's (/etc/default/sloth-rf), never the
+         * unit's: a shipped --gps or --adsb would need the drop-in on
+         * every host, and a shipped --location is somebody's position. */
+        static const char *const site[] = {
+            "--adsb", "--aprs", "--aprs-freq", "--aprs-silent-hours",
+            "--rtl433", "--gps", "--gps-allow-remote", "--gps-baud",
+            "--location", "--site-label", "--jsonl",
+        };
+        for (size_t i = 0; i < sizeof(site) / sizeof(site[0]); i++) {
+            if (uf_has_token(start, site[i]))
+                fprintf(stderr, "    sloth-rf unit: ExecStart carries %s\n", site[i]);
+            ASSERT(!uf_has_token(start, site[i]));
+        }
+    }
+    /* The deployment page names the unit, its paths and the tool. */
+    static const char *const named[] = {
+        "sloth-rf.service", "sloth-migrate-rf", "/etc/default/sloth-rf",
+        "/var/lib/sloth-rf/sloth-rf.db", "unix:/run/sloth-rf/sloth-rf.sock",
+        "RuntimeDirectory=sloth-rf", "sloth-rf-gps.conf",
+    };
+    for (size_t i = 0; i < sizeof(named) / sizeof(named[0]); i++) {
+        if (!strstr(doc, named[i]))
+            fprintf(stderr, "    %s does not name %s\n", UF_PATH_WIKI, named[i]);
+        ASSERT(strstr(doc, named[i]) != NULL);
+    }
+    free(buf);
+    free(doc);
+}
+
+/* /etc/default/sloth-rf as shipped: an environment file with the one
+ * variable, empty. A flag on the live line would start every new
+ * install reading something, and a --location there is a position. */
+static void test_rf_defaults_file(void) {
+    char *buf = uf_slurp(UF_PATH_RF_DEFAULTS);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    int live = 0, args = 0;
+    static const char *const flags[] = {
+        "--adsb", "--aprs", "--aprs-freq", "--aprs-silent-hours", "--rtl433",
+        "--gps", "--gps-allow-remote", "--gps-baud", "--location", "--jsonl",
+        "--strict", "--site-label",
+    };
+    int documented[sizeof(flags) / sizeof(flags[0])] = {0};
+    for (char *l = strtok(buf, "\n"); l; l = strtok(NULL, "\n")) {
+        for (size_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++)
+            if (l[0] == '#' && uf_doc_names_flag(l, flags[i])) documented[i] = 1;
+        if (l[0] == '#' || l[0] == '\0') continue;
+        live++;
+        if (strcmp(l, "SLOTH_RF_ARGS=") == 0) args++;
+        else fprintf(stderr, "    %s has a live line: %s\n", UF_PATH_RF_DEFAULTS, l);
+    }
+    ASSERT_EQ(live, 1);
+    ASSERT_EQ(args, 1);
+    /* A commented example for each flag sloth-rf takes from this file. */
+    for (size_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++) {
+        if (!documented[i])
+            fprintf(stderr, "    %s has no example for %s\n", UF_PATH_RF_DEFAULTS, flags[i]);
+        ASSERT(documented[i]);
+    }
+    free(buf);
+}
+
+/* sloth-rf's drop-in is inert as shipped and each block says what it
+ * claims, as for the sensor's (test_gps_dropin_is_inert_and_scoped):
+ * the gpsd block adds only the IP families, the serial block keeps the
+ * device allow-list closed and read-only. Seen red with `#` removed
+ * from the gpsd block's `#[Service]`, and with `#DevicePolicy=closed`
+ * moved into the gpsd block. */
+static void test_rf_dropin_is_inert_and_scoped(void) {
+    char *buf = uf_slurp(UF_PATH_RF_DROPIN);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    /* [0] preamble, [1] gpsd block, [2] serial block. */
+    int live = 0, blk = 0, headings = 0;
+    int pd[3] = {0}, policy[3] = {0}, allow_r[3] = {0}, groups[3] = {0}, fam[3] = {0};
+    int section[3] = {0};
+    for (char *l = strtok(buf, "\n"); l; l = strtok(NULL, "\n")) {
+        if (l[0] != '#' && l[0] != '\0') {
+            fprintf(stderr, "    sloth-rf gps.conf has a live line: %s\n", l);
+            live++;
+        }
+        if (!strncmp(l, "# \xe2\x94\x80\xe2\x94\x80 gpsd over TCP", 19)) { blk = 1; headings++; }
+        if (!strncmp(l, "# \xe2\x94\x80\xe2\x94\x80 Serial NMEA", 17)) { blk = 2; headings++; }
+        if (!strcmp(l, "#[Service]")) section[blk]++;
+        if (!strcmp(l, "#PrivateDevices=false")) pd[blk]++;
+        if (!strcmp(l, "#DevicePolicy=closed")) policy[blk]++;
+        if (!strncmp(l, "#DeviceAllow=", 13)) {
+            if (!strncmp(l, "#DeviceAllow=/dev/tty", 21) &&
+                !strcmp(l + strlen(l) - 2, " r"))
+                allow_r[blk]++;
+            else
+                allow_r[blk] += 100;   /* any other DeviceAllow is wrong */
+        }
+        if (!strcmp(l, "#SupplementaryGroups=dialout")) groups[blk]++;
+        if (!strncmp(l, "#RestrictAddressFamilies=", 25)) {
+            if (!strcmp(l, "#RestrictAddressFamilies=AF_INET AF_INET6")) fam[blk]++;
+            else fam[blk] += 100;
+        }
+    }
+    ASSERT_EQ(live, 0);
+    ASSERT_EQ(headings, 2);
+    for (int b = 0; b < 3; b++) {
+        ASSERT_EQ(section[b], b != 0);
+        ASSERT_EQ(fam[b], b == 1);
+        ASSERT_EQ(pd[b], b == 2);
+        ASSERT_EQ(policy[b], b == 2);
+        ASSERT_EQ(allow_r[b], b == 2);
+        ASSERT_EQ(groups[b], b == 2);
+    }
+    free(buf);
+}
+
+/* make: the binary only where the tree built one, the migrate tool,
+ * the unit, the defaults file no-clobber, the drop-in to share/sloth.
+ * That no drop-in goes into the unit directory and that no recipe runs
+ * systemctl is test_makefile_installs_ble_scan_without_enabling, which
+ * reads every line of both recipes. */
+static void test_makefile_installs_rf(void) {
+    char *buf = uf_slurp("Makefile");
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    static char *lines[UF_MAX_MAKE_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_MAKE_LINES);
+    ASSERT_LT(n, UF_MAX_MAKE_LINES);
+    int in_install = 0, in_service = 0, in_deploy = 0;
+    int bin = 0, bin_unguarded = 0, tool = 0, unit = 0, defaults_nc = 0;
+    int defaults_b = 0, defaults_plain = 0, dropin = 0, lint = 0, lint_test = 0, runs = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        if (!uf_is_recipe(l)) {
+            in_install = strncmp(l, "install:", 8) == 0;
+            in_service = strncmp(l, "install-service:", 16) == 0;
+            in_deploy  = strncmp(l, "deploy-test:", 12) == 0;
+            if (strncmp(l, "DEPLOY_SCRIPTS", 14) == 0) {
+                if (uf_has_token(l, UF_PATH_RF_MIGRATE)) lint = 1;
+                if (uf_has_token(l, "tests/deploy/test_migrate_rf.sh")) lint_test = 1;
+            }
+            continue;
+        }
+        if (in_install && strstr(l, "$(DESTDIR)$(PREFIX)/bin/sloth-rf")) {
+            /* The binary is #213's: a tree without it still installs,
+             * and one with it never skips it. */
+            if (strstr(l, "[ ! -x sloth-rf ] || install -m 755 sloth-rf ")) bin = 1;
+            else bin_unguarded = 1;
+        }
+        if (in_install && strstr(l, "install -m 755 " UF_PATH_RF_MIGRATE " ") &&
+            strstr(l, "$(DESTDIR)$(PREFIX)/sbin/sloth-migrate-rf")) tool = 1;
+        if (in_service && strstr(l, UF_PATH_RF_UNIT) &&
+            strstr(l, "$(DESTDIR)$(UNITDIR)/sloth-rf.service")) unit = 1;
+        if (in_service && strstr(l, UF_PATH_RF_DEFAULTS " ")) {
+            if (strstr(l, "[ -e $(DESTDIR)$(DEFAULTDIR)/sloth-rf ] ||")) defaults_nc = 1;
+            else defaults_plain = 1;
+            if (strstr(l, "install -b")) defaults_b = 1;
+        }
+        if (in_service && strstr(l, UF_PATH_RF_DROPIN) &&
+            strstr(l, "$(DESTDIR)$(PREFIX)/share/sloth/sloth-rf-gps.conf")) dropin = 1;
+        if (in_deploy && strstr(l, "sh tests/deploy/test_migrate_rf.sh")) runs = 1;
+    }
+    ASSERT(bin);
+    ASSERT(!bin_unguarded);
+    ASSERT(tool);
+    ASSERT(unit);
+    ASSERT(defaults_nc);
+    ASSERT(!defaults_plain);
+    ASSERT(!defaults_b);
+    ASSERT(dropin);
+    ASSERT(lint);
+    ASSERT(lint_test);
+    ASSERT(runs);
+    free(buf);
+}
+
 void run_unit_file_tests(void) {
     TEST_SUITE("shipped systemd unit (#139)");
     RUN_TEST(test_scanner_directive_lookup_is_exact);
@@ -1501,4 +1946,11 @@ void run_unit_file_tests(void) {
     RUN_TEST(test_ble_scan_unit_relationships);
     RUN_TEST(test_makefile_installs_ble_scan_without_enabling);
     RUN_TEST(test_gps_dropin_is_inert_and_scoped);
+    RUN_TEST(test_rf_unit_runs_as_sloth_with_no_capabilities);
+    RUN_TEST(test_rf_unit_is_bound_to_nothing);
+    RUN_TEST(test_rf_unit_sandbox);
+    RUN_TEST(test_rf_unit_execstart);
+    RUN_TEST(test_rf_defaults_file);
+    RUN_TEST(test_rf_dropin_is_inert_and_scoped);
+    RUN_TEST(test_makefile_installs_rf);
 }

@@ -1811,6 +1811,13 @@ $(STAMPS): FORCE
 # the operator, or sloth-migrate-sensor for a unit with the flag, puts
 # it in sloth-sensor.service.d/, because the family lets a compromised
 # sensor make hciN transmit.
+# sloth-rf (#215, ADR 0010) is installed when the tree has built one
+# (`[ ! -x sloth-rf ] ||`: the binary is #213's, and a tree without it
+# still installs), with sloth-migrate-rf beside the other operator tools
+# in sbin. sloth-rf.service goes in like sloth-ble-scan.service:
+# installed, never enabled here. Its defaults file is no-clobber like
+# the others, and its AF_INET / serial drop-in goes to share/sloth inert
+# as the sensor's gps.conf does.
 # The units are written for PREFIX=/usr/local; a different prefix is
 # substituted at install time so the text in packaging/ stays the one
 # tests/test_unit_file.c scans.
@@ -1827,6 +1834,8 @@ install: $(TARGET) $(BLE_SCAN_BIN) $(SDRSWEEP_BIN) $(VA_BIN)
 	install -m 755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET)
 	install -m 755 slothweb $(DESTDIR)$(PREFIX)/bin/slothweb
 	install -m 755 packaging/bin/sloth-monitor-up $(DESTDIR)$(PREFIX)/sbin/sloth-monitor-up
+	[ ! -x sloth-rf ] || install -m 755 sloth-rf $(DESTDIR)$(PREFIX)/bin/sloth-rf
+	install -m 755 packaging/bin/sloth-migrate-rf $(DESTDIR)$(PREFIX)/sbin/sloth-migrate-rf
 	[ -z "$(BLE_SCAN_BIN)" ] || install -m 755 sloth-ble-scan $(DESTDIR)$(PREFIX)/sbin/sloth-ble-scan
 	[ -z "$(SDRSWEEP_BIN)" ] || install -m 755 sloth-sdrsweep $(DESTDIR)$(PREFIX)/sbin/sloth-sdrsweep
 	[ -z "$(VA_BIN)" ] || install -m 755 sloth-va $(DESTDIR)$(PREFIX)/sbin/sloth-va
@@ -1874,6 +1883,14 @@ install-service:
 	    $(DESTDIR)$(PREFIX)/share/sloth/sloth-sensor-gps.conf
 	[ -e $(DESTDIR)$(DEFAULTDIR)/slothweb ] || \
 	    install -m 644 packaging/default/slothweb $(DESTDIR)$(DEFAULTDIR)/slothweb
+	sed -e 's|/usr/local/|$(PREFIX)/|g' packaging/systemd/sloth-rf.service \
+	    > $(DESTDIR)$(UNITDIR)/sloth-rf.service.tmp
+	install -m 644 $(DESTDIR)$(UNITDIR)/sloth-rf.service.tmp $(DESTDIR)$(UNITDIR)/sloth-rf.service
+	rm -f $(DESTDIR)$(UNITDIR)/sloth-rf.service.tmp
+	[ -e $(DESTDIR)$(DEFAULTDIR)/sloth-rf ] || \
+	    install -m 644 packaging/default/sloth-rf $(DESTDIR)$(DEFAULTDIR)/sloth-rf
+	install -D -m 644 packaging/systemd/sloth-rf.service.d/gps.conf \
+	    $(DESTDIR)$(PREFIX)/share/sloth/sloth-rf-gps.conf
 	@echo "installed units and sysusers fragment; /etc/default/sloth{,web} only where absent; next:"
 	@echo "  systemd-sysusers && systemctl daemon-reload && systemctl enable --now sloth-sensor"
 	@echo "  systemctl enable --now slothweb   (reads /etc/default/slothweb; loopback by default)"
@@ -1889,6 +1906,10 @@ install-service:
 	@echo "  sloth-va.service (Victron reader; TRANSMITS) is installed, not enabled; it needs"
 	@echo "  bluetoothd and its own controller: docs/wiki/deployment.md, Victron (sloth-va),"
 	@echo "  then 'systemd-sysusers && systemctl enable --now sloth-va'"
+	@echo "  sloth-rf.service is installed, not enabled; slothweb.service now reads sloth-rf's socket"
+	@echo "  and database for the ADS-B, APRS, rtl_433 and GNSS pages. A host whose /etc/default/sloth"
+	@echo "  still has --adsb, --aprs or --rtl433 moves them now: sloth-migrate-rf (dry run), then"
+	@echo "  sloth-migrate-rf --apply and the commands it prints: docs/wiki/deployment.md §10.4"
 	@echo "  (migration from a build-tree unit: docs/wiki/deployment.md)"
 
 # ── Deploy tooling test (#153) ───────────────────────────────────────────────
@@ -1898,6 +1919,7 @@ install-service:
 # because it is shell, not the C suite; shellcheck runs when installed.
 DEPLOY_SCRIPTS = packaging/bin/sloth-migrate-sensor packaging/bin/sloth-monitor-up \
                  tests/deploy/test_migrate_sensor.sh \
+                 packaging/bin/sloth-migrate-rf tests/deploy/test_migrate_rf.sh \
                  .github/scripts/wiki_sync.sh tests/deploy/test_wiki_sync.sh \
                  tests/deploy/test_slothweb_unit.sh tools/gate.sh \
                  tools/lab/lab_capture.sh tools/lab/expect.sh \
@@ -1919,6 +1941,7 @@ deploy-test:
 	  echo "deploy-test: shellcheck not installed, skipping lint"; \
 	fi
 	sh tests/deploy/test_migrate_sensor.sh
+	sh tests/deploy/test_migrate_rf.sh
 	sh tests/deploy/test_wiki_sync.sh
 	sh tests/deploy/test_slothweb_unit.sh
 	sh tests/deploy/test_lab_tools.sh

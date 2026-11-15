@@ -36,6 +36,9 @@ SLOTH_IFACE=alfa0
 #                         the decoder's Beast binary output (readsb
 #                         --net-bo-port), decoded by sloth; the same rules
 #                         and the same AF_INET drop-in as sbs://.
+# Where sloth-rf.service is installed (#215), --adsb, --aprs, --aprs-freq,
+# --aprs-silent-hours and --rtl433 belong in /etc/default/sloth-rf, not
+# here: `sloth-migrate-rf` moves them (docs/wiki/deployment.md §10.4).
 # Example:
 #   SLOTH_ARGS=--my-ssid HomeNet --my-bssid 28:25:5f:00:00:00 --site-label attic-sensor
 SLOTH_ARGS=--site-label sloth-sensor
