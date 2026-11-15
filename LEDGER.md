@@ -357,3 +357,4 @@
 | 33f69cfa | 2026-11-15T13:55:39Z | claude-opus-5 | 412 | 197513 | 43179930 | 582060 | 32.3505 | #207 — persist beacon_aps.operating_width for the Spectrum overlay (slice 1) |
 | d22b810 | 2026-11-15T16:55:54Z | claude-fable-5-1, claude-fable-5-2 | 168 | 27444 | 2581065 | 227123 | 5.9335 | ADR 0010 and the wifi/rf coupling inventory (#211 S0) |
 | b7ceb81 | 2026-11-15T17:20:45Z | claude-fable-5-2 | 8 | 1189 | 530613 | 1876 | 0.1838 | Build seam for the wifi/rf split: source groups, run flag, poll stage table (#212) |
+| c78796d | 2026-11-15T19:16:45Z | claude-fable-5-1, claude-fable-5-2 | 94 | 11179 | 4780308 | 215976 | 5.0406 | agents: name the three source groups, not CORE_COMMON_SRCS (#212) |
