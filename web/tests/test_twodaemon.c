@@ -1,0 +1,1111 @@
+/* One slothweb, two daemons (#214, ADR 0010): --rf-socket and --rf-db.
+ *
+ * The framer is driven without a socket (web_feed_bytes()), with every
+ * consumer set on BOTH feeds, so what a consumer sees is decided by the
+ * feed's role and by nothing main.c happened to leave unset. Records
+ * are the emitters' shapes (src/jsonl.c, src/jsonl_rf.c) with invented
+ * values; positions are invented (10/20 and 11/21 degrees).
+ *
+ * Absence assertions, each seen red under the named mutation and
+ * restored:
+ *   - the rtl_433 tab surviving sloth's sensor_health: with
+ *     split_line()'s `if (rf_type || health)` block also run for
+ *     WEB_FEED_WIFI (the block was cleared, "sensor":null);
+ *   - sloth's copies of the RF records feeding nothing: with
+ *     `if (rf_type) return;` removed and the RF consumers called on the
+ *     Wi-Fi feed (the decoy aircraft, station and device were listed);
+ *   - the wrong-daemon guard: with wrong_daemon() returning 0 (sloth-rf's
+ *     sensor_health on --socket set sloth.db's limit and cleared the
+ *     capture state; sloth's on --rf-socket cleared the rtl_433 block);
+ *   - the RF stream never reaching the metrics or the lures: with
+ *     web_metrics_record() and web_lure_record() called in the
+ *     WEB_FEED_RF branch (have_first_ts set, the lure version moved);
+ *   - the one-stream incident list keeping its order (by change, not
+ *     by last_ts): with the no-peer path sorted by by_last_desc();
+ *     sloth-rf's incidents in the open counts: with peer_alerts()
+ *     dropped from web_live_summary() (present, seen red the same way);
+ *   - an RF alert's page reading sloth-rf.db: with web_alert_route()'s
+ *     `e->rf` test made false (sloth.db's row of the same key served);
+ *   - each store's limit from its own daemon: with sloth-rf's
+ *     sensor_health given to sloth.db's slot;
+ *   - the host batch having one writer: with web_sys_record_from()'s
+ *     `if (y->host_wifi) applied = 0;` removed (sloth-rf's rss replaced
+ *     sloth's);
+ *   - sloth's source rows of sloth-rf's sources: with
+ *     web_sys_record_from()'s owner test made false (sloth's
+ *     "not_configured" adsb row replaced sloth-rf's "ok"), and the gnss
+ *     row's with `if (y->gnss_rf) applied = 0;` made false;
+ *   - the position's precedence: with the Wi-Fi feed calling
+ *     web_gnss_record() in place of web_gnss_record_fallback() (sloth's
+ *     sensor_health without loc_* cleared sloth-rf's position);
+ *   - the answers without the flags: with health_json()'s
+ *     `h->live->peer` test dropped ("daemons" in a one-stream answer),
+ *     the tick's likewise ("rf"), /api/sys's `y->split` test made true
+ *     ("host_from") and its `i == WEB_SYS_DB_RF && !path[0]` skip
+ *     removed (a third storage row; test_sysstat.c's whole-answer pin
+ *     went red on that one too);
+ *   - the RF history's file: with web_m4_rfdb() returning m->sdb
+ *     (sloth.db's decoy aircraft listed, sloth-rf.db's not). */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "sdb_gen.h"
+#include "web_adsb.h"
+#include "web_aprs.h"
+#include "web_assets.h"
+#include "web_devices.h"
+#include "web_gnss.h"
+#include "web_ingest.h"
+#include "web_live.h"
+#include "web_lure.h"
+#include "web_metrics.h"
+#include "web_rollup.h"
+#include "web_routes.h"
+#include "web_rtl433.h"
+#include "web_sysstat.h"
+#include "web_victron.h"
+#include "web_alertkb.h"
+#include "wt_world.h"
+
+#define T 1800000000LL
+
+static long long fixed_clock(void *ctx) { (void)ctx; return T; }
+
+typedef struct {
+    int           split;
+    web_live_t    live, live_rf;
+    web_gnss_t    gnss;
+    web_adsb_t    adsb;
+    web_aprs_t    aprs;
+    web_rtl433_t  rtl433;
+    web_victron_t victron;
+    web_sys_t     sys;
+    web_lure_t    lure;
+    web_rollup_t  ru;
+    web_metrics_t met;
+    web_feed_t   *fw, *fr;      /* fw is the one feed of a one-stream world */
+    web_m4_t      m4;
+    web_health_t  h;
+    long long     ms;
+} tw_t;
+
+static char g_out[262144];
+
+static const char *body_of(const char *out) {
+    const char *sep = strstr(out, "\r\n\r\n");
+    return sep ? sep + 4 : "";
+}
+
+static int count_of(const char *s, const char *needle) {
+    int n = 0;
+    for (const char *q = strstr(s, needle); q; q = strstr(q + 1, needle)) n++;
+    return n;
+}
+
+static void consumers(tw_t *w, web_feed_t *f) {
+    f->metrics = &w->met;
+    f->gnss = &w->gnss;
+    f->adsb = &w->adsb;
+    f->aprs = &w->aprs;
+    f->rtl433 = &w->rtl433;
+    f->victron = &w->victron;
+    f->sys = &w->sys;
+    f->lure = &w->lure;
+}
+
+static void tw_up(tw_t *w, int split) {
+    char err[256];
+    memset(w, 0, sizeof(*w));
+    w->split = split;
+    web_live_init(&w->live, "unix:/demo/sloth.sock");
+    web_live_sock_connected(&w->live, 0);
+    WT_EQ(web_gnss_init(&w->gnss), 0);
+    WT_EQ(web_adsb_init(&w->adsb), 0);
+    WT_EQ(web_aprs_init(&w->aprs), 0);
+    WT_EQ(web_rtl433_init(&w->rtl433), 0);
+    WT_EQ(web_victron_init(&w->victron), 0);
+    WT_EQ(web_sys_init(&w->sys), 0);
+    WT_EQ(web_lure_init(&w->lure), 0);
+    WT_EQ(web_rollup_init(&w->ru, 64, 0, err, sizeof(err)), 0);
+    WT_EQ(web_metrics_init(&w->met, &w->ru, fixed_clock, NULL), 0);
+    w->fw = calloc(1, sizeof(*w->fw));
+    w->fr = calloc(1, sizeof(*w->fr));
+    WT_ASSERT(w->fw && w->fr);
+    if (!w->fw || !w->fr) return;
+    consumers(w, w->fw);
+    if (split) {
+        web_live_init(&w->live_rf, "unix:/demo/sloth-rf.sock");
+        web_live_sock_connected(&w->live_rf, 0);
+        web_live_set_role(&w->live, WEB_LIVE_WIFI);
+        web_live_set_role(&w->live_rf, WEB_LIVE_RF);
+        web_live_set_peer(&w->live, &w->live_rf);
+        web_sys_set_split(&w->sys);
+        w->fw->role = WEB_FEED_WIFI;
+        consumers(w, w->fr);
+        w->fr->role = WEB_FEED_RF;
+        w->fr->rf_ru = &w->ru;
+        w->fr->rf_clock = fixed_clock;
+    }
+    w->h.live = &w->live;
+    w->h.gnss = &w->gnss;
+    w->h.adsb = &w->adsb;
+    w->h.aprs = &w->aprs;
+    w->h.rtl433 = &w->rtl433;
+    w->h.victron = &w->victron;
+    w->h.sys = &w->sys;
+    w->h.lure = &w->lure;
+    w->h.m4 = &w->m4;
+    w->h.wall_s = T;
+    w->h.now_ms = 5000;
+    w->ms = 1000;
+}
+
+static void tw_down(tw_t *w) {
+    free(w->fw);
+    free(w->fr);
+    web_metrics_destroy(&w->met);
+    web_rollup_destroy(&w->ru);
+    web_lure_destroy(&w->lure);
+    web_sys_destroy(&w->sys);
+    web_victron_destroy(&w->victron);
+    web_rtl433_destroy(&w->rtl433);
+    web_aprs_destroy(&w->aprs);
+    web_adsb_destroy(&w->adsb);
+    web_gnss_destroy(&w->gnss);
+    if (w->split) web_live_destroy(&w->live_rf);
+    web_live_destroy(&w->live);
+}
+
+/* One line on sloth's socket ('w') or sloth-rf's ('r'). A one-stream
+ * world has the one socket: both go to it. */
+static void put(tw_t *w, int which, const char *line) {
+    web_feed_t *f = w->split && which == 'r' ? w->fr : w->fw;
+    web_live_t *l = w->split && which == 'r' ? &w->live_rf : &w->live;
+    if (!f) return;
+    web_feed_bytes(f, l, line, strlen(line), w->ms);
+    web_feed_bytes(f, l, "\n", 1, w->ms);
+    w->ms += 10;
+}
+
+static int get(tw_t *w, const char *path, const char *query) {
+    web_req_t *rq = calloc(1, sizeof(*rq));
+    web_resp_t r;
+    if (!rq) return -1;
+    memset(&r, 0, sizeof(r));
+    snprintf(rq->path, sizeof(rq->path), "%s", path);
+    snprintf(rq->query, sizeof(rq->query), "%s", query);
+    snprintf(rq->host, sizeof(rq->host), "127.0.0.1:8770");
+    rq->host_count = 1;
+    int rc = web_route(rq, &w->h, 1, g_out, sizeof(g_out), &r);
+    free(rq);
+    if (rc != 0) return -1;
+    size_t n = r.out_len < sizeof(g_out) - 1 ? r.out_len : sizeof(g_out) - 1;
+    if (r.body && r.body_len && n + r.body_len < sizeof(g_out) - 1) {
+        memcpy(g_out + n, r.body, r.body_len);
+        n += r.body_len;
+    }
+    g_out[n] = '\0';
+    if (r.body_owned) free(r.body_owned);
+    else if (r.body_free) free((void *)r.body);
+    return r.status;
+}
+
+/* A route's body, copied: two worlds' answers are compared. */
+static char *body_dup(tw_t *w, const char *path, const char *query) {
+    if (get(w, path, query) != 200) return NULL;
+    const char *b = body_of(g_out);
+    char *c = malloc(strlen(b) + 1);
+    if (c) memcpy(c, b, strlen(b) + 1);
+    return c;
+}
+
+/* ── the records ──────────────────────────────────────────────────── */
+
+/* sloth-rf's blocks of sensor_health, in jsonl_emit_sensor_health_rf()'s
+ * order: the receiver and the position, ADS-B, APRS, rtl_433. */
+#define RF_BLOCKS \
+    "\"gps_state\":\"fix\",\"gps_src\":\"gpsd:127.0.0.1:2947\",\"gps_fix_age_s\":0," \
+    "\"gps_quality\":3,\"gps_sats\":2,\"gps_hdop\":0.8,\"gps_sentences\":2," \
+    "\"gps_bad_checksum\":0,\"gps_parse_errors\":0,\"gps_reconnects\":0," \
+    "\"gps_positions_dropped\":0,\"gps_err\":\"\",\"gnss_sats_in_view\":4," \
+    "\"gnss_sats_used\":2,\"gnss_cn0_mean\":31.3,\"gnss_time_offset_ms\":250,\"gnss_jam\":12," \
+    "\"loc_lat\":10.00000,\"loc_lon\":20.00000,\"loc_alt_m\":30.0,\"loc_src\":\"gps\"," \
+    "\"adsb_state\":\"live\",\"adsb_src\":\"file:/run/readsb/aircraft.json\"," \
+    "\"aprs_state\":\"live\",\"aprs_src\":\"file:/var/lib/direwolf/aprs.log\"," \
+    "\"rtl433_state\":\"live\",\"rtl433_src\":\"file:/var/lib/rtl_433/events.jsonl\"," \
+    "\"rtl433_missing\":0,\"rtl433_last_read\":1799999999,\"rtl433_last_msg\":1799999960," \
+    "\"rtl433_devices\":1,\"rtl433_bytes\":4096,\"rtl433_lines\":12,\"rtl433_msgs\":10," \
+    "\"rtl433_bad_lines\":2,\"rtl433_err\":\"\""
+
+/* sloth's own: the capture and the monitor radio. */
+#define WIFI_BLOCKS \
+    "\"capture_iface\":\"eth0\",\"capture_open\":1,\"capture_running\":1," \
+    "\"monitor_iface\":\"wlan1mon\",\"monitor_open\":1,\"monitor_running\":1,\"scope\":\"lan\""
+
+/* `sloth` before the split: everything in one record. */
+static const char SH_ONE[] =
+    "{\"type\":\"sensor_health\",\"ts\":1800000000," WIFI_BLOCKS "," RF_BLOCKS
+    ",\"db_max_mb\":512,\"jsonl_version\":\"1.9.0\"}";
+/* sloth-wifi after it: its capture, no decoder block, no position. */
+static const char SH_WIFI[] =
+    "{\"type\":\"sensor_health\",\"ts\":1800000000," WIFI_BLOCKS
+    ",\"daemon\":\"wifi\",\"db_max_mb\":512,\"jsonl_version\":\"1.9.0\"}";
+/* sloth-wifi with a GPS of its own (it keeps GNSS health and loc_*). */
+static const char SH_WIFI_GPS[] =
+    "{\"type\":\"sensor_health\",\"ts\":1800000000," WIFI_BLOCKS
+    ",\"gps_state\":\"fix\",\"gps_src\":\"gpsd:127.0.0.1:2947\",\"gnss_sats_in_view\":9,"
+    "\"gnss_sats_used\":7,\"gnss_cn0_mean\":40.0,\"gnss_jam\":3,"
+    "\"loc_lat\":11.00000,\"loc_lon\":21.00000,\"loc_src\":\"gps\","
+    "\"daemon\":\"wifi\",\"db_max_mb\":512,\"jsonl_version\":\"1.9.0\"}";
+static const char SH_RF[] =
+    "{\"type\":\"sensor_health\",\"ts\":1800000000," RF_BLOCKS
+    ",\"daemon\":\"rf\",\"db_max_mb\":256,\"jsonl_version\":\"1.9.0\"}";
+/* sloth-rf with no decoder and no receiver configured. */
+static const char SH_RF_BARE[] =
+    "{\"type\":\"sensor_health\",\"ts\":1800000001,\"daemon\":\"rf\",\"db_max_mb\":256,"
+    "\"jsonl_version\":\"1.9.0\"}";
+
+static const char FIX[] =
+    "{\"type\":\"gnss_fix\",\"ts\":1800000000,\"src\":\"gpsd:127.0.0.1:2947\","
+    "\"fix_ts\":1800000000,\"mode\":3,\"status\":2,\"nsat\":4,\"usat\":2,"
+    "\"hdop\":0.8,\"vdop\":1.2,\"pdop\":1.5,\"lat\":10.00000,\"lon\":20.00000,"
+    "\"alt_m\":30.0,\"eph\":6.2,\"epv\":9.1,\"speed_mps\":0.30,\"track_deg\":12.5,"
+    "\"time_off_ms\":250,\"leap\":18,\"jam\":12,\"tpv_count\":1}";
+static const char SKY[] =
+    "{\"type\":\"gnss_sky\",\"ts\":1800000000,\"src\":\"gpsd:127.0.0.1:2947\","
+    "\"sky_ts\":1800000000,\"nsat\":4,\"usat\":2,\"rows\":4,\"overflow\":0,"
+    "\"hdop\":0.8,\"vdop\":1.2,\"pdop\":1.5,\"gdop\":2.0,\"tdop\":0.9,"
+    "\"cn0_mean\":31.3,\"cn0_max\":41.0,\"cn0_sd\":7.6,\"cn0_n\":3,\"passes\":1}";
+static const char SAT[] =
+    "{\"type\":\"gnss_sat\",\"ts\":1800000000,\"gnss\":\"GPS\",\"gnssid\":0,\"svid\":5,"
+    "\"prn\":5,\"sigid\":0,\"el\":45,\"az\":120,\"cn0\":41.0,\"used\":1,\"health\":1,"
+    "\"sky_ts\":1800000000}";
+static const char AC[] =
+    "{\"type\":\"adsb_aircraft\",\"ts\":1800000000,\"hex\":\"a1b2c3\",\"non_icao\":0,"
+    "\"state\":\"live\",\"flight\":\"FLT-MARK\",\"first_seen\":1799999940,"
+    "\"last_seen\":1800000000}";
+static const char STN[] =
+    "{\"type\":\"aprs_station\",\"ts\":1800000000,\"call\":\"N0TEST-5\",\"state\":\"live\","
+    "\"src\":\"file:/var/lib/direwolf/aprs.log\",\"first_seen\":1799999940,"
+    "\"last_seen\":1800000000,\"packets\":1,\"via\":\"N0TEST-5\",\"direct\":1,"
+    "\"heard_direct\":1,\"level\":50,\"best_level\":50,\"dti\":\"!\",\"symbol\":\"/#\","
+    "\"comment\":\"APRS-COMMENT-MARK\"}";
+static const char DEV[] =
+    "{\"type\":\"rtl433_device\",\"ts\":1800000000,\"src\":\"file:/var/lib/rtl_433/events.jsonl\","
+    "\"model\":\"Testco-TP01\",\"id\":\"1a2b3c\",\"first_seen\":1799999990,"
+    "\"last_seen\":1799999990,\"msgs\":1,\"dev_type\":\"TPMS\",\"mic\":\"CHECKSUM\","
+    "\"mod\":\"FSK\",\"protocol\":60,\"freq_mhz\":433.918,\"temperature_C\":21.0,"
+    "\"other_keys\":3}";
+/* What a sloth that still has the RF flags writes beside sloth-rf: its
+ * own copies, with other values. */
+static const char AC_DECOY[] =
+    "{\"type\":\"adsb_aircraft\",\"ts\":1800000000,\"hex\":\"dec0de\",\"non_icao\":0,"
+    "\"state\":\"live\",\"flight\":\"DECOY-AC\",\"first_seen\":1799999940,"
+    "\"last_seen\":1800000000}";
+static const char STN_DECOY[] =
+    "{\"type\":\"aprs_station\",\"ts\":1800000000,\"call\":\"D3COY-1\",\"state\":\"live\","
+    "\"src\":\"file:/x\",\"first_seen\":1799999940,\"last_seen\":1800000000,\"packets\":1,"
+    "\"via\":\"D3COY-1\",\"direct\":1,\"heard_direct\":1,\"level\":50,\"best_level\":50,"
+    "\"dti\":\"!\",\"symbol\":\"/#\",\"comment\":\"DECOY-STN\"}";
+static const char DEV_DECOY[] =
+    "{\"type\":\"rtl433_device\",\"ts\":1800000000,\"src\":\"file:/x\","
+    "\"model\":\"Decoy-DV01\",\"id\":\"777\",\"first_seen\":1799999990,"
+    "\"last_seen\":1799999990,\"msgs\":1,\"other_keys\":0}";
+static const char FIX_DECOY[] =
+    "{\"type\":\"gnss_fix\",\"ts\":1800000000,\"src\":\"gpsd:127.0.0.1:2947\","
+    "\"fix_ts\":1800000000,\"mode\":2,\"status\":1,\"nsat\":9,\"usat\":7,\"hdop\":9.9,"
+    "\"lat\":11.00000,\"lon\":21.00000,\"tpv_count\":77}";
+
+static const char STATUS_WIFI[] =
+    "{\"type\":\"sys_status\",\"ts\":1800000060,\"seq\":2,\"interval_s\":60,\"cpu_pct\":15.0,"
+    "\"cpu_iowait_pct\":10.0,\"cpu_band\":\"low\",\"mem_total_kb\":3884328,"
+    "\"mem_avail_kb\":2913246,\"mem_band\":\"ok\",\"uptime_s\":350735,\"rss_kb\":12276,"
+    "\"temps\":1,\"temp_max_c\":51.0,\"temp_max_id\":\"thermal_zone0\",\"temp_band\":\"ok\","
+    "\"volts\":0,\"undervolt\":0,\"power\":0,\"sources\":9,\"receivers\":0}";
+static const char STATUS_RF[] =
+    "{\"type\":\"sys_status\",\"ts\":1800000061,\"seq\":7,\"interval_s\":60,\"cpu_pct\":16.0,"
+    "\"cpu_iowait_pct\":10.0,\"cpu_band\":\"low\",\"mem_total_kb\":3884328,"
+    "\"mem_avail_kb\":2913246,\"mem_band\":\"ok\",\"uptime_s\":350736,\"rss_kb\":4321,"
+    "\"temps\":1,\"temp_max_c\":51.0,\"temp_max_id\":\"thermal_zone0\",\"temp_band\":\"ok\","
+    "\"volts\":0,\"undervolt\":0,\"power\":0,\"sources\":5,\"receivers\":0}";
+static const char TEMP_WIFI[] =
+    "{\"type\":\"sys_sensor\",\"ts\":1800000060,\"seq\":2,\"class\":\"temp\","
+    "\"id\":\"thermal_zone0\",\"label\":\"cpu-thermal\",\"c\":48.3}";
+static const char TEMP_RF[] =
+    "{\"type\":\"sys_sensor\",\"ts\":1800000061,\"seq\":7,\"class\":\"temp\","
+    "\"id\":\"thermal_zone9\",\"label\":\"rf-side\",\"c\":49.9}";
+
+#define SRC(name, state, detail) \
+    "{\"type\":\"source_status\",\"ts\":1800000060,\"seq\":2,\"name\":\"" name "\"," \
+    "\"kind\":\"" name "\",\"flag\":\"--x\",\"state\":\"" state "\",\"detail\":\"" detail "\"," \
+    "\"endpoint\":\"\"}"
+
+/* ── the tabs ─────────────────────────────────────────────────────── */
+
+/* The same records, one stream or two: the five RF tabs answer the same
+ * bytes. sloth's stream in the two-daemon world also carries sloth's own
+ * copies of the RF records (a sloth that still has the RF flags) and a
+ * sensor_health with no decoder block; neither reaches a tab. */
+static void test_tabs_same_with_one_stream_or_two(void) {
+    static tw_t one, two;
+    tw_up(&one, 0);
+    tw_up(&two, 1);
+    put(&one, 'w', FIX); put(&one, 'w', SKY); put(&one, 'w', SAT);
+    put(&one, 'w', AC); put(&one, 'w', STN); put(&one, 'w', DEV);
+    put(&one, 'w', SH_ONE);
+
+    put(&two, 'w', FIX_DECOY); put(&two, 'w', AC_DECOY); put(&two, 'w', STN_DECOY);
+    put(&two, 'w', DEV_DECOY);
+    put(&two, 'r', FIX); put(&two, 'r', SKY); put(&two, 'r', SAT);
+    put(&two, 'r', AC); put(&two, 'r', STN); put(&two, 'r', DEV);
+    put(&two, 'r', SH_RF);
+    /* sloth's sensor_health after sloth-rf's: no decoder block in it. */
+    put(&two, 'w', SH_WIFI);
+    put(&two, 'w', AC_DECOY);
+
+    static const char *const paths[] = { "/api/rtl433", "/api/adsb", "/api/aprs", "/api/gnss",
+                                         "/api/gnss/fixes", "/api/victron" };
+    for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+        char *a = body_dup(&one, paths[i], ""), *b = body_dup(&two, paths[i], "");
+        WT_ASSERT(a && b);
+        if (a && b) {
+            if (strcmp(a, b)) fprintf(stderr, "    %s differs:\n    one: %s\n    two: %s\n",
+                                      paths[i], a, b);
+            WT_ASSERT(!strcmp(a, b));
+            /* And it is an answer with something in it. */
+            WT_LACKS(b, "DECOY");
+            WT_LACKS(b, "dec0de");
+            WT_LACKS(b, "D3COY");
+            WT_LACKS(b, "Decoy-DV01");
+        }
+        free(a);
+        free(b);
+    }
+    WT_EQ(get(&two, "/api/rtl433", ""), 200);
+    WT_HAS(body_of(g_out), "Testco-TP01");
+    WT_HAS(body_of(g_out), "\"state\":\"live\"");
+    WT_EQ(get(&two, "/api/adsb", ""), 200);
+    WT_HAS(body_of(g_out), "FLT-MARK");
+    WT_EQ(get(&two, "/api/aprs", ""), 200);
+    WT_HAS(body_of(g_out), "APRS-COMMENT-MARK");
+    WT_EQ(get(&two, "/api/gnss", ""), 200);
+    WT_HAS(body_of(g_out), "\"tpv_count\":1}");
+    WT_LACKS(body_of(g_out), "\"tpv_count\":77");
+    /* sloth's stream still counted what it sent. */
+    WT_EQ(two.live.records, 6);
+    WT_EQ(two.live_rf.records, 7);
+    tw_down(&one);
+    tw_down(&two);
+}
+
+/* The hazard the split was routed around (web_rtl433.c sh_apply()): a
+ * sensor_health without the rtl433 block clears the tab's block. With
+ * two streams sloth's record cannot; with one it still does, as today. */
+static void test_rtl433_block_and_sloths_sensor_health(void) {
+    static tw_t w;
+    tw_up(&w, 1);
+    put(&w, 'r', DEV);
+    put(&w, 'r', SH_RF);
+    WT_EQ(w.rtl433.sh.seen, 1);
+    char *before = body_dup(&w, "/api/rtl433", "");
+    put(&w, 'w', SH_WIFI);
+    put(&w, 'w', SH_WIFI);
+    WT_EQ(w.rtl433.sh.seen, 1);
+    char *after = body_dup(&w, "/api/rtl433", "");
+    WT_ASSERT(before && after && !strcmp(before, after));
+    if (after) WT_HAS(after, "\"sensor\":{");
+    free(before);
+    free(after);
+    /* sloth-rf's own record without the block is the decoder gone, and
+     * does clear it. */
+    put(&w, 'r', SH_RF_BARE);
+    WT_EQ(w.rtl433.sh.seen, 0);
+    tw_down(&w);
+
+    /* One stream, today's way: cleared. */
+    tw_up(&w, 0);
+    put(&w, 'w', DEV);
+    put(&w, 'w', SH_ONE);
+    WT_EQ(w.rtl433.sh.seen, 1);
+    put(&w, 'w', SH_WIFI);
+    WT_EQ(w.rtl433.sh.seen, 0);
+    tw_down(&w);
+}
+
+/* ── the wrong daemon ─────────────────────────────────────────────── */
+
+/* --socket pointed at sloth-rf, or --rf-socket at sloth: the
+ * sensor_health that says so is counted once and applied to nothing,
+ * and so is what follows it on that connection. */
+static void test_wrong_daemon_is_not_applied(void) {
+    static tw_t w;
+    tw_up(&w, 1);
+    /* Each socket right first. */
+    put(&w, 'w', SH_WIFI);
+    put(&w, 'r', DEV);
+    put(&w, 'r', SH_RF);
+    WT_EQ(w.live.cap_open, 1);
+    WT_EQ(w.sys.sloth_max_mb, 512);
+    WT_EQ(w.sys.rf_max_mb, 256);
+    WT_EQ(w.live.wrong_health, 0);
+    WT_EQ(w.live_rf.wrong_health, 0);
+    WT_ASSERT(!strcmp(w.live.sh_daemon, "wifi") && !strcmp(w.live_rf.sh_daemon, "rf"));
+
+    /* sloth-rf's record on --socket. */
+    unsigned long long rec0 = w.live.records;
+    put(&w, 'w', SH_RF);
+    WT_EQ(w.live.wrong_health, 1);
+    WT_ASSERT(!strcmp(w.live.wrong_now, "rf"));
+    WT_EQ(w.live.records, rec0 + 1);            /* counted as a record */
+    WT_EQ(w.live.cap_open, 1);                  /* not "no capture" */
+    WT_ASSERT(!strcmp(w.live.cap_iface, "eth0"));
+    WT_EQ(w.sys.sloth_max_mb, 512);             /* not sloth-rf's 256 */
+    /* What follows on that connection is passed over too. */
+    put(&w, 'w', STATUS_RF);
+    WT_EQ(w.live.wrong_records, 2);
+    WT_EQ(w.sys.seen, 0);
+    /* A connect is a new stream; a right record ends it as well. */
+    put(&w, 'w', SH_WIFI);
+    WT_EQ(w.live.wrong_now[0], '\0');
+    WT_EQ(w.live.wrong_health, 1);
+    put(&w, 'w', STATUS_WIFI);
+    WT_EQ(w.sys.seen, 1);
+    WT_EQ(w.live.wrong_records, 2);
+
+    /* sloth's record on --rf-socket: with its word, and with none (an
+     * older sloth). */
+    put(&w, 'r', SH_WIFI);
+    WT_EQ(w.live_rf.wrong_health, 1);
+    WT_ASSERT(!strcmp(w.live_rf.wrong_now, "wifi"));
+    WT_EQ(w.rtl433.sh.seen, 1);                 /* not cleared by it */
+    WT_EQ(w.sys.rf_max_mb, 256);
+    put(&w, 'r', DEV_DECOY);
+    WT_EQ(w.live_rf.wrong_records, 2);
+    WT_EQ(get(&w, "/api/rtl433", ""), 200);
+    WT_LACKS(body_of(g_out), "Decoy-DV01");
+    put(&w, 'r', SH_ONE);
+    WT_EQ(w.live_rf.wrong_health, 2);
+    WT_ASSERT(!strcmp(w.live_rf.wrong_now, "other"));
+    WT_EQ(w.rtl433.sh.seen, 1);
+    /* /api/health says it, per daemon. */
+    WT_EQ(get(&w, "/api/health", ""), 200);
+    WT_HAS(body_of(g_out), "\"wrong_daemon\":\"other\",\"wrong_health\":2,\"wrong_records\":3}");
+    WT_HAS(body_of(g_out), "\"wrong_daemon\":null,\"wrong_health\":1,\"wrong_records\":2}");
+    /* A reconnect clears the word, not the count. */
+    web_feed_reset(w.fr);
+    web_live_sock_connected(&w.live_rf, w.ms);
+    put(&w, 'r', DEV);
+    WT_EQ(w.live_rf.wrong_now[0], '\0');
+    WT_EQ(w.live_rf.wrong_records, 3);
+    tw_down(&w);
+
+    /* One stream: no guard, whatever the word (a host that runs
+     * sloth-rf alone and points --socket at it, as before the flags). */
+    tw_up(&w, 0);
+    put(&w, 'w', SH_RF);
+    WT_EQ(w.live.wrong_health, 0);
+    WT_EQ(w.live.sh_seen, 1);
+    WT_EQ(w.rtl433.sh.seen, 1);
+    WT_EQ(w.sys.sloth_max_mb, 256);
+    tw_down(&w);
+}
+
+/* ── one writer each ──────────────────────────────────────────────── */
+
+/* sloth-rf's stream never reaches the metrics (one thread's alone) or
+ * the lures; its series go to the rollup, which locks. */
+static void test_rf_stream_feeds_the_rollup_not_the_metrics(void) {
+    static tw_t w;
+    tw_up(&w, 1);
+    web_rollup_stats_t st;
+    web_rollup_stats(&w.ru, &st);
+    WT_EQ(st.samples, 0);
+    put(&w, 'r', FIX);
+    put(&w, 'r', SKY);
+    put(&w, 'r', SH_RF);
+    put(&w, 'r', SRC("adsb", "ok", ""));
+    WT_EQ(w.met.have_first_ts, 0);
+    WT_EQ(w.lure.ver[0] + w.lure.ver[1] + w.lure.ver[2], 0);
+    WT_EQ(w.lure.ver_seen, 0);
+    web_rollup_stats(&w.ru, &st);
+    /* Three figures of the fix, one of the sky, source.up for the row;
+     * no records.rate or records.total, which are sloth's stream's. */
+    WT_EQ(st.samples, 3 + 1 + 1);
+    /* sloth's stream is the metrics' writer still, and its copies of
+     * the RF records and of sloth-rf's source rows sample nothing. */
+    put(&w, 'w', FIX_DECOY);
+    put(&w, 'w', SRC("adsb", "not_configured", ""));
+    web_rollup_stats(&w.ru, &st);
+    WT_EQ(st.samples, 5);
+    WT_EQ(w.met.have_first_ts, 0);
+    put(&w, 'w', SH_WIFI);
+    WT_EQ(w.met.have_first_ts, 1);
+    WT_EQ(w.lure.ver_seen, 1);
+    tw_down(&w);
+}
+
+/* The host batch, the source rows and the two stores' limits. */
+static void test_sysstat_has_one_writer_per_part(void) {
+    static tw_t w;
+    tw_up(&w, 1);
+    /* sloth-rf alone so far: its batch is the host's. */
+    put(&w, 'r', STATUS_RF);
+    put(&w, 'r', TEMP_RF);
+    WT_EQ(w.sys.seen, 1);
+    WT_EQ(w.sys.rss_kb, 4321);
+    WT_EQ(get(&w, "/api/sys", ""), 200);
+    WT_HAS(body_of(g_out), "\"host_from\":\"rf\"");
+    WT_HAS(body_of(g_out), "\"id\":\"thermal_zone9\"");
+    /* sloth reports: the host is sloth's from here on, and sloth-rf's
+     * rows of the batch it took over from are gone. */
+    put(&w, 'w', STATUS_WIFI);
+    put(&w, 'w', TEMP_WIFI);
+    WT_EQ(w.sys.rss_kb, 12276);
+    put(&w, 'r', STATUS_RF);
+    put(&w, 'r', TEMP_RF);
+    WT_EQ(w.sys.rss_kb, 12276);
+    WT_EQ(w.sys.seq, 2);
+    WT_EQ(get(&w, "/api/sys", ""), 200);
+    WT_HAS(body_of(g_out), "\"host_from\":\"wifi\"");
+    WT_HAS(body_of(g_out), "\"id\":\"thermal_zone0\"");
+    WT_LACKS(body_of(g_out), "thermal_zone9");
+
+    /* The source rows, by name. */
+    put(&w, 'r', SRC("adsb", "ok", "rf-adsb"));
+    put(&w, 'w', SRC("adsb", "not_configured", "wifi-adsb"));
+    put(&w, 'w', SRC("monitor", "ok", "wifi-monitor"));
+    put(&w, 'r', SRC("monitor", "not_configured", "rf-monitor"));
+    put(&w, 'w', SRC("rtl433", "down", "wifi-rtl433"));
+    put(&w, 'w', SRC("victron", "down", "wifi-victron"));
+    put(&w, 'w', SRC("aprs", "down", "wifi-aprs"));
+    WT_EQ(get(&w, "/api/sys", ""), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "\"name\":\"adsb\",\"kind\":\"adsb\",\"flag\":\"--x\",\"state\":\"ok\",\"detail\":\"rf-adsb\"");
+    WT_HAS(b, "\"name\":\"monitor\",\"kind\":\"monitor\",\"flag\":\"--x\",\"state\":\"ok\",\"detail\":\"wifi-monitor\"");
+    WT_LACKS(b, "wifi-adsb");
+    WT_LACKS(b, "rf-monitor");
+    WT_LACKS(b, "wifi-rtl433");
+    WT_LACKS(b, "wifi-victron");
+    WT_LACKS(b, "wifi-aprs");
+
+    /* gnss, which both report: sloth's until sloth-rf reports one that
+     * is configured, sloth-rf's from then on. */
+    put(&w, 'r', SRC("gnss", "not_configured", "rf-none"));
+    put(&w, 'w', SRC("gnss", "ok", "wifi-gps"));
+    put(&w, 'r', SRC("gnss", "not_configured", "rf-none"));
+    WT_EQ(get(&w, "/api/sys", ""), 200);
+    WT_HAS(body_of(g_out), "\"detail\":\"wifi-gps\"");
+    WT_LACKS(body_of(g_out), "rf-none");
+    put(&w, 'r', SRC("gnss", "ok", "rf-gps"));
+    put(&w, 'w', SRC("gnss", "ok", "wifi-gps"));
+    put(&w, 'w', SRC("gnss", "stale", "wifi-gps-2"));
+    WT_EQ(get(&w, "/api/sys", ""), 200);
+    WT_HAS(body_of(g_out), "\"detail\":\"rf-gps\"");
+    WT_LACKS(body_of(g_out), "wifi-gps");
+    /* A name this slothweb does not know is its sender's. */
+    put(&w, 'r', SRC("meshtastic", "ok", "rf-mesh"));
+    WT_EQ(get(&w, "/api/sys", ""), 200);
+    WT_HAS(body_of(g_out), "\"detail\":\"rf-mesh\"");
+
+    /* Each daemon's sensor_health is its own store's limit. */
+    put(&w, 'w', SH_WIFI);
+    put(&w, 'r', SH_RF);
+    put(&w, 'w', SH_WIFI);
+    WT_EQ(w.sys.sloth_max_mb, 512);
+    WT_EQ(w.sys.rf_max_mb, 256);
+    WT_EQ(w.sys.sloth_lim, WEB_SYS_LIM_SAID);
+    WT_EQ(w.sys.rf_lim, WEB_SYS_LIM_SAID);
+    tw_down(&w);
+
+    /* One stream: every row is the one daemon's, as before. */
+    tw_up(&w, 0);
+    put(&w, 'w', STATUS_WIFI);
+    put(&w, 'w', SRC("adsb", "ok", "one-adsb"));
+    put(&w, 'w', SRC("adsb", "not_configured", "one-adsb-2"));
+    put(&w, 'w', SRC("monitor", "ok", "one-monitor"));
+    put(&w, 'w', SRC("gnss", "not_configured", "one-gnss"));
+    put(&w, 'w', STATUS_RF);
+    WT_EQ(w.sys.rss_kb, 4321);
+    WT_EQ(w.sys.not_owned, 0);
+    WT_EQ(get(&w, "/api/sys", ""), 200);
+    WT_HAS(body_of(g_out), "one-adsb-2");
+    WT_HAS(body_of(g_out), "one-monitor");
+    WT_HAS(body_of(g_out), "one-gnss");
+    WT_LACKS(body_of(g_out), "host_from");
+    WT_LACKS(body_of(g_out), "not_owned");
+    tw_down(&w);
+}
+
+/* GNSS (ADR 0010, ruled 2026-11-15): both daemons report the health and
+ * the position; sloth-rf's is served when it has given one, sloth's
+ * otherwise, and neither clears the other's. */
+static void test_gnss_position_and_health_precedence(void) {
+    static tw_t w;
+    tw_up(&w, 1);
+    /* sloth alone has a GPS (sloth-rf masked, or not started yet). */
+    put(&w, 'w', SH_WIFI_GPS);
+    WT_EQ(get(&w, "/api/gnss", ""), 200);
+    WT_HAS(body_of(g_out), "\"loc\":{\"lat\":11.0000000,\"lon\":21.0000000,");
+    WT_HAS(body_of(g_out), "\"sats_in_view\":9,");
+    /* sloth-rf reports its own: served from then on. */
+    put(&w, 'r', SH_RF);
+    WT_EQ(get(&w, "/api/gnss", ""), 200);
+    WT_HAS(body_of(g_out), "\"loc\":{\"lat\":10.0000000,\"lon\":20.0000000,\"alt_m\":30.0,");
+    WT_HAS(body_of(g_out), "\"sats_in_view\":4,");
+    /* sloth's record with no position (it has no --gps) clears nothing
+     * of sloth-rf's, nor does its record with another one replace it. */
+    put(&w, 'w', SH_WIFI);
+    WT_EQ(get(&w, "/api/gnss", ""), 200);
+    WT_HAS(body_of(g_out), "\"loc\":{\"lat\":10.0000000,\"lon\":20.0000000,\"alt_m\":30.0,");
+    WT_HAS(body_of(g_out), "\"sats_in_view\":4,");
+    put(&w, 'w', SH_WIFI_GPS);
+    WT_EQ(get(&w, "/api/gnss", ""), 200);
+    WT_HAS(body_of(g_out), "\"loc\":{\"lat\":10.0000000,\"lon\":20.0000000,\"alt_m\":30.0,");
+    WT_LACKS(body_of(g_out), "11.0000000");
+    /* The fleet's site reads the same. */
+    web_loc_t loc;
+    web_gnss_sh_t sh;
+    web_gnss_site(&w.gnss, &loc, &sh);
+    WT_EQ(loc.has, 1);
+    WT_ASSERT(loc.lat > 9.99 && loc.lat < 10.01);
+    WT_EQ(sh.sats_in_view, 4);
+    /* sloth-rf loses its position: sloth's is served, not none. */
+    put(&w, 'r', SH_RF_BARE);
+    WT_EQ(get(&w, "/api/gnss", ""), 200);
+    WT_HAS(body_of(g_out), "\"loc\":{\"lat\":11.0000000,\"lon\":21.0000000,");
+    /* Neither has one. */
+    put(&w, 'w', SH_WIFI);
+    WT_EQ(get(&w, "/api/gnss", ""), 200);
+    WT_HAS(body_of(g_out), "\"loc\":null");
+    tw_down(&w);
+
+    /* One stream, today's way: a record without loc_* clears it. */
+    tw_up(&w, 0);
+    put(&w, 'w', SH_ONE);
+    WT_EQ(w.gnss.loc.has, 1);
+    put(&w, 'w', SH_WIFI);
+    WT_EQ(w.gnss.loc.has, 0);
+    WT_EQ(w.gnss.loc_fb.has, 0);
+    WT_EQ(w.gnss.sh_fb.seen, 0);
+    WT_EQ(get(&w, "/api/gnss", ""), 200);
+    WT_HAS(body_of(g_out), "\"loc\":null");
+    tw_down(&w);
+}
+
+/* ── alerts ───────────────────────────────────────────────────────── */
+
+#define ALERT(ev, id, sev, ty, title, ts) \
+    "{\"type\":\"alert." ev "\",\"ts\":" ts ",\"incident_id\":\"" id "\",\"sev\":" sev "," \
+    "\"ty\":" ty ",\"title\":\"" title "\",\"detail\":\"d\",\"key\":\"k:" id "\"," \
+    "\"first_seen\":" ts ",\"last_seen\":" ts ",\"count\":1}"
+
+/* An alert sloth-rf raised is on the list, in the counts and behind its
+ * handle with sloth's; sloth's reconnect drops sloth's open incidents
+ * and leaves sloth-rf's. */
+static void test_rf_alerts_are_listed_with_sloths(void) {
+    static tw_t w;
+    tw_up(&w, 1);
+    put(&w, 'w', ALERT("create", "w1", "1", "10", "WIFI-ONE", "1800000010"));
+    put(&w, 'r', ALERT("create", "r1", "2", "11", "RF-ONE", "1800000020"));
+    put(&w, 'w', ALERT("create", "w2", "0", "12", "WIFI-TWO", "1800000030"));
+    put(&w, 'r', ALERT("create", "r2", "1", "13", "RF-CLOSED", "1800000005"));
+    put(&w, 'r', ALERT("resolve", "r2", "1", "13", "RF-CLOSED", "1800000006"));
+    web_live_inc_t *inc = calloc(64, sizeof(*inc));
+    WT_ASSERT(inc != NULL);
+    if (!inc) { tw_down(&w); return; }
+    int nopen = 0, n = web_live_incidents(&w.live, inc, 64, &nopen);
+    WT_EQ(n, 4);
+    WT_EQ(nopen, 3);
+    /* Open first, the newest change first, across the two. */
+    WT_ASSERT(!strcmp(inc[0].title, "WIFI-TWO") && inc[0].rf == 0);
+    WT_ASSERT(!strcmp(inc[1].title, "RF-ONE") && inc[1].rf == 1);
+    WT_ASSERT(!strcmp(inc[2].title, "WIFI-ONE") && inc[2].rf == 0);
+    WT_ASSERT(!strcmp(inc[3].title, "RF-CLOSED") && inc[3].rf == 1);
+    /* The handles are apart, and one lookup finds either. */
+    WT_ASSERT(strcmp(inc[0].hid, inc[1].hid) != 0);
+    WT_ASSERT(strncmp(inc[0].hid, inc[1].hid, 8) != 0);
+    web_live_inc_t one;
+    WT_EQ(web_live_incident(&w.live, inc[1].hid, &one), 1);
+    WT_ASSERT(!strcmp(one.title, "RF-ONE") && one.rf == 1);
+    WT_EQ(web_live_incident(&w.live, inc[2].hid, &one), 1);
+    WT_ASSERT(!strcmp(one.title, "WIFI-ONE") && one.rf == 0);
+    WT_EQ(web_live_incident(&w.live, "00000000ffff", &one), 0);
+    /* The counts: the tick's and /api/live's. */
+    web_live_sum_t s;
+    web_live_summary(&w.live, &s, w.ms);
+    WT_EQ(s.alerts[0], 1);
+    WT_EQ(s.alerts[1], 1);
+    WT_EQ(s.alerts[2], 1);
+    char tick[2048];
+    WT_ASSERT(web_sse_tick(tick, sizeof(tick), 1, T, &w.h) > 0);
+    WT_HAS(tick, "\"alerts_open\":[1,1,1]");
+    WT_EQ(get(&w, "/api/live", ""), 200);
+    WT_HAS(body_of(g_out), "\"alerts_open\":{\"low\":1,\"warn\":1,\"crit\":1");
+    WT_EQ(get(&w, "/api/alerts", "limit=100"), 200);
+    WT_HAS(body_of(g_out), "RF-ONE");
+    WT_HAS(body_of(g_out), "WIFI-ONE");
+    WT_HAS(body_of(g_out), "RF-CLOSED");
+
+    /* sloth reconnects: its open incidents go, sloth-rf's stay. */
+    web_live_sock_connected(&w.live, w.ms);
+    n = web_live_incidents(&w.live, inc, 64, &nopen);
+    WT_EQ(nopen, 1);
+    WT_ASSERT(!strcmp(inc[0].title, "RF-ONE"));
+    /* And the other way. */
+    put(&w, 'w', ALERT("create", "w3", "1", "10", "WIFI-THREE", "1800000040"));
+    web_live_sock_connected(&w.live_rf, w.ms);
+    n = web_live_incidents(&w.live, inc, 64, &nopen);
+    WT_EQ(nopen, 1);
+    WT_ASSERT(!strcmp(inc[0].title, "WIFI-THREE"));
+    tw_down(&w);
+
+    /* One stream: its own incidents, in its own order, none marked. */
+    tw_up(&w, 0);
+    put(&w, 'w', ALERT("create", "a", "1", "10", "A-OLD-TS", "1800000090"));
+    put(&w, 'w', ALERT("create", "b", "1", "11", "B-NEW-CHANGE", "1800000010"));
+    n = web_live_incidents(&w.live, inc, 64, &nopen);
+    WT_EQ(n, 2);
+    /* By the order they changed, not by last_ts: as before. */
+    WT_ASSERT(!strcmp(inc[0].title, "B-NEW-CHANGE") && inc[0].rf == 0);
+    WT_ASSERT(!strcmp(inc[1].title, "A-OLD-TS") && inc[1].rf == 0);
+    free(inc);
+    tw_down(&w);
+}
+
+/* ── /api/health, /api/sys and the tick ───────────────────────────── */
+
+/* Without the flags the three answers carry none of the new members;
+ * with them, both daemons, each on its own. */
+static void test_health_one_stream_or_two(void) {
+    static tw_t w;
+    char tick[2048];
+    tw_up(&w, 0);
+    put(&w, 'w', SH_ONE);
+    put(&w, 'w', STATUS_WIFI);
+    WT_EQ(get(&w, "/api/health", ""), 200);
+    WT_LACKS(body_of(g_out), "\"daemons\"");
+    WT_LACKS(body_of(g_out), "\"rf_db\"");
+    WT_LACKS(body_of(g_out), "wrong_daemon");
+    WT_LACKS(body_of(g_out), "jsonl_version");
+    WT_EQ(count_of(body_of(g_out), "\"socket_spec\":"), 1);
+    WT_EQ(get(&w, "/api/sys", ""), 200);
+    WT_LACKS(body_of(g_out), "host_from");
+    WT_LACKS(body_of(g_out), "sloth-rf");
+    WT_EQ(count_of(body_of(g_out), "{\"key\":\"sloth"), 2);
+    WT_HAS(body_of(g_out), "\"storage\":[{\"key\":\"sloth\",\"configured\":false,");
+    WT_ASSERT(web_sse_tick(tick, sizeof(tick), 1, T, &w.h) > 0);
+    WT_LACKS(tick, "\"rf\":");
+    WT_HAS(tick, ",\"sensor\":\"ok\"}");
+    tw_down(&w);
+
+    tw_up(&w, 1);
+    put(&w, 'w', SH_WIFI);
+    put(&w, 'r', SH_RF);
+    w.h.now_ms = w.ms + 4000;
+    WT_EQ(get(&w, "/api/health", ""), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, ",\"daemons\":[{\"role\":\"wifi\",\"socket\":\"connected\","
+              "\"socket_spec\":\"unix:/demo/sloth.sock\",");
+    WT_HAS(b, "},{\"role\":\"rf\",\"socket\":\"connected\","
+              "\"socket_spec\":\"unix:/demo/sloth-rf.sock\",");
+    WT_HAS(b, ",\"sensor\":\"ok\",\"health_age_s\":4,\"health_ts\":1800000000,"
+              "\"jsonl_version\":\"1.9.0\",\"daemon\":\"rf\",\"wrong_daemon\":null,"
+              "\"wrong_health\":0,\"wrong_records\":0}]");
+    WT_HAS(b, "\"jsonl_version\":\"1.9.0\",\"daemon\":\"wifi\",\"wrong_daemon\":null,");
+    /* The first socket's members stand where they stood. */
+    WT_HAS(b, "\"uptime_s\":0,\"socket\":\"connected\",\"socket_spec\":\"unix:/demo/sloth.sock\",");
+    WT_EQ(count_of(b, "\"socket_spec\":"), 3);
+    /* No --rf-db: no "rf_db". */
+    WT_LACKS(b, "\"rf_db\"");
+    WT_ASSERT(web_sse_tick(tick, sizeof(tick), 1, T, &w.h) > 0);
+    WT_HAS(tick, ",\"sensor\":\"ok\",\"rf\":{\"socket\":\"connected\",\"sensor\":\"ok\","
+                 "\"records\":1}}");
+    /* sloth-rf silent past the heartbeat: stale; sloth's word is its own. */
+    w.h.now_ms = w.ms + WEB_LIVE_SH_STALE_MS + 1000;
+    put(&w, 'w', SH_WIFI);
+    w.live.sh_ms = w.h.now_ms;
+    WT_ASSERT(web_sse_tick(tick, sizeof(tick), 1, T, &w.h) > 0);
+    WT_HAS(tick, ",\"sensor\":\"ok\",\"rf\":{\"socket\":\"connected\",\"sensor\":\"stale\",");
+    /* sloth-rf has no capture: never "not_observing" or "degraded". */
+    WT_ASSERT(strcmp(web_live_sensor_word(&w.live_rf, w.ms), "ok") == 0);
+    /* A stream that is not there yet. */
+    web_live_sock_failed(&w.live_rf, "connect: No such file or directory", 250, w.ms);
+    WT_EQ(get(&w, "/api/health", ""), 200);
+    WT_HAS(body_of(g_out), "{\"role\":\"rf\",\"socket\":\"retrying\",");
+    WT_HAS(body_of(g_out), "\"socket_last_error\":\"connect: No such file or directory\"");
+    tw_down(&w);
+}
+
+/* The store slot: listed, measured and sampled only when --rf-db names
+ * it. */
+static void test_rf_store_slot(void) {
+    static tw_t w;
+    char dir[TEST_TMP_MAX], path[TEST_TMP_MAX + 32];
+    snprintf(dir, sizeof(dir), "%s/slothweb-twod-XXXXXX", test_tmpdir());
+    WT_ASSERT(mkdtemp(dir) != NULL);
+    snprintf(path, sizeof(path), "%s/sloth-rf.db", dir);
+    FILE *f = fopen(path, "wb");
+    WT_ASSERT(f != NULL);
+    if (f) {
+        static char block[4096];
+        for (int i = 0; i < 256; i++) fwrite(block, 1, sizeof(block), f);   /* 1 MiB */
+        fclose(f);
+    }
+    tw_up(&w, 1);
+    web_sys_set_rf_db(&w.sys, path);
+    WT_EQ(get(&w, "/api/sys", ""), 200);
+    WT_HAS(body_of(g_out), ",{\"key\":\"sloth-rf\",\"configured\":true,\"file\":\"sloth-rf.db\","
+                           "\"present\":true,\"mb\":1.0,");
+    WT_HAS(body_of(g_out), "\"limit_mb\":null,\"limit_state\":\"unknown\",\"limit_from\":null,");
+    put(&w, 'r', SH_RF);
+    put(&w, 'w', SH_WIFI);
+    WT_EQ(get(&w, "/api/sys", ""), 200);
+    WT_HAS(body_of(g_out), "\"key\":\"sloth-rf\",\"configured\":true,\"file\":\"sloth-rf.db\","
+                           "\"present\":true,\"mb\":1.0,\"main_bytes\":1048576,\"wal_bytes\":0,"
+                           "\"limit_mb\":256,\"limit_state\":\"set\",\"limit_from\":\"sensor_health\",");
+    /* sys.db_mb for it, on the RF daemon's own sys_status. */
+    web_rollup_stats_t st0, st1;
+    web_rollup_stats(&w.ru, &st0);
+    put(&w, 'r', STATUS_RF);
+    web_rollup_stats(&w.ru, &st1);
+    WT_ASSERT(st1.samples > st0.samples);
+    tw_down(&w);
+    unlink(path);
+    rmdir(dir);
+}
+
+#ifdef WITH_SQLITE
+/* ── --rf-db ──────────────────────────────────────────────────────── */
+
+static void ac_row(const char *db, const char *hex, const char *flight) {
+    char sql[640];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO adsb_aircraft (hex,non_icao,first_seen,last_seen,visit_first,visits,"
+        "sightings,flight,squawk,category,source_type,messages,pos_seen) VALUES"
+        " ('%s',0,%lld,%lld,%lld,1,1,'%s','4175','A3','adsb_icao',307,0);",
+        hex, (long long)SDB_NOW - 900, (long long)SDB_NOW - 100, (long long)SDB_NOW - 900, flight);
+    WT_EQ(sdb_exec(db, sql), 0);
+}
+
+/* The RF history is read from --rf-db when it is given, else from
+ * --sloth-db; /api/health describes it; the Devices route is sloth.db's
+ * either way. */
+static void test_rf_history_reads_the_rf_db(void) {
+    static tw_t w;
+    char dir[TEST_TMP_MAX], wdb[TEST_TMP_MAX + 32], rdb[TEST_TMP_MAX + 32];
+    snprintf(dir, sizeof(dir), "%s/slothweb-twod-XXXXXX", test_tmpdir());
+    WT_ASSERT(mkdtemp(dir) != NULL);
+    snprintf(wdb, sizeof(wdb), "%s/sloth.db", dir);
+    snprintf(rdb, sizeof(rdb), "%s/sloth-rf.db", dir);
+    WT_EQ(sdb_make(wdb, db_schema_version(), 0), 0);
+    WT_EQ(sdb_make(rdb, db_schema_version(), 0), 0);
+    ac_row(wdb, "aaa111", "WIFIDB1");
+    ac_row(rdb, "bbb222", "RFDB22");
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO devices (mac,vendor,is_ap,sources,risk_signals,first_seen,last_seen)"
+        " VALUES ('0e:5f:00:00:00:0a','InWifiDb',0,16,0,%lld,%lld);",
+        (long long)SDB_NOW - 900, (long long)SDB_NOW - 60);
+    WT_EQ(sdb_exec(wdb, sql), 0);
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO devices (mac,vendor,is_ap,sources,risk_signals,first_seen,last_seen)"
+        " VALUES ('0e:5f:00:00:00:0b','InRfDb',0,16,0,%lld,%lld);",
+        (long long)SDB_NOW - 900, (long long)SDB_NOW - 60);
+    WT_EQ(sdb_exec(rdb, sql), 0);
+    static web_slothdb_t S1, S2;
+    web_slothdb_init(&S1, wdb, NULL);
+    web_slothdb_init(&S2, rdb, NULL);
+
+    tw_up(&w, 1);
+    w.h.wall_s = SDB_NOW;
+    w.m4.sdb = &S1;
+    /* No --rf-db: sloth.db, as before the flags. */
+    WT_EQ(get(&w, "/api/adsb/seen", "days=1"), 200);
+    WT_HAS(body_of(g_out), "aaa111");
+    WT_LACKS(body_of(g_out), "bbb222");
+    WT_EQ(get(&w, "/api/health", ""), 200);
+    WT_LACKS(body_of(g_out), "\"rf_db\"");
+    /* With it. */
+    w.m4.sdb_rf = &S2;
+    WT_EQ(get(&w, "/api/adsb/seen", "days=1"), 200);
+    WT_HAS(body_of(g_out), "bbb222");
+    WT_HAS(body_of(g_out), "RFDB22");
+    WT_LACKS(body_of(g_out), "aaa111");
+    WT_EQ(get(&w, "/api/adsb/aircraft", "hex=bbb222&days=1"), 200);
+    WT_HAS(body_of(g_out), "RFDB22");
+    WT_EQ(get(&w, "/api/adsb/aircraft", "hex=aaa111&days=1"), 200);
+    WT_LACKS(body_of(g_out), "WIFIDB1");
+    WT_EQ(get(&w, "/api/gnss/seen", "days=1"), 200);
+    WT_EQ(get(&w, "/api/aprs/seen", "days=1"), 200);
+    /* The Wi-Fi tables stay on sloth.db. */
+    WT_EQ(get(&w, "/api/devices", "limit=10&offset=0&sort=last"), 200);
+    WT_HAS(body_of(g_out), "InWifiDb");
+    WT_LACKS(body_of(g_out), "InRfDb");
+    /* /api/health: sloth.db's members where they stood, sloth-rf.db's
+     * in "rf_db". */
+    WT_EQ(get(&w, "/api/health", ""), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, ",\"db\":\"open\",");
+    WT_HAS(b, ",\"rf_db\":{\"state\":\"open\",\"schema\":");
+    WT_HAS(b, "/sloth-rf.db\",\"mode\":");
+    WT_HAS(b, ",\"stale_after_s\":");
+    WT_HAS(b, ",\"error\":null,\"opens\":");
+    /* Only --rf-db (a host that runs sloth-rf alone): the RF history
+     * answers, the Devices view says there is no sloth.db. */
+    w.m4.sdb = NULL;
+    WT_EQ(get(&w, "/api/adsb/seen", "days=1"), 200);
+    WT_HAS(body_of(g_out), "bbb222");
+    WT_EQ(get(&w, "/api/devices", "limit=10&offset=0&sort=last"), 503);
+    /* --rf-db named and not there: the RF history says so, and does not
+     * fall back to another daemon's file. */
+    static web_slothdb_t S3;
+    char gone[TEST_TMP_MAX + 32];
+    snprintf(gone, sizeof(gone), "%s/absent.db", dir);
+    web_slothdb_init(&S3, gone, NULL);
+    w.m4.sdb = &S1;
+    w.m4.sdb_rf = &S3;
+    WT_EQ(get(&w, "/api/adsb/seen", "days=1"), 503);
+    WT_HAS(body_of(g_out), "sloth_db_missing");
+    WT_LACKS(body_of(g_out), "aaa111");
+    WT_EQ(get(&w, "/api/health", ""), 200);
+    WT_HAS(body_of(g_out), ",\"rf_db\":{\"state\":\"missing\",\"schema\":null,");
+    WT_EQ(get(&w, "/api/devices", "limit=10&offset=0&sort=last"), 200);
+    tw_down(&w);
+    web_slothdb_destroy(&S3);
+    web_slothdb_destroy(&S2);
+    web_slothdb_destroy(&S1);
+    /* slothweb wrote neither file nor a side file of either. */
+    char listing[1024];
+    sdb_listing(dir, listing, sizeof(listing));
+    WT_LACKS(listing, "-journal");
+    WT_LACKS(listing, "absent.db");
+    static const char *const names[] = { "sloth.db", "sloth.db-wal", "sloth.db-shm",
+                                         "sloth-rf.db", "sloth-rf.db-wal", "sloth-rf.db-shm" };
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        char p[TEST_TMP_MAX + 48];
+        snprintf(p, sizeof(p), "%s/%s", dir, names[i]);
+        unlink(p);
+    }
+    rmdir(dir);
+}
+
+/* An alert sloth-rf raised, in the shared world with the optional RF
+ * stream and database (wt_world.h w_rf_up()): it is on /api/alerts by
+ * its handle, and its page reads the finding's history from
+ * sloth-rf.db, not from a row of the same key in sloth.db. */
+static void test_rf_alert_page_reads_the_rf_db(void) {
+    w_open(0);
+    w_rf_up();
+    if (!W.have_db || !W.have_rf_db) { w_close(); return; }
+    int ty = web_akb_find("GNSS_JAMMING");
+    WT_ASSERT(ty > 0);
+    char sql[1024], line[512], id[64];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,technique,"
+        "match_ip,match_port,count) VALUES ('gnssjam',%lld,%lld,%d,2,'GNSS jamming','',"
+        "'T1464',NULL,NULL,7);", (long long)W_T - 5000, (long long)W_T - 40, ty);
+    WT_EQ(sdb_exec(W.rf_path, sql), 0);
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,technique,"
+        "match_ip,match_port,count) VALUES ('gnssjam',%lld,%lld,%d,2,'GNSS jamming','',"
+        "'T1464',NULL,NULL,99);", (long long)W_T - 7777, (long long)W_T - 50, ty);
+    WT_EQ(sdb_exec(W.sdb_path, sql), 0);
+    snprintf(line, sizeof(line),
+        "{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"j1\",\"sev\":2,\"ty\":%d,"
+        "\"title\":\"GNSS jamming\",\"detail\":\"d\",\"key\":\"gnssjam\",\"first_seen\":%lld,"
+        "\"last_seen\":%lld,\"count\":1}", (long long)W_T - 40, ty, (long long)W_T - 40,
+        (long long)W_T - 40);
+    web_live_sum_t s0;
+    web_live_summary(&W.live, &s0, W.h.now_ms);
+    w_rf_line(line);
+    WT_EQ(w_alert_id("GNSS_JAMMING", id, sizeof(id)), 1);
+    WT_EQ(id[0], 's');
+    char q[96], want[64];
+    snprintf(q, sizeof(q), "id=%s", id);
+    WT_EQ(w_get("/api/alert", q), 200);
+    snprintf(want, sizeof(want), "%lld", (long long)W_T - 5000);
+    WT_HAS(w_body(), want);
+    snprintf(want, sizeof(want), "%lld", (long long)W_T - 7777);
+    WT_LACKS(w_body(), want);
+    /* The open count the tiles show includes it. */
+    WT_EQ(w_get("/api/live", ""), 200);
+    web_live_sum_t s;
+    web_live_summary(&W.live, &s, W.h.now_ms);
+    WT_EQ(s.alerts[2], s0.alerts[2] + 1);
+    w_close();
+}
+#endif
+
+/* ── the page ─────────────────────────────────────────────────────── */
+
+/* The health view's two additions and the tile's, each pinned whole
+ * (presence checks; no absence is claimed). */
+static void test_two_daemon_page(void) {
+    const char *p = (const char *)web_page;
+    WT_HAS(p, "  function rfWord(rf) { return rf.socket === \"connected\" ? String(rf.sensor) : String(rf.socket); }\n"
+              "  function rfKpi(t) {\n"
+              "    if (!t.rf || typeof t.sensor !== \"string\") return;\n"
+              "    var w = rfWord(t.rf);\n"
+              "    var worst = t.sensor !== \"ok\" ? t.sensor : w;\n"
+              "    set(\"k-sensor\", t.sensor + \" \\u00b7 rf \" + w);\n"
+              "    $(\"k-sensor\").className = \"kpi health-\" + (worst === \"ok\" ? \"ok\" : worst === \"unknown\" ? \"unknown\" : \"bad\");\n"
+              "  }\n");
+    WT_HAS(p, "        (t.sensor === \"ok\" ? \"ok\" : t.sensor === \"unknown\" ? \"unknown\" : \"bad\");\n"
+              "    }\n"
+              "    rfKpi(t);\n");
+    WT_HAS(p, "  var DAEMON_NAME = { \"wifi\": \"sloth (--socket)\", \"rf\": \"sloth-rf (--rf-socket)\" };\n"
+              "  function daemonRows(box, h) {\n"
+              "    (h.daemons || []).forEach(function (d) {\n"
+              "      var word = el(\"span\", \"health-\" + (d.sensor === \"ok\" ? \"ok\" : d.sensor === \"unknown\" ? \"unknown\" : \"bad\"),\n"
+              "                    String(d.sensor));\n"
+              "      box.appendChild(el(\"div\", \"label\", \"daemon: \" + (DAEMON_NAME[d.role] || String(d.role))));\n"
+              "      kvList(box, [[\"socket\", d.socket + (d.socket_spec ? \", \" + d.socket_spec : \"\")],\n"
+              "                   [\"sensor_health\", word],\n"
+              "                   [\"report\", num(d.health_age_s) ? dur(d.health_age_s) + \" ago\" : \"no sensor_health yet\"],\n"
+              "                   [\"stream version\", d.jsonl_version],\n"
+              "                   [\"last record\", num(d.last_record_age_s) ? dur(d.last_record_age_s) + \" ago\" : \"none yet\"],\n"
+              "                   [\"records\", String(d.socket_records)], [\"decode errors\", String(d.socket_decode_errors)],\n"
+              "                   [\"gaps\", String(d.socket_gaps)], [\"reconnects\", String(d.socket_reconnects)],\n"
+              "                   [\"last error\", d.socket_last_error],\n"
+              "                   [\"wrong daemon\", d.wrong_daemon ? \"this socket is sending \" + d.wrong_daemon + \"'s sensor_health: nothing from it is applied (\" +\n"
+              "                                                     d.wrong_records + \" records passed over); check the socket flags\"\n"
+              "                                                   : d.wrong_records ? d.wrong_records + \" records passed over earlier, none now\" : null]]);\n"
+              "    });\n"
+              "  }\n");
+    WT_HAS(p, "  function rfDbRows(box, h) {\n"
+              "    var d = h.rf_db;\n"
+              "    if (!d) return;\n"
+              "    box.appendChild(el(\"div\", \"label\", \"sloth-rf.db\"));\n"
+              "    kvList(box, [[\"db\", String(d.state) + (d.mode ? \", \" + d.mode : \"\")],\n"
+              "                 [\"schema\", num(d.schema) ? \"v\" + d.schema : null],\n"
+              "                 [\"freshness\", num(d.age_s) ? \"written \" + dur(d.age_s) + \" ago\" + (d.stale === true ? \", stale: sloth-rf's stream is current and the file is not\" : \"\")\n"
+              "                                            : \"nothing to read yet\"],\n"
+              "                 [\"error\", d.error]]);\n"
+              "  }\n");
+    WT_HAS(p, "        kvList(box, [[\"store\", String(h.store)], [\"path\", h.store_path]]);\n"
+              "        daemonRows(box, h);\n"
+              "        rfDbRows(box, h);\n"
+              "        set(\"hl-note\", \"the tile's word is the state above\");\n");
+    WT_HAS(p, "  var DB_NAME = { \"sloth\": \"sloth.db\", \"slothweb\": \"slothweb.db\", \"sloth-rf\": \"sloth-rf.db\" };");
+    WT_HAS(p, "  function rssName(j) { return j.host_from === \"rf\" ? \"sloth-rf rss\" : \"sloth rss\"; }\n");
+    WT_HAS(p, "      { g: \"host\", name: rssName(j), metric: \"sys.rss\", key: \"\", unit: \"kB\", eps: 1024 },");
+}
+
+void run_twodaemon_tests(void) {
+    WT_RUN(test_tabs_same_with_one_stream_or_two);
+    WT_RUN(test_rtl433_block_and_sloths_sensor_health);
+    WT_RUN(test_wrong_daemon_is_not_applied);
+    WT_RUN(test_rf_stream_feeds_the_rollup_not_the_metrics);
+    WT_RUN(test_sysstat_has_one_writer_per_part);
+    WT_RUN(test_gnss_position_and_health_precedence);
+    WT_RUN(test_rf_alerts_are_listed_with_sloths);
+    WT_RUN(test_health_one_stream_or_two);
+    WT_RUN(test_rf_store_slot);
+#ifdef WITH_SQLITE
+    WT_RUN(test_rf_history_reads_the_rf_db);
+    WT_RUN(test_rf_alert_page_reads_the_rf_db);
+#endif
+    WT_RUN(test_two_daemon_page);
+}

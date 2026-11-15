@@ -764,7 +764,7 @@ static void down(void) {
 }
 
 static char *export(long long since_q, const char *query, int *status) {
-    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, g_own_csv, NULL, NULL, NULL, g_own_mon_csv };
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, g_own_csv, NULL, NULL, NULL, g_own_mon_csv, NULL };
     char q[64];
     if (!query) snprintf(q, sizeof(q), "since=%lld", since_q);
     char *body = NULL;
@@ -1987,7 +1987,7 @@ static void test_pull_from_an_f1_peer(void) {
     web_m4_t m4;
     memset(&m4, 0, sizeof(m4));
     m4.fleet = &F;
-    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     static char body[65536];
     size_t len = 0;
     int st = 0;
@@ -2386,7 +2386,7 @@ static void test_locate_route(void) {
     G.loc.lon = -111.87006;
     G.loc.ts = T;
     snprintf(G.loc.src, sizeof(G.loc.src), "fixed");
-    web_fleet_src_t src = { &here, NULL, &G, NULL, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { &here, NULL, &G, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
 
     char *b = NULL;
     size_t bl = 0;
@@ -2787,7 +2787,7 @@ static void test_gnss_export(void) {
     web_gnss_t *g = malloc(sizeof(*g));
     WT_ASSERT(g && web_gnss_init(g) == 0);
     gnss_feed(g, T - 5, 33.32922, -111.87006, -60);
-    web_fleet_src_t src = { &SDB, NULL, g, &FR, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { &SDB, NULL, g, &FR, NULL, NULL, NULL, NULL, NULL, NULL };
     char *body = NULL;
     size_t len = 0;
     int st = 0;
@@ -3140,7 +3140,7 @@ static void test_gnss_route(void) {
         T, T, T + 100, T - 2850, T - 2850, T - 2750, T - 500, T - 500, T - 500);
     WT_EQ(sql_on(g_store, sql), 0);
     gnss_two_sites(&F, T - 7200, T);
-    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL, NULL, NULL, NULL, NULL };
     char *b = gnss_get(&src, "", T);
     WT_HAS(b, "\"local\":\"open\"");
     WT_HAS(b, "\"window_s\":120,\"gap_s\":150,\"region_m\":50000,");
@@ -3261,7 +3261,7 @@ static void test_gnss_route(void) {
     WT_HAS(b, "\"why\":\"no_current_fix\"");
     WT_LACKS(b, "\"moved\":[\"beta\"]");
     free(b);
-    web_fleet_src_t nos = { NULL, NULL, NULL, &FR, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t nos = { NULL, NULL, NULL, &FR, NULL, NULL, NULL, NULL, NULL, NULL };
     b = gnss_get(&nos, "", T + 60);
     WT_HAS(b, "\"local\":\"none\"");
     snprintf(want, sizeof(want), "{\"site\":\"beta\",\"type\":\"GNSS_TIME_JUMP\",\"class\":"
@@ -3297,7 +3297,7 @@ static void test_gnss_sample_events(void) {
         if (t == T + 60) {
             /* At T the indicator's window has not closed at beta's last
              * pull: no quiet peer yet. */
-            char *b0 = gnss_get(&(web_fleet_src_t){ NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL }, "", T);
+            char *b0 = gnss_get(&(web_fleet_src_t){ NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL }, "", T);
             char want0[512];
             snprintf(want0, sizeof(want0), "{\"site\":\"self\",\"type\":\"JAM_IND\",\"class\":"
                      "\"interference\",\"source\":\"sample\",\"first_seen\":%lld,"
@@ -3316,7 +3316,7 @@ static void test_gnss_sample_events(void) {
             web_fg_add(F.fg, sl[i], &s, 150);
         }
     }
-    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     char *b = gnss_get(&src, "", T + 120);
     char want[512];
     snprintf(want, sizeof(want), "{\"site\":\"self\",\"type\":\"CN0_DROP\",\"class\":"
@@ -3380,7 +3380,7 @@ static void test_gnss_state_survives_a_restart(void) {
     WT_EQ(F.fg->site[b].se_a[0], T + 30);
     /* With the references back, the baseline needs only a fresh fix. */
     gnss_two_sites(&F, T + 60, T + 60);
-    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL, NULL, NULL, NULL, NULL, NULL };
     char *body = gnss_get(&src, "", T + 60);
     WT_HAS(body, "\"verdict\":\"within\"");
     free(body);
@@ -3587,7 +3587,7 @@ static void test_adsb_export(void) {
     web_adsb_t A;
     WT_EQ(web_adsb_init(&A), 0);
     adsb_rx(&A, T - 30, 2247000);
-    web_fleet_src_t src = { &SDB, NULL, &G, &FR, NULL, &A, NULL, NULL, NULL };
+    web_fleet_src_t src = { &SDB, NULL, &G, &FR, NULL, &A, NULL, NULL, NULL, NULL };
     char *b0 = export_q(&src, "since=0&adsb=1");
     free(b0);
     adsb_rx(&A, T, 2247900);
@@ -3633,7 +3633,7 @@ static void test_adsb_export(void) {
      * the aircraft, not read, are cut - never an empty list the
      * comparison would take as "heard none" (seen red, false, with the
      * !ac_read clause removed from the export). */
-    web_fleet_src_t none = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t none = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     b = export_q(&none, "since=0&adsb=1");
     if (b) {
         WT_LACKS(b, "adsb_rx");
@@ -3927,7 +3927,7 @@ static void test_adsb_route(void) {
     WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
     web_slothdb_t here;
     web_slothdb_init(&here, g_here_db, NULL);
-    web_fleet_src_t src = { &here, NULL, &GS, NULL, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { &here, NULL, &GS, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     char *b = aircraft_get(&src, "");
     WT_ASSERT(b != NULL);
     if (b) {
@@ -4187,7 +4187,7 @@ static void test_export_monitor_only(void) {
     snprintf(mine.bssid[0], sizeof(mine.bssid[0]), "0e:51:00:00:00:f1");
     mine.nbssid = 1;
     web_fleet_src_t src = { &SDB, &B, &G, &FR, "0e:51:00:00:00:97,0e:51:00:00:00:99", &A, &mine,
-                            NULL, "0e:51:00:00:00:97" };
+                            NULL, "0e:51:00:00:00:97", NULL };
     char *b = export_q(&src, "since=0&next=1&own=1&gnss=1&adsb=1&ident=1");
     WT_ASSERT(b != NULL);
     if (b) {
@@ -4573,6 +4573,141 @@ static void test_purge_v2_repulls(void) {
     WT_EQ(F.peer[0].nown, 1);
     pull_down();
 }
+
+/* Two daemons (#214, ADR 0010): with --rf-db the export reads the GNSS
+ * incidents and the aircraft from sloth-rf's database (src.rf) and
+ * everything else from sloth.db as before. One answer, one header: the
+ * host is named once and the rule stated once, whichever file a row
+ * came from. sloth-rf.db shares sloth's DDL, so it has a devices and an
+ * alerts table too; nothing in them, and nothing of its rtl_433 or
+ * Victron rows, travels (ADR 0009: the export has no writer for those
+ * kinds, and the device and alert lines are sloth.db's). Without src.rf
+ * the same export reads sloth.db for both, as before the split.
+ *
+ * Seen red, each restored: with the export's `src->rf &&
+ * src->rf->configured` made false (the decoy aircraft and the decoy
+ * incident of sloth.db were sent, and sloth-rf.db's were not); with the
+ * device read given `rfc` in place of `&c` (sloth-rf.db's marker device
+ * was sent); with the alert read given `rfc` (its marker alert was
+ * sent). */
+static void test_export_reads_rf_db(void) {
+    up();
+    char rfdb[TEST_TMP_MAX + 32], sql[2048];
+    snprintf(rfdb, sizeof(rfdb), "%s/sloth-rf.db", g_dir);
+    WT_EQ(sdb_make(rfdb, db_schema_version(), 0), 0);
+    /* sloth-rf's file: the sky, the receiver's incidents, and rows of
+     * every kind that must not leave it. */
+    peer_sky(rfdb);
+    gnss_incidents(rfdb);
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO devices (mac,ip,hostname,vendor,last_ssid,is_ap,signal_dbm,sources,"
+        "risk_signals,first_seen,last_seen) VALUES"
+        " ('0e:5f:00:00:00:01',NULL,NULL,'RfDbMarker','RfDbSsid',0,-50,16,0,%lld,%lld);"
+        "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,technique,"
+        "match_ip,match_port,count) VALUES ('deauth:0e:5f:00:00:00:02',%lld,%lld,%d,1,"
+        "'rf-db-alert-marker','','T1499',NULL,NULL,1);"
+        "INSERT INTO victron_devices (mac,first_seen,last_seen,serial,model,readings,sessions)"
+        " VALUES ('0e:5f:00:00:00:03',%lld,%lld,'VICSERIALMARK','VicModelMark',1,0);",
+        T - 900, T - 60, T - 900, T - 60, web_akb_find("DEAUTH_FLOOD"), T - 900, T - 60);
+    WT_EQ(sdb_exec(rfdb, sql), 0);
+    /* sloth.db: an aircraft and a receiver incident that are not
+     * sloth-rf's, which a split sensor's sloth.db no longer gains. */
+    ac_put(g_db, "a0dec0", T - 5000, T - 900, T - 100, "DECOY1");
+    ac_sight(g_db, "a0dec0", T - 100, BETA_LAT, BETA_LON, 10000, 9000, "280.0", 0);
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO alert_incidents (key,incident_id,type,first_seen,last_seen,sev,peak_sev,"
+        "count,observations) VALUES ('gnsstime','decoy',%d,%lld,%lld,1,1,1,1);",
+        web_akb_find("GNSS_TIME_JUMP"), T - 700, T - 700);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    web_slothdb_t RF;
+    web_slothdb_init(&RF, rfdb, NULL);
+    web_gnss_t G;
+    site_at(&G, BETA_LAT, BETA_LON);
+    web_adsb_t A;
+    WT_EQ(web_adsb_init(&A), 0);
+    adsb_rx(&A, T, 2247900);
+    web_fleet_src_t src = { &SDB, NULL, &G, &FR, NULL, &A, NULL, NULL, NULL, &RF };
+    char *b = export_q(&src, "since=0&next=1&own=1&gnss=1&adsb=1&ident=1");
+    WT_ASSERT(b != NULL);
+    if (b) {
+        /* One header, the host named once, the rule stated once. */
+        WT_EQ(count_of(b, "\"type\":\"fleet_export\""), 1);
+        WT_EQ(count_of(b, "\"hostname\":"), 1);
+        WT_EQ(count_of(b, "\"share_rule\":\"monitor_only/2\""), 1);
+        /* sloth-rf.db's sky and incidents. */
+        WT_HAS(b, "{\"type\":\"aircraft\",\"hex\":\"a00001\",");
+        WT_HAS(b, "{\"type\":\"aircraft\",\"hex\":\"a00002\",");
+        WT_HAS(b, ",\"aircraft\":3,\"truncated_aircraft\":false,");
+        WT_HAS(b, "\"positions\":14,\"cov_complete\":true,");
+        WT_HAS(b, "{\"type\":\"gnss_event\",\"alert_type\":\"GNSS_JAMMING\",");
+        WT_HAS(b, "{\"type\":\"gnss_event\",\"alert_type\":\"GNSS_POSITION_JUMP\",");
+        /* sloth.db's own rows still travel. */
+        WT_HAS(b, "{\"type\":\"wifi\",");
+        /* Not sloth.db's copies of the RF tables. */
+        WT_LACKS(b, "a0dec0");
+        WT_LACKS(b, "DECOY1");
+        WT_LACKS(b, "GNSS_TIME_JUMP");
+        /* Nothing else of sloth-rf.db. */
+        static const char *const never[] = {
+            "0e:5f:00:00:00:01", "RfDbMarker", "RfDbSsid", "0e:5f:00:00:00:02",
+            "rf-db-alert-marker", "0e:5f:00:00:00:03", "VICSERIALMARK", "VicModelMark",
+            "victron", "rtl433",
+        };
+        for (size_t i = 0; i < sizeof(never) / sizeof(never[0]); i++) {
+            if (strstr(b, never[i])) fprintf(stderr, "    sent: %s\n", never[i]);
+            WT_LACKS(b, never[i]);
+        }
+        /* The importer takes it whole. */
+        WT_EQ(ingest_ok(b), 0);
+        free(b);
+    }
+    /* A page of one kind is sloth.db's, with or without sloth-rf.db. */
+    b = export_q(&src, "since=0&kind=wifi&after=4102444800~");
+    if (b) {
+        WT_LACKS(b, "0e:5f:00:00:00:01");
+        WT_LACKS(b, "\"type\":\"aircraft\"");
+        free(b);
+    }
+    /* Without it: one file for both, as before the split. */
+    web_fleet_src_t one = { &SDB, NULL, &G, &FR, NULL, &A, NULL, NULL, NULL, NULL };
+    b = export_q(&one, "since=0&next=1&own=1&gnss=1&adsb=1&ident=1");
+    WT_ASSERT(b != NULL);
+    if (b) {
+        WT_HAS(b, "{\"type\":\"aircraft\",\"hex\":\"a0dec0\",");
+        WT_HAS(b, "{\"type\":\"gnss_event\",\"alert_type\":\"GNSS_TIME_JUMP\",");
+        WT_LACKS(b, "a00001");
+        WT_LACKS(b, "GNSS_JAMMING");
+        WT_EQ(count_of(b, "\"hostname\":"), 1);
+        free(b);
+    }
+    /* sloth-rf.db configured and not there: the aircraft are cut, never
+     * an empty list, and sloth.db's are not sent in their place. */
+    web_slothdb_t GONE;
+    char gone[TEST_TMP_MAX + 32];
+    snprintf(gone, sizeof(gone), "%s/no-such-rf.db", g_dir);
+    web_slothdb_init(&GONE, gone, NULL);
+    web_fleet_src_t miss = { &SDB, NULL, &G, &FR, NULL, &A, NULL, NULL, NULL, &GONE };
+    b = export_q(&miss, "since=0&next=1&own=1&gnss=1&adsb=1&ident=1");
+    WT_ASSERT(b != NULL);
+    if (b) {
+        WT_LACKS(b, "a0dec0");
+        WT_LACKS(b, "\"type\":\"gnss_event\"");
+        WT_HAS(b, ",\"aircraft\":0,\"truncated_aircraft\":true,");
+        WT_HAS(b, "{\"type\":\"wifi\",");
+        free(b);
+    }
+    web_slothdb_destroy(&GONE);
+    web_slothdb_destroy(&RF);
+    web_adsb_destroy(&A);
+    web_gnss_destroy(&G);
+    static const char *const sfx[] = { "", "-wal", "-shm", "-journal" };
+    for (size_t i = 0; i < sizeof(sfx) / sizeof(sfx[0]); i++) {
+        char p[TEST_TMP_MAX + 48];
+        snprintf(p, sizeof(p), "%s%s", rfdb, sfx[i]);
+        unlink(p);
+    }
+    down();
+}
 #endif
 
 void run_fleet_tests(void) {
@@ -4587,6 +4722,7 @@ void run_fleet_tests(void) {
     WT_RUN(test_ingest_refuses_forbidden);
     WT_RUN(test_ingest_refuses_rtl433);
     WT_RUN(test_ingest_refuses_victron);
+    WT_RUN(test_export_reads_rf_db);
     WT_RUN(test_purge_once);
     WT_RUN(test_purge_v2_repulls);
     WT_RUN(test_pull_good_and_upsert);

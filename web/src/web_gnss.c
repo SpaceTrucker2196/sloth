@@ -204,7 +204,7 @@ static void fix_apply(web_gnss_t *g, const web_jrec_t *r, long long ts) {
     take_src(g, r);
 }
 
-static void sh_apply(web_gnss_t *g, const web_jrec_t *r, long long ts) {
+static void sh_apply(web_gnss_t *g, web_gnss_sh_t *out, const web_jrec_t *r, long long ts) {
     /* Only a sensor_health carrying the block: a sloth with no --gps
      * writes none of these, and the panel then says "no receiver". */
     if (!web_jl_get(r, "gnss_sats_in_view")) return;
@@ -223,7 +223,7 @@ static void sh_apply(web_gnss_t *g, const web_jrec_t *r, long long ts) {
     long long off = jint(r, "gnss_time_offset_ms", -(1LL << 46), (1LL << 46), (1LL << 47));
     if (off != (1LL << 47)) { h.has_time_off = 1; h.time_off_ms = off; }
     h.jam = (int)jint(r, "gnss_jam", -1, 255, -1);
-    g->sh = h;
+    *out = h;
     const char *src = web_jl_str(r, "gps_src");
     if (src && !g->src[0]) {
         size_t n = strlen(src);
@@ -239,16 +239,16 @@ static void sh_apply(web_gnss_t *g, const web_jrec_t *r, long long ts) {
  * a line without them clears it, so a lost position is not served as a
  * current one. Every sensor_health carries them while a position
  * exists, so the clear is right, not a gap. */
-static void loc_apply(web_gnss_t *g, const web_jrec_t *r, long long ts) {
+static void loc_apply(web_loc_t *loc, const web_jrec_t *r, long long ts) {
     double lat, lon, alt = 0.0;
     const char *src = web_jl_str(r, "loc_src");
     if (!web_jl_num(r, "loc_lat", &lat) || !web_jl_num(r, "loc_lon", &lon) || !src) {
-        memset(&g->loc, 0, sizeof(g->loc));
+        memset(loc, 0, sizeof(*loc));
         return;
     }
     int has_alt = web_jl_num(r, "loc_alt_m", &alt) && isfinite(alt) && alt >= -1000 && alt <= 20000;
-    if (!web_loc_set(&g->loc, lat, lon, has_alt, alt, 0, 0, src, ts))
-        memset(&g->loc, 0, sizeof(g->loc));
+    if (!web_loc_set(loc, lat, lon, has_alt, alt, 0, 0, src, ts))
+        memset(loc, 0, sizeof(*loc));
 }
 
 void web_gnss_record(web_gnss_t *g, const web_jrec_t *r, long long now_ms) {
@@ -261,9 +261,26 @@ void web_gnss_record(web_gnss_t *g, const web_jrec_t *r, long long now_ms) {
     if (!strcmp(t, "gnss_sat")) { g->records++; sat_apply(g, r, ts); age_out(g, ts); }
     else if (!strcmp(t, "gnss_sky")) { g->records++; sky_apply(g, r, ts); age_out(g, ts); }
     else if (!strcmp(t, "gnss_fix")) { g->records++; fix_apply(g, r, ts); }
-    else if (!strcmp(t, "sensor_health")) { loc_apply(g, r, ts); sh_apply(g, r, ts); }
+    else if (!strcmp(t, "sensor_health")) { loc_apply(&g->loc, r, ts); sh_apply(g, &g->sh, r, ts); }
     pthread_mutex_unlock(&g->mu);
 }
+
+void web_gnss_record_fallback(web_gnss_t *g, const web_jrec_t *r, long long now_ms) {
+    (void)now_ms;
+    if (!g || !g->sats) return;
+    const char *t = web_jl_str(r, "type");
+    if (!t || strcmp(t, "sensor_health")) return;
+    long long ts = web_jl_int(r, "ts", 0);
+    pthread_mutex_lock(&g->mu);
+    loc_apply(&g->loc_fb, r, ts);
+    sh_apply(g, &g->sh_fb, r, ts);
+    pthread_mutex_unlock(&g->mu);
+}
+
+/* What is served: sloth-rf's (or the one stream's) when it has given
+ * one, else the fallback, which is zero without --rf-socket. */
+static const web_loc_t *loc_of(const web_gnss_t *g) { return g->loc.has ? &g->loc : &g->loc_fb; }
+static const web_gnss_sh_t *sh_of(const web_gnss_t *g) { return g->sh.seen ? &g->sh : &g->sh_fb; }
 
 /* ── JSON ───────────────────────────────────────────────────────────── */
 
@@ -364,14 +381,14 @@ int web_gnss_route(web_gnss_t *g, const char *query, long long now_s,
     web_jw_raw(&w, ",\"rejected\":"); web_jw_int(&w, (long long)g->rejected);
     /* The sensor block: null until a sensor_health carried gnss_*. */
     web_jw_raw(&w, ",\"sensor\":");
-    if (g->sh.seen) {
-        web_jw_raw(&w, "{\"ts\":"); web_jw_int(&w, g->sh.ts);
-        web_jw_raw(&w, ",\"state\":"); web_jw_str(&w, g->sh.gps_state);
-        web_jw_raw(&w, ",\"sats_in_view\":"); web_jw_int(&w, g->sh.sats_in_view);
-        web_jw_raw(&w, ",\"sats_used\":"); web_jw_int(&w, g->sh.sats_used);
-        web_jw_raw(&w, ",\"cn0_mean\":"); jw_num(&w, g->sh.cn0_mean > 0, g->sh.cn0_mean, 1);
-        web_jw_raw(&w, ",\"time_off_ms\":"); jw_int_or_null(&w, g->sh.has_time_off, g->sh.time_off_ms);
-        web_jw_raw(&w, ",\"jam\":"); jw_int_or_null(&w, g->sh.jam >= 0, g->sh.jam);
+    if (sh_of(g)->seen) {
+        web_jw_raw(&w, "{\"ts\":"); web_jw_int(&w, sh_of(g)->ts);
+        web_jw_raw(&w, ",\"state\":"); web_jw_str(&w, sh_of(g)->gps_state);
+        web_jw_raw(&w, ",\"sats_in_view\":"); web_jw_int(&w, sh_of(g)->sats_in_view);
+        web_jw_raw(&w, ",\"sats_used\":"); web_jw_int(&w, sh_of(g)->sats_used);
+        web_jw_raw(&w, ",\"cn0_mean\":"); jw_num(&w, sh_of(g)->cn0_mean > 0, sh_of(g)->cn0_mean, 1);
+        web_jw_raw(&w, ",\"time_off_ms\":"); jw_int_or_null(&w, sh_of(g)->has_time_off, sh_of(g)->time_off_ms);
+        web_jw_raw(&w, ",\"jam\":"); jw_int_or_null(&w, sh_of(g)->jam >= 0, sh_of(g)->jam);
         web_jw_raw(&w, "}");
     } else {
         web_jw_raw(&w, "null");
@@ -442,7 +459,7 @@ int web_gnss_route(web_gnss_t *g, const char *query, long long now_s,
     /* The sensor's own position (loc_apply), last: the pinned heads of
      * this answer stand. */
     web_jw_raw(&w, ",\"loc\":");
-    web_loc_json(&w, &g->loc);
+    web_loc_json(&w, loc_of(g));
     web_jw_raw(&w, "}");
     pthread_mutex_unlock(&g->mu);
     if (w.overflow) return -1;
@@ -499,7 +516,7 @@ void web_gnss_health_json(web_gnss_t *g, web_jw_t *w) {
     web_jw_raw(w, ",\"evictions\":"); web_jw_int(w, (long long)g->evictions);
     web_jw_raw(w, ",\"aged\":"); web_jw_int(w, (long long)g->aged);
     web_jw_raw(w, ",\"rejected\":"); web_jw_int(w, (long long)g->rejected);
-    web_jw_raw(w, ",\"sensor_seen\":"); web_jw_int(w, g->sh.seen);
+    web_jw_raw(w, ",\"sensor_seen\":"); web_jw_int(w, sh_of(g)->seen);
     web_jw_raw(w, "}");
     pthread_mutex_unlock(&g->mu);
 }
@@ -537,8 +554,8 @@ void web_gnss_site(web_gnss_t *g, web_loc_t *loc, web_gnss_sh_t *sh) {
     memset(sh, 0, sizeof(*sh));
     if (!g || !g->sats) return;
     pthread_mutex_lock(&g->mu);
-    *loc = g->loc;
-    *sh = g->sh;
+    *loc = *loc_of(g);
+    *sh = *sh_of(g);
     pthread_mutex_unlock(&g->mu);
 }
 

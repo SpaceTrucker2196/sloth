@@ -50,6 +50,13 @@ typedef struct {
     int      retain_days;          /* --web-retain-days */
     /* M4 (#162): sloth.db, read-only. "" when not given. */
     char     sloth_db[4096];       /* --sloth-db */
+    /* The second daemon (#214, ADR 0010): sloth-rf's data socket and
+     * its database, read as --socket and --sloth-db are. Neither has a
+     * default: without --rf-socket there is one stream, as before the
+     * split, and without --rf-db the RF tables are read from
+     * --sloth-db. rf_sock.kind 0: not given. */
+    web_sockspec_t rf_sock;        /* --rf-socket */
+    char     rf_db[4096];          /* --rf-db */
     /* M5 (#163): the SQL box (web_sqlbox.h). Off unless given. */
     int      allow_sql;            /* --web-allow-sql */
     /* Triage and the TACDB (docs/web-frrs-spec.md): --web-read-only

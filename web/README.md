@@ -250,20 +250,24 @@ thread fails; slothweb is not running after either.
 | `slothweb: bad --web-bind ADDR (want A.B.C.D:PORT or [V6]:PORT)`, `bad --web-bind ADDR (want [V6]:PORT)`, `bad --web-bind address in ADDR`, `--web-bind ADDR: bad port` | A literal address and a port: `127.0.0.1:8770`, `[::1]:8770`. |
 | `slothweb: --web-bind ADDR: not a literal IPv4 address (names are not resolved)` | slothweb never resolves a name, its own bind included: `localhost:8770` is refused, write `127.0.0.1:8770`. |
 | `slothweb: refusing to bind ADDR: not a loopback address.` | Keep it on loopback and use `ssh -L` (above), or, deliberately, add `--web-allow-remote` and name the peers with `--web-allow` (Security). |
-| `slothweb: --strict refuses a non-loopback --web-bind (ADDR).`, `--strict refuses a non-loopback --web-allow (CIDR).`, `--strict refuses a non-loopback --socket (SPEC).` | `--strict` means loopback only, whatever else is given; drop one of the two. |
+| `slothweb: --strict refuses a non-loopback --web-bind (ADDR).`, `--strict refuses a non-loopback --web-allow (CIDR).`, `--strict refuses a non-loopback --socket (SPEC).`, `--strict refuses a non-loopback --rf-socket (SPEC).` | `--strict` means loopback only, whatever else is given; drop one of the two. |
 | `slothweb: --web-allow CIDR admits non-loopback peers; that needs --web-allow-remote.` | Add `--web-allow-remote` if you mean it. |
 | `slothweb: --web-allow CIDR: empty address`, `bad address`, `not a literal IPv4 or IPv6 address`, `bad prefix`, `prefix too long`, `host bits set past the prefix` | A CIDR with its host bits zero: `10.0.0.0/8`, not `10.0.0.1/8`; no names. |
 | `slothweb: too many --web-allow entries (max N)` | Use fewer, wider prefixes. |
 | `slothweb: --socket SPEC: want unix:PATH or tcp:ADDR:PORT`, `want tcp:A.B.C.D:PORT or tcp:[V6]:PORT`, `want tcp:[V6]:PORT`, `bad address`, `bad port` | `--socket unix:/run/sloth/sloth.sock` or `--socket tcp:127.0.0.1:8765`. |
 | `slothweb: --socket SPEC: not a literal IPv4 address (names are not resolved)` | A literal address, never a name. |
 | `slothweb: --socket SPEC: the path must be 1..N bytes` | A unix socket path is limited to 107 bytes by the kernel: use a shorter path, or a relative one from the directory you start in. |
-| `slothweb: --sloth-db: empty or too long a path`, `--store: empty or too long a path`, `--pcap-dir: empty or too long a path` | Give a path, shorter than 4,080 bytes. |
+| `slothweb: --rf-socket SPEC: ...` with any of the `--socket` reasons above | `--rf-socket` takes what `--socket` takes: `--rf-socket unix:/run/sloth-rf/sloth-rf.sock` or `--rf-socket tcp:127.0.0.1:8766`. |
+| `slothweb: --rf-socket and --socket name the same socket (SPEC): --rf-socket is sloth-rf's, --socket sloth's` | One socket under both flags is one daemon read as two. Give `--rf-socket` sloth-rf's socket (`unix:/run/sloth-rf/sloth-rf.sock`), or leave it out: without it slothweb reads one stream, as before the split. The default `--socket` counts. |
+| `slothweb: --sloth-db: empty or too long a path`, `--rf-db: empty or too long a path`, `--store: empty or too long a path`, `--pcap-dir: empty or too long a path` | Give a path, shorter than 4,080 bytes. |
 | `slothweb: --pcap-dir: at most N (the sensor's --pcap-dir and its --eapol-dir)` | Two directories at most: the sensor's `--pcap-dir`, and its `--eapol-dir` when it runs `--collect-handshakes`. |
 | `slothweb: --pcap-dir PATH given twice` | Name each directory once. |
 | `slothweb: --spectrum-dir: want an absolute path, under N bytes`, `--spectrum-request: want an absolute path, under N bytes` | The Spectrum tab's two paths are absolute, as the units that share them name them: `/var/lib/sloth-sdrsweep` and `/run/slothweb/sdrsweep.request` by default ([docs/wiki/sdr-sweep.md](../docs/wiki/sdr-sweep.md)). |
 | `slothweb: --web-serve-evidence-pcap with --web-allow-remote would hand remote peers evidence pcaps` | An evidence pcap (`<incident>-<event>-<RULE>.pcap`, from the sensor's `--eapol-dir`) may hold EAPOL/PMKID handshake material, so serving it to remote peers takes its own spelling: `--web-serve-evidence-pcap=remote`. Or drop one of the two flags. Exit 2. |
-| `slothweb: --sloth-db needs SQLite; this slothweb was built with WITH_SQLITE=0`, `--store needs SQLite; this slothweb was built with WITH_SQLITE=0`, `--web-allow-sql needs SQLite; this slothweb was built with WITH_SQLITE=0` | Rebuild with `make web` (SQLite is the default), or drop the flag. |
+| `slothweb: --sloth-db needs SQLite; this slothweb was built with WITH_SQLITE=0`, `--rf-db needs SQLite; this slothweb was built with WITH_SQLITE=0`, `--store needs SQLite; this slothweb was built with WITH_SQLITE=0`, `--web-allow-sql needs SQLite; this slothweb was built with WITH_SQLITE=0` | Rebuild with `make web` (SQLite is the default), or drop the flag. |
 | `slothweb: --sloth-db and --store name the same file (PATH): sloth.db is sloth's, the store is slothweb's own` | Point `--store` somewhere else. |
+| `slothweb: --rf-db and --store name the same file (PATH): sloth-rf.db is sloth-rf's, the store is slothweb's own` | Point `--store` somewhere else. |
+| `slothweb: --rf-db and --sloth-db name the same file (PATH): give --rf-db only when sloth-rf writes a database of its own` | One file under both flags would be read twice. A sensor that is one `sloth` has one database: drop `--rf-db`, and the RF history is read from `--sloth-db` as before. |
 | `slothweb: --web-allow-sql needs --sloth-db PATH: the box reads sloth.db and nothing else.` | Add `--sloth-db`, or drop `--web-allow-sql`. |
 | `slothweb: --strict refuses --web-allow-sql.` | The SQL box is a query surface; `--strict` refuses it. Drop one. |
 | `slothweb: --peer SPEC: want NAME=http://A.B.C.D[:PORT]`, `the name must be 1 to 32 of A-Z a-z 0-9 . _ -`, `the URL must start http:// (no TLS: the tailnet encrypts the link)`, `the URL is longer than 64 bytes`, `not a literal IPv4 address (names are not resolved)`, `bad port`, `the URL is the peer's address only, with no path` | `--peer w9fjc=http://100.101.102.103:8770`: a name of your own, then the peer slothweb's tailnet address and port, nothing after it ([Fleet](#fleet)). |
@@ -287,6 +291,7 @@ thread fails; slothweb is not running after either.
 | `slothweb: WARNING: admitting non-loopback peers in CIDR (--web-allow, authorised by --web-allow-remote).` | As it says. |
 | `slothweb: WARNING: --web-allow-sql with --web-allow-remote: the SQL box (/api/query) ...` | Every admitted peer can run read-only SQL over sloth.db. |
 | `slothweb: WARNING: reading the data stream from SPEC, which is not loopback.` | The stream crosses a network unencrypted; read it on the sensor instead, or tunnel it. |
+| `slothweb: WARNING: reading sloth-rf's data stream from SPEC, which is not loopback.` | The same, for `--rf-socket`. |
 | `slothweb: WARNING: --peer NAME at URL is outside the tailnet (--peer-allow-outside-tailnet).` | The pull and the export it reads travel as plain HTTP over whatever path reaches that address; only that path protects them ([Fleet](#fleet)). |
 
 **Starting up** (exit 1 unless said):
@@ -326,6 +331,7 @@ and the page says why in each view that needs it):
 | `PATH: needs recovery by sloth, which it does when it next opens it (ERR)` | sloth stopped mid-write; start sloth and it recovers the file. |
 | `PATH: SQLITE_DBCONFIG_DEFENSIVE refused`, `PATH: query_only: ERR` | The SQLite library lacks what slothweb needs: 3.31 or newer. |
 | `no --sloth-db`, `slothweb was built without SQLite; no sloth.db` | The reason `/api/health` gives (`db_error`) when there is no sloth.db to read. |
+| `slothweb: sloth-rf.db PATH: missing (PATH: not there (yet): sloth makes it with --db); the GNSS, ADS-B, APRS and Victron history waits for it, retried on every request` | `--rf-db` names a file that is not there: sloth-rf is not installed on this host, not started yet, or runs without `--db`. slothweb runs; the live tabs are fed by the stream, the history routes answer `503` until the file appears, and nothing is read from `--sloth-db` in its place. The same line carries each reason sloth.db's does (above), and `/api/health` says the state in `rf_db`. |
 | `--web-assessments: empty or too long a path`, `--web-assessments PATH: not a directory` | Give the directory holding the research assessments (`<TYPE>.md` with front matter), or leave the flag out: "follow recommended" then says "no recommendation yet". A path that is not there is accepted and means the same (`slothweb: follow recommended: PATH: no such directory, no recommendation yet`); `make install` puts them in `$(PREFIX)/share/sloth/alert-assessments`. |
 | `--web-agent-secret: empty or too long a path`, `--web-agent-secret PATH: exists and is not a private regular file of this user (mode 0600, one link); refused, left as it is`, `--web-agent-secret: no random bytes from /dev/urandom`, `--web-agent-secret PATH: ERR` | The file slothweb writes the run's agent secret to ([Writes by an agent](#writes-by-an-agent)). Name a path in a directory slothweb's user can write (under the shipped unit `/run/slothweb`); slothweb replaces its own earlier file there and will not write over anything else (with `--web-agent-group`, its own file may also be `0640` in that group: `... (mode 0600, or 0640 with the --web-agent-group group, one link) ...`). Exit `1` for all but the first. |
 | `--web-agent-group needs --web-agent-secret`, `--web-agent-group: empty or too long a name`, `--web-agent-group NAME: no such group`, `--web-agent-group: cannot give PATH.new the group (ERR); slothweb's user must be a member of the group` | The group the agent secret is given ([Writes by an agent](#writes-by-an-agent)). Create the group and add slothweb's user to it (`usermod -aG NAME sloth`; it takes effect at the next start of the service), or leave the flag out for a `0600` file. Exit `2` for the first two, `1` for the others. |
@@ -344,8 +350,11 @@ request, so one the sensor creates later is read once it exists):
 **Normal start notices** (not problems): `listening on`, `vendor
 table: ieee (...)`, or `vendor table: sloth (...); A4 off: built
 without the IEEE CSVs in web/data/` for a `WEB_OUI_DIR` build without
-them (see Build), `sloth.db ...: schema vN, N devices, read-only`, `reading
-SPEC`, `BLE: N advertisers and M findings restored from the store;
+them (see Build), `sloth.db ...: schema vN, N devices, read-only`, `sloth-rf.db PATH: schema vN, read-only (MODE);
+the GNSS, ADS-B, APRS and Victron history is read from it`
+(with `--rf-db`), `reading SPEC`, `reading sloth-rf at
+SPEC (read-only; reconnects on its own): GNSS, ADS-B, APRS, rtl_433 and
+Victron come from this stream only` (with `--rf-socket`), `BLE: N advertisers and M findings restored from the store;
 assigned numbers: sig (...)` (or `none (...); names off: built without
 the SIG CSVs in web/data/btsig/` for a `WEB_BTSIG_DIR` build without
 them), `time series in`, `baselines (N restored)`, `store schema vN
@@ -371,7 +380,12 @@ a `WITH_SQLITE=0` build:
 (`socket`, `socket_last_error`) and in the footer: `sock retrying`
 with `connect: No such file or directory` means sloth is not running or
 not with `--data-socket`; `Permission denied` means slothweb runs as
-another user than sloth (above).
+another user than sloth (above). With `--rf-socket` the same two
+members for sloth-rf's stream are in `/api/health` `daemons` (the
+entry whose `role` is `rf`) and on the health page: a host with no
+sloth-rf shows `retrying` there for as long as it has none, and
+everything fed by sloth's stream is unaffected
+([Two daemons](#two-daemons)).
 
 ## Security
 
@@ -493,6 +507,8 @@ milestone (W0, M0 to M6; tracker #102).
 | `--web-max-mb N` | Ceiling on the store's used size, in MB, default 256. Checked after every 10 s write and at each compaction; over it, the oldest 10 s rows go first, then the 1 min and 1 h rows of keyed series, and the global series' rows last. The baselines and episodes (M3) count towards it but are never dropped, and the time series always keeps a history allowance beside them: a week of hour rows for every series the baselines can hold, at 64 bytes a row (measured), about 51 MB at the default 512 keys and 760 MB at 8,192. So the bound is `used <= max(ceiling, analysis state + allowance)`: when the analysis state (its pages measured with SQLite's `dbstat`, `store_analysis_bytes`) leaves less than the allowance under the ceiling, the time series is trimmed to the allowance, not erased and not left to grow, and the pass is counted in `store_ceiling_raised`. A library without `dbstat` cannot measure the analysis state (`store_analysis_bytes` `-1`) and drops until under the ceiling or out of rows. With a store, a ceiling below the analysis state's estimate plus the allowance is refused at start (exit 2), naming the least that would do: 96 at the default 512 keys, 1,437 at 8,192 (MB here are 2^20 bytes). |
 | `--web-retain-days N` | Days of 1 min buckets kept, 1..400, default 30. |
 | `--sloth-db PATH` | sloth's own database (`sloth --db`), read-only (below). Absent: `/api/devices` is a `503` `no_sloth_db`, the drawer and Lookup answer from the stream and the vendor table, A2 runs on the stream alone, and the page says so. A path that is not there yet, or a file refused, is not fatal: every request opens it afresh. Needs a `WITH_SQLITE` build; the same path as `--store` is refused. |
+| `--rf-socket SPEC` | sloth-rf's data socket, read beside `--socket` ([Two daemons](#two-daemons), ADR 0010): the same forms and the same refusals (`--strict` refuses a non-loopback one; the same socket as `--socket`, its default included, is refused). No default: without it slothweb reads one stream and behaves as it did before the flag existed. With it the GNSS, ADS-B, APRS, rtl_433 and Victron tabs are fed from this stream only. A socket that is not there is not an error: slothweb retries it as it retries `--socket`. |
+| `--rf-db PATH` | sloth-rf's database (`sloth-rf --db`), read-only as `--sloth-db` is (never written, migrated or given a side file). With it the GNSS, ADS-B, APRS and Victron history, the fleet's aircraft and GNSS incidents, and the page of an alert sloth-rf raised are read from this file; without it they are read from `--sloth-db`, as before. Refused when it names the same file as `--sloth-db` or `--store`. A path that is not there yet is not an error. The SQL box stays on `--sloth-db`. Needs a `WITH_SQLITE` build. |
 | `--web-allow-sql` | The SQL box (M5, below): `/api/query` and `/api/recipes`, and the box on the History view. Off by default; without it both paths are `404` and the page never draws the box. Needs `--sloth-db` and a `WITH_SQLITE` build. `--strict` refuses it (exit 2). With `--web-allow-remote` it is announced on stderr, naming what every admitted peer can then read. |
 | `--web-agent-group NAME` | With `--web-agent-secret`, the secret file is `0640` in group `NAME` instead of `0600` ([Writes by an agent](#writes-by-an-agent)), so `slothweb-mcp` runs as the operator's own user, a member of `NAME`, with no sudo rule (owner ruling 2026-11-11). Looked up at start; slothweb's own user must be a member of `NAME` (only then may it give a file that group). An unknown group, or one it cannot give, exits `1` before serving; without `--web-agent-secret` it exits `2`. |
 | `--web-agent-secret PATH` | Let an agent on this machine write through `slothweb-mcp` ([Writes by an agent](#writes-by-an-agent)): a secret drawn at start is written to `PATH` (`0600`, or `0640` in the `--web-agent-group` group; a new one every run, removed at exit), and a loopback POST carrying it in `X-Slothweb-Agent`, with no `Origin`, may write triage, notes and links, recorded `via: agent` under the name it gives. A `PATH` that is empty or too long is `slothweb: --web-agent-secret: empty or too long a path`; one holding something that is not a private regular file of this user is `--web-agent-secret PATH: exists and is not a private regular file of this user (mode 0600, one link); refused, left as it is`; no random bytes is `--web-agent-secret: no random bytes from /dev/urandom`; each exits before serving. Unset: no agent path, and a request with the header is `403 agent_off`. |
@@ -1494,7 +1510,11 @@ status and the source inventory*). `web/src/web_sysstat.c` keeps the
 newest batch in memory and answers `/api/sys`; the page is
 `web/ui/syshealth.js` (`window.SlothSysHealth`, containers `sy-*`), two
 hooks in `app.js`. The older panel (capture, monitor, Bluetooth, the
-stream, sloth.db, slothweb.db) is unchanged below them.
+stream, sloth.db, slothweb.db) is unchanged below them. With `--rf-socket`
+or `--rf-db` ([Two daemons](#two-daemons)) it ends with a block per
+daemon and one for sloth-rf.db; `/api/sys` says which daemon the host
+batch came from (`host_from`) and lists sloth-rf.db beside the two
+stores.
 
 **Sources and receivers.** Two tables, each the page's one DataTable.
 *Sources* lists every source sloth can read, configured or not: the
@@ -1683,6 +1703,106 @@ of the default `--web-max-keys 512`, and the new class's own 64 slots
 0.61 MB; at `--web-max-keys 8192` the eight are 32.5 MB. The record-type
 class went from 64 to 80 keys with the four new types (0.15 MB). That is the
 rollup's existing cost per metric, not a new one.
+
+## Two daemons
+
+The sensor is becoming two daemons (ADR 0010,
+[`docs/wiki/adr/0010-wifi-rf-daemons.md`](../docs/wiki/adr/0010-wifi-rf-daemons.md)):
+`sloth` (later `sloth-wifi`: the capture, the monitor radio, BLE) and
+`sloth-rf` (GNSS records, ADS-B, APRS, rtl_433, Victron), each with its
+own data socket and its own database. One slothweb reads both, with two
+flags (#214):
+
+    ./slothweb --socket unix:/run/sloth/sloth.sock --sloth-db /var/lib/sloth/sloth.db \
+               --rf-socket unix:/run/sloth-rf/sloth-rf.sock --rf-db /var/lib/sloth-rf/sloth-rf.db
+
+**Without the two flags nothing changes.** There is one stream and one
+database, every record goes to every consumer, and every route answers
+what it answered before the flags existed. That is the configuration
+of a sensor that is still one `sloth`, and of a host that runs
+`sloth-rf` alone and points `--socket` and `--sloth-db` at it. Either
+flag can be given without the other.
+
+**With `--rf-socket`** a second thread reads sloth-rf's stream into a
+state of its own (`web/src/web_ingest.h` has the table). Each consumer
+then has one writer:
+
+| What | Fed by sloth's stream (`--socket`) | Fed by sloth-rf's stream (`--rf-socket`) |
+|---|---|---|
+| Overview, ticker, devices, the capture and monitor state, scope | every record | never |
+| The time series' own derivation, triage, BLE, lures, twin links | every record but sloth-rf's kinds | never |
+| ADS-B, APRS, rtl_433 and Victron tabs | never | their records and `sensor_health` |
+| GNSS tab: sky, fixes, satellites | never | `gnss_fix`, `gnss_sky`, `gnss_sat` |
+| GNSS health and the sensor's position (Radar centre, the fleet's site) | `sensor_health`, kept as a fallback | `sensor_health`, served when it has given one |
+| Host status (`/api/sys` system, sensors, receivers) | sloth's batch, for good once it has reported one | sloth-rf's batch until then |
+| Source rows (`/api/sys` sources) | `capture`, `monitor`, `btmon`, `btcap`; `gnss` until sloth-rf reports a configured one | `adsb`, `aprs`, `rtl433`, `victron`; `gnss` once it reports a configured one |
+| sloth.db's limit / sloth-rf.db's limit | sloth's `db_max_mb` | sloth-rf's `db_max_mb` |
+| Series: `records.*`, and every series of sloth's own records | through the metrics | never |
+| Series: `gnss.*`; `source.*` of its rows; `sys.*` while it reports the host | never | sampled straight into the rollup |
+
+A record of one of sloth-rf's kinds (`gnss_*`, `adsb_*`, `aprs_*`,
+`rtl433_*`, `victron_*`, or a `source_status` row of one of its
+sources) that arrives on `--socket` is counted and applied nowhere. A
+`sloth` that still has its RF flags therefore cannot double or blank
+what sloth-rf feeds, and its `sensor_health`, which carries no rtl_433
+block, cannot clear the rtl_433 tab.
+
+GNSS follows the owner's ruling of 2026-11-15 (both daemons report the
+receiver's health and `loc_*`; only sloth-rf writes the `gnss_*`
+records). The position and the health block are sloth-rf's when
+sloth-rf's `sensor_health` carries them and sloth's otherwise. The
+precedence is fixed, so the answer never depends on which daemon wrote
+last, and a host with a GPS on `sloth` and no sloth-rf keeps its Radar
+centre.
+
+**The wrong daemon on a socket.** `sensor_health` says which daemon
+wrote it (`"daemon":"wifi"` or `"rf"`). With `--rf-socket` given, a
+`sensor_health` that says `rf` on `--socket`, or one that does not say
+`rf` on `--rf-socket`, is counted and not applied, and neither is
+anything after it on that connection, until a `sensor_health` that
+names the right daemon or a reconnect. `/api/health` reports it per
+daemon (`wrong_daemon`, `wrong_health`, `wrong_records`) and the health
+page says which socket to check. sloth replays its state, the
+`sensor_health` included, to a client that connects, so this closes
+within the first tick; the few records of that tick ahead of the
+`sensor_health` are routed by the table above like any others.
+
+**With `--rf-db`** the RF tables are read from sloth-rf's database:
+`/api/gnss/seen`, `/api/gnss/sat`, `/api/gnss/tracks`, `/api/adsb/seen`,
+`/api/adsb/aircraft`, the APRS history routes, `/api/victron/history`,
+the fleet's ADS-B and GNSS views and the export's aircraft and GNSS
+incidents. Without it they are read from `--sloth-db`, exactly as
+before. A `--rf-db` that is missing is a `503` on those routes, never a
+silent read of the other daemon's file. slothweb opens both read-only
+and writes neither. **The SQL box reads `--sloth-db` only.**
+
+**Alerts.** An alert sloth-rf raises (`GNSS_*`, `ADSB_EMERGENCY`, its
+own `SENSOR_SOURCE_DOWN`) arrives on its stream and is on the same
+pages as sloth's: `/api/alerts` and the alert page by its handle, the
+open counts on the Overview and in the tick, the ADS-B tab's emergency
+rows, triage. Each stream's reconnect clears only its own open
+incidents. The page of such an alert reads its history from `--rf-db`.
+What is **not** merged yet: the closed findings in sloth-rf.db's
+`alerts` table that this slothweb did not see on the stream (they are
+not in `/api/alerts`' database rows, `/api/history`, or the fleet
+export's `alert` lines; the export's `gnss_event` lines do carry the
+GNSS incidents). Nothing is lost from the file; the SQL of the alert
+readers is one database's, and merging two is a slice of its own.
+
+**Health.** `/api/health` gains `daemons` (two objects, `role` `wifi`
+and `rf`: the socket's state and counters, `sensor`, `health_age_s`,
+`jsonl_version`, the guard's account) with `--rf-socket` and `rf_db`
+(state, schema, mode, age, `stale`, error) with `--rf-db`; `/api/sys`
+gains `host_from` and a third `storage` row keyed `sloth-rf`; the tick
+gains `rf` (`socket`, `sensor`, `records`). The sensor tile then reads
+`ok · rf ok`, sloth's word first. None of these members exists without
+the flags.
+
+Not yet, with `--rf-socket`: sloth-rf's records are not in the ticker,
+in `/api/live`'s type counts or in the `records.rate` / `records.total`
+series (those are sloth's stream; `/api/health` `daemons` has
+sloth-rf's own count), and `/api/positions` reads sloth.db's
+`sensor_positions` only.
 
 ## The data socket (M1)
 

@@ -1098,6 +1098,7 @@
       $("k-sensor").className = "kpi health-" +
         (t.sensor === "ok" ? "ok" : t.sensor === "unknown" ? "unknown" : "bad");
     }
+    rfKpi(t);
     if (num(t.anomalies_open)) {
       set("k-anoms", t.anomalies_open);
       set("s-anoms", t.anomalies_open);
@@ -1215,6 +1216,20 @@
       richText(tx, detail, 0, "d-normal");
     }
     return tx;
+  }
+
+  // Two daemons (#214): with --rf-socket the tick carries sloth-rf's
+  // stream as t.rf, and the tile says both words, sloth's first. A
+  // socket that is not connected is said in place of its sensor word
+  // (the last sensor_health then says nothing of now). Without t.rf
+  // the tile is what kpis() left.
+  function rfWord(rf) { return rf.socket === "connected" ? String(rf.sensor) : String(rf.socket); }
+  function rfKpi(t) {
+    if (!t.rf || typeof t.sensor !== "string") return;
+    var w = rfWord(t.rf);
+    var worst = t.sensor !== "ok" ? t.sensor : w;
+    set("k-sensor", t.sensor + " \u00b7 rf " + w);
+    $("k-sensor").className = "kpi health-" + (worst === "ok" ? "ok" : worst === "unknown" ? "unknown" : "bad");
   }
 
   function sensor(s, b) {
@@ -6037,6 +6052,44 @@
     }).catch(function (e) { if (gen === BDR.gen) set("bdr-note", errText(e.message)); });
   }
 
+  // Two daemons (#214): /api/health "daemons", only with --rf-socket,
+  // is sloth's stream and sloth-rf's. One block each: its socket and
+  // counters, its sensor_health's word, age and contract version, and
+  // the wrong-daemon guard (a sensor_health naming the other daemon on
+  // this socket is counted and not applied; the operator pointed a
+  // socket flag at the wrong daemon).
+  var DAEMON_NAME = { "wifi": "sloth (--socket)", "rf": "sloth-rf (--rf-socket)" };
+  function daemonRows(box, h) {
+    (h.daemons || []).forEach(function (d) {
+      var word = el("span", "health-" + (d.sensor === "ok" ? "ok" : d.sensor === "unknown" ? "unknown" : "bad"),
+                    String(d.sensor));
+      box.appendChild(el("div", "label", "daemon: " + (DAEMON_NAME[d.role] || String(d.role))));
+      kvList(box, [["socket", d.socket + (d.socket_spec ? ", " + d.socket_spec : "")],
+                   ["sensor_health", word],
+                   ["report", num(d.health_age_s) ? dur(d.health_age_s) + " ago" : "no sensor_health yet"],
+                   ["stream version", d.jsonl_version],
+                   ["last record", num(d.last_record_age_s) ? dur(d.last_record_age_s) + " ago" : "none yet"],
+                   ["records", String(d.socket_records)], ["decode errors", String(d.socket_decode_errors)],
+                   ["gaps", String(d.socket_gaps)], ["reconnects", String(d.socket_reconnects)],
+                   ["last error", d.socket_last_error],
+                   ["wrong daemon", d.wrong_daemon ? "this socket is sending " + d.wrong_daemon + "'s sensor_health: nothing from it is applied (" +
+                                                     d.wrong_records + " records passed over); check the socket flags"
+                                                   : d.wrong_records ? d.wrong_records + " records passed over earlier, none now" : null]]);
+    });
+  }
+  // /api/health "rf_db", only with --rf-db: sloth-rf's database, which
+  // the GNSS, ADS-B, APRS and Victron history is read from.
+  function rfDbRows(box, h) {
+    var d = h.rf_db;
+    if (!d) return;
+    box.appendChild(el("div", "label", "sloth-rf.db"));
+    kvList(box, [["db", String(d.state) + (d.mode ? ", " + d.mode : "")],
+                 ["schema", num(d.schema) ? "v" + d.schema : null],
+                 ["freshness", num(d.age_s) ? "written " + dur(d.age_s) + " ago" + (d.stale === true ? ", stale: sloth-rf's stream is current and the file is not" : "")
+                                            : "nothing to read yet"],
+                 ["error", d.error]]);
+  }
+
   // ── the sensor's health: the sensor-health tile's view ─────────────
   function healthView() {
     var box = clear("hl-rows"), asked = SCOPE;
@@ -6122,6 +6175,8 @@
                      ["error", h.db_error]]);
         box.appendChild(el("div", "label", "slothweb.db"));
         kvList(box, [["store", String(h.store)], ["path", h.store_path]]);
+        daemonRows(box, h);
+        rfDbRows(box, h);
         set("hl-note", "the tile's word is the state above");
       }).catch(function (e) { set("hl-note", errText(e.message)); });
   }

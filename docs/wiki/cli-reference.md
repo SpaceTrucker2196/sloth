@@ -29,7 +29,7 @@ call), `tests/replay/rf_refusals.sh`,
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-11-15 ([[victron]]: sloth-rf's `source_status` gains the `victron` row, five not four; no flag changed), 2026-11-15 (#213, owner ruling: sloth-rf no longer takes `--jsonl`; its JSONL flag is `-o` / `--out` only, so both daemons take the same flags); 2026-11-15 (#213 review: sloth-rf's JSONL flag is documented as `-o` / `--out`, `sloth`'s spelling, with `--jsonl` as its own extra one; the bare `--data-socket` remedy names no port, since 8765 is `sloth`'s); 2026-11-15 (#213: the `sloth-rf` section, the second daemon's flags, `--victron` among them; the receiver's and decoders' flag checks are one copy both mains call); 2026-11-15 (`--victron SPEC`: tail the JSONL the `sloth-va` helper writes, the owner's Victron readings; file-only, sloth connects to nothing); 2026-11-14 (`--rtl433 SPEC`, #208: tail the JSON event log a local rtl_433 already writes, as a passive sub-GHz sensor; file-only, no SDR and no network); 2026-11-13 (`--aprs-freq HZ` and `--aprs-silent-hours N`, #204: the decoder's declared frequency against the GNSS-derived region, and the silent-decoder threshold); 2026-11-12 (`--monitor-iface NAME` pins the monitor radio); 2026-11-12 (`--gps gpsd://`: the one line sent is `?WATCH={"enable":true,"json":true,"pps":true}`, #182; `report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); 2026-11-12 (`karma.forge_assoc_s`, #187); 2026-11-12 (`report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); ---
+**Last updated**: 2026-11-15 (#214: slothweb's `--rf-socket SPEC` and `--rf-db PATH`, sloth-rf's socket and database read beside sloth's; no sensor flag changed), 2026-11-15 ([[victron]]: sloth-rf's `source_status` gains the `victron` row, five not four; no flag changed), 2026-11-15 (#213, owner ruling: sloth-rf no longer takes `--jsonl`; its JSONL flag is `-o` / `--out` only, so both daemons take the same flags); 2026-11-15 (#213 review: sloth-rf's JSONL flag is documented as `-o` / `--out`, `sloth`'s spelling, with `--jsonl` as its own extra one; the bare `--data-socket` remedy names no port, since 8765 is `sloth`'s); 2026-11-15 (#213: the `sloth-rf` section, the second daemon's flags, `--victron` among them; the receiver's and decoders' flag checks are one copy both mains call); 2026-11-15 (`--victron SPEC`: tail the JSONL the `sloth-va` helper writes, the owner's Victron readings; file-only, sloth connects to nothing); 2026-11-14 (`--rtl433 SPEC`, #208: tail the JSON event log a local rtl_433 already writes, as a passive sub-GHz sensor; file-only, no SDR and no network); 2026-11-13 (`--aprs-freq HZ` and `--aprs-silent-hours N`, #204: the decoder's declared frequency against the GNSS-derived region, and the silent-decoder threshold); 2026-11-12 (`--monitor-iface NAME` pins the monitor radio); 2026-11-12 (`--gps gpsd://`: the one line sent is `?WATCH={"enable":true,"json":true,"pps":true}`, #182; `report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); 2026-11-12 (`karma.forge_assoc_s`, #187); 2026-11-12 (`report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); ---
 
 ## Synopsis
 
@@ -563,7 +563,8 @@ Dire Wolf and rtl_433 write and the file `sloth-va` writes, and makes the JSONL 
 and alerts `sloth` makes from the same inputs. It opens no radio, tunes
 no SDR and transmits nothing (`MISSION.md` §2); the one line it writes
 to a peer is gpsd's `?WATCH`, announced. It has no terminal interface:
-slothweb is its interface, once slothweb reads a second daemon (#214).
+slothweb is its interface: `slothweb --rf-socket SPEC --rf-db PATH`
+reads it beside `sloth` (#214, § slothweb).
 
 It is built by a plain `make` beside `sloth` and is **not installed
 yet**: the unit and the migrate tool are #215. Until cutover (#216)
@@ -659,6 +660,18 @@ into its own store; a peer outside the tailnet, or any under
 (1..20000, default 50) is how far apart two sites may be for a GNSS
 event seen at both within 120 s to be called regional; a value outside
 the range exits `2`.
+Since 2026-11-15 (#214, [ADR 0010](adr/0010-wifi-rf-daemons.md))
+`--rf-socket SPEC` and `--rf-db PATH` name sloth-rf's data socket and
+database, read beside `--socket` and `--sloth-db` and never written.
+Neither has a default: without them slothweb reads one stream and one
+database, as before. With `--rf-socket` the GNSS, ADS-B, APRS, rtl_433
+and Victron tabs are fed from sloth-rf's stream only; with `--rf-db`
+their history and the fleet's aircraft and GNSS incidents are read
+from its file. A socket or a file that is not there is retried or
+reported, not fatal. `--strict` refuses a non-loopback `--rf-socket`;
+`--rf-socket` naming `--socket`'s socket (its default included), or
+`--rf-db` naming `--sloth-db`'s or `--store`'s file, exits `2`. The SQL
+box stays on `--sloth-db` ([[slothweb]] § Two daemons).
 Since 2026-11-11 `--web-agent-secret PATH` lets an agent on the same
 machine write through `slothweb-mcp`: slothweb writes a per-run secret
 to `PATH` (`0600`, replaced every start, removed at exit; a path

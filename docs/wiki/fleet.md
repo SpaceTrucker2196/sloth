@@ -20,7 +20,9 @@ already admits, and pulls the same from each `--peer NAME=URL` every
 `peer_sightings`). The sensor and `sloth.db` are not touched, and
 slothweb still never writes `sloth.db` (ADR 0005). Credentials,
 usernames, alert keys and details, EAPOL rows and RADIUS identities
-never travel: the export reads `sloth.db` only through the M4 reader's
+never travel: the export reads `sloth.db` (and, with `--rf-db`,
+sloth-rf's database for the aircraft and the GNSS incidents; below)
+only through the M4 reader's
 column allow-list, every member name is held to `web_secret.h`, and a
 test seeds each one and holds it out. Slice F1 of #192 is the plumbing;
 F2 is the Fleet tab (the sites on a map, each peer's health, what was
@@ -86,7 +88,7 @@ authentication); for the identity findings `research/mitre/T1595.md`,
 `docs/wiki/alert-assessments/MY_NETWORK_RECON.md` and
 [[mac-randomisation]].
 
-**Last updated**: 2026-11-13 (the Radar draws each area as a traced polygon with the device mark at its most probable point); 2026-11-12 (ADR 0009 revised to the owner's provenance rule, `share_rule` `"monitor_only/2"`: everything heard in monitor mode travels, the joined network's APs and stations, its probes, the both-ways device with its radio members only; `own_net` again under `ident=1`; `own_macs` the monitor radios only, by `/sys/class/net/<if>/type`; `MY_NETWORK_RECON` and `UNKNOWN_DEVICE` allow-listed, 66 types, 34 withheld; the local-network set and its fail-closed cut gone; the importer keeps `own_net` and an attested peer's `own_macs`; meta `fleet.rule.monitor_only.v2` resets each peer's clock and backfill once; a peer that names no own networks answers `no_own_networks_shared`); 2026-11-12 (owner hard rule, ADR 0009: monitor data only. Devices read in the Monitor scope; the local network withheld whole, `web_fleet_local_build()`; alerts and verdicts by an allow-list of 64 types, 36 withheld; `own_net` and `own_macs` never sent; the header's `hostname` and `share_rule`; the importer's refusals, `refused_by_rule`; the one-time purge; I2 and I3 with a peer as the owner `no_own_networks_shared`; meta `fleet.host.<peer>`); 2026-11-12 (#196 known limits: a backfill cut at every pull pages the new gap first and resumes the older segment from its own cursor; the GNSS reference's re-anchoring recorded and shown, `reference_moved_at`, `reference_moved_m`; the skew measured at the request's middle with its round trip, `skew_moved` judged against 2 s plus half of it; the own-radio list re-read every 10 min with no 64-entry cap; a peer's own networks expired a day after its last ident answer, `own_expired`; aircraft still have no backfill, and why); 2026-11-12 (the Radar tab draws `/api/fleet/locate` as translucent areas: band overlap, fix disc or nearer-side wash); 2026-11-12 (the merged views reach the ADS-B tab: `/api/adsb` and `/api/adsb/seen` carry the peers' `aircraft` rows, `/api/adsb/aircraft` names the hosts); 2026-11-11 (#192 I2, I3, I4, I8 review: `EVIL_TWIN` only for the impostor half the stream attributed, `TWIN_UNATTRIBUTED` for either half otherwise and not counted by I4; I2 not applicable at co-located sites; I2 and I4 leads (`lead`); 16 own networks of each kind, as sloth); 2026-11-11 (#192 I2, I3, I4, I8: identity across the sites, the export's `ident=1` (`own_net` lines; `ie_fp`, `vie_fp`, `wps_manuf`, `wps_model`, `wps_num`, `attacks`, `attack_first`, `attack_last` on ap lines), peer_sightings kind `own_net`, meta `fleet.ident.<peer>`, slothweb's `--my-ssid` and `--my-bssid`, `/api/fleet/findings`, the overview's `findings`, the Fleet tab's identity panel); 
+**Last updated**: 2026-11-15 (#214: with slothweb's `--rf-db` the export reads the GNSS incidents, the receiver's coverage and the aircraft from sloth-rf's database and everything else from `sloth.db`; one header, the same writers and allow-list; rtl_433 and Victron still withheld); 2026-11-13 (the Radar draws each area as a traced polygon with the device mark at its most probable point); 2026-11-12 (ADR 0009 revised to the owner's provenance rule, `share_rule` `"monitor_only/2"`: everything heard in monitor mode travels, the joined network's APs and stations, its probes, the both-ways device with its radio members only; `own_net` again under `ident=1`; `own_macs` the monitor radios only, by `/sys/class/net/<if>/type`; `MY_NETWORK_RECON` and `UNKNOWN_DEVICE` allow-listed, 66 types, 34 withheld; the local-network set and its fail-closed cut gone; the importer keeps `own_net` and an attested peer's `own_macs`; meta `fleet.rule.monitor_only.v2` resets each peer's clock and backfill once; a peer that names no own networks answers `no_own_networks_shared`); 2026-11-12 (owner hard rule, ADR 0009: monitor data only. Devices read in the Monitor scope; the local network withheld whole, `web_fleet_local_build()`; alerts and verdicts by an allow-list of 64 types, 36 withheld; `own_net` and `own_macs` never sent; the header's `hostname` and `share_rule`; the importer's refusals, `refused_by_rule`; the one-time purge; I2 and I3 with a peer as the owner `no_own_networks_shared`; meta `fleet.host.<peer>`); 2026-11-12 (#196 known limits: a backfill cut at every pull pages the new gap first and resumes the older segment from its own cursor; the GNSS reference's re-anchoring recorded and shown, `reference_moved_at`, `reference_moved_m`; the skew measured at the request's middle with its round trip, `skew_moved` judged against 2 s plus half of it; the own-radio list re-read every 10 min with no 64-entry cap; a peer's own networks expired a day after its last ident answer, `own_expired`; aircraft still have no backfill, and why); 2026-11-12 (the Radar tab draws `/api/fleet/locate` as translucent areas: band overlap, fix disc or nearer-side wash); 2026-11-12 (the merged views reach the ADS-B tab: `/api/adsb` and `/api/adsb/seen` carry the peers' `aircraft` rows, `/api/adsb/aircraft` names the hosts); 2026-11-11 (#192 I2, I3, I4, I8 review: `EVIL_TWIN` only for the impostor half the stream attributed, `TWIN_UNATTRIBUTED` for either half otherwise and not counted by I4; I2 not applicable at co-located sites; I2 and I4 leads (`lead`); 16 own networks of each kind, as sloth); 2026-11-11 (#192 I2, I3, I4, I8: identity across the sites, the export's `ident=1` (`own_net` lines; `ie_fp`, `vie_fp`, `wps_manuf`, `wps_model`, `wps_num`, `attacks`, `attack_first`, `attack_last` on ap lines), peer_sightings kind `own_net`, meta `fleet.ident.<peer>`, slothweb's `--my-ssid` and `--my-bssid`, `/api/fleet/findings`, the overview's `findings`, the Fleet tab's identity panel); 
 ## What travels, and what never does
 
 ADR 0008 amends ADR 0006 for one case: between sensors the same
@@ -252,6 +254,31 @@ one type with the same title (most of sloth's titles are the type's
 name) share it. Matching the same tool across sites by IE-order or
 vendor-IE hash (#192 I4) needs those hashes exported as their own
 members, which `ident=1` adds (below, "Identity across the sites").
+
+**Two sensor databases (#214).** When the sensor is two daemons
+(ADR 0010) and slothweb is given `--rf-db`, the rows the export reads
+sit in two files, and the export reads each kind from the one that
+holds it: devices, access points, probes, alerts and the session label
+from `sloth.db`; the GNSS incidents (`gnss_event`), the receiver's
+demonstrated coverage (`adsb_rx`) and the aircraft from sloth-rf's
+database, on a second read-only connection with its own budget.
+Nothing about what travels changes: the same line writers, the same
+checks against what the importer takes, the same allow-list
+(`web_fleetshare.c`, untouched). It is one answer with one header, so
+the host is named once and `share_rule` stated once. sloth-rf's
+database has sloth's DDL and therefore a `devices` and an `alerts`
+table of its own; the export never reads them, and it has no writer
+for rtl_433 or Victron rows, which stay withheld (fail closed). A
+`--rf-db` that cannot be opened cuts the aircraft
+(`truncated_aircraft`) and marks the incidents incomplete; it never
+falls back to `sloth.db`'s copies. Without `--rf-db` every read is
+`sloth.db`'s, as before. `web/tests/test_fleet.c ::
+test_export_reads_rf_db` holds each of these, its absences seen red.
+The alerts sloth-rf raised (`GNSS_*`, `ADSB_EMERGENCY`) are on the
+travel list, but their `alert` lines are read from `sloth.db` only for
+now: with two databases they do not travel as `alert` lines until the
+alert readers merge two sources (the GNSS ones still travel as
+`gnss_event`).
 
 ## The transport
 

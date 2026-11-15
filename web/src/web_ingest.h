@@ -18,6 +18,7 @@
 
 #include "web_jsonl.h"
 #include "web_live.h"
+#include "web_rollup.h"
 
 /* sloth's own default since #136 (src/data_socket.h). */
 #define WEB_DEFAULT_SOCKET       "unix:/run/sloth/sloth.sock"
@@ -42,6 +43,12 @@ typedef struct {
  * only. 0, or -1 with err. */
 int  web_sockspec_parse(const char *s, web_sockspec_t *out,
                         char *err, size_t errsz);
+/* The same for another flag (--rf-socket): its name in the message. */
+int  web_sockspec_parse_flag(const char *flag, const char *s, web_sockspec_t *out,
+                             char *err, size_t errsz);
+/* Do the two name one endpoint (the same path, or the same address and
+ * port)? */
+int  web_sockspec_same(const web_sockspec_t *a, const web_sockspec_t *b);
 void web_sockspec_format(const web_sockspec_t *sp, char *buf, size_t sz);
 /* A unix socket, or a tcp address on loopback. */
 int  web_sockspec_is_local(const web_sockspec_t *sp);
@@ -64,9 +71,61 @@ struct web_sys;
 struct web_lure;
 struct web_chain;
 
+/* Two daemons (#214, ADR 0010): which stream a feed frames.
+ *
+ * WEB_FEED_ONLY is a slothweb without --rf-socket: one stream, every
+ * record to every consumer that is set, as before the split.
+ *
+ * With --rf-socket there are two feeds on two threads, and each
+ * consumer has one of them as its writer:
+ *
+ *   consumer                 WEB_FEED_WIFI           WEB_FEED_RF
+ *   the stream's web_live_t  every record            every record (its own)
+ *   metrics, frrs, ble,      every record but the    never
+ *     lure, chain            RF-owned ones
+ *   adsb, aprs, rtl433,      never                   their records and
+ *     victron                                        sensor_health
+ *   gnss                     sensor_health only, as  gnss_* and
+ *                            the fallback            sensor_health
+ *                            (web_gnss.h)
+ *   sys                      web_sys_record_from()   web_sys_record_from()
+ *                            WEB_SYS_FROM_WIFI       WEB_SYS_FROM_RF
+ *   the rollup               through metrics         web_metrics_rf_sample()
+ *
+ * An RF-owned record is one of sloth-rf's types (web_feed_rf_type()) or
+ * a source_status row of one of its sources. On the Wi-Fi socket it is
+ * counted by the live state and applied nowhere, so a sloth that still
+ * writes those records (before the cutover) cannot blank or double what
+ * sloth-rf feeds.
+ *
+ * The wrong-daemon guard: sensor_health carries "daemon" ("wifi" or
+ * "rf"; an older sloth carries none). On the RF socket a sensor_health
+ * that does not say "rf", and on the Wi-Fi socket one that says "rf",
+ * is the other daemon's stream on this socket: it is counted
+ * (web_live_wrong_daemon()), applied to nothing, and so is every record
+ * after it on that connection until one that names the right daemon.
+ * sloth replays its whole state, sensor_health included, to a client
+ * that connects (src/data_socket.c), so the guard closes within the
+ * first tick; the records of that tick ahead of the sensor_health pass
+ * the table above like any others. */
+enum { WEB_FEED_ONLY = 0, WEB_FEED_WIFI, WEB_FEED_RF };
+
+/* Is t one of sloth-rf's record types (gnss_*, adsb_*, aprs_*,
+ * rtl433_*, victron_*)? */
+int web_feed_rf_type(const char *t);
+
 typedef struct {
     size_t     len;
     int        discarding;
+    /* WEB_FEED_*, and the guard's state for this connection (cleared by
+     * web_feed_reset()). */
+    int        role;
+    int        wrong;
+    /* WEB_FEED_RF: the rollup web_metrics_rf_sample() adds to, when
+     * set, and its clock (unix seconds; NULL is time()). */
+    web_rollup_t *rf_ru;
+    long long (*rf_clock)(void *ctx);
+    void      *rf_clock_ctx;
     /* M2: every decoded record also goes to the metric derivation
      * (web_metrics.h) when this is set; lost lines taint its pass. */
     struct web_metrics *metrics;
@@ -142,6 +201,10 @@ void web_ingest_set_sys(web_ingest_t *g, struct web_sys *y);
 void web_ingest_set_lure(web_ingest_t *g, struct web_lure *l);
 /* Feed G8's links as well. Call before web_ingest_start(). */
 void web_ingest_set_chain(web_ingest_t *g, struct web_chain *c);
+/* Which daemon's stream this is (WEB_FEED_*), and for WEB_FEED_RF the
+ * rollup its series go to. Call before web_ingest_start(). */
+void web_ingest_set_role(web_ingest_t *g, int role);
+void web_ingest_set_rf_rollup(web_ingest_t *g, web_rollup_t *ru);
 /* Stop and join it; safe to call when it never started. */
 void web_ingest_stop(web_ingest_t *g);
 

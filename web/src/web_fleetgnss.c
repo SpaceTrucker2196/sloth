@@ -766,11 +766,13 @@ static void build(web_fleet_t *f, const web_fleet_src_t *src, long long now_s, g
     }
     /* This site's incidents from sloth.db, through the M4 reader. */
     int local_ok = 0;
-    if (src && src->sdb && src->sdb->configured) {
+    /* sloth-rf's database when one is given (#214), else sloth.db. */
+    struct web_slothdb *rdb = web_fleet_src_rfdb(src);
+    if (rdb && rdb->configured) {
         web_sdb_conn_t c;
         memset(&c, 0, sizeof(c));
         char err[WEB_SDB_ERR_MAX];
-        if (web_slothdb_open(src->sdb, &c, WEB_SDB_OVERVIEW_MS, now_s, err, sizeof(err)) == 0) {
+        if (web_slothdb_open(rdb, &c, WEB_SDB_OVERVIEW_MS, now_s, err, sizeof(err)) == 0) {
             x->local = "open";
             int r = web_sdb_gnss_incidents(&c, now_s - WEB_FG_EVENTS_S, 256,
                                            local_incident, x);

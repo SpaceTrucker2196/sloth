@@ -26,7 +26,7 @@ naming every place the tree and #211 disagree.
 `packaging/bin/sloth-migrate-sensor`, `tests/test_unit_file.c`,
 `tests/deploy/`, issues #211 to #217.
 
-**Last updated**: 2026-11-15 ([[victron]]: sloth-rf's fifth `source_status` row, `victron`), 2026-11-15 (#213 review: §10's member count measured at 49, and what the `nm` gate missed and now holds); 2026-11-15 (#213, S2 landed: §10, the seams it cut, and what of §§2 to 4 it made stale); 2026-11-15 (S0, and the notes on S1)
+**Last updated**: 2026-11-15 (#214, S3 landed: §11, what it did about each row of §6.2, and what it left), 2026-11-15 ([[victron]]: sloth-rf's fifth `source_status` row, `victron`), 2026-11-15 (#213 review: §10's member count measured at 49, and what the `nm` gate missed and now holds); 2026-11-15 (#213, S2 landed: §10, the seams it cut, and what of §§2 to 4 it made stale); 2026-11-15 (S0, and the notes on S1)
 
 This page is a measurement, not a plan. It is slice S0's deliverable
 (#211) and it exists so that S1 to S6 cut along lines someone has
@@ -516,7 +516,7 @@ From `gh issue list`, titles as filed.
 | S0 | #211 | The tracking issue, [ADR 0010](adr/0010-wifi-rf-daemons.md), this page. |
 | S1 | #212 | Build seam: source groups, run flag out of `capture.c`, poll stage table per app. No behaviour change. |
 | S2 | #213 | The `sloth-rf` binary: readers, RF rules, own JSONL socket and database. Additive. **Landed 2026-11-15; §10.** |
-| S3 | #214 | slothweb reads two daemons: `--rf-socket` and `--rf-db`. |
+| S3 | #214 | slothweb reads two daemons: `--rf-socket` and `--rf-db`. **Landed 2026-11-15; §11.** |
 | S4 | #215 | Packaging: `sloth-rf.service` and `sloth-migrate-rf`. |
 | S5 | #216 | Cutover: `sloth-wifi` rename, RF leaves the Wi-Fi daemon, JSONL 2.0.0. |
 | S6 | #217 | Deploy both daemons: W9FJC, then beta-site. |
@@ -657,7 +657,8 @@ Rulings applied: both daemons write `sensor_positions` (the
 there because no stage of that table builds a device);
 `SENSOR_UNDERVOLT` is not in `g_alert_table_rf`.
 
-Left for later slices: slothweb does not read sloth-rf (S3); nothing is
+Left for later slices: slothweb does not read sloth-rf (S3, since
+landed: §11); nothing is
 installed and there is no unit (S4); `sloth` still takes the RF flags,
 so a host must not point both at one serial GPS (S5). Two things S2
 found that no slice names yet: `agents/risk_score.sh` scores deletions
@@ -665,6 +666,46 @@ in `src/jsonl.c` and names it as the forensic-output path, and does
 not know `src/jsonl_core.c` or `src/jsonl_rf.c`; and the readers'
 messages and the shared flag checks say `sloth:` in sloth-rf, which is
 right while they are one copy and wants a decision at cutover.
+
+---
+
+## 11. What S3 cut (#214)
+
+slothweb reads sloth-rf beside sloth, behind `--rf-socket` and
+`--rf-db`; with neither it is §6's single-source program, unchanged.
+The design is [[slothweb]] § Two daemons. Against §6.2's table, row by
+row:
+
+| §6.2 hazard | What S3 did |
+|---|---|
+| `web_rtl433.c` `sh_apply()` clears on a `sensor_health` without the block | With `--rf-socket` sloth's stream never reaches it (`split_line()`); the function is unchanged, so one stream still clears it as before. |
+| `web_gnss.c` `loc_apply()` clears the position | sloth-rf's stream writes the served slot; sloth's `sensor_health` writes a fallback slot (`web_gnss_record_fallback()`), read only while the served one is empty. |
+| `web_live.c` `sensor_record()` overwrites capture and monitor state | Each stream has its own `web_live_t`; the RF one keeps liveness, version and daemon word only (`WEB_LIVE_RF`). |
+| `web_live_sock_connected()` drops open incidents and the radio set | Per state: a reconnect clears its own. The incident readers and the open counts read both (`web_live_set_peer()`). |
+| `ingest_main()` resets the feed and `web_metrics_stream()` | Per feed; the RF feed has no metrics. |
+| `web_metrics_t` single writer | Kept: the RF thread calls `web_metrics_rf_sample()`, which touches only the rollup (its own mutex). |
+| `web_lure.c`, `web_sysstat.c` take `jsonl_version` / `db_max_mb` from the last `sensor_health` | The lures are sloth's stream's alone; `web_sys_record_from()` gives each daemon's `db_max_mb` to its own store. |
+| `web_frrs.c` takes the interface names | sloth's stream's alone. |
+
+And two it did not name: `sys_status` and the `source_status` rows,
+which both daemons write (`web_sys_record_from()`: the host batch is
+sloth's once sloth has reported, the rows are owned by name), and
+`sensor_health`'s `daemon`, used as a second guard on each socket.
+
+§6.1's single pointers gained a sibling where an RF table is read:
+`web_m4_t.sdb_rf`, `web_fleet_src_t.rf`. `web_anomaly.h`'s and
+`web_sqlbox.h`'s stay sloth.db's. §6.3 holds: sloth-rf.db passes the
+`devices` probe with an empty table, and `/api/health` `rf_db`
+therefore reports no row count. §6.4 holds: the allow-list and the
+writers are untouched; the export's aircraft and GNSS incidents are
+read from the second file, its device, AP and alert lines from the
+first.
+
+Left for later: the alert history's merge across two databases (the
+`alerts` table readers in `web_alertdb.c`, `web_slothdb.c`'s
+`web_sdb_alerts_*`, the export's `alert` lines) and sloth-rf's records
+on the ticker. Nothing is installed: the unit that passes the two
+flags is S4.
 
 ---
 

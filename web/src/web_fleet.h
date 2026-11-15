@@ -447,7 +447,18 @@ typedef struct {
      * named. own_csv's other radios are never named (owner rule
      * 2026-11-12). */
     const char         *own_mon_csv;
+    /* sloth-rf's database (--rf-db, #214), may be NULL: the GNSS
+     * incidents and the aircraft are then read from sdb, as before the
+     * split. What travels is the same either way: the same readers, the
+     * same writers and the same allow-list (ADR 0009); only the file
+     * the rows sit in differs. Last, so the initialisers that name the
+     * members above in order stand. */
+    struct web_slothdb *rf;
 } web_fleet_src_t;
+
+/* Where the export and the fleet's ADS-B and GNSS views read the RF
+ * tables: src->rf when it is configured, else src->sdb. */
+struct web_slothdb *web_fleet_src_rfdb(const web_fleet_src_t *src);
 
 /* /api/fleet/export: a heap body the caller frees, in *body. 0 with
  * *status (200, 400 or 503), -1 out of memory. */

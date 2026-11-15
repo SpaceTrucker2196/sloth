@@ -170,6 +170,30 @@ int web_config_check(const web_config_t *c, char *err, size_t errsz) {
                              "slothweb's own\n", c->sloth_db);
         return -1;
     }
+    /* sloth-rf's database is read like sloth.db, and is neither the
+     * store nor sloth.db itself: one file under two names would be read
+     * twice, every RF row and alert counted from both. */
+    if (c->rf_db[0] && !strcmp(c->rf_db, c->store_path)) {
+        snprintf(err, errsz, "slothweb: --rf-db and --store name the same "
+                             "file (%s): sloth-rf.db is sloth-rf's, the store "
+                             "is slothweb's own\n", c->rf_db);
+        return -1;
+    }
+    if (c->rf_db[0] && !strcmp(c->rf_db, c->sloth_db)) {
+        snprintf(err, errsz, "slothweb: --rf-db and --sloth-db name the same "
+                             "file (%s): give --rf-db only when sloth-rf "
+                             "writes a database of its own\n", c->rf_db);
+        return -1;
+    }
+    /* One socket under both flags would be one daemon read as two. */
+    if (c->rf_sock.kind && web_sockspec_same(&c->rf_sock, &c->sock)) {
+        char sp[WEB_SOCK_PATH_MAX + INET6_ADDRSTRLEN + 16];
+        web_sockspec_format(&c->rf_sock, sp, sizeof(sp));
+        snprintf(err, errsz, "slothweb: --rf-socket and --socket name the same "
+                             "socket (%s): --rf-socket is sloth-rf's, --socket "
+                             "sloth's\n", sp);
+        return -1;
+    }
     /* The SQL box is the operator's own sqlite3 in a tab: --strict, the
      * flag that says "nothing but the defaults", refuses it outright. */
     if (c->allow_sql && c->strict) {
@@ -231,6 +255,17 @@ int web_config_check(const web_config_t *c, char *err, size_t errsz) {
         return -1;
     }
 
+    if (c->strict && c->rf_sock.kind && !web_sockspec_is_local(&c->rf_sock)) {
+        char sp[INET6_ADDRSTRLEN + 16];
+        web_sockspec_format(&c->rf_sock, sp, sizeof(sp));
+        snprintf(err, errsz,
+            "slothweb: --strict refuses a non-loopback --rf-socket (%s).\n"
+            "  The stream has no TLS and no authentication. Read it on the "
+            "sensor, or\n  forward it: ssh -L 8766:127.0.0.1:8766 "
+            "user@sensor\n", sp);
+        return -1;
+    }
+
     for (int i = 0; i < c->acl.n; i++) {
         const web_acl_entry_t *e = &c->acl.e[i];
         if (web_acl_entry_is_loopback(e)) continue;
@@ -281,6 +316,7 @@ void web_usage(FILE *out) {
         "                [--web-allow CIDR]... [--web-allow-remote] [--strict]\n"
         "                [--store PATH] [--web-max-keys N] [--web-max-mb N]\n"
         "                [--web-retain-days N] [--sloth-db PATH]\n"
+        "                [--rf-socket SPEC] [--rf-db PATH]\n"
         "                [--web-allow-sql] [--web-read-only]\n"
         "                [--web-agent-secret PATH [--web-agent-group NAME]]\n"
         "                [--web-assessments DIR] [--pcap-dir DIR]...\n"
@@ -328,6 +364,18 @@ void web_usage(FILE *out) {
         "                        drawer's record and A2's durable first_seen.\n"
         "                        Without it those say so and the rest runs.\n"
         "                        Needs a WITH_SQLITE build.\n"
+        "  --rf-socket SPEC      sloth-rf's data socket, read beside --socket\n"
+        "                        (same forms; no default). With it the GNSS,\n"
+        "                        ADS-B, APRS, rtl_433 and Victron tabs are fed\n"
+        "                        from this stream only, and --socket's copies\n"
+        "                        of those records are counted and not used.\n"
+        "                        Without it there is one stream, as before.\n"
+        "  --rf-db PATH          sloth-rf's database (sloth-rf --db), opened\n"
+        "                        read-only like --sloth-db: the GNSS, ADS-B,\n"
+        "                        APRS and Victron history and the fleet's\n"
+        "                        aircraft and GNSS incidents are read from it.\n"
+        "                        Without it they are read from --sloth-db.\n"
+        "                        The SQL box stays on --sloth-db.\n"
         "  --web-allow-sql       the read-only SQL box (/api/query) over\n"
         "                        --sloth-db: one SELECT or WITH at a time,\n"
         "                        5 s, 10,000 rows, credential columns\n"
@@ -585,6 +633,31 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
                 fprintf(err, "slothweb: %s\n", msg);
                 return -1;
             }
+        } else if (!strcmp(a, "--rf-socket")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            if (web_sockspec_parse_flag(a, argv[++i], &c->rf_sock, msg, sizeof(msg)) != 0) {
+                fprintf(err, "slothweb: %s\n", msg);
+                return -1;
+            }
+        } else if (!strcmp(a, "--rf-db")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (!v[0] || strlen(v) >= sizeof(c->rf_db) - 16) {
+                fprintf(err, "slothweb: --rf-db: empty or too long a path\n");
+                return -1;
+            }
+            if (!web_slothdb_available()) {
+                fprintf(err, "slothweb: --rf-db needs SQLite; this slothweb "
+                             "was built with WITH_SQLITE=0\n");
+                return -1;
+            }
+            snprintf(c->rf_db, sizeof(c->rf_db), "%s", v);
         } else if (!strcmp(a, "--spectrum-dir") || !strcmp(a, "--spectrum-request")) {
             if (i + 1 >= argc) {
                 fprintf(err, "slothweb: %s needs an argument\n", a);
@@ -782,6 +855,13 @@ void web_config_announce(const web_config_t *c, FILE *err) {
         char sp[INET6_ADDRSTRLEN + 16];
         web_sockspec_format(&c->sock, sp, sizeof(sp));
         fprintf(err, "slothweb: WARNING: reading the data stream from %s, "
+                     "which is not loopback.\n"
+                     "  It travels with no TLS and no authentication.\n", sp);
+    }
+    if (c->rf_sock.kind && !web_sockspec_is_local(&c->rf_sock)) {
+        char sp[INET6_ADDRSTRLEN + 16];
+        web_sockspec_format(&c->rf_sock, sp, sizeof(sp));
+        fprintf(err, "slothweb: WARNING: reading sloth-rf's data stream from %s, "
                      "which is not loopback.\n"
                      "  It travels with no TLS and no authentication.\n", sp);
     }

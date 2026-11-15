@@ -96,6 +96,7 @@ void run_camera_tests(void);             /* tests/test_camera.c (2026-11-15) */
 void run_aprs_tests(void);               /* tests/test_aprs.c (2026-11-05) */
 void run_rtl433_tests(void);             /* tests/test_rtl433.c (#208) */
 void run_victron_tests(void);            /* tests/test_victron.c */
+void run_twodaemon_tests(void);          /* tests/test_twodaemon.c (#214) */
 void run_radar_tests(void);              /* tests/test_radar.c (2026-11-06) */
 void run_allkeys_tests(void);            /* tests/test_allkeys.c (2026-11-11) */
 void run_ssidview_tests(void);           /* tests/test_ssidview.c (2026-11-11) */

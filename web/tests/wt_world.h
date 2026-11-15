@@ -68,6 +68,13 @@ typedef struct {
     web_lure_t     lure;
     web_m4_t       m4;
     web_health_t   h;
+    /* Optional (w_rf_up()): sloth-rf's stream and its database (#214).
+     * Zero, and no part of the world, unless a test asks. */
+    int            have_rf, have_rf_db;
+    char           rf_path[TEST_TMP_MAX + 32];
+    web_live_t     live_rf;
+    web_slothdb_t  sdb_rf;
+    web_feed_t    *rf_feed;
 } w_env_t;
 static w_env_t W;
 static char w_out[262144];
@@ -184,7 +191,46 @@ static inline void w_open(int writes) {
     W.h.live = &W.live;
 }
 
+/* The second daemon, for a test that wants it (after w_open()): a
+ * state for sloth-rf's stream beside the world's own, as main.c wires
+ * the two with --rf-socket, and an empty sloth-rf.db of sloth's DDL
+ * (sdb_make()) as --rf-db. The world's sloth.db, its stream and every
+ * test that does not call this are untouched. */
+static inline void w_rf_up(void) {
+    snprintf(W.rf_path, sizeof(W.rf_path), "%s/sloth-rf.db", W.dir);
+    web_live_init(&W.live_rf, "unix:/demo/sloth-rf.sock");
+    web_live_sock_connected(&W.live_rf, 0);
+    web_live_set_role(&W.live, WEB_LIVE_WIFI);
+    web_live_set_role(&W.live_rf, WEB_LIVE_RF);
+    web_live_set_peer(&W.live, &W.live_rf);
+    W.have_rf_db = web_store_available() && sdb_make(W.rf_path, db_schema_version(), 0) == 0;
+    web_sdb_fns_t fns = { NULL, NULL, NULL, &W.live };
+    web_slothdb_init(&W.sdb_rf, W.have_rf_db ? W.rf_path : "", &fns);
+    W.m4.sdb_rf = W.have_rf_db ? &W.sdb_rf : NULL;
+    W.rf_feed = calloc(1, sizeof(*W.rf_feed));
+    WT_ASSERT(W.rf_feed != NULL);
+    if (W.rf_feed) {
+        W.rf_feed->role = WEB_FEED_RF;
+        W.rf_feed->gnss = &W.gnss;
+        W.rf_feed->adsb = &W.adsb;
+        W.rf_feed->aprs = &W.aprs;
+    }
+    W.have_rf = 1;
+}
+
+/* One record on sloth-rf's socket. */
+static inline void w_rf_line(const char *line) {
+    if (!W.rf_feed) return;
+    web_feed_bytes(W.rf_feed, &W.live_rf, line, strlen(line), W.h.now_ms);
+    web_feed_bytes(W.rf_feed, &W.live_rf, "\n", 1, W.h.now_ms);
+}
+
 static inline void w_close(void) {
+    if (W.have_rf) {
+        free(W.rf_feed);
+        web_slothdb_destroy(&W.sdb_rf);
+        web_live_destroy(&W.live_rf);
+    }
     web_gnss_destroy(&W.gnss);
     web_adsb_destroy(&W.adsb);
     web_aprs_destroy(&W.aprs);

@@ -338,6 +338,59 @@ static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
             web_jw_raw(&w, "null");
         }
     }
+    /* Two daemons (#214), only with --rf-socket or --rf-db: without
+     * them the answer is what it was. "daemons" is sloth's stream and
+     * sloth-rf's, each with its socket, its sensor_health and the
+     * wrong-daemon guard's account; "rf_db" is --rf-db as "db" and its
+     * sloth_db_* members are --sloth-db. */
+    if (h->live && h->live->peer) {
+        web_jw_raw(&w, ",\"daemons\":[");
+        web_live_daemon_json(h->live, &w, h->now_ms);
+        web_jw_raw(&w, ",");
+        web_live_daemon_json(h->live->peer, &w, h->now_ms);
+        web_jw_raw(&w, "]");
+    }
+    if (h->m4 && h->m4->sdb_rf && h->m4->sdb_rf->configured) {
+        web_slothdb_t *rd = h->m4->sdb_rf;
+        web_slothdb_check(rd, h->wall_s);
+        web_sdb_stats_t st;
+        web_slothdb_stats(rd, &st);
+        int open = st.state == WEB_SDB_OPEN;
+        web_jw_raw(&w, ",\"rf_db\":{\"state\":");
+        web_jw_str(&w, web_slothdb_state_word(st.state));
+        web_jw_raw(&w, ",\"schema\":");
+        if (open) web_jw_int(&w, st.schema); else web_jw_raw(&w, "null");
+        web_jw_raw(&w, ",\"path\":");
+        web_jw_strn(&w, rd->path, strnlen(rd->path, 256));
+        web_jw_raw(&w, ",\"mode\":");
+        if (st.mode[0]) web_jw_str(&w, st.mode); else web_jw_raw(&w, "null");
+        web_jw_raw(&w, ",\"mtime\":");
+        if (open && st.mtime > 0) web_jw_int(&w, st.mtime); else web_jw_raw(&w, "null");
+        web_jw_raw(&w, ",\"age_s\":");
+        long long age = h->wall_s > st.mtime ? h->wall_s - st.mtime : 0;
+        if (open && st.mtime > 0) web_jw_int(&w, age); else web_jw_raw(&w, "null");
+        web_jw_raw(&w, ",\"stale_after_s\":"); web_jw_int(&w, WEB_SDB_STALE_S);
+        /* Stale as sloth.db is (#168), against sloth-rf's own stream. */
+        web_jw_raw(&w, ",\"stale\":");
+        if (open && st.mtime > 0) {
+            int current = 0;
+            if (h->live && h->live->peer) {
+                web_live_sum_t ls;
+                web_live_summary(h->live->peer, &ls, h->now_ms);
+                current = ls.sock_state == WEB_SOCK_CONNECTED &&
+                          ls.last_record_age_ms >= 0 &&
+                          ls.last_record_age_ms <= WEB_SDB_STREAM_CURRENT_S * 1000LL;
+            }
+            web_jw_raw(&w, web_sdb_is_stale(age, current) ? "true" : "false");
+        } else {
+            web_jw_raw(&w, "null");
+        }
+        web_jw_raw(&w, ",\"error\":");
+        if (st.err[0]) web_jw_str(&w, st.err); else web_jw_raw(&w, "null");
+        web_jw_raw(&w, ",\"opens\":");    web_jw_int(&w, (long long)st.opens);
+        web_jw_raw(&w, ",\"timeouts\":"); web_jw_int(&w, (long long)st.timeouts);
+        web_jw_raw(&w, "}");
+    }
     /* The page shows the SQL box only when this says so. */
     web_jw_raw(&w, ",\"sql\":");
     if (!h->sql || !h->sql->enabled) {
@@ -434,8 +487,11 @@ static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
 static int route_health(const web_req_t *rq, const web_health_t *h,
                         char *out, size_t outsz, web_resp_t *r) {
     /* 8 KB before the fleet; eight peers, each a last refusal of up to
-     * WEB_FLEET_ERR_MAX bytes escaped, take up to another 10 KB. */
-    char body[20480];
+     * WEB_FLEET_ERR_MAX bytes escaped, take up to another 10 KB. With
+     * --rf-socket and --rf-db (#214) the two daemons' objects (each a
+     * socket spec and a last error, escaped) and "rf_db" (a path and an
+     * error, escaped) take up to another 8 KB. */
+    char body[28672];
     size_t bl = health_json(h, body, sizeof(body));
     if (bl == 0) return -1;
     r->status = 200;
@@ -857,7 +913,10 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
         if (rc == 0 && !none_here && status == 200 && h->fleet_merge &&
             (which == M5_APS || which == PR_CLIENTS || which == PR_SSIDS ||
              which == RF_ADSB_SEEN)) {
-            web_fv_src_t fs = { m->sdb, h->ble, m->oui, h->adsb };
+            /* The inventory's "held here" reads adsb_aircraft: sloth-rf's
+             * database when one is given. */
+            web_fv_src_t fs = { which == RF_ADSB_SEEN ? web_m4_rfdb(m) : m->sdb, h->ble, m->oui,
+                                h->adsb };
             web_fv_list(m->fleet, &fs,
                         which == M5_APS ? WEB_FV_APS
                         : which == PR_CLIENTS ? WEB_FV_PROBE_CLIENTS
@@ -1690,6 +1749,7 @@ static int route_fleet_export(const web_req_t *rq, const web_health_t *h, char *
         h->m4 && h->m4->fleet ? h->m4->fleet->own_csv : NULL, h->adsb,
         h->m4 && h->m4->fleet ? &h->m4->fleet->mine : NULL, h->m4 ? h->m4->chain : NULL,
         h->m4 && h->m4->fleet ? h->m4->fleet->own_mon_csv : NULL,
+        h->m4 ? h->m4->sdb_rf : NULL,
     };
     char *body = NULL;
     size_t bl = 0;
@@ -1779,6 +1839,7 @@ static int route_fleet_overview(const web_req_t *rq, const web_health_t *h, char
         h->m4 && h->m4->fleet ? h->m4->fleet->own_csv : NULL, h->adsb,
         h->m4 && h->m4->fleet ? &h->m4->fleet->mine : NULL, h->m4 ? h->m4->chain : NULL,
         h->m4 && h->m4->fleet ? h->m4->fleet->own_mon_csv : NULL,
+        h->m4 ? h->m4->sdb_rf : NULL,
     };
     if (qlong(rq)) {
         status = 400;
@@ -1827,6 +1888,7 @@ static int route_fleet_heap(const web_req_t *rq, const web_health_t *h, char *ou
         h->m4 && h->m4->fleet ? h->m4->fleet->own_csv : NULL, h->adsb,
         h->m4 && h->m4->fleet ? &h->m4->fleet->mine : NULL, h->m4 ? h->m4->chain : NULL,
         h->m4 && h->m4->fleet ? h->m4->fleet->own_mon_csv : NULL,
+        h->m4 ? h->m4->sdb_rf : NULL,
     };
     char *body = NULL;
     size_t bl = 0;
@@ -2233,7 +2295,7 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
 
 size_t web_sse_tick(char *out, size_t outsz, unsigned long seq, long long ts,
                     const web_health_t *h) {
-    char data[512];
+    char data[640];      /* 512, and "rf" (#214) at its longest */
     web_jw_t w;
     web_jw_init(&w, data, sizeof(data));
     web_jw_raw(&w, "{\"seq\":");        web_jw_int(&w, (long long)seq);
@@ -2256,6 +2318,18 @@ size_t web_sse_tick(char *out, size_t outsz, unsigned long seq, long long ts,
         web_jw_raw(&w, ",\"records_s\":"); web_jw_raw(&w, r10);
         web_jw_raw(&w, ",\"records\":"); web_jw_int(&w, (long long)s.records);
         web_jw_raw(&w, ",\"sensor\":"); web_jw_str(&w, s.sensor);
+        /* sloth-rf's stream (#214), only with --rf-socket: the tick is
+         * otherwise what it was. alerts_open above already counts its
+         * open incidents. */
+        if (h->live->peer) {
+            web_live_sum_t rs;
+            web_live_summary(h->live->peer, &rs, h->now_ms);
+            web_jw_raw(&w, ",\"rf\":{\"socket\":");
+            web_jw_str(&w, web_live_sock_word(rs.sock_state));
+            web_jw_raw(&w, ",\"sensor\":"); web_jw_str(&w, rs.sensor);
+            web_jw_raw(&w, ",\"records\":"); web_jw_int(&w, (long long)rs.records);
+            web_jw_raw(&w, "}");
+        }
     }
     if (h->anomaly) {
         web_jw_raw(&w, ",\"anomalies_open\":");

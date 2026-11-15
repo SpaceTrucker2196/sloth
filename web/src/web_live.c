@@ -58,6 +58,17 @@ void web_live_init(web_live_t *l, const char *spec) {
 
 void web_live_destroy(web_live_t *l) { pthread_mutex_destroy(&l->mu); }
 
+void web_live_set_role(web_live_t *l, int role) { l->role = role; }
+
+void web_live_set_peer(web_live_t *l, web_live_t *rf) {
+    l->peer = rf == l ? NULL : rf;
+    /* An incident's handle is its state's nonce and counter, and one
+     * lookup serves both states: two equal nonces (one draw in 2^32,
+     * or the fallback's same second) would give two incidents one
+     * handle. */
+    if (l->peer && l->peer->hid_nonce == l->hid_nonce) l->peer->hid_nonce ^= 0x5a5a5a5aU;
+}
+
 const char *web_live_sock_word(int state) {
     switch (state) {
     case WEB_SOCK_CONNECTING: return "connecting";
@@ -110,6 +121,8 @@ void web_live_sock_connected(web_live_t *l, long long now_ms) {
     l->sc.radio = 0;
     l->sc_known = 0;
     l->batches_conn = 0;
+    /* Which daemon is at the other end is the new stream's to say. */
+    l->wrong_now[0] = '\0';
     pthread_mutex_unlock(&l->mu);
 }
 
@@ -732,8 +745,35 @@ static void c193_record(web_live_t *l, const web_jrec_t *r) {
     }
 }
 
+/* A short word off the stream, kept only when every byte is in
+ * `set`-like ASCII: digits and dots for a version, lower-case letters
+ * for a daemon. "" otherwise. */
+static void word_keep(char *out, size_t max, const char *s, int version) {
+    out[0] = '\0';
+    if (!s) return;
+    size_t n = strlen(s);
+    if (n == 0 || n > max) return;
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        int ok = version ? ((c >= '0' && c <= '9') || c == '.') : (c >= 'a' && c <= 'z');
+        if (!ok) return;
+    }
+    memcpy(out, s, n + 1);
+}
+
 static void sensor_record(web_live_t *l, const web_jrec_t *r, long long ts,
                           long long now_ms) {
+    word_keep(l->sh_ver, WEB_LIVE_VER_MAX, web_jl_str(r, "jsonl_version"), 1);
+    word_keep(l->sh_daemon, WEB_LIVE_DAEMON_MAX, web_jl_str(r, "daemon"), 0);
+    l->wrong_now[0] = '\0';
+    if (l->role == WEB_LIVE_RF) {
+        /* sloth-rf's record has no capture, monitor radio or scope
+         * block (src/jsonl_rf.c): only that it came, and when. */
+        l->sh_seen = 1;
+        l->sh_ms = now_ms;
+        l->sh_ts = ts;
+        return;
+    }
     c193_record(l, r);
     l->sh_seen = 1;
     l->sh_ms = now_ms;
@@ -847,6 +887,29 @@ void web_live_decode_error(web_live_t *l, int err, long long now_ms) {
     pthread_mutex_unlock(&l->mu);
 }
 
+void web_live_wrong_daemon(web_live_t *l, const char *daemon, long long now_ms) {
+    pthread_mutex_lock(&l->mu);
+    l->lines++;
+    l->records++;
+    l->last_record_ms = now_ms;
+    l->wrong_health++;
+    l->wrong_records++;
+    /* The word it named, when it is one of sloth's two; else "other"
+     * (no member, or a word neither daemon writes). */
+    const char *w = daemon && (!strcmp(daemon, "wifi") || !strcmp(daemon, "rf")) ? daemon : "other";
+    snprintf(l->wrong_now, sizeof(l->wrong_now), "%s", w);
+    pthread_mutex_unlock(&l->mu);
+}
+
+void web_live_wrong_record(web_live_t *l, long long now_ms) {
+    pthread_mutex_lock(&l->mu);
+    l->lines++;
+    l->records++;
+    l->last_record_ms = now_ms;
+    l->wrong_records++;
+    pthread_mutex_unlock(&l->mu);
+}
+
 void web_live_truncated(web_live_t *l) {
     pthread_mutex_lock(&l->mu);
     l->truncated++;
@@ -860,6 +923,8 @@ void web_live_truncated(web_live_t *l) {
 static const char *sensor_word(const web_live_t *l, long long now_ms) {
     if (!l->sh_seen) return "unknown";
     if (now_ms - l->sh_ms > WEB_LIVE_SH_STALE_MS) return "stale";
+    /* sloth-rf has no capture to be degraded or not observing. */
+    if (l->role == WEB_LIVE_RF) return "ok";
     if ((l->cap_open && !l->cap_running) || (l->mon_open && !l->mon_running) ||
         l->scope_ne)
         return "degraded";
@@ -909,9 +974,25 @@ static void summary_locked(const web_live_t *l, web_live_sum_t *s,
     }
 }
 
+/* The RF daemon's open incidents by severity, added to s->alerts: those
+ * sc's scope passes (NULL or Hybrid: all). Called with l's mutex held;
+ * takes the peer's (the one order, web_live.h). */
+static void peer_alerts(const web_live_t *l, const web_scope_ctx_t *sc, web_live_sum_t *s) {
+    web_live_t *p = l->peer;
+    if (!p) return;
+    int scoped = sc && sc->scope != WEB_SCOPE_HYBRID;
+    pthread_mutex_lock(&p->mu);
+    for (int i = 0; i < p->ninc; i++)
+        if (!scoped || web_scope_pass(sc->scope, web_live_inc_tag(sc, &p->inc[i])))
+            s->alerts[p->inc[i].sev]++;
+    if (p->inc_overflow) s->alerts_overflow = 1;
+    pthread_mutex_unlock(&p->mu);
+}
+
 void web_live_summary(web_live_t *l, web_live_sum_t *s, long long now_ms) {
     pthread_mutex_lock(&l->mu);
     summary_locked(l, s, now_ms);
+    peer_alerts(l, NULL, s);
     pthread_mutex_unlock(&l->mu);
 }
 
@@ -982,6 +1063,28 @@ void web_live_health_members(web_live_t *l, web_jw_t *w, long long now_ms) {
     pthread_mutex_unlock(&l->mu);
 }
 
+void web_live_daemon_json(web_live_t *l, web_jw_t *w, long long now_ms) {
+    web_jw_raw(w, "{\"role\":");
+    web_jw_str(w, l->role == WEB_LIVE_RF ? "rf" : "wifi");
+    web_live_health_members(l, w, now_ms);
+    pthread_mutex_lock(&l->mu);
+    web_jw_raw(w, ",\"sensor\":"); web_jw_str(w, sensor_word(l, now_ms));
+    web_jw_raw(w, ",\"health_age_s\":");
+    if (l->sh_seen) web_jw_int(w, (now_ms - l->sh_ms) / 1000); else web_jw_raw(w, "null");
+    web_jw_raw(w, ",\"health_ts\":");
+    if (l->sh_seen) web_jw_int(w, l->sh_ts); else web_jw_raw(w, "null");
+    web_jw_raw(w, ",\"jsonl_version\":");
+    if (l->sh_ver[0]) web_jw_str(w, l->sh_ver); else web_jw_raw(w, "null");
+    web_jw_raw(w, ",\"daemon\":");
+    if (l->sh_daemon[0]) web_jw_str(w, l->sh_daemon); else web_jw_raw(w, "null");
+    web_jw_raw(w, ",\"wrong_daemon\":");
+    if (l->wrong_now[0]) web_jw_str(w, l->wrong_now); else web_jw_raw(w, "null");
+    web_jw_raw(w, ",\"wrong_health\":");  web_jw_int(w, (long long)l->wrong_health);
+    web_jw_raw(w, ",\"wrong_records\":"); web_jw_int(w, (long long)l->wrong_records);
+    web_jw_raw(w, "}");
+    pthread_mutex_unlock(&l->mu);
+}
+
 size_t web_live_json(web_live_t *l, char *out, size_t cap, long long now_ms) {
     return web_live_json_scoped(l, NULL, out, cap, now_ms);
 }
@@ -998,6 +1101,7 @@ void web_live_bundle_sensor(web_live_t *l, const web_scope_ctx_t *sc,
     summary_locked(l, &s, now_ms);
     /* The counts under the request's scope, as /api/live gives them. */
     scope_sum(l, sc, &s, now_ms);
+    peer_alerts(l, sc, &s);
     web_jw_raw(w, "{\"socket\":");      web_jw_str(w, web_live_sock_word(l->sock_state));
     web_jw_raw(w, ",\"socket_spec\":"); web_jw_str(w, l->spec);
     web_jw_raw(w, ",\"state\":");       web_jw_str(w, s.sensor);
@@ -1082,6 +1186,7 @@ size_t web_live_json_scoped(web_live_t *l, const web_scope_ctx_t *sc,
     web_live_sum_t s;
     summary_locked(l, &s, now_ms);
     scope_sum(l, sc, &s, now_ms);
+    peer_alerts(l, sc, &s);
     int scoped = sc && sc->scope != WEB_SCOPE_HYBRID;
 
     web_jw_raw(&w, "{\"socket\":"); web_jw_str(&w, web_live_sock_word(s.sock_state));
@@ -1257,7 +1362,54 @@ static int by_seq_desc(const void *a, const void *b) {
     return x < y ? 1 : x > y ? -1 : 0;
 }
 
+/* Two daemons' incidents in one list: seq counts one state's changes
+ * and says nothing across two, so the newest change is the later
+ * last_ts; a tie keeps sloth's before sloth-rf's, then each state's own
+ * order. */
+static int by_last_desc(const void *a, const void *b) {
+    const web_live_inc_t *x = a, *y = b;
+    if (x->last_ts != y->last_ts) return x->last_ts < y->last_ts ? 1 : -1;
+    if (x->rf != y->rf) return x->rf - y->rf;
+    return by_seq_desc(a, b);
+}
+
+/* One state's open or closed incidents onto out[n..], marked. The
+ * caller holds its mutex. */
+static int inc_copy(const web_live_t *l, int open, int rf, web_live_inc_t *out, int n, int max) {
+    if (open) {
+        for (int i = 0; i < l->ninc && n < max; i++) { out[n] = l->inc[i]; out[n++].rf = rf; }
+    } else {
+        for (int k = 0; k < l->closed_n && n < max; k++) {
+            int i = (l->closed_next - 1 - k + 2 * WEB_LIVE_CLOSED) % WEB_LIVE_CLOSED;
+            out[n] = l->closed[i];
+            out[n++].rf = rf;
+        }
+    }
+    return n;
+}
+
 int web_live_incidents(web_live_t *l, web_live_inc_t *out, int max, int *nopen) {
+    web_live_t *p = l->peer;
+    if (p) {
+        /* Both under their locks (this state's, then the peer's: the
+         * one order), so an incident that resolves meanwhile is in one
+         * group, not both. The open ones of both first: when the two
+         * together are more than max (every caller sizes for one
+         * state), what is cut is the closed, sloth-rf's before sloth's. */
+        pthread_mutex_lock(&l->mu);
+        pthread_mutex_lock(&p->mu);
+        int n = inc_copy(l, 1, 0, out, 0, max);
+        n = inc_copy(p, 1, 1, out, n, max);
+        int o = n;
+        n = inc_copy(l, 0, 0, out, n, max);
+        n = inc_copy(p, 0, 1, out, n, max);
+        pthread_mutex_unlock(&p->mu);
+        pthread_mutex_unlock(&l->mu);
+        qsort(out, (size_t)o, sizeof(*out), by_last_desc);
+        qsort(out + o, (size_t)(n - o), sizeof(*out), by_last_desc);
+        if (nopen) *nopen = o;
+        return n;
+    }
     pthread_mutex_lock(&l->mu);
     int n = 0;
     for (int i = 0; i < l->ninc && n < max; i++) out[n++] = l->inc[i];
@@ -1285,6 +1437,13 @@ int web_live_incident(web_live_t *l, const char *hid, web_live_inc_t *out) {
         if (!strcmp(l->closed[i].hid, hid)) { *out = l->closed[i]; found = 1; }
     }
     pthread_mutex_unlock(&l->mu);
+    /* The RF daemon's, by the same handle space: each state draws its
+     * own nonce, and web_live_set_peer() callers keep them apart
+     * (web_live_init()). */
+    if (!found && l->peer && web_live_incident(l->peer, hid, out)) {
+        out->rf = 1;
+        found = 1;
+    }
     return found;
 }
 

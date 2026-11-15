@@ -19,8 +19,16 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "web_adsb.h"
+#include "web_aprs.h"
+#include "web_gnss.h"
 #include "web_ingest.h"
 #include "web_live.h"
+#include "web_metrics.h"
+#include "web_rollup.h"
+#include "web_rtl433.h"
+#include "web_sysstat.h"
+#include "web_victron.h"
 #include "web_server.h"
 #include "wtest.h"
 #include "wt_tmp.h"
@@ -760,6 +768,366 @@ static void test_client_never_writes(void) {
     tmp_dir_done();
 }
 
+/* ── two daemons (#214) ───────────────────────────────────────────── */
+
+/* A second listener and a second ingest thread, wired as main.c wires
+ * them with --rf-socket: sloth's stream and sloth-rf's on two sockets,
+ * two threads and two states, feeding the consumers they share (the
+ * GNSS panel's fallback and its panel, the host status, the rollup)
+ * while this thread reads them. The gate runs this under the thread
+ * sanitizer; the assertions are that each consumer ends holding what
+ * its one writer sent.
+ *
+ * Seen red, each restored: the rtl_433 block's survival with
+ * split_line() handing sloth's sensor_health to web_rtl433_record()
+ * (sh.seen 0 after the 200 rounds); the decoy device's absence with
+ * `if (rf_type) return;` replaced by the RF panels' calls. */
+static web_live_t    g_live_rf;
+static web_ingest_t  g_ing_rf;
+static char          g_rf_path[160];
+
+typedef struct {
+    web_gnss_t    gnss;
+    web_adsb_t    adsb;
+    web_aprs_t    aprs;
+    web_rtl433_t  rtl433;
+    web_victron_t victron;
+    web_sys_t     sys;
+    web_rollup_t  ru;
+    web_metrics_t met;
+} two_t;
+static two_t TW;
+
+static int two_up(void) {
+    char err[256];
+    memset(&TW, 0, sizeof(TW));
+    if (web_gnss_init(&TW.gnss) || web_adsb_init(&TW.adsb) || web_aprs_init(&TW.aprs) ||
+        web_rtl433_init(&TW.rtl433) || web_victron_init(&TW.victron) || web_sys_init(&TW.sys) ||
+        web_rollup_init(&TW.ru, 64, 0, err, sizeof(err)) ||
+        web_metrics_init(&TW.met, &TW.ru, NULL, NULL))
+        return -1;
+    web_sys_set_split(&TW.sys);
+    return 0;
+}
+
+static void two_down(void) {
+    web_metrics_destroy(&TW.met);
+    web_rollup_destroy(&TW.ru);
+    web_sys_destroy(&TW.sys);
+    web_victron_destroy(&TW.victron);
+    web_rtl433_destroy(&TW.rtl433);
+    web_aprs_destroy(&TW.aprs);
+    web_adsb_destroy(&TW.adsb);
+    web_gnss_destroy(&TW.gnss);
+}
+
+/* Both threads, as main.c starts them. rf 0 leaves sloth-rf's socket
+ * with no listener. */
+static int two_start(int bmin, int bmax) {
+    web_sockspec_t sp, rsp;
+    char err[256], spec[160], rspec[200];
+    snprintf(spec, sizeof(spec), "unix:%s", g_path);
+    snprintf(rspec, sizeof(rspec), "unix:%s", g_rf_path);
+    if (web_sockspec_parse(spec, &sp, err, sizeof(err)) != 0 ||
+        web_sockspec_parse_flag("--rf-socket", rspec, &rsp, err, sizeof(err)) != 0)
+        return -1;
+    web_live_init(&g_live, spec);
+    web_live_init(&g_live_rf, rspec);
+    web_live_set_role(&g_live, WEB_LIVE_WIFI);
+    web_live_set_role(&g_live_rf, WEB_LIVE_RF);
+    web_live_set_peer(&g_live, &g_live_rf);
+    memset(&g_ing_rf, 0, sizeof(g_ing_rf));
+    web_ingest_set_role(&g_ing, WEB_FEED_WIFI);
+    web_ingest_set_metrics(&g_ing, &TW.met);
+    web_ingest_set_gnss(&g_ing, &TW.gnss);
+    web_ingest_set_sys(&g_ing, &TW.sys);
+    /* More than main.c gives sloth's thread: the RF panels too, so
+     * that it is the feed's role that keeps sloth's records out of
+     * them, not a pointer left unset. */
+    web_ingest_set_adsb(&g_ing, &TW.adsb);
+    web_ingest_set_aprs(&g_ing, &TW.aprs);
+    web_ingest_set_rtl433(&g_ing, &TW.rtl433);
+    web_ingest_set_victron(&g_ing, &TW.victron);
+    web_ingest_set_role(&g_ing_rf, WEB_FEED_RF);
+    web_ingest_set_gnss(&g_ing_rf, &TW.gnss);
+    web_ingest_set_adsb(&g_ing_rf, &TW.adsb);
+    web_ingest_set_aprs(&g_ing_rf, &TW.aprs);
+    web_ingest_set_rtl433(&g_ing_rf, &TW.rtl433);
+    web_ingest_set_victron(&g_ing_rf, &TW.victron);
+    web_ingest_set_sys(&g_ing_rf, &TW.sys);
+    web_ingest_set_rf_rollup(&g_ing_rf, &TW.ru);
+    if (web_ingest_start(&g_ing, &sp, bmin, bmax, &g_live, err, sizeof(err)) != 0) return -1;
+    if (web_ingest_start(&g_ing_rf, &rsp, bmin, bmax, &g_live_rf, err, sizeof(err)) != 0) {
+        web_ingest_stop(&g_ing);
+        return -1;
+    }
+    return 0;
+}
+
+static void two_stop(void) {
+    web_ingest_stop(&g_ing);
+    web_ingest_stop(&g_ing_rf);
+    /* The next test's one-stream client starts from a clean feed. */
+    memset(&g_ing.feed, 0, sizeof(g_ing.feed));
+    web_live_destroy(&g_live);
+    web_live_destroy(&g_live_rf);
+}
+
+static int rf_records(unsigned long long n, int ms) {
+    long long end = mono_ms() + ms;
+    for (;;) {
+        pthread_mutex_lock(&g_live_rf.mu);
+        unsigned long long have = g_live_rf.records;
+        pthread_mutex_unlock(&g_live_rf.mu);
+        if (have >= n) return 1;
+        if (mono_ms() >= end) return 0;
+        nap(2);
+    }
+}
+
+#define RF_ROUNDS 200
+
+/* sloth-rf's end, on a thread of its own, so the two streams really
+ * arrive at once. Each round is a tick: an rtl_433 device, an aircraft,
+ * a fix, its source row, the host batch and its sensor_health. */
+static void *rf_writer(void *arg) {
+    int fd = *(int *)arg;
+    char b[2048];
+    for (int i = 0; i < RF_ROUNDS; i++) {
+        long long ts = 1800000000LL + i;
+        int n = snprintf(b, sizeof(b),
+            "{\"type\":\"rtl433_device\",\"ts\":%lld,\"src\":\"file:/x\",\"model\":\"Testco-TP01\","
+            "\"id\":\"1a2b3c\",\"first_seen\":1800000000,\"last_seen\":%lld,\"msgs\":%d,"
+            "\"other_keys\":0}\n"
+            "{\"type\":\"adsb_aircraft\",\"ts\":%lld,\"hex\":\"a1b2c3\",\"non_icao\":0,"
+            "\"state\":\"live\",\"flight\":\"FLT-MARK\",\"first_seen\":1800000000,"
+            "\"last_seen\":%lld}\n"
+            "{\"type\":\"gnss_fix\",\"ts\":%lld,\"src\":\"gpsd:127.0.0.1:2947\",\"fix_ts\":%lld,"
+            "\"mode\":3,\"status\":2,\"nsat\":4,\"usat\":2,\"hdop\":0.8,\"tpv_count\":%d}\n"
+            "{\"type\":\"source_status\",\"ts\":%lld,\"seq\":%d,\"name\":\"rtl433\","
+            "\"kind\":\"rtl433\",\"flag\":\"--rtl433\",\"state\":\"ok\",\"detail\":\"rf-side\","
+            "\"endpoint\":\"\"}\n"
+            "{\"type\":\"sys_status\",\"ts\":%lld,\"seq\":%d,\"interval_s\":60,\"cpu_pct\":16.0,"
+            "\"rss_kb\":4321,\"temps\":0,\"volts\":0,\"power\":0,\"receivers\":0}\n"
+            "{\"type\":\"sensor_health\",\"ts\":%lld,\"gps_state\":\"fix\","
+            "\"gnss_sats_in_view\":4,\"gnss_sats_used\":2,\"gnss_cn0_mean\":31.3,"
+            "\"loc_lat\":10.00000,\"loc_lon\":20.00000,\"loc_src\":\"gps\","
+            "\"rtl433_state\":\"live\",\"rtl433_src\":\"file:/x\",\"rtl433_devices\":1,"
+            "\"daemon\":\"rf\",\"db_max_mb\":256,\"jsonl_version\":\"1.9.0\"}\n",
+            ts, ts, i + 1, ts, ts, ts, ts, i + 1, ts, i + 1, ts, i + 1, ts);
+        put(fd, b, (size_t)n);
+    }
+    return NULL;
+}
+
+static void wifi_round(int fd, int i) {
+    char b[2048];
+    long long ts = 1800000000LL + i;
+    int n = snprintf(b, sizeof(b),
+        /* sloth's own copies of sloth-rf's records, as a sloth that
+         * still has the RF flags writes them. */
+        "{\"type\":\"rtl433_device\",\"ts\":%lld,\"src\":\"file:/y\",\"model\":\"Decoy-DV01\","
+        "\"id\":\"777\",\"first_seen\":1800000000,\"last_seen\":%lld,\"msgs\":1,"
+        "\"other_keys\":0}\n"
+        "{\"type\":\"source_status\",\"ts\":%lld,\"seq\":%d,\"name\":\"rtl433\","
+        "\"kind\":\"rtl433\",\"flag\":\"--rtl433\",\"state\":\"not_configured\","
+        "\"detail\":\"wifi-side\",\"endpoint\":\"\"}\n"
+        "{\"type\":\"sys_status\",\"ts\":%lld,\"seq\":%d,\"interval_s\":60,\"cpu_pct\":15.0,"
+        "\"rss_kb\":12276,\"temps\":0,\"volts\":0,\"power\":0,\"receivers\":0}\n"
+        "{\"type\":\"sensor_health\",\"ts\":%lld,\"capture_iface\":\"eth0\",\"capture_open\":1,"
+        "\"capture_running\":1,\"monitor_iface\":\"\",\"monitor_open\":0,"
+        "\"monitor_running\":0,\"scope\":\"none\",\"scope_not_enforced\":0,"
+        "\"loc_lat\":11.00000,\"loc_lon\":21.00000,\"loc_src\":\"gps\","
+        "\"daemon\":\"wifi\",\"db_max_mb\":512,\"jsonl_version\":\"1.9.0\"}\n",
+        ts, ts, ts, i + 1, ts, i + 1, ts);
+    put(fd, b, (size_t)n);
+}
+
+static void test_two_daemons_on_two_threads(void) {
+    if (tmp_dir() != 0) { WT_ASSERT(0); return; }
+    snprintf(g_rf_path, sizeof(g_rf_path), "%s/sloth-rf.sock", g_dir);
+    int lfd = unix_listen(g_path), rlfd = unix_listen(g_rf_path);
+    WT_ASSERT(lfd >= 0 && rlfd >= 0);
+    if (lfd < 0 || rlfd < 0 || two_up() != 0 || two_start(20, 200) != 0) {
+        WT_ASSERT(0);
+        if (lfd >= 0) close(lfd);
+        if (rlfd >= 0) close(rlfd);
+        unlink(g_rf_path);
+        tmp_dir_done();
+        return;
+    }
+    int fd = accept_within(lfd, 3000), rfd = accept_within(rlfd, 3000);
+    WT_ASSERT(fd >= 0 && rfd >= 0);
+    if (fd >= 0 && rfd >= 0) {
+        pthread_t th;
+        WT_EQ(pthread_create(&th, NULL, rf_writer, &rfd), 0);
+        /* An alert of sloth's, open while sloth-rf's stream runs. */
+        puts_fd(fd, "{\"type\":\"alert.create\",\"ts\":1800000000,\"incident_id\":\"w1\","
+                    "\"sev\":1,\"ty\":10,\"title\":\"WIFI-ONE\",\"detail\":\"d\"}\n");
+        static char body[65536];
+        for (int i = 0; i < RF_ROUNDS; i++) {
+            wifi_round(fd, i);
+            /* This thread reads what the two write, as the HTTP thread
+             * does. */
+            size_t len = 0;
+            int st = 0;
+            web_live_sum_t s;
+            web_live_summary(&g_live, &s, mono_ms());
+            web_rtl433_route(&TW.rtl433, "", 1800000000LL, 0, body, sizeof(body), &len, &st);
+            web_gnss_route(&TW.gnss, "", 1800000000LL, body, sizeof(body), &len, &st);
+            web_sys_route(&TW.sys, "", 1800000000LL, mono_ms(), body, sizeof(body), &len, &st);
+        }
+        pthread_join(th, NULL);
+        web_live_sum_t s;
+        WT_ASSERT(rf_records(6 * RF_ROUNDS, 5000));
+        /* One more of sloth's ticks after sloth-rf's last record, so
+         * the last sensor_health applied anywhere is sloth's. */
+        wifi_round(fd, RF_ROUNDS);
+        WT_ASSERT(wait_sum(has_records, 1 + 4 * (RF_ROUNDS + 1), 5000, &s));
+
+        /* The rtl_433 tab is sloth-rf's alone: its device and its block,
+         * through 201 of sloth's sensor_health records without one, the
+         * last of them after sloth-rf's last. */
+        size_t len = 0;
+        int st = 0;
+        WT_EQ(web_rtl433_route(&TW.rtl433, "", 1800000000LL, 0, body, sizeof(body), &len, &st), 0);
+        body[len < sizeof(body) ? len : sizeof(body) - 1] = '\0';
+        WT_HAS(body, "Testco-TP01");
+        WT_LACKS(body, "Decoy-DV01");
+        pthread_mutex_lock(&TW.rtl433.mu);
+        WT_EQ(TW.rtl433.sh.seen, 1);
+        pthread_mutex_unlock(&TW.rtl433.mu);
+        /* The position is sloth-rf's, sloth's kept behind it. */
+        web_loc_t loc;
+        web_gnss_sh_t sh;
+        web_gnss_site(&TW.gnss, &loc, &sh);
+        WT_EQ(loc.has, 1);
+        WT_ASSERT(loc.lat > 9.99 && loc.lat < 10.01);
+        pthread_mutex_lock(&TW.gnss.mu);
+        WT_EQ(TW.gnss.loc_fb.has, 1);
+        WT_ASSERT(TW.gnss.loc_fb.lat > 10.99 && TW.gnss.loc_fb.lat < 11.01);
+        pthread_mutex_unlock(&TW.gnss.mu);
+        /* The host is sloth's once it reported; each store's limit is
+         * its own daemon's; the source row is sloth-rf's. */
+        pthread_mutex_lock(&TW.sys.mu);
+        WT_EQ(TW.sys.rss_kb, 12276);
+        WT_EQ(TW.sys.sloth_max_mb, 512);
+        WT_EQ(TW.sys.rf_max_mb, 256);
+        int ok = 0;
+        for (int i = 0; i < WEB_SYS_SOURCES; i++)
+            if (TW.sys.sources[i].used && !strcmp(TW.sys.sources[i].name, "rtl433"))
+                ok = !strcmp(TW.sys.sources[i].detail, "rf-side");
+        WT_EQ(ok, 1);
+        pthread_mutex_unlock(&TW.sys.mu);
+        /* Each state counted its own stream, and neither called the
+         * other's daemon wrong. */
+        pthread_mutex_lock(&g_live_rf.mu);
+        WT_EQ(g_live_rf.records, 6 * RF_ROUNDS);
+        WT_EQ(g_live_rf.wrong_health, 0);
+        WT_EQ(g_live_rf.connects, 1);
+        pthread_mutex_unlock(&g_live_rf.mu);
+        WT_EQ(live_ul(&g_live.wrong_health), 0);
+
+        /* sloth-rf goes away and comes back: sloth's open incident is
+         * still open (its own state's connect handler clears only its
+         * own), and sloth's stream was not disturbed. */
+        close(rfd);
+        rfd = accept_within(rlfd, 3000);
+        WT_ASSERT(rfd >= 0);
+        if (rfd >= 0) {
+            puts_fd(rfd, "{\"type\":\"sensor_health\",\"ts\":1800000300,\"daemon\":\"rf\","
+                         "\"jsonl_version\":\"1.9.0\"}\n");
+            WT_ASSERT(rf_records(6 * RF_ROUNDS + 1, 5000));
+        }
+        web_live_summary(&g_live, &s, mono_ms());
+        WT_EQ(s.alerts[1], 1);
+        WT_EQ(live_ul(&g_live.connects), 1);
+        pthread_mutex_lock(&g_live_rf.mu);
+        WT_EQ(g_live_rf.connects, 2);
+        pthread_mutex_unlock(&g_live_rf.mu);
+    }
+    if (fd >= 0) close(fd);
+    if (rfd >= 0) close(rfd);
+    two_stop();
+    two_down();
+    close(lfd);
+    close(rlfd);
+    unlink(g_rf_path);
+    tmp_dir_done();
+}
+
+/* sloth-rf's socket is not there (the daemon is not installed, or not
+ * up yet): slothweb runs on sloth's stream, says why in the RF state,
+ * keeps trying, and takes sloth-rf's stream the moment it appears. */
+static void test_rf_socket_absent_then_appears(void) {
+    if (tmp_dir() != 0) { WT_ASSERT(0); return; }
+    snprintf(g_rf_path, sizeof(g_rf_path), "%s/sloth-rf.sock", g_dir);
+    int lfd = unix_listen(g_path);
+    WT_ASSERT(lfd >= 0);
+    if (lfd < 0 || two_up() != 0 || two_start(10, 40) != 0) {
+        WT_ASSERT(0);
+        if (lfd >= 0) close(lfd);
+        tmp_dir_done();
+        return;
+    }
+    int fd = accept_within(lfd, 3000);
+    WT_ASSERT(fd >= 0);
+    if (fd >= 0) {
+        wifi_round(fd, 0);
+        web_live_sum_t s;
+        WT_ASSERT(wait_sum(has_records, 4, 5000, &s));
+        WT_EQ(s.sock_state, WEB_SOCK_CONNECTED);
+    }
+    /* A few back-offs. */
+    long long end = mono_ms() + 3000;
+    unsigned long fails = 0;
+    while (mono_ms() < end && fails < 3) {
+        pthread_mutex_lock(&g_live_rf.mu);
+        fails = g_live_rf.failures;
+        pthread_mutex_unlock(&g_live_rf.mu);
+        nap(3);
+    }
+    WT_ASSERT(fails >= 3);
+    char hb[8192];
+    web_jw_t w;
+    web_jw_init(&w, hb, sizeof(hb));
+    web_live_daemon_json(&g_live_rf, &w, mono_ms());
+    hb[w.len < sizeof(hb) ? w.len : sizeof(hb) - 1] = '\0';
+    WT_HAS(hb, "{\"role\":\"rf\",\"socket\":\"");
+    WT_LACKS(hb, "\"socket\":\"connected\"");
+    WT_HAS(hb, "\"socket_last_error\":\"connect: No such file or directory\"");
+    WT_HAS(hb, ",\"sensor\":\"unknown\",\"health_age_s\":null,");
+    /* sloth's stream ran throughout, and its position stands in for the
+     * one sloth-rf has not given. */
+    web_loc_t loc;
+    web_gnss_sh_t sh;
+    web_gnss_site(&TW.gnss, &loc, &sh);
+    WT_EQ(loc.has, 1);
+    WT_ASSERT(loc.lat > 10.99 && loc.lat < 11.01);
+    /* It appears. */
+    int rlfd = unix_listen(g_rf_path);
+    WT_ASSERT(rlfd >= 0);
+    int rfd = rlfd >= 0 ? accept_within(rlfd, 3000) : -1;
+    WT_ASSERT(rfd >= 0);
+    if (rfd >= 0) {
+        rf_writer(&rfd);
+        WT_ASSERT(rf_records(6 * RF_ROUNDS, 5000));
+        pthread_mutex_lock(&TW.rtl433.mu);
+        WT_EQ(TW.rtl433.sh.seen, 1);
+        pthread_mutex_unlock(&TW.rtl433.mu);
+        web_gnss_site(&TW.gnss, &loc, &sh);
+        WT_ASSERT(loc.lat > 9.99 && loc.lat < 10.01);
+        close(rfd);
+    }
+    if (fd >= 0) close(fd);
+    two_stop();
+    two_down();
+    close(lfd);
+    if (rlfd >= 0) close(rlfd);
+    unlink(g_rf_path);
+    tmp_dir_done();
+}
+
 void run_ingest_tests(void) {
     WT_RUN(test_sockspec);
     WT_RUN(test_backoff_bound);
@@ -772,4 +1140,6 @@ void run_ingest_tests(void) {
     WT_RUN(test_connect_timeout);
     WT_RUN(test_hostile_stream);
     WT_RUN(test_client_never_writes);
+    WT_RUN(test_two_daemons_on_two_threads);
+    WT_RUN(test_rf_socket_absent_then_appears);
 }

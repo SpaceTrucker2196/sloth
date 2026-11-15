@@ -92,7 +92,13 @@ int web_sys_db_size(const char *path, long long *main_b, long long *wal_b) {
     return 0;
 }
 
-static const char *const DB_KEY[WEB_SYS_DBS] = { "sloth", "slothweb" };
+void web_sys_set_rf_db(web_sys_t *y, const char *rf_db) {
+    snprintf(y->db_path[WEB_SYS_DB_RF], sizeof(y->db_path[0]), "%s", rf_db ? rf_db : "");
+}
+
+void web_sys_set_split(web_sys_t *y) { y->split = 1; }
+
+static const char *const DB_KEY[WEB_SYS_DBS] = { "sloth", "slothweb", "sloth-rf" };
 
 void web_sys_db_metrics(web_sys_t *y, web_rollup_t *ru, long long now_s) {
     if (!y || !ru) return;
@@ -305,11 +311,11 @@ static void hw_apply(web_sys_t *y, const web_jrec_t *r) {
 /* sloth's db.max_mb from a sensor_health (web_sysstat.h): its own
  * member, or an older sloth's `tuned` list. A record that says neither
  * leaves what was known. */
-static void health_apply(web_sys_t *y, const web_jrec_t *r) {
+static void health_apply(const web_jrec_t *r, int *lim, long long *max_mb) {
     long long v, n;
     if (jll(r, "db_max_mb", -1, WEB_SLOTH_DB_MAX_MB_MAX, &v)) {
-        y->sloth_lim = v < 0 ? WEB_SYS_LIM_NO_DB : WEB_SYS_LIM_SAID;
-        y->sloth_max_mb = v < 0 ? 0 : v;
+        *lim = v < 0 ? WEB_SYS_LIM_NO_DB : WEB_SYS_LIM_SAID;
+        *max_mb = v < 0 ? 0 : v;
         return;
     }
     const char *t = web_jl_str(r, "tuned");
@@ -325,13 +331,13 @@ static void health_apply(web_sys_t *y, const web_jrec_t *r) {
             int nd = 0;
             while (*d >= '0' && *d <= '9' && nd < 8) { k = k * 10 + (*d - '0'); d++; nd++; }
             if (nd && (!*d || *d == ',') && k <= WEB_SLOTH_DB_MAX_MB_MAX) {
-                y->sloth_lim = WEB_SYS_LIM_TUNED;
-                y->sloth_max_mb = k;
+                *lim = WEB_SYS_LIM_TUNED;
+                *max_mb = k;
                 return;
             }
             /* Named but unreadable: not the default either. */
-            y->sloth_lim = WEB_SYS_LIM_UNKNOWN;
-            y->sloth_max_mb = 0;
+            *lim = WEB_SYS_LIM_UNKNOWN;
+            *max_mb = 0;
             return;
         }
         const char *c = strchr(p, ',');
@@ -340,11 +346,11 @@ static void health_apply(web_sys_t *y, const web_jrec_t *r) {
     /* Not named: the default only when the list is whole (sloth cuts it
      * at 256 bytes, and a cut list may have dropped the knob). */
     if (items == n) {
-        y->sloth_lim = WEB_SYS_LIM_DEFAULT;
-        y->sloth_max_mb = WEB_SLOTH_DB_DEFAULT_MAX_MB;
+        *lim = WEB_SYS_LIM_DEFAULT;
+        *max_mb = WEB_SLOTH_DB_DEFAULT_MAX_MB;
     } else {
-        y->sloth_lim = WEB_SYS_LIM_UNKNOWN;
-        y->sloth_max_mb = 0;
+        *lim = WEB_SYS_LIM_UNKNOWN;
+        *max_mb = 0;
     }
 }
 
@@ -357,25 +363,90 @@ static int which(const char *t) {
     return 0;
 }
 
-void web_sys_record(web_sys_t *y, const web_jrec_t *r, long long now_ms) {
-    if (y) web_own_record(&y->own, r, now_ms);
+/* Whose a source row is, by its name alone: WEB_SYS_FROM_RF,
+ * WEB_SYS_FROM_WIFI, or 0 for one that is not fixed (gnss, or a name
+ * this slothweb does not know). */
+static int source_owner(const char *name) {
+    static const char *const RF[] = { "adsb", "aprs", "rtl433", "victron", NULL };
+    static const char *const WIFI[] = { "capture", "monitor", "btmon", "btcap", NULL };
+    if (!name) return 0;
+    for (int i = 0; RF[i]; i++) if (!strcmp(name, RF[i])) return WEB_SYS_FROM_RF;
+    for (int i = 0; WIFI[i]; i++) if (!strcmp(name, WIFI[i])) return WEB_SYS_FROM_WIFI;
+    return 0;
+}
+
+int web_sys_record_from(web_sys_t *y, int from, const web_jrec_t *r, long long now_ms) {
+    if (y && from != WEB_SYS_FROM_RF) web_own_record(&y->own, r, now_ms);
     const char *type = web_jl_str(r, "type");
-    if (y && type && !strcmp(type, "sensor_health")) {
+    if (type && !strcmp(type, "sensor_health")) {
+        if (!y) return 1;
         pthread_mutex_lock(&y->mu);
-        health_apply(y, r);
+        if (from == WEB_SYS_FROM_RF) health_apply(r, &y->rf_lim, &y->rf_max_mb);
+        else                         health_apply(r, &y->sloth_lim, &y->sloth_max_mb);
         pthread_mutex_unlock(&y->mu);
-        return;
+        return 1;
     }
     int w = which(type);
-    if (!y || !w) return;
+    if (!w) return 1;
+    /* The fixed part of the rule needs no state. */
+    const char *name = w == 3 ? web_jl_str(r, "name") : NULL;
+    int owner = w == 3 ? source_owner(name) : 0;
+    if (from != WEB_SYS_FROM_ONLY && owner && owner != from) {
+        if (y) {
+            pthread_mutex_lock(&y->mu);
+            y->not_owned++;
+            pthread_mutex_unlock(&y->mu);
+        }
+        return 0;
+    }
+    if (!y) return 1;
     long long ts = web_jl_int(r, "ts", 0);
+    int applied = 1;
     pthread_mutex_lock(&y->mu);
-    y->records++;
-    if (w == 1) status_apply(y, r, ts, now_ms);
-    else if (w == 2) sensor_apply(y, r);
-    else if (w == 3) source_apply(y, r, ts, now_ms);
-    else hw_apply(y, r);
+    if (from == WEB_SYS_FROM_RF && w != 3) {
+        /* The host batch: sloth's once sloth has reported one. */
+        if (y->host_wifi) applied = 0;
+        else y->host_rf = 1;
+    } else if (from == WEB_SYS_FROM_WIFI && w != 3) {
+        if (w == 1 && !y->host_wifi) {
+            y->host_wifi = 1;
+            /* sloth-rf's rows of the batch it takes over from are not
+             * this batch's, whatever their seq. */
+            if (y->host_rf) {
+                memset(y->sensors, 0, sizeof(y->sensors));
+                memset(y->hw, 0, sizeof(y->hw));
+            }
+        } else if (!y->host_wifi) {
+            /* A row before sloth's first sys_status belongs to a batch
+             * whose head was missed: not applied over sloth-rf's. */
+            if (y->host_rf) applied = 0;
+        }
+    } else if (from != WEB_SYS_FROM_ONLY && w == 3 && name && !strcmp(name, "gnss")) {
+        const char *state = web_jl_str(r, "state");
+        int conf = state && strcmp(state, "not_configured");
+        if (from == WEB_SYS_FROM_RF) {
+            if (conf) y->gnss_rf = 1;
+            else if (y->gnss_wifi) applied = 0;
+        } else {
+            if (y->gnss_rf) applied = 0;
+            else y->gnss_wifi = 1;
+        }
+    }
+    if (!applied) {
+        y->not_owned++;
+    } else {
+        y->records++;
+        if (w == 1) status_apply(y, r, ts, now_ms);
+        else if (w == 2) sensor_apply(y, r);
+        else if (w == 3) source_apply(y, r, ts, now_ms);
+        else hw_apply(y, r);
+    }
     pthread_mutex_unlock(&y->mu);
+    return applied;
+}
+
+void web_sys_record(web_sys_t *y, const web_jrec_t *r, long long now_ms) {
+    if (y) web_sys_record_from(y, WEB_SYS_FROM_ONLY, r, now_ms);
 }
 
 void web_sys_metrics(web_rollup_t *ru, const web_jrec_t *r, long long now_s) {
@@ -459,6 +530,13 @@ int web_sys_route(web_sys_t *y, const char *query, long long now_s, long long no
     web_jw_raw(&w, ",\"stale\":");
     web_jw_raw(&w, y->seen && age > (long long)WEB_SYS_STALE_INTERVALS * y->interval_s
                    ? "true" : "false");
+    /* Two daemons: which one the batch below came from. */
+    if (y->split) {
+        web_jw_raw(&w, ",\"host_from\":");
+        if (!y->seen) web_jw_raw(&w, "null");
+        else web_jw_str(&w, y->host_wifi ? "wifi" : "rf");
+        web_jw_raw(&w, ",\"not_owned\":"); web_jw_int(&w, (long long)y->not_owned);
+    }
     web_jw_raw(&w, ",\"system\":");
     if (!y->seen) {
         web_jw_raw(&w, "null");
@@ -561,6 +639,10 @@ int web_sys_route(web_sys_t *y, const char *query, long long now_s, long long no
     web_jw_raw(&w, "],\"storage\":[");
     for (int i = 0; i < WEB_SYS_DBS; i++) {
         const char *path = y->db_path[i];
+        /* sloth-rf's is listed only when --rf-db names it. */
+        if (i == WEB_SYS_DB_RF && !path[0]) continue;
+        int dlim = i == WEB_SYS_DB_RF ? y->rf_lim : y->sloth_lim;
+        long long dmax = i == WEB_SYS_DB_RF ? y->rf_max_mb : y->sloth_max_mb;
         long long mb_b = 0, wb_b = 0;
         int there = web_sys_db_size(path, &mb_b, &wb_b) == 0;
         double mb = (double)(mb_b + wb_b) / (1024.0 * 1024.0);
@@ -572,14 +654,14 @@ int web_sys_route(web_sys_t *y, const char *query, long long now_s, long long no
         const char *state = "unknown", *from = NULL;
         if (i == WEB_SYS_DB_WEB) {
             if (y->web_max_mb >= 0) { known = 1; lim = y->web_max_mb; from = "--web-max-mb"; }
-        } else if (y->sloth_lim == WEB_SYS_LIM_NO_DB) {
+        } else if (dlim == WEB_SYS_LIM_NO_DB) {
             state = "no_db";
             from = "sensor_health";
-        } else if (y->sloth_lim != WEB_SYS_LIM_UNKNOWN) {
+        } else if (dlim != WEB_SYS_LIM_UNKNOWN) {
             known = 1;
-            lim = y->sloth_max_mb;
-            from = y->sloth_lim == WEB_SYS_LIM_SAID ? "sensor_health"
-                 : y->sloth_lim == WEB_SYS_LIM_TUNED ? "tuned" : "default";
+            lim = dmax;
+            from = dlim == WEB_SYS_LIM_SAID ? "sensor_health"
+                 : dlim == WEB_SYS_LIM_TUNED ? "tuned" : "default";
         }
         if (known) state = lim > 0 ? "set" : "unlimited";
         const char *slash = strrchr(path, '/');

@@ -122,6 +122,12 @@ typedef struct web_gnss {
      * position was lost or never configured). The Radar view's centre;
      * served as /api/gnss "loc". */
     web_loc_t       loc;
+    /* Two daemons (#214, web_gnss_record_fallback()): sloth's own
+     * sensor_health position and gnss_* summary, served only while
+     * sloth-rf's stream has given none (loc.has 0, sh.seen 0). Zero,
+     * and so never served, in a slothweb without --rf-socket. */
+    web_loc_t       loc_fb;
+    web_gnss_sh_t   sh_fb;
     char            src[WEB_GNSS_SRC_MAX + 1];
     unsigned long   records, evictions, aged, rejected;
 } web_gnss_t;
@@ -132,6 +138,19 @@ void web_gnss_destroy(web_gnss_t *g);
 /* Every decoded record; the four types above apply, the rest return. */
 void web_gnss_record(web_gnss_t *g, const web_jrec_t *r, long long now_ms);
 
+/* Two daemons (#214, ADR 0010): both report the receiver's health and
+ * the sensor's position in sensor_health (ruled 2026-11-15), and only
+ * sloth-rf writes gnss_fix, gnss_sky and gnss_sat. With --rf-socket
+ * the RF stream is web_gnss_record()'s only caller, so the sky, the
+ * fixes, the health block and the position each have one writer; the
+ * Wi-Fi stream's sensor_health comes here instead and is kept apart, as
+ * a fallback: /api/gnss "sensor" and "loc", the fleet's site and the
+ * Radar's centre read sloth-rf's when it has given one and sloth's
+ * otherwise. The precedence is fixed, so the answer changes only when
+ * sloth-rf's own report gains or loses the block, never with which
+ * daemon wrote last; a host with a GPS and no sloth-rf keeps its Radar
+ * centre. Every other record type returns. */
+void web_gnss_record_fallback(web_gnss_t *g, const web_jrec_t *r, long long now_ms);
 /* The name sloth gives gpsd's gnssid (src/gps.c gnss_name()). */
 const char *web_gnss_name(int gnssid);
 

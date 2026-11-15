@@ -178,6 +178,10 @@ typedef struct {
     web_live_sevh_t sevh[WEB_LIVE_SEVH];  /* the latest WEB_LIVE_SEVH, oldest first */
     unsigned long long seq;            /* when it last changed: newest first */
     web_loc_t loc;                     /* sloth's location stamp (web_loc.h) */
+    /* 1 on a copy web_live_incidents() / web_live_incident() took from
+     * the RF daemon's state (web_live_set_peer()): its history is in
+     * --rf-db, not sloth.db. Never set in a table. */
+    int       rf;
 } web_live_inc_t;
 
 /* The devices of sloth's latest published pass, by MAC, for the
@@ -187,8 +191,34 @@ typedef struct {
 #define WEB_LIVE_PASS_MAX   2048
 #define WEB_LIVE_PASS_ROW   19
 
+/* Which daemon's stream a state holds (#214, ADR 0010). ONLY is the
+ * one stream of a slothweb started without --rf-socket: nothing below
+ * that reads the role does anything for it. */
+enum { WEB_LIVE_ONLY = 0, WEB_LIVE_WIFI, WEB_LIVE_RF };
+#define WEB_LIVE_VER_MAX    15
+#define WEB_LIVE_DAEMON_MAX 7
+
 typedef struct web_live_s {
     pthread_mutex_t mu;
+
+    /* Two daemons (#214). role and peer are set before any thread
+     * starts and never written after. peer is the RF daemon's state,
+     * set on the Wi-Fi one only: the incident readers and the open
+     * counts take its incidents too, so an alert sloth-rf raised is on
+     * the same pages as one sloth raised. The lock order is this state's
+     * mutex, then the peer's; the peer never takes this one. */
+    int                role;
+    struct web_live_s *peer;
+    /* The latest sensor_health's contract version and "daemon" word
+     * ("" when it carried none), and the guard's account: a
+     * sensor_health that names the other daemon is not applied, nor is
+     * any record after it on that connection; wrong_now holds the word
+     * it named until a connect or a right one. */
+    char               sh_ver[WEB_LIVE_VER_MAX + 1];
+    char               sh_daemon[WEB_LIVE_DAEMON_MAX + 1];
+    char               wrong_now[WEB_LIVE_DAEMON_MAX + 1];
+    unsigned long      wrong_health;      /* such sensor_health records */
+    unsigned long long wrong_records;     /* records not applied for it */
 
     /* the socket */
     char          spec[WEB_LIVE_SPEC_MAX + 1];
@@ -320,6 +350,26 @@ typedef struct {
 /* spec is the operator's --socket text, kept for display. */
 void web_live_init(web_live_t *l, const char *spec);
 void web_live_destroy(web_live_t *l);
+
+/* Two daemons (#214): call before any thread starts. A state with a
+ * role other than WEB_LIVE_ONLY keeps the RF daemon's sensor_health
+ * apart (WEB_LIVE_RF: liveness, version and daemon word only, never the
+ * capture, the monitor radio or the scope, which are sloth's). */
+void web_live_set_role(web_live_t *l, int role);
+void web_live_set_peer(web_live_t *l, web_live_t *rf);
+/* The wrong-daemon guard (web_ingest.c): a sensor_health whose "daemon"
+ * is the other daemon's, and a record that followed one on the same
+ * connection. Both are counted as lines and records and applied to
+ * nothing. daemon may be NULL (a record with none, on the RF socket). */
+void web_live_wrong_daemon(web_live_t *l, const char *daemon, long long now_ms);
+void web_live_wrong_record(web_live_t *l, long long now_ms);
+/* One daemon's health as a JSON object: "role", the socket members of
+ * web_live_health_members(), then "sensor" ("ok", "stale", "unknown",
+ * and for a state that is not the RF one "degraded" and
+ * "not_observing"), "health_age_s", "health_ts", "jsonl_version",
+ * "daemon", "wrong_daemon" (null, or the word a sensor_health on this
+ * socket named), "wrong_health" and "wrong_records". */
+void web_live_daemon_json(web_live_t *l, web_jw_t *w, long long now_ms);
 
 /* The ingest thread's account of the socket. err strings are our own
  * (strerror and a word of context), never anything the peer sent. */

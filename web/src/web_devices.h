@@ -102,7 +102,19 @@ typedef struct {
     /* The Camera tab's state directory (web_camera.h); NULL:
      * /api/camera.jpg is 404. */
     const struct web_camera *camera;
+    /* sloth-rf's database (--rf-db, #214); NULL: none, and the RF
+     * tables are read from sdb as before. Last, so an initialiser that
+     * names the members above in order is unchanged. */
+    web_slothdb_t       *sdb_rf;
 } web_m4_t;
+
+/* Where the RF tables are read (adsb_*, aprs_*, gnss_*, victron_*,
+ * and the alerts sloth-rf raised): --rf-db when it is given, else
+ * --sloth-db exactly as before the split. NULL when neither is. */
+static inline web_slothdb_t *web_m4_rfdb(const web_m4_t *m) {
+    if (!m) return NULL;
+    return m->sdb_rf && m->sdb_rf->configured ? m->sdb_rf : m->sdb;
+}
 
 /* In a route, once its parameters are checked: under check_only, an
  * empty 200 and no read. */

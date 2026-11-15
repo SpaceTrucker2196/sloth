@@ -668,7 +668,7 @@ static char *peer_export(const char *q) {
     PEER_MINE.nssid = 1;
     snprintf(PEER_MINE.bssid[0], 18, "0b:00:00:00:00:b1");
     PEER_MINE.nbssid = 1;
-    web_fleet_src_t src = { &PSDB, NULL, &PG, &PFR, NULL, NULL, &PEER_MINE, NULL, NULL };
+    web_fleet_src_t src = { &PSDB, NULL, &PG, &PFR, NULL, NULL, &PEER_MINE, NULL, NULL, NULL };
     char *body = NULL;
     size_t len = 0;
     int st = 0;
@@ -734,7 +734,7 @@ static void test_export_ident(void) {
     char *e = NULL;
     size_t el = 0;
     int st = 0;
-    web_fleet_src_t src = { &PSDB, NULL, &PG, &PFR, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { &PSDB, NULL, &PG, &PFR, NULL, NULL, NULL, NULL, NULL, NULL };
     WT_EQ(web_fleet_export_route(&src, "since=0&ident=2", T, &e, &el, &st), 0);
     WT_EQ(st, 400);
     free(e);
@@ -862,7 +862,7 @@ static int ingest_at(const char *b, long long gen) {
 static char *findings_at(long long now) {
     web_fleet_mine_t mine;
     memset(&mine, 0, sizeof(mine));
-    web_fleet_src_t src = { &HSDB, NULL, &HG, &HFR, NULL, NULL, &mine, NULL, NULL };
+    web_fleet_src_t src = { &HSDB, NULL, &HG, &HFR, NULL, NULL, &mine, NULL, NULL, NULL };
     char *b = NULL;
     size_t len = 0;
     int st = 0;
@@ -948,7 +948,7 @@ static void test_findings_unshared(void) {
  * karma ones only. Seen red with twin_part() returning
  * WEB_FID_ATK_TWIN for every half (the real half then EVIL_TWIN). */
 static char *export_chain(web_chain_t *ch) {
-    web_fleet_src_t src = { &PSDB, NULL, &PG, &PFR, NULL, NULL, NULL, ch, NULL };
+    web_fleet_src_t src = { &PSDB, NULL, &PG, &PFR, NULL, NULL, NULL, ch, NULL, NULL };
     char *body = NULL;
     size_t len = 0;
     int st = 0;
@@ -1044,7 +1044,7 @@ static void test_export_twin_attribution(void) {
 static char *findings(const char *q, int *st) {
     web_fleet_mine_t mine;
     memset(&mine, 0, sizeof(mine));
-    web_fleet_src_t src = { &HSDB, NULL, &HG, &HFR, NULL, NULL, &mine, NULL, NULL };
+    web_fleet_src_t src = { &HSDB, NULL, &HG, &HFR, NULL, NULL, &mine, NULL, NULL, NULL };
     char *b = NULL;
     size_t len = 0;
     WT_EQ(web_fleet_findings_route(&F, &src, q, T, &b, &len, st), 0);
@@ -1120,7 +1120,7 @@ static void test_findings_route(void) {
         free(b);
     }
     /* The overview's counts. */
-    web_fleet_src_t src = { &HSDB, NULL, &HG, &HFR, NULL, NULL, NULL, NULL, NULL };
+    web_fleet_src_t src = { &HSDB, NULL, &HG, &HFR, NULL, NULL, NULL, NULL, NULL, NULL };
     static char ov[1 << 17];
     size_t ol = 0;
     WT_EQ(web_fleet_overview_route(&F, &src, "", T, ov, sizeof(ov) - 1, &ol, &st), 0);

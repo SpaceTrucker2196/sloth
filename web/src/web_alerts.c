@@ -819,6 +819,16 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
         free(e); free(hist); free(all); free(inc); free(rin);
         return web_hist_no_db(body, cap, len, status);
     }
+    /* An incident sloth-rf raised (#214): its history, its totals and
+     * its incident rows are in sloth-rf's database, when one is given.
+     * The reads below are then of that file; a "d" id is a sloth.db
+     * rowid and stays there. */
+    web_m4_t mrf;
+    if (have_inc && e->rf && m && m->sdb_rf && m->sdb_rf->configured) {
+        mrf = *m;
+        mrf.sdb = m->sdb_rf;
+        m = &mrf;
+    }
     const char *db = "none";
     int have_row = 0, nh = 0, have_t = 0;
     web_adb_totals_t tot;

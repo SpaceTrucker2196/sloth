@@ -175,4 +175,25 @@ int  web_key_rectype(const char *s, char *out);
  * a global metric (s must then be empty). */
 int  web_key_canon(int metric, const char *s, char *out);
 
+/* Two daemons (#214): the series the RF daemon's records feed, from
+ * its own ingest thread. web_metrics_record() is one thread's alone (a
+ * web_metrics_t has no lock: its high-water marks, batch state and
+ * taint are that thread's), so the RF stream is never handed to it.
+ * This touches no web_metrics_t at all, only the rollup, which has its
+ * own mutex and takes samples from any thread: the four GNSS series off
+ * gnss_fix and gnss_sky, and, when sysstat applied the record
+ * (sys_applied, web_sys_record_from()), the host and source series and
+ * sys.db_mb. now_s is the caller's clock in unix seconds.
+ *
+ * Only series the other thread never adds to. A rollup bucket closes
+ * when a sample of a later one arrives, so two threads whose clocks
+ * read a microsecond apart across a bucket's edge could close one
+ * bucket twice. The routing (web_ingest.h) gives each of these series
+ * one stream; records.rate and records.total, which both streams'
+ * records would count, therefore stay the first stream's and are not
+ * sampled here. */
+struct web_sys;
+void web_metrics_rf_sample(web_rollup_t *ru, struct web_sys *sys, const web_jrec_t *r,
+                           int sys_applied, long long now_s);
+
 #endif

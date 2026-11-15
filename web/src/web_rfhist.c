@@ -65,10 +65,10 @@ static int hex_ok(const char *s) {
 static int open_sdb(const web_m4_t *m, web_sdb_conn_t *conn, long long now_s,
                     char *body, size_t cap, size_t *len, int *status) {
     char oerr[WEB_SDB_ERR_MAX];
-    if (web_slothdb_open(m->sdb, conn, WEB_SDB_HTTP_MS, now_s, oerr, sizeof(oerr)) != 0) {
+    if (web_slothdb_open(web_m4_rfdb(m), conn, WEB_SDB_HTTP_MS, now_s, oerr, sizeof(oerr)) != 0) {
         web_slothdb_close(conn);
         web_sdb_stats_t st;
-        web_slothdb_stats(m->sdb, &st);
+        web_slothdb_stats(web_m4_rfdb(m), &st);
         char r[48];
         snprintf(r, sizeof(r), "sloth_db_%s", web_slothdb_state_word(st.state));
         answer_error(503, r, oerr, body, cap, len, status);
@@ -78,7 +78,7 @@ static int open_sdb(const web_m4_t *m, web_sdb_conn_t *conn, long long now_s,
 }
 
 static int no_db(const web_m4_t *m, char *body, size_t cap, size_t *len, int *status) {
-    if (m && m->sdb && m->sdb->configured && web_slothdb_available()) return 0;
+    if (web_m4_rfdb(m) && web_m4_rfdb(m)->configured && web_slothdb_available()) return 0;
     answer_error(503, "no_sloth_db",
                  "start slothweb with --sloth-db PATH (a WITH_SQLITE build)",
                  body, cap, len, status);

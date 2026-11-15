@@ -105,7 +105,10 @@ typedef struct {
 } web_sys_hw_t;
 
 /* The two stores (indices into web_sys_t's db_path). */
-enum { WEB_SYS_DB_SLOTH = 0, WEB_SYS_DB_WEB, WEB_SYS_DBS };
+enum { WEB_SYS_DB_SLOTH = 0, WEB_SYS_DB_WEB,
+       /* sloth-rf's database (--rf-db, #214): appended, and absent from
+        * /api/sys and from sys.db_mb unless it is configured. */
+       WEB_SYS_DB_RF, WEB_SYS_DBS };
 /* A store's band by its share of its limit: "near" from this, "full"
  * from the next. sloth trims observations once over its ceiling and
  * slothweb its oldest rows, so "full" is a store being trimmed, not
@@ -158,6 +161,18 @@ typedef struct web_sys {
     int       sloth_lim;
     long long sloth_max_mb;
     long long db_sampled_s;      /* the last sys.db_mb sample; -1 none */
+    /* Two daemons (#214, web_sys_record_from()). split is set before
+     * any thread starts; the rest is under the lock. sloth-rf's own
+     * db.max_mb, as sloth's above; who has reported the host batch
+     * (once sloth has, it is sloth's for good) and the "gnss" source
+     * row (once sloth-rf has reported a configured one, it is
+     * sloth-rf's for good), so neither is written by two daemons in
+     * turn. */
+    int       split;
+    int       rf_lim;
+    long long rf_max_mb;
+    int       host_wifi, host_rf, gnss_wifi, gnss_rf;
+    unsigned long not_owned;     /* rows refused: the other daemon's */
 } web_sys_t;
 
 int  web_sys_init(web_sys_t *y);
@@ -165,6 +180,33 @@ void web_sys_destroy(web_sys_t *y);
 
 /* Every decoded record; the four types above apply, the rest return. */
 void web_sys_record(web_sys_t *y, const web_jrec_t *r, long long now_ms);
+
+/* Two daemons (#214): which stream a record came on. ONLY is
+ * web_sys_record(), the one stream of a slothweb without --rf-socket. */
+enum { WEB_SYS_FROM_ONLY = 0, WEB_SYS_FROM_WIFI, WEB_SYS_FROM_RF };
+
+/* web_sys_record() for one of two streams, so that no part of the
+ * state has two writers:
+ *   sensor_health   sloth's is sloth.db's limit (and the designated
+ *                   networks' `ownership` is sloth's alone); sloth-rf's
+ *                   is sloth-rf.db's limit.
+ *   sys_status, sys_sensor, receiver_hw (the host batch)
+ *                   sloth's. sloth-rf's is applied only until sloth's
+ *                   first sys_status (a host that runs sloth-rf alone
+ *                   still shows its CPU and temperatures), never after.
+ *   source_status   by name: adsb, aprs, rtl433, victron are sloth-rf's;
+ *                   capture, monitor, btmon, btcap are sloth's; gnss,
+ *                   which both report (ADR 0010, ruled 2026-11-15), is
+ *                   sloth-rf's once it has reported one that is
+ *                   configured, sloth's until then; any other name is
+ *                   its sender's.
+ * Returns 0 when the record is one of these types and was refused as
+ * the other daemon's (the caller then samples no series from it), else
+ * 1. y may be NULL: the answer is then the fixed part of the rule. */
+int  web_sys_record_from(web_sys_t *y, int from, const web_jrec_t *r, long long now_ms);
+/* Call before any thread starts: /api/sys then says who reports the
+ * host ("host_from"). Without it the answer is as it was. */
+void web_sys_set_split(web_sys_t *y);
 
 /* The same four types into the rollup (web_metrics.c's one call). A
  * figure out of range is not sampled; an absent one is not a zero. */
@@ -174,6 +216,9 @@ void web_sys_metrics(web_rollup_t *ru, const web_jrec_t *r, long long now_s);
  * (the store slothweb opened, "" or NULL when it has none) and the
  * latter's --web-max-mb. Before any thread starts. */
 void web_sys_set_dbs(web_sys_t *y, const char *sloth_db, const char *web_db, int web_max_mb);
+/* sloth-rf's database (--rf-db), "" or NULL none. Before any thread
+ * starts. */
+void web_sys_set_rf_db(web_sys_t *y, const char *rf_db);
 
 /* A store's size on disk: the main file's bytes and its -wal's (0
  * when there is none). stat() only. 0, or -1 when path is not a

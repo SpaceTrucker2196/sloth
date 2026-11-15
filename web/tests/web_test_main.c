@@ -139,6 +139,7 @@ int main(void) {
     SUITE(run_aprs_tests);
     SUITE(run_rtl433_tests);
     SUITE(run_victron_tests);
+    SUITE(run_twodaemon_tests);
     SUITE(run_spectrum_tests);
     SUITE(run_camera_tests);
     SUITE(run_radar_tests);

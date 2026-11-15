@@ -486,6 +486,41 @@ static long long sum_of(const web_jrec_t *r, const char *const *fields) {
     return t;
 }
 
+/* gnss_fix and gnss_sky into the rollup; any other type returns. It
+ * reads and writes nothing of a web_metrics_t (the rollup has its own
+ * mutex), which is what lets the RF stream's thread call it. */
+static void gnss_sample(web_rollup_t *ru, const char *t, const web_jrec_t *r, long long now) {
+    if (!strcmp(t, "gnss_fix")) {
+        /* The host's own receiver (web_gnss.h): change-only records, so
+         * a sample per band change or heartbeat. A gnss_fix carries
+         * usat / hdop as -1 / 0 when its sky has not said; gauge()
+         * samples what the record says, and the page reads null from
+         * /api/gnss, so only a figure in range is sampled here. */
+        double v;
+        if (web_jl_num(r, "usat", &v) && v >= 0)
+            web_rollup_add(ru, WM_GNSS_SATS_USED, "", v, now);
+        if (web_jl_num(r, "hdop", &v) && v > 0 && v <= 100)
+            web_rollup_add(ru, WM_GNSS_HDOP, "", v, now);
+        if (web_jl_num(r, "time_off_ms", &v) && v > -1e14 && v < 1e14)
+            web_rollup_add(ru, WM_GNSS_TIME_OFF_MS, "", v, now);
+    } else if (!strcmp(t, "gnss_sky")) {
+        double v;
+        if (web_jl_num(r, "cn0_mean", &v) && v > 0 && v <= 99)
+            web_rollup_add(ru, WM_GNSS_CN0_MEAN, "", v, now);
+    }
+}
+
+void web_metrics_rf_sample(web_rollup_t *ru, struct web_sys *sys, const web_jrec_t *r,
+                           int sys_applied, long long now_s) {
+    const char *t = web_jl_str(r, "type");
+    if (!ru || !t) return;
+    gnss_sample(ru, t, r, now_s);
+    if (sys_applied && (!strncmp(t, "sys_s", 5) || !strcmp(t, "source_status"))) {
+        web_sys_metrics(ru, r, now_s);
+        if (sys && !strcmp(t, "sys_status")) web_sys_db_metrics(sys, ru, now_s);
+    }
+}
+
 void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
     const char *t = web_jl_str(r, "type");
     if (!t) return;
@@ -633,23 +668,8 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
         count(m, WM_BLE_CLASS_ADV, slug, d, now);
         if (m->blemix)
             web_chmix_add(m->blemix, slug, mac, anon ? WEB_TX_BLE_ANON : WEB_TX_BLE, d, now);
-    } else if (!strcmp(t, "gnss_fix")) {
-        /* The host's own receiver (web_gnss.h): change-only records, so
-         * a sample per band change or heartbeat. A gnss_fix carries
-         * usat / hdop as -1 / 0 when its sky has not said; gauge()
-         * samples what the record says, and the page reads null from
-         * /api/gnss, so only a figure in range is sampled here. */
-        double v;
-        if (web_jl_num(r, "usat", &v) && v >= 0)
-            web_rollup_add(m->ru, WM_GNSS_SATS_USED, "", v, now);
-        if (web_jl_num(r, "hdop", &v) && v > 0 && v <= 100)
-            web_rollup_add(m->ru, WM_GNSS_HDOP, "", v, now);
-        if (web_jl_num(r, "time_off_ms", &v) && v > -1e14 && v < 1e14)
-            web_rollup_add(m->ru, WM_GNSS_TIME_OFF_MS, "", v, now);
-    } else if (!strcmp(t, "gnss_sky")) {
-        double v;
-        if (web_jl_num(r, "cn0_mean", &v) && v > 0 && v <= 99)
-            web_rollup_add(m->ru, WM_GNSS_CN0_MEAN, "", v, now);
+    } else if (!strcmp(t, "gnss_fix") || !strcmp(t, "gnss_sky")) {
+        gnss_sample(m->ru, t, r, now);
     } else if (!strcmp(t, "dns")) {
         if (web_key_ip(web_jl_str(r, "src"), k) != 0) return;
         long long resp = web_jl_int(r, "is_resp", -1);

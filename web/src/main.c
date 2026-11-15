@@ -43,6 +43,11 @@
 static web_server_t  g_srv;   /* ~2.3 MB: static, not on the stack */
 static web_live_t    g_live;
 static web_ingest_t  g_ingest;
+/* sloth-rf (#214): its own stream state, ingest thread and database
+ * reader, used only with --rf-socket / --rf-db. */
+static web_live_t    g_live_rf;
+static web_ingest_t  g_ingest_rf;
+static web_slothdb_t g_sdb_rf;
 static web_rollup_t  g_rollup;
 static web_metrics_t g_metrics;
 static web_store_t   g_store;
@@ -130,6 +135,10 @@ int main(int argc, char **argv) {
     acfg.ptr = &g_ptr;
     web_sdb_fns_t fns = { acfg.oui, &g_anomaly, &g_ptr, &g_live };
     web_slothdb_init(&g_sdb, cfg.sloth_db, &fns);
+    /* sloth-rf's database (--rf-db): the same reader on another file,
+     * read-only like the first, and like it absent or refused is not
+     * fatal. "" leaves it unconfigured and the RF tables on sloth.db. */
+    web_slothdb_init(&g_sdb_rf, cfg.rf_db, &fns);
     if (web_rollup_init(&g_rollup, cfg.max_keys,
                         have_store ? 1 : WEB_ROLLUP_Q_LONG, err,
                         sizeof(err)) != 0 ||
@@ -177,6 +186,8 @@ int main(int argc, char **argv) {
     /* The two stores' size (web_sysstat.h): sloth.db as configured,
      * slothweb.db only when it opened, with its --web-max-mb. */
     web_sys_set_dbs(&g_sys, cfg.sloth_db, have_store ? cfg.store_path : "", cfg.max_mb);
+    web_sys_set_rf_db(&g_sys, cfg.rf_db);
+    if (cfg.rf_sock.kind) web_sys_set_split(&g_sys);
     web_metrics_set_sys(&g_metrics, &g_sys);
     web_metrics_set_live(&g_metrics, &g_live);
     web_metrics_set_anomaly(&g_metrics, &g_anomaly);
@@ -185,6 +196,7 @@ int main(int argc, char **argv) {
     web_tsdb_set_ble(&g_tsdb, &g_ble);
     web_ident_set_ptr(&g_ident, &g_ptr);
     g_m4.sdb = cfg.sloth_db[0] ? &g_sdb : NULL;
+    g_m4.sdb_rf = cfg.rf_db[0] ? &g_sdb_rf : NULL;
     g_m4.oui = acfg.oui;
     g_m4.ptr = &g_ptr;
     g_m4.ident = &g_ident;
@@ -284,6 +296,17 @@ int main(int argc, char **argv) {
     char spec[160];
     web_sockspec_format(&cfg.sock, spec, sizeof(spec));
     web_live_init(&g_live, spec);
+    /* Two daemons (#214): with --rf-socket each stream has a state of
+     * its own, and the alert routes and the open counts read sloth-rf's
+     * incidents through sloth's (web_live_set_peer()). */
+    char rf_spec[160] = "";
+    if (cfg.rf_sock.kind) {
+        web_sockspec_format(&cfg.rf_sock, rf_spec, sizeof(rf_spec));
+        web_live_init(&g_live_rf, rf_spec);
+        web_live_set_role(&g_live, WEB_LIVE_WIFI);
+        web_live_set_role(&g_live_rf, WEB_LIVE_RF);
+        web_live_set_peer(&g_live, &g_live_rf);
+    }
     web_server_set_live(&g_srv, &g_live);
     web_server_set_tsdb(&g_srv, &g_tsdb);
     web_server_set_anomaly(&g_srv, &g_anomaly);
@@ -312,10 +335,28 @@ int main(int argc, char **argv) {
     web_ingest_set_frrs(&g_ingest, &g_frrs);
     web_ingest_set_ble(&g_ingest, &g_ble);
     web_ingest_set_gnss(&g_ingest, &g_gnss);
-    web_ingest_set_adsb(&g_ingest, &g_adsb);
-    web_ingest_set_aprs(&g_ingest, &g_aprs);
-    web_ingest_set_rtl433(&g_ingest, &g_rtl433);
-    web_ingest_set_victron(&g_ingest, &g_victron);
+    if (!cfg.rf_sock.kind) {
+        web_ingest_set_adsb(&g_ingest, &g_adsb);
+        web_ingest_set_aprs(&g_ingest, &g_aprs);
+        web_ingest_set_rtl433(&g_ingest, &g_rtl433);
+        web_ingest_set_victron(&g_ingest, &g_victron);
+    } else {
+        /* The routing table in web_ingest.h: sloth's stream feeds the
+         * Wi-Fi consumers and, of the GNSS panel, only the fallback
+         * health and position; sloth-rf's feeds the five RF panels and
+         * its own rows of the host status, and never the metrics (one
+         * thread's alone), the triage ledger, BLE, the lures or the
+         * links. Its series go to the rollup, which has its own lock. */
+        web_ingest_set_role(&g_ingest, WEB_FEED_WIFI);
+        web_ingest_set_role(&g_ingest_rf, WEB_FEED_RF);
+        web_ingest_set_gnss(&g_ingest_rf, &g_gnss);
+        web_ingest_set_adsb(&g_ingest_rf, &g_adsb);
+        web_ingest_set_aprs(&g_ingest_rf, &g_aprs);
+        web_ingest_set_rtl433(&g_ingest_rf, &g_rtl433);
+        web_ingest_set_victron(&g_ingest_rf, &g_victron);
+        web_ingest_set_sys(&g_ingest_rf, &g_sys);
+        web_ingest_set_rf_rollup(&g_ingest_rf, &g_rollup);
+    }
     web_ingest_set_sys(&g_ingest, &g_sys);
     web_ingest_set_lure(&g_ingest, &g_lure);
     /* The designated networks the SSID, Probes and WiFi routes mark. */
@@ -332,12 +373,18 @@ int main(int argc, char **argv) {
     if (web_tsdb_start(&g_tsdb, err, sizeof(err)) != 0 ||
         web_ingest_start(&g_ingest, &cfg.sock, cfg.sock_backoff_min_ms,
                          cfg.sock_backoff_max_ms, &g_live,
-                         err, sizeof(err)) != 0) {
+                         err, sizeof(err)) != 0 ||
+        (cfg.rf_sock.kind &&
+         web_ingest_start(&g_ingest_rf, &cfg.rf_sock, cfg.sock_backoff_min_ms,
+                          cfg.sock_backoff_max_ms, &g_live_rf,
+                          err, sizeof(err)) != 0)) {
         fprintf(stderr, "slothweb: %s\n", err);
         web_fleet_destroy(&g_fleet);
+        web_ingest_stop(&g_ingest);
         web_tsdb_stop(&g_tsdb);
         web_server_close(&g_srv);
         web_live_destroy(&g_live);
+        if (cfg.rf_sock.kind) web_live_destroy(&g_live_rf);
         web_frrs_destroy(&g_frrs);
         web_store_close(&g_store);
         return 1;
@@ -387,6 +434,20 @@ int main(int argc, char **argv) {
                         "drawer's sloth.db record are off; Lookup answers from "
                         "the stream and the vendor table\n");
     }
+    if (cfg.rf_db[0]) {
+        int st = web_slothdb_check(&g_sdb_rf, (long long)time(NULL));
+        web_sdb_stats_t ss;
+        web_slothdb_stats(&g_sdb_rf, &ss);
+        if (st == WEB_SDB_OPEN)
+            fprintf(stderr, "slothweb: sloth-rf.db %s: schema v%d, read-only (%s); "
+                            "the GNSS, ADS-B, APRS and Victron history is read "
+                            "from it\n", cfg.rf_db, ss.schema, ss.mode);
+        else
+            fprintf(stderr, "slothweb: sloth-rf.db %s: %s (%s); the GNSS, ADS-B, "
+                            "APRS and Victron history waits for it, retried on "
+                            "every request\n", cfg.rf_db,
+                    web_slothdb_state_word(st), ss.err);
+    }
     for (int i = 0; i < cfg.npcap_dir; i++)
         fprintf(stderr, "slothweb: alert pcaps from %s (read-only, opened per "
                         "request; sloth's alert pcap names only, never a "
@@ -398,6 +459,10 @@ int main(int argc, char **argv) {
                         "capture is off\n");
     fprintf(stderr, "slothweb: reading %s (read-only; reconnects on its "
                     "own)\n", spec);
+    if (cfg.rf_sock.kind)
+        fprintf(stderr, "slothweb: reading sloth-rf at %s (read-only; reconnects "
+                        "on its own): GNSS, ADS-B, APRS, rtl_433 and Victron "
+                        "come from this stream only\n", rf_spec);
     if (cfg.read_only)
         fprintf(stderr, "slothweb: --web-read-only: no write route; every POST "
                         "is 405\n");
@@ -459,6 +524,7 @@ int main(int argc, char **argv) {
     web_fleet_stop(&g_fleet);
     web_sqlbox_stop(&g_sql);
     web_ingest_stop(&g_ingest);
+    web_ingest_stop(&g_ingest_rf);
     web_tsdb_stop(&g_tsdb);
     web_anomaly_save_cover(&g_anomaly);
 
@@ -471,6 +537,7 @@ int main(int argc, char **argv) {
     web_server_close(&g_srv);
     web_sqlbox_destroy(&g_sql);
     web_live_destroy(&g_live);
+    if (cfg.rf_sock.kind) web_live_destroy(&g_live_rf);
     web_tsdb_destroy(&g_tsdb);
     web_metrics_destroy(&g_metrics);
     web_chmix_destroy(&g_chmix);
@@ -492,6 +559,7 @@ int main(int argc, char **argv) {
     web_ident_destroy(&g_ident);
     web_ptr_destroy(&g_ptr);
     web_slothdb_destroy(&g_sdb);
+    web_slothdb_destroy(&g_sdb_rf);
     web_fleet_destroy(&g_fleet);
     web_frrs_destroy(&g_frrs);
     web_pcapdir_destroy(&g_pcap);

@@ -142,8 +142,11 @@
   // its limit in words. The server says the band (80 % near, 95 %
   // full); the page words it. A limit of 0 is "no limit" and draws no
   // rule; one sloth has not said is said to be unknown, never guessed.
-  var DB_NAME = { "sloth": "sloth.db", "slothweb": "slothweb.db" };
+  var DB_NAME = { "sloth": "sloth.db", "slothweb": "slothweb.db", "sloth-rf": "sloth-rf.db" };
   var DB_BAND = { "near": "near the limit", "full": "at the limit: the oldest rows are being trimmed" };
+  // With two daemons /api/sys says which one the host batch came from
+  // ("host_from"); the RSS row is that daemon's.
+  function rssName(j) { return j.host_from === "rf" ? "sloth-rf rss" : "sloth rss"; }
   function dbLimitText(d) {
     if (d.limit_state === "set" && num(d.limit_mb)) return "limit " + H.fmt(d.limit_mb) + " MB";
     if (d.limit_state === "unlimited") return "no limit";
@@ -393,7 +396,7 @@
     var r = [
       { g: "host", name: "cpu", metric: "sys.cpu", key: "", unit: "%", eps: 5, fixed: [0, 100] },
       { g: "host", name: "memory used", metric: "sys.mem_used", key: "", unit: "%", eps: 2, fixed: [0, 100] },
-      { g: "host", name: "sloth rss", metric: "sys.rss", key: "", unit: "kB", eps: 1024 },
+      { g: "host", name: rssName(j), metric: "sys.rss", key: "", unit: "kB", eps: 1024 },
       { g: "temperature", name: "hottest", metric: "sys.temp", key: "hottest", unit: "\u00b0F", conv: cToF, eps: 1, share: "temp" }
     ];
     (j.sensors || []).forEach(function (s) {

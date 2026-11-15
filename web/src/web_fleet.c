@@ -980,6 +980,11 @@ static int parse_query(const char *q, xq_t *x, const char **why) {
     return 0;
 }
 
+struct web_slothdb *web_fleet_src_rfdb(const web_fleet_src_t *src) {
+    if (!src) return NULL;
+    return src->rf && src->rf->configured ? src->rf : src->sdb;
+}
+
 int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
                            long long now_s, char **body, size_t *len,
                            int *status) {
@@ -1044,6 +1049,23 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
         }
     }
     x.c = have_c ? &c : NULL;
+    /* sloth-rf's tables (#214): its own database when one is given, on
+     * a connection and a budget of its own; else the one above, and
+     * every read below is then what it was before the split. Only the
+     * file differs: the rows go through the same writers and the same
+     * allow-list (ADR 0009). */
+    web_sdb_conn_t c2;
+    memset(&c2, 0, sizeof(c2));
+    web_sdb_conn_t *rfc = &c;
+    int have_rf = have_c, own_rf = 0;
+    if (src->rf && src->rf->configured) {
+        char err[WEB_SDB_ERR_MAX];
+        rfc = &c2;
+        have_rf = web_slothdb_open(src->rf, &c2, WEB_SDB_OVERVIEW_MS, now_s, err,
+                                   sizeof(err)) == 0;
+        if (have_rf) own_rf = 1;
+        else web_slothdb_close(&c2);
+    }
     char label[WEB_SDB_TEXT_MAX + 1] = "";
     if (have_c) {
         web_sdb_session_t ss;
@@ -1197,46 +1219,49 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
                 }
             }
         }
+    }
+    if (have_rf && !fault) {
         /* The receiver's incidents (#192 I6): gnss=1, the whole export
          * only, the newest of the last week changed since `since`. */
-        if (all && xq.gnss && !c.timed_out && !w.overflow) {
+        if (all && xq.gnss && !rfc->timed_out && !w.overflow) {
             long long from = now_s - WEB_FG_EVENTS_S;
             if (since > from) from = since;
-            int gr = web_sdb_gnss_incidents(&c, from, WEB_FLEET_CAP_GNSSEV + 1, xp_gev, &x);
+            int gr = web_sdb_gnss_incidents(rfc, from, WEB_FLEET_CAP_GNSSEV + 1, xp_gev, &x);
             if (gr == -1 && w.overflow) fault = 1;
             /* Complete only when the read ran to its end: a file before
              * v11, a read error, the budget or the cap is not "nothing
              * happened", and the importer takes coverage from this. */
-            x.gev_all = gr >= 0 && !x.gev_cut && !c.timed_out;
+            x.gev_all = gr >= 0 && !x.gev_cut && !rfc->timed_out;
         }
         /* The receiver and its aircraft (#192 I7): adsb=1, the whole
          * export only, the rows changed since `since` within the last
          * WEB_FA_EXPORT_S. */
-        if (all && xq.adsb && !c.timed_out && !w.overflow) {
+        if (all && xq.adsb && !rfc->timed_out && !w.overflow) {
             ac_read = 1;
-            if (xp_adsb_rx(&x, src->adsb, &c, &loc, now_s) != 0) fault = 1;
+            if (xp_adsb_rx(&x, src->adsb, rfc, &loc, now_s) != 0) fault = 1;
             long long from = now_s - WEB_FA_EXPORT_S;
             if (since > from) from = since;
-            int ar = fault ? 0 : web_sdb_adsb_fleet(&c, from, 0, WEB_FA_CAP_AIRCRAFT + 1, xp_ac, &x);
+            int ar = fault ? 0 : web_sdb_adsb_fleet(rfc, from, 0, WEB_FA_CAP_AIRCRAFT + 1, xp_ac, &x);
             if (ar == -1 && w.overflow) fault = 1;
-            if (ar < 0 || c.timed_out) x.ac_cut = 1;
-        }
-        /* A read that ran out of budget is a cut, never an error: what
-         * was read before it went out, and the cursor says where. */
-        if (c.timed_out) {
-            if (WANT(WEB_FK_WIFI)) x.cut[WEB_FK_WIFI] = x.cut[WEB_FK_PROBE] = 1;
-            if (WANT(WEB_FK_AP)) x.cut[WEB_FK_AP] = 1;
-            if (WANT(WEB_FK_ALERT)) x.cut[WEB_FK_ALERT] = 1;
+            if (ar < 0 || rfc->timed_out) x.ac_cut = 1;
         }
     }
+    /* A read that ran out of budget is a cut, never an error: what
+     * was read before it went out, and the cursor says where. */
+    if (have_c && c.timed_out) {
+        if (WANT(WEB_FK_WIFI)) x.cut[WEB_FK_WIFI] = x.cut[WEB_FK_PROBE] = 1;
+        if (WANT(WEB_FK_AP)) x.cut[WEB_FK_AP] = 1;
+        if (WANT(WEB_FK_ALERT)) x.cut[WEB_FK_ALERT] = 1;
+    }
     if (have_c) web_slothdb_close(&c);
+    if (own_rf) web_slothdb_close(&c2);
     /* Aircraft asked for and not read (no sloth.db, its budget spent or
      * the body full before them): cut, never an empty list that reads
      * as "heard none" - the comparison takes a receiver's silence from
      * an uncut answer. */
     if (all && xq.adsb && !ac_read) x.ac_cut = 1;
     /* No sloth.db: the receiver's summary alone, no coverage. */
-    if (!have_c && all && xq.adsb && !fault && xp_adsb_rx(&x, src->adsb, NULL, &loc, now_s) != 0)
+    if (!have_rf && all && xq.adsb && !fault && xp_adsb_rx(&x, src->adsb, NULL, &loc, now_s) != 0)
         fault = 1;
     if (all && src->ble && !fault) xp_ble(&x, src->ble, now_s);
     if (WANT(WEB_FK_VERDICT) && src->frrs && !fault) {
