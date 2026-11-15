@@ -1,0 +1,533 @@
+# Architecture: the sloth-wifi / sloth-rf coupling inventory
+
+**Summary**: Every place today's single `sloth` process ties the SDR and
+GNSS modules (ADS-B, APRS, rtl_433, GNSS) to the Wi-Fi monitor, produced
+by grep rather than from #211's prose, with the command beside each list
+so a reviewer can re-run it. It covers the RF files and what each
+`*_health_poll()` writes, the services that exist once per process, the
+places GNSS reaches into Wi-Fi-side code, the run flag that lives in
+`src/capture/capture.c`, slothweb's one-socket and one-database
+assumptions, the packaging, the slice table S0 to S6, and a section
+naming every place the tree and #211 disagree.
+
+**Sources**: `include/sloth.h`, `include/sloth_alerts.def`,
+`include/sloth_views.def`, `src/poll.c`, `src/main.c`, `src/gps.c`,
+`src/adsb.c`, `src/aprs.c`, `src/rtl433.c`, `src/capture/capture.c`,
+`src/capture/capture.h`, `src/capture/{gps,adsb,aprs,rtl433}_reader.c`,
+`src/alerts/engine.c`, `src/alerts/rules_table.c`,
+`src/alerts/rules_twin.c`, `src/alerts/rules_sensor.c`,
+`src/evidence_manifest.c`, `src/position_track.c`, `src/sys_status.c`,
+`src/sys_status.h`, `src/jsonl.c`, `src/data_socket.c`, `src/db.c`,
+`src/db.h`, `src/db_schema.c`, `src/views/alerts.c`, `src/views/iface.c`,
+`src/views/adsb.c`, `Makefile`, `web/src/main.c`, `web/src/web_config.h`,
+`web/src/web_devices.h`, `web/src/web_fleet.h`, `web/src/web_ingest.c`,
+`web/src/web_ingest.h`, `web/src/web_live.c`, `web/src/web_gnss.c`,
+`web/src/web_rtl433.c`, `web/src/web_slothdb.c`, `packaging/systemd/`,
+`packaging/bin/sloth-migrate-sensor`, `tests/test_unit_file.c`,
+`tests/deploy/`, issues #211 to #217.
+
+**Last updated**: 2026-11-15
+
+This page is a measurement, not a plan. It is slice S0's deliverable
+(#211) and it exists so that S1 to S6 cut along lines someone has
+looked at. The decision it serves is
+[ADR 0010](adr/0010-wifi-rf-daemons.md). Where it contradicts #211, the
+tree is the authority and §9 says so.
+
+Line numbers are those of commit `3148c553`. They move; the commands do
+not.
+
+---
+
+## 1. How each list was produced
+
+Run from the repository root. Each command is the authority for the
+section named beside it.
+
+```sh
+# (a1) files named for an RF module
+git ls-files src include |
+  grep -i -E 'adsb|aprs|rtl433|gnss|gps|nmea|ubx|sdr|meshtastic'
+
+# (a2) every file that mentions one (the superset: owners and users)
+grep -rlE 'adsb|aprs|rtl433|gnss|gps_|[^a-z]gps[^a-z]|GNSS|ADSB|APRS|RTL433' \
+  src include --include=*.c --include=*.h --include=*.def | sort
+
+# (a3) the health polls, and the state members each one touches
+grep -rnE '^(void|int) +[a-z0-9_]*_health_poll *\(' src
+grep -nE '_health_poll *\(' src/poll.c
+sed -n '<first>,<closing brace>p' <file> | grep -oE 's->[a-z0-9_]+' | sort | uniq -c
+
+# (a4) the RF members of sloth_state_t, the alert kinds and the views
+grep -nE '(gps|gnss|adsb|aprs|rtl433)[a-z0-9_]*(\[[A-Z0-9_]+\])?;' include/sloth.h
+grep -nE 'GNSS|ADSB|APRS|RTL433|SENSOR_' include/sloth_alerts.def | grep 'X('
+grep -nE 'GNSS|ADSB|APRS|RTL' include/sloth_views.def
+grep -nE 'gnss|adsb|aprs|rtl433|sensor' src/alerts/rules_table.c
+
+# (b) the once-per-process services
+grep -n 'g_poll_stages' src/poll.c ; sed -n '470,506p' src/poll.c
+grep -nE '^static [a-zA-Z_0-9 \*]+ g_[a-z_0-9]+' \
+  src/alerts/engine.c src/db.c src/jsonl.c src/data_socket.c
+grep -rnE 'sensor_register *\(' src --include=*.c
+grep -nE 'SENSOR_[A-Z0-9_]+|MAX_SENSORS' include/sloth.h
+grep -nE 'SYS_SRC_[A-Z0-9_]+' src/sys_status.h
+grep -nE 'CREATE TABLE IF NOT EXISTS (gnss|adsb|aprs|rtl433|device_positions|sensor)[a-z_]*' \
+  src/db_schema.c
+
+# (c) GNSS outside the GNSS module
+grep -rnE '(s|st|state)->(gps|gnss_[a-z_]+)\b' src --include=*.c --include=*.h |
+  grep -vE '^src/(gps\.[ch]|capture/gps_reader\.[ch]|alerts/rules_gnss\.c|views/gnss\.[ch])'
+grep -rnE '\b(gps|gnss)_[a-z0-9_]+ *\(' src --include=*.c |
+  grep -vE '^src/(gps\.c|capture/gps_reader\.c|alerts/rules_gnss\.c|views/gnss\.c)'
+grep -rnE 's->(adsb|aprs|rtl433)(_[a-z_]+)?\b' src --include=*.c |
+  grep -vE '^src/(adsb|aprs|rtl433)\.c' | awk -F: '{print $1}' | sort | uniq -c
+
+# (d) the run flag
+grep -rnE 'capture_run_flag' src --include=*.c --include=*.h
+
+# (e) slothweb
+grep -nE '\b(sock|sloth_db)\b' web/src/web_config.h
+grep -nE '^static [A-Za-z_0-9 \*]+ \**g_[a-z_0-9]+' web/src/main.c
+grep -nE '&g_sdb|cfg\.(sock|sloth_db)' web/src/main.c
+grep -rnE 'web_slothdb[a-z_]* *\*sdb' web/src/*.h
+grep -rnE '"sensor_health"' web/src/*.c
+grep -nE 'web_live_sock_connected|web_feed_reset|web_metrics_stream' web/src/web_ingest.c
+grep -nE '"devices"|FROM devices' web/src/web_slothdb.c
+
+# (f) packaging
+git ls-files packaging
+grep -nE '^(ExecStart|RuntimeDirectory|StateDirectory|User|After|Wants|BindsTo|ReadOnlyPaths|RestrictAddressFamilies)' \
+  packaging/systemd/sloth-sensor.service packaging/systemd/slothweb.service
+sed -n '250,311p' packaging/bin/sloth-migrate-sensor
+grep -rnE '/usr/local/s?bin/sloth\b' tests packaging Makefile
+
+# (g) the slices
+gh issue list --state all --limit 12 --json number,title
+```
+
+---
+
+## 2. What belongs to the RF side (a)
+
+### 2.1 Files
+
+From (a1). Lines are `wc -l` at this commit.
+
+| Module | Pure half | Reader thread | Rule file | Terminal view |
+|---|---|---|---|---|
+| GNSS | `src/gps.c` (1607), `src/gps.h` (388) | `src/capture/gps_reader.c` (266), `.h` (43) | `src/alerts/rules_gnss.c` (954) | `src/views/gnss.c` (336), `.h` (13) |
+| ADS-B | `src/adsb.c` (1094), `src/adsb.h` (279), `src/adsb_beast.c` (542), `src/adsb_beast.h` (201) | `src/capture/adsb_reader.c` (288), `.h` (54) | `src/alerts/rules_adsb.c` (169) | `src/views/adsb.c` (318), `.h` (15) |
+| APRS | `src/aprs.c` (670), `src/aprs.h` (226) | `src/capture/aprs_reader.c` (187), `.h` (46) | none | none |
+| rtl_433 | `src/rtl433.c` (673), `src/rtl433.h` (200) | `src/capture/rtl433_reader.c` (187), `.h` (48) | none | none |
+
+`include/` holds no RF file of its own; the RF types
+(`gps_health_t`, `gnss_sky_t`, `gnss_fix_t`, `adsb_health_t`,
+`aprs_health_t`, `rtl433_health_t` and their row types) are declared in
+`include/sloth.h`, and the kinds and views in
+`include/sloth_alerts.def` and `include/sloth_views.def`.
+
+Not on the list, and why:
+
+- **Meshtastic has no code.** `grep -rniE meshtastic src include web/src`
+  finds only the registry kind: `SENSOR_MESHTASTIC` in the
+  `sensor_kind_t` enum (`include/sloth.h:2818`), its name string in
+  `src/sensors.c:6`, and a comment.
+- **`sloth-sdrsweep` is already a separate binary.** `src/sdrsweep/`
+  (`main.c`, `sdrsweep_dsp.c`, `sdrsweep_dsp.h`) is built by its own
+  Makefile section (`Makefile:558` on) from `SDRSWEEP_SRCS`
+  (`Makefile:574`), has its own unit and account
+  (`packaging/systemd/sloth-sdrsweep.{service,path,sysusers.conf}`), and
+  `tests/test_sdrsweep.c` holds that it is not linked into `sloth`. This
+  programme does not move it.
+
+The sources reach the build through `CORE_COMMON_SRCS`
+(`Makefile:226`, `241`, `254`, `258`, `262`, `266`; `src/views/gnss.c`
+and `src/alerts/rules_gnss.c` are in the same list). There is one list,
+so every RF file is in `sloth` and in `sloth_test`.
+
+Tests named for these modules: `tests/test_gps.c`,
+`test_gnss_rules.c`, `test_gnss_view.c`, `test_adsb.c`,
+`test_adsb_beast.c`, `test_adsb_rules.c`, `test_adsb_view.c`,
+`test_aprs.c`, `test_rtl433.c`, and for the shared services
+`test_sensor_health.c`, `test_sensor_rules.c`, `test_sensors.c`,
+`test_sys_status.c`.
+
+### 2.2 What each health poll writes
+
+From (a3). All are called from one stage, `st_health()` in `src/poll.c`,
+in this order (lines 129, 132, 135, 140), after the capture, monitor and
+Bluetooth polls (124 to 126) and before `sys_status_poll()`.
+
+| Poll | Defined | Writes on `sloth_state_t` | Reads on it |
+|---|---|---|---|
+| `gps_health_poll(s, wall)` | `src/gps.c:1280` | `gps`, `gnss_sky`, `gnss_fix`, `gnss_hist` | — |
+| `adsb_health_poll(s, wall, mono_ms)` | `src/adsb.c:1025` | `adsb`, `adsb_rows`, `adsb_count`, `adsb_gone`, `adsb_gone_count` | — |
+| `aprs_health_poll(s, wall, mono_ms)` | `src/aprs.c:488` | `aprs`, `aprs_rows`, `aprs_count`, `aprs_gone`, `aprs_gone_count`, `aprs_pkts`, `aprs_pkt_count` | `gps` (§4.2) |
+| `rtl433_health_poll(s, wall)` | `src/rtl433.c:624` | `rtl433`, `rtl433_rows`, `rtl433_count` | — |
+
+The members are declared at `include/sloth.h:4213` to `4260`, beside the
+terminal selections that belong to the two RF views (`gnss_sel`,
+`gnss_sel_key`, `gnss_detail`, `adsb_sel`, `adsb_sel_key`).
+
+### 2.3 Alert kinds, rule rows, views, flags, knobs
+
+- **Kinds** (`include/sloth_alerts.def`): `GNSS_JAMMING` (330),
+  `GNSS_SPOOF_SUSPECT` (338), `GNSS_TIME_JUMP` (343),
+  `GNSS_POSITION_JUMP` (346), `ADSB_EMERGENCY` (358),
+  `SENSOR_UNDERVOLT` (381), `SENSOR_SOURCE_DOWN` (383). APRS and rtl_433
+  have no alert kind.
+- **Rule rows** (`src/alerts/rules_table.c`): `rule_gnss_jamming`,
+  `rule_gnss_time_jump`, `rule_gnss_position_jump`,
+  `rule_gnss_spoof_suspect` (116 to 119), `rule_adsb_emergency` (121),
+  `rule_sensor_undervolt`, `rule_sensor_source_down` (124, 125). The
+  last pair is defined in `src/alerts/rules_sensor.c` (87, 157) and
+  reads only `sys_status_get()`.
+- **Views** (`include/sloth_views.def`): `GNSS`, key `#` (65); `ADSB`,
+  key `^` (71). Both are included from `src/tui.c` (71, 72).
+- **Flags** (`src/main.c`): `--location` (1030), `--gps` (1032),
+  `--adsb` (1034), `--aprs` (1036), `--rtl433` (1038), `--aprs-freq`
+  (1040), `--aprs-silent-hours` (1047), `--gps-allow-remote` (1056),
+  `--gps-baud` (1058). The readers are configured at 1373 (ADS-B), 1402
+  (APRS), 1427 (rtl_433) and 1754 (GNSS), started together after the
+  privilege drop (2017 to 2020) and stopped together (2114 to 2117).
+- **Knobs** (`grep -oE 'TUNE_(GPS|GNSS|ADSB|APRS|RTL433)[A-Z0-9_]*'
+  src/tune.h | sort -u`): `TUNE_ADSB_EMERG_HOLD_S`, the twelve
+  `TUNE_GNSS_*`, and `TUNE_GPS_MAX_FIX_AGE_S`, `TUNE_GPS_MIN_MOVE_M`,
+  `TUNE_GPS_SAMPLE_S`. The three `TUNE_GPS_*` are read by Wi-Fi-side
+  code too (the location stamp's age, `position_track.c`).
+
+---
+
+## 3. What exists once per process (b)
+
+Each of these is one instance that both halves use today. A second
+daemon needs its own.
+
+| Service | Where | What is single |
+|---|---|---|
+| The state | `sloth_state_t`, `include/sloth.h` | One struct; the RF members of §2.2 sit in it beside the Wi-Fi tables. Every rule, view, emitter and writer takes it whole. |
+| The poll loop | `g_poll_stages[]`, `src/poll.c:470` | One table of stages (`platform_net`, `health`, … `alerts`, … `positions`, `jsonl`, `db`), run in order every tick at `src/poll.c:519`. The four RF polls are lines inside the `health` stage; the RF sensor registrations are lines inside `st_sensors()` (§3.1). There is no per-application table. |
+| The alert engine | `src/alerts/engine.c` | File-scope state: `g_incident_seq` (59), `g_incident_hook` (99), the twin taint table (130 to 132), `g_key_hash_mask` (209), the side table (279 to 281), the hardware verdict (463). One alert table on the state. |
+| The rule table | `src/alerts/rules_table.c` | One array, 93 `R(rule_…)` rows; seven of them are the RF rows of §2.3. Table order is run order. |
+| The JSONL writer | `src/jsonl.c` | One file sink `g_fp` and one mutex (50 to 53), one change-only cache `g_dedup[]` (107), one APRS cursor `g_aprs_cursor` (3430). `jsonl_emit_state_snapshots()` (3883) calls `jsonl_emit_gnss`, `_adsb`, `_aprs`, `_rtl433` (3930 to 3933) and then `jsonl_emit_sensor_health` (3943) in one pass. |
+| The data socket | `src/data_socket.c` | One listener `g_listen_fd`, one client table, one unix path (73 to 81). `any_sink()` (`src/jsonl.c:59`) is "the file or this socket". |
+| The database handle | `src/db.c` | `static sqlite3 *g_db` (44), with the session id (58), the tick clocks (55, 56) and `g_aprs_seq` (180) beside it. `db_tick()` (2766) writes every table from the one state; the RF writers are `write_gnss()` (1983), `write_adsb()` (2059), `write_aprs()` (2140), and `write_positions()` (1939). `DB_SCHEMA_VERSION` is 14 (`src/db.h:114`). |
+| The `sensor_health` record | `jsonl_emit_sensor_health()`, `src/jsonl.c:2181` | One record per process. Its change signature takes the GNSS state and the position cell (2430 to 2444); its body carries the `gps_*`, `gnss_*` and `loc_*` members (from 2768) and the `adsb_*`, `aprs_*` and `rtl433_*` blocks, each only while its flag is set. |
+
+The RF tables in the schema (`src/db_schema.c`): `device_positions`
+(784), `sensor_positions` (796), `gnss_fixes` (814), `gnss_sightings`
+(838), `adsb_aircraft` (861), `adsb_sightings` (883), `aprs_stations`
+(921), `aprs_packets` (942), `sensors` (963). rtl_433 has no table.
+
+### 3.1 The two registries
+
+- **`s->sensors[]`** (`include/sloth.h:3930`, `MAX_SENSORS` 16 at 2815).
+  `sensor_register()` (`src/sensors.c:24`) is called from one function,
+  `st_sensors()` in `src/poll.c`: the Wi-Fi monitor (299), the BLE HCI
+  monitor (318), the Ubertooth capture (328), the GNSS receiver (338),
+  the ADS-B decoder (348), the APRS decoder (363), the rtl_433 decoder
+  (378). The kind numbers (`SENSOR_WIFI` … `SENSOR_RTL433`,
+  `include/sloth.h:2817` to 2820) are persisted, in the `sensors` table
+  and the `sensor` record.
+- **`SYS_SRC_*`** (`src/sys_status.h:114` to 119): `SYS_SRC_CAPTURE`,
+  `_MONITOR`, `_BTMON`, `_BTCAP`, `_GNSS`, `_ADSB`, `_APRS`, `_RTL433`,
+  then `SYS_SRC_COUNT`. A source's slot is its id in the stream.
+  `sys_status_poll()` fills one `sys_source_t src[SYS_SRC_COUNT]`
+  (`src/sys_status.h:172`) from the state: `s->gps` at
+  `src/sys_status.c:984` to 1006, `s->adsb` at 1014, `s->aprs` at 1029,
+  `s->rtl433` at 1046. `rule_sensor_source_down` and
+  `rule_sensor_undervolt` read that one snapshot.
+
+Both registries hold Wi-Fi and RF rows in one array with one numbering.
+
+---
+
+## 4. GNSS in Wi-Fi-side code, and APRS reading the position (c)
+
+### 4.1 Wi-Fi-side code that uses GNSS
+
+From (c). "Wi-Fi-side" here is everything outside `src/gps.c`,
+`src/capture/gps_reader.c`, `src/alerts/rules_gnss.c` and
+`src/views/gnss.c`.
+
+| Where | What it uses | Why |
+|---|---|---|
+| `src/alerts/engine.c:626` | `gps_location_current(&a->loc, now)` | The location stamp: where the sensor was as an incident opened, once per open. Every alert kind gets it. Downstream: `gps_loc_json()` on the alert record (`src/jsonl.c:544`), the `loc_src` column (`src/db.c:2230`). |
+| `src/alerts/rules_twin.c:2062` | `s->gnss_hist` in `twin_sensor_moving()` | Motion suppression: a twin proximity swing measured while the sensor moved is not evidence. Called at 243 and 2115. |
+| `src/evidence_manifest.c:388` | `gps_loc_json(meta->loc, …)` | The incident's location in the evidence manifest. |
+| `src/views/alerts.c:154`, `156` | `s->gps.configured`, `gps_loc_text()` | The alert detail's location line. |
+| `src/views/iface.c:531` to 533 | `s->gps`, `gps_state_name()` | The `gps` token on the interface strip. |
+| `src/position_track.c:106`, `119`, `120` | `gps_location_current()`, `s->gps.sats`, `s->gps.hdop`, `gps_distance_m()` (32) | `postrack_tick()`, the `positions` stage (`src/poll.c:437`): samples for `device_positions` **and** `sensor_positions`, written by `write_positions()`. |
+| `src/jsonl.c:2430` to 2444, 2768 to 2815 | `s->gps` | `sensor_health`'s `gps_*`, `gnss_*` and `loc_*` members and their part of the change signature. |
+| `src/sys_status.c:984` to 1006 | `s->gps`, `gps_state_name()` | The `SYS_SRC_GNSS` row of `source_status`. |
+| `src/poll.c:337` to 340 | `s->gps.has_gps`, `.src`, `.sentences` | The GNSS row of `s->sensors[]`. |
+| `src/main.c:1061`, 1317 to 1348, 1754 to 1794 | `gps_spec_parse()`, `gps_location_parse_fixed()`, `gps_reader_configure()` | Flag parsing and start-up. |
+
+The GNSS records and tables themselves are written from
+`src/jsonl.c:3236` (`jsonl_emit_gnss`) and `src/db.c:1983`
+(`write_gnss`), both reading `s->gps`, `s->gnss_fix` and `s->gnss_sky`.
+
+Headers: `gps.h` is included by `src/alerts/engine.c`, `src/db.c`,
+`src/evidence_manifest.c`, `src/jsonl.c`, `src/main.c`, `src/poll.c`,
+`src/position_track.c`, `src/reset_all.c`, `src/sys_status.c`,
+`src/views/adsb.c`, `src/views/alerts.c`, `src/views/iface.c`, besides
+the GNSS module's own files.
+
+### 4.2 The place APRS reads the position
+
+`aprs_health_poll()` at `src/aprs.c:529`:
+
+```c
+int rg = aprs_region_of(s->gps.has_loc, s->gps.loc_lat, s->gps.loc_lon);
+```
+
+It is why `aprs_health_poll()` runs after `gps_health_poll()` in
+`st_health()` (`src/aprs.h:117` says so), and why sloth-rf needs its own
+`--gps` / `--location`. Only the region and its channel are kept, never
+the position.
+
+### 4.3 The other RF modules on the Wi-Fi side
+
+Where code outside a module's own `.c` reads its state, by file and
+count of `s->adsb*`, `s->aprs*` and `s->rtl433*` references:
+`src/jsonl.c` 58, `src/views/adsb.c` 22, `src/poll.c` 15,
+`src/alerts/rules_adsb.c` 7, `src/db.c` 7, `src/sys_status.c` 6,
+`src/views/iface.c` 2. The last is the `adsb` token on the interface
+strip (`src/views/iface.c:548` to 550), a Wi-Fi-side view reading
+`s->adsb`. `src/views/adsb.c` in turn calls `gps_location_current()`
+(164) for range and bearing. `src/reset_all.c` includes `adsb.h`,
+`aprs.h`, `rtl433.h` and `gps.h` to clear every module on a reset.
+
+---
+
+## 5. The run flag lives in `src/capture/capture.c` (d)
+
+`capture_run_flag_t` is declared in `src/capture/capture.h` (347, with
+`capture_run_flag_get`, `_set`, `_take` at 350 to 352) and defined in
+`src/capture/capture.c` (478, 485, 491), the libpcap capture's own file.
+
+Every reader thread uses it for its `g_running`:
+
+| File | `#include "capture/capture.h"` | `g_running` |
+|---|---|---|
+| `src/capture/gps_reader.c` | 15 | 32 |
+| `src/capture/adsb_reader.c` | 15 | 31 |
+| `src/capture/aprs_reader.c` | 10 | 22 |
+| `src/capture/rtl433_reader.c` | 10 | 22 |
+| `src/capture/bt_capture.c` | 15 | 27 |
+| `src/capture/bt_monitor.c` | — | 29 |
+| `src/capture/probe.c` | — | 145 |
+| `src/capture/capture.c` | — | 548 |
+
+So the four RF readers, which need nothing else from the capture, link
+against the capture's translation unit for three small functions. A
+sloth-rf that does not open a pcap handle cannot be linked until the
+flag moves to a file of its own (S1, #212).
+
+---
+
+## 6. slothweb assumes one socket and one database (e)
+
+### 6.1 Configuration and globals
+
+- `web_config_t` (`web/src/web_config.h`, closes at 93) has one
+  `web_sockspec_t sock` (42, `--socket`) and one `char sloth_db[4096]`
+  (52, `--sloth-db`).
+- `web/src/main.c` holds one of each consumer as a file-scope global
+  (42 to 74): `g_live` (43), `g_ingest` (44), `g_rollup`, `g_metrics`,
+  `g_store`, `g_tsdb`, `g_sdb` (53), `g_m4` (54), `g_sql`, `g_frrs`,
+  `g_ble`, `g_gnss`, `g_adsb`, `g_aprs`, `g_rtl433`, `g_sys`, `g_lure`,
+  `g_chain`, `g_fleet`.
+- One ingest thread: `web_ingest_start(&g_ingest, &cfg.sock, …)`
+  (`web/src/main.c:323`). `web_ingest_t` (`web/src/web_ingest.h:102`)
+  has one `spec`, one `feed` and one `live`.
+- One database reader: `web_slothdb_init(&g_sdb, cfg.sloth_db, &fns)`
+  (129). `&g_sdb` is handed to the anomaly config (126), `g_m4.sdb`
+  (183) and `web_sqlbox_init()` (287); `web_sys_set_dbs()` (175) takes
+  the one path for the store-size figures.
+- The structs that carry it: `web_m4_t.sdb` (`web/src/web_devices.h:70`,
+  struct closes at 102), `web_fleet_src_t.sdb` (`web/src/web_fleet.h:436`,
+  closes at 450), and the same member in `web_anomaly.h:300`,
+  `web_fleetview.h:125` and `web_sqlbox.h:110`. Each is a single
+  pointer: a route reads "the" sloth.db.
+
+### 6.2 What a second stream into today's pipeline would break
+
+From `grep -rnE '"sensor_health"' web/src/*.c` and the connect path in
+`web/src/web_ingest.c`, each read at this commit.
+
+| Consumer | Behaviour | Effect of sloth-rf's records arriving on the same feed |
+|---|---|---|
+| `web/src/web_rtl433.c`, `sh_apply()` (187) | A `sensor_health` without `rtl433_state` **clears** the block (`memset(&a->sh, 0, …)`). | sloth-wifi's `sensor_health` blanks the rtl_433 tab's health every tick. |
+| `web/src/web_gnss.c`, `loc_apply()` (242) | A `sensor_health` without `loc_lat` / `loc_lon` / `loc_src` **clears** the sensor position. | A daemon with no position clears the one the other reported. |
+| `web/src/web_live.c`, `sensor_record()` (735) | Overwrites `cap_open`, `cap_running`, `mon_open`, `mon_running`, the interface names and the scope from every `sensor_health`; absent members read as 0 or `""`. | sloth-rf's record says "no capture, no monitor radio" for the host. |
+| `web/src/web_live.c`, `web_live_sock_connected()` (92) | On every connect: `ninc = 0` (open incidents dropped), the monitor-radio set cleared, `conn_gen++`. | Each daemon's reconnect resets the other's open incidents and scope. |
+| `web/src/web_ingest.c`, `ingest_main()` | On connect: `web_feed_reset()` and `web_metrics_stream()`. | The same, for the feed's line state and the metrics' per-stream tables. |
+| `web/src/web_ingest.h:117` to 118 | "Call before `web_ingest_start()`; the metrics are then the ingest thread's alone." `web_metrics_t` has no lock of its own; `web/src/web_rollup.h:68` names one ingest thread adding samples. | A second ingest thread feeding `g_metrics` breaks the single-writer contract. |
+| `web/src/web_lure.c` (296), `web/src/web_sysstat.c` `health_apply()` | Take `jsonl_version` and `db_max_mb` from whichever `sensor_health` came last. | The version and the store limit flip between the two daemons' values. |
+| `web/src/web_frrs.c` (579) | Takes `monitor_iface` / `capture_iface` from every `sensor_health`. | As for `web_live.c`. |
+
+Consumers that already keep what they had when their block is absent,
+and so are safe on a shared feed: `web/src/web_adsb.c` `sh_apply()`
+(202), `web/src/web_aprs.c` `sh_apply()` (263), `web/src/web_gnss.c`
+`sh_apply()` (207), `web/src/web_ble.c` `sh_apply()` (501).
+
+### 6.3 The devices-table probe
+
+`web/src/web_slothdb.c` refuses a file whose `devices` table lacks
+sloth's required columns: the probe builds the column list from
+`web_sdb_allow[]` rows for `"devices"` (1169 to 1177), checks them with
+`table_cols(c->db, "devices", …)` (1180), and a failure is
+`"no devices table with sloth's columns"` (1387). The row count it
+reports is `SELECT count(*) FROM devices` (1425).
+
+`sloth-rf.db` has the same DDL, so it passes the probe; its `devices`
+table is empty, so "rows" reads 0 for a healthy file. The reader's
+allow-list already names the RF tables (`adsb_aircraft`,
+`adsb_sightings`, `aprs_stations`, `aprs_packets`, `gnss_fixes`,
+`gnss_sightings`, `device_positions`, `sensor_positions`), all read
+through the one handle today.
+
+### 6.4 The fleet
+
+`web/src/web_fleetshare.c` already classifies the RF alert kinds:
+`ADSB_EMERGENCY` and the `GNSS_*` kinds are on the travel list (44, 45),
+`SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN` on the withheld list (60).
+The export reads through `web_fleet_src_t.sdb`, one database. rtl_433
+has no export writer and the importer refuses its record. Nothing here
+changes with the split (ADR 0009); what changes is that the rows the
+export reads will sit in a second file.
+
+---
+
+## 7. Packaging (f)
+
+- **Units** (`git ls-files packaging`): `sloth-sensor.service` with its
+  drop-ins `sloth-sensor.service.d/bt-monitor.conf` and `gps.conf`,
+  `slothweb.service`, `sloth-ble-scan.service`,
+  `sloth-sdrsweep.{service,path,sysusers.conf}`, `sloth.sysusers.conf`;
+  defaults `packaging/default/sloth`, `slothweb`, `sloth-sdrsweep`;
+  tools `packaging/bin/sloth-migrate-sensor`, `sloth-monitor-up`. There
+  is no `sloth-rf.service`.
+- **`sloth-sensor.service`**: `User=sloth` (34),
+  `EnvironmentFile=-/etc/default/sloth` (42), `StateDirectory=sloth`
+  (47), `RuntimeDirectory=sloth` (49, mode 0750),
+  `ExecStart=/usr/local/bin/sloth` (88) with
+  `--db /var/lib/sloth/sloth.db` and
+  `--data-socket unix:/run/sloth/sloth.sock`, then `$SLOTH_ARGS`;
+  `RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_PACKET` (138). It is
+  bound to the monitor radio's device unit (25, 26), so the whole
+  process, RF readers included, stops when the radio is unplugged. The
+  `gps.conf` drop-in carries the serial device and the `AF_INET` that
+  gpsd needs, commented out.
+- **`slothweb.service`**: `After=` and `Wants=sloth-sensor.service`
+  (31, 32), `RuntimeDirectory=slothweb` (61),
+  `ExecStart=/usr/local/bin/slothweb --socket unix:/run/sloth/sloth.sock
+  --sloth-db /var/lib/sloth/sloth.db` (71 to 73),
+  `ReadOnlyPaths=-/var/lib/sloth` (92). One socket, one database, one
+  sensor unit, one read-only state directory.
+- **The migrate tool's flag allow-list**
+  (`packaging/bin/sloth-migrate-sensor`, the `case "$f"` at 260 to 311).
+  The binary must be named `sloth` (`case "$(basename "$1")"`, 252 to
+  255). Absorbed: `--headless`, `--no-discovery`, `--hop`; dropped:
+  `--no-privdrop`; relocated: `--db`, `--pcap-dir`, `--report`,
+  `--report-json`, `--snapshot-out`, `--baseline-in`, `--with-research`;
+  `--data-socket` (unix, or tcp with `--data-socket-unix`); carried:
+  `--bt-monitor`, `--my-ssid`, `--my-bssid`, `--site-label`, `--site`,
+  `--known-mac`, `--iface`, `--db-interval-secs`, `--db-retain-days`,
+  `--db-max-mb`, `--correlate-retain`. Anything else is refused (309).
+  No RF flag is on the list: `grep -nE 'adsb|aprs|rtl433|--gps|--location'`
+  on the script finds nothing. It reads the binary at
+  `$ROOT$PREFIX/bin/sloth` (86) and the socket at
+  `$ROOT/run/sloth/sloth.sock` (84).
+- **Install** (`Makefile`): `TARGET = sloth` (425);
+  `install -m 755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET)` (1598).
+- **Tests that pin `/usr/local/bin/sloth`**: `tests/test_unit_file.c`
+  (221, 236, 334, 335; 607 asserts its absence from another unit),
+  `tests/deploy/test_migrate_sensor.sh` (101, 104, a stub binary at that
+  path), `tests/deploy/test_lab_tools.sh` (97, a fake `cmdline`). A
+  rename without the symlink turns each of these red.
+
+---
+
+## 8. The slices (g)
+
+From `gh issue list`, titles as filed.
+
+| Slice | Issue | What |
+|---|---|---|
+| S0 | #211 | The tracking issue, [ADR 0010](adr/0010-wifi-rf-daemons.md), this page. |
+| S1 | #212 | Build seam: source groups, run flag out of `capture.c`, poll stage table per app. No behaviour change. |
+| S2 | #213 | The `sloth-rf` binary: readers, RF rules, own JSONL socket and database. Additive. |
+| S3 | #214 | slothweb reads two daemons: `--rf-socket` and `--rf-db`. |
+| S4 | #215 | Packaging: `sloth-rf.service` and `sloth-migrate-rf`. |
+| S5 | #216 | Cutover: `sloth-wifi` rename, RF leaves the Wi-Fi daemon, JSONL 2.0.0. |
+| S6 | #217 | Deploy both daemons: W9FJC, then beta-site. |
+
+Which section each slice cuts: S1 is §5 and the stage table and source
+list of §3 and §2.1; S2 is §2 and the rest of §3; S3 is §6; S4 is §7;
+S5 is §4.3, the `sloth` name in §7 and the contract version.
+
+---
+
+## 9. Where the tree and #211 disagree
+
+#211's "What the code looks like today" holds on every point it makes.
+These are the places the grep found more than it says, or something it
+does not decide.
+
+1. **GNSS reaches Wi-Fi-side code in more than five places.** #211
+   lists the location stamp, twin motion suppression, the evidence
+   manifest, a pair of views and `device_positions`. The views are
+   `src/views/alerts.c` and `src/views/iface.c`. Also there (§4.1): the
+   `SYS_SRC_GNSS` row in `src/sys_status.c`, the GNSS row of
+   `s->sensors[]` in `src/poll.c`, and `sensor_health`'s `gps_*` and
+   `gnss_*` members beside the `loc_*` ones #211's table does name.
+   Whether sloth-wifi keeps reporting a GNSS source row and the `gps_*`
+   / `gnss_*` health members, or only `loc_*`, is not stated.
+   OPEN — needs owner ruling.
+2. **`sensor_positions` is in neither column.** `position_track.c`
+   writes it with `device_positions` from one fix; #211 assigns
+   `device_positions` to sloth-wifi and the `gnss_*` tables to sloth-rf.
+   OPEN — needs owner ruling (recorded in ADR 0010).
+3. **`SENSOR_UNDERVOLT` is host state.** `rule_sensor_undervolt` reads
+   the host's supply flags from `sys_status_get()`, not a source. #211
+   gives sloth-rf both `SENSOR_*` kinds "for its own sources" and
+   sloth-wifi "everything else"; on a host running both, whether one or
+   both report an undervolt is not stated. OPEN — needs owner ruling
+   (recorded in ADR 0010).
+4. **The registries are shared numbering, not only shared storage.**
+   `sensor_kind_t` and `SYS_SRC_*` are persisted ids (§3.1). Two
+   daemons each emitting `sensor` and `source_status` records with
+   their own subset is a contract question for the 2.0.0 stream that
+   #211 does not spell out.
+5. **slothweb breaks in more places than the four named.** #211 names
+   the rtl_433 tab, the sensor position, the metrics writer and open
+   incidents; all four are confirmed (§6.2). `web_live.c`'s capture and
+   monitor state, `web_frrs.c`'s interface names, `web_lure.c`'s stream
+   version and `web_sysstat.c`'s store limit are overwritten the same
+   way.
+6. **A Wi-Fi-side view reads ADS-B.** The interface strip's `adsb`
+   token (`src/views/iface.c:548`) is not the ADS-B view and is not
+   mentioned; it has to go at cutover with the view.
+7. **The migrate tool refuses every RF flag today.** A legacy unit with
+   `--gps`, `--location`, `--adsb`, `--aprs` or `--rtl433` in its
+   `ExecStart` is refused by `sloth-migrate-sensor` (§7). #211's S4
+   names a new `sloth-migrate-rf`; it does not say the existing tool
+   has this gap.
+8. **`sloth-sensor.service` is bound to the monitor radio.** The RF
+   readers stop with it today (§7). Not a disagreement, but the
+   strongest packaging argument for the split and absent from #211.
+
+---
+
+## Related pages
+
+- [ADR 0010 — two daemons, one repository](adr/0010-wifi-rf-daemons.md) — the decision this page measures for.
+- [[architecture-split]] — the other inventory: the sensor, the dashboard and the intelligence tables (#184).
+- [[architecture]] — the system map.
+- [ADR index](adr/README.md)
+- [[jsonl-schema]] — the stream whose contract version moves at cutover.
+- [[sqlite-schema]] — the DDL both stores will share.
+- [[deployment]] — the units and the migrate tool.
+- [[gnss]], [[adsb]], [[aprs]], [[rtl433]], [[sdr-sweep]] — the modules.

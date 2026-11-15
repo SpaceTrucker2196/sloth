@@ -31,10 +31,16 @@ the Wi-Fi it watches:
   dashboard and the intelligence tables: every reference out of `web/`
   and every intelligence table in `src/`, with #184's contract table
   C1–C10 filled in and the places the grep disagrees with it.
-- [ADRs 0001–0009](adr/README.md) — the architecture decision records for
+- [ADRs 0001–0010](adr/README.md) — the architecture decision records for
   the three-repository programme (#184), one per decision, with the gaps
   that still need an owner ruling marked in place; 0009 is the owner's
-  monitor-only rule for fleet sharing (2026-11-12).
+  monitor-only rule for fleet sharing (2026-11-12); 0010 splits the
+  sensor into the `sloth-wifi` and `sloth-rf` daemons (#211).
+- [[architecture-rf-split]] — the measured coupling between the Wi-Fi
+  monitor and the SDR and GNSS modules (ADS-B, APRS, rtl_433, GNSS) in
+  today's one process, slothweb's one-socket and one-database
+  assumptions, the packaging, the slices #211–#217 and the places the
+  tree and #211 disagree.
 - [[pack-schema]] — the intel pack manifest, file set and immutability
   rule, v1 draft.
 - [[threat-model]] — assets A1–A5, adversaries ADV-1..4, trust
