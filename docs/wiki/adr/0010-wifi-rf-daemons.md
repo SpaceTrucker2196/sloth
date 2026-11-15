@@ -89,15 +89,22 @@ Not decided by #211, found while measuring the tree
 - Whether sloth-wifi keeps reporting a GNSS source row
   (`SYS_SRC_GNSS`, the GNSS row of `s->sensors[]`) and
   `sensor_health`'s `gps_*` / `gnss_*` members, or only the `loc_*`
-  ones #211's table names. OPEN — needs owner ruling.
+  ones #211's table names. **Ruled 2026-11-15: sloth-wifi keeps GNSS
+  health too** — the source row, the sensor row and the `gps_*` /
+  `gnss_*` members stay in its stream beside `loc_*`. The `gnss_fix` /
+  `gnss_sky` / `gnss_sat` records, the `gnss_*` tables and the four
+  `GNSS_*` alerts are still sloth-rf's alone.
 - Which daemon writes `sensor_positions`. #211 names `device_positions`
   (sloth-wifi) and the `gnss_*` tables (sloth-rf); the sensor's own
   track is written by the same module as `device_positions` and is in
-  neither list. OPEN — needs owner ruling.
+  neither list. **Ruled 2026-11-15: both** — each daemon writes the
+  track to its own database.
 - Whether `SENSOR_UNDERVOLT`, which reports the host and not a source,
   fires from both daemons on a host that runs both. #211 gives sloth-rf
   the two `SENSOR_*` alerts "for its own sources" and sloth-wifi
-  "everything else". OPEN — needs owner ruling.
+  "everything else". **Ruled 2026-11-15: sloth-wifi only.** sloth-rf
+  does not fire it; a host running only sloth-rf has no undervolt
+  alert.
 
 Not decided by #211, and not from the inventory (found while writing
 this record):

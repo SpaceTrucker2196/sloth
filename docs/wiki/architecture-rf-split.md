@@ -510,17 +510,19 @@ does not decide.
    `gnss_*` members beside the `loc_*` ones #211's table does name.
    Whether sloth-wifi keeps reporting a GNSS source row and the `gps_*`
    / `gnss_*` health members, or only `loc_*`, is not stated.
-   OPEN — needs owner ruling (recorded in ADR 0010).
+   Ruled 2026-11-15: sloth-wifi keeps the source row, the sensor row
+   and the `gps_*` / `gnss_*` members (ADR 0010).
 2. **`sensor_positions` is in neither column.** `position_track.c`
    writes it with `device_positions` from one fix; #211 assigns
    `device_positions` to sloth-wifi and the `gnss_*` tables to sloth-rf.
-   OPEN — needs owner ruling (recorded in ADR 0010).
+   Ruled 2026-11-15: both daemons write it, each to its own database
+   (ADR 0010).
 3. **`SENSOR_UNDERVOLT` is host state.** `rule_sensor_undervolt` reads
    the host's supply flags from `sys_status_get()`, not a source. #211
    gives sloth-rf both `SENSOR_*` kinds "for its own sources" and
    sloth-wifi "everything else"; on a host running both, whether one or
-   both report an undervolt is not stated. OPEN — needs owner ruling
-   (recorded in ADR 0010).
+   both report an undervolt is not stated. Ruled 2026-11-15: sloth-wifi
+   only (ADR 0010).
 4. **The registries are shared numbering, not only shared storage.**
    `sensor_kind_t` and `SYS_SRC_*` are persisted ids (§3.1). Two
    daemons each emitting `sensor` and `source_status` records with
