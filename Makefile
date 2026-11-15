@@ -24,9 +24,33 @@ WITH_SQLITE  ?= 1
 #              list beside it (the inline fuzz lists rotted and failed CI on
 #              2026-10-14).
 #
-# A new module goes in CORE_COMMON_SRCS (or a feature group below) once,
-# and `make`, `make test` and `make fuzz` all pick it up.
-CORE_COMMON_SRCS = \
+# A new module goes in exactly one list, once, and `make`, `make test`
+# and `make fuzz` all pick it up. Which list (#212, for the sloth-wifi /
+# sloth-rf split of #211, ADR 0010):
+#
+#   RF_SRCS         only ADS-B, APRS or rtl_433 (and, later, Meshtastic):
+#                   a decoder, its reader thread, its rules, its view, its
+#                   poll stages. What sloth-rf will own and sloth-wifi
+#                   will stop linking at cutover.
+#   GNSS_SRCS       only the --gps / --location receiver: the parsers, the
+#                   reader, the position track, the GNSS rules and view,
+#                   its poll stages. Both daemons link it.
+#   CORE_BASE_SRCS  everything else that is built in every configuration:
+#                   the Wi-Fi, wired and BLE modules and the services both
+#                   daemons share (the alert engine, JSONL, the clock, the
+#                   run flag, the poll runner). When in doubt, here.
+#   a feature group below (PCAP_CORE_SRCS, SQLITE_CORE_SRCS, the Linux
+#                   lists) if a WITH_* flag or the platform gates it.
+#
+# The test for RF_SRCS and GNSS_SRCS is the include graph, not the topic:
+# a file belongs there only if nothing in CORE_BASE_SRCS would have to
+# move with it. src/sys_status.c reads every source and stays in the
+# base; so does src/alerts/rules_sensor.c.
+#
+# CORE_COMMON_SRCS is the union of the three and is what every consumer
+# below reads, so `sloth`, the test, no-flag, bench and fuzz builds link
+# exactly what they linked when it was one list.
+CORE_BASE_SRCS = \
        src/view_route.c    \
        src/worker_thread.c \
        src/view_labels.c   \
@@ -199,71 +223,88 @@ CORE_COMMON_SRCS = \
 # are compiled and linked in every configuration — main.c calls
 # capture_dlt_has_ifindex() to report inactive scoping even in a build
 # with no capture at all (#46, #57).
-CORE_COMMON_SRCS += src/capture/capture.c
+CORE_BASE_SRCS += src/capture/capture.c
 # The pcap-edge gate (#141) is libpcap-free so the test and fuzz builds
 # link it whatever WITH_PCAP says; both capture callbacks call it first.
-CORE_COMMON_SRCS += src/capture/frame_edge.c
+CORE_BASE_SRCS += src/capture/frame_edge.c
 # --replay (#119). Same split as capture.c: the route table, the list
 # parser and the empty platform are pure and built everywhere; the
 # savefile reader sits inside WITH_PCAP.
-CORE_COMMON_SRCS += src/capture/replay.c
-CORE_COMMON_SRCS += src/fragattack.c
-CORE_COMMON_SRCS += src/views/research.c
-CORE_COMMON_SRCS += src/views/fragattack.c
-CORE_COMMON_SRCS += research/coverage.c
-CORE_COMMON_SRCS += src/pcap_format.c src/pcap_write.c
-CORE_COMMON_SRCS += src/evidence_ring.c src/evidence_export.c
-CORE_COMMON_SRCS += src/evidence_manifest.c
-CORE_COMMON_SRCS += src/geo.c
+CORE_BASE_SRCS += src/capture/replay.c
+CORE_BASE_SRCS += src/fragattack.c
+CORE_BASE_SRCS += src/views/research.c
+CORE_BASE_SRCS += src/views/fragattack.c
+CORE_BASE_SRCS += research/coverage.c
+CORE_BASE_SRCS += src/pcap_format.c src/pcap_write.c
+CORE_BASE_SRCS += src/evidence_ring.c src/evidence_export.c
+CORE_BASE_SRCS += src/evidence_manifest.c
+CORE_BASE_SRCS += src/geo.c
 # #101 slice A: the compiled-in 5 GHz channel table and the rules that read it.
-CORE_COMMON_SRCS += src/reg_table.c src/alerts/rules_regulatory.c
-CORE_COMMON_SRCS += src/ble_snoop.c
+CORE_BASE_SRCS += src/reg_table.c src/alerts/rules_regulatory.c
+CORE_BASE_SRCS += src/ble_snoop.c
 # #144 slice 2: the HCI monitor decoder and the own-transmission rule are
 # pure; the libpcap worker that feeds them is in PCAP_CORE_SRCS.
-CORE_COMMON_SRCS += src/ble_hci.c src/alerts/rules_ble.c
-CORE_COMMON_SRCS += src/alerts/rules_gnss.c
-# #186: ADSB_EMERGENCY, read off the ADS-B table (src/adsb.c below).
-CORE_COMMON_SRCS += src/alerts/rules_adsb.c
-CORE_COMMON_SRCS += src/alerts/rules_sensor.c
+CORE_BASE_SRCS += src/ble_hci.c src/alerts/rules_ble.c
+CORE_BASE_SRCS += src/alerts/rules_sensor.c
 # #144 slice 3: the Ubertooth stream's framer and its two link-layer
 # parsers are pure; the reader that feeds them is in PCAP_CORE_SRCS.
-CORE_COMMON_SRCS += src/btle_ll.c src/bredr_bb.c src/bt_stream.c
+CORE_BASE_SRCS += src/btle_ll.c src/bredr_bb.c src/bt_stream.c
 # #144 slice 4: the flood windows, the watchlist matcher (shipped empty),
 # the three BLE detector lanes and the [*] BLE view. All pure.
-CORE_COMMON_SRCS += src/ble_flood.c src/ble_watchlist.c src/ble_detect.c
+CORE_BASE_SRCS += src/ble_flood.c src/ble_watchlist.c src/ble_detect.c
 # #156 item 2: address-rotation hints, off unless --ble-rotation-hints, and
 # the keyed hash their digests use. Pure.
-CORE_COMMON_SRCS += src/ble_rotation.c src/siphash.c
-CORE_COMMON_SRCS += src/views/ble.c
-# GNSS observation (2026-11-02): the [#] view over the --gps receiver's sky.
-CORE_COMMON_SRCS += src/views/gnss.c
-# #186 (2026-11-07): the [^] view over the --adsb decoder's aircraft table.
-CORE_COMMON_SRCS += src/views/adsb.c
-CORE_COMMON_SRCS += src/scan.c
-CORE_COMMON_SRCS += src/alert_key.c
-CORE_COMMON_SRCS += src/camera_vendor.c
-CORE_COMMON_SRCS += src/camera_join.c
+CORE_BASE_SRCS += src/ble_rotation.c src/siphash.c
+CORE_BASE_SRCS += src/views/ble.c
+CORE_BASE_SRCS += src/scan.c
+CORE_BASE_SRCS += src/alert_key.c
+CORE_BASE_SRCS += src/camera_vendor.c
+CORE_BASE_SRCS += src/camera_join.c
 # #155: router-role observations (DHCP server, DNS responder) the camera
 # classifier vetoes a mixed-vendor OUI from.
-CORE_COMMON_SRCS += src/lan_role.c
-CORE_COMMON_SRCS += src/privdrop.c
-CORE_COMMON_SRCS += src/poll.c
+CORE_BASE_SRCS += src/lan_role.c
+CORE_BASE_SRCS += src/privdrop.c
+# The poll table (#113, #212): the Wi-Fi stages and `sloth`'s table, then
+# the runner and the stages every table shares. The GNSS and RF stages
+# are in their groups below.
+CORE_BASE_SRCS += src/poll.c src/poll_core.c
+# The worker run flag (#95), out of capture.c since #212 so a reader
+# thread does not need the capture module to have a stop flag.
+CORE_BASE_SRCS += src/run_flag.c
+
+# ── The GNSS group (#212) ───────────────────────────────────────────────────
 # --location / --gps (2026-10-27): the parsers and the arbitration state
 # are pure; the reader opens a serial device or a gpsd TCP stream and
 # needs neither libpcap nor SQLite, so it is common too.
-CORE_COMMON_SRCS += src/gps.c src/capture/gps_reader.c src/position_track.c
+GNSS_SRCS  = src/gps.c src/capture/gps_reader.c src/position_track.c
+GNSS_SRCS += src/alerts/rules_gnss.c
+# GNSS observation (2026-11-02): the [#] view over the --gps receiver's sky.
+GNSS_SRCS += src/views/gnss.c
+GNSS_SRCS += src/poll_gnss.c
+
+# ── The RF group (#212) ─────────────────────────────────────────────────────
 # --adsb (#26 slice 1, 2026-11-05): the aircraft.json parser and table are
 # pure; the reader re-reads a local file and needs neither libpcap nor
 # SQLite.
-CORE_COMMON_SRCS += src/adsb.c src/adsb_beast.c src/capture/adsb_reader.c
+RF_SRCS  = src/adsb.c src/adsb_beast.c src/capture/adsb_reader.c
+# #186: ADSB_EMERGENCY, read off the ADS-B table.
+RF_SRCS += src/alerts/rules_adsb.c
+# #186 (2026-11-07): the [^] view over the --adsb decoder's aircraft table.
+RF_SRCS += src/views/adsb.c
 # --aprs (2026-11-05): Dire Wolf's packet-log parser and the station
 # table are pure; the reader tails a local file and needs neither
 # libpcap nor SQLite.
-CORE_COMMON_SRCS += src/aprs.c src/capture/aprs_reader.c
+RF_SRCS += src/aprs.c src/capture/aprs_reader.c
 # --rtl433 (#208, 2026-11-14): rtl_433's JSON event-log parser and the
 # device table are pure; the reader tails a local file and needs neither
 # libpcap nor SQLite.
-CORE_COMMON_SRCS += src/rtl433.c src/capture/rtl433_reader.c
+RF_SRCS += src/rtl433.c src/capture/rtl433_reader.c
+# The RF poll stages and the table sloth-rf will pass (#212).
+RF_SRCS += src/poll_rf.c
+
+# The union every consumer reads. Order is base, GNSS, RF; nothing
+# depends on it (the objects go into an archive).
+CORE_COMMON_SRCS = $(CORE_BASE_SRCS) $(GNSS_SRCS) $(RF_SRCS)
 
 # Feature-gated core sources, grouped by the flag that gates them.
 # CORE_SRCS_ALL is their union with the common list: the test and fuzz
@@ -286,7 +327,7 @@ LINUX_WIFI_SRCS     = src/platform/linux_wifi.c
 # stand in. The evidence ring and its exporter (#92) used to sit here
 # too, on the grounds that only on_probe_frame() fills the ring. Since
 # #92 slice 1 the alert engine calls the exporter, and the engine is in
-# every build — so both are in CORE_COMMON_SRCS now. In a no-pcap build
+# every build — so both are in CORE_BASE_SRCS now. In a no-pcap build
 # the ring is never initialised (main.c calls evidence_ring_init_default()
 # only under WITH_PCAP), so it holds no arena and costs code, not memory.
 PCAP_CORE_SRCS      = src/capture/probe.c src/capture/bt_monitor.c \

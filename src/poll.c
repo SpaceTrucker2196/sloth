@@ -1,17 +1,9 @@
-#include <string.h>
 #include "poll.h"
-#include "sloth_clock.h"
 #include "capture/capture.h"
 #include "capture/probe.h"
 #include "capture/bt_monitor.h"
 #include "bt_stream.h"
 #include "ble_hci.h"
-#include "persist_health.h"
-#include "gps.h"
-#include "adsb.h"
-#include "aprs.h"
-#include "rtl433.h"
-#include "sys_status.h"
 #include "position_track.h"
 #include "history.h"
 #include "dev_how.h"
@@ -61,7 +53,6 @@
 #include "ntp_log.h"
 #include "icmp_log.h"
 #include "cleartext_creds.h"
-#include "alerts.h"
 #include "devices.h"
 #include "top_hosts.h"
 #include "scan.h"
@@ -69,13 +60,16 @@
 #include "transit.h"
 #include "presence.h"
 #include "rf_distance.h"
-#include "jsonl.h"
 #include "ownership.h"
-#include "db.h"
 
-/* Stage bodies. Each is the code poll_data() ran at that point, moved
- * verbatim except where the move is the fix — those say so. Phase
- * membership and order live in g_poll_stages below, not here. */
+/* The Wi-Fi, wired and BLE stage bodies, and the two tables that use
+ * them: g_poll_sloth (what `sloth` runs) and g_poll_wifi. The runner and
+ * the stages both daemons share are src/poll_core.c; the GNSS stages are
+ * src/poll_gnss.c and the RF ones src/poll_rf.c (#212).
+ *
+ * Each body is the code poll_data() ran at that point, moved verbatim
+ * except where the move is the fix — those say so. Phase membership and
+ * order live in the tables below, not here. */
 
 /* ── PLATFORM ─────────────────────────────────────────────── */
 
@@ -117,34 +111,28 @@ static void st_platform_net(sloth_state_t *s, const poll_ctx_t *ctx) {
         s->arp_sel = s->arp_count - 1;
 }
 
-static void st_health(sloth_state_t *s, const poll_ctx_t *ctx) {
+/* st_health() was one stage that polled every source in turn. It is
+ * five since #212, so a daemon's table can carry the halves it has: the
+ * capture workers here, the receiver in poll_gnss.c, the decoders in
+ * poll_rf.c, the host's own state in poll_core.c, and the scope check
+ * below. The union table lists them in the order the one function made
+ * its calls, so `sloth` runs the same sequence it always did. */
+static void st_health_capture(sloth_state_t *s, const poll_ctx_t *ctx) {
+    (void)ctx;
     /* #91 slice 2: both capture workers' liveness and pcap_stats(). Both
      * calls self-stub without WITH_PCAP, where "off" is the honest health
      * state rather than a missing one. */
     capture_health_poll(&s->cap_health);
     probe_health_poll(&s->mon_health);
     bt_monitor_health_poll(&s->bt_health);   /* #144 slice 2 */
-    /* --location / --gps (2026-10-27): the reader's state into s->gps,
-     * before anything this tick stamps a position. */
-    gps_health_poll(s, ctx->wall);
-    /* --adsb (#26 slice 1): expire the aircraft the decoder stopped
-     * reporting and copy the table, before anything this tick reads it. */
-    adsb_health_poll(s, ctx->wall, ctx->mono_ms);
-    /* --aprs: expire the stations unheard for an hour and copy the
-     * table and the packet ring, before anything this tick reads them. */
-    aprs_health_poll(s, ctx->wall, ctx->mono_ms);
-    /* --rtl433 (#208): copy the sub-GHz device table and its health,
-     * before anything this tick reads them. No expiry: a device heard
-     * once is a real observation of the band, and only the table
-     * filling removes a row. */
-    rtl433_health_poll(s, ctx->wall);
-    /* Host status and the source inventory (src/sys_status.h): after
-     * the per-source polls above, whose state it reads. */
-    sys_status_poll(s, ctx->wall, ctx->mono_ms);
-    /* #96: per-sink write-failure counts, for the cannot-persist badge. */
-    persist_health_poll(&s->persist_health);
+}
+
+static void st_capture_scope(sloth_state_t *s, const poll_ctx_t *ctx) {
+    (void)ctx;
     /* #85: re-check each pinned ifindex still names its interface; a
-     * replugged, renamed or reused one fails closed and reads DEGRADED. */
+     * replugged, renamed or reused one fails closed and reads DEGRADED.
+     * Its own stage only because it ran after the host polls in
+     * st_health() and still does. */
     capture_scope_poll(s);
 }
 
@@ -289,7 +277,13 @@ static void st_transit(sloth_state_t *s, const poll_ctx_t *ctx) {
 }
 #endif
 
-static void st_sensors(sloth_state_t *s, const poll_ctx_t *ctx) {
+/* st_sensors() was one stage registering every source. It is three
+ * since #212: the radios here, the receiver in poll_gnss.c, the decoders
+ * in poll_rf.c. A sensor's id is its registry slot (sensor_register()
+ * appends) and wifi_merged publishes it, so the order the three run in
+ * is part of the stream: radios, then GNSS, then RF, as the one function
+ * had it. tests/test_poll.c pins the slots. */
+static void st_sensors_wifi(sloth_state_t *s, const poll_ctx_t *ctx) {
     /* #28: register the monitor radio as the Wi-Fi sensor and record its
      * cumulative observation count. Future RF families register the same
      * way. Ahead of EMIT (#113): the sensor and wifi_merged records used
@@ -329,61 +323,6 @@ static void st_sensors(sloth_state_t *s, const poll_ctx_t *ctx) {
                                        BT_CAPTURE_IFACE, ctx->wall);
         sensor_observe(ub, s->btcap.adv + s->btcap.bredr, ctx->wall);
     }
-    /* GNSS (2026-11-02): the --gps receiver is a sensor too, observing
-     * parsed sentences / gpsd objects. After the radios, for the same
-     * id-slot reason; s->gps is this tick's (gps_health_poll ran in the
-     * health stage). A --location alone registers nothing: it is a
-     * setting, not a receiver. */
-    if (s->gps.has_gps) {
-        sensor_t *gn = sensor_register(s, SENSOR_GPS, "GNSS receiver",
-                                       s->gps.src, ctx->wall);
-        sensor_observe(gn, s->gps.sentences, ctx->wall);
-    }
-    /* ADS-B (#26 slice 1): the --adsb decoder file, observing parsed
-     * documents. A missing, unreadable or malformed file, or a decoder
-     * whose clock stopped advancing, is the registry's ERROR; recovery
-     * puts it back to ACTIVE (or PRESENT before any document). After the
-     * GNSS receiver, for the same id-slot reason. */
-    if (s->adsb.configured) {
-        sensor_t *ad = sensor_register(s, SENSOR_ADSB, "ADS-B decoder",
-                                       s->adsb.src, ctx->wall);
-        sensor_observe(ad, s->adsb.reads, ctx->wall);
-        if (s->adsb.state == ADSB_ERROR || s->adsb.state == ADSB_STALE)
-            sensor_set_state(ad, SENSOR_STATE_ERROR);
-        else
-            sensor_set_state(ad, s->adsb.reads ? SENSOR_STATE_ACTIVE
-                                               : SENSOR_STATE_PRESENT);
-    }
-    /* APRS: Dire Wolf's packet log, observing decoded packets. An
-     * unreadable file is the registry's ERROR; a missing one (Dire Wolf
-     * creates it with its first packet) and a quiet channel are not:
-     * PRESENT until a packet, ACTIVE after. After the ADS-B decoder,
-     * for the same id-slot reason. */
-    if (s->aprs.configured) {
-        sensor_t *ap = sensor_register(s, SENSOR_APRS, "APRS decoder",
-                                       s->aprs.src, ctx->wall);
-        sensor_observe(ap, s->aprs.packets, ctx->wall);
-        if (s->aprs.state == APRS_ERROR)
-            sensor_set_state(ap, SENSOR_STATE_ERROR);
-        else
-            sensor_set_state(ap, s->aprs.packets ? SENSOR_STATE_ACTIVE
-                                                 : SENSOR_STATE_PRESENT);
-    }
-    /* rtl_433 (#208): the --rtl433 event log, observing decoded
-     * messages. The same rule as APRS - an unreadable file is the
-     * registry's ERROR, a missing one (rtl_433 creates it with its
-     * first decode) and a quiet band are not. After the APRS decoder,
-     * for the same id-slot reason. */
-    if (s->rtl433.configured) {
-        sensor_t *rt = sensor_register(s, SENSOR_RTL433, "rtl_433 decoder",
-                                       s->rtl433.src, ctx->wall);
-        sensor_observe(rt, s->rtl433.msgs, ctx->wall);
-        if (s->rtl433.state == RTL433_ERROR)
-            sensor_set_state(rt, SENSOR_STATE_ERROR);
-        else
-            sensor_set_state(rt, s->rtl433.msgs ? SENSOR_STATE_ACTIVE
-                                                : SENSOR_STATE_PRESENT);
-    }
 }
 
 static void st_twins(sloth_state_t *s, const poll_ctx_t *ctx) {
@@ -391,13 +330,6 @@ static void st_twins(sloth_state_t *s, const poll_ctx_t *ctx) {
     /* After beacon_snapshot() (#113): twins walk s->beacon_aps, and used
      * to walk the previous tick's copy. */
     twins_snapshot(s);
-}
-
-/* ── ALERTS ───────────────────────────────────────────────── */
-
-static void st_alerts(sloth_state_t *s, const poll_ctx_t *ctx) {
-    (void)ctx;
-    alerts_update(s);
 }
 
 /* ── POST ─────────────────────────────────────────────────── */
@@ -442,34 +374,17 @@ static void st_chanhop(sloth_state_t *s, const poll_ctx_t *ctx) {
     if (ctx->chanhop) ctx->chanhop(s);
 }
 
-/* ── EMIT ─────────────────────────────────────────────────── */
+/* ── the tables ───────────────────────────────────────────── */
 
-static void st_jsonl(sloth_state_t *s, const poll_ctx_t *ctx) {
-    (void)ctx;
-    /* Last before durable state (#113): every state record now describes
-     * this tick. It used to run ahead of the snapshot block, so beacons,
-     * deauths, probe clients, PNL, devices, top hosts, sensors and the
-     * merged Wi-Fi model all reached the stream one tick late. */
-    jsonl_emit_connections(s);
-    jsonl_emit_twin_episodes(s);
-    jsonl_emit_state_snapshots(s);
-}
-
-/* ── DURABLE ──────────────────────────────────────────────── */
-
-static void st_db(sloth_state_t *s, const poll_ctx_t *ctx) {
-    /* Durable state (#42). Reads sloth_state_t directly rather than
-     * hanging off the jsonl emitters: every jsonl_emit_* short-circuits
-     * when no sink is open, so a --db-only run would otherwise write an
-     * empty database, and durable last_seen would ride the change-only
-     * cache and lag by up to the 300 s heartbeat. Its own cadence
-     * (--db-interval-secs), so slow storage never paces the poll loop. */
-    if (db_due(ctx->wall)) db_tick(s, ctx->wall);
-}
-
-const poll_stage_t g_poll_stages[] = {
+/* What `sloth` runs: every stage, in the order poll_data() always ran
+ * them. main.c passes this one. */
+static const poll_stage_t sloth_stages[] = {
     { "platform_net",      PH_PLATFORM, st_platform_net      },
-    { "health",            PH_PLATFORM, st_health            },
+    { "health_capture",    PH_PLATFORM, st_health_capture    },
+    { "health_gnss",       PH_PLATFORM, poll_st_health_gnss  },
+    { "health_rf",         PH_PLATFORM, poll_st_health_rf    },
+    { "health_host",       PH_PLATFORM, poll_st_health_host  },
+    { "capture_scope",     PH_PLATFORM, st_capture_scope     },
     { "stats_baseline",    PH_PLATFORM, st_stats_baseline    },
 
     { "capture_ring",      PH_SNAPSHOT, st_capture_ring      },
@@ -489,10 +404,12 @@ const poll_stage_t g_poll_stages[] = {
 #ifdef WITH_PCAP
     { "transit",           PH_DERIVE,   st_transit           },
 #endif
-    { "sensors",           PH_DERIVE,   st_sensors           },
+    { "sensors_wifi",      PH_DERIVE,   st_sensors_wifi      },
+    { "sensors_gnss",      PH_DERIVE,   poll_st_sensors_gnss },
+    { "sensors_rf",        PH_DERIVE,   poll_st_sensors_rf   },
     { "twins",             PH_DERIVE,   st_twins             },
 
-    { "alerts",            PH_ALERTS,   st_alerts            },
+    { "alerts",            PH_ALERTS,   poll_st_alerts       },
 
     { "research_coverage", PH_POST,     st_research_coverage },
     { "karma",             PH_POST,     st_karma             },
@@ -501,28 +418,61 @@ const poll_stage_t g_poll_stages[] = {
     { "positions",         PH_POST,     st_positions         },
     { "chanhop",           PH_POST,     st_chanhop           },
 
-    { "jsonl",             PH_EMIT,     st_jsonl             },
+    { "jsonl",             PH_EMIT,     poll_st_jsonl        },
 
-    { "db",                PH_DURABLE,  st_db                },
+    { "db",                PH_DURABLE,  poll_st_db           },
 };
-const int g_poll_stage_count =
-    (int)(sizeof(g_poll_stages) / sizeof(g_poll_stages[0]));
+const poll_table_t g_poll_sloth = {
+    sloth_stages, (int)(sizeof(sloth_stages) / sizeof(sloth_stages[0]))
+};
 
-void poll_ctx_init(poll_ctx_t *ctx) {
-    memset(ctx, 0, sizeof(*ctx));
-    ctx->wall    = sloth_wall();
-    ctx->mono_ms = sloth_mono_ms();
-}
+/* The Wi-Fi half: g_poll_sloth without the two RF stages, and nothing
+ * else different. No binary passes it yet; it is what sloth-wifi runs
+ * once the decoders leave at cutover (#211), and it exists now so the
+ * tests can hold it to "the union minus RF" while both are in the tree.
+ * A stage added above belongs here too unless it is RF's. */
+static const poll_stage_t wifi_stages[] = {
+    { "platform_net",      PH_PLATFORM, st_platform_net      },
+    { "health_capture",    PH_PLATFORM, st_health_capture    },
+    { "health_gnss",       PH_PLATFORM, poll_st_health_gnss  },
+    { "health_host",       PH_PLATFORM, poll_st_health_host  },
+    { "capture_scope",     PH_PLATFORM, st_capture_scope     },
+    { "stats_baseline",    PH_PLATFORM, st_stats_baseline    },
 
-void poll_tick(sloth_state_t *s, const poll_ctx_t *ctx) {
-    if (!s || !ctx) return;
-    for (int i = 0; i < g_poll_stage_count; i++)
-        g_poll_stages[i].fn(s, ctx);
-}
+    { "capture_ring",      PH_SNAPSHOT, st_capture_ring      },
+#ifdef WITH_PCAP
+    { "wifi_snapshots",    PH_SNAPSHOT, st_wifi_snapshots    },
+    { "wired_snapshots",   PH_SNAPSHOT, st_wired_snapshots   },
+#endif
+    { "eap_track",         PH_SNAPSHOT, st_eap_track         },
+    { "ble",               PH_SNAPSHOT, st_ble               },
 
-int poll_stage_index(const char *name) {
-    if (!name) return -1;
-    for (int i = 0; i < g_poll_stage_count; i++)
-        if (strcmp(g_poll_stages[i].name, name) == 0) return i;
-    return -1;
-}
+    { "history_bw",        PH_DERIVE,   st_history_bw        },
+#ifdef WITH_PCAP
+    { "channel_rf",        PH_DERIVE,   st_channel_rf        },
+#endif
+    { "scan",              PH_DERIVE,   st_scan              },
+    { "beacon_detect",     PH_DERIVE,   st_beacon_detect     },
+#ifdef WITH_PCAP
+    { "transit",           PH_DERIVE,   st_transit           },
+#endif
+    { "sensors_wifi",      PH_DERIVE,   st_sensors_wifi      },
+    { "sensors_gnss",      PH_DERIVE,   poll_st_sensors_gnss },
+    { "twins",             PH_DERIVE,   st_twins             },
+
+    { "alerts",            PH_ALERTS,   poll_st_alerts       },
+
+    { "research_coverage", PH_POST,     st_research_coverage },
+    { "karma",             PH_POST,     st_karma             },
+    { "alert_hot",         PH_POST,     st_alert_hot         },
+    { "devices_hosts",     PH_POST,     st_devices_hosts     },
+    { "positions",         PH_POST,     st_positions         },
+    { "chanhop",           PH_POST,     st_chanhop           },
+
+    { "jsonl",             PH_EMIT,     poll_st_jsonl        },
+
+    { "db",                PH_DURABLE,  poll_st_db           },
+};
+const poll_table_t g_poll_wifi = {
+    wifi_stages, (int)(sizeof(wifi_stages) / sizeof(wifi_stages[0]))
+};

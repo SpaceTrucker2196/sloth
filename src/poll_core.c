@@ -1,0 +1,79 @@
+#include <string.h>
+#include "poll.h"
+#include "sloth_clock.h"
+#include "sys_status.h"
+#include "persist_health.h"
+#include "alerts.h"
+#include "jsonl.h"
+#include "db.h"
+
+/* The poll runner, and the stages every daemon's table carries (#212).
+ *
+ * Nothing here names a source. The Wi-Fi, wired and BLE stages are
+ * src/poll.c, the GNSS ones src/poll_gnss.c and the RF ones
+ * src/poll_rf.c, so a table built from this file and the last two does
+ * not pull the capture stages in with it. */
+
+/* ── PLATFORM ─────────────────────────────────────────────── */
+
+void poll_st_health_host(sloth_state_t *s, const poll_ctx_t *ctx) {
+    /* Host status and the source inventory (src/sys_status.h): after
+     * the per-source polls, whose state it reads - every table places
+     * this stage behind its health_* stages. */
+    sys_status_poll(s, ctx->wall, ctx->mono_ms);
+    /* #96: per-sink write-failure counts, for the cannot-persist badge. */
+    persist_health_poll(&s->persist_health);
+}
+
+/* ── ALERTS ───────────────────────────────────────────────── */
+
+void poll_st_alerts(sloth_state_t *s, const poll_ctx_t *ctx) {
+    (void)ctx;
+    alerts_update(s);
+}
+
+/* ── EMIT ─────────────────────────────────────────────────── */
+
+void poll_st_jsonl(sloth_state_t *s, const poll_ctx_t *ctx) {
+    (void)ctx;
+    /* Last before durable state (#113): every state record now describes
+     * this tick. It used to run ahead of the snapshot block, so beacons,
+     * deauths, probe clients, PNL, devices, top hosts, sensors and the
+     * merged Wi-Fi model all reached the stream one tick late. */
+    jsonl_emit_connections(s);
+    jsonl_emit_twin_episodes(s);
+    jsonl_emit_state_snapshots(s);
+}
+
+/* ── DURABLE ──────────────────────────────────────────────── */
+
+void poll_st_db(sloth_state_t *s, const poll_ctx_t *ctx) {
+    /* Durable state (#42). Reads sloth_state_t directly rather than
+     * hanging off the jsonl emitters: every jsonl_emit_* short-circuits
+     * when no sink is open, so a --db-only run would otherwise write an
+     * empty database, and durable last_seen would ride the change-only
+     * cache and lag by up to the 300 s heartbeat. Its own cadence
+     * (--db-interval-secs), so slow storage never paces the poll loop. */
+    if (db_due(ctx->wall)) db_tick(s, ctx->wall);
+}
+
+/* ── the runner ───────────────────────────────────────────── */
+
+void poll_ctx_init(poll_ctx_t *ctx) {
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->wall    = sloth_wall();
+    ctx->mono_ms = sloth_mono_ms();
+}
+
+void poll_tick(const poll_table_t *t, sloth_state_t *s, const poll_ctx_t *ctx) {
+    if (!t || !s || !ctx) return;
+    for (int i = 0; i < t->count; i++)
+        t->stages[i].fn(s, ctx);
+}
+
+int poll_stage_index(const poll_table_t *t, const char *name) {
+    if (!t || !name) return -1;
+    for (int i = 0; i < t->count; i++)
+        if (strcmp(t->stages[i].name, name) == 0) return i;
+    return -1;
+}

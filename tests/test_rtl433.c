@@ -889,13 +889,13 @@ static void test_sensor_registry_rtl433(void) {
     memset(&s, 0, sizeof(s));
     poll_ctx_t ctx;
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     ASSERT_EQ(find_sensor(&s), -1);           /* nothing without --rtl433 */
 
     rtl433_set_source("file:/var/lib/rtl_433/events.jsonl");
     rtl433_note_missing();
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     int k = find_sensor(&s);
     ASSERT(k >= 0);
     if (k < 0) { sloth_clock_test_set(NULL, NULL); return; }
@@ -911,17 +911,17 @@ static void test_sensor_registry_rtl433(void) {
     rtl433_note_read(g_wall, 0, 0, 0);
     feed(L_TPMS, g_wall);
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ACTIVE);
     ASSERT_EQ(s.sensors[k].observed, 1u);
 
     rtl433_note_read_error("open: Permission denied");
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ERROR);
     rtl433_note_read(g_wall, 0, 0, 0);
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ACTIVE);
     /* SENSOR_RTL433 is appended, so every earlier kind keeps its
      * number: the kind is persisted (include/sloth.h). */

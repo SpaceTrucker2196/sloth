@@ -374,7 +374,7 @@ static void test_tick_rosters_platform_self_macs(void) {
 
     poll_ctx_t ctx;
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     ASSERT_EQ(g_fake_net.self_mac_calls, 1);
     ASSERT_EQ(ownership_is_self_mac(card), 1);
     ASSERT_EQ(ownership_is_self_mac(perm), 1);
@@ -384,7 +384,7 @@ static void test_tick_rosters_platform_self_macs(void) {
 
     /* Same interfaces, a second later: not asked again. */
     ctx.mono_ms += 1000;
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     ASSERT_EQ(g_fake_net.self_mac_calls, 1);
 
     /* A monitor vif appears: asked at once, and a pool address the phy
@@ -395,7 +395,7 @@ static void test_tick_rosters_platform_self_macs(void) {
     memcpy(g_fake_net.self_macs[3], vif, 6);
     g_fake_net.self_mac_count = 4;
     ctx.mono_ms += 1000;
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     ASSERT_EQ(g_fake_net.self_mac_calls, 2);
 
     /* Nothing in the interface set changes, but a P2P device came up:
@@ -404,7 +404,7 @@ static void test_tick_rosters_platform_self_macs(void) {
     memcpy(g_fake_net.self_macs[4], nan, 6);
     g_fake_net.self_mac_count = 5;
     ctx.mono_ms += SELF_RESCAN_MS;
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     ASSERT_EQ(g_fake_net.self_mac_calls, 3);
     ASSERT_EQ(ownership_is_self_mac(nan), 1);
 
@@ -460,7 +460,7 @@ static void test_recon_from_p2p_device_exonerated(void) {
         int (*saved)(uint8_t (*)[6], int) = g_platform.get_self_macs;
         if (!with) g_platform.get_self_macs = NULL;
         poll_ctx_init(&ctx);
-        poll_tick(&s, &ctx);
+        poll_tick(&g_poll_sloth, &s, &ctx);
         g_platform.get_self_macs = saved;
         s.pnl_count = 0;
         recon_from_p2p(&s, p2p);

@@ -1382,7 +1382,7 @@ static void test_poll_tick_writes_the_batch(void) {
     poll_ctx_t ctx;
     clock_at(0);
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     char *b = jl_read();
     ASSERT_EQ(count_of(b, "\"type\":\"sys_status\""), 1);
     ASSERT_EQ(count_of(b, "\"type\":\"source_status\""), SYS_SRC_COUNT);
@@ -1390,7 +1390,7 @@ static void test_poll_tick_writes_the_batch(void) {
     const char *sh = strstr(b, "\"type\":\"sensor_health\"");
     ASSERT(ss != NULL && sh != NULL && ss < sh);
     if (sh) ASSERT(strstr(sh, "\n{") == NULL);
-    ASSERT(poll_stage_index("health") >= 0);
+    ASSERT(poll_stage_index(&g_poll_sloth, "health_host") >= 0);
     done();
 }
 

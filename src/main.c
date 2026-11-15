@@ -229,8 +229,9 @@ static void headless_wait(int timeout_ms, int wake_fd) {
  * posture_render_md. */
 static rq_handle_t *g_research = NULL;
 
-/* One tick of the poll loop. The stages and their order are the phase
- * table in src/poll.c (#113); this only fills in what lives in the app
+/* One tick of the poll loop. The stages and their order are a phase
+ * table (#113) the application supplies (#212): g_poll_sloth in
+ * src/poll.c, every stage. This only fills in what lives in the app
  * rather than the core library. */
 static void poll_data(sloth_state_t *s) {
     poll_ctx_t ctx;
@@ -240,7 +241,7 @@ static void poll_data(sloth_state_t *s) {
 #ifdef WITH_PCAP
     ctx.chanhop   = chanhop_drive;
 #endif
-    poll_tick(s, &ctx);
+    poll_tick(&g_poll_sloth, s, &ctx);
 }
 
 static void handle_filter_input(sloth_state_t *s, int key) {

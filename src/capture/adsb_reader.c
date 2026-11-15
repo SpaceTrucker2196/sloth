@@ -12,7 +12,7 @@
 
 #include "adsb.h"
 #include "adsb_beast.h"
-#include "capture/capture.h"     /* capture_run_flag_t */
+#include "run_flag.h"            /* capture_run_flag_t */
 #include "capture/adsb_reader.h"
 #include "sloth_clock.h"
 #include "worker_thread.h"

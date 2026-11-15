@@ -12,7 +12,7 @@
 #include <unistd.h>
 
 #include "gps.h"
-#include "capture/capture.h"     /* capture_run_flag_t */
+#include "run_flag.h"            /* capture_run_flag_t */
 #include "capture/gps_reader.h"
 #include "sloth_clock.h"
 #include "worker_thread.h"

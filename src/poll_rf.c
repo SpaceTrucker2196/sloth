@@ -1,0 +1,97 @@
+#include "poll.h"
+#include "adsb.h"
+#include "aprs.h"
+#include "rtl433.h"
+#include "sensors.h"
+
+/* The RF decoders' poll stages and the RF table (#212): ADS-B, APRS and
+ * rtl_433. What sloth-rf will run (#211); today `sloth` runs the two
+ * stages from its own table (g_poll_sloth, src/poll.c) and nothing
+ * passes g_poll_rf but the tests. Nothing here, or reachable from the
+ * table below, is a capture stage. */
+
+void poll_st_health_rf(sloth_state_t *s, const poll_ctx_t *ctx) {
+    /* --adsb (#26 slice 1): expire the aircraft the decoder stopped
+     * reporting and copy the table, before anything this tick reads it. */
+    adsb_health_poll(s, ctx->wall, ctx->mono_ms);
+    /* --aprs: expire the stations unheard for an hour and copy the
+     * table and the packet ring, before anything this tick reads them. */
+    aprs_health_poll(s, ctx->wall, ctx->mono_ms);
+    /* --rtl433 (#208): copy the sub-GHz device table and its health,
+     * before anything this tick reads them. No expiry: a device heard
+     * once is a real observation of the band, and only the table
+     * filling removes a row. */
+    rtl433_health_poll(s, ctx->wall);
+}
+
+void poll_st_sensors_rf(sloth_state_t *s, const poll_ctx_t *ctx) {
+    /* ADS-B (#26 slice 1): the --adsb decoder file, observing parsed
+     * documents. A missing, unreadable or malformed file, or a decoder
+     * whose clock stopped advancing, is the registry's ERROR; recovery
+     * puts it back to ACTIVE (or PRESENT before any document). After the
+     * GNSS receiver, for the same id-slot reason. */
+    if (s->adsb.configured) {
+        sensor_t *ad = sensor_register(s, SENSOR_ADSB, "ADS-B decoder",
+                                       s->adsb.src, ctx->wall);
+        sensor_observe(ad, s->adsb.reads, ctx->wall);
+        if (s->adsb.state == ADSB_ERROR || s->adsb.state == ADSB_STALE)
+            sensor_set_state(ad, SENSOR_STATE_ERROR);
+        else
+            sensor_set_state(ad, s->adsb.reads ? SENSOR_STATE_ACTIVE
+                                               : SENSOR_STATE_PRESENT);
+    }
+    /* APRS: Dire Wolf's packet log, observing decoded packets. An
+     * unreadable file is the registry's ERROR; a missing one (Dire Wolf
+     * creates it with its first packet) and a quiet channel are not:
+     * PRESENT until a packet, ACTIVE after. After the ADS-B decoder,
+     * for the same id-slot reason. */
+    if (s->aprs.configured) {
+        sensor_t *ap = sensor_register(s, SENSOR_APRS, "APRS decoder",
+                                       s->aprs.src, ctx->wall);
+        sensor_observe(ap, s->aprs.packets, ctx->wall);
+        if (s->aprs.state == APRS_ERROR)
+            sensor_set_state(ap, SENSOR_STATE_ERROR);
+        else
+            sensor_set_state(ap, s->aprs.packets ? SENSOR_STATE_ACTIVE
+                                                 : SENSOR_STATE_PRESENT);
+    }
+    /* rtl_433 (#208): the --rtl433 event log, observing decoded
+     * messages. The same rule as APRS - an unreadable file is the
+     * registry's ERROR, a missing one (rtl_433 creates it with its
+     * first decode) and a quiet band are not. After the APRS decoder,
+     * for the same id-slot reason. */
+    if (s->rtl433.configured) {
+        sensor_t *rt = sensor_register(s, SENSOR_RTL433, "rtl_433 decoder",
+                                       s->rtl433.src, ctx->wall);
+        sensor_observe(rt, s->rtl433.msgs, ctx->wall);
+        if (s->rtl433.state == RTL433_ERROR)
+            sensor_set_state(rt, SENSOR_STATE_ERROR);
+        else
+            sensor_set_state(rt, s->rtl433.msgs ? SENSOR_STATE_ACTIVE
+                                                : SENSOR_STATE_PRESENT);
+    }
+}
+
+/* The RF half: the receiver and the decoders, the host's own state, the
+ * alert engine and the two sinks. health_gnss stays ahead of health_rf
+ * (the APRS region check) and health_host behind both (it reads them).
+ * A first cut for the tests to run; #213 owns what sloth-rf finally
+ * passes, the "positions" stage included - which daemon writes
+ * sensor_positions is not ruled on (ADR 0010). */
+static const poll_stage_t rf_stages[] = {
+    { "health_gnss",  PH_PLATFORM, poll_st_health_gnss  },
+    { "health_rf",    PH_PLATFORM, poll_st_health_rf    },
+    { "health_host",  PH_PLATFORM, poll_st_health_host  },
+
+    { "sensors_gnss", PH_DERIVE,   poll_st_sensors_gnss },
+    { "sensors_rf",   PH_DERIVE,   poll_st_sensors_rf   },
+
+    { "alerts",       PH_ALERTS,   poll_st_alerts       },
+
+    { "jsonl",        PH_EMIT,     poll_st_jsonl        },
+
+    { "db",           PH_DURABLE,  poll_st_db           },
+};
+const poll_table_t g_poll_rf = {
+    rf_stages, (int)(sizeof(rf_stages) / sizeof(rf_stages[0]))
+};

@@ -614,13 +614,13 @@ static void test_sensor_registry_aprs(void) {
     memset(&s, 0, sizeof(s));
     poll_ctx_t ctx;
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     ASSERT_EQ(find_sensor(&s), -1);           /* nothing without --aprs */
 
     aprs_set_source("file:/var/lib/direwolf/aprs.log");
     aprs_note_missing();
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     int k = find_sensor(&s);
     ASSERT(k >= 0);
     if (k < 0) { sloth_clock_test_set(NULL, NULL); return; }
@@ -631,17 +631,17 @@ static void test_sensor_registry_aprs(void) {
     aprs_note_read(g_wall, 0, 0, 0);
     feed(L_FIXED, g_mono);
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ACTIVE);
     ASSERT_EQ(s.sensors[k].observed, 1u);
 
     aprs_note_read_error("open: Permission denied");
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ERROR);
     aprs_note_read(g_wall, 0, 0, 0);
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ACTIVE);
     sloth_clock_test_set(NULL, NULL);
     aprs_reset();

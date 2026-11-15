@@ -34,6 +34,16 @@ looked at. The decision it serves is
 [ADR 0010](adr/0010-wifi-rf-daemons.md). Where it contradicts #211, the
 tree is the authority and §9 says so.
 
+It measures the tree as it stood before any slice. S1 (#212) has since
+landed, so three things below describe the parent of that commit and
+not the tree: §5 (the run flag is `src/run_flag.c` now, and the four
+readers include `run_flag.h`), the stage-table row of §3 with every
+`src/poll.c` line number (the table is data: `g_poll_sloth`,
+`g_poll_wifi`, `g_poll_rf`; the GNSS and RF stages are
+`src/poll_gnss.c` and `src/poll_rf.c`), and the `Makefile` line numbers
+of §2.1 (`RF_SRCS`, `GNSS_SRCS`). [[architecture]] has the current
+layout.
+
 Line numbers are those of commit `3148c553`. They move; the commands do
 not.
 

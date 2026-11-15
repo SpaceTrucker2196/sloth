@@ -8,9 +8,9 @@ type: reference
 
 **Summary**: How sloth's source is organised: header → CLI → platform vtable → capture pipeline → per-protocol parsers → state → views.
 
-**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `tests/tmp_dir.h`, `tests/test_tmp_dir.c`, `tests/main_test.c`, `web/tests/wt_tmp.h`, `web/tests/web_test_main.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `src/worker_thread.c`, `tests/test_worker_thread.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
+**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `tests/tmp_dir.h`, `tests/test_tmp_dir.c`, `tests/main_test.c`, `web/tests/wt_tmp.h`, `web/tests/web_test_main.c`, `src/sloth_clock.h`, `src/poll.h`, `src/poll.c`, `src/poll_core.c`, `src/poll_gnss.c`, `src/poll_rf.c`, `src/run_flag.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `src/worker_thread.c`, `tests/test_worker_thread.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-11-03 (#180: fragattack's sixth table, no new lock edge); 2026-11-02 (the system map: sensor, BLE scan helper, slothweb and its stores); 2026-10-27 (temporary files: the leak guard, interrupts and a long TMPDIR; #95, #118, #141, #132, #130, #109)
+**Last updated**: 2026-11-15 (#212: source groups, the run flag's own file, the stage table as data); 2026-11-03 (#180: fragattack's sixth table, no new lock edge); 2026-11-02 (the system map: sensor, BLE scan helper, slothweb and its stores); 2026-10-27 (temporary files: the leak guard, interrupts and a long TMPDIR; #95, #118, #141, #132, #130, #109)
 
 ---
 
@@ -226,6 +226,33 @@ Since #115 every binary is derived from one set of source lists in the
   (`LINUX_PLATFORM_SRCS`, `LINUX_WIFI_SRCS`, `PCAP_CORE_SRCS`,
   `SQLITE_CORE_SRCS`) the flags leave on. It is archived as
   `build/<cfg>/libsloth_core.a` and linked after the app objects.
+- `CORE_COMMON_SRCS` is the union of three named groups since #212, the
+  build seam for the two daemons of [[architecture-rf-split]] (ADR
+  0010). A new `src/*.c` still goes in exactly one list, once:
+  - `RF_SRCS` — only ADS-B, APRS or rtl_433: `src/adsb.c`,
+    `src/adsb_beast.c`, `src/aprs.c`, `src/rtl433.c`, their
+    `src/capture/*_reader.c`, `src/alerts/rules_adsb.c`,
+    `src/views/adsb.c`, `src/poll_rf.c`. What sloth-rf will own.
+  - `GNSS_SRCS` — only the `--gps` / `--location` receiver:
+    `src/gps.c`, `src/capture/gps_reader.c`, `src/position_track.c`,
+    `src/alerts/rules_gnss.c`, `src/views/gnss.c`, `src/poll_gnss.c`.
+    Both daemons link it.
+  - `CORE_BASE_SRCS` — the rest: the Wi-Fi, wired and BLE modules and
+    what both daemons share (the alert engine, JSONL, the clock, the
+    run flag, the poll runner). `src/sys_status.c` and
+    `src/alerts/rules_sensor.c` read every source and stay here.
+
+  The test for the first two is the include graph, not the topic: a
+  file belongs there only if nothing in the base has to move with it.
+  Every consumer still reads the union, so `sloth`, the test, no-flag,
+  bench and fuzz builds link what they linked before; no binary is
+  built from a group alone yet (#213).
+- The worker run flag (`capture_run_flag_t`, #95) is `src/run_flag.c`
+  / `run_flag.h` since #212. It was defined in `src/capture/capture.c`,
+  so the GNSS, ADS-B, APRS and rtl_433 readers needed the capture
+  module to have a stop flag; none of their objects references a
+  `capture.o` symbol now. `capture/capture.h` includes the new header,
+  so the capture, monitor and Bluetooth workers read it as before.
 - `sloth_test` links every `tests/*.c` against a core archive built
   from `CORE_SRCS_ALL` plus `src/tui.c`, `src/reset_all.c` and the
   library halves of the research tools (`TEST_ONLY_SRCS`), compiled
@@ -283,16 +310,52 @@ them; relaxing it belongs to the batched `agents/` change (#119).
 
 ## Tick
 
-One pass of the main loop is `poll_tick()` (`src/poll.c`, #113): a
+One pass of the main loop is `poll_tick()` (`src/poll_core.c`, #113): a
 table of named stages, each tagged with a phase, run in table order.
-`main.c :: poll_data()` only builds the `poll_ctx_t` — one wall and one
+`main.c :: poll_data()` builds the `poll_ctx_t` — one wall and one
 monotonic reading through the clock seam, the research handle, and two
 hooks for consumers that live in the app rather than the core library
-(the tui alert-hot list, the channel-hop scheduler).
+(the tui alert-hot list, the channel-hop scheduler) — and passes the
+table.
+
+The table is data the application supplies (#212). There are three
+(`poll_table_t`, `src/poll.h`):
+
+| Table | Stages | Defined in | Passed by |
+|---|---|---|---|
+| `g_poll_sloth` | every stage, in the order the one table always had | `src/poll.c` | `sloth` |
+| `g_poll_wifi` | `g_poll_sloth` without `health_rf` and `sensors_rf` | `src/poll.c` | nothing yet (sloth-wifi at cutover) |
+| `g_poll_rf` | `health_gnss`, `health_rf`, `health_host`, `sensors_gnss`, `sensors_rf`, `alerts`, `jsonl`, `db` | `src/poll_rf.c` | nothing yet (sloth-rf, #213) |
+
+The stage bodies are split the same way: the Wi-Fi, wired and BLE
+stages in `src/poll.c`, the receiver's in `src/poll_gnss.c`, the
+decoders' in `src/poll_rf.c`, and the runner with the four stages every
+table carries (`health_host`, `alerts`, `jsonl`, `db`) in
+`src/poll_core.c`. Two former stages became several, with the calls in
+the order the single functions made them:
+
+- `health` → `health_capture` (capture, monitor and Bluetooth workers),
+  `health_gnss`, `health_rf` (ADS-B, APRS, rtl_433), `health_host`
+  (`sys_status_poll()`, persist health), `capture_scope`. The receiver
+  runs before the decoders because the APRS region check reads
+  `s->gps`; the host status runs after both because it reads every
+  source's state.
+- `sensors` → `sensors_wifi` (monitor radio, HCI monitor, Ubertooth),
+  `sensors_gnss`, `sensors_rf`. A sensor's id is the registry slot it
+  is given and `wifi_merged` publishes it (`sensor_mask`,
+  `best_sensor`), so this order is part of the stream: the radio is
+  sensor 0 whatever else is configured.
+
+`tests/test_poll.c` spells out `g_poll_sloth`'s order stage by stage,
+holds the two halves to "a subsequence of the union, and between them
+all of it", pins the seven registry slots with every source configured,
+and runs each half alone: the RF half with no capture stage (no
+platform read, no radio registered), the Wi-Fi half with no decoder
+polled or registered.
 
 | Phase | What runs | Reads |
 |---|---|---|
-| PLATFORM | `g_platform` ifaces / conns / Wi-Fi / ARP / DHCP, capture + probe + persist health, scope pins, first-tick stats baseline | the kernel |
+| PLATFORM | `g_platform` ifaces / conns / Wi-Fi / ARP / DHCP; the health stages (capture workers, GNSS, RF decoders, host status + persist health); scope pins; first-tick stats baseline | the kernel |
 | SNAPSHOT | `capture_ring_snapshot()` first, then every capture-fed `*_snapshot(s)` | module tables, under their locks |
 | DERIVE | history + bandwidth, channel summary + control-frame annotation, RF quality, scan, beacon detection, recurring transit, sensor registration + merged Wi-Fi model, twins | this tick's snapshots |
 | ALERTS | `alerts_update()` | everything above |
@@ -301,8 +364,8 @@ hooks for consumers that live in the app rather than the core library
 | DURABLE | `db_tick()` on its own cadence | all of it |
 
 `test_phases_are_monotonic` pins that no stage precedes a stage of an
-earlier phase; the end-to-end tests in `tests/test_poll.c` run the real
-table on the fake platform. The hand-sequenced `poll_data()` it replaced
+earlier phase, in all three tables; the end-to-end tests in
+`tests/test_poll.c` run the real tables on the fake platform. The hand-sequenced `poll_data()` it replaced
 had six stale reads, each one tick late: JSONL state before the
 snapshots, twins before beacons, the channel summary before beacons,
 sensor and `wifi_merged` records before registration, recurring transit
@@ -386,7 +449,7 @@ file, two of its own mutexes are never held at once.
 | `action_snoop.c` `g_mu`, `g_btm_mu`, `g_ring_mu`, `g_saq_mu`, `g_mfpv_mu`, `g_csa_mu`, `g_rrm_mu` | protected-action counter; BTM steer pairs; BTM event ring; SA Query pairs; MFP violations; CSA events; RRM pairs | nothing |
 | `capture/capture.c` `g_mu` | worker exit reason / detail, per-stream freshness, allow-list valid bits | nothing |
 | `capture/probe.c` `g_frame_mu` | frame totals, bad-clock and radiotap-reject counters, last frame time | nothing |
-| `capture_run_flag_t.mu` (`capture.h`) | one worker's running / stop flag | nothing |
+| `capture_run_flag_t.mu` (`run_flag.h`) | one worker's running / stop flag | nothing |
 | `http_log.c` `g_flow_mu` | request→response flow pairing | nothing |
 | `auth_track`, `captive_portal`, `ctrl_frames`, `deauth_snoop`, `host_cache`, `mle`, `observe`, `jsonl`, `data_socket`, `updater` `g_mu` | that module's ring / table / file handle / client list / policy | nothing |
 

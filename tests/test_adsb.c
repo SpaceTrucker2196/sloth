@@ -1166,12 +1166,12 @@ static void test_sensor_registry_adsb(void) {
     memset(&s, 0, sizeof(s));
     poll_ctx_t ctx;
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     ASSERT_EQ(find_sensor(&s), -1);           /* nothing without --adsb */
 
     adsb_set_source("file:/run/readsb/aircraft.json");
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     int k = find_sensor(&s);
     ASSERT(k >= 0);
     if (k < 0) { sloth_clock_test_set(NULL, NULL); return; }
@@ -1182,19 +1182,19 @@ static void test_sensor_registry_adsb(void) {
     ASSERT_EQ(parse("{\"now\":1800000000,\"aircraft\":[{\"hex\":\"a0b1c2\"}]}"), 0);
     adsb_feed_doc(&g_doc, 0, g_wall, g_mono);
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ACTIVE);
     ASSERT_EQ(s.sensors[k].observed, 1u);
 
     g_wall += ADSB_STALE_S + 1; g_mono += (ADSB_STALE_S + 1) * 1000u;
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ERROR);   /* stale */
 
     ASSERT_EQ(parse("{\"now\":1800000020,\"aircraft\":[]}"), 0);
     adsb_feed_doc(&g_doc, 0, g_wall, g_mono);
     poll_ctx_init(&ctx);
-    poll_tick(&s, &ctx);
+    poll_tick(&g_poll_sloth, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ACTIVE);
     sloth_clock_test_set(NULL, NULL);
 }

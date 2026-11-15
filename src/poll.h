@@ -18,8 +18,9 @@
  * names its phase, the phases run in a fixed order, and
  * test_phases_are_monotonic pins that the table never goes backwards.
  *
- *   PLATFORM  kernel-facing reads through g_platform, the health polls,
- *             and the first-tick stats baseline over the interface list
+ *   PLATFORM  kernel-facing reads through g_platform, the health polls
+ *             (capture, GNSS, RF, then the host's own state), and the
+ *             first-tick stats baseline over the interface list
  *   SNAPSHOT  capture_ring_snapshot() first, then every module's
  *             *_snapshot(s): copy each capture-fed table into s
  *   DERIVE    everything computed from those snapshots: history,
@@ -80,17 +81,57 @@ typedef struct {
     void        (*fn)(sloth_state_t *s, const poll_ctx_t *ctx);
 } poll_stage_t;
 
-extern const poll_stage_t g_poll_stages[];
-extern const int          g_poll_stage_count;
+/* A stage table is data the application supplies (#212). There was one
+ * table, hard-coded in src/poll.c; since the sensor is to be two daemons
+ * (#211, ADR 0010) each passes its own.
+ *
+ *   g_poll_sloth  every stage - what `sloth` runs today    src/poll.c
+ *   g_poll_wifi   g_poll_sloth without the RF stages       src/poll.c
+ *   g_poll_rf     the receiver, the decoders, the engine
+ *                 and the sinks; no capture stage          src/poll_rf.c
+ *
+ * The first is the union of the other two, in the order the one table
+ * had, and tests/test_poll.c holds all three to that. */
+typedef struct {
+    const poll_stage_t *stages;
+    int                 count;
+} poll_table_t;
+
+extern const poll_table_t g_poll_sloth;
+extern const poll_table_t g_poll_wifi;
+extern const poll_table_t g_poll_rf;
+
+/* The stages more than one table carries, so more than one file names
+ * them. Everything else is static beside its table.
+ *
+ *   health_gnss, sensors_gnss   src/poll_gnss.c   both daemons
+ *   health_rf, sensors_rf       src/poll_rf.c     sloth-rf (and `sloth`)
+ *   health_host, alerts,
+ *   jsonl, db                   src/poll_core.c   both daemons
+ *
+ * Two orders are part of the contract and every table keeps them:
+ * health_gnss before health_rf (the APRS region check reads s->gps),
+ * and both before health_host (sys_status reads every source's state);
+ * and sensors_wifi, sensors_gnss, sensors_rf in that order, because a
+ * sensor's id is the registry slot it was given and wifi_merged
+ * publishes it. */
+void poll_st_health_gnss(sloth_state_t *s, const poll_ctx_t *ctx);
+void poll_st_sensors_gnss(sloth_state_t *s, const poll_ctx_t *ctx);
+void poll_st_health_rf(sloth_state_t *s, const poll_ctx_t *ctx);
+void poll_st_sensors_rf(sloth_state_t *s, const poll_ctx_t *ctx);
+void poll_st_health_host(sloth_state_t *s, const poll_ctx_t *ctx);
+void poll_st_alerts(sloth_state_t *s, const poll_ctx_t *ctx);
+void poll_st_jsonl(sloth_state_t *s, const poll_ctx_t *ctx);
+void poll_st_db(sloth_state_t *s, const poll_ctx_t *ctx);
 
 /* Fill ctx's clocks from the seam; research and hooks are left NULL. */
 void poll_ctx_init(poll_ctx_t *ctx);
 
-/* Run every stage in table order. */
-void poll_tick(sloth_state_t *s, const poll_ctx_t *ctx);
+/* Run every stage of `t` in table order. */
+void poll_tick(const poll_table_t *t, sloth_state_t *s, const poll_ctx_t *ctx);
 
-/* Index of the stage named `name`, or -1. Tests use it to assert one
- * stage runs before another without hard-coding table positions. */
-int poll_stage_index(const char *name);
+/* Index in `t` of the stage named `name`, or -1. Tests use it to assert
+ * one stage runs before another without hard-coding table positions. */
+int poll_stage_index(const poll_table_t *t, const char *name);
 
 #endif /* SLOTH_POLL_H */
