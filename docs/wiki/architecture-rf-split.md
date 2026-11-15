@@ -26,7 +26,7 @@ naming every place the tree and #211 disagree.
 `packaging/bin/sloth-migrate-sensor`, `tests/test_unit_file.c`,
 `tests/deploy/`, issues #211 to #217.
 
-**Last updated**: 2026-11-15 (#213, S2 landed: §10, the seams it cut, and what of §§2 to 4 it made stale); 2026-11-15 (S0, and the notes on S1)
+**Last updated**: 2026-11-15 (#213 review: §10's member count measured at 49, and what the `nm` gate missed and now holds); 2026-11-15 (#213, S2 landed: §10, the seams it cut, and what of §§2 to 4 it made stale); 2026-11-15 (S0, and the notes on S1)
 
 This page is a measurement, not a plan. It is slice S0's deliverable
 (#211) and it exists so that S1 to S6 cut along lines someone has
@@ -587,8 +587,16 @@ socket, the privilege drop, `tune` - against the archive as it stood
 after S1 pulled 159 members and libpcap, because the services §3 calls
 "once per process" each named the capture. The table is every
 dependency that had to go, with the symbol that carried it (from `nm`
-on the archive), in the order the link showed them. After: 46 members,
-and `DT_NEEDED` of libm, libsqlite3 and libc.
+on the archive), in the order the link showed them. After: 49 members
+in the default configuration (measured on the committed link: the
+archive members that define a global symbol the binary defines), and
+`DT_NEEDED` of libm, libsqlite3 and libc. The first count published
+here, 46, was taken before `gnss_flags.o`, `rf_flags.o` and
+`daemon_start.o` joined the link. With `--victron` (which reached
+`main` while this slice was in review, and is wired into sloth-rf
+through `rf_flags.o` and `jsonl_rf.o`) the link is 51: `victron.o` and
+`victron_reader.o`, a parser and a file tailer that name no capture
+module, so the gate below passes unchanged.
 
 | Shared object | Pulled, through | Cut |
 |---|---|---|
@@ -622,6 +630,26 @@ The Makefile's `check_rf_no_capture` holds the result on every link
 call into `bt_stream.c` added to `src/jsonl_rf.c` (the definitions
 list), and with `libver_format()` used there and `-lpcap` put back on
 the link line (the imports list).
+
+The gate works per archive member, so a name guards only the member
+that defines it. The first list named `linux_wifi_*` and `linux_get_*`
+for the platform backend and five decoders for 802.11; review found
+that `linux_tcpdiag.o` (the INET_DIAG socket), `linux_neigh.o`
+(rtnetlink), `discovery.o` (the mDNS advertisement) and seven frame
+decoders in files of their own define none of those names and need
+none of them, so a call from a shared file would have linked each with
+the gate green. The lists now name those members, a third list holds
+whole families by pattern (`linux_*`, `dot11_*`, `*_observe_frame`,
+`*_parse_frame`, `bt_*`, `ble_*`, `btle_*`, `evidence_*`, `eapol_*`,
+`discovery_*`, `view_*`, `tui_*`), and the imports list refuses the
+forward resolver and the calls a netlink or raw-socket module is made
+of (`sendto`, `sendmsg`, `recv*`, `ioctl`, `if_nametoindex`). Seen red,
+each with one reference added to `src/rf/platform_rf.c`:
+`linux_tcpdiag_fill` and `linux_neigh_parse` (imports: `recv`,
+`if_indextoname`), `discovery_unpublish` and `ctrl_observe_frame`
+(definitions), `radiotap_parse` (definitions), `getaddrinfo` and
+`sendto` (imports). The gate does not say no file about 802.11 is
+linked: the members in the paragraph above are.
 
 Rulings applied: both daemons write `sensor_positions` (the
 `positions` stage is in `g_poll_rf`; `device_positions` stays empty

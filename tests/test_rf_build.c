@@ -1,4 +1,5 @@
 #include <dirent.h>
+#include <regex.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -134,7 +135,73 @@ static void test_every_forbidden_definition_exists(void) {
         ASSERT(hit);
     }
     /* Each module the gate is for has a name on it. */
-    ASSERT_GE(names, 20);
+    ASSERT_GE(names, 40);
+    free(mk);
+}
+
+/* The family patterns beside the names (review of #213). A pattern
+ * cannot be held to "is defined", so each is held to a witness: a
+ * definition in the tree today that it matches whole, and that no name
+ * on the first list would have caught for it. A pattern with no
+ * witness here fails the count, so adding one means naming what it is
+ * for; a witness that is renamed away fails by name.
+ * (Seen red with linux_[a-z0-9_]+ dropped from the Makefile's list,
+ * and with the witness linux_neigh_parse misspelt.) */
+static void test_every_forbidden_pattern_has_a_witness(void) {
+    char *mk = slurp("Makefile");
+    ASSERT(mk != NULL);
+    if (!mk) return;
+    static char pats[1024];
+    ASSERT(mk_var(mk, "RF_FORBID_DEF_PATTERNS", pats, sizeof(pats)));
+    static const struct { const char *pat, *witness; } w[] = {
+        { "linux_[a-z0-9_]+",          "linux_neigh_parse" },
+        { "dot11_[a-z0-9_]+",          "dot11_ie_ssid" },
+        { "[a-z0-9_]+_observe_frame",  "frag_observe_frame" },
+        { "[a-z0-9_]+_parse_frame",    "assoc_request_parse_frame" },
+        { "bt_[a-z0-9_]+",             "bt_stream_feed" },
+        { "ble_[a-z0-9_]+",            "ble_mon_ingest" },
+        { "btle_[a-z0-9_]+",           "btle_ll_parse" },
+        { "evidence_[a-z0-9_]+",       "evidence_ring_init" },
+        { "eapol_[a-z0-9_]+",          "eapol_observe_frame" },
+        { "discovery_[a-z0-9_]+",      "discovery_unpublish" },
+        { "view_[a-z0-9_]+",           "view_mdns_draw" },
+        { "tui_[a-z0-9_]+",            "tui_init" },
+    };
+    static const char *const dirs[] = {
+        "src", "src/capture", "src/platform", "src/alerts", "src/views"
+    };
+    const size_t nw = sizeof(w) / sizeof(w[0]);
+    for (size_t i = 0; i < nw; i++) {
+        char want[96], re[96];
+        snprintf(want, sizeof(want), " %s ", w[i].pat);
+        if (!strstr(pats, want))
+            fprintf(stderr, "    RF_FORBID_DEF_PATTERNS lost%s\n", want);
+        ASSERT(strstr(pats, want) != NULL);
+        /* Anchored as the Makefile anchors the whole alternation. */
+        snprintf(re, sizeof(re), "^(%s)$", w[i].pat);
+        regex_t rx;
+        ASSERT_EQ(regcomp(&rx, re, REG_EXTENDED | REG_NOSUB), 0);
+        ASSERT_EQ(regexec(&rx, w[i].witness, 0, NULL, 0), 0);
+        /* And it is a family, not a name: what sloth-rf does link
+         * stays outside it. */
+        ASSERT(regexec(&rx, "wifi_downgrade_update", 0, NULL, 0) != 0);
+        ASSERT(regexec(&rx, "capture_run_flag_get", 0, NULL, 0) != 0);
+        ASSERT(regexec(&rx, "adsb_reader_run", 0, NULL, 0) != 0);
+        regfree(&rx);
+        int hit = 0;
+        for (size_t d = 0; d < sizeof(dirs) / sizeof(dirs[0]) && !hit; d++)
+            hit = defined_under(dirs[d], w[i].witness);
+        if (!hit)
+            fprintf(stderr, "    the witness %s for %s is defined nowhere "
+                            "under src/\n", w[i].witness, w[i].pat);
+        ASSERT(hit);
+    }
+    int listed = 0;
+    for (char *tok = strtok(pats, " \t"); tok; tok = strtok(NULL, " \t"))
+        listed++;
+    ASSERT_EQ(listed, (int)nw);
+    /* Both lists reach the expression the recipe matches against. */
+    ASSERT(strstr(mk, "$(strip $(RF_FORBID_DEFS) $(RF_FORBID_DEF_PATTERNS))") != NULL);
     free(mk);
 }
 
@@ -156,6 +223,16 @@ static void test_the_lists_cover_each_module(void) {
         " alert_pcap_dump ", " evidence_export_pcap_unique ",
         " linux_wifi_scan ", " linux_wifi_set_channel ", " dns_resolve ",
         " tui_init ",
+        /* The members that define none of the names above and need
+         * none of them (review of #213): the INET_DIAG and rtnetlink
+         * readers, the lease, pid and self-MAC readers, the mDNS
+         * advertisement, and the frame decoders in files of their own. */
+        " linux_tcpdiag_fill ", " linux_neigh6_fill ", " linux_get_dhcp ",
+        " linux_get_self_macs ", " resolve_pids ", " discovery_publish ",
+        " action_observe_frame ", " frag_observe_frame ",
+        " ctrl_observe_frame ", " karma_observe_frame ",
+        " assoc_request_parse_frame ", " pm_forge_observe_frame ",
+        " mle_bss_observe_frame ", " dot11_ie_find ", " dot11_data_addrs ",
     };
     for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
         if (!strstr(defs, want[i]))
@@ -164,6 +241,21 @@ static void test_the_lists_cover_each_module(void) {
     }
     ASSERT(strstr(imps, " pcap_[a-z_]+ ") != NULL);
     ASSERT(strstr(imps, " getnameinfo ") != NULL);
+    /* The forward resolver, and the calls a netlink or raw-socket
+     * module is made of; sloth-rf's own sockets use none of them. */
+    static const char *const want_imp[] = {
+        " getaddrinfo ", " gethostbyname[0-9a-z_]* ", " sendto ",
+        " sendmsg ", " recv ", " recvfrom ", " recvmsg ", " ioctl ",
+        " if_nametoindex ", " initscr ", " newterm ",
+    };
+    for (size_t i = 0; i < sizeof(want_imp) / sizeof(want_imp[0]); i++) {
+        if (!strstr(imps, want_imp[i]))
+            fprintf(stderr, "    RF_FORBID_IMPORTS lost%s\n", want_imp[i]);
+        ASSERT(strstr(imps, want_imp[i]) != NULL);
+    }
+    /* send() is not on it: gpsd's ?WATCH and the data socket's
+     * writes are this daemon's, announced. */
+    ASSERT(strstr(imps, " send ") == NULL);
     free(mk);
 }
 
@@ -195,6 +287,9 @@ static void test_recipe_links_and_gates_sloth_rf(void) {
         ASSERT(strstr(rule, " $(LDFLAGS)\n") == NULL ||
                strstr(rule, " $(LDFLAGS)\n") > end);
     }
+    /* The HCI-builder gate's include scan reads sloth-rf's own three
+     * sources too, not only sloth's and the archive's. */
+    ASSERT(strstr(mk, "$(APP_SRCS) $(RF_APP_SRCS) $(CORE_SRCS) /dev/null") != NULL);
     ASSERT(strstr(mk, "\nall: $(RF_TARGET)\n") != NULL);
     ASSERT(strstr(mk, "\n\trm -f sloth-rf\n") != NULL);
     /* A failed gate removes the binary, so the next make cannot call it
@@ -292,6 +387,7 @@ static void test_shared_files_include_no_capture_header(void) {
 void run_rf_build_tests(void) {
     TEST_SUITE("sloth-rf: the build and its nm gate (#213)");
     RUN_TEST(test_every_forbidden_definition_exists);
+    RUN_TEST(test_every_forbidden_pattern_has_a_witness);
     RUN_TEST(test_the_lists_cover_each_module);
     RUN_TEST(test_recipe_links_and_gates_sloth_rf);
     RUN_TEST(test_shared_files_include_no_capture_header);

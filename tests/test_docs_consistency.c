@@ -1952,6 +1952,60 @@ static void test_every_cli_flag_is_in_wiki_reference(void) {
     free(ref);
 }
 
+/* The sloth-rf table is held to sloth-rf's parser, both ways (review
+ * of #213). The two walks around this one ask about the whole page:
+ * nearly every sloth-rf flag is also a row of sloth's tables, so a row
+ * deleted from the sloth-rf table stayed green, and a sloth-only flag
+ * added to it stayed green because "either daemon parses it". Here the
+ * section between `## sloth-rf` and the next `## ` is taken alone and
+ * its first-cell flags must be exactly the long options
+ * src/rf/rf_args.c compares.
+ * (Seen red three ways: the `--ticks` row deleted, a `--hop` row
+ * added, and the section heading renamed.) */
+static void test_sloth_rf_table_is_sloth_rf_flags(void) {
+    char *ref = slurp(DC_CLI_REF);
+    char *rf  = slurp(DC_RF_ARGS);
+    ASSERT(ref != NULL);
+    ASSERT(rf != NULL);
+    if (!ref || !rf) { free(ref); free(rf); return; }
+    char *sec = strstr(ref, "\n## sloth-rf\n");
+    ASSERT(sec != NULL);
+    if (!sec) { free(ref); free(rf); return; }
+    sec += 1;
+    char *end = strstr(sec + 3, "\n## ");
+    if (end) *end = '\0';
+
+    static char doc[DC_MAX_OPTS][DC_OPT_LEN], parsed[DC_MAX_OPTS][DC_OPT_LEN];
+    int dn = dc_scan_doc_opts(sec, doc);
+    int pn = dc_scan_argv_opts(rf, parsed);
+    ASSERT_GE(pn, 20);
+    int missing = 0, extra = 0;
+    for (int i = 0; i < pn; i++) {
+        int found = 0;
+        for (int j = 0; j < dn && !found; j++)
+            if (!strcmp(doc[j], parsed[i])) found = 1;
+        if (found) continue;
+        missing++;
+        fprintf(stderr, "    %s parses --%s; the sloth-rf table of %s has "
+                        "no row for it\n", DC_RF_ARGS, parsed[i], DC_CLI_REF);
+    }
+    for (int j = 0; j < dn; j++) {
+        int found = 0;
+        for (int i = 0; i < pn && !found; i++)
+            if (!strcmp(doc[j], parsed[i])) found = 1;
+        if (found) continue;
+        extra++;
+        fprintf(stderr, "    the sloth-rf table of %s has a row for --%s; "
+                        "%s parses no such option\n", DC_CLI_REF, doc[j],
+                DC_RF_ARGS);
+    }
+    ASSERT_EQ(missing, 0);
+    ASSERT_EQ(extra, 0);
+    ASSERT_EQ(dn, pn);
+    free(ref);
+    free(rf);
+}
+
 static void test_wiki_reference_documents_no_dead_flag(void) {
     char *src = slurp("src/main.c");
     char *ref = slurp(DC_CLI_REF);
@@ -2630,6 +2684,7 @@ void run_docs_consistency_tests(void) {
     TEST_SUITE("CLI surface vs. wiki reference (#103)");
     RUN_TEST(test_cli_opt_extractor);
     RUN_TEST(test_every_cli_flag_is_in_wiki_reference);
+    RUN_TEST(test_sloth_rf_table_is_sloth_rf_flags);
     RUN_TEST(test_wiki_reference_documents_no_dead_flag);
     RUN_TEST(test_charter_section_and_flag_extractor);
     RUN_TEST(test_every_charter_flag_is_parsed);

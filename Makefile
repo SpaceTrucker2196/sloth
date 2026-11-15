@@ -588,7 +588,7 @@ define check_no_hci_builder
 	@syms=$$(nm $@) || { echo "$@: nm failed; cannot check for the HCI builder" >&2; rm -f $@; exit 1; }; \
 	 bad=$$(printf '%s\n' "$$syms" | awk '$$NF ~ /^_?bles_/ { print $$NF }' | head -n 3 | tr '\n' ' '); \
 	 [ -z "$$bad" ] || { echo "$@: links sloth-ble-scan's HCI builder ($$bad); MISSION.md §2: sloth sends no HCI command" >&2; rm -f $@; exit 1; }; \
-	 inc=$$(grep -lE 'ble_scan_cmd|ble_scan/' $(APP_SRCS) $(CORE_SRCS) /dev/null); \
+	 inc=$$(grep -lE 'ble_scan_cmd|ble_scan/' $(APP_SRCS) $(RF_APP_SRCS) $(CORE_SRCS) /dev/null); \
 	 [ -z "$$inc" ] || { echo "$@: $$inc names sloth-ble-scan's builder; MISSION.md §2: sloth sends no HCI command" >&2; rm -f $@; exit 1; }
 endef
 
@@ -713,28 +713,60 @@ $(RF_TARGET): $(RF_APP_OBJS) $(CORE_LIB) $(RF_LINK_STAMP)
 # capture module would pull that module, and through it the rest, into
 # this binary without a line of this file changing. That is not
 # hypothetical: before #213 cut the seams, linking these same roots
-# pulled 159 archive members and libpcap; after, 46 and none.
+# pulled 159 archive members and libpcap; after, 49 and none (51 with
+# --victron's victron.o and victron_reader.o, which name no capture).
 #
-# Two lists, both explicit.
+# Three lists, all explicit.
 #   RF_FORBID_IMPORTS: dynamic symbols it must not import. Any libpcap
-#     call; getnameinfo, the resolver's (src/dns.c is the one module
-#     that can put a query on the wire); and ncurses, which a headless
-#     daemon has no use for.
+#     call; every resolver entry (getnameinfo is the one src/dns.c
+#     uses, the one module that can put a query on the wire; the
+#     forward calls are here so a second resolver cannot arrive by
+#     another name); ncurses, which a headless daemon has no use for;
+#     and the calls the netlink and raw-socket modules are made of
+#     (sendto, sendmsg, recv*, ioctl, if_nametoindex), none of which
+#     this daemon's own sockets use: it read()s them, and its one
+#     write to a peer is send() of gpsd's ?WATCH. A module the two
+#     lists below miss still trips here if it talks to the kernel.
 #   RF_FORBID_DEFS: sloth's own entry points, one or two per module
 #     that must stay out, chosen because nothing can use the module
 #     without them - the IP capture, the 802.11 monitor and its frame
 #     decoders, the Bluetooth HCI monitor and the Ubertooth stream, the
 #     savefile replay, the evidence ring and the two pcap exporters, the
-#     platform backend (nl80211, rtnetlink, INET_DIAG; sloth-rf's own
+#     platform backend member by member (nl80211, rtnetlink, INET_DIAG,
+#     the neighbour, lease, pid and self-MAC readers; sloth-rf's own
 #     g_platform, src/rf/platform_rf.c, reads files and nothing else),
-#     the resolver and the terminal.
+#     the mDNS advertisement, the resolver and the terminal.
+#   RF_FORBID_DEF_PATTERNS: the same by family, so a member added to
+#     one later is held without a line here: every linux_* backend
+#     function, every dot11_* helper, every *_observe_frame and
+#     *_parse_frame decoder, the Bluetooth sources, the evidence and
+#     handshake stores, the advertisement, every view and the terminal.
+# The gate works per archive member: a name guards the member that
+# defines it. That is why the platform backend and the 802.11 decoders
+# are listed member by member and not by one name each (review of
+# #213: linux_tcpdiag.o, linux_neigh.o, discovery.o and seven frame
+# decoders define none of the names the first list had).
+#
+# What it does not claim: that no file about 802.11 is linked.
+# wifi_assess.o, attack_hw.o and wifi_oui_attacker.o are, as tables and
+# labels over state this daemon never fills
+# (docs/wiki/architecture-rf-split.md section 10). What is held out is
+# everything that opens, decodes or captures.
+#
 # A name on the second list that is renamed stops guarding, so
 # tests/test_rf_build.c holds every one of them to being defined in the
-# tree today.
+# tree today, and every pattern to matching a definition it names.
 #
 # A failure deletes the binary, so the next `make` cannot call it up to
 # date.
-RF_FORBID_IMPORTS = pcap_[a-z_]+ getnameinfo initscr newterm
+RF_FORBID_IMPORTS = pcap_[a-z_]+ getnameinfo getaddrinfo \
+                    gethostbyname[0-9a-z_]* gethostbyaddr[a-z_]* \
+                    (__)?res_[a-z]+ \
+                    sendto sendmsg sendmmsg \
+                    recv recvfrom recvmsg recvmmsg \
+                    __recv_chk __recvfrom_chk \
+                    ioctl if_nametoindex if_indextoname \
+                    initscr newterm
 RF_FORBID_DEFS    = capture_open capture_run capture_start \
                     probe_open probe_run \
                     bt_monitor_open bt_capture_run ble_mon_ingest \
@@ -742,23 +774,35 @@ RF_FORBID_DEFS    = capture_open capture_run capture_start \
                     replay_run \
                     dot11_frame_decode radiotap_parse beacon_parse_frame \
                     deauth_parse_frame eapol_observe_frame \
+                    action_observe_frame frag_observe_frame \
+                    ctrl_observe_frame karma_observe_frame \
+                    assoc_request_parse_frame pm_forge_observe_frame \
+                    mle_bss_observe_frame dot11_ie_find dot11_data_addrs \
                     evidence_ring_init alert_pcap_dump \
                     evidence_export_pcap_unique \
                     linux_wifi_scan linux_wifi_set_channel \
                     linux_wifi_get_stations \
                     linux_get_ifaces linux_get_conns \
+                    linux_tcpdiag_fill linux_neigh6_fill linux_get_dhcp \
+                    linux_get_self_macs resolve_pids \
+                    discovery_publish \
                     dns_init dns_resolve \
                     tui_init
+RF_FORBID_DEF_PATTERNS = linux_[a-z0-9_]+ dot11_[a-z0-9_]+ \
+                    [a-z0-9_]+_observe_frame [a-z0-9_]+_parse_frame \
+                    bt_[a-z0-9_]+ ble_[a-z0-9_]+ btle_[a-z0-9_]+ \
+                    evidence_[a-z0-9_]+ eapol_[a-z0-9_]+ \
+                    discovery_[a-z0-9_]+ view_[a-z0-9_]+ tui_[a-z0-9_]+
 rf_empty :=
 rf_space := $(rf_empty) $(rf_empty)
 RF_FORBID_IMPORTS_RE = ^_?($(subst $(rf_space),|,$(strip $(RF_FORBID_IMPORTS))))$$
-RF_FORBID_DEFS_RE    = ^_?($(subst $(rf_space),|,$(strip $(RF_FORBID_DEFS))))$$
+RF_FORBID_DEFS_RE    = ^_?($(subst $(rf_space),|,$(strip $(RF_FORBID_DEFS) $(RF_FORBID_DEF_PATTERNS))))$$
 define check_rf_no_capture
 	@syms=$$(nm $@) || { echo "$@: nm failed; cannot check for the capture" >&2; rm -f $@; exit 1; }; \
 	 bad=$$(printf '%s\n' "$$syms" | awk 'NF == 2 && $$1 == "U" { sub(/@.*/, "", $$2); if ($$2 ~ /$(RF_FORBID_IMPORTS_RE)/) print $$2 }' | sort -u | head -n 4 | tr '\n' ' '); \
-	 [ -z "$$bad" ] || { echo "$@: imports $$bad- sloth-rf links no libpcap, no resolver and no terminal (MISSION.md §2, ADR 0010); a shared file has grown a call into a capture module" >&2; rm -f $@; exit 1; }; \
+	 [ -z "$$bad" ] || { echo "$@: imports $$bad- sloth-rf links no libpcap, no resolver, no terminal and no netlink or raw-socket call (MISSION.md §2, ADR 0010); a shared file has grown a call into a capture or platform module" >&2; rm -f $@; exit 1; }; \
 	 bad=$$(printf '%s\n' "$$syms" | awk 'NF == 3 && $$2 != "U" && $$3 ~ /$(RF_FORBID_DEFS_RE)/ { print $$3 }' | sort -u | head -n 4 | tr '\n' ' '); \
-	 [ -z "$$bad" ] || { echo "$@: links $$bad- sloth-rf links no capture, 802.11, Bluetooth, nl80211, resolver or terminal code (MISSION.md §2, ADR 0010); cut the dependency, do not shorten this list" >&2; rm -f $@; exit 1; }
+	 [ -z "$$bad" ] || { echo "$@: links $$bad- sloth-rf links no capture, 802.11 frame decoder, Bluetooth source, platform backend (nl80211, rtnetlink, INET_DIAG), mDNS advertisement, resolver, view or terminal code (MISSION.md §2, ADR 0010); cut the dependency, do not shorten this list" >&2; rm -f $@; exit 1; }
 endef
 
 all: $(RF_TARGET)

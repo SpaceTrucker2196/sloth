@@ -399,12 +399,18 @@ jobs:
           grep -Eq -- '-D_FORTIFY_SOURCE=3\b' build.log || {
             echo "FAIL: no -D_FORTIFY_SOURCE=3 in any compile command" >&2; fail=1;
           }
-          grep -E -- '-o sloth ' build.log | grep -q -- '-pie\b' || {
-            echo "FAIL: the sloth link command has no -pie" >&2; fail=1;
-          }
-          grep -E -- '-o sloth ' build.log | grep -Eq -- '-Wl,-z,relro,-z,now\b' || {
-            echo "FAIL: the sloth link command has no -Wl,-z,relro,-z,now" >&2; fail=1;
-          }
+          # Both daemons (#213): sloth-rf opens the same data socket and
+          # links through its own RF_LDFLAGS, a filtered copy of LDFLAGS,
+          # so its line is checked for itself. `-o sloth ` does not match
+          # `-o sloth-rf `, and the reverse.
+          for bin in sloth sloth-rf; do
+            grep -E -- "-o $bin " build.log | grep -q -- '-pie\b' || {
+              echo "FAIL: the $bin link command has no -pie" >&2; fail=1;
+            }
+            grep -E -- "-o $bin " build.log | grep -Eq -- '-Wl,-z,relro,-z,now\b' || {
+              echo "FAIL: the $bin link command has no -Wl,-z,relro,-z,now" >&2; fail=1;
+            }
+          done
 
           exit "$fail"
 
@@ -413,30 +419,32 @@ jobs:
           set -e
           fail=0
 
-          readelf -h sloth | grep -q 'Type:.*DYN' || {
-            echo "FAIL: sloth is not a Position-Independent Executable (readelf -h Type != DYN)" >&2
-            fail=1
-          }
+          for bin in sloth sloth-rf; do
+            readelf -h "$bin" | grep -q 'Type:.*DYN' || {
+              echo "FAIL: $bin is not a Position-Independent Executable (readelf -h Type != DYN)" >&2
+              fail=1
+            }
 
-          readelf -l sloth | grep -q GNU_RELRO || {
-            echo "FAIL: sloth has no GNU_RELRO program header" >&2
-            fail=1
-          }
+            readelf -l "$bin" | grep -q GNU_RELRO || {
+              echo "FAIL: $bin has no GNU_RELRO program header" >&2
+              fail=1
+            }
 
-          readelf -d sloth | grep -q BIND_NOW || {
-            echo "FAIL: sloth is not eagerly bound (no BIND_NOW dynamic flag) - RELRO is partial, not full" >&2
-            fail=1
-          }
+            readelf -d "$bin" | grep -q BIND_NOW || {
+              echo "FAIL: $bin is not eagerly bound (no BIND_NOW dynamic flag) - RELRO is partial, not full" >&2
+              fail=1
+            }
 
-          nm -D sloth | grep -q '__stack_chk_fail' || {
-            echo "FAIL: sloth has no __stack_chk_fail reference - stack protector missing" >&2
-            fail=1
-          }
+            nm -D "$bin" | grep -q '__stack_chk_fail' || {
+              echo "FAIL: $bin has no __stack_chk_fail reference - stack protector missing" >&2
+              fail=1
+            }
 
-          nm -D sloth | grep -q '_chk@' || {
-            echo "FAIL: sloth calls no fortified (_chk) libc symbol - _FORTIFY_SOURCE not in effect" >&2
-            fail=1
-          }
+            nm -D "$bin" | grep -q '_chk@' || {
+              echo "FAIL: $bin calls no fortified (_chk) libc symbol - _FORTIFY_SOURCE not in effect" >&2
+              fail=1
+            }
+          done
 
           exit "$fail"
 
@@ -452,12 +460,15 @@ jobs:
           tls='lib(ssl|crypto|mbedtls|mbedx509|mbedcrypto|gnutls|wolfssl|nss3|bearssl)[.-]'
           # ldd, not readelf NEEDED: a TLS library pulled in through
           # another dependency (libcurl-style) is linked all the same.
+          # Both daemons serve the data socket (#213).
           check() {
-            if ldd sloth | grep -Eq "$tls"; then
-              echo "FAIL: $1 build links a TLS library:" >&2
-              ldd sloth | grep -E "$tls" >&2
-              fail=1
-            fi
+            for bin in sloth sloth-rf; do
+              if ldd "$bin" | grep -Eq "$tls"; then
+                echo "FAIL: $1 build of $bin links a TLS library:" >&2
+                ldd "$bin" | grep -E "$tls" >&2
+                fail=1
+              fi
+            done
           }
           check default
           make clean && make embedded

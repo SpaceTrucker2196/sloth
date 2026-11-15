@@ -271,6 +271,16 @@ static void test_rf_stream_is_only_its_own(void) {
     ASSERT(strstr(b, "\"sources\":4,\"sources_configured\":4,") != NULL);
     ASSERT(strstr(a, "\"sources\":8,") != NULL);
 
+    /* sys_status's beacon-recall block is the beacon table's, which
+     * this daemon does not have: absent, not zero
+     * (docs/wiki/jsonl-schema.md says so). `sloth`, same run, writes
+     * it. (Seen red with has_recall forced to 1 in
+     * src/sys_status.c's sample.) */
+    ASSERT(strstr(b, "\"type\":\"sys_status\"") != NULL);
+    ASSERT(strstr(b, "beacon_recall_") == NULL);
+    ASSERT(strstr(a, "\"beacon_recall_slots\":") != NULL);
+    ASSERT(strstr(a, "\"beacon_recall_quiet\":") != NULL);
+
     /* The daemon says which it is, once per record. */
     ASSERT(strstr(b, "\"daemon\":\"rf\"") != NULL);
     ASSERT(strstr(b, "\"daemon\":\"wifi\"") == NULL);

@@ -90,11 +90,12 @@ int daemon_privdrop_apply(const privdrop_req_t *req,
 }
 
 const char *daemon_data_socket_default(const char *dir, const char *spec,
-                                       const char *runtime_dir) {
+                                       const char *runtime_dir,
+                                       const char *tcp_example) {
     char why[256];
     if (data_socket_default_dir_ok(dir, why, sizeof(why))) return spec;
     char msg[768];
-    data_socket_default_refusal_at(spec, dir, runtime_dir, why, geteuid(),
+    data_socket_default_refusal_at(spec, dir, runtime_dir, tcp_example, why, geteuid(),
                                    msg, sizeof(msg));
     fputs(msg, stderr);
     return NULL;

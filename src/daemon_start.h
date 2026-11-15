@@ -47,9 +47,11 @@ int daemon_privdrop_apply(const privdrop_req_t *req,
 /* A bare --data-socket: `spec` when `dir` is fit to hold it, else NULL
  * with the refusal and its remedy printed (the caller exits 2). Never a
  * TCP spec. `runtime_dir` is the systemd RuntimeDirectory= name the
- * remedy cites. */
+ * remedy cites, `tcp_example` the explicit loopback transport it
+ * offers: the calling daemon's own, never the other's port. */
 const char *daemon_data_socket_default(const char *dir, const char *spec,
-                                       const char *runtime_dir);
+                                       const char *runtime_dir,
+                                       const char *tcp_example);
 
 /* --strict's refusal of a routable --data-socket, printed. The caller
  * has the profile's verdict (observe_resolve_profile()) and exit code. */

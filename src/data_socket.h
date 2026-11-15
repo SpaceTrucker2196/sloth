@@ -103,11 +103,22 @@ void data_socket_default_refusal(const char *why, uid_t euid,
 /* The same refusal for another daemon's default (#213): sloth-rf's bare
  * flag means DATA_SOCKET_RF_DEFAULT_SPEC, in a runtime directory of its
  * own, and is refused in the same words when that directory is not fit.
- * data_socket_default_refusal() is this with `sloth`'s three values. */
+ * data_socket_default_refusal() is this with `sloth`'s four values.
+ *
+ * `tcp_example` is the explicit transport the last line offers. It is
+ * the daemon's own too: 8765 is the loopback port sloth's consumers
+ * are documented to find sloth on (docs/wiki/cli-reference.md), so
+ * sloth-rf's remedy must not send an operator to it - on a host that
+ * runs both daemons the bind fails, or the RF stream lands where a
+ * consumer expects sloth's records. sloth-rf has no port of its own to
+ * name, so its line names none and says which one is taken. */
+#define DATA_SOCKET_TCP_EXAMPLE     "tcp:127.0.0.1:8765"
 #define DATA_SOCKET_RF_DEFAULT_DIR  "/run/sloth-rf"
 #define DATA_SOCKET_RF_DEFAULT_SPEC "unix:" DATA_SOCKET_RF_DEFAULT_DIR "/sloth-rf.sock"
+#define DATA_SOCKET_RF_TCP_EXAMPLE  "tcp:127.0.0.1:PORT (a port of its own; 8765 is sloth's)"
 void data_socket_default_refusal_at(const char *spec, const char *dir,
                                     const char *runtime_dir,
+                                    const char *tcp_example,
                                     const char *why, uid_t euid,
                                     char *out, size_t outsz);
 

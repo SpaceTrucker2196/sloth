@@ -120,7 +120,7 @@ int main(int argc, char **argv) {
     /* Warn, do not refuse: a run with no sink still exercises the
      * readers, but it must not look like one that records. */
     if (!a.jsonl_path && !a.data_socket && !a.db_path)
-        fprintf(stderr, "sloth-rf: no --jsonl, --data-socket or --db: "
+        fprintf(stderr, "sloth-rf: no -o, --data-socket or --db: "
                         "this run produces no output\n");
     if (!a.rf.adsb && !a.rf.aprs && !a.rf.rtl433 && !a.rf.victron &&
         !a.gnss.gps)
@@ -135,8 +135,12 @@ int main(int argc, char **argv) {
     rtl433_reader_run();
     victron_reader_run();
     event_wake_init();
+    /* What is true of every run, and no more: a gpsd:// source is sent
+     * its one ?WATCH line and a routable --data-socket streams to
+     * whoever connects, each announced on its own line above, so this
+     * line does not say "nothing transmitted" after them. */
     fprintf(stderr, "sloth-rf: running (headless; no radio opened, "
-                    "nothing transmitted)\n");
+                    "no SDR tuned)\n");
 
     long ticks_done = 0;
     while (!g_quit) {

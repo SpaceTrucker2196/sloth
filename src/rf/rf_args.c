@@ -17,7 +17,7 @@ void rf_usage(FILE *fp, const char *argv0) {
             "       [--aprs-silent-hours N] [--rtl433 SPEC] [--victron SPEC]\n"
             "       [--gps SPEC] [--gps-allow-remote] [--gps-baud N]\n"
             "       [--location LAT,LON[,ALT]]\n"
-            "       [--jsonl FILE] [--db FILE] [--site-label TEXT]\n"
+            "       [-o FILE] [--db FILE] [--site-label TEXT]\n"
             "       [--data-socket [SPEC]] [--data-socket-allow-remote]\n"
             "       [--strict] [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--user NAME] [--no-privdrop] [--ticks N]\n"
@@ -76,11 +76,11 @@ void rf_usage(FILE *fp, const char *argv0) {
             "                     the sensor's fixed position (WGS84 decimal\n"
             "                     degrees, ALT metres). A fresh --gps fix\n"
             "                     takes precedence.\n"
-            "  --jsonl FILE       append the JSONL record stream to FILE\n"
+            "  -o, --out FILE     append the JSONL record stream to FILE\n"
             "                     (created 0600; an existing FILE must be\n"
             "                     private and yours, never a symlink).\n"
-            "                     -o and --out are the same flag, sloth's\n"
-            "                     spelling.\n"
+            "                     --jsonl FILE is the same flag here; sloth\n"
+            "                     does not take that spelling.\n"
             "  --db FILE          persist to a SQLite database with sloth's\n"
             "                     own schema. The GNSS, ADS-B and APRS\n"
             "                     tables, the alerts and the sensor's own\n"
@@ -132,6 +132,10 @@ int rf_args_parse(int argc, char **argv, rf_args_t *a) {
          * loops by that shape to hold the CLI reference to what is
          * parsed. */
         const int has = i + 1 < argc;
+        /* -o / --out is sloth's spelling and the one the usage and the
+         * warnings name, so a command line written from this daemon's
+         * help works on sloth. --jsonl is an extra spelling of this
+         * daemon's only. */
         if ((!strcmp(argv[i], "--jsonl") || !strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && has) {
             a->jsonl_path = argv[++i];
         } else if (!strcmp(argv[i], "--db") && has) {
@@ -146,7 +150,7 @@ int rf_args_parse(int argc, char **argv, rf_args_t *a) {
             } else {
                 a->data_socket = daemon_data_socket_default(
                     DATA_SOCKET_RF_DEFAULT_DIR, DATA_SOCKET_RF_DEFAULT_SPEC,
-                    "sloth-rf");
+                    "sloth-rf", DATA_SOCKET_RF_TCP_EXAMPLE);
                 if (!a->data_socket) return 2;
             }
         } else if (!strcmp(argv[i], "--data-socket-allow-remote")) {

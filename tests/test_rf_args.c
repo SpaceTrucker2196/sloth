@@ -250,7 +250,9 @@ static void test_data_socket_default_is_its_own(void) {
         ASSERT(strstr(g_text, "RuntimeDirectory=sloth-rf, or: install -d "
                               "-m 0750 -o ") != NULL);
         ASSERT(strstr(g_text, " /run/sloth-rf)\n") != NULL);
-        ASSERT(strstr(g_text, "--data-socket tcp:127.0.0.1:8765\n") != NULL);
+        /* Its own transport, not sloth's port (review of #213). */
+        ASSERT(strstr(g_text, "--data-socket tcp:127.0.0.1:PORT ") != NULL);
+        ASSERT(strstr(g_text, "--data-socket tcp:127.0.0.1:8765") == NULL);
     }
     ASSERT_STR(DATA_SOCKET_RF_DEFAULT_SPEC, "unix:/run/sloth-rf/sloth-rf.sock");
     ASSERT(strcmp(DATA_SOCKET_RF_DEFAULT_SPEC, DATA_SOCKET_DEFAULT_SPEC) != 0);
@@ -280,9 +282,23 @@ static void test_default_refusal_is_one_text(void) {
     ASSERT(strstr(a, ": /run/sloth unusable.\n") != NULL);
     data_socket_default_refusal_at(DATA_SOCKET_RF_DEFAULT_SPEC,
                                    DATA_SOCKET_RF_DEFAULT_DIR, "sloth-rf",
+                                   DATA_SOCKET_RF_TCP_EXAMPLE,
                                    NULL, 0, b, sizeof(b));
     ASSERT(strstr(b, ": /run/sloth-rf unusable.\n") != NULL);
     ASSERT(strstr(b, "RuntimeDirectory=sloth-rf,") != NULL);
+    /* sloth-rf's remedy does not offer sloth's port as the transport
+     * to bind: on a host running both, that bind fails or puts the RF
+     * stream where a consumer expects sloth's (review of #213). The
+     * whole text, so the last line cannot drift back.
+     * (Seen red with DATA_SOCKET_RF_TCP_EXAMPLE set to sloth's.) */
+    ASSERT_STR(b, "sloth: --data-socket default "
+                  "unix:/run/sloth-rf/sloth-rf.sock: /run/sloth-rf unusable.\n"
+                  "  Create it (RuntimeDirectory=sloth-rf, or: install -d "
+                  "-m 0750 -o 0 /run/sloth-rf)\n"
+                  "  or name a transport explicitly: --data-socket "
+                  "tcp:127.0.0.1:PORT (a port of its own; 8765 is "
+                  "sloth's)\n");
+    ASSERT(strstr(b, "--data-socket tcp:127.0.0.1:8765") == NULL);
 }
 
 /* --strict refuses a routable --data-socket, and the allow-remote flag

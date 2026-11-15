@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `tests/tmp_dir.h`, `tests/test_tmp_dir.c`, `tests/main_test.c`, `web/tests/wt_tmp.h`, `web/tests/web_test_main.c`, `src/sloth_clock.h`, `src/poll.h`, `src/poll.c`, `src/poll_core.c`, `src/poll_gnss.c`, `src/poll_rf.c`, `src/run_flag.h`, `tests/test_poll.c`, `src/rf/main.c`, `src/rf/rf_args.c`, `src/rf/platform_rf.c`, `src/capture_side.h`, `src/alerts/rules.h`, `src/alerts/rules_table_rf.c`, `src/jsonl_internal.h`, `src/sys_status.h`, `src/daemon_start.h`, `tests/test_rf_build.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `src/worker_thread.c`, `tests/test_worker_thread.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-11-15 (#213: `sloth-rf`, the second daemon; the capture side as data the shared services take; the `nm` gate on its link); 2026-11-15 (#212: source groups, the run flag's own file, the stage table as data); 2026-11-03 (#180: fragattack's sixth table, no new lock edge); 2026-11-02 (the system map: sensor, BLE scan helper, slothweb and its stores); 2026-10-27 (temporary files: the leak guard, interrupts and a long TMPDIR; #95, #118, #141, #132, #130, #109)
+**Last updated**: 2026-11-15 (#213 review: the `nm` gate's lists as widened, by member and by family; 49 members, measured); 2026-11-15 (#213: `sloth-rf`, the second daemon; the capture side as data the shared services take; the `nm` gate on its link); 2026-11-15 (#212: source groups, the run flag's own file, the stage table as data); 2026-11-03 (#180: fragattack's sixth table, no new lock edge); 2026-11-02 (the system map: sensor, BLE scan helper, slothweb and its stores); 2026-10-27 (temporary files: the leak guard, interrupts and a long TMPDIR; #95, #118, #141, #132, #130, #109)
 
 ---
 
@@ -270,7 +270,8 @@ Since #115 every binary is derived from one set of source lists in the
 - **`sloth-rf` (#213)** is linked from three objects of its own
   (`RF_APP_SRCS`: `src/rf/main.c`, `src/rf/rf_args.c`,
   `src/rf/platform_rf.c`) and the same `libsloth_core.a`, so only the
-  archive members something references come in: 46 of them, against
+  archive members something references come in: 51 of them (49, and
+  `--victron`'s `victron.o` and `victron_reader.o`), against
   159 before the seams below were cut, and no libpcap, ncurses or
   resolver. There is no second source list. `RF_LDFLAGS` is `LDFLAGS`
   without `-lpcap` and the curses library; the binary's `DT_NEEDED` is
@@ -279,22 +280,40 @@ Since #115 every binary is derived from one set of source lists in the
   installed yet (#215).
 - **The `nm` gate on it** (`check_rf_no_capture`, beside
   `check_no_hci_builder`, which runs on it too): after the link, the
-  binary must import no `pcap_*`, `getnameinfo`, `initscr` or
-  `newterm`, and must define none of a list of sloth's own entry
-  points - `capture_open`, `capture_run`, `capture_start`,
+  binary must import no `pcap_*`, no resolver call (`getnameinfo`,
+  `getaddrinfo`, `gethostby*`, `res_*`), none of the calls a netlink
+  or raw-socket module is made of (`sendto`, `sendmsg`, `sendmmsg`,
+  `recv`, `recvfrom`, `recvmsg`, `recvmmsg`, `ioctl`,
+  `if_nametoindex`, `if_indextoname`; its own sockets are read, and
+  its one write to a peer is `send()` of gpsd's `?WATCH`), and no
+  `initscr` or `newterm`; and must define none of a list of sloth's
+  own entry points - `capture_open`, `capture_run`, `capture_start`,
   `probe_open`, `probe_run`, `bt_monitor_open`, `bt_capture_run`,
   `ble_mon_ingest`, `bt_stream_feed`, `btle_ll_parse`, `replay_run`,
   `dot11_frame_decode`, `radiotap_parse`, `beacon_parse_frame`,
-  `deauth_parse_frame`, `eapol_observe_frame`, `evidence_ring_init`,
-  `alert_pcap_dump`, `evidence_export_pcap_unique`, `linux_wifi_scan`,
+  `deauth_parse_frame`, `eapol_observe_frame`, `action_observe_frame`,
+  `frag_observe_frame`, `ctrl_observe_frame`, `karma_observe_frame`,
+  `assoc_request_parse_frame`, `pm_forge_observe_frame`,
+  `mle_bss_observe_frame`, `dot11_ie_find`, `dot11_data_addrs`,
+  `evidence_ring_init`, `alert_pcap_dump`,
+  `evidence_export_pcap_unique`, `linux_wifi_scan`,
   `linux_wifi_set_channel`, `linux_wifi_get_stations`,
-  `linux_get_ifaces`, `linux_get_conns`, `dns_init`, `dns_resolve`,
-  `tui_init`. A failure deletes the binary. It is checked on the link
+  `linux_get_ifaces`, `linux_get_conns`, `linux_tcpdiag_fill`,
+  `linux_neigh6_fill`, `linux_get_dhcp`, `linux_get_self_macs`,
+  `resolve_pids`, `discovery_publish`, `dns_init`, `dns_resolve`,
+  `tui_init` - nor any symbol of twelve families held by pattern
+  (`linux_*`, `dot11_*`, `*_observe_frame`, `*_parse_frame`, `bt_*`,
+  `ble_*`, `btle_*`, `evidence_*`, `eapol_*`, `discovery_*`, `view_*`,
+  `tui_*`). A name guards the archive member that defines it, which is
+  why the backend and the decoders are listed member by member. What
+  the gate holds out is what opens, decodes or captures; the 802.11
+  tables and labels sloth-rf does link are listed in
+  [[architecture-rf-split]] §10. A failure deletes the binary. It is checked on the link
   because a Makefile list cannot see one new call from a shared file
   pulling a capture module in. `tests/test_rf_build.c` holds every
   name on the list to a definition in the tree (a renamed symbol would
-  otherwise stop guarding) and the shared files to including no
-  capture header.
+  otherwise stop guarding), every pattern to a named definition it
+  matches, and the shared files to including no capture header.
 - **The capture side is data (#213).** Linking the alert engine,
   `sys_status` or the JSONL writer used to link the capture, because
   each named its modules. Each now takes that part from the daemon:

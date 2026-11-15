@@ -941,7 +941,7 @@ int main(int argc, char **argv) {
                  * the refusal, and is shared with sloth-rf (#213). */
                 data_socket = daemon_data_socket_default(
                     DATA_SOCKET_DEFAULT_DIR, data_socket_default_spec(1),
-                    "sloth");
+                    "sloth", DATA_SOCKET_TCP_EXAMPLE);
                 if (!data_socket) return 2;
             }
         } else if (!strcmp(argv[i], "--refresh-ms") && i + 1 < argc) {

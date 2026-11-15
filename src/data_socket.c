@@ -607,6 +607,7 @@ int data_socket_default_dir_ok(const char *dir, char *err, size_t errsz) {
 
 void data_socket_default_refusal_at(const char *spec, const char *dir,
                                     const char *runtime_dir,
+                                    const char *tcp_example,
                                     const char *why, uid_t euid,
                                     char *out, size_t outsz) {
     if (!out || !outsz) return;
@@ -617,16 +618,17 @@ void data_socket_default_refusal_at(const char *spec, const char *dir,
              "  Create it (RuntimeDirectory=%s, or: install -d -m 0750 "
              "-o %lu %s)\n"
              "  or name a transport explicitly: "
-             "--data-socket tcp:127.0.0.1:8765\n",
+             "--data-socket %s\n",
              spec,
              (why && why[0]) ? why : unusable,
-             runtime_dir, (unsigned long)euid, dir);
+             runtime_dir, (unsigned long)euid, dir, tcp_example);
 }
 
 void data_socket_default_refusal(const char *why, uid_t euid,
                                  char *out, size_t outsz) {
     data_socket_default_refusal_at(DATA_SOCKET_DEFAULT_SPEC,
                                    DATA_SOCKET_DEFAULT_DIR, "sloth",
+                                   DATA_SOCKET_TCP_EXAMPLE,
                                    why, euid, out, outsz);
 }
 
