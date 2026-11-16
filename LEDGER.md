@@ -370,3 +370,5 @@
 | ba41d24 | 2026-11-16T03:11:45Z | claude-fable-5-1, claude-fable-5-2 | 110 | 10593 | 1805254 | 97042 | 2.9881 | Cutover: sloth-wifi and sloth-rf, RF leaves the Wi-Fi daemon, JSONL 2.0.0 (refs #216) |
 | be658c2 | 2026-11-16T17:54:21Z | claude-fable-5-1, claude-fable-5-2 | 252 | 37932 | 8502403 | 586045 | 13.8556 | agents: follow the cutover (sloth-wifi, sloth-rf, two rule tables); ADR 0010: duplicate alerts shown once (refs #211) |
 | fe8c821 | 2026-11-16T18:51:57Z | claude-fable-5-1, claude-fable-5-2, claude-opus-5-5 | 112 | 13025 | 3322550 | 200061 | 3.1485 | make contract: the sensor's contract as one reproducible release artifact (refs #185) |
+| a34b9a1 | 2026-11-16T22:20:23Z | claude-fable-5-1, claude-opus-5-5 | 130 | 23032 | 5677502 | 327660 | 5.4881 | make contract: the alert bundle ships no host data (#185 review, finding 2) |
+| 431e1be | 2026-11-16T22:23:37Z | claude-opus-5-5 | 8 | 1707 | 668188 | 2456 | 0.1875 | sloth-va: register the advertisement monitor asynchronously |
