@@ -94,6 +94,26 @@ Paid for by:
 - A migration for existing hosts: paths, the `slothweb` symlink, the
   unit rename (#184 §3, Stage 5).
 
+## Rulings since (2026-11-15)
+
+Recorded here rather than by rewriting the text above, which stays as
+it was decided on 2026-11-04. All of #184 §5 is now ruled:
+
+- **Names.** The presentation repository is `sloth-mesh`, not
+  `sloth-dash` (owner: "sloth-mesh instead of sloth web"). Wherever
+  these records and the [inventory](../architecture-split.md) say
+  `sloth-dash`, read `sloth-mesh`. Whether the `slothweb` binary, unit
+  and `slothweb.db` are renamed too was not ruled; they keep their names.
+- **Licence.** The two new repositories are private and carry PolyForm
+  Noncommercial 1.0.0. This closes the open mark under Decision.
+- **Vendor research workflow** lives in `sloth-comint`.
+- **Alert assessments and the research corpus** stay in `sloth` with the
+  rules ([ADR 0002](0002-research-corpus-stays.md)); the owner's answer
+  named the Wi-Fi side, and the RF daemon's rules are in the same
+  repository ([ADR 0010](0010-wifi-rf-daemons.md)).
+- **The contract artifact** is published as GitHub release assets on
+  `sloth`.
+
 ## Related pages
 
 - [ADR index](README.md)
