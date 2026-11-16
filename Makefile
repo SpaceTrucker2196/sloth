@@ -907,7 +907,8 @@ docs-counts:
 
 # ── Research corpus (#73) ───────────────────────────────────────────────────
 # research.db is committed: it is small, deterministic (documents are
-# visited in sorted path order, so a rebuild is byte-identical), and
+# visited in sorted path order, so a rebuild with the same SQLite is
+# byte-identical; tools/gate.sh compares by content across versions), and
 # committing it means --with-research works from a fresh clone with no
 # build step. Regenerate after editing anything under research/.
 RESEARCH_SRCS = research/ingest/main.c research/ingest/research_ingest.c

@@ -7,7 +7,7 @@
 # vendor table, under ASan and under TSan twice; the quickstart check;
 # deploy-test with every shellcheck given; replay-check; a one-second
 # fuzz; cppcheck; and docs-counts and research-index leaving the tree
-# clean. Each line is one measured result; CI runs the same matrix on
+# clean (research.db by content: its header carries the SQLite version). Each line is one measured result; CI runs the same matrix on
 # every push (.github/workflows/ci.yml), so a local run is for finding
 # it first, not instead.
 #
@@ -141,7 +141,23 @@ step "replay-check" make replay-check
 step "fuzz" make fuzz FUZZ_SECONDS=1
 step "cppcheck" make cppcheck
 make docs-counts > /dev/null 2>&1
+# research.db is compared by content, not bytes: SQLite stamps the
+# library version that wrote the file into its header (bytes 96-99), so
+# a rebuild with another SQLite than the committed file's differs there
+# and nowhere else. A rebuild whose dump matches gets the committed
+# bytes back; one that differs stays in the tree and is counted below.
+cp research.db build/research.db.before 2> /dev/null
 make research-index > /dev/null 2>&1
+if command -v sqlite3 > /dev/null 2>&1 && [ -f build/research.db.before ] &&
+   ! cmp -s research.db build/research.db.before; then
+    sqlite3 build/research.db.before .dump > build/research.before.sql 2> /dev/null
+    sqlite3 research.db .dump > build/research.after.sql 2> /dev/null
+    if [ -s build/research.before.sql ] &&
+       cmp -s build/research.before.sql build/research.after.sql; then
+        cp build/research.db.before research.db
+        say "research.db: same content, header differs (written by another SQLite); committed bytes kept"
+    fi
+fi
 dirty=$(git status --short 2>/dev/null | grep -vc '^??')
 say "tree dirty after docs-counts and research-index: $dirty"
 [ "$dirty" -eq 0 ] || red=1

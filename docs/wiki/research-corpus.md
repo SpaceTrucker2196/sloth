@@ -3,7 +3,7 @@
 **Issue:** [#73](https://github.com/SpaceTrucker2196/sloth/issues/73) ·
 **Built by:** `make research-index` · **Guard:** `tests/test_research_corpus.c`
 
-**Last updated**: 2026-11-11 (#192 I7: `research/adsb/multi-receiver-verification.md`, the basis of slothweb's fleet aircraft cross-check, no alert kind); 2026-11-09 (#187 S4: `research/papers/mbssid-per-bss-ie-variation.md` for `KARMA_AP`'s IE-fingerprint collapse — and a worked example of a document whose job is to say what its sources do *not* support); 2026-11-08 (#186: `research/adsb/emergency-squawks.md` for `ADSB_EMERGENCY`); 2026-11-03 (the four GNSS kinds landed: each document's `alert_kinds` uncommented); 2026-11-02 (four GNSS documents, kinds pending; the BLE device-class document, no alert kind); 2026-10-26 (the RSSI distance document, no alert kind); 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
+**Last updated**: 2026-11-16 (the gate compares `research.db` by content, since its header carries the SQLite version); 2026-11-11 (#192 I7: `research/adsb/multi-receiver-verification.md`, the basis of slothweb's fleet aircraft cross-check, no alert kind); 2026-11-09 (#187 S4: `research/papers/mbssid-per-bss-ie-variation.md` for `KARMA_AP`'s IE-fingerprint collapse — and a worked example of a document whose job is to say what its sources do *not* support); 2026-11-08 (#186: `research/adsb/emergency-squawks.md` for `ADSB_EMERGENCY`); 2026-11-03 (the four GNSS kinds landed: each document's `alert_kinds` uncommented); 2026-11-02 (four GNSS documents, kinds pending; the BLE device-class document, no alert kind); 2026-10-26 (the RSSI distance document, no alert kind); 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
 
 `agents/AGENTS.md` § Discipline says every detector names its basis. The
 citations exist — in issue bodies, wiki pages and the rule table — but
@@ -84,6 +84,13 @@ artifact and it is deliberate: it is small, it is **byte-for-byte
 reproducible** (documents are visited in sorted path order, so repeated
 builds are identical — verified, not assumed), and committing it means
 the runtime query works from a fresh clone with no build step.
+
+Reproducible **with one SQLite**: the file header carries the version of
+the library that wrote it (bytes 96 to 99), so a rebuild on a host with
+another SQLite differs in those bytes and nowhere else. `make gate`
+therefore compares the rebuild with the committed file by content (a
+`.dump` of each) and keeps the committed bytes when the content is the
+same; a rebuild whose content differs still turns the gate red.
 
 Regenerate with `make research-index` after editing anything under
 `research/`. `.gitattributes` marks it binary so git does not attempt
