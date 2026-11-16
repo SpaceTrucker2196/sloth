@@ -41,6 +41,11 @@ the Wi-Fi it watches:
   today's one process, slothweb's one-socket and one-database
   assumptions, the packaging, the slices #211–#217 and the places the
   tree and #211 disagree.
+- [[contract]] — the sensor's contract artifact (`make contract`,
+  #185 item 4): `libsloth-wire`, `schema.sql`, the JSONL contract, the
+  palette, the alert knowledge bundle and the golden fixtures in one
+  reproducible tar on `sloth`'s releases, how to verify it, and the
+  decisions behind it.
 - [[pack-schema]] — the intel pack manifest, file set and immutability
   rule, v1 draft.
 - [[threat-model]] — assets A1–A5, adversaries ADV-1..4, trust

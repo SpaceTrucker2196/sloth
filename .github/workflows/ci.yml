@@ -227,10 +227,16 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Install dependencies
-        run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
+        run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev pkg-config
 
       - name: Replay generated savefiles against the golden
         run: make replay-check REPLAY_DIR="$RUNNER_TEMP/replay"
+
+      # The contract artifact (#185 item 4): built twice and compared,
+      # unpacked, checksummed, and a consumer compiled against it alone.
+      # Here because this job has already built both daemons.
+      - name: Contract artifact
+        run: make contract-check
 
   # ThreadSanitizer (#95). The evil-twin taint table (#95/6730997), the
   # RF-quality counters (#95/21d3c52) and the DNS caller-owned buffer

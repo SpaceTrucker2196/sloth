@@ -17,6 +17,8 @@
  * snapshot stream into a queryable history: "who was here between 2 and
  * 4 AM" is a range scan, not a log grep. */
 
+#include <stdio.h>
+
 #include "db.h"
 
 static const char SCHEMA_SQL[] =
@@ -1202,3 +1204,26 @@ const char *db_schema_migrate_v11_sql(void) { return MIGRATE_V11_SQL; }
 const char *db_schema_migrate_v12_sql(void) { return MIGRATE_V12_SQL; }
 const char *db_schema_migrate_v13_sql(void) { return MIGRATE_V13_SQL; }
 const char *db_schema_migrate_v14_sql(void) { return MIGRATE_V14_SQL; }
+
+/* --print-schema (#185 item 4). The statements a new file gets, in the
+ * order db_open() applies them, then the version row check_version()
+ * writes into it - so loading this text into an empty database gives
+ * the tables, indexes and meta row the daemon would have created. The
+ * PRAGMAs db_open() also runs (auto_vacuum, WAL, synchronous,
+ * foreign_keys) are storage settings, not schema, and are named in the
+ * header comment rather than emitted. Compiled unconditionally with the
+ * rest of this file, so a WITH_SQLITE=0 build prints the same text: the
+ * DDL is the contract whether or not this build can write it. */
+int db_schema_print(FILE *out) {
+    fprintf(out,
+            "-- sloth database schema, DB_SCHEMA_VERSION %d (src/db_schema.c).\n"
+            "-- The same DDL creates sloth-wifi's --db and sloth-rf's --db.\n"
+            "-- A daemon also runs PRAGMA auto_vacuum=INCREMENTAL,\n"
+            "-- journal_mode=WAL, synchronous=NORMAL and foreign_keys=ON on\n"
+            "-- the files it opens; those are storage settings, not schema.\n",
+            DB_SCHEMA_VERSION);
+    fputs(SCHEMA_SQL, out);
+    fprintf(out, "INSERT INTO meta (key,value) VALUES ('schema_version','%d');\n",
+            DB_SCHEMA_VERSION);
+    return ferror(out) ? -1 : 0;
+}

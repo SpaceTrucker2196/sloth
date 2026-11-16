@@ -1,5 +1,6 @@
 /* palette css SLOTH_TUI_C THEME_CSS OUT.css
  * palette js  SLOTH_TUI_C OUT.js
+ * palette json SLOTH_TUI_C OUT.json   (the contract's palette.json)
  * palette contrast SLOTH_TUI_C THEME_CSS
  *
  * The page's data colours (owner ruling 2026-10-23: "color code all
@@ -760,6 +761,64 @@ static int emit_js(FILE *o) {
     return ferror(o) ? -1 : 0;
 }
 
+/* The contract artifact's palette.json (#185 item 4, #184 C5): what
+ * this tool reads out of sloth, as data, so a presentation repository
+ * that cannot link src/tui_palette.c or parse src/tui.c gets the same
+ * answers. Sloth's side only: each pair's xterm-256 index and its hex
+ * (the dark theme, which is the TUI byte for byte), the monitor rows'
+ * pair, the brand table and the Google letters. The light variants are
+ * not here: they are computed against web/ui/theme.css, which is the
+ * page's, not the sensor's. Strings are written through jstr(); every
+ * one comes from this file or a brand substring, but the brand table is
+ * parsed C source and is not trusted to be JSON-clean. */
+static void jstr(FILE *o, const char *s) {
+    fputc('"', o);
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c == '"' || c == '\\') fprintf(o, "\\%c", c);
+        else if (c < 0x20) fprintf(o, "\\u%04x", c);
+        else fputc(c, o);
+    }
+    fputc('"', o);
+}
+
+static int emit_json(FILE *o) {
+    char h[8];
+    static const char *const MON_WHY[NMON] = { "CP_MON_ROW background", "CP_MON_ROW" };
+    mon_pairs();
+    fprintf(o, "{\n  \"palette_format\": 1,\n"
+               "  \"source\": \"src/tui_palette.c tui_pair_colors(); src/tui.c find_brand(), "
+               "tui_brand_addstr(); src/ip_color.h\",\n"
+               "  \"ip_colors\": %d,\n  \"info_colors\": 8,\n  \"google\": %d,\n"
+               "  \"tokens\": [\n", IP_NUM_COLORS, BR_GOOGLE_BLUE);
+    for (int i = 0; i < g_ntok; i++) {
+        hex(xterm_rgb(g_tok[i].xterm), h);
+        fprintf(o, "    {\"name\": ");
+        jstr(o, g_tok[i].name);
+        fprintf(o, ", \"xterm\": %d, \"hex\": \"%s\", \"pair\": ", g_tok[i].xterm, h);
+        jstr(o, g_tok[i].why);
+        fprintf(o, "},\n");
+    }
+    for (int i = 0; i < NMON; i++) {
+        hex(xterm_rgb(g_mon_x[i]), h);
+        fprintf(o, "    {\"name\": ");
+        jstr(o, MON_NAME[i]);
+        fprintf(o, ", \"xterm\": %d, \"hex\": \"%s\", \"pair\": ", g_mon_x[i], h);
+        jstr(o, MON_WHY[i]);
+        fprintf(o, "}%s\n", i + 1 < NMON ? "," : "");
+    }
+    fprintf(o, "  ],\n  \"gseq\": [");
+    for (int i = 0; i < g_ngseq; i++) fprintf(o, "%s%d", i ? ", " : "", g_gseq[i]);
+    fprintf(o, "],\n  \"brands\": [\n");
+    for (int i = 0; i < g_nbrand; i++) {
+        fprintf(o, "    {\"brand\": %d, \"match\": ", g_brand[i].brand);
+        jstr(o, g_brand[i].sub);
+        fprintf(o, "}%s\n", i + 1 < g_nbrand ? "," : "");
+    }
+    fprintf(o, "  ]\n}\n");
+    return ferror(o) ? -1 : 0;
+}
+
 static void row(const char *name, const char *what) {
     rgb_t c[2], bg[2], pn[2];
     for (int t = 0; t < 2; t++) {
@@ -892,7 +951,7 @@ static int emit_contrast(void) {
 int main(int argc, char **argv) {
     if (argc < 3) {
         fprintf(stderr, "usage: palette css TUI_C THEME_CSS OUT.css | js TUI_C OUT.js | "
-                        "contrast TUI_C THEME_CSS\n");
+                        "json TUI_C OUT.json | contrast TUI_C THEME_CSS\n");
         return 2;
     }
     const char *mode = argv[1];
@@ -900,10 +959,10 @@ int main(int argc, char **argv) {
     char *tui = slurp(argv[2]);
     if (!tui || read_brands(tui) != 0) { free(tui); return 1; }
     free(tui);
-    if (!strcmp(mode, "js") && argc == 4) {
+    if ((!strcmp(mode, "js") || !strcmp(mode, "json")) && argc == 4) {
         FILE *o = fopen(argv[3], "w");
         if (!o) { perror(argv[3]); return 1; }
-        int rc = emit_js(o);
+        int rc = !strcmp(mode, "js") ? emit_js(o) : emit_json(o);
         if (fclose(o) != 0) rc = -1;
         return rc ? 1 : 0;
     }

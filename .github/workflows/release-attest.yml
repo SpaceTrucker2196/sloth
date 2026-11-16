@@ -12,6 +12,15 @@ name: Release attestation
 # alias would name a file nobody installs, and sloth-rf, the only binary
 # with the SDR decoders, had neither.
 #
+# The contract artifact (#185 item 4, docs/wiki/contract.md): `make
+# contract` builds dist/sloth-contract-<version>.tar, reproducibly, and
+# its checksum file; the tar is attested with the binaries and both are
+# attached to the tag's GitHub release (owner ruling on #184 §5 item 4:
+# the artifact lives on sloth's releases). A release that does not exist
+# yet is created as a draft, so the owner's notes and the publish step
+# (which mirror-release.yml follows) stay the owner's. That upload is why
+# this job's token may write contents.
+#
 # What this does NOT do: sign the tag. Tag signing needs the owner's key,
 # which CI does not hold; it stays the manual `git tag -s` step in
 # docs/wiki/release-checklist.md and SECURITY.md.
@@ -27,7 +36,7 @@ jobs:
   attest:
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      contents: write       # attach the contract artifact to the release
       id-token: write       # OIDC token for the Sigstore-backed attestation
       attestations: write
     steps:
@@ -38,6 +47,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
       - name: Build
         run: make EXTRA_CFLAGS=-Werror
+      - name: Contract artifact
+        run: make contract && cat dist/sloth-contract-*.SHA256SUMS
       - name: SHA256SUMS
         run: sha256sum sloth-wifi sloth-rf > SHA256SUMS && cat SHA256SUMS
       - name: Attest build provenance
@@ -46,3 +57,15 @@ jobs:
           subject-path: |
             sloth-wifi
             sloth-rf
+            dist/sloth-contract-*.tar
+      - name: Attach the contract artifact to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft \
+              --title "sloth $GITHUB_REF_NAME" \
+              --notes "Draft created by release-attest.yml to carry the contract artifact; notes to follow."
+          gh release upload "$GITHUB_REF_NAME" --clobber \
+            dist/sloth-contract-*.tar dist/sloth-contract-*.SHA256SUMS

@@ -13,6 +13,9 @@ sloth.bak-*
 *.o
 # Per-configuration object directories, archives and fuzz binaries (#115).
 /build/
+# `make contract`'s output (#185 item 4): published as release assets,
+# never committed.
+/dist/
 *.dSYM/
 __pycache__/
 .DS_Store

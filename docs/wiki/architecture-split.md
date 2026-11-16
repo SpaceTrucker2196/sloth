@@ -20,7 +20,7 @@ section naming every place the grep and #184 §2 disagree.
 `web/data/vendors/COVERAGE.md`, `packaging/systemd/`, issues #184 and
 #185, owner rulings on #184 of 2026-11-04.
 
-**Last updated**: 2026-11-10 (C1 shipped: `SLOTH_JSONL_VERSION` exists and
+**Last updated**: 2026-11-16 (#185 item 4: `make contract` ships C2, C3, C4, C5 and C9 as one release artifact, [[contract]]; §5 items 1, 2 and 5 restated or resolved), 2026-11-10 (C1 shipped: `SLOTH_JSONL_VERSION` exists and
 `sensor_health` reports it, #185 item 3), 2026-11-05
 
 This page is a measurement, not a plan. It is Stage 0's first deliverable
@@ -333,14 +333,14 @@ differs from #184's text has it marked, and §5 says why it matters.
 | # | #184 says | Found | Owner |
 |---|---|---|---|
 | C1 | JSONL over `--data-socket`; gains `SLOTH_JSONL_VERSION` reported in `sensor_health` | **Done** (#185 item 3, 2026-11-10). `SLOTH_JSONL_VERSION` was `"1.0.0"` when it landed and is `"1.1.0"` since 2026-11-11 (four added record types: `sys_status`, `sys_sensor`, `source_status`, `receiver_hw`), in `include/sloth.h`, beside `SLOTH_VERSION`; `jsonl_emit_sensor_health()` writes it as the record's last field, `jsonl_version`. Bump rule in [jsonl-schema.md](jsonl-schema.md) *Versioning*. When this row was first written the macro did not exist and this cell said so | sloth |
-| C2 | `sloth.db` schema, `DB_SCHEMA_VERSION` 11, `src/db_schema.c` as DDL text; slothweb's tests link `src/db_schema.c` | Confirmed. `src/db.h:103` is `#define DB_SCHEMA_VERSION 11`. `src/db_schema.c` reaches `web/` twice, not once: `WEB_TEST_SRCS` (727) **and** `WEB_DEMO_DB_SRCS` (861), the demo generator. There is no `--print-schema` flag today | sloth |
-| C3 | slothweb links `WEB_CORE_SRCS`: `dot11_frame.c`, `radiotap.c`, `wifi_freq.c`, `dns_wire.c`, `dot11_ie.c`, `rsn_ie.c`, … | **Differs.** `WEB_CORE_SRCS` (717–718) is exactly six files and `rsn_ie.c` is **not** among them: `dot11_frame.c`, `radiotap.c`, `wifi_freq.c`, `dns_wire.c`, `dot11_ie.c`, `netstr.c`. `rsn_ie.c` reaches `web/` only through `WEB_TEST_SRCS` (728), with five other `src/` files `libsloth-wire` would also have to carry or dash would have to replace | sloth |
-| C4 | one generator reads `sloth_alerts.def`, `docs/views/alerts.md`, `docs/wiki/alerts.md`, `docs/wiki/alert-remediation.md`, `research/**` and `docs/wiki/alert-assessments/*.md` | **Differs.** Two generators. `web/tools/alertkb.c` takes the first four plus `research/` (`Makefile:814–815`); `web/tools/alertasm.c` takes `include/sloth_alerts.def` and `docs/wiki/alert-assessments/` (`:846`). The bundle has two consumers to satisfy, and `web-test` also passes `-DWEB_ASMGEN=` so a test can run the second generator (`:886`) | sloth |
-| C5 | the palette generator parses `src/tui.c` and `src/tui_palette.c` | **Differs in kind, not in effect.** It *links* `src/tui_palette.c` (`WEB_PALGEN_SRCS`, 751) and calls `tui_pair_colors()`; it *reads* `src/tui.c` as text, passed as an argument at 760, 764 and 770. A `palette.json` artifact replaces both, but the second is a parse of C source and the first is an API call | sloth |
+| C2 | `sloth.db` schema, `DB_SCHEMA_VERSION` 11, `src/db_schema.c` as DDL text; slothweb's tests link `src/db_schema.c` | Confirmed. `src/db.h:103` is `#define DB_SCHEMA_VERSION 11`. `src/db_schema.c` reaches `web/` twice, not once: `WEB_TEST_SRCS` (727) **and** `WEB_DEMO_DB_SRCS` (861), the demo generator. There is no `--print-schema` flag today. **Shipped** (#185 item 4, 2026-11-16): `sloth-wifi --print-schema` and `sloth-rf --print-schema` print the same DDL and version row (`db_schema_print()`), and the contract artifact carries it as `schema/schema.sql` ([[contract]]) | sloth |
+| C3 | slothweb links `WEB_CORE_SRCS`: `dot11_frame.c`, `radiotap.c`, `wifi_freq.c`, `dns_wire.c`, `dot11_ie.c`, `rsn_ie.c`, … | **Differs.** `WEB_CORE_SRCS` (717–718) is exactly six files and `rsn_ie.c` is **not** among them: `dot11_frame.c`, `radiotap.c`, `wifi_freq.c`, `dns_wire.c`, `dot11_ie.c`, `netstr.c`. `rsn_ie.c` reaches `web/` only through `WEB_TEST_SRCS` (728), with five other `src/` files `libsloth-wire` would also have to carry or dash would have to replace. Since this row was written `WEB_CORE_SRCS` gained `rf_model.c` (seven files). **Shipped** (#185 item 4): `lib/libsloth-wire.a` is exactly `WEB_CORE_SRCS`, with its headers and `sloth-wire.pc`, in the contract artifact; no shipped header includes `sloth.h`, and a consumer defines `sh_parse_fault_note()` as slothweb's `web_sh_stub.c` does ([[contract]], decisions 1 and 2) | sloth |
+| C4 | one generator reads `sloth_alerts.def`, `docs/views/alerts.md`, `docs/wiki/alerts.md`, `docs/wiki/alert-remediation.md`, `research/**` and `docs/wiki/alert-assessments/*.md` | **Differs.** Two generators. `web/tools/alertkb.c` takes the first four plus `research/` (`Makefile:814–815`); `web/tools/alertasm.c` takes `include/sloth_alerts.def` and `docs/wiki/alert-assessments/` (`:846`). The bundle has two consumers to satisfy, and `web-test` also passes `-DWEB_ASMGEN=` so a test can run the second generator (`:886`). **Shipped** (#185 item 4): the bundle is under `alerts/` in the contract artifact at its tree paths, so both generators' arguments carry over with a prefix, plus `alert-daemons.tsv`, which daemon raises each kind ([[contract]]) | sloth |
+| C5 | the palette generator parses `src/tui.c` and `src/tui_palette.c` | **Differs in kind, not in effect.** It *links* `src/tui_palette.c` (`WEB_PALGEN_SRCS`, 751) and calls `tui_pair_colors()`; it *reads* `src/tui.c` as text, passed as an argument at 760, 764 and 770. A `palette.json` artifact replaces both, but the second is a parse of C source and the first is an API call. **Shipped** (#185 item 4): `palette/palette.json`, written by `web/tools/palette.c`'s new `json` mode from the same API call and the same parse; the light-theme variants stay the page's ([[contract]]) | sloth |
 | C6 | intelligence hand-kept in `src/*.c` and generated into `build/web/` from `web/data/` | Confirmed, and **wider than §1's list**: §3.1 and §3.2 above. The five generators are `oui_gen.c` (784), `btsig_gen.c` (797), `vendorkb.c` (826), `alertkb.c` (813) and `alertasm.c` (844); all five write into `build/web/` and none is committed | comint |
 | C7 | slothweb has no version; the bundle reports `SLOTH_VERSION` | Confirmed. `WEB_VERSION_DEF` (726) `sed`s `SLOTH_VERSION` out of `include/sloth.h` into `-DSLOTHWEB_BUILD_VERSION`; the envelope is `web/src/web_bundle.c`, whose `bundle_schema` field is at `:599` and `:695` | dash |
 | C8 | one `install` target refusing without `./slothweb`; **two** systemd units; one `sloth` user | **Differs.** `packaging/systemd/` holds **three** units — `sloth-sensor.service`, `slothweb.service`, `sloth-ble-scan.service` — plus `sloth-sensor.service.d/` and `sloth.sysusers.conf`. The refusal is `Makefile:1489`, the staleness check `:1490`. `sloth-ble-scan` has no home in #184's three-repo split | each |
-| C9 | one suite, one CI matrix; sloth publishes golden fixtures: `tests/replay/golden.jsonl`, a golden `sloth.db`, **sample pcaps** | **Differs.** `tests/replay/` holds `golden.jsonl`, `gen_replay.c` and `normalise.sh`. There are **no `.pcap` files tracked anywhere** in the repository, and `agents/AGENTS.md` makes that a rule, not an accident. There is no golden `sloth.db` either — the web tests build one from `src/db_schema.c` at run time, which is C2's mechanism. Also unlisted: the suite is not cleanly one-directional (§2.3) | each |
+| C9 | one suite, one CI matrix; sloth publishes golden fixtures: `tests/replay/golden.jsonl`, a golden `sloth.db`, **sample pcaps** | **Differs.** `tests/replay/` holds `golden.jsonl`, `gen_replay.c` and `normalise.sh`. There are **no `.pcap` files tracked anywhere** in the repository, and `agents/AGENTS.md` makes that a rule, not an accident. There is no golden `sloth.db` either — the web tests build one from `src/db_schema.c` at run time, which is C2's mechanism. Also unlisted: the suite is not cleanly one-directional (§2.3). **Shipped** (#185 item 4): `fixtures/golden.jsonl` and a golden `fixtures/sloth.db` built from `schema.sql` at `make contract` time; no sample pcaps, for the reason above ([[contract]], decisions 5 and 9) | each |
 | C10 | dash ↔ comint: none today | Confirmed; neither repo exists yet (both created private on 2026-11-04) | comint |
 
 ---
@@ -358,12 +358,25 @@ these changes the shape of the programme; each changes a stage's content.
    the `web` and `web-test` link lines (850, 881–887), `WEB_DEMO_DB_SRCS`
    (861) and `-iquote research` (882). Roughly half the coupling is
    outside the range both issues cite.
+   *Restated 2026-11-16:* every line number in this page is as measured
+   on 2026-11-05 and the `Makefile` has grown since (the slothweb
+   section now starts near line 940 and `WEB_CORE_SRCS` is near 1093); grep
+   for the names, not the numbers. The contract section (`make
+   contract`, #185 item 4) is a separate block after the web section and
+   reads `WEB_CORE_SRCS` rather than restating it, so the archive's source
+   list cannot drift from slothweb's.
 2. **`rsn_ie.c` is not in `WEB_CORE_SRCS`** (C3). It is a test-only
    dependency, and five other `src/` files share that position
    (`ip_color.c`, `tui_palette.c`, `tui.c`, `view_labels.c`,
    `db_schema.c`). `libsloth-wire` as C3 describes it does not cover
    them, so Stage 3 needs an answer for the test link line as well as the
    binary one.
+   *Since #185 item 4 (2026-11-16):* the contract artifact's archive is
+   exactly `WEB_CORE_SRCS` (decision 1 in [[contract]]). Of the six
+   test-only files, `db_schema.c` is answered by `schema.sql` and
+   `tui_palette.c` / `tui.c` by `palette.json`; `rsn_ie.c`, `ip_color.c`
+   and `view_labels.c` still have no answer, so the item stands for those
+   three.
 3. **C4 is two generators, not one.** The alert knowledge bundle has to
    satisfy `alertkb.c` and `alertasm.c`, and the assessments are the
    second one's only input besides the `.def`.
@@ -375,6 +388,10 @@ these changes the shape of the programme; each changes a stage's content.
    `sloth.db` does not exist either and would have to be *built* by `make
    contract` from the DDL, which is what #185 item 4 says — worth
    separating from "publish what we have".
+   *Resolved by #185 item 4 (2026-11-16):* C9 ships the replay golden and
+   a golden `sloth.db` built at `make contract` time from the daemon's
+   printed DDL, and no pcaps; the reason is recorded as a decision in
+   [[contract]].
 6. **The intelligence list in §1 item 3 is incomplete.** Nine further
    tables in `src/` meet its own definition (§3.2), two of which
    (`src/dot11_ie.c`'s `k_oui`, `src/wifi_freq.c`'s `PLAN`) already
@@ -401,7 +418,9 @@ these changes the shape of the programme; each changes a stage's content.
 - Where `sloth-ble-scan.service` lives after the split (C8).
 - Whether `libsloth-wire` carries only `WEB_CORE_SRCS` or also the six
   test-only `src/` files (C3, §5 item 2). The second is larger and
-  includes `tui.c`, which is the TUI.
+  includes `tui.c`, which is the TUI. Narrowed by #185 item 4: the
+  archive is `WEB_CORE_SRCS`, and three of the six are covered by other
+  contract contents; `rsn_ie.c`, `ip_color.c` and `view_labels.c` remain.
 - The fate of the three `tests/fuzz/fuzz_web_*.c` harnesses at Stage 4.
 
 ---
@@ -414,6 +433,7 @@ these changes the shape of the programme; each changes a stage's content.
 - [[slothweb]] — what the `web/` half is and does.
 - [[sqlite-schema]] — `sloth.db`, C2's artifact.
 - [[jsonl-schema]] — the record stream, C1's artifact.
+- [[contract]] — the artifact `make contract` builds: C2–C5 and C9.
 - [[research-corpus]] — the corpus that stays with the rules (ADR 2).
 - [[attack-hardware-fingerprints]] — why the #151 known-stack table is not in the tree.
 - [[vendor-research]] — the format of the 276 vendor entries.

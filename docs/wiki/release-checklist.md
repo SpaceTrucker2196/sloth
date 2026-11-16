@@ -26,9 +26,10 @@ is section 5.
 (`SLOTH_VERSION`), `tests/test_version.c`, `tests/test_libver.c`,
 `tests/test_ci_pins.c`, `SECURITY.md`, `RELEASE_v*.md`, `src/db.c`
 (`check_version`), `src/db.h`, `packaging/systemd/sloth-sensor.service`,
-`.github/workflows/release-attest.yml`, issues #95, #142.
+`.github/workflows/release-attest.yml`, `tools/contract.sh`,
+`tests/contract/check.sh`, issues #95, #142, #185.
 
-**Last updated**: 2026-10-19 (#95 rollback, #142 CI half)
+**Last updated**: 2026-11-16 (#185 item 4: the contract artifact, built, attested and attached by the release workflow; steps 6a and 10), 2026-10-19 (#95 rollback, #142 CI half)
 
 ---
 
@@ -66,6 +67,12 @@ is section 5.
    that host's libraries; `sloth --version` and the `libs` field of
    every `sensor_health` record report what was actually loaded
    ([[jsonl-schema]]).
+6a. **Contract artifact** ([[contract]]): `make contract-check` on the
+   clean tree must end `contract-check: green`; it builds
+   `dist/sloth-contract-<version>.tar` twice and compares. The release
+   workflow builds it again from the tag and attaches it, so nothing
+   from this step is uploaded by hand; it is here so a broken artifact
+   is found before the tag rather than in the workflow's log.
 7. **Checksums**: `sha256sum sloth-wifi sloth-rf sloth-<version>.cdx.json >
    SHA256SUMS`, and paste the file's contents into
    `RELEASE_v<version>.md` under a `## SHA256SUMS` heading, so the
@@ -103,6 +110,16 @@ is section 5.
     (and `sloth-rf`). The two-subject form has not run yet either: it
     was written at the cutover (#216 review) and its first run is that
     tag's, so read that run's log before publishing.
+    Since #185 item 4 the same job also runs `make contract`, attests
+    `dist/sloth-contract-<version>.tar` beside the binaries, and attaches
+    the tar and `sloth-contract-<version>.SHA256SUMS` to the tag's
+    release, creating it as a **draft** when step 9 has not happened
+    yet (so the notes and the publish stay the owner's; the checksum
+    file is named for the tar so it never replaces the `SHA256SUMS`
+    attached in step 9). The job's token may therefore write contents.
+    This has not run yet: its first run is the next tag's. Verify with
+    `gh attestation verify sloth-contract-<version>.tar --repo
+    SpaceTrucker2196/sloth`.
 
 ## 5. Rolling back to the previous tag
 
@@ -178,6 +195,7 @@ a downgrade on a sensor. The next rollback that happens should replace
 | every workflow action pinned to a 40-hex commit | `tests/test_ci_pins.c` (#95) |
 | no `-latest` runner image | classifier in `tests/test_ci_pins.c`; the tree-wide assertion follows the workflow change (#142) |
 | `SLOTH_VERSION` orders after every shipped tag | `tests/test_version.c` |
+| the contract artifact is reproducible, complete and consumable alone | `make contract-check` in CI's `replay` job and `make gate` (#185) |
 | signed tag | the owner, by hand (step 8) |
 
 libpcap has no runtime floor on purpose: `src/capture/capture.c`
@@ -195,3 +213,4 @@ and shipping every upstream CVE fix in two parsers it did not write.
 - [[deployment]] — `make install` and the shipped unit.
 - [[jsonl-schema]] — the `sensor_health.libs` field.
 - [[threat-model]] — the supply-chain threats this answers.
+- [[contract]] — the contract artifact the workflow attaches.

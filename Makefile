@@ -1808,6 +1808,57 @@ cppcheck:
 	  -i src/platform/bsd.c -i src/platform/win32.c -i src/platform/stub.c \
 	  src research web
 
+# ── Contract artifact (#185 item 4; #184 §2 C1-C5, C9) ─────────────────────
+# `make contract` builds dist/sloth-contract-<SLOTH_VERSION>.tar, what a
+# repository split off this one (sloth-mesh, sloth-comint) builds and
+# tests against instead of reaching into this tree: libsloth-wire.a
+# (exactly WEB_CORE_SRCS) with its headers and sloth-wire.pc, schema.sql
+# as `sloth-wifi --print-schema` prints it, jsonl-schema.md,
+# palette.json, the alert knowledge bundle, and the golden fixtures.
+# Reproducible: two builds of one commit with one toolchain are the same
+# bytes, and `make contract-check` builds twice and compares. Contents,
+# decisions and the release step: docs/wiki/contract.md. dist/ is not
+# committed; the release workflow attaches the tar to a v* tag.
+CONTRACT_VERSION   = $(shell sed -n 's/^\#define SLOTH_VERSION "\(.*\)"/\1/p' include/sloth.h)
+CONTRACT_TAR       = dist/sloth-contract-$(CONTRACT_VERSION).tar
+# The headers a consumer of WEB_CORE_SRCS needs: each public header and
+# the leaf headers they include, plus sensor_health.h for the one hook
+# the archive calls and does not define (sh_parse_fault_note()).
+# src/bytes.h is included by the .c files only and is not shipped.
+CONTRACT_WIRE_HDRS = src/dot11_frame.h src/dot11_data.h src/radiotap.h src/wifi_freq.h \
+                     src/dns_wire.h src/dot11_ie.h src/netstr.h src/rf_model.h \
+                     src/sensor_health.h
+# Fixed flags, not CFLAGS: a sanitizer or a hardening flag of this
+# tree's build would become a link requirement of every consumer.
+# -fPIC so the archive can go into a shared object; no -g, and the tree's
+# path mapped away, so the objects do not depend on where it was built.
+# EXTRA_CFLAGS contributes its warning flags (-Werror) only.
+CONTRACT_CFLAGS    = -O2 -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra -fPIC \
+                     -ffile-prefix-map=$(CURDIR)/= $(filter -W%,$(EXTRA_CFLAGS))
+CONTRACT_DB        = build/contract-tools/contract-db
+CONTRACT_DB_SRCS   = tools/contract_db.c
+
+$(CONTRACT_DB): $(CONTRACT_DB_SRCS)
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -o $@ $(CONTRACT_DB_SRCS) -lsqlite3
+
+.PHONY: contract contract-check
+contract: $(TARGET) $(WEB_PALGEN) $(CONTRACT_DB)
+	@[ "$(WITH_SQLITE)" = 1 ] || { echo "contract: needs WITH_SQLITE=1 (the golden sloth.db)" >&2; exit 1; }
+	CC='$(CC)' AR='$(AR)' CONTRACT_CFLAGS='$(CONTRACT_CFLAGS)' sh tools/contract.sh \
+	    '$(CONTRACT_VERSION)' ./$(TARGET) $(WEB_PALGEN) $(CONTRACT_DB) \
+	    '$(WEB_CORE_SRCS)' '$(CONTRACT_WIRE_HDRS)'
+
+# Unpack, verify, compile a consumer against the unpacked archive alone,
+# check the schema and the golden db, then build again and compare
+# (tests/contract/check.sh). The consumer is a test program and is
+# compiled with this tree's CFLAGS (and -Werror); the archive it links
+# was not. Needs pkg-config; no network, temporary files under
+# mktemp -d only.
+contract-check: contract $(RF_TARGET)
+	MAKE='$(MAKE)' CC='$(CC)' CFLAGS='$(CFLAGS)' sh tests/contract/check.sh $(CONTRACT_TAR) \
+	    ./$(TARGET) ./$(RF_TARGET) $(CONTRACT_DB)
+
 # ── Mutation testing ────────────────────────────────────────────────────────
 # Verifies the test suite itself: introduces small faults into src/ files,
 # rebuilds, runs `make test`, and reports surviving mutants. See
@@ -1823,7 +1874,7 @@ mutate:
 # second rm sweeps objects the pre-#115 layout compiled beside their
 # sources, so a tree upgraded across that change does not keep them.
 clean:
-	rm -rf build
+	rm -rf build dist
 	rm -f $(TARGET) $(TARGET_ALIAS) $(TEST_BIN) $(NOFLAGS_BIN) research_ingest sloth-research-mcp
 	rm -f slothweb slothweb_test slothweb-mcp sloth-ble-scan sloth-sdrsweep sloth-va
 	rm -f sloth-rf
@@ -2101,7 +2152,8 @@ DEPLOY_SCRIPTS = packaging/bin/sloth-migrate-sensor packaging/bin/sloth-monitor-
                  .github/scripts/wiki_sync.sh tests/deploy/test_wiki_sync.sh \
                  tests/deploy/test_slothweb_unit.sh tools/gate.sh \
                  tools/lab/lab_capture.sh tools/lab/expect.sh \
-                 tests/deploy/test_lab_tools.sh
+                 tests/deploy/test_lab_tools.sh \
+                 tools/contract.sh tests/contract/check.sh
 
 # The whole build surface in one measured run (agents/AGENTS.md
 # "Discipline"); one run per tree, refuses a full TMPDIR, prints the

@@ -342,7 +342,7 @@ static void print_usage(const char *argv0) {
             "       [--my-ssid SSID] [--my-bssid BSSID]\n"
             "       [--inventory FILE] [--site TEXT]\n"
             "       [--known-mac MAC] [--known-macs FILE]\n"
-            "       [--headless] [--no-color] [--version]\n"
+            "       [--headless] [--no-color] [--version] [--print-schema]\n"
             "       [--with-research research.db]\n"
             "       [--db FILE] [--db-interval-secs N]\n"
             "       [--db-compact-alerts SRC DST]\n"
@@ -701,6 +701,9 @@ static void print_usage(const char *argv0) {
             "                     running — no use on a headless sensor.\n"
             "                     Lines 2-3 name the libpcap and sqlite\n"
             "                     actually loaded.\n"
+            "  --print-schema     print the --db schema (the DDL and\n"
+            "                     DB_SCHEMA_VERSION, as SQL) and exit.\n"
+            "                     Opens nothing; sloth-rf prints the same.\n"
             "  --with-research FILE\n"
             "                     load the research corpus for per-alert\n"
             "                     citations in --report. Additive: an\n"
@@ -1091,6 +1094,12 @@ int main(int argc, char **argv) {
             printf("pcap: %s\n", libver_pcap());
             printf("sqlite: %s\n", libver_sqlite());
             return 0;
+        } else if (!strcmp(argv[i], "--print-schema")) {
+            /* The contract artifact's schema.sql (#185 item 4): the DDL
+             * as this binary would create it, so the published schema
+             * is what the daemon runs and not a copy of it. Opens no
+             * device, file or database, and needs no privilege. */
+            return db_schema_print(stdout) == 0 ? 0 : 1;
         } else if (!strcmp(argv[i], "--headless")) {
             headless = 1;
         } else if (!strcmp(argv[i], "--replay") && i + 1 < argc) {

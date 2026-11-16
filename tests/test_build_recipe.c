@@ -87,9 +87,16 @@ static int is_recipe(const char *line) { return line[0] == '\t'; }
 
 static int invokes_cc(const char *line) { return strstr(line, "$(CC)") != NULL; }
 
+/* $(CONTRACT_CFLAGS) is the third sanctioned set (#185 item 4): the
+ * contract artifact's libsloth-wire.a is compiled with fixed flags on
+ * purpose, because a sanitizer or hardening flag of this tree's build
+ * would become a link requirement of every consumer in another
+ * repository. It still takes EXTRA_CFLAGS' warning flags, so -Werror
+ * reaches it (the Makefile's CONTRACT_CFLAGS). */
 static int carries_cflags(const char *line) {
     return strstr(line, "$(CFLAGS)") != NULL ||
-           strstr(line, "$(TEST_CFLAGS)") != NULL;
+           strstr(line, "$(TEST_CFLAGS)") != NULL ||
+           strstr(line, "$(CONTRACT_CFLAGS)") != NULL;
 }
 
 

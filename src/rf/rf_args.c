@@ -4,6 +4,7 @@
 #include "rf_args.h"
 #include "sloth.h"
 #include "daemon_start.h"
+#include "db.h"
 #include "data_socket.h"
 #include "libver.h"
 #include "observe.h"
@@ -21,7 +22,7 @@ void rf_usage(FILE *fp, const char *argv0) {
             "       [--data-socket [SPEC]] [--data-socket-allow-remote]\n"
             "       [--strict] [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--user NAME] [--no-privdrop] [--ticks N]\n"
-            "       [--help] [--version]\n"
+            "       [--help] [--version] [--print-schema]\n"
             "\n"
             "sloth-rf is the RF half of the sloth sensor: it reads what\n"
             "decoders that are already running write, and a GNSS receiver.\n"
@@ -114,7 +115,10 @@ void rf_usage(FILE *fp, const char *argv0) {
             "                     boxes only). Conflicts with --user (exit 2).\n"
             "  --ticks N          exit 0 after N poll ticks (1..1000000).\n"
             "  --version, -V      print the version and the loaded sqlite,\n"
-            "                     then exit.\n",
+            "                     then exit.\n"
+            "  --print-schema     print the --db schema (the DDL and\n"
+            "                     DB_SCHEMA_VERSION, as SQL) and exit.\n"
+            "                     Opens nothing; sloth-wifi prints the same.\n",
             argv0);
 }
 
@@ -196,6 +200,10 @@ int rf_args_parse(int argc, char **argv, rf_args_t *a) {
             printf("sloth-rf %s\n", SLOTH_VERSION);
             printf("sqlite: %s\n", libver_sqlite());
             return 0;
+        } else if (!strcmp(argv[i], "--print-schema")) {
+            /* sloth-wifi's flag, the same function: one DDL for both
+             * daemons' databases (#185 item 4). */
+            return db_schema_print(stdout) == 0 ? 0 : 1;
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             rf_usage(stderr, argv[0]);
             return 0;

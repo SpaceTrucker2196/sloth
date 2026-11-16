@@ -238,6 +238,47 @@ static void test_schema_tables_have_seen_columns(void) {
     ASSERT_EQ(with_both, entities);
 }
 
+/* --print-schema (#185 item 4) prints db_schema_print()'s text, which
+ * is the contract artifact's schema.sql: a comment naming the version,
+ * the schema verbatim, and the meta row check_version() stamps. Asserted
+ * on the text, so it holds in a WITH_SQLITE=0 build, whose flag prints
+ * the same; `make contract-check` loads it into SQLite and compares the
+ * two daemons' output byte for byte. */
+static void test_print_schema_is_the_ddl_and_version(void) {
+    FILE *f = tmpfile();
+    ASSERT(f != NULL);
+    if (!f) return;
+    ASSERT_EQ(db_schema_print(f), 0);
+    long n = ftell(f);
+    ASSERT(n > 0);
+    char *buf = n > 0 ? malloc((size_t)n + 1) : NULL;
+    ASSERT(buf != NULL);
+    if (!buf) { fclose(f); return; }
+    rewind(f);
+    ASSERT_EQ(fread(buf, 1, (size_t)n, f), (size_t)n);
+    buf[n] = '\0';
+    fclose(f);
+
+    char want[160];
+    snprintf(want, sizeof(want),
+             "-- sloth database schema, DB_SCHEMA_VERSION %d (src/db_schema.c).\n",
+             DB_SCHEMA_VERSION);
+    ASSERT(strncmp(buf, want, strlen(want)) == 0);
+    /* Every line before the schema is a comment, so the text loads as
+     * it stands. */
+    const char *ddl = strstr(buf, db_schema_sql());
+    ASSERT(ddl != NULL);
+    for (const char *p = buf; ddl && p < ddl; p = strchr(p, '\n') + 1)
+        ASSERT(p[0] == '-' && p[1] == '-');
+    snprintf(want, sizeof(want),
+             "INSERT INTO meta (key,value) VALUES ('schema_version','%d');\n",
+             DB_SCHEMA_VERSION);
+    /* The version row comes last, after the whole schema. */
+    ASSERT(ddl && strlen(ddl) == strlen(db_schema_sql()) + strlen(want));
+    ASSERT(ddl && strcmp(ddl + strlen(db_schema_sql()), want) == 0);
+    free(buf);
+}
+
 /* ── open / close / versioning ───────────────────────────── */
 
 static void test_open_creates_and_stamps_version(void) {
@@ -5225,6 +5266,7 @@ void run_db_tests(void) {
     RUN_TEST(test_schema_has_no_secret_named_columns);
     RUN_TEST(test_eapol_key_material_never_reaches_disk);
     RUN_TEST(test_schema_tables_have_seen_columns);
+    RUN_TEST(test_print_schema_is_the_ddl_and_version);
 
     TEST_SUITE("db: open / close / versioning");
     RUN_TEST(test_open_creates_and_stamps_version);

@@ -29,7 +29,7 @@ typedef struct {
 } rf_args_t;
 
 /* Read argv into `a`. Returns -1 to go on, or the exit code: 0 after
- * --help, --version and --tune-list (each printed), 2 on a flag that is
+ * --help, --version, --print-schema and --tune-list (each printed), 2 on a flag that is
  * unknown or whose value is refused (the reason on stderr). */
 int rf_args_parse(int argc, char **argv, rf_args_t *a);
 

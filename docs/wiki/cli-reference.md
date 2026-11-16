@@ -37,14 +37,14 @@ only that each flag and key is here.
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-11-15 (#216, the cutover: the Wi-Fi binary is `sloth-wifi` with `sloth` a symlink to it; it refuses `--adsb`, `--aprs`, `--aprs-freq`, `--aprs-silent-hours`, `--rtl433` and `--victron` with exit 2 and one line naming `sloth-rf` and `sloth-migrate-rf`; the six rows moved to the sloth-rf table; the `^` ADS-B view key is gone), 2026-11-15 (#214: slothweb's `--rf-socket SPEC` and `--rf-db PATH`, sloth-rf's socket and database read beside sloth's; no sensor flag changed), 2026-11-15 ([[victron]]: sloth-rf's `source_status` gains the `victron` row, five not four; no flag changed), 2026-11-15 (#213, owner ruling: sloth-rf no longer takes `--jsonl`; its JSONL flag is `-o` / `--out` only, so both daemons take the same flags); 2026-11-15 (#213 review: sloth-rf's JSONL flag is documented as `-o` / `--out`, `sloth`'s spelling, with `--jsonl` as its own extra one; the bare `--data-socket` remedy names no port, since 8765 is `sloth`'s); 2026-11-15 (#213: the `sloth-rf` section, the second daemon's flags, `--victron` among them; the receiver's and decoders' flag checks are one copy both mains call); 2026-11-15 (`--victron SPEC`: tail the JSONL the `sloth-va` helper writes, the owner's Victron readings; file-only, sloth connects to nothing); 2026-11-14 (`--rtl433 SPEC`, #208: tail the JSON event log a local rtl_433 already writes, as a passive sub-GHz sensor; file-only, no SDR and no network); 2026-11-13 (`--aprs-freq HZ` and `--aprs-silent-hours N`, #204: the decoder's declared frequency against the GNSS-derived region, and the silent-decoder threshold); 2026-11-12 (`--monitor-iface NAME` pins the monitor radio); 2026-11-12 (`--gps gpsd://`: the one line sent is `?WATCH={"enable":true,"json":true,"pps":true}`, #182; `report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); 2026-11-12 (`karma.forge_assoc_s`, #187); 2026-11-12 (`report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); ---
+**Last updated**: 2026-11-16 (#185 item 4: `--print-schema` in both daemons, the `--db` DDL and `DB_SCHEMA_VERSION` as SQL, which `make contract` publishes as `schema.sql`), 2026-11-15 (#216, the cutover: the Wi-Fi binary is `sloth-wifi` with `sloth` a symlink to it; it refuses `--adsb`, `--aprs`, `--aprs-freq`, `--aprs-silent-hours`, `--rtl433` and `--victron` with exit 2 and one line naming `sloth-rf` and `sloth-migrate-rf`; the six rows moved to the sloth-rf table; the `^` ADS-B view key is gone), 2026-11-15 (#214: slothweb's `--rf-socket SPEC` and `--rf-db PATH`, sloth-rf's socket and database read beside sloth's; no sensor flag changed), 2026-11-15 ([[victron]]: sloth-rf's `source_status` gains the `victron` row, five not four; no flag changed), 2026-11-15 (#213, owner ruling: sloth-rf no longer takes `--jsonl`; its JSONL flag is `-o` / `--out` only, so both daemons take the same flags); 2026-11-15 (#213 review: sloth-rf's JSONL flag is documented as `-o` / `--out`, `sloth`'s spelling, with `--jsonl` as its own extra one; the bare `--data-socket` remedy names no port, since 8765 is `sloth`'s); 2026-11-15 (#213: the `sloth-rf` section, the second daemon's flags, `--victron` among them; the receiver's and decoders' flag checks are one copy both mains call); 2026-11-15 (`--victron SPEC`: tail the JSONL the `sloth-va` helper writes, the owner's Victron readings; file-only, sloth connects to nothing); 2026-11-14 (`--rtl433 SPEC`, #208: tail the JSON event log a local rtl_433 already writes, as a passive sub-GHz sensor; file-only, no SDR and no network); 2026-11-13 (`--aprs-freq HZ` and `--aprs-silent-hours N`, #204: the decoder's declared frequency against the GNSS-derived region, and the silent-decoder threshold); 2026-11-12 (`--monitor-iface NAME` pins the monitor radio); 2026-11-12 (`--gps gpsd://`: the one line sent is `?WATCH={"enable":true,"json":true,"pps":true}`, #182; `report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); 2026-11-12 (`karma.forge_assoc_s`, #187); 2026-11-12 (`report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); ---
 
 ## Synopsis
 
 ```
 sloth-wifi [output] [handshakes] [stream] [wifi] [bluetooth] [location]
            [correlation] [db] [inventory] [posture] [replay] [runtime]
-           [--help] [--version]
+           [--help] [--version] [--print-schema]
 sloth      ...    the same program: a symlink to sloth-wifi (build tree
                   and /usr/local/bin), kept with no end date
 sloth-rf   [decoders] [receiver] [output] [db] [stream] [runtime]   (see "sloth-rf")
@@ -456,6 +456,7 @@ per-frame detectors behave as live. → [[replay-integration]]
 | `--headless` | — | off | Draw nothing, never touch the terminal (no clears, no escape sequences, no raw-mode termios). For appliance/systemd. Capture, alerting and every sink run normally. |
 | `--no-color`, `--no-colour` | — | color on | Suppress colour escapes, keep drawing. Also honoured via `NO_COLOR` env. |
 | `--version`, `-V` | — | — | Print version to stdout and exit `0`. Line 1 is `sloth <SLOTH_VERSION>`, unchanged for scripts that read it alone; lines 2–3 (#142) are `pcap: <pcap_lib_version()>` and `sqlite: <sqlite3_libversion()>` — the libraries the dynamic linker **loaded**, `none` in a build without one. → [[release-checklist]] |
+| `--print-schema` | — | — | Print the `--db` schema as one SQL script to stdout and exit `0` (#185 item 4): a comment naming `DB_SCHEMA_VERSION`, the DDL of `src/db_schema.c` (`db_schema_sql()`), and the `INSERT` of the `meta` row `schema_version` that a new file is stamped with. Loading it into an empty database gives the tables, indexes and version row `--db` would create; the PRAGMAs a daemon also sets (`auto_vacuum`, `journal_mode=WAL`, `synchronous`, `foreign_keys`) are storage settings and are named in the comment, not emitted. Opens no device, file or database and needs no privilege. The same text in a `WITH_SQLITE=0` build, and byte for byte the same as `sloth-rf --print-schema` (`make contract-check`). It is the contract artifact's `schema.sql` ([[contract]]). |
 | `--help`, `-h` | — | — | Print usage and exit `0`. |
 
 ## Keybindings (runtime TUI)
@@ -581,7 +582,7 @@ only a configured `storage.*` floor refuses anything in advance. See
 
 | Code | Meaning |
 |------|---------|
-| `0` | Clean exit (incl. `--version`, `--help`, and the end of a `--ticks N` run). |
+| `0` | Clean exit (incl. `--version`, `--print-schema`, `--help`, and the end of a `--ticks N` run). |
 | `1` | A `--replay` file that cannot be opened, is not a savefile, has a datalink with no route, or is damaged part-way (#119). |
 | `2` | Bad argument, or a fail-closed refusal (one of the six decoder flags, which are `sloth-rf`'s since #216: § Refused; `--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--strict` with a routable `--data-socket`, `--eapol-dir` without `--collect-handshakes`, `--pcap-dir` and `--eapol-dir` naming one directory (#166), a `--handshake-retention` value outside `0..36500`, a `--correlate-retain`/`--db-*`/`--wps-*` value that is not an integer inside its knob's range (#120), a `--user` naming no account or needing root it does not have, `--user` with `--no-privdrop`, a privilege drop that failed or did not read back, `--iface` naming a raw HCI device `bluetoothN`, a `--monitor-iface` given twice, not an interface name, naming `bluetoothN`, with `--replay` or in a `WITH_PCAP=0` build, `--bt-monitor` with `--replay` or in a `WITH_PCAP=0` build, a `--location` outside its ranges, a malformed `--gps` SPEC, `--gps` with `--replay`, a `--gps` device that cannot be opened, a non-loopback gpsd without `--gps-allow-remote` or under `--strict`, a `--gps-baud` outside its list, a malformed or unsupported `--adsb` SPEC (a non-loopback `sbs://` or `beast://` host), `--adsb` with `--replay`, a malformed `--aprs` SPEC, `--aprs` with `--replay`, a malformed `--rtl433` SPEC, `--rtl433` with `--replay`, a malformed `--victron` SPEC, `--victron` with `--replay`). |
 
@@ -642,6 +643,7 @@ argument.
 | `--no-privdrop` | — | off | As `sloth`'s. |
 | `--ticks` | `N` | run until a signal | Exit 0 after `N` poll ticks. |
 | `--version`, `-V` | — | — | `sloth-rf <version>` and the loaded sqlite. No `pcap:` line: it loads no libpcap. |
+| `--print-schema` | — | — | As `sloth-wifi`'s, and the same bytes: both daemons' databases are created from one DDL (`src/db_schema.c`) at one `DB_SCHEMA_VERSION`. Exit 0. |
 | `--help`, `-h` | — | — | Usage, on stderr; exit 0. |
 
 The six decoder rows were written when the one binary took those
@@ -679,7 +681,7 @@ What it writes, and how that differs from `sloth`'s stream:
   report on it and this daemon has none.
 
 Exit codes are `sloth-wifi`'s: `0` clean (and `--help`, `--version`,
-`--tune-list`, the end of `--ticks N`), `1` a sink that could not be
+`--print-schema`, `--tune-list`, the end of `--ticks N`), `1` a sink that could not be
 opened, `2` a bad argument or a fail-closed refusal.
 
 ## slothweb

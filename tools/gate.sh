@@ -5,8 +5,9 @@
 # and under TSan; make web-test plain, against
 # SQLite 3.45 when a build of it is given, without SQLite, with an empty
 # vendor table, under ASan and under TSan twice; the quickstart check;
-# deploy-test with every shellcheck given; replay-check; a one-second
-# fuzz; cppcheck; and docs-counts and research-index leaving the tree
+# deploy-test with every shellcheck given; replay-check; contract-check
+# (the release's contract artifact, built twice and compared, and read
+# from the unpacked tar alone); a one-second fuzz; cppcheck; and docs-counts and research-index leaving the tree
 # clean (research.db by content: its header carries the SQLite version). Each line is one measured result; CI runs the same matrix on
 # every push (.github/workflows/ci.yml), so a local run is for finding
 # it first, not instead.
@@ -138,6 +139,7 @@ fi
 make -s clean > /dev/null 2>&1
 make -s > /dev/null 2>&1
 step "replay-check" make replay-check
+step "contract-check" make contract-check
 step "fuzz" make fuzz FUZZ_SECONDS=1
 step "cppcheck" make cppcheck
 make docs-counts > /dev/null 2>&1

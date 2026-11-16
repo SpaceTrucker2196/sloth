@@ -32,6 +32,8 @@
 #ifndef SLOTH_DB_H
 #define SLOTH_DB_H
 
+#include <stdio.h>
+
 #include "sloth.h"
 
 /* Schema version stamped into the meta table. db_open() refuses a file
@@ -428,6 +430,12 @@ const char *db_schema_meta_sql(void);
  * file and not db.h's callers (slothweb's suite holds its own newest
  * readable version to it). */
 int db_schema_version(void);
+
+/* Print the schema as one SQL script (#185 item 4, `--print-schema` in
+ * both daemons, the contract artifact's schema.sql): a comment naming
+ * DB_SCHEMA_VERSION, db_schema_sql(), and the INSERT of the meta row
+ * check_version() stamps a new file with. 0, or -1 on a write error. */
+int db_schema_print(FILE *out);
 
 /* v1 -> v2 (#53 retroactive): ALTER TABLE ADD COLUMN only. Exposed for
  * the same guardrail tests as db_schema_sql(). */
