@@ -657,9 +657,9 @@ typedef struct {
 
 static int stream_findings(web_live_t *live, const char *mac, sfind_t *out, int max) {
     if (!live) return 0;
-    web_live_inc_t *inc = calloc(WEB_LIVE_INCIDENTS + WEB_LIVE_CLOSED, sizeof(*inc));
+    web_live_inc_t *inc = calloc(WEB_LIVE_INC_ALL, sizeof(*inc));
     if (!inc) return 0;
-    int nopen = 0, n = web_live_incidents(live, inc, WEB_LIVE_INCIDENTS + WEB_LIVE_CLOSED, &nopen), k = 0;
+    int nopen = 0, n = web_live_incidents(live, inc, WEB_LIVE_INC_ALL, &nopen), k = 0;
     for (int i = 0; i < n && k < max; i++) {
         if (!strstr(inc[i].key, mac)) continue;
         int dup = 0;

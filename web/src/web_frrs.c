@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "web_alertdb.h"
+#include "web_alerts.h"
 #include "web_alertkb.h"
 #include "web_history.h"
 #include "web_incident.h"
@@ -1337,16 +1338,19 @@ int frrs_resolve_alert(const web_m4_t *m, web_live_t *live, web_sdb_conn_t *cin,
             /* The earliest first_ts of the key's incidents in the
              * stream: the descriptor a stream-only row keeps. */
             long long first = e->first_ts;
-            web_live_inc_t *all = calloc(WEB_LIVE_INCIDENTS + WEB_LIVE_CLOSED, sizeof(*all));
-            int na = all ? web_live_incidents(live, all, WEB_LIVE_INCIDENTS + WEB_LIVE_CLOSED, NULL) : 0;
+            web_live_inc_t *all = calloc(WEB_LIVE_INC_ALL, sizeof(*all));
+            int na = all ? web_live_incidents(live, all, WEB_LIVE_INC_ALL, NULL) : 0;
+            /* An incident of sloth-rf.db's (web_alerts.h): its key is
+             * no predicate on sloth.db, so its subject is the stream's. */
+            int apart = web_alert_rf_apart(m, e);
             for (int i = 0; i < na; i++)
                 if (e->key[0] && !strcmp(all[i].key, e->key) && all[i].first_ts > 0 &&
-                    all[i].first_ts < first)
+                    web_alert_rf_apart(m, &all[i]) == apart && all[i].first_ts < first)
                     first = all[i].first_ts;
             free(all);
             web_tri_q_t q = { id, e->key[0] ? e->key : NULL, 0, e->type, e->match_port,
                               e->match_ip, first };
-            rc = subj_of_q(have_c ? cp : NULL, &q, s) == 0 ? 1 : -1;
+            rc = subj_of_q(have_c && !apart ? cp : NULL, &q, s) == 0 ? 1 : -1;
         }
         free(e);
     } else {
@@ -1729,9 +1733,9 @@ static int route_summary(const web_m4_t *m, web_live_t *live, const char *query,
     int nopen = 0;
     web_live_inc_t *inc = NULL;
     if (live) {
-        inc = calloc(WEB_LIVE_INCIDENTS + WEB_LIVE_CLOSED, sizeof(*inc));
+        inc = calloc(WEB_LIVE_INC_ALL, sizeof(*inc));
         if (!inc) return -1;
-        int ninc = web_live_incidents(live, inc, WEB_LIVE_INCIDENTS + WEB_LIVE_CLOSED, &nopen);
+        int ninc = web_live_incidents(live, inc, WEB_LIVE_INC_ALL, &nopen);
         (void)ninc;
     }
     int any = web_frrs_triage_any(f);
@@ -1746,7 +1750,10 @@ static int route_summary(const web_m4_t *m, web_live_t *live, const char *query,
             continue;
         /* One per key, as the Alerts page's open rows are. */
         int dup = 0;
-        for (int j = 0; j < i && !dup; j++) dup = inc[i].key[0] && !strcmp(inc[j].key, inc[i].key);
+        int apart = web_alert_rf_apart(m, &inc[i]);
+        for (int j = 0; j < i && !dup; j++)
+            dup = inc[i].key[0] && !strcmp(inc[j].key, inc[i].key) &&
+                  web_alert_rf_apart(m, &inc[j]) == apart;
         if (dup) continue;
         total++;
         int st = WEB_TRI_UNTRIAGED;
@@ -1756,7 +1763,7 @@ static int route_summary(const web_m4_t *m, web_live_t *live, const char *query,
             web_tri_q_t q = { id, inc[i].key[0] ? inc[i].key : NULL, 0, inc[i].type,
                               inc[i].match_port, inc[i].match_ip, inc[i].first_ts };
             web_tri_t t;
-            if (web_frrs_triage_find(f, have_c ? &c : NULL, &q, &t) > 0) st = t.state;
+            if (web_frrs_triage_find(f, have_c && !apart ? &c : NULL, &q, &t) > 0) st = t.state;
         }
         open[st]++;
     }

@@ -534,8 +534,8 @@ static void cand_alerts(const web_m4_t *m, web_live_t *live, web_sdb_conn_t *c, 
                         const ref_t *r, int is_mac, const link_t *ln, int nl, cand_t *cs,
                         int *n, long long *reached) {
     if (live) {
-        web_live_inc_t *all = calloc(WEB_LIVE_INCIDENTS + WEB_LIVE_CLOSED, sizeof(*all));
-        int na = all ? web_live_incidents(live, all, WEB_LIVE_INCIDENTS + WEB_LIVE_CLOSED, NULL) : 0;
+        web_live_inc_t *all = calloc(WEB_LIVE_INC_ALL, sizeof(*all));
+        int na = all ? web_live_incidents(live, all, WEB_LIVE_INC_ALL, NULL) : 0;
         for (int i = 0; i < na && *n < WEB_REL_SUGGEST; i++) {
             char k[WEB_KEY_MAX + 1], mac[18];
             int same = is_mac ? frrs_mac_in(all[i].key, mac) && !strcmp(mac, r->key)

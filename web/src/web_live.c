@@ -974,16 +974,37 @@ static void summary_locked(const web_live_t *l, web_live_sum_t *s,
     }
 }
 
+/* Do a's and b's spans meet, within WEB_LIVE_SAME_SLACK_S? An open
+ * incident has no end. */
+static int inc_meet(const web_live_inc_t *a, const web_live_inc_t *b) {
+    if (a->closed_ts >= 0 && a->closed_ts + WEB_LIVE_SAME_SLACK_S < b->first_ts) return 0;
+    if (b->closed_ts >= 0 && b->closed_ts + WEB_LIVE_SAME_SLACK_S < a->first_ts) return 0;
+    return 1;
+}
+
+/* Is the RF daemon's incident e one sloth holds too (web_live.h, "one
+ * occurrence, two daemons")? Both mutexes held. */
+static int peer_dup(const web_live_t *l, const web_live_inc_t *e) {
+    if (!e->key[0]) return 0;
+    for (int i = 0; i < l->ninc; i++)
+        if (!strcmp(l->inc[i].key, e->key) && inc_meet(&l->inc[i], e)) return 1;
+    for (int i = 0; i < l->closed_n; i++)
+        if (!strcmp(l->closed[i].key, e->key) && inc_meet(&l->closed[i], e)) return 1;
+    return 0;
+}
+
 /* The RF daemon's open incidents by severity, added to s->alerts: those
- * sc's scope passes (NULL or Hybrid: all). Called with l's mutex held;
- * takes the peer's (the one order, web_live.h). */
+ * sc's scope passes (NULL or Hybrid: all), less the ones sloth holds
+ * too. Called with l's mutex held; takes the peer's (the one order,
+ * web_live.h). */
 static void peer_alerts(const web_live_t *l, const web_scope_ctx_t *sc, web_live_sum_t *s) {
     web_live_t *p = l->peer;
     if (!p) return;
     int scoped = sc && sc->scope != WEB_SCOPE_HYBRID;
     pthread_mutex_lock(&p->mu);
     for (int i = 0; i < p->ninc; i++)
-        if (!scoped || web_scope_pass(sc->scope, web_live_inc_tag(sc, &p->inc[i])))
+        if (!peer_dup(l, &p->inc[i]) &&
+            (!scoped || web_scope_pass(sc->scope, web_live_inc_tag(sc, &p->inc[i]))))
             s->alerts[p->inc[i].sev]++;
     if (p->inc_overflow) s->alerts_overflow = 1;
     pthread_mutex_unlock(&p->mu);
@@ -1373,14 +1394,22 @@ static int by_last_desc(const void *a, const void *b) {
     return by_seq_desc(a, b);
 }
 
-/* One state's open or closed incidents onto out[n..], marked. The
- * caller holds its mutex. */
-static int inc_copy(const web_live_t *l, int open, int rf, web_live_inc_t *out, int n, int max) {
+/* One state's open or closed incidents onto out[n..], marked: sloth's
+ * (dup_of NULL), or the RF daemon's less the ones dup_of holds too.
+ * The caller holds the mutexes. */
+static int inc_copy(const web_live_t *l, int open, const web_live_t *dup_of,
+                    web_live_inc_t *out, int n, int max) {
+    int rf = dup_of != NULL;
     if (open) {
-        for (int i = 0; i < l->ninc && n < max; i++) { out[n] = l->inc[i]; out[n++].rf = rf; }
+        for (int i = 0; i < l->ninc && n < max; i++) {
+            if (dup_of && peer_dup(dup_of, &l->inc[i])) continue;
+            out[n] = l->inc[i];
+            out[n++].rf = rf;
+        }
     } else {
         for (int k = 0; k < l->closed_n && n < max; k++) {
             int i = (l->closed_next - 1 - k + 2 * WEB_LIVE_CLOSED) % WEB_LIVE_CLOSED;
+            if (dup_of && peer_dup(dup_of, &l->closed[i])) continue;
             out[n] = l->closed[i];
             out[n++].rf = rf;
         }
@@ -1393,16 +1422,16 @@ int web_live_incidents(web_live_t *l, web_live_inc_t *out, int max, int *nopen) 
     if (p) {
         /* Both under their locks (this state's, then the peer's: the
          * one order), so an incident that resolves meanwhile is in one
-         * group, not both. The open ones of both first: when the two
-         * together are more than max (every caller sizes for one
-         * state), what is cut is the closed, sloth-rf's before sloth's. */
+         * group, not both. The open ones of both first: a caller's
+         * WEB_LIVE_INC_ALL holds every one of both states, and a
+         * smaller max cuts the closed first, sloth-rf's before sloth's. */
         pthread_mutex_lock(&l->mu);
         pthread_mutex_lock(&p->mu);
-        int n = inc_copy(l, 1, 0, out, 0, max);
-        n = inc_copy(p, 1, 1, out, n, max);
+        int n = inc_copy(l, 1, NULL, out, 0, max);
+        n = inc_copy(p, 1, l, out, n, max);
         int o = n;
-        n = inc_copy(l, 0, 0, out, n, max);
-        n = inc_copy(p, 0, 1, out, n, max);
+        n = inc_copy(l, 0, NULL, out, n, max);
+        n = inc_copy(p, 0, l, out, n, max);
         pthread_mutex_unlock(&p->mu);
         pthread_mutex_unlock(&l->mu);
         qsort(out, (size_t)o, sizeof(*out), by_last_desc);

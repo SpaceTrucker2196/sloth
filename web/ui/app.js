@@ -1222,14 +1222,21 @@
   // stream as t.rf, and the tile says both words, sloth's first. A
   // socket that is not connected is said in place of its sensor word
   // (the last sensor_health then says nothing of now). Without t.rf
-  // the tile is what kpis() left.
+  // the tile is what kpis() left. /api/live carries no rf, and under a
+  // scope the tick's tiles are not used: both callers pass the latest
+  // tick's (lastRf), so the tile says sloth-rf's word in every scope
+  // and a live() answer does not blank it until the next tick.
+  var lastRf = null;
   function rfWord(rf) { return rf.socket === "connected" ? String(rf.sensor) : String(rf.socket); }
   function rfKpi(t) {
     if (!t.rf || typeof t.sensor !== "string") return;
     var w = rfWord(t.rf);
-    var worst = t.sensor !== "ok" ? t.sensor : w;
+    // The worse of the two words colours the tile: anything but ok or
+    // unknown is bad, whichever daemon says it.
+    var bad = function (x) { return x !== "ok" && x !== "unknown"; };
+    var cls = bad(t.sensor) || bad(w) ? "bad" : t.sensor === "ok" && w === "ok" ? "ok" : "unknown";
     set("k-sensor", t.sensor + " \u00b7 rf " + w);
-    $("k-sensor").className = "kpi health-" + (worst === "ok" ? "ok" : worst === "unknown" ? "unknown" : "bad");
+    $("k-sensor").className = "kpi health-" + cls;
   }
 
   function sensor(s, b) {
@@ -1264,6 +1271,7 @@
                devices_stale: l.devices_stale, records: l.records,
                records_s: l.records_s,
                sensor: l.sensor ? l.sensor.state : undefined,
+               rf: lastRf,
                alerts_open: l.alerts_open
                  ? [l.alerts_open.low, l.alerts_open.warn, l.alerts_open.crit]
                  : null });
@@ -1316,7 +1324,8 @@
       set("seq", t.seq);
       set("up", dur(t.uptime_s));
       set("clients", t.sse_clients);
-      kpis(SCOPE === "hybrid" ? t : { socket: t.socket, sensor: t.sensor });
+      lastRf = t.rf || null;
+      kpis(SCOPE === "hybrid" ? t : { socket: t.socket, sensor: t.sensor, rf: lastRf });
       // Under a scope the tiles are /api/live's: asked again every 2 s.
       if (SCOPE !== "hybrid" && Date.now() - lastLive >= 2000) live();
     });
@@ -5277,7 +5286,8 @@
       li.appendChild(el("span", "tx d-normal", stamp(r.from) + " to " + stamp(r.to)));
       li.appendChild(el("span", "n " + (r.incidents > 1 ? heatClass(0.6) : "d-dim"), String(r.incidents)));
       li.appendChild(el("span", "n d-dim", "x" + fmt(r.count)));
-      if (r.id !== AD.runsOf) alertLink(li, r.id);
+      // A run of sloth-rf.db's has no id: nothing to link (db_file).
+      if (r.id && r.id !== AD.runsOf) alertLink(li, r.id);
       ol.appendChild(li);
     });
     if (!AD.runs.length) ol.appendChild(el("li", "sub", AD.runsNone || "none"));
@@ -5451,7 +5461,8 @@
     var h2 = j.history || {};
     AD.runs = h2.runs || [];
     AD.runsOf = j.id;
-    AD.runsNone = j.db === "open" ? "no sloth.db row yet" : "sloth.db is " + j.db;
+    var dbFile = j.db_file || "sloth.db";
+    AD.runsNone = j.db === "open" ? "no " + dbFile + " row yet" : dbFile + " is " + j.db;
     runsDraw();
     set("ad-history-note", (num(h2.incidents_read) ? h2.incidents_read + " incidents read" : "") +
         (num(h2.gap_s) ? "; incidents less than " + Math.round(h2.gap_s / 60) + " min apart are one run" : "") +

@@ -15,7 +15,7 @@
 #include "web_series.h"
 #include "web_ssid.h"
 
-#define INC_MAX (WEB_LIVE_INCIDENTS + WEB_LIVE_CLOSED)
+#define INC_MAX WEB_LIVE_INC_ALL
 /* The most one list row renders to: every text member at its cut
  * length, each byte escaped six-fold, and the fixed members. */
 #define ROW_JSON_MAX (2 * WEB_SDB_TEXT_MAX * WEB_JW_EXPAND + 64 * WEB_JW_EXPAND + 400)
@@ -364,11 +364,13 @@ static int state_ok(const aq_t *a, const web_live_inc_t *e) {
 }
 
 /* The row of the stream already standing for e's key, or -1. A keyless
- * incident stands alone. */
-static int row_of_key(const row_t *rows, int n, const web_live_inc_t *e) {
+ * incident stands alone, and so does a key of the other database. */
+static int row_of_key(const web_m4_t *m, const row_t *rows, int n, const web_live_inc_t *e) {
     if (!e->key[0]) return -1;
     for (int i = 0; i < n; i++)
-        if (rows[i].stream && !strcmp(rows[i].inc->key, e->key)) return i;
+        if (rows[i].stream && !strcmp(rows[i].inc->key, e->key) &&
+            web_alert_rf_apart(m, rows[i].inc) == web_alert_rf_apart(m, e))
+            return i;
     return -1;
 }
 
@@ -408,7 +410,7 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
     int nr = 0, open_rows = 0, stream_closed = 0;
     for (int i = 0; i < ninc; i++) {
         if (!inc_match(&a, &inc[i], since) || !state_ok(&a, &inc[i])) continue;
-        if (row_of_key(rows, nr, &inc[i]) >= 0) continue;
+        if (row_of_key(m, rows, nr, &inc[i]) >= 0) continue;
         row_t *r = &rows[nr++];
         r->stream = 1;
         r->inc = &inc[i];
@@ -417,7 +419,7 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
     }
     /* Each stream row over every incident of its key in the stream. */
     for (int i = 0; i < ninc; i++) {
-        int k = row_of_key(rows, nr, &inc[i]);
+        int k = row_of_key(m, rows, nr, &inc[i]);
         for (int j = 0; j < nr && k < 0; j++)      /* keyless: its own row */
             if (rows[j].inc == &inc[i]) k = j;
         if (k < 0) continue;
@@ -459,9 +461,12 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
             snprintf(f.q, sizeof(f.q), "%s", a.q);
             for (int t = 0; a.q[0] && t < web_akb_n && f.nqtypes < WEB_ADB_TYPES; t++)
                 if (has_ci(web_akb[t].name, a.q)) f.qtypes[f.nqtypes++] = t;
-            /* Every stream key is the stream's row, never a second one. */
+            /* Every stream key is the stream's row, never a second
+             * one: the keys whose rows are in this file. A key of
+             * sloth-rf.db's excludes nothing here, so sloth.db's own
+             * finding of that key is listed as itself. */
             for (int i = 0; i < ninc && f.nexclude < WEB_ADB_EXCLUDE; i++) {
-                int dup = 0;
+                int dup = web_alert_rf_apart(m, &inc[i]);
                 for (int j = 0; j < f.nexclude && !dup; j++) dup = !strcmp(f.exclude[j], inc[i].key);
                 if (inc[i].key[0] && !dup) f.exclude[f.nexclude++] = inc[i].key;
             }
@@ -507,7 +512,10 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
                                        r->g.first_seen };
                 }
                 web_tri_t t;
-                if (web_frrs_triage_find(f, have_c ? &c : NULL, &q, &t) > 0) {
+                /* A sloth-rf.db key is never resolved against sloth.db:
+                 * its subject is the stream's (web_alerts.h). */
+                int in_c = have_c && !(r->stream && web_alert_rf_apart(m, r->inc));
+                if (web_frrs_triage_find(f, in_c ? &c : NULL, &q, &t) > 0) {
                     r->tri_state = t.state;
                     r->tri_via = t.via;
                     r->tri_ts = t.ts;
@@ -531,18 +539,41 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
     int lo = (int)a.offset, hi = (int)(a.offset + a.limit);
     if (hi > total) hi = total;
 
-    /* The page's rows only: each key's totals, by key or rowid. */
-    for (int i = lo; have_c && i < hi; i++) {
+    /* The page's rows only: each key's totals, by key or rowid, from
+     * the file its rows are in: sloth-rf.db for an incident sloth-rf
+     * raised (as its page reads them, web_alert_route()), opened once
+     * and only for such a row. Missing or refused, those rows show the
+     * stream's figures alone. */
+    web_sdb_conn_t crf;
+    int have_rf = 0, tried_rf = 0;
+    for (int i = lo; i < hi; i++) {
         row_t *r = &rows[i];
+        web_sdb_conn_t *cp = have_c ? &c : NULL;
+        if (r->stream && web_alert_rf_apart(m, r->inc)) {
+            if (!tried_rf) {
+                web_m4_t mrf = *m;
+                mrf.sdb = m->sdb_rf;
+                tried_rf = 1;
+                have_rf = web_hist_configured(&mrf) &&
+                          web_hist_open(&mrf, &crf, now_s, body, cap, len, status) == 0;
+            }
+            cp = have_rf ? &crf : NULL;
+        }
+        if (!cp) continue;
         int got = r->stream
-            ? (r->inc->key[0] ? web_adb_key_totals(&c, 0, r->inc->key, &r->t) : 0)
-            : web_adb_key_totals(&c, r->g.rid, NULL, &r->t);
+            ? (r->inc->key[0] ? web_adb_key_totals(cp, 0, r->inc->key, &r->t) : 0)
+            : web_adb_key_totals(cp, r->g.rid, NULL, &r->t);
         if (got < 0) {
+            /* One answer per failure: the other connection is closed
+             * first, the failed one by the answer. */
+            if (cp == &c) { if (have_rf) web_slothdb_close(&crf); }
+            else if (have_c) web_slothdb_close(&c);
             free(inc); free(rows);
-            return web_hist_read_failed(&c, body, cap, len, status);
+            return web_hist_read_failed(cp, body, cap, len, status);
         }
         r->have_t = got > 0;
     }
+    if (have_rf) web_slothdb_close(&crf);
     if (have_c) web_slothdb_close(&c);
 
     web_jw_t w;
@@ -738,15 +769,15 @@ static void runs_json(web_jw_t *w, const run_in_t *r, int n, size_t cap,
             if (r[i].sev > sev) sev = r[i].sev;
             count += r[i].count;
         }
-        char id[32];
-        snprintf(id, sizeof(id), "d%lld", r[at].rid);
+        char id[32] = "";
+        if (r[at].rid > 0) snprintf(id, sizeof(id), "d%lld", r[at].rid);
         web_jw_raw(w, runs ? ",{\"from\":" : "{\"from\":");
         web_jw_int(w, r[end].first_seen);
         web_jw_raw(w, ",\"to\":");        web_jw_int(w, r[at].last_seen);
         web_jw_raw(w, ",\"incidents\":"); web_jw_int(w, end - at + 1);
         web_jw_raw(w, ",\"sev\":");       web_jw_int(w, sev_clamp(sev));
         web_jw_raw(w, ",\"count\":");     web_jw_int(w, count);
-        web_jw_raw(w, ",\"id\":");        web_jw_str(w, id);
+        web_jw_raw(w, ",\"id\":");        jw_str_or_null(w, id);
         web_jw_raw(w, "}");
         runs++;
         at = end + 1;
@@ -824,7 +855,9 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
      * The reads below are then of that file; a "d" id is a sloth.db
      * rowid and stays there. */
     web_m4_t mrf;
-    if (have_inc && e->rf && m && m->sdb_rf && m->sdb_rf->configured) {
+    const web_m4_t *m0 = m;
+    int from_rf = have_inc && web_alert_rf_apart(m, e);
+    if (from_rf) {
         mrf = *m;
         mrf.sdb = m->sdb_rf;
         m = &mrf;
@@ -870,7 +903,8 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
              * never read). */
             for (int i = 0; got >= 0 && kind == 'd' && i < na && !have_inc; i++) {
                 web_adb_totals_t t2;
-                if (!all[i].key[0]) continue;
+                /* Never sloth-rf.db's incident of the same key. */
+                if (!all[i].key[0] || web_alert_rf_apart(m0, &all[i])) continue;
                 int g2 = web_adb_key_totals(&c, 0, all[i].key, &t2);
                 if (g2 < 0) got = -1;
                 else if (g2 > 0 && t2.newest_rid == tot.newest_rid) { *e = all[i]; have_inc = 1; }
@@ -919,7 +953,8 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
     int sn = 0;
     long long s_count = 0, s_first = 0;
     for (int i = 0; have_inc && i < na; i++) {
-        if (e->key[0] ? strcmp(all[i].key, e->key) != 0 : strcmp(all[i].hid, e->hid) != 0)
+        if (e->key[0] ? strcmp(all[i].key, e->key) != 0 || web_alert_rf_apart(m0, &all[i]) != web_alert_rf_apart(m0, e)
+                      : strcmp(all[i].hid, e->hid) != 0)
             continue;
         sn++;
         s_count += all[i].count;
@@ -979,8 +1014,13 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
     } else {
         web_jw_raw(&w, ",\"stream_id\":null");
     }
+    /* "db_id" and the runs' ids are sloth.db rowids, which every route
+     * that takes a "d" id resolves in sloth.db. sloth-rf.db's rowids
+     * are another file's and are never given as one: null, and
+     * "db_file" names the file "db" and the history were read from. */
+    if (from_rf) web_jw_raw(&w, ",\"db_file\":\"sloth-rf.db\"");
     web_jw_raw(&w, ",\"db_id\":");
-    if (tot.newest_rid > 0) {
+    if (tot.newest_rid > 0 && !from_rf) {
         char did[32];
         snprintf(did, sizeof(did), "d%lld", tot.newest_rid);
         web_jw_str(&w, did);
@@ -1110,7 +1150,13 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
      * since v8, so one run holding every incident's peak and sum). */
     int nr = ni > 0 ? ni : nh;
     for (int i = 0; i < nr; i++) {
-        if (ni > 0) {
+        if (from_rf) {
+            rin[i].rid = 0;           /* no id: runs_json() */
+            rin[i].first_seen = ni > 0 ? inc[i].first_seen : hist[i].first_seen;
+            rin[i].last_seen = ni > 0 ? inc[i].last_seen : hist[i].last_seen;
+            rin[i].count = ni > 0 ? inc[i].count : hist[i].count;
+            rin[i].sev = ni > 0 ? inc[i].peak_sev : hist[i].sev;
+        } else if (ni > 0) {
             rin[i].rid = tot.newest_rid > 0 ? tot.newest_rid : rid;
             rin[i].first_seen = inc[i].first_seen;
             rin[i].last_seen = inc[i].last_seen;

@@ -613,9 +613,9 @@ int web_lure_bssid_route(web_lure_t *l, web_live_t *live, const char *query,
     web_live_inc_t *inc = NULL;
     int ninc = 0;
     if (live) {
-        inc = calloc(WEB_LIVE_INCIDENTS + WEB_LIVE_CLOSED, sizeof(*inc));
+        inc = calloc(WEB_LIVE_INC_ALL, sizeof(*inc));
         if (!inc) return -1;
-        ninc = web_live_incidents(live, inc, WEB_LIVE_INCIDENTS + WEB_LIVE_CLOSED, NULL);
+        ninc = web_live_incidents(live, inc, WEB_LIVE_INC_ALL, NULL);
     }
 
     web_jw_t w;

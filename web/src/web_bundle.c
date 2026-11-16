@@ -805,6 +805,42 @@ static void write_envelope(const web_bundle_ctx_t *c, web_jw_t *w) {
         web_jw_raw(w, ",\"stale_after_s\":"); web_jw_int(w, WEB_SDB_STALE_S);
         web_jw_raw(w, "}");
     }
+    /* sloth-rf.db (--rf-db, #214), only when it is given: an alert
+     * sloth-rf raised has its page read from this file (the page's
+     * "db_file"), so its state is the one that page's "db" speaks of.
+     * As /api/health's "rf_db", less the path and the counters. */
+    if (c->m->sdb_rf && c->m->sdb_rf->configured) {
+        web_sdb_stats_t st;
+        web_slothdb_check(c->m->sdb_rf, h->wall_s);
+        web_slothdb_stats(c->m->sdb_rf, &st);
+        int open = st.state == WEB_SDB_OPEN && st.mtime > 0;
+        long long age = h->wall_s > st.mtime ? h->wall_s - st.mtime : 0;
+        web_jw_raw(w, ",\"rf_db\":{\"state\":");
+        web_jw_str(w, web_slothdb_state_word(st.state));
+        web_jw_raw(w, ",\"schema\":");
+        if (st.state == WEB_SDB_OPEN) web_jw_int(w, st.schema); else web_jw_raw(w, "null");
+        web_jw_raw(w, ",\"mode\":");
+        if (st.mode[0]) web_jw_str(w, st.mode); else web_jw_raw(w, "null");
+        web_jw_raw(w, ",\"mtime\":");
+        if (open) web_jw_int(w, st.mtime); else web_jw_raw(w, "null");
+        web_jw_raw(w, ",\"age_s\":");
+        if (open) web_jw_int(w, age); else web_jw_raw(w, "null");
+        web_jw_raw(w, ",\"stale\":");
+        if (open) {
+            int current = 0;
+            if (h->live && h->live->peer) {
+                web_live_sum_t ls;
+                web_live_summary(h->live->peer, &ls, h->now_ms);
+                current = ls.sock_state == WEB_SOCK_CONNECTED && ls.last_record_age_ms >= 0 &&
+                          ls.last_record_age_ms <= WEB_SDB_STREAM_CURRENT_S * 1000LL;
+            }
+            web_jw_raw(w, web_sdb_is_stale(age, current) ? "true" : "false");
+        } else {
+            web_jw_raw(w, "null");
+        }
+        web_jw_raw(w, ",\"stale_after_s\":"); web_jw_int(w, WEB_SDB_STALE_S);
+        web_jw_raw(w, "}");
+    }
 
     /* The scope in effect and what it excludes. */
     web_scope_ctx_t sc;

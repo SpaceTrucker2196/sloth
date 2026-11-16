@@ -438,7 +438,19 @@ const char *web_live_sensor_word(web_live_t *l, long long now_ms);
 /* The incidents, for the alert routes: the open ones first (the
  * Overview's open-alerts count, exactly), then the recently closed,
  * each group newest change first; at most max into out. Their count;
- * *nopen of them open. */
+ * *nopen of them open. With a peer (#214) they are both daemons', and
+ * WEB_LIVE_INC_ALL is the max that holds every one: a caller sized for
+ * one state would lose sloth-rf's open incidents on a busy sensor.
+ *
+ * One occurrence, two daemons: sloth and sloth-rf share the gpsd
+ * reader, and until sloth's RF sources are retired (#216) both can run
+ * the same rule on the same input and raise the same key. An incident
+ * of sloth-rf's whose key sloth holds too, over a span that meets it
+ * (within WEB_LIVE_SAME_SLACK_S, the two daemons' ticks apart), is that
+ * one occurrence: it is listed and counted once, as sloth's, here and
+ * in the open counts. It is still found by its own handle. */
+#define WEB_LIVE_INC_ALL       (2 * (WEB_LIVE_INCIDENTS + WEB_LIVE_CLOSED))
+#define WEB_LIVE_SAME_SLACK_S  5
 int web_live_incidents(web_live_t *l, web_live_inc_t *out, int max, int *nopen);
 /* One incident by its handle (web_live_inc_t.hid), open or recently
  * closed: 1 found. */

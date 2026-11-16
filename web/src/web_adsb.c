@@ -288,10 +288,10 @@ static int by_interest(const void *pa, const void *pb) {
 
 int web_adsb_alerts(struct web_live_s *l, web_adsb_alert_t *out, int max) {
     if (!l || max <= 0) return 0;
-    web_live_inc_t *inc = calloc(WEB_LIVE_INCIDENTS + WEB_LIVE_CLOSED, sizeof(*inc));
+    web_live_inc_t *inc = calloc(WEB_LIVE_INC_ALL, sizeof(*inc));
     if (!inc) return 0;
     int nopen = 0, n = 0;
-    web_live_incidents(l, inc, WEB_LIVE_INCIDENTS + WEB_LIVE_CLOSED, &nopen);
+    web_live_incidents(l, inc, WEB_LIVE_INC_ALL, &nopen);
     for (int i = 0; i < nopen && n < max; i++) {
         const web_live_inc_t *e = &inc[i];
         const web_akb_t *k = web_akb_get(e->type);

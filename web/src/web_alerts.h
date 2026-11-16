@@ -78,6 +78,18 @@
 int web_alert_parse_id(const char *query, int *kind, char *sid, long long *rid,
                        char *err, size_t errsz);
 
+/* Is e an incident whose database is --rf-db, apart from sloth.db
+ * (#214)? sloth-rf raised it and --rf-db is given: its key is then a
+ * key of sloth-rf.db's, and sloth.db's rows of the same key (what
+ * sloth recorded before the split) are another finding. Its totals and
+ * history are read from --rf-db, it never stands for a sloth.db row,
+ * and its triage subject is the stream's ("s<handle>"), never a
+ * sloth.db finding. Without --rf-db there is the one database, as
+ * before the split. */
+static inline int web_alert_rf_apart(const web_m4_t *m, const web_live_inc_t *e) {
+    return e->rf && m && m->sdb_rf && m->sdb_rf->configured;
+}
+
 /* The routes: the body into body (cap bytes), *status set; 0, or -1
  * when not even an error fit. live may be NULL (no data socket). */
 int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,

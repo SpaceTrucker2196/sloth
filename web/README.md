@@ -1745,7 +1745,8 @@ A record of one of sloth-rf's kinds (`gnss_*`, `adsb_*`, `aprs_*`,
 sources) that arrives on `--socket` is counted and applied nowhere. A
 `sloth` that still has its RF flags therefore cannot double or blank
 what sloth-rf feeds, and its `sensor_health`, which carries no rtl_433
-block, cannot clear the rtl_433 tab.
+block, cannot clear the rtl_433 tab. (Alerts both daemons raise are
+under **Alerts** below.)
 
 GNSS follows the owner's ruling of 2026-11-15 (both daemons report the
 receiver's health and `loc_*`; only sloth-rf writes the `gnss_*`
@@ -1762,10 +1763,12 @@ wrote it (`"daemon":"wifi"` or `"rf"`). With `--rf-socket` given, a
 anything after it on that connection, until a `sensor_health` that
 names the right daemon or a reconnect. `/api/health` reports it per
 daemon (`wrong_daemon`, `wrong_health`, `wrong_records`) and the health
-page says which socket to check. sloth replays its state, the
-`sensor_health` included, to a client that connects, so this closes
-within the first tick; the few records of that tick ahead of the
-`sensor_health` are routed by the table above like any others.
+page says which socket to check. A daemon's client count is part of
+what makes it send a `sensor_health`, so a connect brings one on its
+next tick and the guard closes then; the few records ahead of it are
+routed by the table above like any others. (If another client left in
+the same tick the count is unchanged, and the guard waits for the
+daemon's heartbeat.)
 
 **With `--rf-db`** the RF tables are read from sloth-rf's database:
 `/api/gnss/seen`, `/api/gnss/sat`, `/api/gnss/tracks`, `/api/adsb/seen`,
@@ -1781,13 +1784,34 @@ own `SENSOR_SOURCE_DOWN`) arrives on its stream and is on the same
 pages as sloth's: `/api/alerts` and the alert page by its handle, the
 open counts on the Overview and in the tick, the ADS-B tab's emergency
 rows, triage. Each stream's reconnect clears only its own open
-incidents. The page of such an alert reads its history from `--rf-db`.
+incidents.
+
+An occurrence both daemons raise is one incident. Both read the one
+gpsd and both watch their sources, and a `sloth` that still has its RF
+flags runs the GNSS and ADS-B rules too: an incident of sloth-rf's
+whose key sloth holds over the same span is listed and counted once,
+as sloth's.
+
+With `--rf-db`, an alert sloth-rf raised belongs to sloth-rf.db, and
+sloth.db's rows of the same key (what sloth recorded before the split)
+are a separate finding with its own row. The list row and the page of
+such an alert read `count`, `incidents` and the history from
+`--rf-db`. The page says `"db_file":"sloth-rf.db"`, and its `db_id`
+and its runs' `id` are `null`: a `d<rowid>` id always names a sloth.db
+row, so sloth-rf.db's rowids are never given as one. A verdict on such
+an alert is kept against its stream handle, not against a sloth.db
+finding, so it lasts until slothweb restarts or the incident leaves
+the recently-closed list. Its evidence bundle carries `rf_db` beside
+`sloth_db`. Without `--rf-db` there is one database and nothing here
+changes.
+
 What is **not** merged yet: the closed findings in sloth-rf.db's
 `alerts` table that this slothweb did not see on the stream (they are
 not in `/api/alerts`' database rows, `/api/history`, or the fleet
 export's `alert` lines; the export's `gnss_event` lines do carry the
-GNSS incidents). Nothing is lost from the file; the SQL of the alert
-readers is one database's, and merging two is a slice of its own.
+GNSS incidents), and with them a lasting verdict on a sloth-rf.db
+finding. Nothing is lost from the file; the SQL of the alert readers
+is one database's, and merging two is a slice of its own.
 
 **Health.** `/api/health` gains `daemons` (two objects, `role` `wifi`
 and `rf`: the socket's state and counters, `sensor`, `health_age_s`,
@@ -1795,14 +1819,16 @@ and `rf`: the socket's state and counters, `sensor`, `health_age_s`,
 (state, schema, mode, age, `stale`, error) with `--rf-db`; `/api/sys`
 gains `host_from` and a third `storage` row keyed `sloth-rf`; the tick
 gains `rf` (`socket`, `sensor`, `records`). The sensor tile then reads
-`ok · rf ok`, sloth's word first. None of these members exists without
-the flags.
+`ok · rf ok`, sloth's word first, in every scope, and is coloured by
+the worse of the two. None of these members exists without the flags.
 
 Not yet, with `--rf-socket`: sloth-rf's records are not in the ticker,
 in `/api/live`'s type counts or in the `records.rate` / `records.total`
 series (those are sloth's stream; `/api/health` `daemons` has
-sloth-rf's own count), and `/api/positions` reads sloth.db's
-`sensor_positions` only.
+sloth-rf's own count), `/api/positions` reads sloth.db's
+`sensor_positions` only, and the `alerts.fired` series counts sloth's
+alerts only: one sloth-rf fires is listed and counted open, but is not
+a sample of that series.
 
 ## The data socket (M1)
 

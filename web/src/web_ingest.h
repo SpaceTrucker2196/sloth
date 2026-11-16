@@ -104,10 +104,13 @@ struct web_chain;
  * is the other daemon's stream on this socket: it is counted
  * (web_live_wrong_daemon()), applied to nothing, and so is every record
  * after it on that connection until one that names the right daemon.
- * sloth replays its whole state, sensor_health included, to a client
- * that connects (src/data_socket.c), so the guard closes within the
- * first tick; the records of that tick ahead of the sensor_health pass
- * the table above like any others. */
+ * A daemon does not replay its state to a client that connects; the
+ * client count is in sensor_health's change signature (src/jsonl.c,
+ * socket_clients), so a connect brings one on the daemon's next tick
+ * and the guard closes then. Records ahead of it pass the table above
+ * like any others. Best effort: a client that leaves in the tick this
+ * one joins leaves the count as it was, and the guard waits for the
+ * heartbeat. */
 enum { WEB_FEED_ONLY = 0, WEB_FEED_WIFI, WEB_FEED_RF };
 
 /* Is t one of sloth-rf's record types (gnss_*, adsb_*, aprs_*,

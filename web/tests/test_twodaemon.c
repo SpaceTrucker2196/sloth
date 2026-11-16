@@ -45,7 +45,11 @@
  *     removed (a third storage row; test_sysstat.c's whole-answer pin
  *     went red on that one too);
  *   - the RF history's file: with web_m4_rfdb() returning m->sdb
- *     (sloth.db's decoy aircraft listed, sloth-rf.db's not). */
+ *     (sloth.db's decoy aircraft listed, sloth-rf.db's not).
+ * The review's (#214): one occurrence two daemons raise, the two
+ * databases' findings of one key, an RF alert's ids, its triage
+ * subject, the bundle's rf_db and the sloth-rf sys.db_mb series each
+ * name their mutation at the assertion. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -533,6 +537,20 @@ static void test_rf_stream_feeds_the_rollup_not_the_metrics(void) {
     /* Three figures of the fix, one of the sky, source.up for the row;
      * no records.rate or records.total, which are sloth's stream's. */
     WT_EQ(st.samples, 3 + 1 + 1);
+    /* An alert sloth-rf fires adds no sample: alerts.fired stays
+     * sloth's stream's (slothweb.md, "Not in #214": a type both daemons
+     * fire would be one series with two writers). Seen red with an
+     * "alert" branch adding WM_ALERTS_FIRED in web_metrics_rf_sample(). */
+    {
+        char line[256], tyk[16];
+        snprintf(tyk, sizeof(tyk), "%d", web_akb_find("GNSS_JAMMING"));
+        snprintf(line, sizeof(line), "{\"type\":\"alert\",\"ts\":1800000000,\"sev\":2,\"ty\":%s,"
+                 "\"title\":\"GNSS jamming\",\"detail\":\"d\"}", tyk);
+        put(&w, 'r', line);
+        WT_EQ(web_rollup_has(&w.ru, WM_ALERTS_FIRED, tyk), 0);
+        web_rollup_stats(&w.ru, &st);
+        WT_EQ(st.samples, 5);
+    }
     /* sloth's stream is the metrics' writer still, and its copies of
      * the RF records and of sloth-rf's source rows sample nothing. */
     put(&w, 'w', FIX_DECOY);
@@ -774,6 +792,111 @@ static void test_rf_alerts_are_listed_with_sloths(void) {
     tw_down(&w);
 }
 
+/* An incident with its own key and span. */
+#define ALERTK(ev, id, sev, ty, title, key, first, ts) \
+    "{\"type\":\"alert." ev "\",\"ts\":" ts ",\"incident_id\":\"" id "\",\"sev\":" sev "," \
+    "\"ty\":" ty ",\"title\":\"" title "\",\"detail\":\"d\",\"key\":\"" key "\"," \
+    "\"first_seen\":" first ",\"last_seen\":" ts ",\"count\":3}"
+
+/* One occurrence both daemons raise (the shared gpsd reader; a sloth
+ * that still runs the RF rules, until #216) is one incident: listed
+ * once, as sloth's, and counted once. Seen red with peer_dup()
+ * returning 0: two in the open counts, the tick and /api/live, and
+ * the list row's count the two daemons' sum (6). The same key over
+ * spans that do not meet is two incidents (seen red with inc_meet()
+ * returning 1: sloth-rf's later one was dropped). */
+static void test_same_key_from_both_daemons_is_one(void) {
+    static tw_t w;
+    tw_up(&w, 1);
+    put(&w, 'w', ALERTK("create", "wg", "1", "20", "SRC-DOWN", "srcdown:gnss",
+                        "1800000100", "1800000100"));
+    put(&w, 'r', ALERTK("create", "rg", "1", "20", "SRC-DOWN", "srcdown:gnss",
+                        "1800000102", "1800000102"));
+    put(&w, 'r', ALERT("create", "r1", "2", "11", "RF-ONE", "1800000020"));
+    web_live_inc_t *inc = calloc(WEB_LIVE_INC_ALL, sizeof(*inc));
+    WT_ASSERT(inc != NULL);
+    if (!inc) { tw_down(&w); return; }
+    int nopen = 0, n = web_live_incidents(&w.live, inc, WEB_LIVE_INC_ALL, &nopen);
+    WT_EQ(n, 2);
+    WT_EQ(nopen, 2);
+    WT_ASSERT(!strcmp(inc[0].title, "SRC-DOWN") && inc[0].rf == 0);
+    WT_ASSERT(!strcmp(inc[1].title, "RF-ONE") && inc[1].rf == 1);
+    web_live_sum_t s;
+    web_live_summary(&w.live, &s, w.ms);
+    WT_EQ(s.alerts[0], 0);
+    WT_EQ(s.alerts[1], 1);
+    WT_EQ(s.alerts[2], 1);
+    char tick[2048];
+    WT_ASSERT(web_sse_tick(tick, sizeof(tick), 1, T, &w.h) > 0);
+    WT_HAS(tick, "\"alerts_open\":[0,1,1]");
+    WT_EQ(get(&w, "/api/live", ""), 200);
+    WT_HAS(body_of(g_out), "\"alerts_open\":{\"low\":0,\"warn\":1,\"crit\":1");
+    WT_EQ(get(&w, "/api/alerts", "limit=100"), 200);
+    WT_EQ(count_of(body_of(g_out), "\"title\":\"SRC-DOWN\""), 1);
+    WT_HAS(body_of(g_out), "\"count\":3,\"incidents\":1,");
+    WT_LACKS(body_of(g_out), "\"count\":6,");
+    WT_HAS(body_of(g_out), "\"open\":2,");
+    /* sloth-rf's copy is still behind its own handle. */
+    web_live_inc_t own, one;
+    WT_EQ(web_live_incidents(&w.live_rf, &own, 1, NULL), 1);
+    WT_ASSERT(!strcmp(own.title, "SRC-DOWN"));
+    WT_EQ(web_live_incident(&w.live, own.hid, &one), 1);
+    WT_EQ(one.rf, 1);
+
+    /* The same key, another occurrence: sloth's closed long before
+     * sloth-rf's opened. Both are listed. */
+    put(&w, 'w', ALERTK("create", "wj", "2", "21", "JAM-THEN", "gnssjam",
+                        "1800000000", "1800000000"));
+    put(&w, 'w', ALERTK("resolve", "wj", "2", "21", "JAM-THEN", "gnssjam",
+                        "1800000000", "1800000010"));
+    put(&w, 'r', ALERTK("create", "rj", "2", "21", "JAM-NOW", "gnssjam",
+                        "1800000500", "1800000500"));
+    n = web_live_incidents(&w.live, inc, WEB_LIVE_INC_ALL, &nopen);
+    WT_EQ(n, 4);
+    WT_EQ(nopen, 3);
+    WT_ASSERT(!strcmp(inc[0].title, "JAM-NOW") && inc[0].rf == 1);
+    WT_ASSERT(!strcmp(inc[3].title, "JAM-THEN") && inc[3].rf == 0);
+    web_live_summary(&w.live, &s, w.ms);
+    WT_EQ(s.alerts[2], 2);
+    free(inc);
+    tw_down(&w);
+}
+
+/* A busy sensor: more open incidents across the two daemons than one
+ * state's list holds. Every one is listed and the list agrees with the
+ * open counts (seen red with WEB_LIVE_INC_ALL the one state's 320: 320
+ * listed against 400 counted, the last 80 of sloth-rf's cut). */
+static void test_both_daemons_open_incidents_all_listed(void) {
+    static tw_t w;
+    tw_up(&w, 1);
+    char line[512];
+    for (int i = 0; i < 200; i++) {
+        for (int d = 0; d < 2; d++) {
+            snprintf(line, sizeof(line),
+                     "{\"type\":\"alert.create\",\"ts\":%d,\"incident_id\":\"%c%d\",\"sev\":1,"
+                     "\"ty\":10,\"title\":\"%s\",\"detail\":\"d\",\"key\":\"k:%c%d\","
+                     "\"first_seen\":%d,\"last_seen\":%d,\"count\":1}",
+                     1800000000 + i, d ? 'r' : 'w', i, d ? "RF-MANY" : "WIFI-MANY",
+                     d ? 'r' : 'w', i, 1800000000 + i, 1800000000 + i);
+            put(&w, d ? 'r' : 'w', line);
+        }
+    }
+    web_live_inc_t *inc = calloc(WEB_LIVE_INC_ALL, sizeof(*inc));
+    WT_ASSERT(inc != NULL);
+    if (!inc) { tw_down(&w); return; }
+    int nopen = 0, n = web_live_incidents(&w.live, inc, WEB_LIVE_INC_ALL, &nopen), nrf = 0;
+    for (int i = 0; i < n; i++) nrf += inc[i].rf;
+    WT_EQ(nopen, 400);
+    WT_EQ(nrf, 200);
+    web_live_sum_t s;
+    web_live_summary(&w.live, &s, w.ms);
+    WT_EQ(s.alerts[1], 400);
+    WT_EQ(get(&w, "/api/alerts", "state=open&limit=1"), 200);
+    WT_HAS(body_of(g_out), "\"open\":400,");
+    free(inc);
+    tw_down(&w);
+}
+
 /* ── /api/health, /api/sys and the tick ───────────────────────────── */
 
 /* Without the flags the three answers carry none of the new members;
@@ -865,15 +988,23 @@ static void test_rf_store_slot(void) {
     WT_HAS(body_of(g_out), "\"key\":\"sloth-rf\",\"configured\":true,\"file\":\"sloth-rf.db\","
                            "\"present\":true,\"mb\":1.0,\"main_bytes\":1048576,\"wal_bytes\":0,"
                            "\"limit_mb\":256,\"limit_state\":\"set\",\"limit_from\":\"sensor_health\",");
-    /* sys.db_mb for it, on the RF daemon's own sys_status. */
-    web_rollup_stats_t st0, st1;
-    web_rollup_stats(&w.ru, &st0);
+    /* sys.db_mb for it, on the RF daemon's own sys_status: the series
+     * of its own key, not the host batch's samples of the same record
+     * (seen red with DB_KEY[2] made "sloth"). */
+    WT_EQ(web_rollup_has(&w.ru, WM_SYS_DB_MB, "sloth-rf"), 0);
     put(&w, 'r', STATUS_RF);
-    web_rollup_stats(&w.ru, &st1);
-    WT_ASSERT(st1.samples > st0.samples);
+    WT_EQ(web_rollup_has(&w.ru, WM_SYS_DB_MB, "sloth-rf"), 1);
     tw_down(&w);
     unlink(path);
     rmdir(dir);
+    /* Without --rf-db the same record samples no such series (seen red
+     * with web_sys_db_metrics() adding a row whose size read failed). */
+    tw_up(&w, 1);
+    put(&w, 'r', SH_RF);
+    put(&w, 'r', STATUS_RF);
+    WT_EQ(web_rollup_has(&w.ru, WM_SYS_CPU, ""), 1);
+    WT_EQ(web_rollup_has(&w.ru, WM_SYS_DB_MB, "sloth-rf"), 0);
+    tw_down(&w);
 }
 
 #ifdef WITH_SQLITE
@@ -991,12 +1122,27 @@ static void test_rf_history_reads_the_rf_db(void) {
     rmdir(dir);
 }
 
+/* The list row of id in an /api/alerts body: from its "id" to the end
+ * of the object. 1 found. */
+static int row_seg(const char *body, const char *id, char *out, size_t cap) {
+    char want[80];
+    snprintf(want, sizeof(want), "{\"id\":\"%s\",", id);
+    const char *b = strstr(body, want);
+    if (!b) return 0;
+    const char *e = strstr(b + 1, "{\"id\":\"");
+    size_t n = e ? (size_t)(e - b) : strlen(b);
+    if (n >= cap) n = cap - 1;
+    memcpy(out, b, n);
+    out[n] = '\0';
+    return 1;
+}
+
 /* An alert sloth-rf raised, in the shared world with the optional RF
  * stream and database (wt_world.h w_rf_up()): it is on /api/alerts by
  * its handle, and its page reads the finding's history from
  * sloth-rf.db, not from a row of the same key in sloth.db. */
 static void test_rf_alert_page_reads_the_rf_db(void) {
-    w_open(0);
+    w_open(1);
     w_rf_up();
     if (!W.have_db || !W.have_rf_db) { w_close(); return; }
     int ty = web_akb_find("GNSS_JAMMING");
@@ -1029,11 +1175,87 @@ static void test_rf_alert_page_reads_the_rf_db(void) {
     WT_HAS(w_body(), want);
     snprintf(want, sizeof(want), "%lld", (long long)W_T - 7777);
     WT_LACKS(w_body(), want);
+    /* sloth-rf.db's rowids are never given as "d" ids, which every
+     * route resolves in sloth.db: the page names its file, and neither
+     * db_id nor a run carries one (seen red with from_rf made 0 after
+     * the file was chosen: a "d" db_id and a "d" run id of sloth-rf.db's
+     * rowid came back). */
+    WT_HAS(w_body(), "\"db\":\"open\",\"state\":\"open\",\"source\":\"both\",");
+    WT_HAS(w_body(), ",\"db_file\":\"sloth-rf.db\",\"db_id\":null,");
+    WT_HAS(w_body(), ",\"incidents\":1,\"sev\":2,\"count\":7,\"id\":null}],\"more\":false}");
+    WT_LACKS(w_body(), "\"id\":\"d");
     /* The open count the tiles show includes it. */
     WT_EQ(w_get("/api/live", ""), 200);
     web_live_sum_t s;
     web_live_summary(&W.live, &s, W.h.now_ms);
     WT_EQ(s.alerts[2], s0.alerts[2] + 1);
+    /* The list row shows what the page shows: sloth-rf.db's figures of
+     * the key (7), not sloth.db's (99). sloth.db's finding of the same
+     * key is no part of that row and is listed as itself (seen red with
+     * web_alert_rf_apart() returning 0: the stream row counted 99 and
+     * the sloth.db row was gone). */
+    char row[1024], drow[1024];
+    WT_EQ(w_get("/api/alerts", "limit=100&window=2592000"), 200);
+    WT_EQ(row_seg(w_body(), id, row, sizeof(row)), 1);
+    WT_HAS(row, "\"state\":\"open\",\"source\":\"both\",");
+    WT_HAS(row, ",\"count\":7,\"incidents\":1,");
+    char did[32] = "";
+    const char *dp = strstr(w_body(), "\"state\":\"recorded\",\"source\":\"sloth.db\",\"type\":");
+    for (; dp; dp = strstr(dp + 1, "\"state\":\"recorded\",\"source\":\"sloth.db\",\"type\":")) {
+        const char *tn = strstr(dp, "\"type_name\":\"");
+        if (!tn || strncmp(tn + 13, "GNSS_JAMMING\"", 13) != 0) continue;
+        const char *b = dp;
+        while (b > w_body() && strncmp(b, "{\"id\":\"", 7) != 0) b--;
+        const char *e = strchr(b + 7, '"');
+        if (e && (size_t)(e - b - 7) < sizeof(did)) {
+            memcpy(did, b + 7, (size_t)(e - b - 7));
+            did[e - b - 7] = '\0';
+        }
+        break;
+    }
+    WT_EQ(did[0], 'd');
+    WT_EQ(row_seg(w_body(), did, drow, sizeof(drow)), 1);
+    WT_HAS(drow, ",\"count\":99,\"incidents\":1,");
+    /* And sloth.db's finding is not given sloth-rf's live incident of
+     * the same key as its state (seen red with the web_alert_rf_apart()
+     * test dropped from the "d" page's stream match: "open", and
+     * sloth-rf's handle as its stream_id). */
+    char dq[48];
+    snprintf(dq, sizeof(dq), "id=%s", did);
+    WT_EQ(w_get("/api/alert", dq), 200);
+    WT_HAS(w_body(), "\"state\":\"recorded\",\"source\":\"sloth.db\",\"stream_id\":null,");
+    WT_LACKS(w_body(), "\"db_file\"");
+
+    /* A verdict on sloth-rf's alert is the stream incident's own, never
+     * recorded against sloth.db's finding of the same key (seen red
+     * with `apart` made 0 in frrs_resolve_alert(): sloth.db's row came
+     * back "noise" too). */
+    if (W.have_store) {
+        char b[160];
+        snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"noise\",\"by\":\"op\"}", id);
+        WT_EQ(w_post("/api/frrs/triage", b), 200);
+        WT_EQ(w_get("/api/alerts", "limit=100&window=2592000&triage=any"), 200);
+        WT_EQ(row_seg(w_body(), id, row, sizeof(row)), 1);
+        WT_HAS(row, "\"triage\":{\"state\":\"noise\"");
+        WT_EQ(row_seg(w_body(), did, drow, sizeof(drow)), 1);
+        WT_HAS(drow, "\"triage\":{\"state\":\"untriaged\"");
+        WT_LACKS(drow, "\"noise\"");
+    }
+
+    /* The bundle of it says which file its page was read from, and
+     * that file's state beside sloth.db's. */
+    snprintf(q, sizeof(q), "kind=alert&id=%s", id);
+    WT_EQ(w_get("/api/bundle", q), 200);
+    WT_HAS(w_body(), ",\"sloth_db\":{\"state\":\"open\",\"schema\":");
+    WT_HAS(w_body(), ",\"rf_db\":{\"state\":\"open\",\"schema\":");
+    WT_HAS(w_body(), ",\"db_file\":\"sloth-rf.db\",\"db_id\":null,");
+    /* Without --rf-db the bundle has no such member (seen red with the
+     * block written for --sloth-db's file when --rf-db is not given). */
+    W.m4.sdb_rf = NULL;
+    WT_EQ(w_get("/api/bundle", q), 200);
+    WT_HAS(w_body(), ",\"sloth_db\":{\"state\":\"open\",\"schema\":");
+    WT_LACKS(w_body(), "\"rf_db\"");
+    WT_LACKS(w_body(), "\"db_file\"");
     w_close();
 }
 #endif
@@ -1048,10 +1270,34 @@ static void test_two_daemon_page(void) {
               "  function rfKpi(t) {\n"
               "    if (!t.rf || typeof t.sensor !== \"string\") return;\n"
               "    var w = rfWord(t.rf);\n"
-              "    var worst = t.sensor !== \"ok\" ? t.sensor : w;\n"
+              "    // The worse of the two words colours the tile: anything but ok or\n"
+              "    // unknown is bad, whichever daemon says it.\n"
+              "    var bad = function (x) { return x !== \"ok\" && x !== \"unknown\"; };\n"
+              "    var cls = bad(t.sensor) || bad(w) ? \"bad\" : t.sensor === \"ok\" && w === \"ok\" ? \"ok\" : \"unknown\";\n"
               "    set(\"k-sensor\", t.sensor + \" \\u00b7 rf \" + w);\n"
-              "    $(\"k-sensor\").className = \"kpi health-\" + (worst === \"ok\" ? \"ok\" : worst === \"unknown\" ? \"unknown\" : \"bad\");\n"
+              "    $(\"k-sensor\").className = \"kpi health-\" + cls;\n"
               "  }\n");
+    /* Both of kpis()'s callers hand it sloth-rf's word, in every scope:
+     * the tick keeps it, a scoped tick and /api/live's answer (which
+     * has none) pass the kept one. */
+    WT_HAS(p, "  var lastRf = null;\n"
+              "  function rfWord(rf) {");
+    WT_HAS(p, "        kpis({ socket: l.socket, devices: l.devices,\n"
+              "               devices_stale: l.devices_stale, records: l.records,\n"
+              "               records_s: l.records_s,\n"
+              "               sensor: l.sensor ? l.sensor.state : undefined,\n"
+              "               rf: lastRf,\n"
+              "               alerts_open: l.alerts_open\n"
+              "                 ? [l.alerts_open.low, l.alerts_open.warn, l.alerts_open.crit]\n"
+              "                 : null });\n");
+    WT_HAS(p, "      lastRf = t.rf || null;\n"
+              "      kpis(SCOPE === \"hybrid\" ? t : { socket: t.socket, sensor: t.sensor, rf: lastRf });\n"
+              "      // Under a scope the tiles are /api/live's: asked again every 2 s.\n"
+              "      if (SCOPE !== \"hybrid\" && Date.now() - lastLive >= 2000) live();\n");
+    /* An RF alert's runs carry no id and its page names its file. */
+    WT_HAS(p, "      if (r.id && r.id !== AD.runsOf) alertLink(li, r.id);\n");
+    WT_HAS(p, "    var dbFile = j.db_file || \"sloth.db\";\n"
+              "    AD.runsNone = j.db === \"open\" ? \"no \" + dbFile + \" row yet\" : dbFile + \" is \" + j.db;\n");
     WT_HAS(p, "        (t.sensor === \"ok\" ? \"ok\" : t.sensor === \"unknown\" ? \"unknown\" : \"bad\");\n"
               "    }\n"
               "    rfKpi(t);\n");
@@ -1101,6 +1347,8 @@ void run_twodaemon_tests(void) {
     WT_RUN(test_sysstat_has_one_writer_per_part);
     WT_RUN(test_gnss_position_and_health_precedence);
     WT_RUN(test_rf_alerts_are_listed_with_sloths);
+    WT_RUN(test_same_key_from_both_daemons_is_one);
+    WT_RUN(test_both_daemons_open_incidents_all_listed);
     WT_RUN(test_health_one_stream_or_two);
     WT_RUN(test_rf_store_slot);
 #ifdef WITH_SQLITE
