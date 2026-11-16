@@ -79,7 +79,10 @@ static void test_rf_db_has_sloths_schema_and_the_rf_rows(void) {
     ASSERT_GE(rows("adsb_sightings"), 2);
     ASSERT_EQ(rows("aprs_stations"), 2);
     ASSERT_EQ(rows("aprs_packets"), 2);
-    ASSERT_EQ(rows("sensors"), 4);
+    /* sloth-va's file: one device, one write of its readings. */
+    ASSERT_EQ(rows("victron_devices"), 1);
+    ASSERT_GE(rows("victron_readings"), 1);
+    ASSERT_EQ(rows("sensors"), 5);
     ASSERT_EQ(rows("sessions"), 1);
     /* The 7700 squawk, as an alert row with its incident. */
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts WHERE title='ADSB_EMERGENCY'"), 1);
@@ -149,7 +152,10 @@ static void test_rf_db_has_no_capture_rows(void) {
  * Seen red (2026-11-15): with `if (g_rf_side)` taken off the four
  * writers in db_tick(), gnss_fixes and gnss_sightings fill (the
  * receiver's state is in this daemon); with health_rf put back in
- * wifi_stages[] as well, adsb_aircraft and aprs_stations do. */
+ * wifi_stages[] as well, adsb_aircraft, aprs_stations, victron_devices
+ * and victron_readings do (the Victron pair seen on 2026-11-15, #216's
+ * review, once the scenario fed sloth-va's file: until then those two
+ * zeros had nothing to be non-zero from). */
 static void test_wifi_db_has_no_rf_rows_and_keeps_the_track(void) {
     tmp_db();
     rfs_run(&g_poll_wifi, 0, NULL, g_db);

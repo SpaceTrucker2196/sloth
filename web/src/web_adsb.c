@@ -200,9 +200,17 @@ static void row_apply(web_adsb_t *a, const web_jrec_t *r, long long ts) {
 }
 
 static void sh_apply(web_adsb_t *a, const web_jrec_t *r, long long ts) {
-    /* Only a sensor_health carrying the block: a sloth with no --adsb
-     * writes none of it, and the panel then says "no decoder". */
-    if (!web_jl_get(r, "adsb_state")) return;
+    /* The daemon writes the block on every sensor_health while --adsb
+     * is set and on none without it, so a sensor_health without it is a
+     * stream with no decoder: sloth-rf restarted without the flag, or
+     * an unsplit 1.x sensor upgraded to sloth-wifi under a slothweb
+     * that stayed up (#216). The block clears, as rtl_433's and
+     * Victron's do; kept, the tab read "decoder live" for ever and
+     * never said the RF daemon's stream is not configured. */
+    if (!web_jl_get(r, "adsb_state")) {
+        memset(&a->sh, 0, sizeof(a->sh));
+        return;
+    }
     web_adsb_sh_t h;
     memset(&h, 0, sizeof(h));
     h.seen = 1;

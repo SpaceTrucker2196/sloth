@@ -1,9 +1,16 @@
 name: Release attestation
 
 # Build provenance for tagged releases (#142, owner approved 2026-10-15).
-# On a v* tag: build sloth the way it ships, write SHA256SUMS, and attest
-# the binary with actions/attest-build-provenance so a downloader can run
-# `gh attestation verify ./sloth --repo SpaceTrucker2196/sloth`.
+# On a v* tag: build the two daemons the way they ship, write SHA256SUMS,
+# and attest both with actions/attest-build-provenance so a downloader
+# can run `gh attestation verify ./sloth-wifi --repo
+# SpaceTrucker2196/sloth` (and the same for ./sloth-rf).
+#
+# Since the cutover (#216) the Wi-Fi daemon is sloth-wifi and `sloth` in
+# the build tree is a symlink to it, so the subjects are the two regular
+# files by their own names: a checksum line or an attestation under the
+# alias would name a file nobody installs, and sloth-rf, the only binary
+# with the SDR decoders, had neither.
 #
 # What this does NOT do: sign the tag. Tag signing needs the owner's key,
 # which CI does not hold; it stays the manual `git tag -s` step in
@@ -32,8 +39,10 @@ jobs:
       - name: Build
         run: make EXTRA_CFLAGS=-Werror
       - name: SHA256SUMS
-        run: sha256sum sloth > SHA256SUMS && cat SHA256SUMS
+        run: sha256sum sloth-wifi sloth-rf > SHA256SUMS && cat SHA256SUMS
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
-          subject-path: sloth
+          subject-path: |
+            sloth-wifi
+            sloth-rf

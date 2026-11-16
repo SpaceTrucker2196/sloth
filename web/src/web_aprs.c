@@ -261,9 +261,13 @@ static void station_apply(web_aprs_t *a, const web_jrec_t *r, long long ts) {
 }
 
 static void sh_apply(web_aprs_t *a, const web_jrec_t *r, long long ts) {
-    /* Only a sensor_health carrying the block: a sloth with no --aprs
-     * writes none of it, and the panel then says "no decoder". */
-    if (!web_jl_get(r, "aprs_state")) return;
+    /* As web_adsb.c: a sensor_health without the block is a stream with
+     * no decoder, and the block clears rather than staying at the last
+     * state it had (#216). */
+    if (!web_jl_get(r, "aprs_state")) {
+        memset(&a->sh, 0, sizeof(a->sh));
+        return;
+    }
     web_aprs_sh_t h;
     memset(&h, 0, sizeof(h));
     h.seen = 1;

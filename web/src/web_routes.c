@@ -1016,8 +1016,15 @@ static int route_positions(const web_req_t *rq, const web_health_t *h,
 
 enum { BLE_DEVICES, BLE_ALERTS, BLE_DEVICE };
 
+static void rf_stream_member(const web_health_t *h, char *body, size_t cap, size_t *bl);
+
 /* /api/gnss and /api/gnss/fixes (web_gnss.h): the host's own receiver,
- * sloth's own state, so every scope's; the answer says so itself. */
+ * sloth's own state, so every scope's; the answer says so itself.
+ * /api/gnss carries "rf_stream" as the RF tabs do (#216 review): the
+ * receiver's health is in both daemons' sensor_health, but gnss_fix,
+ * gnss_sky and gnss_sat are sloth-rf's alone since 2.0.0, so against a
+ * 2.x sloth-wifi with no --rf-socket the header draws and the fix, the
+ * sky and the table stay empty, and the page needs the reason. */
 static int route_gnss(const web_req_t *rq, const web_health_t *h, int fixes,
                       char *out, size_t outsz, web_resp_t *r) {
     if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
@@ -1033,6 +1040,7 @@ static int route_gnss(const web_req_t *rq, const web_health_t *h, int fixes,
         rc = web_gnss_fixes_route(h->gnss, rq->query, h->wall_s, body, cap, &bl, &status);
     } else {
         rc = web_gnss_route(h->gnss, rq->query, h->wall_s, body, cap, &bl, &status);
+        if (rc == 0 && status == 200) rf_stream_member(h, body, cap, &bl);
     }
     if (rc != 0 || bl == 0) {
         r->status = 503;

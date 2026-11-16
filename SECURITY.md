@@ -79,7 +79,8 @@ record.
 - **Build provenance**: GitHub artifact attestation
   (`actions/attest-build-provenance`, pinned by commit SHA) on `v*`
   tags, in `.github/workflows/release-attest.yml`. Verify with
-  `gh attestation verify ./sloth --repo SpaceTrucker2196/sloth`.
+  `gh attestation verify ./sloth-wifi --repo SpaceTrucker2196/sloth`
+  (and `./sloth-rf`; `sloth` is a symlink to `sloth-wifi` since #216).
   Releases tagged before 2026-10-19 carry no attestation.
 
 The procedure is [`docs/wiki/release-checklist.md`](docs/wiki/release-checklist.md).

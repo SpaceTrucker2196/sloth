@@ -37,10 +37,10 @@
     if (!j) return "not known";
     if (j.out_of_scope) return String(j.reason || "");
     var s = j.sensor;
-    if (!s) return "no decoder: sloth has not reported --rtl433 on this connection";
+    if (!s) return "no decoder: the sensor has not reported --rtl433 on this connection (the flag is sloth-rf's)";
     var t = "decoder " + s.state + (s.missing ? " (file not there yet)" : "") +
       (s.err ? ": " + s.err : "") + "; " + plural(s.devices || 0, "device", "devices") +
-      " in sloth's table";
+      " in the sensor's table";
     if (num(s.bad_lines) && s.bad_lines > 0) t += "; " + plural(s.bad_lines, "line", "lines") + " refused";
     if (num(s.bad_values) && s.bad_values > 0) t += "; " + plural(s.bad_values, "value", "values") + " out of range, left blank";
     if (num(s.evicted) && s.evicted > 0) t += "; " + plural(s.evicted, "device", "devices") + " dropped for the cap";

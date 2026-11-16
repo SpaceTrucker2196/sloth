@@ -1730,7 +1730,9 @@ refuses `--adsb`, `--aprs`, `--aprs-freq`, `--aprs-silent-hours`,
 `--rtl433` and `--victron`), so its stream has no ADS-B, APRS, rtl_433
 or Victron record. slothweb reads the stream's version and says which
 case it is in, as `rf_stream` on `/api/health` and as the last member
-of `/api/adsb`, `/api/aprs`, `/api/rtl433` and `/api/victron`:
+of `/api/adsb`, `/api/aprs`, `/api/rtl433`, `/api/victron` and
+`/api/gnss` (whose fix, sky and satellite records are sloth-rf's too,
+while its header is fed by the receiver's health in either stream):
 
 | `rf_stream.state` | Means |
 |---|---|
@@ -1741,7 +1743,9 @@ of `/api/adsb`, `/api/aprs`, `/api/rtl433` and `/api/victron`:
 | `unknown` | no `sensor_health` on `--socket` yet |
 
 `rf_stream.reading` is `"1.x"`, `"2.x"` or `"before 1.0.0"`: both
-contracts are read, and the answer says which. The remedy for
+contracts are read, and the answer says which. Any other `MAJOR` is
+named as it is (`"3.x"`, `"0.x"`) and the health view says this
+slothweb does not know it. The remedy for
 `not_configured` is the command above: add `--rf-socket` (and
 `--rf-db` for the history).
 

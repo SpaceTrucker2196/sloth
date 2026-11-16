@@ -14,7 +14,10 @@ is attested by `.github/workflows/release-attest.yml` on every `v*` tag
 (it also writes `SHA256SUMS`), and CI's `sbom` job produces a CycloneDX
 SBOM artifact on every push; `make sbom` remains the offline fallback.
 Verify a release binary with
-`gh attestation verify ./sloth --repo SpaceTrucker2196/sloth`.
+`gh attestation verify ./sloth-wifi --repo SpaceTrucker2196/sloth`
+(and `./sloth-rf`). Since the cutover (#216) the release's binaries are
+`sloth-wifi` and `sloth-rf`; `sloth` is a symlink to `sloth-wifi` that
+`make` and `make install` create, not a file a release carries.
 Rolling back to the previous tag, and what on-disk state survives it,
 is section 5.
 
@@ -63,7 +66,7 @@ is section 5.
    that host's libraries; `sloth --version` and the `libs` field of
    every `sensor_health` record report what was actually loaded
    ([[jsonl-schema]]).
-7. **Checksums**: `sha256sum sloth sloth-<version>.cdx.json >
+7. **Checksums**: `sha256sum sloth-wifi sloth-rf sloth-<version>.cdx.json >
    SHA256SUMS`, and paste the file's contents into
    `RELEASE_v<version>.md` under a `## SHA256SUMS` heading, so the
    checksums travel with the notes rather than only beside the binary.
@@ -87,16 +90,19 @@ is section 5.
 ## 4. After the tag
 
 9. **Publish the GitHub release** for the tag with the notes from step
-   2 and attach `sloth`, the SBOM and `SHA256SUMS`. Publishing triggers
+   2 and attach `sloth-wifi`, `sloth-rf`, the SBOM and `SHA256SUMS`. Publishing triggers
    `mirror-release.yml`, which mirrors the tag and release.
 10. **Provenance.** `.github/workflows/release-attest.yml` (landed in
-    `9131b8e`, #142) builds `sloth`, writes `SHA256SUMS` and attests the
-    binary with `actions/attest-build-provenance` on every `v*` tag push;
+    `9131b8e`, #142) builds `sloth-wifi` and `sloth-rf`, writes
+    `SHA256SUMS` and attests both with `actions/attest-build-provenance` on every `v*` tag push;
     CI's `sbom` job produces the CycloneDX SBOM with `anchore/sbom-action`
     on every push. Both are pinned by full commit SHA. No tag has been
     pushed since it landed, so no released version carries an
     attestation yet; the first will be the tag after v1.8.4. Verify with
-    `gh attestation verify sloth --repo SpaceTrucker2196/sloth`.
+    `gh attestation verify sloth-wifi --repo SpaceTrucker2196/sloth`
+    (and `sloth-rf`). The two-subject form has not run yet either: it
+    was written at the cutover (#216 review) and its first run is that
+    tag's, so read that run's log before publishing.
 
 ## 5. Rolling back to the previous tag
 
@@ -118,6 +124,10 @@ gh release download v<prev> --repo SpaceTrucker2196/sloth \
 sha256sum -c --ignore-missing SHA256SUMS
 gh attestation verify ./sloth --repo SpaceTrucker2196/sloth
 ```
+
+That is the form for a previous tag from before the cutover (#216),
+whose one binary is `sloth`. For a previous tag at or after it, the
+patterns and the subjects are `sloth-wifi` and `sloth-rf`.
 
 Compare `SHA256SUMS` with the copy pasted into `RELEASE_v<prev>.md`
 (step 7) as well: the release asset and the notes are two places an

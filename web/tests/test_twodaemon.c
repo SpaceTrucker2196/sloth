@@ -389,11 +389,11 @@ static void test_tabs_same_with_one_stream_or_two(void) {
         if (a && b) {
             /* The data is the same; where it came from is not (#216). */
             const char *sa = cut_rf_stream(a), *sb = cut_rf_stream(b);
-            if (strncmp(paths[i], "/api/gnss", 9)) {
+            if (strcmp(paths[i], "/api/gnss/fixes")) {
                 WT_ASSERT(sa && strstr(sa, "\"rf_stream\":{\"state\":\"sensor_stream\",") == sa);
                 WT_ASSERT(sb && strstr(sb, "\"rf_stream\":{\"state\":\"rf_socket\",") == sb);
             } else {
-                WT_ASSERT(!sa && !sb);     /* both daemons have a receiver */
+                WT_ASSERT(!sa && !sb);     /* the page takes it from /api/gnss */
             }
             if (strcmp(a, b)) fprintf(stderr, "    %s differs:\n    one: %s\n    two: %s\n",
                                       paths[i], a, b);
@@ -1435,10 +1435,17 @@ static void test_2x_wifi_alone_says_rf_not_configured(void) {
                            "\"rf_socket\":false}");
     WT_EQ(count_of(body_of(g_out), "\"rf_stream\":"), 1);
     WT_LACKS(body_of(g_out), "\"daemons\"");
-    /* The receiver's health is sloth-wifi's too and still read: the
-     * GNSS tab is not an RF-daemon-only tab. */
+    /* The receiver's health is sloth-wifi's too and still read, so the
+     * GNSS tab's header draws; its fix, sky and satellite records are
+     * sloth-rf's alone, so the answer carries the same reason and the
+     * page says why those are empty (#216 review; seen red with the
+     * rf_stream_member() call taken out of route_gnss()). */
     WT_EQ(get(&w, "/api/gnss", ""), 200);
     WT_HAS(body_of(g_out), "\"lat\":11.00000");
+    WT_HAS(body_of(g_out), "\"fix\":null");
+    WT_HAS(body_of(g_out), RFS_NOT_CONFIGURED);
+    WT_EQ(count_of(body_of(g_out), "\"rf_stream\":"), 1);
+    WT_EQ(get(&w, "/api/gnss/fixes", ""), 200);
     WT_LACKS(body_of(g_out), "rf_stream");
     /* The out-of-scope answer is the scope's, not this sensor's: no
      * member. */
@@ -1579,6 +1586,87 @@ static void test_2x_wifi_and_rf_fill_the_tabs_from_the_rf_stream(void) {
     WT_EQ(web_live_rf_stream(NULL), WEB_RF_STREAM_UNKNOWN);
 }
 
+/* An unsplit 1.x sensor upgraded under a slothweb that stays up: the
+ * decoder blocks its stream carried are not kept once a sensor_health
+ * arrives without them. The ADS-B and APRS stores used to keep the last
+ * block for ever (rtl_433 and Victron always cleared theirs), so the
+ * tab read "decoder live" over a stream that has no decoder, and the
+ * page, which asks for the reason only when there is no block, never
+ * said the RF daemon is not configured. The same clears a block when
+ * sloth-rf is restarted without the flag.
+ *
+ * Seen red (2026-11-15) with web_adsb.c's and web_aprs.c's sh_apply()
+ * returning on a blockless sensor_health as they did: both answers kept
+ * "sensor":{...,"state":"live"}. */
+static void test_1x_then_2x_drops_the_decoder_blocks(void) {
+    static tw_t w;
+    tw_up(&w, 0);
+    put(&w, 'w', SH_ONE);
+    WT_EQ(get(&w, "/api/adsb", ""), 200);
+    WT_HAS(body_of(g_out), "\"sensor\":{\"ts\":1800000000,\"state\":\"live\"");
+    WT_EQ(get(&w, "/api/aprs", ""), 200);
+    WT_HAS(body_of(g_out), "\"state\":\"live\"");
+    WT_LACKS(body_of(g_out), "\"sensor\":null");
+    put(&w, 'w', SH_WIFI_2X);
+    WT_EQ(web_live_rf_stream(&w.live), WEB_RF_STREAM_NOT_CONFIGURED);
+    for (int i = 0; i < RF_TAB_N; i++) {
+        WT_EQ(get(&w, RF_TABS[i], ""), 200);
+        WT_HAS(body_of(g_out), "\"sensor\":null");
+        WT_LACKS(body_of(g_out), "\"state\":\"live\"");
+        WT_HAS(body_of(g_out), RFS_NOT_CONFIGURED);
+    }
+    tw_down(&w);
+
+    /* sloth-rf restarted with no decoder, on its own socket. */
+    tw_up(&w, 1);
+    put(&w, 'w', SH_WIFI_2X);
+    put(&w, 'r', SH_RF_2X);
+    WT_EQ(get(&w, "/api/adsb", ""), 200);
+    WT_HAS(body_of(g_out), "\"sensor\":{\"ts\":1800000000,\"state\":\"live\"");
+    put(&w, 'r', SH_RF_BARE);
+    for (int i = 0; i < RF_TAB_N; i++) {
+        WT_EQ(get(&w, RF_TABS[i], ""), 200);
+        WT_HAS(body_of(g_out), "\"sensor\":null");
+    }
+    /* sloth-wifi's own sensor_health never clears sloth-rf's blocks. */
+    put(&w, 'r', SH_RF_2X);
+    put(&w, 'w', SH_WIFI_2X);
+    WT_EQ(get(&w, "/api/adsb", ""), 200);
+    WT_HAS(body_of(g_out), "\"sensor\":{\"ts\":1800000000,\"state\":\"live\"");
+    WT_EQ(get(&w, "/api/aprs", ""), 200);
+    WT_LACKS(body_of(g_out), "\"sensor\":null");
+    tw_down(&w);
+}
+
+/* The contract is named for what the stream says, never rounded to one
+ * slothweb knows: a 3.0.0 reads "3.x" and a 0.9.0 "0.x", and the page
+ * says it does not know that MAJOR (rfstream.js readingText()). Such a
+ * stream used to be reported as "2.x" (and 0.x as "1.x").
+ *
+ * Seen red (2026-11-15) with the reading written as
+ * `ver_major() >= 2 ? "2.x" : "1.x"`. */
+static void test_reading_names_the_streams_own_major(void) {
+    static tw_t w;
+    static const struct { const char *ver, *reading; int state; } v[] = {
+        { "3.0.0",  "\"reading\":\"3.x\",\"sensor_jsonl_version\":\"3.0.0\"",   WEB_RF_STREAM_NOT_CONFIGURED },
+        { "10.0.0", "\"reading\":\"10.x\",\"sensor_jsonl_version\":\"10.0.0\"", WEB_RF_STREAM_NOT_CONFIGURED },
+        { "0.9.0",  "\"reading\":\"0.x\",\"sensor_jsonl_version\":\"0.9.0\"",   WEB_RF_STREAM_SENSOR_1X },
+        { "2.4.1",  "\"reading\":\"2.x\",\"sensor_jsonl_version\":\"2.4.1\"",   WEB_RF_STREAM_NOT_CONFIGURED },
+        { "1.10.0", "\"reading\":\"1.x\",\"sensor_jsonl_version\":\"1.10.0\"",  WEB_RF_STREAM_SENSOR_1X },
+    };
+    for (size_t k = 0; k < sizeof(v) / sizeof(v[0]); k++) {
+        char line[1024];
+        tw_up(&w, 0);
+        snprintf(line, sizeof(line), "{\"type\":\"sensor_health\",\"ts\":1800000000," WIFI_BLOCKS
+                 ",\"daemon\":\"wifi\",\"db_max_mb\":512,\"jsonl_version\":\"%s\"}", v[k].ver);
+        put(&w, 'w', line);
+        WT_EQ(web_live_rf_stream(&w.live), v[k].state);
+        WT_EQ(get(&w, "/api/health", ""), 200);
+        WT_HAS(body_of(g_out), v[k].reading);
+        tw_down(&w);
+    }
+}
+
 /* The page's one wording of it (web/ui/rfstream.js), whole functions,
  * and the one call each tab and the health view make. Every string
  * reaches the DOM through textContent or el(): none is HTML. */
@@ -1607,15 +1695,32 @@ static void test_rf_stream_page(void) {
               "        \"), which has no ADS-B, APRS, rtl_433 or Victron records; give slothweb --rf-socket (and --rf-db) for sloth-rf\";\n"
               "    return \"not known: no sensor_health on --socket yet\";\n"
               "  }\n");
-    WT_HAS(p, "  window.SlothRfStream = { notConfigured: notConfigured, text: text, sourceText: sourceText };\n");
+    WT_HAS(p, "  function readingText(r) {\n"
+              "    var rd = r && r.reading;\n"
+              "    if (!rd) return null;\n"
+              "    if (rd === \"1.x\" || rd === \"2.x\" || rd === \"before 1.0.0\") return rd;\n"
+              "    return rd + \" (a JSONL MAJOR this slothweb does not know; it reads 1.x and 2.x, so what it shows of this stream may be wrong: upgrade slothweb)\";\n"
+              "  }\n");
+    WT_HAS(p, "  window.SlothRfStream = { notConfigured: notConfigured, text: text, sourceText: sourceText, readingText: readingText };\n");
     /* The health view. */
     WT_HAS(p, "  function rfStreamRows(box, h) {\n"
               "    var t = window.SlothRfStream && h.rf_stream ? window.SlothRfStream.sourceText(h.rf_stream) : null;\n"
               "    if (!t) return;\n"
               "    box.appendChild(el(\"div\", \"label\", \"RF daemon (ADS-B, APRS, rtl_433, Victron)\"));\n"
+              "    var rd = window.SlothRfStream.readingText(h.rf_stream);\n"
               "    kvList(box, [[\"records from\", el(\"span\", h.rf_stream.state === \"not_configured\" ? \"health-bad\" : \"\", t)],\n"
-              "                 [\"--socket is\", h.rf_stream.reading]]);\n"
+              "                 [\"--socket is\", rd && rd !== h.rf_stream.reading ? el(\"span\", \"health-bad\", rd) : rd]]);\n"
               "  }\n");
+    /* The GNSS tab: the receiver's health is sloth-wifi's, the fix, sky
+     * and satellite records sloth-rf's, so it gives the same reason. */
+    WT_HAS(p, "  function rfWhy(j) {\n"
+              "    return window.SlothRfStream ? window.SlothRfStream.text(j, \"gnss_fix, gnss_sky or gnss_sat\") : \"\";\n"
+              "  }\n");
+    WT_HAS(p, "    if (!rows || !rows.length) { set(\"gnss-fix-note\", rfWhy(last) || \"no gnss_fix records yet\"); return; }\n");
+    /* The two state lines name the daemon that takes the flag. */
+    WT_HAS(p, "    if (!s) return \"no decoder: the sensor has not reported --rtl433 on this connection (the flag is sloth-rf's)\";\n");
+    WT_HAS(p, "    if (!s) return \"no reader: the sensor has not reported --victron on this connection (the flag is sloth-rf's)\";\n");
+    WT_LACKS(p, "sloth has not reported --");
     /* The four tabs: the reason outranks "no decoder". */
     WT_HAS(p, "    if (!s && !j.total) {\n"
               "      // #216: with a 2.x sloth-wifi and no --rf-socket the tab is empty\n"
@@ -1667,5 +1772,7 @@ void run_twodaemon_tests(void) {
     WT_RUN(test_2x_wifi_alone_says_rf_not_configured);
     WT_RUN(test_1x_stream_alone_still_fills_the_rf_tabs);
     WT_RUN(test_2x_wifi_and_rf_fill_the_tabs_from_the_rf_stream);
+    WT_RUN(test_1x_then_2x_drops_the_decoder_blocks);
+    WT_RUN(test_reading_names_the_streams_own_major);
     WT_RUN(test_rf_stream_page);
 }

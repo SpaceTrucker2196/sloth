@@ -44,6 +44,12 @@ apply to both files; what differs is which tables a daemon fills.
 
 A `sloth.db` from before the cutover keeps the RF rows it has: nothing
 is deleted or moved, and retention ages them out as it always did.
+**slothweb does not show them.** It reads the RF tables from one file,
+and with `--rf-db` (which the shipped unit always passes) that file is
+`sloth-rf.db`, so the ADS-B, APRS, Victron and GNSS history pages start
+empty at the cutover and show what sloth-rf has recorded since. The
+older rows are read with `sqlite3 -readonly` on `sloth.db` until they
+age out; no tool copies them across ([[deployment]] §11.4).
 The writer's seam is `db_set_rf_side()` (`src/db.h`): `sloth-rf`
 registers it and `sloth-wifi` does not, and unregistered the four
 writers are not called, whatever the state holds (`sloth-wifi` has a

@@ -347,7 +347,11 @@ Since #115 every binary is derived from one set of source lists in the
   `sys_status_rf_fill`). All patterns, file-local symbols included.
   The GNSS reader, the position track and the GNSS view are not on
   it, and `rf_moved_*`, this daemon's refusal of the six flags, is not
-  matched. Until the cutover every RF file was in the one binary;
+  matched. It is a list of names, so it holds RF *files* out of the
+  link, not RF code in a shared file: `src/db.c`'s writers for the
+  RF tables are compiled into both daemons and are kept off in
+  `sloth-wifi` at run time by `db_set_rf_side()`, which
+  `tests/test_rf_db.c` holds ([[architecture-rf-split]] §12). Until the cutover every RF file was in the one binary;
   what keeps them out now is only that nothing sloth-wifi references
   leads to them, so the gate is on the link for the reason sloth-rf's
   is. `tests/test_rf_build.c` holds each pattern to a named definition

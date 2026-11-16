@@ -37,6 +37,15 @@
         "), which has no ADS-B, APRS, rtl_433 or Victron records; give slothweb --rf-socket (and --rf-db) for sloth-rf";
     return "not known: no sensor_health on --socket yet";
   }
+  // Which contract --socket's stream is. The server names the stream's
+  // own MAJOR; this build reads 1.x and 2.x, and says so of any other
+  // rather than passing it off as one of those.
+  function readingText(r) {
+    var rd = r && r.reading;
+    if (!rd) return null;
+    if (rd === "1.x" || rd === "2.x" || rd === "before 1.0.0") return rd;
+    return rd + " (a JSONL MAJOR this slothweb does not know; it reads 1.x and 2.x, so what it shows of this stream may be wrong: upgrade slothweb)";
+  }
 
-  window.SlothRfStream = { notConfigured: notConfigured, text: text, sourceText: sourceText };
+  window.SlothRfStream = { notConfigured: notConfigured, text: text, sourceText: sourceText, readingText: readingText };
 })();

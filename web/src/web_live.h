@@ -398,7 +398,12 @@ enum { WEB_RF_STREAM_UNKNOWN = 0, WEB_RF_STREAM_RF_SOCKET,
        WEB_RF_STREAM_NOT_CONFIGURED };
 int         web_live_rf_stream(web_live_t *l);
 const char *web_live_rf_stream_word(int state);
-/* {"state":"...","reading":"1.x"|"2.x"|"before 1.0.0"|null,
+/* "reading" is the stream's own MAJOR as "N.x" ("1.x", "2.x"; a MAJOR
+ * this build does not know is named as it is, "3.x" or "0.x", and the
+ * state is still decided as above: 2 and later as a split stream),
+ * "before 1.0.0" for a stream with no version, null before any
+ * sensor_health.
+ * {"state":"...","reading":"N.x"|"before 1.0.0"|null,
  *  "sensor_jsonl_version":"x.y.z"|null,"sensor_daemon":"wifi"|...|null,
  *  "rf_socket":true|false}. l may be NULL (no data socket): "unknown". */
 void web_live_rf_stream_json(web_live_t *l, web_jw_t *w);

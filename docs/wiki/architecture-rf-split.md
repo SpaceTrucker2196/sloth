@@ -791,6 +791,23 @@ and sloth-rf's stages, tables and side. Seen to fail with a call to
 `tests/test_rf_build.c` holds each pattern to a definition and to not
 matching what sloth-wifi keeps.
 
+**What the gate does not hold.** It is a list of name families, so it
+catches an RF *file* coming into the link (every RF object defines a
+symbol on the list) and not RF code that lives in a shared file under
+another name. One such body is in `sloth-wifi` today: `src/db.c`'s
+writers for the `gnss_*`, `adsb_*`, `aprs_*` and `victron_*` tables
+(`write_gnss()`, `write_adsb()`, `write_aprs()`, `write_victron()`,
+with `db_victron_col()` and their change memories) are compiled into
+both daemons, because the schema and its writer are one file. In
+`sloth-wifi` they are unreachable, not absent: `db_tick()` calls them
+only when `db_set_rf_side()` has registered a side, and only sloth-rf
+registers one. So "sloth-wifi writes no RF row" is a runtime property
+held by `tests/test_rf_db.c` (seen red with the `if (g_rf_side)` test taken off `db_tick()`), while
+"sloth-wifi links no decoder, reader, RF record emitter or RF rule" is
+the link property the gate holds. A new RF writer added to `db.c`, or
+any RF-reading code added to a shared file, passes the gate and needs
+its own test on the sloth-wifi side.
+
 **Numbering.** `alert_type_t`, `sensor_kind_t` and `sys_src_id_t` did
 not change. Both daemons use one of each, the numbers are persisted,
 and a row a daemon does not have is absent. The views list lost its

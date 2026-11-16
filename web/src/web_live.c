@@ -1156,7 +1156,14 @@ void web_live_rf_stream_json(web_live_t *l, web_jw_t *w) {
     web_jw_raw(w, ",\"reading\":");
     if (!l->sh_seen)         web_jw_raw(w, "null");
     else if (!l->sh_ver[0])  web_jw_str(w, "before 1.0.0");
-    else                     web_jw_str(w, ver_major(l->sh_ver) >= 2 ? "2.x" : "1.x");
+    else {
+        /* The stream's own MAJOR, never rounded to one this build
+         * knows: a 3.x is not reported as 2.x. The page says when it is
+         * not 1 or 2 (rfstream.js readingText()). */
+        char rd[24];
+        snprintf(rd, sizeof(rd), "%d.x", ver_major(l->sh_ver));
+        web_jw_str(w, rd);
+    }
     web_jw_raw(w, ",\"sensor_jsonl_version\":");
     if (l->sh_ver[0]) web_jw_str(w, l->sh_ver); else web_jw_raw(w, "null");
     web_jw_raw(w, ",\"sensor_daemon\":");

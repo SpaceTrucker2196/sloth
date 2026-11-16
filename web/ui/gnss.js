@@ -71,6 +71,14 @@
     });
   }
 
+  // #216: gnss_fix, gnss_sky and gnss_sat are sloth-rf's alone since
+  // JSONL 2.0.0; sloth-wifi keeps the receiver's health, so against a
+  // 2.x sloth-wifi with no --rf-socket the header draws and the rest is
+  // empty. "" unless that is the case (web/ui/rfstream.js).
+  function rfWhy(j) {
+    return window.SlothRfStream ? window.SlothRfStream.text(j, "gnss_fix, gnss_sky or gnss_sat") : "";
+  }
+
   // ── the header: the TUI's two lines ──────────────────────────────
   function header(j) {
     var now = num(j.now) ? j.now : Math.floor(Date.now() / 1000);
@@ -80,7 +88,8 @@
       h.appendChild(el("span", "", "GNSS: no receiver"));
       var e = $("gnss-empty");
       e.hidden = false;
-      e.textContent = "no gnss records yet: sloth needs --gps gpsd:// or --gps /dev/ttyXXX (docs/wiki/gnss.md); --location alone is a setting, not a receiver";
+      e.textContent = "no gnss records yet: the sensor needs --gps gpsd:// (sloth-wifi for the position stamp and the receiver's health, sloth-rf for the fix, sky and satellite records; docs/wiki/gnss.md); --location alone is a setting, not a receiver" +
+        (rfWhy(j) ? ". " + rfWhy(j) : "");
       $("gnss-head2").textContent = "";
       return;
     }
@@ -365,7 +374,7 @@
     g.scale(dpr, dpr);
     g.clearRect(0, 0, W, H);
     set("gnss-fix-legend", "top to bottom: fix mode (0..3), satellites used, HDOP (0..10), clock offset (±2 s); one point per gnss_fix record, oldest left");
-    if (!rows || !rows.length) { set("gnss-fix-note", "no gnss_fix records yet"); return; }
+    if (!rows || !rows.length) { set("gnss-fix-note", rfWhy(last) || "no gnss_fix records yet"); return; }
     set("gnss-fix-note", rows.length + " records, " + age(rows[0].ts, now) + " to " + age(rows[rows.length - 1].ts, now) + " ago");
     var t0 = rows[0].ts, t1 = rows[rows.length - 1].ts, span = Math.max(1, t1 - t0);
     var lanes = [
@@ -473,7 +482,7 @@
     var t = seenTable();
     var ordered = t ? t.sort(seenRows, true) : seenRows.slice();
     var body = clear($("gnss-seen-rows"));
-    set("gnss-seen-count", j.have === false ? "sloth.db has no gnss_sightings yet" :
+    set("gnss-seen-count", j.have === false ? "the sensor's database has no gnss_sightings yet (sloth-rf writes them; slothweb reads its file with --rf-db)" :
       seenRows.length + (j.more ? "+" : "") + " in " + (j.days === 1 ? "24 h" : j.days + " days"));
     ordered.forEach(function (g) {
       var on = histSel && histSel.gnssid === g.gnssid && histSel.prn === g.prn;

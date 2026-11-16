@@ -856,6 +856,10 @@ endef
 #                                         g_alert_table_rf, rf_flags_*,
 #                                         rf_flag_*, rf_side_install,
 #                                         sys_status_rf_fill
+# It is a list of names, so it holds RF files out of the link and not
+# RF code in a shared file: src/db.c's writers for the gnss_*, adsb_*,
+# aprs_* and victron_* tables are in both daemons and are kept off in
+# sloth-wifi at run time (db_set_rf_side(), tests/test_rf_db.c).
 # The GNSS reader, the position track and the GNSS view are not on it:
 # sloth-wifi keeps them (owner ruling 2026-11-15). rf_moved_* is this
 # daemon's own refusal of the six flags and is not matched (the list
@@ -1912,6 +1916,13 @@ $(STAMPS): FORCE
 # The units are written for PREFIX=/usr/local; a different prefix is
 # substituted at install time so the text in packaging/ stays the one
 # tests/test_unit_file.c scans.
+# The sensor's unit and its binary are held the same way since the
+# cutover (#216 review): the unit names bin/sloth-wifi, a pre-cutover
+# host has only bin/sloth, and `install-service` run alone (or after a
+# `make install` that failed) would replace a unit that starts with one
+# that does not. It refuses, before it writes anything, when bin/sloth
+# is there and bin/sloth-wifi is not; with neither there is nothing
+# installed to disagree with (a staged tree, a first install).
 # Upgrade safety (#216). sloth-wifi refuses the six decoder flags, so a
 # host whose /etc/default/sloth still carries one has a sensor that will
 # not start after this build is installed. install-service never
@@ -1934,6 +1945,33 @@ f=$(DESTDIR)$(DEFAULTDIR)/sloth; \
 	   echo "      sloth-migrate-rf --apply    (moves them to $(DEFAULTDIR)/sloth-rf)"; \
 	   echo "  then the commands it prints. docs/wiki/deployment.md section 11.4"; \
 	   echo "  ************************************************************************"; \
+	   echo ""; }
+endef
+
+# The same upgrade, the quiet half (#216 review). --gps is not one of
+# the six: sloth-wifi takes it (the position stamp and the receiver's
+# health are its own), so the sensor starts and the warning above has
+# nothing to say. But the four GNSS_* rules, the gnss_fix / gnss_sky /
+# gnss_sat records and the gnss_fixes / gnss_sightings tables are
+# sloth-rf's alone, so a host whose sensor has --gps and whose sloth-rf
+# has none stops raising and recording them, and nothing fails. Said
+# once, before the summary, as a note: uncommented lines only, and
+# --gps-baud is not --gps. Never fatal, and no file is edited.
+GPS_FLAG_RE = --gps([[:space:]=]|$$)
+define note_gps_without_rf
+f=$(DESTDIR)$(DEFAULTDIR)/sloth; r=$(DESTDIR)$(DEFAULTDIR)/sloth-rf; \
+	 [ ! -f "$$f" ] || ! grep -v '^[[:space:]]*[#]' "$$f" | grep -Eq -e '$(GPS_FLAG_RE)' || \
+	 { [ -f "$$r" ] && grep -v '^[[:space:]]*[#]' "$$r" | grep -Eq -e '$(GPS_FLAG_RE)'; } || { \
+	   echo ""; \
+	   echo "  NOTE: $$f passes --gps and $$r does not."; \
+	   echo "  sloth-wifi keeps the receiver for the position stamp and its health, and starts."; \
+	   echo "  It no longer raises GNSS_JAMMING, GNSS_SPOOF_SUSPECT, GNSS_TIME_JUMP or"; \
+	   echo "  GNSS_POSITION_JUMP and no longer writes gnss_fix / gnss_sky / gnss_sat or the"; \
+	   echo "  gnss_* tables: those are sloth-rf's now, and only with a --gps of its own."; \
+	   echo "  To keep them (the receiver must be on gpsd; a serial device opens once):"; \
+	   echo "      sloth-migrate-rf            (dry run: shows --gps and --location copied)"; \
+	   echo "      sloth-migrate-rf --apply    (copies them to $(DEFAULTDIR)/sloth-rf)"; \
+	   echo "  then the commands it prints. docs/wiki/deployment.md section 11.4"; \
 	   echo ""; }
 endef
 
@@ -1973,6 +2011,8 @@ install: $(TARGET) $(BLE_SCAN_BIN) $(SDRSWEEP_BIN) $(VA_BIN)
 install-service:
 	@b=$(DESTDIR)$(PREFIX)/bin/slothweb; [ ! -e "$$b" ] || for f in $$($(WEB_UNIT_FLAGS)); do grep -aqF -e "$$f" "$$b" || { \
 	    echo "install-service: $$b does not know $$f, which the new slothweb.service passes; the web UI would not start. Nothing was installed: run 'make web' and 'sudo make install' from this tree first" >&2; exit 1; }; done
+	@d=$(DESTDIR)$(PREFIX)/bin; [ ! -e "$$d/$(TARGET_ALIAS)" ] && [ ! -L "$$d/$(TARGET_ALIAS)" ] || [ -x "$$d/$(TARGET)" ] || { \
+	    echo "install-service: $$d/$(TARGET_ALIAS) is installed and $$d/$(TARGET) is not: this is a pre-cutover install (#216), and the new sloth-sensor.service runs $$d/$(TARGET); the sensor would fail to start (203/EXEC) at its next restart. Nothing was installed: run 'sudo make install' from this tree first" >&2; exit 1; }
 	install -d $(DESTDIR)$(UNITDIR) $(DESTDIR)$(SYSUSERSDIR) $(DESTDIR)$(DEFAULTDIR)
 	sed -e 's|/usr/local/|$(PREFIX)/|g' packaging/systemd/sloth-sensor.service \
 	    > $(DESTDIR)$(UNITDIR)/sloth-sensor.service.tmp
@@ -2021,6 +2061,7 @@ install-service:
 	install -D -m 644 packaging/systemd/sloth-rf.service.d/gps.conf \
 	    $(DESTDIR)$(PREFIX)/share/sloth/sloth-rf-gps.conf
 	@$(warn_rf_flags_in_default)
+	@$(note_gps_without_rf)
 	@echo "installed units and sysusers fragment; /etc/default/sloth{,web} only where absent; next:"
 	@echo "  systemd-sysusers && systemctl daemon-reload && systemctl enable --now sloth-sensor"
 	@echo "  systemctl enable --now slothweb   (reads /etc/default/slothweb; loopback by default)"

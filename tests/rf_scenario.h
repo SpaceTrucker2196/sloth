@@ -21,24 +21,29 @@
 #include "adsb.h"
 #include "aprs.h"
 #include "rtl433.h"
+#include "victron.h"
 #include "capture/adsb_reader.h"
 #include "capture/aprs_reader.h"
 #include "capture/rtl433_reader.h"
+#include "capture/victron_reader.h"
 
 /*
- * One canned run of the four RF inputs, for the sloth-rf tests (#213).
+ * One canned run of the five RF inputs, for the sloth-rf tests (#213;
+ * Victron's added on #216's review, so that "sloth-wifi writes no
+ * Victron record or row" is said of a run that has one to write).
  *
  * The inputs are the files and the stream the decoders write, built by
  * hand from each format's own documentation, as tests/test_adsb.c,
  * test_aprs.c, test_rtl433.c and test_gps.c build theirs: readsb's
  * aircraft.json (README-json.md), Dire Wolf's packet log (its User
  * Guide's "Log files" columns), rtl_433's -F json lines
- * (docs/DATA_FORMAT.md) and gpsd's TPV / SKY objects (gpsd_json(5)).
+ * (docs/DATA_FORMAT.md), sloth-va's victron.jsonl (docs/wiki/victron.md)
+ * and gpsd's TPV / SKY objects (gpsd_json(5)).
  * Callsigns, models, ids and addresses are invented; the position is a
  * point in the open Atlantic. No line came off a receiver and no parser
  * output is fed back in.
  *
- * They go in the way they arrive: the three files are read by the
+ * They go in the way they arrive: the four files are read by the
  * readers' own poll step (*_reader_poll_once(), the body of each
  * worker's loop, on a file under the test's temporary directory), and
  * the gpsd objects through the reader's line framer. No device, serial
@@ -115,6 +120,22 @@ static inline void rfs_replace(const char *name, const char *text) {
     "\"mod\":\"ASK\",\"freq\":433.942,\"rssi\":-11.100,\"snr\":9.800," \
     "\"noise\":-20.900}\n"
 
+/* sloth-va's file: a line from before the start, then one instant
+ * readout of a battery monitor. The address is locally administered
+ * and the serial is not a Victron one. */
+#define RFS_VIC_OLD \
+    "{\"type\":\"victron\",\"t\":1799990000,\"source\":\"readout\"," \
+    "\"mac\":\"02:00:5e:00:53:0a\",\"serial\":\"TESTOLD0001\"," \
+    "\"model_id\":\"0xa381\",\"model\":\"BMV-712 Smart\"," \
+    "\"record\":\"battery_monitor\",\"rssi\":-70," \
+    "\"values\":{\"voltage_v\":12.000}}\n"
+#define RFS_VIC_BMV \
+    "{\"type\":\"victron\",\"t\":1800000001,\"source\":\"readout\"," \
+    "\"mac\":\"02:00:5e:00:53:0b\",\"serial\":\"TESTBMV0001\"," \
+    "\"model_id\":\"0xa381\",\"model\":\"BMV-712 Smart\"," \
+    "\"record\":\"battery_monitor\",\"rssi\":-71," \
+    "\"values\":{\"voltage_v\":13.200,\"current_a\":-1.500,\"soc_pct\":87.500}}\n"
+
 /* One ordinary aircraft; then the same with a second one squawking
  * 7700, which is ADSB_EMERGENCY. */
 #define RFS_ADSB_1 \
@@ -160,6 +181,7 @@ static inline void rfs_readers_poll(void) {
     (void)adsb_reader_poll_once(rfs_wall, rfs_mono);
     (void)aprs_reader_poll_once(rfs_wall, rfs_mono);
     (void)rtl433_reader_poll_once(rfs_wall);
+    (void)victron_reader_poll_once(rfs_wall);
 }
 
 static inline void rfs_tick(const poll_table_t *t, sloth_state_t *s) {
@@ -206,6 +228,7 @@ static inline void rfs_run(const poll_table_t *t, int as_rf,
      * record. */
     rfs_append("aprs.log", RFS_APRS_HDR RFS_APRS_OLD);
     rfs_append("events.jsonl", RFS_RTL_OLD);
+    rfs_append("victron.jsonl", RFS_VIC_OLD);
     rfs_replace("aircraft.json", RFS_ADSB_1);
 
     char spec[TEST_TMP_MAX + 64], err[200];
@@ -215,6 +238,8 @@ static inline void rfs_run(const poll_table_t *t, int as_rf,
     ASSERT_EQ(aprs_reader_configure(spec, err, sizeof(err)), 0);
     snprintf(spec, sizeof(spec), "%s/events.jsonl", rfs_dir);
     ASSERT_EQ(rtl433_reader_configure(spec, err, sizeof(err)), 0);
+    snprintf(spec, sizeof(spec), "%s/victron.jsonl", rfs_dir);
+    ASSERT_EQ(victron_reader_configure(spec, err, sizeof(err)), 0);
     gps_location_set_gps("gpsd:127.0.0.1:2947");
     gps_lines_init(&rfs_gpsd, GPS_FEED_GPSD);
 
@@ -237,6 +262,7 @@ static inline void rfs_run(const poll_table_t *t, int as_rf,
     rfs_wall += 1; rfs_mono += 1000;
     rfs_append("aprs.log", RFS_APRS_FIXED);
     rfs_append("events.jsonl", RFS_RTL_TPMS);
+    rfs_append("victron.jsonl", RFS_VIC_BMV);
     rfs_feed_tpv(10.00000);
     rfs_readers_poll();
     rfs_tick(t, &s);
@@ -264,6 +290,7 @@ static inline void rfs_run(const poll_table_t *t, int as_rf,
     adsb_reader_stop();
     aprs_reader_stop();
     rtl433_reader_stop();
+    victron_reader_stop();
     test_rm_tree(rfs_dir);
     sloth_reset_all();
     fake_net_reset();

@@ -122,10 +122,10 @@
     if (!j) return "not known";
     if (j.out_of_scope) return String(j.reason || "");
     var s = j.sensor;
-    if (!s) return "no reader: sloth has not reported --victron on this connection";
+    if (!s) return "no reader: the sensor has not reported --victron on this connection (the flag is sloth-rf's)";
     var t = "reader " + s.state + (s.missing ? " (file not there yet)" : "") +
       (s.err ? ": " + s.err : "") + "; " + plural(s.devices || 0, "device", "devices") +
-      " in sloth's table";
+      " in the sensor's table";
     if (num(s.bad_lines) && s.bad_lines > 0) t += "; " + plural(s.bad_lines, "line", "lines") + " refused";
     if (num(s.bad_values) && s.bad_values > 0) t += "; " + plural(s.bad_values, "value", "values") + " out of range, left blank";
     if (num(s.table_full) && s.table_full > 0) t += "; " + plural(s.table_full, "record", "records") + " for a 17th device dropped";

@@ -2,9 +2,11 @@
 # sloth-migrate-rf — move the RF decoders' flags from the Wi-Fi sensor's
 # defaults file to sloth-rf's (#215, ADR 0010).
 #
-# The owner runs this as root, once, on a host whose Wi-Fi sensor still
-# reads the decoders, after `make install` and `make install-service`
-# have placed sloth-rf and sloth-rf.service:
+# The owner runs this as root, once, on a host whose /etc/default/sloth
+# still carries the decoders' flags, after `make install` and `make
+# install-service` have placed sloth-rf and sloth-rf.service. Since the
+# cutover (#216) sloth-wifi refuses those flags, so this is run before
+# the sensor is restarted on the new binary:
 #
 #   sudo sloth-migrate-rf            # dry run: read the before and after
 #   sudo sloth-migrate-rf --apply    # then write them
@@ -338,7 +340,7 @@ NEW_S=$(plan_get SLOTH)
 NEW_RF=$(plan_get RF)
 
 dev=$(plan_get SERIAL)
-[ -z "$dev" ] || refuse "--gps in $DEFAULTS names the serial device $dev. After the split both daemons read GNSS, and a serial device opens once, so sloth-rf could not have it too. The fix is gpsd: let gpsd hold $dev, change SLOTH_ARGS to --gps gpsd://127.0.0.1:2947 (dropping --gps-baud), give sloth-sensor.service the gpsd block of its gps.conf drop-in, check the sensor still has a fix, then run this again (docs/wiki/deployment.md §11.4)"
+[ -z "$dev" ] || refuse "--gps in $DEFAULTS names the serial device $dev. After the split both daemons read GNSS, and a serial device opens once, so sloth-rf could not have it too. The fix is gpsd: let gpsd hold $dev, change SLOTH_ARGS to --gps gpsd://127.0.0.1:2947 (dropping --gps-baud), give sloth-sensor.service the gpsd block of its gps.conf drop-in, then run this again. If SLOTH_ARGS also has a decoder flag, do not restart the sensor to check the fix first: sloth-wifi refuses the flag and would not start. Check gpsd itself (gpspipe -w -n 5), run this with --apply, restart as it says, and look at the sensor's fix then (docs/wiki/deployment.md §11.4)"
 
 c=$(plan_get CONFLICT)
 if [ -n "$c" ]; then

@@ -36,7 +36,7 @@ static void tmp_jsonl(char *buf, size_t sz) {
  * writes alone. */
 static const char *const RF_KINDS[] = {
     "gnss_fix", "gnss_sky", "gnss_sat", "adsb_aircraft",
-    "aprs_packet", "aprs_station", "rtl433_device",
+    "aprs_packet", "aprs_station", "rtl433_device", "victron_device",
 };
 #define RF_KIND_N ((int)(sizeof(RF_KINDS) / sizeof(RF_KINDS[0])))
 
@@ -147,15 +147,18 @@ static void test_rf_records_are_sloth_rfs_alone(void) {
         ASSERT_EQ(count_type(pb, "aprs_packet"), 2);
         ASSERT_GE(count_type(pb, "aprs_station"), 2);
         ASSERT_GE(count_type(pb, "rtl433_device"), 2);
+        ASSERT_GE(count_type(pb, "victron_device"), 1);
         /* The input's own words made it through: nothing here is a
          * statement about an empty stream. */
         ASSERT(strstr(pb, "\"N0TEST-9\"") != NULL);
         ASSERT(strstr(pb, "\"Testco-WX9\"") != NULL);
         ASSERT(strstr(pb, "a1b2c3") != NULL);
+        ASSERT(strstr(pb, "TESTBMV0001") != NULL);
         /* What the decoders wrote before the daemon started is not a
          * record: both logs are tailed from their end. */
         ASSERT(strstr(pb, "N0OLD-1") == NULL);
         ASSERT(strstr(pb, "Testco-OLD") == NULL);
+        ASSERT(strstr(pb, "TESTOLD0001") == NULL);
 
         /* sloth-wifi: none, by kind and by the input's words. */
         ASSERT_EQ(count_lines(pa), 0);
@@ -164,7 +167,10 @@ static void test_rf_records_are_sloth_rfs_alone(void) {
                 fprintf(stderr, "    sloth-wifi wrote a \"%s\" record\n", RF_KINDS[i]);
             ASSERT_EQ(count_type(a, RF_KINDS[i]), 0);
         }
-        ASSERT_EQ(count_type(a, "victron_device"), 0);
+        /* Victron's is in RF_KINDS, so the loop above holds it; the
+         * scenario feeds sloth-va's file since #216's review, and the
+         * sloth-rf half above is its control. */
+        ASSERT(strstr(a, "TESTBMV0001") == NULL);
         ASSERT(strstr(a, "N0TEST-9") == NULL);
         ASSERT(strstr(a, "Testco-WX9") == NULL);
         ASSERT(strstr(a, "a1b2c3") == NULL);
@@ -216,7 +222,7 @@ static void test_adsb_emergency_is_sloth_rfs_alone(void) {
 static void test_rf_stream_is_only_its_own(void) {
     static const char *const ALLOWED[] = {
         "gnss_fix", "gnss_sky", "gnss_sat", "adsb_aircraft", "aprs_packet",
-        "aprs_station", "rtl433_device", "sensor", "sensor_health",
+        "aprs_station", "rtl433_device", "victron_device", "sensor", "sensor_health",
         "sys_status", "sys_sensor", "source_status", "receiver_hw",
         "alert", "alert.create", "alert.update", "alert.escalate",
         "alert.resolve",
@@ -269,9 +275,9 @@ static void test_rf_stream_is_only_its_own(void) {
      * name either. (Seen red with the `name` guards taken out of
      * src/sys_status.c's emit path: four nameless rows a batch.) */
     ASSERT(strstr(b, "\"name\":\"\"") == NULL);
-    /* sys_status counts the rows the daemon has (victron's among them
-     * since JSONL 1.10.0, not configured in this scenario). */
-    ASSERT(strstr(b, "\"sources\":5,\"sources_configured\":4,") != NULL);
+    /* sys_status counts the rows the daemon has, all five configured
+     * in this scenario. */
+    ASSERT(strstr(b, "\"sources\":5,\"sources_configured\":5,") != NULL);
     /* sloth-wifi's rows are the capture's four and the receiver's
      * (#216): nine until the cutover, when it named the decoders'. */
     ASSERT(strstr(a, "\"sources\":5,") != NULL);
@@ -292,8 +298,9 @@ static void test_rf_stream_is_only_its_own(void) {
     ASSERT(strstr(a, "\"daemon\":\"wifi\"") != NULL);
     ASSERT(strstr(a, "\"daemon\":\"rf\"") == NULL);
 
-    /* The four sensors, from slot 0, and no radio. */
-    ASSERT_EQ(count_type(b, "sensor") % 4, 0);
+    /* The five sensors, from slot 0, and no radio. */
+    ASSERT_EQ(count_type(b, "sensor") % 5, 0);
+    ASSERT(strstr(b, "\"name\":\"Victron (sloth-va)\"") != NULL);
     ASSERT(strstr(b, "\"name\":\"GNSS receiver\"") != NULL);
     ASSERT(strstr(b, "\"name\":\"rtl_433 decoder\"") != NULL);
     free(a); free(b);
@@ -370,12 +377,15 @@ static void test_wifi_stream_keeps_gnss_health_and_no_gnss_record(void) {
     ASSERT(strstr(a, "\"name\":\"ADS-B decoder\"") == NULL);
     ASSERT(strstr(a, "\"name\":\"APRS decoder\"") == NULL);
     ASSERT(strstr(a, "\"name\":\"rtl_433 decoder\"") == NULL);
+    ASSERT(strstr(a, "\"name\":\"Victron (sloth-va)\"") == NULL);
     ASSERT(strstr(b, "\"name\":\"ADS-B decoder\"") != NULL);
+    ASSERT(strstr(b, "\"name\":\"Victron (sloth-va)\"") != NULL);
     ASSERT(strstr(a, "\"adsb_") == NULL);
     ASSERT(strstr(a, "\"aprs_") == NULL);
     ASSERT(strstr(a, "\"rtl433_") == NULL);
     ASSERT(strstr(a, "\"victron_") == NULL);
     ASSERT(strstr(b, "\"adsb_state\":") != NULL);
+    ASSERT(strstr(b, "\"victron_state\":") != NULL);     /* the control */
     /* Both say 2.x, and which they are. */
     char ver[64];
     snprintf(ver, sizeof(ver), "\"jsonl_version\":\"%s\"", SLOTH_JSONL_VERSION);

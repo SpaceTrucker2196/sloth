@@ -6106,8 +6106,9 @@
     var t = window.SlothRfStream && h.rf_stream ? window.SlothRfStream.sourceText(h.rf_stream) : null;
     if (!t) return;
     box.appendChild(el("div", "label", "RF daemon (ADS-B, APRS, rtl_433, Victron)"));
+    var rd = window.SlothRfStream.readingText(h.rf_stream);
     kvList(box, [["records from", el("span", h.rf_stream.state === "not_configured" ? "health-bad" : "", t)],
-                 ["--socket is", h.rf_stream.reading]]);
+                 ["--socket is", rd && rd !== h.rf_stream.reading ? el("span", "health-bad", rd) : rd]]);
   }
 
   // ── the sensor's health: the sensor-health tile's view ─────────────
