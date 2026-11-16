@@ -13,27 +13,37 @@ It never injects a frame onto a network it monitors — the one absolute
 in `MISSION.md` §2; every other network-using behaviour is opt-in and
 announced. It reads `/proc`, `/sys`, netlink (rtnetlink / nl80211 / INET_DIAG) and a
 pcap stream, then surfaces what it sees through <!-- count:views -->37<!-- /count --> ncurses views
-(`VIEW_COUNT`), <!-- count:rules -->100<!-- /count --> alert rules (one per `ALERT_TYPE_*`), an embedded
+(`VIEW_COUNT`; `sloth-wifi`'s, `sloth-rf` is headless), <!-- count:rules -->100<!-- /count --> alert rules (one per `ALERT_TYPE_*`;
+`sloth-wifi` raises <!-- count:rules-wifi -->95<!-- /count --> of the kinds, `sloth-rf` <!-- count:rules-rf -->6<!-- /count --> of them, `SENSOR_SOURCE_DOWN`
+both), an embedded
 threat-intel matcher whose shipped IOC list is **synthetic demo data**,
 optional per-alert pcap dumps, and an optional JSONL forensic log.
 
-Two daemons from one tree since #211 (ADR 0010): `sloth`, the Wi-Fi /
-LAN / BLE monitor (renamed `sloth-wifi` at #216's cutover), and
+Two daemons from one tree since #211 (ADR 0010): `sloth-wifi`, the
+Wi-Fi / LAN / BLE monitor (`sloth` is a symlink to it, kept with no end
+date), and
 `sloth-rf`, the headless reader for the SDR decoders' output (ADS-B,
 APRS, rtl_433, Victron) and GNSS. Both link `libsloth_core.a`; an `nm`
 gate (`check_rf_no_capture`) keeps capture, 802.11 and BLE-capture code
-out of `sloth-rf`. Test binary `sloth_test`.
+out of `sloth-rf`, and its mirror `check_wifi_no_rf` keeps the decoders,
+their records and the GNSS / ADS-B rules out of `sloth-wifi` (a name
+list: `src/db.c`'s RF table writers link into both and are off in
+`sloth-wifi` at run time). `sloth-wifi` refuses the decoder flags with
+exit 2 since #216; the stream is JSONL 2.0.0. Test binary `sloth_test`.
 
 ## Architecture
 
 - `include/sloth.h` — central header: shared structs, the `view_t` enum.
 - `src/main.c` — CLI, signal handlers, main poll loop.
 - `src/rf/main.c`, `rf_args.c`, `platform_rf.c` — the `sloth-rf` daemon:
-  its argv parser, loop and two-function platform table. Flag
-  validation both daemons share is in `src/rf_flags.c`,
-  `src/gnss_flags.c` and `src/daemon_start.c`.
+  its argv parser, loop and two-function platform table. Its decoder
+  flags are validated in `src/rf_flags.c`; what both daemons share is
+  in `src/gnss_flags.c` and `src/daemon_start.c`. `src/rf_side.c` is
+  sloth-rf's side as data (the mirror of `capture_side.c`),
+  `src/sys_status_rf.c` its four decoder source rows, and
+  `src/rf_moved.c` the refusal `sloth-wifi` prints for a moved flag.
 - `src/poll_core.c`, `poll.c`, `poll_gnss.c`, `poll_rf.c` — the poll
-  stages and the per-daemon stage tables (`g_poll_sloth`, `g_poll_rf`).
+  stages and the per-daemon stage tables (`g_poll_wifi`, `g_poll_rf`).
 - `src/tui.c` + `tui.h` — ncurses rendering, colour pair init, key
   polling. ANSI fallback when built without ncurses.
 - `src/platform/linux*.c` — Linux backends (rtnetlink, nl80211, /proc
@@ -49,7 +59,8 @@ out of `sloth-rf`. Test binary `sloth_test`.
   `jsonl.c` (the capture's records). The alert rule table is selected
   by the daemon (`alerts_set_table()`; `rules_table.c`,
   `rules_table_rf.c`).
-- `src/views/*.c` — one file per VIEW_*. The dashboard composites
+- `src/views/*.c` — one file per VIEW_* (`sloth-wifi`'s; the ADS-B view
+  was removed at #216). The dashboard composites
   several panels into one grid.
 - `src/md5.c` — embedded MD5 for JA3 (verified against RFC 1321 vectors).
 - `tests/` — unit tests, fake platform, scenarios. For the assertion
@@ -128,7 +139,8 @@ out of `sloth-rf`. Test binary `sloth_test`.
   has libpcap 1.10, SQLite 3.45 and shellcheck 0.9; the reference host
   had libpcap 1.11 (which marks `pcap_set_*` and `pcap_setfilter`
   `warn_unused_result`, so `(void)` does not silence them, 9a5c52c),
-  SQLite 3.53 and shellcheck 0.11. A warning that appears only on one
+  SQLite 3.53 and shellcheck 0.11 (W9FJC has no shellcheck at all as of
+  2026-11-16, so CI's is the first lint of a shell edit made there). A warning that appears only on one
   side is still real on that side; the car box will be the newer one.
 
 - **A test that measures wall-clock time against a real budget scales
@@ -451,7 +463,8 @@ weakening it breaks the rule.
 - Don't add new files at repo root; everything has a home (`src/`,
   `tests/`, `docs/`, `include/`, and `web/` for slothweb — owner ruling
   2026-10-19 on #102; its spec is `docs/web-ui-spec.md`).
-- Don't stage `wifi-sigint/`, `sloth`, or `sloth_test`.
+- Don't stage `wifi-sigint/`, `sloth`, `sloth-wifi`, `sloth-rf`, or
+  `sloth_test`.
 - Don't reintroduce coloured row backgrounds (deliberately removed).
 - Don't bypass git hooks (`--no-verify` etc.) unless explicitly asked.
 - Don't push directly to a branch other than `main` without asking.
@@ -487,7 +500,9 @@ weakening it breaks the rule.
    `rules_enterprise.c`, `rules_mle.c`) that calls `fire(...)`; build its
    key with the `akey_*` builder (#112), never `snprintf` of a remote
    string.
-3. Add its row to `src/alerts/rules_table.c` — the table order is the
+3. Add its row to `src/alerts/rules_table.c` (an RF-side rule goes in
+   `src/alerts/rules_table_rf.c` instead, and a new RF symbol family
+   goes on the Makefile's `WIFI_FORBID_DEF_PATTERNS`) — the table order is the
    run order, and `test_rule_order_dependencies` pins the pairs that
    matter.
 4. If the alert has a known target IP, pass `match_ip` + `match_port`

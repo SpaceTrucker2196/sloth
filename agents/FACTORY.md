@@ -19,7 +19,7 @@ sudo apt-get install -y build-essential libpcap-dev libncursesw5-dev
 git clone https://github.com/SpaceTrucker2196/sloth.git
 cd sloth
 make test    # green ⇒ env is sound (no root, no terminal, no network)
-make         # builds ./sloth
+make         # builds ./sloth-wifi and ./sloth-rf; ./sloth is a symlink to sloth-wifi
 sudo ./sloth # needs CAP_NET_RAW + CAP_NET_ADMIN for pcap + nl80211
 ```
 
@@ -100,7 +100,7 @@ All targets driven by the root [`Makefile`](../Makefile).
 
 | Command | What you get |
 |---------|--------------|
-| `make`                       | full build → `./sloth` (ncurses + pcap + nl80211) |
+| `make`                       | full build → `./sloth-wifi` and `./sloth-rf`, with `./sloth` a symlink to `sloth-wifi` (ncurses + pcap + nl80211) |
 | `make WITH_PCAP=0`           | no capture; the packets/probe views render a disabled message |
 | `make WITH_NCURSES=0`        | headless; `TPRINT` falls back to `printf` |
 | `make WITH_WIFI=0`           | drops nl80211 source on Linux |
@@ -108,8 +108,8 @@ All targets driven by the root [`Makefile`](../Makefile).
 | `make test`                  | builds `./sloth_test`, runs all assertions |
 | `make test-capture-path`     | builds `./sloth_test_pcap` (WITH_PCAP), drives the real `pcap_dispatch` → `on_packet` path |
 | `make cppcheck`              | CI's cppcheck command verbatim, with CI's version guard. Green here means the cppcheck job is green. Hard-fails unless `cppcheck --version` is exactly `Cppcheck 2.13.0`; no distro ships it, so build from source per the recipe above the target |
-| `make clean`                 | removes objects, `sloth`, `sloth_test` |
-| `make install PREFIX=...`    | installs to `$PREFIX/bin/sloth` (default `/usr/local`) |
+| `make clean`                 | removes objects, `sloth-wifi`, `sloth-rf`, the `sloth` symlink, `sloth_test` |
+| `make install PREFIX=...`    | installs `$PREFIX/bin/sloth-wifi` and `sloth-rf`, with `bin/sloth` a symlink (default `/usr/local`) |
 
 **Override knobs** (env or `make CC=clang ...`):
 
@@ -158,7 +158,7 @@ Easiest path during development: `sudo ./sloth`. For unattended
 deployment, prefer file-grant caps:
 
 ```sh
-sudo setcap cap_net_raw,cap_net_admin=eip ./sloth
+sudo setcap cap_net_raw,cap_net_admin=eip ./sloth-wifi   # the file, not the ./sloth symlink
 ./sloth   # runs unprivileged
 ```
 
@@ -206,9 +206,9 @@ collapses and panels become unreadable.
 
 ## 7. Deployment
 
-Sloth is **one binary**, no config file, no daemon manager required.
+Sloth is **two daemons** (`sloth-wifi` and the headless `sloth-rf`, ADR 0010), no config file, no daemon manager required.
 
-- `sudo make install` drops `/usr/local/bin/sloth`.
+- `sudo make install` drops `/usr/local/bin/sloth-wifi` and `sloth-rf`, with `/usr/local/bin/sloth` a symlink to the first.
 - For systemd, write a unit that runs `sloth -o ... --pcap-dir ... --eapol-dir ...`
   with `AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN`. No template
   shipped — keep deployment under operator control.
@@ -249,7 +249,7 @@ mergeable by the factory's review loop.
 | `src/capture/probe.c`        | 802.11 probe / beacon capture |
 | `src/{dns,tls,quic,http,ntp,icmp,dns}_log.c` | ring buffers + snapshot helpers |
 | `src/{alerts,beacon_detect,devices,threat_intel,filter,jsonl,alert_pcap,top_hosts,ip_color,ip_owner,host_cache,probe_pnl,eapol_log,seqnum_track,assoc_track}.c` | synthesis + export |
-| `src/views/<name>.c`         | one file per VIEW_* |
+| `src/views/<name>.c`         | one file per VIEW_* (`sloth-wifi`'s) |
 | `src/md5.c`                  | embedded MD5 for JA3 (RFC 1321 verified) |
 | `tests/`                     | unit tests, fake platform, scenarios |
 | `docs/views/<name>.md`       | per-view protocol/observation reference |

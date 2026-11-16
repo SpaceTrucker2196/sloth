@@ -123,6 +123,11 @@ Ruled after this record was written:
   both daemons accept the same spellings.
 - **Victron** (`--victron`, ADR 0011, d5d2153f) is an RF-side file
   source and is read by sloth-rf like the other three decoders.
+- **The same alert from both daemons is shown once** (2026-11-16: "yes
+  if it's a duplicate alert"). Where sloth-wifi and sloth-rf raise an
+  incident with the same key at the same time (`srcdown:gnss` is the
+  case, both read the receiver), slothweb shows one, as sloth-wifi's.
+  Incidents that differ in key or time stay separate.
 
 ## As built (2026-11-15, #216, the cutover)
 

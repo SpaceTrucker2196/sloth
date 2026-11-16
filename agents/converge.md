@@ -89,7 +89,7 @@ Run the dark-factory converge loop on GitHub issue #$ARGUMENTS.
    `make clean` first, then believe the error.
 5. **Self-review.** Diff against agents/AGENTS.md invariants and hard don'ts
    (VIEW_COUNT sync, no circular parser tests, no repo-root files, never
-   stage `wifi-sigint/`, `sloth`, or `sloth_test`).
+   stage `wifi-sigint/`, `sloth`, `sloth-wifi`, `sloth-rf`, or `sloth_test`).
 
    **Mutation-prove every assertion of absence.** A test that asserts
    something does *not* happen passes just as happily when it exercises
