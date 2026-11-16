@@ -31,7 +31,7 @@ attaches it to that tag's GitHub release.
 [ADR 0004](adr/0004-libsloth-wire.md), [ADR 0007](adr/0007-versioning.md),
 issues #184 and #185.
 
-**Last updated**: 2026-11-16 (#185 review: the checks now also cover the outer checksum, JSON validity, the copies against the tree, `palette.json`, `alert-daemons.tsv`, an empty golden database and the declared-but-undefined functions; *Gaps*; migrated databases; the release step's order and tag check), 2026-11-16 (#185 item 4: first version, contract format 1)
+**Last updated**: 2026-11-16 (no host data in the alert bundle: the assessments and research documents are redacted, and `make contract-check` refuses a MAC address outside `tests/contract/allowed-macs.txt` or a home-directory path), 2026-11-16 (#185 review: the checks now also cover the outer checksum, JSON validity, the copies against the tree, `palette.json`, `alert-daemons.tsv`, an empty golden database and the declared-but-undefined functions; *Gaps*; migrated databases; the release step's order and tag check), 2026-11-16 (#185 item 4: first version, contract format 1)
 
 ---
 
@@ -250,6 +250,24 @@ with its reason.
 
 ## Gaps
 
+- **Host data (closed 2026-11-16).** The alert bundle is a release
+  asset, so it carries nothing a sensor learned about itself or the
+  devices around it. The assessments that quoted the reference host's
+  own managed-card MAC (`MY_NETWORK_RECON`), the addresses it heard
+  (`FRAG_AMSDU`, `FRAG_EAPOL_RELAY`), its database snapshot's home path
+  (`FRAG_*`) and the sensors' names (`research/papers/rssi-distance-estimation.md`)
+  now say "AP-1", "STA-1", "its own managed card", "a snapshot of its
+  database", "one sensor". `make contract-check` fails on any MAC-shaped
+  string in the bundle's text files that is not in
+  `tests/contract/allowed-macs.txt` (documentation placeholders, the
+  802.1X group address, the UNSW public dataset), and on any `~/` or
+  `/home/` path. `research.db` is not scanned as bytes: its text is the
+  research documents' (it is compared with the tree's file, and the gate
+  fails when `research-index` would change it), and its record headers
+  hold `~/` by coincidence. Both refusals were seen red: a heard BSSID
+  put back into `FRAG_AMSDU.md`, and a `~/` path appended to it. The
+  same addresses remain in this repository's history and in issue #180;
+  the rule covers what a release asset ships.
 - **Declared, not defined.** Two shipped headers declare functions
   `libsloth-wire.a` does not define, so a consumer calling one compiles
   and then fails to link. `dot11_data.h` (11 functions: the data-frame

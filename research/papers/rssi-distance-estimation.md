@@ -272,8 +272,8 @@ which parts are sloth's choices.
   directions (the received level differs by the two transmit powers and
   the two receive gains only), so a large asymmetry between the two
   directions of an own-radio link is evidence about the radios, not the
-  path. On 2026-11-11 W9FJC heard beta-site's card at -52 dBm and
-  beta-site heard W9FJC's at -84 to -92 dBm.
+  path. On 2026-11-11 one sensor heard the other's card at -52 dBm and
+  the other heard the first's at -84 to -92 dBm.
 - **sloth's choices, uncited:** the extra 6 dB for an uncalibrated
   receiver (the same size as the assumed-power term); pairing readings
   within 120 s; the candidate radius as the bands' half-widths over the

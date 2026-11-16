@@ -86,7 +86,7 @@ Re-verified 2026-10-27 against HEAD 0d60387. `git log` shows no commit touching 
 
 Third pass 2026-10-27 against HEAD d70d394 (no src/ or include/ commit since c5650a3; all line numbers re-read and still match).
 
-- Noise arithmetic corrected: the poll tick is not 1 s. POLL_MS=250 (include/sloth.h:28) and event wakes shorten it; on the reference host (~/sloth-snap.db `alerts`) every steady single-key alert advances at ~40.6 evaluations/s. "~86,400 fires/day at a 1 s tick" replaced with ≥4/s nominal, ~40/s (~3.5M/day) measured.
+- Noise arithmetic corrected: the poll tick is not 1 s. POLL_MS=250 (include/sloth.h:28) and event wakes shorten it; on the reference host (a snapshot of its database, `alerts` table) every steady single-key alert advances at ~40.6 evaluations/s. "~86,400 fires/day at a 1 s tick" replaced with ≥4/s nominal, ~40/s (~3.5M/day) measured.
 - count_semantics corrected: `cache_poison++` (src/fragattack.c:340-342) runs once per continuation fragment (FN>0, retransmissions included), so the detail's leading integer counts fragments, not reassemblies — a three-fragment MSDU straddling one reassociation counts 2.
 - Code re-checked: non-QoS frames reach frag_track with TID 0 (dot11_frame_tid, src/dot11_frame.c:212-216), so the session key description stands.
 - Sources re-fetched (curl + pdftotext for PDFs, WebFetch for Intel which 403s curl): USENIX paper, fragattacks.com, CVE records, fragattacks README/ADVISORIES (41 links), Wi-Fi Alliance, oss-security, ATT&CK pages, Intel (5.3 x3), Cisco (6.5 for -26140/-26143/-26144/-26145; 5.7 for -24586/-24588; 4.8 for -24587/-26146/-26147) — every quoted phrase grepped and present. research/papers/fragattacks-usenix2021.md names the type.

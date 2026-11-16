@@ -100,7 +100,7 @@ Re-verified 2026-10-27 against HEAD 0d60387. `git log` shows no commit touching 
 
 Third pass 2026-10-27 against HEAD d70d394 (no src/ or include/ commit since c5650a3; all line numbers re-read and still match).
 
-- Noise arithmetic corrected: the poll tick is not 1 s. POLL_MS=250 (include/sloth.h:28) and event wakes shorten it; on the reference host (~/sloth-snap.db `alerts`) every steady single-key alert advances at ~40.6 evaluations/s. "~86,400 fires/day at a 1 s tick" replaced with ≥4/s nominal, ~40/s (~3.5M/day) measured.
+- Noise arithmetic corrected: the poll tick is not 1 s. POLL_MS=250 (include/sloth.h:28) and event wakes shorten it; on the reference host (a snapshot of its database, `alerts` table) every steady single-key alert advances at ~40.6 evaluations/s. "~86,400 fires/day at a 1 s tick" replaced with ≥4/s nominal, ~40/s (~3.5M/day) measured.
 - "for the life of the process" softened: row eviction does end these incidents in practice (the reference host's FRAG_AMSDU incident stopped after ~1.7 h while sloth kept running).
 - [13] Cisco 6.5 is tied with three other CVEs for the highest score, not the sole highest; reworded.
 - Code re-checked: gate (564), group-address test (566), `fragmented` (488/572), key/detail/fire 610-620 — unchanged and correct.

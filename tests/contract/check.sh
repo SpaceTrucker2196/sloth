@@ -10,7 +10,9 @@
 #    directory named for it; SHA256SUMS verifies and lists every file;
 #    MANIFEST.json is valid JSON whose path, size and SHA-256 agree with
 #    every file and lists every file, and its versions are the tree's;
-#    the copied payloads are the tree's files, byte for byte;
+#    the copied payloads are the tree's files, byte for byte; the alert
+#    bundle's text holds no MAC address outside
+#    tests/contract/allowed-macs.txt and no home-directory path;
 #    palette.json is valid JSON with the tree's IP palette size;
 #    alert-daemons.tsv lists every kind in order and its per-daemon
 #    counts are the tree's count markers;
@@ -121,6 +123,27 @@ if ! [ -s "$tmp/kb.tree" ] || ! cmp -s "$tmp/kb.tree" "$tmp/kb.tar"; then
 fi
 while read -r f; do same "$f" "alerts/$f"; done < "$tmp/kb.tree"
 ok "payloads are the tree's ($(wc -l < "$tmp/kb.tree" | tr -d ' ') assessment and research documents)"
+
+# No host data rides out on a release asset: no MAC-shaped string but
+# tests/contract/allowed-macs.txt's, and no home-directory path. The
+# text files are read; research.db is not, because its rows are the
+# research documents' text (it is the tree's file, above, and the gate
+# fails when research-index would change it) and its record headers
+# hold byte pairs such as "~/" by coincidence.
+find "$d/alerts" -type f ! -name research.db > "$tmp/kbtext"
+xargs grep -hoiE '([0-9a-f]{2}:){5}[0-9a-f]{2}' < "$tmp/kbtext" | tr 'A-F' 'a-f' |
+    LC_ALL=C sort -u > "$tmp/macs"
+grep -v '^#' "$here/allowed-macs.txt" | LC_ALL=C sort -u > "$tmp/macs.ok"
+LC_ALL=C comm -23 "$tmp/macs" "$tmp/macs.ok" > "$tmp/macs.bad"
+if [ -s "$tmp/macs.bad" ]; then
+    cat "$tmp/macs.bad" >&2
+    fail "alerts/ carries MAC addresses not in tests/contract/allowed-macs.txt"
+fi
+if xargs grep -lE '~/|/home/' < "$tmp/kbtext" > "$tmp/homes"; then
+    cat "$tmp/homes" >&2
+    fail "alerts/ carries a home-directory path"
+fi
+ok "alerts/ carries no host MAC address or home-directory path"
 
 p=$d/palette/palette.json
 [ "$("$cdb" jsql "$p" 'SELECT json_valid(?1)')" = 1 ] || fail "palette.json is not valid JSON"
