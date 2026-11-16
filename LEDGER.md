@@ -368,3 +368,4 @@
 | e2a230bc | 2026-11-16T14:17:16Z | claude-opus-5 | 412 | 134836 | 20563634 | 475481 | 18.4096 | release v1.8.7 |
 | d7a68c4 | 2026-11-16T01:35:08Z | claude-fable-5-2 | 16 | 6227 | 2448494 | 8191 | 0.8700 | ADR 0001: record the owner's rulings on #184 section 5 (sloth-mesh, licence, artifact home) |
 | ba41d24 | 2026-11-16T03:11:45Z | claude-fable-5-1, claude-fable-5-2 | 110 | 10593 | 1805254 | 97042 | 2.9881 | Cutover: sloth-wifi and sloth-rf, RF leaves the Wi-Fi daemon, JSONL 2.0.0 (refs #216) |
+| be658c2 | 2026-11-16T17:54:21Z | claude-fable-5-1, claude-fable-5-2 | 252 | 37932 | 8502403 | 586045 | 13.8556 | agents: follow the cutover (sloth-wifi, sloth-rf, two rule tables); ADR 0010: duplicate alerts shown once (refs #211) |
