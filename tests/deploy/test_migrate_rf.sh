@@ -604,6 +604,14 @@ env PATH="$W/stub:$PATH" ROOT="$ROOT" STAMP="$STAMP" RF_DEFAULTS_TEMPLATE="$W/ab
 RC=$?
 check '[ "$RC" -eq 0 ] && [ "$(args_of "$R" SLOTH_RF_ARGS)" = "--rtl433 $R433" ]' "without the template: exit $RC: $(cat "$W/out")"
 
+# ── --victron is an RF-side source and moves like the decoders ───────────
+setup victron "SLOTH_ARGS=--site-label test-sensor --victron /var/lib/sloth-va/victron.jsonl --my-ssid TestNet"
+# shellcheck disable=SC2086  # TOOL_SH may be two words
+env PATH="$W/stub:$PATH" ROOT="$ROOT" STAMP="$STAMP" $TOOL_SH "$TOOL" --apply > "$W/out" 2>&1
+RC=$?
+check '[ "$RC" -eq 0 ] && [ "$(args_of "$R" SLOTH_RF_ARGS)" = "--victron /var/lib/sloth-va/victron.jsonl" ]' "--victron moved: exit $RC: $(cat "$W/out")"
+check '[ "$(args_of "$S" SLOTH_ARGS)" = "--site-label test-sensor --my-ssid TestNet" ]' "--victron left in SLOTH_ARGS: $(args_of "$S" SLOTH_ARGS)"
+
 # ── --help prints the header and changes nothing ─────────────────────────
 setup help "$ALL"
 h=$(tree_hash "$ROOT")

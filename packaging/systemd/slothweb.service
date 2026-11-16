@@ -89,7 +89,7 @@ RuntimeDirectoryMode=0711
 # ADS-B, APRS, rtl_433 and GNSS pages are fed from sloth-rf alone
 # (#214), so a host whose decoders are still on the Wi-Fi sensor's
 # command line moves them with sloth-migrate-rf in the same sitting as
-# this unit is installed (docs/wiki/deployment.md §10.4).
+# this unit is installed (docs/wiki/deployment.md §11.4).
 #
 # A slothweb that does not know one of the flags below exits on it. So
 # `make install` refuses a ./slothweb that lacks one, and `make

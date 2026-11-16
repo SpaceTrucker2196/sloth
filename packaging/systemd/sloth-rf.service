@@ -8,7 +8,7 @@
 # does, with whatever /etc/default/sloth-rf holds (nothing, as shipped);
 # `systemctl mask sloth-rf` keeps it off. Recipe, the reason for every
 # key and the migration of a host whose decoders are still read by the
-# Wi-Fi sensor: docs/wiki/deployment.md §10.
+# Wi-Fi sensor: docs/wiki/deployment.md §11.
 #
 # What it is: the second of the two daemons of ADR 0010. sloth-rf reads
 # what other programs on the host already decode (readsb's aircraft.json
@@ -104,7 +104,7 @@ ProtectSystem=strict
 # group (`usermod -aG GROUP sloth`, or SupplementaryGroups=GROUP in a
 # drop-in). Never a capability and never root for this: the unit holds
 # neither, on purpose.
-ReadOnlyPaths=-/run/readsb -/var/lib/direwolf -/var/lib/rtl_433
+ReadOnlyPaths=-/run/readsb -/var/lib/direwolf -/var/lib/rtl_433 -/var/lib/sloth-va
 ProtectHome=true
 PrivateTmp=true
 # No device at all: the SDRs belong to the decoders. A serial GNSS
@@ -122,7 +122,7 @@ ProtectProc=invisible
 # AF_UNIX for the data socket, and nothing else: no packet socket, no
 # netlink. AF_INET and AF_INET6 are needed only for --gps gpsd:// and
 # for --adsb sbs:// or beast://, and come from the opt-in drop-in
-# sloth-rf.service.d/gps.conf (docs/wiki/deployment.md §10.3), so a
+# sloth-rf.service.d/gps.conf (docs/wiki/deployment.md §11.3), so a
 # daemon that only tails files cannot open an IP socket.
 RestrictAddressFamilies=AF_UNIX
 RestrictNamespaces=true

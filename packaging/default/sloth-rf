@@ -5,7 +5,7 @@
 # there is none, so an edited copy is never replaced. A host whose
 # decoders are still read by the Wi-Fi sensor gets its flags moved here
 # by `sloth-migrate-rf --apply`, from /etc/default/sloth
-# (docs/wiki/deployment.md §10.4).
+# (docs/wiki/deployment.md §11.4).
 #
 # The unit fixes two paths (--db /var/lib/sloth-rf/sloth-rf.db and
 # --data-socket unix:/run/sloth-rf/sloth-rf.sock); the sandbox admits no
@@ -34,6 +34,8 @@
 #   --rtl433 PATH         the JSON event log a local rtl_433 writes
 #                         (rtl_433 -F json:FILE; wiki: rtl433), e.g.
 #                         --rtl433 /var/lib/rtl_433/events.jsonl
+#   --victron PATH        the JSONL sloth-va writes (wiki: victron), e.g.
+#                         --victron /var/lib/sloth-va/victron.jsonl
 #   --gps gpsd://127.0.0.1:2947
 #                         the GNSS receiver, through gpsd (needs the same
 #                         AF_INET drop-in). On a host that also runs the

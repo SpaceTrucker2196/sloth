@@ -23,6 +23,7 @@
 #   MOVED to SLOTH_RF_ARGS in /etc/default/sloth-rf, with their values,
 #   as "--flag value" or "--flag=value", whichever the file has:
 #     --adsb  --aprs  --aprs-freq  --aprs-silent-hours  --rtl433
+#     --victron
 #   COPIED, so both daemons have them (both read GNSS: owner ruling of
 #   2026-11-15, ADR 0010):
 #     --gps  --gps-allow-remote  --gps-baud  --location
@@ -65,7 +66,7 @@
 # so tests/deploy/test_migrate_rf.sh can run it unprivileged against a
 # scratch root. Exit status: 0 migrated, already migrated, nothing to
 # migrate, or a dry run; 1 failed (both files as they were); 2 refused
-# (nothing changed). Recipe: docs/wiki/deployment.md §10.4.
+# (nothing changed). Recipe: docs/wiki/deployment.md §11.4.
 set -u
 
 ME=sloth-migrate-rf
@@ -169,7 +170,7 @@ render_rf_defaults() {
     else
         echo "# /etc/default/sloth-rf — site configuration for sloth-rf.service (#215)."
         echo "# Written by sloth-migrate-rf ($STAMP) from the flags in"
-        echo "# $DEFAULTS. Flags: docs/wiki/deployment.md §10."
+        echo "# $DEFAULTS. Flags: docs/wiki/deployment.md §11."
         echo "SLOTH_RF_ARGS=$NEW_RF"
     fi
 }
@@ -184,7 +185,8 @@ plan() {
     MR_SLOTH=$S_ARGS MR_RF=$R_ARGS MR_SNAME=$DEFAULTS MR_RNAME=$RF_DEFAULTS awk '
         function kind(f) {
             if (f == "--adsb" || f == "--aprs" || f == "--aprs-freq" ||
-                f == "--aprs-silent-hours" || f == "--rtl433") return "move"
+                f == "--aprs-silent-hours" || f == "--rtl433" ||
+                f == "--victron") return "move"
             if (f == "--gps" || f == "--gps-baud" || f == "--location") return "copy"
             if (f == "--gps-allow-remote") return "bool"
             return ""
@@ -336,7 +338,7 @@ NEW_S=$(plan_get SLOTH)
 NEW_RF=$(plan_get RF)
 
 dev=$(plan_get SERIAL)
-[ -z "$dev" ] || refuse "--gps in $DEFAULTS names the serial device $dev. After the split both daemons read GNSS, and a serial device opens once, so sloth-rf could not have it too. The fix is gpsd: let gpsd hold $dev, change SLOTH_ARGS to --gps gpsd://127.0.0.1:2947 (dropping --gps-baud), give sloth-sensor.service the gpsd block of its gps.conf drop-in, check the sensor still has a fix, then run this again (docs/wiki/deployment.md §10.4)"
+[ -z "$dev" ] || refuse "--gps in $DEFAULTS names the serial device $dev. After the split both daemons read GNSS, and a serial device opens once, so sloth-rf could not have it too. The fix is gpsd: let gpsd hold $dev, change SLOTH_ARGS to --gps gpsd://127.0.0.1:2947 (dropping --gps-baud), give sloth-sensor.service the gpsd block of its gps.conf drop-in, check the sensor still has a fix, then run this again (docs/wiki/deployment.md §11.4)"
 
 c=$(plan_get CONFLICT)
 if [ -n "$c" ]; then

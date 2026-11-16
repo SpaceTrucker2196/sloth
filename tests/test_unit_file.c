@@ -1710,11 +1710,11 @@ static void test_rf_unit_sandbox(void) {
      * lets the unit start on a host without that decoder, and nothing
      * writable beyond the state and runtime directories. */
     static const char *const ro[] = {
-        "-/run/readsb", "-/var/lib/direwolf", "-/var/lib/rtl_433",
+        "-/run/readsb", "-/var/lib/direwolf", "-/var/lib/rtl_433", "-/var/lib/sloth-va",
     };
     const char *rop = uf_value(lines, n, "ReadOnlyPaths");
     ASSERT_EQ(uf_count(lines, n, "ReadOnlyPaths"), 1);
-    ASSERT(uf_tokens_within(rop, ro, 3));
+    ASSERT(uf_tokens_within(rop, ro, sizeof(ro) / sizeof(ro[0])));
     for (size_t i = 0; i < sizeof(ro) / sizeof(ro[0]); i++)
         ASSERT(uf_has_token(rop, ro[i]));
     ASSERT(uf_value(lines, n, "ReadWritePaths") == NULL);

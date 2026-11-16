@@ -1931,7 +1931,7 @@ install-service:
 	@echo "  slothweb starts sloth-rf ('systemctl mask sloth-rf' keeps it off). slothweb now reads sloth-rf's"
 	@echo "  socket and database for the ADS-B, APRS, rtl_433 and GNSS pages. A host whose /etc/default/sloth"
 	@echo "  still has --adsb, --aprs or --rtl433 moves them now: sloth-migrate-rf (dry run), then"
-	@echo "  sloth-migrate-rf --apply and the commands it prints: docs/wiki/deployment.md §10.4"
+	@echo "  sloth-migrate-rf --apply and the commands it prints: docs/wiki/deployment.md §11.4"
 	@echo "  (migration from a build-tree unit: docs/wiki/deployment.md)"
 
 # ── Deploy tooling test (#153) ───────────────────────────────────────────────
