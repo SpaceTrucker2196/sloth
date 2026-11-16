@@ -23,7 +23,7 @@ it and links none of it.
 `Makefile` (`sloth-va`, `WITH_SDBUS`),
 `research/victron/instant-readout-and-gatt.md`.
 
-**Last updated**: 2026-11-15 (#216, the cutover: `--victron` is `sloth-rf`'s alone; `sloth-wifi` refuses it); 2026-11-15 (the web: slothweb's Victron tab,
+**Last updated**: 2026-11-16 (sloth-va registers its advertisement monitor asynchronously; the beta-site worker's fix); 2026-11-15 (#216, the cutover: `--victron` is `sloth-rf`'s alone; `sloth-wifi` refuses it); 2026-11-15 (the web: slothweb's Victron tab,
 `/api/victron` and `/api/victron/history`; sloth.db v15
 `victron_devices` / `victron_readings`; the `victron` `source_status`
 row, so `SENSOR_SOURCE_DOWN` covers the file; the fleet decision,
@@ -103,7 +103,11 @@ on the device it belongs to:
   filtering off (net/bluetooth/hci_sync.c, `hci_update_passive_scan_sync`,
   `hci_passive_scan_sync`). Passive: no SCAN_REQ. BlueZ marks this API
   experimental, so bluetoothd needs `Experimental = true`; without it
-  sloth-va says so and runs GATT only. It never falls back to discovery
+  sloth-va says so and runs GATT only. `RegisterMonitor` is sent
+  asynchronously and its reply handled in the event loop: BlueZ answers
+  it by calling back into sloth-va's `GetManagedObjects`, which a
+  blocking call left unanswered (beta-site, 2026-11-15: no `Activate`,
+  no scan). It never falls back to discovery
   (`StartDiscovery` is an active scan; a test holds that the call is not
   in the source). One record per device per `--readout-every` (30 s).
 - **GATT sessions**: one at a time, each bounded to 60 s, per configured

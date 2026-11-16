@@ -515,6 +515,19 @@ static int get_patterns(sd_bus *b, const char *p, const char *i, const char *pr,
     return sd_bus_message_close_container(reply);
 }
 
+/* RegisterMonitor's reply (or NULL when the call could not be sent). */
+static int on_monitor_registered(sd_bus_message *m, void *ud, sd_bus_error *e) {
+    (void)ud; (void)e;
+    if (m && !sd_bus_message_is_method_error(m, NULL)) return 0;
+    const sd_bus_error *er = m ? sd_bus_message_get_error(m) : NULL;
+    logf_("AdvertisementMonitorManager1.RegisterMonitor: %s", er && er->name ? er->name : "not sent");
+    logf_("AdvertisementMonitorManager1 unavailable (bluetoothd needs Experimental = true "
+          "in main.conf, or -E): no Instant Readout, and only devices BlueZ already "
+          "knows are reached. This helper never falls back to discovery, which scans "
+          "actively");
+    return 0;
+}
+
 static int m_activate(sd_bus_message *m, void *ud, sd_bus_error *e) {
     logf_("advertisement monitor active: passive scan for Victron Instant Readout");
     g.monitor_on = 1;
@@ -1113,12 +1126,14 @@ int main(int argc, char **argv) {
     /* Always, keys or not: the monitor's passive scan is also how BlueZ
      * comes to hold a Device1 object for a GATT-only device (the
      * dongle), and a device it does not hold is never searched for. */
-    if (bluez_call(g.adapter, "org.bluez.AdvertisementMonitorManager1", "RegisterMonitor",
-                   "o", APP_ROOT, NULL) < 0)
-        logf_("AdvertisementMonitorManager1 unavailable (bluetoothd needs Experimental = true "
-              "in main.conf, or -E): no Instant Readout, and only devices BlueZ already "
-              "knows are reached. This helper never falls back to discovery, which scans "
-              "actively");
+    /* Asynchronous: BlueZ answers RegisterMonitor and then calls this
+     * helper's GetManagedObjects to find the monitor. A blocking call
+     * left that request unanswered (seen on Beta-Site 2026-11-15: no
+     * Activate, no scan), so the reply is handled in the event loop. */
+    if (sd_bus_call_method_async(g.bus, NULL, "org.bluez", g.adapter,
+                                 "org.bluez.AdvertisementMonitorManager1", "RegisterMonitor",
+                                 on_monitor_registered, NULL, "o", APP_ROOT) < 0)
+        on_monitor_registered(NULL, NULL, NULL);
 
     sd_event_source *tick = NULL;
     sd_event_add_time_relative(g.ev, &tick, CLOCK_MONOTONIC, (uint64_t)TICK_S * 1000000ull, 0,
