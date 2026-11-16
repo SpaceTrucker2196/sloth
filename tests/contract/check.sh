@@ -139,7 +139,7 @@ if [ -s "$tmp/macs.bad" ]; then
     cat "$tmp/macs.bad" >&2
     fail "alerts/ carries MAC addresses not in tests/contract/allowed-macs.txt"
 fi
-if xargs grep -lE '~/|/home/' < "$tmp/kbtext" > "$tmp/homes"; then
+if xargs grep -lE '[~]/|/home/' < "$tmp/kbtext" > "$tmp/homes"; then
     cat "$tmp/homes" >&2
     fail "alerts/ carries a home-directory path"
 fi
