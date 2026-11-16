@@ -365,3 +365,4 @@
 | 03a4292 | 2026-11-16T00:59:34Z | claude-fable-5-2 | 2 | 428 | 333168 | 1099 | 0.1014 | Packaging review: keep slothweb's unit and binary together, close sloth-migrate-rf's gaps (#215 review) |
 | c65837c | 2026-11-16T01:09:53Z | claude-fable-5-2 | 20 | 5919 | 3404722 | 12641 | 1.1201 | sloth-rf packaging: section 11, --victron moves with the decoders (#215) |
 | c86274ad | 2026-11-16T12:45:10Z | claude-opus-5 | 412 | 154137 | 39064916 | 546306 | 28.8510 | #209 — fd-descriptor guard at every test-case boundary, plus db_error() |
+| e2a230bc | 2026-11-16T14:17:16Z | claude-opus-5 | 412 | 134836 | 20563634 | 475481 | 18.4096 | release v1.8.7 |
