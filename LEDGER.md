@@ -361,3 +361,6 @@
 | 7579b5b | 2026-11-15T21:38:55Z | claude-fable-5-2 | 146 | 37752 | 13512413 | 72116 | 5.3676 | sloth-rf: the RF daemon beside sloth, sensor_health names its daemon (#213) |
 | 1cc07cb | 2026-11-15T22:08:00Z | claude-fable-5-2 | 28 | 6816 | 3261325 | 17199 | 1.2003 | Fix red main: sweep-history leak, readdir suppressions, bound check |
 | 929d5b8 | 2026-11-15T23:54:11Z | claude-fable-5-1, claude-fable-5-2 | 84 | 13279 | 2393269 | 96753 | 3.1034 | slothweb reads two daemons: --rf-socket and --rf-db (#214) |
+| 482992b | 2026-11-16T00:59:27Z | claude-fable-5-2 | 14 | 3233 | 1664456 | 305643 | 5.3526 | Packaging for sloth-rf: unit, defaults and sloth-migrate-rf (#215) |
+| 03a4292 | 2026-11-16T00:59:34Z | claude-fable-5-2 | 2 | 428 | 333168 | 1099 | 0.1014 | Packaging review: keep slothweb's unit and binary together, close sloth-migrate-rf's gaps (#215 review) |
+| c65837c | 2026-11-16T01:09:53Z | claude-fable-5-2 | 20 | 5919 | 3404722 | 12641 | 1.1201 | sloth-rf packaging: section 11, --victron moves with the decoders (#215) |
