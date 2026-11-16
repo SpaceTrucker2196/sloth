@@ -178,9 +178,18 @@ typedef struct {
 #ifdef WITH_SQLITE
 
 /* Open (creating if needed) the database at `path` and apply the
- * schema. Returns 1 on success, 0 on failure (message on stderr).
- * A failure here is fatal to --db only; the caller decides. */
+ * schema. Returns 1 on success, 0 on failure (message on stderr, and
+ * in db_error()). A failure here is fatal to --db only; the caller
+ * decides. */
 int  db_open(const char *path);
+
+/* Why the last db_open() refused — never NULL, "" when none has. The
+ * counterpart of jsonl_error(), added for the same reason (#209): CI
+ * refused a freshly created mkstemp path twice, once through each
+ * function, and only jsonl_open() could say why. Set on every failing
+ * path out of db_open() and cleared at its entry, so it describes the
+ * most recent open attempt and nothing else. */
+const char *db_error(void);
 
 /* Flush and close. Safe when never opened. */
 void db_close(void);
@@ -341,6 +350,8 @@ static inline int db_compact_alerts(const char *s, const char *d,
        { (void)s; (void)d; (void)o; return -1; }
 
 static inline int  db_open(const char *path) { (void)path; return 0; }
+static inline const char *db_error(void)
+       { return "built without SQLite"; }
 static inline void db_close(void)            {}
 static inline int  db_is_open(void)          { return 0; }
 static inline int  db_is_defensive(void)     { return 0; }

@@ -268,6 +268,21 @@ void eapol_maintain(time_t now);
  * the reason in eapol_export_error(). */
 int  eapol_set_output_dir(const char *dir);
 
+/* Unpin the export directory and forget the export failure state, as
+ * eapol_set_output_dir(NULL) does, without being a configuration
+ * change (#209). Separate from eapol_clear() on purpose: that one is
+ * the operator's [c] key in the EAPOL view, and an operator clearing
+ * the event list must not silently stop handshake export.
+ *
+ * Exists because the pinned descriptor otherwise lives until the next
+ * eapol_set_output_dir() call, whenever that is — so the test suite's
+ * reset registry (tests/main_test.c, src/reset_all.h) had no way to
+ * release it and the suite's descriptor guard (tests/fd_guard.h) saw it
+ * outlive the case that pinned it. Does NOT touch the --collect-
+ * handshakes gate: that is a separate knob, and this is about the
+ * descriptor. */
+void eapol_export_clear(void);
+
 /* fstat() of the pinned export directory, for a caller that must know
  * whether another sink resolved to the same one (#166: --pcap-dir and
  * --eapol-dir in one directory would put alert pcaps on this module's

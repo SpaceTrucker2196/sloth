@@ -9,6 +9,7 @@
 
 #ifdef WITH_SQLITE
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,6 +49,28 @@ static sqlite3 *g_db;
 static db_akm_regression_t g_akm_reg[DB_MAX_AKM_REGRESSIONS];
 static int                 g_akm_reg_n;
 static int      g_disabled;      /* set once on error — fail-open */
+
+/* Why the last db_open() refused, for db_error() — the same accessor
+ * jsonl_open() got in ec8a9d06, for the same reason and after the same
+ * failure (#209): CI refused a test's own freshly made mkstemp path,
+ * twice, and `db_open() != 1` was all anyone could see. Cleared at
+ * db_open()'s entry and set on every path out of it that returns 0,
+ * with the same text as the stderr line beside it so there is one
+ * wording rather than two to keep in step. */
+static char     g_open_err[SFILE_ERR_MAX];
+
+/* Record the reason and print it. Every "could not open db" line in the
+ * open path goes through here. */
+static int open_fail(const char *fmt, ...)
+    __attribute__((format(printf, 1, 2)));
+static int open_fail(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(g_open_err, sizeof(g_open_err), fmt, ap);
+    va_end(ap);
+    fprintf(stderr, "sloth: could not open db %s\n", g_open_err);
+    return 0;
+}
 /* Cadence, retention and size target live in the --tune registry
  * (db.interval_secs / db.retain_days / db.max_mb, #120), so the
  * --db-* flags and --tune share one validation and a moved value
@@ -964,6 +987,15 @@ static int exec(const char *sql, const char *what) {
     return 1;
 }
 
+/* exec() inside db_open(): records which step refused, for db_error().
+ * It does not print — exec() already did, and two lines for one failure
+ * is how a log stops being read. */
+static int open_exec(const char *sql, const char *what, const char *path) {
+    if (exec(sql, what)) return 1;
+    snprintf(g_open_err, sizeof(g_open_err), "%s: %s failed", path, what);
+    return 0;
+}
+
 /* ── per-incident rows (#175) ────────────────────────────────
  *
  * alert_incidents is written two ways. Every tick writes each incident
@@ -1262,25 +1294,27 @@ static int check_version(void) {
 static int db_prepare_private(const char *path) {
     char err[SFILE_ERR_MAX];
     int fd = sfile_open(AT_FDCWD, path, SFILE_APPEND, err, sizeof(err));
-    if (fd < 0) {
-        fprintf(stderr, "sloth: could not open db %s\n", err);
-        return 0;
-    }
+    if (fd < 0) return open_fail("%s", err);
     close(fd);
     static const char *const side[] = { "-wal", "-shm", "-journal" };
     for (size_t i = 0; i < sizeof(side) / sizeof(side[0]); i++) {
         char p[4096];
         snprintf(p, sizeof(p), "%s%s", path, side[i]);
-        if (sfile_check_existing(p, err, sizeof(err)) != 0) {
-            fprintf(stderr, "sloth: could not open db %s\n", err);
-            return 0;
-        }
+        if (sfile_check_existing(p, err, sizeof(err)) != 0)
+            return open_fail("%s", err);
     }
     return 1;
 }
 
 int db_open(const char *path) {
-    if (!path || !path[0]) return 0;
+    if (!path || !path[0]) {
+        /* Recorded but not printed: an empty --db is caught in argv
+         * parsing, so reaching here is a caller's bug, not an operator's
+         * mistake, and db_error() is where a caller looks. */
+        snprintf(g_open_err, sizeof(g_open_err), "empty database path");
+        return 0;
+    }
+    g_open_err[0] = '\0';
     /* A new file starts with no GNSS change memory: its first tick
      * writes the current sky whole. */
     memset(&g_gnss_fix_mem, 0, sizeof(g_gnss_fix_mem));
@@ -1293,17 +1327,13 @@ int db_open(const char *path) {
      * binary was copied to (#142). Before anything touches the path:
      * NOFOLLOW is the guard the side-file checks below lean on. */
     char floor_err[96];
-    if (libver_sqlite_refuse(floor_err, sizeof(floor_err)) != 0) {
-        fprintf(stderr, "sloth: could not open db %s: %s\n", path,
-                floor_err);
-        return 0;
-    }
+    if (libver_sqlite_refuse(floor_err, sizeof(floor_err)) != 0)
+        return open_fail("%s: %s", path, floor_err);
     if (!db_prepare_private(path)) return 0;
     int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
                 SQLITE_OPEN_NOFOLLOW;
     if (sqlite3_open_v2(path, &g_db, flags, NULL) != SQLITE_OK) {
-        fprintf(stderr, "sloth: could not open db %s: %s\n", path,
-                g_db ? sqlite3_errmsg(g_db) : "?");
+        open_fail("%s: %s", path, g_db ? sqlite3_errmsg(g_db) : "?");
         sqlite3_close(g_db);
         g_db = NULL;
         return 0;
@@ -1318,8 +1348,7 @@ int db_open(const char *path) {
     int defensive = -1;
     if (sqlite3_db_config(g_db, SQLITE_DBCONFIG_DEFENSIVE, 1, &defensive)
             != SQLITE_OK || defensive != 1) {
-        fprintf(stderr, "sloth: could not open db %s: DEFENSIVE refused\n",
-                path);
+        open_fail("%s: DEFENSIVE refused", path);
         sqlite3_close(g_db);
         g_db = NULL;
         return 0;
@@ -1340,13 +1369,19 @@ int db_open(const char *path) {
      * to hit its missing column first, which tells the operator
      * nothing useful — the version message tells them exactly what to
      * do. Hence the meta table alone up front. */
-    if (!exec("PRAGMA auto_vacuum=INCREMENTAL", "auto_vacuum") ||
-        !exec("PRAGMA journal_mode=WAL", "WAL")            ||
-        !exec("PRAGMA synchronous=NORMAL", "synchronous")  ||
-        !exec("PRAGMA foreign_keys=ON", "foreign_keys")    ||
-        !exec(db_schema_meta_sql(), "meta schema")         ||
-        !check_version()                                   ||
-        !exec(db_schema_sql(), "schema")) {
+    if (!open_exec("PRAGMA auto_vacuum=INCREMENTAL", "auto_vacuum", path) ||
+        !open_exec("PRAGMA journal_mode=WAL", "WAL", path)            ||
+        !open_exec("PRAGMA synchronous=NORMAL", "synchronous", path)  ||
+        !open_exec("PRAGMA foreign_keys=ON", "foreign_keys", path)    ||
+        !open_exec(db_schema_meta_sql(), "meta schema", path)         ||
+        !check_version()                                              ||
+        !open_exec(db_schema_sql(), "schema", path)) {
+        /* check_version() is the one step that reports in its own words
+         * (a version message tells the operator what to do); it leaves
+         * the reason on stderr, so name the step here. */
+        if (!g_open_err[0])
+            snprintf(g_open_err, sizeof(g_open_err),
+                     "%s: schema version refused (reason on stderr)", path);
         sqlite3_close(g_db);
         g_db = NULL;
         return 0;
@@ -1354,6 +1389,9 @@ int db_open(const char *path) {
     for (int i = 0; i < ST_COUNT; i++) {
         if (!SQL[i]) continue;
         if (sqlite3_prepare_v2(g_db, SQL[i], -1, &g_st[i], NULL) != SQLITE_OK) {
+            snprintf(g_open_err, sizeof(g_open_err),
+                     "%s: prepare %d failed: %s", path, i,
+                     sqlite3_errmsg(g_db));
             fprintf(stderr, "sloth: db prepare %d failed: %s\n", i,
                     sqlite3_errmsg(g_db));
             db_close();
@@ -1396,6 +1434,8 @@ void db_close(void) {
 }
 
 int db_is_open(void) { return g_db != NULL && !g_disabled; }
+
+const char *db_error(void) { return g_open_err; }
 
 int db_is_defensive(void) {
     int v = -1;

@@ -27,6 +27,7 @@
     X(adsb_reset) \
     X(aprs_reset) \
     X(alerts_clear) \
+    X(alert_pcap_clear) \
     X(assoc_clear) \
     X(assoc_flood_clear) \
     X(assoc_request_clear) \
@@ -59,6 +60,7 @@
     X(dns_resolver_stats_reset) \
     X(eap_track_clear) \
     X(eapol_clear) \
+    X(eapol_export_clear) \
     X(evidence_ring_reset) \
     X(evidence_manifest_reset) \
     X(evil_twin_taint_clear) \

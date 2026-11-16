@@ -14,6 +14,17 @@
  * alert_pcap_error(). */
 int  alert_pcap_set_dir(const char *dir);
 
+/* Drop everything alert_pcap_set_dir() established — the pinned
+ * directory descriptor, the sweep's open DIR*, the counters and the
+ * failure state — and leave export disabled (#209). Equivalent to
+ * alert_pcap_set_dir(NULL) plus the sweep cutoff, and separate from it
+ * so the test suite's reset registry (src/reset_all.h) can name a
+ * `void fn(void)`. Nothing in the daemon calls it: this module had no
+ * registered reset at all, so its two descriptors lived until the next
+ * set_dir() and the suite's descriptor guard (tests/fd_guard.h) saw
+ * them outlive the case that pinned them. */
+void alert_pcap_clear(void);
+
 /* Dump failures since the last alert_pcap_set_dir(); the first is also
  * printed to stderr. */
 int         alert_pcap_failures(void);

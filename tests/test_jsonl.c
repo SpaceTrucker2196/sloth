@@ -1943,7 +1943,14 @@ static void test_emit_sensor_health_reports_db_max_mb(void) {
     int fd = mkstemp(test_tmp_tpl(dbp, sizeof(dbp), "sloth_jsonl_db_XXXXXX"));
     if (fd >= 0) close(fd);
     unlink(dbp);
-    ASSERT_EQ(db_open(dbp), 1);
+    /* Say why when the open is refused: CI's plain test job refused it
+     * on fe60b02e and printed nothing a reader could use, which is what
+     * db_error() exists for (#209). The same shape as the jsonl_open()
+     * print ec8a9d06 added in tests/test_twin_field.c. */
+    int opened = db_open(dbp);
+    if (opened != 1) fprintf(stderr, "    db_open(%s): %s\n", dbp,
+                             db_error()[0] ? db_error() : "?");
+    ASSERT_EQ(opened, 1);
     int was = db_max_mb();
     db_set_max_mb(1024);
     open_fresh();

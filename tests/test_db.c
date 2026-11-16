@@ -6,6 +6,7 @@
  * value is that the rows are queryable afterwards, so the tests query
  * them back with SQL, which is also how the operator will. */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -344,6 +345,32 @@ static void test_open_bad_path_fails_cleanly(void) {
     ASSERT_EQ(db_is_open(), 0);
     ASSERT_EQ(db_open(NULL), 0);
     ASSERT_EQ(db_open(""),   0);
+}
+
+/* A refusal must say why (#209). `db_open() != 1` was the whole of what
+ * CI reported when it refused a test's own freshly created mkstemp path
+ * on fe60b02e, and the reason set reachable for such a path is short
+ * enough to enumerate — but only if the function keeps one. Seen red
+ * with the open_fail() call in db_prepare_private() reduced to its
+ * fprintf. */
+static void test_open_refusal_says_why(void) {
+    db_close();
+    ASSERT_EQ(db_open("/this/does/not/exist/nope/x.db"), 0);
+    ASSERT(db_error() != NULL);
+    ASSERT(strstr(db_error(), "/this/does/not/exist/nope/x.db") != NULL);
+    ASSERT(strstr(db_error(), strerror(ENOENT)) != NULL);
+
+    /* …and a successful open clears it, so a stale reason cannot be
+     * read as this attempt's. */
+    fresh_db();
+    ASSERT_STR(db_error(), "");
+    db_close();
+    unlink(db_path);
+
+    /* The caller's own bug is named too, without a stderr line: argv
+     * parsing never lets an empty --db through. */
+    ASSERT_EQ(db_open(""), 0);
+    ASSERT_STR(db_error(), "empty database path");
 }
 
 /* Every entry point must tolerate never having been opened — the
@@ -5189,6 +5216,7 @@ void run_db_tests(void) {
     RUN_TEST(test_open_refuses_foreign_schema_version);
     RUN_TEST(test_open_is_defensive_and_still_writes);
     RUN_TEST(test_open_bad_path_fails_cleanly);
+    RUN_TEST(test_open_refusal_says_why);
     RUN_TEST(test_open_waits_out_a_brief_lock);
     RUN_TEST(test_open_creates_db_and_wal_private_under_permissive_umask);
     RUN_TEST(test_open_refuses_permissive_existing_db);

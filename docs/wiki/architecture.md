@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `tests/tmp_dir.h`, `tests/test_tmp_dir.c`, `tests/main_test.c`, `web/tests/wt_tmp.h`, `web/tests/web_test_main.c`, `src/sloth_clock.h`, `src/poll.h`, `src/poll.c`, `src/poll_core.c`, `src/poll_gnss.c`, `src/poll_rf.c`, `src/run_flag.h`, `tests/test_poll.c`, `src/rf/main.c`, `src/rf/rf_args.c`, `src/rf/platform_rf.c`, `src/capture_side.h`, `src/alerts/rules.h`, `src/alerts/rules_table_rf.c`, `src/jsonl_internal.h`, `src/sys_status.h`, `src/daemon_start.h`, `tests/test_rf_build.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `src/worker_thread.c`, `tests/test_worker_thread.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-11-15 (#213 review: the `nm` gate's lists as widened, by member and by family; 49 members, measured); 2026-11-15 (#213: `sloth-rf`, the second daemon; the capture side as data the shared services take; the `nm` gate on its link); 2026-11-15 (#212: source groups, the run flag's own file, the stage table as data); 2026-11-03 (#180: fragattack's sixth table, no new lock edge); 2026-11-02 (the system map: sensor, BLE scan helper, slothweb and its stores); 2026-10-27 (temporary files: the leak guard, interrupts and a long TMPDIR; #95, #118, #141, #132, #130, #109)
+**Last updated**: 2026-11-16 (#209: the descriptor guard at every test-case boundary, the harness teardown behind it, and the two modules whose pinned directory nothing released); 2026-11-15 (#213 review: the `nm` gate's lists as widened, by member and by family; 49 members, measured); 2026-11-15 (#213: `sloth-rf`, the second daemon; the capture side as data the shared services take; the `nm` gate on its link); 2026-11-15 (#212: source groups, the run flag's own file, the stage table as data); 2026-11-03 (#180: fragattack's sixth table, no new lock edge); 2026-11-02 (the system map: sensor, BLE scan helper, slothweb and its stores); 2026-10-27 (temporary files: the leak guard, interrupts and a long TMPDIR; #95, #118, #141, #132, #130, #109)
 
 ---
 
@@ -702,6 +702,63 @@ checked by interrupting a run in its own session: without
 `trap 'exit 130' INT` a Ctrl-C under `make test` left `sloth_mk.*`;
 without `tmp_run_dir_trap_signals()` a Ctrl-C to `./sloth_test` left
 `sloth_test.*` with a live SQLite file and its `-wal` and `-shm`.
+
+### File descriptors (#209)
+
+The other shared resource a test case can walk off with, and the one
+that does not leave anything to be found: a leaked descriptor shows up
+only as the next `open()` failing, anywhere in the run. CI hit that
+twice in November 2026 — `jsonl_open()` refused a test's own `mkstemp`
+path on the ASan job, `db_open()` refused one on the plain job, both
+green on a rerun of the same code — and for a file this process had
+just created 0600, `sfile_open()`'s only reachable refusal is the
+`openat()` itself, which under `ulimit -n 1024` means `EMFILE`.
+
+So `tests/fd_guard.h` samples the open-descriptor count at every
+test-case boundary, and `RUN_TEST` fails the suite naming the case whose
+count did not come back: `FDLEAK: <case> left N descriptor(s) open (A at
+entry, B at exit): fd N -> <readlink>`, at most `FDG_NAMED` (6) named.
+The verdict is the **count**, not the identity — a case that closes fd 3
+and opens fd 7 returned what it borrowed. `/proc/self/fd` where it
+exists, else an `F_GETFD` probe of every descriptor up to the soft limit
+(both routes exported, and `test_both_scan_routes_agree` runs them
+against the same table so the fallback is not dead code only Darwin
+reaches). Cost is one scan per boundary, below run-to-run noise on the
+suite's 20 s, so it is unconditional; there is no flag.
+
+The exit sample is taken **after** a teardown that runs the reset
+registry (`g_test_teardown`, `src/reset_all.h`), which is what makes the
+finding mean "nothing releases this": a module that holds a descriptor
+for a whole run by design — the evidence manifest's open manifest per
+pinned directory, `alert_pcap`'s `--pcap-dir`, eapol export's
+`--eapol-dir`, the data socket's listener — is released by its
+registered reset, and before the teardown existed 24 cases looked like
+leaks for borrowing one. What the guard found that the registry could
+*not* release: `alert_pcap` had no registered reset at all (its pinned
+`g_dirfd` and the sweep's open `DIR*` lived until the next
+`alert_pcap_set_dir()`), and `eapol_clear()` — the operator's `[c]` key
+in the `[e]` view, which must not stop export — left `g_out_fd` pinned.
+Hence `alert_pcap_clear()` and `eapol_export_clear()`, both registered.
+
+`tests/test_fd_guard.c` covers the part a green run never reaches: a
+leak caught and named, a clean case not reported, a descriptor that
+merely moved not reported, a descriptor closed but not opened reported
+the other way, the list capped, and both scan routes agreeing. The
+wiring through `RUN_TEST` was seen red by adding one
+`open("/dev/null")` to `test_rm_tree_removes_a_0500_dir_of_our_own`:
+one failure, named, with `fd 4 -> /dev/null`, and the next case clean —
+an accumulating leak is blamed once, at its site, not smeared over
+every case after it. Restored byte-identical.
+
+Rules for a test that opens a descriptor:
+
+- Close what you open, in the case that opened it. A `mkstemp()` whose
+  fd is never closed is the shape this guard exists for.
+- A module that pins a descriptor for the life of a run needs a
+  `void <mod>_clear(void)` in `src/reset_all.h` that releases it —
+  `tests/test_reset_registry.c` already requires every declared
+  `_clear(void)` / `_reset(void)` to be registered, so writing one is
+  enough to make the harness release it.
 
 ## Generated lists (#117)
 

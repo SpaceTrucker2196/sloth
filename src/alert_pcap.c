@@ -75,6 +75,17 @@ int alert_pcap_set_dir(const char *dir) {
     return 0;
 }
 
+/* The header says why this is not just alert_pcap_set_dir(NULL): the
+ * registry needs a `void fn(void)`, and a reset restores the load state
+ * rather than reconfiguring, so g_sweep_cutoff goes too. */
+void alert_pcap_clear(void) {
+    (void)alert_pcap_set_dir(NULL);
+    g_sweep_cutoff = 0;
+    g_sweep_spare  = 0;
+    g_set_wall     = 0;
+    g_set_mono_ms  = 0;
+}
+
 int alert_pcap_failures(void) { return g_fail.failures; }
 const char *alert_pcap_error(void) { return g_fail.last; }
 

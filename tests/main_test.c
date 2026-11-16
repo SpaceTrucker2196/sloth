@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "runner.h"
+#include "fd_guard.h"
 #include "tmp_dir.h"
 #include "reset_all.h"
 #include "sloth_clock.h"
@@ -32,6 +33,42 @@ static void default_test_setup(void) {
 }
 
 void (*g_test_setup)(void) = default_test_setup;
+
+/* The matching teardown (#209): the same registry, on the way out.
+ * Modules that hold a descriptor for a whole run by design — the
+ * evidence manifest's open manifest per pinned directory, alert_pcap's
+ * pinned --pcap-dir, the data socket's listener — are closed by their
+ * registered reset, and running it here rather than only at the next
+ * setUp is what lets the descriptor guard below say "nothing releases
+ * this" and mean it. No tui_init_offscreen: the screen is the run's,
+ * not the case's, and main() opens it once. */
+static void default_test_teardown(void) {
+    sloth_reset_all();
+}
+
+void (*g_test_teardown)(void) = default_test_teardown;
+
+/* ── The descriptor-leak guard (#209) ─────────────────────────────────
+ * tests/fd_guard.h says why this exists; this is the state RUN_TEST
+ * drives it through. One pair of samples, so the guard costs one
+ * /proc/self/fd scan per case boundary and no allocation. */
+static fdg_set_t g_fd_entry;
+
+void fd_guard_enter(void) { (void)fdg_scan(&g_fd_entry); }
+
+int fd_guard_check(const char *name) {
+    fdg_set_t now;
+    (void)fdg_scan(&now);
+    char msg[FDG_MSG_MAX];
+    int delta = fdg_report(&g_fd_entry, &now, name, msg, sizeof(msg));
+    if (delta != 0) {
+        fflush(stdout);   /* the [pass] lines are stdout; keep them apart */
+        fprintf(stderr, "    %s\n", msg);
+        g_fail++;
+        g_test_fail++;
+    }
+    return delta;
+}
 
 /* LeakSanitizer reads this hook at exit when the suite is built with
  * -fsanitize=address; in any other build it is an unused function.
@@ -147,6 +184,7 @@ void run_sdrsweep_tests(void);            /* tests/test_sdrsweep.c (sloth-sdrswe
 void run_va_tests(void);                  /* tests/test_va.c (sloth-va) */
 void run_victron_tests(void);             /* tests/test_victron.c (--victron) */
 void run_tmp_dir_tests(void);             /* tests/test_tmp_dir.c */
+void run_fd_guard_tests(void);            /* tests/test_fd_guard.c (#209) */
 void run_deauth_snoop_tests(void);
 void run_flood_window_tests(void);
 void run_clock_seam_tests(void);
@@ -530,6 +568,7 @@ int main(void) {
     run_va_tests();
     run_victron_tests();
     run_tmp_dir_tests();
+    run_fd_guard_tests();
 
     tui_offscreen_end();
     /* The leak guard: a path still in the run directory after the last

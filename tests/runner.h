@@ -17,6 +17,29 @@ extern int g_test_total;  /* assertions executed within the current test —
  * clock-seam reset so no individual test has to remember either. */
 extern void (*g_test_setup)(void);
 
+/* Called once after each RUN_TEST, if registered. main_test.c points
+ * this at sloth_reset_all() — the same registry setUp runs, run again
+ * on the way out so a module's own long-lived descriptor is released
+ * inside the case that opened it and not at the start of the next one.
+ * #114 took module state off the test author; this is the matching
+ * half, and it is what makes the descriptor guard below honest. */
+extern void (*g_test_teardown)(void);
+
+/* The descriptor-leak guard (#209), defined in main_test.c over
+ * tests/fd_guard.h. fd_guard_enter() samples the open-descriptor count
+ * at a case's entry — before setUp, so a descriptor the shared setup
+ * leaves open is the shared setup's finding and not silently every
+ * test's. fd_guard_check() samples it again after the teardown above,
+ * so what it reports is a descriptor NOTHING releases: a test's own
+ * forgotten mkstemp fd or socket, which accumulates for the rest of the
+ * run, rather than a module descriptor the registry owns. When the
+ * count did not come back it prints the case's name with what is new
+ * and fails the suite. Returns the signed delta. Declared here rather
+ * than in fd_guard.h so a test file need not include the guard to be
+ * measured by it. */
+void fd_guard_enter(void);
+int  fd_guard_check(const char *name);
+
 #define ASSERT(cond) do { \
     g_test_total++; \
     if (cond) { \
@@ -39,12 +62,15 @@ extern void (*g_test_setup)(void);
 #define RUN_TEST(fn) do { \
     g_test_fail = 0; \
     g_test_total = 0; \
+    fd_guard_enter(); \
     if (g_test_setup) g_test_setup(); \
     fn(); \
     if (g_test_total == 0) { \
         fprintf(stderr, "    FAIL %s: zero assertions executed\n", #fn); \
         g_fail++; g_test_fail++; \
     } \
+    if (g_test_teardown) g_test_teardown(); \
+    fd_guard_check(#fn); \
     printf("  [%s] %s\n", g_test_fail == 0 ? "pass" : "FAIL", #fn); \
 } while (0)
 

@@ -990,6 +990,15 @@ int eapol_set_output_dir(const char *dir) {
     return rc;
 }
 
+void eapol_export_clear(void) {
+    pthread_mutex_lock(&g_mu);
+    if (g_out_fd >= 0) { close(g_out_fd); g_out_fd = -1; }
+    g_out_dir[0] = '\0';
+    sfile_fail_reset(&g_fail);
+    g_last_sweep = 0;
+    pthread_mutex_unlock(&g_mu);
+}
+
 int eapol_export_dir_stat(struct stat *out) {
     pthread_mutex_lock(&g_mu);
     int rc = (g_out_fd >= 0 && fstat(g_out_fd, out) == 0) ? 0 : -1;
