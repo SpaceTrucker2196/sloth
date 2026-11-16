@@ -112,6 +112,13 @@ jobs:
       - name: Build without sqlite
         run: make clean && make WITH_SQLITE=0
 
+      # sloth_test_noflags (#116) links the suite against neither
+      # WITH_NCURSES nor WITH_PCAP: a seventh configuration, link-only
+      # (its assertions are written for the shipped config and are not
+      # run here). #221 found it broken on main with nothing gating it.
+      - name: Build the no-flags test binary (link check)
+        run: make clean && make sloth_test_noflags
+
   # The full suite under AddressSanitizer + UndefinedBehaviorSanitizer
   # (#95). The parsers read off-the-air and off-the-wire bytes; a unit
   # test that passes while reading past its buffer is a false green.

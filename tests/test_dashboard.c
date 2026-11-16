@@ -410,7 +410,12 @@ static void test_conn_panel_drills_to_conns_without_monitor(void) {
  * w 40 the answer column starts at 29 and is 11 cells wide. The A row
  * is the control: its address still takes the IP palette. Seen red
  * (the name printed whole past the panel, in an IP pair) with the
- * dns_log_is_ptr() test in draw_dns_log_panel() removed. */
+ * dns_log_is_ptr() test in draw_dns_log_panel() removed.
+ *
+ * draw_dns_log_panel() is declared only under WITH_NCURSES (it is a
+ * private panel helper, not part of the stubbed public view interface
+ * dashboard.c provides without ncurses), so this test is too. */
+#ifdef WITH_NCURSES
 static void test_dns_panel_ptr_answer_is_not_an_address(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     seed_dns_log(&s, "5.113.0.203.in-addr.arpa", "203-0-113-5.isp.example.net", 1);
@@ -424,13 +429,16 @@ static void test_dns_panel_ptr_answer_is_not_an_address(void) {
     ASSERT_EQ(runner_find_col(3, "192.0.2.10"), 29);
     ASSERT_NE(tui_test_pair(3, 29), CP_BRIGHT);
 }
+#endif /* WITH_NCURSES */
 
 void run_dashboard_tests(void) {
     TEST_SUITE("dashboard draw");
     RUN_TEST(test_draw_empty);
     RUN_TEST(test_draw_populated);
     RUN_TEST(test_bargraph_counts_a_long_info_once);
+#ifdef WITH_NCURSES
     RUN_TEST(test_dns_panel_ptr_answer_is_not_an_address);
+#endif
     RUN_TEST(test_draw_with_monitor_iface);
     RUN_TEST(test_draw_with_monitor_error);
     RUN_TEST(test_draw_assoc_band_when_monitoring);

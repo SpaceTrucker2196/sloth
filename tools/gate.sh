@@ -1,7 +1,8 @@
 #!/bin/sh
 # The whole build surface, in one run, in one tree (agents/AGENTS.md
-# "Discipline"): the six -Werror configs; make test and test-capture-path
-# plain, under ASan+UBSan and under TSan; make web-test plain, against
+# "Discipline"): the six -Werror configs; sloth_test_noflags (-Werror,
+# link-only); make test and test-capture-path plain, under ASan+UBSan
+# and under TSan; make web-test plain, against
 # SQLite 3.45 when a build of it is given, without SQLite, with an empty
 # vendor table, under ASan and under TSan twice; the quickstart check;
 # deploy-test with every shellcheck given; replay-check; a one-second
@@ -94,6 +95,12 @@ for cfg in "" WITH_NCURSES=0 WITH_PCAP=0 WITH_WIFI=0 WITH_SQLITE=0 embedded; do
         step "build ${cfg:-default}" make -s $cfg EXTRA_CFLAGS=-Werror
     fi
 done
+
+# sloth_test_noflags (#116) links the suite against neither WITH_NCURSES
+# nor WITH_PCAP; it is a seventh, link-only configuration no step here
+# ran until #221 found it broken with nothing gating it.
+make -s clean > /dev/null 2>&1
+step "build sloth_test_noflags" make -s sloth_test_noflags EXTRA_CFLAGS=-Werror
 
 make -s clean > /dev/null 2>&1
 step "test" make test
