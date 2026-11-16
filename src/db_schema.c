@@ -1217,7 +1217,11 @@ const char *db_schema_migrate_v14_sql(void) { return MIGRATE_V14_SQL; }
 int db_schema_print(FILE *out) {
     fprintf(out,
             "-- sloth database schema, DB_SCHEMA_VERSION %d (src/db_schema.c).\n"
-            "-- The same DDL creates sloth-wifi's --db and sloth-rf's --db.\n"
+            "-- The same DDL creates a new sloth-wifi --db and sloth-rf --db.\n"
+            "-- A file a daemon migrated from an older version has the same\n"
+            "-- columns, but ALTER TABLE ADD COLUMN appends them, so their\n"
+            "-- order and sqlite_master's text differ: name columns, never\n"
+            "-- read them by position or compare the CREATE text.\n"
             "-- A daemon also runs PRAGMA auto_vacuum=INCREMENTAL,\n"
             "-- journal_mode=WAL, synchronous=NORMAL and foreign_keys=ON on\n"
             "-- the files it opens; those are storage settings, not schema.\n",

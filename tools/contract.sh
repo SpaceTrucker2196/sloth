@@ -104,8 +104,23 @@ copy_tree include/sloth_alerts.def docs/views/alerts.md docs/wiki/alerts.md \
           docs/wiki/alert-remediation.md research.db
 # Tracked files only: an operator's scratch note under research/ is not
 # part of a release. LC_ALL=C so the order never depends on a locale.
-# shellcheck disable=SC2046
-copy_tree $(git ls-files 'docs/wiki/alert-assessments/*.md' 'research/*.md' | LC_ALL=C sort)
+# Listed first and checked, because a command substitution used as
+# arguments escapes set -e: outside a git checkout this would otherwise
+# write a tar with no assessments and no research corpus, and say
+# nothing. Each half must be non-empty.
+kb=$(git ls-files 'docs/wiki/alert-assessments/*.md' 'research/*.md') || {
+    echo "contract: git ls-files failed; the alert bundle needs a git checkout" >&2
+    exit 1
+}
+kb=$(printf '%s\n' "$kb" | LC_ALL=C sort)
+n_asm=$(printf '%s\n' "$kb" | grep -c '^docs/wiki/alert-assessments/' || true)
+n_res=$(printf '%s\n' "$kb" | grep -c '^research/' || true)
+if [ "$n_asm" -eq 0 ] || [ "$n_res" -eq 0 ]; then
+    echo "contract: git lists $n_asm assessments and $n_res research documents" >&2
+    exit 1
+fi
+# shellcheck disable=SC2086
+copy_tree $kb
 
 # Which daemon raises each kind, from the two rule tables. The model
 # tools/docs_counts.sh and tests/test_docs_consistency.c hold the

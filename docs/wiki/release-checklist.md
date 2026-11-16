@@ -29,7 +29,7 @@ is section 5.
 `.github/workflows/release-attest.yml`, `tools/contract.sh`,
 `tests/contract/check.sh`, issues #95, #142, #185.
 
-**Last updated**: 2026-11-16 (#185 item 4: the contract artifact, built, attested and attached by the release workflow; steps 6a and 10), 2026-10-19 (#95 rollback, #142 CI half)
+**Last updated**: 2026-11-16 (#185 review: step 9 publishes the workflow's draft rather than creating a second release; the job checks the tag against `SLOTH_VERSION`), 2026-11-16 (#185 item 4: the contract artifact, built, attested and attached by the release workflow; steps 6a and 10), 2026-10-19 (#95 rollback, #142 CI half)
 
 ---
 
@@ -99,6 +99,17 @@ is section 5.
 9. **Publish the GitHub release** for the tag with the notes from step
    2 and attach `sloth-wifi`, `sloth-rf`, the SBOM and `SHA256SUMS`. Publishing triggers
    `mirror-release.yml`, which mirrors the tag and release.
+   Step 8's push starts `release-attest.yml`, which (since #185 item 4)
+   creates the tag's release as a **draft** carrying the contract tar
+   when no release exists yet. Check first with `gh release view
+   v<version>`: if that draft exists, fill and publish *it* (`gh release
+   upload v<version> sloth-wifi sloth-rf <sbom> SHA256SUMS`, then `gh
+   release edit v<version> --notes-file <notes> --draft=false`); do not
+   create a second release, or the contract stays on an unpublished
+   draft and the mirror never carries it. If no release exists yet,
+   creating it before the job reaches its upload is also safe: the job
+   then attaches the contract to that release instead of making a draft.
+   Either way, confirm the contract tar is on the published release.
 10. **Provenance.** `.github/workflows/release-attest.yml` (landed in
     `9131b8e`, #142) builds `sloth-wifi` and `sloth-rf`, writes
     `SHA256SUMS` and attests both with `actions/attest-build-provenance` on every `v*` tag push;

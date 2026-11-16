@@ -6,17 +6,24 @@
 #
 # 1. both daemons print the same --print-schema, and it is the shipped
 #    schema.sql;
-# 2. the tar unpacks to one directory named for it; SHA256SUMS verifies
-#    and lists every file; MANIFEST.json's path, size and SHA-256 agree
-#    with every file and lists every file, and its versions are the
-#    tree's;
+# 2. the tar's own checksum file verifies; the tar unpacks to one
+#    directory named for it; SHA256SUMS verifies and lists every file;
+#    MANIFEST.json is valid JSON whose path, size and SHA-256 agree with
+#    every file and lists every file, and its versions are the tree's;
+#    the copied payloads are the tree's files, byte for byte;
+#    palette.json is valid JSON with the tree's IP palette size;
+#    alert-daemons.tsv lists every kind in order and its per-daemon
+#    counts are the tree's count markers;
 # 3. tests/contract/consumer.c compiles and links against the unpacked
 #    headers, libsloth-wire.a and sloth-wire.pc alone, and decodes a
-#    hand-built radiotap + beacon;
+#    hand-built radiotap + beacon; the functions the shipped headers
+#    declare and the archive does not define are exactly
+#    tests/contract/declared-not-defined.txt;
 # 4. schema.sql loads into an in-memory database whose schema_version is
-#    the MANIFEST's, and the golden sloth.db has exactly that schema;
-# 5. a second `make contract` (another umask, a later second) gives the
-#    same bytes.
+#    the MANIFEST's, and the golden sloth.db has exactly that schema, is
+#    auto_vacuum=INCREMENTAL, and holds no row but meta's one;
+# 5. a second `make contract` (another umask, time zone and locale, a
+#    later second) gives the same bytes.
 #
 # Everything is unpacked under one mktemp -d, removed on exit. No
 # network. Each check prints one line; the first failure exits 1.
@@ -32,7 +39,11 @@ case $tar in /*) ;; *) tar=$root/$tar ;; esac
 case $cdb in /*) ;; *) cdb=$root/$cdb ;; esac
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/sloth-contract.XXXXXX")
-trap 'rm -rf "$tmp"' EXIT INT TERM
+# A signal exits (and the EXIT trap cleans up); a trap that only
+# removed the directory would let dash carry on after a TERM.
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 fail() { echo "contract-check: FAIL $*" >&2; exit 1; }
 ok() { echo "contract-check: ok   $*"; }
@@ -46,6 +57,10 @@ ok "sloth-wifi and sloth-rf --print-schema identical"
 
 # ── 2. unpack, SHA256SUMS, MANIFEST.json ──
 name=$(basename "$tar" .tar)
+# The release asset beside the tar: what a downloader checks first.
+(cd "$(dirname "$tar")" && sha256sum -c --quiet "$name.SHA256SUMS") ||
+    fail "$name.SHA256SUMS does not verify the tar"
+ok "$name.SHA256SUMS verifies the tar"
 mkdir "$tmp/x"
 tar -C "$tmp/x" -xf "$tar"
 set -- "$tmp/x"/* "$tmp/x"/.[!.]*
@@ -60,6 +75,9 @@ cmp -s "$tmp/files" "$tmp/summed" || fail "SHA256SUMS does not list exactly the 
 ok "SHA256SUMS verifies and covers $(wc -l < "$tmp/files" | tr -d ' ') files"
 
 m=$d/MANIFEST.json
+# Valid JSON first (SQLite's strict RFC 8259 json_valid()): the sed
+# reads below are line-shaped and would accept a trailing comma.
+[ "$("$cdb" jsql "$m" 'SELECT json_valid(?1)')" = 1 ] || fail "MANIFEST.json is not valid JSON"
 sed -n 's/^ *{"path": "\([^"]*\)", "size": \([0-9]*\), "sha256": "\([0-9a-f]*\)"},*$/\1 \2 \3/p' "$m" > "$tmp/listed"
 while read -r p size sum; do
     [ -f "$d/$p" ] || fail "MANIFEST.json lists $p, which is not in the archive"
@@ -78,7 +96,64 @@ want=$(sed -n 's/^#define SLOTH_JSONL_VERSION "\(.*\)"$/\1/p' "$root/include/slo
 [ "$(field jsonl_version)" = "$want" ] || fail "jsonl_version is not $want"
 want=$(sed -n 's/^#define DB_SCHEMA_VERSION \([0-9]*\).*/\1/p' "$root/src/db.h")
 [ "$(field db_schema_version)" = "$want" ] || fail "db_schema_version is not $want"
+[ "$("$cdb" jsql "$m" "SELECT json_array_length(?1, '\$.files')")" = "$(wc -l < "$tmp/listed" | tr -d ' ')" ] ||
+    fail "MANIFEST.json's files array and its lines disagree"
 ok "MANIFEST.json matches all $(wc -l < "$tmp/listed" | tr -d ' ') files and the tree's versions"
+
+# The copies are the tree's files. The sums above only prove the archive
+# agrees with itself; a wrong file checksummed consistently passes them.
+same() { cmp -s "$root/$1" "$d/$2" || fail "$2 is not the tree's $1"; }
+same docs/wiki/jsonl-schema.md jsonl/jsonl-schema.md
+same tests/replay/golden.jsonl fixtures/golden.jsonl
+for h in "$d"/include/sloth-wire/*.h; do
+    h=${h##*/}
+    same "src/$h" "include/sloth-wire/$h"
+done
+for f in include/sloth_alerts.def docs/views/alerts.md docs/wiki/alerts.md \
+         docs/wiki/alert-remediation.md research.db; do
+    same "$f" "alerts/$f"
+done
+(cd "$root" && git ls-files 'docs/wiki/alert-assessments/*.md' 'research/*.md') |
+    LC_ALL=C sort > "$tmp/kb.tree" || fail "git ls-files"
+(cd "$d/alerts" && find docs/wiki/alert-assessments research -type f) | LC_ALL=C sort > "$tmp/kb.tar"
+if ! [ -s "$tmp/kb.tree" ] || ! cmp -s "$tmp/kb.tree" "$tmp/kb.tar"; then
+    fail "alerts/ does not hold exactly the tracked assessments and research documents"
+fi
+while read -r f; do same "$f" "alerts/$f"; done < "$tmp/kb.tree"
+ok "payloads are the tree's ($(wc -l < "$tmp/kb.tree" | tr -d ' ') assessment and research documents)"
+
+p=$d/palette/palette.json
+[ "$("$cdb" jsql "$p" 'SELECT json_valid(?1)')" = 1 ] || fail "palette.json is not valid JSON"
+want=$(sed -n 's/^#define IP_NUM_COLORS \([0-9]*\).*/\1/p' "$root/src/ip_color.h")
+[ "$("$cdb" jsql "$p" "SELECT json_extract(?1, '\$.ip_colors')")" = "$want" ] ||
+    fail "palette.json's ip_colors is not IP_NUM_COLORS $want"
+bad=$("$cdb" jsql "$p" "SELECT count(*) FROM json_each(?1, '\$.tokens')
+    WHERE json_extract(value, '\$.hex') NOT GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'
+       OR json_type(value, '\$.xterm') != 'integer'
+       OR json_extract(value, '\$.xterm') NOT BETWEEN 0 AND 255
+       OR json_type(value, '\$.name') != 'text'")
+ntok=$("$cdb" jsql "$p" "SELECT json_array_length(?1, '\$.tokens')")
+if [ "$bad" != 0 ] || [ "${ntok:-0}" -lt "$want" ]; then
+    fail "palette.json's tokens ($ntok, $bad malformed)"
+fi
+ok "palette.json is valid; $ntok tokens, ip_colors $want"
+
+# alert-daemons.tsv: every kind of sloth_alerts.def, in order, ty 0..n-1,
+# and the per-daemon totals are the count markers docs_counts.sh keeps
+# in docs/wiki/alerts.md (wifi = sloth-wifi + both, rf = sloth-rf + both).
+t=$d/alerts/alert-daemons.tsv
+sed -n 's/^X(\([A-Z0-9_]*\),.*/\1/p' "$root/include/sloth_alerts.def" > "$tmp/kinds"
+grep -v '^#' "$t" | sed 1d > "$tmp/tsv"
+awk -F '\t' '$1 != NR - 1 || ($3 != "sloth-wifi" && $3 != "sloth-rf" && $3 != "both") { exit 1 }' \
+    "$tmp/tsv" || fail "alert-daemons.tsv: ty not 0..n-1, or an unknown raised_by"
+cut -f2 "$tmp/tsv" | cmp -s - "$tmp/kinds" || fail "alert-daemons.tsv does not list sloth_alerts.def's kinds in order"
+marker() { sed -n "s/.*<!-- count:$1 -->\([0-9]*\)<!-- \/count -->.*/\1/p" "$root/docs/wiki/alerts.md" | sed -n 1p; }
+nw=$(awk -F '\t' '$3 != "sloth-rf"' "$tmp/tsv" | wc -l | tr -d ' ')
+nr=$(awk -F '\t' '$3 != "sloth-wifi"' "$tmp/tsv" | wc -l | tr -d ' ')
+if [ "$nw" != "$(marker rules-wifi)" ] || [ "$nr" != "$(marker rules-rf)" ]; then
+    fail "alert-daemons.tsv: sloth-wifi $nw, sloth-rf $nr; the tree's markers say $(marker rules-wifi), $(marker rules-rf)"
+fi
+ok "alert-daemons.tsv: $(wc -l < "$tmp/tsv" | tr -d ' ') kinds; sloth-wifi raises $nw, sloth-rf $nr"
 
 cmp -s "$tmp/wifi.sql" "$d/schema/schema.sql" || fail "schema.sql is not what sloth-wifi --print-schema prints"
 ok "schema.sql is the daemon's"
@@ -98,6 +173,30 @@ libs=$(PKG_CONFIG_PATH=$pc pkg-config --libs sloth-wire)
 "$tmp/consumer" || fail "the consumer's decode"
 ok "consumer built from sloth-wire.pc alone and decoded the beacon"
 
+# What a header promises and the archive cannot link. A consumer that
+# calls such a function compiles and then fails to link, so the set is
+# pinned: it may change only with tests/contract/declared-not-defined.txt
+# and the gap it records in docs/wiki/contract.md. GCC's -aux-info lists
+# every prototype with the file it came from; another compiler cannot
+# run this step, and it fails rather than skipping.
+: "${NM:=nm}"
+for h in "$d"/include/sloth-wire/*.h; do
+    h=${h##*/}
+    (cd "$d/include/sloth-wire" && $CC -std=c99 -fsyntax-only -aux-info "$tmp/aux1" -x c "$h") ||
+        fail "$CC -aux-info on $h (this step needs GCC)"
+    cat "$tmp/aux1" >> "$tmp/aux"
+done
+sed -n 's/^\/\* \([^/:]*\.h\):[0-9]*:[A-Z]* \*\/ extern [^(]*[ *]\([A-Za-z_][A-Za-z0-9_]*\) (.*/\1 \2/p' \
+    "$tmp/aux" | LC_ALL=C sort -u > "$tmp/declared"
+[ -s "$tmp/declared" ] || fail "no prototype read from the shipped headers"
+$NM -g --defined-only "$d/lib/libsloth-wire.a" | awk 'NF == 3 { print $3 }' | LC_ALL=C sort -u > "$tmp/defined"
+awk 'NR == FNR { d[$1] = 1; next } !($2 in d)' "$tmp/defined" "$tmp/declared" > "$tmp/undef"
+grep -v '^#' "$here/declared-not-defined.txt" | cmp -s - "$tmp/undef" || {
+    grep -v '^#' "$here/declared-not-defined.txt" | diff - "$tmp/undef" >&2 || true
+    fail "declared-but-undefined functions are not tests/contract/declared-not-defined.txt"
+}
+ok "$(wc -l < "$tmp/declared" | tr -d ' ') declared functions; the $(wc -l < "$tmp/undef" | tr -d ' ') the archive does not define are the pinned list"
+
 # ── 4. the schema and the golden database ──
 v=$("$cdb" version "$d/schema/schema.sql") || fail "schema.sql does not load into an empty database"
 [ "$v" = "$(field db_schema_version)" ] || fail "schema.sql records schema_version $v, the MANIFEST says $(field db_schema_version)"
@@ -107,17 +206,27 @@ ok "schema.sql loads; schema_version $v"
 [ -s "$tmp/schema.dump" ] || fail "schema.sql defines nothing"
 cmp -s "$tmp/schema.dump" "$tmp/golden.dump" || fail "fixtures/sloth.db's schema is not schema.sql's"
 [ "$("$cdb" version "$d/fixtures/sloth.db")" = "$v" ] || fail "fixtures/sloth.db's schema_version"
+# Empty, and made as db_open() makes a file: auto_vacuum=INCREMENTAL (2)
+# set before the first table; no row but schema.sql's own meta row.
+"$cdb" facts "$d/schema/schema.sql" | grep '^rows ' > "$tmp/sql.rows" || true
+[ "$(cat "$tmp/sql.rows")" = "rows meta 1" ] || fail "schema.sql inserts more than the meta row"
+"$cdb" facts "$d/fixtures/sloth.db" > "$tmp/golden.facts" || fail "facts of fixtures/sloth.db"
+[ "$(cat "$tmp/golden.facts")" = "$(printf 'auto_vacuum 2\nrows meta 1')" ] ||
+    fail "fixtures/sloth.db is not empty or not auto_vacuum=INCREMENTAL: $(tr '\n' ' ' < "$tmp/golden.facts")"
 ok "fixtures/sloth.db has schema.sql's $(wc -l < "$tmp/schema.dump" | tr -d ' ') objects"
 
 # ── 5. reproducible ──
 cp "$tar" "$tmp/first.tar"
-# A different umask and at least a second later: neither may reach the
-# bytes. `sleep` is POSIX; the second is what makes a leaked wall-clock
-# mtime show.
+# A different umask, time zone and locale, and at least a second later:
+# none may reach the bytes. `sleep` is POSIX; the second is what makes a
+# leaked wall-clock mtime show. Not varied here: the checkout's path (a
+# hand check of two clones at different paths gave the same bytes; see
+# docs/wiki/contract.md).
 sleep 1
 # MAKE is make's own variable, which may carry a path or flags.
 # shellcheck disable=SC2086
-(cd "$root" && umask 077 && $MAKE -s contract > "$tmp/second.log" 2>&1) ||
+(cd "$root" && umask 077 && TZ=Pacific/Chatham LC_ALL=C.UTF-8 \
+    $MAKE -s contract > "$tmp/second.log" 2>&1) ||
     { cat "$tmp/second.log" >&2; fail "the second make contract"; }
 cmp "$tmp/first.tar" "$tar" || fail "two builds of one tree are not the same bytes"
 ok "rebuilt: byte-identical ($(sha256sum "$tar" | cut -d' ' -f1))"

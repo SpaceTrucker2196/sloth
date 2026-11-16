@@ -31,7 +31,7 @@ attaches it to that tag's GitHub release.
 [ADR 0004](adr/0004-libsloth-wire.md), [ADR 0007](adr/0007-versioning.md),
 issues #184 and #185.
 
-**Last updated**: 2026-11-16 (#185 item 4: first version, contract format 1)
+**Last updated**: 2026-11-16 (#185 review: the checks now also cover the outer checksum, JSON validity, the copies against the tree, `palette.json`, `alert-daemons.tsv`, an empty golden database and the declared-but-undefined functions; *Gaps*; migrated databases; the release step's order and tag check), 2026-11-16 (#185 item 4: first version, contract format 1)
 
 ---
 
@@ -42,9 +42,9 @@ One directory, `sloth-contract-<version>/`:
 | Path | What | Contract row |
 |---|---|---|
 | `lib/libsloth-wire.a` | the leaf parsers slothweb links, compiled from exactly `WEB_CORE_SRCS` (`dot11_frame.c`, `radiotap.c`, `wifi_freq.c`, `dns_wire.c`, `dot11_ie.c`, `netstr.c`, `rf_model.c`) | C3 |
-| `include/sloth-wire/*.h` | each of those sources' public header, the leaf headers they include (`dot11_data.h`), and `sensor_health.h` for the one hook (below) | C3 |
+| `include/sloth-wire/*.h` | each of those sources' public header, the leaf headers they include (`dot11_data.h`), and `sensor_health.h` for the one hook (below); two of them declare functions the archive does not define (*Gaps*) | C3 |
 | `lib/pkgconfig/sloth-wire.pc` | `pkg-config --cflags --libs sloth-wire`; relocatable through `${pcfiledir}`, so the unpacked directory can sit anywhere | C3 |
-| `schema/schema.sql` | `sloth-wifi --print-schema`: the DDL both daemons create `--db` with, and the `meta` row stamping `DB_SCHEMA_VERSION` | C2 |
+| `schema/schema.sql` | `sloth-wifi --print-schema`: the DDL both daemons create a new `--db` with, and the `meta` row stamping `DB_SCHEMA_VERSION` (a migrated file differs in column order: *Gaps*) | C2 |
 | `jsonl/jsonl-schema.md` | [[jsonl-schema]] as in the tree at that commit (`SLOTH_JSONL_VERSION`) | C1 |
 | `palette/palette.json` | what `web/tools/palette.c` reads out of the TUI today, as data: each mirrored colour pair's xterm-256 index and hex, the monitor-row pair, the brand table and the Google letter sequence | C5 |
 | `alerts/include/sloth_alerts.def`, `alerts/docs/views/alerts.md`, `alerts/docs/wiki/alerts.md`, `alerts/docs/wiki/alert-remediation.md`, `alerts/docs/wiki/alert-assessments/*.md`, `alerts/research/**/*.md`, `alerts/research.db` | the alert knowledge bundle, at their tree paths under `alerts/` | C4 |
@@ -67,27 +67,49 @@ cd sloth-contract-<version> && sha256sum -c SHA256SUMS
 PKG_CONFIG_PATH=$PWD/lib/pkgconfig pkg-config --cflags --libs sloth-wire
 ```
 
-`make contract-check` (`tests/contract/check.sh`) does all of that and
-more, on every CI run (the `replay` job) and in `make gate`:
+`make contract-check` (`tests/contract/check.sh`) does every step
+above except the attestation, which needs the network and a release, on
+every CI run (the `replay` job) and in `make gate`. #185 named this test
+`tests/test_contract.c`; it is a shell check run by its own target, not
+part of `make test`, because it needs the built daemons, `make contract`
+itself (twice) and `pkg-config`, none of which the unit-test binary
+has. What it checks:
 
 1. `sloth-wifi --print-schema` and `sloth-rf --print-schema` are the same
    bytes, and are `schema/schema.sql`.
-2. The tar holds one directory named for it; `SHA256SUMS` verifies and
-   lists exactly the files present; `MANIFEST.json`'s path, size and
-   SHA-256 agree with every file and list exactly the files present; its
-   `sloth_version`, `jsonl_version` and `db_schema_version` are the
-   tree's.
+2. `sloth-contract-<version>.SHA256SUMS` verifies the tar; the tar holds
+   one directory named for it; `SHA256SUMS` verifies and lists exactly
+   the files present; `MANIFEST.json` is valid JSON (SQLite's strict
+   `json_valid()`) whose path, size and SHA-256 agree with every file and
+   list exactly the files present, and its `sloth_version`,
+   `jsonl_version` and `db_schema_version` are the tree's. The copied
+   files (`jsonl-schema.md`, `golden.jsonl`, the headers, the whole alert
+   bundle) are the tree's, byte for byte, and the bundle holds exactly
+   the tracked assessments and research documents. `palette.json` is
+   valid JSON, its `ip_colors` is `IP_NUM_COLORS`, and every token has a
+   name, an xterm index 0–255 and a `#rrggbb` hex. `alert-daemons.tsv`
+   lists `sloth_alerts.def`'s kinds in order with `ty` 0..n-1, and its
+   per-daemon totals are the `rules-wifi` / `rules-rf` count markers
+   `tools/docs_counts.sh` keeps.
 3. `tests/contract/consumer.c` compiles with only `sloth-wire.pc`'s flags
    (from a temporary directory, so no header of this tree can be found)
    and decodes a radiotap header and an 802.11 beacon built byte by byte
    per the specifications, as `tests/test_beacon_snoop.c` builds frames.
-   It also feeds a cut element list and counts the archive's one
-   outbound call. `sloth-wire.pc`'s `Version` is `sloth_version`.
-4. `schema.sql` loads into an in-memory SQLite and its `schema_version`
-   is the MANIFEST's; `fixtures/sloth.db`'s `sqlite_master` equals that
-   load's.
-5. A second `make contract` under `umask 077`, at least a second later,
-   gives the same bytes (`cmp`).
+   It also feeds a cut element list to both element walks that report
+   an overrun and counts the archive's outbound call from each.
+   `sloth-wire.pc`'s `Version` is `sloth_version`. The functions the
+   shipped headers declare (read with GCC's `-aux-info`) less those
+   `libsloth-wire.a` defines (`nm`) are exactly
+   `tests/contract/declared-not-defined.txt` (*Gaps*).
+4. `schema.sql` loads into an in-memory SQLite, inserts nothing but its
+   `meta` row, and its `schema_version` is the MANIFEST's;
+   `fixtures/sloth.db`'s `sqlite_master` equals that load's, it is
+   `auto_vacuum=INCREMENTAL`, and no table holds a row but `meta`'s one.
+5. A second `make contract` under `umask 077`, `TZ=Pacific/Chatham` and
+   `LC_ALL=C.UTF-8`, at least a second later, gives the same bytes
+   (`cmp`). The checkout's path is not varied there; two clones of one
+   commit at different paths, under different umasks, time zones and
+   locales, were checked by hand to give the same tar (#185 review).
 
 Each check was seen red under a mutation of the thing it guards before
 it was claimed (`agents/AGENTS.md`, "A test that asserts absence…"):
@@ -99,7 +121,18 @@ header including `sloth.h` (red earlier, at the archive's own compile,
 which has no `include/` on its path); the radiotap rate decode wrong;
 the overrun hook not called; the `.pc` version wrong; the version row
 off by one; an extra table in the golden database; no `--mode`
-normalisation; no fixed `--mtime`; a stray second top-level entry.
+normalisation; no fixed `--mtime`; a stray second top-level entry. And,
+for the checks the review added: `palette.json` missing its closing
+brace; a trailing comma in `MANIFEST.json`; a `sessions` row in, and
+`auto_vacuum=NONE` on, the golden database; `SENSOR_SOURCE_DOWN`
+attributed to `sloth-rf` alone; `jsonl-schema.md` copied from the wrong
+file; one tracked assessment left out of the bundle; a kind renamed in
+`alert-daemons.tsv`; a byte appended to the tar after its checksum; a
+prototype added to a shipped header, and an entry dropped from the
+pinned list; the second overrun site's hook call removed; the time zone
+written into `MANIFEST.json`. `tools/contract.sh` refuses to build when
+`git ls-files` fails or lists no assessment or no research document,
+rather than shipping a bundle without them.
 
 ## Versioning
 
@@ -147,10 +180,10 @@ with its reason.
    is recorded as the alternative chosen against. Its type and
    declaration come from the shipped `sensor_health.h`, sloth's whole
    header, which also declares functions the archive does not define:
-   **gap**, stated here rather than fixed by a trimmed copy that could
-   drift. No shipped header includes `sloth.h` (checked: the archive's
-   own compile has no `include/` on its path, and the consumer's has
-   only the unpacked directory).
+   **gap** (*Gaps*), stated rather than fixed by a trimmed copy that
+   could drift. No shipped header includes `sloth.h` (checked: the
+   archive's own compile has no `include/` on its path, and the
+   consumer's has only the unpacked directory).
 3. **Fixed compiler flags for the archive** (`CONTRACT_CFLAGS`: `-O2
    -std=c99 -fPIC`, warnings, no `-g`, the tree's path mapped away),
    not the tree's `CFLAGS`: a sanitizer or a hardening flag of this
@@ -206,10 +239,38 @@ with its reason.
     the `SHA256SUMS` of the binaries the owner attaches by hand
     ([[release-checklist]] step 9). The workflow attaches to the tag's
     release, creating it as a **draft** when it does not exist yet, so
-    the notes and the publish step stay the owner's.
+    the notes and the publish step stay the owner's; step 9 says to
+    publish that draft rather than create a second release. The job
+    first refuses a tag that is not `v` + `SLOTH_VERSION`, and builds the
+    contract *before* its `-Werror` build, so the daemons it checksums
+    and attests are that build's and not a relink by `make contract`.
 11. **`palette.json` is the sensor's half only.** The light-theme
     variants are computed against `web/ui/theme.css`, which belongs to
     the page, so they are not in it.
+
+## Gaps
+
+- **Declared, not defined.** Two shipped headers declare functions
+  `libsloth-wire.a` does not define, so a consumer calling one compiles
+  and then fails to link. `dot11_data.h` (11 functions: the data-frame
+  helpers of `dot11_data.c`) is shipped because `dot11_frame.h` includes
+  it for `dot11_data_status_t`, and `dot11_data.c` is not in
+  `WEB_CORE_SRCS`. `sensor_health.h` (16 functions) is shipped whole for
+  the one hook (decision 2). The exact list is
+  `tests/contract/declared-not-defined.txt`, and `make contract-check`
+  fails if it grows or shrinks. The two ways to close the first are an
+  owner choice: add `dot11_data.c` (a leaf: `string.h`, `dot11_data.h`,
+  `dot11_frame.h`) to the archive, which ends decision 1's "exactly
+  `WEB_CORE_SRCS`"; or move `dot11_data_status_t` into a header of its
+  own so `dot11_data.h` need not ship.
+- **Migrated databases.** `schema.sql` is what a *new* file gets. A file
+  a daemon migrated from an older version has the same tables, columns
+  and indexes, but `ALTER TABLE … ADD COLUMN` appends a column where the
+  current `CREATE TABLE` has it in the middle (`beacon_aps.akm_bits`,
+  `probe_clients.presence`), so the column order and `sqlite_master`'s
+  text differ. A consumer names columns; it never reads them by
+  position or compares the `CREATE` text. `schema.sql`'s header says the
+  same.
 
 ## Not done, and open
 

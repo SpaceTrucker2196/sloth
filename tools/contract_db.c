@@ -6,6 +6,14 @@
  *   contract-db version FILE              meta.schema_version
  *   contract-db dump FILE                 sqlite_master, sorted
  *   contract-db libversion                sqlite3_libversion()
+ *   contract-db facts FILE                auto_vacuum, and every table
+ *                                         that holds rows, with its count
+ *   contract-db jsql FILE SQL             SQL run with ?1 bound to
+ *                                         FILE's text; prints column 0
+ *                                         of each row (the JSON checks:
+ *                                         SQLite's json_valid() and
+ *                                         json_each(), no jq or python
+ *                                         needed on the runner)
  *
  * FILE ending in ".sql" is loaded into an in-memory database first;
  * anything else is opened read-only, so the checks never change the
@@ -145,15 +153,83 @@ static int dump(const char *path) {
     return rc;
 }
 
+/* What "an empty database" means, checkably: the auto_vacuum mode the
+ * file was created with (db_open() sets INCREMENTAL, 2) and every table
+ * that is not empty. The golden fixture's answer is the one meta row. */
+static int facts(const char *path) {
+    sqlite3 *db = open_any(path);
+    if (!db) return 1;
+    sqlite3_stmt *st = NULL;
+    int rc = 1;
+    if (sqlite3_prepare_v2(db, "PRAGMA auto_vacuum", -1, &st, NULL) == SQLITE_OK &&
+        sqlite3_step(st) == SQLITE_ROW) {
+        printf("auto_vacuum %d\n", sqlite3_column_int(st, 0));
+        rc = 0;
+    }
+    sqlite3_finalize(st);
+    st = NULL;
+    if (rc == 0 &&
+        sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' "
+                               "ORDER BY name", -1, &st, NULL) == SQLITE_OK) {
+        int r = SQLITE_DONE;
+        while (rc == 0 && (r = sqlite3_step(st)) == SQLITE_ROW) {
+            char *q = sqlite3_mprintf("SELECT count(*) FROM \"%w\"",
+                                      (const char *)sqlite3_column_text(st, 0));
+            sqlite3_stmt *c = NULL;
+            if (!q || sqlite3_prepare_v2(db, q, -1, &c, NULL) != SQLITE_OK ||
+                sqlite3_step(c) != SQLITE_ROW)
+                rc = 1;
+            else if (sqlite3_column_int64(c, 0) > 0)
+                printf("rows %s %lld\n", (const char *)sqlite3_column_text(st, 0),
+                       (long long)sqlite3_column_int64(c, 0));
+            sqlite3_finalize(c);
+            sqlite3_free(q);
+        }
+        if (rc == 0 && r != SQLITE_DONE) rc = 1;
+    } else {
+        rc = 1;
+    }
+    if (rc) fprintf(stderr, "contract-db: %s: %s\n", path, sqlite3_errmsg(db));
+    sqlite3_finalize(st);
+    sqlite3_close(db);
+    return rc;
+}
+
+static int jsql(const char *path, const char *sql) {
+    char *text = slurp(path);
+    if (!text) return 1;
+    sqlite3 *db = NULL;
+    sqlite3_stmt *st = NULL;
+    int rc = 1;
+    if (sqlite3_open(":memory:", &db) == SQLITE_OK &&
+        sqlite3_prepare_v2(db, sql, -1, &st, NULL) == SQLITE_OK &&
+        (sqlite3_bind_parameter_count(st) == 0 ||
+         sqlite3_bind_text(st, 1, text, -1, SQLITE_STATIC) == SQLITE_OK)) {
+        int r;
+        while ((r = sqlite3_step(st)) == SQLITE_ROW) {
+            const unsigned char *v = sqlite3_column_text(st, 0);
+            printf("%s\n", v ? (const char *)v : "");
+        }
+        rc = r == SQLITE_DONE ? 0 : 1;
+    }
+    if (rc) fprintf(stderr, "contract-db: jsql %s: %s\n", path, db ? sqlite3_errmsg(db) : "?");
+    sqlite3_finalize(st);
+    sqlite3_close(db);
+    free(text);
+    return rc;
+}
+
 int main(int argc, char **argv) {
     if (argc == 4 && !strcmp(argv[1], "build")) return build(argv[2], argv[3]);
     if (argc == 3 && !strcmp(argv[1], "version")) return version(argv[2]);
     if (argc == 3 && !strcmp(argv[1], "dump")) return dump(argv[2]);
+    if (argc == 3 && !strcmp(argv[1], "facts")) return facts(argv[2]);
+    if (argc == 4 && !strcmp(argv[1], "jsql")) return jsql(argv[2], argv[3]);
     if (argc == 2 && !strcmp(argv[1], "libversion")) {
         printf("%s\n", sqlite3_libversion());
         return 0;
     }
     fprintf(stderr, "usage: contract-db build OUT.db SCHEMA.sql | version FILE | "
-                    "dump FILE | libversion\n");
+                    "dump FILE | libversion | facts FILE | jsql FILE SQL\n");
     return 2;
 }

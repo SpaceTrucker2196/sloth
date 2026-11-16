@@ -104,10 +104,16 @@ int main(void) {
 
     /* An element list cut inside its last element (an SSID claiming 8
      * octets with 2 present): the walk stops and calls out of the
-     * archive, once, through the hook above. */
+     * archive through the hook above, once per walk. dot11_ie.c has two
+     * walks that note it (the element search and the PHY summary), so
+     * both are fed the cut list and each must add one. */
     static const unsigned char CUT[] = { 0x03, 0x01, 0x06, 0x00, 0x08, 'c', 'o' };
     EXPECT(dot11_ie_find(CUT, (int)sizeof(CUT), 0, NULL, NULL) == 0);
     EXPECT(g_overruns == 1);
+    dot11_phy_t phy;
+    memset(&phy, 0, sizeof(phy));
+    dot11_ie_phy(CUT, (int)sizeof(CUT), &phy);
+    EXPECT(g_overruns == 2);
 
     if (!g_fail) printf("consumer: beacon decoded through libsloth-wire\n");
     return g_fail;

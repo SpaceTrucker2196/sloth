@@ -96,7 +96,10 @@ static int invokes_cc(const char *line) { return strstr(line, "$(CC)") != NULL; 
 static int carries_cflags(const char *line) {
     return strstr(line, "$(CFLAGS)") != NULL ||
            strstr(line, "$(TEST_CFLAGS)") != NULL ||
-           strstr(line, "$(CONTRACT_CFLAGS)") != NULL;
+           /* only the one recipe that hands them to tools/contract.sh:
+            * a binary built with them would carry no hardening flag */
+           (strstr(line, "$(CONTRACT_CFLAGS)") != NULL &&
+            strstr(line, "tools/contract.sh") != NULL);
 }
 
 

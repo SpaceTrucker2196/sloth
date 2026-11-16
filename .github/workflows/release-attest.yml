@@ -45,10 +45,24 @@ jobs:
           persist-credentials: false
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
-      - name: Build
-        run: make EXTRA_CFLAGS=-Werror
+      # The tar is named from SLOTH_VERSION and uploaded to the tag's
+      # release: a tag pushed without the version bump would otherwise
+      # carry the previous version's contract and nothing would fail.
+      - name: Tag matches SLOTH_VERSION
+        run: |
+          v=$(sed -n 's/^#define SLOTH_VERSION "\(.*\)"$/\1/p' include/sloth.h)
+          [ "v$v" = "$GITHUB_REF_NAME" ] ||
+            { echo "tag $GITHUB_REF_NAME is not v$v (include/sloth.h SLOTH_VERSION)" >&2; exit 1; }
+      # Contract first, then Build: `make contract` builds sloth-wifi with
+      # the tree's plain flags, and the -Werror Build after it relinks
+      # both daemons, so the binaries checksummed and attested below are
+      # the Build step's. The tar in dist/ is not touched by Build, and
+      # its library has fixed flags (CONTRACT_CFLAGS), so it is the bytes
+      # a local plain `make contract` of the tag gives.
       - name: Contract artifact
         run: make contract && cat dist/sloth-contract-*.SHA256SUMS
+      - name: Build
+        run: make EXTRA_CFLAGS=-Werror
       - name: SHA256SUMS
         run: sha256sum sloth-wifi sloth-rf > SHA256SUMS && cat SHA256SUMS
       - name: Attest build provenance

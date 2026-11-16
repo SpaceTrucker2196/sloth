@@ -1825,6 +1825,9 @@ CONTRACT_TAR       = dist/sloth-contract-$(CONTRACT_VERSION).tar
 # the leaf headers they include, plus sensor_health.h for the one hook
 # the archive calls and does not define (sh_parse_fault_note()).
 # src/bytes.h is included by the .c files only and is not shipped.
+# dot11_data.h (for dot11_data_status_t) and sensor_health.h declare
+# functions the archive does not define; contract-check pins that list
+# (tests/contract/declared-not-defined.txt, docs/wiki/contract.md Gaps).
 CONTRACT_WIRE_HDRS = src/dot11_frame.h src/dot11_data.h src/radiotap.h src/wifi_freq.h \
                      src/dns_wire.h src/dot11_ie.h src/netstr.h src/rf_model.h \
                      src/sensor_health.h
