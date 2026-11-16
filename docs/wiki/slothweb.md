@@ -113,7 +113,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-15 (#214 review: an alert both daemons raise is one incident; an RF alert's list row, page, triage subject and bundle are sloth-rf.db's and never sloth.db's finding of the same key, its page gives no `d` id; every incident list holds both states; the sensor tile says sloth-rf's word in every scope; `alerts.fired` is sloth's stream's alone, said under "Not in #214"), 2026-11-15 (#214: one slothweb, two daemons. `--rf-socket` and `--rf-db` read sloth-rf beside sloth: a second ingest thread and stream state, each consumer with one writer (`web_ingest.h`'s table), a wrong-daemon guard on `sensor_health`'s `daemon`, the RF history and the fleet's aircraft and GNSS incidents from sloth-rf.db, sloth-rf's alerts on the same pages, `/api/health` `daemons` and `rf_db`, `/api/sys` `host_from` and a third store, the tick's `rf`; without the flags nothing changes; § Two daemons), 2026-11-15 (the Victron tab: `GET /api/victron` (the owner's Victron devices from sloth's `victron_device` records, kept in memory, each with its age and a `stale` mark past 360 s, 660 s for a GATT-only device) and `GET /api/victron/history?mac=&metric=&hours=` (one value of one device from sloth.db v15's `victron_readings`, at most 240 buckets of mean/min/max), `web_victron.c`, `web/ui/victron.js`; per-device cards and a chart per key metric; Monitor scope; not in the fleet; `WEB_SDB_SCHEMA_MAX` 15; [[victron]]), 2026-11-15 (the Spectrum tab's ranges: `GET /api/spectrum?range=last3|1h|5h|12h|24h`, one row per run from `sloth-sdrsweep`'s `history/`, max-pooled to stay near 2 MB, bad records skipped and counted; a range selector kept per browser; rows placed by time with gaps marked; the Run button refused within 120 s of the last run whatever the helper's cooldown; [[sdr-sweep]]), 2026-11-15 (the Camera tab: `GET /api/camera.jpg`, `--camera-dir`, `web_camera.c`, `web/ui/camera.js`; the still is a capture helper's `latest.jpg`, read only), 2026-11-14 (#208: the rtl_433 tab, `GET /api/rtl433`, `web_rtl433.c`, `web/ui/rtl433.js`; Monitor scope; [[rtl433]]), 2026-11-13 (the Spectrum tab: `GET /api/spectrum`, `POST /api/spectrum/run`, `--spectrum-dir`, `--spectrum-request`, `web_spectrum.c`, `web/ui/spectrum.js`; the sweep is `sloth-sdrsweep`'s, [[sdr-sweep]]; the write gate admits that one path without a store and refuses it to an agent), 2026-11-13 (the Radar: fleet areas as traced polygons, devices at their most probable point, hollow when unlocated, Wi-Fi hues `--rw-0..4` by MAC), 2026-11-12 (#187: one BSSID's KARMA detail, `/api/lures/bssid` and `web/ui/karma.js`, from the lures card and the device drawer: its `karma_suspect` row over time, its `KARMA_AP` / `KARMA_PROBE_FORGE` incidents, the `hw_verdict` and the beacon's `probe_lat` (JSONL 1.6.0, now kept by the decoder beside `loc`); `slothweb-mcp`'s `sloth_lures` and `sloth_lure_bssid`), 2026-11-12 (#187, #172: the WiFi view's "lures and key harvesting" card from sloth's `karma_suspect`, `harvest_station` and `harvest_chain` records (JSONL 1.3.0), `/api/lures`, `web_lure.c`; the details of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN` shown), 2026-11-12 (#198: many alerts triaged as one: `POST /api/frrs/triage/bulk` (100 ids at one token), incidents (`POST /api/frrs/incident`, `GET /api/frrs/incidents`, members by id or by a standing filter that auto-joins new alerts, the incident's state read by its members unless one has its own later verdict), `/api/alerts`'s `incident=`, slothweb.db v12 with its migration, the Alerts page's incidents panel, selection and bulk verdict (`web/ui/incident.js`), five `slothweb-mcp` tools; [[slothweb-mcp]]); 2026-11-12 (the stores' size, owner: "track sloth db usage in the host and trends window ... the records tile with long term graph showing the limit for storage": sloth.db and slothweb.db on disk (main file plus `-wal`, `stat()` only) against sloth's `db.max_mb` (from `sensor_health`'s `db_max_mb`, JSONL 1.7.0, or an older sloth's `tuned` list) and `--web-max-mb`; `/api/sys`'s `storage`; the `sys.db_mb` series keyed `sloth` / `slothweb`; a tile per store and a `storage` trend row on Sensor health, and a line and a 30 d G1 on the Overview's records/s tile, each drawn on 0 to the limit with the limit as a rule (glyph.js G1's `limit`); 80 % `near`, 95 % `full`, 0 no limit), 2026-11-12 (#187, #172: the WiFi view's "lures and key harvesting" card from sloth's `karma_suspect`, `harvest_station` and `harvest_chain` records (JSONL 1.3.0), `/api/lures`, `web_lure.c`; the details of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN` shown), 2026-11-12 (#198: many alerts triaged as one: `POST /api/frrs/triage/bulk` (100 ids at one token), incidents (`POST /api/frrs/incident`, `GET /api/frrs/incidents`, members by id or by a standing filter that auto-joins new alerts, the incident's state read by its members unless one has its own later verdict), `/api/alerts`'s `incident=`, slothweb.db v12 with its migration, the Alerts page's incidents panel, selection and bulk verdict (`web/ui/incident.js`), five `slothweb-mcp` tools; [[slothweb-mcp]]); reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
+**Last updated**: 2026-11-15 (#216, the cutover: the RF stream's state, "rf_stream" on `/api/health` and on the four RF tabs' answers; a 2.x `sloth-wifi` on `--socket` with no `--rf-socket` says the RF daemon's stream is not configured; 1.x and 2.x streams are both read and named), 2026-11-15 (#214 review: an alert both daemons raise is one incident; an RF alert's list row, page, triage subject and bundle are sloth-rf.db's and never sloth.db's finding of the same key, its page gives no `d` id; every incident list holds both states; the sensor tile says sloth-rf's word in every scope; `alerts.fired` is sloth's stream's alone, said under "Not in #214"), 2026-11-15 (#214: one slothweb, two daemons. `--rf-socket` and `--rf-db` read sloth-rf beside sloth: a second ingest thread and stream state, each consumer with one writer (`web_ingest.h`'s table), a wrong-daemon guard on `sensor_health`'s `daemon`, the RF history and the fleet's aircraft and GNSS incidents from sloth-rf.db, sloth-rf's alerts on the same pages, `/api/health` `daemons` and `rf_db`, `/api/sys` `host_from` and a third store, the tick's `rf`; without the flags nothing changes; § Two daemons), 2026-11-15 (the Victron tab: `GET /api/victron` (the owner's Victron devices from sloth's `victron_device` records, kept in memory, each with its age and a `stale` mark past 360 s, 660 s for a GATT-only device) and `GET /api/victron/history?mac=&metric=&hours=` (one value of one device from sloth.db v15's `victron_readings`, at most 240 buckets of mean/min/max), `web_victron.c`, `web/ui/victron.js`; per-device cards and a chart per key metric; Monitor scope; not in the fleet; `WEB_SDB_SCHEMA_MAX` 15; [[victron]]), 2026-11-15 (the Spectrum tab's ranges: `GET /api/spectrum?range=last3|1h|5h|12h|24h`, one row per run from `sloth-sdrsweep`'s `history/`, max-pooled to stay near 2 MB, bad records skipped and counted; a range selector kept per browser; rows placed by time with gaps marked; the Run button refused within 120 s of the last run whatever the helper's cooldown; [[sdr-sweep]]), 2026-11-15 (the Camera tab: `GET /api/camera.jpg`, `--camera-dir`, `web_camera.c`, `web/ui/camera.js`; the still is a capture helper's `latest.jpg`, read only), 2026-11-14 (#208: the rtl_433 tab, `GET /api/rtl433`, `web_rtl433.c`, `web/ui/rtl433.js`; Monitor scope; [[rtl433]]), 2026-11-13 (the Spectrum tab: `GET /api/spectrum`, `POST /api/spectrum/run`, `--spectrum-dir`, `--spectrum-request`, `web_spectrum.c`, `web/ui/spectrum.js`; the sweep is `sloth-sdrsweep`'s, [[sdr-sweep]]; the write gate admits that one path without a store and refuses it to an agent), 2026-11-13 (the Radar: fleet areas as traced polygons, devices at their most probable point, hollow when unlocated, Wi-Fi hues `--rw-0..4` by MAC), 2026-11-12 (#187: one BSSID's KARMA detail, `/api/lures/bssid` and `web/ui/karma.js`, from the lures card and the device drawer: its `karma_suspect` row over time, its `KARMA_AP` / `KARMA_PROBE_FORGE` incidents, the `hw_verdict` and the beacon's `probe_lat` (JSONL 1.6.0, now kept by the decoder beside `loc`); `slothweb-mcp`'s `sloth_lures` and `sloth_lure_bssid`), 2026-11-12 (#187, #172: the WiFi view's "lures and key harvesting" card from sloth's `karma_suspect`, `harvest_station` and `harvest_chain` records (JSONL 1.3.0), `/api/lures`, `web_lure.c`; the details of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN` shown), 2026-11-12 (#198: many alerts triaged as one: `POST /api/frrs/triage/bulk` (100 ids at one token), incidents (`POST /api/frrs/incident`, `GET /api/frrs/incidents`, members by id or by a standing filter that auto-joins new alerts, the incident's state read by its members unless one has its own later verdict), `/api/alerts`'s `incident=`, slothweb.db v12 with its migration, the Alerts page's incidents panel, selection and bulk verdict (`web/ui/incident.js`), five `slothweb-mcp` tools; [[slothweb-mcp]]); 2026-11-12 (the stores' size, owner: "track sloth db usage in the host and trends window ... the records tile with long term graph showing the limit for storage": sloth.db and slothweb.db on disk (main file plus `-wal`, `stat()` only) against sloth's `db.max_mb` (from `sensor_health`'s `db_max_mb`, JSONL 1.7.0, or an older sloth's `tuned` list) and `--web-max-mb`; `/api/sys`'s `storage`; the `sys.db_mb` series keyed `sloth` / `slothweb`; a tile per store and a `storage` trend row on Sensor health, and a line and a 30 d G1 on the Overview's records/s tile, each drawn on 0 to the limit with the limit as a rule (glyph.js G1's `limit`); 80 % `near`, 95 % `full`, 0 no limit), 2026-11-12 (#187, #172: the WiFi view's "lures and key harvesting" card from sloth's `karma_suspect`, `harvest_station` and `harvest_chain` records (JSONL 1.3.0), `/api/lures`, `web_lure.c`; the details of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN` shown), 2026-11-12 (#198: many alerts triaged as one: `POST /api/frrs/triage/bulk` (100 ids at one token), incidents (`POST /api/frrs/incident`, `GET /api/frrs/incidents`, members by id or by a standing filter that auto-joins new alerts, the incident's state read by its members unless one has its own later verdict), `/api/alerts`'s `incident=`, slothweb.db v12 with its migration, the Alerts page's incidents panel, selection and bulk verdict (`web/ui/incident.js`), five `slothweb-mcp` tools; [[slothweb-mcp]]); reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
 set: <!-- count:vendors -->276<!-- /count --> entries, most of the
 reference host's vendors covered and the rest pending, `COVERAGE.md`); 2026-10-27 (sensor location: the alert page's "where the sensor was", the drawer's scatter, `/api/positions` with GeoJSON and GPX, the stream decoder keeping sloth's `loc` object, sloth.db v9 read; [[location]]); 2026-10-27 (an alert's proof: `--pcap-dir`, the capture decoded and hash-checked, the assessment and bibliography, the drawer's rows as tap targets); 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (the vendor
 research section under the drawer's and Lookup's OUI card, one cited Markdown file per OUI holder
@@ -988,9 +988,12 @@ and the contrast table, is `web/README.md`'s Design section.
 
 ## Two daemons (#214, 2026-11-15)
 
-ADR 0010 splits the sensor into `sloth` (Wi-Fi, IP, BLE) and `sloth-rf`
+ADR 0010 splits the sensor into `sloth-wifi` (Wi-Fi, IP, BLE; `sloth`
+is a symlink to it, and "sloth" below is that daemon) and `sloth-rf`
 (GNSS records, ADS-B, APRS, rtl_433, Victron), each with a data socket
-and a database of its own. slothweb's whole pipeline assumed one of
+and a database of its own. Since the cutover (#216, JSONL 2.0.0)
+`sloth-wifi` no longer reads the decoders at all, so the second source
+is the only source of the RF tabs: § The RF stream's state, below. slothweb's whole pipeline assumed one of
 each ([[architecture-rf-split]] §6). #214 gives it the second, behind
 two flags that default to absent: `--rf-socket SPEC` and `--rf-db PATH`
 (`web_config.c`; parsed and refused as `--socket` and `--sloth-db` are,
@@ -1017,7 +1020,8 @@ An RF-owned record is a `gnss_*`, `adsb_*`, `aprs_*`, `rtl433_*` or
 state and applied nowhere. That is what removes the hazards the
 inventory names: sloth's `sensor_health`, which has no rtl_433 block,
 can no longer reach `web_rtl433.c`'s `sh_apply()`, which clears the tab
-on such a record; a `sloth` that still has its RF flags (until #216)
+on such a record; a `sloth` that still has its RF flags (an unsplit
+1.x sensor; a 2.x `sloth-wifi` refuses them)
 cannot double a series or a row. That is the records. An alert both
 daemons raise is a separate matter, under **Alerts** below.
 
@@ -1095,9 +1099,10 @@ states' open and closed), so a busy sensor's list still agrees with
 the open counts.
 
 *One occurrence, two daemons.* Both daemons read the one gpsd and both
-run `rule_sensor_source_down`, and a `sloth` that still has its RF
-flags (until #216) runs the `GNSS_*` and `ADSB_EMERGENCY` rules too,
-with the same keys. An incident of sloth-rf's whose key sloth holds
+run `rule_sensor_source_down` (so `srcdown:gnss` can open in both),
+and an unsplit 1.x `sloth` that still has its RF flags runs the
+`GNSS_*` and `ADSB_EMERGENCY` rules too, with the same keys. (A 2.x
+`sloth-wifi` runs neither; #216.) An incident of sloth-rf's whose key sloth holds
 too, over a span that meets it (`WEB_LIVE_SAME_SLACK_S`, 5 s, for the
 two daemons' ticks), is that one occurrence: `peer_dup()` leaves it out
 of the list and the open counts, and sloth's stands for it. It is
@@ -1157,7 +1162,7 @@ None of it exists without the flags.
 `sensor_positions`; the alert history's merge above. `alerts.fired`
 counts sloth's `alert` records only: an alert sloth-rf fires is listed
 and counted open but adds no sample, because a type both daemons fire
-(`SENSOR_SOURCE_DOWN` always, the GNSS types until #216) would be one
+(`SENSOR_SOURCE_DOWN` always, the GNSS types from a 1.x sensor) would be one
 series with two writers, which the rollup's bucket close does not
 allow (above). `/api/health`'s `rf_db.stale` needs `--rf-socket` to
 ever be true.
@@ -1171,6 +1176,73 @@ triage subject and bundle), `test_ingest.c` (two
 listeners, two threads, a third reading; an absent RF socket that
 appears), `test_config.c`, `test_fleet.c`
 (`test_export_reads_rf_db`), `wt_world.h`'s optional `w_rf_up()`.
+
+
+### The RF stream's state (#216, 2026-11-15)
+
+Since JSONL 2.0.0 `sloth-wifi`'s stream has no ADS-B, APRS, rtl_433 or
+Victron record, no block for them in `sensor_health` and no
+`source_status` row: they are sloth-rf's, on `--rf-socket`
+([[jsonl-schema]] § 1.x to 2.0.0). A slothweb started with a 2.x
+`sloth-wifi` on `--socket` and no `--rf-socket` would show four empty
+tabs with "no decoder", which is true of that stream and tells the
+operator nothing. So slothweb works out which case it is in, from the
+role of `--socket`'s state and the last `sensor_health` on it
+(`web_live_rf_stream()`, `web_live.c`), and says it:
+
+| `state` | When | What the RF tabs are |
+|---|---|---|
+| `rf_socket` | `--rf-socket` is given | sloth-rf's stream's, and nothing on `--socket` feeds them (above) |
+| `sensor_stream` | one socket, and its `sensor_health` says `1.x` or carries no version (before 1.0.0) | the sensor's own stream's, as before: an unsplit, older sensor, whose stream has the decoders' records and blocks |
+| `rf_daemon_on_socket` | one socket, and its `sensor_health` says `"daemon":"rf"` | sloth-rf's, read on `--socket` (a host with only SDRs) |
+| `not_configured` | one socket, a `2.x` stream that is not sloth-rf's | **empty, because the RF daemon's stream is not configured** |
+| `unknown` | one socket, no `sensor_health` on it yet | not known yet; never `not_configured` |
+
+The version is read, not assumed: a `1.x` and a `2.x` stream are both
+accepted (and one from before the version field), and the answer says
+which (`"reading"`: `"1.x"`, `"2.x"`, `"before 1.0.0"`), with the
+stream's own `sensor_jsonl_version` and `sensor_daemon` beside it. The
+`MAJOR` is parsed as a number (`1.10.0` is `1.x`). `web_lure.c`'s own
+version check (JSONL 1.3.0 for the lure records) is `>=` on the parsed
+triple and takes `2.x` as it took `1.x`; `/api/lures` reports the
+version it read.
+
+Where it is served: `/api/health` carries `"rf_stream":{"state",
+"reading","sensor_jsonl_version","sensor_daemon","rf_socket"}`
+whenever there is a data socket, and `/api/adsb`, `/api/aprs`,
+`/api/rtl433` and `/api/victron` carry the same object as the **last**
+member of a 200 answer that is this sensor's own
+(`rf_stream_member()`, `web_routes.c`). The out-of-scope answer (Local
+scope) does not get it: that answer is the scope's and says nothing
+about a stream. `/api/gnss` does not get it either: the receiver's
+health and position are `sloth-wifi`'s too, so that tab is not empty
+for this reason.
+
+On the page, one module words it (`web/ui/rfstream.js`,
+`window.SlothRfStream`, no DOM of its own): each of the four tabs asks
+`text(j, "ADS-B")` and, when the state is `not_configured`, shows
+"RF daemon not configured: this slothweb reads sloth-wifi's stream
+(JSONL 2.0.0), which has carried no ADS-B records since the sloth-wifi
+/ sloth-rf split (JSONL 2.0.0). They are sloth-rf's: start slothweb
+with --rf-socket (and --rf-db) pointing at it" in place of "no
+decoder"; the health view adds an "RF daemon" block with
+`sourceText()`'s line for every state, the not-configured one in the
+warning colour, and which contract `--socket` is. Every string goes in
+through `textContent` or `el()`.
+
+The shipped `slothweb.service` passes `--rf-socket` and `--rf-db`, so
+an installed host is `rf_socket`; `not_configured` is what a slothweb
+started by hand against only the Wi-Fi daemon sees.
+
+Tests (`web/tests/test_twodaemon.c`): a 2.x Wi-Fi stream alone says
+`not_configured` on each RF tab and in `/api/health`, as the last
+member, and `unknown` before any `sensor_health`; a 1.x stream alone
+(and one with no version) still fills the RF tabs and says
+`sensor_stream`; a 2.x Wi-Fi stream with an RF stream fills them from
+the RF stream and says `rf_socket`, a decoy on the Wi-Fi socket
+listed nowhere; sloth-rf alone on `--socket`; the page's functions
+whole. The absences were each seen red (the version threshold, the
+1.x case, the out-of-scope answer, the decoys).
 
 
 ## The Alerts page and an alert's page (2026-10-26)

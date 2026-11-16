@@ -124,6 +124,47 @@ Ruled after this record was written:
 - **Victron** (`--victron`, ADR 0011, d5d2153f) is an RF-side file
   source and is read by sloth-rf like the other three decoders.
 
+## As built (2026-11-15, #216, the cutover)
+
+A short record of where the cutover landed against the decision above;
+the decision itself is unchanged. The detail is
+[the inventory](../architecture-rf-split.md) §12.
+
+- **Names.** The Wi-Fi binary is `sloth-wifi`; `sloth` is a relative
+  symlink to it in the build tree and in `$(PREFIX)/bin`, with no end
+  date. `sloth-sensor.service` runs `sloth-wifi` by that name.
+- **The decoders left by link, not by flag.** `sloth-wifi` links no
+  decoder, reader, RF record, RF source row or GNSS / ADS-B rule; an
+  `nm` gate on its link (`check_wifi_no_rf`, the mirror of sloth-rf's)
+  holds that. It refuses `--adsb`, `--aprs`, `--aprs-freq`,
+  `--aprs-silent-hours`, `--rtl433` and `--victron` with exit 2 and one
+  line naming `sloth-rf` and `sloth-migrate-rf`.
+- **GNSS as ruled.** One reader in both. `sloth-wifi` keeps the stamp,
+  both position tables' writer (it fills `device_positions` and
+  `sensor_positions`), the twin motion suppression, the `[#]` view and
+  the receiver's health (source row, sensor row, `gps_*` / `gnss_*` /
+  `loc_*`); the `gnss_*` records and tables and the four `GNSS_*` rules
+  are `sloth-rf`'s alone.
+- **Alerts as ruled.** `SENSOR_UNDERVOLT` from `sloth-wifi` only;
+  `SENSOR_SOURCE_DOWN` from each for its own rows, `gnss` from both.
+- **The stream is `2.0.0` in both daemons**, one macro. Nothing was
+  renamed or renumbered: `alert_type_t`, `sensor_kind_t` and the
+  `source_status` slots are one numbering, and a row a daemon lacks is
+  absent. The migration table is [jsonl-schema](../jsonl-schema.md)
+  § 1.x to 2.0.0.
+- **The ADS-B terminal view is deleted** with its test and its
+  `docs/views` page; the views list lost its last row.
+- **slothweb** reads `1.x` and `2.x` and says which; against a `2.x`
+  `sloth-wifi` with no `--rf-socket` its RF tabs and health view say
+  the RF daemon's stream is not configured.
+- **Not changed, as decided:** `MISSION.md` §2, and
+  [ADR 0009](0009-fleet-monitor-only.md)'s allow-list, device test and
+  tests; rtl_433 and Victron stay withheld from the fleet.
+- **Left as it was, and worth a ruling:** the shared flag checks and
+  the readers still print `sloth:` in `sloth-rf`
+  (the inventory's §10 noted it "wants a decision at cutover";
+  sloth-rf's behaviour was held unchanged in this slice).
+
 ## Consequences
 
 Accepted:

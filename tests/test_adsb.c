@@ -19,6 +19,7 @@
 #include "poll.h"
 #include "sensors.h"
 #include "sloth_clock.h"
+#include "rf_profile.h"
 
 /* --adsb (#26 slice 1, 2026-11-05).
  *
@@ -1162,16 +1163,20 @@ static int find_sensor(const sloth_state_t *s) {
 static void test_sensor_registry_adsb(void) {
     g_wall = 1800000000; g_mono = 1000000;
     sloth_clock_test_set(t_mono, t_wall);
+    /* The decoders are sloth-rf's since the cutover (#216): its table,
+     * with the services in its shape. The harness puts sloth-wifi's
+     * back before the next test. */
+    rf_profile_select();
     TEST_STATE(s);
     memset(&s, 0, sizeof(s));
     poll_ctx_t ctx;
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_rf, &s, &ctx);
     ASSERT_EQ(find_sensor(&s), -1);           /* nothing without --adsb */
 
     adsb_set_source("file:/run/readsb/aircraft.json");
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_rf, &s, &ctx);
     int k = find_sensor(&s);
     ASSERT(k >= 0);
     if (k < 0) { sloth_clock_test_set(NULL, NULL); return; }
@@ -1182,19 +1187,19 @@ static void test_sensor_registry_adsb(void) {
     ASSERT_EQ(parse("{\"now\":1800000000,\"aircraft\":[{\"hex\":\"a0b1c2\"}]}"), 0);
     adsb_feed_doc(&g_doc, 0, g_wall, g_mono);
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_rf, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ACTIVE);
     ASSERT_EQ(s.sensors[k].observed, 1u);
 
     g_wall += ADSB_STALE_S + 1; g_mono += (ADSB_STALE_S + 1) * 1000u;
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_rf, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ERROR);   /* stale */
 
     ASSERT_EQ(parse("{\"now\":1800000020,\"aircraft\":[]}"), 0);
     adsb_feed_doc(&g_doc, 0, g_wall, g_mono);
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_rf, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ACTIVE);
     sloth_clock_test_set(NULL, NULL);
 }
@@ -1337,7 +1342,7 @@ static void test_sensor_health_adsb_block(void) {
     memset(&s, 0, sizeof(s));
     jl_open();
     adsb_health_poll(&s, g_wall, g_mono);
-    jsonl_emit_sensor_health(&s);
+    jsonl_emit_sensor_health_rf(&s);
     jsonl_close();
     char *b = read_all(g_jl);
     ASSERT(b != NULL);
@@ -1357,13 +1362,13 @@ static void test_sensor_health_adsb_block(void) {
         ASSERT_EQ(parse(d), 0);
         adsb_feed_doc(&g_doc, 0, g_wall, g_mono);
         adsb_health_poll(&s, g_wall, g_mono);
-        jsonl_emit_sensor_health(&s);
+        jsonl_emit_sensor_health_rf(&s);
     }
     b = NULL;
     for (int i = 0; i < ADSB_STALE_S + 2; i++) {
         g_wall++; g_mono += 1000;
         adsb_health_poll(&s, g_wall, g_mono);
-        jsonl_emit_sensor_health(&s);
+        jsonl_emit_sensor_health_rf(&s);
     }
     jsonl_close();
     b = read_all(g_jl);

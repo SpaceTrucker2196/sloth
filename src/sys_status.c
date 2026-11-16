@@ -6,15 +6,11 @@
 #include <unistd.h>
 
 #include "sys_status.h"
-#include "adsb.h"
-#include "aprs.h"
 #include "fs_capacity.h"
 #include "gps.h"
 #include "jsonl.h"
-#include "rtl433.h"
 #include "sensor_health.h"
 #include "sloth_clock.h"
-#include "victron.h"
 
 /* Contract, rationale and what is deliberately absent: sys_status.h. */
 
@@ -460,6 +456,13 @@ void sys_status_set_capture_side(const sys_capture_side_t *c) {
     g_capture_side = c;
 }
 
+/* The RF side, likewise the binary's shape. */
+static sys_rf_fill_fn g_rf_side;
+
+void sys_status_set_rf_side(sys_rf_fill_fn fill) {
+    g_rf_side = fill;
+}
+
 /* The "absent" values a zeroed struct does not have. Separate from the
  * reset so the first poll of a process does not clear the disk path
  * main() set before it. */
@@ -873,7 +876,7 @@ static uint64_t fnv_str(uint64_t h, const char *s) {
 }
 
 /* Age from the count advancing, for a reader with no arrival clock. */
-static long long track_age(int i, uint64_t count, uint64_t mono_ms) {
+long long sys_status_track_age(int i, uint64_t count, uint64_t mono_ms) {
     if (!g.st[i].tracked) {
         g.st[i].tracked = 1;
         g.st[i].track_count = count;
@@ -922,7 +925,7 @@ static void fill_sources(const sloth_state_t *s, uint64_t mono_ms) {
         o->count = p->sentences;
         o->errors = p->bad_checksum + p->parse_errors;
         o->has_reconnects = 1; o->reconnects = p->reconnects;
-        o->age_s = track_age(SYS_SRC_GNSS, p->sentences, mono_ms);
+        o->age_s = sys_status_track_age(SYS_SRC_GNSS, p->sentences, mono_ms);
         /* Liveness is the receiver talking, not having a fix: a
          * receiver searching under a roof is a working source. The fix
          * state is the detail. */
@@ -942,78 +945,12 @@ static void fill_sources(const sloth_state_t *s, uint64_t mono_ms) {
         snprintf(o->detail, sizeof(o->detail), "--location only: a fixed position, no receiver");
     }
 
-    o = &g.snap.src[SYS_SRC_ADSB];
-    o->name = "adsb"; o->flag = "--adsb"; o->unit = "messages";
-    o->age_s = -1;
-    snprintf(o->kind, sizeof(o->kind), "adsb");
-    if (s->adsb.configured) {
-        const adsb_health_t *a = &s->adsb;
-        snprintf(o->endpoint, sizeof(o->endpoint), "%s", a->src);
-        o->count = a->messages; o->errors = a->read_errors + a->parse_errors;
-        o->age_s = a->age_s;
-        snprintf(o->detail, sizeof(o->detail), "%s%s%.70s", adsb_state_name(a->state),
-                 a->err[0] ? ": " : "", a->err);
-        o->state = a->state == ADSB_LIVE ? SYS_ST_OK
-                 : a->state == ADSB_ERROR ? SYS_ST_DOWN : SYS_ST_STALE;
-    }
-
-    o = &g.snap.src[SYS_SRC_APRS];
-    o->name = "aprs"; o->flag = "--aprs"; o->unit = "packets";
-    o->age_s = -1;
-    snprintf(o->kind, sizeof(o->kind), "aprs");
-    if (s->aprs.configured) {
-        const aprs_health_t *a = &s->aprs;
-        snprintf(o->endpoint, sizeof(o->endpoint), "%s", a->src);
-        o->count = a->packets; o->errors = a->read_errors + a->bad_lines;
-        o->age_s = track_age(SYS_SRC_APRS, a->packets, mono_ms);
-        snprintf(o->detail, sizeof(o->detail), "%s%s%s%.60s", aprs_state_name(a->state),
-                 a->missing ? " (file not there yet)" : "", a->err[0] ? ": " : "", a->err);
-        /* A quiet channel is not a fault (aprs_health_t): live stays ok
-         * however old the last packet; its age says how quiet. */
-        o->state = a->state == APRS_LIVE ? SYS_ST_OK
-                 : a->state == APRS_ERROR ? SYS_ST_DOWN : SYS_ST_STALE;
-    }
-
-    o = &g.snap.src[SYS_SRC_RTL433];
-    o->name = "rtl433"; o->flag = "--rtl433"; o->unit = "messages";
-    o->age_s = -1;
-    snprintf(o->kind, sizeof(o->kind), "sub-ghz");
-    if (s->rtl433.configured) {
-        const rtl433_health_t *r = &s->rtl433;
-        snprintf(o->endpoint, sizeof(o->endpoint), "%s", r->src);
-        o->count = r->msgs; o->errors = r->read_errors + r->bad_lines;
-        o->age_s = track_age(SYS_SRC_RTL433, r->msgs, mono_ms);
-        snprintf(o->detail, sizeof(o->detail), "%s%s%s%.60s",
-                 rtl433_state_name(r->state),
-                 r->missing ? " (file not there yet)" : "",
-                 r->err[0] ? ": " : "", r->err);
-        /* A quiet band is not a fault (rtl433_health_t): live stays ok
-         * however old the last decode; its age says how quiet. */
-        o->state = r->state == RTL433_LIVE ? SYS_ST_OK
-                 : r->state == RTL433_ERROR ? SYS_ST_DOWN : SYS_ST_STALE;
-    }
-
-    o = &g.snap.src[SYS_SRC_VICTRON];
-    o->name = "victron"; o->flag = "--victron"; o->unit = "records";
-    o->age_s = -1;
-    snprintf(o->kind, sizeof(o->kind), "victron");
-    if (s->victron.configured) {
-        const victron_health_t *v = &s->victron;
-        snprintf(o->endpoint, sizeof(o->endpoint), "%s", v->src);
-        o->count = v->records; o->errors = v->read_errors + v->bad_lines;
-        o->age_s = track_age(SYS_SRC_VICTRON, v->records, mono_ms);
-        snprintf(o->detail, sizeof(o->detail), "%s%s%s%.60s",
-                 victron_state_name(v->state),
-                 v->missing ? " (file not there yet)" : "",
-                 v->err[0] ? ": " : "", v->err);
-        /* Quiet is not a fault (victron_health_t): sloth-va writes
-         * nothing while the devices are out of range, so live stays ok
-         * however old the last record; its age says how quiet. A file
-         * that is not there yet (sloth-va not started, or no record
-         * yet) is stale, so it is held and then reported. */
-        o->state = v->state == VICTRON_LIVE ? SYS_ST_OK
-                 : v->state == VICTRON_ERROR ? SYS_ST_DOWN : SYS_ST_STALE;
-    }
+    /* The four decoders' rows are the RF side's (src/sys_status_rf.c),
+     * for the reason the capture's are the capture side's: sloth-wifi
+     * has no decoder since the cutover (#216), and "not configured"
+     * would be a statement about the host that sloth-rf may be
+     * contradicting in the next process. Unregistered, unnamed. */
+    if (g_rf_side) g_rf_side(s, g.snap.src, mono_ms);
 
     for (int i = 0; i < SYS_SRC_COUNT; i++) {
         o = &g.snap.src[i];

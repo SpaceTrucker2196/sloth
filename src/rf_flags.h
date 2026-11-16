@@ -7,14 +7,14 @@
  * --aprs-freq, --aprs-silent-hours, --rtl433 and --victron (sloth-va's
  * file: not a decoder, but read and refused the way --rtl433's is).
  *
- * `sloth` takes them until cutover and sloth-rf takes them from now
- * (ADR 0010), so for a release both mains parse the same six flags.
- * The checks were inline in src/main.c; they are here so
- * src/rf/main.c calls them and not a copy, and the two daemons refuse
- * the same SPEC with the same words and exit code. Each function
- * prints on stderr exactly what main.c did and returns the exit code:
- * 0 to go on, 2 to exit. "sloth:" in both daemons, for the reason
- * src/gnss_flags.h gives. */
+ * sloth-rf's alone since the cutover (#216, ADR 0010). For one release
+ * both mains parsed these six, which is why the checks came out of
+ * src/main.c into a file of their own; sloth-wifi now refuses each
+ * flag before it would reach one (src/rf_moved.h) and does not link
+ * this file. Each function prints on stderr exactly what main.c did
+ * and returns the exit code: 0 to go on, 2 to exit. The prefix is
+ * still "sloth:", as src/gnss_flags.h's shared checks print it:
+ * sloth-rf's output was held unchanged across the cutover. */
 
 typedef struct {
     const char *adsb;          /* --adsb SPEC; NULL not given */

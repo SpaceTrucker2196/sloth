@@ -28,13 +28,17 @@ WITH_SQLITE  ?= 1
 # and `make fuzz` all pick it up. Which list (#212, for the sloth-wifi /
 # sloth-rf split of #211, ADR 0010):
 #
-#   RF_SRCS         only ADS-B, APRS or rtl_433 (and, later, Meshtastic):
-#                   a decoder, its reader thread, its rules, its view, its
-#                   poll stages. What sloth-rf will own and sloth-wifi
-#                   will stop linking at cutover.
+#   RF_SRCS         only ADS-B, APRS, rtl_433 or Victron (and, later,
+#                   Meshtastic): a decoder, its reader thread, its rules,
+#                   its poll stages, its records and source rows. sloth-rf
+#                   owns them; sloth-wifi links none of them since the
+#                   cutover (#216), and check_wifi_no_rf holds its link
+#                   to that.
 #   GNSS_SRCS       only the --gps / --location receiver: the parsers, the
 #                   reader, the position track, the GNSS rules and view,
-#                   its poll stages. Both daemons link it.
+#                   its poll stages. Both daemons link the reader; the
+#                   view is sloth-wifi's alone and the rules sloth-rf's
+#                   alone (rule_gnss_* is on check_wifi_no_rf's list).
 #   CORE_BASE_SRCS  everything else that is built in every configuration:
 #                   the Wi-Fi, wired and BLE modules and the services both
 #                   daemons share (the alert engine, JSONL, the clock, the
@@ -48,8 +52,9 @@ WITH_SQLITE  ?= 1
 # base; so does src/alerts/rules_sensor.c.
 #
 # CORE_COMMON_SRCS is the union of the three and is what every consumer
-# below reads, so `sloth`, the test, no-flag, bench and fuzz builds link
-# exactly what they linked when it was one list.
+# below reads. It all goes into one archive, and each binary's linker
+# takes the members something it links references: sloth-wifi and
+# sloth-rf differ by what their own objects name, not by a second list.
 CORE_BASE_SRCS = \
        src/view_route.c    \
        src/worker_thread.c \
@@ -278,6 +283,8 @@ CORE_BASE_SRCS += src/run_flag.c
 # #213: the start-up steps both daemons take alike (--tune, the
 # privilege drop, the three sinks), out of src/main.c.
 CORE_BASE_SRCS += src/daemon_start.c
+# #216: the six decoder flags sloth-wifi refuses, and the line it says.
+CORE_BASE_SRCS += src/rf_moved.c
 
 # ── The GNSS group (#212) ───────────────────────────────────────────────────
 # --location / --gps (2026-10-27): the parsers and the arbitration state
@@ -299,8 +306,6 @@ GNSS_SRCS += src/gnss_flags.c
 RF_SRCS  = src/adsb.c src/adsb_beast.c src/capture/adsb_reader.c
 # #186: ADSB_EMERGENCY, read off the ADS-B table.
 RF_SRCS += src/alerts/rules_adsb.c
-# #186 (2026-11-07): the [^] view over the --adsb decoder's aircraft table.
-RF_SRCS += src/views/adsb.c
 # --aprs (2026-11-05): Dire Wolf's packet-log parser and the station
 # table are pure; the reader tails a local file and needs neither
 # libpcap nor SQLite.
@@ -321,6 +326,9 @@ RF_SRCS += src/poll_rf.c
 RF_SRCS += src/jsonl_rf.c src/alerts/rules_table_rf.c
 # #213: the decoder flags' checks, out of src/main.c for the same reason.
 RF_SRCS += src/rf_flags.c
+# #216: the four decoder source rows, out of src/sys_status.c, and the
+# one call that hands sloth-rf's side to the shared services.
+RF_SRCS += src/sys_status_rf.c src/rf_side.c
 
 # The union every consumer reads. Order is base, GNSS, RF; nothing
 # depends on it (the objects go into an archive).
@@ -483,13 +491,19 @@ CORE_LIB  = $(OBJDIR)/libsloth_core.a
 APP_OBJS  = $(APP_SRCS:%.c=$(OBJDIR)/%.o)
 CORE_OBJS = $(CORE_SRCS:%.c=$(OBJDIR)/%.o)
 OBJS      = $(APP_OBJS) $(CORE_LIB)
-TARGET    = sloth
+# The Wi-Fi daemon (#216, ADR 0010). It was `sloth` until the cutover
+# and still answers to that name: `sloth` is a symlink to it, in the
+# build tree (below) and beside it where `make install` puts it, with no
+# end date (owner ruling 2026-11-15). One program under two names:
+# nothing in it reads argv[0] to decide what it is.
+TARGET       = sloth-wifi
+TARGET_ALIAS = sloth
 
 # The shipped binary is relinked when the config or link command changes,
 # not only when an object is newer: going back to a config whose objects
 # predate the current `sloth` would otherwise leave the other config's
 # binary in place and call it up to date.
-LINK_STAMP = build/sloth.link
+LINK_STAMP = build/sloth-wifi.link
 
 # Rewrite the stamp only when what it records differs, so its mtime moves
 # exactly when the recorded text does. STAMP is set per target below.
@@ -501,7 +515,7 @@ $(LINK_STAMP):      STAMP = $(OBJDIR) $(CC) $(CFLAGS) $(LDFLAGS)
 
 .PHONY: all clean install embedded check-deps sbom
 
-all: check-deps $(TARGET)
+all: check-deps $(TARGET) $(TARGET_ALIAS)
 
 # ── Dependency floors (#142) ────────────────────────────────────────────────
 # The minimum library versions, checked before compiling rather than
@@ -575,6 +589,19 @@ sbom:
 $(TARGET): $(OBJS) $(LINK_STAMP)
 	$(CC) $(CFLAGS) -o $@ $(filter-out $(LINK_STAMP),$^) $(LDFLAGS)
 	$(check_no_hci_builder)
+	$(check_wifi_no_rf)
+
+# ./sloth, so `./sloth --headless ...` and every script that names it
+# keep working in a build tree. A relative symlink, remade whenever it is
+# not one pointing at $(TARGET): a tree built before the cutover has a
+# regular file called sloth here, the old binary, and leaving that in
+# place would run pre-split code under the old name. Order-only on the
+# binary, so the link is not remade when the binary is relinked; the
+# recipe always runs and does nothing when the link is already right.
+.PHONY: FORCE_ALIAS
+FORCE_ALIAS:
+$(TARGET_ALIAS): FORCE_ALIAS | $(TARGET)
+	@[ "$$(readlink $@ 2>/dev/null)" = "$(TARGET)" ] || { ln -sfn $(TARGET) $@ && echo "ln -sfn $(TARGET) $@"; }
 
 # MISSION.md §2: sloth sends no HCI command, so sloth-ble-scan's builder
 # (src/ble_scan/, every symbol `bles_`) must never be in it. Checked on
@@ -680,8 +707,10 @@ sloth-va: $(VA_SRCS) $(VA_HDRS) $(OBJDIR)/.flags
 # ── sloth-rf (#213, ADR 0010) ──────────────────────────────────────────────
 # The RF half of the sensor as a daemon of its own: the GNSS receiver and
 # the ADS-B, APRS and rtl_433 decoders' files, with the alert engine, the
-# JSONL writer and the database `sloth` uses for the same records. Built
-# beside `sloth` by a plain `make`; not installed yet (packaging is #215).
+# JSONL writer and the database sloth-wifi uses for its own. Built
+# beside sloth-wifi by a plain `make` and installed by `make install`
+# (#215). Since the cutover (#216) it is the only daemon that links the
+# decoders: check_wifi_no_rf, below, holds sloth-wifi to that.
 #
 # Its three own sources are compiled like any object (per config, behind
 # the flag stamp), and everything else comes out of libsloth_core.a, so
@@ -803,6 +832,52 @@ define check_rf_no_capture
 	 [ -z "$$bad" ] || { echo "$@: imports $$bad- sloth-rf links no libpcap, no resolver, no terminal and no netlink or raw-socket call (MISSION.md §2, ADR 0010); a shared file has grown a call into a capture or platform module" >&2; rm -f $@; exit 1; }; \
 	 bad=$$(printf '%s\n' "$$syms" | awk 'NF == 3 && $$2 != "U" && $$3 ~ /$(RF_FORBID_DEFS_RE)/ { print $$3 }' | sort -u | head -n 4 | tr '\n' ' '); \
 	 [ -z "$$bad" ] || { echo "$@: links $$bad- sloth-rf links no capture, 802.11 frame decoder, Bluetooth source, platform backend (nl80211, rtnetlink, INET_DIAG), mDNS advertisement, resolver, view or terminal code (MISSION.md §2, ADR 0010); cut the dependency, do not shorten this list" >&2; rm -f $@; exit 1; }
+endef
+
+# The mirror for the other daemon (#216, ADR 0010): sloth-wifi reads no
+# SDR decoder. Until the cutover every RF file was linked into the one
+# binary; what keeps them out now is, as for sloth-rf, only that nothing
+# sloth-wifi references leads to them - so one new call from a shared
+# file (src/sys_status.c, src/db.c, src/jsonl.c, a view) into
+# src/adsb.c would put the decoder, its reader thread and its records
+# back without a line of this file changing. Checked on the linked
+# binary, file-local symbols included, by family:
+#   the decoders and their readers        adsb_* (the Beast decoder is
+#                                         adsb_beast_*) aprs_* rtl433_*
+#                                         victron_*
+#   their rules and the receiver's rules  rule_adsb_* rule_gnss_*
+#                                         rules_adsb_* rules_gnss_*
+#   their records and health blocks       jsonl_emit_{gnss,adsb,aprs,
+#                                         rtl433,victron}, jsonl_sh_{adsb,
+#                                         aprs,rtl433,victron,rf}*,
+#                                         jsonl_emit_state_rf,
+#                                         jsonl_emit_sensor_health_rf
+#   sloth-rf's stages, tables and side    poll_st_*_rf, g_poll_rf,
+#                                         g_alert_table_rf, rf_flags_*,
+#                                         rf_flag_*, rf_side_install,
+#                                         sys_status_rf_fill
+# The GNSS reader, the position track and the GNSS view are not on it:
+# sloth-wifi keeps them (owner ruling 2026-11-15). rf_moved_* is this
+# daemon's own refusal of the six flags and is not matched (the list
+# says rf_flag, not rf_). tests/test_rf_build.c holds every family to
+# matching a definition in the tree today, so a renamed module cannot
+# leave a pattern guarding nothing. A failure deletes the binary, so the
+# next `make` cannot call it up to date.
+WIFI_FORBID_DEF_PATTERNS = adsb_[a-z0-9_]+ aprs_[a-z0-9_]+ \
+                    rtl433_[a-z0-9_]+ victron_[a-z0-9_]+ \
+                    rule_adsb_[a-z0-9_]+ rule_gnss_[a-z0-9_]+ \
+                    rules_adsb_[a-z0-9_]+ rules_gnss_[a-z0-9_]+ \
+                    jsonl_emit_(gnss|adsb|aprs|rtl433|victron) \
+                    jsonl_sh_(adsb|aprs|rtl433|victron|rf)[a-z0-9_]* \
+                    jsonl_emit_state_rf jsonl_emit_sensor_health_rf \
+                    poll_st_[a-z0-9_]+_rf g_poll_rf g_alert_table_rf \
+                    rf_flags_[a-z0-9_]+ rf_flag_[a-z0-9_]+ rf_side_install \
+                    sys_status_rf_fill
+WIFI_FORBID_DEFS_RE = ^_?($(subst $(rf_space),|,$(strip $(WIFI_FORBID_DEF_PATTERNS))))$$
+define check_wifi_no_rf
+	@syms=$$(nm $@) || { echo "$@: nm failed; cannot check for the RF decoders" >&2; rm -f $@; exit 1; }; \
+	 bad=$$(printf '%s\n' "$$syms" | awk 'NF == 3 && $$2 != "U" && $$3 ~ /$(WIFI_FORBID_DEFS_RE)/ { print $$3 }' | sort -u | head -n 4 | tr '\n' ' '); \
+	 [ -z "$$bad" ] || { echo "$@: links $$bad- sloth-wifi links no ADS-B, APRS, rtl_433 or Victron decoder, none of their records or source rows, and no GNSS or ADS-B rule: those are sloth-rf's (ADR 0010, #216); cut the dependency, do not shorten this list" >&2; rm -f $@; exit 1; }
 endef
 
 all: $(RF_TARGET)
@@ -1376,10 +1451,13 @@ bench: $(BENCH_BINS)
 # run it only when the diff `make replay-check` shows is the intended
 # one, and say so in the commit.
 #
-# replay-check also runs sloth-rf (#213) beside sloth on the command
-# lines both refuse - the receiver's and the decoders' flags, --tune,
-# --ticks, --strict with a routable --data-socket - and fails unless
-# both exit 2 with the same words (tests/replay/rf_refusals.sh).
+# replay-check also runs sloth-rf (#213) beside sloth-wifi on the
+# command lines both refuse - the receiver's flags, --tune, --ticks,
+# --strict with a routable --data-socket - and fails unless both exit 2
+# with the same words; on the six decoder flags, which sloth-wifi
+# refuses with its one guidance line and sloth-rf takes (#216); and on
+# `sloth`, which must be a symlink that answers as sloth-wifi does
+# (tests/replay/rf_refusals.sh).
 #
 # --refresh-ms 100 only shortens the wait between ticks. The normalised
 # output was checked identical at 100 and 1000 ms before this was set.
@@ -1398,7 +1476,7 @@ $(REPLAY_GEN): $(REPLAY_GEN_SRCS) src/pcap_format.h tests/frame_build.h
 	$(CC) $(TEST_CFLAGS) $(TEST_INCS) -o $@ $(filter %.c,$^)
 
 .PHONY: replay-run replay-check replay-golden
-replay-run: $(TARGET) $(REPLAY_GEN)
+replay-run: $(TARGET) $(TARGET_ALIAS) $(REPLAY_GEN)
 	rm -rf $(REPLAY_RUN)
 	mkdir -p $(REPLAY_RUN)
 	$(REPLAY_GEN) $(REPLAY_RUN)
@@ -1434,7 +1512,7 @@ replay-check: replay-run $(RF_TARGET)
 	@./$(TARGET) --headless --ticks 1 --no-privdrop --bt-capture $(REPLAY_RUN) >/dev/null 2>&1; \
 	  rc=$$?; if [ $$rc -ne 2 ]; then \
 	    echo "replay-check: --bt-capture DIR exited $$rc, want 2 (not a file or FIFO)" >&2; exit 1; fi
-	@sh tests/replay/rf_refusals.sh ./$(TARGET) ./$(RF_TARGET)
+	@sh tests/replay/rf_refusals.sh ./$(TARGET) ./$(RF_TARGET) ./$(TARGET_ALIAS)
 	@echo "replay-check: $$(wc -l < $(REPLAY_GOLDEN)) records match $(REPLAY_GOLDEN)"
 
 replay-golden: replay-run
@@ -1741,7 +1819,7 @@ mutate:
 # sources, so a tree upgraded across that change does not keep them.
 clean:
 	rm -rf build
-	rm -f $(TARGET) $(TEST_BIN) $(NOFLAGS_BIN) research_ingest sloth-research-mcp
+	rm -f $(TARGET) $(TARGET_ALIAS) $(TEST_BIN) $(NOFLAGS_BIN) research_ingest sloth-research-mcp
 	rm -f slothweb slothweb_test slothweb-mcp sloth-ble-scan sloth-sdrsweep sloth-va
 	rm -f sloth-rf
 	rm -f sloth_test_pcap   # the pre-#116 capture-path binary
@@ -1834,12 +1912,43 @@ $(STAMPS): FORCE
 # The units are written for PREFIX=/usr/local; a different prefix is
 # substituted at install time so the text in packaging/ stays the one
 # tests/test_unit_file.c scans.
+# Upgrade safety (#216). sloth-wifi refuses the six decoder flags, so a
+# host whose /etc/default/sloth still carries one has a sensor that will
+# not start after this build is installed. install-service never
+# rewrites that file (see above), so it says so instead, twice: before
+# the summary and as the last thing printed, where a scrolled terminal
+# still shows it. Only uncommented lines count; the shipped file names
+# the flags in its comments. Never fatal: the units are installed either
+# way, and the fix is the operator's one command.
+RF_MOVED_FLAGS_RE = --(adsb|aprs|aprs-freq|aprs-silent-hours|rtl433|victron)([[:space:]=]|$$)
+define warn_rf_flags_in_default
+f=$(DESTDIR)$(DEFAULTDIR)/sloth; \
+	 [ ! -f "$$f" ] || ! grep -v '^[[:space:]]*[#]' "$$f" | grep -Eq -e '$(RF_MOVED_FLAGS_RE)' || { \
+	   echo ""; \
+	   echo "  ************************************************************************"; \
+	   echo "  WARNING: $$f still passes an SDR decoder flag:"; \
+	   grep -v '^[[:space:]]*[#]' "$$f" | grep -Eo -e '$(RF_MOVED_FLAGS_RE)' | sed -e 's/[[:space:]=]$$//' | sort -u | sed 's/^/      /'; \
+	   echo "  sloth-wifi REFUSES these (exit 2): sloth-sensor.service WILL NOT START"; \
+	   echo "  with this file. They are sloth-rf's now. Before restarting the sensor:"; \
+	   echo "      sloth-migrate-rf            (dry run: shows what it would move)"; \
+	   echo "      sloth-migrate-rf --apply    (moves them to $(DEFAULTDIR)/sloth-rf)"; \
+	   echo "  then the commands it prints. docs/wiki/deployment.md section 11.4"; \
+	   echo "  ************************************************************************"; \
+	   echo ""; }
+endef
+
 DESTDIR     ?=
 UNITDIR     ?= /etc/systemd/system
 SYSUSERSDIR ?= /usr/lib/sysusers.d
 DEFAULTDIR  ?= /etc/default
 WEB_UNIT_FLAGS = sed -n '/^ExecStart=/,/[^\\]$$/p' packaging/systemd/slothweb.service | grep -o -e '--[a-z][a-z0-9-]*'
 
+# The Wi-Fi daemon is installed as sloth-wifi, and `sloth` beside it is
+# a relative symlink to it (#216; it stays, owner ruling 2026-11-15):
+# `ln -sfn` so a pre-cutover /usr/local/bin/sloth, a regular file and
+# the old binary, is replaced by the link and not left running under
+# the old name. Anything that executes or names /usr/local/bin/sloth
+# keeps working; sloth-sensor.service names sloth-wifi.
 install: $(TARGET) $(BLE_SCAN_BIN) $(SDRSWEEP_BIN) $(VA_BIN)
 	@[ -x slothweb ] || { echo "install: no ./slothweb; run 'make web' first (as yourself, not under sudo)" >&2; exit 1; }
 	@new=$$(find web/src web/ui web/tools web/data $(WEB_RECIPES_MD) Makefile -type f -newer slothweb 2>/dev/null | head -n 1); \
@@ -1848,6 +1957,7 @@ install: $(TARGET) $(BLE_SCAN_BIN) $(SDRSWEEP_BIN) $(VA_BIN)
 	    echo "install: ./slothweb does not know $$f, which packaging/systemd/slothweb.service passes; slothweb.service would not start. Nothing was installed (this tree's unit is ahead of its slothweb)" >&2; exit 1; }; done
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/sbin $(DESTDIR)$(PREFIX)/share/sloth
 	install -m 755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET)
+	ln -sfn $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET_ALIAS)
 	install -m 755 slothweb $(DESTDIR)$(PREFIX)/bin/slothweb
 	install -m 755 packaging/bin/sloth-monitor-up $(DESTDIR)$(PREFIX)/sbin/sloth-monitor-up
 	[ ! -x sloth-rf ] || install -m 755 sloth-rf $(DESTDIR)$(PREFIX)/bin/sloth-rf
@@ -1910,6 +2020,7 @@ install-service:
 	    install -m 644 packaging/default/sloth-rf $(DESTDIR)$(DEFAULTDIR)/sloth-rf
 	install -D -m 644 packaging/systemd/sloth-rf.service.d/gps.conf \
 	    $(DESTDIR)$(PREFIX)/share/sloth/sloth-rf-gps.conf
+	@$(warn_rf_flags_in_default)
 	@echo "installed units and sysusers fragment; /etc/default/sloth{,web} only where absent; next:"
 	@echo "  systemd-sysusers && systemctl daemon-reload && systemctl enable --now sloth-sensor"
 	@echo "  systemctl enable --now slothweb   (reads /etc/default/slothweb; loopback by default)"
@@ -1929,10 +2040,13 @@ install-service:
 	    echo "  sloth-rf.service was NOT installed: no $(DESTDIR)$(PREFIX)/bin/sloth-rf ('sudo make install' first)"
 	@echo "  sloth-rf.service, where installed, is not enabled, but slothweb.service Wants= it: starting"
 	@echo "  slothweb starts sloth-rf ('systemctl mask sloth-rf' keeps it off). slothweb now reads sloth-rf's"
-	@echo "  socket and database for the ADS-B, APRS, rtl_433 and GNSS pages. A host whose /etc/default/sloth"
-	@echo "  still has --adsb, --aprs or --rtl433 moves them now: sloth-migrate-rf (dry run), then"
-	@echo "  sloth-migrate-rf --apply and the commands it prints: docs/wiki/deployment.md §11.4"
+	@echo "  socket and database for the ADS-B, APRS, rtl_433, Victron and GNSS pages. sloth-sensor.service"
+	@echo "  runs $(PREFIX)/bin/sloth-wifi, which REFUSES --adsb, --aprs, --aprs-freq, --aprs-silent-hours,"
+	@echo "  --rtl433 and --victron (exit 2): they are sloth-rf's. A host whose /etc/default/sloth has one"
+	@echo "  moves it before restarting the sensor: sloth-migrate-rf (dry run), then sloth-migrate-rf --apply"
+	@echo "  and the commands it prints: docs/wiki/deployment.md §11.4"
 	@echo "  (migration from a build-tree unit: docs/wiki/deployment.md)"
+	@$(warn_rf_flags_in_default)
 
 # ── Deploy tooling test (#153) ───────────────────────────────────────────────
 # packaging/bin/sloth-migrate-sensor against a scratch root with stub

@@ -10,11 +10,17 @@ type: reference
 and/or a read-only stream socket (`--data-socket SPEC`). Same records,
 same encoding, line-delimited by `\n`. This page is the contract
 downstream consumers (SIEMs, the planned iOS dashboard, ad-hoc
-scripts) code against.
+scripts) code against. **Two streams since `2.0.0`** (#216,
+[ADR 0010](adr/0010-wifi-rf-daemons.md)): `sloth-wifi` (alias `sloth`)
+writes the capture's, the monitor radio's and BLE's records, and
+`sloth-rf` writes the SDR decoders' and the GNSS records, each to its
+own file and socket under the one contract version. Which record is
+whose, and what a `1.x` consumer has to change, is *Versioning* §
+"1.x to 2.0.0".
 
 **Sources**: `src/jsonl.c`, `src/jsonl_core.c`, `src/jsonl_rf.c`, `src/jsonl_internal.h`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/sys_status.c`, `src/dns_wire.c`.
 
-**Last updated**: 2026-11-15 (`jsonl_version` `1.10.0`, [[victron]]: `victron_device` gains `services` (the newest GATT session's service UUIDs, only when it listed some) and `values_src` (`readout` or `gatt`, the path of the newest values), both signed; a `victron` `source_status` row in both daemons' streams (`sloth` 9 rows, sloth-rf 5); no existing field changed), 2026-11-15 (#213 review: the `beacon_recall_*` rows say they are `sloth`'s only; sloth-rf's `sys_status` omits the block), 2026-11-15 (`jsonl_version` `1.9.0`, #213: `daemon` appended to `sensor_health`, `"wifi"` from `sloth` and `"rf"` from sloth-rf, after the last block and before `db_max_mb`; outside the change-only signature; what sloth-rf's `sensor_health`, `source_status` and `sys_status` carry and leave out; this bump also carries the `victron_*` fields and `victron_device`, pending until now. No existing field changed), 2026-11-15 ([[victron]]: the change-only `victron_device` record from `--victron`, sloth-va's file; the `victron_*` block on `sensor_health` after the `rtl433_*` block and before `db_max_mb`, only with `--victron`; the `sensor` kind `victron`; the `MINOR` bump pending, see Versioning; no existing field changed), 2026-11-14 (`jsonl_version` `1.8.0`, #208 slice 1, [[rtl433]]: the change-only `rtl433_device` record, one sub-GHz device the `--rtl433` rtl_433 event log fed, keyed `(model, id)`; the `rtl433_*` block appended to `sensor_health` with a per-reason reject breakout, present only with `--rtl433`, after the `aprs_*` fields and before `db_max_mb`; `evict_rtl433` appended to the eviction breakout; the `sensor` kind `rtl433` and a `source_status` row of that name. This bump also carries #204's pending `aprs_*` fields. No existing field changed), 2026-11-13 (#204: `aprs_region`, `aprs_region_hz`, `aprs_freq_hz`, `aprs_freq_mismatch`, `aprs_silent`, `aprs_silent_after_s` and `aprs_quiet_since` appended to `sensor_health` with `--aprs`, before `db_max_mb`; the region and its channel only, never a coordinate; `aprs_region`, the mismatch and the silent flag signed; the `MINOR` bump is pending, see Versioning), 2026-11-12 (`jsonl_version` `1.7.0`: `db_max_mb` on `sensor_health`, before `jsonl_version`: sloth's `db.max_mb` in MiB, 0 unlimited, -1 with no database open; in the change-only signature; slothweb draws it as the limit on sloth.db's size), 2026-11-12 (`jsonl_version` `1.7.0`: the `twin193_*` counts appended to `sensor_health` before `jsonl_version`, #193's field data on how often a deauth flood meets a late locally administered same-SSID copy the twin-chain rule leaves unnamed; a measurement, read by no rule; outside the change-only signature), 2026-11-12 (`jsonl_version` `1.7.0`, #172's follow-up: `harvest_cluster_id` appended to `eapol`, the harvest tracker's row the message was counted in, 0 for none; `cluster_id` and `qevict` appended to `harvest_station` and `harvest_chain`, both signed; `harvest_posture` appended to `beacon`, absent until the BSSID was heard handing out the PMKID KDE in M1; no existing field changed), 2026-11-12 (`jsonl_version` `1.6.0`: `probe_lat` appended to `beacon`, #187 S3's probe-response latency per BSSID — an observation, not used in any verdict, no cited threshold; absent until measured; `beacon` has no change-only signature so it signs nothing; and `evict_probe_latency` appended to `sensor_health`), 2026-11-12 (`jsonl_version` `1.5.0`: the `karma_suspect` record's `tool` and the `KARMA_AP` detail's attribution lose the `/low` `/med` `/high` confidence word, #151's one-vocabulary mapping; a `corroborated` `hw_verdict` now arrives on a CRIT record, `suspected` still moves nothing; no field added or renamed), 2026-11-12 (`jsonl_version` `1.4.0`: `hw_verdict` and `hw_signals` on `alert` and every `alert.*` record a #151 attack-hardware verdict shaped, `KARMA_AP` only; omitted when there is none), 2026-11-12 (`jsonl_version` `1.3.0`: the `karma_suspect`, `harvest_station` and `harvest_chain` records, the evidence tables behind `KARMA_AP` / `KARMA_PROBE_FORGE` and `PMKID_HARVEST` / `HANDSHAKE_HARVEST`, change-only per row with a `gone` record when a row leaves its table; no existing record changed), 2026-11-11 (`jsonl_version` `1.2.0`: the `ownership` record, the designated SSIDs and BSSIDs and the known-device roster's count; the `beacon_recall_*` fields appended to `sys_status`, a batch written at once when the memory overflows or goes quiet; the `alert.resolve` reason `recovered`), 2026-11-11 (host status and the source inventory: the `sys_status`, `sys_sensor`, `source_status` and `receiver_hw` records, on a 60 s cadence; `jsonl_version` `1.1.0`, a MINOR bump for four added record types; no existing record changed), 2026-11-10 (#185 item 3, [ADR 0007](adr/0007-versioning.md): `jsonl_version` appended to `sensor_health` as the stream's own contract version, `1.0.0`, from `SLOTH_JSONL_VERSION`; the *Versioning* section's "no version field" replaced by the bump rule), 2026-11-09 ([[adsb]]: `beast:HOST:PORT` as `adsb_src` / `src`, readsb's address-type names as `source_type` for Beast rows, and what the `adsb_*` tallies count for a Beast stream; no field added), 2026-11-06 ([[location]]: `loc_lat`, `loc_lon`, `loc_alt_m`, `loc_src` appended to `sensor_health` while a position exists, signed on the 0.01° cell; slothweb's Radar centre), 2026-11-05 ([[aprs]]: the `aprs_packet` record, one per packet Dire Wolf decoded, the change-only `aprs_station` record, the `aprs_*` block appended to `sensor_health`, present only with `--aprs`, and the `sensor` kind `aprs`), 2026-11-05 (#26 slice 1, [[adsb]]: the change-only `adsb_aircraft` record, and the `adsb_*` block appended to `sensor_health`, present only with `--adsb`), 2026-11-03 (#173: the MGMT_FUZZ lifecycle example carries the banded detail), 2026-11-03 (#180: `evict_frag_ap_ident` appended to the `sensor_health` breakout — the FragAttacks per-BSSID AP-identity table), 2026-11-02 ([[gnss]]: the change-only `gnss_fix`, `gnss_sky` and `gnss_sat` records, and `gnss_sats_in_view`, `gnss_sats_used`, `gnss_cn0_mean`, `gnss_time_offset_ms`, `gnss_jam` appended to `sensor_health` with a `--gps` reader; on review, the used count signed as a band, the offset band with hysteresis, `jam` sticky across the TPVs gpsd omits it from, `el` / `az` absent rather than -1, and a set satellite inferred from its heartbeat lapsing), 2026-10-27 ([[location]]: the `loc` object on `alert` and every `alert.*` record of a stamped incident; the `gps_*` block in `sensor_health`, present only with `--location` or `--gps`), 2026-10-26 (`capture_linktype` and `monitor_only` in `sensor_health`, for slothweb's capture scope), 2026-10-26 (RSSI distance data point: `est_dist_m`, `est_dist_band`, `est_dist_trend`, `est_ptx_source` on `beacon`, `probe_client`, `assoc`, `device` and `ble_device`, present only with an estimate; `ble_device` signs the band only, never metres or the trend), 2026-10-26 (#170: incidents versus `--db` findings stated under *Incident lifecycle*; no record changed), 2026-10-26 (#166: `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` in `sensor_health`, present only with `--pcap-dir`), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
+**Last updated**: 2026-11-15 (`jsonl_version` `2.0.0`, #216, the cutover, the first MAJOR: `gnss_fix`, `gnss_sky`, `gnss_sat`, `adsb_aircraft`, `aprs_station`, `aprs_packet`, `rtl433_device` and `victron_device`, the `adsb_*`, `aprs_*`, `rtl433_*` and `victron_*` blocks of `sensor_health`, the `adsb`, `aprs`, `rtl433` and `victron` `source_status` rows, their `sensor` rows and the `GNSS_*` and `ADSB_EMERGENCY` alerts left the Wi-Fi daemon's stream for sloth-rf's; nothing was renamed and no value changed; the migration table is under Versioning), 2026-11-15 (`jsonl_version` `1.10.0`, [[victron]]: `victron_device` gains `services` (the newest GATT session's service UUIDs, only when it listed some) and `values_src` (`readout` or `gatt`, the path of the newest values), both signed; a `victron` `source_status` row in both daemons' streams (`sloth` 9 rows, sloth-rf 5); no existing field changed), 2026-11-15 (#213 review: the `beacon_recall_*` rows say they are `sloth`'s only; sloth-rf's `sys_status` omits the block), 2026-11-15 (`jsonl_version` `1.9.0`, #213: `daemon` appended to `sensor_health`, `"wifi"` from `sloth` and `"rf"` from sloth-rf, after the last block and before `db_max_mb`; outside the change-only signature; what sloth-rf's `sensor_health`, `source_status` and `sys_status` carry and leave out; this bump also carries the `victron_*` fields and `victron_device`, pending until now. No existing field changed), 2026-11-15 ([[victron]]: the change-only `victron_device` record from `--victron`, sloth-va's file; the `victron_*` block on `sensor_health` after the `rtl433_*` block and before `db_max_mb`, only with `--victron`; the `sensor` kind `victron`; the `MINOR` bump pending, see Versioning; no existing field changed), 2026-11-14 (`jsonl_version` `1.8.0`, #208 slice 1, [[rtl433]]: the change-only `rtl433_device` record, one sub-GHz device the `--rtl433` rtl_433 event log fed, keyed `(model, id)`; the `rtl433_*` block appended to `sensor_health` with a per-reason reject breakout, present only with `--rtl433`, after the `aprs_*` fields and before `db_max_mb`; `evict_rtl433` appended to the eviction breakout; the `sensor` kind `rtl433` and a `source_status` row of that name. This bump also carries #204's pending `aprs_*` fields. No existing field changed), 2026-11-13 (#204: `aprs_region`, `aprs_region_hz`, `aprs_freq_hz`, `aprs_freq_mismatch`, `aprs_silent`, `aprs_silent_after_s` and `aprs_quiet_since` appended to `sensor_health` with `--aprs`, before `db_max_mb`; the region and its channel only, never a coordinate; `aprs_region`, the mismatch and the silent flag signed; the `MINOR` bump is pending, see Versioning), 2026-11-12 (`jsonl_version` `1.7.0`: `db_max_mb` on `sensor_health`, before `jsonl_version`: sloth's `db.max_mb` in MiB, 0 unlimited, -1 with no database open; in the change-only signature; slothweb draws it as the limit on sloth.db's size), 2026-11-12 (`jsonl_version` `1.7.0`: the `twin193_*` counts appended to `sensor_health` before `jsonl_version`, #193's field data on how often a deauth flood meets a late locally administered same-SSID copy the twin-chain rule leaves unnamed; a measurement, read by no rule; outside the change-only signature), 2026-11-12 (`jsonl_version` `1.7.0`, #172's follow-up: `harvest_cluster_id` appended to `eapol`, the harvest tracker's row the message was counted in, 0 for none; `cluster_id` and `qevict` appended to `harvest_station` and `harvest_chain`, both signed; `harvest_posture` appended to `beacon`, absent until the BSSID was heard handing out the PMKID KDE in M1; no existing field changed), 2026-11-12 (`jsonl_version` `1.6.0`: `probe_lat` appended to `beacon`, #187 S3's probe-response latency per BSSID — an observation, not used in any verdict, no cited threshold; absent until measured; `beacon` has no change-only signature so it signs nothing; and `evict_probe_latency` appended to `sensor_health`), 2026-11-12 (`jsonl_version` `1.5.0`: the `karma_suspect` record's `tool` and the `KARMA_AP` detail's attribution lose the `/low` `/med` `/high` confidence word, #151's one-vocabulary mapping; a `corroborated` `hw_verdict` now arrives on a CRIT record, `suspected` still moves nothing; no field added or renamed), 2026-11-12 (`jsonl_version` `1.4.0`: `hw_verdict` and `hw_signals` on `alert` and every `alert.*` record a #151 attack-hardware verdict shaped, `KARMA_AP` only; omitted when there is none), 2026-11-12 (`jsonl_version` `1.3.0`: the `karma_suspect`, `harvest_station` and `harvest_chain` records, the evidence tables behind `KARMA_AP` / `KARMA_PROBE_FORGE` and `PMKID_HARVEST` / `HANDSHAKE_HARVEST`, change-only per row with a `gone` record when a row leaves its table; no existing record changed), 2026-11-11 (`jsonl_version` `1.2.0`: the `ownership` record, the designated SSIDs and BSSIDs and the known-device roster's count; the `beacon_recall_*` fields appended to `sys_status`, a batch written at once when the memory overflows or goes quiet; the `alert.resolve` reason `recovered`), 2026-11-11 (host status and the source inventory: the `sys_status`, `sys_sensor`, `source_status` and `receiver_hw` records, on a 60 s cadence; `jsonl_version` `1.1.0`, a MINOR bump for four added record types; no existing record changed), 2026-11-10 (#185 item 3, [ADR 0007](adr/0007-versioning.md): `jsonl_version` appended to `sensor_health` as the stream's own contract version, `1.0.0`, from `SLOTH_JSONL_VERSION`; the *Versioning* section's "no version field" replaced by the bump rule), 2026-11-09 ([[adsb]]: `beast:HOST:PORT` as `adsb_src` / `src`, readsb's address-type names as `source_type` for Beast rows, and what the `adsb_*` tallies count for a Beast stream; no field added), 2026-11-06 ([[location]]: `loc_lat`, `loc_lon`, `loc_alt_m`, `loc_src` appended to `sensor_health` while a position exists, signed on the 0.01° cell; slothweb's Radar centre), 2026-11-05 ([[aprs]]: the `aprs_packet` record, one per packet Dire Wolf decoded, the change-only `aprs_station` record, the `aprs_*` block appended to `sensor_health`, present only with `--aprs`, and the `sensor` kind `aprs`), 2026-11-05 (#26 slice 1, [[adsb]]: the change-only `adsb_aircraft` record, and the `adsb_*` block appended to `sensor_health`, present only with `--adsb`), 2026-11-03 (#173: the MGMT_FUZZ lifecycle example carries the banded detail), 2026-11-03 (#180: `evict_frag_ap_ident` appended to the `sensor_health` breakout — the FragAttacks per-BSSID AP-identity table), 2026-11-02 ([[gnss]]: the change-only `gnss_fix`, `gnss_sky` and `gnss_sat` records, and `gnss_sats_in_view`, `gnss_sats_used`, `gnss_cn0_mean`, `gnss_time_offset_ms`, `gnss_jam` appended to `sensor_health` with a `--gps` reader; on review, the used count signed as a band, the offset band with hysteresis, `jam` sticky across the TPVs gpsd omits it from, `el` / `az` absent rather than -1, and a set satellite inferred from its heartbeat lapsing), 2026-10-27 ([[location]]: the `loc` object on `alert` and every `alert.*` record of a stamped incident; the `gps_*` block in `sensor_health`, present only with `--location` or `--gps`), 2026-10-26 (`capture_linktype` and `monitor_only` in `sensor_health`, for slothweb's capture scope), 2026-10-26 (RSSI distance data point: `est_dist_m`, `est_dist_band`, `est_dist_trend`, `est_ptx_source` on `beacon`, `probe_client`, `assoc`, `device` and `ble_device`, present only with an estimate; `ble_device` signs the band only, never metres or the trend), 2026-10-26 (#170: incidents versus `--db` findings stated under *Incident lifecycle*; no record changed), 2026-10-26 (#166: `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` in `sensor_health`, present only with `--pcap-dir`), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
 and `drained`; the `beacon-overflow` `BEACONING` finding; IPv4-mapped
 beaconing peers keyed as IPv4), 2026-10-23 (#165 audit: a PTR `answer`
 is whole up to 63 bytes, for a PTR question only; a target that would
@@ -664,6 +670,15 @@ swap, and so duplicate, whenever the two RSSIs crossed.
 
 ## State snapshot record types
 
+**Which daemon writes which (JSONL 2.0.0).** Every record in this
+section is `sloth-wifi`'s, except: `gnss_fix`, `gnss_sky`, `gnss_sat`,
+`adsb_aircraft`, `aprs_packet`, `aprs_station`, `rtl433_device` and
+`victron_device`, which are **`sloth-rf`'s only** (emitted by
+`jsonl_emit_state_rf()`); and `sensor`, `sensor_health`, `sys_status`,
+`sys_sensor`, `receiver_hw`, `source_status`, `alert` and the
+`alert.*` lifecycle, which **both** write, each about itself. Until
+2.0.0 the one binary wrote all of them into one stream.
+
 These records carry the current contents of each view-backing table.
 **Snapshot semantics — one record per entry per poll**, emitted by
 `jsonl_emit_state_snapshots()` in the EMIT phase of `poll_tick()`. Consumers
@@ -995,6 +1010,15 @@ the 300 s heartbeat refreshes it. A consumer with no alert to read a
 `loc` stamp from (slothweb, until an alert fires) reads the position
 here.
 
+**The four decoder blocks below are in `sloth-rf`'s `sensor_health`
+only since JSONL 2.0.0** (#216). `sloth-wifi`'s record ends its
+flag-gated blocks with the position block above; it has no `adsb_*`,
+`aprs_*`, `rtl433_*` or `victron_*` member, whatever the host runs,
+and a decoder changing state is not in its change signature. Absent,
+not zero: a zero would say "a decoder that is down" about a host whose
+decoders are another daemon's. The position block (`gps_*`, `gnss_*`,
+`loc_*`) is in both daemons' records: both link the receiver.
+
 **ADS-B decoder** (2026-11-05, #26 slice 1, [[adsb]]). Appended after
 the GNSS block, present **only** with `--adsb`:
 
@@ -1052,9 +1076,9 @@ block, present **only** with `--aprs`:
 | `aprs_silent` | `1` when `aprs_state` is `live` (the log is there and readable), `aprs_silent_after_s` is non-zero, and no packet arrived for that long since `aprs_quiet_since`; else `0`. `aprs_state` stays `live`: the file is fine, the receive chain before it is not |
 | `aprs_silent_after_s` | the threshold, `--aprs-silent-hours` × 3600: `21600` (6 h) by default, `0` off |
 | `aprs_quiet_since` | when the quiet began: the newest packet's `utime`, or this run's first good read when later (the reader starts at the file's end, so a restart re-arms it); `0` before a read |
-| `daemon` | additive, JSONL 1.9.0 (2026-11-15, #213) — **which daemon wrote this record**: `"wifi"` from `sloth` (the daemon with the capture; `sloth-wifi` after cutover), `"rf"` from `sloth-rf` ([ADR 0010](adr/0010-wifi-rf-daemons.md)). The sensor is becoming two processes, each with its own stream, and both write a `sensor_health`; a consumer that reads both needs to know whose capture, whose `db_max_mb` and whose `jsonl_version` a line is about without inferring it from which members are present. A constant for the life of the process, so, like `libs` and `jsonl_version`, it is outside the change-only signature and rides every line. Placed after the last flag-gated block and before `db_max_mb`; `db_max_mb` and `jsonl_version` stay the last two. A record with no `daemon` is from a stream before 1.9.0, when there was one daemon: read it as `"wifi"`. **sloth-rf's record** carries the members a daemon with no capture has something to say in, written by the same functions as `sloth`'s (`src/jsonl_internal.h`): `evictions` and its breakout, `storage_failures` and `storage_jsonl_failures`, `tuned_count` to `libs`, the `gps_*` / `gnss_*` / `loc_*`, `adsb_*`, `aprs_*`, `rtl433_*` and `victron_*` blocks, then `daemon`, `db_max_mb`, `jsonl_version`. Every other member of this table (`capture_*`, `monitor_*`, `chan_*`, `hop_*`, `pcap_dir_*`, `storage_pcap_failures`, `storage_eapol_failures`, `scope*`, `btmon_*`, `ble_*`, `btcap_*`, `twin193_*`) is **absent** from it, not zero: a zero would say "a capture that is down" about a host whose capture is the other daemon's. Two members it answers for itself: `libs` reads `pcap: none; …` (it loads no libpcap) and `resolver_calls` is `-1`, not measured (it has no resolver) |
+| `daemon` | additive, JSONL 1.9.0 (2026-11-15, #213) — **which daemon wrote this record**: `"wifi"` from `sloth-wifi` (the daemon with the capture; `sloth` under its old name), `"rf"` from `sloth-rf` ([ADR 0010](adr/0010-wifi-rf-daemons.md)). The sensor is becoming two processes, each with its own stream, and both write a `sensor_health`; a consumer that reads both needs to know whose capture, whose `db_max_mb` and whose `jsonl_version` a line is about without inferring it from which members are present. A constant for the life of the process, so, like `libs` and `jsonl_version`, it is outside the change-only signature and rides every line. Placed after the last flag-gated block and before `db_max_mb`; `db_max_mb` and `jsonl_version` stay the last two. A record with no `daemon` is from a stream before 1.9.0, when there was one daemon: read it as `"wifi"`. **sloth-rf's record** carries the members a daemon with no capture has something to say in, written by the same functions as `sloth`'s (`src/jsonl_internal.h`): `evictions` and its breakout, `storage_failures` and `storage_jsonl_failures`, `tuned_count` to `libs`, the `gps_*` / `gnss_*` / `loc_*`, `adsb_*`, `aprs_*`, `rtl433_*` and `victron_*` blocks, then `daemon`, `db_max_mb`, `jsonl_version`. Every other member of this table (`capture_*`, `monitor_*`, `chan_*`, `hop_*`, `pcap_dir_*`, `storage_pcap_failures`, `storage_eapol_failures`, `scope*`, `btmon_*`, `ble_*`, `btcap_*`, `twin193_*`) is **absent** from it, not zero: a zero would say "a capture that is down" about a host whose capture is the other daemon's. Two members it answers for itself: `libs` reads `pcap: none; …` (it loads no libpcap) and `resolver_calls` is `-1`, not measured (it has no resolver) |
 | `db_max_mb` | additive, JSONL 1.7.0 (2026-11-12) — `--db`'s size ceiling, the `db.max_mb` knob (`--db-max-mb`), in MiB: `0` unlimited, `-1` when sloth has no database open (no `--db`, or a build without SQLite). sloth trims observation rows once `page_count × page_size` passes it and never findings. Its own member because `tuned` names a knob only when it is not the default and is cut at 256 bytes, so a consumer could not always tell the default from "not said". In the change-only signature: a tune knob moves only when the operator moves it. Placed before `jsonl_version`, which stays last. slothweb reads it as the limit it draws on sloth.db's size ([[slothweb]]) |
-| `jsonl_version` | additive, #185 item 3 — **this stream's contract version**, `MAJOR.MINOR.PATCH`, `1.10.0` today. What a consumer codes against, and not the same thing as sloth's own `SLOTH_VERSION`, which this record does not carry: a release that changes no record leaves this alone, and a record change between releases does not wait for a tag ([ADR 0007](adr/0007-versioning.md)). The last field in the record, after the flag-gated blocks above. Fixed for the life of the process, so — like `libs` — it is outside the change-only signature and rides every line: one record is enough to tell which contract wrote it, with the sensor long gone. The bump rule is under *Versioning* below |
+| `jsonl_version` | additive, #185 item 3 — **this stream's contract version**, `MAJOR.MINOR.PATCH`, `2.0.0` today, the same value from both daemons. What a consumer codes against, and not the same thing as sloth's own `SLOTH_VERSION`, which this record does not carry: a release that changes no record leaves this alone, and a record change between releases does not wait for a tag ([ADR 0007](adr/0007-versioning.md)). The last field in the record, after the flag-gated blocks above. Fixed for the life of the process, so — like `libs` — it is outside the change-only signature and rides every line: one record is enough to tell which contract wrote it, with the sensor long gone. The bump rule is under *Versioning* below |
 
 The signature takes `aprs_state`, `aprs_missing` and none/some bands of
 the read errors, bad lines, overflow and `aprs_err`; the counts and
@@ -1092,8 +1116,9 @@ with `--rtl433`:
 
 **Victron, sloth-va's file** ([[victron]], 2026-11-15, carried by
 `1.9.0`). Appended after the rtl_433 block and before `daemon` and
-`db_max_mb`, present **only** with `--victron`, in `sloth`'s record and
-sloth-rf's alike (one function, `jsonl_sh_victron()`): `victron_state` (`waiting`, `live`,
+`db_max_mb`, present **only** with `--victron`, in sloth-rf's record
+(one function, `jsonl_sh_victron()`; in the one binary's too until
+2.0.0): `victron_state` (`waiting`, `live`,
 `error`, as `rtl433_state`), `victron_src`, `victron_missing`,
 `victron_last_read`, `victron_last_rec`, `victron_devices` (address rows,
 at most 16), `victron_bytes`, `victron_lines`, `victron_records`,
@@ -1625,7 +1650,7 @@ One per batch.
 | `volts` | how many rows of class `volt` follow |
 | `undervolt` | `1` when any `inN_lcrit_alarm` reads 1, `0` when none does. On a Raspberry Pi this is the firmware's under-voltage flag (hwmon `rpi_volt`, `in0_lcrit_alarm`). **Absent** on a host with no such alarm node |
 | `power` | how many rows of class `power` follow |
-| `sources`, `sources_configured`, `sources_ok`, `sources_down` | the source rows that follow (9 from `sloth`, 5 from sloth-rf: the rows the daemon has; `victron` added in 1.10.0), and how many are configured, `ok` and `down` |
+| `sources`, `sources_configured`, `sources_ok`, `sources_down` | the source rows that follow (5 from `sloth-wifi`, 5 from sloth-rf: the rows the daemon has, `gnss` in both; 9 from the one binary before 2.0.0), and how many are configured, `ok` and `down` |
 | `receivers` | the `receiver_hw` rows that follow |
 | `beacon_recall_slots`, `beacon_recall_max` | 1.2.0, appended. **`sloth` only**: the six `beacon_recall_*` members are absent (not zero) from sloth-rf's `sys_status`, which has no beacon table to report (#213; `has_recall` in `src/sys_status.c`, set only when a capture side is registered; `tests/test_rf_loop.c`). The memory of BSSIDs the beacon table has dropped (`src/beacon_snoop.c`, "BSSIDs the table has forgotten"), which `EVIL_TWIN`'s late-arrival signal reads to tell a returning AP from a new one: slots in use (a superseded memory still holds its slot until overwritten) of its fixed size, 4096. Sampled with the system, every 10 s |
 | `beacon_recall_overflowed` | `1` once a live memory has been overwritten since sloth started (or the table was cleared); from then on "not found" no longer means "never heard". `0` otherwise |
@@ -1675,10 +1700,14 @@ device is two rows: each named sensor is listed as the kernel names it.
 ### `source_status`
 
 One per source, per batch, and one on its own when the source changes.
-`sloth` always writes all nine. sloth-rf (#213) writes its own five,
-`gnss`, `adsb`, `aprs`, `rtl433` and `victron`: the other four describe a capture
-it does not have, and a `not_configured` row for them would be a claim
-about the host that the other daemon may be contradicting.
+Each daemon writes the rows it has (JSONL 2.0.0): `sloth-wifi` writes
+`capture`, `monitor`, `btmon`, `btcap` and `gnss`; sloth-rf writes
+`gnss`, `adsb`, `aprs`, `rtl433` and `victron`. A row a daemon does not
+have is absent, never `not_configured`: that would be a claim about
+the host that the other daemon may be contradicting. `gnss` is in both,
+because both link the receiver (each reports its own reader's state).
+Until 2.0.0 the one binary wrote all nine. The names, kinds and the
+order below did not change, and a source's slot is still its id.
 
 | `name` | `kind` | Enabled by | `unit` | `count` |
 |---|---|---|---|---|
@@ -1913,8 +1942,9 @@ signature / syslog MSGID), and it does not count towards `seq` itself.
 ## Versioning
 
 - **One version field, `jsonl_version` on `sensor_health`** (#185 item
-  3, [ADR 0007](adr/0007-versioning.md)). `MAJOR.MINOR.PATCH`, `1.10.0`
-  today, from `SLOTH_JSONL_VERSION` in `include/sloth.h`. It versions
+  3, [ADR 0007](adr/0007-versioning.md)). `MAJOR.MINOR.PATCH`, `2.0.0`
+  today, from `SLOTH_JSONL_VERSION` in `include/sloth.h`, one macro for
+  both daemons. It versions
   **this contract**, not the binary: `SLOTH_VERSION` is the tree's
   semantic version and is deliberately not on this stream.
 
@@ -1924,10 +1954,11 @@ signature / syslog MSGID), and it does not count towards `seq` itself.
   |---|---|---|
   | `MINOR` | a record type or a field was added, or an optional field became present in a case where it was absent before | the slice that adds it (`agents/dark-factory.md` §4.1) |
   | `PATCH` | an emitted value was corrected, with no field added, renamed or removed | the slice that corrects it |
-  | `MAJOR` | anything non-additive | nobody's, inside this repo: an external-contract break is a stop-and-ask (§4.3), and `tests/test_jsonl.c :: test_jsonl_contract_version_is_a_major_1_semver` pins the `1` so it cannot pass quietly |
+  | `MAJOR` | anything non-additive | nobody's, inside this repo: an external-contract break is a stop-and-ask (§4.3), and `tests/test_jsonl.c :: test_jsonl_contract_version_is_a_major_2_semver` pins the `2` so it cannot pass quietly |
 
-  So a consumer pinned to the `1.x` series keeps working by
+  So a consumer pinned to a `MAJOR` series keeps working by
   construction, and `MINOR` is the only part that moves in normal work.
+  The one `MAJOR` so far is `2.0.0`, below.
   `tests/test_sensor_health.c ::
   test_schema_doc_states_the_jsonl_contract_version` fails if the macro
   moves and this page does not.
@@ -1948,13 +1979,69 @@ signature / syslog MSGID), and it does not count towards `seq` itself.
   two may still carry them, which is the only reason that reading is
   worth keeping here.
 
-  History: `1.10.0` (2026-11-15, [[victron]]) added `services` and
+  ### 1.x to 2.0.0 (2026-11-15, #216)
+
+  The sensor became two daemons ([ADR 0010](adr/0010-wifi-rf-daemons.md)),
+  and what the SDR decoders and the GNSS records put on the stream
+  left the Wi-Fi daemon's stream for sloth-rf's. That is a removal from
+  a stream a consumer may be reading, so it is the `MAJOR` the rule
+  above reserves; the owner signed it off on 2026-11-15, as
+  [ADR 0007](adr/0007-versioning.md) requires. **Nothing was renamed,
+  no value changed meaning, and no number was reassigned**: every
+  record and member below has the shape it had in `1.10.0`, and is now
+  in the other daemon's stream. Both daemons report `2.0.0`.
+
+  | What | In `1.x` | In `2.0.0` |
+  |---|---|---|
+  | `gnss_fix`, `gnss_sky`, `gnss_sat` records | `sloth`'s stream, with `--gps` | **sloth-rf's stream only**, with its `--gps`. sloth-wifi still links the receiver and writes none of them |
+  | `adsb_aircraft` record | `sloth`'s stream, with `--adsb` | **sloth-rf's stream only** |
+  | `aprs_station`, `aprs_packet` records | `sloth`'s stream, with `--aprs` | **sloth-rf's stream only** |
+  | `rtl433_device` record | `sloth`'s stream, with `--rtl433` | **sloth-rf's stream only** |
+  | `victron_device` record | `sloth`'s stream, with `--victron` | **sloth-rf's stream only** |
+  | `sensor_health`: `adsb_*`, `aprs_*` (the region, frequency and silence members included), `rtl433_*`, `victron_*` | members of the one record | members of **sloth-rf's** `sensor_health` (`"daemon":"rf"`) only; absent from sloth-wifi's |
+  | `sensor_health`: `gps_*`, `gnss_*`, `loc_*` | members of the one record | **both** daemons' records, each from its own reader (owner ruling 2026-11-15) |
+  | `sensor_health`: everything else (capture, monitor radio, hop, scope, pcap export, Bluetooth, `twin193_*`) | members of the one record | sloth-wifi's record only, as since `1.9.0` |
+  | `sensor_health.daemon` | `"wifi"` (or absent before `1.9.0`) | `"wifi"` from sloth-wifi, `"rf"` from sloth-rf; unchanged |
+  | `source_status` rows `adsb`, `aprs`, `rtl433`, `victron` | four of `sloth`'s nine rows, `not_configured` when the flag was not given | **sloth-rf's rows only**; absent from sloth-wifi's stream, never `not_configured` there |
+  | `source_status` row `gnss` | one of `sloth`'s nine | a row in **both** streams |
+  | `source_status` rows `capture`, `monitor`, `btmon`, `btcap` | four of `sloth`'s nine | sloth-wifi's rows only |
+  | `sys_status.sources` | `9` | `5` from sloth-wifi, `5` from sloth-rf: the daemon's own rows |
+  | `sensor` rows of kind `adsb`, `aprs`, `rtl433`, `victron` | `sloth`'s registry, after the radios and the receiver | **sloth-rf's registry only**, after its receiver |
+  | `sensor` row of kind `gps` | `sloth`'s registry | a row in **both** registries |
+  | `alert` / `alert.*` of `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP` | `sloth`'s stream | **sloth-rf's stream only**; sloth-wifi runs none of them |
+  | `alert` / `alert.*` of `ADSB_EMERGENCY` | `sloth`'s stream | **sloth-rf's stream only** |
+  | `alert` / `alert.*` of `SENSOR_SOURCE_DOWN` | `sloth`'s stream, for any of nine sources | each daemon's stream, for the sources it reports; `srcdown:gnss` can be in both |
+  | `alert` / `alert.*` of `SENSOR_UNDERVOLT` | `sloth`'s stream | sloth-wifi's stream only, as since sloth-rf existed |
+  | the `loc` stamp on every alert | from the one reader | on each daemon's own alerts, from its own reader |
+  | every other record | `sloth`'s stream | sloth-wifi's stream, unchanged |
+  | `ty` numbers, `sensor` kind numbers, source slots | one numbering | the same numbering in both streams; a row a daemon lacks is absent, nothing is renumbered |
+
+  **What a consumer does.** One that reads only the Wi-Fi, wired and
+  BLE records changes nothing but the `MAJOR` it accepts. One that
+  reads any row of the table's "sloth-rf's stream only" lines opens
+  sloth-rf's socket (`unix:/run/sloth-rf/sloth-rf.sock`) or file beside
+  the first and reads those there; the record is the one it already
+  parses. One that reads a `1.x` stream from a sensor that has not
+  been upgraded keeps working: such a stream still carries everything
+  in the left column, and `jsonl_version` says which it is. slothweb
+  does all three ([[slothweb]] § Two daemons, § The RF stream's
+  state): it reads `1.x` and `2.x`, says which it is reading, and with
+  a `2.x` Wi-Fi stream and no `--rf-socket` says that the RF daemon's
+  stream is not configured rather than showing empty tables.
+
+  **The sensor's side of it**: sloth-wifi refuses the six decoder flags
+  with exit 2, so a host moves them to sloth-rf at the upgrade
+  ([[deployment]] §11.4, `sloth-migrate-rf`). `tests/replay/golden.jsonl`
+  changed by exactly this: the four `not_configured` rows gone,
+  `sources` 9 to 5, and the version string.
+
+  History: `2.0.0` (2026-11-15, #216) is the table above. `1.10.0` (2026-11-15, [[victron]]) added `services` and
   `values_src` to `victron_device`, both in its signature, and a
   `source_status` row named `victron` (in `sloth`'s stream and
   sloth-rf's alike). No existing field changed. `1.9.0` (2026-11-15, #213) added `daemon` to `sensor_health`
   (`"wifi"` or `"rf"`), for the second daemon of
   [ADR 0010](adr/0010-wifi-rf-daemons.md); additive, and not the
-  `2.0.0` that ADR reserves for cutover, when records leave the Wi-Fi
+  `2.0.0` that ADR reserved for cutover, when records left the Wi-Fi
   daemon's stream. It also carries the `victron_device` record, the
   `victron_*` block and the `sensor` kind `victron`, whose bump it owns
   per the paragraph above. `1.8.0` (2026-11-14) added the `rtl433_device` record and

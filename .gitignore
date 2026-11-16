@@ -37,6 +37,9 @@ sloth-research-mcp
 /sloth-va
 # sloth-rf (#213, src/rf/), built by `make` beside sloth.
 /sloth-rf
+# sloth-wifi (#216): the Wi-Fi daemon's binary. `/sloth`, above, is a
+# symlink to it in a build tree since the cutover.
+/sloth-wifi
 
 
 # libFuzzer writes its reproducers into the working directory, so a

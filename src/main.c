@@ -51,7 +51,6 @@
 #include "views/fragattack.h"
 #include "views/ble.h"
 #include "views/gnss.h"
-#include "views/adsb.h"
 #include "coverage.h"
 #include "karma_detect.h"
 #include "eap_track.h"
@@ -131,19 +130,11 @@
 #include "capture/bt_capture.h" /* --bt-capture (#144 slice 3) */
 #include "capture/gps_reader.h" /* --gps (2026-10-27) */
 #include "gps.h"                 /* --location (2026-10-27) */
-#include "adsb.h"                /* --adsb (#26 slice 1) */
-#include "capture/adsb_reader.h"
-#include "aprs.h"                /* --aprs (2026-11-05) */
-#include "capture/aprs_reader.h"
-#include "rtl433.h"              /* --rtl433 (#208, 2026-11-14) */
-#include "capture/rtl433_reader.h"
-#include "victron.h"             /* --victron (2026-11-15) */
-#include "capture/victron_reader.h"
 #include "ble_hci.h"
 #include "capture_side.h"
 #include "daemon_start.h"
 #include "gnss_flags.h"
-#include "rf_flags.h"
+#include "rf_moved.h"
 
 static sloth_state_t g_state;
 /* Written from on_signal(), so the type is the one C99 7.14.1.1 allows a
@@ -220,8 +211,8 @@ static void chanhop_drive(sloth_state_t *s) {
 static rq_handle_t *g_research = NULL;
 
 /* One tick of the poll loop. The stages and their order are a phase
- * table (#113) the application supplies (#212): g_poll_sloth in
- * src/poll.c, every stage. This only fills in what lives in the app
+ * table (#113) the application supplies (#212): g_poll_wifi in
+ * src/poll.c. This only fills in what lives in the app
  * rather than the core library. */
 static void poll_data(sloth_state_t *s) {
     poll_ctx_t ctx;
@@ -231,7 +222,7 @@ static void poll_data(sloth_state_t *s) {
 #ifdef WITH_PCAP
     ctx.chanhop   = chanhop_drive;
 #endif
-    poll_tick(&g_poll_sloth, s, &ctx);
+    poll_tick(&g_poll_wifi, s, &ctx);
 }
 
 static void handle_filter_input(sloth_state_t *s, int key) {
@@ -340,8 +331,7 @@ static void print_usage(const char *argv0) {
             "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
             "       [--bt-monitor] [--bt-capture PATH] [--ble-rotation-hints]\n"
             "       [--location LAT,LON[,ALT]] [--gps SPEC] [--gps-allow-remote]\n"
-            "       [--gps-baud N] [--adsb SPEC] [--aprs SPEC] [--aprs-freq HZ]\n"
-            "       [--aprs-silent-hours N] [--rtl433 SPEC] [--victron SPEC]\n"
+            "       [--gps-baud N]\n"
             "       [--user NAME] [--no-privdrop]\n"
             "       [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
@@ -604,47 +594,11 @@ static void print_usage(const char *argv0) {
             "                     --strict refuses a remote gpsd regardless.\n"
             "  --gps-baud N       serial speed for --gps /dev/... (4800, 9600\n"
             "                     (default), 19200, 38400, 57600, 115200).\n"
-            "  --adsb SPEC        read a local ADS-B decoder (readsb,\n"
-            "                     dump1090-fa) that is already running:\n"
-            "                       /path/aircraft.json or file:///path\n"
-            "                         re-read about once a second, or\n"
-            "                       sbs://[HOST[:PORT]] its SBS/BaseStation\n"
-            "                         TCP output (default 127.0.0.1:30003;\n"
-            "                         loopback only; sloth sends nothing),\n"
-            "                         or beast://[HOST[:PORT]] its Beast\n"
-            "                         binary output (default 127.0.0.1:30005;\n"
-            "                         the same rules; sloth decodes Mode S).\n"
-            "                     sloth never opens or tunes the SDR.\n"
-            "                     Refused with --replay.\n"
-            "  --aprs SPEC        tail the packet log a local Dire Wolf APRS\n"
-            "                     decoder already writes (direwolf -L FILE):\n"
-            "                       /path/aprs.log or file:///path\n"
-            "                     Checked once a second, from its end at\n"
-            "                     startup; sloth never touches the radio or\n"
-            "                     Dire Wolf and uses no network. Refused\n"
-            "                     with --replay.\n"
-            "  --aprs-freq HZ     the frequency the Dire Wolf decoder is\n"
-            "                     CONFIGURED for, in Hz (144000000..148000000;\n"
-            "                     not rx_fm's hardware tune). sensor_health\n"
-            "                     flags it when it is not the APRS channel of\n"
-            "                     the region the GNSS fix is in. Needs --aprs.\n"
-            "  --aprs-silent-hours N\n"
-            "                     report the decoder silent when its log is\n"
-            "                     readable but no packet arrived for N hours\n"
-            "                     (1..168, default 6; 0 off). Needs --aprs.\n"
-            "  --rtl433 SPEC      tail the JSON event log a local rtl_433\n"
-            "                     already writes (rtl_433 -F json):\n"
-            "                       /path/events.jsonl or file:///path\n"
-            "                     Checked once a second, from its end at\n"
-            "                     startup; sloth never opens, tunes, hops or\n"
-            "                     runs the SDR and uses no network. Refused\n"
-            "                     with --replay.\n"
-            "  --victron SPEC     tail the JSONL the sloth-va helper writes\n"
-            "                     (Victron readings): /path/victron.jsonl or\n"
-            "                     file:///path. Checked once a second, from\n"
-            "                     its end at startup; sloth reads the file\n"
-            "                     only (sloth-va is what connects). Refused\n"
-            "                     with --replay.\n"
+            "  --adsb, --aprs, --aprs-freq, --aprs-silent-hours, --rtl433,\n"
+            "  --victron          not this daemon's: the SDR decoders are read\n"
+            "                     by sloth-rf (see sloth-rf --help). Refused\n"
+            "                     here with exit 2; sloth-migrate-rf moves\n"
+            "                     them out of /etc/default/sloth.\n"
             "  --ble-rotation-hints\n"
             "                     INTERNAL USE ONLY, off by default: link\n"
             "                     private BLE addresses that may be one\n"
@@ -885,13 +839,11 @@ int main(int argc, char **argv) {
     int         bt_monitor   = 0;        /* --bt-monitor (#144 slice 2) */
     const char *bt_capture   = NULL;     /* --bt-capture PATH (#144 slice 3) */
     int         ble_rotation_hints = 0;  /* --ble-rotation-hints (#156) */
-    /* --location, --gps, --gps-allow-remote, --gps-baud (2026-10-27) and
-     * --adsb (#26), --aprs, --aprs-freq, --aprs-silent-hours (#204),
-     * --rtl433 (#208), --victron (2026-11-15). The two structs and what
-     * checks them are shared with sloth-rf (#213): src/gnss_flags.h,
-     * src/rf_flags.h. */
+    /* --location, --gps, --gps-allow-remote, --gps-baud (2026-10-27).
+     * The struct and what checks it are shared with sloth-rf (#213):
+     * src/gnss_flags.h. The decoder flags are sloth-rf's alone since
+     * the cutover (#216) and are refused below (src/rf_moved.h). */
     gnss_flags_t gnss_flags = { NULL, NULL, 0, 0 };
-    rf_flags_t   rf_flags   = RF_FLAGS_INIT;
     const char *replay_arg   = NULL;     /* --replay FILE[,FILE] (#119) */
     long        max_ticks    = 0;        /* --ticks N; 0 = run until quit */
     time_t      session_start = sloth_wall();
@@ -1026,21 +978,14 @@ int main(int argc, char **argv) {
             gnss_flags.location = argv[++i];
         } else if (!strcmp(argv[i], "--gps") && i + 1 < argc) {
             gnss_flags.gps = argv[++i];
-        } else if (!strcmp(argv[i], "--adsb") && i + 1 < argc) {
-            rf_flags.adsb = argv[++i];
-        } else if (!strcmp(argv[i], "--aprs") && i + 1 < argc) {
-            rf_flags.aprs = argv[++i];
-        } else if (!strcmp(argv[i], "--rtl433") && i + 1 < argc) {
-            rf_flags.rtl433 = argv[++i];
-        } else if (!strcmp(argv[i], "--victron") && i + 1 < argc) {
-            rf_flags.victron = argv[++i];
-        } else if (!strcmp(argv[i], "--aprs-freq") && i + 1 < argc) {
-            if (rf_flag_aprs_freq(argv[++i], &rf_flags.aprs_freq) != 0)
-                return 2;
-        } else if (!strcmp(argv[i], "--aprs-silent-hours") && i + 1 < argc) {
-            if (rf_flag_aprs_silent_hours(argv[++i],
-                                          &rf_flags.aprs_silent_h) != 0)
-                return 2;
+        } else if (rf_moved_flag(argv[i])) {
+            /* With or without its value: the flag is refused, not
+             * parsed, so a truncated command line gets the guidance
+             * and not the usage text. */
+            char moved[400];
+            rf_moved_message(argv[i], moved, sizeof(moved));
+            fprintf(stderr, "%s\n", moved);
+            return 2;
         } else if (!strcmp(argv[i], "--gps-allow-remote")) {
             gnss_flags.allow_remote = 1;
         } else if (!strcmp(argv[i], "--gps-baud") && i + 1 < argc) {
@@ -1273,13 +1218,10 @@ int main(int argc, char **argv) {
         return 2;
     }
 #endif
-    /* The receiver's flags, then the decoders': --location and --gps
-     * for shape and scope (the receiver is opened just before the
-     * privilege drop), each decoder's SPEC and nothing else. Shared
+    /* The receiver's flags: --location and --gps for shape and scope
+     * (the receiver is opened just before the privilege drop). Shared
      * with sloth-rf, so the two refuse alike (#213). */
     if (gnss_flags_check(&gnss_flags, strict_lock, replay_arg != NULL) != 0)
-        return 2;
-    if (rf_flags_check(&rf_flags, replay_arg != NULL) != 0)
         return 2;
 
     char replay_paths[REPLAY_MAX_FILES][REPLAY_PATH_MAX];
@@ -1764,10 +1706,6 @@ int main(int argc, char **argv) {
     bt_capture_run();   /* after the drop: opens as the run's account */
 #endif
     gps_reader_run();   /* after the drop: gpsd is dialled from here */
-    adsb_reader_run();  /* after the drop: the file is read as the run's account */
-    aprs_reader_run();  /* after the drop: likewise */
-    rtl433_reader_run();  /* after the drop: likewise */
-    victron_reader_run(); /* after the drop: likewise */
     event_wake_init();
     updater_init(check_manifest);
     if (headless) {
@@ -1862,10 +1800,6 @@ int main(int argc, char **argv) {
 
     if (!headless) tui_cleanup();
     gps_reader_stop();
-    adsb_reader_stop();
-    aprs_reader_stop();
-    rtl433_reader_stop();
-    victron_reader_stop();
 #ifdef WITH_PCAP
     probe_stop();
     capture_stop();

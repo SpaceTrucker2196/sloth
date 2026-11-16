@@ -69,7 +69,6 @@
 #include "views/fragattack.h"
 #include "views/ble.h"
 #include "views/gnss.h"
-#include "views/adsb.h"
 
 
 /* ── Sanitised emission (#138) ───────────────────────────── *

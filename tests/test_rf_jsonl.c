@@ -90,9 +90,11 @@ static int count(const char *hay, const char *needle) {
     return n;
 }
 
-/* "wifi" from `sloth`, once, as the third member from the end: after
- * the last block and before db_max_mb and jsonl_version, which stay
- * last (tests/test_jsonl.c pins those two). */
+/* "wifi" from sloth-wifi, once, as the third member from the end:
+ * after the last block and before db_max_mb and jsonl_version, which
+ * stay last (tests/test_jsonl.c pins those two). The last block is the
+ * twin193 one since JSONL 2.0.0, with or without decoders in the
+ * state: the rtl_433 block that stood between them is sloth-rf's. */
 static void test_daemon_is_wifi_from_sloth(void) {
     TEST_STATE(s);
     seed(&s);
@@ -107,9 +109,8 @@ static void test_daemon_is_wifi_from_sloth(void) {
     if (at) ASSERT_EQ(strlen(at), strlen(tail));       /* the record ends there */
     ASSERT_EQ(count(out, "\"daemon\":"), 1);
     ASSERT(strstr(out, "\"daemon\":\"rf\"") == NULL);
-    /* Straight after the last flag-gated block. */
-    ASSERT(strstr(out, "\"rtl433_err\":\"\",\"daemon\":\"wifi\",") != NULL);
-    /* And with no decoder at all, after the block that is always there. */
+    ASSERT(strstr(out, "\"twin193_excl_any\":0,\"daemon\":\"wifi\",") != NULL);
+    /* And with no decoder in the state, the same. */
     memset(&s, 0, sizeof(s));
     sink_open();
     jsonl_emit_sensor_health(&s);
@@ -140,13 +141,101 @@ static void test_daemon_is_rf_from_sloth_rf(void) {
     capture_side_install();
 }
 
-/* The field is additive, so the stream's MINOR moved and its MAJOR did
- * not: 1.9.0 or later, below 2. */
+/* The field arrived additively in 1.9.0; the stream both daemons report
+ * is 2.x since the cutover (#216), one macro for both, so a consumer
+ * that sees "daemon" and a 2.x version knows the RF members are in the
+ * other daemon's record and not missing from this one. */
 static void test_version_moved_with_the_field(void) {
     int maj = 0, min = 0, pat = 0;
     ASSERT_EQ(sscanf(SLOTH_JSONL_VERSION, "%d.%d.%d", &maj, &min, &pat), 3);
-    ASSERT_EQ(maj, 1);
-    ASSERT_GE(min, 9);
+    ASSERT_EQ(maj, 2);
+    TEST_STATE(s);
+    seed(&s);
+    char want[64];
+    snprintf(want, sizeof(want), "\"jsonl_version\":\"%s\"}\n", SLOTH_JSONL_VERSION);
+    sink_open();
+    jsonl_emit_sensor_health(&s);
+    ASSERT(strstr(sink_read(), want) != NULL);
+    rf_profile_select();
+    sink_open();
+    jsonl_emit_sensor_health_rf(&s);
+    ASSERT(strstr(sink_read(), want) != NULL);
+    capture_side_install();
+}
+
+/* sloth-wifi's record has none of the decoders' members (JSONL 2.0.0,
+ * #216): not the ADS-B, APRS, APRS-region, rtl_433 or Victron block,
+ * with every decoder configured and live in the state it is handed.
+ * Absent, not zero - a zero would say "a decoder that is down" about a
+ * host whose decoders are another daemon's. Each name is in sloth-rf's
+ * record of the same state, which is what makes its absence here a
+ * statement. And what stays, stays: the receiver's gps_*, gnss_* and
+ * loc_* members are in both (owner ruling 2026-11-15).
+ *
+ * Seen red (2026-11-15), every name, with the five jsonl_sh_{adsb,aprs,
+ * aprs_region,rtl433,victron}() calls put back in
+ * jsonl_emit_sensor_health(); the Makefile's check_wifi_no_rf refuses
+ * that link as well. */
+static void test_wifi_record_has_no_rf_member(void) {
+    static const char *const rf_only[] = {
+        "\"adsb_state\":", "\"adsb_src\":", "\"adsb_aircraft\":",
+        "\"adsb_messages\":", "\"adsb_err\":",
+        "\"aprs_state\":", "\"aprs_src\":", "\"aprs_packets\":",
+        "\"aprs_err\":", "\"aprs_region\":", "\"aprs_freq_hz\":",
+        "\"aprs_silent\":",
+        "\"rtl433_state\":", "\"rtl433_src\":", "\"rtl433_msgs\":",
+        "\"rtl433_err\":",
+        "\"victron_state\":", "\"victron_src\":", "\"victron_err\":",
+    };
+    static const char *const both[] = {
+        "\"gps_state\":", "\"gps_src\":", "\"gps_sats\":",
+        "\"gnss_sats_in_view\":", "\"loc_lat\":", "\"loc_lon\":",
+        "\"loc_src\":",
+    };
+    TEST_STATE(s);
+    seed(&s);
+    s.victron.configured = 1;
+    s.victron.state = VICTRON_LIVE;
+    snprintf(s.victron.src, sizeof(s.victron.src), "file:/run/test/victron.jsonl");
+    rf_profile_select();
+    sink_open();
+    jsonl_emit_sensor_health_rf(&s);
+    static char rf[32768];
+    snprintf(rf, sizeof(rf), "%s", sink_read());
+
+    capture_side_install();
+    sink_open();
+    jsonl_emit_sensor_health(&s);
+    const char *wifi = sink_read();
+    ASSERT(strstr(wifi, "\"type\":\"sensor_health\"") != NULL);
+    for (size_t i = 0; i < sizeof(rf_only) / sizeof(rf_only[0]); i++) {
+        if (strstr(wifi, rf_only[i]))
+            fprintf(stderr, "    sloth-wifi's sensor_health has %s\n", rf_only[i]);
+        ASSERT(strstr(wifi, rf_only[i]) == NULL);
+        if (!strstr(rf, rf_only[i]))
+            fprintf(stderr, "    sloth-rf's sensor_health has no %s to compare\n",
+                    rf_only[i]);
+        ASSERT(strstr(rf, rf_only[i]) != NULL);
+    }
+    /* No member of any decoder family, whatever its name. */
+    ASSERT(strstr(wifi, "\"adsb_") == NULL);
+    ASSERT(strstr(wifi, "\"aprs_") == NULL);
+    ASSERT(strstr(wifi, "\"rtl433_") == NULL);
+    ASSERT(strstr(wifi, "\"victron_") == NULL);
+    for (size_t i = 0; i < sizeof(both) / sizeof(both[0]); i++) {
+        if (!strstr(wifi, both[i]))
+            fprintf(stderr, "    sloth-wifi's sensor_health lost %s\n", both[i]);
+        ASSERT(strstr(wifi, both[i]) != NULL);
+        ASSERT(strstr(rf, both[i]) != NULL);
+    }
+    /* A decoder changing state is not this daemon's news: no line. */
+    sink_open();
+    jsonl_emit_sensor_health(&s);
+    s.adsb.state = ADSB_ERROR;
+    s.aprs.state = APRS_ERROR;
+    s.rtl433.state = RTL433_ERROR;
+    jsonl_emit_sensor_health(&s);
+    ASSERT_EQ(count(sink_read(), "\"type\":\"sensor_health\""), 1);
 }
 
 /* sloth-rf's record has none of the capture's members: not the IP
@@ -209,7 +298,7 @@ static int slice(const char *text, const char *from, const char *to,
 }
 
 /* What the two records share is the same text: each shared block of
- * `sloth`'s record, cut out by its first and following member, is in
+ * sloth-wifi's record, cut out by its first and following member, is in
  * sloth-rf's record byte for byte. One function writes each block, and
  * this is what holds that a second copy has not grown beside it. */
 static void test_shared_blocks_are_the_same_text(void) {
@@ -229,10 +318,9 @@ static void test_shared_blocks_are_the_same_text(void) {
         { "\"evictions\":",        ",\"pcap_dir_free_mb\":" },
         /* tuned knobs, the socket, parse faults */
         { "\"tuned_count\":",      ",\"rss_kb\":" },
-        /* the receiver, the position, ADS-B and APRS */
+        /* the receiver and the position: the one flag-gated block both
+         * write since JSONL 2.0.0 (the decoders' are sloth-rf's alone) */
         { "\"gps_state\":",        ",\"twin193_since\":" },
-        /* the APRS region and rtl_433 */
-        { "\"aprs_region\":",      ",\"daemon\":" },
         /* the tail after the daemon's own word */
         { "\"db_max_mb\":",        "\n" },
     };
@@ -368,6 +456,7 @@ static void test_rf_emitters_without_a_sink(void) {
 void run_rf_jsonl_tests(void) {
     TEST_SUITE("sloth-rf: sensor_health and the daemon field (#213)");
     RUN_TEST(test_daemon_is_wifi_from_sloth);
+    RUN_TEST(test_wifi_record_has_no_rf_member);
     RUN_TEST(test_daemon_is_rf_from_sloth_rf);
     RUN_TEST(test_version_moved_with_the_field);
     RUN_TEST(test_rf_record_has_no_capture_member);

@@ -17,6 +17,7 @@
 #include "sensors.h"
 #include "sensor_health.h"
 #include "sloth_clock.h"
+#include "rf_profile.h"
 
 /* --rtl433 (#208, 2026-11-14).
  *
@@ -885,17 +886,21 @@ static void test_sensor_registry_rtl433(void) {
     g_wall = 1793930000; g_mono = 1000000;
     sloth_clock_test_set(t_mono, t_wall);
     rtl433_reset();
+    /* The decoders are sloth-rf's since the cutover (#216): its table,
+     * with the services in its shape. The harness puts sloth-wifi's
+     * back before the next test. */
+    rf_profile_select();
     TEST_STATE(s);
     memset(&s, 0, sizeof(s));
     poll_ctx_t ctx;
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_rf, &s, &ctx);
     ASSERT_EQ(find_sensor(&s), -1);           /* nothing without --rtl433 */
 
     rtl433_set_source("file:/var/lib/rtl_433/events.jsonl");
     rtl433_note_missing();
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_rf, &s, &ctx);
     int k = find_sensor(&s);
     ASSERT(k >= 0);
     if (k < 0) { sloth_clock_test_set(NULL, NULL); return; }
@@ -911,17 +916,17 @@ static void test_sensor_registry_rtl433(void) {
     rtl433_note_read(g_wall, 0, 0, 0);
     feed(L_TPMS, g_wall);
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_rf, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ACTIVE);
     ASSERT_EQ(s.sensors[k].observed, 1u);
 
     rtl433_note_read_error("open: Permission denied");
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_rf, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ERROR);
     rtl433_note_read(g_wall, 0, 0, 0);
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_rf, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ACTIVE);
     /* SENSOR_RTL433 is appended, so every earlier kind keeps its
      * number: the kind is persisted (include/sloth.h). */
@@ -1121,7 +1126,7 @@ static void test_sensor_health_rtl433_block(void) {
     memset(&s, 0, sizeof(s));
     jl_open();
     rtl433_health_poll(&s, g_wall);
-    jsonl_emit_sensor_health(&s);
+    jsonl_emit_sensor_health_rf(&s);
     jsonl_close();
     char *b = read_all(g_jl);
     ASSERT(b != NULL);
@@ -1145,12 +1150,12 @@ static void test_sensor_health_rtl433_block(void) {
         rtl433_note_read(g_wall, 100, 0, 0);
         feed(L_TPMS, g_wall);
         rtl433_health_poll(&s, g_wall);
-        jsonl_emit_sensor_health(&s);
+        jsonl_emit_sensor_health_rf(&s);
     }
     g_wall++; g_mono += 1000;
     rtl433_note_read_error("read: Input/output error");
     rtl433_health_poll(&s, g_wall);
-    jsonl_emit_sensor_health(&s);
+    jsonl_emit_sensor_health_rf(&s);
     jsonl_close();
     b = read_all(g_jl);
     ASSERT(b != NULL);
@@ -1170,7 +1175,7 @@ static void test_sensor_health_rtl433_block(void) {
         ASSERT(strstr(b, "\"rtl433_state\":\"error\"") != NULL);
         ASSERT(strstr(b, "\"rtl433_err\":\"read: Input/output error\"") != NULL);
         /* The block sits before the tail test_jsonl.c pins. */
-        ASSERT(strstr(b, "\"rtl433_err\":\"\",\"daemon\":\"wifi\",\"db_max_mb\":") != NULL);
+        ASSERT(strstr(b, "\"rtl433_err\":\"\",\"daemon\":\"rf\",\"db_max_mb\":") != NULL);
     }
     unlink(g_jl);
     sloth_clock_test_set(NULL, NULL);

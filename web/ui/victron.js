@@ -263,7 +263,9 @@
 
   function draw(j) {
     var st = $("vc-state");
-    if (st) st.textContent = stateText(j);
+    // #216: the RF daemon's stream not configured outranks "no reader".
+    var rf = window.SlothRfStream ? window.SlothRfStream.text(j, "Victron") : "";
+    if (st) st.textContent = rf || stateText(j);
     var box = clear($("vc-cards"));
     if (!box) return;
     var ds = (j && !j.out_of_scope && j.devices) || [];

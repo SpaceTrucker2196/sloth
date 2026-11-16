@@ -85,7 +85,15 @@ ExecStartPre=+/usr/local/sbin/sloth-monitor-up ${SLOTH_IFACE}
 # radio in monitor mode on the same host (a bench attacker) could
 # otherwise be taken for the sensor. If it is missing or not in monitor
 # mode there is no fallback. It does not scope the IP stream (--iface).
-ExecStart=/usr/local/bin/sloth \
+#
+# sloth-wifi (#216, ADR 0010): the Wi-Fi, IP and BLE daemon, which this
+# unit has always run; /usr/local/bin/sloth is a symlink to it. It
+# REFUSES --adsb, --aprs, --aprs-freq, --aprs-silent-hours, --rtl433
+# and --victron (exit 2, one line naming the flag): those are
+# sloth-rf.service's. A /etc/default/sloth that still carries one stops
+# this unit from starting until sloth-migrate-rf --apply has moved it
+# (docs/wiki/deployment.md section 11.4).
+ExecStart=/usr/local/bin/sloth-wifi \
     --headless \
     --monitor-iface ${SLOTH_IFACE} \
     --hop \

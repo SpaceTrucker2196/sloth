@@ -307,6 +307,144 @@ static void test_recipe_links_and_gates_sloth_rf(void) {
     free(mk);
 }
 
+/* ── sloth-wifi's gate, the mirror (#216) ─────────────────────────────
+ *
+ * check_wifi_no_rf refuses the decoders, their records, their rules and
+ * sloth-rf's own tables in the Wi-Fi daemon. It is all patterns, so each
+ * is held to a witness: a definition in the tree today that it matches
+ * whole. A pattern with no witness fails the count; a witness renamed
+ * away fails by name. And each is held to NOT matching what sloth-wifi
+ * keeps and must go on linking: the receiver, its view, its poll
+ * stages, its health block, and this daemon's own refusal of the six
+ * flags.
+ * (Seen red with adsb_[a-z0-9_]+ dropped from the Makefile's list, and
+ * with the witness rule_gnss_jamming misspelt.) */
+static void test_wifi_gate_patterns_have_witnesses(void) {
+    char *mk = slurp("Makefile");
+    ASSERT(mk != NULL);
+    if (!mk) return;
+    static char pats[1024];
+    ASSERT(mk_var(mk, "WIFI_FORBID_DEF_PATTERNS", pats, sizeof(pats)));
+    static const struct { const char *pat, *witness; } w[] = {
+        { "adsb_[a-z0-9_]+",          "adsb_health_poll" },
+        { "aprs_[a-z0-9_]+",          "aprs_health_poll" },
+        { "rtl433_[a-z0-9_]+",        "rtl433_health_poll" },
+        { "victron_[a-z0-9_]+",       "victron_health_poll" },
+        { "rule_adsb_[a-z0-9_]+",     "rule_adsb_emergency" },
+        { "rule_gnss_[a-z0-9_]+",     "rule_gnss_jamming" },
+        { "rules_adsb_[a-z0-9_]+",    "rules_adsb_forget" },
+        { "rules_gnss_[a-z0-9_]+",    "rules_gnss_forget" },
+        { "jsonl_emit_(gnss|adsb|aprs|rtl433|victron)", "jsonl_emit_gnss" },
+        { "jsonl_sh_(adsb|aprs|rtl433|victron|rf)[a-z0-9_]*", "jsonl_sh_aprs_region" },
+        { "jsonl_emit_state_rf",      "jsonl_emit_state_rf" },
+        { "jsonl_emit_sensor_health_rf", "jsonl_emit_sensor_health_rf" },
+        { "poll_st_[a-z0-9_]+_rf",    "poll_st_health_rf" },
+        { "g_poll_rf",                "g_poll_rf" },
+        { "g_alert_table_rf",         "g_alert_table_rf" },
+        { "rf_flags_[a-z0-9_]+",      "rf_flags_check" },
+        { "rf_flag_[a-z0-9_]+",       "rf_flag_aprs_freq" },
+        { "rf_side_install",          "rf_side_install" },
+        { "sys_status_rf_fill",       "sys_status_rf_fill" },
+    };
+    static const char *const dirs[] = {
+        "src", "src/capture", "src/platform", "src/alerts", "src/views"
+    };
+    /* What sloth-wifi keeps: none of it is on the list. */
+    static const char *const kept[] = {
+        "gps_reader_run", "gps_health_poll", "gps_location_current",
+        "postrack_tick", "view_gnss_draw", "poll_st_health_gnss",
+        "poll_st_sensors_gnss", "poll_st_positions", "jsonl_sh_gps",
+        "jsonl_sh_gnss_sig", "gnss_flags_check", "rf_moved_flag",
+        "rf_moved_message", "rule_sensor_source_down", "sys_status_capture_fill",
+        "g_poll_wifi", "g_alert_table_wifi", "jsonl_emit_sensor_health",
+        "jsonl_emit_state_snapshots",
+    };
+    const size_t nw = sizeof(w) / sizeof(w[0]);
+    for (size_t i = 0; i < nw; i++) {
+        char want[96], re[128];
+        snprintf(want, sizeof(want), " %s ", w[i].pat);
+        if (!strstr(pats, want))
+            fprintf(stderr, "    WIFI_FORBID_DEF_PATTERNS lost%s\n", want);
+        ASSERT(strstr(pats, want) != NULL);
+        snprintf(re, sizeof(re), "^(%s)$", w[i].pat);
+        regex_t rx;
+        ASSERT_EQ(regcomp(&rx, re, REG_EXTENDED | REG_NOSUB), 0);
+        ASSERT_EQ(regexec(&rx, w[i].witness, 0, NULL, 0), 0);
+        for (size_t k = 0; k < sizeof(kept) / sizeof(kept[0]); k++) {
+            if (regexec(&rx, kept[k], 0, NULL, 0) == 0)
+                fprintf(stderr, "    %s matches %s, which sloth-wifi keeps\n",
+                        w[i].pat, kept[k]);
+            ASSERT(regexec(&rx, kept[k], 0, NULL, 0) != 0);
+        }
+        regfree(&rx);
+        int hit = 0;
+        for (size_t d = 0; d < sizeof(dirs) / sizeof(dirs[0]) && !hit; d++)
+            hit = defined_under(dirs[d], w[i].witness);
+        if (!hit)
+            fprintf(stderr, "    the witness %s for %s is defined nowhere "
+                            "under src/\n", w[i].witness, w[i].pat);
+        ASSERT(hit);
+    }
+    /* What it keeps is there to be kept. */
+    for (size_t k = 0; k < sizeof(kept) / sizeof(kept[0]); k++) {
+        int hit = 0;
+        for (size_t d = 0; d < sizeof(dirs) / sizeof(dirs[0]) && !hit; d++)
+            hit = defined_under(dirs[d], kept[k]);
+        if (!hit) fprintf(stderr, "    %s is defined nowhere under src/\n", kept[k]);
+        ASSERT(hit);
+    }
+    int listed = 0;
+    for (char *tok = strtok(pats, " \t"); tok; tok = strtok(NULL, " \t"))
+        listed++;
+    ASSERT_EQ(listed, (int)nw);
+    ASSERT(strstr(mk, "$(strip $(WIFI_FORBID_DEF_PATTERNS))") != NULL);
+    free(mk);
+}
+
+/* The recipe: the Wi-Fi daemon is sloth-wifi, both `nm` gates run on
+ * it, a failed one removes the binary, `sloth` is a symlink target of
+ * `all` beside it, `make clean` removes both, and `make install` puts
+ * the binary and the link in place. */
+static void test_recipe_names_and_gates_sloth_wifi(void) {
+    char *mk = slurp("Makefile");
+    ASSERT(mk != NULL);
+    if (!mk) return;
+    static char v[256];
+    ASSERT(mk_var(mk, "TARGET", v, sizeof(v)));
+    ASSERT_STR(v, " sloth-wifi ");
+    ASSERT(mk_var(mk, "TARGET_ALIAS", v, sizeof(v)));
+    ASSERT_STR(v, " sloth ");
+    const char *rule = strstr(mk, "\n$(TARGET): $(OBJS) $(LINK_STAMP)\n");
+    ASSERT(rule != NULL);
+    if (rule) {
+        const char *end = strstr(rule + 1, "\n\n");
+        const char *hci = strstr(rule, "\t$(check_no_hci_builder)\n");
+        const char *rf  = strstr(rule, "\t$(check_wifi_no_rf)\n");
+        ASSERT(end != NULL);
+        ASSERT(hci != NULL && end && hci < end);
+        ASSERT(rf != NULL && end && rf < end);
+    }
+    const char *def = strstr(mk, "\ndefine check_wifi_no_rf\n");
+    ASSERT(def != NULL);
+    if (def) {
+        const char *end = strstr(def, "\nendef\n");
+        ASSERT(end != NULL);
+        int removals = 0;
+        for (const char *p = def; end && (p = strstr(p, "rm -f $@; exit 1;")) != NULL && p < end; p++)
+            removals++;
+        ASSERT_EQ(removals, 2);
+    }
+    ASSERT(strstr(mk, "\nall: check-deps $(TARGET) $(TARGET_ALIAS)\n") != NULL);
+    ASSERT(strstr(mk, "\n$(TARGET_ALIAS): FORCE_ALIAS | $(TARGET)\n") != NULL);
+    ASSERT(strstr(mk, "\n\trm -f $(TARGET) $(TARGET_ALIAS) $(TEST_BIN)") != NULL);
+    ASSERT(strstr(mk, "\n\tinstall -m 755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET)\n"
+                      "\tln -sfn $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET_ALIAS)\n") != NULL);
+    /* The RF group is not a second link list: it is in the archive, and
+     * the gate is what keeps it out of this binary. */
+    ASSERT(strstr(mk, "\nCORE_COMMON_SRCS = $(CORE_BASE_SRCS) $(GNSS_SRCS) $(RF_SRCS)\n") != NULL);
+    free(mk);
+}
+
 /* Does `path` have an #include of `hdr`? The line number, or 0. */
 static int includes(const char *path, const char *hdr) {
     char *src = slurp(path);
@@ -390,5 +528,7 @@ void run_rf_build_tests(void) {
     RUN_TEST(test_every_forbidden_pattern_has_a_witness);
     RUN_TEST(test_the_lists_cover_each_module);
     RUN_TEST(test_recipe_links_and_gates_sloth_rf);
+    RUN_TEST(test_wifi_gate_patterns_have_witnesses);
+    RUN_TEST(test_recipe_names_and_gates_sloth_wifi);
     RUN_TEST(test_shared_files_include_no_capture_header);
 }

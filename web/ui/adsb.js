@@ -115,10 +115,13 @@
     var s = j.sensor;
     var h = clear($("adsb-head"));
     if (!s && !j.total) {
-      h.appendChild(el("span", "", "ADS-B: no decoder"));
+      // #216: with a 2.x sloth-wifi and no --rf-socket the tab is empty
+      // because the RF daemon's stream is not configured; say that.
+      var rf = window.SlothRfStream ? window.SlothRfStream.text(j, "ADS-B") : "";
+      h.appendChild(el("span", "", rf ? "ADS-B: RF daemon not configured" : "ADS-B: no decoder"));
       var e = $("adsb-empty");
       e.hidden = false;
-      e.textContent = "no adsb records yet: sloth needs --adsb /run/readsb/aircraft.json (or another readsb / dump1090-fa aircraft.json), docs/wiki/adsb.md";
+      e.textContent = rf || "no adsb records yet: sloth-rf needs --adsb /run/readsb/aircraft.json (or another readsb / dump1090-fa aircraft.json), docs/wiki/adsb.md";
       $("adsb-head2").textContent = "";
       return;
     }

@@ -21,6 +21,7 @@
 #include "capture/rtl433_reader.h"
 #include "capture/victron_reader.h"
 #include "rf_args.h"
+#include "rf_side.h"
 
 /* sloth-rf: the RF half of the sensor (#213, ADR 0010).
  *
@@ -56,9 +57,10 @@ static volatile sig_atomic_t g_quit = 0;
 static void on_signal(int sig) { (void)sig; g_quit = 1; }
 
 int main(int argc, char **argv) {
-    /* Before anything can tick: this daemon's rules. SENSOR_UNDERVOLT
-     * is not among them (src/alerts/rules_table_rf.c says why). */
-    alerts_set_table(&g_alert_table_rf);
+    /* Before anything can tick: this daemon's rules (SENSOR_UNDERVOLT
+     * is not among them, src/alerts/rules_table_rf.c says why), its
+     * four source rows and its tables (src/rf_side.h). */
+    rf_side_install();
 
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);

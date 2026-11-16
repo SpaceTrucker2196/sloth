@@ -1706,9 +1706,10 @@ rollup's existing cost per metric, not a new one.
 
 ## Two daemons
 
-The sensor is becoming two daemons (ADR 0010,
+The sensor is two daemons (ADR 0010,
 [`docs/wiki/adr/0010-wifi-rf-daemons.md`](../docs/wiki/adr/0010-wifi-rf-daemons.md)):
-`sloth` (later `sloth-wifi`: the capture, the monitor radio, BLE) and
+`sloth-wifi` (the capture, the monitor radio, BLE; `sloth` is a symlink
+to it, and "sloth" below is that daemon) and
 `sloth-rf` (GNSS records, ADS-B, APRS, rtl_433, Victron), each with its
 own data socket and its own database. One slothweb reads both, with two
 flags (#214):
@@ -1722,6 +1723,27 @@ what it answered before the flags existed. That is the configuration
 of a sensor that is still one `sloth`, and of a host that runs
 `sloth-rf` alone and points `--socket` and `--sloth-db` at it. Either
 flag can be given without the other.
+
+**Since the cutover (#216, JSONL 2.0.0) the two flags are how the RF
+tabs get any data.** `sloth-wifi` no longer reads the decoders (it
+refuses `--adsb`, `--aprs`, `--aprs-freq`, `--aprs-silent-hours`,
+`--rtl433` and `--victron`), so its stream has no ADS-B, APRS, rtl_433
+or Victron record. slothweb reads the stream's version and says which
+case it is in, as `rf_stream` on `/api/health` and as the last member
+of `/api/adsb`, `/api/aprs`, `/api/rtl433` and `/api/victron`:
+
+| `rf_stream.state` | Means |
+|---|---|
+| `rf_socket` | `--rf-socket` is given: the RF tabs are sloth-rf's stream's |
+| `sensor_stream` | one socket, a `1.x` stream (or one with no version): an unsplit, older sensor whose own stream has the decoders. Read as before |
+| `rf_daemon_on_socket` | one socket, and it is sloth-rf's (`"daemon":"rf"`) |
+| `not_configured` | one socket, a `2.x` `sloth-wifi`: **the RF daemon's stream is not configured**. The four tabs and the health view say so, instead of showing empty tables |
+| `unknown` | no `sensor_health` on `--socket` yet |
+
+`rf_stream.reading` is `"1.x"`, `"2.x"` or `"before 1.0.0"`: both
+contracts are read, and the answer says which. The remedy for
+`not_configured` is the command above: add `--rf-socket` (and
+`--rf-db` for the history).
 
 **With `--rf-socket`** a second thread reads sloth-rf's stream into a
 state of its own (`web/src/web_ingest.h` has the table). Each consumer

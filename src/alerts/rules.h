@@ -50,14 +50,18 @@ typedef struct {
  * that drop the history those rows keep between ticks (alerts_clear()
  * calls each), and the exporters, NULL for none.
  *
- *   g_alert_table_sloth  every rule - what `sloth` runs    rules_table.c
+ *   g_alert_table_wifi   the capture's, the monitor radio's and
+ *                        BLE's rules, SENSOR_UNDERVOLT and
+ *                        SENSOR_SOURCE_DOWN - sloth-wifi    rules_table.c
  *   g_alert_table_rf     the GNSS rules, ADSB_EMERGENCY and
  *                        SENSOR_SOURCE_DOWN - sloth-rf      rules_table_rf.c
  *
- * The second is a subsequence of the first; tests/test_rf_rules.c holds
- * it to that. SENSOR_UNDERVOLT is not in it: the host has one supply,
- * and on a host running both daemons only the one with the capture
- * reports it (owner ruling 2026-11-15, ADR 0010). */
+ * They share one row, rule_sensor_source_down, which judges whichever
+ * source rows its daemon reports; tests/test_rf_rules.c holds that, and
+ * that the GNSS rules and ADSB_EMERGENCY are in the second only (#216).
+ * SENSOR_UNDERVOLT is in the first only: the host has one supply, and
+ * on a host running both daemons only the one with the capture reports
+ * it (owner ruling 2026-11-15, ADR 0010). */
 typedef struct {
     const alert_rule_t        *rules;
     int                        count;
@@ -66,7 +70,7 @@ typedef struct {
     const alert_exporter_t    *exporter;
 } alert_rule_table_t;
 
-extern const alert_rule_table_t g_alert_table_sloth;
+extern const alert_rule_table_t g_alert_table_wifi;
 extern const alert_rule_table_t g_alert_table_rf;
 
 /* Select the table alerts_update() runs. Once, at start, before the

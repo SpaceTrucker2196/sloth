@@ -219,6 +219,26 @@ typedef struct {
 } sys_capture_side_t;
 void sys_status_set_capture_side(const sys_capture_side_t *c);
 
+/* ── The RF side (#216) ──────────────────────────────────────────────
+ *
+ * The same for the four decoder rows (adsb, aprs, rtl433, victron):
+ * filled by src/sys_status_rf.c, registered by the daemon that reads
+ * the decoders (src/rf_side.c, sloth-rf). sloth-wifi registers none, so
+ * its stream carries no row for them, and a 2.x consumer reads their
+ * absence as "another daemon's", never as "not configured". The GNSS
+ * row is this file's own: both daemons link the receiver and both
+ * report it (owner ruling 2026-11-15, ADR 0010).
+ *
+ * `src` has SYS_SRC_COUNT rows; the slots are the persisted ids, which
+ * is why an absent row leaves a gap and nothing is renumbered. */
+typedef void (*sys_rf_fill_fn)(const sloth_state_t *s, sys_source_t *src,
+                               uint64_t mono_ms);
+void sys_status_set_rf_side(sys_rf_fill_fn fill);
+
+/* For a row filler: when source `id`'s count last advanced, in seconds
+ * (-1 never), for a source that keeps no arrival clock of its own. */
+long long sys_status_track_age(int id, uint64_t count, uint64_t mono_ms);
+
 /* For a row filler: tie a source to the receiver sysfs says owns
  * `iface` (hw, desc, driver), and whether the last receiver scan found
  * `iface` to be a wireless netdev. */
@@ -227,6 +247,9 @@ int  sys_status_cap_wireless(const char *iface);
 
 /* src/sys_status_capture.c: the capture side's row filler. */
 void sys_status_capture_fill(const sloth_state_t *s, sys_source_t *src);
+/* src/sys_status_rf.c: the RF side's. */
+void sys_status_rf_fill(const sloth_state_t *s, sys_source_t *src,
+                        uint64_t mono_ms);
 
 const sys_snapshot_t *sys_status_get(void);
 void sys_status_reset(void);

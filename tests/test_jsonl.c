@@ -1897,23 +1897,28 @@ static void test_emit_sensor_health_reports_the_jsonl_contract_version(void) {
     ASSERT(contains(body, want));
     ASSERT(contains(body, tail));
 
-    /* Same with the two optional trailing blocks present. Both are
-     * `configured` gates, so this also moves the signature and the
-     * change-only writer emits a second line. */
+    /* Same with the optional trailing block present: the receiver's,
+     * the one flag-gated block this daemon still writes. Until JSONL
+     * 2.0.0 this half configured the ADS-B and APRS decoders; their
+     * blocks are sloth-rf's now, and configuring them here adds nothing
+     * (tests/test_rf_jsonl.c holds that). */
     open_fresh();
     s.adsb.configured = 1;
     s.aprs.configured = 1;
+    s.gps.configured = 1;
     jsonl_emit_sensor_health(&s);
     jsonl_close();
     body = slurp(tmp_path);
     ASSERT(body != NULL);
     if (!body) return;
-    ASSERT(contains(body, "\"aprs_err\":"));
+    ASSERT(contains(body, "\"gps_state\":"));
+    ASSERT(!contains(body, "\"aprs_err\":"));
+    ASSERT(!contains(body, "\"adsb_state\":"));
     ASSERT(contains(body, tail));
-    const char *aprs = strstr(body, "\"aprs_err\":");
-    const char *ver  = strstr(body, "\"jsonl_version\":");
-    ASSERT(aprs && ver);
-    if (aprs && ver) ASSERT(aprs < ver);
+    const char *gps = strstr(body, "\"gps_state\":");
+    const char *ver = strstr(body, "\"jsonl_version\":");
+    ASSERT(gps && ver);
+    if (gps && ver) ASSERT(gps < ver);
 }
 
 /* JSONL 1.7.0: --db's size ceiling, db.max_mb, on every sensor_health
@@ -1973,16 +1978,20 @@ static void test_emit_sensor_health_reports_db_max_mb(void) {
 
 /* The macro's form IS the bump rule, so it is pinned rather than
  * trusted: three numeric components and nothing after them, and MAJOR
- * 1. MINOR and PATCH are free to move — that is a slice's call under
+ * 2. MINOR and PATCH are free to move — that is a slice's call under
  * agents/dark-factory.md §4.1 — while MAJOR is a non-additive break and
  * therefore a stop-and-ask (§4.3). This assertion is what that
- * stop-and-ask has to come through. */
-static void test_jsonl_contract_version_is_a_major_1_semver(void) {
+ * stop-and-ask has to come through.
+ *
+ * It came through once: 1 -> 2 on 2026-11-15 (#216), with the owner's
+ * sign-off recorded in ADR 0010, when the decoders' records left
+ * sloth-wifi's stream for sloth-rf's. The next MAJOR needs its own. */
+static void test_jsonl_contract_version_is_a_major_2_semver(void) {
     int maj = -1, min = -1, pat = -1;
     char rest[8] = "x";
     int n = sscanf(SLOTH_JSONL_VERSION, "%d.%d.%d%7s", &maj, &min, &pat, rest);
     ASSERT_EQ(n, 3);                 /* exactly three components, no tail */
-    ASSERT_EQ(maj, 1);
+    ASSERT_EQ(maj, 2);
     ASSERT_GE(min, 0);
     ASSERT_GE(pat, 0);
 }
@@ -3033,7 +3042,7 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_sensor_health_carries_loaded_libs);
     RUN_TEST(test_emit_sensor_health_reports_the_jsonl_contract_version);
     RUN_TEST(test_emit_sensor_health_reports_db_max_mb);
-    RUN_TEST(test_jsonl_contract_version_is_a_major_1_semver);
+    RUN_TEST(test_jsonl_contract_version_is_a_major_2_semver);
     RUN_TEST(test_sensor_health_parse_faults_do_not_re_emit);
     RUN_TEST(test_emit_sensor_health_memory_fields);
     RUN_TEST(test_sensor_health_memory_does_not_re_emit);

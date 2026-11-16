@@ -49,7 +49,12 @@ static void hook(const alert_t *a, time_t now, const char *reason) {
     }
 }
 
+/* SENSOR_SOURCE_DOWN is one rule both daemons run, each over the rows
+ * it reports (#216). These cases judge rows of both kinds through it,
+ * so both sides are registered here; which daemon reports which row is
+ * tests/test_sys_status.c and tests/test_rf_rules.c. */
 static void begin(void) {
+    sys_status_set_rf_side(sys_status_rf_fill);
     g_mono = 5000000;
     g_wall = (time_t)1800000000;
     sloth_clock_test_set(pin_mono, pin_wall);

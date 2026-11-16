@@ -85,20 +85,22 @@ typedef struct {
  * table, hard-coded in src/poll.c; since the sensor is to be two daemons
  * (#211, ADR 0010) each passes its own.
  *
- *   g_poll_sloth  every stage - what `sloth` runs today    src/poll.c
- *   g_poll_wifi   g_poll_sloth without the RF stages       src/poll.c
+ *   g_poll_wifi   the capture, the monitor radio, BLE, the
+ *                 receiver, the engine and the sinks - what
+ *                 sloth-wifi runs                          src/poll.c
  *   g_poll_rf     the receiver, the decoders, the engine
  *                 and the sinks; no capture stage - what
  *                 sloth-rf runs (#213)                     src/poll_rf.c
  *
- * The first is the union of the other two, in the order the one table
- * had, and tests/test_poll.c holds all three to that. */
+ * Until the cutover (#216) a third, g_poll_sloth, was their union and
+ * what the one binary ran. The two share the GNSS stages, health_host,
+ * alerts, positions and db, and nothing else; tests/test_poll.c holds
+ * each table's stages by name and the shared ones to one function. */
 typedef struct {
     const poll_stage_t *stages;
     int                 count;
 } poll_table_t;
 
-extern const poll_table_t g_poll_sloth;
 extern const poll_table_t g_poll_wifi;
 extern const poll_table_t g_poll_rf;
 

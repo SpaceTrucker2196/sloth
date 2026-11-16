@@ -16,6 +16,7 @@
 #include "poll.h"
 #include "sensors.h"
 #include "sloth_clock.h"
+#include "rf_profile.h"
 
 /* --aprs (2026-11-05).
  *
@@ -610,17 +611,21 @@ static void test_sensor_registry_aprs(void) {
     g_wall = 1793930000; g_mono = 1000000;
     sloth_clock_test_set(t_mono, t_wall);
     aprs_reset();
+    /* The decoders are sloth-rf's since the cutover (#216): its table,
+     * with the services in its shape. The harness puts sloth-wifi's
+     * back before the next test. */
+    rf_profile_select();
     TEST_STATE(s);
     memset(&s, 0, sizeof(s));
     poll_ctx_t ctx;
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_rf, &s, &ctx);
     ASSERT_EQ(find_sensor(&s), -1);           /* nothing without --aprs */
 
     aprs_set_source("file:/var/lib/direwolf/aprs.log");
     aprs_note_missing();
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_rf, &s, &ctx);
     int k = find_sensor(&s);
     ASSERT(k >= 0);
     if (k < 0) { sloth_clock_test_set(NULL, NULL); return; }
@@ -631,17 +636,17 @@ static void test_sensor_registry_aprs(void) {
     aprs_note_read(g_wall, 0, 0, 0);
     feed(L_FIXED, g_mono);
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_rf, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ACTIVE);
     ASSERT_EQ(s.sensors[k].observed, 1u);
 
     aprs_note_read_error("open: Permission denied");
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_rf, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ERROR);
     aprs_note_read(g_wall, 0, 0, 0);
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_rf, &s, &ctx);
     ASSERT_EQ(s.sensors[k].state, SENSOR_STATE_ACTIVE);
     sloth_clock_test_set(NULL, NULL);
     aprs_reset();
@@ -769,7 +774,7 @@ static void test_sensor_health_aprs_block(void) {
     memset(&s, 0, sizeof(s));
     jl_open();
     aprs_health_poll(&s, g_wall, g_mono);
-    jsonl_emit_sensor_health(&s);
+    jsonl_emit_sensor_health_rf(&s);
     jsonl_close();
     char *b = read_all(g_jl);
     ASSERT(b != NULL);
@@ -786,12 +791,12 @@ static void test_sensor_health_aprs_block(void) {
         aprs_note_read(g_wall, 100, 0, 0);
         feed(L_FIXED, g_mono);
         aprs_health_poll(&s, g_wall, g_mono);
-        jsonl_emit_sensor_health(&s);
+        jsonl_emit_sensor_health_rf(&s);
     }
     g_wall++; g_mono += 1000;
     aprs_note_read_error("read: Input/output error");
     aprs_health_poll(&s, g_wall, g_mono);
-    jsonl_emit_sensor_health(&s);
+    jsonl_emit_sensor_health_rf(&s);
     jsonl_close();
     b = read_all(g_jl);
     ASSERT(b != NULL);
@@ -1068,7 +1073,7 @@ static void test_health_silent(void) {
 
 /* The additive sensor_health fields: region and Hz, the declared
  * frequency, the two findings, the threshold and quiet_since, after the
- * twin193 block and before db_max_mb. Never the position in them; a
+ * APRS block and before db_max_mb, in sloth-rf's record (#216). Never the position in them; a
  * silent flip is a line of its own (it is signed), quiet_since is not. */
 static void test_sensor_health_region_fields(void) {
     g_wall = 1793930000; g_mono = 3000000;
@@ -1082,12 +1087,12 @@ static void test_sensor_health_region_fields(void) {
     jl_open();
     aprs_note_read(g_wall, 0, 0, 0);
     aprs_health_poll(&s, g_wall, g_mono);
-    jsonl_emit_sensor_health(&s);
+    jsonl_emit_sensor_health_rf(&s);
     for (int i = 0; i < 3601; i++) {                     /* one quiet hour */
         g_wall++; g_mono += 1000;
         aprs_note_read(g_wall, 0, 0, 0);
         aprs_health_poll(&s, g_wall, g_mono);
-        jsonl_emit_sensor_health(&s);
+        jsonl_emit_sensor_health_rf(&s);
     }
     jsonl_close();
     char *b = read_all(g_jl);
@@ -1101,10 +1106,12 @@ static void test_sensor_health_region_fields(void) {
                          "\"aprs_freq_mismatch\":1,\"aprs_silent\":0,"
                          "\"aprs_silent_after_s\":3600,"
                          "\"aprs_quiet_since\":1793930000,"
-                     "\"daemon\":\"wifi\",\"db_max_mb\":") != NULL);
+                     "\"daemon\":\"rf\",\"db_max_mb\":") != NULL);
         ASSERT(strstr(b, "\"aprs_silent\":1,\"aprs_silent_after_s\":3600,"
                          "\"aprs_quiet_since\":1793930000,") != NULL);
-        ASSERT(strstr(b, "\"twin193_excl_any\":0,\"aprs_region\":") != NULL);
+        /* Straight after the APRS block in sloth-rf's record (it has no
+         * twin193 block between them, as the one binary's had). */
+        ASSERT(strstr(b, "\"aprs_err\":\"\",\"aprs_region\":") != NULL);
         ASSERT(count_of(b, "\"type\":\"sensor_health\"") <= 3601 / 300 + 2);
         /* The block carries no position of its own. */
         const char *rg = strstr(b, "\"aprs_region\"");

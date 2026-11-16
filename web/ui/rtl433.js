@@ -78,7 +78,9 @@
 
   function draw(j) {
     var st = $("r4-state");
-    if (st) st.textContent = stateText(j);
+    // #216: the RF daemon's stream not configured outranks "no decoder".
+    var rf = window.SlothRfStream ? window.SlothRfStream.text(j, "rtl_433") : "";
+    if (st) st.textContent = rf || stateText(j);
     table((j && !j.out_of_scope && j.devices) || []);
   }
 

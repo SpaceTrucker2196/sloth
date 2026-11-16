@@ -1,14 +1,15 @@
 /* The rule table sloth-rf selects (#213, ADR 0010): the GNSS rules,
- * ADSB_EMERGENCY and SENSOR_SOURCE_DOWN, in the order
- * src/alerts/rules_table.c runs them. Nothing else lives here.
+ * ADSB_EMERGENCY and SENSOR_SOURCE_DOWN, in the order the one table ran
+ * them before the cutover (#216). The first five are this table's
+ * alone now; sloth-wifi's (src/alerts/rules_table.c) has none of them.
+ * Nothing else lives here.
  *
  * SENSOR_UNDERVOLT is absent on purpose. It reports the host's supply,
  * not a source, and a host running both daemons would report one
  * brown-out twice; the owner ruled on 2026-11-15 that the daemon with
  * the capture reports it and this one does not. tests/test_rf_rules.c
- * holds the absence, and holds this table to being a subsequence of
- * the full one, so a rule added here without being added there, or
- * reordered here, is a red suite.
+ * holds the absence, this table's rows and their order by name, and
+ * that the only row the two tables share is rule_sensor_source_down.
  *
  * No exporter: both of them write captured frames, and this daemon
  * captures none. That is also what keeps src/alert_pcap.c and

@@ -40,7 +40,27 @@ references: the Dire Wolf User Guide ("Logging") and `src/log.c`
 (APRS101.pdf) for the data type indicators (ch. 5), objects and items
 (ch. 11) and the symbol tables (ch. 20, appendix 2).
 
-**Last updated**: 2026-11-13 (the positions panel as an ATC-style radar scope centred on the sensor); 2026-11-13 (#204: the APRS region and channel derived from the GNSS position, `--aprs-freq` and its mismatch, the silent decoder after `--aprs-silent-hours` (default 6), the `sensor_health` fields and the APRS tab's notices; the beta-site log sat at 0 bytes from 2026-11-11 with nothing saying so); 2026-11-06 (the Radar tab: stations and, by name, objects and items as entities of their own, kept for the `APRS for` window after their newest packet, with status, comment and a moving one's 24 h trail, from `/api/aprs/tracks`); 2026-11-05 (shipped: the feed, the table, JSONL, sloth.db v13, slothweb's APRS tab and history).
+**Last updated**: 2026-11-15 (#216, the cutover: `--aprs`, `--aprs-freq` and `--aprs-silent-hours` are `sloth-rf`'s alone; `sloth-wifi` refuses them); 2026-11-13 (the positions panel as an ATC-style radar scope centred on the sensor); 2026-11-13 (#204: the APRS region and channel derived from the GNSS position, `--aprs-freq` and its mismatch, the silent decoder after `--aprs-silent-hours` (default 6), the `sensor_health` fields and the APRS tab's notices; the beta-site log sat at 0 bytes from 2026-11-11 with nothing saying so); 2026-11-06 (the Radar tab: stations and, by name, objects and items as entities of their own, kept for the `APRS for` window after their newest packet, with status, comment and a moving one's 24 h trail, from `/api/aprs/tracks`); 2026-11-05 (shipped: the feed, the table, JSONL, sloth.db v13, slothweb's APRS tab and history).
+
+**Which daemon (since the cutover, #216).** The APRS decoder source is **`sloth-rf`'s**:
+`--aprs` (with `--aprs-freq` and `--aprs-silent-hours` is its flag, and the reader, the table, the `aprs_station` and `aprs_packet` records,
+the `aprs_*` block of `sensor_health`, the `aprs` row of
+`source_status` and the `aprs_stations` / `aprs_packets` tables are in its stream and its database
+(`/run/sloth-rf/sloth-rf.sock`, `/var/lib/sloth-rf/sloth-rf.db`) and
+nowhere else. `sloth-wifi` (the Wi-Fi daemon; `sloth` is a symlink to
+it) took this flag until JSONL 2.0.0 and now refuses it with exit 2 and
+a line naming `sloth-rf` and `sloth-migrate-rf` ([[deployment]] §11.4,
+[[cli-reference]] § Refused); it links none of this code. Where the
+rest of this page says "sloth" reads, keeps or writes something, the
+daemon is `sloth-rf`. slothweb's tab is fed by `--rf-socket`; against
+a 2.x `sloth-wifi` with no `--rf-socket` it says the RF daemon's
+stream is not configured ([[slothweb]] § The RF stream's state). An
+unsplit `1.x` sensor is still read as before
+([ADR 0010](adr/0010-wifi-rf-daemons.md), [[jsonl-schema]] § 1.x to
+2.0.0).
+
+The region check reads the sensor's position, which is now
+`sloth-rf`'s own reader's: give it `--gps` or `--location` too.
 
 ---
 

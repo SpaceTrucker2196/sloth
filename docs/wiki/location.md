@@ -36,7 +36,19 @@ gpsd(8) (https://gpsd.gitlab.io/gpsd/gpsd.html), the client HOWTO
 (https://gpsd.gitlab.io/gpsd/gpsd_json.html); RFC 7946 (GeoJSON); GPX
 1.1 (https://www.topografix.com/GPX/1/1/).
 
-**Last updated**: 2026-11-12 (gpsd: the `?WATCH` line asks for `"pps":true`, #182); 2026-11-06 (`loc_lat` / `loc_lon` / `loc_alt_m` / `loc_src` on `sensor_health` while a position exists; slothweb's `/api/gnss` `loc`); 2026-11-02 ([[gnss]]: the same receiver's sky, clock offset and the `[#]` view are their own page; `gps_health_poll()` now also fills `s->gnss_sky` / `s->gnss_fix`); 2026-11-02 (a fix is aged on sloth's monotonic clock, and ends when its source goes away; a GSA mode 1 no longer ends a fix; out-of-range accuracy and altitude are dropped; a parked sensor's device sample rate and the `--location` recommendation). 2026-11-02 (`loc_ts` is receipt time; a GSA never renews a position; a FIFO is treated as live; what leaves the host through slothweb and the data socket; `gps_reconnects` counts lost sessions; `gps_quality` -1 before any sentence). 2026-10-27.
+**Last updated**: 2026-11-15 (#216, the cutover: both daemons take the four flags and stamp their own alerts; both write `sensor_positions`, `sloth-wifi` alone `device_positions`); 2026-11-12 (gpsd: the `?WATCH` line asks for `"pps":true`, #182); 2026-11-06 (`loc_lat` / `loc_lon` / `loc_alt_m` / `loc_src` on `sensor_health` while a position exists; slothweb's `/api/gnss` `loc`); 2026-11-02 ([[gnss]]: the same receiver's sky, clock offset and the `[#]` view are their own page; `gps_health_poll()` now also fills `s->gnss_sky` / `s->gnss_fix`); 2026-11-02 (a fix is aged on sloth's monotonic clock, and ends when its source goes away; a GSA mode 1 no longer ends a fix; out-of-range accuracy and altitude are dropped; a parked sensor's device sample rate and the `--location` recommendation). 2026-11-02 (`loc_ts` is receipt time; a GSA never renews a position; a FIFO is treated as live; what leaves the host through slothweb and the data socket; `gps_reconnects` counts lost sessions; `gps_quality` -1 before any sentence). 2026-10-27.
+
+**Which daemon (since the cutover, #216).** Both. `sloth-wifi` (alias
+`sloth`) and `sloth-rf` each take `--location`, `--gps`,
+`--gps-allow-remote` and `--gps-baud`, each links the one reader, and
+each stamps its **own** alerts and writes the sensor's own track
+(`sensor_positions`) to its **own** database; `device_positions` is
+`sloth-wifi`'s alone, since only it builds devices. Everything this
+page says holds for either daemon. What `sloth-wifi` no longer does
+with the receiver (the `gnss_*` records and tables, the `GNSS_*`
+alerts) is on [[gnss]]. A serial receiver opens once, so two daemons
+on one serial GPS go through gpsd; `sloth-rf`'s unit has its own
+drop-in, `sloth-rf-gps.conf` ([[deployment]] §11).
 
 ## Sources of a position
 

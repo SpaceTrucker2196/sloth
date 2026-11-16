@@ -26,7 +26,7 @@ naming every place the tree and #211 disagree.
 `packaging/bin/sloth-migrate-sensor`, `tests/test_unit_file.c`,
 `tests/deploy/`, issues #211 to #217.
 
-**Last updated**: 2026-11-15 (#214, S3 landed: §11, what it did about each row of §6.2, and what it left), 2026-11-15 ([[victron]]: sloth-rf's fifth `source_status` row, `victron`), 2026-11-15 (#213 review: §10's member count measured at 49, and what the `nm` gate missed and now holds); 2026-11-15 (#213, S2 landed: §10, the seams it cut, and what of §§2 to 4 it made stale); 2026-11-15 (S0, and the notes on S1)
+**Last updated**: 2026-11-15 (#216, S5 landed, the cutover: §12, what left sloth-wifi, what stayed, the seams it cut and what of §§2 to 7 and 10 it made stale), 2026-11-15 (#214, S3 landed: §11, what it did about each row of §6.2, and what it left), 2026-11-15 ([[victron]]: sloth-rf's fifth `source_status` row, `victron`), 2026-11-15 (#213 review: §10's member count measured at 49, and what the `nm` gate missed and now holds); 2026-11-15 (#213, S2 landed: §10, the seams it cut, and what of §§2 to 4 it made stale); 2026-11-15 (S0, and the notes on S1)
 
 This page is a measurement, not a plan. It is slice S0's deliverable
 (#211) and it exists so that S1 to S6 cut along lines someone has
@@ -88,6 +88,35 @@ keeps every flag. §10 is what it cut and why. It made these stale too:
   writes its own five `source_status` rows (`victron` the fifth since
   JSONL 1.10.0) and its own sensors from
   slot 0 today; the numbering is the shared enum's.
+
+S5 (#216), the cutover, has landed: §12. It made these stale:
+
+- **Every "`sloth`" that means the Wi-Fi daemon.** The binary is
+  `sloth-wifi`; `sloth` is a symlink to it.
+- **§2.1's view column and §2.3's view and flag rows.** `src/views/adsb.c`
+  is deleted and `include/sloth_views.def` has no ADS-B row; `--adsb`,
+  `--aprs`, `--aprs-freq`, `--aprs-silent-hours`, `--rtl433` and
+  `--victron` are not parsed by `src/main.c` but refused
+  (`src/rf_moved.c`), and it starts and stops no decoder reader.
+- **§2.3's rule rows, §3's rule-table row and §10's first table row.**
+  The Wi-Fi table is `g_alert_table_wifi`, 88 rows; the four GNSS
+  rules and `rule_adsb_emergency` are in `g_alert_table_rf` only.
+- **§3's poll-loop row.** Two tables, `g_poll_wifi` and `g_poll_rf`;
+  `g_poll_sloth` is gone.
+- **§3.1 and §4.1's `src/sys_status.c` row.** `sys_status_poll()` fills
+  the GNSS row itself; the `adsb`, `aprs`, `rtl433` and `victron` rows
+  are `src/sys_status_rf.c`, registered by sloth-rf.
+- **§3's database row and §4.1's last paragraph.** `write_gnss()`,
+  `write_adsb()`, `write_aprs()` and `write_victron()` run only where
+  `db_set_rf_side()` was called; `jsonl_emit_gnss()` is not called by
+  `src/jsonl.c`.
+- **§4.3.** Nothing outside the RF group names `adsb_*`, `aprs_*`,
+  `rtl433_*` or `victron_*` functions any more; `src/views/iface.c`
+  has no `adsb` token.
+- **§7.** `ExecStart=/usr/local/bin/sloth-wifi`; the migrate tool
+  accepts `sloth` and `sloth-wifi` and reads `$ROOT$PREFIX/bin/sloth-wifi`;
+  `make install` places `sloth-wifi` and the `sloth` link.
+- **§8.** S5's row: landed.
 
 [[architecture]] has the current layout.
 
@@ -518,7 +547,7 @@ From `gh issue list`, titles as filed.
 | S2 | #213 | The `sloth-rf` binary: readers, RF rules, own JSONL socket and database. Additive. **Landed 2026-11-15; §10.** |
 | S3 | #214 | slothweb reads two daemons: `--rf-socket` and `--rf-db`. **Landed 2026-11-15; §11.** |
 | S4 | #215 | Packaging: `sloth-rf.service` and `sloth-migrate-rf`. |
-| S5 | #216 | Cutover: `sloth-wifi` rename, RF leaves the Wi-Fi daemon, JSONL 2.0.0. |
+| S5 | #216 | Cutover: `sloth-wifi` rename, RF leaves the Wi-Fi daemon, JSONL 2.0.0. **Landed 2026-11-15; §12.** |
 | S6 | #217 | Deploy both daemons: W9FJC, then beta-site. |
 
 Which section each slice cuts: S1 is §5 and the stage table and source
@@ -706,6 +735,93 @@ Left for later: the alert history's merge across two databases (the
 `web_sdb_alerts_*`, the export's `alert` lines) and sloth-rf's records
 on the ticker. Nothing is installed: the unit that passes the two
 flags is S4.
+
+---
+
+## 12. What S5 cut (#216), the cutover
+
+One binary's worth of RF left the Wi-Fi daemon. By the owner's rulings
+of 2026-11-15:
+
+| | Left `sloth-wifi` (now `sloth-rf`'s alone) | Stayed in `sloth-wifi` |
+|---|---|---|
+| Flags | `--adsb`, `--aprs`, `--aprs-freq`, `--aprs-silent-hours`, `--rtl433`, `--victron`: refused, exit 2 | `--gps`, `--gps-allow-remote`, `--gps-baud`, `--location`, and every capture flag |
+| Threads | the ADS-B, APRS, rtl_433 and Victron readers | the GNSS reader |
+| Poll stages | `health_rf`, `sensors_rf` | `health_gnss`, `sensors_gnss`, `positions`, every capture stage |
+| Records | `gnss_fix`, `gnss_sky`, `gnss_sat`, `adsb_aircraft`, `aprs_station`, `aprs_packet`, `rtl433_device`, `victron_device` | every capture record; `sensor`, `sensor_health`, `sys_status`, `source_status` about itself |
+| `sensor_health` | the `adsb_*`, `aprs_*`, `rtl433_*`, `victron_*` blocks and their part of the change signature | `gps_*`, `gnss_*`, `loc_*`, and all of the capture's |
+| `source_status` rows | `adsb`, `aprs`, `rtl433`, `victron` | `capture`, `monitor`, `btmon`, `btcap`, `gnss` |
+| Sensor registry rows | ADS-B, APRS, rtl_433, Victron | the radios, the receiver |
+| Rules | `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, `ADSB_EMERGENCY` | everything else, `SENSOR_UNDERVOLT`, and `SENSOR_SOURCE_DOWN` for its five rows |
+| Tables written | `gnss_fixes`, `gnss_sightings`, `adsb_*`, `aprs_*`, `victron_*` | `device_positions`, `sensor_positions`, every capture table |
+| Terminal | the ADS-B view (`^`), the interface strip's `adsb` token: deleted | the GNSS view (`#`), the strip's `gps` token |
+| Location | | the `loc` stamp on alerts and devices, the twin motion suppression |
+
+`sloth-rf` did not change, apart from the version string: its poll
+table, its rule table, its records and its messages are what they
+were. The same canned decoder files through the parent's `sloth-rf`
+and this one gave the same set of records (types, members and
+identities) and the same database rows, `jsonl_version` apart.
+
+**The seams.** `g_poll_wifi` and `g_alert_table_wifi` existed or
+followed directly; three shared files still named the decoders, found
+by `nm` on the archive (the members of the base group with an
+undefined symbol an RF member defines), and each takes that part as
+data now, the way §10's capture side does:
+
+| Shared object | Pulled, through | Cut |
+|---|---|---|
+| `sys_status.o` | `adsb.o`, `aprs.o`, `rtl433.o`, `victron.o` (`*_state_name()` in `fill_sources()`) | the four rows are `src/sys_status_rf.c`, registered by `sys_status_set_rf_side()`. Unregistered, unnamed: not written, not counted, not judged. `track_age()` became `sys_status_track_age()` for it |
+| `db.o` | `adsb.o` (`adsb_row_sig()`, `adsb_emergency_name()` in `write_adsb()`) | `db_set_rf_side()` hands over both functions and is also the switch for `write_gnss()`, `write_adsb()`, `write_aprs()`, `write_victron()`: sloth-wifi holds a fix and a sky and must still write no `gnss_*` row |
+| `jsonl.o` | `jsonl_rf.o` (five `jsonl_emit_*`, five `jsonl_sh_*`, `jsonl_sh_rf_sig`) | the calls are gone from `jsonl_emit_state_snapshots()` and `jsonl_emit_sensor_health()` |
+| `poll.o` | `poll_rf.o` (`poll_st_health_rf`, `poll_st_sensors_rf`) | `g_poll_sloth` deleted; `src/main.c` passes `g_poll_wifi` |
+| `rules_table.o` | `rules_gnss.o`, `rules_adsb.o` (`rule_gnss_*` and `rule_adsb_emergency`, and their `*_forget()`) | the rows are out of `g_alert_table_wifi` |
+| `iface.o`, `tui.o`, `main.o` | `adsb.o`, the ADS-B view, the readers, `rf_flags.o` | the token, the view and the flags are gone; the refusal is `src/rf_moved.c`, which names no decoder |
+
+sloth-rf hands its side over in `rf_side_install()` (`src/rf_side.c`),
+the mirror of `capture_side_install()`.
+
+**The gate.** `check_wifi_no_rf` (`Makefile`) runs `nm` on `sloth-wifi`
+and refuses any definition, file-local included, of the decoders'
+families, their rules and the receiver's, the RF records and blocks,
+and sloth-rf's stages, tables and side. Seen to fail with a call to
+`adsb_state_name()` added to `src/main.c` (it named `adsb_alt_band`,
+`adsb_doc_parse`, …: the whole member came in), and with a call to
+`rules_gnss_forget()` (it named the four `rule_gnss_*`).
+`tests/test_rf_build.c` holds each pattern to a definition and to not
+matching what sloth-wifi keeps.
+
+**Numbering.** `alert_type_t`, `sensor_kind_t` and `sys_src_id_t` did
+not change. Both daemons use one of each, the numbers are persisted,
+and a row a daemon does not have is absent. The views list lost its
+last row, so `view_t` did not move either.
+
+**Per-binary counts.** `make docs-counts` writes `views` (sloth-wifi's),
+`rules` (the kinds in the list), `rules-wifi` and `rules-rf`;
+`tests/test_docs_consistency.c :: test_counts_say_which_binary` holds
+them to the build.
+
+**Packaging.** `TARGET` is `sloth-wifi`; `sloth` is a symlink target of
+`all` and is installed beside the binary. `sloth-sensor.service` runs
+`/usr/local/bin/sloth-wifi`. `make install-service` warns when the
+host's `/etc/default/sloth` still passes a decoder flag
+([[deployment]] §11.4).
+
+**slothweb.** It reads 1.x and 2.x and says which; `rf_stream` on
+`/api/health` and the four RF tabs' answers ([[slothweb]] § The RF
+stream's state).
+
+**The stream.** `SLOTH_JSONL_VERSION` is `2.0.0` in both daemons;
+[[jsonl-schema]] § 1.x to 2.0.0 is the migration table. The replay
+golden changed by the four `not_configured` rows, `sources` 9 to 5 and
+the version.
+
+Left: S6 (#217), deploying both daemons. Two things S5 found that no
+slice names: the shared flag checks and the readers still say `sloth:`
+in sloth-rf (§10's note; held unchanged here, wants a ruling); and
+`sloth-migrate-sensor` still refuses a legacy unit that carries `--gps`
+or `--location`, which are sloth-wifi's flags (§9 item 7's gap, for
+those two).
 
 ---
 

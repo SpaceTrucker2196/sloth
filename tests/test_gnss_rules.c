@@ -6,6 +6,7 @@
 #include "gps.h"
 #include "sloth_clock.h"
 #include "tune.h"
+#include "alerts/rules.h"
 
 /*
  * The four GNSS rules (src/alerts/rules_gnss.c, 2026-11-03).
@@ -48,6 +49,9 @@ static void begin(void) {
     g_mono = 5000000;
     g_wall = (time_t)T0_WALL;
     sloth_clock_test_set(pin_mono, pin_wall);
+    /* sloth-rf's table: this rule is in no other since #216. The
+     * harness puts sloth-wifi's back before the next test. */
+    alerts_set_table(&g_alert_table_rf);
     tune_reset();
     alerts_clear();             /* also rules_gnss_forget() at g_mono */
     memset(&g_hist, 0, sizeof(g_hist));
@@ -1599,9 +1603,40 @@ static void test_toff_history_carries_what_the_rule_reads(void) {
     toff_end();
 }
 
+/* ══ the other daemon ══════════════════════════════════════════════ */
+
+/* sloth-wifi never raises a GNSS alert (#216, ADR 0010). It links the
+ * same receiver and holds the same sky and history - the state below is
+ * the collapse that opens GNSS_JAMMING WARN in the first test of this
+ * file - and under its table nothing opens, however often it is
+ * evaluated. The same state under sloth-rf's table, straight after, is
+ * the control: the collapse is there to be judged.
+ *
+ * Seen red (2026-11-15) with R(rule_gnss_jamming) put back in
+ * src/alerts/rules_table.c: GNSS_JAMMING opened under sloth-wifi's
+ * table. */
+static void test_sloth_wifi_raises_no_gnss_alert(void) {
+    begin();
+    alerts_set_table(&g_alert_table_wifi);
+    nominal_sky();
+    secs(5, 250, 10, 6, 14, -1, 3);         /* every bird down to 25 dB-Hz */
+    for (int i = 0; i < 5; i++) evaluate();
+    ASSERT_EQ(find_type(ALERT_TYPE_GNSS_JAMMING), -1);
+    ASSERT_EQ(find_type(ALERT_TYPE_GNSS_SPOOF_SUSPECT), -1);
+    ASSERT_EQ(find_type(ALERT_TYPE_GNSS_TIME_JUMP), -1);
+    ASSERT_EQ(find_type(ALERT_TYPE_GNSS_POSITION_JUMP), -1);
+    ASSERT_EQ(g_s.alert_count, 0);
+
+    alerts_set_table(&g_alert_table_rf);
+    evaluate();
+    ASSERT_GE(find_type(ALERT_TYPE_GNSS_JAMMING), 0);
+    end();
+}
+
 void run_gnss_rules_tests(void) {
     TEST_SUITE("GNSS rules: jamming, spoofing suspect, time and position jumps");
     RUN_TEST(test_jam_collapse_fires_warn);
+    RUN_TEST(test_sloth_wifi_raises_no_gnss_alert);
     RUN_TEST(test_jam_fix_lost_is_crit);
     RUN_TEST(test_jam_unknown_mode_is_not_fix_lost);
     RUN_TEST(test_jam_every_satellite_lost_fires_crit);

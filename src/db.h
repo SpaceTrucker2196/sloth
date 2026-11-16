@@ -175,6 +175,19 @@ typedef struct {
 #define DB_DEFAULT_RETAIN_DAYS 30
 #define DB_DEFAULT_MAX_MB     512
 
+/* The RF side (#216, ADR 0010): the daemon that owns the receiver's and
+ * the decoders' tables (gnss_fixes, gnss_sightings, adsb_*, aprs_*,
+ * victron_*) registers this once at start (src/rf_side.c, sloth-rf).
+ * A daemon that registers none - sloth-wifi - writes none of them,
+ * whatever its state holds; device_positions and sensor_positions are
+ * not among them and both daemons write those. The two functions are
+ * src/adsb.c's, taken as data so that src/db.c names no decoder and
+ * sloth-wifi links none. The DDL is one for both stores regardless. */
+typedef struct {
+    uint64_t    (*adsb_row_sig)(const adsb_aircraft_t *a);
+    const char *(*adsb_emergency_name)(int e);
+} db_rf_side_t;
+
 #ifdef WITH_SQLITE
 
 /* Open (creating if needed) the database at `path` and apply the
@@ -209,6 +222,8 @@ int  db_is_defensive(void);
  *
  * `now` is passed rather than read so tests are deterministic. */
 void db_tick(const sloth_state_t *s, time_t now);
+
+void db_set_rf_side(const db_rf_side_t *rf);
 
 /* Seconds between write ticks (--db-interval-secs). 0 restores the
  * default. db_tick() itself is unconditional; the poll loop uses this
@@ -357,6 +372,7 @@ static inline int  db_is_open(void)          { return 0; }
 static inline int  db_is_defensive(void)     { return 0; }
 static inline void db_tick(const sloth_state_t *s, time_t now)
                                              { (void)s; (void)now; }
+static inline void db_set_rf_side(const db_rf_side_t *rf) { (void)rf; }
 static inline void db_set_interval(int secs) { (void)secs; }
 static inline int  db_interval(void)         { return 0; }
 static inline void db_set_retain_days(int d) { (void)d; }

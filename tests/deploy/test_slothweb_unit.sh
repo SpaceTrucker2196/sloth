@@ -78,6 +78,61 @@ if svc new && [ -f "$stage/new/etc/systemd/system/slothweb.service" ] &&
    [ -f "$stage/new/etc/systemd/system/sloth-rf.service" ] &&
    [ ! -e "$stage/new/etc/systemd/system/sloth-rf.service.tmp" ]; then pass=$((pass + 1));
 else fail=$((fail + 1)); echo "  FAIL install-service beside a current slothweb and sloth-rf: $(cat "$stage/new.out")"; fi
+
+# Upgrade safety (#216). sloth-sensor.service runs sloth-wifi, which
+# refuses the six decoder flags and exits 2, so a host whose
+# /etc/default/sloth still carries one has a sensor that will not start
+# after this build. install-service never rewrites that file; it warns,
+# prominently, before the summary and again as its last lines, names the
+# flags it found and the command that moves them, and still exits 0.
+# Staged under the same scratch DESTDIR. Seen red: the warning, with the
+# $(warn_rf_flags_in_default) lines taken out of the recipe; the three
+# "no warning" cases, with the comment filter dropped (the shipped
+# file's own comments name every flag) and with the trailing
+# [[:space:]=] taken off RF_MOVED_FLAGS_RE (--adsb-extra matched).
+warned() { grep -c "WARNING: .*etc/default/sloth still passes an SDR decoder flag" "$stage/$1.out"; }
+# The shipped file, installed fresh: flags in comments only.
+if [ "$(warned none)" -eq 0 ] && ! grep -qF "WILL NOT START" "$stage/none.out"; then pass=$((pass + 1));
+else fail=$((fail + 1)); echo "  FAIL install-service warned about the shipped /etc/default/sloth: $(cat "$stage/none.out")"; fi
+# A site file from before the split.
+mkdir -p "$stage/rfargs/etc/default"
+printf '%s\n' '# site' 'SLOTH_IFACE=alfa0' \
+    'SLOTH_ARGS=--site-label attic --adsb /run/readsb/aircraft.json --aprs-freq=144390000 --rtl433 /var/lib/rtl_433/events.jsonl' \
+    > "$stage/rfargs/etc/default/sloth"
+cp "$stage/rfargs/etc/default/sloth" "$stage/rfargs.before"
+if svc rfargs; then pass=$((pass + 1));
+else fail=$((fail + 1)); echo "  FAIL install-service failed over a site file with decoder flags: $(cat "$stage/rfargs.out")"; fi
+if [ "$(warned rfargs)" -eq 2 ]; then pass=$((pass + 1));
+else fail=$((fail + 1)); echo "  FAIL the decoder-flag warning was printed $(warned rfargs) times, want 2: $(cat "$stage/rfargs.out")"; fi
+for want in "      --adsb" "      --aprs-freq" "      --rtl433" "WILL NOT START" \
+            "sloth-migrate-rf --apply" "section 11.4"; do
+    if grep -qF -e "$want" "$stage/rfargs.out"; then pass=$((pass + 1));
+    else fail=$((fail + 1)); echo "  FAIL the warning lacks '$want': $(cat "$stage/rfargs.out")"; fi
+done
+# Only the flags that are there: --aprs-freq is not --aprs.
+if grep -qxF -e "      --aprs" "$stage/rfargs.out" || grep -qF -e "      --victron" "$stage/rfargs.out"; then
+    fail=$((fail + 1)); echo "  FAIL the warning names a flag the file does not have: $(cat "$stage/rfargs.out")";
+else pass=$((pass + 1)); fi
+# The warning is the last thing printed, and the file is the site's still.
+if tail -n 2 "$stage/rfargs.out" | grep -qF '****'; then pass=$((pass + 1));
+else fail=$((fail + 1)); echo "  FAIL the warning is not at the end: $(tail -n 5 "$stage/rfargs.out")"; fi
+if cmp -s "$stage/rfargs.before" "$stage/rfargs/etc/default/sloth"; then pass=$((pass + 1));
+else fail=$((fail + 1)); echo "  FAIL install-service changed the site's /etc/default/sloth"; fi
+if [ -f "$stage/rfargs/etc/systemd/system/sloth-sensor.service" ] &&
+   grep -q '^ExecStart=/usr/local/bin/sloth-wifi ' "$stage/rfargs/etc/systemd/system/sloth-sensor.service"; then pass=$((pass + 1));
+else fail=$((fail + 1)); echo "  FAIL the sensor unit was not installed, or does not run sloth-wifi"; fi
+# Look-alikes and a commented example are not the flags.
+mkdir -p "$stage/alike/etc/default"
+printf '%s\n' '#   SLOTH_ARGS=--adsb /nowhere/example.json' '# SLOTH_ARGS=--rtl433 /nowhere/commented.json' \
+    'SLOTH_ARGS=--site-label attic --adsb-extra 1 --aprsx=2 --victronish 3 --gps gpsd://' \
+    > "$stage/alike/etc/default/sloth"
+if svc alike && [ "$(warned alike)" -eq 0 ]; then pass=$((pass + 1));
+else fail=$((fail + 1)); echo "  FAIL install-service warned about look-alike or commented flags: $(cat "$stage/alike.out")"; fi
+# A flag at the end of the line, and one by itself.
+mkdir -p "$stage/eol/etc/default"
+printf '%s\n' 'SLOTH_ARGS=--site-label attic --victron' > "$stage/eol/etc/default/sloth"
+if svc eol && [ "$(warned eol)" -eq 2 ] && grep -qxF -e "      --victron" "$stage/eol.out"; then pass=$((pass + 1));
+else fail=$((fail + 1)); echo "  FAIL a decoder flag at the end of the line was not warned about: $(cat "$stage/eol.out")"; fi
 rm -rf "$stage"
 
 # The filter itself, on a live user manager.

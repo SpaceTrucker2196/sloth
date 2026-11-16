@@ -17,10 +17,11 @@
  *                                    and the recall sample (sys_status.h)
  *   sh_set_resolver_calls_fn()       the resolver's count (sensor_health.h)
  *
- * `sloth` calls it first thing in main(), and the test binary before
+ * sloth-wifi calls it first thing in main(), and the test binary before
  * its first suite. sloth-rf does not link this file: it selects its
  * own rule table and registers nothing else, which is what "no capture"
- * means to the three services. Idempotent. */
+ * means to the three services (its own side is src/rf_side.h).
+ * Idempotent. */
 void capture_side_install(void);
 
 #endif /* SLOTH_CAPTURE_SIDE_H */

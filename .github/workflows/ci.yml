@@ -408,9 +408,11 @@ jobs:
           }
           # Both daemons (#213): sloth-rf opens the same data socket and
           # links through its own RF_LDFLAGS, a filtered copy of LDFLAGS,
-          # so its line is checked for itself. `-o sloth ` does not match
-          # `-o sloth-rf `, and the reverse.
-          for bin in sloth sloth-rf; do
+          # so its line is checked for itself. `-o sloth-wifi ` does not
+          # match `-o sloth-rf `, and the reverse. The Wi-Fi daemon is
+          # sloth-wifi since #216; `sloth` is a symlink to it and has no
+          # link line of its own.
+          for bin in sloth-wifi sloth-rf; do
             grep -E -- "-o $bin " build.log | grep -q -- '-pie\b' || {
               echo "FAIL: the $bin link command has no -pie" >&2; fail=1;
             }
@@ -426,7 +428,14 @@ jobs:
           set -e
           fail=0
 
-          for bin in sloth sloth-rf; do
+          # `sloth` is the same program under its old name (#216): a
+          # relative symlink, never a second binary that could go stale.
+          if [ ! -L sloth ] || [ "$(readlink sloth)" != sloth-wifi ]; then
+            echo "FAIL: ./sloth is not a symlink to sloth-wifi" >&2
+            fail=1
+          fi
+
+          for bin in sloth-wifi sloth-rf; do
             readelf -h "$bin" | grep -q 'Type:.*DYN' || {
               echo "FAIL: $bin is not a Position-Independent Executable (readelf -h Type != DYN)" >&2
               fail=1
@@ -469,7 +478,7 @@ jobs:
           # another dependency (libcurl-style) is linked all the same.
           # Both daemons serve the data socket (#213).
           check() {
-            for bin in sloth sloth-rf; do
+            for bin in sloth-wifi sloth-rf; do
               if ldd "$bin" | grep -Eq "$tls"; then
                 echo "FAIL: $1 build of $bin links a TLS library:" >&2
                 ldd "$bin" | grep -E "$tls" >&2

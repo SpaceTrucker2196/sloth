@@ -89,12 +89,15 @@ netif wlan0 801 3           # managed
 dflt=$base/default-sloth
 printf 'SLOTH_IFACE=alfa0\nSLOTH_ARGS=--site-label lab --iface eth0\n' > "$dflt"
 
+# The sensor's process as sloth-sensor.service starts it since the
+# cutover (#216): sloth-wifi. SLOTH_NAME=sloth is the same program
+# started through its symlink, which the kernel reports under that name.
 mkproc() {  # $1 = proc root, $2 = cmdline args after argv0 (space-separated)
     d=$1/100
     mkdir -p "$d/fd" "$d/net"
-    echo sloth > "$d/comm"
+    echo "${SLOTH_NAME:-sloth-wifi}" > "$d/comm"
     # shellcheck disable=SC2086
-    printf '%s\000' /usr/local/bin/sloth $2 > "$d/cmdline"
+    printf '%s\000' "/usr/local/bin/${SLOTH_NAME:-sloth-wifi}" $2 > "$d/cmdline"
     ln -s 'socket:[5555]' "$d/fd/3"
     ln -s 'socket:[6666]' "$d/fd/4"
     ln -s /dev/null "$d/fd/0"
@@ -129,6 +132,17 @@ check "$base/o" "is an --iface of the running sloth (pid 100)" "--iface named"
 rm -rf "$proc"; mkproc "$proc" "--headless --monitor-iface mon2"
 run mon2 L2 "hostapd 2.10" 5/36 1; rc_is $? 2 "a running sloth's --monitor-iface refused"
 check "$base/o" "is an --monitor-iface of the running sloth (pid 100)" "--monitor-iface named"
+# The same sensor started as `sloth`, the symlink (#216): still a sloth.
+rm -rf "$proc"; SLOTH_NAME=sloth; mkproc "$proc" "--headless --monitor-iface mon2"
+run mon2 L2 "hostapd 2.10" 5/36 1; rc_is $? 2 "a sloth started through the symlink refused"
+check "$base/o" "is an --monitor-iface of the running sloth (pid 100)" "the symlink's process named"
+run mon1 L2 "hostapd 2.10" 5/36 1; rc_is $? 2 "the symlink's packet socket refused"
+# sloth-rf opens no radio: its process is not a sloth for this purpose,
+# whatever its command line says.
+rm -rf "$proc"; SLOTH_NAME=sloth-rf; mkproc "$proc" "--iface mon2"
+run --dry-run mon2 L2 "hostapd 2.10" 5/36 1; rc_is $? 0 "sloth-rf's process is not the sensor"
+if grep -q "of the running sloth" "$base/o"; then bad "sloth-rf's process was taken for the sensor"; else ok; fi
+SLOTH_NAME=
 rm -rf "$proc"; mkproc "$proc" "--headless --hop --iface mon2"
 run wlan0 L2 "hostapd 2.10" 5/36 1; rc_is $? 2 "managed mode refused"
 check "$base/o" "is not in monitor mode (type 801" "managed named"

@@ -13,6 +13,7 @@
 #include "jsonl.h"
 #include "poll.h"
 #include "sys_status.h"
+#include "capture_side.h"
 
 /* ── Host status and the receiver inventory (src/sys_status.h) ───────
  *
@@ -89,7 +90,13 @@ static void tick(sloth_state_t *s, uint64_t ms) {
     sys_status_emit(s);
 }
 
+/* Both sides registered: these are the module's tests, over every row
+ * it can carry. No daemon is that shape since the cutover (#216) -
+ * sloth-wifi registers the capture side (the harness does, before every
+ * test) and sloth-rf the RF side - and test_wifi_shape_has_no_rf_row
+ * and tests/test_rf_loop.c hold each daemon's own. */
 static void fresh(sloth_state_t *s) {
+    sys_status_set_rf_side(sys_status_rf_fill);
     memset(s, 0, sizeof(*s));
     beacon_clear();             /* the recall memory is the session's */
     fake_net_reset();
@@ -1410,20 +1417,69 @@ static void test_disk_of_the_output_path(void) {
 static void test_poll_tick_writes_the_batch(void) {
     TEST_STATE(s);
     fresh(&s);
+    capture_side_install();             /* sloth-wifi's shape, for its table */
     put_pi();
     jl_open();
     poll_ctx_t ctx;
     clock_at(0);
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_wifi, &s, &ctx);
     char *b = jl_read();
     ASSERT_EQ(count_of(b, "\"type\":\"sys_status\""), 1);
-    ASSERT_EQ(count_of(b, "\"type\":\"source_status\""), SYS_SRC_COUNT);
+    /* The capture's four rows and the receiver's. */
+    ASSERT_EQ(count_of(b, "\"type\":\"source_status\""), 5);
     const char *ss = strstr(b, "\"type\":\"sys_status\"");
     const char *sh = strstr(b, "\"type\":\"sensor_health\"");
     ASSERT(ss != NULL && sh != NULL && ss < sh);
     if (sh) ASSERT(strstr(sh, "\n{") == NULL);
-    ASSERT(poll_stage_index(&g_poll_sloth, "health_host") >= 0);
+    ASSERT(poll_stage_index(&g_poll_wifi, "health_host") >= 0);
+    done();
+}
+
+/* sloth-wifi's shape (#216): the capture side and no RF side. The four
+ * decoder rows are unnamed - not "not_configured", which would be a
+ * statement about the host that sloth-rf may be contradicting - so none
+ * is written, `sources` counts five, and the slots keep their persisted
+ * numbers with a gap where the decoders' are. The receiver's row stays:
+ * both daemons report it.
+ *
+ * Seen red (2026-11-15) with capture_side_install() registering
+ * sys_status_rf_fill where it clears the RF side: nine rows, four of
+ * them the decoders'. */
+static void test_wifi_shape_has_no_rf_row(void) {
+    TEST_STATE(s);
+    fresh(&s);
+    capture_side_install();             /* what sloth-wifi's main() calls */
+    /* Decoders "configured" in the state, as on a host whose sloth-rf
+     * runs beside this daemon: still not this daemon's rows. */
+    s.adsb.configured = 1; s.adsb.state = ADSB_LIVE;
+    s.aprs.configured = 1;
+    s.rtl433.configured = 1;
+    s.victron.configured = 1;
+    jl_open();
+    tick(&s, 0);
+    sys_status_emit(&s);
+    char *b = jl_read();
+    static const int rf[] = { SYS_SRC_ADSB, SYS_SRC_APRS, SYS_SRC_RTL433,
+                              SYS_SRC_VICTRON };
+    for (int i = 0; i < 4; i++)
+        ASSERT(sys_status_get()->src[rf[i]].name == NULL);
+    ASSERT(sys_status_get()->src[SYS_SRC_GNSS].name != NULL);
+    ASSERT(sys_status_get()->src[SYS_SRC_CAPTURE].name != NULL);
+    ASSERT_EQ(count_of(b, "\"type\":\"source_status\""), 5);
+    ASSERT_EQ(count_of(b, "\"name\":\"adsb\""), 0);
+    ASSERT_EQ(count_of(b, "\"name\":\"aprs\""), 0);
+    ASSERT_EQ(count_of(b, "\"name\":\"rtl433\""), 0);
+    ASSERT_EQ(count_of(b, "\"name\":\"victron\""), 0);
+    ASSERT_EQ(count_of(b, "\"name\":\"gnss\""), 1);
+    ASSERT(strstr(b, "\"sources\":5,") != NULL);
+    /* The persisted ids are the enum's, unmoved by the gap. */
+    ASSERT_EQ((int)SYS_SRC_GNSS, 4);
+    ASSERT_EQ((int)SYS_SRC_ADSB, 5);
+    ASSERT_EQ((int)SYS_SRC_APRS, 6);
+    ASSERT_EQ((int)SYS_SRC_RTL433, 7);
+    ASSERT_EQ((int)SYS_SRC_VICTRON, 8);
+    ASSERT_EQ((int)SYS_SRC_COUNT, 9);
     done();
 }
 
@@ -1475,5 +1531,6 @@ void run_sys_status_tests(void) {
     RUN_TEST(test_source_change_is_one_row);
     RUN_TEST(test_disk_of_the_output_path);
     RUN_TEST(test_poll_tick_writes_the_batch);
+    RUN_TEST(test_wifi_shape_has_no_rf_row);
     RUN_TEST(test_schema_doc_names_the_records);
 }

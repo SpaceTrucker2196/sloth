@@ -18,7 +18,21 @@ each is a typed producer of observations copied into `sloth_state_t`, exactly
 like the 802.11 path. Until the sensor seam exists, treat everything here as
 design, not implementation.
 
-**Last updated**: 2026-11-09 (ADS-B: `--adsb beast://`, [[adsb]]); 2026-11-09 (ADS-B: `--adsb sbs://`, [[adsb]]); 2026-11-08 (ADS-B: the flag-only `ADSB_EMERGENCY` alert, #186, [[adsb]]); 2026-11-07 (ADS-B: the `[^]` TUI view and the `adsb` health token, [[adsb]]); 2026-11-05 (APRS shipped: `--aprs` off Dire Wolf's packet log, JSONL, sloth.db v13 and slothweb's APRS tab, [[aprs]]); 2026-11-05 (ADS-B in slothweb: the ADS-B tab, [[adsb]]); 2026-11-05 (ADS-B slice 1 shipped: the `--adsb` feed, the aircraft table and the `adsb_aircraft` record, [[adsb]]); 2026-11-02 (the GPS family is shipped: [[location]] for the position, [[gnss]] for the sky; the sketch below replaced by what exists); 2026-10-14.
+**Last updated**: 2026-11-15 (#216, the cutover: which daemon reads which family); 2026-11-09 (ADS-B: `--adsb beast://`, [[adsb]]); 2026-11-09 (ADS-B: `--adsb sbs://`, [[adsb]]); 2026-11-08 (ADS-B: the flag-only `ADSB_EMERGENCY` alert, #186, [[adsb]]); 2026-11-07 (ADS-B: the `[^]` TUI view and the `adsb` health token, [[adsb]]); 2026-11-05 (APRS shipped: `--aprs` off Dire Wolf's packet log, JSONL, sloth.db v13 and slothweb's APRS tab, [[aprs]]); 2026-11-05 (ADS-B in slothweb: the ADS-B tab, [[adsb]]); 2026-11-05 (ADS-B slice 1 shipped: the `--adsb` feed, the aircraft table and the `adsb_aircraft` record, [[adsb]]); 2026-11-02 (the GPS family is shipped: [[location]] for the position, [[gnss]] for the sky; the sketch below replaced by what exists); 2026-10-14.
+
+**Which daemon reads which family (since the cutover, #216,
+[ADR 0010](adr/0010-wifi-rf-daemons.md)).** The sensor is two daemons,
+and the families below divide between them by what they need:
+`sloth-wifi` (alias `sloth`) reads **BLE** (the HCI monitor channel and
+an Ubertooth capture) beside the IP capture and the 802.11 radio;
+`sloth-rf` reads the **SDR decoders** (ADS-B, APRS, rtl_433) and
+**Victron** (sloth-va's file), and Meshtastic is planned for it; the
+**GNSS** receiver is linked into both ([[gnss]]). `sloth-wifi` refuses
+`--adsb`, `--aprs`, `--aprs-freq`, `--aprs-silent-hours`, `--rtl433`
+and `--victron`. The passive filter and the seven questions below
+apply to both daemons unchanged: neither opens, tunes or drives a
+radio it does not already listen through, and `sloth-rf` links no
+capture at all.
 
 ---
 

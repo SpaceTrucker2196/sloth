@@ -19,6 +19,7 @@
 #include "aprs.h"
 #include "rtl433.h"
 #include "bt_stream.h"
+#include "rf_profile.h"
 
 /* poll_tick() and its phase table (#113).
  *
@@ -32,10 +33,11 @@
  * from a second binary, sloth_test_pcap; since #116 sloth_test is built
  * WITH_PCAP and main_test.c calls both groups.
  *
- * Since #212 the table is data the application passes, and there are
- * three: g_poll_sloth (every stage, what `sloth` runs), g_poll_wifi and
- * g_poll_rf. The older cases below run g_poll_sloth, as main.c does; the
- * #212 group holds the three to each other and runs each half alone. */
+ * Since #212 the table is data the application passes. There were
+ * three until the cutover (#216); there are two: g_poll_wifi, what
+ * sloth-wifi runs, and g_poll_rf, sloth-rf's. The older cases below run
+ * g_poll_wifi, as main.c does; the #212 group spells each table out,
+ * holds the stages they share to one body, and runs each alone. */
 
 /* A fixed wall clock far from any real one: the assertions below compare
  * against it, never against the host's time (CI VMs may be seconds old). */
@@ -76,15 +78,15 @@ static const char *sink_read(void) {
 static void tick_once(sloth_state_t *s) {
     poll_ctx_t ctx;
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, s, &ctx);
+    poll_tick(&g_poll_wifi, s, &ctx);
 }
 
 /* ── table invariants ─────────────────────────────────────── */
 
 static const poll_table_t *const g_tables[] = {
-    &g_poll_sloth, &g_poll_wifi, &g_poll_rf
+    &g_poll_wifi, &g_poll_rf
 };
-static const char *const g_table_names[] = { "sloth", "wifi", "rf" };
+static const char *const g_table_names[] = { "wifi", "rf" };
 #define TABLE_COUNT ((int)(sizeof(g_tables) / sizeof(g_tables[0])))
 
 /* The table is the contract: a stage placed after a later phase's stage
@@ -105,8 +107,8 @@ static void test_phases_are_monotonic(void) {
 }
 
 /* Every stage has a body and a unique name — poll_stage_index() would
- * otherwise answer for the wrong one — and the two tables a capturing
- * daemon runs populate every phase. The RF table has no SNAPSHOT or
+ * otherwise answer for the wrong one — and the table a capturing
+ * daemon runs populates every phase. The RF table has no SNAPSHOT or
  * POST stage by design (its sources fill s in their health polls), so
  * it is held only to the phases it must have. */
 static void test_every_phase_has_a_stage_and_names_are_unique(void) {
@@ -137,8 +139,8 @@ static void test_every_phase_has_a_stage_and_names_are_unique(void) {
 
 /* #111's ring copy has to precede everything that reads s->packets. */
 static void test_capture_ring_is_the_first_snapshot_stage(void) {
-    const poll_table_t *both[] = { &g_poll_sloth, &g_poll_wifi };
-    for (int k = 0; k < 2; k++) {
+    const poll_table_t *both[] = { &g_poll_wifi };
+    for (int k = 0; k < 1; k++) {
         const poll_table_t *t = both[k];
         int ring = poll_stage_index(t, "capture_ring");
         ASSERT_GE(ring, 0);
@@ -152,8 +154,8 @@ static void test_capture_ring_is_the_first_snapshot_stage(void) {
 /* The named orderings #113 fixed, by name, so a reorder that keeps the
  * phases monotonic but moves one of these still goes red. */
 static void test_fixed_orderings_hold(void) {
-    const poll_table_t *both[] = { &g_poll_sloth, &g_poll_wifi };
-    for (int k = 0; k < 2; k++) {
+    const poll_table_t *both[] = { &g_poll_wifi };
+    for (int k = 0; k < 1; k++) {
         const poll_table_t *t = both[k];
         int alerts = poll_stage_index(t, "alerts");
         int jsonl  = poll_stage_index(t, "jsonl");
@@ -186,7 +188,7 @@ static void test_tick_reads_platform_and_runs_hooks(void) {
     poll_ctx_init(&ctx);
     g_chanhop_calls = 0;
     ctx.chanhop = count_chanhop;
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_wifi, &s, &ctx);
     ASSERT_EQ(s.iface_count, 1);
     ASSERT_STR(s.ifaces[0].name, "eth0");
     ASSERT_EQ(s.stats_init, 1);          /* PLATFORM baseline ran */
@@ -194,7 +196,7 @@ static void test_tick_reads_platform_and_runs_hooks(void) {
     ASSERT_EQ(g_chanhop_calls, 1);
 
     ctx.chanhop = NULL;                  /* must not crash, must not count */
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_wifi, &s, &ctx);
     ASSERT_EQ(g_chanhop_calls, 1);
     fake_net_reset();
 }
@@ -259,7 +261,7 @@ static void test_tick_rosters_the_hosts_own_iface_macs(void) {
 
     poll_ctx_t ctx;
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_wifi, &s, &ctx);
     ASSERT_EQ(ownership_is_self_mac(eth), 1);
     ASSERT_EQ(ownership_is_self_mac(mon), 1);
     ASSERT_EQ(ownership_self_count(), 2);
@@ -310,18 +312,17 @@ static void test_runner_runs_the_table_it_is_given(void) {
     fake_net_reset();
 }
 
-/* What `sloth` runs is the table it ran before #212, stage for stage.
- * Two stages became several - "health" is health_capture, health_gnss,
- * health_rf, health_host and capture_scope, in the order st_health()
- * made those calls; "sensors" is sensors_wifi, sensors_gnss, sensors_rf
- * - and nothing else moved. Spelled out rather than derived: this list
- * IS the order, and a diff to it is a change someone has to mean. */
-static void test_union_table_is_the_order_sloth_always_ran(void) {
+/* What sloth-wifi runs, stage for stage. It is the table the one binary
+ * ran before the split with exactly two stages gone at the cutover
+ * (#216): health_rf, which stood between health_gnss and health_host,
+ * and sensors_rf, between sensors_gnss and twins. Nothing else moved.
+ * Spelled out rather than derived: this list IS the order, and a diff
+ * to it is a change someone has to mean. */
+static void test_wifi_table_is_the_order_sloth_always_ran(void) {
     static const struct { const char *name; poll_phase_t phase; } want[] = {
         { "platform_net",      PH_PLATFORM },
         { "health_capture",    PH_PLATFORM },
         { "health_gnss",       PH_PLATFORM },
-        { "health_rf",         PH_PLATFORM },
         { "health_host",       PH_PLATFORM },
         { "capture_scope",     PH_PLATFORM },
         { "stats_baseline",    PH_PLATFORM },
@@ -343,7 +344,6 @@ static void test_union_table_is_the_order_sloth_always_ran(void) {
 #endif
         { "sensors_wifi",      PH_DERIVE   },
         { "sensors_gnss",      PH_DERIVE   },
-        { "sensors_rf",        PH_DERIVE   },
         { "twins",             PH_DERIVE   },
         { "alerts",            PH_ALERTS   },
         { "research_coverage", PH_POST     },
@@ -356,60 +356,37 @@ static void test_union_table_is_the_order_sloth_always_ran(void) {
         { "db",                PH_DURABLE  },
     };
     int n = (int)(sizeof(want) / sizeof(want[0]));
-    ASSERT_EQ(g_poll_sloth.count, n);
-    for (int i = 0; i < n && i < g_poll_sloth.count; i++) {
-        ASSERT_STR(g_poll_sloth.stages[i].name, want[i].name);
-        ASSERT_EQ(g_poll_sloth.stages[i].phase, want[i].phase);
+    ASSERT_EQ(g_poll_wifi.count, n);
+    for (int i = 0; i < n && i < g_poll_wifi.count; i++) {
+        ASSERT_STR(g_poll_wifi.stages[i].name, want[i].name);
+        ASSERT_EQ(g_poll_wifi.stages[i].phase, want[i].phase);
     }
-}
-
-/* Position in the union of the stage `st` (same name, same body, same
- * phase), or -1. One stage is exempt from "same body" since #213: the
- * RF half's "jsonl" is poll_st_jsonl_rf, because the union's writes the
- * capture's records and a daemon with no capture cannot link them. It
- * keeps the union's name, phase and place. */
-static int union_pos(const poll_stage_t *st) {
-    int i = poll_stage_index(&g_poll_sloth, st->name);
-    if (i < 0) return -1;
-    if (g_poll_sloth.stages[i].fn != st->fn && st->fn != poll_st_jsonl_rf)
-        return -1;
-    if (g_poll_sloth.stages[i].phase != st->phase) return -1;
-    return i;
 }
 
 static int table_has(const poll_table_t *t, const char *name) {
     return poll_stage_index(t, name) >= 0;
 }
 
-/* The two halves are the union, cut: each is a subsequence of it (the
- * same stage bodies in the same relative order), the Wi-Fi half is the
- * union without exactly the two RF stages, the RF half is exactly its
- * nine, and no union stage is in neither. Nine since #213: "positions"
- * joined on the ruling that both daemons write the sensor's track. */
-static void test_halves_are_the_union_in_order(void) {
-    const poll_table_t *halves[] = { &g_poll_wifi, &g_poll_rf };
-    for (int k = 0; k < 2; k++) {
-        int last = -1;
-        for (int i = 0; i < halves[k]->count; i++) {
-            int u = union_pos(&halves[k]->stages[i]);
-            if (u < 0 || u <= last)
-                fprintf(stderr, "    half %d: stage %s is not the union's, or out of order\n",
-                        k, halves[k]->stages[i].name);
-            ASSERT_GE(u, 0);
-            ASSERT_GT(u, last);
-            last = u;
-        }
-    }
-    /* Wi-Fi: everything but RF. */
-    ASSERT_EQ(g_poll_wifi.count, g_poll_sloth.count - 2);
-    for (int i = 0; i < g_poll_sloth.count; i++) {
-        const char *nm = g_poll_sloth.stages[i].name;
-        int rf_only = strcmp(nm, "health_rf") == 0 || strcmp(nm, "sensors_rf") == 0;
-        ASSERT_EQ(table_has(&g_poll_wifi, nm), !rf_only);
-        /* Nothing falls between the halves. */
-        ASSERT(table_has(&g_poll_wifi, nm) || table_has(&g_poll_rf, nm));
-    }
-    /* RF: exactly these, so a capture stage cannot ride in unnoticed. */
+/* The two tables against each other (#216). sloth-wifi's has no RF
+ * stage; sloth-rf's is exactly its nine, so a capture stage cannot ride
+ * in unnoticed ("positions" joined on the ruling that both daemons
+ * write the sensor's track). The stages both carry are one body, one
+ * phase and the same relative order in each - the receiver's two, the
+ * host's status, the engine, the track and the database - except
+ * "jsonl", which is each daemon's own emitter under one name.
+ *
+ * Seen red (2026-11-15): with health_rf put back in wifi_stages[] the
+ * first two assertions fail; with sensors_rf, the second pair. */
+static void test_tables_share_only_what_both_daemons_run(void) {
+    ASSERT(!table_has(&g_poll_wifi, "health_rf"));
+    for (int i = 0; i < g_poll_wifi.count; i++)
+        ASSERT(g_poll_wifi.stages[i].fn != poll_st_health_rf);
+    ASSERT(!table_has(&g_poll_wifi, "sensors_rf"));
+    for (int i = 0; i < g_poll_wifi.count; i++)
+        ASSERT(g_poll_wifi.stages[i].fn != poll_st_sensors_rf);
+    for (int i = 0; i < g_poll_wifi.count; i++)
+        ASSERT(g_poll_wifi.stages[i].fn != poll_st_jsonl_rf);
+
     static const char *const rf[] = {
         "health_gnss", "health_rf", "health_host",
         "sensors_gnss", "sensors_rf", "alerts", "positions", "jsonl", "db"
@@ -418,19 +395,34 @@ static void test_halves_are_the_union_in_order(void) {
     ASSERT_EQ(g_poll_rf.count, n);
     for (int i = 0; i < n && i < g_poll_rf.count; i++)
         ASSERT_STR(g_poll_rf.stages[i].name, rf[i]);
-    /* The one stage whose body is the half's own, and only that one:
-     * the exemption in union_pos() is for it and must not widen. */
-    int own = 0;
+
+    static const char *const shared[] = {
+        "health_gnss", "health_host", "sensors_gnss", "alerts",
+        "positions", "jsonl", "db"
+    };
+    int nshared = 0, last_w = -1, last_r = -1, own = 0;
     for (int i = 0; i < g_poll_rf.count; i++) {
-        int u = poll_stage_index(&g_poll_sloth, g_poll_rf.stages[i].name);
-        if (u >= 0 && g_poll_sloth.stages[u].fn != g_poll_rf.stages[i].fn) {
+        const poll_stage_t *r = &g_poll_rf.stages[i];
+        int w = poll_stage_index(&g_poll_wifi, r->name);
+        if (w < 0) continue;
+        ASSERT(nshared < 7);
+        if (nshared < 7) ASSERT_STR(r->name, shared[nshared]);
+        nshared++;
+        ASSERT_EQ(g_poll_wifi.stages[w].phase, r->phase);
+        ASSERT_GT(w, last_w);
+        ASSERT_GT(i, last_r);
+        last_w = w; last_r = i;
+        if (g_poll_wifi.stages[w].fn != r->fn) {
             own++;
-            ASSERT_STR(g_poll_rf.stages[i].name, "jsonl");
+            ASSERT_STR(r->name, "jsonl");
         }
     }
+    ASSERT_EQ(nshared, 7);
     ASSERT_EQ(own, 1);
     int j = poll_stage_index(&g_poll_rf, "jsonl");
     ASSERT(j >= 0 && g_poll_rf.stages[j].fn == poll_st_jsonl_rf);
+    j = poll_stage_index(&g_poll_wifi, "jsonl");
+    ASSERT(j >= 0 && g_poll_wifi.stages[j].fn == poll_st_jsonl);
     ASSERT(poll_st_jsonl_rf != poll_st_jsonl);
 }
 
@@ -506,10 +498,12 @@ static int count_kind(const sloth_state_t *s, int kind) {
 
 /* The sensor id is the registry slot, and wifi_merged publishes it
  * (sensor_mask, best_sensor), so the slot order is part of the stream.
- * With everything configured the union gives each source the slot the
- * single st_sensors() gave it: radio 0, HCI 1, Ubertooth 2, receiver 3,
- * ADS-B 4, APRS 5, rtl_433 6. A second tick moves nothing. */
-static void test_union_sensor_slots_are_unchanged(void) {
+ * With everything configured sloth-wifi gives each of its sources the
+ * slot the single st_sensors() gave it: radio 0, HCI 1, Ubertooth 2,
+ * receiver 3. The decoders took 4, 5 and 6 there until the cutover
+ * (#216); they are sloth-rf's now, from its own slot 1 (the next test).
+ * A second tick moves nothing. */
+static void test_wifi_sensor_slots_are_unchanged(void) {
     TEST_STATE(s);
     configure_every_source(&s);
     static const struct { int kind; const char *iface; } want[] = {
@@ -517,14 +511,11 @@ static void test_union_sensor_slots_are_unchanged(void) {
         { SENSOR_BLE,    POLL_BT_IFACE    },
         { SENSOR_BLE,    BT_CAPTURE_IFACE },
         { SENSOR_GPS,    POLL_GPS_LABEL   },
-        { SENSOR_ADSB,   POLL_ADSB_LABEL  },
-        { SENSOR_APRS,   POLL_APRS_LABEL  },
-        { SENSOR_RTL433, POLL_RTL_LABEL   },
     };
     for (int pass = 0; pass < 2; pass++) {
         tick_once(&s);
-        ASSERT_EQ(s.sensor_count, 7);
-        for (int i = 0; i < 7 && i < s.sensor_count; i++) {
+        ASSERT_EQ(s.sensor_count, 4);
+        for (int i = 0; i < 4 && i < s.sensor_count; i++) {
             ASSERT_EQ(s.sensors[i].kind, want[i].kind);
             ASSERT_STR(s.sensors[i].iface, want[i].iface);
         }
@@ -541,6 +532,7 @@ static void test_union_sensor_slots_are_unchanged(void) {
  * the RF table.) */
 static void test_rf_half_runs_alone_without_capture(void) {
     TEST_STATE(s);
+    rf_profile_select();
     configure_every_source(&s);
     poll_ctx_t ctx;
     poll_ctx_init(&ctx);
@@ -622,12 +614,12 @@ void run_poll_tests(void) {
     RUN_TEST(test_sensor_emitted_on_registration_tick);
     RUN_TEST(test_tick_rosters_the_hosts_own_iface_macs);
 
-    TEST_SUITE("poll stage tables: union and halves (#212)");
+    TEST_SUITE("poll stage tables: sloth-wifi's and sloth-rf's (#212, #216)");
     RUN_TEST(test_runner_runs_the_table_it_is_given);
-    RUN_TEST(test_union_table_is_the_order_sloth_always_ran);
-    RUN_TEST(test_halves_are_the_union_in_order);
+    RUN_TEST(test_wifi_table_is_the_order_sloth_always_ran);
+    RUN_TEST(test_tables_share_only_what_both_daemons_run);
     RUN_TEST(test_contract_orders_hold_in_every_table);
-    RUN_TEST(test_union_sensor_slots_are_unchanged);
+    RUN_TEST(test_wifi_sensor_slots_are_unchanged);
     RUN_TEST(test_rf_half_runs_alone_without_capture);
     RUN_TEST(test_wifi_half_runs_alone_without_rf);
 }
@@ -744,11 +736,10 @@ static void test_channel_summary_sees_this_ticks_beacons(void) {
 
 /* What the slot order is for: wifi_merged publishes the radio's sensor
  * id. With every other source configured beside it the merged entry
- * still names sensor 0, bit 0 - under the union and under the Wi-Fi
- * half alike (#212). */
+ * still names sensor 0, bit 0 (#212). */
 static void test_wifi_merged_publishes_the_radio_as_sensor_0(void) {
-    const poll_table_t *both[] = { &g_poll_sloth, &g_poll_wifi };
-    for (int k = 0; k < 2; k++) {
+    const poll_table_t *both[] = { &g_poll_wifi };
+    for (int k = 0; k < 1; k++) {
         pcap_case_reset();
         TEST_STATE(s);
         configure_every_source(&s);

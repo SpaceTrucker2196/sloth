@@ -338,6 +338,14 @@ static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
             web_jw_raw(&w, "null");
         }
     }
+    /* Where the RF tabs' records come from (#216, web_live.h): with a
+     * 2.x sloth-wifi on --socket and no --rf-socket this is
+     * "not_configured", and the page says so rather than showing empty
+     * tables. With a data socket only: the M0 shape stands without. */
+    if (h->live) {
+        web_jw_raw(&w, ",\"rf_stream\":");
+        web_live_rf_stream_json(h->live, &w);
+    }
     /* Two daemons (#214), only with --rf-socket or --rf-db: without
      * them the answer is what it was. "daemons" is sloth's stream and
      * sloth-rf's, each with its socket, its sensor_health and the
@@ -1034,6 +1042,34 @@ static int route_gnss(const web_req_t *rq, const web_health_t *h, int fixes,
     return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
+/* "rf_stream" on an RF tab's answer (#216, web_live.h): the object
+ * /api/health carries, added as the last member of a 200 answer that
+ * is this sensor's own, so a tab with no rows can say it is empty
+ * because the RF daemon's stream is not configured. The callers do not
+ * add it to the out-of-scope answer, which is the scope's and says
+ * nothing about a stream. A trailing newline (some writers end with
+ * one) stays last. The answer is left as it was when it is not an
+ * object, when there is no data socket, or when the member does not
+ * fit. */
+static void rf_stream_member(const web_health_t *h, char *body, size_t cap, size_t *bl) {
+    char m[256];
+    web_jw_t w;
+    size_t end = *bl;
+    if (!h->live) return;
+    while (end > 0 && body[end - 1] == '\n') end--;
+    if (end < 2 || body[0] != '{' || body[end - 1] != '}') return;
+    size_t tail = *bl - end;
+    web_jw_init(&w, m, sizeof(m));
+    web_jw_raw(&w, ",\"rf_stream\":");
+    web_live_rf_stream_json(h->live, &w);
+    web_jw_raw(&w, "}");
+    size_t n = w.len;
+    if (w.overflow || n == 0 || end - 1 + n + tail >= cap) return;
+    memcpy(body + end - 1, m, n);
+    memset(body + end - 1 + n, '\n', tail);
+    *bl = end - 1 + n + tail;
+}
+
 /* /api/adsb (web_adsb.h): the aircraft a local decoder lists. Its SDR
  * is a passive radio, as the BLE receivers are, so Monitor's and
  * Hybrid's; under Local the query is checked, then the one
@@ -1066,6 +1102,7 @@ static int route_adsb(const web_req_t *rq, const web_health_t *h,
             web_fv_src_t fs = { h->m4->sdb, h->ble, h->m4->oui, h->adsb };
             web_fv_list(h->m4->fleet, &fs, WEB_FV_ADSB, rq->query, h->wall_s, body, cap, &bl);
         }
+        if (rc == 0 && !none_here && status == 200) rf_stream_member(h, body, cap, &bl);
     }
     if (rc != 0 || bl == 0) {
         r->status = 503;
@@ -1151,6 +1188,7 @@ static int route_aprs(const web_req_t *rq, const web_health_t *h,
     } else {
         rc = web_aprs_route(h->aprs, rq->query, h->wall_s, none_here, body, cap, &bl, &status);
         if (rc == 0 && none_here && status == 200) bl = web_aprs_out_of_scope_json(body, cap);
+        if (rc == 0 && !none_here && status == 200) rf_stream_member(h, body, cap, &bl);
     }
     if (rc != 0 || bl == 0) {
         r->status = 503;
@@ -1181,6 +1219,7 @@ static int route_victron(const web_req_t *rq, const web_health_t *h,
         rc = web_victron_route(h->victron, rq->query, h->wall_s, none_here, body, cap,
                                &bl, &status);
         if (rc == 0 && none_here && status == 200) bl = web_victron_out_of_scope_json(body, cap);
+        if (rc == 0 && !none_here && status == 200) rf_stream_member(h, body, cap, &bl);
     }
     if (rc != 0 || bl == 0) {
         r->status = 503;
@@ -1209,6 +1248,7 @@ static int route_rtl433(const web_req_t *rq, const web_health_t *h,
     } else {
         rc = web_rtl433_route(h->rtl433, rq->query, h->wall_s, none_here, body, cap, &bl, &status);
         if (rc == 0 && none_here && status == 200) bl = web_rtl433_out_of_scope_json(body, cap);
+        if (rc == 0 && !none_here && status == 200) rf_stream_member(h, body, cap, &bl);
     }
     if (rc != 0 || bl == 0) {
         r->status = 503;

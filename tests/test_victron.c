@@ -540,7 +540,7 @@ static void test_sensor_health_block(void) {
     memset(&s, 0, sizeof(s));
     jl_open();
     victron_health_poll(&s, g_wall);
-    jsonl_emit_sensor_health(&s);
+    jsonl_emit_sensor_health_rf(&s);
     jsonl_close();
     char *b = read_all(g_jl);
     ASSERT(b != NULL);
@@ -551,7 +551,7 @@ static void test_sensor_health_block(void) {
     victron_note_read(g_wall, 50, 0, 0);
     victron_feed_line(L_BMV, strlen(L_BMV), g_wall);
     victron_health_poll(&s, g_wall);
-    jsonl_emit_sensor_health(&s);
+    jsonl_emit_sensor_health_rf(&s);
     jsonl_close();
     b = read_all(g_jl);
     ASSERT(b != NULL);

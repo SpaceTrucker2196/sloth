@@ -46,9 +46,10 @@
  * so a run is a function of its inputs and of the pinned clocks.
  *
  * rfs_run() does the same run under any poll table, with the shared
- * services in the shape the daemon that passes that table has: `sloth`
- * with its capture side (g_poll_sloth), or sloth-rf with its own rule
- * table and nothing registered (g_poll_rf). The two are then compared.
+ * services in the shape the daemon that passes that table has:
+ * sloth-wifi with its capture side (g_poll_wifi), or sloth-rf with its
+ * own (g_poll_rf). The two are then compared: since the cutover (#216)
+ * for what each has that the other must not.
  */
 
 #define RFS_WALL0 ((time_t)1800000000)   /* 2027-01-15T08:00:00Z */
@@ -168,7 +169,7 @@ static inline void rfs_tick(const poll_table_t *t, sloth_state_t *s) {
 }
 
 /* The run. `as_rf` puts the shared services in sloth-rf's shape;
- * otherwise they are `sloth`'s. `jsonl` and `dbp` are sink paths, either
+ * otherwise they are sloth-wifi's. `jsonl` and `dbp` are sink paths, either
  * may be NULL. Leaves both sinks closed and everything reset. The host
  * the fake platform reports has one interface, one associated Wi-Fi
  * station and a hwmon supply alarm reading 1 - things a daemon with a

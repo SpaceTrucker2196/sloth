@@ -10,6 +10,8 @@
 #include "views/help.h"
 #include "persist_health.h"
 #include "data_socket.h"
+#include "alerts.h"
+#include "alerts/rules.h"
 
 /*
  * Docs-consistency guard — issue #96.
@@ -367,6 +369,26 @@ static int dc_vendor_entries(void) {
  * gets the number whose value disagrees with the build; the caller
  * asserts, so the parser can be exercised on a wrong value without
  * failing the suite. */
+/* The per-daemon kind counts (#216), from the compiled rule tables the
+ * way tools/docs_counts.sh takes them from the two table files:
+ * sloth-rf raises one kind per row of its table, and sloth-wifi raises
+ * every kind but those whose row is in sloth-rf's table and not in its
+ * own. Each sloth-rf row is held to naming a kind (rule_<kind>, lower
+ * case), so "rows" and "kinds" are the same number there. */
+static int dc_rf_kinds(void) { return g_alert_table_rf.count; }
+
+static int dc_wifi_kinds(void) {
+    int rf_only = 0;
+    for (int i = 0; i < g_alert_table_rf.count; i++) {
+        int in_wifi = 0;
+        for (int j = 0; j < g_alert_table_wifi.count; j++)
+            if (!strcmp(g_alert_table_wifi.rules[j].name, g_alert_table_rf.rules[i].name))
+                in_wifi = 1;
+        if (!in_wifi) rf_only++;
+    }
+    return (int)ALERT_TYPE_COUNT - rf_only;
+}
+
 static int dc_check_count_markers(const char *doc, const char *text,
                                   int *stale) {
     static const char open[] = "<!-- count:";
@@ -383,6 +405,8 @@ static int dc_check_count_markers(const char *doc, const char *text,
         int want;
         if (e - p == 5 && !strncmp(p, "views", 5))      want = VIEW_COUNT;
         else if (e - p == 5 && !strncmp(p, "rules", 5)) want = ALERT_TYPE_COUNT;
+        else if (e - p == 10 && !strncmp(p, "rules-wifi", 10)) want = dc_wifi_kinds();
+        else if (e - p == 8 && !strncmp(p, "rules-rf", 8)) want = dc_rf_kinds();
         else if (e - p == 7 && !strncmp(p, "vendors", 7)) want = dc_vendor_entries();
         else {
             fprintf(stderr, "    %s: unknown count marker '%.*s'\n",
@@ -466,6 +490,121 @@ static int dc_def_rows(const char *path) {
 static void test_def_row_counts_match_build(void) {
     ASSERT_EQ(dc_def_rows("include/sloth_views.def"), (int)VIEW_COUNT);
     ASSERT_EQ(dc_def_rows("include/sloth_alerts.def"), (int)ALERT_TYPE_COUNT);
+}
+
+/* Which binary has which (#216, ADR 0010). The counts the docs state
+ * are per daemon since the cutover, and each is held to the build:
+ *
+ *   views        sloth-wifi's, VIEW_COUNT; sloth-rf is headless
+ *   rules        the kinds in the one enum both daemons share
+ *   rules-wifi   the kinds sloth-wifi raises
+ *   rules-rf     the kinds sloth-rf raises
+ *
+ * Spelled out, not only derived: a kind moving between the daemons is a
+ * change someone has to mean, and this is where it has to be said. The
+ * script's two table scans are held to the compiled tables too, so a
+ * row that is indented oddly or split across lines cannot be counted by
+ * one and not the other. And the marked documents must say which
+ * binary a count is: the three that carry the per-daemon pair. */
+static int dc_table_rows(const char *path, const char *only_missing_from) {
+    char *t = slurp(path);
+    char *other = only_missing_from ? slurp(only_missing_from) : NULL;
+    if (!t || (only_missing_from && !other)) { free(t); free(other); return -1; }
+    int n = 0;
+    for (const char *p = t; p; ) {
+        const char *q = p;
+        while (*q == ' ' || *q == '\t') q++;
+        if (!strncmp(q, "R(rule_", 7)) {
+            const char *e = strstr(q, "),");
+            const char *nl = strchr(q, '\n');
+            if (e && (!nl || e < nl)) {
+                if (!other) n++;
+                else {
+                    char row[96];
+                    snprintf(row, sizeof(row), "%.*s", (int)(e + 2 - q), q);
+                    if (!strstr(other, row)) n++;
+                }
+            }
+        }
+        p = strchr(p, '\n');
+        if (p) p++;
+    }
+    free(t);
+    free(other);
+    return n;
+}
+
+static void test_counts_say_which_binary(void) {
+    ASSERT_EQ((int)VIEW_COUNT, 37);
+    ASSERT_EQ((int)ALERT_TYPE_COUNT, 100);
+    ASSERT_EQ(dc_wifi_kinds(), 95);
+    ASSERT_EQ(dc_rf_kinds(), 6);
+    /* The one kind both raise is why 95 + 6 is not 100. */
+    ASSERT_EQ(dc_wifi_kinds() + dc_rf_kinds(), (int)ALERT_TYPE_COUNT + 1);
+
+    /* Every sloth-rf row is one kind, by name. */
+    for (int i = 0; i < g_alert_table_rf.count; i++) {
+        int hit = 0;
+        for (int t = 0; t < ALERT_TYPE_COUNT; t++) {
+            /* alert_type_name() is "ALERT_TYPE_<ID>"; the row is
+             * "rule_<id>". */
+            const char *id = alert_type_name((alert_type_t)t) + 11;
+            const char *row = g_alert_table_rf.rules[i].name + 5;
+            size_t k = 0;
+            while (id[k] && row[k] && tolower((unsigned char)id[k]) == row[k]) k++;
+            if (!id[k] && !row[k]) hit = 1;
+        }
+        if (!hit) fprintf(stderr, "    %s names no ALERT_TYPE_*\n",
+                          g_alert_table_rf.rules[i].name);
+        ASSERT(hit);
+    }
+
+    /* The script's scans agree with the compiled tables. */
+    ASSERT_EQ(dc_table_rows("src/alerts/rules_table_rf.c", NULL), g_alert_table_rf.count);
+    ASSERT_EQ(dc_table_rows("src/alerts/rules_table.c", NULL), g_alert_table_wifi.count);
+    ASSERT_EQ((int)ALERT_TYPE_COUNT -
+              dc_table_rows("src/alerts/rules_table_rf.c", "src/alerts/rules_table.c"),
+              dc_wifi_kinds());
+
+    /* The parser knows the two new markers, right and wrong. */
+    char m[160];
+    int bad = -1;
+    snprintf(m, sizeof(m), "<!-- count:rules-wifi -->%d<!-- /count --> "
+                           "<!-- count:rules-rf -->%d<!-- /count -->",
+             dc_wifi_kinds(), dc_rf_kinds());
+    ASSERT_EQ(dc_check_count_markers("t", m, &bad), 2);
+    ASSERT_EQ(bad, 0);
+    snprintf(m, sizeof(m), "<!-- count:rules-wifi -->%d<!-- /count --> "
+                           "<!-- count:rules-rf -->%d<!-- /count -->",
+             (int)ALERT_TYPE_COUNT, dc_rf_kinds() + 1);
+    ASSERT_EQ(dc_check_count_markers("(expected stale)", m, &bad), 2);
+    ASSERT_EQ(bad, 2);
+
+    /* The documents that state the counts say which binary each is. */
+    static const char *const docs[] = {
+        "README.md", "docs/wiki/what-sloth-does.md", "docs/wiki/alerts.md",
+        "docs/wiki/views-catalog.md",
+    };
+    for (size_t i = 0; i < sizeof(docs) / sizeof(docs[0]); i++) {
+        char *t = slurp(docs[i]);
+        ASSERT(t != NULL);
+        if (!t) continue;
+        int has_wifi = strstr(t, "<!-- count:rules-wifi -->") != NULL;
+        int has_rf = strstr(t, "<!-- count:rules-rf -->") != NULL;
+        int views_only = !strcmp(docs[i], "docs/wiki/views-catalog.md");
+        if (!views_only && !(has_wifi && has_rf))
+            fprintf(stderr, "    %s does not carry the per-daemon rule counts "
+                            "(count:rules-wifi, count:rules-rf)\n", docs[i]);
+        ASSERT(views_only || (has_wifi && has_rf));
+        if (!strstr(t, "sloth-wifi") || !strstr(t, "sloth-rf"))
+            fprintf(stderr, "    %s does not name both daemons\n", docs[i]);
+        ASSERT(strstr(t, "sloth-wifi") != NULL);
+        ASSERT(strstr(t, "sloth-rf") != NULL);
+        int stale = -1;
+        ASSERT_GE(dc_check_count_markers(docs[i], t, &stale), 1);
+        ASSERT_EQ(stale, 0);
+        free(t);
+    }
 }
 
 /* Every marked document, and the floor of markers each must carry: a
@@ -1194,16 +1333,58 @@ static void test_usage_strict_claims_no_total_coverage(void) {
     ASSERT(has_ci(b, "--no-discovery"));
 }
 
-/* --adsb's help names both socket schemes: sbs:// is accepted since
- * 2026-11-09 and beast:// is still refused (src/adsb.c adsb_spec_parse,
- * docs/wiki/cli-reference.md). The help once named only sbs://, so an
- * operator reading it would try beast:// and hit exit 2. */
+/* --adsb's help names both socket schemes (src/adsb.c
+ * adsb_spec_parse, docs/wiki/cli-reference.md). The help once named
+ * only sbs://, so an operator reading it would try beast:// and hit
+ * exit 2. Since the cutover (#216) the flag is sloth-rf's, so the help
+ * that has to name them is sloth-rf's (src/rf/rf_args.c rf_usage()),
+ * and sloth-wifi's --help has to say the six decoder flags are refused
+ * and whose they are - not document them as if it took them. */
 static void test_usage_adsb_names_both_refused_schemes(void) {
-    char b[2048];
-    ASSERT_EQ(usage_option_block("--adsb", b, sizeof(b)), 1);
-    ASSERT(has_ci(b, "sbs://"));
-    ASSERT(has_ci(b, "beast://"));
-    ASSERT(has_ci(b, "--replay"));
+    char *rf = slurp("src/rf/rf_args.c");
+    ASSERT(rf != NULL);
+    if (rf) {
+        char *start = strstr(rf, "void rf_usage(");
+        char *end = start ? strstr(start, "\n}\n") : NULL;
+        ASSERT(start != NULL && end != NULL);
+        if (start && end) {
+            *end = '\0';
+            ASSERT(strstr(start, "--adsb SPEC") != NULL);
+            ASSERT(strstr(start, "sbs://") != NULL);
+            ASSERT(strstr(start, "beast://") != NULL);
+        }
+        free(rf);
+    }
+    char *wifi = slurp("src/main.c");
+    ASSERT(wifi != NULL);
+    if (!wifi) return;
+    char *start = strstr(wifi, "static void print_usage(");
+    char *end = start ? strstr(start, "\n}\n") : NULL;
+    ASSERT(start != NULL && end != NULL);
+    if (start && end) {
+        *end = '\0';
+        /* One entry, naming all six and the daemon that takes them. */
+        const char *e = strstr(start, "\"  --adsb, --aprs, --aprs-freq, --aprs-silent-hours, --rtl433,\\n\"");
+        ASSERT(e != NULL);
+        if (e) {
+            ASSERT(strstr(e, "--victron") != NULL);
+            ASSERT(strstr(e, "sloth-rf") != NULL);
+            ASSERT(strstr(e, "exit 2") != NULL);
+            ASSERT(strstr(e, "sloth-migrate-rf") != NULL);
+        }
+        /* And not documented as flags it takes: no SPEC synopsis and no
+         * decoder scheme anywhere in its usage. */
+        ASSERT(strstr(start, "--adsb SPEC") == NULL);
+        ASSERT(strstr(start, "--aprs SPEC") == NULL);
+        ASSERT(strstr(start, "--rtl433 SPEC") == NULL);
+        ASSERT(strstr(start, "--victron SPEC") == NULL);
+        ASSERT(strstr(start, "sbs://") == NULL);
+        ASSERT(strstr(start, "beast://") == NULL);
+        /* The receiver's flags stay documented here. */
+        ASSERT(strstr(start, "--gps SPEC") != NULL);
+        ASSERT(strstr(start, "--location LAT,LON[,ALT]") != NULL);
+    }
+    free(wifi);
 }
 
 /*
@@ -2656,6 +2837,7 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_scanner_versions_exclude_addresses);
     RUN_TEST(test_count_marker_parser);
     RUN_TEST(test_def_row_counts_match_build);
+    RUN_TEST(test_counts_say_which_binary);
     RUN_TEST(test_count_markers_match_build);
     RUN_TEST(test_readme_counts_match_build);
     RUN_TEST(test_wiki_counts_match_build);

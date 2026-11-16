@@ -9,6 +9,8 @@
 #include "sys_status.h"
 #include "capture_side.h"
 #include "alerts/rules.h"
+#include "rf_side.h"
+#include "alerts/engine_internal.h"
 
 /*
  * The rule table is data the application selects (#213): `sloth` the
@@ -98,31 +100,55 @@ static void test_rf_table_rows_and_order(void) {
     ASSERT(g_alert_table_rf.rules[5].fn == rule_sensor_source_down);
 }
 
-/* Every RF row is a row of the full table, with the same body, and the
- * RF order is the full table's order: `sloth` and sloth-rf run the
- * rules they share in one sequence, so same-tick records come out in
- * one order from both. (Seen red with rule_adsb_emergency moved ahead
- * of rule_gnss_jamming in rules_table_rf.c.) */
-static void test_rf_table_is_a_subsequence_of_the_full_one(void) {
-    int last = -1;
-    for (int i = 0; i < g_alert_table_rf.count; i++) {
-        int at = row_of(&g_alert_table_sloth, g_alert_table_rf.rules[i].name);
-        if (at < 0 || at <= last)
-            fprintf(stderr, "    %s: not in the full table, or out of its order\n",
-                    g_alert_table_rf.rules[i].name);
-        ASSERT_GE(at, 0);
-        ASSERT_GT(at, last);
-        if (at >= 0)
-            ASSERT(g_alert_table_sloth.rules[at].fn == g_alert_table_rf.rules[i].fn);
-        last = at;
+/* The two tables against each other since the cutover (#216). Until
+ * then sloth-rf's was a subsequence of the one binary's; now the GNSS
+ * rules and ADSB_EMERGENCY are in sloth-rf's only - not a row of
+ * sloth-wifi's by name or by function - and the single row both run is
+ * rule_sensor_source_down, with one body, which judges whichever source
+ * rows its daemon reports.
+ *
+ * Seen red (2026-11-15) with R(rule_gnss_jamming) and then
+ * R(rule_adsb_emergency) put back in src/alerts/rules_table.c: the
+ * by-name and the by-function assertion each fail, and the Makefile's
+ * check_wifi_no_rf refuses the link. */
+static void test_gnss_and_adsb_rules_are_the_rf_tables_alone(void) {
+    static const char *const rf_only[] = {
+        "rule_gnss_jamming", "rule_gnss_time_jump", "rule_gnss_position_jump",
+        "rule_gnss_spoof_suspect", "rule_adsb_emergency",
+    };
+    for (int i = 0; i < 5; i++) {
+        ASSERT_GE(row_of(&g_alert_table_rf, rf_only[i]), 0);
+        if (row_of(&g_alert_table_wifi, rf_only[i]) >= 0)
+            fprintf(stderr, "    %s is a row of sloth-wifi's table\n", rf_only[i]);
+        ASSERT_EQ(row_of(&g_alert_table_wifi, rf_only[i]), -1);
     }
-    ASSERT_LT(g_alert_table_rf.count, g_alert_table_sloth.count);
+    for (int i = 0; i < g_alert_table_wifi.count; i++) {
+        alert_rule_fn fn = g_alert_table_wifi.rules[i].fn;
+        ASSERT(fn != rule_gnss_jamming && fn != rule_gnss_time_jump &&
+               fn != rule_gnss_position_jump && fn != rule_gnss_spoof_suspect &&
+               fn != rule_adsb_emergency);
+    }
+    int shared = 0;
+    for (int i = 0; i < g_alert_table_rf.count; i++) {
+        int at = row_of(&g_alert_table_wifi, g_alert_table_rf.rules[i].name);
+        if (at < 0) continue;
+        shared++;
+        ASSERT_STR(g_alert_table_rf.rules[i].name, "rule_sensor_source_down");
+        ASSERT(g_alert_table_wifi.rules[at].fn == g_alert_table_rf.rules[i].fn);
+    }
+    ASSERT_EQ(shared, 1);
+    /* 93 rows before the cutover, less these five. */
+    ASSERT_EQ(g_alert_table_wifi.count, 88);
+    /* Neither table drops the other's history. */
+    for (int i = 0; i < g_alert_table_wifi.forget_count; i++)
+        ASSERT(g_alert_table_wifi.forget[i] != rules_gnss_forget &&
+               g_alert_table_wifi.forget[i] != rules_adsb_forget);
 }
 
 /* SENSOR_UNDERVOLT is not sloth-rf's (owner ruling 2026-11-15): not a
  * row, by name or by function, and with the host's alarm reading 1 the
  * RF table opens no such incident however long it is held - while the
- * full table, over the same snapshot, opens it on the next tick. The
+ * Wi-Fi table, over the same snapshot, opens it on the next tick. The
  * second half is what makes the first one mean something: the alarm is
  * there to be seen. (Seen red, both the row check and the incident
  * count, with R(rule_sensor_undervolt) added to rules_table_rf.c.) */
@@ -130,7 +156,7 @@ static void test_undervolt_is_not_in_the_rf_table(void) {
     ASSERT_EQ(row_of(&g_alert_table_rf, "rule_sensor_undervolt"), -1);
     for (int i = 0; i < g_alert_table_rf.count; i++)
         ASSERT(g_alert_table_rf.rules[i].fn != rule_sensor_undervolt);
-    ASSERT_GE(row_of(&g_alert_table_sloth, "rule_sensor_undervolt"), 0);
+    ASSERT_GE(row_of(&g_alert_table_wifi, "rule_sensor_undervolt"), 0);
 
     begin();
     put_pi_alarm("1\n");
@@ -141,7 +167,7 @@ static void test_undervolt_is_not_in_the_rf_table(void) {
     ASSERT_EQ(open_count(ALERT_TYPE_SENSOR_UNDERVOLT), 0);
     ASSERT_EQ(g_s.alert_count, 0);
 
-    alerts_set_table(&g_alert_table_sloth);
+    alerts_set_table(&g_alert_table_wifi);
     tick();
     ASSERT_EQ(open_count(ALERT_TYPE_SENSOR_UNDERVOLT), 1);
     end();
@@ -149,10 +175,10 @@ static void test_undervolt_is_not_in_the_rf_table(void) {
 
 /* The RF table does fire what is its own. A configured ADS-B decoder
  * that is down opens SENSOR_SOURCE_DOWN under it, keyed for that
- * source, exactly as under the full table. */
+ * source. */
 static void test_rf_table_fires_source_down_for_its_sources(void) {
     begin();
-    alerts_set_table(&g_alert_table_rf);
+    rf_side_install();   /* its table and its four source rows */
     g_s.adsb.configured = 1;
     g_s.adsb.state = ADSB_ERROR;
     snprintf(g_s.adsb.src, sizeof(g_s.adsb.src), "file:/run/test/aircraft.json");
@@ -196,12 +222,14 @@ static void test_no_capture_side_judges_no_capture_row(void) {
 
 /* What a table brings beside its rows: the RF one names no exporter
  * (it captures nothing to export) and only its own rules' history; the
- * full one names both exporters. */
+ * Wi-Fi one names both exporters. */
 static void test_rf_table_names_no_exporter(void) {
     ASSERT(g_alert_table_rf.exporter == NULL);
-    ASSERT(g_alert_table_sloth.exporter != NULL);
+    ASSERT(g_alert_table_wifi.exporter != NULL);
     ASSERT_EQ(g_alert_table_rf.forget_count, 3);
-    ASSERT_GT(g_alert_table_sloth.forget_count, g_alert_table_rf.forget_count);
+    /* Three each since #216: wired, twin and sensor there; GNSS, ADS-B
+     * and sensor here. */
+    ASSERT_EQ(g_alert_table_wifi.forget_count, 3);
     for (int i = 0; i < g_alert_table_rf.forget_count; i++)
         ASSERT(g_alert_table_rf.forget[i] != NULL);
 }
@@ -225,15 +253,15 @@ static void test_selection_is_what_the_engine_runs(void) {
     alerts_clear();
 
     capture_side_install();
-    ASSERT(alerts_table() == &g_alert_table_sloth);
-    ASSERT_EQ(g_alert_rule_count, g_alert_table_sloth.count);
+    ASSERT(alerts_table() == &g_alert_table_wifi);
+    ASSERT_EQ(g_alert_rule_count, g_alert_table_wifi.count);
     end();
 }
 
 void run_rf_rules_tests(void) {
     TEST_SUITE("sloth-rf: the rule table it selects (#213)");
     RUN_TEST(test_rf_table_rows_and_order);
-    RUN_TEST(test_rf_table_is_a_subsequence_of_the_full_one);
+    RUN_TEST(test_gnss_and_adsb_rules_are_the_rf_tables_alone);
     RUN_TEST(test_undervolt_is_not_in_the_rf_table);
     RUN_TEST(test_rf_table_fires_source_down_for_its_sources);
     RUN_TEST(test_no_capture_side_judges_no_capture_row);

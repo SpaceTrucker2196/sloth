@@ -149,7 +149,6 @@ void run_adsb_beast_tests(void);         /* tests/test_adsb_beast.c (#186) */
 void run_aprs_tests(void);               /* tests/test_aprs.c (2026-11-05) */
 void run_rtl433_tests(void);             /* tests/test_rtl433.c (#208) */
 void run_gnss_view_tests(void);          /* tests/test_gnss_view.c (2026-11-02) */
-void run_adsb_view_tests(void);          /* tests/test_adsb_view.c (#186) */
 void run_dhcp_tests(void);
 void run_rtt_tests(void);
 void run_tree_tests(void);
@@ -230,6 +229,7 @@ void run_rf_jsonl_tests(void);
 void run_rf_loop_tests(void);
 void run_rf_db_tests(void);
 void run_rf_build_tests(void);
+void run_rf_moved_tests(void);            /* tests/test_rf_moved.c (#216) */
 void run_ip_owner_tests(void);
 void run_dashboard_tests(void);
 void run_ip_color_tests(void);
@@ -380,7 +380,6 @@ int main(void) {
     run_aprs_tests();
     run_rtl433_tests();
     run_gnss_view_tests();
-    run_adsb_view_tests();
     run_dhcp_tests();
     run_rtt_tests();
     run_tree_tests();
@@ -448,6 +447,7 @@ int main(void) {
     run_rf_loop_tests();
     run_rf_db_tests();
     run_rf_build_tests();
+    run_rf_moved_tests();
     run_ip_owner_tests();
     run_dashboard_tests();
     run_ip_color_tests();

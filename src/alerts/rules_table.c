@@ -26,7 +26,7 @@
 
 #define R(fn) { #fn, fn }
 
-static const alert_rule_t sloth_rules[] = {
+static const alert_rule_t wifi_rules[] = {
     R(rule_port_scan),
     R(rule_deauth_flood),
     R(rule_nxdomain_burst),
@@ -113,15 +113,12 @@ static const alert_rule_t sloth_rules[] = {
     R(rule_country_absent),
     R(rule_dfs_masking),
     R(rule_cam_rtsp_unauth),
-    /* The GNSS rules depend on no other rule and none on them. Jamming
-     * first: when a jam and a reacquisition land in one tick, the
-     * interference reaches the stream before the suspicion it feeds. */
-    R(rule_gnss_jamming),
-    R(rule_gnss_time_jump),
-    R(rule_gnss_position_jump),
-    R(rule_gnss_spoof_suspect),
-    /* Reads only the ADS-B table; depends on no other rule. */
-    R(rule_adsb_emergency),
+    /* No GNSS rule and no ADSB_EMERGENCY since the cutover (#216, ADR
+     * 0010): those five rows are sloth-rf's alone
+     * (src/alerts/rules_table_rf.c), and they sat here, in that table's
+     * order, between rule_cam_rtsp_unauth and the sensor's own pair.
+     * This daemon still links the receiver, for the location stamp and
+     * the twin rules' motion suppression; it does not judge it. */
     /* The sensor's own state; read only sys_status_get(), and depend on
      * no other rule. */
     R(rule_sensor_undervolt),
@@ -133,17 +130,15 @@ static const alert_rule_t sloth_rules[] = {
 /* What alerts_clear() drops beside the engine's own state: the history
  * these rows keep between ticks. Order is the one the engine always
  * called them in; none reads another's. */
-static void (*const sloth_forget[])(void) = {
+static void (*const wifi_forget[])(void) = {
     rules_wired_forget,
-    rules_gnss_forget,
-    rules_adsb_forget,
     rules_twin_forget,
     rules_sensor_forget,
 };
 
 /* The two per-alert pcap exporters (src/alerts/rules.h says why they are
  * the table's). */
-static const alert_exporter_t sloth_exporter = {
+static const alert_exporter_t wifi_exporter = {
     alert_pcap_enabled,
     alert_pcap_dump,
     evidence_export_enabled,
@@ -152,11 +147,12 @@ static const alert_exporter_t sloth_exporter = {
     evidence_export_path,
 };
 
-/* The table `sloth` selects (src/main.c), and the test binary with it. */
-const alert_rule_table_t g_alert_table_sloth = {
-    sloth_rules,
-    (int)(sizeof(sloth_rules) / sizeof(sloth_rules[0])),
-    sloth_forget,
-    (int)(sizeof(sloth_forget) / sizeof(sloth_forget[0])),
-    &sloth_exporter,
+/* The table sloth-wifi selects (src/capture_side.c), and the test
+ * binary with it. */
+const alert_rule_table_t g_alert_table_wifi = {
+    wifi_rules,
+    (int)(sizeof(wifi_rules) / sizeof(wifi_rules[0])),
+    wifi_forget,
+    (int)(sizeof(wifi_forget) / sizeof(wifi_forget[0])),
+    &wifi_exporter,
 };

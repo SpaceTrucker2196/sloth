@@ -1,6 +1,6 @@
 ---
 name: cli-reference
-description: Complete command, flag, argument, keybinding and environment reference for the sloth binary — the authoritative CLI page
+description: Complete command, flag, argument, keybinding and environment reference for the two sensor daemons, sloth-wifi (alias sloth) and sloth-rf, and for slothweb — the authoritative CLI page
 type: reference
 ---
 
@@ -8,7 +8,13 @@ type: reference
 
 **Summary**: Every command-line flag, its argument, default, and effect;
 every runtime keybinding; the tab-bar status badges; the environment
-variables; and exit codes.
+variables; and exit codes. Two sensor binaries since the cutover (#216,
+[ADR 0010](adr/0010-wifi-rf-daemons.md)): **`sloth-wifi`** (IP, 802.11,
+BLE; `sloth` is a symlink to it and is the same program) and
+**`sloth-rf`** (ADS-B, APRS, rtl_433, Victron, the GNSS records). Every
+section down to "Exit codes" is `sloth-wifi`'s; `sloth-rf` has its own
+section after it. Where this page says `sloth` it means `sloth-wifi`
+under either name.
 Source of truth is `print_usage()` and the argv loop in `src/main.c`, and
 `include/sloth_views.def` / `handle_key()` for the keys. If this page and the
 binary disagree, the binary is right — and this page is out of sync, which
@@ -21,21 +27,27 @@ only that each flag and key is here.
 
 **Sources**: `src/main.c` (`print_usage`, `main` argv loop, `handle_key`),
 `src/rf/rf_args.c` and `src/rf/main.c` (sloth-rf), `src/gnss_flags.c`,
-`src/rf_flags.c` and `src/daemon_start.c` (the flag checks both daemons
-call), `tests/replay/rf_refusals.sh`,
+`src/daemon_start.c` (the flag checks both daemons call),
+`src/rf_flags.c` (the decoder flags' checks, sloth-rf's),
+`src/rf_moved.c` (sloth-wifi's refusal of them),
+`tests/replay/rf_refusals.sh`,
 `include/sloth_views.def` (expanded by `src/view_labels.c`),
 `include/sloth.h`; `src/persist_health.c`
 (`persist_badge`), `src/tui.c` (`draw_tabbar`, both front ends) and
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-11-15 (#214: slothweb's `--rf-socket SPEC` and `--rf-db PATH`, sloth-rf's socket and database read beside sloth's; no sensor flag changed), 2026-11-15 ([[victron]]: sloth-rf's `source_status` gains the `victron` row, five not four; no flag changed), 2026-11-15 (#213, owner ruling: sloth-rf no longer takes `--jsonl`; its JSONL flag is `-o` / `--out` only, so both daemons take the same flags); 2026-11-15 (#213 review: sloth-rf's JSONL flag is documented as `-o` / `--out`, `sloth`'s spelling, with `--jsonl` as its own extra one; the bare `--data-socket` remedy names no port, since 8765 is `sloth`'s); 2026-11-15 (#213: the `sloth-rf` section, the second daemon's flags, `--victron` among them; the receiver's and decoders' flag checks are one copy both mains call); 2026-11-15 (`--victron SPEC`: tail the JSONL the `sloth-va` helper writes, the owner's Victron readings; file-only, sloth connects to nothing); 2026-11-14 (`--rtl433 SPEC`, #208: tail the JSON event log a local rtl_433 already writes, as a passive sub-GHz sensor; file-only, no SDR and no network); 2026-11-13 (`--aprs-freq HZ` and `--aprs-silent-hours N`, #204: the decoder's declared frequency against the GNSS-derived region, and the silent-decoder threshold); 2026-11-12 (`--monitor-iface NAME` pins the monitor radio); 2026-11-12 (`--gps gpsd://`: the one line sent is `?WATCH={"enable":true,"json":true,"pps":true}`, #182; `report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); 2026-11-12 (`karma.forge_assoc_s`, #187); 2026-11-12 (`report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); ---
+**Last updated**: 2026-11-15 (#216, the cutover: the Wi-Fi binary is `sloth-wifi` with `sloth` a symlink to it; it refuses `--adsb`, `--aprs`, `--aprs-freq`, `--aprs-silent-hours`, `--rtl433` and `--victron` with exit 2 and one line naming `sloth-rf` and `sloth-migrate-rf`; the six rows moved to the sloth-rf table; the `^` ADS-B view key is gone), 2026-11-15 (#214: slothweb's `--rf-socket SPEC` and `--rf-db PATH`, sloth-rf's socket and database read beside sloth's; no sensor flag changed), 2026-11-15 ([[victron]]: sloth-rf's `source_status` gains the `victron` row, five not four; no flag changed), 2026-11-15 (#213, owner ruling: sloth-rf no longer takes `--jsonl`; its JSONL flag is `-o` / `--out` only, so both daemons take the same flags); 2026-11-15 (#213 review: sloth-rf's JSONL flag is documented as `-o` / `--out`, `sloth`'s spelling, with `--jsonl` as its own extra one; the bare `--data-socket` remedy names no port, since 8765 is `sloth`'s); 2026-11-15 (#213: the `sloth-rf` section, the second daemon's flags, `--victron` among them; the receiver's and decoders' flag checks are one copy both mains call); 2026-11-15 (`--victron SPEC`: tail the JSONL the `sloth-va` helper writes, the owner's Victron readings; file-only, sloth connects to nothing); 2026-11-14 (`--rtl433 SPEC`, #208: tail the JSON event log a local rtl_433 already writes, as a passive sub-GHz sensor; file-only, no SDR and no network); 2026-11-13 (`--aprs-freq HZ` and `--aprs-silent-hours N`, #204: the decoder's declared frequency against the GNSS-derived region, and the silent-decoder threshold); 2026-11-12 (`--monitor-iface NAME` pins the monitor radio); 2026-11-12 (`--gps gpsd://`: the one line sent is `?WATCH={"enable":true,"json":true,"pps":true}`, #182; `report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); 2026-11-12 (`karma.forge_assoc_s`, #187); 2026-11-12 (`report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); ---
 
 ## Synopsis
 
 ```
-sloth [output] [handshakes] [stream] [wifi] [bluetooth] [correlation] [db]
-      [inventory] [posture] [replay] [runtime] [--help] [--version]
+sloth-wifi [output] [handshakes] [stream] [wifi] [bluetooth] [location]
+           [correlation] [db] [inventory] [posture] [replay] [runtime]
+           [--help] [--version]
+sloth      ...    the same program: a symlink to sloth-wifi (build tree
+                  and /usr/local/bin), kept with no end date
+sloth-rf   [decoders] [receiver] [output] [db] [stream] [runtime]   (see "sloth-rf")
 ```
 
 Run as root (or with `CAP_NET_ADMIN` + `CAP_NET_RAW`) for capture. A
@@ -195,7 +207,7 @@ Thresholds of the four `--gps` rules ([[alerts]] § The GNSS receiver, `src/aler
 | `gnss.time_jump_ms` | 1000 | 200..3600000 | `GNSS_TIME_JUMP` (and heuristic 3): ms the receiver's time must step against the host's monotonic clock between fixes. The gpsd time HOWTO: the in-band delay "may be stable to 10 mSec for hours and then jump by 200mSec", so 200 ms is the floor, and "anything below roughly a second is noise on its own terms" (`research/gnss/time-and-position-integrity.md`) |
 | `gnss.pos_jump_k` | 3 | 1..100 | `GNSS_POSITION_JUMP` (and heuristic 3): the multiplier on eph₁ + eph₂ in the bound `(speed + eps) × Δt + k × (eph₁ + eph₂)`. "Because the confidence level of eph is unknown, a multiplier on it is a judgement, not a cited value": 3 covers eph read as one sigma to three sigma per fix |
 
-Threshold of the `--adsb` rule ([[alerts]] § ADS-B, `src/alerts/rules_adsb.c`; basis `research/adsb/emergency-squawks.md`).
+Threshold of the `--adsb` rule ([[alerts]] § ADS-B, `src/alerts/rules_adsb.c`; basis `research/adsb/emergency-squawks.md`). The rule and the twelve `gnss.*` rule knobs above are read by `sloth-rf` only since the cutover (#216); the registry is one, so `sloth-wifi --tune-list` still prints them and `--tune` still accepts them, to no effect there.
 
 | Knob | Default | Range | Meaning |
 |------|---------|-------|---------|
@@ -283,18 +295,37 @@ scan, or restart the scan, to have it recorded. → [[ble]]
 Both opt-in; neither is a network the sensor monitors, and neither puts
 a frame on one. Each is announced on stderr at startup. → [[location]]
 
+`sloth-wifi` keeps the receiver (owner ruling 2026-11-15): the position
+stamp on alerts and devices, `device_positions`, `sensor_positions`,
+the twin rules' motion suppression, the `[#]` view, the `gnss` row of
+`source_status` and `sensor_health`'s `gps_*`, `gnss_*` and `loc_*`
+members. It does not write the `gnss_fix` / `gnss_sky` / `gnss_sat`
+records or the `gnss_fixes` / `gnss_sightings` tables and runs no
+`GNSS_*` rule: those are `sloth-rf`'s, from its own copy of the same
+reader. A serial receiver opens once, so a host that gives `--gps` to
+both daemons uses gpsd.
+
 | Flag | Arg | Default | Effect |
 |------|-----|---------|--------|
 | `--location` | `LAT,LON[,ALT]` | off | The sensor's fixed position, WGS84 decimal degrees and metres above mean sea level (`51.50074,-0.12469,12`). Every new alert incident is stamped with it: the JSONL `alert` / `alert.*` records' `loc` object, the `--db` alerts row's `lat`/`lon`/`alt_m`/`loc_src`/`loc_ts`, the evidence manifests' `loc`. A latitude outside -90..90, a longitude outside -180..180, an altitude outside -1000..20000 or anything that is not a decimal number exits 2. Allowed with `--replay` (the files were captured somewhere; say where). |
 | `--gps` | `SPEC` | off | Read the sensor's position from a receiver. `SPEC` is `/dev/ttyXXX` — NMEA 0183 GGA, RMC and GSA off a serial device, checksum verified, opened read-only (`O_RDONLY`; sloth never writes a byte to the receiver) **before** the privilege drop, because the drop clears supplementary groups and the device is usually group `dialout`, and read on a worker after it — or `gpsd://[HOST[:PORT]]`, gpsd's JSON stream over TCP (default `127.0.0.1:2947`), dialled after the drop; sloth sends gpsd exactly one line, `?WATCH={"enable":true,"json":true,"pps":true}` (`"pps"` since 2026-11-12, #182: gpsd then also sends `TOFF`, which `GNSS_TIME_JUMP` judges on, [[gnss]]), then only reads. There is no `gpsd://PATH`: gpsd has no Unix-socket data transport (its `-F` socket takes device add/remove commands only). A fix younger than `gps.max_fix_age_s` stamps as `loc_src` `gps` and wins over `--location`; an older one, or a receiver reporting no fix, stamps nothing (or the `--location` value). Fix quality 6 (dead reckoning), 7 (manual) and 8 (simulation) never stamp. With `--db`, a moving sensor also records `device_positions` and `sensor_positions`. `sensor_health` carries `gps_*`; the interface view's health strip carries `gps <state>`. Refused (exit 2) with `--replay`, for a malformed SPEC, a host name (numeric addresses only: no resolver), a device that cannot be opened, and a non-loopback gpsd without `--gps-allow-remote`. |
 | `--gps-allow-remote` | — | off | Permit `--gps gpsd://HOST` outside 127.0.0.0/8 and `::1`. The stream is unauthenticated and unencrypted. `--strict` refuses a remote gpsd regardless: a lock another flag can override is not a lock. Ignored, with a notice, without `--gps`. |
-| `--adsb` | `SPEC` | off | Read a local, already-running ADS-B decoder (readsb, dump1090-fa) ([[adsb]]). `SPEC` is an absolute path or `file:///path` to its `aircraft.json`, or `sbs://[HOST[:PORT]]` for its SBS / BaseStation TCP output, or `beast://[HOST[:PORT]]` for its Beast binary output. **File**: opened afresh about once a second (`ADSB_POLL_MS`; the decoder replaces it by rename), read-only, by a worker started after the privilege drop; a regular file of at most 2 MiB, else counted as a read error; no network. **`sbs://`** (2026-11-09): `HOST` a numeric loopback address (`127.0.0.0/8` or `[::1]`), default `127.0.0.1:30003` (readsb's SBS port); a TCP client started after the privilege drop that **never writes a byte to the socket**, announced on stderr; a refused connect or a closed session is a read error, retried after 2 s (doubling to 30 s while the connect keeps failing); lines over 512 bytes and malformed lines are parse errors, not fatal; `live` while any line, readsb's 60 s heartbeat included, arrived in the last 130 s. Under `sloth-sensor.service` it needs `AF_INET` (`AF_INET6` for `[::1]`) added to `RestrictAddressFamilies=` by a drop-in. **`beast://`** (2026-11-09): the same rules, default `127.0.0.1:30005` (readsb's `--net-bo-port`); sloth frames the stream and decodes the Mode S frames itself (CRC-24 with no bit correction; DF17/18 only intact; DF4/5/20/21 only for an address a clean DF17 or DF11 confirmed in the last 60 s; CPR from an even/odd pair within 10 s, then locally against the aircraft's own last fix); garbage, unknown frame types and cut frames are parse errors, CRC failures `bad`, never fatal; `live` while any frame, readsb's 60 s Mode A/C heartbeat included, arrived in the last 130 s. sloth never opens or tunes the SDR. A missing file or an unreachable port is not a refusal: the `adsb` sensor and `sensor_health`'s `adsb_state` read `error` until it appears. Emits `adsb_aircraft` (change-only) and `adsb_*` in `sensor_health`. Refused (exit 2) with `--replay`, for a relative path, a directory path, `file://HOST/`, any other scheme, an `sbs://` or `beast://` host that is a name or not loopback, or a port outside 1..65535. |
-| `--aprs` | `SPEC` | off | Tail the packet log a local, already-running Dire Wolf APRS decoder writes (`direwolf -L FILE`, one CSV line per decoded packet; [[aprs]]). `SPEC` is an absolute path or `file:///path`. Checked about once a second (`APRS_POLL_MS`) by a worker started after the privilege drop, read-only: the first look starts at the file's end (its history is not replayed; sloth.db already holds what an earlier run read), a file that appears later or a new file at the path (rotation) is read from its start, a file that shrank (logrotate `copytruncate`) from 0; at most 256 KiB a poll, lines over 1024 bytes counted bad. sloth never touches the radio, the SDR or Dire Wolf and uses no network. A missing file is a state, not a refusal (`aprs_state` `waiting`; Dire Wolf creates the file with its first packet); an unreadable one reads `error`. Emits `aprs_packet` (one per packet), `aprs_station` (change-only) and `aprs_*` in `sensor_health`; with `--db`, `aprs_stations` and `aprs_packets`. Refused (exit 2) with `--replay`, for a relative path, a directory path, `file://HOST/` and any other scheme. |
-| `--aprs-freq` | `HZ` | not declared | The frequency the Dire Wolf decoder is **configured** for, in Hz, `144000000`..`148000000` (#204; [[aprs]] § The channel). On the reference host that is `APRS_FREQ` in `/etc/default/aprs`, not `rx_fm`'s reported hardware tune, which sits fs/4 above it (about 144.894 MHz for 144.390) and is normal. sloth compares it with the APRS channel of the region its GNSS position falls in and sets `aprs_freq_mismatch` 1 in `sensor_health` when they are more than 6.25 kHz apart; it never changes the decoder. Decimal Hz only (`144.39` is refused). Needs `--aprs` (exit 2 without it, or out of range). |
-| `--aprs-silent-hours` | `N` | `6` | Report the decoder **silent** (`aprs_silent` 1 in `sensor_health`, a notice on slothweb's APRS tab) when its log is readable (`aprs_state` `live`) but no packet arrived for `N` hours, counted from the newest packet or this run's first read, whichever is later. `0` turns it off; `1`..`168`. Six hours is six times the quiet hour the state already tolerates and catches a dead receive chain the same day ([[aprs]] § Silent). Needs `--aprs`. |
-| `--rtl433` | `SPEC` | off | Tail the JSON event log a local, already-running `rtl_433` writes (`rtl_433 -F json`, one JSON object per decode; [[rtl433]]). `SPEC` is an absolute path or `file:///path`. Checked about once a second (`RTL433_POLL_MS`) by a worker started after the privilege drop, read-only: the first look starts at the file's end (its history is not replayed), a file that appears later or a new file at the path (rotation) is read from its start, a file that shrank (logrotate `copytruncate`) from 0; at most 256 KiB a poll, lines over 1024 bytes counted bad. **sloth never opens, tunes, hops or runs the SDR** - `rtl_433` owns it - and uses no network. A missing file is a state, not a refusal (`rtl433_state` `waiting`; `rtl_433` creates the file with its first decode); an unreadable one, or anything that is not a regular file, reads `error`. Each line is keyed `(model, id)` into a table of 256 rows that drops the least recently heard on full (`evict_rtl433`); a line that is not one JSON object, or that carries no usable `model` or `id`, is a bad line with its own `rtl433_rej_*` counter. Emits `rtl433_device` (change-only) and `rtl433_*` in `sensor_health`. Refused (exit 2) with `--replay`, for a relative path, a directory path, `file://HOST/` and any other scheme. |
-| `--victron` | `SPEC` | off | Tail the JSONL the `sloth-va` helper appends to (`/var/lib/sloth-va/victron.jsonl`; [[victron]]): the owner's Victron readings, decrypted Instant Readout (`source` `readout`) and GATT sessions (`gatt`). `SPEC` is an absolute path or `file:///path`. The same tail as `--rtl433` (once a second, from the end at startup, rotation and truncation followed, at most 64 KiB a poll, lines over 2048 bytes bad). **sloth only reads the file**: sloth-va is the separate component that connects to the devices ([ADR 0011](adr/0011-sloth-va-transmits.md)); sloth opens no Bluetooth socket for this and decrypts nothing. A missing file is `waiting`. One row per device address, at most 16 (a 17th is counted, `victron_table_full`, never evicting); values only from an allow-list with bounds, out of range absent (`victron_bad_values`), other names counted (`victron_other_keys`); the device's own name (`label`) is not kept. Emits `victron_device` (change-only, values banded) and `victron_*` in `sensor_health`. Refused (exit 2) with `--replay` and for a malformed SPEC. |
 | `--gps-baud` | `N` | 9600 | Serial speed for `--gps /dev/...`: 4800, 9600, 19200, 38400, 57600 or 115200. Anything else, or the flag with a gpsd SPEC or without `--gps`, exits 2. |
+
+### Refused — the SDR decoders' flags (#216)
+
+| Flag | Effect |
+|------|--------|
+| `--adsb`, `--aprs`, `--aprs-freq`, `--aprs-silent-hours`, `--rtl433`, `--victron` | **Exit `2`**, with or without a value, before anything is opened, printing one line: `sloth-wifi: --adsb is sloth-rf's flag since the split (JSONL 2.0.0): this daemon reads no SDR decoder. Run 'sloth-migrate-rf --apply' to move it from /etc/default/sloth to /etc/default/sloth-rf, then start sloth-rf (docs/wiki/deployment.md section 11.4)` (the flag named is the one given; `src/rf_moved.c`). |
+
+Until the cutover the one binary took these six. They are `sloth-rf`'s
+(§ sloth-rf, below), and `sloth-wifi` links none of the decoders: the
+`Makefile`'s `check_wifi_no_rf` fails the link if a decoder symbol is
+in it. A refusal and not "unknown argument", because a sensor whose
+`/etc/default/sloth` still names one must say what to do, not print a
+usage text into the journal; [[deployment]] §11.4 is the upgrade.
+`tests/test_rf_moved.c` holds the line and `tests/replay/rf_refusals.sh`
+the exit code, on the linked binary and on the `sloth` symlink.
 
 ### Privilege — dropping root after capture opens
 
@@ -443,12 +474,12 @@ per-frame detectors behave as live. → [[replay-integration]]
 | `8` ARP | `e` EAPOL | `m` Channel | |
 | `9` mDNS | `j` Seqnum | `w` Assoc | `*` BLE |
 | `0` NBNS | | | `#` GNSS |
-| | | | `^` ADS-B |
 
-`*` is BLE, `#` is GNSS and `^` is ADS-B because every letter and digit
-already selects a view or is a global (`b` is Beacons); `^` points up,
-which is where the aircraft are. Full map with
-descriptions: [[views-catalog]].
+`*` is BLE and `#` is GNSS because every letter and digit already
+selects a view or is a global (`b` is Beacons). `^` selected the ADS-B
+view until the cutover (#216); the aircraft table is `sloth-rf`'s, which
+is headless, and is read in slothweb, so the key selects nothing now.
+Full map with descriptions: [[views-catalog]].
 
 ### Global keys
 
@@ -552,7 +583,7 @@ only a configured `storage.*` floor refuses anything in advance. See
 |------|---------|
 | `0` | Clean exit (incl. `--version`, `--help`, and the end of a `--ticks N` run). |
 | `1` | A `--replay` file that cannot be opened, is not a savefile, has a datalink with no route, or is damaged part-way (#119). |
-| `2` | Bad argument, or a fail-closed refusal (`--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--strict` with a routable `--data-socket`, `--eapol-dir` without `--collect-handshakes`, `--pcap-dir` and `--eapol-dir` naming one directory (#166), a `--handshake-retention` value outside `0..36500`, a `--correlate-retain`/`--db-*`/`--wps-*` value that is not an integer inside its knob's range (#120), a `--user` naming no account or needing root it does not have, `--user` with `--no-privdrop`, a privilege drop that failed or did not read back, `--iface` naming a raw HCI device `bluetoothN`, a `--monitor-iface` given twice, not an interface name, naming `bluetoothN`, with `--replay` or in a `WITH_PCAP=0` build, `--bt-monitor` with `--replay` or in a `WITH_PCAP=0` build, a `--location` outside its ranges, a malformed `--gps` SPEC, `--gps` with `--replay`, a `--gps` device that cannot be opened, a non-loopback gpsd without `--gps-allow-remote` or under `--strict`, a `--gps-baud` outside its list, a malformed or unsupported `--adsb` SPEC (a non-loopback `sbs://` or `beast://` host), `--adsb` with `--replay`, a malformed `--aprs` SPEC, `--aprs` with `--replay`, a malformed `--rtl433` SPEC, `--rtl433` with `--replay`, a malformed `--victron` SPEC, `--victron` with `--replay`). |
+| `2` | Bad argument, or a fail-closed refusal (one of the six decoder flags, which are `sloth-rf`'s since #216: § Refused; `--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--strict` with a routable `--data-socket`, `--eapol-dir` without `--collect-handshakes`, `--pcap-dir` and `--eapol-dir` naming one directory (#166), a `--handshake-retention` value outside `0..36500`, a `--correlate-retain`/`--db-*`/`--wps-*` value that is not an integer inside its knob's range (#120), a `--user` naming no account or needing root it does not have, `--user` with `--no-privdrop`, a privilege drop that failed or did not read back, `--iface` naming a raw HCI device `bluetoothN`, a `--monitor-iface` given twice, not an interface name, naming `bluetoothN`, with `--replay` or in a `WITH_PCAP=0` build, `--bt-monitor` with `--replay` or in a `WITH_PCAP=0` build, a `--location` outside its ranges, a malformed `--gps` SPEC, `--gps` with `--replay`, a `--gps` device that cannot be opened, a non-loopback gpsd without `--gps-allow-remote` or under `--strict`, a `--gps-baud` outside its list, a malformed or unsupported `--adsb` SPEC (a non-loopback `sbs://` or `beast://` host), `--adsb` with `--replay`, a malformed `--aprs` SPEC, `--aprs` with `--replay`, a malformed `--rtl433` SPEC, `--rtl433` with `--replay`, a malformed `--victron` SPEC, `--victron` with `--replay`). |
 
 ## sloth-rf
 
@@ -560,35 +591,41 @@ only a configured `storage.*` floor refuses anything in advance. See
 [ADR 0010](adr/0010-wifi-rf-daemons.md), [[architecture-rf-split]]): it
 reads a GNSS receiver, the files or loopback sockets that readsb,
 Dire Wolf and rtl_433 write and the file `sloth-va` writes, and makes the JSONL records, database rows
-and alerts `sloth` makes from the same inputs. It opens no radio, tunes
+and alerts for them. Since the cutover (#216) it is the only daemon
+that does: `sloth-wifi` refuses the six decoder flags. It opens no radio, tunes
 no SDR and transmits nothing (`MISSION.md` §2); the one line it writes
 to a peer is gpsd's `?WATCH`, announced. It has no terminal interface:
 slothweb is its interface: `slothweb --rf-socket SPEC --rf-db PATH`
 reads it beside `sloth` (#214, § slothweb).
 
-It is built by a plain `make` beside `sloth` and is **not installed
-yet**: the unit and the migrate tool are #215. Until cutover (#216)
-`sloth` keeps every flag below too, so the two must not be pointed at
-one serial GPS (a serial device opens once; both can read gpsd).
+It is built by a plain `make` beside `sloth-wifi`, installed by `make
+install` and run by `sloth-rf.service` ([[deployment]] §11). Both
+daemons take `--gps`, so the two must not be pointed at one serial GPS
+(a serial device opens once; both can read gpsd).
 
-Every flag `sloth-rf` shares with `sloth` is read and refused by the
-same function (`src/gnss_flags.c`, `src/rf_flags.c`,
-`src/daemon_start.c`), so the meaning, the refusal text and the exit
-code are those of the `sloth` rows above. The messages say `sloth:` in
-both daemons: it is the prefix every shared module already prints, and
-it is what makes the two refusals the same bytes. `make replay-check`
-runs both binaries on 22 refused command lines and compares stderr
-(`tests/replay/rf_refusals.sh`), and on `--jsonl`, which both refuse as
-an unknown argument.
+Every flag `sloth-rf` shares with `sloth-wifi` (the receiver's, `-o`,
+`--db`, `--data-socket`, `--strict`, `--tune`, `--user`,
+`--no-privdrop`, `--ticks`) is read and refused by the same function
+(`src/gnss_flags.c`, `src/daemon_start.c`), so the meaning, the refusal
+text and the exit code are those of the `sloth-wifi` rows above. The
+messages say `sloth:` in both daemons, the decoder flags' included
+(`src/rf_flags.c`): it is the prefix every shared module already
+prints, and it is what makes the shared refusals the same bytes.
+`make replay-check` runs both binaries on the command lines both
+refuse and compares stderr, runs the six decoder flags through both
+(`sloth-wifi` refuses each, `sloth-rf` takes each), and holds `sloth`
+to being a symlink that answers as `sloth-wifi` does
+(`tests/replay/rf_refusals.sh`); `--jsonl` both refuse as an unknown
+argument.
 
 | Flag | Arg | Default | Effect |
 |------|-----|---------|--------|
-| `--adsb` | `SPEC` | off | As `sloth`'s (Location group above; [[adsb]]). |
-| `--aprs` | `SPEC` | off | As `sloth`'s ([[aprs]]). |
-| `--aprs-freq` | `HZ` | not declared | As `sloth`'s. Needs `--aprs`. |
-| `--aprs-silent-hours` | `N` | `6` | As `sloth`'s. Needs `--aprs`. |
-| `--rtl433` | `SPEC` | off | As `sloth`'s ([[rtl433]]). |
-| `--victron` | `SPEC` | off | As `sloth`'s ([[victron]]): the file `sloth-va` writes, read only. This daemon opens no Bluetooth socket; `sloth-va` is the component that connects (ADR 0011). |
+| `--adsb` | `SPEC` | off | Read a local, already-running ADS-B decoder (readsb, dump1090-fa) ([[adsb]]). `SPEC` is an absolute path or `file:///path` to its `aircraft.json`, or `sbs://[HOST[:PORT]]` for its SBS / BaseStation TCP output, or `beast://[HOST[:PORT]]` for its Beast binary output. **File**: opened afresh about once a second (`ADSB_POLL_MS`; the decoder replaces it by rename), read-only, by a worker started after the privilege drop; a regular file of at most 2 MiB, else counted as a read error; no network. **`sbs://`** (2026-11-09): `HOST` a numeric loopback address (`127.0.0.0/8` or `[::1]`), default `127.0.0.1:30003` (readsb's SBS port); a TCP client started after the privilege drop that **never writes a byte to the socket**, announced on stderr; a refused connect or a closed session is a read error, retried after 2 s (doubling to 30 s while the connect keeps failing); lines over 512 bytes and malformed lines are parse errors, not fatal; `live` while any line, readsb's 60 s heartbeat included, arrived in the last 130 s. Under `sloth-sensor.service` it needs `AF_INET` (`AF_INET6` for `[::1]`) added to `RestrictAddressFamilies=` by a drop-in. **`beast://`** (2026-11-09): the same rules, default `127.0.0.1:30005` (readsb's `--net-bo-port`); sloth frames the stream and decodes the Mode S frames itself (CRC-24 with no bit correction; DF17/18 only intact; DF4/5/20/21 only for an address a clean DF17 or DF11 confirmed in the last 60 s; CPR from an even/odd pair within 10 s, then locally against the aircraft's own last fix); garbage, unknown frame types and cut frames are parse errors, CRC failures `bad`, never fatal; `live` while any frame, readsb's 60 s Mode A/C heartbeat included, arrived in the last 130 s. sloth never opens or tunes the SDR. A missing file or an unreachable port is not a refusal: the `adsb` sensor and `sensor_health`'s `adsb_state` read `error` until it appears. Emits `adsb_aircraft` (change-only) and `adsb_*` in `sensor_health`. Refused (exit 2) with `--replay`, for a relative path, a directory path, `file://HOST/`, any other scheme, an `sbs://` or `beast://` host that is a name or not loopback, or a port outside 1..65535. |
+| `--aprs` | `SPEC` | off | Tail the packet log a local, already-running Dire Wolf APRS decoder writes (`direwolf -L FILE`, one CSV line per decoded packet; [[aprs]]). `SPEC` is an absolute path or `file:///path`. Checked about once a second (`APRS_POLL_MS`) by a worker started after the privilege drop, read-only: the first look starts at the file's end (its history is not replayed; sloth.db already holds what an earlier run read), a file that appears later or a new file at the path (rotation) is read from its start, a file that shrank (logrotate `copytruncate`) from 0; at most 256 KiB a poll, lines over 1024 bytes counted bad. sloth never touches the radio, the SDR or Dire Wolf and uses no network. A missing file is a state, not a refusal (`aprs_state` `waiting`; Dire Wolf creates the file with its first packet); an unreadable one reads `error`. Emits `aprs_packet` (one per packet), `aprs_station` (change-only) and `aprs_*` in `sensor_health`; with `--db`, `aprs_stations` and `aprs_packets`. Refused (exit 2) with `--replay`, for a relative path, a directory path, `file://HOST/` and any other scheme. |
+| `--aprs-freq` | `HZ` | not declared | The frequency the Dire Wolf decoder is **configured** for, in Hz, `144000000`..`148000000` (#204; [[aprs]] § The channel). On the reference host that is `APRS_FREQ` in `/etc/default/aprs`, not `rx_fm`'s reported hardware tune, which sits fs/4 above it (about 144.894 MHz for 144.390) and is normal. sloth compares it with the APRS channel of the region its GNSS position falls in and sets `aprs_freq_mismatch` 1 in `sensor_health` when they are more than 6.25 kHz apart; it never changes the decoder. Decimal Hz only (`144.39` is refused). Needs `--aprs` (exit 2 without it, or out of range). |
+| `--aprs-silent-hours` | `N` | `6` | Report the decoder **silent** (`aprs_silent` 1 in `sensor_health`, a notice on slothweb's APRS tab) when its log is readable (`aprs_state` `live`) but no packet arrived for `N` hours, counted from the newest packet or this run's first read, whichever is later. `0` turns it off; `1`..`168`. Six hours is six times the quiet hour the state already tolerates and catches a dead receive chain the same day ([[aprs]] § Silent). Needs `--aprs`. |
+| `--rtl433` | `SPEC` | off | Tail the JSON event log a local, already-running `rtl_433` writes (`rtl_433 -F json`, one JSON object per decode; [[rtl433]]). `SPEC` is an absolute path or `file:///path`. Checked about once a second (`RTL433_POLL_MS`) by a worker started after the privilege drop, read-only: the first look starts at the file's end (its history is not replayed), a file that appears later or a new file at the path (rotation) is read from its start, a file that shrank (logrotate `copytruncate`) from 0; at most 256 KiB a poll, lines over 1024 bytes counted bad. **sloth never opens, tunes, hops or runs the SDR** - `rtl_433` owns it - and uses no network. A missing file is a state, not a refusal (`rtl433_state` `waiting`; `rtl_433` creates the file with its first decode); an unreadable one, or anything that is not a regular file, reads `error`. Each line is keyed `(model, id)` into a table of 256 rows that drops the least recently heard on full (`evict_rtl433`); a line that is not one JSON object, or that carries no usable `model` or `id`, is a bad line with its own `rtl433_rej_*` counter. Emits `rtl433_device` (change-only) and `rtl433_*` in `sensor_health`. Refused (exit 2) with `--replay`, for a relative path, a directory path, `file://HOST/` and any other scheme. |
+| `--victron` | `SPEC` | off | Tail the JSONL the `sloth-va` helper appends to (`/var/lib/sloth-va/victron.jsonl`; [[victron]]): the owner's Victron readings, decrypted Instant Readout (`source` `readout`) and GATT sessions (`gatt`). `SPEC` is an absolute path or `file:///path`. The same tail as `--rtl433` (once a second, from the end at startup, rotation and truncation followed, at most 64 KiB a poll, lines over 2048 bytes bad). **sloth only reads the file**: sloth-va is the separate component that connects to the devices ([ADR 0011](adr/0011-sloth-va-transmits.md)); sloth opens no Bluetooth socket for this and decrypts nothing. A missing file is `waiting`. One row per device address, at most 16 (a 17th is counted, `victron_table_full`, never evicting); values only from an allow-list with bounds, out of range absent (`victron_bad_values`), other names counted (`victron_other_keys`); the device's own name (`label`) is not kept. Emits `victron_device` (change-only, values banded) and `victron_*` in `sensor_health`. Refused (exit 2) with `--replay` and for a malformed SPEC. |
 | `--gps` | `SPEC` | off | As `sloth`'s ([[gnss]], [[location]]). Here it also feeds the `gnss_fix` / `gnss_sky` / `gnss_sat` records and the four `GNSS_*` rules, which are sloth-rf's after cutover. A serial device is opened before the privilege drop, as in `sloth`. |
 | `--gps-allow-remote` | — | off | As `sloth`'s. `--strict` refuses a remote gpsd regardless. |
 | `--gps-baud` | `N` | 9600 | As `sloth`'s. |
@@ -607,8 +644,12 @@ an unknown argument.
 | `--version`, `-V` | — | — | `sloth-rf <version>` and the loaded sqlite. No `pcap:` line: it loads no libpcap. |
 | `--help`, `-h` | — | — | Usage, on stderr; exit 0. |
 
+The six decoder rows were written when the one binary took those
+flags and are unchanged: where a row says `sloth` reads, sends or
+refuses something, the daemon is `sloth-rf`.
+
 Anything else is `unknown argument:` and exit 2, including every flag
-of `sloth`'s capture (`--iface`, `--hop`, `--allow-active`,
+of `sloth-wifi`'s capture (`--iface`, `--hop`, `--allow-active`,
 `--bt-monitor`, `--replay`, `--pcap-dir`, `--headless`, …): a daemon
 that accepted `--hop` and did nothing would read as one that can retune
 a radio.
@@ -619,13 +660,16 @@ What it writes, and how that differs from `sloth`'s stream:
   `aprs_packet`, `aprs_station`, `rtl433_device`, `victron_device`
   (with `--victron`), `sensor`, `alert` and the `alert.*` lifecycle,
   `sys_status`, `sys_sensor`, `receiver_hw`, `source_status` and
-  `sensor_health`. The first seven are the bytes `sloth` writes for the
-  same input (`tests/test_rf_loop.c`); `victron_device` is written by
-  the function `sloth` calls (`src/jsonl_rf.c`).
+  `sensor_health`. The first eight are this daemon's alone since JSONL
+  2.0.0: `sloth-wifi`, given the same inputs, writes none of them
+  (`tests/test_rf_loop.c`).
 - **`sensor_health`** says `"daemon":"rf"` and carries the process,
   receiver and decoder blocks only ([[jsonl-schema]]).
 - **`source_status`** has five rows (`gnss`, `adsb`, `aprs`, `rtl433`,
-  `victron`), not nine (`victron` since JSONL 1.10.0, in both daemons); `sys_status`'s `sources` counts them.
+  `victron`); `sloth-wifi`'s has five too (`capture`, `monitor`,
+  `btmon`, `btcap`, `gnss`). `gnss` is in both, and the other four of
+  each are in that daemon's stream only. `sys_status`'s `sources`
+  counts the daemon's own.
 - **Alerts**: `GNSS_JAMMING`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`,
   `GNSS_SPOOF_SUSPECT`, `ADSB_EMERGENCY` and `SENSOR_SOURCE_DOWN` for
   its five sources. Not `SENSOR_UNDERVOLT` (owner ruling 2026-11-15:
@@ -634,7 +678,7 @@ What it writes, and how that differs from `sloth`'s stream:
   sinks, in `sloth`'s order). SIGUSR1 is ignored; `sloth` writes its
   report on it and this daemon has none.
 
-Exit codes are `sloth`'s: `0` clean (and `--help`, `--version`,
+Exit codes are `sloth-wifi`'s: `0` clean (and `--help`, `--version`,
 `--tune-list`, the end of `--ticks N`), `1` a sink that could not be
 opened, `2` a bad argument or a fail-closed refusal.
 

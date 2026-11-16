@@ -512,9 +512,11 @@ static void test_replay_targets_diff_a_committed_golden(void) {
     ASSERT(mk != NULL);
     if (!mk) return;
     /* replay-run first; since #213 sloth-rf too, whose refusals the
-     * target compares with sloth's. */
+     * target compares with sloth-wifi's; since #216 the `sloth`
+     * symlink as well, which must answer as sloth-wifi does. */
     ASSERT(strstr(mk, "\nreplay-check: replay-run $(RF_TARGET)\n") != NULL);
-    ASSERT(strstr(mk, "\t@sh tests/replay/rf_refusals.sh ./$(TARGET) ./$(RF_TARGET)\n") != NULL);
+    ASSERT(strstr(mk, "\t@sh tests/replay/rf_refusals.sh ./$(TARGET) ./$(RF_TARGET) ./$(TARGET_ALIAS)\n") != NULL);
+    ASSERT(strstr(mk, "\nreplay-run: $(TARGET) $(TARGET_ALIAS) $(REPLAY_GEN)\n") != NULL);
     ASSERT(strstr(mk, "diff -u $(REPLAY_GOLDEN) $(REPLAY_RUN)/norm.jsonl") != NULL);
     ASSERT(strstr(mk, "\nreplay-golden: replay-run\n") != NULL);
     ASSERT(strstr(mk, "$(REPLAY_GEN) $(REPLAY_RUN)\n") != NULL);

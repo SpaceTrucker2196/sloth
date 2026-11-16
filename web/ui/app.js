@@ -6101,6 +6101,15 @@
                  ["error", d.error]]);
   }
 
+  // Where the RF tabs' records come from (web/ui/rfstream.js, #216).
+  function rfStreamRows(box, h) {
+    var t = window.SlothRfStream && h.rf_stream ? window.SlothRfStream.sourceText(h.rf_stream) : null;
+    if (!t) return;
+    box.appendChild(el("div", "label", "RF daemon (ADS-B, APRS, rtl_433, Victron)"));
+    kvList(box, [["records from", el("span", h.rf_stream.state === "not_configured" ? "health-bad" : "", t)],
+                 ["--socket is", h.rf_stream.reading]]);
+  }
+
   // ── the sensor's health: the sensor-health tile's view ─────────────
   function healthView() {
     var box = clear("hl-rows"), asked = SCOPE;
@@ -6187,6 +6196,7 @@
         box.appendChild(el("div", "label", "slothweb.db"));
         kvList(box, [["store", String(h.store)], ["path", h.store_path]]);
         daemonRows(box, h);
+        rfStreamRows(box, h);
         rfDbRows(box, h);
         set("hl-note", "the tile's word is the state above");
       }).catch(function (e) { set("hl-note", errText(e.message)); });

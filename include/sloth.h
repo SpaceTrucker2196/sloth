@@ -39,14 +39,21 @@
  *          or removed;
  *   MAJOR  anything non-additive. That is an external-contract break,
  *          so it is a stop-and-ask (agents/dark-factory.md §4.3) and
- *          never a slice's own call; tests/test_jsonl.c pins the 1 so a
- *          MAJOR bump has to argue with a test.
+ *          never a slice's own call; tests/test_jsonl.c pins the MAJOR
+ *          so a bump has to argue with a test.
+ *
+ * 2.0.0 (#216, owner sign-off 2026-11-15, ADR 0010) is the one MAJOR so
+ * far: the sensor became two daemons, and the decoders' records, their
+ * sensor_health blocks and source_status rows, the gnss_* records and
+ * ADSB_EMERGENCY / GNSS_* left sloth-wifi's stream for sloth-rf's. Both
+ * daemons report this one value. The table of what moved is
+ * docs/wiki/jsonl-schema.md "1.x to 2.0.0".
  *
  * 1.0.0 is where the DECLARED contract starts, not a claim about the
  * stream's history — the records predate the field by many releases. A
  * `sensor_health` line with no `jsonl_version` is from a stream written
  * before this version and says nothing more than that. */
-#define SLOTH_JSONL_VERSION "1.10.0"
+#define SLOTH_JSONL_VERSION "2.0.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
@@ -4308,11 +4315,6 @@ typedef struct {
     int              adsb_count;
     const adsb_aircraft_t *adsb_gone;
     int              adsb_gone_count;
-    int              adsb_sel;        /* row index into the sorted table */
-    int              adsb_sel_key;    /* the selected aircraft's identity
-                                       * (views/adsb.c adsb_row_key), 0 none:
-                                       * the cursor follows the aircraft, not
-                                       * the index, across a re-sort */
     /* APRS (2026-11-05): the --aprs source's health, the station
      * table, the stations retired by this poll, and the packet ring
      * (oldest first; each sink writes the ones past its own cursor),

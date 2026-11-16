@@ -164,7 +164,11 @@ for d in "$PROC"/[0-9]*; do
     [ -r "$d/cmdline" ] || continue
     comm=$(cat "$d/comm" 2>/dev/null) || continue
     argv0=$(tr '\0' '\n' < "$d/cmdline" 2>/dev/null | head -n 1)
-    [ "$comm" = sloth ] || [ "${argv0##*/}" = sloth ] || continue
+    # The sensor is sloth-wifi since #216, and `sloth` is a symlink to
+    # it: one program, either name. sloth-rf opens no radio and is not
+    # matched.
+    [ "$comm" = sloth ] || [ "${argv0##*/}" = sloth ] ||
+        [ "$comm" = sloth-wifi ] || [ "${argv0##*/}" = sloth-wifi ] || continue
     pid=${d##*/}
     slothpids="$slothpids $pid"
     prev=

@@ -371,6 +371,38 @@ void web_live_wrong_record(web_live_t *l, long long now_ms);
  * socket named), "wrong_health" and "wrong_records". */
 void web_live_daemon_json(web_live_t *l, web_jw_t *w, long long now_ms);
 
+/* Where the RF tabs' records come from (#216, ADR 0010). Since JSONL
+ * 2.0.0 sloth-wifi's stream carries no ADS-B, APRS, rtl_433 or Victron
+ * record, no block for them in sensor_health and no source row: they
+ * are sloth-rf's, on its own socket. So one slothweb can be in five
+ * states, and the RF tabs and the health page say which
+ * (/api/health, /api/adsb, /api/aprs, /api/rtl433, /api/victron:
+ * "rf_stream"). `l` is --socket's state:
+ *
+ *   RF_SOCKET       --rf-socket is given: the RF tabs are sloth-rf's
+ *                   stream's, and nothing on --socket feeds them
+ *   SENSOR_1X       one socket, and its sensor_health says 1.x or
+ *                   carries no version: an unsplit sensor, whose own
+ *                   stream has the decoders' records, read as before
+ *   RF_DAEMON       one socket, and its sensor_health says "daemon":
+ *                   "rf": --socket is pointed at sloth-rf itself
+ *   NOT_CONFIGURED  one socket, a 2.x stream that is not sloth-rf's:
+ *                   the RF daemon's stream is not configured, and the
+ *                   RF tabs are empty for that reason and no other
+ *   UNKNOWN         one socket and no sensor_health on it yet
+ *
+ * The version is the stream's word, so 1.x and 2.x are both read and
+ * the answer says which ("reading"). */
+enum { WEB_RF_STREAM_UNKNOWN = 0, WEB_RF_STREAM_RF_SOCKET,
+       WEB_RF_STREAM_SENSOR_1X, WEB_RF_STREAM_RF_DAEMON,
+       WEB_RF_STREAM_NOT_CONFIGURED };
+int         web_live_rf_stream(web_live_t *l);
+const char *web_live_rf_stream_word(int state);
+/* {"state":"...","reading":"1.x"|"2.x"|"before 1.0.0"|null,
+ *  "sensor_jsonl_version":"x.y.z"|null,"sensor_daemon":"wifi"|...|null,
+ *  "rf_socket":true|false}. l may be NULL (no data socket): "unknown". */
+void web_live_rf_stream_json(web_live_t *l, web_jw_t *w);
+
 /* The ingest thread's account of the socket. err strings are our own
  * (strerror and a word of context), never anything the peer sent. */
 void web_live_sock_attempt(web_live_t *l, long long now_ms);

@@ -4,20 +4,24 @@
 #include "rf_scenario.h"
 
 /*
- * The loop, end to end, twice (#213): the same canned ADS-B, APRS,
- * rtl_433 and gpsd input (tests/rf_scenario.h) through the readers into
- * JSONL, once under `sloth`'s poll table with its capture side and once
- * under sloth-rf's with its own rule table and nothing registered. The
- * records of the RF kinds must come out the same from both - the same
- * lines, in the same order - because sloth-rf's whole claim is that it
- * is `sloth`'s RF half, moved, and not a second implementation of it.
+ * The loop, end to end, twice: the same canned ADS-B, APRS, rtl_433 and
+ * gpsd input (tests/rf_scenario.h) through the readers into JSONL, once
+ * under sloth-wifi's poll table with its capture side and once under
+ * sloth-rf's with its own side.
  *
- * Two members are not compared as written. An incident's id is a hash
- * over a process-wide counter the engine never resets
+ * Until the cutover (#216) the first run was the one binary's, which
+ * read the decoders too, and this file held sloth-rf's RF records to
+ * being its, line for line (#213). That comparison was made while both
+ * existed and cannot be made now: sloth-wifi writes none of them. What
+ * is held instead is the split itself - every RF kind, the 7700
+ * incident and the decoder source rows are in sloth-rf's stream and in
+ * no line of sloth-wifi's, from one input, with each run the other's
+ * control - and the counts and words the comparison used to ride on.
+ *
+ * Two members are masked where lines are picked. An incident's id is a
+ * hash over a process-wide counter the engine never resets
  * (src/alerts/engine.c incident_id_make()), so the second run of the
- * scenario in one process gets other ids for the same incidents; the 16
- * hex digits of incident_id, and of the event_id built on it, are
- * masked. Nothing else is: the timestamps are the pinned clock's.
+ * scenario in one process gets other ids for the same incidents.
  */
 
 static char g_jl_a[TEST_TMP_MAX], g_jl_b[TEST_TMP_MAX];
@@ -28,8 +32,8 @@ static void tmp_jsonl(char *buf, size_t sz) {
     if (fd >= 0) close(fd);
 }
 
-/* The record kinds sloth-rf owns (ADR 0010), which both daemons write
- * from the same inputs until cutover. */
+/* The record kinds sloth-rf owns (ADR 0010), and since JSONL 2.0.0
+ * writes alone. */
 static const char *const RF_KINDS[] = {
     "gnss_fix", "gnss_sky", "gnss_sat", "adsb_aircraft",
     "aprs_packet", "aprs_station", "rtl433_device",
@@ -113,34 +117,20 @@ static int count_type(const char *text, const char *type) {
     return n;
 }
 
-/* Where two picks first differ, for the failure message. */
-static void show_first_difference(const char *a, const char *b) {
-    int line = 1;
-    while (*a && *b) {
-        const char *ea = strchr(a, '\n'), *eb = strchr(b, '\n');
-        size_t la = ea ? (size_t)(ea - a) : strlen(a);
-        size_t lb = eb ? (size_t)(eb - b) : strlen(b);
-        if (la != lb || memcmp(a, b, la) != 0) {
-            fprintf(stderr, "    line %d differs:\n      sloth:    %.*s\n"
-                            "      sloth-rf: %.*s\n", line,
-                    (int)(la > 300 ? 300 : la), a, (int)(lb > 300 ? 300 : lb), b);
-            return;
-        }
-        a += la + (ea ? 1 : 0);
-        b += lb + (eb ? 1 : 0);
-        line++;
-    }
-    fprintf(stderr, "    one stream ends at line %d and the other goes on\n", line);
-}
-
-/* The RF records are the same from both daemons, line for line. And
- * the comparison is over something: every kind is in it, more than
- * once where the input had more than one. */
-static void test_rf_records_match_sloths(void) {
+/* The RF records are sloth-rf's, every kind, more than once where the
+ * input had more than one - and sloth-wifi, given the same decoder
+ * files and the same receiver, writes not one of them.
+ *
+ * Seen red (2026-11-15), the sloth-wifi half: with the five
+ * jsonl_emit_{gnss,adsb,aprs,rtl433,victron} calls put back in
+ * jsonl_emit_state_snapshots() the gnss_* counts are 1, 1 and 3 (the
+ * decoders' stay 0 there for want of a health_rf stage); with health_rf
+ * put back in wifi_stages[] as well, every count below is non-zero. */
+static void test_rf_records_are_sloth_rfs_alone(void) {
     tmp_jsonl(g_jl_a, sizeof(g_jl_a));
     tmp_jsonl(g_jl_b, sizeof(g_jl_b));
-    rfs_run(&g_poll_sloth, 0, g_jl_a, NULL);
-    rfs_run(&g_poll_rf,    1, g_jl_b, NULL);
+    rfs_run(&g_poll_wifi, 0, g_jl_a, NULL);
+    rfs_run(&g_poll_rf,   1, g_jl_b, NULL);
     char *a = rfs_slurp(g_jl_a), *b = rfs_slurp(g_jl_b);
     ASSERT(a != NULL && b != NULL);
     if (!a || !b) { free(a); free(b); return; }
@@ -149,9 +139,6 @@ static void test_rf_records_match_sloths(void) {
     char *pb = pick(b, RF_KINDS, RF_KIND_N, NULL);
     ASSERT(pa != NULL && pb != NULL);
     if (pa && pb) {
-        int same = strcmp(pa, pb) == 0;
-        if (!same) show_first_difference(pa, pb);
-        ASSERT(same);
         ASSERT_GE(count_lines(pb), 10);
         ASSERT_GE(count_type(pb, "gnss_fix"), 1);
         ASSERT_GE(count_type(pb, "gnss_sky"), 1);
@@ -160,8 +147,8 @@ static void test_rf_records_match_sloths(void) {
         ASSERT_EQ(count_type(pb, "aprs_packet"), 2);
         ASSERT_GE(count_type(pb, "aprs_station"), 2);
         ASSERT_GE(count_type(pb, "rtl433_device"), 2);
-        /* The input's own words made it through both: nothing here is
-         * a comparison of two empty streams. */
+        /* The input's own words made it through: nothing here is a
+         * statement about an empty stream. */
         ASSERT(strstr(pb, "\"N0TEST-9\"") != NULL);
         ASSERT(strstr(pb, "\"Testco-WX9\"") != NULL);
         ASSERT(strstr(pb, "a1b2c3") != NULL);
@@ -169,18 +156,34 @@ static void test_rf_records_match_sloths(void) {
          * record: both logs are tailed from their end. */
         ASSERT(strstr(pb, "N0OLD-1") == NULL);
         ASSERT(strstr(pb, "Testco-OLD") == NULL);
+
+        /* sloth-wifi: none, by kind and by the input's words. */
+        ASSERT_EQ(count_lines(pa), 0);
+        for (int i = 0; i < RF_KIND_N; i++) {
+            if (count_type(a, RF_KINDS[i]) != 0)
+                fprintf(stderr, "    sloth-wifi wrote a \"%s\" record\n", RF_KINDS[i]);
+            ASSERT_EQ(count_type(a, RF_KINDS[i]), 0);
+        }
+        ASSERT_EQ(count_type(a, "victron_device"), 0);
+        ASSERT(strstr(a, "N0TEST-9") == NULL);
+        ASSERT(strstr(a, "Testco-WX9") == NULL);
+        ASSERT(strstr(a, "a1b2c3") == NULL);
+        /* And it did run: its own records are there. */
+        ASSERT_GE(count_type(a, "iface"), 1);
+        ASSERT_GE(count_type(a, "sensor_health"), 1);
     }
     free(pa); free(pb); free(a); free(b);
     unlink(g_jl_a); unlink(g_jl_b);
 }
 
-/* The alert both daemons own - the 7700 squawk - is the same incident
- * from both: the legacy record and its lifecycle, in order. */
-static void test_adsb_emergency_matches_sloths(void) {
+/* The 7700 squawk is sloth-rf's incident - the legacy record and its
+ * lifecycle, in order - and sloth-wifi, with the same aircraft.json on
+ * disk, opens none. */
+static void test_adsb_emergency_is_sloth_rfs_alone(void) {
     tmp_jsonl(g_jl_a, sizeof(g_jl_a));
     tmp_jsonl(g_jl_b, sizeof(g_jl_b));
-    rfs_run(&g_poll_sloth, 0, g_jl_a, NULL);
-    rfs_run(&g_poll_rf,    1, g_jl_b, NULL);
+    rfs_run(&g_poll_wifi, 0, g_jl_a, NULL);
+    rfs_run(&g_poll_rf,   1, g_jl_b, NULL);
     char *a = rfs_slurp(g_jl_a), *b = rfs_slurp(g_jl_b);
     ASSERT(a != NULL && b != NULL);
     if (!a || !b) { free(a); free(b); return; }
@@ -188,12 +191,11 @@ static void test_adsb_emergency_matches_sloths(void) {
     char *pb = pick(b, NULL, 0, "ADSB_EMERGENCY");
     ASSERT(pa != NULL && pb != NULL);
     if (pa && pb) {
-        int same = strcmp(pa, pb) == 0;
-        if (!same) show_first_difference(pa, pb);
-        ASSERT(same);
         ASSERT_GE(count_type(pb, "alert"), 1);
         ASSERT_GE(count_type(pb, "alert.create"), 1);
         ASSERT(strstr(pb, "squawk 7700") != NULL);
+        ASSERT_EQ(count_lines(pa), 0);
+        ASSERT(strstr(a, "ADSB_EMERGENCY") == NULL);
     }
     free(pa); free(pb); free(a); free(b);
     unlink(g_jl_a); unlink(g_jl_b);
@@ -205,12 +207,12 @@ static void test_adsb_emergency_matches_sloths(void) {
  * interface, an associated Wi-Fi station and a supply alarm for a
  * capture daemon to report. Three absences, each with its control:
  *
- *   no record of any other type  (`sloth`, same run: "iface" is there)
- *   no SENSOR_UNDERVOLT          (`sloth`, same run: it fires)
- *   no capture source row        (`sloth`, same run: "capture" is there)
+ *   no record of any other type  (sloth-wifi, same run: "iface" is there)
+ *   no SENSOR_UNDERVOLT          (sloth-wifi, same run: it fires)
+ *   no capture source row        (sloth-wifi, same run: "capture" is there)
  *
- * Seen red, all three, with g_poll_sloth and `sloth`'s services passed
- * to the second run in place of sloth-rf's. */
+ * Seen red, all three, with the one binary's table and services passed
+ * to the second run in place of sloth-rf's (#213). */
 static void test_rf_stream_is_only_its_own(void) {
     static const char *const ALLOWED[] = {
         "gnss_fix", "gnss_sky", "gnss_sat", "adsb_aircraft", "aprs_packet",
@@ -222,7 +224,7 @@ static void test_rf_stream_is_only_its_own(void) {
     const int allowed_n = (int)(sizeof(ALLOWED) / sizeof(ALLOWED[0]));
     tmp_jsonl(g_jl_a, sizeof(g_jl_a));
     tmp_jsonl(g_jl_b, sizeof(g_jl_b));
-    rfs_run(&g_poll_sloth, 0, g_jl_a, NULL);
+    rfs_run(&g_poll_wifi, 0, g_jl_a, NULL);
     rfs_run(&g_poll_rf,    1, g_jl_b, NULL);
     char *a = rfs_slurp(g_jl_a), *b = rfs_slurp(g_jl_b);
     ASSERT(a != NULL && b != NULL);
@@ -270,11 +272,13 @@ static void test_rf_stream_is_only_its_own(void) {
     /* sys_status counts the rows the daemon has (victron's among them
      * since JSONL 1.10.0, not configured in this scenario). */
     ASSERT(strstr(b, "\"sources\":5,\"sources_configured\":4,") != NULL);
-    ASSERT(strstr(a, "\"sources\":9,") != NULL);
+    /* sloth-wifi's rows are the capture's four and the receiver's
+     * (#216): nine until the cutover, when it named the decoders'. */
+    ASSERT(strstr(a, "\"sources\":5,") != NULL);
 
     /* sys_status's beacon-recall block is the beacon table's, which
      * this daemon does not have: absent, not zero
-     * (docs/wiki/jsonl-schema.md says so). `sloth`, same run, writes
+     * (docs/wiki/jsonl-schema.md says so). sloth-wifi, same run, writes
      * it. (Seen red with has_recall forced to 1 in
      * src/sys_status.c's sample.) */
     ASSERT(strstr(b, "\"type\":\"sys_status\"") != NULL);
@@ -296,9 +300,96 @@ static void test_rf_stream_is_only_its_own(void) {
     unlink(g_jl_a); unlink(g_jl_b);
 }
 
+/* sloth-wifi keeps the receiver without owning its records (#216,
+ * owner ruling 2026-11-15). From the scenario's gpsd stream - a fix, a
+ * sky of three satellites, and the sensor moving - its stream has the
+ * receiver's health (gps_*, gnss_*) and the position (loc_*) in
+ * sensor_health, its `gnss` source row, its sensor row and the loc_*
+ * stamp on the incident it opens; and it has no gnss_fix / gnss_sky /
+ * gnss_sat record, no GNSS_* alert, and no decoder's source row,
+ * sensor row or sensor_health member. sloth-rf, same input, is the
+ * control for each absence.
+ *
+ * Seen red (2026-11-15): the record absences with jsonl_emit_gnss()
+ * put back in jsonl_emit_state_snapshots(); the source rows with
+ * sys_status_set_rf_side(sys_status_rf_fill) left registered in
+ * capture_side_install(); the sensor rows and members with health_rf
+ * and sensors_rf put back in wifi_stages[] and the jsonl_sh_* calls in
+ * jsonl_emit_sensor_health(). The GNSS_* absence: with
+ * R(rule_gnss_position_jump) put back in src/alerts/rules_table.c and
+ * the scenario's third fix moved 2 degrees, sloth-wifi opens
+ * GNSS_POSITION_JUMP; tests/test_rf_rules.c holds the row's absence. */
+static void test_wifi_stream_keeps_gnss_health_and_no_gnss_record(void) {
+    tmp_jsonl(g_jl_a, sizeof(g_jl_a));
+    tmp_jsonl(g_jl_b, sizeof(g_jl_b));
+    rfs_run(&g_poll_wifi, 0, g_jl_a, NULL);
+    rfs_run(&g_poll_rf,   1, g_jl_b, NULL);
+    char *a = rfs_slurp(g_jl_a), *b = rfs_slurp(g_jl_b);
+    ASSERT(a != NULL && b != NULL);
+    if (!a || !b) { free(a); free(b); return; }
+
+    /* Kept: the receiver's health, the position, its rows. */
+    ASSERT(strstr(a, "\"gps_state\":\"fix\"") != NULL);
+    ASSERT(strstr(a, "\"gps_src\":\"gpsd:127.0.0.1:2947\"") != NULL);
+    ASSERT(strstr(a, "\"gnss_sats_in_view\":3,") != NULL);
+    ASSERT(strstr(a, "\"loc_lat\":") != NULL);
+    ASSERT(strstr(a, "\"loc_src\":\"gps\"") != NULL);
+    ASSERT(strstr(a, "\"name\":\"gnss\",") != NULL);
+    ASSERT(strstr(a, "\"name\":\"GNSS receiver\"") != NULL);
+    /* The stamp on its own incident. */
+    const char *uv = strstr(a, "\"title\":\"SENSOR_UNDERVOLT\"");
+    ASSERT(uv != NULL);
+    if (uv) {
+        const char *ls = uv;
+        while (ls > a && ls[-1] != '\n') ls--;
+        const char *le = strchr(uv, '\n');
+        const char *loc = strstr(ls, "\"loc\":{");
+        ASSERT(loc != NULL && le != NULL && loc < le);
+    }
+
+    /* Gone: the records and the alerts. */
+    ASSERT_EQ(count_type(a, "gnss_fix"), 0);
+    ASSERT_EQ(count_type(a, "gnss_sky"), 0);
+    ASSERT_EQ(count_type(a, "gnss_sat"), 0);
+    ASSERT(strstr(a, "GNSS_JAMMING") == NULL);
+    ASSERT(strstr(a, "GNSS_SPOOF_SUSPECT") == NULL);
+    ASSERT(strstr(a, "GNSS_TIME_JUMP") == NULL);
+    ASSERT(strstr(a, "GNSS_POSITION_JUMP") == NULL);
+    ASSERT_GE(count_type(b, "gnss_fix"), 1);              /* the control */
+    ASSERT_EQ(count_type(b, "gnss_sat"), 3);
+
+    /* Gone: every decoder's source row, sensor row and health member. */
+    static const char *const rf_rows[] = { "adsb", "aprs", "rtl433", "victron" };
+    for (int i = 0; i < 4; i++) {
+        char want[48];
+        snprintf(want, sizeof(want), "\"name\":\"%s\",", rf_rows[i]);
+        if (strstr(a, want)) fprintf(stderr, "    sloth-wifi wrote a %s source row\n", rf_rows[i]);
+        ASSERT(strstr(a, want) == NULL);
+        ASSERT(strstr(b, want) != NULL);                  /* the control */
+    }
+    ASSERT(strstr(a, "\"name\":\"ADS-B decoder\"") == NULL);
+    ASSERT(strstr(a, "\"name\":\"APRS decoder\"") == NULL);
+    ASSERT(strstr(a, "\"name\":\"rtl_433 decoder\"") == NULL);
+    ASSERT(strstr(b, "\"name\":\"ADS-B decoder\"") != NULL);
+    ASSERT(strstr(a, "\"adsb_") == NULL);
+    ASSERT(strstr(a, "\"aprs_") == NULL);
+    ASSERT(strstr(a, "\"rtl433_") == NULL);
+    ASSERT(strstr(a, "\"victron_") == NULL);
+    ASSERT(strstr(b, "\"adsb_state\":") != NULL);
+    /* Both say 2.x, and which they are. */
+    char ver[64];
+    snprintf(ver, sizeof(ver), "\"jsonl_version\":\"%s\"", SLOTH_JSONL_VERSION);
+    ASSERT(strstr(a, ver) != NULL);
+    ASSERT(strstr(b, ver) != NULL);
+    ASSERT_EQ(strncmp(SLOTH_JSONL_VERSION, "2.", 2), 0);
+    free(a); free(b);
+    unlink(g_jl_a); unlink(g_jl_b);
+}
+
 void run_rf_loop_tests(void) {
-    TEST_SUITE("sloth-rf: canned inputs to JSONL, against sloth's (#213)");
-    RUN_TEST(test_rf_records_match_sloths);
-    RUN_TEST(test_adsb_emergency_matches_sloths);
+    TEST_SUITE("sloth-rf: canned inputs to JSONL, against sloth-wifi's (#213, #216)");
+    RUN_TEST(test_rf_records_are_sloth_rfs_alone);
+    RUN_TEST(test_adsb_emergency_is_sloth_rfs_alone);
     RUN_TEST(test_rf_stream_is_only_its_own);
+    RUN_TEST(test_wifi_stream_keeps_gnss_health_and_no_gnss_record);
 }

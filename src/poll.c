@@ -63,8 +63,8 @@
 #include "rf_distance.h"
 #include "ownership.h"
 
-/* The Wi-Fi, wired and BLE stage bodies, and the two tables that use
- * them: g_poll_sloth (what `sloth` runs) and g_poll_wifi. The runner and
+/* The Wi-Fi, wired and BLE stage bodies, and the table that uses
+ * them: g_poll_wifi, what sloth-wifi runs. The runner and
  * the stages both daemons share are src/poll_core.c; the GNSS stages are
  * src/poll_gnss.c and the RF ones src/poll_rf.c (#212).
  *
@@ -376,7 +376,7 @@ static void st_chanhop(sloth_state_t *s, const poll_ctx_t *ctx) {
 
 /* ── EMIT ─────────────────────────────────────────────────── */
 
-/* `sloth`'s EMIT stage, here since #213: it writes the capture's records
+/* sloth-wifi's EMIT stage, here since #213: it writes the capture's records
  * (src/jsonl.c), so it cannot live with the stages every table shares.
  * sloth-rf's is poll_st_jsonl_rf() in src/poll_rf.c. */
 void poll_st_jsonl(sloth_state_t *s, const poll_ctx_t *ctx) {
@@ -392,61 +392,12 @@ void poll_st_jsonl(sloth_state_t *s, const poll_ctx_t *ctx) {
 
 /* ── the tables ───────────────────────────────────────────── */
 
-/* What `sloth` runs: every stage, in the order poll_data() always ran
- * them. main.c passes this one. */
-static const poll_stage_t sloth_stages[] = {
-    { "platform_net",      PH_PLATFORM, st_platform_net      },
-    { "health_capture",    PH_PLATFORM, st_health_capture    },
-    { "health_gnss",       PH_PLATFORM, poll_st_health_gnss  },
-    { "health_rf",         PH_PLATFORM, poll_st_health_rf    },
-    { "health_host",       PH_PLATFORM, poll_st_health_host  },
-    { "capture_scope",     PH_PLATFORM, st_capture_scope     },
-    { "stats_baseline",    PH_PLATFORM, st_stats_baseline    },
-
-    { "capture_ring",      PH_SNAPSHOT, st_capture_ring      },
-#ifdef WITH_PCAP
-    { "wifi_snapshots",    PH_SNAPSHOT, st_wifi_snapshots    },
-    { "wired_snapshots",   PH_SNAPSHOT, st_wired_snapshots   },
-#endif
-    { "eap_track",         PH_SNAPSHOT, st_eap_track         },
-    { "ble",               PH_SNAPSHOT, st_ble               },
-
-    { "history_bw",        PH_DERIVE,   st_history_bw        },
-#ifdef WITH_PCAP
-    { "channel_rf",        PH_DERIVE,   st_channel_rf        },
-#endif
-    { "scan",              PH_DERIVE,   st_scan              },
-    { "beacon_detect",     PH_DERIVE,   st_beacon_detect     },
-#ifdef WITH_PCAP
-    { "transit",           PH_DERIVE,   st_transit           },
-#endif
-    { "sensors_wifi",      PH_DERIVE,   st_sensors_wifi      },
-    { "sensors_gnss",      PH_DERIVE,   poll_st_sensors_gnss },
-    { "sensors_rf",        PH_DERIVE,   poll_st_sensors_rf   },
-    { "twins",             PH_DERIVE,   st_twins             },
-
-    { "alerts",            PH_ALERTS,   poll_st_alerts       },
-
-    { "research_coverage", PH_POST,     st_research_coverage },
-    { "karma",             PH_POST,     st_karma             },
-    { "alert_hot",         PH_POST,     st_alert_hot         },
-    { "devices_hosts",     PH_POST,     st_devices_hosts     },
-    { "positions",         PH_POST,     poll_st_positions    },
-    { "chanhop",           PH_POST,     st_chanhop           },
-
-    { "jsonl",             PH_EMIT,     poll_st_jsonl        },
-
-    { "db",                PH_DURABLE,  poll_st_db           },
-};
-const poll_table_t g_poll_sloth = {
-    sloth_stages, (int)(sizeof(sloth_stages) / sizeof(sloth_stages[0]))
-};
-
-/* The Wi-Fi half: g_poll_sloth without the two RF stages, and nothing
- * else different. No binary passes it yet; it is what sloth-wifi runs
- * once the decoders leave at cutover (#211), and it exists now so the
- * tests can hold it to "the union minus RF" while both are in the tree.
- * A stage added above belongs here too unless it is RF's. */
+/* What sloth-wifi runs (src/main.c passes it), in the order poll_data()
+ * always ran its stages. Until the cutover (#216) there was a union
+ * table beside it, g_poll_sloth, with health_rf after health_gnss and
+ * sensors_rf after sensors_gnss; those two stages are sloth-rf's alone
+ * now (g_poll_rf, src/poll_rf.c). The GNSS stages stay: both daemons
+ * link the receiver (ADR 0010). */
 static const poll_stage_t wifi_stages[] = {
     { "platform_net",      PH_PLATFORM, st_platform_net      },
     { "health_capture",    PH_PLATFORM, st_health_capture    },

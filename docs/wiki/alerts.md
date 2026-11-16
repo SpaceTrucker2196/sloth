@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-11-12 (#193: field data on the twin-chain's unnamed locally administered copy, counted in `sensor_health` `twin193_*`; no alert changed). 2026-11-12 (#187, #151 owner decisions: `KARMA_PROBE_FORGE` CRIT only on a captured station; `KARMA_AP` IE variety -15 confidence and CRIT on a `corroborated` hardware verdict). 2026-11-12 (#194: `EVIL_TWIN`'s late-arrival memory compares the radio and ignores APs born in a beacon flood). 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#187, #172: the evidence behind `KARMA_AP`, `KARMA_PROBE_FORGE`, `PMKID_HARVEST` and `HANDSHAKE_HARVEST` on the stream as `karma_suspect`, `harvest_station`, `harvest_chain`, JSONL 1.3.0, and as slothweb's WiFi card; slothweb shows the detail of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`). **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
+**Last updated**: 2026-11-15 (#216, the cutover: two rule tables, not a table and a subsequence of it; `sloth-wifi` raises <!-- count:rules-wifi -->95<!-- /count --> of the kinds and `sloth-rf` <!-- count:rules-rf -->6<!-- /count -->; the `GNSS_*` rules and `ADSB_EMERGENCY` are `sloth-rf`'s alone). 2026-11-12 (#193: field data on the twin-chain's unnamed locally administered copy, counted in `sensor_health` `twin193_*`; no alert changed). 2026-11-12 (#187, #151 owner decisions: `KARMA_PROBE_FORGE` CRIT only on a captured station; `KARMA_AP` IE variety -15 confidence and CRIT on a `corroborated` hardware verdict). 2026-11-12 (#194: `EVIL_TWIN`'s late-arrival memory compares the radio and ignores APs born in a beacon flood). 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#187, #172: the evidence behind `KARMA_AP`, `KARMA_PROBE_FORGE`, `PMKID_HARVEST` and `HANDSHAKE_HARVEST` on the stream as `karma_suspect`, `harvest_station`, `harvest_chain`, JSONL 1.3.0, and as slothweb's WiFi card; slothweb shows the detail of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`). **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
 
 ---
@@ -28,19 +28,35 @@ type: reference
   | `rules_wifi_mgmt.c` | 802.11 management/control plane and the sensor's radio: the floods, BTM, CSA, RRM, RTS, SA Query, MFP, Block Ack, malformed management frames, probe floods, recon, transit, unknown devices, RF degradation, no monitor radio, PM forgery, queue release, TPC |
   | `rules_twin.c` | impersonation: the evil-twin family, SSID confusion, KARMA, open/camera setup SSIDs, captive portal, WPA downgrade, SAE, FragAttacks — and the pair scoring the Twins view shares |
   | `rules_enterprise.c` | rogue RADIUS, PEAP without a server certificate, the three WPS verdicts |
-  | `rules_gnss.c` | the `--gps` receiver's own inputs: GNSS jamming, spoofing suspect, time and position jumps |
+  | `rules_gnss.c` | the `--gps` receiver's own inputs: GNSS jamming, spoofing suspect, time and position jumps. `sloth-rf`'s since the cutover |
+  | `rules_adsb.c` | `ADSB_EMERGENCY`, read off the ADS-B table. `sloth-rf`'s |
+  | `rules_sensor.c` | the sensor's own state: `SENSOR_UNDERVOLT` (`sloth-wifi` only) and `SENSOR_SOURCE_DOWN` (each daemon, for the sources it reports) |
   | `rules_mle.c` | the 802.11be Multi-Link Element rules: five keyed by MLD MAC, two by BSSID (#104) |
 
   `src/alerts.h` is the public API and did not change.
 - **Rule order is a table (#118), and the table is data the daemon
   selects (#213).** `alerts_update()` derives the Wi-Fi posture
   (`wifi_downgrade_update()`), then runs `g_alert_rules[]`, the rows of
-  the selected table, in order. `sloth` selects the whole table
-  (`g_alert_table_sloth`, `src/alerts/rules_table.c`, through
-  `capture_side_install()`); sloth-rf selects `g_alert_table_rf`
-  (`src/alerts/rules_table_rf.c`): the four GNSS rules,
-  `ADSB_EMERGENCY` and `SENSOR_SOURCE_DOWN`, a subsequence of the whole
-  one, and not `SENSOR_UNDERVOLT` (owner ruling 2026-11-15). A table
+  the selected table, in order. There are two tables since the cutover
+  (#216), one per daemon. `sloth-wifi` selects `g_alert_table_wifi`
+  (`src/alerts/rules_table.c`, through `capture_side_install()`): every
+  rule of the capture, the monitor radio and BLE, `SENSOR_UNDERVOLT`
+  and `SENSOR_SOURCE_DOWN`, 88 rows that raise
+  <!-- count:rules-wifi -->95<!-- /count --> of the kinds. `sloth-rf` selects `g_alert_table_rf`
+  (`src/alerts/rules_table_rf.c`, through `rf_side_install()`): the
+  four GNSS rules, `ADSB_EMERGENCY` and `SENSOR_SOURCE_DOWN`,
+  <!-- count:rules-rf -->6<!-- /count --> kinds, and not `SENSOR_UNDERVOLT` (owner ruling 2026-11-15).
+  Until the cutover the first table had the second's first five rows
+  too, between `rule_cam_rtsp_unauth` and the sensor's pair; they
+  depended on no other rule and none on them, so taking them out moved
+  nothing. The one row both run is `rule_sensor_source_down`, which
+  judges whichever `source_status` rows its daemon reports: both
+  report `gnss`, so a receiver that is down opens `srcdown:gnss` in
+  both streams, and slothweb shows a same-key, same-time pair once
+  ([[slothweb]] § Two daemons). `sloth-wifi` links none of the five
+  (the `Makefile`'s `check_wifi_no_rf`), and
+  `tests/test_rf_rules.c`, `tests/test_gnss_rules.c` and
+  `tests/test_adsb_rules.c` hold that it raises none. A table
   also brings its rules' `*_forget()` functions and the pcap exporters,
   so the engine names no rule file and no exporter. The
   order is the one the hand-written call sequence had, copied verbatim,
@@ -49,8 +65,8 @@ type: reference
   a pair and `rule_evil_twin`, earlier in the table, reads that taint
   on the next tick; `rule_deauth_flood` runs before the chain rule
   whose finding cites the flood. `tests/test_alert_rules.c` pins those
-  pairs by name and fails if a rule defined under `src/alerts/` is
-  missing from the table or listed twice.
+  pairs by name and fails if a rule defined under `src/alerts/` is in
+  neither table, in the wrong one, or listed twice.
 - **Frame citations (#92).** The no-IP wireless rules whose triggering
   frames are monitor frames hand the alert the evidence-ring IDs of
   those frames (`fire_ev()`, or `fire_inv()` when the rule also reports
@@ -700,6 +716,16 @@ create/resolve pair per toggle.
   configured never fires. The detail carries the reader's own word, the
   state and the freshness band, never an age in seconds (#173).
 
+**Which daemon (#216).** `SENSOR_UNDERVOLT` is `sloth-wifi`'s only:
+the host has one supply, and on a host running both daemons one
+brown-out is one incident (a host running `sloth-rf` alone has no
+undervolt alert). `SENSOR_SOURCE_DOWN` is each daemon's for the sources
+it reports: `sloth-wifi` for `capture`, `monitor`, `btmon`, `btcap` and
+`gnss`, `sloth-rf` for `gnss`, `adsb`, `aprs`, `rtl433` and `victron`.
+A decoder that is down is therefore `sloth-rf`'s incident alone, and a
+receiver that is down is one in each stream, with one key
+(`srcdown:gnss`), which slothweb shows once.
+
 Both details are on slothweb's audited list since 2026-11-12
 (`web/src/web_alertfmt.c`), so its Alerts view shows them rather than
 withholding them: every field is the host's own text (an hwmon id and
@@ -880,6 +906,12 @@ Full row, including the false-positive cases, in
 `research/papers/surveillance-vendor-endpoints.md`.
 ### The GNSS receiver (2026-11-03)
 
+**`sloth-rf`'s rules since the cutover (#216).** `sloth-wifi` links the
+same receiver for the position stamp and reports its health, and runs
+none of the four below: they are in `g_alert_table_rf` only, and
+`sloth-wifi`'s link refuses `rule_gnss_*`. A host that wants them runs
+`sloth-rf` with `--gps` (alone, on a GPS-only host).
+
 What the `--gps` receiver reports about its own inputs ([[gnss]]),
 judged by `src/alerts/rules_gnss.c` from the per-poll snapshot
 (`s->gnss_sky`, `s->gnss_fix` and the `s->gnss_hist` rings) and never
@@ -939,6 +971,9 @@ clearing cannot replay a minute-old jump. No new JSONL record: the
 alert records already carry `loc` ([[location]]).
 
 ### ADS-B emergency squawks and status (#186)
+
+**`sloth-rf`'s rule since the cutover (#216)**: `--adsb` is its flag
+and the aircraft table is its state.
 
 What the `--adsb` decoder lists ([[adsb]]), judged by
 `src/alerts/rules_adsb.c` from the per-poll table (`s->adsb`,

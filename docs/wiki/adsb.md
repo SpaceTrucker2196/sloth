@@ -66,7 +66,27 @@ and Mode S surveillance, whose example messages are the known-answer
 tests. ICAO Annex 10 Vol. IV and RTCA DO-260B were **not** read; what
 is said here of them comes through those two.
 
-**Last updated**: 2026-11-14 (the positions panel as an ATC-style radar scope centred on the sensor, shared with APRS through `web/ui/ppi.js`); 2026-11-12 (other sloth hosts' aircraft in the tab, grey, with the host named; [[fleet]] "The merged views"); 2026-11-11 (#192 I7: the owner's fleet compares its ADS-B receivers, `/api/fleet/aircraft`, [[fleet]]); 2026-11-09 (#186: `--adsb beast://`, the decoder's Beast output, decoded in sloth: CRC, ghost suppression, CPR, the TC 28 emergency word); 2026-11-09 (#186: `--adsb sbs://`, the decoder's SBS output, loopback, read-only; the `AF_INET` drop-in note); 2026-11-08 (#186: `ADSB_EMERGENCY`, flag only; slothweb's ADS-B tab marks an aircraft with an open one; the `packaging/` note on `/run/readsb`); 2026-11-07 (the `[^]` TUI aircraft view, the `adsb` health-strip token, and `gps_bearing_deg()` beside `gps_distance_m()`); 2026-11-05 (`--db`: schema v12, `adsb_aircraft` and `adsb_sightings`; slothweb's "aircraft seen" history and each aircraft's recorded track and altitude profile); 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
+**Last updated**: 2026-11-15 (#216, the cutover: `--adsb` is `sloth-rf`'s alone; `sloth-wifi` refuses it; the `[^]` terminal view and the interface strip's `adsb` token are gone); 2026-11-14 (the positions panel as an ATC-style radar scope centred on the sensor, shared with APRS through `web/ui/ppi.js`); 2026-11-12 (other sloth hosts' aircraft in the tab, grey, with the host named; [[fleet]] "The merged views"); 2026-11-11 (#192 I7: the owner's fleet compares its ADS-B receivers, `/api/fleet/aircraft`, [[fleet]]); 2026-11-09 (#186: `--adsb beast://`, the decoder's Beast output, decoded in sloth: CRC, ghost suppression, CPR, the TC 28 emergency word); 2026-11-09 (#186: `--adsb sbs://`, the decoder's SBS output, loopback, read-only; the `AF_INET` drop-in note); 2026-11-08 (#186: `ADSB_EMERGENCY`, flag only; slothweb's ADS-B tab marks an aircraft with an open one; the `packaging/` note on `/run/readsb`); 2026-11-07 (the `[^]` TUI aircraft view, the `adsb` health-strip token, and `gps_bearing_deg()` beside `gps_distance_m()`); 2026-11-05 (`--db`: schema v12, `adsb_aircraft` and `adsb_sightings`; slothweb's "aircraft seen" history and each aircraft's recorded track and altitude profile); 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
+
+**Which daemon (since the cutover, #216).** The ADS-B decoder source is **`sloth-rf`'s**:
+`--adsb` is its flag, and the reader, the table, the `adsb_aircraft` record,
+the `adsb_*` block of `sensor_health`, the `adsb` row of
+`source_status`, the `adsb_aircraft` / `adsb_sightings` tables and `ADSB_EMERGENCY` are in its stream and its database
+(`/run/sloth-rf/sloth-rf.sock`, `/var/lib/sloth-rf/sloth-rf.db`) and
+nowhere else. `sloth-wifi` (the Wi-Fi daemon; `sloth` is a symlink to
+it) took this flag until JSONL 2.0.0 and now refuses it with exit 2 and
+a line naming `sloth-rf` and `sloth-migrate-rf` ([[deployment]] §11.4,
+[[cli-reference]] § Refused); it links none of this code. Where the
+rest of this page says "sloth" reads, keeps or writes something, the
+daemon is `sloth-rf`. slothweb's tab is fed by `--rf-socket`; against
+a 2.x `sloth-wifi` with no `--rf-socket` it says the RF daemon's
+stream is not configured ([[slothweb]] § The RF stream's state). An
+unsplit `1.x` sensor is still read as before
+([ADR 0010](adr/0010-wifi-rf-daemons.md), [[jsonl-schema]] § 1.x to
+2.0.0).
+
+The `[^]` terminal view retired with it: `sloth-rf` is headless, and
+the aircraft table is slothweb's ADS-B tab.
 
 ---
 
@@ -548,11 +568,16 @@ an altitude profile over time (emergencies ringed), and the recorded
 track dashed on the positions plot, also for an aircraft the decoder no
 longer lists. Monitor's and Hybrid's, as the live panel is.
 
-## The `[^]` TUI view
+## The `[^]` TUI view (retired at the cutover, #216)
 
-`[^]` draws the table (`src/views/adsb.c`,
-[`docs/views/adsb.md`](../views/adsb.md) has the mockup and the
-column notes): one row per address, **freshest first** by the
+**Removed.** The view was the one binary's; `sloth-rf`, which has the
+aircraft table since the cutover, has no terminal, and `sloth-wifi` has
+no aircraft. `src/views/adsb.c`, its test and `docs/views/adsb.md` are
+deleted, `^` selects nothing, and the `adsb` token is gone from the
+interface strip. The table is read in slothweb's ADS-B tab. What
+follows describes the view as it was, for the record of what it drew.
+
+`[^]` drew the table: one row per address, **freshest first** by the
 decoder's own last-heard time with the address as the tie-break, over
 a header of the decoder's state, the aircraft count, the aircraft
 reporting an `emergency`, the decoder's lifetime message total, how

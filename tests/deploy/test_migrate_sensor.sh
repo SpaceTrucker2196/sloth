@@ -98,10 +98,13 @@ setup() {   # setup NAME [extra ExecStart line, ending in a backslash]
     printf '{}' > "$D/report.json"
     printf 'snapshot' > "$D/snapshot.txt"
     find "$D" -type f -exec chmod 600 {} +
-    printf '#!/bin/sh\n' > "$ROOT/usr/local/bin/sloth"
+    # What `make install` leaves since the cutover (#216): the binary as
+    # sloth-wifi, and `sloth` a symlink to it.
+    printf '#!/bin/sh\n' > "$ROOT/usr/local/bin/sloth-wifi"
+    ln -s sloth-wifi "$ROOT/usr/local/bin/sloth"
     printf '#!/bin/sh\n' > "$ROOT/usr/local/bin/slothweb"
     printf '#!/bin/sh\n' > "$ROOT/usr/local/sbin/sloth-monitor-up"
-    chmod 755 "$ROOT/usr/local/bin/sloth" "$ROOT/usr/local/bin/slothweb" \
+    chmod 755 "$ROOT/usr/local/bin/sloth-wifi" "$ROOT/usr/local/bin/slothweb" \
               "$ROOT/usr/local/sbin/sloth-monitor-up"
     printf 'research' > "$ROOT/usr/local/share/sloth/research.db"
     printf 'Name:\tsloth\nCapEff:\t0000000000001000\nNoNewPrivs:\t1\n' \
@@ -282,6 +285,19 @@ check 'grep -q "would: install the hardened unit" "$W/out"' "unit install not an
 check 'grep -q "would: verify active, CapEff 0000000000001000" "$W/out"' "verify not announced"
 check 'grep -q "SLOTH_ARGS:  --db-interval-secs 1 --db-retain-days 30 --my-ssid TestNet" "$W/out"' "SLOTH_ARGS not shown"
 
+# ── 1a. a unit that already runs the binary by its new name (#216) ───────
+# `sloth` and `sloth-wifi` are one program; a hand-written unit that
+# names the second is migrated like one that names the first.
+CASE=dry-run-wifi-name
+setup dry-wifi
+sed -i "s|^ExecStart=/home/op/sloth/sloth |ExecStart=/home/op/sloth/sloth-wifi |" "$ROOT/$UNIT_REL"
+check 'grep -q "^ExecStart=/home/op/sloth/sloth-wifi " "$ROOT/$UNIT_REL"' "the case did not rename the binary"
+h0=$(tree_hash "$ROOT")
+run --dry-run
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+check '[ "$(tree_hash "$ROOT")" = "$h0" ]' "the scratch root changed under --dry-run"
+check 'grep -q "would: install the hardened unit" "$W/out"' "unit install not announced"
+
 # ── 1b. keys the hardened unit replaces are named, not dropped silently ──
 CASE=not-carried
 setup not-carried
@@ -410,6 +426,18 @@ PREP='sed -i "s|^Restart=always|ExecStart=/home/op/sloth/sloth --headless\nResta
 refusal two-execstart "expected exactly one ExecStart= in"
 PREP='sed -i "s|^ExecStart=/home/op/sloth/sloth |ExecStart=/usr/bin/python3 |" "$ROOT/$UNIT_REL"'
 refusal not-sloth "runs '/usr/bin/python3', not a sloth binary"
+# The other daemon is not this unit's binary either (#216).
+PREP='sed -i "s|^ExecStart=/home/op/sloth/sloth |ExecStart=/home/op/sloth/sloth-rf |" "$ROOT/$UNIT_REL"'
+refusal sloth-rf-binary "runs '/home/op/sloth/sloth-rf', not a sloth binary"
+# An installed tree from before the cutover has bin/sloth and no
+# bin/sloth-wifi; the hardened unit would name a file that is not there.
+PREP='rm "$ROOT/usr/local/bin/sloth" "$ROOT/usr/local/bin/sloth-wifi" && printf "#!/bin/sh\n" > "$ROOT/usr/local/bin/sloth" && chmod 755 "$ROOT/usr/local/bin/sloth"'
+refusal pre-cutover-install "bin/sloth-wifi; run 'sudo make install' first"
+# A decoder flag in the legacy unit is not carried into a sensor that
+# would refuse it (#216): refused here, by name, before anything moves.
+PREP=
+refusal rf-flag-adsb "flag '--adsb'" '    --adsb /run/readsb/aircraft.json \'
+refusal rf-flag-rtl433 "flag '--rtl433'" '    --rtl433 /var/lib/rtl_433/events.jsonl \'
 PREP='ln -s sloth.db "$ROOT/home/op/sloth/data/sloth-link.db"'
 refusal data-symlink "sloth-link.db is not a regular file or directory"
 PREP='mkdir "$ROOT/elsewhere" && ln -s ../../elsewhere "$ROOT/var/lib/sloth"'

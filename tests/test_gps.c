@@ -2318,12 +2318,12 @@ static void test_sensor_registry_gps(void) {
     ASSERT_EQ(gps_location_parse_fixed("10,20", err, sizeof(err)), 0);
     poll_ctx_t ctx;
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_wifi, &s, &ctx);
     for (int i = 0; i < s.sensor_count; i++) ASSERT_NE(s.sensors[i].kind, SENSOR_GPS);
     gps_location_set_gps("gpsd:127.0.0.1:2947");
     feed_sky_tpv(1793059200);
     poll_ctx_init(&ctx);
-    poll_tick(&g_poll_sloth, &s, &ctx);
+    poll_tick(&g_poll_wifi, &s, &ctx);
     int found = -1;
     for (int i = 0; i < s.sensor_count; i++)
         if (s.sensors[i].kind == SENSOR_GPS) found = i;

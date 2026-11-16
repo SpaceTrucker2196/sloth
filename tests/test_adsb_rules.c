@@ -7,6 +7,7 @@
 #include "alerts.h"
 #include "sloth_clock.h"
 #include "tune.h"
+#include "alerts/rules.h"
 
 /*
  * ADSB_EMERGENCY (src/alerts/rules_adsb.c, #186).
@@ -43,6 +44,9 @@ static void begin(void) {
     g_wall = (time_t)T0_WALL;
     g_now = T0_WALL;
     sloth_clock_test_set(pin_mono, pin_wall);
+    /* sloth-rf's table: this rule is in no other since #216. The
+     * harness puts sloth-wifi's back before the next test. */
+    alerts_set_table(&g_alert_table_rf);
     tune_reset();
     adsb_reset();
     alerts_clear();
@@ -475,8 +479,35 @@ static void test_sbs_flag_alone_does_not_fire(void) {
     end();
 }
 
+/* ── the other daemon ──────────────────────────────────────────── */
+
+/* sloth-wifi never raises ADSB_EMERGENCY (#216, ADR 0010), even handed
+ * a state that holds an aircraft squawking 7700: the rule is in
+ * sloth-rf's table alone. The same state under sloth-rf's table is the
+ * control.
+ *
+ * Seen red (2026-11-15) with R(rule_adsb_emergency) put back in
+ * src/alerts/rules_table.c. */
+static void test_sloth_wifi_raises_no_adsb_emergency(void) {
+    static const char AC[] =
+        "{\"hex\":\"a1b2c3\",\"flight\":\"SYN7   \",\"squawk\":\"7700\",\"seen\":0}";
+    begin();
+    alerts_set_table(&g_alert_table_wifi);
+    for (int i = 0; i < 3; i++) tick(AC);
+    ASSERT_EQ(g_s.adsb_count, 1);              /* the aircraft is in the state */
+    ASSERT_EQ(n_type(), 0);
+    ASSERT_EQ(g_s.alert_count, 0);
+
+    alerts_set_table(&g_alert_table_rf);
+    tick(AC);
+    ASSERT_EQ(n_type(), 1);
+    ASSERT(by_key("adsbemerg:a1b2c3:icao:7700") != NULL);
+    end();
+}
+
 void run_adsb_rules_tests(void) {
     RUN_TEST(test_each_code_fires);
+    RUN_TEST(test_sloth_wifi_raises_no_adsb_emergency);
     RUN_TEST(test_each_status_fires);
     RUN_TEST(test_non_icao_is_its_own_key);
     RUN_TEST(test_none_and_absent_do_not_fire);

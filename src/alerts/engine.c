@@ -24,7 +24,7 @@
 #include "gps.h"
 
 /* The table this process runs (#213). The application selects it once,
- * before the first tick: `sloth` its whole table (g_alert_table_sloth,
+ * before the first tick: sloth-wifi its table (g_alert_table_wifi,
  * src/alerts/rules_table.c), sloth-rf the RF one (g_alert_table_rf,
  * src/alerts/rules_table_rf.c). The engine names neither, so linking it
  * does not link a rule file: a table brings its own rows, the per-rule

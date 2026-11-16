@@ -222,7 +222,7 @@ static void test_scanner_directive_lookup_is_exact(void) {
                  "UserNS=no\n"
                  "User=sloth\n"
                  "ExecStartPre=+/usr/local/sbin/helper x\n"
-                 "ExecStart=/usr/local/bin/sloth \\\n"
+                 "ExecStart=/usr/local/bin/sloth-wifi \\\n"
                  "    --headless \\\n"
                  "    --db /var/lib/sloth/sloth.db\n"
                  "SystemCallFilter=@system-service\n"
@@ -237,7 +237,7 @@ static void test_scanner_directive_lookup_is_exact(void) {
     ASSERT_STR(uf_req(lines, n, "UserNS"), "no");
     ASSERT(uf_value(lines, n, "Group") == NULL);
     /* The continuation joined into the one ExecStart systemd sees. */
-    ASSERT(strncmp(uf_req(lines, n, "ExecStart"), "/usr/local/bin/sloth", 20) == 0);
+    ASSERT(strncmp(uf_req(lines, n, "ExecStart"), "/usr/local/bin/sloth-wifi ", 26) == 0);
     ASSERT(uf_has_token(uf_value(lines, n, "ExecStart"), "--db"));
     ASSERT(uf_has_token(uf_value(lines, n, "ExecStart"), "--headless"));
     ASSERT(strncmp(uf_req(lines, n, "ExecStartPre"), "+/usr/local/sbin/", 17) == 0);
@@ -335,8 +335,17 @@ static void test_unit_executes_installed_paths_only(void) {
     if (start) {
         /* No `-`/`@`/`+`/`!` prefix: sloth itself must run inside the
          * sandbox, and its failure must fail the unit. */
-        ASSERT(strncmp(start, "/usr/local/bin/sloth ", 21) == 0 ||
-               strcmp(start, "/usr/local/bin/sloth") == 0);
+        /* sloth-wifi since the cutover (#216), by its own name and not
+         * through the `sloth` symlink beside it: the unit must not
+         * depend on a compatibility link. Seen red with the unit's
+         * ExecStart left at /usr/local/bin/sloth. */
+        ASSERT(strncmp(start, "/usr/local/bin/sloth-wifi ", 26) == 0 ||
+               strcmp(start, "/usr/local/bin/sloth-wifi") == 0);
+        /* No decoder flag: sloth-wifi refuses each with exit 2. */
+        static const char *const moved[] = { "--adsb", "--aprs", "--aprs-freq",
+            "--aprs-silent-hours", "--rtl433", "--victron" };
+        for (size_t i = 0; i < sizeof(moved) / sizeof(moved[0]); i++)
+            ASSERT(!uf_has_token(start, moved[i]));
         ASSERT(uf_has_token(start, "--headless"));
     }
     ASSERT_EQ(uf_count(lines, n, "ExecStart"), 1);

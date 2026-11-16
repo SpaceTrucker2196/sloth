@@ -1106,6 +1106,67 @@ void web_live_daemon_json(web_live_t *l, web_jw_t *w, long long now_ms) {
     pthread_mutex_unlock(&l->mu);
 }
 
+/* The stream's MAJOR: 0 for no version (before 1.0.0) or one that does
+ * not start with a number. sh_ver is digits and dots (word_keep()). */
+static int ver_major(const char *v) {
+    int n = 0;
+    if (!v || !*v) return 0;
+    for (; *v >= '0' && *v <= '9' && n < 100000; v++) n = n * 10 + (*v - '0');
+    return n;
+}
+
+static int rf_stream_locked(const web_live_t *l) {
+    if (l->role != WEB_LIVE_ONLY) return WEB_RF_STREAM_RF_SOCKET;
+    if (!l->sh_seen) return WEB_RF_STREAM_UNKNOWN;
+    if (!strcmp(l->sh_daemon, "rf")) return WEB_RF_STREAM_RF_DAEMON;
+    return ver_major(l->sh_ver) >= 2 ? WEB_RF_STREAM_NOT_CONFIGURED
+                                     : WEB_RF_STREAM_SENSOR_1X;
+}
+
+int web_live_rf_stream(web_live_t *l) {
+    if (!l) return WEB_RF_STREAM_UNKNOWN;
+    pthread_mutex_lock(&l->mu);
+    int st = rf_stream_locked(l);
+    pthread_mutex_unlock(&l->mu);
+    return st;
+}
+
+const char *web_live_rf_stream_word(int state) {
+    switch (state) {
+    case WEB_RF_STREAM_RF_SOCKET:      return "rf_socket";
+    case WEB_RF_STREAM_SENSOR_1X:      return "sensor_stream";
+    case WEB_RF_STREAM_RF_DAEMON:      return "rf_daemon_on_socket";
+    case WEB_RF_STREAM_NOT_CONFIGURED: return "not_configured";
+    default:                           return "unknown";
+    }
+}
+
+void web_live_rf_stream_json(web_live_t *l, web_jw_t *w) {
+    if (!l) {
+        web_jw_raw(w, "{\"state\":\"unknown\",\"reading\":null,"
+                      "\"sensor_jsonl_version\":null,\"sensor_daemon\":null,"
+                      "\"rf_socket\":false}");
+        return;
+    }
+    pthread_mutex_lock(&l->mu);
+    int st = rf_stream_locked(l);
+    web_jw_raw(w, "{\"state\":");
+    web_jw_str(w, web_live_rf_stream_word(st));
+    /* Which contract --socket's stream is: both are read. */
+    web_jw_raw(w, ",\"reading\":");
+    if (!l->sh_seen)         web_jw_raw(w, "null");
+    else if (!l->sh_ver[0])  web_jw_str(w, "before 1.0.0");
+    else                     web_jw_str(w, ver_major(l->sh_ver) >= 2 ? "2.x" : "1.x");
+    web_jw_raw(w, ",\"sensor_jsonl_version\":");
+    if (l->sh_ver[0]) web_jw_str(w, l->sh_ver); else web_jw_raw(w, "null");
+    web_jw_raw(w, ",\"sensor_daemon\":");
+    if (l->sh_daemon[0]) web_jw_str(w, l->sh_daemon); else web_jw_raw(w, "null");
+    web_jw_raw(w, ",\"rf_socket\":");
+    web_jw_raw(w, l->role != WEB_LIVE_ONLY ? "true" : "false");
+    web_jw_raw(w, "}");
+    pthread_mutex_unlock(&l->mu);
+}
+
 size_t web_live_json(web_live_t *l, char *out, size_t cap, long long now_ms) {
     return web_live_json_scoped(l, NULL, out, cap, now_ms);
 }

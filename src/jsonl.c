@@ -9,9 +9,6 @@
 #include "jsonl.h"
 #include "jsonl_internal.h"
 #include "gps.h"
-#include "adsb.h"
-#include "aprs.h"
-#include "rtl433.h"
 #include "position_track.h"
 #include "sloth_clock.h"
 #include "netstr.h"
@@ -1747,11 +1744,11 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
          * (-1 otherwise) and --monitor-only. Both discrete and set at
          * start; a change is a reopen, which is news. */
         int      cap_linktype, monitor_only;
-        /* The receiver, the position and the decoders: the blocks both
-         * daemons write (#213), each signed on states and bands only.
-         * src/jsonl_internal.h has the fields and why each is one. */
+        /* The receiver and the position: the block both daemons write
+         * (#213), signed on states and bands only. src/jsonl_internal.h
+         * has the fields and why each is one. The decoders' half
+         * (jsonl_sh_rf_sig_t) is sloth-rf's alone since JSONL 2.0.0. */
         jsonl_sh_gnss_sig_t gnss;
-        jsonl_sh_rf_sig_t   rf;
         /* --db's size ceiling (JSONL 1.7.0): a tune knob, so it moves
          * only when the operator moves it. */
         int      db_max_mb;
@@ -1865,7 +1862,6 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.btcap_truncated_any = s->btcap.truncated > 0;
     sig.ble_rot_on           = s->ble_rot.enabled != 0;
     jsonl_sh_gnss_sig(s, &sig.gnss);
-    jsonl_sh_rf_sig(s, &sig.rf);
     const int pcap_on = alert_pcap_enabled();
     sig.pcap_swept_band     = pcap_on ? decade_band(alert_pcap_swept()) : -1;
     sig.pcap_sweep_err_band = pcap_on
@@ -2092,12 +2088,11 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "pcap_swept",        (long long)alert_pcap_swept());
         kv_int(buf, LINEBUF, &off, "pcap_sweep_errors", alert_pcap_sweep_errors());
     }
-    /* The receiver and position block, then the ADS-B and APRS ones:
-     * each written only while its flag is given, and shared with
-     * sloth-rf's record (#213). */
+    /* The receiver and position block, written only with --location
+     * or --gps and shared with sloth-rf's record (#213). The adsb_*
+     * and aprs_* blocks stood after it until JSONL 2.0.0 (#216); they
+     * are in sloth-rf's sensor_health only. */
     jsonl_sh_gps(buf, &off, s);
-    jsonl_sh_adsb(buf, &off, s);
-    jsonl_sh_aprs(buf, &off, s);
     /* #193 field data (JSONL 1.7.0, src/alerts/twin_field.h): how often
      * a deauth flood met a late locally administered same-SSID copy the
      * chain rule left unnamed, with its denominators. Appended after the
@@ -2123,12 +2118,8 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
                (long long)tf.excl_sibling);
         kv_int(buf, LINEBUF, &off, "twin193_excl_any", (long long)tf.excl_any);
     }
-    /* #204 and #208: the APRS region block and the rtl_433 one, after
-     * the twin193 block as they always were, then --victron's after
-     * rtl_433's. Shared with sloth-rf. */
-    jsonl_sh_aprs_region(buf, &off, s);
-    jsonl_sh_rtl433(buf, &off, s);
-    jsonl_sh_victron(buf, &off, s);
+    /* The APRS region, rtl_433 and Victron blocks stood here until
+     * JSONL 2.0.0 (#216): sloth-rf's sensor_health only. */
     /* "daemon", then db_max_mb and jsonl_version, which stay last. */
     jsonl_sh_tail(buf, &off, "wifi", db_cap_mb);
     end_obj(buf, LINEBUF, &off);
@@ -2622,12 +2613,13 @@ void jsonl_emit_ble_alerts(const sloth_state_t *s) {
     }
 }
 
-/* What `sloth` writes each tick: every record of every source. The
- * sink, the primitives, the alert records and the blocks sensor_health
- * shares are src/jsonl_core.c; the GNSS, ADS-B, APRS and rtl_433
- * records are src/jsonl_rf.c, which also has the list sloth-rf writes
- * (jsonl_emit_state_rf(), #213). This file is the capture's records and
- * needs the capture to link. */
+/* What sloth-wifi writes each tick: every record of the capture, the
+ * monitor radio and BLE. The sink, the primitives, the alert records
+ * and the blocks sensor_health shares are src/jsonl_core.c; the GNSS,
+ * ADS-B, APRS, rtl_433 and Victron records are src/jsonl_rf.c, which
+ * has the list sloth-rf writes (jsonl_emit_state_rf(), #213) and which
+ * this daemon does not link (#216). This file is the capture's records
+ * and needs the capture to link. */
 void jsonl_emit_state_snapshots(sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
@@ -2675,11 +2667,11 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_mqtt_flows        (s);
     jsonl_emit_ble_devices       (s);   /* #144 slice 4 */
     jsonl_emit_ble_alerts        (s);
-    jsonl_emit_gnss              (s);   /* 2026-11-02 */
-    jsonl_emit_adsb              (s);   /* #26 slice 1 */
-    jsonl_emit_aprs              (s);   /* 2026-11-05 */
-    jsonl_emit_rtl433            (s);   /* #208 */
-    jsonl_emit_victron           (s);   /* --victron */
+    /* No gnss_fix / gnss_sky / gnss_sat, adsb_aircraft, aprs_station /
+     * aprs_packet, rtl433_device or victron_device since JSONL 2.0.0
+     * (#216, ADR 0010): those records are sloth-rf's
+     * (jsonl_emit_state_rf()). The receiver's health stays in this
+     * daemon's sensor_health, below. */
     /* The host's status and the source inventory (src/sys_status.h):
      * a batch on its own cadence, nothing on most ticks. */
     sys_status_emit              (s);

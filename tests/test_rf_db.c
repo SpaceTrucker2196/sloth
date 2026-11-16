@@ -102,8 +102,8 @@ static void test_rf_db_has_sloths_schema_and_the_rf_rows(void) {
  * tests/test_rf_rules.c gives, with the alarm reading 1 throughout.
  *
  * (Seen red - devices, device_positions, wifi_stas and the undervolt
- * row - with g_poll_sloth and `sloth`'s services passed in sloth-rf's
- * place.) */
+ * row - with the one binary's table and services passed in sloth-rf's
+ * place, #213.) */
 static void test_rf_db_has_no_capture_rows(void) {
     tmp_db();
     rfs_run(&g_poll_rf, 1, NULL, g_db);
@@ -122,15 +122,62 @@ static void test_rf_db_has_no_capture_rows(void) {
     ASSERT_GE(rows("sensor_positions"), 2);     /* not empty for want of a fix */
     rm_db();
 
-    /* The control: the same run as `sloth`. */
+    /* The control: the same run as sloth-wifi. */
     tmp_db();
-    rfs_run(&g_poll_sloth, 0, NULL, g_db);
+    rfs_run(&g_poll_wifi, 0, NULL, g_db);
     ASSERT_GE(rows("devices"), 1);
     ASSERT_GE(rows("device_positions"), 1);
     ASSERT_GE(rows("wifi_stas"), 1);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts WHERE title='SENSOR_UNDERVOLT'"), 1);
-    /* And `sloth` writes the track too: both daemons do. */
+    /* And sloth-wifi writes the track too: both daemons do. */
     ASSERT_GE(rows("sensor_positions"), 2);
+    rm_db();
+}
+
+/* The other daemon's file, from the same inputs (#216): sloth-wifi,
+ * with a receiver that has a fix and three decoder files on disk,
+ * writes none of the receiver's records' tables and none of the
+ * decoders' - gnss_fixes, gnss_sightings, adsb_*, aprs_*, victron_* are
+ * sloth-rf's alone - and no GNSS or ADS-B alert. What it keeps, it
+ * keeps: the sensor's own track and the devices' (both daemons write
+ * sensor_positions, owner ruling 2026-11-15), the receiver in its
+ * sensors table, and the loc_* stamp on the alert it does open.
+ *
+ * The control for every zero is the first test of this file: the same
+ * run as sloth-rf fills each of these tables.
+ *
+ * Seen red (2026-11-15): with `if (g_rf_side)` taken off the four
+ * writers in db_tick(), gnss_fixes and gnss_sightings fill (the
+ * receiver's state is in this daemon); with health_rf put back in
+ * wifi_stages[] as well, adsb_aircraft and aprs_stations do. */
+static void test_wifi_db_has_no_rf_rows_and_keeps_the_track(void) {
+    tmp_db();
+    rfs_run(&g_poll_wifi, 0, NULL, g_db);
+    static const char *const empty[] = {
+        "gnss_fixes", "gnss_sightings", "adsb_aircraft", "adsb_sightings",
+        "aprs_stations", "aprs_packets", "victron_devices", "victron_readings",
+    };
+    for (size_t i = 0; i < sizeof(empty) / sizeof(empty[0]); i++) {
+        long long n = rows(empty[i]);
+        if (n != 0) fprintf(stderr, "    sloth-wifi wrote %lld row(s) of %s\n", n, empty[i]);
+        ASSERT_EQ(n, 0);
+    }
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts WHERE title LIKE 'GNSS_%'"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts WHERE title='ADSB_EMERGENCY'"), 0);
+
+    /* Kept. The fix moved about 110 m a tick. */
+    ASSERT_GE(rows("sensor_positions"), 2);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sensor_positions WHERE loc_src='gps'"),
+              rows("sensor_positions"));
+    ASSERT_GE(rows("device_positions"), 1);
+    /* The receiver is one of this daemon's sensors, and no decoder is. */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sensors WHERE name='GNSS receiver'"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sensors WHERE name IN "
+                    "('ADS-B decoder','APRS decoder','rtl_433 decoder',"
+                    "'Victron (sloth-va)')"), 0);
+    /* The location stamp: the undervolt incident opened with a fix. */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts WHERE title='SENSOR_UNDERVOLT' "
+                    "AND loc_src='gps'"), 1);
     rm_db();
 }
 
@@ -138,4 +185,5 @@ void run_rf_db_tests(void) {
     TEST_SUITE("sloth-rf: its database (#213)");
     RUN_TEST(test_rf_db_has_sloths_schema_and_the_rf_rows);
     RUN_TEST(test_rf_db_has_no_capture_rows);
+    RUN_TEST(test_wifi_db_has_no_rf_rows_and_keeps_the_track);
 }

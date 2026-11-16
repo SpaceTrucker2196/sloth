@@ -83,7 +83,7 @@ TARGET_HOST=/var/lib/sloth              # the path the unit names; fixed by it
 TARGET=${TARGET:-$ROOT$TARGET_HOST}
 SOCK=${SOCK:-$ROOT/run/sloth/sloth.sock}
 PROC=${PROC:-$ROOT/proc}
-BIN=${BIN:-$ROOT$PREFIX/bin/sloth}
+BIN=${BIN:-$ROOT$PREFIX/bin/sloth-wifi}
 HELPER=${HELPER:-$ROOT$PREFIX/sbin/sloth-monitor-up}
 RESEARCH=${RESEARCH:-$ROOT$PREFIX/share/sloth/research.db}
 UNIT_TEMPLATE=${UNIT_TEMPLATE:-$SLOTH_SRC/packaging/systemd/sloth-sensor.service}
@@ -249,8 +249,11 @@ parse_exec() {
     set -- $exec_line
     set +f
     [ $# -ge 1 ] || refuse "ExecStart in $UNIT is empty"
+    # A legacy unit runs `sloth`; one written since the cutover (#216),
+    # or by hand from the packaged unit, runs `sloth-wifi`. One program
+    # under two names (the first is a symlink to the second).
     case "$(basename "$1")" in
-        sloth) ;;
+        sloth|sloth-wifi) ;;
         *) refuse "ExecStart runs '$1', not a sloth binary" ;;
     esac
     shift

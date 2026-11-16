@@ -216,6 +216,13 @@ static struct {
     time_t   dev_ts, read_ts;
 } g_victron_mem[VICTRON_MAX_DEVICES];
 
+/* The RF side (src/db.h): NULL in a daemon that owns none of the
+ * receiver's and the decoders' tables. Apart from the handle, and not
+ * cleared by db_open(): it is the binary's shape, not a run's state. */
+static const db_rf_side_t *g_rf_side;
+
+void db_set_rf_side(const db_rf_side_t *rf) { g_rf_side = rf; }
+
 /* The ST_DEVICE upsert spells the MAC-keyed camera bits as literals. */
 #if CAM_SIG_SETUP_SSID != 2 || CAM_SIG_SETUP_OUI != 16
 #error "ST_DEVICE's cam_signals literals no longer match CAM_SIG_*"
@@ -2144,10 +2151,10 @@ static void write_gnss(const sloth_state_t *s, time_t now) {
  * other. Never once a second: the signature holds bands and cells, not
  * the raw figures. A slot quiet for two heartbeats is free again. */
 static void write_adsb(const sloth_state_t *s, time_t now) {
-    if (!s->adsb.configured || !s->adsb_rows) return;
+    if (!g_rf_side || !s->adsb.configured || !s->adsb_rows) return;
     for (int i = 0; i < s->adsb_count; i++) {
         const adsb_aircraft_t *a = &s->adsb_rows[i];
-        uint64_t sig = adsb_row_sig(a);
+        uint64_t sig = g_rf_side->adsb_row_sig(a);
         int slot = -1, free_slot = -1;
         for (int j = 0; j < DB_ADSB_SLOTS; j++) {
             if (g_adsb_mem[j].used && g_adsb_mem[j].icao == a->icao &&
@@ -2164,7 +2171,7 @@ static void write_adsb(const sloth_state_t *s, time_t now) {
                  (unsigned)(a->icao & 0xffffffu));
         int has_alt = !a->on_ground && (a->has_alt_baro || a->has_alt_geom);
         int alt = a->has_alt_baro ? a->alt_baro : a->alt_geom;
-        const char *em = adsb_emergency_name(a->emergency);
+        const char *em = g_rf_side->adsb_emergency_name(a->emergency);
 
         sqlite3_stmt *st = g_st[ST_ADSB_AC];
         bind_txt(st, 1, hex);
@@ -2970,10 +2977,17 @@ void db_tick(const sloth_state_t *s, time_t now) {
     write_events         (s, now);
     write_detector_evidence(s, now);
     write_positions      ();
-    write_gnss           (s, now);
-    write_adsb           (s, now);
-    write_aprs           (s);
-    write_victron        (s, now);
+    /* gnss_fixes / gnss_sightings and the decoders' tables are
+     * sloth-rf's alone since the cutover (#216, ADR 0010). sloth-wifi
+     * holds a receiver's fix and sky too (it links the same reader, for
+     * the location stamp), so the state being empty is not what keeps
+     * these rows out of sloth.db: this is. */
+    if (g_rf_side) {
+        write_gnss       (s, now);
+        write_adsb       (s, now);
+        write_aprs       (s);
+        write_victron    (s, now);
+    }
 
     if (g_disabled) {
         exec("ROLLBACK", "rollback");

@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42, #56, #154 and #170.
 
-**Last updated**: 2026-11-15 ([[victron]]: schema v15, `victron_devices`
+**Last updated**: 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
 in the entity tier and `victron_readings` in the observation tier, at
 most one reading row a minute per device, the stamp-only v14 → v15 step
 and its two tests; slothweb's Victron tab charts `victron_readings`).
@@ -22,6 +22,36 @@ and its two tests; slothweb's Victron tab charts `victron_readings`).
 gains `operating_width` — a BSS's occupied bandwidth, so a reader can
 draw it instead of assuming 20 MHz — the v13 → v14 step and its two
 tests; slothweb's `/api/wifi/aps` serves the field). 2026-11-05 ([[aprs]]: schema v13, `aprs_stations` in the entity tier and `aprs_packets` in the observation tier, one row per packet, the stamp-only v12 → v13 step and its two tests); 2026-11-05 (#26, [[adsb]]: schema v12, `adsb_aircraft` in the entity tier and `adsb_sightings` in the observation tier on the `adsb_aircraft` record's change-only rule, the stamp-only v11 → v12 step and its two tests; slothweb's GNSS and ADS-B "seen" history reads them and `gnss_sightings`). 2026-11-03 (#175: schema v11, `alert_incidents`, one row per incident beside the per-finding `alerts` row, written from the engine's lifecycle hook and each tick, bounded at 256 incidents a key, on the finding tier; the stamp-only v10 → v11 step and its two tests; slothweb's History and alert page read it). 2026-11-02 ([[gnss]]: schema v10, `gnss_fixes` and `gnss_sightings` in the observation tier on the records' banded change-only rule, the stamp-only v9 → v10 step and its two tests). 2026-11-02 ([[location]]: `device_positions` at rest samples on an RSSI band change or every `gps.sample_s` x 10, its row rate, and `--location` for a parked sensor). 2026-10-27 ([[location]]: schema v9, the alerts location stamp `lat`/`lon`/`alt_m`/`acc_m`/`loc_src`/`loc_ts`, the v8 → v9 step, `device_positions` and `sensor_positions` in the observation tier, the stamp's upsert rule and `--db-compact-alerts` carrying it). 2026-10-26 (`idx_alerts_first_seen` and `idx_devices_first_seen`, for slothweb's History strip; an index needs no bump, and the build cost is measured under "Indexes on time"). 2026-10-26 (#170 review: `alerts.incident_first_seen`, peak `sev` on the live row as on a compacted one, `count` / `reopens` as lower bounds, and `--db-compact-alerts` refusing an un-checkpointed SRC, writing nothing beside it, and handing DST to SRC's owner). 2026-10-26 (#170: schema v8, one `alerts` row per finding rather than per incident — the incident semantics below, the v7 → v8 step, and the opt-in `--db-compact-alerts` copy for the duplicates older builds wrote). 2026-10-23 (#163: the query recipes are slothweb's SQL box's, extracted at its build; three are refused there, the space recipe because `dbstat` gives away a withheld column's length). 2026-10-21 (#154: the v1 → v4 migration steps, so the chain now runs the full v1 → v7 and nothing below v5 is refused any more; also fixed a latent `check_version()` bug — reopening a file already at the current version could wrongly re-enter the migration chain once the floor reached v1, because "a schema_version row exists" and "the version to migrate from" shared one variable). 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
+
+**Two files, one schema (since the cutover, #216,
+[ADR 0010](adr/0010-wifi-rf-daemons.md)).** `sloth-wifi` (alias
+`sloth`) writes `/var/lib/sloth/sloth.db` and `sloth-rf` writes
+`/var/lib/sloth-rf/sloth-rf.db`. Both have this page's DDL, every
+table, and the same `DB_SCHEMA_VERSION`, so a bump and its migration
+apply to both files; what differs is which tables a daemon fills.
+
+| Tables | `sloth-wifi` (`sloth.db`) | `sloth-rf` (`sloth-rf.db`) |
+|---|---|---|
+| `devices`, `device_positions`, `beacon_aps`, `wifi_*`, `probe_clients`, `pnl_clients`, `arp`, `dhcp_leases`, every flow, discovery and event table, `twin_episodes`, `cleartext_creds` | written | empty (it has no capture) |
+| `gnss_fixes`, `gnss_sightings` | **empty since the cutover** | written, with `--gps` |
+| `adsb_aircraft`, `adsb_sightings` | **empty since the cutover** | written, with `--adsb` |
+| `aprs_stations`, `aprs_packets` | **empty since the cutover** | written, with `--aprs` |
+| `victron_devices`, `victron_readings` | **empty since the cutover** | written, with `--victron` |
+| `sensor_positions` | written (with a fix) | written (with a fix): both daemons keep the sensor's own track |
+| `sensors` | its radios and the receiver | the receiver and the decoders |
+| `alerts`, `alert_incidents` | its findings | its findings (`GNSS_*`, `ADSB_EMERGENCY`, `SENSOR_SOURCE_DOWN` for its sources) |
+| `sessions`, `meta` | written | written |
+
+A `sloth.db` from before the cutover keeps the RF rows it has: nothing
+is deleted or moved, and retention ages them out as it always did.
+The writer's seam is `db_set_rf_side()` (`src/db.h`): `sloth-rf`
+registers it and `sloth-wifi` does not, and unregistered the four
+writers are not called, whatever the state holds (`sloth-wifi` has a
+receiver's fix in its state and still writes no `gnss_fixes` row;
+`tests/test_rf_db.c`). Where the sections below say a table is
+"written only with `--adsb`" (or `--aprs`, `--victron`, `--gps` for the
+`gnss_*` pair), the daemon is `sloth-rf`. slothweb reads the second
+file with `--rf-db` ([[slothweb]] § Two daemons).
 
 ---
 

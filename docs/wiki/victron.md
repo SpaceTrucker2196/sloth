@@ -23,7 +23,7 @@ it and links none of it.
 `Makefile` (`sloth-va`, `WITH_SDBUS`),
 `research/victron/instant-readout-and-gatt.md`.
 
-**Last updated**: 2026-11-15 (the web: slothweb's Victron tab,
+**Last updated**: 2026-11-15 (#216, the cutover: `--victron` is `sloth-rf`'s alone; `sloth-wifi` refuses it); 2026-11-15 (the web: slothweb's Victron tab,
 `/api/victron` and `/api/victron/history`; sloth.db v15
 `victron_devices` / `victron_readings`; the `victron` `source_status`
 row, so `SENSOR_SOURCE_DOWN` covers the file; the fleet decision,
@@ -152,9 +152,13 @@ No record field can hold a PIN, a key or a raw advertisement byte.
 
 sloth reads the file as a passive source, the same shape as `--rtl433`
 ([[cli-reference]]): `--victron /var/lib/sloth-va/victron.jsonl`.
-`sloth-rf` takes the same flag through the same code (#213, ADR 0010:
-`src/rf_flags.c`, `src/jsonl_rf.c`), so until cutover give it to one of
-the two daemons, not both.
+Since the cutover (#216) `--victron` is **`sloth-rf`'s flag alone**
+(`src/rf_flags.c`, `src/jsonl_rf.c`): `sloth-wifi` refuses it with exit
+2 and a line naming `sloth-rf` and `sloth-migrate-rf` ([[deployment]]
+§11.4), and the `victron_device` record, the `victron_*` block, the
+`victron` source row and the `victron_*` tables are in `sloth-rf`'s
+stream and database only. Where this section says "sloth" reads the
+file, the daemon is `sloth-rf`.
 `src/victron.c` parses each line against an allow-list of value names
 with bounds (out of range absent and counted, never clamped; other
 names counted and dropped; the device's own `label` never kept) into
@@ -189,7 +193,7 @@ as to every other table. Schema and the stamp-only v14 → v15 step:
 
 ### Source health
 
-`source_status` has a `victron` row, in `sloth`'s stream and sloth-rf's (`--victron`, kind `victron`,
+`source_status` has a `victron` row, in sloth-rf's stream (`--victron`, kind `victron`,
 unit `records`): `live` is `ok` however quiet (sloth-va writes nothing
 while the devices are out of range), a file not there yet is `stale`,
 a read error `down`. `SENSOR_SOURCE_DOWN` reads that row like any

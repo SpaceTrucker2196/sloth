@@ -92,10 +92,13 @@
     var now = nowOf(j), s = j.sensor;
     var h = clear($("aprs-head"));
     if (!s && !j.total) {
-      h.appendChild(el("span", "", "APRS: no decoder"));
+      // #216: as the ADS-B tab; the RF daemon's stream not configured
+      // is a reason of its own.
+      var rf = window.SlothRfStream ? window.SlothRfStream.text(j, "APRS") : "";
+      h.appendChild(el("span", "", rf ? "APRS: RF daemon not configured" : "APRS: no decoder"));
       var e = $("aprs-empty");
       e.hidden = false;
-      e.textContent = "no aprs records yet: sloth needs --aprs /var/lib/direwolf/aprs.log (Dire Wolf's -L packet log), docs/wiki/aprs.md";
+      e.textContent = rf || "no aprs records yet: sloth-rf needs --aprs /var/lib/direwolf/aprs.log (Dire Wolf's -L packet log), docs/wiki/aprs.md";
       $("aprs-head2").textContent = "";
       notices(null, now);
       return;

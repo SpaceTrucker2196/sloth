@@ -33,7 +33,37 @@ GST, `gpsd_time_parse()`, the sky / fix state, `gps_gnss_*_sig()`),
 `tests/test_gnss_view.c`, `tests/test_db.c` (v9 → v10),
 `web/tests/test_gnss.c`.
 
-**Last updated**: 2026-11-12 (#182 item 1, owner ruling 2026-11-12: the `?WATCH` line asks for `"pps":true`; gpsd's `TOFF` is parsed into its own ring and `GNSS_TIME_JUMP` judges a step on consecutive TOFFs, falling back to the read-time measure and its late-read guard where no TOFF is fresh). 2026-11-12 (#182: the late-read guard tested against a lateness that varies from fix to fix; `TOFF` still not used, owner ruling). 2026-11-11 (a link to [[fleet]]'s GNSS comparison across sites, #192 I6). 2026-11-09 (#182: `GNSS_TIME_JUMP` does not judge or anchor on a fix read late, the queued read's mirror; its detail carries both gaps and the fix interval). 2026-11-06 (`/api/gnss` gains `loc`, the sensor's own position from `sensor_health`'s `loc_*`, GPS else `--location`, for the Radar view's centre); 2026-11-05 (slothweb names each satellite: the RINEX identifier and, from the IGS satellite metadata compiled in, the vehicle - name, NORAD and COSPAR numbers, SVN, block, launch, plane and slot - at the record's time; the sky plot draws each satellite's trail from `gnss_sightings`, `/api/gnss/tracks`). 2026-11-05 (slothweb's "satellites seen" history over `gnss_sightings`, `/api/gnss/seen` and `/api/gnss/sat`, and a satellite's C/N0 and elevation over a window). 2026-11-03 (the four GNSS rules replace the hooks section; the history carries the monotonic clock, `eps`, `leapseconds` and `reacq`). 2026-11-02 (verify: `GPSD_MAX_LINE` 10240 so a full multi-GNSS SKY fits; a fractional `mode` is no fix; slothweb shows any offset sloth records). 2026-11-02 (review: `jam` sticky across the TPVs gpsd omits it from; the clock-offset band held with hysteresis; the used count signed as a band in `gnss_fix` and `gnss_sky`; `el` / `az` carried with flags and absent from the records rather than -1; an empty `satellites` set empties the sky and the view says so; the `[#]` cursor follows the satellite across a re-sort; the TUI's cursor, the DataTable and the fix-ring walk in slothweb; what a set satellite writes, and the accepted band-edge case, stated); 2026-11-02 (first version).
+**Last updated**: 2026-11-15 (#216, the cutover: one reader in both daemons; the `gnss_*` records, the `gnss_*` tables and the four `GNSS_*` rules are `sloth-rf`'s alone, the view, the stamp, the tracks and the health are still `sloth-wifi`'s too); 2026-11-12 (#182 item 1, owner ruling 2026-11-12: the `?WATCH` line asks for `"pps":true`; gpsd's `TOFF` is parsed into its own ring and `GNSS_TIME_JUMP` judges a step on consecutive TOFFs, falling back to the read-time measure and its late-read guard where no TOFF is fresh). 2026-11-12 (#182: the late-read guard tested against a lateness that varies from fix to fix; `TOFF` still not used, owner ruling). 2026-11-11 (a link to [[fleet]]'s GNSS comparison across sites, #192 I6). 2026-11-09 (#182: `GNSS_TIME_JUMP` does not judge or anchor on a fix read late, the queued read's mirror; its detail carries both gaps and the fix interval). 2026-11-06 (`/api/gnss` gains `loc`, the sensor's own position from `sensor_health`'s `loc_*`, GPS else `--location`, for the Radar view's centre); 2026-11-05 (slothweb names each satellite: the RINEX identifier and, from the IGS satellite metadata compiled in, the vehicle - name, NORAD and COSPAR numbers, SVN, block, launch, plane and slot - at the record's time; the sky plot draws each satellite's trail from `gnss_sightings`, `/api/gnss/tracks`). 2026-11-05 (slothweb's "satellites seen" history over `gnss_sightings`, `/api/gnss/seen` and `/api/gnss/sat`, and a satellite's C/N0 and elevation over a window). 2026-11-03 (the four GNSS rules replace the hooks section; the history carries the monotonic clock, `eps`, `leapseconds` and `reacq`). 2026-11-02 (verify: `GPSD_MAX_LINE` 10240 so a full multi-GNSS SKY fits; a fractional `mode` is no fix; slothweb shows any offset sloth records). 2026-11-02 (review: `jam` sticky across the TPVs gpsd omits it from; the clock-offset band held with hysteresis; the used count signed as a band in `gnss_fix` and `gnss_sky`; `el` / `az` carried with flags and absent from the records rather than -1; an empty `satellites` set empties the sky and the view says so; the `[#]` cursor follows the satellite across a re-sort; the TUI's cursor, the DataTable and the fix-ring walk in slothweb; what a set satellite writes, and the accepted band-edge case, stated); 2026-11-02 (first version).
+
+**Which daemon (since the cutover, #216; owner rulings 2026-11-15).**
+The receiver is one reader linked into **both** daemons, and what each
+does with it differs:
+
+| | `sloth-wifi` (alias `sloth`) | `sloth-rf` |
+|---|---|---|
+| `--gps`, `--gps-allow-remote`, `--gps-baud`, `--location` | yes | yes |
+| the position stamp (`loc` on its alerts), [[location]] | yes | yes, on its own alerts |
+| `sensor_positions` (the sensor's own track) | yes, in `sloth.db` | yes, in `sloth-rf.db` |
+| `device_positions` | yes | no (it builds no device) |
+| twin rules' motion suppression | yes | no twin rules |
+| the `[#]` view | yes | no (headless) |
+| `sensor_health` `gps_*`, `gnss_*`, `loc_*`; the `gnss` `source_status` row; the `gps` `sensor` row | yes | yes |
+| `SENSOR_SOURCE_DOWN` for `gnss` | yes | yes (one key, shown once by slothweb) |
+| `gnss_fix`, `gnss_sky`, `gnss_sat` records | **no** | **yes** |
+| `gnss_fixes`, `gnss_sightings` tables | **no** | **yes** |
+| `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP` | **no** | **yes** |
+
+So "The records", "The tables" and the rules below are `sloth-rf`'s
+since JSONL 2.0.0; slothweb's GNSS tab (sky, fixes, satellites) is fed
+by `--rf-socket`, and its position and health block fall back to
+`sloth-wifi`'s `sensor_health` when sloth-rf has reported none. A host
+that wants the tab and the alerts and has only a GPS runs `sloth-rf`
+with just `--gps`. Each daemon opens the receiver itself, and a serial
+device opens once: a host that gives a serial GPS to both uses gpsd.
+`sloth-wifi` holds a fix and a sky in its state (the view draws them)
+and still writes no record and no row: `tests/test_rf_loop.c` and
+`tests/test_rf_db.c` hold both absences, and its link refuses
+`rule_gnss_*` and `jsonl_emit_gnss`.
 
 ## What is read
 
@@ -153,8 +183,9 @@ mockup.
 
 Three change-only records, each signed on bands and never on a figure
 that moves every second (agents/AGENTS.md), written by
-`jsonl_emit_gnss()` only with a `--gps` reader, after `ble_alert` and
-before `sensor_health` in the snapshot order. The bucketing lives in
+`jsonl_emit_gnss()` only with a `--gps` reader, first in `sloth-rf`'s
+snapshot order (`jsonl_emit_state_rf()`); `sloth-wifi` does not write
+them since JSONL 2.0.0. The bucketing lives in
 `src/gps.c` (`gps_gnss_fix_sig()`, `gps_gnss_sky_sig()`,
 `gps_gnss_sat_sig()`) and is shared with the `--db` writer, so the two
 sinks agree on what is news.

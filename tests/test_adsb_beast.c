@@ -17,6 +17,7 @@
 #include "capture/adsb_reader.h"
 #include "sloth_clock.h"
 #include "tune.h"
+#include "alerts/rules.h"
 
 /* --adsb beast:// (#186, 2026-11-09).
  *
@@ -846,6 +847,7 @@ static const alert_t *alert_by_key(const char *key) {
 
 static void emerg_begin(void) {
     begin();
+    alerts_set_table(&g_alert_table_rf);   /* ADSB_EMERGENCY is sloth-rf's (#216) */
     sloth_clock_test_set(pin_mono, pin_wall);
     tune_reset();
     alerts_clear();

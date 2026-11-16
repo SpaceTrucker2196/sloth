@@ -25,11 +25,21 @@ default run originates no network traffic at all. Both of those are opt-in behin
 `--allow-active`, which announces itself on stderr; optional telemetry (`-o file.jsonl`,
 `--data-socket`) carries observations to a consumer you configured, over a path you
 configured, never to the segment being watched. It observes what your host already
-sees and turns it into **<!-- count:views -->38<!-- /count --> live views** and **<!-- count:rules -->100<!-- /count --> passive
+sees and turns it into **<!-- count:views -->37<!-- /count --> live views** and **<!-- count:rules -->100<!-- /count --> passive
 alert rules**, an embedded
 WiFi-SIGINT toolkit (PNL aggregation, RSN/cipher/MFP inventory, EAPOL/PMKID
 capture, hidden-SSID reveal, scored seqnum correlation across MAC rotations),
 and an optional JSONL forensic log.
+
+The sensor is **two daemons** from this one tree ([ADR 0010](docs/wiki/adr/0010-wifi-rf-daemons.md)):
+**`sloth-wifi`** — everything above: the IP capture, the 802.11 monitor radio, BLE and
+the terminal; `sloth` is a symlink to it, the same program under its old name — and
+**`sloth-rf`**, a headless daemon that reads the SDR decoders an operator already runs
+(ADS-B, APRS, rtl_433, Victron) and writes the GNSS records. Both are passive; neither
+needs the other. The views are `sloth-wifi`'s. Of the alert kinds, `sloth-wifi` raises
+<!-- count:rules-wifi -->95<!-- /count --> and `sloth-rf`
+<!-- count:rules-rf -->6<!-- /count --> (one, `SENSOR_SOURCE_DOWN`, is both's). slothweb
+reads both.
 
 📖 **Per-view deep dives live under [`docs/views/`](docs/views/)** — each
 file explains the protocol, shows a text mockup, and lists what to watch
@@ -108,7 +118,6 @@ GitHub automatically; start at [`docs/wiki/index.md`](docs/wiki/index.md).
 | [**FragAttacks**](docs/views/fragattack.md) | Per-BSSID counters for the FragAttacks rules (CVE-2020-24586/24587/24588, CVE-2020-261xx) (#75) |
 | [**BLE**](docs/views/ble.md) `[*]`        | One row per BLE advertiser per sensor, with the HID / watchlist flags the BLE_* rules read and an `Enter` detail (#144) |
 | [**GNSS**](docs/views/gnss.md) `[#]`      | The `--gps` receiver's sky: one row per satellite in view with its C/N0, elevation, azimuth, used and health flags, over the fix, the DOPs and the receiver's clock against the host's; observation only (2026-11-02) |
-| [**ADS-B**](docs/views/adsb.md) `[^]`     | The aircraft a local readsb / dump1090-fa decoder lists in its `aircraft.json`, tailed by `--adsb`: ICAO, callsign, squawk, altitude, ground speed, track, RSSI and age, with distance and bearing from the sensor when `--location` or a `--gps` fix gives it one; observation only (#186) |
 | [**Research**](docs/views/research.md)   | The cited source behind each alert that actually fired — CVE, advisory, IEEE clause or paper (#73) |
 | [**Channel**](docs/views/channel.md)     | Per-channel 802.11 activity histogram: APs beaconing and STAs associated on each channel |
 | **Help** `[?]`                            | Keybindings, running version, and the embedded-data disclosures |
@@ -312,7 +321,7 @@ make test                     # the whole suite (no root, no terminal, no networ
 make mutate                   # mutation-test the suite itself (verify the verifier)
 ```
 
-`make` builds four binaries: `sloth`, the monitor; `sloth-rf`, the RF half of the sensor as a headless daemon of its own (ADS-B, APRS, rtl_433 and GNSS from decoders that are already running; no capture, no radio, nothing transmitted; [flags](docs/wiki/cli-reference.md#sloth-rf), built but not yet installed, [ADR 0010](docs/wiki/adr/0010-wifi-rf-daemons.md)); and on Linux the two operator helpers `sloth-ble-scan` and, where SoapySDR is installed, `sloth-sdrsweep`. `make test` builds `sloth_test`.
+`make` builds the two sensor daemons and their helpers: `sloth-wifi`, the monitor, with `sloth` beside it as a symlink to it (so `./sloth ...` below and every script that names it still run the same program); `sloth-rf`, the RF half of the sensor as a headless daemon of its own (ADS-B, APRS, rtl_433, Victron and the GNSS records from decoders that are already running; no capture, no radio, nothing transmitted; [flags](docs/wiki/cli-reference.md#sloth-rf), [ADR 0010](docs/wiki/adr/0010-wifi-rf-daemons.md)); and on Linux the operator helpers `sloth-ble-scan`, `sloth-va` and, where SoapySDR is installed, `sloth-sdrsweep`. `sloth-wifi` refuses the decoder flags (`--adsb`, `--aprs`, `--aprs-freq`, `--aprs-silent-hours`, `--rtl433`, `--victron`) with exit 2 and a line naming `sloth-rf`; a host upgrading from one binary moves them with `sloth-migrate-rf` ([deployment §11.4](docs/wiki/deployment.md)). `make test` builds `sloth_test`.
 
 Requires `libpcap-dev` and `libncursesw-dev` for the full build. The test build needs neither. The mutate target is opt-in and offline — see [`docs/wiki/mutation-testing.md`](docs/wiki/mutation-testing.md).
 
@@ -361,7 +370,7 @@ Use `[?]` inside sloth for an up-to-date reference card.
 
 ## Alerts
 
-**<!-- count:rules -->100<!-- /count --> rules** feed `VIEW_ALERTS` — one per `ALERT_TYPE_*` row in [`include/sloth_alerts.def`](include/sloth_alerts.def), each with a row in [`docs/views/alerts.md`](docs/views/alerts.md). Every rule has a cited assessment in [`docs/wiki/alert-assessments/`](docs/wiki/alert-assessments/README.md); four watch the `--gps` receiver (`GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, [`docs/wiki/gnss.md`](docs/wiki/gnss.md)); one flags an `--adsb` aircraft declaring an emergency, flag only (`ADSB_EMERGENCY`, [`docs/wiki/adsb.md`](docs/wiki/adsb.md)). With `--db`, every incident of a finding is its own `alert_incidents` row (schema v11). New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98).
+**<!-- count:rules -->100<!-- /count --> rules** feed `VIEW_ALERTS` — one per `ALERT_TYPE_*` row in [`include/sloth_alerts.def`](include/sloth_alerts.def), each with a row in [`docs/views/alerts.md`](docs/views/alerts.md). Every rule has a cited assessment in [`docs/wiki/alert-assessments/`](docs/wiki/alert-assessments/README.md). The list is one for both daemons, and each runs its own part: `sloth-wifi` raises <!-- count:rules-wifi -->95<!-- /count --> of the kinds and feeds `VIEW_ALERTS`; `sloth-rf` raises <!-- count:rules-rf -->6<!-- /count --> — the four that watch the `--gps` receiver (`GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, [`docs/wiki/gnss.md`](docs/wiki/gnss.md)), the one that flags an `--adsb` aircraft declaring an emergency, flag only (`ADSB_EMERGENCY`, [`docs/wiki/adsb.md`](docs/wiki/adsb.md)), and `SENSOR_SOURCE_DOWN` for its own sources, which `sloth-wifi` raises for its own too. `sloth-rf` has no terminal: its alerts are read in slothweb. With `--db`, every incident of a finding is its own `alert_incidents` row (schema v11). New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98).
 
 Six of them, as a sample of the shape:
 
@@ -629,7 +638,7 @@ Packet decode runs in a dedicated pcap thread. The eight log modules each have a
 include/sloth.h            shared types: state, packet, conn, alert, device, ...
 include/sloth_views.def    the view list; enum, labels, keys and dispatch expand from it
 include/sloth_alerts.def   the alert-type list; enum, names and ATT&CK techniques expand from it
-src/main.c                 sloth: CLI, signal handlers, main loop
+src/main.c                 sloth-wifi (alias sloth): CLI, signal handlers, main loop
 src/rf/                    sloth-rf: its CLI, headless loop and file-only platform
 src/tui.c                  ncurses / ANSI rendering, key polling
 src/platform/linux*.c      Linux backends (rtnetlink, nl80211, /proc, INET_DIAG)

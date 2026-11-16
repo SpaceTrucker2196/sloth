@@ -29,6 +29,7 @@
 #include "victron.h"
 #include "gps.h"
 #include "position_track.h"
+#include "rf_side.h"
 
 /* The current schema version as meta stores it: every "migrates to
  * current" test pins this, not a literal, so a bump moves one line. */
@@ -3551,6 +3552,10 @@ static void test_v11_migration_failure_leaves_file_unchanged(void) {
  * sightings) and with the visits term dropped from ST_ADSB_AC (visits
  * stayed 1). */
 static void test_adsb_tables_written(void) {
+    /* sloth-rf's tables since the cutover (#216): written only by the
+     * daemon that registers the RF side (src/db.h). The harness puts
+     * sloth-wifi's shape back before the next test. */
+    rf_side_install();
     fresh_db();
     static adsb_aircraft_t ac[2];
     memset(ac, 0, sizeof(ac));
@@ -3896,6 +3901,10 @@ static void vval(victron_device_t *d, const char *name, double v) {
  * minute) and with the readings-advanced test removed (a reading row
  * written with nothing new, once the minute had passed). */
 static void test_victron_tables_written(void) {
+    /* sloth-rf's tables since the cutover (#216): written only by the
+     * daemon that registers the RF side (src/db.h). The harness puts
+     * sloth-wifi's shape back before the next test. */
+    rf_side_install();
     fresh_db();
     static victron_device_t dv[2];
     vdev(&dv[0], "c7:fe:23:b1:1c:5f");
@@ -4002,6 +4011,10 @@ static void aprs_pkt(aprs_packet_t *p, uint64_t seq, time_t ut, const char *src,
  * from ST_APRS_STN (visits stayed 1), and with the object test removed
  * (the sender took the object's position). */
 static void test_aprs_tables_written(void) {
+    /* sloth-rf's tables since the cutover (#216): written only by the
+     * daemon that registers the RF side (src/db.h). The harness puts
+     * sloth-wifi's shape back before the next test. */
+    rf_side_install();
     fresh_db();
     static aprs_packet_t pk[4];
     aprs_pkt(&pk[0], 1, 1793930035, "N0TEST-5", "N0TEST-5", '!', 50);
@@ -4299,6 +4312,10 @@ static void test_incident_close_is_flushed_on_db_close(void) {
  * Seen red with write_gnss()'s per-satellite memory check removed
  * (the second tick wrote four more sightings). */
 static void test_gnss_tables_written(void) {
+    /* sloth-rf's tables since the cutover (#216): written only by the
+     * daemon that registers the RF side (src/db.h). The harness puts
+     * sloth-wifi's shape back before the next test. */
+    rf_side_install();
     fresh_db();
     gps_location_set_gps("gpsd:127.0.0.1:2947");
     static const char sky[] =
