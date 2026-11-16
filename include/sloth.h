@@ -19,7 +19,7 @@
 #include "sloth_view.h"
 #include "sloth_alert.h"
 
-#define SLOTH_VERSION "1.8.6"
+#define SLOTH_VERSION "1.8.7"
 
 /* The JSONL record stream's own contract version, reported as
  * `jsonl_version` on every `sensor_health` line (ADR 0007, #185 item 3).
