@@ -377,3 +377,4 @@
 | 097bc3e | 2026-11-17T04:07:41Z | claude-fable-5-1, claude-opus-5-5 | 244 | 27866 | 14303307 | 77620 | 4.7008 | tests: say that a stack buffer handed to test_tmp_tpl() must start as "" |
 | e62c915 | 2026-11-17T04:44:46Z | claude-opus-5-5 | 30 | 4655 | 3156411 | 12426 | 0.8239 | slothweb: draw the WiFi and BLE Devices waterfalls isometrically (#224) |
 | 25a04ece | 2026-11-17T12:43:55Z | claude-opus-5 | 354 | 268764 | 28389159 | 558176 | 26.4972 | #222 — dga: scale the DGA signals with the label |
+| 2fe8e68 | 2026-11-17T15:23:34Z | claude-fable-5-1, claude-opus-5-5 | 122 | 10619 | 2816929 | 199296 | 3.9617 | contract: ship dot11_data_status.h, not dot11_data.h (#185) |
