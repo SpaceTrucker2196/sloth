@@ -98,6 +98,15 @@ int probe_test_dispatch(sloth_state_t *s,
                         const int *orig_lens,
                         const uint32_t *ts_secs, int n);
 
+/* The same seam with the frames arriving from sensor radio `radio`
+   (0 is the radio probe_open() opens; src/mon_radios.h). Swaps no
+   global, so two threads may drive two radios at once. ts_usecs is
+   optional (NULL: frame i at i ms). */
+int probe_test_dispatch_radio(int radio,
+                              const uint8_t *const *frames, const int *lens,
+                              const uint32_t *ts_secs, const uint32_t *ts_usecs,
+                              int n);
+
 /* Refresh `h` from the monitor-radio handle — liveness, the worker's
    exit classification once it has ended, and one pcap_stats() sample
    (#91 slice 2). The mirror of capture_health_poll() for the radio;

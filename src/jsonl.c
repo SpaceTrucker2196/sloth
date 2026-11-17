@@ -15,6 +15,7 @@
 #include "tune.h"
 #include "capture/probe.h"
 #include "capture/df_radio.h"
+#include "mon_radios.h"
 #include "df.h"
 #include "alerts.h"
 #include "attack_hw.h"
@@ -1840,6 +1841,19 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         /* --db's size ceiling (JSONL 1.7.0): a tune knob, so it moves
          * only when the operator moves it. */
         int      db_max_mb;
+        /* Several sensor radios (JSONL 2.3.0, src/mon_radios.h): how
+         * many, each one's state, whether its share of the hop list is
+         * empty, whether a retune of it has ever failed or ever been
+         * acknowledged, and its duplicate tally as a decade. Never the
+         * frame counts, the frequency or the channel, which move every
+         * tick or every dwell; never the raw duplicate count, which
+         * moves with every frame two radios hear. */
+        int      mon_extra;
+        int      mon_state[MON_RADIO_MAX], mon_hops[MON_RADIO_MAX];
+        int      mon_retune_fail_any[MON_RADIO_MAX];
+        int      mon_ever_confirmed[MON_RADIO_MAX];
+        int      mon_dup_band[MON_RADIO_MAX];
+        int      mon_dd_evicted_any;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -1907,6 +1921,20 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     const int db_cap_mb = db_is_open() ? db_max_mb() : -1;
     sig.db_max_mb     = db_cap_mb;
     sig.mon_bad_clock = mon_bad_clock_total();
+    const int   mon_extra = mon_radios_extra();
+    mon_radio_t mon_r[MON_RADIO_MAX];
+    memset(mon_r, 0, sizeof(mon_r));
+    sig.mon_extra = mon_extra;
+    for (int k = 0; mon_extra && k < MON_RADIO_MAX; k++) {
+        if (!mon_radios_get(k, &mon_r[k])) continue;
+        sig.mon_state[k]           = (int)mon_r[k].state;
+        sig.mon_hops[k]            = mon_r[k].hop_channels > 0;
+        sig.mon_retune_fail_any[k] = mon_r[k].retune_failures > 0;
+        sig.mon_ever_confirmed[k]  = mon_r[k].chan_confirmed != 0;
+        sig.mon_dup_band[k]        = decade_band(mon_r[k].dup_dropped);
+    }
+    const unsigned long long mon_dd_evicted = mon_dedup_evicted();
+    sig.mon_dd_evicted_any = mon_dd_evicted > 0;
     /* The STATE, never the raw seconds. stale_secs ticks up every
      * second, so putting it in the change-only signature would make
      * this record emit once a second forever — turning a
@@ -2017,6 +2045,41 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
            (long long)s->hop_dwell.completed);
     health_kv(buf, &off, "capture", &s->cap_health);
     health_kv(buf, &off, "monitor", &s->mon_health);
+    /* Several sensor radios (JSONL 2.3.0, src/mon_radios.h).
+     * mon_extra_radios is how many --monitor-iface radios were named
+     * beside the first; 0 is the one-radio run and the mon_rK_* members
+     * are then absent. With any, K = 0 is the first radio (monitor_iface
+     * above) and each named radio has its block whether or not it could
+     * be opened: state "not_open" with the reason in mon_rK_err is the
+     * record of one that could not. mon_rK_chan is the channel its last
+     * retune confirmed (0: not hopping, or none yet) and mon_rK_freq
+     * the frequency of the last frame it received, which is where the
+     * radio is whether or not sloth tuned it. */
+    kv_int(buf, LINEBUF, &off, "mon_extra_radios", mon_extra);
+    if (mon_extra) {
+        kv_int(buf, LINEBUF, &off, "mon_dup_dropped",
+               (long long)mon_radios_dup_total());
+        kv_int(buf, LINEBUF, &off, "mon_dedup_evicted", (long long)mon_dd_evicted);
+    }
+    for (int k = 0; mon_extra && k <= mon_extra && k < MON_RADIO_MAX; k++) {
+        const mon_radio_t *r = &mon_r[k];
+        char key[40];
+#define MON_KEY(name) (snprintf(key, sizeof(key), "mon_r%d_" name, k), key)
+        kv_str(buf, LINEBUF, &off, MON_KEY("iface"), r->iface);
+        kv_str(buf, LINEBUF, &off, MON_KEY("state"), mon_radio_state_name(r->state));
+        kv_str(buf, LINEBUF, &off, MON_KEY("err"),   r->err);
+        kv_int(buf, LINEBUF, &off, MON_KEY("freq"),  r->freq_mhz);
+        kv_int(buf, LINEBUF, &off, MON_KEY("chan"),
+               k == 0 ? s->chan_confirmed : r->chan_confirmed);
+        kv_int(buf, LINEBUF, &off, MON_KEY("hop_channels"),
+               k == 0 ? s->hop_activity.channels : r->hop_channels);
+        kv_int(buf, LINEBUF, &off, MON_KEY("frames"), (long long)r->frames);
+        kv_int(buf, LINEBUF, &off, MON_KEY("dup_dropped"),
+               (long long)r->dup_dropped);
+        kv_int(buf, LINEBUF, &off, MON_KEY("retune_failures"),
+               k == 0 ? s->chan_retune_failures : r->retune_failures);
+#undef MON_KEY
+    }
     jsonl_sh_evictions(buf, &off, evict_total, storage_fail);
     /* Headroom of the --pcap-dir filesystem (#96). The free figures are
      * emitted raw because a consumer wants the number; the signature

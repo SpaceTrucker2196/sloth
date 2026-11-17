@@ -18,6 +18,8 @@
 #include "dot11_ie.h"            /* dot11_ie_ssid (#127) */
 #include "radiotap.h"
 #include "df.h"                  /* radio 0 of the direction-finding table */
+#include "mon_radios.h"          /* several sensor radios: de-duplication */
+#include "capture/probe_internal.h"
 #include "rf_quality.h"
 #include "rf_distance.h"
 #include "beacon_snoop.h"
@@ -181,7 +183,7 @@ void probe_test_set_sysfs_net(const char *root) {
 #ifdef PLATFORM_LINUX
 /* ARPHRD_* of a netdev from <root>/<name>/type: the type, -1 when the
  * netdev does not exist, -2 when it exists but the type is unreadable. */
-static int iface_type(const char *name) {
+int probe_iface_type(const char *name) {
     char path[PATH_MAX];
     /* %.15s: kernel names are under IFNAMSIZ, and every caller has
      * already bounded the name. The precision restates that guard at
@@ -212,7 +214,7 @@ static int find_monitor_iface(char *buf, int sz) {
          * snprintf buffers below. */
         size_t nlen = strlen(e->d_name);
         if (nlen >= 16) continue;
-        if (iface_type(e->d_name) == 803) { /* ARPHRD_IEEE80211_RADIOTAP */
+        if (probe_iface_type(e->d_name) == 803) { /* ARPHRD_IEEE80211_RADIOTAP */
             snprintf(buf, sz, "%s", e->d_name);
             closedir(d);
             return 1;
@@ -222,7 +224,7 @@ static int find_monitor_iface(char *buf, int sz) {
     return 0;
 }
 #else
-static int iface_type(const char *name) { (void)name; return -1; }
+int probe_iface_type(const char *name) { (void)name; return -1; }
 static int find_monitor_iface(char *buf, int sz) { (void)buf; (void)sz; return 0; }
 #endif
 
@@ -233,7 +235,7 @@ static int find_monitor_iface(char *buf, int sz) { (void)buf; (void)sz; return 0
  * no pin, discovery as before. 1 with buf set, or 0 with err set. */
 static int select_monitor_iface(char *buf, int sz, char *err, size_t errsz) {
     if (g_pin_iface[0]) {
-        int type = iface_type(g_pin_iface);
+        int type = probe_iface_type(g_pin_iface);
         if (type == -1) {
             snprintf(err, errsz, "monitor iface %.15s not found", g_pin_iface);
             return 0;
@@ -361,9 +363,10 @@ static void record_probe(const uint8_t *mac, const char *ssid,
 
 /* ── pcap callback ───────────────────────────────────────── */
 
-static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
+/* Which sensor radio a frame came from rides in pcap's `user` pointer:
+ * 0 (NULL) is the radio this file opens, 1.. are mon_radio.c's. */
+static void on_radio_frame(int radio, const struct pcap_pkthdr *hdr,
                            const u_char *data) {
-    (void)user;
 
     /* ── The pcap-edge gate (#141) ──────────────────────────────
      *
@@ -489,11 +492,25 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * the level this radio heard the transmitter at is radio 0's
      * reading. A frame that failed its FCS names nobody reliably. The
      * host's clock, as the other radios' notes (df_radio.c). */
-    if (df_active() && !rt.bad_fcs) {
+    if (radio == 0 && df_active() && !rt.bad_fcs) {
         uint8_t df_ta[6];
         if (df_frame_ta(dot11, dot11_len, df_ta))
             df_note(0, df_ta, signal, channel, sloth_wall());
     }
+
+    /* Several sensor radios (mon_radios.h): a frame another radio has
+     * already delivered stops here, counted against this radio, before
+     * any counter, ring, parser or detector below can see it twice.
+     * After the direction-finding note on purpose: the level radio 0
+     * heard a transmitter at is radio 0's reading whichever radio's
+     * copy was delivered, and the other SENSOR radios are not in that
+     * table at all - under --hop they sit on other channels, where a
+     * level is not comparable with radio 0's. With one radio this call
+     * returns 1 and touches nothing. */
+    if (!mon_radio_frame(radio, dot11, dot11_len,
+                         fts > 0 ? (int64_t)fts * 1000000 + (int64_t)fv.ts_usec : 0,
+                         rt.freq_mhz))
+        return;
 
     /* Per-channel RF quality (roadmap B3). The retry bit is Frame
      * Control byte 1 bit 3; the FCS-failed flag came from radiotap.
@@ -507,7 +524,11 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * FCS gate, because it numbers dwells from the radio frequency of
      * all of them; it pairs only good-FCS Probe Request / Response.
      * TSFT when radiotap carries it, the pcap stamp otherwise. */
-    {
+    /* Radio 0's frames only: the module numbers dwells from the order
+     * frequencies change in and times a pair on one radio's TSFT, and
+     * neither means anything across radios on different channels with
+     * unrelated clocks. A pair another radio heard is not measured. */
+    if (radio == 0) {
         const plat_clock_t pclk = { rt.freq_mhz, rt.has_tsft, rt.tsft_us,
                                     (long)fv.ts_sec, (long)fv.ts_usec };
         probe_latency_observe(&fr, &pclk);
@@ -530,10 +551,15 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * and deriving staleness from the first would call a healthy stream
      * dead. sloth_wall() rather than a libc read keeps it injectable and
      * keeps this callback free of the wall-clock read #92 removed. */
-    pthread_mutex_lock(&g_frame_mu);
-    g_last_frame_ts   = fts;
-    g_last_frame_wall = sloth_wall();
-    pthread_mutex_unlock(&g_frame_mu);
+    /* Radio 0's alone: `monitor` in sensor_health is that radio's
+     * health, and another radio still delivering must not make a dead
+     * radio 0 read as fresh. The others' state is in mon_radios. */
+    if (radio == 0) {
+        pthread_mutex_lock(&g_frame_mu);
+        g_last_frame_ts   = fts;
+        g_last_frame_wall = sloth_wall();
+        pthread_mutex_unlock(&g_frame_mu);
+    }
 
     /* Retain the whole frame for evidence (#92). `data`, not `dot11`:
      * the radiotap header is part of the record — it carries the
@@ -615,9 +641,9 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
          * be misread by every tool that opens the file. The evidence
          * ring above keeps the capture as delivered, pad included.
          *
-         * Static, not automatic: this callback runs on the one monitor
-         * thread (or synchronously under probe_test_dispatch), and a
-         * 64 KiB stack buffer per frame buys nothing.
+         * Static, not automatic: this callback runs under g_dispatch_mu
+         * (one frame at a time, whichever radio's thread brought it),
+         * and a 64 KiB stack buffer per frame buys nothing.
          *
          * dot11_frame_depad() moves the view onto the copy rather than
          * decoding the copy again (#130): the header is unchanged by
@@ -859,6 +885,26 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     probe_pnl_observe(sa, ssid, fp, phy);
 }
 
+/* One frame at a time (several sensor radios, mon_radios.h). The path
+ * above was written for one thread: the frame ring's neighbours, the
+ * depad buffer, and every observer's assumption that frames arrive in
+ * sequence. Each radio has its own reader thread, so the whole callback
+ * runs under this lock - taken first, before any module's own lock, and
+ * by nothing but the capture callbacks. Uncontended with one radio. */
+static pthread_mutex_t g_dispatch_mu = PTHREAD_MUTEX_INITIALIZER;
+
+void probe_radio_frame(u_char *user, const struct pcap_pkthdr *hdr,
+                       const u_char *data) {
+    pthread_mutex_lock(&g_dispatch_mu);
+    on_radio_frame((int)(intptr_t)user, hdr, data);
+    pthread_mutex_unlock(&g_dispatch_mu);
+}
+
+static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
+                           const u_char *data) {
+    probe_radio_frame(user, hdr, data);
+}
+
 /* ── Capture thread ──────────────────────────────────────── */
 
 /* Why the monitor worker left its loop (#91 slice 2). Same publication
@@ -993,6 +1039,42 @@ int probe_test_dispatch(sloth_state_t *s,
     g_state = saved_state;
 
     pcap_close(pc);          /* closes the FILE* it took ownership of */
+    free(img);
+    return got;
+}
+
+/* The same seam for a frame "from" sensor radio `radio` (several
+ * sensor radios, mon_radios.h). Unlike probe_test_dispatch() it swaps
+ * no file-level pointer, so two threads may each drive a radio at once:
+ * that is the test of the dispatch lock. ts_usecs is optional (NULL:
+ * the builder's own, frame i at i ms). */
+int probe_test_dispatch_radio(int radio,
+                              const uint8_t *const *frames, const int *lens,
+                              const uint32_t *ts_secs, const uint32_t *ts_usecs,
+                              int n) {
+    size_t total = 0;
+    uint8_t *img = capture_test_savefile(DLT_IEEE802_11_RADIO, frames, lens,
+                                         NULL, ts_secs, n, &total);
+    if (!img) return -1;
+    /* The builder writes whole seconds; the microseconds field is the
+     * second 32-bit word of each 16-octet record header. */
+    if (ts_usecs) {
+        size_t off = 24;
+        for (int i = 0; i < n && off + 16 <= total; i++) {
+            /* Little-endian, as pcap_fmt_rec_hdr() writes it. */
+            for (int b = 0; b < 4; b++)
+                img[off + 4 + (size_t)b] = (uint8_t)(ts_usecs[i] >> (8 * b));
+            off += 16 + (size_t)lens[i];
+        }
+    }
+    FILE *fp = fmemopen(img, total, "rb");
+    if (!fp) { free(img); return -1; }
+    char errbuf[PCAP_ERRBUF_SIZE];
+    pcap_t *pc = pcap_fopen_offline(fp, errbuf);
+    if (!pc) { fclose(fp); free(img); return -1; }
+    int got = pcap_dispatch(pc, n > 0 ? n : -1, probe_radio_frame,
+                            (u_char *)(intptr_t)radio);
+    pcap_close(pc);
     free(img);
     return got;
 }

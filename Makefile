@@ -148,6 +148,8 @@ CORE_BASE_SRCS = \
        src/wifi_chanhop.c    \
        src/df.c              \
        src/capture/df_radio.c \
+       src/mon_radios.c      \
+       src/capture/mon_radio.c \
        src/auth_track.c      \
        src/action_snoop.c    \
        src/ctrl_frames.c     \

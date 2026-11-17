@@ -246,6 +246,24 @@ const char *chanhop_retune_reason(int err);
  * "other" last), for the sticky reason mask in sloth_state_t. */
 int chanhop_retune_reason_bit(int err);
 
+/* Radio k's share of a hop list dealt among `radios` radios (several
+ * sensor radios, src/mon_radios.h): entries k, k+radios, k+2*radios, ...
+ * of `full`, into a freshly reset *h. The shares of k = 0..radios-1 are
+ * disjoint and together are the whole list, so no two radios are given
+ * one channel and every channel waits the same number of dwells for its
+ * revisit. The number of channels in the share; 0 when the list is
+ * shorter than k + 1, and that radio is then not retuned. */
+int chanhop_split(chanhop_t *h, const chanhop_t *full, int radios, int k);
+
+/* One scheduler's poll for the radio `iface`: attribute mon_frames to
+ * its confirmed channel, tick, and when a retune is due issue it
+ * through g_platform.set_channel and feed the answer back. 1 when a
+ * retune was issued, with the channel asked for and the positive errno
+ * (0 acknowledged); 0 when the dwell is still running. chanhop_service()
+ * is this for radio 0 plus the publication into sloth_state_t. */
+int chanhop_step(chanhop_t *h, const char *iface, uint64_t now_ms,
+                 uint32_t mon_frames, int *requested, int *err);
+
 /* One poll's worth of hopping, against g_platform (#91): attribute
  * `mon_frames` (monitor-radio frames since the last call) to the
  * confirmed channel, tick, issue the retune through

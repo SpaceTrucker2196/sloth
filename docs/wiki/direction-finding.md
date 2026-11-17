@@ -13,7 +13,9 @@ and the level it was heard at, into a table of transmitters with one
 level per radio (`src/df.c`). The sensor radio is radio 0 of that table.
 Nothing else reads a frame from a `--df-iface` radio: no parser,
 detector, counter, evidence ring or alert, so a frame three radios hear
-is still one frame to every rule, and sloth still has one sensor radio.
+is still one frame to every rule. They are not sensor radios; those are
+`--monitor-iface` repeated ([[multi-radio-sensing]]), and a radio is one
+or the other, never both (exit 2).
 **Receive-only** (MISSION §2). Under `--hop` the extra radios are
 retuned with the sensor radio, the same kind of kernel write `--hop`
 already makes on sloth's own interface; without `--hop` nothing is
@@ -27,7 +29,7 @@ No alert rule reads either: this is a data point for an analyst.
 `tests/test_df.c`. Owner's request, 2026-11-16, for the beta-site row
 of Alfa adapters.
 
-**Last updated**: 2026-11-16 (new).
+**Last updated**: 2026-11-16 (several sensor radios: what this table holds then, [[multi-radio-sensing]]), 2026-11-16 (new).
 
 ## What it can say, and what it cannot
 
@@ -128,6 +130,17 @@ coverage): these radios add no coverage.
 - Times are the host's clock at the note, for every radio, since the
   table compares ages across radios.
 
+## With several sensor radios
+
+`--monitor-iface` may be given more than once ([[multi-radio-sensing]]).
+Radio 0 of this table is still the first of them, and the `--df-iface`
+radios still follow its channel. The further sensor radios are not in
+the table: under `--hop` each sits on its own share of the channel list,
+so it did not hear the transmission radio 0 heard and its level cannot
+be compared. Radio 0's level is noted from radio 0's own copy of a frame
+even when another sensor radio's copy was the one the detectors got. A
+name given to both flags is refused at startup.
+
 ## Records
 
 Both are sloth-wifi's, change-only, and written only when a second
@@ -156,6 +169,7 @@ Not in `--db`, not in slothweb, not in the fleet export: later slices.
 ## Related pages
 
 - [[wifi-sigint]] — the sensor radio, `--hop`, the #21 merge layer
+- [[multi-radio-sensing]] — more than one sensor radio, and why those are not in this table
 - [[antenna-fixture-rev-n]] — the three-sector fixture this makes usable
 - [[rf-distance]] — distance from one radio's level, the same caution
 - [[jsonl-schema]] — `df_radio`, `wifi_df`

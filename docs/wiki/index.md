@@ -78,6 +78,7 @@ the Wi-Fi it watches:
 - [[wifi-sigint-guide]] — plain-language guide to passive RF inference and its limits, with every radio emission of a current iPhone and Android phone (sourced, 117 references).
 - [[non-ip-sensors]] — passive RF / non-IP sensor-family roadmap (#26).
 - [[ble]] — the Bluetooth host source: `--bt-monitor` over the HCI monitor channel, the passive-scan procedure, what is refused and never written (#144).
+- [[multi-radio-sensing]] — `--monitor-iface` repeated: up to four sensor radios feeding one set of detectors; a frame two radios hear is delivered once (identity, the 5 ms window and what it costs for control frames); the hop list dealt out so the radios sit on different channels; a radio lost mid-run; the `mon_rK_*` members of `sensor_health`.
 - [[direction-finding]] — `--df-iface`: extra monitor radios that feed only a per-transmitter, per-radio signal-level table; which radio hears a transmitter loudest, by how much, and a point along a baseline; what a row of independent radios cannot say (side, range, bearing); the `wifi_df` and `df_radio` records.
 - [[rf-distance]] — the RSSI distance data point: an estimate from signal strength (ITU-R P.1238 log-distance), bands and trend, announced vs assumed transmit power, calibration, and why it is not a location.
 - [[antenna-fixture-rev-n]] — the three-sector passive antenna fixture (Rev N): print, assemble, mount on a 1-1/2 NPT PVC mast, foil the reflectors, validate passively with sloth, maintain; how three sectors reach a sloth that drives one monitor radio (2026-11-02).

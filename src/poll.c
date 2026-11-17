@@ -1,5 +1,6 @@
 #include "poll.h"
 #include "capture/capture.h"
+#include "mon_radios.h"
 #include "capture/probe.h"
 #include "capture/bt_monitor.h"
 #include "bt_stream.h"
@@ -125,6 +126,13 @@ static void st_health_capture(sloth_state_t *s, const poll_ctx_t *ctx) {
      * state rather than a missing one. */
     capture_health_poll(&s->cap_health);
     probe_health_poll(&s->mon_health);
+    /* Several sensor radios (src/mon_radios.h): radio 0's place in that
+     * table follows its worker; the others report their own. */
+    if (mon_radios_active())
+        mon_radios_set_state(0, s->mon_health.running ? MON_RADIO_RUNNING
+                                : s->mon_health.open  ? MON_RADIO_LOST
+                                                      : MON_RADIO_STOPPED,
+                             s->mon_health.exit_detail);
     bt_monitor_health_poll(&s->bt_health);   /* #144 slice 2 */
     /* #96: per-sink write-failure counts, for the cannot-persist badge.
      * Here since #213 and not in health_host: two of the three sinks it
@@ -299,7 +307,11 @@ static void st_sensors_wifi(sloth_state_t *s, const poll_ctx_t *ctx) {
     if (s->probe_iface[0]) {
         sensor_t *sn = sensor_register(s, SENSOR_WIFI, "Wi-Fi monitor",
                                        s->probe_iface, ctx->wall);
-        sensor_observe(sn, mon_frame_total(), ctx->wall);
+        /* With further sensor radios (below) the total is all of
+         * theirs, and this sensor's count is radio 0's own. */
+        mon_radio_t r0;
+        sensor_observe(sn, mon_radios_active() && mon_radios_get(0, &r0)
+                               ? r0.frames : mon_frame_total(), ctx->wall);
         /* #21: fold this radio's beacon observations into the merged
          * multi-radio world model. With one adapter this is an identity
          * map; a second monitor radio would merge under its own sensor
@@ -309,6 +321,20 @@ static void st_sensors_wifi(sloth_state_t *s, const poll_ctx_t *ctx) {
             wifi_merge_reset(&s->wifi_merged);
             wifi_merge_from_beacons(s, (int)(sn - s->sensors));
         }
+    }
+    /* The further sensor radios (src/mon_radios.h), one sensor each,
+     * observing the frames that radio delivered. After the first radio
+     * so it keeps id 0; a run without them registers nothing here and
+     * every later id is where it was. Their beacons are in the one AP
+     * table with radio 0's (it does not record which radio heard a
+     * beacon), so wifi_merged still attributes them to sensor 0. One
+     * that was never opened is not a sensor. */
+    for (int k = 1; s->probe_iface[0] && k < mon_radios_count(); k++) {
+        mon_radio_t r;
+        if (!mon_radios_get(k, &r) || r.state == MON_RADIO_NAMED) continue;
+        sensor_t *xn = sensor_register(s, SENSOR_WIFI, "Wi-Fi monitor",
+                                       r.iface, ctx->wall);
+        if (xn) sensor_observe(xn, r.frames, ctx->wall);
     }
     /* #144 slice 2: the Bluetooth host source registers as the BLE
      * sensor, observing decoded advertising reports. After the Wi-Fi

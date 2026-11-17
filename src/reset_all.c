@@ -69,6 +69,7 @@
 #include "rf_distance.h"
 #include "rf_quality.h"
 #include "df.h"
+#include "mon_radios.h"
 #include "seqnum_track.h"
 #include "sensor_health.h"
 #include "smb_snoop.h"

@@ -84,6 +84,7 @@
     X(linux_wifi_scan_trigger_reset) \
     X(mdns_clear) \
     X(mle_clear) \
+    X(mon_radios_reset) \
     X(mqtt_snoop_clear) \
     X(nbns_clear) \
     X(ndp_snoop_clear) \

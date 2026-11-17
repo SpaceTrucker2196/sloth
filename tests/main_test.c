@@ -290,6 +290,7 @@ void run_evidence_cite_tests(void);
 void run_queue_evict_tests(void);
 void run_wifi_merge_tests(void);
 void run_df_tests(void);
+void run_mon_radios_tests(void);
 void run_twins_tests(void);
 void run_karma_tests(void);
 void run_probe_latency_tests(void);
@@ -509,6 +510,7 @@ int main(void) {
     run_queue_evict_tests();
     run_wifi_merge_tests();
     run_df_tests();
+    run_mon_radios_tests();
     run_twins_tests();
     run_karma_tests();
     run_probe_latency_tests();

@@ -121,6 +121,8 @@
 #include "scan.h"
 #include "capture/probe.h"     /* self-stubbing without WITH_PCAP */
 #include "capture/df_radio.h"  /* --df-iface: the direction-finding radios */
+#include "capture/mon_radio.h" /* --monitor-iface, repeated: more sensor radios */
+#include "mon_radios.h"
 #include "df.h"
 #ifdef WITH_PCAP
 #  include "evidence_ring.h"   /* raw 802.11 evidence ring (#92) */
@@ -200,9 +202,16 @@ static void chanhop_drive(sloth_state_t *s) {
     uint64_t mon_total = mon_frame_total();
     uint32_t delta = (uint32_t)(mon_total - last_total);
     last_total = mon_total;
+    /* With several sensor radios (src/mon_radios.h) that counter is all
+     * of theirs; this scheduler is radio 0's and is fed radio 0's. */
+    if (mon_radios_active()) delta = mon_hop_radio0_delta();
     /* Tick, retune, feed the ack back, publish: src/wifi_chanhop.c, so
      * the loop is testable through the fake platform (#91). */
     chanhop_service(&g_chanhop, s, now_ms, delta);
+    /* The other sensor radios' schedulers, each on its own share of the
+     * list; a radio lost since the last poll has its share dealt out
+     * again. sensor_health carries the result (mon_rK_*). */
+    (void)mon_hop_service(&g_chanhop, now_ms);
 #ifdef WITH_PCAP
     /* The --df-iface radios follow the sensor radio's confirmed channel
      * (src/capture/df_radio.h): a level is comparable only between
@@ -639,6 +648,13 @@ static void print_usage(const char *argv0) {
             "                     fallback. [m] cannot retarget away from\n"
             "                     it. Not part of the --iface allow-list,\n"
             "                     which does not reach the monitor radio.\n"
+            "                     Repeatable: each further NAME (up to 3)\n"
+            "                     is another sensor radio whose frames feed\n"
+            "                     the same detectors; a frame two radios\n"
+            "                     hear is counted once. Under --hop the\n"
+            "                     channel list is split between them. One\n"
+            "                     that is absent or not in monitor mode is\n"
+            "                     left out. Receive-only.\n"
             "  --df-iface NAME[@METRES]\n"
             "                     direction finding: also listen on NAME, a\n"
             "                     second monitor-mode radio (repeatable, up\n"
@@ -864,7 +880,11 @@ int main(int argc, char **argv) {
     const char *allow_ifaces[MAX_IFACES];/* --iface NAME, repeatable (#35) */
     int         allow_iface_count = 0;
     int         monitor_only = 0;        /* --monitor-only (#35) */
-    const char *monitor_iface = NULL;    /* --monitor-iface NAME */
+    const char *monitor_iface = NULL;    /* --monitor-iface NAME, the first */
+    /* Every --monitor-iface in order: [0] is radio 0 (monitor_iface
+     * above), the rest are further sensor radios (src/mon_radios.h). */
+    mon_cli_t   mon_cli;
+    memset(&mon_cli, 0, sizeof(mon_cli));
     /* --df-iface NAME[@METRES], repeatable: the radios beside the
      * sensor radio (src/df.h). --df-origin METRES is the sensor radio's
      * own place on the baseline. */
@@ -984,24 +1004,12 @@ int main(int argc, char **argv) {
             /* Names the sensor radio; does not scope anything. Kept
              * apart from --iface by the owner's 2026-10-04 ruling that
              * the monitor stream stays outside the allow-list. */
-            const char *n = argv[++i];
-            if (monitor_iface) {
-                fprintf(stderr, "sloth: --monitor-iface given twice; one "
-                                "radio is pinned\n");
+            char why[200];
+            if (!mon_cli_add(&mon_cli, argv[++i], why, sizeof(why))) {
+                fprintf(stderr, "%s\n", why);
                 return 2;
             }
-            if (!n[0] || strlen(n) >= 16 /* IFNAMSIZ */ || strchr(n, '/')) {
-                fprintf(stderr, "sloth: --monitor-iface %s: not an "
-                                "interface name (1..15 chars, no '/')\n", n);
-                return 2;
-            }
-            if (bt_dev_is_raw_hci(n)) {
-                fprintf(stderr, "sloth: --monitor-iface %s refused: a raw "
-                                "HCI device accepts injected packets; use "
-                                "--bt-monitor\n", n);
-                return 2;
-            }
-            monitor_iface = n;
+            monitor_iface = mon_cli.name[0];
         } else if (!strcmp(argv[i], "--df-iface") && i + 1 < argc) {
             const char *sp = argv[++i];
             char n[16]; int hp; double pm;
@@ -1298,6 +1306,30 @@ int main(int argc, char **argv) {
 
     char replay_paths[REPLAY_MAX_FILES][REPLAY_PATH_MAX];
     int  replay_count = 0;
+    /* Further sensor radios against the rest of the command line: a
+     * replay, a build with no capture, a radio also given to
+     * --df-iface. One line, exit 2, before anything opens. */
+    {
+        char dfn[DF_MAX_RADIOS - 1][16];
+        const char *dfp[DF_MAX_RADIOS - 1];
+        char why[200];
+        for (int k = 0; k < df_spec_n; k++) {
+            int hp; double pm;
+            if (!df_parse_spec(df_specs[k], dfn[k], (int)sizeof(dfn[k]), &hp, &pm))
+                dfn[k][0] = '\0';
+            dfp[k] = dfn[k];
+        }
+#ifdef WITH_PCAP
+        const int have_pcap = 1;
+#else
+        const int have_pcap = 0;
+#endif
+        if (!mon_cli_check(&mon_cli, dfp, df_spec_n, replay_arg != NULL,
+                           have_pcap, why, sizeof(why))) {
+            fprintf(stderr, "%s\n", why);
+            return 2;
+        }
+    }
 #ifndef WITH_PCAP
     /* Only the capture build reads these two. */
     (void)df_specs; (void)df_origin_m;
@@ -1505,6 +1537,45 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "sloth: --monitor-iface: %s; no monitor "
                                 "capture, no fallback to another radio\n",
                         g_state.probe_err);
+        }
+        /* Further --monitor-iface radios (src/mon_radios.h): sensor
+         * radios like the first, opened here for the reason it is. Each
+         * is announced; one that is absent or not in monitor mode is
+         * left out and the run continues. With no radio 0 there is no
+         * 802.11 path for them to feed (its health and its place in
+         * every record are radio 0's), so none is opened. */
+        if (mon_cli.n > 1 && !g_state.probe_iface[0]) {
+            fprintf(stderr, "sloth: --monitor-iface: the first radio is not "
+                            "open, so no further sensor radio was opened\n");
+        } else if (mon_cli.n > 1) {
+            mon_radios_reset();
+            mon_radios_add(g_state.probe_iface);
+            mon_radios_set_state(0, MON_RADIO_OPEN, "");
+            for (int k = 1; k < mon_cli.n; k++) {
+                char why[96];
+                int idx = mon_radios_add(mon_cli.name[k]);
+                if (idx < 0) continue;      /* the CLI refused a repeat */
+                if (mon_radio_open(idx, mon_cli.name[k], why, sizeof(why))) {
+                    fprintf(stderr, "sloth: --monitor-iface: sensor radio %d "
+                                    "opened on %s beside %s (receive-only; a "
+                                    "frame both hear is counted once)\n",
+                            idx, mon_cli.name[k], g_state.probe_iface);
+                } else {
+                    mon_radios_set_state(idx, MON_RADIO_NAMED, why);
+                    fprintf(stderr, "sloth: --monitor-iface: %s; that radio "
+                                    "is not used\n", why);
+                }
+            }
+            if (g_hop_enabled) {
+                int sharing = mon_hop_setup(&g_chanhop);
+                fprintf(stderr, "sloth: --hop: the channel list is split "
+                                "between %d sensor radio%s, each on its own "
+                                "channels\n", sharing, sharing == 1 ? "" : "s");
+            } else {
+                fprintf(stderr, "sloth: --monitor-iface without --hop: "
+                                "nothing retunes the sensor radios; each "
+                                "listens where it was parked\n");
+            }
         }
         /* --df-iface (src/df.h): opened here for the reason the sensor
          * radio is, the capability the drop below gives up. Announced
@@ -1830,6 +1901,7 @@ int main(int argc, char **argv) {
         }
     }
     probe_run();
+    mon_radio_run();
     df_radio_run();
     bt_monitor_run();
     bt_capture_run();   /* after the drop: opens as the run's account */
@@ -1931,6 +2003,7 @@ int main(int argc, char **argv) {
     gps_reader_stop();
 #ifdef WITH_PCAP
     df_radio_stop();
+    mon_radio_stop();   /* before the ring goes: these threads write it too */
     probe_stop();
     capture_stop();
     bt_monitor_stop();
