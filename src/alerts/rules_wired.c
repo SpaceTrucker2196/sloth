@@ -1254,9 +1254,9 @@ void rule_mqtt_broker_brute(const sloth_state_t *s, time_t now) {
 }
 
 /* DGA: any qname whose leftmost label trips the dga_is_suspicious
- * heuristic — high Shannon entropy + consonant clusters + digit
- * density. Dedup key is the qname so repeated lookups against the
- * same domain only ever produce one alert.
+ * heuristic — since #222 a weighted score over five length-aware
+ * lexical signals, per `-`-separated piece (src/dga.c). Dedup key is
+ * the qname so repeated lookups only ever produce one alert.
  *
  * One fire per name per tick, naming the client that asked (#173). A
  * name sits in the ring as its query and as its response, and `src`
