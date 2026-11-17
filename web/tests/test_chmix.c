@@ -628,14 +628,21 @@ static void test_mix_route_clients(void) {
     int i1 = tx_index(b, "00:11:22:00:00:01");
     WT_ASSERT(i1 >= 0);
     char want[400];
+    /* The vendor is the OUI table's, which CI's fallback-table job
+     * builds empty (vendor null there), so the entry is checked from
+     * its id and from the field after the vendor. */
+    const char *e1 = strstr(b, "\"clients\":[{\"id\":\"00:11:22:00:00:01\",\"vendor\":");
+    WT_ASSERT(e1 != NULL);
+    const char *l1 = e1 ? strstr(e1, ",\"laa\":") : NULL;
+    WT_ASSERT(l1 != NULL);
     snprintf(want, sizeof(want),
-             "\"clients\":[{\"id\":\"00:11:22:00:00:01\",\"vendor\":\"CIMSYS Inc\",\"laa\":false,"
+             ",\"laa\":false,"
              "\"frames\":12,\"first\":%lld,\"last\":%lld,"
              "\"chans\":[[\"6\",9,\"000000000000001\"],[\"11\",3,\"000000000000200\"]],"
              "\"chans_more\":false,\"tx\":%d,\"assoc\":{\"bssid\":\"02:de:00:00:00:a1\","
              "\"src\":\"stream\",\"ssid\":\"home\",\"ssid_k\":%d,\"ssid_np\":false,"
              "\"ssid_src\":\"stream\"}}", T - 600, T - 50, i1, web_ssid_color("home"));
-    WT_HAS(b, want);
+    WT_ASSERT(l1 && !strncmp(l1, want, strlen(want)));
     WT_HAS(b, "{\"id\":\"02:de:00:00:00:02\",\"vendor\":null,\"laa\":true,\"frames\":4,");
     WT_HAS(b, "\"chans_more\":false,\"tx\":");
     /* C2 has no AP: null, not the stream's pairing of another. */
