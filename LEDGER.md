@@ -374,3 +374,5 @@
 | 431e1be | 2026-11-16T22:23:37Z | claude-opus-5-5 | 8 | 1707 | 668188 | 2456 | 0.1875 | sloth-va: register the advertisement monitor asynchronously |
 | d27e6fe | 2026-11-16T22:45:29Z | claude-opus-5-5 | 18 | 3439 | 1367703 | 4122 | 0.3754 | contract-check: spell the home-path pattern so shellcheck 0.9 accepts it |
 | ae5ccdc | 2026-11-17T02:28:44Z | claude-fable-5-1, claude-opus-5-5 | 144 | 19246 | 6206967 | 279032 | 5.3768 | slothweb: the page's title and header read "sloth mesh" |
+| 097bc3e | 2026-11-17T04:07:41Z | claude-fable-5-1, claude-opus-5-5 | 244 | 27866 | 14303307 | 77620 | 4.7008 | tests: say that a stack buffer handed to test_tmp_tpl() must start as "" |
+| e62c915 | 2026-11-17T04:44:46Z | claude-opus-5-5 | 30 | 4655 | 3156411 | 12426 | 0.8239 | slothweb: draw the WiFi and BLE Devices waterfalls isometrically (#224) |
