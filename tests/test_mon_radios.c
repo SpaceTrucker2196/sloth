@@ -600,6 +600,10 @@ static void test_cli_refusals(void) {
 
 static sloth_state_t g_s;
 
+/* probe_test_dispatch_radio() and the other probe_test_*() seams are
+ * declared only under WITH_PCAP (probe.h); the link-only no-flag build
+ * leaves these out, as tests/test_dot11_frame.c does. */
+#ifdef WITH_PCAP
 /* radiotap with CHANNEL and the antenna signal, then the frame. */
 static int rt_probe_req(uint8_t *f, int cap, const uint8_t *sa, uint16_t seq,
                         uint8_t fc1, uint16_t freq) {
@@ -835,6 +839,8 @@ static void test_three_reader_threads_deliver_each_frame_once(void) {
     ASSERT_EQ((long long)mon_radios_dup_total(), 2 * THR_FRAMES);
 }
 
+#endif /* WITH_PCAP */
+
 /* ── sensor_health ────────────────────────────────────────── */
 
 static char g_path[TEST_TMP_MAX];
@@ -935,6 +941,7 @@ static void test_sensor_health_reports_each_radio(void) {
     }
 }
 
+#ifdef WITH_PCAP
 /* Opening a further radio, over a fake /sys/class/net tree as the
  * --monitor-iface pin tests do (tests/test_capture_path.c): absent,
  * typeless and not-in-monitor-mode radios are refused in radio 0's
@@ -988,6 +995,7 @@ static void test_a_radio_that_cannot_be_opened_is_refused(void) {
     }
     (void)rmdir(root);
 }
+#endif /* WITH_PCAP */
 
 /* Each further sensor radio that was opened is a `sensor` row of its
  * own, after radio 0's (which keeps slot 0), counting the frames that
@@ -1046,11 +1054,13 @@ void run_mon_radios_tests(void) {
     RUN_TEST(test_hop_with_one_radio_is_untouched);
     RUN_TEST(test_cli_names);
     RUN_TEST(test_cli_refusals);
+#ifdef WITH_PCAP
     RUN_TEST(test_path_delivers_a_frame_two_radios_heard_once);
     RUN_TEST(test_path_with_one_radio_is_as_it_was);
     RUN_TEST(test_radio0_figures_are_radio0s);
     RUN_TEST(test_three_reader_threads_deliver_each_frame_once);
     RUN_TEST(test_a_radio_that_cannot_be_opened_is_refused);
+#endif
     RUN_TEST(test_each_opened_radio_is_a_sensor);
     RUN_TEST(test_sensor_health_with_one_radio);
     RUN_TEST(test_sensor_health_reports_each_radio);
