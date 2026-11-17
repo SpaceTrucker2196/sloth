@@ -182,6 +182,10 @@ const web_sdb_col_t web_sdb_allow[] = {
     { "victron_readings", "device_state", 15, 1, 0 },
     { "victron_readings", "charger_error", 15, 1, 0 },
     { "victron_readings", "off_reason", 15, 1, 0 },
+    /* v16: the inverter record's AC output. */
+    { "victron_readings", "ac_voltage_v", 16, 1, 0 },
+    { "victron_readings", "ac_current_a", 16, 1, 0 },
+    { "victron_readings", "ac_apparent_va", 16, 1, 0 },
     /* v11 (#175): one row per incident beside the per-finding alerts
      * row. The key is the alerts key and as predicate-only as that one;
      * so is sloth's incident_id, a hash over the key (web_alerts.h never

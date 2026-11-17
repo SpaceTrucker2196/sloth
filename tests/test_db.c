@@ -3897,6 +3897,81 @@ static void test_v14_migration_failure_leaves_file_unchanged(void) {
     unlink(db_path);
 }
 
+/* ── Schema v16: victron_readings' AC output columns ───────────── */
+
+/* A v15 file: a current file whose victron_readings is put back at its
+ * v15 shape (no ac_* columns) by hand, since the unconditional schema
+ * already writes the v16 one and the ALTER would meet a duplicate
+ * column. One reading rides along. */
+static void write_v15_file(void) {
+    fresh_db();
+    db_close();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "DROP TABLE victron_readings;"
+        "CREATE TABLE victron_readings (last_seen INTEGER NOT NULL,"
+        " mac TEXT NOT NULL, src TEXT NOT NULL, rssi INTEGER,"
+        " voltage_v REAL, aux_voltage_v REAL, mid_voltage_v REAL,"
+        " input_v REAL, output_v REAL, current_a REAL, power_w REAL,"
+        " consumed_ah REAL, soc_pct REAL, ttg_min REAL, temperature_c REAL,"
+        " alarm_reason INTEGER, aux_input INTEGER, device_state INTEGER,"
+        " charger_error INTEGER, off_reason INTEGER);"
+        "CREATE INDEX idx_victron_readings_last_seen"
+        " ON victron_readings(last_seen);"
+        "CREATE INDEX idx_victron_readings_mac"
+        " ON victron_readings(mac, last_seen);"
+        "INSERT INTO victron_readings (last_seen,mac,src,voltage_v,device_state)"
+        " VALUES (1600000000,'f5:d8:0c:b6:31:cf','readout',12.8,9);"
+        "UPDATE meta SET value='15' WHERE key='schema_version';",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+}
+
+/* v15 -> v16: the three columns are added, NULL on the row that was
+ * there, and that row's own values are untouched. Seen to fail with the
+ * { 15, ... } step removed from g_steps[] (the static chain check
+ * refuses the build). */
+static void test_v15_file_migrates_additively(void) {
+    write_v15_file();
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, DB_VER_STR);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('victron_readings')"
+                    " WHERE name IN ('ac_voltage_v','ac_current_a','ac_apparent_va')"), 3);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM victron_readings WHERE ac_voltage_v IS NULL"
+                    " AND ac_current_a IS NULL AND ac_apparent_va IS NULL"
+                    " AND device_state=9 AND voltage_v=12.8"), 1);
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v15 file whose stamp cannot be written stays v15 with none of the
+ * three columns: the ALTERs and the stamp are one transaction. */
+static void test_v15_migration_failure_leaves_file_unchanged(void) {
+    write_v15_file();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TRIGGER refuse_v16 BEFORE UPDATE ON meta"
+        " WHEN NEW.key='schema_version' AND NEW.value='16'"
+        " BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[32];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "15");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('victron_readings')"
+                    " WHERE name LIKE 'ac\\_%' ESCAPE '\\'"), 0);
+    ASSERT_EQ(q_int("SELECT device_state FROM victron_readings"), 9);
+    unlink(db_path);
+}
+
 /* Every victron_readings value column is a name on sloth's allow-list,
  * every allow-listed name has its column, and the table has exactly
  * those beside last_seen, mac, src and rssi. */
@@ -5320,6 +5395,8 @@ void run_db_tests(void) {
     RUN_TEST(test_aprs_tables_written);
     RUN_TEST(test_v14_file_migrates_additively);
     RUN_TEST(test_v14_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_v15_file_migrates_additively);
+    RUN_TEST(test_v15_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_victron_columns_match_the_allow_list);
     RUN_TEST(test_victron_tables_written);
     RUN_TEST(test_device_ip_joined_camera_columns_follow_latest);

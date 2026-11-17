@@ -800,8 +800,10 @@ static const char *const SQL[ST_COUNT] = {
 [ST_VICTRON_READ] =
     "INSERT INTO victron_readings (last_seen,mac,src,rssi,voltage_v,aux_voltage_v,"
     "mid_voltage_v,input_v,output_v,current_a,power_w,consumed_ah,soc_pct,ttg_min,"
-    "temperature_c,alarm_reason,aux_input,device_state,charger_error,off_reason)"
-    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
+    "temperature_c,ac_voltage_v,ac_current_a,ac_apparent_va,alarm_reason,aux_input,"
+    "device_state,charger_error,off_reason)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,"
+    "?21,?22,?23)",
 [ST_APRS_PKT] =
     "INSERT INTO aprs_packets (last_seen,source,heard,dti,name,symbol,lat,lon,"
     "speed_kt,course,alt_m,level,status,comment) VALUES (?1,?2,NULLIF(?3,''),"
@@ -1146,6 +1148,7 @@ static const char *const TABLES_KARMA[]    = { "karma_candidates", NULL };
 static const char *const TABLES_DEVICES[]  = { "devices", NULL };
 static const char *const TABLES_ALERTS[]   = { "alerts", NULL };
 static const char *const TABLES_BEACON_APS[] = { "beacon_aps", NULL };
+static const char *const TABLES_VICTRON_READINGS[] = { "victron_readings", NULL };
 
 static const db_step_t g_steps[] = {
     { 1, db_schema_migrate_v1_sql, TABLES_PROBE_CLIENTS,
@@ -1182,6 +1185,9 @@ static const db_step_t g_steps[] = {
     { 14, db_schema_migrate_v14_sql, TABLES_NONE,
       "victron_devices and victron_readings ride the unconditional schema;"
       " stamp only" },
+    { 15, db_schema_migrate_v15_sql, TABLES_VICTRON_READINGS,
+      "victron_readings gained ac_voltage_v, ac_current_a and"
+      " ac_apparent_va" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */

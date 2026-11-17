@@ -218,6 +218,54 @@ static void test_hand_built_dcdc(void) {
     ASSERT((v = val(&r, "off_reason")) && v->v == 0);
 }
 
+/* Hand-built Inverter payload, by the "Extra manufacturer data" table
+ * (victron-ble's devices/inverter.py reads the same widths):
+ *   state 9 (inverting)   bits 32..39                 09
+ *   alarm 0               40..55                      00 00
+ *   battery 12.80 V       56..71        1280 = 0x0500 00 05
+ *   apparent 120 VA       72..87        0x0078        78 00
+ *   AC 120.05 V           88..102  \    12005 = 0x2EE5
+ *   AC 1.0 A              103..113 |    10
+ *   unused, set           114..119 /    0x3F
+ *     0x2EE5 | 10 << 15 | 0x3F << 26 = 0xFC052EE5     E5 2E 05 FC
+ * then 40 unused bits set; model 0xA259. */
+static void test_hand_built_inverter(void) {
+    uint8_t md[32], key[16];
+    size_t n = unhex("1000" "59a2" "03" "3412" "01" "461693dcf2120792d463b503685041ef", md, sizeof(md));
+    unhex(HAND_KEY, key, 16);
+    va_readout_t r;
+    ASSERT_EQ(va_readout_decode(md, n, key, &r), VA_RO_OK);
+    ASSERT_EQ(r.record_type, VA_REC_INVERTER);
+    ASSERT_STR(va_model_name(r.model_id), "Phoenix Inverter 12V 500VA 120V");
+    const va_value_t *v;
+    ASSERT((v = val(&r, "device_state")) && v->v == 9 && !strcmp(v->text, "inverting"));
+    ASSERT((v = val(&r, "alarm_reason")) && v->v == 0);
+    ASSERT((v = val(&r, "voltage_v")) && v->v > 12.7999 && v->v < 12.8001);
+    ASSERT((v = val(&r, "ac_apparent_va")) && v->v == 120 && v->integer);
+    ASSERT((v = val(&r, "ac_voltage_v")) && v->v > 120.0499 && v->v < 120.0501);
+    ASSERT((v = val(&r, "ac_current_a")) && v->v > 0.9999 && v->v < 1.0001);
+    ASSERT_EQ(r.nvals, 6);
+}
+
+/* The same record with every figure at its NA code (state 1, alarm 0,
+ * then 0x7FFF, 0xFFFF, 0x7FFF, 0x7FF): only the state and the alarm
+ * are written, and a record cut short after the alarm gives the same. */
+static void test_inverter_na_and_short(void) {
+    uint8_t md[32], key[16];
+    size_t n = unhex("1000" "59a2" "03" "3412" "01" "4e1693238895f8880599b603685041ef", md, sizeof(md));
+    unhex(HAND_KEY, key, 16);
+    va_readout_t r;
+    ASSERT_EQ(va_readout_decode(md, n, key, &r), VA_RO_OK);
+    const va_value_t *v;
+    ASSERT((v = val(&r, "device_state")) && v->v == 1 && !strcmp(v->text, "low_power"));
+    ASSERT((v = val(&r, "alarm_reason")) && v->v == 0);
+    ASSERT(val(&r, "voltage_v") == NULL && val(&r, "ac_apparent_va") == NULL);
+    ASSERT(val(&r, "ac_voltage_v") == NULL && val(&r, "ac_current_a") == NULL);
+    ASSERT_EQ(r.nvals, 2);
+    ASSERT_EQ(va_readout_decode(md, 8 + 3, key, &r), VA_RO_OK);
+    ASSERT_EQ(r.nvals, 2);
+}
+
 /* A record type with no layout here is decrypted and named, never
  * guessed at: no values. */
 static void test_unknown_record_type(void) {
@@ -659,6 +707,8 @@ void run_va_tests(void) {
     RUN_TEST(test_published_dcdc);
     RUN_TEST(test_hand_built_battery_monitor);
     RUN_TEST(test_hand_built_dcdc);
+    RUN_TEST(test_hand_built_inverter);
+    RUN_TEST(test_inverter_na_and_short);
     RUN_TEST(test_unknown_record_type);
     RUN_TEST(test_wrong_key_refused);
     RUN_TEST(test_not_product_ad_and_truncated);

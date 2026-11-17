@@ -1011,7 +1011,10 @@ static const char SCHEMA_SQL[] =
     "  aux_input     INTEGER,"
     "  device_state  INTEGER,"
     "  charger_error INTEGER,"
-    "  off_reason    INTEGER"
+    "  off_reason    INTEGER,"
+    "  ac_voltage_v  REAL,"
+    "  ac_current_a  REAL,"
+    "  ac_apparent_va REAL"
     ");\n"
     "CREATE INDEX IF NOT EXISTS idx_victron_readings_last_seen"
     " ON victron_readings(last_seen);\n"
@@ -1163,8 +1166,10 @@ static const char MIGRATE_V13_SQL[] =
     "ALTER TABLE beacon_aps ADD COLUMN operating_width INTEGER NOT NULL"
     " DEFAULT 0;\n";
 
-/* Victron (schema v15): the victron_readings value columns in table
- * order (bound from ?5 by db.c's write_victron()); each is the value of
+/* Victron (schema v15; the three ac_* names v16): the victron_readings
+ * value columns in the order db.c's write_victron() binds them from ?5
+ * (its INSERT's column list; the table itself holds the v16 columns
+ * last, where ALTER put them); each is the value of
  * that name on sloth's allow-list (src/victron.c VALS[];
  * tests/test_db.c holds the two equal). From DB_VICTRON_FIRST_ENUM on
  * they are enumerations, stored as integers. slothweb's history route
@@ -1172,8 +1177,9 @@ static const char MIGRATE_V13_SQL[] =
 static const char *const VICTRON_COLS[] = {
     "voltage_v", "aux_voltage_v", "mid_voltage_v", "input_v", "output_v",
     "current_a", "power_w", "consumed_ah", "soc_pct", "ttg_min",
-    "temperature_c", "alarm_reason", "aux_input", "device_state",
-    "charger_error", "off_reason",
+    "temperature_c", "ac_voltage_v", "ac_current_a", "ac_apparent_va",
+    "alarm_reason", "aux_input", "device_state", "charger_error",
+    "off_reason",
 };
 
 const char *db_victron_col(int i) {
@@ -1186,6 +1192,14 @@ const char *db_victron_col(int i) {
  * unconditional schema; the step is the stamp, as v12 -> v13 was.
  * Nothing is backfilled: no earlier file recorded a Victron reading. */
 static const char MIGRATE_V14_SQL[] = "";
+
+/* v15 -> v16 (2026-11-16, docs/wiki/victron.md): the inverter record's
+ * AC output. Three nullable columns on victron_readings; an existing
+ * row has none of them, which is what it recorded. */
+static const char MIGRATE_V15_SQL[] =
+    "ALTER TABLE victron_readings ADD COLUMN ac_voltage_v REAL;\n"
+    "ALTER TABLE victron_readings ADD COLUMN ac_current_a REAL;\n"
+    "ALTER TABLE victron_readings ADD COLUMN ac_apparent_va REAL;\n";
 
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
@@ -1204,6 +1218,7 @@ const char *db_schema_migrate_v11_sql(void) { return MIGRATE_V11_SQL; }
 const char *db_schema_migrate_v12_sql(void) { return MIGRATE_V12_SQL; }
 const char *db_schema_migrate_v13_sql(void) { return MIGRATE_V13_SQL; }
 const char *db_schema_migrate_v14_sql(void) { return MIGRATE_V14_SQL; }
+const char *db_schema_migrate_v15_sql(void) { return MIGRATE_V15_SQL; }
 
 /* --print-schema (#185 item 4). The statements a new file gets, in the
  * order db_open() applies them, then the version row check_version()

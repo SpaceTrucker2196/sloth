@@ -48,6 +48,7 @@
   function kindOf(d) {
     if (d.record === "battery_monitor" || val(d, "soc_pct") !== null ||
         val(d, "consumed_ah") !== null) return "battery";
+    if (d.record === "inverter") return "inverter";
     if (d.record === "dcdc_converter" || val(d, "device_state") !== null ||
         val(d, "input_v") !== null) return "dcdc";
     return "other";
@@ -78,6 +79,13 @@
       if (val(d, "aux_voltage_v") !== null) f.push(["starter", fx(val(d, "aux_voltage_v"), 2, "V")]);
       if (val(d, "mid_voltage_v") !== null) f.push(["midpoint", fx(val(d, "mid_voltage_v"), 2, "V")]);
       if (val(d, "temperature_c") !== null) f.push(["temperature", fx(val(d, "temperature_c"), 1, "C")]);
+    } else if (k === "inverter") {
+      f.push(["state", stateName(val(d, "device_state"))]);
+      f.push(["alarm", code(val(d, "alarm_reason"), "none")]);
+      f.push(["battery", fx(val(d, "voltage_v"), 2, "V")]);
+      f.push(["AC output", fx(val(d, "ac_voltage_v"), 1, "V")]);
+      f.push(["AC current", fx(val(d, "ac_current_a"), 1, "A")]);
+      f.push(["AC load", fx(val(d, "ac_apparent_va"), 0, "VA")]);
     } else if (k === "dcdc") {
       f.push(["state", stateName(val(d, "device_state"))]);
       f.push(["error", code(val(d, "charger_error"), "none")]);
@@ -98,6 +106,7 @@
     var k = kindOf(d);
     if (k === "battery") return ["voltage_v", "current_a", "soc_pct"];
     if (k === "dcdc") return ["input_v", "output_v"];
+    if (k === "inverter") return ["voltage_v", "ac_voltage_v", "ac_apparent_va"];
     var out = [];
     for (var n in d.values || {}) {
       if (Object.prototype.hasOwnProperty.call(d.values, n) && d.values[n].unit && out.length < 3)

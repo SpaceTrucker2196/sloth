@@ -117,7 +117,11 @@
  * and victron_readings are new tables and ride the unconditional
  * schema; the v14 -> v15 step is a stamp alone. No existing table
  * changes. */
-#define DB_SCHEMA_VERSION 15
+/* Bumped to 16 on 2026-11-16 (docs/wiki/victron.md): victron_readings
+ * gains ac_voltage_v, ac_current_a and ac_apparent_va, the inverter
+ * record's AC output. The v15 -> v16 step is three ALTER TABLE ADD
+ * COLUMN, all nullable. No existing column or value changes. */
+#define DB_SCHEMA_VERSION 16
 
 /* The least time between two victron_readings rows of one device.
  * sloth-va writes a readout every 30 s and a session every 300 s; one
@@ -477,12 +481,15 @@ const char *db_schema_migrate_v13_sql(void);
  * victron_readings are new tables and ride the unconditional schema. An
  * empty statement list. */
 const char *db_schema_migrate_v14_sql(void);
+/* v15 -> v16 (Victron inverter): ALTER TABLE victron_readings ADD
+ * COLUMN only. */
+const char *db_schema_migrate_v15_sql(void);
 
-/* victron_readings' value column `i` (0 from voltage_v, in table order),
- * NULL past the last. From DB_VICTRON_FIRST_ENUM on, an enumeration
+/* victron_readings' value column `i` (0 from voltage_v, in the writer's
+ * bind order), NULL past the last. From DB_VICTRON_FIRST_ENUM on, an enumeration
  * stored as an integer. */
-#define DB_VICTRON_FIRST_ENUM 11
-#define DB_VICTRON_NCOLS      16
+#define DB_VICTRON_FIRST_ENUM 14
+#define DB_VICTRON_NCOLS      19
 const char *db_victron_col(int i);
 
 #endif /* SLOTH_DB_H */

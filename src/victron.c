@@ -113,7 +113,8 @@ static int jnull(jcur_t *c) {
 
 /* ── The allow-list ────────────────────────────────────────────────
  * What sloth-va writes (va_victron.c: the Instant Readout fields of the
- * battery-monitor and DC/DC records, and the 65970000 GATT values),
+ * battery-monitor, inverter and DC/DC records, and the 65970000 GATT
+ * values),
  * each with a sanity bound wider than the field can carry, and the step
  * the change signature bands it to (0 = exact). */
 static const struct {
@@ -131,6 +132,10 @@ static const struct {
     { "soc_pct",       "%",      0,  100,        1.0 },
     { "ttg_min",       "min",    0,  65535,     10.0 },
     { "temperature_c", "C",   -100,  400,        1.0 },
+    /* The inverter record's AC output (schema v16). */
+    { "ac_voltage_v",  "V",      0,  400,        1.0 },
+    { "ac_current_a",  "A",      0,  250,        0.5 },
+    { "ac_apparent_va", "VA",    0,  65535,     10.0 },
     { "alarm_reason",  "",       0,  65535,      0 },
     { "aux_input",     "",       0,  3,          0 },
     { "device_state",  "",       0,  255,        0 },

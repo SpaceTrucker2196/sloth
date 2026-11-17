@@ -1,6 +1,6 @@
 ---
 name: sqlite-schema
-description: The --db SQLite sink — why it exists, the schema and its v1 → v15 migration chain, findings and their per-incident rows, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
+description: The --db SQLite sink — why it exists, the schema and its v1 → v16 migration chain, findings and their per-incident rows, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
 type: reference
 ---
 
@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42, #56, #154 and #170.
 
-**Last updated**: 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
+**Last updated**: 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
 in the entity tier and `victron_readings` in the observation tier, at
 most one reading row a minute per device, the stamp-only v14 → v15 step
 and its two tests; slothweb's Victron tab charts `victron_readings`).
@@ -181,14 +181,14 @@ These are what make the file trustworthy rather than merely present.
 | One row per finding; `count` sums incidents, `reopens` counts them | `alerts` | A write continues the key's newest row, so evict-and-refire, a quiet-period reopen and a restart all advance one row (#170). See *Findings and incidents* below. |
 | One row per incident: span widens, `peak_sev`/`count`/`observations` only rise, a close once recorded stays; `sev` the latest | `alert_incidents` | Written each tick from the hook's queue and then from the snapshot, and by a full queue's own flush between ticks. Every column but `sev` comes out the same whatever the order; `sev` is the last write's, and the snapshot, the newest view, is written last (#175). See *Per-incident rows* below. |
 
-## Schema — 52 tables, v1 → v15
+## Schema — 52 tables, v1 → v16
 
-`meta` holds `schema_version`, currently **15**. `db_open()` checks it
+`meta` holds `schema_version`, currently **16**. `db_open()` checks it
 *before* applying the rest of the schema, so a mismatch produces the
 clear version message rather than whatever SQL error the schema happens
-to hit first. Since #154 the chain covers the full **v1 → v15**: any
+to hit first. Since #154 the chain covers the full **v1 → v16**: any
 file this build has ever written opens and migrates forward. Only a
-file from a *newer* build (`schema_version` above 15) is refused.
+file from a *newer* build (`schema_version` above 16) is refused.
 
 **v5** (#90): `karma_candidates.pnl_best`. **v6** (#106 round 2):
 `devices` gains `device_class`, `camera_vendor`, `camera_model`,
@@ -233,6 +233,25 @@ refuses (`test_v14_migration_failure_leaves_file_unchanged`: it stays
 v14 with neither table and the alert row as it was). slothweb's
 `WEB_SDB_SCHEMA_MAX` moved to 15 with it.
 
+**v16** (2026-11-16, [[victron]]): `victron_readings` gains
+`ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the AC output of
+the Instant Readout inverter record; no existing column or value
+changes.
+
+**The v15 → v16 migration.** Three `ALTER TABLE victron_readings ADD
+COLUMN`, all nullable REAL (`db_schema_migrate_v15_sql()`), applied
+only when the table exists (a file from before v15 gets the table whole
+from the unconditional schema). A row written before the step has NULL
+in all three, which is what it recorded. A migrated file holds the
+three columns after `off_reason`, where the unconditional schema also
+puts them. Tested on a v15 file (`victron_readings` rebuilt by hand at
+its v15 shape, one reading; `test_v15_file_migrates_additively`: the
+three columns present and NULL on that row, its own values unchanged)
+and on one whose stamp a trigger refuses
+(`test_v15_migration_failure_leaves_file_unchanged`: it stays v15 with
+none of the three). slothweb's `WEB_SDB_SCHEMA_MAX` moved to 16 with
+it; it reads the three as absent from a v15 file.
+
 **`victron_devices` and `victron_readings`.** Written only with
 `--victron`, by `write_victron()`, from sloth's device table
 (`src/victron.c`; at most 16 addresses). `victron_devices (mac PK,
@@ -249,11 +268,12 @@ since it started (not a sum across runs). `victron_readings
 (last_seen, mac, src, rssi, voltage_v, aux_voltage_v, mid_voltage_v,
 input_v, output_v, current_a, power_w, consumed_ah, soc_pct, ttg_min,
 temperature_c, alarm_reason, aux_input, device_state, charger_error,
-off_reason)` gets one row when the device took a record with values
+off_reason, ac_voltage_v, ac_current_a, ac_apparent_va)` gets one row when the device took a record with values
 and 60 s have passed since its last row: `last_seen` sloth's read time,
 each value the latest sloth's table held (sticky: a value a record did
-not carry is the last one that did; NULL never heard; the last five
-are enumerations stored as integers), `src` `readout` or `gatt` for the
+not carry is the last one that did; NULL never heard; `alarm_reason`
+to `off_reason` are enumerations stored as integers; the three `ac_*`
+are v16), `src` `readout` or `gatt` for the
 path the newest values came from. The value columns are sloth's
 allow-list by name (`db_victron_col()`; `tests/test_db.c
 test_victron_columns_match_the_allow_list` holds the two equal). No

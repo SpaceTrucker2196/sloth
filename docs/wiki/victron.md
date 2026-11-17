@@ -23,7 +23,7 @@ it and links none of it.
 `Makefile` (`sloth-va`, `WITH_SDBUS`),
 `research/victron/instant-readout-and-gatt.md`.
 
-**Last updated**: 2026-11-16 (sloth-va registers its advertisement monitor asynchronously; the beta-site worker's fix); 2026-11-15 (#216, the cutover: `--victron` is `sloth-rf`'s alone; `sloth-wifi` refuses it); 2026-11-15 (the web: slothweb's Victron tab,
+**Last updated**: 2026-11-16 (the inverter record, 0x03, decoded: state, alarm, battery V and the AC output's V, A and VA, for the Phoenix behind the VE.Direct dongle; three new values on sloth's allow-list, JSONL 2.1.0, sloth.db v16, an inverter card in slothweb); 2026-11-16 (sloth-va registers its advertisement monitor asynchronously; the beta-site worker's fix); 2026-11-15 (#216, the cutover: `--victron` is `sloth-rf`'s alone; `sloth-wifi` refuses it); 2026-11-15 (the web: slothweb's Victron tab,
 `/api/victron` and `/api/victron/history`; sloth.db v15
 `victron_devices` / `victron_readings`; the `victron` `source_status`
 row, so `SENSOR_SOURCE_DOWN` covers the file; the fleet decision,
@@ -42,14 +42,14 @@ which cites each item:
 |---|---|---|---|
 | BMV-712 Smart, SN HQ2501YV9FU | record 0x02 "battery monitor": voltage, current, SOC, consumed Ah, TTG, alarm reason, aux (starter V / mid V / temperature) | reads the 65970000 service if the device has it (voltage, current, power, consumed Ah, SOC); otherwise records its service list | readout: Victron's published layout, two published vectors reproduced. GATT: Victron documented the service for the SmartShunt only — unverified here |
 | Orion-Tr Smart 12/12-18A isolated, SN HQ2515QP3RX | record 0x04 "DC/DC converter": device state, charger error, input V, output V, off reason (no currents) | as above | readout as above; GATT unverified |
-| VE.Direct Bluetooth Smart dongle, SN HQ25232KEJG | none: heard sending a record that does not start 0x10 (Instant Readout off, or not offered) | as above; needs its MAC in `victron-va.conf` | GATT unverified; what is on its VE.Direct port is unknown |
+| VE.Direct Bluetooth Smart dongle, SN HQ25232KEJG, on a Phoenix Inverter 12V 500VA 120V (model 0xA259) | record 0x03 "inverter": device state, alarm reason, battery V (`voltage_v`), AC output apparent power (`ac_apparent_va`), AC output V (`ac_voltage_v`), AC output A (`ac_current_a`) | as above; needs its MAC in `victron-va.conf` | readout: Victron's published layout, checked against hand-built vectors only (no published one). sloth-rf carries all six (JSONL 2.1.0, sloth.db v16) and slothweb's card shows them, charting battery V, AC V and AC VA. GATT unverified |
 
 Not implemented: VictronConnect's own service
 (306b0001-b081-4037-83dc-e59fcc3cdfd0) and its framing, which Victron
 has not published. A device that offers only it gets a
 `"session":"no_supported_service"` record listing its services, which is
 the evidence for the next step. The other [EMD] record types (solar
-charger, inverter, …) are named but not decoded.
+charger, inverter RS, …) are named but not decoded.
 
 ## The two secret files
 
@@ -192,7 +192,8 @@ its services, when each path last delivered, sloth's counts) and
 the newest values), at most one reading row a minute per device
 (`DB_VICTRON_MIN_S`), observation tier for the readings and entity
 tier for the inventory, so `--db-retain-days` and `--db-max-mb` apply
-as to every other table. Schema and the stamp-only v14 → v15 step:
+as to every other table. v16 added the inverter's three `ac_*` columns.
+Schema, the stamp-only v14 → v15 step and the v15 → v16 one:
 [[sqlite-schema]].
 
 ### Source health

@@ -65,7 +65,7 @@
 /* sloth keeps VICTRON_MAX_DEVICES (16) rows; room for twice that while
  * a restarted sloth's old rows wait out their TTL. */
 #define WEB_VICTRON_ROWS        32
-#define WEB_VICTRON_VALS        16     /* sloth's allow-list */
+#define WEB_VICTRON_VALS        19     /* sloth's allow-list */
 #define WEB_VICTRON_SERIAL_MAX  23     /* victron_device_t.serial */
 #define WEB_VICTRON_MODEL_MAX   31
 #define WEB_VICTRON_RECORD_MAX  23

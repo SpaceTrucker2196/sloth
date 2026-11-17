@@ -92,6 +92,19 @@ static void decode_dcdc(va_readout_t *r, const uint8_t *p) {
     if (field(r, p, 80, 32, 0, 0, &v))       put(r, "off_reason", "", v, 1, NULL);
 }
 
+/* [EMD] "Inverter" (a Phoenix, heard through the VE.Direct Bluetooth
+ * Smart dongle on its port). voltage_v is the battery side; the three
+ * AC figures are the output. */
+static void decode_inverter(va_readout_t *r, const uint8_t *p) {
+    uint32_t v;
+    if (field(r, p, 32, 8, 1, 0xFF, &v))    put(r, "device_state", "", v, 1, va_device_state_name((int)v));
+    if (field(r, p, 40, 16, 0, 0, &v))      put(r, "alarm_reason", "", v, 1, NULL);
+    if (field(r, p, 56, 16, 1, 0x7FFF, &v)) put(r, "voltage_v", "V", sext(v, 16) * 0.01, 0, NULL);
+    if (field(r, p, 72, 16, 1, 0xFFFF, &v)) put(r, "ac_apparent_va", "VA", v, 1, NULL);
+    if (field(r, p, 88, 15, 1, 0x7FFF, &v)) put(r, "ac_voltage_v", "V", v * 0.01, 0, NULL);
+    if (field(r, p, 103, 11, 1, 0x7FF, &v)) put(r, "ac_current_a", "A", v * 0.1, 0, NULL);
+}
+
 va_ro_status_t va_readout_decode(const uint8_t *md, size_t n, const uint8_t key[16],
                                  va_readout_t *out) {
     memset(out, 0, sizeof(*out));
@@ -124,6 +137,7 @@ va_ro_status_t va_readout_decode(const uint8_t *md, size_t n, const uint8_t key[
 
     switch (out->record_type) {
     case VA_REC_BATTERY_MONITOR: decode_battery_monitor(out, plain); out->status = VA_RO_OK; break;
+    case VA_REC_INVERTER:        decode_inverter(out, plain);        out->status = VA_RO_OK; break;
     case VA_REC_DCDC:            decode_dcdc(out, plain);            out->status = VA_RO_OK; break;
     default:                     out->status = VA_RO_UNDECODED; break;
     }
@@ -172,6 +186,36 @@ const char *va_model_name(uint16_t id) {
     case 0xA38A: return "SmartShunt 1000A/50mV";
     case 0xA38B: return "SmartShunt 2000A/50mV";
     case 0xA3F0: return "Orion XS 12V/12V-50A";
+    case 0xA231: return "Phoenix Inverter 12V 250VA 230V";
+    case 0xA232: return "Phoenix Inverter 24V 250VA 230V";
+    case 0xA234: return "Phoenix Inverter 48V 250VA 230V";
+    case 0xA239: return "Phoenix Inverter 12V 250VA 120V";
+    case 0xA23A: return "Phoenix Inverter 24V 250VA 120V";
+    case 0xA23C: return "Phoenix Inverter 48V 250VA 120V";
+    case 0xA241: return "Phoenix Inverter 12V 375VA 230V";
+    case 0xA242: return "Phoenix Inverter 24V 375VA 230V";
+    case 0xA244: return "Phoenix Inverter 48V 375VA 230V";
+    case 0xA249: return "Phoenix Inverter 12V 375VA 120V";
+    case 0xA24A: return "Phoenix Inverter 24V 375VA 120V";
+    case 0xA24C: return "Phoenix Inverter 48V 375VA 120V";
+    case 0xA251: return "Phoenix Inverter 12V 500VA 230V";
+    case 0xA252: return "Phoenix Inverter 24V 500VA 230V";
+    case 0xA254: return "Phoenix Inverter 48V 500VA 230V";
+    case 0xA259: return "Phoenix Inverter 12V 500VA 120V";
+    case 0xA25A: return "Phoenix Inverter 24V 500VA 120V";
+    case 0xA25C: return "Phoenix Inverter 48V 500VA 120V";
+    case 0xA261: return "Phoenix Inverter 12V 800VA 230V";
+    case 0xA262: return "Phoenix Inverter 24V 800VA 230V";
+    case 0xA264: return "Phoenix Inverter 48V 800VA 230V";
+    case 0xA269: return "Phoenix Inverter 12V 800VA 120V";
+    case 0xA26A: return "Phoenix Inverter 24V 800VA 120V";
+    case 0xA26C: return "Phoenix Inverter 48V 800VA 120V";
+    case 0xA271: return "Phoenix Inverter 12V 1200VA 230V";
+    case 0xA272: return "Phoenix Inverter 24V 1200VA 230V";
+    case 0xA274: return "Phoenix Inverter 48V 1200VA 230V";
+    case 0xA279: return "Phoenix Inverter 12V 1200VA 120V";
+    case 0xA27A: return "Phoenix Inverter 24V 1200VA 120V";
+    case 0xA27C: return "Phoenix Inverter 48V 1200VA 120V";
     /* [VEB] only: not in [VED] (no VE.Direct port on the Orion Smart). */
     case 0xA3C0: return "Orion Smart 12V/12V-18A";
     default:     return NULL;

@@ -507,7 +507,7 @@ static void test_health_json(void) {
         "{\"service\":\"slothweb\",\"milestone\":\"M6\",\"uptime_s\":42,"
         "\"socket\":\"none\",\"last_record_age_s\":null,"
         "\"db\":\"none\",\"db_schema\":null,\"db_rows\":null,"
-        "\"db_supported\":[1,15],\"sql\":false,"
+        "\"db_supported\":[1,16],\"sql\":false,"
         "\"store\":\"none\",\"anomaly\":null,\"sse_clients\":2,"
         "\"tick_seq\":17,\"hostname\":\"%s\"}\n", hn);
     WT_HAS(out, "Content-Type: application/json\r\n");
