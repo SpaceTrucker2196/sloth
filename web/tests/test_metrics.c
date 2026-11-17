@@ -203,6 +203,10 @@ static void test_event_counters(void) {
     line("{\"type\":\"alert\",\"ts\":1,\"title\":\"t\",\"detail\":\"d\",\"key\":\"k\","
          "\"sev\":2,\"ty\":14,\"count\":1}");
     line("{\"type\":\"alert.create\",\"ts\":1,\"title\":\"t\",\"sev\":2,\"ty\":14}");
+    /* "alert" queues rather than adding straight to the bucket (#218:
+     * sloth-rf can raise the same type), so it needs a drain before
+     * it shows. */
+    web_rollup_close_all(&ru);
     WT_ASSERT(cur(WM_ALERTS_FIRED, "14").sum == 1);   /* the legacy record only */
     done();
 }

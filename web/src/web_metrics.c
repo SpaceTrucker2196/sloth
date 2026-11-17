@@ -515,6 +515,16 @@ void web_metrics_rf_sample(web_rollup_t *ru, struct web_sys *sys, const web_jrec
     const char *t = web_jl_str(r, "type");
     if (!ru || !t) return;
     gnss_sample(ru, t, r, now_s);
+    if (!strcmp(t, "alert")) {
+        /* sloth-rf's own alert types (GNSS_*, ADSB_EMERGENCY) are
+         * exclusively its own, but SENSOR_SOURCE_DOWN is not -- sloth
+         * can raise it too -- so every "alert" record queues rather
+         * than applying directly (#218), the same as
+         * web_metrics_record()'s "alert" branch. */
+        char k[WEB_KEY_MAX + 1];
+        if (web_key_alert_type(web_jl_int(r, "ty", -1), k) == 0)
+            web_rollup_queue_add(ru, WM_ALERTS_FIRED, k, 1, now_s);
+    }
     if (sys_applied && (!strncmp(t, "sys_s", 5) || !strcmp(t, "source_status"))) {
         web_sys_metrics(ru, r, now_s);
         if (sys && !strcmp(t, "sys_status")) web_sys_db_metrics(sys, ru, now_s);
@@ -723,7 +733,11 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
                   hw_delta(m, "ble|adv", web_jl_int(r, "ble_adv_reports", 0), -1), now);
     } else if (!strcmp(t, "alert")) {
         if (web_key_alert_type(web_jl_int(r, "ty", -1), k) != 0) return;
-        web_rollup_add(m->ru, WM_ALERTS_FIRED, k, 1, now);
+        /* Queued, not applied here: sloth-rf can raise the same alert
+         * type (SENSOR_SOURCE_DOWN), and alerts.fired keeps one writer
+         * (#218) -- web_metrics_rf_sample() queues its own samples the
+         * same way, and close_where() alone applies either. */
+        web_rollup_queue_add(m->ru, WM_ALERTS_FIRED, k, 1, now);
     } else if (!strcmp(t, "channel_summary")) {
         if (web_key_channel(web_jl_int(r, "channel", -1),
                             web_jl_str(r, "band"), k) != 0) return;

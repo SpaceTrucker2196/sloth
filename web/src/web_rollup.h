@@ -282,6 +282,22 @@ typedef struct {
     unsigned long ghost_hits;             /* returning keys given their life */
 } web_kclass_t;
 
+/* A sample queued for a metric more than one thread can write (#218:
+ * WM_ALERTS_FIRED, since either daemon can raise SENSOR_SOURCE_DOWN).
+ * It waits here, under the rollup's own mutex, for close_where() --
+ * called only from the tsdb thread's once-a-second tick -- to apply
+ * it, so the metric keeps the one-writer-per-series rule every other
+ * series already relies on. */
+typedef struct {
+    int       metric;
+    char      key[WEB_KEY_MAX + 1];
+    double    v;
+    int       clamped;
+    long long now_s;
+} web_alertq_row_t;
+
+#define WEB_ALERTQ_CAP 64
+
 typedef struct {
     pthread_mutex_t mu;
     web_kclass_t    cls[WEB_KC_COUNT];
@@ -299,6 +315,9 @@ typedef struct {
     unsigned long   clamped;
     unsigned long   hw_evictions;         /* web_metrics.c's high-water rows */
     unsigned long   rows_closed[WEB_TIER_COUNT];
+    web_alertq_row_t alertq[WEB_ALERTQ_CAP];
+    int             alertq_n;
+    unsigned long   alertq_dropped;
 } web_rollup_t;
 
 typedef struct {
@@ -310,6 +329,7 @@ typedef struct {
     unsigned long q_dropped, churn_dropped, clamped, hw_evictions;
     unsigned long long samples;
     unsigned long rows_closed[WEB_TIER_COUNT];
+    unsigned long alertq_dropped;
 } web_rollup_stats_t;
 
 /* A bucket handed to /api/series. */
@@ -334,6 +354,15 @@ void web_rollup_destroy(web_rollup_t *ru);
  * infinite v is ignored; a larger one is clamped to WEB_VALUE_MAX. */
 void web_rollup_add(web_rollup_t *ru, int metric, const char *key, double v,
                     long long now_s);
+
+/* Same validation as web_rollup_add(), but the sample is queued
+ * instead of applied: for a metric more than one thread can write
+ * (#218), so it keeps one writer. web_rollup_close_due() and
+ * web_rollup_close_all() apply every queued row, in queue order,
+ * before closing due buckets. A full queue drops the row and counts
+ * it (web_rollup_stats_t.alertq_dropped). */
+void web_rollup_queue_add(web_rollup_t *ru, int metric, const char *key,
+                          double v, long long now_s);
 
 /* Close every open bucket whose interval ended at or before now_s;
  * an unestablished key's minute and hour buckets stay open. */

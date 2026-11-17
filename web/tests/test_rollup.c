@@ -854,6 +854,75 @@ static void test_queue_holds_max_keys_hour_and_shutdown(void) {
     web_rollup_destroy(&ru);
 }
 
+/* web_rollup_queue_add() (#218): a sample for a metric more than one
+ * thread can write waits for close_where() instead of landing right
+ * away, so two threads sharing a key never race the same bucket.
+ * Seen red by changing web_rollup_queue_add() to call
+ * apply_sample_locked() itself instead of queuing: web_rollup_has()
+ * would then read 1 before any close_due()/close_all(). */
+static void test_queue_add_defers_until_close(void) {
+    fresh(64, 0);
+    const long long T = 1792627200;
+    web_rollup_queue_add(&ru, WM_ALERTS_FIRED, "9", 1, T);
+    WT_EQ(web_rollup_has(&ru, WM_ALERTS_FIRED, "9"), 0);
+    web_rollup_stats_t st;
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.samples, 0);
+    web_rollup_close_due(&ru, T);
+    WT_EQ(web_rollup_has(&ru, WM_ALERTS_FIRED, "9"), 1);
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.samples, 1);
+    web_rollup_destroy(&ru);
+}
+
+/* Applied in queue order, close_all() included: two samples of one
+ * key, queued together, aggregate exactly as if web_rollup_add() had
+ * been called twice in that order -- the drain must replay the queue,
+ * not just the last row of it. Seen red by draining only alertq[0]
+ * (off-by-one on the loop bound): n would be 1 and sum 3. */
+static void test_queue_add_order_preserved_through_drain(void) {
+    fresh(64, 0);
+    const long long T = 1792627200;
+    web_rollup_queue_add(&ru, WM_ALERTS_FIRED, "9", 3, T + 1);
+    web_rollup_queue_add(&ru, WM_ALERTS_FIRED, "9", 5, T + 2);
+    web_rollup_close_all(&ru);
+    web_point_t p[4];
+    int n = fine(WM_ALERTS_FIRED, "9", T, T + 10, 1, p, 4);
+    WT_EQ(n, 1);
+    WT_EQ(p[0].n, 2);
+    WT_EQ(p[0].sum, 8);
+    WT_EQ(p[0].min, 3);
+    WT_EQ(p[0].max, 5);
+    web_rollup_destroy(&ru);
+}
+
+/* A full queue drops the new row and counts it, the same shape as
+ * every other bounded queue here -- it never blocks or grows. Seen
+ * red by sizing the ring one row short of WEB_ALERTQ_CAP (an
+ * off-by-one: the (CAP-1)th push would also drop). */
+static void test_queue_add_drops_when_full_and_counts(void) {
+    fresh(64, 0);
+    const long long T = 1792627200;
+    char k[16];
+    for (int i = 0; i < WEB_ALERTQ_CAP; i++) {
+        snprintf(k, sizeof(k), "%d", i % 90);
+        web_rollup_queue_add(&ru, WM_ALERTS_FIRED, k, 1, T);
+    }
+    web_rollup_stats_t st;
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.alertq_dropped, 0);
+    web_rollup_queue_add(&ru, WM_ALERTS_FIRED, "1", 1, T);
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.alertq_dropped, 1);
+    web_rollup_close_all(&ru);
+    web_rollup_stats(&ru, &st);
+    /* The dropped row never arrives, so samples is exactly the first
+     * WEB_ALERTQ_CAP pushes, not CAP + 1. */
+    WT_EQ(st.samples, WEB_ALERTQ_CAP);
+    WT_EQ(st.alertq_dropped, 1);
+    web_rollup_destroy(&ru);
+}
+
 static void test_catalogue(void) {
     WT_EQ(web_metric_find("iface.rx_rate"), WM_IFACE_RX);
     WT_EQ(web_metric_find("flow.mqtt"), WM_FLOW_MQTT);
@@ -888,5 +957,8 @@ void run_rollup_tests(void) {
     WT_RUN(test_ghost_table_keeps_established_ways);
     WT_RUN(test_label_keys_established_and_separate);
     WT_RUN(test_queue_holds_max_keys_hour_and_shutdown);
+    WT_RUN(test_queue_add_defers_until_close);
+    WT_RUN(test_queue_add_order_preserved_through_drain);
+    WT_RUN(test_queue_add_drops_when_full_and_counts);
     WT_RUN(test_catalogue);
 }

@@ -226,6 +226,8 @@ static void tsdb_health(web_tsdb_t *t, web_jw_t *w) {
     web_jw_raw(w, ",\"highwater_evictions\":");
     web_jw_int(w, (long long)rs.hw_evictions);
     web_jw_raw(w, ",\"values_clamped\":");   web_jw_int(w, (long long)rs.clamped);
+    web_jw_raw(w, ",\"alertq_dropped\":");
+    web_jw_int(w, (long long)rs.alertq_dropped);
 }
 
 /* The M3 members: the baseline table, the episode table and the

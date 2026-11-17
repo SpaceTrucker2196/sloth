@@ -561,10 +561,15 @@ static void test_rf_stream_feeds_the_rollup_not_the_metrics(void) {
     /* Three figures of the fix, one of the sky, source.up for the row;
      * no records.rate or records.total, which are sloth's stream's. */
     WT_EQ(st.samples, 3 + 1 + 1);
-    /* An alert sloth-rf fires adds no sample: alerts.fired stays
-     * sloth's stream's (slothweb.md, "Not in #214": a type both daemons
-     * fire would be one series with two writers). Seen red with an
-     * "alert" branch adding WM_ALERTS_FIRED in web_metrics_rf_sample(). */
+    /* An alert sloth-rf fires now reaches alerts.fired (#218), but not
+     * by a direct write from this thread: it queues (web_rollup_queue_add())
+     * and waits for close_where() -- the tsdb thread's alone -- to
+     * apply it, so a type both daemons can fire (SENSOR_SOURCE_DOWN)
+     * never gets two writers on one series (slothweb.md, "Alerts").
+     * Seen red by reverting web_metrics_rf_sample()'s "alert" branch
+     * to call web_rollup_add() directly: the queued-not-applied
+     * assertion below would pass immediately instead of waiting for
+     * the drain. */
     {
         char line[256], tyk[16];
         snprintf(tyk, sizeof(tyk), "%d", web_akb_find("GNSS_JAMMING"));
@@ -574,13 +579,17 @@ static void test_rf_stream_feeds_the_rollup_not_the_metrics(void) {
         WT_EQ(web_rollup_has(&w.ru, WM_ALERTS_FIRED, tyk), 0);
         web_rollup_stats(&w.ru, &st);
         WT_EQ(st.samples, 5);
+        web_rollup_close_all(&w.ru);
+        WT_EQ(web_rollup_has(&w.ru, WM_ALERTS_FIRED, tyk), 1);
+        web_rollup_stats(&w.ru, &st);
+        WT_EQ(st.samples, 6);
     }
     /* sloth's stream is the metrics' writer still, and its copies of
      * the RF records and of sloth-rf's source rows sample nothing. */
     put(&w, 'w', FIX_DECOY);
     put(&w, 'w', SRC("adsb", "not_configured", ""));
     web_rollup_stats(&w.ru, &st);
-    WT_EQ(st.samples, 5);
+    WT_EQ(st.samples, 6);
     WT_EQ(w.met.have_first_ts, 0);
     put(&w, 'w', SH_WIFI);
     WT_EQ(w.met.have_first_ts, 1);

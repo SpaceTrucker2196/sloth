@@ -518,20 +518,31 @@ static long long bucket_of(long long now, int step) {
     return b;
 }
 
-void web_rollup_add(web_rollup_t *ru, int metric, const char *key, double v,
-                    long long now_s) {
-    if (metric < 0 || metric >= WM_COUNT || !key) return;
-    if (!isfinite(v)) return;
-    int clamped = 0;
-    if (v >  WEB_VALUE_MAX) { v =  WEB_VALUE_MAX; clamped = 1; }
-    if (v < -WEB_VALUE_MAX) { v = -WEB_VALUE_MAX; clamped = 1; }
+/* Shared by web_rollup_add() and web_rollup_queue_add(): metric and
+ * key must be valid and v finite (NULL return: drop it silently, as
+ * before). v is clamped to WEB_VALUE_MAX in place and *clamped set;
+ * a WEB_KC_GLOBAL metric's key is forced to "". */
+static const char *sample_prep(int metric, const char *key, double *v,
+                               int *clamped) {
+    *clamped = 0;
+    if (metric < 0 || metric >= WM_COUNT || !key) return NULL;
+    if (!isfinite(*v)) return NULL;
+    if (*v >  WEB_VALUE_MAX) { *v =  WEB_VALUE_MAX; *clamped = 1; }
+    if (*v < -WEB_VALUE_MAX) { *v = -WEB_VALUE_MAX; *clamped = 1; }
     const web_metric_t *md = &web_metric_defs[metric];
-    if (md->kclass == WEB_KC_GLOBAL) key = "";
-    else if (!key[0] || strlen(key) > WEB_KEY_MAX) return;
+    if (md->kclass == WEB_KC_GLOBAL) return "";
+    if (!key[0] || strlen(key) > WEB_KEY_MAX) return NULL;
+    return key;
+}
 
-    pthread_mutex_lock(&ru->mu);
+/* The bucket-mutating half of web_rollup_add(), shared with the
+ * alert queue's drain (close_where()): the caller holds ru->mu and
+ * key is already valid and canonical. */
+static void apply_sample_locked(web_rollup_t *ru, int metric, const char *key,
+                                double v, int clamped, long long now_s) {
     ru->samples++;
     if (clamped) ru->clamped++;
+    const web_metric_t *md = &web_metric_defs[metric];
     web_kclass_t *c = &ru->cls[md->kclass];
     web_rkey_t *k = key_get(ru, c, key, now_s);
     k->last_seen = now_s;
@@ -560,10 +571,50 @@ void web_rollup_add(web_rollup_t *ru, int metric, const char *key, double v,
         if (v > a->max) a->max = v;
         a->n++;
     }
+}
+
+void web_rollup_add(web_rollup_t *ru, int metric, const char *key, double v,
+                    long long now_s) {
+    int clamped;
+    const char *kk = sample_prep(metric, key, &v, &clamped);
+    if (!kk) return;
+    pthread_mutex_lock(&ru->mu);
+    apply_sample_locked(ru, metric, kk, v, clamped, now_s);
     pthread_mutex_unlock(&ru->mu);
 }
 
+void web_rollup_queue_add(web_rollup_t *ru, int metric, const char *key,
+                          double v, long long now_s) {
+    int clamped;
+    const char *kk = sample_prep(metric, key, &v, &clamped);
+    if (!kk) return;
+    pthread_mutex_lock(&ru->mu);
+    if (ru->alertq_n >= WEB_ALERTQ_CAP) {
+        ru->alertq_dropped++;
+    } else {
+        web_alertq_row_t *q = &ru->alertq[ru->alertq_n++];
+        q->metric = metric;
+        snprintf(q->key, sizeof(q->key), "%s", kk);
+        q->v = v;
+        q->clamped = clamped;
+        q->now_s = now_s;
+    }
+    pthread_mutex_unlock(&ru->mu);
+}
+
+/* Applies every queued alert sample, in queue order, then empties the
+ * queue. The caller holds ru->mu (close_where()'s only caller does
+ * the same). */
+static void drain_alertq_locked(web_rollup_t *ru) {
+    for (int i = 0; i < ru->alertq_n; i++) {
+        web_alertq_row_t *q = &ru->alertq[i];
+        apply_sample_locked(ru, q->metric, q->key, q->v, q->clamped, q->now_s);
+    }
+    ru->alertq_n = 0;
+}
+
 static void close_where(web_rollup_t *ru, long long now_s, int all) {
+    drain_alertq_locked(ru);
     for (int c = 0; c < WEB_KC_COUNT; c++) {
         web_kclass_t *cl = &ru->cls[c];
         for (int i = 0; i < cl->cap; i++) {
@@ -860,6 +911,7 @@ void web_rollup_stats(web_rollup_t *ru, web_rollup_stats_t *st) {
     st->clamped = ru->clamped;
     st->hw_evictions = ru->hw_evictions;
     st->samples = ru->samples;
+    st->alertq_dropped = ru->alertq_dropped;
     memcpy(st->rows_closed, ru->rows_closed, sizeof(st->rows_closed));
     pthread_mutex_unlock(&ru->mu);
 }
