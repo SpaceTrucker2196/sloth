@@ -373,3 +373,4 @@
 | a34b9a1 | 2026-11-16T22:20:23Z | claude-fable-5-1, claude-opus-5-5 | 130 | 23032 | 5677502 | 327660 | 5.4881 | make contract: the alert bundle ships no host data (#185 review, finding 2) |
 | 431e1be | 2026-11-16T22:23:37Z | claude-opus-5-5 | 8 | 1707 | 668188 | 2456 | 0.1875 | sloth-va: register the advertisement monitor asynchronously |
 | d27e6fe | 2026-11-16T22:45:29Z | claude-opus-5-5 | 18 | 3439 | 1367703 | 4122 | 0.3754 | contract-check: spell the home-path pattern so shellcheck 0.9 accepts it |
+| ae5ccdc | 2026-11-17T02:28:44Z | claude-fable-5-1, claude-opus-5-5 | 144 | 19246 | 6206967 | 279032 | 5.3768 | slothweb: the page's title and header read "sloth mesh" |
