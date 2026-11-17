@@ -380,3 +380,4 @@
 | 2fe8e68 | 2026-11-17T15:23:34Z | claude-fable-5-1, claude-opus-5-5 | 122 | 10619 | 2816929 | 199296 | 3.9617 | contract: ship dot11_data_status.h, not dot11_data.h (#185) |
 | a5bf585 | 2026-11-17T18:42:03Z | claude-fable-5-1, claude-opus-5-5 | 226 | 27744 | 9005546 | 277962 | 6.1939 | slothweb: colour the WiFi and BLE waterfalls by band, channel, SSID and class |
 | da3f6bd | 2026-11-17T21:31:19Z | claude-fable-5-1, claude-opus-5-5 | 134 | 11133 | 4983497 | 133612 | 3.9237 | slothweb: a clients lane on the WiFi waterfall, and a 70% fade for a picked SSID |
+| eea3e6b | 2026-11-17T21:59:35Z | claude-fable-5-1, claude-opus-5-5 | 96 | 4608 | 2775758 | 120169 | 3.2661 | Fix red main: the clients test assumed a vendor name |
