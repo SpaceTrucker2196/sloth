@@ -1944,7 +1944,7 @@ static void test_emit_sensor_health_reports_db_max_mb(void) {
              SLOTH_JSONL_VERSION);
     ASSERT(contains(body, want));
 #ifdef WITH_SQLITE
-    char dbp[TEST_TMP_MAX];
+    char dbp[TEST_TMP_MAX] = "";   /* test_tmp_tpl() fills an EMPTY buffer */
     int fd = mkstemp(test_tmp_tpl(dbp, sizeof(dbp), "sloth_jsonl_db_XXXXXX"));
     if (fd >= 0) close(fd);
     unlink(dbp);

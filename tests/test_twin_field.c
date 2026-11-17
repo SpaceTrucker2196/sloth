@@ -302,7 +302,7 @@ static void test_sensor_health_carries_the_counts(void) {
     alerts_update(&s);
     twin_field_counts_t c = counts();
 
-    char path[TEST_TMP_MAX];
+    char path[TEST_TMP_MAX] = "";  /* test_tmp_tpl() fills an EMPTY buffer */
     int fd = mkstemp(test_tmp_tpl(path, sizeof(path), "sloth_tf_XXXXXX"));
     if (fd >= 0) close(fd);
     jsonl_close();
