@@ -93,7 +93,7 @@ if [ $ok -ne 1 ]; then
 fi
 page=$(curl -s -m 2 "http://127.0.0.1:$port/")
 case "$page" in
-*'<title>slothweb</title>'*) ;;
+*'<title>sloth mesh</title>'*) ;;
 *) echo "quickstart_check: / is not the page" >&2; exit 1 ;;
 esac
 flows=$(curl -s -m 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/api/flows/graph")
