@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#include "dot11_data.h"   /* dot11_data_status_t: the payload status codes */
+#include "dot11_data_status.h"   /* dot11_data_status_t: the payload status codes */
 
 /* One decode per 802.11 frame — issue #122.
  *

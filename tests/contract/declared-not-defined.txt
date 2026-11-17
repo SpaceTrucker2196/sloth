@@ -5,21 +5,8 @@
 # stale one (the gap closed) each turn contract-check red. Lines are
 # "header function", sorted with LC_ALL=C. docs/wiki/contract.md
 # ("Gaps") says why each header is shipped anyway:
-#   dot11_data.h    included by dot11_frame.h for dot11_data_status_t;
-#                   dot11_data.c is not in WEB_CORE_SRCS.
 #   sensor_health.h shipped whole for the one hook the archive calls
 #                   (sh_parse_fault_note, defined by the consumer).
-dot11_data.h dot11_amsdu_present
-dot11_data.h dot11_ccmp_pn
-dot11_data.h dot11_data_addrs
-dot11_data.h dot11_data_header_len
-dot11_data.h dot11_data_payload
-dot11_data.h dot11_data_tid
-dot11_data.h dot11_frag_num
-dot11_data.h dot11_is_group_addr
-dot11_data.h dot11_mgmt_hdr_len
-dot11_data.h dot11_more_frags
-dot11_data.h dot11_seq_num
 sensor_health.h sh_evict_count
 sensor_health.h sh_evict_is_flow_ring
 sensor_health.h sh_evict_name

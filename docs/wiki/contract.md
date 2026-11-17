@@ -31,7 +31,7 @@ attaches it to that tag's GitHub release.
 [ADR 0004](adr/0004-libsloth-wire.md), [ADR 0007](adr/0007-versioning.md),
 issues #184 and #185.
 
-**Last updated**: 2026-11-16 (no host data in the alert bundle: the assessments and research documents are redacted, and `make contract-check` refuses a MAC address outside `tests/contract/allowed-macs.txt` or a home-directory path), 2026-11-16 (#185 review: the checks now also cover the outer checksum, JSON validity, the copies against the tree, `palette.json`, `alert-daemons.tsv`, an empty golden database and the declared-but-undefined functions; *Gaps*; migrated databases; the release step's order and tag check), 2026-11-16 (#185 item 4: first version, contract format 1)
+**Last updated**: 2026-11-17 (`dot11_data_status_t` in its own header; `dot11_data.h` no longer ships, *Gaps*), 2026-11-16 (no host data in the alert bundle: the assessments and research documents are redacted, and `make contract-check` refuses a MAC address outside `tests/contract/allowed-macs.txt` or a home-directory path), 2026-11-16 (#185 review: the checks now also cover the outer checksum, JSON validity, the copies against the tree, `palette.json`, `alert-daemons.tsv`, an empty golden database and the declared-but-undefined functions; *Gaps*; migrated databases; the release step's order and tag check), 2026-11-16 (#185 item 4: first version, contract format 1)
 
 ---
 
@@ -42,7 +42,7 @@ One directory, `sloth-contract-<version>/`:
 | Path | What | Contract row |
 |---|---|---|
 | `lib/libsloth-wire.a` | the leaf parsers slothweb links, compiled from exactly `WEB_CORE_SRCS` (`dot11_frame.c`, `radiotap.c`, `wifi_freq.c`, `dns_wire.c`, `dot11_ie.c`, `netstr.c`, `rf_model.c`) | C3 |
-| `include/sloth-wire/*.h` | each of those sources' public header, the leaf headers they include (`dot11_data.h`), and `sensor_health.h` for the one hook (below); two of them declare functions the archive does not define (*Gaps*) | C3 |
+| `include/sloth-wire/*.h` | each of those sources' public header, the leaf headers they include (`dot11_data_status.h`), and `sensor_health.h` for the one hook (below), which declares functions the archive does not define (*Gaps*) | C3 |
 | `lib/pkgconfig/sloth-wire.pc` | `pkg-config --cflags --libs sloth-wire`; relocatable through `${pcfiledir}`, so the unpacked directory can sit anywhere | C3 |
 | `schema/schema.sql` | `sloth-wifi --print-schema`: the DDL both daemons create a new `--db` with, and the `meta` row stamping `DB_SCHEMA_VERSION` (a migrated file differs in column order: *Gaps*) | C2 |
 | `jsonl/jsonl-schema.md` | [[jsonl-schema]] as in the tree at that commit (`SLOTH_JSONL_VERSION`) | C1 |
@@ -268,19 +268,20 @@ with its reason.
   put back into `FRAG_AMSDU.md`, and a `~/` path appended to it. The
   same addresses remain in this repository's history and in issue #180;
   the rule covers what a release asset ships.
-- **Declared, not defined.** Two shipped headers declare functions
+- **Declared, not defined.** `sensor_health.h` declares 16 functions
   `libsloth-wire.a` does not define, so a consumer calling one compiles
-  and then fails to link. `dot11_data.h` (11 functions: the data-frame
-  helpers of `dot11_data.c`) is shipped because `dot11_frame.h` includes
-  it for `dot11_data_status_t`, and `dot11_data.c` is not in
-  `WEB_CORE_SRCS`. `sensor_health.h` (16 functions) is shipped whole for
-  the one hook (decision 2). The exact list is
-  `tests/contract/declared-not-defined.txt`, and `make contract-check`
-  fails if it grows or shrinks. The two ways to close the first are an
-  owner choice: add `dot11_data.c` (a leaf: `string.h`, `dot11_data.h`,
-  `dot11_frame.h`) to the archive, which ends decision 1's "exactly
-  `WEB_CORE_SRCS`"; or move `dot11_data_status_t` into a header of its
-  own so `dot11_data.h` need not ship.
+  and then fails to link. It is shipped whole for the one hook
+  (decision 2): that is deliberate, not a defect to close. The exact
+  list is `tests/contract/declared-not-defined.txt`, and
+  `make contract-check` fails if it grows or shrinks.
+  `dot11_data.h` was the other header in that list until 2026-11-17
+  (11 functions, the data-frame helpers of `dot11_data.c`), shipped only
+  because `dot11_frame.h` included it for `dot11_data_status_t`. The
+  owner chose to split the enum into `dot11_data_status.h` rather than
+  add `dot11_data.c` to the archive, so the archive stays exactly
+  `WEB_CORE_SRCS` and `dot11_data.h` no longer ships. The header set
+  changed while contract format 1 had no published release, so the
+  format number stays 1.
 - **Migrated databases.** `schema.sql` is what a *new* file gets. A file
   a daemon migrated from an older version has the same tables, columns
   and indexes, but `ALTER TABLE … ADD COLUMN` appends a column where the

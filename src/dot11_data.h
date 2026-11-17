@@ -25,19 +25,7 @@
  * are rejected here. This is only ever useful on open networks — which
  * is exactly where rogue portals and credential harvesting live. */
 
-/* Why a frame was rejected. Distinguishing these matters because
- * "encrypted" is the normal case on most networks and says nothing is
- * wrong, while "malformed" is a signal. */
-typedef enum {
-    DOT11_DATA_OK          =  0,
-    DOT11_DATA_NOT_DATA    = -1,  /* not a type-2 frame              */
-    DOT11_DATA_NO_PAYLOAD  = -2,  /* Null-function subtype, or empty */
-    DOT11_DATA_ENCRYPTED   = -3,  /* Protected bit set               */
-    DOT11_DATA_FRAGMENT    = -4,  /* More Fragments, or not fragment 0 */
-    DOT11_DATA_AMSDU       = -5,  /* aggregated: several subframes   */
-    DOT11_DATA_NOT_SNAP    = -6,  /* LLC present but not SNAP-encapsulated */
-    DOT11_DATA_TRUNCATED   = -7,
-} dot11_data_status_t;
+#include "dot11_data_status.h"   /* dot11_data_status_t */
 
 /* Length of the MAC header for a data frame, in bytes, or -1 if `len`
  * cannot hold it or the frame is not a data frame. Since #122 this and
