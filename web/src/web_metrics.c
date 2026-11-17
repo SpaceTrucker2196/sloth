@@ -607,6 +607,11 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
         double d = hw_delta(m, id, web_jl_int(r, "frame_count", 0),
                             web_jl_int(r, "first_seen", -1));
         count(m, WM_DEV_FRAMES, k, d, now);
+        /* The pairing alone, so the WiFi view's client lane can name a
+         * station's AP where sloth.db does not (web_chmix.h). */
+        uint8_t sta[6], bss[6];
+        if (m->mix && web_mix_mac_bytes(k, sta) == 0 && web_mix_mac_bytes(k2, bss) == 0)
+            web_chmix_assoc(m->mix, sta, bss, now);
         /* Not in the channel mix: frame_count counts both ends of the
          * pair (src/assoc_track.c), the AP's (re)association responses
          * and EAPOL M1/M3 with the station's M2/M4, so neither one sent

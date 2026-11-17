@@ -284,6 +284,7 @@ All routes are `GET`. Any other method returns `405`. Responses are JSON unless 
 | `/api/host/{ip}` | one host: flows, DNS it asked, TLS SNI it used, ports seen, presence heatmap |
 | `/api/alerts?since=&sev=` | from `sloth.db alerts` joined with `slothweb` anomaly context |
 | `/api/wifi/channels?from=&to=` | channel x time grid for the channel heatmap |
+| `/api/wifi/channels?from=&to=&cols=&mix=1` | the channel mix: per cell the five busiest transmitters and the rest; since 2026-11-17 per cell the clients named and a `clients` list (channels, cells, AP) for the clients lane (`web/README.md`, WiFi) |
 | `/api/wifi/aps` | `beacon_aps` with SSID history and KARMA score |
 | `/api/lookup?mac=` and `/api/lookup?ip=` | vendor, passive names with their source and time, and active PTR only if enabled |
 | `/api/search?q=` | one box that searches mac, ip, hostname, vendor, ssid, alert title; returns typed hits |

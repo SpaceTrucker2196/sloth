@@ -255,6 +255,36 @@ int web_chmix_ssid(web_chmix_t *c, const uint8_t mac[6], char *out) {
     return found;
 }
 
+void web_chmix_assoc(web_chmix_t *c, const uint8_t sta[6], const uint8_t bssid[6],
+                     long long now_s) {
+    if (!c || !c->ring) return;
+    pthread_mutex_lock(&c->mu);
+    web_mix_assoc_t *slot = NULL;
+    for (int i = 0; i < WEB_CHMIX_NAMES; i++) {
+        web_mix_assoc_t *a = &c->assoc[i];
+        if (a->used && !memcmp(a->sta, sta, 6)) { slot = a; break; }
+        if (!slot || (slot->used && (!a->used || a->seen < slot->seen))) slot = a;
+    }
+    memcpy(slot->sta, sta, 6);
+    memcpy(slot->bssid, bssid, 6);
+    slot->used = 1;
+    slot->seen = now_s;
+    pthread_mutex_unlock(&c->mu);
+}
+
+int web_chmix_sta_bssid(web_chmix_t *c, const uint8_t sta[6], uint8_t bssid[6]) {
+    int found = 0;
+    if (!c || !c->ring) return 0;
+    pthread_mutex_lock(&c->mu);
+    for (int i = 0; i < WEB_CHMIX_NAMES && !found; i++)
+        if (c->assoc[i].used && !memcmp(c->assoc[i].sta, sta, 6)) {
+            memcpy(bssid, c->assoc[i].bssid, 6);
+            found = 1;
+        }
+    pthread_mutex_unlock(&c->mu);
+    return found;
+}
+
 void web_chmix_close_due(web_chmix_t *c, long long now_s) {
     if (!c || !c->ring) return;
     pthread_mutex_lock(&c->mu);

@@ -3532,7 +3532,17 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   and UNII-4; 6 GHz PSC against the
   rest); the column's body the cell's busiest transmitters stacked by
   share in their SSIDs' colours. A key under the canvas names the steps
-  and the window's SSIDs; pressing an SSID fades the others (not kept).
+  and the window's SSIDs; pressing an SSID fades the others to 70
+  percent transparent (owner 2026-11-17; not kept). Under the band
+  strip a clients lane (owner 2026-11-17: "the spectrum should show
+  where the clients sit in the spectrum highlighting their channel"):
+  a diamond under each channel the window's clients were named on,
+  sized by how many, its count beside it where it fits, in the busiest
+  one's AP's SSID colour (its MAC's when no AP is known), and a tick at
+  the foot of each column whose cell named one. The key's Clients
+  buttons (vendor, short MAC, "randomised", "→ SSID") trace one
+  client's channels, mark its cells and fade the rest by the same 70
+  percent; a client and an SSID are not highlighted together.
 - **G3's scale** (slice V3, F8). Each row carries `"scale"`, and the
   answer `"scale_s"`, the span an absolute scale was read over
   (2,592,000 with a store, 86,400 without):
@@ -3613,6 +3623,40 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   (`ssid_src`; a slot holds the stream's longest form, 32 octets each
   U+FFFD); `vendor` is the vendor table's. `mix` other than `1`
   is a `400` `bad_mix`, with `metric` a `400` `mix_takes_no_metric`.
+- **Clients** (2026-11-17, the isometric panel's clients lane). Each
+  row also carries `"clients"`, per cell the distinct clients named in
+  its buckets (`null` where the cell is), and the answer a list:
+
+  ```
+  "channels":[{"key":"6","band":"2.4","total":63,"cells":[...],
+               "clients":[null,...,2]},...],
+  "clients":[{"id":"00:11:22:00:00:01","vendor":"CIMSYS Inc","laa":false,
+              "frames":12,"first":1792626600,"last":1792627150,
+              "chans":[["6",9,"000000000000001"],["11",3,"000000000000200"]],
+              "chans_more":false,"tx":1,
+              "assoc":{"bssid":"02:de:00:00:00:a1","src":"stream","ssid":"home",
+                       "ssid_k":6,"ssid_np":false,"ssid_src":"stream"}},
+             {"id":"02:de:00:00:00:02","vendor":null,"laa":true,...,"assoc":null}],
+  "clients_total":2,"clients_more":false,"clients_cell_cut":false,
+  "clients_db_cut":false
+  ```
+
+  The mix names five transmitters a bucket, so a client is counted
+  only in a cell where some bucket named it: every count is a floor,
+  and one never among a bucket's five is not listed. A client's frames
+  are its probe requests on the channel of its latest probe (above).
+  `laa` is the locally administered bit (a randomised MAC). `chans`
+  are its busiest 8 channels (`chans_more` past that), each
+  `[key, frames, hex]`, the hex a digit four cells, the first cell the
+  high bit. `first`/`last` bound the buckets it was named in. `tx` is
+  its index in `tx`, or `null` when the table had no room. `assoc` is
+  sloth.db's newest `assocs` row for it, else the stream's newest
+  `assoc` record (held in memory, never in slothweb.db), or `null`; its
+  SSID is named as that AP's own `tx` entry would be, so its colour is
+  the AP's. The list is busiest first, at most 64 in 16 KB
+  (`clients_more`); a cell counts at most 32 (`clients_cell_cut`); the
+  sloth.db reads stop when the request's budget is spent, and the
+  rest's APs come from the stream (`clients_db_cut`).
 - **The grid** draws each cell as a stacked bar of those five, each
   band's height its share of the cell's frames, the busiest at the
   bottom and the rest grey on top: an AP in its SSID's hash colour (the
@@ -7604,7 +7648,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_ptr.c` | the passive PTR cache: reverse names per RFC 1035 §3.5 and RFC 3596 §2.5 (and what is not one), what a dns record must be to be recorded (an empty answer, sloth's today, counted), the bound and its eviction, a rename, changed rows out once and back on a failed write, a row read back checked; the identity tables' M4 readers |
 | `test_slothdb.c` | sloth.db generated from `src/db_schema.c`: the open flags (read-only, no-follow, never write or create; a write refused); the file byte for byte and its directory listing after every read, for a rollback-journal file, a cleanly closed WAL file (immutable, no `-wal` or `-shm` made), a WAL file sloth holds open with unflushed frames (read, main file and WAL prefix unchanged, sloth still writing) and a `-wal` with no `-shm`; the refusals (missing, symlink, directory, newer, a slothweb store, no devices table, a bad version, not SQLite, not configured); a v5 file read by probing and a minimal v1 file; the allow-list against `tests/test_db.c`'s guardrail, credential words and the live schema; the authorizer denying every statement off the list; the budget interrupting a slow statement; the acceptance query returning exactly D1 and D6; every other term against the file; the drawer's, Lookup's and A2's reads |
 | `test_devices.c` | the three routes through the route table: no sloth.db (`503`, the drawer and Lookup from the stream), `405` and `421` on the new paths; the acceptance query over HTTP (encoded both ways, `HEAD`); a row's members, the vendor's and name's sources, markup never markup; paging and every `400`; sloth.db missing; the drawer (path forms, lists, the detail, alerts, no credential, a MAC sloth.db lacks, bad MACs); the strip from the store's minute tier and the ring, the week from the baseline, an episode and the `anomaly:` and `has:` terms; Lookup (an MA-S MAC resolved, and not with sloth's own table; an IP's MAC, names and record; refusals); the health members; the worst case stopping with `more` |
-| `test_chmix.c` | the WiFi view's channel mix and the SSID display form: the escaper on printable UTF-8, a backslash, octets that start no sequence, C0, DEL, C1, U+FFFD, a bidi override, a zero width space, Default_Ignorable code points (a Hangul filler, the grapheme joiner, variation selectors) and blank lookalikes (NBSP, an em space), private use, a noncharacter, a truncated and an overlong sequence, and its cut; the colour against `src/ip_color.c` over the octets (a case where hashing the display form would differ); a bucket's top five by frames then MAC and the rest, closed when due and not before; the tracking bound (a scan of one-frame MACs cannot push out a busy one, a heavy late one still gets in, and one first heard half way through an hour behind 32 others far ahead enters with exactly its frames); the channel bound and the ring's overwrite counted; `beacon` and `probe_client` through the decoder and the metric derivation (deltas, a first sight a baseline, 6 GHz from `channel_source`, the beacon's name, kept whole at the stream's longest form), an `assoc` line in sloth's shape adding nothing; `?mix=1` from memory (band order, a cell merged and cut to five, the tx table, an AP's escaped stream name, empty cells null, the refusals, the plain grid unchanged), the worst case stopping at a whole row with `more` and `folded`, the `chmix` health member, the ticker's SSID escaped, an alert's title and detail escaped on `/api/live` and the ticker; with SQLite, the minute tier from slothweb.db with the AP's octets from sloth.db (escaped, the TUI's colour) and a stream name only where sloth.db has none, and every sloth.db SSID (AP table and history, the drawer's last SSID, PNL SSIDs and associations, the Devices row, `/api/sessions/new`'s APs and probe clients, the SQL box's ssid and title columns) and `/api/history/alerts`' titles escaped, never U+FFFD |
+| `test_chmix.c` | the WiFi view's channel mix and the SSID display form: the escaper on printable UTF-8, a backslash, octets that start no sequence, C0, DEL, C1, U+FFFD, a bidi override, a zero width space, Default_Ignorable code points (a Hangul filler, the grapheme joiner, variation selectors) and blank lookalikes (NBSP, an em space), private use, a noncharacter, a truncated and an overlong sequence, and its cut; the colour against `src/ip_color.c` over the octets (a case where hashing the display form would differ); a bucket's top five by frames then MAC and the rest, closed when due and not before; the tracking bound (a scan of one-frame MACs cannot push out a busy one, a heavy late one still gets in, and one first heard half way through an hour behind 32 others far ahead enters with exactly its frames); the channel bound and the ring's overwrite counted; `beacon` and `probe_client` through the decoder and the metric derivation (deltas, a first sight a baseline, 6 GHz from `channel_source`, the beacon's name, kept whole at the stream's longest form), an `assoc` line in sloth's shape adding nothing; `?mix=1` from memory (band order, a cell merged and cut to five, the tx table, an AP's escaped stream name, empty cells null, the refusals, the plain grid unchanged), the worst case stopping at a whole row with `more` and `folded`, the `chmix` health member, the ticker's SSID escaped, an alert's title and detail escaped on `/api/live` and the ticker; with SQLite, the minute tier from slothweb.db with the AP's octets from sloth.db (escaped, the TUI's colour) and a stream name only where sloth.db has none, and every sloth.db SSID (AP table and history, the drawer's last SSID, PNL SSIDs and associations, the Devices row, `/api/sessions/new`'s APs and probe clients, the SQL box's ssid and title columns) and `/api/history/alerts`' titles escaped, never U+FFFD; the clients lane: per-cell client counts, the list (vendor, randomised flag, channels busiest first with their cells as hex, an AP from the stream's `assoc`, an unassociated client null, no AP listed), the 64 cap with `clients_more` and a cell past 32, and with SQLite the AP from sloth.db's `assocs` first and from the stream once the read budget is spent (`clients_db_cut`) |
 | `test_prefs.c` | the kept settings, by the page's text (the suite runs no script; the behaviour was driven in headless Chromium): no `localStorage` outside the store's functions, each in a `try`, one `slothweb.v1.` namespace, the old keys moved; every table's widths and sort read through `DataTable()`, a width clamped to the column's floor, a sort only on a column that still sorts, written on each change and forgotten by `reset columns`; every `select`, `input` and `textarea` on the page kept or listed as not kept; the address over a kept view, scope and filters; `reset settings`. Each absence seen red under a named mutation |
 | `test_tables.c` | sortable, resizable columns: the devices statement with a direction compiled from constant columns only (and unchanged without one), every sort word and the `dir` words accepted and nothing else; over a generated sloth.db the order `/api/devices`, `/api/wifi/aps` and `/api/flows` give for each new word in both directions (text by bytes, an address by number, an empty value last), `bad_dir` without the value echoed; the page's one `DataTable()` used by every table, its headers no longer `aria-hidden`, its storage in a `try`, the reset control, the direction on every server-paged fetch; the review's fixes pinned (a set flex column drawn fixed and seeded from its drawn width, the label floor, the separator's maximum and text, ARIA rows, cells and rowgroups, a server-paged prefix not sorted again, the SQL box's widths by name and typed columns, the list headers' padding) |
 | `test_wifi.c` | the WiFi routes through the route table: the waterfall's band order and channel order, a gauge cell as the mean of its buckets and a counter's as their sum, null for empty, the defaults, 40 channels and `more`, every `400` (`tier_unavailable` past 24 h without a store), `503` without a time series or sloth.db; a channel only the store holds, at the minute and hour tiers; the deauth timeline by frames with its DEAUTH_FLOOD episodes in the range matched on the alert key that no body names, and without sloth.db; the AP table (AKM bits and downgrade flags by name, MFP as a word, the SSID history and count, KARMA, a markup SSID escaped, sorts, paging, refusals) and its worst-case row fitting `WEB_WIFI_AP_ROW_MAX`; the page's WiFi view, its ids and fetches. Both builds |

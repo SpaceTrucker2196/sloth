@@ -330,11 +330,39 @@ typedef struct {
     uint32_t f;
 } mcell_e_t;
 
+/* The client lane (owner 2026-11-17: "the spectrum should show where
+ * the clients sit in the spectrum highlighting their channel"). The mix
+ * names a bucket's five busiest transmitters and folds the rest into
+ * "other", so a client is seen only in a bucket where it was one of the
+ * five: a cell's client count is the distinct clients named in its
+ * buckets, a floor (at most MIX_CELL_CL of them; "clients_cell_cut" past
+ * that), and a client that never made a bucket's five is not in the
+ * list. A client's frames are its probe requests (web_chmix.h). */
+#define MIX_CELL_CL    32
+#define MIX_CL_CH      8             /* channels kept per client */
+#define MIX_CL_MAX     64            /* clients the answer lists */
+#define MIX_CL_BYTES   16384
+
 typedef struct {
     uint32_t  other;
     int       n;
     mcell_e_t e[MIX_CELL_TRACK];
+    uint8_t   ncl, cl_cut;
+    int16_t   cl[MIX_CELL_CL];
 } mcell_t;
+
+/* One client's window: its frames per channel (the busiest MIX_CL_CH
+ * channels it was named on; ch_cut past that), the cells it was named
+ * in on each, and the bounds of the buckets it was named in. */
+#define MIX_CL_WORDS ((WEB_WIFI_COLS + 31) / 32)
+typedef struct {
+    unsigned long long frames;
+    long long first, last;
+    int       nch, ch_cut;
+    int16_t   ch[MIX_CL_CH];
+    unsigned long long chf[MIX_CL_CH];
+    uint32_t  cols[MIX_CL_CH][MIX_CL_WORDS];
+} mcl_t;
 
 typedef struct {
     char      key[WEB_CHMIX_KEY_MAX + 1];
@@ -359,6 +387,8 @@ typedef struct {
     mtx_t    tx[MIX_TXD];
     int      ntx, cut_tx;
     int16_t  hash[MIX_TXH];
+    mcl_t   *cl;                       /* MIX_TXD, when ops->clients */
+    int      cell_cut;
 } magg_t;
 
 static uint32_t sat32(uint32_t a, unsigned long long b) {
@@ -415,6 +445,43 @@ static int mix_tx(magg_t *a, const uint8_t mac[6], int kind) {
     return -1;
 }
 
+/* A client x named with f frames on channel c in cell at bucket t. */
+static void mix_client(magg_t *a, mcell_t *cell, int c, int x, long long t,
+                       long long col, unsigned long long f) {
+    int seen = 0;
+    for (int i = 0; i < cell->ncl; i++) if (cell->cl[i] == x) { seen = 1; break; }
+    if (!seen) {
+        if (cell->ncl < MIX_CELL_CL) cell->cl[cell->ncl++] = (int16_t)x;
+        else { cell->cl_cut = 1; a->cell_cut = 1; }
+    }
+    mcl_t *k = &a->cl[x];
+    long long end = t + a->g->step;
+    if (!k->frames || t < k->first) k->first = t;
+    if (!k->frames || end > k->last) k->last = end;
+    k->frames += f;
+    int s = -1;
+    for (int i = 0; i < k->nch; i++) if (k->ch[i] == c) { s = i; break; }
+    if (s < 0 && k->nch < MIX_CL_CH) {
+        s = k->nch++;
+        k->ch[s] = (int16_t)c;
+        k->chf[s] = 0;
+        memset(k->cols[s], 0, sizeof(k->cols[s]));
+    } else if (s < 0) {
+        /* Full: the quietest gives way to a busier one, as a cell's do. */
+        int q = 0;
+        for (int i = 1; i < k->nch; i++) if (k->chf[i] < k->chf[q]) q = i;
+        k->ch_cut = 1;
+        if (f <= k->chf[q]) return;
+        s = q;
+        k->ch[s] = (int16_t)c;
+        k->chf[s] = 0;
+        memset(k->cols[s], 0, sizeof(k->cols[s]));
+    }
+    k->chf[s] += f;
+    if (col >= 0 && col < WEB_WIFI_COLS)
+        k->cols[s][col / 32] |= 1u << (col % 32);
+}
+
 /* f frames on chan at t from the transmitter mac (NULL: the rest). */
 static void mix_put(magg_t *a, const char *chan, long long t,
                     const uint8_t *mac, int kind, unsigned long long f) {
@@ -428,6 +495,7 @@ static void mix_put(magg_t *a, const char *chan, long long t,
     mcell_t *cell = &a->cells[(size_t)c * (size_t)g->ncol + (size_t)col];
     int x = mac ? mix_tx(a, mac, kind) : -1;
     if (x < 0) { cell->other = sat32(cell->other, f); return; }
+    if (a->cl && kind == WEB_TX_CLIENT) mix_client(a, cell, c, x, t, col, f);
     for (int i = 0; i < cell->n; i++)
         if (cell->e[i].tx == x) { cell->e[i].f = sat32(cell->e[i].f, f); return; }
     if (cell->n < MIX_CELL_TRACK) {
@@ -491,6 +559,22 @@ static int by_mix_band(const void *x, const void *y) {
     return strcmp(a->key, b->key);
 }
 
+/* An AP's SSID: sloth.db's octets first, they are the TUI's
+ * (web_ssid.h), then the stream's. The source, or NULL with ssid "". */
+#define AP_SSID_BUF ((WEB_SDB_TEXT_MAX > WEB_CHMIX_SSID_MAX ? WEB_SDB_TEXT_MAX \
+                                                            : WEB_CHMIX_SSID_MAX) + 1)
+static const char *ap_ssid_of(const web_m4_t *m, web_sdb_conn_t *conn,
+                              const uint8_t bssid[6], char ssid[AP_SSID_BUF]) {
+    char mac[18];
+    web_mix_mac_text(bssid, mac);
+    ssid[0] = '\0';
+    if (conn && web_sdb_ap_ssid(conn, mac, ssid) == 1) return "sloth.db";
+    if (m->tsdb && m->tsdb->mix && web_chmix_ssid(m->tsdb->mix, bssid, ssid))
+        return "stream";
+    ssid[0] = '\0';
+    return NULL;
+}
+
 /* One transmitter of the WiFi answer's tx list. */
 static void wifi_tx_json(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *conn,
                          const uint8_t txmac[6], int kind, void *ctx) {
@@ -505,21 +589,158 @@ static void wifi_tx_json(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *conn,
     web_jw_raw(w, ",\"vendor\":");
     if (hit.found) web_jw_str(w, hit.name); else web_jw_raw(w, "null");
     if (kind == WEB_TX_AP) {
-        /* sloth.db's octets first: they are the TUI's (web_ssid.h). The
-         * buffer holds either source's longest. */
-        char ssid[(WEB_SDB_TEXT_MAX > WEB_CHMIX_SSID_MAX ? WEB_SDB_TEXT_MAX
-                                                         : WEB_CHMIX_SSID_MAX) + 1] = "";
-        const char *src = NULL;
-        if (conn && web_sdb_ap_ssid(conn, mac, ssid) == 1) src = "sloth.db";
-        else if (m->tsdb && m->tsdb->mix && web_chmix_ssid(m->tsdb->mix, txmac, ssid))
-            src = "stream";
-        if (!src) ssid[0] = '\0';
+        char ssid[AP_SSID_BUF];
+        const char *src = ap_ssid_of(m, conn, txmac, ssid);
         web_jw_raw(w, ",\"ssid\":"); web_jw_ssid(w, ssid);
         web_jw_ssid_meta(w, "ssid", ssid);
         web_jw_raw(w, ",\"ssid_src\":");
         if (src && ssid[0]) web_jw_str(w, src); else web_jw_raw(w, "null");
     }
     web_jw_raw(w, "}");
+}
+
+/* ── the client lane ─────────────────────────────────────────────────── */
+
+int web_wifi_test_expire;
+
+/* sloth.db's newest association of a station: its BSSID. */
+typedef struct { char bssid[WEB_SDB_TEXT_MAX + 1]; int got; } first_assoc_t;
+static int take_first_assoc(void *ctx, const web_sdb_item_t *it) {
+    first_assoc_t *f = ctx;
+    snprintf(f->bssid, sizeof(f->bssid), "%s", it->a);
+    f->got = 1;
+    return 1;
+}
+
+static int by_cl_ch(const void *x, const void *y, const mcl_t *k) {
+    int a = *(const int *)x, b = *(const int *)y;
+    if (k->chf[a] != k->chf[b]) return k->chf[a] > k->chf[b] ? -1 : 1;
+    return a - b;
+}
+
+/* One client of the answer's "clients": its MAC, vendor, whether the MAC
+ * is locally administered (randomised), its frames and the bounds of
+ * the buckets it was named in, its channels busiest first, its index in
+ * "tx" (null when the table had no room), and its AP: sloth.db's newest
+ * association, else the stream's newest assoc record, named as the AP's
+ * own transmitter entry is (ap_ssid_of()), so its colour is the AP's.
+ * *db_cut once sloth.db's budget is spent: the rest from the stream. */
+static void client_json(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *conn,
+                        const magg_t *a, int x, int *db_cut) {
+    const mcl_t *k = &a->cl[x];
+    const uint8_t *mac = a->tx[x].mac;
+    char id[18];
+    web_mix_mac_text(mac, id);
+    web_jw_raw(w, "{\"id\":"); web_jw_str(w, id);
+    web_oui_hit_t hit;
+    memset(&hit, 0, sizeof(hit));
+    if (m->oui) web_oui_lookup(m->oui, mac, &hit);
+    web_jw_raw(w, ",\"vendor\":");
+    if (hit.found) web_jw_str(w, hit.name); else web_jw_raw(w, "null");
+    web_jw_raw(w, ",\"laa\":"); web_jw_raw(w, mac[0] & 0x02 ? "true" : "false");
+    web_jw_raw(w, ",\"frames\":"); web_jw_int(w, (long long)(k->frames > 0x7fffffffffffULL
+                                                           ? 0x7fffffffffffULL : k->frames));
+    web_jw_raw(w, ",\"first\":"); web_jw_int(w, k->first);
+    web_jw_raw(w, ",\"last\":");  web_jw_int(w, k->last);
+    int ord[MIX_CL_CH];
+    for (int i = 0; i < k->nch; i++) ord[i] = i;
+    for (int i = 1; i < k->nch; i++)          /* at most eight: insertion */
+        for (int j = i; j > 0 && by_cl_ch(&ord[j - 1], &ord[j], k) > 0; j--) {
+            int t = ord[j]; ord[j] = ord[j - 1]; ord[j - 1] = t;
+        }
+    web_jw_raw(w, ",\"chans\":[");
+    for (int i = 0; i < k->nch; i++) {
+        web_jw_raw(w, i ? ",[" : "[");
+        web_jw_str(w, a->ch[k->ch[ord[i]]].key);
+        web_jw_raw(w, ",");
+        web_jw_int(w, (long long)(k->chf[ord[i]] > 0x7fffffffffffULL ? 0x7fffffffffffULL
+                                                                    : k->chf[ord[i]]));
+        /* Its cells as hex, a digit four cells, the first the high bit. */
+        char hex[WEB_WIFI_COLS / 4 + 2];
+        int nd = (a->g->ncol + 3) / 4;
+        if (nd > WEB_WIFI_COLS / 4) nd = WEB_WIFI_COLS / 4;
+        for (int d = 0; d < nd; d++) {
+            unsigned v = 0;
+            for (int b = 0; b < 4; b++) {
+                int col = d * 4 + b;
+                if (col < a->g->ncol && (k->cols[ord[i]][col / 32] >> (col % 32) & 1u))
+                    v |= 8u >> b;
+            }
+            hex[d] = "0123456789abcdef"[v];
+        }
+        hex[nd] = '\0';
+        web_jw_raw(w, ",\"");
+        web_jw_raw(w, hex);
+        web_jw_raw(w, "\"]");
+    }
+    web_jw_raw(w, "],\"chans_more\":"); web_jw_raw(w, k->ch_cut ? "true" : "false");
+    web_jw_raw(w, ",\"tx\":");
+    if (a->tx[x].out >= 0) web_jw_int(w, a->tx[x].out); else web_jw_raw(w, "null");
+    uint8_t bssid[6];
+    const char *asrc = NULL;
+    if (conn && !*db_cut) {
+        if (web_sdb_spent(conn)) *db_cut = 1;
+        else {
+            first_assoc_t f;
+            memset(&f, 0, sizeof(f));
+            if (web_sdb_assocs(conn, id, 1, take_first_assoc, &f) > 0 && f.got &&
+                web_mix_mac_bytes(f.bssid, bssid) == 0)
+                asrc = "sloth.db";
+            else if (conn->timed_out)
+                *db_cut = 1;
+        }
+    }
+    if (!asrc && m->tsdb && m->tsdb->mix && web_chmix_sta_bssid(m->tsdb->mix, mac, bssid))
+        asrc = "stream";
+    web_jw_raw(w, ",\"assoc\":");
+    if (!asrc) { web_jw_raw(w, "null}"); return; }
+    char bt[18], ssid[AP_SSID_BUF];
+    web_mix_mac_text(bssid, bt);
+    const char *ssrc = ap_ssid_of(m, *db_cut ? NULL : conn, bssid, ssid);
+    web_jw_raw(w, "{\"bssid\":"); web_jw_str(w, bt);
+    web_jw_raw(w, ",\"src\":"); web_jw_str(w, asrc);
+    web_jw_raw(w, ",\"ssid\":"); web_jw_ssid(w, ssid);
+    web_jw_ssid_meta(w, "ssid", ssid);
+    web_jw_raw(w, ",\"ssid_src\":");
+    if (ssrc && ssid[0]) web_jw_str(w, ssrc); else web_jw_raw(w, "null");
+    web_jw_raw(w, "}}");
+}
+
+/* The answer's "clients" members into w: every client the window named,
+ * busiest first, at most MIX_CL_MAX in w's bytes. */
+static void clients_json(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *conn,
+                         magg_t *a, unsigned long long *frames, int *byf) {
+    int n = 0;
+    for (int i = 0; i < a->ntx; i++)
+        if (a->tx[i].kind == WEB_TX_CLIENT && a->cl[i].frames) {
+            byf[n] = i;
+            frames[i] = a->cl[i].frames;
+            n++;
+        }
+    g_mix_txf = frames;
+    qsort(byf, (size_t)n, sizeof(*byf), by_tx_frames);
+    g_mix_txf = NULL;
+    int shown = 0, more = 0, db_cut = 0;
+    web_jw_raw(w, ",\"clients\":[");
+    for (int i = 0; i < n; i++) {
+        if (shown >= MIX_CL_MAX) { more = 1; break; }
+        size_t mark = w->len;
+        if (shown) web_jw_raw(w, ",");
+        client_json(w, m, conn, a, byf[i], &db_cut);
+        /* Room for the members after the list. */
+        if (w->overflow || w->len + 128 > w->cap) {
+            w->overflow = 0;
+            w->len = mark;
+            w->buf[mark] = '\0';
+            more = 1;
+            break;
+        }
+        shown++;
+    }
+    web_jw_raw(w, "],\"clients_total\":"); web_jw_int(w, n);
+    web_jw_raw(w, ",\"clients_more\":"); web_jw_raw(w, more ? "true" : "false");
+    web_jw_raw(w, ",\"clients_cell_cut\":"); web_jw_raw(w, a->cell_cut ? "true" : "false");
+    web_jw_raw(w, ",\"clients_db_cut\":"); web_jw_raw(w, db_cut ? "true" : "false");
 }
 
 static void wifi_row_extra(web_jw_t *w, const char *key, void *ctx) {
@@ -542,6 +763,16 @@ int web_mix_answer(const web_m4_t *m, const web_grid_t *g, const web_mix_ops_t *
     a->g = g;
     a->ops = ops;
     a->cells = cells;
+    char *clb = NULL;
+    if (ops->clients) {
+        a->cl = calloc(MIX_TXD, sizeof(*a->cl));
+        clb = malloc(MIX_CL_BYTES);
+        if (!a->cl || !clb) {
+            free(a->cl); free(clb);
+            free(a); free(cells); free(dict); free(rows); free(row);
+            return -1;
+        }
+    }
     for (int i = 0; i < MIX_TXH; i++) a->hash[i] = -1;
     int read_more = 0;
     long long nread = 0;
@@ -554,6 +785,7 @@ int web_mix_answer(const web_m4_t *m, const web_grid_t *g, const web_mix_ops_t *
                                        g->to, MIX_READ_MAX, mix_from_store, a,
                                        &read_more);
         if (nread < 0) {
+            free(a->cl); free(clb);
             free(a); free(cells); free(dict); free(rows); free(row);
             return answer_error(503, "store_error", NULL, body, cap, len, status);
         }
@@ -582,6 +814,7 @@ int web_mix_answer(const web_m4_t *m, const web_grid_t *g, const web_mix_ops_t *
     if (!txf || !byf) {
         free(txf); free(byf);
         web_slothdb_close(&conn);
+        free(a->cl); free(clb);
         free(a); free(cells); free(dict); free(rows); free(row);
         return -1;
     }
@@ -609,6 +842,14 @@ int web_mix_answer(const web_m4_t *m, const web_grid_t *g, const web_mix_ops_t *
             break;
         }
         a->tx[byf[k]].out = nout++;
+    }
+    /* The client list, after the table so it can point into it. */
+    web_jw_t cw;
+    web_jw_init(&cw, clb ? clb : row, clb ? MIX_CL_BYTES : 1);
+    if (clb) {
+        if (have_db && web_wifi_test_expire) conn.deadline_ms = 0;
+        memset(txf, 0, (size_t)(a->ntx ? a->ntx : 1) * sizeof(*txf));
+        clients_json(&cw, m, have_db ? &conn : NULL, a, txf, byf);
     }
     free(txf);
     free(byf);
@@ -654,8 +895,22 @@ int web_mix_answer(const web_m4_t *m, const web_grid_t *g, const web_mix_ops_t *
             }
             web_jw_raw(&r, "]");
         }
-        web_jw_raw(&r, "]}");
-        if (r.overflow || head_max + dw.len + rw.len + r.len + tail_max > cap) {
+        web_jw_raw(&r, "]");
+        /* The client lane: each cell's distinct clients named (null
+         * where the cell is). */
+        if (a->cl) {
+            web_jw_raw(&r, ",\"clients\":[");
+            for (int col = 0; col < g->ncol; col++) {
+                const mcell_t *cell = &cells[(size_t)ci * (size_t)g->ncol + (size_t)col];
+                if (col) web_jw_raw(&r, ",");
+                if (!cell->n && !cell->other) web_jw_raw(&r, "null");
+                else web_jw_int(&r, cell->ncl);
+            }
+            web_jw_raw(&r, "]");
+        }
+        web_jw_raw(&r, "}");
+        if (r.overflow ||
+            head_max + dw.len + rw.len + r.len + tail_max + (clb ? cw.len : 0) > cap) {
             rows_cut = 1;
             break;
         }
@@ -702,9 +957,11 @@ int web_mix_answer(const web_m4_t *m, const web_grid_t *g, const web_mix_ops_t *
      * past the read cap. Their frames are in "other" or not read. */
     web_jw_raw(&w, ",\"folded\":"); web_jw_raw(&w, folded ? "true" : "false");
     web_jw_raw(&w, ",\"read_cut\":"); web_jw_raw(&w, read_more ? "true" : "false");
+    if (clb) web_jw_raw(&w, clb);
     if (ops->tail) ops->tail(&w, ops->ctx);
     web_jw_raw(&w, "}\n");
     (void)nread;
+    free(a->cl); free(clb);
     free(a); free(cells); free(dict); free(rows); free(row);
     if (w.overflow) return -1;
     *len = w.len;
@@ -848,6 +1105,7 @@ int web_wifi_channels_route(const web_m4_t *m, const char *query,
         ops.key = wifi_mix_key;
         ops.row_extra = wifi_row_extra;
         ops.tx_json = wifi_tx_json;
+        ops.clients = 1;
         return web_mix_answer(m, &mg, &ops, now_s, body, cap, len, status);
     }
     int metric = WM_WIFI_AP_COUNT;

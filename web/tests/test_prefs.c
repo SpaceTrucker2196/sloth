@@ -330,6 +330,9 @@ static const char *const TOGGLE_JS[] = {   /* the script's ARIA state, each a li
      * pressed while its SSID is the one not faded, which is not kept (a
      * look, not a setting; nothing stored, here or on the server) */
     "        b.ariaPressed = WF.hl === o.ssid ? \"true\" : \"false\";",
+    /* and a client chip (2026-11-17) while its client is the one traced,
+     * not kept either */
+    "      b.ariaPressed = on ? \"true\" : \"false\";",
 };
 
 static void test_every_toggle_is_decided(void) {

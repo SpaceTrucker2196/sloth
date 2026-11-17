@@ -113,7 +113,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-17 (the isometric WiFi and BLE Devices waterfalls coloured by identity: band hue, channel shade and SSID on WiFi, class hue on BLE, with keys; `web/ui/iso.css` `--iso-*`; § M5's WiFi and BLE Devices); 2026-11-17 (the WiFi view's direction-finding card, `web/src/web_df.c`, `web/ui/df.js`, `GET /api/df`: § Direction finding); 2026-11-17 (#218: `alerts.fired` counts an alert
+**Last updated**: 2026-11-17 (the WiFi waterfall's clients lane and client highlight, `clients` on `/api/wifi/channels?mix=1`; the highlight fade 70 percent transparent; § M5's WiFi); 2026-11-17 (the isometric WiFi and BLE Devices waterfalls coloured by identity: band hue, channel shade and SSID on WiFi, class hue on BLE, with keys; `web/ui/iso.css` `--iso-*`; § M5's WiFi and BLE Devices); 2026-11-17 (the WiFi view's direction-finding card, `web/src/web_df.c`, `web/ui/df.js`, `GET /api/df`: § Direction finding); 2026-11-17 (#218: `alerts.fired` counts an alert
 either daemon raises, not sloth's stream alone; an "alert" record from
 either stream now queues a sample (`web_rollup_queue_add()`) instead of
 adding one directly, so `SENSOR_SOURCE_DOWN` -- the one type both can
@@ -815,10 +815,48 @@ In short:
   its MAC's, the rest and a cell with no transmitter detail in the
   channel's shade. A key under the canvas names every step and the
   window's SSIDs (busiest first, a dozen, then "+N more"); pressing an
-  SSID fades every other one to a quarter until pressed again (nothing
-  kept). The tooltip adds the channel's step in words; no label was
-  dropped (`test_iso.c` counts the grid's text calls). Colours:
-  `web/ui/iso.css` `--iso-b*`, both themes.
+  SSID fades every other one to 70 percent transparent (owner,
+  2026-11-17: "when highlighting an ssid on the water fall make all the
+  others 70 percent transparent"; `ISO_FADE`, 0.3 of the colour kept)
+  until pressed again (nothing kept). The tooltip adds the channel's
+  step in words; no label was dropped (`test_iso.c` counts the grid's
+  text calls). Colours: `web/ui/iso.css` `--iso-b*`, both themes.
+  Since 2026-11-17 (owner: "the spectrum should show where the clients
+  sit in the spectrum highlighting their channel") a clients lane runs
+  under the band strip: a diamond under each channel the window's
+  clients were named on, sized by how many against the busiest channel,
+  the count beside it where it fits and the lane named "clients" at
+  left; it is coloured as the busiest of them, by its AP's SSID (the
+  same `--k-*` colour as that AP's segments, so a network's clients
+  group with its APs) or, with no AP known, by its MAC. A tick at the
+  foot of a column marks a cell that named a client. The key gains a
+  Clients group (the busiest dozen, then "+N more"): vendor, the MAC's
+  last three octets, "randomised" for a locally administered MAC and
+  "→ SSID" for its AP, all text. Pressing one traces its channels'
+  floors in the band colour, puts a bar on the cells it was named in
+  and fades every other cell by the same 70 percent; pressing it again
+  clears it. An SSID and a client are not highlighted together: pressing
+  either drops the other. The tooltip adds the clients named in the
+  cell and, with one picked, its frames there. What a count can say:
+  a client is a station whose probe requests sloth reported (data
+  frames are not in the mix), on the channel of its latest probe, and
+  the mix names five transmitters a bucket, so a client is seen only in
+  a bucket where it was one of the five: every count is a floor, and a
+  client that never made a bucket's five is not listed. The answer:
+  `/api/wifi/channels?mix=1`'s rows gain `clients` (per cell, the
+  distinct clients named; `null` where the cell is) and the answer a
+  `clients` list (busiest first, at most 64 in 16 KB: `id`, `vendor`,
+  `laa`, `frames`, `first`/`last` bucket bounds, `chans` as
+  `[key, frames, hex]` with the hex a bit a cell, first cell the high
+  bit, `chans_more` past 8 channels, `tx` its index in `tx` or `null`,
+  and `assoc`: sloth.db's newest `assocs` row, else the stream's newest
+  `assoc` record (`web_chmix_assoc()`, in memory only), with the AP's
+  SSID named as its own `tx` entry is), `clients_total`,
+  `clients_more`, `clients_cell_cut` (a cell past 32) and
+  `clients_db_cut` (sloth.db's budget spent before every client's AP
+  was read; the rest from the stream). Tests: `web/tests/test_chmix.c`
+  (`test_mix_route_clients*`), `web/tests/test_iso.c`
+  (`test_client_lane_pinned`).
   Every SSID, and every alert title and detail (sloth writes the SSID
   into them as it came), is sent in a display form (`\xNN` for any
   octet that is not printable UTF-8, Default_Ignorable code points and

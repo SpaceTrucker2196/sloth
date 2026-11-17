@@ -125,7 +125,18 @@ typedef struct {
     void (*tail)(web_jw_t *w, void *ctx);
     size_t            tail_max;
     void             *ctx;
+    /* The WiFi view's client lane (2026-11-17): each row's "clients"
+     * (a cell's distinct clients named, a floor: the mix names five a
+     * bucket) and the window's "clients" list with each client's
+     * channels and AP, "clients_total", "clients_more" (the list cut at
+     * 64 or its bytes), "clients_cell_cut" (a cell past 32 clients) and
+     * "clients_db_cut" (sloth.db's budget spent before every client's
+     * association was read; the rest from the stream). */
+    int               clients;
 } web_mix_ops_t;
+/* Test seam: nonzero spends the mix answer's sloth.db budget once the
+ * transmitter table is written (0 in slothweb). */
+extern int web_wifi_test_expire;
 int web_mix_answer(const web_m4_t *m, const web_grid_t *g, const web_mix_ops_t *ops,
                    long long now_s, char *body, size_t cap, size_t *len, int *status);
 

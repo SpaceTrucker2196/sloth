@@ -284,7 +284,9 @@ static const char GRID_RENDER[] =
         "      }\n"
         "      var grouped = o.cols.some(function (c) { return !!c.group; });\n"
         "      var floored = o.cols.some(function (c) { return !!c.floor; }), fy = floored ? 7 : 0;\n"
-        "      var geo = layout({ W: W, Hh: Hh, n: n, L: 44, R: 56, top: 14, bottom: (grouped ? 34 : 22) + fy, deep: n > 12 });\n"
+        "      var lane = o.lane || null, ly = lane ? 14 : 0;\n"
+        "      var geo = layout({ W: W, Hh: Hh, n: n, L: 44, R: 56, top: 14, bottom: (grouped ? 34 : 22) + fy + ly, deep: n > 12 });\n"
+        "      geo.foot = 17 + fy + ly;\n"
         "      st.geo = geo;\n"
         "      // A scale with no extent (a caller's hi equal to its lo) is one\n"
         "      // unit wide, so no tick, height or ridge is NaN.\n"
@@ -309,7 +311,16 @@ static const char GRID_RENDER[] =
         "          var v = o.value(i, c);\n"
         "          return num(v) && span > 0 ? (v - o.lo) / span : 0;\n"
         "        },\n"
-        "        segments: o.segments, cap: o.cols.some(function (c) { return !!c.cap; }) ? function (c) { return o.cols[c].cap; } : null\n"
+        "        segments: o.segments, cap: o.cols.some(function (c) { return !!c.cap; }) ? function (c) { return o.cols[c].cap; } : null,\n"
+        "        after: lane && lane.foot ? function (i, x0, y0) {\n"
+        "          // Drawn as each row goes down, so a nearer row hides it.\n"
+        "          for (var fc = 0; fc < nc; fc++) {\n"
+        "            var fcol = lane.foot(i, fc);\n"
+        "            if (!fcol) continue;\n"
+        "            g.fillStyle = fcol;\n"
+        "            g.fillRect(x0 + (fc + 0.25) * PW / nc, y0 + 1, Math.max(1, PW / nc * 0.5), 2);\n"
+        "          }\n"
+        "        } : null\n"
         "      });\n"
         "      // The time axis up the right rail: a label a label height apart.\n"
         "      g.fillStyle = T.muted; g.strokeStyle = T.rule; g.textAlign = \"left\";\n"
@@ -333,6 +344,26 @@ static const char GRID_RENDER[] =
         "        if (!fl.dash) { g.fillRect(fx, base0 + 15, Math.max(0.5, fz - fx), 4); continue; }\n"
         "        for (var dx = fx; dx < fz; dx += 5) g.fillRect(dx, base0 + 15, Math.min(3, fz - dx), 4);\n"
         "      }\n"
+        "      if (lane) {\n"
+        "        var lcy = base0 + 19 + fy, lmax = 0, lc;\n"
+        "        for (lc = 0; lc < nc; lc++) lmax = Math.max(lmax, num(lane.count(lc)) ? lane.count(lc) : 0);\n"
+        "        // At the left edge: the level axis's labels sit above it.\n"
+        "        g.fillStyle = T.muted; g.textAlign = \"left\";\n"
+        "        g.fillText(lane.name, 1, lcy + 3);\n"
+        "        g.textAlign = \"left\";\n"
+        "        for (lc = 0; lc < nc; lc++) {\n"
+        "          var ln = lane.count(lc);\n"
+        "          if (!num(ln) || ln <= 0) continue;\n"
+        "          var lt = String(ln), ltw = g.measureText(lt).width, rr = Math.min(cw * 0.45, 2 + 3 * Math.sqrt(ln / lmax));\n"
+        "          var lx = geo.L + (lc + 0.5) * cw, wide = cw >= ltw + 2 * rr + 4;\n"
+        "          if (wide) lx -= (ltw + 2) / 2;\n"
+        "          g.fillStyle = lane.color(lc);\n"
+        "          g.beginPath(); g.moveTo(lx, lcy - rr); g.lineTo(lx + rr, lcy); g.lineTo(lx, lcy + rr); g.lineTo(lx - rr, lcy);\n"
+        "          g.closePath(); g.fill();\n"
+        "          if (wide) { g.fillStyle = T.ink; g.fillText(lt, lx + rr + 2, lcy + 3); }\n"
+        "        }\n"
+        "        g.textAlign = \"center\";\n"
+        "      }\n"
         "      for (var c = 0; c <= nc; c++) {\n"
         "        if (c < nc) {\n"
         "          var cx = geo.L + (c + 0.5) * cw, lab = o.cols[c].label, w = g.measureText(lab).width;\n"
@@ -346,10 +377,10 @@ static const char GRID_RENDER[] =
         "        if (grouped && (c === nc || (c > gs && o.cols[c].group !== o.cols[gs].group))) {\n"
         "          var a = geo.L + gs * cw, z = geo.L + c * cw;\n"
         "          g.strokeStyle = T.rule;\n"
-        "          g.beginPath(); g.moveTo(a + 2, base0 + 18.5 + fy); g.lineTo(z - 2, base0 + 18.5 + fy); g.stroke();\n"
+        "          g.beginPath(); g.moveTo(a + 2, base0 + 18.5 + fy + ly); g.lineTo(z - 2, base0 + 18.5 + fy + ly); g.stroke();\n"
         "          var gl = o.cols[gs].group || \"\";\n"
         "          if (gl && g.measureText(gl).width >= z - a && o.cols[gs].groupShort) gl = o.cols[gs].groupShort;\n"
-        "          if (gl && g.measureText(gl).width < z - a) { g.fillStyle = o.cols[gs].groupColor || T.ink; g.fillText(gl, (a + z) / 2, base0 + 29 + fy); }\n"
+        "          if (gl && g.measureText(gl).width < z - a) { g.fillStyle = o.cols[gs].groupColor || T.ink; g.fillText(gl, (a + z) / 2, base0 + 29 + fy + ly); }\n"
         "          gs = c;\n"
         "        }\n"
         "      }\n"
@@ -369,6 +400,27 @@ static const char GRID_OVERLAY[] =
         "        var h = Math.max(2, geo.ridges[s.k][s.c] * geo.RH);\n"
         "        g.strokeStyle = color; g.lineWidth = w;\n"
         "        g.strokeRect(x0 + s.c * cw + 0.5, y0 - h + 0.5, Math.max(1, cw - 1), h);\n"
+        "      }\n"
+        "      var pk = o.pick, fk = geo.n - 1, cwp = geo.PW / geo.cols;\n"
+        "      if (pk && geo.ridges[fk] && geo.ridges[0]) {\n"
+        "        (pk.cols || []).forEach(function (c) {\n"
+        "          if (!(c >= 0 && c < geo.cols)) return;\n"
+        "          // The column's floor from the newest row to the oldest, and its\n"
+        "          // slot under the front row down through the lane.\n"
+        "          g.strokeStyle = pk.color(c); g.lineWidth = 3;\n"
+        "          g.beginPath(); g.moveTo(geo.rowOx[fk] + (c + 0.5) * cwp, geo.rowOy[fk] + 2);\n"
+        "          g.lineTo(geo.rowOx[0] + (c + 0.5) * cwp, geo.rowOy[0] + 2); g.stroke();\n"
+        "          g.lineWidth = 2;\n"
+        "          g.strokeRect(geo.L + c * cwp + 1, geo.base0 + 2, Math.max(1, cwp - 2), geo.foot || 17);\n"
+        "        });\n"
+        "        // A cell it was named in: a bar across its column's top, so a\n"
+        "        // dense grid stays readable where outlines would not.\n"
+        "        (pk.cells || []).forEach(function (s) {\n"
+        "          if (!s || s.k < 0 || s.k >= geo.n || s.c < 0 || s.c >= geo.cols || !geo.ridges[s.k]) return;\n"
+        "          var h = Math.max(2, geo.ridges[s.k][s.c] * geo.RH);\n"
+        "          g.fillStyle = pk.cellColor || pk.color(s.c);\n"
+        "          g.fillRect(geo.rowOx[s.k] + s.c * cwp + 0.5, geo.rowOy[s.k] - h - 1.5, Math.max(1, cwp - 1), 3);\n"
+        "        });\n"
         "      }\n"
         "      cell(o.sel, T.signal, 2);\n"
         "      var hv = st.hover;\n"
@@ -403,11 +455,12 @@ static const char W_ISO_GRID[] =
         "    if (hz) set(\"w-heat-note\", rows.length + \" channels, \" + hz.tier + \" tier, \" + fmt(hz.col_s) + \" s cells, \" +\n"
         "                unit + \" 0 to \" + fmt(hmax) + \" (the window's largest cell)\" + (hz.more ? \", more channels than shown\" : \"\"));\n"
         "    mixNote();\n"
-        "    var cur = WF.cur, P = SlothIso.scheme(), hl = isoKey();\n"
+        "    var cur = WF.cur, P = SlothIso.scheme(), hl = isoKey(), pc = isoClient();\n"
         "    // The mix's cells line up with the heat's only on the same grid.\n"
         "    var mx = !!(hz && WF.mix && WF.mix.from === hz.from && WF.mix.cols === hz.cols && WF.mix.col_s === hz.col_s);\n"
         "    var sh = rows.map(function (r) { return chanShade(r.band, r.key); });\n"
         "    var rc = sh.map(function (sc) { return chanColor(sc, P); });\n"
+        "    var lane = mx ? clientLane(rows) : null, pick = mx && pc ? clientPick(pc, rows, cols, sh, P) : null;\n"
         "    SlothIso.grid(c, WF.ist, {\n"
         "      cols: rows.map(function (r, i) {\n"
         "        return { label: r.key, short: r.key.replace(/^6g/, \"\"), group: BAND_WORD[r.band] || \"band unknown\",\n"
@@ -416,7 +469,8 @@ static const char W_ISO_GRID[] =
         "      }),\n"
         "      n: rows.length ? cols : 0, from: hz ? hz.from : 0, col_s: hz ? hz.col_s : 0,\n"
         "      value: function (k, i) { var cl = rows[i].heat && rows[i].heat.cells; return cl ? cl[k] : null; },\n"
-        "      segments: function (k, i) { return isoSegs(mx ? rows[i] : null, k, rc[i], mx ? hl : null); },\n"
+        "      segments: function (k, i) { return isoSegs(mx ? rows[i] : null, k, rc[i], mx ? hl : null, pick ? pick.lit(k, i) : null); },\n"
+        "      lane: lane, pick: pick,\n"
         "      lo: 0, hi: hmax > 0 ? hmax : 1, ticks: hmax > 0 ? [0, hmax / 2, hmax] : [0], unit: unit, fmt: fmt,\n"
         "      clock: hhmmss, sel: cur && cur.r < rows.length && cur.c < cols ? { k: cur.c, c: cur.r } : null,\n"
         "      empty: hz ? \"no channel in the window\" : \"loading\"\n"
@@ -528,12 +582,13 @@ static const char CHAN_SHADE[] =
         "  function chanWord(sc) { return sc ? CHAN_STEP[sc.band][sc.step] : \"band unknown\"; }";
 
 static const char W_ISO_SEGS[] =
-        "  function isoSegs(r, k, base, hl) {\n"
-        "    var m = r && r.mix && r.mix.cells ? r.mix.cells[k] : null, rest = hl === null ? 1 : ISO_FADE, out = [];\n"
+        "  function isoSegs(r, k, base, hl, lit) {\n"
+        "    var m = r && r.mix && r.mix.cells ? r.mix.cells[k] : null, off = lit === false;\n"
+        "    var rest = hl === null && !off ? 1 : ISO_FADE, out = [];\n"
         "    if (!Array.isArray(m) || !num(m[0]) || m[0] <= 0) return [{ f: 1, color: base, alpha: rest }];\n"
         "    for (var e = 2; e + 1 < m.length; e += 2) {\n"
         "      var t = txOf(m[e]);\n"
-        "      out.push({ f: m[e + 1] / m[0], color: txColor(t), alpha: hl === null || ssidOf(t) === hl ? 1 : ISO_FADE });\n"
+        "      out.push({ f: m[e + 1] / m[0], color: txColor(t), alpha: !off && (hl === null || ssidOf(t) === hl) ? 1 : ISO_FADE });\n"
         "    }\n"
         "    if (num(m[1]) && m[1] > 0) out.push({ f: m[1] / m[0], color: base, alpha: rest });\n"
         "    return out.length ? out : [{ f: 1, color: base, alpha: rest }];\n"
@@ -584,6 +639,8 @@ static const char W_ISO_KEY[] =
         "        b.appendChild(el(\"span\", \"\", o.ssid === \"\" ? \"(hidden)\" : o.ssid));\n"
         "        b.addEventListener(\"click\", function () {\n"
         "          WF.hl = WF.hl === o.ssid ? null : o.ssid;\n"
+        "          // One highlight at a time: an SSID drops a picked client.\n"
+        "          if (WF.hl !== null) WF.pc = null;\n"
         "          channelGrid();\n"
         "          // The key is drawn anew: the focus back on the same chip.\n"
         "          var again = $(\"w-iso-key\").querySelectorAll(\"button.chip\")[i];\n"
@@ -592,7 +649,146 @@ static const char W_ISO_KEY[] =
         "      });\n"
         "      if (list.length > ISO_SSIDS) grp.appendChild(el(\"span\", \"more\", \"+\" + (list.length - ISO_SSIDS) + \" more\"));\n"
         "    }\n"
+        "    clientKey(box);\n"
         "    return WF.hl;\n"
+        "  }";
+
+/* The client lane (owner 2026-11-17: "the spectrum should show where the
+ * clients sit in the spectrum highlighting their channel"), whole: the
+ * list read from the mix answer's "clients", a client's colour its AP's
+ * SSID's (else its MAC's), its words, its cells from the hex, the lane,
+ * the pick and the key's Clients group; and the tooltip's line. */
+static const char W_ISO_CLIENTS[] =
+        "  // ── the client lane (owner 2026-11-17: \"the spectrum should show where\n"
+        "  // the clients sit in the spectrum highlighting their channel\") ──\n"
+        "  // The mix's \"clients\" (web_wifi.h): every client the window named,\n"
+        "  // busiest first, each with its channels (frames and the cells it was\n"
+        "  // named in, as hex) and its AP where sloth.db or the stream paired\n"
+        "  // them. A client is named only in a bucket where it was one of the five\n"
+        "  // busiest, so a count is a floor and a quiet client may be missing.\n"
+        "  // Its colour is its AP's SSID's, so a network's clients group with its\n"
+        "  // APs; with no AP known, its MAC's, as txColor() colours a client.\n"
+        "  var ISO_CLIENTS = 12;\n"
+        "  function clientsOf() {\n"
+        "    var l = WF.mix && Array.isArray(WF.mix.clients) ? WF.mix.clients : [];\n"
+        "    return l.filter(function (c) { return c && typeof c.id === \"string\" && Array.isArray(c.chans); });\n"
+        "  }\n"
+        "  function clientColor(c) {\n"
+        "    var a = c.assoc, T = theme();\n"
+        "    if (a && typeof a.ssid === \"string\" && num(a.ssid_k) && a.ssid_k >= 0 && a.ssid_k < 8) return T.k[a.ssid_k];\n"
+        "    return keyColor(c.id);\n"
+        "  }\n"
+        "  // A client in words: its vendor and the MAC's last three octets,\n"
+        "  // \"randomised\" for a locally administered MAC, and its AP's SSID.\n"
+        "  function clientName(c) {\n"
+        "    var s = (typeof c.vendor === \"string\" && c.vendor ? c.vendor + \" \" : \"\") + String(c.id).slice(-8);\n"
+        "    if (c.laa) s += \" randomised\";\n"
+        "    if (c.assoc && typeof c.assoc.ssid === \"string\") s += \" \\u2192 \" + (c.assoc.ssid === \"\" ? \"(hidden)\" : c.assoc.ssid);\n"
+        "    else if (c.assoc && typeof c.assoc.bssid === \"string\") s += \" \\u2192 \" + c.assoc.bssid;\n"
+        "    return s;\n"
+        "  }\n"
+        "  // Its entry for a channel key ([key, frames, hex]), or null; whether\n"
+        "  // the hex names cell k (a digit four cells, the first the high bit).\n"
+        "  function clientChan(c, key) {\n"
+        "    for (var i = 0; i < c.chans.length; i++) if (Array.isArray(c.chans[i]) && c.chans[i][0] === key) return c.chans[i];\n"
+        "    return null;\n"
+        "  }\n"
+        "  function clientIn(ch, k) {\n"
+        "    var d = ch && typeof ch[2] === \"string\" ? parseInt(ch[2].charAt(k >> 2), 16) : NaN;\n"
+        "    return num(d) && (d & (8 >> (k & 3))) !== 0;\n"
+        "  }\n"
+        "  // The picked client, dropped once a loaded mix no longer names it.\n"
+        "  function isoClient() {\n"
+        "    if (WF.pc === null) return null;\n"
+        "    var c = clientsOf().find(function (x) { return x.id === WF.pc; }) || null;\n"
+        "    if (!c && WF.mix) WF.pc = null;\n"
+        "    return c;\n"
+        "  }\n"
+        "  // The lane under the floor strip: per channel, the clients the list\n"
+        "  // names on it (the busiest one's colour), and a tick at the foot of\n"
+        "  // each cell the row's \"clients\" says held one.\n"
+        "  function clientLane(rows) {\n"
+        "    var cls = clientsOf(), per = rows.map(function (r) {\n"
+        "      var n = 0, first = null;\n"
+        "      cls.forEach(function (c) { if (clientChan(c, r.key)) { n++; if (!first) first = c; } });\n"
+        "      return { n: n, color: first ? clientColor(first) : null };\n"
+        "    });\n"
+        "    return {\n"
+        "      name: \"clients\", count: function (i) { return per[i].n; },\n"
+        "      color: function (i) { return per[i].color || theme().muted; },\n"
+        "      foot: function (k, i) {\n"
+        "        var cl = rows[i].mix && Array.isArray(rows[i].mix.clients) ? rows[i].mix.clients[k] : null;\n"
+        "        return num(cl) && cl > 0 ? per[i].color || theme().muted : null;\n"
+        "      }\n"
+        "    };\n"
+        "  }\n"
+        "  // The pick: the client's channels traced in their band's colour, the\n"
+        "  // cells it was named in outlined in its own; lit(k, i) for isoSegs().\n"
+        "  function clientPick(c, rows, cols, sh, P) {\n"
+        "    var on = rows.map(function (r) { return clientChan(c, r.key); }), cells = [], col = clientColor(c);\n"
+        "    on.forEach(function (ch, i) {\n"
+        "      for (var k = 0; ch && k < cols; k++) if (clientIn(ch, k)) cells.push({ k: k, c: i });\n"
+        "    });\n"
+        "    return {\n"
+        "      cols: on.map(function (ch, i) { return ch ? i : -1; }).filter(function (i) { return i >= 0; }),\n"
+        "      color: function (i) { return sh[i] ? P.band[sh[i].band][0] : P.muted; },\n"
+        "      cells: cells, cellColor: col,\n"
+        "      lit: function (k, i) { return clientIn(on[i], k); }\n"
+        "    };\n"
+        "  }\n"
+        "  // The key's Clients group: the busiest ISO_CLIENTS, each a button that\n"
+        "  // traces its channels and fades every cell it was not named in, until\n"
+        "  // pressed again; a client and an SSID are not highlighted together.\n"
+        "  function clientKey(box) {\n"
+        "    var cls = clientsOf(), mx = WF.mix;\n"
+        "    if (!mx || !Array.isArray(mx.clients)) return;\n"
+        "    var grp = box.appendChild(el(\"span\", \"grp\"));\n"
+        "    grp.appendChild(el(\"span\", \"nm\", \"Clients\"));\n"
+        "    if (!cls.length) { grp.appendChild(el(\"span\", \"more\", \"none named in the window\")); return; }\n"
+        "    // A picked client the busiest no longer include keeps its chip, so\n"
+        "    // the pick can always be undone where it was made.\n"
+        "    var shown = cls.slice(0, ISO_CLIENTS);\n"
+        "    if (WF.pc !== null && !shown.some(function (c) { return c.id === WF.pc; }))\n"
+        "      shown = shown.concat(cls.filter(function (c) { return c.id === WF.pc; }));\n"
+        "    shown.forEach(function (c, i) {\n"
+        "      var on = WF.pc === c.id, b = grp.appendChild(el(\"button\", \"chip cl\"));\n"
+        "      b.type = \"button\";\n"
+        "      b.ariaPressed = on ? \"true\" : \"false\";\n"
+        "      b.title = (on ? \"show every cell again\" : \"trace its channels, fade the rest\") + \"; \" +\n"
+        "        c.chans.map(function (ch) { return \"ch \" + ch[0] + \" \" + fmt(ch[1]); }).join(\", \") + \" frames\";\n"
+        "      var sw = el(\"span\", \"sw dia\");\n"
+        "      sw.style.backgroundColor = clientColor(c);\n"
+        "      b.appendChild(sw);\n"
+        "      b.appendChild(el(\"span\", \"\", clientName(c)));\n"
+        "      b.addEventListener(\"click\", function () {\n"
+        "        WF.pc = on ? null : c.id;\n"
+        "        if (WF.pc !== null) WF.hl = null;\n"
+        "        channelGrid();\n"
+        "        var again = $(\"w-iso-key\").querySelectorAll(\"button.chip.cl\")[i];\n"
+        "        if (again) again.focus();\n"
+        "      });\n"
+        "    });\n"
+        "    var total = num(mx.clients_total) ? mx.clients_total : cls.length;\n"
+        "    if (total > shown.length)\n"
+        "      grp.appendChild(el(\"span\", \"more\", \"+\" + (total - shown.length) + \" more\"));\n"
+        "  }";
+
+static const char W_ISO_TIP_CLIENTS[] =
+        "  // The tooltip's client line: the clients named in the cell (a floor),\n"
+        "  // and with one picked, its frames there.\n"
+        "  function isoTipClients(r, k) {\n"
+        "    var cl = r.mix && Array.isArray(r.mix.clients) ? r.mix.clients[k] : null, s = \"\";\n"
+        "    if (num(cl)) s = cl === 1 ? \"1 client named here\" : fmt(cl) + \" clients named here\";\n"
+        "    var c = WF.pc !== null ? clientsOf().find(function (x) { return x.id === WF.pc; }) : null;\n"
+        "    if (!c) return s;\n"
+        "    var m = r.mix && r.mix.cells ? r.mix.cells[k] : null, f = null;\n"
+        "    for (var e = 2; Array.isArray(m) && e + 1 < m.length; e += 2) {\n"
+        "      var t = txOf(m[e]);\n"
+        "      if (t && t.id === c.id) f = m[e + 1];\n"
+        "    }\n"
+        "    var w = clientName(c) + \": \" + (num(f) ? fmt(f) + \" frames here\"\n"
+        "      : clientIn(clientChan(c, r.key), k) ? \"named here, its frames among the rest\" : \"not named here\");\n"
+        "    return s ? s + \"; \" + w : w;\n"
         "  }";
 
 static const char BLE_COLOURS[] =
@@ -829,7 +1025,7 @@ static void test_identity_scheme_pinned(void) {
     WT_HAS(p, BLE_CLASS_KEY);
     /* The SSID colour is the page's one SSID colour (txColor()), and the
      * tooltip names the channel's step in words. */
-    WT_HAS(p, "      out.push({ f: m[e + 1] / m[0], color: txColor(t), alpha: hl === null || ssidOf(t) === hl ? 1 : ISO_FADE });");
+    WT_HAS(p, "      out.push({ f: m[e + 1] / m[0], color: txColor(t), alpha: !off && (hl === null || ssidOf(t) === hl) ? 1 : ISO_FADE });");
     WT_HAS(p, "      [chanWord(chanShade(r.band, r.key)), true],");
     /* The keys' containers, and each shown only isometric. */
     WT_HAS(p, "<div class=\"iso-key\" id=\"w-iso-key\" role=\"group\" aria-label=\"colour key: bands, channel shades and SSIDs\" hidden></div>");
@@ -884,31 +1080,38 @@ static void test_identity_tokens_both_themes(void) {
 
 /* Owner 2026-11-17: "don't remove any text labels". Colour is added on
  * top: every name the grid drew before it still draws, and none waits on
- * a colour. The grid renderer's text calls are counted (six: the empty
+ * a colour. The grid renderer's text calls are counted (eight: the empty
  * words, the level ticks, the unit, the clock, the column names, the
- * group names) and each pinned, and the callers still hand every name
- * over. Seen red with the column-name fillText deleted from iso.js
- * (count 5) and with the group's fillText made conditional on a floor. */
+ * group names, and since the client lane its name and each column's
+ * count) and each pinned, and the callers still hand every name over.
+ * Seen red with the column-name fillText deleted from iso.js (count 5),
+ * with the group's fillText made conditional on a floor, and with the
+ * lane's name drawn only when a lane count is nonzero. */
 static void test_grid_labels_all_drawn(void) {
     char *r = slice("  function gridRender(st) {", "  function gridOverlay(st) {");
     WT_ASSERT(r != NULL);
     if (!r) return;
     int n = 0;
     for (const char *q = strstr(r, "fillText("); q; q = strstr(q + 1, "fillText(")) n++;
-    WT_EQ(n, 6);
+    WT_EQ(n, 8);
     WT_HAS(r, "        g.fillText(o.empty || \"no data\", 16, 24);");
     WT_HAS(r, "        g.fillText(o.fmt ? o.fmt(tk[k]) : String(tk[k]), geo.L - 4, yy + 3);");
     WT_HAS(r, "        g.fillText(o.unit, 0, 0); g.restore();");
     WT_HAS(r, "        g.fillText(o.clock(o.from + k * o.col_s), x + 8, y + 3);");
     WT_HAS(r, "            g.fillText(lab, cx, base0 + 12);");
-    WT_HAS(r, "          if (gl && g.measureText(gl).width < z - a) { g.fillStyle = o.cols[gs].groupColor || T.ink; g.fillText(gl, (a + z) / 2, base0 + 29 + fy); }");
-    /* The floor strip only moves the group's rule and name down. */
-    WT_HAS(r, "      var geo = layout({ W: W, Hh: Hh, n: n, L: 44, R: 56, top: 14, bottom: (grouped ? 34 : 22) + fy, deep: n > 12 });");
+    WT_HAS(r, "          if (gl && g.measureText(gl).width < z - a) { g.fillStyle = o.cols[gs].groupColor || T.ink; g.fillText(gl, (a + z) / 2, base0 + 29 + fy + ly); }");
+    /* The floor strip and the lane only move the group's rule and name
+     * down. */
+    WT_HAS(r, "      var geo = layout({ W: W, Hh: Hh, n: n, L: 44, R: 56, top: 14, bottom: (grouped ? 34 : 22) + fy + ly, deep: n > 12 });");
+    WT_HAS(r, "        g.fillStyle = T.muted; g.textAlign = \"left\";\n        g.fillText(lane.name, 1, lcy + 3);");
+    WT_HAS(r, "          if (wide) { g.fillStyle = T.ink; g.fillText(lt, lx + rr + 2, lcy + 3); }");
+    WT_LACKS(r, "lmax > 0) g.fillText");
     WT_LACKS(r, "floor) g.fillText");
     free(r);
     const char *p = page();
     WT_HAS(p, "        return { label: r.key, short: r.key.replace(/^6g/, \"\"), group: BAND_WORD[r.band] || \"band unknown\",");
     WT_HAS(p, "        return { label: d.glyph + \" \" + d.label, short: d.glyph, floor: { color: hue }, cap: hue };");
+    WT_HAS(p, "      name: \"clients\", count: function (i) { return per[i].n; },");
     WT_HAS(p, "        return { label: r.name !== null ? r.name : shortAddr(r.addr), short: d.glyph,\n"
               "                 group: d.label, groupShort: d.glyph, groupColor: hue[i], floor: { color: hue[i] }, cap: hue[i] };");
 }
@@ -936,6 +1139,37 @@ static void test_paint_plain_path_unchanged(void) {
     free(m);
 }
 
+/* The client lane: its functions whole, the tooltip's line wired in, the
+ * fade the owner set ("when highlighting an ssid on the water fall make
+ * all the others 70 percent transparent", 2026-11-17) one constant that
+ * the SSID chips and the client pick both use, an SSID and a client
+ * never highlighted together, and every peer string (vendor, SSID,
+ * BSSID) text: the block holds no markup sink. Seen red with
+ * "innerHTML" added in a comment to clientKey(), with the SSID chip's
+ * "WF.pc = null" removed, and with ISO_FADE set back to 0.25. */
+static void test_client_lane_pinned(void) {
+    const char *p = page();
+    WT_HAS(p, W_ISO_CLIENTS);
+    WT_HAS(p, W_ISO_TIP_CLIENTS);
+    WT_HAS(p, "      [isoTipClients(r, at.k), true]\n    ].filter(function (l) { return l[0] !== \"\"; }), ev);");
+    WT_HAS(p, "  var ISO_FADE = 0.3;\n");
+    WT_LACKS(p, "  var ISO_FADE = 0.25;");
+    WT_HAS(p, "          if (WF.hl !== null) WF.pc = null;");
+    WT_HAS(p, "        if (WF.pc !== null) WF.hl = null;");
+    WT_HAS(p, "      lane: lane, pick: pick,");
+    WT_HAS(p, "fade every other one to 70 percent transparent, again to show all.");
+    char *b = slice("  // ── the client lane (owner 2026-11-17", "  // Hover: the column under the pointer");
+    WT_ASSERT(b != NULL);
+    if (b) {
+        static const char *const sinks[] = {
+            "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "setAttribute",
+            "eval(", "new Function",
+        };
+        for (size_t i = 0; i < sizeof(sinks) / sizeof(sinks[0]); i++) WT_LACKS(b, sinks[i]);
+        free(b);
+    }
+}
+
 void run_iso_tests(void) {
     WT_RUN(test_iso_module_pinned);
     WT_RUN(test_iso_grid_and_callers_pinned);
@@ -947,4 +1181,5 @@ void run_iso_tests(void) {
     WT_RUN(test_identity_tokens_both_themes);
     WT_RUN(test_grid_labels_all_drawn);
     WT_RUN(test_paint_plain_path_unchanged);
+    WT_RUN(test_client_lane_pinned);
 }

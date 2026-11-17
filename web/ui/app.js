@@ -3404,7 +3404,7 @@
   // /api/series with its baseline band. Channel keys, BSSIDs and SSIDs
   // are drawn with fillText or set with textContent, never as markup.
   var WF = { gen: 0, heat: null, mix: null, rows: [], cur: null, apEls: new Map(), geo: null,
-             g3max: {}, g3of: "", cl: [], clFrom: null, hl: null,
+             g3max: {}, g3of: "", cl: [], clFrom: null, hl: null, pc: null,
              iso: true, ist: { off: null, dirty: true, geo: null, hover: null, o: null } };
   var AP_SORTS = { "signal": 1, "last": 1, "ssids": 1, "karma": 1, "bssid": 1 };
   var BAND_WORD = { "2.4": "2.4 GHz", "5": "5 GHz", "6": "6 GHz" };
@@ -3526,6 +3526,8 @@
     "colour says which: the band a hue family on the floor strip, the band name and each column's top (2.4 GHz amber, " +
     "5 GHz teal-green, 6 GHz violet), the channel a shade within it (1, 6 and 11; the UNII sub-bands, DFS dashed; " +
     "6 GHz PSC), the column's body its busiest transmitters stacked in their SSIDs' colours, named in the key below; " +
+    "under the channel names a clients lane, a diamond under each channel clients were heard on, sized by how many, " +
+    "in their network's colour, the key's Clients buttons tracing one client's channels; " +
     "arrow keys pick a cell (left and right a channel, up older, down newer), the list below names it";
   function channelGrid() {
     var iso = WF.iso, hz = $("w-grid").value !== "mix";
@@ -3569,11 +3571,12 @@
     if (hz) set("w-heat-note", rows.length + " channels, " + hz.tier + " tier, " + fmt(hz.col_s) + " s cells, " +
                 unit + " 0 to " + fmt(hmax) + " (the window's largest cell)" + (hz.more ? ", more channels than shown" : ""));
     mixNote();
-    var cur = WF.cur, P = SlothIso.scheme(), hl = isoKey();
+    var cur = WF.cur, P = SlothIso.scheme(), hl = isoKey(), pc = isoClient();
     // The mix's cells line up with the heat's only on the same grid.
     var mx = !!(hz && WF.mix && WF.mix.from === hz.from && WF.mix.cols === hz.cols && WF.mix.col_s === hz.col_s);
     var sh = rows.map(function (r) { return chanShade(r.band, r.key); });
     var rc = sh.map(function (sc) { return chanColor(sc, P); });
+    var lane = mx ? clientLane(rows) : null, pick = mx && pc ? clientPick(pc, rows, cols, sh, P) : null;
     SlothIso.grid(c, WF.ist, {
       cols: rows.map(function (r, i) {
         return { label: r.key, short: r.key.replace(/^6g/, ""), group: BAND_WORD[r.band] || "band unknown",
@@ -3582,7 +3585,8 @@
       }),
       n: rows.length ? cols : 0, from: hz ? hz.from : 0, col_s: hz ? hz.col_s : 0,
       value: function (k, i) { var cl = rows[i].heat && rows[i].heat.cells; return cl ? cl[k] : null; },
-      segments: function (k, i) { return isoSegs(mx ? rows[i] : null, k, rc[i], mx ? hl : null); },
+      segments: function (k, i) { return isoSegs(mx ? rows[i] : null, k, rc[i], mx ? hl : null, pick ? pick.lit(k, i) : null); },
+      lane: lane, pick: pick,
       lo: 0, hi: hmax > 0 ? hmax : 1, ticks: hmax > 0 ? [0, hmax / 2, hmax] : [0], unit: unit, fmt: fmt,
       clock: hhmmss, sel: cur && cur.r < rows.length && cur.c < cols ? { k: cur.c, c: cur.r } : null,
       empty: hz ? "no channel in the window" : "loading"
@@ -3592,14 +3596,20 @@
   // A cell's column body, bottom up: its transmitters by share in their
   // colours, then the rest in the channel's shade; no detail, all of it
   // the channel's. hl: the SSID the key picked (null none); the others
-  // fade to a quarter.
-  var ISO_FADE = 0.25;
-  function isoSegs(r, k, base, hl) {
-    var m = r && r.mix && r.mix.cells ? r.mix.cells[k] : null, rest = hl === null ? 1 : ISO_FADE, out = [];
+  // fade. lit: with a client picked, whether the client was named in
+  // this cell (null: none picked); every cell it was not fades whole.
+  // ISO_FADE is what a faded segment keeps of its colour against the
+  // panel: owner 2026-11-17, "when highlighting an ssid on the water
+  // fall make all the others 70 percent transparent", so 0.3; the client
+  // pick fades by the same.
+  var ISO_FADE = 0.3;
+  function isoSegs(r, k, base, hl, lit) {
+    var m = r && r.mix && r.mix.cells ? r.mix.cells[k] : null, off = lit === false;
+    var rest = hl === null && !off ? 1 : ISO_FADE, out = [];
     if (!Array.isArray(m) || !num(m[0]) || m[0] <= 0) return [{ f: 1, color: base, alpha: rest }];
     for (var e = 2; e + 1 < m.length; e += 2) {
       var t = txOf(m[e]);
-      out.push({ f: m[e + 1] / m[0], color: txColor(t), alpha: hl === null || ssidOf(t) === hl ? 1 : ISO_FADE });
+      out.push({ f: m[e + 1] / m[0], color: txColor(t), alpha: !off && (hl === null || ssidOf(t) === hl) ? 1 : ISO_FADE });
     }
     if (num(m[1]) && m[1] > 0) out.push({ f: m[1] / m[0], color: base, alpha: rest });
     return out.length ? out : [{ f: 1, color: base, alpha: rest }];
@@ -3654,6 +3664,8 @@
         b.appendChild(el("span", "", o.ssid === "" ? "(hidden)" : o.ssid));
         b.addEventListener("click", function () {
           WF.hl = WF.hl === o.ssid ? null : o.ssid;
+          // One highlight at a time: an SSID drops a picked client.
+          if (WF.hl !== null) WF.pc = null;
           channelGrid();
           // The key is drawn anew: the focus back on the same chip.
           var again = $("w-iso-key").querySelectorAll("button.chip")[i];
@@ -3662,7 +3674,122 @@
       });
       if (list.length > ISO_SSIDS) grp.appendChild(el("span", "more", "+" + (list.length - ISO_SSIDS) + " more"));
     }
+    clientKey(box);
     return WF.hl;
+  }
+
+  // ── the client lane (owner 2026-11-17: "the spectrum should show where
+  // the clients sit in the spectrum highlighting their channel") ──
+  // The mix's "clients" (web_wifi.h): every client the window named,
+  // busiest first, each with its channels (frames and the cells it was
+  // named in, as hex) and its AP where sloth.db or the stream paired
+  // them. A client is named only in a bucket where it was one of the five
+  // busiest, so a count is a floor and a quiet client may be missing.
+  // Its colour is its AP's SSID's, so a network's clients group with its
+  // APs; with no AP known, its MAC's, as txColor() colours a client.
+  var ISO_CLIENTS = 12;
+  function clientsOf() {
+    var l = WF.mix && Array.isArray(WF.mix.clients) ? WF.mix.clients : [];
+    return l.filter(function (c) { return c && typeof c.id === "string" && Array.isArray(c.chans); });
+  }
+  function clientColor(c) {
+    var a = c.assoc, T = theme();
+    if (a && typeof a.ssid === "string" && num(a.ssid_k) && a.ssid_k >= 0 && a.ssid_k < 8) return T.k[a.ssid_k];
+    return keyColor(c.id);
+  }
+  // A client in words: its vendor and the MAC's last three octets,
+  // "randomised" for a locally administered MAC, and its AP's SSID.
+  function clientName(c) {
+    var s = (typeof c.vendor === "string" && c.vendor ? c.vendor + " " : "") + String(c.id).slice(-8);
+    if (c.laa) s += " randomised";
+    if (c.assoc && typeof c.assoc.ssid === "string") s += " \u2192 " + (c.assoc.ssid === "" ? "(hidden)" : c.assoc.ssid);
+    else if (c.assoc && typeof c.assoc.bssid === "string") s += " \u2192 " + c.assoc.bssid;
+    return s;
+  }
+  // Its entry for a channel key ([key, frames, hex]), or null; whether
+  // the hex names cell k (a digit four cells, the first the high bit).
+  function clientChan(c, key) {
+    for (var i = 0; i < c.chans.length; i++) if (Array.isArray(c.chans[i]) && c.chans[i][0] === key) return c.chans[i];
+    return null;
+  }
+  function clientIn(ch, k) {
+    var d = ch && typeof ch[2] === "string" ? parseInt(ch[2].charAt(k >> 2), 16) : NaN;
+    return num(d) && (d & (8 >> (k & 3))) !== 0;
+  }
+  // The picked client, dropped once a loaded mix no longer names it.
+  function isoClient() {
+    if (WF.pc === null) return null;
+    var c = clientsOf().find(function (x) { return x.id === WF.pc; }) || null;
+    if (!c && WF.mix) WF.pc = null;
+    return c;
+  }
+  // The lane under the floor strip: per channel, the clients the list
+  // names on it (the busiest one's colour), and a tick at the foot of
+  // each cell the row's "clients" says held one.
+  function clientLane(rows) {
+    var cls = clientsOf(), per = rows.map(function (r) {
+      var n = 0, first = null;
+      cls.forEach(function (c) { if (clientChan(c, r.key)) { n++; if (!first) first = c; } });
+      return { n: n, color: first ? clientColor(first) : null };
+    });
+    return {
+      name: "clients", count: function (i) { return per[i].n; },
+      color: function (i) { return per[i].color || theme().muted; },
+      foot: function (k, i) {
+        var cl = rows[i].mix && Array.isArray(rows[i].mix.clients) ? rows[i].mix.clients[k] : null;
+        return num(cl) && cl > 0 ? per[i].color || theme().muted : null;
+      }
+    };
+  }
+  // The pick: the client's channels traced in their band's colour, the
+  // cells it was named in outlined in its own; lit(k, i) for isoSegs().
+  function clientPick(c, rows, cols, sh, P) {
+    var on = rows.map(function (r) { return clientChan(c, r.key); }), cells = [], col = clientColor(c);
+    on.forEach(function (ch, i) {
+      for (var k = 0; ch && k < cols; k++) if (clientIn(ch, k)) cells.push({ k: k, c: i });
+    });
+    return {
+      cols: on.map(function (ch, i) { return ch ? i : -1; }).filter(function (i) { return i >= 0; }),
+      color: function (i) { return sh[i] ? P.band[sh[i].band][0] : P.muted; },
+      cells: cells, cellColor: col,
+      lit: function (k, i) { return clientIn(on[i], k); }
+    };
+  }
+  // The key's Clients group: the busiest ISO_CLIENTS, each a button that
+  // traces its channels and fades every cell it was not named in, until
+  // pressed again; a client and an SSID are not highlighted together.
+  function clientKey(box) {
+    var cls = clientsOf(), mx = WF.mix;
+    if (!mx || !Array.isArray(mx.clients)) return;
+    var grp = box.appendChild(el("span", "grp"));
+    grp.appendChild(el("span", "nm", "Clients"));
+    if (!cls.length) { grp.appendChild(el("span", "more", "none named in the window")); return; }
+    // A picked client the busiest no longer include keeps its chip, so
+    // the pick can always be undone where it was made.
+    var shown = cls.slice(0, ISO_CLIENTS);
+    if (WF.pc !== null && !shown.some(function (c) { return c.id === WF.pc; }))
+      shown = shown.concat(cls.filter(function (c) { return c.id === WF.pc; }));
+    shown.forEach(function (c, i) {
+      var on = WF.pc === c.id, b = grp.appendChild(el("button", "chip cl"));
+      b.type = "button";
+      b.ariaPressed = on ? "true" : "false";
+      b.title = (on ? "show every cell again" : "trace its channels, fade the rest") + "; " +
+        c.chans.map(function (ch) { return "ch " + ch[0] + " " + fmt(ch[1]); }).join(", ") + " frames";
+      var sw = el("span", "sw dia");
+      sw.style.backgroundColor = clientColor(c);
+      b.appendChild(sw);
+      b.appendChild(el("span", "", clientName(c)));
+      b.addEventListener("click", function () {
+        WF.pc = on ? null : c.id;
+        if (WF.pc !== null) WF.hl = null;
+        channelGrid();
+        var again = $("w-iso-key").querySelectorAll("button.chip.cl")[i];
+        if (again) again.focus();
+      });
+    });
+    var total = num(mx.clients_total) ? mx.clients_total : cls.length;
+    if (total > shown.length)
+      grp.appendChild(el("span", "more", "+" + (total - shown.length) + " more"));
   }
 
   // Hover: the column under the pointer named in the tooltip, as the
@@ -3678,9 +3805,26 @@
       [chanWord(chanShade(r.band, r.key)), true],
       [hhmmss(t0) + " to " + hhmmss(t0 + geo.col_s)],
       [num(v) ? fmt(v) + (WF.heat.metric === "wifi.ctrl_total" ? " control frames" : " APs") : "not observed"],
-      [Array.isArray(m) && num(m[0]) && m[0] > 0 ? fmt(m[0]) + " frames from its transmitters; click for the five" : "", true]
+      [Array.isArray(m) && num(m[0]) && m[0] > 0 ? fmt(m[0]) + " frames from its transmitters; click for the five" : "", true],
+      [isoTipClients(r, at.k), true]
     ].filter(function (l) { return l[0] !== ""; }), ev);
     SlothIso.grid(c, WF.ist);
+  }
+  // The tooltip's client line: the clients named in the cell (a floor),
+  // and with one picked, its frames there.
+  function isoTipClients(r, k) {
+    var cl = r.mix && Array.isArray(r.mix.clients) ? r.mix.clients[k] : null, s = "";
+    if (num(cl)) s = cl === 1 ? "1 client named here" : fmt(cl) + " clients named here";
+    var c = WF.pc !== null ? clientsOf().find(function (x) { return x.id === WF.pc; }) : null;
+    if (!c) return s;
+    var m = r.mix && r.mix.cells ? r.mix.cells[k] : null, f = null;
+    for (var e = 2; Array.isArray(m) && e + 1 < m.length; e += 2) {
+      var t = txOf(m[e]);
+      if (t && t.id === c.id) f = m[e + 1];
+    }
+    var w = clientName(c) + ": " + (num(f) ? fmt(f) + " frames here"
+      : clientIn(clientChan(c, r.key), k) ? "named here, its frames among the rest" : "not named here");
+    return s ? s + "; " + w : w;
   }
   function isoPick(ev) {
     var at = SlothIso.at($("w-heat"), WF.ist, ev);

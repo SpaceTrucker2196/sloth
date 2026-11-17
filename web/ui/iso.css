@@ -50,3 +50,5 @@ canvas.wfall.iso { cursor: crosshair; }
   background: none; border: 1px solid var(--rule); border-radius: var(--radius-sm); padding: 1px 6px; cursor: pointer; }
 .iso-key button.chip[aria-pressed="true"] { border-color: var(--signal); }
 .iso-key .more { color: var(--muted); }
+/* A client chip's swatch is a diamond, as the client lane's marks are. */
+.iso-key .sw.dia { transform: rotate(45deg) scale(0.8); border-radius: 1px; }

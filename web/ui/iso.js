@@ -18,7 +18,9 @@
 //   SlothIso.grid(cv, st, o)        a cell grid (columns across, time
 //                                   cells receding), axes and all; a
 //                                   column's floor, cap and segments
-//                                   coloured when the caller says
+//                                   coloured when the caller says; a
+//                                   lane of counts under the floor and
+//                                   a picked set of columns and cells
 //   SlothIso.at(cv, st, ev)         the grid cell under a pointer
 //   SlothIso.tip(box, lines, ev)    the hover tooltip's lines
 // A plain canvas, no library (the page's CSP loads none); every string
@@ -278,6 +280,16 @@
   //     (dashed with dash), its cap its top edge, a group's colour its
   //     name's; the margin under the front row grows for the strip, and
   //     every name is drawn as without it.
+  //     o.lane: {name, count(c) -> n, color(c), foot(k, c) -> a colour
+  //     or null} (the WiFi tab's clients, owner 2026-11-17): a row under
+  //     the floor strip, a diamond a column sized by its count against
+  //     the largest, the count beside it where it fits and the lane's
+  //     name at left; foot(k, c) a tick at the foot of that cell's
+  //     column. The group's rule and name move down under the lane.
+  //     o.pick: {cols: [c], color(c), cells: [{k, c}], cellColor}:
+  //     those columns' floors traced in color(c) and those cells
+  //     marked by a bar across their tops in cellColor (else their
+  //     column's), under the selection's outline.
   function gridRender(st) {
     return function (cv, dpr, W, Hh) {
       var o = st.o, g = cv.getContext("2d");
@@ -294,7 +306,9 @@
       }
       var grouped = o.cols.some(function (c) { return !!c.group; });
       var floored = o.cols.some(function (c) { return !!c.floor; }), fy = floored ? 7 : 0;
-      var geo = layout({ W: W, Hh: Hh, n: n, L: 44, R: 56, top: 14, bottom: (grouped ? 34 : 22) + fy, deep: n > 12 });
+      var lane = o.lane || null, ly = lane ? 14 : 0;
+      var geo = layout({ W: W, Hh: Hh, n: n, L: 44, R: 56, top: 14, bottom: (grouped ? 34 : 22) + fy + ly, deep: n > 12 });
+      geo.foot = 17 + fy + ly;
       st.geo = geo;
       // A scale with no extent (a caller's hi equal to its lo) is one
       // unit wide, so no tick, height or ridge is NaN.
@@ -319,7 +333,16 @@
           var v = o.value(i, c);
           return num(v) && span > 0 ? (v - o.lo) / span : 0;
         },
-        segments: o.segments, cap: o.cols.some(function (c) { return !!c.cap; }) ? function (c) { return o.cols[c].cap; } : null
+        segments: o.segments, cap: o.cols.some(function (c) { return !!c.cap; }) ? function (c) { return o.cols[c].cap; } : null,
+        after: lane && lane.foot ? function (i, x0, y0) {
+          // Drawn as each row goes down, so a nearer row hides it.
+          for (var fc = 0; fc < nc; fc++) {
+            var fcol = lane.foot(i, fc);
+            if (!fcol) continue;
+            g.fillStyle = fcol;
+            g.fillRect(x0 + (fc + 0.25) * PW / nc, y0 + 1, Math.max(1, PW / nc * 0.5), 2);
+          }
+        } : null
       });
       // The time axis up the right rail: a label a label height apart.
       g.fillStyle = T.muted; g.strokeStyle = T.rule; g.textAlign = "left";
@@ -343,6 +366,26 @@
         if (!fl.dash) { g.fillRect(fx, base0 + 15, Math.max(0.5, fz - fx), 4); continue; }
         for (var dx = fx; dx < fz; dx += 5) g.fillRect(dx, base0 + 15, Math.min(3, fz - dx), 4);
       }
+      if (lane) {
+        var lcy = base0 + 19 + fy, lmax = 0, lc;
+        for (lc = 0; lc < nc; lc++) lmax = Math.max(lmax, num(lane.count(lc)) ? lane.count(lc) : 0);
+        // At the left edge: the level axis's labels sit above it.
+        g.fillStyle = T.muted; g.textAlign = "left";
+        g.fillText(lane.name, 1, lcy + 3);
+        g.textAlign = "left";
+        for (lc = 0; lc < nc; lc++) {
+          var ln = lane.count(lc);
+          if (!num(ln) || ln <= 0) continue;
+          var lt = String(ln), ltw = g.measureText(lt).width, rr = Math.min(cw * 0.45, 2 + 3 * Math.sqrt(ln / lmax));
+          var lx = geo.L + (lc + 0.5) * cw, wide = cw >= ltw + 2 * rr + 4;
+          if (wide) lx -= (ltw + 2) / 2;
+          g.fillStyle = lane.color(lc);
+          g.beginPath(); g.moveTo(lx, lcy - rr); g.lineTo(lx + rr, lcy); g.lineTo(lx, lcy + rr); g.lineTo(lx - rr, lcy);
+          g.closePath(); g.fill();
+          if (wide) { g.fillStyle = T.ink; g.fillText(lt, lx + rr + 2, lcy + 3); }
+        }
+        g.textAlign = "center";
+      }
       for (var c = 0; c <= nc; c++) {
         if (c < nc) {
           var cx = geo.L + (c + 0.5) * cw, lab = o.cols[c].label, w = g.measureText(lab).width;
@@ -356,10 +399,10 @@
         if (grouped && (c === nc || (c > gs && o.cols[c].group !== o.cols[gs].group))) {
           var a = geo.L + gs * cw, z = geo.L + c * cw;
           g.strokeStyle = T.rule;
-          g.beginPath(); g.moveTo(a + 2, base0 + 18.5 + fy); g.lineTo(z - 2, base0 + 18.5 + fy); g.stroke();
+          g.beginPath(); g.moveTo(a + 2, base0 + 18.5 + fy + ly); g.lineTo(z - 2, base0 + 18.5 + fy + ly); g.stroke();
           var gl = o.cols[gs].group || "";
           if (gl && g.measureText(gl).width >= z - a && o.cols[gs].groupShort) gl = o.cols[gs].groupShort;
-          if (gl && g.measureText(gl).width < z - a) { g.fillStyle = o.cols[gs].groupColor || T.ink; g.fillText(gl, (a + z) / 2, base0 + 29 + fy); }
+          if (gl && g.measureText(gl).width < z - a) { g.fillStyle = o.cols[gs].groupColor || T.ink; g.fillText(gl, (a + z) / 2, base0 + 29 + fy + ly); }
           gs = c;
         }
       }
@@ -377,6 +420,27 @@
         var h = Math.max(2, geo.ridges[s.k][s.c] * geo.RH);
         g.strokeStyle = color; g.lineWidth = w;
         g.strokeRect(x0 + s.c * cw + 0.5, y0 - h + 0.5, Math.max(1, cw - 1), h);
+      }
+      var pk = o.pick, fk = geo.n - 1, cwp = geo.PW / geo.cols;
+      if (pk && geo.ridges[fk] && geo.ridges[0]) {
+        (pk.cols || []).forEach(function (c) {
+          if (!(c >= 0 && c < geo.cols)) return;
+          // The column's floor from the newest row to the oldest, and its
+          // slot under the front row down through the lane.
+          g.strokeStyle = pk.color(c); g.lineWidth = 3;
+          g.beginPath(); g.moveTo(geo.rowOx[fk] + (c + 0.5) * cwp, geo.rowOy[fk] + 2);
+          g.lineTo(geo.rowOx[0] + (c + 0.5) * cwp, geo.rowOy[0] + 2); g.stroke();
+          g.lineWidth = 2;
+          g.strokeRect(geo.L + c * cwp + 1, geo.base0 + 2, Math.max(1, cwp - 2), geo.foot || 17);
+        });
+        // A cell it was named in: a bar across its column's top, so a
+        // dense grid stays readable where outlines would not.
+        (pk.cells || []).forEach(function (s) {
+          if (!s || s.k < 0 || s.k >= geo.n || s.c < 0 || s.c >= geo.cols || !geo.ridges[s.k]) return;
+          var h = Math.max(2, geo.ridges[s.k][s.c] * geo.RH);
+          g.fillStyle = pk.cellColor || pk.color(s.c);
+          g.fillRect(geo.rowOx[s.k] + s.c * cwp + 0.5, geo.rowOy[s.k] - h - 1.5, Math.max(1, cwp - 1), 3);
+        });
       }
       cell(o.sel, T.signal, 2);
       var hv = st.hover;

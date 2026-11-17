@@ -369,6 +369,13 @@ static void test_records_feed_the_mix(void) {
     }
     WT_ASSERT(saw6g && saw6);
     uint8_t ap[6] = { 0x02, 0xde, 0, 0, 0, 0xa1 };
+    /* The assoc record pairs the station with its AP for the client
+     * lane (and nothing else of it reaches the mix). Seen red with the
+     * web_chmix_assoc() call removed from web_metrics.c. */
+    uint8_t sta[6] = { 0x02, 0xde, 0, 0, 0, 0x10 }, got[6] = { 0 };
+    WT_EQ(web_chmix_sta_bssid(&cm, sta, got), 1);
+    WT_ASSERT(!memcmp(got, ap, 6));
+    WT_EQ(web_chmix_sta_bssid(&cm, ap, got), 0);
     char ssid[WEB_CHMIX_SSID_MAX + 1];
     WT_EQ(web_chmix_ssid(&cm, ap, ssid), 1);
     WT_ASSERT(!strcmp(ssid, "demo\xef\xbf\xbdx"));
@@ -494,10 +501,10 @@ static void test_mix_route_from_memory(void) {
     WT_LACKS(r6, want);
     snprintf(want, sizeof(want), "[238,58,%d,40,", i1);
     WT_HAS(r6, want);
-    snprintf(want, sizeof(want), ",%d,32]]}", i5);
+    snprintf(want, sizeof(want), ",%d,32]],\"clients\":[", i5);
     WT_HAS(r6, want);
     WT_HAS(r6, "\"cells\":[null,");
-    WT_HAS(b, "\"shown\":3,\"more\":false,\"folded\":false,\"read_cut\":false}");
+    WT_HAS(b, "\"shown\":3,\"more\":false,\"folded\":false,\"read_cut\":false,\"clients\":[");
     /* The refusals. */
     WT_EQ(route(&H, "/api/wifi/channels", "mix=2"), 400);
     WT_HAS(body_of(g_out), "{\"error\":\"bad_mix\"}");
@@ -517,8 +524,10 @@ static void test_mix_route_from_memory(void) {
 
 /* The worst answer still fits: 64 channels, every cell of 96 holding
  * five transmitters of ten-digit counts and a ten-digit rest, every AP
- * named with an SSID that escapes every octet. The answer stops at a
- * whole row with "more", never mid-row, and never overflows. */
+ * named with an SSID that escapes every octet and every client paired
+ * with one. The answer stops at a whole row with "more", never mid-row,
+ * the client list at a whole client, and never overflows. Seen red with
+ * the list's bytes left out of the rows' fit test (a 503). */
 static void test_mix_route_worst_case_fits(void) {
     mem_up(0);
     uint8_t mac[6];
@@ -535,6 +544,13 @@ static void test_mix_route_worst_case_fits(void) {
                 web_chmix_add(&cm, k, mac, i % 2 ? WEB_TX_AP : WEB_TX_CLIENT,
                               3e9 + i, T - 3600 + col * 37 + 1);
                 if (i % 2) web_chmix_name(&cm, mac, name, T);
+                else {
+                    /* Every client paired with the next AP, so the
+                     * client list's entries carry that escaped SSID. */
+                    uint8_t apm[6];
+                    mac_n(apm, (n % 2000) + 1);
+                    web_chmix_assoc(&cm, mac, apm, T);
+                }
             }
     }
     web_chmix_close_all(&cm);
@@ -549,6 +565,117 @@ static void test_mix_route_worst_case_fits(void) {
     WT_HAS(b, "\"folded\":true");
     WT_HAS(b, "]}],\"shown\":");
     WT_LACKS(b, "\"shown\":0,");
+    /* The client list stops at its bytes, whole, before the answer's
+     * end: its own members follow it. */
+    WT_HAS(b, ",\"clients_more\":true,\"clients_cell_cut\":");
+    WT_HAS(b, "\"ssid_src\":\"stream\"}}],\"clients_total\":");
+    mem_down();
+}
+
+
+/* ── the client lane (owner 2026-11-17: "the spectrum should show where
+ * the clients sit in the spectrum highlighting their channel") ──────── */
+
+static void mac_g(uint8_t mac[6], int n) {
+    mac[0] = 0x00; mac[1] = 0x11; mac[2] = 0x22; mac[3] = 0;
+    mac[4] = (uint8_t)(n >> 8); mac[5] = (uint8_t)n;
+}
+
+/* The count of "{\"id\":" between the answer's "clients":[ and its end. */
+static int clients_listed(const char *b) {
+    const char *c = strstr(b, "\"clients\":[{");
+    const char *e = c ? strstr(c, "],\"clients_total\":") : NULL;
+    if (!c || !e) return 0;
+    int n = 0;
+    for (const char *q = c; q < e; q = q + 1) if (!strncmp(q, "{\"id\":", 6)) n++;
+    return n;
+}
+
+/* From memory: a row's "clients" is each cell's distinct clients named
+ * (null where the cell is), the list busiest first with the MAC, vendor,
+ * randomised flag, frames, bucket bounds, channels busiest first with
+ * their cells as hex, the index in "tx", and the AP the stream's assoc
+ * record named, coloured as that AP's own entry; an unassociated client
+ * says null, and an AP is never a client. Seen red with mix_client()
+ * not called (no counts, no list), with the laa test inverted, with the
+ * channel order unsorted (11 before 6), and with the stream fallback
+ * removed from client_json() (C1's assoc null). */
+static void test_mix_route_clients(void) {
+    mem_up(0);
+    uint8_t ap[6], c1[6], c2[6];
+    mac_n(ap, 0xa1);
+    mac_g(c1, 1);
+    mac_n(c2, 2);                       /* 02:...: locally administered */
+    /* 11 first, so the channels' busiest-first order is the answer's
+     * doing, not the order they were heard in. */
+    web_chmix_add(&cm, "11", c1, WEB_TX_CLIENT, 3, T - 600);
+    web_chmix_add(&cm, "6", ap, WEB_TX_AP, 50, T - 60);
+    web_chmix_name(&cm, ap, "home", T - 60);
+    web_chmix_add(&cm, "6", c1, WEB_TX_CLIENT, 9, T - 60);
+    web_chmix_add(&cm, "6", c2, WEB_TX_CLIENT, 4, T - 60);
+    web_chmix_assoc(&cm, c1, ap, T - 60);
+    web_chmix_close_all(&cm);
+    char q[200];
+    snprintf(q, sizeof(q), "mix=1&from=%lld&to=%lld&cols=60", T - 3600, T);
+    WT_EQ(route(&H, "/api/wifi/channels", q), 200);
+    const char *b = body_of(g_out);
+    const char *r6 = row_of(b, "6"), *r11 = row_of(b, "11");
+    WT_ASSERT(r6 && r11);
+    /* Column 59 holds the AP and both clients: 2 clients. */
+    WT_HAS(r6, "\"clients\":[null,");
+    WT_HAS(r6, ",2]}");
+    WT_HAS(r11, ",1,null,null,null,null,null,null,null,null,null]}");
+    int i1 = tx_index(b, "00:11:22:00:00:01");
+    WT_ASSERT(i1 >= 0);
+    char want[400];
+    snprintf(want, sizeof(want),
+             "\"clients\":[{\"id\":\"00:11:22:00:00:01\",\"vendor\":\"CIMSYS Inc\",\"laa\":false,"
+             "\"frames\":12,\"first\":%lld,\"last\":%lld,"
+             "\"chans\":[[\"6\",9,\"000000000000001\"],[\"11\",3,\"000000000000200\"]],"
+             "\"chans_more\":false,\"tx\":%d,\"assoc\":{\"bssid\":\"02:de:00:00:00:a1\","
+             "\"src\":\"stream\",\"ssid\":\"home\",\"ssid_k\":%d,\"ssid_np\":false,"
+             "\"ssid_src\":\"stream\"}}", T - 600, T - 50, i1, web_ssid_color("home"));
+    WT_HAS(b, want);
+    WT_HAS(b, "{\"id\":\"02:de:00:00:00:02\",\"vendor\":null,\"laa\":true,\"frames\":4,");
+    WT_HAS(b, "\"chans_more\":false,\"tx\":");
+    /* C2 has no AP: null, not the stream's pairing of another. */
+    const char *c2e = strstr(b, "{\"id\":\"02:de:00:00:00:02\",\"vendor\":null,\"laa\":true");
+    WT_ASSERT(c2e != NULL);
+    if (c2e) WT_ASSERT(!strncmp(strstr(c2e, ",\"assoc\":"), ",\"assoc\":null}", 14));
+    WT_EQ(clients_listed(b), 2);
+    WT_HAS(b, "],\"clients_total\":2,\"clients_more\":false,\"clients_cell_cut\":false,"
+              "\"clients_db_cut\":false}");
+    /* The AP is a transmitter, never a client. */
+    const char *cl = strstr(b, "\"clients\":[{");
+    WT_ASSERT(cl != NULL);
+    if (cl) WT_LACKS(cl, "{\"id\":\"02:de:00:00:00:a1\"");
+    /* The BLE mix carries no lane. */
+    mem_down();
+}
+
+/* The bounds: the list stops at 64 with "clients_more", the busiest
+ * kept; a cell past 32 clients says 32 and "clients_cell_cut". Seen red
+ * with MIX_CL_MAX's test removed (70 listed) and with the cell's cut
+ * flag never set. */
+static void test_mix_route_clients_bounds(void) {
+    mem_up(0);
+    uint8_t mac[6];
+    for (int i = 0; i < 70; i++) {
+        mac_g(mac, i + 1);
+        /* One a bucket, so every one is named: 70 in one cell. */
+        web_chmix_add(&cm, "1", mac, WEB_TX_CLIENT, 100 + i, T - 3590 + i * 10);
+    }
+    web_chmix_close_all(&cm);
+    char q[200];
+    snprintf(q, sizeof(q), "mix=1&from=%lld&to=%lld&cols=1", T - 3600, T);
+    WT_EQ(route(&H, "/api/wifi/channels", q), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "{\"key\":\"1\",\"band\":\"2.4\",");
+    WT_HAS(b, "\"clients\":[32]}");
+    WT_EQ(clients_listed(b), 64);
+    WT_HAS(b, "\"clients\":[{\"id\":\"00:11:22:00:00:46\",");      /* the busiest */
+    WT_LACKS(b, "{\"id\":\"00:11:22:00:00:06\",\"vendor\"");       /* the 65th */
+    WT_HAS(b, "],\"clients_total\":70,\"clients_more\":true,\"clients_cell_cut\":true,");
     mem_down();
 }
 
@@ -636,6 +763,63 @@ static void test_mix_route_from_the_store(void) {
     web_store_close(&st);
     const char *files[] = { "sloth.db", "slothweb.db", "slothweb.db-wal",
                             "slothweb.db-shm", "sloth.db-wal", "sloth.db-shm" };
+    for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+        snprintf(p, sizeof(p), "%s/%s", g_dir, files[i]);
+        unlink(p);
+    }
+    rmdir(g_dir);
+}
+
+/* The client lane's AP from sloth.db: its newest assocs row first (over
+ * the stream's pairing), named as the AP's own entry is (beacon_aps'
+ * octets, their colour); and with the read budget spent, every client's
+ * AP from the stream and "clients_db_cut". Seen red with client_json()
+ * preferring the stream, and with its web_sdb_spent() test removed
+ * (the expired answer still "sloth.db": the short statement finishes
+ * before the progress handler is asked). */
+static void test_mix_route_clients_db(void) {
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-clients-XXXXXX", test_tmpdir());
+    WT_ASSERT(mkdtemp(g_dir) != NULL);
+    char db[160], p[160];
+    snprintf(db, sizeof(db), "%s/sloth.db", g_dir);
+    WT_EQ(sdb_make(db, db_schema_version(), 0), 0);
+    WT_EQ(sdb_exec(db,
+        "INSERT INTO beacon_aps (bssid,ssid,first_seen,last_seen) VALUES"
+        " ('02:de:00:00:00:b2','dbnet',1,2);"
+        "INSERT INTO assocs (bssid,sta_mac,ssid,source,channel,signal_dbm,first_seen,last_seen)"
+        " VALUES ('02:de:00:00:00:b2','00:11:22:00:00:01','x',1,6,-50,1,2);"), 0);
+    web_slothdb_init(&sdb, db, NULL);
+    mem_up(0);
+    m4.sdb = &sdb;
+    uint8_t ap[6], c1[6];
+    mac_n(ap, 0xa1);
+    mac_g(c1, 1);
+    web_chmix_name(&cm, ap, "home", T - 60);
+    web_chmix_add(&cm, "6", c1, WEB_TX_CLIENT, 9, T - 60);
+    web_chmix_assoc(&cm, c1, ap, T - 60);
+    web_chmix_close_all(&cm);
+    char q[200], want[300];
+    snprintf(q, sizeof(q), "mix=1&from=%lld&to=%lld&cols=60", T - 3600, T);
+    WT_EQ(route(&H, "/api/wifi/channels", q), 200);
+    const char *b = body_of(g_out);
+    snprintf(want, sizeof(want), ",\"assoc\":{\"bssid\":\"02:de:00:00:00:b2\",\"src\":\"sloth.db\","
+             "\"ssid\":\"dbnet\",\"ssid_k\":%d,\"ssid_np\":false,\"ssid_src\":\"sloth.db\"}}",
+             web_ssid_color("dbnet"));
+    WT_HAS(b, want);
+    WT_HAS(b, "\"clients_db_cut\":false}");
+    web_wifi_test_expire = 1;
+    WT_EQ(route(&H, "/api/wifi/channels", q), 200);
+    web_wifi_test_expire = 0;
+    b = body_of(g_out);
+    snprintf(want, sizeof(want), ",\"assoc\":{\"bssid\":\"02:de:00:00:00:a1\",\"src\":\"stream\","
+             "\"ssid\":\"home\",\"ssid_k\":%d,\"ssid_np\":false,\"ssid_src\":\"stream\"}}",
+             web_ssid_color("home"));
+    WT_HAS(b, want);
+    WT_LACKS(b, "02:de:00:00:00:b2");
+    WT_HAS(b, "\"clients_db_cut\":true}");
+    mem_down();
+    web_slothdb_destroy(&sdb);
+    const char *files[] = { "sloth.db", "sloth.db-wal", "sloth.db-shm" };
     for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
         snprintf(p, sizeof(p), "%s/%s", g_dir, files[i]);
         unlink(p);
@@ -853,6 +1037,8 @@ void run_chmix_tests(void) {
     WT_RUN(test_records_feed_the_mix);
     WT_RUN(test_mix_route_from_memory);
     WT_RUN(test_mix_route_worst_case_fits);
+    WT_RUN(test_mix_route_clients);
+    WT_RUN(test_mix_route_clients_bounds);
     WT_RUN(test_mix_on_health);
     WT_RUN(test_ticker_ssid_escaped);
     WT_RUN(test_alert_text_escaped);
@@ -860,5 +1046,6 @@ void run_chmix_tests(void) {
 #ifdef WITH_SQLITE
     WT_RUN(test_mix_route_from_the_store);
     WT_RUN(test_every_db_ssid_is_escaped);
+    WT_RUN(test_mix_route_clients_db);
 #endif
 }

@@ -146,6 +146,16 @@ typedef struct {
     char      ssid[WEB_CHMIX_SSID_MAX + 1];
 } web_mix_name_t;
 
+/* A station's AP as the stream's assoc records paired them (2026-11-17,
+ * the WiFi view's client lane): the newest pairing per station, a table
+ * of WEB_CHMIX_NAMES, least recently heard out first. Like the names,
+ * never written to slothweb.db. */
+typedef struct {
+    uint8_t   sta[6], bssid[6];
+    int       used;
+    long long seen;
+} web_mix_assoc_t;
+
 typedef struct {
     unsigned long long samples;
     unsigned long channel_evictions, ring_overwritten, queue_dropped;
@@ -168,6 +178,7 @@ typedef struct web_chmix {
     web_mix_row_t  *queue;
     size_t          q_head, q_n;
     web_mix_name_t  names[WEB_CHMIX_NAMES];
+    web_mix_assoc_t assoc[WEB_CHMIX_NAMES];
     web_chmix_stats_t st;
 } web_chmix_t;
 
@@ -191,6 +202,12 @@ void web_chmix_name(web_chmix_t *c, const uint8_t mac[6], const char *ssid,
                     long long now_s);
 /* 1 and the name into out (WEB_CHMIX_SSID_MAX + 1) when known. */
 int  web_chmix_ssid(web_chmix_t *c, const uint8_t mac[6], char *out);
+
+/* The stream's assoc record paired sta with bssid at now_s; and the
+ * newest such bssid of sta into bssid (1 when known). */
+void web_chmix_assoc(web_chmix_t *c, const uint8_t sta[6], const uint8_t bssid[6],
+                     long long now_s);
+int  web_chmix_sta_bssid(web_chmix_t *c, const uint8_t sta[6], uint8_t bssid[6]);
 
 /* Close every open bucket whose interval ended at or before now_s. */
 void web_chmix_close_due(web_chmix_t *c, long long now_s);
