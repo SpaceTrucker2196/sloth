@@ -20,7 +20,7 @@
   var H = null;
   var POLL_MS = 10000;
   var HIST_MS = 60000;
-  var S = { gen: 0, timer: 0, hours: 24, hist: {} };
+  var S = { gen: 0, timer: 0, hours: 24, hist: {}, late: [] };
 
   function $(id) { return document.getElementById(id); }
   function num(v) { return typeof v === "number" && isFinite(v); }
@@ -220,7 +220,12 @@
     wrap.appendChild(cap);
     box.appendChild(wrap);
     var key = histKey(mac, metric), e = S.hist[key];
-    if (e && e.j) paintChart(c, cap, e.j); else cap.textContent = "loading " + metric;
+    // A cached chart is painted once its card is on the page: here the
+    // canvas is not attached yet, has no width, and paintChart() would
+    // draw nothing - which is how every chart went blank on the poll
+    // after its first paint and stayed blank until the cache expired.
+    if (e && e.j) S.late.push(function () { paintChart(c, cap, e.j); });
+    else cap.textContent = "loading " + metric;
     if (e && Date.now() - e.at < HIST_MS) return;
     S.hist[key] = { at: Date.now(), j: e ? e.j : null };
     H.getJSON(histPath(mac, metric)).then(function (j) {
@@ -278,7 +283,12 @@
     var box = clear($("vc-cards"));
     if (!box) return;
     var ds = (j && !j.out_of_scope && j.devices) || [];
+    S.late = [];
     for (var i = 0; i < ds.length; i++) box.appendChild(card(ds[i]));
+    // The cards are attached now: paint the charts that had their data.
+    var late = S.late;
+    S.late = [];
+    for (var k = 0; k < late.length; k++) late[k]();
   }
 
   function load() {

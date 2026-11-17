@@ -486,6 +486,18 @@ static void test_victron_page(void) {
     WT_HAS(p, "        dl.appendChild(el(\"dd\", d.stale ? \"vc-old\" : null, f[i][1]));");
     /* The chart is glyph.paint()'s, from a pure mark list. */
     WT_HAS(p, "    glyph.paint(c, marks(pts, { w: c.clientWidth, h: c.clientHeight, from: from, to: to,");
+    /* A chart with cached data is painted after its card is attached,
+     * never at build time when the canvas has no width (2026-11-16: the
+     * charts went blank on every poll between two history fetches). */
+    WT_HAS(p, "    if (e && e.j) S.late.push(function () { paintChart(c, cap, e.j); });\n"
+              "    else cap.textContent = \"loading \" + metric;");
+    WT_HAS(p, "    S.late = [];\n"
+              "    for (var i = 0; i < ds.length; i++) box.appendChild(card(ds[i]));\n"
+              "    // The cards are attached now: paint the charts that had their data.\n"
+              "    var late = S.late;\n"
+              "    S.late = [];\n"
+              "    for (var k = 0; k < late.length; k++) late[k]();");
+    WT_ASSERT(strstr(p, "if (e && e.j) paintChart(c, cap, e.j);") == NULL);
     const char *s = strstr(p, "// slothweb: the Victron tab");
     const char *m = strstr(p, "    chartCaption: chartCaption\n  };\n})();");
     WT_ASSERT(s && m && s < m);
