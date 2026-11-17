@@ -62,7 +62,11 @@ static inline int test_tmp_path(char *buf, size_t sz, const char *name) {
  * "<tmpdir>/<name>" the first time (buf still empty) and returns buf,
  * so `mkstemp(test_tmp_tpl(buf, sizeof(buf), "x_XXXXXX"))` reads the
  * way the old `static char buf[] = "/tmp/x_XXXXXX"` did. A test that
- * puts the XXXXXX back after use and calls it again keeps its path. */
+ * puts the XXXXXX back after use and calls it again keeps its path.
+ * A buffer on the stack must start as "": an uninitialized one whose
+ * first byte happens to be non-zero is returned as it is, garbage, as
+ * a path (#209: test_twin_field's jsonl_open and test_jsonl's db_open,
+ * refused intermittently in CI). */
 static inline char *test_tmp_tpl(char *buf, size_t sz, const char *name) {
     if (!buf[0] && test_tmp_path(buf, sz, name) != 0) buf[0] = '\0';
     return buf;
