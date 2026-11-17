@@ -146,6 +146,8 @@ CORE_BASE_SRCS = \
        src/dga.c             \
        src/wifi_oui_attacker.c \
        src/wifi_chanhop.c    \
+       src/df.c              \
+       src/capture/df_radio.c \
        src/auth_track.c      \
        src/action_snoop.c    \
        src/ctrl_frames.c     \

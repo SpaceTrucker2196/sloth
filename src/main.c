@@ -120,6 +120,8 @@
 #include "privdrop.h"
 #include "scan.h"
 #include "capture/probe.h"     /* self-stubbing without WITH_PCAP */
+#include "capture/df_radio.h"  /* --df-iface: the direction-finding radios */
+#include "df.h"
 #ifdef WITH_PCAP
 #  include "evidence_ring.h"   /* raw 802.11 evidence ring (#92) */
 #endif
@@ -201,6 +203,16 @@ static void chanhop_drive(sloth_state_t *s) {
     /* Tick, retune, feed the ack back, publish: src/wifi_chanhop.c, so
      * the loop is testable through the fake platform (#91). */
     chanhop_service(&g_chanhop, s, now_ms, delta);
+#ifdef WITH_PCAP
+    /* The --df-iface radios follow the sensor radio's confirmed channel
+     * (src/capture/df_radio.h): a level is comparable only between
+     * radios that heard the same transmission. */
+    static int df_followed = 0;
+    if (df_radio_open_count() && s->chan_confirmed != df_followed) {
+        df_followed = s->chan_confirmed;
+        df_radio_follow(chanhop_current_freq(&g_chanhop));
+    }
+#endif
 }
 #endif
 
@@ -627,6 +639,20 @@ static void print_usage(const char *argv0) {
             "                     fallback. [m] cannot retarget away from\n"
             "                     it. Not part of the --iface allow-list,\n"
             "                     which does not reach the monitor radio.\n"
+            "  --df-iface NAME[@METRES]\n"
+            "                     direction finding: also listen on NAME, a\n"
+            "                     second monitor-mode radio (repeatable, up\n"
+            "                     to 3). Only the transmitter address and\n"
+            "                     signal level of its frames are read, into\n"
+            "                     a per-radio table; no frame from it reaches\n"
+            "                     a detector, count or alert. @METRES is the\n"
+            "                     radio's place along a straight baseline.\n"
+            "                     Under --hop these radios are retuned with\n"
+            "                     the sensor radio; without it, park them on\n"
+            "                     its channel. Receive-only. Output: the\n"
+            "                     wifi_df and df_radio records.\n"
+            "  --df-origin METRES the sensor radio's own place on that\n"
+            "                     baseline (default 0).\n"
             "  --no-discovery     suppress the mDNS advertisement of the data\n"
             "                     socket. By default, when --data-socket is bound\n"
             "                     to a routable (non-loopback) TCP address, sloth\n"
@@ -839,6 +865,13 @@ int main(int argc, char **argv) {
     int         allow_iface_count = 0;
     int         monitor_only = 0;        /* --monitor-only (#35) */
     const char *monitor_iface = NULL;    /* --monitor-iface NAME */
+    /* --df-iface NAME[@METRES], repeatable: the radios beside the
+     * sensor radio (src/df.h). --df-origin METRES is the sensor radio's
+     * own place on the baseline. */
+    const char *df_specs[DF_MAX_RADIOS - 1];
+    int         df_spec_n = 0;
+    int         df_origin_set = 0;
+    double      df_origin_m = 0;
     int         bt_monitor   = 0;        /* --bt-monitor (#144 slice 2) */
     const char *bt_capture   = NULL;     /* --bt-capture PATH (#144 slice 3) */
     int         ble_rotation_hints = 0;  /* --ble-rotation-hints (#156) */
@@ -969,6 +1002,36 @@ int main(int argc, char **argv) {
                 return 2;
             }
             monitor_iface = n;
+        } else if (!strcmp(argv[i], "--df-iface") && i + 1 < argc) {
+            const char *sp = argv[++i];
+            char n[16]; int hp; double pm;
+            if (!df_parse_spec(sp, n, (int)sizeof(n), &hp, &pm)) {
+                fprintf(stderr, "sloth: --df-iface %s: want NAME or "
+                                "NAME@METRES (an interface name of 1..15 "
+                                "chars, metres within +/-1000)\n", sp);
+                return 2;
+            }
+            if (bt_dev_is_raw_hci(n)) {
+                fprintf(stderr, "sloth: --df-iface %s refused: a raw HCI "
+                                "device accepts injected packets\n", n);
+                return 2;
+            }
+            if (df_spec_n >= DF_MAX_RADIOS - 1) {
+                fprintf(stderr, "sloth: too many --df-iface radios (max %d "
+                                "beside the sensor radio)\n", DF_MAX_RADIOS - 1);
+                return 2;
+            }
+            df_specs[df_spec_n++] = sp;
+        } else if (!strcmp(argv[i], "--df-origin") && i + 1 < argc) {
+            char n[16]; int hp; double pm; char sp[64];
+            snprintf(sp, sizeof(sp), "x@%s", argv[++i]);
+            if (!df_parse_spec(sp, n, (int)sizeof(n), &hp, &pm)) {
+                fprintf(stderr, "sloth: --df-origin %s: want metres within "
+                                "+/-1000\n", argv[i]);
+                return 2;
+            }
+            df_origin_set = 1;
+            df_origin_m = pm;
         } else if (!strcmp(argv[i], "--monitor-only")) {
             monitor_only = 1;
         } else if (!strcmp(argv[i], "--bt-monitor")) {
@@ -1236,12 +1299,24 @@ int main(int argc, char **argv) {
     char replay_paths[REPLAY_MAX_FILES][REPLAY_PATH_MAX];
     int  replay_count = 0;
 #ifndef WITH_PCAP
+    /* Only the capture build reads these two. */
+    (void)df_specs; (void)df_origin_m;
+    if (df_spec_n || df_origin_set) {
+        fprintf(stderr, "sloth: --df-iface needs a build with libpcap "
+                        "(this one is WITH_PCAP=0)\n");
+        return 2;
+    }
     if (monitor_iface) {
         fprintf(stderr, "sloth: --monitor-iface needs a build with libpcap "
                         "(this one is WITH_PCAP=0)\n");
         return 2;
     }
 #endif
+    if (replay_arg && (df_spec_n || df_origin_set)) {
+        fprintf(stderr, "sloth: --df-iface names live radios; it cannot be "
+                        "combined with --replay\n");
+        return 2;
+    }
     if (replay_arg) {
 #ifndef WITH_PCAP
         fprintf(stderr, "sloth: --replay needs a build with libpcap "
@@ -1430,6 +1505,50 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "sloth: --monitor-iface: %s; no monitor "
                                 "capture, no fallback to another radio\n",
                         g_state.probe_err);
+        }
+        /* --df-iface (src/df.h): opened here for the reason the sensor
+         * radio is, the capability the drop below gives up. Announced
+         * radio by radio (MISSION section 2); one that cannot be opened
+         * is left out and the run continues, and with no sensor radio
+         * there is nothing to compare against, so none is opened. */
+        if (df_spec_n && !g_state.probe_iface[0]) {
+            fprintf(stderr, "sloth: --df-iface: no sensor radio is open, so "
+                            "no direction-finding radio was opened\n");
+        } else if (df_spec_n) {
+            int positions = df_origin_set;
+            for (int k = 0; k < df_spec_n; k++)
+                if (strchr(df_specs[k], '@')) positions = 1;
+            df_reset();
+            /* The sensor radio is radio 0; with any position given and
+             * no --df-origin it sits at 0 m. */
+            df_radio_add(g_state.probe_iface, positions, df_origin_m);
+            for (int k = 0; k < df_spec_n; k++) {
+                char n[16], why[96]; int hp; double pm;
+                if (!df_parse_spec(df_specs[k], n, (int)sizeof(n), &hp, &pm)) continue;
+                if (!strcmp(n, g_state.probe_iface)) {
+                    fprintf(stderr, "sloth: --df-iface %s is the sensor radio; "
+                                    "left out\n", n);
+                    continue;
+                }
+                int idx = df_radio_add(n, hp, pm);
+                if (idx < 0) {
+                    fprintf(stderr, "sloth: --df-iface %s given twice; left "
+                                    "out\n", n);
+                    continue;
+                }
+                if (df_radio_open(idx, n, why, sizeof(why)))
+                    fprintf(stderr, "sloth: --df-iface: %s opened beside %s "
+                                    "(receive-only; signal levels only, no "
+                                    "frame from it reaches a detector)\n",
+                            n, g_state.probe_iface);
+                else
+                    fprintf(stderr, "sloth: --df-iface: %s; that radio is "
+                                    "not used\n", why);
+            }
+            if (!g_hop_enabled && df_radio_open_count())
+                fprintf(stderr, "sloth: --df-iface without --hop: nothing "
+                                "retunes these radios; park them on the "
+                                "sensor radio's channel\n");
         }
         /* #144 slice 2: beside the IP handle and for the same reason —
          * binding the monitor channel needs CAP_NET_RAW, which the drop
@@ -1711,6 +1830,7 @@ int main(int argc, char **argv) {
         }
     }
     probe_run();
+    df_radio_run();
     bt_monitor_run();
     bt_capture_run();   /* after the drop: opens as the run's account */
 #endif
@@ -1810,6 +1930,7 @@ int main(int argc, char **argv) {
     if (!headless) tui_cleanup();
     gps_reader_stop();
 #ifdef WITH_PCAP
+    df_radio_stop();
     probe_stop();
     capture_stop();
     bt_monitor_stop();

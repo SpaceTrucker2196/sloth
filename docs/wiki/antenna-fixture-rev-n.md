@@ -416,7 +416,10 @@ single `monitor_iface`; the `wifi_merged` record carries one
 scopes the **IP** capture only — the 802.11 monitor radio sits outside
 its allow-list by owner ruling (2026-10-04). `src/position_track.h`
 says it in one line: sloth has one antenna and no bearing. A second
-and third adapter plugged into the same sloth are ignored.
+and third adapter plugged into the same sloth are ignored by the
+sensor. Since 2026-11-16 `--df-iface` reads them for signal levels
+only ([[direction-finding]]): the loudest sector per transmitter, with
+no sector field and no bearing yet.
 
 So the three sectors reach sloth in one of two ways:
 

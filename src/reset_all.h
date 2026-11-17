@@ -52,6 +52,7 @@
     X(dashboard_info_clear) \
     X(data_socket_cleanup) \
     X(db_close) \
+    X(df_reset) \
     X(dev_how_clear) \
     X(deauth_clear) \
     X(dhcp_snoop_clear) \

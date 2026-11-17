@@ -14,6 +14,8 @@
 #include "netstr.h"
 #include "tune.h"
 #include "capture/probe.h"
+#include "capture/df_radio.h"
+#include "df.h"
 #include "alerts.h"
 #include "attack_hw.h"
 #include "wired_attach.h"
@@ -1569,6 +1571,92 @@ void jsonl_emit_wifi_merged(const sloth_state_t *s) {
     }
 }
 
+/* Direction finding (src/df.h, --df-iface). `df_radio`: one line per
+ * radio, change-only on whether it is open, running, hearing anything
+ * and has refused a retune - never the frame count, which moves every
+ * tick. `wifi_df`: one line per transmitter two or more radios hold a
+ * fresh level for, change-only on which radio is loudest, the quality
+ * word, the margin in 3 dB bands and the baseline point in 0.25 m
+ * bands; the levels themselves ride the line and do not sign it. */
+#define DF_EMIT_MAX 128
+void jsonl_emit_wifi_df(const sloth_state_t *s) {
+    if (!any_sink() || !s || !df_active()) return;
+    time_t now = sloth_wall();
+    int nr = df_radio_count();
+    df_radio_t radios[DF_MAX_RADIOS];
+    for (int i = 0; i < nr; i++) {
+        df_radio_health_t h;
+        memset(&h, 0, sizeof(h));
+        if (!df_radio_get(i, &radios[i])) { nr = i; break; }
+        /* Radio 0 is the sensor radio (probe.c); the others are
+         * df_radio.c's, one place down in its table. */
+        int aux = i > 0 && df_radio_health(i - 1, &h);
+        uint64_t sig = FNV64_OFFSET;
+        int st[5] = { i == 0 || h.open, i == 0 || h.running,
+                      radios[i].frames > 0, h.retune_failures > 0,
+                      radios[i].calibrated ? (int)floor(radios[i].bias_db / 3.0 + 0.5)
+                                           : 1 << 30 };
+        sig = fnv1a(st, sizeof(st), sig);
+        uint8_t key[2] = { (uint8_t)i, 0 };
+        if (!jsonl_changed(JD_DF_RADIO, key, sizeof(key), sig, now)) continue;
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "df_radio", now);
+        kv_int(buf, LINEBUF, &off, "radio", i);
+        kv_str(buf, LINEBUF, &off, "iface", radios[i].iface);
+        kv_str(buf, LINEBUF, &off, "role", i == 0 ? "sensor" : "df");
+        if (radios[i].has_pos) kv_double(buf, LINEBUF, &off, "pos_m", radios[i].pos_m);
+        kv_int(buf, LINEBUF, &off, "open", st[0]);
+        kv_int(buf, LINEBUF, &off, "running", st[1]);
+        kv_int(buf, LINEBUF, &off, "noted", (long long)radios[i].frames);
+        if (i > 0 && radios[i].calibrated)
+            kv_double(buf, LINEBUF, &off, "bias_db", radios[i].bias_db);
+        if (aux) {
+            kv_int(buf, LINEBUF, &off, "frames", (long long)h.frames);
+            kv_int(buf, LINEBUF, &off, "rejects", (long long)h.rejects);
+            kv_int(buf, LINEBUF, &off, "retune_failures", (long long)h.retune_failures);
+        }
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+    static df_est_t est[DF_EMIT_MAX];
+    int n = df_snapshot(est, DF_EMIT_MAX, now);
+    for (int i = 0; i < n; i++) {
+        const df_est_t *e = &est[i];
+        int mask = 0;
+        for (int r = 0; r < nr; r++) if (e->has[r]) mask |= 1 << r;
+        int st[5] = { (int)e->quality, e->best_radio, mask,
+                      (int)(e->margin_db / 3.0),
+                      e->has_along ? (int)floor(e->along_m / 0.25 + 0.5) : 1 << 30 };
+        uint64_t sig = fnv1a(st, sizeof(st), FNV64_OFFSET);
+        if (!jsonl_changed(JD_WIFI_DF, e->mac, 6, sig, now)) continue;
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "wifi_df", now);
+        kv_mac(buf, LINEBUF, &off, "mac", e->mac);
+        kv_int(buf, LINEBUF, &off, "channel", e->channel);
+        kv_int(buf, LINEBUF, &off, "heard_by", e->heard_by);
+        kv_str(buf, LINEBUF, &off, "quality", df_quality_name(e->quality));
+        kv_int(buf, LINEBUF, &off, "best_radio", e->best_radio);
+        if (e->best_radio >= 0 && e->best_radio < nr)
+            kv_str(buf, LINEBUF, &off, "best_iface", radios[e->best_radio].iface);
+        kv_double(buf, LINEBUF, &off, "margin_db", e->margin_db);
+        if (e->has_along) kv_double(buf, LINEBUF, &off, "along_m", e->along_m);
+        appendf(buf, LINEBUF, &off, ",\"rssi\":[");
+        for (int r = 0; r < nr; r++) {
+            if (e->has[r]) appendf(buf, LINEBUF, &off, "%s%.1f", r ? "," : "", e->rssi[r]);
+            else           appendf(buf, LINEBUF, &off, "%snull", r ? "," : "");
+        }
+        appendf(buf, LINEBUF, &off, "],\"level\":[");
+        for (int r = 0; r < nr; r++) {
+            if (e->has[r]) appendf(buf, LINEBUF, &off, "%s%.1f", r ? "," : "", e->level[r]);
+            else           appendf(buf, LINEBUF, &off, "%snull", r ? "," : "");
+        }
+        appendf(buf, LINEBUF, &off, "]");
+        kv_int(buf, LINEBUF, &off, "last_seen", (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 /* ── sensor_health (#91 slice 3) ─────────────────────────────
  *
  * One singleton record per tick, carrying what slices 1 and 2 collect.
@@ -2627,6 +2715,7 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_ifaces            (s);
     jsonl_emit_sensors           (s);
     jsonl_emit_wifi_merged       (s);
+    jsonl_emit_wifi_df           (s);
     jsonl_emit_arp               (s);
     jsonl_emit_dhcp_leases       (s);
     jsonl_emit_wifi_aps          (s);

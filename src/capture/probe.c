@@ -17,6 +17,7 @@
 #include "capture/frame_edge.h"  /* the pcap-edge gate (#141) */
 #include "dot11_ie.h"            /* dot11_ie_ssid (#127) */
 #include "radiotap.h"
+#include "df.h"                  /* radio 0 of the direction-finding table */
 #include "rf_quality.h"
 #include "rf_distance.h"
 #include "beacon_snoop.h"
@@ -483,6 +484,16 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     const int     full = dot11_frame_decode(dot11, dot11_len, &hints, &fr);
     const uint8_t type = fr.type;
     const uint8_t sub  = fr.subtype;
+
+    /* Direction finding (df.h): with a --df-iface radio beside this one,
+     * the level this radio heard the transmitter at is radio 0's
+     * reading. A frame that failed its FCS names nobody reliably. The
+     * host's clock, as the other radios' notes (df_radio.c). */
+    if (df_active() && !rt.bad_fcs) {
+        uint8_t df_ta[6];
+        if (df_frame_ta(dot11, dot11_len, df_ta))
+            df_note(0, df_ta, signal, channel, sloth_wall());
+    }
 
     /* Per-channel RF quality (roadmap B3). The retry bit is Frame
      * Control byte 1 bit 3; the FCS-failed flag came from radiotap.

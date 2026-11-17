@@ -39,7 +39,7 @@ enum { JD_PNL = 1, JD_SEQNUM, JD_SENSOR_HEALTH, JD_WIFI_REG,
        JD_BLE_DEVICE, JD_BLE_ALERT, JD_GNSS_FIX, JD_GNSS_SKY, JD_GNSS_SAT,
        JD_ADSB_AIRCRAFT, JD_APRS_STATION, JD_RTL433_DEVICE, JD_OWNERSHIP,
        JD_KARMA_SUSPECT, JD_HARVEST_STA, JD_HARVEST_CHAIN,
-       JD_VICTRON_DEVICE };
+       JD_VICTRON_DEVICE, JD_WIFI_DF, JD_DF_RADIO };
 
 /* Sized for the hostile worst case, not the typical one. Beacon and
  * PNL records carry attacker-chosen SSID / WPS strings that
