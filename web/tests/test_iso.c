@@ -78,6 +78,7 @@ static const char PAINT[] =
         "      cap.push(css(heatRGB(T, k / 64)));\n"
         "    }\n"
         "    var gp = o.gap ? Math.min(o.gap, PW / cols * 0.2) : 0;\n"
+        "    var seg = o.segments ? segPainter(g, T, dense) : null, capOf = o.cap ? colorCache(g) : null;\n"
         "    var every = n <= 24 ? 1 : Math.ceil(n / 24);\n"
         "    for (var r = 0; r < n; r++) {\n"
         "      var idx = order[r], d = o.depth(idx), x0 = ox(geo, d), y0 = oy(geo, d), ridge = new Float32Array(cols);\n"
@@ -88,9 +89,14 @@ static const char PAINT[] =
         "        ridge[c] = f;\n"
         "        var hpx = f * RH;\n"
         "        if (hpx < 0.5) continue;\n"
-        "        g.fillStyle = pal[Math.round(f * 64)];\n"
-        "        g.fillRect(x0 + c * PW / cols + gp, y0 - hpx, PW / cols + 0.6 - 2 * gp, hpx);\n"
-        "        if (dense) { g.fillStyle = cap[Math.round(f * 64)]; g.fillRect(x0 + c * PW / cols + gp, y0 - hpx, PW / cols + 0.6 - 2 * gp, Math.min(1.5, hpx)); }\n"
+        "        var sg = seg ? o.segments(idx, c) : null, cc = capOf ? capOf(o.cap(c)) : null;\n"
+        "        if (sg && sg.length) seg(sg, f, x0 + c * PW / cols + gp, y0, PW / cols + 0.6 - 2 * gp, hpx);\n"
+        "        else {\n"
+        "          g.fillStyle = pal[Math.round(f * 64)];\n"
+        "          g.fillRect(x0 + c * PW / cols + gp, y0 - hpx, PW / cols + 0.6 - 2 * gp, hpx);\n"
+        "        }\n"
+        "        if (cc) { g.fillStyle = cc; g.fillRect(x0 + c * PW / cols + gp, y0 - hpx, PW / cols + 0.6 - 2 * gp, Math.min(dense ? 1.5 : 2, hpx)); }\n"
+        "        else if (dense) { g.fillStyle = cap[Math.round(f * 64)]; g.fillRect(x0 + c * PW / cols + gp, y0 - hpx, PW / cols + 0.6 - 2 * gp, Math.min(1.5, hpx)); }\n"
         "      }\n"
         "      geo.rowOx[idx] = x0; geo.rowOy[idx] = y0; geo.ridges[idx] = ridge;\n"
         "      // The baseline under the ridge, so a quiet row still shows.\n"
@@ -215,6 +221,7 @@ static const char CHANNEL_GRID[] =
         "    $(\"w-hz-sub\").hidden = iso || !hz;\n"
         "    $(\"w-mx-sub\").hidden = iso || hz;\n"
         "    $(\"w-iso-sub\").hidden = !iso;\n"
+        "    $(\"w-iso-key\").hidden = !iso;\n"
         "    if (!iso) { WF.ist.hover = null; $(\"w-iso-tip\").hidden = true; }\n"
         "    if (iso) { isoGrid(); return; }\n"
         "    if (hz) horizonGrid(); else mixGrid();\n"
@@ -238,6 +245,7 @@ static const char BLE_ISO_MODE[] =
         "      c.classList.toggle(\"iso\", S.iso);\n"
         "    });\n"
         "    $(\"bledev-iso-sub\").hidden = !S.iso;\n"
+        "    $(\"bledev-cls-key\").hidden = $(\"bledev-prox-key\").hidden = !S.iso || noSensor();\n"
         "    if (!S.iso) { S.ist.hover = S.pist.hover = null; $(\"bledev-iso-tip\").hidden = true; }\n"
         "  }";
 
@@ -275,7 +283,8 @@ static const char GRID_RENDER[] =
         "        return;\n"
         "      }\n"
         "      var grouped = o.cols.some(function (c) { return !!c.group; });\n"
-        "      var geo = layout({ W: W, Hh: Hh, n: n, L: 44, R: 56, top: 14, bottom: grouped ? 34 : 22, deep: n > 12 });\n"
+        "      var floored = o.cols.some(function (c) { return !!c.floor; }), fy = floored ? 7 : 0;\n"
+        "      var geo = layout({ W: W, Hh: Hh, n: n, L: 44, R: 56, top: 14, bottom: (grouped ? 34 : 22) + fy, deep: n > 12 });\n"
         "      st.geo = geo;\n"
         "      // A scale with no extent (a caller's hi equal to its lo) is one\n"
         "      // unit wide, so no tick, height or ridge is NaN.\n"
@@ -299,7 +308,8 @@ static const char GRID_RENDER[] =
         "        value: function (i, c) {\n"
         "          var v = o.value(i, c);\n"
         "          return num(v) && span > 0 ? (v - o.lo) / span : 0;\n"
-        "        }\n"
+        "        },\n"
+        "        segments: o.segments, cap: o.cols.some(function (c) { return !!c.cap; }) ? function (c) { return o.cols[c].cap; } : null\n"
         "      });\n"
         "      // The time axis up the right rail: a label a label height apart.\n"
         "      g.fillStyle = T.muted; g.strokeStyle = T.rule; g.textAlign = \"left\";\n"
@@ -313,6 +323,16 @@ static const char GRID_RENDER[] =
         "      // then each group's name under its span.\n"
         "      g.textAlign = \"center\";\n"
         "      var cw = PW / nc, last = -Infinity, gs = 0;\n"
+        "      // The floor strip under the names: each column's colour across\n"
+        "      // its width, dashed where the caller marks it (DFS).\n"
+        "      for (var fc = 0; floored && fc < nc; fc++) {\n"
+        "        var fl = o.cols[fc].floor;\n"
+        "        if (!fl) continue;\n"
+        "        g.fillStyle = fl.color;\n"
+        "        var fx = geo.L + fc * cw + 0.5, fz = geo.L + (fc + 1) * cw - 0.5;\n"
+        "        if (!fl.dash) { g.fillRect(fx, base0 + 15, Math.max(0.5, fz - fx), 4); continue; }\n"
+        "        for (var dx = fx; dx < fz; dx += 5) g.fillRect(dx, base0 + 15, Math.min(3, fz - dx), 4);\n"
+        "      }\n"
         "      for (var c = 0; c <= nc; c++) {\n"
         "        if (c < nc) {\n"
         "          var cx = geo.L + (c + 0.5) * cw, lab = o.cols[c].label, w = g.measureText(lab).width;\n"
@@ -326,9 +346,10 @@ static const char GRID_RENDER[] =
         "        if (grouped && (c === nc || (c > gs && o.cols[c].group !== o.cols[gs].group))) {\n"
         "          var a = geo.L + gs * cw, z = geo.L + c * cw;\n"
         "          g.strokeStyle = T.rule;\n"
-        "          g.beginPath(); g.moveTo(a + 2, base0 + 18.5); g.lineTo(z - 2, base0 + 18.5); g.stroke();\n"
+        "          g.beginPath(); g.moveTo(a + 2, base0 + 18.5 + fy); g.lineTo(z - 2, base0 + 18.5 + fy); g.stroke();\n"
         "          var gl = o.cols[gs].group || \"\";\n"
-        "          if (gl && g.measureText(gl).width < z - a) { g.fillStyle = T.ink; g.fillText(gl, (a + z) / 2, base0 + 29); }\n"
+        "          if (gl && g.measureText(gl).width >= z - a && o.cols[gs].groupShort) gl = o.cols[gs].groupShort;\n"
+        "          if (gl && g.measureText(gl).width < z - a) { g.fillStyle = o.cols[gs].groupColor || T.ink; g.fillText(gl, (a + z) / 2, base0 + 29 + fy); }\n"
         "          gs = c;\n"
         "        }\n"
         "      }\n"
@@ -382,13 +403,20 @@ static const char W_ISO_GRID[] =
         "    if (hz) set(\"w-heat-note\", rows.length + \" channels, \" + hz.tier + \" tier, \" + fmt(hz.col_s) + \" s cells, \" +\n"
         "                unit + \" 0 to \" + fmt(hmax) + \" (the window's largest cell)\" + (hz.more ? \", more channels than shown\" : \"\"));\n"
         "    mixNote();\n"
-        "    var cur = WF.cur;\n"
+        "    var cur = WF.cur, P = SlothIso.scheme(), hl = isoKey();\n"
+        "    // The mix's cells line up with the heat's only on the same grid.\n"
+        "    var mx = !!(hz && WF.mix && WF.mix.from === hz.from && WF.mix.cols === hz.cols && WF.mix.col_s === hz.col_s);\n"
+        "    var sh = rows.map(function (r) { return chanShade(r.band, r.key); });\n"
+        "    var rc = sh.map(function (sc) { return chanColor(sc, P); });\n"
         "    SlothIso.grid(c, WF.ist, {\n"
-        "      cols: rows.map(function (r) {\n"
-        "        return { label: r.key, short: r.key.replace(/^6g/, \"\"), group: BAND_WORD[r.band] || \"band unknown\" };\n"
+        "      cols: rows.map(function (r, i) {\n"
+        "        return { label: r.key, short: r.key.replace(/^6g/, \"\"), group: BAND_WORD[r.band] || \"band unknown\",\n"
+        "                 groupColor: sh[i] ? P.band[sh[i].band][0] : P.muted,\n"
+        "                 floor: { color: rc[i], dash: !!(sh[i] && sh[i].dfs) }, cap: rc[i] };\n"
         "      }),\n"
         "      n: rows.length ? cols : 0, from: hz ? hz.from : 0, col_s: hz ? hz.col_s : 0,\n"
         "      value: function (k, i) { var cl = rows[i].heat && rows[i].heat.cells; return cl ? cl[k] : null; },\n"
+        "      segments: function (k, i) { return isoSegs(mx ? rows[i] : null, k, rc[i], mx ? hl : null); },\n"
         "      lo: 0, hi: hmax > 0 ? hmax : 1, ticks: hmax > 0 ? [0, hmax / 2, hmax] : [0], unit: unit, fmt: fmt,\n"
         "      clock: hhmmss, sel: cur && cur.r < rows.length && cur.c < cols ? { k: cur.c, c: cur.r } : null,\n"
         "      empty: hz ? \"no channel in the window\" : \"loading\"\n"
@@ -402,11 +430,15 @@ static const char BLE_CLASS_ISO[] =
         "    rows.forEach(function (r) {\n"
         "      ((r.heat && r.heat.cells) || []).forEach(function (v) { if (num(v) && v > hmax) hmax = v; });\n"
         "    });\n"
-        "    var cur = S.cur;\n"
+        "    var cur = S.cur, P = SlothIso.scheme();\n"
         "    SlothIso.grid($(\"bledev-classes\"), S.ist, {\n"
-        "      cols: rows.map(function (r) { var d = classDef(r.key); return { label: d.glyph + \" \" + d.label, short: d.glyph }; }),\n"
+        "      cols: rows.map(function (r) {\n"
+        "        var d = classDef(r.key), hue = classHue(r.key, P);\n"
+        "        return { label: d.glyph + \" \" + d.label, short: d.glyph, floor: { color: hue }, cap: hue };\n"
+        "      }),\n"
         "      n: rows.length ? cols : 0, from: from, col_s: col_s,\n"
         "      value: function (k, i) { var cl = rows[i].heat && rows[i].heat.cells; return cl ? cl[k] : null; },\n"
+        "      segments: function (k, i) { return classSegs(rows[i], k, classHue(rows[i].key, P)); },\n"
         "      lo: 0, hi: hmax > 0 ? hmax : 1, ticks: hmax > 0 ? [0, hmax / 2, hmax] : [0], unit: classUnit(), fmt: H.fmt,\n"
         "      clock: H.hhmmss, sel: cur && cur.r < rows.length && cur.c < cols ? { k: cur.c, c: cur.r } : null,\n"
         "      empty: S.cls ? \"no class in the window\" : \"loading\"\n"
@@ -415,20 +447,194 @@ static const char BLE_CLASS_ISO[] =
 
 static const char BLE_PROX_ISO[] =
         "  function proxIso(rows, p) {\n"
-        "    var cur = S.pcur, cols = p && p.cols ? p.cols : 0;\n"
+        "    var cur = S.pcur, cols = p && p.cols ? p.cols : 0, P = SlothIso.scheme();\n"
+        "    var hue = rows.map(function (r) { return classHue(r[\"class\"], P); });\n"
+        "    var step = rows.map(function (r) { return ISO_STEP[addrStep(r.addr)]; });\n"
         "    SlothIso.grid($(\"bledev-prox\"), S.pist, {\n"
-        "      cols: rows.map(function (r) {\n"
+        "      cols: rows.map(function (r, i) {\n"
         "        var d = classDef(r[\"class\"]);\n"
-        "        return { label: r.name !== null ? r.name : shortAddr(r.addr), short: d.glyph };\n"
+        "        return { label: r.name !== null ? r.name : shortAddr(r.addr), short: d.glyph,\n"
+        "                 group: d.label, groupShort: d.glyph, groupColor: hue[i], floor: { color: hue[i] }, cap: hue[i] };\n"
         "      }),\n"
         "      n: rows.length ? cols : 0, from: p ? p.from : 0, col_s: p ? p.col_s : 0,\n"
         "      value: function (k, i) { return rows[i].cells ? rows[i].cells[k] : null; },\n"
+        "      segments: function (k, i) { return [{ f: 1, color: hue[i], alpha: step[i] }]; },\n"
         "      lo: PROX_LO, hi: PROX_HI, ticks: [-100, -80, -60, -40], unit: \"dBm (mean)\",\n"
         "      fmt: function (v) { return String(v); }, clock: H.hhmmss,\n"
         "      sel: cur && cur.r < rows.length && cur.c < cols ? { k: cur.c, c: cur.r } : null,\n"
         "      empty: p ? \"no advertiser heard in the window\" : \"loading\"\n"
         "    });\n"
         "  }";
+
+static const char SCHEME[] =
+        "  function scheme() {\n"
+        "    return {\n"
+        "      band: { \"2.4\": [cssVar(\"--iso-b24-0\", \"#ffb347\"), cssVar(\"--iso-b24-1\", \"#a87a45\")],\n"
+        "              \"5\": [cssVar(\"--iso-b5-0\", \"#a6f2d4\"), cssVar(\"--iso-b5-1\", \"#55d6a6\"),\n"
+        "                    cssVar(\"--iso-b5-2\", \"#2fa98a\"), cssVar(\"--iso-b5-3\", \"#3fc8e0\"), cssVar(\"--iso-b5-4\", \"#6f9a90\")],\n"
+        "              \"6\": [cssVar(\"--iso-b6-0\", \"#b48cff\"), cssVar(\"--iso-b6-1\", \"#8f7fc0\")] },\n"
+        "      cls: { \"b:phone\": cssVar(\"--iso-c-phone\", \"#5b9bff\"), \"b:wear\": cssVar(\"--iso-c-wear\", \"#6fdc6f\"),\n"
+        "             \"b:tag\": cssVar(\"--iso-c-tag\", \"#ff6a3d\"), \"b:hid\": cssVar(\"--iso-c-hid\", \"#f2d240\"),\n"
+        "             \"b:bcn\": cssVar(\"--iso-c-bcn\", \"#40e0f0\"), \"b:iot\": cssVar(\"--iso-c-iot\", \"#c07cff\"),\n"
+        "             \"b:unk\": cssVar(\"--iso-c-unk\", \"#8a8a96\") },\n"
+        "      muted: cssVar(\"--muted\", \"#8a82a0\")\n"
+        "    };\n"
+        "  }";
+
+static const char SEG_PAINTER[] =
+        "  function segPainter(g, T, dense) {\n"
+        "    var memo = {};\n"
+        "    function shade(color, t) {\n"
+        "      var q = Math.round(Math.max(0, Math.min(1, t)) * 32), key = color + \"|\" + q;\n"
+        "      if (!Object.prototype.hasOwnProperty.call(memo, key)) memo[key] = toward(g, T, color, q / 32);\n"
+        "      return memo[key];\n"
+        "    }\n"
+        "    return function (sg, f, x, y0, w, hpx) {\n"
+        "      var body = dense ? 0.5 + 0.4 * f : 0.6 + 0.4 * f, y = y0, left = hpx;\n"
+        "      for (var s = 0; s < sg.length && left > 0; s++) {\n"
+        "        var h = s === sg.length - 1 ? left : Math.min(left, Math.max(0, num(sg[s].f) ? sg[s].f : 0) * hpx);\n"
+        "        if (!(h > 0)) continue;\n"
+        "        g.fillStyle = shade(String(sg[s].color), body * (num(sg[s].alpha) ? sg[s].alpha : 1));\n"
+        "        g.fillRect(x, y - h, w, h);\n"
+        "        y -= h; left -= h;\n"
+        "      }\n"
+        "    };\n"
+        "  }";
+
+static const char COLOR_CACHE[] =
+        "  function colorCache(g) {\n"
+        "    var memo = {};\n"
+        "    return function (c) {\n"
+        "      if (!c) return null;\n"
+        "      if (!Object.prototype.hasOwnProperty.call(memo, c)) memo[c] = css(rgbOf(g, c));\n"
+        "      return memo[c];\n"
+        "    };\n"
+        "  }";
+
+static const char CHAN_SHADE[] =
+        "  var CHAN_STEP = { \"2.4\": [\"1/6/11\", \"overlapping\"], \"5\": [\"UNII-1\", \"UNII-2A DFS\", \"UNII-2C DFS\", \"UNII-3\", \"other\"],\n"
+        "                    \"6\": [\"PSC\", \"non-PSC\"] };\n"
+        "  function chanShade(band, key) {\n"
+        "    var ch = chanNum(key);\n"
+        "    if (band === \"2.4\") return { band: \"2.4\", step: ch === 1 || ch === 6 || ch === 11 ? 0 : 1, dfs: false };\n"
+        "    if (band === \"5\") {\n"
+        "      var st = ch <= 48 ? 0 : ch <= 64 ? 1 : ch < 100 ? 4 : ch <= 144 ? 2 : ch <= 165 ? 3 : 4;\n"
+        "      return { band: \"5\", step: st, dfs: st === 1 || st === 2 };\n"
+        "    }\n"
+        "    if (band === \"6\") return { band: \"6\", step: ch % 16 === 5 ? 0 : 1, dfs: false };\n"
+        "    return null;\n"
+        "  }\n"
+        "  function chanColor(sc, P) { return sc ? P.band[sc.band][sc.step] : P.muted; }\n"
+        "  function chanWord(sc) { return sc ? CHAN_STEP[sc.band][sc.step] : \"band unknown\"; }";
+
+static const char W_ISO_SEGS[] =
+        "  function isoSegs(r, k, base, hl) {\n"
+        "    var m = r && r.mix && r.mix.cells ? r.mix.cells[k] : null, rest = hl === null ? 1 : ISO_FADE, out = [];\n"
+        "    if (!Array.isArray(m) || !num(m[0]) || m[0] <= 0) return [{ f: 1, color: base, alpha: rest }];\n"
+        "    for (var e = 2; e + 1 < m.length; e += 2) {\n"
+        "      var t = txOf(m[e]);\n"
+        "      out.push({ f: m[e + 1] / m[0], color: txColor(t), alpha: hl === null || ssidOf(t) === hl ? 1 : ISO_FADE });\n"
+        "    }\n"
+        "    if (num(m[1]) && m[1] > 0) out.push({ f: m[1] / m[0], color: base, alpha: rest });\n"
+        "    return out.length ? out : [{ f: 1, color: base, alpha: rest }];\n"
+        "  }";
+
+static const char W_ISO_KEY[] =
+        "  function isoKey() {\n"
+        "    var box = $(\"w-iso-key\");\n"
+        "    while (box.firstChild) box.removeChild(box.firstChild);\n"
+        "    [[\"2.4\", \"--iso-b24-\"], [\"5\", \"--iso-b5-\"], [\"6\", \"--iso-b6-\"]].forEach(function (b) {\n"
+        "      var grp = box.appendChild(el(\"span\", \"grp\"));\n"
+        "      grp.appendChild(el(\"span\", \"nm\", BAND_WORD[b[0]]));\n"
+        "      CHAN_STEP[b[0]].forEach(function (w, i) {\n"
+        "        var it = grp.appendChild(el(\"span\", \"it\")), sw = el(\"span\", \"sw\" + (b[0] === \"5\" && (i === 1 || i === 2) ? \" dfs\" : \"\"));\n"
+        "        sw.style.backgroundColor = \"var(\" + b[1] + i + \")\";\n"
+        "        it.appendChild(sw);\n"
+        "        it.appendChild(el(\"span\", \"\", w));\n"
+        "      });\n"
+        "    });\n"
+        "    var by = new Map();\n"
+        "    ((WF.mix && WF.mix.channels) || []).forEach(function (r) {\n"
+        "      (r.cells || []).forEach(function (m) {\n"
+        "        if (!Array.isArray(m)) return;\n"
+        "        for (var e = 2; e + 1 < m.length; e += 2) {\n"
+        "          var t = txOf(m[e]), s = ssidOf(t);\n"
+        "          if (s === null || !num(m[e + 1])) continue;\n"
+        "          var o = by.get(s);\n"
+        "          if (!o) { o = { ssid: s, n: 0, t: t }; by.set(s, o); }\n"
+        "          o.n += m[e + 1];\n"
+        "        }\n"
+        "      });\n"
+        "    });\n"
+        "    // Only a loaded mix can say the SSID left: a reload clears WF.mix\n"
+        "    // and the heat can land first.\n"
+        "    if (WF.hl !== null && WF.mix && !by.has(WF.hl)) WF.hl = null;\n"
+        "    var list = Array.from(by.values()).sort(function (a, b) { return b.n - a.n || (a.ssid < b.ssid ? -1 : a.ssid > b.ssid ? 1 : 0); });\n"
+        "    if (list.length) {\n"
+        "      var grp = box.appendChild(el(\"span\", \"grp\"));\n"
+        "      grp.appendChild(el(\"span\", \"nm\", \"SSIDs\"));\n"
+        "      list.slice(0, ISO_SSIDS).forEach(function (o, i) {\n"
+        "        var b = grp.appendChild(el(\"button\", \"chip\"));\n"
+        "        b.type = \"button\";\n"
+        "        b.ariaPressed = WF.hl === o.ssid ? \"true\" : \"false\";\n"
+        "        b.title = WF.hl === o.ssid ? \"show every SSID again\" : \"fade every other SSID\";\n"
+        "        var sw = el(\"span\", \"sw\");\n"
+        "        sw.style.backgroundColor = txColor(o.t);\n"
+        "        b.appendChild(sw);\n"
+        "        b.appendChild(el(\"span\", \"\", o.ssid === \"\" ? \"(hidden)\" : o.ssid));\n"
+        "        b.addEventListener(\"click\", function () {\n"
+        "          WF.hl = WF.hl === o.ssid ? null : o.ssid;\n"
+        "          channelGrid();\n"
+        "          // The key is drawn anew: the focus back on the same chip.\n"
+        "          var again = $(\"w-iso-key\").querySelectorAll(\"button.chip\")[i];\n"
+        "          if (again) again.focus();\n"
+        "        });\n"
+        "      });\n"
+        "      if (list.length > ISO_SSIDS) grp.appendChild(el(\"span\", \"more\", \"+\" + (list.length - ISO_SSIDS) + \" more\"));\n"
+        "    }\n"
+        "    return WF.hl;\n"
+        "  }";
+
+static const char BLE_COLOURS[] =
+        "  var ISO_STEP = [1, 0.78, 0.6, 0.45], ISO_REST = 0.32;\n"
+        "  function classHue(slug, P) { return P.cls[classDef(slug).slug]; }\n"
+        "  function classToken(slug) { return \"var(--iso-c-\" + classDef(slug).slug.slice(2) + \")\"; }\n"
+        "  function addrStep(a) {\n"
+        "    var h = 0, s = String(a);\n"
+        "    for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;\n"
+        "    return h % ISO_STEP.length;\n"
+        "  }\n"
+        "  // The proximity panel's advertisers grouped by class, in CLASSES'\n"
+        "  // order, each class keeping the table's order (trackers first, then\n"
+        "  // the nearest).\n"
+        "  function byClass(rows) {\n"
+        "    return rows.map(function (r, i) { return { r: r, i: i, c: CLASS_OF[classDef(r[\"class\"]).slug] }; })\n"
+        "      .sort(function (a, b) { return a.c - b.c || a.i - b.i; })\n"
+        "      .map(function (e) { return e.r; });\n"
+        "  }";
+
+static const char BLE_CLASS_SEGS[] =
+        "  function classSegs(r, k, hue) {\n"
+        "    var m = r.mix && r.mix.cells ? r.mix.cells[k] : null, out = [];\n"
+        "    if (!Array.isArray(m) || !num(m[0]) || m[0] <= 0) return [{ f: 1, color: hue }];\n"
+        "    for (var e = 2, s = 0; e + 1 < m.length; e += 2, s++)\n"
+        "      out.push({ f: m[e + 1] / m[0], color: hue, alpha: ISO_STEP[Math.min(s, ISO_STEP.length - 1)] });\n"
+        "    if (num(m[1]) && m[1] > 0) out.push({ f: m[1] / m[0], color: hue, alpha: ISO_REST });\n"
+        "    return out.length ? out : [{ f: 1, color: hue }];\n"
+        "  }";
+
+static const char BLE_CLASS_KEY[] =
+        "  function classKey(id) {\n"
+        "    var box = clear($(id));\n"
+        "    CLASSES.forEach(function (c) {\n"
+        "      var it = H.el(\"span\", \"it\"), sw = H.el(\"span\", \"sw\");\n"
+        "      sw.style.backgroundColor = classToken(c.slug);\n"
+        "      it.appendChild(sw);\n"
+        "      it.appendChild(H.el(\"span\", \"\", c.glyph + \" \" + c.label));\n"
+        "      box.appendChild(it);\n"
+        "    });\n"
+        "  }";
+
 
 /* The shared pieces, whole. */
 static void test_iso_module_pinned(void) {
@@ -440,7 +646,7 @@ static void test_iso_module_pinned(void) {
     WT_HAS(p, FRAME);
     WT_HAS(p, AT);
     WT_HAS(p, TIP);
-    WT_HAS(p, "  window.SlothIso = { theme: theme, rgbOf: rgbOf, mix: mix, heatRGB: heatRGB, css: css,\n"
+    WT_HAS(p, "  window.SlothIso = { theme: theme, scheme: scheme, rgbOf: rgbOf, mix: mix, heatRGB: heatRGB, css: css,\n"
               "                      layout: layout, rails: rails, paint: paint, hit: hit, colAt: colAt,\n"
               "                      frame: frame, grid: grid, at: at, tip: tip };");
     /* One namespace object, defined once. */
@@ -586,6 +792,150 @@ static void test_no_inline_handler(void) {
     WT_EQ(bad, 0);
 }
 
+/* Owner 2026-11-17 ("on the spectrum displays for wifi and bluetooth I
+ * want you to color code finding by band channel and ssid"): colour is
+ * identity, height the value. The scheme's pieces whole: the colours
+ * read from iso.css at each draw, the segment painter, the channel
+ * classifier, the WiFi column body and key, the BLE class hues, steps
+ * and grouping. The classifier's answers (2.4 GHz 1/6/11 against the
+ * overlapping rest, the four 5 GHz U-NII steps with 2A and 2C under
+ * DFS and "other" for 68-96 (U-NII-2B) and 169 up (U-NII-4),
+ * 6 GHz ch % 16 == 5) were run in node on 1, 3, 6, 11, 13, 36, 48, 52,
+ * 64, 68, 96, 100, 144, 149, 165, 169, 177, 6g1, 6g5, 6g21, 6g33, 6g37
+ * and an unknown band; the suite runs no script, so the classifier is held by its
+ * text, which is the rule as written. */
+/* The proximity panel's grouped order and the pick carried across it
+ * and across a refresh (new row objects) by the advertiser's identity,
+ * not its old index: the block whole. */
+static const char BLE_PROX_REMAP[] =
+        "    if (S.iso) rows = byClass(rows);\n"
+        "    var was = S.pcur ? S.prows[S.pcur.r] : null, at = was ? rows.findIndex(function (r) {\n"
+        "      return r === was || (r.addr === was.addr && r.addr_type === was.addr_type && r.iface === was.iface);\n"
+        "    }) : -1;\n"
+        "    if (at >= 0 && at !== S.pcur.r) S.pcur = { r: at, c: S.pcur.c };\n"
+        "    S.prows = rows;\n";
+
+static void test_identity_scheme_pinned(void) {
+    WT_HAS(page(), BLE_PROX_REMAP);
+    const char *p = page();
+    WT_HAS(p, SCHEME);
+    WT_HAS(p, SEG_PAINTER);
+    WT_HAS(p, COLOR_CACHE);
+    WT_HAS(p, CHAN_SHADE);
+    WT_HAS(p, W_ISO_SEGS);
+    WT_HAS(p, W_ISO_KEY);
+    WT_HAS(p, BLE_COLOURS);
+    WT_HAS(p, BLE_CLASS_SEGS);
+    WT_HAS(p, BLE_CLASS_KEY);
+    /* The SSID colour is the page's one SSID colour (txColor()), and the
+     * tooltip names the channel's step in words. */
+    WT_HAS(p, "      out.push({ f: m[e + 1] / m[0], color: txColor(t), alpha: hl === null || ssidOf(t) === hl ? 1 : ISO_FADE });");
+    WT_HAS(p, "      [chanWord(chanShade(r.band, r.key)), true],");
+    /* The keys' containers, and each shown only isometric. */
+    WT_HAS(p, "<div class=\"iso-key\" id=\"w-iso-key\" role=\"group\" aria-label=\"colour key: bands, channel shades and SSIDs\" hidden></div>");
+    WT_HAS(p, "<div class=\"iso-key\" id=\"bledev-cls-key\" role=\"group\" aria-label=\"colour key: device classes\"></div>");
+    WT_HAS(p, "<div class=\"iso-key\" id=\"bledev-prox-key\" role=\"group\" aria-label=\"colour key: device classes\"></div>");
+    WT_HAS(p, "    $(\"bledev-cls-key\").hidden = $(\"bledev-prox-key\").hidden = !S.iso || noSensor();");
+}
+
+/* Every token the scheme reads is written for both themes, and every
+ * class in bledev.js's CLASSES table has its hue: read from the table
+ * itself, so a class added there without a colour fails here. Seen red
+ * with the light theme's --iso-c-hid line removed from iso.css, and with
+ * "b:iot" dropped from scheme() (there by SCHEME's pin; the per-class
+ * check reads the page, not the pin). */
+static void test_identity_tokens_both_themes(void) {
+    const char *p = page();
+    const char *dark = strstr(p, "  --iso-b24-0: #ffb347;");
+    const char *light = strstr(p, ":root[data-theme=\"light\"] {\n  --iso-b24-0:");
+    WT_ASSERT(dark && light && dark < light);
+    static const char *const tok[] = {
+        "--iso-b24-0:", "--iso-b24-1:", "--iso-b5-0:", "--iso-b5-1:", "--iso-b5-2:", "--iso-b5-3:", "--iso-b5-4:",
+        "--iso-b6-0:", "--iso-b6-1:",
+    };
+    for (size_t i = 0; i < sizeof(tok) / sizeof(tok[0]); i++) {
+        int n = 0;
+        for (const char *q = strstr(p, tok[i]); q; q = strstr(q + 1, tok[i])) n++;
+        if (n != 2) fprintf(stderr, "    %s written %d times\n", tok[i], n);
+        WT_EQ(n, 2);
+    }
+    char *cls = slice("  var CLASSES = [", "  var CLASS_OF = {};");
+    WT_ASSERT(cls != NULL);
+    if (!cls) return;
+    int classes = 0;
+    for (const char *q = strstr(cls, "{ slug: \"b:"); q; q = strstr(q + 1, "{ slug: \"b:")) {
+        const char *a = q + strlen("{ slug: \"b:"), *z = strchr(a, '"');
+        if (!z || z - a > 16) break;
+        char want[96], name[24];
+        memcpy(name, a, (size_t)(z - a));
+        name[z - a] = '\0';
+        classes++;
+        snprintf(want, sizeof want, "--iso-c-%s:", name);
+        int n = 0;
+        for (const char *r = strstr(p, want); r; r = strstr(r + 1, want)) n++;
+        if (n != 2) fprintf(stderr, "    %s written %d times\n", want, n);
+        WT_EQ(n, 2);
+        snprintf(want, sizeof want, "\"b:%s\": cssVar(\"--iso-c-%s\"", name, name);
+        WT_HAS(p, want);
+    }
+    WT_EQ(classes, 7);
+    free(cls);
+}
+
+/* Owner 2026-11-17: "don't remove any text labels". Colour is added on
+ * top: every name the grid drew before it still draws, and none waits on
+ * a colour. The grid renderer's text calls are counted (six: the empty
+ * words, the level ticks, the unit, the clock, the column names, the
+ * group names) and each pinned, and the callers still hand every name
+ * over. Seen red with the column-name fillText deleted from iso.js
+ * (count 5) and with the group's fillText made conditional on a floor. */
+static void test_grid_labels_all_drawn(void) {
+    char *r = slice("  function gridRender(st) {", "  function gridOverlay(st) {");
+    WT_ASSERT(r != NULL);
+    if (!r) return;
+    int n = 0;
+    for (const char *q = strstr(r, "fillText("); q; q = strstr(q + 1, "fillText(")) n++;
+    WT_EQ(n, 6);
+    WT_HAS(r, "        g.fillText(o.empty || \"no data\", 16, 24);");
+    WT_HAS(r, "        g.fillText(o.fmt ? o.fmt(tk[k]) : String(tk[k]), geo.L - 4, yy + 3);");
+    WT_HAS(r, "        g.fillText(o.unit, 0, 0); g.restore();");
+    WT_HAS(r, "        g.fillText(o.clock(o.from + k * o.col_s), x + 8, y + 3);");
+    WT_HAS(r, "            g.fillText(lab, cx, base0 + 12);");
+    WT_HAS(r, "          if (gl && g.measureText(gl).width < z - a) { g.fillStyle = o.cols[gs].groupColor || T.ink; g.fillText(gl, (a + z) / 2, base0 + 29 + fy); }");
+    /* The floor strip only moves the group's rule and name down. */
+    WT_HAS(r, "      var geo = layout({ W: W, Hh: Hh, n: n, L: 44, R: 56, top: 14, bottom: (grouped ? 34 : 22) + fy, deep: n > 12 });");
+    WT_LACKS(r, "floor) g.fillText");
+    free(r);
+    const char *p = page();
+    WT_HAS(p, "        return { label: r.key, short: r.key.replace(/^6g/, \"\"), group: BAND_WORD[r.band] || \"band unknown\",");
+    WT_HAS(p, "        return { label: d.glyph + \" \" + d.label, short: d.glyph, floor: { color: hue }, cap: hue };");
+    WT_HAS(p, "        return { label: r.name !== null ? r.name : shortAddr(r.addr), short: d.glyph,\n"
+              "                 group: d.label, groupShort: d.glyph, groupColor: hue[i], floor: { color: hue[i] }, cap: hue[i] };");
+}
+
+/* paint() with no segments and no cap makes the heat ramp's calls as
+ * before (the Spectrum tab's picture): the plain branch is the old body
+ * and cap, line for line, and the new paths are reached only through
+ * o.segments and o.cap. The canvas calls of the old and new iso.js were
+ * recorded in node and compared equal on a 7x96 grouped grid, 24x96,
+ * 5x3, 3x10 and a 50-column 30-row Spectrum-style paint. */
+static void test_paint_plain_path_unchanged(void) {
+    char *m = slice("  function paint(g, T, geo, o) {", "  // A column's body as segments");
+    WT_ASSERT(m != NULL);
+    if (!m) return;
+    WT_HAS(m, "    var seg = o.segments ? segPainter(g, T, dense) : null, capOf = o.cap ? colorCache(g) : null;");
+    WT_HAS(m, "        else {\n"
+              "          g.fillStyle = pal[Math.round(f * 64)];\n"
+              "          g.fillRect(x0 + c * PW / cols + gp, y0 - hpx, PW / cols + 0.6 - 2 * gp, hpx);\n"
+              "        }\n");
+    WT_HAS(m, "        else if (dense) { g.fillStyle = cap[Math.round(f * 64)]; g.fillRect(x0 + c * PW / cols + gp, y0 - hpx, PW / cols + 0.6 - 2 * gp, Math.min(1.5, hpx)); }");
+    /* Spectrum hands paint() neither. */
+    char *s = slice(SPEC_FROM, SPEC_TO);
+    WT_ASSERT(s != NULL);
+    if (s) { WT_LACKS(s, "segments:"); WT_LACKS(s, "cap:"); free(s); }
+    free(m);
+}
+
 void run_iso_tests(void) {
     WT_RUN(test_iso_module_pinned);
     WT_RUN(test_iso_grid_and_callers_pinned);
@@ -593,4 +943,8 @@ void run_iso_tests(void) {
     WT_RUN(test_spectrum_uses_iso);
     WT_RUN(test_toggles_default_to_iso);
     WT_RUN(test_no_inline_handler);
+    WT_RUN(test_identity_scheme_pinned);
+    WT_RUN(test_identity_tokens_both_themes);
+    WT_RUN(test_grid_labels_all_drawn);
+    WT_RUN(test_paint_plain_path_unchanged);
 }

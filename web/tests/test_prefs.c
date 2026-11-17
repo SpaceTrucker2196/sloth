@@ -326,6 +326,10 @@ static const char *const TOGGLE_JS[] = {   /* the script's ARIA state, each a li
     /* incident.js's selection box on an alert row: pressed while the
      * alert is selected, which is not kept (a selection is one action's) */
     "    b.ariaPressed = on ? \"true\" : \"false\";",
+    /* app.js's isometric WiFi key (owner 2026-11-17): an SSID chip is
+     * pressed while its SSID is the one not faded, which is not kept (a
+     * look, not a setting; nothing stored, here or on the server) */
+    "        b.ariaPressed = WF.hl === o.ssid ? \"true\" : \"false\";",
 };
 
 static void test_every_toggle_is_decided(void) {

@@ -46,6 +46,32 @@
   function classDef(slug) {
     return Object.prototype.hasOwnProperty.call(CLASS_OF, slug) ? CLASSES[CLASS_OF[slug]] : CLASSES[6];
   }
+  // The isometric panels' colours (owner 2026-11-17: "color code
+  // finding ... easy to tell by color groupings"). BLE reports carry no
+  // channel and no SSID, so the grouping is the class: each its own hue
+  // (iso.css --iso-c-*, read by SlothIso.scheme() at each draw;
+  // Trackers red-orange), its shade steps for what is inside the class.
+  // A step is how far from the ground (iso.js paint()'s segment alpha):
+  // the busiest advertisers in turn, the rest the darkest; an advertiser
+  // on the proximity panel at the step its address's hash picks, so
+  // neighbours in a group stay apart (a rotating address may change
+  // step, as it changes row).
+  var ISO_STEP = [1, 0.78, 0.6, 0.45], ISO_REST = 0.32;
+  function classHue(slug, P) { return P.cls[classDef(slug).slug]; }
+  function classToken(slug) { return "var(--iso-c-" + classDef(slug).slug.slice(2) + ")"; }
+  function addrStep(a) {
+    var h = 0, s = String(a);
+    for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return h % ISO_STEP.length;
+  }
+  // The proximity panel's advertisers grouped by class, in CLASSES'
+  // order, each class keeping the table's order (trackers first, then
+  // the nearest).
+  function byClass(rows) {
+    return rows.map(function (r, i) { return { r: r, i: i, c: CLASS_OF[classDef(r["class"]).slug] }; })
+      .sort(function (a, b) { return a.c - b.c || a.i - b.i; })
+      .map(function (e) { return e.r; });
+  }
 
   // src/rf_distance.c for an advertiser announcing no power: P_tx 0 dBm,
   // L(1 m) = 20 log10(2440) - 28 dB, N = 2.8; the band edges at 1, 3, 10
@@ -117,6 +143,7 @@
   function emptyState() {
     var none = noSensor();
     ["bledev-classes", "bledev-prox", "bledev-prox-legend"].forEach(function (id) { $(id).hidden = none; });
+    ["bledev-cls-key", "bledev-prox-key"].forEach(function (id) { $(id).hidden = none || !S.iso; });
     if (!none) return false;
     var line = clear($("bledev-now"));
     line.appendChild(H.el("span", "d-dim", "(no BLE sensor: no advertisements decoded - start with --bt-monitor or " +
@@ -361,15 +388,30 @@
     rows.forEach(function (r) {
       ((r.heat && r.heat.cells) || []).forEach(function (v) { if (num(v) && v > hmax) hmax = v; });
     });
-    var cur = S.cur;
+    var cur = S.cur, P = SlothIso.scheme();
     SlothIso.grid($("bledev-classes"), S.ist, {
-      cols: rows.map(function (r) { var d = classDef(r.key); return { label: d.glyph + " " + d.label, short: d.glyph }; }),
+      cols: rows.map(function (r) {
+        var d = classDef(r.key), hue = classHue(r.key, P);
+        return { label: d.glyph + " " + d.label, short: d.glyph, floor: { color: hue }, cap: hue };
+      }),
       n: rows.length ? cols : 0, from: from, col_s: col_s,
       value: function (k, i) { var cl = rows[i].heat && rows[i].heat.cells; return cl ? cl[k] : null; },
+      segments: function (k, i) { return classSegs(rows[i], k, classHue(rows[i].key, P)); },
       lo: 0, hi: hmax > 0 ? hmax : 1, ticks: hmax > 0 ? [0, hmax / 2, hmax] : [0], unit: classUnit(), fmt: H.fmt,
       clock: H.hhmmss, sel: cur && cur.r < rows.length && cur.c < cols ? { k: cur.c, c: cur.r } : null,
       empty: S.cls ? "no class in the window" : "loading"
     });
+  }
+  // A class cell's column body, bottom up: its busiest advertisers by
+  // share, each a step darker, then the rest darkest; with no
+  // advertiser detail, the class's hue whole.
+  function classSegs(r, k, hue) {
+    var m = r.mix && r.mix.cells ? r.mix.cells[k] : null, out = [];
+    if (!Array.isArray(m) || !num(m[0]) || m[0] <= 0) return [{ f: 1, color: hue }];
+    for (var e = 2, s = 0; e + 1 < m.length; e += 2, s++)
+      out.push({ f: m[e + 1] / m[0], color: hue, alpha: ISO_STEP[Math.min(s, ISO_STEP.length - 1)] });
+    if (num(m[1]) && m[1] > 0) out.push({ f: m[1] / m[0], color: hue, alpha: ISO_REST });
+    return out.length ? out : [{ f: 1, color: hue }];
   }
   function classUnit() { return S.cls && S.cls.metric === "ble.class.adv" ? "reports" : "advertisers"; }
 
@@ -383,6 +425,16 @@
     if (emptyState()) return;
     var c = $("bledev-prox"), T = H.theme();
     var rows = (S.prox && S.prox.rows) || [];
+    // Isometric, the advertisers are grouped by class; the picked
+    // advertiser stays picked across the reorder and across a refresh
+    // (new row objects, maybe a new order), found by its address, type
+    // and sensor, so the hover, the tooltip and the list under the panel
+    // name the advertiser they named.
+    if (S.iso) rows = byClass(rows);
+    var was = S.pcur ? S.prows[S.pcur.r] : null, at = was ? rows.findIndex(function (r) {
+      return r === was || (r.addr === was.addr && r.addr_type === was.addr_type && r.iface === was.iface);
+    }) : -1;
+    if (at >= 0 && at !== S.pcur.r) S.pcur = { r: at, c: S.pcur.c };
     S.prows = rows;
     c.style.height = S.iso ? "320px" : Math.max(3, rows.length) * PROW_PX + 4 + "px";
     var dpr = H.sizeCanvas(c), g = c.getContext("2d");
@@ -456,14 +508,18 @@
   // are in the tooltip and the list, at the row's own power).
   var PROX_LO = -110, PROX_HI = -30;
   function proxIso(rows, p) {
-    var cur = S.pcur, cols = p && p.cols ? p.cols : 0;
+    var cur = S.pcur, cols = p && p.cols ? p.cols : 0, P = SlothIso.scheme();
+    var hue = rows.map(function (r) { return classHue(r["class"], P); });
+    var step = rows.map(function (r) { return ISO_STEP[addrStep(r.addr)]; });
     SlothIso.grid($("bledev-prox"), S.pist, {
-      cols: rows.map(function (r) {
+      cols: rows.map(function (r, i) {
         var d = classDef(r["class"]);
-        return { label: r.name !== null ? r.name : shortAddr(r.addr), short: d.glyph };
+        return { label: r.name !== null ? r.name : shortAddr(r.addr), short: d.glyph,
+                 group: d.label, groupShort: d.glyph, groupColor: hue[i], floor: { color: hue[i] }, cap: hue[i] };
       }),
       n: rows.length ? cols : 0, from: p ? p.from : 0, col_s: p ? p.col_s : 0,
       value: function (k, i) { return rows[i].cells ? rows[i].cells[k] : null; },
+      segments: function (k, i) { return [{ f: 1, color: hue[i], alpha: step[i] }]; },
       lo: PROX_LO, hi: PROX_HI, ticks: [-100, -80, -60, -40], unit: "dBm (mean)",
       fmt: function (v) { return String(v); }, clock: H.hhmmss,
       sel: cur && cur.r < rows.length && cur.c < cols ? { k: cur.c, c: cur.r } : null,
@@ -559,6 +615,20 @@
     }
   }
 
+  // The class key under each isometric panel: a swatch per class in its
+  // hue, then its glyph and name; the swatches are var() references, so
+  // the theme toggle repaints them by itself.
+  function classKey(id) {
+    var box = clear($(id));
+    CLASSES.forEach(function (c) {
+      var it = H.el("span", "it"), sw = H.el("span", "sw");
+      sw.style.backgroundColor = classToken(c.slug);
+      it.appendChild(sw);
+      it.appendChild(H.el("span", "", c.glyph + " " + c.label));
+      box.appendChild(it);
+    });
+  }
+
   // ── picking, as the WiFi grid picks ──────────────────────────────
   function pick(ev, canvas, geo, nrows, which) {
     if (!geo) return;
@@ -644,6 +714,8 @@
   function show() {
     if (!H) return;
     legend();
+    classKey("bledev-cls-key");
+    classKey("bledev-prox-key");
     load();
     if (!S.timer) S.timer = setInterval(function () { if (visible()) load(); }, REFRESH_MS);
   }
@@ -716,15 +788,18 @@
       c.classList.toggle("iso", S.iso);
     });
     $("bledev-iso-sub").hidden = !S.iso;
+    $("bledev-cls-key").hidden = $("bledev-prox-key").hidden = !S.iso || noSensor();
     if (!S.iso) { S.ist.hover = S.pist.hover = null; $("bledev-iso-tip").hidden = true; }
   }
   var ISO_LABEL = {
     "bledev-classes": "device classes by time, isometric: the classes across, the time cells receding up and to the " +
-      "right with the newest in front, each column's height and colour the class's advertisers or reports in the cell; " +
-      "arrow keys pick a cell (left and right a class, up older, down newer), the list below names it",
+      "right with the newest in front, each column's height the class's advertisers or reports in the cell; its colour " +
+      "the class's own hue (Trackers red-orange), the busiest advertisers stacked as shade steps of it, named in the key " +
+      "below; arrow keys pick a cell (left and right a class, up older, down newer), the list below names it",
     "bledev-prox": "advertisers by time, isometric: the advertisers across, the time cells receding up and to the " +
-      "right with the newest in front, each column's height and colour the mean signal, taller is stronger; arrow " +
-      "keys pick a cell (left and right an advertiser, up older, down newer), the list below names it"
+      "right with the newest in front, each column's height the mean signal, taller is stronger; the advertisers " +
+      "grouped by class, the class named under its span, each in its class's hue at a shade its address picks, named in " +
+      "the key below; arrow keys pick a cell (left and right an advertiser, up older, down newer), the list below names it"
   };
 
   function init(h) {

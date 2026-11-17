@@ -3404,7 +3404,7 @@
   // /api/series with its baseline band. Channel keys, BSSIDs and SSIDs
   // are drawn with fillText or set with textContent, never as markup.
   var WF = { gen: 0, heat: null, mix: null, rows: [], cur: null, apEls: new Map(), geo: null,
-             g3max: {}, g3of: "", cl: [], clFrom: null,
+             g3max: {}, g3of: "", cl: [], clFrom: null, hl: null,
              iso: true, ist: { off: null, dirty: true, geo: null, hover: null, o: null } };
   var AP_SORTS = { "signal": 1, "last": 1, "ssids": 1, "karma": 1, "bssid": 1 };
   var BAND_WORD = { "2.4": "2.4 GHz", "5": "5 GHz", "6": "6 GHz" };
@@ -3439,6 +3439,34 @@
   var BAND_RANK = { "2.4": 0, "5": 1, "6": 2 };
   function bandRank(b) { return Object.prototype.hasOwnProperty.call(BAND_RANK, b) ? BAND_RANK[b] : 3; }
   function chanNum(k) { return parseInt(String(k).replace(/^6g/, ""), 10) || 0; }
+
+  // A channel's colour on the isometric waterfall (owner 2026-11-17:
+  // "color code finding by band channel and ssid ... easy to tell by
+  // color groupings"): its band the hue family (iso.css --iso-b*), its
+  // place in the band's 802.11 structure the shade step. 2.4 GHz: 1, 6
+  // and 11, the non-overlapping set, full, the overlapping rest dimmer.
+  // 5 GHz: the four U-NII sub-bands of 47 CFR 15.407 by channel number
+  // (U-NII-1 to 48, U-NII-2A 52 to 64, U-NII-2C 100 to 144, U-NII-3 149
+  // to 165), 2A and 2C the ones under DFS (15.407(h)), which the floor
+  // strip dashes; a fifth, paler step for the rest (68 to 96, U-NII-2B,
+  // in no US plan; 169 and up, U-NII-4), so none is named for a
+  // sub-band it is not in. 6 GHz: the preferred scanning channels (5, 21, 37, ...
+  // every 16; IEEE 802.11ax) full, the rest paler. A step's words,
+  // CHAN_STEP, are the legend's and the tooltip's.
+  var CHAN_STEP = { "2.4": ["1/6/11", "overlapping"], "5": ["UNII-1", "UNII-2A DFS", "UNII-2C DFS", "UNII-3", "other"],
+                    "6": ["PSC", "non-PSC"] };
+  function chanShade(band, key) {
+    var ch = chanNum(key);
+    if (band === "2.4") return { band: "2.4", step: ch === 1 || ch === 6 || ch === 11 ? 0 : 1, dfs: false };
+    if (band === "5") {
+      var st = ch <= 48 ? 0 : ch <= 64 ? 1 : ch < 100 ? 4 : ch <= 144 ? 2 : ch <= 165 ? 3 : 4;
+      return { band: "5", step: st, dfs: st === 1 || st === 2 };
+    }
+    if (band === "6") return { band: "6", step: ch % 16 === 5 ? 0 : 1, dfs: false };
+    return null;
+  }
+  function chanColor(sc, P) { return sc ? P.band[sc.band][sc.step] : P.muted; }
+  function chanWord(sc) { return sc ? CHAN_STEP[sc.band][sc.step] : "band unknown"; }
 
   function gridRows() {
     var by = new Map(), out = [];
@@ -3483,6 +3511,9 @@
       return T.k[t.ssid_k];
     return keyColor(t.id);
   }
+  // The SSID a transmitter is keyed by on the isometric legend: a named
+  // AP's (a hidden one's "" too); a client or a nameless AP none.
+  function ssidOf(t) { return t && t.kind === "ap" && typeof t.ssid === "string" ? t.ssid : null; }
 
   // The channels panel: isometric (#224, the default), or flat in the
   // mode the "channels" control picks: G3's horizon strips (F8, slice
@@ -3491,8 +3522,11 @@
   // server again.
   var W_FLAT_LABEL = $("w-heat").ariaLabel;
   var W_ISO_LABEL = "channels by time, isometric: the channels across, 2.4, 5 and 6 GHz grouped, the time cells " +
-    "receding up and to the right with the newest in front, each column's height and colour its cell's value on one " +
-    "scale; arrow keys pick a cell (left and right a channel, up older, down newer), the list below names it";
+    "receding up and to the right with the newest in front, each column's height its cell's value on one scale; " +
+    "colour says which: the band a hue family on the floor strip, the band name and each column's top (2.4 GHz amber, " +
+    "5 GHz teal-green, 6 GHz violet), the channel a shade within it (1, 6 and 11; the UNII sub-bands, DFS dashed; " +
+    "6 GHz PSC), the column's body its busiest transmitters stacked in their SSIDs' colours, named in the key below; " +
+    "arrow keys pick a cell (left and right a channel, up older, down newer), the list below names it";
   function channelGrid() {
     var iso = WF.iso, hz = $("w-grid").value !== "mix";
     $("w-grid").disabled = iso;
@@ -3503,6 +3537,7 @@
     $("w-hz-sub").hidden = iso || !hz;
     $("w-mx-sub").hidden = iso || hz;
     $("w-iso-sub").hidden = !iso;
+    $("w-iso-key").hidden = !iso;
     if (!iso) { WF.ist.hover = null; $("w-iso-tip").hidden = true; }
     if (iso) { isoGrid(); return; }
     if (hz) horizonGrid(); else mixGrid();
@@ -3513,7 +3548,13 @@
   // receding with the newest in front, each column's height and heat
   // its cell in the metric shown, on one scale for every channel, 0 to
   // the window's largest cell (the stacked grid's heat scale; G3's
-  // per-channel tops would make the heights incomparable).
+  // per-channel tops would make the heights incomparable). Colour is
+  // identity (owner 2026-11-17): the band and channel shade on the
+  // floor, the band's name and each column's top; the body the cell's
+  // busiest transmitters stacked by share as the stacked grid draws
+  // them, in their SSIDs' colours, the rest and a cell with no detail in
+  // the channel's shade; an SSID picked in the key keeps its colour and
+  // every other fades.
   function isoGrid() {
     var c = $("w-heat");
     c.style.height = "380px";
@@ -3528,18 +3569,100 @@
     if (hz) set("w-heat-note", rows.length + " channels, " + hz.tier + " tier, " + fmt(hz.col_s) + " s cells, " +
                 unit + " 0 to " + fmt(hmax) + " (the window's largest cell)" + (hz.more ? ", more channels than shown" : ""));
     mixNote();
-    var cur = WF.cur;
+    var cur = WF.cur, P = SlothIso.scheme(), hl = isoKey();
+    // The mix's cells line up with the heat's only on the same grid.
+    var mx = !!(hz && WF.mix && WF.mix.from === hz.from && WF.mix.cols === hz.cols && WF.mix.col_s === hz.col_s);
+    var sh = rows.map(function (r) { return chanShade(r.band, r.key); });
+    var rc = sh.map(function (sc) { return chanColor(sc, P); });
     SlothIso.grid(c, WF.ist, {
-      cols: rows.map(function (r) {
-        return { label: r.key, short: r.key.replace(/^6g/, ""), group: BAND_WORD[r.band] || "band unknown" };
+      cols: rows.map(function (r, i) {
+        return { label: r.key, short: r.key.replace(/^6g/, ""), group: BAND_WORD[r.band] || "band unknown",
+                 groupColor: sh[i] ? P.band[sh[i].band][0] : P.muted,
+                 floor: { color: rc[i], dash: !!(sh[i] && sh[i].dfs) }, cap: rc[i] };
       }),
       n: rows.length ? cols : 0, from: hz ? hz.from : 0, col_s: hz ? hz.col_s : 0,
       value: function (k, i) { var cl = rows[i].heat && rows[i].heat.cells; return cl ? cl[k] : null; },
+      segments: function (k, i) { return isoSegs(mx ? rows[i] : null, k, rc[i], mx ? hl : null); },
       lo: 0, hi: hmax > 0 ? hmax : 1, ticks: hmax > 0 ? [0, hmax / 2, hmax] : [0], unit: unit, fmt: fmt,
       clock: hhmmss, sel: cur && cur.r < rows.length && cur.c < cols ? { k: cur.c, c: cur.r } : null,
       empty: hz ? "no channel in the window" : "loading"
     });
     mixDetail();
+  }
+  // A cell's column body, bottom up: its transmitters by share in their
+  // colours, then the rest in the channel's shade; no detail, all of it
+  // the channel's. hl: the SSID the key picked (null none); the others
+  // fade to a quarter.
+  var ISO_FADE = 0.25;
+  function isoSegs(r, k, base, hl) {
+    var m = r && r.mix && r.mix.cells ? r.mix.cells[k] : null, rest = hl === null ? 1 : ISO_FADE, out = [];
+    if (!Array.isArray(m) || !num(m[0]) || m[0] <= 0) return [{ f: 1, color: base, alpha: rest }];
+    for (var e = 2; e + 1 < m.length; e += 2) {
+      var t = txOf(m[e]);
+      out.push({ f: m[e + 1] / m[0], color: txColor(t), alpha: hl === null || ssidOf(t) === hl ? 1 : ISO_FADE });
+    }
+    if (num(m[1]) && m[1] > 0) out.push({ f: m[1] / m[0], color: base, alpha: rest });
+    return out.length ? out : [{ f: 1, color: base, alpha: rest }];
+  }
+  // The key under the isometric waterfall: the three bands with their
+  // shade steps named, then the window's SSIDs, busiest first (a
+  // dozen, then how many more), each a button that fades every other
+  // SSID until pressed again. Every name is text (textContent). Returns
+  // the SSID picked, dropped once the window no longer holds it.
+  var ISO_SSIDS = 12;
+  function isoKey() {
+    var box = $("w-iso-key");
+    while (box.firstChild) box.removeChild(box.firstChild);
+    [["2.4", "--iso-b24-"], ["5", "--iso-b5-"], ["6", "--iso-b6-"]].forEach(function (b) {
+      var grp = box.appendChild(el("span", "grp"));
+      grp.appendChild(el("span", "nm", BAND_WORD[b[0]]));
+      CHAN_STEP[b[0]].forEach(function (w, i) {
+        var it = grp.appendChild(el("span", "it")), sw = el("span", "sw" + (b[0] === "5" && (i === 1 || i === 2) ? " dfs" : ""));
+        sw.style.backgroundColor = "var(" + b[1] + i + ")";
+        it.appendChild(sw);
+        it.appendChild(el("span", "", w));
+      });
+    });
+    var by = new Map();
+    ((WF.mix && WF.mix.channels) || []).forEach(function (r) {
+      (r.cells || []).forEach(function (m) {
+        if (!Array.isArray(m)) return;
+        for (var e = 2; e + 1 < m.length; e += 2) {
+          var t = txOf(m[e]), s = ssidOf(t);
+          if (s === null || !num(m[e + 1])) continue;
+          var o = by.get(s);
+          if (!o) { o = { ssid: s, n: 0, t: t }; by.set(s, o); }
+          o.n += m[e + 1];
+        }
+      });
+    });
+    // Only a loaded mix can say the SSID left: a reload clears WF.mix
+    // and the heat can land first.
+    if (WF.hl !== null && WF.mix && !by.has(WF.hl)) WF.hl = null;
+    var list = Array.from(by.values()).sort(function (a, b) { return b.n - a.n || (a.ssid < b.ssid ? -1 : a.ssid > b.ssid ? 1 : 0); });
+    if (list.length) {
+      var grp = box.appendChild(el("span", "grp"));
+      grp.appendChild(el("span", "nm", "SSIDs"));
+      list.slice(0, ISO_SSIDS).forEach(function (o, i) {
+        var b = grp.appendChild(el("button", "chip"));
+        b.type = "button";
+        b.ariaPressed = WF.hl === o.ssid ? "true" : "false";
+        b.title = WF.hl === o.ssid ? "show every SSID again" : "fade every other SSID";
+        var sw = el("span", "sw");
+        sw.style.backgroundColor = txColor(o.t);
+        b.appendChild(sw);
+        b.appendChild(el("span", "", o.ssid === "" ? "(hidden)" : o.ssid));
+        b.addEventListener("click", function () {
+          WF.hl = WF.hl === o.ssid ? null : o.ssid;
+          channelGrid();
+          // The key is drawn anew: the focus back on the same chip.
+          var again = $("w-iso-key").querySelectorAll("button.chip")[i];
+          if (again) again.focus();
+        });
+      });
+      if (list.length > ISO_SSIDS) grp.appendChild(el("span", "more", "+" + (list.length - ISO_SSIDS) + " more"));
+    }
+    return WF.hl;
   }
 
   // Hover: the column under the pointer named in the tooltip, as the
@@ -3552,6 +3675,7 @@
     var m = r.mix && r.mix.cells ? r.mix.cells[at.k] : null;
     SlothIso.tip($("w-iso-tip"), [
       ["ch " + r.key + "  " + (BAND_WORD[r.band] || "band unknown")],
+      [chanWord(chanShade(r.band, r.key)), true],
       [hhmmss(t0) + " to " + hhmmss(t0 + geo.col_s)],
       [num(v) ? fmt(v) + (WF.heat.metric === "wifi.ctrl_total" ? " control frames" : " APs") : "not observed"],
       [Array.isArray(m) && num(m[0]) && m[0] > 0 ? fmt(m[0]) + " frames from its transmitters; click for the five" : "", true]

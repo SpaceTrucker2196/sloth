@@ -5,15 +5,20 @@
 // WiFi and BLE Devices tabs draw one picture the same way:
 //   SlothIso.theme(g)               the heat stops and inks, read from
 //                                   the theme at each draw
+//   SlothIso.scheme()               the identity colours (iso.css):
+//                                   band shades and class hues
 //   SlothIso.layout(o)              the projection: the plot's width, the
 //                                   ridge height and the depth offsets
 //   SlothIso.rails(g, T, geo)       the floor's two side rails
-//   SlothIso.paint(g, T, geo, o)    the rows, back to front
+//   SlothIso.paint(g, T, geo, o)    the rows, back to front; heat
+//                                   coloured, or o.segments / o.cap
 //   SlothIso.hit(geo, x, y)         the row under a point
 //   SlothIso.colAt(geo, i, x)       that row's column under it
 //   SlothIso.frame(cv, st, r, ov)   the offscreen picture and an overlay
 //   SlothIso.grid(cv, st, o)        a cell grid (columns across, time
-//                                   cells receding), axes and all
+//                                   cells receding), axes and all; a
+//                                   column's floor, cap and segments
+//                                   coloured when the caller says
 //   SlothIso.at(cv, st, ev)         the grid cell under a pointer
 //   SlothIso.tip(box, lines, ev)    the hover tooltip's lines
 // A plain canvas, no library (the page's CSP loads none); every string
@@ -46,6 +51,25 @@
       data: cssVar("--data", "#4cebff"), faint: cssVar("--faint", "#5a536e")
     };
   }
+  // The identity colours (iso.css; owner 2026-11-17: "color code
+  // finding by band channel and ssid"): the WiFi bands' shade steps,
+  // in the order the legend names them, and a hue per BLE class slug.
+  function scheme() {
+    return {
+      band: { "2.4": [cssVar("--iso-b24-0", "#ffb347"), cssVar("--iso-b24-1", "#a87a45")],
+              "5": [cssVar("--iso-b5-0", "#a6f2d4"), cssVar("--iso-b5-1", "#55d6a6"),
+                    cssVar("--iso-b5-2", "#2fa98a"), cssVar("--iso-b5-3", "#3fc8e0"), cssVar("--iso-b5-4", "#6f9a90")],
+              "6": [cssVar("--iso-b6-0", "#b48cff"), cssVar("--iso-b6-1", "#8f7fc0")] },
+      cls: { "b:phone": cssVar("--iso-c-phone", "#5b9bff"), "b:wear": cssVar("--iso-c-wear", "#6fdc6f"),
+             "b:tag": cssVar("--iso-c-tag", "#ff6a3d"), "b:hid": cssVar("--iso-c-hid", "#f2d240"),
+             "b:bcn": cssVar("--iso-c-bcn", "#40e0f0"), "b:iot": cssVar("--iso-c-iot", "#c07cff"),
+             "b:unk": cssVar("--iso-c-unk", "#8a8a96") },
+      muted: cssVar("--muted", "#8a82a0")
+    };
+  }
+  // A shade step of a colour: t of the way from the panel's ground to
+  // it (1 the colour itself), for shades within a hue family.
+  function toward(g, T, c, t) { return css(mix(T.bg, rgbOf(g, c), t)); }
   function mix(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
   function heatRGB(T, f) {
     f = Math.max(0, Math.min(1, f));
@@ -99,7 +123,11 @@
   // Spectrum range paints a few hundred thousand columns.
   // o: {cols, depth(i), value(i, c) -> 0..1 (0: nothing), gap (px per
   // side) and step (outline along the tops) for discrete columns,
-  // after(i, x0, y0) once a row is down}.
+  // after(i, x0, y0) once a row is down; segments(i, c) -> [{f, color,
+  // alpha}] stacks a column's body bottom up, each f its share of the
+  // height, in its colour (alpha 0..1 fades it to the ground), and
+  // cap(c) -> a colour for the column's top edge}. With neither, the
+  // heat ramp's calls exactly as before (the Spectrum tab's picture).
   function paint(g, T, geo, o) {
     var n = geo.n, cols = o.cols, PW = geo.PW, RH = geo.RH, c, k;
     geo.cols = cols;
@@ -112,6 +140,7 @@
       cap.push(css(heatRGB(T, k / 64)));
     }
     var gp = o.gap ? Math.min(o.gap, PW / cols * 0.2) : 0;
+    var seg = o.segments ? segPainter(g, T, dense) : null, capOf = o.cap ? colorCache(g) : null;
     var every = n <= 24 ? 1 : Math.ceil(n / 24);
     for (var r = 0; r < n; r++) {
       var idx = order[r], d = o.depth(idx), x0 = ox(geo, d), y0 = oy(geo, d), ridge = new Float32Array(cols);
@@ -122,9 +151,14 @@
         ridge[c] = f;
         var hpx = f * RH;
         if (hpx < 0.5) continue;
-        g.fillStyle = pal[Math.round(f * 64)];
-        g.fillRect(x0 + c * PW / cols + gp, y0 - hpx, PW / cols + 0.6 - 2 * gp, hpx);
-        if (dense) { g.fillStyle = cap[Math.round(f * 64)]; g.fillRect(x0 + c * PW / cols + gp, y0 - hpx, PW / cols + 0.6 - 2 * gp, Math.min(1.5, hpx)); }
+        var sg = seg ? o.segments(idx, c) : null, cc = capOf ? capOf(o.cap(c)) : null;
+        if (sg && sg.length) seg(sg, f, x0 + c * PW / cols + gp, y0, PW / cols + 0.6 - 2 * gp, hpx);
+        else {
+          g.fillStyle = pal[Math.round(f * 64)];
+          g.fillRect(x0 + c * PW / cols + gp, y0 - hpx, PW / cols + 0.6 - 2 * gp, hpx);
+        }
+        if (cc) { g.fillStyle = cc; g.fillRect(x0 + c * PW / cols + gp, y0 - hpx, PW / cols + 0.6 - 2 * gp, Math.min(dense ? 1.5 : 2, hpx)); }
+        else if (dense) { g.fillStyle = cap[Math.round(f * 64)]; g.fillRect(x0 + c * PW / cols + gp, y0 - hpx, PW / cols + 0.6 - 2 * gp, Math.min(1.5, hpx)); }
       }
       geo.rowOx[idx] = x0; geo.rowOy[idx] = y0; geo.ridges[idx] = ridge;
       // The baseline under the ridge, so a quiet row still shows.
@@ -147,6 +181,39 @@
       }
       if (o.after) o.after(idx, x0, y0);
     }
+  }
+
+  // A column's body as segments: each its share of the column's height,
+  // bottom up, the last taking what rounding left. The body is the
+  // colour blended into the ground by the cell's value (taller,
+  // stronger; darker in a dense range, as the heat body is) and by the
+  // segment's alpha, opaque, so a front ridge still hides the one
+  // behind it. Colour strings cached per colour and step.
+  function segPainter(g, T, dense) {
+    var memo = {};
+    function shade(color, t) {
+      var q = Math.round(Math.max(0, Math.min(1, t)) * 32), key = color + "|" + q;
+      if (!Object.prototype.hasOwnProperty.call(memo, key)) memo[key] = toward(g, T, color, q / 32);
+      return memo[key];
+    }
+    return function (sg, f, x, y0, w, hpx) {
+      var body = dense ? 0.5 + 0.4 * f : 0.6 + 0.4 * f, y = y0, left = hpx;
+      for (var s = 0; s < sg.length && left > 0; s++) {
+        var h = s === sg.length - 1 ? left : Math.min(left, Math.max(0, num(sg[s].f) ? sg[s].f : 0) * hpx);
+        if (!(h > 0)) continue;
+        g.fillStyle = shade(String(sg[s].color), body * (num(sg[s].alpha) ? sg[s].alpha : 1));
+        g.fillRect(x, y - h, w, h);
+        y -= h; left -= h;
+      }
+    };
+  }
+  function colorCache(g) {
+    var memo = {};
+    return function (c) {
+      if (!c) return null;
+      if (!Object.prototype.hasOwnProperty.call(memo, c)) memo[c] = css(rgbOf(g, c));
+      return memo[c];
+    };
   }
 
   // ── hit-testing ──────────────────────────────────────────────────
@@ -203,9 +270,14 @@
   // across (channels, classes, advertisers), the time cells receding
   // with the newest in front, height and heat each cell's value on one
   // scale for the whole grid, lo to hi.
-  // o: {cols: [{label, short, group}], n, from, col_s, value(k, c) ->
-  //     number or null, lo, hi, ticks, unit, fmt, clock(ts), sel: {k, c}
-  //     or null, empty: words when there is nothing to draw}
+  // o: {cols: [{label, short, group, groupShort, groupColor, floor:
+  //     {color, dash}, cap}], n, from, col_s, value(k, c) -> number or
+  //     null, segments(k, c) -> as paint()'s, lo, hi, ticks, unit, fmt,
+  //     clock(ts), sel: {k, c} or null, empty: words when there is
+  //     nothing to draw}. A column's floor is a strip under its name
+  //     (dashed with dash), its cap its top edge, a group's colour its
+  //     name's; the margin under the front row grows for the strip, and
+  //     every name is drawn as without it.
   function gridRender(st) {
     return function (cv, dpr, W, Hh) {
       var o = st.o, g = cv.getContext("2d");
@@ -221,7 +293,8 @@
         return;
       }
       var grouped = o.cols.some(function (c) { return !!c.group; });
-      var geo = layout({ W: W, Hh: Hh, n: n, L: 44, R: 56, top: 14, bottom: grouped ? 34 : 22, deep: n > 12 });
+      var floored = o.cols.some(function (c) { return !!c.floor; }), fy = floored ? 7 : 0;
+      var geo = layout({ W: W, Hh: Hh, n: n, L: 44, R: 56, top: 14, bottom: (grouped ? 34 : 22) + fy, deep: n > 12 });
       st.geo = geo;
       // A scale with no extent (a caller's hi equal to its lo) is one
       // unit wide, so no tick, height or ridge is NaN.
@@ -245,7 +318,8 @@
         value: function (i, c) {
           var v = o.value(i, c);
           return num(v) && span > 0 ? (v - o.lo) / span : 0;
-        }
+        },
+        segments: o.segments, cap: o.cols.some(function (c) { return !!c.cap; }) ? function (c) { return o.cols[c].cap; } : null
       });
       // The time axis up the right rail: a label a label height apart.
       g.fillStyle = T.muted; g.strokeStyle = T.rule; g.textAlign = "left";
@@ -259,6 +333,16 @@
       // then each group's name under its span.
       g.textAlign = "center";
       var cw = PW / nc, last = -Infinity, gs = 0;
+      // The floor strip under the names: each column's colour across
+      // its width, dashed where the caller marks it (DFS).
+      for (var fc = 0; floored && fc < nc; fc++) {
+        var fl = o.cols[fc].floor;
+        if (!fl) continue;
+        g.fillStyle = fl.color;
+        var fx = geo.L + fc * cw + 0.5, fz = geo.L + (fc + 1) * cw - 0.5;
+        if (!fl.dash) { g.fillRect(fx, base0 + 15, Math.max(0.5, fz - fx), 4); continue; }
+        for (var dx = fx; dx < fz; dx += 5) g.fillRect(dx, base0 + 15, Math.min(3, fz - dx), 4);
+      }
       for (var c = 0; c <= nc; c++) {
         if (c < nc) {
           var cx = geo.L + (c + 0.5) * cw, lab = o.cols[c].label, w = g.measureText(lab).width;
@@ -272,9 +356,10 @@
         if (grouped && (c === nc || (c > gs && o.cols[c].group !== o.cols[gs].group))) {
           var a = geo.L + gs * cw, z = geo.L + c * cw;
           g.strokeStyle = T.rule;
-          g.beginPath(); g.moveTo(a + 2, base0 + 18.5); g.lineTo(z - 2, base0 + 18.5); g.stroke();
+          g.beginPath(); g.moveTo(a + 2, base0 + 18.5 + fy); g.lineTo(z - 2, base0 + 18.5 + fy); g.stroke();
           var gl = o.cols[gs].group || "";
-          if (gl && g.measureText(gl).width < z - a) { g.fillStyle = T.ink; g.fillText(gl, (a + z) / 2, base0 + 29); }
+          if (gl && g.measureText(gl).width >= z - a && o.cols[gs].groupShort) gl = o.cols[gs].groupShort;
+          if (gl && g.measureText(gl).width < z - a) { g.fillStyle = o.cols[gs].groupColor || T.ink; g.fillText(gl, (a + z) / 2, base0 + 29 + fy); }
           gs = c;
         }
       }
@@ -336,7 +421,7 @@
     box.style.top = Math.max(0, ev.clientY + 12) + "px";
   }
 
-  window.SlothIso = { theme: theme, rgbOf: rgbOf, mix: mix, heatRGB: heatRGB, css: css,
+  window.SlothIso = { theme: theme, scheme: scheme, rgbOf: rgbOf, mix: mix, heatRGB: heatRGB, css: css,
                       layout: layout, rails: rails, paint: paint, hit: hit, colAt: colAt,
                       frame: frame, grid: grid, at: at, tip: tip };
 })();

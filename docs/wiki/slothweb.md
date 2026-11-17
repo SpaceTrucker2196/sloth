@@ -113,7 +113,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-17 (the WiFi view's direction-finding card, `web/src/web_df.c`, `web/ui/df.js`, `GET /api/df`: § Direction finding); 2026-11-17 (#218: `alerts.fired` counts an alert
+**Last updated**: 2026-11-17 (the isometric WiFi and BLE Devices waterfalls coloured by identity: band hue, channel shade and SSID on WiFi, class hue on BLE, with keys; `web/ui/iso.css` `--iso-*`; § M5's WiFi and BLE Devices); 2026-11-17 (the WiFi view's direction-finding card, `web/src/web_df.c`, `web/ui/df.js`, `GET /api/df`: § Direction finding); 2026-11-17 (#218: `alerts.fired` counts an alert
 either daemon raises, not sloth's stream alone; an "alert" record from
 either stream now queues a sample (`web_rollup_queue_add()`) instead of
 adding one directly, so `SENSOR_SOURCE_DOWN` -- the one type both can
@@ -798,6 +798,27 @@ In short:
   channel, up older, down newer) pick the cell for the list of its
   five. The `isometric` checkbox (kept as `wifi.iso`, `false` when
   flat) brings back the flat panel below, with its own arrow keys.
+  Since 2026-11-17 (owner: "on the spectrum displays for wifi and
+  bluetooth I want you to color code finding by band channel and
+  ssid") colour on the isometric panel says which and the height how
+  much: the band is a hue family (2.4 GHz amber, 5 GHz teal-green,
+  6 GHz violet) on a strip under the channel names, the band's name and
+  each column's top edge; the channel is a shade step of it by the
+  band's 802.11 structure (2.4 GHz: 1, 6 and 11 full, the overlapping
+  rest dimmer; 5 GHz: UNII-1 to 48, UNII-2A 52 to 64, UNII-2C 100 to
+  144, UNII-3 149 to 165, by channel number, the two DFS sub-bands
+  dashed on the strip, and a paler fifth step, "other", for the rest
+  (68 to 96, UNII-2B, in no US plan; 169 and up, UNII-4); 6 GHz: the preferred scanning channels, ch % 16 == 5, full, the
+  rest paler); a column's body is the cell's five busiest transmitters
+  stacked by share as the stacked grid draws them, an AP in its SSID's
+  colour (`--k-*`, the same on every tab and both bands), a client in
+  its MAC's, the rest and a cell with no transmitter detail in the
+  channel's shade. A key under the canvas names every step and the
+  window's SSIDs (busiest first, a dozen, then "+N more"); pressing an
+  SSID fades every other one to a quarter until pressed again (nothing
+  kept). The tooltip adds the channel's step in words; no label was
+  dropped (`test_iso.c` counts the grid's text calls). Colours:
+  `web/ui/iso.css` `--iso-b*`, both themes.
   Every SSID, and every alert title and detail (sloth writes the SSID
   into them as it came), is sent in a display form (`\xNN` for any
   octet that is not printable UTF-8, Default_Ignorable code points and
@@ -2468,6 +2489,20 @@ arrow keys (left and right across, up older, down newer) pick the cell
 for the list under the panel. One `isometric` checkbox for the tab
 (`bledev.iso`) draws both flat as above; each canvas's spoken label
 follows the mode.
+
+Since 2026-11-17 (owner: "color code finding by band channel and ssid
+... easy to tell by color groupings") BLE, with no channel and no SSID,
+is grouped by class: each class its own hue (Phones & computers blue,
+Wearables & audio green, Trackers red-orange, Input yellow, Beacons
+cyan, Vehicles & IoT violet, Unknown grey; `web/ui/iso.css`
+`--iso-c-*`, both themes) on the column's floor strip and top edge. The
+class panel stacks a cell's busiest advertisers by share as shade steps
+of the class's hue, the rest darkest; the proximity panel groups the
+advertisers by class (each class in the table's order, the class named
+under its span; the picked advertiser stays picked across the reorder),
+each in its class's hue at one of four shades a hash of its address
+picks. A class key sits under each panel; the height is unchanged and
+no label was dropped.
 
 **Anonymous advertising** (2026-11-03). An LE Extended Advertising
 Report with Address_Type 0xFF carries no AdvA; sloth zeroes the address,
