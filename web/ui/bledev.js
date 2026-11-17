@@ -25,7 +25,10 @@
   var H = null;
   var REFRESH_MS = 30000;
   var S = { gen: 0, timer: 0, cls: null, mix: null, prox: null, rows: [], prows: [],
-            cur: null, pcur: null, geo: null, pgeo: null, sensor: null };
+            cur: null, pcur: null, geo: null, pgeo: null, sensor: null,
+            iso: true, ist: isoState(), pist: isoState() };
+  // Each isometric canvas's own picture and hover (web/ui/iso.js).
+  function isoState() { return { off: null, dirty: true, geo: null, hover: null, o: null }; }
 
   // web_bledev.c web_ble_classes[], display order (test_bledev.c holds
   // the two equal, row by row).
@@ -191,6 +194,7 @@
   function classGrid() {
     if (emptyState()) return;
     var c = $("bledev-classes"), T = H.theme();
+    c.style.height = S.iso ? "300px" : "";
     var dpr = H.sizeCanvas(c), g = c.getContext("2d");
     var W = c.width, Hh = c.height;
     g.clearRect(0, 0, W, Hh);
@@ -211,6 +215,12 @@
             (num(S.mix.ring_from) && S.mix.ring_from > from ? "; detail held from " + H.hhmmss(S.mix.ring_from) : "") +
             (captureOnly() ? "; --bt-capture only: an Ubertooth's one-channel samples are not credited, so there is no " +
                              "advertiser detail and no report count, and the cells are advertiser counts only" : ""));
+    }
+    if (S.iso) {
+      S.geo = rows.length && cols ? { cols: cols, col_s: col_s, from: from, iso: true } : null;
+      classIso(rows, cols, col_s, from);
+      classDetail();
+      return;
     }
     if (!rows.length || !cols) { classDetail(); return; }
     var busy = rows.map(rowBusy), bmax = 0, hmax = 0;
@@ -342,6 +352,27 @@
     box.appendChild(ol);
   }
 
+  // Panel A isometric (#224): the classes across, the time cells
+  // receding with the newest in front, each column's height and heat
+  // its cell in the cells select (advertisers per class or reports), on
+  // one scale, 0 to the window's largest cell.
+  function classIso(rows, cols, col_s, from) {
+    var hmax = 0;
+    rows.forEach(function (r) {
+      ((r.heat && r.heat.cells) || []).forEach(function (v) { if (num(v) && v > hmax) hmax = v; });
+    });
+    var cur = S.cur;
+    SlothIso.grid($("bledev-classes"), S.ist, {
+      cols: rows.map(function (r) { var d = classDef(r.key); return { label: d.glyph + " " + d.label, short: d.glyph }; }),
+      n: rows.length ? cols : 0, from: from, col_s: col_s,
+      value: function (k, i) { var cl = rows[i].heat && rows[i].heat.cells; return cl ? cl[k] : null; },
+      lo: 0, hi: hmax > 0 ? hmax : 1, ticks: hmax > 0 ? [0, hmax / 2, hmax] : [0], unit: classUnit(), fmt: H.fmt,
+      clock: H.hhmmss, sel: cur && cur.r < rows.length && cur.c < cols ? { k: cur.c, c: cur.r } : null,
+      empty: S.cls ? "no class in the window" : "loading"
+    });
+  }
+  function classUnit() { return S.cls && S.cls.metric === "ble.class.adv" ? "reports" : "advertisers"; }
+
   function openOf(addr, type, iface) {
     return function () { H.openBleDrawer(addr, type, iface); };
   }
@@ -353,7 +384,7 @@
     var c = $("bledev-prox"), T = H.theme();
     var rows = (S.prox && S.prox.rows) || [];
     S.prows = rows;
-    c.style.height = Math.max(3, rows.length) * PROW_PX + 4 + "px";
+    c.style.height = S.iso ? "320px" : Math.max(3, rows.length) * PROW_PX + 4 + "px";
     var dpr = H.sizeCanvas(c), g = c.getContext("2d");
     var W = c.width, Hh = c.height;
     g.clearRect(0, 0, W, Hh);
@@ -369,6 +400,12 @@
                  p.tier + " tier, " + H.fmt(p.col_s) + " s cells" + (p.more && !p.read_cut ? "; more than shown" : "") +
                  (p.anonymous_heard ? "; anonymous advertising heard and not drawn: no address to key a signal by " +
                                       "(it is in the class panel)" : ""));
+    if (S.iso) {
+      S.pgeo = p && rows.length && p.cols ? { cols: p.cols, col_s: p.col_s, from: p.from, iso: true } : null;
+      proxIso(rows, p);
+      proxDetail();
+      return;
+    }
     if (!p || !rows.length || !p.cols) {
       g.fillStyle = T.faint;
       g.fillRect(W * 0.35, Hh / 2, W * 0.3, Math.max(1, dpr));
@@ -411,6 +448,74 @@
       g.strokeRect(x0 + cur.c * cw + 0.5, cur.r * rh + 0.5, Math.max(dpr, cw - 1), rh - 1);
     }
     proxDetail();
+  }
+
+  // Panel B isometric (#224): the advertisers across in the table's
+  // order, the time cells receding, each column's height and heat its
+  // mean signal from -110 to -30 dBm (the flat grid's distance bands
+  // are in the tooltip and the list, at the row's own power).
+  var PROX_LO = -110, PROX_HI = -30;
+  function proxIso(rows, p) {
+    var cur = S.pcur, cols = p && p.cols ? p.cols : 0;
+    SlothIso.grid($("bledev-prox"), S.pist, {
+      cols: rows.map(function (r) {
+        var d = classDef(r["class"]);
+        return { label: r.name !== null ? r.name : shortAddr(r.addr), short: d.glyph };
+      }),
+      n: rows.length ? cols : 0, from: p ? p.from : 0, col_s: p ? p.col_s : 0,
+      value: function (k, i) { return rows[i].cells ? rows[i].cells[k] : null; },
+      lo: PROX_LO, hi: PROX_HI, ticks: [-100, -80, -60, -40], unit: "dBm (mean)",
+      fmt: function (v) { return String(v); }, clock: H.hhmmss,
+      sel: cur && cur.r < rows.length && cur.c < cols ? { k: cur.c, c: cur.r } : null,
+      empty: p ? "no advertiser heard in the window" : "loading"
+    });
+  }
+
+  // Hover on either isometric panel: the column under the pointer
+  // named in the tooltip, as the Spectrum tab's.
+  function isoTipLines(which, at) {
+    var geo = which === "p" ? S.pgeo : S.geo;
+    if (!geo) return null;
+    var t0 = geo.from + at.k * geo.col_s, when = H.hhmmss(t0) + " to " + H.hhmmss(t0 + geo.col_s);
+    if (which === "p") {
+      var r = S.prows[at.c];
+      if (!r) return null;
+      var v = r.cells ? r.cells[at.k] : null, E = rowEdges(r);
+      return [[r.name !== null ? "\"" + r.name + "\"  " + r.addr : r.addr], [when],
+              [num(v) ? v.toFixed(1) + " dBm mean, " + PROX_WORD[proxBand(v, E)] + " (" + PROX_SPAN[proxBand(v, E)] + ")" : "not heard"],
+              [classDef(r["class"]).label + ", P_tx " + ptxText(r.ptx, r.ptx_source), true]];
+    }
+    var cr = S.rows[at.c];
+    if (!cr) return null;
+    var hv = cr.heat && cr.heat.cells ? cr.heat.cells[at.k] : null;
+    var m = cr.mix && cr.mix.cells ? cr.mix.cells[at.k] : null, top = Array.isArray(m) ? txOf(m[2]) : null;
+    var out = [[classDef(cr.key).label], [when], [num(hv) ? H.fmt(hv) + " " + classUnit() : "not observed"]];
+    if (top && num(m[0]) && m[0] > 0)
+      out.push(["busiest " + (isAnon(top) ? "anonymous" : top.name !== null ? "\"" + top.name + "\"" : top.id) + ", " +
+                H.fmt(m[3]) + " of " + H.fmt(m[0]) + " reports", true]);
+    return out;
+  }
+  function isoHover(ev, which) {
+    var cv = $(which === "p" ? "bledev-prox" : "bledev-classes"), st = which === "p" ? S.pist : S.ist;
+    var at = SlothIso.at(cv, st, ev), lines = at ? isoTipLines(which, at) : null;
+    st.hover = lines ? at : null;
+    SlothIso.tip($("bledev-iso-tip"), lines, ev);
+    SlothIso.grid(cv, st);
+  }
+  function isoLeave(ev, which) {
+    var st = which === "p" ? S.pist : S.ist;
+    if (!st.hover) return;
+    st.hover = null;
+    SlothIso.tip($("bledev-iso-tip"), null, ev);
+    SlothIso.grid($(which === "p" ? "bledev-prox" : "bledev-classes"), st);
+  }
+  function isoPick(ev, which) {
+    var p = which === "p", at = SlothIso.at($(p ? "bledev-prox" : "bledev-classes"), p ? S.pist : S.ist, ev);
+    var key = p ? "pcur" : "cur";
+    if (!at || at.c >= (p ? S.prows : S.rows).length) return;
+    if (S[key] && S[key].r === at.c && S[key].c === at.k) return;
+    S[key] = { r: at.c, c: at.k };
+    if (p) proxGrid(); else classGrid();
   }
 
   function proxDetail() {
@@ -473,6 +578,7 @@
   // canvas, or another button, does not open it.
   function labelClick(ev, canvas, geo) {
     if (!geo || ev.button !== 0) return;
+    if (geo.iso) return;   // isometric: a click picks a column
     var bx = canvas.getBoundingClientRect();
     var px = (ev.clientX - bx.left) * (canvas.width / Math.max(1, bx.width));
     var py = (ev.clientY - bx.top) * (canvas.height / Math.max(1, bx.height));
@@ -485,7 +591,10 @@
     if (!geo || !nrows) return;
     var key = which === "p" ? "pcur" : "cur";
     var cur = S[key] || { r: 0, c: geo.cols - 1 };
-    var MOVE = { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] };
+    // Isometric, the rows run across and time recedes: left and right
+    // a row, up an older cell, down a newer one.
+    var MOVE = S.iso ? { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }
+                     : { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] };
     var d = Object.prototype.hasOwnProperty.call(MOVE, ev.key) ? MOVE[ev.key] : null;
     if (d) {
       ev.preventDefault();
@@ -597,20 +706,62 @@
     }).catch(function (e) { if (gen === DR.gen) H.set("bledev-rssi-note", H.errText(e.message)); });
   }
 
+  // The canvases' words, the sub text and the cursor follow the mode.
+  var FLAT_LABEL = {};
+  function isoMode() {
+    ["bledev-classes", "bledev-prox"].forEach(function (id) {
+      var c = $(id);
+      if (!Object.prototype.hasOwnProperty.call(FLAT_LABEL, id)) FLAT_LABEL[id] = c.ariaLabel;
+      c.ariaLabel = S.iso ? ISO_LABEL[id] : FLAT_LABEL[id];
+      c.classList.toggle("iso", S.iso);
+    });
+    $("bledev-iso-sub").hidden = !S.iso;
+    if (!S.iso) { S.ist.hover = S.pist.hover = null; $("bledev-iso-tip").hidden = true; }
+  }
+  var ISO_LABEL = {
+    "bledev-classes": "device classes by time, isometric: the classes across, the time cells receding up and to the " +
+      "right with the newest in front, each column's height and colour the class's advertisers or reports in the cell; " +
+      "arrow keys pick a cell (left and right a class, up older, down newer), the list below names it",
+    "bledev-prox": "advertisers by time, isometric: the advertisers across, the time cells receding up and to the " +
+      "right with the newest in front, each column's height and colour the mean signal, taller is stronger; arrow " +
+      "keys pick a cell (left and right an advertiser, up older, down newer), the list below names it"
+  };
+
   function init(h) {
     H = h;
     var cc = $("bledev-classes"), pc = $("bledev-prox");
     cc.tabIndex = 0;
     pc.tabIndex = 0;
-    cc.addEventListener("pointermove", function (ev) { if (ev.pointerType === "mouse") pick(ev, cc, S.geo, S.rows.length, "c"); });
-    cc.addEventListener("pointerdown", function (ev) { pick(ev, cc, S.geo, S.rows.length, "c"); });
+    cc.addEventListener("pointermove", function (ev) {
+      if (S.iso) isoHover(ev, "c");
+      else if (ev.pointerType === "mouse") pick(ev, cc, S.geo, S.rows.length, "c");
+    });
+    cc.addEventListener("pointerdown", function (ev) { if (S.iso) isoPick(ev, "c"); else pick(ev, cc, S.geo, S.rows.length, "c"); });
+    cc.addEventListener("pointerleave", function (ev) { isoLeave(ev, "c"); });
     cc.addEventListener("keydown", function (ev) { keys(ev, S.geo, S.rows.length, "c", "bledev-detail"); });
-    pc.addEventListener("pointermove", function (ev) { if (ev.pointerType === "mouse") pick(ev, pc, S.pgeo, S.prows.length, "p"); });
-    pc.addEventListener("pointerdown", function (ev) { pick(ev, pc, S.pgeo, S.prows.length, "p"); });
+    pc.addEventListener("pointermove", function (ev) {
+      if (S.iso) isoHover(ev, "p");
+      else if (ev.pointerType === "mouse") pick(ev, pc, S.pgeo, S.prows.length, "p");
+    });
+    pc.addEventListener("pointerdown", function (ev) { if (S.iso) isoPick(ev, "p"); else pick(ev, pc, S.pgeo, S.prows.length, "p"); });
+    pc.addEventListener("pointerleave", function (ev) { isoLeave(ev, "p"); });
     pc.addEventListener("click", function (ev) { labelClick(ev, pc, S.pgeo); });
     pc.addEventListener("keydown", function (ev) { keys(ev, S.pgeo, S.prows.length, "p", "bledev-pdetail"); });
     ["bledev-win", "bledev-metric", "bledev-n"].forEach(function (id) {
       $(id).addEventListener("change", function () { S.cur = S.pcur = null; load(); });
+    });
+    // Isometric or flat, kept per viewer (slothweb.v1.bledev.iso; the
+    // default, isometric, kept as no value).
+    S.iso = H.prefGet("bledev.iso") !== false;
+    $("bledev-iso").checked = S.iso;
+    isoMode();
+    $("bledev-iso").addEventListener("change", function () {
+      S.iso = $("bledev-iso").checked;
+      H.prefSet("bledev.iso", S.iso ? null : false);
+      isoMode();
+      if (!visible()) return;
+      classGrid();
+      proxGrid();
     });
     window.addEventListener("resize", function () {
       if (!visible()) return;

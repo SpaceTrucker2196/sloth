@@ -3402,7 +3402,8 @@
   // /api/series with its baseline band. Channel keys, BSSIDs and SSIDs
   // are drawn with fillText or set with textContent, never as markup.
   var WF = { gen: 0, heat: null, mix: null, rows: [], cur: null, apEls: new Map(), geo: null,
-             g3max: {}, g3of: "", cl: [], clFrom: null };
+             g3max: {}, g3of: "", cl: [], clFrom: null,
+             iso: true, ist: { off: null, dirty: true, geo: null, hover: null, o: null } };
   var AP_SORTS = { "signal": 1, "last": 1, "ssids": 1, "karma": 1, "bssid": 1 };
   var BAND_WORD = { "2.4": "2.4 GHz", "5": "5 GHz", "6": "6 GHz" };
 
@@ -3481,17 +3482,86 @@
     return keyColor(t.id);
   }
 
-  // The channels panel, in the mode the "channels" control picks: G3's
-  // horizon strips (F8, slice V3; the default) or the stacked grid it
-  // drills into. Both answers are fetched whichever is shown, so the
-  // control switches without asking the server again.
+  // The channels panel: isometric (#224, the default), or flat in the
+  // mode the "channels" control picks: G3's horizon strips (F8, slice
+  // V3) or the stacked grid it drills into. Both answers are fetched
+  // whichever is shown, so either control switches without asking the
+  // server again.
+  var W_FLAT_LABEL = $("w-heat").ariaLabel;
+  var W_ISO_LABEL = "channels by time, isometric: the channels across, 2.4, 5 and 6 GHz grouped, the time cells " +
+    "receding up and to the right with the newest in front, each column's height and colour its cell's value on one " +
+    "scale; arrow keys pick a cell (left and right a channel, up older, down newer), the list below names it";
   function channelGrid() {
-    var hz = $("w-grid").value !== "mix";
-    $("w-g3wrap").classList.toggle("mix", !hz);
-    $("w-drill").hidden = !hz;
-    $("w-hz-sub").hidden = !hz;
-    $("w-mx-sub").hidden = hz;
+    var iso = WF.iso, hz = $("w-grid").value !== "mix";
+    $("w-grid").disabled = iso;
+    $("w-g3wrap").classList.toggle("mix", iso || !hz);
+    $("w-heat").classList.toggle("iso", iso);
+    $("w-heat").ariaLabel = iso ? W_ISO_LABEL : W_FLAT_LABEL;
+    $("w-drill").hidden = iso || !hz;
+    $("w-hz-sub").hidden = iso || !hz;
+    $("w-mx-sub").hidden = iso || hz;
+    $("w-iso-sub").hidden = !iso;
+    if (!iso) { WF.ist.hover = null; $("w-iso-tip").hidden = true; }
+    if (iso) { isoGrid(); return; }
     if (hz) horizonGrid(); else mixGrid();
+  }
+
+  // The isometric waterfall (web/ui/iso.js, as the Spectrum tab's): the
+  // channels across in gridRows()'s band order, the time cells
+  // receding with the newest in front, each column's height and heat
+  // its cell in the metric shown, on one scale for every channel, 0 to
+  // the window's largest cell (the stacked grid's heat scale; G3's
+  // per-channel tops would make the heights incomparable).
+  function isoGrid() {
+    var c = $("w-heat");
+    c.style.height = "380px";
+    var rows = gridRows(), hz = WF.heat;
+    WF.rows = rows;
+    var cols = hz && num(hz.cols) ? hz.cols : 0, hmax = 0;
+    rows.forEach(function (r) {
+      ((r.heat && r.heat.cells) || []).forEach(function (v) { if (num(v) && v > hmax) hmax = v; });
+    });
+    WF.geo = cols && rows.length ? { cols: cols, col_s: hz.col_s, from: hz.from, iso: true } : null;
+    var unit = hz && hz.metric === "wifi.ctrl_total" ? "control frames" : "APs";
+    if (hz) set("w-heat-note", rows.length + " channels, " + hz.tier + " tier, " + fmt(hz.col_s) + " s cells, " +
+                unit + " 0 to " + fmt(hmax) + " (the window's largest cell)" + (hz.more ? ", more channels than shown" : ""));
+    mixNote();
+    var cur = WF.cur;
+    SlothIso.grid(c, WF.ist, {
+      cols: rows.map(function (r) {
+        return { label: r.key, short: r.key.replace(/^6g/, ""), group: BAND_WORD[r.band] || "band unknown" };
+      }),
+      n: rows.length ? cols : 0, from: hz ? hz.from : 0, col_s: hz ? hz.col_s : 0,
+      value: function (k, i) { var cl = rows[i].heat && rows[i].heat.cells; return cl ? cl[k] : null; },
+      lo: 0, hi: hmax > 0 ? hmax : 1, ticks: hmax > 0 ? [0, hmax / 2, hmax] : [0], unit: unit, fmt: fmt,
+      clock: hhmmss, sel: cur && cur.r < rows.length && cur.c < cols ? { k: cur.c, c: cur.r } : null,
+      empty: hz ? "no channel in the window" : "loading"
+    });
+    mixDetail();
+  }
+
+  // Hover: the column under the pointer named in the tooltip, as the
+  // Spectrum tab's; a click or tap picks its cell for the list below.
+  function isoHover(ev) {
+    var c = $("w-heat"), at = SlothIso.at(c, WF.ist, ev), geo = WF.geo, r = at ? WF.rows[at.c] : null;
+    WF.ist.hover = r && geo ? at : null;
+    if (!WF.ist.hover) { SlothIso.tip($("w-iso-tip"), null, ev); SlothIso.grid(c, WF.ist); return; }
+    var t0 = geo.from + at.k * geo.col_s, v = r.heat && r.heat.cells ? r.heat.cells[at.k] : null;
+    var m = r.mix && r.mix.cells ? r.mix.cells[at.k] : null;
+    SlothIso.tip($("w-iso-tip"), [
+      ["ch " + r.key + "  " + (BAND_WORD[r.band] || "band unknown")],
+      [hhmmss(t0) + " to " + hhmmss(t0 + geo.col_s)],
+      [num(v) ? fmt(v) + (WF.heat.metric === "wifi.ctrl_total" ? " control frames" : " APs") : "not observed"],
+      [Array.isArray(m) && num(m[0]) && m[0] > 0 ? fmt(m[0]) + " frames from its transmitters; click for the five" : "", true]
+    ].filter(function (l) { return l[0] !== ""; }), ev);
+    SlothIso.grid(c, WF.ist);
+  }
+  function isoPick(ev) {
+    var at = SlothIso.at($("w-heat"), WF.ist, ev);
+    if (!at || at.c >= WF.rows.length) return;
+    if (WF.cur && WF.cur.r === at.c && WF.cur.c === at.k) return;
+    WF.cur = { r: at.c, c: at.k };
+    channelGrid();
   }
 
   // G3 (web/ui/air.js): one strip per channel on its own absolute
@@ -3721,13 +3791,25 @@
     channelGrid();
   }
   $("w-heat").tabIndex = 0;
-  $("w-heat").addEventListener("pointermove", function (ev) { if (ev.pointerType === "mouse") gridPick(ev); });
-  $("w-heat").addEventListener("pointerdown", gridPick);
+  $("w-heat").addEventListener("pointermove", function (ev) {
+    if (WF.iso) isoHover(ev);
+    else if (ev.pointerType === "mouse") gridPick(ev);
+  });
+  $("w-heat").addEventListener("pointerdown", function (ev) { if (WF.iso) isoPick(ev); else gridPick(ev); });
+  $("w-heat").addEventListener("pointerleave", function (ev) {
+    if (!WF.iso || !WF.ist.hover) return;
+    WF.ist.hover = null;
+    SlothIso.tip($("w-iso-tip"), null, ev);
+    SlothIso.grid($("w-heat"), WF.ist);
+  });
   $("w-heat").addEventListener("keydown", function (ev) {
     var geo = WF.geo;
     if (!geo || !WF.rows.length) return;
     var cur = WF.cur || { r: 0, c: num(geo.c1) ? geo.c1 : geo.cols - 1 };
-    var MOVE = { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] };
+    // Isometric, the channels run across and time recedes: left and
+    // right a channel, up an older cell, down a newer one.
+    var MOVE = WF.iso ? { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }
+                      : { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] };
     var d = Object.prototype.hasOwnProperty.call(MOVE, ev.key) ? MOVE[ev.key] : null;
     if (d) {
       ev.preventDefault();
@@ -3745,6 +3827,15 @@
     }
   });
   window.addEventListener("resize", function () { if (view === "wifi" && WF.geo) channelGrid(); });
+  // Isometric or flat, kept per viewer (slothweb.v1.wifi.iso; the
+  // default, isometric, kept as no value).
+  WF.iso = prefGet("wifi.iso") !== false;
+  $("w-iso").checked = WF.iso;
+  $("w-iso").addEventListener("change", function () {
+    WF.iso = $("w-iso").checked;
+    prefSet("wifi.iso", WF.iso ? null : false);
+    if (view === "wifi") channelGrid();
+  });
 
   function av(k) { return function (a) { return a[k]; }; }
   var DTA = DataTable({ id: "aps", label: "access points", box: $("w-aps-box"), head: $("w-aps-head"),
@@ -6326,7 +6417,8 @@
   // The BLE Devices waterfall (web/ui/bledev.js): the page's helpers, lent once.
   if (window.SlothBleDev) SlothBleDev.init({ el: el, set: set, getJSON: getJSON, theme: theme,
     heat: heat, keyColor: keyColor, sizeCanvas: sizeCanvas, fmt: fmt, hhmmss: hhmmss, css: css,
-    errText: errText, series: series, tierFor: tierFor, openBleDrawer: openBleDrawer });
+    errText: errText, series: series, tierFor: tierFor, openBleDrawer: openBleDrawer,
+    prefGet: prefGet, prefSet: prefSet });
 
   // The Radar view (web/ui/radar.js): the page's helpers, lent once; its
   // fetches go through the scoped getJSON, so the dome shows the scope

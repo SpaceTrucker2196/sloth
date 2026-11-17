@@ -22,6 +22,7 @@
 @include adsb.css
 @include aprs.css
 @include spectrum.css
+@include iso.css
 @include victron.css
 @include camera.css
 @include bledev.css
@@ -50,6 +51,7 @@
 @include subnotes.js
 @include incident.js
 @include rfstream.js
+@include iso.js
 @include app.js
 @include location.js
 @include gnss.js
@@ -326,6 +328,7 @@
       <span class="sub" id="b-note">sloth's ble_device records, kept by slothweb (slothweb.db; sloth.db has no BLE table); nothing is sent, and sloth never scans, connects or reads GATT: the operator's stack runs the scan</span>
     </section>
     <section class="panel controls" aria-label="ble waterfall controls">
+      <label title="both waterfalls drawn isometrically, as the Spectrum tab draws its sweep; off: the flat grids"><input type="checkbox" id="bledev-iso" checked> isometric</label>
       <label>cells <select id="bledev-metric">
         <option value="advertisers" selected>advertisers per class</option>
         <option value="adv">advertising reports</option>
@@ -349,6 +352,8 @@
       <div class="label">who is around: device class x time <span class="sub" id="bledev-classes-note"></span> <span class="sub" id="bledev-mix-note"></span></div>
       <canvas class="wfall bledev-classes" id="bledev-classes" aria-label="device classes by time: each cell the class's five busiest advertisers as stacked bands; arrow keys pick a cell, the list below names it" aria-describedby="bledev-detail"></canvas>
       <div class="sub">rows: device classes, decided from what each advertisement carries (web/README.md, BLE Devices: the rules and their sources), Trackers always shown. A cell: its five busiest advertisers by advertising reports, each band its share (a named device in its name's colour, else its address's), grey the rest, and anonymous advertising (an extended advertisement with no address) one neutral band labelled anonymous in Unknown, with no drawer to open: sloth holds every anonymous advertiser a sensor hears as one row, so its fields class none of them; the strip at a row's left: its busyness in the cells select, the heat ramp against the busiest row; a dimmed heat cell: no advertiser detail held for it. With --bt-capture alone (an Ubertooth) every report is a one-channel sample, which the mix and the report count do not credit: every cell is then a dimmed advertiser count, the note says so, and "advertising reports" stays empty. Trackers are a watch category, an Appearance Tag or Keyring, or a UUID the SIG assigns to Tile or CHIPOLO: the shipped watchlist is empty and the Find My and SmartTag shapes are unverified, so an empty row is not "no trackers here". A report is one HCI advertising report (one a scan when the controller filters duplicates), not one frame on the air.</div>
+      <div class="sub" id="bledev-iso-sub">isometric: the classes across, the time cells receding up and to the right, the newest in front, a column's height and heat colour its cell in the cells select on one scale, 0 to the window's largest; in the panel below, the advertisers across and each column its mean signal from -110 to -30 dBm, hotter and taller is stronger. Point at a column for its row, time and value; click, tap or arrow to it (left and right across, up older, down newer) for the list under the panel. Untick isometric for the flat grids, whose rows and cells this text's neighbours describe.</div>
+      <div class="iso-tip" id="bledev-iso-tip" role="tooltip" hidden></div>
       <div class="mixd" id="bledev-detail" aria-live="polite"></div>
     </section>
     <section class="panel">
@@ -600,6 +605,7 @@
       <div class="sub">the access points the managed card's own scan found (sloth.db wifi_aps), newest first; status: the BSS the card is on now</div>
     </section>
     <section class="panel controls" aria-label="wifi controls">
+      <label title="the channel waterfall drawn isometrically, as the Spectrum tab draws its sweep; off: the flat grid below"><input type="checkbox" id="w-iso" checked> isometric</label>
       <label>channels <select id="w-grid">
         <option value="horizon" selected>against normal (horizon)</option>
         <option value="mix">who transmits (stacked)</option>
@@ -625,6 +631,8 @@
       <canvas class="wfall" id="w-heat" aria-label="channels by time: one horizon strip per channel against its own scale, or each cell the top five transmitters as stacked bands; 2.4, 5 and 6 GHz grouped; arrow keys pick a cell, the list below names it" aria-describedby="w-mix"></canvas>
       <canvas class="g3drill" id="w-drill" aria-label="the picked column: each channel's five busiest transmitters, stacked by their share of its frames"></canvas>
       </div>
+      <div class="iso-tip" id="w-iso-tip" role="tooltip" hidden></div>
+      <div class="sub" id="w-iso-sub" hidden>isometric: the channels across, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), each band named under its channels; the time cells receding up and to the right, the newest in front; a column's height and heat colour its cell in the metric above, on one scale for every channel, 0 to the window's largest cell (the level axis at left). Point at a column for its channel, time and value; click or tap it, or arrow to it (left and right: channels, up: older, down: newer), and the list below names the cell's five busiest transmitters. Untick isometric for the horizon strips or the stacked grid.</div>
       <div class="sub" id="w-hz-sub">rows: every channel seen in 30 days, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), a rule between bands. A strip is two bands laid over one another, the lighter its first half, the darker its second: APs per channel from 0 to the channel's own 30 d largest; control frames as z against the channel's hour-of-week baseline ("z" after the key), the second band above the sensitivity's sd and in the heat colour, flat while the channel is normal (a channel with no baseline yet: from 0 to its own 30 d busiest, per minute). A grey cell: warming, a line along the foot: observed and quiet, nothing: not observed, a mark along the top: past the scale. Point at, tap or arrow to a column: beside the strips, that column's five busiest transmitters on each channel, stacked in their TUI colours; the list below names the picked cell's.</div>
       <div class="sub" id="w-mx-sub" hidden>rows: channels, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), a rule between bands. A cell: its five busiest transmitters, each band its share of the cell's frames (an AP in its SSID's colour, a client in its MAC's, as the TUI colours them; a client's probes all on the channel of its latest one, which carries no band, so a 6 GHz client reads as the 2.4 or 5 GHz channel of that number), grey the rest, on the monitor radio's ground; the strip at a row's left: its busyness in the metric above, the heat ramp against the busiest row; a dimmed heat cell: no transmitter detail held for it. Point at, tap or arrow to a cell.</div>
       <div class="mixd" id="w-mix" aria-live="polite"></div>

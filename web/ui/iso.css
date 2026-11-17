@@ -1,0 +1,9 @@
+/* The isometric waterfalls' chrome (iso.js, #224): the hover tooltip
+ * of the WiFi and BLE Devices tabs, beside the pointer in the window's
+ * coordinates; the picture's colours are the palette's heat stops, read
+ * by the script at each draw. */
+.iso-tip { position: fixed; z-index: 20; max-width: 240px; padding: 4px 6px; font-size: 11px;
+  background: var(--panel); border: 1px solid var(--rule-hi); border-radius: var(--radius-sm);
+  pointer-events: none; white-space: pre-wrap; }
+.iso-tip .d-dim { color: var(--tui-dim); }
+canvas.wfall.iso { cursor: crosshair; }

@@ -175,34 +175,10 @@
   function tickText(hz) { var m = hz / 1e6; return m >= 1 ? String(+m.toPrecision(6)) : (hz / 1e3) + "k"; }
 
   // ── colour ───────────────────────────────────────────────────────
-  // The palette's four heat stops, read from the theme at each draw so
-  // the light theme gets its own; interpolated through a 1x1 canvas.
-  function rgbOf(g, c) {
-    g.fillStyle = "#000"; g.fillStyle = c;
-    var s = g.fillStyle;
-    if (s.charAt(0) === "#") return [parseInt(s.substr(1, 2), 16), parseInt(s.substr(3, 2), 16), parseInt(s.substr(5, 2), 16)];
-    var m = s.match(/(\d+(\.\d+)?)/g);
-    return m ? [+m[0], +m[1], +m[2]] : [128, 128, 128];
-  }
-  function theme(g) {
-    return {
-      heat: [rgbOf(g, cssVar("--heat-0", "#2b8f74")), rgbOf(g, cssVar("--heat-1", "#6bffcc")),
-             rgbOf(g, cssVar("--heat-2", "#ff8c26")), rgbOf(g, cssVar("--heat-3", "#ff3f3f"))],
-      bg: rgbOf(g, cssVar("--panel", "#0e0817")),
-      ink: cssVar("--ink", "#e8e2f2"), muted: cssVar("--muted", "#8a82a0"),
-      rule: cssVar("--rule", "#163a30"), signal: cssVar("--signal", "#ff8c26"),
-      data: cssVar("--data", "#4cebff"), faint: cssVar("--faint", "#5a536e")
-    };
-  }
-  function mix(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
-  function heatRGB(T, f) {
-    f = Math.max(0, Math.min(1, f));
-    var x = f * 3, i = Math.min(2, Math.floor(x));
-    return mix(T.heat[i], T.heat[i + 1], x - i);
-  }
-  function css(c, a) {
-    return "rgba(" + Math.round(c[0]) + "," + Math.round(c[1]) + "," + Math.round(c[2]) + "," + (a === undefined ? 1 : a) + ")";
-  }
+  // The palette's heat stops and the theme's inks, SlothIso's (iso.js,
+  // #224): the WiFi and BLE Devices waterfalls draw with the same.
+  var ISO = window.SlothIso;
+  var rgbOf = ISO.rgbOf, theme = ISO.theme, css = ISO.css;
 
   // ── the waterfall ────────────────────────────────────────────────
   // Geometry: the newest row in front, along the bottom; each older one
@@ -215,7 +191,10 @@
   // is behind it, as a 3-D surface would; past ~24 rows only every few
   // ridges get an outline, so a dense range reads as a surface and not
   // a hairball. The picture is drawn once into an offscreen canvas;
-  // hover and drag paint over a copy of it.
+  // hover and drag paint over a copy of it. The projection, the row
+  // painter, the hit test and the offscreen copy are SlothIso's
+  // (iso.js); the axes, the band strip, the peak labels, the gaps and
+  // the zoom are this tab's.
   function levelRange() {
     if (doc && doc._lr) return doc._lr;
     var lo = Infinity, hi = -Infinity, qmax = 0;
@@ -266,39 +245,25 @@
     return out;
   }
 
-  var off = null, dirty = true;
-  function invalidate() { dirty = true; }
+  var fr = { off: null, dirty: true };
+  function invalidate() { fr.dirty = true; }
 
   function draw() {
     var cv = $("spec-plot");
     if (!cv) return;
-    var dpr = window.devicePixelRatio || 1, W = cv.clientWidth || 800, Hh = cv.clientHeight || 460;
-    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(Hh * dpr)) {
-      cv.width = Math.round(W * dpr); cv.height = Math.round(Hh * dpr);
-      dirty = true;
-    }
-    if (!off) off = document.createElement("canvas");
-    if (dirty || off.width !== cv.width || off.height !== cv.height) {
-      off.width = cv.width; off.height = cv.height;
-      render(off, dpr, W, Hh);
-      dirty = false;
-    }
-    var g = cv.getContext("2d");
-    g.setTransform(1, 0, 0, 1, 0, 0);
-    g.clearRect(0, 0, cv.width, cv.height);
-    g.drawImage(off, 0, 0);
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (!geo) return;
-    var T = theme(g);
-    if (drag && drag.x1 !== undefined) {
-      g.fillStyle = css(rgbOf(g, T.signal), 0.15);
-      g.fillRect(Math.min(drag.x0, drag.x1), geo.top - 10, Math.abs(drag.x1 - drag.x0), geo.base0 - geo.top + 10);
-    }
-    if (hover) {
-      g.strokeStyle = T.signal; g.lineWidth = 1;
-      g.beginPath(); g.moveTo(hover.x, hover.oy); g.lineTo(hover.x, hover.oy - geo.RH); g.stroke();
-      g.beginPath(); g.moveTo(hover.ox, hover.oy + 0.5); g.lineTo(hover.ox + geo.PW, hover.oy + 0.5); g.stroke();
-    }
+    ISO.frame(cv, fr, render, function (g) {
+      if (!geo) return;
+      var T = theme(g);
+      if (drag && drag.x1 !== undefined) {
+        g.fillStyle = css(rgbOf(g, T.signal), 0.15);
+        g.fillRect(Math.min(drag.x0, drag.x1), geo.top - 10, Math.abs(drag.x1 - drag.x0), geo.base0 - geo.top + 10);
+      }
+      if (hover) {
+        g.strokeStyle = T.signal; g.lineWidth = 1;
+        g.beginPath(); g.moveTo(hover.x, hover.oy); g.lineTo(hover.x, hover.oy - geo.RH); g.stroke();
+        g.beginPath(); g.moveTo(hover.ox, hover.oy + 0.5); g.lineTo(hover.ox + geo.PW, hover.oy + 0.5); g.stroke();
+      }
+    });
   }
 
   function render(cv, dpr, W, Hh) {
@@ -314,34 +279,18 @@
       geo = null;
       return;
     }
-    var n = rows.length, L = 46, R = timed() ? 112 : 70, top = 70, bottom = 54, avail = Hh - top - bottom;
-    var DXT, DYT;
-    if (timed() || n > 12) {
-      // A range: the depth axis is time, its share of the height growing
-      // with the rows it holds (3 runs ~30%, 288 ~65%).
-      var share = Math.min(0.65, 0.3 + 0.07 * Math.log(Math.max(n, 3) / 3) / Math.LN2);
-      DYT = avail * share; DXT = Math.min((W - L - R) * 0.16, DYT * 0.9);
-    } else {
-      // A few rows: the original ridge spacing.
-      DXT = Math.min(28, (W - L - R) * 0.04) * (n - 1); DYT = Math.min(30, avail * 0.12) * (n - 1);
-    }
-    var PW = Math.max(100, W - L - R - DXT), base0 = Hh - bottom;
-    var RH = Math.max(40, base0 - top - DYT);
-    var lr = levelRange(), span = lr[1] - lr[0];
-    var order = [];
-    for (var i = 0; i < n; i++) order.push(i);
-    order.sort(function (a, b) { return depthOf(b) - depthOf(a); });   // back first
-    geo = { L: L, PW: PW, DXT: DXT, DYT: DYT, base0: base0, RH: RH, n: n, lr: lr, top: top,
-            rowOx: [], rowOy: [], ridges: [], cols: 0, front: [] };
+    var n = rows.length;
+    geo = ISO.layout({ W: W, Hh: Hh, n: n, L: 46, R: timed() ? 112 : 70, top: 70, bottom: 54, deep: timed() || n > 12 });
+    var L = geo.L, PW = geo.PW, DXT = geo.DXT, DYT = geo.DYT, base0 = geo.base0, RH = geo.RH;
+    var lr = levelRange(), span = lr[1] - lr[0], i, k;
+    geo.lr = lr;
     function ox(d) { return L + d * DXT; }
     function oy(d) { return base0 - d * DYT; }
     // The floor: its two side rails, the gaps where scheduled runs are
     // missing (hatched), and the level scale at left.
-    g.strokeStyle = T.rule; g.lineWidth = 1;
-    g.beginPath(); g.moveTo(L, base0); g.lineTo(L + DXT, base0 - DYT);
-    g.moveTo(L + PW, base0); g.lineTo(L + PW + DXT, base0 - DYT); g.stroke();
+    ISO.rails(g, T, geo);
     var gp = gaps();
-    for (var k = 0; k < gp.length; k++) {
+    for (k = 0; k < gp.length; k++) {
       var d0 = (doc.to - gp[k][1]) / (doc.to - doc.from), d1 = (doc.to - gp[k][0]) / (doc.to - doc.from);
       g.fillStyle = css(rgbOf(g, T.faint), 0.18);
       g.beginPath();
@@ -357,54 +306,27 @@
     }
     g.save(); g.translate(10, base0 - RH / 2); g.rotate(-Math.PI / 2); g.textAlign = "center";
     g.fillText("dBFS (max-hold)", 0, 0); g.restore();
-    // Rows, back to front. Colour strings are cached per level step:
-    // a 24 h range paints a few hundred thousand columns.
+    // Rows, back to front (SlothIso.paint), each column the highest
+    // level in its display bins.
     var cols = Math.max(50, Math.floor(PW / (n > 120 ? 2 : 1)));
-    geo.cols = cols;
     var bins = new Array(cols + 1);
     for (var c = 0; c <= cols; c++) bins[c] = Math.max(0, Math.min(doc.bins - 1, binOf(hzOf(c / cols))));
-    // A dense range darkens each column's body and gives its top a cap
-    // in the full heat colour, so every ridge keeps an edge against the
-    // one behind it.
-    var dense = n > 24, pal = [], cap = [];
-    for (k = 0; k <= 64; k++) {
-      pal.push(css(mix(T.bg, heatRGB(T, k / 64), dense ? 0.12 + 0.5 * k / 64 : 0.35 + 0.65 * k / 64)));
-      cap.push(css(heatRGB(T, k / 64)));
-    }
-    var every = n <= 24 ? 1 : Math.ceil(n / 24), lastLabel = -Infinity;
-    for (var r = 0; r < n; r++) {
-      var idx = order[r], row = rows[idx], d = depthOf(idx), x0 = ox(d), y0 = oy(d), ridge = new Float32Array(cols);
-      var front = r === n - 1;
-      for (c = 0; c < cols; c++) {
-        var a = bins[c], b = Math.max(a, bins[c + 1] - 1);
-        var q = colMax(row.q, a, b), f = q ? Math.max(0, Math.min(1, (qDb(q) - lr[0]) / span)) : 0;
-        ridge[c] = f;
-        var hpx = f * RH;
-        if (hpx < 0.5) continue;
-        g.fillStyle = pal[Math.round(f * 64)];
-        g.fillRect(x0 + c * PW / cols, y0 - hpx, PW / cols + 0.6, hpx);
-        if (dense) { g.fillStyle = cap[Math.round(f * 64)]; g.fillRect(x0 + c * PW / cols, y0 - hpx, PW / cols + 0.6, Math.min(1.5, hpx)); }
-      }
-      geo.rowOx[idx] = x0; geo.rowOy[idx] = y0; geo.ridges[idx] = ridge;
-      // The baseline under the ridge, so a quiet run still shows as a row.
-      g.strokeStyle = T.rule; g.lineWidth = 1;
-      if (n <= 48 || front) { g.beginPath(); g.moveTo(x0, y0 + 0.5); g.lineTo(x0 + PW, y0 + 0.5); g.stroke(); }
-      if (front || (n - 1 - r) % every === 0) {
-        g.beginPath();
-        for (c = 0; c < cols; c++) {
-          var px = x0 + (c + 0.5) * PW / cols, py = y0 - ridge[c] * RH;
-          if (c) g.lineTo(px, py); else g.moveTo(px, py);
+    var lastLabel = -Infinity;
+    ISO.paint(g, T, geo, {
+      cols: cols, depth: depthOf,
+      value: function (idx, c) {
+        var a = bins[c], b = Math.max(a, bins[c + 1] - 1), q = colMax(rows[idx].q, a, b);
+        return q ? Math.max(0, Math.min(1, (qDb(q) - lr[0]) / span)) : 0;
+      },
+      after: function (idx, x0, y0) {
+        var row = rows[idx];
+        if (!timed() && num(row.t) && y0 - lastLabel >= 12) {
+          g.fillStyle = T.muted; g.textAlign = "left";
+          g.fillText(doc.mode === "history" ? hhmm(row.t) : clock(row.t), x0 + PW + 6, y0 - 2);
+          lastLabel = y0;
         }
-        g.strokeStyle = front ? T.ink : css(heatRGB(T, 0.6), n > 24 ? 0.55 : 0.9);
-        g.lineWidth = front ? 1 : 0.8;
-        g.stroke();
       }
-      if (!timed() && num(row.t) && y0 - lastLabel >= 12) {
-        g.fillStyle = T.muted; g.textAlign = "left";
-        g.fillText(doc.mode === "history" ? hhmm(row.t) : clock(row.t), x0 + PW + 6, y0 - 2);
-        lastLabel = y0;
-      }
-    }
+    });
     // The time axis, over the rows so no ridge hides it: HH:MM at round
     // times a label height apart, and each gap dashed along it.
     g.fillStyle = T.muted; g.textAlign = "left";
@@ -511,28 +433,13 @@
   }
 
   // ── hover and zoom ───────────────────────────────────────────────
-  // The row under the pointer is the frontmost whose painted column
-  // covers it (what the eye sees there); off every column, the row
-  // whose baseline is nearest.
-  function rowAt(x, y) {
-    var best = -1, bestD = Infinity, order = [];
-    for (var i = 0; i < rows.length; i++) if (geo.ridges[i]) order.push(i);
-    order.sort(function (a, b) { return geo.rowOy[b] - geo.rowOy[a]; });   // front first
-    for (var k = 0; k < order.length; k++) {
-      var idx = order[k], f = (x - geo.rowOx[idx]) / geo.PW;
-      if (f < 0 || f > 1) continue;
-      var c = Math.min(geo.cols - 1, Math.floor(f * geo.cols)), oy = geo.rowOy[idx];
-      if (y <= oy + 1 && y >= oy - Math.max(2, geo.ridges[idx][c] * geo.RH)) return idx;
-      var dd = Math.abs(y - oy);
-      if (dd < bestD) { bestD = dd; best = idx; }
-    }
-    return best;
-  }
+  // The row under the pointer: SlothIso.hit, the frontmost whose
+  // painted column covers it, else the nearest baseline.
   function onMove(ev) {
     if (!geo || !doc) return;
     var r = ev.currentTarget.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
     if (drag) { drag.x1 = Math.max(geo.L, Math.min(geo.L + geo.PW, x)); draw(); return; }
-    var tip = $("spec-tip"), idx = rowAt(x, y);
+    var tip = $("spec-tip"), idx = ISO.hit(geo, x, y);
     if (idx < 0) { hover = null; tip.hidden = true; draw(); return; }
     var ox = geo.rowOx[idx], f = (x - ox) / geo.PW, row = rows[idx];
     var hz = hzOf(f), cols = geo.cols, c = Math.min(cols - 1, Math.floor(f * cols));

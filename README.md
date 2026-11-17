@@ -417,9 +417,10 @@ serves one page on `http://127.0.0.1:8770/` (loopback only by default,
 GET and HEAD only, no external requests; triage writes only behind the
 allow list). Overview tiles and strip facts each drawn against their
 own hour-of-week band; Activity and anomaly episodes; Devices and WiFi
-with per-device signal ranges in sloth's own distance bands, channel
-horizon strips and the channel mix; **BLE Devices** (who is around by
-device class, how close by signal, a signal chart per device); **GPS
+with per-device signal ranges in sloth's own distance bands, an
+isometric channel waterfall (flat: horizon strips and the channel mix);
+**BLE Devices** (who is around by device class, how close by signal,
+both isometric by default, a signal chart per device); **GPS
 Sat** (satellites in view, sky plot, fix history); Flows as a matrix
 (chord diagram second); History with an event rug; Lookup; and an alert
 page that leads with detail changes, incidents and confidence, draws
