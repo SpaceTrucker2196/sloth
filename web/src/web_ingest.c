@@ -22,6 +22,7 @@
 #include "web_rtl433.h"
 #include "web_victron.h"
 #include "web_lure.h"
+#include "web_df.h"
 #include "web_sysstat.h"
 #include "web_gnss.h"
 #include "web_metrics.h"
@@ -196,6 +197,7 @@ static void split_line(web_feed_t *f, web_live_t *l, long long now_ms) {
     if (f->ble) web_ble_record(f->ble, &f->rec, now_ms);
     if (health && f->gnss) web_gnss_record_fallback(f->gnss, &f->rec, now_ms);
     if (f->lure) web_lure_record(f->lure, &f->rec, now_ms);
+    if (f->df) web_df_record(f->df, &f->rec, now_ms);
     if (f->chain) web_chain_record(f->chain, &f->rec);
 }
 
@@ -218,6 +220,7 @@ static void one_line(web_feed_t *f, web_live_t *l, long long now_ms) {
         if (f->victron) web_victron_record(f->victron, &f->rec, now_ms);
         if (f->sys) web_sys_record(f->sys, &f->rec, now_ms);
         if (f->lure) web_lure_record(f->lure, &f->rec, now_ms);
+        if (f->df) web_df_record(f->df, &f->rec, now_ms);
         if (f->chain) web_chain_record(f->chain, &f->rec);
     } else {
         web_live_decode_error(l, e, now_ms);
@@ -490,6 +493,10 @@ void web_ingest_set_sys(web_ingest_t *g, struct web_sys *y) {
 
 void web_ingest_set_lure(web_ingest_t *g, struct web_lure *l) {
     g->feed.lure = l;
+}
+
+void web_ingest_set_df(web_ingest_t *g, struct web_df *d) {
+    g->feed.df = d;
 }
 
 void web_ingest_set_chain(web_ingest_t *g, struct web_chain *c) {

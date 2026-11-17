@@ -113,7 +113,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-17 (#218: `alerts.fired` counts an alert
+**Last updated**: 2026-11-17 (the WiFi view's direction-finding card, `web/src/web_df.c`, `web/ui/df.js`, `GET /api/df`: § Direction finding); 2026-11-17 (#218: `alerts.fired` counts an alert
 either daemon raises, not sloth's stream alone; an "alert" record from
 either stream now queues a sample (`web_rollup_queue_add()`) instead of
 adding one directly, so `SENSOR_SOURCE_DOWN` -- the one type both can
@@ -2775,6 +2775,41 @@ left), shown in the browser's zone. `/api/sys` carries it as
 member out of range, or quiet without an overflow, drops the block and
 keeps the rest of the batch.
 
+## Direction finding (2026-11-17)
+
+The WiFi view's **direction finding** card shows [[direction-finding]]'s
+two records, `df_radio` and `wifi_df` (JSONL 2.2.0), which sloth-wifi
+writes only when run with `--df-iface`. slothweb keeps the newest record
+per key (`web/src/web_df.c`, fed from sloth-wifi's feed beside the
+lures): 4 radios and 512 transmitters, sloth's own table sizes. sloth's
+table recycles its rows and these records have no `gone` form, so a new
+transmitter takes a free row, then the row written longest ago
+(`evicted` counts the ones that were still fresh). A row not refreshed
+for 660 s is left out of answers and counted `stale`.
+
+`GET /api/df` (no parameter) answers `radios` in radio order and
+`emitters`, `lean` before `weak` and the widest margin first, at most
+128 with `held` saying how many were fresh. What is kept of a `wifi_df`
+is its scalars (`best_radio`, `best_iface`, `margin_db`, `along_m`,
+`quality`, `heard_by`, `channel`, `last_seen`); the `rssi` and `level`
+arrays are not, since the stream decoder checks a nested array and skips
+it. A record with a malformed or out-of-bound member is refused whole
+and counted (`rejected`): a radio index past the table, a role that is
+not `sensor` or `df`, radio 0 not the sensor, an interface name sloth
+would not take, a negative margin.
+
+`reported` tells "off" from "not known" as the lures card does: `true`
+from a 2.2.0 stream (no radios then means sloth runs without
+`--df-iface`, or its 300 s heartbeat has not come since slothweb
+connected), `false` before it, `null` before any `sensor_health`. The
+card (`web/ui/df.js`, `window.SlothDf`) loads the route when the WiFi
+view shows and every 10 s while it is visible, textContent only. Its
+footer says what the card is not: a bearing, a side of the line, a
+distance, or anything at all between radios with unlike antennas.
+Monitor's and Hybrid's; `/api/df` answers `out_of_scope` under Local.
+In memory only: nothing is stored, no series, no MCP tool, no fleet
+export. Tests: `web/tests/test_webdf.c`.
+
 ## Lures and key harvesting (2026-11-12)
 
 #187 and #172 left the KARMA and key-harvest evidence in the TUI and
@@ -3009,6 +3044,7 @@ preview's timestamps advance about 10x slower than the wall clock.
 ## Related pages
 
 - [[data-socket-exposure]] — the remote-bind guard this copies.
+- [[direction-finding]] — what `--df-iface` reports and what it cannot say; the WiFi view's card.
 - [[jsonl-schema]] — the stream M1 consumes.
 - [[sqlite-schema]] — sloth's database, which M4 reads read-only and
   M2's store never touches; its migration rule is the one

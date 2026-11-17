@@ -573,6 +573,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/pcap/frames?id=&n=&offset=` | `200` JSON: capture `n` of alert `id` (an index into `/api/alert`'s `captures`; a name or path is never taken), its SHA-256 recomputed against the manifest (`hash.says`: `hash verified`, `HASH MISMATCH` or `no manifest entry`), its file header, and 24 decoded frames from `offset` (0..4095) with each one's hex dump; `400` for a parameter that does not pass; `404` `no_such_alert`, `no_such_capture`, `no_pcap_dir`, `not_found`; `403` `not_regular`, `withheld_evidence_pcap` (an evidence pcap without `--web-serve-evidence-pcap`); `413` `too_large` (over 16 MiB); `415` `pcapng_not_supported` or `not_pcap` with a `message` |
    | `GET /api/pcap?id=&n=` | `200` the same file's bytes, `Content-Type: application/vnd.tcpdump.pcap`, `Content-Disposition: attachment; filename="<its name>"`, `X-Sloth-SHA256: verified`, `mismatch` or `no_manifest_entry` (the check of the bytes served), `Cache-Control: no-store`; the errors as above, as JSON |
    | `GET /api/bundle?kind=device\|alert\|lookup\|ble\|platform&id=` | `200` JSON, a detail view's whole answer for its "copy JSON" button ([Copy JSON: the analysis bundle](#copy-json-the-analysis-bundle)); `400` for a kind, an id or a parameter that does not pass; `404` and `503` as the route it splices (`not_found` for a BLE address no sensor heard, `no_such_platform`, `no_store`); `413` `bundle_too_large` |
+   | `GET /api/df` | `200` JSON, the WiFi view's direction-finding card ([Direction finding](#direction-finding)): `radios` (sloth's `df_radio` rows in radio order: `radio`, `iface`, `role`, `pos_m` when given, `open`, `running`, `noted`, `bias_db` once measured, `frames`, `rejects`, `retune_failures` for a `df` radio), `emitters` (`wifi_df` rows, `lean` before `weak`, widest `margin_db` first, at most 128: `mac`, `channel`, `heard_by`, `quality`, `best_radio`, `best_iface`, `margin_db`, `along_m` when positions allow, `last_seen`), each row with `age_s`; `held` (fresh transmitters, shown or not), `reported` (`true` from a JSONL 2.2.0 stream, `false` before it, `null` before any `sensor_health`), `jsonl_version`, `stale` (rows not refreshed for 660 s, left out), `records`, `rejected`, `evicted`. Monitor's and Hybrid's; under Local `{"out_of_scope":true,...}`. No parameter: any is `400` |
    | `GET /api/lures` | `200` JSON, the WiFi view's KARMA and key-harvest card ([Lures and key harvesting](#lures-and-key-harvesting)): `karma` (sloth's `karma_suspect` rows, highest score first), `stations` (`harvest_station`, most unanswered M1s first), `chains` (`harvest_chain`, most victims first), each row's counts with `ts` and `age_s`; `reported` (`true` from a JSONL 1.3.0 stream, `false` before it, `null` before any `sensor_health`), `jsonl_version`, `stale` (rows not refreshed for 660 s, left out), `records`, `rejected`, `overflow`. Monitor's and Hybrid's; under Local `{"out_of_scope":true,...}`. No parameter: any is `400` |
    | `GET /api/lures/bssid?bssid=` | `200` JSON, one BSSID's KARMA detail ([Lures and key harvesting](#lures-and-key-harvesting)): `state` (`live`, `gone`, `stale` or `none`), `current` (its `karma_suspect` row as `/api/lures` gives it, or `null`), `gone_ts`, `history` (each change of the row, oldest first: `ts` the first record saying it, `ts_last` the newest repeating it, and the counts; the newest 16, `history_changes` how many there were), `hw` (`verdict` and `signals` from the newest `KARMA_AP` record, `null` members for none, `null` before one), `probe_lat` (the beacon's JSONL 1.6.0 member as sloth sent it, with `ts` and `age_s`, or `null`), `alerts` (the stream's open and recently closed `KARMA_AP` / `KARMA_PROBE_FORGE` incidents whose key names it at its field, by the alert page's `id`, at most 16, `alerts_more`), `alerts_held` (`false` with no data socket), `reported`, `jsonl_version`. `bssid` required (`xx:xx:xx:xx:xx:xx`, either case), the only parameter: `400` `missing_bssid`, `bad_bssid` or the parser's word. Monitor's and Hybrid's; under Local `{"out_of_scope":true,...}` |
    | `GET /api/sys` | `200` JSON, the Sensor health view's host status ([Sensor health](#sensor-health)): the newest `sys_status` (CPU, load, memory, uptime, sloth's RSS, the output filesystem, the hottest temperature, the under-voltage alarm; `null` for a figure the host does not have), its `sys_sensor` rows, every `source_status` (all of sloth's sources, configured or not) and every `receiver_hw` (the attached receivers), and `storage`, sloth.db's and slothweb.db's size on disk against their limits, measured on the request ([Sensor health](#sensor-health), *The stores*); `"seen":false` before the first batch or with no live stream; `"stale":true` past three of the sensor's own intervals. The same answer under every scope. No parameter: any is `400` |
@@ -1442,6 +1443,33 @@ slothweb's escaper and checks every number against RFC 8259's grammar
 (nesting at most eight deep), so nothing of the file reaches the answer
 unescaped; `status.json` is one flat object through the stream's own
 decoder. A GET never writes. Tests: `web/tests/test_spectrum.c`.
+
+## Direction finding
+
+The WiFi view's **direction finding** card (`web/ui/df.js`, `GET
+/api/df`, `web/src/web_df.c`) shows what `sloth-wifi --df-iface` reports
+(JSONL 2.2.0, `df_radio` and `wifi_df`; the wiki's `direction-finding`
+page says what the numbers can and cannot mean). Two tables:
+
+- **Radios**: the sensor radio and each `--df-iface` radio, its place on
+  the baseline when one was given, whether it is listening, the frames
+  it fed the comparison, and how much louder than the sensor radio it
+  reads the same transmitters (sloth measures that from the air and
+  takes it off before comparing).
+- **Transmitters** two or more radios hear: the radio hearing it
+  loudest, the margin over the quietest, the quality (`lean` at 6 dB or
+  more, `weak` under it) and the point along the baseline, the widest
+  margins first, at most 128 rows.
+
+It is not a bearing, a side of the line or a distance, and radios with
+unlike antennas give leans that mean nothing. No alert reads it. The
+card says `off` when the stream carries no radio (sloth runs without
+`--df-iface`, or its 300 s heartbeat has not come since slothweb
+connected), `not reported` for a stream older than 2.2.0, and `not
+known` before the first `sensor_health`. The records' `rssi` and `level`
+arrays are not kept: slothweb's stream decoder skips nested arrays.
+Held in memory only (512 transmitters, the row written longest ago
+giving way), so a restart of slothweb starts empty.
 
 ## Lures and key harvesting
 

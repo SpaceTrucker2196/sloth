@@ -1463,6 +1463,8 @@
     if (v === "probes" && window.SlothProbes) SlothProbes.show();
     // The KARMA and key-harvest card (lure.js, its own module): a no-op when not loaded.
     if (v === "wifi" && window.SlothLure) SlothLure.show();
+    // The direction-finding card (df.js, its own module): a no-op when not loaded.
+    if (v === "wifi" && window.SlothDf) SlothDf.show();
     // The Fleet view (fleet.js, its own module): a no-op when not loaded.
     if (v === "fleet" && window.SlothFleet) SlothFleet.show();
     // Identity across the sites (fleetid.js, its own module, #192 I2-I8).
@@ -6405,6 +6407,8 @@
 
   // The WiFi view's KARMA and key-harvest card (web/ui/lure.js): the page's helpers, lent once.
   if (window.SlothLure) SlothLure.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp });
+  // The WiFi view's direction-finding card (web/ui/df.js): the page's helpers, lent once.
+  if (window.SlothDf) SlothDf.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp });
   // The rtl_433 tab (web/ui/rtl433.js): the page's helpers, lent once.
   if (window.SlothRtl433) SlothRtl433.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp });
   // The Victron tab (web/ui/victron.js): the page's helpers, lent once.

@@ -69,6 +69,7 @@ struct web_rtl433;
 struct web_victron;
 struct web_sys;
 struct web_lure;
+struct web_df;
 struct web_chain;
 
 /* Two daemons (#214, ADR 0010): which stream a feed frames.
@@ -82,7 +83,7 @@ struct web_chain;
  *   consumer                 WEB_FEED_WIFI           WEB_FEED_RF
  *   the stream's web_live_t  every record            every record (its own)
  *   metrics, frrs, ble,      every record but the    never
- *     lure, chain            RF-owned ones
+ *     lure, df, chain        RF-owned ones
  *   adsb, aprs, rtl433,      never                   their records and
  *     victron                                        sensor_health
  *   gnss                     sensor_health only, as  gnss_* and
@@ -151,6 +152,8 @@ typedef struct {
     struct web_sys *sys;
     /* The KARMA and key-harvest evidence (web_lure.h), when set. */
     struct web_lure *lure;
+    /* Direction finding across monitor radios (web_df.h), when set. */
+    struct web_df *df;
     /* G8's links, the stream's twin_episode (web_chain.h), when set. */
     struct web_chain *chain;
     char       line[WEB_JL_MAX_LINE + 1];
@@ -202,6 +205,9 @@ void web_ingest_set_sys(web_ingest_t *g, struct web_sys *y);
 /* Feed the KARMA and key-harvest evidence as well. Call before
  * web_ingest_start(). */
 void web_ingest_set_lure(web_ingest_t *g, struct web_lure *l);
+/* Feed the direction-finding tables as well. Call before
+ * web_ingest_start(). */
+void web_ingest_set_df(web_ingest_t *g, struct web_df *d);
 /* Feed G8's links as well. Call before web_ingest_start(). */
 void web_ingest_set_chain(web_ingest_t *g, struct web_chain *c);
 /* Which daemon's stream this is (WEB_FEED_*), and for WEB_FEED_RF the

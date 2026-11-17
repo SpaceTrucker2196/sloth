@@ -1146,6 +1146,36 @@ static int route_sys(const web_req_t *rq, const web_health_t *h,
     return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
+/* /api/df (web_df.h): direction finding across monitor radios, the
+ * radios and the transmitters sloth holds a lean for. The monitor
+ * radios', so Monitor's and Hybrid's; under Local the query is checked,
+ * then the one out_of_scope answer. */
+static int route_df(const web_req_t *rq, const web_health_t *h,
+                    char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = web_df_route(h->df, rq->query, h->wall_s, h->now_ms, none_here,
+                          body, cap, &bl, &status);
+        if (rc == 0 && none_here && status == 200) bl = web_df_out_of_scope_json(body, cap);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
 /* /api/lures and /api/lures/bssid (web_lure.h): the KARMA and
  * key-harvest evidence sloth's rules read, and one BSSID's KARMA
  * detail. The monitor radio's, so Monitor's and Hybrid's; under Local
@@ -2285,6 +2315,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_spectrum(rq, h, 1, out, outsz, r);
         if (!strcmp(rq->path, "/api/sys"))
             return route_sys(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/df"))
+            return route_df(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/lures"))
             return route_lures(rq, h, 0, out, outsz, r);
         if (!strcmp(rq->path, "/api/lures/bssid"))

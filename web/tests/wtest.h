@@ -90,6 +90,7 @@ void run_gnss_tests(void);               /* tests/test_gnss.c (2026-11-02) */
 void run_sysstat_tests(void);            /* tests/test_sysstat.c (2026-11-11) */
 void run_own_tests(void);                /* tests/test_own.c (2026-11-11) */
 void run_lure_tests(void);               /* tests/test_lure.c (2026-11-12) */
+void run_webdf_tests(void);              /* tests/test_webdf.c (2026-11-17) */
 void run_adsb_tests(void);               /* tests/test_adsb.c (2026-11-05) */
 void run_spectrum_tests(void);           /* tests/test_spectrum.c (2026-11-13) */
 void run_iso_tests(void);                /* tests/test_iso.c (#224, 2026-11-16) */

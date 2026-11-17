@@ -135,6 +135,7 @@ int main(void) {
     SUITE(run_sysstat_tests);
     SUITE(run_own_tests);
     SUITE(run_lure_tests);
+    SUITE(run_webdf_tests);
     SUITE(run_adsb_tests);
     SUITE(run_aprs_tests);
     SUITE(run_rtl433_tests);

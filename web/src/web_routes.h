@@ -86,6 +86,7 @@
 #include "web_victron.h"
 #include "web_sysstat.h"
 #include "web_lure.h"
+#include "web_df.h"
 #include "web_gnss.h"
 #include "web_devices.h"
 #include "web_http.h"
@@ -117,6 +118,7 @@ typedef struct {
     web_victron_t *victron;   /* NULL: no Victron tab (web_victron.h) */
     web_sys_t     *sys;       /* NULL: no host status (web_sysstat.h) */
     web_lure_t    *lure;      /* NULL: no lure evidence (web_lure.h) */
+    web_df_t      *df;        /* NULL: no direction finding (web_df.h) */
     int            fleet_merge; /* merge the peers' rows (web_fleetview.h);
                                    set by the router on its own copy, and
                                    read only on the merged routes */

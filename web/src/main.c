@@ -72,6 +72,7 @@ static web_spectrum_t g_spectrum;
 static web_camera_t g_camera;
 static web_sys_t      g_sys;
 static web_lure_t     g_lure;
+static web_df_t       g_df;
 static web_chain_t    g_chain;
 static web_fleet_t    g_fleet;
 
@@ -160,6 +161,7 @@ int main(int argc, char **argv) {
         web_victron_init(&g_victron) != 0 ||
         web_sys_init(&g_sys) != 0 ||
         web_lure_init(&g_lure) != 0 ||
+        web_df_init(&g_df) != 0 ||
         web_chain_init(&g_chain) != 0) {
         fprintf(stderr, "slothweb: time series: out of memory\n");
         return 1;
@@ -331,6 +333,7 @@ int main(int argc, char **argv) {
     web_server_set_victron(&g_srv, &g_victron);
     web_server_set_sys(&g_srv, &g_sys);
     web_server_set_lure(&g_srv, &g_lure);
+    web_server_set_df(&g_srv, &g_df);
     web_ingest_set_metrics(&g_ingest, &g_metrics);
     web_ingest_set_frrs(&g_ingest, &g_frrs);
     web_ingest_set_ble(&g_ingest, &g_ble);
@@ -359,6 +362,7 @@ int main(int argc, char **argv) {
     }
     web_ingest_set_sys(&g_ingest, &g_sys);
     web_ingest_set_lure(&g_ingest, &g_lure);
+    web_ingest_set_df(&g_ingest, &g_df);
     /* The designated networks the SSID, Probes and WiFi routes mark. */
     web_own_bind(&g_sys.own);
     web_ingest_set_chain(&g_ingest, &g_chain);
@@ -552,6 +556,7 @@ int main(int argc, char **argv) {
     web_victron_destroy(&g_victron);
     web_sys_destroy(&g_sys);
     web_lure_destroy(&g_lure);
+    web_df_destroy(&g_df);
     web_chain_destroy(&g_chain);
     web_rollup_destroy(&g_rollup);
     web_anomaly_destroy(&g_anomaly);
