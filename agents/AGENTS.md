@@ -29,7 +29,7 @@ out of `sloth-rf`, and its mirror `check_wifi_no_rf` keeps the decoders,
 their records and the GNSS / ADS-B rules out of `sloth-wifi` (a name
 list: `src/db.c`'s RF table writers link into both and are off in
 `sloth-wifi` at run time). `sloth-wifi` refuses the decoder flags with
-exit 2 since #216; the stream is JSONL 2.2.0 (2.0.0 at the cutover). Test binary `sloth_test`.
+exit 2 since #216; the stream is JSONL 2.3.0 (2.0.0 at the cutover). Test binary `sloth_test`.
 
 ## Architecture
 
