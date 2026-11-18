@@ -100,6 +100,7 @@
     X(rdp_snoop_clear) \
     X(rf_calibration_reset) \
     X(rf_quality_clear) \
+    X(rf_trim_reset) \
     X(rrm_clear) \
     X(rtl433_reset) \
     X(victron_reset) \

@@ -224,6 +224,7 @@ void run_alert_pcap_tests(void);
 void run_alert_key_tests(void);
 void run_alert_rules_tests(void);
 void run_rf_args_tests(void);
+void run_rf_trim_tests(void);           /* tests/test_rf_trim.c */
 void run_rf_rules_tests(void);
 void run_rf_jsonl_tests(void);
 void run_rf_loop_tests(void);
@@ -444,6 +445,7 @@ int main(void) {
     run_alert_rules_tests();
     /* #213: sloth-rf, the RF daemon beside sloth. */
     run_rf_args_tests();
+    run_rf_trim_tests();
     run_rf_rules_tests();
     run_rf_jsonl_tests();
     run_rf_loop_tests();

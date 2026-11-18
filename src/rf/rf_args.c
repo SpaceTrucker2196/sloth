@@ -16,6 +16,7 @@ void rf_usage(FILE *fp, const char *argv0) {
     fprintf(fp,
             "usage: %s [--adsb SPEC] [--aprs SPEC] [--aprs-freq HZ]\n"
             "       [--aprs-silent-hours N] [--rtl433 SPEC] [--victron SPEC]\n"
+            "       [--no-sdr-trim]\n"
             "       [--gps SPEC] [--gps-allow-remote] [--gps-baud N]\n"
             "       [--location LAT,LON[,ALT]]\n"
             "       [-o FILE] [--db FILE] [--site-label TEXT]\n"
@@ -52,6 +53,15 @@ void rf_usage(FILE *fp, const char *argv0) {
             "  --rtl433 SPEC      tail the JSON event log rtl_433 writes\n"
             "                     (rtl_433 -F json): /path/events.jsonl or\n"
             "                     file:///path, from its end at startup.\n"
+            "  --no-sdr-trim      start every decoder input whatever USB lists.\n"
+            "                     By default, when /sys/bus/usb/devices shows\n"
+            "                     no SDR at startup, a file --adsb, --aprs\n"
+            "                     (with its two qualifiers) and --rtl433 are\n"
+            "                     not started, each named on stderr, and\n"
+            "                     their rows read not_installed. --adsb sbs://\n"
+            "                     and beast://, --gps, --location and\n"
+            "                     --victron are never trimmed. Read once: an\n"
+            "                     SDR plugged in later needs a restart.\n"
             "  --victron SPEC     tail the JSONL the sloth-va helper writes\n"
             "                     (Victron readings): /path/victron.jsonl or\n"
             "                     file:///path, from its end at startup.\n"
@@ -125,7 +135,7 @@ void rf_usage(FILE *fp, const char *argv0) {
 int rf_args_parse(int argc, char **argv, rf_args_t *a) {
     static const rf_args_t zero = {
         NULL, NULL, NULL, 0, 0, NULL, NULL, 0, 0,
-        { NULL, NULL, 0, 0 }, RF_FLAGS_INIT
+        { NULL, NULL, 0, 0 }, RF_FLAGS_INIT, 0
     };
     *a = zero;
     for (int i = 1; i < argc; i++) {
@@ -176,6 +186,8 @@ int rf_args_parse(int argc, char **argv, rf_args_t *a) {
             a->rf.rtl433 = argv[++i];
         } else if (!strcmp(argv[i], "--victron") && has) {
             a->rf.victron = argv[++i];
+        } else if (!strcmp(argv[i], "--no-sdr-trim")) {
+            a->no_sdr_trim = 1;
         } else if (!strcmp(argv[i], "--aprs-freq") && has) {
             if (rf_flag_aprs_freq(argv[++i], &a->rf.aprs_freq) != 0) return 2;
         } else if (!strcmp(argv[i], "--aprs-silent-hours") && has) {

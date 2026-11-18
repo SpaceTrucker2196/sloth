@@ -113,7 +113,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-18 (one WiFi channel palette, `--ch-*` written and checked in `web/tools/palette.c` and mapped by `web/ui/chan.js`, a chip wherever a channel is shown and the isometric waterfall moved onto it; the greenbar, `web/ui/greenbar.css`; § The restyle, § M5's WiFi); 2026-11-17 (the WiFi waterfall's clients lane and client highlight, `clients` on `/api/wifi/channels?mix=1`; the highlight fade 70 percent transparent; § M5's WiFi); 2026-11-17 (the isometric WiFi and BLE Devices waterfalls coloured by identity: band hue, channel shade and SSID on WiFi, class hue on BLE, with keys; `web/ui/iso.css` `--iso-*`; § M5's WiFi and BLE Devices); 2026-11-17 (the WiFi view's direction-finding card, `web/src/web_df.c`, `web/ui/df.js`, `GET /api/df`: § Direction finding); 2026-11-17 (#218: `alerts.fired` counts an alert
+**Last updated**: 2026-11-18 (health page: the `source_status` state `not_installed`, sloth-rf's trimmed decoder input, shown as `no SDR attached`, no up/down series), 2026-11-18 (one WiFi channel palette, `--ch-*` written and checked in `web/tools/palette.c` and mapped by `web/ui/chan.js`, a chip wherever a channel is shown and the isometric waterfall moved onto it; the greenbar, `web/ui/greenbar.css`; § The restyle, § M5's WiFi); 2026-11-17 (the WiFi waterfall's clients lane and client highlight, `clients` on `/api/wifi/channels?mix=1`; the highlight fade 70 percent transparent; § M5's WiFi); 2026-11-17 (the isometric WiFi and BLE Devices waterfalls coloured by identity: band hue, channel shade and SSID on WiFi, class hue on BLE, with keys; `web/ui/iso.css` `--iso-*`; § M5's WiFi and BLE Devices); 2026-11-17 (the WiFi view's direction-finding card, `web/src/web_df.c`, `web/ui/df.js`, `GET /api/df`: § Direction finding); 2026-11-17 (#218: `alerts.fired` counts an alert
 either daemon raises, not sloth's stream alone; an "alert" record from
 either stream now queues a sample (`web_rollup_queue_add()`) instead of
 adding one directly, so `SENSOR_SOURCE_DOWN` -- the one type both can
@@ -2836,7 +2836,10 @@ The `#health` view now leads with three panels fed by sloth's
   adapters, Bluetooth controllers). A source is tied to a receiver only
   where sysfs ties them; an SDR owned by readsb or Dire Wolf is listed
   as attached and not credited to the decoder's TCP endpoint. No serial
-  number is read or shown.
+  number is read or shown. A decoder input sloth-rf trimmed at startup
+  (`not_installed`, JSONL 2.5.0: no SDR on USB) is listed dim as
+  `· no SDR attached`, with the path it was given, no rate and no
+  up/down series (`web/src/web_sysstat.c`, `web/ui/syshealth.js`).
 - **The sensor host**: CPU, load, memory, sloth's RSS, disk, uptime,
   each temperature and voltage, the under-voltage alarm. A reading the
   host does not have is said (`not reported by this host`), never 0.

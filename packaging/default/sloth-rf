@@ -34,6 +34,21 @@
 #   --rtl433 PATH         the JSON event log a local rtl_433 writes
 #                         (rtl_433 -F json:FILE; wiki: rtl433), e.g.
 #                         --rtl433 /var/lib/rtl_433/events.jsonl
+#   --no-sdr-trim         start every decoder input whatever USB lists.
+#                         By default sloth-rf looks at /sys/bus/usb once
+#                         at startup and, with no SDR there, does not
+#                         start a file --adsb, --aprs (with --aprs-freq
+#                         and --aprs-silent-hours) or --rtl433: one
+#                         journal line names each, and slothweb shows it
+#                         "no SDR attached" instead of down. So one file
+#                         serves a host with SDRs and one without.
+#                         --adsb sbs:// / beast://, --gps, --location and
+#                         --victron are never trimmed; with nothing left
+#                         to read it runs on idle. An SDR
+#                         plugged in later needs
+#                         `systemctl restart sloth-rf`. Give this flag
+#                         only where an SDR is attached but its USB ID
+#                         is not one sloth knows (wiki: cli-reference).
 #   --victron PATH        the JSONL sloth-va writes (wiki: victron), e.g.
 #                         --victron /var/lib/sloth-va/victron.jsonl
 #   --gps gpsd://127.0.0.1:2947

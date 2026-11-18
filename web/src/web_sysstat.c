@@ -238,8 +238,10 @@ static void sensor_apply(web_sys_t *y, const web_jrec_t *r) {
 }
 
 static int state_ok(const char *s) {
+    /* not_installed: JSONL 2.5.0, a decoder input sloth-rf trimmed at
+     * startup because no SDR was attached (src/rf_trim.h). */
     return s && (!strcmp(s, "ok") || !strcmp(s, "stale") || !strcmp(s, "down") ||
-                 !strcmp(s, "not_configured"));
+                 !strcmp(s, "not_configured") || !strcmp(s, "not_installed"));
 }
 
 static void source_apply(web_sys_t *y, const web_jrec_t *r, long long ts, long long now_ms) {
@@ -475,8 +477,9 @@ void web_sys_metrics(web_rollup_t *ru, const web_jrec_t *r, long long now_s) {
     } else if (w == 3) {
         const char *name = web_jl_str(r, "name"), *state = web_jl_str(r, "state");
         if (!word_ok(name, 24) || !state_ok(state) || web_key_sys(name, k) != 0) return;
-        /* A source nobody configured has no up or down to chart. */
-        if (!strcmp(state, "not_configured")) return;
+        /* A source nobody configured, or one trimmed at startup, has
+         * no up or down to chart. */
+        if (!strcmp(state, "not_configured") || !strcmp(state, "not_installed")) return;
         web_rollup_add(ru, WM_SRC_UP, k, !strcmp(state, "ok") ? 1.0 : 0.0, now_s);
         if (jnum(r, "rate", 0, 1e9, &v)) web_rollup_add(ru, WM_SRC_RATE, k, v, now_s);
     }

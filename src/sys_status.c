@@ -57,6 +57,68 @@ const sys_usb_id_t sys_usb_table[] = {
     { 0x2cf0, 0x5250, "sdr", "Nuand bladeRF 2.0 micro" },
     { 0x2500, 0x0020, "sdr", "Ettus USRP B210" },
     { 0x0456, 0xb673, "sdr", "Analog Devices ADALM-PLUTO" },
+    /* systemd hwdb.d/70-software-radio.hwdb (main, read 2026-11-18),
+     * ID_SOFTWARE_RADIO: the rest of its rows. The RTL2832U ones are
+     * osmocom librtlsdr's known_devices[] (rtl-sdr's own list of the
+     * DVB-T sticks it drives), so a clone stick sold under its maker's
+     * ID is an SDR here too: sloth-rf's startup trim (src/rf_trim.h)
+     * reads "no SDR" off this table, and a missing row would trim a
+     * decoder on a host that has one. */
+    { 0x0456, 0xb674, "sdr", "Analog Devices ADALM-PLUTO (DFU)" },
+    { 0xfffe, 0x0002, "sdr", "Ettus USRP1" },
+    { 0x2500, 0x0002, "sdr", "Ettus USRP B100" },
+    { 0x2500, 0x0021, "sdr", "Ettus USRP B200 family" },
+    { 0x2500, 0x0022, "sdr", "Ettus USRP B200 family" },
+    { 0x2500, 0x0023, "sdr", "Ettus USRP B200 family" },
+    { 0x3923, 0x7813, "sdr", "NI USRP-2900 (Ettus B200 family)" },
+    { 0x3923, 0x7814, "sdr", "NI USRP-2901 (Ettus B200 family)" },
+    { 0x04d8, 0xfb56, "sdr", "FUNcube Dongle Pro" },
+    { 0x04d8, 0xfb31, "sdr", "FUNcube Dongle Pro+" },
+    { 0x38af, 0x0001, "sdr", "HydraSDR RFOne" },
+    { 0x0525, 0x3380, "sdr", "Fairwaves XTRX (LimeSDR)" },
+    { 0x04b4, 0x325c, "sdr", "Microtelecom Perseus" },
+    { 0x1d50, 0x6066, "sdr", "Nuand bladeRF 1.x (legacy ID)" },
+    { 0x1df7, 0x3040, "sdr", "SDRplay nRSP-ST" },
+    { 0x0413, 0x6680, "sdr", "DigitalNow Quad DVB-T (RTL2832U)" },
+    { 0x0413, 0x6f0f, "sdr", "Leadtek WinFast DTV mini D (RTL2832U)" },
+    { 0x0458, 0x707f, "sdr", "Genius TVGo DVB-T03 (RTL2832U)" },
+    { 0x0ccd, 0x00a9, "sdr", "Terratec Cinergy T Stick Black (RTL2832U)" },
+    { 0x0ccd, 0x00b3, "sdr", "Terratec NOXON DAB/DAB+ (RTL2832U)" },
+    { 0x0ccd, 0x00b4, "sdr", "Terratec Deutschlandradio DAB (RTL2832U)" },
+    { 0x0ccd, 0x00b5, "sdr", "Terratec NOXON DAB Radio Energy (RTL2832U)" },
+    { 0x0ccd, 0x00b7, "sdr", "Terratec Media Broadcast DAB (RTL2832U)" },
+    { 0x0ccd, 0x00b8, "sdr", "Terratec BR DAB Stick (RTL2832U)" },
+    { 0x0ccd, 0x00b9, "sdr", "Terratec WDR DAB Stick (RTL2832U)" },
+    { 0x0ccd, 0x00c0, "sdr", "Terratec MuellerVerlag DAB (RTL2832U)" },
+    { 0x0ccd, 0x00c6, "sdr", "Terratec Fraunhofer DAB (RTL2832U)" },
+    { 0x0ccd, 0x00d3, "sdr", "Terratec Cinergy T Stick RC (RTL2832U)" },
+    { 0x0ccd, 0x00d7, "sdr", "Terratec T Stick PLUS (RTL2832U)" },
+    { 0x0ccd, 0x00e0, "sdr", "Terratec NOXON DAB/DAB+ rev 2 (RTL2832U)" },
+    { 0x1554, 0x5020, "sdr", "PixelView PV-DT235U(RN) (RTL2832U)" },
+    { 0x15f4, 0x0131, "sdr", "Astrometa DVB-T/DVB-T2 (RTL2832U)" },
+    { 0x15f4, 0x0133, "sdr", "HanfTek DAB+FM+DVB-T (RTL2832U)" },
+    { 0x185b, 0x0620, "sdr", "Compro Videomate U620F (RTL2832U)" },
+    { 0x185b, 0x0650, "sdr", "Compro Videomate U650F (RTL2832U)" },
+    { 0x185b, 0x0680, "sdr", "Compro Videomate U680F (RTL2832U)" },
+    { 0x1b80, 0xd393, "sdr", "GIGABYTE GT-U7300 (RTL2832U)" },
+    { 0x1b80, 0xd394, "sdr", "DIKOM USB-DVBT HD (RTL2832U)" },
+    { 0x1b80, 0xd395, "sdr", "Peak 102569AGPK (RTL2832U)" },
+    { 0x1b80, 0xd397, "sdr", "KWorld KW-UB450-T (RTL2832U)" },
+    { 0x1b80, 0xd398, "sdr", "Zaapa ZT-MINDVBZP (RTL2832U)" },
+    { 0x1b80, 0xd39d, "sdr", "SVEON STV20 DVB-T (RTL2832U)" },
+    { 0x1b80, 0xd3a4, "sdr", "Twintech UT-40 (RTL2832U)" },
+    { 0x1b80, 0xd3a8, "sdr", "ASUS U3100MINI_PLUS_V2 (RTL2832U)" },
+    { 0x1b80, 0xd3af, "sdr", "SVEON STV27 DVB-T (RTL2832U)" },
+    { 0x1b80, 0xd3b0, "sdr", "SVEON STV21 DVB-T (RTL2832U)" },
+    { 0x1d19, 0x1101, "sdr", "Dexatek DK DVB-T (Logilink VG0002A) (RTL2832U)" },
+    { 0x1d19, 0x1102, "sdr", "Dexatek DK DVB-T (MSI DigiVox mini II) (RTL2832U)" },
+    { 0x1d19, 0x1103, "sdr", "Dexatek DK 5217 DVB-T (RTL2832U)" },
+    { 0x1d19, 0x1104, "sdr", "MSI DigiVox Micro HD (RTL2832U)" },
+    { 0x1f4d, 0xa803, "sdr", "Sweex DVB-T USB (RTL2832U)" },
+    { 0x1f4d, 0xb803, "sdr", "GTek T803 (RTL2832U)" },
+    { 0x1f4d, 0xc803, "sdr", "Lifeview LV5TDeluxe (RTL2832U)" },
+    { 0x1f4d, 0xd286, "sdr", "MyGica TD312 (RTL2832U)" },
+    { 0x1f4d, 0xd803, "sdr", "PROlectrix DV107669 (RTL2832U)" },
     { 0x1d50, 0x6002, "bluetooth-sniffer", "Ubertooth One" },
     { 0x1546, 0x01a5, "gnss", "u-blox 5" },
     { 0x1546, 0x01a6, "gnss", "u-blox 6" },
@@ -336,6 +398,7 @@ const char *sys_src_state_name(int state) {
     case SYS_ST_OK:    return "ok";
     case SYS_ST_STALE: return "stale";
     case SYS_ST_DOWN:  return "down";
+    case SYS_ST_NOT_INSTALLED: return "not_installed";
     default:           return "not_configured";
     }
 }
@@ -715,6 +778,41 @@ static int usb_dev_name(const char *n) {
     return dash;
 }
 
+/* sloth-rf's startup trim (src/rf_trim.h). Its own list, larger than
+ * scan_usb()'s: the inventory may stop at SYS_LIST_MAX entries, but a
+ * "no SDR" read off a list that was cut short would trim a decoder on a
+ * host that has one, so a full list is "cannot tell" instead. */
+#define SYS_USB_KIND_SCAN_MAX 256
+int sys_usb_has_kind(const char *kind, char *desc, int cap) {
+    static char names[SYS_USB_KIND_SCAN_MAX][SYS_NAME_MAX];
+    char path[96], b[64], vid[5], pid[5];
+    if (desc && cap > 0) desc[0] = '\0';
+    if (!kind || !g_platform.sys_list || !sys_path_ok("/sys/bus/usb/devices/")) return -1;
+    int n = g_platform.sys_list("/sys/bus/usb/devices", &names[0][0], SYS_NAME_MAX,
+                                SYS_USB_KIND_SCAN_MAX);
+    if (n < 0 || n >= SYS_USB_KIND_SCAN_MAX) return -1;
+    /* A device whose ID cannot be read might be the one asked for: with
+     * none found, that is "cannot tell", not "none". */
+    int unread = 0;
+    for (int i = 0; i < n; i++) {
+        names[i][SYS_NAME_MAX - 1] = '\0';
+        if (!name_ok(names[i]) || !usb_dev_name(names[i])) continue;
+        int r;
+        unsigned v, p;
+        snprintf(path, sizeof(path), "/sys/bus/usb/devices/%.31s/idVendor", names[i]);
+        if ((r = sys_rd(path, b, (int)sizeof(b))) < 0 || sys_parse_hex4(b, r, vid) != 0) { unread = 1; continue; }
+        snprintf(path, sizeof(path), "/sys/bus/usb/devices/%.31s/idProduct", names[i]);
+        if ((r = sys_rd(path, b, (int)sizeof(b))) < 0 || sys_parse_hex4(b, r, pid) != 0) { unread = 1; continue; }
+        if (sscanf(vid, "%4x", &v) != 1 || sscanf(pid, "%4x", &p) != 1) { unread = 1; continue; }
+        const sys_usb_id_t *e = sys_usb_lookup(v, p);
+        if (!e || strcmp(e->kind, kind) != 0) continue;
+        if (desc && cap > 0)
+            snprintf(desc, (size_t)cap, "%s (%.4s:%.4s at usb:%.31s)", e->name, vid, pid, names[i]);
+        return 1;
+    }
+    return unread ? -1 : 0;
+}
+
 /* bus and id from a device uevent: PCI_ID=8086:2723, SDIO_ID=02D0:A9A6,
  * PRODUCT=bda/8812/0 (USB, hex without leading zeros). */
 static void uevent_bus_id(const char *ue, int n, sys_hw_t *h) {
@@ -1042,7 +1140,9 @@ static void emit_source(int i, time_t wall, uint64_t now_ms) {
         f_str(&l, "desc", o->desc);
         f_str(&l, "driver", o->driver);
     }
-    if (o->state != SYS_ST_NOT_CONFIGURED) {
+    /* not_installed is a row nothing reads (src/rf_trim.h): no age,
+     * no count, as for not_configured. */
+    if (o->state != SYS_ST_NOT_CONFIGURED && o->state != SYS_ST_NOT_INSTALLED) {
         f_int(&l, "age_s", o->age_s);
         f_str(&l, "age_band", sys_age_band_name(sys_age_band(o->age_s)));
         f_str(&l, "unit", o->unit);
@@ -1085,7 +1185,11 @@ static void emit_batch(time_t wall, uint64_t now_ms) {
     int ok = 0, down = 0, conf = 0, named = 0;
     for (int i = 0; i < SYS_SRC_COUNT; i++) {
         if (sn->src[i].name) named++;
-        if (sn->src[i].state != SYS_ST_NOT_CONFIGURED) conf++;
+        /* A trimmed input (not_installed) was asked for and is not read:
+         * not counted as configured, so sources_configured stays the
+         * rows something is reading. */
+        if (sn->src[i].state != SYS_ST_NOT_CONFIGURED &&
+            sn->src[i].state != SYS_ST_NOT_INSTALLED) conf++;
         if (sn->src[i].state == SYS_ST_OK) ok++;
         if (sn->src[i].state == SYS_ST_DOWN) down++;
     }

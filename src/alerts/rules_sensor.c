@@ -141,7 +141,10 @@ void rule_sensor_undervolt(const sloth_state_t *s, time_t now) {
  *   closes reading `ok` for SENSOR_RECOVER_S without a break.
  *
  * A source that is not configured never fires: its row says nothing
- * about the sensor's health, only about what was asked for.
+ * about the sensor's health, only about what was asked for. Nor does
+ * one sloth-rf trimmed at startup (not_installed, src/rf_trim.h): the
+ * SDR its decoder needs is not attached, which is the host's shape and
+ * not a fault, and the trim says so once on stderr.
  *
  * Severity: CRIT for the monitor radio and the IP capture, WARN for the
  * rest. Those two are the sensor's main function - every 802.11 rule
@@ -169,10 +172,12 @@ void rule_sensor_source_down(const sloth_state_t *s, time_t now) {
         akey_tok(&ak, o->name);
         if (!akey_end(&ak)[0]) continue;
 
-        if (o->state == SYS_ST_NOT_CONFIGURED) {
-            /* Not configured now: nothing to judge. A source cannot
-             * become unconfigured mid-run; if it ever does, an open
-             * incident expires on the engine's quiet period. */
+        if (o->state == SYS_ST_NOT_CONFIGURED || o->state == SYS_ST_NOT_INSTALLED) {
+            /* Not configured now, or trimmed at startup because its
+             * receiver is not attached (src/rf_trim.h): nothing is
+             * read, so nothing to judge. A source cannot become
+             * unconfigured mid-run; if it ever does, an open incident
+             * expires on the engine's quiet period. */
             memset(h, 0, sizeof(*h));
             continue;
         }

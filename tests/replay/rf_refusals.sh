@@ -133,9 +133,12 @@ moved --victron relative.jsonl /nonexistent/victron.jsonl
 # And sloth-rf takes them: one run with every decoder flag and a value
 # it accepts gets past the flag checks (no file is opened by a check; a
 # decoder's file that is not there is a state). --ticks 1, no sink, no
-# privilege drop: it starts, ticks once and exits 0.
+# privilege drop: it starts, ticks once and exits 0. --no-sdr-trim, so
+# every decoder reaches its check whatever this host's USB lists: on a
+# host with no SDR the startup trim would otherwise take the three
+# decoder files before the checks (src/rf_trim.h).
 n=$((n + 1))
-out=$("$rf" --no-privdrop --ticks 1 --adsb /nonexistent/aircraft.json \
+out=$("$rf" --no-privdrop --no-sdr-trim --ticks 1 --adsb /nonexistent/aircraft.json \
       --aprs /nonexistent/aprs.log --aprs-freq 144390000 --aprs-silent-hours 3 \
       --rtl433 /nonexistent/events.jsonl --victron /nonexistent/victron.jsonl \
       2>&1 >/dev/null </dev/null); rc=$?

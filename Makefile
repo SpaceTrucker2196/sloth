@@ -333,6 +333,9 @@ RF_SRCS += src/rf_flags.c
 # #216: the four decoder source rows, out of src/sys_status.c, and the
 # one call that hands sloth-rf's side to the shared services.
 RF_SRCS += src/sys_status_rf.c src/rf_side.c
+# 2026-11-18: the startup trim - decoder inputs whose SDR is not on USB
+# are not started (src/rf_trim.h).
+RF_SRCS += src/rf_trim.c
 
 # The union every consumer reads. Order is base, GNSS, RF; nothing
 # depends on it (the objects go into an archive).
@@ -859,7 +862,7 @@ endef
 #   sloth-rf's stages, tables and side    poll_st_*_rf, g_poll_rf,
 #                                         g_alert_table_rf, rf_flags_*,
 #                                         rf_flag_*, rf_side_install,
-#                                         sys_status_rf_fill
+#                                         rf_trim_*, sys_status_rf_fill
 # It is a list of names, so it holds RF files out of the link and not
 # RF code in a shared file: src/db.c's writers for the gnss_*, adsb_*,
 # aprs_* and victron_* tables are in both daemons and are kept off in
@@ -880,6 +883,7 @@ WIFI_FORBID_DEF_PATTERNS = adsb_[a-z0-9_]+ aprs_[a-z0-9_]+ \
                     jsonl_emit_state_rf jsonl_emit_sensor_health_rf \
                     poll_st_[a-z0-9_]+_rf g_poll_rf g_alert_table_rf \
                     rf_flags_[a-z0-9_]+ rf_flag_[a-z0-9_]+ rf_side_install \
+                    rf_trim_[a-z0-9_]+ \
                     sys_status_rf_fill
 WIFI_FORBID_DEFS_RE = ^_?($(subst $(rf_space),|,$(strip $(WIFI_FORBID_DEF_PATTERNS))))$$
 define check_wifi_no_rf

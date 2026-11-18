@@ -164,11 +164,15 @@
 
   // \u2500\u2500 the tables \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   // A state's mark is a shape and a word, never colour alone (R10).
+  // not_installed (JSONL 2.5.0): given to sloth-rf, not started because
+  // no SDR was on USB at its start. Idle like not_configured, and says so.
   var MARK = { "ok": "\u25cf ok", "stale": "\u25d0 stale", "down": "\u2715 down",
-               "not_configured": "\u00b7 not configured" };
+               "not_configured": "\u00b7 not configured",
+               "not_installed": "\u00b7 no SDR attached" };
   var MARK_CLS = { "ok": "health-ok", "stale": "health-bad", "down": "health-bad",
-                   "not_configured": "health-unknown" };
-  var RANK = { "down": 0, "stale": 1, "ok": 2, "not_configured": 3 };
+                   "not_configured": "health-unknown", "not_installed": "health-unknown" };
+  var RANK = { "down": 0, "stale": 1, "ok": 2, "not_installed": 3, "not_configured": 4 };
+  function idle(r) { return r.state === "not_configured" || r.state === "not_installed"; }
   function txt(k) { return function (r) { return r[k] || ""; }; }
   function val(k) { return function (r) { return num(r[k]) ? r[k] : null; }; }
   function devText(r) {
@@ -177,12 +181,12 @@
     return d;
   }
   function heardText(r) {
-    if (r.state === "not_configured") return "-";
+    if (idle(r)) return "-";
     if (!num(r.age_s) || r.age_s < 0) return "never";
     return H.dur(r.age_s) + " ago";
   }
   function rateText(r) {
-    if (r.state === "not_configured") return "-";
+    if (idle(r)) return "-";
     return num(r.rate) ? H.fmt(r.rate) + " " + (r.unit || "") + "/s" : "not measured yet";
   }
   var SRC_COLS = [
@@ -226,15 +230,15 @@
     var body = clear($("sy-src-rows"));
     var ordered = ST ? ST.sort(S.rows, true) : S.rows.slice();
     ordered.forEach(function (r) {
-      var row = el("div", "syrow dt-row " + (r.state === "not_configured" ? "d-dim" : "d-normal"));
+      var row = el("div", "syrow dt-row " + (idle(r) ? "d-dim" : "d-normal"));
       row.appendChild(cell("c-st " + (MARK_CLS[r.state] || "health-unknown"), MARK[r.state] || r.state));
       row.appendChild(cell("c-nm d-bright", r.name));
       row.appendChild(cell("c-kd", r.kind));
       row.appendChild(cell("c-ep", r.endpoint || (r.state === "not_configured" ? "not configured" + (r.flag ? " (" + r.flag + ")" : "") : "")));
-      row.appendChild(cell("c-dv", devText(r) || (r.state === "not_configured" ? "" : "not tied to a receiver")));
+      row.appendChild(cell("c-dv", devText(r) || (idle(r) ? "" : "not tied to a receiver")));
       row.appendChild(cell("c-lh n", heardText(r)));
       row.appendChild(cell("c-rt n", rateText(r)));
-      row.appendChild(cell("c-er n", r.state === "not_configured" || !num(r.errors) ? "-" : H.fmt(r.errors)));
+      row.appendChild(cell("c-er n", idle(r) || !num(r.errors) ? "-" : H.fmt(r.errors)));
       row.appendChild(cell("c-dt", r.detail));
       body.appendChild(row);
     });
@@ -355,7 +359,7 @@
     drawHw();
     drawTiles(j);
     drawRecall(j);
-    var cfg = S.rows.filter(function (r) { return r.state !== "not_configured"; }).length;
+    var cfg = S.rows.filter(function (r) { return !idle(r); }).length;
     var ok = S.rows.filter(function (r) { return r.state === "ok"; }).length;
     if (!j.seen) {
       set("sy-note", "no sys_status record yet");
@@ -369,7 +373,8 @@
           j.interval_s + " s" + (j.stale ? "; the figures below are the last it sent" : ""));
     }
     set("sy-src-cap", "source_status, " + S.rows.length + " sources, " + cfg + " configured, " + ok + " ok; " +
-        "state: ok delivering, stale nothing within 60 s (or the decoder's clock stopped), down not open or in error");
+        "state: ok delivering, stale nothing within 60 s (or the decoder's clock stopped), down not open or in error, " +
+        "no SDR attached given to sloth-rf but not started (no SDR on USB at its start; restart it after plugging one in)");
     set("sy-hw-cap", "receiver_hw, " + S.hw.length + " attached; USB devices in sloth's table of receiver IDs, wireless " +
         "interfaces and Bluetooth controllers, from sysfs. No serial number is read. A source is tied to a receiver " +
         "only where sysfs says so: a decoder's TCP endpoint is not guessed at");
@@ -419,7 +424,7 @@
     r.push({ g: "stream", name: "capture drops", metric: "sensor.drops", key: "", unit: "frames", eps: 1, counter: true });
     r.push({ g: "stream", name: "records", metric: "records.total", key: "", unit: "rec/s", eps: 1, perSec: true });
     (j.sources || []).forEach(function (s) {
-      if (s.state === "not_configured") return;
+      if (idle(s)) return;
       r.push({ g: "sources", name: s.name + " up", metric: "source.up", key: s.name, strip: "up" });
       r.push({ g: "sources", name: s.name + " rate", metric: "source.rate", key: s.name,
                unit: (s.unit || "") + "/s", eps: 0.1 });

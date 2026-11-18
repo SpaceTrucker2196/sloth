@@ -344,6 +344,7 @@ static void test_wifi_gate_patterns_have_witnesses(void) {
         { "rf_flags_[a-z0-9_]+",      "rf_flags_check" },
         { "rf_flag_[a-z0-9_]+",       "rf_flag_aprs_freq" },
         { "rf_side_install",          "rf_side_install" },
+        { "rf_trim_[a-z0-9_]+",       "rf_trim_apply" },
         { "sys_status_rf_fill",       "sys_status_rf_fill" },
     };
     static const char *const dirs[] = {

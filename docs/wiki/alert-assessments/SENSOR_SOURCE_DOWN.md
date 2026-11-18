@@ -1,7 +1,7 @@
 ---
 type: SENSOR_SOURCE_DOWN
 technique: ""
-rule_file: src/alerts/rules_sensor.c:157 rule_sensor_source_down()
+rule_file: src/alerts/rules_sensor.c:160 rule_sensor_source_down()
 count_semantics: per rule evaluation - one fire() per alerts_update() tick per configured source that is open or past its hold (down 10 s, or not ok 300 s). One key per source (`srcdown:<name>`); the detail carries the state, the reader's own word and the freshness band, never an age in seconds, so `observations` moves only when one of those changes.
 severity_assessment: agree - CRIT for the monitor radio and the IP capture, whose loss leaves the sensor silent on its whole 802.11 or wired domain while the views look like a quiet network; WARN for the Bluetooth, GNSS, ADS-B and APRS sources, which each feed one domain beside them.
 false_positive_risk: low - the input is sloth's own reader state (source_status); the holds keep a reconnect that succeeds within seconds and a short lull out. A wired capture on a segment that is genuinely silent for five minutes would fire, which is the rule saying exactly what it measures.
@@ -14,7 +14,7 @@ researched: 2026-11-11
 
 The input is `sys_status_get()`'s `src[]`, the seven `source_status` rows `src/sys_status.c` `fill_sources()` re-derives every poll from the readers' own health (`cap_health`, `mon_health`, `bt_health`, `btcap`, `gps`, `adsb`, `aprs` on the state). Each row is `not_configured`, `ok`, `stale` or `down` by that file's rules: a pcap stream not open or whose worker exited is `down`, one with no frame for more than 60 s or none yet is `stale`; a decoder in error is `down`, connecting or quiet `stale`.
 
-`rule_sensor_source_down()` skips a row that is `not_configured`. For the rest it keeps two clocks per source: how long it has read `down` without a break, and how long it has read anything but `ok`. It opens an incident, key `srcdown:<name>`, when the first reaches `SENSOR_SRC_DOWN_HOLD_S` (10 s) or the second `SENSOR_SRC_STALE_S` (300 s); while one is open it re-asserts it in every state but `ok`; it resolves it with the `alert.resolve` reason `recovered` once the source has read `ok` for `SENSOR_RECOVER_S` (120 s) without a break. Severity is CRIT for `capture` and `monitor`, WARN for the others.
+`rule_sensor_source_down()` skips a row that is `not_configured`, or `not_installed` (since 2026-11-18, JSONL 2.5.0: a decoder input sloth-rf was given but did not start because no SDR was on USB at its start, `src/rf_trim.h`; the host's shape, not a fault). For the rest it keeps two clocks per source: how long it has read `down` without a break, and how long it has read anything but `ok`. It opens an incident, key `srcdown:<name>`, when the first reaches `SENSOR_SRC_DOWN_HOLD_S` (10 s) or the second `SENSOR_SRC_STALE_S` (300 s); while one is open it re-asserts it in every state but `ok`; it resolves it with the `alert.resolve` reason `recovered` once the source has read `ok` for `SENSOR_RECOVER_S` (120 s) without a break. Severity is CRIT for `capture` and `monitor`, WARN for the others.
 
 ## The attack
 

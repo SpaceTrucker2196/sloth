@@ -22,6 +22,7 @@
 #include "capture/victron_reader.h"
 #include "rf_args.h"
 #include "rf_side.h"
+#include "rf_trim.h"
 
 /* sloth-rf: the RF half of the sensor (#213, ADR 0010).
  *
@@ -78,8 +79,27 @@ int main(int argc, char **argv) {
     rf_args_t a;
     int rc = rf_args_parse(argc, argv, &a);
     if (rc >= 0) return rc;
+    /* The startup trim (src/rf_trim.h), before the checks configure
+     * any reader: an input trimmed here is never configured, announced
+     * or started. */
+    char sdr_desc[128] = "";
+    int sdr = a.no_sdr_trim ? RF_SDR_UNKNOWN
+                            : rf_trim_detect(sdr_desc, (int)sizeof(sdr_desc));
+    int trim = rf_trim_apply(&a.rf, a.gnss.gps != NULL, a.no_sdr_trim, sdr,
+                             sdr_desc, stderr);
     rc = rf_args_check(&a);
     if (rc != 0) return rc;
+    /* Every input was a decoder whose SDR is not here. It runs on, as
+     * a run given no input does: its source rows say not_installed and
+     * why, which slothweb shows and SENSOR_SOURCE_DOWN does not judge,
+     * where an exit would leave slothweb's rf socket "retrying" (a bad
+     * tile) and those rows nowhere to be read. */
+    const int nothing_left = trim == RF_TRIM_NOTHING_LEFT;
+    if (nothing_left)
+        fprintf(stderr, "sloth-rf: no SDR attached and no other input "
+                        "(--gps, --victron, --adsb sbs:// or beast://): "
+                        "nothing to read; running so the trimmed rows say "
+                        "why (restart after plugging an SDR in)\n");
 
     /* The privilege plan, before anything opens, so a --user that names
      * no account exits 2 having opened nothing (#140). Nothing here
@@ -124,8 +144,8 @@ int main(int argc, char **argv) {
     if (!a.jsonl_path && !a.data_socket && !a.db_path)
         fprintf(stderr, "sloth-rf: no -o, --data-socket or --db: "
                         "this run produces no output\n");
-    if (!a.rf.adsb && !a.rf.aprs && !a.rf.rtl433 && !a.rf.victron &&
-        !a.gnss.gps)
+    if (!nothing_left && !a.rf.adsb && !a.rf.aprs && !a.rf.rtl433 &&
+        !a.rf.victron && !a.gnss.gps)
         fprintf(stderr, "sloth-rf: no --adsb, --aprs, --rtl433, --victron "
                         "or --gps: there is nothing to read\n");
 

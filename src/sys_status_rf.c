@@ -6,12 +6,24 @@
 #include "aprs.h"
 #include "rtl433.h"
 #include "victron.h"
+#include "rf_trim.h"
 
 /* The RF side's source rows (#216): the ADS-B, APRS and rtl_433
  * decoders and sloth-va's Victron file. Out of src/sys_status.c,
  * unchanged, so that file no longer names a decoder and sloth-wifi
  * links none; src/sys_status.h says what registers this and what a
  * daemon without it reports. The mirror of src/sys_status_capture.c. */
+
+/* A decoder input sloth-rf trimmed at startup (src/rf_trim.h): the SPEC
+ * that was given, and not_installed, never stale or down. */
+static void trimmed_row(sys_source_t *o, int id) {
+    char spec[64];
+    if (!rf_trim_trimmed(id, spec, (int)sizeof(spec))) return;
+    snprintf(o->endpoint, sizeof(o->endpoint), "%s", spec);
+    snprintf(o->detail, sizeof(o->detail),
+             "not started: no SDR on USB at startup (--no-sdr-trim keeps it)");
+    o->state = SYS_ST_NOT_INSTALLED;
+}
 
 void sys_status_rf_fill(const sloth_state_t *s, sys_source_t *src,
                         uint64_t mono_ms) {
@@ -30,6 +42,8 @@ void sys_status_rf_fill(const sloth_state_t *s, sys_source_t *src,
                  a->err[0] ? ": " : "", a->err);
         o->state = a->state == ADSB_LIVE ? SYS_ST_OK
                  : a->state == ADSB_ERROR ? SYS_ST_DOWN : SYS_ST_STALE;
+    } else {
+        trimmed_row(o, SYS_SRC_ADSB);
     }
 
     o = &src[SYS_SRC_APRS];
@@ -47,6 +61,8 @@ void sys_status_rf_fill(const sloth_state_t *s, sys_source_t *src,
          * however old the last packet; its age says how quiet. */
         o->state = a->state == APRS_LIVE ? SYS_ST_OK
                  : a->state == APRS_ERROR ? SYS_ST_DOWN : SYS_ST_STALE;
+    } else {
+        trimmed_row(o, SYS_SRC_APRS);
     }
 
     o = &src[SYS_SRC_RTL433];
@@ -66,6 +82,8 @@ void sys_status_rf_fill(const sloth_state_t *s, sys_source_t *src,
          * however old the last decode; its age says how quiet. */
         o->state = r->state == RTL433_LIVE ? SYS_ST_OK
                  : r->state == RTL433_ERROR ? SYS_ST_DOWN : SYS_ST_STALE;
+    } else {
+        trimmed_row(o, SYS_SRC_RTL433);
     }
 
     o = &src[SYS_SRC_VICTRON];

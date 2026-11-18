@@ -1165,9 +1165,14 @@ static void test_sys_page(void) {
               "        head: $(\"sy-src-thead\"), reset: $(\"sy-src-tools\"), redraw: drawSources, cols: SRC_COLS });");
     WT_HAS(m, "      HT = window.SlothTables.make({ id: \"sy-hw\", label: \"attached receivers\", box: $(\"sy-hw-box\"),\n"
               "        head: $(\"sy-hw-thead\"), reset: $(\"sy-hw-tools\"), redraw: drawHw, cols: HW_COLS });");
-    /* A state is a shape and a word (R10), four of them. */
+    /* A state is a shape and a word (R10), five of them: not_installed
+     * (JSONL 2.5.0) is sloth-rf's trimmed decoder input, idle like
+     * not_configured and worded as what it is. */
     WT_HAS(m, "  var MARK = { \"ok\": \"\\u25cf ok\", \"stale\": \"\\u25d0 stale\", \"down\": \"\\u2715 down\",\n"
-              "               \"not_configured\": \"\\u00b7 not configured\" };");
+              "               \"not_configured\": \"\\u00b7 not configured\",\n"
+              "               \"not_installed\": \"\\u00b7 no SDR attached\" };");
+    WT_HAS(m, "  function idle(r) { return r.state === \"not_configured\" || r.state === \"not_installed\"; }");
+    WT_HAS(m, "    (j.sources || []).forEach(function (s) {\n      if (idle(s)) return;");
     /* A reading the host does not have is said, never drawn as zero. */
     WT_HAS(m, "  var ABSENT = \"not reported by this host\";");
     WT_HAS(m, "    t.appendChild(el(\"div\", \"sub\", value === null ? ABSENT : sub || \"\"));");
@@ -1262,6 +1267,50 @@ static void test_sys_page(void) {
     free(m);
 }
 
+/* not_installed (JSONL 2.5.0): sloth-rf was given --rtl433 and trimmed
+ * it at startup, no SDR being on USB (src/rf_trim.h). The row is listed
+ * with what was asked for and nothing measured, and has no up or down
+ * to chart. Seen red with "not_installed" dropped from state_ok() (the
+ * row is rejected, "rejected":1 and no rtl433 in the list) and with
+ * web_sys_metrics()'s not_installed return removed (a flat "down"
+ * series for a decoder whose SDR is not attached). */
+static const char SRC_RTL_TRIMMED[] =
+    "{\"type\":\"source_status\",\"ts\":1800000060,\"seq\":2,\"name\":\"rtl433\","
+    "\"kind\":\"sub-ghz\",\"flag\":\"--rtl433\",\"state\":\"not_installed\","
+    "\"detail\":\"not started: no SDR on USB at startup (--no-sdr-trim keeps it)\","
+    "\"endpoint\":\"/var/lib/rtl_433/events.jsonl\"}";
+
+static void test_sys_not_installed(void) {
+    fresh();
+    feed(STATUS);
+    feed(SRC_RTL_TRIMMED);
+    web_health_t H;
+    health(&H, T + 5);
+    WT_EQ(route(&H, "/api/sys", ""), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "{\"name\":\"rtl433\",\"kind\":\"sub-ghz\",\"flag\":\"--rtl433\","
+              "\"state\":\"not_installed\",\"detail\":\"not started: no SDR on USB at "
+              "startup (--no-sdr-trim keeps it)\",\"endpoint\":\"/var/lib/rtl_433/events.jsonl\","
+              "\"hw\":null,\"desc\":null,\"driver\":null,\"age_s\":null,\"age_band\":null,"
+              "\"unit\":null,\"count\":null,\"rate\":null,\"errors\":null,\"reconnects\":null,");
+    WT_HAS(b, "\"records\":2,\"rejected\":0,");
+
+    web_rollup_t ru;
+    web_metrics_t m;
+    char err[128];
+    g_clock = T;
+    WT_EQ(web_rollup_init(&ru, 64, 0, err, sizeof(err)), 0);
+    WT_EQ(web_metrics_init(&m, &ru, clock_fn, NULL), 0);
+    mrec(&m, STATUS);
+    mrec(&m, SRC_MON);
+    mrec(&m, SRC_RTL_TRIMMED);
+    WT_ASSERT(web_rollup_has(&ru, WM_SRC_UP, "monitor"));
+    WT_ASSERT(!web_rollup_has(&ru, WM_SRC_UP, "rtl433"));
+    WT_ASSERT(!web_rollup_has(&ru, WM_SRC_RATE, "rtl433"));
+    web_metrics_destroy(&m);
+    web_rollup_destroy(&ru);
+}
+
 void run_sysstat_tests(void) {
     WT_RUN(test_sys_key);
     WT_RUN(test_sys_keep);
@@ -1274,6 +1323,7 @@ void run_sysstat_tests(void) {
     WT_RUN(test_sys_beacon_recall);
     WT_RUN(test_sys_hostile);
     WT_RUN(test_sys_metrics);
+    WT_RUN(test_sys_not_installed);
     WT_RUN(test_sys_db_size);
     WT_RUN(test_sys_db_limits);
     WT_RUN(test_sys_db_metrics);

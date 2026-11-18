@@ -120,8 +120,13 @@ typedef enum {
     SYS_SRC_COUNT
 } sys_src_id_t;
 
+/* SYS_ST_NOT_INSTALLED (JSONL 2.5.0, appended): sloth-rf was given the
+ * input but trimmed it at startup because the receiver it needs is not
+ * attached (src/rf_trim.h). Like not_configured it is never judged by
+ * SENSOR_SOURCE_DOWN; unlike it, the row says what was asked for. */
 typedef enum {
-    SYS_ST_NOT_CONFIGURED = 0, SYS_ST_OK, SYS_ST_STALE, SYS_ST_DOWN
+    SYS_ST_NOT_CONFIGURED = 0, SYS_ST_OK, SYS_ST_STALE, SYS_ST_DOWN,
+    SYS_ST_NOT_INSTALLED
 } sys_src_state_t;
 
 /* -1 never, 0 within SYS_SRC_STALE_S, 1 within SYS_SRC_OLD_S, 2 older. */
@@ -296,6 +301,16 @@ typedef struct {
 extern const sys_usb_id_t sys_usb_table[];
 extern const int          sys_usb_table_count;
 const sys_usb_id_t *sys_usb_lookup(unsigned vid, unsigned pid);
+
+/* Whether /sys/bus/usb/devices lists a device whose ID sys_usb_table[]
+ * gives `kind` ("sdr"): 1, the first one's name, ID and port into desc;
+ * 0 none; -1 the list could not be read or was longer than this reads
+ * (256 entries), or, with no match, a device's ID could not be read:
+ * all "cannot tell", which a caller must not take for none. Reads
+ * idVendor and idProduct through the same seam and guard as the
+ * receiver inventory: regular files under /sys, no device opened. For
+ * sloth-rf's startup trim (src/rf_trim.h). */
+int sys_usb_has_kind(const char *kind, char *desc, int cap);
 
 /* The path guard: 1 when path is under /proc/ or /sys/ and has no ".."
  * component. sys_rd / sys_ls call nothing for a path that fails it. */

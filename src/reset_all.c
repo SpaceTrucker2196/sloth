@@ -7,6 +7,7 @@
 #include "aprs.h"
 #include "rtl433.h"
 #include "victron.h"
+#include "rf_trim.h"
 #include "alert_pcap.h"
 #include "alerts.h"
 #include "assoc_track.h"
