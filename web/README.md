@@ -1154,15 +1154,49 @@ honestly has:
 
 The dome is the page (owner request, 2026-11-06): on the Radar tab the
 canvas fills the window below the tab bar, and the header, the camera
-line and buttons, the picked panel and the caption float over it as
+line and buttons, the sources and the picked panel float over it as
 small panels; the explanation folds under "about this view". Other tabs
 are unchanged. **full screen** (or `f` on the focused dome) puts the
 dome alone into the browser's full screen, every panel hidden; Esc
 leaves. The button is hidden where the browser has no Fullscreen API.
 
+**Sources** (owner request 2026-11-18: "on the radar screen add a
+selection view to include or exclude sensor sources. and remove the box
+of text for sources"). Under the buttons a `sources` fieldset holds one
+checkbox a source: **satellites**, **aircraft**, **APRS**, **Wi-Fi**,
+**BLE** and, with a `--peer` configured, **fleet areas**
+(`radar-src-sat` … `radar-src-fleet`); under Local only satellites is
+offered. Each label carries its live count, read from the answers and
+not from the frame, so an excluded source still counts: satellites,
+aircraft and APRS in the window as held, Wi-Fi and BLE as listed of
+those with an estimate (`Wi-Fi 50/210`), fleet areas as drawn. An
+excluded source is not drawn (marks, band rings, device rings, trails,
+ticks, labels; Wi-Fi off also takes the Wi-Fi and AP fleet areas, BLE
+off the BLE ones) and not picked: every hit list (labels, marks, rings,
+areas) goes through `pickShown()`, and turning off the source of the
+picked item closes the side panel (`srcChange()`); a hover on it is
+dropped. Excluded sources are still fetched, so their counts stay live
+and turning one on draws at once; the fleet areas alone are not
+fetched while off, the old button's rule. The canvas's `aria-label`
+lists only the sources drawn. Kept per browser as `radar.src`, the list
+of the sources off (absent: all on); the old `radar.fleet` "off" moves
+into it once. The bottom-left caption is gone: its counts are the
+checkboxes'; the sensor's position, its source and age, what of a
+drawn source is heard but not placed (satellites without az/el,
+aircraft and APRS without a position, Wi-Fi and BLE without a distance
+estimate), how many devices are located and hollow (and from how many
+sites), the fleet areas' state (no peer with a position yet, no sensor
+position, rows with no area) and every failed answer of a source drawn
+(the fleet's and sloth.db's trails included; /api/gnss's always, the
+position is read from it) are the header's, held to four lines and
+scrolled on a narrow screen; the endpoints and their
+intervals and the range scale are in "about this view". Dropped: the
+APRS moving and object counts (the dome shows both: a trail, a ✕) and
+the fleet areas' per-form breakdown (each area's panel names its form).
+
 A single passive sensor has no bearing for a terrestrial emitter
 (`web/src/web_frrs_report.c`, `src/position_track.h`), so rings are the
-honest form, and the caption says what a ring is: where the device may
+honest form, and "about this view" says what a ring is: where the device may
 be, not where it is. **True direction, compressed distance**: every
 object sits at its true (azimuth, elevation) with its slant range on a
 log scale, 0.3 m at the centre (so the "immediate" ring is not the
@@ -1197,7 +1231,7 @@ distance at an angle from a hash of its address (a BLE one on its own
 faint dashed ring; a Wi-Fi one has had no ring since 2026-11-17, the
 owner's ruling once direction finding was running): that angle
 means nothing, only the distance is an estimate, and the side panel
-and the caption say so. ■ Wi-Fi station, ◆ access point, ● BLE. A Wi-Fi
+and the header say so. ■ Wi-Fi station, ◆ access point, ● BLE. A Wi-Fi
 mark and its polygon share one of five hues, `--rw-0..4`, by a hash of
 the MAC, stable across polls (owner ruling over R10 for this view; the
 values and their distances are in the Design tables, and
@@ -1206,8 +1240,9 @@ one within 20 of `--signal`, the heat ramp, `--tui-normal`, `--data` or
 `--ink`, or if one is under 3:1 on either ground, in either theme). BLE
 keeps the one ink. Labels go beside their marks through the same
 greedy placer (with a leader when only the third radius has room); the
-two stacked columns are gone. The caption counts located (solid, from N
-sites) and unlocated (hollow) devices per family.
+two stacked columns are gone. The header counts located (solid, from N
+sites) and unlocated (hollow) devices per family (the caption did until
+2026-11-18).
 
 **Devices on the north axis** (superseded 2026-11-13; owner request 2026-11-06: "add
 Bluetooth and Wi-Fi devices; since we have no azimuth or location for
@@ -1267,9 +1302,9 @@ characters when there is room and drops it when there is not. A
 the 24 h) draws its trail on the ground through the same log mapping,
 at most 48 points (the newest of each 30 min bucket), fading toward
 its oldest point and broken across a gap of more than two buckets; the
-caption says "APRS: N in the last 1 h (M moving, trails 24 h), K
-objects". Without `--sloth-db` the live stations still draw, without
-trails or objects, and the caption says why.
+APRS checkbox counts the entities in the window. Without `--sloth-db`
+the live stations still draw, without trails or objects, and the header
+says why.
 
 **Speed and heading.** An aircraft with a ground speed and a track, or
 an APRS station with a speed and a course, gets a velocity tick from
@@ -1323,15 +1358,16 @@ places both readings rule out. A Wi-Fi area is filled in its address's
 hue, a BLE area in `--data`, at the same shared alpha, and outlined
 1 px at 0.25 in the same ink. A device mark at its area's point and its area
 are linked: hover or pick one and the other is outlined (the dot
-ringed). The **fleet areas** button (`radar-fleet`) hides them, kept as
-`radar.fleet` only when off. `/api/health` is read once a page for
-`fleet.peers`: with none the button is hidden and nothing of the fleet
-is fetched, nor with the button off, the tab hidden or under Local
+ringed). The **fleet areas** checkbox (`radar-src-fleet`, one of the
+sources since 2026-11-18; the `radar-fleet` button before) hides them,
+kept in `radar.src`. `/api/health` is read once a page for
+`fleet.peers`: with none the checkbox is hidden and nothing of the fleet
+is fetched, nor with it off, the tab hidden or under Local
 (three requests per 30 s otherwise).
 At W9FJC and beta-site (10.5 m apart on 2026-11-11) 133 of 141 located
 rows drew: 55 as overlapping bands (outer radius median 40 m), 78 as a
 side (median 12 m), 8 with no side; at that baseline they are where an
-emitter may be, not where it is, and the caption says so.
+emitter may be, not where it is, and "about this view" says so.
 
 **The centre** is the GPS fix when `gnss.fix` is a 2D/3D fix within 60
 s, else the position `sensor_health` carries (`/api/gnss` `loc`: the
@@ -1356,10 +1392,11 @@ edges (`src/rf_distance.h`), the count and up to eight devices ("8 of
 31"), each a way into its drawer; "open in GPS Sat / ADS-B / APRS / BLE
 Devices / Devices" shows the tab and hands the family's module the
 selection (`SlothGnss.select`, `SlothAdsb.select`, `SlothAprs.select`,
-`openBleDrawer`, `openDrawer`). The caption (R9) names the sources and
-their windows, the position's source and age, the range and height
-rule, each family's placed and unplaced counts, how many Wi-Fi and BLE
-rows have no distance estimate, and the estimate sentence. The visual
+`openBleDrawer`, `openDrawer`). R9 is met by the sources' counts, the
+header (the position's source and age, the unplaced counts, how many
+Wi-Fi and BLE rows have no distance estimate) and "about this view"
+(the endpoints and their windows, the range and height rule, the
+estimate sentence); the caption that held them went on 2026-11-18. The visual
 spec's R12 (no glyph without a TUI form) is waived for this view by
 owner ruling (`docs/web-ui-spec.md`): the dome has no character-cell
 form; its marks still carry shape and word (R10), it uses no gradient,

@@ -449,8 +449,7 @@ static void test_radar_page(void) {
     static const char *const ids[] = {
         "radar-head", "radar-note", "radar-cam", "radar-reset", "radar-north", "radar-top",
         "radar-zin", "radar-zout", "radar-side", "radar-side-name", "radar-side-kv",
-        "radar-side-list", "radar-open", "radar-side-close", "radar-cap", "radar-full",
-        "radar-fleet",
+        "radar-side-list", "radar-open", "radar-side-close", "radar-full",
     };
     for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
         char want[64];
@@ -464,7 +463,6 @@ static void test_radar_page(void) {
         free(mod);
     }
     WT_HAS(p, "<dl class=\"radar-kv\" id=\"radar-side-kv\"></dl>");
-    WT_HAS(p, "<div class=\"sub radar-ov radar-bl\" id=\"radar-cap\"></div>");
     /* The dome is the page (owner request 2026-11-06): the stage holds
      * the canvas full size and the rest floats over it; fit() gives the
      * stage the window below its top. */
@@ -525,11 +523,15 @@ static void test_radar_page(void) {
              * with a second <select id="radar-x"> added. */
             WT_EQ(count(view, "<select"), 1);
             WT_HAS(view, "<select id=\"radar-aprs-win\">");
-            WT_LACKS(view, "<input");
+            /* The six sources' checkboxes (2026-11-18), kept by radar.js
+             * as radar.src (test_prefs.c's census lists them); no other
+             * input. The fleet areas' button went into them. */
+            WT_EQ(count(view, "<input"), 6);
+            WT_EQ(count(view, "<input type=\"checkbox\" id=\"radar-src-"), 6);
             WT_LACKS(view, "<textarea");
             WT_LACKS(view, "aria-pressed");
             WT_LACKS(view, "aria-checked");
-            WT_EQ(count(view, "<button type=\"button\" id=\"radar-"), 9);   /* + full screen, fleet areas */
+            WT_EQ(count(view, "<button type=\"button\" id=\"radar-"), 8);   /* + full screen */
             WT_EQ(count(view, "<canvas"), 1);
             free(view);
         }
@@ -723,13 +725,10 @@ static void test_radar_prefs(void) {
  * rule (a fresh fix, else loc, else none); the ring loader's
  * out_of_scope handling and the three passive fetches skipped under
  * Local; every fetch through the lent (scoped) getJSON. */
-static void test_radar_scope_and_caption(void) {
+static void test_radar_scope_and_header(void) {
     const char *p = (const char *)web_page;
     WT_HAS(p, "\"Local: only the host's own receiver (satellites). Aircraft, APRS, Wi-Fi monitor and BLE are "
               "the passive radios' \xe2\x80\x94 switch to Monitor or Hybrid\"");
-    WT_HAS(p, "    parts.push(\"range log 0.3 m\xe2\x80\x93" "300 km; height is true elevation angle\");");
-    WT_HAS(p, "      parts.push(\"distance from signal strength is an estimate; a ring is where the device may be, not where it is\");");
-    WT_HAS(p, "\" Wi-Fi, \" + (rd.ble ? rd.ble.none : 0) + \" BLE without a distance estimate\"");
     WT_HAS(p, "      h.appendChild(H.el(\"b\", \"h2\", \"no sensor position: aircraft and APRS not placed\"));");
     WT_HAS(p, "    if (f && num(f.mode) && f.mode >= 2 && num(f.lat) && num(f.lon) && num(f.ts) && now - f.ts <= FIX_FRESH_S)\n"
               "      return { lat: f.lat, lon: f.lon, alt: num(f.alt_m) ? f.alt_m : null, from: \"gps fix\", age: now - f.ts };\n"
@@ -743,7 +742,6 @@ static void test_radar_scope_and_caption(void) {
               "      S.radarAt = S.atrkAt = 0;\n"
               "      S.fleet = null;\n"
               "      S.fleetAt = 0;\n"
-              "      fleetBtn();\n"
               "      after();\n"
               "      return;\n"
               "    }");
@@ -819,8 +817,8 @@ static void test_select_hooks(void) {
  * address's hash (addrAngle()), a Wi-Fi mark in its address's hue
  * (wifiHue(), --rw-0..4), ■ station ◆ AP ● BLE (devMark()); the
  * labels placed free, the two stacked columns (stackColumn()) gone; the
- * panel's placement rows (devPlace()) and the caption's located and
- * unlocated counts.
+ * panel's placement rows (devPlace()) and the header's located and
+ * hollow counts (test_radar_sources_js).
  *
  * What the pins prove and what they do not: a C test cannot run the
  * script, so "no label ever overlaps another" is held by construction
@@ -1026,7 +1024,7 @@ static void test_radar_devices_js(void) {
               "      loc.sMax = Math.max(loc.sMax, ns);\n"
               "    }\n"
               "    [\"wifi\", \"ble\"].forEach(function (fam) {\n"
-              "      var list = (S.radar && S.radar.devs && S.radar.devs[fam]) || [];\n"
+              "      var list = (S.src[fam] && S.radar && S.radar.devs && S.radar.devs[fam]) || [];\n"
               "      list.forEach(function (dv, idx) {\n"
               "        var m = devM(dv), ble = fam === \"ble\", ad = String((ble ? dv.addr : dv.mac) || \"\").toLowerCase();\n"
               "        var a = byAddr[fam + \"|\" + ad] || null;\n"
@@ -1087,9 +1085,8 @@ static void test_radar_devices_js(void) {
     WT_HAS(p, "    // A device's label is its handle where marks crowd.\n"
               "    for (var i = 0; i < S.labelPicks.length; i++) {\n"
               "      var b = S.labelPicks[i].box;\n"
-              "      if (px >= b.x0 && px <= b.x1 && py >= b.y0 && py <= b.y1) return S.labelPicks[i].pick;\n"
-              "    }\n"
-              "    S.marks.forEach");
+              "      if (px >= b.x0 && px <= b.x1 && py >= b.y0 && py <= b.y1 && pickShown(S.labelPicks[i].pick)) return S.labelPicks[i].pick;\n"
+              "    }\n");
     WT_HAS(p, "    else if (s.kind === \"ble\") { H.show(\"ble\"); H.openBleDrawer(ref.addr, ref.addr_type, ref.iface); }\n"
               "    else if (s.kind === \"wifi\") { H.show(\"devices\"); H.openDrawer(ref.mac); }");
     WT_HAS(p, "  var TREND_GLYPH = { approaching: \"\\u2198\", steady: \"\\u2192\", leaving: \"\\u2197\" };");
@@ -1124,16 +1121,6 @@ static void test_radar_devices_js(void) {
               "            [\"probable point\", metres(rg) + \" from this sensor, bearing \" + deg(az, 0) + \" true\"]];\n"
               "  }");
     WT_HAS(p, "                  [\"last seen\", age(isBle ? ref.last_seen : ref.ts, now) + \" ago\"]].concat(devPlace(s.kind, s.key)));");
-    WT_HAS(p, "        parts.push(\"devices: \" + (p.ble || 0) + \" of \" + (rd.ble ? rd.ble.estimated : 0) + \" BLE, \" + (p.wifi || 0) + \" of \" +\n"
-              "                   (rd.wifi ? rd.wifi.estimated : 0) + \" Wi-Fi listed (most recent)\");\n"
-              "        var lc = p.loc || { wifi: 0, ble: 0, wifiNo: 0, bleNo: 0, sMin: 0, sMax: 0 };\n"
-              "        parts.push(\"located (solid, at the most probable point of a fleet area\" +\n"
-              "                   (lc.sMax ? \", from \" + (lc.sMin === lc.sMax ? lc.sMax : lc.sMin + \"\\u2013\" + lc.sMax) + \" sites\" : \"\") + \"): \" +\n"
-              "                   lc.wifi + \" Wi-Fi, \" + lc.ble + \" BLE; unlocated (hollow, this site only): \" + lc.wifiNo + \" Wi-Fi, \" + lc.bleNo +\n"
-              "                   \" BLE, each at its distance at an arbitrary angle (BLE on its own ring, Wi-Fi with none): only the distance is an estimate\");\n"
-              "        parts.push(\"Wi-Fi mark and area share a hue from the address (\\u25a0 station, \\u25c6 access point), BLE \\u25cf in one ink\");");
-    WT_HAS(p, "      parts.push(\"ticks are speed and heading (aircraft gs/track, APRS speed/course); Wi-Fi and BLE have neither, \" +\n"
-              "                 \"their arrow is sloth's trend (\\u2198 approaching, \\u2192 steady, \\u2197 leaving)\");");
     char *mod = module(p);
     WT_ASSERT(mod != NULL);
     if (mod) {
@@ -1446,19 +1433,14 @@ static void test_radar_fleet_js(void) {
               "      return !!j && Array.isArray(j.sites) && j.sites.some(function (s) { return s && s.site !== \"self\"; });\n"
               "    });\n"
               "  ");
-    WT_HAS(p, "  function fleetWanted() { return S.fpeers > 0 && S.fleetOn && H.scope() !== \"local\"; }\n"
-              "  function fleetBtn() {\n"
-              "    var b = $(\"radar-fleet\");\n"
-              "    if (!b) return;\n"
-              "    b.hidden = !(S.fpeers > 0) || H.scope() === \"local\";\n"
-              "    b.textContent = S.fleetOn ? \"fleet areas on\" : \"fleet areas off\";\n"
-              "  ");
-    WT_HAS(p, "  function drawFleet(g, cam, c, T, W, Hh, dpr, want, placed) {\n"
+    WT_HAS(p, "  function fleetWanted() { return S.fpeers > 0 && S.src.fleet && H.scope() !== \"local\"; }\n"
+              "  // An area's family is drawn: Wi-Fi (a station or an AP) or BLE.\n"
+              "  function areaShown(a) { return !!S.src[a.kind === \"ble\" ? \"ble\" : \"wifi\"]; }\n");
+    WT_HAS(p, "  function drawFleet(g, cam, c, T, W, Hh, dpr, want) {\n"
               "    S.areas = [];\n"
-              "    var n = { fix: 0, bands: 0, side: 0, none: 0 };\n"
-              "    placed.fleet = n;\n"
-              "    if (!S.fleetOn || !c || !fleetPeers()) return;\n"
-              "    var areas = fleetGeo(c, n), al = Math.min(FLEET_A_MAX, FLEET_A_SUM / Math.max(1, areas.length));\n"
+              "    if (!S.src.fleet || !c || !fleetPeers()) return;\n"
+              "    var areas = fleetGeo(c, { fix: 0, bands: 0, side: 0, none: 0 }).filter(areaShown);\n"
+              "    var al = Math.min(FLEET_A_MAX, FLEET_A_SUM / Math.max(1, areas.length));\n"
               "    var dhot = hotAddrs(false);\n"
               "    areas.forEach(function (a) {\n"
               "      var p = areaPath(a, cam), on = isSel(\"fleet\", a.id), ink = on ? T.signal : areaInk(a, T);\n"
@@ -1504,7 +1486,6 @@ static void test_radar_fleet_js(void) {
               "    })).then(function (all) {\n"
               "      if (fg !== S.fgen) return;\n"
               "      S.fleet = all;\n"
-              "      fleetBtn();\n"
               "      after();\n"
               "    });\n"
               "  ");
@@ -1519,14 +1500,14 @@ static void test_radar_fleet_js(void) {
               "    // so a tap off every mark still clears the panel where the areas\n"
               "    // cover the centre).\n"
               "    var g = $(\"radar-dome\").getContext(\"2d\");\n"
-              "    for (i = S.areas.length - 1; g && i >= 0; i--) if (areaHit(S.areas[i], g, px, py)) return { kind: \"fleet\", key: S.areas[i].id };\n"
+              "    for (i = S.areas.length - 1; g && i >= 0; i--)\n"
+              "      if (pickShown({ kind: \"fleet\", key: S.areas[i].id }) && areaHit(S.areas[i], g, px, py)) return { kind: \"fleet\", key: S.areas[i].id };\n"
               "    return null;");
     WT_HAS(p, "    if (local) {\n"
               "      S.adsb = S.aprs = S.radar = S.atrk = null;\n"
               "      S.radarAt = S.atrkAt = 0;\n"
               "      S.fleet = null;\n"
               "      S.fleetAt = 0;\n"
-              "      fleetBtn();\n"
               "      after();\n"
               "      return;\n"
               "    }\n"
@@ -1535,7 +1516,7 @@ static void test_radar_fleet_js(void) {
               "      S.fpeers = -2;\n"
               "      H.getJSON(\"/api/health\").then(function (j) {\n"
               "        S.fpeers = j && j.fleet && Array.isArray(j.fleet.peers) ? j.fleet.peers.length : 0;\n"
-              "        fleetBtn();\n"
+              "        dirty();\n"
               "        if (fleetWanted() && visible()) loadFleet();\n"
               "      }).catch(function () { S.fpeers = -1; });\n"
               "    }\n"
@@ -1544,16 +1525,11 @@ static void test_radar_fleet_js(void) {
      * clears the panel even where the areas cover the centre. */
     WT_HAS(p, "        var pt = canvasPoint(ev, cv), hit = pickAt(pt[0], pt[1], !S.sel);\n"
               "        if (hit) select(hit.kind, hit.key); else select(null);\n");
-    WT_HAS(p, "    S.fleetOn = H.prefGet(\"radar.fleet\") !== false;");
-    WT_HAS(p, "    $(\"radar-fleet\").addEventListener(\"click\", function () {\n"
-              "      S.fleetOn = !S.fleetOn;\n"
-              "      H.prefSet(\"radar.fleet\", S.fleetOn ? null : false);\n"
-              "      if (!S.fleetOn && S.sel && S.sel.kind === \"fleet\") select(null);\n"
-              "      if (fleetWanted() && Date.now() - S.fleetAt > FLEET_MS) loadFleet();\n"
-              "      fleetBtn();\n"
-              "      dirty();\n"
-              "    });\n"
-              "    fleetBtn();");
+    /* The fleet toggle's kept "off" from before the selection moves into
+     * radar.src once; the toggle itself is the sources' fleet checkbox
+     * (test_radar_sources_js). */
+    WT_HAS(p, "    if (H.prefGet(\"radar.fleet\") === false) { S.src.fleet = false; H.prefSet(\"radar.fleet\", null); srcSave(); }");
+    WT_HAS(p, "    if (k === \"fleet\" && fleetWanted() && Date.now() - S.fleetAt > FLEET_MS) loadFleet();\n");
     WT_HAS(p, "    else if (s.kind === \"fleet\") H.show(\"fleet\");");
     WT_HAS(p, "        [\"area drawn\", ref.form === \"fix\" ? \"a least-squares fit's disc, radius \" + metres(ref.shapes[0].hi)\n"
               "                       : ref.form === \"bands\" ? \"where every site's one-sigma band overlaps, its outline traced\"\n"
@@ -1563,12 +1539,6 @@ static void test_radar_fleet_js(void) {
               "                                                    \" (one Gaussian a site about its range, sigma half its band)\"\n"
               "                           : \"half the radius into the nearer site's side\"],");
     WT_HAS(p, "        [\"placement\", \"range from signal strength at each sloth (ITU-R P.1238, power assumed): where it may be, not where it is\"]]));");
-    WT_HAS(p, "      if (S.fpeers > 0)\n"
-              "        parts.push(!S.fleetOn ? \"fleet areas off\" : !fleetPeers() ? \"fleet areas: no other sloth with a position yet\"\n"
-              "                   : !c ? \"fleet areas need a sensor position\"\n"
-              "                   : \"fleet areas from /api/fleet/locate 30 s: \" + (fn.fix + fn.bands + fn.side) + \" drawn (\" + fn.bands +\n"
-              "                     \" where the sites' bands overlap, \" + fn.fix + \" least-squares discs, \" + fn.side + \" a side only), \" + fn.none +\n"
-              "                     \" with no side; each where it may be, not where it is\");");
     char *mod = module(p);
     WT_ASSERT(mod != NULL);
     if (mod) {
@@ -1588,14 +1558,15 @@ static void test_radar_fleet_js(void) {
         }
         /* Under every mark: after the dome's meridians, before the band
          * rings, the devices, the satellites, aircraft and APRS. */
-        const char *df = strstr(mod, "    drawFleet(g, cam, c, T, W, Hh, dpr, want, placed);\n");
+        const char *df = strstr(mod, "    drawFleet(g, cam, c, T, W, Hh, dpr, want);\n");
         const char *mer = strstr(mod, "      polyline(g, mer);\n");
         const char *rings = strstr(mod, "    [[\"wifi\", \"Wi-Fi \"], [\"ble\", \"BLE \"]].forEach(function (fam) {");
         const char *devs = strstr(mod, "    var shown = { ble: 0, wifi: 0 }, fhot = hotAddrs(true), byAddr = Object.create(null), claimed = Object.create(null);");
         WT_ASSERT(df && mer && rings && devs && mer < df && df < rings && rings < devs);
         WT_EQ(count(mod, "drawFleet("), 2);
-        /* The one kept setting, written only to clear or to say off. */
+        /* The old key, only ever cleared now: radar.src holds it. */
         WT_EQ(count(mod, "prefSet(\"radar.fleet\""), 1);
+        WT_EQ(count(mod, "H.prefSet(\"radar.fleet\", null)"), 1);
         WT_EQ(count(mod, "H.getJSON(\"/api/fleet/locate?kind=\" + k + \"&limit=\" + FLEET_LIMIT)"), 1);
         /* Nothing fetched without a configured peer or with the toggle
          * off: every loadFleet() call but the definition is behind
@@ -1607,8 +1578,12 @@ static void test_radar_fleet_js(void) {
         WT_HAS(mod, "        if (fhot.indexOf(ad) >= 0) { g.strokeStyle = T.ink; ring(g, p.x, p.y, 6 * dpr); }\n");
         free(mod);
     }
-    /* The toggle, hidden until a peer is in an answer. */
-    WT_HAS(p, "          <button type=\"button\" id=\"radar-fleet\" hidden>fleet areas on</button>\n");
+    /* The toggle, a checkbox hidden until a peer is configured; the old
+     * button gone. */
+    WT_HAS(p, "          <label hidden><input type=\"checkbox\" id=\"radar-src-fleet\" checked> fleet areas <span class=\"sub\" id=\"radar-n-fleet\"></span></label></fieldset>\n");
+    WT_LACKS(p, "id=\"radar-fleet\"");
+    WT_LACKS(p, "fleetBtn(");
+    WT_LACKS(p, "S.fleetOn");
     /* The Wi-Fi hues, both themes (palette.c holds them apart). */
     WT_HAS(p, "  --rw-0: #7b94ff;  --rw-1: #d08aff;  --rw-2: #ff7ab8;\n"
               "  --rw-3: #b0e070;  --rw-4: #c09090;\n");
@@ -1624,7 +1599,7 @@ static void test_radar_fleet_js(void) {
  * merge of sloth.db's entities with the live stations and the window
  * filter on the newest packet of any kind; the trail; the object's ✕;
  * the label with its status suffix and the short form the placer falls
- * back to; the 60 s loader; the panel's rows; the caption. Seen red
+ * back to; the 60 s loader; the panel's rows. Seen red
  * with aprsEntities()'s filter made `now - e.pos_ts` (a status-only
  * packet no longer kept an entity: the pin and the LACKS) and with the
  * trail's gap test dropped (the pin). */
@@ -1767,12 +1742,8 @@ static void test_radar_aprs_js(void) {
               "  }");
     WT_HAS(p, "    var awin = aprsWin(), ents = aprsEntities(now, awin);\n"
               "    S.aents = ents;\n"
-              "    ents.forEach(function (e) {\n"
-              "      placed.aprsN++;\n"
-              "      if (e.moving) placed.aprsMoving++;\n"
-              "      if (e.kind === \"object\") placed.aprsObj++;\n"
-              "      if (!c || !num(e.lat) || !num(e.lon)) { placed.aprsNo++; return; }\n"
-              "      placed.aprs++;\n"
+              "    (S.src.aprs ? ents : []).forEach(function (e) {\n"
+              "      if (!c || !num(e.lat) || !num(e.lon)) return;\n"
               "      var a = e.live, L = locate(c, e.lat, e.lon, num(e.alt_m) ? e.alt_m : null);\n"
               "      var on = isSel(\"aprs\", e.id), gone = (a && a.state === \"gone\") || stale(e.last_seen, now);\n"
               "      var col = on ? T.signal : e.kind === \"object\" ? T.normal : a && a.heard_direct ? H.tok(\"--heat-2\") : T.dim;\n"
@@ -1814,9 +1785,6 @@ static void test_radar_aprs_js(void) {
               "        after();\n"
               "      });\n"
               "    }");
-    WT_HAS(p, "      parts.push(\"APRS: \" + (p.aprsN || 0) + \" in the last \" + winText(aprsWin()) + \" (\" + (p.aprsMoving || 0) +\n"
-              "                 \" moving, trails 24 h), \" + (p.aprsObj || 0) + \" objects\" + (p.aprsNo ? \", \" + p.aprsNo + \" unplaced\" : \"\") +\n"
-              "                 (S.atrkErr ? \" (sloth.db: \" + S.atrkErr + \")\" : \"\"));");
     WT_HAS(p, "                  [\"status\", ref.status || null],\n"
               "                  [\"comment\", ref.comment || null],\n"
               "                  [\"trail\", np + \" points over \" + (span / 3600).toFixed(1) + \" h, \" + (ref.moving ? \"moving\" : \"stationary\")],");
@@ -1838,6 +1806,214 @@ static void test_radar_aprs_js(void) {
     }
 }
 
+/* The source selection (owner request 2026-11-18: "on the radar screen
+ * add a selection view to include or exclude sensor sources. and remove
+ * the box of text for sources"), whole: six checkboxes in a fieldset in
+ * the top-left panel, one a source (satellites, aircraft, APRS, Wi-Fi,
+ * BLE, fleet areas), each with its live count (srcCounts(), read from
+ * the answers so an excluded source still counts), the fleet areas only
+ * with a peer, Local only the satellites (srcUI()); kept as radar.src,
+ * the list of those off, through the lent prefGet/prefSet (srcSave(),
+ * init; test_prefs.c's census lists the six); a change drops a pick or
+ * a hover whose source is no longer drawn (srcChange(): the side panel
+ * closes); each family's draw block and every hit list gated (draw(),
+ * drawFleet() with areaShown(), pickAt() with pickShown()); the canvas's
+ * name lists only what is drawn. The caption (#radar-cap, caption()) is
+ * gone; what it said beyond the counts is the header's (header(n)): the
+ * sensor's position and source, what of a drawn source is not placed,
+ * the located and hollow devices, the fleet areas' state, every failed
+ * answer (the fleet's and sloth.db's included).
+ *
+ * What the pins do not prove: a C test runs no script, so "an excluded
+ * source is not drawn and not picked" is held by the gates' being where
+ * they are (pinned whole and counted), not executed here; it was run in
+ * node with a stub canvas and DOM (2026-11-18, see the slice's report).
+ *
+ * Absence assertions, each seen red under a named mutation and
+ * restored: the caption with `<div class="sub radar-ov radar-bl"
+ * id="radar-cap"></div>` put back in index.html; caption() with a
+ * `function caption() {}` added to radar.js; the CSS with `.radar-bl {}`
+ * added to radar.css; the old toggle with `fleetBtn();` added to init();
+ * the inputs' count with a seventh checkbox added to the fieldset. The
+ * gates, each red under its mutation: srcChange()'s select(null) line
+ * removed (the pin); pickAt()'s `if (!pickShown(m)) return;` removed (the
+ * pin and the count); the aircraft block's `S.src.adsb && ` removed (the
+ * pin and the count). */
+static void test_radar_sources_js(void) {
+    const char *p = (const char *)web_page;
+    WT_HAS(p, "        <fieldset class=\"radar-src\"><legend class=\"sub\">sources</legend>\n"
+              "          <label><input type=\"checkbox\" id=\"radar-src-sat\" checked> satellites <span class=\"sub\" id=\"radar-n-sat\"></span></label>\n"
+              "          <label><input type=\"checkbox\" id=\"radar-src-adsb\" checked> aircraft <span class=\"sub\" id=\"radar-n-adsb\"></span></label>\n"
+              "          <label><input type=\"checkbox\" id=\"radar-src-aprs\" checked> APRS <span class=\"sub\" id=\"radar-n-aprs\"></span></label>\n"
+              "          <label><input type=\"checkbox\" id=\"radar-src-wifi\" checked> Wi-Fi <span class=\"sub\" id=\"radar-n-wifi\"></span></label>\n"
+              "          <label><input type=\"checkbox\" id=\"radar-src-ble\" checked> BLE <span class=\"sub\" id=\"radar-n-ble\"></span></label>\n"
+              "          <label hidden><input type=\"checkbox\" id=\"radar-src-fleet\" checked> fleet areas <span class=\"sub\" id=\"radar-n-fleet\"></span></label></fieldset>\n"
+              "        <details class=\"radar-about\">");
+    WT_HAS(p, "  var SRC = [\"sat\", \"adsb\", \"aprs\", \"wifi\", \"ble\", \"fleet\"];\n");
+    WT_HAS(p, "            src: { sat: true, adsb: true, aprs: true, wifi: true, ble: true, fleet: true } };");
+    /* The caption, gone: its element, its function and its calls, its CSS. */
+    WT_LACKS(p, "radar-cap");
+    WT_LACKS(p, "radar-bl");
+    char *mod = module(p);
+    WT_ASSERT(mod != NULL);
+    if (mod) {
+        WT_LACKS(mod, "caption(");
+        WT_LACKS(mod, "fleetBtn(");
+        WT_LACKS(mod, "S.placed");
+        WT_LACKS(mod, "placed.");
+        /* One store key, written in one place, read once. */
+        WT_EQ(count(mod, "prefSet(\"radar.src\""), 1);
+        WT_EQ(count(mod, "prefGet(\"radar.src\")"), 1);
+        /* The gates in draw(): the trails and the satellites, the
+         * aircraft, APRS, the band rings, the devices; drawFleet()'s own
+         * and its families'; pickAt()'s for labels, marks, rings and
+         * areas. */
+        WT_EQ(count(mod, "((S.src.sat && "), 2);
+        WT_EQ(count(mod, "((S.src.adsb && "), 1);
+        WT_EQ(count(mod, "(S.src.aprs ? ents : [])"), 1);
+        WT_EQ(count(mod, "if (!S.src[fam[0]] || !cen || !cen.bands) return;"), 1);
+        WT_EQ(count(mod, "(S.src[fam] && S.radar && S.radar.devs && S.radar.devs[fam])"), 1);
+        WT_EQ(count(mod, "if (!S.src.fleet || !c || !fleetPeers()) return;"), 1);
+        WT_EQ(count(mod, ".filter(areaShown)"), 2);
+        WT_EQ(count(mod, "pickShown("), 7);
+        free(mod);
+    }
+    WT_HAS(p, "  function srcCounts() {\n"
+              "    var c = centre(), now = nowOf(S.gnss), rd = S.radar, n = {};\n"
+              "    var sats = (S.gnss && S.gnss.sats) || [], air = (S.adsb && S.adsb.rows) || [], ents = aprsEntities(now, aprsWin());\n"
+              "    function unplaced(o) { return !c || !num(o.lat) || !num(o.lon); }\n"
+              "    n.sat = { n: sats.length, no: sats.filter(function (s) { return !num(s.el) || !num(s.az); }).length };\n"
+              "    n.adsb = { n: air.length, no: air.filter(unplaced).length };\n"
+              "    n.aprs = { n: ents.length, no: ents.filter(unplaced).length };\n"
+              "    [\"wifi\", \"ble\"].forEach(function (f) {\n"
+              "      var fam = rd && rd[f];\n"
+              "      n[f] = { n: ((rd && rd.devs && rd.devs[f]) || []).length, of: fam ? fam.estimated : 0, none: fam ? fam.none : 0 };\n"
+              "    });\n"
+              "    var fn = { fix: 0, bands: 0, side: 0, none: 0 };\n"
+              "    n.fleet = S.src.fleet && c && fleetPeers() ? { n: fleetGeo(c, fn).filter(areaShown).length, none: fn.none } : null;\n"
+              "    return n;\n"
+              "  ");
+    WT_HAS(p, "  function countText(k, v) {\n"
+              "    if (!v) return \"\";\n"
+              "    return k === \"wifi\" || k === \"ble\" ? v.n + (v.of > v.n ? \"/\" + v.of : \"\") : String(v.n);\n"
+              "  ");
+    WT_HAS(p, "  function srcUI(n) {\n"
+              "    var local = H.scope() === \"local\", said = [];\n"
+              "    SRC.forEach(function (k) {\n"
+              "      var cb = $(\"radar-src-\" + k);\n"
+              "      if (!cb) return;\n"
+              "      var offered = k === \"fleet\" ? S.fpeers > 0 && !local : k === \"sat\" || !local;\n"
+              "      cb.parentNode.hidden = !offered;\n"
+              "      cb.checked = S.src[k];\n"
+              "      H.set(\"radar-n-\" + k, countText(k, n[k]));\n"
+              "      if (offered && S.src[k]) said.push(SRC_SAID[k]);\n"
+              "    });\n"
+              "    var cv = $(\"radar-dome\");\n"
+              "    if (cv) cv.ariaLabel = \"half-dome of the radios heard, centred on the sensor: \" +\n"
+              "                           (said.length ? said.join(\"; \") : \"every source excluded, only the ground and the dome\");\n"
+              "  ");
+    WT_HAS(p, "  function pickShown(s) {\n"
+              "    if (!s) return false;\n"
+              "    if (s.kind === \"ring\") return !!S.src[s.key.fam];\n"
+              "    if (s.kind === \"fleet\") return S.src.fleet && !!S.src[s.key.indexOf(\"ble|\") === 0 ? \"ble\" : \"wifi\"];\n"
+              "    return !!S.src[s.kind];\n"
+              "  ");
+    WT_HAS(p, "  function srcSave() {\n"
+              "    var off = SRC.filter(function (k) { return !S.src[k]; });\n"
+              "    H.prefSet(\"radar.src\", off.length ? off : null);\n"
+              "  ");
+    WT_HAS(p, "  function srcChange(k, on) {\n"
+              "    S.src[k] = !!on;\n"
+              "    srcSave();\n"
+              "    if (S.hover && !pickShown(S.hover)) S.hover = null;\n"
+              "    if (S.sel && !pickShown(S.sel)) select(null);\n"
+              "    if (k === \"fleet\" && fleetWanted() && Date.now() - S.fleetAt > FLEET_MS) loadFleet();\n"
+              "    dirty();\n"
+              "  ");
+    /* An excluded source's failed answer is not named (errShown(), and
+     * the fleet's and sloth.db's gated in header()); /api/gnss's always
+     * is, the sensor's position is read from it. The header held to four
+     * lines on a narrow screen (radar.css). */
+    WT_HAS(p, "  #radar-head { max-height: 5.6em; overflow-y: auto; }");
+    WT_HAS(p, "  function errShown(k) {\n"
+              "    return k === \"adsb\" || k === \"aprs\" ? !!S.src[k] : k === \"radar\" ? S.src.wifi || S.src.ble : true;\n"
+              "  }\n");
+    WT_HAS(p, "  function plural(n, one, many) { return n + \" \" + (n === 1 ? one : many); }\n");
+    WT_HAS(p, "  function header(n) {\n"
+              "    var h = clear($(\"radar-head\")), c = centre(), now = nowOf(S.gnss);\n"
+              "    if (H.scope() === \"local\") {\n"
+              "      h.appendChild(H.el(\"span\", \"\", \"Local: only the host's own receiver (satellites). Aircraft, APRS, Wi-Fi monitor and BLE are the passive radios' \xe2\x80\x94" " switch to Monitor or Hybrid\"));\n"
+              "      return;\n"
+              "    }\n"
+              "    h.appendChild(H.el(\"span\", \"\", \"Radar: sensor \"));\n"
+              "    if (c) {\n"
+              "      h.appendChild(H.el(\"b\", \"\", c.lat.toFixed(5) + \", \" + c.lon.toFixed(5)));\n"
+              "      h.appendChild(H.el(\"span\", \"\", (num(c.alt) ? \", \" + Math.round(c.alt) + \" m\" : \"\") + \" (\" + c.from +\n"
+              "                         (num(c.age) ? \", \" + age(now - c.age, now) + \" ago\" : \"\") + \")\"));\n"
+              "    } else {\n"
+              "      h.appendChild(H.el(\"b\", \"h2\", \"no sensor position: aircraft and APRS not placed\"));\n"
+              "      h.appendChild(H.el(\"span\", \"d-dim\", \" (a GPS fix or --location gives one; satellites and rings are drawn)\"));\n"
+              "    }\n"
+              "    var no = [], lc = S.loc, loc = [], err = [];\n"
+              "    if (S.src.sat && n.sat.no) no.push(plural(n.sat.no, \"satellite\", \"satellites\") + \" without az/el\");\n"
+              "    if (S.src.adsb && n.adsb.no) no.push(n.adsb.no + \" aircraft without a position\");\n"
+              "    if (S.src.aprs && n.aprs.no) no.push(n.aprs.no + \" APRS without a position\");\n"
+              "    if (S.src.wifi && n.wifi.none) no.push(n.wifi.none + \" Wi-Fi without a distance estimate\");\n"
+              "    if (S.src.ble && n.ble.none) no.push(n.ble.none + \" BLE without a distance estimate\");\n"
+              "    if (no.length) h.appendChild(H.el(\"span\", \"d-dim\", \"\\nnot placed: \" + no.join(\", \")));\n"
+              "    if (lc) {\n"
+              "      if (S.src.wifi) loc.push(\"Wi-Fi \" + lc.wifi + \" located, \" + lc.wifiNo + \" hollow\");\n"
+              "      if (S.src.ble) loc.push(\"BLE \" + lc.ble + \" located, \" + lc.bleNo + \" hollow\");\n"
+              "    }\n"
+              "    if (loc.length)\n"
+              "      h.appendChild(H.el(\"span\", \"d-dim\", \"\\n\" + loc.join(\"; \") + (lc.sMax ? \" (located from \" +\n"
+              "                         (lc.sMin === lc.sMax ? plural(lc.sMax, \"site\", \"sites\") : lc.sMin + \"\\u2013\" + lc.sMax + \" sites\") + \")\" : \"\") +\n"
+              "                         \"; a hollow mark is this site's distance only, at an arbitrary angle\"));\n"
+              "    if (S.fpeers > 0 && S.src.fleet) {\n"
+              "      var fl = !fleetPeers() ? \"fleet areas: no other sloth with a position yet\" : !c ? \"fleet areas need a sensor position\"\n"
+              "             : n.fleet && n.fleet.none ? plural(n.fleet.none, \"fleet row\", \"fleet rows\") + \" with no area (the bands do not meet, neither site clearly nearer)\" : \"\";\n"
+              "      if (fl) h.appendChild(H.el(\"span\", \"d-dim\", \"\\n\" + fl));\n"
+              "    }\n"
+              "    Object.keys(S.errs).forEach(function (k) { if (errShown(k)) err.push(k + \": \" + S.errs[k]); });\n"
+              "    if (S.fleetErr && S.src.fleet) err.push(\"fleet: \" + S.fleetErr);\n"
+              "    if (S.atrkErr && S.src.aprs) err.push(\"APRS trails (sloth.db): \" + S.atrkErr);\n"
+              "    if (err.length) h.appendChild(H.el(\"span\", \"h2\", \"\\n\" + err.join(\"; \")));\n"
+              "  ");
+    /* The draw blocks' gates, in their lines. */
+    WT_HAS(p, "    ((S.src.sat && tr && tr.tracks) || []).forEach(function (t) {");
+    WT_HAS(p, "    ((S.src.sat && S.gnss && S.gnss.sats) || []).forEach(function (s) {\n"
+              "      if (!num(s.el) || !num(s.az)) return;\n");
+    WT_HAS(p, "    ((S.src.adsb && S.adsb && S.adsb.rows) || []).forEach(function (a) {\n"
+              "      if (!c || !num(a.lat) || !num(a.lon)) return;\n");
+    WT_HAS(p, "      var cen = S.radar && S.radar[fam[0]];\n"
+              "      if (!S.src[fam[0]] || !cen || !cen.bands) return;\n");
+    /* Every hit list through pickShown(): a source turned off is not
+     * picked before the next frame redraws it away. */
+    WT_HAS(p, "    S.marks.forEach(function (m) {\n"
+              "      if (!pickShown(m)) return;\n");
+    WT_HAS(p, "    S.rings.forEach(function (r) {\n"
+              "      if (!S.src[r.fam]) return;\n");
+    /* The header and the counts with the frame they describe. */
+    WT_HAS(p, "    drawLabels(g, want, dpr, W, Hh, T, overlayBoxes(cv));\n"
+              "    S.loc = loc;\n");
+    WT_HAS(p, "    var n = srcCounts();\n"
+              "    header(n);\n"
+              "    srcUI(n);\n"
+              "  }\n");
+    WT_HAS(p, "  function after() { panel(); dirty(); }");
+    /* Kept: read in init(), each checkbox's change through srcChange(). */
+    WT_HAS(p, "    var off = H.prefGet(\"radar.src\");\n"
+              "    SRC.forEach(function (k) { S.src[k] = !(Array.isArray(off) && off.indexOf(k) >= 0); });\n"
+              "    if (H.prefGet(\"radar.fleet\") === false) { S.src.fleet = false; H.prefSet(\"radar.fleet\", null); srcSave(); }\n");
+    WT_HAS(p, "    SRC.forEach(function (k) {\n"
+              "      $(\"radar-src-\" + k).addEventListener(\"change\", function (ev) { srcChange(k, ev.target.checked); });\n"
+              "    });\n"
+              "    srcUI(srcCounts());\n");
+    /* The fieldset's look: a wrapped row, a hidden label really hidden. */
+    WT_HAS(p, ".radar-src { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: center; margin: 4px 0 0; padding: 0; border: 0; min-width: 0; }");
+    WT_HAS(p, ".radar-src label[hidden] { display: none; }");
+}
+
 void run_radar_tests(void) {
     WT_RUN(test_radar_census);
     WT_RUN(test_radar_cap);
@@ -1849,9 +2025,10 @@ void run_radar_tests(void) {
     WT_RUN(test_radar_devices_js);
     WT_RUN(test_radar_aprs_js);
     WT_RUN(test_radar_fleet_js);
+    WT_RUN(test_radar_sources_js);
     WT_RUN(test_radar_marks_are_shapes);
     WT_RUN(test_radar_prefs);
-    WT_RUN(test_radar_scope_and_caption);
+    WT_RUN(test_radar_scope_and_header);
     WT_RUN(test_select_hooks);
     web_ble_destroy(&B);
     web_frrs_destroy(&F);

@@ -48,7 +48,7 @@
   var STALE_S = 600, FIX_FRESH_S = 60, PICK_PX = 8, TAP_PX = 4, LABEL_ZOOM = 0.7;
   // src/rf_distance.h RF_BAND_*_M restated: the bands' edges, and the
   // nominal radius each ring is drawn at (far at 100 m: the band has
-  // no outer edge, and the caption says so).
+  // no outer edge, and a ring's panel says so).
   var BANDS = ["immediate", "near", "room", "building", "far"];
   var BAND_EDGE = ["under 1 m", "1 to 3 m", "3 to 10 m", "10 to 30 m", "over 30 m"];
   var BAND_R = [1, 3, 10, 30, 100];
@@ -60,10 +60,11 @@
   var PRI = { sel: 0, air: 1, aprs: 2, dev: 3, satUsed: 4, sat: 5, band: 6, range: 7 };
   var S = { yaw: 0, pitch: PITCH_DFLT, zoom: 1, gnss: null, adsb: null, aprs: null, radar: null, trails: null,
             sel: null, selTrack: null, marks: [], rings: [], raf: 0, timer: 0, gen: 0, rgen: 0, tgen: 0,
-            sgen: 0, radarAt: 0, trailAt: 0, cam: null, drag: null, errs: {}, placed: null, labelPicks: [],
+            sgen: 0, radarAt: 0, trailAt: 0, cam: null, drag: null, errs: {}, labelPicks: [],
             hover: null, atrk: null, atrkAt: 0, agen: 0, atrkErr: "", aents: [],
-            fleet: null, fleetAt: 0, fgen: 0, fleetOn: true, fleetErr: "", areas: [], fpeers: -1,
-            fgeo: null, devArea: {} };
+            fleet: null, fleetAt: 0, fgen: 0, fleetErr: "", areas: [], fpeers: -1,
+            fgeo: null, devArea: {}, loc: null,
+            src: { sat: true, adsb: true, aprs: true, wifi: true, ble: true, fleet: true } };
   // The APRS window (owner request 2026-11-06, "a setting that defaults
   // to one hour for APRS objects"): an entity stays on the dome while its
   // newest packet of any kind is younger than this; every packet resets
@@ -98,6 +99,18 @@
   // its shape reads where the fills stack. RW_N Wi-Fi hues, --rw-0..4.
   var FLEET_GRID = 48, FLEET_GRID_MAX = 64, FLEET_EDGE_A = 0.25, RW_N = 5;
   var FLEET_KIND = { wifi: "Wi-Fi station", ap: "Wi-Fi access point", ble: "BLE advertiser" };
+  // The sources (owner request 2026-11-18: "on the radar screen add a
+  // selection view to include or exclude sensor sources"): one checkbox
+  // #radar-src-<k> each, its count in #radar-n-<k>, kept as radar.src,
+  // the list of the ones off. An excluded source is neither drawn nor
+  // picked; it is still fetched, so its count stays live, but for the
+  // fleet areas, which are not fetched while off (the old toggle's rule).
+  // Under Local only the satellites are offered. SRC_SAID: the canvas's
+  // name for each, so it never claims one that is not drawn.
+  var SRC = ["sat", "adsb", "aprs", "wifi", "ble", "fleet"];
+  var SRC_SAID = { sat: "satellites by azimuth and elevation", adsb: "aircraft by bearing, elevation and log range",
+                   aprs: "APRS stations by bearing, elevation and log range", wifi: "Wi-Fi devices and their distance bands",
+                   ble: "BLE devices and their distance rings", fleet: "fleet areas as translucent polygons" };
 
   function $(id) { return document.getElementById(id); }
   function num(v) { return typeof v === "number" && isFinite(v); }
@@ -581,14 +594,10 @@
       return !!j && Array.isArray(j.sites) && j.sites.some(function (s) { return s && s.site !== "self"; });
     });
   }
-  // Worth asking: a peer configured, the toggle on, not Local.
-  function fleetWanted() { return S.fpeers > 0 && S.fleetOn && H.scope() !== "local"; }
-  function fleetBtn() {
-    var b = $("radar-fleet");
-    if (!b) return;
-    b.hidden = !(S.fpeers > 0) || H.scope() === "local";
-    b.textContent = S.fleetOn ? "fleet areas on" : "fleet areas off";
-  }
+  // Worth asking: a peer configured, the fleet areas on, not Local.
+  function fleetWanted() { return S.fpeers > 0 && S.src.fleet && H.scope() !== "local"; }
+  // An area's family is drawn: Wi-Fi (a station or an AP) or BLE.
+  function areaShown(a) { return !!S.src[a.kind === "ble" ? "ble" : "wifi"]; }
   // Drawn under every mark, after the ground and the dome: each area's
   // polygon filled once at the shared alpha (a Wi-Fi area in its
   // address's hue, BLE in --data), so overlaps read darker, and outlined
@@ -596,13 +605,14 @@
   // stack; the hovered or picked one, or one whose device dot is,
   // stronger and labelled at its most probable point. Then the other
   // sites, a hollow □ and the name. W and Hh are unused since the
-  // polygons (the clip's fillRect was the canvas's size).
-  function drawFleet(g, cam, c, T, W, Hh, dpr, want, placed) {
+  // polygons (the clip's fillRect was the canvas's size). Only the areas
+  // of a family drawn (areaShown()) are drawn, and only they are in
+  // S.areas, the list picking reads.
+  function drawFleet(g, cam, c, T, W, Hh, dpr, want) {
     S.areas = [];
-    var n = { fix: 0, bands: 0, side: 0, none: 0 };
-    placed.fleet = n;
-    if (!S.fleetOn || !c || !fleetPeers()) return;
-    var areas = fleetGeo(c, n), al = Math.min(FLEET_A_MAX, FLEET_A_SUM / Math.max(1, areas.length));
+    if (!S.src.fleet || !c || !fleetPeers()) return;
+    var areas = fleetGeo(c, { fix: 0, bands: 0, side: 0, none: 0 }).filter(areaShown);
+    var al = Math.min(FLEET_A_MAX, FLEET_A_SUM / Math.max(1, areas.length));
     var dhot = hotAddrs(false);
     areas.forEach(function (a) {
       var p = areaPath(a, cam), on = isSel("fleet", a.id), ink = on ? T.signal : areaInk(a, T);
@@ -831,7 +841,8 @@
       return { x0: x0, y0: y0, x1: x0 + w, y1: y0 + h };
     });
   }
-  // The panels floating over the dome (header, picked panel, caption),
+  // The panels floating over the dome (the header with its controls and
+  // the picked panel),
   // in canvas pixels: no label is placed under one.
   function overlayBoxes(cv) {
     var cb = cv.getBoundingClientRect(), sx = cv.width / Math.max(1, cb.width), sy = cv.height / Math.max(1, cb.height);
@@ -930,7 +941,6 @@
     S.rings = [];
     S.labelPicks = [];
     var want = [], now = nowOf(S.gnss), c = centre(), zoomIn = S.zoom >= LABEL_ZOOM;
-    var placed = { sats: 0, satsNo: 0, air: 0, airNo: 0, aprs: 0, aprsNo: 0, aprsN: 0, aprsMoving: 0, aprsObj: 0 };
     g.font = Math.round(11 * dpr) + "px " + H.tok("--font-mono");
     g.lineWidth = dpr;
     g.setLineDash([]);
@@ -974,7 +984,7 @@
       for (var el = 0; el <= 90; el += 5) mer.push(project(place(b, el, R_MAX), cam));
       polyline(g, mer);
     }
-    drawFleet(g, cam, c, T, W, Hh, dpr, want, placed);
+    drawFleet(g, cam, c, T, W, Hh, dpr, want);
     g.globalAlpha = 1;
 
     // The Wi-Fi and BLE band rings on the ground, counted: Wi-Fi solid,
@@ -983,7 +993,7 @@
     // (Wi-Fi at the ring's screen right, BLE at its left).
     [["wifi", "Wi-Fi "], ["ble", "BLE "]].forEach(function (fam) {
       var cen = S.radar && S.radar[fam[0]];
-      if (!cen || !cen.bands) return;
+      if (!S.src[fam[0]] || !cen || !cen.bands) return;
       for (var i = 0; i < BANDS.length; i++) {
         var band = cen.bands[BANDS[i]];
         if (!band || !num(band.n) || band.n <= 0) continue;
@@ -1036,7 +1046,7 @@
       loc.sMax = Math.max(loc.sMax, ns);
     }
     ["wifi", "ble"].forEach(function (fam) {
-      var list = (S.radar && S.radar.devs && S.radar.devs[fam]) || [];
+      var list = (S.src[fam] && S.radar && S.radar.devs && S.radar.devs[fam]) || [];
       list.forEach(function (dv, idx) {
         var m = devM(dv), ble = fam === "ble", ad = String((ble ? dv.addr : dv.mac) || "").toLowerCase();
         var a = byAddr[fam + "|" + ad] || null;
@@ -1091,7 +1101,7 @@
     // The satellite trails (/api/gnss/tracks), fading toward the oldest
     // point, with gnss.js's gap rule; the selected one in the accent.
     var tr = S.trails;
-    ((tr && tr.tracks) || []).forEach(function (t) {
+    ((S.src.sat && tr && tr.tracks) || []).forEach(function (t) {
       var pts = t.pts || [];
       if (pts.length < 2) return;
       var on = isSel("sat", { gnssid: t.gnssid, prn: t.prn });
@@ -1111,9 +1121,8 @@
     // Satellites: ◇ on the rim shell, filled when in the solution, C/N0
     // on the heat ramp over 50 dB-Hz, an unhealthy one ringed; a mark on
     // the dome's far side dimmed.
-    ((S.gnss && S.gnss.sats) || []).forEach(function (s) {
-      if (!num(s.el) || !num(s.az)) { placed.satsNo++; return; }
-      placed.sats++;
+    ((S.src.sat && S.gnss && S.gnss.sats) || []).forEach(function (s) {
+      if (!num(s.el) || !num(s.az)) return;
       var p = project(place(s.az, Math.max(0, s.el), R_MAX), cam);
       var key = { gnssid: s.gnssid, prn: s.prn }, on = isSel("sat", key);
       var col = on ? T.signal : num(s.cn0) ? H.heat(s.cn0 / CN0_SPAN) : T.dim;
@@ -1133,9 +1142,8 @@
     // Aircraft: ▲ rotated to the track at the true bearing and
     // elevation angle, a drop line to the ground foot, the kept track
     // through the same mapping; altitude on the heat ramp over 45,000 ft.
-    ((S.adsb && S.adsb.rows) || []).forEach(function (a) {
-      if (!c || !num(a.lat) || !num(a.lon)) { placed.airNo++; return; }
-      placed.air++;
+    ((S.src.adsb && S.adsb && S.adsb.rows) || []).forEach(function (a) {
+      if (!c || !num(a.lat) || !num(a.lon)) return;
       var ft = altFt(a), L = locate(c, a.lat, a.lon, num(ft) ? ft * FT_M : null);
       var on = isSel("adsb", a.hex), gone = a.state === "gone" || stale(a.last_seen, now);
       var col = on ? T.signal : a.on_ground ? T.dim : H.heat(num(ft) ? Math.max(0, ft) / ALT_SPAN_FT : 0);
@@ -1169,14 +1177,11 @@
     // true bearing on the ground (or the altitude they reported); a
     // station heard direct in --heat-2, else dim; a moving one's 24 h
     // trail, else the selected station's live track.
+    // Kept in S.aents whether drawn or not: the panel's row is read there.
     var awin = aprsWin(), ents = aprsEntities(now, awin);
     S.aents = ents;
-    ents.forEach(function (e) {
-      placed.aprsN++;
-      if (e.moving) placed.aprsMoving++;
-      if (e.kind === "object") placed.aprsObj++;
-      if (!c || !num(e.lat) || !num(e.lon)) { placed.aprsNo++; return; }
-      placed.aprs++;
+    (S.src.aprs ? ents : []).forEach(function (e) {
+      if (!c || !num(e.lat) || !num(e.lon)) return;
       var a = e.live, L = locate(c, e.lat, e.lon, num(e.alt_m) ? e.alt_m : null);
       var on = isSel("aprs", e.id), gone = (a && a.state === "gone") || stale(e.last_seen, now);
       var col = on ? T.signal : e.kind === "object" ? T.normal : a && a.heard_direct ? H.tok("--heat-2") : T.dim;
@@ -1209,13 +1214,12 @@
     g.fillStyle = T.ink;
     g.fillRect(o.x - 2 * dpr, o.y - 2 * dpr, 4 * dpr, 4 * dpr);
     drawLabels(g, want, dpr, W, Hh, T, overlayBoxes(cv));
-    placed.ble = shown.ble;
-    placed.wifi = shown.wifi;
-    placed.loc = loc;
-    S.placed = placed;
+    S.loc = loc;
     H.set("radar-cam", "yaw " + Math.round(((S.yaw % 360) + 360) % 360) + "°  pitch " + Math.round(S.pitch) +
           "°  zoom " + S.zoom.toFixed(1) + "×" + (S.pitch >= PITCH_MAX ? "  (plan view)" : ""));
-    caption();
+    var n = srcCounts();
+    header(n);
+    srcUI(n);
   }
 
   // ── picking: the nearest mark within 8 px, else the nearest ring ──
@@ -1226,15 +1230,19 @@
     // A device's label is its handle where marks crowd.
     for (var i = 0; i < S.labelPicks.length; i++) {
       var b = S.labelPicks[i].box;
-      if (px >= b.x0 && px <= b.x1 && py >= b.y0 && py <= b.y1) return S.labelPicks[i].pick;
+      if (px >= b.x0 && px <= b.x1 && py >= b.y0 && py <= b.y1 && pickShown(S.labelPicks[i].pick)) return S.labelPicks[i].pick;
     }
+    // Each list is of what was drawn; pickShown() again, so a source
+    // turned off is not picked before the next frame redraws it away.
     S.marks.forEach(function (m) {
+      if (!pickShown(m)) return;
       var dx = m.x - px, dy = m.y - py, dd = Math.sqrt(dx * dx + dy * dy);
       if (dd <= bd) { bd = dd; best = { kind: m.kind, key: m.key }; }
     });
     if (best) return best;
     bd = lim;
     S.rings.forEach(function (r) {
+      if (!S.src[r.fam]) return;
       var dd = ringDist(px, py, r.r, cam);
       if (dd <= bd) { bd = dd; best = { kind: "ring", key: { fam: r.fam, band: r.band } }; }
     });
@@ -1244,7 +1252,8 @@
     // so a tap off every mark still clears the panel where the areas
     // cover the centre).
     var g = $("radar-dome").getContext("2d");
-    for (i = S.areas.length - 1; g && i >= 0; i--) if (areaHit(S.areas[i], g, px, py)) return { kind: "fleet", key: S.areas[i].id };
+    for (i = S.areas.length - 1; g && i >= 0; i--)
+      if (pickShown({ kind: "fleet", key: S.areas[i].id }) && areaHit(S.areas[i], g, px, py)) return { kind: "fleet", key: S.areas[i].id };
     return null;
   }
   function canvasPoint(ev, cv) {
@@ -1423,8 +1432,86 @@
     else if (s.kind === "fleet") H.show("fleet");
   }
 
-  // ── the header and the caption (R9) ──────────────────────────────
-  function header() {
+  // ── the header and the source selection (R9) ─────────────────────
+  // What each source holds, for its checkbox's count and the header:
+  // read from the answers, not from the last frame, so an excluded
+  // source still counts. no: heard but not placed (no az/el, no
+  // position, or no sensor position); Wi-Fi and BLE: listed of those
+  // with an estimate, none those with a reading and no estimate; the
+  // fleet areas: drawn of the families drawn, null while off.
+  function srcCounts() {
+    var c = centre(), now = nowOf(S.gnss), rd = S.radar, n = {};
+    var sats = (S.gnss && S.gnss.sats) || [], air = (S.adsb && S.adsb.rows) || [], ents = aprsEntities(now, aprsWin());
+    function unplaced(o) { return !c || !num(o.lat) || !num(o.lon); }
+    n.sat = { n: sats.length, no: sats.filter(function (s) { return !num(s.el) || !num(s.az); }).length };
+    n.adsb = { n: air.length, no: air.filter(unplaced).length };
+    n.aprs = { n: ents.length, no: ents.filter(unplaced).length };
+    ["wifi", "ble"].forEach(function (f) {
+      var fam = rd && rd[f];
+      n[f] = { n: ((rd && rd.devs && rd.devs[f]) || []).length, of: fam ? fam.estimated : 0, none: fam ? fam.none : 0 };
+    });
+    var fn = { fix: 0, bands: 0, side: 0, none: 0 };
+    n.fleet = S.src.fleet && c && fleetPeers() ? { n: fleetGeo(c, fn).filter(areaShown).length, none: fn.none } : null;
+    return n;
+  }
+  function countText(k, v) {
+    if (!v) return "";
+    return k === "wifi" || k === "ble" ? v.n + (v.of > v.n ? "/" + v.of : "") : String(v.n);
+  }
+  // The checkboxes: each offered source with its count (the fleet areas
+  // only with a peer, Local only the satellites), checked as kept; the
+  // canvas's name lists only what is drawn.
+  function srcUI(n) {
+    var local = H.scope() === "local", said = [];
+    SRC.forEach(function (k) {
+      var cb = $("radar-src-" + k);
+      if (!cb) return;
+      var offered = k === "fleet" ? S.fpeers > 0 && !local : k === "sat" || !local;
+      cb.parentNode.hidden = !offered;
+      cb.checked = S.src[k];
+      H.set("radar-n-" + k, countText(k, n[k]));
+      if (offered && S.src[k]) said.push(SRC_SAID[k]);
+    });
+    var cv = $("radar-dome");
+    if (cv) cv.ariaLabel = "half-dome of the radios heard, centred on the sensor: " +
+                           (said.length ? said.join("; ") : "every source excluded, only the ground and the dome");
+  }
+  // Whether a pick's source is drawn: its family's checkbox (a ring is
+  // its family's), and for a fleet area the fleet areas' too.
+  function pickShown(s) {
+    if (!s) return false;
+    if (s.kind === "ring") return !!S.src[s.key.fam];
+    if (s.kind === "fleet") return S.src.fleet && !!S.src[s.key.indexOf("ble|") === 0 ? "ble" : "wifi"];
+    return !!S.src[s.kind];
+  }
+  function srcSave() {
+    var off = SRC.filter(function (k) { return !S.src[k]; });
+    H.prefSet("radar.src", off.length ? off : null);
+  }
+  // A checkbox changed: kept, the pick dropped (the side panel closes)
+  // and the hover cleared when their source is no longer drawn, the
+  // fleet read when turned on, the dome drawn again.
+  function srcChange(k, on) {
+    S.src[k] = !!on;
+    srcSave();
+    if (S.hover && !pickShown(S.hover)) S.hover = null;
+    if (S.sel && !pickShown(S.sel)) select(null);
+    if (k === "fleet" && fleetWanted() && Date.now() - S.fleetAt > FLEET_MS) loadFleet();
+    dirty();
+  }
+  function plural(n, one, many) { return n + " " + (n === 1 ? one : many); }
+  // A failed answer is named while a source it feeds is drawn: an
+  // excluded one says nothing (a host with no APRS excluding it is not
+  // told "no APRS tables yet" every frame); /api/gnss always, the
+  // sensor's position is read from it.
+  function errShown(k) {
+    return k === "adsb" || k === "aprs" ? !!S.src[k] : k === "radar" ? S.src.wifi || S.src.ble : true;
+  }
+  // The sensor's position and its source, then what the caption carried
+  // until 2026-11-18 that the checkboxes' counts do not: what of a drawn
+  // source is heard but not placed, which devices are located, the fleet
+  // areas' state, and every answer that failed.
+  function header(n) {
     var h = clear($("radar-head")), c = centre(), now = nowOf(S.gnss);
     if (H.scope() === "local") {
       h.appendChild(H.el("span", "", "Local: only the host's own receiver (satellites). Aircraft, APRS, Wi-Fi monitor and BLE are the passive radios' — switch to Monitor or Hybrid"));
@@ -1439,57 +1526,36 @@
       h.appendChild(H.el("b", "h2", "no sensor position: aircraft and APRS not placed"));
       h.appendChild(H.el("span", "d-dim", " (a GPS fix or --location gives one; satellites and rings are drawn)"));
     }
-    var sats = (S.gnss && S.gnss.sats || []).length, air = (S.adsb && S.adsb.rows || []).length;
-    var stn = aprsEntities(now, aprsWin()).length, rd = S.radar;
-    h.appendChild(H.el("span", "", "  " + sats + " satellites, " + air + " aircraft, " + stn + " APRS" +
-                       (rd && rd.wifi ? ", Wi-Fi " + rd.wifi.estimated + " in bands" : "") +
-                       (rd && rd.ble ? ", BLE " + rd.ble.estimated : "")));
-    var errs = Object.keys(S.errs).map(function (k) { return k + ": " + S.errs[k]; });
-    if (errs.length) h.appendChild(H.el("span", "h2", "  " + errs.join("; ")));
-  }
-  function caption() {
-    var c = centre(), now = nowOf(S.gnss), p = S.placed || {}, rd = S.radar, local = H.scope() === "local";
-    var parts = ["sources /api/gnss 5 s" + (local ? "" : ", /api/adsb 5 s, /api/aprs 5 s, /api/aprs/tracks 24 h 60 s, /api/radar 10 s") +
-                 ", /api/gnss/tracks " + TRAIL_H + " h 60 s"];
-    parts.push("sensor position " + (c ? c.from + (num(c.age) ? " " + age(now - c.age, now) + " ago" : "") : "none"));
-    parts.push("range log 0.3 m–300 km; height is true elevation angle");
-    parts.push("satellites " + (p.sats || 0) + " placed" + (p.satsNo ? ", " + p.satsNo + " without az/el" : ""));
-    if (!local) {
-      parts.push("aircraft " + (p.air || 0) + " placed" + (p.airNo ? ", " + p.airNo + " unplaced" : ""));
-      parts.push("APRS: " + (p.aprsN || 0) + " in the last " + winText(aprsWin()) + " (" + (p.aprsMoving || 0) +
-                 " moving, trails 24 h), " + (p.aprsObj || 0) + " objects" + (p.aprsNo ? ", " + p.aprsNo + " unplaced" : "") +
-                 (S.atrkErr ? " (sloth.db: " + S.atrkErr + ")" : ""));
-      if (rd && (rd.wifi || rd.ble)) {
-        parts.push((rd.wifi ? rd.wifi.estimated : 0) + " Wi-Fi, " + (rd.ble ? rd.ble.estimated : 0) + " BLE in bands (far drawn at 100 m, nominal)");
-        parts.push((rd.wifi ? rd.wifi.none : 0) + " Wi-Fi, " + (rd.ble ? rd.ble.none : 0) + " BLE without a distance estimate");
-        parts.push("devices: " + (p.ble || 0) + " of " + (rd.ble ? rd.ble.estimated : 0) + " BLE, " + (p.wifi || 0) + " of " +
-                   (rd.wifi ? rd.wifi.estimated : 0) + " Wi-Fi listed (most recent)");
-        var lc = p.loc || { wifi: 0, ble: 0, wifiNo: 0, bleNo: 0, sMin: 0, sMax: 0 };
-        parts.push("located (solid, at the most probable point of a fleet area" +
-                   (lc.sMax ? ", from " + (lc.sMin === lc.sMax ? lc.sMax : lc.sMin + "\u2013" + lc.sMax) + " sites" : "") + "): " +
-                   lc.wifi + " Wi-Fi, " + lc.ble + " BLE; unlocated (hollow, this site only): " + lc.wifiNo + " Wi-Fi, " + lc.bleNo +
-                   " BLE, each at its distance at an arbitrary angle (BLE on its own ring, Wi-Fi with none): only the distance is an estimate");
-        parts.push("Wi-Fi mark and area share a hue from the address (\u25a0 station, \u25c6 access point), BLE \u25cf in one ink");
-      }
-      parts.push("ticks are speed and heading (aircraft gs/track, APRS speed/course); Wi-Fi and BLE have neither, " +
-                 "their arrow is sloth's trend (\u2198 approaching, \u2192 steady, \u2197 leaving)");
-      parts.push("distance from signal strength is an estimate; a ring is where the device may be, not where it is");
-      var fn = p.fleet || { fix: 0, bands: 0, side: 0, none: 0 };
-      if (S.fpeers > 0)
-        parts.push(!S.fleetOn ? "fleet areas off" : !fleetPeers() ? "fleet areas: no other sloth with a position yet"
-                   : !c ? "fleet areas need a sensor position"
-                   : "fleet areas from /api/fleet/locate 30 s: " + (fn.fix + fn.bands + fn.side) + " drawn (" + fn.bands +
-                     " where the sites' bands overlap, " + fn.fix + " least-squares discs, " + fn.side + " a side only), " + fn.none +
-                     " with no side; each where it may be, not where it is");
-      if (S.fleetErr) parts.push("fleet: " + S.fleetErr);
-    } else {
-      parts.push("Local: the passive radios' families are not read");
+    var no = [], lc = S.loc, loc = [], err = [];
+    if (S.src.sat && n.sat.no) no.push(plural(n.sat.no, "satellite", "satellites") + " without az/el");
+    if (S.src.adsb && n.adsb.no) no.push(n.adsb.no + " aircraft without a position");
+    if (S.src.aprs && n.aprs.no) no.push(n.aprs.no + " APRS without a position");
+    if (S.src.wifi && n.wifi.none) no.push(n.wifi.none + " Wi-Fi without a distance estimate");
+    if (S.src.ble && n.ble.none) no.push(n.ble.none + " BLE without a distance estimate");
+    if (no.length) h.appendChild(H.el("span", "d-dim", "\nnot placed: " + no.join(", ")));
+    if (lc) {
+      if (S.src.wifi) loc.push("Wi-Fi " + lc.wifi + " located, " + lc.wifiNo + " hollow");
+      if (S.src.ble) loc.push("BLE " + lc.ble + " located, " + lc.bleNo + " hollow");
     }
-    H.set("radar-cap", parts.join("; "));
+    if (loc.length)
+      h.appendChild(H.el("span", "d-dim", "\n" + loc.join("; ") + (lc.sMax ? " (located from " +
+                         (lc.sMin === lc.sMax ? plural(lc.sMax, "site", "sites") : lc.sMin + "\u2013" + lc.sMax + " sites") + ")" : "") +
+                         "; a hollow mark is this site's distance only, at an arbitrary angle"));
+    if (S.fpeers > 0 && S.src.fleet) {
+      var fl = !fleetPeers() ? "fleet areas: no other sloth with a position yet" : !c ? "fleet areas need a sensor position"
+             : n.fleet && n.fleet.none ? plural(n.fleet.none, "fleet row", "fleet rows") + " with no area (the bands do not meet, neither site clearly nearer)" : "";
+      if (fl) h.appendChild(H.el("span", "d-dim", "\n" + fl));
+    }
+    Object.keys(S.errs).forEach(function (k) { if (errShown(k)) err.push(k + ": " + S.errs[k]); });
+    if (S.fleetErr && S.src.fleet) err.push("fleet: " + S.fleetErr);
+    if (S.atrkErr && S.src.aprs) err.push("APRS trails (sloth.db): " + S.atrkErr);
+    if (err.length) h.appendChild(H.el("span", "h2", "\n" + err.join("; ")));
   }
 
   // ── loading: the lent scoped getJSON for every fetch ─────────────
-  function after() { header(); panel(); dirty(); caption(); }
+  // The header and the checkboxes' counts are drawn with the dome
+  // (draw()), so a frame and its counts agree.
+  function after() { panel(); dirty(); }
   function loadSelTrack() {
     var s = S.sel;
     if (!s || s.kind !== "aprs" || s.key.indexOf("station|") !== 0 || H.scope() === "local") return;
@@ -1501,7 +1567,7 @@
     }).catch(function () { /* the mark still shows; the next poll retries */ });
   }
   // The three kinds at once; an answer that fails is left out and named
-  // in the caption.
+  // in the header.
   function loadFleet() {
     S.fleetAt = Date.now();
     S.fleetErr = "";
@@ -1514,7 +1580,6 @@
     })).then(function (all) {
       if (fg !== S.fgen) return;
       S.fleet = all;
-      fleetBtn();
       after();
     });
   }
@@ -1543,7 +1608,6 @@
       S.radarAt = S.atrkAt = 0;
       S.fleet = null;
       S.fleetAt = 0;
-      fleetBtn();
       after();
       return;
     }
@@ -1552,7 +1616,7 @@
       S.fpeers = -2;
       H.getJSON("/api/health").then(function (j) {
         S.fpeers = j && j.fleet && Array.isArray(j.fleet.peers) ? j.fleet.peers.length : 0;
-        fleetBtn();
+        dirty();
         if (fleetWanted() && visible()) loadFleet();
       }).catch(function () { S.fpeers = -1; });
     }
@@ -1634,8 +1698,12 @@
     S.yaw = prefNum("radar.yaw", 0, 360, 0);
     S.pitch = prefNum("radar.pitch", PITCH_MIN, PITCH_MAX, PITCH_DFLT);
     S.zoom = prefNum("radar.zoom", ZOOM_MIN, ZOOM_MAX, 1);
-    // Kept only when off: absent is on.
-    S.fleetOn = H.prefGet("radar.fleet") !== false;
+    // The sources: kept only those off, absent is every one on. The fleet
+    // toggle's own key from before the selection (radar.fleet, false when
+    // off) moves in once.
+    var off = H.prefGet("radar.src");
+    SRC.forEach(function (k) { S.src[k] = !(Array.isArray(off) && off.indexOf(k) >= 0); });
+    if (H.prefGet("radar.fleet") === false) { S.src.fleet = false; H.prefSet("radar.fleet", null); srcSave(); }
     var cv = $("radar-dome");
     if (!cv) return;
     cv.tabIndex = 0;
@@ -1714,15 +1782,10 @@
     $("radar-open").addEventListener("click", openSel);
     // The APRS window: the entities read again and the dome redrawn.
     $("radar-aprs-win").addEventListener("change", function () { S.atrkAt = 0; load(); dirty(); });
-    $("radar-fleet").addEventListener("click", function () {
-      S.fleetOn = !S.fleetOn;
-      H.prefSet("radar.fleet", S.fleetOn ? null : false);
-      if (!S.fleetOn && S.sel && S.sel.kind === "fleet") select(null);
-      if (fleetWanted() && Date.now() - S.fleetAt > FLEET_MS) loadFleet();
-      fleetBtn();
-      dirty();
+    SRC.forEach(function (k) {
+      $("radar-src-" + k).addEventListener("change", function (ev) { srcChange(k, ev.target.checked); });
     });
-    fleetBtn();
+    srcUI(srcCounts());
     var fb = $("radar-full");
     fb.hidden = !document.fullscreenEnabled;
     fb.addEventListener("click", toggleFull);

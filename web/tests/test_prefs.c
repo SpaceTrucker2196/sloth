@@ -143,6 +143,10 @@ static const char *const KEPT_ELSEWHERE[] = {
     /* #224: isometric or flat, kept only when flat (wifi.iso, by app.js;
      * bledev.iso, by bledev.js through the lent prefGet/prefSet) */
     "w-iso", "bledev-iso",
+    /* radar.src, by radar.js through the lent prefGet/prefSet: the
+     * Radar's sources (2026-11-18), kept as the list of those off */
+    "radar-src-sat", "radar-src-adsb", "radar-src-aprs", "radar-src-wifi", "radar-src-ble",
+    "radar-src-fleet",
 };
 static const char *const NOT_KEPT[] = {
     "q-recipe",   /* an action: it fills the SQL box, whose text is kept */
@@ -252,6 +256,7 @@ static void test_every_control_is_decided(void) {
     WT_HAS(p, "H.prefSet(\"frrs.tacdb.q\", $(\"tc-q\").value || null);");
     WT_HAS(p, "    prefSet(\"wifi.iso\", WF.iso ? null : false);");
     WT_HAS(p, "      H.prefSet(\"bledev.iso\", S.iso ? null : false);");
+    WT_HAS(p, "    H.prefSet(\"radar.src\", off.length ? off : null);");
     /* A kept value only where the control can hold it. */
     WT_HAS(p, "for (var i = 0; i < c.options.length; i++) if (c.options[i].value === v) return true;");
     WT_HAS(p, "return v.length <= (c.maxLength > 0 ? c.maxLength : 65536);");

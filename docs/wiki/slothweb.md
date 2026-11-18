@@ -113,7 +113,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-18 (health page: the `source_status` state `not_installed`, sloth-rf's trimmed decoder input, shown as `no SDR attached`, no up/down series), 2026-11-18 (one WiFi channel palette, `--ch-*` written and checked in `web/tools/palette.c` and mapped by `web/ui/chan.js`, a chip wherever a channel is shown and the isometric waterfall moved onto it; the greenbar, `web/ui/greenbar.css`; § The restyle, § M5's WiFi); 2026-11-17 (the WiFi waterfall's clients lane and client highlight, `clients` on `/api/wifi/channels?mix=1`; the highlight fade 70 percent transparent; § M5's WiFi); 2026-11-17 (the isometric WiFi and BLE Devices waterfalls coloured by identity: band hue, channel shade and SSID on WiFi, class hue on BLE, with keys; `web/ui/iso.css` `--iso-*`; § M5's WiFi and BLE Devices); 2026-11-17 (the WiFi view's direction-finding card, `web/src/web_df.c`, `web/ui/df.js`, `GET /api/df`: § Direction finding); 2026-11-17 (#218: `alerts.fired` counts an alert
+**Last updated**: 2026-11-18 (the Radar's sources: a checkbox a source with its count, kept as `radar.src`, an excluded source neither drawn nor picked; the caption box removed, its notes the header's and the about text's), 2026-11-18 (health page: the `source_status` state `not_installed`, sloth-rf's trimmed decoder input, shown as `no SDR attached`, no up/down series), 2026-11-18 (one WiFi channel palette, `--ch-*` written and checked in `web/tools/palette.c` and mapped by `web/ui/chan.js`, a chip wherever a channel is shown and the isometric waterfall moved onto it; the greenbar, `web/ui/greenbar.css`; § The restyle, § M5's WiFi); 2026-11-17 (the WiFi waterfall's clients lane and client highlight, `clients` on `/api/wifi/channels?mix=1`; the highlight fade 70 percent transparent; § M5's WiFi); 2026-11-17 (the isometric WiFi and BLE Devices waterfalls coloured by identity: band hue, channel shade and SSID on WiFi, class hue on BLE, with keys; `web/ui/iso.css` `--iso-*`; § M5's WiFi and BLE Devices); 2026-11-17 (the WiFi view's direction-finding card, `web/src/web_df.c`, `web/ui/df.js`, `GET /api/df`: § Direction finding); 2026-11-17 (#218: `alerts.fired` counts an alert
 either daemon raises, not sloth's stream alone; an "alert" record from
 either stream now queues a sample (`web_rollup_queue_add()`) instead of
 adding one directly, so `SENSOR_SOURCE_DOWN` -- the one type both can
@@ -2070,9 +2070,11 @@ difference's sigma, a fainter wash over its side; else nothing. One
 darker, under every mark; the other sites as hollow squares; hover,
 or tap with nothing picked, for the key, form and band (with something
 picked a tap off the marks clears it, areas or not); a device dot and
-its area linked; a **fleet areas** button kept as `radar.fleet` only
-when off and hidden with no peer in `/api/health`'s `fleet.peers`,
-which is read once; nothing fetched with no peer or the button off. `web/ui/radar.js`, `web/tests/test_radar.c`
+its area linked; a **fleet areas** toggle (since 2026-11-18 the
+fleet checkbox of the Radar's sources, kept in `radar.src`; a button
+kept as `radar.fleet` before) hidden with no peer in `/api/health`'s
+`fleet.peers`, which is read once; nothing fetched with no peer or the
+toggle off. `web/ui/radar.js`, `web/tests/test_radar.c`
 (`test_radar_fleet_js`); `web/README.md` "Radar" has the rules.
 
 Since 2026-11-13 (owner request: "instead of on the n/s axis in the
@@ -2091,6 +2093,24 @@ Wi-Fi mark and its polygon share one of five hues (`--rw-0..4`) by a
 hash of the MAC, an owner ruling over the visual spec's R10 for this
 view; `web/tools/palette.c` holds the hues apart. Display only: nothing
 new is fetched or shared.
+
+Since 2026-11-18 (owner: "on the radar screen add a selection view to
+include or exclude sensor sources. and remove the box of text for
+sources") the Radar's top-left panel carries a **sources** fieldset,
+one checkbox each for satellites, aircraft, APRS, Wi-Fi, BLE and (with
+a peer) fleet areas, each labelled with its live count (`aircraft 12`,
+`Wi-Fi 50/210`: listed of those with an estimate); under Local only
+satellites. An excluded source is neither drawn (marks, rings, trails,
+ticks, labels; Wi-Fi or BLE off also takes that family's fleet areas)
+nor picked, and the side panel closes when its item's source goes off.
+Excluded sources are still fetched so their counts stay live; the fleet
+areas are not fetched while off. Kept per browser as `radar.src` (the
+list of those off; all on by default). The bottom-left caption is gone:
+its counts are the checkboxes', the unplaced and located counts, the
+fleet areas' state and every failed answer of a source drawn are the header's, the
+endpoints and the range rule are in "about this view". `web/ui/radar.js`,
+`web/tests/test_radar.c` (`test_radar_sources_js`), `web/README.md`
+"Radar", Sources.
 
 ## Triage and the FRRS record (2026-11-01)
 
