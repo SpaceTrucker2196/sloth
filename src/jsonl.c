@@ -1577,8 +1577,10 @@ void jsonl_emit_wifi_merged(const sloth_state_t *s) {
  * and has refused a retune - never the frame count, which moves every
  * tick. `wifi_df`: one line per transmitter two or more radios hold a
  * fresh level for, change-only on which radio is loudest, the quality
- * word, the margin in 3 dB bands and the baseline point in 0.25 m
- * bands; the levels themselves ride the line and do not sign it. */
+ * word, the margin in 3 dB bands, the baseline point in 0.25 m bands
+ * and the bearing (already one of eight points, held with hysteresis:
+ * src/df.h) with its error; the levels themselves ride the line and do
+ * not sign it. */
 #define DF_EMIT_MAX 128
 void jsonl_emit_wifi_df(const sloth_state_t *s) {
     if (!any_sink() || !s || !df_active()) return;
@@ -1606,6 +1608,10 @@ void jsonl_emit_wifi_df(const sloth_state_t *s) {
         kv_str(buf, LINEBUF, &off, "iface", radios[i].iface);
         kv_str(buf, LINEBUF, &off, "role", i == 0 ? "sensor" : "df");
         if (radios[i].has_pos) kv_double(buf, LINEBUF, &off, "pos_m", radios[i].pos_m);
+        if (radios[i].has_xy) {
+            kv_double(buf, LINEBUF, &off, "x_m", radios[i].x_m);
+            kv_double(buf, LINEBUF, &off, "y_m", radios[i].y_m);
+        }
         kv_int(buf, LINEBUF, &off, "open", st[0]);
         kv_int(buf, LINEBUF, &off, "running", st[1]);
         kv_int(buf, LINEBUF, &off, "noted", (long long)radios[i].frames);
@@ -1625,9 +1631,11 @@ void jsonl_emit_wifi_df(const sloth_state_t *s) {
         const df_est_t *e = &est[i];
         int mask = 0;
         for (int r = 0; r < nr; r++) if (e->has[r]) mask |= 1 << r;
-        int st[5] = { (int)e->quality, e->best_radio, mask,
+        int st[7] = { (int)e->quality, e->best_radio, mask,
                       (int)(e->margin_db / 3.0),
-                      e->has_along ? (int)floor(e->along_m / 0.25 + 0.5) : 1 << 30 };
+                      e->has_along ? (int)floor(e->along_m / 0.25 + 0.5) : 1 << 30,
+                      e->has_bearing ? e->bearing_deg : -1,
+                      e->has_bearing ? e->bearing_err_deg : -1 };
         uint64_t sig = fnv1a(st, sizeof(st), FNV64_OFFSET);
         if (!jsonl_changed(JD_WIFI_DF, e->mac, 6, sig, now)) continue;
         char buf[LINEBUF]; int off = 0;
@@ -1641,6 +1649,10 @@ void jsonl_emit_wifi_df(const sloth_state_t *s) {
             kv_str(buf, LINEBUF, &off, "best_iface", radios[e->best_radio].iface);
         kv_double(buf, LINEBUF, &off, "margin_db", e->margin_db);
         if (e->has_along) kv_double(buf, LINEBUF, &off, "along_m", e->along_m);
+        if (e->has_bearing) {
+            kv_int(buf, LINEBUF, &off, "bearing_deg", e->bearing_deg);
+            kv_int(buf, LINEBUF, &off, "bearing_err_deg", e->bearing_err_deg);
+        }
         appendf(buf, LINEBUF, &off, ",\"rssi\":[");
         for (int r = 0; r < nr; r++) {
             if (e->has[r]) appendf(buf, LINEBUF, &off, "%s%.1f", r ? "," : "", e->rssi[r]);

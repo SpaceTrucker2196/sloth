@@ -21,6 +21,7 @@ typedef struct {
     uint8_t   mac[6];
     time_t    last_seen;
     int       channel;
+    int       brg_held;          /* compass point last given + 1; 0 none */
     df_cell_t r[DF_MAX_RADIOS];
 } df_emitter_t;
 
@@ -51,7 +52,8 @@ static int radio_find_locked(const char *iface) {
     return -1;
 }
 
-int df_radio_add(const char *iface, int has_pos, double pos_m) {
+static int radio_add(const char *iface, int has_pos, double pos_m,
+                     int has_xy, double x_m, double y_m) {
     if (!iface || !iface[0] || strlen(iface) >= sizeof(g_radios[0].iface)) return -1;
     int at = -1;
     pthread_mutex_lock(&g_mu);
@@ -61,10 +63,133 @@ int df_radio_add(const char *iface, int has_pos, double pos_m) {
         snprintf(g_radios[at].iface, sizeof(g_radios[at].iface), "%s", iface);
         g_radios[at].has_pos = has_pos ? 1 : 0;
         g_radios[at].pos_m   = has_pos ? pos_m : 0;
+        g_radios[at].has_xy  = has_xy;
+        g_radios[at].x_m     = x_m;
+        g_radios[at].y_m     = y_m;
         g_active = g_nradios > 1;
     }
     pthread_mutex_unlock(&g_mu);
     return at;
+}
+
+int df_radio_add(const char *iface, int has_pos, double pos_m) {
+    return radio_add(iface, has_pos, pos_m, 0, 0, 0);
+}
+
+int df_radio_add_xy(const char *iface, double x_m, double y_m) {
+    return radio_add(iface, 0, 0, 1, x_m, y_m);
+}
+
+/* g_mu held. Three or more radios placed in two dimensions, and not on
+ * one line: across the longest side the array is at least DF_MIN_ASPECT
+ * of that side deep. A flatter one is a line with a rounding error, and
+ * the direction across it would be read from a level difference that is
+ * not there. */
+static int array_2d_locked(void) {
+    int idx[DF_MAX_RADIOS], n = 0;
+    for (int i = 0; i < g_nradios; i++) if (g_radios[i].has_xy) idx[n++] = i;
+    if (n < 3) return 0;
+    int a = 0, b = 0;
+    double len2 = 0;
+    for (int i = 0; i < n; i++) {
+        for (int j = i + 1; j < n; j++) {
+            double dx = g_radios[idx[j]].x_m - g_radios[idx[i]].x_m;
+            double dy = g_radios[idx[j]].y_m - g_radios[idx[i]].y_m;
+            if (dx * dx + dy * dy > len2) { len2 = dx * dx + dy * dy; a = idx[i]; b = idx[j]; }
+        }
+    }
+    if (len2 <= 0) return 0;
+    double ux = g_radios[b].x_m - g_radios[a].x_m, uy = g_radios[b].y_m - g_radios[a].y_m;
+    double depth = 0;
+    for (int i = 0; i < n; i++) {
+        double px = g_radios[idx[i]].x_m - g_radios[a].x_m;
+        double py = g_radios[idx[i]].y_m - g_radios[a].y_m;
+        double h = fabs(ux * py - uy * px) / sqrt(len2);
+        if (h > depth) depth = h;
+    }
+    return depth >= DF_MIN_ASPECT * sqrt(len2);
+}
+
+int df_array_has_bearing(void) {
+    pthread_mutex_lock(&g_mu);
+    int ok = array_2d_locked();
+    pthread_mutex_unlock(&g_mu);
+    return ok;
+}
+
+/* g_mu held. The compass direction, degrees in [0, 360), from the
+ * centroid of the 2D radio positions to their mean weighted by received
+ * power; lv[] is one level per 2D radio, all of them. 0 when the two
+ * points coincide: no direction. */
+static int lean_dir_locked(const double *lv, double *deg) {
+    double top = -1e9;
+    for (int i = 0; i < g_nradios; i++)
+        if (g_radios[i].has_xy && lv[i] > top) top = lv[i];
+    double cx = 0, cy = 0, wx = 0, wy = 0, wsum = 0;
+    int n = 0;
+    for (int i = 0; i < g_nradios; i++) {
+        if (!g_radios[i].has_xy) continue;
+        /* Against the loudest, so the ratio is all that is used. */
+        double w = pow(10.0, (lv[i] - top) / 10.0);
+        cx += g_radios[i].x_m; cy += g_radios[i].y_m;
+        wx += w * g_radios[i].x_m; wy += w * g_radios[i].y_m;
+        wsum += w;
+        n++;
+    }
+    if (n == 0 || wsum <= 0) return 0;
+    double dx = wx / wsum - cx / n, dy = wy / wsum - cy / n;
+    if (hypot(dx, dy) < 1e-6) return 0;
+    double d = atan2(dx, dy) * 180.0 / 3.14159265358979323846;   /* east of north */
+    if (d < 0) d += 360.0;
+    if (d >= 360.0) d = 0;
+    *deg = d;
+    return 1;
+}
+
+static double ang_diff(double a, double b) {
+    double d = fabs(a - b);
+    return d > 180.0 ? 360.0 - d : d;
+}
+
+/* g_mu held. The bearing for an estimate already filled, or none
+ * (df.h: when it is withheld). */
+static void bearing_locked(df_emitter_t *e, df_est_t *o) {
+    int held = e->brg_held;
+    e->brg_held = 0;
+    if (o->quality != DF_LEAN || !array_2d_locked()) return;
+    double lv[DF_MAX_RADIOS] = { 0 };
+    for (int i = 0; i < g_nradios; i++) {
+        /* Every placed radio heard it, and no unplaced one did. */
+        if (g_radios[i].has_xy != o->has[i]) return;
+        lv[i] = o->level[i];
+    }
+    double dir;
+    if (!lean_dir_locked(lv, &dir)) return;
+    double err = 0;
+    for (int i = 0; i < g_nradios; i++) {
+        if (!g_radios[i].has_xy) continue;
+        for (int sgn = -1; sgn <= 1; sgn += 2) {
+            double was = lv[i], d2;
+            lv[i] = was + sgn * DF_BEARING_WANDER_DB;
+            int ok = lean_dir_locked(lv, &d2);
+            lv[i] = was;
+            if (!ok) return;
+            if (ang_diff(dir, d2) > err) err = ang_diff(dir, d2);
+        }
+    }
+    if (err > DF_BEARING_MAX_ERR_DEG) return;
+    int points = 360 / DF_BEARING_STEP_DEG;
+    int bin = (int)floor(dir / DF_BEARING_STEP_DEG + 0.5) % points;
+    /* Hysteresis: the point given last stands until the direction is
+     * DF_BEARING_HYST_DEG past the edge of its sector. */
+    if (held > 0 && ang_diff(dir, (double)(held - 1) * DF_BEARING_STEP_DEG)
+                    <= DF_BEARING_STEP_DEG / 2.0 + DF_BEARING_HYST_DEG)
+        bin = held - 1;
+    e->brg_held = bin + 1;
+    o->has_bearing = 1;
+    o->bearing_deg = bin * DF_BEARING_STEP_DEG;
+    int steps = (int)ceil(err / DF_BEARING_ERR_STEP_DEG - 1e-9);
+    o->bearing_err_deg = (steps < 1 ? 1 : steps) * DF_BEARING_ERR_STEP_DEG;
 }
 
 int df_radio_count(void) {
@@ -132,7 +257,7 @@ void df_note(int radio, const uint8_t mac[6], int rssi_dbm, int channel, time_t 
 }
 
 /* g_mu held. */
-static void estimate_locked(const df_emitter_t *e, time_t now, df_est_t *o) {
+static void estimate_locked(df_emitter_t *e, time_t now, df_est_t *o) {
     memset(o, 0, sizeof(*o));
     memcpy(o->mac, e->mac, 6);
     o->last_seen  = e->last_seen;
@@ -156,10 +281,11 @@ static void estimate_locked(const df_emitter_t *e, time_t now, df_est_t *o) {
         wsum += w;
         wx   += w * g_radios[i].pos_m;
     }
-    if (o->heard_by < 2) { o->quality = DF_NONE; return; }
+    if (o->heard_by < 2) { o->quality = DF_NONE; e->brg_held = 0; return; }
     o->margin_db = hi - lo;
     o->quality   = o->margin_db >= DF_MIN_MARGIN_DB ? DF_LEAN : DF_WEAK;
     if (all_pos && wsum > 0) { o->has_along = 1; o->along_m = wx / wsum; }
+    bearing_locked(e, o);
 }
 
 int df_estimate(const uint8_t mac[6], time_t now, df_est_t *out) {
@@ -267,6 +393,119 @@ const char *df_quality_name(df_quality_t q) {
     return "none";
 }
 
+/* One position number, the whole of s[0..len): finite, within
+ * +/-DF_POS_MAX_M. */
+static int place_num(const char *s, size_t len, double *out) {
+    char b[64];
+    if (len == 0 || len >= sizeof(b)) return 0;
+    memcpy(b, s, len);
+    b[len] = '\0';
+    char *end = NULL;
+    double v = strtod(b, &end);
+    if (end == b || *end != '\0' || !isfinite(v) || v < -DF_POS_MAX_M || v > DF_POS_MAX_M)
+        return 0;
+    *out = v;
+    return 1;
+}
+
+int df_parse_place(const char *spec, char *iface, int iface_sz, df_pos_t *pos) {
+    if (!spec || !iface || iface_sz < 2 || !pos) return 0;
+    memset(pos, 0, sizeof(*pos));
+    const char *at = strchr(spec, '@');
+    const char *comma = at ? strchr(at + 1, ',') : NULL;
+    if (!comma) {
+        int hp = 0;
+        double m = 0;
+        if (!df_parse_spec(spec, iface, iface_sz, &hp, &m)) return 0;
+        pos->form = hp ? DF_POS_LINE : DF_POS_NONE;
+        pos->a    = m;
+        return 1;
+    }
+    /* The name by the one-number parser's rules. */
+    char name_only[32];
+    size_t nl = (size_t)(at - spec);
+    int hp = 0;
+    double m = 0;
+    if (nl >= sizeof(name_only)) return 0;
+    memcpy(name_only, spec, nl);
+    name_only[nl] = '\0';
+    if (!df_parse_spec(name_only, iface, iface_sz, &hp, &m)) return 0;
+    double x, y;
+    if (!place_num(at + 1, (size_t)(comma - at - 1), &x) ||
+        !place_num(comma + 1, strlen(comma + 1), &y)) return 0;
+    pos->form = DF_POS_XY;
+    pos->a = x;
+    pos->b = y;
+    return 1;
+}
+
+int df_cli_add(df_cli_t *c, const char *spec, char *err, size_t errsz) {
+    if (err && errsz) err[0] = '\0';
+    if (!c || !spec || !err) return 0;
+    char n[16];
+    df_pos_t p;
+    if (!df_parse_place(spec, n, (int)sizeof(n), &p)) {
+        snprintf(err, errsz, "sloth: --df-iface %s: want NAME, NAME@METRES or "
+                             "NAME@X,Y (an interface name of 1..15 chars, "
+                             "metres within +/-1000)", spec);
+        return 0;
+    }
+    if (c->n >= DF_MAX_RADIOS - 1) {
+        snprintf(err, errsz, "sloth: too many --df-iface radios (max %d "
+                             "beside the sensor radio)", DF_MAX_RADIOS - 1);
+        return 0;
+    }
+    snprintf(c->name[c->n], sizeof(c->name[c->n]), "%s", n);
+    c->pos[c->n] = p;
+    c->n++;
+    return 1;
+}
+
+int df_cli_origin(df_cli_t *c, const char *arg, char *err, size_t errsz) {
+    if (err && errsz) err[0] = '\0';
+    if (!c || !arg || !err) return 0;
+    char n[16], sp[80];
+    df_pos_t p;
+    int w = snprintf(sp, sizeof(sp), "x@%s", arg);
+    if (w < 0 || (size_t)w >= sizeof(sp) || !df_parse_place(sp, n, (int)sizeof(n), &p) ||
+        p.form == DF_POS_NONE) {
+        snprintf(err, errsz, "sloth: --df-origin %s: want METRES or X,Y, "
+                             "metres within +/-1000", arg);
+        return 0;
+    }
+    c->origin_set = 1;
+    c->origin = p;
+    return 1;
+}
+
+static int cli_forms(const df_cli_t *c) {
+    int seen = 0;
+    if (c->origin_set) seen |= 1 << c->origin.form;
+    for (int k = 0; k < c->n; k++) seen |= 1 << c->pos[k].form;
+    return seen;
+}
+
+int df_cli_check(const df_cli_t *c, char *err, size_t errsz) {
+    if (err && errsz) err[0] = '\0';
+    if (!c || !err) return 0;
+    int seen = cli_forms(c);
+    if ((seen & (1 << DF_POS_LINE)) && (seen & (1 << DF_POS_XY))) {
+        snprintf(err, errsz, "sloth: --df-iface, --df-origin: positions given "
+                             "both as METRES along a line and as X,Y; one "
+                             "command line uses one form");
+        return 0;
+    }
+    return 1;
+}
+
+df_pos_form_t df_cli_form(const df_cli_t *c) {
+    if (!c) return DF_POS_NONE;
+    int seen = cli_forms(c);
+    if (seen & (1 << DF_POS_XY)) return DF_POS_XY;
+    if (seen & (1 << DF_POS_LINE)) return DF_POS_LINE;
+    return DF_POS_NONE;
+}
+
 int df_parse_spec(const char *spec, char *iface, int iface_sz, int *has_pos, double *pos_m) {
     if (!spec || !iface || iface_sz < 2 || !has_pos || !pos_m) return 0;
     const char *at = strchr(spec, '@');
@@ -283,7 +522,7 @@ int df_parse_spec(const char *spec, char *iface, int iface_sz, int *has_pos, dou
     if (!at) return 1;
     char *end = NULL;
     double v = strtod(at + 1, &end);
-    if (end == at + 1 || *end != '\0' || !isfinite(v) || v < -1000 || v > 1000) return 0;
+    if (end == at + 1 || *end != '\0' || !isfinite(v) || v < -DF_POS_MAX_M || v > DF_POS_MAX_M) return 0;
     *has_pos = 1;
     *pos_m   = v;
     return 1;

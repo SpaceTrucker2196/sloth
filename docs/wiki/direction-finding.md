@@ -6,7 +6,7 @@ type: reference
 
 # Direction finding across monitor radios (`--df-iface`)
 
-**Summary**: `sloth-wifi --df-iface NAME[@METRES]` (repeatable, up to
+**Summary**: `sloth-wifi --df-iface NAME[@METRES|@X,Y]` (repeatable, up to
 three) listens on extra monitor-mode radios beside the sensor radio.
 From each of their frames it reads two things, the transmitter address
 and the level it was heard at, into a table of transmitters with one
@@ -27,9 +27,9 @@ No alert rule reads either: this is a data point for an analyst.
 `src/main.c` (`--df-iface`, `--df-origin`, the follow in
 `chanhop_drive()`), `src/jsonl.c` (`jsonl_emit_wifi_df()`),
 `tests/test_df.c`. Owner's request, 2026-11-16, for the beta-site row
-of Alfa adapters.
+of Alfa adapters; 2026-11-17 for the same three in a triangle.
 
-**Last updated**: 2026-11-17 (slothweb's card and `/api/df`), 2026-11-16 (several sensor radios: what this table holds then, [[multi-radio-sensing]]), 2026-11-16 (new).
+**Last updated**: 2026-11-17 (radios off the line: `NAME@X,Y` and the bearing, JSONL 2.4.0), 2026-11-17 (slothweb's card and `/api/df`), 2026-11-16 (several sensor radios: what this table holds then, [[multi-radio-sensing]]), 2026-11-16 (new).
 
 ## What it can say, and what it cannot
 
@@ -42,14 +42,17 @@ hears a transmitter louder.
 | which radio hears a transmitter loudest (`best_radio`, `best_iface`) | the per-radio mean level |
 | by how much (`margin_db`: loudest minus quietest) | the same |
 | a point along the baseline (`along_m`), when every radio that heard it has a position | the mean of the radio positions weighted by received power (linear, the free-space 1/d² weight) |
+| a compass direction the levels lean in (`bearing_deg`, one of eight points, with `bearing_err_deg`), when three or more radios are placed in two dimensions and the transmitter is close to them: § Radios off the line | the direction of that same weighted mean from the middle of the array |
 | how much to trust it (`quality`) | `lean` at a margin of 6 dB or more, `weak` under it, and no record at all with fewer than two radios |
 
 | It does not say | Why |
 |---|---|
-| which side of the line the transmitter is on | radios in a straight line are symmetric about it |
+| which side of the line the transmitter is on, with the radios in a line | radios in a straight line are symmetric about it |
 | how far off the line it is | one dimension of positions gives one dimension of answer |
+| where the transmitter is, or how far | the weighted mean always lies inside the array; it has a direction from the middle and no range |
 | anything about a transmitter far away compared with the baseline | every radio hears it at the same level; it reads `weak`, which is the answer and not a fault |
-| a bearing in degrees | there is none to be had from levels on a line |
+| a bearing from radios on a line | there is none to be had from levels on a line |
+| an angle of arrival | the bearing is which way the levels lean, in 45 degree steps, not a measured angle |
 
 Omnidirectional antennas a metre apart resolve only transmitters within
 a few metres of the row; the level one antenna sees for a fixed
@@ -58,6 +61,45 @@ transmitter already wanders several dB with multipath, which is what the
 directional antennas facing different ways (the three sectors of
 [[antenna-fixture-rev-n]]: loudest sector is the bearing), or a longer
 baseline, or radios off the line to break the symmetry.
+
+## Radios off the line (`NAME@X,Y`)
+
+Owner's layout, 2026-11-17: three Alfa adapters at the corners of a
+triangle with 2 m sides, matching antennas. With a position in two
+dimensions on every radio (`X,Y`: metres east, metres north) the
+symmetry about the line is gone, and the power-weighted mean of the
+radio positions has a direction from the centroid of the array. That
+direction is `bearing_deg`: compass degrees, 0 north, 90 east.
+
+It is the direction the levels lean, not a fix and not a range. It is
+given as one of eight compass points (`DF_BEARING_STEP_DEG` 45), with
+`bearing_err_deg` beside it (15, 30 or 45): how far the direction moves
+when one radio's level is 3 dB off (`DF_BEARING_WANDER_DB`, half the
+margin floor), rounded up. A point once given stands until the direction
+is 11.25 degrees past the edge of its sector, so a still transmitter on
+an edge does not write a line each time its mean moves a degree.
+
+It is withheld, and the record written without it, unless all of:
+
+- three or more radios have an `X,Y` position and are not on one line
+  (the array is at least a quarter as deep as its longest side,
+  `DF_MIN_ASPECT`);
+- every placed radio holds a fresh level for the transmitter, and no
+  radio without a position heard it;
+- the quality is `lean` (6 dB between loudest and quietest);
+- that 3 dB error on any one radio moves the direction 45 degrees or
+  less.
+
+With 2 m sides that means a transmitter within about three metres of the
+array: at 10 m the three radios differ by under 2 dB and the record
+reads `weak`. Most transmitters have no bearing, and that is the answer.
+With the three corners at 0, 120 and 240 degrees, a transmitter beside
+a corner reads 0, 135 or 225.
+
+`along_m` and `bearing_deg` are never on one record: a command line
+gives positions in one form (exit 2 otherwise). At start, `X,Y`
+positions that cannot give a bearing (fewer than three placed radios, or
+on one line) are said so on stderr.
 
 ## Calibration: radios do not read alike
 
@@ -95,11 +137,23 @@ sloth-wifi --monitor-iface alfa0 --hop \
     --df-iface alfa1@1.0 --df-iface alfa2@2.0
 ```
 
+The beta-site triangle, sensor radio at the east corner:
+
+```
+sloth-wifi --monitor-iface alfa0 --hop --df-origin 1.0,-0.58 \
+    --df-iface alfa1@0,1.15 --df-iface alfa2@-1.0,-0.58
+```
+
 - `--df-iface NAME` alone records levels with no positions: `best_radio`
   and `margin_db`, no `along_m`.
 - `--df-iface NAME@METRES` places the radio on a straight baseline. With
   any position given, the sensor radio sits at 0 m unless `--df-origin
   METRES` says otherwise.
+- `--df-iface NAME@X,Y` places it in two dimensions, metres east and
+  metres north of any point the operator picks; the sensor radio sits at
+  `0,0` unless `--df-origin X,Y` says otherwise. The two forms are not
+  mixed on one command line (exit 2); a radio with no position may sit
+  beside either.
 - A radio that cannot be opened (absent, not in monitor mode, a raw HCI
   device) is announced on stderr and left out; the run continues. With
   no sensor radio open, none is opened.
@@ -147,7 +201,8 @@ Both are sloth-wifi's, change-only, and written only when a second
 radio is registered. Field tables: [[jsonl-schema]].
 
 - **`df_radio`**, one per radio: `radio` (0 is the sensor radio),
-  `iface`, `role` (`sensor` or `df`), `pos_m` when given, `open`,
+  `iface`, `role` (`sensor` or `df`), `pos_m` or `x_m` and `y_m` when
+  given, `open`,
   `running`, `noted` (frames that reached the table), and for a `df`
   radio `bias_db` once measured (how much louder than radio 0 it reads),
   `frames`, `rejects`, `retune_failures`. Signed on open, running,
@@ -155,18 +210,21 @@ radio is registered. Field tables: [[jsonl-schema]].
   in 3 dB bands, never on a count.
 - **`wifi_df`**, one per transmitter two or more radios hold a fresh
   level for: `mac`, `channel`, `heard_by`, `quality`, `best_radio`,
-  `best_iface`, `margin_db`, `along_m` when positions allow, `rssi`
+  `best_iface`, `margin_db`, `along_m` when positions allow,
+  `bearing_deg` and `bearing_err_deg` when a bearing is given, `rssi`
   (one entry per radio in `df_radio` order, as measured, `null` for a
   radio with no fresh level), `level` (the same less each radio's bias:
   what `best_radio`, `margin_db` and `along_m` are computed from),
   `last_seen`. Signed on the quality, the loudest radio,
-  which radios heard it, the margin in 3 dB bands and the point in
-  0.25 m bands, so a transmitter standing still writes a line when
+  which radios heard it, the margin in 3 dB bands, the point in
+  0.25 m bands and the bearing with its error, so a transmitter standing still writes a line when
   something about its direction changes and on the heartbeat.
 
 In slothweb: the WiFi view's direction-finding card and `GET /api/df`
 ([[slothweb]] § Direction finding, 2026-11-17), from the stream, the
-scalars only (not the `rssi` and `level` arrays), in memory. Not in
+scalars only (not the `rssi` and `level` arrays), in memory; the card
+does not show the 2.4.0 members (`x_m`, `y_m`, `bearing_deg`,
+`bearing_err_deg`) yet. Not in
 `--db`, not in the fleet export: later slices.
 
 ## Related pages

@@ -298,6 +298,239 @@ static void test_active_needs_two_radios(void) {
     ASSERT_EQ(df_active(), 0);
 }
 
+/* The beta-site triangle (2026-11-17), 2 m sides, in the order the
+ * sensor registers it: radio 0 the sensor radio at the east corner,
+ * radio 1 north, radio 2 south-west. Metres east, metres north. */
+static void triangle(void) {
+    df_reset();
+    ASSERT_EQ(df_radio_add_xy("alfa0", 1.0, -0.58), 0);
+    ASSERT_EQ(df_radio_add_xy("alfa1", 0.0, 1.15), 1);
+    ASSERT_EQ(df_radio_add_xy("alfa2", -1.0, -0.58), 2);
+}
+
+static void tri_feed(const uint8_t *mac, int l0, int l1, int l2, int n) {
+    feed(0, mac, l0, n, 1000);
+    feed(1, mac, l1, n, 1000);
+    feed(2, mac, l2, n, 1000);
+}
+
+static void test_place_parses_one_number_or_two(void) {
+    char n[16]; df_pos_t p;
+    ASSERT_EQ(df_parse_place("alfa1", n, sizeof(n), &p), 1);
+    ASSERT_STR(n, "alfa1");
+    ASSERT_EQ(p.form, DF_POS_NONE);
+    ASSERT_EQ(df_parse_place("alfa1@1.5", n, sizeof(n), &p), 1);
+    ASSERT(p.form == DF_POS_LINE && p.a > 1.4999 && p.a < 1.5001);
+    ASSERT_EQ(df_parse_place("alfa2@-1.0,-0.58", n, sizeof(n), &p), 1);
+    ASSERT_STR(n, "alfa2");
+    ASSERT_EQ(p.form, DF_POS_XY);
+    ASSERT(p.a < -0.9999 && p.a > -1.0001 && p.b < -0.5799 && p.b > -0.5801);
+    ASSERT_EQ(df_parse_place("alfa1@0,1.15", n, sizeof(n), &p), 1);
+    ASSERT(p.form == DF_POS_XY && p.a == 0.0 && p.b > 1.1499 && p.b < 1.1501);
+    ASSERT_EQ(df_parse_place("alfa1@1,", n, sizeof(n), &p), 0);
+    ASSERT_EQ(df_parse_place("alfa1@,1", n, sizeof(n), &p), 0);
+    ASSERT_EQ(df_parse_place("alfa1@1,2,3", n, sizeof(n), &p), 0);
+    ASSERT_EQ(df_parse_place("alfa1@1,2m", n, sizeof(n), &p), 0);
+    ASSERT_EQ(df_parse_place("alfa1@1,nan", n, sizeof(n), &p), 0);
+    ASSERT_EQ(df_parse_place("alfa1@inf,1", n, sizeof(n), &p), 0);
+    ASSERT_EQ(df_parse_place("alfa1@5000,0", n, sizeof(n), &p), 0);
+    ASSERT_EQ(df_parse_place("alfa1@0,-1000.5", n, sizeof(n), &p), 0);
+    ASSERT_EQ(df_parse_place("@1,2", n, sizeof(n), &p), 0);
+    ASSERT_EQ(df_parse_place("a/b@1,2", n, sizeof(n), &p), 0);
+    ASSERT_EQ(df_parse_place("sixteen-chars-xx@1,2", n, sizeof(n), &p), 0);
+    ASSERT_EQ(df_parse_place(NULL, n, sizeof(n), &p), 0);
+}
+
+/* The command line: every refusal is a line, and one command line
+ * holds positions of one form. */
+static void test_cli_takes_one_form(void) {
+    df_cli_t c; char err[200];
+    memset(&c, 0, sizeof(c));
+    ASSERT_EQ(df_cli_form(&c), DF_POS_NONE);
+    ASSERT_EQ(df_cli_add(&c, "alfa1@0,1.15", err, sizeof(err)), 1);
+    ASSERT_STR(err, "");
+    ASSERT_EQ(df_cli_add(&c, "alfa2@-1.0,-0.58", err, sizeof(err)), 1);
+    ASSERT_EQ(df_cli_origin(&c, "1.0,-0.58", err, sizeof(err)), 1);
+    ASSERT_EQ(c.n, 2);
+    ASSERT_STR(c.name[1], "alfa2");
+    ASSERT(c.origin_set == 1 && c.origin.form == DF_POS_XY);
+    ASSERT(c.origin.a > 0.9999 && c.origin.a < 1.0001);
+    ASSERT_EQ(df_cli_check(&c, err, sizeof(err)), 1);
+    ASSERT_EQ(df_cli_form(&c), DF_POS_XY);
+    /* A radio with no position beside placed ones is not a second form. */
+    ASSERT_EQ(df_cli_add(&c, "alfa3", err, sizeof(err)), 1);
+    ASSERT_EQ(df_cli_check(&c, err, sizeof(err)), 1);
+    /* A fourth is one too many beside the sensor radio. */
+    ASSERT_EQ(df_cli_add(&c, "alfa4", err, sizeof(err)), 0);
+    ASSERT(strstr(err, "too many --df-iface radios (max 3") != NULL);
+    ASSERT_EQ(c.n, 3);
+
+    memset(&c, 0, sizeof(c));
+    ASSERT_EQ(df_cli_add(&c, "alfa1@1.0", err, sizeof(err)), 1);
+    ASSERT_EQ(df_cli_check(&c, err, sizeof(err)), 1);
+    ASSERT_EQ(df_cli_form(&c), DF_POS_LINE);
+    ASSERT_EQ(df_cli_add(&c, "alfa2@2,0", err, sizeof(err)), 1);
+    ASSERT_EQ(df_cli_check(&c, err, sizeof(err)), 0);
+    ASSERT(strstr(err, "one command line uses one form") != NULL);
+
+    /* The origin alone can be the odd one out. */
+    memset(&c, 0, sizeof(c));
+    ASSERT_EQ(df_cli_add(&c, "alfa1@0,1", err, sizeof(err)), 1);
+    ASSERT_EQ(df_cli_origin(&c, "0.5", err, sizeof(err)), 1);
+    ASSERT_EQ(c.origin.form, DF_POS_LINE);
+    ASSERT_EQ(df_cli_check(&c, err, sizeof(err)), 0);
+
+    memset(&c, 0, sizeof(c));
+    ASSERT_EQ(df_cli_add(&c, "alfa1@1,", err, sizeof(err)), 0);
+    ASSERT(strstr(err, "--df-iface alfa1@1,: want NAME, NAME@METRES or NAME@X,Y") != NULL);
+    ASSERT_EQ(c.n, 0);
+    ASSERT_EQ(df_cli_origin(&c, "", err, sizeof(err)), 0);
+    ASSERT(strstr(err, "--df-origin : want METRES or X,Y") != NULL);
+    ASSERT_EQ(df_cli_origin(&c, "1,2,3", err, sizeof(err)), 0);
+    ASSERT_EQ(df_cli_origin(&c, "east", err, sizeof(err)), 0);
+    ASSERT_EQ(c.origin_set, 0);
+}
+
+/* A transmitter beside one corner: the bearing is that corner's
+ * direction from the middle, to the nearest of eight points. The
+ * corners sit at 120, 0 and 240 degrees. */
+static void test_bearing_points_at_the_loud_corner(void) {
+    df_est_t e;
+    triangle();
+    ASSERT_EQ(df_array_has_bearing(), 1);
+    tri_feed(TX_A, -60, -40, -60, 5);                /* north corner */
+    ASSERT_EQ(df_estimate(TX_A, 1000, &e), 1);
+    ASSERT_EQ(e.quality, DF_LEAN);
+    ASSERT_EQ(e.has_bearing, 1);
+    ASSERT_EQ(e.bearing_deg, 0);
+    ASSERT_EQ(e.bearing_err_deg, 15);                /* 0.5 degrees, rounded up */
+    ASSERT_EQ(e.has_along, 0);                       /* never both */
+
+    triangle();
+    tri_feed(TX_A, -40, -60, -60, 5);                /* east corner: 120 */
+    ASSERT_EQ(df_estimate(TX_A, 1000, &e), 1);
+    ASSERT_EQ(e.has_bearing, 1);
+    ASSERT_EQ(e.bearing_deg, 135);
+
+    triangle();
+    tri_feed(TX_A, -60, -60, -40, 5);                /* south-west corner: 240 */
+    ASSERT_EQ(df_estimate(TX_A, 1000, &e), 1);
+    ASSERT_EQ(e.has_bearing, 1);
+    ASSERT_EQ(e.bearing_deg, 225);
+
+    /* Between two corners, away from the quiet third: 60 degrees, and
+     * a 3 dB error on one radio moves it 40.9. */
+    triangle();
+    tri_feed(TX_A, -50, -50, -56, 5);
+    ASSERT_EQ(df_estimate(TX_A, 1000, &e), 1);
+    ASSERT_EQ(e.has_bearing, 1);
+    ASSERT_EQ(e.bearing_deg, 45);
+    ASSERT_EQ(e.bearing_err_deg, 45);
+    /* The snapshot carries the same. */
+    df_est_t out[2];
+    ASSERT_EQ(df_snapshot(out, 2, 1000), 1);
+    ASSERT_EQ(out[0].has_bearing, 1);
+    ASSERT_EQ(out[0].bearing_deg, 45);
+}
+
+/* Withheld is the common case: each condition in df.h, one at a time. */
+static void test_bearing_is_withheld(void) {
+    df_est_t e;
+    /* The radios agree: weak, no direction to lean in. */
+    triangle();
+    tri_feed(TX_A, -70, -71, -69, 5);
+    ASSERT_EQ(df_estimate(TX_A, 1000, &e), 1);
+    ASSERT_EQ(e.quality, DF_WEAK);
+    ASSERT_EQ(e.has_bearing, 0);
+
+    /* A lean at the 6 dB floor that a 3 dB error on one radio would
+     * move 48 degrees: more than one point. */
+    triangle();
+    tri_feed(TX_A, -50, -51, -56, 5);
+    ASSERT_EQ(df_estimate(TX_A, 1000, &e), 1);
+    ASSERT_EQ(e.quality, DF_LEAN);
+    ASSERT_EQ(e.has_bearing, 0);
+
+    /* Two of the three heard it. */
+    triangle();
+    feed(0, TX_A, -40, 5, 1000);
+    feed(1, TX_A, -60, 5, 1000);
+    ASSERT_EQ(df_estimate(TX_A, 1000, &e), 1);
+    ASSERT_EQ(e.quality, DF_LEAN);
+    ASSERT_EQ(e.has_bearing, 0);
+
+    /* A fourth radio with no position heard it too. */
+    triangle();
+    ASSERT_EQ(df_radio_add("alfa3", 0, 0), 3);
+    ASSERT_EQ(df_array_has_bearing(), 1);
+    tri_feed(TX_A, -60, -40, -60, 5);
+    ASSERT_EQ(df_estimate(TX_A, 1000, &e), 1);
+    ASSERT_EQ(e.has_bearing, 1);                     /* it did not hear this one */
+    feed(3, TX_A, -55, 5, 1000);
+    ASSERT_EQ(df_estimate(TX_A, 1000, &e), 1);
+    ASSERT_EQ(e.has_bearing, 0);
+
+    /* Three placed radios on one line, and nearly on one. */
+    df_reset();
+    df_radio_add_xy("a", 0, 0); df_radio_add_xy("b", 1, 1); df_radio_add_xy("c", 2, 2);
+    ASSERT_EQ(df_array_has_bearing(), 0);
+    tri_feed(TX_A, -40, -60, -60, 5);
+    ASSERT_EQ(df_estimate(TX_A, 1000, &e), 1);
+    ASSERT_EQ(e.has_bearing, 0);
+    df_reset();
+    df_radio_add_xy("a", 0, 0); df_radio_add_xy("b", 2, 0); df_radio_add_xy("c", 1, 0.4);
+    ASSERT_EQ(df_array_has_bearing(), 0);            /* 0.4 deep on a 2 m side */
+    df_reset();
+    df_radio_add_xy("a", 0, 0); df_radio_add_xy("b", 2, 0); df_radio_add_xy("c", 1, 0.5);
+    ASSERT_EQ(df_array_has_bearing(), 1);            /* DF_MIN_ASPECT, exactly */
+
+    /* Two placed radios, or all three at one spot. */
+    df_reset();
+    df_radio_add_xy("a", 0, 0); df_radio_add_xy("b", 2, 0);
+    ASSERT_EQ(df_array_has_bearing(), 0);
+    df_reset();
+    df_radio_add_xy("a", 1, 1); df_radio_add_xy("b", 1, 1); df_radio_add_xy("c", 1, 1);
+    ASSERT_EQ(df_array_has_bearing(), 0);
+
+    /* The baseline form never has one. */
+    three_in_a_row();
+    ASSERT_EQ(df_array_has_bearing(), 0);
+    tri_feed(TX_A, -40, -52, -60, 5);
+    ASSERT_EQ(df_estimate(TX_A, 1000, &e), 1);
+    ASSERT_EQ(e.has_along, 1);
+    ASSERT_EQ(e.has_bearing, 0);
+}
+
+/* A point once given stands until the direction is 11.25 degrees past
+ * the edge of its sector; a transmitter first seen there gets the
+ * nearer point. */
+static void test_bearing_point_is_held(void) {
+    df_est_t e;
+    triangle();
+    tri_feed(TX_A, -50, -48, -56, 5);                /* 34.1 degrees */
+    ASSERT_EQ(df_estimate(TX_A, 1000, &e), 1);
+    ASSERT_EQ(e.has_bearing, 1);
+    ASSERT_EQ(e.bearing_deg, 45);
+    tri_feed(TX_A, -50, -46, -56, 80);               /* the mean settles on 19.0 */
+    ASSERT_EQ(df_estimate(TX_A, 1000, &e), 1);
+    ASSERT_EQ(e.has_bearing, 1);
+    ASSERT_EQ(e.bearing_deg, 45);                    /* 26 from 45: held */
+    tri_feed(TX_B, -50, -46, -56, 5);                /* the same place, new */
+    ASSERT_EQ(df_estimate(TX_B, 1000, &e), 1);
+    ASSERT_EQ(e.bearing_deg, 0);
+    feed(1, TX_A, -44, 80, 1000);                    /* 10.7: 34.3 from 45 */
+    ASSERT_EQ(df_estimate(TX_A, 1000, &e), 1);
+    ASSERT_EQ(e.has_bearing, 1);
+    ASSERT_EQ(e.bearing_deg, 0);
+    /* Withheld once, the hold is gone. */
+    tri_feed(TX_A, -50, -50, -50, 80);
+    ASSERT_EQ(df_estimate(TX_A, 1000, &e), 1);
+    ASSERT_EQ(e.has_bearing, 0);
+    tri_feed(TX_A, -50, -46, -56, 80);
+    ASSERT_EQ(df_estimate(TX_A, 1000, &e), 1);
+    ASSERT_EQ(e.bearing_deg, 0);
+}
+
 void run_df_tests(void) {
     TEST_SUITE("df - direction finding across monitor radios");
     RUN_TEST(test_spec_parses_name_and_metres);
@@ -314,4 +547,9 @@ void run_df_tests(void) {
     RUN_TEST(test_bias_is_measured_from_the_air);
     RUN_TEST(test_frame_ta);
     RUN_TEST(test_active_needs_two_radios);
+    RUN_TEST(test_place_parses_one_number_or_two);
+    RUN_TEST(test_cli_takes_one_form);
+    RUN_TEST(test_bearing_points_at_the_loud_corner);
+    RUN_TEST(test_bearing_is_withheld);
+    RUN_TEST(test_bearing_point_is_held);
 }

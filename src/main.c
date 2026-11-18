@@ -655,20 +655,27 @@ static void print_usage(const char *argv0) {
             "                     channel list is split between them. One\n"
             "                     that is absent or not in monitor mode is\n"
             "                     left out. Receive-only.\n"
-            "  --df-iface NAME[@METRES]\n"
+            "  --df-iface NAME[@METRES|@X,Y]\n"
             "                     direction finding: also listen on NAME, a\n"
             "                     second monitor-mode radio (repeatable, up\n"
             "                     to 3). Only the transmitter address and\n"
             "                     signal level of its frames are read, into\n"
             "                     a per-radio table; no frame from it reaches\n"
             "                     a detector, count or alert. @METRES is the\n"
-            "                     radio's place along a straight baseline.\n"
+            "                     radio's place along a straight baseline;\n"
+            "                     @X,Y its place in two dimensions (metres\n"
+            "                     east, metres north), which with three\n"
+            "                     radios not on one line adds a compass\n"
+            "                     bearing for a transmitter close to them.\n"
+            "                     One command line uses one form.\n"
             "                     Under --hop these radios are retuned with\n"
             "                     the sensor radio; without it, park them on\n"
             "                     its channel. Receive-only. Output: the\n"
             "                     wifi_df and df_radio records.\n"
-            "  --df-origin METRES the sensor radio's own place on that\n"
-            "                     baseline (default 0).\n"
+            "  --df-origin METRES|X,Y\n"
+            "                     the sensor radio's own place, in the form\n"
+            "                     the --df-iface positions use (default 0,\n"
+            "                     or 0,0).\n"
             "  --no-discovery     suppress the mDNS advertisement of the data\n"
             "                     socket. By default, when --data-socket is bound\n"
             "                     to a routable (non-loopback) TCP address, sloth\n"
@@ -885,13 +892,11 @@ int main(int argc, char **argv) {
      * above), the rest are further sensor radios (src/mon_radios.h). */
     mon_cli_t   mon_cli;
     memset(&mon_cli, 0, sizeof(mon_cli));
-    /* --df-iface NAME[@METRES], repeatable: the radios beside the
-     * sensor radio (src/df.h). --df-origin METRES is the sensor radio's
-     * own place on the baseline. */
-    const char *df_specs[DF_MAX_RADIOS - 1];
-    int         df_spec_n = 0;
-    int         df_origin_set = 0;
-    double      df_origin_m = 0;
+    /* --df-iface NAME[@METRES|@X,Y], repeatable: the radios beside the
+     * sensor radio (src/df.h). --df-origin is the sensor radio's own
+     * place, on the baseline or in two dimensions. */
+    df_cli_t    df_cli;
+    memset(&df_cli, 0, sizeof(df_cli));
     int         bt_monitor   = 0;        /* --bt-monitor (#144 slice 2) */
     const char *bt_capture   = NULL;     /* --bt-capture PATH (#144 slice 3) */
     int         ble_rotation_hints = 0;  /* --ble-rotation-hints (#156) */
@@ -1011,35 +1016,23 @@ int main(int argc, char **argv) {
             }
             monitor_iface = mon_cli.name[0];
         } else if (!strcmp(argv[i], "--df-iface") && i + 1 < argc) {
-            const char *sp = argv[++i];
-            char n[16]; int hp; double pm;
-            if (!df_parse_spec(sp, n, (int)sizeof(n), &hp, &pm)) {
-                fprintf(stderr, "sloth: --df-iface %s: want NAME or "
-                                "NAME@METRES (an interface name of 1..15 "
-                                "chars, metres within +/-1000)\n", sp);
+            char why[200];
+            if (!df_cli_add(&df_cli, argv[++i], why, sizeof(why))) {
+                fprintf(stderr, "%s\n", why);
                 return 2;
             }
-            if (bt_dev_is_raw_hci(n)) {
+            if (bt_dev_is_raw_hci(df_cli.name[df_cli.n - 1])) {
                 fprintf(stderr, "sloth: --df-iface %s refused: a raw HCI "
-                                "device accepts injected packets\n", n);
+                                "device accepts injected packets\n",
+                        df_cli.name[df_cli.n - 1]);
                 return 2;
             }
-            if (df_spec_n >= DF_MAX_RADIOS - 1) {
-                fprintf(stderr, "sloth: too many --df-iface radios (max %d "
-                                "beside the sensor radio)\n", DF_MAX_RADIOS - 1);
-                return 2;
-            }
-            df_specs[df_spec_n++] = sp;
         } else if (!strcmp(argv[i], "--df-origin") && i + 1 < argc) {
-            char n[16]; int hp; double pm; char sp[64];
-            snprintf(sp, sizeof(sp), "x@%s", argv[++i]);
-            if (!df_parse_spec(sp, n, (int)sizeof(n), &hp, &pm)) {
-                fprintf(stderr, "sloth: --df-origin %s: want metres within "
-                                "+/-1000\n", argv[i]);
+            char why[200];
+            if (!df_cli_origin(&df_cli, argv[++i], why, sizeof(why))) {
+                fprintf(stderr, "%s\n", why);
                 return 2;
             }
-            df_origin_set = 1;
-            df_origin_m = pm;
         } else if (!strcmp(argv[i], "--monitor-only")) {
             monitor_only = 1;
         } else if (!strcmp(argv[i], "--bt-monitor")) {
@@ -1310,30 +1303,27 @@ int main(int argc, char **argv) {
      * replay, a build with no capture, a radio also given to
      * --df-iface. One line, exit 2, before anything opens. */
     {
-        char dfn[DF_MAX_RADIOS - 1][16];
         const char *dfp[DF_MAX_RADIOS - 1];
         char why[200];
-        for (int k = 0; k < df_spec_n; k++) {
-            int hp; double pm;
-            if (!df_parse_spec(df_specs[k], dfn[k], (int)sizeof(dfn[k]), &hp, &pm))
-                dfn[k][0] = '\0';
-            dfp[k] = dfn[k];
+        /* --df-iface positions in one form (src/df.h). */
+        if (!df_cli_check(&df_cli, why, sizeof(why))) {
+            fprintf(stderr, "%s\n", why);
+            return 2;
         }
+        for (int k = 0; k < df_cli.n; k++) dfp[k] = df_cli.name[k];
 #ifdef WITH_PCAP
         const int have_pcap = 1;
 #else
         const int have_pcap = 0;
 #endif
-        if (!mon_cli_check(&mon_cli, dfp, df_spec_n, replay_arg != NULL,
+        if (!mon_cli_check(&mon_cli, dfp, df_cli.n, replay_arg != NULL,
                            have_pcap, why, sizeof(why))) {
             fprintf(stderr, "%s\n", why);
             return 2;
         }
     }
 #ifndef WITH_PCAP
-    /* Only the capture build reads these two. */
-    (void)df_specs; (void)df_origin_m;
-    if (df_spec_n || df_origin_set) {
+    if (df_cli.n || df_cli.origin_set) {
         fprintf(stderr, "sloth: --df-iface needs a build with libpcap "
                         "(this one is WITH_PCAP=0)\n");
         return 2;
@@ -1344,7 +1334,7 @@ int main(int argc, char **argv) {
         return 2;
     }
 #endif
-    if (replay_arg && (df_spec_n || df_origin_set)) {
+    if (replay_arg && (df_cli.n || df_cli.origin_set)) {
         fprintf(stderr, "sloth: --df-iface names live radios; it cannot be "
                         "combined with --replay\n");
         return 2;
@@ -1582,26 +1572,29 @@ int main(int argc, char **argv) {
          * radio by radio (MISSION section 2); one that cannot be opened
          * is left out and the run continues, and with no sensor radio
          * there is nothing to compare against, so none is opened. */
-        if (df_spec_n && !g_state.probe_iface[0]) {
+        if (df_cli.n && !g_state.probe_iface[0]) {
             fprintf(stderr, "sloth: --df-iface: no sensor radio is open, so "
                             "no direction-finding radio was opened\n");
-        } else if (df_spec_n) {
-            int positions = df_origin_set;
-            for (int k = 0; k < df_spec_n; k++)
-                if (strchr(df_specs[k], '@')) positions = 1;
+        } else if (df_cli.n) {
+            df_pos_form_t form = df_cli_form(&df_cli);
             df_reset();
             /* The sensor radio is radio 0; with any position given and
-             * no --df-origin it sits at 0 m. */
-            df_radio_add(g_state.probe_iface, positions, df_origin_m);
-            for (int k = 0; k < df_spec_n; k++) {
-                char n[16], why[96]; int hp; double pm;
-                if (!df_parse_spec(df_specs[k], n, (int)sizeof(n), &hp, &pm)) continue;
+             * no --df-origin it sits at 0 m, or at 0,0. */
+            if (form == DF_POS_XY)
+                df_radio_add_xy(g_state.probe_iface, df_cli.origin.a, df_cli.origin.b);
+            else
+                df_radio_add(g_state.probe_iface, form == DF_POS_LINE, df_cli.origin.a);
+            for (int k = 0; k < df_cli.n; k++) {
+                const char *n = df_cli.name[k];
+                const df_pos_t *p = &df_cli.pos[k];
+                char why[96];
                 if (!strcmp(n, g_state.probe_iface)) {
                     fprintf(stderr, "sloth: --df-iface %s is the sensor radio; "
                                     "left out\n", n);
                     continue;
                 }
-                int idx = df_radio_add(n, hp, pm);
+                int idx = p->form == DF_POS_XY ? df_radio_add_xy(n, p->a, p->b)
+                                               : df_radio_add(n, p->form == DF_POS_LINE, p->a);
                 if (idx < 0) {
                     fprintf(stderr, "sloth: --df-iface %s given twice; left "
                                     "out\n", n);
@@ -1620,6 +1613,10 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "sloth: --df-iface without --hop: nothing "
                                 "retunes these radios; park them on the "
                                 "sensor radio's channel\n");
+            if (form == DF_POS_XY && !df_array_has_bearing())
+                fprintf(stderr, "sloth: --df-iface: X,Y positions need three "
+                                "radios that are not on one line; no bearing "
+                                "will be given\n");
         }
         /* #144 slice 2: beside the IP handle and for the same reason —
          * binding the monitor channel needs CAP_NET_RAW, which the drop

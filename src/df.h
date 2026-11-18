@@ -1,6 +1,7 @@
 #ifndef SLOTH_DF_H
 #define SLOTH_DF_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <time.h>
 
@@ -28,6 +29,31 @@
  * transmitter far away compared with the baseline is heard equally by
  * every radio and reads `weak`: that is the answer, not a fault.
  *
+ * Radios off the line (2026-11-17, the owner's triangle of three Alfa
+ * adapters, 2 m sides). With a position in two dimensions on every
+ * radio (--df-iface NAME@X,Y: metres east, metres north) the symmetry
+ * about the line is broken, and the same power-weighted mean of the
+ * radio positions has a direction from the middle of the array:
+ * `bearing_deg`, compass degrees (0 north, 90 east) from the centroid
+ * of the radio positions. It is the direction the levels LEAN, not a
+ * fix: the weighted mean always lies inside the array, so it is never
+ * the transmitter's place and is not reported as one. The bearing is
+ * withheld (df_est_t.has_bearing 0) unless
+ *   - three or more radios have a 2D position and they are not on one
+ *     line (the array's depth across its longest side is at least
+ *     DF_MIN_ASPECT of that side);
+ *   - every positioned radio holds a fresh level, and no radio without
+ *     a position heard the transmitter;
+ *   - the quality is `lean`: the same DF_MIN_MARGIN_DB the line form
+ *     trusts, for the same reason (one antenna's own fading);
+ *   - moving any one radio's level by DF_BEARING_WANDER_DB either way
+ *     moves the direction by no more than DF_BEARING_MAX_ERR_DEG.
+ * With a 2 m baseline that means a transmitter within about three
+ * metres: at 10 m the radios differ by under 2 dB. Withheld is the
+ * common case and the answer, not a fault. What is given is one of
+ * eight compass points (DF_BEARING_STEP_DEG) with the largest of those
+ * moves beside it (`bearing_err_deg`).
+ *
  * Calibration. Two radios do not read the same level for the same
  * signal: receiver, antenna, cable and port differ (the beta-site pair
  * sat 14 dB apart on every transmitter, 2026-11-16). Left in, that
@@ -49,11 +75,33 @@
 #define DF_MIN_SAMPLES    3      /* frames from a radio before its mean is used */
 #define DF_MIN_MARGIN_DB  6.0    /* below this the radios agree: no lean */
 #define DF_CAL_MIN        8      /* transmitters two radios share before a bias is taken */
+#define DF_POS_MAX_M      1000.0 /* a position, either form, is within +/- this */
+
+/* The bearing (2D positions only; see above).
+ * STEP: eight compass points. At the 6 dB floor a 3 dB wander on one
+ * radio moves the direction 20 to 40 degrees, so a finer step would be
+ * precision the levels do not have, and a coarser one (90) would throw
+ * away the six directions three radios do tell apart.
+ * HYST: the point held changes only once the direction is this far
+ * past the edge of its sector, so a still transmitter sitting on an
+ * edge does not write a line every time its mean moves a degree.
+ * WANDER: half the margin floor, the size of error one radio's mean is
+ * taken to carry. MAX_ERR: one step; past it the direction could be
+ * two points away and is not given.
+ * ERR_STEP: bearing_err_deg is rounded up to this. */
+#define DF_BEARING_STEP_DEG     45
+#define DF_BEARING_HYST_DEG     11.25
+#define DF_BEARING_WANDER_DB    (DF_MIN_MARGIN_DB / 2.0)
+#define DF_BEARING_MAX_ERR_DEG  45.0
+#define DF_BEARING_ERR_STEP_DEG 15
+#define DF_MIN_ASPECT           0.25
 
 typedef struct {
     char   iface[16];
     int    has_pos;
     double pos_m;                /* along the baseline, metres */
+    int    has_xy;               /* placed in two dimensions instead (never with has_pos) */
+    double x_m, y_m;             /* metres east, metres north */
     uint64_t frames;             /* transmitter frames noted from it */
     int    calibrated;           /* bias_db is a measurement (radio 0: always 0) */
     double bias_db;              /* how much louder than radio 0 it reads */
@@ -78,6 +126,13 @@ typedef struct {
     df_quality_t quality;
     int     has_along;           /* every heard radio has a position, 2+ of them */
     double  along_m;
+    /* 2D positions only. The direction the levels lean, from the
+     * centroid of the radio positions; withheld unless it can mean
+     * something (see the top of this file). Never with has_along. */
+    int     has_bearing;
+    int     bearing_deg;         /* 0, 45 .. 315: compass, 0 north, 90 east */
+    int     bearing_err_deg;     /* 15, 30 or 45: how far a DF_BEARING_WANDER_DB
+                                  * error on one radio moves it, rounded up */
 } df_est_t;
 
 /* Forget every radio and transmitter. */
@@ -86,6 +141,11 @@ void df_reset(void);
 /* Register a radio; its index (0 first), or -1 when the table is full,
  * the name is empty or too long, or already registered. */
 int df_radio_add(const char *iface, int has_pos, double pos_m);
+/* The same with a position in two dimensions, metres east and north. */
+int df_radio_add_xy(const char *iface, double x_m, double y_m);
+/* Whether the registered radios can give a bearing at all: three or
+ * more hold a 2D position and those are not on one line. */
+int df_array_has_bearing(void);
 int df_radio_count(void);
 int df_radio_get(int i, df_radio_t *out);
 int df_radio_find(const char *iface);
@@ -127,5 +187,40 @@ const char *df_quality_name(df_quality_t q);
  * name is empty, 16 bytes or longer, or the metres are not a finite
  * number within +/-1000. */
 int df_parse_spec(const char *spec, char *iface, int iface_sz, int *has_pos, double *pos_m);
+
+/* The command line (--df-iface, --df-origin), kept apart from main()
+ * so every refusal is a tested line. A position is one number (METRES
+ * along a straight baseline) or two (X,Y: metres east, metres north);
+ * one command line uses one form. */
+typedef enum { DF_POS_NONE = 0, DF_POS_LINE, DF_POS_XY } df_pos_form_t;
+
+typedef struct {
+    df_pos_form_t form;
+    double a, b;                 /* LINE: a. XY: a east, b north. */
+} df_pos_t;
+
+typedef struct {
+    int      n;                              /* --df-iface given */
+    char     name[DF_MAX_RADIOS - 1][16];
+    df_pos_t pos[DF_MAX_RADIOS - 1];
+    int      origin_set;                     /* --df-origin given */
+    df_pos_t origin;
+} df_cli_t;
+
+/* "NAME", "NAME@METRES" or "NAME@X,Y". 1 and the parts; 0 on what
+ * df_parse_spec() refuses, a missing or extra number, or one that is
+ * not finite and within +/-DF_POS_MAX_M. */
+int df_parse_place(const char *spec, char *iface, int iface_sz, df_pos_t *pos);
+
+/* One --df-iface / the --df-origin argument. 1, or 0 with the line to
+ * print in err (no newline). */
+int df_cli_add(df_cli_t *c, const char *spec, char *err, size_t errsz);
+int df_cli_origin(df_cli_t *c, const char *arg, char *err, size_t errsz);
+/* The whole of it, once argv is read: 0 with the line when positions
+ * of both forms were given. */
+int df_cli_check(const df_cli_t *c, char *err, size_t errsz);
+/* DF_POS_XY, DF_POS_LINE or DF_POS_NONE: the form the positions given
+ * are in (checked: never both). */
+df_pos_form_t df_cli_form(const df_cli_t *c);
 
 #endif
