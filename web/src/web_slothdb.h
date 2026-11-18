@@ -460,6 +460,19 @@ int  web_sdb_ap_ssids(web_sdb_conn_t *c, const char *bssid, int max,
  * (the channel mix's AP names: the octets the TUI colours by), into out
  * (WEB_SDB_TEXT_MAX + 1). 1, 0 none (or no such table), -1. */
 int  web_sdb_ap_ssid(web_sdb_conn_t *c, const char *bssid, char *out);
+/* The channel each Wi-Fi name was last heard on (2026-11-18, the page's
+ * channel colour on text, web/ui/chan.js), newest first, at most max:
+ * a = the name as stored, n2 = the channel, last_seen its time.
+ * WEB_LASTCH_AP an AP's own (beacon_aps, by BSSID); WEB_LASTCH_SSID an
+ * SSID's most recently heard AP's (beacon_aps, the newest row naming
+ * it); WEB_LASTCH_STA a station's latest of its associations (assocs,
+ * the AP's channel then) and its probe requests (probe_clients, the
+ * channel its latest probe was heard on). A row with no channel (0 or
+ * NULL) is not read. All three the monitor radio's. The count, 0 when
+ * the file has no such table, -1. */
+enum { WEB_LASTCH_AP = 0, WEB_LASTCH_SSID, WEB_LASTCH_STA };
+int  web_sdb_last_channels(web_sdb_conn_t *c, int what, int max,
+                           web_sdb_item_fn fn, void *ctx);
 /* DEAUTH_FLOOD episodes against bssid overlapping [from, to): n2 = sev,
  * n3 = count. Matched on alerts.key (predicate-only, a canonical MAC
  * bound) and the type; oldest first. */

@@ -410,6 +410,7 @@ static void test_fleet_page(void) {
     WT_HAS(mod,
               "  function devLink(kind, r) {\n"
               "    var b = H.el(\"button\", \"fleet-dev\", r.key);\n"
+              "    if (kind !== \"ble\" && typeof r.addr === \"string\") SlothChan.mark(b, \"mac\", r.addr);\n"
               "    b.type = \"button\";\n"
               "    b.title = \"open \" + r.addr;\n"
               "    b.addEventListener(\"click\", function () {\n"

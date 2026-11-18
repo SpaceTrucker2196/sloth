@@ -123,18 +123,36 @@ static rgb_t from_hsl(double h, double s, double l) {
 
 /* The light theme's rule for a data colour: keep the hue and the
  * saturation, and lower the HSL lightness in steps of 0.005 until the
- * colour reads at 4.5:1 (WCAG AA, body text) on both the light --bg and
- * the light --panel. A colour that already does is kept as it is. */
+ * colour reads at 4.5:1 (WCAG AA, body text) on every ground it is
+ * given: for text in a list, the light --bg, --panel and --panel-2 and
+ * their greenbar stripes (light_grounds(); since 2026-11-18, the owner
+ * keeping the stripe at 8%). A colour that already does is kept as it
+ * is. */
 #define LIGHT_MIN 4.5
-static rgb_t light_variant(rgb_t c, rgb_t bg, rgb_t panel) {
+static rgb_t light_variant(rgb_t c, const rgb_t *g, int ng) {
     double h, s, l;
     to_hsl(c, &h, &s, &l);
     rgb_t o = c;
-    while ((contrast(o, bg) < LIGHT_MIN || contrast(o, panel) < LIGHT_MIN) && l > 0) {
+    for (;;) {
+        int ok = 1;
+        for (int k = 0; k < ng; k++) if (contrast(o, g[k]) < LIGHT_MIN) ok = 0;
+        if (ok || l <= 0) break;
         l -= 0.005;
         if (l < 0) l = 0;
         o = from_hsl(h, s, l);
     }
+    return o;
+}
+
+/* The greenbar's alternate row (web/ui/greenbar.css): the surface 8% of
+ * the way to white in the dark theme, to black in the light one (the
+ * cream has nowhere lighter to go), as color-mix() in sRGB does. */
+#define GB_STEP 0.08
+static rgb_t stripe(rgb_t s, int light) {
+    double t = light ? 0 : 255;
+    rgb_t o = { (int)lround(s.r * (1 - GB_STEP) + t * GB_STEP),
+                (int)lround(s.g * (1 - GB_STEP) + t * GB_STEP),
+                (int)lround(s.b * (1 - GB_STEP) + t * GB_STEP) };
     return o;
 }
 
@@ -687,15 +705,24 @@ static int rw_apart(void) {
  * would pull the pale and the deep step of one hue onto one colour.
  * Each theme's values were picked by a search over the CIELCh grid
  * maximising the floors below, then fixed here; the checks are what
- * holds them, not the search.
+ * holds them, not the search. The second search (2026-11-18, the text
+ * floor) started from the first set and paid for each step away from
+ * it, so the colours moved as little as the floors needed (CIEDE2000
+ * at most 6.4 in the dark theme, 5.4 in the light).
  *
- * A channel is drawn as a chip: its colour the fill, its number on it
- * in --ch-ink (the dark theme's --bg, the light theme's --panel), on a
- * row that may be the greenbar's alternate (web/ui/greenbar.css: the
- * surface GB_STEP towards white in the dark theme, towards black in the
- * light, the cream having nowhere lighter to go). So: */
-#define CH_GFX_MIN 3.0     /* fill on --bg, --panel and both stripes, both
-                            * themes: a graphic (WCAG 1.4.11) */
+ * One colour works twice (owner 2026-11-18: "use that palette
+ * throughout the ui for all wifi devices and ssids and mac addresses
+ * ... try to find a solution that works for both"). As a chip: the
+ * colour the fill, the channel's number on it in --ch-ink (the dark
+ * theme's --bg, the light theme's --panel). As text: an SSID or a MAC
+ * address written in its channel's colour (chan.js SlothChan.text()).
+ * Either sits on the page's --bg, a panel's --panel or a card's
+ * --panel-2, on a row that may be the greenbar's alternate (stripe()).
+ * Text is the stricter, so the floor on all six grounds is text's: */
+#define CH_TEXT_MIN 4.5    /* on --bg, --panel, --panel-2 and their
+                            * stripes, both themes: body text (WCAG
+                            * 1.4.3); the fill's 3:1 (1.4.11) follows */
+#define CH_GFX_MIN 3.0     /* the fill, reported beside it */
 #define CH_INK_MIN 4.5     /* the number on its chip: body text (WCAG 1.4.3) */
 /* CIEDE2000, the smaller of the two themes' distances. Two channels
  * next to each other in a sorted list (2.4 GHz 1-14; 5 GHz 36 to 177 in
@@ -704,44 +731,44 @@ static int rw_apart(void) {
  * are made of, at 25 from each other, above every other floor here. A
  * band's every pair: 2.4 GHz's 14 at 7 and 6 GHz's 4 at 8, which keeps
  * any two from reading as one; 5 GHz's 28 at 4 only, because 28 warm
- * hues at 3:1 on cream (L* 27 to 48) cannot all stand 7 apart: the
- * number on the chip tells two such apart, and adjacency is what a list
- * needs. Between families (2.4 vs 5 vs 6) and from --muted (a channel in
- * no table) at 10, so a band is never read for another. */
+ * hues dark enough for text on the cream's stripe (L* 25 to 41) cannot
+ * all stand 7 apart: the number on the chip tells two such apart, and
+ * adjacency is what a list needs. Between families (2.4 vs 5 vs 6) and
+ * from --muted (a channel in no table) at 10, so a band is never read
+ * for another. */
 #define CH_ADJ_MIN 20.0
 #define CH_TRIO_MIN 25.0
 #define CH_PAIR24_MIN 7.0
 #define CH_PAIR5_MIN 4.0
 #define CH_PAIR6_MIN 8.0
 #define CH_FAMILY_MIN 10.0
-#define GB_STEP 0.08       /* greenbar.css: color-mix(in srgb, <surface> 92%, ...) */
 
 typedef struct { int ch; const char *band, *dark, *light; } chan_t;
 static const chan_t CHAN[] = {
-    { 1, "2.4", "#71f5ff", "#00777e" },   { 2, "2.4", "#8efc70", "#117d00" },
-    { 3, "2.4", "#99e1ff", "#00708c" },   { 4, "2.4", "#00dd74", "#006c35" },
-    { 5, "2.4", "#94b5ff", "#005aa7" },   { 6, "2.4", "#29a112", "#085500" },
-    { 7, "2.4", "#cde5ff", "#0071a7" },   { 8, "2.4", "#008945", "#004b23" },
-    { 9, "2.4", "#007fb4", "#004463" },   { 10, "2.4", "#3bffc1", "#007a59" },
-    { 11, "2.4", "#5b74ff", "#003aa5" },  { 12, "2.4", "#00927a", "#004e40" },
-    { 13, "2.4", "#d6d3ff", "#445bd1" },  { 14, "2.4", "#00bfbd", "#005f5e" },
-    { 36, "5", "#de540d", "#7b2900" },    { 40, "5", "#d9b256", "#846922" },
-    { 44, "5", "#ffa9b7", "#bb004e" },    { 48, "5", "#a27c00", "#574100" },
-    { 52, "5", "#ffd9dc", "#cf1b51" },    { 56, "5", "#bb8732", "#7c5614" },
-    { 60, "5", "#ff9a9e", "#b40038" },    { 64, "5", "#db9100", "#704800" },
-    { 100, "5", "#ff7291", "#a30043" },   { 104, "5", "#d0913a", "#906221" },
-    { 108, "5", "#ffc8df", "#c2157c" },   { 112, "5", "#ffd086", "#875f00" },
-    { 116, "5", "#f17ab1", "#982a63" },   { 120, "5", "#ffaf77", "#954800" },
-    { 124, "5", "#ff5798", "#99004e" },   { 128, "5", "#a36b00", "#5a3900" },
-    { 132, "5", "#eb0458", "#84002e" },   { 136, "5", "#f1c458", "#6f5501" },
-    { 140, "5", "#ff7764", "#a50513" },   { 144, "5", "#ee35a5", "#a63c78" },
-    { 149, "5", "#d17400", "#6f3b00" },   { 153, "5", "#de6593", "#b3376b" },
-    { 157, "5", "#ff9d71", "#9f3600" },   { 161, "5", "#e50085", "#810048" },
-    { 165, "5", "#ff7a24", "#893800" },   { 169, "5", "#ff97b7", "#b0005c" },
-    { 173, "5", "#ffc07e", "#8e5500" },   { 177, "5", "#ff69c2", "#9c006c" },
+    { 1, "2.4", "#71f5ff", "#046c73" },   { 2, "2.4", "#8bfa6e", "#087203" },
+    { 3, "2.4", "#99e0fe", "#086a85" },   { 4, "2.4", "#00dd74", "#086c37" },
+    { 5, "2.4", "#92b4fd", "#07539d" },   { 6, "2.4", "#25a011", "#055500" },
+    { 7, "2.4", "#cee5fe", "#00679b" },   { 8, "2.4", "#1a9950", "#004a23" },
+    { 9, "2.4", "#398dba", "#004361" },   { 10, "2.4", "#39ffc0", "#066f58" },
+    { 11, "2.4", "#5e7afe", "#073ba4" },  { 12, "2.4", "#13967e", "#044f40" },
+    { 13, "2.4", "#d6d6ff", "#3c57cc" },  { 14, "2.4", "#14bebc", "#015356" },
+    { 36, "5", "#e25a18", "#7d2500" },    { 40, "5", "#d9b256", "#765e23" },
+    { 44, "5", "#ffa9b7", "#bb004e" },    { 48, "5", "#a68010", "#574102" },
+    { 52, "5", "#ffd8dc", "#b1324a" },    { 56, "5", "#bb8732", "#705221" },
+    { 60, "5", "#fe999d", "#b40136" },    { 64, "5", "#db9100", "#704800" },
+    { 100, "5", "#ff7290", "#a10240" },   { 104, "5", "#d1923d", "#835926" },
+    { 108, "5", "#ffc8df", "#bc0478" },   { 112, "5", "#fed086", "#815a02" },
+    { 116, "5", "#f07bb1", "#982a63" },   { 120, "5", "#ffaf77", "#954801" },
+    { 124, "5", "#fe5999", "#99054f" },   { 128, "5", "#b77804", "#5a3900" },
+    { 132, "5", "#fa3167", "#83042e" },   { 136, "5", "#f1c458", "#6d5300" },
+    { 140, "5", "#fe7764", "#a60213" },   { 144, "5", "#ef34a4", "#a13b78" },
+    { 149, "5", "#d07405", "#6f3b01" },   { 153, "5", "#de6593", "#b02e67" },
+    { 157, "5", "#ff9d71", "#9f3702" },   { 161, "5", "#f03a8c", "#800549" },
+    { 165, "5", "#fd7b29", "#883901" },   { 169, "5", "#ff96b6", "#9e2f54" },
+    { 173, "5", "#ffc07c", "#8d5501" },   { 177, "5", "#fe69c1", "#9c016d" },
     /* 6 GHz: ch is the step, not a channel number */
-    { 0, "6", "#975ec1", "#592583" },     { 1, "6", "#bd94b7", "#694465" },
-    { 2, "6", "#a199d8", "#4e4a82" },     { 3, "6", "#d7b1ff", "#7248a9" },
+    { 0, "6", "#a670c1", "#552c78" },     { 1, "6", "#bc94b7", "#694465" },
+    { 2, "6", "#a198d9", "#4f4a7c" },     { 3, "6", "#d7b0ff", "#744d9d" },
 };
 #define NCHAN ((int)(sizeof(CHAN) / sizeof(CHAN[0])))
 
@@ -759,26 +786,23 @@ static rgb_t chan_rgb(int i, int light) {
     return c;
 }
 
-/* The greenbar's alternate row: the surface GB_STEP of the way to
- * white (dark theme) or black (light), as color-mix() in sRGB does. */
-static rgb_t stripe(rgb_t s, int light) {
-    double t = light ? 0 : 255;
-    rgb_t o = { (int)lround(s.r * (1 - GB_STEP) + t * GB_STEP),
-                (int)lround(s.g * (1 - GB_STEP) + t * GB_STEP),
-                (int)lround(s.b * (1 - GB_STEP) + t * GB_STEP) };
-    return o;
-}
-
 /* The chip's number ink: the darkest ground in the dark theme, the
  * lightest in the light. Emitted as --ch-ink, var() of the same. */
 static rgb_t chan_ink(int light) { return light ? need("--panel", 1) : need("--bg", 0); }
 
-/* The four grounds a channel colour is drawn on, per theme. */
-static void chan_grounds(int light, rgb_t g[4]) {
+/* The six grounds a list's text is drawn on, per theme: --bg, --panel,
+ * --panel-2 and each one's greenbar stripe. A channel colour, and in
+ * the light theme every data colour (light_variant()), reads at 4.5:1
+ * on all six. */
+#define NGROUND 6
+static const char *const GROUND_NAME[NGROUND] = {
+    "--bg", "--panel", "--panel-2", "the --bg stripe", "the --panel stripe", "the --panel-2 stripe",
+};
+static void list_grounds(int light, rgb_t g[NGROUND]) {
     g[0] = need("--bg", light);
     g[1] = need("--panel", light);
-    g[2] = stripe(g[0], light);
-    g[3] = stripe(g[1], light);
+    g[2] = need("--panel-2", light);
+    for (int k = 0; k < 3; k++) g[k + 3] = stripe(g[k], light);
 }
 
 static double chan_de(int i, int j) {
@@ -787,7 +811,7 @@ static double chan_de(int i, int j) {
 }
 
 /* The measured floors, kept for the contrast report. */
-static struct { double gfx, ink, adj, trio, pair24, pair5, pair6, fam; } g_chm;
+static struct { double txt, ink, adj, trio, pair24, pair5, pair6, fam; } g_chm;
 
 static int chan_bad(double v, double lim, const char *what, int i, int j) {
     if (v >= lim) return 0;
@@ -800,7 +824,7 @@ static int chan_bad(double v, double lim, const char *what, int i, int j) {
 
 static int chan_check(void) {
     int bad = 0;
-    g_chm.gfx = g_chm.ink = g_chm.adj = g_chm.trio = 1e9;
+    g_chm.txt = g_chm.ink = g_chm.adj = g_chm.trio = 1e9;
     g_chm.pair24 = g_chm.pair5 = g_chm.pair6 = g_chm.fam = 1e9;
     for (int i = 0; i < NCHAN; i++) {
         if (strcmp(CHAN[i].band, "2.4") && strcmp(CHAN[i].band, "5") && strcmp(CHAN[i].band, "6")) {
@@ -823,15 +847,14 @@ static int chan_check(void) {
         char n[16];
         chan_name(i, n);
         for (int t = 0; t < 2; t++) {
-            rgb_t c = chan_rgb(i, t), g[4];
-            chan_grounds(t, g);
-            static const char *const GN[4] = { "--bg", "--panel", "the --bg stripe", "the --panel stripe" };
-            for (int k = 0; k < 4; k++) {
+            rgb_t c = chan_rgb(i, t), g[NGROUND];
+            list_grounds(t, g);
+            for (int k = 0; k < NGROUND; k++) {
                 double r = contrast(c, g[k]);
-                if (r < g_chm.gfx) g_chm.gfx = r;
-                if (r < CH_GFX_MIN) {
-                    fprintf(stderr, "palette: %s is %.2f:1 on %s (%s), under %.0f:1\n", n, r, GN[k],
-                            t ? "light" : "dark", CH_GFX_MIN);
+                if (r < g_chm.txt) g_chm.txt = r;
+                if (r < CH_TEXT_MIN || r < CH_GFX_MIN) {
+                    fprintf(stderr, "palette: %s is %.2f:1 on %s (%s), under %.1f:1 for text\n", n, r,
+                            GROUND_NAME[k], t ? "light" : "dark", CH_TEXT_MIN);
                     bad = 1;
                 }
             }
@@ -886,12 +909,26 @@ static int chan_check(void) {
     return bad ? -1 : 0;
 }
 
+/* The chrome's text tokens (theme.css's, light theme): each one's
+ * stripe-row value, emitted as --gb-<name> and set on a light stripe
+ * row by greenbar.css, so that text in a list reads at 4.5:1 on its
+ * stripe without theme.css changing (the same rule, light_variant(),
+ * on the six list grounds; a token that already reads there keeps its
+ * value). */
+#define NGBTXT 6
+static const char *const GB_TXT[NGBTXT] = { "--ink", "--muted", "--brass", "--phosphor-hi",
+                                            "--phosphor-mid", "--hover" };
+static rgb_t g_gb_txt[NGBTXT];
+
 static int compute(void) {
     rgb_t lbg = need("--bg", 1), lpanel = need("--panel", 1), dbg = need("--bg", 0);
+    rgb_t lg[NGROUND];
+    list_grounds(1, lg);
     for (int i = 0; i < g_ntok; i++) {
         g_data_dark[i] = xterm_rgb(g_tok[i].xterm);
-        g_data_light[i] = light_variant(g_data_dark[i], lbg, lpanel);
+        g_data_light[i] = light_variant(g_data_dark[i], lg, NGROUND);
     }
+    for (int i = 0; i < NGBTXT; i++) g_gb_txt[i] = light_variant(need(GB_TXT[i], 1), lg, NGROUND);
     g_nchart = 0;
     for (int i = 0; i < g_dark.n && g_nchart < 16; i++) {
         if (strncmp(g_dark.d[i].name, "--f-", 4)) continue;
@@ -907,14 +944,18 @@ static int compute(void) {
         if (!strncmp(g_dark.d[i].val, "var(", 4)) {
             if (resolve(g_dark.d[i].name, 1, &g_chart_light[g_nchart], 0) != 0) return -1;
         } else {
-            g_chart_light[g_nchart] = light_variant(c, lbg, lpanel);
+            /* chart marks, on the plain grounds (no list stripes) */
+            rgb_t cg[2] = { lbg, lpanel };
+            g_chart_light[g_nchart] = light_variant(c, cg, 2);
         }
         g_chart[g_nchart++] = i;
     }
     mon_pairs();
     for (int i = 0; i < NMON; i++) g_mon[i][0] = xterm_rgb(g_mon_x[i]);
     g_mon[0][1] = light_ground(g_mon[0][0], dbg, lbg);
-    for (int i = 1; i < NMON; i++) g_mon[i][1] = light_variant(g_mon[i][0], g_mon[0][1], g_mon[0][1]);
+    /* a monitor row's text: on its ground and on its own stripe */
+    rgb_t mg[2] = { g_mon[0][1], stripe(g_mon[0][1], 1) };
+    for (int i = 1; i < NMON; i++) g_mon[i][1] = light_variant(g_mon[i][0], mg, 2);
     if (chart_apart() != 0) return -1;
     if (sun_apart() != 0) return -1;
     if (rw_apart() != 0) return -1;
@@ -933,7 +974,8 @@ static int emit_css(FILE *o) {
         " * the standard formula. Not committed; edit the TUI, not this.\n"
         " * Dark: the TUI's colours byte for byte. Light: the same hue and\n"
         " * saturation, the HSL lightness lowered in 0.005 steps until 4.5:1 on\n"
-        " * both the light --bg and --panel (web/README.md, Design). */\n"
+        " * the light --bg, --panel and --panel-2 and their greenbar stripes\n"
+        " * (web/README.md, Design). */\n"
         ":root {\n");
     for (int i = 0; i < g_ntok; i++) {
         hex(g_data_dark[i], h);
@@ -945,6 +987,10 @@ static int emit_css(FILE *o) {
         hex(g_mon[i][0], h);
         fprintf(o, "  %s: %s; /* xterm %d, %s */\n", MON_NAME[i], h, g_mon_x[i], MON_WHY[i]);
     }
+    /* greenbar.css sets --<name>: var(--gb-<name>) on a stripe row; in
+     * the dark theme the chrome's text reads there as it is */
+    for (int i = 0; i < NGBTXT; i++)
+        fprintf(o, "  --gb-%s: var(%s); /* %s on a stripe row */\n", GB_TXT[i] + 2, GB_TXT[i], GB_TXT[i]);
     char cn[16];
     fprintf(o, "  /* the WiFi channel palette (palette.c CHAN[], owner 2026-11-18) */\n"
                "  --ch-ink: var(--bg); /* a chip's number */\n");
@@ -975,6 +1021,12 @@ static int emit_css(FILE *o) {
         hex(g_mon[i][0], h2);
         fprintf(o, "  %s: %s; /* from %s, %.1f:1 on --mon-bg */\n", MON_NAME[i], h, h2,
                 contrast(g_mon[i][1], g_mon[0][1]));
+    }
+    /* greenbar.css sets these on a light stripe row (compute()) */
+    for (int i = 0; i < NGBTXT; i++) {
+        hex(g_gb_txt[i], h);
+        hex(need(GB_TXT[i], 1), h2);
+        fprintf(o, "  --gb-%s: %s; /* %s on a stripe row, from %s */\n", GB_TXT[i] + 2, h, GB_TXT[i], h2);
     }
     fprintf(o, "  --ch-ink: var(--panel);\n");
     for (int i = 0; i < NCHAN; i++) {
@@ -1185,54 +1237,56 @@ static int emit_contrast(void) {
             if (d0 < 30 || d1 < 30)
                 printf("| `%s`, `%s` | %.1f | %.1f |\n", RW_NAME[i], RW_NAME[j], d0, d1);
         }
-    printf("\nThe WiFi channel palette (2026-11-18): each fill on --bg, --panel and their "
-           "greenbar stripes (the least of the four; `*` under %.0f:1), and --ch-ink on it "
-           "(`*` under %.1f:1):\n\n"
+    printf("\nThe WiFi channel palette (2026-11-18), one colour as text and as a chip's fill: "
+           "each on --bg, --panel, --panel-2 and their greenbar stripes (the least of the six; "
+           "`*` under %.1f:1, text; a fill wants %.0f:1), and --ch-ink on it (`*` under %.1f:1):\n\n"
            "| token | dark | least ground | ink | light | least ground | ink |\n"
-           "|---|---|---|---|---|---|---|\n", CH_GFX_MIN, CH_INK_MIN);
+           "|---|---|---|---|---|---|---|\n", CH_TEXT_MIN, CH_GFX_MIN, CH_INK_MIN);
     for (int i = 0; i < NCHAN; i++) {
         char n[16];
         double r[2][2];
         chan_name(i, n);
         for (int t = 0; t < 2; t++) {
-            rgb_t g[4], c = chan_rgb(i, t);
-            chan_grounds(t, g);
+            rgb_t g[NGROUND], c = chan_rgb(i, t);
+            list_grounds(t, g);
             r[t][0] = 99;
-            for (int k = 0; k < 4; k++) if (contrast(c, g[k]) < r[t][0]) r[t][0] = contrast(c, g[k]);
+            for (int k = 0; k < NGROUND; k++) if (contrast(c, g[k]) < r[t][0]) r[t][0] = contrast(c, g[k]);
             r[t][1] = contrast(c, chan_ink(t));
         }
         printf("| `%s` | `%s` | %.2f%s | %.2f%s | `%s` | %.2f%s | %.2f%s |\n", n,
-               CHAN[i].dark, r[0][0], r[0][0] < CH_GFX_MIN ? " *" : "", r[0][1], r[0][1] < CH_INK_MIN ? " *" : "",
-               CHAN[i].light, r[1][0], r[1][0] < CH_GFX_MIN ? " *" : "", r[1][1], r[1][1] < CH_INK_MIN ? " *" : "");
+               CHAN[i].dark, r[0][0], r[0][0] < CH_TEXT_MIN ? " *" : "", r[0][1], r[0][1] < CH_INK_MIN ? " *" : "",
+               CHAN[i].light, r[1][0], r[1][0] < CH_TEXT_MIN ? " *" : "", r[1][1], r[1][1] < CH_INK_MIN ? " *" : "");
     }
     printf("\nThe floors (CIEDE2000, the smaller theme's), enforced and measured:\n\n"
            "| floor | enforced | measured |\n|---|---|---|\n"
-           "| fill on any ground | %.1f:1 | %.2f:1 |\n| --ch-ink on a fill | %.1f:1 | %.2f:1 |\n"
+           "| text (and fill) on any of the six grounds | %.1f:1 | %.2f:1 |\n"
+           "| --ch-ink on a fill | %.1f:1 | %.2f:1 |\n"
            "| sorted neighbours, 2.4 and 5 GHz | %.0f | %.1f |\n| 1, 6 and 11 | %.0f | %.1f |\n"
            "| any two 2.4 GHz | %.0f | %.1f |\n| any two 5 GHz | %.0f | %.1f |\n"
            "| any two 6 GHz steps | %.0f | %.1f |\n| two bands, or --muted | %.0f | %.1f |\n",
-           CH_GFX_MIN, g_chm.gfx, CH_INK_MIN, g_chm.ink, CH_ADJ_MIN, g_chm.adj, CH_TRIO_MIN, g_chm.trio,
+           CH_TEXT_MIN, g_chm.txt, CH_INK_MIN, g_chm.ink, CH_ADJ_MIN, g_chm.adj, CH_TRIO_MIN, g_chm.trio,
            CH_PAIR24_MIN, g_chm.pair24, CH_PAIR5_MIN, g_chm.pair5, CH_PAIR6_MIN, g_chm.pair6,
            CH_FAMILY_MIN, g_chm.fam);
     /* The greenbar's cost to text: each text token that reads at 4.5:1
-     * on a ground and under it on that ground's stripe. Reported, not
-     * enforced: the dark theme's data colours are the TUI's byte for
-     * byte, and the stripe is the owner's 8%. */
+     * on a ground and under it on that ground's stripe, as a stripe row
+     * draws it (the light theme's chrome text as its --gb-* value).
+     * Reported, not enforced: the dark theme's data colours are the
+     * TUI's byte for byte (ruling 2026-10-23), and the stripe is the
+     * owner's 8%. The light theme's are derived for the stripes
+     * (light_variant()), so a light row here is a regression. */
     printf("\nText under 4.5:1 on a greenbar stripe that reads at 4.5:1 on its ground:\n\n"
            "| token | theme | ground | on it | on its stripe |\n|---|---|---|---|---|\n");
-    static const char *const TXT[] = { "--ink", "--muted", "--brass", "--phosphor-hi", "--phosphor-mid",
-                                       "--hover" };
-    int nt = (int)(sizeof(TXT) / sizeof(TXT[0])), shown = 0;
-    for (int i = 0; i < nt + g_ntok; i++) {
-        const char *n = i < nt ? TXT[i] : g_tok[i - nt].name;
+    int shown = 0;
+    for (int i = 0; i < NGBTXT + g_ntok; i++) {
+        const char *n = i < NGBTXT ? GB_TXT[i] : g_tok[i - NGBTXT].name;
         for (int t = 0; t < 2; t++) {
-            rgb_t c = need(n, t), g[4];
-            chan_grounds(t, g);
-            for (int k = 0; k < 2; k++) {
-                double r0 = contrast(c, g[k]), r1 = contrast(c, g[k + 2]);
+            rgb_t c = need(n, t), cs = t && i < NGBTXT ? g_gb_txt[i] : c, g[NGROUND];
+            list_grounds(t, g);
+            for (int k = 0; k < 3; k++) {
+                double r0 = contrast(c, g[k]), r1 = contrast(cs, g[k + 3]);
                 if (r0 >= 4.5 && r1 < 4.5) {
                     printf("| `%s` | %s | `%s` | %.2f | %.2f |\n", n, t ? "light" : "dark",
-                           k ? "--panel" : "--bg", r0, r1);
+                           GROUND_NAME[k], r0, r1);
                     shown++;
                 }
             }

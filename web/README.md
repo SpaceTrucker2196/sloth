@@ -561,6 +561,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/wifi/chain?from=&to=&cols=&bssid=` | `200` JSON, G8's attack chain per BSSID: the deauth timeline's rows (or the one `bssid`) with the EVIL_TWIN, KARMA_AP and association stages sloth.db holds against each and the links the stream's `twin_episode` made (#171 V4, below); out of scope under Local; `400` for a parameter that does not pass (`bad_bssid`); `503` with no time series |
    | `GET /api/wifi/aps?sort=&dir=&limit=&offset=&fleet=` | `200` JSON, a page of sloth.db's beacon_aps, with the peers' rows unless `fleet=0` ([Fleet](#fleet)); `400`; `503` with no `--sloth-db` or sloth.db unreadable |
    | `GET /api/wifi/local?limit=` | `200` JSON, the managed Wi-Fi card's own scan (sloth.db `wifi_aps`, newest first, at most 100) and link (`wifi_stas`, at most 32); out of scope under Monitor; `400`; `503` as above |
+   | `GET /api/wifi/lastch` | `200` JSON, the channel each Wi-Fi name was last heard on, for the page's channel colour on text (2026-11-18): `aps` (BSSID: its `beacon_aps` channel), `ssids` (display form: its newest AP's), `stas` (MAC: its latest `assocs` or `probe_clients` channel), each newest first, at most 1,024 and a third of the room, `cut` when the oldest were left out; no parameters (`400` on any); out of scope under Local; `503` as above |
    | `GET /api/wifi/ssid?ssid=` | `200` JSON, one SSID's detail ([An SSID's detail](#an-ssids-detail)): its access points now and once, the stations associated to it and asking for it, its 24 h presence, its KARMA and twin findings and the alerts naming it; `ssid` is the base64url of its octets, or `-` for the hidden (empty) SSID; out of scope under Local; `400` `missing_ssid`, `bad_ssid`; `503` as above |
    | `GET /api/probes/clients?days=&sort=&limit=&offset=&fleet=`, `/api/probes/ssids?days=&sort=&limit=&offset=&fleet=` | `200` JSON, the Probes tab ([Probes](#probes)): the stations heard probing with the networks each asked for by name, and the networks asked for with how many stations ask; `days` 0 (all sloth.db retains) or 1..400, default 30; `limit` 1..100; each with `total` beside `count`; with the peers' rows unless `fleet=0` ([Fleet](#fleet)); out of scope under Local; `400` `bad_days`, `bad_sort`, `bad_limit`, `bad_offset`; `503` as above |
    | `GET /api/probes/shared?mac=&days=&min=`, `/api/probes/groups?days=&min=` | `200` JSON, the stations probing for the same networks as `mac`, ranked by the similarity, and the groups of stations linked by shared uncommon networks; `min` 1..8, default 2; out of scope under Local; `400` `missing_mac`, `bad_mac`, `bad_min`, `bad_days`; `503` as above |
@@ -7217,8 +7218,8 @@ channels, emitters, chains, clients.
   since when (`"links_since"`, the first one kept). No slothweb.db
   step.
 - **Where G8 goes.** On the WiFi view's chains panel (§6.3): one G8 per
-  bssid with more than one stage, its address in its hash colour above
-  it, and a bssid with one stage a lane of the G7 rug under it (§5:
+  bssid with more than one stage, its address above it (in its
+  channel's colour since 2026-11-18, `SlothChan.mark()`), and a bssid with one stage a lane of the G7 rug under it (§5:
   "a BSSID with one stage gets a G7 rug, not a G8"); with no chain the
   block collapses to its caption (`no bssid with more than one stage
   in the window`, F16). A BSSID with no deauth key in the window is a
@@ -7378,10 +7379,10 @@ embedder takes as `@include`s. `app.js` ports the TUI's choices:
 | an IP address, everywhere one appears (tables, cards, chord labels and nodes, the drawer, Lookup, alerts, flows, records) | `tui_ip_addstr()`: `ip_color_index()` (djb2 over the bytes, mod 8) into `tui_ip_fg` | `ipColorIndex()` over the UTF-8 bytes into `--k-0`..`--k-7` |
 | an address an alert names | `tui_alert_hot_check()`, before anything else: for `ALERT_HOT_TTL_S` (3600 s) after the alert was last seen, its `match_ip` is `CP_ALERT_HOT_LOW` / `WARN` / `CRIT` by the alert's severity, bold from WARN; promotion only, 256 slots, the oldest replaced | `hotSet()` from each alert's `match_ip` (`/api/live`, the drawer's alerts), `hotCheck()` before the hash in `ipSpan()` and the chord's nodes: `--hot-0`..`--hot-2`, bold from WARN |
 | an address seen in two or more sources | bold (`ip_index_is_cross_panel()`: more than one `IP_SRC_*` bit) | bold, by the same bits: the page keeps one index for its life (the TUI rebuilds its per frame), at the TUI's 512 addresses, and an address that turns cross-panel turns bold where it is already drawn. An alert counts toward `IP_SRC_ALERT` with its `match_ip` alone, as `ip_index_build()` adds it; the other addresses in an alert's text are coloured and counted toward no source |
-| an SSID | `tui_ssid_addstr()`: the same hash and palette | `ssidSpan()` |
+| an SSID | `tui_ssid_addstr()`: the same hash and palette | as text, its channel's colour since 2026-11-18 (owner; `ssidSpan()` through `SlothChan.mark()`, the Design section's "WiFi channel colours and the greenbar"); the hash (`ssid_k`) on the marks keyed by SSID, the waterfall's stacks |
 | a host name, a device name | `tui_brand_addstr()`: the earliest match of any brand, ASCII case-insensitive, a tie to the first entry; Google's letters in the logo's sequence | `brandRuns()` over the generated table into `--br-0`..`--br-15`, the rest in the row's pair |
 | a record's info text | `tui_info_color()`: the hash into `tui_info_fg`, `CP_NORMAL` when empty | `infoClass()`, `--info-0`..`--info-7`, with every address in it in its own colour |
-| MACs, labels, stamps | `CP_DIM` | `--tui-dim` |
+| MACs, labels, stamps | `CP_DIM` | `--tui-dim`; a Wi-Fi MAC its channel's colour since 2026-11-18 (`SlothChan.mark()`) |
 | values, names | `CP_NORMAL`, `CP_BRIGHT` | `--tui-normal`, `--tui-bright` |
 | severity | `tui_heat(0.3 / 0.5 / 1.0)` for LOW / WARN / CRIT | `--sev-*` on `--heat-1`..`--heat-3` |
 | heat | `tui_heat()`'s 0.15 / 0.40 / 0.70 | `heatClass()`, `heat()` |
@@ -7481,55 +7482,55 @@ them. A closed anomaly card is marked by a dashed edge and the word
 | `--hover` | hover text, live pill | `#6bffcc` | 16.49 | 15.76 | `#06563f` | 7.65 | 8.57 |
 | `--data` | canvas accent, no text | `#4cebff` | 14.37 | 13.73 | `#1a7ea1` | 4.06 * | 4.55 |
 | `--signal` | selection edge, no text | `#ff8c26` | 8.87 | 8.47 | `#c25f0a` | 3.74 * | 4.19 * |
-| `--k-0` | IP / SSID hash | `#00ffd7` | 15.99 | 15.28 | `#007a67` | 4.64 | 5.19 |
-| `--k-1` | IP / SSID hash | `#5fd7d7` | 11.96 | 11.44 | `#1e7777` | 4.66 | 5.22 |
-| `--k-2` | IP / SSID hash | `#87ffaf` | 16.64 | 15.91 | `#007f2a` | 4.53 | 5.08 |
-| `--k-3` | IP / SSID hash | `#afff87` | 17.16 | 16.40 | `#2a7d00` | 4.58 | 5.12 |
-| `--k-4` | IP / SSID hash | `#d7af00` | 9.84 | 9.40 | `#836b00` | 4.54 | 5.08 |
-| `--k-5` | IP / SSID hash | `#ffaf5f` | 11.34 | 10.84 | `#ab5600` | 4.54 | 5.08 |
-| `--k-6` | IP / SSID hash | `#d78787` | 7.56 | 7.23 | `#c04242` | 4.50 | 5.04 |
-| `--k-7` | IP / SSID hash | `#87afd7` | 8.98 | 8.58 | `#386fa7` | 4.61 | 5.16 |
-| `--br-0` | brand | `#0087ff` | 5.80 | 5.54 | `#006dcf` | 4.51 | 5.05 |
-| `--br-1` | brand | `#d75f5f` | 5.59 | 5.34 | `#cb3333` | 4.54 | 5.09 |
-| `--br-2` | brand | `#ffd700` | 14.70 | 14.05 | `#7f6b00` | 4.61 | 5.16 |
-| `--br-3` | brand | `#00af5f` | 7.16 | 6.85 | `#007c43` | 4.66 | 5.21 |
-| `--br-4` | brand | `#ff8700` | 8.56 | 8.18 | `#a85900` | 4.51 | 5.05 |
-| `--br-5` | brand | `#ff0000` | 5.16 | 4.93 | `#db0000` | 4.60 | 5.15 |
-| `--br-6` | brand | `#808080` | 5.22 | 4.99 | `#6d6d6d` | 4.55 | 5.09 |
-| `--br-7` | brand | `#875fff` | 5.02 | 4.80 | `#7445ff` | 4.57 | 5.12 |
-| `--br-8` | brand | `#005fff` | 4.01 * | 3.83 * | `#005fff` | 4.52 | 5.06 |
-| `--br-9` | brand | `#00d75f` | 10.69 | 10.21 | `#007e38` | 4.57 | 5.11 |
-| `--br-10` | brand | `#af5fff` | 5.80 | 5.54 | `#952cff` | 4.52 | 5.06 |
-| `--br-11` | brand | `#ffaf00` | 11.18 | 10.68 | `#916400` | 4.58 | 5.13 |
-| `--br-12` | brand | `#0087af` | 4.99 | 4.77 | `#007598` | 4.62 | 5.17 |
+| `--k-0` | IP / SSID hash | `#00ffd7` | 15.99 | 15.28 | `#006e5c` | 5.45 | 6.10 |
+| `--k-1` | IP / SSID hash | `#5fd7d7` | 11.96 | 11.44 | `#1b6b6b` | 5.49 | 6.14 |
+| `--k-2` | IP / SSID hash | `#87ffaf` | 16.64 | 15.91 | `#007025` | 5.52 | 6.18 |
+| `--k-3` | IP / SSID hash | `#afff87` | 17.16 | 16.40 | `#257000` | 5.43 | 6.08 |
+| `--k-4` | IP / SSID hash | `#d7af00` | 9.84 | 9.40 | `#745e00` | 5.52 | 6.18 |
+| `--k-5` | IP / SSID hash | `#ffaf5f` | 11.34 | 10.84 | `#9a4d00` | 5.37 | 6.01 |
+| `--k-6` | IP / SSID hash | `#d78787` | 7.56 | 7.23 | `#ab3939` | 5.47 | 6.12 |
+| `--k-7` | IP / SSID hash | `#87afd7` | 8.98 | 8.58 | `#326496` | 5.43 | 6.08 |
+| `--br-0` | brand | `#0087ff` | 5.80 | 5.54 | `#0061b8` | 5.42 | 6.07 |
+| `--br-1` | brand | `#d75f5f` | 5.59 | 5.34 | `#b52d2d` | 5.46 | 6.12 |
+| `--br-2` | brand | `#ffd700` | 14.70 | 14.05 | `#705f00` | 5.55 | 6.21 |
+| `--br-3` | brand | `#00af5f` | 7.16 | 6.85 | `#006f3c` | 5.53 | 6.19 |
+| `--br-4` | brand | `#ff8700` | 8.56 | 8.18 | `#944e00` | 5.51 | 6.17 |
+| `--br-5` | brand | `#ff0000` | 5.16 | 4.93 | `#c70000` | 5.38 | 6.03 |
+| `--br-6` | brand | `#808080` | 5.22 | 4.99 | `#616161` | 5.44 | 6.09 |
+| `--br-7` | brand | `#875fff` | 5.02 | 4.80 | `#632fff` | 5.46 | 6.11 |
+| `--br-8` | brand | `#005fff` | 4.01 * | 3.83 * | `#0055e3` | 5.41 | 6.06 |
+| `--br-9` | brand | `#00d75f` | 10.69 | 10.21 | `#007132` | 5.41 | 6.06 |
+| `--br-10` | brand | `#af5fff` | 5.80 | 5.54 | `#8206ff` | 5.40 | 6.04 |
+| `--br-11` | brand | `#ffaf00` | 11.18 | 10.68 | `#825900` | 5.46 | 6.12 |
+| `--br-12` | brand | `#0087af` | 4.99 | 4.77 | `#006989` | 5.46 | 6.11 |
 | `--br-13` | brand | `#af0000` | 2.77 * | 2.65 * | `#af0000` | 6.54 | 7.32 |
-| `--br-14` | brand | `#ff5f00` | 6.76 | 6.46 | `#bd4600` | 4.57 | 5.11 |
-| `--br-15` | brand | `#d75faf` | 6.03 | 5.77 | `#c13091` | 4.50 | 5.04 |
-| `--info-0` | record info | `#875f5f` | 3.76 * | 3.60 * | `#875f5f` | 4.82 | 5.39 |
-| `--info-1` | record info | `#87875f` | 5.56 | 5.31 | `#6f6f4e` | 4.55 | 5.09 |
-| `--info-2` | record info | `#af875f` | 6.34 | 6.06 | `#896745` | 4.51 | 5.05 |
-| `--info-3` | record info | `#afaf87` | 9.13 | 8.73 | `#6f6f4a` | 4.56 | 5.10 |
-| `--info-4` | record info | `#d7875f` | 7.38 | 7.06 | `#aa552b` | 4.56 | 5.11 |
-| `--info-5` | record info | `#d7af5f` | 10.00 | 9.56 | `#8a6722` | 4.56 | 5.11 |
-| `--info-6` | record info | `#af8787` | 6.52 | 6.23 | `#916060` | 4.56 | 5.11 |
-| `--info-7` | record info | `#878787` | 5.74 | 5.48 | `#6d6d6d` | 4.55 | 5.09 |
-| `--tui-bright` | TUI phosphor | `#00ffaf` | 15.63 | 14.94 | `#007d56` | 4.54 | 5.08 |
-| `--tui-normal` | TUI phosphor | `#00d7af` | 11.13 | 10.64 | `#007b64` | 4.59 | 5.14 |
-| `--tui-dim` | TUI phosphor | `#00875f` | 4.55 | 4.35 * | `#007d58` | 4.53 | 5.07 |
-| `--heat-0` | heat, severity | `#626262` | 3.38 * | 3.23 * | `#626262` | 5.36 | 6.00 |
-| `--heat-1` | heat, severity | `#d7af00` | 9.84 | 9.40 | `#836b00` | 4.54 | 5.08 |
-| `--heat-2` | heat, severity | `#ff8700` | 8.56 | 8.18 | `#a85900` | 4.51 | 5.05 |
-| `--heat-3` | heat, severity | `#ff0000` | 5.16 | 4.93 | `#db0000` | 4.60 | 5.15 |
-| `--hot-0` | alert-hot address | `#ffd700` | 14.70 | 14.05 | `#7f6b00` | 4.61 | 5.16 |
-| `--hot-1` | alert-hot address | `#ff8700` | 8.56 | 8.18 | `#a85900` | 4.51 | 5.05 |
-| `--hot-2` | alert-hot address | `#ff0000` | 5.16 | 4.93 | `#db0000` | 4.60 | 5.15 |
+| `--br-14` | brand | `#ff5f00` | 6.76 | 6.46 | `#a83f00` | 5.47 | 6.12 |
+| `--br-15` | brand | `#d75faf` | 6.03 | 5.77 | `#aa2b80` | 5.48 | 6.14 |
+| `--info-0` | record info | `#875f5f` | 3.76 * | 3.60 * | `#7d5858` | 5.41 | 6.06 |
+| `--info-1` | record info | `#87875f` | 5.56 | 5.31 | `#636346` | 5.42 | 6.07 |
+| `--info-2` | record info | `#af875f` | 6.34 | 6.06 | `#7a5c3d` | 5.39 | 6.03 |
+| `--info-3` | record info | `#afaf87` | 9.13 | 8.73 | `#636342` | 5.44 | 6.09 |
+| `--info-4` | record info | `#d7875f` | 7.38 | 7.06 | `#984c26` | 5.43 | 6.08 |
+| `--info-5` | record info | `#d7af5f` | 10.00 | 9.56 | `#7a5b1e` | 5.52 | 6.18 |
+| `--info-6` | record info | `#af8787` | 6.52 | 6.23 | `#815656` | 5.43 | 6.08 |
+| `--info-7` | record info | `#878787` | 5.74 | 5.48 | `#616161` | 5.44 | 6.09 |
+| `--tui-bright` | TUI phosphor | `#00ffaf` | 15.63 | 14.94 | `#00704d` | 5.39 | 6.03 |
+| `--tui-normal` | TUI phosphor | `#00d7af` | 11.13 | 10.64 | `#006e5a` | 5.46 | 6.12 |
+| `--tui-dim` | TUI phosphor | `#00875f` | 4.55 | 4.35 * | `#00704f` | 5.38 | 6.02 |
+| `--heat-0` | heat, severity | `#626262` | 3.38 * | 3.23 * | `#616161` | 5.44 | 6.09 |
+| `--heat-1` | heat, severity | `#d7af00` | 9.84 | 9.40 | `#745e00` | 5.52 | 6.18 |
+| `--heat-2` | heat, severity | `#ff8700` | 8.56 | 8.18 | `#944e00` | 5.51 | 6.17 |
+| `--heat-3` | heat, severity | `#ff0000` | 5.16 | 4.93 | `#c70000` | 5.38 | 6.03 |
+| `--hot-0` | alert-hot address | `#ffd700` | 14.70 | 14.05 | `#705f00` | 5.55 | 6.21 |
+| `--hot-1` | alert-hot address | `#ff8700` | 8.56 | 8.18 | `#944e00` | 5.51 | 6.17 |
+| `--hot-2` | alert-hot address | `#ff0000` | 5.16 | 4.93 | `#c70000` | 5.38 | 6.03 |
 | `--f-ssh` | chart hue | `#7fd1ff` | 12.24 | 11.70 | `#0072b2` | 4.56 | 5.10 |
 | `--f-rdp` | chart hue | `#b48cff` | 7.99 | 7.63 | `#803dff` | 4.58 | 5.13 |
 | `--f-smb` | chart hue | `#ffd166` | 14.30 | 13.67 | `#8f6400` | 4.62 | 5.18 |
 | `--f-snmp` | chart hue | `#9be564` | 13.53 | 12.93 | `#407a15` | 4.60 | 5.15 |
 | `--f-bgp` | chart hue | `#ff9ecb` | 10.80 | 10.33 | `#d60063` | 4.57 | 5.11 |
 | `--f-ldap` | chart hue | `#c0c0c0` | 11.33 | 10.83 | `#6d6d6d` | 4.55 | 5.09 |
-| `--f-kerb` | chart hue | `#00d7af` | 11.13 | 10.64 | `#007b64` | 4.59 | 5.14 |
+| `--f-kerb` | chart hue | `#00d7af` | 11.13 | 10.64 | `#006e5a` | 5.46 | 6.12 |
 
 Graphics (`*` under 3:1):
 
@@ -7537,9 +7538,9 @@ Graphics (`*` under 3:1):
 |---|---|---|---|---|
 | `--rule` | `--bg` | row rules | 1.65 * | 1.34 * |
 | `--rule` | `--panel` | row rules, the warming cell | 1.58 * | 1.51 * |
-| `--heat-0` | `--rule` | a fed cell's lowest heat, beside a warming one | 2.05 * | 3.99 |
-| `--tui-dim` | `--rule` | a provisional cell's bar, on its warming tile | 2.75 * | 3.37 |
-| `--tui-dim` | `--panel` | a provisional cell's bar, against the panel beside the tile | 4.35 | 5.07 |
+| `--heat-0` | `--rule` | a fed cell's lowest heat, beside a warming one | 2.05 * | 4.05 |
+| `--tui-dim` | `--rule` | a provisional cell's bar, on its warming tile | 2.75 * | 4.00 |
+| `--tui-dim` | `--panel` | a provisional cell's bar, against the panel beside the tile | 4.35 | 6.02 |
 
 Chart hues closer than 30 (CIEDE2000) in either theme; under 15 fails the build:
 
@@ -7547,17 +7548,18 @@ Chart hues closer than 30 (CIEDE2000) in either theme; under 15 fails the build:
 |---|---|---|
 | `--f-ssh`, `--f-rdp` | 27.2 | 25.6 |
 | `--f-ssh`, `--f-ldap` | 19.8 | 21.6 |
-| `--f-ssh`, `--f-kerb` | 29.7 | 30.8 |
+| `--f-ssh`, `--f-kerb` | 29.7 | 30.2 |
 | `--f-rdp`, `--f-bgp` | 21.8 | 30.3 |
 | `--f-rdp`, `--f-ldap` | 27.8 | 31.6 |
 | `--f-smb`, `--f-snmp` | 26.4 | 28.4 |
 | `--f-smb`, `--f-ldap` | 25.8 | 24.4 |
-| `--f-smb`, `--sev-crit` | 44.2 | 29.8 |
+| `--f-smb`, `--sev-crit` | 44.2 | 29.2 |
 | `--f-snmp`, `--f-ldap` | 27.7 | 25.5 |
-| `--f-snmp`, `--f-kerb` | 20.9 | 18.8 |
+| `--f-snmp`, `--f-kerb` | 20.9 | 19.6 |
 | `--f-bgp`, `--f-ldap` | 24.2 | 27.9 |
-| `--f-bgp`, `--sev-crit` | 35.5 | 23.0 |
-| `--f-ldap`, `--f-kerb` | 25.5 | 23.1 |
+| `--f-bgp`, `--sev-crit` | 35.5 | 22.9 |
+| `--f-ldap`, `--f-kerb` | 25.5 | 22.9 |
+| `--f-ldap`, `--sev-crit` | 37.1 | 29.7 |
 
 The sun's phases on the presence strip (G5), graphics (`*` under 3:1), and how far apart (CIEDE2000) they and the strip's other marks are; under 20 fails the build:
 
@@ -7565,28 +7567,28 @@ The sun's phases on the presence strip (G5), graphics (`*` under 3:1), and how f
 |---|---|---|---|---|---|---|
 | `--sun-night` | `#4a72c4` | 4.41 | 4.22 | `#5b84d6` | 3.23 | 3.61 |
 | `--sun-rise` | `#ffe07a` | 15.90 | 15.20 | `#8a7a00` | 3.79 | 4.25 |
-| `--sun-day` | `#00d7af` | 11.13 | 10.64 | `#007b64` | 4.59 | 5.14 |
+| `--sun-day` | `#00d7af` | 11.13 | 10.64 | `#006e5a` | 5.46 | 6.12 |
 | `--sun-set` | `#e0569b` | 5.86 | 5.61 | `#c2247a` | 4.82 | 5.40 |
 
 | marks | dark | light |
 |---|---|---|
 | `--sun-night`, `--sun-rise` | 62.1 | 54.5 |
-| `--sun-night`, `--sun-day` | 45.7 | 35.9 |
+| `--sun-night`, `--sun-day` | 45.7 | 36.5 |
 | `--sun-night`, `--sun-set` | 35.0 | 37.8 |
 | `--sun-night`, `--signal` | 52.8 | 47.6 |
-| `--sun-night`, `--heat-2` | 53.5 | 48.4 |
+| `--sun-night`, `--heat-2` | 53.5 | 48.8 |
 | `--sun-night`, `--faint` | 21.1 | 21.2 |
-| `--sun-rise`, `--sun-day` | 34.9 | 30.7 |
+| `--sun-rise`, `--sun-day` | 34.9 | 31.4 |
 | `--sun-rise`, `--sun-set` | 60.2 | 59.1 |
 | `--sun-rise`, `--signal` | 26.6 | 25.3 |
-| `--sun-rise`, `--heat-2` | 27.2 | 21.8 |
+| `--sun-rise`, `--heat-2` | 27.2 | 22.8 |
 | `--sun-rise`, `--faint` | 60.2 | 37.7 |
-| `--sun-day`, `--sun-set` | 62.2 | 49.3 |
-| `--sun-day`, `--signal` | 53.7 | 47.8 |
-| `--sun-day`, `--heat-2` | 54.2 | 44.0 |
-| `--sun-day`, `--faint` | 50.7 | 33.4 |
+| `--sun-day`, `--sun-set` | 62.2 | 47.2 |
+| `--sun-day`, `--signal` | 53.7 | 47.4 |
+| `--sun-day`, `--heat-2` | 54.2 | 41.8 |
+| `--sun-day`, `--faint` | 50.7 | 35.0 |
 | `--sun-set`, `--signal` | 43.3 | 39.8 |
-| `--sun-set`, `--heat-2` | 44.8 | 41.4 |
+| `--sun-set`, `--heat-2` | 44.8 | 40.5 |
 | `--sun-set`, `--faint` | 29.7 | 26.9 |
 
 The Radar's Wi-Fi hues (2026-11-13), graphics (`*` under 3:1), and how far apart (CIEDE2000) they and the dome's reserved hues are; under 15 between two of them, or 20 from a reserved one, fails the build:
@@ -7610,20 +7612,21 @@ Pairs closer than 30 in either theme:
 | `--rw-1`, `--rw-4` | 26.4 | 28.8 |
 | `--rw-1`, `--ink` | 26.5 | 32.3 |
 | `--rw-2`, `--rw-4` | 17.6 | 17.3 |
-| `--rw-2`, `--heat-3` | 32.8 | 27.7 |
+| `--rw-2`, `--heat-3` | 32.8 | 26.7 |
 | `--rw-2`, `--ink` | 27.5 | 30.2 |
-| `--rw-3`, `--heat-1` | 23.7 | 21.9 |
-| `--rw-3`, `--tui-normal` | 21.7 | 22.1 |
+| `--rw-3`, `--heat-1` | 23.7 | 23.6 |
+| `--rw-3`, `--tui-normal` | 21.7 | 23.9 |
 | `--rw-4`, `--signal` | 25.6 | 23.7 |
-| `--rw-4`, `--heat-2` | 27.0 | 22.8 |
-| `--rw-4`, `--heat-3` | 25.9 | 21.8 |
+| `--rw-4`, `--heat-1` | 35.1 | 29.0 |
+| `--rw-4`, `--heat-2` | 27.0 | 21.6 |
+| `--rw-4`, `--heat-3` | 25.9 | 20.7 |
 | `--rw-4`, `--ink` | 24.0 | 26.7 |
 
 Monitor rows, on `--mon-bg` (`#303030` dark, `#c5c2ba` light):
 
 | token | dark | on --mon-bg | light | on --mon-bg |
 |---|---|---|---|---|
-| `--mon-fg` | `#00d7af` | 7.13 | `#005a49` | 4.61 |
+| `--mon-fg` | `#00d7af` | 7.13 | `#004d3f` | 5.53 |
 
 ### WiFi channel colours and the greenbar (2026-11-18)
 
@@ -7660,80 +7663,173 @@ the fleet's "also heard by" lines, the SSID drawer's access points and
 clients, the direction-finding emitters, the waterfall's picked cell,
 its key (each step's words, then its channels' chips), and on the
 canvases the isometric floor strip, column tops and client trace, and a
-bar before each key on the stacked grid and G3's strips. SSID names keep
-their hash colour.
+bar before each key on the stacked grid and G3's strips.
+
+**Names in their channel's colour** (owner, the same day: "use that
+palette throughout the ui for all wifi devices and ssids and mac
+addresses depending on the current or last read channel"). Every Wi-Fi
+MAC and SSID the page writes as text takes its channel's colour through
+`SlothChan.mark(node, kind, key, ch, band)`; one rule, in `chan.js`:
+
+- the channel of the record the name came in, where it carries one (an
+  AP table row's, an association's, a probe's): the current channel,
+  the one its chip beside it shows, and the only one with a band. A
+  probe's channel is the station's, never given to the SSID it asked
+  for;
+- else sloth.db's last channel for the name: an AP (a BSSID) its own,
+  a station or client the one it was last heard on, an SSID the channel
+  of its most recently heard AP;
+- else the ink around it.
+
+The record wins over sloth.db because sloth.db's is the older of the
+two (the daemon's last write, read each minute): an AP that moved
+channel would otherwise show its name in the old channel's colour
+beside a chip in the new one's for up to a minute.
+
+The channels come from **`GET /api/wifi/lastch`** (no parameters;
+`web_wifi_lastch_route()`, `web_sdb_last_channels()`, read-only):
+`{"now","db_schema","aps":{BSSID:ch},"ssids":{SSID:ch},"stas":{MAC:ch},
+"cut"}`. `aps` is `beacon_aps`' channel by BSSID; `ssids` the channel of
+the newest `beacon_aps` row naming each SSID (the SSID in its display
+form, the page's key); `stas` the latest of a station's `assocs` row
+(the AP's channel then) and its `probe_clients` row (the channel its
+latest probe was heard on). A row with no channel is not read. Each list
+newest first, at most 1,024 and a third of the answer's room; `cut`
+says the oldest were left out (they keep their record's channel or the
+ink). The monitor radio's: answered under Monitor and Hybrid, out of
+scope under Local, where every name keeps its record's channel or its
+ink. The page reads it at load, at a scope change and each minute, and
+`SlothChan.learn()` repaints every name already drawn. sloth.db carries
+no band (`beacon_aps` has none, and `wifi_merged.freq_mhz` is written 0
+on every row as of 2026-11-18), so a name coloured from sloth.db on a
+6 GHz channel reads as the 2.4 or 5 GHz one of its number; a record
+that names "6 GHz" is coloured from the record.
+
+The places: the device table's MAC and SSID, the device drawer's title,
+last SSID, PNL SSIDs, associations and ARP MACs, Lookup's ARP MACs and
+device, the alert page's device, the fleet's "also heard by" lines and
+the Fleet view's shared rows (a Wi-Fi key and an AP's or probe's SSID),
+the AP table's BSSID, SSID and SSID history, the card's scan and station
+dump, the WiFi clients panel, the SSID drawer's name, access points,
+clients, probers and findings, the Probes view's stations, siblings and
+SSIDs, the KARMA card and detail, the key-harvest and chain tables, the
+chain timeline's headings, the direction-finding emitters, the
+waterfall key's SSIDs and clients, the deauth rug's labels (canvas, by
+`SlothChan.of()`), History's new rows and who-was-here, and every MAC
+series key (the anomaly cards, the Activity graph). A MAC never heard
+on Wi-Fi (a wired device) is not in the answer and keeps its ink; BLE
+addresses are not marked. The SSID hash colour (`--k-*`, the TUI's
+`tui_ssid_addstr()`) stays on the marks that key by SSID (the
+waterfall's stacks, the key's swatches) and in the TUI; it is no longer
+an SSID's text colour. A monitor row (`--mon-bg`: the ticker's, the
+waterfall cell's transmitters) keeps its own ink: the channel colours
+are held on the list grounds, not on `--mon-bg`, and a cell's list is
+one channel, named in its header's chip. The Radar's marks keep their
+`--rw-*` hues and its labels their ink.
 
 **The build gate** (`chan_check()`), every channel, both themes: the
-fill at 3:1 on `--bg`, `--panel` and both their stripes (WCAG 1.4.11),
-`--ch-ink` on it at 4.5:1; CIEDE2000, the smaller theme's: neighbours in
-a sorted 2.4 or 5 GHz list 20 apart, 1, 6 and 11 25 apart, any two 2.4
-GHz 7, any two 5 GHz 4 (28 warm hues at 3:1 on cream, L* 27 to 48,
-cannot all stand 7 apart; the chip's number tells two such apart), any
-two 6 GHz steps 8, and 10 between bands and from `--muted`.
+colour at 4.5:1 as text on `--bg`, `--panel`, `--panel-2` and each
+one's stripe (WCAG 1.4.3; the fill's 3:1, 1.4.11, follows), `--ch-ink`
+on it at 4.5:1; CIEDE2000, the smaller theme's: neighbours in a sorted
+2.4 or 5 GHz list 20 apart, 1, 6 and 11 25 apart, any two 2.4 GHz 7,
+any two 5 GHz 4 (28 warm hues dark enough for text on the cream's
+stripe, L* 25 to 41, cannot all stand 7 apart; the chip's number tells
+two such apart), any two 6 GHz steps 8, and 10 between bands and from
+`--muted`. One set does both jobs in both themes, so no theme has a
+text shade of its own: the dark colours are light enough for the dark
+ink on them and for text on the lightest dark stripe, the light ones
+dark enough for text on the cream's darkest stripe and for the light
+ink on them. The text floor (2026-11-18) moved the first set by a
+search that started from it and paid for each step away (CIEDE2000 at
+most 6.4 dark, 5.4 light); every floor kept its margin or gained.
 
-The WiFi channel palette (2026-11-18): each fill on --bg, --panel and their greenbar stripes (the least of the four; `*` under 3:1), and --ch-ink on it (`*` under 4.5:1):
+The WiFi channel palette (2026-11-18), one colour as text and as a chip's fill: each on --bg, --panel, --panel-2 and their greenbar stripes (the least of the six; `*` under 4.5:1, text; a fill wants 3:1), and --ch-ink on it (`*` under 4.5:1):
 
 | token | dark | least ground | ink | light | least ground | ink |
 |---|---|---|---|---|---|---|
-| `--ch-1` | `#71f5ff` | 12.82 | 15.91 | `#00777e` | 3.92 | 5.24 |
-| `--ch-2` | `#8efc70` | 12.90 | 16.01 | `#117d00` | 3.91 | 5.22 |
-| `--ch-3` | `#99e1ff` | 11.52 | 14.30 | `#00708c` | 4.18 | 5.59 |
-| `--ch-4` | `#00dd74` | 9.17 | 11.38 | `#006c35` | 4.84 | 6.46 |
-| `--ch-5` | `#94b5ff` | 8.16 | 10.12 | `#005aa7` | 5.12 | 6.84 |
-| `--ch-6` | `#29a112` | 4.91 | 6.09 | `#085500` | 6.69 | 8.94 |
-| `--ch-7` | `#cde5ff` | 12.85 | 15.95 | `#0071a7` | 3.94 | 5.27 |
-| `--ch-8` | `#008945` | 3.69 | 4.58 | `#004b23` | 7.61 | 10.17 |
-| `--ch-9` | `#007fb4` | 3.71 | 4.61 | `#004463` | 7.70 | 10.29 |
-| `--ch-10` | `#3bffc1` | 12.86 | 15.96 | `#007a59` | 3.94 | 5.26 |
-| `--ch-11` | `#5b74ff` | 4.26 | 5.29 | `#003aa5` | 7.20 | 9.61 |
-| `--ch-12` | `#00927a` | 4.27 | 5.29 | `#004e40` | 7.15 | 9.55 |
-| `--ch-13` | `#d6d3ff` | 11.57 | 14.35 | `#445bd1` | 4.22 | 5.64 |
-| `--ch-14` | `#00bfbd` | 7.27 | 9.02 | `#005f5e` | 5.53 | 7.38 |
-| `--ch-36` | `#de540d` | 4.26 | 5.28 | `#7b2900` | 7.16 | 9.57 |
-| `--ch-40` | `#d9b256` | 8.27 | 10.26 | `#846922` | 3.84 | 5.13 |
+| `--ch-1` | `#71f5ff` | 12.82 | 15.91 | `#046c73` | 4.55 | 6.08 |
+| `--ch-2` | `#8bfa6e` | 12.65 | 15.70 | `#087203` | 4.52 | 6.04 |
+| `--ch-3` | `#99e0fe` | 11.43 | 14.18 | `#086a85` | 4.53 | 6.06 |
+| `--ch-4` | `#00dd74` | 9.17 | 11.38 | `#086c37` | 4.82 | 6.43 |
+| `--ch-5` | `#92b4fd` | 8.04 | 9.98 | `#07539d` | 5.66 | 7.56 |
+| `--ch-6` | `#25a011` | 4.84 | 6.00 | `#055500` | 6.71 | 8.96 |
+| `--ch-7` | `#cee5fe` | 12.86 | 15.97 | `#00679b` | 4.53 | 6.05 |
+| `--ch-8` | `#1a9950` | 4.52 | 5.61 | `#004a23` | 7.72 | 10.31 |
+| `--ch-9` | `#398dba` | 4.50 | 5.59 | `#004361` | 7.83 | 10.46 |
+| `--ch-10` | `#39ffc0` | 12.85 | 15.94 | `#066f58` | 4.52 | 6.04 |
+| `--ch-11` | `#5e7afe` | 4.50 | 5.59 | `#073ba4` | 7.12 | 9.52 |
+| `--ch-12` | `#13967e` | 4.50 | 5.59 | `#044f40` | 7.04 | 9.40 |
+| `--ch-13` | `#d6d6ff` | 11.80 | 14.65 | `#3c57cc` | 4.51 | 6.03 |
+| `--ch-14` | `#14bebc` | 7.22 | 8.95 | `#015356` | 6.52 | 8.71 |
+| `--ch-36` | `#e25a18` | 4.52 | 5.60 | `#7d2500` | 7.24 | 9.67 |
+| `--ch-40` | `#d9b256` | 8.27 | 10.26 | `#765e23` | 4.55 | 6.08 |
 | `--ch-44` | `#ffa9b7` | 9.18 | 11.40 | `#bb004e` | 4.80 | 6.41 |
-| `--ch-48` | `#a27c00` | 4.29 | 5.32 | `#574100` | 7.15 | 9.56 |
-| `--ch-52` | `#ffd9dc` | 12.82 | 15.91 | `#cf1b51` | 3.94 | 5.26 |
-| `--ch-56` | `#bb8732` | 5.24 | 6.50 | `#7c5614` | 4.83 | 6.46 |
-| `--ch-60` | `#ff9a9e` | 8.20 | 10.18 | `#b40038` | 5.16 | 6.89 |
+| `--ch-48` | `#a68010` | 4.52 | 5.61 | `#574102` | 7.15 | 9.55 |
+| `--ch-52` | `#ffd8dc` | 12.74 | 15.81 | `#b1324a` | 4.52 | 6.03 |
+| `--ch-56` | `#bb8732` | 5.24 | 6.50 | `#705221` | 5.30 | 7.08 |
+| `--ch-60` | `#fe999d` | 8.11 | 10.07 | `#b40136` | 5.16 | 6.89 |
 | `--ch-64` | `#db9100` | 6.38 | 7.91 | `#704800` | 5.91 | 7.90 |
-| `--ch-100` | `#ff7291` | 6.38 | 7.92 | `#a30043` | 5.86 | 7.83 |
-| `--ch-104` | `#d0913a` | 6.16 | 7.65 | `#906221` | 3.91 | 5.22 |
-| `--ch-108` | `#ffc8df` | 11.53 | 14.31 | `#c2157c` | 4.19 | 5.59 |
-| `--ch-112` | `#ffd086` | 11.56 | 14.35 | `#875f00` | 4.22 | 5.63 |
-| `--ch-116` | `#f17ab1` | 6.45 | 8.01 | `#982a63` | 5.43 | 7.26 |
-| `--ch-120` | `#ffaf77` | 9.22 | 11.44 | `#954800` | 4.82 | 6.45 |
-| `--ch-124` | `#ff5798` | 5.59 | 6.94 | `#99004e` | 6.27 | 8.38 |
-| `--ch-128` | `#a36b00` | 3.69 | 4.58 | `#5a3900` | 7.65 | 10.23 |
-| `--ch-132` | `#eb0458` | 3.71 | 4.60 | `#84002e` | 7.65 | 10.22 |
-| `--ch-136` | `#f1c458` | 10.11 | 12.54 | `#6f5501` | 5.20 | 6.94 |
-| `--ch-140` | `#ff7764` | 6.39 | 7.93 | `#a50513` | 5.88 | 7.85 |
-| `--ch-144` | `#ee35a5` | 4.50 | 5.58 | `#a63c78` | 4.37 | 5.84 |
-| `--ch-149` | `#d17400` | 4.91 | 6.10 | `#6f3b00` | 6.72 | 8.98 |
-| `--ch-153` | `#de6593` | 5.05 | 6.27 | `#b3376b` | 4.21 | 5.62 |
-| `--ch-157` | `#ff9d71` | 8.16 | 10.12 | `#9f3600` | 5.15 | 6.88 |
-| `--ch-161` | `#e50085` | 3.69 | 4.58 | `#810048` | 7.63 | 10.19 |
-| `--ch-165` | `#ff7a24` | 6.38 | 7.91 | `#893800` | 5.88 | 7.86 |
-| `--ch-169` | `#ff97b7` | 8.20 | 10.17 | `#b0005c` | 5.15 | 6.88 |
-| `--ch-173` | `#ffc07e` | 10.36 | 12.85 | `#8e5500` | 4.48 | 5.99 |
-| `--ch-177` | `#ff69c2` | 6.37 | 7.90 | `#9c006c` | 5.88 | 7.85 |
-| `--ch6-0` | `#975ec1` | 3.71 | 4.60 | `#592583` | 7.67 | 10.24 |
-| `--ch6-1` | `#bd94b7` | 6.39 | 7.94 | `#694465` | 5.91 | 7.90 |
-| `--ch6-2` | `#a199d8` | 6.38 | 7.92 | `#4e4a82` | 5.89 | 7.87 |
-| `--ch6-3` | `#d7b1ff` | 9.19 | 11.41 | `#7248a9` | 4.81 | 6.42 |
+| `--ch-100` | `#ff7290` | 6.38 | 7.91 | `#a10240` | 5.95 | 7.95 |
+| `--ch-104` | `#d1923d` | 6.24 | 7.75 | `#835926` | 4.52 | 6.04 |
+| `--ch-108` | `#ffc8df` | 11.53 | 14.31 | `#bc0478` | 4.51 | 6.03 |
+| `--ch-112` | `#fed086` | 11.53 | 14.31 | `#815a02` | 4.55 | 6.08 |
+| `--ch-116` | `#f07bb1` | 6.47 | 8.02 | `#982a63` | 5.43 | 7.26 |
+| `--ch-120` | `#ffaf77` | 9.22 | 11.44 | `#954801` | 4.82 | 6.44 |
+| `--ch-124` | `#fe5999` | 5.62 | 6.97 | `#99054f` | 6.21 | 8.30 |
+| `--ch-128` | `#b77804` | 4.51 | 5.60 | `#5a3900` | 7.65 | 10.23 |
+| `--ch-132` | `#fa3167` | 4.51 | 5.60 | `#83042e` | 7.65 | 10.22 |
+| `--ch-136` | `#f1c458` | 10.11 | 12.54 | `#6d5300` | 5.35 | 7.15 |
+| `--ch-140` | `#fe7764` | 6.36 | 7.89 | `#a60213` | 5.86 | 7.83 |
+| `--ch-144` | `#ef34a4` | 4.51 | 5.59 | `#a13b78` | 4.53 | 6.05 |
+| `--ch-149` | `#d07405` | 4.89 | 6.07 | `#6f3b01` | 6.72 | 8.97 |
+| `--ch-153` | `#de6593` | 5.05 | 6.27 | `#b02e67` | 4.50 | 6.02 |
+| `--ch-157` | `#ff9d71` | 8.16 | 10.12 | `#9f3702` | 5.12 | 6.84 |
+| `--ch-161` | `#f03a8c` | 4.50 | 5.58 | `#800549` | 7.60 | 10.15 |
+| `--ch-165` | `#fd7b29` | 6.36 | 7.89 | `#883901` | 5.87 | 7.85 |
+| `--ch-169` | `#ff96b6` | 8.14 | 10.10 | `#9e2f54` | 5.17 | 6.91 |
+| `--ch-173` | `#ffc07c` | 10.35 | 12.84 | `#8d5501` | 4.50 | 6.02 |
+| `--ch-177` | `#fe69c1` | 6.33 | 7.86 | `#9c016d` | 5.86 | 7.83 |
+| `--ch6-0` | `#a670c1` | 4.52 | 5.60 | `#552c78` | 7.66 | 10.24 |
+| `--ch6-1` | `#bc94b7` | 6.37 | 7.91 | `#694465` | 5.91 | 7.90 |
+| `--ch6-2` | `#a198d9` | 6.33 | 7.86 | `#4f4a7c` | 5.94 | 7.94 |
+| `--ch6-3` | `#d7b0ff` | 9.13 | 11.33 | `#744d9d` | 4.70 | 6.28 |
 
 The floors (CIEDE2000, the smaller theme's), enforced and measured:
 
 | floor | enforced | measured |
 |---|---|---|
-| fill on any ground | 3.0:1 | 3.69:1 |
-| --ch-ink on a fill | 4.5:1 | 4.58:1 |
-| sorted neighbours, 2.4 and 5 GHz | 20 | 25.3 |
-| 1, 6 and 11 | 25 | 30.5 |
-| any two 2.4 GHz | 7 | 8.4 |
-| any two 5 GHz | 4 | 4.7 |
-| any two 6 GHz steps | 8 | 10.1 |
-| two bands, or --muted | 10 | 10.8 |
+| text (and fill) on any of the six grounds | 4.5:1 | 4.50:1 |
+| --ch-ink on a fill | 4.5:1 | 5.58:1 |
+| sorted neighbours, 2.4 and 5 GHz | 20 | 23.8 |
+| 1, 6 and 11 | 25 | 29.1 |
+| any two 2.4 GHz | 7 | 8.3 |
+| any two 5 GHz | 4 | 4.9 |
+| any two 6 GHz steps | 8 | 9.7 |
+| two bands, or --muted | 10 | 12.0 |
+
+Text under 4.5:1 on a greenbar stripe that reads at 4.5:1 on its ground:
+
+| token | theme | ground | on it | on its stripe |
+|---|---|---|---|---|
+| `--br-5` | dark | `--bg` | 5.16 | 4.48 |
+| `--br-5` | dark | `--panel` | 4.93 | 4.15 |
+| `--br-5` | dark | `--panel-2` | 5.03 | 4.30 |
+| `--br-6` | dark | `--panel` | 4.99 | 4.21 |
+| `--br-6` | dark | `--panel-2` | 5.10 | 4.35 |
+| `--br-7` | dark | `--bg` | 5.02 | 4.36 |
+| `--br-7` | dark | `--panel` | 4.80 | 4.04 |
+| `--br-7` | dark | `--panel-2` | 4.90 | 4.19 |
+| `--br-12` | dark | `--bg` | 4.99 | 4.34 |
+| `--br-12` | dark | `--panel` | 4.77 | 4.02 |
+| `--br-12` | dark | `--panel-2` | 4.87 | 4.16 |
+| `--info-1` | dark | `--panel` | 5.31 | 4.48 |
+| `--tui-dim` | dark | `--bg` | 4.55 | 3.95 |
+| `--heat-3` | dark | `--bg` | 5.16 | 4.48 |
+| `--heat-3` | dark | `--panel` | 4.93 | 4.15 |
+| `--heat-3` | dark | `--panel-2` | 5.03 | 4.30 |
+| `--hot-2` | dark | `--bg` | 5.16 | 4.48 |
+| `--hot-2` | dark | `--panel` | 4.93 | 4.15 |
+| `--hot-2` | dark | `--panel-2` | 5.03 | 4.30 |
 
 **Greenbar.** `web/ui/greenbar.css`, the last stylesheet: in every list
 and table the even data rows (headers never count) take the surface
@@ -7746,13 +7842,24 @@ rules are inside `:where()`, so a hover tint, a selected row and a
 monitor row's ground win by specificity; the device table is
 virtualised, so `app.js` marks its odd data rows `.gb-alt` by index
 rather than DOM order. `palette.c` computes the same mix (`GB_STEP`).
-What it costs text, from `make web-contrast`: in the light theme the
-data colours, ruled to 4.5:1 on `--bg` and `--panel`, read 3.77 to
-4.49:1 on the stripes (the `--bg` stripe the lower), and `--muted`,
-`--brass` and `--phosphor-mid` 4.14 to 4.30:1; in the dark theme
-`--tui-dim`, `--heat-3`, `--hot-2` and five brand and info colours read
-3.95 to 4.48:1 on a stripe. Reported, not enforced: the dark data are
-the TUI's byte for byte and the 8% is the owner's.
+
+What it costs text (owner, keeping the 8%: fix it in the light theme,
+report the dark). **Light theme: nothing.** The data colours' light
+values are derived on all six list grounds, `--bg`, `--panel`,
+`--panel-2` and their stripes (`light_variant()`; before, `--bg` and
+`--panel` only, and they read 3.77 to 4.49:1 on a stripe), so each now
+reads at 4.5:1 on the cream's darkest stripe; a monitor row's text on
+its own stripe too. The chrome's text tokens are `theme.css`'s, so a
+stripe row sets them to `palette.c`'s `--gb-*` (`--gb-muted` `#675e72`
+from `#6b6176`, `--gb-brass` `#815916` from `#8a5f18`,
+`--gb-phosphor-mid` `#176e56` from `#1a7d61`; `--ink`, `--phosphor-hi`
+and `--hover` already read there and keep their values); in the dark
+theme `--gb-*` is the token itself. **Dark theme: as the TUI.** The
+data colours are its bytes (ruling 2026-10-23), so the table above
+lists what reads at 4.5:1 on a ground and under it on that ground's
+stripe, reported, not enforced: `--tui-dim` 3.95 on the `--bg` stripe,
+`--br-5`, `--br-6`, `--br-7`, `--br-12`, `--heat-3` and `--hot-2` 4.02
+to 4.48, `--info-1` 4.48.
 
 ## What it never does
 
@@ -7920,7 +8027,7 @@ web/
     web_ptr.c      the passive PTR cache (M4)
     web_devices.c  /api/devices, /api/device/{mac}, /api/lookup (M4),
                    /api/history/devices (M5)
-    web_wifi.c     /api/wifi/channels, /api/wifi/deauth, /api/wifi/aps, /api/wifi/local (M5),
+    web_wifi.c     /api/wifi/channels, /api/wifi/deauth, /api/wifi/aps, /api/wifi/local, /api/wifi/lastch (M5),
                    /api/wifi/chain (#171 V4); the grid and the mix answer the BLE
                    waterfall shares
     web_chain.c    G8's links: the stream's twin_episode pairs, in memory (#171 V4)

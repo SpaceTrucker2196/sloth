@@ -15,7 +15,16 @@
  * own alternate is the one rule here with weight, so that it can win
  * over the ground it alternates. The device table is virtualised (its
  * rows are a recycled pool, so DOM order is not data order): app.js
- * marks its odd data rows .gb-alt. */
+ * marks its odd data rows .gb-alt.
+ *
+ * Text on a stripe reads at 4.5:1 (owner 2026-11-18, keeping the 8%).
+ * The data colours' light values are derived for the stripes
+ * (palette.c light_variant()), and so are the channel colours (CHAN[]).
+ * The chrome's text tokens are theme.css's, so a stripe row takes
+ * palette.c's --gb-* for them: in the light theme each one darkened to
+ * 4.5:1 on the stripes, in the dark theme the token itself. The dark
+ * theme's data colours are the TUI's byte for byte (ruling 2026-10-23)
+ * and some read under 4.5:1 there; web/README.md lists them. */
 :root { --gb-toward: #ffffff; }
 :root[data-theme="light"] { --gb-toward: #000000; }
 body { --gb-surface: var(--bg); }
@@ -28,6 +37,8 @@ body { --gb-surface: var(--bg); }
 :where(table tr:nth-child(even of :has(> td))),
 :where(:is(.fv-line, .fleet-row, .fid-row, .inc-row, .ak-row):nth-child(even of :is(.fv-line, .fleet-row, .fid-row, .inc-row, .ak-row))) {
   background-color: color-mix(in srgb, var(--gb-surface) 92%, var(--gb-toward));
+  --ink: var(--gb-ink); --muted: var(--gb-muted); --brass: var(--gb-brass);
+  --phosphor-hi: var(--gb-phosphor-hi); --phosphor-mid: var(--gb-phosphor-mid); --hover: var(--gb-hover);
 }
 :is(.ticker, .mixl) > li.mon:nth-child(even of :not(.sub, .dhead)) {
   background-color: color-mix(in srgb, var(--mon-bg) 92%, var(--gb-toward));

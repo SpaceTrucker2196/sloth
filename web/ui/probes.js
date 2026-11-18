@@ -65,14 +65,17 @@
   }
   function who(x) { return x.random ? "randomised" : typeof x.vendor === "string" ? x.vendor : "?"; }
 
-  // A MAC as a button: go(mac) on a click, without the row's own.
-  function macBtn(mac, random, title, go) {
+  // A MAC as a button: go(mac) on a click, without the row's own. The
+  // address in its channel's colour (SlothChan.mark(): an AP's own, a
+  // station's last heard; ch the record's where it carries one).
+  function macBtn(mac, random, title, go, ch) {
     var b = H.el("button", "lk");
     b.type = "button";
     var sw = H.el("span", "sw");
     sw.style.background = H.keyColor(String(mac));
     b.appendChild(sw);
-    b.appendChild(H.el("span", random ? "rnd d-dim" : "d-dim", (random ? "~" : "") + mac));
+    b.appendChild(SlothChan.mark(H.el("span", random ? "rnd d-dim" : "d-dim", (random ? "~" : "") + mac),
+                                 "mac", String(mac), ch));
     b.title = title;
     b.addEventListener("click", function (e) { e.stopPropagation(); go(String(mac)); });
     return b;
@@ -199,7 +202,10 @@
       var sw = H.el("span", "sw");
       sw.style.background = H.keyColor(String(d.mac));
       mc.appendChild(sw);
-      mc.appendChild(H.el("span", d.random ? "rnd d-dim" : "d-dim", (d.random ? "~" : "") + d.mac));
+      // the station in the channel it was last heard on (SlothChan.mark()):
+      // its latest probe's here, /api/wifi/lastch's where that has none
+      mc.appendChild(SlothChan.mark(H.el("span", d.random ? "rnd d-dim" : "d-dim", (d.random ? "~" : "") + d.mac),
+                                    "mac", String(d.mac), d.channel));
       var fm = H.fvMark(d);
       if (fm) mc.appendChild(fm);
       row.appendChild(mc);

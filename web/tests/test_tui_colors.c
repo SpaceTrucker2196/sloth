@@ -317,7 +317,8 @@ static void same_ip_colour(const char *what, const char *s, int colour_class_ind
 }
 
 /* An address and an SSID: one colour for the whole string, the hash's,
- * and bold only for a cross-panel address. Half the addresses are seen
+ * and bold only for a cross-panel address (an SSID's on the page's
+ * marks; its text is its channel's). Half the addresses are seen
  * in two sources, in the TUI's index and in the page's mask alike. */
 static void test_ips_and_ssids_colour_as_the_tui(void) {
     WT_HAS(page(), "  function utf8(s) {\n"
@@ -352,7 +353,13 @@ static void test_ips_and_ssids_colour_as_the_tui(void) {
     WT_HAS(page(), "      richText(tx, detail, 0, \"d-normal\");");
     WT_HAS(page(), "    hotSet(ip, t, sev);\n    ipNote(ip, IP_SRC.alert);");
     WT_HAS(page(), "sp.style.color = \"var(--k-\" + ipColorIndex(ip) + \")\";");
-    WT_HAS(page(), "if (ssid !== \"\") sp.style.color = \"var(--k-\" + ipColorIndex(ssid) + \")\";");
+    /* An SSID's text is in its channel's colour since 2026-11-18 (owner;
+     * test_chan.c pins the rule): the hash colour below is the TUI's,
+     * which the page keeps for an SSID's marks (the waterfall's stacks,
+     * test_non_utf8_ssids_colour_as_the_tui()), never for its text. Seen
+     * red with ssidText()'s hash line put back. */
+    WT_HAS(page(), "    if (ssid !== \"\") SlothChan.mark(sp, \"ssid\", ssid, ch, band);");
+    WT_LACKS(page(), "sp.style.color = \"var(--k-\" + ipColorIndex(ssid)");
     WT_EQ(read_palette(), 0);
     WT_EQ(P.ip, IP_NUM_COLORS);
     static const int bits[7] = { IP_SRC_CONN, IP_SRC_PKT, IP_SRC_ARP, IP_SRC_DNS,
@@ -401,15 +408,13 @@ static void test_ips_and_ssids_colour_as_the_tui(void) {
 /* An SSID that is not UTF-8 (sloth keeps its high octets, so sloth.db
  * holds them): the TUI colours it by its octets; the server sends its
  * display form with the colour it hashed over those same octets
- * (web_ssid.h), and the page uses that colour, not a hash of the text
- * it was given. Seen red with the page's line using ipColorIndex(ssid)
- * first (the pin), and with web_ssid_color() hashing the display form
- * (the colour). */
+ * (web_ssid.h), and the page's marks use that colour (the waterfall's
+ * stacks: an AP in its SSID's), not a hash of the text it was given.
+ * SSID text is its channel's colour since 2026-11-18. Seen red with
+ * web_ssid_color() hashing the display form (the colour). */
 static void test_non_utf8_ssids_colour_as_the_tui(void) {
-    WT_HAS(page(), "if (num(k) && k >= 0 && k < P.ip) sp.style.color = "
-                   "\"var(--k-\" + k + \")\";\n"
-                   "    else if (ssid !== \"\") sp.style.color = \"var(--k-\" + "
-                   "ipColorIndex(ssid) + \")\";");
+    WT_HAS(page(), "    if (t.kind === \"ap\" && num(t.ssid_k) && t.ssid !== null && t.ssid_k >= 0 && t.ssid_k < 8)\n"
+                   "      return T.k[t.ssid_k];");
     WT_EQ(read_palette(), 0);
     static const char *const RAW[] = {
         "demo-\xff\xfe-legacy", "caf\xe9", "\xa0\xa1\xa2", "x\xc2\x85y",

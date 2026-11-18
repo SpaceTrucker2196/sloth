@@ -113,7 +113,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-18 (the Radar's sources: a checkbox a source with its count, kept as `radar.src`, an excluded source neither drawn nor picked; the caption box removed, its notes the header's and the about text's), 2026-11-18 (health page: the `source_status` state `not_installed`, sloth-rf's trimmed decoder input, shown as `no SDR attached`, no up/down series), 2026-11-18 (one WiFi channel palette, `--ch-*` written and checked in `web/tools/palette.c` and mapped by `web/ui/chan.js`, a chip wherever a channel is shown and the isometric waterfall moved onto it; the greenbar, `web/ui/greenbar.css`; § The restyle, § M5's WiFi); 2026-11-17 (the WiFi waterfall's clients lane and client highlight, `clients` on `/api/wifi/channels?mix=1`; the highlight fade 70 percent transparent; § M5's WiFi); 2026-11-17 (the isometric WiFi and BLE Devices waterfalls coloured by identity: band hue, channel shade and SSID on WiFi, class hue on BLE, with keys; `web/ui/iso.css` `--iso-*`; § M5's WiFi and BLE Devices); 2026-11-17 (the WiFi view's direction-finding card, `web/src/web_df.c`, `web/ui/df.js`, `GET /api/df`: § Direction finding); 2026-11-17 (#218: `alerts.fired` counts an alert
+**Last updated**: 2026-11-18 (every Wi-Fi MAC and SSID in its channel's colour, the channel from `GET /api/wifi/lastch`; the channel colours held at 4.5:1 as text on every list ground, both themes; the light theme's data and chrome text at 4.5:1 on the greenbar stripes; § The restyle), 2026-11-18 (the Radar's sources: a checkbox a source with its count, kept as `radar.src`, an excluded source neither drawn nor picked; the caption box removed, its notes the header's and the about text's), 2026-11-18 (health page: the `source_status` state `not_installed`, sloth-rf's trimmed decoder input, shown as `no SDR attached`, no up/down series), 2026-11-18 (one WiFi channel palette, `--ch-*` written and checked in `web/tools/palette.c` and mapped by `web/ui/chan.js`, a chip wherever a channel is shown and the isometric waterfall moved onto it; the greenbar, `web/ui/greenbar.css`; § The restyle, § M5's WiFi); 2026-11-17 (the WiFi waterfall's clients lane and client highlight, `clients` on `/api/wifi/channels?mix=1`; the highlight fade 70 percent transparent; § M5's WiFi); 2026-11-17 (the isometric WiFi and BLE Devices waterfalls coloured by identity: band hue, channel shade and SSID on WiFi, class hue on BLE, with keys; `web/ui/iso.css` `--iso-*`; § M5's WiFi and BLE Devices); 2026-11-17 (the WiFi view's direction-finding card, `web/src/web_df.c`, `web/ui/df.js`, `GET /api/df`: § Direction finding); 2026-11-17 (#218: `alerts.fired` counts an alert
 either daemon raises, not sloth's stream alone; an "alert" record from
 either stream now queues a sample (`web_rollup_queue_add()`) instead of
 adding one directly, so `SENSOR_SOURCE_DOWN` -- the one type both can
@@ -1031,14 +1031,40 @@ and the contrast table, is `web/README.md`'s Design section.
   shows as a chip, its number on its colour, wherever an AP, station,
   device or SSID is shown with one (the AP table, the card's scan, the
   device drawer's associations, the fleet's lines, the SSID drawer, the
-  direction-finding emitters, the waterfall's cell, key and canvases);
-  SSID names keep their hash colour. The build fails on a fill under
-  3:1 on `--bg`, `--panel` or a stripe, on the chip's ink under 4.5:1,
-  and on CIEDE2000 floors in either theme: sorted neighbours 20, 1, 6
-  and 11 25, any two 2.4 GHz 7, any two 5 GHz 4 (28 warm hues on
-  cream cannot all stand further apart; the number tells them apart), 6
-  GHz steps 8, bands and `--muted` 10. `web/README.md`'s Design section
-  has the table.
+  direction-finding emitters, the waterfall's cell, key and canvases).
+- **Names in their channel's colour** (owner, the same day: "use that
+  palette throughout the ui for all wifi devices and ssids and mac
+  addresses depending on the current or last read channel"; then "try
+  to find a solution that works for both", text and chip). Every Wi-Fi
+  MAC and SSID written as text takes its channel's colour
+  (`SlothChan.mark()`): the record's own channel where it carries one
+  (the current one, as its chip shows); else sloth.db's last one, an AP
+  its own channel, a station or client the one it was last heard on, an
+  SSID its most recently heard AP's; else the ink around it.
+  The channels are `GET /api/wifi/lastch`'s (sloth.db, read-only:
+  `beacon_aps` by BSSID and the newest row per SSID, a station's latest
+  `assocs` or `probe_clients` channel; at most 1,024 a list, newest
+  first, `cut` past that; out of scope under Local), read at load, on a
+  scope change and each minute, every drawn name repainted. This
+  replaces the SSID's hash colour as text on the page (owner decision);
+  the hash stays on the marks keyed by SSID (the waterfall's stacks)
+  and in the TUI, which is untouched. A wired-only MAC and every BLE
+  address keep their ink; a monitor row (`--mon-bg`) keeps its own ink;
+  the Radar's marks keep `--rw-*`. `web/README.md`'s Design section
+  lists every place.
+- **One colour, text and chip, both themes.** The build fails on a
+  channel colour under 4.5:1 as text on `--bg`, `--panel`, `--panel-2`
+  or any of their greenbar stripes (the fill's 3:1 follows), on the
+  chip's ink under 4.5:1 on it, and on CIEDE2000 floors in either
+  theme: sorted neighbours 20, 1, 6 and 11 25, any two 2.4 GHz 7, any
+  two 5 GHz 4 (28 warm hues dark enough for the cream's stripe cannot
+  all stand further apart; the number tells them apart), 6 GHz steps 8,
+  bands and `--muted` 10. One set meets all of it, so no theme has a
+  separate text shade; the set was re-picked from the first one by a
+  search that paid for each step away (CIEDE2000 at most 6.4 dark, 5.4
+  light), and every floor kept or gained margin (measured: text 4.50,
+  ink 5.58, neighbours 23.8, 1/6/11 29.1, 2.4 GHz 8.3, 5 GHz 4.9, 6 GHz
+  9.7, bands 12.0). `web/README.md`'s Design section has the table.
 - **Greenbar** (owner 2026-11-18: "like greenbar paper make an
   alternating pattern in lists where the alternate bar color is the
   background but 8% lighter"). `web/ui/greenbar.css`: every list's and
@@ -1046,9 +1072,16 @@ and the contrast table, is `web/README.md`'s Design section.
   light theme 8% toward black (the cream has nowhere lighter to go);
   a monitor row alternates on `--mon-bg`; hover, selection and monitor
   grounds win (the rules weigh nothing, `:where()`); the virtualised
-  device table marks its rows by index. On a stripe, the light theme's
-  data colours read about 3.8 to 4.5:1 and a few dark ones about 4.0
-  to 4.5:1 (`make web-contrast` lists them).
+  device table marks its rows by index. Text on a stripe (owner: keep
+  the 8%): in the light theme every data colour is derived for 4.5:1 on
+  the stripes as well as the plain grounds (`light_variant()` on all
+  six), and a stripe row sets the chrome's text tokens to `palette.c`'s
+  `--gb-*` (`--muted`, `--brass` and `--phosphor-mid` a step darker
+  there; `theme.css` unchanged); nothing reads under 4.5:1. In the dark
+  theme the data colours are the TUI's bytes, so `--tui-dim` (3.95),
+  `--br-5`, `--br-6`, `--br-7`, `--br-12`, `--heat-3`, `--hot-2` (4.02
+  to 4.48) and `--info-1` (4.48) still read under 4.5:1 on a stripe;
+  `make web-contrast` lists them.
 
 ## Deployment and freshness (#153, #168)
 

@@ -247,19 +247,38 @@
     rows.forEach(function (x) {
       var line = el("div", "fv-line");
       line.appendChild(el("span", "fv-host", fvCut(fvName(x))));
+      // Words, and the names as nodes: the SSID and the BSSID in their
+      // channel's colour (SlothChan.mark(), owner 2026-11-18), the
+      // channel as its chip, each between the words around it. A probe's
+      // channel is the station's, never its SSID's.
+      function ssidN(w) {
+        var sp = el("span", "", w);
+        sp.appendChild(ssidText(String(x.ssid), x.ssid_k, x.ssid_np, x.kind === "probe" ? null : x.channel));
+        return sp;
+      }
+      function bssidN() {
+        var sp = el("span", "", "bssid ");
+        sp.appendChild(SlothChan.mark(el("span", "", String(x.bssid)), "mac", x.bssid, x.channel));
+        return sp;
+      }
+      function chN() {
+        var sp = el("span", "", "ch ");
+        sp.appendChild(SlothChan.chip(x.channel));
+        return sp;
+      }
       var t = [x.kind === "ap" ? "as an AP" : null,
-               x.kind === "probe" ? "probed for " + x.ssid : x.ssid ? "ssid " + x.ssid : null,
+               x.kind === "probe" ? ssidN("probed for ") : x.ssid ? ssidN("ssid ") : null,
                x.name ? "name " + x.name : null,
                x.vendor ? "vendor " + x.vendor : null, x.class ? "class " + x.class : null,
-               num(x.signal) ? x.signal + " dBm" : num(x.rssi) ? x.rssi + " dBm" : null];
-      var u = [x.enc ? x.enc : null, x.bssid ? "bssid " + x.bssid : null,
+               num(x.signal) ? x.signal + " dBm" : num(x.rssi) ? x.rssi + " dBm" : null,
+               num(x.channel) ? chN() : null,
+               x.enc ? x.enc : null, x.bssid ? bssidN() : null,
                "first " + stamp(x.first_seen), "last " + stamp(x.last_seen)];
-      function some(a) { return a.filter(function (s) { return s !== null; }).join(", "); }
-      // The channel as its chip (SlothChan, owner 2026-11-18), between
-      // the words before and after it.
-      line.appendChild(el("span", "d-dim", "  " + some(t) + (num(x.channel) ? (some(t) ? ", " : "") + "ch " : "")));
-      if (num(x.channel)) line.appendChild(SlothChan.chip(x.channel));
-      line.appendChild(el("span", "d-dim", (some(t) || num(x.channel) ? ", " : "") + some(u)));
+      var rest = line.appendChild(el("span", "d-dim", "  "));
+      t.filter(function (s) { return s !== null; }).forEach(function (s, i) {
+        if (i) rest.appendChild(document.createTextNode(", "));
+        rest.appendChild(typeof s === "string" ? document.createTextNode(s) : s);
+      });
       box.appendChild(line);
     });
   }
@@ -475,16 +494,19 @@
     return sp;
   }
 
-  // tui_ssid_addstr(): the same palette, its own hash of the SSID. The
-  // server sends every SSID in its display form (web/src/web_ssid.h:
-  // printable UTF-8 as it is, any other octet as \xNN), never raw, with
-  // the colour it hashed over the octets themselves (k, its *_k member),
-  // which is the TUI's; the page's own hash is for an SSID that came
-  // without one. One that needed escaping (np) carries a marker.
-  function ssidText(ssid, k, np) {
+  // An SSID in its channel's colour (owner 2026-11-18, replacing the
+  // TUI's hash colour on the page; the TUI keeps tui_ssid_addstr()'s):
+  // the channel of the SSID's most recently heard AP, which
+  // /api/wifi/lastch names (SlothChan.mark()), else ch, the channel of
+  // the record it came in where that carries one, else the ink around
+  // it. The server sends every SSID in its display form
+  // (web/src/web_ssid.h: printable UTF-8 as it is, any other octet as
+  // \xNN), never raw, and that form is the name looked up; k, the hash
+  // colour (its *_k member), is the canvases' (the waterfall's stacks)
+  // and not text's. One that needed escaping (np) carries a marker.
+  function ssidText(ssid, k, np, ch, band) {
     var sp = el("span", "", ssid);
-    if (num(k) && k >= 0 && k < P.ip) sp.style.color = "var(--k-" + k + ")";
-    else if (ssid !== "") sp.style.color = "var(--k-" + ipColorIndex(ssid) + ")";
+    if (ssid !== "") SlothChan.mark(sp, "ssid", ssid, ch, band);
     if (np !== true) return sp;
     var w = el("span", "ssid-np");
     w.appendChild(sp);
@@ -497,8 +519,8 @@
   // Enter or Space opens its detail, as a device row opens the drawer.
   // plain: inside a control that has an action of its own. ssidHidden:
   // the word a view writes for the empty SSID, selectable the same way.
-  function ssidSpan(ssid, k, np, plain) {
-    var n = ssidText(ssid, k, np);
+  function ssidSpan(ssid, k, np, plain, ch, band) {
+    var n = ssidText(ssid, k, np, ch, band);
     return plain || !window.SlothSsid ? n : SlothSsid.link(n, ssid);
   }
   function ssidHidden(word) {
@@ -556,11 +578,13 @@
   function infoClass(s) { return s ? "info-" + (ipColorIndex(s) & 7) : "d-normal"; }
 
   // A series key or episode key: an address as an address, a MAC in
-  // CP_DIM (the TUI's device and station tables), anything else (an
+  // CP_DIM (the TUI's device and station tables) or, once heard on
+  // Wi-Fi, its channel's colour (SlothChan.mark()), anything else (an
   // interface, a channel, an alert type) in CP_NORMAL.
   function keySpan(k) {
     if (isIP(k)) return ipSpan(k, 0);
-    return el("span", MAC_RE.test(k) ? "d-dim" : "d-normal", k);
+    if (MAC_RE.test(k)) return SlothChan.mark(el("span", "d-dim", k), "mac", k);
+    return el("span", "d-normal", k);
   }
 
   // The heat ramp's class, tui_heat()'s 0.15 / 0.40 / 0.70.
@@ -1688,6 +1712,8 @@
     set("tick-note", "");
     first = true;
     live();
+    // the channel colours as this scope holds them
+    chanLoad(true);
     return 1;
   }
   function pickScope(s) {
@@ -2895,6 +2921,25 @@
   sunLoad();
   setInterval(sunLoad, SUN_POLL_MS);
 
+  // The channel each Wi-Fi name was last heard on (/api/wifi/lastch,
+  // sloth.db's), for every MAC and SSID the page writes in its
+  // channel's colour (SlothChan.mark(), owner 2026-11-18). Read at load
+  // and each minute, in the scope shown; learn() repaints what is drawn.
+  // An answer without the maps (out of scope) holds nothing: each name
+  // keeps its record's channel, or its ink. A failed read (a busy
+  // sloth.db's 503) keeps what the last one held, so a minute's timeout
+  // does not blank every name; a failed read for a new scope holds
+  // nothing, never the old scope's. Only the newest read's answer is
+  // taken: a scope change's must not be overwritten by a slower one.
+  var CHAN_POLL_MS = 60000, chanSeq = 0;
+  function chanLoad(fresh) {
+    var n = ++chanSeq;
+    getJSON("/api/wifi/lastch").then(function (j) { if (n === chanSeq) SlothChan.learn(j); })
+      .catch(function () { if (n === chanSeq && fresh === true) SlothChan.learn(null); });
+  }
+  chanLoad(true);
+  setInterval(chanLoad, CHAN_POLL_MS);
+
   function rowEl() {
     var r = { el: el("div", "drow dt-row"), k: -1, mac: "" };
     r.el.role = "row";
@@ -2932,8 +2977,10 @@
   // The TUI's device table (src/views/devices.c): the MAC in CP_DIM, a
   // known vendor and a name in CP_BRIGHT (an unknown one dim), source
   // and signal dim, the risk heat-graded by level (MED 0.4, HIGH 0.7,
-  // CRIT 1.0, LOW dim), a non-zero count at heat 0.5; the address in
-  // its hash colour, the SSID in its own, the name through the brands.
+  // CRIT 1.0, LOW dim), a non-zero count at heat 0.5; the IP in its
+  // hash colour, the MAC and the SSID in their channel's (SlothChan.mark()
+  // over /api/wifi/lastch: a MAC never heard on Wi-Fi stays dim), the
+  // name through the brands.
   var RISK_HEAT = [-1, 0.4, 0.7, 1.0];
   // risk_signals bit 64 (sloth's DEV_RISK_SELF, #191): the sensor
   // host's own interface or one on the operator's roster. Its anonymity
@@ -2955,6 +3002,7 @@
     if (r.nw) r.cells["c-mac"].insertBefore(r.nw, r.sw);
     r.macText.className = d.random ? "rnd d-dim" : "d-dim";
     r.macText.textContent = (d.random ? "~" : "") + r.mac;
+    SlothChan.mark(r.macText, "mac", r.mac);
     if (window.SlothSubNotes) SlothSubNotes.mark(r.cells["c-mac"], "device", r.mac);
     r.cells["c-ven"].className = "c-ven " + (d.vendor === null ? "d-dim" : "d-bright");
     r.cells["c-ven"].textContent = d.vendor === null ? "?" : String(d.vendor);
@@ -2991,6 +3039,7 @@
     if (r.nw) { r.nw.remove(); r.nw = null; }
     r.macText.className = "";
     r.macText.textContent = (d.random ? "~" : "") + r.mac;
+    SlothChan.unmark(r.macText);
     put(r.fv, fvMark(d));
     r.cells["c-ven"].className = "c-ven";
     r.cells["c-ven"].textContent = typeof d.vendor === "string" ? d.vendor : "?";
@@ -3095,7 +3144,11 @@
     return sp;
   }
   function ssidVal(v, k, np) { return v === null || v === undefined ? null : ssidSpan(String(v), k, np); }
-  function macVal(v) { return v === null || v === undefined ? null : el("span", "d-dim", String(v)); }
+  // A MAC in its channel's colour (SlothChan.mark(): an AP's own, a
+  // station's last heard; one never heard on Wi-Fi stays dim).
+  function macVal(v) {
+    return v === null || v === undefined ? null : SlothChan.mark(el("span", "d-dim", String(v)), "mac", String(v));
+  }
 
   // The drawer's and Lookup's lists are tables too: when, and what,
   // the value sorted as its kind is.
@@ -3219,6 +3272,8 @@
     SlothBundle.mount($("dr-hd"), "device", mac, scoped, $("dr-close"));
     $("dr-sw").style.background = keyColor(mac);
     $("dr-mac").className = "d-dim";
+    // its channel's colour (SlothChan.mark()), as in the table
+    SlothChan.mark($("dr-mac"), "mac", mac);
     set("dr-note", "loading");
     // The last device's research is not this one's.
     clear("dr-vendor");
@@ -3262,8 +3317,9 @@
       itemList(box, "pnl ssids", j.ssids, function (x) { return ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np); }, j.ssids_more);
       itemList(box, "associations", j.assocs, function (x) {
         var sp = el("span", "");
-        sp.appendChild(el("span", "d-dim", x.bssid + "  "));
-        if (x.ssid !== null) sp.appendChild(ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np));
+        sp.appendChild(SlothChan.mark(el("span", "d-dim", String(x.bssid)), "mac", x.bssid, x.channel));
+        sp.appendChild(el("span", "d-dim", "  "));
+        if (x.ssid !== null) sp.appendChild(ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np, false, x.channel));
         sp.appendChild(el("span", "d-normal", "  ch "));
         sp.appendChild(num(x.channel) ? SlothChan.chip(x.channel) : el("span", "d-normal", String(x.channel)));
         sp.appendChild(el("span", "d-normal", (num(x.signal) ? "  " + x.signal + " dBm" : "") + "  source " + x.source));
@@ -3676,7 +3732,9 @@
         var sw = el("span", "sw");
         sw.style.backgroundColor = txColor(o.t);
         b.appendChild(sw);
-        b.appendChild(el("span", "", o.ssid === "" ? "(hidden)" : o.ssid));
+        // the swatch the stacks' colour it keys; the name its channel's
+        // (SlothChan.mark(): the SSID's most recently heard AP's)
+        b.appendChild(o.ssid === "" ? el("span", "", "(hidden)") : SlothChan.mark(el("span", "", o.ssid), "ssid", o.ssid));
         b.addEventListener("click", function () {
           WF.hl = WF.hl === o.ssid ? null : o.ssid;
           // One highlight at a time: an SSID drops a picked client.
@@ -3794,7 +3852,10 @@
       var sw = el("span", "sw dia");
       sw.style.backgroundColor = clientColor(c);
       b.appendChild(sw);
-      b.appendChild(el("span", "", clientName(c)));
+      // the diamond its network's colour; the name the channel the
+      // client was last heard on (SlothChan.mark()), else its busiest here
+      b.appendChild(SlothChan.mark(el("span", "", clientName(c)), "mac", c.id,
+                                   c.chans.length && Array.isArray(c.chans[0]) ? c.chans[0][0] : null));
       b.addEventListener("click", function () {
         WF.pc = on ? null : c.id;
         if (WF.pc !== null) WF.hl = null;
@@ -4154,7 +4215,10 @@
     var nw = SlothRf.newMark(a.first_seen, WF.newFrom);
     if (nw) bs.appendChild(nw);
     bs.appendChild(sw);
-    bs.appendChild(el("span", "d-dim", a.bssid));
+    // the BSSID in its own channel's colour (SlothChan.mark()); another
+    // host's row stays grey
+    var bt = bs.appendChild(el("span", "d-dim", a.bssid));
+    if (!rem) SlothChan.mark(bt, "mac", String(a.bssid), a.channel, a.rf ? a.rf.radio : null);
     var fm = fvMark(a);
     if (fm) bs.appendChild(fm);
     row.appendChild(bs);
@@ -4164,11 +4228,13 @@
       row.tabIndex = 0;
       row.addEventListener("click", function () { openDrawer(String(a.bssid)); });
     }
-    // The SSID in its hash colour; the warning (KARMA, multi-VAP) is
-    // the squares after it, at the heat the TUI warns at.
+    // The SSID in its channel's colour (this row's, the AP's current
+    // one; /api/wifi/lastch's where it has none); the warning (KARMA,
+    // multi-VAP) is the squares after it, at the heat the TUI warns at.
     var ss = el("span", "c-ssid");
     ss.appendChild(a.ssid === null ? ssidHidden("(hidden)")
-                   : rem ? el("span", "", String(a.ssid)) : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
+                   : rem ? el("span", "", String(a.ssid))
+                   : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np, false, a.channel, a.rf ? a.rf.radio : null));
     // sloth's --my-ssid / --my-bssid, from its `ownership` record; never
     // on another host's row, which carries neither.
     if (!rem && a.designated === true) ss.appendChild(el("span", "d-bright", " yours"));
@@ -4214,7 +4280,7 @@
       hist.appendChild(document.createTextNode("ssid history: "));
       a.ssids.forEach(function (x, i) {
         if (i) hist.appendChild(document.createTextNode("; "));
-        hist.appendChild(ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np));
+        hist.appendChild(ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np, false, a.channel, a.rf ? a.rf.radio : null));
         hist.appendChild(document.createTextNode(" (" + shortStamp(x.first_seen) + " to " +
                                                  shortStamp(x.last_seen) + ")"));
       });
@@ -4289,7 +4355,7 @@
       var sw = el("span", "sw");
       sw.style.background = keyColor(String(d.mac));
       mc.appendChild(sw);
-      mc.appendChild(el("span", d.random ? "rnd d-dim" : "d-dim", (d.random ? "~" : "") + d.mac));
+      mc.appendChild(SlothChan.mark(el("span", d.random ? "rnd d-dim" : "d-dim", (d.random ? "~" : "") + d.mac), "mac", String(d.mac)));
       row.appendChild(mc);
       row.appendChild(el("span", d.vendor === null ? "d-dim" : "d-bright", d.vendor === null ? "?" : String(d.vendor)));
       SlothRf.cell(row.appendChild(el("span", "c-sig d-dim")), d.rf, num(d.signal) ? d.signal : null);
@@ -4361,13 +4427,14 @@
       { k: "st", label: "status", w: 13, type: "text", val: av("status") },
       { k: "ls", label: "last", w: 11, type: "time", val: av("last_seen") }
     ] });
-  // A MAC with its swatch, as the AP table and the TUI colour one.
-  function macCell(mac) {
+  // A MAC with its swatch, as the AP table and the TUI colour one; the
+  // address in its channel's colour (SlothChan.mark()), ch the row's.
+  function macCell(mac, ch) {
     var c = el("span", "");
     var sw = el("span", "sw");
     sw.style.background = keyColor(String(mac));
     c.appendChild(sw);
-    c.appendChild(el("span", "d-dim", String(mac)));
+    c.appendChild(SlothChan.mark(el("span", "d-dim", String(mac)), "mac", String(mac), ch));
     return c;
   }
   function cardStaDraw() {
@@ -4390,9 +4457,9 @@
     var box = clear("w-scan");
     DTWC.sort(WC.aps).forEach(function (a) {
       var row = el("div", "dt-row");
-      row.appendChild(macCell(a.bssid));
+      row.appendChild(macCell(a.bssid, a.channel));
       var ss = el("span", "");
-      ss.appendChild(a.ssid === null ? ssidHidden("(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
+      ss.appendChild(a.ssid === null ? ssidHidden("(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np, false, a.channel));
       row.appendChild(ss);
       var cc = row.appendChild(el("span", "n d-normal", num(a.channel) ? undefined : String(a.channel)));
       if (num(a.channel)) cc.appendChild(SlothChan.chip(a.channel));
@@ -5042,8 +5109,9 @@
             var li = el("li", "nwrow dt-row");
             li.appendChild(el("span", "ts", shortStamp(r.first_seen)));
             // ident: a BSSID or a MAC; label: an AP's or a probe's SSID,
-            // a device's host name (or vendor).
-            li.appendChild(el("span", "d-dim", r.ident));
+            // a device's host name (or vendor). The BSSID or MAC in its
+            // channel's colour (SlothChan.mark()).
+            li.appendChild(SlothChan.mark(el("span", "d-dim", r.ident), "mac", String(r.ident)));
             var tx = el("span", "tx");
             if (r.label === null || r.label === "") tx.appendChild(el("span", "d-dim", "-"));
             else if (k[0] === "devices") brandText(tx, String(r.label), "d-bright");
@@ -5100,7 +5168,7 @@
     var sw = el("span", "sw");
     sw.style.background = keyColor(String(d.mac));
     mac.appendChild(sw);
-    mac.appendChild(el("span", d.random ? "rnd d-dim" : "d-dim", (d.random ? "~" : "") + d.mac));
+    mac.appendChild(SlothChan.mark(el("span", d.random ? "rnd d-dim" : "d-dim", (d.random ? "~" : "") + d.mac), "mac", String(d.mac)));
     row.appendChild(mac);
     row.appendChild(el("span", "c-ven " + (d.vendor === null ? "d-dim" : "d-bright"),
                        d.vendor === null ? "?" : d.vendor));

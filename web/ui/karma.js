@@ -111,7 +111,11 @@
       ["postures", c.ie_postures > 0 ? c.ie_postures + (c.ie_collapsed ? " (collapsed: several names, one posture)" : "") : "-"],
       ["forged", String(c.forged)], ["to stations", String(c.forge_stations)],
       ["pnl best", String(c.pnl_best)], ["lure chain", c.lure_chain ? "yes" : "no"],
-      ["score", String(c.score)], ["top ssid", c.top_ssid || "-"], ["tool", c.tool || "-"],
+      // the SSID in its channel's colour (SlothChan.mark(): its most
+      // recently heard AP's)
+      ["score", String(c.score)],
+      ["top ssid", c.top_ssid ? SlothChan.mark(el("span", null, c.top_ssid), "ssid", c.top_ssid) : "-"],
+      ["tool", c.tool || "-"],
       ["last beacon", stamp(c.last_seen)]
     ] : []).concat([
       ["hardware", hwText(j.hw)],
@@ -164,6 +168,7 @@
     $("kdrawer").hidden = false;
     $("kdr-close").focus();
     $("kdr-bssid").textContent = bssid;
+    SlothChan.mark($("kdr-bssid"), "mac", bssid);
     $("kdr-sw").style.background = H.keyColor(bssid);
     $("kdr-note").textContent = "loading";
     clear($("kdr-body"));
@@ -187,7 +192,8 @@
     var sw = el("span", "sw");
     sw.style.background = H ? H.keyColor(bssid) : "";
     b.appendChild(sw);
-    b.appendChild(el("span", "d-dim", bssid));
+    // the BSSID in its own channel's colour (SlothChan.mark())
+    b.appendChild(SlothChan.mark(el("span", "d-dim", bssid), "mac", bssid));
     b.title = "the KARMA detail of " + bssid;
     b.addEventListener("click", function () { open(bssid); });
     return b;

@@ -55,17 +55,23 @@
       t += "; " + plural(j.rejected, "malformed record", "malformed records") + " refused";
     return t;
   }
+  // A Wi-Fi name in its channel's colour (SlothChan.mark(), owner
+  // 2026-11-18): a BSSID or a station its own or last heard channel, an
+  // SSID its most recently heard AP's; none known, the table's ink.
+  function wname(kind, v) {
+    return window.SlothChan ? SlothChan.mark(el("span", null, String(v)), kind, String(v)) : String(v);
+  }
   function karmaCells(r) {
-    return [r.bssid, r.top_ssid || "", r.ssids, r.ie_postures > 0 ? r.ie_postures : "-",
+    return [r.bssid, r.top_ssid ? wname("ssid", r.top_ssid) : "", r.ssids, r.ie_postures > 0 ? r.ie_postures : "-",
             r.forged, r.forge_stations, r.pnl_best, r.lure_chain ? "yes" : "",
             r.score, r.tool || "", stamp(r.last_seen)];
   }
   function staCells(r) {
-    return [r.sta, r.asked, r.m1_bssids, r.unanswered, r.unanswered_kde, r.answered,
+    return [wname("mac", r.sta), r.asked, r.m1_bssids, r.unanswered, r.unanswered_kde, r.answered,
             stamp(r.first_seen), stamp(r.last_seen)];
   }
   function chainCells(r) {
-    return [r.bssid, r.victims, r.disconnects, stamp(r.first_seen), stamp(r.last_seen)];
+    return [wname("mac", r.bssid), r.victims, r.disconnects, stamp(r.first_seen), stamp(r.last_seen)];
   }
 
   var KARMA_HEAD = ["bssid", "ssid", "ssids", "postures", "forged", "to stations",
@@ -88,15 +94,18 @@
       var c = cells(rows[r]);
       tr = el("tr");
       for (var k = 0; k < c.length; k++) {
-        var td = el("td", null, k === 0 && first ? null : c[k]);
+        // a cell is text, or a node (a name in its channel's colour)
+        var nd = typeof Node !== "undefined" && c[k] instanceof Node;
+        var td = el("td", null, k === 0 && first || nd ? null : c[k]);
         if (k === 0 && first) td.appendChild(first(c[k]));
+        else if (nd) td.appendChild(c[k]);
         tr.appendChild(td);
       }
       t.appendChild(tr);
     }
   }
   function karmaFirst(v) {
-    return window.SlothKarma ? SlothKarma.button(String(v)) : document.createTextNode(String(v));
+    return window.SlothKarma ? SlothKarma.button(String(v)) : wname("mac", v);
   }
 
   function draw(j) {

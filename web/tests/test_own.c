@@ -145,7 +145,7 @@ static void test_own_page(void) {
               "    return \"not known: sloth has not reported its designated networks\";\n"
               "  }\n");
     WT_HAS(p, "      [\"designated\", designatedText(j)]\n");
-    WT_HAS(p, "      li.appendChild(macGo(b.bssid, false));\n"
+    WT_HAS(p, "      li.appendChild(macGo(b.bssid, false, b.channel));\n"
               "      if (b.designated === true) li.appendChild(H.el(\"span\", \"d-bright\", \"yours: --my-bssid\"));\n");
     WT_HAS(p, "  function designatedCaption(j) {\n"
               "    var n = j.designated_count;\n"

@@ -1511,6 +1511,82 @@ static void test_alerts_history_scoped(void) {
     same_as_hybrid(&H, "/api/wifi/aps", "");
 }
 
+/* /api/wifi/lastch (2026-11-18): the channel each Wi-Fi name was last
+ * heard on, for the page's channel colour on text. An AP's own channel
+ * (beacon_aps; channel 0, not decoded, is not read), an SSID's most
+ * recently heard AP's (LastNet: 36 on the older AP, 149 on the newer),
+ * a station's latest association or probe (e1's probe on 6 is newer
+ * than its association on 36; e2's association on 36 newer than its
+ * probe on 1), the SSID in its display form (\x01 escaped). The
+ * monitor radio's: answered under Monitor and Hybrid, out of scope
+ * under Local, the query checked first; seen red (Local's answer
+ * carried LastNet) with M5_LASTCH out of route_m5()'s none_here. A long
+ * list is cut, newest kept: 1100 more APs, the oldest absent and "cut"
+ * true; seen red (the oldest present) with the AP read ordered oldest
+ * first. The other absences seen red: "LastNet":36 with the SSID
+ * read's MAX() made MIN(); d3 (channel 0) only with both guards, the read's
+ * "channel > 0" and emit_lastch()'s, opened. */
+static void test_wifi_lastch_scoped(void) {
+    char sql[2048];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO beacon_aps (bssid,ssid,signal_dbm,channel,enc,first_seen,last_seen) VALUES"
+        " ('02:00:00:00:00:d1','LastNet',-50,36,'WPA2',%lld,%lld),"
+        " ('02:00:00:00:00:d2','LastNet',-60,149,'WPA2',%lld,%lld),"
+        " ('02:00:00:00:00:d3','ZeroNet',-60,0,'WPA2',%lld,%lld),"
+        " ('02:00:00:00:00:d4','Odd' || char(1) || 'Net',-70,44,'WPA2',%lld,%lld);"
+        "INSERT INTO assocs (bssid,sta_mac,ssid,source,channel,signal_dbm,first_seen,last_seen)"
+        " VALUES ('02:00:00:00:00:d1','02:00:00:00:00:e1','LastNet',0,36,-55,%lld,%lld),"
+        " ('02:00:00:00:00:d1','02:00:00:00:00:e2','LastNet',0,36,-56,%lld,%lld);"
+        "INSERT INTO probe_clients (mac,ssid,signal_dbm,channel,frame_count,presence,"
+        "first_seen,last_seen) VALUES"
+        " ('02:00:00:00:00:e1','LastNet',-71,6,3,0,%lld,%lld),"
+        " ('02:00:00:00:00:e2','LastNet',-72,1,3,0,%lld,%lld);",
+        (long long)SDB_NOW - 900, (long long)SDB_NOW - 100,
+        (long long)SDB_NOW - 900, (long long)SDB_NOW - 50,
+        (long long)SDB_NOW - 900, (long long)SDB_NOW - 40,
+        (long long)SDB_NOW - 900, (long long)SDB_NOW - 45,
+        (long long)SDB_NOW - 900, (long long)SDB_NOW - 500,
+        (long long)SDB_NOW - 900, (long long)SDB_NOW - 20,
+        (long long)SDB_NOW - 900, (long long)SDB_NOW - 10,
+        (long long)SDB_NOW - 900, (long long)SDB_NOW - 800);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    WT_EQ(route(&H, "/api/wifi/lastch", ""), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "{\"now\":");
+    WT_HAS(b, ",\"aps\":{\"02:00:00:00:00:d4\":44,\"02:00:00:00:00:d2\":149,\"02:00:00:00:00:d1\":36,");
+    WT_LACKS(b, "02:00:00:00:00:d3");
+    WT_HAS(b, "\"ssids\":{\"Odd\\\\x01Net\":44,\"LastNet\":149,");
+    WT_LACKS(b, "\"LastNet\":36");
+    WT_LACKS(b, "ZeroNet");
+    WT_HAS(b, "\"stas\":{\"02:00:00:00:00:e1\":6,\"02:00:00:00:00:e2\":36,");
+    WT_HAS(b, "\"cut\":false}\n");
+    WT_EQ(route(&H, "/api/wifi/lastch", "limit=1"), 400);
+    WT_EQ(route(&H, "/api/wifi/lastch", "scope=monitor"), 200);
+    WT_HAS(body_of(g_out), "\"LastNet\":149");
+    WT_EQ(route(&H, "/api/wifi/lastch", "scope=local"), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"out_of_scope\":true");
+    WT_LACKS(b, "LastNet");
+    WT_LACKS(b, "02:00:00:00:00:e1");
+    WT_EQ(route(&H, "/api/wifi/lastch", "scope=local&limit=1"), 400);
+    same_as_hybrid(&H, "/api/wifi/lastch", "");
+    /* More than the answer holds: the newest kept, "cut" said. */
+    snprintf(sql, sizeof(sql),
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1100)"
+        " INSERT INTO beacon_aps (bssid,ssid,signal_dbm,channel,enc,first_seen,last_seen)"
+        " SELECT printf('02:00:00:01:%%02x:%%02x', i / 256, i %% 256), 'Many', -80, 11, 'WPA2',"
+        " %lld, %lld + i FROM n;", (long long)SDB_NOW - 7 * 86400, (long long)SDB_NOW - 5 * 86400);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    WT_EQ(route(&H, "/api/wifi/lastch", ""), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"cut\":true}\n");
+    WT_HAS(b, "\"02:00:00:00:00:d2\":149");
+    WT_LACKS(b, "\"02:00:00:01:00:01\"");
+    WT_HAS(b, "\"LastNet\":149");
+    WT_HAS(b, "\"02:00:00:00:00:e1\":6");
+    WT_EQ(sdb_exec(g_db, "DELETE FROM beacon_aps WHERE ssid = 'Many';"), 0);
+}
+
 /* The WiFi view's Local half: the managed card's own scan (wifi_aps)
  * and its link (wifi_stas), Wi-Fi through the host's own network. Shown
  * under Local and Hybrid; under Monitor out of scope, the parameters
@@ -1786,6 +1862,7 @@ void run_scope_tests(void) {
     WT_RUN(test_device_scoped);
     WT_RUN(test_alerts_history_scoped);
     WT_RUN(test_wifi_card_scoped);
+    WT_RUN(test_wifi_lastch_scoped);
     WT_RUN(test_scoped_reads_on_a_large_file);
     sdb_down();
 #endif

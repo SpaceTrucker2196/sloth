@@ -845,7 +845,7 @@ enum { M5_CHANNELS, M5_DEAUTH, M5_APS, M5_OVERVIEW, M5_HDEVICES, M5_HALERTS,
        M5_HFLOWS, M5_SESSIONS, M5_SESSIONS_NEW, M6_FLOWS, M6_GRAPH, M5_WLOCAL,
        M5_CHAIN, RF_GNSS_SEEN, RF_GNSS_SAT, RF_ADSB_SEEN, RF_ADSB_AC, RF_GNSS_TRACKS,
        RF_APRS_SEEN, RF_APRS_STN, RF_APRS_TRK, M5_SSID,
-       PR_CLIENTS, PR_SSIDS, PR_SHARED, PR_GROUPS, RF_VICTRON_HIST };
+       PR_CLIENTS, PR_SSIDS, PR_SHARED, PR_GROUPS, RF_VICTRON_HIST, M5_LASTCH };
 
 /* The WiFi and History routes (M5, web_wifi.h, web_history.h) and the
  * Flows routes (M6, web_flows.h): the same shape as route_m4(). */
@@ -871,7 +871,7 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
         web_aprs_seen_route, web_aprs_station_route, web_aprs_tracks_route,
         web_ssid_route, web_probes_clients_route, web_probes_ssids_route,
         web_probes_shared_route, web_probes_groups_route,
-        web_victron_history_route,
+        web_victron_history_route, web_wifi_lastch_route,
     };
     /* A view a capture scope holds nothing of (web_scope.h): the WiFi
      * view's channels, deauths and APs are the monitor radio's, its card
@@ -884,7 +884,7 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
     int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
     const char *none_here =
         sc == WEB_SCOPE_LOCAL && (which == M5_CHANNELS || which == M5_DEAUTH ||
-                                  which == M5_APS || which == M5_CHAIN)
+                                  which == M5_APS || which == M5_CHAIN || which == M5_LASTCH)
             ? "the WiFi view's channels, deauths and access points are the passive "
               "monitor radio's; the host's own interfaces carried none of it (the "
               "managed card's own scan and link are /api/wifi/local)"
@@ -2261,6 +2261,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             { "/api/wifi/channels", M5_CHANNELS },
             { "/api/wifi/deauth", M5_DEAUTH },
             { "/api/wifi/chain", M5_CHAIN },
+            /* the channel each Wi-Fi name was last heard on (chan.js) */
+            { "/api/wifi/lastch", M5_LASTCH },
             /* GNSS and ADS-B history (web_rfhist.h): sloth.db's. */
             { "/api/gnss/seen", RF_GNSS_SEEN },
             { "/api/gnss/sat", RF_GNSS_SAT },

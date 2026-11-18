@@ -7,3 +7,8 @@
 .ch-chip { display: inline-block; min-width: 3ch; padding: 0 3px; border-radius: 2px; text-align: center;
   font-variant-numeric: tabular-nums; font-weight: 600; line-height: 1.35; color: var(--ch-ink); }
 .ch-chip.unk { color: var(--muted); font-weight: 400; box-shadow: inset 0 0 0 1px var(--rule-hi); }
+/* A name in its channel's colour (SlothChan.mark()) on a monitor row
+ * keeps the row's ink: the channel colours are held at 4.5:1 on the
+ * list grounds (palette.c CH_TEXT_MIN), not on --mon-bg, and a cell's
+ * transmitter list is all one channel, named in its header's chip. */
+:is(.ticker, .mixl) > li.mon [data-ch-kind] { color: var(--mon-fg) !important; }

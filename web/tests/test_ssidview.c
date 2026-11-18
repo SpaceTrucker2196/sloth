@@ -640,8 +640,8 @@ static const char JS_MORE[] =
     "";
 
 static const char JS_SPAN[] =
-    "  function ssidSpan(ssid, k, np, plain) {\n"
-    "    var n = ssidText(ssid, k, np);\n"
+    "  function ssidSpan(ssid, k, np, plain, ch, band) {\n"
+    "    var n = ssidText(ssid, k, np, ch, band);\n"
     "    return plain || !window.SlothSsid ? n : SlothSsid.link(n, ssid);\n"
     "  }\n"
     "";
@@ -673,16 +673,18 @@ static void test_page_ssid_detail(void) {
     WT_HAS(p, JS_MORE);
     WT_HAS(p, JS_SPAN);
     WT_HAS(p, JS_HIDDEN);
-    WT_HAS(p, "  function ssidText(ssid, k, np) {\n    var sp = el(\"span\", \"\", ssid);\n");
+    WT_HAS(p, "  function ssidText(ssid, k, np, ch, band) {\n    var sp = el(\"span\", \"\", ssid);\n");
     WT_HAS(p, "    H.getJSON(\"/api/wifi/ssid?ssid=\" + encodeURIComponent(p)).then(function (j) {\n");
     /* The hooks, where the WiFi view writes a name. */
     WT_HAS(p, "    ss.appendChild(a.ssid === null ? ssidHidden(\"(hidden)\")\n"
-              "                   : rem ? el(\"span\", \"\", String(a.ssid)) : "
-              "ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));\n");
+              "                   : rem ? el(\"span\", \"\", String(a.ssid))\n"
+              "                   : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np, false, a.channel, "
+              "a.rf ? a.rf.radio : null));\n");
     WT_HAS(p, "    if (!rem && window.SlothSubNotes && window.SlothSsid && a.ssid !== null)\n");
-    WT_HAS(p, "        hist.appendChild(ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np));");
+    WT_HAS(p, "        hist.appendChild(ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np, false, a.channel, "
+              "a.rf ? a.rf.radio : null));");
     WT_HAS(p, "      ss.appendChild(a.ssid === null ? ssidHidden(\"(hidden)\") : "
-              "ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));\n      row.appendChild(ss);");
+              "ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np, false, a.channel));\n      row.appendChild(ss);");
     WT_HAS(p, ": ssidSpan(String(t.ssid), t.ssid_k, t.ssid_np, true));");
     WT_HAS(p, "      if (t.kind === \"ap\" && window.SlothSsid) SlothSsid.more(li, t.ssid === undefined "
               "? null : t.ssid);\n");

@@ -630,6 +630,11 @@ int web_sdb_ap_ssid(web_sdb_conn_t *c, const char *bssid, char *out) {
     out[0] = '\0';
     return -1;
 }
+int web_sdb_last_channels(web_sdb_conn_t *c, int what, int max,
+                          web_sdb_item_fn fn, void *ctx) {
+    (void)c; (void)what; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
 int web_sdb_deauth_floods(web_sdb_conn_t *c, const char *bssid,
                           long long from, long long to, int max,
                           web_sdb_item_fn fn, void *ctx) {
@@ -2223,6 +2228,65 @@ int web_sdb_ap_ssid(web_sdb_conn_t *c, const char *bssid, char *out) {
     }
     sqlite3_finalize(st);
     return rc == SQLITE_DONE ? found : -1;
+}
+
+int web_sdb_last_channels(web_sdb_conn_t *c, int what, int max,
+                          web_sdb_item_fn fn, void *ctx) {
+    static const char *const ap[] = { "bssid", "ssid", "channel", "last_seen", NULL };
+    static const char *const as[] = { "sta_mac", "channel", "last_seen", NULL };
+    static const char *const pc[] = { "mac", "channel", "last_seen", NULL };
+    const char *sql;
+    if (what == WEB_LASTCH_AP || what == WEB_LASTCH_SSID) {
+        if (!have_all(c, "beacon_aps", ap)) return 0;
+        /* SQLite's bare columns beside MAX() come from the row holding
+         * the maximum (lang_select.html, "bare columns"): the SSID's
+         * newest AP's channel. */
+        sql = what == WEB_LASTCH_AP
+            ? "SELECT bssid, channel, last_seen FROM beacon_aps WHERE channel > 0"
+              " ORDER BY last_seen DESC, bssid LIMIT ?1"
+            : "SELECT ssid, channel, MAX(last_seen) FROM beacon_aps WHERE channel > 0"
+              " AND COALESCE(ssid,'') <> '' GROUP BY ssid ORDER BY 3 DESC, ssid LIMIT ?1";
+    } else if (what == WEB_LASTCH_STA) {
+        int ha = have_all(c, "assocs", as), hp = have_all(c, "probe_clients", pc);
+        /* Each side cut to its newest ?1 before the union: probe_clients
+         * is one row per MAC and grows with every randomised probe
+         * (81,323 rows on W9FJC, 2026-11-18), so a GROUP BY over the
+         * whole union built a temp B-tree of all of them every refresh.
+         * A top-?1 sorter keeps ?1 rows instead; the scan stays (no
+         * index on last_seen; ~35-55 ms there). Still exact: a MAC in
+         * the newest ?1 overall has its newest row in its side's newest
+         * ?1 (assocs grouped per MAC first, probe_clients already is). */
+        sql = ha && hp
+            ? "SELECT mac, channel, MAX(ls) FROM ("
+              "SELECT * FROM (SELECT sta_mac AS mac, channel, MAX(last_seen) AS ls"
+              " FROM assocs WHERE channel > 0 GROUP BY sta_mac ORDER BY 3 DESC LIMIT ?1)"
+              " UNION ALL SELECT * FROM (SELECT mac, channel, last_seen AS ls"
+              " FROM probe_clients WHERE channel > 0 ORDER BY last_seen DESC LIMIT ?1))"
+              " GROUP BY mac ORDER BY 3 DESC, mac LIMIT ?1"
+            : ha ? "SELECT sta_mac, channel, MAX(last_seen) FROM assocs WHERE channel > 0"
+                   " GROUP BY sta_mac ORDER BY 3 DESC, sta_mac LIMIT ?1"
+            : hp ? "SELECT mac, channel, last_seen FROM probe_clients WHERE channel > 0"
+                   " ORDER BY last_seen DESC, mac LIMIT ?1"
+            : NULL;
+        if (!sql) return 0;
+    } else {
+        return -1;
+    }
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_int(st, 1, max);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_item_t it;
+        memset(&it, 0, sizeof(it));
+        text(st, 0, it.a, WEB_SDB_TEXT_MAX);
+        it.n2 = sqlite3_column_int64(st, 1);
+        it.last_seen = sqlite3_column_int64(st, 2);
+        n++;
+        if (fn(ctx, &it)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
 }
 
 /* One statement of the seven-column item shape: ?1 a text (when p1),

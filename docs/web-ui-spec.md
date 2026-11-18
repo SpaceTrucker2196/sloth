@@ -356,10 +356,19 @@ The client keeps a 24 h fine-tier ring in memory per visible metric and asks `/a
 - **WiFi channel colours** (2026-11-18): `--ch-N` and `--ch6-0..3` in
   `palette.css`, written for both themes in `web/tools/palette.c`
   (`CHAN[]`, 2.4 GHz cool, 5 GHz warm, 6 GHz violet), held by the build
-  at 3:1 on every ground including the greenbar stripes and at
-  CIEDE2000 floors between neighbours; mapped only by `web/ui/chan.js`.
-  Lists alternate (`web/ui/greenbar.css`): the surface 8% toward white,
-  toward black in the light theme.
+  at 4.5:1 as text on `--bg`, `--panel`, `--panel-2` and each one's
+  greenbar stripe (so 3:1 as a chip's fill), the chip's ink at 4.5:1 on
+  it, and at CIEDE2000 floors between neighbours; mapped only by
+  `web/ui/chan.js`. A chip wherever a channel is shown; every Wi-Fi MAC
+  and SSID as text in its channel's colour (`SlothChan.mark()`): the
+  record's own channel where it carries one, else the last from `GET
+  /api/wifi/lastch` (sloth.db's `beacon_aps`, `assocs`, `probe_clients`:
+  an AP its own channel, a station the one it was last heard on, an SSID
+  its most recently heard AP's), else the ink. The SSID's hash colour is no longer its text colour (owner,
+  2026-11-18); it stays on SSID-keyed marks. Lists alternate
+  (`web/ui/greenbar.css`): the surface 8% toward white, toward black in
+  the light theme, where the data colours are derived for 4.5:1 on the
+  stripes and a stripe row takes `--gb-*` for the chrome's text.
 - **Chart hues** with no TUI counterpart (`--f-*`, the Flows chord)
   are in `theme.css`, each named in the legend; the generator fails the
   build if two come within 15 (CIEDE2000) in either theme.

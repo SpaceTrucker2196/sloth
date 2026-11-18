@@ -160,6 +160,19 @@ int web_wifi_aps_route(const web_m4_t *m, const char *query, long long now_s,
 #define WEB_WIFI_STA_MAX 32
 int web_wifi_local_route(const web_m4_t *m, const char *query, long long now_s,
                          char *body, size_t cap, size_t *len, int *status);
+/* /api/wifi/lastch (2026-11-18): the channel each Wi-Fi name was last
+ * heard on, for the page's channel colour on text (web/ui/chan.js
+ * SlothChan.learn()): {"aps":{BSSID:ch},"ssids":{SSID:ch},
+ * "stas":{MAC:ch},"cut":bool}. An AP's own channel, an SSID's most
+ * recently heard AP's, a station's latest association's or probe's
+ * (web_sdb_last_channels()); each newest first, at most
+ * WEB_LASTCH_ROWS, and each in a third of the answer's room, cut
+ * (the oldest left out, "cut" true) when the names are long. The
+ * SSIDs in their display form (web_ssid.h), the page's key. No
+ * parameters. The monitor radio's, so out of scope under Local. */
+#define WEB_LASTCH_ROWS 1024
+int web_wifi_lastch_route(const web_m4_t *m, const char *query, long long now_s,
+                          char *body, size_t cap, size_t *len, int *status);
 
 /* The 802.11 AKM suite name of type t (IEEE 802.11-2020 Table 9-151),
  * src/rsn_ie.c rsn_akm_name()'s, "?" when it names none. */

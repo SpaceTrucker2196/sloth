@@ -293,8 +293,12 @@
     ln.appendChild(tr);
     return ln;
   }
+  // A Wi-Fi key's address in its channel's colour (SlothChan.mark(),
+  // owner 2026-11-18: an AP's own, a station's last heard, as this
+  // site's sloth.db knows it); a BLE address keeps the button's ink.
   function devLink(kind, r) {
     var b = H.el("button", "fleet-dev", r.key);
+    if (kind !== "ble" && typeof r.addr === "string") SlothChan.mark(b, "mac", r.addr);
     b.type = "button";
     b.title = "open " + r.addr;
     b.addEventListener("click", function () {
@@ -320,7 +324,12 @@
       j.rows.forEach(function (r) {
         var row = H.el("div", "fleet-row");
         row.appendChild(devLink(kind, r));
-        row.appendChild(H.el("span", "", (r.label || "") + (r.vendor ? " · " + r.vendor : "")));
+        // an AP's or a probe's label is an SSID: its channel's colour
+        var lb = row.appendChild(H.el("span", ""));
+        if (r.label && (kind === "ap" || kind === "probe"))
+          lb.appendChild(SlothChan.mark(H.el("span", "", r.label), "ssid", r.label));
+        else if (r.label) lb.appendChild(document.createTextNode(r.label));
+        if (r.vendor) lb.appendChild(document.createTextNode(" · " + r.vendor));
         row.appendChild(H.el("span", "", r.verdict ? r.verdict.state + " (" + siteName(r.verdict.site) + ")" : "-"));
         var tl = H.el("div", "fleet-tl");
         r.sites.forEach(function (s) { tl.appendChild(lane(s, t0, t1)); });

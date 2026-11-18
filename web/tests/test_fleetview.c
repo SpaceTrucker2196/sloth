@@ -99,7 +99,7 @@ static void test_page(void) {
               "    if (window.SlothProbes) SlothProbes.show();\n");
     WT_HAS(p, "    fvQuery: fvQuery, fvAll: fvAll });");
     WT_HAS(p, "    var rows = (f.rows || []).concat(f.ap_rows || [], f.probe_rows || []);");
-    WT_HAS(p, "               x.kind === \"probe\" ? \"probed for \" + x.ssid : x.ssid ? \"ssid \" + x.ssid : null,");
+    WT_HAS(p, "               x.kind === \"probe\" ? ssidN(\"probed for \") : x.ssid ? ssidN(\"ssid \") : null,");
     WT_HAS(p, "      if (d.remote === true) { box.appendChild(clientRemote(d)); return; }");
     WT_HAS(p, "      if (s.remote === true) { ssidRemote(box, s); return; }");
     WT_HAS(p, "    row.addEventListener(\"click\", function () { H.openDrawer(String(d.mac)); });\n"

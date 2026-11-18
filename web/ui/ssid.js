@@ -112,14 +112,17 @@
     return b;
   }
 
-  // A MAC as a button that opens the device drawer over this one.
-  function macGo(mac, random) {
+  // A MAC as a button that opens the device drawer over this one; the
+  // address in its channel's colour (SlothChan.mark(): an AP's own, a
+  // station's last heard; ch the record's where it carries one).
+  function macGo(mac, random, ch) {
     var b = H.el("button", "lk");
     b.type = "button";
     var sw = H.el("span", "sw");
     sw.style.background = H.keyColor(String(mac));
     b.appendChild(sw);
-    b.appendChild(H.el("span", random ? "rnd d-dim" : "d-dim", (random ? "~" : "") + mac));
+    b.appendChild(SlothChan.mark(H.el("span", random ? "rnd d-dim" : "d-dim", (random ? "~" : "") + mac),
+                                 "mac", String(mac), ch));
     b.title = "the device drawer of " + mac;
     b.addEventListener("click", function () { H.openDrawer(String(mac)); });
     return b;
@@ -158,7 +161,7 @@
         nw.title = "new: first seen in the last 24 h";
         li.appendChild(nw);
       }
-      li.appendChild(macGo(b.bssid, false));
+      li.appendChild(macGo(b.bssid, false, b.channel));
       if (b.designated === true) li.appendChild(H.el("span", "d-bright", "yours: --my-bssid"));
       li.appendChild(H.el("span", typeof b.vendor === "string" ? "d-bright" : "d-dim",
                           typeof b.vendor === "string" ? b.vendor : "?"));
@@ -209,15 +212,26 @@
     return "not known: sloth has not reported its designated networks";
   }
 
+  // The SSID's channel, before /api/wifi/lastch's: its most
+  // recently heard AP's, of the ones this answer lists (the page's rule
+  // for an SSID's colour, chan.js SlothChan.mark()).
+  function lastCh(j) {
+    var best = null;
+    (j.bssids || []).forEach(function (b) {
+      if (num(b.channel) && b.channel > 0 && num(b.last_seen) && (!best || b.last_seen > best.last_seen)) best = b;
+    });
+    return best ? best.channel : null;
+  }
+
   function render(j) {
     var body = clear("sdr-body"), lists = clear("sdr-lists");
-    var nm = clear("sdr-name");
-    nm.appendChild(j.ssid === null ? H.el("span", "d-dim", "(hidden)") : H.ssidPlain(String(j.ssid), j.ssid_k, j.ssid_np));
+    var nm = clear("sdr-name"), ch = lastCh(j);
+    nm.appendChild(j.ssid === null ? H.el("span", "d-dim", "(hidden)") : H.ssidPlain(String(j.ssid), j.ssid_k, j.ssid_np, ch));
     var nb = (j.bssids || []).length, newFrom = num(j.now) ? j.now - NEW_S : null;
     $("sdr-note").textContent = "sloth.db " + j.db + (H.scope() !== "hybrid" ? "; " + H.scope() + " scope" : "");
     H.kvList(body, [
       ["ssid", j.ssid === null ? "none: a hidden network's beacons carry an empty SSID"
-                               : H.ssidPlain(String(j.ssid), j.ssid_k, j.ssid_np)],
+                               : H.ssidPlain(String(j.ssid), j.ssid_k, j.ssid_np, ch)],
       ["octets", String(j.octets) + (j.ssid_np ? ", some not printable UTF-8 (shown as \\xNN)" : "")],
       ["first seen", num(j.first_seen) ? H.stamp(j.first_seen) : "no access point in sloth.db beacons it"],
       ["last seen", num(j.last_seen) ? H.stamp(j.last_seen) : null],
@@ -235,9 +249,11 @@
          "none in sloth.db's beacon_aps", bssidRow(newFrom));
     list(lists, "clients associated to it", j.assocs, j.assocs_total,
          "no association to it in sloth.db's assocs", function (li, a) {
-           li.appendChild(macGo(a.mac, a.random));
+           li.appendChild(macGo(a.mac, a.random, a.channel));
            li.appendChild(H.el("span", a.random ? "d-dim" : "d-bright", who(a)));
-           var on = li.appendChild(H.el("span", "d-dim", "on " + a.bssid + ", ch "));
+           var on = li.appendChild(H.el("span", "d-dim", "on "));
+           on.appendChild(SlothChan.mark(H.el("span", "", String(a.bssid)), "mac", String(a.bssid), a.channel));
+           on.appendChild(document.createTextNode(", ch "));
            on.appendChild(num(a.channel) ? SlothChan.chip(a.channel) : H.el("span", "", String(a.channel)));
            if (num(a.signal)) on.appendChild(document.createTextNode(", " + a.signal + " dBm"));
            seen(li, a);

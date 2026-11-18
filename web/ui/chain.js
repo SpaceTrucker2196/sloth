@@ -113,12 +113,12 @@
     return { stages: gl.stages, max: max };
   }
 
-  // A BSSID's heading: the address in its hash colour, as every MAC is.
+  // A BSSID's heading: the address in its channel's colour, as every
+  // Wi-Fi MAC on the page is (SlothChan.mark(), owner 2026-11-18; the
+  // AP's own channel from /api/wifi/lastch, else the ink around it).
   function head(bssid) {
     var d = el("div", "chhead");
-    var b = el("span", "", bssid);
-    b.style.color = H.keyColor(bssid);
-    d.appendChild(b);
+    d.appendChild(SlothChan.mark(el("span", "", bssid), "mac", bssid));
     return d;
   }
 

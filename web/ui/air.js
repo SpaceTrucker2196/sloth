@@ -168,8 +168,11 @@
     var dpr = window.devicePixelRatio || 1, g = c.getContext("2d");
     g.font = 10 * dpr + "px " + H.css("--font-mono");
     g.textBaseline = "middle";
-    g.fillStyle = H.tok("--tui-dim");
+    // each BSSID in its own channel's colour (SlothChan.of(): the AP's
+    // channel /api/wifi/lastch names), else dim, as a list writes it
     rows.forEach(function (r, i) {
+      var ch = SlothChan.of("mac", String(r.bssid));
+      g.fillStyle = ch !== null ? SlothChan.rgb(ch) : H.tok("--tui-dim");
       g.fillText(String(r.bssid), 2 * dpr, (i * (LANE + GAP) + LANE / 2) * dpr);
     });
     return { max: glyph.g7Max(lanes), lanes: rows.length, busy: all.length };

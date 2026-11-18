@@ -1873,3 +1873,78 @@ int web_wifi_local_route(const web_m4_t *m, const char *query, long long now_s,
     *status = 200;
     return 0;
 }
+
+/* ── /api/wifi/lastch ────────────────────────────────────────────────── */
+
+typedef struct {
+    web_jw_t *w;
+    size_t    end;     /* this list's room: the writer's length it stops at */
+    int       n, ssid, cut;
+} lastw_t;
+
+static int emit_lastch(void *ctx, const web_sdb_item_t *it) {
+    lastw_t *k = ctx;
+    /* a key at most WEB_SSID_JSON_MAX of a 63-octet name, ":", the
+     * channel and a comma */
+    if (k->n >= WEB_LASTCH_ROWS || k->w->len + WEB_SSID_JSON_MAX(WEB_SDB_TEXT_MAX) + 16 > k->end) {
+        k->cut = 1;
+        return 1;
+    }
+    if (!it->a[0] || it->n2 <= 0 || it->n2 > 255) return 0;
+    if (k->n++) web_jw_raw(k->w, ",");
+    if (k->ssid) web_jw_ssid(k->w, it->a); else web_jw_str(k->w, it->a);
+    web_jw_raw(k->w, ":");
+    web_jw_int(k->w, it->n2);
+    return 0;
+}
+
+int web_wifi_lastch_route(const web_m4_t *m, const char *query, long long now_s,
+                          char *body, size_t cap, size_t *len, int *status) {
+    if (!m || !m->sdb || !m->sdb->configured || !web_slothdb_available())
+        return answer_error(503, "no_sloth_db",
+                            "start slothweb with --sloth-db PATH (a WITH_SQLITE build)",
+                            body, cap, len, status);
+    char err[48];
+    if (web_params_parse(query, NULL, 0, err, sizeof(err)) != 0)
+        return answer_error(400, err, NULL, body, cap, len, status);
+    WEB_M4_CHECKED(m, len, status);
+    web_sdb_conn_t conn;
+    char oerr[WEB_SDB_ERR_MAX];
+    if (web_slothdb_open(m->sdb, &conn, WEB_SDB_HTTP_MS, now_s, oerr,
+                         sizeof(oerr)) != 0) {
+        web_slothdb_close(&conn);
+        web_sdb_stats_t st;
+        web_slothdb_stats(m->sdb, &st);
+        char r[48];
+        snprintf(r, sizeof(r), "sloth_db_%s", web_slothdb_state_word(st.state));
+        return answer_error(503, r, oerr, body, cap, len, status);
+    }
+    web_jw_t w;
+    web_jw_init(&w, body, cap);
+    web_jw_raw(&w, "{\"now\":");       web_jw_int(&w, now_s);
+    web_jw_raw(&w, ",\"db_schema\":"); web_jw_int(&w, conn.schema);
+    static const char *const NAME[3] = { "aps", "ssids", "stas" };
+    static const int WHAT[3] = { WEB_LASTCH_AP, WEB_LASTCH_SSID, WEB_LASTCH_STA };
+    size_t third = cap > 96 ? (cap - 96) / 3 : 0;
+    int cut = 0, rc = 0;
+    for (int i = 0; i < 3 && rc >= 0; i++) {
+        web_jw_raw(&w, i ? "},\"" : ",\"");
+        web_jw_raw(&w, NAME[i]);
+        web_jw_raw(&w, "\":{");
+        lastw_t k = { &w, w.len + third, 0, WHAT[i] == WEB_LASTCH_SSID, 0 };
+        rc = web_sdb_last_channels(&conn, WHAT[i], WEB_LASTCH_ROWS + 1, emit_lastch, &k);
+        cut |= k.cut;
+    }
+    int to = conn.timed_out;
+    web_slothdb_close(&conn);
+    if (rc < 0)
+        return answer_error(503, to ? "sloth_db_timeout" : "sloth_db_error", NULL,
+                            body, cap, len, status);
+    web_jw_raw(&w, "},\"cut\":");
+    web_jw_raw(&w, cut ? "true" : "false");
+    web_jw_raw(&w, "}\n");
+    if (w.overflow) return -1;
+    *len = w.len;
+    *status = 200;
+    return 0;
+}
