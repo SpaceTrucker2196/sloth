@@ -388,3 +388,4 @@
 | 8524847 | 2026-11-18T16:24:43Z | claude-opus-5-5 | 58 | 11838 | 3801959 | 35297 | 1.2798 | slothweb: WiFi channel palette (2.4 cool, 5 GHz warm) and greenbar lists |
 | 0db4329 | 2026-11-18T17:20:11Z | claude-fable-5-1, claude-opus-5-5 | 130 | 13340 | 5026937 | 140313 | 4.1028 | sloth-rf: trim SDR decoder inputs at startup when no SDR on USB |
 | ab71783 | 2026-11-18T18:13:36Z | claude-fable-5-1, claude-opus-5-5 | 174 | 16912 | 7718021 | 38349 | 2.8722 | slothweb Radar: sources picker, caption box removed |
+| 91c7881 | 2026-11-18T18:37:36Z | claude-fable-5-1, claude-opus-5-5 | 104 | 5938 | 3626168 | 14492 | 1.4555 | sloth-rf: keep a trimmed decoder whose input file was written recently |
