@@ -65,8 +65,9 @@ typedef struct {
     long long ts, rx_ms;
     char      iface[WEB_DF_IFACE_MAX + 1];
     int       sensor;            /* role "sensor", else "df" */
-    int       has_pos, has_bias, has_aux;
+    int       has_pos, has_xy, has_bias, has_aux;
     double    pos_m, bias_db;
+    double    x_m, y_m;          /* has_xy (2.4.0): metres east, north */
     long long open, running, noted;
     long long frames, rejects, retune_failures;   /* has_aux */
 } web_df_radio_t;
@@ -81,6 +82,12 @@ typedef struct {
     double    margin_db;
     int       has_along;
     double    along_m;
+    /* 2.4.0, radios placed in two dimensions: the compass point the
+     * levels lean toward (0, 45 .. 315) and how far a 3 dB error on one
+     * radio moves it (15, 30 or 45). Together or not at all, and never
+     * with along_m. */
+    int       has_bearing;
+    long long bearing_deg, bearing_err_deg;
 } web_df_em_t;
 
 typedef struct web_df {

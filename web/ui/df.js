@@ -7,11 +7,14 @@
 //                     w-df-* containers and keeps them current while
 //                     the view is visible
 // Two tables: the radios (the sensor radio and each --df-iface one,
-// where it sits on the baseline and how much louder than the sensor
-// radio it reads), and the transmitters two or more of them hear, the
-// ones with a lean first. What a row says is which radio hears the
-// transmitter loudest and by how much; it is not a bearing, and with
-// unlike antennas it is not even that. A data point, not a verdict.
+// where it sits, on the baseline or east and north, and how much louder
+// than the sensor radio it reads), and the transmitters two or more of
+// them hear, the ones with a lean first. What a row says is which radio
+// hears the transmitter loudest and by how much, and, from radios
+// placed in two dimensions with the transmitter close to them, the
+// compass point the levels lean toward. That is a lean and not a fix,
+// and with unlike antennas it is not even that. A data point, not a
+// verdict.
 // Every string shown is the sensor's: textContent only, no markup sink,
 // no attribute written from a value.
 (function () {
@@ -67,21 +70,39 @@
     if (!r.running) return "stopped";
     return r.noted > 0 ? "listening" : "no frames yet";
   }
+  // Metres east and north of the operator's origin, or along the baseline.
+  function placeText(r) {
+    if (num(r.x_m) && num(r.y_m)) {
+      return Math.abs(r.x_m).toFixed(2) + " m " + (r.x_m < 0 ? "W" : "E") + ", " +
+             Math.abs(r.y_m).toFixed(2) + " m " + (r.y_m < 0 ? "S" : "N");
+    }
+    return fixed(r.pos_m, 2, " m");
+  }
+  var POINTS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  // "NW 315 +/-30": the compass point, its degrees and what a 3 dB error
+  // on one radio does to it. "-" when sloth withheld it, the common case.
+  function bearingText(r) {
+    if (!num(r.bearing_deg) || r.bearing_deg < 0 || r.bearing_deg >= 360 || r.bearing_deg % 45)
+      return "-";
+    var t = POINTS[r.bearing_deg / 45] + " " + r.bearing_deg + "\u00b0";
+    if (num(r.bearing_err_deg)) t += " \u00b1" + r.bearing_err_deg + "\u00b0";
+    return t;
+  }
   function radioCells(r) {
-    return [r.radio, r.iface, r.role, fixed(r.pos_m, 2, " m"), radioState(r), r.noted,
+    return [r.radio, r.iface, r.role, placeText(r), radioState(r), r.noted,
             r.role === "sensor" ? "reference" : signed(r.bias_db, 1, " dB"),
             num(r.retune_failures) ? r.retune_failures : "-"];
   }
   function emCells(r) {
     return [r.mac, r.channel > 0 ? r.channel : "-", r.quality,
             r.best_iface || (r.best_radio >= 0 ? "radio " + r.best_radio : "-"),
-            fixed(r.margin_db, 1, " dB"), fixed(r.along_m, 2, " m"), r.heard_by,
+            fixed(r.margin_db, 1, " dB"), bearingText(r), fixed(r.along_m, 2, " m"), r.heard_by,
             stamp(r.last_seen)];
   }
 
   var RADIO_HEAD = ["radio", "interface", "role", "position", "state", "frames noted",
                     "reads vs sensor", "retunes refused"];
-  var EM_HEAD = ["transmitter", "ch", "quality", "loudest at", "margin", "along baseline",
+  var EM_HEAD = ["transmitter", "ch", "quality", "loudest at", "margin", "bearing", "along baseline",
                  "heard by", "last heard"];
 
   function table(id, head, rows, cells) {
@@ -133,6 +154,7 @@
       if (S.timer) clearTimeout(S.timer);
       tick();
     },
-    stateText: stateText, radioState: radioState, radioCells: radioCells, emCells: emCells
+    stateText: stateText, radioState: radioState, radioCells: radioCells, emCells: emCells,
+    placeText: placeText, bearingText: bearingText
   };
 })();

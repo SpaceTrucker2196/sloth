@@ -304,6 +304,77 @@ static void test_webdf_worst_case_fits(void) {
     WT_ASSERT(strlen(body()) > 20000);
 }
 
+/* JSONL 2.4.0, radios in a triangle: the east/north place on the radio
+ * and the bearing on the transmitter are kept and answered; a row
+ * without a bearing says nothing of one; each malformed form is refused
+ * whole. Seen red (no bearing_deg in the answer) before em_parse() read
+ * it. */
+static void test_webdf_bearing(void) {
+    fresh();
+    feed("{\"type\":\"sensor_health\",\"ts\":1800000000,\"jsonl_version\":\"2.4.0\"}");
+    feed("{\"type\":\"df_radio\",\"ts\":1800000000,\"radio\":0,\"iface\":\"alfa0\",\"role\":\"sensor\","
+         "\"x_m\":1.00,\"y_m\":-0.58,\"open\":1,\"running\":1,\"noted\":966}");
+    feed("{\"type\":\"df_radio\",\"ts\":1800000000,\"radio\":1,\"iface\":\"alfa1\",\"role\":\"df\","
+         "\"x_m\":0.00,\"y_m\":1.15,\"open\":1,\"running\":1,\"noted\":5498,\"bias_db\":-10.53,"
+         "\"frames\":5499,\"rejects\":0,\"retune_failures\":0}");
+    feed("{\"type\":\"wifi_df\",\"ts\":1800000000,\"mac\":\"02:11:22:33:44:55\",\"channel\":11,"
+         "\"heard_by\":3,\"quality\":\"lean\",\"best_radio\":1,\"best_iface\":\"alfa1\","
+         "\"margin_db\":15.10,\"bearing_deg\":315,\"bearing_err_deg\":30,"
+         "\"rssi\":[-82.0,-77.4,-75.5],\"level\":[-82.0,-66.9,-70.8],\"last_seen\":1799999990}");
+    feed("{\"type\":\"wifi_df\",\"ts\":1800000000,\"mac\":\"0a:bb:00:00:00:09\",\"channel\":1,"
+         "\"heard_by\":3,\"quality\":\"lean\",\"best_radio\":1,\"best_iface\":\"alfa1\","
+         "\"margin_db\":6.50,\"last_seen\":1799999995}");
+    WT_EQ(D.rejected, 0);
+    WT_EQ(route("", MONO0), 200);
+    const char *b = body();
+    WT_HAS(b, "{\"radio\":0,\"iface\":\"alfa0\",\"role\":\"sensor\",\"x_m\":1.00,\"y_m\":-0.58,\"open\":true,");
+    WT_HAS(b, "{\"radio\":1,\"iface\":\"alfa1\",\"role\":\"df\",\"x_m\":0.00,\"y_m\":1.15,\"open\":true,");
+    WT_LACKS(b, "pos_m");
+    WT_HAS(b, "\"margin_db\":15.10,\"bearing_deg\":315,\"bearing_err_deg\":30,\"last_seen\":1799999990");
+    WT_HAS(b, "\"margin_db\":6.50,\"last_seen\":1799999995");
+    /* The bearing goes when a newer record has none. */
+    feed("{\"type\":\"wifi_df\",\"ts\":1800000010,\"mac\":\"02:11:22:33:44:55\",\"channel\":11,"
+         "\"heard_by\":3,\"quality\":\"weak\",\"best_radio\":1,\"margin_db\":2.00,\"last_seen\":1800000009}");
+    WT_EQ(route("", MONO0), 200);
+    WT_LACKS(body(), "bearing");
+    static const char *const BAD[] = {
+        /* one of the pair */
+        "{\"type\":\"wifi_df\",\"ts\":1,\"mac\":\"02:11:22:33:44:55\",\"channel\":6,\"heard_by\":3,"
+        "\"quality\":\"lean\",\"best_radio\":1,\"margin_db\":9.4,\"bearing_deg\":90,\"last_seen\":1}",
+        "{\"type\":\"wifi_df\",\"ts\":1,\"mac\":\"02:11:22:33:44:55\",\"channel\":6,\"heard_by\":3,"
+        "\"quality\":\"lean\",\"best_radio\":1,\"margin_db\":9.4,\"bearing_err_deg\":15,\"last_seen\":1}",
+        /* not a compass point, past the circle, not a number */
+        "{\"type\":\"wifi_df\",\"ts\":1,\"mac\":\"02:11:22:33:44:55\",\"channel\":6,\"heard_by\":3,"
+        "\"quality\":\"lean\",\"best_radio\":1,\"margin_db\":9.4,\"bearing_deg\":100,\"bearing_err_deg\":15,\"last_seen\":1}",
+        "{\"type\":\"wifi_df\",\"ts\":1,\"mac\":\"02:11:22:33:44:55\",\"channel\":6,\"heard_by\":3,"
+        "\"quality\":\"lean\",\"best_radio\":1,\"margin_db\":9.4,\"bearing_deg\":360,\"bearing_err_deg\":15,\"last_seen\":1}",
+        "{\"type\":\"wifi_df\",\"ts\":1,\"mac\":\"02:11:22:33:44:55\",\"channel\":6,\"heard_by\":3,"
+        "\"quality\":\"lean\",\"best_radio\":1,\"margin_db\":9.4,\"bearing_deg\":\"north\",\"bearing_err_deg\":15,\"last_seen\":1}",
+        /* an error sloth never writes */
+        "{\"type\":\"wifi_df\",\"ts\":1,\"mac\":\"02:11:22:33:44:55\",\"channel\":6,\"heard_by\":3,"
+        "\"quality\":\"lean\",\"best_radio\":1,\"margin_db\":9.4,\"bearing_deg\":90,\"bearing_err_deg\":0,\"last_seen\":1}",
+        "{\"type\":\"wifi_df\",\"ts\":1,\"mac\":\"02:11:22:33:44:55\",\"channel\":6,\"heard_by\":3,"
+        "\"quality\":\"lean\",\"best_radio\":1,\"margin_db\":9.4,\"bearing_deg\":90,\"bearing_err_deg\":20,\"last_seen\":1}",
+        "{\"type\":\"wifi_df\",\"ts\":1,\"mac\":\"02:11:22:33:44:55\",\"channel\":6,\"heard_by\":3,"
+        "\"quality\":\"lean\",\"best_radio\":1,\"margin_db\":9.4,\"bearing_deg\":90,\"bearing_err_deg\":60,\"last_seen\":1}",
+        /* beside a point on a baseline */
+        "{\"type\":\"wifi_df\",\"ts\":1,\"mac\":\"02:11:22:33:44:55\",\"channel\":6,\"heard_by\":3,"
+        "\"quality\":\"lean\",\"best_radio\":1,\"margin_db\":9.4,\"along_m\":0.5,\"bearing_deg\":90,\"bearing_err_deg\":15,\"last_seen\":1}",
+        /* a radio with half a place, one out of bounds, both forms */
+        "{\"type\":\"df_radio\",\"ts\":1,\"radio\":2,\"iface\":\"alfa2\",\"role\":\"df\",\"x_m\":1.0,"
+        "\"open\":1,\"running\":1,\"noted\":1}",
+        "{\"type\":\"df_radio\",\"ts\":1,\"radio\":2,\"iface\":\"alfa2\",\"role\":\"df\",\"x_m\":1.0,\"y_m\":2000,"
+        "\"open\":1,\"running\":1,\"noted\":1}",
+        "{\"type\":\"df_radio\",\"ts\":1,\"radio\":2,\"iface\":\"alfa2\",\"role\":\"df\",\"pos_m\":1.0,\"x_m\":1.0,\"y_m\":2.0,"
+        "\"open\":1,\"running\":1,\"noted\":1}",
+    };
+    unsigned long before = D.rejected;
+    for (size_t i = 0; i < sizeof(BAD) / sizeof(BAD[0]); i++) feed(BAD[i]);
+    WT_EQ(D.rejected - before, sizeof(BAD) / sizeof(BAD[0]));
+    WT_EQ(route("", MONO0), 200);
+    WT_LACKS(body(), "alfa2");
+}
+
 /* Local: the query is still checked, then the one out_of_scope answer. */
 static void test_webdf_scope(void) {
     fresh();
@@ -365,7 +436,12 @@ static void test_webdf_page(void) {
     WT_HAS(p, "      return \"off: sloth has written no radio (it runs without --df-iface, or its next heartbeat, at most 5 min away, has not come yet)\";\n");
     WT_HAS(p, "    if (up < 2) t += \"; fewer than two radios listening, so nothing can be compared\";\n");
     /* The page says what the card is not. */
-    WT_HAS(p, "What this is not: a bearing, a side of the line, or a distance; radios with unlike antennas give leans that mean nothing");
+    WT_HAS(p, "What this is not: a fix, an angle of arrival, or a distance; radios with unlike antennas give leans that mean nothing");
+    /* The bearing: a column, and its words. */
+    WT_HAS(p, "\"loudest at\", \"margin\", \"bearing\", \"along baseline\"");
+    WT_HAS(p, "  var POINTS = [\"N\", \"NE\", \"E\", \"SE\", \"S\", \"SW\", \"W\", \"NW\"];\n");
+    WT_HAS(p, "    var t = POINTS[r.bearing_deg / 45] + \" \" + r.bearing_deg + \"\\u00b0\";\n");
+    WT_HAS(p, "      return Math.abs(r.x_m).toFixed(2) + \" m \" + (r.x_m < 0 ? \"W\" : \"E\") + \", \" +\n");
     /* textContent only: the module writes no markup. */
     const char *m = strstr(p, "// slothweb: the direction-finding card");
     const char *e = m ? strstr(m, "window.SlothDf = {") : NULL;
@@ -389,6 +465,7 @@ static void test_webdf_page(void) {
 void run_webdf_tests(void) {
     WT_RUN(test_webdf_reported);
     WT_RUN(test_webdf_route);
+    WT_RUN(test_webdf_bearing);
     WT_RUN(test_webdf_refuses);
     WT_RUN(test_webdf_stale_and_bounds);
     WT_RUN(test_webdf_worst_case_fits);

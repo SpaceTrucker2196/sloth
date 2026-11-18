@@ -222,9 +222,9 @@ radio is registered. Field tables: [[jsonl-schema]].
 
 In slothweb: the WiFi view's direction-finding card and `GET /api/df`
 ([[slothweb]] § Direction finding, 2026-11-17), from the stream, the
-scalars only (not the `rssi` and `level` arrays), in memory; the card
-does not show the 2.4.0 members (`x_m`, `y_m`, `bearing_deg`,
-`bearing_err_deg`) yet. Not in
+scalars only (not the `rssi` and `level` arrays), in memory; the card's
+bearing column and the radios' east/north places are the 2.4.0 members.
+Not in
 `--db`, not in the fleet export: later slices.
 
 ## Related pages

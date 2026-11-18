@@ -2864,12 +2864,17 @@ for 660 s is left out of answers and counted `stale`.
 `emitters`, `lean` before `weak` and the widest margin first, at most
 128 with `held` saying how many were fresh. What is kept of a `wifi_df`
 is its scalars (`best_radio`, `best_iface`, `margin_db`, `along_m`,
+`bearing_deg` and `bearing_err_deg` (JSONL 2.4.0, the card's bearing
+column, `NW 315° ±30°`; a radio's `x_m`, `y_m` likewise),
 `quality`, `heard_by`, `channel`, `last_seen`); the `rssi` and `level`
 arrays are not, since the stream decoder checks a nested array and skips
 it. A record with a malformed or out-of-bound member is refused whole
 and counted (`rejected`): a radio index past the table, a role that is
 not `sensor` or `df`, radio 0 not the sensor, an interface name sloth
-would not take, a negative margin.
+would not take, a negative margin, a bearing that is not one of the
+eight compass points or an error that is not 15, 30 or 45, one of that
+pair without the other or beside `along_m`, half an east/north place or
+one beside `pos_m`.
 
 `reported` tells "off" from "not known" as the lures card does: `true`
 from a 2.2.0 stream (no radios then means sloth runs without

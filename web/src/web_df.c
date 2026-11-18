@@ -95,6 +95,12 @@ static int radio_parse(const web_jrec_t *r, web_df_radio_t *t, long long *idx) {
     int e = jreal(r, "pos_m", WEB_DF_POS_MAX, &t->pos_m);
     if (e < 0) return -1;
     t->has_pos = e;
+    /* A place in two dimensions (2.4.0): both numbers or neither, and
+     * not beside a place on the baseline. */
+    int ex = jreal(r, "x_m", WEB_DF_POS_MAX, &t->x_m);
+    int ey = jreal(r, "y_m", WEB_DF_POS_MAX, &t->y_m);
+    if (ex < 0 || ey < 0 || ex != ey || (ex && t->has_pos)) return -1;
+    t->has_xy = ex;
     e = jreal(r, "bias_db", WEB_DF_DB_MAX, &t->bias_db);
     if (e < 0) return -1;
     t->has_bias = e;
@@ -128,6 +134,17 @@ static int em_parse(const web_jrec_t *r, web_df_em_t *t) {
     int e = jreal(r, "along_m", WEB_DF_POS_MAX, &t->along_m);
     if (e < 0) return -1;
     t->has_along = e;
+    /* The bearing (2.4.0): a compass point and its error, as sloth
+     * writes them (src/df.h), together, and never beside along_m. */
+    int a = web_jl_get(r, "bearing_deg") != NULL, b = web_jl_get(r, "bearing_err_deg") != NULL;
+    if (a != b) return -1;
+    if (a) {
+        if (t->has_along ||
+            !jint(r, "bearing_deg", 0, 315, &t->bearing_deg) || t->bearing_deg % 45 ||
+            !jint(r, "bearing_err_deg", 15, 45, &t->bearing_err_deg) ||
+            t->bearing_err_deg % 15) return -1;
+        t->has_bearing = 1;
+    }
     return 0;
 }
 
@@ -292,6 +309,7 @@ int web_df_route(web_df_t *d, const char *query, long long now_s,
         web_jw_raw(&w, ",\"role\":");
         web_jw_str(&w, x->sensor ? "sensor" : "df");
         if (x->has_pos) kreal(&w, "pos_m", x->pos_m);
+        if (x->has_xy) { kreal(&w, "x_m", x->x_m); kreal(&w, "y_m", x->y_m); }
         kbool(&w, "open", x->open);
         kbool(&w, "running", x->running);
         kv(&w, "noted", x->noted);
@@ -330,6 +348,10 @@ int web_df_route(web_df_t *d, const char *query, long long now_s,
         }
         kreal(&w, "margin_db", x->margin_db);
         if (x->has_along) kreal(&w, "along_m", x->along_m);
+        if (x->has_bearing) {
+            kv(&w, "bearing_deg", x->bearing_deg);
+            kv(&w, "bearing_err_deg", x->bearing_err_deg);
+        }
         kv(&w, "last_seen", x->last_seen);
         kv(&w, "age_s", (now_ms - x->rx_ms) / 1000);
         web_jw_raw(&w, "}");
