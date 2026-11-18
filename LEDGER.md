@@ -385,3 +385,4 @@
 | c947e16 | 2026-11-18T04:41:26Z | claude-opus-5-5 | 70 | 11214 | 3778694 | 135424 | 2.0637 | EVIL_TWIN: mesh guest-VAP context + steady-original late arrival (#227) |
 | 69b009db | 2026-11-18T12:16:56Z | claude-opus-5 | 104 | 47189 | 5160026 | 316221 | 6.9225 | #210 — docs/wiki/aprs.md: the SDRplay rx_fm sample-rate trap, verification and t |
 | e1db20c | 2026-11-18T15:14:04Z | claude-opus-5-5 | 10 | 1602 | 704869 | 143226 | 1.3189 | test_mon_radios: drop an unread loop counter (gcc 16 -Werror) |
+| 8524847 | 2026-11-18T16:24:43Z | claude-opus-5-5 | 58 | 11838 | 3801959 | 35297 | 1.2798 | slothweb: WiFi channel palette (2.4 cool, 5 GHz warm) and greenbar lists |
