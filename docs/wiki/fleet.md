@@ -651,8 +651,8 @@ nearer site's half of the plane within its band; otherwise nothing.
 Overlaps read darker. Since 2026-11-13 each area is drawn as a traced
 polygon and the emitter's device mark sits solid at the area's most
 probable point (a Wi-Fi mark and its polygon in one hue from the MAC);
-a device no peer heard is hollow at an arbitrary angle on its distance
-ring. The mark and its area are linked on hover. `web/README.md`
+a device no peer heard is hollow at an arbitrary angle at its distance
+(a BLE one on its own ring). The mark and its area are linked on hover. `web/README.md`
 "Radar" has the rules and the live counts.
 
 ## The store: slothweb.db v8

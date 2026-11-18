@@ -2052,8 +2052,9 @@ grid of the region, holes kept, filled even-odd) and the Wi-Fi and BLE
 devices have left the north axis: a device with an area is a solid
 mark at its most probable point (the fix's centre, the server's
 candidate when inside the region, else the likeliest grid sample under
-one Gaussian a site), one without is hollow on its distance ring at an
-angle from its address's hash (only its distance is an estimate). A
+one Gaussian a site), one without is hollow at its distance at an
+angle from its address's hash (only its distance is an estimate; a BLE
+one on its own faint ring, a Wi-Fi one with none since 2026-11-17). A
 Wi-Fi mark and its polygon share one of five hues (`--rw-0..4`) by a
 hash of the MAC, an owner ruling over the visual spec's R10 for this
 view; `web/tools/palette.c` holds the hues apart. Display only: nothing

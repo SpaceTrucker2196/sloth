@@ -25,7 +25,10 @@
 // most probable point; a Wi-Fi mark and its polygon share a hue from
 // the address (--rw-*, the owner's ruling over R10 for this view), so
 // a point and its area read as a pair. A device only this sensor heard
-// is a hollow mark on its distance ring at an arbitrary angle. Every
+// is a hollow mark at its distance, at an arbitrary angle; a BLE one
+// on its own faint ring, a Wi-Fi one with none (owner, 2026-11-17:
+// "don't show the distance rings for each wifi source anymore since we
+// have direction finding now"). Every
 // DOM string goes through textContent; a peer string on the canvas is
 // drawn with fillText (adsb.js's precedent) and never becomes markup.
 // Owner ruling 2026-11-06: the dome has no character-cell form, so it
@@ -1006,10 +1009,14 @@
     // location"), each family's 50 most recently heard. One another sloth
     // also heard has a fleet area: its mark is solid at the area's most
     // probable point (areaGeom()). One only this sensor heard has no
-    // bearing at all: a hollow mark on its own faint distance ring (the
-    // band's nominal radius when the record carried no metres) at an
-    // angle from its address's hash, so a solid mark always means
-    // located and a hollow one's angle means nothing. devMark()'s shapes;
+    // bearing at all: a hollow mark at its distance (the band's nominal
+    // radius when the record carried no metres) at an angle from its
+    // address's hash, so a solid mark always means located and a hollow
+    // one's angle means nothing. A BLE one sits on its own faint ring;
+    // a Wi-Fi one has had none since 2026-11-17 (the owner's ruling:
+    // direction finding is where a Wi-Fi transmitter's direction is
+    // read, and fifty rings said nothing a mark's distance does not).
+    // The per-band Wi-Fi rings above are counts and stay. devMark()'s shapes;
     // a Wi-Fi mark in its address's hue, the same as its polygon's, BLE
     // in the one neutral ink; the selection in the accent. Then every
     // other area's point (an emitter located but not among the 50): the
@@ -1045,13 +1052,15 @@
           p = project(gpt(a.pt.e, a.pt.n), cam);
         } else {
           loc[fam + "No"]++;
-          if (ble) g.setLineDash([6, 4]); else g.setLineDash([]);
-          g.lineWidth = 1;
-          g.globalAlpha = on ? 0.6 : old ? 0.06 : 0.15;
-          g.strokeStyle = col;
-          groundPath(g, cam, rn(m), 0);
-          g.stroke();
-          g.setLineDash([]);
+          if (ble) {
+            g.setLineDash([6, 4]);
+            g.lineWidth = 1;
+            g.globalAlpha = on ? 0.6 : old ? 0.06 : 0.15;
+            g.strokeStyle = col;
+            groundPath(g, cam, rn(m), 0);
+            g.stroke();
+            g.setLineDash([]);
+          }
           p = project(place(addrAngle(ad), 0, m), cam);
         }
         g.globalAlpha = old ? 0.35 : 1;
@@ -1388,7 +1397,8 @@
   // uncertain about it; else the hollow mark's meaning.
   function devPlace(fam, key) {
     var a = S.devArea[fam + "|" + key];
-    if (!a) return [["placement", "distance from signal strength at this site only, no bearing: a hollow mark on its distance ring " +
+    if (!a) return [["placement", "distance from signal strength at this site only, no bearing: a hollow mark " +
+                                  (fam === "ble" ? "on its distance ring " : "at its distance ") +
                                   "at an arbitrary angle (from its address); only the distance is an estimate"]];
     var ns = a.row.sites.length, rg = Math.sqrt(a.pt.e * a.pt.e + a.pt.n * a.pt.n);
     var az = (Math.atan2(a.pt.e, a.pt.n) * 180 / Math.PI + 360) % 360;
@@ -1458,7 +1468,7 @@
         parts.push("located (solid, at the most probable point of a fleet area" +
                    (lc.sMax ? ", from " + (lc.sMin === lc.sMax ? lc.sMax : lc.sMin + "\u2013" + lc.sMax) + " sites" : "") + "): " +
                    lc.wifi + " Wi-Fi, " + lc.ble + " BLE; unlocated (hollow, this site only): " + lc.wifiNo + " Wi-Fi, " + lc.bleNo +
-                   " BLE, each on its distance ring at an arbitrary angle: only the distance is an estimate");
+                   " BLE, each at its distance at an arbitrary angle (BLE on its own ring, Wi-Fi with none): only the distance is an estimate");
         parts.push("Wi-Fi mark and area share a hue from the address (\u25a0 station, \u25c6 access point), BLE \u25cf in one ink");
       }
       parts.push("ticks are speed and heading (aircraft gs/track, APRS speed/course); Wi-Fi and BLE have neither, " +

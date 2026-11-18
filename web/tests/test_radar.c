@@ -814,7 +814,8 @@ static void test_select_hooks(void) {
  * axis on 2026-11-13 (owner: "instead of on the n/s axis in the radar
  * use the data to plot the most probably point location. color code the
  * wifi points"): a device with a fleet area solid at its most probable
- * point, one without hollow on its distance ring at an angle from its
+ * point, one without hollow at its distance (a BLE one on its own
+ * ring; a Wi-Fi one with none since 2026-11-17) at an angle from its
  * address's hash (addrAngle()), a Wi-Fi mark in its address's hue
  * (wifiHue(), --rw-0..4), ■ station ◆ AP ● BLE (devMark()); the
  * labels placed free, the two stacked columns (stackColumn()) gone; the
@@ -998,10 +999,14 @@ static void test_radar_devices_js(void) {
               "    // location\"), each family's 50 most recently heard. One another sloth\n"
               "    // also heard has a fleet area: its mark is solid at the area's most\n"
               "    // probable point (areaGeom()). One only this sensor heard has no\n"
-              "    // bearing at all: a hollow mark on its own faint distance ring (the\n"
-              "    // band's nominal radius when the record carried no metres) at an\n"
-              "    // angle from its address's hash, so a solid mark always means\n"
-              "    // located and a hollow one's angle means nothing. devMark()'s shapes;\n"
+              "    // bearing at all: a hollow mark at its distance (the band's nominal\n"
+              "    // radius when the record carried no metres) at an angle from its\n"
+              "    // address's hash, so a solid mark always means located and a hollow\n"
+              "    // one's angle means nothing. A BLE one sits on its own faint ring;\n"
+              "    // a Wi-Fi one has had none since 2026-11-17 (the owner's ruling:\n"
+              "    // direction finding is where a Wi-Fi transmitter's direction is\n"
+              "    // read, and fifty rings said nothing a mark's distance does not).\n"
+              "    // The per-band Wi-Fi rings above are counts and stay. devMark()'s shapes;\n"
               "    // a Wi-Fi mark in its address's hue, the same as its polygon's, BLE\n"
               "    // in the one neutral ink; the selection in the accent. Then every\n"
               "    // other area's point (an emitter located but not among the 50): the\n"
@@ -1037,13 +1042,15 @@ static void test_radar_devices_js(void) {
               "          p = project(gpt(a.pt.e, a.pt.n), cam);\n"
               "        } else {\n"
               "          loc[fam + \"No\"]++;\n"
-              "          if (ble) g.setLineDash([6, 4]); else g.setLineDash([]);\n"
-              "          g.lineWidth = 1;\n"
-              "          g.globalAlpha = on ? 0.6 : old ? 0.06 : 0.15;\n"
-              "          g.strokeStyle = col;\n"
-              "          groundPath(g, cam, rn(m), 0);\n"
-              "          g.stroke();\n"
-              "          g.setLineDash([]);\n"
+              "          if (ble) {\n"
+              "            g.setLineDash([6, 4]);\n"
+              "            g.lineWidth = 1;\n"
+              "            g.globalAlpha = on ? 0.6 : old ? 0.06 : 0.15;\n"
+              "            g.strokeStyle = col;\n"
+              "            groundPath(g, cam, rn(m), 0);\n"
+              "            g.stroke();\n"
+              "            g.setLineDash([]);\n"
+              "          }\n"
               "          p = project(place(addrAngle(ad), 0, m), cam);\n"
               "        }\n"
               "        g.globalAlpha = old ? 0.35 : 1;\n"
@@ -1103,7 +1110,8 @@ static void test_radar_devices_js(void) {
     WT_HAS(p, "    cv.addEventListener(\"pointerleave\", function () { if (S.hover) { S.hover = null; dirty(); } });");
     WT_HAS(p, "  function devPlace(fam, key) {\n"
               "    var a = S.devArea[fam + \"|\" + key];\n"
-              "    if (!a) return [[\"placement\", \"distance from signal strength at this site only, no bearing: a hollow mark on its distance ring \" +\n"
+              "    if (!a) return [[\"placement\", \"distance from signal strength at this site only, no bearing: a hollow mark \" +\n"
+              "                                  (fam === \"ble\" ? \"on its distance ring \" : \"at its distance \") +\n"
               "                                  \"at an arbitrary angle (from its address); only the distance is an estimate\"]];\n"
               "    var ns = a.row.sites.length, rg = Math.sqrt(a.pt.e * a.pt.e + a.pt.n * a.pt.n);\n"
               "    var az = (Math.atan2(a.pt.e, a.pt.n) * 180 / Math.PI + 360) % 360;\n"
@@ -1122,7 +1130,7 @@ static void test_radar_devices_js(void) {
               "        parts.push(\"located (solid, at the most probable point of a fleet area\" +\n"
               "                   (lc.sMax ? \", from \" + (lc.sMin === lc.sMax ? lc.sMax : lc.sMin + \"\\u2013\" + lc.sMax) + \" sites\" : \"\") + \"): \" +\n"
               "                   lc.wifi + \" Wi-Fi, \" + lc.ble + \" BLE; unlocated (hollow, this site only): \" + lc.wifiNo + \" Wi-Fi, \" + lc.bleNo +\n"
-              "                   \" BLE, each on its distance ring at an arbitrary angle: only the distance is an estimate\");\n"
+              "                   \" BLE, each at its distance at an arbitrary angle (BLE on its own ring, Wi-Fi with none): only the distance is an estimate\");\n"
               "        parts.push(\"Wi-Fi mark and area share a hue from the address (\\u25a0 station, \\u25c6 access point), BLE \\u25cf in one ink\");");
     WT_HAS(p, "      parts.push(\"ticks are speed and heading (aircraft gs/track, APRS speed/course); Wi-Fi and BLE have neither, \" +\n"
               "                 \"their arrow is sloth's trend (\\u2198 approaching, \\u2192 steady, \\u2197 leaving)\");");

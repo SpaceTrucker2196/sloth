@@ -1149,7 +1149,7 @@ honestly has:
 | GNSS satellites (`/api/gnss`) | azimuth, elevation | ◇ on the rim shell at its az/el; filled when in the solution, C/N0 on the heat ramp, an unhealthy one ringed; the `/api/gnss/tracks` trail behind it |
 | ADS-B aircraft (`/api/adsb`) | lat, lon, altitude, track, kept track | ▲ rotated to its track at its true bearing and elevation angle, a drop line to its ground foot, the kept track through the same mapping; altitude on the heat ramp, an emergency or a reserved squawk ringed and worded |
 | APRS stations (`/api/aprs`) | lat, lon, altitude as broadcast | ○ at its true bearing, `--heat-2` when heard direct; the selected station's kept track |
-| Wi-Fi APs and stations (`/api/radar`) | sloth's distance estimate (metres, band, trend), no bearing | the 50 most recently heard as ■ (station) or ◆ (AP) in a hue from the MAC: solid at the most probable point of its fleet area when another sloth heard it too, else hollow on its own faint solid distance ring at an arbitrary angle; and one fainter solid ring per band on the ground, labelled `Wi-Fi room 7` |
+| Wi-Fi APs and stations (`/api/radar`) | sloth's distance estimate (metres, band, trend), no bearing | the 50 most recently heard as ■ (station) or ◆ (AP) in a hue from the MAC: solid at the most probable point of its fleet area when another sloth heard it too, else hollow at its distance at an arbitrary angle, with no ring of its own (2026-11-17); and one faint solid ring per band on the ground, labelled `Wi-Fi room 7` |
 | BLE advertisers (`/api/radar`) | sloth's distance estimate, no bearing | the 50 most recently heard as ● in one ink, solid at its fleet area's most probable point, else hollow on its own faint dashed distance ring at an arbitrary angle; and one fainter dashed ring per band, labelled `BLE room 12` |
 
 The dome is the page (owner request, 2026-11-06): on the Radar tab the
@@ -1192,8 +1192,10 @@ server's candidate when it lies in the region, else the likeliest of
 the region's grid samples, each scored by one Gaussian a site about its
 range with sigma half its band, or their weighted mean when that is
 inside and nearly as likely; half the radius into the nearer site's
-side for a wash). One only this sensor heard is **hollow**, on its own
-faint distance ring at an angle from a hash of its address: that angle
+side for a wash). One only this sensor heard is **hollow**, at its
+distance at an angle from a hash of its address (a BLE one on its own
+faint dashed ring; a Wi-Fi one has had no ring since 2026-11-17, the
+owner's ruling once direction finding was running): that angle
 means nothing, only the distance is an estimate, and the side panel
 and the caption say so. ■ Wi-Fi station, ◆ access point, ● BLE. A Wi-Fi
 mark and its polygon share one of five hues, `--rw-0..4`, by a hash of
