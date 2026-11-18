@@ -405,8 +405,7 @@ static void test_hopping_radios_sit_on_different_channels(void) {
     ASSERT_EQ(h0.count, (total + 2) / 3);
     int visited[CHANHOP_MAX];
     memset(visited, 0, sizeof(visited));
-    int polls = 0;
-    for (uint64_t t = 0; t <= 6000; t += 50, polls++) {
+    for (uint64_t t = 0; t <= 6000; t += 50) {
         ASSERT_EQ(hop_poll(&h0, t), 0);
         int c[3] = { chan_of(0), chan_of(1), chan_of(2) };
         ASSERT(c[0] && c[1] && c[2]);
