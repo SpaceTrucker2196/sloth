@@ -383,3 +383,4 @@
 | eea3e6b | 2026-11-17T21:59:35Z | claude-fable-5-1, claude-opus-5-5 | 96 | 4608 | 2775758 | 120169 | 3.2661 | Fix red main: the clients test assumed a vendor name |
 | ce4822b | 2026-11-18T02:12:05Z | claude-opus-5-5 | 82 | 19879 | 4780904 | 106704 | 2.2077 | deploy-test: clock-bounded wait for the socket reader (#226) |
 | c947e16 | 2026-11-18T04:41:26Z | claude-opus-5-5 | 70 | 11214 | 3778694 | 135424 | 2.0637 | EVIL_TWIN: mesh guest-VAP context + steady-original late arrival (#227) |
+| 69b009db | 2026-11-18T12:16:56Z | claude-opus-5 | 104 | 47189 | 5160026 | 316221 | 6.9225 | #210 — docs/wiki/aprs.md: the SDRplay rx_fm sample-rate trap, verification and t |
