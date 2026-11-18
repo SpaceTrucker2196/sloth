@@ -1,6 +1,6 @@
 ---
 name: aprs
-description: APRS stations — --aprs tails the packet log a local Dire Wolf decoder already writes, on the APRS channel of the region the GNSS fix is in (144.390 MHz in North America); --aprs-freq and the silent-decoder check; the CSV parser, the station table and its one-hour expiry, the aprs sensor, sensor_health's aprs_* fields, the aprs_packet and change-only aprs_station records, sloth.db v13's aprs_stations / aprs_packets, and slothweb's APRS tab
+description: APRS stations — --aprs tails the packet log a local Dire Wolf decoder already writes, on the APRS channel of the region the GNSS fix is in (144.390 MHz in North America); --aprs-freq and the silent-decoder check; the sample-rate trap that makes an SDRplay front end demodulate hundreds of kHz off the channel while every process reports success (#210), how to measure it and the open front-end choice; the CSV parser, the station table and its one-hour expiry, the aprs sensor, sensor_health's aprs_* fields, the aprs_packet and change-only aprs_station records, sloth.db v13's aprs_stations / aprs_packets, and slothweb's APRS tab
 type: reference
 ---
 
@@ -38,9 +38,12 @@ appends in `jsonl_emit_sensor_health()`), `src/db.c` (`write_aprs()`),
 references: the Dire Wolf User Guide ("Logging") and `src/log.c`
 (wb2osz/direwolf, release 1.7); the APRS Protocol Reference 1.0.1
 (APRS101.pdf) for the data type indicators (ch. 5), objects and items
-(ch. 11) and the symbol tables (ch. 20, appendix 2).
+(ch. 11) and the symbol tables (ch. 20, appendix 2). § The sample-rate
+trap is from the W9FJC measurements recorded in #210 — no file in this
+repo runs, configures or describes `rx_fm`, so that section cites the
+issue and the host's own `aprs.service`, not the tree.
 
-**Last updated**: 2026-11-15 (#216, the cutover: `--aprs`, `--aprs-freq` and `--aprs-silent-hours` are `sloth-rf`'s alone; `sloth-wifi` refuses them); 2026-11-13 (the positions panel as an ATC-style radar scope centred on the sensor); 2026-11-13 (#204: the APRS region and channel derived from the GNSS position, `--aprs-freq` and its mismatch, the silent decoder after `--aprs-silent-hours` (default 6), the `sensor_health` fields and the APRS tab's notices; the beta-site log sat at 0 bytes from 2026-11-11 with nothing saying so); 2026-11-06 (the Radar tab: stations and, by name, objects and items as entities of their own, kept for the `APRS for` window after their newest packet, with status, comment and a moving one's 24 h trail, from `/api/aprs/tracks`); 2026-11-05 (shipped: the feed, the table, JSONL, sloth.db v13, slothweb's APRS tab and history).
+**Last updated**: 2026-11-18 (#210: the sample-rate trap — `rx_fm` derives its fs/4 LO offset from the rate it requested and rotates by a quarter of the rate the device delivered, so an SDRplay host that ignores `-s` demodulates hundreds of kHz off the channel and the pipeline reports success all the way down; how to measure the stdout rate without a second radio, W9FJC's host-side workaround and why it is fragile, the open front-end choice. Also: the 144.894 MHz LO in § The channel is no longer presented as evidence of a working chain); 2026-11-15 (#216, the cutover: `--aprs`, `--aprs-freq` and `--aprs-silent-hours` are `sloth-rf`'s alone; `sloth-wifi` refuses them); 2026-11-13 (the positions panel as an ATC-style radar scope centred on the sensor); 2026-11-13 (#204: the APRS region and channel derived from the GNSS position, `--aprs-freq` and its mismatch, the silent decoder after `--aprs-silent-hours` (default 6), the `sensor_health` fields and the APRS tab's notices; the beta-site log sat at 0 bytes from 2026-11-11 with nothing saying so); 2026-11-06 (the Radar tab: stations and, by name, objects and items as entities of their own, kept for the `APRS for` window after their newest packet, with status, comment and a moving one's 24 h trail, from `/api/aprs/tracks`); 2026-11-05 (shipped: the feed, the table, JSONL, sloth.db v13, slothweb's APRS tab and history).
 
 **Which daemon (since the cutover, #216).** The APRS decoder source is **`sloth-rf`'s**:
 `--aprs` (with `--aprs-freq` and `--aprs-silent-hours` is its flag, and the reader, the table, the `aprs_station` and `aprs_packet` records,
@@ -166,12 +169,122 @@ Hz. On the reference host that is `APRS_FREQ` in `/etc/default/aprs`
 (read by the host's own `aprs.service`, `rx_fm | direwolf`, which is not
 in this repo): pass the same number, e.g. `--aprs-freq 144390000`. It
 is **not** `rx_fm`'s reported hardware tune: that sits fs/4 above the
-target (2.016 MS/s / 4 = 504 kHz, so about 144.894 MHz for 144.390) and
-still demodulates the target; comparing it would flag a correct
-decoder. When both are known and more than 6.25 kHz apart (half the
+target (2.016 MS/s / 4 = 504 kHz, so about 144.894 MHz for 144.390), so
+comparing it would flag a decoder whose configuration is right. But **an
+offset LO is not by itself evidence that the chain works**: #210 (below,
+§ The sample-rate trap) found `rx_fm` deriving that offset from a rate
+the device never delivered and demodulating 246 kHz off the channel, and
+the 144.894 MHz reading named here is beta-site's, read at the time as a
+benign fs/4 offset on a chain that has decoded nothing since
+2026-11-11. The declared-frequency check is a check of the operator's
+*configuration*, not of the receive chain. When both are known and more than 6.25 kHz apart (half the
 narrowest 2 m channel spacing) `aprs_freq_mismatch` is 1 and slothweb
 says "frequency mismatch". sloth never changes the decoder's frequency
 and ships no tool that does: receive-only, file-only, as before.
+
+## The sample-rate trap (#210)
+
+A decoder on the right channel can still demodulate the wrong
+frequency, because the front end computed its tuning from a sample rate
+the device never gave it. This is written down here because it is
+invisible from everything sloth can see: it took W9FJC's APRS feed with
+no process reporting a fault, and it fits beta-site's silence since
+2026-11-11 as well.
+
+**Symptom.** `aprs_state` is `live`, the log is readable, and no packet
+ever arrives — then, six hours in, `aprs_silent` goes to 1 (§ Silent).
+Every process in the chain reports success: the SDR opens, `rx_fm`
+streams, Dire Wolf reads samples and writes nothing, and logrotate
+rotates a 0-byte file. On W9FJC (2026-11-14) `rx_fm -d driver=sdrplay …
+-f 144.390M -s 22050 | direwolf -r 22050` on an SDRplay RSPdx-R2
+decoded nothing while a handheld beside the antenna read S8–S9 on
+144.390 MHz, and an NESDR into the same Dire Wolf decoded that same
+handheld at level 70–74. Nothing in sloth's health block distinguishes
+this from a genuinely quiet channel: sloth reads a file, and the file
+was fine.
+
+**Mechanism.** `rx_fm` derives two numbers from the sample rate, and
+they stop agreeing the moment the device does not deliver the rate it
+was asked for.
+
+- `-s 22050` asks the device for 22050 × 46 = **1,014,300 Hz**
+  (`rx_fm`'s fixed ÷46 decimation).
+- SoapySDRPlay3 0.5.3 hands back the RSPdx-R2's native **2 MS/s**
+  instead. `rx_fm` keeps its ÷46, so its stdout runs at
+  2,000,000 ÷ 46 = **43,478 samples/s** (43,520 measured over a short
+  window), not 22,050 — and Dire Wolf, told `-r 22050`, reads a stream
+  arriving at nearly twice the rate it was declared.
+- `rx_fm` offsets the LO by a quarter of the rate it **requested**
+  (1,014,300 ÷ 4 = 253.575 kHz, so LO 144.643575 MHz) and then rotates
+  the stream down by a quarter of the rate it was **given** (500 kHz).
+  What it demodulated was 144.643575 − 0.500 = **144.143575 MHz**, about
+  246 kHz below the channel: flat discriminator noise.
+
+Accepting a different rate from the one requested is not an error on
+any of these interfaces, so no process in the pipeline has anything to
+report. The symptom is silence, not a failure.
+
+**Verifying it, with no second radio.** Measure `rx_fm`'s own output
+rate and compare it with the `-s` value it was given.
+
+- Bytes per second off its stdout: `rx_fm … -s 22050 | pv -r >
+  /dev/null`, or a byte count over a known interval
+  (`timeout 10 rx_fm … 2>/dev/null | wc -c`, divided by 10).
+- Samples per second is that divided by the bytes per sample.
+  **Establish the divisor before dividing it**: this repo runs no part
+  of that pipeline and records no sample format for `rx_fm` anywhere in
+  the tree, so take it from the `rx_fm` build in use (`rx_fm --help`)
+  and from the format Dire Wolf is told to expect on stdin. The
+  reference chain's is 2 (16-bit signed mono), i.e. samples/s =
+  bytes/s ÷ 2.
+- Or run the test **format-free**: change `-s` and see whether the
+  output rate changes with it. A device honouring the request moves in
+  proportion; one ignoring it does not move at all.
+
+**Pass condition**: the measured stdout rate is the `-s` value, within
+a per cent or so. A rate off by an integer-ish factor is the signature
+of this fault — 43,478 / 22,050 ≈ 1.97, which is
+2,000,000 / 1,014,300 — and means the device kept its own rate and the
+LO offset is wrong by a quarter of the difference. Where a second
+receiver exists (the NESDR above), the other check is to compare what
+Dire Wolf reports for one known local transmitter on each: a chain
+demodulating the wrong frequency reports no packet at all, not a weak
+one.
+
+**The workaround in place on W9FJC — host config, not in this repo.**
+`aprs.service` since 2026-11-14 (sloth ships no tool that reads or
+edits it; § The channel):
+
+    rx_fm … -f 144.636425M -s 22050    # 144.636425 + 0.253575 = 144.890 LO, − 0.500 = 144.390
+    direwolf -r 43478                  # 2,000,000 / 46
+
+The handheld decodes at level 71. **It is correct only while both rates
+stay exactly as measured.** It compensates with two different rates at
+once — the LO offset from the rate `rx_fm` *requests*, the rotation
+from the rate the device *delivers* — so a SoapySDRPlay3 that starts
+honouring the requested rate, or that picks a different native rate,
+moves the demodulated frequency by hundreds of kHz. The failure mode is
+again silence rather than an error, and the only thing that would say
+so is `aprs_silent`, six hours later. Re-measure the output rate after
+any change to the SDR stack.
+
+**The proper fix is still open** (#210). The options, none of them
+chosen here:
+
+- Ask for a rate the device provides natively and resample —
+  `rx_fm -s 2000000 -r 22050`, or a 2 MS/s capture with an explicit
+  decimation chain — checking the actual output rate either way.
+- A different front end on SDRplay hosts: SoapySDR + `csdr`, or
+  GNU Radio.
+
+Which front end runs on a sensor, and what its unit files say, is the
+operator's call and not this repo's
+([`agents/dark-factory.md`](../../agents/dark-factory.md) §4.3, actions
+outside the repo). sloth never opens, tunes or spawns the decoder —
+`grep -rnE 'execv|execl|popen|system\(|fork\(' src/main.c src/aprs.c
+src/capture/aprs_reader.c` is empty — it reads the log Dire Wolf
+writes, and documents what feeds it. beta-site's chain is still to be
+checked the same way.
 
 ## Silent
 
