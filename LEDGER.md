@@ -389,3 +389,4 @@
 | 0db4329 | 2026-11-18T17:20:11Z | claude-fable-5-1, claude-opus-5-5 | 130 | 13340 | 5026937 | 140313 | 4.1028 | sloth-rf: trim SDR decoder inputs at startup when no SDR on USB |
 | ab71783 | 2026-11-18T18:13:36Z | claude-fable-5-1, claude-opus-5-5 | 174 | 16912 | 7718021 | 38349 | 2.8722 | slothweb Radar: sources picker, caption box removed |
 | 91c7881 | 2026-11-18T18:37:36Z | claude-fable-5-1, claude-opus-5-5 | 104 | 5938 | 3626168 | 14492 | 1.4555 | sloth-rf: keep a trimmed decoder whose input file was written recently |
+| f4f0455 | 2026-11-18T19:42:33Z | claude-fable-5-1, claude-opus-5-5 | 104 | 8056 | 3818585 | 22638 | 1.6110 | slothweb: Wi-Fi MAC/SSID text by channel; text-grade palette; light stripes 4.5:1 |
