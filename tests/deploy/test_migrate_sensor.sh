@@ -193,8 +193,10 @@ echo '{"type":"heartbeat","ts":1}'
 cat "$STATE/health"
 # A record the sensor emits later in the run, as a retune failure would be.
 [ -e "$STATE/health_late" ] && { sleep 2; cat "$STATE/health_late"; }
-# Held open, as a real socat on a live socket is.
-[ -e "$STATE/socat_holds" ] && exec sleep 8
+# Held open, as a real socat on a live socket is. Far longer than case
+# 10's wait for it to be reaped, so a leaked reader cannot expire by
+# itself inside that wait and pass (#226).
+[ -e "$STATE/socat_holds" ] && exec sleep 60
 exit 0
 STUBEOF
     # slothweb's /api/health, as $STATE/web_health holds it; no file, no
@@ -649,7 +651,6 @@ check '[ "$(cat "$ROOT/etc/default/sloth")" = "ORIGINAL defaults" ]' "the migrat
 check '[ ! -e "$ROOT/var/lib/sloth" ] && [ -d "$ROOT/var/lib/sloth.rolled-back-T1" ]' "the copy was not set aside"
 check '[ "$(tree_hash "$ROOT/home/op/sloth/data")" = "$src_h" ]' "the source data dir was modified"
 check '[ "$(cat "$STATE/active")" = active ]' "the old service was not restarted"
-sleep 1
 # By open file, not by name: the reader and its socat hold this case's
 # health file, and a name match also finds a reader some earlier run
 # left behind (a mutation that drops stop_health_reader does).
@@ -662,7 +663,20 @@ holders() {
         done
     done
 }
+# Wait on the condition, not a fixed second: under load the reaping
+# took longer than one and the check failed on a correct tool (#226).
+# Bounded by the clock, not by a count: one holders() scan of /proc
+# takes seconds on a busy host, and fifty of them outlasted the leaked
+# reader a mutation dropping rollback's stop_health_reader leaves (about
+# 70 s with HEALTH_T=60), which then passed. Five seconds is well inside
+# that and inside the stub's sixty.
+deadline=$(($(date +%s) + 5))
+while [ -n "$(holders)" ] && [ "$(date +%s)" -lt "$deadline" ]; do
+    sleep 0.1
+done
 check '[ -z "$(holders)" ]' "the socket reader outlived the tool: $(holders)"
+# A leaked holder would otherwise sit out its sixty seconds after a red run.
+for h in $(holders | cut -d' ' -f1); do kill "$h" 2>/dev/null; done
 
 # ── 11. --data-socket-unix: the owner's tcp: -> unix: move (#153) ────────
 # The reference host streams on tcp:127.0.0.1:8765 for slothweb. Without
