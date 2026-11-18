@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-11-15 (#216, the cutover: two rule tables, not a table and a subsequence of it; `sloth-wifi` raises <!-- count:rules-wifi -->95<!-- /count --> of the kinds and `sloth-rf` <!-- count:rules-rf -->6<!-- /count -->; the `GNSS_*` rules and `ADSB_EMERGENCY` are `sloth-rf`'s alone). 2026-11-12 (#193: field data on the twin-chain's unnamed locally administered copy, counted in `sensor_health` `twin193_*`; no alert changed). 2026-11-12 (#187, #151 owner decisions: `KARMA_PROBE_FORGE` CRIT only on a captured station; `KARMA_AP` IE variety -15 confidence and CRIT on a `corroborated` hardware verdict). 2026-11-12 (#194: `EVIL_TWIN`'s late-arrival memory compares the radio and ignores APs born in a beacon flood). 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#187, #172: the evidence behind `KARMA_AP`, `KARMA_PROBE_FORGE`, `PMKID_HARVEST` and `HANDSHAKE_HARVEST` on the stream as `karma_suspect`, `harvest_station`, `harvest_chain`, JSONL 1.3.0, and as slothweb's WiFi card; slothweb shows the detail of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`). **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
+**Last updated**: 2026-11-17 (#227: `EVIL_TWIN` deducts 35 for two locally administered guest VAPs of one vendor's mesh, `+mesh VAP`, and counts a late arrival only against an original heard at least once a minute). 2026-11-15 (#216, the cutover: two rule tables, not a table and a subsequence of it; `sloth-wifi` raises <!-- count:rules-wifi -->95<!-- /count --> of the kinds and `sloth-rf` <!-- count:rules-rf -->6<!-- /count -->; the `GNSS_*` rules and `ADSB_EMERGENCY` are `sloth-rf`'s alone). 2026-11-12 (#193: field data on the twin-chain's unnamed locally administered copy, counted in `sensor_health` `twin193_*`; no alert changed). 2026-11-12 (#187, #151 owner decisions: `KARMA_PROBE_FORGE` CRIT only on a captured station; `KARMA_AP` IE variety -15 confidence and CRIT on a `corroborated` hardware verdict). 2026-11-12 (#194: `EVIL_TWIN`'s late-arrival memory compares the radio and ignores APs born in a beacon flood). 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#187, #172: the evidence behind `KARMA_AP`, `KARMA_PROBE_FORGE`, `PMKID_HARVEST` and `HANDSHAKE_HARVEST` on the stream as `karma_suspect`, `harvest_station`, `harvest_chain`, JSONL 1.3.0, and as slothweb's WiFi card; slothweb shows the detail of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`). **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
 
 ---
@@ -466,6 +466,22 @@ the weights in `src/alerts.h`) now asks before it weighs:
   barely heard, its strongest reading at or under -92 dBm or fewer than
   `twin.crit_min_beacons` (5) beacons heard, keeps a soft row at WARN,
   `+faint`.
+- **A mesh's guest VAPs? (#227, 2026-11-17)** Two locally administered
+  halves, each with a globally administered BSSID on its channel under
+  another non-empty SSID and the same low five octets, the two of those
+  different addresses sharing their first four octets and one main
+  SSID: the guest SSIDs of one vendor's mesh
+  nodes (98:.. main, 9e:.. guest), whose vendor IEs differ node to node.
+  -35 context, `+mesh VAP`, which takes vendor-IE + late arrival (55)
+  to 20. A copy would have to bring a clone of the main network with
+  it, on the matching address and channel; a copy of one AP's guest
+  VAP on another locally administered first octet finds one parent
+  for both halves and is not the shape.
+- **Was the original being heard? (#227)** A late arrival counts only
+  when the earlier half's entry averages at least one frame a minute
+  (`TWIN_STEADY_FRAME_S`, `src/alerts.h`). An AP at the decode margin
+  heard now and then makes every later neighbour look late; the gap is
+  then the sensor's detection latency, not a transmitter turning up.
 
 - **Arrived, or came back? (#194, 2026-11-12)** The table's memory of
   dropped APs keeps band, `enc` and vendor-IE hash, so a return as

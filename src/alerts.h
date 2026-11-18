@@ -208,6 +208,18 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
  *     first_seen. "Later" otherwise only means the table had not
  *     forgotten the first AP yet (BEACON_AGE_SECS is 300), which is
  *     what a sensor driven past two APs a kilometre apart sees;
+ *   - the earlier half was heard steadily (#227): at least one frame
+ *     in every TWIN_STEADY_FRAME_S of its entry's life. "The copy came
+ *     after the original" is only a statement about the air when the
+ *     original was being heard all along; an AP at the decode margin
+ *     whose beacons get through one in a hundred makes every later
+ *     neighbour look late, and the gap is detection latency, not a
+ *     transmitter turning up (the issue's mesh node at -90 dBm, 11
+ *     beacons). frame_count over last_seen - first_seen is the one
+ *     rate the table keeps; it averages over the whole entry, which
+ *     covers the gap because the earlier half was heard again after
+ *     the later one started. 0 frames is a hand-built entry and
+ *     "cannot say", the convention `faint` follows;
  *   - the later half was first heard at least that long after the
  *     sensor was last known to be moving (a GNSS fix at
  *     TWIN_PROX_MOVING_MPS or more). Arrival order on a moving sensor
@@ -269,7 +281,30 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
  *     around sloth, and a fingerprint read off one or two frames at
  *     the decode margin is not one sloth has been able to read twice.
  *     0 in a reading (the table's "unseen") is "cannot say" and does
- *     not count as faint, the convention first_seen follows. */
+ *     not count as faint, the convention first_seen follows.
+ *
+ * ── A mesh's guest VAPs (#227, 2026-11-17) ────────────────────
+ *
+ *   - `mesh_vap`: both halves are locally administered, and each has a
+ *     globally administered BSSID heard by this sensor with the same
+ *     low five octets, on the same channel, under a different non-empty
+ *     SSID, and those two parents are two addresses (the halves' low
+ *     five octets differ) sharing their first four octets (the OUI and
+ *     one more) and one main SSID. That is how a TP-Link mesh numbers
+ *     itself: each node's main SSID on its vendor address and the guest
+ *     SSID on a locally administered copy of it (98:.. -> 9e:..), and
+ *     two nodes' guest VAPs on one channel carry node-specific vendor
+ *     IEs. The sibling test rightly refuses a same-band pair, since
+ *     address distance alone is how one vendor numbers a whole mesh;
+ *     this is the shape that says "mesh", and it needs more than
+ *     distance: a copy would have to bring a clone of the main network
+ *     with it, on the matching address and channel. One AP's main
+ *     network is not the shape: a copy of its guest VAP on another
+ *     locally administered first octet would find that one parent for
+ *     both halves. Context, not a suppressor, on the carrier SSID's
+ *     terms: TWIN_C_MESH_VAP takes the strongest soft sum two locally
+ *     administered halves can reach (35 + 20) to the mute line, and a
+ *     hard signal still carries the row to CRIT. */
 #define TWIN_W_DIFF_OUI      20   /* cross-vendor: weak, and forgeable */
 #define TWIN_W_IE_HASH       35   /* vendor-IE fingerprints disagree */
 #define TWIN_W_ATTACKER_OUI  40   /* Hak5 / Espressif OUI present */
@@ -293,6 +328,9 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
  * mute line, and no further: the row stays, it is not CRIT. */
 #define TWIN_C_CARRIER_SSID  35   /* a carrier SSID every subscriber's
                                    * gateway broadcasts (#188) */
+/* As TWIN_C_CARRIER_SSID and for the same reason: 35 + 20 - 35 = 20,
+ * the mute line, and a lone vendor-IE mismatch to the floor. */
+#define TWIN_C_MESH_VAP      35   /* guest VAPs of one vendor's mesh (#227) */
 #define TWIN_CONF_MIN         5
 #define TWIN_CONF_MAX        95
 /* The least confidence a soft-signal CRIT may carry (#188). 50 is the
@@ -325,6 +363,18 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
  * hearing the original. The knob's floor is 30 s so it cannot be set
  * under one worst hop pass or into the sibling window. */
 #define TWIN_LATE_ARRIVAL_DEFAULT_S 120
+/* The steadiness floor of the earlier half of a late arrival (#227):
+ * one frame a minute, averaged over the entry. From below: an AP in
+ * steady earshot is heard at least once a pass of the hop list, 22 s
+ * at worst on the default list (above), but the hopper does not dwell
+ * evenly, and on the reference host (2026-11-17, -hop, one monitor
+ * radio) the weakest APs heard all session on channel 1 at -79..-81 dBm
+ * came in every 36-44 s while the strong ones came every 1-10 s. 60 s
+ * keeps those steady with room to spare. From above: the issue's faint
+ * node (-90 dBm, 11 beacons) is unsteady once its entry has lived 11
+ * minutes, and an AP whose beacons arrive one in a hundred at a 102.4
+ * ms interval on a one-in-eleven dwell is heard every ~110 s. */
+#define TWIN_STEADY_FRAME_S 60
 /* The beacon floor of a soft-signal CRIT: `twin.crit_min_beacons`
  * (#188). Below the decode margin is TWIN_PROX_FLOOR_DBM's argument;
  * the count is the other way to be barely heard. An AP in steady
@@ -353,6 +403,7 @@ typedef struct {
     int sibling;         /* one device's radios on two bands (#188) */
     int nbr_claim;       /* either side advertises the other (802.11k) */
     int carrier_ssid;    /* a carrier SSID many gateways share (#188) */
+    int mesh_vap;        /* both halves a mesh node's guest VAP (#227) */
     int faint;           /* a half barely heard: no soft CRIT (#188) */
     int inv_mismatch;    /* a half is not approved for an inventoried SSID */
     int inv_approved;    /* both halves approved for an inventoried SSID */

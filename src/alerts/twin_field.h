@@ -23,9 +23,9 @@
  *     beacons a named, non-OPEN SSID (the chain rule's population);
  *   - a copy: another BSSID with that SSID and security, locally
  *     administered, first heard twin.late_arrival_s or more after the
- *     flooded one by twin_pair_late_arrival()'s test as #194 left it
- *     (both on the air at once, a new name on the address, not while
- *     the sensor moved);
+ *     flooded one by twin_pair_late_arrival()'s test as #194 and #227
+ *     left it (both on the air at once, the flooded one heard steadily,
+ *     a new name on the address, not while the sensor moved);
  *   - no other twin evidence: twin_evidence_score() found nothing, so
  *     the chain rule wrote no row (and the pair is not one the operator
  *     declared in the inventory);

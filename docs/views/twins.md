@@ -38,7 +38,8 @@ and five flags:
   least `twin.late_arrival_s` (120 s) after the earlier one, the earlier
   one has been heard again since, the sensor has been at rest that long,
   its SSID is new on its BSSID this session (an AP the beacon table
-  dropped and heard again is a return),
+  dropped and heard again is a return), the earlier one was heard
+  steadily (at least one frame a minute over its entry, #227),
   and the scorer counted it (+20). Set only on a pair with other
   positive evidence and a locally administered half; it is the alert's
   `+late-arrival`.

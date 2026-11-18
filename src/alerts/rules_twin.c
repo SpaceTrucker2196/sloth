@@ -219,9 +219,75 @@ static int twin_ap_faint(const beacon_ap_t *ap) {
     return ap->frame_count > 0 && ap->frame_count < TWIN_CRIT_MIN_BEACONS;
 }
 
+/* A mesh node's guest VAP (#227): `vap` is locally administered and a
+ * globally administered BSSID with first octet `want0` and its low
+ * five octets is on its channel under another non-empty SSID. That
+ * address is unique in the table, so this is the parent or NULL. */
+static const beacon_ap_t *twin_mesh_parent(const sloth_state_t *s,
+                                           const beacon_ap_t *vap,
+                                           uint8_t want0) {
+    if (!bssid_is_laa(vap->bssid) || vap->channel <= 0) return NULL;
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *p = &s->beacon_aps[i];
+        if (p == vap || bssid_is_laa(p->bssid)) continue;
+        if (p->bssid[0] != want0) continue;
+        if (memcmp(p->bssid + 1, vap->bssid + 1, 5) != 0) continue;
+        if (p->channel != vap->channel) continue;
+        if (!p->ssid[0] || strcmp(p->ssid, vap->ssid) == 0) continue;
+        return p;
+    }
+    return NULL;
+}
+
+/* Both halves guest VAPs of two nodes of one mesh: each has a parent,
+ * the two parents share their first four octets and carry one main
+ * SSID, and they are two radios, not one. The parents' octets 1-5 are
+ * their VAPs', so that is the halves' octets 1-3 alike and 1-5 not,
+ * plus one first octet both parents carry. Every first octet a GA
+ * address in the table carries is tried, so a third address that
+ * happens to match one half's low five octets cannot hide the real
+ * parent.
+ *
+ * Two radios, because one parent is not a mesh: a copy of a single
+ * AP's guest VAP on another locally administered first octet (9a:..
+ * beside the real 9e:..) finds that AP's main network as the parent of
+ * both halves, and would otherwise be deducted for a shape it brought
+ * nothing to. One main SSID, because two GA addresses of one box
+ * under two SSIDs (a main and an IoT VAP, say) are not two nodes
+ * either, and a copy placed on the second one's low octets would ride
+ * them. Why the shape at all: src/alerts.h. */
+static int twin_pair_mesh_vap(const sloth_state_t *s, const beacon_ap_t *a,
+                              const beacon_ap_t *b) {
+    if (!s || !bssid_is_laa(a->bssid) || !bssid_is_laa(b->bssid)) return 0;
+    if (memcmp(a->bssid + 1, b->bssid + 1, 3) != 0) return 0;
+    if (memcmp(a->bssid + 1, b->bssid + 1, 5) == 0) return 0;
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *p = &s->beacon_aps[i];
+        /* Only an address that could be a's parent names a first
+         * octet worth asking about: one table pass per candidate, not
+         * per GA entry. */
+        if (bssid_is_laa(p->bssid) ||
+            memcmp(p->bssid + 1, a->bssid + 1, 5) != 0) continue;
+        const beacon_ap_t *pa = twin_mesh_parent(s, a, p->bssid[0]);
+        if (!pa) continue;
+        const beacon_ap_t *pb = twin_mesh_parent(s, b, p->bssid[0]);
+        if (pb && strcmp(pa->ssid, pb->ssid) == 0) return 1;
+    }
+    return 0;
+}
+
 /* ── The copy arrives after the original (#188, ruling 3b) ────
  * The conditions and why each exists: src/alerts.h. */
 #define TWIN_LATE_ARRIVAL_S ((time_t)tune_val(TUNE_TWIN_LATE_ARRIVAL_S))
+
+/* Heard at least once every TWIN_STEADY_FRAME_S of the entry's life
+ * (#227). A frame_count of 0 is a hand-built entry: "cannot say", as
+ * in twin_ap_faint(). */
+static int twin_ap_steady(const beacon_ap_t *ap) {
+    if (ap->frame_count <= 0) return 1;
+    long long span = (long long)(ap->last_seen - ap->first_seen);
+    return (long long)ap->frame_count * TWIN_STEADY_FRAME_S >= span;
+}
 
 static int twin_sensor_moving(const sloth_state_t *s, time_t now);
 
@@ -255,6 +321,9 @@ static int twin_pair_late_arrival(const beacon_ap_t *a, const beacon_ap_t *b) {
     const beacon_ap_t *late  = early == a ? b : a;
     if (late->first_seen - early->first_seen < TWIN_LATE_ARRIVAL_S) return 0;
     if (early->last_seen < late->first_seen) return 0;
+    /* An original heard only now and then makes everything later look
+     * late (#227); the gap is then sloth's, not the transmitter's. */
+    if (!twin_ap_steady(early)) return 0;
     /* first_seen is the entry's, and the table rebuilds an entry it
      * dropped: an AP that fell silent for BEACON_AGE_SECS, or lost its
      * slot in a full table, comes back with a new one. Only a name
@@ -502,6 +571,11 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
      * radios are no pair to explain. Both halves carry the one SSID. */
     ev.carrier_ssid = twin_ssid_is_carrier(a->ssid);
     if (ev.carrier_ssid) ev.context += TWIN_C_CARRIER_SSID;
+    /* Context like the carrier SSID: it never touches `hard`, so an
+     * attacker-tool OUI, a steer or an inventory mismatch still carries
+     * the row to CRIT. */
+    ev.mesh_vap = twin_pair_mesh_vap(s, a, b);
+    if (ev.mesh_vap) ev.context += TWIN_C_MESH_VAP;
     ev.faint = twin_ap_faint(a) || twin_ap_faint(b);
 
     ev.confidence = clamp_conf(ev.positive - ev.context);
@@ -523,18 +597,21 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
 }
 
 /* One short, bounded phrase per context signal. ALERT_DETAIL_LEN is 320
- * and the longest EVIL_TWIN detail is 285 (the late-arrival and
- * same-OUI phrases cannot both appear;
+ * and the longest EVIL_TWIN detail is 292 (the same-OUI phrase needs
+ * two globally administered halves, the late-arrival one a locally
+ * administered half and the mesh-VAP one two, so same-OUI appears with
+ * neither, and late-arrival with mesh VAP is the longer pair by 7;
  * test_twin_detail_fits_with_every_phrase). The BTM
  * steer is not here: it gets its own note naming the steering AP, which
- * is the actionable half. The longest note is 84. */
+ * is the actionable half. The longest note is 91. */
 #define TWIN_NOTE_LEN 112
 static void twin_evidence_note(char *out, size_t n, const twin_evidence_t *ev) {
-    snprintf(out, n, "%s%s%s%s%s%s",
+    snprintf(out, n, "%s%s%s%s%s%s%s",
              ev->inv_mismatch ? " +not in inventory"           : "",
              ev->late_arrival ? " +late-arrival"               : "",
              ev->same_oui     ? " +same-vendor-OUI"            : "",
              ev->carrier_ssid ? " +carrier SSID"               : "",
+             ev->mesh_vap     ? " +mesh VAP"                   : "",
              ev->faint        ? " +faint"                      : "",
              ev->nbr_claim    ? " +802.11k claim (unverified)" : "");
 }

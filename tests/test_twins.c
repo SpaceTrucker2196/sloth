@@ -838,6 +838,323 @@ static void test_twin_class_enum_values_are_pinned(void) {
     ASSERT_EQ((int)TWIN_CLASS_DECLARED,     3);
 }
 
+/* ── A mesh's guest VAPs (#227) ────────────────────────────────
+ *
+ * The issue's field shape, hand-built: a neighbour's 3-node TP-Link
+ * style mesh, every node with its main SSID on a globally administered
+ * BSSID and its guest SSID on a locally administered copy of it
+ * (98:.. -> 9e:.., the low five octets kept). All ten addresses share
+ * the first four octets. On 2.4 GHz channel 4 node A is faint (-90 dBm,
+ * 11 beacons over the hour), B is at -86 (6), C at -82 (419) and was
+ * first heard five minutes after A; on 5 GHz channel 48, A and C with
+ * one and three beacons. Each node's guest VAP carries its own vendor
+ * IEs. Before #227 the A/C guest pair was CRIT at 55: vendor-IE +
+ * late-arrival. */
+
+#define MESH_GUEST "Neighbour-Guest"
+#define MESH_MAIN  "Neighbour"
+
+typedef struct {
+    uint8_t lo5[5];          /* octets 1-5, shared by main and guest */
+    int     channel;
+    int8_t  dbm;
+    int     frames;
+    int     first_after;     /* seconds after t0 */
+    uint32_t hash;
+} mesh_radio_t;
+
+static const mesh_radio_t MESH_RADIOS[] = {
+    { {0xda,0xc4,0x10,0x5e,0xee},  4, -90,  11,   0, 0xa000u },  /* A */
+    { {0xda,0xc4,0x10,0x5e,0xef}, 48, -90,   1,   0, 0xa500u },  /* A 5G */
+    { {0xda,0xc4,0x10,0x5f,0xae},  4, -86,   6,  60, 0xb000u },  /* B */
+    { {0xda,0xc4,0x10,0x69,0x86},  4, -82, 419, 300, 0xc000u },  /* C */
+    { {0xda,0xc4,0x10,0x69,0x87}, 48, -88,   3, 300, 0xc500u },  /* C 5G */
+};
+#define MESH_N ((int)(sizeof(MESH_RADIOS) / sizeof(MESH_RADIOS[0])))
+
+static beacon_ap_t *mesh_vap(sloth_state_t *s, const char *ssid,
+                             uint8_t octet0, const mesh_radio_t *r,
+                             time_t t0) {
+    uint8_t b[6];
+    b[0] = octet0;
+    memcpy(b + 1, r->lo5, 5);
+    add_beacon(s, ssid, b, "WPA2", r->dbm);
+    beacon_ap_t *ap = &s->beacon_aps[s->beacon_count - 1];
+    ap->channel     = r->channel;
+    ap->frame_count = r->frames;
+    ap->first_seen  = t0 + r->first_after;
+    ap->rssi_max_60s = r->dbm;
+    ap->fp.vendor_ies_hash = r->hash;
+    return ap;
+}
+
+/* The guest VAPs first, A then C then the rest, so the rule (which
+ * fires one pair per first half and moves on) fires the A/C pair; then
+ * each node's main BSSID with its own vendor IEs. Returns the guest
+ * halves of A and C through `ga` / `gc`. */
+static void mesh_fixture(sloth_state_t *s, time_t t0, int with_mains,
+                         beacon_ap_t **ga, beacon_ap_t **gc) {
+    seed(s);
+    static const int order[] = { 0, 3, 2, 1, 4 };
+    for (int k = 0; k < MESH_N; k++) {
+        beacon_ap_t *ap = mesh_vap(s, MESH_GUEST, 0x9e,
+                                   &MESH_RADIOS[order[k]], t0);
+        if (order[k] == 0 && ga) *ga = ap;
+        if (order[k] == 3 && gc) *gc = ap;
+    }
+    if (!with_mains) return;
+    for (int k = 0; k < MESH_N; k++) {
+        beacon_ap_t *ap = mesh_vap(s, MESH_MAIN, 0x98, &MESH_RADIOS[k], t0);
+        ap->fp.vendor_ies_hash ^= 0x0101u;
+    }
+}
+
+static int twins_worst(const sloth_state_t *s, int *conf) {
+    int worst = -1;
+    if (conf) *conf = -1;
+    for (int k = 0; k < s->alert_count; k++) {
+        if (s->alerts[k].type != ALERT_TYPE_EVIL_TWIN) continue;
+        if ((int)s->alerts[k].sev > worst) {
+            worst = (int)s->alerts[k].sev;
+            if (conf) *conf = s->alerts[k].confidence;
+        }
+    }
+    return worst;
+}
+
+/* The `twin-fp` row of one pair, by its key (alert_pair_key), or -1. A
+ * pair-specific lookup because other pairs in a fixture score on their
+ * own terms (a main BSSID moved to another first octet is a second
+ * vendor beside the other mains). */
+static int twins_pair_alert(const sloth_state_t *s, const beacon_ap_t *a,
+                            const beacon_ap_t *b) {
+    char ka[20], kb[20];
+    const uint8_t *x = a->bssid, *y = b->bssid;
+    snprintf(ka, sizeof(ka), "%02x:%02x:%02x:%02x:%02x:%02x",
+             x[0], x[1], x[2], x[3], x[4], x[5]);
+    snprintf(kb, sizeof(kb), "%02x:%02x:%02x:%02x:%02x:%02x",
+             y[0], y[1], y[2], y[3], y[4], y[5]);
+    for (int k = 0; k < s->alert_count; k++) {
+        if (s->alerts[k].type != ALERT_TYPE_EVIL_TWIN) continue;
+        if (strncmp(s->alerts[k].key, "twin-fp:", 8) != 0) continue;
+        if (strstr(s->alerts[k].key, ka) && strstr(s->alerts[k].key, kb))
+            return k;
+    }
+    return -1;
+}
+
+/* The issue's fixture end to end: WARN at most, no CRIT. Both #227
+ * changes hold the A/C pair down here (A is unsteady and the pair is a
+ * mesh's), so this block alone cannot go red under one mutation; the
+ * two tests after it isolate each, and their mutations are listed
+ * there. Under both mutations together this block read CRIT at 55. */
+static void test_twins_mesh_guest_vaps_are_not_crit(void) {
+    alerts_clear(); ownership_clear(); inventory_clear();
+    time_t t0 = time(NULL) - 3600;
+    static sloth_state_t s;
+    beacon_ap_t *ga = NULL, *gc = NULL;
+    mesh_fixture(&s, t0, 1, &ga, &gc);
+    ASSERT(ga != NULL && gc != NULL);
+    if (!ga || !gc) return;
+
+    twin_evidence_t ev;
+    ASSERT_EQ(twin_evidence_score(&s, ga, gc, time(NULL), &ev), 1);
+    ASSERT_EQ(ev.hashes_differ, 1);
+    ASSERT_EQ(ev.mesh_vap, 1);
+    ASSERT_EQ(ev.late_arrival, 0);          /* A is not heard steadily */
+    ASSERT_EQ(ev.faint, 0);                 /* as in the field */
+    ASSERT_EQ(ev.hard, 0);
+
+    alerts_update(&s);
+    int conf = -1;
+    int worst = twins_worst(&s, &conf);
+    ASSERT(worst >= 0);                     /* still a row, not muted away */
+    ASSERT(worst <= (int)ALERT_SEV_WARN);
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type != ALERT_TYPE_EVIL_TWIN) continue;
+        ASSERT(s.alerts[k].sev != ALERT_SEV_CRIT);
+        ASSERT(s.alerts[k].confidence < TWIN_CRIT_MIN_CONF);
+    }
+
+    twins_snapshot(&s);
+    for (int k = 0; k < s.twin_episode_count; k++)
+        ASSERT((int)s.twin_episodes[k].confidence < TWIN_CRIT_MIN_CONF);
+}
+
+/* The deduction on its own: node A heard steadily (one frame a second),
+ * so the late arrival counts, 35 + 20 = 55, and the mesh shape takes it
+ * to 20, WARN. Then each condition of the shape removed in turn, every
+ * one back to CRIT at 55: no main SSIDs at all (a lone locally
+ * administered copy), C's main on another channel, C's main under the
+ * guest SSID, C's main from another first octet (the first four octets
+ * no longer shared), C's guest copied from A's main but not on A's
+ * address, a copy of A's guest VAP itself on first octet 9a (one
+ * parent for both halves), C's main under another SSID than A's. And a
+ * hard signal is not deducted away: a steer from an unrelated address
+ * at the pair is CRIT with the shape in place.
+ *
+ * Mutations (2026-11-17), each red here: `if (ev.mesh_vap) ev.context
+ * += TWIN_C_MESH_VAP` removed (the first block read CRIT at 55);
+ * twin_pair_mesh_vap() returning 1 for every pair (every negative block
+ * read WARN 20); the channel test dropped from twin_mesh_parent() (its
+ * block WARN 20); the SSID test dropped (its block WARN 20); the
+ * `want0` filter dropped, so the first four octets are not compared
+ * (its block WARN 20). Review (2026-11-17): the low-five-octets
+ * inequality dropped from twin_pair_mesh_vap() (the 9a block read WARN
+ * 20); the parents' SSID comparison dropped (the IoT block read WARN
+ * 20). */
+static void test_twins_mesh_vap_is_context(void) {
+    alerts_clear(); ownership_clear(); inventory_clear();
+    time_t t0 = time(NULL) - 3600;
+    time_t now = time(NULL);
+    static sloth_state_t s;
+    beacon_ap_t *ga = NULL, *gc = NULL;
+    twin_evidence_t ev;
+
+#define MESH_STEADY_A() do { ga->frame_count = 3600; \
+    for (int k_ = 0; k_ < s.beacon_count; k_++) \
+        if (memcmp(s.beacon_aps[k_].bssid + 1, ga->bssid + 1, 5) == 0) \
+            s.beacon_aps[k_].frame_count = 3600; } while (0)
+
+    mesh_fixture(&s, t0, 1, &ga, &gc);
+    MESH_STEADY_A();
+    ASSERT_EQ(twin_evidence_score(&s, ga, gc, now, &ev), 1);
+    ASSERT_EQ(ev.late_arrival, 1);
+    ASSERT_EQ(ev.mesh_vap, 1);
+    ASSERT_EQ(ev.positive, TWIN_W_IE_HASH + TWIN_W_LATE_ARRIVAL);
+    ASSERT_EQ(ev.context, TWIN_C_MESH_VAP);
+    ASSERT_EQ(ev.confidence,
+              TWIN_W_IE_HASH + TWIN_W_LATE_ARRIVAL - TWIN_C_MESH_VAP);
+    alerts_update(&s);
+    int idx = twins_pair_alert(&s, ga, gc);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+        ASSERT_EQ(s.alerts[idx].confidence,
+                  TWIN_W_IE_HASH + TWIN_W_LATE_ARRIVAL - TWIN_C_MESH_VAP);
+        ASSERT(strstr(s.alerts[idx].detail, " +late-arrival +mesh VAP")
+               != NULL);
+    }
+    ASSERT(twins_worst(&s, NULL) <= (int)ALERT_SEV_WARN);
+
+    /* Each condition removed: the late copy is CRIT at 55 again. */
+    for (int c = 0; c < 7; c++) {
+        alerts_clear();
+        mesh_fixture(&s, t0, c != 0, &ga, &gc);
+        MESH_STEADY_A();
+        beacon_ap_t *mc = NULL;
+        for (int k = 0; k < s.beacon_count; k++)
+            if (s.beacon_aps[k].bssid[0] == 0x98 &&
+                memcmp(s.beacon_aps[k].bssid + 1, gc->bssid + 1, 5) == 0)
+                mc = &s.beacon_aps[k];
+        if (c == 1 && mc) mc->channel = 1;
+        if (c == 2 && mc) snprintf(mc->ssid, sizeof(mc->ssid), "%s", MESH_GUEST);
+        if (c == 3 && mc) mc->bssid[0] = 0x90;
+        if (c == 4) gc->bssid[4] ^= 0x40;   /* no main shares its low octets */
+        /* A copy of A's own guest VAP on another locally administered
+         * first octet: A's main is the parent of both halves. */
+        if (c == 5) {
+            gc->bssid[0] = 0x9a;
+            memcpy(gc->bssid + 1, ga->bssid + 1, 5);
+        }
+        /* C's main under another SSID: two of one box's VAPs, not two
+         * nodes of one network. */
+        if (c == 6 && mc) snprintf(mc->ssid, sizeof(mc->ssid), "%s", "Neighbour-IoT");
+        if (c != 0) ASSERT(mc != NULL);
+        twin_evidence_score(&s, ga, gc, now, &ev);
+        if (ev.mesh_vap != 0)
+            fprintf(stderr, "    mesh case %d: mesh_vap %d\n", c, ev.mesh_vap);
+        ASSERT_EQ(ev.mesh_vap, 0);
+        ASSERT_EQ(ev.confidence, TWIN_W_IE_HASH + TWIN_W_LATE_ARRIVAL);
+        alerts_update(&s);
+        idx = twins_pair_alert(&s, ga, gc);
+        ASSERT(idx >= 0);
+        if (idx < 0) continue;
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+        ASSERT_EQ(s.alerts[idx].confidence,
+                  TWIN_W_IE_HASH + TWIN_W_LATE_ARRIVAL);
+        ASSERT(strstr(s.alerts[idx].detail, "mesh VAP") == NULL);
+    }
+
+    /* A hard signal survives the deduction. */
+    alerts_clear();
+    mesh_fixture(&s, t0, 1, &ga, &gc);
+    MESH_STEADY_A();
+    btm_steer_t *st = &s.btm_steers[s.btm_steer_count++];
+    memset(st, 0, sizeof(*st));
+    static const uint8_t steerer[6] = {0x5c,0x11,0x22,0x33,0x44,0x55};
+    memcpy(st->bssid, steerer, 6);
+    st->req_count = 1;
+    st->imminent_count = 3;
+    memcpy(st->candidates[0], gc->bssid, 6);
+    st->candidate_count = 1;
+    st->first_seen = st->last_seen = time(NULL);
+    twin_evidence_score(&s, ga, gc, now, &ev);
+    ASSERT_EQ(ev.mesh_vap, 1);
+    ASSERT_EQ(ev.hard, 1);
+    alerts_update(&s);
+    idx = twins_pair_alert(&s, ga, gc);
+    ASSERT(idx >= 0);
+    if (idx >= 0) ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+#undef MESH_STEADY_A
+}
+
+/* Late arrival needs a steadily heard original (#227). #193's case, a
+ * single locally administered copy with no main network beside it,
+ * first heard ten minutes after an original on a vendor's address, one
+ * band, other vendor IEs: CRIT at 55 when the original has been heard
+ * once a second, and at the floor of TWIN_STEADY_FRAME_S (60 frames in
+ * the hour). One frame fewer, or the field's 11, and the gap is
+ * sloth's: no late arrival, WARN at 35. A frame_count of 0 is a
+ * hand-built entry and "cannot say", so it still counts.
+ *
+ * Mutations (2026-11-17), each red here: the `!twin_ap_steady(early)`
+ * test removed from twin_pair_late_arrival() (the 59- and 11-frame
+ * blocks read CRIT 55); `>=` in twin_ap_steady() made `>` (the 60-frame
+ * block read WARN 35); the frame_count 0 escape removed (the 0 block
+ * read WARN 35). */
+static void test_twins_late_arrival_needs_a_steady_original(void) {
+    alerts_clear(); ownership_clear(); inventory_clear();
+    time_t now = time(NULL);
+    time_t t0  = now - 3600;
+    uint8_t orig[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t copy[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+    static const struct { int frames, late, sev, conf; } C[] = {
+        { 3600, 1, ALERT_SEV_CRIT, TWIN_W_IE_HASH + TWIN_W_LATE_ARRIVAL },
+        {   60, 1, ALERT_SEV_CRIT, TWIN_W_IE_HASH + TWIN_W_LATE_ARRIVAL },
+        {   59, 0, ALERT_SEV_WARN, TWIN_W_IE_HASH },
+        {   11, 0, ALERT_SEV_WARN, TWIN_W_IE_HASH },
+        {    0, 1, ALERT_SEV_CRIT, TWIN_W_IE_HASH + TWIN_W_LATE_ARRIVAL },
+    };
+    static sloth_state_t s;
+    for (size_t c = 0; c < sizeof(C) / sizeof(C[0]); c++) {
+        alerts_clear();
+        seed(&s);
+        add_beacon(&s, "CorpWiFi", orig, "WPA2", -60);
+        add_beacon(&s, "CorpWiFi", copy, "WPA2", -60);
+        beacon_ap_t *o = &s.beacon_aps[0], *k = &s.beacon_aps[1];
+        o->first_seen = t0;        o->last_seen = now;
+        k->first_seen = t0 + 600;  k->last_seen = now;
+        o->frame_count = C[c].frames;
+        k->frame_count = 500;
+        o->fp.vendor_ies_hash = 0x1111u;
+        k->fp.vendor_ies_hash = 0x2222u;
+        twin_evidence_t ev;
+        twin_evidence_score(&s, o, k, now, &ev);
+        alerts_update(&s);
+        int conf = -1;
+        int sev = twins_worst(&s, &conf);
+        if (ev.late_arrival != C[c].late || sev != C[c].sev ||
+            conf != C[c].conf)
+            fprintf(stderr, "    %d frames: late %d sev %d conf %d\n",
+                    C[c].frames, ev.late_arrival, sev, conf);
+        ASSERT_EQ(ev.late_arrival, C[c].late);
+        ASSERT_EQ(ev.mesh_vap, 0);
+        ASSERT_EQ(sev, C[c].sev);
+        ASSERT_EQ(conf, C[c].conf);
+    }
+}
+
 void run_twins_tests(void) {
     TEST_SUITE("twins snapshot");
     RUN_TEST(test_twins_empty_state_no_episodes);
@@ -873,6 +1190,11 @@ void run_twins_tests(void) {
     RUN_TEST(test_twins_unattributed_pair_gets_no_wired_verdict);
     RUN_TEST(test_twins_neighbor_class_does_not_suppress_the_episode);
     RUN_TEST(test_twins_dual_band_radios_of_one_device_are_no_episode);
+
+    TEST_SUITE("twins: a mesh's guest VAPs (#227)");
+    RUN_TEST(test_twins_mesh_guest_vaps_are_not_crit);
+    RUN_TEST(test_twins_mesh_vap_is_context);
+    RUN_TEST(test_twins_late_arrival_needs_a_steady_original);
 
     TEST_SUITE("twins view");
     RUN_TEST(test_view_twins_empty_does_not_crash);

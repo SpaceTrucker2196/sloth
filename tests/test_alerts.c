@@ -9064,7 +9064,10 @@ static void test_twin_an_ap_that_returns_is_not_a_late_arrival(void) {
         /* The first router is heard throughout; the second is not. */
         for (int k = 0; k < 6; k++) {
             tw_tick(100);
-            beacon_record(r1, "Riverside", -60, 6, "WPA2", 100, NULL);
+            /* Two frames a step: a steadily heard original, 50 s a
+             * frame, inside TWIN_STEADY_FRAME_S (#227). */
+            for (int f = 0; f < 2; f++)
+                beacon_record(r1, "Riverside", -60, 6, "WPA2", 100, NULL);
             seed_state(&s);
             beacon_snapshot(&s);
         }
@@ -9218,6 +9221,50 @@ static void test_twin_detail_fits_with_every_phrase(void) {
         ASSERT(strstr(d, " - BSSID not in the approved inventory"
                          " +not in inventory +same-vendor-OUI"
                          " +carrier SSID +faint"
+                         " +802.11k claim (unverified)"
+                         " +btm-steered by 5c:11:22:33:44:55") != NULL);
+        ASSERT(n >= 25 &&
+               strcmp(d + n - 25, " [class=impostor wired=?]") == 0);
+    }
+    no_inventory();
+
+    /* And as two mesh nodes' guest VAPs (#227): both halves locally
+     * administered, so no same-OUI note, the late arrival and the mesh
+     * note in its place, 7 longer: 291 under a 15-octet carrier name,
+     * and the 292 rules_twin.c allows for under a 16-octet one. */
+    static const char *INV_MESH =
+        "{\"version\":\"2026-09-25.1\",\"site\":\"hq-3f\","
+        "\"networks\":[{\"ssid\":\"Spectrum Mobile\","
+        "\"security_profile\":\"wpa2-enterprise\","
+        "\"bssids\":[\"aa:bb:cc:00:11:22\"]}]}";
+    uint8_t g_ok[6]  = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t g_bad[6] = {0xaa,0xbb,0xcc,0x00,0x41,0x9c};
+    uint8_t m_ok[6]  = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t m_bad[6] = {0xa8,0xbb,0xcc,0x00,0x41,0x9c};
+    ASSERT_EQ(use_inventory(INV_MESH), 1);
+    alerts_clear();
+    static sloth_state_t m; seed_state(&m);
+    add_beacon(&m, "Spectrum Mobile", g_ok,  "WPA2");
+    add_beacon(&m, "Spectrum Mobile", g_bad, "WPA2");
+    add_beacon(&m, "Mesh-Main", m_ok,  "WPA2");
+    add_beacon(&m, "Mesh-Main", m_bad, "WPA2");
+    twin_radio(&m, 0, 6, t0,       0x1111u);
+    twin_radio(&m, 1, 6, t0 + 600, 0x2222u);
+    m.beacon_aps[1].signal_dbm = -100;
+    add_neighbor(&m, g_ok, g_bad);
+    seed_steer(&m, steerer, g_bad, 1);
+    alerts_update(&m);
+    idx = find_alert(&m, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        const char *d = m.alerts[idx].detail;
+        size_t n = strlen(d);
+        ASSERT_EQ((long long)n, 291);
+        ASSERT(n + 2 < ALERT_DETAIL_LEN);
+        ASSERT_EQ((int)m.alerts[idx].sev, (int)ALERT_SEV_CRIT);   /* hard */
+        ASSERT(strstr(d, " - BSSID not in the approved inventory"
+                         " +not in inventory +late-arrival"
+                         " +carrier SSID +mesh VAP +faint"
                          " +802.11k claim (unverified)"
                          " +btm-steered by 5c:11:22:33:44:55") != NULL);
         ASSERT(n >= 25 &&
@@ -9467,7 +9514,10 @@ static void test_twin_an_announcement_as_another_radio_is_no_alibi(void) {
         beacon_record(rogue, "Riverside", -70, announce_ch, "WPA2", 100, &rc);
         for (int k = 0; k < 6; k++) {
             tw_tick(100);
-            beacon_record(r1, "Riverside", -60, 6, "WPA2", 100, &rr);
+            /* Two frames a step: a steadily heard original, 50 s a
+             * frame, inside TWIN_STEADY_FRAME_S (#227). */
+            for (int f = 0; f < 2; f++)
+                beacon_record(r1, "Riverside", -60, 6, "WPA2", 100, &rr);
             seed_state(&s);
             beacon_snapshot(&s);
         }
@@ -9606,7 +9656,9 @@ static void test_twin_issue_188_field_pairs_classify(void) {
         add_beacon(&s, tc->ssid, tc->b, "WPA2");
         twin_radio(&s, 0, tc->ch_a, t0,             tc->hash_a);
         twin_radio(&s, 1, tc->ch_b, t0 + tc->gap_s, tc->hash_b);
-        s.beacon_aps[0].frame_count = 50;
+        /* One frame a second over the hour: the earlier half heard
+         * steadily, as a late arrival needs (#227). */
+        s.beacon_aps[0].frame_count = 3600;
         s.beacon_aps[1].frame_count = tc->frames_b;
         s.beacon_aps[1].signal_dbm  = (int8_t)tc->sig_b;
         if (tc->self_steer) seed_steer(&s, tc->b, tc->a, 3);
