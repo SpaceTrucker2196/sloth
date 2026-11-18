@@ -43,7 +43,11 @@
 #                         "no SDR attached" instead of down. So one file
 #                         serves a host with SDRs and one without.
 #                         --adsb sbs:// / beast://, --gps, --location and
-#                         --victron are never trimmed; with nothing left
+#                         --victron are never trimmed, nor is a decoder
+#                         file written in the last 10 min (--adsb) or
+#                         24 h (--aprs, --rtl433): something else feeds
+#                         it (a sound-card TNC, readsb net-only,
+#                         rtl_tcp). With nothing left
 #                         to read it runs on idle. An SDR
 #                         plugged in later needs
 #                         `systemctl restart sloth-rf`. Give this flag

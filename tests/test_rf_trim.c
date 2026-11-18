@@ -1,7 +1,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include "runner.h"
 #include "sloth.h"
@@ -434,8 +438,283 @@ static void test_rows_and_source_down(void) {
     run_end();
 }
 
+/* ── the fail-open guard: a recently written input file is kept ──── */
+
+/* The mtime table the guard reads through rf_trim_test_set_mtime(): a
+ * path not listed is a file that is not there. Ages are against the
+ * pinned wall clock g_wall. */
+static struct { const char *path; time_t mtime; int err; } g_mt[4];
+static int g_mt_n;
+
+static int fake_mtime(const char *path, time_t *mtime) {
+    for (int i = 0; i < g_mt_n; i++)
+        if (strcmp(g_mt[i].path, path) == 0) {
+            if (g_mt[i].err) return g_mt[i].err;
+            *mtime = g_mt[i].mtime;
+            return 0;
+        }
+    return ENOENT;
+}
+
+static void mt_reset(void) { g_mt_n = 0; }
+static void mt_put(const char *path, long age) {
+    g_mt[g_mt_n].path = path;
+    g_mt[g_mt_n].mtime = g_wall - (time_t)age;
+    g_mt[g_mt_n].err = 0;
+    g_mt_n++;
+}
+static void mt_put_err(const char *path, int err) {
+    g_mt[g_mt_n].path = path;
+    g_mt[g_mt_n].mtime = 0;
+    g_mt[g_mt_n].err = err;
+    g_mt_n++;
+}
+static void mt_put_at(const char *path, time_t mtime) {
+    g_mt[g_mt_n].path = path;
+    g_mt[g_mt_n].mtime = mtime;
+    g_mt[g_mt_n].err = 0;
+    g_mt_n++;
+}
+
+static void guard_begin(void) {
+    g_mono = 5000000;
+    g_wall = (time_t)1800000000;
+    sloth_clock_test_set(pin_mono, pin_wall);
+    mt_reset();
+    rf_trim_test_set_mtime(fake_mtime);
+}
+
+static void guard_end(void) {
+    mt_reset();
+    rf_trim_test_set_mtime(fake_mtime);   /* the suite's hermetic default */
+    sloth_clock_test_set(NULL, NULL);
+    rf_trim_reset();
+}
+
+#define APRS_LOG "/var/lib/direwolf/aprs.log"
+#define ADSB_JSON "/run/readsb/aircraft.json"
+#define RTL_LOG "/var/lib/rtl_433/events.jsonl"
+
+/* No SDR, but Dire Wolf on a sound-card TNC wrote aprs.log five
+ * minutes ago: --aprs is kept with its qualifiers and says why, while
+ * --adsb (no file) and --rtl433 (unwritten for 25 h) are trimmed as
+ * before. Seen red with the guard dropped from the --aprs branch
+ * (written_recently() call removed: aprs trimmed, its mark set, the
+ * kept line absent). */
+static void test_fresh_aprs_kept(void) {
+    guard_begin();
+    mt_put(APRS_LOG, 300);
+    mt_put(RTL_LOG, 25L * 3600L);
+    rf_flags_t f = beta_site();
+    ASSERT_EQ(apply(&f, 1, 0, RF_SDR_ABSENT), RF_TRIM_GO);
+    ASSERT_STR(S(f.aprs), APRS_LOG);
+    ASSERT_EQ(f.aprs_freq, 144390000u);
+    ASSERT_EQ(f.aprs_silent_h, 4);
+    ASSERT_EQ(rf_trim_trimmed(SYS_SRC_APRS, NULL, 0), 0);
+    ASSERT(f.adsb == NULL);
+    ASSERT(f.rtl433 == NULL);
+    ASSERT_EQ(rf_trim_trimmed(SYS_SRC_ADSB, NULL, 0), 1);
+    ASSERT_EQ(rf_trim_trimmed(SYS_SRC_RTL433, NULL, 0), 1);
+    ASSERT_STR(g_log,
+        "sloth-rf: --adsb " ADSB_JSON " not started: no SDR on USB "
+        "at startup (no known SDR USB ID under /sys/bus/usb/devices); "
+        "--no-sdr-trim keeps it\n"
+        "sloth-rf: --aprs " APRS_LOG " kept: no SDR on USB but its file was "
+        "written 300 s ago (another feed writes it; trimmed when unwritten "
+        "for 86400 s)\n"
+        "sloth-rf: --rtl433 " RTL_LOG " not started: no SDR on "
+        "USB at startup (no known SDR USB ID under /sys/bus/usb/devices); "
+        "--no-sdr-trim keeps it\n");
+    guard_end();
+}
+
+/* Each decoder's window, at its edge: aircraft.json is kept at 600 s
+ * and trimmed at 601 (readsb rewrites it every second), the event logs
+ * kept at 24 h and trimmed a second later (they are written only on a
+ * decode). Seen red with the comparison inverted in written_recently()
+ * (a > window: every case flips) and, separately, with the event logs
+ * given the ADS-B window (aprs and rtl433 at 24 h trimmed). */
+static void test_windows(void) {
+    static const struct { long adsb, ev; int kept; } c[] = {
+        { 0, 0, 1 },
+        { RF_TRIM_FRESH_ADSB_S, RF_TRIM_FRESH_EVENTS_S, 1 },
+        { RF_TRIM_FRESH_ADSB_S + 1, RF_TRIM_FRESH_EVENTS_S + 1, 0 },
+    };
+    ASSERT_EQ(RF_TRIM_FRESH_ADSB_S, 600L);
+    ASSERT_EQ(RF_TRIM_FRESH_EVENTS_S, 86400L);
+    for (size_t i = 0; i < sizeof(c) / sizeof(c[0]); i++) {
+        guard_begin();
+        mt_put(ADSB_JSON, c[i].adsb);
+        mt_put(APRS_LOG, c[i].ev);
+        mt_put(RTL_LOG, c[i].ev);
+        rf_flags_t f = beta_site();
+        ASSERT_EQ(apply(&f, 0, 0, RF_SDR_ABSENT), RF_TRIM_GO);
+        ASSERT_EQ(f.adsb != NULL, c[i].kept);
+        ASSERT_EQ(f.aprs != NULL, c[i].kept);
+        ASSERT_EQ(f.rtl433 != NULL, c[i].kept);
+        ASSERT_EQ(rf_trim_trimmed(SYS_SRC_ADSB, NULL, 0), !c[i].kept);
+        ASSERT_EQ(rf_trim_trimmed(SYS_SRC_APRS, NULL, 0), !c[i].kept);
+        ASSERT_EQ(rf_trim_trimmed(SYS_SRC_RTL433, NULL, 0), !c[i].kept);
+        guard_end();
+    }
+    /* A recently written aircraft.json alone, with nothing else given:
+     * not NOTHING_LEFT, since the guard left a reader. */
+    guard_begin();
+    mt_put(ADSB_JSON, 1);
+    rf_flags_t g = RF_FLAGS_INIT;
+    g.adsb = ADSB_JSON;
+    ASSERT_EQ(apply(&g, 0, 0, RF_SDR_ABSENT), RF_TRIM_GO);
+    ASSERT_STR(S(g.adsb), ADSB_JSON);
+    ASSERT_STR(g_log, "sloth-rf: --adsb " ADSB_JSON " kept: no SDR on USB but "
+                      "its file was written 1 s ago (another feed writes it; "
+                      "trimmed when unwritten for 600 s)\n");
+    guard_end();
+}
+
+/* An mtime ahead of the clock (a skewed RTC, a file from a host whose
+ * clock ran fast) is not proof the feed stopped: kept, and said so.
+ * Seen red with the age taken as its absolute value in
+ * written_recently() (a far-future file trimmed). */
+static void test_future_mtime_kept(void) {
+    guard_begin();
+    mt_put(RTL_LOG, -(3L * 86400L));
+    rf_flags_t f = RF_FLAGS_INIT;
+    f.rtl433 = "file://" RTL_LOG;
+    ASSERT_EQ(apply(&f, 1, 0, RF_SDR_ABSENT), RF_TRIM_GO);
+    ASSERT_STR(S(f.rtl433), "file://" RTL_LOG);
+    ASSERT_EQ(rf_trim_trimmed(SYS_SRC_RTL433, NULL, 0), 0);
+    ASSERT_STR(g_log, "sloth-rf: --rtl433 file://" RTL_LOG " kept: no SDR on "
+                      "USB but its file's mtime is 259200 s ahead of the clock "
+                      "(clock skew; read as another feed writing it)\n");
+    guard_end();
+}
+
+/* An SDR attached: the guard is never consulted and says nothing,
+ * fresh files or not. Seen red with the guard's lookup moved ahead of
+ * the RF_SDR_PRESENT return (kept lines in the log). */
+static void test_present_ignores_guard(void) {
+    guard_begin();
+    mt_put(ADSB_JSON, 1);
+    mt_put(APRS_LOG, 1);
+    rf_flags_t f = beta_site();
+    ASSERT_EQ(apply(&f, 1, 0, RF_SDR_PRESENT), RF_TRIM_GO);
+    ASSERT_STR(g_log, "sloth-rf: SDR attached: Realtek RTL2838 DVB-T (RTL-SDR); "
+                      "decoder inputs kept\n");
+    ASSERT_STR(S(f.adsb), ADSB_JSON);
+    ASSERT_STR(S(f.rtl433), RTL_LOG);
+    guard_end();
+}
+
+/* W9FJC as measured on 2026-11-18 11:15 MST: no aircraft.json (no
+ * readsb), aprs.log last written 343436 s before (four days), the
+ * rtl_433 log 212603 s before (its logrotate copytruncate): all three
+ * trimmed, as without the guard. Seen red with RF_TRIM_FRESH_EVENTS_S
+ * raised to a week (aprs and rtl433 kept). */
+static void test_w9fjc_still_trims(void) {
+    guard_begin();
+    mt_put(APRS_LOG, 343436);
+    mt_put(RTL_LOG, 212603);
+    rf_flags_t f = RF_FLAGS_INIT;
+    f.adsb = ADSB_JSON;
+    f.aprs = APRS_LOG;
+    f.aprs_freq = 144390000u;
+    f.rtl433 = RTL_LOG;
+    ASSERT_EQ(apply(&f, 1, 0, RF_SDR_ABSENT), RF_TRIM_GO);
+    ASSERT(f.adsb == NULL);
+    ASSERT(f.aprs == NULL);
+    ASSERT(f.rtl433 == NULL);
+    ASSERT(strstr(g_log, "kept") == NULL);
+    guard_end();
+}
+
+/* stat() failing for a reason other than absence - EACCES on a
+ * directory the sloth account cannot search, ProtectHome= over a
+ * /home path - says nothing about whether the file is fed: kept, with
+ * the reason, so the reader reports the real cause instead of the trim
+ * calling it "no SDR". ENOENT and ENOTDIR are absence: trimmed. Seen
+ * red with written_recently() treating every stat() failure as absent
+ * (aprs trimmed, no "could not be checked" line). */
+static void test_unstatable_kept(void) {
+    guard_begin();
+    mt_put_err(APRS_LOG, EACCES);
+    mt_put_err(RTL_LOG, ENOTDIR);
+    rf_flags_t f = RF_FLAGS_INIT;
+    f.aprs = APRS_LOG;
+    f.rtl433 = RTL_LOG;
+    ASSERT_EQ(apply(&f, 1, 0, RF_SDR_ABSENT), RF_TRIM_GO);
+    ASSERT_STR(S(f.aprs), APRS_LOG);
+    ASSERT_EQ(rf_trim_trimmed(SYS_SRC_APRS, NULL, 0), 0);
+    ASSERT(f.rtl433 == NULL);
+    ASSERT_EQ(rf_trim_trimmed(SYS_SRC_RTL433, NULL, 0), 1);
+    char want[256];
+    snprintf(want, sizeof(want), "sloth-rf: --aprs " APRS_LOG " kept: no SDR "
+             "on USB but its file could not be checked (%s); its reader "
+             "reports it\n", strerror(EACCES));
+    ASSERT(strncmp(g_log, want, strlen(want)) == 0);
+    guard_end();
+}
+
+/* An mtime at the far ends of time_t (a corrupt inode, a FAT stamp
+ * read wrong) neither overflows the age nor flips its sign: very old
+ * is trimmed, very far ahead is kept as skew. Seen red with the age
+ * taken as a signed (long)(now - m) on a far-past mtime (UBSan
+ * reports the overflow; plain builds wrap it negative and read the
+ * file as ahead of the clock: kept). */
+static void test_extreme_mtime(void) {
+    if (sizeof(time_t) < 8) return;   /* the extremes below are 64-bit */
+    guard_begin();
+    mt_put_at(APRS_LOG, (time_t)LLONG_MIN);
+    mt_put_at(RTL_LOG, (time_t)LLONG_MAX);
+    rf_flags_t f = RF_FLAGS_INIT;
+    f.aprs = APRS_LOG;
+    f.rtl433 = RTL_LOG;
+    ASSERT_EQ(apply(&f, 1, 0, RF_SDR_ABSENT), RF_TRIM_GO);
+    ASSERT(f.aprs == NULL);
+    ASSERT_STR(S(f.rtl433), RTL_LOG);
+    guard_end();
+}
+
+/* The real lookup, stat(), on a file in TMPDIR whose mtime is set with
+ * utimes(): a minute old is kept, two days old trimmed, removed
+ * trimmed. Nothing is opened by the code under test. */
+static void test_real_stat(void) {
+    const char *td = getenv("TMPDIR");
+    char path[256];
+    snprintf(path, sizeof(path), "%s/sloth-rf-trim-XXXXXX", td && td[0] ? td : "/tmp");
+    int fd = mkstemp(path);
+    ASSERT(fd >= 0);
+    if (fd < 0) return;
+    close(fd);
+    guard_begin();
+    rf_trim_test_set_mtime(NULL);
+    struct timeval tv[2] = { { (time_t)(g_wall - 60), 0 }, { (time_t)(g_wall - 60), 0 } };
+    ASSERT_EQ(utimes(path, tv), 0);
+    rf_flags_t f = RF_FLAGS_INIT;
+    f.aprs = path;
+    ASSERT_EQ(apply(&f, 1, 0, RF_SDR_ABSENT), RF_TRIM_GO);
+    ASSERT_STR(S(f.aprs), path);
+    ASSERT(strstr(g_log, "written 60 s ago") != NULL);
+
+    tv[0].tv_sec = tv[1].tv_sec = (time_t)(g_wall - 2 * 86400);
+    ASSERT_EQ(utimes(path, tv), 0);
+    f.aprs = path;
+    ASSERT_EQ(apply(&f, 1, 0, RF_SDR_ABSENT), RF_TRIM_GO);
+    ASSERT(f.aprs == NULL);
+
+    unlink(path);
+    f.aprs = path;
+    ASSERT_EQ(apply(&f, 1, 0, RF_SDR_ABSENT), RF_TRIM_GO);
+    ASSERT(f.aprs == NULL);
+    guard_end();
+}
+
 void run_rf_trim_tests(void) {
     TEST_SUITE("sloth-rf startup trim (no SDR on USB, src/rf_trim.h)");
+    /* Hermetic: no test reads the host's decoder files through the
+     * guard (this host's own /var/lib/direwolf/aprs.log would decide
+     * the beta-site cases otherwise). test_real_stat lifts it. */
+    mt_reset();
+    rf_trim_test_set_mtime(fake_mtime);
     RUN_TEST(test_detect);
     RUN_TEST(test_present_keeps_all);
     RUN_TEST(test_absent_trims_local);
@@ -445,4 +724,13 @@ void run_rf_trim_tests(void) {
     RUN_TEST(test_bad_spec_is_left_to_refuse);
     RUN_TEST(test_nothing_left);
     RUN_TEST(test_rows_and_source_down);
+    RUN_TEST(test_fresh_aprs_kept);
+    RUN_TEST(test_windows);
+    RUN_TEST(test_future_mtime_kept);
+    RUN_TEST(test_present_ignores_guard);
+    RUN_TEST(test_w9fjc_still_trims);
+    RUN_TEST(test_unstatable_kept);
+    RUN_TEST(test_extreme_mtime);
+    RUN_TEST(test_real_stat);
+    rf_trim_test_set_mtime(NULL);
 }
