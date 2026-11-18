@@ -94,6 +94,7 @@ void run_webdf_tests(void);              /* tests/test_webdf.c (2026-11-17) */
 void run_adsb_tests(void);               /* tests/test_adsb.c (2026-11-05) */
 void run_spectrum_tests(void);           /* tests/test_spectrum.c (2026-11-13) */
 void run_iso_tests(void);                /* tests/test_iso.c (#224, 2026-11-16) */
+void run_chan_tests(void);               /* tests/test_chan.c (2026-11-18) */
 void run_camera_tests(void);             /* tests/test_camera.c (2026-11-15) */
 void run_aprs_tests(void);               /* tests/test_aprs.c (2026-11-05) */
 void run_rtl433_tests(void);             /* tests/test_rtl433.c (#208) */

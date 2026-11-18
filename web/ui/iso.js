@@ -54,14 +54,11 @@
     };
   }
   // The identity colours (iso.css; owner 2026-11-17: "color code
-  // finding by band channel and ssid"): the WiFi bands' shade steps,
-  // in the order the legend names them, and a hue per BLE class slug.
+  // finding by band channel and ssid"): a hue per BLE class slug. A WiFi
+  // channel's is the page's one channel colour (chan.js, 2026-11-18),
+  // which app.js reads itself.
   function scheme() {
     return {
-      band: { "2.4": [cssVar("--iso-b24-0", "#ffb347"), cssVar("--iso-b24-1", "#a87a45")],
-              "5": [cssVar("--iso-b5-0", "#a6f2d4"), cssVar("--iso-b5-1", "#55d6a6"),
-                    cssVar("--iso-b5-2", "#2fa98a"), cssVar("--iso-b5-3", "#3fc8e0"), cssVar("--iso-b5-4", "#6f9a90")],
-              "6": [cssVar("--iso-b6-0", "#b48cff"), cssVar("--iso-b6-1", "#8f7fc0")] },
       cls: { "b:phone": cssVar("--iso-c-phone", "#5b9bff"), "b:wear": cssVar("--iso-c-wear", "#6fdc6f"),
              "b:tag": cssVar("--iso-c-tag", "#ff6a3d"), "b:hid": cssVar("--iso-c-hid", "#f2d240"),
              "b:bcn": cssVar("--iso-c-bcn", "#40e0f0"), "b:iot": cssVar("--iso-c-iot", "#c07cff"),

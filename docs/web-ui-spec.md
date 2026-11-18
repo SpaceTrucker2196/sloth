@@ -353,6 +353,13 @@ The client keeps a 24 h fine-tier ring in memory per visible metric and asks `/a
   override), `--mon-bg`/`--mon-fg` (monitor rows). The light theme
   darkens each by one recorded rule to 4.5:1. `web/tests/test_tui_colors.c`
   compares them with what `src/tui.c` writes.
+- **WiFi channel colours** (2026-11-18): `--ch-N` and `--ch6-0..3` in
+  `palette.css`, written for both themes in `web/tools/palette.c`
+  (`CHAN[]`, 2.4 GHz cool, 5 GHz warm, 6 GHz violet), held by the build
+  at 3:1 on every ground including the greenbar stripes and at
+  CIEDE2000 floors between neighbours; mapped only by `web/ui/chan.js`.
+  Lists alternate (`web/ui/greenbar.css`): the surface 8% toward white,
+  toward black in the light theme.
 - **Chart hues** with no TUI counterpart (`--f-*`, the Flows chord)
   are in `theme.css`, each named in the legend; the generator fails the
   build if two come within 15 (CIEDE2000) in either theme.

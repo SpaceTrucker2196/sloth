@@ -3531,15 +3531,17 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   pick the cell for the list below). Unticking `isometric` (kept per
   browser as `wifi.iso`) draws it flat: G3's horizon strips (slice V3,
   the Design section's "Slice V3"), or the stacked grid below.
-  Isometric, colour is identity (owner 2026-11-17): the band a hue
-  family (2.4 GHz amber, 5 GHz teal-green, 6 GHz violet) on a floor
-  strip, the band's name and each column's top; the channel a shade
-  step (2.4 GHz 1/6/11 against the overlapping rest; 5 GHz UNII-1,
-  UNII-2A, UNII-2C, UNII-3, the DFS two dashed, and "other" for UNII-2B
-  and UNII-4; 6 GHz PSC against the
-  rest); the column's body the cell's busiest transmitters stacked by
-  share in their SSIDs' colours. A key under the canvas names the steps
-  and the window's SSIDs; pressing an SSID fades the others to 70
+  Isometric, colour is identity (owner 2026-11-17): each channel its
+  colour from the page's one channel palette (since 2026-11-18, the
+  Design section's "WiFi channel colours and the greenbar": 2.4 GHz
+  cool, 5 GHz warm, 6 GHz violet, the same as in every list) on a floor
+  strip and each column's top, a band's name in its first channel's;
+  the column's body the cell's busiest transmitters stacked by share in
+  their SSIDs' colours. A key under the canvas names each band's steps
+  (2.4 GHz 1/6/11 against the overlapping rest; 5 GHz UNII-1, UNII-2A,
+  UNII-2C, UNII-3, the DFS two dashed on the strip, and "other" for
+  UNII-2B and UNII-4; 6 GHz PSC against the rest), each followed by the
+  window's channels in it as chips, and the window's SSIDs; pressing an SSID fades the others to 70
   percent transparent (owner 2026-11-17; not kept). Under the band
   strip a clients lane (owner 2026-11-17: "the spectrum should show
   where the clients sit in the spectrum highlighting their channel"):
@@ -7585,6 +7587,135 @@ Monitor rows, on `--mon-bg` (`#303030` dark, `#c5c2ba` light):
 | token | dark | on --mon-bg | light | on --mon-bg |
 |---|---|---|---|---|
 | `--mon-fg` | `#00d7af` | 7.13 | `#005a49` | 4.61 |
+
+### WiFi channel colours and the greenbar (2026-11-18)
+
+Owner, 2026-11-18: "a consistent color palette for wifi channels both
+2.4 and 5ghz that's used throughout the app when device or ssid is
+shown. use cool colors for 2.4 ghz and warm colors for 5ghz. try to make
+each channel a visually distinct color so it's easy to read in a list.
+like greenbar paper make an alternating pattern in lists where the
+alternate bar color is the background but 8% lighter."
+
+**One palette.** Every 20 MHz channel has one colour per theme,
+written in `web/tools/palette.c` (`CHAN[]`) and emitted into
+`palette.css` as `--ch-N`: 2.4 GHz 1 to 14 cool (greens, teals, cyans,
+blues, blue-violets), 5 GHz 36 to 64, 100 to 144 and 149 to 177 warm
+(pinks, reds, oranges, ambers, golds; CIELCh hue 340 to 86, short of
+the olive a yellow turns dark enough for cream and the plum a deep
+magenta turns beside 6 GHz's violet), lightness varied as well as hue. 6 GHz is a low-chroma violet family of four steps,
+`--ch6-0..3`, a channel's step `((n - 1) / 4) % 4`, so neighbours in a
+sorted 6 GHz list differ. A channel in no table (a bonded 38, a 6 GHz
+number with no `6g` key outside 1 to 14 and 32 to 177) is `--muted`.
+The light values are written, not derived: `light_variant()` would pull
+a hue's pale and deep steps onto one colour. `web/ui/chan.js`
+(`window.SlothChan`) is the one place a channel becomes a token
+(`token`, `color`, `rgb` for a canvas, `chip`); a caller that knows a
+row's band passes it (the waterfall its row's `band`, the AP table its
+`rf.radio` when sloth's estimate names one), since a bare 6 GHz number
+reads as the 2.4 or 5 GHz channel of that number; `test_chan.c` counts
+the token strings in the page and fails on a second mapping.
+
+A channel is shown as a chip, the number on its colour in `--ch-ink`
+(the dark `--bg`, the light `--panel`), never the colour alone: the AP
+table and the card's scan (`ch`), the device drawer's associations,
+the fleet's "also heard by" lines, the SSID drawer's access points and
+clients, the direction-finding emitters, the waterfall's picked cell,
+its key (each step's words, then its channels' chips), and on the
+canvases the isometric floor strip, column tops and client trace, and a
+bar before each key on the stacked grid and G3's strips. SSID names keep
+their hash colour.
+
+**The build gate** (`chan_check()`), every channel, both themes: the
+fill at 3:1 on `--bg`, `--panel` and both their stripes (WCAG 1.4.11),
+`--ch-ink` on it at 4.5:1; CIEDE2000, the smaller theme's: neighbours in
+a sorted 2.4 or 5 GHz list 20 apart, 1, 6 and 11 25 apart, any two 2.4
+GHz 7, any two 5 GHz 4 (28 warm hues at 3:1 on cream, L* 27 to 48,
+cannot all stand 7 apart; the chip's number tells two such apart), any
+two 6 GHz steps 8, and 10 between bands and from `--muted`.
+
+The WiFi channel palette (2026-11-18): each fill on --bg, --panel and their greenbar stripes (the least of the four; `*` under 3:1), and --ch-ink on it (`*` under 4.5:1):
+
+| token | dark | least ground | ink | light | least ground | ink |
+|---|---|---|---|---|---|---|
+| `--ch-1` | `#71f5ff` | 12.82 | 15.91 | `#00777e` | 3.92 | 5.24 |
+| `--ch-2` | `#8efc70` | 12.90 | 16.01 | `#117d00` | 3.91 | 5.22 |
+| `--ch-3` | `#99e1ff` | 11.52 | 14.30 | `#00708c` | 4.18 | 5.59 |
+| `--ch-4` | `#00dd74` | 9.17 | 11.38 | `#006c35` | 4.84 | 6.46 |
+| `--ch-5` | `#94b5ff` | 8.16 | 10.12 | `#005aa7` | 5.12 | 6.84 |
+| `--ch-6` | `#29a112` | 4.91 | 6.09 | `#085500` | 6.69 | 8.94 |
+| `--ch-7` | `#cde5ff` | 12.85 | 15.95 | `#0071a7` | 3.94 | 5.27 |
+| `--ch-8` | `#008945` | 3.69 | 4.58 | `#004b23` | 7.61 | 10.17 |
+| `--ch-9` | `#007fb4` | 3.71 | 4.61 | `#004463` | 7.70 | 10.29 |
+| `--ch-10` | `#3bffc1` | 12.86 | 15.96 | `#007a59` | 3.94 | 5.26 |
+| `--ch-11` | `#5b74ff` | 4.26 | 5.29 | `#003aa5` | 7.20 | 9.61 |
+| `--ch-12` | `#00927a` | 4.27 | 5.29 | `#004e40` | 7.15 | 9.55 |
+| `--ch-13` | `#d6d3ff` | 11.57 | 14.35 | `#445bd1` | 4.22 | 5.64 |
+| `--ch-14` | `#00bfbd` | 7.27 | 9.02 | `#005f5e` | 5.53 | 7.38 |
+| `--ch-36` | `#de540d` | 4.26 | 5.28 | `#7b2900` | 7.16 | 9.57 |
+| `--ch-40` | `#d9b256` | 8.27 | 10.26 | `#846922` | 3.84 | 5.13 |
+| `--ch-44` | `#ffa9b7` | 9.18 | 11.40 | `#bb004e` | 4.80 | 6.41 |
+| `--ch-48` | `#a27c00` | 4.29 | 5.32 | `#574100` | 7.15 | 9.56 |
+| `--ch-52` | `#ffd9dc` | 12.82 | 15.91 | `#cf1b51` | 3.94 | 5.26 |
+| `--ch-56` | `#bb8732` | 5.24 | 6.50 | `#7c5614` | 4.83 | 6.46 |
+| `--ch-60` | `#ff9a9e` | 8.20 | 10.18 | `#b40038` | 5.16 | 6.89 |
+| `--ch-64` | `#db9100` | 6.38 | 7.91 | `#704800` | 5.91 | 7.90 |
+| `--ch-100` | `#ff7291` | 6.38 | 7.92 | `#a30043` | 5.86 | 7.83 |
+| `--ch-104` | `#d0913a` | 6.16 | 7.65 | `#906221` | 3.91 | 5.22 |
+| `--ch-108` | `#ffc8df` | 11.53 | 14.31 | `#c2157c` | 4.19 | 5.59 |
+| `--ch-112` | `#ffd086` | 11.56 | 14.35 | `#875f00` | 4.22 | 5.63 |
+| `--ch-116` | `#f17ab1` | 6.45 | 8.01 | `#982a63` | 5.43 | 7.26 |
+| `--ch-120` | `#ffaf77` | 9.22 | 11.44 | `#954800` | 4.82 | 6.45 |
+| `--ch-124` | `#ff5798` | 5.59 | 6.94 | `#99004e` | 6.27 | 8.38 |
+| `--ch-128` | `#a36b00` | 3.69 | 4.58 | `#5a3900` | 7.65 | 10.23 |
+| `--ch-132` | `#eb0458` | 3.71 | 4.60 | `#84002e` | 7.65 | 10.22 |
+| `--ch-136` | `#f1c458` | 10.11 | 12.54 | `#6f5501` | 5.20 | 6.94 |
+| `--ch-140` | `#ff7764` | 6.39 | 7.93 | `#a50513` | 5.88 | 7.85 |
+| `--ch-144` | `#ee35a5` | 4.50 | 5.58 | `#a63c78` | 4.37 | 5.84 |
+| `--ch-149` | `#d17400` | 4.91 | 6.10 | `#6f3b00` | 6.72 | 8.98 |
+| `--ch-153` | `#de6593` | 5.05 | 6.27 | `#b3376b` | 4.21 | 5.62 |
+| `--ch-157` | `#ff9d71` | 8.16 | 10.12 | `#9f3600` | 5.15 | 6.88 |
+| `--ch-161` | `#e50085` | 3.69 | 4.58 | `#810048` | 7.63 | 10.19 |
+| `--ch-165` | `#ff7a24` | 6.38 | 7.91 | `#893800` | 5.88 | 7.86 |
+| `--ch-169` | `#ff97b7` | 8.20 | 10.17 | `#b0005c` | 5.15 | 6.88 |
+| `--ch-173` | `#ffc07e` | 10.36 | 12.85 | `#8e5500` | 4.48 | 5.99 |
+| `--ch-177` | `#ff69c2` | 6.37 | 7.90 | `#9c006c` | 5.88 | 7.85 |
+| `--ch6-0` | `#975ec1` | 3.71 | 4.60 | `#592583` | 7.67 | 10.24 |
+| `--ch6-1` | `#bd94b7` | 6.39 | 7.94 | `#694465` | 5.91 | 7.90 |
+| `--ch6-2` | `#a199d8` | 6.38 | 7.92 | `#4e4a82` | 5.89 | 7.87 |
+| `--ch6-3` | `#d7b1ff` | 9.19 | 11.41 | `#7248a9` | 4.81 | 6.42 |
+
+The floors (CIEDE2000, the smaller theme's), enforced and measured:
+
+| floor | enforced | measured |
+|---|---|---|
+| fill on any ground | 3.0:1 | 3.69:1 |
+| --ch-ink on a fill | 4.5:1 | 4.58:1 |
+| sorted neighbours, 2.4 and 5 GHz | 20 | 25.3 |
+| 1, 6 and 11 | 25 | 30.5 |
+| any two 2.4 GHz | 7 | 8.4 |
+| any two 5 GHz | 4 | 4.7 |
+| any two 6 GHz steps | 8 | 10.1 |
+| two bands, or --muted | 10 | 10.8 |
+
+**Greenbar.** `web/ui/greenbar.css`, the last stylesheet: in every list
+and table the even data rows (headers never count) take the surface
+they sit on (`--gb-surface`: the page's `--bg`, a panel's, drawer's or
+dialog's `--panel`, a card's `--panel-2`) mixed 8% toward white in the
+dark theme, `color-mix(in srgb, <surface> 92%, #fff)`. The light
+theme's cream has nowhere lighter to go, so there it is 8% toward
+black. A monitor row alternates on its own `--mon-bg`. The stripe
+rules are inside `:where()`, so a hover tint, a selected row and a
+monitor row's ground win by specificity; the device table is
+virtualised, so `app.js` marks its odd data rows `.gb-alt` by index
+rather than DOM order. `palette.c` computes the same mix (`GB_STEP`).
+What it costs text, from `make web-contrast`: in the light theme the
+data colours, ruled to 4.5:1 on `--bg` and `--panel`, read 3.77 to
+4.49:1 on the stripes (the `--bg` stripe the lower), and `--muted`,
+`--brass` and `--phosphor-mid` 4.14 to 4.30:1; in the dark theme
+`--tui-dim`, `--heat-3`, `--hot-2` and five brand and info colours read
+3.95 to 4.48:1 on a stripe. Reported, not enforced: the dark data are
+the TUI's byte for byte and the 8% is the owner's.
 
 ## What it never does
 

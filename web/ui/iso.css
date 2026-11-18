@@ -11,41 +11,32 @@ canvas.wfall.iso { cursor: crosshair; }
 /* Identity colours on the isometric waterfalls (owner 2026-11-17: "color
  * code finding by band channel and ssid ... easy to tell by color
  * groupings"). Height still carries the value; colour says which.
- * WiFi: a hue family per band (2.4 GHz amber, 5 GHz teal-green, 6 GHz
- * violet), its shades the band's 802.11 structure: 2.4 the
- * non-overlapping 1/6/11 full and the overlapping rest dimmer; 5 the
- * four UNII sub-bands (2A and 2C the DFS ones) and a paler fifth for
- * the rest (2B, UNII-4); 6 the preferred
- * scanning channels full and the rest paler. The SSID colours are the
- * page's --k-* palette, not written here. BLE: a hue per device class,
- * Trackers red-orange. Each is named beside its swatch in the legends
- * and in the tooltip, never colour alone. Read by iso.js scheme() at
- * each draw, so the theme toggle follows. Chosen at 3:1 or more on
- * --panel (WCAG 1.4.11, a graphic) in both themes, and the three band
- * hues 80+ apart (CIE76); not checked by palette.c, which reads
- * theme.css only. */
+ * WiFi: each channel the page's one channel colour (palette.css --ch-*,
+ * web/tools/palette.c, through web/ui/chan.js; owner 2026-11-18), so a
+ * channel reads the same on the waterfall as in every list; the SSID
+ * colours are the page's --k-* palette. Neither is written here. BLE: a
+ * hue per device class, Trackers red-orange. Each is named beside its
+ * swatch in the legends and in the tooltip, never colour alone. Read by
+ * iso.js scheme() at each draw, so the theme toggle follows. Chosen at
+ * 3:1 or more on --panel (WCAG 1.4.11, a graphic) in both themes; not
+ * checked by palette.c, which reads theme.css only. */
 :root {
-  --iso-b24-0: #ffb347;  --iso-b24-1: #a87a45;
-  --iso-b5-0: #a6f2d4;   --iso-b5-1: #55d6a6;  --iso-b5-2: #2fa98a;  --iso-b5-3: #3fc8e0;  --iso-b5-4: #6f9a90;
-  --iso-b6-0: #b48cff;   --iso-b6-1: #8f7fc0;
   --iso-c-phone: #5b9bff; --iso-c-wear: #6fdc6f; --iso-c-tag: #ff6a3d; --iso-c-hid: #f2d240;
   --iso-c-bcn: #40e0f0;   --iso-c-iot: #c07cff;  --iso-c-unk: #8a8a96;
 }
 :root[data-theme="light"] {
-  --iso-b24-0: #b35f00;  --iso-b24-1: #a37b4c;
-  --iso-b5-0: #3a9a3e;   --iso-b5-1: #1a7d61;  --iso-b5-2: #0d5c55;  --iso-b5-3: #0b7896;  --iso-b5-4: #5f7f78;
-  --iso-b6-0: #6742d4;   --iso-b6-1: #8a78c2;
   --iso-c-phone: #1f5fd6; --iso-c-wear: #2e8a2e; --iso-c-tag: #d03a10; --iso-c-hid: #8a7400;
   --iso-c-bcn: #0a7f92;   --iso-c-iot: #8a3ad0;  --iso-c-unk: #6b6b76;
 }
-/* The legends under the canvases: a swatch then its name; an SSID chip
- * a button that dims every other SSID until pressed again. */
+/* The legends under the canvases: a swatch then its name (a WiFi
+ * channel step's name then its channels' chips); an SSID chip a button
+ * that dims every other SSID until pressed again. */
 .iso-key { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; margin: 4px 0; font-size: 11px; }
 .iso-key .grp { display: inline-flex; flex-wrap: wrap; gap: 2px 8px; align-items: center; }
 .iso-key .grp > .nm { color: var(--ink); }
 .iso-key .it { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
 .iso-key .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
-.iso-key .sw.dfs { background-image: repeating-linear-gradient(90deg, transparent 0 3px, var(--panel) 3px 5px); }
+.iso-key .sw.dfs { background-color: var(--muted); background-image: repeating-linear-gradient(90deg, transparent 0 3px, var(--panel) 3px 5px); }
 .iso-key button.chip { display: inline-flex; align-items: center; gap: 4px; font: inherit; color: var(--ink);
   background: none; border: 1px solid var(--rule); border-radius: var(--radius-sm); padding: 1px 6px; cursor: pointer; }
 .iso-key button.chip[aria-pressed="true"] { border-color: var(--signal); }

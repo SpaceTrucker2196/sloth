@@ -94,7 +94,7 @@
             num(r.retune_failures) ? r.retune_failures : "-"];
   }
   function emCells(r) {
-    return [r.mac, r.channel > 0 ? r.channel : "-", r.quality,
+    return [r.mac, r.channel > 0 ? SlothChan.chip(r.channel) : "-", r.quality,
             r.best_iface || (r.best_radio >= 0 ? "radio " + r.best_radio : "-"),
             fixed(r.margin_db, 1, " dB"), bearingText(r), fixed(r.along_m, 2, " m"), r.heard_by,
             stamp(r.last_seen)];
@@ -116,7 +116,11 @@
     for (var r = 0; r < rows.length; r++) {
       var c = cells(rows[r]);
       tr = el("tr");
-      for (var k = 0; k < c.length; k++) tr.appendChild(el("td", null, c[k]));
+      for (var k = 0; k < c.length; k++) {
+        // a cell is text, or a node (the channel's chip, SlothChan)
+        var td = tr.appendChild(el("td", null, c[k] instanceof Node ? null : c[k]));
+        if (c[k] instanceof Node) td.appendChild(c[k]);
+      }
       t.appendChild(tr);
     }
   }

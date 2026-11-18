@@ -80,9 +80,12 @@
     // beside its key ("z" for a z strip: the two scales differ).
     rows.forEach(function (r, j) {
       var ty = (j * ROW + ROW / 2 + 1) * dpr;
+      // the channel's colour (SlothChan, as in every list) a bar before its key
+      g.fillStyle = SlothChan.rgb(r.key, r.band);
+      g.fillRect(0, (j * ROW + 3) * dpr, 2 * dpr, (ROW - 4) * dpr);
       g.fillStyle = H.tok("--muted");
       g.textAlign = "left";
-      g.fillText(r.key, 2 * dpr, ty);
+      g.fillText(r.key, 4 * dpr, ty);
       g.fillStyle = H.tok("--faint");
       g.textAlign = "right";
       g.fillText(tops[j], (LABEL - 4) * dpr, ty);

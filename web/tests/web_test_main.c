@@ -143,6 +143,7 @@ int main(void) {
     SUITE(run_twodaemon_tests);
     SUITE(run_spectrum_tests);
     SUITE(run_iso_tests);
+    SUITE(run_chan_tests);
     SUITE(run_camera_tests);
     SUITE(run_radar_tests);
     SUITE(run_allkeys_tests);

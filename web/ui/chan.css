@@ -1,0 +1,9 @@
+/* A WiFi channel as a chip (web/ui/chan.js SlothChan.chip(); owner
+ * 2026-11-18): the number on the channel's colour, palette.css's --ch-*
+ * from web/tools/palette.c, which holds every fill at 3:1 on --bg,
+ * --panel and the greenbar stripes and --ch-ink on it at 4.5:1, both
+ * themes. The number is always there; the colour is added to it. A
+ * channel in no table keeps its number in muted ink, outlined. */
+.ch-chip { display: inline-block; min-width: 3ch; padding: 0 3px; border-radius: 2px; text-align: center;
+  font-variant-numeric: tabular-nums; font-weight: 600; line-height: 1.35; color: var(--ch-ink); }
+.ch-chip.unk { color: var(--muted); font-weight: 400; box-shadow: inset 0 0 0 1px var(--rule-hi); }

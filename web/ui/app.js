@@ -251,11 +251,15 @@
                x.kind === "probe" ? "probed for " + x.ssid : x.ssid ? "ssid " + x.ssid : null,
                x.name ? "name " + x.name : null,
                x.vendor ? "vendor " + x.vendor : null, x.class ? "class " + x.class : null,
-               num(x.signal) ? x.signal + " dBm" : num(x.rssi) ? x.rssi + " dBm" : null,
-               num(x.channel) ? "ch " + x.channel : null, x.enc ? x.enc : null,
-               x.bssid ? "bssid " + x.bssid : null,
+               num(x.signal) ? x.signal + " dBm" : num(x.rssi) ? x.rssi + " dBm" : null];
+      var u = [x.enc ? x.enc : null, x.bssid ? "bssid " + x.bssid : null,
                "first " + stamp(x.first_seen), "last " + stamp(x.last_seen)];
-      line.appendChild(el("span", "d-dim", "  " + t.filter(function (s) { return s !== null; }).join(", ")));
+      function some(a) { return a.filter(function (s) { return s !== null; }).join(", "); }
+      // The channel as its chip (SlothChan, owner 2026-11-18), between
+      // the words before and after it.
+      line.appendChild(el("span", "d-dim", "  " + some(t) + (num(x.channel) ? (some(t) ? ", " : "") + "ch " : "")));
+      if (num(x.channel)) line.appendChild(SlothChan.chip(x.channel));
+      line.appendChild(el("span", "d-dim", (some(t) || num(x.channel) ? ", " : "") + some(u)));
       box.appendChild(line);
     });
   }
@@ -3030,6 +3034,9 @@
       r.el.hidden = false;
       r.el.style.top = (k * ROW_H) + "px";
       if (r.k !== k) { fill(r, D.rows[k]); r.k = k; }
+      // greenbar.css: the pool's DOM order is not the data's, so the
+      // alternate row is marked by its index.
+      r.el.classList.toggle("gb-alt", (k & 1) === 1);
     }
   }
 
@@ -3257,8 +3264,9 @@
         var sp = el("span", "");
         sp.appendChild(el("span", "d-dim", x.bssid + "  "));
         if (x.ssid !== null) sp.appendChild(ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np));
-        sp.appendChild(el("span", "d-normal", "  ch " + x.channel +
-                          (num(x.signal) ? "  " + x.signal + " dBm" : "") + "  source " + x.source));
+        sp.appendChild(el("span", "d-normal", "  ch "));
+        sp.appendChild(num(x.channel) ? SlothChan.chip(x.channel) : el("span", "d-normal", String(x.channel)));
+        sp.appendChild(el("span", "d-normal", (num(x.signal) ? "  " + x.signal + " dBm" : "") + "  source " + x.source));
         return sp;
       }, j.assocs_more);
       itemList(box, "arp addresses", j.ips, function (x) { return ipVal(x.addr, IP_SRC.arp); }, j.ips_more);
@@ -3440,19 +3448,19 @@
   function bandRank(b) { return Object.prototype.hasOwnProperty.call(BAND_RANK, b) ? BAND_RANK[b] : 3; }
   function chanNum(k) { return parseInt(String(k).replace(/^6g/, ""), 10) || 0; }
 
-  // A channel's colour on the isometric waterfall (owner 2026-11-17:
-  // "color code finding by band channel and ssid ... easy to tell by
-  // color groupings"): its band the hue family (iso.css --iso-b*), its
-  // place in the band's 802.11 structure the shade step. 2.4 GHz: 1, 6
-  // and 11, the non-overlapping set, full, the overlapping rest dimmer.
-  // 5 GHz: the four U-NII sub-bands of 47 CFR 15.407 by channel number
+  // A channel's place in its band's 802.11 structure, in words, on the
+  // isometric waterfall's key and tooltip (owner 2026-11-17: "color code
+  // finding by band channel and ssid"). Its colour is the page's one
+  // channel colour (SlothChan, owner 2026-11-18), the same as in every
+  // list; this is what the key groups the channels under. 2.4 GHz: 1, 6
+  // and 11, the non-overlapping set, and the overlapping rest. 5 GHz:
+  // the four U-NII sub-bands of 47 CFR 15.407 by channel number
   // (U-NII-1 to 48, U-NII-2A 52 to 64, U-NII-2C 100 to 144, U-NII-3 149
   // to 165), 2A and 2C the ones under DFS (15.407(h)), which the floor
-  // strip dashes; a fifth, paler step for the rest (68 to 96, U-NII-2B,
-  // in no US plan; 169 and up, U-NII-4), so none is named for a
-  // sub-band it is not in. 6 GHz: the preferred scanning channels (5, 21, 37, ...
-  // every 16; IEEE 802.11ax) full, the rest paler. A step's words,
-  // CHAN_STEP, are the legend's and the tooltip's.
+  // strip dashes; a fifth step for the rest (68 to 96, U-NII-2B, in no
+  // US plan; 169 and up, U-NII-4), so none is named for a sub-band it is
+  // not in. 6 GHz: the preferred scanning channels (5, 21, 37, ... every
+  // 16; IEEE 802.11ax) and the rest.
   var CHAN_STEP = { "2.4": ["1/6/11", "overlapping"], "5": ["UNII-1", "UNII-2A DFS", "UNII-2C DFS", "UNII-3", "other"],
                     "6": ["PSC", "non-PSC"] };
   function chanShade(band, key) {
@@ -3465,7 +3473,6 @@
     if (band === "6") return { band: "6", step: ch % 16 === 5 ? 0 : 1, dfs: false };
     return null;
   }
-  function chanColor(sc, P) { return sc ? P.band[sc.band][sc.step] : P.muted; }
   function chanWord(sc) { return sc ? CHAN_STEP[sc.band][sc.step] : "band unknown"; }
 
   function gridRows() {
@@ -3523,9 +3530,9 @@
   var W_FLAT_LABEL = $("w-heat").ariaLabel;
   var W_ISO_LABEL = "channels by time, isometric: the channels across, 2.4, 5 and 6 GHz grouped, the time cells " +
     "receding up and to the right with the newest in front, each column's height its cell's value on one scale; " +
-    "colour says which: the band a hue family on the floor strip, the band name and each column's top (2.4 GHz amber, " +
-    "5 GHz teal-green, 6 GHz violet), the channel a shade within it (1, 6 and 11; the UNII sub-bands, DFS dashed; " +
-    "6 GHz PSC), the column's body its busiest transmitters stacked in their SSIDs' colours, named in the key below; " +
+    "colour says which: each channel its colour on the floor strip and each column's top, the same as in every list " +
+    "(2.4 GHz cool, 5 GHz warm, 6 GHz violet; the key groups them under 1, 6 and 11, the UNII sub-bands, DFS dashed, " +
+    "and 6 GHz PSC), the column's body its busiest transmitters stacked in their SSIDs' colours, named in the key below; " +
     "under the channel names a clients lane, a diamond under each channel clients were heard on, sized by how many, " +
     "in their network's colour, the key's Clients buttons tracing one client's channels; " +
     "arrow keys pick a cell (left and right a channel, up older, down newer), the list below names it";
@@ -3551,11 +3558,11 @@
   // its cell in the metric shown, on one scale for every channel, 0 to
   // the window's largest cell (the stacked grid's heat scale; G3's
   // per-channel tops would make the heights incomparable). Colour is
-  // identity (owner 2026-11-17): the band and channel shade on the
-  // floor, the band's name and each column's top; the body the cell's
+  // identity (owner 2026-11-17): the channel's colour (SlothChan, since
+  // 2026-11-18) on the floor and each column's top; the body the cell's
   // busiest transmitters stacked by share as the stacked grid draws
   // them, in their SSIDs' colours, the rest and a cell with no detail in
-  // the channel's shade; an SSID picked in the key keeps its colour and
+  // the channel's colour; an SSID picked in the key keeps its colour and
   // every other fades.
   function isoGrid() {
     var c = $("w-heat");
@@ -3575,12 +3582,15 @@
     // The mix's cells line up with the heat's only on the same grid.
     var mx = !!(hz && WF.mix && WF.mix.from === hz.from && WF.mix.cols === hz.cols && WF.mix.col_s === hz.col_s);
     var sh = rows.map(function (r) { return chanShade(r.band, r.key); });
-    var rc = sh.map(function (sc) { return chanColor(sc, P); });
-    var lane = mx ? clientLane(rows) : null, pick = mx && pc ? clientPick(pc, rows, cols, sh, P) : null;
+    // Each channel its colour in every list (SlothChan); a band's name
+    // in its first channel's.
+    var rc = rows.map(function (r) { return SlothChan.rgb(r.key, r.band); }), gc = {};
+    rows.forEach(function (r, i) { if (!(r.band in gc)) gc[r.band] = rc[i]; });
+    var lane = mx ? clientLane(rows) : null, pick = mx && pc ? clientPick(pc, rows, cols, rc) : null;
     SlothIso.grid(c, WF.ist, {
       cols: rows.map(function (r, i) {
         return { label: r.key, short: r.key.replace(/^6g/, ""), group: BAND_WORD[r.band] || "band unknown",
-                 groupColor: sh[i] ? P.band[sh[i].band][0] : P.muted,
+                 groupColor: sh[i] ? gc[r.band] : P.muted,
                  floor: { color: rc[i], dash: !!(sh[i] && sh[i].dfs) }, cap: rc[i] };
       }),
       n: rows.length ? cols : 0, from: hz ? hz.from : 0, col_s: hz ? hz.col_s : 0,
@@ -3594,7 +3604,7 @@
     mixDetail();
   }
   // A cell's column body, bottom up: its transmitters by share in their
-  // colours, then the rest in the channel's shade; no detail, all of it
+  // colours, then the rest in the channel's colour; no detail, all of it
   // the channel's. hl: the SSID the key picked (null none); the others
   // fade. lit: with a client picked, whether the client was named in
   // this cell (null: none picked); every cell it was not fades whole.
@@ -3615,22 +3625,27 @@
     return out.length ? out : [{ f: 1, color: base, alpha: rest }];
   }
   // The key under the isometric waterfall: the three bands with their
-  // shade steps named, then the window's SSIDs, busiest first (a
-  // dozen, then how many more), each a button that fades every other
-  // SSID until pressed again. Every name is text (textContent). Returns
-  // the SSID picked, dropped once the window no longer holds it.
+  // steps named, each step followed by the window's channels in it as
+  // their chips (SlothChan, the lists' colours; a DFS step's dashed
+  // swatch the floor strip's dash), then the window's SSIDs, busiest
+  // first (a dozen, then how many more), each a button that fades every
+  // other SSID until pressed again. Every name is text (textContent).
+  // Returns the SSID picked, dropped once the window no longer holds it.
   var ISO_SSIDS = 12;
   function isoKey() {
     var box = $("w-iso-key");
     while (box.firstChild) box.removeChild(box.firstChild);
-    [["2.4", "--iso-b24-"], ["5", "--iso-b5-"], ["6", "--iso-b6-"]].forEach(function (b) {
+    ["2.4", "5", "6"].forEach(function (b) {
       var grp = box.appendChild(el("span", "grp"));
-      grp.appendChild(el("span", "nm", BAND_WORD[b[0]]));
-      CHAN_STEP[b[0]].forEach(function (w, i) {
-        var it = grp.appendChild(el("span", "it")), sw = el("span", "sw" + (b[0] === "5" && (i === 1 || i === 2) ? " dfs" : ""));
-        sw.style.backgroundColor = "var(" + b[1] + i + ")";
-        it.appendChild(sw);
+      grp.appendChild(el("span", "nm", BAND_WORD[b]));
+      CHAN_STEP[b].forEach(function (w, i) {
+        var it = grp.appendChild(el("span", "it"));
+        if (b === "5" && (i === 1 || i === 2)) it.appendChild(el("span", "sw dfs"));
         it.appendChild(el("span", "", w));
+        WF.rows.forEach(function (r) {
+          var sc = r.band === b ? chanShade(r.band, r.key) : null;
+          if (sc && sc.step === i) it.appendChild(SlothChan.chip(r.key, r.band, r.key.replace(/^6g/, "")));
+        });
       });
     });
     var by = new Map();
@@ -3741,16 +3756,17 @@
       }
     };
   }
-  // The pick: the client's channels traced in their band's colour, the
-  // cells it was named in outlined in its own; lit(k, i) for isoSegs().
-  function clientPick(c, rows, cols, sh, P) {
+  // The pick: the client's channels traced in their own colours (rc,
+  // SlothChan's), the cells it was named in outlined in the client's;
+  // lit(k, i) for isoSegs().
+  function clientPick(c, rows, cols, rc) {
     var on = rows.map(function (r) { return clientChan(c, r.key); }), cells = [], col = clientColor(c);
     on.forEach(function (ch, i) {
       for (var k = 0; ch && k < cols; k++) if (clientIn(ch, k)) cells.push({ k: k, c: i });
     });
     return {
       cols: on.map(function (ch, i) { return ch ? i : -1; }).filter(function (i) { return i >= 0; }),
-      color: function (i) { return sh[i] ? P.band[sh[i].band][0] : P.muted; },
+      color: function (i) { return rc[i]; },
       cells: cells, cellColor: col,
       lit: function (k, i) { return clientIn(on[i], k); }
     };
@@ -3924,8 +3940,11 @@
         g.fillStyle = T.rule;
         g.fillRect(0, y, W, Math.max(1, dpr));
       }
+      // The channel's colour (SlothChan) as a bar before its key.
+      g.fillStyle = SlothChan.rgb(r.key, r.band);
+      g.fillRect(0, y + dpr, 3 * dpr, rh - dpr);
       g.fillStyle = T.muted;
-      g.fillText(r.key, 2 * dpr, y + rh / 2);
+      g.fillText(r.key, 5 * dpr, y + rh / 2);
       g.fillStyle = busy[i] > 0 ? heat(bmax > 0 ? busy[i] / bmax : 0) : T.rule;
       g.fillRect(padL, y + dpr, strip, rh - dpr);
       g.fillStyle = T.mon;
@@ -3980,10 +3999,12 @@
     var r = rows[cur.r], t0 = geo.from + cur.c * geo.col_s;
     var m = r.mix && r.mix.cells ? r.mix.cells[cur.c] : null;
     var hv = r.heat && r.heat.cells ? r.heat.cells[cur.c] : null;
-    var head = "ch " + r.key + "  " + hhmmss(t0) + " to " + hhmmss(t0 + geo.col_s);
+    var head = "  " + hhmmss(t0) + " to " + hhmmss(t0 + geo.col_s);
     if (Array.isArray(m) && num(m[0])) head += "  " + fmt(m[0]) + " frames";
     if (num(hv)) head += "  (" + (WF.heat.metric === "wifi.ctrl_total" ? "control frames " : "APs ") + fmt(hv) + ")";
-    box.appendChild(el("div", "label", head));
+    var lab = box.appendChild(el("div", "label", "ch "));
+    lab.appendChild(SlothChan.chip(r.key, r.band));
+    lab.appendChild(document.createTextNode(head));
     if (!Array.isArray(m) || !num(m[0]) || m[0] <= 0) {
       box.appendChild(el("div", "sub", "no transmitter detail for this cell"));
       return;
@@ -4163,7 +4184,8 @@
       ss.appendChild(sq);
     }
     row.appendChild(ss);
-    row.appendChild(el("span", "c-ch d-normal", num(a.channel) ? String(a.channel) : "-"));
+    var cc = row.appendChild(el("span", "c-ch d-normal", num(a.channel) ? undefined : "-"));
+    if (num(a.channel)) cc.appendChild(SlothChan.chip(a.channel, a.rf ? a.rf.radio : null));
     var sg = row.appendChild(el("span", "c-sig d-dim"));
     SlothRf.cell(sg, a.rf, num(a.signal) ? a.signal : null, a.channel);
     row.appendChild(el("span", "c-enc d-normal", (a.enc === null ? "?" : a.enc) + " " +
@@ -4372,7 +4394,8 @@
       var ss = el("span", "");
       ss.appendChild(a.ssid === null ? ssidHidden("(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
       row.appendChild(ss);
-      row.appendChild(el("span", "n d-normal", String(a.channel)));
+      var cc = row.appendChild(el("span", "n d-normal", num(a.channel) ? undefined : String(a.channel)));
+      if (num(a.channel)) cc.appendChild(SlothChan.chip(a.channel));
       row.appendChild(el("span", "n d-dim", num(a.signal) ? String(a.signal) : "-"));
       row.appendChild(el("span", "d-normal", a.enc === null ? "?" : String(a.enc)));
       row.appendChild(el("span", a.status === "associated" ? "d-normal" : "d-dim",

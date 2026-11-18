@@ -1,0 +1,34 @@
+/* Greenbar (owner 2026-11-18: "like greenbar paper make an alternating
+ * pattern in lists where the alternate bar color is the background but
+ * 8% lighter"). One rule for every list and table on the page: the data
+ * rows alternate, a header never counts, and the alternate row is the
+ * surface the list sits on, 8% of the way to white in the dark theme.
+ * The light theme's cream has nowhere lighter to go, so there it is 8%
+ * of the way to black. web/tools/palette.c computes the same mix
+ * (GB_STEP) and holds every channel colour at 3:1 on it.
+ *
+ * The surface is the container's (--gb-surface): the page's --bg, a
+ * panel's, drawer's or dialog's --panel, a card's --panel-2, and a
+ * monitor row its own --mon-bg. The stripe rules sit in :where(), so any
+ * row style that sets a background (a hover's tint, a selected row, a
+ * monitor row) wins over them by specificity alone; the monitor row's
+ * own alternate is the one rule here with weight, so that it can win
+ * over the ground it alternates. The device table is virtualised (its
+ * rows are a recycled pool, so DOM order is not data order): app.js
+ * marks its odd data rows .gb-alt. */
+:root { --gb-toward: #ffffff; }
+:root[data-theme="light"] { --gb-toward: #000000; }
+body { --gb-surface: var(--bg); }
+.panel, .drawer, dialog, .scope-legend, .radar-ov { --gb-surface: var(--panel); }
+.card, .cell, .filterbar, .scopebar { --gb-surface: var(--panel-2); }
+
+:where(.dt-row:nth-child(even of .dt-row:not(.dhead)):not(.vrows > *)),
+:where(.vrows > .gb-alt),
+:where(:is(.lst, .alerts, .ticker, .mixl, .radar-list, .vc-svc) > li:nth-child(even of :not(.sub, .dhead))),
+:where(table tr:nth-child(even of :has(> td))),
+:where(:is(.fv-line, .fleet-row, .fid-row, .inc-row, .ak-row):nth-child(even of :is(.fv-line, .fleet-row, .fid-row, .inc-row, .ak-row))) {
+  background-color: color-mix(in srgb, var(--gb-surface) 92%, var(--gb-toward));
+}
+:is(.ticker, .mixl) > li.mon:nth-child(even of :not(.sub, .dhead)) {
+  background-color: color-mix(in srgb, var(--mon-bg) 92%, var(--gb-toward));
+}

@@ -459,12 +459,15 @@ static const char W_ISO_GRID[] =
         "    // The mix's cells line up with the heat's only on the same grid.\n"
         "    var mx = !!(hz && WF.mix && WF.mix.from === hz.from && WF.mix.cols === hz.cols && WF.mix.col_s === hz.col_s);\n"
         "    var sh = rows.map(function (r) { return chanShade(r.band, r.key); });\n"
-        "    var rc = sh.map(function (sc) { return chanColor(sc, P); });\n"
-        "    var lane = mx ? clientLane(rows) : null, pick = mx && pc ? clientPick(pc, rows, cols, sh, P) : null;\n"
+        "    // Each channel its colour in every list (SlothChan); a band's name\n"
+        "    // in its first channel's.\n"
+        "    var rc = rows.map(function (r) { return SlothChan.rgb(r.key, r.band); }), gc = {};\n"
+        "    rows.forEach(function (r, i) { if (!(r.band in gc)) gc[r.band] = rc[i]; });\n"
+        "    var lane = mx ? clientLane(rows) : null, pick = mx && pc ? clientPick(pc, rows, cols, rc) : null;\n"
         "    SlothIso.grid(c, WF.ist, {\n"
         "      cols: rows.map(function (r, i) {\n"
         "        return { label: r.key, short: r.key.replace(/^6g/, \"\"), group: BAND_WORD[r.band] || \"band unknown\",\n"
-        "                 groupColor: sh[i] ? P.band[sh[i].band][0] : P.muted,\n"
+        "                 groupColor: sh[i] ? gc[r.band] : P.muted,\n"
         "                 floor: { color: rc[i], dash: !!(sh[i] && sh[i].dfs) }, cap: rc[i] };\n"
         "      }),\n"
         "      n: rows.length ? cols : 0, from: hz ? hz.from : 0, col_s: hz ? hz.col_s : 0,\n"
@@ -523,10 +526,6 @@ static const char BLE_PROX_ISO[] =
 static const char SCHEME[] =
         "  function scheme() {\n"
         "    return {\n"
-        "      band: { \"2.4\": [cssVar(\"--iso-b24-0\", \"#ffb347\"), cssVar(\"--iso-b24-1\", \"#a87a45\")],\n"
-        "              \"5\": [cssVar(\"--iso-b5-0\", \"#a6f2d4\"), cssVar(\"--iso-b5-1\", \"#55d6a6\"),\n"
-        "                    cssVar(\"--iso-b5-2\", \"#2fa98a\"), cssVar(\"--iso-b5-3\", \"#3fc8e0\"), cssVar(\"--iso-b5-4\", \"#6f9a90\")],\n"
-        "              \"6\": [cssVar(\"--iso-b6-0\", \"#b48cff\"), cssVar(\"--iso-b6-1\", \"#8f7fc0\")] },\n"
         "      cls: { \"b:phone\": cssVar(\"--iso-c-phone\", \"#5b9bff\"), \"b:wear\": cssVar(\"--iso-c-wear\", \"#6fdc6f\"),\n"
         "             \"b:tag\": cssVar(\"--iso-c-tag\", \"#ff6a3d\"), \"b:hid\": cssVar(\"--iso-c-hid\", \"#f2d240\"),\n"
         "             \"b:bcn\": cssVar(\"--iso-c-bcn\", \"#40e0f0\"), \"b:iot\": cssVar(\"--iso-c-iot\", \"#c07cff\"),\n"
@@ -578,7 +577,6 @@ static const char CHAN_SHADE[] =
         "    if (band === \"6\") return { band: \"6\", step: ch % 16 === 5 ? 0 : 1, dfs: false };\n"
         "    return null;\n"
         "  }\n"
-        "  function chanColor(sc, P) { return sc ? P.band[sc.band][sc.step] : P.muted; }\n"
         "  function chanWord(sc) { return sc ? CHAN_STEP[sc.band][sc.step] : \"band unknown\"; }";
 
 static const char W_ISO_SEGS[] =
@@ -598,14 +596,17 @@ static const char W_ISO_KEY[] =
         "  function isoKey() {\n"
         "    var box = $(\"w-iso-key\");\n"
         "    while (box.firstChild) box.removeChild(box.firstChild);\n"
-        "    [[\"2.4\", \"--iso-b24-\"], [\"5\", \"--iso-b5-\"], [\"6\", \"--iso-b6-\"]].forEach(function (b) {\n"
+        "    [\"2.4\", \"5\", \"6\"].forEach(function (b) {\n"
         "      var grp = box.appendChild(el(\"span\", \"grp\"));\n"
-        "      grp.appendChild(el(\"span\", \"nm\", BAND_WORD[b[0]]));\n"
-        "      CHAN_STEP[b[0]].forEach(function (w, i) {\n"
-        "        var it = grp.appendChild(el(\"span\", \"it\")), sw = el(\"span\", \"sw\" + (b[0] === \"5\" && (i === 1 || i === 2) ? \" dfs\" : \"\"));\n"
-        "        sw.style.backgroundColor = \"var(\" + b[1] + i + \")\";\n"
-        "        it.appendChild(sw);\n"
+        "      grp.appendChild(el(\"span\", \"nm\", BAND_WORD[b]));\n"
+        "      CHAN_STEP[b].forEach(function (w, i) {\n"
+        "        var it = grp.appendChild(el(\"span\", \"it\"));\n"
+        "        if (b === \"5\" && (i === 1 || i === 2)) it.appendChild(el(\"span\", \"sw dfs\"));\n"
         "        it.appendChild(el(\"span\", \"\", w));\n"
+        "        WF.rows.forEach(function (r) {\n"
+        "          var sc = r.band === b ? chanShade(r.band, r.key) : null;\n"
+        "          if (sc && sc.step === i) it.appendChild(SlothChan.chip(r.key, r.band, r.key.replace(/^6g/, \"\")));\n"
+        "        });\n"
         "      });\n"
         "    });\n"
         "    var by = new Map();\n"
@@ -722,16 +723,17 @@ static const char W_ISO_CLIENTS[] =
         "      }\n"
         "    };\n"
         "  }\n"
-        "  // The pick: the client's channels traced in their band's colour, the\n"
-        "  // cells it was named in outlined in its own; lit(k, i) for isoSegs().\n"
-        "  function clientPick(c, rows, cols, sh, P) {\n"
+        "  // The pick: the client's channels traced in their own colours (rc,\n"
+        "  // SlothChan's), the cells it was named in outlined in the client's;\n"
+        "  // lit(k, i) for isoSegs().\n"
+        "  function clientPick(c, rows, cols, rc) {\n"
         "    var on = rows.map(function (r) { return clientChan(c, r.key); }), cells = [], col = clientColor(c);\n"
         "    on.forEach(function (ch, i) {\n"
         "      for (var k = 0; ch && k < cols; k++) if (clientIn(ch, k)) cells.push({ k: k, c: i });\n"
         "    });\n"
         "    return {\n"
         "      cols: on.map(function (ch, i) { return ch ? i : -1; }).filter(function (i) { return i >= 0; }),\n"
-        "      color: function (i) { return sh[i] ? P.band[sh[i].band][0] : P.muted; },\n"
+        "      color: function (i) { return rc[i]; },\n"
         "      cells: cells, cellColor: col,\n"
         "      lit: function (k, i) { return clientIn(on[i], k); }\n"
         "    };\n"
@@ -1028,7 +1030,7 @@ static void test_identity_scheme_pinned(void) {
     WT_HAS(p, "      out.push({ f: m[e + 1] / m[0], color: txColor(t), alpha: !off && (hl === null || ssidOf(t) === hl) ? 1 : ISO_FADE });");
     WT_HAS(p, "      [chanWord(chanShade(r.band, r.key)), true],");
     /* The keys' containers, and each shown only isometric. */
-    WT_HAS(p, "<div class=\"iso-key\" id=\"w-iso-key\" role=\"group\" aria-label=\"colour key: bands, channel shades and SSIDs\" hidden></div>");
+    WT_HAS(p, "<div class=\"iso-key\" id=\"w-iso-key\" role=\"group\" aria-label=\"colour key: bands, channels and SSIDs\" hidden></div>");
     WT_HAS(p, "<div class=\"iso-key\" id=\"bledev-cls-key\" role=\"group\" aria-label=\"colour key: device classes\"></div>");
     WT_HAS(p, "<div class=\"iso-key\" id=\"bledev-prox-key\" role=\"group\" aria-label=\"colour key: device classes\"></div>");
     WT_HAS(p, "    $(\"bledev-cls-key\").hidden = $(\"bledev-prox-key\").hidden = !S.iso || noSensor();");
@@ -1042,19 +1044,13 @@ static void test_identity_scheme_pinned(void) {
  * check reads the page, not the pin). */
 static void test_identity_tokens_both_themes(void) {
     const char *p = page();
-    const char *dark = strstr(p, "  --iso-b24-0: #ffb347;");
-    const char *light = strstr(p, ":root[data-theme=\"light\"] {\n  --iso-b24-0:");
+    const char *dark = strstr(p, "  --iso-c-phone: #5b9bff;");
+    const char *light = strstr(p, ":root[data-theme=\"light\"] {\n  --iso-c-phone:");
     WT_ASSERT(dark && light && dark < light);
-    static const char *const tok[] = {
-        "--iso-b24-0:", "--iso-b24-1:", "--iso-b5-0:", "--iso-b5-1:", "--iso-b5-2:", "--iso-b5-3:", "--iso-b5-4:",
-        "--iso-b6-0:", "--iso-b6-1:",
-    };
-    for (size_t i = 0; i < sizeof(tok) / sizeof(tok[0]); i++) {
-        int n = 0;
-        for (const char *q = strstr(p, tok[i]); q; q = strstr(q + 1, tok[i])) n++;
-        if (n != 2) fprintf(stderr, "    %s written %d times\n", tok[i], n);
-        WT_EQ(n, 2);
-    }
+    /* Since 2026-11-18 a WiFi channel is the page's one channel colour
+     * (test_chan.c); the band hue families are gone, not kept beside it.
+     * Seen red with an --iso-b24-0 line put back in iso.css. */
+    WT_LACKS(p, "--iso-b");
     char *cls = slice("  var CLASSES = [", "  var CLASS_OF = {};");
     WT_ASSERT(cls != NULL);
     if (!cls) return;

@@ -162,7 +162,9 @@
       if (b.designated === true) li.appendChild(H.el("span", "d-bright", "yours: --my-bssid"));
       li.appendChild(H.el("span", typeof b.vendor === "string" ? "d-bright" : "d-dim",
                           typeof b.vendor === "string" ? b.vendor : "?"));
-      li.appendChild(H.el("span", "d-normal", "ch " + b.channel));
+      // the channel as its chip (SlothChan, owner 2026-11-18)
+      var ch = li.appendChild(H.el("span", "d-normal", "ch "));
+      ch.appendChild(num(b.channel) ? SlothChan.chip(b.channel) : H.el("span", "", String(b.channel)));
       li.appendChild(H.el("span", "d-normal", (b.enc === null ? "?" : b.enc) +
                           (b.akm_names && b.akm_names.length ? " " + b.akm_names.join(",") : "") +
                           ", mfp " + b.mfp_word));
@@ -235,8 +237,9 @@
          "no association to it in sloth.db's assocs", function (li, a) {
            li.appendChild(macGo(a.mac, a.random));
            li.appendChild(H.el("span", a.random ? "d-dim" : "d-bright", who(a)));
-           li.appendChild(H.el("span", "d-dim", "on " + a.bssid + ", ch " + a.channel +
-                               (num(a.signal) ? ", " + a.signal + " dBm" : "")));
+           var on = li.appendChild(H.el("span", "d-dim", "on " + a.bssid + ", ch "));
+           on.appendChild(num(a.channel) ? SlothChan.chip(a.channel) : H.el("span", "", String(a.channel)));
+           if (num(a.signal)) on.appendChild(document.createTextNode(", " + a.signal + " dBm"));
            seen(li, a);
          });
     list(lists, "clients probing for it", j.probers, j.probers_total,

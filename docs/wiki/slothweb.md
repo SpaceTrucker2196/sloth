@@ -113,7 +113,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-17 (the WiFi waterfall's clients lane and client highlight, `clients` on `/api/wifi/channels?mix=1`; the highlight fade 70 percent transparent; § M5's WiFi); 2026-11-17 (the isometric WiFi and BLE Devices waterfalls coloured by identity: band hue, channel shade and SSID on WiFi, class hue on BLE, with keys; `web/ui/iso.css` `--iso-*`; § M5's WiFi and BLE Devices); 2026-11-17 (the WiFi view's direction-finding card, `web/src/web_df.c`, `web/ui/df.js`, `GET /api/df`: § Direction finding); 2026-11-17 (#218: `alerts.fired` counts an alert
+**Last updated**: 2026-11-18 (one WiFi channel palette, `--ch-*` written and checked in `web/tools/palette.c` and mapped by `web/ui/chan.js`, a chip wherever a channel is shown and the isometric waterfall moved onto it; the greenbar, `web/ui/greenbar.css`; § The restyle, § M5's WiFi); 2026-11-17 (the WiFi waterfall's clients lane and client highlight, `clients` on `/api/wifi/channels?mix=1`; the highlight fade 70 percent transparent; § M5's WiFi); 2026-11-17 (the isometric WiFi and BLE Devices waterfalls coloured by identity: band hue, channel shade and SSID on WiFi, class hue on BLE, with keys; `web/ui/iso.css` `--iso-*`; § M5's WiFi and BLE Devices); 2026-11-17 (the WiFi view's direction-finding card, `web/src/web_df.c`, `web/ui/df.js`, `GET /api/df`: § Direction finding); 2026-11-17 (#218: `alerts.fired` counts an alert
 either daemon raises, not sloth's stream alone; an "alert" record from
 either stream now queues a sample (`web_rollup_queue_add()`) instead of
 adding one directly, so `SENSOR_SOURCE_DOWN` -- the one type both can
@@ -801,26 +801,29 @@ In short:
   Since 2026-11-17 (owner: "on the spectrum displays for wifi and
   bluetooth I want you to color code finding by band channel and
   ssid") colour on the isometric panel says which and the height how
-  much: the band is a hue family (2.4 GHz amber, 5 GHz teal-green,
-  6 GHz violet) on a strip under the channel names, the band's name and
-  each column's top edge; the channel is a shade step of it by the
-  band's 802.11 structure (2.4 GHz: 1, 6 and 11 full, the overlapping
-  rest dimmer; 5 GHz: UNII-1 to 48, UNII-2A 52 to 64, UNII-2C 100 to
-  144, UNII-3 149 to 165, by channel number, the two DFS sub-bands
-  dashed on the strip, and a paler fifth step, "other", for the rest
-  (68 to 96, UNII-2B, in no US plan; 169 and up, UNII-4); 6 GHz: the preferred scanning channels, ch % 16 == 5, full, the
-  rest paler); a column's body is the cell's five busiest transmitters
+  much: each channel is its colour from the page's one channel palette
+  (since 2026-11-18, below under the restyle: 2.4 GHz cool, 5 GHz warm,
+  6 GHz violet, the same colour as in every list) on a strip under the
+  channel names and each column's top edge, a band's name in its first
+  channel's; the key groups the channels, as chips, under their band's
+  802.11 structure in words (2.4 GHz: 1, 6 and 11 against the
+  overlapping rest; 5 GHz: UNII-1 to 48, UNII-2A 52 to 64, UNII-2C 100
+  to 144, UNII-3 149 to 165, by channel number, the two DFS sub-bands
+  dashed on the strip, and "other" for the rest (68 to 96, UNII-2B, in
+  no US plan; 169 and up, UNII-4); 6 GHz: the preferred scanning
+  channels, ch % 16 == 5, against the rest); a column's body is the cell's five busiest transmitters
   stacked by share as the stacked grid draws them, an AP in its SSID's
   colour (`--k-*`, the same on every tab and both bands), a client in
   its MAC's, the rest and a cell with no transmitter detail in the
-  channel's shade. A key under the canvas names every step and the
+  channel's colour. A key under the canvas names every step and the
   window's SSIDs (busiest first, a dozen, then "+N more"); pressing an
   SSID fades every other one to 70 percent transparent (owner,
   2026-11-17: "when highlighting an ssid on the water fall make all the
   others 70 percent transparent"; `ISO_FADE`, 0.3 of the colour kept)
   until pressed again (nothing kept). The tooltip adds the channel's
   step in words; no label was dropped (`test_iso.c` counts the grid's
-  text calls). Colours: `web/ui/iso.css` `--iso-b*`, both themes.
+  text calls). Colours: the channels' `--ch-*` (`web/tools/palette.c`,
+  through `web/ui/chan.js`), both themes; `web/ui/iso.css` holds BLE's.
   Since 2026-11-17 (owner: "the spectrum should show where the clients
   sit in the spectrum highlighting their channel") a clients lane runs
   under the band strip: a diamond under each channel the window's
@@ -833,7 +836,7 @@ In short:
   Clients group (the busiest dozen, then "+N more"): vendor, the MAC's
   last three octets, "randomised" for a locally administered MAC and
   "→ SSID" for its AP, all text. Pressing one traces its channels'
-  floors in the band colour, puts a bar on the cells it was named in
+  floors in their channel colours, puts a bar on the cells it was named in
   and fades every other cell by the same 70 percent; pressing it again
   clears it. An SSID and a client are not highlighted together: pressing
   either drops the other. The tooltip adds the clients named in the
@@ -1017,6 +1020,35 @@ and the contrast table, is `web/README.md`'s Design section.
   until it reads at 4.5:1 on both the light `--bg` and `--panel`.
   Canvases read their colours from the custom properties and are
   redrawn on a toggle.
+- **WiFi channels** (owner 2026-11-18: "a consistent color palette for
+  wifi channels both 2.4 and 5ghz that's used throughout the app when
+  device or ssid is shown. use cool colors for 2.4 ghz and warm colors
+  for 5ghz"). One colour per 20 MHz channel, written for both themes in
+  `web/tools/palette.c` (`CHAN[]`) and emitted as `--ch-N` (2.4 GHz 1
+  to 14 cool, 5 GHz 36 to 177 warm) and `--ch6-0..3` (6 GHz, a violet
+  family of four steps); a channel in no table is `--muted`.
+  `web/ui/chan.js` (`window.SlothChan`) is the only mapping. A channel
+  shows as a chip, its number on its colour, wherever an AP, station,
+  device or SSID is shown with one (the AP table, the card's scan, the
+  device drawer's associations, the fleet's lines, the SSID drawer, the
+  direction-finding emitters, the waterfall's cell, key and canvases);
+  SSID names keep their hash colour. The build fails on a fill under
+  3:1 on `--bg`, `--panel` or a stripe, on the chip's ink under 4.5:1,
+  and on CIEDE2000 floors in either theme: sorted neighbours 20, 1, 6
+  and 11 25, any two 2.4 GHz 7, any two 5 GHz 4 (28 warm hues on
+  cream cannot all stand further apart; the number tells them apart), 6
+  GHz steps 8, bands and `--muted` 10. `web/README.md`'s Design section
+  has the table.
+- **Greenbar** (owner 2026-11-18: "like greenbar paper make an
+  alternating pattern in lists where the alternate bar color is the
+  background but 8% lighter"). `web/ui/greenbar.css`: every list's and
+  table's even data rows take their surface 8% toward white, in the
+  light theme 8% toward black (the cream has nowhere lighter to go);
+  a monitor row alternates on `--mon-bg`; hover, selection and monitor
+  grounds win (the rules weigh nothing, `:where()`); the virtualised
+  device table marks its rows by index. On a stripe, the light theme's
+  data colours read about 3.8 to 4.5:1 and a few dark ones about 4.0
+  to 4.5:1 (`make web-contrast` lists them).
 
 ## Deployment and freshness (#153, #168)
 
