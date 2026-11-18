@@ -1,5 +1,6 @@
 /* palette css SLOTH_TUI_C THEME_CSS OUT.css
  * palette js  SLOTH_TUI_C OUT.js
+ * palette json SLOTH_TUI_C OUT.json   (the contract's palette.json)
  * palette contrast SLOTH_TUI_C THEME_CSS
  *
  * The page's data colours (owner ruling 2026-10-23: "color code all
@@ -22,6 +23,9 @@
  * The dark theme carries the TUI's values byte for byte. The light
  * theme keeps each hue and darkens it by one rule (light_variant()),
  * against the light --bg and --panel read out of web/ui/theme.css.
+ *
+ * The WiFi channel colours (CHAN[], owner 2026-11-18) are the one set
+ * written here rather than read: see "the WiFi channel palette" below.
  *
  * "contrast" prints web/README.md's contrast tables: every text, data,
  * severity, heat and alert-hot token on --bg and --panel in both
@@ -568,6 +572,320 @@ static int chart_apart(void) {
     return bad ? -1 : 0;
 }
 
+/* ── the sun's phases on the presence strip (G5) ───────────────────── */
+
+/* theme.css writes the four --sun-* tokens for both themes (its comment
+ * says why the light ones are not derived). They are graphics, cells
+ * and a ruler band, never text, so each must reach 3:1 on both grounds
+ * (WCAG 1.4.11); and a present cell must be tellable from every other
+ * phase and from the marks drawn on the same strip: the first-seen
+ * cell and the now tick (--signal), the anomaly underline (--heat-2),
+ * the ruler's midnight ticks (--faint). --signal and --heat-2 are not
+ * held apart from each other here: they are a diamond and a 1 px
+ * underline, and were on the strip before this. */
+#define SUN_APART_MIN 20.0
+#define SUN_GFX_MIN 3.0
+#define NSUN 4
+#define NSUN_OTHER 3
+static const char *const SUN_NAME[NSUN + NSUN_OTHER] = {
+    "--sun-night", "--sun-rise", "--sun-day", "--sun-set", "--signal", "--heat-2", "--faint" };
+
+static int sun_apart(void) {
+    rgb_t c[2][NSUN + NSUN_OTHER];
+    int bad = 0;
+    for (int i = 0; i < NSUN + NSUN_OTHER; i++)
+        for (int t = 0; t < 2; t++) c[t][i] = need(SUN_NAME[i], t);
+    for (int i = 0; i < NSUN; i++)
+        for (int t = 0; t < 2; t++) {
+            double rb = contrast(c[t][i], need("--bg", t)), rp = contrast(c[t][i], need("--panel", t));
+            if (rb < SUN_GFX_MIN || rp < SUN_GFX_MIN) {
+                fprintf(stderr, "palette: %s is %.2f:1 on --bg and %.2f:1 on --panel (%s), "
+                                "under %.0f:1\n", SUN_NAME[i], rb, rp, t ? "light" : "dark",
+                        SUN_GFX_MIN);
+                bad = 1;
+            }
+        }
+    for (int i = 0; i < NSUN; i++)
+        for (int j = i + 1; j < NSUN + NSUN_OTHER; j++) {
+            double d0 = de2000(c[0][i], c[0][j]), d1 = de2000(c[1][i], c[1][j]);
+            if (d0 < SUN_APART_MIN || d1 < SUN_APART_MIN) {
+                fprintf(stderr, "palette: %s and %s are %.1f (dark) / %.1f (light) apart, "
+                                "under %.0f\n", SUN_NAME[i], SUN_NAME[j], d0, d1, SUN_APART_MIN);
+                bad = 1;
+            }
+        }
+    return bad ? -1 : 0;
+}
+
+/* ── the Radar's Wi-Fi hues (owner request 2026-11-13) ────────────── */
+
+/* theme.css writes the five --rw-* tokens for both themes. A device mark
+ * and its translucent polygon on the dome, so a graphic: 3:1 on both
+ * grounds (WCAG 1.4.11). Categorical, so held 15 apart, the chart hues'
+ * floor; and 20 from every hue the dome already means something by:
+ * the selection (--signal), the heat ramp's live steps (aircraft
+ * altitude; --heat-3 the alarm ring), BLE's ink (--tui-normal) and its
+ * areas' (--data), and --ink (the hover ring, the sensor). */
+#define RW_APART_MIN 15.0
+#define RW_RESERVED_MIN 20.0
+#define NRW 5
+#define NRW_OTHER 7
+static const char *const RW_NAME[NRW + NRW_OTHER] = {
+    "--rw-0", "--rw-1", "--rw-2", "--rw-3", "--rw-4",
+    "--signal", "--heat-1", "--heat-2", "--heat-3", "--tui-normal", "--data", "--ink" };
+
+static int rw_apart(void) {
+    rgb_t c[2][NRW + NRW_OTHER];
+    int bad = 0;
+    for (int i = 0; i < NRW + NRW_OTHER; i++)
+        for (int t = 0; t < 2; t++) c[t][i] = need(RW_NAME[i], t);
+    for (int i = 0; i < NRW; i++)
+        for (int t = 0; t < 2; t++) {
+            double rb = contrast(c[t][i], need("--bg", t)), rp = contrast(c[t][i], need("--panel", t));
+            if (rb < SUN_GFX_MIN || rp < SUN_GFX_MIN) {
+                fprintf(stderr, "palette: %s is %.2f:1 on --bg and %.2f:1 on --panel (%s), "
+                                "under %.0f:1\n", RW_NAME[i], rb, rp, t ? "light" : "dark",
+                        SUN_GFX_MIN);
+                bad = 1;
+            }
+        }
+    for (int i = 0; i < NRW; i++)
+        for (int j = i + 1; j < NRW + NRW_OTHER; j++) {
+            double d0 = de2000(c[0][i], c[0][j]), d1 = de2000(c[1][i], c[1][j]);
+            double lim = j < NRW ? RW_APART_MIN : RW_RESERVED_MIN;
+            if (d0 < lim || d1 < lim) {
+                fprintf(stderr, "palette: %s and %s are %.1f (dark) / %.1f (light) apart, "
+                                "under %.0f\n", RW_NAME[i], RW_NAME[j], d0, d1, lim);
+                bad = 1;
+            }
+        }
+    return bad ? -1 : 0;
+}
+
+/* ── the WiFi channel palette (owner 2026-11-18) ──────────────────── */
+
+/* "a consistent color palette for wifi channels both 2.4 and 5ghz
+ * that's used throughout the app when device or ssid is shown. use cool
+ * colors for 2.4 ghz and warm colors for 5ghz. try to make each channel
+ * a visually distinct color so it's easy to read in a list."
+ *
+ * One colour per 20 MHz channel, written here for both themes and
+ * emitted into palette.css as --ch-N (2.4 GHz 1-14, 5 GHz 36-64,
+ * 100-144, 149-177) and --ch6-0..3 (6 GHz, a channel's step its
+ * ((n - 1) / 4) % 4, so neighbours in a sorted 6 GHz list differ);
+ * web/ui/chan.js is the one place a channel is turned into a token.
+ * 2.4 GHz cool (CIELCh hue 135-295: greens, teals, cyans, blues,
+ * blue-violets), 5 GHz warm (340-86: pinks, reds, oranges, ambers,
+ * golds), 6 GHz a low-chroma violet / lavender (hue 298-330). The warm
+ * range stops at gold on purpose: past hue ~88 a yellow dark enough for
+ * 3:1 on cream turns olive, and under ~340 a pink deep enough turns
+ * plum, next to 6 GHz's violet (review, 2026-11-18: 40, 56, 104, 136,
+ * 116, 144 and 153 moved in from there).
+ * Lightness varies as well as hue, which is what lets 28 warm colours
+ * stay apart. The light values are written, not derived: the data
+ * rule (light_variant()) keeps a hue and darkens it to 4.5:1, which
+ * would pull the pale and the deep step of one hue onto one colour.
+ * Each theme's values were picked by a search over the CIELCh grid
+ * maximising the floors below, then fixed here; the checks are what
+ * holds them, not the search.
+ *
+ * A channel is drawn as a chip: its colour the fill, its number on it
+ * in --ch-ink (the dark theme's --bg, the light theme's --panel), on a
+ * row that may be the greenbar's alternate (web/ui/greenbar.css: the
+ * surface GB_STEP towards white in the dark theme, towards black in the
+ * light, the cream having nowhere lighter to go). So: */
+#define CH_GFX_MIN 3.0     /* fill on --bg, --panel and both stripes, both
+                            * themes: a graphic (WCAG 1.4.11) */
+#define CH_INK_MIN 4.5     /* the number on its chip: body text (WCAG 1.4.3) */
+/* CIEDE2000, the smaller of the two themes' distances. Two channels
+ * next to each other in a sorted list (2.4 GHz 1-14; 5 GHz 36 to 177 in
+ * order, across the U-NII gaps) at 20, the --sun-* floor for marks told
+ * apart side by side. 1, 6 and 11, the non-overlapping set most lists
+ * are made of, at 25 from each other, above every other floor here. A
+ * band's every pair: 2.4 GHz's 14 at 7 and 6 GHz's 4 at 8, which keeps
+ * any two from reading as one; 5 GHz's 28 at 4 only, because 28 warm
+ * hues at 3:1 on cream (L* 27 to 48) cannot all stand 7 apart: the
+ * number on the chip tells two such apart, and adjacency is what a list
+ * needs. Between families (2.4 vs 5 vs 6) and from --muted (a channel in
+ * no table) at 10, so a band is never read for another. */
+#define CH_ADJ_MIN 20.0
+#define CH_TRIO_MIN 25.0
+#define CH_PAIR24_MIN 7.0
+#define CH_PAIR5_MIN 4.0
+#define CH_PAIR6_MIN 8.0
+#define CH_FAMILY_MIN 10.0
+#define GB_STEP 0.08       /* greenbar.css: color-mix(in srgb, <surface> 92%, ...) */
+
+typedef struct { int ch; const char *band, *dark, *light; } chan_t;
+static const chan_t CHAN[] = {
+    { 1, "2.4", "#71f5ff", "#00777e" },   { 2, "2.4", "#8efc70", "#117d00" },
+    { 3, "2.4", "#99e1ff", "#00708c" },   { 4, "2.4", "#00dd74", "#006c35" },
+    { 5, "2.4", "#94b5ff", "#005aa7" },   { 6, "2.4", "#29a112", "#085500" },
+    { 7, "2.4", "#cde5ff", "#0071a7" },   { 8, "2.4", "#008945", "#004b23" },
+    { 9, "2.4", "#007fb4", "#004463" },   { 10, "2.4", "#3bffc1", "#007a59" },
+    { 11, "2.4", "#5b74ff", "#003aa5" },  { 12, "2.4", "#00927a", "#004e40" },
+    { 13, "2.4", "#d6d3ff", "#445bd1" },  { 14, "2.4", "#00bfbd", "#005f5e" },
+    { 36, "5", "#de540d", "#7b2900" },    { 40, "5", "#d9b256", "#846922" },
+    { 44, "5", "#ffa9b7", "#bb004e" },    { 48, "5", "#a27c00", "#574100" },
+    { 52, "5", "#ffd9dc", "#cf1b51" },    { 56, "5", "#bb8732", "#7c5614" },
+    { 60, "5", "#ff9a9e", "#b40038" },    { 64, "5", "#db9100", "#704800" },
+    { 100, "5", "#ff7291", "#a30043" },   { 104, "5", "#d0913a", "#906221" },
+    { 108, "5", "#ffc8df", "#c2157c" },   { 112, "5", "#ffd086", "#875f00" },
+    { 116, "5", "#f17ab1", "#982a63" },   { 120, "5", "#ffaf77", "#954800" },
+    { 124, "5", "#ff5798", "#99004e" },   { 128, "5", "#a36b00", "#5a3900" },
+    { 132, "5", "#eb0458", "#84002e" },   { 136, "5", "#f1c458", "#6f5501" },
+    { 140, "5", "#ff7764", "#a50513" },   { 144, "5", "#ee35a5", "#a63c78" },
+    { 149, "5", "#d17400", "#6f3b00" },   { 153, "5", "#de6593", "#b3376b" },
+    { 157, "5", "#ff9d71", "#9f3600" },   { 161, "5", "#e50085", "#810048" },
+    { 165, "5", "#ff7a24", "#893800" },   { 169, "5", "#ff97b7", "#b0005c" },
+    { 173, "5", "#ffc07e", "#8e5500" },   { 177, "5", "#ff69c2", "#9c006c" },
+    /* 6 GHz: ch is the step, not a channel number */
+    { 0, "6", "#975ec1", "#592583" },     { 1, "6", "#bd94b7", "#694465" },
+    { 2, "6", "#a199d8", "#4e4a82" },     { 3, "6", "#d7b1ff", "#7248a9" },
+};
+#define NCHAN ((int)(sizeof(CHAN) / sizeof(CHAN[0])))
+
+static void chan_name(int i, char out[16]) {
+    if (!strcmp(CHAN[i].band, "6")) snprintf(out, 16, "--ch6-%d", CHAN[i].ch);
+    else snprintf(out, 16, "--ch-%d", CHAN[i].ch);
+}
+
+static rgb_t chan_rgb(int i, int light) {
+    rgb_t c = { 0, 0, 0 };
+    if (parse_hex(light ? CHAN[i].light : CHAN[i].dark, &c) != 0) {
+        fprintf(stderr, "palette: channel table entry %d is not #rrggbb\n", i);
+        exit(1);
+    }
+    return c;
+}
+
+/* The greenbar's alternate row: the surface GB_STEP of the way to
+ * white (dark theme) or black (light), as color-mix() in sRGB does. */
+static rgb_t stripe(rgb_t s, int light) {
+    double t = light ? 0 : 255;
+    rgb_t o = { (int)lround(s.r * (1 - GB_STEP) + t * GB_STEP),
+                (int)lround(s.g * (1 - GB_STEP) + t * GB_STEP),
+                (int)lround(s.b * (1 - GB_STEP) + t * GB_STEP) };
+    return o;
+}
+
+/* The chip's number ink: the darkest ground in the dark theme, the
+ * lightest in the light. Emitted as --ch-ink, var() of the same. */
+static rgb_t chan_ink(int light) { return light ? need("--panel", 1) : need("--bg", 0); }
+
+/* The four grounds a channel colour is drawn on, per theme. */
+static void chan_grounds(int light, rgb_t g[4]) {
+    g[0] = need("--bg", light);
+    g[1] = need("--panel", light);
+    g[2] = stripe(g[0], light);
+    g[3] = stripe(g[1], light);
+}
+
+static double chan_de(int i, int j) {
+    double d0 = de2000(chan_rgb(i, 0), chan_rgb(j, 0)), d1 = de2000(chan_rgb(i, 1), chan_rgb(j, 1));
+    return d0 < d1 ? d0 : d1;
+}
+
+/* The measured floors, kept for the contrast report. */
+static struct { double gfx, ink, adj, trio, pair24, pair5, pair6, fam; } g_chm;
+
+static int chan_bad(double v, double lim, const char *what, int i, int j) {
+    if (v >= lim) return 0;
+    char a[16], b[16];
+    chan_name(i, a);
+    if (j >= 0) chan_name(j, b); else snprintf(b, sizeof b, "--muted");
+    fprintf(stderr, "palette: %s and %s are %.1f apart (%s), under %.0f\n", a, b, v, what, lim);
+    return 1;
+}
+
+static int chan_check(void) {
+    int bad = 0;
+    g_chm.gfx = g_chm.ink = g_chm.adj = g_chm.trio = 1e9;
+    g_chm.pair24 = g_chm.pair5 = g_chm.pair6 = g_chm.fam = 1e9;
+    for (int i = 0; i < NCHAN; i++) {
+        if (strcmp(CHAN[i].band, "2.4") && strcmp(CHAN[i].band, "5") && strcmp(CHAN[i].band, "6")) {
+            fprintf(stderr, "palette: channel table entry %d has band %s\n", i, CHAN[i].band);
+            return -1;
+        }
+        for (int j = 0; j < i; j++)
+            if (CHAN[j].ch == CHAN[i].ch && !strcmp(CHAN[j].band, CHAN[i].band)) {
+                fprintf(stderr, "palette: channel %d written twice\n", CHAN[i].ch);
+                return -1;
+            }
+    }
+    /* Each band's run in ascending order, as a sorted list shows them. */
+    for (int i = 1; i < NCHAN; i++)
+        if (!strcmp(CHAN[i].band, CHAN[i - 1].band) && CHAN[i].ch <= CHAN[i - 1].ch) {
+            fprintf(stderr, "palette: channel table out of order at %d\n", CHAN[i].ch);
+            return -1;
+        }
+    for (int i = 0; i < NCHAN; i++) {
+        char n[16];
+        chan_name(i, n);
+        for (int t = 0; t < 2; t++) {
+            rgb_t c = chan_rgb(i, t), g[4];
+            chan_grounds(t, g);
+            static const char *const GN[4] = { "--bg", "--panel", "the --bg stripe", "the --panel stripe" };
+            for (int k = 0; k < 4; k++) {
+                double r = contrast(c, g[k]);
+                if (r < g_chm.gfx) g_chm.gfx = r;
+                if (r < CH_GFX_MIN) {
+                    fprintf(stderr, "palette: %s is %.2f:1 on %s (%s), under %.0f:1\n", n, r, GN[k],
+                            t ? "light" : "dark", CH_GFX_MIN);
+                    bad = 1;
+                }
+            }
+            double r = contrast(c, chan_ink(t));
+            if (r < g_chm.ink) g_chm.ink = r;
+            if (r < CH_INK_MIN) {
+                fprintf(stderr, "palette: --ch-ink on %s is %.2f:1 (%s), under %.1f:1\n", n, r,
+                        t ? "light" : "dark", CH_INK_MIN);
+                bad = 1;
+            }
+        }
+        double dm0 = de2000(chan_rgb(i, 0), need("--muted", 0)), dm1 = de2000(chan_rgb(i, 1), need("--muted", 1));
+        double dm = dm0 < dm1 ? dm0 : dm1;
+        if (dm < g_chm.fam) g_chm.fam = dm;
+        bad |= chan_bad(dm, CH_FAMILY_MIN, "from the unknown channel's ink", i, -1);
+    }
+    int t24[3] = { -1, -1, -1 };
+    for (int i = 0; i < NCHAN; i++) {
+        if (!strcmp(CHAN[i].band, "2.4") && (CHAN[i].ch == 1 || CHAN[i].ch == 6 || CHAN[i].ch == 11))
+            t24[CHAN[i].ch / 5] = i;
+        for (int j = i + 1; j < NCHAN; j++) {
+            double d = chan_de(i, j);
+            int same = !strcmp(CHAN[i].band, CHAN[j].band);
+            if (!same) {
+                if (d < g_chm.fam) g_chm.fam = d;
+                bad |= chan_bad(d, CH_FAMILY_MIN, "two bands", i, j);
+                continue;
+            }
+            const char *b = CHAN[i].band;
+            double lim = !strcmp(b, "2.4") ? CH_PAIR24_MIN : !strcmp(b, "5") ? CH_PAIR5_MIN : CH_PAIR6_MIN;
+            double *m = !strcmp(b, "2.4") ? &g_chm.pair24 : !strcmp(b, "5") ? &g_chm.pair5 : &g_chm.pair6;
+            if (d < *m) *m = d;
+            bad |= chan_bad(d, lim, "one band", i, j);
+            /* neighbours in the band's sorted run; 6 GHz's four steps
+             * are each other's neighbours, held by CH_PAIR6_MIN */
+            if (j == i + 1 && strcmp(b, "6")) {
+                if (d < g_chm.adj) g_chm.adj = d;
+                bad |= chan_bad(d, CH_ADJ_MIN, "neighbours in a sorted list", i, j);
+            }
+        }
+    }
+    if (t24[0] < 0 || t24[1] < 0 || t24[2] < 0) {
+        fprintf(stderr, "palette: channel table lacks 1, 6 or 11\n");
+        return -1;
+    }
+    for (int a = 0; a < 3; a++)
+        for (int b = a + 1; b < 3; b++) {
+            double d = chan_de(t24[a], t24[b]);
+            if (d < g_chm.trio) g_chm.trio = d;
+            bad |= chan_bad(d, CH_TRIO_MIN, "1, 6 and 11", t24[a], t24[b]);
+        }
+    return bad ? -1 : 0;
+}
+
 static int compute(void) {
     rgb_t lbg = need("--bg", 1), lpanel = need("--panel", 1), dbg = need("--bg", 0);
     for (int i = 0; i < g_ntok; i++) {
@@ -597,7 +915,10 @@ static int compute(void) {
     for (int i = 0; i < NMON; i++) g_mon[i][0] = xterm_rgb(g_mon_x[i]);
     g_mon[0][1] = light_ground(g_mon[0][0], dbg, lbg);
     for (int i = 1; i < NMON; i++) g_mon[i][1] = light_variant(g_mon[i][0], g_mon[0][1], g_mon[0][1]);
-    return chart_apart();
+    if (chart_apart() != 0) return -1;
+    if (sun_apart() != 0) return -1;
+    if (rw_apart() != 0) return -1;
+    return chan_check();
 }
 
 /* ── output ────────────────────────────────────────────────────────── */
@@ -624,6 +945,13 @@ static int emit_css(FILE *o) {
         hex(g_mon[i][0], h);
         fprintf(o, "  %s: %s; /* xterm %d, %s */\n", MON_NAME[i], h, g_mon_x[i], MON_WHY[i]);
     }
+    char cn[16];
+    fprintf(o, "  /* the WiFi channel palette (palette.c CHAN[], owner 2026-11-18) */\n"
+               "  --ch-ink: var(--bg); /* a chip's number */\n");
+    for (int i = 0; i < NCHAN; i++) {
+        chan_name(i, cn);
+        fprintf(o, "  %s: %s; /* %s GHz */\n", cn, CHAN[i].dark, CHAN[i].band);
+    }
     fprintf(o, "}\n");
     fprintf(o, ":root[data-theme=\"light\"] {\n");
     for (int i = 0; i < g_ntok; i++) {
@@ -648,6 +976,12 @@ static int emit_css(FILE *o) {
         fprintf(o, "  %s: %s; /* from %s, %.1f:1 on --mon-bg */\n", MON_NAME[i], h, h2,
                 contrast(g_mon[i][1], g_mon[0][1]));
     }
+    fprintf(o, "  --ch-ink: var(--panel);\n");
+    for (int i = 0; i < NCHAN; i++) {
+        chan_name(i, cn);
+        fprintf(o, "  %s: %s; /* written, %.1f:1 on --bg */\n", cn, CHAN[i].light,
+                contrast(chan_rgb(i, 1), lbg));
+    }
     fprintf(o, "}\n");
     return ferror(o) ? -1 : 0;
 }
@@ -660,11 +994,83 @@ static int emit_js(FILE *o) {
         "  ip: %d, info: 8, google: %d,\n"
         "  gseq: [", IP_NUM_COLORS, BR_GOOGLE_BLUE);
     for (int i = 0; i < g_ngseq; i++) fprintf(o, "%s%d", i ? ", " : "", g_gseq[i]);
-    fprintf(o, "],\n  brands: [\n");
+    fprintf(o, "],\n");
+    /* The channels palette.css has a --ch-N for, per band; 6 GHz its
+     * step count (--ch6-0 up). web/ui/chan.js reads these. */
+    fprintf(o, "  chan: {");
+    static const char *const BANDS[2] = { "2.4", "5" };
+    for (int b = 0; b < 2; b++) {
+        fprintf(o, "%s\"%s\": [", b ? ", " : " ", BANDS[b]);
+        int n = 0;
+        for (int i = 0; i < NCHAN; i++)
+            if (!strcmp(CHAN[i].band, BANDS[b])) fprintf(o, "%s%d", n++ ? ", " : "", CHAN[i].ch);
+        fprintf(o, "]");
+    }
+    int n6 = 0;
+    for (int i = 0; i < NCHAN; i++) n6 += !strcmp(CHAN[i].band, "6");
+    fprintf(o, ", \"6\": %d },\n  brands: [\n", n6);
     for (int i = 0; i < g_nbrand; i++)
         fprintf(o, "    [%d, \"%s\"]%s\n", g_brand[i].brand, g_brand[i].sub,
                 i + 1 < g_nbrand ? "," : "");
     fprintf(o, "  ]\n};\n");
+    return ferror(o) ? -1 : 0;
+}
+
+/* The contract artifact's palette.json (#185 item 4, #184 C5): what
+ * this tool reads out of sloth, as data, so a presentation repository
+ * that cannot link src/tui_palette.c or parse src/tui.c gets the same
+ * answers. Sloth's side only: each pair's xterm-256 index and its hex
+ * (the dark theme, which is the TUI byte for byte), the monitor rows'
+ * pair, the brand table and the Google letters. The light variants are
+ * not here: they are computed against web/ui/theme.css, which is the
+ * page's, not the sensor's. Strings are written through jstr(); every
+ * one comes from this file or a brand substring, but the brand table is
+ * parsed C source and is not trusted to be JSON-clean. */
+static void jstr(FILE *o, const char *s) {
+    fputc('"', o);
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c == '"' || c == '\\') fprintf(o, "\\%c", c);
+        else if (c < 0x20) fprintf(o, "\\u%04x", c);
+        else fputc(c, o);
+    }
+    fputc('"', o);
+}
+
+static int emit_json(FILE *o) {
+    char h[8];
+    static const char *const MON_WHY[NMON] = { "CP_MON_ROW background", "CP_MON_ROW" };
+    mon_pairs();
+    fprintf(o, "{\n  \"palette_format\": 1,\n"
+               "  \"source\": \"src/tui_palette.c tui_pair_colors(); src/tui.c find_brand(), "
+               "tui_brand_addstr(); src/ip_color.h\",\n"
+               "  \"ip_colors\": %d,\n  \"info_colors\": 8,\n  \"google\": %d,\n"
+               "  \"tokens\": [\n", IP_NUM_COLORS, BR_GOOGLE_BLUE);
+    for (int i = 0; i < g_ntok; i++) {
+        hex(xterm_rgb(g_tok[i].xterm), h);
+        fprintf(o, "    {\"name\": ");
+        jstr(o, g_tok[i].name);
+        fprintf(o, ", \"xterm\": %d, \"hex\": \"%s\", \"pair\": ", g_tok[i].xterm, h);
+        jstr(o, g_tok[i].why);
+        fprintf(o, "},\n");
+    }
+    for (int i = 0; i < NMON; i++) {
+        hex(xterm_rgb(g_mon_x[i]), h);
+        fprintf(o, "    {\"name\": ");
+        jstr(o, MON_NAME[i]);
+        fprintf(o, ", \"xterm\": %d, \"hex\": \"%s\", \"pair\": ", g_mon_x[i], h);
+        jstr(o, MON_WHY[i]);
+        fprintf(o, "}%s\n", i + 1 < NMON ? "," : "");
+    }
+    fprintf(o, "  ],\n  \"gseq\": [");
+    for (int i = 0; i < g_ngseq; i++) fprintf(o, "%s%d", i ? ", " : "", g_gseq[i]);
+    fprintf(o, "],\n  \"brands\": [\n");
+    for (int i = 0; i < g_nbrand; i++) {
+        fprintf(o, "    {\"brand\": %d, \"match\": ", g_brand[i].brand);
+        jstr(o, g_brand[i].sub);
+        fprintf(o, "}%s\n", i + 1 < g_nbrand ? "," : "");
+    }
+    fprintf(o, "  ]\n}\n");
     return ferror(o) ? -1 : 0;
 }
 
@@ -711,8 +1117,15 @@ static int emit_contrast(void) {
      * rules separate rows that are legible without them. */
     static const struct { const char *fg, *bg, *w; } gfx[] = {
         { "--rule", "--bg", "row rules" }, { "--rule", "--panel", "row rules, the warming cell" },
-        { "--muted", "--rule", "the warming hatch, on its cell" },
-        { "--muted", "--panel", "the warming hatch, on the panel" },
+        /* Since #171 V1 a warming cell has no hatch (F3, R8): its meaning
+         * is the caption's count in words, and this is the step from it
+         * to the lowest heat of a fed cell beside it. */
+        { "--heat-0", "--rule", "a fed cell's lowest heat, beside a warming one" },
+        /* Owner ruling 2026-11-11: a warming cell with a sample carries
+         * its value so far as a bar in one ink on its tile. Told from a
+         * fed cell by shape and the caption's count, not by this step. */
+        { "--tui-dim", "--rule", "a provisional cell's bar, on its warming tile" },
+        { "--tui-dim", "--panel", "a provisional cell's bar, against the panel beside the tile" },
     };
     printf("\nGraphics (`*` under 3:1):\n\n| graphic | on | use | dark | light |\n"
            "|---|---|---|---|---|\n");
@@ -727,6 +1140,105 @@ static int emit_contrast(void) {
     for (int i = 0; i < g_napart; i++)
         printf("| `%s`, `%s` | %.1f | %.1f |\n", g_apart[i].a, g_apart[i].b,
                g_apart[i].d[0], g_apart[i].d[1]);
+    printf("\nThe sun's phases on the presence strip (G5), graphics (`*` under %.0f:1), and how "
+           "far apart (CIEDE2000) they and the strip's other marks are; under %.0f fails the "
+           "build:\n\n| token | dark | on --bg | on --panel | light | on --bg | on --panel |\n"
+           "|---|---|---|---|---|---|---|\n", SUN_GFX_MIN, SUN_APART_MIN);
+    for (int i = 0; i < NSUN; i++) {
+        char a[8], b[8];
+        rgb_t d = need(SUN_NAME[i], 0), l = need(SUN_NAME[i], 1);
+        hex(d, a);
+        hex(l, b);
+        double r[4] = { contrast(d, need("--bg", 0)), contrast(d, need("--panel", 0)),
+                        contrast(l, need("--bg", 1)), contrast(l, need("--panel", 1)) };
+        printf("| `%s` | `%s` | %.2f%s | %.2f%s | `%s` | %.2f%s | %.2f%s |\n", SUN_NAME[i],
+               a, r[0], r[0] < SUN_GFX_MIN ? " *" : "", r[1], r[1] < SUN_GFX_MIN ? " *" : "",
+               b, r[2], r[2] < SUN_GFX_MIN ? " *" : "", r[3], r[3] < SUN_GFX_MIN ? " *" : "");
+    }
+    printf("\n| marks | dark | light |\n|---|---|---|\n");
+    for (int i = 0; i < NSUN; i++)
+        for (int j = i + 1; j < NSUN + NSUN_OTHER; j++)
+            printf("| `%s`, `%s` | %.1f | %.1f |\n", SUN_NAME[i], SUN_NAME[j],
+                   de2000(need(SUN_NAME[i], 0), need(SUN_NAME[j], 0)),
+                   de2000(need(SUN_NAME[i], 1), need(SUN_NAME[j], 1)));
+    printf("\nThe Radar's Wi-Fi hues (2026-11-13), graphics (`*` under %.0f:1), and how far "
+           "apart (CIEDE2000) they and the dome's reserved hues are; under %.0f between two of "
+           "them, or %.0f from a reserved one, fails the build:\n\n"
+           "| token | dark | on --bg | on --panel | light | on --bg | on --panel |\n"
+           "|---|---|---|---|---|---|---|\n", SUN_GFX_MIN, RW_APART_MIN, RW_RESERVED_MIN);
+    for (int i = 0; i < NRW; i++) {
+        char a[8], b[8];
+        rgb_t d = need(RW_NAME[i], 0), l = need(RW_NAME[i], 1);
+        hex(d, a);
+        hex(l, b);
+        double r[4] = { contrast(d, need("--bg", 0)), contrast(d, need("--panel", 0)),
+                        contrast(l, need("--bg", 1)), contrast(l, need("--panel", 1)) };
+        printf("| `%s` | `%s` | %.2f%s | %.2f%s | `%s` | %.2f%s | %.2f%s |\n", RW_NAME[i],
+               a, r[0], r[0] < SUN_GFX_MIN ? " *" : "", r[1], r[1] < SUN_GFX_MIN ? " *" : "",
+               b, r[2], r[2] < SUN_GFX_MIN ? " *" : "", r[3], r[3] < SUN_GFX_MIN ? " *" : "");
+    }
+    printf("\nPairs closer than 30 in either theme:\n\n| hues | dark | light |\n|---|---|---|\n");
+    for (int i = 0; i < NRW; i++)
+        for (int j = i + 1; j < NRW + NRW_OTHER; j++) {
+            double d0 = de2000(need(RW_NAME[i], 0), need(RW_NAME[j], 0));
+            double d1 = de2000(need(RW_NAME[i], 1), need(RW_NAME[j], 1));
+            if (d0 < 30 || d1 < 30)
+                printf("| `%s`, `%s` | %.1f | %.1f |\n", RW_NAME[i], RW_NAME[j], d0, d1);
+        }
+    printf("\nThe WiFi channel palette (2026-11-18): each fill on --bg, --panel and their "
+           "greenbar stripes (the least of the four; `*` under %.0f:1), and --ch-ink on it "
+           "(`*` under %.1f:1):\n\n"
+           "| token | dark | least ground | ink | light | least ground | ink |\n"
+           "|---|---|---|---|---|---|---|\n", CH_GFX_MIN, CH_INK_MIN);
+    for (int i = 0; i < NCHAN; i++) {
+        char n[16];
+        double r[2][2];
+        chan_name(i, n);
+        for (int t = 0; t < 2; t++) {
+            rgb_t g[4], c = chan_rgb(i, t);
+            chan_grounds(t, g);
+            r[t][0] = 99;
+            for (int k = 0; k < 4; k++) if (contrast(c, g[k]) < r[t][0]) r[t][0] = contrast(c, g[k]);
+            r[t][1] = contrast(c, chan_ink(t));
+        }
+        printf("| `%s` | `%s` | %.2f%s | %.2f%s | `%s` | %.2f%s | %.2f%s |\n", n,
+               CHAN[i].dark, r[0][0], r[0][0] < CH_GFX_MIN ? " *" : "", r[0][1], r[0][1] < CH_INK_MIN ? " *" : "",
+               CHAN[i].light, r[1][0], r[1][0] < CH_GFX_MIN ? " *" : "", r[1][1], r[1][1] < CH_INK_MIN ? " *" : "");
+    }
+    printf("\nThe floors (CIEDE2000, the smaller theme's), enforced and measured:\n\n"
+           "| floor | enforced | measured |\n|---|---|---|\n"
+           "| fill on any ground | %.1f:1 | %.2f:1 |\n| --ch-ink on a fill | %.1f:1 | %.2f:1 |\n"
+           "| sorted neighbours, 2.4 and 5 GHz | %.0f | %.1f |\n| 1, 6 and 11 | %.0f | %.1f |\n"
+           "| any two 2.4 GHz | %.0f | %.1f |\n| any two 5 GHz | %.0f | %.1f |\n"
+           "| any two 6 GHz steps | %.0f | %.1f |\n| two bands, or --muted | %.0f | %.1f |\n",
+           CH_GFX_MIN, g_chm.gfx, CH_INK_MIN, g_chm.ink, CH_ADJ_MIN, g_chm.adj, CH_TRIO_MIN, g_chm.trio,
+           CH_PAIR24_MIN, g_chm.pair24, CH_PAIR5_MIN, g_chm.pair5, CH_PAIR6_MIN, g_chm.pair6,
+           CH_FAMILY_MIN, g_chm.fam);
+    /* The greenbar's cost to text: each text token that reads at 4.5:1
+     * on a ground and under it on that ground's stripe. Reported, not
+     * enforced: the dark theme's data colours are the TUI's byte for
+     * byte, and the stripe is the owner's 8%. */
+    printf("\nText under 4.5:1 on a greenbar stripe that reads at 4.5:1 on its ground:\n\n"
+           "| token | theme | ground | on it | on its stripe |\n|---|---|---|---|---|\n");
+    static const char *const TXT[] = { "--ink", "--muted", "--brass", "--phosphor-hi", "--phosphor-mid",
+                                       "--hover" };
+    int nt = (int)(sizeof(TXT) / sizeof(TXT[0])), shown = 0;
+    for (int i = 0; i < nt + g_ntok; i++) {
+        const char *n = i < nt ? TXT[i] : g_tok[i - nt].name;
+        for (int t = 0; t < 2; t++) {
+            rgb_t c = need(n, t), g[4];
+            chan_grounds(t, g);
+            for (int k = 0; k < 2; k++) {
+                double r0 = contrast(c, g[k]), r1 = contrast(c, g[k + 2]);
+                if (r0 >= 4.5 && r1 < 4.5) {
+                    printf("| `%s` | %s | `%s` | %.2f | %.2f |\n", n, t ? "light" : "dark",
+                           k ? "--panel" : "--bg", r0, r1);
+                    shown++;
+                }
+            }
+        }
+    }
+    if (!shown) printf("| none | | | | |\n");
     printf("\nMonitor rows, on `--mon-bg` (`");
     for (int t = 0; t < 2; t++) {
         char h[8];
@@ -748,7 +1260,7 @@ static int emit_contrast(void) {
 int main(int argc, char **argv) {
     if (argc < 3) {
         fprintf(stderr, "usage: palette css TUI_C THEME_CSS OUT.css | js TUI_C OUT.js | "
-                        "contrast TUI_C THEME_CSS\n");
+                        "json TUI_C OUT.json | contrast TUI_C THEME_CSS\n");
         return 2;
     }
     const char *mode = argv[1];
@@ -756,10 +1268,10 @@ int main(int argc, char **argv) {
     char *tui = slurp(argv[2]);
     if (!tui || read_brands(tui) != 0) { free(tui); return 1; }
     free(tui);
-    if (!strcmp(mode, "js") && argc == 4) {
+    if ((!strcmp(mode, "js") || !strcmp(mode, "json")) && argc == 4) {
         FILE *o = fopen(argv[3], "w");
         if (!o) { perror(argv[3]); return 1; }
-        int rc = emit_js(o);
+        int rc = !strcmp(mode, "js") ? emit_js(o) : emit_json(o);
         if (fclose(o) != 0) rc = -1;
         return rc ? 1 : 0;
     }

@@ -3,7 +3,11 @@
 #include <string.h>
 #include <time.h>
 #include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <dirent.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "alert_pcap.h"
 #include "sloth_clock.h"
 #include "fs_capacity.h"
@@ -11,6 +15,7 @@
 #include "tune.h"
 #include "secure_file.h"
 #include "evidence_manifest.h"
+#include "eapol_log.h"
 
 /* pcap-on-alert: when a rule fires with a concrete match_ip (and optional
  * match_port), dump every packet currently in the s->packets[] ring whose
@@ -29,7 +34,36 @@ static char         g_dir[256];
 static int          g_dirfd = -1;
 static sfile_fail_t g_fail;
 
+/* The age sweep (#166). g_sweep_d is open only while a pass has entries
+ * left, which is what lets a pass span many poll ticks; g_sweep_start
+ * == 0 means "never started", which makes the first maintain call the
+ * startup pass. Kept apart from g_fail: that counter is write failures,
+ * read by `storage_pcap_failures` and the !persist badge, and a sweep
+ * that cannot delete has not lost any evidence. All of it is touched on
+ * the main thread only — the alert engine's dump and the poll loop's
+ * maintain both run there. */
+static DIR               *g_sweep_d      = NULL;
+static time_t             g_sweep_start  = 0;
+static time_t             g_sweep_cutoff = 0;
+static unsigned long long g_swept        = 0;
+static sfile_fail_t       g_sweep_fail;
+/* Both clocks as alert_pcap_set_dir() found them, for the stale-clock
+ * guard in alert_pcap_sweep_step(). */
+static time_t             g_set_wall     = 0;
+static uint64_t           g_set_mono_ms  = 0;
+static int                g_sweep_spare  = 0;
+
+static void sweep_stop(void) {
+    if (g_sweep_d) { closedir(g_sweep_d); g_sweep_d = NULL; }
+}
+
 int alert_pcap_set_dir(const char *dir) {
+    sweep_stop();
+    g_sweep_start = 0;                /* a new directory gets a startup pass */
+    g_swept = 0;
+    sfile_fail_reset(&g_sweep_fail);
+    g_set_wall    = sloth_wall();
+    g_set_mono_ms = sloth_mono_ms();
     if (g_dirfd >= 0) { close(g_dirfd); g_dirfd = -1; }
     g_dir[0] = '\0';
     sfile_fail_reset(&g_fail);
@@ -39,6 +73,17 @@ int alert_pcap_set_dir(const char *dir) {
     g_dirfd = fd;
     snprintf(g_dir, sizeof(g_dir), "%s", dir);
     return 0;
+}
+
+/* The header says why this is not just alert_pcap_set_dir(NULL): the
+ * registry needs a `void fn(void)`, and a reset restores the load state
+ * rather than reconfiguring, so g_sweep_cutoff goes too. */
+void alert_pcap_clear(void) {
+    (void)alert_pcap_set_dir(NULL);
+    g_sweep_cutoff = 0;
+    g_sweep_spare  = 0;
+    g_set_wall     = 0;
+    g_set_mono_ms  = 0;
 }
 
 int alert_pcap_failures(void) { return g_fail.failures; }
@@ -106,8 +151,9 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
 
     /* Refuse before creating, when the operator has set a floor (#96).
      *
-     * This sink is the one with no cap and no sweep, so it is the one
-     * that fills a filesystem — and it fills it with INODES first. The
+     * This sink is the one that fills a filesystem — and it fills it
+     * with INODES first. The #166 age sweep bounds it over weeks; a
+     * floor is what holds within one burst. The
      * floors default to 0 (off), so this is a no-op unless asked for;
      * when it does refuse, it goes through the same sfile_fail counter
      * every other write failure here uses, which means the operator
@@ -199,7 +245,7 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
          * `rule` rather than carry a placeholder (engine.c's evidence
          * sink follows the same rule). */
         snprintf(rule, sizeof(rule), "%s", tn ? tn : "");
-        evm_meta_t m = { EVM_SINK_ALERT_PCAP, a->incident_id, rule };
+        evm_meta_t m = { EVM_SINK_ALERT_PCAP, a->incident_id, rule, &a->loc };
         if (evidence_manifest_record(g_dirfd, name, &m, err, sizeof(err)) != 0)
             sfile_fail(&g_fail, "alert pcap manifest", err);
     }
@@ -214,3 +260,187 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
     }
     return written;
 }
+
+/* ── Age sweep (#166) ──────────────────────────────────────────────── */
+
+#define ALERT_PCAP_SECS_PER_DAY 86400
+
+static int all_digits(const char *p, int n) {
+    for (int i = 0; i < n; i++)
+        if (!isdigit((unsigned char)p[i])) return 0;
+    return 1;
+}
+
+/* The exact shape alert_pcap_dump() produces: the stem snprintf above,
+ * slugify()'s alphabet (which also covers sfile_fopen_unique()'s "_N"
+ * suffix), and the 80-byte name buffer. Strict on purpose — the sweep
+ * deletes sloth's artifacts, not the directory's contents, and a looser
+ * "ends in .pcap" would take a capture the operator dropped in beside
+ * them. The manifest is swept on the same window: its mtime is its
+ * newest line, so it goes only once everything it lists could have. */
+int alert_pcap_is_name(const char *name) {
+    if (!name) return 0;
+    if (evidence_manifest_is_name(name)) return 1;
+    static const char pfx[] = "alert_", ext[] = ".pcap";
+    const size_t pn = sizeof(pfx) - 1, en = sizeof(ext) - 1;
+    size_t n = strlen(name);
+    /* prefix + 8 date digits + '_' + 6 time digits + '_' + ext */
+    if (n < pn + 8 + 1 + 6 + 1 + en || n >= 80) return 0;
+    if (strncmp(name, pfx, pn) != 0) return 0;
+    const char *p = name + pn;
+    if (!all_digits(p, 8) || p[8] != '_' ||
+        !all_digits(p + 9, 6) || p[15] != '_')
+        return 0;
+    if (strcmp(name + n - en, ext) != 0) return 0;
+    for (const char *c = p + 16; c < name + n - en; c++)
+        if (!isalnum((unsigned char)*c) && *c != '_') return 0;
+    return 1;
+}
+
+int alert_pcap_retain_days(void) {
+    return (int)tune_val(TUNE_PCAP_RETAIN_DAYS);
+}
+
+/* Not sfile_fail(): its line says "export failed", which README and
+ * retention.md use to mean lost evidence, and a sweep error loses
+ * none. Same once-then-count shape, its own words. */
+static void sweep_err(const char *msg) {
+    g_sweep_fail.failures++;
+    snprintf(g_sweep_fail.last, sizeof(g_sweep_fail.last), "%s",
+             msg ? msg : "?");
+    if (!g_sweep_fail.reported) {
+        fprintf(stderr, "sloth: --pcap-dir retention sweep: %s (further "
+                        "sweep errors counted in "
+                        "sensor_health.pcap_sweep_errors)\n",
+                g_sweep_fail.last);
+        g_sweep_fail.reported = 1;
+    }
+}
+
+/* Open a new pass if one is due. 1 when a pass is now open. */
+static int sweep_begin(time_t now, int days) {
+    /* A clock stepped back past the last start would otherwise wait out
+     * the whole interval; treat it as due, as eapol_maintain() does. */
+    int due = g_sweep_start == 0 || now < g_sweep_start ||
+              now - g_sweep_start >= ALERT_PCAP_SWEEP_INTERVAL_S;
+    if (!due) return 0;
+    /* Stamped before anything can fail: a directory that cannot be read
+     * is retried next interval, not on every poll. */
+    g_sweep_start = now;
+    time_t window = (time_t)days * ALERT_PCAP_SECS_PER_DAY;
+    if (now <= window) return 0;      /* nothing can predate epoch+window */
+    /* One cutoff for the whole pass, so a pass spanning many ticks
+     * applies one window rather than a sliding one. */
+    g_sweep_cutoff = now - window;
+    /* Stale-clock guard. Age is mtime against the wall clock, so a
+     * sensor that started on a stale clock (no RTC, before NTP) stamps
+     * its files in the past, and once NTP steps the clock forward they
+     * look older than the window. Until this process has been up a
+     * whole window by the monotonic clock, nothing it could have
+     * written — any mtime at or after the wall time it started at — is
+     * old enough to delete: on a clock that was right all along those
+     * files are younger than the uptime, so this costs nothing. */
+    g_sweep_spare = (sloth_mono_ms() - g_set_mono_ms) / 1000 <
+                    (uint64_t)window;
+
+    char err[SFILE_ERR_MAX];
+    /* A duplicate, because closedir() closes the descriptor it is given
+     * and g_dirfd must outlive the pass. */
+    int dfd = fcntl(g_dirfd, F_DUPFD_CLOEXEC, 0);
+    DIR *d  = dfd >= 0 ? fdopendir(dfd) : NULL;
+    if (!d) {
+        int e = errno;
+        if (dfd >= 0) close(dfd);
+        snprintf(err, sizeof(err), "%.200s: cannot read the directory: %s",
+                 g_dir, strerror(e));
+        sweep_err(err);
+        return -1;
+    }
+    /* The duplicate shares its offset with g_dirfd; start at the top. */
+    rewinddir(d);
+    g_sweep_d = d;
+    return 1;
+}
+
+int alert_pcap_sweep_step(int budget) {
+    const int days = alert_pcap_retain_days();
+    if (g_dirfd < 0 || days <= 0 || budget <= 0) {
+        /* 0 can only come from startup --tune, but a pass left open by
+         * a window that then closed must not go on deleting. */
+        if (days <= 0) sweep_stop();
+        return 0;
+    }
+    if (!g_sweep_d) {
+        int b = sweep_begin(sloth_wall(), days);
+        if (b <= 0) return b;
+    }
+
+    char err[SFILE_ERR_MAX];
+    int removed = 0;
+    for (int seen = 0; seen < budget; seen++) {
+        errno = 0;
+        struct dirent *e = readdir(g_sweep_d);
+        if (!e) {
+            if (errno) {
+                snprintf(err, sizeof(err), "%.200s: readdir failed: %s",
+                         g_dir, strerror(errno));
+                sweep_err(err);
+            }
+            sweep_stop();             /* pass complete (or abandoned) */
+            break;
+        }
+        if (!alert_pcap_is_name(e->d_name)) continue;
+        struct stat st;
+        if (fstatat(g_dirfd, e->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
+            if (errno == ENOENT) continue;      /* raced away; fine */
+            snprintf(err, sizeof(err), "%.100s: cannot stat: %s",
+                     e->d_name, strerror(errno));
+            sweep_err(err);
+            continue;
+        }
+        if (!S_ISREG(st.st_mode)) {
+            /* A symlink, directory or FIFO at an artifact name is not
+             * something sloth wrote. Left exactly as it is, whatever its
+             * age — an mtime read off a planted link proves nothing — and
+             * counted, because in a 0700 directory only sloth writes it
+             * is operator error or someone steering the sweep. */
+            snprintf(err, sizeof(err),
+                     "%.100s: not a regular file - left in place, nothing "
+                     "was followed", e->d_name);
+            sweep_err(err);
+            continue;
+        }
+        if (st.st_mtime >= g_sweep_cutoff) continue;
+        if (g_sweep_spare && st.st_mtime >= g_set_wall) continue;
+        /* unlinkat() removes the name, never what it points to, so an
+         * entry swapped for a symlink between the stat and here costs
+         * the link, not its target. */
+        if (unlinkat(g_dirfd, e->d_name, 0) != 0) {
+            if (errno == ENOENT) continue;
+            snprintf(err, sizeof(err),
+                     "%.100s: could not delete past the %d-day window: %s",
+                     e->d_name, days, strerror(errno));
+            sweep_err(err);
+            continue;
+        }
+        removed++;
+    }
+    g_swept += (unsigned long long)removed;
+    return removed;
+}
+
+int alert_pcap_maintain(void) {
+    return alert_pcap_sweep_step(ALERT_PCAP_SWEEP_BUDGET);
+}
+
+int alert_pcap_shares_eapol_dir(void) {
+    struct stat a, b;
+    if (g_dirfd < 0 || fstat(g_dirfd, &a) != 0) return 0;
+    if (eapol_export_dir_stat(&b) != 0) return 0;
+    return a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+}
+
+int alert_pcap_sweep_in_progress(void) { return g_sweep_d != NULL; }
+unsigned long long alert_pcap_swept(void) { return g_swept; }
+int alert_pcap_sweep_errors(void) { return g_sweep_fail.failures; }
+const char *alert_pcap_sweep_error(void) { return g_sweep_fail.last; }

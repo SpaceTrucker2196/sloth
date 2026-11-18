@@ -5,6 +5,7 @@
 #include <sqlite3.h>
 #include "runner.h"
 #include "query.h"
+#include "tmp_dir.h"
 
 /*
  * Research-corpus queries — issue #73, slice 2.
@@ -47,7 +48,8 @@ static void test_wrong_schema_is_distinguished(void) {
      * shelling out to the `sqlite3` CLI (#114) — the old `system()`
      * call returned non-zero and silently skipped the whole test, with
      * zero assertions run, on any host without that CLI installed. */
-    const char *tmp = "/tmp/sloth_not_a_corpus.db";
+    char tmp[TEST_TMP_MAX];
+    test_tmp_path(tmp, sizeof(tmp), "sloth_not_a_corpus.db");
     unlink(tmp);
     sqlite3 *db = NULL;
     ASSERT_EQ(sqlite3_open(tmp, &db), SQLITE_OK);
@@ -135,7 +137,8 @@ static void test_view_named_research_is_refused(void) {
      * issues can fire the trigger even with the catalogue check gone
      * (seen: with it removed, `side` still read 0). It would only catch
      * a future change that opened the corpus writable. */
-    const char *tmp = "/tmp/sloth_view_corpus.db";
+    char tmp[TEST_TMP_MAX];
+    test_tmp_path(tmp, sizeof(tmp), "sloth_view_corpus.db");
     int built = build_db(tmp,
         "CREATE TABLE side(x);"
         "CREATE TABLE t(title, body, source_url, retrieved, topics,"
@@ -160,7 +163,8 @@ static void test_fts5_corpus_with_a_trigger_is_refused(void) {
     /* The right table, plus something ingest never writes. A trigger in
      * a read-only file cannot fire, but the file is not one ingest made
      * and nothing about it should be taken on trust. */
-    const char *tmp = "/tmp/sloth_trigger_corpus.db";
+    char tmp[TEST_TMP_MAX];
+    test_tmp_path(tmp, sizeof(tmp), "sloth_trigger_corpus.db");
     int built = build_db(tmp,
         "CREATE VIRTUAL TABLE research USING fts5(title, body,"
         "  source_url UNINDEXED, retrieved UNINDEXED, topics, alert_kinds,"
@@ -182,7 +186,8 @@ static void test_minimal_fts5_corpus_opens(void) {
     /* The catalogue check must not refuse what ingest actually writes:
      * one FTS5 table plus its shadow tables, nothing else. Built here
      * rather than read from research.db so the shape is visible. */
-    const char *tmp = "/tmp/sloth_min_corpus.db";
+    char tmp[TEST_TMP_MAX];
+    test_tmp_path(tmp, sizeof(tmp), "sloth_min_corpus.db");
     int built = build_db(tmp,
         "CREATE VIRTUAL TABLE research USING fts5(title, body,"
         "  source_url UNINDEXED, retrieved UNINDEXED, topics, alert_kinds,"

@@ -57,13 +57,26 @@ void view_arp_draw(const sloth_state_t *s) {
 #endif
     TPRINT("\n");
 
+    /* The address column is as wide as the widest address in the table
+     * (#176: IPv6 rows sit beside IPv4 ones), never narrower than a
+     * dotted quad. The dashes under it follow. */
+    int ipw = 15;
+    for (int i = 0; i < s->arp_count; i++) {
+        int l = (int)strlen(s->arp_entries[i].ip);
+        if (l > ipw) ipw = l;
+    }
+    if (ipw > 45) ipw = 45;
+    char ipdash[46];
+    memset(ipdash, '-', (size_t)ipw);
+    ipdash[ipw] = '\0';
+
     /* column headers */
     tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
-    TPRINT(" %-15s  %-17s  %-16s  %-12s  %-6s  %s\n",
-           "IP", "MAC", "Hostname", "Vendor", "Expiry", "Interface");
-    TPRINT(" %-15s  %-17s  %-16s  %-12s  %-6s  %s\n",
-           "---------------", "-----------------",
+    TPRINT(" %-*s  %-17s  %-16s  %-12s  %-6s  %s\n",
+           ipw, "IP", "MAC", "Hostname", "Vendor", "Expiry", "Interface");
+    TPRINT(" %-*s  %-17s  %-16s  %-12s  %-6s  %s\n",
+           ipw, ipdash, "-----------------",
            "----------------", "------------", "------", "---------");
     tui_normal();
 
@@ -96,11 +109,11 @@ void view_arp_draw(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
         if (row == s->arp_sel) {
             tui_sel();
-            tui_printf(" %-15s  %-17s  %-16.16s  %-12.12s  %-6s  %s\n",
-                   e->ip, mac, hstr, vstr, expiry, e->iface);
+            tui_printf(" %-*s  %-17s  %-16.16s  %-12.12s  %-6s  %s\n",
+                   ipw, e->ip, mac, hstr, vstr, expiry, e->iface);
             tui_reset();
         } else {
-            tui_bright(); tui_printf(" %-15s", e->ip);
+            tui_bright(); tui_printf(" %-*s", ipw, e->ip);
             tui_dim();    tui_printf("  %-17s", mac);
             if (hostname) { tui_bright(); } else { tui_dim(); }
             tui_printf("  %-16.16s", hstr);
@@ -111,11 +124,11 @@ void view_arp_draw(const sloth_state_t *s) {
 #else
         if (row == s->arp_sel) {
             tui_sel();
-            tui_printf(" %-15s  %-17s  %-16.16s  %-12.12s  %-6s  %s",
-                   e->ip, mac, hstr, vstr, expiry, e->iface);
+            tui_printf(" %-*s  %-17s  %-16.16s  %-12.12s  %-6s  %s",
+                   ipw, e->ip, mac, hstr, vstr, expiry, e->iface);
             tui_reset(); tui_printf("\n");
         } else {
-            tui_bright(); tui_printf(" %-15s", e->ip);
+            tui_bright(); tui_printf(" %-*s", ipw, e->ip);
             tui_dim();    tui_printf("  %-17s", mac);
             if (hostname) { tui_bright(); } else { tui_dim(); }
             tui_printf("  %-16.16s", hstr);

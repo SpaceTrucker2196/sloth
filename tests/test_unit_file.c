@@ -40,6 +40,14 @@
 #define UF_PATH_HELPER   "packaging/bin/sloth-monitor-up"
 #define UF_PATH_DEFAULTS "packaging/default/sloth"
 #define UF_PATH_WIKI     "docs/wiki/deployment.md"
+#define UF_PATH_WEB_UNIT "packaging/systemd/slothweb.service"
+#define UF_PATH_WEB_DEFAULTS "packaging/default/slothweb"
+#define UF_PATH_BLE_UNIT "packaging/systemd/sloth-ble-scan.service"
+#define UF_PATH_BT_DROPIN "packaging/systemd/sloth-sensor.service.d/bt-monitor.conf"
+#define UF_PATH_RF_UNIT  "packaging/systemd/sloth-rf.service"
+#define UF_PATH_RF_DEFAULTS "packaging/default/sloth-rf"
+#define UF_PATH_RF_DROPIN "packaging/systemd/sloth-rf.service.d/gps.conf"
+#define UF_PATH_RF_MIGRATE "packaging/bin/sloth-migrate-rf"
 #define UF_MAX_LINES     512
 
 static char *uf_slurp(const char *path) {
@@ -102,6 +110,19 @@ static const char *uf_value(char *lines[], int n, const char *key) {
     return NULL;
 }
 
+/* uf_value() for a key the caller then compares: never NULL. A missing
+ * key prints its name and yields a value no expected one equals, so
+ * ASSERT_STR() and strncmp() fail an assertion naming the key instead
+ * of handing strcmp() a NULL (which ended the whole suite with
+ * SIGSEGV). */
+#define UF_ABSENT "\x01(absent)"
+static const char *uf_req(char *lines[], int n, const char *key) {
+    const char *v = uf_value(lines, n, key);
+    if (v) return v;
+    fprintf(stderr, "    %s= absent\n", key);
+    return UF_ABSENT;
+}
+
 /* Number of directives with this key — a key given twice is how
  * SystemCallFilter accumulates, and how User= could be overridden. */
 static int uf_count(char *lines[], int n, const char *key) {
@@ -156,6 +177,28 @@ static int uf_tokens_within(const char *value, const char *const allow[],
     return seen > 0;
 }
 
+/* A token of a path list (ReadWritePaths= and kin) at or under `dir`,
+ * after the '-' and '+' prefixes systemd allows. `/var/lib/slothweb`
+ * is not under `/var/lib/sloth`; `/var/lib/sloth/` and
+ * `-/var/lib/sloth/x` are. */
+static int uf_path_under(const char *value, const char *dir) {
+    if (!value) return 0;
+    size_t k = strlen(dir);
+    const char *p = value;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        const char *e = p;
+        while (*e && *e != ' ' && *e != '\t') e++;
+        const char *t = p;
+        while (t < e && (*t == '-' || *t == '+')) t++;
+        if ((size_t)(e - t) >= k && strncmp(t, dir, k) == 0 &&
+            (t + k == e || t[k] == '/')) return 1;
+        p = e;
+    }
+    return 0;
+}
+
 /* A flag is "named" by a document when it appears followed by something
  * that cannot continue a flag name — so a page listing only
  * `--db-interval-secs` does not get credit for `--db`. */
@@ -179,7 +222,7 @@ static void test_scanner_directive_lookup_is_exact(void) {
                  "UserNS=no\n"
                  "User=sloth\n"
                  "ExecStartPre=+/usr/local/sbin/helper x\n"
-                 "ExecStart=/usr/local/bin/sloth \\\n"
+                 "ExecStart=/usr/local/bin/sloth-wifi \\\n"
                  "    --headless \\\n"
                  "    --db /var/lib/sloth/sloth.db\n"
                  "SystemCallFilter=@system-service\n"
@@ -190,14 +233,14 @@ static void test_scanner_directive_lookup_is_exact(void) {
     ASSERT(!uf_is_directive("[Service]"));
     ASSERT(!uf_is_directive("# User=root in a comment"));
     ASSERT(uf_is_directive("User=sloth"));
-    ASSERT_STR(uf_value(lines, n, "User"), "sloth");
-    ASSERT_STR(uf_value(lines, n, "UserNS"), "no");
+    ASSERT_STR(uf_req(lines, n, "User"), "sloth");
+    ASSERT_STR(uf_req(lines, n, "UserNS"), "no");
     ASSERT(uf_value(lines, n, "Group") == NULL);
     /* The continuation joined into the one ExecStart systemd sees. */
-    ASSERT(strncmp(uf_value(lines, n, "ExecStart"), "/usr/local/bin/sloth", 20) == 0);
+    ASSERT(strncmp(uf_req(lines, n, "ExecStart"), "/usr/local/bin/sloth-wifi ", 26) == 0);
     ASSERT(uf_has_token(uf_value(lines, n, "ExecStart"), "--db"));
     ASSERT(uf_has_token(uf_value(lines, n, "ExecStart"), "--headless"));
-    ASSERT(strncmp(uf_value(lines, n, "ExecStartPre"), "+/usr/local/sbin/", 17) == 0);
+    ASSERT(strncmp(uf_req(lines, n, "ExecStartPre"), "+/usr/local/sbin/", 17) == 0);
     ASSERT_EQ(uf_count(lines, n, "SystemCallFilter"), 2);
     ASSERT_EQ(uf_count(lines, n, "User"), 1);
 }
@@ -219,6 +262,19 @@ static void test_scanner_tokens_are_whole_words(void) {
     /* Emptied-out directive is not a subset, it is a missing directive. */
     ASSERT(!uf_tokens_within("", caps, 2));
     ASSERT(!uf_tokens_within(NULL, caps, 2));
+
+    ASSERT(uf_path_under("/var/lib/sloth", "/var/lib/sloth"));
+    ASSERT(uf_path_under("/var/lib/sloth/", "/var/lib/sloth"));
+    ASSERT(uf_path_under("/var/lib/sloth/x", "/var/lib/sloth"));
+    ASSERT(uf_path_under("-/var/lib/sloth", "/var/lib/sloth"));
+    ASSERT(uf_path_under("+/var/lib/sloth/x", "/var/lib/sloth"));
+    ASSERT(uf_path_under("/var/lib/sloth /var/lib/slothweb", "/var/lib/sloth"));
+    ASSERT(uf_path_under("/var/lib/slothweb /var/lib/sloth", "/var/lib/sloth"));
+    ASSERT(!uf_path_under("/var/lib/slothweb", "/var/lib/sloth"));
+    ASSERT(!uf_path_under("/var/lib/slothweb/x /tmp/var/lib/sloth", "/var/lib/sloth"));
+    ASSERT(!uf_path_under("/var/lib/slot", "/var/lib/sloth"));
+    ASSERT(!uf_path_under("", "/var/lib/sloth"));
+    ASSERT(!uf_path_under(NULL, "/var/lib/sloth"));
 }
 
 static void test_scanner_doc_flag_match_needs_a_boundary(void) {
@@ -243,17 +299,17 @@ static void test_unit_runs_as_the_sloth_account(void) {
     /* The whole point of the slice. Given once, so a later User= cannot
      * quietly win. */
     ASSERT_EQ(uf_count(lines, n, "User"), 1);
-    ASSERT_STR(uf_value(lines, n, "User"), "sloth");
-    ASSERT_STR(uf_value(lines, n, "Group"), "sloth");
+    ASSERT_STR(uf_req(lines, n, "User"), "sloth");
+    ASSERT_STR(uf_req(lines, n, "Group"), "sloth");
     ASSERT(uf_value(lines, n, "DynamicUser") == NULL);
 
     /* State lives where systemd creates it for that account, not in a
      * checkout. */
-    ASSERT_STR(uf_value(lines, n, "StateDirectory"), "sloth");
-    ASSERT_STR(uf_value(lines, n, "StateDirectoryMode"), "0700");
-    ASSERT_STR(uf_value(lines, n, "RuntimeDirectory"), "sloth");
-    ASSERT_STR(uf_value(lines, n, "WorkingDirectory"), "/var/lib/sloth");
-    ASSERT_STR(uf_value(lines, n, "UMask"), "0077");
+    ASSERT_STR(uf_req(lines, n, "StateDirectory"), "sloth");
+    ASSERT_STR(uf_req(lines, n, "StateDirectoryMode"), "0700");
+    ASSERT_STR(uf_req(lines, n, "RuntimeDirectory"), "sloth");
+    ASSERT_STR(uf_req(lines, n, "WorkingDirectory"), "/var/lib/sloth");
+    ASSERT_STR(uf_req(lines, n, "UMask"), "0077");
     free(buf);
 }
 
@@ -279,8 +335,17 @@ static void test_unit_executes_installed_paths_only(void) {
     if (start) {
         /* No `-`/`@`/`+`/`!` prefix: sloth itself must run inside the
          * sandbox, and its failure must fail the unit. */
-        ASSERT(strncmp(start, "/usr/local/bin/sloth ", 21) == 0 ||
-               strcmp(start, "/usr/local/bin/sloth") == 0);
+        /* sloth-wifi since the cutover (#216), by its own name and not
+         * through the `sloth` symlink beside it: the unit must not
+         * depend on a compatibility link. Seen red with the unit's
+         * ExecStart left at /usr/local/bin/sloth. */
+        ASSERT(strncmp(start, "/usr/local/bin/sloth-wifi ", 26) == 0 ||
+               strcmp(start, "/usr/local/bin/sloth-wifi") == 0);
+        /* No decoder flag: sloth-wifi refuses each with exit 2. */
+        static const char *const moved[] = { "--adsb", "--aprs", "--aprs-freq",
+            "--aprs-silent-hours", "--rtl433", "--victron" };
+        for (size_t i = 0; i < sizeof(moved) / sizeof(moved[0]); i++)
+            ASSERT(!uf_has_token(start, moved[i]));
         ASSERT(uf_has_token(start, "--headless"));
     }
     ASSERT_EQ(uf_count(lines, n, "ExecStart"), 1);
@@ -290,6 +355,12 @@ static void test_unit_executes_installed_paths_only(void) {
     const char *pre = uf_value(lines, n, "ExecStartPre");
     ASSERT(pre != NULL);
     if (pre) ASSERT(strncmp(pre, "+/usr/local/sbin/sloth-monitor-up ", 34) == 0);
+
+    /* sloth opens the radio the helper prepared, by the same variable,
+     * not the first type-803 netdev discovery finds: a second radio in
+     * monitor mode on the host must not be taken for the sensor. */
+    if (pre) ASSERT(strstr(pre, " ${SLOTH_IFACE}") != NULL);
+    if (start) ASSERT(strstr(start, "--monitor-iface ${SLOTH_IFACE} ") != NULL);
     free(buf);
 }
 
@@ -323,7 +394,7 @@ static void test_unit_capabilities_are_exactly_the_two(void) {
     ASSERT(uf_has_token(amb, "CAP_NET_ADMIN"));
     ASSERT(uf_has_token(bound, "CAP_NET_RAW"));
     ASSERT(uf_has_token(bound, "CAP_NET_ADMIN"));
-    ASSERT_STR(uf_value(lines, n, "NoNewPrivileges"), "true");
+    ASSERT_STR(uf_req(lines, n, "NoNewPrivileges"), "true");
     free(buf);
 }
 
@@ -434,6 +505,15 @@ static void test_unit_flag_pairs_are_consistent(void) {
     ASSERT(uf_has_token(fam, "AF_UNIX"));
     ASSERT(uf_has_token(fam, "AF_NETLINK"));
     ASSERT(uf_has_token(fam, "AF_PACKET"));
+    /* Not AF_BLUETOOTH. --bt-monitor needs it, but with the family
+     * allowed a compromised sensor could bind a raw HCI socket or an
+     * L2CAP one and make an up hciN transmit; it comes from the opt-in
+     * drop-in (test_sensor_bt_monitor_dropin) instead. */
+    ASSERT(!uf_has_token(fam, "AF_BLUETOOTH"));
+    static const char *const fams[] = {
+        "AF_UNIX", "AF_NETLINK", "AF_PACKET", "AF_INET", "AF_INET6"
+    };
+    ASSERT(uf_tokens_within(fam, fams, 5));
 
     /* The data socket is a unix: path under the RuntimeDirectory, so
      * SO_PEERCRED is the authentication and nothing listens on a port. */
@@ -584,6 +664,339 @@ static void test_defaults_file_is_an_environment_file(void) {
     free(buf);
 }
 
+/* Defined with the sloth-ble-scan tests below; slothweb's unit needs it
+ * too since it names two daemons on separate After= / Wants= lines. */
+static int uf_any_has(char *lines[], int n, const char *key, const char *tok);
+
+/* ── slothweb.service (#153) ──
+ *
+ * The web UI's unit: the same account as the sensor (it reads the
+ * sensor's 0700 state dir and 0600 socket), but nothing the sensor
+ * holds beyond that — no capability at all, no /home, no packet or
+ * netlink socket, and the sensor's directory read-only. Each absence
+ * below was seen red under a one-line mutation of the unit (the #153
+ * log entry names them). */
+
+static void test_web_unit_runs_as_sloth_with_no_capabilities(void) {
+    char *buf = uf_slurp(UF_PATH_WEB_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    /* Raw scans, comments included, as for the sensor's unit, and
+     * before uf_logical_lines(), which cuts buf in place: after it a
+     * strstr() over buf stops at the first line. */
+    ASSERT(strstr(buf, "/home/") == NULL);
+    ASSERT(strstr(buf, "CAP_") == NULL);
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    ASSERT_GT(n, 0);
+    ASSERT_LT(n, UF_MAX_LINES);
+
+    ASSERT_EQ(uf_count(lines, n, "User"), 1);
+    ASSERT_STR(uf_req(lines, n, "User"), "sloth");
+    ASSERT_EQ(uf_count(lines, n, "Group"), 1);
+    ASSERT_STR(uf_req(lines, n, "Group"), "sloth");
+    ASSERT(uf_value(lines, n, "DynamicUser") == NULL);
+
+    /* Present and empty: an absent CapabilityBoundingSet= is the full
+     * set, not none. Given once, since a second line merges in. */
+    const char *bound = uf_value(lines, n, "CapabilityBoundingSet");
+    const char *amb   = uf_value(lines, n, "AmbientCapabilities");
+    ASSERT(bound != NULL);
+    ASSERT(amb != NULL);
+    if (bound && bound[0])
+        fprintf(stderr, "    slothweb unit: CapabilityBoundingSet=%s, want empty\n", bound);
+    ASSERT(bound != NULL && bound[0] == '\0');
+    ASSERT(amb != NULL && amb[0] == '\0');
+    ASSERT_EQ(uf_count(lines, n, "CapabilityBoundingSet"), 1);
+    ASSERT_EQ(uf_count(lines, n, "AmbientCapabilities"), 1);
+    ASSERT_STR(uf_req(lines, n, "NoNewPrivileges"), "true");
+    free(buf);
+}
+
+static void test_web_unit_sandbox(void) {
+    char *buf = uf_slurp(UF_PATH_WEB_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+
+    static const struct { const char *key, *val; } want[] = {
+        { "ProtectSystem",            "strict"    },
+        { "ProtectHome",              "yes"       },
+        { "PrivateTmp",               "true"      },
+        { "PrivateDevices",           "true"      },
+        { "ProtectKernelTunables",    "true"      },
+        { "ProtectKernelModules",     "true"      },
+        { "ProtectKernelLogs",        "true"      },
+        { "ProtectControlGroups",     "true"      },
+        { "RestrictNamespaces",       "true"      },
+        { "RestrictSUIDSGID",         "true"      },
+        { "MemoryDenyWriteExecute",   "true"      },
+        { "SystemCallArchitectures",  "native"    },
+        { "StateDirectory",           "slothweb"  },
+        { "StateDirectoryMode",       "0700"      },
+        { "WorkingDirectory",         "/var/lib/slothweb" },
+        { "UMask",                    "0077"      },
+        { "EnvironmentFile",          "-/etc/default/slothweb" },
+        { "After",                    "sloth-sensor.service" },
+        { "Wants",                    "sloth-sensor.service" },
+    };
+    for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+        const char *v = uf_value(lines, n, want[i].key);
+        if (!v || strcmp(v, want[i].val) != 0)
+            fprintf(stderr, "    slothweb unit: %s=%s wanted, got %s\n",
+                    want[i].key, want[i].val, v ? v : "(absent)");
+        ASSERT(v != NULL && strcmp(v, want[i].val) == 0);
+    }
+    ASSERT_EQ(uf_count(lines, n, "StateDirectory"), 1);
+
+    /* It serves HTTP and reads a unix socket; nothing else. */
+    static const char *const fams[] = { "AF_UNIX", "AF_INET", "AF_INET6" };
+    const char *fam = uf_value(lines, n, "RestrictAddressFamilies");
+    ASSERT(uf_tokens_within(fam, fams, 3));
+    ASSERT(uf_has_token(fam, "AF_UNIX"));
+    ASSERT(uf_has_token(fam, "AF_INET"));
+    ASSERT(!uf_has_token(fam, "AF_PACKET"));
+    ASSERT(!uf_has_token(fam, "AF_NETLINK"));
+    ASSERT_EQ(uf_count(lines, n, "RestrictAddressFamilies"), 1);
+
+    int allow_seen = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (strncmp(l, "SystemCallFilter=", 17) == 0 &&
+            uf_has_token(l + 17, "@system-service")) allow_seen = 1;
+    }
+    ASSERT(allow_seen);
+    ASSERT(uf_value(lines, n, "MemoryMax") != NULL);
+
+    /* No signal to another process: the same uid could otherwise stop or
+     * kill the sensor. tgkill with the rest, since it reaches any
+     * process (deployment.md §6). Each name on a deny ('~') line. */
+    static const char *const sigs[] = {
+        "kill", "tkill", "tgkill", "rt_sigqueueinfo", "rt_tgsigqueueinfo",
+        "pidfd_send_signal",
+    };
+    for (size_t s = 0; s < sizeof(sigs) / sizeof(sigs[0]); s++) {
+        int denied = 0;
+        for (int i = 0; i < n; i++) {
+            const char *l = lines[i];
+            while (*l == ' ' || *l == '\t') l++;
+            if (strncmp(l, "SystemCallFilter=~", 18) == 0 &&
+                uf_has_token(l + 18, sigs[s])) denied = 1;
+        }
+        if (!denied)
+            fprintf(stderr, "    slothweb unit: %s not denied\n", sigs[s]);
+        ASSERT(denied);
+    }
+
+    /* The sensor's directory: read-only, and never this unit's state
+     * directory, which systemd would chown and chmod on every start.
+     * The '-' so a host whose sensor never started (no /var/lib/sloth)
+     * still starts slothweb rather than failing 226/NAMESPACE. */
+    ASSERT(uf_has_token(uf_value(lines, n, "ReadOnlyPaths"), "-/var/lib/sloth"));
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (strncmp(l, "ReadWritePaths=", 15) == 0) {
+            if (uf_path_under(l + 15, "/var/lib/sloth"))
+                fprintf(stderr, "    slothweb unit: %s\n", l);
+            ASSERT(!uf_path_under(l + 15, "/var/lib/sloth"));
+        }
+    }
+    ASSERT(!uf_has_token(uf_value(lines, n, "StateDirectory"), "sloth"));
+
+    /* sloth-rf's directory (#215) the same way: read-only, with the
+     * '-' (it does not exist until sloth-rf.service has started once),
+     * never writable, never this unit's state or runtime directory.
+     * ReadOnlyPaths= is given on more than one line, so every line is
+     * read. */
+    int rf_ro = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (strncmp(l, "ReadOnlyPaths=", 14) == 0) {
+            if (uf_has_token(l + 14, "-/var/lib/sloth-rf")) rf_ro = 1;
+            /* Without the '-' a host with no sloth-rf fails 226/NAMESPACE. */
+            ASSERT(!uf_has_token(l + 14, "/var/lib/sloth-rf"));
+        }
+        if (strncmp(l, "ReadWritePaths=", 15) == 0)
+            ASSERT(!uf_path_under(l + 15, "/var/lib/sloth-rf"));
+        if (strncmp(l, "StateDirectory=", 15) == 0 ||
+            strncmp(l, "RuntimeDirectory=", 17) == 0)
+            ASSERT(!uf_has_token(strchr(l, '=') + 1, "sloth-rf"));
+    }
+    ASSERT(rf_ro);
+
+    /* Ordered after sloth-rf and pulling it in, as for the sensor, and
+     * nothing stronger towards either daemon: Requires=, BindsTo=,
+     * Requisite= or PartOf= would stop or refuse the UI when a daemon
+     * stops, or is not installed at all. */
+    ASSERT(uf_any_has(lines, n, "After", "sloth-rf.service"));
+    ASSERT(uf_any_has(lines, n, "Wants", "sloth-rf.service"));
+    /* Wants= starts any unit that is installed, enabled or not
+     * (systemd.unit(5): "will be started if the configuring unit is").
+     * The unit's comment and the deployment page said "where it is
+     * installed and enabled", which made `enable` look like the
+     * operator's switch when it is not (#215 review). Both now say what
+     * happens and how to keep sloth-rf off. */
+    {
+        char *raw = uf_slurp(UF_PATH_WEB_UNIT);
+        char *doc = uf_slurp(UF_PATH_WIKI);
+        ASSERT(raw != NULL);
+        ASSERT(doc != NULL);
+        if (raw && doc) {
+            ASSERT(strstr(raw, "installed and enabled") == NULL);
+            ASSERT(strstr(doc, "where it is installed and enabled") == NULL);
+            ASSERT(strstr(raw, "enabled or not") != NULL);
+            ASSERT(strstr(doc, "Starting slothweb starts sloth-rf") != NULL);
+            ASSERT(strstr(doc, "systemctl mask sloth-rf") != NULL);
+        }
+        free(raw);
+        free(doc);
+    }
+    static const char *const strong[] = { "Requires", "BindsTo", "Requisite", "PartOf" };
+    for (size_t i = 0; i < sizeof(strong) / sizeof(strong[0]); i++) {
+        if (uf_value(lines, n, strong[i]))
+            fprintf(stderr, "    slothweb unit: %s=%s\n", strong[i],
+                    uf_value(lines, n, strong[i]));
+        ASSERT(uf_value(lines, n, strong[i]) == NULL);
+    }
+    free(buf);
+}
+
+static void test_web_unit_execstart(void) {
+    char *buf = uf_slurp(UF_PATH_WEB_UNIT);
+    char *doc = uf_slurp(UF_PATH_WIKI);
+    ASSERT(buf != NULL);
+    ASSERT(doc != NULL);
+    if (!buf || !doc) { free(buf); free(doc); return; }
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    const char *start = uf_value(lines, n, "ExecStart");
+    ASSERT(start != NULL);
+    ASSERT_EQ(uf_count(lines, n, "ExecStart"), 1);
+    if (start) {
+        ASSERT(strncmp(start, "/usr/local/bin/slothweb ", 24) == 0);
+        ASSERT(strstr(start, "--socket unix:/run/sloth/sloth.sock") != NULL);
+        ASSERT(strstr(start, "--sloth-db /var/lib/sloth/sloth.db") != NULL);
+        ASSERT(strstr(start, "--store /var/lib/slothweb/slothweb.db") != NULL);
+        /* sloth-rf's socket and database (#215), at the paths
+         * sloth-rf.service fixes (test_rf_unit_execstart has the other
+         * end of each). */
+        ASSERT(strstr(start, "--rf-socket unix:/run/sloth-rf/sloth-rf.sock ") != NULL);
+        ASSERT(strstr(start, "--rf-db /var/lib/sloth-rf/sloth-rf.db ") != NULL);
+        ASSERT(uf_has_token(start, "$SLOTHWEB_ARGS"));
+        /* "Follow recommended" from the copy make install puts there
+         * (test_makefile_install_targets), so a deployed slothweb is
+         * not "no recommendation yet" everywhere. */
+        ASSERT(strstr(start, "--web-assessments /usr/local/share/sloth/alert-assessments ") != NULL);
+        /* Loopback unless the site's file says otherwise: the unit
+         * itself never widens the bind or the peer list. */
+        ASSERT(!uf_has_token(start, "--web-bind"));
+        ASSERT(!uf_has_token(start, "--web-allow-remote"));
+        ASSERT(!uf_has_token(start, "--web-allow"));
+        ASSERT(!uf_has_token(start, "--web-allow-sql"));
+        /* The deployment page names every flag the unit runs with. */
+        static const char *const flags[] = { "--socket", "--sloth-db", "--store",
+                                             "--web-assessments",
+                                             "--rf-socket", "--rf-db" };
+        for (size_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++) {
+            if (!uf_doc_names_flag(doc, flags[i]))
+                fprintf(stderr, "    %s does not name slothweb flag %s\n",
+                        UF_PATH_WIKI, flags[i]);
+            ASSERT(uf_doc_names_flag(doc, flags[i]));
+        }
+    }
+    ASSERT(strstr(doc, "slothweb.service") != NULL);
+    ASSERT(strstr(doc, "--data-socket-unix") != NULL);
+    ASSERT(strstr(doc, "--with-slothweb") != NULL);
+    free(buf);
+    free(doc);
+}
+
+/* An IPv4 literal at p (four dotted octets, not inside a longer token):
+ * its length, or 0. */
+static size_t uf_ipv4_at(const char *p, unsigned char o[4]) {
+    const char *q = p;
+    for (int k = 0; k < 4; k++) {
+        if (!isdigit((unsigned char)*q)) return 0;
+        unsigned v = 0;
+        int d = 0;
+        while (isdigit((unsigned char)*q) && d < 4) { v = v * 10 + (unsigned)(*q - '0'); q++; d++; }
+        if (v > 255 || d > 3) return 0;
+        o[k] = (unsigned char)v;
+        if (k < 3) { if (*q != '.') return 0; q++; }
+    }
+    if (isdigit((unsigned char)*q) || *q == '.') return 0;
+    return (size_t)(q - p);
+}
+
+static void test_web_defaults_file(void) {
+    char *buf = uf_slurp(UF_PATH_WEB_DEFAULTS);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *copy = strdup(buf);
+    ASSERT(copy != NULL);
+    int args = 0, live_remote = 0, ex_remote = 0, ex_allow32 = 0;
+    if (copy) {
+        for (char *l = strtok(copy, "\n"); l; l = strtok(NULL, "\n")) {
+            while (*l == ' ' || *l == '\t') l++;
+            if (*l == '#') {
+                if (strstr(l, "--web-allow-remote")) ex_remote++;
+                if (strstr(l, "--web-allow ") && strstr(l, "/32")) ex_allow32++;
+                continue;
+            }
+            if (*l == '\0') continue;
+            ASSERT(strchr(l, '=') != NULL);
+            ASSERT(strncmp(l, "export ", 7) != 0);
+            ASSERT(strstr(l, "$(") == NULL);
+            ASSERT(strchr(l, '`') == NULL);
+            ASSERT(strchr(l, '"') == NULL);
+            if (strncmp(l, "SLOTHWEB_ARGS=", 14) == 0) {
+                args++;
+                /* Shipped empty: loopback, 127.0.0.1:8770. */
+                ASSERT_STR(l + 14, "");
+            }
+            if (strstr(l, "--web-allow-remote")) live_remote++;
+        }
+        free(copy);
+    }
+    ASSERT_EQ(args, 1);
+    ASSERT_EQ(live_remote, 0);
+    /* The Tailscale recipe is there, commented, with a single /32. */
+    ASSERT_GT(ex_remote, 0);
+    ASSERT_GT(ex_allow32, 0);
+    /* No real host's address: every IPv4 literal is loopback or one of
+     * the placeholders in 100.64.0.0/24. Structural, so the test does
+     * not have to name the addresses it keeps out. */
+    for (const char *p = buf; *p; p++) {
+        if (p > buf && (isdigit((unsigned char)p[-1]) || p[-1] == '.')) continue;
+        unsigned char o[4];
+        size_t k = uf_ipv4_at(p, o);
+        if (!k) continue;
+        int ok = (o[0] == 127) ||
+                 (o[0] == 100 && o[1] == 64 && o[2] == 0) ||
+                 (o[0] == 0 && o[1] == 0 && o[2] == 0 && o[3] == 0);
+        if (!ok)
+            fprintf(stderr, "    %s: %u.%u.%u.%u is not a placeholder\n",
+                    UF_PATH_WEB_DEFAULTS, o[0], o[1], o[2], o[3]);
+        ASSERT(ok);
+        p += k - 1;
+    }
+    free(buf);
+}
+
+static void test_scanner_ipv4_literal(void) {
+    unsigned char o[4];
+    ASSERT_EQ(uf_ipv4_at("100.64.0.10:8770", o), 11);
+    ASSERT(o[0] == 100 && o[1] == 64 && o[2] == 0 && o[3] == 10);
+    ASSERT_EQ(uf_ipv4_at("10.1.2", o), 0);
+    ASSERT_EQ(uf_ipv4_at("1.2.3.4.5", o), 0);
+    ASSERT_EQ(uf_ipv4_at("256.1.1.1", o), 0);
+    ASSERT_EQ(uf_ipv4_at("v1.2.3.4", o), 0);
+}
+
 /* ── the Makefile side ── */
 
 static int uf_is_recipe(const char *line) { return line[0] == '\t'; }
@@ -592,6 +1005,460 @@ static int uf_is_recipe(const char *line) { return line[0] == '\t'; }
  * module; size its scan independently so this test cannot go red for a
  * reason unrelated to the install targets. */
 #define UF_MAX_MAKE_LINES 4096
+
+/* ── sloth-ble-scan.service ──
+ *
+ * The passive-scan holder for --bt-monitor. What has to stay true: it
+ * holds CAP_NET_ADMIN and nothing else, reaches AF_BLUETOOTH and
+ * nothing else, displaces bluetoothd rather than fighting it, runs
+ * inside its sandbox including the step that brings hciN down, lives
+ * and dies with the sensor without the sensor depending on it, and is
+ * installed but never enabled by make. Each absence below was seen red
+ * under a one-line mutation (docs/wiki/log.md, the 2026-10-26
+ * sloth-ble-scan entry, names them). */
+
+/* Any directive `key=` carrying `tok` — After= and kin may be given on
+ * several lines, and uf_value() reads only the first. */
+static int uf_any_has(char *lines[], int n, const char *key, const char *tok) {
+    size_t k = strlen(key);
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (!uf_is_directive(l)) continue;
+        if (strncmp(l, key, k) == 0 && l[k] == '=' && uf_has_token(l + k + 1, tok))
+            return 1;
+    }
+    return 0;
+}
+
+static void test_scanner_any_has_reads_every_line(void) {
+    char src[] = "[Unit]\nAfter=a.service\nAfter=b.service c.service\n"
+                 "# After=d.service\nAfterX=e.service\n";
+    char *lines[16];
+    int n = uf_logical_lines(src, lines, 16);
+    ASSERT(uf_any_has(lines, n, "After", "a.service"));
+    ASSERT(uf_any_has(lines, n, "After", "c.service"));
+    ASSERT(!uf_any_has(lines, n, "After", "d.service"));
+    ASSERT(!uf_any_has(lines, n, "After", "e.service"));
+    ASSERT(!uf_any_has(lines, n, "Before", "a.service"));
+}
+
+static void test_ble_scan_unit_privilege(void) {
+    char *buf = uf_slurp(UF_PATH_BLE_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    ASSERT(strstr(buf, "/home/") == NULL);
+    ASSERT(strstr(buf, "ConditionPathExists=") == NULL);
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    ASSERT_GT(n, 0);
+    ASSERT_LT(n, UF_MAX_LINES);
+
+    /* A transient uid, not the sloth account that owns the sensor's
+     * data. Given once; no User= that could name a real account. */
+    ASSERT_STR(uf_req(lines, n, "DynamicUser"), "yes");
+    ASSERT_EQ(uf_count(lines, n, "DynamicUser"), 1);
+    ASSERT(uf_value(lines, n, "User") == NULL);
+
+    /* Exactly CAP_NET_ADMIN: the kernel's check for HCI_CHANNEL_USER and
+     * HCIDEVDOWN. Not CAP_NET_RAW — that is the monitor channel's, and
+     * the monitor channel is sloth's. */
+    static const char *const allow[] = { "CAP_NET_ADMIN" };
+    const char *bound = uf_value(lines, n, "CapabilityBoundingSet");
+    const char *amb   = uf_value(lines, n, "AmbientCapabilities");
+    if (!uf_tokens_within(bound, allow, 1))
+        fprintf(stderr, "    ble-scan unit: CapabilityBoundingSet=%s, want CAP_NET_ADMIN\n",
+                bound ? bound : "(absent)");
+    ASSERT(uf_tokens_within(bound, allow, 1));
+    ASSERT(uf_tokens_within(amb, allow, 1));
+    ASSERT(uf_has_token(bound, "CAP_NET_ADMIN"));
+    ASSERT(uf_has_token(amb, "CAP_NET_ADMIN"));
+    ASSERT_EQ(uf_count(lines, n, "CapabilityBoundingSet"), 1);
+    ASSERT_EQ(uf_count(lines, n, "AmbientCapabilities"), 1);
+    ASSERT_STR(uf_req(lines, n, "NoNewPrivileges"), "true");
+    /* Single-value keys: systemd applies the last assignment, so a
+     * second line would override the first one this reads. */
+    ASSERT_EQ(uf_count(lines, n, "NoNewPrivileges"), 1);
+
+    /* No account or group membership, and nothing writable: the
+     * transient uid is the whole identity and the helper writes no
+     * file. */
+    static const char *const absent[] = {
+        "Group", "SupplementaryGroups", "ReadWritePaths", "BindPaths",
+        "StateDirectory", "RuntimeDirectory", "LogsDirectory",
+        "CacheDirectory", "ConfigurationDirectory"
+    };
+    for (size_t i = 0; i < sizeof(absent) / sizeof(absent[0]); i++) {
+        if (uf_count(lines, n, absent[i]) != 0)
+            fprintf(stderr, "    ble-scan unit: %s= present\n", absent[i]);
+        ASSERT_EQ(uf_count(lines, n, absent[i]), 0);
+    }
+
+    /* Only the two Exec lines below. Any other Exec key runs a command
+     * too, and with a `+` or `!` prefix it runs outside the sandbox with
+     * full privilege — what the prefix check on ExecStartPre exists to
+     * stop. */
+    static const char *const no_exec[] = {
+        "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload",
+        "ExecCondition"
+    };
+    for (size_t i = 0; i < sizeof(no_exec) / sizeof(no_exec[0]); i++) {
+        if (uf_count(lines, n, no_exec[i]) != 0)
+            fprintf(stderr, "    ble-scan unit: %s= present\n", no_exec[i]);
+        ASSERT_EQ(uf_count(lines, n, no_exec[i]), 0);
+    }
+
+    /* The installed helper, inside the sandbox, both steps: no `+`,
+     * `!` or `-` prefix on either. */
+    const char *start = uf_value(lines, n, "ExecStart");
+    const char *pre   = uf_value(lines, n, "ExecStartPre");
+    ASSERT(start != NULL && strncmp(start, "/usr/local/sbin/sloth-ble-scan ", 31) == 0);
+    ASSERT(pre != NULL && strncmp(pre, "/usr/local/sbin/sloth-ble-scan --down ", 38) == 0);
+    ASSERT_EQ(uf_count(lines, n, "ExecStart"), 1);
+    ASSERT_EQ(uf_count(lines, n, "ExecStartPre"), 1);
+    free(buf);
+}
+
+static void test_ble_scan_unit_sandbox(void) {
+    char *buf = uf_slurp(UF_PATH_BLE_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+
+    static const struct { const char *key, *val; } want[] = {
+        { "ProtectSystem",            "strict"    },
+        { "ProtectHome",              "true"      },
+        { "PrivateTmp",               "true"      },
+        { "PrivateDevices",           "true"      },
+        { "ProtectKernelTunables",    "true"      },
+        { "ProtectKernelModules",     "true"      },
+        { "ProtectKernelLogs",        "true"      },
+        { "ProtectControlGroups",     "true"      },
+        { "ProtectClock",             "true"      },
+        { "ProtectHostname",          "true"      },
+        { "ProtectProc",              "invisible" },
+        { "RestrictNamespaces",       "true"      },
+        { "RestrictRealtime",         "true"      },
+        { "RestrictSUIDSGID",         "true"      },
+        { "LockPersonality",          "true"      },
+        { "MemoryDenyWriteExecute",   "true"      },
+        { "SystemCallArchitectures",  "native"    },
+        { "SystemCallErrorNumber",    "EPERM"     },
+        { "MemoryMax",                "16M"       },
+        { "Restart",                  "on-failure" },
+        { "KillSignal",               "SIGTERM"   },
+    };
+    for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+        const char *v = uf_value(lines, n, want[i].key);
+        if (!v || strcmp(v, want[i].val) != 0)
+            fprintf(stderr, "    ble-scan unit: %s=%s wanted, got %s\n",
+                    want[i].key, want[i].val, v ? v : "(absent)");
+        ASSERT(v != NULL && strcmp(v, want[i].val) == 0);
+        /* Read once and given once: systemd applies the last of a
+         * single-value key, so `ProtectSystem=false` appended below
+         * would win over the line read above. */
+        if (uf_count(lines, n, want[i].key) != 1)
+            fprintf(stderr, "    ble-scan unit: %s= given %d times\n",
+                    want[i].key, uf_count(lines, n, want[i].key));
+        ASSERT_EQ(uf_count(lines, n, want[i].key), 1);
+    }
+
+    /* AF_BLUETOOTH and nothing else, given once. */
+    static const char *const fams[] = { "AF_BLUETOOTH" };
+    const char *fam = uf_value(lines, n, "RestrictAddressFamilies");
+    if (!uf_tokens_within(fam, fams, 1))
+        fprintf(stderr, "    ble-scan unit: RestrictAddressFamilies=%s, want AF_BLUETOOTH\n",
+                fam ? fam : "(absent)");
+    ASSERT(uf_tokens_within(fam, fams, 1));
+    ASSERT_EQ(uf_count(lines, n, "RestrictAddressFamilies"), 1);
+
+    /* Either would break it rather than harden it: AF_BLUETOOTH exists
+     * only in the initial network namespace, and a capability held in a
+     * private user namespace does not pass the kernel's check. */
+    ASSERT(uf_value(lines, n, "PrivateNetwork") == NULL);
+    ASSERT(uf_value(lines, n, "PrivateUsers") == NULL);
+
+    /* The two filter lines and no others. An empty `SystemCallFilter=`
+     * resets every line before it, so it is refused wherever it sits. */
+    int allow_seen = 0, deny_seen = 0, empty = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (strncmp(l, "SystemCallFilter=", 17) != 0) continue;
+        const char *v = l + 17;
+        while (*v == ' ' || *v == '\t') v++;
+        if (!*v) empty = 1;
+        if (uf_has_token(l + 17, "@system-service")) allow_seen = 1;
+        if (uf_has_token(l + 17, "~@privileged")) deny_seen = 1;
+    }
+    ASSERT(allow_seen);
+    ASSERT(deny_seen);
+    ASSERT(!empty);
+    ASSERT_EQ(uf_count(lines, n, "SystemCallFilter"), 2);
+    free(buf);
+}
+
+/* [Service] is an allow-list, like [Install]: the checks above pin the
+ * keys they know, and a key nobody thought to refuse — `DeviceAllow=
+ * /dev/mem rw`, `LD_PRELOAD` through Environment=, a `BindPaths=` this
+ * test does not list — would otherwise pass every one of them. A new
+ * key is added here deliberately, with the reason it is safe. */
+static void test_ble_scan_unit_service_keys_are_allow_listed(void) {
+    char *buf = uf_slurp(UF_PATH_BLE_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    static const char *const keys[] = {
+        "Type", "DynamicUser", "Environment", "ExecStartPre", "ExecStart",
+        "AmbientCapabilities", "CapabilityBoundingSet", "NoNewPrivileges",
+        "ProtectSystem", "ProtectHome", "PrivateTmp", "PrivateDevices",
+        "ProtectKernelTunables", "ProtectKernelModules", "ProtectKernelLogs",
+        "ProtectControlGroups", "ProtectClock", "ProtectHostname",
+        "ProtectProc", "ProcSubset", "UMask", "RestrictAddressFamilies",
+        "IPAddressDeny", "RestrictNamespaces", "RestrictRealtime",
+        "RestrictSUIDSGID", "LockPersonality", "MemoryDenyWriteExecute",
+        "SystemCallArchitectures", "SystemCallFilter",
+        "SystemCallErrorNumber", "MemoryMax", "TasksMax", "KillSignal",
+        "TimeoutStopSec", "Restart", "RestartSec", "RestartPreventExitStatus"
+    };
+    int in_service = 0, seen = 0, unknown = 0, env = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (*l == '[') { in_service = strncmp(l, "[Service]", 9) == 0; continue; }
+        if (!in_service || !uf_is_directive(l)) continue;
+        seen++;
+        size_t k = (size_t)(strchr(l, '=') - l);
+        int ok = 0;
+        for (size_t j = 0; j < sizeof(keys) / sizeof(keys[0]); j++)
+            if (strlen(keys[j]) == k && strncmp(l, keys[j], k) == 0) ok = 1;
+        if (!ok) {
+            fprintf(stderr, "    ble-scan unit: [Service] key not allowed: %s\n", l);
+            unknown++;
+        }
+        /* The one variable is the controller's name. Anything else in
+         * the helper's environment (LD_PRELOAD, LD_LIBRARY_PATH) runs
+         * code inside the CAP_NET_ADMIN process before main(). */
+        if (strncmp(l, "Environment=", 12) == 0) {
+            env++;
+            const char *v = l + 12;
+            if (strncmp(v, "SLOTH_BLE_HCI=", 14) != 0 || strchr(v, ' ') || strchr(v, '\t')) {
+                fprintf(stderr, "    ble-scan unit: %s\n", l);
+                unknown++;
+            }
+        }
+    }
+    ASSERT_GT(seen, 0);
+    ASSERT_EQ(unknown, 0);
+    ASSERT_EQ(env, 1);
+    free(buf);
+}
+
+static void test_ble_scan_unit_relationships(void) {
+    char *buf = uf_slurp(UF_PATH_BLE_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+
+    /* bluetoothd holds the controller; the user channel is refused while
+     * it does. */
+    ASSERT(uf_any_has(lines, n, "Conflicts", "bluetooth.service"));
+    /* After the sensor, so sloth sees the Reset and the parameters;
+     * PartOf it, so it lives as long as the sensor; pulled in by the
+     * sensor once enabled. */
+    ASSERT(uf_any_has(lines, n, "After", "sloth-sensor.service"));
+    ASSERT(uf_any_has(lines, n, "PartOf", "sloth-sensor.service"));
+    ASSERT(uf_any_has(lines, n, "WantedBy", "sloth-sensor.service"));
+    /* Not started on its own — at boot, or with bluetooth.target, or
+     * by anything but the sensor — and never ordered before the sensor.
+     * [Install] is an allow-list: every WantedBy= line names only the
+     * sensor, and nothing else installs a link to the unit. */
+    static const char *const by[] = { "sloth-sensor.service" };
+    int wb = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (!uf_is_directive(l) || strncmp(l, "WantedBy=", 9) != 0) continue;
+        wb++;
+        if (!uf_tokens_within(l + 9, by, 1))
+            fprintf(stderr, "    ble-scan unit: %s\n", l);
+        ASSERT(uf_tokens_within(l + 9, by, 1));
+    }
+    ASSERT_GE(wb, 1);
+    static const char *const no_install[] = {
+        "RequiredBy", "UpheldBy", "Alias", "Also", "DefaultInstance"
+    };
+    for (size_t i = 0; i < sizeof(no_install) / sizeof(no_install[0]); i++) {
+        if (uf_count(lines, n, no_install[i]) != 0)
+            fprintf(stderr, "    ble-scan unit: %s= present\n", no_install[i]);
+        ASSERT_EQ(uf_count(lines, n, no_install[i]), 0);
+    }
+    ASSERT(!uf_any_has(lines, n, "Before", "sloth-sensor.service"));
+    free(buf);
+
+    /* The sensor must start without it: nothing in the sensor's unit
+     * requires, binds to or waits on the scan. */
+    char *sb = uf_slurp(UF_PATH_UNIT);
+    ASSERT(sb != NULL);
+    if (!sb) return;
+    char *sl[UF_MAX_LINES];
+    int sn = uf_logical_lines(sb, sl, UF_MAX_LINES);
+    static const char *const deps[] = {
+        "Requires", "Requisite", "BindsTo", "Wants", "After", "Upholds"
+    };
+    for (size_t i = 0; i < sizeof(deps) / sizeof(deps[0]); i++) {
+        if (uf_any_has(sl, sn, deps[i], "sloth-ble-scan.service"))
+            fprintf(stderr, "    sensor unit: %s=sloth-ble-scan.service\n", deps[i]);
+        ASSERT(!uf_any_has(sl, sn, deps[i], "sloth-ble-scan.service"));
+    }
+    free(sb);
+}
+
+/* The opt-in drop-in that gives the sensor AF_BLUETOOTH for
+ * --bt-monitor: one [Service] directive, the family and nothing else —
+ * not a deny list (`~`), not a reset (empty), not any other key. */
+static void test_sensor_bt_monitor_dropin(void) {
+    char *buf = uf_slurp(UF_PATH_BT_DROPIN);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    int directives = 0, sections = 0, service = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (*l == '[') {
+            sections++;
+            if (strcmp(l, "[Service]") == 0) service = 1;
+        }
+        if (uf_is_directive(l)) directives++;
+    }
+    ASSERT_EQ(sections, 1);
+    ASSERT(service);
+    ASSERT_EQ(directives, 1);
+    const char *fam = uf_value(lines, n, "RestrictAddressFamilies");
+    ASSERT(fam != NULL && strcmp(fam, "AF_BLUETOOTH") == 0);
+    free(buf);
+}
+
+/* make installs the helper and the unit, and enables nothing: taking
+ * the controller from bluetoothd is the operator's decision. Recipe
+ * lines only; the closing @echo hints may name systemctl. */
+static void test_makefile_installs_ble_scan_without_enabling(void) {
+    char *buf = uf_slurp("Makefile");
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    static char *lines[UF_MAX_MAKE_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_MAKE_LINES);
+    int in_install = 0, in_service = 0, bin = 0, unit = 0, enables = 0;
+    int dropin = 0, active_dropin = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        if (!uf_is_recipe(l)) {
+            in_install = strncmp(l, "install:", 8) == 0;
+            in_service = strncmp(l, "install-service:", 16) == 0;
+            if (in_install) ASSERT(strstr(l, "$(BLE_SCAN_BIN)") != NULL);
+            continue;
+        }
+        if (in_install && strstr(l, "install -m 755 sloth-ble-scan ") &&
+            strstr(l, "[ -z \"$(BLE_SCAN_BIN)\" ] ||") &&
+            strstr(l, "$(DESTDIR)$(PREFIX)/sbin/sloth-ble-scan")) bin = 1;
+        if (in_service && strstr(l, "packaging/systemd/sloth-ble-scan.service")) unit = 1;
+        /* The sensor's AF_BLUETOOTH drop-in goes to share/sloth, inert;
+         * placed in sloth-sensor.service.d/ it would give every sensor
+         * the family. */
+        if (in_service && strstr(l, "sloth-sensor.service.d/bt-monitor.conf") &&
+            strstr(l, "$(DESTDIR)$(PREFIX)/share/sloth/sloth-sensor-bt-monitor.conf"))
+            dropin = 1;
+        if ((in_install || in_service) && strstr(l, ".service.d")) {
+            const char *u = strstr(l, "$(UNITDIR)");
+            if (u && strstr(u, ".service.d")) {
+                fprintf(stderr, "    Makefile installs a drop-in into the unit dir: %s\n", l);
+                active_dropin = 1;
+            }
+        }
+        if ((in_install || in_service) && strncmp(l, "\t@echo", 6) != 0 &&
+            strstr(l, "systemctl")) {
+            fprintf(stderr, "    Makefile install recipe runs systemctl: %s\n", l);
+            enables = 1;
+        }
+    }
+    ASSERT(bin);
+    ASSERT(unit);
+    ASSERT(!enables);
+    ASSERT(dropin);
+    ASSERT(!active_dropin);
+    free(buf);
+}
+
+/* --gps's drop-in (2026-10-27) is inert as shipped: every directive is
+ * commented, so a copy nobody edited changes nothing, and the two blocks
+ * the operator chooses between say what they claim — the serial block
+ * keeps the device allow-list closed and read-only, the gpsd block adds
+ * only the IP families. make installs it to share/sloth, never to the
+ * unit directory (test_makefile_installs_ble_scan_without_enabling
+ * already fails on any .service.d install into $(UNITDIR)). Seen red
+ * with `#` removed from the serial block's `#[Service]`.
+ *
+ * Each directive is checked in its own block, not just somewhere in the
+ * file: the fail-closed property is PrivateDevices=false travelling
+ * WITH DevicePolicy=closed and the read-only DeviceAllow, so an edit
+ * that moved DevicePolicy into the gpsd block would leave an operator
+ * who uncomments the serial block with the host's whole /dev. Seen red
+ * with `#DevicePolicy=closed` moved below the gpsd block's `#[Service]`,
+ * and with `#RestrictAddressFamilies=...` moved into the serial block. */
+static void test_gps_dropin_is_inert_and_scoped(void) {
+    char *buf = uf_slurp("packaging/systemd/sloth-sensor.service.d/gps.conf");
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    /* [0] preamble, [1] serial block, [2] gpsd block. */
+    int live = 0, blk = 0, headings = 0;
+    int pd[3] = {0}, policy[3] = {0}, allow_r[3] = {0}, groups[3] = {0}, fam[3] = {0};
+    for (char *l = strtok(buf, "\n"); l; l = strtok(NULL, "\n")) {
+        if (l[0] != '#' && l[0] != '\0') {
+            fprintf(stderr, "    gps.conf has a live line: %s\n", l);
+            live++;
+        }
+        if (!strncmp(l, "# \xe2\x94\x80\xe2\x94\x80 Serial NMEA", 17)) { blk = 1; headings++; }
+        if (!strncmp(l, "# \xe2\x94\x80\xe2\x94\x80 gpsd over TCP", 19)) { blk = 2; headings++; }
+        if (!strcmp(l, "#PrivateDevices=false")) pd[blk]++;
+        if (!strcmp(l, "#DevicePolicy=closed")) policy[blk]++;
+        if (!strncmp(l, "#DeviceAllow=", 13)) {
+            if (!strncmp(l, "#DeviceAllow=/dev/tty", 21) &&
+                !strcmp(l + strlen(l) - 2, " r"))
+                allow_r[blk]++;
+            else
+                allow_r[blk] += 100;   /* any other DeviceAllow is wrong */
+        }
+        if (!strcmp(l, "#SupplementaryGroups=dialout")) groups[blk]++;
+        if (!strncmp(l, "#RestrictAddressFamilies=", 25)) {
+            if (!strcmp(l, "#RestrictAddressFamilies=AF_INET AF_INET6")) fam[blk]++;
+            else fam[blk] += 100;
+        }
+    }
+    ASSERT_EQ(live, 0);
+    ASSERT_EQ(headings, 2);
+    for (int b = 0; b < 3; b++) {
+        /* serial: the device directives once each, no families */
+        ASSERT_EQ(pd[b], b == 1);
+        ASSERT_EQ(policy[b], b == 1);
+        ASSERT_EQ(allow_r[b], b == 1);
+        ASSERT_EQ(groups[b], b == 1);
+        /* gpsd: the families once, nothing about devices */
+        ASSERT_EQ(fam[b], b == 2);
+    }
+    free(buf);
+
+    char *mk = uf_slurp("Makefile");
+    ASSERT(mk != NULL);
+    if (!mk) return;
+    ASSERT(strstr(mk, "packaging/systemd/sloth-sensor.service.d/gps.conf \\\n"
+                      "\t    $(DESTDIR)$(PREFIX)/share/sloth/sloth-sensor-gps.conf") != NULL);
+    free(mk);
+}
 
 static void test_makefile_install_targets(void) {
     char *buf = uf_slurp("Makefile");
@@ -602,8 +1469,10 @@ static void test_makefile_install_targets(void) {
     ASSERT_LT(n, UF_MAX_MAKE_LINES);
 
     int in_install = 0, in_service = 0;
-    int inst_bin = 0, inst_helper = 0, inst_db = 0;
-    int svc_unit = 0, svc_sysusers = 0, svc_defaults_b = 0;
+    int inst_bin = 0, inst_helper = 0, inst_db = 0, inst_web = 0;
+    int inst_web_fresh = 0, inst_assess_dir = 0, inst_assess = 0;
+    int svc_unit = 0, svc_sysusers = 0, svc_defaults_nc = 0, svc_defaults_b = 0;
+    int svc_web_unit = 0, svc_web_defaults_nc = 0, svc_web_defaults_b = 0;
     int recipes_seen = 0;
     for (int i = 0; i < n; i++) {
         const char *l = lines[i];
@@ -627,11 +1496,40 @@ static void test_makefile_install_targets(void) {
             if (strstr(l, "$(TARGET)") && strstr(l, "/bin/")) inst_bin = 1;
             if (strstr(l, "packaging/bin/sloth-monitor-up") && strstr(l, "/sbin/")) inst_helper = 1;
             if (strstr(l, "research.db") && strstr(l, "/share/sloth/")) inst_db = 1;
+            if (strstr(l, "install -m 755 slothweb ") && strstr(l, "/bin/slothweb")) inst_web = 1;
+            /* An old ./slothweb is refused, not installed beside a new
+             * unit and UI: its sources and the Makefile are its inputs. */
+            if (strstr(l, "find web/src web/ui ") && strstr(l, " -newer slothweb") &&
+                strstr(l, "exit 1")) inst_web_fresh = 1;
+            /* The assessments slothweb.service names with
+             * --web-assessments: their directory, and the type files
+             * into it, read-only data, the generated index left out. */
+            if (strstr(l, "install -d ") &&
+                strstr(l, "$(DESTDIR)$(PREFIX)/share/sloth/alert-assessments")) inst_assess_dir = 1;
+            if (strstr(l, "install -m 644 ") && strstr(l, "docs/wiki/alert-assessments/*.md") &&
+                strstr(l, "filter-out %/README.md") &&
+                strstr(l, "$(DESTDIR)$(PREFIX)/share/sloth/alert-assessments/")) inst_assess = 1;
         }
         if (in_service) {
             if (strstr(l, "sloth-sensor.service")) svc_unit = 1;
             if (strstr(l, "sloth.sysusers.conf")) svc_sysusers = 1;
-            if (strstr(l, "install -b") && strstr(l, "packaging/default/sloth")) svc_defaults_b = 1;
+            /* No-clobber, like slothweb's below: /etc/default/sloth is
+             * the site's SLOTH_ARGS, and `install -b` replaced it with
+             * the stock file (the edit survived only as sloth~). */
+            if (strstr(l, "packaging/default/sloth ")) {
+                if (strstr(l, "[ -e $(DESTDIR)$(DEFAULTDIR)/sloth ] ||"))
+                    svc_defaults_nc = 1;
+                if (strstr(l, "install -b")) svc_defaults_b = 1;
+            }
+            if (strstr(l, "packaging/systemd/slothweb.service")) svc_web_unit = 1;
+            /* No-clobber: installed only behind a test that none is
+             * there, and never with a backup that would let make
+             * replace an operator's bind and peers. */
+            if (strstr(l, "packaging/default/slothweb")) {
+                if (strstr(l, "[ -e $(DESTDIR)$(DEFAULTDIR)/slothweb ] ||"))
+                    svc_web_defaults_nc = 1;
+                if (strstr(l, "install -b")) svc_web_defaults_b = 1;
+            }
         }
     }
     ASSERT_GT(recipes_seen, 0);
@@ -639,11 +1537,481 @@ static void test_makefile_install_targets(void) {
     ASSERT(inst_bin);
     ASSERT(inst_helper);
     ASSERT(inst_db);
-    /* `install-service`: the unit, the account declaration, and the
-     * defaults file installed with a backup, never over an edit. */
+    ASSERT(inst_web);
+    ASSERT(inst_web_fresh);
+    ASSERT(inst_assess_dir);
+    ASSERT(inst_assess);
+    /* `install-service`: the unit, the account declaration, and each
+     * defaults file only where there is none, never over an edit. */
     ASSERT(svc_unit);
     ASSERT(svc_sysusers);
-    ASSERT(svc_defaults_b);
+    ASSERT(svc_defaults_nc);
+    ASSERT(!svc_defaults_b);
+    ASSERT(svc_web_unit);
+    ASSERT(svc_web_defaults_nc);
+    ASSERT(!svc_web_defaults_b);
+    free(buf);
+}
+
+/* ── sloth-rf.service (#215, ADR 0010) ──
+ *
+ * The RF decoders' daemon. What has to stay true: it is the sloth
+ * account (slothweb reads its socket and database) with no capability
+ * at all, since it opens no capture; it is tied to no network device
+ * and has no monitor-mode helper; its runtime and state directories are
+ * its own, because systemd removes a unit's RuntimeDirectory= when the
+ * unit stops and a shared /run/sloth would take the Wi-Fi sensor's
+ * socket with it; it reaches AF_UNIX and nothing else until the
+ * operator's drop-in says otherwise; and it names no other sloth unit,
+ * so neither daemon needs the other. Each absence below was seen red
+ * under a one-line mutation of the unit (docs/wiki/log.md, the #215
+ * entry, names them). */
+
+static void test_rf_unit_runs_as_sloth_with_no_capabilities(void) {
+    char *buf = uf_slurp(UF_PATH_RF_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    /* Raw scans, comments included, before uf_logical_lines() cuts buf. */
+    ASSERT(strstr(buf, "/home/") == NULL);
+    ASSERT(strstr(buf, "CAP_") == NULL);
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    ASSERT_GT(n, 0);
+    ASSERT_LT(n, UF_MAX_LINES);
+
+    ASSERT_EQ(uf_count(lines, n, "User"), 1);
+    ASSERT_STR(uf_req(lines, n, "User"), "sloth");
+    ASSERT_EQ(uf_count(lines, n, "Group"), 1);
+    ASSERT_STR(uf_req(lines, n, "Group"), "sloth");
+    ASSERT(uf_value(lines, n, "DynamicUser") == NULL);
+    /* Reading another service's files is the file's group, decided on
+     * the host in a drop-in; the shipped unit joins none. */
+    ASSERT(uf_value(lines, n, "SupplementaryGroups") == NULL);
+
+    /* Present and empty: an absent CapabilityBoundingSet= is the full
+     * set, not none. Given once, since a second line merges in. */
+    const char *bound = uf_value(lines, n, "CapabilityBoundingSet");
+    const char *amb   = uf_value(lines, n, "AmbientCapabilities");
+    if (bound && bound[0])
+        fprintf(stderr, "    sloth-rf unit: CapabilityBoundingSet=%s, want empty\n", bound);
+    if (amb && amb[0])
+        fprintf(stderr, "    sloth-rf unit: AmbientCapabilities=%s, want empty\n", amb);
+    ASSERT(bound != NULL && bound[0] == '\0');
+    ASSERT(amb != NULL && amb[0] == '\0');
+    ASSERT_EQ(uf_count(lines, n, "CapabilityBoundingSet"), 1);
+    ASSERT_EQ(uf_count(lines, n, "AmbientCapabilities"), 1);
+    ASSERT_STR(uf_req(lines, n, "NoNewPrivileges"), "true");
+    free(buf);
+}
+
+static void test_rf_unit_is_bound_to_nothing(void) {
+    char *buf = uf_slurp(UF_PATH_RF_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+
+    /* No radio: nothing waits for, or dies with, a network device, and
+     * nothing runs before the daemon as root. No other unit either:
+     * [Unit] carries no dependency or ordering key at all, so neither
+     * daemon needs the other and slothweb is not this unit's concern. */
+    static const char *const none[] = {
+        "BindsTo", "Requires", "Requisite", "PartOf", "Wants", "After",
+        "Before", "Upholds", "Conflicts", "ExecStartPre", "ExecStartPost",
+    };
+    for (size_t i = 0; i < sizeof(none) / sizeof(none[0]); i++) {
+        if (uf_value(lines, n, none[i]))
+            fprintf(stderr, "    sloth-rf unit: %s=%s\n", none[i],
+                    uf_value(lines, n, none[i]));
+        ASSERT(uf_value(lines, n, none[i]) == NULL);
+    }
+    /* On directives only: the comments say what the unit is not. */
+    int directives = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (!uf_is_directive(l)) continue;
+        directives++;
+        if (strstr(l, ".device") || strstr(l, "sys-subsystem-net") ||
+            strstr(l, "SLOTH_IFACE") || strstr(l, "sloth-monitor-up") ||
+            strstr(l, "sloth-sensor") || strstr(l, "slothweb"))
+            fprintf(stderr, "    sloth-rf unit: %s\n", l);
+        ASSERT(strstr(l, ".device") == NULL);
+        ASSERT(strstr(l, "sys-subsystem-net") == NULL);
+        ASSERT(strstr(l, "SLOTH_IFACE") == NULL);
+        ASSERT(strstr(l, "sloth-monitor-up") == NULL);
+        ASSERT(strstr(l, "sloth-sensor") == NULL);
+        ASSERT(strstr(l, "slothweb") == NULL);
+    }
+    ASSERT_GT(directives, 30);
+    /* Started at boot once the operator enables it, by nothing else. */
+    ASSERT_EQ(uf_count(lines, n, "WantedBy"), 1);
+    ASSERT_STR(uf_req(lines, n, "WantedBy"), "multi-user.target");
+    free(buf);
+}
+
+static void test_rf_unit_sandbox(void) {
+    char *buf = uf_slurp(UF_PATH_RF_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+
+    /* The sensor's list (test_unit_sandbox_keys_present), key for key;
+     * what differs is the identity of the directories and Restart=. */
+    static const struct { const char *key, *val; } want[] = {
+        { "ProtectSystem",            "strict"    },
+        { "ProtectHome",              "true"      },
+        { "PrivateTmp",               "true"      },
+        { "PrivateDevices",           "true"      },
+        { "ProtectKernelTunables",    "true"      },
+        { "ProtectKernelModules",     "true"      },
+        { "ProtectKernelLogs",        "true"      },
+        { "ProtectControlGroups",     "true"      },
+        { "ProtectClock",             "true"      },
+        { "ProtectHostname",          "true"      },
+        { "ProtectProc",              "invisible" },
+        { "RestrictNamespaces",       "true"      },
+        { "RestrictRealtime",         "true"      },
+        { "RestrictSUIDSGID",         "true"      },
+        { "LockPersonality",          "true"      },
+        { "MemoryDenyWriteExecute",   "true"      },
+        { "SystemCallArchitectures",  "native"    },
+        { "SystemCallErrorNumber",    "EPERM"     },
+        { "Restart",                  "on-failure" },
+        { "KillSignal",               "SIGTERM"   },
+        { "StateDirectory",           "sloth-rf"  },
+        { "StateDirectoryMode",       "0700"      },
+        { "RuntimeDirectory",         "sloth-rf"  },
+        { "RuntimeDirectoryMode",     "0750"      },
+        { "WorkingDirectory",         "/var/lib/sloth-rf" },
+        { "UMask",                    "0077"      },
+        { "EnvironmentFile",          "-/etc/default/sloth-rf" },
+        { "Environment",              "SLOTH_RF_ARGS=" },
+    };
+    for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+        const char *v = uf_value(lines, n, want[i].key);
+        if (!v || strcmp(v, want[i].val) != 0)
+            fprintf(stderr, "    sloth-rf unit: %s=%s wanted, got %s\n",
+                    want[i].key, want[i].val, v ? v : "(absent)");
+        ASSERT(v != NULL && strcmp(v, want[i].val) == 0);
+    }
+    /* Its own directories, each named once: a second RuntimeDirectory=
+     * line adds to the list, and `sloth` on it is the Wi-Fi sensor's
+     * /run/sloth, which systemd would then remove at every stop of this
+     * unit, the sensor's socket with it. */
+    ASSERT_EQ(uf_count(lines, n, "RuntimeDirectory"), 1);
+    ASSERT_EQ(uf_count(lines, n, "StateDirectory"), 1);
+    ASSERT(!uf_has_token(uf_value(lines, n, "RuntimeDirectory"), "sloth"));
+    ASSERT(!uf_has_token(uf_value(lines, n, "StateDirectory"), "sloth"));
+
+    /* AF_UNIX and nothing else: no capture (AF_PACKET), no netlink, and
+     * no IP family until the operator's drop-in adds one. Given once: a
+     * second allow-list line merges in. */
+    static const char *const fams[] = { "AF_UNIX" };
+    const char *fam = uf_value(lines, n, "RestrictAddressFamilies");
+    if (fam && !uf_tokens_within(fam, fams, 1))
+        fprintf(stderr, "    sloth-rf unit: RestrictAddressFamilies=%s\n", fam);
+    ASSERT(uf_tokens_within(fam, fams, 1));
+    ASSERT_EQ(uf_count(lines, n, "RestrictAddressFamilies"), 1);
+
+    /* What other programs write: read-only, each with the '-' that
+     * lets the unit start on a host without that decoder, and nothing
+     * writable beyond the state and runtime directories. */
+    static const char *const ro[] = {
+        "-/run/readsb", "-/var/lib/direwolf", "-/var/lib/rtl_433", "-/var/lib/sloth-va",
+    };
+    const char *rop = uf_value(lines, n, "ReadOnlyPaths");
+    ASSERT_EQ(uf_count(lines, n, "ReadOnlyPaths"), 1);
+    ASSERT(uf_tokens_within(rop, ro, sizeof(ro) / sizeof(ro[0])));
+    for (size_t i = 0; i < sizeof(ro) / sizeof(ro[0]); i++)
+        ASSERT(uf_has_token(rop, ro[i]));
+    ASSERT(uf_value(lines, n, "ReadWritePaths") == NULL);
+    ASSERT(uf_value(lines, n, "BindPaths") == NULL);
+    ASSERT(uf_value(lines, n, "DeviceAllow") == NULL);
+
+    /* Allow-list plus deny-list, and capset back after the deny, as
+     * for the sensor: the privilege drop ends in a capset and fails
+     * closed without it. Three lines and no fourth: any other allow
+     * line after the deny takes something back out of @privileged. */
+    int allow_seen = 0, deny_at = -1, capset_at = -1;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (strncmp(l, "SystemCallFilter=", 17) != 0) continue;
+        if (uf_has_token(l + 17, "@system-service")) allow_seen = 1;
+        if (uf_has_token(l + 17, "~@privileged")) deny_at = i;
+        if (l[17] != '~' && uf_has_token(l + 17, "capset")) capset_at = i;
+    }
+    ASSERT(allow_seen);
+    ASSERT(deny_at >= 0);
+    ASSERT(capset_at > deny_at);
+    ASSERT_EQ(uf_count(lines, n, "SystemCallFilter"), 3);
+
+    ASSERT(uf_value(lines, n, "MemoryMax") != NULL);
+    ASSERT(uf_value(lines, n, "TasksMax") != NULL);
+    free(buf);
+}
+
+static void test_rf_unit_execstart(void) {
+    char *buf = uf_slurp(UF_PATH_RF_UNIT);
+    char *doc = uf_slurp(UF_PATH_WIKI);
+    ASSERT(buf != NULL);
+    ASSERT(doc != NULL);
+    if (!buf || !doc) { free(buf); free(doc); return; }
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    const char *start = uf_value(lines, n, "ExecStart");
+    ASSERT(start != NULL);
+    ASSERT_EQ(uf_count(lines, n, "ExecStart"), 1);
+    if (start) {
+        /* Its own binary, not the Wi-Fi sensor's, from the root-owned
+         * prefix. */
+        ASSERT(strncmp(start, "/usr/local/bin/sloth-rf ", 24) == 0);
+        ASSERT(strstr(start, "--db /var/lib/sloth-rf/sloth-rf.db ") != NULL);
+        ASSERT(strstr(start, "--data-socket unix:/run/sloth-rf/sloth-rf.sock ") != NULL);
+        ASSERT(uf_has_token(start, "$SLOTH_RF_ARGS"));
+        /* The socket stays a unix: path (the unit has no IP family),
+         * and nothing of the Wi-Fi sensor's is named. */
+        ASSERT(strstr(start, "tcp:") == NULL);
+        ASSERT(strstr(start, "/run/sloth/") == NULL);
+        ASSERT(strstr(start, "/var/lib/sloth/") == NULL);
+        /* The inputs are the site's (/etc/default/sloth-rf), never the
+         * unit's: a shipped --gps or --adsb would need the drop-in on
+         * every host, and a shipped --location is somebody's position. */
+        static const char *const site[] = {
+            "--adsb", "--aprs", "--aprs-freq", "--aprs-silent-hours",
+            "--rtl433", "--gps", "--gps-allow-remote", "--gps-baud",
+            "--location", "--site-label", "--jsonl",
+        };
+        for (size_t i = 0; i < sizeof(site) / sizeof(site[0]); i++) {
+            if (uf_has_token(start, site[i]))
+                fprintf(stderr, "    sloth-rf unit: ExecStart carries %s\n", site[i]);
+            ASSERT(!uf_has_token(start, site[i]));
+        }
+    }
+    /* The deployment page names the unit, its paths and the tool. */
+    static const char *const named[] = {
+        "sloth-rf.service", "sloth-migrate-rf", "/etc/default/sloth-rf",
+        "/var/lib/sloth-rf/sloth-rf.db", "unix:/run/sloth-rf/sloth-rf.sock",
+        "RuntimeDirectory=sloth-rf", "sloth-rf-gps.conf",
+    };
+    for (size_t i = 0; i < sizeof(named) / sizeof(named[0]); i++) {
+        if (!strstr(doc, named[i]))
+            fprintf(stderr, "    %s does not name %s\n", UF_PATH_WIKI, named[i]);
+        ASSERT(strstr(doc, named[i]) != NULL);
+    }
+    free(buf);
+    free(doc);
+}
+
+/* /etc/default/sloth-rf as shipped: an environment file with the one
+ * variable, empty. A flag on the live line would start every new
+ * install reading something, and a --location there is a position. */
+static void test_rf_defaults_file(void) {
+    char *buf = uf_slurp(UF_PATH_RF_DEFAULTS);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    int live = 0, args = 0;
+    static const char *const flags[] = {
+        "--adsb", "--aprs", "--aprs-freq", "--aprs-silent-hours", "--rtl433",
+        "--gps", "--gps-allow-remote", "--gps-baud", "--location", "--jsonl",
+        "--strict", "--site-label",
+    };
+    int documented[sizeof(flags) / sizeof(flags[0])] = {0};
+    for (char *l = strtok(buf, "\n"); l; l = strtok(NULL, "\n")) {
+        for (size_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++)
+            if (l[0] == '#' && uf_doc_names_flag(l, flags[i])) documented[i] = 1;
+        if (l[0] == '#' || l[0] == '\0') continue;
+        live++;
+        if (strcmp(l, "SLOTH_RF_ARGS=") == 0) args++;
+        else fprintf(stderr, "    %s has a live line: %s\n", UF_PATH_RF_DEFAULTS, l);
+    }
+    ASSERT_EQ(live, 1);
+    ASSERT_EQ(args, 1);
+    /* A commented example for each flag sloth-rf takes from this file. */
+    for (size_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++) {
+        if (!documented[i])
+            fprintf(stderr, "    %s has no example for %s\n", UF_PATH_RF_DEFAULTS, flags[i]);
+        ASSERT(documented[i]);
+    }
+    free(buf);
+}
+
+/* sloth-rf's drop-in is inert as shipped and each block says what it
+ * claims, as for the sensor's (test_gps_dropin_is_inert_and_scoped):
+ * the gpsd block adds only the IP families, the serial block keeps the
+ * device allow-list closed and read-only. Seen red with `#` removed
+ * from the gpsd block's `#[Service]`, and with `#DevicePolicy=closed`
+ * moved into the gpsd block. */
+static void test_rf_dropin_is_inert_and_scoped(void) {
+    char *buf = uf_slurp(UF_PATH_RF_DROPIN);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    /* [0] preamble, [1] gpsd block, [2] serial block. */
+    int live = 0, blk = 0, headings = 0;
+    int pd[3] = {0}, policy[3] = {0}, allow_r[3] = {0}, groups[3] = {0}, fam[3] = {0};
+    int section[3] = {0};
+    for (char *l = strtok(buf, "\n"); l; l = strtok(NULL, "\n")) {
+        if (l[0] != '#' && l[0] != '\0') {
+            fprintf(stderr, "    sloth-rf gps.conf has a live line: %s\n", l);
+            live++;
+        }
+        if (!strncmp(l, "# \xe2\x94\x80\xe2\x94\x80 gpsd over TCP", 19)) { blk = 1; headings++; }
+        if (!strncmp(l, "# \xe2\x94\x80\xe2\x94\x80 Serial NMEA", 17)) { blk = 2; headings++; }
+        if (!strcmp(l, "#[Service]")) section[blk]++;
+        if (!strcmp(l, "#PrivateDevices=false")) pd[blk]++;
+        if (!strcmp(l, "#DevicePolicy=closed")) policy[blk]++;
+        if (!strncmp(l, "#DeviceAllow=", 13)) {
+            if (!strncmp(l, "#DeviceAllow=/dev/tty", 21) &&
+                !strcmp(l + strlen(l) - 2, " r"))
+                allow_r[blk]++;
+            else
+                allow_r[blk] += 100;   /* any other DeviceAllow is wrong */
+        }
+        if (!strcmp(l, "#SupplementaryGroups=dialout")) groups[blk]++;
+        if (!strncmp(l, "#RestrictAddressFamilies=", 25)) {
+            if (!strcmp(l, "#RestrictAddressFamilies=AF_INET AF_INET6")) fam[blk]++;
+            else fam[blk] += 100;
+        }
+    }
+    ASSERT_EQ(live, 0);
+    ASSERT_EQ(headings, 2);
+    for (int b = 0; b < 3; b++) {
+        ASSERT_EQ(section[b], b != 0);
+        ASSERT_EQ(fam[b], b == 1);
+        ASSERT_EQ(pd[b], b == 2);
+        ASSERT_EQ(policy[b], b == 2);
+        ASSERT_EQ(allow_r[b], b == 2);
+        ASSERT_EQ(groups[b], b == 2);
+    }
+    free(buf);
+}
+
+/* make: the binary only where the tree built one, the migrate tool,
+ * the unit, the defaults file no-clobber, the drop-in to share/sloth.
+ * That no drop-in goes into the unit directory and that no recipe runs
+ * systemctl is test_makefile_installs_ble_scan_without_enabling, which
+ * reads every line of both recipes. */
+static void test_makefile_installs_rf(void) {
+    char *buf = uf_slurp("Makefile");
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    static char *lines[UF_MAX_MAKE_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_MAKE_LINES);
+    ASSERT_LT(n, UF_MAX_MAKE_LINES);
+    int in_install = 0, in_service = 0, in_deploy = 0;
+    int bin = 0, bin_unguarded = 0, tool = 0, unit = 0, defaults_nc = 0;
+    int defaults_b = 0, defaults_plain = 0, dropin = 0, lint = 0, lint_test = 0, runs = 0;
+    int unit_unguarded = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        if (!uf_is_recipe(l)) {
+            in_install = strncmp(l, "install:", 8) == 0;
+            in_service = strncmp(l, "install-service:", 16) == 0;
+            in_deploy  = strncmp(l, "deploy-test:", 12) == 0;
+            if (strncmp(l, "DEPLOY_SCRIPTS", 14) == 0) {
+                if (uf_has_token(l, UF_PATH_RF_MIGRATE)) lint = 1;
+                if (uf_has_token(l, "tests/deploy/test_migrate_rf.sh")) lint_test = 1;
+            }
+            continue;
+        }
+        if (in_install && strstr(l, "$(DESTDIR)$(PREFIX)/bin/sloth-rf")) {
+            /* The binary is #213's: a tree without it still installs,
+             * and one with it never skips it. */
+            if (strstr(l, "[ ! -x sloth-rf ] || install -m 755 sloth-rf ")) bin = 1;
+            else bin_unguarded = 1;
+        }
+        if (in_install && strstr(l, "install -m 755 " UF_PATH_RF_MIGRATE " ") &&
+            strstr(l, "$(DESTDIR)$(PREFIX)/sbin/sloth-migrate-rf")) tool = 1;
+        /* The unit only where `make install` has put the binary it
+         * runs. slothweb.service Wants= it, so a unit with no binary
+         * would fail 203/EXEC at every start of slothweb (#215 review).
+         * Every recipe line that writes the unit carries the guard. */
+        if (in_service && strstr(l, "$(DESTDIR)$(UNITDIR)/sloth-rf.service")) {
+            if (strncmp(l, "\t[ ! -x $(DESTDIR)$(PREFIX)/bin/sloth-rf ] || {", 47) == 0) {
+                if (strstr(l, UF_PATH_RF_UNIT)) unit = 1;
+            } else {
+                unit_unguarded = 1;
+            }
+        }
+        if (in_service && strstr(l, UF_PATH_RF_DEFAULTS " ")) {
+            if (strstr(l, "[ -e $(DESTDIR)$(DEFAULTDIR)/sloth-rf ] ||")) defaults_nc = 1;
+            else defaults_plain = 1;
+            if (strstr(l, "install -b")) defaults_b = 1;
+        }
+        if (in_service && strstr(l, UF_PATH_RF_DROPIN) &&
+            strstr(l, "$(DESTDIR)$(PREFIX)/share/sloth/sloth-rf-gps.conf")) dropin = 1;
+        if (in_deploy && strstr(l, "sh tests/deploy/test_migrate_rf.sh")) runs = 1;
+    }
+    ASSERT(bin);
+    ASSERT(!bin_unguarded);
+    ASSERT(tool);
+    ASSERT(unit);
+    ASSERT(!unit_unguarded);
+    ASSERT(defaults_nc);
+    ASSERT(!defaults_plain);
+    ASSERT(!defaults_b);
+    ASSERT(dropin);
+    ASSERT(lint);
+    ASSERT(lint_test);
+    ASSERT(runs);
+    free(buf);
+}
+
+/* slothweb.service and the slothweb it runs are installed by two
+ * targets, and slothweb exits on an option it does not know: a unit
+ * ahead of its binary is a web UI that restarts every five seconds and
+ * never serves. That was this slice as built, since --rf-socket and
+ * --rf-db are #214's (#215 review). Both targets now compare the two
+ * before writing anything: `install` the tree's slothweb, and
+ * `install-service` the installed one, where there is one. The list is
+ * read from the unit, so a flag added to ExecStart is covered without
+ * touching the Makefile. tests/deploy/test_slothweb_unit.sh runs
+ * install-service against a staged binary; this pins the text. */
+static void test_makefile_keeps_slothweb_unit_and_binary_agreeing(void) {
+    char *buf = uf_slurp("Makefile");
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    static char *lines[UF_MAX_MAKE_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_MAKE_LINES);
+    ASSERT_LT(n, UF_MAX_MAKE_LINES);
+    int in_install = 0, in_service = 0, recipe_no = 0;
+    int flags_var = 0, chk_install = 0, chk_service = 0;
+    int first_write_install = 0, first_write_service = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        if (!uf_is_recipe(l)) {
+            in_install = strncmp(l, "install:", 8) == 0;
+            in_service = strncmp(l, "install-service:", 16) == 0;
+            recipe_no = 0;
+            if (strncmp(l, "WEB_UNIT_FLAGS", 14) == 0 &&
+                strstr(l, "/^ExecStart=/") && strstr(l, UF_PATH_WEB_UNIT) &&
+                strstr(l, "grep -o -e '--[a-z][a-z0-9-]*'")) flags_var = 1;
+            continue;
+        }
+        recipe_no++;
+        int checks = strstr(l, "$$($(WEB_UNIT_FLAGS))") && strstr(l, "grep -aqF -e \"$$f\"") &&
+                     strstr(l, "exit 1");
+        /* The first line of either recipe that writes: `install ...`
+         * or a redirection. The check comes before it. */
+        int writes = strncmp(l, "\tinstall ", 9) == 0 || strstr(l, " > $(DESTDIR)") != NULL;
+        if (in_install) {
+            if (checks && strstr(l, "\" slothweb ||") && !first_write_install) chk_install = 1;
+            if (writes && !first_write_install) first_write_install = recipe_no;
+        }
+        if (in_service) {
+            if (checks && strstr(l, "b=$(DESTDIR)$(PREFIX)/bin/slothweb;") &&
+                strstr(l, "[ ! -e \"$$b\" ] ||") && strstr(l, "\"$$b\" ||") &&
+                !first_write_service) chk_service = 1;
+            if (writes && !first_write_service) first_write_service = recipe_no;
+        }
+    }
+    ASSERT(flags_var);
+    ASSERT(chk_install);
+    ASSERT(chk_service);
+    ASSERT_GT(first_write_install, 1);
+    ASSERT_GT(first_write_service, 1);
     free(buf);
 }
 
@@ -652,6 +2020,7 @@ void run_unit_file_tests(void) {
     RUN_TEST(test_scanner_directive_lookup_is_exact);
     RUN_TEST(test_scanner_tokens_are_whole_words);
     RUN_TEST(test_scanner_doc_flag_match_needs_a_boundary);
+    RUN_TEST(test_scanner_ipv4_literal);
     RUN_TEST(test_unit_runs_as_the_sloth_account);
     RUN_TEST(test_unit_executes_installed_paths_only);
     RUN_TEST(test_unit_capabilities_are_exactly_the_two);
@@ -661,5 +2030,25 @@ void run_unit_file_tests(void) {
     RUN_TEST(test_sysusers_fragment_declares_a_system_account);
     RUN_TEST(test_monitor_up_helper_is_idempotent_and_root_side);
     RUN_TEST(test_defaults_file_is_an_environment_file);
+    RUN_TEST(test_web_unit_runs_as_sloth_with_no_capabilities);
+    RUN_TEST(test_web_unit_sandbox);
+    RUN_TEST(test_web_unit_execstart);
+    RUN_TEST(test_web_defaults_file);
     RUN_TEST(test_makefile_install_targets);
+    RUN_TEST(test_scanner_any_has_reads_every_line);
+    RUN_TEST(test_sensor_bt_monitor_dropin);
+    RUN_TEST(test_ble_scan_unit_privilege);
+    RUN_TEST(test_ble_scan_unit_sandbox);
+    RUN_TEST(test_ble_scan_unit_service_keys_are_allow_listed);
+    RUN_TEST(test_ble_scan_unit_relationships);
+    RUN_TEST(test_makefile_installs_ble_scan_without_enabling);
+    RUN_TEST(test_gps_dropin_is_inert_and_scoped);
+    RUN_TEST(test_rf_unit_runs_as_sloth_with_no_capabilities);
+    RUN_TEST(test_rf_unit_is_bound_to_nothing);
+    RUN_TEST(test_rf_unit_sandbox);
+    RUN_TEST(test_rf_unit_execstart);
+    RUN_TEST(test_rf_defaults_file);
+    RUN_TEST(test_rf_dropin_is_inert_and_scoped);
+    RUN_TEST(test_makefile_installs_rf);
+    RUN_TEST(test_makefile_keeps_slothweb_unit_and_binary_agreeing);
 }

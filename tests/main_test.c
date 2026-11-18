@@ -1,8 +1,14 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 #include "runner.h"
+#include "fd_guard.h"
+#include "tmp_dir.h"
 #include "reset_all.h"
 #include "sloth_clock.h"
 #include "tui.h"
+#include "capture_side.h"
 
 /* Shared counters — all test files reference these via extern */
 int g_pass      = 0;
@@ -15,6 +21,11 @@ int g_test_total = 0;
  * clock restored — whether or not the test remembers to ask for it.
  * A test with its own extra setup still runs it after this. */
 static void default_test_setup(void) {
+    /* The suite is `sloth`'s: the whole rule table, the capture's
+     * source rows, the resolver's count (#213). Re-installed before
+     * every test, so one that selects sloth-rf's table to hold it to
+     * something cannot leave it selected for the next. */
+    capture_side_install();
     sloth_reset_all();
     sloth_clock_test_set(NULL, NULL);
     tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
@@ -22,6 +33,42 @@ static void default_test_setup(void) {
 }
 
 void (*g_test_setup)(void) = default_test_setup;
+
+/* The matching teardown (#209): the same registry, on the way out.
+ * Modules that hold a descriptor for a whole run by design — the
+ * evidence manifest's open manifest per pinned directory, alert_pcap's
+ * pinned --pcap-dir, the data socket's listener — are closed by their
+ * registered reset, and running it here rather than only at the next
+ * setUp is what lets the descriptor guard below say "nothing releases
+ * this" and mean it. No tui_init_offscreen: the screen is the run's,
+ * not the case's, and main() opens it once. */
+static void default_test_teardown(void) {
+    sloth_reset_all();
+}
+
+void (*g_test_teardown)(void) = default_test_teardown;
+
+/* ── The descriptor-leak guard (#209) ─────────────────────────────────
+ * tests/fd_guard.h says why this exists; this is the state RUN_TEST
+ * drives it through. One pair of samples, so the guard costs one
+ * /proc/self/fd scan per case boundary and no allocation. */
+static fdg_set_t g_fd_entry;
+
+void fd_guard_enter(void) { (void)fdg_scan(&g_fd_entry); }
+
+int fd_guard_check(const char *name) {
+    fdg_set_t now;
+    (void)fdg_scan(&now);
+    char msg[FDG_MSG_MAX];
+    int delta = fdg_report(&g_fd_entry, &now, name, msg, sizeof(msg));
+    if (delta != 0) {
+        fflush(stdout);   /* the [pass] lines are stdout; keep them apart */
+        fprintf(stderr, "    %s\n", msg);
+        g_fail++;
+        g_test_fail++;
+    }
+    return delta;
+}
 
 /* LeakSanitizer reads this hook at exit when the suite is built with
  * -fsanitize=address; in any other build it is an unused function.
@@ -36,6 +83,46 @@ const char *__lsan_default_suppressions(void);
 const char *__lsan_default_suppressions(void) {
     return "leak:libncursesw.so\n"
            "leak:libtinfo.so\n";
+}
+
+/* The run directory: every temporary path a test makes lands here
+ * (tests/tmp_dir.h). Removed at exit by the process that made it only —
+ * a fork child that returns through exit() must not take it away from
+ * the suite still running in its parent. SLOTH_TEST_KEEP_TMP=1 keeps it
+ * and prints where, for looking at what a failing test wrote. */
+static char  g_run_dir[TEST_TMP_MAX];
+static pid_t g_run_owner;
+static int   g_run_keep;
+
+/* A run directory that cannot be removed fails the run, even one whose
+ * suites all passed: _exit() from an atexit handler sets the status. */
+static void run_dir_cleanup(void) {
+    if (getpid() == g_run_owner &&
+        tmp_run_dir_close(g_run_dir, "sloth_test") != 0) {
+        /* _exit() skips stdio's flush: the summary line would be lost
+         * on a pipe in exactly the run that fails for this. */
+        fflush(NULL);
+        _exit(1);
+    }
+}
+
+/* Ctrl-C, or a TERM from make or timeout(1), skips atexit(): remove the
+ * tree here, then die of the same signal so the caller sees it. */
+static void run_dir_on_signal(int sig) {
+    if (getpid() == g_run_owner && !g_run_keep)
+        tmp_run_dir_signal_rm(g_run_dir);
+    raise(sig);
+}
+
+static int run_dir_open(void) {
+    if (tmp_run_dir_open(g_run_dir, sizeof(g_run_dir), "sloth_test",
+                         "sloth_test") != 0)
+        return -1;
+    g_run_owner = getpid();
+    g_run_keep  = tmp_run_dir_keep();
+    atexit(run_dir_cleanup);
+    tmp_run_dir_trap_signals(run_dir_on_signal);
+    return 0;
 }
 
 void run_parse_tests(void);
@@ -56,6 +143,12 @@ void run_arp_tests(void);
 void run_pcap_write_tests(void);
 void run_iface_graph_tests(void);
 void run_geo_tests(void);
+void run_gps_tests(void);
+void run_adsb_tests(void);               /* tests/test_adsb.c (#26 slice 1) */
+void run_adsb_beast_tests(void);         /* tests/test_adsb_beast.c (#186) */
+void run_aprs_tests(void);               /* tests/test_aprs.c (2026-11-05) */
+void run_rtl433_tests(void);             /* tests/test_rtl433.c (#208) */
+void run_gnss_view_tests(void);          /* tests/test_gnss_view.c (2026-11-02) */
 void run_dhcp_tests(void);
 void run_rtt_tests(void);
 void run_tree_tests(void);
@@ -81,7 +174,16 @@ void run_ble_snoop_tests(void);           /* tests/test_ble_snoop.c (#144 slice 
 void run_ble_hci_tests(void);             /* tests/test_ble_hci.c (#144 slice 2) */
 void run_ubertooth_tests(void);           /* tests/test_ubertooth.c (#144 slice 3) */
 void run_ble_rules_tests(void);           /* tests/test_ble_rules.c (#144 slice 4) */
+void run_gnss_rules_tests(void);          /* tests/test_gnss_rules.c (GNSS rules) */
+void run_adsb_rules_tests(void);          /* tests/test_adsb_rules.c (#186) */
+void run_sensor_rules_tests(void);        /* tests/test_sensor_rules.c */
 void run_ble_rotation_tests(void);        /* tests/test_ble_rotation.c (#156 item 2) */
+void run_ble_scan_tests(void);            /* tests/test_ble_scan.c (sloth-ble-scan) */
+void run_sdrsweep_tests(void);            /* tests/test_sdrsweep.c (sloth-sdrsweep) */
+void run_va_tests(void);                  /* tests/test_va.c (sloth-va) */
+void run_victron_tests(void);             /* tests/test_victron.c (--victron) */
+void run_tmp_dir_tests(void);             /* tests/test_tmp_dir.c */
+void run_fd_guard_tests(void);            /* tests/test_fd_guard.c (#209) */
 void run_deauth_snoop_tests(void);
 void run_flood_window_tests(void);
 void run_clock_seam_tests(void);
@@ -121,6 +223,13 @@ void run_filter_tests(void);
 void run_alert_pcap_tests(void);
 void run_alert_key_tests(void);
 void run_alert_rules_tests(void);
+void run_rf_args_tests(void);
+void run_rf_rules_tests(void);
+void run_rf_jsonl_tests(void);
+void run_rf_loop_tests(void);
+void run_rf_db_tests(void);
+void run_rf_build_tests(void);
+void run_rf_moved_tests(void);            /* tests/test_rf_moved.c (#216) */
 void run_ip_owner_tests(void);
 void run_dashboard_tests(void);
 void run_ip_color_tests(void);
@@ -144,11 +253,14 @@ void run_dot11_frame_tests(void);
 void run_mle_tests(void);
 void run_mle_bss_tests(void);
 void run_tool_fingerprint_tests(void);
+void run_attack_hw_tests(void);
 void run_captive_portal_tests(void);
 void run_fragattack_tests(void);
 void run_research_ingest_tests(void);
 void run_research_corpus_tests(void);
 void run_docs_consistency_tests(void);
+void run_alert_assessment_tests(void);
+void run_alert_tick_rate_tests(void);
 void run_build_recipe_tests(void);
 void run_unit_file_tests(void);
 void run_ci_pin_tests(void);
@@ -162,6 +274,7 @@ void run_wifi_assess_tests(void);
 void run_wifi_baseline_tests(void);
 void run_sensors_tests(void);
 void run_sensor_health_tests(void);
+void run_sys_status_tests(void);
 void run_bytes_tests(void);
 void run_worker_thread_tests(void);
 void run_dot11_ie_tests(void);
@@ -176,8 +289,13 @@ void run_pm_forge_tests(void);
 void run_evidence_cite_tests(void);
 void run_queue_evict_tests(void);
 void run_wifi_merge_tests(void);
+void run_df_tests(void);
+void run_mon_radios_tests(void);
 void run_twins_tests(void);
 void run_karma_tests(void);
+void run_probe_latency_tests(void);
+void run_twin_field_tests(void);
+void run_harvest_track_tests(void);
 void run_rogue_radius_tests(void);
 void run_help_tests(void);
 void run_discovery_tests(void);
@@ -201,11 +319,15 @@ void run_snmp_snoop_tests(void);
 void run_mqtt_snoop_tests(void);
 void run_capture_tests(void);
 void run_tui_palette_tests(void);
+void run_tui_glyph_tests(void);
 void run_ownership_tests(void);
+void run_self_macs_tests(void);
+void run_jsonl_lures_tests(void);
 void run_inventory_tests(void);
 void run_wired_attach_tests(void);
 void run_db_tests(void);
 void run_presence_tests(void);
+void run_rf_distance_tests(void);
 void run_transit_tests(void);
 void run_radiotap_tests(void);
 void run_wifi_freq_tests(void);
@@ -221,6 +343,8 @@ void run_replay_tests(void);              /* tests/test_replay.c (#119) */
 int main(void) {
     printf("sloth test suite\n");
     printf("===============\n");
+
+    if (run_dir_open() != 0) return 2;
 
     /* Views draw through the shipped renderer (#116): an ncurses SCREEN
      * whose output goes to /dev/null, read back with tui_test_line().
@@ -252,6 +376,12 @@ int main(void) {
     run_pcap_write_tests();
     run_iface_graph_tests();
     run_geo_tests();
+    run_gps_tests();
+    run_adsb_tests();
+    run_adsb_beast_tests();
+    run_aprs_tests();
+    run_rtl433_tests();
+    run_gnss_view_tests();
     run_dhcp_tests();
     run_rtt_tests();
     run_tree_tests();
@@ -312,6 +442,14 @@ int main(void) {
     run_alert_pcap_tests();
     run_alert_key_tests();
     run_alert_rules_tests();
+    /* #213: sloth-rf, the RF daemon beside sloth. */
+    run_rf_args_tests();
+    run_rf_rules_tests();
+    run_rf_jsonl_tests();
+    run_rf_loop_tests();
+    run_rf_db_tests();
+    run_rf_build_tests();
+    run_rf_moved_tests();
     run_ip_owner_tests();
     run_dashboard_tests();
     run_ip_color_tests();
@@ -335,11 +473,14 @@ int main(void) {
     run_mle_tests();
     run_mle_bss_tests();
     run_tool_fingerprint_tests();
+    run_attack_hw_tests();
     run_captive_portal_tests();
     run_fragattack_tests();
     run_research_ingest_tests();
     run_research_corpus_tests();
     run_docs_consistency_tests();
+    run_alert_assessment_tests();
+    run_alert_tick_rate_tests();
     run_build_recipe_tests();
     run_unit_file_tests();
     run_ci_pin_tests();
@@ -353,6 +494,7 @@ int main(void) {
     run_wifi_baseline_tests();
     run_sensors_tests();
     run_sensor_health_tests();
+    run_sys_status_tests();
     run_bytes_tests();
     run_worker_thread_tests();
     run_dot11_ie_tests();
@@ -367,8 +509,13 @@ int main(void) {
     run_evidence_cite_tests();
     run_queue_evict_tests();
     run_wifi_merge_tests();
+    run_df_tests();
+    run_mon_radios_tests();
     run_twins_tests();
     run_karma_tests();
+    run_probe_latency_tests();
+    run_twin_field_tests();
+    run_harvest_track_tests();
     run_rogue_radius_tests();
     run_help_tests();
     run_discovery_tests();
@@ -392,11 +539,15 @@ int main(void) {
     run_mqtt_snoop_tests();
     run_capture_tests();
     run_tui_palette_tests();
+    run_tui_glyph_tests();
     run_ownership_tests();
+    run_self_macs_tests();
+    run_jsonl_lures_tests();
     run_inventory_tests();
     run_wired_attach_tests();
     run_db_tests();
     run_presence_tests();
+    run_rf_distance_tests();
     run_transit_tests();
     run_radiotap_tests();
     run_wifi_freq_tests();
@@ -412,9 +563,23 @@ int main(void) {
     run_ble_hci_tests();
     run_ubertooth_tests();
     run_ble_rules_tests();
+    run_gnss_rules_tests();
+    run_adsb_rules_tests();
+    run_sensor_rules_tests();
     run_ble_rotation_tests();
+    run_ble_scan_tests();
+    run_sdrsweep_tests();
+    run_va_tests();
+    run_victron_tests();
+    run_tmp_dir_tests();
+    run_fd_guard_tests();
 
     tui_offscreen_end();
+    /* The leak guard: a path still in the run directory after the last
+     * suite is one a test made and did not remove. It fails the run
+     * here, because the directory is about to be deleted and nobody
+     * would see it otherwise. */
+    if (tmp_run_dir_check(g_run_dir, "sloth_test") != 0) g_fail++;
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;
 }

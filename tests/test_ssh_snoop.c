@@ -5,6 +5,7 @@
 #include "ssh_snoop.h"
 #include <stdio.h>
 #include "sensor_health.h"
+#include "sloth_clock.h"
 
 /* SSH banners (RFC 4253 §4.2):
  *   SSH-protoversion-softwareversion SP comments CR LF
@@ -190,6 +191,79 @@ static void test_ssh_table_full_evicts_oldest_and_tallies(void) {
     ASSERT_EQ(have_first, 0);
 }
 
+/* ── Brute-force window (#202) ──────────────────────────── */
+/* banner_count is a lifetime tally with no decay (kept for operator
+ * context); SSH_BRUTE_FORCE instead reads brute_count, a per-flow
+ * sliding window computed by ssh_snoop_snapshot() each tick from a
+ * private ring noted here at observe time, on an injected clock. */
+static uint64_t g_ssw_mono;
+static time_t   g_ssw_wall;
+static uint64_t ssw_mono(void) { return g_ssw_mono; }
+static time_t   ssw_wall(void) { return g_ssw_wall; }
+
+static void test_window_holds_recent_banners_only(void) {
+    ssh_snoop_clear();
+    g_ssw_mono = 1000000; g_ssw_wall = 1700000000;
+    sloth_clock_test_set(ssw_mono, ssw_wall);
+
+    /* 5 banners, 1 s apart. */
+    for (int i = 0; i < 5; i++) {
+        if (i > 0) { g_ssw_mono += 1000; g_ssw_wall += 1; }
+        ssh_snoop_observe("10.0.0.10", 22, "10.0.0.5", 49152,
+                          BANNER_OPENSSH, (int)sizeof(BANNER_OPENSSH) - 1);
+    }
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    ssh_snoop_snapshot(&s);
+    ASSERT_EQ(s.ssh_flow_count, 1);
+    ASSERT_EQ(s.ssh_flows[0].banner_count, 5);     /* lifetime, unaffected */
+    ASSERT_EQ(s.ssh_flows[0].brute_count, 5);      /* default 60 s window */
+
+    /* The window resets with time, not with a latch: clear 70 s (past
+     * the default 60 s window) with no further banner, and all five
+     * must age out. */
+    g_ssw_mono += 70000; g_ssw_wall += 70;
+    ssh_snoop_snapshot(&s);
+    ASSERT_EQ(s.ssh_flows[0].brute_count, 0);
+    ASSERT_EQ(s.ssh_flows[0].banner_count, 5);     /* still not decayed */
+
+    /* One more banner starts a fresh window of 1, not a sixth entry
+     * in a window that never actually cleared. */
+    ssh_snoop_observe("10.0.0.10", 22, "10.0.0.5", 49152,
+                      BANNER_OPENSSH, (int)sizeof(BANNER_OPENSSH) - 1);
+    ssh_snoop_snapshot(&s);
+    ASSERT_EQ(s.ssh_flows[0].brute_count, 1);
+    ASSERT_EQ(s.ssh_flows[0].banner_count, 6);
+
+    sloth_clock_test_set(NULL, NULL);
+    ssh_snoop_clear();
+}
+
+/* 12 banners, 600 s (10 min) apart — comfortably more than the
+ * default ssh.brute_force threshold (10) lifetime, but spread far
+ * wider than the default 60 s window can ever hold two of.
+ * brute_count must never pass 1. Pre-#202 this read as a sweep: the
+ * lifetime banner_count still reached 10 and the rule had no way to
+ * tell a decade of occasional logins from a sweep. */
+static void test_window_ignores_widely_spaced_banners(void) {
+    ssh_snoop_clear();
+    g_ssw_mono = 1000000; g_ssw_wall = 1700000000;
+    sloth_clock_test_set(ssw_mono, ssw_wall);
+
+    sloth_state_t s;
+    for (int i = 0; i < 12; i++) {
+        if (i > 0) { g_ssw_mono += 600000; g_ssw_wall += 600; }
+        ssh_snoop_observe("10.0.0.10", 22, "10.0.0.5", 49152,
+                          BANNER_OPENSSH, (int)sizeof(BANNER_OPENSSH) - 1);
+        memset(&s, 0, sizeof(s));
+        ssh_snoop_snapshot(&s);
+        ASSERT_EQ(s.ssh_flows[0].brute_count, 1);
+    }
+    ASSERT_EQ(s.ssh_flows[0].banner_count, 12);
+
+    sloth_clock_test_set(NULL, NULL);
+    ssh_snoop_clear();
+}
+
 void run_ssh_snoop_tests(void) {
     TEST_SUITE("ssh_snoop: server-banner detection");
     RUN_TEST(test_detects_openssh_banner);
@@ -211,4 +285,8 @@ void run_ssh_snoop_tests(void) {
     RUN_TEST(test_truncated_banner_rejected);
     RUN_TEST(test_banner_truncates_at_crlf);
     RUN_TEST(test_ssh_table_full_evicts_oldest_and_tallies);
+
+    TEST_SUITE("ssh_snoop: brute-force window (#202)");
+    RUN_TEST(test_window_holds_recent_banners_only);
+    RUN_TEST(test_window_ignores_widely_spaced_banners);
 }

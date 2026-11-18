@@ -879,6 +879,11 @@ static void test_depad_moves_the_view_without_a_decode(void) {
  * A single observer called through its byte wrapper instead of its view
  * entry makes it two, which is how this was mutation-checked. */
 
+/* probe_test_dispatch() is declared only under WITH_PCAP (probe.h's
+ * non-WITH_PCAP stubs cover every operator-facing probe_*() call but
+ * deliberately not the test-only dispatch hook), so this whole group —
+ * the test and the helpers it alone uses — is too. */
+#ifdef WITH_PCAP
 static int obs_rt(uint8_t *buf, int cap, uint8_t rt_flags,
                   const uint8_t *frame, int n) {
     fb_t b; fb_init(&b, buf, cap);
@@ -980,6 +985,7 @@ static void test_probe_path_decodes_each_frame_once(void) {
     csa_clear();
     ctrl_clear();
 }
+#endif /* WITH_PCAP */
 
 void run_dot11_frame_tests(void) {
     TEST_SUITE("802.11 frame view: header length (#122)");
@@ -1018,5 +1024,7 @@ void run_dot11_frame_tests(void) {
     RUN_TEST(test_action_view_and_bytes_agree);
     RUN_TEST(test_ctrl_view_and_bytes_agree);
     RUN_TEST(test_depad_moves_the_view_without_a_decode);
+#ifdef WITH_PCAP
     RUN_TEST(test_probe_path_decodes_each_frame_once);
+#endif
 }

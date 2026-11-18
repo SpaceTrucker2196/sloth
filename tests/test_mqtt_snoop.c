@@ -5,6 +5,7 @@
 #include "mqtt_snoop.h"
 #include <stdio.h>
 #include "sensor_health.h"
+#include "sloth_clock.h"
 
 /* MQTT Control Packet type constants — kept here so the test file
  * doesn't depend on the .c file's #defines. Values match the spec. */
@@ -291,6 +292,110 @@ static void test_mqtt_table_full_evicts_oldest_and_tallies(void) {
     ASSERT_EQ(have_first, 0);
 }
 
+/* ── Brute-force window (#203) ──────────────────────────── */
+/* connect_count / connack_fail_count stay lifetime tallies;
+ * MQTT_BROKER_BRUTE reads brute_connects / brute_fails, each from its
+ * own private ring, recomputed by mqtt_snoop_snapshot() on an injected
+ * clock. Seen red: the connect tests with the snapshot reverted to
+ * `brute_connects = tmp[i].pub.connect_count`; the fail test with
+ * `brute_fails = tmp[i].pub.connack_fail_count`; and the fail test's
+ * independence assertion with refused CONNACKs noted into conn_win
+ * (one ring for both paths). */
+static uint64_t g_qsw_mono;
+static time_t   g_qsw_wall;
+static uint64_t qsw_mono(void) { return g_qsw_mono; }
+static time_t   qsw_wall(void) { return g_qsw_wall; }
+
+static void observe_connect(void) {
+    uint8_t buf[128];
+    int n = build_connect(buf, "spammer", "admin");
+    mqtt_snoop_observe("10.0.0.5", 49152, "10.0.0.10", 1883, buf, n);
+}
+
+static void observe_refused(void) {
+    uint8_t buf[16];
+    int n = build_connack(buf, 4);   /* v3.1.1: bad user name or password */
+    mqtt_snoop_observe("10.0.0.10", 1883, "10.0.0.5", 49152, buf, n);
+}
+
+static void test_window_holds_recent_connects_only(void) {
+    mqtt_snoop_clear();
+    g_qsw_mono = 1000000; g_qsw_wall = 1700000000;
+    sloth_clock_test_set(qsw_mono, qsw_wall);
+
+    /* Ten CONNECTs 1 s apart: the default mqtt.brute_connects. */
+    for (int i = 0; i < 10; i++) {
+        if (i > 0) { g_qsw_mono += 1000; g_qsw_wall += 1; }
+        observe_connect();
+    }
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    mqtt_snoop_snapshot(&s);
+    ASSERT_EQ(s.mqtt_flow_count, 1);
+    ASSERT_EQ(s.mqtt_flows[0].connect_count, 10);    /* lifetime */
+    ASSERT_EQ(s.mqtt_flows[0].brute_connects, 10);   /* in the window */
+    ASSERT_EQ(s.mqtt_flows[0].brute_fails, 0);
+
+    g_qsw_mono += 70000; g_qsw_wall += 70;
+    mqtt_snoop_snapshot(&s);
+    ASSERT_EQ(s.mqtt_flows[0].brute_connects, 0);
+    ASSERT_EQ(s.mqtt_flows[0].connect_count, 10);    /* still not decayed */
+
+    observe_connect();
+    mqtt_snoop_snapshot(&s);
+    ASSERT_EQ(s.mqtt_flows[0].brute_connects, 1);
+    ASSERT_EQ(s.mqtt_flows[0].connect_count, 11);
+
+    sloth_clock_test_set(NULL, NULL);
+    mqtt_snoop_clear();
+}
+
+static void test_window_holds_recent_fails_only(void) {
+    mqtt_snoop_clear();
+    g_qsw_mono = 1000000; g_qsw_wall = 1700000000;
+    sloth_clock_test_set(qsw_mono, qsw_wall);
+
+    /* Five refused CONNACKs 1 s apart: the default mqtt.brute_fails. */
+    for (int i = 0; i < 5; i++) {
+        if (i > 0) { g_qsw_mono += 1000; g_qsw_wall += 1; }
+        observe_refused();
+    }
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    mqtt_snoop_snapshot(&s);
+    ASSERT_EQ(s.mqtt_flow_count, 1);
+    ASSERT_EQ(s.mqtt_flows[0].connack_fail_count, 5);
+    ASSERT_EQ(s.mqtt_flows[0].brute_fails, 5);
+    ASSERT_EQ(s.mqtt_flows[0].brute_connects, 0);    /* separate ring */
+
+    g_qsw_mono += 70000; g_qsw_wall += 70;
+    mqtt_snoop_snapshot(&s);
+    ASSERT_EQ(s.mqtt_flows[0].brute_fails, 0);
+    ASSERT_EQ(s.mqtt_flows[0].connack_fail_count, 5);
+
+    sloth_clock_test_set(NULL, NULL);
+    mqtt_snoop_clear();
+}
+
+/* Twelve CONNECTs 600 s apart: past the default 10 lifetime, never two
+ * inside one 60 s window. */
+static void test_window_ignores_widely_spaced_connects(void) {
+    mqtt_snoop_clear();
+    g_qsw_mono = 1000000; g_qsw_wall = 1700000000;
+    sloth_clock_test_set(qsw_mono, qsw_wall);
+
+    sloth_state_t s;
+    for (int i = 0; i < 12; i++) {
+        if (i > 0) { g_qsw_mono += 600000; g_qsw_wall += 600; }
+        observe_connect();
+        memset(&s, 0, sizeof(s));
+        mqtt_snoop_snapshot(&s);
+        ASSERT_EQ(s.mqtt_flows[0].brute_connects, 1);
+    }
+    ASSERT_EQ(s.mqtt_flows[0].connect_count, 12);
+
+    sloth_clock_test_set(NULL, NULL);
+    mqtt_snoop_clear();
+}
+
 void run_mqtt_snoop_tests(void) {
     TEST_SUITE("mqtt_snoop: packet-type detection");
     RUN_TEST(test_detects_connect);
@@ -315,4 +420,9 @@ void run_mqtt_snoop_tests(void) {
     RUN_TEST(test_truncated_rejected);
     RUN_TEST(test_username_non_printable_dropped);
     RUN_TEST(test_mqtt_table_full_evicts_oldest_and_tallies);
+
+    TEST_SUITE("mqtt_snoop: brute-force window (#203)");
+    RUN_TEST(test_window_holds_recent_connects_only);
+    RUN_TEST(test_window_holds_recent_fails_only);
+    RUN_TEST(test_window_ignores_widely_spaced_connects);
 }

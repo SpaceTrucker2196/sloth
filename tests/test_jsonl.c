@@ -9,6 +9,7 @@
 #include <sys/resource.h>
 #include "runner.h"
 #include "sloth.h"
+#include "attack_hw.h"
 #include "jsonl.h"
 #include "sensor_health.h"
 #include "dns.h"
@@ -24,15 +25,17 @@
 #include "wifi_chanhop.h"
 #include "fake_platform.h"
 #include "jsonl_ptr_fixture.h"
+#include "tmp_dir.h"
+#include "db.h"
 
 /* Each test opens a fresh temp file, exercises the emitter, then reads
  * the file back and asserts on the recorded line(s). */
 
-static char tmp_path[] = "/tmp/sloth_jsonl_XXXXXX";
+static char tmp_path[TEST_TMP_MAX];
 
 static void open_fresh(void) {
     /* Build a unique path; close immediately so jsonl_open can append. */
-    int fd = mkstemp(tmp_path);
+    int fd = mkstemp(test_tmp_tpl(tmp_path, sizeof(tmp_path), "sloth_jsonl_XXXXXX"));
     if (fd >= 0) close(fd);
     jsonl_close();
     /* Drop any previous content. jsonl_open recreates the file 0600; a
@@ -310,6 +313,7 @@ static void test_emit_twin_episode_full_fields(void) {
     e->attack_in_progress = 1;
     e->attacker_oui       = 1;
     e->hash_mismatch      = 1;
+    e->late_arrival       = 1;
     e->attributed         = 1;
     e->confidence         = 60;
     e->last_seen          = 1700000000;
@@ -330,6 +334,7 @@ static void test_emit_twin_episode_full_fields(void) {
     ASSERT(contains(body, "\"attack_in_progress\":1"));
     ASSERT(contains(body, "\"attacker_oui\":1"));
     ASSERT(contains(body, "\"hash_mismatch\":1"));
+    ASSERT(contains(body, "\"late_arrival\":1"));
     ASSERT(contains(body, "\"attributed\":1"));
     ASSERT(contains(body, "\"confidence\":60"));
 }
@@ -726,6 +731,36 @@ static void test_emit_alert_omits_signature_when_no_tool_matched(void) {
     ASSERT(!contains(body, "signature_version"));
     ASSERT(!contains(body, "validated"));
     ASSERT(!contains(body, "signature_evidence"));
+}
+
+/* #151: the attack-hardware verdict, on both record families when
+ * there is one, absent (not empty) when there is none. */
+static void test_emit_alert_carries_hw_verdict(void) {
+    open_fresh();
+    alert_t a; fill_karma_alert(&a);
+    a.hw_tier    = HW_TIER_SUSPECTED;
+    a.hw_device  = SLOTH_TOOL_PINEAPPLE_MK7;
+    a.hw_signals = HW_SIG_PAIR | HW_SIG_OUI;
+    jsonl_emit_alert(&a);
+    jsonl_emit_alert_event(&a, "alert.create", a.last_seen, -1, NULL);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT_EQ(count_occ(body,
+              "\"hw_verdict\":\"suspected-pineapple-mk7\""), 2);
+    ASSERT_EQ(count_occ(body, "\"hw_signals\":\"pair+oui\""), 2);
+
+    open_fresh();
+    fill_karma_alert(&a);
+    jsonl_emit_alert(&a);
+    jsonl_emit_alert_event(&a, "alert.create", a.last_seen, -1, NULL);
+    jsonl_close();
+    body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT(!contains(body, "hw_verdict"));
+    ASSERT(!contains(body, "hw_signals"));
 }
 
 /* #92: per-export outcome rides the lifecycle event, alongside
@@ -1169,6 +1204,39 @@ static void test_emit_sensor_health_on_empty_state(void) {
     ASSERT(contains(body, "\"capture_exit\":\"none\""));
 }
 
+/* What the IP stream is, for a consumer telling IP heard off the air
+ * from the host's own (slothweb's capture scope): its link type while
+ * open, -1 while not, and --monitor-only. Raw facts. Discrete and set
+ * at open, so a second identical tick writes nothing. Seen to fail with
+ * the open test dropped (the closed capture reported its stale DLT) and
+ * with cap_linktype left out of the signature (the radiotap reopen
+ * wrote no line). */
+static void test_emit_sensor_health_reports_the_ip_stream_link_type(void) {
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.pkt_linktype = 1;
+    jsonl_emit_sensor_health(&s);
+    jsonl_emit_sensor_health(&s);                 /* unchanged: suppressed */
+    s.pkt_linktype = 127;                          /* reopened on a radio: */
+    jsonl_emit_sensor_health(&s);                 /* the DLT alone is news */
+    s.monitor_only = 1;
+    jsonl_emit_sensor_health(&s);
+    s.cap_health.open = 0;
+    s.cap_health.running = 0;
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    /* Four records of ~3.3 KB: past slurp()'s 16 KiB window, so the
+     * file's own lines are counted and the whole of it read. */
+    ASSERT_EQ(count_file_lines(tmp_path), 4);
+    size_t n;
+    const char *body = slurp_big(tmp_path, &n);
+    ASSERT(contains(body, "\"capture_iface\":\"any\",\"capture_linktype\":1,"
+                          "\"monitor_only\":0,"));
+    ASSERT(contains(body, "\"capture_linktype\":127,\"monitor_only\":0,"));
+    ASSERT(contains(body, "\"capture_linktype\":127,\"monitor_only\":1,"));
+    ASSERT(contains(body, "\"capture_linktype\":-1,\"monitor_only\":1,"));
+}
+
 static void test_emit_sensor_health_reports_pcap_dir_headroom(void) {
     /* #96. With no --pcap-dir configured both fields must be -1, which
        is "not measured" and not "zero left" — reporting 0 free would
@@ -1190,7 +1258,8 @@ static void test_emit_sensor_health_measures_a_configured_pcap_dir(void) {
        "present and not -1" rather than against a number, because the
        number belongs to whatever host runs the suite — pinning it would
        make this pass or fail by accident. */
-    char dir[] = "/tmp/sloth_cap_XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "sloth_cap_XXXXXX");
     ASSERT(mkdtemp(dir) != NULL);
     ASSERT_EQ(alert_pcap_set_dir(dir), 0);
     open_fresh();
@@ -1206,6 +1275,73 @@ static void test_emit_sensor_health_measures_a_configured_pcap_dir(void) {
        would fail on btrfs for a correct build. */
     ASSERT(contains(body, "\"pcap_dir_free_inodes\":"));
     alert_pcap_set_dir(NULL);
+    ASSERT_EQ(rmdir(dir), 0);
+}
+
+/* #166: the --pcap-dir age sweep's counters. Present only with a
+ * --pcap-dir, so a run without one writes exactly what it wrote before
+ * (the replay golden has none). */
+static time_t sweep_fixed_wall(void) { return 1800000000; }
+
+static void test_emit_sensor_health_omits_sweep_without_pcap_dir(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alert_pcap_set_dir(NULL);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"pcap_dir_free_mb\":-1"));   /* the record ran */
+    ASSERT(!contains(body, "\"pcap_retain_days\""));
+    ASSERT(!contains(body, "\"pcap_swept\""));
+    ASSERT(!contains(body, "\"pcap_sweep_errors\""));
+}
+
+/* A sweep clearing a backlog moves its count on every step. The record
+ * says so on the first removal (a band crossing) and not again while
+ * the count stays in its decade. */
+static void test_sensor_health_sweep_count_does_not_churn(void) {
+    sloth_clock_test_set(NULL, sweep_fixed_wall);
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "sloth_swh_XXXXXX");
+    ASSERT(mkdtemp(dir) != NULL);
+    ASSERT_EQ(alert_pcap_set_dir(dir), 0);
+    for (int i = 0; i < 5; i++) {
+        char p[128];
+        snprintf(p, sizeof(p), "%s/alert_20261001_00000%d_X.pcap", dir, i);
+        int fd = open(p, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        ASSERT(fd >= 0);
+        if (fd >= 0) close(fd);
+        struct timespec ts[2];
+        ts[0].tv_sec = ts[1].tv_sec = sweep_fixed_wall() - 30 * 86400;
+        ts[0].tv_nsec = ts[1].tv_nsec = 0;
+        ASSERT_EQ(utimensat(AT_FDCWD, p, ts, 0), 0);
+    }
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    jsonl_emit_sensor_health(&s);                 /* line 1 */
+    unsigned long long last = 0;
+    for (int i = 0; i < 100 && alert_pcap_swept() < 5; i++) {
+        alert_pcap_sweep_step(1);                 /* one entry per step */
+        if (alert_pcap_swept() != last) {
+            last = alert_pcap_swept();
+            jsonl_emit_sensor_health(&s);         /* 0 -> 1 only is news */
+        }
+    }
+    jsonl_close();
+    ASSERT_EQ((long long)alert_pcap_swept(), 5);
+    ASSERT_EQ(count_file_lines(tmp_path), 2);
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (body) {
+        ASSERT(contains(body, "\"pcap_retain_days\":14"));
+        ASSERT(contains(body, "\"pcap_swept\":0"));
+        ASSERT(contains(body, "\"pcap_sweep_errors\":0"));
+        ASSERT_EQ(count_occ(body, "\"pcap_swept\":"), 2);
+    }
+    alert_pcap_set_dir(NULL);
+    rmdir(dir);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_emit_sensor_health_channel_fields(void) {
@@ -1725,6 +1861,141 @@ static void test_emit_sensor_health_carries_loaded_libs(void) {
     if (end) ASSERT_EQ(end[1], '\n');
 }
 
+/* #185 item 3 / ADR 0007: the record stream's own contract version,
+ * `jsonl_version`, on every sensor_health line. Compared against the
+ * macro rather than a literal — a literal here would have to be edited
+ * on every bump, and the thing worth pinning is that the emitter reports
+ * the macro the build was compiled with, not what some test remembers.
+ * The macro's own shape is pinned separately below.
+ *
+ * Appended LAST, after the blocks that are present only under a flag, so
+ * every earlier field keeps its name and position. That is checked in
+ * both shapes: the minimal record, and one carrying the --adsb and
+ * --aprs blocks, which are the fields it now has to follow.
+ *
+ * Not in the change-only signature, for `libs`' reason: it is a
+ * compile-time constant, so it could never be the change worth a line.
+ * That is deliberately NOT asserted — no input can move a constant, so
+ * a "does not churn" test would pass whatever the signature contained,
+ * which is the kind of green agents/AGENTS.md says to refuse. */
+static void test_emit_sensor_health_reports_the_jsonl_contract_version(void) {
+    open_fresh();
+    sh_evict_reset();
+    sh_parse_fault_reset();
+    sloth_state_t s; seed_health(&s);
+    char want[64], tail[80];
+    snprintf(want, sizeof(want), "\"jsonl_version\":\"%s\"", SLOTH_JSONL_VERSION);
+    /* The `}` follows the value's closing quote with nothing between,
+     * and the line ends there: the field is last, not merely present. */
+    snprintf(tail, sizeof(tail), "%s}\n", want);
+
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT(contains(body, want));
+    ASSERT(contains(body, tail));
+
+    /* Same with the optional trailing block present: the receiver's,
+     * the one flag-gated block this daemon still writes. Until JSONL
+     * 2.0.0 this half configured the ADS-B and APRS decoders; their
+     * blocks are sloth-rf's now, and configuring them here adds nothing
+     * (tests/test_rf_jsonl.c holds that). */
+    open_fresh();
+    s.adsb.configured = 1;
+    s.aprs.configured = 1;
+    s.gps.configured = 1;
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT(contains(body, "\"gps_state\":"));
+    ASSERT(!contains(body, "\"aprs_err\":"));
+    ASSERT(!contains(body, "\"adsb_state\":"));
+    ASSERT(contains(body, tail));
+    const char *gps = strstr(body, "\"gps_state\":");
+    const char *ver = strstr(body, "\"jsonl_version\":");
+    ASSERT(gps && ver);
+    if (gps && ver) ASSERT(gps < ver);
+}
+
+/* JSONL 1.7.0: --db's size ceiling, db.max_mb, on every sensor_health
+ * line, before jsonl_version (which stays last): -1 with no database
+ * open, else the knob, 0 for unlimited. slothweb draws it as the limit
+ * on sloth.db's size. Seen red with the member written as db_max_mb()
+ * unconditionally (0, "unlimited", with no database open), and with it
+ * left out of `sig` (a moved ceiling wrote no line: the second emit
+ * below came back empty). */
+static void test_emit_sensor_health_reports_db_max_mb(void) {
+    open_fresh();
+    sh_evict_reset();
+    sh_parse_fault_reset();
+    sloth_state_t s; seed_health(&s);
+    db_close();
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    char want[96];
+    snprintf(want, sizeof(want), "\"db_max_mb\":-1,\"jsonl_version\":\"%s\"}\n",
+             SLOTH_JSONL_VERSION);
+    ASSERT(contains(body, want));
+#ifdef WITH_SQLITE
+    char dbp[TEST_TMP_MAX] = "";   /* test_tmp_tpl() fills an EMPTY buffer */
+    int fd = mkstemp(test_tmp_tpl(dbp, sizeof(dbp), "sloth_jsonl_db_XXXXXX"));
+    if (fd >= 0) close(fd);
+    unlink(dbp);
+    /* Say why when the open is refused: CI's plain test job refused it
+     * on fe60b02e and printed nothing a reader could use, which is what
+     * db_error() exists for (#209). The same shape as the jsonl_open()
+     * print ec8a9d06 added in tests/test_twin_field.c. */
+    int opened = db_open(dbp);
+    if (opened != 1) fprintf(stderr, "    db_open(%s): %s\n", dbp,
+                             db_error()[0] ? db_error() : "?");
+    ASSERT_EQ(opened, 1);
+    int was = db_max_mb();
+    db_set_max_mb(1024);
+    open_fresh();
+    jsonl_emit_sensor_health(&s);
+    /* A moved ceiling is a change worth a line. */
+    db_set_max_mb(0);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (body) {
+        ASSERT(contains(body, "\"db_max_mb\":1024,"));
+        ASSERT(contains(body, "\"db_max_mb\":0,"));
+    }
+    db_set_max_mb(was);
+    db_close();
+    unlink(dbp);
+#endif
+}
+
+/* The macro's form IS the bump rule, so it is pinned rather than
+ * trusted: three numeric components and nothing after them, and MAJOR
+ * 2. MINOR and PATCH are free to move — that is a slice's call under
+ * agents/dark-factory.md §4.1 — while MAJOR is a non-additive break and
+ * therefore a stop-and-ask (§4.3). This assertion is what that
+ * stop-and-ask has to come through.
+ *
+ * It came through once: 1 -> 2 on 2026-11-15 (#216), with the owner's
+ * sign-off recorded in ADR 0010, when the decoders' records left
+ * sloth-wifi's stream for sloth-rf's. The next MAJOR needs its own. */
+static void test_jsonl_contract_version_is_a_major_2_semver(void) {
+    int maj = -1, min = -1, pat = -1;
+    char rest[8] = "x";
+    int n = sscanf(SLOTH_JSONL_VERSION, "%d.%d.%d%7s", &maj, &min, &pat, rest);
+    ASSERT_EQ(n, 3);                 /* exactly three components, no tail */
+    ASSERT_EQ(maj, 2);
+    ASSERT_GE(min, 0);
+    ASSERT_GE(pat, 0);
+}
+
 /* …and, like the flow rings, the tally must NOT move the change-only
  * signature. Under mdk4 mode m or a beacon flood it climbs on every
  * frame; signing over it would emit this record every tick forever
@@ -1915,7 +2186,8 @@ static void test_sensor_health_new_table_kinds_move_the_signature(void) {
  * would report last tick's count instead of this one's). */
 
 static void test_emit_sensor_health_reports_pcap_export_failures(void) {
-    char dir[] = "/tmp/sloth_sh_pcap_XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "sloth_sh_pcap_XXXXXX");
     char *d = mkdtemp(dir);
     ASSERT(d != NULL);
     if (!d) return;
@@ -2459,7 +2731,7 @@ static void test_btm_steer_empty_emits_nothing(void) {
  * that is not private, or a symlink, is refused and left untouched. */
 
 static void j87_path(char *out, size_t sz) {
-    snprintf(out, sz, "/tmp/sloth_test_jsonl87_%d.jsonl", (int)getpid());
+    snprintf(out, sz, "%s/sloth_test_jsonl87_%d.jsonl", test_tmpdir(), (int)getpid());
 }
 
 static int j87_mode(const char *path) {
@@ -2715,6 +2987,7 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_alert_carries_unverified_signature);
     RUN_TEST(test_emit_alert_carries_validated_signature);
     RUN_TEST(test_emit_alert_omits_signature_when_no_tool_matched);
+    RUN_TEST(test_emit_alert_carries_hw_verdict);
     RUN_TEST(test_emit_alert_carries_evidence_ids);
     RUN_TEST(test_emit_alert_omits_evidence_when_none_cited);
     RUN_TEST(test_emit_alert_evidence_clamped_to_array_size);
@@ -2744,8 +3017,11 @@ void run_jsonl_tests(void) {
 
     TEST_SUITE("jsonl sensor_health record (#91 slice 3)");
     RUN_TEST(test_emit_sensor_health_on_empty_state);
+    RUN_TEST(test_emit_sensor_health_reports_the_ip_stream_link_type);
     RUN_TEST(test_emit_sensor_health_reports_pcap_dir_headroom);
     RUN_TEST(test_emit_sensor_health_measures_a_configured_pcap_dir);
+    RUN_TEST(test_emit_sensor_health_omits_sweep_without_pcap_dir);
+    RUN_TEST(test_sensor_health_sweep_count_does_not_churn);
     RUN_TEST(test_emit_sensor_health_channel_fields);
     RUN_TEST(test_emit_sensor_health_confirmed_channel_is_ok);
     RUN_TEST(test_emit_sensor_health_retune_reason);
@@ -2764,6 +3040,9 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_sensor_health_flow_ring_churn_does_not_re_emit);
     RUN_TEST(test_emit_sensor_health_parse_faults);
     RUN_TEST(test_emit_sensor_health_carries_loaded_libs);
+    RUN_TEST(test_emit_sensor_health_reports_the_jsonl_contract_version);
+    RUN_TEST(test_emit_sensor_health_reports_db_max_mb);
+    RUN_TEST(test_jsonl_contract_version_is_a_major_2_semver);
     RUN_TEST(test_sensor_health_parse_faults_do_not_re_emit);
     RUN_TEST(test_emit_sensor_health_memory_fields);
     RUN_TEST(test_sensor_health_memory_does_not_re_emit);
@@ -2803,4 +3082,8 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_btm_steer_empty_emits_nothing);
     RUN_TEST(test_json_escape_output_is_valid_utf8);
     RUN_TEST(test_json_escape_keeps_text_escapes_line_separators);
+
+    /* The suite's shared sink file, which the tests above reopen. */
+    jsonl_close();
+    unlink(tmp_path);
 }

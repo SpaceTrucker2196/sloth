@@ -8,6 +8,7 @@
 #include "evidence_export.h"
 #include "evidence_ring.h"
 #include "eapol_log.h"
+#include "tmp_dir.h"
 
 /* ── Gated evidence export — issue #92 ───────────────────────
  *
@@ -43,21 +44,21 @@
  * genuine regression first is the dropped descriptor, because it is the
  * one no caller can route around. */
 
-#define EXP_DIR "/tmp/sloth_evexport_test"
+static char g_exp_dir[TEST_TMP_MAX];
+#define EXP_DIR g_exp_dir
 
-/* Delete our candidate files and recreate EXP_DIR 0700 — #87 refuses a
-   permissive directory, and a leftover file would make the emptiness
-   assertions below pass or fail for the wrong reason. */
+/* Remove the previous directory with everything in it and make a fresh
+   0700 one — #87 refuses a permissive directory, and a leftover file
+   would make the emptiness assertions below pass or fail for the wrong
+   reason. The whole tree goes, not a list of names: the export also
+   writes a sloth-manifest-<ts>-<rand>.jsonl (#92 slice 3), and a
+   name-by-name cleanup that predated it left the directory behind
+   with one more manifest in it on every run. */
 static void reset_dir(void) {
-    char path[512];
-    const char *names[] = { "ev1.pcap", "ev2.pcap", "ev3.pcap",
-                            "eapol.22000", NULL };
-    for (int i = 0; names[i]; i++) {
-        snprintf(path, sizeof(path), "%s/%s", EXP_DIR, names[i]);
-        unlink(path);
-    }
-    rmdir(EXP_DIR);
-    mkdir(EXP_DIR, 0700);
+    if (g_exp_dir[0]) test_rm_tree(g_exp_dir);
+    if (test_tmp_path(g_exp_dir, sizeof(g_exp_dir), "sloth_evexport_XXXXXX") != 0 ||
+        !mkdtemp(g_exp_dir))
+        g_exp_dir[0] = '\0';
 }
 
 /* How many of our candidate names exist in EXP_DIR. */
@@ -286,7 +287,7 @@ void run_evidence_export_tests(void) {
        assumes the shipped default would otherwise inherit an open gate
        from here. */
     eapol_set_collect_enabled(0);
-    reset_dir();
-    rmdir(EXP_DIR);
+    test_rm_tree(EXP_DIR);
+    g_exp_dir[0] = '\0';
     evidence_ring_reset();
 }

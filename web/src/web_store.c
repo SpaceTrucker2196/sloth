@@ -142,6 +142,416 @@ static const char STEP_V4_SQL[] =
     ") WITHOUT ROWID;\n"
     "CREATE INDEX passive_ptr_last ON passive_ptr (last_seen);\n";
 
+/* v4 -> v5: the WiFi view's channel mix (web_chmix.h): per channel
+ * and closed minute or hour bucket (tier 1 or 2), the frames of each of
+ * its top transmitters (tx a canonical MAC, kind 1 an AP, 2 a client)
+ * and of the rest (tx '', kind 0). Since 2026-11-02 the same table also
+ * holds the BLE view's class mix (web_bledev.h): channel a class slug
+ * "b:phone" .. "b:unk", which no channel key can be, tx an advertiser's
+ * address, kind 3 (WEB_TX_BLE), frames its advertising reports; since
+ * 2026-11-03 also anonymous advertising, channel "b:unk", tx the
+ * all-zero address and kind 4 (WEB_TX_BLE_ANON), which a b801ab7 slothweb
+ * skips on read (its BLE reader keeps kind 3), so those reports are
+ * missing from its minute and hour cells, never drawn as an address. Values
+ * the columns already hold kinds of, so no step: a v7 file is read as
+ * it is, an older slothweb never draws a "b:" row (its WiFi reader
+ * keeps canonical channel keys and kinds 1 and 2 only), and each view
+ * reads its own namespace (web_store_mix_query_ns()). The kind is in the key, as it is in
+ * memory: a MAC that both beacons and probes is two transmitters, and
+ * neither's frames are added to the other's row. The key is canonical text and the
+ * rest are numbers: no SSID, nor any other string a peer chose, is
+ * stored. Indexed on (tier, t), which retention, the row cap, the
+ * ceiling and the grid all select on. Additive: one new table and its
+ * index, nothing that exists is changed. */
+static const char STEP_V5_SQL[] =
+    "CREATE TABLE chmix (\n"
+    "  tier    INTEGER NOT NULL,\n"
+    "  channel TEXT NOT NULL,\n"
+    "  t       INTEGER NOT NULL,\n"
+    "  tx      TEXT NOT NULL,\n"
+    "  kind    INTEGER NOT NULL,\n"
+    "  frames  INTEGER NOT NULL,\n"
+    "  PRIMARY KEY (tier, channel, t, tx, kind)\n"
+    ") WITHOUT ROWID;\n"
+    "CREATE INDEX chmix_t ON chmix (tier, t);\n";
+
+/* v5 -> v6 (docs/web-frrs-spec.md §3): the operator's own state. triage
+ * is append-only: one row per decision on one finding (its subject as
+ * the alert routes name it, the sloth.db rowid once resolved, and the
+ * (type, addr, port, first_seen) descriptor that survives a rebuild),
+ * so every change is reversible by another; folded counts the rows of
+ * the alert's history folded away (one alert past WEB_FRRS_HIST_PER, the
+ * table at its cap), claim_by and claim_peer what an imported file said
+ * of who and where (peer is then the importer). The tacdb_* tables are the
+ * platforms, their equipment and the units that own them, soft-deleted
+ * (deleted 0/1) so a delete is a change like any other. Every TEXT
+ * column holds an address, slothweb's own words or operator text, cut
+ * to its bound at validation (web_frrs.c); nothing from the stream.
+ * Additive: five new tables and their indexes, nothing that exists is
+ * changed. Plain CREATE, as every step: a file already holding one of
+ * these names fails the step and stays at v5. */
+static const char STEP_V6_SQL[] =
+    "CREATE TABLE triage (\n"
+    "  id         INTEGER PRIMARY KEY,\n"
+    "  subject    TEXT NOT NULL,\n"
+    "  finding    INTEGER,\n"
+    "  type       INTEGER NOT NULL,\n"
+    "  addr       TEXT NOT NULL DEFAULT '',\n"
+    "  port       INTEGER NOT NULL DEFAULT 0,\n"
+    "  first_seen INTEGER NOT NULL DEFAULT 0,\n"
+    "  state      INTEGER NOT NULL,\n"
+    "  prev_state INTEGER NOT NULL DEFAULT 0,\n"
+    "  via        INTEGER NOT NULL DEFAULT 0,\n"
+    "  basis      TEXT NOT NULL DEFAULT '',\n"
+    "  note       TEXT NOT NULL DEFAULT '',\n"
+    "  who        TEXT NOT NULL DEFAULT '',\n"
+    "  peer       TEXT NOT NULL DEFAULT '',\n"
+    "  ts         INTEGER NOT NULL,\n"
+    "  folded     INTEGER NOT NULL DEFAULT 0,\n"
+    "  claim_by   TEXT NOT NULL DEFAULT '',\n"
+    "  claim_peer TEXT NOT NULL DEFAULT ''\n"
+    ");\n"
+    "CREATE INDEX triage_subject ON triage (subject, id);\n"
+    "CREATE INDEX triage_finding ON triage (finding, id);\n"
+    "CREATE INDEX triage_desc ON triage (type, addr, port, first_seen);\n"
+    "CREATE TABLE tacdb_unit (\n"
+    "  id      INTEGER PRIMARY KEY,\n"
+    "  parent  INTEGER,\n"
+    "  name    TEXT NOT NULL,\n"
+    "  kind    INTEGER NOT NULL DEFAULT 5,\n"
+    "  note    TEXT NOT NULL DEFAULT '',\n"
+    "  origin  INTEGER NOT NULL DEFAULT 0,\n"
+    "  created INTEGER NOT NULL,\n"
+    "  updated INTEGER NOT NULL,\n"
+    "  deleted INTEGER NOT NULL DEFAULT 0\n"
+    ");\n"
+    "CREATE INDEX tacdb_unit_parent ON tacdb_unit (parent);\n"
+    "CREATE TABLE tacdb_platform (\n"
+    "  id           INTEGER PRIMARY KEY,\n"
+    "  unit         INTEGER,\n"
+    "  nomenclature TEXT NOT NULL,\n"
+    "  class        INTEGER NOT NULL DEFAULT 0,\n"
+    "  vendor       TEXT NOT NULL DEFAULT '',\n"
+    "  note         TEXT NOT NULL DEFAULT '',\n"
+    "  confirmed    INTEGER NOT NULL DEFAULT 1,\n"
+    "  origin       INTEGER NOT NULL DEFAULT 0,\n"
+    "  created      INTEGER NOT NULL,\n"
+    "  updated      INTEGER NOT NULL,\n"
+    "  deleted      INTEGER NOT NULL DEFAULT 0\n"
+    ");\n"
+    "CREATE UNIQUE INDEX tacdb_platform_nom ON tacdb_platform (nomenclature)"
+    " WHERE deleted = 0;\n"
+    "CREATE TABLE tacdb_emitter (\n"
+    "  platform  INTEGER NOT NULL,\n"
+    "  kind      INTEGER NOT NULL,\n"
+    "  addr      TEXT NOT NULL,\n"
+    "  role      INTEGER NOT NULL DEFAULT 0,\n"
+    "  label     TEXT NOT NULL DEFAULT '',\n"
+    "  confirmed INTEGER NOT NULL DEFAULT 1,\n"
+    "  origin    INTEGER NOT NULL DEFAULT 0,\n"
+    "  created   INTEGER NOT NULL,\n"
+    "  updated   INTEGER NOT NULL,\n"
+    "  deleted   INTEGER NOT NULL DEFAULT 0,\n"
+    "  PRIMARY KEY (platform, kind, addr)\n"
+    ") WITHOUT ROWID;\n"
+    "CREATE UNIQUE INDEX tacdb_emitter_addr ON tacdb_emitter (kind, addr)"
+    " WHERE deleted = 0;\n"
+    "CREATE TABLE tacdb_dismiss (\n"
+    "  rule INTEGER NOT NULL,\n"
+    "  a    TEXT NOT NULL,\n"
+    "  b    TEXT NOT NULL DEFAULT '',\n"
+    "  ts   INTEGER NOT NULL,\n"
+    "  PRIMARY KEY (rule, a, b)\n"
+    ") WITHOUT ROWID;\n";
+
+/* v6 -> v7: the BLE view's tables (web_ble.h; owner request
+ * 2026-10-27). sloth.db keeps no BLE table, so slothweb keeps the
+ * advertisers and the findings it read off the stream here, and seeds
+ * its in-memory tables from them at start. ble_device is one advertiser
+ * as one sensor heard it, keyed (addr, addr_type, iface) as sloth keys
+ * it; every column but the name is a number or one of sloth's own
+ * words, and the name is the local name in its display form (web_ssid.h,
+ * as passive_ptr.name holds a peer-chosen name), never a key. ble_alert
+ * is one finding by the hash of its key (the key itself, which can carry
+ * remote text in other alert families, is never stored); its per-kind
+ * integers are eight generic columns, its one word of the kind the
+ * label, and a flood's citation line (sloth's own text, src/ble_flood.c)
+ * the detail. Both indexed on last seen, which retention, the row caps and
+ * the seed all select on. Additive: two new tables and their indexes,
+ * nothing that exists is changed (the triage and TACDB rows of v6 among
+ * it). Plain CREATE, as every step: a file already holding one of these
+ * names fails the step and stays at v6. */
+static const char STEP_V7_SQL[] =
+    "CREATE TABLE ble_device (\n"
+    "  addr            TEXT NOT NULL,\n"
+    "  addr_type       INTEGER NOT NULL,\n"
+    "  iface           TEXT NOT NULL,\n"
+    "  adapter         INTEGER NOT NULL,\n"
+    "  sampled         INTEGER NOT NULL,\n"
+    "  pdu_mask        INTEGER NOT NULL,\n"
+    "  name            TEXT NOT NULL,\n"
+    "  name_np         INTEGER NOT NULL,\n"
+    "  name_complete   INTEGER NOT NULL,\n"
+    "  uuid16          INTEGER NOT NULL,\n"
+    "  mfr_id          INTEGER NOT NULL,\n"
+    "  mfr_subtype     INTEGER NOT NULL,\n"
+    "  svc_data_uuid16 INTEGER NOT NULL,\n"
+    "  appearance      INTEGER NOT NULL,\n"
+    "  hid             INTEGER NOT NULL,\n"
+    "  tx_power        INTEGER NOT NULL,\n"
+    "  flags           INTEGER NOT NULL,\n"
+    "  rssi            INTEGER NOT NULL,\n"
+    "  rssi_best       INTEGER NOT NULL,\n"
+    "  adv_count       INTEGER NOT NULL,\n"
+    "  watch_category  TEXT NOT NULL,\n"
+    "  ext_adv         INTEGER NOT NULL,\n"
+    "  primary_phy     INTEGER NOT NULL,\n"
+    "  secondary_phy   INTEGER NOT NULL,\n"
+    "  adv_sid         INTEGER NOT NULL,\n"
+    "  first_seen      INTEGER NOT NULL,\n"
+    "  last_seen       INTEGER NOT NULL,\n"
+    "  est_dist_dm     INTEGER NOT NULL,\n"
+    "  est_band        INTEGER NOT NULL,\n"
+    "  est_trend       INTEGER NOT NULL,\n"
+    "  est_ptx         INTEGER NOT NULL,\n"
+    "  pres_bucket     INTEGER NOT NULL,\n"
+    "  pres_lo         INTEGER NOT NULL,\n"
+    "  pres_hi         INTEGER NOT NULL,\n"
+    "  PRIMARY KEY (addr, addr_type, iface)\n"
+    ") WITHOUT ROWID;\n"
+    "CREATE INDEX ble_device_last ON ble_device (last_seen);\n"
+    "CREATE TABLE ble_alert (\n"
+    "  key_hash    TEXT PRIMARY KEY,\n"
+    "  kind        INTEGER NOT NULL,\n"
+    "  alert       TEXT NOT NULL,\n"
+    "  iface       TEXT NOT NULL,\n"
+    "  sampled     INTEGER NOT NULL,\n"
+    "  first_ts    INTEGER NOT NULL,\n"
+    "  last_ts     INTEGER NOT NULL,\n"
+    "  resolved_ts INTEGER NOT NULL,\n"
+    "  n0          INTEGER NOT NULL,\n"
+    "  n1          INTEGER NOT NULL,\n"
+    "  n2          INTEGER NOT NULL,\n"
+    "  n3          INTEGER NOT NULL,\n"
+    "  n4          INTEGER NOT NULL,\n"
+    "  n5          INTEGER NOT NULL,\n"
+    "  n6          INTEGER NOT NULL,\n"
+    "  n7          INTEGER NOT NULL,\n"
+    "  rssi        INTEGER NOT NULL,\n"
+    "  label       TEXT NOT NULL,\n"
+    "  detail      TEXT NOT NULL\n"
+    ") WITHOUT ROWID;\n"
+    "CREATE INDEX ble_alert_last ON ble_alert (last_ts);\n";
+
+/* v7 -> v8: the owner's fleet (#192 F1, web_fleet.h, ADR 0008). The
+ * peers slothweb pulls, and what each one reported. peer_sites is one
+ * row per --peer name: its URL, the last attempt and the last good pull
+ * (slothweb's clock), the last refusal in slothweb's own words, the
+ * site's label, position and build as the peer reported them, the
+ * peer's own clock at that answer (the next pull's since) and the rows
+ * it held. peer_sightings is one row per (peer, kind, key): a device,
+ * BLE advertiser, AP, probed SSID, alert or verdict the peer reported,
+ * its first and last seen widened by every pull, its label, vendor and
+ * signal as last reported, and the rest of the row as JSON slothweb
+ * writes itself from validated members. A rowid table, so the per-peer
+ * bound deletes by rowid; indexed on (peer, last_seen), which the
+ * bound and the age limit select on. Additive: two new tables and an
+ * index, nothing that exists is changed. Plain CREATE, as every step: a
+ * file already holding one of these names fails the step and stays at
+ * v7. */
+static const char STEP_V8_SQL[] =
+    "CREATE TABLE peer_sites (\n"
+    "  peer           TEXT PRIMARY KEY,\n"
+    "  url            TEXT NOT NULL,\n"
+    "  label          TEXT NOT NULL DEFAULT '',\n"
+    "  last_attempt   INTEGER NOT NULL DEFAULT 0,\n"
+    "  last_ok        INTEGER NOT NULL DEFAULT 0,\n"
+    "  last_error     TEXT NOT NULL DEFAULT '',\n"
+    "  lat            REAL,\n"
+    "  lon            REAL,\n"
+    "  alt            REAL,\n"
+    "  pos_source     TEXT NOT NULL DEFAULT '',\n"
+    "  pos_ts         INTEGER NOT NULL DEFAULT 0,\n"
+    "  remote_version TEXT NOT NULL DEFAULT '',\n"
+    "  remote_ts      INTEGER NOT NULL DEFAULT 0,\n"
+    "  rows_last      INTEGER NOT NULL DEFAULT 0\n"
+    ");\n"
+    "CREATE TABLE peer_sightings (\n"
+    "  peer       TEXT NOT NULL,\n"
+    "  kind       TEXT NOT NULL,\n"
+    "  key        TEXT NOT NULL,\n"
+    "  label      TEXT NOT NULL DEFAULT '',\n"
+    "  vendor     TEXT NOT NULL DEFAULT '',\n"
+    "  rssi       INTEGER,\n"
+    "  first_seen INTEGER NOT NULL,\n"
+    "  last_seen  INTEGER NOT NULL,\n"
+    "  extra      TEXT NOT NULL DEFAULT '{}',\n"
+    "  PRIMARY KEY (peer, kind, key)\n"
+    ");\n"
+    "CREATE INDEX peer_sightings_last ON peer_sightings (peer, last_seen);\n";
+
+/* v8 -> v9 (owner request 2026-11-11; sequenced after the fleet's v8,
+ * which reached main first): triage notes on slothweb's own
+ * anomalies, and the operator's links between findings. An anomaly's
+ * triage rows go in the triage table v6 made, beside the alerts', under
+ * a subject of their own ("a" and sixteen hex digits, web_anomaly_tid();
+ * type -1, which no alert has), so that table is not touched here.
+ * anom_subject says what such a subject names, its rule, metric and key
+ * as the episode table already holds them (a rule name, a catalogue
+ * name and a canonical key), written when an anomaly is first triaged
+ * or linked: the engine forgets an episode after a day, and a note has
+ * to say what it was written on for longer than that. relation is one
+ * link the operator made, from one finding to another: each end a kind
+ * (0 an alert, 1 an anomaly, 2 a device, 3 a BLE advertiser: a number,
+ * so a kind added later is a value, not a step), the id the routes
+ * name it by (an alert's triage subject, an anomaly's id, a canonical
+ * MAC, a BLE address and its type) and a
+ * label of slothweb's own words (an alert type's name and address, an
+ * anomaly's rule and key), kept so a link whose end has aged out of
+ * sloth.db or the engine still says what it pointed at; note and who
+ * are operator text from the validated POST body, peer the
+ * connection's address. A suggested link is never stored: only what
+ * the operator accepted is here. Additive: two new tables and their
+ * indexes, nothing that exists is changed. Plain CREATE, as every
+ * step: a file already holding one of these names fails the step and
+ * stays at v8. */
+static const char STEP_V9_SQL[] =
+    "CREATE TABLE anom_subject (\n"
+    "  subject TEXT PRIMARY KEY,\n"
+    "  rule    TEXT NOT NULL,\n"
+    "  metric  TEXT NOT NULL,\n"
+    "  key     TEXT NOT NULL,\n"
+    "  ts      INTEGER NOT NULL\n"
+    ") WITHOUT ROWID;\n"
+    "CREATE TABLE relation (\n"
+    "  id      INTEGER PRIMARY KEY,\n"
+    "  a_kind  INTEGER NOT NULL,\n"
+    "  a_id    TEXT NOT NULL,\n"
+    "  a_label TEXT NOT NULL DEFAULT '',\n"
+    "  b_kind  INTEGER NOT NULL,\n"
+    "  b_id    TEXT NOT NULL,\n"
+    "  b_label TEXT NOT NULL DEFAULT '',\n"
+    "  note    TEXT NOT NULL DEFAULT '',\n"
+    "  who     TEXT NOT NULL DEFAULT '',\n"
+    "  peer    TEXT NOT NULL DEFAULT '',\n"
+    "  ts      INTEGER NOT NULL\n"
+    ");\n"
+    "CREATE UNIQUE INDEX relation_pair ON relation (a_kind, a_id, b_kind, b_id);\n"
+    "CREATE INDEX relation_to ON relation (b_kind, b_id);\n";
+
+/* v9 -> v10 (owner request 2026-11-11: "an openclaw agent will need to
+ * ... add notes to anomalies, devices, and other observations"): a
+ * plain note on the things the page lists that are not findings, and
+ * how a link was written. note is one row per note or retraction,
+ * append-only: the kind of subject (0 a device, 1 a BLE advertiser, 2
+ * an SSID, 3 a GNSS satellite, 4 an aircraft, 5 an APRS station: a
+ * number, so a kind added later is a value, not a step), the subject's
+ * id as the routes name it (a canonical MAC, a BLE address and its
+ * type, the base64url of an SSID's octets and never its display form,
+ * "gnssid.prn", an ICAO address, a callsign), the text, who, from
+ * where, and how it was written (via: 0 the page, 3 an agent through
+ * slothweb-mcp; the triage table's own values); retracts is 0 on a
+ * note and the id of the note taken back on a retraction, which is a
+ * row as a triage clear is and never a delete; folded counts the
+ * retracted rows of the subject folded away at a cap (web_notes.h). An
+ * alert's or an anomaly's note stays its triage row: this table holds
+ * none. relation gains via, the same values, default 0: every link
+ * made before this step was the page's, which is what 0 says. The one
+ * step that is not CREATE alone: ADD COLUMN with a default is additive
+ * (the 2026-10-21 rule's own words, "columns or tables with
+ * defaults"), rewrites no stored value and rolls back with the rest. A
+ * file already holding the name note_subject fails the step at its
+ * last statement and stays at v9, relation as it was. */
+static const char STEP_V10_SQL[] =
+    "CREATE TABLE note (\n"
+    "  id       INTEGER PRIMARY KEY,\n"
+    "  kind     INTEGER NOT NULL,\n"
+    "  subject  TEXT NOT NULL,\n"
+    "  text     TEXT NOT NULL DEFAULT '',\n"
+    "  who      TEXT NOT NULL DEFAULT '',\n"
+    "  peer     TEXT NOT NULL DEFAULT '',\n"
+    "  via      INTEGER NOT NULL DEFAULT 0,\n"
+    "  retracts INTEGER NOT NULL DEFAULT 0,\n"
+    "  folded   INTEGER NOT NULL DEFAULT 0,\n"
+    "  ts       INTEGER NOT NULL\n"
+    ");\n"
+    "ALTER TABLE relation ADD COLUMN via INTEGER NOT NULL DEFAULT 0;\n"
+    "CREATE INDEX note_subject ON note (kind, subject, id);\n";
+
+/* v10 -> v11 (owner ruling 2026-11-11: schedule the restart-loss fix):
+ * which minutes of an hour slothweb observed, kept across its own
+ * restarts. One row an hour: mask's bit i is the hour's minute i,
+ * observed (the socket connected and a record inside 60 s at every
+ * store-thread step in it, web_anomaly.c's minute_observed()) by a
+ * process that also wrote that minute's rows to the minute tier first;
+ * each process ORs its own bits in, so a row is the union of every
+ * run's. done is 1 once a process has passed the hour (fed it to the
+ * baselines or judged it unobserved). The hour's values themselves are
+ * not stored here: the minute tier already holds both parts of a split
+ * hour (web_anomaly.c's hour_merge()). Additive: one new table, nothing
+ * that exists is changed. Plain CREATE: a file already holding the name
+ * fails the step and stays at v10. */
+static const char STEP_V11_SQL[] =
+    "CREATE TABLE anom_cover (\n"
+    "  hour INTEGER PRIMARY KEY,\n"
+    "  mask INTEGER NOT NULL DEFAULT 0,\n"
+    "  done INTEGER NOT NULL DEFAULT 0\n"
+    ");\n";
+
+/* v11 -> v12 (#198: triage many alerts as one): the operator's
+ * incidents, web_incident.h. incident is one row per incident opened
+ * (closes 0: its title, the state its members read as, the note, who,
+ * from where, how written, when) and one per incident closed (closes
+ * the id of the row it closes, with the state it closed at and the
+ * closing note): a close is a row, as a triage clear is, and the
+ * partial unique index keeps it to one. incident_member is one row per
+ * member added (kind 0 an alert, filed as a triage row files one: its
+ * subject, the finding when sloth.db names it, and the descriptor that
+ * outlives a rebuild of sloth.db; kind 1 a standing filter: an alert
+ * type or -1 any, an address or '' any, and a first_seen window, 0
+ * open at either end) and one per member removed (removes the id of
+ * the row it takes back, never a delete). Every column has a default
+ * but the clock and the state; via is the triage table's own values.
+ * Additive: two new tables and their indexes, nothing that exists is
+ * changed. Plain CREATE: a file already holding one of these names
+ * fails the step and stays at v11. */
+static const char STEP_V12_SQL[] =
+    "CREATE TABLE incident (\n"
+    "  id     INTEGER PRIMARY KEY,\n"
+    "  closes INTEGER NOT NULL DEFAULT 0,\n"
+    "  title  TEXT NOT NULL DEFAULT '',\n"
+    "  state  INTEGER NOT NULL,\n"
+    "  note   TEXT NOT NULL DEFAULT '',\n"
+    "  who    TEXT NOT NULL DEFAULT '',\n"
+    "  peer   TEXT NOT NULL DEFAULT '',\n"
+    "  via    INTEGER NOT NULL DEFAULT 0,\n"
+    "  ts     INTEGER NOT NULL\n"
+    ");\n"
+    "CREATE UNIQUE INDEX incident_closes ON incident (closes) WHERE closes > 0;\n"
+    "CREATE TABLE incident_member (\n"
+    "  id         INTEGER PRIMARY KEY,\n"
+    "  incident   INTEGER NOT NULL,\n"
+    "  kind       INTEGER NOT NULL DEFAULT 0,\n"
+    "  subject    TEXT NOT NULL DEFAULT '',\n"
+    "  finding    INTEGER,\n"
+    "  type       INTEGER NOT NULL DEFAULT -1,\n"
+    "  addr       TEXT NOT NULL DEFAULT '',\n"
+    "  port       INTEGER NOT NULL DEFAULT 0,\n"
+    "  first_seen INTEGER NOT NULL DEFAULT 0,\n"
+    "  t_from     INTEGER NOT NULL DEFAULT 0,\n"
+    "  t_to       INTEGER NOT NULL DEFAULT 0,\n"
+    "  who        TEXT NOT NULL DEFAULT '',\n"
+    "  peer       TEXT NOT NULL DEFAULT '',\n"
+    "  via        INTEGER NOT NULL DEFAULT 0,\n"
+    "  removes    INTEGER NOT NULL DEFAULT 0,\n"
+    "  ts         INTEGER NOT NULL\n"
+    ");\n"
+    "CREATE INDEX incident_member_of ON incident_member (incident, id);\n"
+    "CREATE INDEX incident_member_subject ON incident_member (subject);\n"
+    "CREATE INDEX incident_member_finding ON incident_member (finding);\n"
+    "CREATE INDEX incident_member_desc ON incident_member (type, addr, port, first_seen);\n"
+    "CREATE INDEX incident_member_removes ON incident_member (removes);\n";
+
 typedef struct {
     int         from;
     const char *sql;
@@ -154,6 +564,15 @@ static const web_step_t STEPS[] = {
     { 2, STEP_V3_SQL, "created baseline, baseline_cell, episode, fanout "
                       "and reported" },
     { 3, STEP_V4_SQL, "created passive_ptr" },
+    { 4, STEP_V5_SQL, "created chmix" },
+    { 5, STEP_V6_SQL, "created triage, tacdb_unit, tacdb_platform, "
+                      "tacdb_emitter and tacdb_dismiss" },
+    { 6, STEP_V7_SQL, "created ble_device and ble_alert" },
+    { 7, STEP_V8_SQL, "created peer_sites and peer_sightings" },
+    { 8, STEP_V9_SQL, "created anom_subject and relation" },
+    { 9, STEP_V10_SQL, "created note and added relation.via" },
+    { 10, STEP_V11_SQL, "created anom_cover" },
+    { 11, STEP_V12_SQL, "created incident and incident_member" },
 };
 #define STEP_N ((int)(sizeof(STEPS) / sizeof(STEPS[0])))
 
@@ -199,6 +618,13 @@ int web_store_open(web_store_t *s, const char *path, char *err, size_t errsz) {
 
 void web_store_close(web_store_t *s) { (void)s; }
 
+int web_store_open_aux(web_store_t *s, struct sqlite3 **out, char *err, size_t errsz) {
+    (void)s;
+    *out = NULL;
+    snprintf(err, errsz, "built without SQLite");
+    return -1;
+}
+
 int web_store_write(web_store_t *s, const web_qrow_t *rows, size_t n) {
     (void)s; (void)rows; (void)n;
     return -1;
@@ -232,6 +658,14 @@ int web_store_keys(web_store_t *s, int tier, int metric, long long from,
                    long long to, char (*out)[WEB_KEY_MAX + 1], int max) {
     (void)s; (void)tier; (void)metric; (void)from; (void)to; (void)out;
     (void)max;
+    return -1;
+}
+
+int web_store_keys_after(web_store_t *s, int tier, int metric, long long from,
+                         long long to, const char *after,
+                         char (*out)[WEB_KEY_MAX + 1], int max) {
+    (void)s; (void)tier; (void)metric; (void)from; (void)to; (void)after;
+    (void)out; (void)max;
     return -1;
 }
 
@@ -325,6 +759,41 @@ int web_store_hours_at(web_store_t *s, int metric, const char *key,
     return -1;
 }
 
+int web_store_cover_put(web_store_t *s, long long hour, unsigned long long mask) {
+    (void)s; (void)hour; (void)mask;
+    return -1;
+}
+
+int web_store_cover_done(web_store_t *s, long long hour) {
+    (void)s; (void)hour;
+    return -1;
+}
+
+int web_store_cover_get(web_store_t *s, long long hour, unsigned long long *mask,
+                        int *done) {
+    (void)s; (void)hour;
+    *mask = 0;
+    *done = 0;
+    return -1;
+}
+
+int web_store_cover_open(web_store_t *s, long long from, long long to,
+                         long long *hours, int max) {
+    (void)s; (void)from; (void)to; (void)hours; (void)max;
+    return -1;
+}
+
+int web_store_cover_prune(web_store_t *s, long long before) {
+    (void)s; (void)before;
+    return -1;
+}
+
+long long web_store_hour_minutes(web_store_t *s, long long hour,
+                                 web_store_minute_fn fn, void *ctx) {
+    (void)s; (void)hour; (void)fn; (void)ctx;
+    return -1;
+}
+
 int web_store_ptr_load(web_store_t *s, int cap,
                        void (*fn)(void *ctx, const web_store_ptr_t *r),
                        void *ctx) {
@@ -344,6 +813,50 @@ int web_store_presence(web_store_t *s, int tier, int metric, const char *key,
                        unsigned char *bits) {
     (void)s; (void)tier; (void)metric; (void)key; (void)from; (void)to;
     (void)ncell; (void)cell_s; (void)bits;
+    return -1;
+}
+
+int web_store_mix_write(web_store_t *s, const web_mix_row_t *rows, size_t n) {
+    (void)s; (void)rows; (void)n;
+    return -1;
+}
+
+int web_store_mix_query(web_store_t *s, int tier, long long from, long long to,
+                        long long max, web_store_mix_fn fn, void *ctx,
+                        int *more) {
+    (void)s; (void)tier; (void)from; (void)to; (void)max; (void)fn; (void)ctx;
+    *more = 0;
+    return -1;
+}
+
+int web_store_mix_query_ns(web_store_t *s, int ns, int tier, long long from,
+                           long long to, long long max, web_store_mix_fn fn,
+                           void *ctx, int *more) {
+    (void)ns;
+    return web_store_mix_query(s, tier, from, to, max, fn, ctx, more);
+}
+
+long long web_store_mix_count(web_store_t *s) {
+    (void)s;
+    return -1;
+}
+
+int web_store_ble_write(web_store_t *s, const web_store_bdev_t *rows, size_t n,
+                        const web_store_balert_t *alerts, size_t na) {
+    (void)s; (void)rows; (void)n; (void)alerts; (void)na;
+    return -1;
+}
+
+int web_store_ble_load(web_store_t *s, int cap,
+                       void (*fn)(void *ctx, const web_store_bdev_t *r), void *ctx,
+                       long long since,
+                       void (*afn)(void *ctx, const web_store_balert_t *r), void *actx) {
+    (void)s; (void)cap; (void)fn; (void)ctx; (void)since; (void)afn; (void)actx;
+    return -1;
+}
+
+long long web_store_ble_count(web_store_t *s, int alerts) {
+    (void)s; (void)alerts;
     return -1;
 }
 
@@ -426,7 +939,9 @@ static const char *const EXP_ANY[WEB_TIER_COUNT] = {
 };
 /* The ceiling drops the oldest slice of one class of rows at a time,
  * in this order: fine rows (any series; the 24 h tier is the one the
- * spec gives up first), then the minute and hour rows of keyed series,
+ * spec gives up first), then the channel mix's minute and hour rows (a
+ * view's detail, which no baseline reads), then the minute and hour
+ * rows of keyed series,
  * and only then those of the global series (the network-wide totals,
  * one series per metric, which no key churn can multiply). A class is
  * left only once it is empty. A slice is the WEB_STORE_SLICE_ROWS
@@ -439,14 +954,38 @@ static const char *const EXP_ANY[WEB_TIER_COUNT] = {
 #define SLICE(tier, cls) \
     "DELETE FROM " tier " WHERE (series,t) IN (SELECT series,t FROM " tier \
     cls " ORDER BY t LIMIT ?1)"
+/* Whole buckets: every row of each (channel, t) the oldest rows fall
+ * in, so a bucket is never left part drawn as a whole cell. That passes
+ * the slice by at most the rest of the buckets at its last t. */
+#define MIX_SLICE(tier) \
+    "DELETE FROM chmix WHERE tier=" tier " AND (channel,t) IN (SELECT channel,t" \
+    " FROM chmix WHERE tier=" tier " ORDER BY t LIMIT ?1)"
+/* The BLE tables (v7) are in the same budget: an advertiser row is
+ * remote-paced (an address flood mints a row per random address, which
+ * is what BLE_ADV_FLOOD exists to catch), so the ones no flag marks go
+ * right after the channel mix and before any keyed history, and a flood
+ * cannot erase the Wi-Fi and host series to make room for itself. The
+ * HID and watchlisted rows, and then the findings, go after the keyed
+ * history and before the global series. */
+#define BLE_FLAGGED "(hid<>0 OR watch_category<>'')"
 static const char *const CEIL_STEP[] = {
     SLICE("fine", ""),
+    MIX_SLICE("1"),
+    MIX_SLICE("2"),
+    "DELETE FROM ble_device WHERE (addr,addr_type,iface) IN (SELECT addr,"
+    "addr_type,iface FROM ble_device WHERE NOT " BLE_FLAGGED
+    " ORDER BY last_seen LIMIT ?1)",
     SLICE("minute", " WHERE " KEYED),
     SLICE("hour", " WHERE " KEYED),
+    "DELETE FROM ble_device WHERE (addr,addr_type,iface) IN (SELECT addr,"
+    "addr_type,iface FROM ble_device ORDER BY last_seen LIMIT ?1)",
+    "DELETE FROM ble_alert WHERE key_hash IN (SELECT key_hash FROM ble_alert"
+    " ORDER BY last_ts LIMIT ?1)",
     SLICE("minute", " WHERE " GLOBAL),
     SLICE("hour", " WHERE " GLOBAL),
 };
 #undef SLICE
+#undef MIX_SLICE
 #undef KEYED
 #undef GLOBAL
 #define CEIL_STEPS ((int)(sizeof(CEIL_STEP) / sizeof(CEIL_STEP[0])))
@@ -468,7 +1007,8 @@ enum {
     AN_BL_INS = 0, AN_BL_UPD, AN_CELL_PUT, AN_BL_DEL, AN_CELL_DEL,
     AN_EP_PUT, AN_EP_DEL, AN_FAN_PUT, AN_FAN_DEL, AN_REP_PUT, AN_REP_PRUNE,
     AN_ANY_MIN, AN_ANY_HOUR, AN_HOUR_AT, AN_BL_FIND, AN_EP_EXPIRE,
-    AN_PTR_PUT, AN_PTR_PRUNE
+    AN_PTR_PUT, AN_PTR_PRUNE, AN_COV_PUT, AN_COV_DONE, AN_COV_GET,
+    AN_COV_OPEN, AN_COV_PRUNE, AN_HOUR_MIN
 };
 static const char *const AN_SQL[WEB_STORE_AN_STMTS] = {
     [AN_BL_INS]    = "INSERT INTO baseline (metric,key,last_active,last_fed,"
@@ -511,12 +1051,26 @@ static const char *const AN_SQL[WEB_STORE_AN_STMTS] = {
     [AN_PTR_PRUNE] = "DELETE FROM passive_ptr WHERE ip IN (SELECT ip FROM"
                      " passive_ptr ORDER BY last_seen DESC, ip LIMIT -1"
                      " OFFSET ?1)",
+    /* v11: a run's bits are ORed in, never put in place of another's. */
+    [AN_COV_PUT]   = "INSERT INTO anom_cover (hour,mask) VALUES (?1,?2)"
+                     " ON CONFLICT(hour) DO UPDATE SET mask=mask|excluded.mask",
+    [AN_COV_DONE]  = "INSERT INTO anom_cover (hour,done) VALUES (?1,1)"
+                     " ON CONFLICT(hour) DO UPDATE SET done=1",
+    [AN_COV_GET]   = "SELECT mask,done FROM anom_cover WHERE hour=?1",
+    [AN_COV_OPEN]  = "SELECT hour FROM anom_cover WHERE done=0 AND hour>=?1"
+                     " AND hour<?2 ORDER BY hour LIMIT ?3",
+    [AN_COV_PRUNE] = "DELETE FROM anom_cover WHERE hour<?1",
+    /* The hour's minute rows, every series: minute_t picks the hour. */
+    [AN_HOUR_MIN]  = "SELECT s.metric,s.key,r.t,r.sum,r.n,r.min,r.max FROM"
+                     " minute r JOIN series s ON s.id=r.series WHERE"
+                     " r.t>=?1 AND r.t<?2",
 };
 
 int web_store_available(void) { return 1; }
 
 void (*web_store_test_between_opens)(const char *path) = NULL;
 int    web_store_test_no_defensive = 0;
+long long web_store_test_mix_cap = 0;
 void (*web_store_test_after_commit)(const char *path) = NULL;
 
 static void after_commit(web_store_t *s) {
@@ -729,8 +1283,14 @@ static void refresh_size(web_store_t *s) {
 static void recount(web_store_t *s) {
     long long r[WEB_TIER_COUNT];
     for (int t = 0; t < WEB_TIER_COUNT; t++) r[t] = q_int(s->db, COUNT_ROWS[t]);
+    long long mx = q_int(s->db, "SELECT COUNT(*) FROM chmix");
+    long long bd = q_int(s->db, "SELECT COUNT(*) FROM ble_device");
+    long long ba = q_int(s->db, "SELECT COUNT(*) FROM ble_alert");
     pthread_mutex_lock(&s->mu);
     for (int t = 0; t < WEB_TIER_COUNT; t++) if (r[t] >= 0) s->st.rows[t] = r[t];
+    if (mx >= 0) s->st.mix_rows = mx;
+    if (bd >= 0) s->st.ble_rows = bd;
+    if (ba >= 0) s->st.ble_alert_rows = ba;
     pthread_mutex_unlock(&s->mu);
 }
 
@@ -937,6 +1497,27 @@ int web_store_open(web_store_t *s, const char *path, char *err, size_t errsz) {
     refresh_size(s);
     s->st.analysis_bytes = -1;
     s->st.open = 1;
+    return 0;
+}
+
+int web_store_open_aux(web_store_t *s, sqlite3 **out, char *err, size_t errsz) {
+    *out = NULL;
+    if (!s->st.open) {
+        snprintf(err, errsz, "the store is not open");
+        return -1;
+    }
+    if (private_main(s->path, err, errsz) != 0 || private_side(s->path, err, errsz) != 0)
+        return -1;
+    if (open_db(s->path, SQLITE_OPEN_READWRITE, 0, out, err, errsz) != 0) return -1;
+    /* What it opened is the store the writer identified. */
+    if (identify(*out, s->path, err, errsz) != WEB_STORE_SCHEMA) {
+        if (!err[0]) snprintf(err, errsz, "%s: changed while it was being opened; "
+                                     "refused", s->path);
+        sqlite3_close(*out);
+        *out = NULL;
+        return -1;
+    }
+    sqlite3_busy_timeout(*out, WEB_STORE_AUX_BUSY_MS);
     return 0;
 }
 
@@ -1301,6 +1882,99 @@ static long long expire(web_store_t *s, const long long cutoff[WEB_TIER_COUNT]) 
     return bad ? -1 : total;
 }
 
+/* Delete the buckets of tier older than before that the oldest limit
+ * (at most WEB_STORE_SLICE_ROWS) rows fall in, whole, in one
+ * transaction: a bucket is up to WEB_CHMIX_TOP + 1 rows sharing one t,
+ * and one left in part would be drawn as a whole cell with its shares
+ * wrong. So it deletes at least limit rows when there are that many,
+ * and passes it by at most the rest of the buckets at its last t.
+ * Rows, or -1. */
+static long long mix_slice(web_store_t *s, int tier, long long before,
+                           long long limit) {
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(s->db,
+            "DELETE FROM chmix WHERE tier=?1 AND (channel,t) IN (SELECT "
+            "channel,t FROM chmix WHERE tier=?1 AND t<?2 ORDER BY t LIMIT ?3)",
+            -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_int(st, 1, tier);
+    sqlite3_bind_int64(st, 2, before);
+    sqlite3_bind_int64(st, 3, limit < WEB_STORE_SLICE_ROWS ? limit
+                                                           : WEB_STORE_SLICE_ROWS);
+    int rc = sqlite3_step(st);
+    sqlite3_finalize(st);
+    if (rc != SQLITE_DONE) return -1;
+    long long d = sqlite3_changes(s->db);
+    after_commit(s);
+    return d;
+}
+
+/* The mix's retention: minute rows to minute_cut, hour rows to
+ * hour_cut, a slice at a time. Rows, or -1. */
+static long long mix_expire(web_store_t *s, long long minute_cut,
+                            long long hour_cut) {
+    long long total = 0;
+    const long long cut[2] = { minute_cut, hour_cut };
+    for (int k = 0; k < 2; k++)
+        for (int guard = 0; guard < 100000; guard++) {
+            long long d = mix_slice(s, WEB_TIER_MINUTE + k, cut[k],
+                                    WEB_STORE_SLICE_ROWS);
+            if (d < 0) return -1;
+            total += d;
+            if (d < WEB_STORE_SLICE_ROWS) break;
+        }
+    pthread_mutex_lock(&s->mu);
+    s->st.mix_rows = s->st.mix_rows > total ? s->st.mix_rows - total : 0;
+    pthread_mutex_unlock(&s->mu);
+    return total;
+}
+
+/* One slice of the oldest rows of a BLE table (by its last-seen column)
+ * before `before`, at most limit. Rows, or -1. */
+static long long ble_slice(web_store_t *s, int alerts, long long before,
+                           long long limit) {
+    /* 0 the advertisers, 1 the findings, 2 the advertisers with the
+     * flagged ones last (the row cap: a flood of fresh random addresses
+     * pushes out its own rows before a HID or watchlisted one). */
+    static const char *const SQL[3] = {
+        "DELETE FROM ble_device WHERE (addr,addr_type,iface) IN (SELECT "
+        "addr,addr_type,iface FROM ble_device WHERE last_seen<?1 ORDER BY "
+        "last_seen LIMIT ?2)",
+        "DELETE FROM ble_alert WHERE key_hash IN (SELECT key_hash FROM ble_alert"
+        " WHERE last_ts<?1 ORDER BY last_ts LIMIT ?2)",
+        "DELETE FROM ble_device WHERE (addr,addr_type,iface) IN (SELECT "
+        "addr,addr_type,iface FROM ble_device WHERE last_seen<?1 ORDER BY "
+        BLE_FLAGGED ", last_seen LIMIT ?2)",
+    };
+    sqlite3_stmt *st = NULL;
+    if (alerts < 0 || alerts > 2) return -1;
+    if (sqlite3_prepare_v2(s->db, SQL[alerts], -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_int64(st, 1, before);
+    sqlite3_bind_int64(st, 2, limit < WEB_STORE_SLICE_ROWS ? limit
+                                                           : WEB_STORE_SLICE_ROWS);
+    int rc = sqlite3_step(st);
+    sqlite3_finalize(st);
+    if (rc != SQLITE_DONE) return -1;
+    long long d = sqlite3_changes(s->db);
+    after_commit(s);
+    return d;
+}
+
+/* The BLE tables' retention: rows last seen before cut, a slice at a
+ * time. Rows, or -1. */
+static long long ble_expire(web_store_t *s, long long cut) {
+    long long total = 0;
+    for (int k = 0; k < 2; k++)
+        for (int guard = 0; guard < 100000; guard++) {
+            long long d = ble_slice(s, k, cut, WEB_STORE_SLICE_ROWS);
+            if (d < 0) return -1;
+            total += d;
+            if (d < WEB_STORE_SLICE_ROWS) break;
+        }
+    return total;
+}
+
 int web_store_compact(web_store_t *s, long long now_s, int retain_days,
                       long long max_bytes) {
     if (!s->db) return -1;
@@ -1313,6 +1987,12 @@ int web_store_compact(web_store_t *s, long long now_s, int retain_days,
     char err[WEB_STORE_ERR_MAX];
     long long expired = expire(s, cutoff);
     if (expired < 0) goto fail;
+    long long mx_exp = mix_expire(s, now_s - WEB_STORE_MIX_MINUTE_KEEP_S,
+                                  cutoff[WEB_TIER_HOUR]);
+    if (mx_exp < 0) goto fail;
+    /* The BLE tables: --web-retain-days, as the minute tier. */
+    long long ble_exp = ble_expire(s, cutoff[WEB_TIER_MINUTE]);
+    if (ble_exp < 0) goto fail;
     int raised;
     long long ceiling = ceiling_loop(s, max_bytes, &raised);
     if (ceiling < 0) goto fail;
@@ -1328,6 +2008,8 @@ int web_store_compact(web_store_t *s, long long now_s, int retain_days,
     pthread_mutex_lock(&s->mu);
     s->st.compactions++;
     s->st.dropped_expired += (unsigned long long)expired;
+    s->st.mix_dropped_expired += (unsigned long long)mx_exp;
+    s->st.ble_dropped_expired += (unsigned long long)ble_exp;
     s->st.dropped_ceiling += (unsigned long long)ceiling;
     if (ceiling > 0) s->st.ceiling_runs++;
     if (raised) s->st.ceiling_raised++;
@@ -1420,6 +2102,208 @@ int web_store_keys(web_store_t *s, int tier, int metric, long long from,
     }
     return n;
 }
+
+int web_store_keys_after(web_store_t *s, int tier, int metric, long long from,
+                         long long to, const char *after,
+                         char (*out)[WEB_KEY_MAX + 1], int max) {
+    static const char *const TBL[WEB_TIER_COUNT] = { "fine", "minute", "hour" };
+    if (!s->rd || tier < 0 || tier >= WEB_TIER_COUNT || metric < 0 ||
+        metric >= WM_COUNT || max <= 0)
+        return -1;
+    char sql[320];
+    /* The tier's table name is one of three constants; every value is
+     * bound. ?5 is 1 for "from the first": a global metric's one key is
+     * "", which nothing is greater than. */
+    snprintf(sql, sizeof(sql), "SELECT x.key FROM series x WHERE x.metric = ?1"
+             " AND (?5 OR x.key > ?2) AND EXISTS (SELECT 1 FROM %s r WHERE"
+             " r.series = x.id AND r.t >= ?3 AND r.t < ?4) ORDER BY x.key"
+             " LIMIT ?6", TBL[tier]);
+    pthread_mutex_lock(&s->rmu);
+    sqlite3_stmt *st = NULL;
+    int rc = sqlite3_prepare_v2(s->rd, sql, -1, &st, NULL);
+    int n = 0;
+    if (rc == SQLITE_OK) {
+        sqlite3_bind_text(st, 1, web_metric_defs[metric].name, -1, SQLITE_STATIC);
+        sqlite3_bind_text(st, 2, after ? after : "", -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(st, 3, from);
+        sqlite3_bind_int64(st, 4, to);
+        sqlite3_bind_int(st, 5, after ? 0 : 1);
+        sqlite3_bind_int(st, 6, max);
+        while ((rc = sqlite3_step(st)) == SQLITE_ROW && n < max) {
+            const unsigned char *k = sqlite3_column_text(st, 0);
+            size_t kl = k ? strlen((const char *)k) : 0;
+            /* As web_store_keys(): a key longer than ours is not ours. */
+            if (!k || kl > WEB_KEY_MAX) continue;
+            memcpy(out[n], k, kl + 1);
+            n++;
+        }
+    }
+    int bad = rc != SQLITE_DONE && rc != SQLITE_ROW;
+    sqlite3_finalize(st);
+    pthread_mutex_unlock(&s->rmu);
+    if (bad) {
+        set_err(s, "keys", s->rd);
+        return -1;
+    }
+    return n;
+}
+
+/* ── the channel mix (v5) ────────────────────────────────────────────── */
+
+int web_store_mix_write(web_store_t *s, const web_mix_row_t *rows, size_t n) {
+    if (!s->db || !n) return s->db ? 0 : -1;
+    static const char INS[] =
+        "INSERT OR IGNORE INTO chmix (tier,channel,t,tx,kind,frames)"
+        " VALUES (?1,?2,?3,?4,?5,?6)";
+    static const char UPD[] =
+        "UPDATE chmix SET frames=MIN(frames+?6,4294967295)"
+        " WHERE tier=?1 AND channel=?2 AND t=?3 AND tx=?4 AND kind=?5";
+    char err[WEB_STORE_ERR_MAX];
+    sqlite3_stmt *st[2] = { NULL, NULL };
+    long long added = 0;
+    if (sqlite3_prepare_v2(s->db, INS, -1, &st[0], NULL) != SQLITE_OK ||
+        sqlite3_prepare_v2(s->db, UPD, -1, &st[1], NULL) != SQLITE_OK) {
+        snprintf(err, sizeof(err), "mix: %s", sqlite3_errmsg(s->db));
+        goto fail_msg;
+    }
+    if (exec(s->db, "BEGIN IMMEDIATE", err, sizeof(err), "mix begin") != 0)
+        goto fail_msg;
+    for (size_t i = 0; i < n; i++) {
+        const web_mix_row_t *r = &rows[i];
+        if (r->tier != WEB_TIER_MINUTE && r->tier != WEB_TIER_HOUR) continue;
+        int nt = r->n < 0 ? 0 : r->n > WEB_CHMIX_TOP ? WEB_CHMIX_TOP : r->n;
+        for (int k = 0; k <= nt; k++) {
+            char tx[18] = "";
+            int kind = WEB_TX_OTHER;
+            long long f;
+            if (k < nt) {
+                web_mix_mac_text(r->tx[k].mac, tx);
+                kind = r->tx[k].kind;
+                f = r->tx[k].frames;
+            } else {
+                f = r->other;
+            }
+            if (f <= 0) continue;
+            for (int u = 0; u < 2; u++) {
+                sqlite3_reset(st[u]);
+                sqlite3_bind_int(st[u], 1, r->tier);
+                sqlite3_bind_text(st[u], 2, r->chan, -1, SQLITE_TRANSIENT);
+                sqlite3_bind_int64(st[u], 3, r->t);
+                sqlite3_bind_text(st[u], 4, tx, -1, SQLITE_TRANSIENT);
+                sqlite3_bind_int(st[u], 5, kind);
+                sqlite3_bind_int64(st[u], 6, f);
+                if (sqlite3_step(st[u]) != SQLITE_DONE) goto fail;
+                if (!u && sqlite3_changes(s->db) == 1) { added++; break; }
+            }
+        }
+    }
+    sqlite3_reset(st[0]);
+    sqlite3_reset(st[1]);
+    if (exec(s->db, "COMMIT", err, sizeof(err), "mix commit") != 0) goto fail_rb;
+    sqlite3_finalize(st[0]);
+    sqlite3_finalize(st[1]);
+    /* The row cap: the oldest minute rows first, then the oldest hour
+     * rows, a slice at a time. */
+    long long have, cut = 0;
+    long long cap = web_store_test_mix_cap > 0 ? web_store_test_mix_cap
+                                               : WEB_STORE_MIX_ROWS;
+    pthread_mutex_lock(&s->mu);
+    s->st.mix_rows += added;
+    have = s->st.mix_rows;
+    pthread_mutex_unlock(&s->mu);
+    for (int tier = WEB_TIER_MINUTE; tier <= WEB_TIER_HOUR; tier++)
+        for (int guard = 0; have > cap && guard < 100000; guard++) {
+            long long d = mix_slice(s, tier, (long long)1 << 62, have - cap);
+            if (d < 0) {
+                snprintf(err, sizeof(err), "mix cap: %s", sqlite3_errmsg(s->db));
+                goto fail_count;
+            }
+            if (d == 0) break;
+            have -= d;
+            cut += d;
+        }
+    pthread_mutex_lock(&s->mu);
+    s->st.mix_rows = have;
+    s->st.mix_dropped_cap += (unsigned long long)cut;
+    pthread_mutex_unlock(&s->mu);
+    refresh_size(s);
+    return 0;
+fail:
+    snprintf(err, sizeof(err), "mix write: %s", sqlite3_errmsg(s->db));
+fail_rb:
+    {
+        char ignore[64];
+        sqlite3_reset(st[0]);
+        sqlite3_reset(st[1]);
+        exec(s->db, "ROLLBACK", ignore, sizeof(ignore), "rollback");
+    }
+fail_msg:
+    sqlite3_finalize(st[0]);
+    sqlite3_finalize(st[1]);
+fail_count:
+    pthread_mutex_lock(&s->mu);
+    s->st.write_errors++;
+    snprintf(s->st.last_error, sizeof(s->st.last_error), "%s", err);
+    pthread_mutex_unlock(&s->mu);
+    return -1;
+}
+
+int web_store_mix_query(web_store_t *s, int tier, long long from, long long to,
+                        long long max, web_store_mix_fn fn, void *ctx,
+                        int *more) {
+    return web_store_mix_query_ns(s, WEB_MIX_NS_WIFI, tier, from, to, max, fn,
+                                  ctx, more);
+}
+
+int web_store_mix_query_ns(web_store_t *s, int ns, int tier, long long from,
+                           long long to, long long max, web_store_mix_fn fn,
+                           void *ctx, int *more) {
+    *more = 0;
+    if (!s->rd || (tier != WEB_TIER_MINUTE && tier != WEB_TIER_HOUR) || max <= 0 ||
+        (ns != WEB_MIX_NS_WIFI && ns != WEB_MIX_NS_BLE))
+        return -1;
+    pthread_mutex_lock(&s->rmu);
+    sqlite3_stmt *st = NULL;
+    /* Two fixed statements, nothing spliced: GLOB is case-sensitive and
+     * 'b:*' matches only the class slugs. */
+    int rc = sqlite3_prepare_v2(s->rd, ns == WEB_MIX_NS_BLE
+        ? "SELECT channel,t,tx,kind,frames FROM chmix WHERE tier=?1 AND t>=?2"
+          " AND t<?3 AND channel GLOB 'b:*' ORDER BY t LIMIT ?4"
+        : "SELECT channel,t,tx,kind,frames FROM chmix WHERE tier=?1 AND t>=?2"
+          " AND t<?3 AND channel NOT GLOB 'b:*' ORDER BY t LIMIT ?4", -1, &st, NULL);
+    long long n = 0;
+    if (rc == SQLITE_OK) {
+        sqlite3_bind_int(st, 1, tier);
+        sqlite3_bind_int64(st, 2, from);
+        sqlite3_bind_int64(st, 3, to);
+        sqlite3_bind_int64(st, 4, max + 1);
+        while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+            if (n >= max) { *more = 1; rc = SQLITE_DONE; break; }
+            const char *ch = (const char *)sqlite3_column_text(st, 0);
+            const char *tx = (const char *)sqlite3_column_text(st, 2);
+            n++;
+            if (fn(ctx, ch ? ch : "", sqlite3_column_int64(st, 1), tx ? tx : "",
+                   sqlite3_column_int(st, 3), sqlite3_column_int64(st, 4))) {
+                rc = SQLITE_DONE;
+                break;
+            }
+        }
+    }
+    int bad = rc != SQLITE_DONE;
+    sqlite3_finalize(st);
+    pthread_mutex_unlock(&s->rmu);
+    if (bad) {
+        set_err(s, "mix", s->rd);
+        return -1;
+    }
+    return (int)n;
+}
+
+long long web_store_mix_count(web_store_t *s) {
+    if (!s->db) return -1;
+    return q_int(s->db, "SELECT COUNT(*) FROM chmix");
+}
+
 
 void web_store_stats(web_store_t *s, web_store_stats_t *out) {
     if (!s->mu_init) { memset(out, 0, sizeof(*out)); return; }
@@ -1946,6 +2830,115 @@ int web_store_hours_at(web_store_t *s, int metric, const char *key,
     return found;
 }
 
+/* ── the hour coverage (v11) ─────────────────────────────────────────── */
+
+int web_store_cover_put(web_store_t *s, long long hour, unsigned long long mask) {
+    if (!s->db) return -1;
+    sqlite3_stmt *st = s->an[AN_COV_PUT];
+    sqlite3_bind_int64(st, 1, hour);
+    sqlite3_bind_int64(st, 2, (sqlite3_int64)(mask & WEB_STORE_COVER_ALL));
+    if (an_step_done(st) != 0) {
+        note_fail(s, "coverage write");
+        return -1;
+    }
+    return 0;
+}
+
+int web_store_cover_done(web_store_t *s, long long hour) {
+    if (!s->db) return -1;
+    sqlite3_stmt *st = s->an[AN_COV_DONE];
+    sqlite3_bind_int64(st, 1, hour);
+    if (an_step_done(st) != 0) {
+        note_fail(s, "coverage done");
+        return -1;
+    }
+    return 0;
+}
+
+int web_store_cover_get(web_store_t *s, long long hour, unsigned long long *mask,
+                        int *done) {
+    *mask = 0;
+    *done = 0;
+    if (!s->db) return -1;
+    sqlite3_stmt *st = s->an[AN_COV_GET];
+    sqlite3_bind_int64(st, 1, hour);
+    int rc = sqlite3_step(st), found = 0;
+    if (rc == SQLITE_ROW) {
+        /* A value no run wrote (negative, or bits past minute 59) is
+         * read as the minutes it can name, never as more. */
+        *mask = (unsigned long long)sqlite3_column_int64(st, 0) & WEB_STORE_COVER_ALL;
+        *done = sqlite3_column_int64(st, 1) != 0;
+        found = 1;
+    }
+    sqlite3_reset(st);
+    if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
+        note_fail(s, "coverage read");
+        return -1;
+    }
+    return found;
+}
+
+int web_store_cover_open(web_store_t *s, long long from, long long to,
+                         long long *hours, int max) {
+    if (!s->db || max <= 0) return -1;
+    sqlite3_stmt *st = s->an[AN_COV_OPEN];
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int64(st, 2, to);
+    sqlite3_bind_int(st, 3, max);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW && n < max) {
+        long long h = sqlite3_column_int64(st, 0);
+        if (h % WEB_HOUR_S == 0) hours[n++] = h;   /* an hour start, or not one of ours */
+    }
+    sqlite3_reset(st);
+    if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
+        note_fail(s, "coverage list");
+        return -1;
+    }
+    return n;
+}
+
+int web_store_cover_prune(web_store_t *s, long long before) {
+    if (!s->db) return -1;
+    sqlite3_stmt *st = s->an[AN_COV_PRUNE];
+    sqlite3_bind_int64(st, 1, before);
+    if (an_step_done(st) != 0) {
+        note_fail(s, "coverage prune");
+        return -1;
+    }
+    return 0;
+}
+
+long long web_store_hour_minutes(web_store_t *s, long long hour,
+                                 web_store_minute_fn fn, void *ctx) {
+    if (!s->db || hour % WEB_HOUR_S) return -1;
+    sqlite3_stmt *st = s->an[AN_HOUR_MIN];
+    sqlite3_bind_int64(st, 1, hour);
+    sqlite3_bind_int64(st, 2, hour + WEB_HOUR_S);
+    long long n = 0;
+    int rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        const unsigned char *mt = sqlite3_column_text(st, 0);
+        const unsigned char *k = sqlite3_column_text(st, 1);
+        int metric = mt ? web_metric_find((const char *)mt) : -1;
+        if (metric < 0 || !k) continue;
+        char key[WEB_KEY_MAX + 1];
+        snprintf(key, sizeof(key), "%s", (const char *)k);
+        long long c = sqlite3_column_int64(st, 4);
+        web_point_t pt = { sqlite3_column_int64(st, 2), sqlite3_column_double(st, 3),
+                           sqlite3_column_double(st, 5), sqlite3_column_double(st, 6),
+                           c > 0 ? (unsigned long)c : 0 };
+        fn(ctx, metric, key, &pt);
+        n++;
+    }
+    sqlite3_reset(st);
+    if (rc != SQLITE_DONE) {
+        note_fail(s, "hour minutes");
+        return -1;
+    }
+    return n;
+}
+
 /* ── the passive PTR cache (v4, #162) ────────────────────────────────── */
 
 /* A name read back is held to the cache's own rule (web_ptr.h). */
@@ -2049,6 +3042,273 @@ int web_store_presence(web_store_t *s, int tier, int metric, const char *key,
         return -1;
     }
     return set;
+}
+
+/* ── the BLE tables (v7) ─────────────────────────────────────────────── */
+
+/* The one writer: a row's columns bound in the order of the DDL, the
+ * upsert keeping the earlier first_seen and OR-ing the sticky masks. */
+static const char BLE_DEV_UPSERT[] =
+    "INSERT INTO ble_device (addr,addr_type,iface,adapter,sampled,pdu_mask,name,"
+    "name_np,name_complete,uuid16,mfr_id,mfr_subtype,svc_data_uuid16,appearance,hid,"
+    "tx_power,flags,rssi,rssi_best,adv_count,watch_category,ext_adv,primary_phy,"
+    "secondary_phy,adv_sid,first_seen,last_seen,est_dist_dm,est_band,est_trend,est_ptx,"
+    "pres_bucket,pres_lo,pres_hi)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,"
+    "?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34)"
+    " ON CONFLICT(addr,addr_type,iface) DO UPDATE SET"
+    " adapter=excluded.adapter, sampled=excluded.sampled,"
+    " pdu_mask=ble_device.pdu_mask|excluded.pdu_mask, name=excluded.name,"
+    " name_np=excluded.name_np, name_complete=excluded.name_complete,"
+    " uuid16=excluded.uuid16, mfr_id=excluded.mfr_id, mfr_subtype=excluded.mfr_subtype,"
+    " svc_data_uuid16=excluded.svc_data_uuid16, appearance=excluded.appearance,"
+    " hid=ble_device.hid|excluded.hid, tx_power=excluded.tx_power, flags=excluded.flags,"
+    " rssi=excluded.rssi, rssi_best=excluded.rssi_best,"
+    " adv_count=MAX(ble_device.adv_count,excluded.adv_count),"
+    " watch_category=excluded.watch_category, ext_adv=excluded.ext_adv,"
+    " primary_phy=excluded.primary_phy, secondary_phy=excluded.secondary_phy,"
+    " adv_sid=excluded.adv_sid,"
+    " first_seen=CASE WHEN ble_device.first_seen>0 AND (excluded.first_seen<=0 OR"
+    " ble_device.first_seen<excluded.first_seen) THEN ble_device.first_seen"
+    " ELSE excluded.first_seen END,"
+    " last_seen=MAX(ble_device.last_seen,excluded.last_seen),"
+    " est_dist_dm=excluded.est_dist_dm, est_band=excluded.est_band,"
+    " est_trend=excluded.est_trend, est_ptx=excluded.est_ptx,"
+    " pres_bucket=excluded.pres_bucket, pres_lo=excluded.pres_lo, pres_hi=excluded.pres_hi";
+static const char BLE_AL_UPSERT[] =
+    "INSERT INTO ble_alert (key_hash,kind,alert,iface,sampled,first_ts,last_ts,"
+    "resolved_ts,n0,n1,n2,n3,n4,n5,n6,n7,rssi,label,detail)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)"
+    " ON CONFLICT(key_hash) DO UPDATE SET kind=excluded.kind, alert=excluded.alert,"
+    " iface=excluded.iface, sampled=excluded.sampled,"
+    " first_ts=CASE WHEN ble_alert.first_ts>0 AND (excluded.first_ts<=0 OR"
+    " ble_alert.first_ts<excluded.first_ts) THEN ble_alert.first_ts ELSE excluded.first_ts END,"
+    " last_ts=MAX(ble_alert.last_ts,excluded.last_ts), resolved_ts=excluded.resolved_ts,"
+    " n0=excluded.n0, n1=excluded.n1, n2=excluded.n2, n3=excluded.n3, n4=excluded.n4,"
+    " n5=excluded.n5, n6=excluded.n6, n7=excluded.n7,"
+    " rssi=excluded.rssi, label=excluded.label, detail=excluded.detail";
+
+int web_store_ble_write(web_store_t *s, const web_store_bdev_t *rows, size_t n,
+                        const web_store_balert_t *alerts, size_t na) {
+    if (!s->db) return -1;
+    if (!n && !na) return 0;
+    char err[WEB_STORE_ERR_MAX];
+    sqlite3_stmt *sd = NULL, *sa = NULL;
+    if (sqlite3_prepare_v2(s->db, BLE_DEV_UPSERT, -1, &sd, NULL) != SQLITE_OK ||
+        sqlite3_prepare_v2(s->db, BLE_AL_UPSERT, -1, &sa, NULL) != SQLITE_OK) {
+        snprintf(err, sizeof(err), "ble: %s", sqlite3_errmsg(s->db));
+        goto fail_msg;
+    }
+    if (exec(s->db, "BEGIN IMMEDIATE", err, sizeof(err), "ble begin") != 0)
+        goto fail_msg;
+    for (size_t i = 0; i < n; i++) {
+        const web_store_bdev_t *r = &rows[i];
+        sqlite3_reset(sd);
+        sqlite3_bind_text(sd, 1, r->addr, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(sd, 2, r->addr_type);
+        sqlite3_bind_text(sd, 3, r->iface, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(sd, 4, r->adapter);
+        sqlite3_bind_int(sd, 5, r->sampled);
+        sqlite3_bind_int(sd, 6, r->pdu_mask);
+        sqlite3_bind_text(sd, 7, r->name, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(sd, 8, r->name_np);
+        sqlite3_bind_int(sd, 9, r->name_complete);
+        sqlite3_bind_int(sd, 10, r->uuid16);
+        sqlite3_bind_int(sd, 11, r->mfr_id);
+        sqlite3_bind_int(sd, 12, r->mfr_subtype);
+        sqlite3_bind_int(sd, 13, r->svc_data_uuid16);
+        sqlite3_bind_int(sd, 14, r->appearance);
+        sqlite3_bind_int(sd, 15, r->hid);
+        sqlite3_bind_int(sd, 16, r->tx_power);
+        sqlite3_bind_int(sd, 17, r->flags);
+        sqlite3_bind_int(sd, 18, r->rssi);
+        sqlite3_bind_int(sd, 19, r->rssi_best);
+        sqlite3_bind_int64(sd, 20, r->adv_count);
+        sqlite3_bind_text(sd, 21, r->watch_category, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(sd, 22, r->ext_adv);
+        sqlite3_bind_int(sd, 23, r->primary_phy);
+        sqlite3_bind_int(sd, 24, r->secondary_phy);
+        sqlite3_bind_int(sd, 25, r->adv_sid);
+        sqlite3_bind_int64(sd, 26, r->first_seen);
+        sqlite3_bind_int64(sd, 27, r->last_seen);
+        sqlite3_bind_int(sd, 28, r->est_dist_dm);
+        sqlite3_bind_int(sd, 29, r->est_band);
+        sqlite3_bind_int(sd, 30, r->est_trend);
+        sqlite3_bind_int(sd, 31, r->est_ptx);
+        sqlite3_bind_int64(sd, 32, r->pres_bucket);
+        sqlite3_bind_int64(sd, 33, r->pres_lo);
+        sqlite3_bind_int64(sd, 34, r->pres_hi);
+        if (sqlite3_step(sd) != SQLITE_DONE) goto fail;
+    }
+    for (size_t i = 0; i < na; i++) {
+        const web_store_balert_t *r = &alerts[i];
+        sqlite3_reset(sa);
+        sqlite3_bind_text(sa, 1, r->key_hash, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(sa, 2, r->kind);
+        sqlite3_bind_text(sa, 3, r->alert, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(sa, 4, r->iface, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(sa, 5, r->sampled);
+        sqlite3_bind_int64(sa, 6, r->first_ts);
+        sqlite3_bind_int64(sa, 7, r->last_ts);
+        sqlite3_bind_int64(sa, 8, r->resolved_ts);
+        for (int k = 0; k < WEB_BLE_NCOLS; k++) sqlite3_bind_int64(sa, 9 + k, r->n[k]);
+        sqlite3_bind_int(sa, 17, r->rssi);
+        sqlite3_bind_text(sa, 18, r->label, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(sa, 19, r->detail, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(sa) != SQLITE_DONE) goto fail;
+    }
+    sqlite3_reset(sd);
+    sqlite3_reset(sa);
+    if (exec(s->db, "COMMIT", err, sizeof(err), "ble commit") != 0) goto fail_rb;
+    sqlite3_finalize(sd);
+    sqlite3_finalize(sa);
+    /* The caps: the oldest rows by last seen, a slice at a time. An
+     * upsert's changes() is 1 for an insert and an update alike, so the
+     * tables are counted rather than tallied. */
+    long long cut = 0;
+    long long have[2] = { q_int(s->db, "SELECT COUNT(*) FROM ble_device"),
+                          q_int(s->db, "SELECT COUNT(*) FROM ble_alert") };
+    const long long cap[2] = { WEB_STORE_BLE_ROWS, WEB_STORE_BLE_ALERT_ROWS };
+    for (int k = 0; k < 2; k++)
+        for (int guard = 0; have[k] > cap[k] && guard < 100000; guard++) {
+            long long d = ble_slice(s, k ? 1 : 2, (long long)1 << 62, have[k] - cap[k]);
+            if (d < 0) {
+                snprintf(err, sizeof(err), "ble cap: %s", sqlite3_errmsg(s->db));
+                goto fail_count;
+            }
+            if (d == 0) break;
+            have[k] -= d;
+            cut += d;
+        }
+    pthread_mutex_lock(&s->mu);
+    if (have[0] >= 0) s->st.ble_rows = have[0];
+    if (have[1] >= 0) s->st.ble_alert_rows = have[1];
+    s->st.ble_dropped_cap += (unsigned long long)cut;
+    s->st.ble_batches++;
+    pthread_mutex_unlock(&s->mu);
+    refresh_size(s);
+    return 0;
+fail:
+    snprintf(err, sizeof(err), "ble write: %s", sqlite3_errmsg(s->db));
+fail_rb:
+    {
+        char ignore[64];
+        sqlite3_reset(sd);
+        sqlite3_reset(sa);
+        exec(s->db, "ROLLBACK", ignore, sizeof(ignore), "rollback");
+    }
+fail_msg:
+    sqlite3_finalize(sd);
+    sqlite3_finalize(sa);
+fail_count:
+    pthread_mutex_lock(&s->mu);
+    s->st.write_errors++;
+    snprintf(s->st.last_error, sizeof(s->st.last_error), "%s", err);
+    pthread_mutex_unlock(&s->mu);
+    return -1;
+}
+
+int web_store_ble_load(web_store_t *s, int cap,
+                       void (*fn)(void *ctx, const web_store_bdev_t *r), void *ctx,
+                       long long since,
+                       void (*afn)(void *ctx, const web_store_balert_t *r), void *actx) {
+    if (!s->db || cap <= 0) return -1;
+    sqlite3_stmt *st = NULL;
+    int n = 0;
+    if (sqlite3_prepare_v2(s->db,
+            "SELECT addr,addr_type,iface,adapter,sampled,pdu_mask,name,name_np,"
+            "name_complete,uuid16,mfr_id,mfr_subtype,svc_data_uuid16,appearance,hid,"
+            "tx_power,flags,rssi,rssi_best,adv_count,watch_category,ext_adv,primary_phy,"
+            "secondary_phy,adv_sid,first_seen,last_seen,est_dist_dm,est_band,est_trend,"
+            "est_ptx,pres_bucket,pres_lo,pres_hi FROM ble_device"
+            " ORDER BY last_seen DESC, addr LIMIT ?1",
+            -1, &st, NULL) != SQLITE_OK) {
+        note_fail(s, "ble_device load");
+        return -1;
+    }
+    sqlite3_bind_int(st, 1, cap);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        web_store_bdev_t r;
+        memset(&r, 0, sizeof(r));
+        col_text(st, 0, r.addr, 17);
+        r.addr_type = sqlite3_column_int(st, 1);
+        col_text(st, 2, r.iface, WEB_BLE_IFACE_MAX);
+        r.adapter = sqlite3_column_int(st, 3);
+        r.sampled = sqlite3_column_int(st, 4);
+        r.pdu_mask = sqlite3_column_int(st, 5);
+        col_text(st, 6, r.name, WEB_BLE_NAME_MAX);
+        r.name_np = sqlite3_column_int(st, 7);
+        r.name_complete = sqlite3_column_int(st, 8);
+        r.uuid16 = sqlite3_column_int(st, 9);
+        r.mfr_id = sqlite3_column_int(st, 10);
+        r.mfr_subtype = sqlite3_column_int(st, 11);
+        r.svc_data_uuid16 = sqlite3_column_int(st, 12);
+        r.appearance = sqlite3_column_int(st, 13);
+        r.hid = sqlite3_column_int(st, 14);
+        r.tx_power = sqlite3_column_int(st, 15);
+        r.flags = sqlite3_column_int(st, 16);
+        r.rssi = sqlite3_column_int(st, 17);
+        r.rssi_best = sqlite3_column_int(st, 18);
+        r.adv_count = sqlite3_column_int64(st, 19);
+        col_text(st, 20, r.watch_category, WEB_BLE_CAT_MAX);
+        r.ext_adv = sqlite3_column_int(st, 21);
+        r.primary_phy = sqlite3_column_int(st, 22);
+        r.secondary_phy = sqlite3_column_int(st, 23);
+        r.adv_sid = sqlite3_column_int(st, 24);
+        r.first_seen = sqlite3_column_int64(st, 25);
+        r.last_seen = sqlite3_column_int64(st, 26);
+        r.est_dist_dm = sqlite3_column_int(st, 27);
+        r.est_band = sqlite3_column_int(st, 28);
+        r.est_trend = sqlite3_column_int(st, 29);
+        r.est_ptx = sqlite3_column_int(st, 30);
+        r.pres_bucket = sqlite3_column_int64(st, 31);
+        r.pres_lo = sqlite3_column_int64(st, 32);
+        r.pres_hi = sqlite3_column_int64(st, 33);
+        /* An address read back is held to the wire's rule. */
+        char c[WEB_KEY_MAX + 1];
+        if (web_key_mac(r.addr, c) != 0 || strcmp(c, r.addr)) continue;
+        fn(ctx, &r);
+        n++;
+    }
+    sqlite3_finalize(st);
+    if (!afn) return n;
+    st = NULL;
+    if (sqlite3_prepare_v2(s->db,
+            "SELECT key_hash,kind,alert,iface,sampled,first_ts,last_ts,resolved_ts,"
+            "n0,n1,n2,n3,n4,n5,n6,n7,rssi,label,detail FROM ble_alert"
+            " WHERE resolved_ts<0 OR last_ts>=?1"
+            " ORDER BY last_ts DESC LIMIT ?2", -1, &st, NULL) != SQLITE_OK) {
+        note_fail(s, "ble_alert load");
+        return -1;
+    }
+    sqlite3_bind_int64(st, 1, since);
+    sqlite3_bind_int(st, 2, WEB_BLE_ALERTS);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        web_store_balert_t r;
+        memset(&r, 0, sizeof(r));
+        col_text(st, 0, r.key_hash, 16);
+        r.kind = sqlite3_column_int(st, 1);
+        col_text(st, 2, r.alert, 23);
+        col_text(st, 3, r.iface, WEB_BLE_IFACE_MAX);
+        r.sampled = sqlite3_column_int(st, 4);
+        r.first_ts = sqlite3_column_int64(st, 5);
+        r.last_ts = sqlite3_column_int64(st, 6);
+        r.resolved_ts = sqlite3_column_int64(st, 7);
+        for (int k = 0; k < WEB_BLE_NCOLS; k++) r.n[k] = sqlite3_column_int64(st, 8 + k);
+        r.rssi = sqlite3_column_int(st, 16);
+        col_text(st, 17, r.label, WEB_BLE_LABEL_MAX);
+        col_text(st, 18, r.detail, WEB_BLE_DETAIL_MAX);
+        afn(actx, &r);
+        n++;
+    }
+    sqlite3_finalize(st);
+    return n;
+}
+
+long long web_store_ble_count(web_store_t *s, int alerts) {
+    if (!s->db) return -1;
+    return q_int(s->db, alerts ? "SELECT COUNT(*) FROM ble_alert"
+                               : "SELECT COUNT(*) FROM ble_device");
 }
 
 #endif /* WITH_SQLITE */

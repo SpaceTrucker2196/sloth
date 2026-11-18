@@ -10,9 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
-**Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
-**Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
+**Last updated**: 2026-11-17 (#227: `EVIL_TWIN` deducts 35 for two locally administered guest VAPs of one vendor's mesh, `+mesh VAP`, and counts a late arrival only against an original heard at least once a minute). 2026-11-15 (#216, the cutover: two rule tables, not a table and a subsequence of it; `sloth-wifi` raises <!-- count:rules-wifi -->95<!-- /count --> of the kinds and `sloth-rf` <!-- count:rules-rf -->6<!-- /count -->; the `GNSS_*` rules and `ADSB_EMERGENCY` are `sloth-rf`'s alone). 2026-11-12 (#193: field data on the twin-chain's unnamed locally administered copy, counted in `sensor_health` `twin193_*`; no alert changed). 2026-11-12 (#187, #151 owner decisions: `KARMA_PROBE_FORGE` CRIT only on a captured station; `KARMA_AP` IE variety -15 confidence and CRIT on a `corroborated` hardware verdict). 2026-11-12 (#194: `EVIL_TWIN`'s late-arrival memory compares the radio and ignores APs born in a beacon flood). 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#187, #172: the evidence behind `KARMA_AP`, `KARMA_PROBE_FORGE`, `PMKID_HARVEST` and `HANDSHAKE_HARVEST` on the stream as `karma_suspect`, `harvest_station`, `harvest_chain`, JSONL 1.3.0, and as slothweb's WiFi card; slothweb shows the detail of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`). **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
 
 ---
@@ -30,20 +28,45 @@ type: reference
   | `rules_wifi_mgmt.c` | 802.11 management/control plane and the sensor's radio: the floods, BTM, CSA, RRM, RTS, SA Query, MFP, Block Ack, malformed management frames, probe floods, recon, transit, unknown devices, RF degradation, no monitor radio, PM forgery, queue release, TPC |
   | `rules_twin.c` | impersonation: the evil-twin family, SSID confusion, KARMA, open/camera setup SSIDs, captive portal, WPA downgrade, SAE, FragAttacks — and the pair scoring the Twins view shares |
   | `rules_enterprise.c` | rogue RADIUS, PEAP without a server certificate, the three WPS verdicts |
+  | `rules_gnss.c` | the `--gps` receiver's own inputs: GNSS jamming, spoofing suspect, time and position jumps. `sloth-rf`'s since the cutover |
+  | `rules_adsb.c` | `ADSB_EMERGENCY`, read off the ADS-B table. `sloth-rf`'s |
+  | `rules_sensor.c` | the sensor's own state: `SENSOR_UNDERVOLT` (`sloth-wifi` only) and `SENSOR_SOURCE_DOWN` (each daemon, for the sources it reports) |
   | `rules_mle.c` | the 802.11be Multi-Link Element rules: five keyed by MLD MAC, two by BSSID (#104) |
 
   `src/alerts.h` is the public API and did not change.
-- **Rule order is a table (#118).** `alerts_update()` derives the
-  Wi-Fi posture (`wifi_downgrade_update()`), then runs
-  `g_alert_rules[]` from `src/alerts/rules_table.c` in order. The
+- **Rule order is a table (#118), and the table is data the daemon
+  selects (#213).** `alerts_update()` derives the Wi-Fi posture
+  (`wifi_downgrade_update()`), then runs `g_alert_rules[]`, the rows of
+  the selected table, in order. There are two tables since the cutover
+  (#216), one per daemon. `sloth-wifi` selects `g_alert_table_wifi`
+  (`src/alerts/rules_table.c`, through `capture_side_install()`): every
+  rule of the capture, the monitor radio and BLE, `SENSOR_UNDERVOLT`
+  and `SENSOR_SOURCE_DOWN`, 88 rows that raise
+  <!-- count:rules-wifi -->95<!-- /count --> of the kinds. `sloth-rf` selects `g_alert_table_rf`
+  (`src/alerts/rules_table_rf.c`, through `rf_side_install()`): the
+  four GNSS rules, `ADSB_EMERGENCY` and `SENSOR_SOURCE_DOWN`,
+  <!-- count:rules-rf -->6<!-- /count --> kinds, and not `SENSOR_UNDERVOLT` (owner ruling 2026-11-15).
+  Until the cutover the first table had the second's first five rows
+  too, between `rule_cam_rtsp_unauth` and the sensor's pair; they
+  depended on no other rule and none on them, so taking them out moved
+  nothing. The one row both run is `rule_sensor_source_down`, which
+  judges whichever `source_status` rows its daemon reports: both
+  report `gnss`, so a receiver that is down opens `srcdown:gnss` in
+  both streams, and slothweb shows a same-key, same-time pair once
+  ([[slothweb]] § Two daemons). `sloth-wifi` links none of the five
+  (the `Makefile`'s `check_wifi_no_rf`), and
+  `tests/test_rf_rules.c`, `tests/test_gnss_rules.c` and
+  `tests/test_adsb_rules.c` hold that it raises none. A table
+  also brings its rules' `*_forget()` functions and the pcap exporters,
+  so the engine names no rule file and no exporter. The
   order is the one the hand-written call sequence had, copied verbatim,
   and it is load-bearing: JSONL events within one tick reach the stream
   in this order; `rule_evil_twin_attack_chain` taints the rogue half of
   a pair and `rule_evil_twin`, earlier in the table, reads that taint
   on the next tick; `rule_deauth_flood` runs before the chain rule
   whose finding cites the flood. `tests/test_alert_rules.c` pins those
-  pairs by name and fails if a rule defined under `src/alerts/` is
-  missing from the table or listed twice.
+  pairs by name and fails if a rule defined under `src/alerts/` is in
+  neither table, in the wrong one, or listed twice.
 - **Frame citations (#92).** The no-IP wireless rules whose triggering
   frames are monitor frames hand the alert the evidence-ring IDs of
   those frames (`fire_ev()`, or `fire_inv()` when the rule also reports
@@ -71,11 +94,14 @@ type: reference
   `MAX_ALERTS`) keeps, per key: the last real pcap export time and path
   (the cooldown, formerly `pcap_cool[]`), `pcap_write_failures`,
   `reopen_count`, and the last incident's `first_seen`. `first_seen` is
-  restored **only** when the previous incident was closed by eviction —
-  the engine ran out of room, the finding did not end — so the `--db`
-  row keyed on `(key, first_seen)` stays one row across evict→refire
-  churn. After an `expired` resolve the re-fire is a new episode with
-  its own `first_seen`. The side table bounds memory, not cardinality:
+  the *finding's* and is restored on **every** reopen (#170; #112 did it
+  after an eviction only): an `expired` re-fire is still a new incident,
+  with a new `incident_id` and its own `first_detected`, but the same
+  finding, and the `--db` `alerts` row is one per finding — the writer
+  continues the key's newest row even when this table has forgotten
+  the key, so a restart or LRU loss does not split it either
+  ([[sqlite-schema]] → *Findings and incidents*). The side table bounds
+  memory, not cardinality:
   per-type fair eviction (below) still decides which findings hold
   slots. Dropping a row that held an export is tallied as
   `evict_pcap_cooldown` on the `sensor_health` record, as before.
@@ -122,7 +148,7 @@ holds both shapes for one finding.
 |------|--------|-------|
 | `DGA_DOMAIN` | `dga:<qname>` | `dga:<qname, 40 kept>:<hash>` |
 | `CLEARTEXT_CRED` | `cred:<src>-><dst>:<port>:<proto>:<user>` | `cred:<src>:<dst>:<port>:<proto>:<user, 32 kept>:<hash>` (IPv6 bracketed) |
-| `CAPTIVE_PORTAL` | `portal:<host, 30 cut>:<kind>` | `portal:<host, 40 kept>:<hash>:<kind>` |
+| `CAPTIVE_PORTAL` | `portal:<host, 30 cut>:<kind>` | `portal:<host, 40 kept>:<hash>:<kind>`; since #169 also `portalkit:<kit id>:<server ip>` for a kit page |
 | `SAE_PSK_SPLIT` | `saesplit:<ssid>` | `saesplit:<ssid, 32 kept>:<hash>` |
 | `SSID_CONFUSION` | `ssidconf:<ssid, 30 cut>:<weak bssid>` | `ssidconf:<ssid, 32 kept>:<hash>:<weak bssid>` |
 | `EVIL_TWIN` (attack chain) | `twin-chain:<ssid>` | `twin-chain:<ssid, 32 kept>:<hash>` |
@@ -176,6 +202,27 @@ WARN→CRIT escalation updated the ring in place and emitted nothing.
   `observations` only moves when the evidence does. Timestamps split
   the same way (`first_detected` / `last_evaluated` vs
   `first_observed` / `last_observed`).
+- **A detail carries only what moves with the evidence (#173).** The
+  engine compares each evaluation's detail with the one it last
+  *emitted*, so a value that changes without the evidence changing — a
+  seconds counter, a frame total, a source that alternates between two
+  ring slots — makes `observations` follow `evaluations` and turns the
+  update floor into one `alert.update` a minute per key. A running total
+  goes in through `count_bucket()` (exact below ten, then `10+`, `100+`,
+  ...), an age as a band, and a rule that walks a ring fires once per
+  key per pass, not once per matching entry. The rules fixed for
+  it in #173 are `ATTACK_TOOL_UA`, `DGA_DOMAIN`, `WPA_DOWNGRADE`,
+  `MGMT_FUZZ`, `FRAG_PLAINTEXT`, `SMB1_USE`; `PM_FORGE` gained the
+  recency bound `QUEUE_EVICT` already had; `CAM_SETUP_OUI` already
+  held still and is pinned by a test (`tests/test_alert_tick_rate.c`).
+  One edge remains in the engine: a change that arrives less than 60 s
+  after the incident's last emitted event (its `alert.create`, or the
+  last update) is compared against the stored copy until the floor
+  passes, so even a single real change counts one observation per pass
+  for the rest of that floor; once the update is emitted the new detail
+  is the stored copy and stops counting.
+  The tests in `tests/test_alert_tick_rate.c` make their real changes
+  past the floor for that reason.
 - Durations run on `CLOCK_MONOTONIC` via the clock seam
   (`src/sloth_clock.c`, #109; the only libc clock reader in `src/`);
   exported timestamps stay wall clock. The evil-twin taint TTL
@@ -208,9 +255,13 @@ both numbers: `EVIL_TWIN` is the first, reported as **suspected
 impersonation** with a percentage rather than as an established fact;
 `KARMA_AP` is the second (#90) — a bare SSID-count candidate is WARN,
 uncorroborated, and escalates to CRIT only when a PNL match on **one**
-station, a shared-victim deauth-then-lure chain, or a verified tool
-signature match ties the pattern to that specific BSSID rather than
-coincidence. The PNL escalator wants at least `KARMA_PNL_CORROB_MIN`
+station, a shared-victim deauth-then-lure chain, a verified tool
+signature match, or (since 2026-11-12, #151) a `corroborated`
+attack-hardware verdict ties the pattern to that specific BSSID rather
+than coincidence. A `suspected` verdict stays context. IE variety (the
+advertised SSIDs carrying two or more distinct postures, `+IE variety`)
+lowers its confidence by 15 (#187): one PineAP-style radio answers every
+name with one IE set. The PNL escalator wants at least `KARMA_PNL_CORROB_MIN`
 = 2 of the advertised SSIDs in a *single* station's list: PineAP
 Beacon Response answers one station's probes for its whole remembered
 list, whereas the union over every nearby client is a description of
@@ -218,6 +269,69 @@ the neighbourhood. The union is still reported and still feeds the
 `[y]` view's Jaccard column; it stopped being the gate because one
 common SSID in one passer-by's list made a benign multi-VAP AP page
 as an active lure.
+
+`KARMA_PROBE_FORGE` (#187 S2) is `KARMA_AP`'s blind spot made into its
+own kind. `KARMA_AP` reads the beacon history only, so the classic KARMA
+radio — the 2005 paper's access point "that responded to any Probe
+Request", `airbase-ng -P` — which beacons one name and answers the rest,
+never becomes a candidate. The new rule reads Probe Responses instead:
+one BSSID answering a station's **directed** probe (paired by DA and
+SSID within 5 s) for an SSID that is not its own name and that it has
+never beaconed. `karma.forge_ssids` (2) such names is WARN, and it
+stays WARN for as long as the radio only forges, whatever the number of
+stations answered or a beacon fan-out beside it (owner decision,
+2026-11-12). CRIT is a station captured: one that was sent a forged
+answer for a name, asked the BSSID to associate under that name within
+`karma.forge_assoc_s` (60 s) of it, and was granted (` +captured
+<sta>`). It asserts what it observed, so it carries no confidence
+percentage. Basis:
+`research/papers/daizovi-macaulay-2005-karma.md`,
+`research/tools/airbase-ng.md`; the row is in
+[`docs/views/alerts.md`](../views/alerts.md).
+
+`PMKID_HARVEST` and `HANDSHAKE_HARVEST` (#172) are the two harvesting
+vectors hcxdumptool's README names, read passively off three frame
+streams no earlier rule joins (`src/harvest_track.c`): one station's
+association requests answered by ≥ 3 BSSIDs' M1s that it left without
+an M2 (WARN; CRIT when ≥ 3 of those M1s carried a PMKID and the station
+answered none), and ≥ 2 deauths claimed from a BSSID followed within
+30 s by the victim's fresh M1/M2 pair (WARN; CRIT at two victims of one
+BSSID). Both are built to see what the flood rules miss: a harvest
+paced under their thresholds. Nothing transmits, and the handshake
+capture and export are unchanged. Every threshold is a judgement,
+labelled and tunable; the sources describe the mechanism, not a count.
+Since 2026-11-12 each tracker row is a numbered cluster: the alert
+detail ends `cluster #N`, the EAPOL records it counted carry the same
+number as `harvest_cluster_id` (JSONL 1.7.0) and the `[e]` view's `[g]`
+groups them. A `QUEUE_EVICT` release (Framing Frames, CVE-2022-47522)
+on one of the cluster's own (BSSID, station) pairs inside the window is
+named in the detail so the two incidents are read together; it moves no
+severity. Separately, an AP heard handing out the PMKID KDE in M1 with a
+PSK-family AKM is flagged harvest-friendly (`beacon.harvest_posture`,
+the `[e]` header) — a posture, not an alert.
+
+The tables the KARMA and harvest rules read (`KARMA_AP` and `KARMA_PROBE_FORGE`'s
+`[y]` rows, the harvest tracker's stations and chains) are on the stream
+since JSONL 1.3.0 as `karma_suspect`, `harvest_station` and
+`harvest_chain` ([[jsonl-schema]], *Credential lures*): the counts, one
+record per row, change-only, and a `gone` record when a row leaves its
+table. slothweb's WiFi view shows them as the "lures and key harvesting"
+card beside the access points ([[slothweb]]); the alert stays the
+verdict, the card the counts behind it.
+
+Since #187 the same rule also reports the **IE-fingerprint collapse**:
+how many distinct IE fingerprints the advertised SSIDs came back with,
+`, 1 IE fingerprint` or `, N IE fingerprints`, and nothing when any of
+them has none recorded. A collapse pays `KARMA_W_IE_COLLAPSE` = 10
+confidence and never moves severity, and the reason is the same
+discipline as the PNL union above — the signal does not separate the
+population it is usually said to. A VAP on real multi-SSID gear has its
+own BSSID and so never becomes a candidate, the Multiple BSSID set's
+nontransmitted profiles are not decoded, and the benign case that does
+cross the threshold, a BSS renamed over a session, collapses exactly
+like a lure. The converse — genuine IE variety — is the better-founded
+reading and is reported for that reason, though it earns no weight yet.
+Basis: `research/papers/mbssid-per-bss-ie-variation.md`.
 
 Collapsing the two axes is what let an uncorroborated same-SSID
 coincidence page at the same volume as an observed attack, and it pushed
@@ -273,6 +387,125 @@ suppress" but "can the adversary reach the input". With no inventory
 configured nothing above applies and the heuristics are exactly as
 slice 1 left them — an operator who never writes a file must not
 silently lose detection.
+
+### The sensor's own addresses (#183)
+
+The other input that does not arrive over the air is the host's own
+interfaces. The **self roster** (`src/ownership.c`) holds every
+link-layer address this host owns, so a rule can tell "the sensor did
+this" from "a stranger did this". `MY_NETWORK_RECON` and
+`UNKNOWN_DEVICE` exonerate on it (`ownership_is_own_device()`, which also
+answers for `--known-mac`); `PM_FORGE`, `RECURRING_TRANSIT` and
+`BLOCKACK_ATTACK` still fire on it, one step lower and tagged
+`self (the sensor's own radio)`; device risk sets bit 64 (`SELF`, #191).
+No flag fills it. The PLATFORM poll stage (`st_platform_net()`,
+`src/poll.c`), which runs ahead of every rule, adds:
+
+- **every `iface` row's address, every tick** (`ownership_self_sync_ifaces()`):
+  Ethernet, the managed card, the monitor radio, bridges. An interface
+  that appears mid-run is rostered on the tick it appears, and an
+  address NetworkManager's per-connection randomisation gives the card
+  is the row's address, so it is rostered too.
+- **what the rows do not carry** (`g_platform.get_self_macs`, Linux:
+  `src/platform/linux_self.c`), asked on the first tick, whenever the
+  interface set's names or addresses change, and every 30 s
+  (`SELF_RESCAN_MS`) otherwise:
+  - every netdev's `IFLA_ADDRESS` **and `IFLA_PERM_ADDRESS`** from an
+    rtnetlink `RTM_GETLINK` dump: no `MAX_IFACES` (32) cap, and the
+    burned-in address of a card currently on a randomised or cloned one,
+    which it returns to when the setting changes;
+  - each Wi-Fi phy's `/sys/class/ieee80211/<phy>/macaddress` and
+    `addresses` pool: the address a monitor vif, AP or second station
+    created later will be given;
+  - every wireless device in an nl80211 `NL80211_CMD_GET_INTERFACE`
+    dump (`linux_wifi_get_wdev_macs()`, `WITH_WIFI` only), which is the
+    one source that names a device with **no netdev**: wpa_supplicant's
+    P2P device (`p2p-dev-wlan0`), whose locally administered address
+    sends P2P discovery probes, and NAN.
+
+All three are reads; nothing is configured (MISSION §2). An all-zero
+address and any address with the group bit set are refused. Entries are
+not removed when a poll misses them (an exoneration that blinks is worse
+than one slightly stale); the roster holds 128 (`MAX_SELF_MACS`) and,
+when full, the address confirmed least recently gives way, so the card's
+newest randomised address is never the one refused. The BSD, Windows and
+stub platforms have no `get_self_macs`: their `iface` rows are the whole
+roster.
+
+**Not covered: per-scan random addresses.** When a managed card scans
+with `NL80211_SCAN_FLAG_RANDOM_ADDR`, mac80211 or the firmware draws a
+fresh address per scan and no interface the kernel exposes ever holds
+it: neither rtnetlink, nl80211's interface dump nor sysfs names it, and
+the scan request and its notification carry the mask, not the address.
+Those probes are exonerated only by seqnum correlation to an associated
+address, as before. `ATTACK_PATH` keys on an IP and has no self tag; the
+sensor keeps no roster of its own IP addresses.
+
+### Two radios are not always two devices, nor two devices a twin (#188, #189)
+
+A field sensor's week of CRIT `EVIL_TWIN` rows (#188) were all benign:
+33 of 38 pairs one device's 2.4 and 5 GHz radios, the rest a same-OUI
+mesh, a carrier offload SSID from two customers' routers, and an ISP
+pair heard at -100 dBm on one or two beacons. The scorer
+(`twin_evidence_score()`, `src/alerts/rules_twin.c`; reasoning beside
+the weights in `src/alerts.h`) now asks before it weighs:
+
+- **One device?** BSSIDs at most two bytes apart, on two bands, first
+  heard within 10 s, are one device and no pair. An OUI is read only
+  from a globally administered address, and vendor-IE fingerprints are
+  compared only within one band. A BTM steer from a sibling address is
+  band steering and carries no weight.
+- **How sure, before CRIT?** A row resting only on soft signals needs
+  50 % confidence: a same-band vendor-IE mismatch beside a second
+  vendor's OUI, or beside a late arrival where a half is locally
+  administered (`twin.late_arrival_s`).
+- **Two devices meant to be there? (2026-11-12)** A carrier SSID every
+  subscriber's gateway broadcasts (exact names: `Spectrum Mobile`,
+  `xfinitywifi`, `XFINITY`, `CableWiFi`, ...) is -35 context,
+  `+carrier SSID`, which leaves every soft sum under the bar. A half
+  barely heard, its strongest reading at or under -92 dBm or fewer than
+  `twin.crit_min_beacons` (5) beacons heard, keeps a soft row at WARN,
+  `+faint`.
+- **A mesh's guest VAPs? (#227, 2026-11-17)** Two locally administered
+  halves, each with a globally administered BSSID on its channel under
+  another non-empty SSID and the same low five octets, the two of those
+  different addresses sharing their first four octets and one main
+  SSID: the guest SSIDs of one vendor's mesh
+  nodes (98:.. main, 9e:.. guest), whose vendor IEs differ node to node.
+  -35 context, `+mesh VAP`, which takes vendor-IE + late arrival (55)
+  to 20. A copy would have to bring a clone of the main network with
+  it, on the matching address and channel; a copy of one AP's guest
+  VAP on another locally administered first octet finds one parent
+  for both halves and is not the shape.
+- **Was the original being heard? (#227)** A late arrival counts only
+  when the earlier half's entry averages at least one frame a minute
+  (`TWIN_STEADY_FRAME_S`, `src/alerts.h`). An AP at the decode margin
+  heard now and then makes every later neighbour look late; the gap is
+  then the sensor's detection latency, not a transmitter turning up.
+
+- **Arrived, or came back? (#194, 2026-11-12)** The table's memory of
+  dropped APs keeps band, `enc` and vendor-IE hash, so a return as
+  another radio is an arrival and an early announcement on another
+  band, security or IEs is no alibi; it does not remember APs first
+  heard during a beacon flood, so a flood no longer switches the
+  late-arrival signal off. The chain still does not name a locally
+  administered copy with no evidence of its own (#193, open by owner
+  ruling pending field data). That field data is now counted and
+  alerted on nowhere: `sensor_health`'s `twin193_*` fields
+  ([[jsonl-schema]]), slothweb's Sensor health view and the posture
+  report give the flood episodes the chain examined
+  (`twin193_floods_chain`), how many met such a copy arriving late
+  (`twin193_coincide`), and how many of those a carrier SSID or a faint
+  half would have excused anyway (`twin193_excl_*`)
+  (`src/alerts/twin_field.h`).
+
+Hard signals (attacker-tool OUI, a BTM steer from another device, an
+inventory mismatch, the deauth-then-twin chain) are untouched by every
+one of these. `EVIL_TWIN_PROXIMITY` (#189) is reported only for a BSSID
+in such a pair, with its swing's minimum above -92 dBm and the sensor
+not moving, and since 2026-11-12, on a pair the attribution ladder has
+attributed, only for the accused half. Per-pair outcomes and costs:
+`docs/wiki/alert-assessments/EVIL_TWIN.md`, `EVIL_TWIN_PROXIMITY.md`.
 
 ### Corroboration before intent (#94)
 
@@ -409,10 +642,24 @@ the headline rules per tier:
   `COUNTRY_ABSENT`, `DFS_MASKING` (both WARN on corroboration)
 - **WARN**: `DEAUTH_FLOOD`, `BEACONING`, `DGA_DOMAIN`, `WEAK_TLS`,
   `SURV_CLOUD_SNI`
+- **Graded by context**: `CAPTIVE_PORTAL` (#169) is LOW for a wrong
+  connectivity-check answer alone — hotel and guest portals do it too —
+  and CRIT on the operator's own network or from a live evil-twin BSS
+  (either tied to the event's own client, never borrowed from another
+  station in range), or for a named kit's portal page; see
+  [[captive-portal]]
 - **CRIT**: `THREAT_DOMAIN`, `THREAT_IP`, `ARP_SPOOF`, `ROGUE_DHCP`,
-  `EVIL_TWIN`, `KARMA_AP`, `DNS_TUNNEL`, `ATTACK_TOOL_UA`,
+  `EVIL_TWIN`, `KARMA_AP`, `KARMA_PROBE_FORGE`, `DNS_TUNNEL`,
+  `ATTACK_TOOL_UA`, `PMKID_HARVEST`, `HANDSHAKE_HARVEST`,
   `ATTACK_PATH`, `WPS_PIN_BRUTE`, `WPS_PBC_RACE`,
   `WPS_PIXIE_LIKELY_SUCCESS`
+
+The two HTTP rules, `ATTACK_PATH` and `ATTACK_TOOL_UA`, judge requests
+only and key on the client that sent them (#197). A paired response row
+in the HTTP ring carries its request's host and path but is sourced from
+the server, and `ATTACK_PATH` used to fire it as a second CRIT naming
+the server as its own attacker; see
+[alert-assessments/ATTACK_PATH](alert-assessments/ATTACK_PATH.md).
 
 ### Own operational state
 
@@ -424,6 +671,8 @@ the exemption in `agents/AGENTS.md`, *Detectors cite their sources*):
 |---|---|---|
 | `NO_MONITOR_MODE` | WARN | interfaces seen, none in monitor mode — the 802.11 views will be empty |
 | `BT_OWN_TRANSMIT` | WARN | the Bluetooth host controller sloth listens through (`--bt-monitor`, or a DLT 254 replay) was told by the host stack to transmit and is still on, or was told within 120 s: an LE scan configured or enabled **active** (it sends SCAN_REQ), Inquiry or Periodic Inquiry, legacy / extended / periodic advertising enabled, LE or BR/EDR Create Connection, Remote Name Request, or Write Scan Enable with inquiry or page scan on (#144 slice 2) |
+| `SENSOR_UNDERVOLT` | WARN | the host's under-voltage alarm (an hwmon `inN_lcrit_alarm`; the Raspberry Pi firmware's flag) reads 1 |
+| `SENSOR_SOURCE_DOWN` | WARN, CRIT for `monitor` and `capture` | a configured source reads `down` for 10 s, or not `ok` for 300 s |
 
 `BT_OWN_TRANSMIT` is **bucketed, not latched**, on two clocks. The
 persistent kinds — advertising (legacy, extended, periodic), inquiry or
@@ -451,6 +700,53 @@ a host command is not seen. `sensor_health` carries the same state as
 on), `ble_own_tx` / `ble_own_tx_kind` (the newest command), and the scan
 configuration
 as `ble_scan_mode` / `ble_scan_filter`. → [[ble]]
+
+`SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN` (2026-11-11,
+`src/alerts/rules_sensor.c`) read the host-status snapshot
+`src/sys_status.c` takes for the `sys_status` and `source_status`
+records, so they say what those records say, once, as incidents. Both
+**hold an incident across a flap** and close it themselves with the
+`alert.resolve` reason `recovered` once the condition has been clear for
+`SENSOR_RECOVER_S` (120 s, two `sys_status` batches) without a break: a
+supply or a decoder toggling every few seconds is one incident, not a
+create/resolve pair per toggle.
+
+- **`SENSOR_UNDERVOLT`**, key `undervolt:host`. The alarm is sampled every
+  10 s, so a dip shorter than that is not seen. WARN only: the alarm says
+  the supply dipped, and nothing sloth reads says for how long a dip has
+  to last before an SD card or a USB radio is harmed, so a CRIT on a span
+  chosen here would be a guess. A host with no alarm node never fires.
+- **`SENSOR_SOURCE_DOWN`**, key `srcdown:<name>`, for the sources
+  `source_status` lists as configured: the command line enabled them, or
+  (the monitor radio) sloth found and opened one. It opens on `down` held
+  10 s (a gpsd or decoder reconnect that succeeds within seconds is not an
+  incident) or on anything but `ok` held 300 s (five of the 60 s stale
+  threshold, and the engine's own quiet period), and is re-asserted in
+  every state but `ok`, so down, then stale, then down is one incident
+  whose detail follows the state. A source down from the first poll (a
+  capture that never opened) opens after the same 10 s. **CRIT for the
+  monitor radio and the IP capture**: every 802.11 rule and view reads the
+  one, every wired rule the other, and with either gone the sensor is
+  silent on that whole domain while it looks like a quiet network. WARN
+  for the rest, which each feed one domain beside them. A source not
+  configured never fires. The detail carries the reader's own word, the
+  state and the freshness band, never an age in seconds (#173).
+
+**Which daemon (#216).** `SENSOR_UNDERVOLT` is `sloth-wifi`'s only:
+the host has one supply, and on a host running both daemons one
+brown-out is one incident (a host running `sloth-rf` alone has no
+undervolt alert). `SENSOR_SOURCE_DOWN` is each daemon's for the sources
+it reports: `sloth-wifi` for `capture`, `monitor`, `btmon`, `btcap` and
+`gnss`, `sloth-rf` for `gnss`, `adsb`, `aprs`, `rtl433` and `victron`.
+A decoder that is down is therefore `sloth-rf`'s incident alone, and a
+receiver that is down is one in each stream, with one key
+(`srcdown:gnss`), which slothweb shows once.
+
+Both details are on slothweb's audited list since 2026-11-12
+(`web/src/web_alertfmt.c`), so its Alerts view shows them rather than
+withholding them: every field is the host's own text (an hwmon id and
+its driver's label; a source's name, kind, endpoint and reader's word,
+the strings its `source_status` row already carries to slothweb).
 
 ### Bluetooth Low Energy advertisements (#144 slice 4)
 
@@ -624,6 +920,121 @@ ruling 8).
 Full row, including the false-positive cases, in
 [`docs/views/alerts.md`](../views/alerts.md); basis in
 `research/papers/surveillance-vendor-endpoints.md`.
+### The GNSS receiver (2026-11-03)
+
+**`sloth-rf`'s rules since the cutover (#216).** `sloth-wifi` links the
+same receiver for the position stamp and reports its health, and runs
+none of the four below: they are in `g_alert_table_rf` only, and
+`sloth-wifi`'s link refuses `rule_gnss_*`. A host that wants them runs
+`sloth-rf` with `--gps` (alone, on a GPS-only host).
+
+What the `--gps` receiver reports about its own inputs ([[gnss]]),
+judged by `src/alerts/rules_gnss.c` from the per-poll snapshot
+(`s->gnss_sky`, `s->gnss_fix` and the `s->gnss_hist` rings) and never
+from `src/gps.c`, every window on the host's monotonic clock. A u-blox 7
+behind gpsd 3.27 exports no AGC, no `jammingState` and no
+`spoofDetState`, so all four are built from SKY `ss` / `used` and TPV
+`mode` / `time` / `eph` / `speed` / `eps` / `leapseconds` / `jam`. Each
+threshold is a `gnss.*` knob ([[cli-reference]]), and each default is
+argued from `research/gnss/` in the rule's comment and its assessment
+in [alert-assessments/](alert-assessments/README.md); where the research
+says no published threshold exists, the comment says so and the default
+is the conservative one.
+
+| Kind | Sev | ATT&CK | Fires on |
+|---|---|---|---|
+| `GNSS_JAMMING` | WARN, CRIT when the fix is lost | Mobile T1464 | the tracked satellites' median C/N0 collapsing at once (≥ 10 dB under the 60 s before a 10 s window, satellites still listed and the list not down 2, the used set down 2 or the fix gone; ss-0 rows are not tracked and do not count), or the u-blox `jamInd` ≥ 128 held 30 s |
+| `GNSS_SPOOF_SUSPECT` | LOW on two heuristics, WARN on three, never CRIT | — | two of: used C/N0 too high on ≥ 4 satellites, used C/N0 uniform (sd < 1 dB over ≥ 6) and high, a reacquisition with a position or time jump — within 300 s |
+| `GNSS_TIME_JUMP` | WARN | — | the receiver's time stepping ≥ 1000 ms against the host's monotonic clock, judged on consecutive gpsd TOFFs when gpsd sends them (#182, 2026-11-12), else from the last accepted fix, held on the next TOFF or fix; not a queued read after a stall, not a late read by a starved reader (#182), not a suspend |
+| `GNSS_POSITION_JUMP` | WARN | — | consecutive fixes farther apart than (speed + eps) × Δt + 3 × (eph₁ + eph₂), Δt the receiver's epoch spacing |
+
+**`GNSS_JAMMING` takes Mobile T1464** (owner ruling 2026-11-03), the
+only Mobile ATT&CK ID in `include/sloth_alerts.def` and the only
+technique in any matrix whose text names GPS jamming; like
+`RF_DEGRADED`'s T1498 it tags the observable, not intent, because DHS
+2017 defines interference and jamming as the same effect. The detail
+says "interference or jamming" and never names a source: one receiver
+cannot bearing a jammer. **The other three take the second exemption
+form** — a real basis (Psiaki & Humphreys 2016, Humphreys et al. 2008,
+chrony, the gpsd time HOWTO, GPS.gov on the week rollover) and no
+technique that describes them; a time or position step also comes from
+faults. They are on the named list in `tests/test_research_corpus.c ::
+test_uncitable_kinds_with_a_real_basis_are_still_cited`, and
+`research/gnss/attack-mapping.md` records why ICS T0830 and T0856 (now
+T1692.002) are not fits.
+
+What separates each from its benign twin, and is tested
+(`tests/test_gnss_rules.c`, every absence seen red under a named
+mutation): `GNSS_JAMMING` measures its drop against the minute before
+the window, so a sky falling over minutes moves it a decibel or two; a
+dip that keeps the solution (foliage) does not fire; an empty sky is
+the antenna gone, not this. `GNSS_TIME_JUMP` takes the host's own wall
+step out (an NTP step or `date -s` moves the clock offset and never
+fires it), passes over a step that does not hold on the next fix and a
+fix read late by a starved reader (#182), and
+does not judge the first fix after a start or a loss, a leap second (a
+whole-second step with a `leapseconds` change, or at UTC midnight) or a
+1024-week rollover. `GNSS_POSITION_JUMP` puts the reported speed in the
+bound and does not judge a cold start or a fix without `eph`.
+`GNSS_SPOOF_SUSPECT` never fires on one heuristic, counts only satellites
+in the solution, keeps the indoor case (uniform but weak) out with a
+mean gate, and cannot see a spoofer that was present before sloth
+started (the u-blox M8's own detector has the same limit).
+
+Each rule judges a fix pair once; `c` (alerts_clear) drops the rules'
+memory and a fix received before it is never judged after it, so
+clearing cannot replay a minute-old jump. No new JSONL record: the
+alert records already carry `loc` ([[location]]).
+
+### ADS-B emergency squawks and status (#186)
+
+**`sloth-rf`'s rule since the cutover (#216)**: `--adsb` is its flag
+and the aircraft table is its state.
+
+What the `--adsb` decoder lists ([[adsb]]), judged by
+`src/alerts/rules_adsb.c` from the per-poll table (`s->adsb`,
+`s->adsb_rows`) and never from `src/adsb.c`.
+
+| Kind | Sev | ATT&CK | Fires on |
+|---|---|---|---|
+| `ADSB_EMERGENCY` | LOW on first sight, WARN once held 10 s, never CRIT | — | an aircraft listed while the source is live with squawk 7500, 7600 or 7700, or an emergency/priority status other than `none` |
+
+**Flag only.** An aircraft declaring an emergency is a third party's
+state, not anything about the operator's network, and ADS-B carries no
+authentication: Schäfer et al. 2013 §3.2 name the "False Alarm Attack"
+outright, and one receiver has no second opinion. sloth surfaces the
+declaration and never acts on it; the detail says so.
+
+**One incident per address and condition.** The key is
+`adsbemerg:<icao>:<icao|nonicao>:<condition>`, the condition the 7x00
+code when the squawk is one, else the status word (readsb: the status is
+"a superset of the 7x00 squawks"). A code change (7700 to 7500) re-keys
+and re-fires; a status following its code from `none` to `general` is
+the same incident; a steady condition re-asserted every pass holds its
+detail still (#173). An aircraft that leaves the table, or a source gone
+`stale`, stops being evaluated and the incident expires on the quiet
+period like any other. A pass that is not live keeps the hold of every
+aircraft still listed, so a one-poll read or parse error does not fire
+an open WARN back at LOW.
+
+**Severity is persistence, not corroboration.** The squawk and the
+status are one declaration reported two ways (readsb: the status is "a
+superset of the 7x00 squawks"; DO-260B itself was not read), so
+agreement between them is not a second observation. A single corrupted reply or a code dialled through in
+passing is what the hold keeps at LOW: the condition must hold for
+`adsb.emerg_hold_s` (10 s, [[cli-reference]]) of the aircraft's **own**
+message time (the row's `last_mono_ms`), so a decoder relisting an
+aircraft it has not heard again does not age it into WARN. No source
+gives that number; it is a judgement and a knob.
+
+Empty technique, second exemption form: SERA.13005, readsb's
+README-json.md, Costin & Francillon 2012 and Schäfer et al. 2013 are
+its basis (`research/adsb/emergency-squawks.md`), and it is on the named
+list in `tests/test_research_corpus.c`. Tested in
+`tests/test_adsb_rules.c` with hand-written aircraft.json documents
+through the module's own parser, every absence seen red under a named
+mutation.
+
 ### Exposure rules — no ATT&CK technique, on purpose
 
 `OPEN_SETUP_AP` (#80), `CAM_WS_DISCOVERY` (#106 slice 1),
@@ -755,6 +1166,9 @@ one.
 | `WPS_PBC_RACE` | fires above 2 / 120 s | `--wps-pbc-concurrent N` |
 | `WPS_PIXIE_PROBE` | 60 s of silence after M3 with no M4 | `--tune wps.pixie_silence_s=N` |
 | `WPS_PIXIE_LIKELY_SUCCESS` | 24 h look-back from a completed run | `--tune wps.pixie_success_window_s=N` |
+| `KARMA_PROBE_FORGE` | 2 never-beaconed SSIDs answered, 600 s; CRIT on an association within 60 s | `--tune karma.forge_ssids=N`, `--tune karma.forge_window_s=N`, `--tune karma.forge_assoc_s=N` |
+| `PMKID_HARVEST` | 3 BSSIDs, 50 % unanswered, 900 s | `--tune harvest.min_bssids=N`, `harvest.unanswered_pct=N`, `harvest.window_s=N` |
+| `HANDSHAKE_HARVEST` | 2 deauths, fresh M1/M2 within 30 s | `--tune harvest.deauth_min=N`, `harvest.reconnect_s=N`, `harvest.window_s=N` |
 
 `WPS_LOCKOUT_CYCLING`'s evidence is readable: the **WPS ACTIVITY**
 block on the Beacons detail screen (`b`, then Enter on the AP) shows
@@ -889,6 +1303,8 @@ the rule fires on an unfamiliar IP.
 
 ## Related pages
 
+- [Alert assessments](alert-assessments/README.md) — per-type research: what each rule checks, its count semantics, evidence, benign causes, severity, noise verdict and bibliography.
+- [[alert-remediation]] — investigation and fix steps per alert type.
 - [[threat-intel]] — IOC list format, suffix matching, swap-in.
 - [[beacon-detection]] — periodicity math.
 - [[pcap-export]] — `--pcap-dir` mechanics.

@@ -6,13 +6,18 @@
 #include "runner.h"
 #include "sloth.h"
 #include "updater.h"
+#include "tmp_dir.h"
 
 /* Version check-in — exercises the manifest reader against files we
- * write into /tmp. Bumps mtime by writing then sleeping isn't needed:
+ * write into the run directory (tests/tmp_dir.h). Bumps mtime by writing then sleeping isn't needed:
  * updater_tick's per-poll rate limit is what we test around by
  * writing manifests before the first call. */
 
-static const char *MANIFEST_PATH = "/tmp/sloth_test_manifest.json";
+static const char *manifest_path(void) {
+    static char p[TEST_TMP_MAX];
+    return test_tmp_tpl(p, sizeof(p), "sloth_test_manifest.json");
+}
+#define MANIFEST_PATH manifest_path()
 
 static void write_manifest(const char *body) {
     FILE *fp = fopen(MANIFEST_PATH, "w");

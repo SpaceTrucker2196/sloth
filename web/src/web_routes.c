@@ -1,15 +1,43 @@
 #include "web_routes.h"
+#include "web_rfhist.h"
+#include "web_aprshist.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
+#include "web_alerts.h"
 #include "web_assets.h"
+#include "web_bledev.h"
+#include "web_evidence.h"
+#include "web_fleet.h"
+#include "web_fleetadsb.h"
+#include "web_fleetgnss.h"
+#include "web_fleetview.h"
+#include "web_fleetid.h"
+#include "web_locate.h"
+#include "web_bundle.h"
 #include "web_flows.h"
+#include "web_frrs.h"
 #include "web_history.h"
 #include "web_json.h"
 #include "web_recipes.h"
+#include "web_scope.h"
 #include "web_series.h"
 #include "web_wifi.h"
+#include "web_positions.h"
+#include "web_probes.h"
+#include "web_radar.h"
+#include "web_allkeys.h"
+#include "web_ssidview.h"
+#include "web_camera.h"
+#include "web_spectrum.h"
+
+static int route_scoped(const web_req_t *rq, const web_health_t *h,
+                        int sse_room, char *out, size_t outsz, web_resp_t *r);
+static int route_paths(const web_req_t *rq, const web_health_t *h,
+                       int sse_room, char *out, size_t outsz, web_resp_t *r);
 
 /* What every answer carries. no-referrer because nothing on the page
  * should tell anyone where it was; nosniff because every type is
@@ -33,6 +61,22 @@ static int fit(int n, size_t outsz, size_t *len) {
     if (n < 0 || (size_t)n >= outsz) return -1;
     *len = (size_t)n;
     return 0;
+}
+
+/* A request that named a scope gets it back as the body's first member,
+ * so an answer says which scope it is (a 400 named none). The body is
+ * an object rendered by our own writers: '{' first. One that filled its
+ * buffer goes out without it: the page knows what it asked for, and a
+ * whole answer is worth more than the echo. */
+static void scope_echo(const web_health_t *h, char *body, size_t *bl, size_t cap) {
+    if (!h || !h->sc || !h->sc->given || *bl < 2 || body[0] != '{') return;
+    char m[40];
+    int n = snprintf(m, sizeof(m), "\"scope\":\"%s\"%s",
+                     web_scope_word(h->sc->scope), body[1] == '}' ? "" : ",");
+    if (n < 0 || (size_t)n >= sizeof(m) || *bl + (size_t)n > cap) return;
+    memmove(body + 1 + n, body + 1, *bl - 1);
+    memcpy(body + 1, m, (size_t)n);
+    *bl += (size_t)n;
 }
 
 static int route_page(const web_req_t *rq, char *out, size_t outsz,
@@ -136,6 +180,32 @@ static void tsdb_health(web_tsdb_t *t, web_jw_t *w) {
     web_jw_int(w, open ? ss.analysis_bytes : -1);
     web_jw_raw(w, ",\"store_baseline_rows_reused\":");
     web_jw_int(w, (long long)ss.bl_rows_reused);
+    /* The WiFi view's channel mix (web_chmix.h): what it holds and what
+     * its bounds dropped, in memory and in the store. */
+    web_jw_raw(w, ",\"chmix\":");
+    if (t->mix) {
+        web_chmix_stats_t ms;
+        web_chmix_stats(t->mix, &ms);
+        web_jw_raw(w, "{\"channels\":");     web_jw_int(w, ms.channels);
+        web_jw_raw(w, ",\"samples\":");      web_jw_int(w, (long long)ms.samples);
+        web_jw_raw(w, ",\"ring_rows\":");    web_jw_int(w, (long long)ms.ring_rows);
+        web_jw_raw(w, ",\"ring_overwritten\":");
+        web_jw_int(w, (long long)ms.ring_overwritten);
+        web_jw_raw(w, ",\"queue_dropped\":");
+        web_jw_int(w, (long long)ms.queue_dropped);
+        web_jw_raw(w, ",\"folded\":");       web_jw_int(w, (long long)ms.folded);
+        web_jw_raw(w, ",\"channel_evictions\":");
+        web_jw_int(w, (long long)ms.channel_evictions);
+        web_jw_raw(w, ",\"store_rows\":");
+        if (open) web_jw_int(w, ss.mix_rows); else web_jw_raw(w, "null");
+        web_jw_raw(w, ",\"store_dropped_expired\":");
+        web_jw_int(w, (long long)ss.mix_dropped_expired);
+        web_jw_raw(w, ",\"store_dropped_cap\":");
+        web_jw_int(w, (long long)ss.mix_dropped_cap);
+        web_jw_raw(w, "}");
+    } else {
+        web_jw_raw(w, "null");
+    }
     web_jw_raw(w, ",\"retain_days\":");     web_jw_int(w, t->retain_days);
     long long v[WEB_KC_COUNT];
     for (int c = 0; c < WEB_KC_COUNT; c++) v[c] = rs.keys[c];
@@ -156,6 +226,8 @@ static void tsdb_health(web_tsdb_t *t, web_jw_t *w) {
     web_jw_raw(w, ",\"highwater_evictions\":");
     web_jw_int(w, (long long)rs.hw_evictions);
     web_jw_raw(w, ",\"values_clamped\":");   web_jw_int(w, (long long)rs.clamped);
+    web_jw_raw(w, ",\"alertq_dropped\":");
+    web_jw_int(w, (long long)rs.alertq_dropped);
 }
 
 /* The M3 members: the baseline table, the episode table and the
@@ -179,6 +251,7 @@ static void analysis_health(web_anomaly_t *a, web_jw_t *w) {
     web_jw_raw(w, ",\"hours_fed\":");         web_jw_int(w, (long long)s.hours_fed);
     web_jw_raw(w, ",\"hours_unobserved\":");  web_jw_int(w, (long long)s.hours_unobserved);
     web_jw_raw(w, ",\"minutes_unobserved\":"); web_jw_int(w, (long long)s.minutes_unobserved);
+    web_jw_raw(w, ",\"hours_merged\":");      web_jw_int(w, (long long)s.hours_merged);
     web_jw_raw(w, ",\"mad\":");
     web_jw_raw(w, a->cfg.store ? "true" : "false");
     web_jw_raw(w, ",\"mad_queries\":");       web_jw_int(w, (long long)s.mad_queries);
@@ -245,6 +318,89 @@ static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
     if (h->live) web_live_health_members(h->live, &w, h->now_ms);
     else         web_jw_raw(&w, ",\"socket\":\"none\",\"last_record_age_s\":null");
     web_m4_health(h->m4, h->wall_s, &w);
+    /* #168: whether the DB-backed views are stale, decided here rather
+     * than in the page so the one rule is tested in one place. Only with
+     * a --sloth-db: the M0 shape stands without one. */
+    if (h->m4 && h->m4->sdb && h->m4->sdb->configured) {
+        long long age;
+        web_jw_raw(&w, ",\"sloth_db_stale_after_s\":");
+        web_jw_int(&w, WEB_SDB_STALE_S);
+        web_jw_raw(&w, ",\"sloth_db_stale\":");
+        if (web_m4_db_age(h->m4, h->wall_s, &age)) {
+            int current = 0;
+            if (h->live) {
+                web_live_sum_t ls;
+                web_live_summary(h->live, &ls, h->now_ms);
+                current = ls.sock_state == WEB_SOCK_CONNECTED &&
+                          ls.last_record_age_ms >= 0 &&
+                          ls.last_record_age_ms <= WEB_SDB_STREAM_CURRENT_S * 1000LL;
+            }
+            web_jw_raw(&w, web_sdb_is_stale(age, current) ? "true" : "false");
+        } else {
+            web_jw_raw(&w, "null");
+        }
+    }
+    /* Where the RF tabs' records come from (#216, web_live.h): with a
+     * 2.x sloth-wifi on --socket and no --rf-socket this is
+     * "not_configured", and the page says so rather than showing empty
+     * tables. With a data socket only: the M0 shape stands without. */
+    if (h->live) {
+        web_jw_raw(&w, ",\"rf_stream\":");
+        web_live_rf_stream_json(h->live, &w);
+    }
+    /* Two daemons (#214), only with --rf-socket or --rf-db: without
+     * them the answer is what it was. "daemons" is sloth's stream and
+     * sloth-rf's, each with its socket, its sensor_health and the
+     * wrong-daemon guard's account; "rf_db" is --rf-db as "db" and its
+     * sloth_db_* members are --sloth-db. */
+    if (h->live && h->live->peer) {
+        web_jw_raw(&w, ",\"daemons\":[");
+        web_live_daemon_json(h->live, &w, h->now_ms);
+        web_jw_raw(&w, ",");
+        web_live_daemon_json(h->live->peer, &w, h->now_ms);
+        web_jw_raw(&w, "]");
+    }
+    if (h->m4 && h->m4->sdb_rf && h->m4->sdb_rf->configured) {
+        web_slothdb_t *rd = h->m4->sdb_rf;
+        web_slothdb_check(rd, h->wall_s);
+        web_sdb_stats_t st;
+        web_slothdb_stats(rd, &st);
+        int open = st.state == WEB_SDB_OPEN;
+        web_jw_raw(&w, ",\"rf_db\":{\"state\":");
+        web_jw_str(&w, web_slothdb_state_word(st.state));
+        web_jw_raw(&w, ",\"schema\":");
+        if (open) web_jw_int(&w, st.schema); else web_jw_raw(&w, "null");
+        web_jw_raw(&w, ",\"path\":");
+        web_jw_strn(&w, rd->path, strnlen(rd->path, 256));
+        web_jw_raw(&w, ",\"mode\":");
+        if (st.mode[0]) web_jw_str(&w, st.mode); else web_jw_raw(&w, "null");
+        web_jw_raw(&w, ",\"mtime\":");
+        if (open && st.mtime > 0) web_jw_int(&w, st.mtime); else web_jw_raw(&w, "null");
+        web_jw_raw(&w, ",\"age_s\":");
+        long long age = h->wall_s > st.mtime ? h->wall_s - st.mtime : 0;
+        if (open && st.mtime > 0) web_jw_int(&w, age); else web_jw_raw(&w, "null");
+        web_jw_raw(&w, ",\"stale_after_s\":"); web_jw_int(&w, WEB_SDB_STALE_S);
+        /* Stale as sloth.db is (#168), against sloth-rf's own stream. */
+        web_jw_raw(&w, ",\"stale\":");
+        if (open && st.mtime > 0) {
+            int current = 0;
+            if (h->live && h->live->peer) {
+                web_live_sum_t ls;
+                web_live_summary(h->live->peer, &ls, h->now_ms);
+                current = ls.sock_state == WEB_SOCK_CONNECTED &&
+                          ls.last_record_age_ms >= 0 &&
+                          ls.last_record_age_ms <= WEB_SDB_STREAM_CURRENT_S * 1000LL;
+            }
+            web_jw_raw(&w, web_sdb_is_stale(age, current) ? "true" : "false");
+        } else {
+            web_jw_raw(&w, "null");
+        }
+        web_jw_raw(&w, ",\"error\":");
+        if (st.err[0]) web_jw_str(&w, st.err); else web_jw_raw(&w, "null");
+        web_jw_raw(&w, ",\"opens\":");    web_jw_int(&w, (long long)st.opens);
+        web_jw_raw(&w, ",\"timeouts\":"); web_jw_int(&w, (long long)st.timeouts);
+        web_jw_raw(&w, "}");
+    }
     /* The page shows the SQL box only when this says so. */
     web_jw_raw(&w, ",\"sql\":");
     if (!h->sql || !h->sql->enabled) {
@@ -264,17 +420,88 @@ static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
     web_jw_raw(&w, ",");
     tsdb_health(h->tsdb, &w);
     analysis_health(h->anomaly, &w);
+    /* The BLE tables (web_ble.h), only when slothweb keeps them: the
+     * M0 shape stands without. */
+    if (h->ble) {
+        web_jw_raw(&w, ",\"ble\":");
+        web_ble_health_json(h->ble, &w);
+        if (h->tsdb && h->tsdb->store && h->tsdb->store->rd) {
+            web_store_stats_t bs;
+            web_store_stats(h->tsdb->store, &bs);
+            web_jw_raw(&w, ",\"ble_store\":{\"rows\":");  web_jw_int(&w, bs.ble_rows);
+            web_jw_raw(&w, ",\"alert_rows\":");            web_jw_int(&w, bs.ble_alert_rows);
+            web_jw_raw(&w, ",\"batches\":");               web_jw_int(&w, (long long)bs.ble_batches);
+            web_jw_raw(&w, ",\"dropped_expired\":");       web_jw_int(&w, (long long)bs.ble_dropped_expired);
+            web_jw_raw(&w, ",\"dropped_cap\":");           web_jw_int(&w, (long long)bs.ble_dropped_cap);
+            web_jw_raw(&w, "}");
+        } else {
+            web_jw_raw(&w, ",\"ble_store\":null");
+        }
+    }
+    /* The GNSS panel (web_gnss.h), likewise only when kept. */
+    if (h->gnss) {
+        web_jw_raw(&w, ",\"gnss\":");
+        web_gnss_health_json(h->gnss, &w);
+    }
+    /* The ADS-B panel (web_adsb.h), likewise only when kept. */
+    if (h->adsb) {
+        web_jw_raw(&w, ",\"adsb\":");
+        web_adsb_health_json(h->adsb, &w);
+    }
+    /* The APRS panel (web_aprs.h), likewise only when kept. */
+    if (h->aprs) {
+        web_jw_raw(&w, ",\"aprs\":");
+        web_aprs_health_json(h->aprs, &w);
+    }
+    /* The rtl_433 tab (web_rtl433.h), likewise only when kept. */
+    if (h->rtl433) {
+        web_jw_raw(&w, ",\"rtl433\":");
+        web_rtl433_health_json(h->rtl433, &w);
+    }
+    /* The Victron tab (web_victron.h), likewise only when kept. */
+    if (h->victron) {
+        web_jw_raw(&w, ",\"victron\":");
+        web_victron_health_json(h->victron, &w);
+    }
     web_jw_raw(&w, ",\"sse_clients\":");
     web_jw_int(&w, h->sse_clients);
     web_jw_raw(&w, ",\"tick_seq\":");
     web_jw_int(&w, (long long)h->tick_seq);
+    /* The page header names the host it is looking at, so two sites'
+     * pages open side by side cannot be mistaken for each other. */
+    {
+        char hn[256];
+        web_jw_raw(&w, ",\"hostname\":");
+        if (gethostname(hn, sizeof(hn)) == 0) {
+            hn[sizeof(hn) - 1] = '\0';
+            web_jw_str(&w, hn);
+        } else {
+            web_jw_raw(&w, "null");
+        }
+    }
+    /* Triage and the FRRS record (web_frrs.h): additive, last, and only
+     * when the module is attached, so the answer without it is as it
+     * was. */
+    if (h->m4 && h->m4->frrs) web_frrs_health(h->m4->frrs, &w);
+    /* The owner's fleet (web_fleet.h): the export, and each peer pulled
+     * with its last good pull's age and its last refusal. Additive and
+     * last, only when attached, as triage is. */
+    if (h->m4 && h->m4->fleet) {
+        web_jw_raw(&w, ",\"fleet\":");
+        web_fleet_health_json(h->m4->fleet, &w, h->wall_s);
+    }
     web_jw_raw(&w, "}\n");
     return w.overflow ? 0 : w.len;
 }
 
 static int route_health(const web_req_t *rq, const web_health_t *h,
                         char *out, size_t outsz, web_resp_t *r) {
-    char body[8192];
+    /* 8 KB before the fleet; eight peers, each a last refusal of up to
+     * WEB_FLEET_ERR_MAX bytes escaped, take up to another 10 KB. With
+     * --rf-socket and --rf-db (#214) the two daemons' objects (each a
+     * socket spec and a last error, escaped) and "rf_db" (a path and an
+     * error, escaped) take up to another 8 KB. */
+    char body[28672];
     size_t bl = health_json(h, body, sizeof(body));
     if (bl == 0) return -1;
     r->status = 200;
@@ -291,7 +518,47 @@ static int route_health(const web_req_t *rq, const web_health_t *h,
 }
 
 static size_t live_body(const web_health_t *h, char *out, size_t cap) {
-    if (h->live) return web_live_json(h->live, out, cap, h->now_ms);
+    if (h->live) {
+        size_t n = web_live_json_scoped(h->live, h->sc, out, cap, h->now_ms);
+        /* Under a scope the tick's anomalies_open (every scope's) will
+         * not do: the scope's own count of open episodes rides here, so
+         * the page's 2 s scoped refresh keeps the tile and the strip. */
+        if (n >= 2 && h->anomaly && h->sc && h->sc->scope != WEB_SCOPE_HYBRID &&
+            out[n - 2] == '}' && out[n - 1] == '\n') {
+            char t[48];
+            int k = snprintf(t, sizeof(t), ",\"anomalies_open\":%d}\n",
+                             web_anomaly_open_count_scoped(h->anomaly, h->sc,
+                                                           h->tsdb ? h->tsdb->ru : NULL));
+            if (k < 0 || n - 2 + (size_t)k + 1 > cap) return 0;
+            memcpy(out + n - 2, t, (size_t)k + 1);
+            n = n - 2 + (size_t)k;
+        }
+        /* The BLE receivers' state (web_ble.h), Monitor's and Hybrid's:
+         * the Overview's BLE fact and the Health view's Bluetooth block.
+         * Under Local the member is null, as the view is out of scope. */
+        if (n >= 2 && h->ble && out[n - 2] == '}' && out[n - 1] == '\n') {
+            /* Sized from the worst case: twelve sensor_health strings of
+             * WEB_BLE_SH_STR bytes, each byte at most a six-byte \u
+             * escape, about 450 bytes of names and a dozen integers.
+             * Should it ever not fit, the member is null and the rest of
+             * /api/live stands: one block is not the page's feed. */
+            char t[12 * WEB_BLE_SH_STR * 6 + 1024];
+            web_jw_t w;
+            web_jw_init(&w, t, sizeof(t));
+            web_jw_raw(&w, ",\"ble\":");
+            if (h->sc && h->sc->scope == WEB_SCOPE_LOCAL) web_jw_raw(&w, "null");
+            else web_ble_live_json(h->ble, &w, h->wall_s);
+            web_jw_raw(&w, "}\n");
+            if (w.overflow) {
+                web_jw_init(&w, t, sizeof(t));
+                web_jw_raw(&w, ",\"ble\":null}\n");
+            }
+            if (w.overflow || n - 2 + w.len + 1 > cap) return 0;
+            memcpy(out + n - 2, t, w.len + 1);
+            n = n - 2 + w.len;
+        }
+        return n;
+    }
     static const char none[] =
         "{\"socket\":\"none\",\"devices\":null,\"devices_stale\":true,"
         "\"alerts_open\":null,\"records\":0,\"records_s\":null,"
@@ -308,7 +575,10 @@ static int route_live(const web_req_t *rq, const web_health_t *h,
                       char *out, size_t outsz, web_resp_t *r) {
     if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
     char *body = out + WEB_LIVE_HDR_RESERVE;
-    size_t bl = live_body(h, body, outsz - WEB_LIVE_HDR_RESERVE);
+    /* 64 bytes kept back for the scope's echo. */
+    size_t bl = outsz > WEB_LIVE_HDR_RESERVE + 64
+              ? live_body(h, body, outsz - WEB_LIVE_HDR_RESERVE - 64) : 0;
+    if (bl) scope_echo(h, body, &bl, outsz - WEB_LIVE_HDR_RESERVE);
     if (bl == 0) {
         r->status = 503;
         r->out_len = web_http_response(503, rq->is_head, out, outsz);
@@ -340,9 +610,10 @@ static int route_live(const web_req_t *rq, const web_health_t *h,
 
 /* A JSON answer whose body was rendered at out + WEB_LIVE_HDR_RESERVE:
  * write the header in front of it. */
-static int json_answer(const web_req_t *rq, int status, size_t bl, char *out,
+static int json_answer(const web_req_t *rq, const web_health_t *h, int status, size_t bl, char *out,
                        size_t outsz, web_resp_t *r) {
     char *body = out + WEB_LIVE_HDR_RESERVE;
+    scope_echo(h, body, &bl, outsz - WEB_LIVE_HDR_RESERVE);
     char hdr[WEB_LIVE_HDR_RESERVE];
     size_t hl;
     if (fit(snprintf(hdr, sizeof(hdr),
@@ -395,6 +666,7 @@ static int route_series(const web_req_t *rq, const web_health_t *h, int which,
             status = 400;
             bl = web_series_error_json(why, body, cap);
         } else {
+            q.sc = h->sc;
             bl = web_series_json(h->tsdb, &q, body, cap);
         }
     } else if (which == SR_KEYS) {
@@ -403,14 +675,14 @@ static int route_series(const web_req_t *rq, const web_health_t *h, int which,
             status = 400;
             bl = web_series_error_json(why, body, cap);
         } else {
-            bl = web_keys_json(h->tsdb, metric, body, cap);
+            bl = web_keys_json_scoped(h->tsdb, metric, h->sc, body, cap);
         }
     } else {
         if (web_metrics_parse(rq->query, why, sizeof(why)) != 0) {
             status = 400;
             bl = web_series_error_json(why, body, cap);
         } else {
-            bl = web_metrics_json(h->tsdb, body, cap);
+            bl = web_metrics_json_scoped(h->tsdb, h->sc, body, cap);
         }
     }
     if (bl == 0) {
@@ -418,7 +690,42 @@ static int route_series(const web_req_t *rq, const web_health_t *h, int which,
         r->out_len = web_http_response(503, rq->is_head, out, outsz);
         return r->out_len ? 0 : -1;
     }
-    return json_answer(rq, status, bl, out, outsz, r);
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/series/all (web_allkeys.h): every key of one metric, each in at
+ * most cols cells, a page of keys to an answer. Checked as /api/series
+ * is, before anything is read. */
+static int route_allkeys(const web_req_t *rq, const web_health_t *h,
+                         char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    char why[48] = "";
+    size_t bl = 0;
+    int status = 200;
+    web_allkeys_q_t q;
+    if (!h->tsdb) {
+        status = 503;
+        bl = web_series_error_json("no_time_series", body, cap);
+    } else if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+    } else if (web_allkeys_parse(rq->query, h->wall_s,
+                                 h->tsdb->store && h->tsdb->store->rd, &q,
+                                 why, sizeof(why)) != 0) {
+        status = 400;
+        bl = web_series_error_json(why, body, cap);
+    } else {
+        q.sc = h->sc;
+        bl = web_allkeys_json(h->tsdb, &q, body, cap);
+    }
+    if (bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
 /* /api/anomalies?since=&kind= and /api/baseline?metric=&key= (M3).
@@ -446,14 +753,15 @@ static int route_anomalies(const web_req_t *rq, const web_health_t *h,
         status = 400;
         bl = web_series_error_json(why, body, cap);
     } else {
-        bl = web_anomaly_json(h->anomaly, h->wall_s, since, kind, body, cap);
+        bl = web_anomaly_json_scoped(h->anomaly, h->wall_s, since, kind, h->sc,
+                                     h->tsdb ? h->tsdb->ru : NULL, body, cap);
     }
     if (bl == 0) {
         r->status = 503;
         r->out_len = web_http_response(503, rq->is_head, out, outsz);
         return r->out_len ? 0 : -1;
     }
-    return json_answer(rq, status, bl, out, outsz, r);
+    return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
 static int route_baseline(const web_req_t *rq, const web_health_t *h,
@@ -476,15 +784,19 @@ static int route_baseline(const web_req_t *rq, const web_health_t *h,
         status = 400;
         bl = web_series_error_json(why, body, cap);
     } else {
-        bl = web_baseline_json(h->anomaly->cfg.bl, metric, key, h->wall_s,
-                               body, cap);
+        /* A series the scope does not hold reads as never fed. */
+        int out_of = h->sc && h->sc->scope != WEB_SCOPE_HYBRID &&
+                     !web_scope_pass(h->sc->scope,
+                                     web_scope_metric_key(metric, key, h->sc));
+        bl = web_baseline_json(out_of ? NULL : h->anomaly->cfg.bl, metric, key,
+                               h->wall_s, body, cap);
     }
     if (bl == 0) {
         r->status = 503;
         r->out_len = web_http_response(503, rq->is_head, out, outsz);
         return r->out_len ? 0 : -1;
     }
-    return json_answer(rq, status, bl, out, outsz, r);
+    return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
 enum { M4_DEVICES, M4_DEVICE, M4_LOOKUP };
@@ -513,16 +825,27 @@ static int route_m4(const web_req_t *rq, const web_health_t *h, int which,
     } else {
         rc = web_lookup_route(m, rq->query, h->wall_s, body, cap, &bl, &status);
     }
+    /* The peers' rows (web_fleetview.h), after the route has answered. */
+    if (rc == 0 && bl && which != M4_LOOKUP && h->fleet_merge) {
+        web_fv_src_t fs = { m->sdb, h->ble, m->oui, h->adsb };
+        if (which == M4_DEVICES && status == 200)
+            web_fv_list(m->fleet, &fs, WEB_FV_DEVICES, rq->query, h->wall_s, body, cap, &bl);
+        else if (which == M4_DEVICE)
+            web_fv_detail(m->fleet, 0, arg, h->wall_s, body, cap, &bl, &status);
+    }
     if (rc != 0 || bl == 0) {
         r->status = 503;
         r->out_len = web_http_response(503, rq->is_head, out, outsz);
         return r->out_len ? 0 : -1;
     }
-    return json_answer(rq, status, bl, out, outsz, r);
+    return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
 enum { M5_CHANNELS, M5_DEAUTH, M5_APS, M5_OVERVIEW, M5_HDEVICES, M5_HALERTS,
-       M5_HFLOWS, M5_SESSIONS, M5_SESSIONS_NEW, M6_FLOWS, M6_GRAPH };
+       M5_HFLOWS, M5_SESSIONS, M5_SESSIONS_NEW, M6_FLOWS, M6_GRAPH, M5_WLOCAL,
+       M5_CHAIN, RF_GNSS_SEEN, RF_GNSS_SAT, RF_ADSB_SEEN, RF_ADSB_AC, RF_GNSS_TRACKS,
+       RF_APRS_SEEN, RF_APRS_STN, RF_APRS_TRK, M5_SSID,
+       PR_CLIENTS, PR_SSIDS, PR_SHARED, PR_GROUPS, RF_VICTRON_HIST };
 
 /* The WiFi and History routes (M5, web_wifi.h, web_history.h) and the
  * Flows routes (M6, web_flows.h): the same shape as route_m4(). */
@@ -542,24 +865,1142 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
         web_history_overview_route, web_history_devices_route,
         web_history_alerts_route, web_history_flows_route, web_sessions_route,
         web_sessions_new_route, web_flows_route, web_flows_graph_route,
+        web_wifi_local_route, web_wifi_chain_route,
+        web_gnss_seen_route, web_gnss_sat_route, web_adsb_seen_route,
+        web_adsb_aircraft_route, web_gnss_tracks_route,
+        web_aprs_seen_route, web_aprs_station_route, web_aprs_tracks_route,
+        web_ssid_route, web_probes_clients_route, web_probes_ssids_route,
+        web_probes_shared_route, web_probes_groups_route,
+        web_victron_history_route,
     };
+    /* A view a capture scope holds nothing of (web_scope.h): the WiFi
+     * view's channels, deauths and APs are the monitor radio's, its card
+     * panels (/api/wifi/local) the managed card's own scan and link, the
+     * flows all the IP capture's (sloth.db keeps no capture path, so its
+     * flow rows are Local's).
+     * Said once, here, rather than as an empty answer that looks like a
+     * quiet network. The parameters are still checked first, by the
+     * route's own parser on a check-only copy that reads nothing. */
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    const char *none_here =
+        sc == WEB_SCOPE_LOCAL && (which == M5_CHANNELS || which == M5_DEAUTH ||
+                                  which == M5_APS || which == M5_CHAIN)
+            ? "the WiFi view's channels, deauths and access points are the passive "
+              "monitor radio's; the host's own interfaces carried none of it (the "
+              "managed card's own scan and link are /api/wifi/local)"
+        : sc == WEB_SCOPE_MONITOR && which == M5_WLOCAL
+            ? "the managed Wi-Fi card's own scan and station dump are the host's "
+              "own interface's; the monitor radio heard none of it"
+        : sc == WEB_SCOPE_MONITOR && (which == M6_FLOWS || which == M6_GRAPH ||
+                                      which == M5_HFLOWS)
+            ? "flows are the IP capture's (sloth.db keeps no capture path, so "
+              "its flow rows count as Local); the monitor radio heard none"
+        : sc == WEB_SCOPE_LOCAL && (which == RF_ADSB_SEEN || which == RF_ADSB_AC)
+            ? "aircraft are the ADS-B decoder's (--adsb), a passive radio; the "
+              "host's own interfaces carried none"
+        : sc == WEB_SCOPE_LOCAL && (which == RF_APRS_SEEN || which == RF_APRS_STN ||
+                                    which == RF_APRS_TRK)
+            ? "APRS stations are the Dire Wolf decoder's (--aprs), a passive "
+              "radio; the host's own interfaces carried none"
+        : sc == WEB_SCOPE_LOCAL && which == RF_VICTRON_HIST
+            ? "Victron devices are sloth-va's file (--victron), read off its "
+              "Bluetooth receiver; the host's own interfaces carried none"
+        : sc == WEB_SCOPE_LOCAL && which >= M5_SSID && which <= PR_GROUPS
+            ? "an SSID's beacons and the probe requests asking for it are the "
+              "passive monitor radio's; the host's own interfaces carried none "
+              "of it"
+        : NULL;
     if (qlong(rq)) {
         status = 400;
         bl = web_series_error_json("query_too_long", body, cap);
         rc = bl ? 0 : -1;
     } else {
-        rc = F[which](m, rq->query, h->wall_s, body, cap, &bl, &status);
+        web_m4_t mc = *m;
+        mc.check_only = none_here != NULL;
+        rc = F[which](&mc, rq->query, h->wall_s, body, cap, &bl, &status);
+        /* The Probes view's clients and SSIDs merge too; shared and
+         * groups are this sensor's similarity and never do. */
+        if (rc == 0 && !none_here && status == 200 && h->fleet_merge &&
+            (which == M5_APS || which == PR_CLIENTS || which == PR_SSIDS ||
+             which == RF_ADSB_SEEN)) {
+            /* The inventory's "held here" reads adsb_aircraft: sloth-rf's
+             * database when one is given. */
+            web_fv_src_t fs = { which == RF_ADSB_SEEN ? web_m4_rfdb(m) : m->sdb, h->ble, m->oui,
+                                h->adsb };
+            web_fv_list(m->fleet, &fs,
+                        which == M5_APS ? WEB_FV_APS
+                        : which == PR_CLIENTS ? WEB_FV_PROBE_CLIENTS
+                        : which == PR_SSIDS ? WEB_FV_PROBE_SSIDS : WEB_FV_ADSB_SEEN,
+                        rq->query, h->wall_s, body, cap, &bl);
+        }
+        /* The aircraft detail names the hosts that heard an address. */
+        if (rc == 0 && !none_here && status == 200 && h->fleet_merge && which == RF_ADSB_AC) {
+            web_fv_src_t fs = { m->sdb, h->ble, m->oui, h->adsb };
+            web_fv_aircraft(m->fleet, &fs, rq->query, h->wall_s, body, cap, &bl, status);
+        }
+        if (rc == 0 && none_here && status == 200) {
+            web_jw_t w;
+            web_jw_init(&w, body, cap);
+            web_jw_raw(&w, "{\"out_of_scope\":true,\"reason\":");
+            web_jw_str(&w, none_here);
+            web_jw_raw(&w, "}\n");
+            bl = w.overflow ? 0 : w.len;
+        }
     }
     if (rc != 0 || bl == 0) {
         r->status = 503;
         r->out_len = web_http_response(503, rq->is_head, out, outsz);
         return r->out_len ? 0 : -1;
     }
-    return json_answer(rq, status, bl, out, outsz, r);
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/positions (web_positions.h): GET only, as /api/alerts. JSON,
+ * GeoJSON or GPX; the two exports are attachments, so a browser saves
+ * them rather than rendering an XML document under this origin. */
+static int route_positions(const web_req_t *rq, const web_health_t *h,
+                           char *out, size_t outsz, web_resp_t *r) {
+    if (rq->is_head) {
+        r->status = 405;
+        return fit(snprintf(out, outsz,
+            "HTTP/1.1 405 Method Not Allowed\r\n"
+            "Allow: GET\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n"
+            "Cache-Control: no-store\r\n"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n"), outsz, &r->out_len);
+    }
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc, fmt = WEB_POS_JSON;
+    static const web_m4_t none;
+    const web_m4_t *m = h->m4 ? h->m4 : &none;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = web_positions_route(m, rq->query, h->wall_s, body, cap, &bl,
+                                 &status, &fmt);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, 0, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    if (fmt == WEB_POS_JSON || status != 200)
+        return json_answer(rq, h, status, bl, out, outsz, r);
+    char hdr[WEB_LIVE_HDR_RESERVE];
+    size_t hl;
+    if (fit(snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Disposition: attachment; filename=\"sloth-positions.%s\"\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: no-store\r\n"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", web_positions_ctype(fmt), web_positions_ext(fmt), bl),
+        sizeof(hdr), &hl) != 0)
+        return -1;
+    if (hl + bl > outsz) return -1;
+    r->status = 200;
+    memmove(out + hl, body, bl);
+    memcpy(out, hdr, hl);
+    r->out_len = hl + bl;
+    return 0;
+}
+
+enum { BLE_DEVICES, BLE_ALERTS, BLE_DEVICE };
+
+static void rf_stream_member(const web_health_t *h, char *body, size_t cap, size_t *bl);
+
+/* /api/gnss and /api/gnss/fixes (web_gnss.h): the host's own receiver,
+ * sloth's own state, so every scope's; the answer says so itself.
+ * /api/gnss carries "rf_stream" as the RF tabs do (#216 review): the
+ * receiver's health is in both daemons' sensor_health, but gnss_fix,
+ * gnss_sky and gnss_sat are sloth-rf's alone since 2.0.0, so against a
+ * 2.x sloth-wifi with no --rf-socket the header draws and the fix, the
+ * sky and the table stay empty, and the page needs the reason. */
+static int route_gnss(const web_req_t *rq, const web_health_t *h, int fixes,
+                      char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else if (fixes) {
+        rc = web_gnss_fixes_route(h->gnss, rq->query, h->wall_s, body, cap, &bl, &status);
+    } else {
+        rc = web_gnss_route(h->gnss, rq->query, h->wall_s, body, cap, &bl, &status);
+        if (rc == 0 && status == 200) rf_stream_member(h, body, cap, &bl);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* "rf_stream" on an RF tab's answer (#216, web_live.h): the object
+ * /api/health carries, added as the last member of a 200 answer that
+ * is this sensor's own, so a tab with no rows can say it is empty
+ * because the RF daemon's stream is not configured. The callers do not
+ * add it to the out-of-scope answer, which is the scope's and says
+ * nothing about a stream. A trailing newline (some writers end with
+ * one) stays last. The answer is left as it was when it is not an
+ * object, when there is no data socket, or when the member does not
+ * fit. */
+static void rf_stream_member(const web_health_t *h, char *body, size_t cap, size_t *bl) {
+    char m[256];
+    web_jw_t w;
+    size_t end = *bl;
+    if (!h->live) return;
+    while (end > 0 && body[end - 1] == '\n') end--;
+    if (end < 2 || body[0] != '{' || body[end - 1] != '}') return;
+    size_t tail = *bl - end;
+    web_jw_init(&w, m, sizeof(m));
+    web_jw_raw(&w, ",\"rf_stream\":");
+    web_live_rf_stream_json(h->live, &w);
+    web_jw_raw(&w, "}");
+    size_t n = w.len;
+    if (w.overflow || n == 0 || end - 1 + n + tail >= cap) return;
+    memcpy(body + end - 1, m, n);
+    memset(body + end - 1 + n, '\n', tail);
+    *bl = end - 1 + n + tail;
+}
+
+/* /api/adsb (web_adsb.h): the aircraft a local decoder lists. Its SDR
+ * is a passive radio, as the BLE receivers are, so Monitor's and
+ * Hybrid's; under Local the query is checked, then the one
+ * out_of_scope answer. */
+static int route_adsb(const web_req_t *rq, const web_health_t *h,
+                      char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        /* The open ADSB_EMERGENCY incidents, so a row links its alert
+         * (#186); read before the panel's lock, never under it. */
+        web_adsb_alert_t al[WEB_ADSB_ALERTS];
+        memset(al, 0, sizeof(al));
+        int nal = none_here ? 0 : web_adsb_alerts(h->live, al, WEB_ADSB_ALERTS);
+        rc = web_adsb_route(h->adsb, rq->query, h->wall_s, none_here, al, nal,
+                            body, cap, &bl, &status);
+        if (rc == 0 && none_here && status == 200) bl = web_adsb_out_of_scope_json(body, cap);
+        /* The peers' aircraft (web_fleetview.h), after the panel's own
+         * answer, its counts untouched. */
+        if (rc == 0 && !none_here && status == 200 && h->fleet_merge && h->m4) {
+            web_fv_src_t fs = { h->m4->sdb, h->ble, h->m4->oui, h->adsb };
+            web_fv_list(h->m4->fleet, &fs, WEB_FV_ADSB, rq->query, h->wall_s, body, cap, &bl);
+        }
+        if (rc == 0 && !none_here && status == 200) rf_stream_member(h, body, cap, &bl);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/sys (web_sysstat.h): the sensor host's status, its sources and
+ * the receivers attached to it. sloth's own state, so every scope's. */
+static int route_sys(const web_req_t *rq, const web_health_t *h,
+                     char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = web_sys_route(h->sys, rq->query, h->wall_s, h->now_ms, body, cap, &bl, &status);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/df (web_df.h): direction finding across monitor radios, the
+ * radios and the transmitters sloth holds a lean for. The monitor
+ * radios', so Monitor's and Hybrid's; under Local the query is checked,
+ * then the one out_of_scope answer. */
+static int route_df(const web_req_t *rq, const web_health_t *h,
+                    char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = web_df_route(h->df, rq->query, h->wall_s, h->now_ms, none_here,
+                          body, cap, &bl, &status);
+        if (rc == 0 && none_here && status == 200) bl = web_df_out_of_scope_json(body, cap);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/lures and /api/lures/bssid (web_lure.h): the KARMA and
+ * key-harvest evidence sloth's rules read, and one BSSID's KARMA
+ * detail. The monitor radio's, so Monitor's and Hybrid's; under Local
+ * the query is checked, then the one out_of_scope answer. */
+static int route_lures(const web_req_t *rq, const web_health_t *h, int one,
+                       char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = one ? web_lure_bssid_route(h->lure, h->live, rq->query, h->wall_s, h->now_ms,
+                                        none_here, body, cap, &bl, &status)
+                 : web_lure_route(h->lure, rq->query, h->wall_s, h->now_ms, none_here,
+                                  body, cap, &bl, &status);
+        if (rc == 0 && none_here && status == 200) bl = web_lure_out_of_scope_json(body, cap);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/aprs (web_aprs.h): the stations a local Dire Wolf decodes. Its
+ * receiver is a passive radio, as the decoder's SDR for ADS-B, so
+ * Monitor's and Hybrid's; under Local the query is checked, then the
+ * one out_of_scope answer. */
+static int route_aprs(const web_req_t *rq, const web_health_t *h,
+                      char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = web_aprs_route(h->aprs, rq->query, h->wall_s, none_here, body, cap, &bl, &status);
+        if (rc == 0 && none_here && status == 200) bl = web_aprs_out_of_scope_json(body, cap);
+        if (rc == 0 && !none_here && status == 200) rf_stream_member(h, body, cap, &bl);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/victron (web_victron.h): the owner's Victron devices off
+ * sloth-va's file. The rtl_433 and APRS precedent: a receiver's data,
+ * Monitor's and Hybrid's; under Local the query is checked, then the
+ * one out_of_scope answer. */
+static int route_victron(const web_req_t *rq, const web_health_t *h,
+                         char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = web_victron_route(h->victron, rq->query, h->wall_s, none_here, body, cap,
+                               &bl, &status);
+        if (rc == 0 && none_here && status == 200) bl = web_victron_out_of_scope_json(body, cap);
+        if (rc == 0 && !none_here && status == 200) rf_stream_member(h, body, cap, &bl);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/rtl433 (web_rtl433.h): the devices a local rtl_433 decodes. Its
+ * SDR is a passive radio, as APRS's, so Monitor's and Hybrid's; under
+ * Local the query is checked, then the one out_of_scope answer. */
+static int route_rtl433(const web_req_t *rq, const web_health_t *h,
+                        char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = web_rtl433_route(h->rtl433, rq->query, h->wall_s, none_here, body, cap, &bl, &status);
+        if (rc == 0 && none_here && status == 200) bl = web_rtl433_out_of_scope_json(body, cap);
+        if (rc == 0 && !none_here && status == 200) rf_stream_member(h, body, cap, &bl);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+static int spectrum_json(const web_req_t *rq, int status, const char *body, size_t bl,
+                         const char *extra, char *out, size_t outsz, web_resp_t *r);
+
+/* /api/camera.jpg (web_camera.h): the capture helper's latest still.
+ * GET and HEAD only; a POST is 405 before anything is read. The body is
+ * the file's own heap copy, handed over as r->body_owned; an error is a
+ * small JSON body like the Spectrum routes'. */
+static int route_camera(const web_req_t *rq, const web_health_t *h, char *out,
+                        size_t outsz, web_resp_t *r) {
+    const web_camera_t *cam = h->m4 ? h->m4->camera : NULL;
+    unsigned char *data = NULL;
+    size_t dn = 0;
+    long long mt = 0;
+    int status = 404;
+    if (rq->is_post) {
+        static const char na[] = "{\"error\":\"method_not_allowed\"}\n";
+        return spectrum_json(rq, 405, na, sizeof(na) - 1, "Allow: GET, HEAD\r\n", out, outsz, r);
+    }
+    if (cam && web_camera_get(cam, &data, &dn, &mt, &status) != 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    if (status != 200) {
+        const char *body = status == 404 ? "{\"error\":\"no_image\"}\n"
+                                         : "{\"error\":\"invalid\"}\n";
+        return spectrum_json(rq, status, body, strlen(body), "", out, outsz, r);
+    }
+    long long age = h->wall_s - mt;
+    if (age < 0) age = 0;
+    if (fit(snprintf(out, outsz,
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: image/jpeg\r\n"
+        "Content-Length: %zu\r\n"
+        "X-Sloth-Captured: %lld\r\n"
+        "X-Sloth-Age: %lld\r\n"
+        "Cache-Control: no-store\r\n"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", dn, mt, age), outsz, &r->out_len) != 0) {
+        free(data);
+        return -1;
+    }
+    r->status = 200;
+    if (rq->is_head) {
+        free(data);
+        return 0;
+    }
+    r->body = data;
+    r->body_owned = data;
+    r->body_len = dn;
+    return 0;
+}
+
+/* /api/spectrum and /api/spectrum/run (web_spectrum.h): the latest
+ * sweep, and the request for another. The read path answers GET and
+ * HEAD and the write path POST only: a GET can never write. A POST the
+ * server did not gate before reading its body (a direct call) is gated
+ * here, by the write surface's own gate. */
+static int spectrum_json(const web_req_t *rq, int status, const char *body, size_t bl,
+                         const char *extra, char *out, size_t outsz, web_resp_t *r) {
+    char hdr[WEB_LIVE_HDR_RESERVE];
+    size_t hl;
+    if (fit(snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: no-store\r\n"
+        "%s"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", status, web_http_reason(status), bl, extra), sizeof(hdr), &hl) != 0)
+        return -1;
+    if (hl + bl > outsz) return -1;
+    r->status = status;
+    memmove(out + hl, body, rq->is_head ? 0 : bl);
+    memcpy(out, hdr, hl);
+    r->out_len = hl + (rq->is_head ? 0 : bl);
+    return 0;
+}
+
+static int route_spectrum(const web_req_t *rq, const web_health_t *h, int run,
+                          char *out, size_t outsz, web_resp_t *r) {
+    const web_spectrum_t *sp = h->m4 ? h->m4->spectrum : NULL;
+    if (!sp) {
+        r->status = 404;
+        r->out_len = web_http_response(404, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE, bl = 0;
+    char extra[96] = "";
+    int status = 200;
+    if (run != rq->is_post) {
+        snprintf(extra, sizeof(extra), "Allow: %s\r\n", run ? "POST" : "GET, HEAD");
+        bl = (size_t)snprintf(body, cap, "{\"error\":\"method_not_allowed\"}\n");
+        return spectrum_json(rq, 405, body, bl, extra, out, outsz, r);
+    }
+    if (run) {
+        if (!rq->gated) {
+            const char *why = NULL;
+            int g = web_frrs_gate(h->m4->frrs, rq, h->now_ms, &why, extra, sizeof(extra));
+            if (g) {
+                bl = (size_t)snprintf(body, cap, "{\"error\":\"%s\"}\n", why ? why : "refused");
+                return spectrum_json(rq, g, body, bl, extra, out, outsz, r);
+            }
+        }
+        if (web_spectrum_run(sp, h->wall_s, body, cap, &bl, &status, extra, sizeof(extra)) != 0) {
+            r->status = 503;
+            r->out_len = web_http_response(503, rq->is_head, out, outsz);
+            return r->out_len ? 0 : -1;
+        }
+        return spectrum_json(rq, status, body, bl, extra, out, outsz, r);
+    }
+    if (qlong(rq)) {
+        bl = web_series_error_json("query_too_long", body, cap);
+        if (!bl) return -1;
+        return json_answer(rq, h, 400, bl, out, outsz, r);
+    }
+    int none_here = h->sc && h->sc->scope == WEB_SCOPE_LOCAL;
+    char *big = NULL;
+    if (web_spectrum_get(sp, rq->query, h->wall_s, none_here, &big, &bl, &status) != 0 || !big) {
+        free(big);
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    if (fit(snprintf(out, outsz,
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: no-store\r\n"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", status, web_http_reason(status), bl), outsz, &r->out_len) != 0) {
+        free(big);
+        return -1;
+    }
+    r->status = status;
+    if (rq->is_head) {
+        free(big);
+        return 0;
+    }
+    r->body = (const unsigned char *)big;
+    r->body_owned = (unsigned char *)big;
+    r->body_len = bl;
+    return 0;
+}
+
+/* /api/radar (web_radar.h): the Radar view's Wi-Fi and BLE band census,
+ * from the BLE tables and the FRRS ledger (h->m4->frrs). Both are
+ * passive radio, so Monitor's and Hybrid's; under Local the query is
+ * checked, then the one out_of_scope answer. */
+static int route_radar(const web_req_t *rq, const web_health_t *h,
+                       char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    web_frrs_t *f = h->m4 ? h->m4->frrs : NULL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = web_radar_route(h->ble, f, rq->query, h->wall_s, none_here, body, cap, &bl, &status);
+        if (rc == 0 && none_here && status == 200) bl = web_radar_out_of_scope_json(body, cap);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/ble, /api/ble/alerts, /api/ble/{addr} (web_ble.h): slothweb's
+ * own BLE tables. The receivers are passive radio, so Monitor and
+ * Hybrid serve them and Local is a view that holds nothing of them:
+ * said once, as route_m5()'s none_here says it, the query still checked
+ * first. */
+static int route_ble(const web_req_t *rq, const web_health_t *h, int which,
+                     const char *arg, char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        if (which == BLE_DEVICES)
+            rc = web_ble_devices_route(h->ble, rq->query, h->wall_s, none_here, body, cap,
+                                       &bl, &status);
+        else if (which == BLE_ALERTS)
+            rc = web_ble_alerts_route(h->ble, rq->query, h->wall_s, none_here, body, cap,
+                                      &bl, &status);
+        else
+            rc = web_ble_device_route(h->ble, arg, rq->query, h->wall_s, none_here, body,
+                                      cap, &bl, &status);
+        if (rc == 0 && which != BLE_ALERTS && !none_here && h->fleet_merge) {
+            web_fleet_t *fl = h->m4 ? h->m4->fleet : NULL;
+            web_fv_src_t fs = { h->m4 ? h->m4->sdb : NULL, h->ble, h->m4 ? h->m4->oui : NULL,
+                                h->adsb };
+            if (which == BLE_DEVICES && status == 200)
+                web_fv_list(fl, &fs, WEB_FV_BLE, rq->query, h->wall_s, body, cap, &bl);
+            else if (which == BLE_DEVICE)
+                web_fv_detail(fl, 1, arg, h->wall_s, body, cap, &bl, &status);
+        }
+        if (rc == 0 && none_here && status == 200) bl = web_ble_out_of_scope_json(body, cap);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/ble/classes and /api/ble/proximity (web_bledev.h): the BLE
+ * Devices view's two panels, over the time series and the BLE tables.
+ * Monitor's and Hybrid's as route_ble()'s; under Local the query is
+ * checked on a check-only copy, then the one out_of_scope answer. */
+static int route_bledev(const web_req_t *rq, const web_health_t *h, int prox,
+                        char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    static const web_m4_t none;
+    web_m4_t mc = h->m4 ? *h->m4 : none;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        mc.check_only = none_here;
+        rc = prox ? web_bledev_proximity_route(&mc, h->ble, rq->query, h->wall_s, body,
+                                               cap, &bl, &status)
+                  : web_bledev_classes_route(&mc, h->ble, rq->query, h->wall_s, body,
+                                             cap, &bl, &status);
+        if (rc == 0 && none_here && status == 200) bl = web_ble_out_of_scope_json(body, cap);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/alerts and /api/alert (web_alerts.h): GET only. A HEAD has no
+ * answer to describe without reading sloth.db, as /api/query's. */
+static int route_alerts(const web_req_t *rq, const web_health_t *h, int one,
+                        char *out, size_t outsz, web_resp_t *r) {
+    if (rq->is_head) {
+        r->status = 405;
+        return fit(snprintf(out, outsz,
+            "HTTP/1.1 405 Method Not Allowed\r\n"
+            "Allow: GET\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n"
+            "Cache-Control: no-store\r\n"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n"), outsz, &r->out_len);
+    }
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    static const web_m4_t none;
+    const web_m4_t *m = h->m4 ? h->m4 : &none;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else if (one) {
+        rc = web_alert_route(m, h->live, rq->query, h->wall_s, body, cap, &bl, &status);
+    } else {
+        rc = web_alerts_route(m, h->live, rq->query, h->wall_s, body, cap, &bl, &status);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, 0, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/frrs/... (web_frrs.h): a JSON answer with the module's extra
+ * header lines (an Allow, a Retry-After), or the export, a body of its
+ * own the connection frees once sent. */
+static int route_frrs(const web_req_t *rq, const web_health_t *h, char *out, size_t outsz,
+                      web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0, biglen = 0;
+    int status = 200;
+    char extra[160];
+    char *big = NULL;
+    static const web_m4_t none;
+    const web_m4_t *m = h->m4 ? h->m4 : &none;
+    int rc = web_frrs_route(m, h->live, rq, h->wall_s, h->now_ms, body, cap, &bl, &status,
+                            extra, sizeof(extra), &big, &biglen);
+    if (rc != 0 || (bl == 0 && !big)) {
+        free(big);
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    if (big) {
+        r->status = status;
+        if (fit(snprintf(out, outsz,
+            "HTTP/1.1 %d %s\r\n"
+            "Content-Type: application/x-ndjson; charset=utf-8\r\n"
+            "Content-Length: %zu\r\n"
+            "Cache-Control: no-store\r\n"
+            "%s"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n", status, web_http_reason(status), biglen, extra), outsz, &r->out_len) != 0) {
+            free(big);
+            return -1;
+        }
+        if (rq->is_head) {
+            free(big);
+        } else {
+            r->body = (const unsigned char *)big;
+            r->body_len = biglen;
+            r->body_free = 1;
+        }
+        return 0;
+    }
+    scope_echo(h, body, &bl, cap);
+    char hdr[WEB_LIVE_HDR_RESERVE];
+    size_t hl;
+    if (fit(snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: no-store\r\n"
+        "%s"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", status, web_http_reason(status), bl, extra), sizeof(hdr), &hl) != 0)
+        return -1;
+    if (hl + bl > outsz) return -1;
+    r->status = status;
+    if (rq->is_head) {
+        memcpy(out, hdr, hl);
+        r->out_len = hl;
+        return 0;
+    }
+    memmove(out + hl, body, bl);
+    memcpy(out, hdr, hl);
+    r->out_len = hl + bl;
+    return 0;
+}
+
+/* /api/pcap/frames and /api/pcap (web_evidence.h): GET only, as
+ * /api/alert, whose capture they read. The download is the one answer
+ * whose body is the route's own heap copy (web_resp_t.body_owned): a
+ * pcap is up to WEB_PCAP_FILE_MAX, past any connection buffer. */
+static int route_pcap(const web_req_t *rq, const web_health_t *h, int download,
+                      char *out, size_t outsz, web_resp_t *r) {
+    if (rq->is_head) {
+        r->status = 405;
+        return fit(snprintf(out, outsz,
+            "HTTP/1.1 405 Method Not Allowed\r\n"
+            "Allow: GET\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n"
+            "Cache-Control: no-store\r\n"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n"), outsz, &r->out_len);
+    }
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    static const web_m4_t none;
+    const web_m4_t *m = h->m4 ? h->m4 : &none;
+    unsigned char *data = NULL;
+    size_t dn = 0;
+    char name[WEB_PCAP_NAME_MAX + 1] = "";
+    const char *hash = NULL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else if (download) {
+        rc = web_pcap_download_route(m, h->live, rq->query, h->wall_s, &data, &dn, name,
+                                     sizeof(name), &hash, body, cap, &bl, &status);
+    } else {
+        rc = web_pcap_frames_route(m, h->live, rq->query, h->wall_s, body, cap, &bl, &status);
+    }
+    if (rc == 0 && data) {
+        /* The name passed sloth's own grammar ([A-Za-z0-9_.-] only,
+         * web_pcapdir_name_ok()), so it needs no quoting. */
+        if (fit(snprintf(out, outsz,
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: application/vnd.tcpdump.pcap\r\n"
+            "Content-Disposition: attachment; filename=\"%s\"\r\n"
+            "Content-Length: %zu\r\n"
+            "X-Sloth-SHA256: %s\r\n"
+            "Cache-Control: no-store\r\n"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n", name, dn, hash ? hash : "no_manifest_entry"), outsz, &r->out_len) != 0) {
+            free(data);
+            return -1;
+        }
+        r->status = 200;
+        r->body = data;
+        r->body_owned = data;
+        r->body_len = dn;
+        return 0;
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, 0, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/bundle (web_bundle.h): GET only, like /api/alert. The body is
+ * the bundle's own heap buffer (it can outgrow out), handed to the
+ * server as r->body_owned behind a header built here; the scope echo
+ * is the bundle's own first member, so none is spliced in. */
+static int route_bundle(const web_req_t *rq, const web_health_t *h, char *out,
+                        size_t outsz, web_resp_t *r) {
+    if (rq->is_head) {
+        r->status = 405;
+        return fit(snprintf(out, outsz,
+            "HTTP/1.1 405 Method Not Allowed\r\n"
+            "Allow: GET\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n"
+            "Cache-Control: no-store\r\n"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n"), outsz, &r->out_len);
+    }
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = NULL;
+    size_t bl = 0;
+    int status = 200;
+    if (qlong(rq)) {
+        bl = web_series_error_json("query_too_long", out + WEB_LIVE_HDR_RESERVE,
+                                   outsz - WEB_LIVE_HDR_RESERVE);
+        if (!bl) return -1;
+        return json_answer(rq, h, 400, bl, out, outsz, r);
+    }
+    if (web_bundle_route(h, rq->query, &body, &bl, &status) != 0 || !body || bl == 0) {
+        free(body);
+        r->status = 503;
+        r->out_len = web_http_response(503, 0, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    if (fit(snprintf(out, outsz,
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: no-store\r\n"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", status, web_http_reason(status), bl), outsz, &r->out_len) != 0) {
+        free(body);
+        return -1;
+    }
+    r->status = status;
+    r->body = (const unsigned char *)body;
+    r->body_owned = (unsigned char *)body;
+    r->body_len = bl;
+    return 0;
+}
+
+/* /api/fleet/export (web_fleet.h): GET only, a heap body as
+ * /api/bundle's. Read-only, and served to whatever the allow list
+ * admits, as every route is: the peers a fleet names are --web-allow
+ * entries. */
+static int route_fleet_export(const web_req_t *rq, const web_health_t *h, char *out,
+                              size_t outsz, web_resp_t *r) {
+    if (rq->is_head) {
+        r->status = 405;
+        return fit(snprintf(out, outsz,
+            "HTTP/1.1 405 Method Not Allowed\r\n"
+            "Allow: GET\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n"
+            "Cache-Control: no-store\r\n"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n"), outsz, &r->out_len);
+    }
+    if (qlong(rq)) {
+        if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+        size_t bl = web_series_error_json("query_too_long", out + WEB_LIVE_HDR_RESERVE,
+                                          outsz - WEB_LIVE_HDR_RESERVE);
+        if (!bl) return -1;
+        return json_answer(rq, h, 400, bl, out, outsz, r);
+    }
+    web_fleet_src_t src = {
+        h->m4 ? h->m4->sdb : NULL, h->ble, h->gnss, h->m4 ? h->m4->frrs : NULL,
+        h->m4 && h->m4->fleet ? h->m4->fleet->own_csv : NULL, h->adsb,
+        h->m4 && h->m4->fleet ? &h->m4->fleet->mine : NULL, h->m4 ? h->m4->chain : NULL,
+        h->m4 && h->m4->fleet ? h->m4->fleet->own_mon_csv : NULL,
+        h->m4 ? h->m4->sdb_rf : NULL,
+    };
+    char *body = NULL;
+    size_t bl = 0;
+    int status = 200;
+    if (web_fleet_export_route(&src, rq->query, h->wall_s, &body, &bl, &status) != 0 ||
+        !body || bl == 0) {
+        free(body);
+        r->status = 503;
+        r->out_len = web_http_response(503, 0, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    if (fit(snprintf(out, outsz,
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: no-store\r\n"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", status, web_http_reason(status),
+        status == 200 ? "application/x-ndjson" : "application/json", bl),
+        outsz, &r->out_len) != 0) {
+        free(body);
+        return -1;
+    }
+    r->status = status;
+    r->body = (const unsigned char *)body;
+    r->body_owned = (unsigned char *)body;
+    r->body_len = bl;
+    return 0;
+}
+
+/* /api/fleet/peers (web_fleet.h): what each peer last reported. */
+static int route_fleet_peers(const web_req_t *rq, const web_health_t *h, char *out,
+                             size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE, bl = 0;
+    int status = 200;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+    } else if (web_fleet_peers_route(h->m4 ? h->m4->fleet : NULL, rq->query, h->wall_s,
+                                     body, cap, &bl, &status) != 0) {
+        bl = 0;
+    }
+    if (bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, 0, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/glossary (web_bundle.h): the bundle's glossary alone. */
+static int route_glossary(const web_req_t *rq, const web_health_t *h, char *out, size_t outsz,
+                          web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    int status = 200;
+    size_t bl;
+    if (rq->query[0] || rq->query_long) {
+        status = 400;
+        bl = web_series_error_json("unknown_parameter", body, cap);
+    } else {
+        bl = web_bundle_glossary_json(body, cap);
+    }
+    if (bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/fleet/overview (web_fleet.h, F2): the sites, their health and
+ * the distances between them. */
+static int route_fleet_overview(const web_req_t *rq, const web_health_t *h, char *out,
+                                size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE, bl = 0;
+    int status = 200;
+    web_fleet_src_t src = {
+        h->m4 ? h->m4->sdb : NULL, h->ble, h->gnss, h->m4 ? h->m4->frrs : NULL,
+        h->m4 && h->m4->fleet ? h->m4->fleet->own_csv : NULL, h->adsb,
+        h->m4 && h->m4->fleet ? &h->m4->fleet->mine : NULL, h->m4 ? h->m4->chain : NULL,
+        h->m4 && h->m4->fleet ? h->m4->fleet->own_mon_csv : NULL,
+        h->m4 ? h->m4->sdb_rf : NULL,
+    };
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+    } else if (web_fleet_overview_route(h->m4 ? h->m4->fleet : NULL, &src, rq->query,
+                                        h->wall_s, body, cap, &bl, &status) != 0) {
+        bl = 0;
+    }
+    if (bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, 0, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/fleet/shared (web_fleet.h, F2): keys seen at this site and at a
+ * peer; /api/fleet/locate (web_locate.h, #192 I5): the emitters two or
+ * more sites heard, located. GET only, a heap body as /api/fleet/export's. */
+typedef int (*fleet_heap_fn)(web_fleet_t *f, const web_fleet_src_t *src, const char *query,
+                             long long now_s, char **body, size_t *len, int *status);
+
+static int route_fleet_heap(const web_req_t *rq, const web_health_t *h, char *out,
+                            size_t outsz, web_resp_t *r, fleet_heap_fn fn) {
+    if (rq->is_head) {
+        r->status = 405;
+        return fit(snprintf(out, outsz,
+            "HTTP/1.1 405 Method Not Allowed\r\n"
+            "Allow: GET\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n"
+            "Cache-Control: no-store\r\n"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n"), outsz, &r->out_len);
+    }
+    if (qlong(rq)) {
+        if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+        size_t bl = web_series_error_json("query_too_long", out + WEB_LIVE_HDR_RESERVE,
+                                          outsz - WEB_LIVE_HDR_RESERVE);
+        if (!bl) return -1;
+        return json_answer(rq, h, 400, bl, out, outsz, r);
+    }
+    web_fleet_src_t src = {
+        h->m4 ? h->m4->sdb : NULL, h->ble, h->gnss, h->m4 ? h->m4->frrs : NULL,
+        h->m4 && h->m4->fleet ? h->m4->fleet->own_csv : NULL, h->adsb,
+        h->m4 && h->m4->fleet ? &h->m4->fleet->mine : NULL, h->m4 ? h->m4->chain : NULL,
+        h->m4 && h->m4->fleet ? h->m4->fleet->own_mon_csv : NULL,
+        h->m4 ? h->m4->sdb_rf : NULL,
+    };
+    char *body = NULL;
+    size_t bl = 0;
+    int status = 200;
+    if (fn(h->m4 ? h->m4->fleet : NULL, &src, rq->query, h->wall_s,
+           &body, &bl, &status) != 0 || !body || bl == 0) {
+        free(body);
+        r->status = 503;
+        r->out_len = web_http_response(503, 0, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    if (fit(snprintf(out, outsz,
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: no-store\r\n"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", status, web_http_reason(status), bl), outsz, &r->out_len) != 0) {
+        free(body);
+        return -1;
+    }
+    r->status = status;
+    r->body = (const unsigned char *)body;
+    r->body_owned = (unsigned char *)body;
+    r->body_len = bl;
+    return 0;
 }
 
 /* /api/recipes: docs/wiki/sqlite-schema.md's, as built in. */
-static int route_recipes(const web_req_t *rq, char *out, size_t outsz,
+static int route_recipes(const web_req_t *rq, const web_health_t *h, char *out, size_t outsz,
                          web_resp_t *r) {
     if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
     char *body = out + WEB_LIVE_HDR_RESERVE;
@@ -589,7 +2030,7 @@ static int route_recipes(const web_req_t *rq, char *out, size_t outsz,
         r->out_len = web_http_response(503, rq->is_head, out, outsz);
         return r->out_len ? 0 : -1;
     }
-    return json_answer(rq, status, bl, out, outsz, r);
+    return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
 /* /api/query (web_sqlbox.h). The text is checked here, on the loop's
@@ -625,12 +2066,12 @@ static int route_query(const web_req_t *rq, const web_health_t *h, char *out,
     if (why) {
         bl = web_series_error_json(why, body, cap);
         if (!bl) return -1;
-        return json_answer(rq, 400, bl, out, outsz, r);
+        return json_answer(rq, h, 400, bl, out, outsz, r);
     }
     if (web_sqlbox_submit(h->sql, sql, len, h->wall_s) != 0) {
         bl = web_series_error_json("busy", body, cap);
         if (!bl) return -1;
-        return json_answer(rq, 503, bl, out, outsz, r);
+        return json_answer(rq, h, 503, bl, out, outsz, r);
     }
     r->kind = WEB_R_SQL;
     r->status = 200;
@@ -687,6 +2128,97 @@ int web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
         r->out_len = web_http_response(421, rq->is_head, out, outsz);
         return r->out_len ? 0 : -1;
     }
+    /* The capture scope, taken out of the query before a route's own
+     * parser sees it. A query that does not name one is routed as it
+     * came, so every answer without a scope is as it was. */
+    if (!rq->path_long && !strncmp(rq->path, "/api/", 5) &&
+        strcmp(rq->path, "/api/health") && strcmp(rq->path, "/api/query") &&
+        !qlong(rq) && strstr(rq->query, "scope"))
+        return route_scoped(rq, h, sse_room, out, outsz, r);
+    return route_paths(rq, h, sse_room, out, outsz, r);
+}
+
+enum { MG_DEVICES, MG_DEVICE, MG_APS, MG_BLE, MG_BLEDEV, MG_PRCLIENTS, MG_PRSSIDS,
+       MG_ADSB, MG_ADSB_SEEN, MG_ADSB_AC };
+
+/* The merged views (web_fleetview.h): fleet= taken out of the query as
+ * scope= is, the route answered as before on the rest, and the peers'
+ * rows merged into its answer when the request asks for them (fleet=1
+ * or no fleet=), a peer is configured and the request is Hybrid's. */
+static int route_merged(const web_req_t *rq, const web_health_t *h, int which,
+                        const char *arg, char *out, size_t outsz, web_resp_t *r) {
+    web_health_t hh = *h;
+    hh.fleet_merge = 0;
+    web_req_t *q = NULL;
+    const web_req_t *use = rq;
+    if (!qlong(rq) && strstr(rq->query, "fleet")) {
+        int mode;
+        char why[48] = "";
+        q = malloc(sizeof(*q));
+        if (!q) return -1;
+        *q = *rq;
+        if (web_fv_take(rq->query, q->query, WEB_QUERY_ROUTE_MAX, &mode, why,
+                        sizeof(why)) != 0) {
+            free(q);
+            if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+            size_t bl = web_series_error_json(why, out + WEB_LIVE_HDR_RESERVE,
+                                              outsz - WEB_LIVE_HDR_RESERVE);
+            if (!bl) return -1;
+            return json_answer(rq, h, 400, bl, out, outsz, r);
+        }
+        hh.fleet_merge = web_fv_on(h->m4 ? h->m4->fleet : NULL, mode, h->sc);
+        use = q;
+    } else {
+        hh.fleet_merge = web_fv_on(h->m4 ? h->m4->fleet : NULL, WEB_FV_DEFAULT, h->sc);
+    }
+    int rc;
+    switch (which) {
+    case MG_DEVICES: rc = route_m4(use, &hh, M4_DEVICES, NULL, out, outsz, r); break;
+    case MG_DEVICE:  rc = route_m4(use, &hh, M4_DEVICE, arg, out, outsz, r); break;
+    case MG_APS:     rc = route_m5(use, &hh, M5_APS, out, outsz, r); break;
+    case MG_BLE:     rc = route_ble(use, &hh, BLE_DEVICES, NULL, out, outsz, r); break;
+    case MG_PRCLIENTS: rc = route_m5(use, &hh, PR_CLIENTS, out, outsz, r); break;
+    case MG_PRSSIDS: rc = route_m5(use, &hh, PR_SSIDS, out, outsz, r); break;
+    case MG_ADSB:    rc = route_adsb(use, &hh, out, outsz, r); break;
+    case MG_ADSB_SEEN: rc = route_m5(use, &hh, RF_ADSB_SEEN, out, outsz, r); break;
+    case MG_ADSB_AC: rc = route_m5(use, &hh, RF_ADSB_AC, out, outsz, r); break;
+    default:         rc = route_ble(use, &hh, BLE_DEVICE, arg, out, outsz, r); break;
+    }
+    free(q);
+    return rc;
+}
+
+static int route_scoped(const web_req_t *rq, const web_health_t *h,
+                        int sse_room, char *out, size_t outsz, web_resp_t *r) {
+    static const web_m4_t none;
+    web_scope_ctx_t sc;
+    memset(&sc, 0, sizeof(sc));
+    char why[48] = "";
+    web_req_t *q = malloc(sizeof(*q));
+    if (!q) return -1;
+    *q = *rq;
+    if (web_scope_take(rq->query, q->query, WEB_QUERY_ROUTE_MAX, &sc.scope,
+                       &sc.given, why, sizeof(why)) != 0) {
+        free(q);
+        if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+        size_t bl = web_series_error_json(why, out + WEB_LIVE_HDR_RESERVE,
+                                          outsz - WEB_LIVE_HDR_RESERVE);
+        if (!bl) return -1;
+        return json_answer(rq, h, 400, bl, out, outsz, r);
+    }
+    if (h->live) web_live_scope_ctx(h->live, &sc);
+    web_health_t hh = *h;
+    web_m4_t mm = h->m4 ? *h->m4 : none;
+    mm.sc = &sc;
+    hh.sc = &sc;
+    hh.m4 = &mm;
+    int rc = route_paths(q, &hh, sse_room, out, outsz, r);
+    free(q);
+    return rc;
+}
+
+static int route_paths(const web_req_t *rq, const web_health_t *h,
+                       int sse_room, char *out, size_t outsz, web_resp_t *r) {
     if (!rq->path_long) {
         if (!strcmp(rq->path, "/"))
             return route_page(rq, out, outsz, r);
@@ -700,6 +2232,8 @@ int web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
             return route_series(rq, h, SR_SERIES, out, outsz, r);
         if (!strcmp(rq->path, "/api/keys"))
             return route_series(rq, h, SR_KEYS, out, outsz, r);
+        if (!strcmp(rq->path, "/api/series/all"))
+            return route_allkeys(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/metrics"))
             return route_series(rq, h, SR_METRICS, out, outsz, r);
         if (!strcmp(rq->path, "/api/anomalies"))
@@ -707,16 +2241,37 @@ int web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
         if (!strcmp(rq->path, "/api/baseline"))
             return route_baseline(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/devices"))
-            return route_m4(rq, h, M4_DEVICES, NULL, out, outsz, r);
+            return route_merged(rq, h, MG_DEVICES, NULL, out, outsz, r);
         if (!strcmp(rq->path, "/api/lookup"))
             return route_m4(rq, h, M4_LOOKUP, NULL, out, outsz, r);
         if (!strncmp(rq->path, "/api/device/", 12) && rq->path[12] &&
             !strchr(rq->path + 12, '/'))
-            return route_m4(rq, h, M4_DEVICE, rq->path + 12, out, outsz, r);
+            return route_merged(rq, h, MG_DEVICE, rq->path + 12, out, outsz, r);
+        if (!strcmp(rq->path, "/api/wifi/aps"))
+            return route_merged(rq, h, MG_APS, NULL, out, outsz, r);
+        if (!strcmp(rq->path, "/api/probes/clients"))
+            return route_merged(rq, h, MG_PRCLIENTS, NULL, out, outsz, r);
+        if (!strcmp(rq->path, "/api/probes/ssids"))
+            return route_merged(rq, h, MG_PRSSIDS, NULL, out, outsz, r);
+        if (!strcmp(rq->path, "/api/adsb/seen"))
+            return route_merged(rq, h, MG_ADSB_SEEN, NULL, out, outsz, r);
+        if (!strcmp(rq->path, "/api/adsb/aircraft"))
+            return route_merged(rq, h, MG_ADSB_AC, NULL, out, outsz, r);
         static const struct { const char *path; int which; } M5[] = {
             { "/api/wifi/channels", M5_CHANNELS },
             { "/api/wifi/deauth", M5_DEAUTH },
-            { "/api/wifi/aps", M5_APS },
+            { "/api/wifi/chain", M5_CHAIN },
+            /* GNSS and ADS-B history (web_rfhist.h): sloth.db's. */
+            { "/api/gnss/seen", RF_GNSS_SEEN },
+            { "/api/gnss/sat", RF_GNSS_SAT },
+            { "/api/gnss/tracks", RF_GNSS_TRACKS },
+            /* APRS history (web_aprshist.h): sloth.db's. */
+            { "/api/aprs/seen", RF_APRS_SEEN },
+            { "/api/aprs/station", RF_APRS_STN },
+            { "/api/aprs/tracks", RF_APRS_TRK },
+            /* Victron history (web_victron.h): sloth.db's. */
+            { "/api/victron/history", RF_VICTRON_HIST },
+            { "/api/wifi/local", M5_WLOCAL },
             { "/api/history/overview", M5_OVERVIEW },
             { "/api/history/devices", M5_HDEVICES },
             { "/api/history/alerts", M5_HALERTS },
@@ -725,16 +2280,94 @@ int web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
             { "/api/sessions/new", M5_SESSIONS_NEW },
             { "/api/flows", M6_FLOWS },
             { "/api/flows/graph", M6_GRAPH },
+            /* One SSID's detail (web_ssidview.h). */
+            { "/api/wifi/ssid", M5_SSID },
+            /* The Probes view (web_probes.h). */
+            { "/api/probes/shared", PR_SHARED },
+            { "/api/probes/groups", PR_GROUPS },
         };
         for (size_t i = 0; i < sizeof(M5) / sizeof(M5[0]); i++)
             if (!strcmp(rq->path, M5[i].path))
                 return route_m5(rq, h, M5[i].which, out, outsz, r);
+        if (!strcmp(rq->path, "/api/alerts"))
+            return route_alerts(rq, h, 0, out, outsz, r);
+        if (!strcmp(rq->path, "/api/alert"))
+            return route_alerts(rq, h, 1, out, outsz, r);
+        if (!strncmp(rq->path, "/api/frrs/", 10) && web_frrs_path(rq->path))
+            return route_frrs(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/gnss"))
+            return route_gnss(rq, h, 0, out, outsz, r);
+        if (!strcmp(rq->path, "/api/gnss/fixes"))
+            return route_gnss(rq, h, 1, out, outsz, r);
+        if (!strcmp(rq->path, "/api/adsb"))
+            return route_merged(rq, h, MG_ADSB, NULL, out, outsz, r);
+        if (!strcmp(rq->path, "/api/aprs"))
+            return route_aprs(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/rtl433"))
+            return route_rtl433(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/victron"))
+            return route_victron(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/spectrum"))
+            return route_spectrum(rq, h, 0, out, outsz, r);
+        if (!strcmp(rq->path, "/api/camera.jpg"))
+            return route_camera(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/spectrum/run"))
+            return route_spectrum(rq, h, 1, out, outsz, r);
+        if (!strcmp(rq->path, "/api/sys"))
+            return route_sys(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/df"))
+            return route_df(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/lures"))
+            return route_lures(rq, h, 0, out, outsz, r);
+        if (!strcmp(rq->path, "/api/lures/bssid"))
+            return route_lures(rq, h, 1, out, outsz, r);
+        if (!strcmp(rq->path, "/api/radar"))
+            return route_radar(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/ble"))
+            return route_merged(rq, h, MG_BLE, NULL, out, outsz, r);
+        if (!strcmp(rq->path, "/api/ble/alerts"))
+            return route_ble(rq, h, BLE_ALERTS, NULL, out, outsz, r);
+        /* Before the address branch below, which would read either as a
+         * bad address. */
+        if (!strcmp(rq->path, "/api/ble/classes"))
+            return route_bledev(rq, h, 0, out, outsz, r);
+        if (!strcmp(rq->path, "/api/ble/proximity"))
+            return route_bledev(rq, h, 1, out, outsz, r);
+        if (!strncmp(rq->path, "/api/ble/", 9) && rq->path[9] &&
+            !strchr(rq->path + 9, '/'))
+            return route_merged(rq, h, MG_BLEDEV, rq->path + 9, out, outsz, r);
+        if (!strcmp(rq->path, "/api/pcap/frames"))
+            return route_pcap(rq, h, 0, out, outsz, r);
+        if (!strcmp(rq->path, "/api/pcap"))
+            return route_pcap(rq, h, 1, out, outsz, r);
+        if (!strcmp(rq->path, "/api/bundle"))
+            return route_bundle(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/positions"))
+            return route_positions(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/fleet/export"))
+            return route_fleet_export(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/fleet/peers"))
+            return route_fleet_peers(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/glossary"))
+            return route_glossary(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/fleet/overview"))
+            return route_fleet_overview(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/fleet/shared"))
+            return route_fleet_heap(rq, h, out, outsz, r, web_fleet_shared_route);
+        if (!strcmp(rq->path, "/api/fleet/locate"))
+            return route_fleet_heap(rq, h, out, outsz, r, web_fleet_locate_route);
+        if (!strcmp(rq->path, "/api/fleet/gnss"))
+            return route_fleet_heap(rq, h, out, outsz, r, web_fleet_gnss_route);
+        if (!strcmp(rq->path, "/api/fleet/aircraft"))
+            return route_fleet_heap(rq, h, out, outsz, r, web_fleet_aircraft_route);
+        if (!strcmp(rq->path, "/api/fleet/findings"))
+            return route_fleet_heap(rq, h, out, outsz, r, web_fleet_findings_route);
         /* Without --web-allow-sql neither exists: a 404 like any path. */
         if (h->sql && h->sql->enabled) {
             if (!strcmp(rq->path, "/api/query"))
                 return route_query(rq, h, out, outsz, r);
             if (!strcmp(rq->path, "/api/recipes"))
-                return route_recipes(rq, out, outsz, r);
+                return route_recipes(rq, h, out, outsz, r);
         }
     }
     r->status = 404;
@@ -744,7 +2377,7 @@ int web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
 
 size_t web_sse_tick(char *out, size_t outsz, unsigned long seq, long long ts,
                     const web_health_t *h) {
-    char data[512];
+    char data[640];      /* 512, and "rf" (#214) at its longest */
     web_jw_t w;
     web_jw_init(&w, data, sizeof(data));
     web_jw_raw(&w, "{\"seq\":");        web_jw_int(&w, (long long)seq);
@@ -767,6 +2400,18 @@ size_t web_sse_tick(char *out, size_t outsz, unsigned long seq, long long ts,
         web_jw_raw(&w, ",\"records_s\":"); web_jw_raw(&w, r10);
         web_jw_raw(&w, ",\"records\":"); web_jw_int(&w, (long long)s.records);
         web_jw_raw(&w, ",\"sensor\":"); web_jw_str(&w, s.sensor);
+        /* sloth-rf's stream (#214), only with --rf-socket: the tick is
+         * otherwise what it was. alerts_open above already counts its
+         * open incidents. */
+        if (h->live->peer) {
+            web_live_sum_t rs;
+            web_live_summary(h->live->peer, &rs, h->now_ms);
+            web_jw_raw(&w, ",\"rf\":{\"socket\":");
+            web_jw_str(&w, web_live_sock_word(rs.sock_state));
+            web_jw_raw(&w, ",\"sensor\":"); web_jw_str(&w, rs.sensor);
+            web_jw_raw(&w, ",\"records\":"); web_jw_int(&w, (long long)rs.records);
+            web_jw_raw(&w, "}");
+        }
     }
     if (h->anomaly) {
         web_jw_raw(&w, ",\"anomalies_open\":");
@@ -782,13 +2427,23 @@ size_t web_sse_tick(char *out, size_t outsz, unsigned long seq, long long ts,
 size_t web_sse_record(char *out, size_t outsz, const web_live_rec_t *e) {
     /* The escaped JSON holds no raw CR or LF (web_jw_strn escapes both),
      * so it is one SSE data line whatever the record said. */
-    char data[(WEB_LIVE_TYPE_MAX + WEB_LIVE_TEXT_MAX) * WEB_JW_EXPAND + 128];
+    char data[(WEB_LIVE_TYPE_MAX + 2 * WEB_LIVE_TEXT_MAX) * WEB_JW_EXPAND + 160];
     web_jw_t w;
     web_jw_init(&w, data, sizeof(data));
     web_jw_raw(&w, "{\"seq\":");  web_jw_int(&w, (long long)e->seq);
     web_jw_raw(&w, ",\"type\":"); web_jw_str(&w, e->type);
     web_jw_raw(&w, ",\"ts\":");   web_jw_int(&w, e->ts);
     web_jw_raw(&w, ",\"text\":"); web_jw_str(&w, e->text);
+    /* Its capture-scope tag (web_scope.h): the page's ticker keeps the
+     * records of the scope it shows. */
+    web_jw_raw(&w, ",\"sc\":");   web_jw_int(&w, e->sc);
+    /* A device row's Monitor line (web_live_rec_t), which the page shows
+     * in place of text under Monitor. The stream goes to every page
+     * whatever its scope, so both lines travel; the scope is a view of
+     * one viewer's data, not a boundary between viewers. */
+    if (!strcmp(e->type, "device")) {
+        web_jw_raw(&w, ",\"text_m\":"); web_jw_str(&w, e->text_m);
+    }
     web_jw_raw(&w, "}");
     if (w.overflow) return 0;
     int n = snprintf(out, outsz, "event: record\ndata: %s\n\n", data);

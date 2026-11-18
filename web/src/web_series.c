@@ -79,6 +79,52 @@ int web_param_secs(const char *s, long long *out) {
     return parse_secs(s, out);
 }
 
+int web_scope_take(const char *query, char *rest, size_t restsz, int *scope,
+                   int *given, char *err, size_t errsz) {
+    *scope = WEB_SCOPE_HYBRID;
+    *given = 0;
+    if (!restsz) return fail(err, errsz, "query_too_long");
+    rest[0] = '\0';
+    if (!query || !query[0]) return 0;
+    size_t ro = 0;
+    const char *p = query;
+    for (;;) {
+        const char *amp = strchr(p, '&');
+        size_t seg = amp ? (size_t)(amp - p) : strlen(p);
+        /* As parse_params() refuses one. */
+        if (!seg) return fail(err, errsz, "bad_query");
+        if (seg > 6 && !memcmp(p, "scope=", 6)) {
+            if (*given) return fail(err, errsz, "repeated_parameter");
+            /* The value through the shared decoder, as one parameter. */
+            char one[WEB_PARAM_MAX * 3 + 8];
+            if (seg >= sizeof(one)) return fail(err, errsz, "value_too_long");
+            memcpy(one, p, seg);
+            one[seg] = '\0';
+            param_t ps[1] = { { "scope", "", 0 } };
+            if (parse_params(one, ps, 1, err, errsz) != 0) return -1;
+            int s = web_scope_find(ps[0].val);
+            if (s < 0) return fail(err, errsz, "bad_scope");
+            *scope = s;
+            *given = 1;
+        } else if (seg == 5 && !memcmp(p, "scope", 5)) {
+            return fail(err, errsz, "bad_query");
+        } else if (seg == 6 && !memcmp(p, "scope=", 6)) {
+            return fail(err, errsz, "empty_value");
+        } else {
+            /* Everything else is the route's own, left for its parser,
+             * byte for byte. */
+            if (ro + seg + 2 > restsz) return fail(err, errsz, "query_too_long");
+            if (ro) rest[ro++] = '&';
+            memcpy(rest + ro, p, seg);
+            ro += seg;
+            rest[ro] = '\0';
+        }
+        if (!amp) break;
+        p = amp + 1;
+    }
+    return 0;
+}
+
 static int parse_secs(const char *s, long long *out) {
     size_t n = strlen(s);
     if (n == 0 || n > 11) return -1;
@@ -199,7 +245,11 @@ size_t web_series_json(web_tsdb_t *t, const web_series_q_t *q, char *out,
     if (!m) return 0;
     int more = 0, store_err = 0;
     int use_store = t->store && t->store->rd;
-    int n = web_series_points(t, q->tier, q->metric, q->key, q->from, q->to,
+    int out_of = q->sc && q->sc->scope != WEB_SCOPE_HYBRID &&
+                 !web_scope_pass(q->sc->scope,
+                                 web_scope_metric_key(q->metric, q->key, q->sc));
+    int n = out_of ? 0
+          : web_series_points(t, q->tier, q->metric, q->key, q->from, q->to,
                               m, max, &more, &store_err);
     if (n < 0) { free(m); return 0; }
 
@@ -238,9 +288,33 @@ size_t web_series_json(web_tsdb_t *t, const web_series_q_t *q, char *out,
         web_jw_int(&w, m[k].n > 4294967295UL ? 4294967295LL : (long long)m[k].n);
         web_jw_raw(&w, "]");
     }
-    web_jw_raw(&w, "]}\n");
+    web_jw_raw(&w, "]");
+    if (out_of) web_jw_raw(&w, ",\"out_of_scope\":true");
+    web_jw_raw(&w, "}\n");
     free(m);
     return w.overflow ? 0 : w.len;
+}
+
+/* A key's place in a scope: is it there? */
+static int key_in(int metric, const char *key, const web_scope_ctx_t *sc) {
+    if (!sc || sc->scope == WEB_SCOPE_HYBRID) return 1;
+    return web_scope_pass(sc->scope, web_scope_metric_key(metric, key, sc));
+}
+
+/* A metric's place in a scope's catalogue. */
+static int metric_in(int metric, const web_scope_ctx_t *sc) {
+    if (!sc || sc->scope == WEB_SCOPE_HYBRID) return 1;
+    int tag = web_scope_metric(metric);
+    if (tag == WEB_SC_BYKEY) return 1;
+    return web_scope_pass(sc->scope, web_scope_eff(tag, sc->radio));
+}
+
+static const char *metric_scope_word(int metric, const web_scope_ctx_t *sc) {
+    int tag = web_scope_metric(metric);
+    if (tag == WEB_SC_BYKEY) return "key";
+    tag = web_scope_eff(tag, sc ? sc->radio : 0);
+    return tag == WEB_SC_M ? "monitor" : tag == WEB_SC_L ? "local"
+         : tag == WEB_SC_META ? "both" : "hybrid";
 }
 
 int web_keys_parse(const char *query, int *metric, char *err, size_t errsz) {
@@ -253,10 +327,23 @@ int web_keys_parse(const char *query, int *metric, char *err, size_t errsz) {
 }
 
 size_t web_keys_json(web_tsdb_t *t, int metric, char *out, size_t cap) {
+    return web_keys_json_scoped(t, metric, NULL, out, cap);
+}
+
+size_t web_keys_json_scoped(web_tsdb_t *t, int metric,
+                            const web_scope_ctx_t *sc, char *out, size_t cap) {
     web_keyinfo_t *k = malloc(WEB_KEYS_MAX * sizeof(*k));
     if (!k) return 0;
     int total = 0;
     int n = web_rollup_keys(t->ru, metric, k, WEB_KEYS_MAX, &total);
+    if (sc && sc->scope != WEB_SCOPE_HYBRID) {
+        int o = 0;
+        for (int i = 0; i < n; i++)
+            if (key_in(metric, k[i].key, sc)) k[o++] = k[i];
+        n = o;
+        total = metric_in(metric, sc) ? o : 0;
+        if (!total) n = 0;
+    }
     const web_metric_t *md = &web_metric_defs[metric];
     web_jw_t w;
     web_jw_init(&w, out, cap);
@@ -282,6 +369,11 @@ int web_metrics_parse(const char *query, char *err, size_t errsz) {
 }
 
 size_t web_metrics_json(web_tsdb_t *t, char *out, size_t cap) {
+    return web_metrics_json_scoped(t, NULL, out, cap);
+}
+
+size_t web_metrics_json_scoped(web_tsdb_t *t, const web_scope_ctx_t *sc,
+                               char *out, size_t cap) {
     int store_on = t->store && t->store->rd;
     web_jw_t w;
     web_jw_init(&w, out, cap);
@@ -302,20 +394,37 @@ size_t web_metrics_json(web_tsdb_t *t, char *out, size_t cap) {
         web_jw_raw(&w, "}");
     }
     web_jw_raw(&w, "],\"metrics\":[");
-    for (int i = 0; i < WM_COUNT; i++) {
+    /* Under a scope a per-key metric counts only the keys in it, as
+     * /api/keys lists them; the other scope's interfaces are not its. */
+    web_keyinfo_t *kb = NULL;
+    for (int i = 0, k = 0; i < WM_COUNT; i++) {
+        if (!metric_in(i, sc)) continue;
         const web_metric_t *md = &web_metric_defs[i];
         web_keyinfo_t one;
         int total = 0;
-        web_rollup_keys(t->ru, i, &one, 1, &total);
-        web_jw_raw(&w, i ? ",{\"name\":" : "{\"name\":");
+        if (sc && sc->scope != WEB_SCOPE_HYBRID &&
+            web_scope_metric(i) == WEB_SC_BYKEY &&
+            (kb || (kb = malloc(WEB_KEYS_MAX * sizeof(*kb))) != NULL)) {
+            int n = web_rollup_keys(t->ru, i, kb, WEB_KEYS_MAX, &total);
+            total = 0;
+            for (int j = 0; j < n; j++) total += key_in(i, kb[j].key, sc);
+        } else {
+            web_rollup_keys(t->ru, i, &one, 1, &total);
+        }
+        web_jw_raw(&w, k++ ? ",{\"name\":" : "{\"name\":");
         web_jw_str(&w, md->name);
         web_jw_raw(&w, ",\"kind\":");    web_jw_str(&w, kind_word(md->kind));
         web_jw_raw(&w, ",\"keykind\":"); web_jw_str(&w, md->keykind);
         web_jw_raw(&w, ",\"unit\":");    web_jw_str(&w, md->unit);
         web_jw_raw(&w, ",\"source\":");  web_jw_str(&w, md->source);
         web_jw_raw(&w, ",\"keys\":");    web_jw_int(&w, total);
+        if (sc && sc->scope != WEB_SCOPE_HYBRID) {
+            web_jw_raw(&w, ",\"scope\":");
+            web_jw_str(&w, metric_scope_word(i, sc));
+        }
         web_jw_raw(&w, "}");
     }
+    free(kb);
     web_jw_raw(&w, "]}\n");
     return w.overflow ? 0 : w.len;
 }
@@ -362,18 +471,6 @@ int web_baseline_parse(const char *query, int *metric, char *key,
     return 0;
 }
 
-/* Seconds east of UTC at t, from the calendar fields alone (tm_gmtoff
- * is not C99). */
-static long long utc_offset(long long t) {
-    time_t tt = (time_t)t;
-    struct tm lt, gt;
-    if (!localtime_r(&tt, &lt) || !gmtime_r(&tt, &gt)) return 0;
-    long long d = lt.tm_yday - gt.tm_yday;
-    if (lt.tm_year != gt.tm_year) d = lt.tm_year > gt.tm_year ? 1 : -1;
-    return ((d * 24 + (lt.tm_hour - gt.tm_hour)) * 60 +
-            (lt.tm_min - gt.tm_min)) * 60 + (lt.tm_sec - gt.tm_sec);
-}
-
 size_t web_baseline_json(web_baseline_t *b, int metric, const char *key,
                          long long now_s, char *out, size_t cap) {
     web_bl_cell_t *cells = malloc(WEB_BL_CELLS * sizeof(*cells));
@@ -394,7 +491,7 @@ size_t web_baseline_json(web_baseline_t *b, int metric, const char *key,
     /* The cell a score of now reads: its UTC hour bucket's. */
     web_jw_raw(&w, ",\"now_cell\":");
     web_jw_int(&w, web_bl_cell_index(now_s - now_s % 3600));
-    web_jw_raw(&w, ",\"utc_offset_s\":"); web_jw_int(&w, utc_offset(now_s));
+    web_jw_raw(&w, ",\"utc_offset_s\":"); web_jw_int(&w, web_utc_offset(now_s));
     int fed = b && web_baseline_cells(b, metric, key, cells) == 0;
     web_jw_raw(&w, ",\"fed\":"); web_jw_raw(&w, fed ? "true" : "false");
     web_jw_raw(&w, ",\"cells\":");

@@ -18,6 +18,7 @@
 #include "tune.h"
 #include "sloth_clock.h"
 #include "secure_file.h"
+#include "tmp_dir.h"
 
 /* ── Alert → evidence export, and no partial files (#92 slices 1+2) ──
  *
@@ -37,7 +38,7 @@
  * pinned for the whole suite (sloth_clock_test_set), so neither the
  * cooldown nor incident expiry can straddle a real second boundary. */
 
-static char   g_dir[64];
+static char   g_dir[TEST_TMP_MAX];
 static time_t g_wall = 1700000000;
 static time_t   ea_wall(void) { return g_wall; }
 static uint64_t ea_mono(void) { return (uint64_t)g_wall * 1000u; }
@@ -79,7 +80,7 @@ static void rm_dir(const char *dir) {
 
 /* A fresh private directory, the gate open on it, a clean engine. */
 static void setup(int collect, int with_dir) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/sloth_evalert_XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/sloth_evalert_XXXXXX", test_tmpdir());
     ASSERT(mkdtemp(g_dir) != NULL);
     g_wall = 1700000000;
     sloth_clock_test_set(ea_mono, ea_wall);
@@ -641,11 +642,15 @@ static void test_every_name_taken_is_counted_once(void) {
 
 /* A subdirectory of g_dir long enough that "<it>/<alert file name>"
    cannot fit in ALERT_PCAP_PATH_LEN, while the directory itself fits
-   the 256-byte buffers both exporters keep it in. */
+   the 256-byte buffers both exporters keep it in. The leaf is sized
+   from g_dir so the whole path is 240 bytes wherever $TMPDIR is
+   (tests/tmp_dir.h), rather than a fixed 200 that only fit under a
+   short /tmp. */
 static void long_subdir(char *out, size_t outsz) {
-    char leaf[201];
-    memset(leaf, 'd', sizeof(leaf) - 1);
-    leaf[sizeof(leaf) - 1] = '\0';
+    char leaf[256];
+    size_t n = 240 - 1 - strlen(g_dir);   /* g_dir < TEST_TMP_MAX (96) */
+    memset(leaf, 'd', n);
+    leaf[n] = '\0';
     snprintf(out, outsz, "%s/%s", g_dir, leaf);
     ASSERT(strlen(out) < 256);
     ASSERT(strlen(out) + 1 + 36 >= ALERT_PCAP_PATH_LEN);
@@ -735,8 +740,8 @@ static void test_aged_out_evidence_falls_back_to_the_ip_path(void) {
        --pcap-dir can still hold the packets. It used to mark the
        incident done after the empty evidence export and write nothing. */
     setup(1, 1);
-    char pdir[64];
-    snprintf(pdir, sizeof(pdir), "/tmp/sloth_evalert_ip_XXXXXX");
+    char pdir[TEST_TMP_MAX];
+    snprintf(pdir, sizeof(pdir), "%s/sloth_evalert_ip_XXXXXX", test_tmpdir());
     ASSERT(mkdtemp(pdir) != NULL);
     ASSERT_EQ(alert_pcap_set_dir(pdir), 0);
     uint64_t real[1];

@@ -61,3 +61,9 @@ X(FRAGATTACK,   "FragAttacks", "c", fragattack)   /* per-BSSID FragAttacks count
 /* '*', not a letter: every letter and digit already selects a view or
  * is a global (q quits, n toggles DNS), and 'b' is Beacons. */
 X(BLE,          "BLE",         "*", ble)          /* BLE advertisers per sensor (#144 slice 4) */
+/* '#', the next free symbol: the GNSS receiver's sky (2026-11-02). */
+X(GNSS,         "GNSS",        "#", gnss)         /* satellites in view, C/N0, DOP, clock offset */
+/* No ADS-B row since the cutover (#216, ADR 0010): the aircraft table
+ * is sloth-rf's, sloth-rf is headless, and the table is read in
+ * slothweb. It was the last row ('^', VIEW_ADSB), so no view's number
+ * moved. '^' is free again. */

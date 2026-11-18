@@ -10,6 +10,115 @@
 #include <stdio.h>
 #include <unistd.h>
 #include "ownership.h"
+#include "tmp_dir.h"
+#include "jsonl.h"
+#include "sloth_clock.h"
+
+/* ── the `ownership` record (JSONL 1.2.0) ─────────────────── */
+
+static time_t g_own_wall;
+static time_t own_wall(void) { return g_own_wall; }
+static char   g_own_path[TEST_TMP_MAX];
+
+static void own_open(void) {
+    int fd = mkstemp(test_tmp_tpl(g_own_path, sizeof(g_own_path), "sloth_own_XXXXXX"));
+    if (fd >= 0) close(fd);
+    jsonl_close();
+    unlink(g_own_path);
+    ASSERT(jsonl_open(g_own_path));
+    jsonl_dedup_reset();
+    g_own_wall = 1800000000;
+    sloth_clock_test_set(NULL, own_wall);
+}
+
+static const char *own_read(void) {
+    static char buf[8192];
+    jsonl_close();
+    FILE *fp = fopen(g_own_path, "r");
+    size_t n = fp ? fread(buf, 1, sizeof(buf) - 1, fp) : 0;
+    buf[n] = '\0';
+    if (fp) fclose(fp);
+    unlink(g_own_path);
+    memcpy(g_own_path + strlen(g_own_path) - 6, "XXXXXX", 6);
+    sloth_clock_test_set(NULL, NULL);
+    return buf;
+}
+
+static int own_lines(const char *b) {
+    int n = 0;
+    for (const char *p = b; (p = strstr(p, "{\"type\":\"ownership\"")) != NULL; p++) n++;
+    return n;
+}
+
+/* The designated SSIDs in the stream's string encoding (a control byte
+ * as \u0001, an octet that is not UTF-8 as \ufffd, never the raw byte),
+ * the BSSIDs lower-case, and the known-device roster as a count: none
+ * of its MACs is written. That absence is pinned by the whole-line
+ * match, not by a mutation: ownership.h has no accessor for the
+ * roster's entries, so no one-line change to the emitter could write
+ * one. The raw-byte absence was seen red with kv_str() swapped for a
+ * raw copy of the SSID. */
+static void test_record_carries_the_rosters(void) {
+    ownership_clear();
+    ASSERT_EQ(ownership_add_ssid("Home"), 1);
+    ASSERT_EQ(ownership_add_ssid("a\x01" "b\xff"), 1);
+    ASSERT_EQ(ownership_add_bssid("AA:BB:CC:DD:EE:0F"), 1);
+    ASSERT_EQ(ownership_add_known_mac("02:11:22:33:44:55"), 1);
+    ASSERT_EQ(ownership_add_known_mac("02:11:22:33:44:66"), 1);
+    own_open();
+    jsonl_emit_ownership();
+    const char *b = own_read();
+    ASSERT(strstr(b, "{\"type\":\"ownership\",\"ts\":1800000000,\"ssids\":2,"
+                     "\"ssid_0\":\"Home\",\"ssid_1\":\"a\\u0001b\\ufffd\","
+                     "\"bssids\":1,\"bssid_0\":\"aa:bb:cc:dd:ee:0f\",\"known_macs\":2}\n") != NULL);
+    ASSERT(strstr(b, "02:11:22") == NULL);
+    ASSERT(strstr(b, "\x01") == NULL);
+    ownership_clear();
+}
+
+/* No designation is still a record: "sloth says none", which a consumer
+ * must be able to tell from "sloth has not said". */
+static void test_record_of_an_empty_roster(void) {
+    ownership_clear();
+    own_open();
+    jsonl_emit_ownership();
+    const char *b = own_read();
+    ASSERT(strstr(b, "{\"type\":\"ownership\",\"ts\":1800000000,\"ssids\":0,"
+                     "\"bssids\":0,\"known_macs\":0}\n") != NULL);
+}
+
+/* One line, then nothing while nothing changes inside the 300 s
+ * heartbeat; a change is a line at once, a renamed designation with
+ * the counts unchanged too; the heartbeat is a line.
+ * Seen red (one line short) with the SSIDs left out of the signature,
+ * and red (a line per call) with the jsonl_changed() test removed. */
+static void test_record_is_change_only_with_a_heartbeat(void) {
+    ownership_clear();
+    ASSERT_EQ(ownership_add_ssid("Home"), 1);
+    own_open();
+    jsonl_emit_ownership();
+    g_own_wall += 10;
+    jsonl_emit_ownership();
+    g_own_wall += 289;
+    jsonl_emit_ownership();                 /* 299 s: suppressed */
+    ASSERT_EQ(ownership_add_ssid("Home-5G"), 1);
+    jsonl_emit_ownership();                 /* changed: written */
+    g_own_wall += 299;
+    jsonl_emit_ownership();                 /* 299 s since: suppressed */
+    g_own_wall += 1;
+    jsonl_emit_ownership();                 /* the heartbeat */
+    /* The same counts, another name: a change. */
+    ownership_clear();
+    ASSERT_EQ(ownership_add_ssid("Office"), 1);
+    ASSERT_EQ(ownership_add_ssid("Office-5G"), 1);
+    g_own_wall += 1;
+    jsonl_emit_ownership();
+    const char *b = own_read();
+    ASSERT_EQ(own_lines(b), 4);
+    ASSERT(strstr(b, "\"ssids\":2,\"ssid_0\":\"Home\",\"ssid_1\":\"Home-5G\"") != NULL);
+    ASSERT(strstr(b, "\"ssids\":2,\"ssid_0\":\"Office\",\"ssid_1\":\"Office-5G\"") != NULL);
+    ownership_clear();
+}
 
 /* ── SSID designation ────────────────────────────────────── */
 
@@ -220,7 +329,8 @@ static void write_roster(const char *path, const char *body) {
 
 static void test_roster_file_parses(void) {
     ownership_clear();
-    const char *path = "/tmp/sloth_roster_ok.txt";
+    char path[TEST_TMP_MAX];
+    test_tmp_path(path, sizeof(path), "sloth_roster_ok.txt");
     write_roster(path,
         "# office laptops\n"
         "aa:bb:cc:00:00:01\n"
@@ -239,7 +349,8 @@ static void test_roster_file_parses(void) {
  * roster of 200 good entries. The good ones still load. */
 static void test_roster_file_skips_bad_lines(void) {
     ownership_clear();
-    const char *path = "/tmp/sloth_roster_bad.txt";
+    char path[TEST_TMP_MAX];
+    test_tmp_path(path, sizeof(path), "sloth_roster_bad.txt");
     write_roster(path,
         "aa:bb:cc:00:00:01\n"
         "not-a-mac\n"
@@ -263,7 +374,8 @@ static void test_roster_file_missing_is_error(void) {
  * is a valid roster, distinct from a missing file. */
 static void test_roster_file_empty_is_zero_not_error(void) {
     ownership_clear();
-    const char *path = "/tmp/sloth_roster_empty.txt";
+    char path[TEST_TMP_MAX];
+    test_tmp_path(path, sizeof(path), "sloth_roster_empty.txt");
     write_roster(path, "# nothing yet\n\n   \n");
     ASSERT_EQ(ownership_load_known_macs(path), 0);
     ASSERT_EQ(ownership_known_count(), 0);
@@ -274,7 +386,8 @@ static void test_roster_file_empty_is_zero_not_error(void) {
  * both normal. */
 static void test_roster_file_load_is_idempotent(void) {
     ownership_clear();
-    const char *path = "/tmp/sloth_roster_twice.txt";
+    char path[TEST_TMP_MAX];
+    test_tmp_path(path, sizeof(path), "sloth_roster_twice.txt");
     write_roster(path, "aa:bb:cc:00:00:01\naa:bb:cc:00:00:02\n");
     ownership_load_known_macs(path);
     ownership_load_known_macs(path);
@@ -304,6 +417,133 @@ static void test_unconfigured_roster_knows_nothing(void) {
     ASSERT_EQ(ownership_known_count(), 0);
 }
 
+/* ── the sensor's own addresses (#183) ───────────────────── */
+
+/* One iface row, as the platform reports it. */
+static void add_iface(iface_stat_t *out, const char *name,
+                      const uint8_t mac[6], iface_mode_t mode) {
+    memset(out, 0, sizeof(*out));
+    snprintf(out->name, sizeof(out->name), "%s", name);
+    if (mac) memcpy(out->mac, mac, 6);
+    out->mode = mode;
+}
+
+/* Every interface, not only the managed card: the issue's whole point is
+ * that the Ethernet port and the monitor radio's own address are the
+ * host's too, and a roster that held one of the three would still have
+ * the sensor accusing itself through the others. */
+static void test_self_sync_rosters_every_iface_mac(void) {
+    ownership_clear();
+    ASSERT_EQ(ownership_self_count(), 0);
+    uint8_t eth[6] = {0x24,0x41,0x8c,0x00,0x00,0x01};
+    uint8_t wifi[6] = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    uint8_t mon[6] = {0x00,0xc0,0xca,0xbb,0x51,0x82};
+    iface_stat_t ifs[3];
+    add_iface(&ifs[0], "eth0",  eth,  IFACE_MODE_ETHER);
+    add_iface(&ifs[1], "wlan0", wifi, IFACE_MODE_WIFI);
+    add_iface(&ifs[2], "alfa0", mon,  IFACE_MODE_MONITOR);
+    ownership_self_sync_ifaces(ifs, 3);
+    ASSERT_EQ(ownership_self_count(), 3);
+    ASSERT_EQ(ownership_is_self_mac(eth),  1);
+    ASSERT_EQ(ownership_is_self_mac(wifi), 1);
+    ASSERT_EQ(ownership_is_self_mac(mon),  1);
+    uint8_t stranger[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+    ASSERT_EQ(ownership_is_self_mac(stranger), 0);
+}
+
+/* The roster is re-synced every poll, so re-adding must not consume a
+ * slot — 1 Hz for a day would otherwise overflow a 64-entry table in
+ * the first minute. */
+static void test_self_sync_is_idempotent(void) {
+    ownership_clear();
+    uint8_t wifi[6] = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    iface_stat_t ifs[1];
+    add_iface(&ifs[0], "wlan0", wifi, IFACE_MODE_WIFI);
+    for (int i = 0; i < 50; i++) ownership_self_sync_ifaces(ifs, 1);
+    ASSERT_EQ(ownership_self_count(), 1);
+}
+
+/* An interface whose hardware address is unknown reads all-zero
+ * (iface_stat_t.mac), and loopback really is all-zero. Rostering that
+ * would exonerate every frame whose source address did not parse. The
+ * multicast bit can never be set on a host's own unicast address, so a
+ * row carrying one is a reporting artefact, not an address. */
+static void test_self_sync_rejects_non_addresses(void) {
+    ownership_clear();
+    uint8_t zero[6]  = {0,0,0,0,0,0};
+    uint8_t bcast[6] = {0xff,0xff,0xff,0xff,0xff,0xff};
+    uint8_t mcast[6] = {0x01,0x00,0x5e,0x00,0x00,0x01};
+    iface_stat_t ifs[3];
+    add_iface(&ifs[0], "lo",   zero,  IFACE_MODE_ETHER);
+    add_iface(&ifs[1], "br0",  bcast, IFACE_MODE_ETHER);
+    add_iface(&ifs[2], "veth", mcast, IFACE_MODE_ETHER);
+    ownership_self_sync_ifaces(ifs, 3);
+    ASSERT_EQ(ownership_self_count(), 0);
+    ASSERT_EQ(ownership_is_self_mac(zero),  0);
+    ASSERT_EQ(ownership_is_self_mac(bcast), 0);
+    ASSERT_EQ(ownership_is_self_mac(mcast), 0);
+    /* ...and the rejection must not have made every lookup true. */
+    uint8_t real[6] = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    ASSERT_EQ(ownership_is_self_mac(real), 0);
+}
+
+/* Bounded like every other table here. A host with a few dozen veths
+ * must not walk off the end of the array. */
+static void test_self_roster_is_bounded(void) {
+    ownership_clear();
+    iface_stat_t one;
+    for (int i = 0; i < MAX_SELF_MACS + 10; i++) {
+        uint8_t m[6] = {0x02,0x00,0x00,
+                        (uint8_t)(i >> 16), (uint8_t)(i >> 8), (uint8_t)i};
+        add_iface(&one, "veth", m, IFACE_MODE_ETHER);
+        ownership_self_sync_ifaces(&one, 1);
+    }
+    ASSERT_EQ(ownership_self_count(), MAX_SELF_MACS);
+}
+
+/* The sensor's own card is "ours" in exactly the sense --known-mac
+ * means, which is what lets the exonerations consult one predicate.
+ * But the operator's roster count must NOT move: rule_unknown_device
+ * is inert until the operator rosters something, and a sensor that
+ * rostered itself would switch that rule on for every deployment that
+ * had only designated an SSID. */
+static void test_self_is_own_device_but_not_a_known_mac(void) {
+    ownership_clear();
+    uint8_t wifi[6] = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    iface_stat_t ifs[1];
+    add_iface(&ifs[0], "wlan0", wifi, IFACE_MODE_WIFI);
+    ownership_self_sync_ifaces(ifs, 1);
+    ASSERT_EQ(ownership_is_own_device(wifi),   1);
+    ASSERT_EQ(ownership_is_known_device(wifi), 0);
+    ASSERT_EQ(ownership_known_count(), 0);
+    /* The operator's own entries still read as ours. */
+    ownership_add_known_mac("aa:bb:cc:dd:ee:ff");
+    uint8_t op[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0xff};
+    ASSERT_EQ(ownership_is_own_device(op), 1);
+    ASSERT_EQ(ownership_is_self_mac(op),   0);
+    uint8_t stranger[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+    ASSERT_EQ(ownership_is_own_device(stranger), 0);
+}
+
+static void test_self_roster_cleared_and_null_safe(void) {
+    ownership_clear();
+    uint8_t wifi[6] = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    iface_stat_t ifs[1];
+    add_iface(&ifs[0], "wlan0", wifi, IFACE_MODE_WIFI);
+    ownership_self_sync_ifaces(ifs, 1);
+    ASSERT_EQ(ownership_self_count(), 1);
+    ownership_clear();
+    ASSERT_EQ(ownership_self_count(), 0);
+    ASSERT_EQ(ownership_is_self_mac(wifi), 0);
+    /* A platform backend that reports nothing, or a negative count. */
+    ownership_self_sync_ifaces(NULL, 3);
+    ownership_self_sync_ifaces(ifs, 0);
+    ownership_self_sync_ifaces(ifs, -1);
+    ASSERT_EQ(ownership_self_count(), 0);
+    ASSERT_EQ(ownership_is_self_mac(NULL), 0);
+    ASSERT_EQ(ownership_is_own_device(NULL), 0);
+}
+
 /* ── echoed input is sanitised (#137) ─────────────────────── */
 
 /* Run fn with stderr redirected to a temp file; returns bytes captured. */
@@ -329,7 +569,11 @@ static size_t capture_stderr(void (*fn)(void), char *buf, size_t cap) {
     return n;
 }
 
-static const char *HOSTILE_ROSTER = "/tmp/sloth_roster_hostile.txt";
+static const char *hostile_roster(void) {
+    static char p[TEST_TMP_MAX];
+    return test_tmp_tpl(p, sizeof(p), "sloth_roster_hostile.txt");
+}
+#define HOSTILE_ROSTER hostile_roster()
 
 static void load_hostile_roster(void) {
     ownership_load_known_macs(HOSTILE_ROSTER);
@@ -437,6 +681,19 @@ void run_ownership_tests(void) {
     RUN_TEST(test_roster_file_load_is_idempotent);
     RUN_TEST(test_roster_is_bounded);
     RUN_TEST(test_unconfigured_roster_knows_nothing);
+
+    TEST_SUITE("ownership: the sensor's own addresses (#183)");
+    RUN_TEST(test_self_sync_rosters_every_iface_mac);
+    RUN_TEST(test_self_sync_is_idempotent);
+    RUN_TEST(test_self_sync_rejects_non_addresses);
+    RUN_TEST(test_self_roster_is_bounded);
+    RUN_TEST(test_self_is_own_device_but_not_a_known_mac);
+    RUN_TEST(test_self_roster_cleared_and_null_safe);
+
+    TEST_SUITE("ownership: the `ownership` record (JSONL 1.2.0)");
+    RUN_TEST(test_record_carries_the_rosters);
+    RUN_TEST(test_record_of_an_empty_roster);
+    RUN_TEST(test_record_is_change_only_with_a_heartbeat);
 
     TEST_SUITE("ownership: echoed input is sanitised (#137)");
     RUN_TEST(test_roster_bad_line_echo_has_no_control_bytes);

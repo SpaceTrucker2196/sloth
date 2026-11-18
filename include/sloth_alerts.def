@@ -316,3 +316,68 @@ X(BLE_HID_UNEXPECTED, "T1200") /* Hardware Additions — a keyboard that should 
  * empty, so with no rows it never fires. Category, never identity. */
 /* advertiser matching a watched category (row-driven, shipped empty) in range — Bluetooth SIG member UUIDs (#144 slice 4) */
 X(BLE_WATCHLIST, "") /* observation of a category, not adversary technique (#144 slice 4) */
+/* The GNSS rules (2026-11-03, src/alerts/rules_gnss.c), read off the
+ * --gps receiver's sky and fixes (docs/wiki/gnss.md). T1464 is a MOBILE
+ * ATT&CK technique, the only ID here from that matrix: every other row
+ * is Enterprise. Mobile T1464 Network Denial of Service is the one
+ * technique in any matrix whose text names GPS jamming ("jam radio
+ * signals (e.g. Wi-Fi, cellular, GPS)"); Enterprise T1498 is about a
+ * network connection's bandwidth, which a GNSS receiver is not on
+ * (research/gnss/attack-mapping.md; owner ruling 2026-11-02). Like
+ * RF_DEGRADED's T1498 it tags the observable, not intent: DHS 2017
+ * defines interference and jamming as the same effect. */
+/* tracked-median C/N0 collapse with the used set falling, or the u-blox jamInd held high — DHS 2017, u-blox 7 MON-HW */
+X(GNSS_JAMMING, "T1464") /* Mobile ATT&CK: Network Denial of Service (GPS jamming) */
+/* Deliberately empty, the second exemption form (agents/AGENTS.md):
+ * a real basis — Psiaki & Humphreys 2016, Humphreys et al. 2008 — and
+ * no technique in any matrix names GNSS spoofing; ICS T0830 and
+ * T0856 (now T1692.002) are about network sessions and ICS reporting
+ * messages, not counterfeit satellite signals
+ * (research/gnss/attack-mapping.md). */
+/* two of: used C/N0 too high, used C/N0 uniform and high, reacquisition with a jump — Psiaki & Humphreys 2016 */
+X(GNSS_SPOOF_SUSPECT, "") /* real basis, no ATT&CK technique names GNSS spoofing (second exemption form) */
+/* Empty on the same form, and a second reason: a step comes from
+ * faults as well as attacks (leap second, week rollover, cold start;
+ * research/gnss/time-and-position-integrity.md). */
+/* receiver time stepped against the host's monotonic clock between fixes — chrony, gpsd time HOWTO */
+X(GNSS_TIME_JUMP, "") /* real basis, no ATT&CK technique (second exemption form) */
+/* Empty on the same form and for the same second reason. */
+/* consecutive fixes farther apart than speed x dt plus k x (eph + eph) — Psiaki & Humphreys 2016 §III-C */
+X(GNSS_POSITION_JUMP, "") /* real basis, no ATT&CK technique (second exemption form) */
+/* The ADS-B rule (#186, src/alerts/rules_adsb.c), read off the --adsb
+ * decoder's aircraft table (docs/wiki/adsb.md). Deliberately empty, the
+ * second exemption form: a real basis - the ICAO emergency codes as
+ * SERA.13005 sets them, the DO-260B emergency/priority status readsb
+ * reports, and the ADS-B spoofing literature (Costin & Francillon 2012,
+ * Schafer et al. 2013) - and no technique: what it reports is a third
+ * party's declared state, an aircraft's crew squawking for help, not an
+ * adversary's step against the operator's network; and a spoofed one
+ * cannot be told from a real one here (research/adsb/emergency-squawks.md).
+ * Flag only: sloth surfaces it and never acts on it. */
+/* squawk 7500 / 7600 / 7700 or a DO-260B emergency status other than none, per address — SERA.13005, readsb README-json */
+X(ADSB_EMERGENCY, "") /* real basis, no ATT&CK technique (second exemption form) */
+/* One BSSID answering stations' directed probe requests for SSIDs it
+ * has never beaconed (#187 S2, src/karma_detect.h): the classic KARMA
+ * radio that beacons one name and answers the rest, which KARMA_AP's
+ * beacon-only fan-out cannot see. Same technique as KARMA_AP. */
+/* >= karma.forge_ssids never-beaconed SSIDs answered to directed probes — Dai Zovi & Macaulay 2005, airbase-ng -P */
+X(KARMA_PROBE_FORGE, "T1557") /* AiTM (forged directed probe response) */
+/* Key-material harvesting (#172, src/alerts/rules_harvest.c): the two
+ * attack vectors hcxdumptool's README names, read off association
+ * requests, EAPOL-Key messages and deauthentications. T1040 as the
+ * issue proposed: what is collected is credential material captured
+ * off the air for offline use. */
+/* one station's association requests answered by >= harvest.min_bssids M1s it left without an M2 — Steube 2018, hcxdumptool */
+X(PMKID_HARVEST, "T1040") /* Network Sniffing (clientless PMKID solicitation) */
+/* >= harvest.deauth_min deauths claimed from a BSSID, then the victim's fresh M1/M2 within harvest.reconnect_s — hcxdumptool */
+X(HANDSHAKE_HARVEST, "T1040") /* Network Sniffing (deauth-driven 4-way handshake capture) */
+/* The sensor's own state (2026-11-11, src/alerts/rules_sensor.c), read
+ * off the host-status snapshot src/sys_status.c takes. Deliberately
+ * empty, the FIRST exemption form (agents/AGENTS.md): sloth's own
+ * operational state, no adversary, nothing to cite - the rows of
+ * NO_MONITOR_MODE and BT_OWN_TRANSMIT, pinned by
+ * tests/test_research_corpus.c :: test_own_state_kinds_are_named. */
+/* the host's under-voltage alarm (an hwmon inN_lcrit_alarm, the Raspberry Pi firmware's flag) reads 1 */
+X(SENSOR_UNDERVOLT, "") /* own operational state (first exemption form) */
+/* a source the command line configured (source_status) is down, or stale past SENSOR_SRC_STALE_S */
+X(SENSOR_SOURCE_DOWN, "") /* own operational state (first exemption form) */

@@ -92,11 +92,24 @@ static void test_rule_scraper_sees_definitions(void) {
     ASSERT(!ar_parse_def("    R(rule_port_scan),\n", name, sizeof(name)));
 }
 
-/* Every rule defined is run, exactly once, and the table runs nothing
- * that is not a rule. Mutation-proved: deleting the R(rule_beaconing)
- * row from rules_table.c turns this red naming rule_beaconing (68
- * definitions, 67 rows), and doubling the R(rule_port_scan) row turns
- * it red on the count and on "in the table 2 times". */
+/* Every rule defined is run, exactly once, by the daemon that owns it,
+ * and the tables run nothing that is not a rule. Mutation-proved:
+ * deleting the R(rule_beaconing) row from rules_table.c turns this red
+ * naming rule_beaconing (68 definitions, 67 rows), and doubling the
+ * R(rule_port_scan) row turns it red on the count and on "in the table
+ * 2 times".
+ *
+ * Two tables since the cutover (#216): sloth-wifi's (the one this
+ * binary has selected, g_alert_rules) and sloth-rf's. A definition is
+ * in sloth-wifi's once and not in sloth-rf's - except the five that are
+ * sloth-rf's alone (once there, never here) and
+ * rule_sensor_source_down, which both run. So a rule dropped from one
+ * table without landing in the other is still a red suite. */
+static int ar_rf_only(const char *name) {
+    return strncmp(name, "rule_gnss_", 10) == 0 ||
+           strcmp(name, "rule_adsb_emergency") == 0;
+}
+
 static void test_rule_table_is_complete(void) {
     ar_defs_t d;
     ar_scrape(&d);
@@ -104,19 +117,31 @@ static void test_rule_table_is_complete(void) {
      * compare an empty scrape against an empty expectation. */
     ASSERT_GE(d.files, 1);
     ASSERT_GE(d.n, 1);
-    if (d.n != g_alert_rule_count)
-        fprintf(stderr, "    %d rule definitions, %d table rows\n",
-                d.n, g_alert_rule_count);
-    ASSERT_EQ(d.n, g_alert_rule_count);
+    ASSERT(alerts_table() == &g_alert_table_wifi);
+    int rf_only = 0;
+    for (int i = 0; i < d.n; i++) rf_only += ar_rf_only(d.names[i]);
+    ASSERT_EQ(rf_only, 5);
+    if (d.n != g_alert_rule_count + rf_only)
+        fprintf(stderr, "    %d rule definitions, %d sloth-wifi rows and %d "
+                        "sloth-rf-only\n", d.n, g_alert_rule_count, rf_only);
+    ASSERT_EQ(d.n, g_alert_rule_count + rf_only);
+    ASSERT_EQ(g_alert_table_rf.count, rf_only + 1);
 
     for (int i = 0; i < d.n; i++) {
-        int hits = 0;
+        int hits = 0, rf_hits = 0;
         for (int r = 0; r < g_alert_rule_count; r++)
             if (strcmp(g_alert_rules[r].name, d.names[i]) == 0) hits++;
-        if (hits != 1)
-            fprintf(stderr, "    %s is in the table %d times\n",
-                    d.names[i], hits);
-        ASSERT_EQ(hits, 1);
+        for (int r = 0; r < g_alert_table_rf.count; r++)
+            if (strcmp(g_alert_table_rf.rules[r].name, d.names[i]) == 0) rf_hits++;
+        int want = ar_rf_only(d.names[i]) ? 0 : 1;
+        int want_rf = ar_rf_only(d.names[i]) ||
+                      strcmp(d.names[i], "rule_sensor_source_down") == 0;
+        if (hits != want || rf_hits != want_rf)
+            fprintf(stderr, "    %s is in sloth-wifi's table %d times (want %d) "
+                            "and sloth-rf's %d (want %d)\n",
+                    d.names[i], hits, want, rf_hits, want_rf);
+        ASSERT_EQ(hits, want);
+        ASSERT_EQ(rf_hits, want_rf);
     }
     for (int r = 0; r < g_alert_rule_count; r++) {
         ASSERT(g_alert_rules[r].fn != NULL);
@@ -170,6 +195,30 @@ static void test_rule_order_dependencies(void) {
     /* The chain taints the rogue half; rule_evil_twin reads the taint
      * through twin_choose_sides() on the next tick, not this one. */
     ASSERT_LT(twin, chain);
+
+    /* The cutover (#216) took five rows out of this table and moved
+     * nothing: rule_gnss_jamming, rule_gnss_time_jump,
+     * rule_gnss_position_jump, rule_gnss_spoof_suspect and
+     * rule_adsb_emergency stood, in that order, between
+     * rule_cam_rtsp_unauth and the sensor's own pair, depended on no
+     * other rule and had none depend on them (the table's own comment
+     * said so). So the three dependencies above are untouched; what is
+     * pinned here is that the five are gone and that the rows that
+     * were either side of them are now adjacent, in the same order, at
+     * the end. sloth-rf's table keeps the five in their order
+     * (tests/test_rf_rules.c). */
+    ASSERT_EQ(ar_index("rule_gnss_jamming"), -1);
+    ASSERT_EQ(ar_index("rule_gnss_time_jump"), -1);
+    ASSERT_EQ(ar_index("rule_gnss_position_jump"), -1);
+    ASSERT_EQ(ar_index("rule_gnss_spoof_suspect"), -1);
+    ASSERT_EQ(ar_index("rule_adsb_emergency"), -1);
+    int rtsp = ar_index("rule_cam_rtsp_unauth");
+    int uv   = ar_index("rule_sensor_undervolt");
+    int down = ar_index("rule_sensor_source_down");
+    ASSERT(rtsp >= 0);
+    ASSERT_EQ(uv, rtsp + 1);
+    ASSERT_EQ(down, uv + 1);
+    ASSERT_EQ(down, g_alert_rule_count - 1);
 
     /* The posture rule_wpa_downgrade reads is derived before any rule
      * runs. Not a table row, so this reads alerts_update() itself. */

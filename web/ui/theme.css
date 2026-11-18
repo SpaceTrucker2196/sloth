@@ -59,6 +59,11 @@
   --sev-low:      var(--heat-1);
   --sev-warn:     var(--heat-2);
   --sev-crit:     var(--heat-3);
+  /* the triage verdict known (known good): green, the affiliation
+   * colour of a friendly or neutral emitter (MIL-STD-2525). The TUI's
+   * bright phosphor, which palette.css lightens for the cream theme to
+   * 4.5:1, so one line serves both themes. */
+  --tri-known:    var(--tui-bright);
 
   /* flow protocol hues (the Flows view, M6): a categorical chart
    * encoding the TUI has no counterpart for, each named beside its line
@@ -70,6 +75,38 @@
   --f-ssh:  #7fd1ff;  --f-rdp:  #b48cff;  --f-smb:  #ffd166;
   --f-snmp: #9be564;  --f-bgp:  #ff9ecb;  --f-ldap: #c0c0c0;
   --f-kerb: var(--tui-normal);
+
+  /* the sun's phase on the presence strip's cells (G5, owner ruling
+   * 2026-11-11; web/ui/sun.js): night the quiet one (the least
+   * contrast of the four in both themes), day the plain one (CP_NORMAL
+   * itself, by reference, the ink every present cell had before),
+   * sunrise yellow and sunset magenta. The light values are written
+   * here, not derived: the data rule lowers a yellow's lightness to a
+   * brown within 15 of --heat-2's, the anomaly underline on the same
+   * strip. palette.c fails the build if one of the three written here
+   * is under 3:1 (WCAG 1.4.11, a graphic) on --bg or --panel, or if two
+   * of the four, or one and a mark that shares the strip (--signal,
+   * --heat-2, --faint), come within 20 (CIEDE2000), in either theme. */
+  --sun-night: #4a72c4;  --sun-rise: #ffe07a;  --sun-set: #e0569b;
+  --sun-day: var(--tui-normal);
+
+  /* the Radar's Wi-Fi hues (owner request 2026-11-13: "color code the
+   * wifi points"): a device's mark and its fleet polygon take one of
+   * these by a hash of its MAC (web/ui/radar.js wifiHue()), so a point
+   * and its area read as a pair. Categorical, never the only carrier:
+   * the shape says station or AP and solid or hollow says located. Kept
+   * off every hue the dome already means something by: the selection
+   * (--signal), the heat ramp the aircraft and the alarm ring use
+   * (--heat-1..3), BLE's ink (--tui-normal) and its areas' (--data),
+   * and --ink, the hover ring's. Five, because no sixth hue clears all
+   * of those in both themes (a grey sits on --ink, a sky blue on --data,
+   * a sand on the heat ramp). Light values written, not derived (the
+   * data rule would pull two of them together). palette.c fails the
+   * build if one is under 3:1 (WCAG 1.4.11, a graphic) on --bg or
+   * --panel, if two come within 15, or one and a reserved hue within 20
+   * (CIEDE2000), in either theme. */
+  --rw-0: #7b94ff;  --rw-1: #d08aff;  --rw-2: #ff7ab8;
+  --rw-3: #b0e070;  --rw-4: #c09090;
 
   /* Dark is the default, whatever the browser prefers; the toggle
    * stores a choice of light. */
@@ -112,6 +149,13 @@
   --phosphor:     #0b8c6a;
   --phosphor-dim: #4a9a85;
   --hover:        var(--phosphor-hi);
+
+  /* the sun's phases on cream (above); --sun-day follows CP_NORMAL */
+  --sun-night: #5b84d6;  --sun-rise: #8a7a00;  --sun-set: #c2247a;
+
+  /* the Radar's Wi-Fi hues on cream (above) */
+  --rw-0: #1f4fe0;  --rw-1: #9a2ac8;  --rw-2: #b5206a;
+  --rw-3: #4d8a00;  --rw-4: #8a5a5a;
 
   color-scheme: light;
 }

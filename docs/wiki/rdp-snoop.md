@@ -17,9 +17,10 @@ Sloth's first RDP pass is narrow: count X.224 Connection Request
 TPDUs per (client_ip, server_ip), pull the username out of the
 mstshash cookie when present, OR-accumulate the requested-protocol
 bitmask, and fire `RDP_BRUTE_FORCE` when one client opens ≥10 CRs
-to one server inside the active window. Same shape as
-[[ssh-snoop]] — the encrypted auth itself is invisible, but brute
-force is a connection-cadence signal, not a payload signal.
+to one server inside the sliding `rdp.brute_window_s` window (60 s
+default; #202). Same shape as [[ssh-snoop]] — the encrypted auth
+itself is invisible, but brute force is a connection-cadence
+signal, not a payload signal.
 
 ## What we detect
 
@@ -68,7 +69,7 @@ RDP_BRUTE_FORCE: 203.0.113.7->10.0.0.20: 47 RDP CRs
 | Field | Value |
 |-------|-------|
 | Severity | CRIT |
-| Threshold | `connect_req_count ≥ 10` per (client_ip, server_ip) |
+| Threshold | ≥10 CRs inside a sliding 60 s window (`rdp.brute_force` / `rdp.brute_window_s`), per (client_ip, server_ip) |
 | Dedup key | `rdp-brute:<client>-><server>` |
 | `match_ip` | `src_ip` (the attacking client) |
 | `match_port` | 3389 |
@@ -77,7 +78,18 @@ Why 10: matches the SSH threshold. Both protocols share the same
 brute-force shape (one TCP connection per credential attempt) and
 both have similar legitimate-reconnect baselines (a handful per
 session for users behind NAT or VPN with sleep/wake cycles). Ten
-distinct CRs to one server in the active window is unambiguous.
+distinct CRs to one server in the window is unambiguous.
+
+The `rdp_flow` record's `connect_req_count` is a **lifetime**
+tally kept for operator context — it never decays and the rule
+does not read it. Before #202 the rule thresholded
+`connect_req_count` directly, so a routine (admin, server) pair
+that ever crossed 10 connections over its whole life re-fired the
+alert on every tick forever, same defect and same fix as
+[[ssh-snoop]]'s `SSH_BRUTE_FORCE`. `rdp.brute_force` /
+`rdp.brute_window_s` are both `--tune` knobs; the window's ring
+holds at most 32 recent CRs (`FLOOD_WIN_CAP`), which is also the
+threshold's upper bound.
 
 ## What's normal
 
@@ -91,8 +103,9 @@ distinct CRs to one server in the active window is unambiguous.
 
 ## What's suspicious
 
-- `connect_req_count ≥ 10` from one source to one server —
-  fires the alert.
+- ≥10 CRs inside the 60 s window from one source to one server —
+  fires the alert. It resolves on its own once the pair goes
+  quiet past the window, with no eviction or restart needed.
 - `last_cookie` cycling through different usernames against the
   same `dst_ip` — password spray. The `rdp_flow` record only
   remembers the *last* cookie; a SIEM-side rule walking the
@@ -117,10 +130,6 @@ distinct CRs to one server in the active window is unambiguous.
   distinguish accepted from rejected CRs.
 - **NLA / CredSSP user enumeration.** Some CredSSP failure
   paths leak which usernames exist. Beyond Tier 1 scope.
-- **Connection-rate / per-second cadence.** A flow that crams
-  20 CRs into 5 seconds is more brute-force-shaped than one
-  that does it over an hour. The current count threshold
-  catches both but doesn't differentiate.
 - **MS-RDPEDC client-channel inspection.** Once TLS wraps the
   session, the DRDYNVC virtual channels are opaque to a
   passive observer.

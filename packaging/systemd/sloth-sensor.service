@@ -70,8 +70,32 @@ ExecStartPre=+/usr/local/sbin/sloth-monitor-up ${SLOTH_IFACE}
 # authentication, and a tcp: socket would need AF_INET added to
 # RestrictAddressFamilies below. $SLOTH_ARGS carries the site-specific
 # flags (--my-ssid, --my-bssid, --site-label) from /etc/default/sloth.
-ExecStart=/usr/local/bin/sloth \
+#
+# --report-interval / --report-history (#190): the report was written
+# only on SIGTERM, so on a sensor that runs for days it described the
+# session before last, and each restart replaced it. Every five minutes
+# report.live.md / .json now carry the running session, and each clean
+# stop also leaves report.<UTC start>.md / .json, deleted after
+# report.retain_days (default 90). snapshot.live.txt carries the running
+# AP inventory on the same cadence; snapshot.txt, the baseline, still
+# moves only at a clean stop.
+#
+# --monitor-iface ${SLOTH_IFACE}: open the radio the helper above put in
+# monitor mode, not whichever type-803 interface sorts first — a second
+# radio in monitor mode on the same host (a bench attacker) could
+# otherwise be taken for the sensor. If it is missing or not in monitor
+# mode there is no fallback. It does not scope the IP stream (--iface).
+#
+# sloth-wifi (#216, ADR 0010): the Wi-Fi, IP and BLE daemon, which this
+# unit has always run; /usr/local/bin/sloth is a symlink to it. It
+# REFUSES --adsb, --aprs, --aprs-freq, --aprs-silent-hours, --rtl433
+# and --victron (exit 2, one line naming the flag): those are
+# sloth-rf.service's. A /etc/default/sloth that still carries one stops
+# this unit from starting until sloth-migrate-rf --apply has moved it
+# (docs/wiki/deployment.md section 11.4).
+ExecStart=/usr/local/bin/sloth-wifi \
     --headless \
+    --monitor-iface ${SLOTH_IFACE} \
     --hop \
     --db /var/lib/sloth/sloth.db --db-interval-secs 1 \
     --pcap-dir /var/lib/sloth/pcap \
@@ -79,6 +103,7 @@ ExecStart=/usr/local/bin/sloth \
     --with-research /usr/local/share/sloth/research.db \
     --report /var/lib/sloth/report.md \
     --report-json /var/lib/sloth/report.json \
+    --report-interval 300 --report-history \
     --snapshot-out /var/lib/sloth/snapshot.txt \
     --baseline-in /var/lib/sloth/snapshot.txt \
     $SLOTH_ARGS
@@ -114,6 +139,10 @@ ProtectProc=invisible
 # AF_PACKET for capture, AF_NETLINK for rtnetlink/nl80211/INET_DIAG,
 # AF_UNIX for the data socket. Add AF_INET AF_INET6 only for a tcp:
 # --data-socket or --allow-active; the db-only profile needs neither.
+# Not AF_BLUETOOTH: --bt-monitor needs it, and gets it from the opt-in
+# drop-in sloth-sensor.service.d/bt-monitor.conf (docs/wiki/deployment.md
+# §7), because with the family allowed a compromised sensor could make
+# an hciN transmit. The scan itself is sloth-ble-scan.service.
 RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_PACKET
 RestrictNamespaces=true
 RestrictRealtime=true

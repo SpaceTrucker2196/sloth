@@ -37,7 +37,7 @@ def beacon(bssid, ssid, channel=6):
                 "0100" "000fac02"   # AKM: PSK
                 "0000")))            # RSN caps
 
-real  = "aa:bb:cc:01:02:03"
+real  = "a8:bb:cc:01:02:03"        # globally administered (see below)
 twin  = "11:22:33:44:55:66"        # different OUI
 sendp([beacon(real, "Cafe-Net"),
        beacon(twin, "Cafe-Net")], iface="wlan1mon", inter=0.1, count=20)
@@ -45,6 +45,11 @@ sendp([beacon(real, "Cafe-Net"),
 
 Expected: `EVIL_TWIN` WARN alert with key `twin-fp:Cafe-Net`; row
 appears in `[x] Twins`.
+
+Both addresses must be globally administered (bit `0x02` of the first
+octet clear). Since #188 a locally administered BSSID has no OUI to
+compare, so the `aa:bb:cc:..` address this page used before earns no
+"vendor OUI differs" credit and Phase 1 raises nothing with it.
 
 ## Phase 2 — Vendor-IE delta (escalates to CRIT)
 
@@ -67,6 +72,27 @@ sendp([beacon_with_vendor_ie(real, "Cafe-Net", real_v),
 Expected: the `twin-fp:Cafe-Net` alert is now CRIT with detail
 "vendor-IE fingerprint differs".
 
+Since #188 this needs both beacons on one band (the helper's
+`channel=6` default does that; vendor IEs are not compared across
+bands) and the different globally administered OUIs of Phase 1: the
+mismatch alone is 35 % and a soft-signal CRIT needs 50 %. With a
+same-OUI twin the row stays WARN.
+
+**Late arrival** (ruling 3b on #188): a twin on a locally administered
+address (say `02:9a:3c:71:5e:08`) has no OUI to differ, so sent together
+with the real AP as above it is WARN at 35 %. Keep the real beacon on
+the air, start the twin's beacon at least 120 s later
+(`twin.late_arrival_s`), and the row is CRIT at 55 % with
+`+late-arrival` in the detail and `>` in the `[x]` Twins flags. The
+sensor must be at rest: a gpsd fix at 1 m/s or more restarts the wait.
+The twin's BSSID must be new to the session under that SSID: if sloth
+heard it beacon `Cafe-Net` earlier and dropped it (300 s of silence),
+its return is not an arrival. Use a fresh BSSID, or clear the beacon
+table, between runs.
+The same delay on the Phase 1 or Phase 2 pair changes nothing: a late
+arrival is counted only where a half is locally administered, and it
+corroborates other evidence and never raises a row on its own.
+
 **Attacker OUI bonus**: swap the twin BSSID to `00:13:37:..` (Hak5) or
 `24:0a:c4:..` (Espressif) and the same WARN→CRIT escalation fires even
 without distinct vendor-IE bodies. Detail will read "attacker-tool OUI
@@ -76,7 +102,10 @@ present".
 
 scapy can't fake an adapter-level RSSI step directly — the RadioTap
 `dbm_antsignal` field is set by the receiving radio, not the sender.
-Reproduce by either:
+Since #189 the swing is reported only for a BSSID that is half of an
+`EVIL_TWIN` pair, so keep the Phase 1 pair on the air; the weakest
+reading in the window must be above -92 dBm, and a sensor that gpsd
+reports moving at 1 m/s or more stays silent. Reproduce by either:
 
 - **Physical**: walk the twin radio toward sloth's antenna while
   re-broadcasting. A 15 dBm swing inside 60 s fires
@@ -98,6 +127,13 @@ deauth = (RadioTap() /
           Dot11Deauth(reason=7))
 sendp([deauth] * 20, iface="wlan1mon", inter=0.02)
 ```
+
+Since #188 (ruling 4a) the chain needs a pair the scorer accepts, which
+the Phase 1 pair is (two globally administered OUIs). A twin on a
+locally administered address is named only with evidence of its own:
+use the Phase 2 vendor IEs on one band. Two addresses at most 2 bytes
+apart on different bands, first sent within 10 s of each other, are one
+device and are not named.
 
 Expected within 5 s of the last deauth:
 

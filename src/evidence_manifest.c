@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "evidence_manifest.h"
+#include "gps.h"
 #include "secure_file.h"
 #include "sha256.h"
 #include "sloth_clock.h"
@@ -383,6 +384,8 @@ int evidence_manifest_record_pinned(evm_pin_t *pin, const evm_meta_t *meta,
     json_str(fname, sizeof(fname), pin->name);
     json_str(inc,   sizeof(inc),   meta->incident_id ? meta->incident_id : "");
     json_str(rule,  sizeof(rule),  meta->rule ? meta->rule : "");
+    char locj[256];
+    gps_loc_json(meta->loc, locj, sizeof(locj));
 
     pthread_mutex_lock(&g_mu);
     int rc = -1;
@@ -406,6 +409,8 @@ int evidence_manifest_record_pinned(evm_pin_t *pin, const evm_meta_t *meta,
     if (rule[0] && n > 0 && (size_t)n < sizeof(line))
         n += snprintf(line + n, sizeof(line) - (size_t)n,
                       ",\"rule\":\"%s\"", rule);
+    if (locj[0] && n > 0 && (size_t)n < sizeof(line))
+        n += snprintf(line + n, sizeof(line) - (size_t)n, ",%s", locj);
     if (n > 0 && (size_t)n < sizeof(line))
         n += snprintf(line + n, sizeof(line) - (size_t)n,
             ",\"reconstructed\":%s,"

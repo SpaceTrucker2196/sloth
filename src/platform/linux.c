@@ -11,7 +11,10 @@
 #include "platform/linux_wifi.h"
 #include "platform/linux_dhcp.h"
 #include "platform/linux_tcpdiag.h"
+#include "platform/linux_neigh.h"
+#include "platform/linux_self.h"
 #include "sloth_clock.h"
+#include "sys_status.h"
 
 /* ── Rate tracking across polls ─────────────────────────── */
 
@@ -141,16 +144,25 @@ int linux_wifi_set_channel(const char *iface, int freq_mhz) {
     (void)iface; (void)freq_mhz;
     return -EOPNOTSUPP;   /* no nl80211 without WITH_WIFI */
 }
+int linux_wifi_get_wdev_macs(uint8_t (*out)[6], int max, int n) {
+    (void)out; (void)max;
+    return n;             /* rtnetlink and sysfs still name every netdev */
+}
 #endif
 
-/* ── ARP neighbor table ────────────────────────────────── */
+/* ── Neighbour table ───────────────────────────────────── */
 
+/* IPv4 from /proc/net/arp, then IPv6 from the kernel's neighbour cache
+ * over rtnetlink (linux_neigh.h, #176): both are what this host
+ * currently resolves, and a client that only ever speaks IPv6 has no
+ * row in the first. IPv4 rows come first so a dual-stack device's
+ * first binding is the one readers that keep one address prefer. */
 static int linux_get_arp(arp_entry_t *out, int max) {
-    FILE *f = fopen("/proc/net/arp", "r");
-    if (!f) return 0;
-    char line[256];
-    if (!fgets(line, sizeof(line), f)) { fclose(f); return 0; }  /* skip header */
     int n = 0;
+    FILE *f = fopen("/proc/net/arp", "r");
+    if (!f) return linux_neigh6_fill(out, max, n);
+    char line[256];
+    if (!fgets(line, sizeof(line), f)) { fclose(f); return linux_neigh6_fill(out, max, n); }  /* skip header */
     while (n < max && fgets(line, sizeof(line), f)) {
         char ip[46], hw[10], flags_str[10], mac_str[20], mask[10], iface[16];
         if (sscanf(line, "%45s %9s %9s %19s %9s %15s",
@@ -171,7 +183,7 @@ static int linux_get_arp(arp_entry_t *out, int max) {
         n++;
     }
     fclose(f);
-    return n;
+    return linux_neigh6_fill(out, max, n);
 }
 
 static void linux_init(void)    {}
@@ -187,6 +199,9 @@ platform_ops_t g_platform = {
     linux_init,
     linux_cleanup,
     linux_wifi_set_channel,
+    sys_io_read_file,   /* src/sys_status.c: regular files only */
+    sys_io_list_dir,
+    linux_get_self_macs, /* platform/linux_self.c (#183) */
 };
 
 #endif /* PLATFORM_LINUX */

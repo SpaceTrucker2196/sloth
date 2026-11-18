@@ -15,6 +15,7 @@
 #include "queue_evict.h"
 #include "seqnum_track.h"
 #include "transit.h"
+#include "tmp_dir.h"
 
 /* ── Operator-tunable thresholds — issue #82 ──────────────────
  *
@@ -45,6 +46,7 @@ static void test_defaults_are_the_shipped_values(void) {
     ASSERT_EQ((long long)tune_val(TUNE_EVIL_TWIN_PROXIMITY_DBM), 15);
     ASSERT_EQ((long long)tune_val(TUNE_DEAUTH_TWIN_WIN_SECS), 5);
     ASSERT_EQ((long long)tune_val(TUNE_TWIN_STEER_WINDOW_S), 300);
+    ASSERT_EQ((long long)tune_val(TUNE_TWIN_LATE_ARRIVAL_S), 120);
     ASSERT_EQ((long long)tune_val(TUNE_RECON_SUSTAIN_S), 600);
     ASSERT_EQ((long long)tune_val(TUNE_RECON_SUSTAIN_PROBES), 20);
     ASSERT_EQ((long long)tune_val(TUNE_KERB_PREAUTH_BURST), 5);
@@ -52,9 +54,13 @@ static void test_defaults_are_the_shipped_values(void) {
     ASSERT_EQ((long long)tune_val(TUNE_BGP_NOTIFICATION_BURST), 3);
     ASSERT_EQ((long long)tune_val(TUNE_SSH_BRUTE_FORCE), 10);
     ASSERT_EQ((long long)tune_val(TUNE_RDP_BRUTE_FORCE), 10);
+    ASSERT_EQ((long long)tune_val(TUNE_SSH_BRUTE_WINDOW_S), 60);
+    ASSERT_EQ((long long)tune_val(TUNE_RDP_BRUTE_WINDOW_S), 60);
     ASSERT_EQ((long long)tune_val(TUNE_SNMP_COMMUNITY_BRUTE), 5);
     ASSERT_EQ((long long)tune_val(TUNE_MQTT_BRUTE_CONNECTS), 10);
     ASSERT_EQ((long long)tune_val(TUNE_MQTT_BRUTE_FAILS), 5);
+    ASSERT_EQ((long long)tune_val(TUNE_SNMP_BRUTE_WINDOW_S), 60);
+    ASSERT_EQ((long long)tune_val(TUNE_MQTT_BRUTE_WINDOW_S), 60);
     /* #135: 4 slots per peer of 16; idle = 3 × JSONL_HEARTBEAT_SECS. */
     ASSERT_EQ((long long)tune_val(TUNE_SOCKET_MAX_PER_PEER), 4);
     ASSERT_EQ((long long)tune_val(TUNE_SOCKET_IDLE_SECS), 900);
@@ -69,8 +75,37 @@ static void test_specs_match_enum_order(void) {
     tune_reset();
     ASSERT_STR(tune_spec(TUNE_KARMA_SSID_THRESH)->name, "karma.ssid_thresh");
     ASSERT_STR(tune_spec(TUNE_SSH_BRUTE_FORCE)->name, "ssh.brute_force");
+    /* #202: windowed now, bound to the ring cap rather than the old
+     * 1000 a lifetime count never actually reached. */
+    ASSERT_EQ((long long)tune_spec(TUNE_SSH_BRUTE_FORCE)->hi, FLOOD_WIN_CAP);
+    ASSERT_EQ((long long)tune_spec(TUNE_RDP_BRUTE_FORCE)->hi, FLOOD_WIN_CAP);
+    ASSERT_STR(tune_spec(TUNE_SSH_BRUTE_WINDOW_S)->name, "ssh.brute_window_s");
+    ASSERT_STR(tune_spec(TUNE_RDP_BRUTE_WINDOW_S)->name, "rdp.brute_window_s");
+    /* #203: the same correction for the SNMP/MQTT brute thresholds. */
+    ASSERT_EQ((long long)tune_spec(TUNE_SNMP_COMMUNITY_BRUTE)->hi, FLOOD_WIN_CAP);
+    ASSERT_EQ((long long)tune_spec(TUNE_MQTT_BRUTE_CONNECTS)->hi, FLOOD_WIN_CAP);
+    ASSERT_EQ((long long)tune_spec(TUNE_MQTT_BRUTE_FAILS)->hi, FLOOD_WIN_CAP);
+    ASSERT_STR(tune_spec(TUNE_SNMP_BRUTE_WINDOW_S)->name, "snmp.brute_window_s");
+    ASSERT_STR(tune_spec(TUNE_MQTT_BRUTE_WINDOW_S)->name, "mqtt.brute_window_s");
     ASSERT_STR(tune_spec(TUNE_MQTT_BRUTE_FAILS)->name, "mqtt.brute_fails");
     ASSERT_STR(tune_spec(TUNE_TWIN_STEER_WINDOW_S)->name, "twin.steer_window_s");
+    ASSERT_STR(tune_spec(TUNE_TWIN_LATE_ARRIVAL_S)->name, "twin.late_arrival_s");
+    /* The floor keeps the wait above the sibling window (10 s) and one
+     * worst pass of the default hop list (22 s). */
+    ASSERT_EQ((long long)tune_spec(TUNE_TWIN_LATE_ARRIVAL_S)->lo, 30);
+    /* A day, as documented; unpinned until 2026-11-11, when a ceiling
+     * of 3600 passed the suite. */
+    ASSERT_EQ((long long)tune_spec(TUNE_TWIN_LATE_ARRIVAL_S)->hi, 86400);
+    /* #188, 2026-11-12: beacons from each half before a soft-signal
+     * EVIL_TWIN may be CRIT. 1 already switches the count off (every
+     * table entry has heard one), so 0 is refused rather than being a
+     * second spelling of it. */
+    ASSERT_STR(tune_spec(TUNE_TWIN_CRIT_MIN_BEACONS)->name, "twin.crit_min_beacons");
+    ASSERT_EQ((long long)tune_val(TUNE_TWIN_CRIT_MIN_BEACONS), 5);
+    ASSERT_EQ((long long)tune_spec(TUNE_TWIN_CRIT_MIN_BEACONS)->lo, 1);
+    ASSERT_EQ((long long)tune_spec(TUNE_TWIN_CRIT_MIN_BEACONS)->hi, 1000);
+    ASSERT_EQ(tune_set_id(TUNE_TWIN_CRIT_MIN_BEACONS, 0), 0);
+    ASSERT_EQ((long long)tune_val(TUNE_TWIN_CRIT_MIN_BEACONS), 5);
     ASSERT_STR(tune_spec(TUNE_RECON_SUSTAIN_PROBES)->name, "recon.sustain_probes");
     ASSERT_STR(tune_spec(TUNE_SOCKET_MAX_PER_PEER)->name, "socket.max_per_peer");
     ASSERT_STR(tune_spec(TUNE_SOCKET_IDLE_SECS)->name, "socket.idle_secs");
@@ -89,6 +124,21 @@ static void test_specs_match_enum_order(void) {
     ASSERT_STR(tune_spec(TUNE_QUEUE_EVICT_REPORT_SECS)->name, "queue_evict.report_secs");
     ASSERT_STR(tune_spec(TUNE_PRESENCE_MIN_SAMPLES)->name, "presence.min_samples");
     ASSERT_STR(tune_spec(TUNE_SEQNUM_CORR_DT_MAX_S)->name, "seqnum.corr_dt_max_s");
+    ASSERT_STR(tune_spec(TUNE_KARMA_FORGE_SSIDS)->name, "karma.forge_ssids");
+    ASSERT_STR(tune_spec(TUNE_KARMA_FORGE_WINDOW_S)->name, "karma.forge_window_s");
+    /* #187, 2026-11-12: the association window behind
+       KARMA_PROBE_FORGE's CRIT. Its ceiling is the forge window's
+       default; an association later than the row keeps its names is
+       never read. */
+    ASSERT_STR(tune_spec(TUNE_KARMA_FORGE_ASSOC_S)->name, "karma.forge_assoc_s");
+    ASSERT_EQ((long long)tune_val(TUNE_KARMA_FORGE_ASSOC_S), 60);
+    ASSERT_EQ((long long)tune_spec(TUNE_KARMA_FORGE_ASSOC_S)->lo, 5);
+    ASSERT_EQ((long long)tune_spec(TUNE_KARMA_FORGE_ASSOC_S)->hi, 600);
+    ASSERT_EQ(tune_set_id(TUNE_KARMA_FORGE_ASSOC_S, 4), 0);
+    ASSERT_EQ(tune_set_id(TUNE_KARMA_FORGE_ASSOC_S, 601), 0);
+    ASSERT_EQ((long long)tune_val(TUNE_KARMA_FORGE_ASSOC_S), 60);
+    ASSERT_STR(tune_spec(TUNE_HARVEST_WINDOW_S)->name, "harvest.window_s");
+    ASSERT_STR(tune_spec(TUNE_HARVEST_RECONNECT_S)->name, "harvest.reconnect_s");
     /* Every name is unique — two rows answering to one name would make
        --tune set whichever the lookup met first. */
     int dupes = 0;
@@ -236,11 +286,27 @@ static void test_non_default_list_truncates_cleanly(void) {
     ASSERT_EQ((long long)one[0], 0);
 }
 
+/* karma.ssid_thresh cannot be set past the beacon history's length:
+ * ssid_history_n never exceeds MAX_AP_SSID_HISTORY, so a larger value
+ * would make KARMA_AP unable to fire. */
+static void test_karma_thresh_capped_at_history(void) {
+    tune_reset();
+    char err[160];
+    char ok[48], over[48];
+    snprintf(ok, sizeof(ok), "karma.ssid_thresh=%d", MAX_AP_SSID_HISTORY);
+    snprintf(over, sizeof(over), "karma.ssid_thresh=%d", MAX_AP_SSID_HISTORY + 1);
+    ASSERT_EQ(tune_set(ok, err, sizeof(err)), 0);
+    ASSERT_EQ((long long)tune_val(TUNE_KARMA_SSID_THRESH), MAX_AP_SSID_HISTORY);
+    ASSERT_NE(tune_set(over, err, sizeof(err)), 0);
+    ASSERT_EQ((long long)tune_val(TUNE_KARMA_SSID_THRESH), MAX_AP_SSID_HISTORY);
+    tune_reset();
+}
+
 static void test_reset_restores_every_default(void) {
     tune_reset();
     char err[160];
-    ASSERT_EQ(tune_set("karma.ssid_thresh=9", err, sizeof(err)), 0);
-    ASSERT_EQ(tune_set("mqtt.brute_fails=99", err, sizeof(err)), 0);
+    ASSERT_EQ(tune_set("karma.ssid_thresh=6", err, sizeof(err)), 0);
+    ASSERT_EQ(tune_set("mqtt.brute_fails=20", err, sizeof(err)), 0);
     ASSERT_EQ(tune_non_default(), 2);
     tune_reset();
     ASSERT_EQ(tune_non_default(), 0);
@@ -250,7 +316,8 @@ static void test_reset_restores_every_default(void) {
 
 static void test_print_list_covers_every_knob(void) {
     tune_reset();
-    char path[] = "/tmp/sloth_tune_list_test.txt";
+    char path[TEST_TMP_MAX];
+    test_tmp_path(path, sizeof(path), "sloth_tune_list_test.txt");
     FILE *f = fopen(path, "w");
     ASSERT(f != NULL);
     tune_print_list(f);
@@ -555,6 +622,7 @@ void run_tune_tests(void) {
     RUN_TEST(test_a_value_equal_to_the_default_is_not_tuned);
     RUN_TEST(test_non_default_list_names_the_knobs);
     RUN_TEST(test_non_default_list_truncates_cleanly);
+    RUN_TEST(test_karma_thresh_capped_at_history);
     RUN_TEST(test_reset_restores_every_default);
     RUN_TEST(test_print_list_covers_every_knob);
     RUN_TEST(test_a_tuned_threshold_reaches_the_detector_macro);

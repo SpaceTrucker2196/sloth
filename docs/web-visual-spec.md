@@ -1,0 +1,596 @@
+# sloth web UI: visual system specification
+
+**Working name:** the sloth glyph set
+**Applies to:** `web/ui/` (slothweb), with parity notes for the TUI
+**Status:** draft for the owner to read, 2026-10-26; slices V0, V1, V2, V3 and V4 built, and #195's leftovers (§10)
+**Companion:** `docs/web-ui-spec.md` (the UI spec; its rulings table wins where the two disagree)
+
+> **Owner rulings, 2026-10-26** (these win over the body below):
+>
+> | §11 item | Ruling |
+> |---|---|
+> | Channels (F8 / G3) vs the stacked top-5 cells the owner asked for on 2026-10-23 | **Both**: G3 horizon strips for "how busy against normal"; selecting or hovering a column shows the stacked top-5 transmitters in their TUI colours (the stacking work is the drill-in) |
+> | 1. Sparkline ink (F7) | **Keep TUI parity**: web sparklines keep the TUI's level-graded colours. R1's "one ink" therefore applies to every glyph except G1's line, which grades like `draw_sparkline_at()`; out-of-band is still marked by the band and the last-value dot |
+> | 2. Glyph test harness (§9) | **C-side** through the embed path, so `make web-test` stays dependency-free (default taken; owner did not object) |
+> | 3. G2 reference line | **Keep -67 dBm**, captioned as a field rule of thumb, not a standard (default taken) |
+> | 4. Flows first mode (F11) | **Matrix first**, chord second |
+> | 5. Overview tile order (§6.1) | **Urgency first**: open alerts, open anomalies, sensor health, throughput, devices, records |
+>
+> **Owner ruling, 2026-11-11** ("color the 24 hour presence based on night sunrise day sunset"): **G5's present cells are coloured by the sun's phase at the sensor**, night, sunrise, day or sunset, in the four `--sun-*` tokens. This is a second exception to R1's "one ink", for G5 only (G1's line is the first). The phase is taken at the sensor's own position and nowhere else; with no position, or a cell longer than an hour, a present cell is `--tui-normal` as before. §5 G5 and R1 below are written to it. **Follow-up ruling the same day:** the ruler's midnight ticks and the sunrise and sunset times in the strip's words are in the **sensor's** time zone (the UTC offset the server reports, slothweb's host's), not the viewer's clock, so the ticks and the sun band agree; every other time label on the page stays the viewer's, and the ruler's words state the exception. The four colours and the full ruler in the three table headers stand as built.
+>
+> **Owner ruling, 2026-11-11** ("make the activity page able to show all the keys on the graph with color coding"; it wins over the body below as the six above do):
+>
+> | Rule | Ruling |
+> |---|---|
+> | R1, one ink | **Set aside for one graph mode.** The Activity graph's `keys: all` draws every key of the selected metric as its own line (a presence metric: its own strip) in that key's identity colour, the eight hash hues R1 already grants to addresses. Nowhere else: `keys: one`, the default, and every other glyph keep R1. Colour is never the only carrier there (R10): the legend is ranked and numbered, the top five lines carry their rank and key at their right end, and a legend entry hovered, focused or picked draws its line last in its colour with every other line in `--faint`. The band is one key's, so it is drawn only for a picked key; the now mark stays the panel's one `--signal`. §6.2 |
+> | "All the keys" (same day, on the first build's questions) | **Lift the cap**: all means every key of the metric in the window, the rollup's and the store's, not the key picker's 256 most recently seen; read a page at a time and drawn as it arrives (`loading N of M keys`), and whatever bound remains is said as `N of M keys`, never silent. The key picker keeps its 256. |
+> | Dimmed lines (same day) | **A little more visible**: an unfocused line is `--faint` (2.84:1 on `--bg`, 2.72:1 on `--panel` dark; 3.03 and 3.39 light), not `--rule` (1.65 and 1.58; 1.34 and 1.51). Not `--tui-dim` (4.55:1): it is a phosphor green, a ninth hue among eight key colours. |
+> | 30 d in `keys: all` (same day) | **Keep the hour tier.** |
+
+> **Owner rulings, 2026-11-11** (these win over the body below and over ruling 3 above):
+>
+> | Subject | Ruling |
+> |---|---|
+> | Every signal graphic | "make all signal graphs a s-meter style bar". **G2's range sparkline is replaced by the S-meter** (§5 G2, rewritten below) in every place the page draws a signal's strength: the DBM columns, the drawer, the Lookup card, the emitter report (as text), the BLE drawer, and on their own units the GNSS C/N0 cell (the per-row C/N0 trail goes with it) and the ADS-B signal cell. Where this document says G2 in §4, §6, §7 and §10 it now means the meter |
+> | The scale | **Confirmed**: 6 dB per S-unit, S1 = -95 dBm and S9 = -47 dBm at 2.4 GHz. A display scale, not the IARU reference (S9 = -93 dBm above 30 MHz), which would pin nearly every 802.11 reading past S9 |
+> | The S reading | "yes add S+ numbers for wifi". **Required** beside every 802.11 meter, with the dBm number kept: `S1` to `S9`, then `S9+10` and `S9+20`, stepped in tens as the face's segments are (the exact figure is the dBm number). BLE RSSI carries the same reading |
+> | The band | "make the s-meter appropriate for the band". **The scale is the band's**: one table (`SM_BANDS`, `web/ui/glyph.js`) gives each band's S9, the 5 and 6 GHz rows lower than 2.4 GHz by the extra free-space path loss. **This amends R3** for the meter: an RSSI glyph is on its band's scale, not one fixed scale, and every table says so once with each band's S9; the dBm number beside the meter is the raw value on every band |
+> | Ruling 3 (the -67 dBm line) | **Dropped from the glyph.** The meter carries two peak-hold ticks; a third tick for -67 dBm does not read at 72 px. -67 dBm is S5 at 2.4 GHz |
+
+> **Owner ruling, 2026-11-11** ("check the heat map for hour of week presence, it always only has one tile highlighted"; it wins over the body below as those above do):
+>
+> | Rule | Ruling |
+> |---|---|
+> | G4, F3: an all-warming grid draws only the now outline | **Always draw the grid.** Every one of the 168 cells is drawn whenever the glyph has cells at all, a warming cell as the plain `--rule` tile, so the first three weeks of a store, and any device first seen under three weeks ago, are a grid and not one outlined tile. No cells at all (no baseline for the pair) is R5's `no data` dash alone, with no outline and no labels, and the caption says `no data` |
+> | R8 and G4: a warming cell makes no claim | **Provisional colour from week one.** A warming cell with at least one sample (1 <= n < warm) says its value so far, in a form that cannot be taken for a fed cell: a bar in one ink, `--tui-dim`, on the cell's `--rule` tile, rising from the tile's floor, 1 px for a value of 0 (observed, nothing so far) and a quarter, a half or three quarters of the tile for a value in the first, second or last third of the provisional scale. The bar never fills the tile and never takes a heat token; the heat ramp stays a fed cell's alone (n >= warm). The provisional scale is fixed, 0 to 1, for a map of shares (the drawer's presence map), and 0 to the largest mean of any sampled cell otherwise; the caption names it, and counts the fed, the provisional and the not yet observed cells. No hatch (R8 stands). A cell never sampled (n = 0) is the tile alone, so observed-absent (the 1 px floor) and never-observed differ. §5 G4, F3 and R8 below are written to it |
+
+## 0. What this document is
+
+This is a review of the slothweb page and a specification for a small set of graphics that the page should use. The graphics follow the rules Edward Tufte sets out in *The Visual Display of Quantitative Information*, *Envisioning Information* and *Beautiful Evidence*, and the later work that tested those rules (Cleveland on aspect ratio, Heer on horizon graphs, Few on bullet graphs). The review is written from two seats: a security researcher who watches a local network, and an intelligence analyst who must keep situational awareness of the local RF environment.
+
+The review covers everything except the theme. Colour tokens, the Spacetrucker chrome and the light theme are settled by the 2026-10-23 ruling and are not reopened here. Where a graphic needs a colour, it uses a token that already exists.
+
+**How the page was reviewed.** The live page at the Tailscale address was not reachable from the session that wrote this, so the review used the M6 demo screenshots in `docs/assets/slothweb/` and the source in `web/ui/app.js`, `web/ui/index.html`, `web/ui/page.css`, together with the server headers that say what data exists. Section 11 lists the things to confirm on the live page.
+
+## 1. The operator's four questions, restated for RF
+
+`docs/web-ui-spec.md` §1 gives four questions. For an analyst who watches the air as well as the wire, they read:
+
+1. **Is anything on fire now?** An attack, a flood, a new emitter.
+2. **Is this normal?** For this hour of this weekday, for this device, for this channel.
+3. **Which thing is the outlier?** Which device, host, BSSID or channel.
+4. **Who or what is it, and how near is it?** Identity, vendor, and the physical proximity that RSSI implies.
+
+The fourth question has a half that the current page does not answer: how near is it, and is it getting nearer. Every other question has a graphic today. That one has a number (`DBM -47`) with no history.
+
+Endsley's model of situation awareness gives the same three levels in different words: perception (what is there), comprehension (what it means, compared to normal), projection (what happens next). A display supports an analyst only if it serves all three. The current page serves the first well, the second in part, and the third not at all. Section 6 maps every proposed graphic to one of the three.
+
+## 2. Findings: the page as it stands
+
+Each finding names the view, what the screenshot or the code shows, why it matters to the analyst, and the fix. The fix refers to a glyph in section 5 where one applies. Findings are ordered by how much they cost the operator, not by view.
+
+### F1. The KPI tiles show a number with nothing to compare it to
+
+Overview. `DEVICES 23`, `OPEN ALERTS 0 2 0`, `OPEN ANOMALIES 0`, `RECORDS/S 111.8`. Only throughput has a sparkline. The code says why: "devices, alerts and anomalies are counts with no stored series behind them". Tufte's first question of any number is *compared to what?* A device count of 23 means one thing at 14:00 on a Tuesday when the baseline is 24, and another at 03:00 when the baseline is 6.
+
+**Fix.** Store a series for each tile (`live.devices`, `live.alerts_open`, `live.anomalies_open`, `live.records_rate`; §7). Every tile gets glyph G1 (band sparkline) and the delta words that G1 prescribes: the value, the band for this hour, and the direction since the last bucket. The tile's explanatory sentence moves to a hover note.
+
+### F2. The throughput sparkline is one spike in an empty box
+
+Overview, Activity. After one minute of running, the 24 h window puts every sample in the last 1 to 2 pixels. The "now vs normal" chart is a vertical line at the right edge, and both axis labels read `10:25:00`. The analyst learns nothing, and the page looks broken during the first hours of every deployment, which is when the analyst is most likely to be watching it.
+
+**Fix.** A chart whose data covers less than a tenth of its window must either shrink the window to the data span and say so ("6 min of 24 h"), or draw the empty span as a labelled gap. The axis must carry at least three time labels, and a "now" mark at the right edge. This is rule R4 (§8).
+
+### F3. The hour-of-week heatmap hatches 168 cells
+
+Overview. With no baseline, every cell is grey with a diagonal hatch. Tufte names hatching as the first source of moiré vibration, "the unintended optical noise of the design", and the screenshot shows it: the grid flickers and the one outlined cell (now) is hard to find. Hatching also fails the smallest-effective-difference test: a warming cell needs to differ from a cold cell, and a lighter grey does that.
+
+**Fix.** A warming cell is `--rule` with no hatch. The panel caption says `warming: 168 of 168 cells`. The now cell keeps its outline. Glyph G4 (§5). *As first written, an entirely warming grid drew the outline and the caption only; the owner found that it read as broken (one tile on an empty canvas for three weeks) and ruled on 2026-11-11 that the grid is always drawn and a sampled warming cell carries a provisional mark (the head of this document, G4).*
+
+### F4. Explanatory prose lives inside the data tiles
+
+Overview. The anomalies tile carries three lines on rule A4 and the vendor table. The throughput tile carries "rx, 24 h, band = mean ± k sd". Tufte asks for documentation, but as a layer under the data, not in the data's place. A tile is read in a second; a sentence is not.
+
+**Fix.** Every panel keeps one caption line in `--muted` under the graphic, in the form `source, window, tier, n` (rule R9). Longer explanation goes behind the `?` key or a hover note. The A4 reason belongs in the status strip's DB pill.
+
+### F5. Sensor facts and server facts share one strip
+
+All views. The strip reads `SENSOR connected | DEVS 23 | ALERTS 2 | ANOMALIES 0 | REC/S 111.8 | TICK 61 | UP 1m1s | CLIENTS 2`. Tick, uptime and client count describe slothweb. Devices, alerts and anomalies describe the network. The footer repeats `SOCK | DB | STORE`. Tufte's layering principle: separate what is about the subject from what is about the instrument.
+
+**Fix.** The top strip holds only network facts, each with a G1 glyph 40 px wide. The footer holds every slothweb fact (`SOCK DB STORE TICK UP CLIENTS`). One row each, never mixed.
+
+### F6. Small multiples do not share a scale, and do not say so
+
+Activity. Each cell in "every key, last hour" is drawn against its own maximum. The `eth0` cell at 312.8 kB/s and the `wlan0mon` cell at 29.4 kB/s show the same height of line. Tufte's small multiples work because "the design is constant and only the data varies"; a reader who understands one cell must be able to read every other one at a glance. A silently varying y-scale breaks that contract. The spec (§8.5) also asks for a sort by `abs(z)`; the code sorts by current value.
+
+**Fix.** A shared y-scale by default, with the maximum printed once in the panel caption. A `scale: shared | own` toggle for the case where one key dwarfs the rest, and when `own` is selected every cell prints its own maximum in `--faint` at its top left. Sort by `|z|` when a baseline exists, by value otherwise, and name the sort in the caption. Glyph G1 in its stacked form.
+
+### F7. The sparkline carries its value twice
+
+Overview, Activity, Anomalies. `draw()` with `spark: true` colours each segment by level (dim, normal, heat mid, heat high, peak) exactly as the TUI does. Height already encodes the value; the colour encodes it a second time. Tufte: "erase redundant data-ink". It also spends the heat ramp, which the page otherwise reserves for *out of band*, on *high but normal*. A reader who has learned that red means anomalous on the band chart sees red on a sparkline that is merely busy.
+
+**Fix.** On the web, a sparkline is one ink (`--tui-normal`). Colour appears only where the value leaves its band (the heat ramp, as the band chart already does) or where there is no band and the point is the maximum of the window (one dot). The TUI keeps its graded glyphs for parity with its own history; this is an owner decision and is listed in §11.
+
+### F8. The channel waterfall normalises to its busiest cell
+
+WiFi. `waterfall()` colours every cell against the maximum in view. With one sample the screenshot shows six saturated yellow blocks and one red one, for channel 6 at a demo load that is not unusual. When the window changes, every colour changes. Tufte again: compared to what? Channel occupancy has a natural scale (0 to a known busy level), and AP count has a natural scale (0 to the most ever seen on that channel). A colour that means "busiest in the last hour" means nothing when the whole hour was quiet.
+
+**Fix.** An absolute scale per metric: `ap_count` against the channel's own 30 d maximum; `ctrl_total` against its hour-of-week baseline as a z-score. The caption prints the scale. The waterfall becomes glyph G3 (horizon strip), one row per channel, which also solves the empty-area problem in the screenshot (seven rows, 96 columns, one column filled).
+
+### F9. RSSI is a number in a column
+
+Devices, WiFi, Lookup. `DBM -47`, `-38`, `-55`. The AP table has `DBM -41`. The `beacon` record carries `rssi_min_60s` and `rssi_max_60s`, and `twin_episode` carries `rssi_swing_dbm`, so the sensor already measures the spread. None of it is drawn. For an analyst, RSSI over time is the only passive proxy for physical distance and motion: a BSSID whose signal climbs from -80 to -45 over ten minutes is a radio walking toward the building. A number cannot show that; a 24-point sparkline can.
+
+**Fix.** A per-BSSID and per-client RSSI series (`ap.rssi`, `sta.rssi`, §7) and glyph G2 (range sparkline: the line, the 60 s min to max whisker, the last value). It goes in the DBM column of every table that has one, 72 px wide, and in the device drawer at full width.
+
+### F10. Presence strips have no time axis
+
+Devices, History. The 144-cell strip is the best Tufte object on the page: a binary sparkline, like his win-loss example. But it has no tick for midnight or for "now", so the reader cannot tell 03:00 from 15:00 without counting cells. The column header reads `24 H PRESENCE` and nothing else.
+
+**Fix.** One `--faint` tick above the strip at each local midnight and one `--signal` tick at now, drawn once in the column header rather than per row, so the rows stay clean. Glyph G5.
+
+### F11. The flows chord diagram asks the reader to trace crossing arcs
+
+Flows. The chord is drawn well, and the spec is honest that it is "the one place a relationship drawing earns its space". Still, in the screenshot six lines cross the centre, two labels sit on arcs, the protocol needs a legend, and the width-by-log rule makes a 64-count pair look like a 9-count pair. Tufte has no objection to a network drawing, but he does object to a drawing whose primary reading needs a legend and a steady hand.
+
+**Fix.** Keep the chord as the second mode. The first mode is a source by destination matrix: rows are sources, columns destinations, both in address order with subnets grouped, each cell a G6 count glyph (a bar with the number). Protocol becomes a small letter in the cell, not a hue. The matrix answers "who talks to whom" in one scan and needs no legend.
+
+### F12. The 30 d history strip draws every day as the same tick
+
+History. Every device first-seen is a teal tick of one height; every alert is an orange tick of one height. A day with one new device looks like a day with thirty. Tufte would draw the count.
+
+**Fix.** Glyph G7 (event rug with height): the tick height is the count in that column, on a shared scale, and the caption prints the maximum. Survey sessions keep their white line.
+
+### F13. The anomaly card draws its score bar but not its evidence
+
+Anomalies. The card has a score bar (orange on grey) and the sentence. The sparkline of the metric that fired is drawn only when the series fetch succeeds and is blank in the screenshot. An analyst deciding whether A8's "9 of 27 NXDOMAIN in 10 min" is worth an hour of work needs the shape: was it one burst or a steady drip?
+
+**Fix.** Every card carries G1 with the episode window shaded in `--signal` at 12 percent and the band behind it. If the fetch fails, the card says `series unavailable` in the glyph's place, never a blank.
+
+### F14. No graphic shows the attack chain
+
+All views. sloth's own rules know that a deauth flood, then an evil twin, then a client association to the twin is one event in three parts (`twin_episode.attack_in_progress`). The page shows the three in three places: the deauth timeline, the AP table, the alerts list. Tufte's causality principle: show the mechanism, not three descriptions. Endsley's projection level: the analyst needs to see where in the chain the event is, to know what comes next.
+
+**Fix.** Glyph G8 (chain timeline) on the WiFi view and in the drawer: one horizontal time axis, one lane per stage, each event a mark, the lanes joined where sloth linked them. Section 6.3.
+
+### F15. New things look like old things
+
+Devices, WiFi. The History view computes "new since the previous session" well. The Devices table and the AP table do not mark a row that is new today. The analyst's most valuable signal in a stable environment is the thing that changed. The devices query language has `first:<7d`, but a filter is not a cue.
+
+**Fix.** A `new` mark (a filled `--signal` dot before the swatch) on any row whose `first_seen` is within the current window, and a count in the panel caption (`24 shown, 3 new today`). Glyph G5 also gains a first-seen tick.
+
+### F16. The deauth timeline and probe-client chart are empty boxes
+
+WiFi. Both panels reserve a quarter of the page and draw nothing in the demo. The probe-client line is a step with no band.
+
+**Fix.** Panels collapse to their caption when empty (`0 deauth in the window`). The probe-client chart gets its band from the baseline that `wifi.probe_clients` already has.
+
+### F17. Every table column is text, including the ones that are a quantity
+
+Devices, WiFi, Flows. `RISK 2`, `ANOM 0`, `karma 82`, `banner 64`, `TOTAL 9`. Few's bullet graph and Tufte's sparkline exist for exactly these cells: a quantity with a qualitative range, inside a table.
+
+**Fix.** Glyph G6 (bullet) for bounded scores (risk, karma, confidence). Glyph G6 in its bar form for counts in a column, so the column reads as a bar chart without leaving the table.
+
+### F18. The band is drawn, but its width is not stated
+
+Activity, Overview. The band is mean ± k sd at the slider's k. The slider sits on the Overview only. On the Activity view the reader sees a band and does not know whether it is 1.5 or 4 sd.
+
+**Fix.** The caption prints `band ±2.0 sd` on every band chart, and the slider is in the footer on every view.
+
+### F19. Nothing says how much data is behind a graphic
+
+All views. A sparkline from three buckets looks like a sparkline from 8,640. Tufte's documentation principle: state the n.
+
+**Fix.** Rule R9: every caption ends with `n=…` buckets, and a glyph with fewer than 5 points draws dots, not a line.
+
+### F20. The Lookup card is text only
+
+Lookup. The card answers "who is it" and stops. The device's presence strip and RSSI sparkline exist on other views.
+
+**Fix.** The Lookup card ends with the same G5 and G2 glyphs the drawer shows, so the analyst does not leave the view to see when the device is usually present and how near it usually is.
+
+## 3. The principles this spec holds every graphic to
+
+Each principle is stated as a rule, with its source. The rules in §8 are the operational form.
+
+- **P1. Compared to what.** Every quantity is shown against a reference: the band for this hour of the week, the device's own history, or the channel's own maximum. A bare number is a defect. (Tufte, *Beautiful Evidence*, the six principles: comparisons.)
+- **P2. Word-sized.** The default graphic is a sparkline: "small, intense, simple, word-sized graphics with the resolution of typography". It sits where a word or number sits: in a table cell, in a tile, in a sentence. (Tufte, *Beautiful Evidence*, pp. 46-63.)
+- **P3. The data is the ink.** No frame, no grid, no axis where a label will do. Non-data ink is erased first; then redundant data ink. (Tufte, *The Visual Display of Quantitative Information*, the data-ink ratio.)
+- **P4. Small multiples share a design and a scale.** A stack of sparklines uses one y-scale unless the caption says otherwise. "Once viewers understand the design of one slice, they have immediate access to the data in all the other slices." (Tufte, *Envisioning Information*.)
+- **P5. Smallest effective difference.** Marks differ by the least that still reads. Grey before colour, thin before thick, one hue before two. Hatching never. (Tufte, *Visual Explanations*; *Envisioning Information*, layering and separation.)
+- **P6. One accent, spent once.** `--signal` marks one thing per panel: now, the selected row, or the live alert. The heat ramp marks out of band and nothing else. (The existing §8.12 ruling, "if two things are orange, one is wrong", applied to every glyph.)
+- **P7. Lumpy, not spiky.** A sparkline's height is chosen so the typical slope is near 45 degrees; a tall thin spike reads worse than a gentle hill of the same data. (Cleveland 1988, banking to 45; adopted by Tufte for sparklines. Later work shows the exact angle matters less than avoiding the extremes.)
+- **P8. Micro and macro.** A panel reads at arm's length as a shape, and up close as data. The horizon strip and the matrix are chosen because they survive both readings. (Tufte, *Envisioning Information*, micro/macro readings.)
+- **P9. Show the mechanism.** When sloth knows that A caused B (a deauth then a twin, a probe then an association), the graphic draws the link. (Tufte, the six principles: causality.)
+- **P10. Document on the graphic.** Source, window, tier, scale and n are on the panel, in one line, every time. (Tufte, the six principles: documentation.)
+- **P11. Integrate words and pictures.** The number sits beside its sparkline, the label beside its line. No legends where a direct label fits. (Tufte, the six principles: integration.)
+- **P12. Say when there is nothing.** Empty, warming, and gap are three different states and must look different. An empty box is never an answer. (Tufte on the Challenger charts: the data that was missing from the display was the data that mattered.)
+
+## 4. The analyst's questions, by Endsley level
+
+| Level | Question | Graphic (§5) | Where (§6) |
+|---|---|---|---|
+| 1 Perception | What is on the air now? Which channels, how many emitters, how loud? | G3 channel horizon, G2 RSSI | WiFi: the air picture |
+| 1 Perception | What is on the wire now? | G1 in the strip and tiles | Overview |
+| 1 Perception | What arrived in the last hour that was not here before? | G5 with first-seen tick, the `new` mark | Devices, WiFi, History |
+| 2 Comprehension | Is this level normal for now? | G1 band, G4 heatmap | Overview, Activity |
+| 2 Comprehension | Is this device where and when it usually is? | G4 per device, G5 | Drawer, Devices |
+| 2 Comprehension | Who is it? | the card (text), G6 confidence | Lookup, drawer |
+| 2 Comprehension | How near is it? | G2 RSSI with whisker | Devices, WiFi, drawer |
+| 2 Comprehension | What does it talk to? | the matrix, G6 | Flows |
+| 3 Projection | Is it getting nearer? | G2 slope and last-value mark | Devices, WiFi |
+| 3 Projection | Where in the attack chain are we? | G8 chain timeline | WiFi, drawer |
+| 3 Projection | Will this hour's load leave the band? | G1 with the band drawn ahead of now | Activity |
+| 3 Projection | Is the sensor still able to see? | G1 on `sensor_health` drops, the footer | Footer |
+
+## 5. The glyph set
+
+Eight glyphs. Each is one function in `app.js` (a `glyph.*` namespace beside `draw()`), drawn on canvas at device pixel ratio, sized by its container, and with the same states: empty, warming, gap, single point, normal, out of band. Every glyph has a TUI form so the two surfaces keep one grammar.
+
+Sizes are in CSS pixels. The text line is 13 px on the body and 12 px in tables (§8.2 of the UI spec), so a word-sized glyph is 14 px tall in a table and 18 px in a tile.
+
+### G1. Band sparkline
+
+Answers: *what is the value now, and is it normal.*
+
+```
+                 ·        ← max dot, --faint, only when no band
+   ░░░░░░░░░░░░░░░░░░░░   ← band: mean ± k sd for each bucket's hour, --data at 12 %
+   ─────╮  ╭──╮  ╭────●  ← line: one ink; out-of-band segments in the heat ramp
+        ╰──╯  ╰──╯       ← last value: a 2.5 px dot, --ink; heat colour if out of band
+   459.7k B/s  band 280k to 610k  ↑   ← the words beside it, same line
+```
+
+- **Size:** 60 to 120 px wide, 14 or 18 px tall. The height is fixed; the y-range is the band's range widened to include the data, so the typical slope stays shallow (P7). Never autoscale to the last spike alone.
+- **Marks:** the line (1 px), the band, the last-value dot. A max dot and a min dot (`--faint`) only when there is no band, because then the range is the only reference.
+- **Words:** value, band lo to hi, and one of `↑ ↓ →` for the direction since the previous bucket. On a tile, the value is the hero number and the words sit under the glyph.
+- **States:** empty draws a `--faint` dash and `no data`; warming draws the line with no band and `warming` in the caption; a gap of more than 2.5 steps breaks the line; fewer than 5 points draw dots.
+- **Colour:** one ink. Heat only out of band. No level grading (F7).
+- **TUI form:** the existing `▁▂▃▄▅▆▇█` sparkline in `CP_NORMAL`, with the last cell in `CP_HEAT_*` when out of band. The band is the `±` number after it.
+
+### G2. S-meter (signal strength)
+
+Answers: *how near is this emitter, and how much has it moved.*
+
+Owner rulings of 2026-11-11 (the header). A receiver's S-meter: a horizontal bar of segments lit up to the reading.
+
+```
+   ▮▮▮▮▮▮▮▯▯ ▯▯   S7 -58  room ↘     ← lit to the last value; the S reading, the dBm, sloth's words
+       ╵   ╵                         ← two peak-hold ticks: the window's least and greatest
+   S 1 2 3 4 5 6 7 8 9  +10 +20      ← the face, drawn once per table with every band's S9
+```
+
+- **Data:** unchanged: the row's `"rf"` member (`rf.rssi.bssid`, `rf.rssi.sta`, §7 as built), `rf.rssi.ble` in the BLE drawer, the report's `series_rssi`.
+- **The face:** nine segments S1 to S9, 6 dB apart, then two segments 10 dB apart (`+10`, `+20`), to 27 dB over S9. A segment is lit when the value has reached its edge. Whole-pixel segments 1 px apart, 3 px at the S9 boundary.
+- **The scale is the band's** (this amends R3):
+
+| Band | Middle used | S9 | S1 | Top of the face | Reasoning |
+|---|---|---|---|---|---|
+| 2.4 GHz (and BLE) | 2442 MHz | -47 dBm | -95 dBm | -20 dBm | S1 is the floor of the range R3 gave every RSSI glyph, eight 6 dB units under S9; the top is that range's top |
+| 5 GHz | 5500 MHz | -54 dBm | -102 dBm | -27 dBm | 20 log10(5500 / 2442) = 7.05 dB more free-space path loss than 2.4 GHz, so the whole scale is 7 dB lower |
+| 6 GHz | 6535 MHz | -56 dBm | -104 dBm | -29 dBm | 20 log10(6535 / 2442) = 8.55 dB, rounded to 9 |
+| unknown | - | the 2.4 GHz row | | | a reading whose row names no band reads on the 2.4 GHz row and its label says `band unknown: 2.4 GHz scale`; a band is never guessed |
+
+  The band is the one the row's own record names: sloth's band label where there is one (the `"rf"` member's `radio`, from the latest beacon's or probe_client's channel and a beacon's `channel_source`; the report's BEI band), else the row's channel number as `ap_band_label()` reads one. A probe has no `channel_source`, so a 6 GHz channel number in one reads as the 2.4 or 5 GHz number it shares. The step is 6 dB on every band. Sloth reports no dBm for a ham or aviation band (ADS-B's RSSI is dBFS; APRS carries none), so the IARU reference is used nowhere.
+- **Marks:** the lit run (`--tui-normal` to S9, `--heat-3` past it), an unlit segment as a 2 px `--rule` line, and two `--ink` ticks at the window's least and greatest reading, full height, on the same band's row. The ticks are what the sparkline's line said about movement; they are drawn only where the window moved. No -67 dBm rule.
+- **Words:** the S reading (`S7`, `S9+10`: stepped as the face is) and the dBm number, always both. The number is bold when sloth's own trend says approaching, and sloth's band and trend glyph follow, as before. The canvas's label says the reading, the range and the scale in words.
+- **Size:** 72 by 14 px in a table cell, as G2 was; 18 px tall at a drawer's width.
+- **States:** no reading is the `--faint` dash and no segment; one reading is the lit run alone; a reading past either end is drawn at the end and counted (`glyph.smClamped()`).
+- **Greyscale (R10):** lit against unlit is height as well as tone; the S9 boundary is the wider gap; the ticks are the only full-height marks.
+- **Other units:** a strength that is not dBm has no S-units. GNSS C/N0 is the same face over 0 to 50 dB-Hz in ten equal segments, ADS-B's RSSI over -50 to 0 dBFS in ten, neither with a second run or labels.
+- **TUI form:** the character cells the emitter report prints, `███████▁▁ ▁▁  S7`, a full block a lit segment and `▁` an unlit one, a space at S9; the TUI's Devices Enter detail draws it (#195, `src/tui_glyph.c`), the window's least and greatest reading written under it in words, since a character row has no room between segments for the ticks.
+
+#### G2 as first specified: the range sparkline (superseded 2026-11-11)
+
+Kept for the record; `glyph.g2()` is still in `web/ui/glyph.js` with its tests and has no caller.
+
+Answered: *how near is this emitter, and is it moving.*
+
+```
+   -40 ┤          ╭─●  -45   ← last value and the number, bold if climbing 10 dB in 10 min
+       │      ╭───╯ ┃         ← whisker: rssi_min_60s to rssi_max_60s at the last sample
+   -90 ┤──────╯     ┃
+```
+
+- **Data:** `ap.rssi` keyed by BSSID, `sta.rssi` keyed by MAC (§7), gauge, fine tier. The whisker from `rssi_min_60s` and `rssi_max_60s` on `beacon`, or `rssi_swing_dbm` on `twin_episode`.
+- **Scale:** fixed, -95 to -20 dBm, the same on every glyph (P4). A fixed scale is what makes "near" readable across rows: a line near the top is near, everywhere on the page.
+- **Marks:** the line, the whisker at the last sample, the last-value dot. A short `--faint` rule at -67 dBm, the usual "good coverage" line, so the reader has one reference without an axis.
+- **Words:** the last value in dBm. The number is bold when the 10-minute slope exceeds +1 dB/min (approaching), and the caption of the panel says `3 approaching` so the reader finds them.
+- **Size:** 72 px wide in a table cell; full panel width in the drawer, where the x-axis gets its three time labels.
+- **States:** as G1. A device with one sample draws the dot and the number only.
+- **TUI form:** the same `▁▂▃▄▅▆▇█` glyphs on the fixed scale, with the dBm number; the Devices view's Enter signal-trail detail already draws a trail and should adopt the fixed scale.
+
+### G3. Horizon strip (channel occupancy)
+
+Answers: *which channels are busy, how busy, and when.*
+
+A horizon graph folds a time series into a short strip: the value is drawn as a filled area, cut into bands of equal height that are laid over one another, with the higher band darker. Heer, Kong and Agrawala (CHI 2009) measured that a mirrored two-band horizon strip keeps estimation accuracy at heights under 24 px, which is the height a channel row has in the waterfall. It replaces the heat-coloured cell grid (F8).
+
+```
+   ch 6   ▄▄▆█▇▄▂▁▁▂▄▆▆▄▂▁▁▁▂▂▄▄▆▇█▇    ← 2 bands: band 1 in --data at 35 %, band 2 at 70 %
+   ch 11  ▁▁▁▂▂▁▁▁▁▁▂▁▁▁▁▁▁▁▁▁▁▁▂▂▁▁
+   ───────────────────────────────────  ← rule between 2.4 and 5 GHz (kept)
+   ch 36  ▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂
+```
+
+- **Data:** `wifi.ctrl_total` (measured occupancy) or `wifi.ap_count` per channel, the existing `/api/wifi/channels` grid.
+- **Scale:** absolute (F8). For `ap_count`, 0 to the channel's 30 d maximum. For `ctrl_total`, the z-score against the hour-of-week baseline, so the strip is flat when the channel is normal and rises only when it is unusually busy; the second band then begins at the slider's k, which makes the horizon strip and the band sparkline agree on what "out of band" means.
+- **Rows:** every channel seen in the last 30 days, not only those in the window, so a channel that went quiet keeps its row and its silence is visible.
+- **Size:** 18 px per row; a caption line under the block.
+- **Colour:** two tints of `--data`. Out-of-band columns (band 2 above k) take `--heat-2`. Nothing else.
+- **TUI form:** the Channel view's histogram is already a bar form of this; a two-level glyph (`▄` and `█` in `CP_NORMAL` and `CP_HEAT_MID`) gives the same reading in one row per channel. As built (#195): the Channel view's last column, control frames a minute over 24 minutes on the channel's own scale since sloth started (it keeps no 30 d history), `_` a minute with none counted and a blank one before the history began.
+
+### G4. Hour-of-week heat glyph
+
+Answers: *when is this thing usually here, and is now usual.*
+
+The existing 7 by 24 grid, with three changes (F3):
+
+- Warming cells are `--rule`, no hatch, and every one of the 168 is drawn (ruling of 2026-11-11): a grid that is all warming is 168 plain tiles under the now outline, never the outline alone. The caption says `warming: n of 168 cells, fed: f, provisional: p (under 3 weeks), not yet observed: u`.
+- **Provisional cells** (ruling of 2026-11-11). A warming cell with a sample (1 <= n < warm; a cell gets one sample a week) carries a `prov` bar on its tile in `--tui-dim`, full width, rising from the tile's floor: 1 px for a mean of 0, then a quarter, a half or three quarters of the tile's height for a mean in the first, second or last third of the provisional scale. The scale is 0 to 1 for a map of shares (with n = 1 a share is 0 or 1, with n = 2 it is 0, 0.5 or 1: the floor, the half, the three quarters) and 0 to the largest mean of any sampled cell, fed or provisional, for a mean of a gauge or a counter; the caption names it (`provisional bar in thirds of 0 to 1`, `... of 0 to 25.0k B/s`). One ink, one shape: it is never a heat token and never the whole tile, so in any grey a provisional cell is a part-inked tile and a fed cell a whole one (R10). A cell with n = 0 is the tile alone: "observed, absent so far" (the floor line) and "not yet observed" (no ink) are different marks.
+- No cells at all (the pair was never fed) is R5's `no data`: the `--faint` dash, no outline, no labels, and the caption's state is `no data`.
+- The colour ramp is the TUI's `tui_heat` ramp but applied to the cell's mean against the series' maximum, as now, and the maximum is printed in the caption.
+- A second form at 56 by 28 px for a table cell or a drawer row: the same grid at 2 px per cell with no labels, so a device's weekly rhythm reads at a glance ("only weeknights", "only 03:00").
+- **TUI form:** the Devices Enter detail can draw the 7 by 24 grid in `▪` at four heat levels. As built (#195): this run's shares of watched hours (`src/dev_how.c`; the TUI keeps no baseline across restarts), `·` an hour watched with the device absent, blank one not watched.
+
+### G5. Binary strip (presence)
+
+Answers: *when was it here.*
+
+The existing 144-cell strip, with a header ruler (F10), two marks (F15) and, since the ruling of 2026-11-11, the sun's phase as the colour of a present cell:
+
+```
+   24 H PRESENCE   |·······|·······|·······▲        ← ruler once, in the header: midnight ticks, ▲ now
+                   ▁▁▂▃▃▃▃▃▃▃▃▃▂▁▁▁▁▁▂▃▃▃▃▃▃        ← under the ticks, the sun's phases: night 1 px, sunrise and sunset 2, day 3
+   nnnnrDDD      DDDDDDDsnnnnnnnnnnrDDDDDDDDDDDD    ← present cells: n --sun-night, r --sun-rise, D --sun-day, s --sun-set
+   ◆nnnrDDDDDDDDDDDsnn                              ← ◆ first seen inside the window, --signal
+   ▮▮▮▮▮▮▮▮      ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮    ← no sensor position, or cells over 1 h: every present cell --tui-normal
+```
+
+- **Marks:** present cells; a `◆` at the first-seen cell when it is inside the window; an anomaly episode as a 1 px `--heat-2` underline across its cells. The ruler is drawn once per table, not per row.
+- **Sun phase (ruling 2026-11-11):** a present cell takes one of `--sun-night`, `--sun-rise`, `--sun-day`, `--sun-set` by the sun's elevation at the sensor's position at the cell's midpoint: night below -6 degrees (past civil twilight), day above +6 (the low warm light is over), and between them sunrise while the elevation rises across the cell and sunset while it falls. The elevation is NOAA's low-precision solar position, computed on the page (`web/ui/sun.js`); the position is the sensor's GNSS fix, else the position `sensor_health` carries, and never the viewer's. No position, or a cell longer than an hour (a cell that spans a sunrise is not one phase): the one ink. Absent cells, gaps, the `◆` and the underline are unchanged. The ruler carries the same phases as a band under its ticks, each phase a height as well as a colour, and each strip's label says the phases in words with the time each begins (R10). The ruler's midnight ticks and the words' times are in the sensor's zone (follow-up ruling 2026-11-11): the server's `utc_offset_s`, one offset for the window, the one at its end (a range over a day says so); with none, the viewer's clock, named as that.
+- **Size:** unchanged (the column width), 12 px tall.
+- **TUI form:** the Devices view can print 24 cells (one per hour) as `▮` and `·`.
+
+### G6. Bullet and count bar
+
+Answers: *how big is this score or count, against its range.*
+
+Few's bullet graph, reduced to what a 14 px table cell can hold:
+
+```
+   risk   ▐███▌░░░░░  2 of 3      ← qualitative bands in --rule and --faint, the measure in --ink
+   karma  ▐██████▌░░  82          ← one comparative tick (the threshold the rule fires at) in --signal
+   count  ▐██▌        64          ← bar form: the number drawn as a bar, shared scale per column
+```
+
+- **Bounded scores** (risk, karma, confidence, the anomaly score): the measure bar, two or three background bands for the qualitative ranges the rule defines, and one tick at the threshold. Severity colour on the bar only when the score crosses the threshold, so the column is grey when all is well.
+- **Counts in a column** (total, banner, anom): a bar on a scale shared by the column, with the column maximum in the header. The number stays; the bar sits behind it in `--rule`.
+- **Size:** the cell. Never wider than 48 px plus the number.
+- **TUI form:** `▐████▌░░░` in `CP_NORMAL`, eight cells.
+
+### G7. Event rug
+
+Answers: *when did things happen, and how many.*
+
+Ticks under a time axis, height by count (F12):
+
+```
+   devices first seen  ▁   ▃     ▁▁  ▇        ▁ ▂       ← height = count in the column, shared scale
+   alerts begun            ▂        ▁▁    ▅             ← one lane per class, --sev-* on the alert lane
+   sessions            │           │                    ← survey sessions, --ink, full height
+```
+
+- **Data:** `/api/history/overview` columns, as now, plus the counts.
+- **Marks:** one lane per class, 8 px tall; the tallest column reaches the lane height and the caption prints its count. A column with zero draws nothing (P3).
+- **Size:** full width; the drag range picker stays.
+- **TUI form:** the same `▁▂▃▄▅▆▇█` row per lane. As built (#195): the Alerts view's `begun` rug, a lane per severity over the last hour.
+
+### G8. Chain timeline
+
+Answers: *which stage of an attack is in progress, and what came before it.*
+
+```
+   deauth    ──────▌▌▌▌▌────────────────────────────    ← DEAUTH_FLOOD frames, G7 rug
+   twin      ─────────────●━━━━━━━━━━━━━━━━●──────────  ← EVIL_TWIN episode, open to close
+   assoc     ────────────────────●──────────────────    ← a client associated to the twin BSSID
+   karma     ──────────────────────────●━━━━━━━━━━━━━   ← KARMA_AP on the same BSSID
+             │  tainted ↑ 5 s     │  attributed ↑       ← the links sloth made, named
+   10:04        10:06        10:08        10:10
+```
+
+- **Data:** the `alert.*` lifecycle records (`incident_id`, `first_detected`, `last_observed`, `reason`) joined by key and bssid; `twin_episode.attack_in_progress`, `attributed`, `confidence`. All of it already crosses the socket.
+- **Marks:** one lane per stage, in the order the chain runs. An incident is a bar from first to last observation. A link that sloth established (the deauth taint within 5 s, an operator attribution) is a `--faint` connector with its reason in words beside it (P9, P11). Severity colour on the bar at the moment it escalated, nowhere else.
+- **Size:** 18 px per lane, full width, one G8 per BSSID that has more than one stage. A BSSID with one stage gets a G7 rug, not a G8.
+- **Words:** the lane name, the link reason, `confidence 70 %` on the twin bar.
+- **TUI form:** the Twins view's episode table can carry one 24-cell lane per stage, `━` and `●` in the alert's severity colour. As built (#195): under the table, for the selected pair.
+
+## 6. Where each glyph goes
+
+### 6.1 Overview
+
+- **Strip:** `DEVS 23 ▁▂▃▃▂▃` with a 40 px G1 after every network fact. Server facts move to the footer (F5).
+- **Tiles:** six tiles, each a G1 at 18 px with the hero number, the band words and the arrow (F1). The tile's prose becomes a hover note (F4). Tile order by urgency: open alerts, open anomalies, sensor health, throughput, devices, records.
+- **Now vs normal:** rule R4 for the window (F2); three time labels and a now mark; `band ±2.0 sd, n=1,440` in the caption (F18, F19).
+- **Hour of week:** G4 (F3).
+- **Top anomalies:** G1 on each card (F13).
+- **Latest alerts:** unchanged; the severity word stays a word.
+- **Records:** a 40 px G1 of records per second per type in the panel header, so a burst in one type (deauth) is visible before it scrolls past.
+
+### 6.2 Activity
+
+- **Main chart:** as the Overview's, plus a ratio to baseline toggle the UI spec already asks for (§8.5), which puts every key on one axis.
+- **Main chart, `keys: all`** (owner ruling 2026-11-11; `web/ui/allkeys.js`, `/api/series/all`). A toggle in the chart's label row, `keys: one` by default and kept per browser (`act.allkeys`). On: every key of the metric in the window (the rollup's and the store's, a page at a time, drawn as it arrives with `loading N of M keys` in the caption; the graph holds 8,192, `--web-max-keys`' own maximum, and a read stops at 60 s, either said as `N of M keys` with its reason) is one line on one shared y-scale (R3; `glyph.shared()`, grown and never shrunk on a refresh, R11), in the key's hash colour, the same `--k-0..7` an address or a device swatch takes everywhere else, by the same hash. Each key is read as at most 480 cells across the window (a cell for every two pixels of the plot, a whole number of the tier's buckets: a gauge's mean, a counter's sum, presence's any), so the cost is bounded by the plot and not by the window; the caption names the cell (`fine in 3 min cells (mean)`). The tier is the finest whose buckets over the window number at most 10,080 (1 h, 6 h, 24 h fine; 7 d minute; 30 d and 400 d hour). The legend under the chart lists every key drawn with its rank, swatch, name and latest value, largest first (equal values by key; a key with nothing in the window last), and says so. Eight colours repeat past eight keys, so three things beside colour tell lines apart (R10): the rank, written in the legend and with the key at the right end of the top five lines; hover or focus of a legend entry, or of a line, which draws that line last in its colour and the rest in `--faint`; and a pick (click, Enter or Space on an entry, or a click on a line), which holds that until the same entry, `show every key` or Esc returns to all. A pick also sets the key picker, so `keys: one` opens on it. A device's entry carries `device`, which opens its drawer. **Many keys.** A line costs its length in pixels, so past 256 keys only the 256 largest by the legend's order are lines (and the focus row, whatever its rank); the rest are drawn as the range they span in each cell, one `--faint` rectangle a cell at 35 percent under the lines, and the caption says `lines for the 256 largest, the other 7936 as their range a cell`. The cells the graph holds across its keys are bounded (524,288; 131,072 for presence), so past 1,092 keys each is read at fewer cells (64 at 8,192) and the caption names the cell. The legend holds 200 entries in the page at once with `show 200 more`, and a filter box over the key's text; an entry keeps its rank among every key. **The band** (mean ± k sd) belongs to one key: none is drawn with every key shown and the caption says `no band: it is one key's, pick a key for its`; with a key picked its band is drawn under the lines and the caption says `band ±2.0 sd for <key>`, or `warming`. **A presence metric** has no line (it keeps strips): its keys are stacked strips on one canvas, a row a key in the legend's order (most cells present first), each run of present cells in the key's colour, the rank beside the first row and every fifth, the same hover and pick; a row is 8 px to 512 keys, then 4, 2 and 1, so 8,192 keys are 8,192 px. Stacked, not disabled, because who was here when across every device at once is the question a presence metric exists to answer. R4 (the window shrinks to the data and says so; three time labels and the now mark), R5 (`no data`, `warming`, a gap is a break, a key not in the scope or a metric with no key yet collapses to its caption), R6 (a key with fewer than five points is dots; a point no line reaches is a dot), R7 (each line's last value is its own mark, and the number is in the legend), R8 and R9 hold as on every other glyph.
+- **Multiples:** G1 stacked, shared scale by default, scale toggle, sort by `|z|` then value, both named in the caption (F6).
+
+### 6.3 WiFi: the air picture
+
+This view changes most, because it is where the RF questions live. Four panels, top to bottom:
+
+1. **Channels.** G3 horizon strips, one per channel seen in 30 d, bands grouped with the existing rule (F8). The metric toggle stays. Caption: `ctrl_total as z against hour-of-week; band 2 above 2.0 sd; 7 channels, 40 s cells, n=90`.
+2. **Emitters.** The AP table, re-sorted by RSSI by default (near first), with a G2 in the DBM column (F9), a G6 bullet for KARMA, the `new` mark (F15), and SSID count as a row of small `▪` after the SSID rather than `+3 ssids` in words. Caption counts `6 shown, 3 approaching, 1 new today`.
+3. **Chains.** One G8 per BSSID with more than one stage in the window; else one G7 rug for deauth and one for probe floods. The empty state is one caption line, not a box (F16).
+4. **Clients.** Probe clients over time as G1 with its band (F16), and under it the clients seen in the window as rows with G2 and G5, so a probing client that is near and new is found by eye.
+
+### 6.4 Devices
+
+- A G2 in the DBM column, a G6 bullet in RISK, a G6 bar in ANOM, a `new` dot before the swatch (F9, F15, F17).
+- The G5 ruler in the header (F10).
+- The Z column: the z-score as a G1 at 40 px when the device has a presence baseline, else `-` as now.
+
+### 6.5 Anomalies
+
+- G1 on every card with the episode shaded (F13).
+- The score bar becomes G6 with the rule's threshold tick, so a score of 60 reads against the 50 that fires it.
+
+### 6.6 Flows
+
+- The matrix as the first mode, the chord as the second (F11). Each cell a G6 bar with the count; the protocol as a letter in the cell's corner; SMB1 cells keep the critical colour.
+- The table's COUNTS and TOTAL columns as G6 bars (F17).
+
+### 6.7 History
+
+- G7 with height on the 30 d strip (F12).
+- "Who was here" rows carry the G5 ruler and marks.
+
+### 6.8 Lookup and the drawer
+
+- The card ends with G5 (24 h), G4 (the 56 by 28 form, when a baseline exists), and G2 at full width (F20).
+- The drawer adds G8 when the device is a BSSID with more than one stage.
+
+### 6.9 Footer
+
+- `SOCK DB STORE TICK UP CLIENTS` and the sensitivity slider (F5, F18). A 40 px G1 of `sensor_health` capture drops per tick, because a sensor that is dropping frames is the one fact that invalidates every other panel (P12).
+
+## 7. Data the server must add
+
+Everything in §5 and §6 is drawn from records that already cross the socket. The server needs five new series and two route changes.
+
+| Series | Key | Kind | Source record and field | Tier | Used by |
+|---|---|---|---|---|---|
+| `ap.rssi` | bssid | gauge | `beacon.signal_dbm`; `rssi_min_60s`, `rssi_max_60s` kept as the bucket's min and max | fine, minute | G2 on WiFi, drawer |
+| `sta.rssi` | mac | gauge | `probe_client.signal_dbm`, `assoc.signal_dbm`, `wifi_sta.signal_dbm` | fine, minute | G2 on Devices, Lookup |
+| `live.devices` | (global) | gauge | the device count of sloth's latest pass, as `/api/live` computes it | fine, minute, hour | G1 on the strip and tile |
+| `live.alerts_open` | (global) | gauge | open incidents, as built one global sum of low + warn + crit (not three keys) | fine, minute, hour | G1 on the strip and tile |
+| `live.anomalies_open` | (global) | gauge | open episodes | fine, minute, hour | G1 on the strip and tile |
+| `records.rate` | type | counter | records per second by type, the `types[]` counts `/api/live` already keeps | fine | G1 in the Records header |
+| `records.total` | (global) | counter | the same records, unkeyed (F1's `live.records_rate`, under the name of its family) | fine, minute, hour | G1 on the strip and the records/s tile |
+| `sensor.drops` | (global) | counter | `sensor_health` per-tick libpcap and NIC drop deltas | fine, minute | G1 in the footer |
+
+**As built (V2).** `ap.rssi` and `sta.rssi` are the `rf.rssi.bssid` and `rf.rssi.sta` gauges that already existed (`web/src/web_rollup.h`, 2026-11-02): the same quantity, so no new metric and no slothweb.db step. Two of the `sta.rssi` sources above are the AP's signal, not the station's (an assoc's `signal_dbm` is set from frames the AP sent, and `rf.rssi.bssid` takes it; `wifi_sta`'s is the managed card's link to its AP, another receiver), so they are not in it. The beacon's 60 s range is G2's whisker when that beacon is in the last value's minute, read from the latest beacon rather than stored as a bucket's min and max; otherwise the last minute's own sample range. G2's "approaching" and its band are sloth's own estimate (`est_dist_trend`, `est_dist_band`, `src/rf_distance.c`), never a slope of the page's, so the glyph and the TUI's distance cell cannot disagree; §5 G2's "+1 dB/min over ten minutes" is replaced by sloth's trend. `web/src/web_rf.h` has the row member.
+
+Rules for the new series:
+
+- They enter the existing cardinality caps (`--web-max-keys`); `ap.rssi` and `sta.rssi` are keyed metrics in the device class.
+- `ap.rssi` and `sta.rssi` get hour-of-week baselines like any gauge, so "nearer than usual for this hour" is a z-score and A1 can fire on it without a new rule.
+- The three `live.*` gauges are global, so they are always kept and never evicted.
+- Nothing new is stored about a record's content; RSSI, counts and types are what the ingest already parses. The secret-column guardrail test stays as it is.
+
+Route changes:
+
+- `/api/wifi/channels` gains `scale: {kind: "absolute"|"z", max}` per row so G3 can draw the absolute scale and print it.
+- `/api/history/overview` returns the count per column, not only presence, so G7 can size its ticks.
+- `/api/flows/graph` gains a `matrix` form: the same nodes and edges, no folding by rank, with the subnet grouping computed server-side so the page draws what it is given.
+- `/api/device/{mac}` and `/api/wifi/aps` rows carry `first_seen` already; the page derives `new` from it against the window.
+
+**As built (V4).** `/api/flows/graph?form=matrix` is the matrix form: the same `edges` largest pairs with no endpoint folded by rank (so `nodes` is refused with it), sources and destinations each in address order with their subnet group (/24, /64) computed server-side, the cells merged by pair with every protocol on it and SMB1 kept, and the largest cell as the one scale. G8's data is a new route, `/api/wifi/chain` (the deauth rows, or one `bssid`, each with the EVIL_TWIN and KARMA_AP rows sloth.db's alerts hold whose key names the BSSID, the associations to it per cell, and the links): the links (`attack_in_progress`, `attributed`, `confidence`) are the stream's `twin_episode`, kept in memory by `web/src/web_chain.c`, because sloth.db keeps none of them in a form G8 can draw (its `twin_episodes` latches `attack_in_progress` with no time it was set and keeps neither `attributed` nor `confidence`; the attack-chain alert's key names the SSID, and its detail is withheld on the web), so a link before slothweb started is not known and the answer says since when. A stage's key is matched at its fields (the pair's two BSSIDs after `twin:` or `twin-fp:`, the one after `karma:`), never anywhere in it, and an association is a stage only on a BSSID with a twin or karma row (on any other AP a station joining and the deauth frames every AP sends would make each busy AP a chain). `/api/alert`'s `device` carries the `bssid` its key names, for the alert page's G8. No new series and no slothweb.db step.
+
+## 8. Rules of the system
+
+These are the operational rules every glyph and panel follows. A review of a slothweb change checks the change against this list.
+
+- **R1. One ink.** A line is `--tui-normal`. The band is `--data` at 12 percent. Grey (`--rule`, `--faint`, `--muted`) carries structure. Colour carries only out of band (the heat ramp), severity (the `--sev-*` tokens, on alerts and chain bars only), identity (the hash hues on addresses and SSIDs, as ruled), and the one accent (`--signal`, once per panel). Two owner-ruled exceptions: G1's line keeps the TUI's level grading (2026-10-26), and G5's present cells take the sun's phase at the sensor, the four `--sun-*` tokens (2026-11-11). A third, for one graph mode (2026-11-11, the rulings at the head of this document): the Activity graph's `keys: all` mode draws each key's line in that key's identity hue (§6.2).
+- **R2. Fixed heights, data-driven widths.** A glyph's height is set by the text line it sits in (14 px in a table, 18 px in a tile). Its width follows the container. Never the other way round.
+- **R3. Shared scales inside a set.** Small multiples share a y-scale by default and say so. `own scale` is a toggle and prints each cell's maximum. RSSI is always on the fixed -95 to -20 dBm scale. *Amended 2026-11-11 for the S-meter: an RSSI meter is on the scale of the band it was heard on (§5 G2's table; -95 to -20 dBm is the 2.4 GHz row), the table says so once, and the dBm number beside it is the raw value.*
+- **R4. Honest windows.** When data covers less than a tenth of the window, the glyph shrinks the window to the data and the caption says `6 min of 24 h`. A band chart carries at least three time labels and a now mark.
+- **R5. Three empty states.** `no data` (a `--faint` dash), `warming` (the line without the band, the word in the caption), and a gap (a break in the line). They never look alike. An empty panel collapses to its caption.
+- **R6. Fewer than five points draw dots.** A line through three buckets claims a shape the data does not have.
+- **R7. The last value is marked and written.** A dot on the line and the number beside it, always. Min and max dots only where there is no band.
+- **R8. No hatching, no gradients, no shadows, no rounded bars.** The chrome's radius applies to panels, not to data. "Not known yet" is still never a texture: G4's warming cell is a plain `--rule` tile, and where it has a sample its value so far is a solid bar in one ink on that tile (owner ruling 2026-11-11, which amends the earlier reading that a warming cell makes no claim at all), not a hatch and not a tint of the heat ramp.
+- **R9. The caption line.** Every panel ends with one `--muted` line: source, window, tier, scale, n. Example: `ap.rssi 02:de:00:00:00:a1, 1 h, fine, -95 to -20 dBm, n=360`.
+- **R10. Greyscale must still read.** Every colour meaning is also a position, a shape or a word (the existing §8.12 rule, restated so the glyphs inherit it). A heat-coloured segment is also above the band; a severity bar also carries its word.
+- **R11. Scales do not jump.** A glyph that refreshes every tick keeps its scale until the data leaves it, and then grows it; it never shrinks on refresh. A reader must be able to look away and back.
+- **R12. The TUI form exists.** A glyph that has no character-cell form is not added. Parity is the test that keeps the web honest. One owner-ruled exemption (2026-11-06, `docs/web-ui-spec.md` rulings table): the Radar view's half-dome and its ◇ ▲ ○ marks, for which no character-cell form exists (the TUI's `[#]` sky plot is the nearest relative); they still carry shape and word (R10) and meet R1, R8 and R9.
+
+## 9. Tests and acceptance
+
+Tests live in `web/tests/` beside the existing ones. The page's canvas code is not unit-tested today; this spec adds a thin layer that is.
+
+- **Glyph geometry is pure.** Each glyph is split into a pure function that maps data and size to a list of marks (`[kind, x, y, w, h, colour-token]`) and a painter that draws the list. The pure half is tested in C through the same embed path as `palette.js`, or in a small JS harness run by `make web-test` under the system `node` if present and skipped with a notice if not. Owner decision, §11.
+- **Every glyph, every state.** For each of G1 to G8: empty, warming, one point, four points (dots), a gap, in band, out of band, and the TUI form. The out-of-band test must be seen to fail when the band is widened (the repo's "seen to fail" rule).
+- **Scale rules.** A shared-scale stack has one maximum; an RSSI glyph with a -10 dBm sample clamps and reports it; a refresh never shrinks a scale (R11).
+- **Window rule.** Six minutes of data in a 24 h window yields the shrunk window and the caption text (R4).
+- **Captions.** Every panel's caption matches the `source, window, tier, scale, n` grammar; a test walks the DOM of the demo and fails on a panel without one (R9).
+- **Greyscale.** A test renders each glyph with every colour token set to the same grey and asserts the mark list still distinguishes band, line, last value and severity by kind and position (R10).
+- **Series.** The seven new series: derivation from a hand-built record, cardinality cap, baseline feed, and the guardrail test unchanged.
+- **Screenshots.** `docs/assets/slothweb/*.png` regenerated from the demo for every view this spec changes, in both themes.
+
+**Acceptance, in the demo:** an analyst opens the WiFi view and, without scrolling or hovering, can say which channel is busiest against its norm, which emitter is nearest and whether it is approaching, which BSSID is in an attack chain and at which stage, and what arrived today. Each of those is one glyph.
+
+## 10. Delivery slices
+
+One child issue per slice, in the dark-factory style, each green on its own.
+
+| Slice | Content | Depends on |
+|---|---|---|
+| V0 | The glyph layer: G1, G5, G6 as pure mark-list functions plus painters; rules R1 to R12 in `web/README.md`; the caption grammar; the strip and footer split (F5); the three empty states (R5); the window rule (R4). No new data. | nothing |
+| V1 | **Done** (series 379ac49; page, #171 V1). The `live.*`, `records.rate` and `sensor.drops` series, plus `records.total` for the records/s tile; G1 on every tile and strip fact and the footer's drops (F1, §6.9); G1 on anomaly cards with the episode shaded (F13); the heatmap without hatch, as G4 (F3); shared-scale multiples with the `scale` toggle and the |z| sort (F6); tiles in urgency order (ruling 5). One-ink sparklines (F7) are not done, by ruling 1: G1's line keeps the TUI's grading. Left: the Records panel's per-type G1 (§6.1), G4's TUI form (R12), F4's hover notes; all three done in #195. | V0 |
+| V2 | **Done** (#171 V2). `ap.rssi` and `sta.rssi` as the existing `rf.rssi.bssid` and `rf.rssi.sta` (§7, as built); G2 on the Devices and AP tables' DBM columns, the drawer and the Lookup card (F9, F20), its words and bold from sloth's distance band and trend; the `new` mark and G5's first-seen cell (F15); G6 on risk, karma (on `karma_candidates.score`, the TUI's 1 to 7 `[y]` score, tick at 3, the least a corroborated candidate scores; F17's `karma 82` was a mockup), the anomaly score (cards and table) and the anom and flow total counts (F17). Left: G2's TUI half (the Devices Enter trail on the fixed scale, R12), the Flows `counts` column (several numbers a cell), G4's 56 by 28 form on the Lookup card (§6.8), G2 on the managed card's tables (no series: another receiver) and on the WiFi Clients panel (V3's layout). #195 did the TUI half (as the S-meter), the counts column (a G6 bar a number) and the 56 by 28 form; the managed card's G2 is still left (no series). | V0 |
+| V3 | **Done** (#171 V3). G3 horizon strips with absolute scales on the WiFi view (F8): `/api/wifi/channels` rows carry `scale` (`absolute` with the channel's own 30 d `max`, or `z`) and `ctrl_total`'s `z` per cell against the hour-of-week baseline, the second band at the slider's k, rows every channel seen in 30 d; the stacked top-5 drill-in per column beside the strips (ruling: both), the stacked grid one control away; G7 on History (F12: the route already counted per column) and as the chains panel's deauth rug (F16: collapses to its caption); the four-panel layout (§6.3), emitters nearest first with the SSID count as `▪`, clients rows with G2 and G5. Left: the probe-flood rug (needs the alert type table on the page), per-severity alert ticks on History's rug, the TUI forms of G3 and G7 (R12). #195 did the probe-flood rug (`/api/alerts` takes the type by name) and both TUI forms; History's per-severity ticks are still left (below). | V1, V2 |
+| V4 | **Done** (#171 V4). G8 in `glyph.js` (F14): four lanes in the chain's order (deauth, twin, assoc, karma), deauth frames and associations as ticks on one scale, each DEAUTH_FLOOD, EVIL_TWIN and KARMA_AP incident a bar in the severity it reached with its word in the lane's label, the links sloth made (the deauth taint, the attribution) as `--faint` connectors with their reasons, from `/api/wifi/chain` (§7, as built); placed on the WiFi chains panel (one G8 per BSSID with more than one stage, the rest the G7 rug), on the alert page for the BSSID its key names, and in the drawer for a BSSID with more than one stage (§6.3, §6.8). The Flows matrix first and the chord second (ruling 4, F11, §6.6), each cell a G6 count bar on the matrix's one scale with its count and its protocols as letters, SMB1 in the critical colour. Left: G8's TUI form (R12); the matrix's TUI form (G6's exists, the layout does not); a BSSID with no deauth key in the window is not a candidate on the WiFi panel (its alert page and drawer still draw it); the probe-flood rug (V3's, still owed). #195 did G8's TUI form, the candidates (an EVIL_TWIN or KARMA_AP row in the window makes one, read before the deauth-only BSSIDs) and the rug; the matrix's TUI form is still left (below). | V3 |
+| S-meter | **Done** (2026-11-11, owner request; the header's rulings). `glyph.sm()` and its scale, band, word and text helpers as new functions in `glyph.js` beside G2's, which stays with no caller; placed by `web/ui/rf.js` in the Devices, AP and clients DBM columns (the S reading beside the dBm, the column 46 px wider for it), the drawer and the Lookup card; the emitter report's line as character cells; the BLE drawer on the 2.4 GHz row; the GNSS signal cell on 0 to 50 dB-Hz (the trail column removed) and the ADS-B signal cell on -50 to 0 dBFS. The `"rf"` member gains `radio`, the band the latest record was heard on. Left: the TUI form (R12); a 6 GHz probe's band (no `channel_source` on a probe_client); the BLE waterfall, the GNSS history plot and the map's dots, which grade signal by colour over time or place and are not level meters. #195 did the TUI form; a 6 GHz probe's band is still left (below). | V2 |
+| Radar | **Done** (2026-11-06, owner request). Not a glyph of §5 but a view: one orthographic half-dome centred on the sensor (`web/ui/radar.js`, `docs/web-ui-spec.md` §8.14) placing GNSS satellites at az/el, aircraft and APRS stations at their true bearing and elevation angle with the range on a log scale (0.3 m to 300 km), and the Wi-Fi and BLE distance bands as counted rings from the new `/api/radar` census; drag, tilt, zoom, pick, a side panel with a way into each family's tab; the camera kept as `radar.*`. Exempt from R12 by the ruling recorded under it; meets R1, R8, R9, R10. The sensor's position came first as `sensor_health`'s `loc_*` and `/api/gnss` `loc`. | the GPS Sat, ADS-B, APRS and BLE tabs |
+
+**Still left after #195**, each needing more than a small slice or a ruling: History's per-severity alert ticks (`/api/history/overview` counts a column from `first_seen` alone on an index that holds no `sev`; a count per severity is a new read plan for every path of `cells_of()`, its cache and its scoped twin, on a file slothweb does not index); the Flows matrix's TUI form (the TUI has no Flows view, so where the matrix lives is the owner's call); G2 on the managed card's tables (the card's signal is another receiver's, with no series); a 6 GHz probe's band (a probe_client record carries no `channel_source`, and adding one is a change to sloth's 802.11 parsing and its JSONL record); `docs/assets/slothweb/*.png` and §9's caption DOM walk (a headless browser run against a populated demo).
+
+V0 and V1 are the MVP of this spec: after them every number on the Overview has its comparison. V2 is the RF half. V3 and V4 are the analyst's projection layer.
+
+## 11. Decisions for the owner, and things to confirm on the live page
+
+Decisions:
+
+1. **One-ink sparklines on the web (F7).** The TUI grades its sparklines by level and the web copies that for parity. This spec says the web should not. Keep parity, or let the web follow the data-ink rule and document the difference?
+2. **The glyph test harness (§9).** A C-side test of the mark lists through the embed path, or a `node` harness that skips when node is absent? The first keeps `make web-test` dependency-free; the second is simpler to write.
+3. **The -67 dBm reference line on G2.** It is a common field rule of thumb, not a standard. Keep it, choose another, or draw none.
+4. **The matrix as the first Flows mode (F11).** The chord is the most-liked drawing on the page. The matrix reads faster; the chord looks better. Which is first?
+5. **The order of the six Overview tiles (§6.1).** Urgency first (alerts, anomalies, sensor) or the current order (throughput first)?
+
+To confirm on the live page, which this session could not reach:
+
+- Whether "now vs normal" still shows the same time at both ends of the axis after a full day (F2 may be a first-hour effect only).
+- How the waterfall looks after an hour of real channel data (F8 was judged from one sample column).
+- Whether the hatch on the heatmap is visible at the operator's usual zoom, or only in the screenshot (F3).
+- The actual RSSI spread per BSSID over an hour, to set G2's default whisker rendering (min to max, or an interquartile range if the spread is noisy).
+- How many channels the sensor has seen in 30 days, which sets the height of the G3 block.
+
+## 12. Sources
+
+Books and papers:
+
+- Edward Tufte, *Beautiful Evidence* (2006), "Sparklines: intense, simple, word-sized graphics" (pp. 46-63) and "The fundamental principles of analytical design" (pp. 122-139).
+- Edward Tufte, *The Visual Display of Quantitative Information* (1983, 2nd ed. 2001): data-ink, chartjunk, small multiples.
+- Edward Tufte, *Envisioning Information* (1990): layering and separation, micro/macro readings, the smallest effective difference, escaping flatland.
+- Edward Tufte, *Visual Explanations* (1997): the Challenger decision, "the smallest effective difference".
+- William S. Cleveland, Marylyn E. McGill and Robert McGill, "The shape parameter of a two-variable graph", *JASA* 83 (1988): banking to 45 degrees.
+- Jeffrey Heer, Nicholas Kong and Maneesh Agrawala, "Sizing the horizon: the effects of chart size and layering on the graphical perception of time series visualizations", CHI 2009.
+- Stephen Few, "Bullet graph design specification", Perceptual Edge (2013 revision).
+- Mica R. Endsley, "Toward a theory of situation awareness in dynamic systems", *Human Factors* 37(1) (1995); Endsley, Bolte and Jones, *Designing for Situation Awareness* (2003).
+
+Web, read 2026-10-26:
+
+- Tufte's own course page and sparkline notebook: https://www.edwardtufte.com/online-course/ and https://www.edwardtufte.com/notebook/sparkline-theory-and-practice-edward-tufte/
+- A reader's summary of the sparkline chapter: https://www.peterme.com/2006/07/20/tuftes-beautiful-evidence-chapter-2/
+- Course notes on Tufte's principles: https://websites.umich.edu/~mmmc/516/notes/TuftePrinciples.pdf
+- Banking to 45 degrees, and its later tests: https://eagereyes.org/basics/banking-45-degrees and https://idl.uw.edu/papers/banking
+- The horizon graph paper: https://idl.uw.edu/papers/horizon
+- Bullet graphs: https://www.visualizing.org/bullet-chart
+- Situation awareness in cyber operations: https://www.perceptualedge.com/blog/?p=45 and https://cylab.be/publications/68/download/2024-evaluation-of-cyber-situation-awareness-theory-techniques-and-applications.pdf
+
+In-tree:
+
+- `docs/web-ui-spec.md` §1, §5.1, §6, §8.4 to §8.12.
+- `web/ui/app.js`: `draw()`, `heatmap()`, `drawStrip()`, `waterfall()`, `deauthChart()`, `multiples()`, `chord()`, `drawOverview()`, `sparkLevel()`, `sparkColor()`.
+- `web/src/web_rollup.h` (the metric catalogue), `web_anomaly.h` (rules A1 to A10), `web_series.h`, `web_wifi.h`.
+- `src/views/dashboard_primitives.c :: draw_sparkline_at()` (the TUI sparkline the web copies).
+- `docs/wiki/jsonl-schema.md`: `beacon` (`signal_dbm`, `rssi_min_60s`, `rssi_max_60s`, `tbtt_jitter_us`), `probe_client`, `assoc`, `wifi_sta`, `channel_summary` (`ctrl_total`), `twin_episode` (`rssi_swing_dbm`, `attack_in_progress`, `attributed`, `confidence`), the `alert.*` lifecycle family, `sensor_health`.
+- `docs/assets/slothweb/*.png` (the M6 demo screenshots).

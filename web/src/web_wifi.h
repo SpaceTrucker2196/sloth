@@ -25,9 +25,25 @@
  *       episodes sloth.db's alerts hold against it in the range
  *       ([first_seen, last_seen, sev, count], oldest first, at most
  *       WEB_WIFI_FLOODS); "db" says whether sloth.db was read.
+ *   /api/wifi/chain?from=&to=&cols=&bssid=
+ *       G8's attack chain (#171 V4, F14): /api/wifi/deauth's rows (at
+ *       most WEB_WIFI_CHAINS of them), or the one BSSID bssid names
+ *       whether or not it has a deauth key, each with the chain's other
+ *       stages against it: "twin" and "karma", the EVIL_TWIN and
+ *       KARMA_AP rows sloth.db's alerts hold whose key names it
+ *       ([first_seen, last_seen, sev, count], oldest first, at most
+ *       WEB_WIFI_FLOODS each, "stages_more" past that); "assoc", the
+ *       associations to it first seen in each cell (sloth.db's assocs,
+ *       the station never read); "links", the pairs the stream's
+ *       twin_episode made with it (web_chain.h: real, twin, first and
+ *       newest record, when sloth tainted the twin and when it
+ *       attributed the pair, the newest confidence), since
+ *       "links_since"; "stages", how many of deauth, twin, assoc and
+ *       karma it has; "read" false when a sloth.db read failed.
  *   /api/wifi/aps?sort=&limit=&offset=
  *       sloth.db's beacon_aps through the M4 allow-list: SSID, channel,
- *       signal, the encryption and AKM sloth wrote and the AKM bits
+ *       operating_width (sloth_ch_width_t: 0 unknown, else MHz, 8080 for
+ *       80+80), signal, the encryption and AKM sloth wrote and the AKM bits
  *       decoded to the 802.11 suite names (src/rsn_ie.c's), MFP, the
  *       downgrade flags decoded (include/sloth.h WPA_DG_*), WPS, the
  *       SSID history (beacon_ap_ssids, at most WEB_WIFI_SSIDS, newest
@@ -44,19 +60,85 @@
 #define SLOTHWEB_WIFI_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "web_devices.h"
+#include "web_json.h"
+#include "web_series.h"
 
 #define WEB_WIFI_COLS     96
 #define WEB_WIFI_ROWS     40
 #define WEB_WIFI_FLOODS   8
+/* /api/wifi/chain (#171 V4): the BSSIDs a list answers, the stage rows
+ * read for one (both types together), the associations counted. */
+#define WEB_WIFI_CHAINS     16
+#define WEB_WIFI_STAGE_READ 64
+#define WEB_WIFI_ASSOC_READ 2000
 #define WEB_WIFI_SSIDS    8
 #define WEB_WIFI_AP_LIMIT 50
 #define WEB_WIFI_AP_MAX   100
 #define WEB_WIFI_SPAN_MAX (400LL * 86400)
 /* The largest one AP row renders to: every text member at its cut
- * length escaped six-fold, every AKM name, WEB_WIFI_SSIDS SSIDs. */
-#define WEB_WIFI_AP_ROW_MAX 7400
+ * length escaped six-fold, every AKM name, WEB_WIFI_SSIDS SSIDs, and
+ * G2's "rf" (web_rf.h). */
+#define WEB_WIFI_AP_ROW_MAX (7400 + WEB_RF_JSON_MAX)
+
+/* The grid the channel, deauth and mix answers share, lent to the BLE
+ * Devices view (web_bledev.h) so its class grid has the same tiers,
+ * bounds and cells. from, to and cols are ps[0..2]; 0, or -1 with the
+ * reason word in why. */
+typedef struct {
+    int       tier, ncol;
+    long long step, from, to, col_s;
+} web_grid_t;
+#define WEB_GRID_KEYS 512
+int  web_grid_of(const web_m4_t *m, const web_param_t *ps, long long now,
+                 web_grid_t *g, const char **why);
+/* The keys of metric for the grid (the rollup's and the store's), each
+ * once, into keys (WEB_GRID_KEYS of them). */
+int  web_grid_keys(const web_m4_t *m, int metric, const web_grid_t *g,
+                   char (*keys)[WEB_KEY_MAX + 1]);
+/* metric, kind, unit, tier, step, from, to, cols and col_s, opening the
+ * object; then one key's cells as a JSON array (a gauge's mean per
+ * cell, a counter's sum, null for none) and its total. -1 on memory. */
+void web_grid_head(web_jw_t *w, int metric, const web_grid_t *g);
+int  web_grid_cells_json(const web_m4_t *m, int metric, const web_grid_t *g,
+                         const char *key, web_jw_t *w, double *total);
+
+/* The mix answer (/api/wifi/channels?mix=1), for any web_chmix_t: its
+ * keys checked and ranked by key(), the store read in namespace ns
+ * (web_store.h WEB_MIX_NS_*) and only the transmitter kinds in kinds (a
+ * bit per WEB_TX_*), each transmitter written by tx_json, each row's
+ * members after "key" by row_extra, the rows under rows_word, and tail's
+ * members (at most tail_max bytes) last. use_db opens sloth.db for
+ * tx_json and says "db". */
+typedef struct {
+    struct web_chmix *mix;
+    int               ns;
+    const char       *metric, *unit, *rows_word;
+    unsigned          kinds;
+    int               use_db;
+    int  (*key)(const char *key, int *rank, long *num);
+    void (*row_extra)(web_jw_t *w, const char *key, void *ctx);
+    void (*tx_json)(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *conn,
+                    const uint8_t mac[6], int kind, void *ctx);
+    void (*tail)(web_jw_t *w, void *ctx);
+    size_t            tail_max;
+    void             *ctx;
+    /* The WiFi view's client lane (2026-11-17): each row's "clients"
+     * (a cell's distinct clients named, a floor: the mix names five a
+     * bucket) and the window's "clients" list with each client's
+     * channels and AP, "clients_total", "clients_more" (the list cut at
+     * 64 or its bytes), "clients_cell_cut" (a cell past 32 clients) and
+     * "clients_db_cut" (sloth.db's budget spent before every client's
+     * association was read; the rest from the stream). */
+    int               clients;
+} web_mix_ops_t;
+/* Test seam: nonzero spends the mix answer's sloth.db budget once the
+ * transmitter table is written (0 in slothweb). */
+extern int web_wifi_test_expire;
+int web_mix_answer(const web_m4_t *m, const web_grid_t *g, const web_mix_ops_t *ops,
+                   long long now_s, char *body, size_t cap, size_t *len, int *status);
 
 int web_wifi_channels_route(const web_m4_t *m, const char *query,
                             long long now_s, char *body, size_t cap,
@@ -64,8 +146,20 @@ int web_wifi_channels_route(const web_m4_t *m, const char *query,
 int web_wifi_deauth_route(const web_m4_t *m, const char *query,
                           long long now_s, char *body, size_t cap,
                           size_t *len, int *status);
+int web_wifi_chain_route(const web_m4_t *m, const char *query,
+                         long long now_s, char *body, size_t cap,
+                         size_t *len, int *status);
 int web_wifi_aps_route(const web_m4_t *m, const char *query, long long now_s,
                        char *body, size_t cap, size_t *len, int *status);
+/* /api/wifi/local?limit=: the managed Wi-Fi card's own scan (sloth.db
+ * wifi_aps, newest first, limit rows, default and most
+ * WEB_WIFI_AP_MAX) and its station dump (wifi_stas, its link to the AP
+ * it is associated with, at most WEB_WIFI_STA_MAX): Wi-Fi through the
+ * host's own network, not the passive radio, so the WiFi view's Local
+ * half (web_scope.h). The router answers out_of_scope under Monitor. */
+#define WEB_WIFI_STA_MAX 32
+int web_wifi_local_route(const web_m4_t *m, const char *query, long long now_s,
+                         char *body, size_t cap, size_t *len, int *status);
 
 /* The 802.11 AKM suite name of type t (IEEE 802.11-2020 Table 9-151),
  * src/rsn_ie.c rsn_akm_name()'s, "?" when it names none. */

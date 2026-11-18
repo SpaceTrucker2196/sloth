@@ -13,6 +13,7 @@
 #include <time.h>
 #include "alerts.h"
 #include "tool_fingerprint.h"
+#include "attack_hw.h"   /* rule_karma_ap's #151 hook */
 
 /* src/alerts/engine.c — the engine's entry points for a rule. */
 void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
@@ -23,6 +24,12 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
               const char *key,
               const char *match_ip, uint16_t match_port,
               time_t now);
+/* Stage an attack-hardware verdict (#151) for the NEXT fire_inv()
+ * only, which stamps it on the incident and clears the stage. Every
+ * other fire stamps it empty. A stage rather than another fire_inv()
+ * parameter so the fourteen other call sites stay untouched; the one
+ * caller (rule_karma_ap) stages immediately before its fire_inv(). */
+void fire_stage_hw_verdict(int tier, int device, int signals);
 void fire_conf(alert_type_t type, alert_sev_t sev, int confidence,
                const char *title, const char *detail,
                const char *key,
@@ -58,6 +65,20 @@ int btm_candidate_is_twin(const sloth_state_t *s, const uint8_t bssid[6]);
  * alerts_clear(). */
 void rules_wired_forget(void);
 
+/* src/alerts/rules_gnss.c — drops the GNSS rules' memory (the fix pairs
+ * judged, a held collapse, the spoofing heuristics' last sightings);
+ * called by alerts_clear(). A fix received before the call is never
+ * judged after it. */
+void rules_gnss_forget(void);
+
+/* src/alerts/rules_adsb.c - drops ADSB_EMERGENCY's per-address holds;
+ * called by alerts_clear(). A standing emergency then starts at LOW. */
+void rules_adsb_forget(void);
+/* rules_twin.c: when the sensor was last known to be moving (#188). */
+void rules_twin_forget(void);
+/* rules_sensor.c: the under-voltage and source holds. */
+void rules_sensor_forget(void);
+
 /* Formatting helpers every rule file uses. static inline rather than
  * external: a name as generic as mac_to_str() has no business in
  * libsloth_core.a's symbol table. */
@@ -69,6 +90,25 @@ static inline void mac_to_str(const uint8_t mac[6], char *out, int sz) {
 static inline void fmt_bssid(char out[20], const uint8_t b[6]) {
     snprintf(out, 20, "%02x:%02x:%02x:%02x:%02x:%02x",
              b[0], b[1], b[2], b[3], b[4], b[5]);
+}
+
+/* A running count for an alert detail (#173). The engine counts an
+ * observation each time the rendered detail differs from the one it
+ * last emitted, so a raw frame or packet total in the detail turns a
+ * standing incident into one observation per tick while the total
+ * moves. Exact below ten, where each new one is worth reading, then
+ * the decade it has reached ("10+", "100+", ...): a detail that moves
+ * only when the count gains a digit. The exact figure stays in the
+ * table and view the rule reads. */
+static inline const char *count_bucket(char out[24], unsigned long n) {
+    if (n < 10) {
+        snprintf(out, 24, "%lu", n);
+        return out;
+    }
+    unsigned long d = 10;
+    while (n / d >= 10) d *= 10;
+    snprintf(out, 24, "%lu+", d);
+    return out;
 }
 
 #endif

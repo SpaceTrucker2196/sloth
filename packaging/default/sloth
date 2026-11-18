@@ -1,5 +1,8 @@
 # /etc/default/sloth — site configuration for sloth-sensor.service (#139).
 #
+# The unit runs /usr/local/bin/sloth-wifi; `sloth` beside it is a symlink
+# to the same program.
+#
 # Read by systemd as an EnvironmentFile: KEY=value, one per line, no
 # shell expansion. `make install-service` installs this file with
 # `install -b`, so a previous copy survives as /etc/default/sloth~.
@@ -16,6 +19,18 @@ SLOTH_IFACE=alfa0
 #   --my-bssid MAC        its BSSID
 #   --site-label LABEL    name stamped on the posture report
 #   --inventory FILE      approved-inventory JSON (#89), if you keep one
+#   --gps SPEC            the sensor's position from a receiver or gpsd
+#                         (wiki: gnss, location); needs the drop-in
+#                         /usr/local/share/sloth/sloth-sensor-gps.conf
+#   --location LAT,LON    a fixed position instead
+#
+# NOT here: the SDR decoders' flags. sloth-sensor.service runs sloth-wifi,
+# which refuses each of these and exits 2 (the unit then fails to start,
+# with one line in the journal naming the flag):
+#     --adsb  --aprs  --aprs-freq  --aprs-silent-hours  --rtl433  --victron
+# They are sloth-rf's and belong in /etc/default/sloth-rf. A file that
+# still has one from before the split: `sloth-migrate-rf` (dry run), then
+# `sloth-migrate-rf --apply` (docs/wiki/deployment.md section 11.4).
 # Example:
 #   SLOTH_ARGS=--my-ssid HomeNet --my-bssid 28:25:5f:00:00:00 --site-label attic-sensor
 SLOTH_ARGS=--site-label sloth-sensor

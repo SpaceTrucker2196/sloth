@@ -312,11 +312,11 @@ static void test_assoc_tables_overflow_is_counted(void) {
     for (int i = 0; i < MAX_ASSOC_ENTRIES + 4; i++) {
         sta[4] = (uint8_t)(i >> 8);
         sta[5] = (uint8_t)i;
-        assoc_observe(bssid, sta, "net", 0, -40, 6);
+        assoc_observe(bssid, sta, "net", 0, -40, 6, WIFI_BAND_UNKNOWN);
     }
     ASSERT_EQ((long long)sh_evict_count(SH_EVICT_ASSOC_PAIR), 4);
     /* Re-observing a resident pair must not evict. */
-    assoc_observe(bssid, sta, "net", 0, -40, 6);
+    assoc_observe(bssid, sta, "net", 0, -40, 6, WIFI_BAND_UNKNOWN);
     ASSERT_EQ((long long)sh_evict_count(SH_EVICT_ASSOC_PAIR), 4);
     assoc_clear();
     sh_evict_reset();
@@ -787,7 +787,8 @@ static void test_parse_fault_names_are_stable_and_distinct(void) {
     ASSERT_STR(sh_parse_fault_name(SH_PF_DNS_NAME_BAD),  "dns_name_bad");
     ASSERT_STR(sh_parse_fault_name(SH_PF_TLS_MALFORMED), "tls_malformed");
     ASSERT_STR(sh_parse_fault_name(SH_PF_FRAME_EDGE),    "frame_edge");
-    ASSERT_EQ((int)SH_PF_KIND_COUNT, 10);
+    ASSERT_STR(sh_parse_fault_name(SH_PF_FCS_FAILED),    "fcs_failed");
+    ASSERT_EQ((int)SH_PF_KIND_COUNT, 11);
     for (int a = 0; a < SH_PF_KIND_COUNT; a++) {
         ASSERT(sh_parse_fault_name((sh_parse_fault_t)a)[0] != '\0');
         for (int b = a + 1; b < SH_PF_KIND_COUNT; b++)
@@ -810,6 +811,7 @@ static void test_parse_fault_wired_set(void) {
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_DNS_NAME_BAD),  0);
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_TLS_MALFORMED), 0);
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_FRAME_EDGE),    1);
+    ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_FCS_FAILED),    1);
 }
 
 /* beacon_parse_ies() is the first walk on the iterator (#126). One
@@ -1147,6 +1149,31 @@ static void test_schema_doc_lists_every_memory_field(void) {
     free(doc);
 }
 
+/* #185 item 3: the contract page names the `jsonl_version` field and the
+ * value this build emits. Both, because each catches a different drift:
+ * the field name going undocumented, and a bump that moves the macro and
+ * leaves the page describing the previous contract. A consumer reads the
+ * page to know what a version means, so the page being behind the
+ * emitter is the one failure mode the version field cannot survive. */
+static void test_schema_doc_states_the_jsonl_contract_version(void) {
+    char *doc = slurp_text("docs/wiki/jsonl-schema.md");
+    ASSERT(doc != NULL);
+    if (!doc) return;
+    int named = strstr(doc, "`jsonl_version`") != NULL;
+    if (!named)
+        fprintf(stderr, "    jsonl-schema.md does not document "
+                        "`jsonl_version`\n");
+    ASSERT(named);
+    char want[64];
+    snprintf(want, sizeof(want), "`%s`", SLOTH_JSONL_VERSION);
+    int versioned = strstr(doc, want) != NULL;
+    if (!versioned)
+        fprintf(stderr, "    jsonl-schema.md does not name the current "
+                        "contract version %s\n", want);
+    ASSERT(versioned);
+    free(doc);
+}
+
 void run_sensor_health_tests(void) {
     TEST_SUITE("sensor health — table-overflow tally (#91 slice 3)");
     RUN_TEST(test_tally_starts_at_zero);
@@ -1198,6 +1225,7 @@ void run_sensor_health_tests(void) {
     RUN_TEST(test_mem_sample_follows_glibc_malloc);
     RUN_TEST(test_mem_sample_reports_resolver_counter);
     RUN_TEST(test_schema_doc_lists_every_memory_field);
+    RUN_TEST(test_schema_doc_states_the_jsonl_contract_version);
 
     sh_evict_reset();   /* leave the tally clean for later suites */
     sh_parse_fault_reset();

@@ -133,7 +133,15 @@ static const char *const CALLS[] = {
 static const char *const NOTICE[] = {
     "listening on ", "SQL box on ", "vendor table: ", "reading ",
     "time series in ", "baselines (", "stopped: ", "store schema v",
-    "sloth.db %s: schema v",
+    "sloth.db %s: schema v", "BLE: ",
+    /* triage and the TACDB (web_frrs.h): which way the writes are */
+    "triage and TACDB writes ", "--web-read-only: no write route", "follow recommended: ",
+    /* the agent's path (web_agent.h): that it is on, and where its secret is */
+    "agent writes: ",
+    /* the fleet (web_fleet.h): what is served and which peers are pulled */
+    "fleet: pulling ", "fleet: /api/fleet/export served ",
+    /* and which own networks this site names (#192 I2, I3) */
+    "fleet: this site's own networks ",
 };
 static const struct { const char *file, *start; } RUNTIME[] = {
     { "web_ingest.c", "socket: " }, { "web_ingest.c", "fcntl: " },
@@ -203,7 +211,8 @@ static void test_security_section(void) {
     WT_ASSERT(s != NULL);
     static const char *const points[] = {
         "**Loopback by default.**", "`--web-allow-remote`", "`--web-allow CIDR`",
-        "**GET and HEAD only.**", "**No authentication.**",
+        "**GET and HEAD, and POST to slothweb's own state only.**", "`--web-read-only`",
+        "**No authentication.**",
         "Whoever can reach the port reads everything", "**The Host check.**",
         "**CSP and no external requests.**", "Content-Security-Policy",
         "**Read-only towards sloth.db.**", "In WAL mode", "never checkpoints",
@@ -223,7 +232,8 @@ static void test_security_section(void) {
     WT_ASSERT(a && b && c && d && a < b && b < c && c < d);
     /* The quick start the check follows. */
     WT_HAS(doc, "<!-- quickstart:begin -->\n```sh\nmake web web-demo\n");
-    WT_HAS(doc, "--sloth-db sloth.db --store slothweb.db\n```\n<!-- quickstart:end -->");
+    WT_HAS(doc, "--sloth-db sloth.db --store slothweb.db --pcap-dir pcap\n```\n<!-- quickstart:end -->");
+    WT_HAS(doc, "\"$SRC/build/web/slothweb-demo\" pcaps pcap\n");
     free(doc);
 }
 

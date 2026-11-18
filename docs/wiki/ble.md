@@ -12,7 +12,9 @@ HCI monitor channel — libpcap's `bluetooth-monitor` device, link type
 advertising reports, and the host's own scan, advertise and connect
 commands. The channel is receive-only by construction. sloth sends no
 HCI or MGMT command; **the operator starts a passive scan** with their
-own stack, and sloth reports in `sensor_health` whether the scan it saw
+own stack — or, where nothing else uses Bluetooth, with
+`sloth-ble-scan.service`, which holds one through the HCI user channel
+for the life of the sensor — and sloth reports in `sensor_health` whether the scan it saw
 configured was in fact passive, and raises `BT_OWN_TRANSMIT` when the
 host it listens through was told to transmit.
 
@@ -26,9 +28,13 @@ host it listens through was told to transmit.
 (`capture_fallback_device`), `src/main.c`, `MISSION.md` §1–§2;
 Bluetooth Core Specification v5.4 Vol 4 Part E §5.2 (arrayed parameters), §5.4, §7.1, §7.3.2, §7.3.18,
 §7.7.65.2, §7.7.65.13, §7.8; Vol 6 Part B §2.3.1 (legacy PDU payload); Linux `include/net/bluetooth/hci_mon.h` and
-`net/bluetooth/hci_sock.c`; libpcap `pcap-bt-monitor-linux.c`; #144.
+`net/bluetooth/hci_sock.c`; libpcap `pcap-bt-monitor-linux.c`; #144;
+`src/ble_scan/main.c`, `src/ble_scan/ble_scan_cmd.c`, `tests/test_ble_scan.c`,
+`packaging/systemd/sloth-ble-scan.service` (the passive-scan helper);
+Core Spec v5.4 Vol 4 Part E §7.3.1, §7.7.14–§7.7.16, §7.8.1, §7.8.10,
+§7.8.11, §7.8.64, §7.8.65; Vol 6 Part B §4.4.3.1 (passive scanning).
 
-**Last updated**: 2026-10-23 (#156 item 2 follow-up: `BLE_ADV_FLOOD` and `BLE_WATCHLIST` pinned unchanged by the flag, the flood also with linked addresses inside it; which side of a link eviction and retention can free), 2026-10-23 (#156 item 2 integration: hints feed only the `[*]` estimate, `BLE_HID_UNEXPECTED` unchanged by the flag; links window-scoped; a linked entry keeps its digests until the link goes), 2026-10-23 (#156 item 2 review round: sequential-spray poisoning and the flood gate judged at commit; no link under controller duplicate filtering; banded `sensor_health` fields; expiry without frames; 3600 s poison window, full list fails closed; Fast Pair token from a 5-octet filter), 2026-10-23 (#156 item 2: address-rotation hints, `--ble-rotation-hints`, internal use only, off by default), 2026-10-23 (multi-report events decoded as consecutive records per Vol 4 Part E §5.2, for 0x02 and 0x0D; Legacy-bit PHY rule; anonymous fragment trains; LE Coded S=2), 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
+**Last updated**: 2026-11-02 (`ble_device` re-sent once a 10 s slot while heard; slothweb's BLE Devices waterfall, the device classes and their sources), 2026-11-02 (slothweb's BLE tab: the `[*]` view at parity in the browser, kept by slothweb from this stream and persisted in slothweb.db v7; the SIG assigned numbers under `web/data/btsig/`; on review, the header's count is sloth's own and its flood figure says what it counts, a finding comes back whole after a restart, and the BLE rows sit inside `--web-max-mb`), 2026-10-26 (`sloth-ble-scan` integration: build, gate and write as one `bles_send()` with an injected writer, and `main.c`'s one `send()` pinned inside it), 2026-10-26 (`sloth-ble-scan` review: a No-Op is flow control, not a restart; a Hardware Error mid-sequence retries in-process; the boot-time bind wait; the decisions as a pure step function; the link-time check that sloth carries no HCI builder; what stopping bluetoothd sends, and Conflicts= in both directions), 2026-10-26 (`sloth-ble-scan`: a passive LE scan held over the HCI user channel for the life of the sensor, its command set and why it is consistent with MISSION §2), 2026-10-23 (#156 item 2 follow-up: `BLE_ADV_FLOOD` and `BLE_WATCHLIST` pinned unchanged by the flag, the flood also with linked addresses inside it; which side of a link eviction and retention can free), 2026-10-23 (#156 item 2 integration: hints feed only the `[*]` estimate, `BLE_HID_UNEXPECTED` unchanged by the flag; links window-scoped; a linked entry keeps its digests until the link goes), 2026-10-23 (#156 item 2 review round: sequential-spray poisoning and the flood gate judged at commit; no link under controller duplicate filtering; banded `sensor_health` fields; expiry without frames; 3600 s poison window, full list fails closed; Fast Pair token from a 5-octet filter), 2026-10-23 (#156 item 2: address-rotation hints, `--ble-rotation-hints`, internal use only, off by default), 2026-10-23 (multi-report events decoded as consecutive records per Vol 4 Part E §5.2, for 0x02 and 0x0D; Legacy-bit PHY rule; anonymous fragment trains; LE Coded S=2), 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
 
 ---
 
@@ -524,8 +530,12 @@ the point of sloth's fields is that it checks itself.
    desktop Bluetooth panel's device search and MGMT Start Discovery all
    run an **active** scan in the Linux kernel. Do not use them.
 3. **Start a passive LE scan** with a tool that sets `LE_Scan_Type` =
-   passive. BlueZ's deprecated `hcitool` does it directly:
-   `hcitool -i hci0 lescan --passive --duplicates`. It uses the legacy
+   passive. On a host where nothing else uses Bluetooth,
+   `sloth-ble-scan.service` does it for the life of the sensor (below,
+   and [[deployment]] §7); it starts after sloth, so step 1's order
+   holds. BlueZ's deprecated `hcitool` does it directly:
+   `hcitool -i hci0 lescan --passive --duplicates`, where the kernel
+   lets it (on the reference host it fails with an I/O error). It uses the legacy
    scan commands, so reports arrive as subevent 0x02. Another scanner on
    the same controller (bluetoothd's own) can make it fail with an I/O
    error; stop that first. On a **BT 5 controller** the legacy commands
@@ -563,6 +573,135 @@ the point of sloth's fields is that it checks itself.
    row: every report in them the tail of a fragmented advertisement
    (`ble_ext_adv_fragments`).
 
+### Holding the scan: `sloth-ble-scan`
+
+`sloth-ble-scan` (`src/ble_scan/`, installed to `/usr/local/sbin` by
+`make install`) is the operator's tool for step 3 on a host where
+nothing else uses Bluetooth; `sloth-ble-scan.service` runs it for the
+life of the sensor ([[deployment]] §7). It exists because BlueZ has no
+passive scan a service can hold: `bluetoothctl scan on` and MGMT
+discovery are active, and on the reference host (kernel 7.0, Intel
+8087:0aaa, BlueZ 5.87) `hcitool lescan --passive` fails with
+`Set scan parameters failed: Input/output error` even with bluetoothd
+masked — `btmon` shows the command never reached the controller,
+because the kernel refuses raw commands on the normal HCI socket while
+it manages the device.
+
+The helper takes the controller over the **HCI user channel** instead:
+with bluetoothd masked and `hciN` down (`sloth-ble-scan --down hciN`,
+the `HCIDEVDOWN` ioctl), it binds an AF_BLUETOOTH socket to
+`HCI_CHANNEL_USER`, which the kernel grants to one holder at a time and
+only with `CAP_NET_ADMIN`. It then sends exactly:
+
+| Command | Opcode | Parameters (Core Spec v5.4 Vol 4 Part E) |
+|---|---|---|
+| HCI_Reset | 0x0C03 | none (§7.3.2) |
+| Set Event Mask | 0x0C01 | `ff ff ff ff ff ff bf 3d` — LE Meta (bit 61) and Hardware Error (bit 15) on (§7.3.1) |
+| LE Set Event Mask | 0x2001 | `02 10 00 00 00 00 00 00` — LE Advertising Report and LE Extended Advertising Report only (§7.8.1) |
+| LE Set Scan Parameters | 0x200B | `LE_Scan_Type` **0x00 passive**, interval = window = 0x0060 (60 ms), own address public, filter policy 0 (§7.8.10) |
+| LE Set Scan Enable | 0x200C | `01 00` to hold, `00 00` on SIGTERM/SIGINT (§7.8.11) |
+
+A controller that refuses the legacy parameters as Unknown HCI Command
+(0x01) or Unsupported Feature or Parameter Value (0x11) gets the
+extended pair instead — LE Set Extended Scan Parameters (0x2041, 1M PHY,
+`Scan_Type` 0x00, §7.8.64) and LE Set Extended Scan Enable (0x2042,
+Duration and Period 0, §7.8.65) — under the same passive rule. After a
+Reset no extended command has been issued, so a controller that has
+both accepts the legacy set; the reference host's did (7489 legacy
+advertising reports from 74 addresses in 60 s, all of them seen by a
+concurrent `sloth --bt-monitor` as `ble_adv_reports` 7489 with
+`ble_own_tx` `never` and no `BT_OWN_TRANSMIT`).
+
+It reads every event and discards it unopened — the socket has to be
+drained or the controller stalls — and never prints advertising
+content: sloth is the decoder. A Hardware Error event (§7.7.16) re-runs
+the whole sequence from the Reset, at most five times a minute, and so
+does one that arrives while the sequence itself is running (the usual
+shape: a second Hardware Error while the host resets after the first),
+rather than exiting into systemd's slower and start-limited restart. A
+Command Complete for opcode 0x0000 is **not** a restart: §7.7.14 makes
+it a No-Op a controller may send at any time to update
+Num_HCI_Command_Packets, and the kernel treats `HCI_OP_NOP` as flow
+control only. Reading it as "controller restarted" — the first version
+did — would let a controller that sends No-Ops in normal running, or one
+late after the Reset, make the helper reset itself out of its own scan
+and spend the budget. A controller that goes away ends the process for
+systemd to restart. At start, a bind refused with `ENODEV` (hciN not
+registered yet, at boot) or `EBUSY` (a USB controller still in setup)
+is retried once a second for up to 30 s; an `EBUSY` that outlasts it
+says what to do: mask `bluetooth.service` and bring `hciN` down. It
+logs one line at start and one per re-establish.
+
+The sequence and its decisions — which answer moves to the extended
+pair (0x01 and 0x11 only; 0x0C or anything else fails), which disable
+matches the set the scan was enabled with, what a Hardware Error
+mid-sequence does, the re-arm budget, the argv rules — are a pure step
+function in `src/ble_scan/ble_scan_cmd.c`, driven in
+`tests/test_ble_scan.c` with hand-built Command Complete, Command Status
+and Hardware Error events; `main.c` only does the I/O.
+
+**Why this is consistent with MISSION §2.** The rule is that a receiver
+is used only to receive, and that a host controller is listened to
+"through a passive scan the operator started".
+
+- A passive scan puts no frame on the air: in passive scanning the Link
+  Layer only receives and sends no SCAN_REQ (Core Spec v5.4 Vol 6 Part B
+  §4.4.3.1). `LE_Scan_Type` is a constant of the command builder, which
+  takes no scan-type argument; every packet then passes
+  `bles_cmd_allowed()`, an independent check of opcode, length and
+  scan type with its own spelling of "passive", before it is written,
+  and a packet refused there aborts the helper. The build, the gate and
+  the write are one call, `bles_send()`, which hands the gated buffer to
+  a writer `main.c` supplies; that writer holds the helper's only
+  `send()`. A writer that records what it is given proves every command
+  arrives exactly as built and admitted, and that a refused packet
+  never reaches it, and a scan of `main.c` (comments and strings
+  blanked) fails on a second `send()`, any `write()`/`sendmsg()`-family
+  call, or a `send()` outside the writer `bles_send()` is passed.
+  `tests/test_ble_scan.c`
+  pins every command byte for byte against hand-built arrays, proves the
+  builder cannot emit a scan type other than 0x00 over every input, and
+  proves the gate refuses an active scan (legacy and per PHY),
+  advertising, connection, inquiry, page, Write Scan Enable and vendor
+  commands — each seen red under a mutation of the guard.
+- sloth itself still sends no HCI command. The builder is compiled into
+  the helper and the test binary only, and the `sloth` link recipe
+  checks the result in every configuration: the build fails, and
+  deletes the binary, if `nm sloth` lists any `bles_` symbol or any
+  source `sloth` is built from names the builder. A Makefile text scan
+  (`tests/test_ble_scan.c :: test_helper_is_not_linked_into_sloth`) is
+  the second line; on its own it missed `CORE_COMMON_SRCS +=
+  $(BLE_SCAN_SRCS)`.
+- The helper is an operator tool, like `sloth-monitor-up` for the
+  802.11 radio: a separate binary, run by a unit the operator enables.
+  And sloth checks it: every command the helper sends crosses the
+  monitor channel, so the Reset sets `ble_own_tx_baseline` to `1`, the
+  parameters set `ble_scan_mode` to `passive`, and any transmitting
+  state would raise `BT_OWN_TRANSMIT`.
+
+What the helper does not control: binding the user channel opens the
+device and releasing it closes it, which runs the kernel driver's own
+open and shutdown path (`hci_dev_open`, the vendor shutdown). None of it
+is an over-the-air transmission, and none of it is a command the helper
+chose. Nothing else on the host can use the controller while the
+helper holds it, which is why the unit conflicts with
+`bluetooth.service`.
+
+What stopping bluetoothd does is not transmission-free in general, and
+it is bluetoothd's, not the helper's: on SIGTERM bluetoothd powers its
+adapters off (MGMT Set Powered 0), and the kernel's power-off path then
+sends HCI_Disconnect for every live link and stops any advertising,
+which puts LL_TERMINATE_IND / LMP_detach on the air. It happens only if
+links exist. On a host with paired devices connected, disconnect or
+unpair them before the unit (or `systemctl mask --now
+bluetooth.service`) first stops bluetoothd. The owner's host has none.
+
+Conflicts= also runs the other way: starting bluetoothd — including by
+D-Bus activation from any `org.bluez` client — stops the scan, cleanly,
+so it does not restart until the sensor next starts; and the sensor's
+next start pulls the scan in again and stops that bluetoothd
+([[deployment]] §7).
+
 ### Warnings
 
 - **This channel carries secrets.** Link keys, LTKs and IRKs cross it in
@@ -586,6 +725,72 @@ of `bluetooth-monitor` — routes to this source under `--replay`, and
 libpcap savefile, and is not read. `make replay-check` replays a
 generated one built from hand-assembled records (`tests/replay/gen_replay.c`);
 no capture is committed.
+
+## slothweb
+
+Since 2026-11-01 the browser dashboard ([[slothweb]]) shows the `[*]`
+view as its BLE tab (key `0`), at data and colour parity with the TUI:
+the same columns and cell strings, a row one colour (bright for a HID
+or watchlisted advertiser), the header, rotation-hints, empty-state
+and legend lines verbatim, a drawer in the detail's order (with a 24 h
+presence strip of quarter hours and the rate between records), and the
+`ble_alert` findings standing first; the Overview has a `ble
+advertisers` tile. sloth.db has no BLE table, so
+slothweb keeps the rows itself from this page's stream records
+(`web/src/web_ble.h`: `ble_device`, `ble_alert`, the Bluetooth members
+of `sensor_health`) and persists them in its own slothweb.db (v7). It
+never re-derives the distance estimate (the four `est_*` fields are
+shown as they came, absent meaning no estimate), never exports a
+rotation link (the block shows the banded `ble_rot_*` counts and says
+the TUI's estimate is not on the stream), and never renders a
+finding's key. The company behind a manufacturer id, the service a
+16-bit UUID names and the appearance's class come from the Bluetooth
+SIG's assigned numbers, committed under `web/data/btsig/` and compiled
+in, so slothweb fetches nothing. Under the capture scope's Local the
+view is empty, saying why: the receivers are passive radio
+([[capture-scope]]).
+
+Two of the TUI header's numbers are not on the stream as the TUI has
+them. `BLE advertisers: N` is sloth's own table (`s->ble_device_count`),
+which `sensor_health` carries as `ble_devices`: the web shows that,
+with the rows slothweb keeps (which outlive sloth's evictions and
+restarts) beside it as `(R rows kept here)`, and the rotation block's
+address count is the same live figure. The TUI's `flood keys` is
+`ble_flood_count`, the flood detector's tracked windows (one a
+manufacturer heard, so tens in a normal room), which no record carries;
+the web says `standing floods: N`, the `adv_flood` findings standing,
+under its own name rather than the TUI's. A finding seeded from
+slothweb.db after a restart carries every field the live one had (a
+flood's fresh count, rate, window and citation line; a `hid_oui`
+finding's address, which the drawer matches on), and a resolve on its
+live key resolves the stored row in place. The BLE tables are inside
+`--web-max-mb`: an address flood mints a row per random address, so
+the ceiling drops the advertisers no flag marks before any keyed
+Wi-Fi or host history, and the HID and watchlisted ones only after it
+([[slothweb]]). The web side's description, routes
+(`/api/ble`, `/api/ble/alerts`, `/api/ble/{addr}`) and parity table:
+[`web/README.md`](../../web/README.md#ble).
+
+Since 2026-11-02 the tab reads `BLE Devices` and has a waterfall above
+the table in the WiFi view's style: device classes by time (each cell
+the class's busiest advertisers as stacked bands) and advertisers by
+time (each cell the mean signal graded by this page's distance bands,
+hot is near). Not channels: an HCI advertising report carries none.
+The classes are decided from what `ble_device` carries, first match
+wins, each rule sourced in
+`research/bluetooth/ble-device-classes.md`: Trackers (a watch
+category, Appearance Tag or Keyring, a Tile or CHIPOLO UUID by the SIG
+registry, the assignment and not a verified shape), Input (the HID
+bits above), Beacons (Eddystone 0xFEAA), Wearables & audio, Phones &
+computers, Vehicles & IoT (Apple Continuity types per Celosia and
+Cunche 2020 and Martin et al. 2019, the MS-CDP beacon, Fast Pair's
+Provider signal, Samsung's packets as the spam tool writes them, and
+the SIG Appearance categories), Unknown. A class names a kind of
+device, never a device or a person; a rotating random address is its
+own row and no rotation is linked. To give both panels a point a 10 s
+bucket, `ble_device` is now re-sent once a slot while the advertiser
+is heard ([[jsonl-schema]]). Description, routes, the class table and
+the grade: [`web/README.md`](../../web/README.md#ble).
 
 ## Not built yet
 
@@ -612,3 +817,7 @@ no capture is committed.
 - [[non-ip-sensors]] — the sensor-family roadmap BLE came from.
 - [[monitor-mode]] — the 802.11 counterpart: sloth reads a monitor
   interface and never configures one.
+- [[deployment]] §7 — `sloth-ble-scan.service`: installing, enabling and
+  verifying the passive-scan holder.
+- [[slothweb]] — the browser dashboard's BLE tab, this view at parity,
+  from the stream records above.

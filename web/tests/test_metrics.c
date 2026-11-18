@@ -6,9 +6,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "web_anomaly.h"
+#include "web_baseline.h"
 #include "web_jsonl.h"
+#include "web_live.h"
 #include "web_metrics.h"
 #include "web_rollup.h"
+#include "web_scope.h"
 #include "wtest.h"
 
 static web_rollup_t  ru;
@@ -97,6 +101,16 @@ static void test_key_canonicalisers(void) {
     WT_EQ(web_key_canon(WM_ALERTS_FIRED, "12a", o), -1);
     WT_EQ(web_key_canon(WM_DEV_FRAMES, "AA:BB:CC:DD:EE:FF", o), 0);
     WT_ASSERT(!strcmp(o, "aa:bb:cc:dd:ee:ff"));
+    WT_EQ(web_key_rectype("dns", o), 0);
+    WT_ASSERT(!strcmp(o, "dns"));
+    WT_EQ(web_key_rectype("alert.create", o), 0);
+    WT_EQ(web_key_rectype("DNS", o), -1);          /* upper case */
+    WT_EQ(web_key_rectype("dns<script>", o), -1);
+    WT_EQ(web_key_rectype("", o), -1);
+    WT_EQ(web_key_rectype(NULL, o), -1);
+    WT_EQ(web_key_rectype("twelve_characters_too_long_for_this", o), -1);
+    WT_EQ(web_key_canon(WM_RECORDS_RATE, "dns", o), 0);
+    WT_EQ(web_key_canon(WM_RECORDS_RATE, "DNS", o), -1);
 }
 
 /* iface and top_host rates are sloth's "%.2f" reals. */
@@ -125,7 +139,12 @@ static void test_gauges(void) {
 }
 
 /* Untrusted keys never become keys: markup in the ip, a bad name, a
- * name too long. Seen red with web_key_ip() replaced by a plain copy. */
+ * name too long. Seen red with web_key_ip() replaced by a plain copy.
+ * records.rate is the one keyed metric every valid-typed line still
+ * feeds (its key is the type, never the hostile field), and
+ * records.total the one global, so the overall counts below are 8
+ * samples in 5 series (4 type keys and the global), not 0 -- the
+ * hostile fields themselves asserted per metric above them. */
 static void test_hostile_keys_refused(void) {
     fresh();
     line("{\"type\":\"top_host\",\"ts\":1,\"ip\":\"<img onerror=x>\",\"conn_count\":1}");
@@ -134,10 +153,25 @@ static void test_hostile_keys_refused(void) {
     line("{\"type\":\"iface\",\"ts\":1,\"name\":\"eth0\\u2028\",\"rx_rate\":1}");
     line("{\"type\":\"probe_client\",\"ts\":1,\"mac\":\"aa:bb:cc:dd:ee:ff<\","
          "\"frame_count\":5}");
+    web_keyinfo_t ki[4];
+    int total;
+    WT_EQ(web_rollup_keys(&ru, WM_HOST_CONNS, ki, 4, &total), 0);
+    WT_EQ(total, 0);
+    WT_EQ(web_rollup_keys(&ru, WM_DNS_QUERIES, ki, 4, &total), 0);
+    WT_EQ(total, 0);
+    WT_EQ(web_rollup_keys(&ru, WM_IFACE_RX, ki, 4, &total), 0);
+    WT_EQ(total, 0);
+    WT_EQ(web_rollup_keys(&ru, WM_DEV_FRAMES, ki, 4, &total), 0);
+    WT_EQ(total, 0);
+    WT_ASSERT(cur(WM_RECORDS_RATE, "top_host").sum == 1);
+    WT_ASSERT(cur(WM_RECORDS_RATE, "dns").sum == 1);
+    WT_ASSERT(cur(WM_RECORDS_RATE, "iface").sum == 1);
+    WT_ASSERT(cur(WM_RECORDS_RATE, "probe_client").sum == 1);
+    WT_ASSERT(cur(WM_RECORDS_TOTAL, "").sum == 4);
     web_rollup_stats_t st;
     web_rollup_stats(&ru, &st);
-    WT_EQ(st.samples, 0);
-    WT_EQ(st.series, 0);
+    WT_EQ(st.samples, 8);
+    WT_EQ(st.series, 5);
     done();
 }
 
@@ -169,6 +203,10 @@ static void test_event_counters(void) {
     line("{\"type\":\"alert\",\"ts\":1,\"title\":\"t\",\"detail\":\"d\",\"key\":\"k\","
          "\"sev\":2,\"ty\":14,\"count\":1}");
     line("{\"type\":\"alert.create\",\"ts\":1,\"title\":\"t\",\"sev\":2,\"ty\":14}");
+    /* "alert" queues rather than adding straight to the bucket (#218:
+     * sloth-rf can raise the same type), so it needs a drain before
+     * it shows. */
+    web_rollup_close_all(&ru);
     WT_ASSERT(cur(WM_ALERTS_FIRED, "14").sum == 1);   /* the legacy record only */
     done();
 }
@@ -373,6 +411,161 @@ static void test_pass_gauges(void) {
     done();
 }
 
+/* records.rate (docs/web-visual-spec.md §7): every decoded record
+ * bumps its own type's counter, by one, regardless of whether the type
+ * steers anything else here. socket_gap is the one exception: it taints
+ * rather than counting as content. */
+static void test_records_rate(void) {
+    fresh();
+    line("{\"type\":\"dns\",\"ts\":1,\"src\":\"10.0.0.5\",\"qname\":\"a.example\","
+         "\"qtype\":\"A\",\"answer\":\"\",\"is_resp\":0}");
+    line("{\"type\":\"dns\",\"ts\":1,\"src\":\"10.0.0.6\",\"qname\":\"b.example\","
+         "\"qtype\":\"A\",\"answer\":\"\",\"is_resp\":0}");
+    line("{\"type\":\"tls\",\"ts\":1,\"src\":\"10.0.0.5\",\"dst\":\"1.1.1.1\","
+         "\"host\":\"x\",\"ver\":\"1.3\",\"ja3\":\"abc\"}");
+    line("{\"type\":\"alert.create\",\"ts\":1,\"title\":\"t\",\"sev\":2,\"ty\":14}");
+    WT_ASSERT(cur(WM_RECORDS_RATE, "dns").sum == 2);
+    WT_ASSERT(cur(WM_RECORDS_RATE, "tls").sum == 1);
+    WT_ASSERT(cur(WM_RECORDS_RATE, "alert.create").sum == 1);
+    WT_EQ(has_series(WM_RECORDS_RATE, "alert"), 0);
+    line("{\"type\":\"socket_gap\",\"ts\":1,\"dropped\":1}");
+    WT_EQ(has_series(WM_RECORDS_RATE, "socket_gap"), 0);
+    /* records.total (F1, the records/s tile): the same four, one global
+     * series, and neither the gap nor a type records.rate refuses is in
+     * it. Seen red with the total's add moved above the type check. */
+    WT_ASSERT(cur(WM_RECORDS_TOTAL, "").sum == 4);
+    line("{\"type\":\"Not A Type\",\"ts\":1}");
+    WT_ASSERT(cur(WM_RECORDS_TOTAL, "").sum == 4);
+    WT_EQ(web_metric_defs[WM_RECORDS_TOTAL].kind, WEB_MK_COUNTER);
+    WT_EQ(web_metric_defs[WM_RECORDS_TOTAL].kclass, WEB_KC_GLOBAL);
+    WT_EQ(web_metric_find("records.total"), WM_RECORDS_TOTAL);
+    done();
+}
+
+/* sensor.drops (docs/web-visual-spec.md §7): the four delta fields
+ * summed, every tick -- a tick with none of them present (an older
+ * sloth, or simply nothing to report) still samples, at 0, so the
+ * series reads as a flat line rather than a gap when the sensor is
+ * healthy. Seen red by gating the sample on the sum being positive. */
+static void test_sensor_drops(void) {
+    fresh();
+    line("{\"type\":\"sensor_health\",\"ts\":1,\"capture_drop_delta\":3,"
+         "\"capture_ifdrop_delta\":1,\"monitor_drop_delta\":2,"
+         "\"monitor_ifdrop_delta\":0}");
+    web_point_t p = cur(WM_SENSOR_DROPS, "");
+    WT_EQ(p.n, 1);
+    WT_ASSERT(p.sum == 6);
+    line("{\"type\":\"sensor_health\",\"ts\":1}");
+    p = cur(WM_SENSOR_DROPS, "");
+    WT_EQ(p.n, 2);
+    WT_ASSERT(p.sum == 6 && p.min == 0);
+    done();
+}
+
+/* live.devices, live.alerts_open, live.anomalies_open (docs/
+ * web-visual-spec.md §7): sampled once a snapshot batch, at its first
+ * iface record, from whatever web_live_t and web_anomaly_t already
+ * hold. Mirrors web_ingest.c's one_line(): web_live_apply() then
+ * web_metrics_record() on the same record. */
+static web_live_t      g_live;
+static web_anomaly_t   g_anom;
+static web_baseline_t  g_bl;
+
+static void live_fresh(void) {
+    fresh();
+    web_live_init(&g_live, NULL);
+    web_anom_cfg_t acfg;
+    memset(&acfg, 0, sizeof(acfg));
+    WT_EQ(web_baseline_init(&g_bl, 32), 0);
+    acfg.bl = &g_bl;
+    WT_EQ(web_anomaly_init(&g_anom, 8, &acfg), 0);
+    web_metrics_set_live(&mx, &g_live);
+    web_metrics_set_anomaly(&mx, &g_anom);
+}
+
+static void live_done(void) {
+    web_anomaly_destroy(&g_anom);
+    web_baseline_destroy(&g_bl);
+    web_live_destroy(&g_live);
+    done();
+}
+
+static void live_line(const char *s) {
+    int e = web_jl_parse(s, strlen(s), &rec);
+    WT_EQ(e, WEB_JL_OK);
+    if (e != WEB_JL_OK) return;
+    web_live_apply(&g_live, &rec, g_now * 1000);
+    web_metrics_record(&mx, &rec);
+}
+
+static void test_live_sampling(void) {
+    live_fresh();
+    /* Pass 1: one device, closed by the beacon that follows it. Not yet
+     * sampled: the first batch_start() has nothing prior to report, the
+     * same way wifi.probe_clients and conns.total report nothing on it
+     * (test_pass_gauges). */
+    live_line("{\"type\":\"iface\",\"ts\":1,\"name\":\"eth0\",\"rx_rate\":0,"
+              "\"tx_rate\":0}");
+    live_line("{\"type\":\"device\",\"ts\":1,\"mac\":\"02:00:00:00:00:01\","
+              "\"ip\":\"\"}");
+    live_line("{\"type\":\"beacon\",\"ts\":1,\"bssid\":\"02:00:00:00:aa:01\","
+              "\"frame_count\":1}");
+    live_line("{\"type\":\"alert.create\",\"ts\":1,\"incident_id\":\"i1\","
+              "\"sev\":1,\"ty\":1,\"title\":\"t\"}");
+    WT_EQ(has_series(WM_LIVE_DEVICES, ""), 0);
+    WT_EQ(has_series(WM_LIVE_ALERTS_OPEN, ""), 0);
+    WT_EQ(has_series(WM_LIVE_ANOMALIES_OPEN, ""), 0);
+    /* One open episode, poked directly: the rules that open one for
+     * real are test_anomaly.c's job, not this file's. */
+    g_anom.ep[0].state = WEB_EP_OPEN;
+
+    /* Pass 2's first iface record is the next batch's batch_start():
+     * it samples pass 1's published count, the open alert and the
+     * open episode. */
+    g_now += 1;
+    live_line("{\"type\":\"iface\",\"ts\":2,\"name\":\"eth0\",\"rx_rate\":0,"
+              "\"tx_rate\":0}");
+    WT_ASSERT(cur(WM_LIVE_DEVICES, "").sum == 1);
+    WT_ASSERT(cur(WM_LIVE_ALERTS_OPEN, "").sum == 1);
+    WT_ASSERT(cur(WM_LIVE_ANOMALIES_OPEN, "").sum == 1);
+    live_line("{\"type\":\"device\",\"ts\":2,\"mac\":\"02:00:00:00:00:02\","
+              "\"ip\":\"\"}");
+    live_line("{\"type\":\"beacon\",\"ts\":2,\"bssid\":\"02:00:00:00:aa:01\","
+              "\"frame_count\":2}");
+    /* Pass 2 published 1 device too; close the open alert and episode,
+     * open nothing new, and confirm the next batch samples 0, not a
+     * stale 1 -- seen red with sample_live() skipped under a 0 value. */
+    live_line("{\"type\":\"alert.resolve\",\"ts\":2,\"incident_id\":\"i1\","
+              "\"sev\":1,\"ty\":1,\"title\":\"t\",\"reason\":\"r\"}");
+    g_anom.ep[0].state = WEB_EP_CLOSED;
+    g_now += 1;
+    live_line("{\"type\":\"iface\",\"ts\":3,\"name\":\"eth0\",\"rx_rate\":0,"
+              "\"tx_rate\":0}");
+    web_point_t p = cur(WM_LIVE_ALERTS_OPEN, "");
+    WT_EQ(p.n, 2);
+    WT_ASSERT(p.sum == 1 && p.min == 0);
+    p = cur(WM_LIVE_ANOMALIES_OPEN, "");
+    WT_EQ(p.n, 2);
+    WT_ASSERT(p.sum == 1 && p.min == 0);
+    live_done();
+}
+
+/* With neither wired (the default), nothing is sampled: existing
+ * callers of web_metrics_init() that never call web_metrics_set_live()
+ * or web_metrics_set_anomaly() are unaffected. */
+static void test_live_sampling_unwired_is_a_noop(void) {
+    fresh();
+    line("{\"type\":\"iface\",\"ts\":1,\"name\":\"eth0\",\"rx_rate\":0,"
+         "\"tx_rate\":0}");
+    g_now += 1;
+    line("{\"type\":\"iface\",\"ts\":2,\"name\":\"eth0\",\"rx_rate\":0,"
+         "\"tx_rate\":0}");
+    WT_EQ(has_series(WM_LIVE_DEVICES, ""), 0);
+    WT_EQ(has_series(WM_LIVE_ALERTS_OPEN, ""), 0);
+    WT_EQ(has_series(WM_LIVE_ANOMALIES_OPEN, ""), 0);
+    done();
+}
+
 /* The high-water table is bounded; its evictions are counted. */
 static void test_highwater_table_bounded(void) {
     fresh();
@@ -386,7 +579,7 @@ static void test_highwater_table_bounded(void) {
     web_rollup_stats_t st;
     web_rollup_stats(&ru, &st);
     WT_EQ(st.hw_evictions, 10);
-    WT_EQ(mx.hw_n, WEB_HW_ROWS);
+    WT_EQ(mx.hw.n, WEB_HW_ROWS);
     done();
 }
 
@@ -497,11 +690,155 @@ static void test_highwater_gone_filter_rotates(void) {
     WT_ASSERT(cur(WM_DEV_FRAMES, "02:00:00:ff:ff:02").sum == 6);
     web_rollup_stats(&ru, &st);
     WT_EQ(st.hw_evictions, 8193);
-    WT_EQ(mx.hw_gone_n, 1);
+    WT_EQ(mx.hw.gone_n, 1);
+    done();
+}
+
+/* rf.rssi.* (docs/web-frrs-spec.md Q7, owner ruling 2026-11-02): the
+ * signal sloth last heard, from hand-built records in src/jsonl.c's
+ * shapes, each into its emitter kind's own series. */
+static void test_rssi_series(void) {
+    fresh();
+    /* A station's probes, by its MAC: a gauge, mean min and max. */
+    line("{\"type\":\"probe_client\",\"ts\":100,\"mac\":\"02:00:00:00:00:51\",\"ssid\":\"x\","
+         "\"signal_dbm\":-61,\"channel\":6,\"first_seen\":90,\"last_seen\":100,\"frame_count\":3}");
+    line("{\"type\":\"probe_client\",\"ts\":101,\"mac\":\"02:00:00:00:00:51\",\"ssid\":\"x\","
+         "\"signal_dbm\":-55,\"channel\":6,\"first_seen\":90,\"last_seen\":101,\"frame_count\":4}");
+    web_point_t p = cur(WM_RF_RSSI_STA, "02:00:00:00:00:51");
+    WT_EQ(p.n, 2);
+    WT_ASSERT(p.min == -61 && p.max == -55);
+    WT_ASSERT(web_point_value(WM_RF_RSSI_STA, &p) == -58);
+    /* An AP's beacon, by bssid (canonicalised), with no channel mix
+     * wired: the sample does not wait on the mix. Seen red with the
+     * beacon branch's `if (!m->mix) return;` moved back above it. */
+    line("{\"type\":\"beacon\",\"ts\":100,\"ssid\":\"x\",\"bssid\":\"02:00:00:00:00:A1\","
+         "\"signal_dbm\":-50,\"channel\":6,\"last_seen\":100,\"frame_count\":10}");
+    p = cur(WM_RF_RSSI_BSSID, "02:00:00:00:00:a1");
+    WT_EQ(p.n, 1);
+    WT_ASSERT(p.sum == -50);
+    /* An assoc row's signal is the AP's frames: the BSSID's series, and
+     * never the station's. Seen red with the assoc branch sampling
+     * WM_RF_RSSI_STA under the station's key k. */
+    line("{\"type\":\"assoc\",\"ts\":101,\"bssid\":\"02:00:00:00:00:a1\",\"sta_mac\":"
+         "\"02:00:00:00:00:52\",\"ssid\":\"x\",\"sta_random\":0,\"source\":1,\"channel\":6,"
+         "\"signal_dbm\":-48,\"first_seen\":95,\"last_seen\":101,\"frame_count\":2}");
+    p = cur(WM_RF_RSSI_BSSID, "02:00:00:00:00:a1");
+    WT_EQ(p.n, 2);
+    WT_ASSERT(p.max == -48);
+    WT_ASSERT(!has_series(WM_RF_RSSI_STA, "02:00:00:00:00:52"));
+    /* A row re-sent long after its last frame is no reading: its signal
+     * is the old one. Seen red with the `ts - ls > WEB_FINE_S` test
+     * taken out of rssi(). */
+    line("{\"type\":\"beacon\",\"ts\":200,\"ssid\":\"y\",\"bssid\":\"02:00:00:00:00:a2\","
+         "\"signal_dbm\":-40,\"channel\":1,\"last_seen\":150,\"frame_count\":10}");
+    WT_ASSERT(!has_series(WM_RF_RSSI_BSSID, "02:00:00:00:00:a2"));
+    /* sloth's 0 is "no signal", not 0 dBm. Seen red with rssi()'s Wi-Fi
+     * upper bound -1 made 0. */
+    line("{\"type\":\"probe_client\",\"ts\":100,\"mac\":\"02:00:00:00:00:53\",\"ssid\":\"x\","
+         "\"signal_dbm\":0,\"channel\":6,\"first_seen\":90,\"last_seen\":100,\"frame_count\":1}");
+    WT_ASSERT(!has_series(WM_RF_RSSI_STA, "02:00:00:00:00:53"));
+    WT_ASSERT(has_series(WM_DEV_PRESENT, "02:00:00:00:00:53"));
+    /* An advertiser, by its address: has_rssi 0 says there is no
+     * reading, whatever rssi holds. Seen red with the has_rssi test
+     * taken out of the ble_device branch. */
+    line("{\"type\":\"ble_device\",\"ts\":100,\"addr\":\"c6:00:00:00:00:b1\",\"addr_type\":1,"
+         "\"has_rssi\":0,\"rssi\":-70,\"rssi_best\":0,\"last_seen\":100}");
+    WT_ASSERT(!has_series(WM_RF_RSSI_BLE, "c6:00:00:00:00:b1"));
+    line("{\"type\":\"ble_device\",\"ts\":101,\"addr\":\"c6:00:00:00:00:b1\",\"addr_type\":1,"
+         "\"has_rssi\":1,\"rssi\":-70,\"rssi_best\":-66,\"last_seen\":101}");
+    p = cur(WM_RF_RSSI_BLE, "c6:00:00:00:00:b1");
+    WT_EQ(p.n, 1);
+    WT_ASSERT(p.sum == -70);
+    /* No kind's series holds another kind's emitter. */
+    WT_ASSERT(!has_series(WM_RF_RSSI_STA, "c6:00:00:00:00:b1"));
+    WT_ASSERT(!has_series(WM_RF_RSSI_BSSID, "02:00:00:00:00:51"));
+    /* The catalogue: gauges of the device class, keyed by MAC, in dBm,
+     * the monitor radio's (and the BLE receivers'). */
+    static const int M[3] = { WM_RF_RSSI_STA, WM_RF_RSSI_BSSID, WM_RF_RSSI_BLE };
+    static const char *const NAME[3] = { "rf.rssi.sta", "rf.rssi.bssid", "rf.rssi.ble" };
+    for (int i = 0; i < 3; i++) {
+        WT_EQ(web_metric_find(NAME[i]), M[i]);
+        WT_EQ(web_metric_defs[M[i]].kind, WEB_MK_GAUGE);
+        WT_EQ(web_metric_defs[M[i]].kclass, i == 2 ? WEB_KC_BLE : WEB_KC_DEV);
+        WT_ASSERT(!strcmp(web_metric_defs[M[i]].keykind, "mac"));
+        WT_ASSERT(!strcmp(web_metric_defs[M[i]].unit, "dBm"));
+        WT_ASSERT(strstr(web_metric_defs[M[i]].source, "not calibrated") != NULL);
+        WT_EQ(web_scope_metric(M[i]), WEB_SC_M);
+        WT_ASSERT(web_metric_is_rssi(M[i]));
+    }
+    WT_ASSERT(!web_metric_is_rssi(WM_DEV_PRESENT));
+    done();
+}
+
+/* The device class's cap bounds rf.rssi.* as it bounds every device
+ * metric: at --web-max-keys 16 the 17th BSSID evicts the least
+ * recently seen, flushed and counted. The first gone was seen red with
+ * web_rollup_init()'s device cap doubled. */
+static void test_rssi_key_cap(void) {
+    char err[64];
+    WT_EQ(web_rollup_init(&ru, WEB_MAX_KEYS_MIN, 0, err, sizeof(err)), 0);
+    WT_EQ(web_metrics_init(&mx, &ru, pinned, NULL), 0);
+    g_now = 1792627200;
+    for (int i = 0; i <= WEB_MAX_KEYS_MIN; i++) {
+        char l[256];
+        g_now++;
+        snprintf(l, sizeof(l), "{\"type\":\"beacon\",\"ts\":%lld,\"ssid\":\"x\",\"bssid\":"
+                 "\"02:00:00:00:01:%02x\",\"signal_dbm\":%d,\"channel\":6,\"last_seen\":%lld,"
+                 "\"frame_count\":1}", g_now, i, -40 - i, g_now);
+        line(l);
+    }
+    web_rollup_stats_t st;
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.keys[WEB_KC_DEV], WEB_MAX_KEYS_MIN);
+    WT_EQ(st.caps[WEB_KC_DEV], WEB_MAX_KEYS_MIN);
+    WT_EQ(st.evictions[WEB_KC_DEV], 1);
+    WT_ASSERT(!web_rollup_has(&ru, WM_RF_RSSI_BSSID, "02:00:00:00:01:00"));
+    WT_ASSERT(web_rollup_has(&ru, WM_RF_RSSI_BSSID, "02:00:00:00:01:01"));
+    WT_ASSERT(web_rollup_has(&ru, WM_RF_RSSI_BSSID, "02:00:00:00:01:10"));
+    done();
+}
+
+/* rf.rssi.ble has a class of its own (#177), capped at the same N: a
+ * stream of rotating advertiser addresses evicts the quietest
+ * advertiser, never a Wi-Fi key, and a Wi-Fi station's history is
+ * untouched by however many advertisers pass. Seen red with
+ * rf.rssi.ble back in the device class: the station's series gone,
+ * device evictions 2 (its key and the first advertiser's) and the BLE
+ * class empty. */
+static void test_ble_rssi_has_its_own_class(void) {
+    char err[64];
+    WT_EQ(web_rollup_init(&ru, WEB_MAX_KEYS_MIN, 0, err, sizeof(err)), 0);
+    WT_EQ(web_metrics_init(&mx, &ru, pinned, NULL), 0);
+    g_now = 1792627200;
+    line("{\"type\":\"probe_client\",\"ts\":1792627200,\"mac\":\"02:00:00:00:02:01\","
+         "\"ssid\":\"x\",\"signal_dbm\":-61,\"channel\":6,\"first_seen\":1,"
+         "\"last_seen\":1792627200,\"frame_count\":1}");
+    for (int i = 0; i <= WEB_MAX_KEYS_MIN; i++) {
+        char l[256];
+        g_now++;
+        snprintf(l, sizeof(l), "{\"type\":\"ble_device\",\"ts\":%lld,\"addr\":"
+                 "\"c6:00:00:00:03:%02x\",\"addr_type\":1,\"has_rssi\":1,\"rssi\":%d,"
+                 "\"rssi_best\":-60,\"last_seen\":%lld}", g_now, i, -70 - i, g_now);
+        line(l);
+    }
+    web_rollup_stats_t st;
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.keys[WEB_KC_DEV], 1);
+    WT_EQ(st.evictions[WEB_KC_DEV], 0);
+    WT_EQ(st.keys[WEB_KC_BLE], WEB_MAX_KEYS_MIN);
+    WT_EQ(st.caps[WEB_KC_BLE], WEB_MAX_KEYS_MIN);
+    WT_EQ(st.evictions[WEB_KC_BLE], 1);
+    WT_ASSERT(web_rollup_has(&ru, WM_RF_RSSI_STA, "02:00:00:00:02:01"));
+    WT_ASSERT(!web_rollup_has(&ru, WM_RF_RSSI_BLE, "c6:00:00:00:03:00"));
+    WT_ASSERT(web_rollup_has(&ru, WM_RF_RSSI_BLE, "c6:00:00:00:03:01"));
+    WT_ASSERT(!strcmp(web_kclass_name(WEB_KC_BLE), "ble"));
     done();
 }
 
 void run_metrics_tests(void) {
+    WT_RUN(test_rssi_series);
+    WT_RUN(test_rssi_key_cap);
+    WT_RUN(test_ble_rssi_has_its_own_class);
     WT_RUN(test_key_canonicalisers);
     WT_RUN(test_gauges);
     WT_RUN(test_hostile_keys_refused);
@@ -511,6 +848,10 @@ void run_metrics_tests(void) {
     WT_RUN(test_channels);
     WT_RUN(test_presence);
     WT_RUN(test_pass_gauges);
+    WT_RUN(test_records_rate);
+    WT_RUN(test_sensor_drops);
+    WT_RUN(test_live_sampling);
+    WT_RUN(test_live_sampling_unwired_is_a_noop);
     WT_RUN(test_highwater_table_bounded);
     WT_RUN(test_highwater_evicted_row_not_recounted);
     WT_RUN(test_highwater_gone_filter_rotates);

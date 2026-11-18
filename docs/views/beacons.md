@@ -38,6 +38,15 @@ the AP itself is broadcasting — and appears as `qbss_stations` /
 `qbss_chan_util` in the `beacon` JSONL record (omitted when the IE is
 absent, so consumers can tell "no data" from a genuine zero).
 
+**FCS-clean since #178.** A beacon radiotap marked FCS-failed is no
+longer handed to `beacon_parse_frame()` — a bit error in a weak frame
+could otherwise read as a plausible SSID and be recorded as a name the
+AP actually sent. Before this fix a BSSID could accumulate several
+short, mostly non-printable "SSIDs" over time, heaviest on the weakest
+signal, each with the same `last_seen` — the signature of bit errors,
+not of an AP changing its name. Those rows are not deleted retroactively;
+a sloth.db from before this version may still show them.
+
 ## WPS vendor-string leakage (#77)
 
 When the AP's WPS IE carries the optional Manufacturer / Model Name /
@@ -611,6 +620,32 @@ never heard tells us nothing about what it does or does not advertise.
   hide a real attack in noise.
 - **Sudden signal jump** (an existing SSID's signal goes from -80 to
   -40) — someone planted a copy of your network closer to the target.
+
+## Distance estimate (2026-10-26)
+
+The `Dist (est)` column, right of `Sig`, and the `dist` text on the
+detail page's Signal line with its interval and power source. The
+column is planned by width so AKM is never pushed off screen: the full
+cell from 113 columns, the short `~27m↘` from 107, and none below - at
+the 100-column minimum the estimate is on the detail page only. An **estimate from signal strength**: walls and reflections dominate,
+and it is not a location. The median of the row's last 8 RSSI samples
+goes through ITU-R P.1238's indoor log-distance model; the cell reads
+`~27m bldg ↘` — metres, band (`imm` < 1 m, `near` 1–3, `room` 3–10,
+`bldg` 10–30, `far` > 30) and trend (↘ approaching, → steady, ↗
+leaving, blank until enough samples); `-` is no estimate (an RSSI of 0
+is no sample, never 1 m). The typical indoor error is a factor of two,
+five when a body or a wall is in the way. No alert rule reads it. Model,
+sources and knobs: `docs/wiki/rf-distance.md`.
+
+The AP's power is the one thing a beacon can state: a TPC Report
+(`Ptx … tpc`) is used first, then the Country element's ceiling less
+any Power Constraint (`ceiling` — an upper bound, so the distance is
+one too and the band may read one farther), else an assumed 20 dBm. A
+ceiling above 20 dBm is not used (US 2.4 GHz allows 30, which would
+place every AP 2.3x too far), and none is used on 6 GHz, whose limit is
+the Transmit Power Envelope's. `--my-bssid` with `--tune
+rf.ref_dist_dm=N` calibrates the band from the operator's own AP at
+N/10 m (`cal`).
 
 ## See also
 

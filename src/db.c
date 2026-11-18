@@ -1,15 +1,22 @@
 /* Embedded SQLite sink. Contract in db.h, schema in db_schema.c (#42). */
 
 #include "db.h"
+#include "adsb.h"
+#include "aprs.h"
+#include "gps.h"
+#include "position_track.h"
 #include "beacon_snoop.h"   /* RSN_AKM_*_FAMILY */
 
 #ifdef WITH_SQLITE
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <sqlite3.h>
 
 /* The side-file checks in db_prepare_private() are advisory — a
@@ -21,10 +28,12 @@
 #error "sloth needs sqlite3 >= 3.31.0 (SQLITE_OPEN_NOFOLLOW, SQLITE_DBCONFIG_TRUSTED_SCHEMA)"
 #endif
 
+#include "alerts.h"
 #include "libver.h"
 #include "ownership.h"
 #include "presence.h"
 #include "secure_file.h"
+#include "sloth_clock.h"
 #include "tune.h"
 
 /* Maintenance is hourly: pruning is a scan over every table, and the
@@ -40,6 +49,28 @@ static sqlite3 *g_db;
 static db_akm_regression_t g_akm_reg[DB_MAX_AKM_REGRESSIONS];
 static int                 g_akm_reg_n;
 static int      g_disabled;      /* set once on error — fail-open */
+
+/* Why the last db_open() refused, for db_error() — the same accessor
+ * jsonl_open() got in ec8a9d06, for the same reason and after the same
+ * failure (#209): CI refused a test's own freshly made mkstemp path,
+ * twice, and `db_open() != 1` was all anyone could see. Cleared at
+ * db_open()'s entry and set on every path out of it that returns 0,
+ * with the same text as the stderr line beside it so there is one
+ * wording rather than two to keep in step. */
+static char     g_open_err[SFILE_ERR_MAX];
+
+/* Record the reason and print it. Every "could not open db" line in the
+ * open path goes through here. */
+static int open_fail(const char *fmt, ...)
+    __attribute__((format(printf, 1, 2)));
+static int open_fail(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(g_open_err, sizeof(g_open_err), fmt, ap);
+    va_end(ap);
+    fprintf(stderr, "sloth: could not open db %s\n", g_open_err);
+    return 0;
+}
 /* Cadence, retention and size target live in the --tune registry
  * (db.interval_secs / db.retain_days / db.max_mb, #120), so the
  * --db-* flags and --tune share one validation and a moved value
@@ -64,6 +95,17 @@ static const char *const TIER_OBSERVATION[] = {
     "ldap_events", "kerb_events", "smb_sessions",
     "deauth_events", "seqnum_correlations", "twin_episodes",
     "eapol_events", "scan_entries", "scan_entry_ports",
+    /* --gps (2026-10-27): a moving sensor's samples, the bulkiest
+     * thing it writes per hour of driving. */
+    "device_positions", "sensor_positions",
+    /* GNSS observation (2026-11-02): the receiver's own sky and clock. */
+    "gnss_fixes", "gnss_sightings",
+    /* ADS-B (#26, schema v12): an aircraft's track, change by change. */
+    "adsb_sightings",
+    /* APRS (schema v13): one row per packet. */
+    "aprs_packets",
+    /* Victron (schema v15): a device's values, one row a minute at most. */
+    "victron_readings",
 };
 
 /* 3x — the inventory. "Which devices were on this network in March"
@@ -75,11 +117,19 @@ static const char *const TIER_ENTITY[] = {
     "assocs", "assoc_reqs", "wifi_merged", "arp", "dhcp_leases", "top_hosts",
     "mdns_services", "nbns_names", "ssdp_devices",
     "ndp_ras", "ndp_ra_prefixes", "sensors",
+    /* ADS-B (#26, schema v12): every aircraft address ever listed. */
+    "adsb_aircraft",
+    /* APRS (schema v13): every source callsign ever heard. */
+    "aprs_stations",
+    /* Victron (schema v15): every device address sloth-va wrote. */
+    "victron_devices",
 };
 
 /* 12x — the findings. These are why the operator kept the file. */
 static const char *const TIER_FINDING[] = {
     "alerts", "cleartext_creds",
+    /* #175: a finding's incidents live as long as the finding does. */
+    "alert_incidents",
     /* Detector evidence sits here, not in the entity tier, so it lives
      * exactly as long as the alert it justifies. At 3x the evidence
      * would expire while the CRIT it supports was still retained,
@@ -118,12 +168,60 @@ enum {
     ST_WIFI_MERGED, ST_ARP, ST_DHCP_LEASE, ST_TOP_HOST,
     ST_MDNS, ST_NBNS, ST_SSDP, ST_NDP_RA, ST_NDP_PREFIX, ST_SENSOR,
     ST_BGP, ST_SSH, ST_RDP, ST_SNMP, ST_MQTT, ST_LDAP, ST_KERB, ST_SMB,
-    ST_ALERT, ST_CRED, ST_EAPOL, ST_DEAUTH, ST_SEQCORR, ST_TWIN,
+    ST_ALERT, ST_ALERT_ROW, ST_INCIDENT, ST_INCIDENT_TRIM, ST_CRED, ST_EAPOL, ST_DEAUTH, ST_SEQCORR, ST_TWIN,
     ST_SCAN, ST_SCAN_PORT, ST_KARMA, ST_ROGUE_RADIUS,
+    ST_DEV_POS, ST_SENSOR_POS,
+    ST_GNSS_FIX, ST_GNSS_SIGHT,
+    ST_ADSB_AC, ST_ADSB_SIGHT,
+    ST_APRS_STN, ST_APRS_PKT,
+    ST_VICTRON_DEV, ST_VICTRON_READ,
     ST_COUNT
 };
 
 static sqlite3_stmt *g_st[ST_COUNT];
+
+/* GNSS observation (2026-11-02): write_gnss()'s change memory, cleared
+ * by db_open(). */
+#define DB_GNSS_HEARTBEAT_S 300
+#define DB_GNSS_SLOTS 64
+static struct { uint64_t sig; time_t ts; } g_gnss_fix_mem;
+static struct {
+    int16_t gnssid, prn;
+    uint64_t sig;
+    time_t ts;
+    int used;
+} g_gnss_sat_mem[DB_GNSS_SLOTS];
+
+/* ADS-B (#26, schema v12): write_adsb()'s change memory, one slot per
+ * row sloth can hold, cleared by db_open(). */
+#define DB_ADSB_HEARTBEAT_S 300
+#define DB_ADSB_SLOTS ADSB_MAX_AIRCRAFT
+static struct {
+    uint32_t icao;
+    uint8_t  non_icao, used;
+    uint64_t sig;
+    time_t   ts;
+} g_adsb_mem[DB_ADSB_SLOTS];
+
+/* APRS (schema v13): the newest packet seq write_aprs() has written
+ * (src/aprs.c's ring), cleared by db_open(). */
+static uint64_t g_aprs_seq;
+
+/* Victron (schema v15): write_victron()'s memory, one slot per row
+ * sloth can hold, cleared by db_open(). */
+static struct {
+    char     mac[18];
+    int      used;
+    uint64_t readings, sessions, facts;
+    time_t   dev_ts, read_ts;
+} g_victron_mem[VICTRON_MAX_DEVICES];
+
+/* The RF side (src/db.h): NULL in a daemon that owns none of the
+ * receiver's and the decoders' tables. Apart from the handle, and not
+ * cleared by db_open(): it is the binary's shape, not a run's state. */
+static const db_rf_side_t *g_rf_side;
+
+void db_set_rf_side(const db_rf_side_t *rf) { g_rf_side = rf; }
 
 /* The ST_DEVICE upsert spells the MAC-keyed camera bits as literals. */
 #if CAM_SIG_SETUP_SSID != 2 || CAM_SIG_SETUP_OUI != 16
@@ -223,9 +321,9 @@ static const char *const SQL[ST_COUNT] = {
     "INSERT INTO beacon_aps (bssid,ssid,signal_dbm,channel,enc,beacon_ms,"
     "pairwise,group_ciph,akm,mfp,vendor,has_wps,wps_state,wps_locked,phy,"
     "revealed,frame_count,has_qbss,qbss_stations,qbss_chan_util,"
-    "downgrade_flags,akm_bits,first_seen,last_seen)"
+    "downgrade_flags,akm_bits,operating_width,first_seen,last_seen)"
     " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,"
-    "?18,?19,?20,?21,?22,?23,?24)"
+    "?18,?19,?20,?21,?22,?23,?24,?25)"
     " ON CONFLICT(bssid) DO UPDATE SET"
     "  ssid=excluded.ssid, signal_dbm=excluded.signal_dbm,"
     "  channel=excluded.channel, enc=excluded.enc,"
@@ -242,6 +340,10 @@ static const char *const SQL[ST_COUNT] = {
      * reasoning as assoc_reqs.downgrade_flags. */
     "  downgrade_flags=(beacon_aps.downgrade_flags|excluded.downgrade_flags),"
     "  akm_bits=(beacon_aps.akm_bits|excluded.akm_bits),"
+    /* Upgrade-only, matching beacon_snoop.c's in-memory merge: a beacon
+     * that omits the operation IE it last carried does not erase a
+     * width a fuller one already established. */
+    "  operating_width=MAX(beacon_aps.operating_width,excluded.operating_width),"
     "  first_seen=MIN(beacon_aps.first_seen,excluded.first_seen),"
     "  last_seen=MAX(beacon_aps.last_seen,excluded.last_seen)",
 [ST_BEACON_SSID] =
@@ -535,13 +637,214 @@ static const char *const SQL[ST_COUNT] = {
     "  last_seen=MAX(smb_sessions.last_seen,excluded.last_seen)",
 [ST_ALERT] =
     "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,"
-    "technique,match_ip,match_port,count) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
+    "technique,match_ip,match_port,count,incident_id,incident_count,"
+    "incident_first_seen,lat,lon,alt_m,acc_m,loc_src,loc_ts)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?11,?13,"
+    "?14,?15,?16,?17,?18,?19)"
     " ON CONFLICT(key,first_seen) DO UPDATE SET"
-    /* An episode's detail and severity are regenerated each tick and
-     * the latest observation wins, matching the live engine. */
     "  last_seen=MAX(alerts.last_seen,excluded.last_seen),"
-    "  sev=excluded.sev, detail=excluded.detail,"
-    "  count=MAX(alerts.count,excluded.count)",
+    /* The finding's peak severity, and the detail of the latest write
+     * at that peak. Latest-wins was the engine's rule for one
+     * incident; once a row holds every incident of a key (#170) it
+     * let a LOW reopen erase the CRIT before it from the file, and
+     * the compactor's MAX(sev) and the live row meant different
+     * things. A tie takes the new detail, so a steady finding still
+     * shows its current evidence. */
+    "  sev=MAX(alerts.sev,excluded.sev),"
+    "  detail=CASE WHEN excluded.sev>=alerts.sev"
+    "    THEN excluded.detail ELSE alerts.detail END,"
+    /* One row per finding (#170). The same incident written again moves
+     * `count` by what its own count moved since the last write; a
+     * different incident on the row (a reopen, or the first write after
+     * a restart or a v7 migration, where the stored id is someone
+     * else's or NULL) adds its whole count and is one more reopen.
+     * Every SET expression reads the row as it was, so the CASEs agree
+     * with each other. */
+    "  count=CASE WHEN alerts.incident_id IS excluded.incident_id"
+    "    THEN alerts.count+MAX(excluded.incident_count-alerts.incident_count,0)"
+    "    ELSE alerts.count+excluded.incident_count END,"
+    "  incident_count=CASE WHEN alerts.incident_id IS excluded.incident_id"
+    "    THEN MAX(alerts.incident_count,excluded.incident_count)"
+    "    ELSE excluded.incident_count END,"
+    "  reopens=alerts.reopens+"
+    "    (CASE WHEN alerts.incident_id IS excluded.incident_id THEN 0 ELSE 1 END),"
+    "  incident_id=excluded.incident_id,"
+    "  incident_first_seen=excluded.incident_first_seen,"
+    /* Schema v9: the location stamp is the current incident's. Within
+     * one incident a recorded stamp is never overwritten (the engine
+     * stamps once, at open, so a later write carries the same one; a
+     * restart re-writing the incident with no fix must not erase it);
+     * a different incident brings its own, NULL included. The six move
+     * together under one condition. */
+    "  lat=CASE WHEN alerts.incident_id IS excluded.incident_id"
+    "    AND alerts.loc_src IS NOT NULL THEN alerts.lat ELSE excluded.lat END,"
+    "  lon=CASE WHEN alerts.incident_id IS excluded.incident_id"
+    "    AND alerts.loc_src IS NOT NULL THEN alerts.lon ELSE excluded.lon END,"
+    "  alt_m=CASE WHEN alerts.incident_id IS excluded.incident_id"
+    "    AND alerts.loc_src IS NOT NULL THEN alerts.alt_m ELSE excluded.alt_m END,"
+    "  acc_m=CASE WHEN alerts.incident_id IS excluded.incident_id"
+    "    AND alerts.loc_src IS NOT NULL THEN alerts.acc_m ELSE excluded.acc_m END,"
+    "  loc_ts=CASE WHEN alerts.incident_id IS excluded.incident_id"
+    "    AND alerts.loc_src IS NOT NULL THEN alerts.loc_ts ELSE excluded.loc_ts END,"
+    "  loc_src=CASE WHEN alerts.incident_id IS excluded.incident_id"
+    "    AND alerts.loc_src IS NOT NULL THEN alerts.loc_src ELSE excluded.loc_src END",
+[ST_DEV_POS] =
+    "INSERT OR IGNORE INTO device_positions (mac,last_seen,lat,lon,acc_m,rssi)"
+    " VALUES (?1,?2,?3,?4,?5,?6)",
+[ST_SENSOR_POS] =
+    "INSERT OR IGNORE INTO sensor_positions (last_seen,lat,lon,alt_m,acc_m,"
+    "loc_src,sats,hdop) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+/* GNSS observation (2026-11-02). INSERT OR REPLACE: within one second
+ * the newest state of the key is the one worth keeping. */
+[ST_GNSS_FIX] =
+    "INSERT OR REPLACE INTO gnss_fixes (last_seen,src,mode,status,nsat,usat,"
+    "hdop,vdop,pdop,eph,epv,lat,lon,alt_m,speed_mps,track_deg,time_off_ms,jam,"
+    "cn0_mean) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,"
+    "?17,?18,?19)",
+[ST_GNSS_SIGHT] =
+    "INSERT OR REPLACE INTO gnss_sightings (last_seen,gnssid,prn,svid,el,az,"
+    "cn0,used,health) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+/* ADS-B (#26, schema v12). The inventory row keeps the earliest
+ * first_seen, the newest non-empty callsign / squawk / category, the
+ * altitude, speed and RSSI extremes, and counts a visit each time
+ * sloth's own first_seen for the address moves (the row expired and
+ * the address came back). visit_first is that first_seen. */
+[ST_ADSB_AC] =
+    "INSERT INTO adsb_aircraft (hex,non_icao,first_seen,last_seen,visit_first,"
+    "visits,sightings,flight,squawk,category,source_type,emergency_seen,"
+    "alt_min,alt_max,gs_max,rssi_max,messages,pos_seen)"
+    " VALUES (?1,?2,?3,?4,?3,1,1,NULLIF(?5,''),NULLIF(?6,''),NULLIF(?7,''),"
+    "NULLIF(?8,''),?9,?10,?10,?11,?12,?13,?14)"
+    " ON CONFLICT(hex) DO UPDATE SET"
+    "  first_seen=MIN(adsb_aircraft.first_seen, excluded.first_seen),"
+    "  last_seen=MAX(adsb_aircraft.last_seen, excluded.last_seen),"
+    "  visits=adsb_aircraft.visits +"
+    "    (excluded.visit_first <> adsb_aircraft.visit_first),"
+    "  visit_first=excluded.visit_first,"
+    "  sightings=adsb_aircraft.sightings + 1,"
+    "  flight=COALESCE(excluded.flight, adsb_aircraft.flight),"
+    "  squawk=COALESCE(excluded.squawk, adsb_aircraft.squawk),"
+    "  category=COALESCE(excluded.category, adsb_aircraft.category),"
+    "  source_type=COALESCE(excluded.source_type, adsb_aircraft.source_type),"
+    "  emergency_seen=MAX(adsb_aircraft.emergency_seen, excluded.emergency_seen),"
+    "  alt_min=COALESCE(MIN(adsb_aircraft.alt_min, excluded.alt_min),"
+    "    adsb_aircraft.alt_min, excluded.alt_min),"
+    "  alt_max=COALESCE(MAX(adsb_aircraft.alt_max, excluded.alt_max),"
+    "    adsb_aircraft.alt_max, excluded.alt_max),"
+    "  gs_max=COALESCE(MAX(adsb_aircraft.gs_max, excluded.gs_max),"
+    "    adsb_aircraft.gs_max, excluded.gs_max),"
+    "  rssi_max=COALESCE(MAX(adsb_aircraft.rssi_max, excluded.rssi_max),"
+    "    adsb_aircraft.rssi_max, excluded.rssi_max),"
+    "  messages=COALESCE(excluded.messages, adsb_aircraft.messages),"
+    "  pos_seen=MAX(adsb_aircraft.pos_seen, excluded.pos_seen)",
+[ST_ADSB_SIGHT] =
+    "INSERT OR REPLACE INTO adsb_sightings (last_seen,hex,heard,flight,squawk,"
+    "emergency,category,on_ground,alt_baro,alt_geom,alt_band,gs,track,"
+    "baro_rate,lat,lon,rssi,messages,source_type) VALUES (?1,?2,?3,"
+    "NULLIF(?4,''),NULLIF(?5,''),NULLIF(?6,''),NULLIF(?7,''),?8,?9,?10,?11,"
+    "?12,?13,?14,?15,?16,?17,?18,NULLIF(?19,''))",
+/* APRS (schema v13). One upsert per packet: the inventory keeps the
+ * earliest first_seen and the latest last_seen, counts the packet,
+ * counts a visit each time sloth's own first_seen for the call moves
+ * (visit_first is that first_seen), and keeps the newest non-empty via,
+ * dti, symbol, position, comment, status and system, the best level,
+ * and whether any packet was heard direct. */
+[ST_APRS_STN] =
+    "INSERT INTO aprs_stations (call,first_seen,last_seen,visit_first,visits,"
+    "packets,via,heard_direct,best_level,dti,symbol,lat,lon,pos_ts,comment,"
+    "status,system) VALUES (?1,?2,?2,?3,1,1,NULLIF(?4,''),?5,?6,NULLIF(?7,''),"
+    "NULLIF(?8,''),?9,?10,?11,NULLIF(?12,''),NULLIF(?13,''),NULLIF(?14,''))"
+    " ON CONFLICT(call) DO UPDATE SET"
+    "  first_seen=MIN(aprs_stations.first_seen, excluded.first_seen),"
+    "  last_seen=MAX(aprs_stations.last_seen, excluded.last_seen),"
+    "  visits=aprs_stations.visits +"
+    "    (excluded.visit_first <> aprs_stations.visit_first),"
+    "  visit_first=excluded.visit_first,"
+    "  packets=aprs_stations.packets + 1,"
+    "  via=COALESCE(excluded.via, aprs_stations.via),"
+    "  heard_direct=MAX(aprs_stations.heard_direct, excluded.heard_direct),"
+    "  best_level=COALESCE(MAX(aprs_stations.best_level, excluded.best_level),"
+    "    aprs_stations.best_level, excluded.best_level),"
+    "  dti=COALESCE(excluded.dti, aprs_stations.dti),"
+    "  symbol=COALESCE(excluded.symbol, aprs_stations.symbol),"
+    "  lat=COALESCE(excluded.lat, aprs_stations.lat),"
+    "  lon=COALESCE(excluded.lon, aprs_stations.lon),"
+    "  pos_ts=COALESCE(excluded.pos_ts, aprs_stations.pos_ts),"
+    "  comment=COALESCE(excluded.comment, aprs_stations.comment),"
+    "  status=COALESCE(excluded.status, aprs_stations.status),"
+    "  system=COALESCE(excluded.system, aprs_stations.system)",
+/* Victron (schema v15). The inventory keeps the earliest first_seen
+ * and the latest last_seen; every other column is the newest sloth's
+ * table held (the counts are sloth's since it started, not a sum), and
+ * services is the newest session's list, cleared by a session that
+ * listed none. */
+[ST_VICTRON_DEV] =
+    "INSERT INTO victron_devices (mac,first_seen,last_seen,serial,model,record,"
+    "session,services,last_readout,last_gatt,readings,sessions,rssi) VALUES"
+    " (?1,?2,?3,NULLIF(?4,''),NULLIF(?5,''),NULLIF(?6,''),NULLIF(?7,''),"
+    "NULLIF(?8,''),NULLIF(?9,0),NULLIF(?10,0),?11,?12,?13)"
+    " ON CONFLICT(mac) DO UPDATE SET"
+    "  first_seen=MIN(victron_devices.first_seen, excluded.first_seen),"
+    "  last_seen=MAX(victron_devices.last_seen, excluded.last_seen),"
+    "  serial=COALESCE(excluded.serial, victron_devices.serial),"
+    "  model=COALESCE(excluded.model, victron_devices.model),"
+    "  record=COALESCE(excluded.record, victron_devices.record),"
+    "  session=COALESCE(excluded.session, victron_devices.session),"
+    "  services=excluded.services,"
+    "  last_readout=COALESCE(MAX(victron_devices.last_readout, excluded.last_readout),"
+    "    victron_devices.last_readout, excluded.last_readout),"
+    "  last_gatt=COALESCE(MAX(victron_devices.last_gatt, excluded.last_gatt),"
+    "    victron_devices.last_gatt, excluded.last_gatt),"
+    "  readings=excluded.readings, sessions=excluded.sessions,"
+    "  rssi=COALESCE(excluded.rssi, victron_devices.rssi)",
+[ST_VICTRON_READ] =
+    "INSERT INTO victron_readings (last_seen,mac,src,rssi,voltage_v,aux_voltage_v,"
+    "mid_voltage_v,input_v,output_v,current_a,power_w,consumed_ah,soc_pct,ttg_min,"
+    "temperature_c,ac_voltage_v,ac_current_a,ac_apparent_va,alarm_reason,aux_input,"
+    "device_state,charger_error,off_reason)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,"
+    "?21,?22,?23)",
+[ST_APRS_PKT] =
+    "INSERT INTO aprs_packets (last_seen,source,heard,dti,name,symbol,lat,lon,"
+    "speed_kt,course,alt_m,level,status,comment) VALUES (?1,?2,NULLIF(?3,''),"
+    "NULLIF(?4,''),NULLIF(?5,''),NULLIF(?6,''),?7,?8,?9,?10,?11,?12,"
+    "NULLIF(?13,''),NULLIF(?14,''))",
+/* The key's newest row, which the write above continues instead of
+ * starting one under the engine's first_seen (#170). The engine keeps
+ * first_seen across a reopen in its side table, but that table is LRU
+ * bounded and dies with the process; the file is what survives both. A
+ * key prefix of the primary key, so an index seek. */
+[ST_ALERT_ROW] =
+    "SELECT first_seen FROM alerts WHERE key=?1"
+    " ORDER BY first_seen DESC LIMIT 1",
+/* One incident's own figures (#175, schema v11). Written from the
+ * engine's hook and from the snapshot, in that order within a tick, so
+ * every column is monotone or sticky and two writes of one incident in
+ * either order leave the same row: the span widens, the peak and the
+ * two counters only rise, and a close once recorded stays. `sev` is the
+ * one latest-wins column, and the snapshot write (the newer of the two)
+ * is the last to set it. */
+[ST_INCIDENT] =
+    "INSERT INTO alert_incidents (key,incident_id,type,first_seen,last_seen,"
+    "sev,peak_sev,count,observations,closed_at,reason)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
+    " ON CONFLICT(key,incident_id) DO UPDATE SET"
+    "  first_seen=MIN(alert_incidents.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(alert_incidents.last_seen,excluded.last_seen),"
+    "  sev=excluded.sev,"
+    "  peak_sev=MAX(alert_incidents.peak_sev,excluded.peak_sev),"
+    "  count=MAX(alert_incidents.count,excluded.count),"
+    "  observations=MAX(alert_incidents.observations,excluded.observations),"
+    "  closed_at=COALESCE(alert_incidents.closed_at,excluded.closed_at),"
+    "  reason=COALESCE(alert_incidents.reason,excluded.reason)",
+/* The per-key bound (DB_INCIDENTS_PER_KEY): every incident of the key
+ * but its newest ?2, newest by start and then by insertion. Both walk
+ * idx_alert_incidents_key, so the cost is the key's rows, never the
+ * table's. */
+[ST_INCIDENT_TRIM] =
+    "DELETE FROM alert_incidents WHERE key=?1 AND rowid NOT IN"
+    " (SELECT rowid FROM alert_incidents WHERE key=?1"
+    "  ORDER BY first_seen DESC, rowid DESC LIMIT ?2)",
 [ST_CRED] =
     "INSERT INTO cleartext_creds (ts,src,dst,dst_port,protocol,username,"
     "pw_observed,first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)"
@@ -693,6 +996,130 @@ static int exec(const char *sql, const char *what) {
     return 1;
 }
 
+/* exec() inside db_open(): records which step refused, for db_error().
+ * It does not print — exec() already did, and two lines for one failure
+ * is how a log stops being read. */
+static int open_exec(const char *sql, const char *what, const char *path) {
+    if (exec(sql, what)) return 1;
+    snprintf(g_open_err, sizeof(g_open_err), "%s: %s failed", path, what);
+    return 0;
+}
+
+/* ── per-incident rows (#175) ────────────────────────────────
+ *
+ * alert_incidents is written two ways. Every tick writes each incident
+ * the engine's snapshot holds, as the alerts row is written. And the
+ * engine's lifecycle hook (src/alerts.h) queues an incident's figures as
+ * it opens, moves severity and closes, which reaches what a tick cannot
+ * see: the alert.resolve reason, a severity that rose and fell between
+ * two ticks, and an incident evicted inside one alerts_update(), whose
+ * slot is reused before any snapshot shows it closed. The queue is
+ * coalesced per incident and drained at the start of the tick's write;
+ * a queue that fills between ticks (an eviction storm under a long
+ * --db-interval-secs) is written there and then in its own transaction
+ * rather than dropping a close. */
+#define DB_INC_PENDING 256
+
+typedef struct {
+    char      key[ALERT_KEY_LEN];
+    char      id[ALERT_INCIDENT_ID_LEN];
+    int       type, sev, peak;
+    long long count, obs;
+    time_t    first, last, closed;   /* closed 0: not closed yet */
+    char      reason[24];
+} db_inc_pend_t;
+
+static db_inc_pend_t g_inc_pend[DB_INC_PENDING];
+static int           g_inc_pend_n;
+
+static void bind_incident(sqlite3_stmt *st, const char *key, const char *id,
+                          int type, time_t first, time_t last, int sev,
+                          int peak, long long count, long long obs,
+                          time_t closed, const char *reason) {
+    /* first_seen <= last_seen, as write_events() keeps it for alerts. */
+    if (last < first) last = first;
+    bind_txt(st, 1, key);
+    bind_txt(st, 2, id);
+    sqlite3_bind_int(st, 3, type);
+    sqlite3_bind_int64(st, 4, (sqlite3_int64)first);
+    sqlite3_bind_int64(st, 5, (sqlite3_int64)last);
+    sqlite3_bind_int(st, 6, sev);
+    sqlite3_bind_int(st, 7, peak);
+    sqlite3_bind_int64(st, 8, (sqlite3_int64)count);
+    sqlite3_bind_int64(st, 9, (sqlite3_int64)obs);
+    /* ?10 and ?11 stay NULL (clear_bindings) for an open incident. */
+    if (closed) {
+        sqlite3_bind_int64(st, 10, (sqlite3_int64)closed);
+        if (reason && reason[0]) bind_txt(st, 11, reason);
+    }
+}
+
+/* Write the queue, each incident then its key's bound. Inside the
+ * caller's transaction. */
+static void write_incident_queue(void) {
+    for (int i = 0; i < g_inc_pend_n && !g_disabled; i++) {
+        const db_inc_pend_t *p = &g_inc_pend[i];
+        bind_incident(g_st[ST_INCIDENT], p->key, p->id, p->type, p->first,
+                      p->last, p->sev, p->peak, p->count, p->obs, p->closed,
+                      p->reason);
+        step_reset(ST_INCIDENT);
+        /* Only an incident the hook saw can be one the file did not
+         * have, so this is where a key can pass its bound. */
+        bind_txt(g_st[ST_INCIDENT_TRIM], 1, p->key);
+        sqlite3_bind_int(g_st[ST_INCIDENT_TRIM], 2, DB_INCIDENTS_PER_KEY);
+        step_reset(ST_INCIDENT_TRIM);
+    }
+    g_inc_pend_n = 0;
+}
+
+/* The queue written now, in its own transaction: between ticks only,
+ * which is where the hook runs (the poll loop calls alerts_update()
+ * before db_tick(), never inside it). */
+static void incident_queue_flush(void) {
+    if (!db_is_open() || g_inc_pend_n == 0) return;
+    if (!exec("BEGIN IMMEDIATE", "incident begin")) {
+        db_fail("incident begin");
+        g_inc_pend_n = 0;
+        return;
+    }
+    write_incident_queue();
+    if (g_disabled) { exec("ROLLBACK", "incident rollback"); return; }
+    if (!exec("COMMIT", "incident commit")) {
+        exec("ROLLBACK", "incident rollback");
+        db_fail("incident commit");
+    }
+}
+
+static void db_incident_hook(const alert_t *a, time_t now, const char *reason) {
+    if (!db_is_open() || !a || !a->incident_id[0]) return;
+    db_inc_pend_t *p = NULL;
+    for (int i = 0; i < g_inc_pend_n && !p; i++)
+        if (!strcmp(g_inc_pend[i].id, a->incident_id) &&
+            !strcmp(g_inc_pend[i].key, a->key))
+            p = &g_inc_pend[i];
+    if (!p) {
+        if (g_inc_pend_n == DB_INC_PENDING) incident_queue_flush();
+        if (g_inc_pend_n == DB_INC_PENDING || !db_is_open()) return;
+        p = &g_inc_pend[g_inc_pend_n++];
+        memset(p, 0, sizeof(*p));
+        snprintf(p->key, sizeof(p->key), "%s", a->key);
+        snprintf(p->id, sizeof(p->id), "%s", a->incident_id);
+        p->peak = (int)a->sev;
+    }
+    p->type  = (int)a->type;
+    p->sev   = (int)a->sev;
+    if ((int)a->sev > p->peak) p->peak = (int)a->sev;
+    p->count = a->count;
+    p->obs   = (long long)a->observations;
+    p->first = a->first_detected ? a->first_detected
+             : a->first_seen ? a->first_seen : now;
+    p->last  = a->last_seen ? a->last_seen : now;
+    if (reason) {
+        p->closed = now;
+        snprintf(p->reason, sizeof(p->reason), "%s", reason);
+    }
+}
+
 /* ── schema version ──────────────────────────────────────── */
 
 /* The migration chain (db.h). Each step takes a file from `from` to
@@ -719,6 +1146,9 @@ static const char *const TABLES_V3_BATCH[]      =
     { "pnl_clients", "beacon_aps", "rogue_radius", NULL };
 static const char *const TABLES_KARMA[]    = { "karma_candidates", NULL };
 static const char *const TABLES_DEVICES[]  = { "devices", NULL };
+static const char *const TABLES_ALERTS[]   = { "alerts", NULL };
+static const char *const TABLES_BEACON_APS[] = { "beacon_aps", NULL };
+static const char *const TABLES_VICTRON_READINGS[] = { "victron_readings", NULL };
 
 static const db_step_t g_steps[] = {
     { 1, db_schema_migrate_v1_sql, TABLES_PROBE_CLIENTS,
@@ -733,6 +1163,31 @@ static const db_step_t g_steps[] = {
       "devices gained camera columns" },
     { 6, db_schema_migrate_v6_sql, TABLES_DEVICES,
       "devices gained camera classifier and DHCP option columns" },
+    { 7, db_schema_migrate_v7_sql, TABLES_ALERTS,
+      "alerts gained reopens, incident_id, incident_count and"
+      " incident_first_seen" },
+    { 8, db_schema_migrate_v8_sql, TABLES_ALERTS,
+      "alerts gained the location stamp (lat, lon, alt_m, acc_m, loc_src,"
+      " loc_ts)" },
+    { 9, db_schema_migrate_v9_sql, TABLES_NONE,
+      "gnss_fixes and gnss_sightings ride the unconditional schema; stamp"
+      " only" },
+    { 10, db_schema_migrate_v10_sql, TABLES_NONE,
+      "alert_incidents rides the unconditional schema; stamp only" },
+    { 11, db_schema_migrate_v11_sql, TABLES_NONE,
+      "adsb_aircraft and adsb_sightings ride the unconditional schema;"
+      " stamp only" },
+    { 12, db_schema_migrate_v12_sql, TABLES_NONE,
+      "aprs_stations and aprs_packets ride the unconditional schema;"
+      " stamp only" },
+    { 13, db_schema_migrate_v13_sql, TABLES_BEACON_APS,
+      "beacon_aps gained operating_width" },
+    { 14, db_schema_migrate_v14_sql, TABLES_NONE,
+      "victron_devices and victron_readings ride the unconditional schema;"
+      " stamp only" },
+    { 15, db_schema_migrate_v15_sql, TABLES_VICTRON_READINGS,
+      "victron_readings gained ac_voltage_v, ac_current_a and"
+      " ac_apparent_va" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
@@ -852,41 +1307,46 @@ static int check_version(void) {
 static int db_prepare_private(const char *path) {
     char err[SFILE_ERR_MAX];
     int fd = sfile_open(AT_FDCWD, path, SFILE_APPEND, err, sizeof(err));
-    if (fd < 0) {
-        fprintf(stderr, "sloth: could not open db %s\n", err);
-        return 0;
-    }
+    if (fd < 0) return open_fail("%s", err);
     close(fd);
     static const char *const side[] = { "-wal", "-shm", "-journal" };
     for (size_t i = 0; i < sizeof(side) / sizeof(side[0]); i++) {
         char p[4096];
         snprintf(p, sizeof(p), "%s%s", path, side[i]);
-        if (sfile_check_existing(p, err, sizeof(err)) != 0) {
-            fprintf(stderr, "sloth: could not open db %s\n", err);
-            return 0;
-        }
+        if (sfile_check_existing(p, err, sizeof(err)) != 0)
+            return open_fail("%s", err);
     }
     return 1;
 }
 
 int db_open(const char *path) {
-    if (!path || !path[0]) return 0;
+    if (!path || !path[0]) {
+        /* Recorded but not printed: an empty --db is caught in argv
+         * parsing, so reaching here is a caller's bug, not an operator's
+         * mistake, and db_error() is where a caller looks. */
+        snprintf(g_open_err, sizeof(g_open_err), "empty database path");
+        return 0;
+    }
+    g_open_err[0] = '\0';
+    /* A new file starts with no GNSS change memory: its first tick
+     * writes the current sky whole. */
+    memset(&g_gnss_fix_mem, 0, sizeof(g_gnss_fix_mem));
+    memset(g_gnss_sat_mem, 0, sizeof(g_gnss_sat_mem));
+    memset(g_adsb_mem, 0, sizeof(g_adsb_mem));
+    g_aprs_seq = 0;
+    memset(g_victron_mem, 0, sizeof(g_victron_mem));
     /* The #error above checks the headers; this checks the library the
      * dynamic linker actually loaded, which can be older on a host the
      * binary was copied to (#142). Before anything touches the path:
      * NOFOLLOW is the guard the side-file checks below lean on. */
     char floor_err[96];
-    if (libver_sqlite_refuse(floor_err, sizeof(floor_err)) != 0) {
-        fprintf(stderr, "sloth: could not open db %s: %s\n", path,
-                floor_err);
-        return 0;
-    }
+    if (libver_sqlite_refuse(floor_err, sizeof(floor_err)) != 0)
+        return open_fail("%s: %s", path, floor_err);
     if (!db_prepare_private(path)) return 0;
     int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
                 SQLITE_OPEN_NOFOLLOW;
     if (sqlite3_open_v2(path, &g_db, flags, NULL) != SQLITE_OK) {
-        fprintf(stderr, "sloth: could not open db %s: %s\n", path,
-                g_db ? sqlite3_errmsg(g_db) : "?");
+        open_fail("%s: %s", path, g_db ? sqlite3_errmsg(g_db) : "?");
         sqlite3_close(g_db);
         g_db = NULL;
         return 0;
@@ -901,8 +1361,7 @@ int db_open(const char *path) {
     int defensive = -1;
     if (sqlite3_db_config(g_db, SQLITE_DBCONFIG_DEFENSIVE, 1, &defensive)
             != SQLITE_OK || defensive != 1) {
-        fprintf(stderr, "sloth: could not open db %s: DEFENSIVE refused\n",
-                path);
+        open_fail("%s: DEFENSIVE refused", path);
         sqlite3_close(g_db);
         g_db = NULL;
         return 0;
@@ -923,13 +1382,19 @@ int db_open(const char *path) {
      * to hit its missing column first, which tells the operator
      * nothing useful — the version message tells them exactly what to
      * do. Hence the meta table alone up front. */
-    if (!exec("PRAGMA auto_vacuum=INCREMENTAL", "auto_vacuum") ||
-        !exec("PRAGMA journal_mode=WAL", "WAL")            ||
-        !exec("PRAGMA synchronous=NORMAL", "synchronous")  ||
-        !exec("PRAGMA foreign_keys=ON", "foreign_keys")    ||
-        !exec(db_schema_meta_sql(), "meta schema")         ||
-        !check_version()                                   ||
-        !exec(db_schema_sql(), "schema")) {
+    if (!open_exec("PRAGMA auto_vacuum=INCREMENTAL", "auto_vacuum", path) ||
+        !open_exec("PRAGMA journal_mode=WAL", "WAL", path)            ||
+        !open_exec("PRAGMA synchronous=NORMAL", "synchronous", path)  ||
+        !open_exec("PRAGMA foreign_keys=ON", "foreign_keys", path)    ||
+        !open_exec(db_schema_meta_sql(), "meta schema", path)         ||
+        !check_version()                                              ||
+        !open_exec(db_schema_sql(), "schema", path)) {
+        /* check_version() is the one step that reports in its own words
+         * (a version message tells the operator what to do); it leaves
+         * the reason on stderr, so name the step here. */
+        if (!g_open_err[0])
+            snprintf(g_open_err, sizeof(g_open_err),
+                     "%s: schema version refused (reason on stderr)", path);
         sqlite3_close(g_db);
         g_db = NULL;
         return 0;
@@ -937,6 +1402,9 @@ int db_open(const char *path) {
     for (int i = 0; i < ST_COUNT; i++) {
         if (!SQL[i]) continue;
         if (sqlite3_prepare_v2(g_db, SQL[i], -1, &g_st[i], NULL) != SQLITE_OK) {
+            snprintf(g_open_err, sizeof(g_open_err),
+                     "%s: prepare %d failed: %s", path, i,
+                     sqlite3_errmsg(g_db));
             fprintf(stderr, "sloth: db prepare %d failed: %s\n", i,
                     sqlite3_errmsg(g_db));
             db_close();
@@ -948,10 +1416,19 @@ int db_open(const char *path) {
     g_last_maint = 0;
     g_session_id = 0;
     g_over_ceiling_reported = 0;
+    g_inc_pend_n = 0;
+    postrack_set_sink(1);   /* --gps samples now have somewhere to go */
+    alerts_set_incident_hook(db_incident_hook);   /* #175 */
     return 1;
 }
 
 void db_close(void) {
+    /* The closes queued since the last tick are the run's last word on
+     * those incidents (#175). */
+    incident_queue_flush();
+    g_inc_pend_n = 0;
+    alerts_set_incident_hook(NULL);
+    postrack_set_sink(0);
     for (int i = 0; i < ST_COUNT; i++) {
         if (g_st[i]) { sqlite3_finalize(g_st[i]); g_st[i] = NULL; }
     }
@@ -970,6 +1447,8 @@ void db_close(void) {
 }
 
 int db_is_open(void) { return g_db != NULL && !g_disabled; }
+
+const char *db_error(void) { return g_open_err; }
 
 int db_is_defensive(void) {
     int v = -1;
@@ -1113,8 +1592,9 @@ static void write_beacons(const sloth_state_t *s, time_t now) {
         sqlite3_bind_int(st, 20, b->qbss_chan_util);
         sqlite3_bind_int  (st, 21, b->downgrade_flags);
         sqlite3_bind_int64(st, 22, (sqlite3_int64)b->akm_bits);
-        sqlite3_bind_int64(st, 23, (sqlite3_int64)last);
+        sqlite3_bind_int  (st, 23, b->operating_width);
         sqlite3_bind_int64(st, 24, (sqlite3_int64)last);
+        sqlite3_bind_int64(st, 25, (sqlite3_int64)last);
         step_reset(ST_BEACON_AP);
 
         int n = b->ssid_history_n;
@@ -1532,16 +2012,394 @@ static void write_proto_flows(const sloth_state_t *s, time_t now) {
     }
 }
 
-/* Event episodes. Keyed by episode identity, so an alert that persists
- * for an hour is one row whose count and last_seen advance rather than
- * 3600 rows. */
+/* The first_seen of `key`'s newest alerts row, or `fallback` when it
+ * has none. A lookup error disables the sink like a write error. */
+static sqlite3_int64 alert_row_first_seen(const char *key,
+                                          sqlite3_int64 fallback) {
+    sqlite3_stmt *st = g_st[ST_ALERT_ROW];
+    if (!st) return fallback;
+    sqlite3_int64 v = fallback;
+    bind_txt(st, 1, key);
+    int rc = sqlite3_step(st);
+    if (rc == SQLITE_ROW) v = sqlite3_column_int64(st, 0);
+    else if (rc != SQLITE_DONE) db_fail("alert row lookup");
+    sqlite3_reset(st);
+    sqlite3_clear_bindings(st);
+    return v;
+}
+
+/* Event episodes. Keyed by finding, so an alert that persists for an
+ * hour is one row whose count and last_seen advance rather than 3600
+ * rows, and a key that is evicted and re-fires, goes quiet and comes
+ * back, or outlives a restart is still that one row (#170):
+ * docs/wiki/sqlite-schema.md has the incident semantics. */
+/* --gps (2026-10-27): drain src/position_track.c's queues. INSERT OR
+ * IGNORE: the key is (mac, last_seen) / last_seen and a sample is one observation, so
+ * a duplicate is the same fact. */
+static void write_positions(void) {
+    static postrack_sample_t dv[256];
+    static postrack_sensor_t sv[64];
+    int n;
+    while ((n = postrack_drain_devices(dv, (int)(sizeof(dv) / sizeof(dv[0])))) > 0) {
+        for (int i = 0; i < n; i++) {
+            sqlite3_stmt *st = g_st[ST_DEV_POS];
+            bind_txt(st, 1, dv[i].mac);
+            sqlite3_bind_int64(st, 2, (sqlite3_int64)dv[i].ts);
+            sqlite3_bind_double(st, 3, dv[i].lat);
+            sqlite3_bind_double(st, 4, dv[i].lon);
+            if (dv[i].has_acc) sqlite3_bind_double(st, 5, dv[i].acc_m);
+            if (dv[i].rssi)    sqlite3_bind_int(st, 6, dv[i].rssi);
+            step_reset(ST_DEV_POS);
+        }
+    }
+    while ((n = postrack_drain_sensor(sv, (int)(sizeof(sv) / sizeof(sv[0])))) > 0) {
+        for (int i = 0; i < n; i++) {
+            sqlite3_stmt *st = g_st[ST_SENSOR_POS];
+            sqlite3_bind_int64(st, 1, (sqlite3_int64)sv[i].ts);
+            sqlite3_bind_double(st, 2, sv[i].lat);
+            sqlite3_bind_double(st, 3, sv[i].lon);
+            if (sv[i].has_alt) sqlite3_bind_double(st, 4, sv[i].alt_m);
+            if (sv[i].has_acc) sqlite3_bind_double(st, 5, sv[i].acc_m);
+            bind_txt(st, 6, "gps");
+            if (sv[i].sats > 0) sqlite3_bind_int(st, 7, sv[i].sats);
+            if (sv[i].hdop > 0) sqlite3_bind_double(st, 8, sv[i].hdop);
+            step_reset(ST_SENSOR_POS);
+        }
+    }
+}
+
+/* GNSS observation (2026-11-02): one gnss_fixes row when the fix's
+ * banded signature changes or DB_GNSS_HEARTBEAT_S passed since the last
+ * row, one gnss_sightings row per satellite on the same rule — the
+ * JSONL records' rule (src/gps.c gps_gnss_*_sig), kept here on this
+ * writer's own memory so the two sinks never depend on each other's
+ * cache. The per-satellite memory is a small table keyed by identity;
+ * a satellite that leaves the sky frees its slot after a heartbeat. */
+
+static void bind_opt_real(sqlite3_stmt *st, int i, int has, double v) {
+    if (has) sqlite3_bind_double(st, i, v);
+}
+
+static void write_gnss(const sloth_state_t *s, time_t now) {
+    if (!s->gps.has_gps) return;
+    const gnss_fix_t *f = &s->gnss_fix;
+    const gnss_sky_t *k = &s->gnss_sky;
+    if (f->valid) {
+        uint64_t sig = gps_gnss_fix_sig(f, k);
+        if (sig != g_gnss_fix_mem.sig || g_gnss_fix_mem.ts == 0 ||
+            now - g_gnss_fix_mem.ts >= DB_GNSS_HEARTBEAT_S) {
+            sqlite3_stmt *st = g_st[ST_GNSS_FIX];
+            sqlite3_bind_int64(st, 1, (sqlite3_int64)now);
+            bind_txt(st, 2, s->gps.src);
+            sqlite3_bind_int(st, 3, f->mode);
+            if (f->status >= 0) sqlite3_bind_int(st, 4, f->status);
+            if (k->valid && k->nsat >= 0) sqlite3_bind_int(st, 5, k->nsat);
+            if (k->valid && k->usat >= 0) sqlite3_bind_int(st, 6, k->usat);
+            bind_opt_real(st, 7, k->hdop > 0, k->hdop);
+            bind_opt_real(st, 8, k->vdop > 0, k->vdop);
+            bind_opt_real(st, 9, k->pdop > 0, k->pdop);
+            bind_opt_real(st, 10, f->has_eph, f->eph);
+            bind_opt_real(st, 11, f->has_epv, f->epv);
+            bind_opt_real(st, 12, f->has_pos, f->lat);
+            bind_opt_real(st, 13, f->has_pos, f->lon);
+            bind_opt_real(st, 14, f->has_alt, f->alt_m);
+            bind_opt_real(st, 15, f->has_speed, f->speed);
+            bind_opt_real(st, 16, f->has_track, f->track);
+            if (f->has_time_off) sqlite3_bind_int64(st, 17, (sqlite3_int64)f->time_off_ms);
+            if (f->jam >= 0) sqlite3_bind_int(st, 18, f->jam);
+            bind_opt_real(st, 19, k->valid && k->cn0_n > 0, k->cn0_mean);
+            step_reset(ST_GNSS_FIX);
+            g_gnss_fix_mem.sig = sig;
+            g_gnss_fix_mem.ts = now;
+        }
+    }
+    if (!k->valid) return;
+    for (int i = 0; i < k->n && i < GNSS_MAX_SATS; i++) {
+        const gnss_sat_t *a = &k->sats[i];
+        uint64_t sig = gps_gnss_sat_sig(a);
+        int slot = -1, free_slot = -1;
+        for (int j = 0; j < DB_GNSS_SLOTS; j++) {
+            if (g_gnss_sat_mem[j].used && g_gnss_sat_mem[j].gnssid == a->gnssid &&
+                g_gnss_sat_mem[j].prn == a->prn) { slot = j; break; }
+            if (free_slot < 0 && (!g_gnss_sat_mem[j].used ||
+                now - g_gnss_sat_mem[j].ts > 2 * DB_GNSS_HEARTBEAT_S))
+                free_slot = j;
+        }
+        if (slot >= 0 && g_gnss_sat_mem[slot].sig == sig &&
+            now - g_gnss_sat_mem[slot].ts < DB_GNSS_HEARTBEAT_S)
+            continue;
+        sqlite3_stmt *st = g_st[ST_GNSS_SIGHT];
+        sqlite3_bind_int64(st, 1, (sqlite3_int64)now);
+        sqlite3_bind_int(st, 2, a->gnssid);
+        sqlite3_bind_int(st, 3, a->prn);
+        if (a->svid >= 0) sqlite3_bind_int(st, 4, a->svid);
+        if (a->has_el)    sqlite3_bind_int(st, 5, a->el);   /* may be negative */
+        if (a->has_az)    sqlite3_bind_int(st, 6, a->az);
+        if (a->has_cn0)   sqlite3_bind_double(st, 7, a->cn0_x10 / 10.0);
+        sqlite3_bind_int(st, 8, a->used);
+        if (a->health >= 0) sqlite3_bind_int(st, 9, a->health);
+        step_reset(ST_GNSS_SIGHT);
+        if (slot < 0) slot = free_slot;
+        if (slot >= 0) {
+            g_gnss_sat_mem[slot].used = 1;
+            g_gnss_sat_mem[slot].gnssid = (int16_t)a->gnssid;
+            g_gnss_sat_mem[slot].prn = a->prn;
+            g_gnss_sat_mem[slot].sig = sig;
+            g_gnss_sat_mem[slot].ts = now;
+        }
+    }
+}
+
+/* ADS-B (#26, schema v12): one adsb_sightings row and an
+ * adsb_aircraft upsert per aircraft when adsb_row_sig() changes or
+ * DB_ADSB_HEARTBEAT_S passed - the adsb_aircraft JSONL record's rule,
+ * on this writer's own memory so the two sinks never depend on each
+ * other. Never once a second: the signature holds bands and cells, not
+ * the raw figures. A slot quiet for two heartbeats is free again. */
+static void write_adsb(const sloth_state_t *s, time_t now) {
+    if (!g_rf_side || !s->adsb.configured || !s->adsb_rows) return;
+    for (int i = 0; i < s->adsb_count; i++) {
+        const adsb_aircraft_t *a = &s->adsb_rows[i];
+        uint64_t sig = g_rf_side->adsb_row_sig(a);
+        int slot = -1, free_slot = -1;
+        for (int j = 0; j < DB_ADSB_SLOTS; j++) {
+            if (g_adsb_mem[j].used && g_adsb_mem[j].icao == a->icao &&
+                g_adsb_mem[j].non_icao == a->non_icao) { slot = j; break; }
+            if (free_slot < 0 && (!g_adsb_mem[j].used ||
+                now - g_adsb_mem[j].ts > 2 * DB_ADSB_HEARTBEAT_S))
+                free_slot = j;
+        }
+        if (slot >= 0 && g_adsb_mem[slot].sig == sig &&
+            now - g_adsb_mem[slot].ts < DB_ADSB_HEARTBEAT_S)
+            continue;
+        char hex[8];
+        snprintf(hex, sizeof(hex), "%s%06x", a->non_icao ? "~" : "",
+                 (unsigned)(a->icao & 0xffffffu));
+        int has_alt = !a->on_ground && (a->has_alt_baro || a->has_alt_geom);
+        int alt = a->has_alt_baro ? a->alt_baro : a->alt_geom;
+        const char *em = g_rf_side->adsb_emergency_name(a->emergency);
+
+        sqlite3_stmt *st = g_st[ST_ADSB_AC];
+        bind_txt(st, 1, hex);
+        sqlite3_bind_int(st, 2, a->non_icao);
+        sqlite3_bind_int64(st, 3, (sqlite3_int64)(a->first_seen ? a->first_seen : now));
+        sqlite3_bind_int64(st, 4, (sqlite3_int64)now);
+        bind_txt(st, 5, a->flight);
+        bind_txt(st, 6, a->squawk);
+        bind_txt(st, 7, a->category);
+        bind_txt(st, 8, a->type);
+        sqlite3_bind_int(st, 9, a->emergency > ADSB_EMERG_NONE);
+        if (has_alt) sqlite3_bind_int(st, 10, alt);
+        bind_opt_real(st, 11, a->has_gs, a->gs);
+        bind_opt_real(st, 12, a->has_rssi, a->rssi);
+        if (a->has_messages) sqlite3_bind_int64(st, 13, (sqlite3_int64)a->messages);
+        sqlite3_bind_int(st, 14, a->has_pos);
+        step_reset(ST_ADSB_AC);
+
+        st = g_st[ST_ADSB_SIGHT];
+        sqlite3_bind_int64(st, 1, (sqlite3_int64)now);
+        bind_txt(st, 2, hex);
+        if (a->last_seen) sqlite3_bind_int64(st, 3, (sqlite3_int64)a->last_seen);
+        bind_txt(st, 4, a->flight);
+        bind_txt(st, 5, a->squawk);
+        bind_txt(st, 6, em);
+        bind_txt(st, 7, a->category);
+        sqlite3_bind_int(st, 8, a->on_ground);
+        if (a->has_alt_baro) sqlite3_bind_int(st, 9, a->alt_baro);
+        if (a->has_alt_geom) sqlite3_bind_int(st, 10, a->alt_geom);
+        sqlite3_bind_int(st, 11, a->alt_band == INT16_MIN ? -1 : a->alt_band);
+        bind_opt_real(st, 12, a->has_gs, a->gs);
+        bind_opt_real(st, 13, a->has_track, a->track);
+        if (a->has_baro_rate) sqlite3_bind_int(st, 14, a->baro_rate);
+        else if (a->has_geom_rate) sqlite3_bind_int(st, 14, a->geom_rate);
+        bind_opt_real(st, 15, a->has_pos, a->lat);
+        bind_opt_real(st, 16, a->has_pos, a->lon);
+        bind_opt_real(st, 17, a->has_rssi, a->rssi);
+        if (a->has_messages) sqlite3_bind_int64(st, 18, (sqlite3_int64)a->messages);
+        bind_txt(st, 19, a->type);
+        step_reset(ST_ADSB_SIGHT);
+
+        if (slot < 0) slot = free_slot;
+        if (slot >= 0) {
+            g_adsb_mem[slot].used = 1;
+            g_adsb_mem[slot].icao = a->icao;
+            g_adsb_mem[slot].non_icao = a->non_icao;
+            g_adsb_mem[slot].sig = sig;
+            g_adsb_mem[slot].ts = now;
+        }
+    }
+}
+
+/* The discrete facts of a row, hashed: a move writes the inventory row
+ * without waiting out DB_VICTRON_MIN_S. */
+static uint64_t victron_facts(const victron_device_t *d) {
+    uint64_t h = 1469598103934665603ULL;
+    const char *f[] = { d->serial, d->model, d->record, d->session, d->services };
+    for (size_t k = 0; k < sizeof(f) / sizeof(f[0]); k++) {
+        for (const char *p = f[k]; *p; p++) {
+            h ^= (unsigned char)*p;
+            h *= 1099511628211ULL;
+        }
+        h ^= 0xff;
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+/* One victron_devices upsert when sloth's row took a record since the
+ * last write and DB_VICTRON_MIN_S has passed or a discrete fact
+ * (serial, model, record type, session outcome, services) moved; one
+ * victron_readings row when it took a record WITH values and
+ * DB_VICTRON_MIN_S has passed since the device's last one. Bounded by
+ * construction: a reading row a minute per device at most, and
+ * VICTRON_MAX_DEVICES devices. */
+static void write_victron(const sloth_state_t *s, time_t now) {
+    if (!s->victron.configured || !s->victron_rows) return;
+    for (int i = 0; i < s->victron_count && i < VICTRON_MAX_DEVICES; i++) {
+        const victron_device_t *d = &s->victron_rows[i];
+        int slot = -1, free_slot = -1;
+        for (int j = 0; j < VICTRON_MAX_DEVICES; j++) {
+            if (g_victron_mem[j].used && !strcmp(g_victron_mem[j].mac, d->mac)) {
+                slot = j;
+                break;
+            }
+            if (free_slot < 0 && !g_victron_mem[j].used) free_slot = j;
+        }
+        if (slot < 0) {
+            /* As many slots as sloth keeps rows, and sloth never
+             * replaces a row, so a free one is always there. */
+            if (free_slot < 0) continue;
+            slot = free_slot;
+            memset(&g_victron_mem[slot], 0, sizeof(g_victron_mem[slot]));
+            g_victron_mem[slot].used = 1;
+            snprintf(g_victron_mem[slot].mac, sizeof(g_victron_mem[slot].mac), "%s", d->mac);
+        }
+        uint64_t facts = victron_facts(d);
+        int moved = d->readings != g_victron_mem[slot].readings ||
+                    d->sessions != g_victron_mem[slot].sessions;
+        int due = !g_victron_mem[slot].dev_ts ||
+                  now - g_victron_mem[slot].dev_ts >= DB_VICTRON_MIN_S;
+        if (moved && (due || facts != g_victron_mem[slot].facts)) {
+            sqlite3_stmt *st = g_st[ST_VICTRON_DEV];
+            bind_txt(st, 1, d->mac);
+            sqlite3_bind_int64(st, 2, (sqlite3_int64)(d->first_seen ? d->first_seen : now));
+            sqlite3_bind_int64(st, 3, (sqlite3_int64)(d->last_seen ? d->last_seen : now));
+            bind_txt(st, 4, d->serial);
+            bind_txt(st, 5, d->model);
+            bind_txt(st, 6, d->record);
+            bind_txt(st, 7, d->session);
+            bind_txt(st, 8, d->services);
+            sqlite3_bind_int64(st, 9, (sqlite3_int64)d->last_readout);
+            sqlite3_bind_int64(st, 10, (sqlite3_int64)d->last_gatt);
+            sqlite3_bind_int64(st, 11, (sqlite3_int64)d->readings);
+            sqlite3_bind_int64(st, 12, (sqlite3_int64)d->sessions);
+            if (d->has_rssi) sqlite3_bind_int(st, 13, d->rssi);
+            step_reset(ST_VICTRON_DEV);
+            g_victron_mem[slot].dev_ts = now;
+            g_victron_mem[slot].facts = facts;
+            g_victron_mem[slot].sessions = d->sessions;
+            /* readings advances below, with the row it gates. */
+        }
+        if (d->readings != g_victron_mem[slot].readings && d->nvals > 0 &&
+            (!g_victron_mem[slot].read_ts ||
+             now - g_victron_mem[slot].read_ts >= DB_VICTRON_MIN_S)) {
+            sqlite3_stmt *st = g_st[ST_VICTRON_READ];
+            sqlite3_bind_int64(st, 1, (sqlite3_int64)(d->last_seen ? d->last_seen : now));
+            bind_txt(st, 2, d->mac);
+            bind_txt(st, 3, d->vals_gatt ? "gatt" : "readout");
+            if (d->has_rssi) sqlite3_bind_int(st, 4, d->rssi);
+            for (int c = 0; db_victron_col(c); c++) {
+                for (int v = 0; v < d->nvals && v < VICTRON_MAX_VALS; v++) {
+                    if (strcmp(d->vals[v].name, db_victron_col(c))) continue;
+                    if (c >= DB_VICTRON_FIRST_ENUM)
+                        sqlite3_bind_int64(st, 5 + c, (sqlite3_int64)d->vals[v].v);
+                    else
+                        sqlite3_bind_double(st, 5 + c, d->vals[v].v);
+                    break;
+                }
+            }
+            step_reset(ST_VICTRON_READ);
+            g_victron_mem[slot].read_ts = now;
+            g_victron_mem[slot].readings = d->readings;
+        }
+    }
+}
+
+/* APRS (schema v13): one aprs_packets row and one aprs_stations
+ * upsert per packet past this writer's own cursor, off src/aprs.c's
+ * ring (APRS_PKT_RING, the newest kept), so a packet reaches the file
+ * once however --db-interval-secs paces the writes; a writer more than
+ * the ring behind loses the oldest. An object or item (dti ';' or ')')
+ * names something else: its position, symbol and comment go in the
+ * packet row, never on the sender's station row (src/aprs.c merge()). */
+static void write_aprs(const sloth_state_t *s) {
+    if (!s->aprs.configured || !s->aprs_pkts) return;
+    int n = s->aprs_pkt_count;
+    if (n && s->aprs_pkts[n - 1].seq < g_aprs_seq) g_aprs_seq = 0;   /* ring restarted */
+    for (int i = 0; i < n; i++) {
+        const aprs_packet_t *p = &s->aprs_pkts[i];
+        if (p->seq <= g_aprs_seq) continue;
+        g_aprs_seq = p->seq;
+        char dti[2] = { p->dti, '\0' };
+        int other = p->dti == ';' || p->dti == ')';
+        int direct = p->heard[0] && strcmp(p->heard, p->source) == 0;
+
+        sqlite3_stmt *st = g_st[ST_APRS_STN];
+        bind_txt(st, 1, p->source);
+        sqlite3_bind_int64(st, 2, (sqlite3_int64)p->utime);
+        sqlite3_bind_int64(st, 3, (sqlite3_int64)(p->stn_first_seen ? p->stn_first_seen
+                                                                     : p->utime));
+        bind_txt(st, 4, p->heard);
+        sqlite3_bind_int(st, 5, direct);
+        if (p->level >= 0) sqlite3_bind_int(st, 6, p->level);
+        bind_txt(st, 7, dti);
+        bind_txt(st, 8, other ? "" : p->symbol);
+        if (p->has_pos && !other) {
+            sqlite3_bind_double(st, 9, p->lat);
+            sqlite3_bind_double(st, 10, p->lon);
+            sqlite3_bind_int64(st, 11, (sqlite3_int64)p->utime);
+        }
+        bind_txt(st, 12, other ? "" : p->comment);
+        bind_txt(st, 13, p->status);
+        bind_txt(st, 14, p->system);
+        step_reset(ST_APRS_STN);
+
+        st = g_st[ST_APRS_PKT];
+        sqlite3_bind_int64(st, 1, (sqlite3_int64)p->utime);
+        bind_txt(st, 2, p->source);
+        bind_txt(st, 3, p->heard);
+        bind_txt(st, 4, dti);
+        bind_txt(st, 5, p->name);
+        bind_txt(st, 6, p->symbol);
+        bind_opt_real(st, 7, p->has_pos, p->lat);
+        bind_opt_real(st, 8, p->has_pos, p->lon);
+        bind_opt_real(st, 9, p->has_speed, p->speed_kt);
+        bind_opt_real(st, 10, p->has_course, p->course);
+        bind_opt_real(st, 11, p->has_alt, p->alt_m);
+        if (p->level >= 0) sqlite3_bind_int(st, 12, p->level);
+        bind_txt(st, 13, p->status);
+        bind_txt(st, 14, p->comment);
+        step_reset(ST_APRS_PKT);
+    }
+}
+
 static void write_events(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->alert_count; i++) {
         const alert_t *a = &s->alerts[i];
         sqlite3_stmt *st = g_st[ST_ALERT];
+        /* first_seen <= last_seen is what slothweb's History count
+         * leans on (it finds an episode begun after a time by its
+         * last_seen, web/src/web_slothdb.h). The engine stamps both
+         * from the unclamped wall clock, so across a backward clock
+         * step an episode can arrive with last_seen before the row's
+         * first_seen; it is stored as having ended where it began. */
+        sqlite3_int64 fs = alert_row_first_seen(a->key,
+                (sqlite3_int64)(a->first_seen ? a->first_seen : now));
+        sqlite3_int64 ls = (sqlite3_int64)(a->last_seen  ? a->last_seen  : now);
+        if (ls < fs) ls = fs;
         bind_txt(st, 1, a->key);
-        sqlite3_bind_int64(st, 2, (sqlite3_int64)(a->first_seen ? a->first_seen : now));
-        sqlite3_bind_int64(st, 3, (sqlite3_int64)(a->last_seen  ? a->last_seen  : now));
+        sqlite3_bind_int64(st, 2, fs);
+        sqlite3_bind_int64(st, 3, ls);
         sqlite3_bind_int(st, 4, (int)a->type);
         sqlite3_bind_int(st, 5, (int)a->sev);
         bind_txt(st, 6, a->title);
@@ -1550,7 +2408,40 @@ static void write_events(const sloth_state_t *s, time_t now) {
         bind_txt(st, 9, a->match_ip);
         sqlite3_bind_int(st, 10, (int)a->match_port);
         sqlite3_bind_int(st, 11, a->count);
+        /* NULL, not "", for an alert with no incident (only a state a
+         * test built by hand): "no incident" then compares equal to
+         * itself, and is never mistaken for one. */
+        if (a->incident_id[0]) bind_txt(st, 12, a->incident_id);
+        else                   sqlite3_bind_null(st, 12);
+        /* The incident's own start; first_seen is the finding's. */
+        sqlite3_bind_int64(st, 13, (sqlite3_int64)(a->first_detected
+                ? a->first_detected : (a->first_seen ? a->first_seen : now)));
+        /* ?14..?19 stay NULL (clear_bindings) for an unstamped alert. */
+        if (a->loc.src == LOC_SRC_GPS || a->loc.src == LOC_SRC_FIXED) {
+            sqlite3_bind_double(st, 14, a->loc.lat);
+            sqlite3_bind_double(st, 15, a->loc.lon);
+            if (a->loc.has_alt) sqlite3_bind_double(st, 16, a->loc.alt_m);
+            if (a->loc.has_acc) sqlite3_bind_double(st, 17, a->loc.acc_m);
+            bind_txt(st, 18, gps_loc_src_name(a->loc.src));
+            sqlite3_bind_int64(st, 19, (sqlite3_int64)a->loc.ts);
+        }
         step_reset(ST_ALERT);
+    }
+
+    /* #175: the hook's queue first, then the snapshot's incidents, the
+     * newer of the two (db.c's per-incident section). A snapshot entry
+     * never closes a row: the reason is the hook's to give. */
+    write_incident_queue();
+    for (int i = 0; i < s->alert_count && !g_disabled; i++) {
+        const alert_t *a = &s->alerts[i];
+        if (!a->incident_id[0]) continue;
+        bind_incident(g_st[ST_INCIDENT], a->key, a->incident_id, (int)a->type,
+                      a->first_detected ? a->first_detected
+                          : a->first_seen ? a->first_seen : now,
+                      a->last_seen ? a->last_seen : now, (int)a->sev,
+                      (int)a->sev, a->count, (long long)a->observations, 0,
+                      NULL);
+        step_reset(ST_INCIDENT);
     }
 
     for (int i = 0; i < s->cleartext_cred_count; i++) {
@@ -2034,6 +2925,39 @@ int db_akm_regressions(db_akm_regression_t *out, int max) {
     return n;
 }
 
+/* ── persisted association evidence (#183) ───────────────────────────
+ *
+ * Designation is tested here rather than in SQL because it is operator
+ * context, not a stored column: the BSSID and the SSID are both valid
+ * answers (the operator may have designated either), and a LIKE over
+ * an SSID the air supplied would be a pattern match on untrusted text.
+ * Rows come back newest-first and the walk stops at the first
+ * designated one, so the common case is one step. */
+time_t db_sta_designated_assoc_last_seen(const uint8_t sta[6]) {
+    if (!sta || !db_is_open()) return 0;
+    char mac[18];
+    mac_str(sta, mac);
+
+    sqlite3_stmt *st = NULL;
+    const char *sql = "SELECT bssid, ssid, last_seen FROM assocs"
+                      " WHERE sta_mac = ?1 ORDER BY last_seen DESC";
+    if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL) != SQLITE_OK) return 0;
+    sqlite3_bind_text(st, 1, mac, -1, SQLITE_TRANSIENT);
+    time_t found = 0;
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        const unsigned char *bss  = sqlite3_column_text(st, 0);
+        const unsigned char *ssid = sqlite3_column_text(st, 1);
+        uint8_t bssid[6];
+        int mine = 0;
+        if (bss && ownership_parse_mac((const char *)bss, bssid))
+            mine = ownership_is_my_bssid(bssid);
+        if (!mine && ssid) mine = ownership_is_my_ssid((const char *)ssid);
+        if (mine) { found = (time_t)sqlite3_column_int64(st, 2); break; }
+    }
+    sqlite3_finalize(st);
+    return found;
+}
+
 void db_tick(const sloth_state_t *s, time_t now) {
     if (!s || !db_is_open()) return;
 
@@ -2058,6 +2982,18 @@ void db_tick(const sloth_state_t *s, time_t now) {
     write_proto_flows    (s, now);
     write_events         (s, now);
     write_detector_evidence(s, now);
+    write_positions      ();
+    /* gnss_fixes / gnss_sightings and the decoders' tables are
+     * sloth-rf's alone since the cutover (#216, ADR 0010). sloth-wifi
+     * holds a receiver's fix and sky too (it links the same reader, for
+     * the location stamp), so the state being empty is not what keeps
+     * these rows out of sloth.db: this is. */
+    if (g_rf_side) {
+        write_gnss       (s, now);
+        write_adsb       (s, now);
+        write_aprs       (s);
+        write_victron    (s, now);
+    }
 
     if (g_disabled) {
         exec("ROLLBACK", "rollback");
@@ -2077,6 +3013,269 @@ void db_tick(const sloth_state_t *s, time_t now) {
      * observation it was triggered by. */
     if (g_last_maint == 0) g_last_maint = now;
     else if (now - g_last_maint >= DB_MAINT_INTERVAL_S) db_maintain(now);
+}
+
+
+/* ── --db-compact-alerts (#170) ──────────────────────────────
+ *
+ * The offline half of #170. A pre-#170 build wrote one alerts row per
+ * incident, and an evicted key re-fired as a new incident every few
+ * seconds under pressure: 867,748 rows for 7,598 keys on the owner's
+ * sensor. The v7 -> v8 step leaves those rows alone (it never rewrites
+ * a recorded value), so folding them is this command, and it works on
+ * a copy: SRC is opened immutable and nothing is written beside it,
+ * DST must not exist, and swapping one for the other is the operator's
+ * decision. */
+
+/* SQL run on DST, after it has been brought to the current schema. One
+ * row per key: the earliest first_seen, the latest last_seen, the summed
+ * count, the peak severity with the detail of the most recent row at
+ * that peak (the live writer's rule, ST_ALERT), and reopens = the rows
+ * folded beyond the first plus any reopens a v8 row already carried.
+ * Everything else that is one observation rather than a total (title,
+ * type, technique, match_ip / match_port, the incident join and the
+ * incident's start) is the key's most recent row's, as the live writer
+ * would have left it. A v7 row's first_seen was its incident's start,
+ * so it stands in for the incident_first_seen a v7 row lacks. */
+static const char COMPACT_SQL[] =
+    /* One streaming pass down the primary key for the totals, and for
+     * each key the rowids of its most recent row and of its most
+     * recent row at peak severity. A window-function form of the same
+     * query sorted all 900,000 rows and took 10 s where this takes a
+     * few (tests/test_db.c's timing line). */
+    "CREATE TEMP TABLE compact_agg AS"
+    " SELECT key, MIN(first_seen) AS fs, MAX(last_seen) AS ls,"
+    "  SUM(count) AS cnt, MAX(sev) AS sv,"
+    "  COUNT(*) - 1 + SUM(reopens) AS ro,"
+    "  (SELECT b.rowid FROM alerts b WHERE b.key = a.key"
+    "    ORDER BY b.last_seen DESC, b.first_seen DESC LIMIT 1) AS rid,"
+    "  (SELECT b.rowid FROM alerts b WHERE b.key = a.key"
+    "    ORDER BY b.sev DESC, b.last_seen DESC, b.first_seen DESC"
+    "    LIMIT 1) AS pid"
+    " FROM alerts a GROUP BY key;\n"
+    "CREATE TEMP TABLE compact_alerts AS"
+    " SELECT g.key, g.fs, g.ls, x.type, g.sv, x.title, p.detail,"
+    "  x.technique, x.match_ip, x.match_port, g.cnt, g.ro, x.incident_id,"
+    "  x.incident_count, COALESCE(x.incident_first_seen, x.first_seen) AS ifs,"
+    "  x.lat, x.lon, x.alt_m, x.acc_m, x.loc_src, x.loc_ts"
+    " FROM compact_agg g JOIN alerts x ON x.rowid = g.rid"
+    " JOIN alerts p ON p.rowid = g.pid;\n"
+    "DELETE FROM alerts;\n"
+    "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,"
+    " technique,match_ip,match_port,count,reopens,incident_id,incident_count,"
+    " incident_first_seen,lat,lon,alt_m,acc_m,loc_src,loc_ts)"
+    " SELECT key, fs, ls, type, sv, title, detail, technique, match_ip,"
+    "  match_port, cnt, ro, incident_id, incident_count, ifs,"
+    "  lat, lon, alt_m, acc_m, loc_src, loc_ts"
+    " FROM compact_alerts;\n"
+    "DROP TABLE compact_alerts;\n"
+    "DROP TABLE compact_agg;\n";
+
+static long long scalar_on(sqlite3 *h, const char *sql) {
+    sqlite3_stmt *st = NULL;
+    long long v = -1;
+    if (sqlite3_prepare_v2(h, sql, -1, &st, NULL) == SQLITE_OK &&
+        sqlite3_step(st) == SQLITE_ROW)
+        v = sqlite3_column_int64(st, 0);
+    sqlite3_finalize(st);
+    return v;
+}
+
+/* DST and the side files SQLite would read beside it. A stale DST-wal
+ * left from some other run would be replayed into the copy, so its
+ * presence refuses the command as firmly as DST's own. */
+static const char *const DB_SIDE[] = { "", "-wal", "-shm", "-journal" };
+
+static void unlink_dst(const char *dst) {
+    for (size_t i = 0; i < sizeof(DB_SIDE) / sizeof(DB_SIDE[0]); i++) {
+        char p[4096];
+        snprintf(p, sizeof(p), "%s%s", dst, DB_SIDE[i]);
+        unlink(p);
+    }
+}
+
+/* "file:" + `path` percent-encoded, with immutable=1: SQLite then
+ * reads SRC as a plain file, taking no lock and creating no -shm or
+ * -wal beside it (a READONLY open of a WAL-mode file creates both and
+ * leaves them, and a stray -wal next to the original is what a swap
+ * would later replay). Safe only because db_compact_alerts() has
+ * already refused a SRC whose -wal or -journal holds anything, so the
+ * main file is the whole database. An absolute path gets the empty
+ * authority ("file:///..."), so a path that itself starts "//" is not
+ * read as a host name. 1 on success, 0 if it does not fit. */
+static int compact_src_uri(const char *path, char *uri, size_t n) {
+    static const char hex[] = "0123456789ABCDEF";
+    size_t o = (size_t)snprintf(uri, n, "file:%s", path[0] == '/' ? "//" : "");
+    for (const unsigned char *c = (const unsigned char *)path; *c; c++) {
+        int plain = (*c >= 'A' && *c <= 'Z') || (*c >= 'a' && *c <= 'z') ||
+                    (*c >= '0' && *c <= '9') || strchr("/._-~", *c);
+        if (o + 4 >= n) return 0;
+        if (plain) uri[o++] = (char)*c;
+        else { uri[o++] = '%'; uri[o++] = hex[*c >> 4]; uri[o++] = hex[*c & 15]; }
+    }
+    int w = snprintf(uri + o, n - o, "?mode=ro&immutable=1");
+    return w > 0 && (size_t)w < n - o;
+}
+
+/* Open SRC immutable, check it is a sloth file this build can migrate,
+ * count what it holds, and copy it to the (just created, empty) DST
+ * with VACUUM INTO. 1 on success. */
+static int compact_copy(const char *src, const char *dst,
+                        db_compact_stats_t *out) {
+    sqlite3 *h = NULL;
+    int ok = 0;
+    char uri[8192];
+    if (!compact_src_uri(src, uri, sizeof(uri))) {
+        fprintf(stderr, "sloth: --db-compact-alerts: %s: path too long\n", src);
+        return 0;
+    }
+    if (sqlite3_open_v2(uri, &h, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW |
+                        SQLITE_OPEN_URI, NULL) != SQLITE_OK) {
+        fprintf(stderr, "sloth: --db-compact-alerts: cannot open %s: %s\n",
+                src, h ? sqlite3_errmsg(h) : "?");
+        sqlite3_close(h);
+        return 0;
+    }
+    int defensive = -1;
+    sqlite3_db_config(h, SQLITE_DBCONFIG_DEFENSIVE, 1, &defensive);
+    sqlite3_busy_timeout(h, DB_BUSY_MS);
+    long long ver = scalar_on(h, "SELECT CAST(value AS INTEGER) FROM meta"
+                              " WHERE key='schema_version'");
+    long long has = scalar_on(h, "SELECT COUNT(*) FROM sqlite_master"
+                              " WHERE type='table' AND name='alerts'");
+    if (defensive != 1) {
+        fprintf(stderr, "sloth: --db-compact-alerts: DEFENSIVE refused\n");
+    } else if (ver < 1 || ver > DB_SCHEMA_VERSION || has != 1) {
+        fprintf(stderr, "sloth: --db-compact-alerts: %s is not a sloth"
+                " database this build reads (schema v%lld, alerts table"
+                " %s)\n", src, ver, has == 1 ? "present" : "missing");
+    } else {
+        out->rows_before = scalar_on(h, "SELECT COUNT(*) FROM alerts");
+        out->keys        = scalar_on(h, "SELECT COUNT(DISTINCT key) FROM alerts");
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(h, "VACUUM INTO ?1", -1, &st, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(st, 1, dst, -1, SQLITE_STATIC);
+            ok = sqlite3_step(st) == SQLITE_DONE;
+        }
+        if (!ok)
+            fprintf(stderr, "sloth: --db-compact-alerts: copy to %s failed:"
+                    " %s\n", dst, sqlite3_errmsg(h));
+        sqlite3_finalize(st);
+    }
+    sqlite3_close(h);
+    return ok && out->rows_before >= 0 && out->keys >= 0;
+}
+
+int db_compact_alerts(const char *src, const char *dst,
+                      db_compact_stats_t *out) {
+    db_compact_stats_t local;
+    if (!out) out = &local;
+    memset(out, 0, sizeof(*out));
+    out->rows_before = out->rows_after = out->keys = -1;
+    if (!src || !src[0] || !dst || !dst[0]) return -1;
+    if (g_db) {
+        fprintf(stderr, "sloth: --db-compact-alerts runs offline, without"
+                " --db\n");
+        return -1;
+    }
+    char floor_err[96];
+    if (libver_sqlite_refuse(floor_err, sizeof(floor_err)) != 0) {
+        fprintf(stderr, "sloth: --db-compact-alerts: %s\n", floor_err);
+        return -1;
+    }
+    for (size_t i = 0; i < sizeof(DB_SIDE) / sizeof(DB_SIDE[0]); i++) {
+        char p[4096];
+        struct stat sb;
+        snprintf(p, sizeof(p), "%s%s", dst, DB_SIDE[i]);
+        if (lstat(p, &sb) == 0) {
+            fprintf(stderr, "sloth: --db-compact-alerts: %s exists; refusing"
+                    " to overwrite it (pick a new DST)\n", p);
+            return -1;
+        }
+    }
+    /* SRC's own owner, for DST below. lstat: compact_copy()'s open
+     * refuses a symlink anyway (NOFOLLOW). */
+    struct stat src_sb;
+    if (lstat(src, &src_sb) != 0 || !S_ISREG(src_sb.st_mode)) {
+        fprintf(stderr, "sloth: --db-compact-alerts: %s: not a regular"
+                " file\n", src);
+        return -1;
+    }
+    /* A sensor that was killed rather than stopped leaves its last
+     * writes in SRC-wal (or, in rollback mode, a hot SRC-journal). The
+     * copy below reads the main file alone (compact_src_uri()), so it
+     * would be missing them - and the swap would put the compacted
+     * file under that old -wal, which SQLite then replays onto pages
+     * it never belonged to: a corrupt database, reproduced on #170's
+     * review. An empty -wal is what a clean close may leave. */
+    static const char *const SRC_LOG[] = { "-wal", "-journal" };
+    for (size_t i = 0; i < sizeof(SRC_LOG) / sizeof(SRC_LOG[0]); i++) {
+        char p[4096];
+        struct stat sb;
+        snprintf(p, sizeof(p), "%s%s", src, SRC_LOG[i]);
+        if (lstat(p, &sb) == 0 && sb.st_size > 0) {
+            fprintf(stderr, "sloth: --db-compact-alerts: %s holds %lld bytes"
+                    " not yet in %s; checkpoint it first (start and stop the"
+                    " sensor cleanly, or run sqlite3 %s"
+                    " 'PRAGMA wal_checkpoint(TRUNCATE)')\n", p,
+                    (long long)sb.st_size, src, src);
+            return -1;
+        }
+    }
+    uint64_t t0 = sloth_mono_ms();
+    /* Created here, exclusively and 0600, before SQLite sees the path:
+     * VACUUM INTO accepts an existing empty file, and creating it first
+     * is what gives the copy db_open()'s private mode and closes the
+     * window in which another process could plant the name. */
+    char err[SFILE_ERR_MAX];
+    int fd = sfile_open(AT_FDCWD, dst, SFILE_EXCL, err, sizeof(err));
+    if (fd < 0) {
+        fprintf(stderr, "sloth: --db-compact-alerts: %s\n", err);
+        return -1;
+    }
+    /* From here DST is ours, and a failure removes it: a half-built
+     * copy is not something an operator should find and swap in. fd
+     * stays open to the end for the fchown below. */
+    if (!compact_copy(src, dst, out) || !db_open(dst)) {
+        close(fd);
+        unlink_dst(dst);
+        return -1;
+    }
+    int ok = exec("BEGIN IMMEDIATE", "compact begin");
+    if (ok && (!exec(COMPACT_SQL, "compact") ||
+               !exec("COMMIT", "compact commit"))) {
+        exec("ROLLBACK", "compact rollback");
+        ok = 0;
+    }
+    /* The DELETE freed every page the duplicates held; VACUUM returns
+     * them, which is most of why the operator is running this. */
+    if (ok) ok = exec("VACUUM", "compact vacuum");
+    if (ok) out->rows_after = scalar("SELECT COUNT(*) FROM alerts");
+    db_close();
+    /* Reading a 0600 sloth-owned SRC usually means running this as
+     * root, and DST is then root's. The sensor opens --db after it has
+     * dropped to its --user account (main.c, privdrop_apply() before
+     * db_open()), and db_open() refuses a file owned by anyone else, so
+     * a swapped-in root-owned copy would stop the sensor starting. DST
+     * goes to SRC's owner instead: the account that already opens SRC.
+     * After db_close(), because db_open() above runs as root and holds
+     * DST to the same rule. Untested: a test cannot chown without
+     * root. */
+    if (ok && geteuid() == 0 &&
+        fchown(fd, src_sb.st_uid, src_sb.st_gid) != 0) {
+        fprintf(stderr, "sloth: --db-compact-alerts: chown %s to %s's owner:"
+                " %s\n", dst, src, strerror(errno));
+        ok = 0;
+    }
+    close(fd);
+    if (!ok || out->rows_after < 0) { unlink_dst(dst); return -1; }
+    out->elapsed_ms = (long long)(sloth_mono_ms() - t0);
+    printf("sloth: compacted alerts: %lld rows for %lld keys in %s"
+            " -> %lld rows in %s (%lld folded, %.2f s); %s is unchanged\n",
+            out->rows_before, out->keys, src, out->rows_after, dst,
+            out->rows_before - out->rows_after,
+            (double)out->elapsed_ms / 1000.0, src);
+    return 0;
 }
 
 #endif /* WITH_SQLITE */

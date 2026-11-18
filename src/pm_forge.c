@@ -6,6 +6,7 @@
 #include "beacon_snoop.h"
 #include "sensor_health.h"
 #include "ev_cite.h"
+#include "sloth_clock.h"
 
 static pm_forge_t      g_tbl[MAX_PM_FORGE_ENTRIES];
 static int             g_count;
@@ -91,6 +92,7 @@ void pm_forge_observe_frame(const dot11_frame_t *f,
             if (bms > 0 && (now_us - e->last_pm1_null_us) <= (int64_t)bms * 1000) {
                 e->contradiction_count++;
                 e->last_contradiction_ts = now_sec;
+                e->last_contradiction_arrival = sloth_wall();
                 /* Both halves: neither frame is a finding alone — the
                  * contradiction is the pair. Re-pushing a Null the ring
                  * already holds moves it to newest (ev_cite_push), so

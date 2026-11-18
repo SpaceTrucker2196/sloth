@@ -16,8 +16,8 @@ type: reference
 
 ## What sloth surfaces
 
-- **<!-- count:views -->36<!-- /count --> ncurses views** (`VIEW_COUNT`, one per row of `include/sloth_views.def`) organised into observation, synthesis, and WiFi-SIGINT groups — see [[views-catalog]].
-- **<!-- count:rules -->90<!-- /count --> alert rules** (one per `ALERT_TYPE_*`, one per row of `include/sloth_alerts.def`) — see [[alerts]]. The threat-intel matcher among them ships a **synthetic demo IOC list**, not a feed — see [[threat-intel]].
+- **<!-- count:views -->37<!-- /count --> ncurses views** (`VIEW_COUNT`, one per row of `include/sloth_views.def`) organised into observation, synthesis, and WiFi-SIGINT groups — see [[views-catalog]]. They are `sloth-wifi`'s (`sloth` is a symlink to it); the second daemon, `sloth-rf`, is headless ([ADR 0010](adr/0010-wifi-rf-daemons.md)).
+- **<!-- count:rules -->100<!-- /count --> alert rules** (one per `ALERT_TYPE_*`, one per row of `include/sloth_alerts.def`) — see [[alerts]]. `sloth-wifi` raises <!-- count:rules-wifi -->95<!-- /count --> of the kinds and `sloth-rf` <!-- count:rules-rf -->6<!-- /count -->; one is both's. The threat-intel matcher among them ships a **synthetic demo IOC list**, not a feed — see [[threat-intel]].
 - **Per-alert pcap dumps** when `--pcap-dir` is set — see [[pcap-export]].
 - **Optional JSONL forensic log** for downstream tooling.
 - **Composite dashboard** that tiles seven bands into one terminal — see [[dashboard]].

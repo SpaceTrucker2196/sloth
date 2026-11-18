@@ -24,7 +24,10 @@
 #define SLOTH_RESETS(X) \
     X(action_clear) \
     X(action_mfp_clear) \
+    X(adsb_reset) \
+    X(aprs_reset) \
     X(alerts_clear) \
+    X(alert_pcap_clear) \
     X(assoc_clear) \
     X(assoc_flood_clear) \
     X(assoc_request_clear) \
@@ -44,10 +47,13 @@
     X(cleartext_creds_reset) \
     X(cp_clear) \
     X(csa_clear) \
+    X(channel_hz_clear) \
     X(ctrl_clear) \
     X(dashboard_info_clear) \
     X(data_socket_cleanup) \
     X(db_close) \
+    X(df_reset) \
+    X(dev_how_clear) \
     X(deauth_clear) \
     X(dhcp_snoop_clear) \
     X(dns_log_clear) \
@@ -55,22 +61,30 @@
     X(dns_resolver_stats_reset) \
     X(eap_track_clear) \
     X(eapol_clear) \
+    X(eapol_export_clear) \
     X(evidence_ring_reset) \
     X(evidence_manifest_reset) \
     X(evil_twin_taint_clear) \
     X(frag_clear) \
+    X(gps_location_reset) \
+    X(harvest_clear) \
     X(host_cache_clear) \
     X(http_log_clear) \
     X(icmp_log_clear) \
     X(inventory_clear) \
     X(ip_index_clear) \
     X(jsonl_dedup_reset) \
+    X(jsonl_lures_reset) \
+    X(jsonl_aprs_reset) \
     X(lan_role_clear) \
+    X(postrack_clear) \
+    X(karma_forge_clear) \
     X(kerb_snoop_clear) \
     X(ldap_snoop_clear) \
     X(linux_wifi_scan_trigger_reset) \
     X(mdns_clear) \
     X(mle_clear) \
+    X(mon_radios_reset) \
     X(mqtt_snoop_clear) \
     X(nbns_clear) \
     X(ndp_snoop_clear) \
@@ -79,12 +93,16 @@
     X(ownership_clear) \
     X(pm_forge_clear) \
     X(probe_clear) \
+    X(probe_latency_reset) \
     X(probe_pnl_clear) \
     X(queue_evict_clear) \
     X(quic_log_clear) \
     X(rdp_snoop_clear) \
+    X(rf_calibration_reset) \
     X(rf_quality_clear) \
     X(rrm_clear) \
+    X(rtl433_reset) \
+    X(victron_reset) \
     X(rtsp_snoop_clear) \
     X(saq_clear) \
     X(seqnum_clear) \
@@ -95,16 +113,19 @@
     X(snmp_snoop_clear) \
     X(ssdp_clear) \
     X(ssh_snoop_clear) \
+    X(sys_status_reset) \
     X(tls_log_clear) \
     X(top_hosts_clear) \
     X(transit_clear) \
     X(tui_alert_hot_clear) \
     X(tui_reset) \
     X(tune_reset) \
+    X(twin_field_reset) \
     X(twins_clear) \
     X(wifi_baseline_clear) \
     X(wired_attach_clear) \
     X(view_procs_fold_clear) \
+    X(view_eapol_group_reset) \
     X(wps_track_clear)
 
 void sloth_reset_all(void);

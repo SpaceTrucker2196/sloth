@@ -16,6 +16,7 @@
 #include "capture/bt_monitor.h"
 #include "capture/probe.h"
 #endif
+#include "tmp_dir.h"
 
 /*
  * The Bluetooth host source — #144 slice 2.
@@ -1304,10 +1305,10 @@ static void test_advertiser_table_evicts_and_tallies(void) {
 
 /* ── sensor_health ──────────────────────────────────────────────── */
 
-static char g_tmp[] = "/tmp/sloth_ble_XXXXXX";
+static char g_tmp[TEST_TMP_MAX];
 
 static int open_tmp_jsonl(void) {
-    int fd = mkstemp(g_tmp);
+    int fd = mkstemp(test_tmp_tpl(g_tmp, sizeof(g_tmp), "sloth_ble_XXXXXX"));
     if (fd >= 0) close(fd);
     jsonl_close();
     unlink(g_tmp);

@@ -42,9 +42,19 @@
 #include "web_ident.h"
 #include "web_json.h"
 #include "web_oui.h"
+#include "web_pcapdir.h"
+#include "web_rf.h"
 #include "web_ptr.h"
+#include "web_scope.h"
 #include "web_slothdb.h"
 #include "web_tsdb.h"
+
+struct web_frrs;
+struct web_chain;
+struct web_fleet;
+struct web_gnss;
+struct web_adsb;
+struct web_aprs;
 
 #define WEB_DEV_LIMIT       100
 #define WEB_DEV_LIMIT_MAX   200
@@ -52,8 +62,9 @@
 #define WEB_DEV_CELLS       144
 #define WEB_DEV_CELL_S      600
 /* The largest one device row renders to: every text member at its cut
- * length, each byte escaped six-fold, and the fixed members. */
-#define WEB_DEV_ROW_MAX     2600
+ * length, each byte escaped six-fold, the fixed members, and G2's "rf"
+ * (web_rf.h). */
+#define WEB_DEV_ROW_MAX     (2600 + WEB_RF_JSON_MAX)
 
 typedef struct {
     web_slothdb_t       *sdb;      /* NULL: no --sloth-db */
@@ -62,7 +73,53 @@ typedef struct {
     web_ident_t         *ident;
     web_anomaly_t       *anomaly;
     web_tsdb_t          *tsdb;
+    /* The sensor's pcap directories (web_pcapdir.h), for the alert
+     * page's packet capture; NULL or none configured: no capture. */
+    web_pcapdir_t       *pcap;
+    /* The request's capture scope (web_scope.h); NULL is Hybrid. Set by
+     * the router on its own copy, never on the shared one. */
+    const web_scope_ctx_t *sc;
+    /* Validate the query and stop, reading nothing (the router's copy,
+     * for a view the scope holds nothing of): WEB_M4_CHECKED(). */
+    int                  check_only;
+    /* Triage and the FRRS record (web_frrs.h); NULL: not attached. */
+    struct web_frrs     *frrs;
+    /* The stream's twin_episode links for G8 (web_chain.h); NULL: not
+     * attached, and a chain has no links. */
+    struct web_chain    *chain;
+    /* The owner's fleet (web_fleet.h): the peers pulled, for
+     * /api/health and /api/fleet/peers; NULL: not attached. */
+    struct web_fleet    *fleet;
+    /* The GNSS, ADS-B and APRS panels' tables (web_gnss.h, web_adsb.h,
+     * web_aprs.h), for a note's "is this subject held" (web_notes.h);
+     * NULL: not attached, and such a note cannot be added. */
+    struct web_gnss     *gnss;
+    struct web_adsb     *adsb;
+    struct web_aprs     *aprs;
+    /* The Spectrum tab's state directory and request file
+     * (web_spectrum.h); NULL: /api/spectrum is 404. */
+    const struct web_spectrum *spectrum;
+    /* The Camera tab's state directory (web_camera.h); NULL:
+     * /api/camera.jpg is 404. */
+    const struct web_camera *camera;
+    /* sloth-rf's database (--rf-db, #214); NULL: none, and the RF
+     * tables are read from sdb as before. Last, so an initialiser that
+     * names the members above in order is unchanged. */
+    web_slothdb_t       *sdb_rf;
 } web_m4_t;
+
+/* Where the RF tables are read (adsb_*, aprs_*, gnss_*, victron_*,
+ * and the alerts sloth-rf raised): --rf-db when it is given, else
+ * --sloth-db exactly as before the split. NULL when neither is. */
+static inline web_slothdb_t *web_m4_rfdb(const web_m4_t *m) {
+    if (!m) return NULL;
+    return m->sdb_rf && m->sdb_rf->configured ? m->sdb_rf : m->sdb;
+}
+
+/* In a route, once its parameters are checked: under check_only, an
+ * empty 200 and no read. */
+#define WEB_M4_CHECKED(m, len, status) \
+    do { if ((m)->check_only) { *(len) = 0; *(status) = 200; return 0; } } while (0)
 
 /* The routes. Each renders its JSON body into body (cap bytes) and sets
  * *status; 0, or -1 when even an error did not fit. */
@@ -78,11 +135,29 @@ int web_lookup_route(const web_m4_t *m, const char *query, long long now_s,
  * the passive PTR cache, A4's state. */
 void web_m4_health(const web_m4_t *m, long long now_s, web_jw_t *w);
 
+/* The age in seconds of the sloth.db data the last health check read
+ * (#168): 1 with *age_s set (never negative: an mtime ahead of the clock
+ * reads as 0), or 0 when there is no --sloth-db or it is not open. */
+int  web_m4_db_age(const web_m4_t *m, long long now_s, long long *age_s);
+
+/* /api/device/{mac}'s fold of a MAC: 17 characters, '-' as ':', then
+ * web_key_mac()'s canonical lower case into out[WEB_KEY_MAX + 1]. 0,
+ * or -1. Shared with the bundle (web_bundle.c). */
+int  web_dev_canon_mac(const char *in, char *out);
+
 /* The presence strip of mac: 144 cells of 10 minutes ending with the
  * cell now_s is in, as 36 lower-case hex digits (cell 0 the oldest,
  * its bit the high bit of the first digit) into out[37]. For the
  * tests and the two routes. */
 void web_dev_presence_hex(const unsigned char bits[WEB_DEV_CELLS / 8],
                           char out[WEB_DEV_CELLS / 4 + 1]);
+
+/* The strips of n MACs as the Devices rows draw them, in the request's
+ * scope: n * (WEB_DEV_CELLS / 8) bytes into bits, cell 0 of each the
+ * cell at web_dev_strip_from(now_s). For the SSID detail and the Probes
+ * view (web_ssidview.h, web_probes.h). */
+long long web_dev_strip_from(long long now_s);
+void web_dev_strips(const web_m4_t *m, const char (*macs)[WEB_KEY_MAX + 1],
+                    int n, long long now_s, unsigned char *bits);
 
 #endif

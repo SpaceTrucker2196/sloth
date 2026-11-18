@@ -5132,11 +5132,1960 @@ report events.
   dashed edge, not by dimming; `utf8()` and `lowerAscii()` are pinned
   and ported. `docs/web-ui-spec.md` §8.1 amended to point at the
   served tokens.
-- 2026-10-26: [[slothweb]]: `docs/web-viz-spec.md` written and linked, a
-  draft for the owner. A review of every slothweb view outside the
-  theme (twenty findings), a Tufte-derived set of eight glyphs (band
-  sparkline, RSSI range sparkline, channel horizon strip, hour-of-week
-  heat glyph, presence strip, bullet and count bar, event rug, attack
-  chain timeline), the analyst's questions by Endsley level, the seven
-  series the server must add, twelve rules, tests and five delivery
-  slices. Nothing in `web/` changed.
+- 2026-10-26 — [[retention]] §2d, [[cli-reference]], [[jsonl-schema]],
+  [[pcap-export]]: the `--pcap-dir` age sweep (#166, owner ruling
+  2026-10-26: keep alert pcaps two weeks). `--tune pcap.retain_days`
+  (default 14, 0..3650, 0 = forever); swept at startup and hourly, at
+  most 1024 directory entries per poll tick with the pass resuming on
+  the next; only `alert_YYYYMMDD_HHMMSS_<slug>[_N].pcap` and the
+  manifest, regular files by `fstatat(AT_SYMLINK_NOFOLLOW)`, removed by
+  `unlinkat()` on the pinned dirfd. `sensor_health` gains
+  `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` while
+  `--pcap-dir` is set, decade-banded in the signature. The #92 evidence
+  pcaps in `--eapol-dir` were already covered by `eapol_sweep()` on the
+  7-day handshake window, and stay there.
+- 2026-10-26 — [[retention]] §2d, [[pcap-export]] §1, [[cli-reference]]:
+  #166 review. `--pcap-dir` and `--eapol-dir` resolving to one
+  directory (dev/ino of the pinned descriptors) exit 2, since
+  `eapol_sweep()` would expire alert pcaps on the 7-day handshake
+  window; a stale-clock guard spares files written since startup until
+  one window of monotonic uptime; a sweep error prints
+  `sloth: --pcap-dir retention sweep:`, not `export failed`. README now
+  says alert pcaps are deleted after `pcap.retain_days`.
+- 2026-10-26 — [[captive-portal]]: #169. Graded: a wrong
+  connectivity-check answer alone is LOW ("legitimate captive portals do
+  this too"), CRIT on a `--my-ssid`/`--my-bssid` network, from a live
+  evil-twin BSS, or to a client served a kit page. Two sentinels added
+  (`www.msftncsi.com/ncsi.txt`, `clients3.google.com/generate_204`).
+  New `portalkit:` findings for the default pages of wifiphisher,
+  Pineapple Evil Portal / PortalAuth, airgeddon and fluxion, from their
+  public source at pinned commits (`research/tools/captive-portal-kits.md`);
+  T1557.004 and DET0379 in `research/mitre/T1557-004.md`. Alerts carry
+  the responder as `match_ip`; the JSONL record gains `server`,
+  `server_port` and `kit`.
+- 2026-10-26 — [[captive-portal]]: #169 review. The Apple sentinel is
+  the 69-byte page Apple serves (one trailing LF); without it every
+  genuine answer read as a hijack. Sentinels added for NCSI's IPv6 hosts
+  and for Firefox's `canonical.html` and `firefox-portal-detection.com`.
+  The CRIT grade is now tied to the event's own client (ARP join to the
+  associated station, or the sensor's Wi-Fi link only for events on it)
+  instead of whichever single station was heard. The alert carries
+  T1557; T1557.004 is the kit rows' research basis.
+- 2026-10-26 — [[sqlite-schema]]: schema v8 (#170). The `alerts` table
+  is one row per finding, not per incident: a key's re-fire after an
+  eviction, a quiet period or a restart advances its newest row, `count`
+  sums the incidents, `reopens` counts them, `incident_id` joins the
+  latest back to the JSONL stream. The engine keeps `first_seen` across
+  every reopen. The v7 → v8 step only adds the three columns; the
+  owner's 867,748 rows for 7,598 keys are folded by the opt-in offline
+  `--db-compact-alerts SRC DST`, which never writes SRC.
+- 2026-10-26 — [[sqlite-schema]]: #170's review. `alerts` gains
+  `incident_first_seen` in the same v7 → v8 step (still unreleased), and
+  slothweb's History range reads and the TUI detail pane's "sustained"
+  time the latest incident from it instead of the finding's
+  `first_seen`. The live row keeps the peak `sev` and that peak's
+  detail, as the compactor does, so a LOW reopen no longer erases a
+  CRIT. `count` and `reopens` are documented as lower bounds sampled at
+  writes. `--db-compact-alerts` refuses a non-empty `SRC-wal` /
+  `-journal`, opens SRC immutable so nothing appears beside it, and run
+  as root hands DST to SRC's owner; the swap procedure checks the side
+  files and the owner.
+- 2026-10-26 — [[rf-distance]]: new page. The RSSI distance data point
+  (owner request "use rf signal strength to estimate distance as a data
+  point"): ITU-R P.1238-10 eq. (1) solved for distance, P_tx from the
+  TPC Report / Country ceiling / BLE TX power or assumed, median of the
+  last K samples, bands and trend with hysteresis, `--my-bssid`
+  calibration. [[jsonl-schema]] gains `est_dist_m` / `est_dist_band` /
+  `est_dist_trend` / `est_ptx_source`; [[cli-reference]] the five `rf.*`
+  knobs; source document `research/papers/rssi-distance-estimation.md`.
+- 2026-10-26 — [[rf-distance]] review round: a band is now held by a
+  margin sized from the median's spread (3 dB floor) for 10 s, and the
+  trend left the `ble_device` signature ([[jsonl-schema]]) - a seeded
+  hour of noise on a band boundary wrote over a thousand records and now
+  rides the heartbeat. A Country ceiling widens the interval downward
+  only, is not used above 20 dBm or on 6 GHz. Probe and association rows
+  take the band from radiotap. Beacons and Probe plan the distance cell
+  by width (none at 100 columns). The detail-pane example is one the
+  code produces: `~4.5m (2.0-10m) room steady, Ptx 20 assumed`.
+- 2026-10-26 — [[slothweb]]: the IEEE registry CSVs are committed
+  (owner ruling 2026-10-26, reversing the 2026-10-21 one; #162).
+  `web/data/` holds `oui.csv`, `mam.csv`, `oui36.csv` and `iab.csv` from
+  Debian's `ieee-data` 20260625, byte for byte, with `SOURCE.md` (the
+  IEEE URLs, the package version, each file's SHA-256, how to refresh);
+  `.gitignore` re-includes `web/data/` past the `data/` rule and
+  `.gitattributes` keeps the CSVs out of end-of-line conversion. The
+  generated `build/web/web_oui_table.c` stays build output. `make
+  update-oui` (`web/tools/update_oui.sh`) copies from
+  `/usr/share/ieee-data` or fetches from the IEEE, checks each header
+  and registry, and rewrites `SOURCE.md`'s block; nothing else runs it.
+  Fixed first: `oui_gen` hung on any multi-file registry (a per-file
+  4,096-slot name index rehashing every earlier name into 8,192 slots;
+  full after `oui.csv`'s 20,012 distinct names, from 39,627
+  assignments), now one index sized for the build. The default
+  build has the full table, A4 on; `web-test` is told which table to
+  expect, and CI's two-row-registry step became a build and test of the
+  empty-`WEB_OUI_DIR` fallback. slothweb 0.5 MB to 3.3 MB. Page:
+  vendor table bullet, README bullet, acceptance rows, Last updated.
+- 2026-10-26 — [[slothweb]], [[sqlite-schema]]: History's "THE LAST 30
+  DAYS" answered "sloth.db was too slow to answer; try again" on the
+  owner's 254 MB snapshot (schema v6, 867,748 alert episodes): its one
+  `GROUP BY` over `alerts.first_seen` had no index and took 253 ms
+  against the 250 ms request budget. sloth now creates
+  `idx_alerts_first_seen` and `idx_devices_first_seen` on every open
+  (no schema bump: an index is a new table's case; a v7 file without
+  them gains them and every row reads the same; the one-time build is
+  276 ms and +4.8 % on that snapshot, 280 ms and +6.9 % for 1M generated
+  alerts, on tmpfs). slothweb counts per cell over that index (32 ms),
+  or without it buckets the rows in range itself, found by
+  `last_seen >= from` when most of the table is older (a scan otherwise:
+  measured, the `last_seen` read costs twice a scan per row when most
+  rows are in range, so the bound is not taken blindly); gives the strip
+  its own 1500 ms budget; caches it 60 s per sloth.db state; and a
+  timeout names the read and the rows it had counted, which the page
+  appends to "try again". Seen red under one mutation each, restored by
+  the inverse edit: the `last_seen` bound dropped (the ticks are a
+  scan's), the cache made to miss, the mtime left out of the state, the
+  old error body, either `CREATE INDEX` removed.
+- 2026-10-26 — [[slothweb]], [[sqlite-schema]]: the History fix's
+  review. The overview cache's `-wal` half is now tested (a writer with
+  checkpoints off appends to the `-wal`, the main file's stat
+  unchanged, and the next strip is counted again; seen red with the
+  state compared on the main file only). The snapshot's own shape,
+  every row in the last 30 days and so the scan plan, is timed against
+  the 1500 ms budget, and the budget's case is restated as a range:
+  123–246 ms idle, 0.3–1.1 s loaded, 6–12 times the idle scan but
+  1.3–5 times the loaded one; a 503 now carries the `plan` that ran
+  out. The index build is quoted as about 0.65 s CPU and 0.93–1.85 s
+  wall under load on the snapshot (the 276 ms first quoted was not
+  reproduced; the CPU time alone is over twice it): a
+  ~1M-row file delays sloth's start by roughly 1–2 s once on a desktop,
+  likely several seconds on a Pi. sloth now stores an alert episode
+  stamped across a backward clock step (last_seen before first_seen) as
+  ending where it began, so the `last_seen` bound's
+  `first_seen <= last_seen` holds by construction for new rows (seen red
+  with the clamp removed).
+- 2026-10-26 — [[deployment]] §4.2-§4.4, §6, [[slothweb]], `web/README.md`:
+  the owner's ruling on #153 (the live sensor moves off
+  `--data-socket tcp:127.0.0.1:8765` to the unix socket),
+  `slothweb.service`, and sloth.db freshness on the DB-backed views
+  (#168). `sloth-migrate-sensor` takes options in any order:
+  `--data-socket-unix` turns an old unit's `tcp:` data socket into the
+  hardened unit's `unix:/run/sloth/sloth.sock --no-discovery` (nothing of
+  the `tcp:` spec is carried; verify reads `sensor_health` from the unix
+  socket as the invoking user; a rollback restores the `tcp:` unit byte
+  for byte); without it the refusal is word for word the old one, and
+  `make deploy-test` pins it on the live spec. `--with-slothweb` adds
+  step 6 after the sensor verifies: back up a differing
+  `slothweb.service`, install the shipped one, install
+  `/etc/default/slothweb` only where there is none, enable, restart, and
+  verify active plus `/api/health` on the bound address (asked from
+  `127.0.0.1`/`::1`, a loopback peer the allow-list always admits)
+  saying `"db":"open"`, `db_mode` `wal` or `immutable` and the stream
+  `connected`; a failure there rolls back slothweb alone and exits 3.
+  Its preflight runs with the sensor's and refuses a missing binary or
+  curl, drop-ins, quoting in `SLOTHWEB_ARGS`, a `--socket`/`--sloth-db`/
+  `--store` there, or a busy port with the unit not running; under
+  `--dry-run` the busy port is a printed note instead, because the
+  owner's dry run comes before the hand-started slothweb is stopped
+  (§4.4). `packaging/systemd/slothweb.service`: `User=sloth`, both
+  capability sets empty, `ProtectSystem=strict`, `ProtectHome=yes`,
+  `ReadOnlyPaths=/var/lib/sloth`, `StateDirectory=slothweb` 0700,
+  `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`,
+  `SystemCallFilter=@system-service`, `MemoryMax=512M`;
+  `systemd-analyze verify` clean and `security --offline=true` 1.3 OK
+  on systemd 261 (run locally on a copy; CI has no verify step, and
+  `.github/` is unchanged). `packaging/default/slothweb` ships empty
+  (loopback) with the Tailscale recipe commented, placeholders from
+  `100.64.0.0/24`. `make install` places slothweb (refusing without a
+  prior `make web`), `make install-service` the unit and, no-clobber,
+  the defaults (checked on a DESTDIR stage: an edited file survived a
+  second run). `/api/health` gains `sloth_db_mtime` (the file's, or the
+  newer of it and its `-wal` for a WAL reader; `lstat`, regular files
+  only), `sloth_db_age_s` (never negative), `sloth_db_stale_after_s`
+  (600) and `sloth_db_stale` (older than that while the stream is
+  connected with a record in the last 60 s; `null` when not open; the
+  members appear only with a `--sloth-db`, so the M0 shape stands); the
+  Devices, WiFi AP table, Flows, History and Lookup views show
+  `database as of HH:MM`, in the warning colour when stale.
+  `test_same_uid_reader_beside_a_writing_sloth` holds the deployment's
+  read: a 0700 directory made 0500 for the reads, 0600 files, a writer
+  of the same uid committing between three WAL reads, each commit seen,
+  the listing unchanged. Found while measuring: an unreverted mutation
+  from an interrupted earlier pass (`act()` running its command under
+  `--dry-run`) was in the working tree and is removed; and
+  `test_web_unit_runs_as_sloth_with_no_capabilities` scanned for `CAP_`
+  after `uf_logical_lines()` had cut the buffer, so the scan saw only
+  the first line and passed vacuously; it now runs before the cut. The
+  slothweb dry-run case's "asked nothing" check was vacuous too: with no
+  slothweb running, a stray `web_verify` never reaches curl, so it stayed
+  green under that mutation; the case now has an old slothweb running
+  and went red. Seen
+  red under one unique-match mutation each, restored by the inverse
+  edit and checked byte-identical: the unit given a `/home/` path, a
+  `CAP_` bounding set, no `AmbientCapabilities=`, `AF_PACKET`, a
+  `--web-bind` in `ExecStart`, `ReadWritePaths=/var/lib/sloth`,
+  `StateDirectory=` naming `sloth`, `DynamicUser=`; the Makefile's
+  slothweb defaults with `install -b`, and without the no-clobber
+  guard; the defaults file with a live `--web-allow-remote`, and a
+  non-placeholder address; `web_sdb_is_stale()` without the stream
+  condition, and with `>=`; the route's quiet-stream condition dropped;
+  the `-wal` branch of `web_slothdb_data_mtime()` removed; `lstat`
+  made `stat`; the immutable open forced; the age clamp removed; the
+  unknown case `false` for `null`; the stale class dropped from
+  `dbAge()`; the members emitted without a `--sloth-db`; the mtime
+  emitted for a file not open; the Lookup line removed; and in the tool
+  a `tcp:` socket accepted without the flag, `act()` running under
+  `--dry-run`, the `tcp:` spec carried into `SLOTH_ARGS`, verify on
+  `TCP-CONNECT`, a restart on the already-migrated path, rollback
+  keeping a defaults file it wrote, the slothweb dry run asking health
+  and writing its unit, the slothweb idempotence branch disabled, the
+  slothweb rollback restarting or rolling back the sensor, leaving its
+  unit, its defaults or its enablement, the operator's defaults
+  replaced, the slothweb preflight dropped from the migration path, the
+  dry run refusing a busy port, and the real run accepting one.
+  Measured, parent (dc65af3) to this tree: `make test` 34027 to 34148
+  assertions, `make web-test` 21394 to 21485, `make deploy-test` 262 to
+  394, each 0 failed; shellcheck 0.9.0 and 0.11.0 both clean on the
+  three scripts, and the web suite also against SQLite 3.45.1.
+- 2026-10-26 — [[deployment]] §2, §6, [[slothweb]], `web/README.md`:
+  the third review of #153 / #168. slothweb shares the sensor's uid,
+  and a process may signal any process of its own uid, so a
+  compromised slothweb could `SIGSTOP` or `SIGKILL` the sensor; §6 now
+  says so and why it is accepted (the `0600` socket and `0700`
+  directory), and the unit denies `kill tkill tgkill rt_sigqueueinfo
+  rt_tgsigqueueinfo pidfd_send_signal`. `tgkill` goes with the rest,
+  since `tgkill(pid, pid, sig)` reaches any process; slothweb sends no
+  signal (its handler writes to a pipe), and under a scratch seccomp
+  launcher denying the six it served `/api/health`, `/` and
+  `/api/devices` over the demo stream and exited 0 on `SIGTERM`. The
+  lasting fix, a `slothweb` account in group `sloth`, is named, not
+  done. `ReadOnlyPaths=-/var/lib/sloth`: without the `-` a host whose
+  sensor never started fails slothweb with `226/NAMESPACE`. `make
+  install` refuses a `./slothweb` older than any file under `web/src`,
+  `web/ui`, `web/tools`, `web/data`, the recipes page or the
+  `Makefile` (checked on a `DESTDIR` stage, refused then accepted after
+  `make web`). The freshness line carries the date when it is not
+  today's, since "stale" is said only while the stream is current.
+  `test_same_uid_reader_beside_a_writing_sloth` makes `sloth.db`, its
+  `-wal` and `-shm` `0400` for the reads, and says it does not pin
+  `readonly_shm` (green without it, as under the real mount;
+  `test_crashed_sloth_restarts_beside_a_reader` red). The unit test's
+  `ReadWritePaths=` check tokenises the value, so
+  `/var/lib/sloth /var/lib/slothweb` is refused. `sloth-migrate-sensor`
+  restores the slothweb unit only once it has replaced it: a failed
+  backup no longer reports `ROLLBACK INCOMPLETE` for a unit never
+  touched. Seen red under one unique-match mutation each, restored by
+  the inverse edit and checked byte-identical: `tgkill` dropped from
+  the deny line, the `-` dropped, a `ReadWritePaths=/var/lib/sloth
+  /var/lib/slothweb` line added, the path-boundary test in
+  `uf_path_under()` made `1`, the Makefile's freshness check pointed at
+  a missing file, the date dropped from `dbWhen()`, and the rollback's
+  old condition restored (the new `web-backup-fails` case).
+  `systemd-analyze verify` clean and `security --offline=true` 1.3 OK
+  on a copy; CI has no verify step and `.github/` is unchanged.
+  Measured, parent (14193e9) to this tree: `make test` 34148 to 34170
+  assertions, `make web-test` 21485 to 21494 (21495 against SQLite 3.45.1),
+  `make deploy-test` 394 to 401 under shellcheck 0.9.0 and 0.11.0, each
+  0 failed; `make test` under ASan + UBSan 34168.
+- 2026-10-26 — [[slothweb]], new page [[alert-remediation]]: the Alerts
+  page (open incidents first, then closed, one row per alert key with its
+  incidents; filters by severity, type and search), an alert's page
+  (what it is, why it matters with its corpus sources, how to
+  investigate and fix it, evidence, the key's incidents as runs, the
+  device), both built in from the rule table, the wiki, `research/` and
+  the new remediation page by `web/tools/alertkb.c`; the detail shown
+  only for the 50 types whose formats `test_alertfmt.c` audits; History
+  and the drawer collapse by key too; every Overview tile a link to the
+  view of what it counts. [[alert-remediation]] linked from [[index]].
+- 2026-10-26 — [[slothweb]], [[alert-remediation]]: the Alerts page's
+  review. The stream's incidents are one row per key (the open one, else
+  the newest closed, the rest counted in), and a row's incidents and
+  count are the key's on the list and the alert's page alike. sloth's
+  `incident_id` (FNV-1a64 over the key, time and counter, invertible to
+  the key's hash) is no longer served: slothweb names an incident by a
+  startup nonce and a counter, and `/api/live`'s `incident_id` became
+  `alert_id`. The Alerts list's filters sit inside its bounded read and
+  the capped note names how far back it reached; History counts each
+  listed key over its rows in the range and reports its scan; the
+  drawer's alerts walk the table by slices under the budget instead of
+  filtering the newest 20,000 rows of every device. "What it is" is the
+  trigger's first sentence, the whole cell under details with its code
+  spans as code. The detail audit refuses every appearance of the
+  detail it cannot follow (aliases, helper arguments). The rule table's
+  six brute-force rows say CRIT, as their `fire()` sites do, and four
+  floods say WARN/CRIT, held by a test against `src/alerts/`. WEAK_TLS's
+  remediation, trigger cell and `research/rfc/8996.md` are about the
+  client's ClientHello; on-device steps are conditional on the device
+  being the operator's; ROGUE_DHCP and ROGUE_RA ask first whether more
+  than one is by design. The theme toggle redraws a view with its
+  parameters (it dropped an alert page's id and a drill-down's filter).
+- 2026-10-26 — [[slothweb]], [[alert-remediation]]: the Alerts page on
+  the current tree. The stream's alert titles and details, and sloth.db's
+  on the Alerts list, an alert's page and the drawer, go out in the
+  display form, the detail gated before it is escaped so a withheld one
+  is never kept; the Alerts list, an alert's runs and its device's other
+  alerts, and the records view's two lists are sortable, resizable
+  tables, and History's alerts in the range gain an incidents column and
+  their links; the Alerts page's rows took a class of their own (they
+  had laid their grid over the Overview's latest alerts). Tests now hold
+  a v8 row's 1 + reopens on the list and the page, a key counted over
+  rows before the window, and the drawer keeping a slice's newest keys
+  (its read now orders them so); the last two unconditioned "locate and
+  remove" steps are conditional on the premises.
+- 2026-10-26 — [[ble]], [[deployment]] §7, [[cli-reference]]:
+  `sloth-ble-scan`, the operator's passive-scan holder for
+  `--bt-monitor`, and `sloth-ble-scan.service`, which runs it for the
+  life of the sensor (owner request: nothing else on the sensor host
+  uses Bluetooth). On the reference host `hcitool lescan --passive`
+  fails with EIO even with bluetoothd masked; the HCI user channel
+  worked (7489 reports from 74 addresses in 60 s, all seen by a
+  concurrent `sloth --bt-monitor`, `ble_own_tx` `never`). The helper
+  (`src/ble_scan/`, not linked into `sloth`) sends only HCI_Reset, Set
+  Event Mask, LE Set Event Mask, LE Set Scan Parameters with the scan
+  type a builder constant 0x00, and LE Set Scan Enable, falling back to
+  the extended pair only on 0x01/0x11; every packet passes an
+  independent gate first. MISSION §2 checked first, and agrees: a
+  passive scan sends no SCAN_REQ (Core Spec v5.4 Vol 6 Part B
+  §4.4.3.1), sloth still sends no HCI command, and the helper is an
+  operator tool like `sloth-monitor-up`; nothing in `research/` says
+  otherwise. The unit: `DynamicUser=yes`, `CAP_NET_ADMIN` only,
+  `AF_BLUETOOTH` only, `Conflicts=bluetooth.service`, `After=` and
+  `PartOf=sloth-sensor.service`, `WantedBy=sloth-sensor.service`; hciN
+  is brought down by the helper's own `--down` (HCIDEVDOWN) inside the
+  sandbox, not by `hciconfig`/`btmgmt` as `+` root. Installed by `make
+  install-service`, never enabled. The sensor's unit gains
+  `AF_BLUETOOTH` (measured: `socket(AF_BLUETOOTH, SOCK_RAW,
+  BTPROTO_HCI)` is `EAFNOSUPPORT` under the old list via `systemd-run
+  --user`, succeeds under the new one; `PrivateNetwork=yes` also
+  `EAFNOSUPPORT`, so the helper's unit has none); the monitor bind's
+  `CAP_NET_RAW` is held, since `bt_monitor_open()` precedes
+  `privdrop_apply()` in `src/main.c`. `sloth-migrate-sensor` carries
+  `--bt-monitor` instead of refusing it. Seen red under one mutation
+  each, restored byte-identical (sha256 checked): the builder's
+  `BLES_SCAN_TYPE_PASSIVE` set to 0x01 (two builder tests); the
+  gate's legacy scan-type check dropped, and separately its per-PHY
+  check (`test_gate_refuses_every_transmitting_command`);
+  `src/ble_scan/ble_scan_cmd.c` appended to `CORE_COMMON_SRCS`
+  (`test_helper_is_not_linked_into_sloth`); in the unit
+  `CAP_NET_RAW` added to the bounding set, `AF_INET` to the families,
+  a `PrivateNetwork=true` line, a `+` on `ExecStartPre`, `/home/` in a
+  comment, `Conflicts=` removed, `WantedBy=multi-user.target`; in the
+  sensor's unit a `Requires=sloth-ble-scan.service` line and
+  `AF_BLUETOOTH` removed; a `systemctl enable` recipe line in
+  `install-service`; and the `--bt-monitor` branch removed from the
+  migration (the new `bt-monitor-carried` deploy case, exit 2).
+  `systemd-analyze verify` clean and `security --offline=true` 1.3 OK
+  on a copy. Not run on hardware here: the host test is the owner's.
+  Measured, parent (49adbb0) to this tree: `make test` 35154 to 35379
+  assertions, `make deploy-test` 401 to 403, each 0 failed.
+- 2026-10-26 — [[ble]], [[deployment]] §2/§3.5/§7, [[cli-reference]]:
+  the `sloth-ble-scan` review. **AF_BLUETOOTH leaves the sensor's
+  shipped unit**: with the family allowed, a compromised sensor with no
+  capabilities could bind a raw HCI socket (Inquiry and Remote Name
+  Request pass `hci_sec_filter`) or connect an L2CAP one and make an up
+  hciN transmit, so it moves to the opt-in drop-in
+  `packaging/systemd/sloth-sensor.service.d/bt-monitor.conf`, which
+  `make install-service` places inert in `share/sloth`, §7.1 copies
+  into place, and `sloth-migrate-sensor` writes (and removes on
+  rollback) only for a unit carrying `--bt-monitor`; that the list
+  merges was measured on systemd 262 with AF_INET. **A No-Op is not a
+  restart**: Command Complete for opcode 0x0000 (§7.7.14) no longer
+  re-arms; only a Hardware Error does. A Hardware Error during the
+  sequence itself now retries from the Reset within the 5-per-60 s
+  budget instead of exiting. The decisions — the sequence, the 0x01 /
+  0x11 fallback and nothing else, the disable per mode, the re-arm
+  decision, argv — are a pure step function in `ble_scan_cmd.c`, tested
+  with hand-built events. At start an `ENODEV` / `EBUSY` bind is retried
+  for 30 s (boot ordering), and `--down` on an unregistered hciN is not
+  an error. The `sloth` link recipe now fails, and deletes the binary,
+  if `nm` finds a `bles_` symbol or a sloth source names the builder;
+  the Makefile text test missed `CORE_COMMON_SRCS += $(BLE_SCAN_SRCS)`.
+  `make install` installs the helper on Linux only. Docs: `Conflicts=`
+  runs both ways — starting bluetoothd, including by D-Bus activation,
+  stops the scan cleanly and it does not restart, so the mask is
+  required (measured with two user units on systemd 262); stopping
+  bluetoothd with links up sends their disconnects; `WantedBy=` pulls
+  the scan in, `PartOf=` only carries stops and restarts, and an
+  automatic restart of a crashed `Restart=always` unit restarted its
+  `PartOf=` dependant (measured, SIGSEGV, systemd 262); the journal
+  check greps the helper's lines. The unit tests now count every
+  single-value hardening key (the last assignment wins), allow only
+  the two Exec lines, refuse `Group=` / `SupplementaryGroups=` /
+  writable paths and an empty `SystemCallFilter=`, and make `[Install]`
+  an allow-list. Seen red under one mutation each, restored
+  byte-identical (sha256): the 0x0000 clause put back
+  (`test_nop_never_restarts_the_scan`); `(phys & ~0x05u)` dropped (the
+  new 0x03 and 0x07 cases); 0x0C added to the fallback statuses; the
+  extended disable swapped for the legacy one; the HW-error retry
+  removed from `bles_after_establish`; ENODEV dropped from
+  `bles_bind_transient`; the `--delay` bound moved to 61; the empty-dev
+  check removed; a Command Status 0x00 accepted as an answer; the link
+  check, with `ble_scan_cmd.c` in `CORE_COMMON_SRCS` plus a bare
+  `bles_build` reference in `src/main.c`, and separately with the header
+  included from `src/alerts/rules_ble.c`; in the scan unit, each
+  appended: `ProtectSystem=false`, `NoNewPrivileges=false`,
+  `PrivateDevices=false`, `ExecStartPost=+/bin/sh -c true`,
+  `ExecStopPost=!/usr/bin/hciconfig hci0 up`, `SupplementaryGroups=sloth`,
+  `ReadWritePaths=/var/lib/sloth`, an empty `SystemCallFilter=`,
+  `Group=sloth`, `WantedBy=bluetooth.target`, `WantedBy=sloth-sensor.service
+  multi-user.target`, `RequiredBy=sloth-sensor.service`,
+  `Alias=bt-scan.service`; `AF_BLUETOOTH` back in the sensor's list; a
+  second key in the drop-in, and the drop-in as a deny list; the
+  Makefile installing the drop-in into the unit dir, and the
+  helper's install line unguarded; in the migration, the flag not
+  recorded, the rollback keeping the drop-in, and the drop-in written
+  for every unit. Judged wrong in part: the `SLOTH_BLE_HCI`-empty case —
+  `${VAR}` is always exactly one argument, so an empty setting is `""`,
+  a usage error (exit 2, not restarted), which is now tested rather
+  than defaulted to hci0. Not run on hardware here. Measured, parent
+  (4b87d52) to this tree: `make test` 35379 to 35582 assertions, `make
+  deploy-test` 403 to 409, each 0 failed.
+- 2026-10-26 — [[deployment]] §2, §4.4, §7.1, [[ble]], [[cli-reference]]:
+  `sloth-ble-scan` integrated onto main (8b938ff, after the libpcap
+  setter checks and the non-blocking monitor poll) with the review's
+  findings fixed. `make install-service` put `packaging/default/sloth`
+  over `/etc/default/sloth` with `install -b`, so §7.1's own `sudo make
+  install install-service` would have run the sensor without the site's
+  `SLOTH_ARGS` (confirmed with `DESTDIR`); it is now no-clobber like
+  slothweb's (`[ -e … ] ||`), and the units, the sysusers fragment and
+  the inert drop-in are still replaced, being the shipped artefact.
+  Build, gate and write are one `bles_send()` with a writer `main.c`
+  supplies, the helper's only `send()`, tested with a recording writer
+  and a scan of `main.c`. `tests/test_unit_file.c`'s lookups are
+  NULL-safe (a missing key had made `strcmp(NULL)` end the suite with
+  SIGSEGV, seen on the old scanner with `NoNewPrivileges=` deleted), and
+  the scan unit's `[Service]` is an allow-list with one `Environment=`.
+  The reference host's hand-made `10-bluetooth-monitor.conf` is removed
+  in §7.1, and after a §4.4 migration, so one drop-in grants
+  `AF_BLUETOOTH`. Seen red under one mutation each, restored
+  byte-identical (sha256 checked): `install -b` restored on
+  `/etc/default/sloth` (2 failed); the gate dropped from
+  `bles_write_gated()` (8); a byte flipped between the build and the
+  gate in `bles_send()` (24); a second `send()` in `disable()` (1);
+  `hci_write()` calling `write()` (2); `NoNewPrivileges=` deleted from
+  the scan unit (2 failed, rc 2, the key named, not rc 139);
+  `DeviceAllow=/dev/mem rw` added (1); `Environment=LD_PRELOAD=…` added
+  (2). Measured, parent (8b938ff) to this tree: `make test` 35157 to
+  35681 (35585 with the two slice commits alone), `make web-test` 84650
+  to 84650, `make deploy-test` 401 to 409, each 0 failed.
+- 2026-10-26 — [[capture-scope]] (new), [[slothweb]], [[jsonl-schema]]:
+  slothweb's top bar has a Monitor | Hybrid | Local switch (owner
+  request). Every `/api` route but `/api/health` and `/api/query` takes
+  `scope=`, taken out by the shared parameter parser; Hybrid's answer is
+  unchanged without it. Each datum is placed by what it is, in one
+  table held to `include/sloth_alerts.def`, `web_live.c`'s poll types,
+  app.js's monitor-row types and `src/device_risk.c`'s weights: alerts
+  by the rule's input, interfaces by whether sloth named them a monitor
+  radio, devices by their sources and camera signals. A device seen
+  both ways is in both, with each scope's own address or SSID, signal,
+  first and last seen and recomputed risk; presence splits into
+  `dev.present.monitor` and `dev.present.local`. The WiFi view is empty
+  under Local and the Flows under Monitor, each saying why; the SQL box
+  is unscoped and labelled so. sloth's `sensor_health` gains
+  `capture_linktype` and `monitor_only`, so the stream's IP records
+  count as Monitor's while the IP capture is itself a radio.
+- 2026-10-27 — [[capture-scope]], [[slothweb]]: the capture scope's
+  review. The host's own tables (`arp` from `/proc/net/arp`,
+  `dhcp_lease` from the lease files, `scan_entry` from the `/proc`
+  sockets) and the rules over them (`PORT_SCAN`, `ARP_SPOOF`) stay Local
+  while the IP capture is a radio. A device row's anomaly count, z,
+  `has:anomaly`, `anomaly:`, `z:`, camera source bit and Monitor
+  PROBE_ONLY follow the scope's own evidence; A2 is placed by its MAC's
+  presence. The open-anomalies tile and strip take the scope's count
+  from `/api/live`; the Records view counts each type's scoped records;
+  a device row's ticker line under Monitor carries no address or
+  hostname; an interface is no scope's until the connection has named
+  its radios, and a new connection forgets the old one's. The WiFi view
+  under Local is the managed card's own scan and link
+  (`/api/wifi/local`). Local's device reads join `arp` once per
+  statement (7.2 s to 33 ms at 32,840 devices and 5,000 ARP rows). An
+  out-of-scope view is checked but not read. The ring and store cost of
+  the presence split is measured and stated. `monitor_only` is reported,
+  not used to tag.
+- 2026-10-27 — [[slothweb]]: kept settings. Every control a viewer can
+  change is kept per browser under one versioned `localStorage`
+  namespace, `slothweb.v1.*`: each table's column widths and sort, the
+  view, theme, scope, sensitivity, the ticker's pause, and every view's
+  filters, windows and search boxes. The address still wins over a kept
+  value; a reset per table and one for everything; the previous build's
+  keys moved in on the first load. No server state.
+- 2026-10-27 — [[slothweb]]: kept settings, review. A link that names
+  an Alerts filter sets the search and window to their defaults too; a
+  kept alert type is no longer taken for a drill-down; each drill-down
+  bar's `show all` clears the kept filters; a scope in an address is
+  applied, not kept; the Anomalies kind chip narrows only its list, not
+  the Overview's top five or the tile's drill-down; a table writes back
+  only its current columns' widths; the move from the build before
+  touches only that build's four keys. `test_prefs.c`'s census reads a
+  control's id in any attribute order and covers the toggle buttons.
+- 2026-10-27 — [[architecture]] *Test discipline → Temporary files*:
+  `make test` and `make web-test` clean up after themselves. Every test
+  path goes under `$TMPDIR` (`tests/tmp_dir.h`, `web/tests/wt_tmp.h`);
+  each runner points `TMPDIR` at a private run directory, removes it at
+  exit and fails the run on anything left in it (`LEAK: <path>`); the
+  make recipes wrap that in an outer `mktemp -d` for crashes. Fixed the
+  leaks the guard found: 13 entries a passing run used to leave in
+  `/tmp` (the shared `sloth_db_*`, `sloth_jsonl_*`, `sloth_regjsonl_*`,
+  `sloth_snap_*`, `sloth_alert_inv_*` files, the `sloth_pcap_*` and
+  `sloth_cap_*` directories, and five export directories cleaned by name
+  that the #92 slice 3 manifest kept from emptying, including the fixed
+  `/tmp/sloth_evexport_test`, now an `mkdtemp` name). No `src/` change.
+- 2026-10-27 — [[architecture]] *Temporary files*, review fixes: an
+  interrupted run cleans up (the make recipes trap INT/TERM/HUP into
+  their EXIT trap; both runners remove their directory on SIGINT,
+  SIGTERM and SIGHUP through a `vfork()`ed `rm`, after `fork()` hung in
+  a handler). A long `TMPDIR` no longer puts the run directory outside
+  make's: the outer base is `$TMPDIR` only up to 19 characters, from
+  one `TEST_TMP_DIR_MAX` passed to the runners as `-D`. A run directory
+  that cannot be removed fails the run; a 0500 directory a failed test
+  left is opened up first. `make bench` runs inside the outer directory
+  and honours `$TMPDIR`. `test_data_socket.c`'s `spec[80]` truncated the
+  socket path under a longer `TMPDIR`. New `tests/test_tmp_dir.c`.
+- 2026-10-27 — [[slothweb]]: the glyph layer, slice V0 of
+  `docs/web-visual-spec.md`. G1 (band sparkline), G5 (binary presence
+  strip) and G6 (bullet and count bar) as pure mark-list functions plus
+  painters in `web/ui/glyph.js`; rules R1 to R12, the caption grammar
+  (R9), the three empty states (R5) and the honest-window rule (R4) in
+  `web/README.md`; the status strip reduced to the network's facts with
+  every slothweb fact in the footer (F5). The geometry is ported into C
+  in `web/tests/test_glyph.c` and the JS pinned verbatim out of the
+  served page, so `make web-test` holds both sides with no node and no
+  new dependency (owner ruling 2 of 2026-10-26). No new data: no new
+  series, no route payload changed.
+- 2026-10-27 — [[slothweb]]: the owner's sloth icon in the page header and
+  as the favicon, two inline `data:` PNGs (`web/ui/icon-64.b64`,
+  `web/ui/icon-32.b64`; sources in `docs/assets/slothweb/icon/`); the
+  page's CSP gains `img-src data:` and nothing else; the no-external-
+  reference test admits exactly those two forms (seen red with an
+  `<img src="/icon.png">` and with a stylesheet `<link>`).
+- 2026-10-27 — [[vendor-research]] (new page), [[slothweb]], `web/README.md`,
+  `web/data/SOURCE.md`: the drawer's and Lookup's "vendor research"
+  section under the OUI card (owner request 2026-10-27). One cited
+  Markdown file per OUI holder in `web/data/vendors/` (front matter,
+  summary, numbered sources, a confidence word per field, `unknown`
+  where nothing is documented), compiled into the binary by
+  `web/tools/vendorkb.c` into `build/web/web_vendorkb_table.c` (never
+  committed); the build refuses a file with a dangling `[n]`, a missing
+  field or a name not its file's, naming the file. Lookup by the IEEE
+  name with spelling folded (`web_vkb_norm()`), `/api/device/{mac}` and
+  `/api/lookup` gain `"vendor_research"`, `web/ui/app.js` draws it as
+  text with sources as plain lines (no link). Three sample entries
+  (Murata Manufacturing, AMPAK Technology, Tesla) written from the
+  companies' own pages, Wikipedia, board documentation, iFixit and NCC
+  Group; FCC grantee codes left `unknown` because the FCC ID databases
+  were not reachable from the session. `web/tests/test_vendorkb.c`
+  holds every entry to the committed registry. The research set (the
+  reference host's 163 vendors and the ~120 commonest) follows in later
+  slices.
+- 2026-10-27 — [[slothweb]]: copy JSON on every detail view (owner
+  request). `/api/bundle?kind=device|alert|lookup&id=` splices the
+  detail routes' own answers verbatim (`web/src/web_bundle.c`) inside
+  an envelope, a registry of optional sections marked
+  `available: false` until their slices land, a glossary, a prompt and
+  the limits; `web/ui/bundle.js` copies it (clipboard, or a hidden
+  textarea and `execCommand` on plain http) and offers it as a
+  download. The body is the route's own heap buffer, 512 KB at most.
+- 2026-10-27 — [[slothweb]]: copy JSON review fixes. The records
+  sections follow the scope (Monitor's device lines carry no address or
+  name) and match whole addresses; `sensor` counts are the scope's; no
+  host name in `server`; the glossary's `risk` is sloth's 0..3 level;
+  nested reads report `no_data` / `too_large` / `read_error` in their
+  own words; the markers are reserved under the cap; the page fetches
+  ahead so the clipboard write stays inside the click, keys what it
+  keeps on the scoped request and expires it.
+- 2026-11-02 — [[slothweb]]: copy JSON second review. Ticker records
+  keep their address members (`web_live_rec_t.addr`) and the bundle
+  matches only those, not the cut line (a 68-byte query name had left
+  `192.0.2.123` as `192.0.2.12`; an SSID of an address matched); an
+  alert id is decoded once and echoed canonical (`d1%2530` is
+  `bad_id`, not d10); a failed prefetch holds off 10 s; the drawer's
+  control sits before close; `server.slothweb.version` is
+  `build_version` and the hard-coded milestone is gone.
+- 2026-11-01 — [[wiki-maintenance]]: `wiki_sync.sh` flattens a
+  `docs/wiki/<dir>/` subdirectory onto the flat GitHub wiki
+  (`<dir>-<page>`, `<dir>/README.md` as `<dir>`), rewriting the links
+  in both directions, and refuses a flattened name that would overwrite
+  a top-level page; owner's go-ahead for the alert-assessment pages.
+  `tests/deploy/test_wiki_sync.sh` (21 checks, run by `make
+  deploy-test`) seen red with the subdirectory loop removed (9 failed)
+  and with the collision guard removed (1 failed).
+- 2026-11-02 — [[wiki-maintenance]]: `wiki_sync.sh` rewrites a
+  top-level page's `](../doc.md)` (a document in `docs/` beside the
+  wiki) to its `blob/main` URL; [[slothweb]]'s link to
+  `../web-visual-spec.md` had been published broken. Seen red with the
+  rule removed (2 of 22 checks).
+- 2026-10-27 — Alert assessments: `docs/wiki/alert-assessments/`, one
+  research file per alert type for the alert detail page, linked from
+  [[alerts]] and the index. 72 of the 90 alert types assessed; the other
+  18 (LDAP_SEARCH_FLOOD, BGP_NOTIFICATION_BURST, SSH_BRUTE_FORCE,
+  RDP_BRUTE_FORCE, SNMP_COMMUNITY_BRUTE, MQTT_BROKER_BRUTE, ATTACK_PATH,
+  WEAK_TLS, NO_MONITOR_MODE, CLEARTEXT_CRED, BEACON_FLOOD, AUTH_FLOOD,
+  FRAG_AMSDU_EAPOL, FRAG_MIXKEY, FRAG_PN_GAP, FRAG_EAPOL_RELAY,
+  SA_QUERY_FLOOD, MFP_UNPROTECTED) are pinned as pending in
+  `tests/test_alert_assessments.c`. Each file's front matter carries
+  `rule_file` (file:line of the `rule_*()`), `count_semantics`,
+  `severity_assessment`, `false_positive_risk` and `noise_verdict`; the
+  body has the evidence that proves or refutes a firing, benign causes,
+  a bibliography and the verification notes. Noise verdicts across the
+  72: 43 not seen, 7 quiet, 14 noisy, 5 very noisy and 3 mixed
+  (quiet in incidents, noisy in `count`). The five noisiest on the
+  reference host, all per-evaluation counting of a standing condition
+  rather than that many events: ATTACK_TOOL_UA 3,136,284,897 fires on
+  2 keys; WPA_DOWNGRADE 672,230,373 on 794; MY_NETWORK_RECON
+  541,307,682 on 5,558; MGMT_FUZZ 501,455,737 on 403; KARMA_AP
+  415,695,109 on 60. `README.md` there is generated from the front
+  matter by `docs/wiki/alert-assessments/gen_index.sh`. The new test
+  checks, for every assessed type, that the front matter parses, `type`
+  and `technique` match the compiled table, `rule_file` names a line
+  containing `rule_`, the Bibliography has an entry and the index has a
+  row; seen red by deleting `PORT_SCAN.md` and by moving ARP_SPOOF's
+  `rule_file` off its line.
+- 2026-10-27 — [[slothweb]] *An alert's proof*, [[pcap-export]] §6,
+  [[cli-reference]] (slothweb pointer), [[deployment]] §6: `slothweb
+  --pcap-dir DIR` shows an alert's capture at the bottom of its page,
+  found through sloth's manifests (`incident_id`, then the record's
+  `pcap_path`, then rule and time, labelled), SHA-256 recomputed
+  (`hash verified` / `HASH MISMATCH` / `no manifest entry`), decoded
+  frame by frame (802.11 by sloth's own `src/` parsers, the IP layers by
+  a bounded summary decoder, `truncated at snaplen 64` stated) and
+  downloadable; handshake pcaps and `eapol.22000` never served. The
+  type's assessment and bibliography from
+  `docs/wiki/alert-assessments/<TYPE>.md` when written ("no assessment
+  yet" until then). The drawer's alert rows are tap targets, checked at
+  360 px under touch emulation.
+- 2026-11-01 — [[slothweb]]: alert triage and the FRRS emitter record
+  (`docs/web-frrs-spec.md`, owner request 2026-10-27). Triage buttons
+  (false, noise, incident, follow recommended) on every alert row,
+  append-only in slothweb.db v6 with its v5 migration test, filterable
+  (`/api/alerts?triage=`), the open-alerts tile saying what is triaged
+  out; the record's BEI, SCS, EC/S, TACDB and Report groups from what
+  sloth already records, every field with its source; the TACDB tab with
+  units, platforms by nomenclature, sloth's correlations as suggestions,
+  JSON Lines export and import. slothweb's first write routes: POST,
+  same-origin, bounded, rate limited; `--web-read-only` removes them;
+  `--web-assessments` feeds "follow recommended"; both are tabled in
+  `web/README.md`, not [[cli-reference]], which
+  `tests/test_docs_consistency.c` holds to sloth's own flags.
+- 2026-11-02 — [[slothweb]]: triage and TACDB review fixes. "Follow
+  recommended" reads the assessments' own vocabulary (`noise_verdict`
+  `noisy` / `very noisy` → noise; `false_positive_risk: high` and
+  `severity_assessment` are advice, never a state) and front matter past
+  4 KiB; the import refuses a file without its header first or its
+  `end` line last, merges units parent first whatever the order, never
+  merges platforms on a name alone, rolls back whatever it began (a
+  headerless file had left the write connection's transaction open
+  until restart); deleted TACDB rows count toward twice each cap, the
+  export carries live rows only; imported triage meets each alert's 64,
+  5,000 per file and half the table; restores re-check depth and the
+  unit; S1 needs the stream's confidence and takes the earlier address
+  as primary, S2 one kind per MLD, S3 the low nibble and the vendor
+  (`docs/web-frrs-spec.md` §14, Q15, Q16).
+- 2026-11-02 — [[slothweb]]: the triage and TACDB second review
+  (`docs/web-frrs-spec.md` §3.1, §12.1 Q2/Q3/Q15, §14). An operator's
+  change is never refused for room: one alert past 64 rows folds (first
+  and newest kept, the fold counted), imported rows at most 8 of it, the
+  table at 20,000 folds superseded rows (imported first, then aged-out
+  alerts', never a current row) and always takes a clear; an unchanged
+  write adds no row. "Follow recommended" gives `noise` only for
+  `false_positive_risk` high and `noise_verdict` noisy (FRAG_PLAINTEXT
+  and SMB1_USE, `low`, no longer get it), else "no automatic triage".
+  The import runs prepared in one transaction, 1,000 triage lines at
+  most (`413`), refuses a `ts` over 300 s ahead, records the importer
+  and keeps the file's `by` / `peer` as claims; its check runs the merge
+  and rolls it back. Bidirectional controls refused in operator text;
+  a body's deadline scales with its length; `make install` installs the
+  assessments and `slothweb.service` passes `--web-assessments`
+  ([[deployment]] §6). Each seen red under its mutation (the commit
+  lists them).
+- 2026-11-02 — [[slothweb]], [[ble]], [[capture-scope]]: the BLE view
+  in slothweb (owner request "add bluetooth to the web ui"). A tab
+  (key `0`) at TUI parity with `[*]`: the same columns and cells, one
+  colour a row (bright for HID or watchlist), the header, rotation-hints,
+  empty-state and legend lines verbatim; a drawer in the TUI detail's
+  order plus the PDUs, PHYs, a 24 h presence strip, the rate and the
+  `hid_oui` findings; the address in words as a column; every column a
+  server sort word; the findings table; a `bluetooth` block in Health;
+  a `ble advertisers` tile on the Overview and a `ble` pill in the
+  strip. slothweb keeps the rows itself (`web/src/web_ble.h`: the
+  stream's `ble_device` / `ble_alert` / `sensor_health` members; sloth.db
+  has no BLE table) and persists them in slothweb.db v7 (`ble_device`,
+  `ble_alert`, additive migration from the triage slice's v6, with its
+  tests on a v6 file holding triage rows). The
+  Bluetooth SIG assigned numbers (company identifiers, 16-bit service
+  UUIDs, appearance values) are committed as CSVs under
+  `web/data/btsig/` with a SOURCE.md and compiled in by
+  `web/tools/btsig_gen.c`; `web/tools/update_btsig.sh` refreshes them
+  from a given directory and never fetches. Two global metrics,
+  `ble.devices` and `ble.adv_rate`, both Monitor's. `/api/ble`,
+  `/api/ble/alerts`, `/api/ble/{addr}`; out_of_scope under Local.
+  On review, before it shipped: a resolve on a seeded finding resolves
+  the stored row instead of writing a second; `ble_alert` gained
+  `n5..n7` and `detail` inside v7 (unreleased), so a seeded flood keeps
+  its fresh count, rate, window and citation line and a `hid_oui`
+  finding its address; the header's count is sloth's `ble_devices` and
+  `flood keys` became `standing floods`, which is what the web can
+  count; the BLE tables are in `--web-max-mb`'s ceiling (unflagged
+  advertisers before keyed history, the row cap 8 × 1024 and flagged
+  rows last); a failed write re-dirties its batch; the SIG generator
+  escapes `?`; `/api/live`'s `ble` member is sized for its worst case;
+  `ble.devices` is sampled with an Ubertooth alone; the 5 s refresh
+  keeps rows a "more" brought in; and every sort word is tested in both
+  directions. Each new test seen red under a named mutation.
+- 2026-11-02 — [[slothweb]], [[ble]]: the BLE view rebased onto the
+  triage slice. Both bumped slothweb.db to v6; triage keeps v6, the BLE
+  tables become v7 (`v6 -> v7`, additive, one `BEGIN IMMEDIATE`), tested
+  on a v6 file holding a triage row and a TACDB platform, on a v5 file
+  through both steps, and with the failure that leaves a v6 file
+  unchanged. BLE keeps key `0`; TACDB, after it, carries no digit. The
+  demo's three FRRS advertisers now use sloth's own words (`iface`
+  `bluetooth-monitor`, `est_ptx_source` `ble_ad_tx_power` / `assumed`).
+  Review fixes: an address flood evicts the oldest row with neither a
+  HID flag nor a watch category (the oldest of all only when every row
+  is flagged), so the rows that matter stay in memory and reach the
+  store; a row's `adv_count` and `last_seen` only move up, as the
+  store's upsert keeps them; the start notice counts advertisers and
+  findings apart; `--help` names `/api/ble`, `/api/ble/alerts` and
+  `/api/ble/ADDR`; the drawer header has the `bundle-btn-ble` hook for
+  the copy-JSON bundle. Each seen red under a named mutation.
+- 2026-11-01 — [[vendor-research]], [[slothweb]], `web/README.md`: the
+  research set. 277 entries in `web/data/vendors/`, written by two
+  research sessions from the sources each cites and checked against
+  those sources; the merge re-fetched the cited pages of ten more
+  entries (no web search: that budget was spent) and found every
+  checked claim. 160 of the reference host's 163 vendor names (1667 of
+  1672 devices) find an entry; SJI Industry Company, Reliance
+  Communications LLC and SJIT Co., Ltd. are pending, because no public
+  documentation ties them to a company (the registry gives only
+  addresses shared with other registrants, which is not documentation
+  that they are one). `web/data/vendors/COVERAGE.md` lists both sides,
+  `REFERENCE_HOST.txt` the reference list with device counts, and
+  `test_coverage_matches_reference_and_entries` holds the three
+  together. Where both sessions covered one company, one file per IEEE
+  string was kept (Roku: the file with every field cited; Alps Alpine
+  dropped for the entry with documented silicon; six alias overlaps
+  left to the file named for each string). The generator passes over
+  `COVERAGE.md` by name; the entry count is a `count:vendors` marker
+  that `make docs-counts` rewrites and `tests/test_docs_consistency.c`
+  checks.
+- 2026-11-02 — [[vendor-research]], [[slothweb]], `web/README.md`: the
+  research set's review. A source line now ends at its access date and
+  a source marked as not reached or not supporting its claim is refused:
+  the notes never reached the drawer, which showed 92 such sources as
+  accessed. A source no `[n]` cites is refused, not noted: the 86 such
+  sources (every one of them among the 92) were dropped and the lists
+  renumbered, and the other six, cited registry sources checked against
+  the committed `oui.csv`, now cite that copy (each claim re-checked
+  against it). A new `affiliates`
+  field holds separate companies of an entry's group that registered
+  blocks under their own names (34 strings moved from `aliases`, among
+  them AUMOVIO's European and Malaysian entities, the Raspberry Pi
+  Foundation, Shenzhen Tenda and Technicolor (China)); a MAC found
+  through one is flagged `"affiliate":true` and its country, parent and
+  founded go out as `unknown`. Content fixes after fetching the cited
+  pages: Amazon Fire 7 SoCs by generation, SparkLAN's Bluetooth version
+  (stated only for WPEA-152GN(BT)), Mitsumi DWM-W028's Foxconn ODM and
+  AR6014G, Vantiva's Quantenna and Marvell parts, Murata's Type-to-chip
+  pairs, Bilian's TS16949, HUMAX Networks' sister-company silicon and
+  CVEs out of its fields. `REFERENCE_HOST.txt` and `COVERAGE.md` keep
+  names only, no device counts; the coverage test checks every
+  reference name against the registry, the Have paths and the count
+  line; `test_generator_refuses_each_defect` runs the built generator
+  over fixtures. Each new check seen red under a named mutation, the
+  files restored byte for byte.
+- 2026-11-02 — [[vendor-research]], [[slothweb]]: the FRRS record's SCS
+  `certification_fcc` reads the registrant's vendor research entry
+  (`fcc_grantee` with its source lines; none for an affiliate, a
+  registrant without an entry, an entry without a code, an address in
+  no block), `docs/web-frrs-spec.md` §4.2's hook wired. `microsoft.md`
+  folded into `microsoft-corporation.md` (one registrant, four registry
+  spellings; 276 entries then); the
+  page writes no confidence word after `unknown`; Raspberry Pi's
+  summary loses a clause its source does not hold (re-fetched), SparkLAN's
+  found_in names DeviWiki, Espressif's randomisation is `inferred` and
+  its block counts come from the committed registry copy (319 and 1,
+  ieee-data 20260625, not the live list's 355 and 19). The README points
+  at Lookup for the section, the demo being locally administered. New
+  checks seen red: the affiliate branch and the source marking removed
+  from `f_cert()`, `Microsoft` dropped from the merged entry's aliases,
+  the `unknown` test removed from `vendorResearch()`.
+- 2026-11-02 — [[slothweb]]: the FRRS Report's RSSI against time
+  (owner ruling on `docs/web-frrs-spec.md` Q7: "Keep, bounded").
+  Three gauges in the existing tiers, `rf.rssi.sta` (`probe_client`),
+  `rf.rssi.bssid` (`beacon`, and `assoc`, whose signal is the AP's
+  frames) and `rf.rssi.ble` (`ble_device` with `has_rssi`), each
+  sampled only from a record heard within 10 s of its `ts`; the minute
+  tier keeps them `--web-retain-days` (30 d), the device class's
+  `--web-max-keys` bounds them with its eviction, counted on
+  `/api/health`; Monitor's scope; not scored by A1. `series_rssi` in
+  the Report is the last 24 h in 48 half-hour cells with min and max,
+  drawn as a text sparkline in the TUI's glyphs and heat ramp; "not
+  kept" is gone. A sloth gauge, not a calibrated measurement. Each
+  absence assertion seen red under a named mutation.
+- 2026-11-02 — [[architecture]], `README.md`: a Mermaid system map
+  replacing an auto-generated one the owner shared, which routed every
+  input through `sensors.c` and left out slothweb's read of `sloth.db`,
+  the monitor-radio and Bluetooth capture paths, `sloth-ble-scan`, the
+  compiled knowledge (assessments, vendor research, registries) and the
+  triage/TACDB store.
+- 2026-11-02 — [[slothweb]]: the alert page reads the 72 written
+  `docs/wiki/alert-assessments/` files (the 18 pending say "no
+  assessment yet"): a numbered Bibliography item `7. ` is entry `[7]`,
+  `## Verification notes` is not citation-checked, an assessment is
+  measured by writing it rather than priced at the worst-case escape
+  (which had sent every real one as `too_large`), and the counters are
+  labelled for what they are: `count (evaluations)`, `observations`
+  following it once the detail moves, never frames or requests.
+- 2026-11-02 — [[slothweb]], [[pcap-export]] §6: the review of the
+  alert page's proof. The pcap download hashes the bytes it serves and
+  says so in `X-Sloth-SHA256`; the manifest index sorts on a read-order
+  field instead of scaling `written_at_epoch` (an 18-digit stamp
+  overflowed); a Bibliography's own prose is `bibliography_note`, never
+  folded into the entry above it; the capture's frame index is a data
+  table (sortable, resizable, kept, its filter kept); the drawer's alert
+  list is found by a `data-ev` mark, not its label's words.
+- 2026-11-02 — [[slothweb]], [[pcap-export]] §6, [[cli-reference]]:
+  the proof's second review. Evidence pcaps (`--eapol-dir`, raw 802.11
+  frames that may carry EAPOL/PMKID material) are listed but withheld
+  unless `--web-serve-evidence-pcap`, which is announced and, with
+  `--web-allow-remote`, refused unless spelled `=remote`. A file named
+  by several manifest lines is verified by any line that matches, and
+  a disagreement is said (`conflicting manifest lines (N)`) instead of
+  the newest stamp winning. `truncated at snaplen N` only when the
+  snaplen cut the record, otherwise `N of M bytes captured`. A listed
+  name that is a symlink or FIFO is marked `unreadable: not a regular
+  file`.
+- 2026-11-02 — [[slothweb]]: copy JSON rebased onto main's triage,
+  FRRS, BLE, vendor research and alert-proof slices. `kind=ble` splices
+  `/api/ble/{addr}` (the router's out-of-scope note under Local) and is
+  mounted through the BLE drawer's `#bundle-btn-ble` hook with the
+  scope; `kind=platform` splices `/api/frrs/tacdb/view` through
+  `SlothFrrs.mountBundle()`. The optional sections main now has data
+  for are the owning routes' answers: `frrs` (`/api/frrs/report`,
+  `/api/frrs/report/alert`), an alert's `triage` (`/api/frrs/history`),
+  and `vendor_research`, `assessment` and `evidence` lifted whole out
+  of the drawer's and the alert page's own answers; a new reason word,
+  `no_store`, for an FRRS route without slothweb.db.
+- 2026-10-27 — [[location]] (new): `--location LAT,LON[,ALT]` and
+  `--gps /dev/ttyXXX | gpsd://[HOST[:PORT]]` (with
+  `--gps-allow-remote`, `--gps-baud`). Every new alert incident is
+  stamped once, as it opens: JSONL `loc` on `alert` / `alert.*`, the
+  `sloth.db` alerts row (schema v9, the v8 → v9 step adds six nullable
+  columns), the manifest line of every pcap it writes. A fix older than
+  `gps.max_fix_age_s` stamps nothing. `device_positions` and
+  `sensor_positions` for a moving sensor; `sensor_health` `gps_*`; the
+  TUI's alert detail and health strip; slothweb's alert page, drawer
+  scatter and `/api/positions` (JSON, GeoJSON, GPX); the inert
+  `gps.conf` drop-in. Pages touched: [[cli-reference]], [[jsonl-schema]],
+  [[sqlite-schema]], [[pcap-export]], [[deployment]], [[slothweb]].
+- 2026-11-02 — [[location]] review: a `GSA` no longer re-stamps an
+  older `GGA` / `RMC` position as a fresh fix; `loc_ts` / `loc.ts` is
+  stated as receipt time and a piped FIFO as treated live;
+  `gps_quality` is -1 before any GGA or TPV; `gps_reconnects` counts
+  lost sessions, not failed attempts; the privacy section says what
+  slothweb and the data socket serve. [[slothweb]]: a cut GeoJSON or
+  GPX export says so. Pages touched: [[jsonl-schema]], [[slothweb]].
+- 2026-11-02 — [[location]] review round 2: a fix is aged on sloth's
+  monotonic clock from its receipt (`loc_ts` stays wall time), so a
+  wall-clock step back no longer keeps an old fix fresh; EOF, a read
+  error or an unplugged receiver ends the fix at once; a `GSA` mode 1
+  no longer ends a fix (NMEA 4.10 sends one per constellation); a
+  non-finite or out-of-range position is ignored, and accuracy outside
+  0..100000 m or altitude outside -1000..20000 m is dropped from the
+  fix rather than recorded; `device_positions` at rest samples only on
+  an RSSI band change or every `gps.sample_s` x 10, with the row rate
+  and the `--location` recommendation for a parked sensor. Pages
+  touched: [[sqlite-schema]], [[jsonl-schema]].
+- 2026-11-02 — [[slothweb]] copy JSON meets [[location]]: rebased onto
+  triage/FRRS, BLE, the alert's proof and the bundle; the alert page's
+  `loc-alert` sits after `frrs-alert` and above the proof (`ev-alert`,
+  the capture still last), `loc-drawer` after `frrs-drawer`. The
+  bundle's `location` section, `{available:false}` until now, is the
+  location routes' own answer spliced: a device's `/api/positions?mac=`
+  JSON, an alert's page `loc` stamp. FRRS keeps "no location axis": the
+  sensor's position is not the emitter's. Pages touched: [[slothweb]].
+- 2026-11-02 — [[architecture]] (via `agents/AGENTS.md`): `make gate`
+  (`tools/gate.sh`) is the whole build surface in one locked, measured
+  run; the web generators depend on `build/web/.flags` so a sanitized
+  make rebuilds them (CI alone had caught a leak and a `qsort(NULL)` in
+  `btsig_gen`); the wall-clock-budget rule and the parallel-session
+  rules written down from this week's work; follow-ups filed as #173
+  (rules whose count follows the tick rate), #174 (18 assessments
+  pending), #175, #176, #177.
+- 2026-11-02 — [[deployment]] §7.2, §7.3: the `gps.conf` drop-in is
+  enabled a whole block at a time, `[Service]` line included (a lone
+  directive is ignored by systemd and `--gps gpsd://` then has no TCP
+  family; hit live); GPS time into the host clock through gpsd `-n` and
+  ntpsec's `shm` refclock, `time1` from the measured offset, no PPS on
+  a USB u-blox 7. The reference host runs `--gps gpsd://127.0.0.1:2947`
+  with a 3D fix on 13 satellites.
+
+## 2026-11-02 — Antenna fixture Rev N build guide
+
+**Source**: the owner's ten-page Rev N build-guide PDF ("improve this
+with better documentation").
+
+**Created pages**:
+
+- [antenna-fixture-rev-n.md](antenna-fixture-rev-n.md) — every
+  dimension and standard from the PDF, plus what it left to the
+  builder: a BOM with the SMA/RP-SMA gender trap and coax losses, a
+  thread-coupon procedure with ASME L1 engagement targets, ABS torque
+  guidance for the bulkhead nuts and the six M6 base bolts, a sector
+  A/B/C labelling and bearing convention, a passive validation method
+  (own AP, twelve 30° positions, RSSI per sector), an honest
+  account of sloth's single monitor radio and the two ways three
+  sectors reach it, a build record and
+  re-inspection schedule. Render in `docs/assets/antenna-fixture-rev-n.png`.
+  The OpenSCAD source the PDF cites is not in the repo; its home is an
+  owner call.
+- 2026-11-02 — GNSS observation: new page [[gnss]]. sloth records what
+  the `--gps` receiver sees the way it records the Wi-Fi and BLE air:
+  the `[#]` view (37 views), the change-only `gnss_fix` / `gnss_sky` /
+  `gnss_sat` records and five `gnss_*` `sensor_health` fields, schema
+  v10 (`gnss_fixes`, `gnss_sightings`, stamp-only step), the `gps`
+  sensor finally registered, slothweb's GNSS tab (`web/ui/gnss.js`,
+  `/api/gnss`, `/api/gnss/fixes`, four `gnss.*` gauges). Observation
+  only; the detector hooks (history rings, signatures) are named for
+  the next slice. Updated [[jsonl-schema]], [[sqlite-schema]],
+  [[views-catalog]], [[cli-reference]], [[non-ip-sensors]],
+  [[location]], [[index]].
+- 2026-11-02 — [[gnss]] review round: `jam` sticky across the TPVs gpsd
+  omits it from (it rides only the TPV after a UBX-MON-HW poll; per
+  TPV it re-signed `gnss_fix` and `sensor_health` every second); the
+  clock-offset band held with hysteresis (a 9600-baud offset hovers at
+  the 500 ms edge); the used count signed as a band; `el` / `az`
+  carried with flags, absent from the records rather than -1, negative
+  kept; an empty `satellites` set empties the sky; the `[#]` cursor
+  follows the satellite; slothweb's table on the one `DataTable`, the
+  fix strip walking `/api/gnss/fixes` with `since=`; what a set
+  satellite writes and the band-edge case stated. Updated
+  [[jsonl-schema]], [[sqlite-schema]], `docs/views/gnss.md`,
+  `web/README.md`, `MISSION.md`'s key list (`[#]`).
+
+
+- 2026-11-02 — BLE Devices waterfall: [[slothweb]]'s BLE tab (now
+  labelled `BLE Devices`; the GNSS tab `GPS Sat`) gains a header strip
+  and two panels in the WiFi view's style: device classes by time (the
+  class mix, a second `web_chmix` keyed by class slug, rows in
+  slothweb.db v7's `chmix` as kind 3, no schema step) and advertisers by
+  time graded by sloth's distance bands; `/api/ble/classes`,
+  `/api/ble/proximity`, `ble.class.advertisers`, `ble.class.adv`, the
+  `bleclass` key class. sloth re-sends `ble_device` once a 10 s slot
+  while it hears the advertiser (the slot in the change-only
+  signature). New research page `research/bluetooth/ble-device-classes.md`.
+  Updated [[ble]], [[jsonl-schema]], [[slothweb]].
+- 2026-11-02 — BLE Devices waterfall review: the BLE `adv_count` marks
+  in their own high-water table (a random-address flood no longer evicts
+  the Wi-Fi and flow marks); trackers read before the 256-address cut;
+  each row graded at its announced power (new `ble_device`
+  `ext_tx_power`); `now.sensor` for the no-sensor and Ubertooth-only
+  states; the drawer's BLE lines reset per address; the research page
+  recorded in [[research-corpus]] and `research.db` rebuilt. Updated
+  [[jsonl-schema]], [[slothweb]], [[research-corpus]].
+
+## 2026-11-03 — Antenna designs kept in the docs
+
+Owner ruling: "keep antenna designs in the docs". New
+`docs/hardware/antenna/` (one directory per revision, a README listing
+them); Rev N's render moved there from `docs/assets/`, the original
+build-guide PDF kept beside it, and
+[antenna-fixture-rev-n.md](antenna-fixture-rev-n.md) §12 names the
+directory as the home of `rev-n.scad` when it is supplied.
+
+## 2026-11-03 — Triage verdict `known` (known good)
+
+Owner request: "this needs a Green tag for known or a sigint term for
+known good traffic". [[slothweb]]'s triage gains a fourth verdict,
+`known` (known good: expected traffic from a friendly or neutral
+emitter, friend or neutral in MIL-STD-2525's green), drawn green and
+triaged out like false and noise; `/api/frrs/summary` and
+`triage_counts` count it, `triage=known` filters it. Stored as 4, no
+slothweb.db schema step. Updated [[slothweb]], `docs/web-frrs-spec.md`,
+`web/README.md`.
+
+- 2026-11-03 — BLE Devices gaps closed: anonymous advertising
+  (`addr_type` 255, no AdvA) is one `anonymous` entry and one advertiser
+  in Unknown, whatever its row's accumulated fields read as (chmix kind
+  4, the zero address; neutral band, no drawer), so for it
+  `ble.class.advertisers`, `ble.class.adv` and the class mix agree and
+  never move class; it has no proximity row, takes no read slot and is
+  never nearest (`anonymous_heard` says it was left out). A1 on
+  `records.rate{ble_device}` across the 10 s slot measured from the
+  baseline code: at most one pre-step sample per cell on the host, z at
+  most 1.55, no change. Updated [[slothweb]].
+
+- 2026-11-02 — [[research-corpus]]: four GNSS documents under
+  `research/gnss/` cite the planned observation-layer detectors ahead of
+  the code — spoofing (Psiaki & Humphreys 2016, Humphreys et al. 2008),
+  jamming (DHS 2017, u-blox 7 MON-HW, gpsd 3.27), time and position
+  integrity (chrony, gpsd time HOWTO, week rollover) and the ATT&CK
+  mapping (Mobile T1464 for jamming; no technique for spoofing, time or
+  position jumps, so those three take the second exemption form). Each
+  `alert_kinds` line is commented out until its `X()` entry lands.
+  `research.db` rebuilt. Pages touched: [[research-corpus]].
+
+## 2026-11-03 — The four GNSS rules
+
+Owner: "finish ... gps dectors". `GNSS_JAMMING` (WARN, CRIT on a lost
+fix; Mobile T1464 by owner ruling), `GNSS_SPOOF_SUSPECT` (LOW on two
+heuristics, WARN on three, never CRIT), `GNSS_TIME_JUMP` and
+`GNSS_POSITION_JUMP` (WARN; empty technique, second exemption form) in
+the new `src/alerts/rules_gnss.c`, last in the rule table; 90 → 94
+rules. They read the per-poll snapshot: `s->gnss_hist` points at
+gps.c's copy of the rings, which now carry the host's monotonic and
+wall clocks, the receiver's time, `speed`, `eps` (TPV `eps` parsed),
+`leapseconds` and a `reacq` flag per fix, and the mode per second.
+Twelve `gnss.*` knobs, each default argued from `research/gnss/` with
+its quote. The four research documents' `alert_kinds` uncommented and
+`research.db` rebuilt; one assessment per kind; remediation sections;
+`tests/test_gnss_rules.c` with hand-built sequences, every absence seen
+red under a named mutation. No new JSONL record. Updated [[gnss]],
+[[alerts]], [[cli-reference]], [[research-corpus]], [[alert-remediation]],
+`docs/views/alerts.md`, `docs/views/gnss.md`,
+[alert-assessments/](alert-assessments/README.md).
+
+Review fixes before push. Receipt time is not epoch time:
+`GNSS_TIME_JUMP` now measures from the last accepted fix, never from a
+fix that did not hold, skips a fix read from a queue (a reader stalled
+by Ctrl-Z or load draining gpsd's buffer a millisecond apart, which
+fired the first version) and takes a suspend as a reacquisition;
+`GNSS_POSITION_JUMP` takes Δt from the receiver's own time, so a
+moving receiver's queued fixes no longer shrink the bound to the error
+estimates. `GNSS_JAMMING` reads the median C/N0 of the tracked
+satellites (ss > 0) with the tracked count, and requires the list to
+hold, so a building hiding four of ten satellites is no longer a 12 dB
+collapse. The four research documents speak of the kinds in the
+present tense and `research.db` is rebuilt; [[cli-reference]] no longer
+says no rule reads a position.
+
+## 2026-11-03 — Bad-FCS frames stop reaching content parsers (#178)
+
+A beacon, probe-response, assoc-response or probe-request whose
+radiotap FLAGS carried BADFCS used to reach its content parser anyway;
+only `rf_quality_observe`, `mon_frame_record` and the evidence ring
+tested it. #123 (2026-10-15) deferred the question of whether a
+bad-FCS frame should feed the per-type parsers at all; #178 answers no,
+citing a real-host symptom — a BSSID accumulating several short,
+mostly non-printable "SSIDs" sharing one `last_seen`, heaviest on the
+weakest signal, the signature of bit errors rather than an AP renaming
+itself. `on_probe_frame()` (`src/capture/probe.c`) now returns right
+after the evidence-side bookkeeping, before the type dispatch, once
+`fr.bad_fcs` is set. New parse-fault kind `SH_PF_FCS_FAILED` /
+`parse_fault_fcs_failed`, wired immediately, additive to the
+`sensor_health` JSONL record. Updated [[jsonl-schema]] (both pinned
+parse-fault lists, a `fcs_failed` bullet, the row table, the literal
+example line) and `docs/views/beacons.md` (an "FCS-clean since #178"
+note; old rows from before this version are not deleted retroactively).
+
+## 2026-11-03 — IPv6 neighbours in the sensor's table (#176)
+
+**Source**: `src/platform/linux_neigh.c` (new), `src/platform/linux.c`,
+`src/devices.c`, `src/views/arp.c`, `src/alerts/rules_twin.c` (unchanged,
+now reached by IPv6 rows); `tests/test_parse.c`, `test_devices.c`,
+`test_arp.c`, `test_captive_portal.c`.
+
+**Changed pages**: [[captive-portal]] (the first grading route joins an
+IPv6-only client too), [[jsonl-schema]] (`arp` rows carry IPv6
+addresses), [[capture-scope]], [[views-catalog]],
+`alert-assessments/ARP_SPOOF.md` (anchors; the rule now sees IPv6
+bindings), `docs/views/arp.md` and `docs/views/devices.md`.
+
+An IPv6-only client had no row to join on: `s->arp_entries` was
+`/proc/net/arp`, which the kernel keeps for IPv4 only, so the
+CAPTIVE_PORTAL grade could not tie the client's address to a MAC the
+monitor table had heard associating, and the Devices view showed it
+with no address. The kernel's IPv6 neighbour cache is now dumped over
+rtnetlink (`RTM_GETNEIGH`, AF_INET6; what `ip -6 neigh` prints) into
+the same table after the IPv4 rows, resolved states only (REACHABLE,
+STALE, DELAY, PROBE, PERMANENT; never INCOMPLETE, FAILED, NOARP or a
+proxy entry). The parser is pure and tested on hand-built netlink
+messages (states, families, a delete, NLMSG_DONE, missing and odd-sized
+attributes, a truncated header, the cap). A device keeps one address:
+IPv4 over IPv6, a global IPv6 over a link-local, else the first seen.
+The ARP view's address column widens to the longest address. Each new
+absence assertion was seen red under a named mutation (rank flattened,
+every state resolved, the column fixed at 15, the join refusing ':').
+
+Not in this slice: passive learning of NS/NA bindings off the capture.
+The table stays what the host itself resolves, as the IPv4 half always
+was; on the reference host that is 27 rows against 55,578 devices, so
+an over-the-air IPv6 client the sensor never exchanged packets with is
+still unjoined. Filed on #176 as the follow-up.
+
+## 2026-11-03 — rf.rssi.ble in a key class of its own (#177)
+
+**Source**: `web/src/web_rollup.h`, `web_rollup.c`, `web_baseline.c`;
+`web/tests/test_metrics.c`, `test_series.c`, `test_rollup.c`,
+`test_frrs.c`, `test_bledev.c`; `web/README.md`.
+
+**Changed pages**: [[slothweb]] (tiers and bounds, the RSSI series, the
+BLE section).
+
+The BLE advertiser series shared the device class with the Wi-Fi keys,
+so a resident random-address advertiser (a new key every fifteen
+minutes) could evict a quiet Wi-Fi station's signal history under
+pressure. `rf.rssi.ble` now has the `ble` class, churnable, capped at
+the same `--web-max-keys` N as the device class; one flag still sizes
+every address class (N device, N/2 host, N BLE). `/api/health` carries
+the class in `series_keys`, `series_key_caps`, `key_evictions` and
+`key_returns`. The baseline cap is unchanged (the metric moved class,
+it did not gain one). Seen red with the metric back in the device
+class: the station's series evicted, device evictions 2, BLE class
+empty.
+
+The Report's 24 h fine read, the second half of the issue, was measured
+rather than cached: with 8,640 fine buckets for one advertiser in the
+store and the ring, `/api/frrs/report` answered in 5 ms mean, 9 ms
+worst of 20, against `/api/series` fine at 0.8 ms and `/api/health`
+at 1 ms, on the build host under the test harness. The transient is
+8,642 points, not a megabyte. Nothing to shrink at that cost; the
+number is on the issue so a slower host has a baseline.
+
+## 2026-11-03 — The last 18 alert assessments (#174)
+
+**Source**: `docs/wiki/alert-assessments/*.md` (18 new files),
+`MLD_MAC_COLLISION.md` and `MLE_CROSS_LINK_CIPHER_DOWNGRADE.md`
+(literature search recorded), `README.md` there regenerated,
+`tests/test_alert_assessments.c` (`pending[]` now empty).
+
+Every `ALERT_TYPE_*` has an assessment: the six wired brute-force rules,
+the four wired posture rules, the four Wi-Fi management floods and
+protections, and the four remaining FragAttacks kinds, each with the
+rule's code anchors re-read, its count semantics, the reference host's
+firing data (read from its `sloth.db` on 2026-11-03: rows, evaluations,
+keys, severity, reopens over 2026-10-14 to 2026-11-03) and every
+citation fetched. The two MLO pages now record a real search (Crossref,
+arXiv, the web, mentor.ieee.org, patents, the hostap list; dblp and
+Semantic Scholar unreachable, Google Scholar not run) and what it
+found: the TGbe drafting record requires one pairwise cipher list
+across an MLD's links, so the cross-link posture is non-conformance, and
+no public treatment of AP-MLD identity cloning exists.
+
+Code findings the pages record for follow-up (not fixed here):
+FRAG_AMSDU_EAPOL reads the EAPOL SNAP at the first subframe's payload
+(body offset 14) while the paper's frame carries it in the first 8
+bytes of the A-MSDU body; FRAG_MIXKEY's generation lookup is keyed on
+SA so downlink reassemblies never qualify; FRAG_PN_GAP holds one
+session per (BSSID, SA, DA, TID) and advances `last_pn` on a
+sequence-number mismatch; `rule_attack_path` also walks paired
+responses and, with `rule_weak_tls`, hard-codes `match_port`;
+`tls_ver_is_weak()`'s SSL branches are unreachable; `linux.c` treats
+ARPHRD 804 as Prism monitor (it is IEEE 802.15.4); no Telnet snoop
+exists though the corpus lists it; the RDP `proto_mask` constants
+disagree with MS-RDPBCGR; `snmp.community_brute` above 8 silently
+disables the rule; the MQTT CONNACK decoder scores v5 by v3.1.1 codes;
+`fragattack.h` and the FragAttacks corpus document still say
+CVE-2020-26139 and -26146 are not implemented.
+
+## 2026-11-03 — Rules whose count followed the tick rate (#173)
+
+The per-type assessments measured fire counts of 7.5e6 to 3.1e9 on a
+handful of keys for the rules below. The engine counts an observation when
+a detail differs from the one it last emitted, so any detail value that
+moved without the evidence moving made `observations` follow
+`evaluations`. Fixed per rule, not in the engine: `ATTACK_TOOL_UA` fires
+once per (src, tool) a pass instead of once per matching HTTP ring entry
+(up to 256 a pass) and summarises the target(s) and request count;
+`DGA_DOMAIN` fires once per name a pass and names the client from the
+newest query, not whichever of query and response slot came last (which
+also made the resolver the `match_ip`); `WPA_DOWNGRADE` carries the
+posture's age as a band (`30s+`/`5m+`/`1h+`/`1d+`) instead of seconds;
+`MGMT_FUZZ` carries the defect kinds and a defects-per-100-frames band
+instead of three running counters; `FRAG_PLAINTEXT` drops the row's
+shared last SA/DA (another FragAttacks kind's hit rewrote it) and takes
+its frame count by decade; `SMB1_USE` takes the session packet count by
+decade; `PM_FORGE` gets the 900 s recency bound `QUEUE_EVICT` already
+had (`PM_FORGE_REPORT_SECS`). `CAM_SETUP_OUI` needed no change and is
+pinned. Shared helper `count_bucket()` (`src/alerts/engine_internal.h`).
+Tests in `tests/test_alert_tick_rate.c`, each standing assertion seen
+red under the old detail or fire. Updated [[alerts]] (a detail-discipline
+bullet, with the engine edge that remains: a change arriving inside
+the 60 s update floor counts per pass until the floor passes; the
+`observations` row of [[jsonl-schema]] now says so too),
+[[smb-snoop]], [[jsonl-schema]] (the MGMT_FUZZ lifecycle example),
+[[alert-remediation]] (FRAG_PLAINTEXT, PM_FORGE), the eight assessments'
+`count_semantics` / `noise_verdict` and Assessment text (the reference
+host figures predate the change and are the owner's to re-measure), and
+the `rule_file` line of every assessment whose rule moved.
+On review: `MGMT_FUZZ`'s counters saturate at 0xffff while `frame_count`
+keeps climbing, so past saturation the per-100 band fell with every frame
+and a fault in every beacon drifted down to the stray-frame reading
+(`under 1` after about a week at 10 beacons/s); a saturated counter now
+reads `counters saturated, rate no longer measured` instead of a band.
+`PM_FORGE`'s bound was measured on the frame's capture stamp against the
+host clock, so a `--replay` of a savefile older than 900 s reported
+nothing; it now ages on `last_contradiction_arrival` (`sloth_wall()` when
+the contradiction was processed), as table ageing does elsewhere
+([[replay-integration]]). `QUEUE_EVICT`'s bound has the same shape and is
+left for its own change.
+
+## 2026-11-03 — FRAG_EAPOL_RELAY knows the AP MLD MAC (#180)
+
+`FRAG_EAPOL_RELAY` (CVE-2020-26139) fired on every handshake of a
+Wi-Fi 7 AP MLD: the authenticator's EAPOL address is the AP MLD MAC,
+the over-the-air BSSID the per-link address, so neither address equalled
+the BSSID (reference host alert `d10040`, 2,964,009 evaluations, three
+incidents, all the AP's own M1/M3). `frag_ap_identity()` in
+`src/fragattack.c` now answers "is this the AP?" as the BSSID, or the
+MLD MAC that BSSID's beacon advertised (fed by a new
+`frag_note_beacon()` call in `on_probe_frame()`'s beacon branch), or —
+only while no beacon from the BSSID has been decoded — the
+mld-sibling heuristic (unicast, locally administered, octets 1-4 equal,
+octet 5 within ±1), which withholds the frame into a separate
+`eapol_mld_sibling` count and is named in the detail of a real relay on
+the same BSS. The key-install gate of `FRAG_PLAINTEXT` / `FRAG_BCAST` /
+`FRAG_AMSDU_EAPOL` files the AP's two advertised identities as one
+station; the heuristic is never used there. The FRRS record's
+`ecs.mld_mac = null` was "not surfaced", not "not captured": a beacon's
+Basic MLE never lists the reporting BSSID as a link, so neither
+`mle_canonical()` nor FRRS's `wifi_mld` link join can bind them. New
+evict kind `evict_frag_ap_ident`, additive to `sensor_health`; replay
+golden regenerated for that one field. Updated [[fragattacks]],
+[[jsonl-schema]], [[architecture]], [[alert-remediation]], the
+FRAG_PLAINTEXT assessment and the rule row in `docs/views/alerts.md`.
+The `needs-pcap-fixture` follow-up stays open. On review: "no MLE" is
+recorded only from a beacon captured whole and carrying no Basic MLE at
+all (a snapped capture or a refused MLE is not evidence of absence), and
+the page now states the two limits — a forged beacon steers the binding
+until the next real one, and a nontransmitted BSSID of a Multiple BSSID
+set, which never beacons itself, still has only the heuristic.
+
+## 2026-11-03 — Per-incident rows in sloth.db (#175, schema v11)
+
+sloth.db gains `alert_incidents`, one row per incident (key,
+incident_id, type, the incident's own first and last seen, its last
+and peak severity, count, observations, and its close time and
+reason) beside the per-finding `alerts` row, which is unchanged. The
+--db writer fills it from the engine's snapshot every tick and from a
+new engine lifecycle hook (`alerts_set_incident_hook()`, open /
+severity / close), so an incident evicted between ticks, a peak
+between ticks and every close reason are recorded; bounded at 256
+incidents a key, on the finding tier. `DB_SCHEMA_VERSION` 10 -> 11,
+the step a stamp (no backfill: a v10 row's peak and sum belong to no
+single incident), tested on a v10 file and on one whose stamp is
+refused. slothweb allow-lists the table (key and incident_id
+predicate-only, `WEB_SDB_SCHEMA_MAX` 11): `/api/history/alerts` reads a
+key's sev, count and incidents per incident in the range, and
+`/api/alert` builds its runs from the incidents and adds
+`db_incident` (data for #179's header). Updated [[sqlite-schema]]
+(v11, *Per-incident rows*, the upsert rule, the chain), [[retention]]
+(the finding tier, the per-key bound) and [[slothweb]] (History, the
+alert page).
+
+## 2026-11-03 — The alert page leads with observations; an over-long triage note refused visibly (#179, #181)
+
+#179: slothweb's alert page and copy-JSON bundle headlined `count`,
+which for a per-tick rule is time-in-table (44.8M on an EVIL_TWIN pair
+of one detail change). The header now reads observations ("detail
+changes"), incidents ("times opened"), first and last seen, the span,
+the rule's `confidence` and its verdict phrase, then `count` as
+evaluations with a tooltip; `/api/alert` writes `observations`,
+`incidents` and `sev_history` before `count`, so `alert.page` does too,
+nothing renamed. New structured members `confidence` and `rule_reason`
+(the stream's; a word from a table of the rule's literals in
+`web_alertfmt.h`, matched after the detail's last quote, so served
+where the detail is withheld); the Alerts page sorts open rows by
+severity then observations and mutes a row under 20% confidence
+below CRIT (a CRIT at 5% is a hard signal a forged claim lowered).
+#181: a triage note over its 240 bytes is refused with the bytes sent
+and the bound and said beside the buttons; the note is counted in bytes
+as typed and none over the bound is sent; the history is drawn from the
+server's rows only. Updated [[slothweb]] and the EVIL_TWIN, KARMA_AP,
+CAM_SETUP_OUI, CAPTIVE_PORTAL and SSID_CONFUSION assessments'
+`noise_verdict` (the presentational recommendation is done).
+
+## 2026-11-03 — Alert list confidence floor inclusive (owner ruling)
+
+Owner answered #179's open question: the Alerts page's display-only
+muted floor is `confidence <= 20`, not `< 20`, so EVIL_TWIN rows whose
+only signal is "vendor OUI differs" (20%) are drawn muted. CRIT rows
+are still never muted. [slothweb.md](slothweb.md), the EVIL_TWIN
+assessment and web/README.md say so.
+
+## 2026-11-03 — slothweb glyph slice V1: every Overview number compared (#171)
+
+G1 on every Overview tile (urgency order: alerts, anomalies, sensor,
+throughput, devices, records/s, then BLE), on the strip's network facts
+and the footer's drops, from the `live.*`, `sensor.drops`, `ble.devices`
+and new `records.total` series, with G1's band words and arrow; G1 with
+the episode shaded on anomaly cards; the hour-of-week grid as G4 with no
+hatch; shared-scale small multiples sorted by |z|. On review: the
+footer's drops carries its last bucket's count and names its bucket,
+scales restart on a scope change, an anomaly card keeps its y-range and
+reads a long window from the minute tier, and the V1 glyph functions are
+pinned whole. Updated [[slothweb]].
+
+## 2026-11-03 — slothweb glyph slice V2: how near, and coming closer (#171)
+
+G2 range sparklines in the Devices and AP tables' signal column, the
+drawer and the Lookup card, from the existing `rf.rssi.bssid` and
+`rf.rssi.sta` series (the spec's `ap.rssi` and `sta.rssi`) through a
+new `"rf"` row member; the number bold, and the band and trend worded,
+by sloth's own distance estimate, never a slope of the page's. The new
+mark and G5's first-seen cell; G6 bullets on risk, karma and the
+anomaly score, bars on the anom and flow total counts. Updated
+[[slothweb]].
+
+## 2026-11-03 — slothweb glyph slice V3: the air picture (#171)
+
+The WiFi view as four panels: channels as G3 horizon strips on each
+channel's own 30 d scale, or control frames as z against the channel's
+hour-of-week baseline with the second band at the slider's k, a stacked
+top-5 drill-in per column beside them and the stacked grid one control
+away; emitters nearest first with the SSID count as squares; the deauth
+frames as a G7 rug that collapses when empty; the probing clients with
+G2 and G5. History's 30 d strip as a G7 rug on one scale. Updated
+[[slothweb]].
+
+## 2026-11-03 — slothweb glyph slice V4: the attack chain and the Flows matrix (#171)
+
+G8, the chain timeline: deauth, twin, association and karma lanes on
+one time axis with the links sloth made between them in words, on the
+WiFi view's chains panel, the alert page and the drawer, from the new
+`/api/wifi/chain` (sloth.db's incidents and associations, the stream's
+`twin_episode` links kept in memory). The Flows view draws the source
+by destination matrix first and the chord second
+(`/api/flows/graph?form=matrix`). The slice's review matched a stage's
+alert key at its BSSID fields (a substring took the text across a
+pair's two halves, or an attack-chain key's SSID), counted an
+association as a stage only on a BSSID with a twin or karma incident
+(otherwise every busy AP with routine deauth frames was a chain), laid
+the link words out so a taint and an attribution in one column no
+longer overprint, kept each chain's scale per cell width, and said in
+the caption when only the most deauthed BSSIDs were read. Updated
+[[slothweb]].
+
+## 2026-11-03 — README and agent lessons after the GNSS, BLE, triage, issues and #171 work
+
+README's slothweb, Alerts and Status sections now name the BLE Devices
+and GPS Sat tabs, the `known` triage verdict, the alert page's order,
+the four GNSS rules, `alert_incidents` (sloth.db v11) and the antenna
+fixture guide. `agents/AGENTS.md` gains "Cost and concurrency": one
+builder plus one fixing reviewer, one workflow at a time, change-local
+tests, and the integration traps that turned CI red after green slices.
+
+## 2026-11-05 — Stage 0 contract freeze: the coupling inventory, ADRs 1 to 7, pack schema v1 (#185)
+
+Created [architecture-split.md](architecture-split.md), the measured
+coupling between the three concerns #184 proposes to split into `sloth`,
+`sloth-dash` and `sloth-comint`: the `Makefile`'s slothweb section
+(573–902, not the 575–760 both issues cite) reference by reference, the
+include lines out of `web/` resolved through `-iquote src` as well as the
+explicit `../../src/` ones, the intelligence tables in `src/` with a
+counted row count and the lookup function behind each, the committed data
+in `web/data/`, and #184 §2's contract table C1–C10 filled in from the
+greps. Nine disagreements with #184 are recorded in §5 rather than
+smoothed over, the largest three being that `rsn_ie.c` is not in
+`WEB_CORE_SRCS`, that `tests/` reaches into `web/` from eight places
+including three fuzz harnesses that `#include` slothweb source, and that
+the intelligence list in §1 is missing nine tables that meet its own
+definition. Every list carries the command that produced it.
+
+Created [adr/](adr/README.md) with the seven records #184 §2 lists —
+three repositories, the corpus staying with the rules, intelligence as
+files, `libsloth-wire`, no runtime dependency, opt-in sharing, versions
+per repository and per seam — each with context, decision and
+consequences, and with the owner's 2026-11-04 rulings on names,
+visibility, the vendor research workflow's home and the artifact's home
+recorded where they apply. Five gaps #184 does not decide are marked
+`OPEN — needs owner ruling` in place: the new repositories' licence,
+which intelligence tables move, what `libsloth-wire` contains beyond
+`WEB_CORE_SRCS`, and where `sloth-ble-scan.service` lives.
+
+Created [pack-schema.md](pack-schema.md), the v1 draft for Stage 1:
+manifest fields (schema and pack version, build time, per-file SHA-256,
+bytes, source URL, retrieval date, licence, format), the file set
+grounded in what `web/data/`, `web/data/btsig/` and `web/data/vendors/`
+hold today with each `SOURCE.md`'s own counts, the `src/` tables as
+`csv-rows` files, the two named tables that have no rows to carry, and
+the rule that a published pack version is never re-published with
+different bytes. Marked a draft throughout. Updated
+[index.md](index.md).
+
+## 2026-11-05 — ADS-B slice 1: --adsb, the aircraft table, adsb_aircraft (#26)
+
+New [[adsb]]. `--adsb PATH|file:///PATH` re-reads the `aircraft.json` a
+local readsb / dump1090-fa writes about once a second (sloth never
+touches the SDR; no network; `sbs://` and `beast://` refused as not yet
+supported). `src/adsb.c` parses it per readsb's README-json.md into
+`adsb_aircraft_t` rows (256 cap, overflow counted), sticky-merged,
+retired 60 s after the decoder last heard them; `adsb_health_t` reports
+`waiting` / `live` / `stale` / `error` off the decoder's own `now`
+advancing. The `adsb` sensor registers, `sensor_health` gains `adsb_*`
+(only with `--adsb`), and the change-only `adsb_aircraft` record signs
+held altitude bands (1,000 ft below 9,750 ft, 4,000 ft above, edges at
+x,750 ft, 100 ft hysteresis) and held 0.1° position cells, never the
+per-second figures; expiry writes one `"gone"`. Updated
+[[non-ip-sensors]], [[cli-reference]], [[jsonl-schema]], [[index]].
+View, slothweb, `--db` and the emergency alert are later slices.
+
+## 2026-11-05 — ADS-B slice 1 review (#26)
+
+[[adsb]]: a first `aircraft.json` whose clock is already more than
+`ADSB_STALE_S` behind the host's (a decoder that hung before sloth
+started) now reads `stale` and contributes no rows until the decoder's
+clock moves; before, each aircraft in it was written as a `live`
+`adsb_aircraft` with a wrong `last_seen` and `gone` a minute later.
+`--help` for `--adsb` names `beast://` beside `sbs://`, as
+[[cli-reference]] already did.
+
+## 2026-11-05 — ADS-B in slothweb (#26)
+
+[[adsb]]: slothweb's ADS-B tab. `/api/adsb` serves the aircraft slothweb
+keeps in memory from `adsb_aircraft` and the `adsb_*` block of
+`sensor_health`: 512 rows, gone rows kept 600 s, live rows quiet 660 s
+aged out, a 32-position track per row. The page draws the decoder's
+health, the aircraft table, a north-up position plot with altitude-coloured
+tracks (no map tiles) and a detail panel; Monitor's and Hybrid's, as
+BLE is. Updated [[slothweb]].
+
+## 2026-11-05 — GNSS and ADS-B history (#26)
+
+[[sqlite-schema]] v12: `adsb_aircraft` (entity tier, one row per address
+ever listed: first and last seen, visits, sightings, last callsign /
+squawk / category, altitude, speed and RSSI extremes, emergency and
+position ever seen) and `adsb_sightings` (observation tier, one row per
+change on the `adsb_aircraft` record's rule), written by `write_adsb()`;
+the v11 → v12 step is a stamp. slothweb reads them and the v10
+`gnss_sightings` (`/api/gnss/seen`, `/api/gnss/sat`, `/api/adsb/seen`,
+`/api/adsb/aircraft`): a "seen" table in each tab and per-item history
+(a satellite's C/N0 and elevation, an aircraft's altitude profile and
+recorded track). Updated [[adsb]], [[gnss]], [[slothweb]].
+
+## 2026-11-05 — which GNSS satellite, and the sky's trails
+
+[[gnss]]: slothweb names each satellite: the RINEX identifier, and the
+vehicle on that PRN at the record's time from the IGS satellite metadata
+(release 2441, committed in `web/data/gnss/` with its SOURCE.md and
+compiled in at build): name, NORAD and COSPAR numbers, SVN, block,
+launch, plane and slot. The sky plot draws each satellite's trail over
+1 to 24 h from `gnss_sightings` (`/api/gnss/tracks`). Updated
+[[slothweb]].
+
+## 2026-11-05 — APRS stations off Dire Wolf's packet log
+
+[[aprs]], new page: `--aprs PATH` tails the `-L` CSV log a local Dire
+Wolf (144.390 MHz) writes - from its end at startup, a new or rotated
+file from 0, copytruncate handled, 256 KiB a poll, 1024-byte lines -
+receive-only and file-only. The parser follows Dire Wolf 1.7's
+`src/log.c` (22 fields, `quote_for_csv()`), refusing a line with a bad
+shape, channel, time or callsign and leaving any other bad field
+absent. Stations keyed by source call (512, one hour to expire; an
+object's position is not its sender's); the `aprs` sensor;
+`sensor_health`'s `aprs_*`; `aprs_packet` per packet and change-only
+`aprs_station` (held 0.01° cells); [[sqlite-schema]] v13
+`aprs_stations` (entity) and `aprs_packets` (observation), a stamp-only
+step; slothweb's APRS tab with `/api/aprs`, `/api/aprs/seen` and
+`/api/aprs/station`. Updated [[cli-reference]], [[jsonl-schema]],
+[[non-ip-sensors]], [[sqlite-schema]], [[slothweb]], [[index]].
+
+## 2026-11-06 — Self-tag and demote, not silence (#183 item 2)
+
+`PM_FORGE`, `RECURRING_TRANSIT` and `BLOCKACK_ATTACK` had no roster
+exoneration (unlike `MY_NETWORK_RECON` / `UNKNOWN_DEVICE`, #183 item 1),
+so a finding whose MAC turned out to be the sensor's own radio
+(`ownership_is_own_device()`) still read as a third party. All three,
+plus the already-designed-for `ATTACK_PATH` case, were named in #183 as
+needing the same tag-and-demote treatment; `ATTACK_PATH` keys on an IP
+(`http_log_entry_t` carries no MAC, and sloth has no "this is one of the
+host's own IPs" primitive — unlike the MAC roster, that is genuinely new
+infrastructure, not plumbing that already exists) and is left as a named
+follow-up rather than built on a guess. The three MAC-keyed rules now
+still fire when the party is the sensor's own address — a compromised
+sensor is worth knowing about — but drop one severity step (new shared
+`sev_demote_one()`, `src/alerts/rules_wifi_mgmt.c`) and tag the detail
+"self (the sensor's own radio)" instead of silence or an unqualified
+attacker reading. `BLOCKACK_ATTACK` had no test driving it through
+`alerts_update()` before this touched it; added a baseline alongside the
+self case. Tests: `test_pm_forge_self_device_demoted_and_tagged`,
+`test_pm_forge_self_device_on_my_bssid_is_warn_not_crit`,
+`test_recurring_transit_self_device_demoted_and_tagged`,
+`test_blockack_attack_fires_warn_without_ownership`,
+`test_blockack_attack_self_device_demoted_and_tagged`
+(`tests/test_alerts.c`). Updated the three assessments' Assessment
+section (the reference-host noise figures predate this and are not
+re-measured, same caveat as #173's entries above) and the `rule_file`
+line of every assessment whose rule moved — all twenty-one in
+`rules_wifi_mgmt.c`, because the new shared helper sits above
+`rule_deauth_flood`, the first of them.
+
+## 2026-11-06 — the sensor's position on sensor_health
+
+[[location]] / [[jsonl-schema]]: `sensor_health` carries `loc_lat`,
+`loc_lon`, `loc_alt_m` and `loc_src` while a position exists (a fresh
+fix, else `--location`), signed on the 0.01° cell. slothweb keeps it and
+`/api/gnss` ends with `loc` ([[gnss]]). The first slice of the Radar
+view, whose dome centres on it.
+
+## 2026-11-06 — the Radar tab
+
+[[slothweb]]: a Radar tab after APRS, one orthographic half-dome centred
+on the sensor (the position [[location]] carried a slice earlier) that
+places GNSS satellites at their az/el, aircraft and APRS stations at
+their true bearing and elevation angle with the range on a log scale
+(0.3 m to 300 km), and the Wi-Fi and BLE distance bands as counted
+rings from the new `/api/radar` census. Drag, tilt, zoom, pick; a side
+panel opens each family's own tab. Satellites only under Local
+([[capture-scope]]). Exempt from the visual spec's R12 by owner ruling
+(`docs/web-ui-spec.md`), the first such exemption.
+
+## 2026-11-06 — the Radar dome is the page
+
+[[slothweb]]: on the Radar tab the dome fills the window below the tab
+bar; the header, the camera buttons, the picked panel and the caption
+are small panels over it, the explanation folded under "about this
+view". Owner request: the radar first, everything else secondary.
+
+## 2026-11-06 — the receive antenna's gain in the distance estimate
+
+[[rf-distance]]: `--tune rf.rx_gain_db_wifi` and `rf.rx_gain_db_ble`
+(dBi, default 0) subtract the sensor antenna's gain from the RSSI before
+the distance is solved; a `--my-bssid` calibration in force supersedes
+it. Owner: a 9 dBi antenna on the Wi-Fi monitor radio. Updated
+[[cli-reference]].
+
+## 2026-11-06 — Radar: devices on the north axis, labels that never overlap
+
+[[slothweb]]: the Radar dome adds the 50 most recently heard Wi-Fi and
+50 BLE devices that carry a distance estimate, each on the north axis
+(no bearing exists for them) at its own estimated distance with a faint
+ring, from `/api/radar`'s new `devs` lists; a label layout pass in which
+no label can overlap another; a velocity tick for any aircraft or APRS
+station with a speed and heading. The per-band rings stay, fainter.
+
+## 2026-11-06 — Radar device labels: ten a family, hover for the rest
+
+[[slothweb]]: after a first look at 100 stacked labels, only the 10 most
+recently heard Wi-Fi and BLE devices are labelled; any other shows its
+label while hovered or selected; labels compact; no label under a
+floating panel.
+
+## 2026-11-06 — Radar: the APRS window, objects and trails
+
+[[slothweb]] / [[aprs]]: the Radar view's one control, `APRS for`
+(default 1 h), keeps an APRS entity on the dome until it has been silent
+that long; objects and items become entities of their own keyed by
+name; each carries its newest status and comment; a moving one draws
+its 24 h trail. New `/api/aprs/tracks` over sloth.db's `aprs_packets`.
+
+## 2026-11-07 — the `[^]` ADS-B TUI view and the `adsb` health token (#186)
+
+New `docs/views/adsb.md`. The 38th view draws the
+`--adsb` decoder's aircraft table (`src/views/adsb.c`): one row per
+address, freshest first by the decoder's own last-heard time with the
+address as the tie-break, over a header of the decoder's state, the
+aircraft count, how many report an `emergency`, the message total, the
+clock age, the source and the read / parse / overflow / bad / expired
+tallies. ICAO, callsign, squawk, altitude (barometric, else geometric,
+else `ground`), ground speed, track, RSSI, age, and a width-flexing
+RSSI bar over -30..0 dBFS; rows unheard for 30 s dim, the cursor
+follows the aircraft across the re-sort. **Distance (km) and bearing
+(deg true) are drawn only when the sensor's own position is known**
+(`gps_location_current()`), absent rather than empty otherwise;
+`gps_bearing_deg()` joins `gps_distance_m()` in `src/gps.c` for the
+second half of that pair. `--adsb` also adds an `adsb` token to the
+Interfaces health strip beside `gps`. The key is `^` because every
+letter and digit already selects a view, `*` is BLE and `#` is GNSS.
+Observation only: the emergency-squawk rule, `sbs://` input and the
+`packaging/` notes are still open on #186. Updated [[adsb]],
+[[views-catalog]], [[cli-reference]], [[non-ip-sensors]].
+
+## 2026-11-08 — `ADSB_EMERGENCY`, flag only (#186)
+
+The last alert item of the ADS-B family. `src/alerts/rules_adsb.c`
+raises `ADSB_EMERGENCY` for an aircraft the `--adsb` decoder lists
+while the source is live with squawk 7500, 7600 or 7700, or a DO-260B
+emergency/priority status other than `none`: one incident per address
+and condition (the code, else the status word), LOW on first sight,
+WARN once held `adsb.emerg_hold_s` (10 s, new knob) of the aircraft's
+own message time, never CRIT. Flag only: ADS-B is unauthenticated and
+a false alarm can be injected, so sloth surfaces it and never acts.
+Empty technique, second exemption form; basis in the new
+`research/adsb/emergency-squawks.md` (SERA.13005, readsb's
+README-json.md, Costin & Francillon 2012, Schäfer et al. 2013, each
+read first-hand; ICAO Doc 8168 / 4444, FAA AIM and DO-260B not).
+slothweb: Monitor's scope, the detail shown (audited: callsign, squawk,
+status word), and the ADS-B tab's ALERT column and detail line link an
+aircraft to its open incident (`/api/adsb` rows carry `alert`).
+`packaging/default/sloth` notes that `/run/readsb` needs no unit
+change. New assessment `alert-assessments/ADSB_EMERGENCY.md`. Updated
+[[alerts]], [[adsb]], [[non-ip-sensors]], [[attack-map]],
+[[cli-reference]], [[research-corpus]], [[alert-remediation]].
+
+## 2026-11-09 — `--adsb sbs://`, the decoder's SBS output (#186)
+
+The last open item of #186. `--adsb sbs://[HOST[:PORT]]` (default
+`127.0.0.1:30003`, numeric loopback only) reads readsb's / dump1090's
+SBS / BaseStation TCP output with a client that never writes a byte to
+the socket, announced on stderr. Lines are framed with a 512-byte cap
+across reads (CRLF; garbage and over-cap lines are parse errors, not
+fatal), parsed per readsb's `modesSendSBSOutput()` (`net_io.c`), and
+merged into the same `adsb_aircraft_t` table with the same sticky
+merge, cap and expiry, so an MSG,3 position and an MSG,1 callsign for
+one address are one row; a row's age is the line's generated time.
+Freshness is any line within 130 s (readsb heartbeats every 60 s); a
+refused connect or a closed session is a read error, retried with
+2..30 s backoff. SBS's emergency flag is not mapped to a status word:
+the 7x00 squawk drives `ADSB_EMERGENCY`. The hardened unit needs
+`AF_INET` by drop-in (the `gps.conf` gpsd block is that line).
+`beast://` stays refused. New fuzz target `fuzz_adsb_sbs`. Updated
+[[adsb]], [[cli-reference]], [[non-ip-sensors]].
+
+## 2026-11-09 — `--adsb beast://`, the decoder's Beast output (#186)
+
+The last open input of #186. `--adsb beast://[HOST[:PORT]]` (default
+`127.0.0.1:30005`, numeric loopback only) reads readsb's Beast binary
+output with the same never-writing client and backoff as `sbs://`, and
+decodes the Mode S frames in sloth (`src/adsb_beast.c`): a framer for
+readsb's 0x1A-escaped stream (types 1/2/3; receiver id and Radarcape
+frames skipped; garbage, unknown types and cut frames are parse errors
+with resync), CRC-24 with no bit correction, DF17/18 only intact,
+DF4/5/20/21 only for an address a clean DF17 or DF11 vouched for in
+the last 60 s (readsb's `icaoFilterAdd()` rule; DF18 does not vouch),
+TC 1-4 identification, TC 5-8 as on-ground, TC 9-18 / 20-22 altitude
+and CPR (a global pair within 10 s, refused across NL zones, else local
+against the aircraft's own fix, every result bounded by a speed limit),
+TC 19 velocity, and TC 28 subtype 1's emergency word and Mode A code.
+RSSI per readsb's formula, `seen` from the read time (the Beast
+timestamp is the receiver's clock). `ADSB_EMERGENCY` fires on Beast
+rows from a squawk or the status word. Known-answer tests from *The
+1090 Megahertz Riddle*; new fuzz target `fuzz_adsb_beast`. Updated
+[[adsb]], [[cli-reference]], [[non-ip-sensors]], [[jsonl-schema]].
+
+## 2026-11-09 — `GNSS_TIME_JUMP`: a late read is not judged (#182)
+
+The queued-read guard's mirror. A reader late by a steady amount on
+every fix passes the queue test, and the next-fix hold then confirms
+the lag: 1.5 s of reader starvation reads as a held -1500 ms step and
+its recovery as a held +1500 ms one. `read_lateness()` sums, from the
+anchor, the host's gap past the receiver's over the reads on which the
+receiver kept its fix interval (`fix_interval_ms()`, the ring's
+median); past 250 ms the fix is neither judged nor the anchor, and a
+lateness standing 30 s is re-anchored on unjudged. A real step at the
+ordinary cadence still fires: its host gap is the interval. The detail
+gains the two gaps and the interval. Added because a late read must
+not be judged, not because the cause of 2026-11-03's 97 fires (alert
+d15049, during a rebuild/test gate, per-step detail not retained) was
+confirmed; the host was then silent from 2026-11-05 to 2026-11-09
+over 39,783 fixes. TOFF parsing (the issue's item 1) not done. Updated
+[[gnss]], [[alerts]], `alert-assessments/GNSS_TIME_JUMP.md`.
+
+Review, same day: the first draft summed each pair's host gap past the
+receiver's, which a receiver can move. One 300 ms nudge of the
+receiver's time with its fixes read on time read as lateness, blinded
+the rule, and a 5 s step after it was re-anchored on unjudged 30 s
+later; before the guard the nudge became the anchor and the step fired.
+A pair now adds only what the host's gap shows on its own (the lesser of
+its excess over the receiver's gap and over the interval, nothing when
+they disagree in sign). Residual, stated in the rule and the assessment:
+a reader falling behind on the very pair where the receiver dropped an
+epoch is not seen, since at 1 Hz that gap is a whole-second step's.
+- 2026-11-10 — ADR 0008 "own fleet" (#192 F0): the owner's own sensors share at full fidelity over the tailnet, pulled by slothweb; ADR 0006 stays the rule for community sharing.
+- 2026-11-10 — [[fleet]] (#192 F1): slothweb's read-only `/api/fleet/export?since=` (JSON Lines, member allow-list held to `web_secret.h`, no credential, username, alert key or detail, EAPOL row or RADIUS identity), the `--peer NAME=URL` pull over the tailnet (`--peer-interval-secs`, `--peer-allow-outside-tailnet` announced), slothweb.db v7 -> v8 (`peer_sites`, `peer_sightings`), `/api/health`'s `fleet` and `/api/fleet/peers`. Updated [[slothweb]], [[cli-reference]], [[index]].
+- 2026-11-10 — [[fleet]] (#192 F1 review): the export holds each line to the importer's own checks before sending it (a stored value outside the importer's ranges no longer refuses a peer's whole answer at every pull; the row is left out and its kind marked truncated); the pull refuses a transfer coding and a second `Content-Length`; the importer takes altitude to 100,000 m as `web_loc_set()` does.
+- 2026-11-11 — [[fleet]] (#192 F2): the Fleet tab (`web/ui/fleet.js`): the sites on an SVG map with the distance between each pair, per-peer health cards, "seen at more than one site" for Wi-Fi, BLE, APs and probed SSIDs with a per-site timeline; `/api/fleet/overview` and `/api/fleet/shared`; the pull's backfill of a kind cut at its cap (`next=1`, `next_<kind>` cursors, `kind=&after=` pages, the state in slothweb.db's `meta`). Updated [[slothweb]].
+- 2026-11-11 — [[fleet]] (#192 F2 review): an alert answer whose reader scan (20,000 rows) stops short of the floor is cut and backfilled from the scan's oldest row (`web_sdb_alerts_upto()`); an F2 puller against an F1 peer retries without `next=1` (`pages_refused`), so a fleet upgrades a host at a time; the shared list's verdicts in one pass per table; the budget checked between its lookups.
+
+## 2026-11-11 — device risk: anonymity counts once, own devices exempt (#191)
+
+`device_risk_score()` put 97% of a field sensor's devices in HIGH,
+because four near-collinear anonymity signals (randomised MAC, unknown
+vendor, no hostname, probe-only) summed to three. They are now one point
+between them, so anonymity stops at MED and HIGH takes an evidence
+signal (a cleartext credential or an alert naming the device's IP), CRIT
+both. Bit 64 (`SELF`) marks the sensor's own interfaces and rostered
+devices, which record no anonymity signal. `00:c0:ca` resolves to Alfa Network.
+slothweb scores from `risk_signals` in every scope and no longer reads
+the stored `risk_level`, so rows stored under the old sums read at the
+new level. The replay golden file's three probe-only device rows move
+from HIGH to MED. `docs/views/devices.md`, [[posture-report]], [[capture-scope]],
+[[slothweb]].
+
+## 2026-11-11 — the "self" tag is the sensor's own interfaces only (#183)
+
+`PM_FORGE`, `RECURRING_TRANSIT` and `BLOCKACK_ATTACK` tag a finding
+"self" and demote it one step only for an address on the self roster,
+no longer for a `--known-mac` device, which was being described as the
+sensor's own radio. `ATTACK_PATH` has no self tag yet: the sensor keeps
+no record of its own IP addresses. [[alerts]].
+
+That left a rostered device passing repeatedly at full WARN. Owner
+ruling 2a: `RECURRING_TRANSIT` demotes a `--known-mac` device one step
+and tags it "rostered device", in its own words; "self" wins for an
+address on both rosters, and the key is unchanged. `PM_FORGE` and
+`BLOCKACK_ATTACK` are not softened by the roster: the station they
+name may be the one under attack.
+
+## 2026-11-11 — `EVIL_TWIN`: one device's own radios are not a pair (#188)
+
+Every CRIT row on a field sensor over six days was the 2.4 and 5 GHz
+radios of one box. A pair whose BSSIDs differ in at most two bytes, on
+different bands, first heard within 10 s of each other is one device.
+A locally administered BSSID has no OUI to compare, vendor-IE hashes are
+compared within a band only, a steer from a sibling address is not a
+hard signal, and a soft-signal CRIT needs 50% confidence. A rogue on a
+locally administered address, which that left at WARN and 35%, reaches
+CRIT again through a late arrival (owner ruling 3b): `+late-arrival`,
++20, when the later half was first heard 120 s or more
+(`twin.late_arrival_s`) after the earlier one, the earlier one has been
+heard since, and the sensor has been at rest that long. It only
+corroborates other evidence, and only on a pair with a locally
+administered half: two globally administered addresses are scored on
+their OUIs as before (a same-vendor or OUI-only pair 20%, a two-vendor
+pair with a vendor-IE mismatch 55%).
+An AP that drops out and returns is not a late arrival: the beacon
+table remembers the BSSID/SSID pairs it has dropped (4096, for the
+session) and only a name new on its address counts, which also
+replaces the full-table guard. Limits: once that memory overflows, an
+entry it does not know is not counted until it reaches back a day; and
+a transmitter can announce the name it will copy ahead of time and be
+a return. The deauth-then-twin chain (`twin-chain:`) takes its pair from
+the same scorer (owner ruling 4a): a flood against one radio of a
+dual-band device no longer names and taints the other, a locally
+administered half is admitted on evidence and not on its first three
+bytes, and two inventory-approved radios are not each other's rogue.
+Limit: a copy on a locally administered address with no evidence of its
+own is not named under a flood. [[alerts]], [[evil-twin-reproducer]],
+[[action-frames]], [[cli-reference]]; `docs/views/twins.md`.
+
+## 2026-11-11 — `EVIL_TWIN_PROXIMITY` needs a twin (#189)
+
+The rule fired on any BSSID with a 15 dBm swing in 60 s; 254 of 300
+firing BSSIDs had no same-SSID twin. It now fires only for half of a
+candidate pair, with the window's minimum above -92 dBm, and not while
+a GNSS fix in the last 60 s shows the sensor moving. [[alerts]],
+`docs/views/twins.md`.
+
+## 2026-11-11 — posture report while running, one record per session (#190)
+
+`--report-interval SECS` writes `report.live.*` beside the report path;
+`--report-history` keeps `report.<UTC session start>.*` at exit so a
+restart no longer replaces the last session's record. A killed session's
+live file is set aside as `.unclean`. `SIGUSR1` forces a live write and
+is blocked in the worker threads. Nothing prunes the per-session files.
+[[posture-report]], [[cli-reference]], [[deployment]], [[retention]].
+
+## 2026-11-11 — slothweb: the presence strip coloured by the sun at the sensor
+
+Owner ruling ("color the 24 hour presence based on night sunrise day
+sunset"): a present cell of G5 takes `--sun-night`, `--sun-rise`,
+`--sun-day` or `--sun-set` by the sun's elevation at the sensor's own
+position (`/api/gnss`: the fix, else `loc`), computed on the page by
+`web/ui/sun.js`; no position or a cell over an hour keeps the one ink,
+and says so. G5's ruler is drawn in the three tables' headers with the
+phases as a band. R1 gains its second exception, for G5 only
+(`docs/web-visual-spec.md`, `web/README.md`). [[slothweb]].
+
+## 2026-11-11 — every key of a metric on the Activity graph, a colour a key
+
+Owner request ("make the activity page able to show all the keys on the graph with color coding") and ruling: R1's one ink is set aside for this one graph mode (recorded at the head of `docs/web-visual-spec.md` and under R1 in `web/README.md`). The Activity graph drew one key over its band, the others only as small multiples. A `keys: one` / `keys: all` button (kept as `act.allkeys`, one key the default) now draws every key the key picker holds as its own line on one shared y-scale, each in the key's hash colour (`ipColorIndex()`, the colour the key already has as an address or a device swatch). A ranked, numbered legend lists every key with its latest value, largest first; the top five lines carry rank and key at their end; hover, focus or a pick draws one line last in colour and the rest in `--rule`; the band is drawn only for a picked key; a device's entry opens its drawer; a presence metric is stacked strips. Data: the new `/api/series/all` (`web/src/web_allkeys.c`), each key merged into at most 480 cells, keys in byte order, at most 32 to an answer, the 256-key cap said as `listed` of `total` and in the caption as "256 of 300 keys". `web/ui/allkeys.js`, `web/tests/test_allkeys.c`. [[slothweb]].
+
+## 2026-11-11 — satellites coloured by constellation; the emitter report in two columns
+
+Two owner requests on slothweb. The GNSS tab colours each satellite by its constellation, one key-palette colour per `gnssid`, in the sky plot, its trails, both tables' GNSS column and a key under the sky; C/N0 keeps its heat in the signal cells. The emitter report's sections show two columns, the field and what was observed; where a value came from is its tooltip. [[gnss]], [[slothweb]].
+
+## 2026-11-11 — slothweb: triage notes on anomalies and links between findings
+
+Owner request. An anomaly is triaged through the alert's own rows, routes, states and guards (`POST /api/frrs/triage` takes an anomaly id, `tid` in `/api/anomalies`: "a" + FNV-1a 64 of rule, metric and key; the finding, every episode of it, as an alert's is every incident of its key; each row records its episode and a state from an earlier episode is answered as carried; `anom_subject` keeps the descriptor so a note outlives the engine's 24 h and a hash collision is refused). Operator links from an anomaly to an alert, another anomaly or a device (`relation`, `POST /api/frrs/relate`, `GET /api/frrs/related`), read from both ends, a gone end "no longer held". Candidates on the same MAC or address within 600 s offered, never stored ("possibly related, not established"). slothweb.db v8 (additive; v7 to v8 migration and its failure tested). Evidence bundle: `alert.related`, `device.related`. UI: `web/ui/notes.js` (`SlothNotes`), four hooks in app.js. Tests: `web/tests/test_notes.c`, `test_store.c`. [[slothweb]].
+
+## 2026-11-11 — slothweb: every signal graphic is an S-meter on its band's scale
+
+Owner rulings. Every signal graphic on the page is a receiver's S-meter bar (G2's range sparkline replaced; `glyph.g2()` kept, no caller). 6 dB per S-unit on the scale of the band heard on, from one table (S9 = -47 dBm at 2.4 GHz, -54 at 5 GHz, -56 at 6 GHz: the free-space path-loss offset against 2442 MHz), which amends the visual spec's R3; the S reading beside the dBm, stepped in tens past S9; two peak-hold ticks for the window's least and greatest; the face and every band's S9 said once per table; "band unknown: 2.4 GHz scale" where a row names no band. The GNSS and ADS-B signal cells take the same face on dB-Hz and dBFS with no S-units, and the GNSS trail column is gone. The `rf` member gains `radio`. [[slothweb]].
+
+## 2026-11-11 — slothweb: the presence ruler and its words in the sensor's time zone
+
+Owner ruling on the sun-phase strip: G5's ruler ticks its midnights in the sensor's zone, not the viewer's clock, so the ticks and the sun band agree, and the words' sunrise and sunset times are in the same zone and name it (`sensor time (slothweb's host), UTC-7`); every other time on the page stays the viewer's. The zone is `utc_offset_s`, which `/api/devices` and `/api/history/devices` now report (slothweb's host's offset, taken as the sensor's; a copied sloth.db read elsewhere shows that machine's). One offset, the window's end's, serves the ruler: a range over a day says so. No offset from the server: the viewer's clock, named as that. [[slothweb]].
+
+## 2026-11-11 — keys: all walks every key, not the key picker's 256
+
+Owner rulings on the first build: "lift the cap", dimmed lines "a little more visible", the hour tier kept for 30 d. `/api/series/all` now answers the union of the rollup's keys and the keys the store holds a bucket of in the window (`web_store_keys_after()`, a seek a series), 128 to an answer and fewer when it is full or has run 100 ms, `total` on the first. The page draws what has arrived under `loading N of M keys`, drops the read on a metric, scope, window or mode change and stops it when the view is left; the graph holds 8,192 keys and a read stops at 60 s, either said in the caption as `N of M keys`. Past 256 keys the 256 largest are lines and the rest the range they span in each cell; the legend keeps 200 entries in the page under a filter box. Unfocused lines are `--faint`, not `--rule`. The key picker keeps its 256. [[slothweb]].
+
+## 2026-11-11 — slothweb: the hour-of-week grid always drawn, provisional cells marked
+
+Owner ruling ("it always only has one tile highlighted"). All 168 cells of G4 are always drawn; an all-warming grid is 168 `--rule` tiles under the now outline, not the outline alone. A warming cell with a sample (1 <= n < 3) is provisional: a `--tui-dim` bar on its tile, 1 px for 0 so far, a quarter, a half or three quarters by thirds of the provisional scale (0 to 1 for shares, 0 to the largest sampled mean otherwise), never a heat token and never the whole tile. A never-sampled cell is the bare tile; no baseline is R5's dash and `no data`. The caption names the scale and counts fed, provisional and not yet observed cells. R8, F3 and G4 amended in `docs/web-visual-spec.md` and `web/README.md`; [[slothweb]] also records what a restart costs the baseline (the start hour always, the stop hour too when it is an earlier one).
+
+## 2026-11-11 — slothweb: an SSID's detail, vendor research at the drawer's foot, the Probes tab
+
+Three owner requests. (1) Every SSID on the page is selectable and opens an SSID detail drawer from the new read-only `/api/wifi/ssid?ssid=` (base64url of the octets, compared with `=`): BSSIDs now and once, associated and probing stations, 24 h presence, KARMA and twin findings, alerts by BSSID or the SSID's key component with a work-bounded walk; `web/src/web_ssidview.c`, `web/ui/ssid.js`. (2) The device drawer's vendor research moved to the drawer's foot (`#dr-vendor`); Lookup unchanged. (3) New Probes tab from `/api/probes/clients|ssids|shared|groups` over sloth.db only (no store): stations heard probing and what sloth ties each to, networks searched for, an inverse-frequency similarity (`w = ln(N/df)`, at least `min` shared uncommon names) and groups; `web/src/web_probes.c`, `web/ui/probes.js`. [[slothweb]], [[capture-scope]].
+
+## 2026-11-11 — host status, every source and the attached receivers; slothweb's Sensor health page
+
+Owner request: list every radio, SDR and GPS in sensor health, add voltage, temperatures and CPU, and graph status and trends. The sensor writes four new record types once a minute (JSONL 1.1.0, `src/sys_status.c`): `sys_status`, `sys_sensor`, `source_status` (all seven sources, a source the command line did not enable as `not_configured`) and `receiver_hw` (USB devices matched against a table of receiver IDs from usb.ids, wireless interfaces, Bluetooth controllers). Everything is the text of a regular file under /proc or /sys through two new platform ops; no ioctl, no device node, no helper; a missing reading is absent, never zero; USB serial numbers are not read; a source is tied to a receiver only where sysfs ties them. A batch also goes out at once when a held band gets worse, never for a recovery. A replay reports no host. slothweb keeps the newest batch (`/api/sys`), shows the sources and receivers as tables, the host as tiles, and trends as G1 and G5 with a window of 1 h to 30 d and a trend word by a stated rule; eight metrics in the existing tiers, the keyed four in a new `sys` class, no store version change, none scored by the anomaly engine. [[jsonl-schema]], [[slothweb]], [[deployment]].
+
+## 2026-11-11 — slothweb: anomaly triage follow-up, and its store step resequenced
+
+Owner rulings: a triaged-out state carried from an earlier episode dims the card at once, the "earlier episode" mark kept on it (a carried incident never dims); an alert may be linked to a device with no anomaly in it (alert to alert and device to device stay refused); a BLE advertiser is a link kind, named by address and address type as the TACDB names one, "no longer held" once the ledger has let it go, the anonymous type refused, no name stored; the Anomalies view's table form carries the triage chip and panel. The fleet (#192) reached main first with slothweb.db v8, so `anom_subject` and `relation` are v9, migrated from a v8 file with the fleet's rows untouched. `web_frrs_verdicts()` reads alerts' triage rows only, so an anomaly's decision neither travels in the fleet export nor takes its limit. [[slothweb]].
+
+## 2026-11-11 — plain notes on devices and the rest; slothweb-mcp and the agent's write path
+
+**Source**: owner request 2026-11-11 ("an openclaw agent will need to read the data thru an mcp and add notes to anomalies, devices, and other observations and devices").
+
+Slice 1: plain notes (`web/src/web_notes.c`, `web/ui/subnotes.js`) on six kinds of subject (device, BLE advertiser, SSID by its octets, GNSS satellite, aircraft, APRS station), append-only with retraction as a row, only retracted notes folding at the caps (64 a subject, 20,000); `GET /api/frrs/notes`, `GET /api/frrs/notes/marks`, `POST /api/frrs/note`; `/api/glossary`; slothweb.db v10 (`note`, `relation.via`) with its migration from v9, its failure case and the chain from v7; `via` gains `agent`; the bundle's `device.notes` and `ble.notes`.
+
+Slice 2: `slothweb-mcp` (`web/mcp/`, `make web-mcp`), an MCP server over slothweb's HTTP API on loopback, 22 read tools and 5 write tools; `slothweb --web-agent-secret PATH` and the `X-Slothweb-Agent` header (`web/src/web_agent.c`): a write proving the run's secret, from loopback with no Origin, is recorded `via: agent`; one without the header can never be; a wrong secret is 403. New page [[slothweb-mcp]]; [[slothweb]], [[cli-reference]].
+
+## 2026-11-11 — KARMA_PROBE_FORGE (#187 S2); PMKID_HARVEST and HANDSHAKE_HARVEST (#172)
+
+**Source**: #187 and #172, integration round 2026-11-11.
+
+#187: `KARMA_PROBE_FORGE` (T1557, WARN/CRIT) for a BSSID answering stations' directed probe requests for SSIDs it never beaconed, the classic KARMA radio that `KARMA_AP`'s beacon fan-out cannot see. `src/karma_detect.c` records answers paired to their requests; the `[y]` view gains an FR column; knobs `karma.forge_ssids` and `karma.forge_window_s`. Sources: Dai Zovi & Macaulay 2005, airbase-ng. S3 (probe-response latency) not built: no primary source. `karma.ssid_thresh` is now bounded by `MAX_AP_SSID_HISTORY` (8), since a larger value could never be reached and switched `KARMA_AP` off silently.
+
+#172: `PMKID_HARVEST` and `HANDSHAKE_HARVEST` (T1040), from `src/harvest_track.c`, which joins association requests, EAPOL-Key messages and deauthentications. Five `harvest.*` knobs, all heuristic. Sources: Steube 2018, the hcxdumptool README, and §12.7 as the collector cites it. Tests use hand-built frames, not pcap fixtures. [[alerts]], [[alert-remediation]].
+
+## 2026-11-11 — own-state alerts, the beacon memory on sys_status, designated networks (JSONL 1.2.0)
+
+**Source**: owner requests 2026-11-11.
+
+`SENSOR_UNDERVOLT` (WARN) and `SENSOR_SOURCE_DOWN` (WARN; CRIT for the monitor radio and the IP capture), own-state kinds read off `sys_status` (`src/alerts/rules_sensor.c`), held across flaps and resolved with the new `alert.resolve` reason `recovered` after 120 s clear. `sys_status` gains `beacon_recall_*`, the state of the memory behind EVIL_TWIN's late-arrival signal; slothweb's Sensor health says whether that signal is on or quiet. A new change-only `ownership` record carries the `--my-ssid` and `--my-bssid` rosters and the known-device roster's count (not its MACs); slothweb (`web/src/web_own.c`) marks designated networks "yours" in the SSID drawer, Probes and the WiFi AP table. [[jsonl-schema]], [[slothweb]].
+
+## 2026-11-11 — slothweb: the agent secret by group, agents retract agents' notes, restarts inside an hour
+
+**Source**: owner request 2026-11-11 (the OpenClaw agent on the same machine).
+
+`--web-agent-group NAME` writes the agent secret `0640` in a group holding slothweb's user and the operator, so `slothweb-mcp` needs no sudo; `slothweb.service` gains `RuntimeDirectory=slothweb` and gives `fchown` back to its filter. An agent may retract only notes written `via: agent` (`403 not_agent_note`); the page may retract any. slothweb.db v11 `anom_cover` keeps each run's observed minutes, so an hour split by a restart is judged on all runs' minutes and fed from the minute tier; a kill loses only the minute in progress. [[slothweb-mcp]], [[slothweb]], [[deployment]].
+- 2026-11-11 — [[fleet]] (#192 I5): locating an emitter two or more of the owner's sites hear, from each site's RSSI by sloth's own model (`src/rf_model.h`, now a leaf both sloth and slothweb link; ITU-R P.1238-10), with a one-sigma band, receivers calibrated by another site's own radio (`own=1`, the header's `own_macs`, bounded +/-20 dB, 2.4 GHz Wi-Fi only), readings paired within 120 s on skew-corrected clocks; two sites give the range circles' crossings and the nearer site by dB, three a least-squares fix; `/api/fleet/locate`, the overview's `calibration`, the map's located emitters and metre scale. A stored 0 dBm is no reading, and an ARP-only device takes its probe reading. Updated [[slothweb]], `web/README.md` and `research/papers/rssi-distance-estimation.md` ("Two or more sensors").
+
+## 2026-11-11 — slothweb-mcp `--from-loopback`
+
+A slothweb bound to the host's Tailscale address (`--web-bind
+100.x.y.z:8770`) listens on nothing at `127.0.0.1`, and a connection to
+the bound address comes from that address, so `slothweb-mcp` could not
+write to it. `--from-loopback` binds `127.0.0.1` (or `::1`) as the
+source before connecting, as `curl --interface 127.0.0.1` does; slothweb
+sees a loopback peer and takes the agent secret by its existing rules.
+A loopback source reaches this host only, so it needs no
+`--allow-remote`. [[slothweb-mcp]] section 7 adds the setup for an agent
+on another machine, through `ssh -T`. [[cli-reference]].
+- 2026-11-11 — [[fleet]] (#192 I6): GNSS regional or local. The export's `gnss=1` (the newest fix and the tracked median C/N0 on the `gnss` line; `gnss_event` lines, the four GNSS keys' `alert_incidents` of the week); the pull samples each receiver (coverage spans and a week's reference position kept in slothweb.db `meta`, no schema step); each GNSS incident and each JAM_IND / CN0_DROP the samples show classified regional (same class at a site within `--peer-gnss-region-km` within 120 s), local (covered sites silent) or undetermined (none covered); the baseline between static sites against 3 x (eph + eph) with the site past its own bound named; a clock step at one site named to it, the skew beside it; `/api/fleet/gnss`, the overview's `gnss`, the Fleet tab's GNSS panel. The window and the region are choices with no source, said so in the page and the route's `basis`.
+- 2026-11-11 — [[fleet]] (the merged views, owner request "combine data from all sloth hosts in the web ui make non local devices and data show in a grey state"): `/api/devices`, `/api/wifi/aps` and `/api/ble` carry the peers' rows (`web/src/web_fleetview.c`): a local row another host reported gains `sites`, a key only a peer reported follows the local rows on the page that ends the list as `"remote": true` with `site` and only what `peer_sightings` holds, at most 100, in the route's own sort, never a key this site holds; `/api/device/{mac}` and `/api/ble/{addr}` answer for a peer-only address with each host's row and `note` naming the hosts that saw it; `fleet=0` is the route's own answer byte for byte, nothing merged without a `--peer` or outside Hybrid; the page draws remote rows grey with the host's name, a `+name` on shared local rows, and a per-view "This site / All sites" choice (`fleet.devices`, `fleet.aps`, `fleet.ble`). Display only: no risk, alert, anomaly, baseline, series, triage, tile count or export reads them. No schema change.
+- 2026-11-11 — [[fleet]] (the merged views, the Probes tab): `/api/probes/clients` and `/api/probes/ssids` carry the peers' `probe` rows in the route's window (`web/src/web_fleetview.c`): a station with no `probe_clients` or `pnl_clients` row here is a remote row with its MAC, the SSIDs the peers heard it ask for and the times, every sloth.db-only member `null` or absent; an SSID no `pnl_ssids` row names is a remote row with its counts `null`; a local station or SSID a peer also heard gains `sites`, one a peer; `/api/device/{mac}`'s `fleet` gains `probe_rows`; `fleet=0` is the route's own answer byte for byte; `/api/probes/shared` and `/api/probes/groups` never merge (the similarity is this site's). The page: grey rows with the host's name, `+name`, "This site / All sites" kept as `fleet.probes`, a grey station opening its drawer, a grey network listing its hosts. No schema change.
+- 2026-11-11 — [[fleet]] (#192 I7): aircraft across the sites. The export's `adsb=1` (an `adsb_rx` line: the decoder's state and messages/s and its demonstrated coverage, the farthest airborne position per 30-degree sector over 24 h from the site's own position; `aircraft` lines for sloth.db's `adsb_aircraft` rows changed within 6 h, the current visit's newest position, each held to the importer's checks); stored as peer_sightings kinds `aircraft` and `adsb` (two days, 3,000 rows a peer) and `meta` `fleet.adsb.<peer>`, no schema step; an I6 export refuses `adsb=1` and the puller falls back for the hour. `/api/fleet/aircraft` classifies each aircraft confirmed (two receivers at overlapping times), unconfirmed (inside another receiver's demonstrated sector and 4/3-earth horizon while it answered, was not cut and heard others, yet never heard it), out of that receiver's coverage, or undetermined with its reason (`single_receiver` today), and flags two receivers' positions further apart than the aircraft could fly; the overview's `aircraft`; the Fleet tab's aircraft panel with a polar coverage plot per receiver. Basis `research/adsb/multi-receiver-verification.md` (new: Strohmeier, Lenders and Martinovic's survey, section V-F, and the radio horizon); the thresholds are choices, said so. Updated [[adsb]], [[research-corpus]] and `web/README.md`.
+- 2026-11-11 — [[fleet]] (#192 I7 review): the aircraft cross-check's paths to a false `unconfirmed` closed. An export whose aircraft read never ran (no `sloth.db`, budget spent, body full) now says `truncated_aircraft`, not an empty complete list; a peer read at its 3,000-row cap, or a comparison out of room, reads as a cut answer. A sector's reach is the median of its hourly farthest position, so one bad decode or a ducting evening cannot stretch it; the horizon credits no antenna height and needs the receiver's own altitude (`no_site_altitude` otherwise). A position's time is bounded by `pos_prev` (sloth rewrites a held position each heartbeat), which widens the window, asks the second receiver to be hearing others at both ends of it, and widens the mobility allowance instead of flagging a stale position as a jump. The research document's horizon is now the stated 4/3-earth derivation, its survey quotations re-checked against the PDF.
+- 2026-11-12 — [[fleet]] (the merged views, the ADS-B tab): `/api/adsb` and `/api/adsb/seen` carry the peers' `aircraft` rows (#192 I7's, `web/src/web_fleetview.c`): an address neither the panel's table nor (for the inventory) `sloth.db`'s `adsb_aircraft` holds is a remote row with what the peer's line held (address, callsign, squawk, category, emergency, on-ground, its newest altitude as `alt`, speed, track, position, RSSI, messages, the times), the decoder's state, rates, alert and track absent; the table takes only a peer's aircraft from the last 660 s plus a pull interval, the inventory those in its `days` window and its `q`; a local aircraft a peer also heard gains `sites`. `/api/adsb/aircraft` gains `fleet` naming the hosts and each one's row, `remote` when this site holds nothing of it. `fleet=0` is each route's own answer byte for byte. The page: grey rows with the host's name, `+name`, "This site / All sites" kept as `fleet.adsb`, a peer's aircraft on the plot as a grey ring at its last position labelled with its host and no track; the Radar dome asks `fleet=0`. I7's cross-check untouched; no schema change.
+- 2026-11-11 — [[fleet]] (#192 I2, I3, I4, I8): identity across the sites. slothweb's `--my-ssid` and `--my-bssid` (this site's own networks, which sloth.db and the stream do not carry); the export's `ident=1` (`own_net` lines, replaced at each answer that counts them; on ap lines `ie_fp`, `vie_fp`, `wps_manuf`, `wps_model`, `wps_num` from the FRRS ledger and `attacks`, `attack_first`, `attack_last` from the `EVIL_TWIN` and `KARMA_AP` keys naming the BSSID at a field, read by `web_sdb_ap_attacks()`); peer_sightings kind `own_net` and meta `fleet.ident.<peer>`, no schema step; `/api/fleet/findings` (I2 probing for another site's own SSID, randomised MACs left out, known clients exonerated; I3 a site's own BSSID or SSID heard beyond its reach and one BSSID at two places at once; I4 one fingerprint with an attack alert at two sites, in order; I8 known against incident, peer verdicts shown and never applied); each check that needs distance judged against an AP's P.1238 reach to the site's weakest AP signal less 20 dB, so the owner's two sites, 16.8 m apart, read `co_located`; the overview's `findings` and the Fleet tab's identity panel.
+- 2026-11-12 — [[alerts]] (#197): `ATTACK_PATH` judges HTTP requests only. A paired response carries its request's host and path (`http_log_pair_response()`) with `src` = the server, and the rule fired it as a second CRIT `path:<server>:<label>`, the victim named as its own attacker with `match_ip` (so the per-alert pcap and `ALERT_TAGGED`) pointed at it; `rule_attack_path()` now skips `is_response` rows. `ATTACK_TOOL_UA` gains the same guard (a response keeps no User-Agent today, so no record changes). The ring's other readers checked: the captive-portal check reads responses by design, the HTTP view and the JSONL `http` record show both halves as observations, slothweb's `WM_HTTP_REQUESTS` already skips rows with `status`. Updated `alert-assessments/ATTACK_PATH.md` (and the `rule_file` lines of every `rules_wired.c` assessment after it, shifted by the change).
+
+## 2026-11-12 — `GNSS_TIME_JUMP`: a lateness that varies (#182)
+
+No rule change. The 2026-11-09 late-read guard sums, from the anchor,
+each pair's host gap past the receiver's on the pairs where the
+receiver kept its interval, so the sum is the read's lateness however
+it got there; the tests had only a steady 1.5 s. New:
+`test_time_jump_varying_reader_lag_does_not_fire` (a lateness wandering
+0.8..2.2 s with jumps of 1.3 s, and one jittering 1.4..1.6 s, judged
+at once and read by read; all four runs red with the guard removed) and
+`test_time_jump_step_after_varying_lag_fires` (a 5 s step at the
+ordinary cadence once the wander clears; red with every fix skipped).
+A pseudo-random sweep of 3,000 runs, lateness 0..3 s, fired nothing;
+it is not kept. Item 1 (judge the step on gpsd's `TOFF`) still waits on
+the owner's ruling on `?WATCH={"pps":true}`; no newer reference-host
+figures in `noise_verdict`, the host's sloth.db not read. Updated
+[[gnss]], `alert-assessments/GNSS_TIME_JUMP.md`.
+- 2026-11-12 — slothweb page header shows the host name (`/api/health` gains `hostname`) in place of the "M6" milestone label.
+
+## 2026-11-12 — EVIL_TWIN: two devices meant to be there; EVIL_TWIN_PROXIMITY on the accused half (#188, #189)
+
+**Source**: issues #188 and #189 (field sensor, 2026-11-04 to 2026-11-10).
+
+The last two benign CRIT shapes of #188 are WARN: a carrier SSID every subscriber's gateway broadcasts (`carrier_ssid`, -35 context, `+carrier SSID`; exact names) and a pair with a barely heard half (`faint`: strongest reading at or under -92 dBm, or fewer than the new knob `twin.crit_min_beacons` (5) beacons; `+faint`, gates a soft CRIT and moves no weight). Hard signals are untouched. `EVIL_TWIN_PROXIMITY` on an attributed pair now reports only the accused half (#189's "preferably the accused half"); an unattributed pair still reports either. [[alerts]], [[cli-reference]], `alert-assessments/EVIL_TWIN.md`, `alert-assessments/EVIL_TWIN_PROXIMITY.md`.
+- 2026-11-12 — [[slothweb]], [[slothweb-mcp]] (#198): many alerts triaged as one. `POST /api/frrs/triage/bulk` (one state on up to 100 ids at one token, each id written as `/api/frrs/triage` writes it, each one's outcome reported); incidents (`POST /api/frrs/incident` add/member/close, `GET /api/frrs/incidents`): a decided state over alerts by id and standing filters (type, address, first_seen window) that auto-join new alerts until the close, a member reading the incident's state unless its own decision is at or after the incident's; `/api/alerts`'s `incident=`; slothweb.db v12 (`incident`, `incident_member`) with its migration; the Alerts page's incidents panel, selection and bulk verdict (`web/ui/incident.js`); five slothweb-mcp tools, an agent closing only an agent's incident. Updated `web/README.md` and `docs/web-frrs-spec.md` §3.7, §5.2.
+- 2026-11-12 — [[slothweb]] (owner request "when multiple sloths exist on the network use that for better location in the radar view"): the Radar tab's fleet areas. With a `--peer`, `/api/fleet/locate` for `wifi`, `ap` and `ble` every 30 s, each located emitter drawn as a light translucent `--data` area on the dome's ground through its own log projection: a least-squares fix's disc, else where every site's one-sigma band overlaps, else a fainter wash over the nearer site's side when `nearest` is outside its sigma, else nothing; the alpha shared out over the areas so overlaps read darker, under every mark; peer sites as hollow squares; hover or tap for the key, form and band and a side panel; a device dot and its area linked; the **fleet areas** button, `radar.fleet` kept only when off, hidden with no peer; nothing fetched under Local. No route and no schema change. Updated [[fleet]] and `web/README.md`.
+- 2026-11-12 — [[slothweb]] Radar fleet areas, review: the nearer-side wash reaches past its site's disc (sites more than twice the band plus 20 m apart drew nothing); an overlap's label sits inside it; a tap takes an area only with nothing picked, so tapping off the marks still clears; `/api/fleet/locate` fetched only with a peer in `/api/health` and the button on; stacked alpha capped at a third of `--data`; "may be within" in place of "fix" on the label.
+- 2026-11-12 — [[posture-report]] (#190, the rest): `--report-interval` and `SIGUSR1` now also keep `snapshot.live.txt` beside `--snapshot-out` (hidden `.tmp`, `fsync`, rename; `# session<TAB>running`; removed when the shutdown snapshot is written), so the AP inventory is current on a long-running sensor while `snapshot.txt`, which the shipped unit also reads as `--baseline-in`, still moves only at a clean stop. `--report-interval` with only `--snapshot-out` is accepted. New knob `report.retain_days` (90, `0..3650`, 0 = forever) deletes per-session records and `.unclean` files at start and shutdown, only with `--report-interval` or `--report-history`. A TSan test drives a beacon writer thread against forced live writes. The posture page's Cadence section, which still said "written once at exit", now lists every file. [[cli-reference]], [[deployment]].
+
+## 2026-11-12 — the self roster takes what the iface rows do not carry (#183)
+
+The self roster was one address per `/proc/net/dev` row, capped at 32.
+A new platform op, `get_self_macs` (Linux: `src/platform/linux_self.c`),
+adds every netdev's `IFLA_ADDRESS` and `IFLA_PERM_ADDRESS` from an
+rtnetlink dump, each Wi-Fi phy's sysfs `macaddress` and `addresses`
+pool, and every wireless device in nl80211's interface dump, which is
+the only source for a device with no netdev (a P2P device probing from
+its locally administered address). Asked on the first tick, on any
+change to the interface set, and every 30 s. The roster grows from 64
+to 128 and, when full, drops the least recently confirmed address
+instead of refusing the newest. Per-scan random addresses belong to no
+interface and stay uncovered. BSD, Windows and the stub have no source
+beyond their rows. [[alerts]], [[cli-reference]],
+`alert-assessments/MY_NETWORK_RECON.md`, [[alert-remediation]].
+- 2026-11-12 — [[jsonl-schema]], [[slothweb]], [[alerts]] (#187, #172 remainder): `jsonl_version` 1.3.0, a MINOR bump for three added record types, `karma_suspect`, `harvest_station` and `harvest_chain` (`src/jsonl.c` `jsonl_emit_lures()`): the tables `KARMA_AP` / `KARMA_PROBE_FORGE` and `PMKID_HARVEST` / `HANDSHAKE_HARVEST` read, one change-only record per row, a `gone` record when a row leaves its table, counts only. slothweb keeps them (`web/src/web_lure.c`), answers `/api/lures` and shows the WiFi view's "lures and key harvesting" card (`web/ui/lure.js`). Its detail audit now lists `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN` (`rules_sensor.c` binds each field to a plain variable; no detail text changed). Updated the four kinds' assessments and `web/README.md`; `tests/replay/golden.jsonl` moves only in `sensor_health`'s `jsonl_version`.
+- 2026-11-12 — [[ble]] (#156 item 1, follow-up): two more tests pin `watch_findings()`'s per-group drop count past the group cap (`tests/test_ble_rules.c`). A group is (sensor, category), so one category on two sensors is two drops; a stale row of a group does not stand in for the group, so its first recent row past the cap is counted. Each was seen red under its mutation (the `seen` scan without the `sensor_iface` comparison, and without the recency test); both clauses had been unpinned. No behaviour change, no wiki page text changed. Item 2 (`--ble-rotation-hints`) is unchanged; item 3, the 802.11 crosswalk, still waits on #151's captures.
+- 2026-11-12 — [[attack-hardware-fingerprints]] (#151, the parts buildable from public sources): `src/attack_hw.c`. (1) The known-stack IE-order table: matcher pinning hash and count, collision reported as ambiguous, a validator refusing any row without a capture SHA-256 or with an `UNVERIFIED` evidence string; ships with **no rows**, because none of the seven wanted stacks has a citable source for its element order. (2) The Pineapple setup-AP pairing: a `KARMA_AP` BSSID plus a different live BSSID beaconing exactly `Pineapple_` and four hex digits, the setup SSID Hak5's Mark VII docs state (`research/tools/wifi-pineapple-mk7.md`); adjacent MACs, shared order hash, channel and timing are not documented, so not used. (3) The verdict layer: `tool`/`stack`/`pair`/`oui` into `none` / `suspected-<device>` / `corroborated-<device>`, corroborated needing two classes with one capture-backed (unreachable today). On the `KARMA_AP` detail and as `hw_verdict` / `hw_signals` (`jsonl_version` 1.4.0); never moves severity or confidence. `rules_twin.c` gains a four-line hook in `rule_karma_ap()`; the assessment anchors after it moved by 3-4 lines. `tests/replay/golden.jsonl` moves only in `sensor_health`'s `jsonl_version`. Updated [[jsonl-schema]], [[tool-fingerprints]], `alert-assessments/KARMA_AP.md`, `docs/views/alerts.md`.
+- 2026-11-12 — TUI forms of the glyph set (#195, R12 of `docs/web-visual-spec.md`): `src/tui_glyph.c` holds the pure cell forms. The Devices Enter detail draws G2's S-meter (`███████▁▁ ▁▁  S7  -61 dBm`, on the band's scale, the window's range in words) and G4's 7 by 24 hour-of-week grid (`▪` at four heat levels; `src/dev_how.c` counts this run's watched and present hours, empty after a restart). The Channel view's activity bar is now G3's horizon strip of control frames a minute over 24 minutes, each row on its own scale (`▄` to half, `█` above), and the table is cut at the edge instead of wrapping. The Alerts view opens with G7's begun rug, one lane per severity over the last hour. The Twins view draws G8's chain lanes (deauth, twin, assoc, karma) for the selected pair, keys matched at their BSSID fields. Updated `docs/views/devices.md`, `channel.md`, `alerts.md`, `twins.md`.
+- 2026-11-12 — [[slothweb]] (#195, the V-slices' smaller leftovers): F4, a tile's explanatory prose is its hover note (the tile's `title`) and the line under its glyph a state or nothing; the Records panel's per-type G1 (`records.rate`, the busiest 4 of the first 8 types in the hour, `web/ui/facts.js`); G4's 56 by 28 form on the Lookup card (`glyph.g4()` gains `pad`); the probe-flood rug on the WiFi chains panel (`/api/alerts` by type name, a lane per severity, `SlothAir.floodRug()`); the Flows `counts` column as a G6 bar per number; `/api/wifi/chain` takes a BSSID with an EVIL_TWIN or KARMA_AP row and no deauth key as a candidate, the BSSIDs an alert names read first. Still left, with reasons in `docs/web-visual-spec.md` §10: History's per-severity ticks, the Flows matrix's TUI form, G2 on the managed card, a 6 GHz probe's band, the screenshots and §9's DOM walk. Updated `web/README.md`.
+- 2026-11-12 — [[alerts]] (#197): `ATTACK_PATH` stops naming the victim as its own attacker. The HTTP observation ring carries both halves of a conversation, and `http_log_pair_response()` deliberately copies the request's `Host` and path onto the response, whose `src` is the server — so `rule_attack_path()`, which walked every row and keyed `path:<src>:<label>`, fired a second CRIT per malicious request keyed on the server and pointed `match_ip`, the `--pcap-dir` carve and the device's `ALERT_TAGGED` risk bit at it. It and `rule_attack_tool_ua()` now walk request rows only, through `http_entry_is_request()` in `src/http_log.h`, which is where the ring's request/response attribution contract is now written down. The `[h]` view, the JSONL writer and `cp_check_response()` want both halves (or only the response) by design and are unchanged; `docs/wiki/alert-assessments/ATTACK_PATH.md` had already described this duplicate and recommended exactly this fix on 2026-11-03. Still open: escalating the severity on the paired response's status, and showing that status on the request's row.
+- 2026-11-12 — [[fleet]] #196 known limits: the backfill keeps a suspended segment's cursor and pages a new cut's gap first (a peer cut at every pull now reaches its oldest rows); the GNSS reference's re-anchoring recorded in meta `fleet.gnssref.<site>` and shown (`reference_moved_at`, `reference_moved_m`, the GNSS card's "re-anchored N m on <date>"); the skew measured at the request's middle in ms with its round trip (`rtt_ms`), `skew_moved` at 2 s plus half of it; the own-radio list re-read every 10 min with every `/sys/class/net` entry looked at; a peer's `own_net` rows expired a day after its last ident answer (`own_expired`); aircraft still have no backfill, the reason stated. No schema step, no export version change. Updated `web/README.md`.
+- 2026-11-12 — [[fleet]] #196 known limits, review: the GNSS reference re-anchors only once the moved median has settled (two reference samples past the bound and within it of each other), so a re-siting is announced once at its whole distance rather than twice at half (the median of an even count stops halfway for a sample); the skew's wall-clock base no longer loses up to a second when the second turns between the caller's `time()` and the pull; a test for the merge past 4 suspended backfill segments; the aircraft no-backfill reason corrected on the cap (the first pull's six hours is about 260 at beta-site's rate). Updated `web/README.md`.
+- 2026-11-12 — [[alerts]] (#194): `EVIL_TWIN`'s late arrival can no longer be switched off two ways. The beacon table's memory of dropped APs (`src/beacon_snoop.c`) keeps band, `enc` and vendor-IE hash, so a return as another radio is an arrival (announcing ahead on another band, security or IEs no longer works); and it does not remember entries first heard during a beacon flood (`beacon.flood_thresh` in `beacon.flood_window_s`; exempt for 60 s and 256 entries after the table was empty), so a flood no longer overflows it. Open: the same radio announced when the gap does not count; a flood kept under the threshold. #193 (the chain naming a locally administered copy with no evidence of its own) stays as it is under the owner ruling, pending field data. `alert-assessments/EVIL_TWIN.md`.
+- 2026-11-12 — [[gnss]] #182 item 1 (owner ruling "182 yes"): sloth's one `?WATCH` line is now `?WATCH={"enable":true,"json":true,"pps":true}` (`GPSD_WATCH_LINE`, bytes pinned in `tests/test_gps.c`), so gpsd also sends `TOFF`; `src/gps.c` parses it (a malformed one is a parse error) into a TOFF ring on `gnss_hist_t`, and `GNSS_TIME_JUMP` judges a step on consecutive TOFFs (gpsd's real − clock, free of sloth's read latency), falling back to the read-time measure and its late-read guard, kept unchanged, where no TOFF was read within 3 s. TOFF is never paired with a fix (the second site's gpsd sent 7 TOFF to 14 TPV and no PPS in 5 s). The detail names the measure. No JSONL field, no sloth.db column. Updated the GNSS_TIME_JUMP assessment (and the four GNSS assessments' line citations), [[cli-reference]], [[location]], `docs/views/gnss.md`.
+- 2026-11-12 — [[alerts]], [[attack-hardware-fingerprints]], [[jsonl-schema]] (#187, #151 owner decisions): `KARMA_PROBE_FORGE` is WARN while a radio only forges answers (two stations and a beacon fan-out no longer make it CRIT) and CRIT when a station is captured: sent a forged answer for a name, asked the BSSID to associate under it within the new `karma.forge_assoc_s` (60 s, 5..600), and granted (`karma_forge_captured()`, ` +captured <sta>`). Its detail's `fan_note` became `fan`, and slothweb's detail audit now lists the kind. `KARMA_AP` subtracts `KARMA_W_IE_VARIETY` = 15 confidence when its SSIDs carry two or more distinct, all-known IE fingerprints (`+IE variety`), and is CRIT on a `corroborated` hardware verdict; `suspected` stays context. The tool attribution's `low/med/high` maps onto the tiers as `suspected` at every field count, so the attribution drops the word (`[ESP32 Marauder? provisional]`) and the verdict states the tier once; `jsonl_version` 1.5.0 for `karma_suspect`'s `tool` value form; the replay golden regenerated for it.
+- 2026-11-12 — [[fleet]], [ADR 0009](adr/0009-fleet-monitor-only.md) (owner hard rule): fleet sharing carries monitor data only and names its host. The export reads devices in the Monitor scope and withholds this host's local network whole (`web_fleet_local_build()`: the managed card's joined networks, every BSSID carrying their SSIDs, its station dump, every ARP MAC, `--my-ssid`/`--my-bssid`, its own radios, the roster), sends alerts and verdicts only of 64 allow-listed types (36 withheld, a new type withheld until classified) with no address, never `own_net` or `own_macs`, and adds `hostname` and `share_rule` to the header. The importer refuses the same from any peer (`refused_by_rule`) and a pre-rule peer's wifi/ap/probe rows; a one-time purge at start removes what an earlier build stored. I2 and I3 with a peer as the owner answer `no_own_networks_shared`. The rule is a hard rule in agents/AGENTS.md, CLAUDE.md and agents/converge.md. ADR 0008 left as written; 0009 supersedes its "What travels". Updated `web/README.md`, `docs/wiki/cli-reference.md`, the ADR index.
+- 2026-11-12 — [[fleet]], [ADR 0009](adr/0009-fleet-monitor-only.md) revised to the owner's clarification ("yes anything that is thru monitor mode is game"; "upgrade together"): the rule is provenance, not subject. Share what sloth heard in monitor mode; never what it learned through the joined network or the wire. The joined network's APs and stations as heard over the air, probes for its SSIDs and a device the LAN also knows (its radio members only, read in the Monitor scope) now travel; `own_net` travels again under `ident=1`, so I2 and I3 with a peer as the owner run again (a peer that names none still answers `no_own_networks_shared`); `own_macs` names the monitor radios only, told from the managed card by `/sys/class/net/<if>/type` (801-803, an address no non-monitor interface shares; an unreadable type withheld); `MY_NETWORK_RECON` and `UNKNOWN_DEVICE` allow-listed (66 types, 34 withheld). Still withheld: ARP, DHCP, mDNS, flows, IPs, host names, the station dump, the managed card's scan and MAC, LAN and wired alert types, alert `ip`, verdicts on IPs, `DEV_RISK_SELF` rows, rows known only from the LAN. `share_rule` is `"monitor_only/2"` (importers take `"monitor_only"` too); the importer keeps `own_net` and an attested peer's `own_macs`; meta `fleet.rule.monitor_only.v2` resets every peer's clock and wifi/ap/alert/verdict backfill once so peers are asked again for what now travels, deleting nothing it allows. The local-network set (`web_fleet_local_build()`, `web_sdb_local_net()`, `web_sdb_keychk*()`) and its fail-closed cut are gone. The hard-rule sections of CLAUDE.md, agents/AGENTS.md and agents/converge.md restated. Updated `web/README.md`, `docs/wiki/cli-reference.md`.
+- 2026-11-12 — [[attack-hardware-fingerprints]] (#187 S3): probe-response latency per BSSID, `src/probe_latency.c`, an observation with no cited threshold and in no verdict. Pairs a Probe Request with the Probe Response addressed back to its station inside one dwell (dwells numbered from the radiotap frequency, so a `--hop` retune voids the pair), first transmissions only, one answer per request per BSSID; radiotap TSFT when present (now decoded by `src/radiotap.c`), the pcap stamp otherwise, never mixed. Count, min, p10, median, p90 over the last 32 pairs, directed and wildcard apart. Not exported yet (waits on the next JSONL version) and not shown. Research: `research/papers/probe-response-latency.md` (Mishra, Shin & Arbaugh 2003 baseline; hostapd-mana and airbase-ng source read; no lure measurement exists).
+- 2026-11-12 — [[attack-hardware-fingerprints]] (#187 S3 review): the BSSID's first answer is now remembered on the request (up to 16 answering BSSIDs each), not as the row's last-answered request, so a hostapd-mana per-SSID burst interleaved with an answer to another station no longer pairs its second answer; ambiguous and Retry-set answers mark the request answered too; a request heard only as a retransmission is voided (`req_retry`), and an overflowed answer list refuses unlisted BSSIDs (`resp_untracked`). The dwell rule's limit is written down: a silent excursion back to the same frequency inside 200 ms is not seen. `research/papers/probe-response-latency.md`: the hostapd-mana call path corrected to what `beacon.c` at d8d9e212 does (`hostapd_send_probe_resp_from_params()`), and the no-ack policy on broadcast-wildcard answers noted.
+- 2026-11-12 — #199 bench helpers, `tools/lab/` (see `tools/lab/README.md`). `lab_capture.sh` runs tcpdump (dumpcap when present) on a monitor-mode interface for a set time or size and writes `lab/YYYY-MM-DD/<test>-<utc>.pcap` with a `sloth-lab-capture/1` sidecar carrying every plan #145 ruling 2 field (hardware and chipset, driver and firmware, band and channel, tool and version, test, UTC start and end, SHA-256, host). It refuses an interface sloth captures on: `SLOTH_IFACE` or an `--iface` in `/etc/default/sloth`, an `--iface` in a running sloth's command line, or a running sloth's packet socket bound to it (`/proc/PID/fd` against `/proc/PID/net/packet`). A sloth without `--iface` takes the first type-803 interface `/sys/class/net` lists (`find_monitor_iface()`, `src/capture/probe.c`), so on a host with two monitor radios only the sockets show which one it has; unreadable sockets are a refusal. `expect.sh` reads `/api/alerts?incident=N` and `/api/frrs/incidents?id=N` and judges the alert types against the matrix row (L7 and L8 are not judged by alerts). `lab/` is git-ignored; `make deploy-test` runs `tests/deploy/test_lab_tools.sh` on fixture `/sys` and `/proc` with stub tools.
+- 2026-11-12 — [[jsonl-schema]], [[attack-hardware-fingerprints]] (#187 S3 export): JSONL 1.6.0. `beacon` gains `probe_lat` — the BSSID's probe-response latency (`src`, `n_dir`, `med_dir_us`, `p10_dir_us`, `p90_dir_us`, `min_dir_us`, `n_wild`, `med_wild_us`), absent until a pair was measured; not used in any verdict, no cited threshold; `beacon` is per pass with no change-only signature, so it signs nothing. `sensor_health` gains `evict_probe_latency` (`SH_EVICT_PROBE_LATENCY`, appended): the pending-request ring and the BSSID table's evictions. Not in sloth.db, slothweb or the fleet export.
+- 2026-11-12 — [[cli-reference]], [[deployment]]: `--monitor-iface NAME` pins the 802.11 monitor radio. `probe_open()` used to take the first type-803 netdev in `/sys/class/net` readdir order, which a second radio in monitor mode on the same host (the #199 bench attacker beside `alfa0` on W9FJC) could win. Pinned, it opens exactly `NAME` or nothing: missing or not type 803 sets `monitor_err` and does not fall back to discovery; `[m]` refuses a retarget elsewhere. Unpinned, unchanged. Separate from `--iface` by the owner's 2026-10-04 ruling that the monitor stream stays outside the allow-list. The shipped unit passes `--monitor-iface ${SLOTH_IFACE}`, the variable its `ExecStartPre` helper already prepares.
+- 2026-11-12 — [[jsonl-schema]], [[alerts]], [[cli-reference]] (#172 follow-up): JSONL 1.7.0. Harvest clusters: every station row and chain row in `src/harvest_track.c` gets a cluster id (one counter, never 0, never reused in a run; a row that ages out and returns is a new cluster, the issue's `(sta, window_start)` key). `harvest_note_eapol()` returns the id the message was counted in and `eapol_observe_frame()` stores it on the event before pushing it: the station row's for an M1/M2 on a target the station asked, the chain's for the M2 that joined a victim (it wins). `eapol_event_t.harvest_cluster_id` takes the four bytes freed by moving `signal_dbm` into the padding after `ssid`, so neither the event nor `sloth_state_t` grows. On the stream: `eapol.harvest_cluster_id`, and `cluster_id` + `qevict` on `harvest_station` / `harvest_chain` (signed). QUEUE_EVICT correlation: `harvest_snapshot()` reads `queue_evict_snapshot()` before its own lock and marks a station row whose (target BSSID, station) pair, or a chain whose (BSSID, victim) pair, had a release within `harvest.window_s`; the PMKID_HARVEST / HANDSHAKE_HARVEST details end `cluster #N` and name that pair, which is the QUEUE_EVICT key; severity unchanged. Harvest-friendly AP posture: a 64-row table of BSSIDs heard sending the PMKID KDE in M1; `beacon.harvest_posture` is 1 with a PSK-family AKM, 0 without, absent when not observed; the issue's FT qualifier is not applied (FT is an AKM, and no source says it stops the KDE). TUI: the `[e]` view gains a `clust` column (heat-red while the cluster is a finding), a posture line for the selected row's AP, and `[g]` to show one cluster's rows under a summary (STA or station count, BSSIDs, PMKIDs, span); `view_claims_key()` claims `g` for VIEW_EAPOL. Assessment anchors repointed (`rules_harvest.c:52`, `:126`). `tests/replay/golden.jsonl` moves only in `sensor_health`'s `jsonl_version`. Not built: the hcxdumptool IE fingerprint (waits on #199 L5's capture). Updated `docs/views/eapol.md`, `docs/views/alerts.md`, `alert-assessments/PMKID_HARVEST.md`, `alert-assessments/HANDSHAKE_HARVEST.md`.
+- 2026-11-12 — [[jsonl-schema]], [[alerts]], `alert-assessments/EVIL_TWIN.md` (#193 field data): JSONL 1.7.0. `sensor_health` gains `twin193_since`, `twin193_floods`, `twin193_floods_chain`, `twin193_named`, `twin193_late_laa`, `twin193_coincide` and `twin193_excl_carrier` / `_faint` / `_sibling` / `_any`, before `jsonl_version`: how often a deauth flood the twin-chain rule examined met a late-arriving locally administered copy of the flooded AP's SSID and security with no other twin evidence, once per flood episode, with its denominators and the exclusions that would have applied. Counted in `src/alerts/twin_field.c` from read-only hooks in `rule_evil_twin_attack_chain`; no alert, detail, severity or taint reads it (`tests/test_twin_field.c` compares the alert table with the hooks on and off). Shown on slothweb's Sensor health view (this session and the total across sloth restarts slothweb has seen) and in the posture report. Prefix `twin193_`, not `chain193_`: `tests/test_ble_rotation.c` refuses any `"chain` key in sloth's output. Replay golden regenerated for the added fields.
+- 2026-11-12 — [[slothweb]], [[slothweb-mcp]], [[jsonl-schema]] (#187 slothweb remainder): one BSSID's KARMA detail. `GET /api/lures/bssid?bssid=` (`web/src/web_lure.c` `web_lure_bssid_route()`) answers the BSSID's `karma_suspect` row now and its changes over time (the newest 16, kept past `gone`), the stream's `KARMA_AP` / `KARMA_PROBE_FORGE` incidents whose key names it exactly (by the alert page's id), the `hw_verdict` / `hw_signals` of its newest `KARMA_AP` record, and the beacon's `probe_lat` (JSONL 1.6.0), which `web/src/web_jsonl.c` now keeps as `probe_lat.<member>` beside `loc`, with the record's text bound checked for the longer prefix. `web/ui/karma.js` draws it in a drawer opened from the lures card's BSSIDs and from the device drawer; another host's grey row reads `-`. `slothweb-mcp` gains `sloth_lures` and `sloth_lure_bssid` (25 read tools, 34 in all). The jsonl-schema `beacon` row no longer says slothweb does not carry `probe_lat`. No sloth-side change.
+- 2026-11-12 — [[slothweb]], [[jsonl-schema]]: the two SQLite stores' size, tracked (owner: "add a monitor to track sloth db usage in the host and trends window. added it to the records tile with long term graph showing the limit for storage"). JSONL 1.7.0: `sensor_health` gains `db_max_mb` (sloth's `db.max_mb`, 0 unlimited, -1 no database open), before `jsonl_version`, in the change-only signature; `tuned` alone could not tell the default from a cut list. slothweb `stat()`s sloth.db and slothweb.db (main file plus `-wal`) on each `sys_status` (at most once a fine bucket) into `sys.db_mb` (keyed `sloth` / `slothweb`, the `sys` class, every tier), and on every `/api/sys` into its new `storage` member with the limit, where it came from, the share and a band (80 % near, 95 % full). Sensor health: a tile per store and a `storage` trend row on 0 to the limit with the limit drawn; the Overview's records/s tile: a line per store and sloth.db's 30 d G1 with the limit, linking to `#health?focus=db`. glyph.js G1 takes `opt.limit`, a `--sev-warn` rule, ported to `test_glyph.c`. `make replay-golden` regenerated: every `sensor_health` line gains the member.
+- 2026-11-12 — [[slothweb]] (#200): `/api/alerts` under `incident=` or `triage=` (other than `any`) no longer pages forever. Those filters apply after sloth.db is read to the furthest offset a page can ask for (`WEB_ALERTS_OFFSET_MAX + WEB_ALERTS_LIMIT_MAX + 1` groups), so on a field sensor holding more groups than that, `"more"` stayed true with `next_offset` repeating while the filtered rows fit one page. sloth.db's groups past that read now set `total_more` only, never another page, and a page that shows no rows never names a next one. `web/tests/test_alerts.c :: test_filtered_paging_ends` (3,000 groups; seen red with the old `more`).
+- 2026-11-13 — [[slothweb]], [[fleet]]: the Radar's Wi-Fi and BLE devices leave the north axis (owner: "instead of on the n/s axis in the radar use the data to plot the most probably point location. color code the wifi points and light transparent polygons for the shape of the estimated location polygon"). Each fleet area is an explicit polygon: a fix's disc, or a band overlap or nearer-side wash traced by marching squares over a grid of the region's margin (at most 67² samples, once an answer), filled and hit-tested even-odd so a hole stays a hole (a traced boundary, not a convex hull, which would cover the places both readings rule out). A device with an area is solid at its most probable point (the fix's centre; the server's candidate when inside the region, else the likeliest grid sample under one Gaussian a site about its range, sigma half its band; the side's anchor); one without is hollow on its distance ring at an angle from its address's hash, only the distance an estimate. ■ station, ◆ AP, ● BLE; a Wi-Fi mark and its polygon share one of five hues `--rw-0..4` (theme.css, both themes) by FNV-1a of the MAC, an owner ruling over R10 recorded in `docs/web-ui-spec.md`; `web/tools/palette.c` fails the build if two are within 15 CIEDE2000, one within 20 of `--signal`, the heat ramp, `--tui-normal`, `--data` or `--ink`, or under 3:1. Labels placed free (the two stacked columns gone). Display only: `/api/fleet/locate` and what travels unchanged. Updated `web/README.md` (Radar, Design tables), `docs/web-ui-spec.md` §8.14.
+- 2026-11-13 — [[ssh-snoop]], [[rdp-snoop]], `alert-assessments/SSH_BRUTE_FORCE.md`, `alert-assessments/RDP_BRUTE_FORCE.md` (#202, field-reported): `SSH_BRUTE_FORCE` / `RDP_BRUTE_FORCE` now threshold a sliding window, not a lifetime count. `banner_count` / `connect_req_count` never decayed and the table has no time expiry, so a pair that ever crossed 10 banners/CRs stood as a CRIT forever, re-firing on every tick until eviction or a restart — a Beta-Site sensor logged 131,014 `SSH_BRUTE_FORCE` fires against 10 ordinary `Accepted publickey` logins. Fix: `ssh_snoop.c` / `rdp_snoop.c` each keep a private `flood_window_t` ring per flow (not in `ssh_flow_t`/`rdp_flow_t` themselves — those are copied wholesale into the already multi-megabyte `sloth_state_t`, and embedding the 272-byte ring directly overflowed the test binary's 8 MB default stack through a few nested by-value copies) and export one `brute_count` int, recomputed from the ring every `*_snoop_snapshot()` tick via the shared `flood_window_count()` (src/flood_window.c, #88 — the same primitive deauth/probe flood already use). Two new `--tune` knobs, `ssh.brute_window_s` / `rdp.brute_window_s` (default 60 s, 5..3600); `ssh.brute_force` / `rdp.brute_force`'s upper bound dropped from 1000 to 32 (`FLOOD_WIN_CAP`), since a windowed count can never exceed the ring it is read from. `banner_count` / `connect_req_count` stay as lifetime operator context; no rule reads them. No JSONL or db schema change — the ring is private, and the two counters it fed are unchanged fields. Updated the two assessments with a dated "Resolved" note rather than rewriting their field analysis.
+- 2026-11-13 — [[jsonl-schema]] (`sys_status.receivers`): the known-receiver table (`src/sys_status.c` `sys_usb_table[]`) gains the SDRplay RSP2/RSP2pro (`1df7:3010`), RSPduo (`3020`) and RSPdx (`3030`) from `usb.ids` 2026.06.26, and the RSP1B (`3050`) and RSPdx-R2 (`3060`) from systemd's `hwdb.d/70-software-radio.hwdb` (systemd 257), which `usb.ids` does not carry yet. A USB device not in the table is not listed, so beta-site's RSPdx-R2, the APRS receiver since 2026-11-13, was missing from slothweb's attached receivers. No record shape change.
+- 2026-11-13 — [[aprs]], [[jsonl-schema]], [[cli-reference]], [[slothweb]] (#204): the APRS channel from the GNSS position, a declared decoder frequency, and a silent decoder. `aprs_region_of()` (`src/aprs.c`, pure, coarse rectangles most specific first) maps the position sloth already stamps with (`s->gps` `loc_*`: a fresh fix, else `--location`; no gpsd client tool) to `north-america` 144.390, `iaru-r1` 144.800, `australia` 145.175, `new-zealand` 144.575, `japan` 144.640, `brazil` 145.570, else `unknown` with no default, or `none` with no position; the last region is held through a lost fix. Only the region and its channel are kept, never the position. `--aprs-freq HZ` declares the decoder's **configured** frequency (the host's `APRS_FREQ`, not `rx_fm`'s fs/4-high hardware tune); more than 6.25 kHz off the region's channel is `aprs_freq_mismatch`. `--aprs-silent-hours N` (default 6, 0 off): the log readable (`live`) and no packet for that long since the newest packet or this run's first read is `aprs_silent` (the beta-site log sat at 0 bytes from 2026-11-11 and nothing said so; `aprs_state` stays `live`, the file being fine). `sensor_health` gains `aprs_region`, `aprs_region_hz`, `aprs_freq_hz`, `aprs_freq_mismatch`, `aprs_silent`, `aprs_silent_after_s` and `aprs_quiet_since`, only with `--aprs`, after `twin193_*` and before `db_max_mb`; the region, mismatch and silent flag are signed. A field addition is a MINOR bump by the rule; it is left to the session that owns 1.8.0 (Versioning, "Pending bump"). slothweb's APRS tab names the region and channel (and the declared frequency) on its health line and says "silent for Xh" or "frequency mismatch" in a notice; the hard-coded 144.390 MHz is gone from the page's note, `web/src/web_aprs.h`, `include/sloth.h` and the wiki. No tool edits `/etc/default/aprs`: sloth stays receive-only and file-only.
+- 2026-11-13 — [[aprs]], [[slothweb]]: the APRS tab's positions panel is an ATC-style radar scope (owner: "i want the positions view in aprs to look like an air traffic control radar with our GPS loctioin in the center"). `web/ui/aprs.js` `scope()`: centred on the sensor by the Radar's rule (`/api/gnss`: a fix under 60 s old, else the last fix, else `--location`), north up, each station at its haversine bearing and range; five range rings, a 5/10/30° bearing rose, a 6 s sweep re-lighting each blip with an afterglow decaying to 0.35 (stepped alpha, no gradient; still under `prefers-reduced-motion`), a 5-minute velocity leader, a data block (callsign; course and speed; altitude); `range` auto (smallest step holding 80 % of live stations, the rest on the rim with their distance) or 2..500 km, kept by `keepCtl`; click a blip to select. The sensor's coordinates are never drawn: `web/tests/test_aprs.c :: test_aprs_page_scope` counts `ctr.lat` / `ctr.lon` in `scope()` (seen red with a `fillText(ctr.lat…)` added). No position: the old fitted plot, its note saying why. Owner ruling row in `docs/web-ui-spec.md` exempts the scope from R12. Display only: no route, record or schema change.
+- 2026-11-13 — [[snmp-snoop]], [[mqtt-snoop]], `alert-assessments/SNMP_COMMUNITY_BRUTE.md`, `alert-assessments/MQTT_BROKER_BRUTE.md` (#203, sibling of #202): `SNMP_COMMUNITY_BRUTE` / `MQTT_BROKER_BRUTE` now threshold a sliding window, not a lifetime count. `community_count` / `connect_count` / `connack_fail_count` never decayed and the tables have no time expiry, so a pair that ever crossed the threshold re-fired CRIT on every tick until eviction or a restart. `snmp_snoop.c` keeps a private `flood_window_t` per flow, noted on each new community, exported as `snmp_flow_t.brute_count`; `mqtt_snoop.c` keeps two, one for CONNECTs and one for refused CONNACKs, exported as `mqtt_flow_t.brute_connects` / `brute_fails`, so the either-path trip is unchanged. All recomputed every `*_snoop_snapshot()` tick, the rings staying out of the public structs as in #202. New `--tune` knobs `snmp.brute_window_s` / `mqtt.brute_window_s` (default 60 s, 5..3600); `snmp.community_brute`, `mqtt.brute_connects` and `mqtt.brute_fails` drop their upper bound from 1000 to 32 (`FLOOD_WIN_CAP`), defaults 5 / 10 / 5 unchanged. Lifetime counters stay as operator context. No JSONL or db schema change. The two assessments gain a dated "Resolved" note; seven `rule_file` anchors in `rules_wired.c` repointed.
+- 2026-11-13 — [[snmp-snoop]], `alert-assessments/SNMP_COMMUNITY_BRUTE.md` (#203 review): the SNMP window noted a guess only where `community_count` increments, so once one sweep filled the 8-entry community set the pair was blind to every later sweep for the life of the row. `record_community()` (`src/snmp_snoop.c`) now also notes a string the full set does not hold, once per change of community (a walk on one unstored string counts once, not per packet). `snmp.community_brute` 9..32 is reachable; the saturation trap the assessment named is gone. Pinned by `tests/test_snmp_snoop.c :: test_window_counts_new_guesses_past_full_set`, both halves seen red.
+- 2026-11-13 — [[sdr-sweep]] (new), [[deployment]] §9, [[slothweb]]: the SDR sweep and slothweb's Spectrum tab (owner request). `sloth-sdrsweep` (`src/sdrsweep/`, built when pkg-config finds SoapySDR) sweeps 0.5-2000 MHz in 6 MHz steps (8 MS/s, 8192-point Hann FFT, 16 frames a step) for 60 s of whole sweeps, writes `latest.json` (100 kHz max-hold rows, base64 bytes, and a peak list at full resolution: +6 dB average or +16 dB max-hold over the step's median floor, merged within 50 kHz, `clock harmonic?` at n x 24 MHz, `internal` against a `--calibrate` run by absolute level) and `status.json`, and stops cleanly on SIGTERM (a killed SDRplay client wedges the API service). `sloth-sdrsweep.{service,path}` and its own sysusers account, installed not enabled; the APRS hand-over is a documented drop-in. slothweb: `GET /api/spectrum`, `POST /api/spectrum/run` (gate as every write, no store needed, no agent, 409/429/503), `--spectrum-dir`, `--spectrum-request`; `web/ui/spectrum.js` draws the isometric waterfall. `make` now builds the helpers on its `all:` line (a prerequisite named before its variable was set expanded to nothing, so `sloth-ble-scan` was built only by `install`). Absence assertions seen red under a mutation each: tests/test_sdrsweep.c (overlap counted once, merge distance, calibration by absolute level, no transmit call, not linked into sloth, no site service in the unit) and web/tests/test_spectrum.c (GET never writes, refusals create nothing, the agent line, strings escaped, links not followed, the allow list).
+- 2026-11-14 — [[sdr-sweep]]: `sloth-sdrsweep` fails closed on its cooldown record. A `status.json` that exists but cannot be read, or carries no `state`, now refuses the run (exit 3, "remove it to run") instead of reading as "no previous run"; a missing file (the first run) still passes. Found on beta-site 2026-11-13 when a hand-written, malformed `status.json` let the helper go on to open the radio (APRS held it, so it failed to open and nothing was harmed). slothweb's own 10-minute bound was never affected.
+- 2026-11-14 — [[adsb]], [[aprs]], [[slothweb]]: the ADS-B tab's positions panel is the same ATC-style radar scope as APRS (owner: "we were supposed to be adding a radar type display to ads-b like aprs has"). The scope moved out of `aprs.js` into `web/ui/ppi.js` (`window.SlothPPI`: `centre()`, `geo()`, `autoRange()`, `make()` with `scope()`, the frame loop and click-picking), which both tabs drive with a spec of targets and tracks; APRS draws as before. ADS-B: rings in nautical miles (`adsb-range` auto or 5..250 NM, kept by `keepCtl`), each aircraft a ▲ turned to its track and coloured by altitude over 45,000 ft (dim on the ground, another host's grey and hollow), a 1-minute leader, history dots, and the ATC data block (callsign; altitude in hundreds of feet with ↑ / ↓ past 300 ft/min, ground speed; an emergency or a 7500 / 7600 / 7700 squawk on a third line, ringed). The sensor's coordinates are never drawn: `test_aprs_page_scope` counts them in `ppi.js`'s `scope()` and `test_adsb_page_scope` in ADS-B's spec (both seen red under a mutation). Display only: no route, record or schema change.
+
+- 2026-11-14 — [[rtl433]] (new), [[jsonl-schema]], [[cli-reference]] (#208 slice 1): `--rtl433 SPEC` tails the JSON event log a local, already-running `rtl_433` writes (`-F json`, one object per decode), the same shape as `--aprs` and the file form of `--adsb` — sloth never opens, tunes, hops or runs the SDR and uses no network, so `MISSION.md` §2 is unaffected. `src/rtl433.c` is the pure half (line parser, spec parser, bands and signature) and `src/capture/rtl433_reader.c` the tail (rotation, `copytruncate`, a missing file as `waiting`, 256 KiB a poll, a line over 1024 bytes one bad line). Each line is keyed `(model, id)` into 256 rows that drop the least recently heard on full (`STAB_OLDEST`, `evict_rtl433`); the allow-list is only what rtl_433's `docs/DATA_FORMAT.md` and `src/r_api.c` document, and a temperature or pressure keeps the unit of the key it arrived under rather than being converted. The per-model keys (`state`, `code`, `flags`, …) are counted in `rtl433_other_keys` and not stored: `flags` alone is `DATA_INT` in `src/devices/tpms_citroen.c` and `DATA_STRING` in `tpms_renault.c`, so the name does not fix the type. `time` is recognised and skipped (its format follows `-M time` and the locale, and the file does not say which), and a row's clock is the host's. JSONL `1.8.0`: the change-only `rtl433_device` record (RSSI in 3 dB steps, the frequency in whole MHz, readings to one unit; `msgs`, `last_seen`, `snr`, `noise` and `freq2` written and unsigned) and the `rtl433_*` block on `sensor_health` with a per-reason reject breakout; a `rtl433` sensor kind and `source_status` row. Also fixed, found here: `sensor_register()` compared a caller's full source id against a stored, truncated copy, so a source id of 32 bytes or more (this one's, on the reference host) re-registered on every poll until the 16-slot registry filled. Not in this slice: the slothweb table and drawer, any detector, a sloth.db table, and the fleet export, which withholds the kind until the owner classifies it (ADR 0009 fail-closed).
+- 2026-11-14 — [[rtl433]], [[slothweb]] (#208 slice 2): slothweb's rtl_433 tab and `GET /api/rtl433` from sloth's `rtl433_device` records and `sensor_health`'s `rtl433_*` block, kept in memory (`web_rtl433.c`, 512 rows, 660 s after sloth's last record, a new `first_seen` a new row); every string and number re-checked against sloth's own rule and bound, readings served in the unit they arrived in; Monitor scope, `out_of_scope` under Local; an `rtl433` member on `/api/health`. The fleet importer refuses an `rtl433_device` line from a peer (pending owner classification); the export has no writer. The receivers tab's `USED BY` stays blank for this source, and why. The rename-rotation note for `StandardOutput=append:`. No device drawer.
+- 2026-11-15 — [[sqlite-schema]], [[slothweb]] (#207 slice 1, prerequisite for the Spectrum tab's Wi-Fi/BLE overlay): `beacon_aps` gains `operating_width` (schema v14), the `sloth_ch_width_t` sloth already decoded from HT/VHT/HE operation IEs (#66) but never persisted, so every reader of `sloth.db` treated every AP as 20 MHz wide. Upgrade-only on conflict (`MAX()`), the same reasoning as `downgrade_flags`'s OR: a beacon that stops carrying the operation IE it last carried must not erase a wider width this file already recorded. The v13 → v14 step is a single additive `ALTER TABLE`; `WEB_SDB_SCHEMA_MAX` moved with it (`test_schema_max_is_sloths` holds the two equal — caught locally as a `web-test` segfault before this companion bump, reported in the commit). slothweb's `/api/wifi/aps` serves the field as `operating_width`, through the M4 allow-list and the per-route forward-compat check (an older `sloth.db` without the column blinds that one route, as `downgrade_flags`/`akm_bits` already do). Not in this slice: the Spectrum tab's actual overlay rendering (BSS widths, BLE 37/38/39 bars, the legend) — see #207's open items.
+- 2026-11-15 — [[architecture-rf-split]] (new), `adr/0010-wifi-rf-daemons.md` (new), [[index]], `adr/README.md` (#211 slice S0): the owner's rulings of 2026-11-14 and 2026-11-15 recorded as ADR 0010 (the sensor becomes `sloth-wifi` and `sloth-rf`, one repository; a shared gpsd reader linked into both; `sloth-rf.db` with the same DDL and `DB_SCHEMA_VERSION` and its own data socket; one slothweb; BLE stays with Wi-Fi, Meshtastic belongs to RF; headless first; `SLOTH_JSONL_VERSION` 2.0.0 at cutover per ADR 0007; `MISSION.md` §2 and ADR 0009 unchanged), and the coupling inventory produced by grep with each command beside its list: the RF files and what each `*_health_poll()` writes, the once-per-process services, GNSS in Wi-Fi-side code, the run flag in `src/capture/capture.c`, slothweb's single socket and database, the packaging, and the places the tree and #211 disagree (`sensor_positions`, `SENSOR_UNDERVOLT` and the GNSS health members marked OPEN). Docs only: no code, record or schema change.
+- 2026-11-15 — [[architecture]] (#212, slice S1 of #211): the build seam for the sloth-wifi / sloth-rf split, no behaviour change. `CORE_COMMON_SRCS` is the union of `CORE_BASE_SRCS`, `GNSS_SRCS` and `RF_SRCS`; the worker run flag moved from `src/capture/capture.c` to `src/run_flag.c` so no RF or GNSS object references a `capture.o` symbol; the poll stage table is data the application passes (`g_poll_sloth`, `g_poll_wifi`, `g_poll_rf`), with `health` and `sensors` split into capture, GNSS, RF and host stages in the order the single functions ran. The replay golden is byte-identical and the sensor registry slots are pinned in `tests/test_poll.c`.
+- 2026-11-15 — [[architecture-rf-split]], `adr/0010-wifi-rf-daemons.md`, [[adsb]], [[aprs]], [[rtl433]], [[gnss]], `alert-assessments/` (#212 review of S0 and S1, docs only): the inventory's §5 table gave no `capture/capture.h` include for `bt_monitor.c`, `probe.c` and `capture.c` (lines 15, 13 and 3 at `3148c553`); its §4.1 row named `gps_spec_parse()` at `src/main.c:1061`, which is `gps_reader_baud_ok()`; its migrate-tool `case` ends at 309, not 311. Its note on what S1 made stale now also lists the sentences that call `st_health()` and `st_sensors()` one function and the "one list" of §2.1. ADR 0010's open items now match the inventory's §9 (the GNSS source row and health members were missing; the symlink lifetime is marked as not from the inventory), and "neither daemon needs the other at run time" moved from Decision to Consequences as derived, since #211 does not extend ADR 0005. The four reader pages cite `src/poll_rf.c` / `src/poll_gnss.c` for the stages S1 moved, and 38 assessments cite `alerts_update()` at `src/poll_core.c:32` (`poll_st_alerts()`); the dated "Second pass" lines keep the line numbers of the commit they name.
+- 2026-11-15 — [[architecture-rf-split]], [ADR 0010](adr/0010-wifi-rf-daemons.md): three of ADR 0010's open items ruled by the owner — sloth-wifi keeps GNSS health (source row, sensor row, `gps_*` / `gnss_*` members) beside `loc_*`; both daemons write `sensor_positions`, each to its own database; `SENSOR_UNDERVOLT` fires from sloth-wifi only. The `sloth` symlink's lifetime stays open. `agents/AGENTS.md` now names the three source groups instead of `CORE_COMMON_SRCS` (#212).
+
+- 2026-11-15 — [[slothweb]] §Camera tab: `GET /api/camera.jpg` and `--camera-dir` (owner request: "show a current still image"). `web_camera.c` serves a capture helper's `latest.jpg` read-only (O_NOFOLLOW, regular file, 8 MB cap, whole-JPEG SOI/EOI check, nosniff, GET/HEAD only); `web/ui/camera.js` draws it on a canvas via `createImageBitmap()` so the page audit and CSP are unchanged. web/tests/test_camera.c (symlink, partial JPEG and POST cases each seen red under a mutation).
+- 2026-11-15 — [[sdr-sweep]], [[deployment]] §9.2, [[slothweb]]: the Spectrum tab's ranges (owner: "show different ranges: last 3 scans, 1 hour, 5 hours, 12 hours, 24 hours. keep the display isometric and readable"; a sweep every 5 minutes, the shared SDRplay's decoder losing ~1 min in 5 accepted). `sloth-sdrsweep-auto.timer` (installed, not enabled) starts `sloth-sdrsweep.service` at `*:0/5`, so a site's drop-in applies to it; `SuccessExitStatus=3` for a start refused inside the cooldown; the helper's default cooldown 600 s to 150 s, with slothweb's own 120 s floor under the Run button. After each sweep run the helper writes `history/<started>.json` (one max-hold row, median floor, times, grid, the 64 strongest peaks; ~33.8 KB, 9.7 MB a day) and prunes past 25 h and 400 records. `GET /api/spectrum?range=` reads them through the strict reader, one row per run, max-pooled by k = ceil(runs x bins / 1.5 M) (24 h: fours, 1.85 MB measured), bad records skipped and counted; the answer without `range` is unchanged. The tab: a range selector kept per browser, rows placed by time with gaps hatched and dashed on an HH:MM axis, depth and ridge height adapting to the row count, an offscreen canvas under the hover. Absence assertions each seen red under a mutation: web/tests/test_spectrum.c (a member twice, another grid, O_NOFOLLOW, the start-in-window check, the name-in-window filter, the base64 result, the 120 s floor) and tests/test_sdrsweep.c (prune's name rule, prune's count bound, the top-64 selection).
+- 2026-11-15 — [[victron]] (new), [[deployment]] §10, `adr/0011-sloth-va-transmits.md` (new), `adr/README.md`, [[index]], `research/victron/instant-readout-and-gatt.md` (new): `sloth-va`, the Victron reader the owner asked for ("connect to victron hardware and gather the data stream"). A separate binary under its own account, built where libsystemd is found, installed not enabled, linked into neither sloth nor slothweb. Instant Readout decoded from Victron's "Extra manufacturer data" (records 0x02 and 0x04) with AES-128-CTR of its own (FIPS-197, SP 800-38A vectors) under a BlueZ AdvertisementMonitor, i.e. a kernel passive scan; scheduled GATT sessions read only the 65970000 service Victron staff documented, else record the service list. PINs and keys via LoadCredential=, never logged. ADR 0011 records why it may transmit while sloth stays passive and that BT_OWN_TRANSMIT is left to fire on its connections. Absence assertions in tests/test_va.c each seen red under a mutation and restored: the key-check removed (test_wrong_key_refused), field()'s length check dropped (test_truncated_fields_absent), the SOC range check dropped (test_soc_out_of_range_absent), a diagnostic reason made a format (test_diag_never_carries_the_line), src/va/va_victron.c added to CORE_COMMON_SRCS (test_helper_is_not_linked_into_sloth_or_slothweb).
+- 2026-11-15 — [[victron]], [[cli-reference]], [[jsonl-schema]], [[deployment]] §10.3: `--victron SPEC`, sloth's reader of the JSONL `sloth-va` writes, the same tail as `--rtl433` (`src/victron.c`, `src/capture/victron_reader.c`): an allow-list of value names with bounds, one row per address (16, a 17th refused and counted), the `victron` sensor kind, the change-only `victron_device` record (values banded in the signature) and `sensor_health`'s `victron_*` block, only with the flag; JSONL MINOR bump pending. sloth opens no Bluetooth socket for it. Not yet: sloth.db history, slothweb's tab, a source_status row, fleet classification (fail closed). Absence assertions in tests/test_victron.c each seen red under a mutation and restored: the bound test made always false (test_out_of_range_absent), victron_value_band() unbanded (test_signature_bands), the refused-record count dropped (test_table_refuses_a_17th; raising the cap instead crashed the suite), the `if (s->victron.configured)` guard removed (test_sensor_health_block).
+- 2026-11-15 — [[cli-reference]], [[architecture]], [[jsonl-schema]], [[architecture-rf-split]], [[alerts]], [[pcap-export]], [[retention]], [[gnss]], [[adsb]], [[aprs]], [[rtl433]], [[location]], [[threat-model]], [[attack-hardware-fingerprints]], `alert-assessments/` (#213, slice S2 of #211): `sloth-rf`, the RF half of the sensor as a second daemon, additive (`sloth` keeps every flag and its stream is unchanged but for one field). It reads the GNSS receiver and the ADS-B, APRS and rtl_433 decoders' files or loopback sockets through the readers `sloth` uses, runs `g_poll_rf` and the rule table it selects (`g_alert_table_rf`: the GNSS rules, `ADSB_EMERGENCY`, `SENSOR_SOURCE_DOWN`; not `SENSOR_UNDERVOLT`, owner ruling 2026-11-15), and writes its own JSONL, data socket (bare default `unix:/run/sloth-rf/sloth-rf.sock`) and database (sloth's DDL and `DB_SCHEMA_VERSION`; the RF tables and `sensor_positions` fill, the capture tables stay empty). Headless; not installed (#215); slothweb does not read it yet (#214). `sensor_health` gains `daemon` (`"wifi"` / `"rf"`), `jsonl_version` 1.9.0; the replay golden differs by that member and the version string only. To link it without the capture, the alert engine, `sys_status`, the memory sample, the JSONL writer and `libver` stopped naming capture modules (the inventory's new §10 lists each seam with the symbol that forced it; 159 archive members and libpcap before, 46 and none after), and the Makefile checks the linked binary's symbols on every build (`check_rf_no_capture`). The flag checks both daemons share are one copy (`src/gnss_flags.c`, `src/rf_flags.c`, `src/daemon_start.c`); `make replay-check` runs both binaries on the refused command lines and compares stderr. `--victron` (the entry above, landed first) was folded into the same structure during the rebase: its check is in `src/rf_flags.c`, its record and `sensor_health` block in `src/jsonl_rf.c` (after rtl433's, before `daemon`), and sloth-rf takes the flag, runs the reader and writes both; its pending MINOR bump is this 1.9.0. `twin_class_label()` moved from `rules_twin.c` to `engine.c`, so the `rule_file` line of the 20 assessments citing that file was repointed.
+- 2026-11-15 — [[architecture]], [[architecture-rf-split]], [[cli-reference]], [[jsonl-schema]] (#213 review of S2): the `nm` gate on sloth-rf guarded per archive member and named too few of them (`linux_tcpdiag.o`, `linux_neigh.o`, `discovery.o` and seven frame decoders could link with it green), so its definition list names those members, a pattern list holds twelve families, and its import list refuses the forward resolver and the netlink / raw-socket calls; the member count is 49, measured, not 46; sloth-rf's bare `--data-socket` remedy no longer offers `sloth`'s port 8765; its JSONL flag is documented as `-o` / `--out` with `--jsonl` as an extra spelling `sloth` refuses; the `beacon_recall_*` rows say sloth-rf's `sys_status` omits them.
+- 2026-11-15 — [[cli-reference]] (#213, owner ruling: both daemons take the same flags): sloth-rf drops `--jsonl`, the spelling of `-o` / `--out` it alone accepted. It is `unknown argument`, exit 2 with the usage, as in `sloth`; the usage text and the `## sloth-rf` table no longer name it. Seen red before the change: `tests/test_rf_args.c :: test_sinks_and_account` (exit 2, the first line, nothing set, absent from `--help`), `tests/test_docs_consistency.c` (`src/rf/rf_args.c` parses no `--jsonl`) and `tests/replay/rf_refusals.sh` (both binaries, exit code and first line).
+- 2026-11-15 — [ADR 0010](adr/0010-wifi-rf-daemons.md): the `sloth` symlink stays with no end date (owner: "keep it for now"), `slothweb.service` keeps `Wants=sloth-rf.service`, sloth-rf takes `-o` / `--out` only, and Victron is an RF-side source. `agents/AGENTS.md` describes the two daemons, `src/rf/`, the poll tables and the three JSONL files (owner approved). Also on `main`: the two `readdir` walks of the sweep history are in `tests/cppcheck.supp`, `va_victron.c` checks its bound before the index, and `web_spectrum.c` no longer leaks a history record's data when the record is outside the window or repeats its `data` key (the sanitize job's 9-byte leak on 15a2760b).
+- 2026-11-15 — [[victron]], [[slothweb]], [[sqlite-schema]], [[jsonl-schema]], [[cli-reference]], [[architecture-rf-split]]: the web for the Victron gear. sloth.db v15: `victron_devices` (entity tier) and `victron_readings` (observation tier, at most one row a minute per device, `DB_VICTRON_MIN_S`), written by `write_victron()`; the v14 → v15 step is a stamp alone (new tables only), tested on a v14 file and on one whose stamp a trigger refuses. `source_status` gains a `victron` row (`SYS_SRC_VICTRON`, appended), so `SENSOR_SOURCE_DOWN` covers the file: live ok however quiet, missing stale, read error down. `victron_device` gains `services` (the newest session's UUIDs; sloth now keeps them, charset-checked, absent rather than cut) and `values_src` (`readout`/`gatt`); JSONL `1.10.0` (main's #213 took `1.9.0` and settled the earlier pending bump); `tests/replay/golden.jsonl` regenerated (the version and the `victron` source_status row; 62 records); sloth-rf's stream carries the row too (five sources, `tests/test_rf_loop.c`), [[cli-reference]] and [[architecture-rf-split]] say so. Fleet: `victron_device` withheld whole and refused on import (GATT values are an authenticated connection's; the row merges both paths). slothweb: the Victron tab (`web/ui/victron.js`, `.css`), `GET /api/victron`, `GET /api/victron/history`, `web_victron.c`, `web_sdb_victron_history()`, the allow-list's `victron_readings` columns, `WEB_SDB_SCHEMA_MAX` 15; Monitor scope, Local out_of_scope. Absence assertions, each seen red under a mutation and restored: `services_take()`'s charset test removed; merge()'s services copy made conditional; `write_victron()`'s 60 s test removed, and its readings-advanced test removed; `migrate_step()`'s return ignored (v14 failure test); the sys_status row's `configured` guard removed, and its LIVE mapped to STALE (the quiet-file half of `test_victron_source_down`); slothweb's value bound dropped, `clean()` widened to any printable, `jservices()`'s charset removed, `route_victron()`'s none_here forced 0, the history route's Local reason removed, `age_out()`'s TTL made false, the stale test made `age > after * 10`, `have` made `schema >= 14`, and the fleet importer's walk() skipping a `victron_device` line.
+- 2026-11-15 — [[slothweb]] § Two daemons (new section), [[architecture-rf-split]] §11 (new), [[fleet]], [[cli-reference]], `web/README.md` (#214, slice S3 of #211): one slothweb reads both daemons. `--rf-socket SPEC` and `--rf-db PATH` name sloth-rf's data socket and database, parsed and refused as `--socket` and `--sloth-db` are (a non-loopback one under `--strict`; `--rf-socket` naming `--socket`'s socket, its default included; `--rf-db` naming `--sloth-db`'s or `--store`'s file). Neither has a default, and without them every route answers what it answered before: the parent's binary and this one, given one fixed stream, answered fourteen routes alike but for the clock's members and the random alert handle. With `--rf-socket` a second ingest thread reads into a second `web_live_t` and each consumer has one writer (`web_ingest.h`'s table): sloth's stream no longer reaches the ADS-B, APRS, rtl_433 and Victron panels (so its `sensor_health`, which has no rtl_433 block, cannot clear that tab), sloth-rf's never reaches the metrics, triage, BLE, lures or links, and its series go to the rollup, which locks, and only to series the other thread never adds to (`records.*` stay sloth's). GNSS per the owner's ruling of 2026-11-15: sloth-rf's `gnss_*` records, and its health block and position when its `sensor_health` carries them, sloth's otherwise (`web_gnss_record_fallback()`), a fixed precedence. The host batch is sloth's once sloth has reported; source rows are owned by name; each daemon's `db_max_mb` is its own store's. `sensor_health`'s `daemon` is a second guard: the other daemon's record on a socket is counted and not applied, nor what follows it on that connection. With `--rf-db` the GNSS, ADS-B, APRS and Victron history, the fleet's aircraft and GNSS views and the export's aircraft and GNSS incidents are read from sloth-rf.db; the export's device, AP and alert lines stay sloth.db's, its header is one, and rtl_433 and Victron stay withheld (`web_fleetshare.c` untouched). sloth-rf's alerts are listed and counted with sloth's from the stream, and an RF alert's page reads `--rf-db`; the alert history's merge across two databases is not in this slice. `/api/health` `daemons` and `rf_db`, `/api/sys` `host_from` and a third store, the tick's `rf`, and the health page's blocks exist only with the flags. Absences seen red, each restored: sloth's `sensor_health` handed to the rtl_433 panel; sloth's copies of the RF records handed to the tabs; the guard off; the RF stream handed to the metrics and the lures; the host batch, the source rows and the `gnss` row with two writers; sloth's `sensor_health` writing the served GNSS slots; `daemons`, `rf`, `host_from` and the third store row in a one-stream answer; the RF history and an RF alert's page reading sloth.db; the export ignoring `src.rf`, and reading sloth-rf.db's devices and alerts; the four configuration refusals.
+- 2026-11-15 — [[slothweb]] § Two daemons, `web/README.md` (#214 review): an alert both daemons raise (the shared gpsd reader; sloth's RF rules until #216) is one incident, listed and counted once; with `--rf-db` an RF alert's list row, page, triage subject and bundle are sloth-rf.db's and never sloth.db's finding of the same key, and its page gives no `d` id (`db_file`, `db_id` null); every incident list holds both states (`WEB_LIVE_INC_ALL`); the sensor tile says sloth-rf's word in every scope; `alerts.fired` stays sloth's stream's alone, said under "Not in #214".
+- 2026-11-15 — [[deployment]] (#215, slice S4 of #211): packaging for sloth-rf. `packaging/systemd/sloth-rf.service` (the `sloth` account, both capability sets empty, `RuntimeDirectory=sloth-rf` and `StateDirectory=sloth-rf` of its own, `RestrictAddressFamilies=AF_UNIX`, the decoders' directories read-only with `-`, no dependency or ordering key, installed and never enabled), its inert `sloth-rf.service.d/gps.conf` (staged as `share/sloth/sloth-rf-gps.conf`), `packaging/default/sloth-rf`, and `packaging/bin/sloth-migrate-rf`, which moves `--adsb`, `--aprs`, `--aprs-freq`, `--aprs-silent-hours` and `--rtl433` from `/etc/default/sloth` to `/etc/default/sloth-rf` and copies `--gps`, `--gps-allow-remote`, `--gps-baud` and `--location`. `slothweb.service` gains `--rf-socket`, `--rf-db`, `ReadOnlyPaths=-/var/lib/sloth-rf` and `After=` / `Wants=sloth-rf.service`. New §10 of the page, rows in §2 and §6. Absences seen red before they were claimed. In `tests/test_unit_file.c`, by a one-line mutation of the unit each: `AmbientCapabilities=CAP_NET_RAW`; a `BindsTo=` and `After=` on the radio's device unit; an `ExecStartPre=+…/sloth-monitor-up`; `RuntimeDirectory=sloth`; a second `RuntimeDirectory=sloth` line; `RestrictAddressFamilies=AF_UNIX AF_INET`; `Requires=sloth-sensor.service`; `--location` in `ExecStart`; a `ReadOnlyPaths=` entry without its `-`; `SupplementaryGroups=`; in slothweb's unit `Requires=sloth-rf.service`, `ReadOnlyPaths=/var/lib/sloth-rf` without the `-` and `ReadWritePaths=/var/lib/sloth-rf`; in the drop-in a live `[Service]` and `#DevicePolicy=closed` moved into the gpsd block; in the defaults file a live `--adsb`; in the Makefile the `[ ! -x sloth-rf ] ||` guard removed and the defaults file installed without its `[ -e … ] ||`. In `tests/deploy/test_migrate_rf.sh`, by a mutation of the tool each: the dry run writing; the serial GPS and the conflict not refused; a moved flag left in `SLOTH_ARGS`; the GNSS flags moved instead of copied; the second run rewriting and backing up; a failed second rename not putting `/etc/default/sloth-rf` back, or leaving a new one; temporaries and backups left after a failure; a missing backup; the tool running `systemctl`; a commented `SLOTH_ARGS=` read as the value, or rewritten; the `AF_INET` step printed for a file-only move; nothing to migrate still writing a file; `--apply` without the binary; `--adsb-extra` taken for `--adsb`; unrelated flags travelling; an existing `/etc/default/sloth-rf` replaced by the template; the sensor file's mode lost; a flag given twice or quoting inside the value accepted. The host has no shellcheck, so the two new scripts were run under dash, `busybox sh` and `bash --posix`, with gawk, mawk and busybox awk, and not linted locally; CI's `make deploy-test` lints them.
+- 2026-11-15 — [[deployment]] (#215 review): six findings, all confirmed. (1) `slothweb.service` passed `--rf-socket` / `--rf-db` to a slothweb that exits on them when the unit is ahead of the binary: `make install` now refuses a `./slothweb` that lacks any `--flag` on the unit's `ExecStart`, and `make install-service` refuses, before writing anything, where the installed slothweb lacks one. (2) `Wants=sloth-rf.service` starts sloth-rf whenever slothweb starts, enabled or not (systemd.unit(5)); the unit comments and §2 / §6 / §10 said "installed and enabled" and now say what happens and that `systemctl mask sloth-rf` keeps it off; `install-service` installs `sloth-rf.service` only beside `/usr/local/bin/sloth-rf`, so it cannot fail `203/EXEC` under slothweb. `Wants=` itself stays, as #215 specifies. (3) `sloth-migrate-rf` refused a serial `--gps` only under `/dev/`; `src/gps.c` reads any value starting with `/` as a device, and so does the tool now. (4) `SLOTH_ARGS = …` (blanks before `=`), live for systemd (checked on 262 with a transient user unit), was "nothing to migrate"; both variables are now read that way and written back without the blanks. (5) A symbolic link at either defaults file was replaced by a regular file with its target left on the old flags; refused, naming `DEFAULTS=` / `RF_DEFAULTS=`. (6) Rules of the tool that no test held. Also found by the new signal test: an interrupt during the backup copy left the backup behind (the flag was set after the `cp`). Absences seen red before they were claimed, each by one mutation of the tool: the serial test put back to `/dev/`; the blank before `=` not allowed in `read_var`, or in `rewrite_var`; each `-L` test removed; each "backup already exists" test; the two-`SLOTH_RF_ARGS=`-lines and not-a-regular-file tests; each read-back test (a stub awk garbles the one rewrite); each `cmp` of a backup (a stub cp damages its copy); the single-quote arm of `unquote()`; `beast` dropped from the `AF_INET` hint; the flag-given-twice test limited to the sensor's file; each of the two signal traps (a stub cp or mv signals the tool); `-p` dropped from each of the four `cp` lines (the mode case is now 0664 under umask 022, since 0640 survives a plain `cp`); the backup flag set after the copy. In `tests/test_unit_file.c` and `tests/deploy/test_slothweb_unit.sh`, by the Makefile as it was: `sloth-rf.service` installed with no binary, and `install-service` writing the unit over a staged slothweb that lacks a flag.
+- 2026-11-15 — [[deployment]] (#215 landed on main after #214): the sloth-rf section is §11 because Victron's `sloth-va` took §10 the same day; every `deployment.md §10` reference in the sloth-rf packaging now says §11. `sloth-migrate-rf` moves `--victron` with the other decoder flags, `sloth-rf.service` may read `/var/lib/sloth-va`, and `packaging/default/sloth-rf` lists the flag (Victron is an RF-side source, ADR 0010). `tests/deploy/test_migrate_rf.sh` case `victron` seen red with the flag off the move list.
+- 2026-11-15 — [ADR 0001](adr/0001-three-repos.md): a "Rulings since" section records the owner's answers to all of #184 §5 — the presentation repository is `sloth-mesh` (not `sloth-dash`), the two new repositories are private under PolyForm Noncommercial 1.0.0, the vendor research workflow goes to `sloth-comint`, the alert assessments and research corpus stay in `sloth`, and the contract artifact is published as release assets on `sloth`. The older records and [[architecture-split]] still say `sloth-dash`; read `sloth-mesh`.
+- 2026-11-16 — [[architecture]] § Temporary files → new § File descriptors (#209): the suite's descriptor-leak guard. `tests/fd_guard.h` samples the open-descriptor count at every `RUN_TEST` boundary and fails the run naming the case whose count did not come back, with the new descriptors and their `readlink` targets; `/proc/self/fd` where it exists, else an `F_GETFD` probe to the soft limit, both routes exercised on one host. The verdict is the count, not the identity, and the exit sample is taken after a new harness teardown (`g_test_teardown`, the reset registry again) so a finding means "nothing releases this" — before the teardown 24 cases looked like leaks for borrowing a module descriptor the registry owns. What it found that the registry could not release: `alert_pcap` had no registered reset at all (`g_dirfd` and the sweep's `DIR*` lived until the next `alert_pcap_set_dir()`), and `eapol_clear()` — the `[e]` view's `[c]` key — left eapol export's `g_out_fd` pinned; hence `alert_pcap_clear()` and `eapol_export_clear()`, registered, with no production call site. No unbounded leak exists in the suite as it stands: the open count stays at 4-6 for the whole run. Also `db_error()`, the counterpart of `jsonl_error()` that the second CI sighting wanted: every `db_open()` failure path records its reason in the same words as its stderr line, and `tests/test_jsonl.c :: test_emit_sensor_health_reports_db_max_mb` prints it on a refusal as `test_twin_field.c` prints `jsonl_error()`. Absences seen red and restored: one `open("/dev/null")` added to `test_rm_tree_removes_a_0500_dir_of_our_own` (one failure, named, `fd 4 -> /dev/null`, every later case clean); `open_fail()` in `db_prepare_private()` reduced to its `fprintf` (`test_open_refusal_says_why`, two assertions); and `fdg_report()`'s delta test relaxed to `> 1` (the guard's own leak case).
+- 2026-11-15 — [[cli-reference]], [[architecture]], [[deployment]], [[slothweb]], [[adsb]], [[aprs]], [[rtl433]], [[victron]], [[gnss]], [[location]], [[fleet]], [[jsonl-schema]], [[sqlite-schema]], [[views-catalog]], [[alerts]], [[non-ip-sensors]], [[architecture-rf-split]] §12 (new), [ADR 0010](adr/0010-wifi-rf-daemons.md) (an "as built" note), [[what-sloth-does]], [[sloth]], [[index]], `README.md`, `web/README.md`, `docs/views/README.md` (#216, slice S5 of #211, the cutover; the one intentionally breaking slice, MAJOR signed off by the owner 2026-11-15). The Wi-Fi binary is `sloth-wifi`, with `sloth` a symlink to it in the build tree and in `$(PREFIX)/bin` (kept with no end date); `sloth-sensor.service` runs `/usr/local/bin/sloth-wifi`. It refuses `--adsb`, `--aprs`, `--aprs-freq`, `--aprs-silent-hours`, `--rtl433` and `--victron` with exit 2 and one line naming `sloth-rf` and `sloth-migrate-rf` (`src/rf_moved.c`), and links no decoder: the readers, the `adsb_aircraft` / `aprs_station` / `aprs_packet` / `rtl433_device` / `victron_device` records, the four decoder blocks of `sensor_health`, their `source_status` and sensor rows, `ADSB_EMERGENCY`, the ADS-B terminal view (deleted with its test and `docs/views/adsb.md`) and the interface strip's `adsb` token are sloth-rf's or gone. GNSS as ruled: one reader in both daemons; sloth-wifi keeps the flags, the `loc` stamp, `device_positions` and `sensor_positions`, the twin motion suppression, the `[#]` view and the receiver's health (`gnss` source row, sensor row, `gps_*` / `gnss_*` / `loc_*`), and no longer writes `gnss_fix` / `gnss_sky` / `gnss_sat`, the `gnss_fixes` / `gnss_sightings` tables or the four `GNSS_*` alerts. The seams that made it a link property: `sys_status_set_rf_side()` (`src/sys_status_rf.c`), `db_set_rf_side()`, `rf_side_install()` (`src/rf_side.c`), `g_poll_wifi` and `g_alert_table_wifi` in place of the union tables, and `check_wifi_no_rf`, an `nm` gate on the link, the mirror of sloth-rf's (seen to fail with a call to `adsb_state_name()` and to `rules_gnss_forget()` added to `src/main.c`). `SLOTH_JSONL_VERSION` is `2.0.0` in both daemons, with the migration table in [[jsonl-schema]]; nothing renamed, no number reassigned (`alert_type_t`, `sensor_kind_t`, `sys_src_id_t` are one numbering, absent rows are absent). The replay golden changed by the four `not_configured` decoder rows, `sources` 9 to 5 and the version. slothweb reads 1.x and 2.x and says which: `rf_stream` on `/api/health` and as the last member of `/api/adsb`, `/api/aprs`, `/api/rtl433`, `/api/victron`; a 2.x sloth-wifi with no `--rf-socket` is `not_configured` and the four tabs and the health view say so (`web/ui/rfstream.js`). Packaging: `sloth-migrate-sensor` accepts a unit running `sloth` or `sloth-wifi`; `make install-service` warns, twice, when the host's `/etc/default/sloth` still passes a decoder flag. The counts say which binary: `count:views` is sloth-wifi's, `count:rules` the kinds in the shared list, and two new markers, `count:rules-wifi` and `count:rules-rf`, the kinds each daemon raises (`make docs-counts`, `tests/test_docs_consistency.c :: test_counts_say_which_binary`). Unchanged, as ruled: `MISSION.md` §2, the fleet allow-list and device test (`web/src/web_fleetshare.c`), `web/tests/test_fleetshare.c` and `web/tests/test_fleet.c`; rtl_433 and Victron stay withheld. sloth-rf's behaviour is unchanged apart from the version string. Every absence assertion added was seen red under a mutation named at the assertion.
+- 2026-11-15 — [[deployment]], [[slothweb]], [[jsonl-schema]], [[sqlite-schema]], [[architecture]], [[architecture-rf-split]] §12, [[release-checklist]], [[attack-map]] (#216 review, no stream or schema change): `make install-service` refuses a pre-cutover install (`bin/sloth` with no `bin/sloth-wifi`, whose new unit would fail `203/EXEC`) and prints a `NOTE` when `/etc/default/sloth` has `--gps` and `/etc/default/sloth-rf` has none, since the `GNSS_*` alerts and the `gnss_*` records and tables are sloth-rf's and stop silently without it; §11.4 says that, that pre-cutover RF history stays in `sloth.db` and is not shown by a slothweb with `--rf-db`, and the serial-GPS order when a decoder flag is present (the sensor cannot be restarted to check the fix first). slothweb: the ADS-B and APRS stores clear their `sensor_health` block on a blockless record as rtl_433's and Victron's did, so a 1.x sensor upgraded under a running slothweb no longer reads "decoder live" for ever; `rf_stream.reading` names the stream's own `MAJOR` (`3.x` is not reported as `2.x`) and the health view marks one it does not know; `/api/gnss` carries `rf_stream` and the GNSS tab gives the not-configured reason for its empty fix history; the rtl_433 and Victron state lines name sloth-rf's flag. The 1.x to 2.0.0 table places the members both daemons write and says `evict_rtl433` stays in sloth-wifi's record at `0`. The `nm` gate's limit is stated: `src/db.c`'s RF table writers are in both daemons and off in sloth-wifi at run time. The release workflow checksums and attests `sloth-wifi` and `sloth-rf` by name (`sloth` is a symlink). The RF test scenario feeds sloth-va's file, so the Victron absence assertions on the sloth-wifi side have a control.
+- 2026-11-16 — [[research-corpus]]: `make gate` compares a rebuilt `research.db` with the committed one by content, not bytes; the SQLite header version stamp differed between the two hosts and turned every gate on W9FJC red on its last line.
+- 2026-11-16 — [ADR 0010](adr/0010-wifi-rf-daemons.md): the owner's ruling that a duplicate alert from both daemons is shown once is recorded; `agents/AGENTS.md`, `agents/FACTORY.md` and `agents/converge.md` follow the cutover (binary names, `g_poll_wifi`, per-daemon rule counts, the two rule tables), with the owner's approval.
+- 2026-11-16 — [[contract]] (new), [[architecture-split]] (C2, C3, C4, C5, C9 shipped; §5 items 1, 2 and 5), [[cli-reference]], [[release-checklist]], [[index]] (#185 item 4): `make contract` builds `dist/sloth-contract-<SLOTH_VERSION>.tar`, reproducibly (sorted, `SOURCE_DATE_EPOCH`, owner 0, normalised modes, deterministic `ar`): `libsloth-wire.a` from exactly `WEB_CORE_SRCS` with its headers and a `${pcfiledir}`-relocatable `sloth-wire.pc`; `schema.sql` from the new `--print-schema` flag, the same bytes in `sloth-wifi` and `sloth-rf` (`db_schema_print()`); `jsonl-schema.md`; `palette.json` (`web/tools/palette.c json`); the alert knowledge bundle at its tree paths plus `alert-daemons.tsv`; `golden.jsonl` and a golden `sloth.db` applied from `schema.sql`; `MANIFEST.json` (contract format 1) and `SHA256SUMS`. No sample pcaps (`agents/AGENTS.md`). `make contract-check` (`tests/contract/check.sh`, in CI's `replay` job and `make gate`) verifies the sums and manifest, compiles a consumer against the unpacked archive alone that decodes a hand-built radiotap beacon, loads the schema, compares the golden db, and rebuilds under another umask to `cmp` the tars; each check seen red under a mutation. `release-attest.yml` attests the tar and attaches it and its `.SHA256SUMS` to the tag's release (a draft when none exists); not run until the next tag.
+- 2026-11-16 — [[contract]], [[release-checklist]] (#185 review): `make contract-check` also verifies the tar's own `.SHA256SUMS`, parses `MANIFEST.json` and `palette.json` as JSON (`contract-db jsql`, SQLite's `json_valid()`), compares every copied payload with the tree, checks `alert-daemons.tsv` against `sloth_alerts.def` and the `rules-wifi` / `rules-rf` markers, requires the golden `sloth.db` to be `auto_vacuum=INCREMENTAL` with no row but `meta`'s (`contract-db facts`), pins the functions the shipped headers declare and the archive does not define (`tests/contract/declared-not-defined.txt`: 11 in `dot11_data.h`, 16 in `sensor_health.h`, a gap recorded in [[contract]] *Gaps*), feeds both overrun sites, and rebuilds under another time zone and locale; each seen red under a mutation. `tools/contract.sh` refuses to build without its `git ls-files` list. `schema.sql`'s header and [[contract]] say a migrated database has the new file's columns in another order. `release-attest.yml` refuses a tag that is not `v` + `SLOTH_VERSION` and builds the contract before its `-Werror` build; release-checklist step 9 publishes the workflow's draft instead of creating a second release.
+- 2026-11-16 — [[contract]] *Gaps* (#185 review finding 2, owner: "fix that"): the alert bundle ships no host data. `docs/wiki/alert-assessments/` `MY_NETWORK_RECON`, `FRAG_AMSDU`, `FRAG_EAPOL_RELAY`, `FRAG_MIXED`, `FRAG_CACHE`, `FRAG_BCAST` and `research/papers/rssi-distance-estimation.md` no longer name the reference host's managed-card MAC, the addresses it heard, its database snapshot's path or the sensors; `research.db` rebuilt. `tests/contract/check.sh` fails on a MAC-shaped string outside `tests/contract/allowed-macs.txt` or a `~/` / `/home/` path in the bundle's text files; both seen red.
+- 2026-11-16 — [[victron]]: sloth-va sends `AdvertisementMonitorManager1.RegisterMonitor` asynchronously (`sd_bus_call_method_async`, reply in `on_monitor_registered()`), because BlueZ's `GetManagedObjects` call back into sloth-va went unanswered under the blocking call and the monitor never activated (beta-site, 2026-11-15). The beta-site worker's uncommitted change, running there since 2026-11-15, brought onto main at the owner's request.
+- 2026-11-16 — [[slothweb]]: the page's `<title>` and header brand read "sloth mesh" (owner: "change the title on the web ui to sloth mesh"; the dashboard's repo name under #184). The binary, unit, database and API keep the name slothweb; `web/tools/quickstart_check.sh` matches the new title.
+- 2026-11-16 — [[victron]], [[sqlite-schema]], [[jsonl-schema]]: sloth-va decodes the Instant Readout inverter record (0x03: device state, alarm reason, battery V, AC output apparent power, V and A; Victron's published widths, hand-built vectors in `tests/test_va.c`, no published one) and names the Phoenix inverters. `ac_voltage_v`, `ac_current_a` and `ac_apparent_va` join sloth's allow-list (`src/victron.c`), `victron_device` (JSONL `2.1.0`) and `victron_readings` (schema v16, three `ALTER TABLE ADD COLUMN`; `WEB_SDB_SCHEMA_MAX` 16). slothweb's Victron tab gives an inverter its own card. Owner's request, for the beta-site Phoenix behind the VE.Direct dongle; not yet run against that device.
+- 2026-11-16 — [[slothweb]] (#224, owner: "Make the WiFi and ble spectrums iso metric like the spectrum tab"): `web/ui/iso.js` (`window.SlothIso`) holds the isometric projection, back-to-front row painter, hit test and offscreen copy the Spectrum tab drew with; `spectrum.js` draws through it, its picture the same before and after (review: every canvas call of the old and new render() recorded and compared equal on 3-row, 30-row, 1 h and 24 h history sweeps and an empty one, and the old and new hit test equal at 14,536 points each). The WiFi channel waterfall and the BLE Devices tab's class and proximity panels are drawn with it by default: columns the channels (band-grouped, 2.4 / 5 / 6 GHz named), classes or advertisers, the time cells receding with the newest in front, height and heat the cell on one scale; hover names the cell in a tooltip, a click or the arrow keys pick it for the existing lists. An `isometric` checkbox per tab, kept as `wifi.iso` / `bledev.iso` (`false` when flat), brings back the flat grids with their own keys; the canvases' spoken labels follow the mode. No data, route or API change. `web/tests/test_iso.c`.
+- 2026-11-16 — [[direction-finding]] (new), [[cli-reference]], [[jsonl-schema]], [[index]], [[antenna-fixture-rev-n]] §10: `--df-iface NAME[@METRES]` (repeatable, up to 3) and `--df-origin`. Extra monitor-mode radios whose frames are read only for the transmitter address and level, into `src/df.c`'s per-transmitter, per-radio table (the sensor radio is radio 0); no frame from them reaches a detector. Under `--hop` they follow the sensor radio's confirmed channel. Two change-only records, `wifi_df` and `df_radio` (JSONL `2.2.0`). The page says what levels on a line cannot give: side, range, a bearing. No `--db`, slothweb or fleet part. Owner's request for the beta-site row of Alfa adapters.
+- 2026-11-17 — [[contract]], [[architecture-split]] (#185 finding 1, owner: "split the header"): `dot11_data_status_t` moved from `src/dot11_data.h` to `src/dot11_data_status.h`, which `dot11_frame.h` now includes; the contract ships that header instead of `dot11_data.h`, so its 11 data-frame prototypes no longer ship unlinkable and `tests/contract/declared-not-defined.txt` holds only `sensor_health.h`'s 16 (the deliberate hook). The archive stays exactly `WEB_CORE_SRCS`; contract format stays 1 (no release had published the header set).
+- 2026-11-16 — [[multi-radio-sensing]] (new), [[cli-reference]], [[jsonl-schema]], [[deployment]], [[direction-finding]], [[index]]: `--monitor-iface` is repeatable. The first is radio 0 as before; each further one (up to 3) is another sensor radio with its own handle and reader thread (`src/capture/mon_radio.c`) feeding the one 802.11 path, which now runs under a dispatch lock (`src/capture/probe.c`). A frame an identical copy of which another radio delivered within 5 ms of capture time is dropped before any counter, ring or detector and counted per radio (`src/mon_radios.c`; the window from 657 frame pairs measured on beta-site, at most 78 us apart). Under `--hop` the list is dealt out between the radios (`chanhop_split()`), each with its own scheduler; a radio lost mid-run has its channels dealt out again and is not reopened. `sensor_health` gains `mon_extra_radios` and, with any, `mon_dup_dropped`, `mon_dedup_evicted` and a `mon_rK_*` block per radio (JSONL `2.3.0`); each further radio is a `sensor` row. Probe-response latency, the monitor stream's freshness and radio 0's direction-finding level stay radio 0's. No `--db` schema change, no slothweb view, no fleet enforcement point touched. Owner's request ("go with multi radio mode").
+- 2026-11-17 — [[slothweb]] § Direction finding (new), [[direction-finding]]: the WiFi view's direction-finding card. `web/src/web_df.c` keeps the newest `df_radio` (4) and `wifi_df` (512, the row written longest ago giving way) from sloth-wifi's feed, a malformed record refused whole; `GET /api/df` answers the radios and the transmitters two or more radios hear, `lean` first and the widest margin first, at most 128, `reported` telling "off" from "not known" by the stream's `jsonl_version` (2.2.0). The `rssi` / `level` arrays are not kept (the stream decoder skips nested arrays). `web/ui/df.js` (`window.SlothDf`) draws two tables, textContent only, with a footer saying what the card is not (a bearing, a side, a distance; unlike antennas give leans that mean nothing). In memory only: no store, no series, no MCP tool, no fleet export. Monitor's and Hybrid's. Tests: `web/tests/test_webdf.c`. `web/README.md`: the route row and a "Direction finding" section.
+- 2026-11-17 — [[slothweb]] (owner: "on the spectrum displays for wifi and bluetooth I want you to color code finding by band channel and ssid. come up with a scheme that's easy to tell by color groupings"; then "don't remove any text labels"): the isometric WiFi channel waterfall colours by identity, the height still the value: band a hue family (2.4 GHz amber, 5 GHz teal-green, 6 GHz violet) on a floor strip, the band name and each column's top; channel a shade step (2.4 GHz 1/6/11 vs overlapping; 5 GHz UNII-1 / 2A / 2C / 3, DFS dashed; 6 GHz PSC vs the rest); the body the cell's busiest transmitters in their SSIDs' `--k-*` colours; a key with the window's SSIDs, one pressed fading the others. BLE Devices: a hue per device class (Trackers red-orange), the class panel's advertisers as shade steps, the proximity panel grouped by class with a per-address shade, a class key per panel. `web/ui/iso.js` `paint()` takes optional `segments` / `cap` and `grid()` per-column `floor` / `cap` / `groupColor` / `groupShort` (without them its canvas calls equal the old ones); tokens `--iso-*` in `web/ui/iso.css` for both themes. Every text label kept. `web/tests/test_iso.c`.
+- 2026-11-17 — [[slothweb]] § M5's WiFi (owner: "the spectrum should show where the clients sit in the spectrum highlighting their channel"; then "when highlighting an ssid on the water fall make all the others 70 percent transparent"; earlier "don't remove any text labels"): the isometric WiFi waterfall gains a clients lane under the band strip (a diamond per channel sized by the clients named on it, the count beside it where it fits, coloured by the busiest one's AP's SSID or its MAC; a tick at the foot of each cell that named one) and a Clients group in the key; pressing a client traces its channels, marks its cells and fades the rest; an SSID or a client highlight fades the others to 70 percent transparent (`ISO_FADE` 0.3), and the two are exclusive. `/api/wifi/channels?mix=1` gains per-row `clients` and a `clients` list with each client's vendor, `laa`, channels (frames and cells as hex), bucket bounds and AP (sloth.db's `assocs`, else the stream's `assoc` records, kept in memory by `web_chmix_assoc()`), additive. A count is a floor: the mix names five transmitters a bucket. Every label kept; the grid's text calls are now eight. Tests: `web/tests/test_chmix.c`, `web/tests/test_iso.c`, `web/tests/test_prefs.c`.
+- 2026-11-17 — [[direction-finding]] § Radios off the line (new), [[cli-reference]], [[jsonl-schema]] (owner: three Alfa adapters in a triangle, 2 m sides, "2D direction finding"): `--df-iface NAME@X,Y` and `--df-origin X,Y` place the radios in two dimensions (metres east, north). With three or more not on one line, `wifi_df` gains `bearing_deg` (one of eight compass points: the direction of the power-weighted mean of the radio positions from their centroid) and `bearing_err_deg` (15/30/45: what a 3 dB error on one radio does to it); `df_radio` gains `x_m`, `y_m`. Withheld unless every placed radio heard the transmitter, the quality is `lean` and that error is 45 degrees or less, which with 2 m sides is a transmitter within about three metres. One form of position per command line (exit 2). JSONL `2.4.0`, additive. slothweb's card does not show the new members yet.
+- 2026-11-17 — [[slothweb]] § Direction finding, [[direction-finding]] (owner: "build it"): the WiFi view's direction-finding card shows the 2.4.0 members. `web/src/web_df.c` keeps `bearing_deg` / `bearing_err_deg` of a `wifi_df` and `x_m` / `y_m` of a `df_radio` (a pair together or not at all, the bearing one of eight points with an error of 15, 30 or 45 and never beside `along_m`, an east/north place never beside `pos_m`; anything else refused whole) and `GET /api/df` answers them. The card gains a bearing column (`NW 315° ±30°`, `-` when sloth withheld it) and a radio's position reads `1.00 m E, 0.58 m S`. Its footer no longer says "not a bearing": it says not a fix, an angle of arrival or a distance.
+- 2026-11-17 — [[slothweb]] § Radar, [[fleet]] (owner: "don't show the distance rings for each wifi source anymore since we have direction finding now"): the Radar no longer draws a ring for each unlocated Wi-Fi device. Its hollow mark stays at its estimated distance, at the arbitrary angle from its address. A BLE device keeps its own dashed ring (direction finding does not hear BLE), and the per-band rings with their counts stay for both families.
+- 2026-11-17 — [[alerts]], `alert-assessments/EVIL_TWIN.md` (#227): `EVIL_TWIN` went CRIT on a neighbour's same-band TP-Link mesh (two nodes' locally administered guest VAPs, vendor-IE + late arrival, the early node at -90 dBm on 11 beacons). Two changes in `src/alerts/rules_twin.c`: a `mesh_vap` context deduction (-35, `TWIN_C_MESH_VAP`, `+mesh VAP`) when both halves are locally administered and each has a globally administered parent on its channel under another non-empty SSID with its low five octets, the two parents different addresses sharing four octets and one main SSID (review: a copy of one AP's guest VAP on another LAA first octet, one parent for both halves, is not the shape); and a late arrival counts only against an original heard at least once a minute over its entry (`TWIN_STEADY_FRAME_S` 60, `src/alerts.h`, grounded on the reference host's weakest steady APs at 36-44 s a frame). Hard signals untouched; #193's lone late copy against a steady original stays CRIT at 55. No JSONL, schema or slothweb change. Tests: `tests/test_twins.c`, suite "twins: a mesh's guest VAPs (#227)".
+- 2026-11-18 — [[aprs]] § The sample-rate trap, § The channel (#210): a decoder on the right channel demodulating 246 kHz off it, with every process in the pipeline reporting success. `rx_fm -s 22050` asks an SDRplay RSPdx-R2 for 22050 × 46 = 1,014,300 Hz; SoapySDRPlay3 0.5.3 gives it the device's native 2 MS/s and `rx_fm` keeps its ÷46, so stdout runs at 43,478 samples/s (43,520 measured) and Dire Wolf is told 22,050. The LO offset comes from the rate **requested** (253.575 kHz → 144.643575 MHz) and the rotation from the rate **delivered** (500 kHz), so W9FJC demodulated 144.143575 MHz: flat discriminator noise, no error anywhere, `aprs_state` `live` and the log 0 bytes until `aprs_silent` six hours later. The page now carries the symptom, the arithmetic, a verification that needs no second radio (measure the stdout rate against the `-s` value — bytes/s ÷ bytes per sample, the divisor taken from the `rx_fm` build in use since nothing in this tree records it, or format-free by changing `-s` and watching whether the rate follows; a mismatch by an integer-ish factor means the device kept its own rate), the owner's host-side workaround (`-f 144.636425M -s 22050` with `direwolf -r 43478`, host config outside this repo) and why it is fragile — it compensates with both rates at once, so a SoapySDRPlay3 that honours the request or picks another native rate moves the result by hundreds of kHz, silently. The proper fix stays open and unchosen (ask for a native rate and resample, or another front end — SoapySDR + csdr, GNU Radio); the front end and the unit files are the operator's call (`agents/dark-factory.md` §4.3). Sloth never spawns `rx_fm` (the `execv|execl|popen|system(|fork(` grep over `src/main.c`, `src/aprs.c`, `src/capture/aprs_reader.c` is empty), so this is documentation, not code. § The channel's "144.894 MHz" no longer reads as evidence of a working chain: that LO was beta-site's, taken then for a benign fs/4 offset, and beta-site has decoded nothing since 2026-11-11. Docs only; no C change.
+- 2026-11-18 — [[slothweb]] § The restyle, § M5's WiFi (owner: "a consistent color palette for wifi channels both 2.4 and 5ghz that's used throughout the app when device or ssid is shown. use cool colors for 2.4 ghz and warm colors for 5ghz ... like greenbar paper make an alternating pattern in lists where the alternate bar color is the background but 8% lighter"): one colour per 20 MHz channel, both themes, written in `web/tools/palette.c` `CHAN[]` as `--ch-N` (2.4 GHz cool, 5 GHz warm) and `--ch6-0..3` (6 GHz violet), the build failing on a fill under 3:1 on `--bg`, `--panel` or a stripe, the chip ink under 4.5:1 and CIEDE2000 floors (sorted neighbours 20, 1/6/11 25); `web/ui/chan.js` the only mapping; a chip wherever an AP, station, device or SSID is shown with its channel; the isometric waterfall's floor, tops, key and client trace on the same colours (`--iso-b*` gone). `web/ui/greenbar.css`: every list alternates, the surface 8% toward white (toward black on the light cream). `web/tests/test_chan.c`, `test_iso.c`.

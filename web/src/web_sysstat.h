@@ -1,0 +1,256 @@
+/* slothweb: the sensor's host status and source inventory (2026-11-11,
+ * docs/wiki/jsonl-schema.md "Host status and the source inventory").
+ *
+ * Fed from four record types sloth writes once a minute (JSONL 1.1.0,
+ * src/sys_status.h): `sys_status` (CPU, load, memory, uptime, sloth's
+ * RSS, the output filesystem, the hottest temperature, the
+ * under-voltage alarm, and since 1.2.0 the state of the beacon memory
+ * EVIL_TWIN's late-arrival signal reads), `sys_sensor` (one temperature, voltage or
+ * power-supply reading), `source_status` (one of sloth's sources,
+ * configured or not) and `receiver_hw` (one attached receiver).
+ *
+ * Kept in memory only: the newest batch, replaced when a `sys_status`
+ * with another `seq` arrives. A sensor or receiver that is not in the
+ * newest batch is gone from the answer; a source row is updated in
+ * place, because sloth also writes one on its own when its state
+ * changes. Nothing here is in slothweb.db: the history is the series
+ * below, in the store's existing tiers under their metric names, so
+ * the store's version does not move.
+ *
+ * The series (web_rollup.c's table):
+ *   sys.cpu, sys.mem_used, sys.rss, sys.undervolt   global
+ *   sys.temp, sys.volt                              by sensor ("hottest"
+ *                                                   is the hottest)
+ *   source.rate, source.up                          by source name
+ * One sample a minute, so the fine tier holds one bucket in six. The
+ * keyed four are the "sys" key class (WEB_KC_SYS, 64 keys): sloth's
+ * own bounded catalogue (36 sensors at most, 7 sources), established
+ * from the first sample as the interface and channel classes are, and
+ * never scored by the anomaly engine (a sensor warming up is not an
+ * intrusion; no rule was asked for over it).
+ *
+ * Every string is the peer's. sloth reduces device strings to
+ * printable ASCII, but the socket may be someone else's, so each is
+ * kept only up to a JSON-output budget (sys_keep(): a byte that
+ * web_jw_str() would write as six costs six), which bounds /api/sys at
+ * its worst case with every slot full of '<'. The page writes them
+ * with textContent.
+ *
+ * sloth's own state, so every scope's, as sensor_health is. With no
+ * live stream (slothweb reading a copied sloth.db) nothing arrives and
+ * /api/sys says "seen":false: sloth.db holds none of this.
+ *
+ * The two SQLite stores (2026-11-12, owner: "track sloth db usage"):
+ * sloth.db (--sloth-db, which slothweb only ever reads) and slothweb's
+ * own slothweb.db (--store). Each one's size on disk is the main file
+ * plus its -wal, stat()ed and never opened (the -shm is an index of the
+ * WAL in shared memory, not data). Its limit: slothweb's own
+ * --web-max-mb, which it knows; sloth's db.max_mb, which it learns from
+ * the stream: sensor_health's db_max_mb (JSONL 1.7.0), or, from an
+ * older sloth, the `tuned` list (the knob when it is named there, the
+ * default when the list is whole and does not name it, else unknown).
+ * 0 is unlimited and draws no limit. The series is sys.db_mb, keyed
+ * "sloth" and "slothweb", sampled when a sys_status arrives (once a
+ * minute) and at most once a fine bucket, so a peer repeating
+ * sys_status cannot make slothweb stat() faster than that. A store
+ * that is not there is not sampled: a gap, never a zero. /api/sys
+ * measures afresh on every request, stream or none. */
+#ifndef SLOTHWEB_SYSSTAT_H
+#define SLOTHWEB_SYSSTAT_H
+
+#include <pthread.h>
+#include <stddef.h>
+
+#include "web_json.h"
+#include "web_jsonl.h"
+#include "web_rollup.h"
+#include "web_own.h"
+
+#define WEB_SYS_SENSORS  36      /* sloth: 16 temps, 16 volts, 4 supplies */
+#define WEB_SYS_SOURCES  8       /* sloth: 7 */
+#define WEB_SYS_HW       16
+/* A report older than this many of its own intervals is stale. */
+#define WEB_SYS_STALE_INTERVALS 3
+
+typedef struct {
+    int       used;
+    char      cls[8];            /* "temp", "volt", "power" */
+    char      id[25];
+    char      key[WEB_KEY_MAX + 1];   /* the series key, "" when the id has none */
+    char      label[49];
+    int       has_val;
+    double    val;
+    int       alarm;             /* -1 absent */
+    int       capacity;          /* -1 absent */
+    char      status[25];
+} web_sys_sensor_t;
+
+typedef struct {
+    int       used;
+    char      name[25], kind[21], flag[33], state[17];
+    char      detail[97], endpoint[65], hw[37], desc[57], driver[25];
+    char      age_band[9], unit[17];
+    int       has_age, has_count, has_rate, has_reconnects;
+    long long age_s, count, errors, reconnects;
+    double    rate;
+    long long ts;                /* the row's own ts */
+    long long rx_ms;             /* slothweb's monotonic clock when it arrived */
+} web_sys_source_t;
+
+typedef struct {
+    int       used;
+    char      key[37], kind[21], bus[9], id[13];
+    char      desc[57], vendor[33], product[49], driver[25], ifaces[65];
+    int       known;
+} web_sys_hw_t;
+
+/* The two stores (indices into web_sys_t's db_path). */
+enum { WEB_SYS_DB_SLOTH = 0, WEB_SYS_DB_WEB,
+       /* sloth-rf's database (--rf-db, #214): appended, and absent from
+        * /api/sys and from sys.db_mb unless it is configured. */
+       WEB_SYS_DB_RF, WEB_SYS_DBS };
+/* A store's band by its share of its limit: "near" from this, "full"
+ * from the next. sloth trims observations once over its ceiling and
+ * slothweb its oldest rows, so "full" is a store being trimmed, not
+ * one about to fail; "near" is the time to raise the knob if the
+ * history matters. */
+#define WEB_SYS_DB_NEAR_PCT 80
+#define WEB_SYS_DB_FULL_PCT 95
+/* sloth's default db.max_mb (src/db.h DB_DEFAULT_MAX_MB): what an
+ * older sloth's whole `tuned` list means when it does not name it. */
+#define WEB_SLOTH_DB_DEFAULT_MAX_MB 512
+/* sloth's own bound on the knob (src/tune.c). */
+#define WEB_SLOTH_DB_MAX_MB_MAX     4194304
+/* What slothweb knows of sloth's ceiling. */
+enum { WEB_SYS_LIM_UNKNOWN = 0, WEB_SYS_LIM_SAID, WEB_SYS_LIM_TUNED,
+       WEB_SYS_LIM_DEFAULT, WEB_SYS_LIM_NO_DB };
+
+typedef struct web_sys {
+    pthread_mutex_t mu;
+    int       seen;              /* a sys_status was read */
+    long long ts, rx_ms, seq;      /* rx_ms: the monotonic clock at arrival */
+    int       interval_s;
+    int       has_cpu, has_load, has_mem, has_uptime, has_rss, has_disk;
+    int       has_temp, undervolt;          /* undervolt: -1 absent */
+    double    cpu_pct, iowait_pct, load1, load5, load15, temp_max_c;
+    long long mem_total_kb, mem_avail_kb, uptime_s, rss_kb;
+    long long disk_free_mb, disk_total_mb;
+    char      cpu_band[13], mem_band[13], disk_band[13], temp_band[13];
+    char      disk_for[9], temp_max_id[25];
+    /* JSONL 1.2.0: the forgotten-BSSID memory behind EVIL_TWIN's
+     * late-arrival signal (sloth's beacon_recall_*). has_recall 0 when
+     * the batch did not carry it (an older sloth); reach_s and quiet_s
+     * -1 when absent. */
+    int       has_recall, recall_overflowed, recall_quiet;
+    long long recall_slots, recall_max, recall_reach_s, recall_quiet_s;
+    long long sensor_seq, hw_seq;
+    web_sys_sensor_t sensors[WEB_SYS_SENSORS];
+    web_sys_source_t sources[WEB_SYS_SOURCES];
+    web_sys_hw_t     hw[WEB_SYS_HW];
+    unsigned long records, rejected, overflow;
+    /* The operator's designated networks (web_own.h): sloth's own
+     * configuration, fed by the same ingest hook as the host status. */
+    web_own_t own;
+    /* The stores (web_sys_set_dbs()): set before any thread starts and
+     * never written after, so read without the lock. "" for one that
+     * is not configured. web_max_mb is --web-max-mb. */
+    char      db_path[WEB_SYS_DBS][4096];
+    int       web_max_mb;
+    /* sloth's db.max_mb, under the lock: how it is known (WEB_SYS_LIM_*)
+     * and the value when it is. */
+    int       sloth_lim;
+    long long sloth_max_mb;
+    long long db_sampled_s;      /* the last sys.db_mb sample; -1 none */
+    /* Two daemons (#214, web_sys_record_from()). split is set before
+     * any thread starts; the rest is under the lock. sloth-rf's own
+     * db.max_mb, as sloth's above; who has reported the host batch
+     * (once sloth has, it is sloth's for good) and the "gnss" source
+     * row (once sloth-rf has reported a configured one, it is
+     * sloth-rf's for good), so neither is written by two daemons in
+     * turn. */
+    int       split;
+    int       rf_lim;
+    long long rf_max_mb;
+    int       host_wifi, host_rf, gnss_wifi, gnss_rf;
+    unsigned long not_owned;     /* rows refused: the other daemon's */
+} web_sys_t;
+
+int  web_sys_init(web_sys_t *y);
+void web_sys_destroy(web_sys_t *y);
+
+/* Every decoded record; the four types above apply, the rest return. */
+void web_sys_record(web_sys_t *y, const web_jrec_t *r, long long now_ms);
+
+/* Two daemons (#214): which stream a record came on. ONLY is
+ * web_sys_record(), the one stream of a slothweb without --rf-socket. */
+enum { WEB_SYS_FROM_ONLY = 0, WEB_SYS_FROM_WIFI, WEB_SYS_FROM_RF };
+
+/* web_sys_record() for one of two streams, so that no part of the
+ * state has two writers:
+ *   sensor_health   sloth's is sloth.db's limit (and the designated
+ *                   networks' `ownership` is sloth's alone); sloth-rf's
+ *                   is sloth-rf.db's limit.
+ *   sys_status, sys_sensor, receiver_hw (the host batch)
+ *                   sloth's. sloth-rf's is applied only until sloth's
+ *                   first sys_status (a host that runs sloth-rf alone
+ *                   still shows its CPU and temperatures), never after.
+ *   source_status   by name: adsb, aprs, rtl433, victron are sloth-rf's;
+ *                   capture, monitor, btmon, btcap are sloth's; gnss,
+ *                   which both report (ADR 0010, ruled 2026-11-15), is
+ *                   sloth-rf's once it has reported one that is
+ *                   configured, sloth's until then; any other name is
+ *                   its sender's.
+ * Returns 0 when the record is one of these types and was refused as
+ * the other daemon's (the caller then samples no series from it), else
+ * 1. y may be NULL: the answer is then the fixed part of the rule. */
+int  web_sys_record_from(web_sys_t *y, int from, const web_jrec_t *r, long long now_ms);
+/* Call before any thread starts: /api/sys then says who reports the
+ * host ("host_from"). Without it the answer is as it was. */
+void web_sys_set_split(web_sys_t *y);
+
+/* The same four types into the rollup (web_metrics.c's one call). A
+ * figure out of range is not sampled; an absent one is not a zero. */
+void web_sys_metrics(web_rollup_t *ru, const web_jrec_t *r, long long now_s);
+
+/* The stores whose size is tracked: sloth_db (--sloth-db) and web_db
+ * (the store slothweb opened, "" or NULL when it has none) and the
+ * latter's --web-max-mb. Before any thread starts. */
+void web_sys_set_dbs(web_sys_t *y, const char *sloth_db, const char *web_db, int web_max_mb);
+/* sloth-rf's database (--rf-db), "" or NULL none. Before any thread
+ * starts. */
+void web_sys_set_rf_db(web_sys_t *y, const char *rf_db);
+
+/* A store's size on disk: the main file's bytes and its -wal's (0
+ * when there is none). stat() only. 0, or -1 when path is not a
+ * regular file (missing, a directory, unreadable). */
+int  web_sys_db_size(const char *path, long long *main_b, long long *wal_b);
+
+/* sys.db_mb for each store that is there, at most once a fine bucket
+ * (web_metrics.c calls it on every sys_status). */
+void web_sys_db_metrics(web_sys_t *y, web_rollup_t *ru, long long now_s);
+
+/* The band word for a size against a limit: "ok", "near", "full";
+ * NULL when there is no limit to be near (limit_mb <= 0). */
+const char *web_sys_db_band(double mb, long long limit_mb);
+
+/* The "sys" key kind: 1..WEB_KEY_MAX bytes of [a-z0-9_.-] after
+ * lower-casing and '/' to '.', so "hwmon1/temp2" is "hwmon1.temp2".
+ * 0 with out filled, -1 when s has anything else. */
+int  web_key_sys(const char *s, char *out);
+
+/* Copy s into out (cap bytes) up to a JSON-output budget of cap - 1:
+ * a byte web_jw_str() escapes to six costs six, a quote or backslash
+ * two. Cut at a UTF-8 boundary. */
+void web_sys_keep(char *out, size_t cap, const char *s);
+
+/* /api/sys: the newest batch. No parameters; a 400 names an unknown
+ * one. Answers under every scope. now_s is the wall clock (the "now"
+ * member), now_ms the monotonic one web_sys_record() was given: an age
+ * is the difference of two readings of that one clock, never a record's
+ * ts against this host's wall clock (the sensor may be another machine,
+ * and its ts is the peer's to choose). 0 with *len / *status set, -1
+ * when the body did not fit. */
+int  web_sys_route(web_sys_t *y, const char *query, long long now_s, long long now_ms,
+                   char *body, size_t cap, size_t *len, int *status);
+
+#endif /* SLOTHWEB_SYSSTAT_H */

@@ -10,11 +10,17 @@ type: reference
 and/or a read-only stream socket (`--data-socket SPEC`). Same records,
 same encoding, line-delimited by `\n`. This page is the contract
 downstream consumers (SIEMs, the planned iOS dashboard, ad-hoc
-scripts) code against.
+scripts) code against. **Two streams since `2.0.0`** (#216,
+[ADR 0010](adr/0010-wifi-rf-daemons.md)): `sloth-wifi` (alias `sloth`)
+writes the capture's, the monitor radio's and BLE's records, and
+`sloth-rf` writes the SDR decoders' and the GNSS records, each to its
+own file and socket under the one contract version. Which record is
+whose, and what a `1.x` consumer has to change, is *Versioning* §
+"1.x to 2.0.0".
 
-**Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/dns_wire.c`.
+**Sources**: `src/jsonl.c`, `src/jsonl_core.c`, `src/jsonl_rf.c`, `src/jsonl_internal.h`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/sys_status.c`, `src/dns_wire.c`.
 
-**Last updated**: 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
+**Last updated**: 2026-11-17 (`jsonl_version` `2.4.0`, [[direction-finding]]: `bearing_deg` and `bearing_err_deg` on `wifi_df`, `x_m` and `y_m` on `df_radio`, only with `--df-iface NAME@X,Y`), 2026-11-16 (`jsonl_version` `2.3.0`, [[multi-radio-sensing]]: `mon_extra_radios` added to `sensor_health` after the `monitor_*` health block, and with any further sensor radio `mon_dup_dropped`, `mon_dedup_evicted` and one `mon_rK_*` block per radio; each further radio a `sensor` row of kind `wifi`; no existing field changed), 2026-11-16 (`jsonl_version` `2.2.0`, [[direction-finding]]: the `wifi_df` and `df_radio` records, only with `--df-iface`), 2026-11-16 (`jsonl_version` `2.1.0`, [[victron]]: `victron_device` carries the inverter record's `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`), 2026-11-15 (#216 review, no stream change: the 1.x to 2.0.0 table places the members both daemons write, the `evict_*` breakout among them, and says `evict_rtl433` stays in sloth-wifi's record at `0`), 2026-11-15 (`jsonl_version` `2.0.0`, #216, the cutover, the first MAJOR: `gnss_fix`, `gnss_sky`, `gnss_sat`, `adsb_aircraft`, `aprs_station`, `aprs_packet`, `rtl433_device` and `victron_device`, the `adsb_*`, `aprs_*`, `rtl433_*` and `victron_*` blocks of `sensor_health`, the `adsb`, `aprs`, `rtl433` and `victron` `source_status` rows, their `sensor` rows and the `GNSS_*` and `ADSB_EMERGENCY` alerts left the Wi-Fi daemon's stream for sloth-rf's; nothing was renamed and no value changed; the migration table is under Versioning), 2026-11-15 (`jsonl_version` `1.10.0`, [[victron]]: `victron_device` gains `services` (the newest GATT session's service UUIDs, only when it listed some) and `values_src` (`readout` or `gatt`, the path of the newest values), both signed; a `victron` `source_status` row in both daemons' streams (`sloth` 9 rows, sloth-rf 5); no existing field changed), 2026-11-15 (#213 review: the `beacon_recall_*` rows say they are `sloth`'s only; sloth-rf's `sys_status` omits the block), 2026-11-15 (`jsonl_version` `1.9.0`, #213: `daemon` appended to `sensor_health`, `"wifi"` from `sloth` and `"rf"` from sloth-rf, after the last block and before `db_max_mb`; outside the change-only signature; what sloth-rf's `sensor_health`, `source_status` and `sys_status` carry and leave out; this bump also carries the `victron_*` fields and `victron_device`, pending until now. No existing field changed), 2026-11-15 ([[victron]]: the change-only `victron_device` record from `--victron`, sloth-va's file; the `victron_*` block on `sensor_health` after the `rtl433_*` block and before `db_max_mb`, only with `--victron`; the `sensor` kind `victron`; the `MINOR` bump pending, see Versioning; no existing field changed), 2026-11-14 (`jsonl_version` `1.8.0`, #208 slice 1, [[rtl433]]: the change-only `rtl433_device` record, one sub-GHz device the `--rtl433` rtl_433 event log fed, keyed `(model, id)`; the `rtl433_*` block appended to `sensor_health` with a per-reason reject breakout, present only with `--rtl433`, after the `aprs_*` fields and before `db_max_mb`; `evict_rtl433` appended to the eviction breakout; the `sensor` kind `rtl433` and a `source_status` row of that name. This bump also carries #204's pending `aprs_*` fields. No existing field changed), 2026-11-13 (#204: `aprs_region`, `aprs_region_hz`, `aprs_freq_hz`, `aprs_freq_mismatch`, `aprs_silent`, `aprs_silent_after_s` and `aprs_quiet_since` appended to `sensor_health` with `--aprs`, before `db_max_mb`; the region and its channel only, never a coordinate; `aprs_region`, the mismatch and the silent flag signed; the `MINOR` bump is pending, see Versioning), 2026-11-12 (`jsonl_version` `1.7.0`: `db_max_mb` on `sensor_health`, before `jsonl_version`: sloth's `db.max_mb` in MiB, 0 unlimited, -1 with no database open; in the change-only signature; slothweb draws it as the limit on sloth.db's size), 2026-11-12 (`jsonl_version` `1.7.0`: the `twin193_*` counts appended to `sensor_health` before `jsonl_version`, #193's field data on how often a deauth flood meets a late locally administered same-SSID copy the twin-chain rule leaves unnamed; a measurement, read by no rule; outside the change-only signature), 2026-11-12 (`jsonl_version` `1.7.0`, #172's follow-up: `harvest_cluster_id` appended to `eapol`, the harvest tracker's row the message was counted in, 0 for none; `cluster_id` and `qevict` appended to `harvest_station` and `harvest_chain`, both signed; `harvest_posture` appended to `beacon`, absent until the BSSID was heard handing out the PMKID KDE in M1; no existing field changed), 2026-11-12 (`jsonl_version` `1.6.0`: `probe_lat` appended to `beacon`, #187 S3's probe-response latency per BSSID — an observation, not used in any verdict, no cited threshold; absent until measured; `beacon` has no change-only signature so it signs nothing; and `evict_probe_latency` appended to `sensor_health`), 2026-11-12 (`jsonl_version` `1.5.0`: the `karma_suspect` record's `tool` and the `KARMA_AP` detail's attribution lose the `/low` `/med` `/high` confidence word, #151's one-vocabulary mapping; a `corroborated` `hw_verdict` now arrives on a CRIT record, `suspected` still moves nothing; no field added or renamed), 2026-11-12 (`jsonl_version` `1.4.0`: `hw_verdict` and `hw_signals` on `alert` and every `alert.*` record a #151 attack-hardware verdict shaped, `KARMA_AP` only; omitted when there is none), 2026-11-12 (`jsonl_version` `1.3.0`: the `karma_suspect`, `harvest_station` and `harvest_chain` records, the evidence tables behind `KARMA_AP` / `KARMA_PROBE_FORGE` and `PMKID_HARVEST` / `HANDSHAKE_HARVEST`, change-only per row with a `gone` record when a row leaves its table; no existing record changed), 2026-11-11 (`jsonl_version` `1.2.0`: the `ownership` record, the designated SSIDs and BSSIDs and the known-device roster's count; the `beacon_recall_*` fields appended to `sys_status`, a batch written at once when the memory overflows or goes quiet; the `alert.resolve` reason `recovered`), 2026-11-11 (host status and the source inventory: the `sys_status`, `sys_sensor`, `source_status` and `receiver_hw` records, on a 60 s cadence; `jsonl_version` `1.1.0`, a MINOR bump for four added record types; no existing record changed), 2026-11-10 (#185 item 3, [ADR 0007](adr/0007-versioning.md): `jsonl_version` appended to `sensor_health` as the stream's own contract version, `1.0.0`, from `SLOTH_JSONL_VERSION`; the *Versioning* section's "no version field" replaced by the bump rule), 2026-11-09 ([[adsb]]: `beast:HOST:PORT` as `adsb_src` / `src`, readsb's address-type names as `source_type` for Beast rows, and what the `adsb_*` tallies count for a Beast stream; no field added), 2026-11-06 ([[location]]: `loc_lat`, `loc_lon`, `loc_alt_m`, `loc_src` appended to `sensor_health` while a position exists, signed on the 0.01° cell; slothweb's Radar centre), 2026-11-05 ([[aprs]]: the `aprs_packet` record, one per packet Dire Wolf decoded, the change-only `aprs_station` record, the `aprs_*` block appended to `sensor_health`, present only with `--aprs`, and the `sensor` kind `aprs`), 2026-11-05 (#26 slice 1, [[adsb]]: the change-only `adsb_aircraft` record, and the `adsb_*` block appended to `sensor_health`, present only with `--adsb`), 2026-11-03 (#173: the MGMT_FUZZ lifecycle example carries the banded detail), 2026-11-03 (#180: `evict_frag_ap_ident` appended to the `sensor_health` breakout — the FragAttacks per-BSSID AP-identity table), 2026-11-02 ([[gnss]]: the change-only `gnss_fix`, `gnss_sky` and `gnss_sat` records, and `gnss_sats_in_view`, `gnss_sats_used`, `gnss_cn0_mean`, `gnss_time_offset_ms`, `gnss_jam` appended to `sensor_health` with a `--gps` reader; on review, the used count signed as a band, the offset band with hysteresis, `jam` sticky across the TPVs gpsd omits it from, `el` / `az` absent rather than -1, and a set satellite inferred from its heartbeat lapsing), 2026-10-27 ([[location]]: the `loc` object on `alert` and every `alert.*` record of a stamped incident; the `gps_*` block in `sensor_health`, present only with `--location` or `--gps`), 2026-10-26 (`capture_linktype` and `monitor_only` in `sensor_health`, for slothweb's capture scope), 2026-10-26 (RSSI distance data point: `est_dist_m`, `est_dist_band`, `est_dist_trend`, `est_ptx_source` on `beacon`, `probe_client`, `assoc`, `device` and `ble_device`, present only with an estimate; `ble_device` signs the band only, never metres or the trend), 2026-10-26 (#170: incidents versus `--db` findings stated under *Incident lifecycle*; no record changed), 2026-10-26 (#166: `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` in `sensor_health`, present only with `--pcap-dir`), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
 and `drained`; the `beacon-overflow` `BEACONING` finding; IPv4-mapped
 beaconing peers keyed as IPv4), 2026-10-23 (#165 audit: a PTR `answer`
 is whole up to 63 bytes, for a PTR question only; a target that would
@@ -304,9 +310,12 @@ signal the `ICMP_TUNNEL` rule keys on (added #40; older records omit it).
 | `signature_version` | string | additive, #90 — which revision of that row's values the finding was matched against. A capture-backed row names its capture; an UNVERIFIED row has no firmware version to name and carries `research-<date>` (the date of the research its values came from), so it is never mistaken for one |
 | `validated` | bool | additive, #90 — `true` only when the row is backed by a capture of the tool; `false` otherwise, which is **every row shipped today**. A JSON boolean, unlike the 0/1 ints elsewhere in this schema: it is the one field a consumer must not read past. Present whenever `signature_id` is |
 | `signature_evidence` | string | additive, #90 — the row's provenance note, verbatim. Starts with `UNVERIFIED` exactly when `validated` is `false` (a test enforces the agreement in source) |
+| `hw_verdict` | string | additive, #151 — the attack-hardware verdict tier: `suspected-<device>` or `corroborated-<device>` (`pineapple-mk7`, `esp32-marauder`, ...; never `identified-` or `CONFIRMED_`, plan #145 ruling 2). **Both `hw_*` fields are omitted when there is no verdict.** `corroborated` needs two independent signal classes, one of them capture-backed, and no dissent; no shipped input is capture-backed, so every verdict today reads `suspected-`. It never moves `confidence`; since 2026-11-12 (#151, owner decision) a `corroborated-` verdict makes `KARMA_AP` CRIT (`sev` 2), and `suspected-` moves nothing. Emitted by `KARMA_AP` only. See [[attack-hardware-fingerprints]] |
+| `hw_signals` | string | additive, #151 — the signal classes behind `hw_verdict`, `+`-joined in a fixed order: `tool` (a tool-signature row), `stack` (a known-stack IE-order row), `pair` (a Pineapple setup AP beside the lure), `oui` (a Hak5 OUI, not counted when the tool row already pins it). Present whenever `hw_verdict` is |
 | `evidence_count` | int | additive, #92 — how many evidence-ring frame IDs this incident cites, below. **Omitted** when the rule cited none. Populated by the no-IP wireless rules whose triggering frames are monitor frames (#92 slice 4; [[pcap-export]] § Which alerts cite frames is the list, and says what each rule cites) — because a frame with no IP has no flow to export on, so the ring's own frames are the only path from the alert back to the bytes that caused it |
 | `evidence_id_0` .. `evidence_id_7` | int | additive, #92 — the cited frames' evidence-ring IDs, oldest first, present for `0 .. evidence_count-1` only. Opaque and **not** the same thing as this record's own `event_id` below — look one up with the evidence-ring retrieval path, never by assuming it is a byte offset or a packet count. Refreshed on every evaluation: a long-running incident cites the IDs still resolvable in the ring, not the first ones it opened with, which the ring may since have evicted |
 | `incident_id` | string | additive, #98 — 16 hex chars identifying the incident this record opens. Join key into the `alert.*` lifecycle records below |
+| `loc` | object | additive, 2026-10-27 — where the sensor was as the incident opened ([[location]]): `{"lat":51.5007400,"lon":-0.1246900[,"alt_m":11.6][,"acc_m":4.5],"src":"gps","ts":1800000000}`. `lat`/`lon` WGS84 decimal degrees to 7 places, `alt_m` metres above mean sea level, `acc_m` an **estimate** of horizontal error (HDOP x 5 m, or gpsd's `eph`) omitted when the source gave none, `src` `"gps"` (a fix no older than `gps.max_fix_age_s`, `ts` the wall-clock time sloth received the sentence or object carrying the position, not the receiver's UTC) or `"fixed"` (`--location`, `ts` the stamp time). Stamped once, when the incident opens, never refreshed. **Omitted entirely** when nothing was known — never `0,0`. The only nested object on this record; written without `%f`, so a decimal-comma locale cannot reach it |
 
 `ts` for alerts is the `last_seen` time of the dedup key, not the
 first observation.
@@ -403,8 +412,8 @@ existing field. A consumer that ignores unknown `type` values keeps
 working unchanged.
 
 ```json
-{"type":"alert.create","ts":1700000006,"event_id":"9f2c41ab77e30d58-0001","incident_id":"9f2c41ab77e30d58","key":"mgmtfuzz:ba:ad:f0:0d:00:01","title":"MGMT_FUZZ","detail":"BSSID ba:ad:f0:0d:00:01 malformed IEs: 3 overrun / 0 oversize-SSID / 0 truncated-RSN - 802.11 mgmt fuzzing","sev":1,"ty":31,"observations":1,"evaluations":1,"count":1,"first_detected":1700000006,"last_evaluated":1700000006,"first_observed":1700000006,"last_observed":1700000006,"technique":"T1499"}
-{"type":"alert.escalate","ts":1700000041,"event_id":"9f2c41ab77e30d58-0002","incident_id":"9f2c41ab77e30d58","key":"mgmtfuzz:ba:ad:f0:0d:00:01","title":"MGMT_FUZZ","detail":"...5 overrun...","sev":2,"ty":31,"prev_sev":1,"observations":2,"evaluations":36,"count":36,"first_detected":1700000006,"last_evaluated":1700000041,"first_observed":1700000006,"last_observed":1700000041,"technique":"T1499"}
+{"type":"alert.create","ts":1700000006,"event_id":"9f2c41ab77e30d58-0001","incident_id":"9f2c41ab77e30d58","key":"mgmtfuzz:ba:ad:f0:0d:00:01","title":"MGMT_FUZZ","detail":"BSSID ba:ad:f0:0d:00:01 malformed IEs (IE overrun): 1-9 per 100 frames heard - 802.11 mgmt fuzzing","sev":1,"ty":31,"observations":1,"evaluations":1,"count":1,"first_detected":1700000006,"last_evaluated":1700000006,"first_observed":1700000006,"last_observed":1700000006,"technique":"T1499"}
+{"type":"alert.escalate","ts":1700000041,"event_id":"9f2c41ab77e30d58-0002","incident_id":"9f2c41ab77e30d58","key":"mgmtfuzz:ba:ad:f0:0d:00:01","title":"MGMT_FUZZ","detail":"...(IE overrun, truncated RSN)...","sev":2,"ty":31,"prev_sev":1,"observations":2,"evaluations":36,"count":36,"first_detected":1700000006,"last_evaluated":1700000041,"first_observed":1700000006,"last_observed":1700000041,"technique":"T1499"}
 {"type":"alert.resolve","ts":1700000341,"event_id":"9f2c41ab77e30d58-0003","incident_id":"9f2c41ab77e30d58","key":"mgmtfuzz:ba:ad:f0:0d:00:01","title":"MGMT_FUZZ","detail":"...","sev":2,"ty":31,"observations":2,"evaluations":36,"count":36,"first_detected":1700000006,"last_evaluated":1700000041,"first_observed":1700000006,"last_observed":1700000041,"technique":"T1499","reason":"expired"}
 ```
 
@@ -422,6 +431,20 @@ the identity is not. What belongs to the *key* rather than the incident
 (the pcap export state and `reopen_count`) survives the slot reuse in
 a side table (#112).
 
+**Incidents are not `--db` rows** (#170). The stream's unit is the
+incident and it is unchanged: every reopen is a new `alert.create` with
+a new `incident_id`, and the gap between two incidents of one key is
+the `alert.resolve` of the first and the `alert.create` of the second.
+The SQLite `alerts` table's unit is the *finding* — every incident of a
+key while its row is retained — so one row advances across reopens,
+sums their `count`, counts them in `reopens`, and holds the latest
+`incident_id` as the join back to this stream. A consumer that wants
+per-incident history reads it here, not from the file; [[sqlite-schema]]
+→ *Findings and incidents*. No field in this stream changed with #170:
+the record that would have — `first_seen`, which the engine now keeps
+across every reopen rather than only an eviction — is not emitted on
+any `alert*` record, whose incident start is `first_detected`.
+
 | Record | Fires when |
 |--------|-----------|
 | `alert.create` | a dedup key not currently open fires. Once per incident. Accompanied by the legacy `alert` record |
@@ -431,7 +454,8 @@ a side table (#112).
 
 The lifecycle records carry `confidence`, `inventory`, the #90
 signature provenance (`signature_id`, `signature_version`, `validated`,
-`signature_evidence`) and the #92 evidence-ring citations
+`signature_evidence`), the #151 attack-hardware verdict (`hw_verdict`,
+`hw_signals`) and the #92 evidence-ring citations
 (`evidence_count`, `evidence_id_N`) on the same terms as the legacy
 `alert` record: all are additive, all are omitted when the rule
 reported none, so a lifecycle-only consumer never has to read both
@@ -478,6 +502,7 @@ not duration.
 | `cleared` | the operator pressed `c` in the TUI. Every open incident closes — leaving them open would strand a consumer waiting for a resolve that can never come |
 | `displaced` | additive, #148 — a per-destination `BEACONING` finding (`beacon:<ip>:<port>`) lost its place among the `bd.max_findings` strongest tracks to a clearly stronger one, or — no longer strong itself — to any strong one, or the cap was lowered under it. The track may still be beaconing: from this record on it is counted in the `beacon-overflow` finding for as long as it stays strong (a holder displaced because it stopped being strong is not counted at all), and if it wins a place back its next `alert.create` is a new incident of the same key (`reopen_count` > 0) |
 | `drained` | additive, #148 — the `beacon-overflow` finding closed because no strong beaconing track is without its own finding (K = 0) — whether the overflowed tracks won places or simply stopped being strong |
+| `recovered` | additive, 2026-11-11 — an own-state finding closed by its rule because the condition has been clear for 120 s without a break: `SENSOR_UNDERVOLT` (the under-voltage alarm read 0) and `SENSOR_SOURCE_DOWN` (the source read `ok`). The hold is what makes a flapping supply or source one incident ([[alerts]]) |
 
 | Field | Type | Meaning |
 |-------|------|---------|
@@ -490,7 +515,7 @@ not duration.
 | `reopen_count` | int | additive, #112 — how many earlier incidents this dedup key has had: absent (0) on a key's first incident, 1 on its first re-open, and so on. Present on every `alert.*` record of the incident, not only `alert.create`. Remembered in a bounded LRU table (512 keys), so it counts what sloth still remembers, not a lifetime total, and restarts at 0 after `c` or a restart |
 | `evidence_count`, `evidence_id_0` .. `evidence_id_7` | int | additive, #92 — same meaning and same omission rule as on the legacy `alert` record above. Present on `alert.create`/`.escalate`/`.update` for the rules listed in [[pcap-export]] § Which alerts cite frames, refreshed each time rather than fixed at `alert.create` |
 | `prev_sev` | int | severity before the transition. Present on `alert.escalate` and on severity-decrease `alert.update` only |
-| `observations` | int | evaluations whose rendered evidence differed from the previous one. A retained condition re-evaluated unchanged does **not** move this. It is the honest answer to "how many distinct observations", which `count` never was — but it is not a packet count either: sloth's rules read retained state, not frames |
+| `observations` | int | evaluations whose rendered evidence differed from the last *emitted* rendering (the `alert.create`, or the latest `alert.update` / `alert.escalate`). A change inside the 60 s update floor therefore counts on every evaluation until the floor passes and the update is emitted (#173). A retained condition re-evaluated unchanged does **not** move this. It is the honest answer to "how many distinct observations", which `count` never was — but it is not a packet count either: sloth's rules read retained state, not frames |
 | `evaluations` | int | rule ticks under this key, i.e. what `count` has always counted |
 | `count` | int | identical to `evaluations`, carried so a lifecycle-only consumer never has to read both record families |
 | `first_detected` | int | wall clock when the incident opened |
@@ -498,6 +523,7 @@ not duration.
 | `first_observed` | int | wall clock of the first counted observation (== `first_detected`) |
 | `last_observed` | int | wall clock of the most recent counted observation |
 | `reason` | string | resolve cause; `alert.resolve` only |
+| `loc` | object | additive, 2026-10-27 — the incident's location stamp, the same object and the same omission rule as on the `alert` record; identical on every record of one incident |
 
 These are ordinary records: they go to `-o FILE` and every
 `--data-socket` client alike, and under `--out-format cef` or `syslog`
@@ -599,7 +625,7 @@ sees for a given `(src, dst, proto)` tuple.
 ### `twin_episode`
 
 ```json
-{"type":"twin_episode","ts":1700000007,"ssid":"Cafe-Net","real_bssid":"aa:bb:cc:01:02:03","twin_bssid":"11:22:33:44:55:66","enc":"WPA2","real_rssi":-70,"twin_rssi":-45,"rssi_swing_dbm":25,"attack_in_progress":1,"attacker_oui":1,"hash_mismatch":1,"attributed":1,"confidence":60}
+{"type":"twin_episode","ts":1700000007,"ssid":"Cafe-Net","real_bssid":"aa:bb:cc:01:02:03","twin_bssid":"11:22:33:44:55:66","enc":"WPA2","real_rssi":-70,"twin_rssi":-45,"rssi_swing_dbm":25,"attack_in_progress":1,"attacker_oui":1,"hash_mismatch":1,"late_arrival":0,"attributed":1,"confidence":60}
 ```
 
 | Field                | Type   | Meaning |
@@ -614,6 +640,7 @@ sees for a given `(src, dst, proto)` tuple.
 | `attack_in_progress` | int    | 1 if the chain rule tainted `twin_bssid` (DEAUTH_FLOOD seen within 5 s) |
 | `attacker_oui`       | int    | 1 if `twin_bssid`'s OUI is Hak5 or Espressif |
 | `hash_mismatch`      | int    | 1 if the vendor-IE fingerprint hashes disagree |
+| `late_arrival`       | int    | additive, #188 — 1 if the scorer counted the later half's arrival as evidence: first heard at least `twin.late_arrival_s` (120 s) after the earlier half, the earlier half heard again since, the sensor at rest that long, the later half's SSID new on its BSSID this session (not an AP the beacon table dropped and heard again), other positive evidence on the pair, and a locally administered half (always 0 on a pair of two globally administered addresses). The alert's `+late-arrival`. Absent from records written before it existed |
 | `attributed`         | int    | additive, #89 — 1 when something other than radio physics established which half is the impostor (an operator-designated BSSID, a tainted BSSID from the deauth chain, or an attacker-tool OUI). **0 means unattributed**: the pair is a candidate and the two BSSID fields are only in canonical byte order |
 | `confidence`         | int    | additive, #89 — same percentage the pair's `EVIL_TWIN` alert carries |
 | `ap_class`           | string | additive, #89 slice 3 — `impostor`, `neighbor` or `declared`. **Omitted** when nothing established a class, which is every pair until an inventory is loaded. Same values and same meaning as on the alert records |
@@ -642,6 +669,15 @@ why the `(ssid, real_bssid, twin_bssid)` key is now stable — it used to
 swap, and so duplicate, whenever the two RSSIs crossed.
 
 ## State snapshot record types
+
+**Which daemon writes which (JSONL 2.0.0).** Every record in this
+section is `sloth-wifi`'s, except: `gnss_fix`, `gnss_sky`, `gnss_sat`,
+`adsb_aircraft`, `aprs_packet`, `aprs_station`, `rtl433_device` and
+`victron_device`, which are **`sloth-rf`'s only** (emitted by
+`jsonl_emit_state_rf()`); and `sensor`, `sensor_health`, `sys_status`,
+`sys_sensor`, `receiver_hw`, `source_status`, `alert` and the
+`alert.*` lifecycle, which **both** write, each about itself. Until
+2.0.0 the one binary wrote all of them into one stream.
 
 These records carry the current contents of each view-backing table.
 **Snapshot semantics — one record per entry per poll**, emitted by
@@ -677,28 +713,28 @@ pattern as they are converted.
 | Record               | Identity key      | Fields |
 |----------------------|-------------------|--------|
 | `iface`              | `name`            | `rx_bytes`, `tx_bytes`, `rx_packets`, `tx_packets`, `rx_errors`, `rx_drops`, `tx_errors`, `tx_drops`, `rx_rate`, `tx_rate`, `mtu`, `speed_mbps` |
-| `arp`                | `mac`+`ip`        | `mac`, `ip`, `iface` |
+| `arp`                | `mac`+`ip`        | `mac`, `ip`, `iface`. Since #176 the table holds the kernel's IPv6 neighbour cache beside `/proc/net/arp`, so `ip` is an IPv4 or a textual IPv6 address (RFC 5952 form, as `inet_ntop` writes it) and one `mac` can carry several rows |
 | `dhcp_lease`         | `ip`              | `ip`, `hostname`, `expire` (epoch; 0 = unknown) |
 | `wifi_ap`            | `bssid`           | `ssid`, `bssid`, `signal_dbm`, `channel` (**semantics corrected, #167**: derived from the scan's centre frequency through the one shared band plan, `src/wifi_freq.c`. This path used to carry its own copy of the converter accepting 5180-5900 MHz where the monitor path accepted 5160-5895, so the same AP could be `channel: 0` to a managed scan and a channel to a capture. The reconciled 5 GHz span is the assignable centres, channel 32 (5160 MHz) to channel 177 (5885 MHz). A log from before this fix reports `0` for an AP on 5160-5175 MHz, and reports the unassignable numbers 178-180 for 5890-5900 MHz, where both now read `0` and `32`-`35` respectively; 5935 MHz now reads 6 GHz channel `2` instead of `0`, and 5960 MHz reads `0` instead of the wrong `2`. No field was added, renamed or retyped), `enc` (**semantics corrected, #128** — see the `beacon` row), `status` |
 | `wifi_sta`           | `mac`             | `mac`, `signal_dbm`, `tx_rate_kbps`, `rx_rate_kbps`, `connected_secs`, `inactive_ms`, `tx_bytes`, `rx_bytes` |
 | `top_host`           | `ip`              | `ip`, `hostname`, `owner`, `first_seen`, `last_seen`, `conn_count`, `rx_rate`, `tx_rate`, `rx_bytes`, `tx_bytes` |
-| `device`             | `mac` (or `ip` when `mac` is `""`) | `mac`, `ip`, `hostname`, `vendor`, `last_ssid`, `is_ap`, `signal_dbm`, `probe_count`, `sources` (bitmask of `DEV_SRC_*`; bit 64 `DEV_SRC_CAMERA` since #106 round 2 = a camera-discovery row joined by IP), `last_seen`, `risk` + `risk_signals` (see `docs/views/devices.md`), and, additive since #106 round 2, `device_class` (`"camera"` — the device named its own class; `"camera-vendor"` — only an OUI block or SERVER token names a camera maker, or since #155 a mixed-vendor block served an RTSP SDP; `"not-camera"` since #155 — a mixed-vendor block seen in a router role with no camera evidence; `""` otherwise), `camera_vendor` (since #155 also set by a mixed-vendor block — Ubiquiti, TP-Link, Wyze — where it names the maker, not a camera: read it beside `device_class` and `cam_evidence`), `camera_model` (ONVIF `name` / `hardware` scopes, printable ASCII only), `setup_mode` (1 = this BSSID advertises a camera vendor's setup SSID; provisioning state not observed) and `cam_signals` (`CAM_SIG_*` mask: 1 WS-Discovery, 2 setup SSID, 4 mDNS, 8 SSDP, 16 OUI, 32 RTSP). All five are discrete; the record is emitted every tick with no change-only signature. Additive since #155: `cam_score` (integer, the classifier's sum), `cam_evidence` (comma-joined slugs in bit order from `mixed_oui`, `rtsp_sdp`, `rtsp_server`, `mdns_rtsp`; `""` for none), `cam_vetoes` (the same shape from `dhcp_server`, `sends_ra`, `dns_responder`), `cam_conflict` (1 = camera evidence and a veto both stand; not resolved), `dhcp_prl` (the client's DHCP option 55 codes, `"1,3,6,15"`) and `dhcp_vci` (option 60, filtered to printable ASCII) — the last two display-only, never scored. They describe this tick's join, so they can fall as well as rise: a LAN row past `camera.join_fresh_secs`, or at an IP two records hold, no longer counts (see [[camera-detection]], "When an IP is not a key"). **`mac` is `""`** on an IP-only camera record — a camera heard announcing itself on the LAN with no MAC-keyed record holding its IP; key such a record by `ip`. See [[camera-detection]] |
-| `beacon`             | `bssid`           | `ssid`, `bssid`, `signal_dbm`, `channel`, `enc` (**semantics corrected, #128**: `WPA3` whenever the RSNE offers any SAE-family AKM — 8 SAE, 9 FT-SAE, 24 SAE-EXT-KEY, 25 FT-SAE-EXT-KEY — the same family `akm_bits` and the `akm` label already used. Before #128 only 8/9 set `WPA3`, so a BSS offering SAE-EXT-KEY alone logged `enc:"WPA2"` beside an SAE `akm_bits`; a log from before this fix under-reports WPA3 for such BSSes, and `WPA_DOWNGRADE`/evil-twin rules that rank on `enc` now rank them as WPA3. An RSNE with a Version other than 1 still logs `WPA2` but decodes no suites), `beacon_ms`, `pairwise`, `group`, `akm`, `mfp` (0/1/2), `vendor`, `has_wps`, `wps_state`, `wps_locked`, `wps_config_methods` + `wps_device_pwd_id` (additive, #82 — raw WPS IE attributes 0x1008/0x1012; `0` means not observed for both, `0x0004` on the latter means an active Push-Button session right now; live, not sticky — reflects only the most recent beacon; not persisted to `--db`; see `docs/views/beacons.md`), `phy` (**semantics corrected, #127**: Wi-Fi 7 = Element ID Extension 106, 107 (Multi-Link) or 108; before #127 one classifier read ext 81 as Multi-Link and ignored 106/107, so a log from before this fix can under-report Wi-Fi 7 and may label an ext-81-only device Wi-Fi 7), `revealed`, `last_seen`, `frame_count`, `fp_flags` (`AP_FP_FLAG_*` bitset), `vendor_ies_hash`, `ie_order_hash` + `ie_order_count` (additive, #77 — FNV-1a over beacon element identity in order, bodies excluded, transient CSA/Quiet elements skipped; `0` = not decoded; see `docs/views/beacons.md`), `rssi_min_60s`, `rssi_max_60s`, `ssid_history[]`, `neighbors[{bssid, channel, phy_type}]`, `fuzz_ie_overruns`/`fuzz_oversize_ssid`/`fuzz_truncated_rsn` (malformed-IE counters, emitted only when non-zero — feed the `MGMT_FUZZ` alert; `fuzz_truncated_rsn` also counts an RSNE whose Pairwise/AKM/PMKID count or a fixed field runs past the element since #128, where before only an RSNE under 8 octets counted; **semantics corrected, #122/#123**: on a driver that delivers the FCS, radiotap FLAGS 0x10, the 4-octet trailer used to be walked as an element and `fuzz_ie_overruns` climbed on every healthy beacon — and `ie_order_hash` read `0` there, because an overrun suppresses it. The trailer is now stripped before parsing; no field changed, but a log from before this fix on such a driver over-counts `fuzz_ie_overruns` and under-reports `ie_order_hash`), `downgrade_flags` (`WPA_DG_*` bits — the weaker lanes this AP advertises beside its primary one, #62), `akm_bits` (00-0F-AC suite-type bitmap; the `akm` string above caps at three entries and cannot answer "PSK and SAE both?"), `operating_width` (MHz — 20/40/80/160/320, or 8080 for non-contiguous 80+80; **0 means not decoded**, which is not the same as 20, #66), `primary_channel` + `channel_source` (1=DS-Param 2=HT-Oper 3=HE-6GHz 4=EHT-Oper — much 6 GHz gear omits DS Param entirely, so this says where the number came from), `secondary_offset` (HT convention: 0 none, 1 above, 3 below), `wps_manufacturer`/`wps_model_name`/`wps_model_number`/`wps_serial` (additive, #77 — WPS IE vendor-string attributes when the beacon leaks them, `""` when absent. **Filtered to printable ASCII (0x20..0x7e) at the parse boundary**: every byte of these attributes is chosen by whoever is transmitting, and WFA WPS 2.0 §12 defines all four as ASCII strings, so anything outside that range is dropped and the logged value can be shorter than what was on the air — a consumer comparing two logs for a serial number is comparing the filtered form. `""` therefore also means a present attribute carried no printable byte at all. The field is guaranteed ASCII — stricter than the valid-UTF-8 floor every string field has had since #138. Not persisted to `--db`, see `docs/views/beacons.md`), `tbtt_jitter_us` + `tbtt_jitter_samples` + `tbtt_jitter_resets` (additive, #77 — standard deviation in µs of the residual between the observed TSF delta and the nearest whole multiple of the beacon interval, i.e. the AP's own medium-access deferral measured on the AP's clock; `0` µs with `0` samples means not enough beacons, not a perfectly-scheduled AP, so read the pair together; `resets` counts baselines discarded on a TSF that ran backwards, a changed beacon interval, or a gap past `BEACON_AGE_SECS`; monitor-mode only, no threshold or verdict attached, not persisted to `--db`, see `docs/views/beacons.md`) |
+| `device`             | `mac` (or `ip` when `mac` is `""`) | `mac`, `ip`, `hostname`, `vendor`, `last_ssid`, `is_ap`, `signal_dbm`, `probe_count`, `sources` (bitmask of `DEV_SRC_*`; bit 64 `DEV_SRC_CAMERA` since #106 round 2 = a camera-discovery row joined by IP), `last_seen`, `risk` + `risk_signals` (see `docs/views/devices.md`), and, additive since #106 round 2, `device_class` (`"camera"` — the device named its own class; `"camera-vendor"` — only an OUI block or SERVER token names a camera maker, or since #155 a mixed-vendor block served an RTSP SDP; `"not-camera"` since #155 — a mixed-vendor block seen in a router role with no camera evidence; `""` otherwise), `camera_vendor` (since #155 also set by a mixed-vendor block — Ubiquiti, TP-Link, Wyze — where it names the maker, not a camera: read it beside `device_class` and `cam_evidence`), `camera_model` (ONVIF `name` / `hardware` scopes, printable ASCII only), `setup_mode` (1 = this BSSID advertises a camera vendor's setup SSID; provisioning state not observed) and `cam_signals` (`CAM_SIG_*` mask: 1 WS-Discovery, 2 setup SSID, 4 mDNS, 8 SSDP, 16 OUI, 32 RTSP). All five are discrete; the record is emitted every tick with no change-only signature. Additive since #155: `cam_score` (integer, the classifier's sum), `cam_evidence` (comma-joined slugs in bit order from `mixed_oui`, `rtsp_sdp`, `rtsp_server`, `mdns_rtsp`; `""` for none), `cam_vetoes` (the same shape from `dhcp_server`, `sends_ra`, `dns_responder`), `cam_conflict` (1 = camera evidence and a veto both stand; not resolved), `dhcp_prl` (the client's DHCP option 55 codes, `"1,3,6,15"`) and `dhcp_vci` (option 60, filtered to printable ASCII) — the last two display-only, never scored. They describe this tick's join, so they can fall as well as rise: a LAN row past `camera.join_fresh_secs`, or at an IP two records hold, no longer counts (see [[camera-detection]], "When an IP is not a key"). **`mac` is `""`** on an IP-only camera record — a camera heard announcing itself on the LAN with no MAC-keyed record holding its IP; key such a record by `ip`. See [[camera-detection]], plus the distance estimate fields (additive, 2026-10-26, below), copied from the `beacon` or `probe_client` row `signal_dbm` came from |
+| `beacon`             | `bssid`           | `ssid`, `bssid`, `signal_dbm`, `channel`, `enc` (**semantics corrected, #128**: `WPA3` whenever the RSNE offers any SAE-family AKM — 8 SAE, 9 FT-SAE, 24 SAE-EXT-KEY, 25 FT-SAE-EXT-KEY — the same family `akm_bits` and the `akm` label already used. Before #128 only 8/9 set `WPA3`, so a BSS offering SAE-EXT-KEY alone logged `enc:"WPA2"` beside an SAE `akm_bits`; a log from before this fix under-reports WPA3 for such BSSes, and `WPA_DOWNGRADE`/evil-twin rules that rank on `enc` now rank them as WPA3. An RSNE with a Version other than 1 still logs `WPA2` but decodes no suites), `beacon_ms`, `pairwise`, `group`, `akm`, `mfp` (0/1/2), `vendor`, `has_wps`, `wps_state`, `wps_locked`, `wps_config_methods` + `wps_device_pwd_id` (additive, #82 — raw WPS IE attributes 0x1008/0x1012; `0` means not observed for both, `0x0004` on the latter means an active Push-Button session right now; live, not sticky — reflects only the most recent beacon; not persisted to `--db`; see `docs/views/beacons.md`), `phy` (**semantics corrected, #127**: Wi-Fi 7 = Element ID Extension 106, 107 (Multi-Link) or 108; before #127 one classifier read ext 81 as Multi-Link and ignored 106/107, so a log from before this fix can under-report Wi-Fi 7 and may label an ext-81-only device Wi-Fi 7), `revealed`, `last_seen`, `frame_count`, `fp_flags` (`AP_FP_FLAG_*` bitset), `vendor_ies_hash`, `ie_order_hash` + `ie_order_count` (additive, #77 — FNV-1a over beacon element identity in order, bodies excluded, transient CSA/Quiet elements skipped; `0` = not decoded; see `docs/views/beacons.md`), `rssi_min_60s`, `rssi_max_60s`, `ssid_history[]`, `neighbors[{bssid, channel, phy_type}]`, `fuzz_ie_overruns`/`fuzz_oversize_ssid`/`fuzz_truncated_rsn` (malformed-IE counters, emitted only when non-zero — feed the `MGMT_FUZZ` alert; `fuzz_truncated_rsn` also counts an RSNE whose Pairwise/AKM/PMKID count or a fixed field runs past the element since #128, where before only an RSNE under 8 octets counted; **semantics corrected, #122/#123**: on a driver that delivers the FCS, radiotap FLAGS 0x10, the 4-octet trailer used to be walked as an element and `fuzz_ie_overruns` climbed on every healthy beacon — and `ie_order_hash` read `0` there, because an overrun suppresses it. The trailer is now stripped before parsing; no field changed, but a log from before this fix on such a driver over-counts `fuzz_ie_overruns` and under-reports `ie_order_hash`), `downgrade_flags` (`WPA_DG_*` bits — the weaker lanes this AP advertises beside its primary one, #62), `akm_bits` (00-0F-AC suite-type bitmap; the `akm` string above caps at three entries and cannot answer "PSK and SAE both?"), `operating_width` (MHz — 20/40/80/160/320, or 8080 for non-contiguous 80+80; **0 means not decoded**, which is not the same as 20, #66), `primary_channel` + `channel_source` (1=DS-Param 2=HT-Oper 3=HE-6GHz 4=EHT-Oper — much 6 GHz gear omits DS Param entirely, so this says where the number came from), `secondary_offset` (HT convention: 0 none, 1 above, 3 below), `wps_manufacturer`/`wps_model_name`/`wps_model_number`/`wps_serial` (additive, #77 — WPS IE vendor-string attributes when the beacon leaks them, `""` when absent. **Filtered to printable ASCII (0x20..0x7e) at the parse boundary**: every byte of these attributes is chosen by whoever is transmitting, and WFA WPS 2.0 §12 defines all four as ASCII strings, so anything outside that range is dropped and the logged value can be shorter than what was on the air — a consumer comparing two logs for a serial number is comparing the filtered form. `""` therefore also means a present attribute carried no printable byte at all. The field is guaranteed ASCII — stricter than the valid-UTF-8 floor every string field has had since #138. Not persisted to `--db`, see `docs/views/beacons.md`), `tbtt_jitter_us` + `tbtt_jitter_samples` + `tbtt_jitter_resets` (additive, #77 — standard deviation in µs of the residual between the observed TSF delta and the nearest whole multiple of the beacon interval, i.e. the AP's own medium-access deferral measured on the AP's clock; `0` µs with `0` samples means not enough beacons, not a perfectly-scheduled AP, so read the pair together; `resets` counts baselines discarded on a TSF that ran backwards, a changed beacon interval, or a gap past `BEACON_AGE_SECS`; monitor-mode only, no threshold or verdict attached, not persisted to `--db`, see `docs/views/beacons.md`), plus the distance estimate fields (additive, 2026-10-26, below; `est_ptx_source` `tpc_report`, `country_max` or `assumed`), and, additive in JSONL 1.6.0 (#187 S3), `probe_lat` — the last member, an object, **absent** until sloth has paired at least one Probe Request with this BSSID's Probe Response: `{"src":"tsft"|"pcap","n_dir":N,"med_dir_us":..,"p10_dir_us":..,"p90_dir_us":..,"min_dir_us":..,"n_wild":N,"med_wild_us":..}`. The time in µs from a station's Probe Request to the first Probe Response this BSSID addressed back to it, heard in one dwell; nearest-rank statistics (p50 the lower median) over the last 32 pairs per kind, `dir` for requests naming an SSID and `wild` for wildcard requests, each `0` when its `n` is `0`. `src` names the clock both ends of every pair were stamped from: `tsft` the receiver's radiotap TSF (start of request to start of response, so the request's airtime is inside the figure), `pcap` the host's capture timestamps (with driver and USB batching delay in them); one BSSID's figures never mix the two. Pairing rules and refusals: `src/probe_latency.h`. **Not used in any verdict; no cited threshold** — no alert, KARMA score or confidence reads it, and [research/papers/probe-response-latency.md](../../research/papers/probe-response-latency.md) records why no source gives a lure's latency a direction or magnitude. Monitor-mode only. `beacon` has no change-only signature, so the raw microseconds sign nothing; were one added, they stay out of it. Not persisted to `--db`, not carried by the fleet export; slothweb keeps the newest per BSSID for its KARMA detail (`/api/lures/bssid`, [[slothweb]], 2026-11-12). Additive in JSONL 1.7.0 (#172), after `probe_lat`: `harvest_posture`, **absent** until this BSSID was heard sending an M1 that carried the PMKID KDE (to any station); then `1` when `akm_bits` offers a PSK-family AKM (2 PSK, 4 FT-PSK, 6 PSK-SHA256), the harvest-friendly posture — the value is attackable offline from the passphrase (`research/papers/steube-2018-pmkid.md`) — and `0` when it offers none (SAE, 802.1X: the KDE is sent but is not a passphrase target). A hygiene observation about the AP, not an attacker signal, and no alert reads it. `src/harvest_track.h` `harvest_posture_psk()` |
 | `wifi_regulatory`    | `bssid`           | additive, #101 slice B — the regulatory envelope this BSSID **claims**, as its own record because it is change-only where `beacon` is per tick. **Emitted only once a regulatory element (malformed included) has been parsed from the BSSID**: an AP that never sent one has made no claim, and a line of zeros would read as one. Every value is raw, beside its `_present` flag — read the flag first. `country_present`, `country` (two octets verbatim, JSON-escaped), `env` (`any`/`indoor`/`outdoor`/`non_country`/`opclass_table`/`unknown`/`absent`) + `env_raw`, `triplets[]` (each either `{first_channel, num_channels, max_tx_power_dbm}` or, for an Operating Extension Identifier >= 201, `{ext_id, operating_class, coverage_class}`) + `triplets_truncated`, `power_constraint_present` + `power_constraint_db` (unsigned, §9.4.2.13), `tpc_present` + `tpc_tx_power_dbm` + `tpc_link_margin_db` (signed, §9.4.2.16), `he6_present` + `he6_reg_info` (HE 6 GHz Operation Information Control B3-B5, 802.11ax-2021 §9.4.2.249: 0 Indoor AP, 1 Standard Power AP, 2-7 reserved) + `he6_reg_info_name` (`indoor`/`standard_power`/`reserved`, `""` when absent), `tpe[{interp, interp_name, category, count, reserved, ext_octets, values_half_db[]}]` (Transmit Power Envelope, tag 195, §9.4.2.161: values are signed 0.5 dB steps — dBm for the EIRP interpretations, dBm/MHz for the PSD ones; `reserved` 1 with an empty list when the Interpretation or Count is reserved; at most 8 entries, one per (interp, category)) + `tpe_truncated`, `malformed_country`/`malformed_power_constraint`/`malformed_tpc`/`malformed_he6`/`malformed_tpe` (lifetime counts). **Change-only signature** holds the claim values only; the malformed counts enter it as "any malformed" and otherwise ride the 300 s heartbeat, because a crafted-frame stream moves them on every beacon. RSSI is not in this record. Not persisted to `--db` |
 | `deauth`             | `bssid`+`src`+`dst`+`subtype` | `src`, `dst`, `bssid`, `reason`, `subtype`, `first_seen`, `last_seen`, `count`, `flood`, plus (additive, #88) `reason_valid` (**`reason` is meaningless when 0** — a PMF-protected body is ciphertext, a truncated one has no field), `retries` / `protected` / `truncated` (subsets of `count`; retries are Retry-bit repeats of the previous sequence number and do not count toward a flood), `flood_last` (epoch the 5-frames-in-5-s window threshold was last met; 0 = never). `flood` is *current* and decays 10 s after `flood_last`. The identity was documented as `bssid`+`dst` but rows were keyed `(src, dst)` with the BSSID overwritten; since #88 it is the four fields shown. `src` is the claimed transmitter — spoofable. The alert-driving `(BSSID, victim)` aggregate is not a JSONL record; it surfaces through the `DEAUTH_FLOOD` alert |
-| `probe_client`       | `mac`             | `mac`, `ssid`, `signal_dbm`, `channel`, `first_seen`, `last_seen`, `frame_count` (lifetime, not a rate), plus (additive, #88) `flood` (decays), `flood_last` (epoch; 0 = never), `burst_frames` + `burst_span_ms` (the requests that met the 30-in-5-s threshold and the time between the first and last of them) |
+| `probe_client`       | `mac`             | `mac`, `ssid`, `signal_dbm`, `channel`, `first_seen`, `last_seen`, `frame_count` (lifetime, not a rate), plus (additive, #88) `flood` (decays), `flood_last` (epoch; 0 = never), `burst_frames` + `burst_span_ms` (the requests that met the 30-in-5-s threshold and the time between the first and last of them), plus the distance estimate fields (additive, 2026-10-26, below; `est_ptx_source` always `assumed` — a probe request names no power) |
 | `pnl_client`         | `mac`             | `mac`, `mac_random`, `probe_count`, `os_fp`, `phy` (**semantics corrected, #127**: Wi-Fi 7 = Element ID Extension 106, 107 (Multi-Link) or 108; before #127 one classifier read ext 81 as Multi-Link and ignored 106/107, so a log from before this fix can under-report Wi-Fi 7 and may label an ext-81-only device Wi-Fi 7), `phy_confirmed` (1 = the tier was corroborated by an association request rather than inferred from probes, #60), `first_seen`, `last_seen`, `ssids[]` |
 | `seqnum_client`      | `mac`             | `mac`, `mac_random`, `last_seen`, `frame_count`, `hist[]` (12-bit seqnums in observation order) |
 | `seqnum_correlation` | `mac_a`+`mac_b`   | `mac_a`, `mac_b`, `mac_a_random`, `mac_b_random`, `gap`, `dt_ms`, `a_count`, `b_count`. **This record is a hypothesis about a radio, never an identification of a person** — see [[mac-randomisation]] for the limits on use, which are part of the contract and not advice. Seven additive fields (#94) carry the evidence a consumer needs in order not to read it as a verdict: `fwd_gap` is the **forward** counter advance across the transition (1…64), which `gap` — an absolute modular distance — could not distinguish from a counter that ran *backwards*; `confidence` (0…90, never 100) is a calibrated ranking of evidence strength and **not a posterior probability**, since the base rate of rotations in an environment is unobservable; `window_start` / `window_end` are the earliest and latest frame timestamps the pair was decided on, so a row read out of an archive shows whether it rests on four frames in six seconds or on a day of traffic; `a_hist_n` / `b_hist_n` are the trail depth each side; `a_is_earlier` says which address the transition ran *from*, the pair itself being unordered. No pre-#94 field changed meaning or value and `DB_SCHEMA_VERSION` does not move. Emitted only while longitudinal correlation is enabled — `--no-correlate` produces no rows of this type at all |
 | `channel_summary`    | `channel`         | `channel`, `band` (additive, #91 — `"2.4 GHz"`/`"5 GHz"`/`"6 GHz"`/`"?"`; `channel` alone cannot say which band, since 5 GHz and 6 GHz channel numbers overlap (37, 149, …) — `ap_band_label()` is the one function behind this field, the `[m]` Channel view's `Band` column and the AP detail panel, so none of the three can disagree; see `docs/views/channel.md`), `ap_count`, `assoc_count`, `best_signal`, `top_ssid`, `ctrl_total` / `ctrl_rts` / `ctrl_cts` / `ctrl_ack` / `ctrl_blockack` (observed control-frame volume, #64 — the *measured* half of channel occupancy, as distinct from the QBSS Load IE an AP self-reports; per-channel because CTS and ACK carry no transmitter address), `last_seen` |
-| `assoc`              | `bssid`+`sta_mac` | `bssid`, `sta_mac`, `ssid`, `sta_random`, `source` (`ASSOC_SRC_*`), `channel`, `signal_dbm`, `first_seen`, `last_seen`, `frame_count` |
+| `assoc`              | `bssid`+`sta_mac` | `bssid`, `sta_mac`, `ssid`, `sta_random`, `source` (`ASSOC_SRC_*`), `channel`, `signal_dbm`, `first_seen`, `last_seen`, `frame_count`, plus the distance estimate fields (additive, 2026-10-26, below) — **of the AP**, not the client: every frame behind the row is one the AP sent |
 | `wifi_assoc_req`     | `bssid`+`sta_mac` | what the client *asked* for (#60), beside the `assoc` grant: `requested_ssid`, `is_reassoc`, `listen_interval`, `capability_info`, `akm_bits`, `pairwise_bits` (00-0F-AC suite-type bitmaps — see `RSN_AKM_*`), `requested_mfp` (0/1/2), `supported_rates`, `phy` (**semantics corrected, #127**: Wi-Fi 7 = Element ID Extension 106, 107 (Multi-Link) or 108; before #127 one classifier read ext 81 as Multi-Link and ignored 106/107, so a log from before this fix can under-report Wi-Fi 7 and may label an ext-81-only device Wi-Fi 7), `vendor_ie_hash`, `downgrade_flags` (`ASSOC_DG_*`), `prev_akm_bits`, `prev_mfp`, `last_seen` |
-| `captive_portal_event` | `host`+`ts`     | connectivity-check interception (#69). `kind` is a `CP_KIND_*` bit — body hijack, DNS spoof, DNS unexpected, or TLS MITM — and they are independent signals, so which one fired tells a consumer how the portal gave itself away. `evidence` carries what was seen instead |
+| `captive_portal_event` | `host`+`ts`     | connectivity-check interception (#69). `kind` is a `CP_KIND_*` bit — body hijack, DNS spoof, DNS unexpected, or TLS MITM — and they are independent signals, so which one fired tells a consumer how the portal gave itself away. `evidence` carries what was seen instead (for a kit page, the matched row's label). Since #169, `server` / `server_port` name the responder (`""` / `0` for a DNS-sourced event) and `kit` the named attack kit (`""` for none) |
 | `wifi_mld`           | `mld_mac`         | Wi-Fi 7 Multi-Link Devices (#67). `mld_mac` is the **stable identity**; `link_0_mac` … `link_n_mac` are the per-link addresses its radios use simultaneously. This is the mapping that stops one handset being counted as three devices — MLO defeats sequence-number correlation structurally, because an MLD's radios have independent sequence spaces and never correlate. `links_truncated` when more affiliated links were advertised than sloth holds. **Since #129 the records include client (non-AP) MLDs** learned from (Re)Association Requests, not only AP MLDs from Beacons: the parser used to read Multi-Link Control bit 4 as "MLD MAC Address Present" and drop every Basic MLE with it clear, but in the Basic variant that bit is Link ID Info Present and the MLD MAC is unconditional — so the client side was never recorded. A consumer will see more `wifi_mld` records, and per-link addresses of Wi-Fi 7 handsets now collapse to their `mld_mac`. No field changed |
 | `rrm_beacon_request` | `bssid`+`sta_mac` | 802.11k survey activity (#61). `targeted_reqs` (named an SSID) and `broadcast_reqs` (did not) are **separate fields** because only the first is the signal — a request with no SSID subelement is ordinary steering. `reports_seen` is separate again: a reply is evidence a survey *succeeded*, not that one was attempted, and folding it in would let a chatty client incriminate its own AP. Plus `last_ssid`, `last_channel`, `measurement_mode` (0 passive, 1 active, 2 table). **Contract note (#124, 2026-10-14):** before this date `measurement_mode` held BSSID octet 1 of the request, not the mode — `255` on every wildcard request — because the parser read element octet 11 where §9.4.2.20.7 puts Measurement Mode at octet 9. Values recorded earlier are not modes and should be discarded. From the same change, Action frames with the Protected Frame bit set (PMF) are never parsed: their body is CCMP ciphertext, so no `rrm_beacon_request`, `btm_request` or `wifi_csa_event` record can originate from one, and on a PMF network these records describe only the unprotected minority |
 | `wifi_csa_event`     | `bssid`+`ts`      | channel-switch announcements (#63), every one — legitimate DFS included, since a consumer judging one needs the ordinary traffic around it. `ta` is the **real transmitter** and `bssid` the BSS it claims to speak for: a difference is the forgery signal and storing only one would erase it. Plus `new_channel`, `new_op_class` (0 when only tag 37 was present), `switch_mode` (1 = stop transmitting until the switch), `switch_count` (TBTTs), `source` (0=beacon 1=probe-resp 2=action), `from_channel` |
 | `btm_request`        | `bssid`+`sta_mac` | 802.11v steering (#59). `req_count` is every BTM Request for the pair; `imminent_count` is the subset carrying Disassociation Imminent — **the field to key on**, since ordinary load balancing and a forced roam are otherwise the same record. Plus `request_mode`, `disassoc_timer` (beacon intervals), `validity_interval`, `candidate_count`, `candidates_truncated`, `candidate_0`…`candidate_n` (where the AP is pointing the client), `first_seen`, `last_seen` |
-| `eapol`              | `bssid`+`sta_mac` | `bssid`, `sta_mac`, `ssid`, `event_ts`, `msg_num`, `has_pmkid`, `handshake_complete`, `signal_dbm`, `channel`. Three additive fields (#97) keep apart what one flag used to blur: `handshake_complete` is a **candidate message pair** — this M2 and a live M1 carry the same Key Replay Counter and landed within `EAPOL_PAIR_WINDOW_S` of each other, the only state a hashcat 22000 EAPOL record is exported from. `handshake_progress` (0-4) is how far M1..M4 got inside that attempt, reporting only. `assoc_evidence` is the one that means the AP committed to this client (M3, key install) — a consumer reading `handshake_complete` as "associated" was reading a half-exchange, since an M1 goes to whoever asks and an M2 can be replayed. `replay_counter_ok` records that the pairing was decided by an actual byte comparison. None of it is cryptographic verification: sloth never checks the MIC |
+| `eapol`              | `bssid`+`sta_mac` | `bssid`, `sta_mac`, `ssid`, `event_ts`, `msg_num`, `has_pmkid`, `handshake_complete`, `signal_dbm`, `channel`. Three additive fields (#97) keep apart what one flag used to blur: `handshake_complete` is a **candidate message pair** — this M2 and a live M1 carry the same Key Replay Counter and landed within `EAPOL_PAIR_WINDOW_S` of each other, the only state a hashcat 22000 EAPOL record is exported from. `handshake_progress` (0-4) is how far M1..M4 got inside that attempt, reporting only. `assoc_evidence` is the one that means the AP committed to this client (M3, key install) — a consumer reading `handshake_complete` as "associated" was reading a half-exchange, since an M1 goes to whoever asks and an M2 can be replayed. `replay_counter_ok` records that the pairing was decided by an actual byte comparison. None of it is cryptographic verification: sloth never checks the MIC. Additive in JSONL 1.7.0 (#172), last: `harvest_cluster_id`, the harvest tracker's cluster this message was counted in, `0` for none — the station row's for an M1 or M2 between a station and a BSSID it sent a (re)association request to, or, for the M2 that joined a victim to a deauth-then-reconnect chain, the chain's (it takes precedence). Ids come from one counter, are never `0` and are not reused within a run; a row that ages out and returns is a new cluster. **Non-zero is not a finding**: every station that associates has a row. It is one when a `harvest_station` / `harvest_chain` record's `cluster_id` or a `PMKID_HARVEST` / `HANDSHAKE_HARVEST` detail's `cluster #N` names the same id; the EAPOL view's `[g]` groups by it (`docs/views/eapol.md`). `src/harvest_track.h` |
 | `mdns_service`       | `instance`        | `instance`, `service`, `host`, `ip`, `port`, `last_seen` |
 | `nbns_name`          | `name`+`ip`       | `name`, `ip`, `suffix`, `last_seen` |
 | `ssdp_device`        | `usn`             | `ip`, `kind` (the SSDP `NT`/`ST` value; renamed from `type` to avoid colliding with the envelope's `type` field), `usn`, `location`, `nts`, `last_seen` |
@@ -714,11 +750,43 @@ pattern as they are converted.
 | `rdp_flow`           | `(src_ip, dst_ip)` | `src_ip` (RDP client), `dst_ip` (RDP server), `connect_req_count` (X.224 Class 0 CR TPDUs observed; one per TCP connection that reached the RDP negotiation), `last_cookie` (last `mstshash=` username seen in the Cookie field — the username the attacker is guessing against), `proto_mask` (bitwise-OR of requested protocols across all CRs on the flow; 0x01=RDP, 0x02=SSL, 0x04=HYBRID/NLA, 0x08=HYBRID_EX), `first_seen`, `last_seen`. Feeds the `RDP_BRUTE_FORCE` alert when `connect_req_count` exceeds the xfreerdp-loop/NLBrute threshold. See `docs/wiki/rdp-snoop.md`. |
 | `snmp_flow`          | `(src_ip, dst_ip)` | `src_ip` (querier — flipped from packet direction so responses attribute back to the original requester), `dst_ip` (agent), `version` (0=v1, 1=v2c, 3=v3), `get_count`, `getnext_count`, `getbulk_count`, `set_count` (rare — write attempts are a post-exploit signal), `response_count`, `trap_count`, `community_count` (distinct community strings seen, capped at 8), `last_community` (most recent community string — sanitised to printable ASCII, dropped if it contained non-printable bytes), `first_seen`, `last_seen`. Feeds the `SNMP_COMMUNITY_BRUTE` alert when `community_count` exceeds the snmpwalk-wordlist threshold. See `docs/wiki/snmp-snoop.md`. |
 | `mqtt_flow`          | `(src_ip, dst_ip)` | `src_ip` (MQTT client — flipped on CONNACK so the conversation stays attributed to the client), `dst_ip` (broker), `connect_count` (CONNECT packets observed), `connack_fail_count` (CONNACK reason codes that mean bad-auth / not-authorised), `subscribe_count`, `publish_count`, `proto_level` (3 / 4 / 5 from the most recent CONNECT), `last_username` (Username field from the most recent CONNECT — sanitised to printable ASCII, dropped if it contained non-printable bytes), `first_seen`, `last_seen`. Feeds the `MQTT_BROKER_BRUTE` alert via dual thresholds (`connect_count ≥ 10` OR `connack_fail_count ≥ 5`). See `docs/wiki/mqtt-snoop.md`. |
-| `ble_device`         | `addr`+`addr_type`+`sensor`+`iface` | additive, #144 slice 4 — one advertiser as one BLE sensor heard it (the host controller via `--bt-monitor` and an Ubertooth via `--bt-capture` are separate rows). `addr` (display order, most significant octet first), `addr_type` (0 public, 1 random, 2/3 resolved identity, 255 anonymous — a 0x0D advertisement with no AdvA, `addr` all zero, one row per sensor for all of them), `sensor` (`ble`), `iface` (`bluetooth-monitor` / `ubertooth`), `adapter` (HCI index; 0 for a capture), `sampled` (1 = a one-channel sample: `adv_count` is a fraction of what was sent), `channel` (LL channel 0..39, -1 unknown), `last_pdu` (`ADV_IND` / `ADV_DIRECT_IND` / `ADV_SCAN_IND` / `ADV_NONCONN_IND` / `SCAN_RSP` / `EXT_ADV` / `EXT_SCAN_RSP` / `adv`; as of the record, not signed; the two `EXT_*` names are extended PDUs from 0x0D reports, a Legacy-bit 0x0D report reads as its legacy name), `pdu_mask` (bit per Event_Type ever heard from the row: 1 ADV_IND, 2 ADV_DIRECT_IND, 4 ADV_SCAN_IND, 8 ADV_NONCONN_IND, 16 SCAN_RSP, 32 EXT_ADV, 64 EXT_SCAN_RSP), `name` + `name_complete`, `uuid16` (first 16-bit service UUID), `mfr_id` (company ID), `mfr_subtype` (the first manufacturer-data octet after it — the Continuity type for Apple; this pair is the **first** one heard, so a device rotating Continuity types is one state), `svc_data_uuid16` (first Service Data - 16-bit UUID), `appearance`, `hid` (mask: 1 a HID appearance 0x03C0..0x03CA was advertised, 2 the HID service 0x1812 was listed), `tx_power` (-128 absent), `flags` (AD Flags), `has_rssi` + `rssi` + `rssi_best`, `adv_count`, `watch_category` (`BLE_WATCHLIST` category, `""` none — **a category, never an identity**; the shipped table is empty), additive with the 0x0D slice `ext_adv` (1 once an extended, non-legacy PDU was heard from the row; not signed on its own, because it is set exactly when the `EXT_ADV` or `EXT_SCAN_RSP` bit of `pdu_mask` is, and that is signed), `primary_phy` (1 LE 1M, 3 LE Coded — S=8 where Advertising Coding Selection is supported — 4 LE Coded S=2, Core v5.4; 0 no 0x0D report yet; a Legacy-bit report is always 1), `secondary_phy` (0 none, 1 1M, 2 2M, 3 Coded S=8, 4 Coded S=2; a Legacy-bit report is always 0) and `adv_sid` (0..15, -1 none or no ADI, which includes every legacy PDU) — the last three the latest 0x0D report's, not signed, `first_seen`, `last_seen` (frame clock). Every id field reads `-1` when the advertisement never carried it. **Change-only**: the signature holds the discrete fields (`pdu_mask`, never `last_pdu`: an ADV_IND and its SCAN_RSP alternate) and RSSI quantised to 10 dB; `last_pdu`, `adv_count`, `channel` and the timestamps are written but not signed, so a steady advertiser is a 300 s heartbeat. No raw AD byte is in the record |
+| `ble_device`         | `addr`+`addr_type`+`sensor`+`iface` | additive, #144 slice 4 — one advertiser as one BLE sensor heard it (the host controller via `--bt-monitor` and an Ubertooth via `--bt-capture` are separate rows). `addr` (display order, most significant octet first), `addr_type` (0 public, 1 random, 2/3 resolved identity, 255 anonymous — a 0x0D advertisement with no AdvA, `addr` all zero, one row per sensor for all of them), `sensor` (`ble`), `iface` (`bluetooth-monitor` / `ubertooth`), `adapter` (HCI index; 0 for a capture), `sampled` (1 = a one-channel sample: `adv_count` is a fraction of what was sent), `channel` (LL channel 0..39, -1 unknown), `last_pdu` (`ADV_IND` / `ADV_DIRECT_IND` / `ADV_SCAN_IND` / `ADV_NONCONN_IND` / `SCAN_RSP` / `EXT_ADV` / `EXT_SCAN_RSP` / `adv`; as of the record, not signed; the two `EXT_*` names are extended PDUs from 0x0D reports, a Legacy-bit 0x0D report reads as its legacy name), `pdu_mask` (bit per Event_Type ever heard from the row: 1 ADV_IND, 2 ADV_DIRECT_IND, 4 ADV_SCAN_IND, 8 ADV_NONCONN_IND, 16 SCAN_RSP, 32 EXT_ADV, 64 EXT_SCAN_RSP), `name` + `name_complete`, `uuid16` (first 16-bit service UUID), `mfr_id` (company ID), `mfr_subtype` (the first manufacturer-data octet after it — the Continuity type for Apple; this pair is the **first** one heard, so a device rotating Continuity types is one state), `svc_data_uuid16` (first Service Data - 16-bit UUID), `appearance`, `hid` (mask: 1 a HID appearance 0x03C0..0x03CA was advertised, 2 the HID service 0x1812 was listed), `tx_power` (-128 absent), additive 2026-11-02 `ext_tx_power` (the extended advertising report header's TxPower, dBm, -128 absent or legacy-only; the value the distance estimate takes first, `est_ptx_source` `ble_ext_tx_power`; written, not signed: it changes only with the advertiser's own setting, and a heard advertiser's record follows within a 10 s slot), `flags` (AD Flags), `has_rssi` + `rssi` + `rssi_best`, `adv_count`, `watch_category` (`BLE_WATCHLIST` category, `""` none — **a category, never an identity**; the shipped table is empty), additive with the 0x0D slice `ext_adv` (1 once an extended, non-legacy PDU was heard from the row; not signed on its own, because it is set exactly when the `EXT_ADV` or `EXT_SCAN_RSP` bit of `pdu_mask` is, and that is signed), `primary_phy` (1 LE 1M, 3 LE Coded — S=8 where Advertising Coding Selection is supported — 4 LE Coded S=2, Core v5.4; 0 no 0x0D report yet; a Legacy-bit report is always 1), `secondary_phy` (0 none, 1 1M, 2 2M, 3 Coded S=8, 4 Coded S=2; a Legacy-bit report is always 0) and `adv_sid` (0..15, -1 none or no ADI, which includes every legacy PDU) — the last three the latest 0x0D report's, not signed, `first_seen`, `last_seen` (frame clock). Every id field reads `-1` when the advertisement never carried it. **Change-only**: the signature holds the discrete fields (`pdu_mask`, never `last_pdu`: an ADV_IND and its SCAN_RSP alternate), the **best** RSSI quantised to 10 dB, and (2026-11-02) the liveness slot `last_seen / 10` (`BLE_JSONL_LIVE_S`, slothweb's fine bucket); `last_pdu`, `adv_count`, `channel`, the current RSSI and the raw timestamps are written but not signed. So an advertiser sloth keeps hearing writes one record per 10 s slot its frame-clock `last_seen` enters, and one that went quiet (its `last_seen` frozen) rides the 300 s heartbeat: the same mechanism as `beacon`, which is re-sent while the AP is heard, bounded to the slot rather than every pass. **Rate**: at most 0.1 lines/s per heard advertiser, so at most 25.6 lines/s with all `MAX_BLE_DEVICES` 256 rows heard at once and about 5 lines/s (about 3 KB/s at roughly 0.6 KB a line) for fifty; `beacon` is one line per AP per pass, 4 lines/s per AP at the default 250 ms pass (`POLL_MS`), up to 1,024 lines/s at `MAX_BEACON_APS` 256. Before 2026-11-02 a steady advertiser was one line per 300 s, which left slothweb's per-advertiser signal series a point in five minutes. `tests/test_ble_rules.c` holds the slot over sixty passes with the RSSI wandering inside its bands (six records for the heard row, one for a row heard once). No raw AD byte is in the record. Additive 2026-10-26: the distance estimate fields (below; `est_ptx_source` `ble_ext_tx_power`, `ble_ad_tx_power` or `assumed`). The signature takes `est_dist_band` only: never `est_dist_m`, and never `est_dist_trend`, which is written on every record but under ordinary RSSI noise moves for an advertiser that is not, so a trend change reaches a consumer on the next record or heartbeat |
 | `ble_alert`          | `key`             | additive, #144 slice 4 — the structured companion of a `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED` or `BLE_WATCHLIST` finding, built from the same list the rules fire from (`src/ble_detect.c`), so the two cannot disagree. Common: `kind` (`adv_flood` / `hid_oui` / `hid_rotate` / `watchlist`), `alert` (`ALERT_TYPE_*`), `ty`, `key` (the alert's dedup key — join on it), `sensor`, `iface`, `sampled`. `adv_flood`: `adv_type`, `family` (`mfr` / `svc_data`), `id`, `subtype` (-1 none), `window` (`current` / `previous`), `window_s`, `distinct_addrs` + `distinct_capped` (1 = more than 128 were heard and not counted), `fresh_addrs` (gate 1: addresses new to the key since the two windows before; uncapped, Bloom-backed, can under-count, never over-count), `total_adv`, `rate` (advertisements per second over the whole window), `has_rssi` + `median_rssi`, `spam_source` (the tool-source line the key rests on). `hid_oui`: `addr`, `addr_type`, `hid`, `appearance`, `oui_table` (`Hak5` / `Espressif`). `hid_rotate`: `addrs`, `window_s`, `appearance`. `watchlist`: `category`, `addrs` (addresses, which rotate — **not** a device count), `window_s`. **Change-only**: signed on the key and the finding's state — for `adv_flood` the **last closed** window's fresh addresses and advertisements quantised by powers of two with its median RSSI by 10 dB, never the window in progress (which climbs from zero every window); for the others `addrs` by powers of two — so a steady flood is two records (onset, then its first closed window) and the 300 s heartbeat, and re-emits when the closed-window volume doubles or halves. The written `total_adv` / `rate` / `distinct_addrs` / `fresh_addrs` are the passing window's, as of the record. Emitted only while the finding stands; its end is the `alert.resolve` of the same key |
-| `sensor`             | `kind`+`iface`    | `kind` (`wifi`/`ble`/`zigbee`/`sdr`/`gps`/`adsb`/`meshtastic`/`can`), `state` (`present`/`active`/`hidden`/`error`), `name`, `iface`, `observed` (cumulative observation count), `first_seen`, `last_seen`. The passive sensor registry — one record per detected observation source. See `docs/wiki/non-ip-sensors.md`. |
+| `sensor`             | `kind`+`iface`    | `kind` (`wifi`/`ble`/`zigbee`/`sdr`/`gps`/`adsb`/`meshtastic`/`can`/`aprs`/`rtl433`), `state` (`present`/`active`/`hidden`/`error`), `name`, `iface`, `observed` (cumulative observation count), `first_seen`, `last_seen`. The passive sensor registry — one record per detected observation source. See `docs/wiki/non-ip-sensors.md`. |
 | `wifi_merged`        | `key`             | `key` (observed entity — AP BSSID or STA MAC), `seen_by` (distinct radios that heard it), `sensor_mask` (bitmask, bit *i* = sensor id *i*), `best_rssi` (strongest signal in dBm across radios; 0 = none sampled), `best_sensor` (radio id that heard it strongest; -1 = none), `channel`, `freq_mhz`, `observations` (total merged hits), `first_seen`, `last_seen`. Multi-radio merged 802.11 world model — folds several monitor adapters into one entity-keyed view while retaining observer metadata. See `docs/wiki/wifi-sigint.md`. |
+| `wifi_df`            | `mac`             | additive 2026-11-16 (JSONL 2.2.0), [[direction-finding]] — only with `--df-iface` and a second radio registered: one line per transmitter two or more radios hold a fresh signal level for. `mac`, `channel` (of its newest frame, 0 unknown), `heard_by` (radios with a fresh level), `quality` (`lean`: loudest minus quietest at or over 6 dB; `weak`: under it), `best_radio` (index into the `df_radio` lines) and `best_iface`, `margin_db`, `along_m` only when every radio that heard it has a position (the power-weighted mean of their positions along the baseline, metres), `bearing_deg` and `bearing_err_deg` (additive, JSONL 2.4.0, 2026-11-17) only when the radios are placed in two dimensions (`--df-iface NAME@X,Y`) and a bearing can be given: the compass direction, `0`, `45` .. `315` (0 north, 90 east), in which the levels lean from the centroid of the radio positions, and how far a 3 dB error on one radio moves it, `15`, `30` or `45`; both integers, both absent in the common case (a transmitter not close to the array, a radio that did not hear it), never with `along_m`, `rssi` (an array in `df_radio` order, the radio's mean level in dBm as measured, or `null`), `level` (the same less each radio's `bias_db`: what the loudest radio, the margin and `along_m` are computed from), `last_seen`. **Change-only** on the quality, the loudest radio, which radios heard it, the margin in 3 dB bands, `along_m` in 0.25 m bands, `bearing_deg` and `bearing_err_deg`. Not a fix: levels on a line say nothing of side or range, and the bearing is a lean in 45 degree steps with no range. No alert reads it. |
+| `df_radio`           | `radio`           | additive 2026-11-16 (JSONL 2.2.0), [[direction-finding]] — only with `--df-iface`: one line per radio of the direction-finding table. `radio` (0 is the sensor radio), `iface`, `role` (`sensor` or `df`), `pos_m` when given, `x_m` and `y_m` (additive, JSONL 2.4.0: metres east and north, when the radio was placed with `NAME@X,Y`; never with `pos_m`), `open`, `running`, `noted` (frames that reached the table), and for a `df` radio `bias_db` once measured (dB it reads above radio 0, the median over shared transmitters), `frames` (admitted by the radiotap gate), `rejects`, `retune_failures`. **Change-only** on open, running, whether anything was noted, whether a retune was refused and `bias_db` in 3 dB bands; never on a count. |
+| `gnss_fix`           | *(singleton)*     | additive 2026-11-02, [[gnss]] — the `--gps` receiver's newest TPV, only with a `--gps` reader: `src`, `fix_ts`, `mode` (0 unknown, 1 none, 2 2D, 3 3D), `status` (gpsd's, -1 absent), `nsat` / `usat` (-1 before a SKY), `hdop` / `vdop` / `pdop` (0 unknown), `lat` / `lon` (five decimals, only with a position), `alt_m`, `eph`, `epv`, `speed_mps`, `track_deg`, `rx_time_ms` (the receiver's `time` as unix ms) and `time_off_ms` (receiver minus host wall clock at receipt; coarse, no PPS) when the TPV carried a parseable time, `leap`, `jam` (u-blox jamming indicator, -1 absent), the seven `gst_*` sigmas once a GST arrived, `tpv_count`. **Change-only** on bands: mode, status, the used-count band (0, 1–3, 4–5, 6–7, ≥8: `uSat` flaps by one every few seconds on a moving or urban receiver, and which bird joined or left is `gnss_sat`'s `used`), `nsat`/4, the HDOP / PDOP bands (<1, <2, <5, ≥5), the offset band (\|off\| <500 ms, <2 s, <10 s, ≥10 s, unknown) **with hysteresis** (the band moves only once the offset clears the edge by a quarter of it — 125 ms, 500 ms, 2.5 s — because a 9600-baud receiver's serial latency hovers around 500 ms), the speed band (<0.5, <2, <30, ≥30 m/s), the jam band (0, 1–63, 64–127, ≥128; `jam` is **sticky**: gpsd attaches it only to the TPV after a UBX-MON-HW poll, so the last value holds for 10 TPVs before reading -1), has-position; the position and the raw figures are written, never signed |
+| `gnss_sky`           | *(singleton)*     | additive 2026-11-02 — the newest SKY's summary: `src`, `sky_ts`, `nsat`, `usat`, `rows` (satellites kept, at most 48), `overflow` (listed past that), `hdop`, `vdop`, `pdop`, `gdop`, `tdop`, `cn0_mean`, `cn0_max`, `cn0_sd` (over the rows with a C/N0), `cn0_n`, `passes`. **Change-only** on `nsat`/4, the used-count band (as `gnss_fix`), the three DOP bands and the mean-C/N0 band (<25, 25–35, ≥35 dB-Hz) |
+| `gnss_sat`           | `gnssid`+`prn`    | additive 2026-11-02 — one satellite in view, per satellite rather than an array in `gnss_sky` so a consumer keeps a table keyed by the row and one change costs one line: `gnss` (GPS / SBAS / Galileo / BeiDou / IMES / QZSS / GLONASS / NavIC, `""` when gpsd sent no gnssid), `gnssid` (-1 absent), `svid`, `prn`, `sigid`, `el`, `az` (degrees; **absent** when gpsd sent none — never -1, which is a bird one degree under the horizon that gpsd still lists; `el` may be negative), `cn0` (dB-Hz, one decimal; **absent** when the receiver lists the satellite but does not track it), `used` (in the solution), `health` (0 unknown, 1 ok, 2 unhealthy, -1 absent), `sky_ts`. **Change-only** on identity, `used`, `health`, C/N0 to 6 dB, elevation and azimuth to 15° (absent as its own band): a steady sky is a 300 s heartbeat per satellite, a satellite rising, joining or leaving the solution or crossing a band is one record. **A satellite that sets writes nothing**: only the current sky is walked, so a consumer infers a set satellite from its heartbeat lapsing (slothweb drops a row quiet for 660 s, two heartbeats and a margin); one that sets and re-rises inside a heartbeat with the same bands is silent too. A row sitting on a band edge writes a line per pass until it moves off it — bounded to that row, accepted ([[gnss]]) |
+| `adsb_aircraft`      | `hex`             | additive 2026-11-05, #26 slice 1, [[adsb]] — one aircraft the `--adsb` decoder (readsb / dump1090-fa `aircraft.json`) lists, only with `--adsb`: `hex` (the 24-bit address as 6 lower-case hex digits, `~`-prefixed for a non-ICAO address such as TIS-B — a separate key from the same digits without it), `non_icao` (0/1), `state` (`live`; `gone` once, when the decoder has not heard it for 60 s), `src` (`file:/path`, `sbs:HOST:PORT`, `beast:HOST:PORT`), `source_type` (the decoder's `type`: `adsb_icao`, `mode_s`, `mlat`, `tisb_other`, ...; for `beast://` sloth's own decode, readsb's names: `adsb_icao`, `adsb_icao_nt`, `adsb_other`, `tisb_icao`, `tisb_trackfile`, `tisb_other`, `adsr_icao`, `adsr_other`, `mode_s`, `mlat`; `""` absent, as for every `sbs://` row), `flight` (callsign, trailing spaces trimmed), `squawk` (4 octal digits), `category` (`A0`..`D7`), `emergency` (`none`, `general`, `lifeguard`, `minfuel`, `nordo`, `unlawful`, `downed`, `reserved`; `""` absent) — each `""` when the decoder never sent it — `on_ground` (0/1), `alt_baro` / `alt_geom` (ft; each **omitted** when unknown), `alt_band` (-2 ground, -1 unknown, 0..9 one per 1,000 ft below 9,750 ft with edges at x,750 ft, 10.. one per 4,000 ft above; the held band, below), `gs` (kt), `track` (°), `baro_rate` / `geom_rate` (ft/min), `lat` / `lon` (five decimals, only as a valid pair) with `pos_ts` (wall time of the position: read time minus `seen_pos`), `rssi` (dBFS), `messages` — each figure omitted when unknown, never 0 — `first_seen` (the first document that listed it), `last_seen` (read time minus `seen`). Sticky: a key the newest document omits keeps its last value. **Change-only** on identity, `first_seen`, the altitude band **held with 100 ft hysteresis** (every edge 250 ft from both the whole-thousand and the x,500 levels where aircraft fly level), the 0.1° position cell **held** until the position leaves it by 0.01°, has-position, squawk, emergency, callsign and category; never the altitude, position, speed, track, rates, RSSI, `seen`, `messages` or `source_type` (readsb's best source flips between ADS-B, MLAT and Mode S). An aircraft level in one cell is a 300 s heartbeat; a band crossing, a new cell, a squawk / emergency / callsign change is one record. The `gone` record is written once per expiry, unconditionally, and re-signs the slot so a returning address is fresh. No `%f` (locale) |
+| `aprs_packet`        | *(event)*         | additive 2026-11-05, [[aprs]] — one APRS packet the `--aprs` Dire Wolf decoder logged (its `-L` CSV, `src/log.c` 1.7), only with `--aprs`; written once per packet (src/aprs.c's ring, this writer's own cursor), not deduplicated: `src` (`file:/path`), `seq` (sloth's packet count from 1), `chan` (Dire Wolf's channel), `utime` (Dire Wolf's clock at decode), `source` (an AX.25 callsign: 1-6 of `[A-Z0-9]`, optionally `-` and 1-2 more), then **only when the line carried them**, never a 0 or `""` for absent: `heard` (the station heard on the air: the source itself, or the digipeater) with `direct` (0/1), `level` (audio level), `error`, `dti` (APRS101 data type indicator, one byte), `name` (object / item name, else the source), `symbol` (table + code, two bytes), `lat` / `lon` (6 dp, as a pair), `speed_kt`, `course` (degrees), `alt_m` (metres), `freq`, `offset`, `tone` (as Dire Wolf wrote them), `system`, `status` (Mic-E), `telemetry`, `comment` (free text from the transmitter: printable ASCII, any other byte `?`, at most 64 bytes, the comment 128). |
+| `aprs_station`       | `call`            | additive 2026-11-05, [[aprs]] — one station (a packet's `source`), only with `--aprs`: `call`, `state` (`live`; `gone` once, when unheard for 3600 s), `src`, `first_seen` / `last_seen` (Dire Wolf's `utime` of its first and newest packet this visit), `packets` (this visit), and when known `via` with `direct` (the newest packet's), `heard_direct` (0/1: any packet heard direct; always written), `level`, `best_level`, `dti`, `symbol`, `lat` / `lon` / `pos_ts` (the newest position and its `utime`) with the `speed_kt` / `course` / `alt_m` that came with it, `system`, `status`, `comment`. An object's or item's position, symbol and comment are not its sender's and never appear here. **Change-only** on `aprs_station_sig()`: the call, `first_seen`, the held 0.01° cell (0.001° hysteresis), has-position, the symbol, `heard_direct` — never the count, times, level, via or comment — plus the 300 s heartbeat; the gone record re-signs the slot. |
+| `rtl433_device`      | `model`+`id`      | additive 2026-11-14, #208 slice 1, [[rtl433]] — one sub-GHz device the `--rtl433` `rtl_433` event log fed, only with `--rtl433`: `src` (`file:/path`), `model` and `id` (the key; `id` as written, an integer id as its own decimal spelling), `first_seen` / `last_seen` (the **host's** clock at the read — rtl_433's own `time` format follows its `-M time` options and the locale, and the file does not say which, so it is not read), `msgs` (lines merged into this row), `other_keys` (keys the decoder wrote that this slice does not store — the per-model fields; a rising value is the field set of whatever is on the air, not a fault), then **only when a line carried them**, never a 0 or `""` for absent: `dev_type` (rtl_433's `type`, renamed so it does not collide with the envelope's), `subtype`, `channel`, `mic` (`CRC` / `CHECKSUM` / `PARITY` only), `mod` (`ASK` / `FSK` / `LoRa` only), `protocol`, `freq_mhz` (rtl_433's `freq` for an ASK or LoRa decode, `freq1` for FSK — its branches are exclusive), `freq2_mhz` (the other FSK tone), `rssi`, `snr`, `noise` (dB), `battery_ok` (0 empty .. 1 full), `temperature_C` **or** `temperature_F`, `humidity` (%), and `pressure_kPa` **or** `pressure_hPa` **or** `pressure_psi` — a reading goes out under the key it arrived under and is never converted (DATA_FORMAT.md's rule is the sensor's native unit). **Change-only** on `rtl433_device_sig()`: the key, `first_seen` (an evicted row heard again is a new row), the discrete facts, RSSI in 3 dB steps, the frequency in whole MHz, the readings to one unit and `battery_ok` to a tenth — never `msgs`, `last_seen`, `other_keys`, `snr`, `noise` or `freq2_mhz` — plus the 300 s heartbeat. No `gone` record: the table retires nothing by age, so a row leaves only by eviction (`rtl433_evicted`). |
+| `victron_device`     | `mac`             | additive 2026-11-15 (carried by JSONL 1.9.0, see Versioning; `services` and `values_src` 1.10.0), [[victron]] — one Victron device row from the file `--victron` tails (the `sloth-va` helper's output; sloth itself connects to nothing), only with `--victron`: `src`, `mac` (the key, lower case), then only when known `serial` (the owner's), `model`, `record` (the Instant Readout record type), `session` (the newest GATT session's outcome) and `services` (1.10.0: that session's service UUIDs, lower case, comma separated; sloth-va lists them only for `no_supported_service`, so a later session without a list clears it); `first_seen`, `last_seen`, `last_readout`, `last_gatt` (the host's clock at the read, 0 never), `readings`, `sessions`, `rssi` when known, `values_src` (1.10.0) once the row holds a value (`readout` or `gatt`: which path delivered the newest record that carried values; the fleet rule and slothweb's Victron tab read it), and each kept value under sloth-va's unit-suffixed name (`voltage_v`, `current_a`, `power_w`, `consumed_ah`, `soc_pct`, `ttg_min`, `temperature_c`, `aux_voltage_v`, `mid_voltage_v`, `input_v`, `output_v`, `alarm_reason`, `aux_input`, `device_state`, `charger_error`, `off_reason`, and since 2.1.0 the inverter record's `ac_voltage_v`, `ac_current_a`, `ac_apparent_va`), three decimals. Values are sticky: a record without one does not erase it. **Change-only** on `victron_device_sig()`: the key, `first_seen`, `serial`, `model`, `record`, `session`, `services`, `values_src`, which values are present, and each value banded (voltages 0.1 V, current and Ah 1, SOC 1 %, power 10 W, temperature 1 C, TTG 10 min, enumerations exact) — never `readings`, `sessions`, `last_*` or `rssi` — plus the 300 s heartbeat. No `gone` record. |
 | `sensor_health`      | *(singleton)*     | The sensor's own state rather than an observation — one line per tick, not one per table row (#91). Monitor radio's requested vs **confirmed** channel plus lifetime retune failures; both capture workers' `_open`/`_running` liveness, the classified `_exit` reason and libpcap's raw `_exit_detail`; `pcap_stats()` lifetime totals and per-tick deltas for received / libpcap-dropped / NIC-dropped; the bounded-table eviction tally; and lifetime write-failure counts across every on-disk sink (#92); whether a launch-time `--iface`/`--monitor-only` scope is enforced or has failed closed (`scope`, `scope_not_enforced`, #85), plus a lifetime count of frames the scope boundary itself refused (`scope_dropped`, #85 wave 8); and the data socket's own occupancy and per-peer refusals (`socket_clients`, `socket_peer_refused`, #135); and a lifetime parse-fault tally (`parse_faults` plus one `parse_fault_<kind>` each, #126). `_open` 1 with `_running` 0 is a dead capture thread behind a still-open handle — the case that used to be indistinguishable from a quiet segment. Change-only with a 300 s heartbeat. Full field list and the eviction tally's coverage limits in the section below. |
+
+### Distance estimate fields (2026-10-26)
+
+An **estimate from signal strength** of how far the transmitter is from
+the sensor: walls, bodies and reflections dominate, and it is **not a
+location**. The typical indoor error is a factor of two, and a factor of
+five when a wall, a body or the antenna's orientation intervenes
+(`research/papers/rssi-distance-estimation.md`). No alert rule reads it.
+All four fields are **omitted** when the row has no estimate — an RSSI of
+0 or "not available", or no known channel — so an absent `est_dist_m`
+means "no estimate", never 0 m.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `est_dist_m` | number | ITU-R P.1238-10 eq. (1) solved for distance from the median RSSI of the last `rf.median_k` samples, **quantised**: 0.5 m steps below 10 m, 1 m below 100 m, 10 m above |
+| `est_dist_band` | string | `immediate` (< 1 m), `near` (1–3 m), `room` (3–10 m), `building` (10–30 m), `far` (> 30 m). A boundary is crossed only by a margin (3 dB, or two standard errors of the median when larger) held for 10 s, so a stationary device keeps its band under noise |
+| `est_dist_trend` | string | `approaching` / `steady` / `leaving` from the median-RSSI slope over 30 s with hysteresis; `unknown` until four points span 6 s |
+| `est_ptx_source` | string | where the transmit power came from: `tpc_report` (802.11 TPC Report), `country_max` (Country element ceiling less Power Constraint, used only when at most 20 dBm and never on 6 GHz — **an upper bound**, so the distance is too and the band may read one farther than the AP is), `ble_ext_tx_power` (extended report header), `ble_ad_tx_power` (TX Power Level AD type), `assumed` (nothing announced) |
+
+Nothing else about the estimate — the interval, the sample spread, the
+calibration — leaves the process; those are on the TUI's detail panes.
+See [[rf-distance]].
 
 ### `sensor_health` — the sensor's self-report (#91)
 
@@ -742,6 +810,8 @@ does not know the type ignores it, as it would any other.
 | Field | Meaning |
 |-------|---------|
 | `capture_iface` | device the IP data-stream handle is bound to (`any`, or a fallback device name); `""` = capture never opened; `replay` = an Ethernet/Linux-cooked `--replay` file is the source (#119) |
+| `capture_linktype` | additive, 2026-10-26 — the IP data stream's pcap link type (DLT) while it is open: `1` Ethernet, `113` / `276` Linux cooked (`any`), `127` radiotap (IP decoded from 802.11 data frames heard on the air, #72); `-1` while the stream is not open. Set at open, so it is in the change-only signature as itself. A raw fact: slothweb's capture scope reads it to tell IP records heard off the air from the host's own interfaces' ([capture scope](capture-scope.md)); sloth classifies nothing |
+| `monitor_only` | additive, 2026-10-26 — `1` when `--monitor-only` put the monitor radio on the IP stream's allow-list (#35), else `0` |
 | `monitor_iface` | the 802.11 monitor radio; `""` = none found; `replay` = a radiotap `--replay` file is the source (#119) |
 | `monitor_err` | last monitor open/retarget error, `""` = none |
 | `chan_requested` | channel `--hop` last asked the radio for; `0` = the hopper has never ticked |
@@ -759,12 +829,24 @@ does not know the type ignores it, as it would any other.
 | `hop_dwell_worst_overshoot_ms` | largest measured-minus-planned seen, lifetime high-water mark |
 | `hop_dwells_completed` | dwells that have ended; the denominator behind the means, and 0 while the first is still in flight |
 | `capture_*` / `monitor_*` | the per-stream block below, once for each of the two handles |
+| `mon_extra_radios` | additive, JSONL 2.3.0 (2026-11-16, [[multi-radio-sensing]]) — how many `--monitor-iface` radios were named beside the first. `0` is the one-radio run and none of the `mon_*` members below is written. sloth-wifi's record only. In the signature |
+| `mon_dup_dropped` | only with `mon_extra_radios` > 0 — frames dropped because an identical frame from a **different** sensor radio had been delivered within 5 ms of capture time, all radios, lifetime. A dropped frame reached no counter, ring, parser or detector. Outside the signature (each radio's count enters as a decade) |
+| `mon_dedup_evicted` | only with `mon_extra_radios` > 0 — entries under a second old that the fixed de-duplication table evicted to make room; a duplicate of an evicted frame is delivered, so a non-zero value bounds how many frames may have been seen twice. Signed none/some |
+| `mon_rK_iface` | only with `mon_extra_radios` > 0, K = 0 .. `mon_extra_radios` — sensor radio K's interface; K = 0 is `monitor_iface`. A radio that was named has its block whether or not it could be opened |
+| `mon_rK_state` | `not_open` (named, could not be opened at start: the reason is `mon_rK_err`), `open`, `running`, `lost` (its reader ended on its own, the device went away; not reopened), `stopped`. In the signature |
+| `mon_rK_err` | why it is `not_open` or `lost`: sloth's own line for an absent or non-monitor interface, libpcap's text for a lost one; `""` otherwise |
+| `mon_rK_freq` | centre frequency in MHz from the radiotap header of the last frame radio K received (a dropped duplicate included): where the radio is, whoever tuned it. `0` before a frame or when the driver reports none |
+| `mon_rK_chan` | the channel radio K's last retune confirmed under `--hop`; `0` without `--hop` or before one. For K = 0 this is `chan_confirmed` |
+| `mon_rK_hop_channels` | how many channels of the `--hop` list are radio K's share; `0` not hopping. Signed as zero / non-zero: it moves when a lost radio's channels are dealt out again |
+| `mon_rK_frames` | frames radio K delivered to the 802.11 path, lifetime. Outside the signature |
+| `mon_rK_dup_dropped` | radio K's share of `mon_dup_dropped`. Signed as its decade (0, 1-9, 10-99, …, a million and more), never the count |
+| `mon_rK_retune_failures` | retunes of radio K the platform refused, lifetime; K = 0 is `chan_retune_failures`. Signed none/some |
 | `evictions` | total observations discarded by a full bounded table, lifetime |
-| `evict_alert`, `evict_top_host`, `evict_pnl_client`, `evict_pnl_ssid`, `evict_dhcp_event`, `evict_eap_session`, `evict_device`, `evict_beacon_ap`, `evict_seqnum_client`, `evict_assoc_pair`, `evict_assoc_req`, `evict_wps_session`, `evict_evidence_frame`, `evict_probe_client`, `evict_pm_forge`, `evict_queue_evict`, `evict_pcap_cooldown`, `evict_dns_log`, `evict_tls_log`, `evict_quic_log`, `evict_http_log`, `evict_ntp_log`, `evict_icmp_log`, `evict_rf_channel`, `evict_http_flow`, `evict_bgp_session`, `evict_ldap_event`, `evict_kerb_event`, `evict_smb_session`, `evict_ssh_flow`, `evict_rdp_flow`, `evict_snmp_flow`, `evict_mqtt_flow`, `evict_mdns_service`, `evict_nbns_name`, `evict_arp_hist`, `evict_frag_bss`, `evict_frag_sta`, `evict_frag_session`, `evict_frag_assoc`, `evict_frag_mpdu`, `evict_ndp_ra`, `evict_rogue_radius`, `evict_ssdp_device`, `evict_onvif_device`, `evict_smtp_flow`, `evict_eapol_pending`, `evict_deauth_obs`, `evict_deauth_victim`, `evict_rtsp_exchange`, `evict_rtsp_stream`, `evict_lan_role`, `evict_ble_device`, `evict_bredr_lap`, `evict_ble_flood` | the same total broken out per table, in `sh_evict_t` order |
+| `evict_alert`, `evict_top_host`, `evict_pnl_client`, `evict_pnl_ssid`, `evict_dhcp_event`, `evict_eap_session`, `evict_device`, `evict_beacon_ap`, `evict_seqnum_client`, `evict_assoc_pair`, `evict_assoc_req`, `evict_wps_session`, `evict_evidence_frame`, `evict_probe_client`, `evict_pm_forge`, `evict_queue_evict`, `evict_pcap_cooldown`, `evict_dns_log`, `evict_tls_log`, `evict_quic_log`, `evict_http_log`, `evict_ntp_log`, `evict_icmp_log`, `evict_rf_channel`, `evict_http_flow`, `evict_bgp_session`, `evict_ldap_event`, `evict_kerb_event`, `evict_smb_session`, `evict_ssh_flow`, `evict_rdp_flow`, `evict_snmp_flow`, `evict_mqtt_flow`, `evict_mdns_service`, `evict_nbns_name`, `evict_arp_hist`, `evict_frag_bss`, `evict_frag_sta`, `evict_frag_session`, `evict_frag_assoc`, `evict_frag_mpdu`, `evict_ndp_ra`, `evict_rogue_radius`, `evict_ssdp_device`, `evict_onvif_device`, `evict_smtp_flow`, `evict_eapol_pending`, `evict_deauth_obs`, `evict_deauth_victim`, `evict_rtsp_exchange`, `evict_rtsp_stream`, `evict_lan_role`, `evict_ble_device`, `evict_bredr_lap`, `evict_ble_flood`, `evict_frag_ap_ident`, `evict_probe_latency`, `evict_rtl433` | the same total broken out per table, in `sh_evict_t` order |
 | `storage_failures` | total write failures across every on-disk sink, lifetime (#92) — "I detected something but could not persist the evidence", which used to be stderr-only or, for EAPOL, a view-header count nobody piping this stream would ever see |
 | `storage_jsonl_failures`, `storage_pcap_failures`, `storage_eapol_failures` | the same total broken out per sink: the `-o` log, per-alert pcap export, and the EAPOL 22000/handshake-pcap export. Since #92 slice 3 the pcap and EAPOL counts also include a failed append to that directory's hashed manifest ([[pcap-export]] §5) — the record of the evidence failed, the evidence itself did not. No new field |
 | `pcap_dir_free_mb` | MB free on the filesystem holding `--pcap-dir`, or **-1 for not measured** (no `--pcap-dir`, or `fstatvfs` failed). -1 rather than 0 on purpose: 0 free would read as a full filesystem on every sensor that exports no pcaps, which is most of them (#96) |
-| `pcap_dir_free_inodes` | free inodes on that same filesystem, or **-1 for not measured** — which here also covers a filesystem with no fixed inode table (btrfs and most network filesystems report `f_files == 0`, which is not the same as "none left"). **Read this before `pcap_dir_free_mb`, not after.** `--pcap-dir` is the only operator-named sink with no cap and no sweep: `alert_pcap_dump()` writes one file per firing and never removes one. It therefore exhausts *inodes* long before bytes, and inode exhaustion surfaces as `ENOSPC` with free space still showing. Measured on the author's own monitor host, 2026-10-13: 15,919,490 alert pcaps, 77 GB, ~93% of the filesystem's inodes consumed — while `df -h` read 39% used the whole time. A consumer alerting on the MB figure alone would have called that sensor healthy (#96) |
+| `pcap_dir_free_inodes` | free inodes on that same filesystem, or **-1 for not measured** — which here also covers a filesystem with no fixed inode table (btrfs and most network filesystems report `f_files == 0`, which is not the same as "none left"). **Read this before `pcap_dir_free_mb`, not after.** Before #166 `--pcap-dir` was the only operator-named sink with no cap and no sweep: `alert_pcap_dump()` wrote one file per firing and never removed one. It therefore exhausted *inodes* long before bytes, and inode exhaustion surfaces as `ENOSPC` with free space still showing. Measured on the author's own monitor host, 2026-10-13: 15,919,490 alert pcaps, 77 GB, ~93% of the filesystem's inodes consumed — while `df -h` read 39% used the whole time. A consumer alerting on the MB figure alone would have called that sensor healthy (#96) |
 | `scope` | launch-time capture scope (#85): `none` (no `--iface`/`--monitor-only`), `enforced` (every requested interface pinned and still the same interface), `no_capture` (scope requested, no live data-stream worker: no handle, or the capture thread has exited — `capture_exit` says why; before 2026-10-19 a worker that died behind a still-open handle read `enforced`), `degraded` (at least one requested interface failed closed) |
 | `scope_not_enforced` | `1` when a scope was requested and `scope` is not `enforced`. This flag means in-scope traffic is not being observed. **It does not mean nothing out of scope was collected.** The allow-list governs the **IP capture stream only**; the 802.11 monitor stream is deliberately outside it (owner decision, 2026-10-04), so `probe_open()` opens whatever monitor radio it discovers at startup regardless of `--iface`, and 802.11 frames from that radio are collected and exported whatever this flag says. The one place the allow-list does reach the radio is an interactive `[m]` retarget, which is refused for an interface outside a non-empty list (#85). A consumer that needs "only these interfaces" must therefore scope the monitor radio out of band — `--monitor-only`, or no monitor-capable adapter present |
 | `scope_requested` | allow-list entries (`--iface` names plus the `--monitor-only` radio) |
@@ -777,7 +859,7 @@ does not know the type ignores it, as it would any other.
 | `socket_peer_refused` | lifetime count of data-socket connections closed at accept because their peer already held `socket.max_per_peer` of the 16 client slots (#135). A peer is a uid on `unix:`, an address on `tcp:`, or the one shared bucket for anything the kernel cannot identify. Climbing means one party is trying to take more than its share — a consumer that reconnects without closing, or a local account crowding the listener. `0` when no `--data-socket` is configured. Appended after `tuned`; **additive** |
 | `socket_clients` | data-socket clients connected right now, `0..16`; `0` when no `--data-socket` is configured (#135). Read together with the field above: refusals with `socket_clients` well under 16 is one peer at its cap, not a full listener. Enters the change-only signature as itself (it moves only on connect/disconnect); `socket_peer_refused` enters as a none/some band so a refusal loop cannot turn this record into a per-tick firehose — the running count rides the 300 s heartbeat |
 | `parse_faults` | lifetime count of parse faults across every kind below (#126) — malformed input reaching sloth's parsers. Appended after `socket_clients`; **additive**. A sibling of `evictions`, never part of it: `evictions` stays the exact sum of the `evict_*` breakout |
-| `parse_fault_radiotap_bad`, `parse_fault_dot11_runt`, `parse_fault_ie_overrun`, `parse_fault_rsn_malformed`, `parse_fault_mle_malformed`, `parse_fault_ip_truncated`, `parse_fault_ip_fragment`, `parse_fault_dns_name_bad`, `parse_fault_tls_malformed`, `parse_fault_frame_edge` | the same total broken out per kind, in `sh_parse_fault_t` order. **Not in the change-only signature**: under a beacon flood or an `mdk4` mode-m run these climb on every frame, so they ride the heartbeat and any other transition's line. Some kinds are reserved and not yet measured — see *Parse faults* below before reading a 0 |
+| `parse_fault_radiotap_bad`, `parse_fault_dot11_runt`, `parse_fault_ie_overrun`, `parse_fault_rsn_malformed`, `parse_fault_mle_malformed`, `parse_fault_ip_truncated`, `parse_fault_ip_fragment`, `parse_fault_dns_name_bad`, `parse_fault_tls_malformed`, `parse_fault_frame_edge`, `parse_fault_fcs_failed` | the same total broken out per kind, in `sh_parse_fault_t` order. **Not in the change-only signature**: under a beacon flood or an `mdk4` mode-m run these climb on every frame, so they ride the heartbeat and any other transition's line. Some kinds are reserved and not yet measured — see *Parse faults* below before reading a 0 |
 | `rss_kb`, `rss_hwm_kb` | this process's resident set and its lifetime peak, kB, from `VmRSS` / `VmHWM` in `/proc/self/status` (#121). Appended after the parse-fault breakout; **additive**. The pair that would have shown the 7.7 GB growth on the production sensor while it was happening rather than from systemd's accounting at stop |
 | `sqlite_mem_kb`, `sqlite_mem_hwm_kb` | bytes SQLite's own allocator holds now and at its peak (`sqlite3_memory_used()` / `sqlite3_memory_highwater(0)`), kB. `-1` in a `WITH_SQLITE=0` build. Grows with page cache and prepared statements, not with the alerts DB **file** — a growing DB is a disk question, not this one |
 | `malloc_kb` | bytes glibc's allocator has handed out and not had back — `mallinfo2()` `uordblks + hblkhd`, kB. `-1` on a libc without `mallinfo2()` (glibc < 2.33, musl). `rss_kb` well above this is freed-but-retained arena memory (fragmentation); the two climbing together is a live allocation that is never freed |
@@ -868,6 +950,214 @@ still says some link committed in that interval. What a band cannot say
 is which pair, or whether it rested on a token; exact counts could,
 matched against the `ble_device` records' `first_seen` (a link commits
 10 s after the newer address's first report).
+
+**`--pcap-dir` age sweep** (#166). Appended last, **only while
+`--pcap-dir` is set**; a run without it writes none of them (the replay
+golden has no `--pcap-dir`).
+
+| Field | Meaning |
+|---|---|
+| `pcap_retain_days` | the `pcap.retain_days` window in days; **0 = the sweep is off** and alert pcaps are kept forever |
+| `pcap_swept` | alert pcaps (and `--pcap-dir` manifests) the sweep has deleted this run |
+| `pcap_sweep_errors` | entries the sweep could not honour the window for: unreadable directory, failed stat, a non-regular file at an artifact name (left in place, never followed), a failed unlink. Not a write failure, so not in `storage_pcap_failures` |
+
+The signature takes the two counts as decade bands (0, 1-9, 10-99, …
+1M+), not as themselves: a sweep clearing a backlog removes up to 1024
+entries a tick, and the raw count would write a line on every one. The
+exact counts ride every emitted line and the heartbeat. See
+[[retention]] §2d.
+
+**Sensor position** (2026-10-27, [[location]]). Appended, and present
+**only** while `--location` or `--gps` is given, so a run with neither
+writes exactly what it wrote before (the replay golden has neither).
+The position itself is not here; it is on the alerts it stamps.
+
+| Field | Meaning |
+|---|---|
+| `gps_state` | `fixed` (`--location` alone), `searching` (a `--gps` source with no usable fix, one that reported losing it, or one whose device or gpsd connection went away), `fix` (a fix no older than `gps.max_fix_age_s`), `stale` (the newest fix is older; stamps fall back to `--location`, or to nothing) |
+| `gps_src` | `fixed`, `nmea:/dev/ttyACM0` or `gpsd:127.0.0.1:2947` |
+| `gps_fix_age_s` | seconds since the newest usable fix arrived, on sloth's monotonic clock (a wall-clock step does not change it), -1 before any |
+| `gps_quality` | the newest GGA fix quality (0..8) or gpsd TPV mode (0..3); -1 before any GGA or TPV has said (an RMC or GSA alone leaves it -1) |
+| `gps_sats` | satellites in use (GGA, or gpsd `SKY` `uSat`); 0 unknown |
+| `gps_hdop` | horizontal dilution of precision, one decimal; 0 unknown (a non-finite, negative or over-20000 HDOP is not recorded) |
+| `gps_sentences` | NMEA sentences / gpsd objects parsed, every type |
+| `gps_bad_checksum` | NMEA sentences refused for their checksum |
+| `gps_parse_errors` | lines refused otherwise: over length, malformed fields, not JSON |
+| `gps_reconnects` | open sessions to the serial device / gpsd that were lost (EOF, read error); each is followed by a reopen attempt. A failed open or connect is not counted: a gpsd that was never reachable reads 0 here and says why in `gps_err` |
+| `gps_positions_dropped` | device and track samples dropped because their queue was full before the `--db` writer drained it |
+| `gps_err` | the reader's last open, read or connect failure; `""` when none |
+
+**GNSS observation** (2026-11-02, [[gnss]]). Appended after `gps_err`
+and present only with a `--gps` reader (a `--location` run has no
+receiver and writes none of these):
+
+| Field | Meaning |
+|---|---|
+| `gnss_sats_in_view` | the newest SKY's `nSat` (or its satellite count); 0 unknown |
+| `gnss_sats_used` | the newest SKY's `uSat`; 0 unknown |
+| `gnss_cn0_mean` | mean C/N0 of the satellites reporting one, dB-Hz, one decimal; 0 none |
+| `gnss_time_offset_ms` | the receiver's `time` minus the host's wall clock as the line arrived, milliseconds; **present only once a TPV carried a parseable time**; coarse (serial and gpsd latency, no PPS) |
+| `gnss_jam` | u-blox jamming indicator from the newest TPV, 0..255; -1 absent |
+
+Their signature contribution is the offset band, the mean-C/N0 band
+and the jam band only, never the counts.
+
+**The sensor's position** (2026-11-06, [[location]]; slothweb's Radar
+centre). Appended after the GNSS block (after `gps_err` in a
+`--location` run) and present only while a position exists: the stamp
+`gps_location_current()` gives the tick, a fresh fix else the fixed
+`--location`; a `--gps` run still searching for its first fix writes
+none of these:
+
+| Field | Meaning |
+|---|---|
+| `loc_lat`, `loc_lon` | degrees, five decimals (the alert stamp's `loc` has seven; a metre is enough for a centre) |
+| `loc_alt_m` | metres, one decimal; **omitted** when the source gave none |
+| `loc_src` | `gps` or `fixed` |
+
+The signature takes `loc_src` and the position's **0.01° cell**
+(`floor(lat × 100)`, `floor(lon × 100)`, about 1.1 km; the
+`aprs_station` cell), never the figure: a fix wanders metres a second,
+and a 17 m fix straddling a finer cell's edge would re-sign this line
+several times a minute. The exact figure rides every line written and
+the 300 s heartbeat refreshes it. A consumer with no alert to read a
+`loc` stamp from (slothweb, until an alert fires) reads the position
+here.
+
+**The four decoder blocks below are in `sloth-rf`'s `sensor_health`
+only since JSONL 2.0.0** (#216). `sloth-wifi`'s record ends its
+flag-gated blocks with the position block above; it has no `adsb_*`,
+`aprs_*`, `rtl433_*` or `victron_*` member, whatever the host runs,
+and a decoder changing state is not in its change signature. Absent,
+not zero: a zero would say "a decoder that is down" about a host whose
+decoders are another daemon's. The position block (`gps_*`, `gnss_*`,
+`loc_*`) is in both daemons' records: both link the receiver.
+
+**ADS-B decoder** (2026-11-05, #26 slice 1, [[adsb]]). Appended after
+the GNSS block, present **only** with `--adsb`:
+
+| Field | Meaning |
+|---|---|
+| `adsb_state` | `waiting` (no document parsed yet), `live` (the decoder's `now`, or the file's mtime in a document without one, advanced within 10 s), `stale` (it has not for longer: the decoder stopped writing), `error` (the last read or parse failed; clears on the next good document). For `sbs://`, `live` is any line, readsb's heartbeat included, within 130 s, and `stale` none for longer; for `beast://` the same with any frame (readsb's heartbeat is a Mode A/C frame of zeros) |
+| `adsb_src` | `file:/run/readsb/aircraft.json`, or `sbs:127.0.0.1:30003` / `sbs:[::1]:30003` for an SBS source, `beast:127.0.0.1:30005` for a Beast one |
+| `adsb_age_s` | seconds since the decoder's clock last advanced, on sloth's monotonic clock; -1 never |
+| `adsb_last_read` | wall time of the last document parsed, 0 never |
+| `adsb_aircraft` | rows in the aircraft table now (at most 256) |
+| `adsb_messages` | the decoder's lifetime Mode S message count (its `messages`); for `sbs://`, the MSG lines received; for `beast://`, the Mode S frames taken into the table |
+| `adsb_reads` | documents parsed (an unchanged file is not re-read); for `sbs://`, MSG lines parsed; for `beast://`, Mode S frames taken |
+| `adsb_read_errors` | opens or reads that failed, not a regular file, over 2 MiB |
+| `adsb_parse_errors` | documents refused as malformed (once per distinct file); for `sbs://`, malformed or over-512-byte lines; for `beast://`, garbage runs, unknown frame types and frames cut short |
+| `adsb_overflow` | aircraft refused for the 256-row cap: past it in one document, or a new address into a full table |
+| `adsb_bad_entries` | `aircraft[]` entries refused: not an object, no or a bad `hex`; for `beast://`, DF11/17/18 frames refused by their CRC |
+| `adsb_expired` | rows retired after 60 s unheard |
+| `adsb_err` | the last read or parse failure; `""` when none |
+
+The signature takes `adsb_state` and none/some bands of the four
+refusal tallies and of `adsb_err`; the age, the counts and the
+decoder's message total move every second a decoder writes and are
+written, not signed. A decoder going stale is one line; ten live
+seconds are none.
+
+**APRS decoder** ([[aprs]], 2026-11-05). Appended after the ADS-B
+block, present **only** with `--aprs`:
+
+| Field | Meaning |
+|---|---|
+| `aprs_state` | `waiting` (the file not read yet, or not there), `live` (the last poll read it; a quiet channel is live), `error` (the last poll failed) |
+| `aprs_src` | `file:/var/lib/direwolf/aprs.log` |
+| `aprs_missing` | 1 while the path names no file (Dire Wolf creates it with its first packet) |
+| `aprs_last_read` | wall time of the last good poll, 0 never |
+| `aprs_last_packet` | Dire Wolf's `utime` of the newest packet, 0 none |
+| `aprs_stations` | stations in the table now (at most 512) |
+| `aprs_bytes`, `aprs_lines`, `aprs_packets` | bytes read, complete non-blank lines (the header too), lines parsed into a packet |
+| `aprs_bad_lines` | lines refused: not 22 fields, a quote out of place, a bad channel, utime or callsign, over 1024 bytes |
+| `aprs_overflow` | new stations refused for the 512 cap |
+| `aprs_expired` | stations retired after 3600 s unheard |
+| `aprs_truncations`, `aprs_rotations` | the file shrank under the offset (copytruncate); a new file at the path |
+| `aprs_read_errors` | opens or reads that failed, not a regular file |
+| `aprs_err` | the last read failure; `""` when none |
+| `twin193_since` | additive, JSONL 1.7.0 (#193) — epoch second of the first alert pass counted this session, `0` before one. The `twin193_*` block is field data the owner asked for before revisiting the twin-chain rule, counted for the life of the process and read by no rule, alert, severity or taint ([src/alerts/twin_field.h](../../src/alerts/twin_field.h); [the EVIL_TWIN assessment](alert-assessments/EVIL_TWIN.md)). Outside the change-only signature: the counts ride the heartbeat and any other change's line |
+| `twin193_floods` | deauth/disassoc flood episodes, per flooded BSSID: a rising edge of some victim row of that BSSID meeting `DEAUTH_FLOOD`'s condition |
+| `twin193_floods_chain` | of those, episodes the twin-chain rule examined: the flooded BSSID beacons a named non-OPEN SSID and the threshold was met within `deauth.twin_window_s` |
+| `twin193_named` | of those, episodes the twin-chain rule named (a `twin-chain:` row) |
+| `twin193_late_laa` | the background: beacon-table entries that are a locally administered copy of a same-SSID entry first heard `twin.late_arrival_s` or more after it, by the #194 late-arrival test; once per entry, flood or none, any security |
+| `twin193_coincide` | the measurement: examined episodes that, on a pass the chain rule had not named them, had a late locally administered copy of the flooded AP's SSID and security with no other twin evidence; once per episode. Read `twin193_coincide / twin193_floods_chain` as the rate #193 asks about |
+| `twin193_excl_carrier`, `twin193_excl_faint`, `twin193_excl_sibling`, `twin193_excl_any` | of `twin193_coincide`, how many the existing exclusions would have excused had the late-arrival test admitted the pair: a carrier SSID, a faint half, the sibling test; `any` counts a pair once. `excl_sibling` is `0` by construction at any tuning (a sibling is heard within 10 s, a late arrival at least 30 s after) |
+| `aprs_region` | additive, #204 (2026-11-13; the `MINOR` bump this needs is not made here, see Versioning) — **only with `--aprs`**, after the `twin193_*` block and before `db_max_mb`. The APRS region the sensor's position falls in ([[aprs]] § The channel): `north-america`, `iaru-r1`, `australia`, `new-zealand`, `japan`, `brazil`; `unknown` for a position in none of them (no default channel), `none` before any position this run. The position is this tick's `loc_*` (a fresh GPS fix, else `--location`); without one the region last derived this run is held. Only the name is written: no coordinate is copied or kept for it |
+| `aprs_region_hz` | that region's APRS channel in Hz (`144390000`, `144800000`, `145175000`, `144575000`, `144640000`, `145570000`); `0` for `unknown` and `none` |
+| `aprs_freq_hz` | `--aprs-freq`: the frequency the operator says the decoder is configured for, in Hz; `0` not declared |
+| `aprs_freq_mismatch` | `1` when `aprs_freq_hz` and `aprs_region_hz` are both non-zero and more than 6.25 kHz apart (half the narrowest 2 m channel spacing); else `0`. A report, never an action: sloth does not touch the decoder |
+| `aprs_silent` | `1` when `aprs_state` is `live` (the log is there and readable), `aprs_silent_after_s` is non-zero, and no packet arrived for that long since `aprs_quiet_since`; else `0`. `aprs_state` stays `live`: the file is fine, the receive chain before it is not |
+| `aprs_silent_after_s` | the threshold, `--aprs-silent-hours` × 3600: `21600` (6 h) by default, `0` off |
+| `aprs_quiet_since` | when the quiet began: the newest packet's `utime`, or this run's first good read when later (the reader starts at the file's end, so a restart re-arms it); `0` before a read |
+| `daemon` | additive, JSONL 1.9.0 (2026-11-15, #213) — **which daemon wrote this record**: `"wifi"` from `sloth-wifi` (the daemon with the capture; `sloth` under its old name), `"rf"` from `sloth-rf` ([ADR 0010](adr/0010-wifi-rf-daemons.md)). The sensor is becoming two processes, each with its own stream, and both write a `sensor_health`; a consumer that reads both needs to know whose capture, whose `db_max_mb` and whose `jsonl_version` a line is about without inferring it from which members are present. A constant for the life of the process, so, like `libs` and `jsonl_version`, it is outside the change-only signature and rides every line. Placed after the last flag-gated block and before `db_max_mb`; `db_max_mb` and `jsonl_version` stay the last two. A record with no `daemon` is from a stream before 1.9.0, when there was one daemon: read it as `"wifi"`. **sloth-rf's record** carries the members a daemon with no capture has something to say in, written by the same functions as `sloth`'s (`src/jsonl_internal.h`): `evictions` and its breakout, `storage_failures` and `storage_jsonl_failures`, `tuned_count` to `libs`, the `gps_*` / `gnss_*` / `loc_*`, `adsb_*`, `aprs_*`, `rtl433_*` and `victron_*` blocks, then `daemon`, `db_max_mb`, `jsonl_version`. Every other member of this table (`capture_*`, `monitor_*`, `chan_*`, `hop_*`, `pcap_dir_*`, `storage_pcap_failures`, `storage_eapol_failures`, `scope*`, `btmon_*`, `ble_*`, `btcap_*`, `twin193_*`) is **absent** from it, not zero: a zero would say "a capture that is down" about a host whose capture is the other daemon's. Two members it answers for itself: `libs` reads `pcap: none; …` (it loads no libpcap) and `resolver_calls` is `-1`, not measured (it has no resolver) |
+| `db_max_mb` | additive, JSONL 1.7.0 (2026-11-12) — `--db`'s size ceiling, the `db.max_mb` knob (`--db-max-mb`), in MiB: `0` unlimited, `-1` when sloth has no database open (no `--db`, or a build without SQLite). sloth trims observation rows once `page_count × page_size` passes it and never findings. Its own member because `tuned` names a knob only when it is not the default and is cut at 256 bytes, so a consumer could not always tell the default from "not said". In the change-only signature: a tune knob moves only when the operator moves it. Placed before `jsonl_version`, which stays last. slothweb reads it as the limit it draws on sloth.db's size ([[slothweb]]) |
+| `jsonl_version` | additive, #185 item 3 — **this stream's contract version**, `MAJOR.MINOR.PATCH`, `2.4.0` today, the same value from both daemons. What a consumer codes against, and not the same thing as sloth's own `SLOTH_VERSION`, which this record does not carry: a release that changes no record leaves this alone, and a record change between releases does not wait for a tag ([ADR 0007](adr/0007-versioning.md)). The last field in the record, after the flag-gated blocks above. Fixed for the life of the process, so — like `libs` — it is outside the change-only signature and rides every line: one record is enough to tell which contract wrote it, with the sensor long gone. The bump rule is under *Versioning* below |
+
+The signature takes `aprs_state`, `aprs_missing` and none/some bands of
+the read errors, bad lines, overflow and `aprs_err`; the counts and
+times are written, not signed. Since #204 it also takes `aprs_region`,
+`aprs_freq_mismatch` and `aprs_silent`, so a decoder going silent or a
+declared frequency off the region's channel is a line at once, not at
+the next heartbeat; `aprs_quiet_since` moves with every packet and is
+written, not signed.
+
+**rtl_433 decoder** ([[rtl433]], #208 slice 1, 2026-11-14, JSONL 1.8.0).
+Appended after the APRS block and before `db_max_mb`, present **only**
+with `--rtl433`:
+
+| Field | Meaning |
+|---|---|
+| `rtl433_state` | `waiting` (the file not read yet, or not there), `live` (the last poll read it; a quiet band is live), `error` (the last read failed, or the path is not a regular file) |
+| `rtl433_src` | `file:/var/lib/rtl_433/events.jsonl`, cut to the field's width |
+| `rtl433_missing` | 1 while the path names no file (rtl_433 creates it with its first decode) |
+| `rtl433_last_read` | wall time of the last good poll, 0 never |
+| `rtl433_last_msg` | wall time of the newest accepted line, 0 none. The **host's** clock: rtl_433's own `time` is not read (see `rtl433_device`) |
+| `rtl433_devices` | `(model, id)` rows in the table now (at most 256) |
+| `rtl433_bytes`, `rtl433_lines`, `rtl433_msgs` | bytes read, complete non-blank lines, lines parsed into a message |
+| `rtl433_bad_lines` | lines refused, the exact sum of the five `rtl433_rej_*` below |
+| `rtl433_rej_oversize` | refused for being longer than 1024 bytes (`RTL433_MAX_LINE`) |
+| `rtl433_rej_not_object` | not one JSON object on the line, or bytes after it |
+| `rtl433_rej_malformed` | a JSON syntax error inside the object — a line cut mid-write, for one |
+| `rtl433_rej_no_model` | no usable `model`: absent, empty, not a string, over 32 bytes, or not printable ASCII |
+| `rtl433_rej_no_id` | no usable `id`. DATA_FORMAT.md calls `id` optional and sloth requires it, because the table is keyed `(model, id)` and a line it cannot key would otherwise go under an invented one. A decoder emitting model-only events reads as this counter climbing |
+| `rtl433_bad_values` | **optional** fields left absent for being out of range or the wrong JSON type. Never clamped, and never a refusal: the key and the signal metadata on that line are still an observation |
+| `rtl433_other_keys` | keys on no list, summed over every line, refused lines included — the measured size of what this slice does not store (the per-model fields: `state`, `code`, `flags`, …). Not a fault. `time` is recognised and skipped, so it is not counted here |
+| `rtl433_evicted` | rows dropped from the 256-row table (the least recently heard). The process-wide tally of the same losses is `evict_rtl433` |
+| `rtl433_truncations`, `rtl433_rotations` | the file shrank under the offset (copytruncate); a new file at the path |
+| `rtl433_read_errors` | opens or reads that failed, or a path that is not a regular file. A **missing** file is not one of these |
+| `rtl433_err` | the last read failure; `""` when none |
+
+**Victron, sloth-va's file** ([[victron]], 2026-11-15, carried by
+`1.9.0`). Appended after the rtl_433 block and before `daemon` and
+`db_max_mb`, present **only** with `--victron`, in sloth-rf's record
+(one function, `jsonl_sh_victron()`; in the one binary's too until
+2.0.0): `victron_state` (`waiting`, `live`,
+`error`, as `rtl433_state`), `victron_src`, `victron_missing`,
+`victron_last_read`, `victron_last_rec`, `victron_devices` (address rows,
+at most 16), `victron_bytes`, `victron_lines`, `victron_records`,
+`victron_bad_lines` (the sum of `victron_rej_oversize`,
+`victron_rej_not_object`, `victron_rej_malformed`, `victron_rej_not_victron`
+— not `"type":"victron"` or an unknown `source` — and `victron_rej_no_mac`),
+`victron_bad_values` (values out of their bound, left absent),
+`victron_other_keys` (value names off the allow-list), `victron_table_full`
+(records for a 17th address, dropped), `victron_truncations`,
+`victron_rotations`, `victron_read_errors`, `victron_err`. Signed as the
+rtl433 block is: the state, `missing` and none/some bands; no count.
+
+The signature takes `rtl433_state`, `rtl433_missing` and none/some
+bands of the read errors, bad lines, evictions, bad values,
+`rtl433_other_keys` and `rtl433_err`; every count and time is written,
+not signed. A kerbside sensor hears one parked car's TPMS every few
+seconds, so signing a count would make this record the per-tick
+firehose the change-only rule exists to prevent.
+
+The change-only signature takes `gps_state`, the fix's age as three
+states (never, within `gps.max_fix_age_s`, older), and none/some bands
+of the two refusal counters and of `gps_err`: a receiver talking moves
+the age, the satellites and the counters every second, and signing
+those would write a line a tick. A stale fix crossing the limit is one
+line; ten seconds of a fresh fix are none.
 
 The hints are not a census of synchronising advertisers. Payload links
 come only from MS-CDP, Apple Handoff and Fast Pair account data, so few
@@ -965,8 +1255,15 @@ recovered reports the recovery on the next heartbeat, not at once —
 the same instantaneous state, and only the second is common.
 
 ```json
-{"type":"sensor_health","ts":1700000000,"capture_iface":"any","monitor_iface":"alfa0","monitor_err":"","chan_requested":11,"chan_confirmed":6,"chan_confirmed_ok":0,"chan_retune_failures":2,"chan_retune_last_errno":16,"chan_retune_reason":"EBUSY","hop_channels":3,"hop_visits":41,"hop_frames":9022,"hop_silent_channels":0,"hop_cur_visits":14,"hop_cur_frames":311,"hop_dwell_planned_ms":250,"hop_dwell_measured_ms":1000,"hop_dwell_last_planned_ms":250,"hop_dwell_last_measured_ms":1000,"hop_dwell_worst_overshoot_ms":750,"hop_dwells_completed":40,"capture_open":1,"capture_running":1,"capture_exit":"none","capture_exit_detail":"","capture_stats_valid":1,"capture_recv":184320,"capture_drop":12,"capture_ifdrop":0,"capture_recv_delta":903,"capture_drop_delta":4,"capture_ifdrop_delta":0,"monitor_open":1,"monitor_running":0,"monitor_exit":"iface_gone","monitor_exit_detail":"The interface went down","monitor_stats_valid":1,"monitor_recv":51201,"monitor_drop":0,"monitor_ifdrop":3,"monitor_recv_delta":0,"monitor_drop_delta":0,"monitor_ifdrop_delta":0,"evictions":917,"evict_alert":1,"evict_top_host":0,"evict_pnl_client":0,"evict_pnl_ssid":4,"evict_dhcp_event":0,"evict_eap_session":0,"evict_device":0,"evict_beacon_ap":0,"evict_seqnum_client":0,"evict_assoc_pair":0,"evict_assoc_req":0,"evict_wps_session":0,"evict_evidence_frame":0,"evict_probe_client":0,"evict_pm_forge":0,"evict_queue_evict":0,"evict_dns_log":912,"evict_tls_log":0,"evict_quic_log":0,"evict_http_log":0,"evict_ntp_log":0,"evict_icmp_log":0,"evict_rf_channel":0,"evict_http_flow":0,"evict_pcap_cooldown":0,"evict_bgp_session":0,"evict_ldap_event":0,"evict_kerb_event":0,"evict_smb_session":0,"evict_ssh_flow":0,"evict_rdp_flow":0,"evict_snmp_flow":0,"evict_mqtt_flow":0,"evict_mdns_service":0,"evict_nbns_name":0,"evict_arp_hist":0,"evict_frag_bss":0,"evict_frag_sta":0,"evict_frag_session":0,"evict_frag_assoc":0,"evict_frag_mpdu":0,"evict_ndp_ra":0,"evict_rogue_radius":0,"evict_ssdp_device":0,"evict_onvif_device":0,"evict_smtp_flow":0,"evict_eapol_pending":0,"evict_deauth_obs":0,"evict_deauth_victim":0,"storage_failures":0,"storage_jsonl_failures":0,"storage_pcap_failures":0,"storage_eapol_failures":0,"pcap_dir_free_mb":273408,"pcap_dir_free_inodes":13138050,"scope":"degraded","scope_not_enforced":1,"scope_requested":1,"scope_enforced":0,"scope_generation":1,"scope_dropped":37,"tuned_count":1,"tuned":"ssh.brute_force=25","socket_peer_refused":0,"socket_clients":1,"parse_faults":5,"parse_fault_radiotap_bad":3,"parse_fault_dot11_runt":2,"parse_fault_ie_overrun":0,"parse_fault_rsn_malformed":0,"parse_fault_mle_malformed":0,"parse_fault_ip_truncated":0,"parse_fault_ip_fragment":0,"parse_fault_dns_name_bad":0,"parse_fault_tls_malformed":0,"parse_fault_frame_edge":0,"rss_kb":48580,"rss_hwm_kb":49124,"sqlite_mem_kb":1310,"sqlite_mem_hwm_kb":1702,"malloc_kb":2911,"fd_count":16,"resolver_calls":0,"libs":"pcap: libpcap version 1.10.6 (with TPACKET_V3); sqlite: 3.53.4"}
+{"type":"sensor_health","ts":1700000000,"capture_iface":"any","capture_linktype":276,"monitor_only":0,"monitor_iface":"alfa0","monitor_err":"","chan_requested":11,"chan_confirmed":6,"chan_confirmed_ok":0,"chan_retune_failures":2,"chan_retune_last_errno":16,"chan_retune_reason":"EBUSY","hop_channels":3,"hop_visits":41,"hop_frames":9022,"hop_silent_channels":0,"hop_cur_visits":14,"hop_cur_frames":311,"hop_dwell_planned_ms":250,"hop_dwell_measured_ms":1000,"hop_dwell_last_planned_ms":250,"hop_dwell_last_measured_ms":1000,"hop_dwell_worst_overshoot_ms":750,"hop_dwells_completed":40,"capture_open":1,"capture_running":1,"capture_exit":"none","capture_exit_detail":"","capture_stats_valid":1,"capture_recv":184320,"capture_drop":12,"capture_ifdrop":0,"capture_recv_delta":903,"capture_drop_delta":4,"capture_ifdrop_delta":0,"monitor_open":1,"monitor_running":0,"monitor_exit":"iface_gone","monitor_exit_detail":"The interface went down","monitor_stats_valid":1,"monitor_recv":51201,"monitor_drop":0,"monitor_ifdrop":3,"monitor_recv_delta":0,"monitor_drop_delta":0,"monitor_ifdrop_delta":0,"mon_extra_radios":0,"evictions":917,"evict_alert":1,"evict_top_host":0,"evict_pnl_client":0,"evict_pnl_ssid":4,"evict_dhcp_event":0,"evict_eap_session":0,"evict_device":0,"evict_beacon_ap":0,"evict_seqnum_client":0,"evict_assoc_pair":0,"evict_assoc_req":0,"evict_wps_session":0,"evict_evidence_frame":0,"evict_probe_client":0,"evict_pm_forge":0,"evict_queue_evict":0,"evict_dns_log":912,"evict_tls_log":0,"evict_quic_log":0,"evict_http_log":0,"evict_ntp_log":0,"evict_icmp_log":0,"evict_rf_channel":0,"evict_http_flow":0,"evict_pcap_cooldown":0,"evict_bgp_session":0,"evict_ldap_event":0,"evict_kerb_event":0,"evict_smb_session":0,"evict_ssh_flow":0,"evict_rdp_flow":0,"evict_snmp_flow":0,"evict_mqtt_flow":0,"evict_mdns_service":0,"evict_nbns_name":0,"evict_arp_hist":0,"evict_frag_bss":0,"evict_frag_sta":0,"evict_frag_session":0,"evict_frag_assoc":0,"evict_frag_mpdu":0,"evict_ndp_ra":0,"evict_rogue_radius":0,"evict_ssdp_device":0,"evict_onvif_device":0,"evict_smtp_flow":0,"evict_eapol_pending":0,"evict_deauth_obs":0,"evict_deauth_victim":0,"storage_failures":0,"storage_jsonl_failures":0,"storage_pcap_failures":0,"storage_eapol_failures":0,"pcap_dir_free_mb":273408,"pcap_dir_free_inodes":13138050,"scope":"degraded","scope_not_enforced":1,"scope_requested":1,"scope_enforced":0,"scope_generation":1,"scope_dropped":37,"tuned_count":1,"tuned":"ssh.brute_force=25","socket_peer_refused":0,"socket_clients":1,"parse_faults":5,"parse_fault_radiotap_bad":3,"parse_fault_dot11_runt":2,"parse_fault_ie_overrun":0,"parse_fault_rsn_malformed":0,"parse_fault_mle_malformed":0,"parse_fault_ip_truncated":0,"parse_fault_ip_fragment":0,"parse_fault_dns_name_bad":0,"parse_fault_tls_malformed":0,"parse_fault_frame_edge":0,"parse_fault_fcs_failed":0,"rss_kb":48580,"rss_hwm_kb":49124,"sqlite_mem_kb":1310,"sqlite_mem_hwm_kb":1702,"malloc_kb":2911,"fd_count":16,"resolver_calls":0,"libs":"pcap: libpcap version 1.10.6 (with TPACKET_V3); sqlite: 3.53.4","db_max_mb":512,"jsonl_version":"1.7.0"}
 ```
+
+**The example is abridged between `libs` and `jsonl_version`.** A real
+line carries the Bluetooth host block and the Ubertooth block there
+unconditionally, and the `ble_rot_*`, `pcap_*`, `gps_*` / `loc_*`,
+`gnss_*`, `adsb_*` and `aprs_*` blocks when their flag is given — see
+their rows above. `jsonl_version` is genuinely last, which is the one
+thing the shape above is faithful about at that end of the record.
 
 **Capture scope (#85).** The `scope*` fields were appended later; every
 earlier field keeps its name and position. Under `--iface` /
@@ -996,7 +1293,7 @@ Owner decisions recorded 2026-10-19 (#85 close-out, plan in #145):
   even while its handle is still open.
 
 **What the eviction tally does and does not cover.** Counted — one
-`evict_<name>` field each, and this is the whole set: `alert`, `top_host`, `pnl_client`, `pnl_ssid`, `dhcp_event`, `eap_session`, `device`, `beacon_ap`, `seqnum_client`, `assoc_pair`, `assoc_req`, `wps_session`, `evidence_frame`, `probe_client`, `pm_forge`, `queue_evict`, `pcap_cooldown`, `dns_log`, `tls_log`, `quic_log`, `http_log`, `ntp_log`, `icmp_log`, `rf_channel`, `http_flow`, `bgp_session`, `ldap_event`, `kerb_event`, `smb_session`, `ssh_flow`, `rdp_flow`, `snmp_flow`, `mqtt_flow`, `mdns_service`, `nbns_name`, `arp_hist`, `frag_bss`, `frag_sta`, `frag_session`, `frag_assoc`, `frag_mpdu`, `ndp_ra`, `rogue_radius`, `ssdp_device`, `onvif_device`, `smtp_flow`, `eapol_pending`, `deauth_obs`, `deauth_victim`, `rtsp_exchange`, `rtsp_stream`, `lan_role`, `ble_device`, `bredr_lap`, `ble_flood`. The
+`evict_<name>` field each, and this is the whole set: `alert`, `top_host`, `pnl_client`, `pnl_ssid`, `dhcp_event`, `eap_session`, `device`, `beacon_ap`, `seqnum_client`, `assoc_pair`, `assoc_req`, `wps_session`, `evidence_frame`, `probe_client`, `pm_forge`, `queue_evict`, `pcap_cooldown`, `dns_log`, `tls_log`, `quic_log`, `http_log`, `ntp_log`, `icmp_log`, `rf_channel`, `http_flow`, `bgp_session`, `ldap_event`, `kerb_event`, `smb_session`, `ssh_flow`, `rdp_flow`, `snmp_flow`, `mqtt_flow`, `mdns_service`, `nbns_name`, `arp_hist`, `frag_bss`, `frag_sta`, `frag_session`, `frag_assoc`, `frag_mpdu`, `ndp_ra`, `rogue_radius`, `ssdp_device`, `onvif_device`, `smtp_flow`, `eapol_pending`, `deauth_obs`, `deauth_victim`, `rtsp_exchange`, `rtsp_stream`, `lan_role`, `ble_device`, `bredr_lap`, `ble_flood`, `frag_ap_ident`, `probe_latency`, `rtl433`. The
 device table refuses a new entry rather than evicting an old one —
 different mechanism, same meaning. The 802.11 tables (`beacon_ap`,
 `seqnum_client`, the two `assoc_*`, `wps_session`) joined after the
@@ -1020,7 +1317,11 @@ the camera classifier vetoes from (`lan_role`); the list above is kept in
 (`rtsp_exchange`, `rtsp_stream`), and with #144 slice 2 the BLE
 advertiser table (`ble_device`), and with #144 slice 3 the BR/EDR LAP
 table the Ubertooth stream fills (`bredr_lap`), and with #144 slice 4
-the advertising-flood windows (`ble_flood`); the list above is kept in
+the advertising-flood windows (`ble_flood`), and with JSONL 1.6.0
+(#187 S3) the probe-response latency tables (`probe_latency`: one
+kind for both the 64-slot pending-request ring, where a live request
+overwritten unanswered counts, and the 128-row per-BSSID table, where
+the oldest row dropped counts); the list above is kept in
 step with the build by `tests/test_sensor_health.c ::
 test_schema_doc_lists_every_counted_table`.
 
@@ -1152,7 +1453,7 @@ end, and most of them stopped silently. They share one iterator (every walk #126
 this tally. The kinds, and this is the whole parse-fault set:
 `radiotap_bad`, `dot11_runt`, `ie_overrun`, `rsn_malformed`,
 `mle_malformed`, `ip_truncated`, `ip_fragment`, `dns_name_bad`,
-`tls_malformed`, `frame_edge`. Measured in this build: `radiotap_bad`, `dot11_runt`, `ie_overrun`, `rsn_malformed`, `mle_malformed`, `ip_truncated`, `ip_fragment`, `frame_edge`. The others are reserved by
+`tls_malformed`, `frame_edge`, `fcs_failed`. Measured in this build: `radiotap_bad`, `dot11_runt`, `ie_overrun`, `rsn_malformed`, `mle_malformed`, `ip_truncated`, `ip_fragment`, `frame_edge`, `fcs_failed`. The others are reserved by
 the issue that introduced the tally and are wired by the slice that
 rewrites those parsers (#131 DNS/TLS); until then
 their field is emitted and reads 0 because nothing measures it, not
@@ -1247,8 +1548,16 @@ holds both lists to the build.
   802.11 minimum behind it are decided by the same module's
   `frame_view_radiotap()` and still count as `radiotap_bad` /
   `dot11_runt`.
-
-What is counted is a parser **walk** that hit the fault, not a frame:
+- `fcs_failed` (#178) — the monitor stream's radiotap FLAGS carried
+  BADFCS. The frame is still evidence about the channel (counted in
+  `rf_quality`, kept in the evidence ring, and it still refreshes the
+  stream's freshness clock), but `on_probe_frame()` returns before any
+  per-type content parser sees it: no beacon, probe-response,
+  association, deauth, authentication or action-frame handling runs,
+  because a bit error in a weak frame can read as a plausible SSID,
+  address or element and there is no way to tell that content from a
+  real one after the fact. `#123` left this choice open on purpose;
+  this is where it was made.
 an association request's elements are walked by more than one parser,
 so one malformed frame can add more than one. Read the tally as "is
 malformed input arriving, and roughly how much" — a rising
@@ -1283,6 +1592,344 @@ consumer that groups by `ts` is unaffected.
 forwarder's `--type` filter lets consumers subscribe to only the
 record types they need.
 
+## Host status and the source inventory (JSONL 1.1.0)
+
+Four record types, written by `src/sys_status.c` (contract and rationale
+in `src/sys_status.h`). They say what `sensor_health` does not: **every**
+source sloth can read, configured or not; the receiver hardware attached
+to the host; and the host's own state — CPU, load, memory, temperatures,
+voltages, the firmware's under-voltage alarm.
+
+**New record types, not new `sensor_health` fields.** `sensor_health` is
+already the widest record on the stream (about 250 members against
+slothweb's 384-member decoder cap, in an 8 KB line), a per-sensor list
+has no flat place in it, and slothweb's decoder keeps top-level scalars
+only, so an array there would be checked and dropped. One row per entity
+is also what `gnss_sat` and `sensor` already do.
+
+**Passive, and narrower than that.** Every figure is the text of a
+regular file under `/proc` or `/sys`. No ioctl, no netlink, no device
+node opened, no helper executed (`lsusb`, `vcgencmd`); a path outside
+those two trees is refused before the platform is asked. A reading the
+host does not have is **absent**, never `0`: a VM has no hwmon, a
+desktop has no under-voltage alarm.
+
+**Cadence.** The host is sampled every 10 s and one **batch** is written
+every 60 s: a `sys_status`, its `sys_sensor` rows, every
+`source_status`, every `receiver_hw`, all carrying the same `seq`. This
+is a fixed cadence on purpose — the point is a trend, and
+`sensor_health`'s 300 s heartbeat is too sparse for one. A batch is also
+written at once when a **band gets worse** (`temp_band`, `cpu_band`,
+`mem_band`, `disk_band`, `undervolt`, and since 1.2.0
+`beacon_recall_overflowed` and `beacon_recall_quiet`, going 0 to 1), never when a figure
+moves. A recovery is not written at once: it is in the next minute's
+batch. The bands are held as well (a move up is taken at once, a move
+down only once the value is clear of the edge by a margin). A reading
+that appears or disappears is not a crossing. Together that bounds the
+record: a value swinging across an edge adds at most one batch per band
+per minute. (Reporting every crossing was tried first. On the build
+host two CPU readings ten seconds apart were 43 % and 55 %, either side
+of the 50 % edge, and an unscheduled batch went out within the first
+72 s of a run; a test toggling the alarm on every sample wrote 13
+batches in two minutes that way and writes 3 now.) What it costs: an
+alarm shorter than the 10 s
+between two samples is not seen at all, and a recovery is up to a
+minute late.
+
+A `source_status` row is written on its own, outside a batch, the
+moment its `state`, `age_band`, `detail`, `endpoint` or `hw` changes.
+Steady state: one batch per minute.
+
+A consumer replaces its tables on a new `seq`: a sensor or a receiver
+that is no longer there is simply not in the next batch.
+
+### `sys_status`
+
+One per batch.
+
+| Field | Meaning |
+|---|---|
+| `seq` | the batch number, from 1, per process |
+| `interval_s` | the batch cadence, `60`: a consumer that has seen none for a few of these knows the report has stopped |
+| `cpu_pct`, `cpu_iowait_pct` | the busy and the iowait share of all CPUs over the last 10 s sample interval, one decimal, from the `/proc/stat` aggregate line's deltas. iowait is idle time and is reported on its own, not inside `cpu_pct`. Absent on the first sample (one reading is not an interval) and when the counters ran backwards |
+| `cpu_band` | `low` (< 50), `busy` (< 80), `high` (< 95), `saturated`; held 5 points on the way down |
+| `load1`, `load5`, `load15` | `/proc/loadavg` |
+| `mem_total_kb`, `mem_avail_kb` | `/proc/meminfo` `MemTotal`, `MemAvailable` |
+| `mem_band` | by the share in use (total minus available): `ok` (< 80 %), `low` (< 90 %), `critical`; held 3 points |
+| `uptime_s` | `/proc/uptime`, whole seconds |
+| `rss_kb` | sloth's own resident set (`/proc/self/status` `VmRSS`), the same figure `sensor_health` carries, here once a minute so a leak has a slope |
+| `disk_for`, `disk_free_mb`, `disk_total_mb`, `disk_band` | the filesystem the output lands on: the `--db` file's directory (`disk_for` `db`), else the `-o` file's (`jsonl`). Bands by the share in use: `ok` (< 85 %), `low` (< 95 %), `critical`; held 2 points. Absent with neither flag. `--pcap-dir`'s filesystem is `sensor_health`'s `pcap_dir_free_mb` |
+| `temps` | how many `sys_sensor` rows of class `temp` follow |
+| `temp_max_c`, `temp_max_id`, `temp_band` | the hottest sensor, its `id`, and its band: `ok` (< 60 °C), `warm` (< 70), `hot` (< 80), `critical`; held 2 °C. The bands are sloth's, one scale for every board, not a device's trip points |
+| `volts` | how many rows of class `volt` follow |
+| `undervolt` | `1` when any `inN_lcrit_alarm` reads 1, `0` when none does. On a Raspberry Pi this is the firmware's under-voltage flag (hwmon `rpi_volt`, `in0_lcrit_alarm`). **Absent** on a host with no such alarm node |
+| `power` | how many rows of class `power` follow |
+| `sources`, `sources_configured`, `sources_ok`, `sources_down` | the source rows that follow (5 from `sloth-wifi`, 5 from sloth-rf: the rows the daemon has, `gnss` in both; 9 from the one binary before 2.0.0), and how many are configured, `ok` and `down` |
+| `receivers` | the `receiver_hw` rows that follow |
+| `beacon_recall_slots`, `beacon_recall_max` | 1.2.0, appended. **`sloth` only**: the six `beacon_recall_*` members are absent (not zero) from sloth-rf's `sys_status`, which has no beacon table to report (#213; `has_recall` in `src/sys_status.c`, set only when a capture side is registered; `tests/test_rf_loop.c`). The memory of BSSIDs the beacon table has dropped (`src/beacon_snoop.c`, "BSSIDs the table has forgotten"), which `EVIL_TWIN`'s late-arrival signal reads to tell a returning AP from a new one: slots in use (a superseded memory still holds its slot until overwritten) of its fixed size, 4096. Sampled with the system, every 10 s |
+| `beacon_recall_overflowed` | `1` once a live memory has been overwritten since sloth started (or the table was cleared); from then on "not found" no longer means "never heard". `0` otherwise |
+| `beacon_recall_reach_s` | present only when overflowed: how far back the memory now reaches, seconds — the age of the newest memory it overwrote |
+| `beacon_recall_quiet` | `1` while the late-arrival signal is **off because of the overflow**: an entry the memory does not know is stamped unsure, not new, until the memory again reaches back 24 h (`BEACON_RECALL_TRUST_S`). Exactly the test the signal itself makes. `0` otherwise |
+| `beacon_recall_quiet_s` | present only when quiet: seconds until the signal is on again, if nothing else is overwritten first (a later overwrite moves it out) |
+
+**Where, and why there.** On `sys_status`, not `sensor_health`: the
+slot count is a trend and rides the fixed one-minute batch freely, where
+`sensor_health`'s change-only signature would have to leave it out, and
+slothweb's Sensor health page already reads this record. The two states
+that matter enter the early-batch rule as bands of two, so an overflow
+or the start of a quiet spell is written at once, not up to a minute
+later.
+
+```json
+{"type":"sys_status","ts":1800000060,"seq":2,"interval_s":60,"cpu_pct":15.0,"cpu_iowait_pct":10.0,"cpu_band":"low","load1":0.20,"load5":0.18,"load15":0.12,"mem_total_kb":3884328,"mem_avail_kb":2913246,"mem_band":"ok","uptime_s":350735,"rss_kb":12276,"disk_for":"db","disk_free_mb":21840,"disk_total_mb":29500,"disk_band":"ok","temps":3,"temp_max_c":51.0,"temp_max_id":"hwmon3/temp1","temp_band":"ok","volts":3,"undervolt":0,"power":0,"sources":7,"sources_configured":4,"sources_ok":3,"sources_down":0,"receivers":5,"beacon_recall_slots":4096,"beacon_recall_max":4096,"beacon_recall_overflowed":1,"beacon_recall_reach_s":21600,"beacon_recall_quiet":1,"beacon_recall_quiet_s":64800}
+```
+
+### `sys_sensor`
+
+One per temperature, voltage or power-supply reading, per batch.
+
+| Field | Meaning |
+|---|---|
+| `seq` | its batch |
+| `class` | `temp`, `volt` or `power` |
+| `id` | where it was read: `thermal_zone0` (`/sys/class/thermal/thermal_zone0/temp`), `hwmon1/temp2` (`/sys/class/hwmon/hwmon1/temp2_input`), `hwmon0/in0`, or a `/sys/class/power_supply` entry's name (`BAT0`) |
+| `label` | what the kernel or the device calls it: the zone's `type`; the hwmon `name` plus the channel's `_label` when it has one; the supply's `type`. Device-supplied text, reduced to printable ASCII |
+| `c` | `temp`: degrees Celsius, one decimal |
+| `v` | `volt` and `power`: volts, three decimals (`inN_input` is millivolts, `voltage_now` microvolts). Absent on an alarm-only channel |
+| `alarm` | `volt`: the channel's `inN_lcrit_alarm`, `0` or `1`, when it has one |
+| `capacity`, `status` | `power`: percent, and the supply's own word (`Charging`, `Discharging`, `Full`) |
+
+At most 16 temperatures (thermal zones first, then `hwmon0..15`,
+`temp1..8`), 16 voltages (`in0..8`) and 4 supplies. A value outside a
+physical range (-100 to 250 °C, ±100 V, 0 to 100 %) is treated as not a
+reading. A CPU that appears both as a thermal zone and as a hwmon
+device is two rows: each named sensor is listed as the kernel names it.
+
+```json
+{"type":"sys_sensor","ts":1800000000,"seq":1,"class":"temp","id":"thermal_zone0","label":"cpu-thermal","c":48.3}
+{"type":"sys_sensor","ts":1800000000,"seq":1,"class":"volt","id":"hwmon1/in0","label":"rpi_volt","alarm":0}
+{"type":"sys_sensor","ts":1800000000,"seq":1,"class":"power","id":"BAT0","label":"Battery","v":12.011,"capacity":87,"status":"Discharging"}
+```
+
+### `source_status`
+
+One per source, per batch, and one on its own when the source changes.
+Each daemon writes the rows it has (JSONL 2.0.0): `sloth-wifi` writes
+`capture`, `monitor`, `btmon`, `btcap` and `gnss`; sloth-rf writes
+`gnss`, `adsb`, `aprs`, `rtl433` and `victron`. A row a daemon does not
+have is absent, never `not_configured`: that would be a claim about
+the host that the other daemon may be contradicting. `gnss` is in both,
+because both link the receiver (each reports its own reader's state).
+Until 2.0.0 the one binary wrote all nine. The names, kinds and the
+order below did not change, and a source's slot is still its id.
+
+| `name` | `kind` | Enabled by | `unit` | `count` |
+|---|---|---|---|---|
+| `capture` | `wifi-monitor` when the IP handle's link type is radiotap, `wifi-managed` when its interface is a wireless one, else `ip-capture` | `--iface` | frames | `capture_recv` |
+| `monitor` | `wifi-monitor` | a monitor-mode interface being present | frames | `monitor_recv` |
+| `btmon` | `bluetooth` | `--bt-monitor` | records | `ble_records` |
+| `btcap` | `bluetooth-sniffer` | `--bt-capture` | records | `btcap_recv` |
+| `gnss` | `gnss` | `--gps` | sentences | `gps_sentences` |
+| `adsb` | `adsb` | `--adsb` | messages | `adsb_messages` |
+| `aprs` | `aprs` | `--aprs` | packets | `aprs_packets` |
+| `rtl433` | `sub-ghz` | `--rtl433` | messages | `rtl433_msgs` |
+| `victron` | `victron` | `--victron` | records | `victron_records`; `live` is `ok` however quiet (sloth-va writes nothing while the devices are out of range), a file not there yet `stale`, a read error `down` (1.10.0) |
+
+| Field | Meaning |
+|---|---|
+| `seq` | the newest batch (a row written between batches carries the last one's) |
+| `name`, `kind`, `flag` | as above; `flag` is the option that enables it |
+| `state` | `ok`, `stale`, `down` or `not_configured`. See below |
+| `detail` | the reader's own word and error, never a moving figure: `exit: iface_gone: No such device`, `searching`, `live`, `error: connection refused`, `--location only: a fixed position, no receiver`, `built without libpcap` |
+| `endpoint` | the interface, or the source as the command line gave it (`gpsd:127.0.0.1:2947`, `beast:127.0.0.1:30005`); `""` when not configured |
+| `hw`, `desc`, `driver` | the `receiver_hw` row this source runs on (its `key`), that row's description and its kernel driver. **Present only where sysfs ties the two**: an interface name under the device, or the tty of an `nmea:/dev/...` source. Never for a TCP endpoint to a decoder, and never for `btmon`, which is every controller's monitor channel: with an RTL-SDR attached and `--adsb beast:...` configured, sloth does not say the one feeds the other |
+| `age_s` | seconds since the source last delivered, `-1` never. Absent when not configured |
+| `age_band` | `never`, `fresh` (≤ 60 s), `stale` (≤ 3600 s), `old` |
+| `unit`, `count` | what the source counts and its lifetime total |
+| `rate` | `count` per second since this source's previous row, two decimals. Absent on its first row, and when the count ran backwards (a decoder restarted): not measured is not zero |
+| `errors` | drops for the pcap streams; malformed records, checksum and parse failures, read errors for the others |
+| `reconnects` | `gnss` only |
+
+`state`, named:
+
+- `not_configured` — the command line (or the build) did not enable it.
+- `down` — the handle is not open, the worker exited, or the reader
+  reports an error.
+- `stale` — open and running, but nothing delivered within 60 s (or
+  nothing yet); for `adsb`, the decoder's own clock stopped advancing;
+  for `btcap`, `aprs` and `rtl433`, still waiting for the writer or the
+  file.
+- `ok` — delivering.
+
+Two sources are judged on their own terms. `gnss` is `ok` while the
+receiver is talking, fix or no fix: a receiver searching under a roof is
+a working source, and `detail` carries the fix state. `aprs` stays `ok`
+however long the channel is quiet (a quiet channel is not a fault), and
+`rtl433` likewise for a quiet band; `age_band` says how quiet.
+
+```json
+{"type":"source_status","ts":1800000060,"seq":2,"name":"monitor","kind":"wifi-monitor","flag":"a monitor-mode interface","state":"ok","detail":"","endpoint":"wlan1mon","hw":"usb:1-1.4","desc":"Realtek RTL8812AU 802.11ac","driver":"rtl88XXau","age_s":0,"age_band":"fresh","unit":"frames","count":184220,"rate":51.30,"errors":0}
+{"type":"source_status","ts":1800000060,"seq":2,"name":"aprs","kind":"aprs","flag":"--aprs","state":"not_configured","detail":"","endpoint":""}
+```
+
+### `receiver_hw`
+
+One per attached receiver, per batch; rescanned once a minute. At most
+16.
+
+| Field | Meaning |
+|---|---|
+| `seq` | its batch |
+| `key` | `usb:<port>` (`usb:1-1.2`, the bus and port path), `net:<iface>` or `bt:<hci>` |
+| `kind` | `sdr`, `gnss`, `serial`, `wifi`, `bluetooth`, `bluetooth-sniffer` |
+| `bus`, `id` | `usb`, `pci` or `sdio`, and the vendor:device ID; `""` when the kernel does not say |
+| `known` | `1` when the ID is in sloth's table |
+| `desc` | the table's name for it; `""` when not in the table |
+| `vendor`, `product` | the device's own strings (USB `manufacturer` / `product`). **Device-supplied and untrusted**: bounded, printable ASCII only |
+| `driver` | the kernel driver bound to it |
+| `ifaces` | the interfaces the kernel hung under it, comma-separated: `wlan1,wlan1mon`, `ttyACM0`, `hci0` |
+
+What is listed: a USB device whose ID is in the table
+(`sys_usb_table[]`; every ID and name from the USB ID repository,
+linux-usb.org `usb.ids` 2024.03.18 and 2026.06.26, or for the SDRplay
+RSP1B and RSPdx-R2, which `usb.ids` lacks, systemd's
+`hwdb.d/70-software-radio.hwdb`), every wireless network interface,
+and every Bluetooth controller. A USB device not in the table is not
+listed — this is a receiver inventory, not a USB dump. `serial` is a
+USB-serial bridge (PL2303, CP210x, FT232, CH340): GNSS pucks and TNCs
+commonly sit behind one, and the ID names the bridge, not what is
+behind it, so it is never called a GPS.
+
+**No serial number.** A USB serial number identifies one physical
+device for its whole life; this log travels (to a SIEM, into a bundle,
+to a colleague), and the port path already tells two identical dongles
+apart on this host. sloth does not read the attribute.
+
+```json
+{"type":"receiver_hw","ts":1800000000,"seq":1,"key":"usb:1-1.2","kind":"sdr","bus":"usb","id":"0bda:2838","known":1,"desc":"Realtek RTL2838 DVB-T (RTL-SDR)","vendor":"Realtek","product":"RTL2838UHIDIR","driver":"dvb_usb_rtl28xxu","ifaces":""}
+{"type":"receiver_hw","ts":1800000000,"seq":1,"key":"net:wlan0","kind":"wifi","bus":"sdio","id":"02d0:a9a6","known":0,"desc":"","vendor":"","product":"","driver":"brcmfmac","ifaces":"wlan0"}
+```
+
+## `ownership` — the operator's designated networks (JSONL 1.2.0)
+
+Owner ruling 2026-11-11: "export your designated networks from the
+sensor". sloth's `--my-ssid` and `--my-bssid` rosters
+(`src/ownership.h`) were in neither sloth.db nor the stream, so a
+consumer (slothweb's SSID drawer, Probes and WiFi views) could not mark
+the operator's networks and had to say it did not know.
+
+One singleton record, written by `src/jsonl.c` `jsonl_emit_ownership()`
+through the change-only snapshot cache: on the first tick, at once on
+any change, and on the 300 s heartbeat, so a consumer that connects late
+has it within five minutes. The rosters are fixed for the life of the
+process today (flags only; there is no roster reload and no SIGHUP
+handler), so in practice it is the first line and then a heartbeat.
+
+| Field | Meaning |
+|---|---|
+| `ssids` | how many SSIDs `--my-ssid` designates, `0`..`16` |
+| `ssid_0` .. `ssid_15` | each designated SSID, as given, through the stream's string escaping (*Common envelope*): a control byte as `\u00XX`, an octet that is not UTF-8 as `\ufffd`, never the raw byte. Not the `?` mapping observed SSIDs get at ingest: the record carries the designation sloth compares with (`ownership_is_my_ssid()`, exact and case-sensitive), so a designation with a control byte in it matches no stored SSID here or in a consumer that compares as sloth does |
+| `bssids` | how many BSSIDs `--my-bssid` designates, `0`..`16` |
+| `bssid_0` .. `bssid_15` | each designated BSSID, lower-case `aa:bb:cc:dd:ee:ff` |
+| `known_macs` | how many MACs the known-device roster (`--known-mac`, `--known-macs`) holds, `0`..`512`. **The count only**: those addresses are the operator's own devices, and a stream that is forwarded to a SIEM or bundled for a colleague has no need to carry them; what a consumer can use is whether the roster is set (it gates `UNKNOWN_DEVICE`). The sensor's own interface addresses are not here either: they are the `iface` records' |
+
+Flat members rather than arrays because slothweb's decoder keeps
+top-level scalars only. An empty roster is still a record (`ssids` 0,
+`bssids` 0): "sloth designates none", which a consumer must be able to
+tell from "sloth has not said".
+
+```json
+{"type":"ownership","ts":1800000000,"ssids":2,"ssid_0":"HomeNet","ssid_1":"a\u0001b","bssids":1,"bssid_0":"aa:bb:cc:dd:ee:0f","known_macs":2}
+```
+
+## Credential lures: `karma_suspect`, `harvest_station`, `harvest_chain` (JSONL 1.3.0)
+
+The tables the KARMA and key-harvest rules read, one record per row
+(#187, #172), so a consumer can show what a rule counted and not only
+that it fired: the `alert` record says "this BSSID, CRIT"; these say
+"it answered directed probes for 3 names it never beaconed, to 2
+stations". Written by `src/jsonl.c` `jsonl_emit_lures()` after
+`ownership` on each pass.
+
+- **Change-only per row**, keyed by its MAC, signed on every count and
+  string and never on a timestamp: a row is written when its evidence
+  moves and on the 300 s heartbeat.
+- **A row that leaves its table** (aged out of the detector's window,
+  displaced by its bound, or a station whose unanswered M1s aged to
+  none) is written once more as `{"type":...,"ts":...,"bssid"|"sta":...,"state":"gone"}`
+  and nothing else, so a consumer drops it rather than holding it to a
+  timeout of its own. Every other row carries `"state":"live"`.
+- **Nothing is written while a table is empty.** A consumer tells "no
+  suspect" from "this sloth does not write these" by `jsonl_version`
+  (1.3.0 or later) on `sensor_health`.
+- **Counts only.** The stations a forging BSSID answered, the names it
+  answered for, and a chain's victims stay in the TUI's `[y]` view and
+  the alerts' evidence frames. Member names avoid the credential words
+  slothweb holds every name to (`web/src/web_secret.c`): the PMKID KDE
+  count is `unanswered_kde`, the deauthentication and disassociation
+  frames `disconnects`, the deauth-then-lure flag `lure_chain`.
+
+`karma_suspect`, one per `[y]` row (`s->karma_aps`, `karma_update()`): a
+BSSID beaconing `karma.ssid_thresh` or more SSIDs, or answering directed
+probes for names it never beaconed. At most 64 (`MAX_KARMA_APS`).
+
+| Field | Meaning |
+|---|---|
+| `bssid` | the BSSID |
+| `ssids` | distinct SSIDs it has beaconed (its beacon history, at most 8) |
+| `ie_postures` | distinct security postures (IE fingerprints) behind those SSIDs, `0` when not every SSID has a known one (`karma_ie_distinct_fp()`) |
+| `ie_collapsed` | `1` when two or more SSIDs share one posture (`karma_ie_collapsed()`); weak evidence, see `docs/views/karma.md` |
+| `forged` | SSIDs it answered a station's directed probe for and never beaconed (`karma_forged_ssids()`) |
+| `forge_stations` | distinct stations those answers went to |
+| `pnl_best` | the most of its SSIDs any one station's PNL asks for |
+| `lure_chain` | `1` for a shared-victim deauth-then-lure chain (`karma_deauth_lure_victim()`) |
+| `score` | the `[y]` score (`karma_ap_t.score`) |
+| `top_ssid` | the SSID it advertised most recently, through the stream's escaping |
+| `tool` | the tool attribution the `KARMA_AP` detail uses, `""` for none: the row's label, then `? provisional` for an UNVERIFIED row. No confidence word since `1.5.0` (#151) |
+| `last_seen` | unix seconds, its last beacon |
+
+`harvest_station`, one per soliciting station with an M1 left
+unanswered (`s->harvest_sta`, `src/harvest_track.h`). At most 32
+(`HARVEST_MAX_STA`).
+
+| Field | Meaning |
+|---|---|
+| `sta` | the station that sent the association requests |
+| `asked` | distinct BSSIDs it sent a (re)association request to in `harvest.window_s` |
+| `m1_bssids` | of those, the ones that answered with an M1 |
+| `unanswered` | M1s it sent no M2 for |
+| `unanswered_kde` | of those, the ones whose M1 carried a PMKID KDE |
+| `answered` | BSSIDs it sent an M2 to |
+| `dropped` | targets displaced by the per-station bound |
+| `first_seen`, `last_seen` | unix seconds |
+| `cluster_id` | 1.7.0: the row's cluster, the id its `eapol` records' `harvest_cluster_id` and the `PMKID_HARVEST` detail carry; a new one when the row ages out and returns |
+| `qevict` | 1.7.0: of the BSSIDs it asked, those whose (BSSID, this station) pair had a `QUEUE_EVICT` release within `harvest.window_s` (Framing Frames, CVE-2022-47522, in the same exchange as the solicitation); the pair itself is in the alert detail |
+
+`harvest_chain`, one per BSSID whose claimed deauthentications were
+followed by a victim's fresh M1/M2 (`s->harvest_chain`). At most 16
+(`HARVEST_MAX_CHAIN`).
+
+| Field | Meaning |
+|---|---|
+| `bssid` | the BSSID the frames were claimed from |
+| `victims` | distinct stations knocked off and captured reconnecting (capped at 8) |
+| `disconnects` | distinct deauthentication / disassociation frames before them |
+| `dropped` | rows' victims or notes displaced by the bounds |
+| `first_seen`, `last_seen` | unix seconds |
+| `cluster_id` | 1.7.0: the chain's cluster, carried by the M2 that joined each victim and by the `HANDSHAKE_HARVEST` detail |
+| `qevict` | 1.7.0: victims whose (this BSSID, victim) pair had a `QUEUE_EVICT` release within `harvest.window_s`; a count, never the victim |
+
+Whether a row crosses its rule's threshold is the rule's to say, with
+the thresholds an operator may have tuned: the records carry the counts
+and the `alert` records the verdict.
+
+```json
+{"type":"karma_suspect","ts":1800000000,"bssid":"02:11:22:33:44:55","state":"live","ssids":1,"ie_postures":1,"ie_collapsed":0,"forged":3,"forge_stations":2,"pnl_best":2,"lure_chain":1,"score":4,"top_ssid":"Cafe","tool":"airbase-ng","last_seen":1799999990}
+{"type":"harvest_station","ts":1800000000,"sta":"02:aa:00:00:00:01","state":"live","asked":5,"m1_bssids":4,"unanswered":4,"unanswered_kde":3,"answered":0,"dropped":0,"first_seen":1799999000,"last_seen":1799999900,"cluster_id":7,"qevict":1}
+{"type":"harvest_chain","ts":1800000000,"bssid":"0a:bb:00:00:00:09","state":"live","victims":2,"disconnects":6,"dropped":0,"first_seen":1799999500,"last_seen":1799999800,"cluster_id":9,"qevict":1}
+{"type":"karma_suspect","ts":1800000060,"bssid":"02:11:22:33:44:55","state":"gone"}
+```
+
 ## `socket_gap` (socket-only)
 
 ```json
@@ -1308,10 +1955,159 @@ signature / syslog MSGID), and it does not count towards `seq` itself.
 
 ## Versioning
 
-- **No version field.** Fields are append-only; existing names and
-  semantics don't change. `count` on `alert` is the standing example:
-  #98 documented what it had always measured (rule evaluations) and
-  added `observations` beside it rather than redefining it.
+- **One version field, `jsonl_version` on `sensor_health`** (#185 item
+  3, [ADR 0007](adr/0007-versioning.md)). `MAJOR.MINOR.PATCH`, `2.4.0`
+  today, from `SLOTH_JSONL_VERSION` in `include/sloth.h`, one macro for
+  both daemons. It versions
+  **this contract**, not the binary: `SLOTH_VERSION` is the tree's
+  semantic version and is deliberately not on this stream.
+
+  The bump rule:
+
+  | Part | Bumped when | Whose call |
+  |---|---|---|
+  | `MINOR` | a record type or a field was added, or an optional field became present in a case where it was absent before | the slice that adds it (`agents/dark-factory.md` §4.1) |
+  | `PATCH` | an emitted value was corrected, with no field added, renamed or removed | the slice that corrects it |
+  | `MAJOR` | anything non-additive | nobody's, inside this repo: an external-contract break is a stop-and-ask (§4.3), and `tests/test_jsonl.c :: test_jsonl_contract_version_is_a_major_2_semver` pins the `2` so it cannot pass quietly |
+
+  So a consumer pinned to a `MAJOR` series keeps working by
+  construction, and `MINOR` is the only part that moves in normal work.
+  The one `MAJOR` so far is `2.0.0`, below.
+  `tests/test_sensor_health.c ::
+  test_schema_doc_states_the_jsonl_contract_version` fails if the macro
+  moves and this page does not.
+
+  **Pending bump (2026-11-15), settled the same day.** The
+  `victron_device` record, the `victron_*` block on `sensor_health` and
+  the `sensor` kind `victron` ([[victron]]) were additive and shipped
+  under `1.8.0` until the next slice took `1.9.0`, the way #204's fields
+  waited for #208; #213 took it, so they ship under `1.9.0`. A `1.8.0`
+  line from a build between the two may carry them.
+
+  **Earlier pending bump, settled.** #204's `aprs_region`, `aprs_region_hz`,
+  `aprs_freq_hz`, `aprs_freq_mismatch`, `aprs_silent`,
+  `aprs_silent_after_s` and `aprs_quiet_since` fields were a field
+  addition whose `MINOR` bump was deferred to whichever slice took
+  `1.8.0`; #208 slice 1 took it, so those fields now ship under
+  `1.8.0` like the rest of it. A `1.7.0` line from a build between the
+  two may still carry them, which is the only reason that reading is
+  worth keeping here.
+
+  ### 1.x to 2.0.0 (2026-11-15, #216)
+
+  The sensor became two daemons ([ADR 0010](adr/0010-wifi-rf-daemons.md)),
+  and what the SDR decoders and the GNSS records put on the stream
+  left the Wi-Fi daemon's stream for sloth-rf's. That is a removal from
+  a stream a consumer may be reading, so it is the `MAJOR` the rule
+  above reserves; the owner signed it off on 2026-11-15, as
+  [ADR 0007](adr/0007-versioning.md) requires. **Nothing was renamed,
+  no value changed meaning, and no number was reassigned**: every
+  record and member below has the shape it had in `1.10.0`, and is now
+  in the other daemon's stream. Both daemons report `2.0.0`.
+
+  | What | In `1.x` | In `2.0.0` |
+  |---|---|---|
+  | `gnss_fix`, `gnss_sky`, `gnss_sat` records | `sloth`'s stream, with `--gps` | **sloth-rf's stream only**, with its `--gps`. sloth-wifi still links the receiver and writes none of them |
+  | `adsb_aircraft` record | `sloth`'s stream, with `--adsb` | **sloth-rf's stream only** |
+  | `aprs_station`, `aprs_packet` records | `sloth`'s stream, with `--aprs` | **sloth-rf's stream only** |
+  | `rtl433_device` record | `sloth`'s stream, with `--rtl433` | **sloth-rf's stream only** |
+  | `victron_device` record | `sloth`'s stream, with `--victron` | **sloth-rf's stream only** |
+  | `sensor_health`: `adsb_*`, `aprs_*` (the region, frequency and silence members included), `rtl433_*`, `victron_*` | members of the one record | members of **sloth-rf's** `sensor_health` (`"daemon":"rf"`) only; absent from sloth-wifi's |
+  | `sensor_health`: `gps_*`, `gnss_*`, `loc_*` | members of the one record | **both** daemons' records, each from its own reader (owner ruling 2026-11-15) |
+  | `sensor_health`: the capture's own members (capture, monitor radio, hop, scope, pcap export, Bluetooth, `twin193_*`) | members of the one record | sloth-wifi's record only, as since `1.9.0` |
+  | `sensor_health`: the process's own members: `evictions` and the whole `evict_*` breakout, `storage_failures`, `storage_jsonl_failures`, `tuned_count` through `libs`, `db_max_mb`, `jsonl_version` | members of the one record | **both** daemons' records, each for its own process, as since `1.9.0` (sloth-rf's `sensor_health`, under `daemon`, above) |
+  | `sensor_health.evict_rtl433` | the rtl_433 device table's evictions | **still a member of both records, and always `0` from sloth-wifi.** The `evict_*` breakout is one list in `sh_evict_t` order, written whole by both daemons, so sloth-rf's record likewise carries every capture table's member at `0`. This is the one decoder-named member left in sloth-wifi's record: it is not part of the `rtl433_*` block, sloth-wifi links no rtl_433 table to evict from, and the count that moves is in sloth-rf's record (and in its `rtl433_evicted`) |
+  | `sensor_health.daemon` | `"wifi"` (or absent before `1.9.0`) | `"wifi"` from sloth-wifi, `"rf"` from sloth-rf; unchanged |
+  | `source_status` rows `adsb`, `aprs`, `rtl433`, `victron` | four of `sloth`'s nine rows, `not_configured` when the flag was not given | **sloth-rf's rows only**; absent from sloth-wifi's stream, never `not_configured` there |
+  | `source_status` row `gnss` | one of `sloth`'s nine | a row in **both** streams |
+  | `source_status` rows `capture`, `monitor`, `btmon`, `btcap` | four of `sloth`'s nine | sloth-wifi's rows only |
+  | `sys_status.sources` | `9` | `5` from sloth-wifi, `5` from sloth-rf: the daemon's own rows |
+  | `sensor` rows of kind `adsb`, `aprs`, `rtl433`, `victron` | `sloth`'s registry, after the radios and the receiver | **sloth-rf's registry only**, after its receiver |
+  | `sensor` row of kind `gps` | `sloth`'s registry | a row in **both** registries |
+  | `alert` / `alert.*` of `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP` | `sloth`'s stream | **sloth-rf's stream only**; sloth-wifi runs none of them |
+  | `alert` / `alert.*` of `ADSB_EMERGENCY` | `sloth`'s stream | **sloth-rf's stream only** |
+  | `alert` / `alert.*` of `SENSOR_SOURCE_DOWN` | `sloth`'s stream, for any of nine sources | each daemon's stream, for the sources it reports; `srcdown:gnss` can be in both |
+  | `alert` / `alert.*` of `SENSOR_UNDERVOLT` | `sloth`'s stream | sloth-wifi's stream only, as since sloth-rf existed |
+  | the `loc` stamp on every alert | from the one reader | on each daemon's own alerts, from its own reader |
+  | every other record | `sloth`'s stream | sloth-wifi's stream, unchanged |
+  | `ty` numbers, `sensor` kind numbers, source slots | one numbering | the same numbering in both streams; a row a daemon lacks is absent, nothing is renumbered |
+
+  **What a consumer does.** One that reads only the Wi-Fi, wired and
+  BLE records changes nothing but the `MAJOR` it accepts. One that
+  reads any row of the table's "sloth-rf's stream only" lines opens
+  sloth-rf's socket (`unix:/run/sloth-rf/sloth-rf.sock`) or file beside
+  the first and reads those there; the record is the one it already
+  parses. One that reads a `1.x` stream from a sensor that has not
+  been upgraded keeps working: such a stream still carries everything
+  in the left column, and `jsonl_version` says which it is. slothweb
+  does all three ([[slothweb]] § Two daemons, § The RF stream's
+  state): it reads `1.x` and `2.x`, says which it is reading, and with
+  a `2.x` Wi-Fi stream and no `--rf-socket` says that the RF daemon's
+  stream is not configured rather than showing empty tables.
+
+  **The sensor's side of it**: sloth-wifi refuses the six decoder flags
+  with exit 2, so a host moves them to sloth-rf at the upgrade
+  ([[deployment]] §11.4, `sloth-migrate-rf`). `tests/replay/golden.jsonl`
+  changed by exactly this: the four `not_configured` rows gone,
+  `sources` 9 to 5, and the version string.
+
+  History: `2.4.0` (2026-11-17, [[direction-finding]]) added `bearing_deg` and `bearing_err_deg` to `wifi_df` and `x_m`, `y_m` to `df_radio`, all four written only when `--df-iface` positions are given as `X,Y`; both daemons report `2.4.0`. No existing field changed. `2.3.0` (2026-11-16, [[multi-radio-sensing]]) added `mon_extra_radios` to sloth-wifi's `sensor_health` and, only when `--monitor-iface` names more than one radio, `mon_dup_dropped`, `mon_dedup_evicted` and the `mon_rK_*` members; both daemons report `2.3.0`. No existing field changed. `2.2.0` (2026-11-16, [[direction-finding]]) added two records to sloth-wifi's stream, `wifi_df` and `df_radio`, written only with `--df-iface`; both daemons report `2.2.0`. No existing record changed. `2.1.0` (2026-11-16, [[victron]]) added three values to `victron_device`, `ac_voltage_v`, `ac_current_a` and `ac_apparent_va` (the inverter record's AC output, banded 1 V, 0.5 A and 10 VA in its signature), in sloth-rf's stream; both daemons report `2.1.0`. No existing field changed. `2.0.0` (2026-11-15, #216) is the table above. `1.10.0` (2026-11-15, [[victron]]) added `services` and
+  `values_src` to `victron_device`, both in its signature, and a
+  `source_status` row named `victron` (in `sloth`'s stream and
+  sloth-rf's alike). No existing field changed. `1.9.0` (2026-11-15, #213) added `daemon` to `sensor_health`
+  (`"wifi"` or `"rf"`), for the second daemon of
+  [ADR 0010](adr/0010-wifi-rf-daemons.md); additive, and not the
+  `2.0.0` that ADR reserved for cutover, when records left the Wi-Fi
+  daemon's stream. It also carries the `victron_device` record, the
+  `victron_*` block and the `sensor` kind `victron`, whose bump it owns
+  per the paragraph above. `1.8.0` (2026-11-14) added the `rtl433_device` record and
+  the `rtl433_*` block on `sensor_health`, before `db_max_mb` and only
+  with `--rtl433` (#208 slice 1, [[rtl433]]); `evict_rtl433` to the
+  eviction breakout; `rtl433` to the `sensor` record's `kind` values and
+  a `source_status` row of that name; and carries #204's `aprs_*`
+  region, frequency and silence fields, whose bump it owns per the
+  paragraph above. No existing field changed. `1.7.0` (2026-11-12) appended `harvest_cluster_id` to
+  `eapol`, `cluster_id` and `qevict` to `harvest_station` and
+  `harvest_chain`, and `harvest_posture` to `beacon` (absent until
+  observed), #172; and the `twin193_*` fields to `sensor_health`
+  before `jsonl_version` (#193 field data, counts only); and `db_max_mb`
+  to `sensor_health`, before `jsonl_version` (sloth's `db.max_mb`, for
+  slothweb's storage limit); no existing field changed. `1.6.0` (2026-11-12) appended the member `probe_lat` to
+  `beacon` (#187 S3, probe-response latency per BSSID; absent until a
+  pair was measured) and the field `evict_probe_latency` to
+  `sensor_health`; no existing field changed. `1.5.0` (2026-11-12) changed a value set, not a field
+  (#151, owner decision: one vocabulary reaches the operator). The tool
+  attribution, which `karma_suspect`'s `tool` carries and the `KARMA_AP`
+  detail prints, was `label/low|med|high[? provisional]` and is now
+  `label[? provisional]`: the field-count word mapped onto the verdict
+  tiers is `suspected` for every match, so it is stated once, by
+  `hw_verdict`. A consumer that split `tool` on `/` gets the whole label.
+  `hw_verdict`'s own values are unchanged; a `corroborated-` verdict now
+  comes with `sev` 2 on `KARMA_AP` ([[attack-hardware-fingerprints]]).
+  MINOR: a value set changed, no field did. `1.4.0` (2026-11-12) added the fields `hw_verdict` and
+  `hw_signals` to `alert` and the `alert.*` records (#151, the
+  attack-hardware verdict; present only when a verdict exists, so a
+  record without one is unchanged). `1.3.0` (2026-11-12) added the record types
+  `karma_suspect`, `harvest_station` and `harvest_chain` (#187, #172:
+  the KARMA and key-harvest evidence tables); no existing record
+  gained, lost or renamed a field. `1.2.0` (2026-11-11) appended the `beacon_recall_*` fields
+  to `sys_status` (the forgotten-BSSID memory behind `EVIL_TWIN`'s
+  late-arrival signal) and added the record type `ownership` (the
+  operator's designated networks); no existing field changed. `1.1.0` (2026-11-11)
+  added the record types `sys_status`,
+  `sys_sensor`, `source_status` and `receiver_hw`; no existing record
+  gained, lost or renamed a field.
+
+  **`1.0.0` is where the declared contract starts, not where the stream
+  does.** The records predate the field by many releases; everything
+  below this bullet happened before `1.0.0` and is kept because it is
+  the history a consumer may still be reading. A `sensor_health` line
+  with no `jsonl_version` is from a stream written before this version,
+  and says nothing more than that.
+- **Fields are append-only**; existing names and semantics don't change.
+  `count` on `alert` is the standing example: #98 documented what it had
+  always measured (rule evaluations) and added `observations` beside it
+  rather than redefining it.
 - **One recorded exception, 2026-10-13 (#77).** The four `wps_*`
   vendor-string fields on `beacon` changed from the bytes as received
   to those bytes filtered to printable ASCII. It is listed here rather
@@ -1443,3 +2239,4 @@ tcp:...` writes.
 - [[alerts]] — severity tiers and the `sev` mapping in detail.
 - [[ja3-fingerprinting]] — origin of the `ja3` field in `tls` records.
 - [[pcap-export]] — sibling forensic output (raw packets, not JSONL).
+- [[rf-distance]] — the `est_dist_*` fields: what they rest on and how far to trust them.

@@ -6,6 +6,14 @@
 
 #include "web_json.h"
 #include "web_series.h"
+#include "web_ssid.h"
+
+int web_hist_test_expire = 0;
+
+/* The overview cache holds a whole answer. */
+typedef char web_hist_ovc_fits[(WEB_HIST_COLS_MAX <= WEB_SDB_OVC_CELLS &&
+                                WEB_HIST_SESSIONS <= WEB_SDB_OVC_SESSIONS)
+                               ? 1 : -1];
 
 int web_hist_error(int status, const char *reason, const char *detail,
                         char *body, size_t cap, size_t *len, int *st) {
@@ -64,19 +72,30 @@ int web_hist_configured(const web_m4_t *m) {
     return m && m->sdb && m->sdb->configured && web_slothdb_available();
 }
 
-/* Open sloth.db, or answer why not: 0 open, 1 answered, -1. */
-int web_hist_open(const web_m4_t *m, web_sdb_conn_t *c, long long now_s,
-                   char *body, size_t cap, size_t *len, int *status) {
+/* Open sloth.db with budget_ms, or answer why not: 0 open, 1 answered,
+ * -1. */
+static int hist_open_budget(const web_m4_t *m, web_sdb_conn_t *c, int budget_ms,
+                            long long now_s, char *body, size_t cap,
+                            size_t *len, int *status) {
     char err[WEB_SDB_ERR_MAX];
-    if (web_slothdb_open(m->sdb, c, WEB_SDB_HTTP_MS, now_s, err,
-                         sizeof(err)) == 0)
+    if (web_slothdb_open(m->sdb, c, budget_ms, now_s, err, sizeof(err)) == 0) {
+        /* Every read on it answers for the request's capture scope. */
+        c->scope = m->sc ? m->sc->scope : WEB_SCOPE_HYBRID;
+        c->sc = m->sc;
+        c->ru = m->tsdb ? m->tsdb->ru : NULL;
         return 0;
+    }
     web_slothdb_close(c);
     web_sdb_stats_t st;
     web_slothdb_stats(m->sdb, &st);
     char r[48];
     snprintf(r, sizeof(r), "sloth_db_%s", web_slothdb_state_word(st.state));
     return web_hist_error(503, r, err, body, cap, len, status) == 0 ? 1 : -1;
+}
+
+int web_hist_open(const web_m4_t *m, web_sdb_conn_t *c, long long now_s,
+                  char *body, size_t cap, size_t *len, int *status) {
+    return hist_open_budget(m, c, WEB_SDB_HTTP_MS, now_s, body, cap, len, status);
 }
 
 int web_hist_read_failed(web_sdb_conn_t *c, char *body, size_t cap, size_t *len,
@@ -99,6 +118,58 @@ static void session_json(web_jw_t *w, const web_sdb_session_t *s) {
 
 /* ── /api/history/overview ───────────────────────────────────────────── */
 
+static const char *plan_name(int plan) {
+    switch (plan) {
+    case WEB_SDB_PLAN_INDEX: return "index";
+    case WEB_SDB_PLAN_BOUND: return "bound";
+    case WEB_SDB_PLAN_SCAN:  return "scan";
+    case WEB_SDB_PLAN_EMPTY: return "empty";
+    default:                 return NULL;
+    }
+}
+
+/* The overview's 503 says which read failed and how far it got, so
+ * "too slow" names the table and the rows it had counted when the
+ * budget ran out: {"error", "detail", "query", "rows_read" (null when
+ * not counting rows), "plan" (how that table was read, c->plan, null
+ * when not counting one), "budget_ms"}. Closes c. */
+static int overview_failed(web_sdb_conn_t *c, char *body, size_t cap,
+                           size_t *len, int *status) {
+    int to = c->timed_out;
+    const char *what = c->what ? c->what : "open";
+    long long rows = c->rows_read;
+    /* How that table was being read: a slow scan of a file sloth has
+     * not reindexed reads differently from a slow index count. */
+    const char *plan = !c->what ? NULL
+                     : !strcmp(c->what, "devices") ? plan_name(c->plan[0])
+                     : !strcmp(c->what, "alerts")  ? plan_name(c->plan[1])
+                     : NULL;
+    web_slothdb_close(c);
+    char detail[160];
+    if (rows >= 0)
+        snprintf(detail, sizeof(detail), "%s %s after %lld rows", what,
+                 to ? "ran past the budget" : "failed", rows);
+    else
+        snprintf(detail, sizeof(detail), "%s %s", what,
+                 to ? "ran past the budget" : "failed");
+    web_jw_t w;
+    web_jw_init(&w, body, cap);
+    web_jw_raw(&w, "{\"error\":");
+    web_jw_str(&w, to ? "sloth_db_timeout" : "sloth_db_error");
+    web_jw_raw(&w, ",\"detail\":");     web_jw_str(&w, detail);
+    web_jw_raw(&w, ",\"query\":");      web_jw_str(&w, what);
+    web_jw_raw(&w, ",\"rows_read\":");
+    if (rows >= 0) web_jw_int(&w, rows); else web_jw_raw(&w, "null");
+    web_jw_raw(&w, ",\"plan\":");
+    if (plan) web_jw_str(&w, plan); else web_jw_raw(&w, "null");
+    web_jw_raw(&w, ",\"budget_ms\":");  web_jw_int(&w, WEB_SDB_OVERVIEW_MS);
+    web_jw_raw(&w, "}\n");
+    if (w.overflow) return -1;
+    *len = w.len;
+    *status = 503;
+    return 0;
+}
+
 int web_history_overview_route(const web_m4_t *m, const char *query,
                                long long now_s, char *body, size_t cap,
                                size_t *len, int *status) {
@@ -118,20 +189,45 @@ int web_history_overview_route(const web_m4_t *m, const char *query,
     long long cell = (span + cols - 1) / cols;
     if (cell < 60) cell = 60;
     int ncell = (int)((span + cell - 1) / cell);
-    long long *devs = calloc((size_t)ncell, sizeof(*devs));
-    long long *al = calloc((size_t)ncell, sizeof(*al));
-    web_sdb_session_t *ss = calloc(WEB_HIST_SESSIONS, sizeof(*ss));
-    if (!devs || !al || !ss) { free(devs); free(al); free(ss); return -1; }
-    web_sdb_conn_t c;
-    int o = web_hist_open(m, &c, now_s, body, cap, len, status);
-    if (o) { free(devs); free(al); free(ss); return o > 0 ? 0 : -1; }
-    int ns = 0;
-    if (web_sdb_overview(&c, from, (int)cell, ncell, devs, al) != 0 ||
-        (ns = web_sdb_sessions(&c, ss, WEB_HIST_SESSIONS)) < 0) {
-        free(devs); free(al); free(ss);
-        return web_hist_read_failed(&c, body, cap, len, status);
+    web_sdb_ovw_t *v = calloc(1, sizeof(*v));
+    if (!v || ncell > WEB_SDB_OVC_CELLS) { free(v); return -1; }
+    web_sdb_ident_t id;
+    /* The cache holds Hybrid's counts only: a scoped overview is read
+     * each time (web_sdb_overview()). */
+    int cacheable = !(m->sc && m->sc->scope) && web_sdb_ovc_ident(m->sdb, &id) == 0;
+    if (!cacheable || !web_sdb_ovc_get(m->sdb, &id, from, (int)cell, ncell, v)) {
+        web_sdb_conn_t c;
+        int o = hist_open_budget(m, &c, WEB_SDB_OVERVIEW_MS, now_s, body, cap,
+                                 len, status);
+        if (o) { free(v); return o > 0 ? 0 : -1; }
+        if (web_hist_test_expire) c.deadline_ms = 0;
+        int ns = -1;
+        int ok = web_sdb_overview(&c, from, (int)cell, ncell, v->devs,
+                                  v->alerts) == 0;
+        if (ok) {
+            c.what = "sessions";
+            c.rows_read = -1;
+            ok = (ns = web_sdb_sessions(&c, v->ss, WEB_HIST_SESSIONS)) >= 0;
+        }
+        if (!ok) {
+            free(v);
+            return overview_failed(&c, body, cap, len, status);
+        }
+        web_slothdb_close(&c);
+        v->from = from;
+        v->to = to;
+        v->cell_s = (int)cell;
+        v->ncell = ncell;
+        v->ns = ns;
+        if (cacheable) web_sdb_ovc_put(m->sdb, &id, v);
     }
-    web_slothdb_close(&c);
+    /* A cached answer is the one counted for a from in the same cell,
+     * at most a minute ago: from and to say which. */
+    from = v->from;
+    to = v->to;
+    long long *devs = v->devs, *al = v->alerts;
+    web_sdb_session_t *ss = v->ss;
+    int ns = v->ns;
     web_jw_t w;
     web_jw_init(&w, body, cap);
     web_jw_raw(&w, "{\"from\":");    web_jw_int(&w, from);
@@ -161,7 +257,7 @@ int web_history_overview_route(const web_m4_t *m, const char *query,
     web_jw_raw(&w, "],\"sessions_more\":");
     web_jw_raw(&w, shown < overlapping || ns == WEB_HIST_SESSIONS ? "true" : "false");
     web_jw_raw(&w, "}\n");
-    free(devs); free(al); free(ss);
+    free(v);
     if (w.overflow) return -1;
     *len = w.len;
     *status = 200;
@@ -184,13 +280,23 @@ static int emit_alert(void *ctx, const web_sdb_item_t *it) {
     if (h->w->len + ITEM_JSON_MAX + 96 > h->cap) { h->cut = 1; return 1; }
     web_jw_t *w = h->w;
     web_jw_raw(w, h->n++ ? ",{\"title\":" : "{\"title\":");
-    jw_text_or_null(w, it->a);
+    /* sloth can put an SSID into a title as it came: the display form
+     * (web_ssid.h), as the live alerts list sends it. */
+    if (it->a[0]) web_jw_text(w, it->a); else web_jw_raw(w, "null");
     web_jw_raw(w, ",\"ip\":");     jw_text_or_null(w, it->b);
     web_jw_raw(w, ",\"type\":");   web_jw_int(w, it->n1 & 0xffff);
     web_jw_raw(w, ",\"sev\":");    web_jw_int(w, it->n2 < 0 ? 0 : it->n2 > 2 ? 2 : it->n2);
     web_jw_raw(w, ",\"count\":");  web_jw_int(w, it->has_n3 && it->n3 > 0 ? it->n3 : 0);
     web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, it->first_seen);
     web_jw_raw(w, ",\"last_seen\":");  web_jw_int(w, it->last_seen);
+    /* The rows of one key in the range collapsed into one (each at
+     * least one incident there), and the opaque id of its detail page
+     * (web_alerts.h). */
+    web_jw_raw(w, ",\"incidents\":"); web_jw_int(w, it->rows > 0 ? it->rows : 1);
+    char id[32];
+    snprintf(id, sizeof(id), "d%lld", it->rid);
+    web_jw_raw(w, ",\"id\":");
+    if (it->rid > 0) web_jw_str(w, id); else web_jw_raw(w, "null");
     web_jw_raw(w, "}");
     return 0;
 }
@@ -230,6 +336,7 @@ static int list_route(const web_m4_t *m, const char *query, long long now_s,
         return web_hist_error(400, why, NULL, body, cap, len, status);
     if (ps[2].seen && decimal(ps[2].val, 1, WEB_HIST_LIMIT_MAX, &limit) != 0)
         return web_hist_error(400, "bad_limit", NULL, body, cap, len, status);
+    WEB_M4_CHECKED(m, len, status);
     web_sdb_conn_t c;
     int o = web_hist_open(m, &c, now_s, body, cap, len, status);
     if (o) return o > 0 ? 0 : -1;
@@ -244,9 +351,25 @@ static int list_route(const web_m4_t *m, const char *query, long long now_s,
         ? web_sdb_flows_between(&c, from, to, (int)limit + 1, emit_flow, &h)
         : web_sdb_alerts_between(&c, from, to, (int)limit + 1, emit_alert, &h);
     if (got < 0) return web_hist_read_failed(&c, body, cap, len, status);
+    long long scanned = 0, oldest = 0;
+    if (!flows && web_sdb_alerts_scan(&c, from, to, &scanned, &oldest) < 0)
+        return web_hist_read_failed(&c, body, cap, len, status);
     web_slothdb_close(&c);
     web_jw_raw(&w, "],\"count\":");  web_jw_int(&w, h.n);
     web_jw_raw(&w, ",\"more\":");    web_jw_raw(&w, h.cut ? "true" : "false");
+    if (!flows) {
+        /* The keys listed come from the range's newest rows, at most
+         * WEB_SDB_ALERT_SCAN; when that cap was reached, a key seen only
+         * before oldest is not listed (each listed key's figures are
+         * its own over the whole range). */
+        int capped = scanned >= WEB_SDB_ALERT_SCAN;
+        web_jw_raw(&w, ",\"scan\":{\"rows\":"); web_jw_int(&w, scanned);
+        web_jw_raw(&w, ",\"cap\":");    web_jw_int(&w, WEB_SDB_ALERT_SCAN);
+        web_jw_raw(&w, ",\"capped\":"); web_jw_raw(&w, capped ? "true" : "false");
+        web_jw_raw(&w, ",\"oldest\":");
+        if (capped) web_jw_int(&w, oldest); else web_jw_raw(&w, "null");
+        web_jw_raw(&w, "}");
+    }
     web_jw_raw(&w, "}\n");
     if (w.overflow) return -1;
     *len = w.len;
@@ -305,6 +428,7 @@ typedef struct {
     web_jw_t *w;
     size_t    cap;
     int       n, max, cut;
+    int       ssid;       /* the label is an SSID (an AP's, a probe's) */
 } nl_t;
 
 static int emit_new(void *ctx, const web_sdb_item_t *it) {
@@ -314,8 +438,10 @@ static int emit_new(void *ctx, const web_sdb_item_t *it) {
     web_jw_t *w = l->w;
     web_jw_raw(w, l->n++ ? ",{\"ident\":" : "{\"ident\":");
     web_jw_str(w, it->a);
-    web_jw_raw(w, ",\"label\":");  jw_text_or_null(w, it->b);
+    web_jw_raw(w, ",\"label\":");
+    if (l->ssid) web_jw_ssid(w, it->b); else jw_text_or_null(w, it->b);
     web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, it->first_seen);
+    if (l->ssid) web_jw_ssid_meta(w, "label", it->b);
     web_jw_raw(w, "}");
     return 0;
 }
@@ -369,7 +495,7 @@ int web_sessions_new_route(const web_m4_t *m, const char *query,
         web_jw_key(&w, K[k].name);
         if (!has_prev) { web_jw_raw(&w, "null"); continue; }
         web_jw_raw(&w, "{\"rows\":[");
-        nl_t l = { &w, cap, 0, WEB_HIST_NEW, 0 };
+        nl_t l = { &w, cap, 0, WEB_HIST_NEW, 0, K[k].kind != WEB_NEW_DEVICE };
         long long total = 0;
         int got = web_sdb_new_since(&c, K[k].kind, since, until, WEB_HIST_NEW,
                                     emit_new, &l, &total);

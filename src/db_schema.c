@@ -17,6 +17,8 @@
  * snapshot stream into a queryable history: "who was here between 2 and
  * 4 AM" is a range scan, not a log grep. */
 
+#include <stdio.h>
+
 #include "db.h"
 
 static const char SCHEMA_SQL[] =
@@ -76,6 +78,15 @@ static const char SCHEMA_SQL[] =
     "  dhcp_vci      TEXT"
     ");\n"
     "CREATE INDEX IF NOT EXISTS idx_devices_last_seen ON devices(last_seen);\n"
+    /* "What arrived when": slothweb's History strip counts rows per
+     * first_seen cell, and without this a range on first_seen is a
+     * scan of the table. An index, like a new table, needs no
+     * DB_SCHEMA_VERSION bump: CREATE INDEX IF NOT EXISTS runs on every
+     * open, so a v7 file written before it gains it on its next open,
+     * and no stored value changes (tests/test_db.c ::
+     * test_current_file_gains_the_first_seen_indexes). The one-time
+     * build is measured in docs/wiki/sqlite-schema.md. */
+    "CREATE INDEX IF NOT EXISTS idx_devices_first_seen ON devices(first_seen);\n"
 
     /* ── PNL — the 15%-of-volume type, as <=2048 rows ─────── *
      * Split client/SSID so the SSID set is queryable: "which devices
@@ -147,6 +158,12 @@ static const char SCHEMA_SQL[] =
      * to have been recorded in March. */
     "  downgrade_flags INTEGER NOT NULL DEFAULT 0,"
     "  akm_bits    INTEGER NOT NULL DEFAULT 0,"
+    /* sloth_ch_width_t (#66's in-memory field, #207's persisted one):
+     * 0 unknown, else MHz, 8080 for 80+80 non-contiguous. Upgrade-only,
+     * like the in-memory merge in beacon_snoop.c — a beacon that omits
+     * the operation IE it last carried does not erase what a fuller
+     * one already established. */
+    "  operating_width INTEGER NOT NULL DEFAULT 0,"
     "  revealed    INTEGER NOT NULL DEFAULT 0,"
     "  frame_count INTEGER NOT NULL DEFAULT 0,"
     "  has_qbss    INTEGER NOT NULL DEFAULT 0,"
@@ -519,10 +536,95 @@ static const char SCHEMA_SQL[] =
     "  match_ip   TEXT,"
     "  match_port INTEGER,"
     "  count      INTEGER NOT NULL DEFAULT 0,"
+    /* #170 (schema v8): one row per finding, not per incident. A
+     * finding is every incident of one key while its row is retained;
+     * the incidents themselves are the JSONL lifecycle stream's (#98).
+     * `reopens` counts the incidents after the first that this row
+     * absorbed. `incident_id` is the latest of them, the join into
+     * that stream, and `incident_count` that incident's own count as
+     * last written, which is what lets `count` sum across incidents
+     * without double-counting the one still open.
+     * `incident_first_seen` is that incident's start: first_seen..
+     * last_seen spans every incident and the quiet gaps between them,
+     * so a "was it firing at t" question reads this column, not
+     * first_seen. Listed last and in MIGRATE_V7_SQL's order, so a
+     * migrated v7 file and a fresh v8 file have the same column
+     * order. */
+    "  reopens        INTEGER NOT NULL DEFAULT 0,"
+    "  incident_id    TEXT,"
+    "  incident_count INTEGER NOT NULL DEFAULT 0,"
+    "  incident_first_seen INTEGER,"
+    /* Schema v9 (2026-10-27, --location / --gps): where the sensor was
+     * when the row's CURRENT incident opened. WGS84 decimal degrees,
+     * alt_m above mean sea level, acc_m an estimate of horizontal error
+     * (HDOP x 5 m, or gpsd's eph), loc_src 'gps' or 'fixed', loc_ts the
+     * fix's wall time. All NULL when unstamped - never 0,0, which is a
+     * real place. Listed last and in MIGRATE_V8_SQL's order. */
+    "  lat     REAL,"
+    "  lon     REAL,"
+    "  alt_m   REAL,"
+    "  acc_m   REAL,"
+    "  loc_src TEXT,"
+    "  loc_ts  INTEGER,"
     "  PRIMARY KEY (key, first_seen)"
     ");\n"
     "CREATE INDEX IF NOT EXISTS idx_alerts_last_seen ON alerts(last_seen);\n"
     "CREATE INDEX IF NOT EXISTS idx_alerts_sev ON alerts(sev);\n"
+    /* Alert episodes begun per History cell; see idx_devices_first_seen.
+     * first_seen never changes on an episode's upsert, so the index
+     * costs an entry per new episode and nothing per tick. */
+    "CREATE INDEX IF NOT EXISTS idx_alerts_first_seen ON alerts(first_seen);\n"
+
+    /* Schema v11 (#175): one row per incident. The alerts row above is
+     * the finding (every incident of its key, #170) and stays as it is:
+     * its sev is the peak and its count the sum across incidents, which
+     * is right for the finding and wrong for "how bad was it in this
+     * window". This table holds each incident's own figures so a range
+     * read can ask that. Written by the --db writer from the engine's
+     * snapshot every tick and from its open / severity / resolve hook
+     * (src/alerts.h alerts_set_incident_hook), so an incident evicted
+     * between two ticks still gets its last figures and its close.
+     *
+     * `first_seen` is the incident's own start (the engine's
+     * first_detected; the alerts row's incident_first_seen while it is
+     * the latest), `sev` its severity as last written and `peak_sev`
+     * the highest it reached, `count` its evaluations and
+     * `observations` its evidence changes (the engine's two counters,
+     * docs/wiki/jsonl-schema.md). `closed_at` and `reason` are its
+     * alert.resolve: NULL while open, or while the file never saw the
+     * resolve (a sensor stopped mid-incident). No detail column: the
+     * finding's detail is on the alerts row, and the audited-detail gate
+     * slothweb reads it through (web_alertdb.h) stays the one way out.
+     *
+     * Keyed by (key, incident_id): the id hashes the key, the wall
+     * second the incident opened and a per-process sequence number
+     * (incident_id_make()), so two runs' incidents of one key share a
+     * row only if both opened in the same wall second at the same
+     * sequence number - a clock set back across a restart, nothing a
+     * running clock produces. Bounded per key at DB_INCIDENTS_PER_KEY
+     * (src/db.c), oldest first, and retained on the finding tier. A
+     * migrated v10 file gets it from this same unconditional schema, so
+     * it and a fresh v11 file agree. */
+    "CREATE TABLE IF NOT EXISTS alert_incidents ("
+    "  key          TEXT NOT NULL,"
+    "  incident_id  TEXT NOT NULL,"
+    "  type         INTEGER NOT NULL,"
+    "  first_seen   INTEGER NOT NULL,"
+    "  last_seen    INTEGER NOT NULL,"
+    "  sev          INTEGER NOT NULL,"
+    "  peak_sev     INTEGER NOT NULL,"
+    "  count        INTEGER NOT NULL DEFAULT 0,"
+    "  observations INTEGER NOT NULL DEFAULT 0,"
+    "  closed_at    INTEGER,"
+    "  reason       TEXT,"
+    "  PRIMARY KEY (key, incident_id)"
+    ");\n"
+    /* A key's incidents in order (the alert page, the per-key bound)
+     * and a range's (History), each an index seek. */
+    "CREATE INDEX IF NOT EXISTS idx_alert_incidents_key"
+    " ON alert_incidents(key, first_seen);\n"
+    "CREATE INDEX IF NOT EXISTS idx_alert_incidents_last_seen"
+    " ON alert_incidents(last_seen);\n"
 
     "CREATE TABLE IF NOT EXISTS cleartext_creds ("
     "  ts          INTEGER NOT NULL,"
@@ -674,6 +776,251 @@ static const char SCHEMA_SQL[] =
     ");\n"
 
     /* ── passive sensor registry (#28) ───────────────────── */
+    /* --gps (2026-10-27, src/position_track.h). Where the SENSOR was
+     * when it heard a device: one row per sample, taken when the fix
+     * moved gps.min_move_m or gps.sample_s passed. Not the device's
+     * position - sloth has no bearing. rssi is the device's last Wi-Fi
+     * signal in dBm, NULL when none. Observation tier. */
+    /* The sample's time is `last_seen` so the retention sweep, which
+     * ages every table by that column, covers both tables unchanged. */
+    "CREATE TABLE IF NOT EXISTS device_positions ("
+    "  mac       TEXT NOT NULL,"
+    "  last_seen INTEGER NOT NULL,"
+    "  lat   REAL NOT NULL,"
+    "  lon   REAL NOT NULL,"
+    "  acc_m REAL,"
+    "  rssi  INTEGER,"
+    "  PRIMARY KEY (mac, last_seen)"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_device_positions_last_seen"
+    " ON device_positions(last_seen);\n"
+    /* The sensor's own track on the same sampling rule. */
+    "CREATE TABLE IF NOT EXISTS sensor_positions ("
+    "  last_seen INTEGER PRIMARY KEY,"
+    "  lat     REAL NOT NULL,"
+    "  lon     REAL NOT NULL,"
+    "  alt_m   REAL,"
+    "  acc_m   REAL,"
+    "  loc_src TEXT NOT NULL,"
+    "  sats    INTEGER,"
+    "  hdop    REAL"
+    ");\n"
+
+    /* GNSS observation (2026-11-02, docs/wiki/gnss.md). The receiver's
+     * own sky and clock, written on the same banded change-only rule as
+     * the gnss_fix / gnss_sat JSONL records (src/gps.c
+     * gps_gnss_*_sig), so the row rate is the record rate: a steady sky
+     * is one row per 300 s heartbeat, a satellite crossing a band is one
+     * row. Observation tier; `last_seen` keeps the retention sweep
+     * unchanged. */
+    "CREATE TABLE IF NOT EXISTS gnss_fixes ("
+    "  last_seen INTEGER PRIMARY KEY,"
+    "  src       TEXT NOT NULL,"
+    "  mode      INTEGER NOT NULL,"
+    "  status    INTEGER,"
+    "  nsat      INTEGER,"
+    "  usat      INTEGER,"
+    "  hdop      REAL,"
+    "  vdop      REAL,"
+    "  pdop      REAL,"
+    "  eph       REAL,"
+    "  epv       REAL,"
+    "  lat       REAL,"
+    "  lon       REAL,"
+    "  alt_m     REAL,"
+    "  speed_mps REAL,"
+    "  track_deg REAL,"
+    "  time_off_ms INTEGER,"
+    "  jam       INTEGER,"
+    "  cn0_mean  REAL"
+    ");\n"
+    /* One row per satellite per change: the key is the pass's time and
+     * the satellite's identity (PRN is the one member gpsd always
+     * writes; gnssid is -1 from an NMEA-only gpsd). */
+    "CREATE TABLE IF NOT EXISTS gnss_sightings ("
+    "  last_seen INTEGER NOT NULL,"
+    "  gnssid    INTEGER NOT NULL,"
+    "  prn       INTEGER NOT NULL,"
+    "  svid      INTEGER,"
+    "  el        INTEGER,"
+    "  az        INTEGER,"
+    "  cn0       REAL,"
+    "  used      INTEGER NOT NULL DEFAULT 0,"
+    "  health    INTEGER,"
+    "  PRIMARY KEY (last_seen, gnssid, prn)"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_gnss_sightings_last_seen"
+    " ON gnss_sightings(last_seen);\n"
+
+    /* ADS-B (#26, schema v12, docs/wiki/adsb.md): what the --adsb
+     * decoder listed. adsb_aircraft is the inventory, one row per
+     * address ever seen (the entity tier); adsb_sightings one row per
+     * meaningful change of an aircraft (the adsb_aircraft JSONL
+     * record's rule: altitude band, position cell, squawk, emergency,
+     * callsign, category, or the 300 s heartbeat), its track over time
+     * (the observation tier). hex is sloth's own spelling: six
+     * lower-case hex digits, `~`-prefixed for a non-ICAO address. */
+    "CREATE TABLE IF NOT EXISTS adsb_aircraft ("
+    "  hex            TEXT PRIMARY KEY,"
+    "  non_icao       INTEGER NOT NULL DEFAULT 0,"
+    "  first_seen     INTEGER NOT NULL,"
+    "  last_seen      INTEGER NOT NULL,"
+    "  visit_first    INTEGER NOT NULL,"
+    "  visits         INTEGER NOT NULL DEFAULT 1,"
+    "  sightings      INTEGER NOT NULL DEFAULT 1,"
+    "  flight         TEXT,"
+    "  squawk         TEXT,"
+    "  category       TEXT,"
+    "  source_type    TEXT,"
+    "  emergency_seen INTEGER NOT NULL DEFAULT 0,"
+    "  alt_min        INTEGER,"
+    "  alt_max        INTEGER,"
+    "  gs_max         REAL,"
+    "  rssi_max       REAL,"
+    "  messages       INTEGER,"
+    "  pos_seen       INTEGER NOT NULL DEFAULT 0"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_adsb_aircraft_last_seen"
+    " ON adsb_aircraft(last_seen);\n"
+    "CREATE TABLE IF NOT EXISTS adsb_sightings ("
+    "  last_seen  INTEGER NOT NULL,"
+    "  hex        TEXT NOT NULL,"
+    "  heard      INTEGER,"
+    "  flight     TEXT,"
+    "  squawk     TEXT,"
+    "  emergency  TEXT,"
+    "  category   TEXT,"
+    "  on_ground  INTEGER NOT NULL DEFAULT 0,"
+    "  alt_baro   INTEGER,"
+    "  alt_geom   INTEGER,"
+    "  alt_band   INTEGER,"
+    "  gs         REAL,"
+    "  track      REAL,"
+    "  baro_rate  INTEGER,"
+    "  lat        REAL,"
+    "  lon        REAL,"
+    "  rssi       REAL,"
+    "  messages   INTEGER,"
+    "  source_type TEXT,"
+    "  PRIMARY KEY (last_seen, hex)"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_adsb_sightings_last_seen"
+    " ON adsb_sightings(last_seen);\n"
+    "CREATE INDEX IF NOT EXISTS idx_adsb_sightings_hex"
+    " ON adsb_sightings(hex, last_seen);\n"
+
+    /* APRS (schema v13, docs/wiki/aprs.md): what the --aprs Dire Wolf
+     * log carried. aprs_stations is the inventory, one row per source
+     * callsign ever heard (the entity tier): earliest first seen, latest
+     * last seen (Dire Wolf's utime of the packet), visits (one more each
+     * time sloth's own first_seen for the call moves: it expired and
+     * came back), packets, the newest position, symbol, comment, status
+     * and system it sent, whether any packet was heard direct, the best
+     * audio level and the newest heard-via. aprs_packets is one row per
+     * packet (the observation tier): no key of its own, since one
+     * packet is often heard twice in a second, direct and through a
+     * digipeater. Every text column is what a transmitter chose. */
+    "CREATE TABLE IF NOT EXISTS aprs_stations ("
+    "  call         TEXT PRIMARY KEY,"
+    "  first_seen   INTEGER NOT NULL,"
+    "  last_seen    INTEGER NOT NULL,"
+    "  visit_first  INTEGER NOT NULL,"
+    "  visits       INTEGER NOT NULL DEFAULT 1,"
+    "  packets      INTEGER NOT NULL DEFAULT 1,"
+    "  via          TEXT,"
+    "  heard_direct INTEGER NOT NULL DEFAULT 0,"
+    "  best_level   INTEGER,"
+    "  dti          TEXT,"
+    "  symbol       TEXT,"
+    "  lat          REAL,"
+    "  lon          REAL,"
+    "  pos_ts       INTEGER,"
+    "  comment      TEXT,"
+    "  status       TEXT,"
+    "  system       TEXT"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_aprs_stations_last_seen"
+    " ON aprs_stations(last_seen);\n"
+    "CREATE TABLE IF NOT EXISTS aprs_packets ("
+    "  last_seen  INTEGER NOT NULL,"
+    "  source     TEXT NOT NULL,"
+    "  heard      TEXT,"
+    "  dti        TEXT,"
+    "  name       TEXT,"
+    "  symbol     TEXT,"
+    "  lat        REAL,"
+    "  lon        REAL,"
+    "  speed_kt   REAL,"
+    "  course     REAL,"
+    "  alt_m      REAL,"
+    "  level      INTEGER,"
+    "  status     TEXT,"
+    "  comment    TEXT"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_aprs_packets_last_seen"
+    " ON aprs_packets(last_seen);\n"
+    "CREATE INDEX IF NOT EXISTS idx_aprs_packets_source"
+    " ON aprs_packets(source, last_seen);\n"
+
+    /* Victron (schema v15, docs/wiki/victron.md): what --victron read
+     * from sloth-va's file. victron_devices is the inventory, one row
+     * per device address (the entity tier): the owner's serial and
+     * sloth-va's model name when known, the newest Instant Readout
+     * record type, GATT session outcome and that session's service
+     * list, when each path last delivered, and sloth's own counts since
+     * it started. victron_readings is one row per write of a device's
+     * values (the observation tier), at most one a DB_VICTRON_MIN_S per
+     * device: the latest of each allow-listed value as sloth's table
+     * held it (sticky, so a value a record did not carry is the last one
+     * that did), NULL never heard, and `src` the path the newest values
+     * came from. No column holds a PIN, a key or the device's own name. */
+    "CREATE TABLE IF NOT EXISTS victron_devices ("
+    "  mac          TEXT PRIMARY KEY,"
+    "  first_seen   INTEGER NOT NULL,"
+    "  last_seen    INTEGER NOT NULL,"
+    "  serial       TEXT,"
+    "  model        TEXT,"
+    "  record       TEXT,"
+    "  session      TEXT,"
+    "  services     TEXT,"
+    "  last_readout INTEGER,"
+    "  last_gatt    INTEGER,"
+    "  readings     INTEGER NOT NULL DEFAULT 0,"
+    "  sessions     INTEGER NOT NULL DEFAULT 0,"
+    "  rssi         INTEGER"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_victron_devices_last_seen"
+    " ON victron_devices(last_seen);\n"
+    "CREATE TABLE IF NOT EXISTS victron_readings ("
+    "  last_seen     INTEGER NOT NULL,"
+    "  mac           TEXT NOT NULL,"
+    "  src           TEXT NOT NULL,"
+    "  rssi          INTEGER,"
+    "  voltage_v     REAL,"
+    "  aux_voltage_v REAL,"
+    "  mid_voltage_v REAL,"
+    "  input_v       REAL,"
+    "  output_v      REAL,"
+    "  current_a     REAL,"
+    "  power_w       REAL,"
+    "  consumed_ah   REAL,"
+    "  soc_pct       REAL,"
+    "  ttg_min       REAL,"
+    "  temperature_c REAL,"
+    "  alarm_reason  INTEGER,"
+    "  aux_input     INTEGER,"
+    "  device_state  INTEGER,"
+    "  charger_error INTEGER,"
+    "  off_reason    INTEGER,"
+    "  ac_voltage_v  REAL,"
+    "  ac_current_a  REAL,"
+    "  ac_apparent_va REAL"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_victron_readings_last_seen"
+    " ON victron_readings(last_seen);\n"
+    "CREATE INDEX IF NOT EXISTS idx_victron_readings_mac"
+    " ON victron_readings(mac, last_seen);\n"
+
     "CREATE TABLE IF NOT EXISTS sensors ("
     "  kind       INTEGER NOT NULL,"
     "  iface      TEXT NOT NULL,"
@@ -758,6 +1105,102 @@ static const char MIGRATE_V6_SQL[] =
     "ALTER TABLE devices ADD COLUMN dhcp_prl      TEXT;\n"
     "ALTER TABLE devices ADD COLUMN dhcp_vci      TEXT;\n";
 
+/* v7 -> v8 (#170): the alerts table gains the per-finding reopen
+ * counter, the incident join and the incident's start. Additive only:
+ * a v7 row keeps every value it holds, including the duplicate rows
+ * the pre-#170 engine wrote (one per evict-and-refire); folding those
+ * is the opt-in offline copy `--db-compact-alerts`, never this step. A
+ * v7 row reads as reopens 0, no incident, incident_count 0 and no
+ * incident_first_seen (a reader falls back to first_seen, which on a
+ * v7 row WAS the incident's start) - the first v8 write to it is then
+ * a new incident on an old finding, which it is. */
+static const char MIGRATE_V7_SQL[] =
+    "ALTER TABLE alerts ADD COLUMN reopens        INTEGER NOT NULL DEFAULT 0;\n"
+    "ALTER TABLE alerts ADD COLUMN incident_id    TEXT;\n"
+    "ALTER TABLE alerts ADD COLUMN incident_count INTEGER NOT NULL DEFAULT 0;\n"
+    "ALTER TABLE alerts ADD COLUMN incident_first_seen INTEGER;\n";
+
+/* v8 -> v9 (2026-10-27): the alerts table gains the location stamp.
+ * Additive only, every column nullable with no default: a v8 row reads
+ * as unstamped, which it was. */
+static const char MIGRATE_V8_SQL[] =
+    "ALTER TABLE alerts ADD COLUMN lat     REAL;\n"
+    "ALTER TABLE alerts ADD COLUMN lon     REAL;\n"
+    "ALTER TABLE alerts ADD COLUMN alt_m   REAL;\n"
+    "ALTER TABLE alerts ADD COLUMN acc_m   REAL;\n"
+    "ALTER TABLE alerts ADD COLUMN loc_src TEXT;\n"
+    "ALTER TABLE alerts ADD COLUMN loc_ts  INTEGER;\n";
+
+/* v9 -> v10 (2026-11-02): no ALTER. gnss_fixes and gnss_sightings are
+ * new tables on the unconditional schema; the step is the stamp. */
+static const char MIGRATE_V9_SQL[] = "";
+
+/* v10 -> v11 (#175): no ALTER. alert_incidents is a new table on the
+ * unconditional schema, so the step is the stamp, as v9 -> v10 was. No
+ * row is written into it from the alerts table: a v10 row's sev is the
+ * peak and its count the sum over every incident it absorbed, which no
+ * single incident had, so a backfilled row would record figures that
+ * were never observed. The first v11 tick writes the incidents open
+ * then; a key with no incident rows is read from its alerts row, as
+ * before (docs/wiki/sqlite-schema.md). */
+static const char MIGRATE_V10_SQL[] = "";
+
+/* v11 -> v12 (#26, 2026-11-05): no ALTER. adsb_aircraft and
+ * adsb_sightings are new tables on the unconditional schema; the step
+ * is the stamp, as v10 -> v11 was. Nothing is backfilled: no earlier
+ * file recorded an aircraft. */
+static const char MIGRATE_V11_SQL[] = "";
+
+/* v12 -> v13 (2026-11-05): no ALTER. aprs_stations and aprs_packets
+ * are new tables on the unconditional schema; the step is the stamp,
+ * as v11 -> v12 was. Nothing is backfilled: no earlier file recorded a
+ * packet. */
+static const char MIGRATE_V12_SQL[] = "";
+
+/* v13 -> v14 (#207 slice 1): beacon_aps gains operating_width, the
+ * sloth_ch_width_t column that lets a reader draw a BSS's occupied
+ * bandwidth instead of assuming 20 MHz. Additive, default 0 (unknown):
+ * an older row simply has no width yet, which is the honest state for
+ * a BSS this build never re-heard a beacon from. */
+static const char MIGRATE_V13_SQL[] =
+    "ALTER TABLE beacon_aps ADD COLUMN operating_width INTEGER NOT NULL"
+    " DEFAULT 0;\n";
+
+/* Victron (schema v15; the three ac_* names v16): the victron_readings
+ * value columns in the order db.c's write_victron() binds them from ?5
+ * (its INSERT's column list; the table itself holds the v16 columns
+ * last, where ALTER put them); each is the value of
+ * that name on sloth's allow-list (src/victron.c VALS[];
+ * tests/test_db.c holds the two equal). From DB_VICTRON_FIRST_ENUM on
+ * they are enumerations, stored as integers. slothweb's history route
+ * reads the same list, so a column it names is one sloth writes. */
+static const char *const VICTRON_COLS[] = {
+    "voltage_v", "aux_voltage_v", "mid_voltage_v", "input_v", "output_v",
+    "current_a", "power_w", "consumed_ah", "soc_pct", "ttg_min",
+    "temperature_c", "ac_voltage_v", "ac_current_a", "ac_apparent_va",
+    "alarm_reason", "aux_input", "device_state", "charger_error",
+    "off_reason",
+};
+
+const char *db_victron_col(int i) {
+    int n = (int)(sizeof(VICTRON_COLS) / sizeof(VICTRON_COLS[0]));
+    return i >= 0 && i < n ? VICTRON_COLS[i] : NULL;
+}
+
+/* v14 -> v15 (2026-11-15, docs/wiki/victron.md): no ALTER.
+ * victron_devices and victron_readings are new tables on the
+ * unconditional schema; the step is the stamp, as v12 -> v13 was.
+ * Nothing is backfilled: no earlier file recorded a Victron reading. */
+static const char MIGRATE_V14_SQL[] = "";
+
+/* v15 -> v16 (2026-11-16, docs/wiki/victron.md): the inverter record's
+ * AC output. Three nullable columns on victron_readings; an existing
+ * row has none of them, which is what it recorded. */
+static const char MIGRATE_V15_SQL[] =
+    "ALTER TABLE victron_readings ADD COLUMN ac_voltage_v REAL;\n"
+    "ALTER TABLE victron_readings ADD COLUMN ac_current_a REAL;\n"
+    "ALTER TABLE victron_readings ADD COLUMN ac_apparent_va REAL;\n";
+
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
 int db_schema_version(void)            { return DB_SCHEMA_VERSION; }
@@ -767,3 +1210,39 @@ const char *db_schema_migrate_v3_sql(void) { return MIGRATE_V3_SQL; }
 const char *db_schema_migrate_v4_sql(void) { return MIGRATE_V4_SQL; }
 const char *db_schema_migrate_v5_sql(void) { return MIGRATE_V5_SQL; }
 const char *db_schema_migrate_v6_sql(void) { return MIGRATE_V6_SQL; }
+const char *db_schema_migrate_v7_sql(void) { return MIGRATE_V7_SQL; }
+const char *db_schema_migrate_v8_sql(void) { return MIGRATE_V8_SQL; }
+const char *db_schema_migrate_v9_sql(void) { return MIGRATE_V9_SQL; }
+const char *db_schema_migrate_v10_sql(void) { return MIGRATE_V10_SQL; }
+const char *db_schema_migrate_v11_sql(void) { return MIGRATE_V11_SQL; }
+const char *db_schema_migrate_v12_sql(void) { return MIGRATE_V12_SQL; }
+const char *db_schema_migrate_v13_sql(void) { return MIGRATE_V13_SQL; }
+const char *db_schema_migrate_v14_sql(void) { return MIGRATE_V14_SQL; }
+const char *db_schema_migrate_v15_sql(void) { return MIGRATE_V15_SQL; }
+
+/* --print-schema (#185 item 4). The statements a new file gets, in the
+ * order db_open() applies them, then the version row check_version()
+ * writes into it - so loading this text into an empty database gives
+ * the tables, indexes and meta row the daemon would have created. The
+ * PRAGMAs db_open() also runs (auto_vacuum, WAL, synchronous,
+ * foreign_keys) are storage settings, not schema, and are named in the
+ * header comment rather than emitted. Compiled unconditionally with the
+ * rest of this file, so a WITH_SQLITE=0 build prints the same text: the
+ * DDL is the contract whether or not this build can write it. */
+int db_schema_print(FILE *out) {
+    fprintf(out,
+            "-- sloth database schema, DB_SCHEMA_VERSION %d (src/db_schema.c).\n"
+            "-- The same DDL creates a new sloth-wifi --db and sloth-rf --db.\n"
+            "-- A file a daemon migrated from an older version has the same\n"
+            "-- columns, but ALTER TABLE ADD COLUMN appends them, so their\n"
+            "-- order and sqlite_master's text differ: name columns, never\n"
+            "-- read them by position or compare the CREATE text.\n"
+            "-- A daemon also runs PRAGMA auto_vacuum=INCREMENTAL,\n"
+            "-- journal_mode=WAL, synchronous=NORMAL and foreign_keys=ON on\n"
+            "-- the files it opens; those are storage settings, not schema.\n",
+            DB_SCHEMA_VERSION);
+    fputs(SCHEMA_SQL, out);
+    fprintf(out, "INSERT INTO meta (key,value) VALUES ('schema_version','%d');\n",
+            DB_SCHEMA_VERSION);
+    return ferror(out) ? -1 : 0;
+}

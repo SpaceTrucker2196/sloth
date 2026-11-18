@@ -1,0 +1,164 @@
+# sloth-rf.service — the RF decoders' daemon as a system service (#215).
+#
+# Installed by `sudo make install-service` to /etc/systemd/system, beside
+# sloth-sensor.service, where `sudo make install` has placed the binary
+# (it does when the tree has built one), and never enabled by make.
+# Enabling is not the only thing that starts it: slothweb.service Wants=
+# this unit, so on a host that runs slothweb it starts whenever slothweb
+# does, with whatever /etc/default/sloth-rf holds (nothing, as shipped);
+# `systemctl mask sloth-rf` keeps it off. Recipe, the reason for every
+# key and the migration of a host whose decoders are still read by the
+# Wi-Fi sensor: docs/wiki/deployment.md §11.
+#
+# What it is: the second of the two daemons of ADR 0010. sloth-rf reads
+# what other programs on the host already decode (readsb's aircraft.json
+# or its SBS / Beast output, Dire Wolf's packet log, rtl_433's event
+# log) and a GNSS receiver through gpsd, and serves its own database and
+# its own data socket. It opens no capture and no radio, so it holds no
+# capability, is bound to no network device, and has no monitor-mode
+# helper in front of it.
+#
+# Neither daemon needs the other (ADR 0010, in the spirit of ADR 0005):
+# nothing here names sloth-sensor.service, and a host with only SDRs, or
+# only a GPS, enables this unit alone.
+
+[Unit]
+Description=sloth-rf passive RF decoder reader (ADS-B, APRS, rtl_433, GNSS)
+Documentation=https://github.com/SpaceTrucker2196/sloth
+Documentation=https://github.com/SpaceTrucker2196/sloth/wiki/deployment
+
+# Nothing to wait for. The decoders it reads are other people's units,
+# with names that differ by host (readsb, dump1090-fa, direwolf,
+# rtl_433, gpsd), and a reader whose file or socket is not there yet
+# reports its source down and keeps looking, so an ordering on any of
+# them would only be a guess. A site that wants one adds After= in a
+# drop-in.
+
+# Do not hot-loop on a bad argument in /etc/default/sloth-rf.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# The sloth account, not one of its own: slothweb runs as sloth and
+# reads this daemon's 0600 socket (SO_PEERCRED) and its 0700 state
+# directory, exactly as it reads the Wi-Fi sensor's.
+User=sloth
+Group=sloth
+
+# Site configuration lives in /etc/default/sloth-rf (installed only
+# where there is none). Environment= gives the default; the file, when
+# present, overrides it.
+Environment=SLOTH_RF_ARGS=
+EnvironmentFile=-/etc/default/sloth-rf
+
+# /var/lib/sloth-rf (0700) holds sloth-rf.db; /run/sloth-rf (0750) holds
+# the data socket. Its OWN runtime directory, never RuntimeDirectory=
+# sloth: systemd removes a unit's runtime directory when the unit stops,
+# so two units naming /run/sloth would have a stop of either delete the
+# other's socket.
+StateDirectory=sloth-rf
+StateDirectoryMode=0700
+RuntimeDirectory=sloth-rf
+RuntimeDirectoryMode=0750
+WorkingDirectory=/var/lib/sloth-rf
+UMask=0077
+
+# The two paths are this deployment's, fixed here because the sandbox
+# below admits no others. $SLOTH_RF_ARGS carries the inputs (--adsb,
+# --aprs, --rtl433, --gps, --location) from /etc/default/sloth-rf; with
+# none of them the daemon has nothing to read.
+#
+# --data-socket is a unix: path on purpose, as for the Wi-Fi sensor:
+# SO_PEERCRED is the kernel's authentication, and a tcp: socket would
+# need AF_INET in RestrictAddressFamilies below.
+ExecStart=/usr/local/bin/sloth-rf \
+    --db /var/lib/sloth-rf/sloth-rf.db \
+    --data-socket unix:/run/sloth-rf/sloth-rf.sock \
+    $SLOTH_RF_ARGS
+
+# ── Privilege ────────────────────────────────────────────────────────────
+# None at all: both sets present and empty (an absent bounding set is
+# the full set, not none), so nothing can be gained by exec either. It
+# opens no AF_PACKET handle and retunes no radio, which is all the Wi-Fi
+# sensor's two capabilities are for.
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=true
+
+# ── Filesystem ───────────────────────────────────────────────────────────
+# Everything read-only except the two directories above.
+ProtectSystem=strict
+# What other programs write and this one reads. Under strict they are
+# read-only already; ReadOnlyPaths= says so explicitly, so a later
+# ReadWritePaths= cannot widen them by accident. The '-': a host without
+# that decoder has no such directory, and without the '-' the namespace
+# setup fails (226/NAMESPACE) instead of the reader reporting its source
+# down. A decoder that writes somewhere else needs no key here unless
+# the place is under /home (ProtectHome= below; relax it in a drop-in).
+#
+# This grants the mount, not the permission. Whether the sloth user can
+# read a file is the file's mode and group, which is the host's
+# decision: readsb's aircraft.json is commonly 0644 in a 0755 directory;
+# a log another service writes 0640 to its own group needs sloth in that
+# group (`usermod -aG GROUP sloth`, or SupplementaryGroups=GROUP in a
+# drop-in). Never a capability and never root for this: the unit holds
+# neither, on purpose.
+ReadOnlyPaths=-/run/readsb -/var/lib/direwolf -/var/lib/rtl_433 -/var/lib/sloth-va
+ProtectHome=true
+PrivateTmp=true
+# No device at all: the SDRs belong to the decoders. A serial GNSS
+# receiver read directly is the opt-in drop-in below.
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+
+# ── Kernel surface ───────────────────────────────────────────────────────
+# AF_UNIX for the data socket, and nothing else: no packet socket, no
+# netlink. AF_INET and AF_INET6 are needed only for --gps gpsd:// and
+# for --adsb sbs:// or beast://, and come from the opt-in drop-in
+# sloth-rf.service.d/gps.conf (docs/wiki/deployment.md §11.3), so a
+# daemon that only tails files cannot open an IP socket.
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# capset is in @privileged, and sloth's privilege drop (src/privdrop.c)
+# ends with a capset to the set it keeps; a denied capset fails the
+# start closed (exit 2). Re-allowed alone, on a later line. With both
+# sets above empty the call has nothing to keep and nothing to gain:
+# capset cannot grow the permitted set.
+SystemCallFilter=capset
+SystemCallErrorNumber=EPERM
+
+# ── Resources ────────────────────────────────────────────────────────────
+# One reader thread per source and the socket's; no capture rings.
+MemoryMax=512M
+MemoryHigh=384M
+TasksMax=16
+
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# on-failure, not always: unlike the Wi-Fi sensor there is no device
+# whose return has to restart it, and a clean exit is the operator's.
+Restart=on-failure
+RestartSec=10
+
+# Journald instead of files: it rotates on its own.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sloth-rf
+
+[Install]
+WantedBy=multi-user.target

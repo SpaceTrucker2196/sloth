@@ -287,21 +287,40 @@ int chanhop_retune_reason_bit(int err) {
     }
 }
 
+int chanhop_split(chanhop_t *h, const chanhop_t *full, int radios, int k) {
+    if (!h) return 0;
+    chanhop_reset(h);
+    if (!full || radios < 1 || k < 0 || k >= radios) return 0;
+    for (int i = k; i < full->count && i < CHANHOP_MAX; i += radios)
+        chanhop_add(h, full->slots[i].band, full->slots[i].channel);
+    return h->count;
+}
+
+int chanhop_step(chanhop_t *h, const char *iface, uint64_t now_ms,
+                 uint32_t mon_frames, int *requested, int *err) {
+    if (!h) return 0;
+    chanhop_observe(h, mon_frames);
+    if (!chanhop_tick(h, now_ms)) return 0;
+    /* #91: the vtable returns 0 or a negative errno. A missing
+     * set_channel is a platform that cannot retune, which is what
+     * EOPNOTSUPP says; a stray positive return is a contract
+     * violation and is reported as EIO rather than as success. */
+    int req = chanhop_target_channel(h);
+    int rc = g_platform.set_channel
+           ? g_platform.set_channel(iface, chanhop_target_freq(h))
+           : -EOPNOTSUPP;
+    int e = rc == 0 ? 0 : (rc < 0 ? -rc : EIO);
+    chanhop_confirm_retune(h, e == 0, now_ms);
+    if (requested) *requested = req;
+    if (err) *err = e;
+    return 1;
+}
+
 void chanhop_service(chanhop_t *h, sloth_state_t *s, uint64_t now_ms,
                      uint32_t mon_frames) {
     if (!h || !s) return;
-    chanhop_observe(h, mon_frames);
-    if (chanhop_tick(h, now_ms)) {
-        /* #91: the vtable returns 0 or a negative errno. A missing
-         * set_channel is a platform that cannot retune, which is what
-         * EOPNOTSUPP says; a stray positive return is a contract
-         * violation and is reported as EIO rather than as success. */
-        int requested = chanhop_target_channel(h);
-        int rc = g_platform.set_channel
-               ? g_platform.set_channel(s->probe_iface, chanhop_target_freq(h))
-               : -EOPNOTSUPP;
-        int err = rc == 0 ? 0 : (rc < 0 ? -rc : EIO);
-        chanhop_confirm_retune(h, err == 0, now_ms);
+    int requested = 0, err = 0;
+    if (chanhop_step(h, s->probe_iface, now_ms, mon_frames, &requested, &err)) {
         chanhop_record_retune_err(requested, err, &s->chan_requested,
                                   &s->chan_confirmed, &s->chan_retune_failures,
                                   &s->chan_retune_last_errno);

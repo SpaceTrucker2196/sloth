@@ -19,6 +19,7 @@
 #ifdef WITH_PCAP
 #include "capture/bt_capture.h"
 #endif
+#include "tmp_dir.h"
 
 /*
  * The Ubertooth capture stream — #144 slice 3.
@@ -943,10 +944,10 @@ static void test_state_names(void) {
 
 /* ── sensor_health ──────────────────────────────────────────────── */
 
-static char g_tmp[] = "/tmp/sloth_ubt_XXXXXX";
+static char g_tmp[TEST_TMP_MAX];
 
 static int open_tmp_jsonl(void) {
-    int fd = mkstemp(g_tmp);
+    int fd = mkstemp(test_tmp_tpl(g_tmp, sizeof(g_tmp), "sloth_ubt_XXXXXX"));
     if (fd >= 0) close(fd);
     jsonl_close();
     unlink(g_tmp);
@@ -1068,7 +1069,7 @@ static void test_sensor_health_names_a_refused_link_type(void) {
 /* ── The reader: one open, off the main thread ──────────────────── */
 
 #ifdef WITH_PCAP
-static char g_dir[] = "/tmp/sloth_ubt_dir_XXXXXX";
+static char g_dir[TEST_TMP_MAX];
 
 static void nap_ms(int ms) {
     struct timespec t = { 0, (long)ms * 1000000L };
@@ -1109,7 +1110,7 @@ static int capture_file_bytes(uint32_t dlt) {
 
 static void test_configure_refuses_missing_and_wrong_types(void) {
     char err[256];
-    ASSERT(mkdtemp(g_dir) != NULL);
+    ASSERT(mkdtemp(test_tmp_tpl(g_dir, sizeof(g_dir), "sloth_ubt_dir_XXXXXX")) != NULL);
     char path[300];
     snprintf(path, sizeof(path), "%s/absent", g_dir);
     ASSERT_EQ(bt_capture_configure(path, err, sizeof(err)), -1);
@@ -1128,7 +1129,7 @@ static void test_configure_refuses_missing_and_wrong_types(void) {
  * reopen comes straight after the first open, so it is pinned by the
  * source scan test_bt_capture_opens_its_path_exactly_once below. */
 static void test_fifo_without_writer_does_not_block_and_is_read_once(void) {
-    ASSERT(mkdtemp(g_dir) != NULL);
+    ASSERT(mkdtemp(test_tmp_tpl(g_dir, sizeof(g_dir), "sloth_ubt_dir_XXXXXX")) != NULL);
     char path[300], err[256];
     snprintf(path, sizeof(path), "%s/ubt.fifo", g_dir);
     ASSERT_EQ(mkfifo(path, 0600), 0);
@@ -1173,7 +1174,7 @@ static int cond_error(void) { return g_s.btcap.state == BT_CAP_ERROR; }
  * fail: with `|| !type_ok(sb.st_mode)` removed from the worker, err
  * reads "read: Is a directory". */
 static void test_path_swapped_after_configure_is_refused_by_the_worker(void) {
-    ASSERT(mkdtemp(g_dir) != NULL);
+    ASSERT(mkdtemp(test_tmp_tpl(g_dir, sizeof(g_dir), "sloth_ubt_dir_XXXXXX")) != NULL);
     char path[300], err[256];
     snprintf(path, sizeof(path), "%s/ubt.fifo", g_dir);
     ASSERT_EQ(mkfifo(path, 0600), 0);
@@ -1195,7 +1196,7 @@ static void test_path_swapped_after_configure_is_refused_by_the_worker(void) {
  * bt_capture_stop() never returns - a hang, killed by `timeout`, for
  * the same reason as the test below. */
 static void test_stop_returns_with_no_writer_ever(void) {
-    ASSERT(mkdtemp(g_dir) != NULL);
+    ASSERT(mkdtemp(test_tmp_tpl(g_dir, sizeof(g_dir), "sloth_ubt_dir_XXXXXX")) != NULL);
     char path[300], err[256];
     snprintf(path, sizeof(path), "%s/ubt.fifo", g_dir);
     ASSERT_EQ(mkfifo(path, 0600), 0);
@@ -1222,7 +1223,7 @@ static void test_stop_returns_with_no_writer_ever(void) {
  * skipped. A hang, not a red assertion, is how these fail, because the
  * join never comes back to assert anything. */
 static void test_stop_returns_with_a_silent_writer(void) {
-    ASSERT(mkdtemp(g_dir) != NULL);
+    ASSERT(mkdtemp(test_tmp_tpl(g_dir, sizeof(g_dir), "sloth_ubt_dir_XXXXXX")) != NULL);
     char path[300], err[256];
     snprintf(path, sizeof(path), "%s/ubt.fifo", g_dir);
     ASSERT_EQ(mkfifo(path, 0600), 0);
@@ -1250,7 +1251,7 @@ static void test_stop_returns_with_a_silent_writer(void) {
 /* A regular file is read to its end; one with a refused link type stops
  * at the header. */
 static void test_regular_files_read_to_end_or_refused(void) {
-    ASSERT(mkdtemp(g_dir) != NULL);
+    ASSERT(mkdtemp(test_tmp_tpl(g_dir, sizeof(g_dir), "sloth_ubt_dir_XXXXXX")) != NULL);
     char path[300], err[256];
     snprintf(path, sizeof(path), "%s/ubt.pcap", g_dir);
     int n = capture_file_bytes(BTLE_DLT_LL_PHDR);

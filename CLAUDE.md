@@ -24,4 +24,19 @@ are a reviewed, high-signal event. `agents/risk_score.sh` weights any
 diff touching `agents/` at +40 precisely so such a change cannot arrive
 quietly inside a feature commit.
 
+## Fleet sharing: monitor data only (owner hard rule, 2026-11-12)
+
+- Share what sloth heard in monitor mode. Never share what it learned
+  through the joined network or the wire.
+- Monitor radio, BLE, GNSS, ADS-B: everything they heard travels, the
+  joined network's APs and stations as heard over the air included
+  (owner: "anything that is thru monitor mode is game").
+- ARP, DHCP, mDNS, DNS, flows, IPs, host names, the managed card's scan,
+  station dump and MAC: never. A row known only that way never travels.
+- Fail closed; every export names its host; the importer refuses what
+  the rule forbids.
+- Only the owner relaxes this. Enforcement points and the tests that
+  hold it: agents/AGENTS.md, same heading;
+  [ADR 0009](docs/wiki/adr/0009-fleet-monitor-only.md).
+
 @agents/AGENTS.md

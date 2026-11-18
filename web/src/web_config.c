@@ -1,14 +1,19 @@
 #include "web_config.h"
+#include "web_camera.h"
+#include "web_spectrum.h"
 
 #include "web_slothdb.h"
 
 #include "web_anomaly.h"
+#include "web_fleetgnss.h"
 #include "web_baseline.h"
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <netinet/in.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 void web_config_defaults(web_config_t *c) {
     memset(c, 0, sizeof(*c));
@@ -30,6 +35,11 @@ void web_config_defaults(web_config_t *c) {
     c->max_keys    = WEB_DEFAULT_MAX_KEYS;
     c->max_mb      = WEB_DEFAULT_MAX_MB;
     c->retain_days = WEB_DEFAULT_RETAIN_DAYS;
+    c->peer_interval_s = WEB_FLEET_INTERVAL_DEF;
+    c->peer_gnss_region_km = WEB_FG_REGION_KM_DEF;
+    snprintf(c->spectrum_dir, sizeof(c->spectrum_dir), "%s", WEB_SPECTRUM_DIR);
+    snprintf(c->spectrum_request, sizeof(c->spectrum_request), "%s", WEB_SPECTRUM_REQUEST);
+    snprintf(c->camera_dir, sizeof(c->camera_dir), "%s", WEB_CAMERA_DIR);
 }
 
 /* A decimal in [lo, hi], digits only. */
@@ -132,12 +142,56 @@ long long web_config_store_min_mb(int max_keys) {
 }
 
 int web_config_check(const web_config_t *c, char *err, size_t errsz) {
+    /* The fleet (web_fleet.h): pulling is a network service, which
+     * --strict refuses as it refuses a routable --socket; and a peer
+     * outside the tailnet only when forced, so a typo in a peer's
+     * address is not a pull across the internet. */
+    if (c->npeer && c->strict) {
+        snprintf(err, errsz, "slothweb: --strict refuses --peer.\n");
+        return -1;
+    }
+    for (int i = 0; i < c->npeer; i++) {
+        char why[160];
+        if (web_fleet_check_peer(&c->peer[i], c->peer_outside, why, sizeof(why)) != 0) {
+            snprintf(err, errsz, "slothweb: --peer %s: %s\n", c->peer[i].name, why);
+            return -1;
+        }
+    }
+    /* A group for a secret file that is not written says nothing. */
+    if (c->agent_group[0] && !c->agent_secret_path[0]) {
+        snprintf(err, errsz, "slothweb: --web-agent-group needs --web-agent-secret\n");
+        return -1;
+    }
     /* sloth.db is read, the store written: one path for both would
      * have slothweb refuse its own store at best. */
     if (c->sloth_db[0] && !strcmp(c->sloth_db, c->store_path)) {
         snprintf(err, errsz, "slothweb: --sloth-db and --store name the same "
                              "file (%s): sloth.db is sloth's, the store is "
                              "slothweb's own\n", c->sloth_db);
+        return -1;
+    }
+    /* sloth-rf's database is read like sloth.db, and is neither the
+     * store nor sloth.db itself: one file under two names would be read
+     * twice, every RF row and alert counted from both. */
+    if (c->rf_db[0] && !strcmp(c->rf_db, c->store_path)) {
+        snprintf(err, errsz, "slothweb: --rf-db and --store name the same "
+                             "file (%s): sloth-rf.db is sloth-rf's, the store "
+                             "is slothweb's own\n", c->rf_db);
+        return -1;
+    }
+    if (c->rf_db[0] && !strcmp(c->rf_db, c->sloth_db)) {
+        snprintf(err, errsz, "slothweb: --rf-db and --sloth-db name the same "
+                             "file (%s): give --rf-db only when sloth-rf "
+                             "writes a database of its own\n", c->rf_db);
+        return -1;
+    }
+    /* One socket under both flags would be one daemon read as two. */
+    if (c->rf_sock.kind && web_sockspec_same(&c->rf_sock, &c->sock)) {
+        char sp[WEB_SOCK_PATH_MAX + INET6_ADDRSTRLEN + 16];
+        web_sockspec_format(&c->rf_sock, sp, sizeof(sp));
+        snprintf(err, errsz, "slothweb: --rf-socket and --socket name the same "
+                             "socket (%s): --rf-socket is sloth-rf's, --socket "
+                             "sloth's\n", sp);
         return -1;
     }
     /* The SQL box is the operator's own sqlite3 in a tab: --strict, the
@@ -151,6 +205,18 @@ int web_config_check(const web_config_t *c, char *err, size_t errsz) {
     if (c->allow_sql && !c->sloth_db[0]) {
         snprintf(err, errsz, "slothweb: --web-allow-sql needs --sloth-db PATH: "
                              "the box reads sloth.db and nothing else.\n");
+        return -1;
+    }
+    /* An evidence pcap can carry a handshake's EAPOL/PMKID frames:
+     * serving it to remote peers is its own decision, spelled out,
+     * not a side effect of a flag given for loopback. */
+    if (c->serve_evidence_pcap == 1 && c->allow_remote) {
+        snprintf(err, errsz, "slothweb: --web-serve-evidence-pcap with --web-allow-remote "
+                             "would hand remote peers evidence pcaps,\n"
+                             "  which may hold EAPOL/PMKID handshake material (crackable "
+                             "offline). Give\n"
+                             "  --web-serve-evidence-pcap=remote to serve them to remote "
+                             "peers anyway, or drop one of the two.\n");
         return -1;
     }
     char where[INET6_ADDRSTRLEN + 16];
@@ -185,6 +251,17 @@ int web_config_check(const web_config_t *c, char *err, size_t errsz) {
             "slothweb: --strict refuses a non-loopback --socket (%s).\n"
             "  The stream has no TLS and no authentication. Read it on the "
             "sensor, or\n  forward it: ssh -L 8765:127.0.0.1:8765 "
+            "user@sensor\n", sp);
+        return -1;
+    }
+
+    if (c->strict && c->rf_sock.kind && !web_sockspec_is_local(&c->rf_sock)) {
+        char sp[INET6_ADDRSTRLEN + 16];
+        web_sockspec_format(&c->rf_sock, sp, sizeof(sp));
+        snprintf(err, errsz,
+            "slothweb: --strict refuses a non-loopback --rf-socket (%s).\n"
+            "  The stream has no TLS and no authentication. Read it on the "
+            "sensor, or\n  forward it: ssh -L 8766:127.0.0.1:8766 "
             "user@sensor\n", sp);
         return -1;
     }
@@ -239,7 +316,16 @@ void web_usage(FILE *out) {
         "                [--web-allow CIDR]... [--web-allow-remote] [--strict]\n"
         "                [--store PATH] [--web-max-keys N] [--web-max-mb N]\n"
         "                [--web-retain-days N] [--sloth-db PATH]\n"
-        "                [--web-allow-sql] [--help]\n"
+        "                [--rf-socket SPEC] [--rf-db PATH]\n"
+        "                [--web-allow-sql] [--web-read-only]\n"
+        "                [--web-agent-secret PATH [--web-agent-group NAME]]\n"
+        "                [--web-assessments DIR] [--pcap-dir DIR]...\n"
+        "                [--web-serve-evidence-pcap[=remote]]\n"
+        "                [--peer NAME=URL]... [--peer-interval-secs N]\n"
+        "                [--peer-allow-outside-tailnet]\n"
+        "                [--peer-gnss-region-km N] [--my-ssid SSID]...\n"
+        "                [--my-bssid MAC]... [--spectrum-dir DIR]\n"
+        "                [--spectrum-request PATH] [--camera-dir DIR] [--help]\n"
         "\n"
         "  --socket SPEC         sloth's data socket to read: unix:PATH or\n"
         "                        tcp:A.B.C.D:PORT / tcp:[V6]:PORT, literal\n"
@@ -278,23 +364,113 @@ void web_usage(FILE *out) {
         "                        drawer's record and A2's durable first_seen.\n"
         "                        Without it those say so and the rest runs.\n"
         "                        Needs a WITH_SQLITE build.\n"
+        "  --rf-socket SPEC      sloth-rf's data socket, read beside --socket\n"
+        "                        (same forms; no default). With it the GNSS,\n"
+        "                        ADS-B, APRS, rtl_433 and Victron tabs are fed\n"
+        "                        from this stream only, and --socket's copies\n"
+        "                        of those records are counted and not used.\n"
+        "                        Without it there is one stream, as before.\n"
+        "  --rf-db PATH          sloth-rf's database (sloth-rf --db), opened\n"
+        "                        read-only like --sloth-db: the GNSS, ADS-B,\n"
+        "                        APRS and Victron history and the fleet's\n"
+        "                        aircraft and GNSS incidents are read from it.\n"
+        "                        Without it they are read from --sloth-db.\n"
+        "                        The SQL box stays on --sloth-db.\n"
         "  --web-allow-sql       the read-only SQL box (/api/query) over\n"
         "                        --sloth-db: one SELECT or WITH at a time,\n"
         "                        5 s, 10,000 rows, credential columns\n"
         "                        withheld. Off by default; refused by\n"
         "                        --strict; announced with\n"
         "                        --web-allow-remote.\n"
+        "  --web-read-only       no write route: every POST is 405, as before\n"
+        "                        triage and the TACDB existed. Without it an\n"
+        "                        admitted peer may POST triage and TACDB\n"
+        "                        changes, which write slothweb's own store\n"
+        "                        only; the allow list is the only gate.\n"
+        "  --web-agent-secret PATH\n"
+        "                        let an agent on this machine write through\n"
+        "                        slothweb-mcp: a secret drawn at start is\n"
+        "                        written to PATH (0600, replaced every run,\n"
+        "                        removed at exit). A loopback POST carrying\n"
+        "                        it in X-Slothweb-Agent, with no Origin, may\n"
+        "                        write triage, notes and links, recorded via\n"
+        "                        agent under the name it gives. Unset: no\n"
+        "                        such path; a request with the header is 403.\n"
+        "  --web-agent-group NAME\n"
+        "                        write the secret 0640 in group NAME instead,\n"
+        "                        so slothweb-mcp runs as a member of NAME\n"
+        "                        with no sudo rule. slothweb's user must be\n"
+        "                        a member of NAME; slothweb refuses to start\n"
+        "                        if NAME does not exist or cannot be given.\n"
+        "  --web-assessments DIR where \"follow recommended\" reads each alert\n"
+        "                        type's <TYPE>.md front matter (the research\n"
+        "                        assessments). Unset, or no such directory:\n"
+        "                        no recommendation yet. slothweb.service\n"
+        "                        passes the installed copy,\n"
+        "                        $PREFIX/share/sloth/alert-assessments.\n"
+        "  --pcap-dir DIR        the sensor's --pcap-dir (and, a second time,\n"
+        "                        its --eapol-dir), read-only: the alert page's\n"
+        "                        packet capture, decoded, hash-checked against\n"
+        "                        sloth's manifests and downloadable. Only\n"
+        "                        files named as sloth names alert pcaps are\n"
+        "                        opened, never a handshake pcap or\n"
+        "                        eapol.22000; 16 MB a file at most.\n"
+        "                        Evidence pcaps (from --eapol-dir) are\n"
+        "                        listed but withheld: they may hold\n"
+        "                        EAPOL/PMKID handshake material.\n"
+        "  --spectrum-dir DIR    sloth-sdrsweep's state directory, read only\n"
+        "                        (default " WEB_SPECTRUM_DIR "):\n"
+        "                        the Spectrum tab's sweep and run status.\n"
+        "  --spectrum-request PATH\n"
+        "                        the empty file POST /api/spectrum/run\n"
+        "                        creates for sloth-sdrsweep.path (default\n"
+        "                        " WEB_SPECTRUM_REQUEST ").\n"
+        "  --camera-dir DIR      the camera helper's state directory, read\n"
+        "                        only (default " WEB_CAMERA_DIR "): the\n"
+        "                        Camera tab's latest.jpg.\n"
+        "  --web-serve-evidence-pcap[=remote]\n"
+        "                        serve evidence pcaps too; announced on\n"
+        "                        stderr. With --web-allow-remote it is\n"
+        "                        refused unless given as =remote.\n"
+        "  --peer NAME=URL       pull another of the operator's slothwebs\n"
+        "                        (repeatable, at most 8): URL is\n"
+        "                        http://A.B.C.D[:PORT], a literal address in\n"
+        "                        the tailnet (100.64.0.0/10), read from its\n"
+        "                        /api/fleet/export into the store. Off by\n"
+        "                        default; each peer announced on stderr.\n"
+        "  --peer-interval-secs N  seconds between pulls (default 60,\n"
+        "                        10..3600).\n"
+        "  --peer-allow-outside-tailnet\n"
+        "                        allow a --peer address outside\n"
+        "                        100.64.0.0/10 (no TLS: only over a link\n"
+        "                        you trust); announced on stderr.\n"
+        "  --peer-gnss-region-km N  a GNSS event at two sites at most this\n"
+        "                        far apart is regional (default 50,\n"
+        "                        1..20000; docs/wiki/fleet.md).\n"
+        "  --my-ssid SSID        one of this site's own networks, as sloth's\n"
+        "                        --my-ssid (repeatable, at most 16): named to a\n"
+        "                        peer that asks, for the fleet's identity\n"
+        "                        findings (docs/wiki/fleet.md).\n"
+        "  --my-bssid MAC        one of this site's own APs, as sloth's\n"
+        "                        --my-bssid (repeatable, at most 16).\n"
         "  --help                this text.\n"
         "\n"
         "Routes (GET and HEAD): / (the page), /api/health, /api/live,\n"
         "/api/series, /api/keys, /api/metrics, /api/baseline,\n"
         "/api/anomalies, /api/devices, /api/device/MAC, /api/lookup,\n"
         "/api/wifi/channels, /api/wifi/aps, /api/wifi/deauth,\n"
+        "/api/wifi/local, /api/wifi/chain,\n"
         "/api/history/overview, /api/history/devices, /api/history/alerts,\n"
         "/api/history/flows, /api/sessions, /api/sessions/new (JSON),\n"
+        "/api/frrs/* (triage, the FRRS record, the TACDB), /api/ble,\n"
+        "/api/ble/alerts, /api/ble/ADDR (the BLE view),\n"
+        "/api/alerts, /api/alert, /api/pcap/frames, /api/pcap and\n"
+        "/api/fleet/export (GET only), /api/fleet/peers, /api/fleet/gnss,\n"
+        "/api/fleet/findings (GET only),\n"
         "/events (Server-Sent Events); with --web-allow-sql, /api/query\n"
-        "(GET only) and /api/recipes. Any other path is 404; any\n"
-        "other method is 405; a Host that is not localhost or an IP\n"
+        "(GET only) and /api/recipes. POST only to the eight /api/frrs\n"
+        "write routes, same-origin, unless --web-read-only. Any other\n"
+        "path is 404; any other method is 405; a Host that is not localhost or an IP\n"
         "literal is 421; a header block over 8 KB is 431.\n");
 }
 
@@ -319,6 +495,135 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
                 return -1;
             }
             c->allow_sql = 1;
+        } else if (!strcmp(a, "--web-read-only")) {
+            c->read_only = 1;
+        } else if (!strcmp(a, "--web-agent-secret")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (!v[0] || strlen(v) >= sizeof(c->agent_secret_path) - 16) {
+                fprintf(err, "slothweb: --web-agent-secret: empty or too long a path\n");
+                return -1;
+            }
+            snprintf(c->agent_secret_path, sizeof(c->agent_secret_path), "%s", v);
+        } else if (!strcmp(a, "--web-agent-group")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (!v[0] || strlen(v) >= sizeof(c->agent_group)) {
+                fprintf(err, "slothweb: --web-agent-group: empty or too long a name\n");
+                return -1;
+            }
+            snprintf(c->agent_group, sizeof(c->agent_group), "%s", v);
+        } else if (!strcmp(a, "--web-assessments")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            struct stat sb;
+            if (!v[0] || strlen(v) >= sizeof(c->assess_dir) - 80) {
+                fprintf(err, "slothweb: --web-assessments: empty or too long a path\n");
+                return -1;
+            }
+            /* Absent is allowed: the unit passes the installed path,
+             * and a build installed without the assessments answers "no
+             * recommendation yet" (web_frrs_init()). Something there
+             * that is not a directory is a mistake, refused. */
+            if (stat(v, &sb) == 0 ? !S_ISDIR(sb.st_mode) : errno != ENOENT) {
+                fprintf(err, "slothweb: --web-assessments %s: not a directory\n", v);
+                return -1;
+            }
+            snprintf(c->assess_dir, sizeof(c->assess_dir), "%s", v);
+        } else if (!strcmp(a, "--peer-allow-outside-tailnet")) {
+            c->peer_outside = 1;
+        } else if (!strcmp(a, "--peer")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (!web_store_available()) {
+                fprintf(err, "slothweb: --peer needs SQLite; this slothweb was "
+                             "built with WITH_SQLITE=0\n");
+                return -1;
+            }
+            if (c->npeer >= WEB_FLEET_PEERS) {
+                fprintf(err, "slothweb: --peer: at most %d peers\n", WEB_FLEET_PEERS);
+                return -1;
+            }
+            web_fleet_peer_cfg_t pc;
+            if (web_fleet_parse_peer(v, &pc, msg, sizeof(msg)) != 0) {
+                fprintf(err, "slothweb: --peer %s: %s\n", v, msg);
+                return -1;
+            }
+            for (int k = 0; k < c->npeer; k++)
+                if (!strcmp(c->peer[k].name, pc.name) || !strcmp(c->peer[k].url, pc.url)) {
+                    fprintf(err, "slothweb: --peer %s: that name or address is "
+                                 "given twice\n", v);
+                    return -1;
+                }
+            c->peer[c->npeer++] = pc;
+        } else if (!strcmp(a, "--peer-interval-secs")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (parse_count(v, WEB_FLEET_INTERVAL_MIN, WEB_FLEET_INTERVAL_MAX,
+                            &c->peer_interval_s) != 0) {
+                fprintf(err, "slothweb: --peer-interval-secs %s: want a whole number "
+                             "from %d to %d\n", v, WEB_FLEET_INTERVAL_MIN,
+                        WEB_FLEET_INTERVAL_MAX);
+                return -1;
+            }
+        } else if (!strcmp(a, "--peer-gnss-region-km")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (parse_count(v, 1, WEB_FG_REGION_KM_MAX, &c->peer_gnss_region_km) != 0) {
+                fprintf(err, "slothweb: --peer-gnss-region-km %s: want a whole number "
+                             "from 1 to %d\n", v, WEB_FG_REGION_KM_MAX);
+                return -1;
+            }
+        } else if (!strcmp(a, "--my-ssid") || !strcmp(a, "--my-bssid")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            web_fleet_mine_t *m = &c->mine;
+            int ssid = !strcmp(a, "--my-ssid");
+            if ((ssid ? m->nssid : m->nbssid) >= WEB_FLEET_MINE_MAX) {
+                fprintf(err, "slothweb: %s: at most %d\n", a, WEB_FLEET_MINE_MAX);
+                return -1;
+            }
+            if (ssid) {
+                if (!web_fleet_ssid_ok(v)) {
+                    fprintf(err, "slothweb: --my-ssid: want 1 to %d octets with no control "
+                                 "character\n", WEB_FLEET_SSID_MAX);
+                    return -1;
+                }
+                snprintf(m->ssid[m->nssid++], sizeof(m->ssid[0]), "%s", v);
+            } else {
+                char mac[WEB_KEY_MAX + 1];
+                if (web_key_mac(v, mac) != 0) {
+                    fprintf(err, "slothweb: --my-bssid %s: want aa:bb:cc:dd:ee:ff\n", v);
+                    return -1;
+                }
+                memcpy(m->bssid[m->nbssid], mac, WEB_FLEET_MAC_SZ - 1);
+                m->bssid[m->nbssid++][WEB_FLEET_MAC_SZ - 1] = '\0';
+            }
+        } else if (!strcmp(a, "--web-serve-evidence-pcap")) {
+            c->serve_evidence_pcap = 1;
+        } else if (!strcmp(a, "--web-serve-evidence-pcap=remote")) {
+            c->serve_evidence_pcap = 2;
         } else if (!strcmp(a, "--socket")) {
             if (i + 1 >= argc) {
                 fprintf(err, "slothweb: %s needs an argument\n", a);
@@ -328,6 +633,82 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
                 fprintf(err, "slothweb: %s\n", msg);
                 return -1;
             }
+        } else if (!strcmp(a, "--rf-socket")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            if (web_sockspec_parse_flag(a, argv[++i], &c->rf_sock, msg, sizeof(msg)) != 0) {
+                fprintf(err, "slothweb: %s\n", msg);
+                return -1;
+            }
+        } else if (!strcmp(a, "--rf-db")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (!v[0] || strlen(v) >= sizeof(c->rf_db) - 16) {
+                fprintf(err, "slothweb: --rf-db: empty or too long a path\n");
+                return -1;
+            }
+            if (!web_slothdb_available()) {
+                fprintf(err, "slothweb: --rf-db needs SQLite; this slothweb "
+                             "was built with WITH_SQLITE=0\n");
+                return -1;
+            }
+            snprintf(c->rf_db, sizeof(c->rf_db), "%s", v);
+        } else if (!strcmp(a, "--spectrum-dir") || !strcmp(a, "--spectrum-request")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            int dir = !strcmp(a, "--spectrum-dir");
+            char *dst = dir ? c->spectrum_dir : c->spectrum_request;
+            /* Absolute, so the unit's sandbox and the path unit can name
+             * the same file; room left for "/latest.json". */
+            if (v[0] != '/' || strlen(v) >= sizeof(c->spectrum_dir) - 32) {
+                fprintf(err, "slothweb: %s: want an absolute path, under %zu bytes\n", a,
+                        sizeof(c->spectrum_dir) - 32);
+                return -1;
+            }
+            snprintf(dst, sizeof(c->spectrum_dir), "%s", v);
+        } else if (!strcmp(a, "--camera-dir")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            /* Absolute, so the unit's sandbox names the same directory;
+             * room left for "/latest.jpg". */
+            if (v[0] != '/' || strlen(v) >= sizeof(c->camera_dir) - 32) {
+                fprintf(err, "slothweb: %s: want an absolute path, under %zu bytes\n", a,
+                        sizeof(c->camera_dir) - 32);
+                return -1;
+            }
+            snprintf(c->camera_dir, sizeof(c->camera_dir), "%s", v);
+        } else if (!strcmp(a, "--pcap-dir")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (!v[0] || strlen(v) >= sizeof(c->pcap_dir[0]) - 16) {
+                fprintf(err, "slothweb: --pcap-dir: empty or too long a path\n");
+                return -1;
+            }
+            if (c->npcap_dir >= WEB_PCAP_DIRS) {
+                fprintf(err, "slothweb: --pcap-dir: at most %d (the sensor's "
+                             "--pcap-dir and its --eapol-dir)\n", WEB_PCAP_DIRS);
+                return -1;
+            }
+            for (int k = 0; k < c->npcap_dir; k++)
+                if (!strcmp(c->pcap_dir[k], v)) {
+                    fprintf(err, "slothweb: --pcap-dir %s given twice\n", v);
+                    return -1;
+                }
+            snprintf(c->pcap_dir[c->npcap_dir++], sizeof(c->pcap_dir[0]), "%s", v);
         } else if (!strcmp(a, "--sloth-db")) {
             if (i + 1 >= argc) {
                 fprintf(err, "slothweb: %s needs an argument\n", a);
@@ -450,10 +831,37 @@ void web_config_announce(const web_config_t *c, FILE *err) {
                      "name, SSID, flow and finding\n"
                      "  sloth recorded (credential columns stay withheld).\n");
     }
+    if (c->serve_evidence_pcap) {
+        fprintf(err, "slothweb: WARNING: --web-serve-evidence-pcap: evidence pcaps "
+                     "(<incident>-<event>-<RULE>.pcap\n"
+                     "  from the sensor's --eapol-dir) are decoded and downloadable; "
+                     "they may hold\n"
+                     "  EAPOL/PMKID handshake material, crackable offline.\n");
+        if (c->serve_evidence_pcap == 2 && c->allow_remote)
+            fprintf(err, "slothweb: WARNING: --web-serve-evidence-pcap=remote with "
+                         "--web-allow-remote: every peer\n"
+                         "  the allow list admits can download them, with no "
+                         "authentication and no TLS.\n");
+    }
+    for (int i = 0; i < c->npeer; i++) {
+        if (web_fleet_in_tailnet(c->peer[i].addr)) continue;
+        fprintf(err, "slothweb: WARNING: --peer %s at %s is outside the tailnet "
+                     "(--peer-allow-outside-tailnet).\n"
+                     "  The pull and the export it reads travel with no TLS; "
+                     "only the link you chose protects them.\n",
+                c->peer[i].name, c->peer[i].url);
+    }
     if (c->sock.kind && !web_sockspec_is_local(&c->sock)) {
         char sp[INET6_ADDRSTRLEN + 16];
         web_sockspec_format(&c->sock, sp, sizeof(sp));
         fprintf(err, "slothweb: WARNING: reading the data stream from %s, "
+                     "which is not loopback.\n"
+                     "  It travels with no TLS and no authentication.\n", sp);
+    }
+    if (c->rf_sock.kind && !web_sockspec_is_local(&c->rf_sock)) {
+        char sp[INET6_ADDRSTRLEN + 16];
+        web_sockspec_format(&c->rf_sock, sp, sizeof(sp));
+        fprintf(err, "slothweb: WARNING: reading sloth-rf's data stream from %s, "
                      "which is not loopback.\n"
                      "  It travels with no TLS and no authentication.\n", sp);
     }

@@ -26,6 +26,8 @@
  *   has:WORD      pnl alert anomaly name ip ssid
  *   anomaly:KIND  an episode of that kind (rate new hours vendor ident
  *                 fanout dns proto sensor) keyed by the MAC
+ *   pass:latest   in the device pass sloth sent last on the stream: the
+ *                 set the Overview's devices tile counts
  *
  * Bounded: the query is at most WEB_Q_LEN bytes, WEB_Q_TERMS terms of
  * at most WEB_Q_TERM_LEN bytes; text is well-formed UTF-8 with no
@@ -46,14 +48,14 @@
 #define WEB_Q_LEN       256
 #define WEB_Q_TERMS     12
 #define WEB_Q_TERM_LEN  64
-#define WEB_Q_SQL_MAX   8192
+#define WEB_Q_SQL_MAX   32768   /* a scoped statement (web_scope.h) is the long one */
 #define WEB_Q_BINDS     (2 * WEB_Q_TERMS + 2)
 #define WEB_Q_BIND_TEXT (WEB_Q_TERM_LEN * 2 + 3)
 
 enum {
     WEB_QT_FREE = 0, WEB_QT_VENDOR, WEB_QT_MAC, WEB_QT_IP, WEB_QT_SSID,
     WEB_QT_NAME, WEB_QT_RANDOM, WEB_QT_SEEN, WEB_QT_FIRST, WEB_QT_RISK,
-    WEB_QT_Z, WEB_QT_SRC, WEB_QT_HAS, WEB_QT_ANOMALY, WEB_QT_COUNT
+    WEB_QT_Z, WEB_QT_SRC, WEB_QT_HAS, WEB_QT_ANOMALY, WEB_QT_PASS, WEB_QT_COUNT
 };
 
 enum { WEB_QOP_EQ = 0, WEB_QOP_LT, WEB_QOP_GT, WEB_QOP_LE, WEB_QOP_GE };
@@ -80,7 +82,7 @@ typedef struct {
 /* Parse q against now_s (for the relative times). 0, or -1 with a
  * reason in err ("query_too_long", "too_many_terms", "term_too_long",
  * "bad_text", "bad_mac", "bad_ip", "bad_random", "bad_time", "bad_risk",
- * "bad_z", "bad_src", "bad_has", "bad_anomaly", "empty_value",
+ * "bad_z", "bad_src", "bad_has", "bad_anomaly", "bad_pass", "empty_value",
  * "bad_quote"). */
 int web_query_parse(const char *q, long long now_s, web_query_t *out,
                     char *err, size_t errsz);
@@ -93,10 +95,34 @@ enum {
     WEB_QF_MDNS   = 1 << 2,     /* mdns_services */
     WEB_QF_NBNS   = 1 << 3,     /* nbns_names */
     WEB_QF_ALERTS = 1 << 4,     /* alerts */
-    WEB_QF_ARP    = 1 << 5      /* arp */
+    WEB_QF_ARP    = 1 << 5,     /* arp */
+    /* The capture scope's tables (web_scope.h): which a scoped
+     * statement may name for membership, signal and first/last seen. */
+    WEB_QF_PROBE  = 1 << 6,     /* probe_clients */
+    WEB_QF_BEACON = 1 << 7,     /* beacon_aps */
+    WEB_QF_ASSOC  = 1 << 8,     /* assocs */
+    WEB_QF_PNLC   = 1 << 9,     /* pnl_clients */
+    WEB_QF_STA    = 1 << 10,    /* wifi_stas */
+    WEB_QF_CAMSIG = 1 << 11     /* devices.cam_signals (v6) */
 };
 
-enum { WEB_QS_LAST = 0, WEB_QS_FIRST, WEB_QS_MAC, WEB_QS_RISK, WEB_QS_COUNT };
+enum { WEB_QS_LAST = 0, WEB_QS_FIRST, WEB_QS_MAC, WEB_QS_RISK, WEB_QS_VENDOR,
+       WEB_QS_IP, WEB_QS_SSID, WEB_QS_SIGNAL, WEB_QS_SOURCES, WEB_QS_COUNT };
+
+/* A sort's direction (the page's sortable columns, owner request
+ * 2026-10-26): WEB_SORT_DEFAULT keeps the sort's own order, ASC and
+ * DESC set its first key's, an empty value last either way. Every
+ * server-paged sort (/api/devices, /api/wifi/aps, /api/flows) takes it
+ * as dir=asc|desc and passes it packed with the sort's index, which no
+ * sort list reaches: WEB_SORT_PACK(sort, dir). The key itself is always
+ * a constant column of the route's own list; nothing from the request
+ * is ever part of the SQL. */
+enum { WEB_SORT_DEFAULT = 0, WEB_SORT_ASC = 1, WEB_SORT_DESC = 2 };
+#define WEB_SORT_PACK(s, d) ((s) | (d) << 8)
+#define WEB_SORT_KEY(p)     ((p) & 0xff)
+#define WEB_SORT_DIR(p)     (((p) >> 8) & 3)
+/* "asc" or "desc" -> WEB_SORT_ASC or WEB_SORT_DESC, else -1. */
+int web_sort_dir_find(const char *s);
 
 typedef struct {
     int       type;            /* 0 text, 1 integer, 2 real */
@@ -116,8 +142,15 @@ typedef struct {
  * (the text did not fit: a bug, not an input). */
 int web_query_compile(const web_query_t *q, unsigned feats, int sort,
                       long long limit, long long offset, web_qsql_t *out);
+/* The same for a capture scope (web_scope.h WEB_SCOPE_*): only the
+ * scope's devices, each column the scope's own (web_query.c says which
+ * table each comes from). Hybrid (0) is web_query_compile() exactly. */
+int web_query_compile_scoped(const web_query_t *q, unsigned feats, int scope,
+                             int sort, long long limit, long long offset,
+                             web_qsql_t *out);
 
-/* "last", "first", "mac", "risk" -> WEB_QS_*, or -1. */
+/* "last", "first", "mac", "risk", "vendor", "ip", "ssid", "signal",
+ * "sources" -> WEB_QS_*, or -1. */
 int web_query_sort_find(const char *s);
 
 /* The anomaly kind names, in web_anomaly_kind_find()'s order. */
@@ -138,5 +171,10 @@ enum {
  * constant of the caller's, or NULL) adds columns after WEB_QCOL_COUNT. */
 int web_query_row_select(unsigned feats, const char *extra, char *out,
                          size_t cap);
+int web_query_row_select_scoped(unsigned feats, int scope, const char *extra,
+                                char *out, size_t cap);
+/* A scope's membership predicate over `devices d` into out: "" for
+ * Hybrid. 0, or -1 when it did not fit. */
+int web_query_member(unsigned feats, int scope, char *out, size_t cap);
 
 #endif

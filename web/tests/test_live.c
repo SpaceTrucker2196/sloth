@@ -271,7 +271,7 @@ static void test_capture_records_inside_a_pass(void) {
  * string. */
 static void test_alert_match_ip(void) {
     fresh();
-    feed("{\"type\":\"alert.create\",\"ts\":1,\"incident_id\":\"a\",\"sev\":2,"
+    feed("{\"type\":\"alert.create\",\"ts\":1,\"incident_id\":\"a\",\"sev\":2,\"ty\":10,"
          "\"title\":\"SMB1_USE\",\"detail\":\"d\",\"match_ip\":\"192.0.2.20\"}\n"
          "{\"type\":\"alert.create\",\"ts\":2,\"incident_id\":\"b\",\"sev\":1,"
          "\"title\":\"T\",\"detail\":\"d\",\"match_ip\":\"2001:db8::1\"}\n"
@@ -283,12 +283,30 @@ static void test_alert_match_ip(void) {
          "{\"type\":\"alert.create\",\"ts\":5,\"incident_id\":\"e\",\"sev\":0,"
          "\"title\":\"T\",\"detail\":\"d\"}\n");
     const char *j = live_json();
-    WT_HAS(j, "\"ts\":1,\"type\":\"alert.create\",\"sev\":2,\"title\":\"SMB1_USE\","
-              "\"detail\":\"d\",\"incident_id\":\"a\",\"match_ip\":\"192.0.2.20\"}");
-    WT_HAS(j, "\"incident_id\":\"b\",\"match_ip\":\"2001:db8::1\"}");
-    WT_HAS(j, "\"incident_id\":\"c\",\"match_ip\":\"\"}");
-    WT_HAS(j, "\"incident_id\":\"d\",\"match_ip\":\"\"}");
-    WT_HAS(j, "\"incident_id\":\"e\",\"match_ip\":\"\"}");
+    /* Each record names its incident by slothweb's handle (web_live.h:
+     * sloth's incident_id inverts to the key's hash), the handle of the
+     * incident the routes know. */
+    char aid[5][WEB_LIVE_HID_MAX + 2];
+    for (int i = 0; i < 5; i++) {
+        char id[2] = { (char)('a' + i), 0 };
+        aid[i][0] = '\0';
+        for (int k = 0; k < g_live.ninc; k++)
+            if (!strcmp(g_live.inc[k].id, id))
+                snprintf(aid[i], sizeof(aid[i]), "s%s", g_live.inc[k].hid);
+        WT_ASSERT(aid[i][1] != '\0');
+    }
+    char want[192];
+    snprintf(want, sizeof(want), "\"ts\":1,\"type\":\"alert.create\",\"ty\":10,\"sev\":2,"
+             "\"title\":\"SMB1_USE\",\"detail\":\"d\",\"alert_id\":\"%s\","
+             "\"match_ip\":\"192.0.2.20\"}", aid[0]);
+    WT_HAS(j, want);
+    snprintf(want, sizeof(want), "\"alert_id\":\"%s\",\"match_ip\":\"2001:db8::1\"}", aid[1]);
+    WT_HAS(j, want);
+    for (int i = 2; i < 5; i++) {
+        snprintf(want, sizeof(want), "\"alert_id\":\"%s\",\"match_ip\":\"\"}", aid[i]);
+        WT_HAS(j, want);
+    }
+    WT_LACKS(j, "incident_id");
     WT_LACKS(j, "<b>");
     done();
 }
@@ -319,8 +337,8 @@ static void test_alert_lifecycle_counts(void) {
     const char *j = live_json();
     WT_HAS(j, "\"alerts_open\":{\"low\":1,\"warn\":1,\"crit\":1,\"overflow\":false}");
     /* newest first, the last WEB_LIVE_ALERTS of them */
-    WT_HAS(j, "\"alerts\":[{\"ts\":9,\"type\":\"alert.create\",\"sev\":2,");
-    WT_HAS(j, "{\"ts\":8,\"type\":\"alert.create\",\"sev\":null,");
+    WT_HAS(j, "\"alerts\":[{\"ts\":9,\"type\":\"alert.create\",\"ty\":null,\"sev\":2,");
+    WT_HAS(j, "{\"ts\":8,\"type\":\"alert.create\",\"ty\":null,\"sev\":null,");
     WT_LACKS(j, "{\"ts\":1,\"type\":\"alert.create\"");   /* fell out: 9 records */
 
     /* The severity indexes the summary's alerts[3], so its bound is
@@ -332,12 +350,12 @@ static void test_alert_lifecycle_counts(void) {
     s = sum();
     WT_EQ(s.alerts[0] + s.alerts[1] + s.alerts[2], 3);
     WT_EQ(s.alerts_overflow, 0);
-    WT_HAS(live_json(), "{\"ts\":10,\"type\":\"alert.create\",\"sev\":null,");
+    WT_HAS(live_json(), "{\"ts\":10,\"type\":\"alert.create\",\"ty\":null,\"sev\":null,");
     WT_HAS(live_json(), "\"alerts_open\":{\"low\":1,\"warn\":1,\"crit\":1,\"overflow\":false}");
     feed("{\"type\":\"alert.create\",\"ts\":11,\"incident_id\":\"gggg\",\"sev\":-1}\n");
     s = sum();
     WT_EQ(s.alerts[0] + s.alerts[1] + s.alerts[2], 3);
-    WT_HAS(live_json(), "{\"ts\":11,\"type\":\"alert.create\",\"sev\":null,");
+    WT_HAS(live_json(), "{\"ts\":11,\"type\":\"alert.create\",\"ty\":null,\"sev\":null,");
     /* An incident_id one byte over WEB_LIVE_ID_MAX is not tracked, not
      * cut to fit (two such ids could then collide). Seen red (crit 2)
      * with the strlen test removed from alert_record(). */
@@ -457,6 +475,62 @@ static void test_sensor_health_liveness(void) {
     done();
 }
 
+/* #193 field data: sensor_health's twin193_* counts reach /api/live
+ * as this sloth session's and as the total over the sessions seen, a
+ * new twin193_since folding the last session in. Seen red 2026-11-12
+ * with the fold removed (total equal to the session after the restart)
+ * and with c193_val() accepting a negative count. */
+static void sh193(long long now_ms, long long since, long long base) {
+    char line[1024];
+    snprintf(line, sizeof(line),
+             "{\"type\":\"sensor_health\",\"ts\":5,\"capture_open\":1,"
+             "\"capture_running\":1,\"jsonl_version\":\"1.7.0\","
+             "\"twin193_since\":%lld,\"twin193_floods\":%lld,"
+             "\"twin193_floods_chain\":%lld,\"twin193_named\":%lld,"
+             "\"twin193_late_laa\":%lld,\"twin193_coincide\":%lld,"
+             "\"twin193_excl_carrier\":%lld,\"twin193_excl_faint\":%lld,"
+             "\"twin193_excl_sibling\":%lld,\"twin193_excl_any\":%lld}\n",
+             since, base + 8, base + 7, base + 6, base + 5, base + 4,
+             base + 3, base + 2, base + 1, base);
+    feed_at(line, now_ms);
+}
+
+static void test_sensor_health_twin193(void) {
+    fresh();
+    /* An older sloth: no twin193 object at all. */
+    feed_at("{\"type\":\"sensor_health\",\"ts\":5,\"capture_open\":1}\n", 1000);
+    WT_LACKS(live_json(), "twin193");
+
+    sh193(1000, 1700000000, 10);
+    const char *j = live_json();
+    WT_HAS(j, "\"twin193\":{\"since\":1700000000,\"session\":{\"floods\":18,"
+              "\"floods_chain\":17,\"named\":16,\"late_laa\":15,\"coincide\":14,"
+              "\"excl_carrier\":13,\"excl_faint\":12,\"excl_sibling\":11,"
+              "\"excl_any\":10},\"total\":{\"floods\":18,");
+    /* The same session moving on replaces, never adds. */
+    sh193(2000, 1700000000, 20);
+    WT_HAS(live_json(), "\"total\":{\"floods\":28,\"floods_chain\":27,");
+    /* A sloth restart: a new since. The total keeps the last session. */
+    sh193(3000, 1700000500, 0);
+    j = live_json();
+    WT_HAS(j, "\"session\":{\"floods\":8,");
+    WT_HAS(j, "\"total\":{\"floods\":36,\"floods_chain\":34,\"named\":32,"
+              "\"late_laa\":30,\"coincide\":28,\"excl_carrier\":26,"
+              "\"excl_faint\":24,\"excl_sibling\":22,\"excl_any\":20}");
+    /* A sloth that has run no pass yet says since 0: no fold, no stamp. */
+    sh193(4000, 0, 0);
+    WT_HAS(live_json(), "\"since\":1700000500,");
+    WT_HAS(live_json(), "\"total\":{\"floods\":36,");
+    /* A hostile count is read as 0, not subtracted. */
+    feed_at("{\"type\":\"sensor_health\",\"ts\":5,\"twin193_since\":1700000500,"
+            "\"twin193_floods\":-99,\"twin193_coincide\":\"7\"}\n", 5000);
+    j = live_json();
+    WT_HAS(j, "\"session\":{\"floods\":0,");
+    WT_HAS(j, "\"total\":{\"floods\":28,");
+    WT_LACKS(j, "-99");
+    done();
+}
+
 /* ── the recent ring ──────────────────────────────────────────────── */
 
 static void test_recent_ring(void) {
@@ -501,7 +575,7 @@ static void test_hostile_strings_are_escaped(void) {
     feed("{\"type\":\"device\",\"ts\":1,\"mac\":\"02:00:00:00:00:01\","
          "\"hostname\":\"<img src=x onerror=alert(1)>\"}\n"
          "{\"type\":\"beacon\",\"ts\":1,\"ssid\":\"</script><script>alert(1)</script>\"}\n"
-         "{\"type\":\"alert.create\",\"ts\":2,\"incident_id\":\"<i>\",\"sev\":2,"
+         "{\"type\":\"alert.create\",\"ts\":2,\"incident_id\":\"<i>\",\"sev\":2,\"ty\":0,"
          "\"title\":\"<b>T</b>\",\"detail\":\"a\\u2028b & 'c' \\\"d\\\"\"}\n"
          "{\"type\":\"sensor_health\",\"ts\":3,\"capture_iface\":\"<x>\",\"capture_open\":1}\n");
     const char *j = live_json();
@@ -511,7 +585,8 @@ static void test_hostile_strings_are_escaped(void) {
     WT_LACKS(j, "\xe2\x80\xa8");
     WT_HAS(j, "\\u003cimg src=x onerror=alert(1)\\u003e");
     WT_HAS(j, "\\u003c/script\\u003e\\u003cscript\\u003ealert(1)\\u003c/script\\u003e");
-    WT_HAS(j, "a\\u2028b \\u0026 \\u0027c\\u0027 \\\"d\\\"");
+    /* U+2028 in an alert's detail is in the display form (web_ssid.h). */
+    WT_HAS(j, "a\\\\xe2\\\\x80\\\\xa8b \\u0026 \\u0027c\\u0027 \\\"d\\\"");
     WT_HAS(j, "\"capture_iface\":\"\\u003cx\\u003e\"");
 
     /* The ticker's event too. */
@@ -614,12 +689,55 @@ static void test_worst_case_live_fits(void) {
              "\"scope\":\"%s\",\"capture_open\":1,\"monitor_open\":1}\n",
              big, big, big, big, big);
     feed(line);
+    /* #193's counts at their cap, over two sessions so the total is at
+     * twice it. */
+    for (int k = 0; k < 2; k++) {
+        snprintf(line, sizeof(line),
+                 "{\"type\":\"sensor_health\",\"ts\":1,\"capture_iface\":\"%s\","
+                 "\"monitor_iface\":\"%s\",\"capture_exit\":\"%s\",\"monitor_exit\":\"%s\","
+                 "\"scope\":\"%s\",\"capture_open\":1,\"monitor_open\":1,"
+                 "\"twin193_since\":%d,\"twin193_floods\":1000000000000,"
+                 "\"twin193_floods_chain\":1000000000000,\"twin193_named\":1000000000000,"
+                 "\"twin193_late_laa\":1000000000000,\"twin193_coincide\":1000000000000,"
+                 "\"twin193_excl_carrier\":1000000000000,\"twin193_excl_faint\":1000000000000,"
+                 "\"twin193_excl_sibling\":1000000000000,\"twin193_excl_any\":1000000000000}\n",
+                 big, big, big, big, big, 2000000000 + k);
+        feed(line);
+    }
     size_t n = web_live_json(&g_live, g_json,
                              WEB_SSE_MAX_UNSENT - WEB_LIVE_HDR_RESERVE, 1000);
     WT_ASSERT(n > 0);
     WT_ASSERT(n < WEB_SSE_MAX_UNSENT - WEB_LIVE_HDR_RESERVE);
     fprintf(stderr, "    worst-case /api/live: %zu bytes of %d\n", n,
             WEB_SSE_MAX_UNSENT - WEB_LIVE_HDR_RESERVE);
+    WT_LACKS(g_json, "<");
+    /* And under a capture scope (web_scope.h): each record's tag and
+     * the scope's facts, every monitor radio's name at its cap. The
+     * router keeps 64 bytes back for the echo (web_routes.c). */
+    for (int i = 0; i < WEB_SCOPE_MON_MAX; i++) {
+        snprintf(line, sizeof(line), "{\"type\":\"sensor\",\"ts\":1,\"kind\":\"wifi\","
+                 "\"iface\":\"%02d%.30s\"}\n", i, big);
+        feed(line);
+    }
+    /* Monitor's records, so the ticker's backlog is all kept. */
+    for (int i = 0; i < WEB_LIVE_RING; i++) {
+        snprintf(line, sizeof(line), "{\"type\":\"beacon\",\"ts\":-9223372036854775807,"
+                                     "\"qname\":\"%s\",\"host\":\"%s\"}\n", big, big);
+        feed(line);
+    }
+    web_scope_ctx_t sc;
+    memset(&sc, 0, sizeof(sc));
+    sc.scope = WEB_SCOPE_MONITOR;
+    sc.given = 1;
+    web_live_scope_ctx(&g_live, &sc);
+    WT_EQ(sc.nmon, WEB_SCOPE_MON_MAX);
+    n = web_live_json_scoped(&g_live, &sc, g_json,
+                             WEB_SSE_MAX_UNSENT - WEB_LIVE_HDR_RESERVE - 64, 1000);
+    WT_ASSERT(n > 0);
+    fprintf(stderr, "    worst-case /api/live?scope=monitor: %zu bytes of %d\n", n,
+            WEB_SSE_MAX_UNSENT - WEB_LIVE_HDR_RESERVE - 64);
+    WT_HAS(g_json, "\"scope_facts\":");
+    WT_HAS(g_json, "\"type\":\"beacon\"");
     WT_LACKS(g_json, "<");
 
     char hbuf[4096];
@@ -722,6 +840,7 @@ void run_live_tests(void) {
     WT_RUN(test_types_counted_by_plausible_name);
     WT_RUN(test_records_per_second);
     WT_RUN(test_sensor_health_liveness);
+    WT_RUN(test_sensor_health_twin193);
     WT_RUN(test_recent_ring);
     WT_RUN(test_hostile_strings_are_escaped);
     WT_RUN(test_ticker_cut_is_on_a_code_point);

@@ -12,17 +12,38 @@ A terminal-based **passive** network monitor for Linux, written in C99.
 It never injects a frame onto a network it monitors — the one absolute
 in `MISSION.md` §2; every other network-using behaviour is opt-in and
 announced. It reads `/proc`, `/sys`, netlink (rtnetlink / nl80211 / INET_DIAG) and a
-pcap stream, then surfaces what it sees through <!-- count:views -->36<!-- /count --> ncurses views
-(`VIEW_COUNT`), <!-- count:rules -->90<!-- /count --> alert rules (one per `ALERT_TYPE_*`), an embedded
+pcap stream, then surfaces what it sees through <!-- count:views -->37<!-- /count --> ncurses views
+(`VIEW_COUNT`; `sloth-wifi`'s, `sloth-rf` is headless), <!-- count:rules -->100<!-- /count --> alert rules (one per `ALERT_TYPE_*`;
+`sloth-wifi` raises <!-- count:rules-wifi -->95<!-- /count --> of the kinds, `sloth-rf` <!-- count:rules-rf -->6<!-- /count --> of them, `SENSOR_SOURCE_DOWN`
+both), an embedded
 threat-intel matcher whose shipped IOC list is **synthetic demo data**,
 optional per-alert pcap dumps, and an optional JSONL forensic log.
 
-Single binary `sloth`. Test binary `sloth_test`.
+Two daemons from one tree since #211 (ADR 0010): `sloth-wifi`, the
+Wi-Fi / LAN / BLE monitor (`sloth` is a symlink to it, kept with no end
+date), and
+`sloth-rf`, the headless reader for the SDR decoders' output (ADS-B,
+APRS, rtl_433, Victron) and GNSS. Both link `libsloth_core.a`; an `nm`
+gate (`check_rf_no_capture`) keeps capture, 802.11 and BLE-capture code
+out of `sloth-rf`, and its mirror `check_wifi_no_rf` keeps the decoders,
+their records and the GNSS / ADS-B rules out of `sloth-wifi` (a name
+list: `src/db.c`'s RF table writers link into both and are off in
+`sloth-wifi` at run time). `sloth-wifi` refuses the decoder flags with
+exit 2 since #216; the stream is JSONL 2.4.0 (2.0.0 at the cutover). Test binary `sloth_test`.
 
 ## Architecture
 
 - `include/sloth.h` — central header: shared structs, the `view_t` enum.
 - `src/main.c` — CLI, signal handlers, main poll loop.
+- `src/rf/main.c`, `rf_args.c`, `platform_rf.c` — the `sloth-rf` daemon:
+  its argv parser, loop and two-function platform table. Its decoder
+  flags are validated in `src/rf_flags.c`; what both daemons share is
+  in `src/gnss_flags.c` and `src/daemon_start.c`. `src/rf_side.c` is
+  sloth-rf's side as data (the mirror of `capture_side.c`),
+  `src/sys_status_rf.c` its four decoder source rows, and
+  `src/rf_moved.c` the refusal `sloth-wifi` prints for a moved flag.
+- `src/poll_core.c`, `poll.c`, `poll_gnss.c`, `poll_rf.c` — the poll
+  stages and the per-daemon stage tables (`g_poll_wifi`, `g_poll_rf`).
 - `src/tui.c` + `tui.h` — ncurses rendering, colour pair init, key
   polling. ANSI fallback when built without ncurses.
 - `src/platform/linux*.c` — Linux backends (rtnetlink, nl80211, /proc
@@ -32,8 +53,14 @@ Single binary `sloth`. Test binary `sloth_test`.
 - `src/{dns,tls,quic,http,ntp,icmp}_log.c` — ring buffers + per-record
   snapshot.
 - `src/{alerts,beacon_detect,devices,threat_intel,filter,jsonl,alert_pcap,
-  top_hosts,ip_color,ip_owner}.c` — synthesis + export.
-- `src/views/*.c` — one file per VIEW_*. The dashboard composites
+  top_hosts,ip_color,ip_owner}.c` — synthesis + export. The JSONL
+  writer is three files: `jsonl_core.c` (sink, dedup, the shared
+  `sensor_health` blocks), `jsonl_rf.c` (the RF and GNSS records) and
+  `jsonl.c` (the capture's records). The alert rule table is selected
+  by the daemon (`alerts_set_table()`; `rules_table.c`,
+  `rules_table_rf.c`).
+- `src/views/*.c` — one file per VIEW_* (`sloth-wifi`'s; the ADS-B view
+  was removed at #216). The dashboard composites
   several panels into one grid.
 - `src/md5.c` — embedded MD5 for JA3 (verified against RFC 1321 vectors).
 - `tests/` — unit tests, fake platform, scenarios. For the assertion
@@ -66,15 +93,66 @@ Single binary `sloth`. Test binary `sloth_test`.
   load-bearing. It is still cheap insurance before quoting a matrix
   result, and the six-config loops in this repo's history do it.
 
-  **The whole build surface, every slice:** the six configs above;
-  `make test` and `make test-capture-path`; **both again under
+  **The whole build surface, every slice, is `make gate`**
+  (`tools/gate.sh`): the six configs above; `make test` and
+  `make test-capture-path` plain, under
   `EXTRA_CFLAGS="-Werror -fsanitize=address,undefined
-  -fno-omit-frame-pointer -fno-sanitize-recover=all"`**; `make fuzz
-  FUZZ_SECONDS=1`; `make cppcheck`. The sanitized capture-path run is
-  the one that caught a 900-byte stack over-read in a test helper on
-  2026-10-15 after every other local gate was green. Source lists are
-  derived since #115 - a new `src/*.c` goes in `CORE_COMMON_SRCS` once,
-  and tests and fuzz harnesses are picked up by wildcard.
+  -fno-omit-frame-pointer -fno-sanitize-recover=all"` and under
+  `-fsanitize=thread`; `make web-test` plain, without SQLite, with an
+  empty vendor table, under ASan and under TSan twice (and against
+  SQLite 3.45 with `GATE_SQLITE345`, which is what CI's Ubuntu 24.04
+  has); `make web-quickstart-check`; `make deploy-test` (and with other
+  shellcheck versions via `GATE_SHELLCHECKS`; CI has 0.9); `make
+  replay-check`; `make fuzz FUZZ_SECONDS=1`; `make cppcheck`; and
+  `docs-counts` plus `research-index` leaving the tree clean. **Run the
+  script, never a hand-picked subset:** the one time a slice's gate left
+  `make fuzz` out, a fuzz harness that no longer linked reached CI
+  (93f8c38, 2026-10-26). The sanitized capture-path run is the one that
+  caught a 900-byte stack over-read in a test helper on 2026-10-15 after
+  every other local gate was green. Source lists are derived since #115
+  - a new `src/*.c` goes once in the group it belongs to (`RF_SRCS`,
+  `GNSS_SRCS`, otherwise `CORE_BASE_SRCS`; since #212
+  `CORE_COMMON_SRCS` is their union and an addition to it is
+  discarded), and tests and fuzz harnesses are picked up by wildcard.
+
+  What the script does that a loop in a shell did not, each from a run
+  that went wrong (its header comment has the dates): one run per tree
+  (two at once `make clean` each other's objects and neither result
+  means anything); refuse a `TMPDIR` under 1.5 GB (the suite builds a
+  900,000-row database there); print the toolchain first (an `apt
+  upgrade` mid-run swapped gcc, glibc and libpcap and broke four
+  configs); `make clean` before every sanitized step (a build-time
+  generator left over from a plain build never ran instrumented
+  locally; CI found a leak and a `qsort(NULL)` in one); keep every
+  step's log and print the FAIL lines under a red step. The generators
+  also depend on `$(WEB_GEN_DIR)/.flags` now, so a sanitized make
+  rebuilds them regardless.
+
+  **When the owner says to skip local gates and lean on CI** (asked on
+  2026-11-02 when four slices were gating at once on one machine), the
+  per-slice minimum is the build with `-Werror`, `make test`, `make
+  web-test`, `make web-test WITH_SQLITE=0`, `make cppcheck` and a clean
+  `docs-counts`; CI is the full matrix; one `make gate` on `main` at the
+  end. Say which of the two you ran when you quote a result.
+
+  **The host's toolchain can be newer than CI's.** CI's Ubuntu 24.04
+  has libpcap 1.10, SQLite 3.45 and shellcheck 0.9; the reference host
+  had libpcap 1.11 (which marks `pcap_set_*` and `pcap_setfilter`
+  `warn_unused_result`, so `(void)` does not silence them, 9a5c52c),
+  SQLite 3.53 and shellcheck 0.11 (W9FJC has no shellcheck at all as of
+  2026-11-16, so CI's is the first lint of a shell edit made there). A warning that appears only on one
+  side is still real on that side; the car box will be the newer one.
+
+- **A test that measures wall-clock time against a real budget scales
+  it under the sanitizers.** slothweb's 250 ms read budget is right for
+  slothweb and wrong for a TSan build on a loaded host, where a correct
+  read answered 503 in some runs and not others (test_alerts.c,
+  2026-11-01). The seam is `web_sdb_test_budget_scale`
+  (1 in slothweb; 4 under ASan, 8 under TSan, set only by the test
+  runner), and a test's own time bound scales with it; a test that needs
+  a budget to expire uses one far below the scaled value. A timing
+  assertion with no sanitizer scale is a flake waiting for a busy
+  machine, and a flake teaches people to rerun instead of read.
 - **Views and alert kinds are X-macro lists** since #117:
   `include/sloth_views.def` and `include/sloth_alerts.def` generate the
   enums, labels, dispatch, key switch and name/technique tables. Edit
@@ -191,6 +269,79 @@ Single binary `sloth`. Test binary `sloth_test`.
   `stale_state()` bucket, not as itself. Heartbeat is what guarantees
   liveness; the signature's job is to encode *meaningful* change.
 
+## Working beside another session
+
+Two sessions pushed to `main` in parallel through 2026-10-27 to
+2026-11-02 (this one and a fork). What kept it from costing more than it
+did, written down so it is the default next time:
+
+- **One pusher at a time, and say so.** Agree an order, hold until the
+  other's slice is on `main`, send the SHA the moment it lands; a push
+  that lands under someone's gate costs them the whole gate again. A fix
+  for a red `main` is the one exception, announced.
+- **One module file per slice** where the slices meet in the same page:
+  `web/ui/glyph.js`, `frrs.js`, `evidence.js`, `bundle.js`,
+  `location.js`, each with one namespace object, its own container ids,
+  and one call per view in `app.js`. Exchange the ids and the order of
+  the containers on a shared page before either builds; the merge is
+  then a line, not an afternoon.
+- **Shared stores are sequenced, not merged.** Two slices that each bump
+  `slothweb.db`'s version become v6 then v7 in push order, each with its
+  migration and a test on the other's file; sloth.db's
+  `DB_SCHEMA_VERSION` the same. Say which store a slice touches when
+  you announce it.
+- **Hand work across the seam by lists, in writing.** The 208 vendors
+  one session researched for the other travelled as a message with the
+  exact format, path, file names and the registry-spelling pitfalls;
+  the receiver committed through the sender's generator and tests.
+- **The host is shared.** Only one session deploys or restarts the
+  services at a time; the other asks. Check `ps -o pid,ppid` before
+  calling two same-named processes two runs: a script's `$(...)`
+  subshells carry the parent's command line, and a valid gate run was
+  killed for that on 2026-11-02.
+- **Quotas are per session.** The web-search allowance (200 a session)
+  ran out in one while the other had it to spare; research moved
+  sessions rather than waiting for a reset.
+
+## Cost and concurrency (lessons of 2026-11-02/03)
+
+The owner's standing rules, and what they cost to learn:
+
+- **Fewest agents that do the job.** A build/review/fix workflow cost
+  2.2-2.7M subagent tokens per slice set (GNSS, BLE tab, issues wave 1,
+  #171). Default shape: **one builder, then one reviewer that fixes what
+  it confirms** - no per-finding judge agents, no parallel lens fan-out.
+  Small fixes, merges and conflict resolution are done inline, not by
+  an agent. Ask before more.
+- **One workflow at a time, agents sequential, one background shell,
+  `make -j2`** (owner, 2026-11-03). The host is the live sensor.
+- **Test only what the change touches** per slice (the minimum in
+  Discipline above); CI is the matrix. Install on the host right after
+  the push; if CI goes red, fix, push, reinstall.
+- **Check the design against live data before building.** The first BLE
+  waterfall design used advertising channels; an HCI report carries no
+  channel (every host row is -1), so it would have drawn nothing. A
+  two-minute look at the records saved a full slice.
+
+Integration traps that turned CI or the suite red after green slices:
+
+- **Additive record fields change `tests/replay/golden.jsonl`.** Run
+  `make replay-check` whenever a JSONL record gains a field; regenerate
+  with `make replay-golden` in the same commit (7052c71).
+- **Assessments cite `rule_file` lines.** Any edit to
+  `src/alerts/rules_*.c` shifts them; repoint each to its rule
+  function's definition line before pushing (8caf61e).
+- **slothweb's detail audit (`web/tests/test_alertfmt.c`) only follows
+  plain variables** in an alert's detail `snprintf`. Bind helper results
+  (`count_bucket()`, band helpers) to a variable first and name it in
+  `web_alert_detail_audited[]`.
+- **Doc `**Last updated**` lines conflict on every parallel merge.**
+  Merge by keeping both entries, newest first.
+- **A red fuzz run on an unrelated commit is still a real bug.** CI's
+  30 s fuzz found a pre-existing over-read in `web_pcap.c` (c3a2bf7).
+- **Page tests that pin single JS lines miss mutations of the lines
+  around them; pin whole functions** (#171 V1 review).
+
 ## Conventions
 
 - **Commit messages.** Imperative subject line, blank line, optional
@@ -252,6 +403,59 @@ overwritten. Full mechanism: `docs/wiki/wiki-maintenance.md`.
   iface (height = iface_count), conn + top-hosts (= 2H), packets (= 2H),
   three 3-panel rows at H each, dns/icmp at H. Min terminal 100×33.
 
+## Fleet sharing: monitor data only (owner hard rule, 2026-11-12)
+
+**Share what sloth heard in monitor mode. Never share what it learned
+through the joined network or the wire.**
+
+The owner's words: "when sloth shares data include the local host name
+and also only share passively monitored data, do not share information
+on the local wifi network the client is connected to via authenticated
+wifi. only share monitor data by a hard rule in the agent instructions.
+local network data should only be stored on local clients on the local
+network." Asked the same day whether the joined network's own APs and
+stations may travel: "yes anything that is thru monitor mode is game";
+and "upgrade together". [ADR 0009](../docs/wiki/adr/0009-fleet-monitor-only.md)
+supersedes ADR 0008's "full fidelity". This is a hard rule: no issue,
+converge run or review may relax it; only the owner can.
+
+The rule is **provenance, not subject**:
+
+- **Share everything heard in monitor mode**: the monitor radio, the
+  BLE receivers, the GNSS receiver, the ADS-B SDR. The joined network's
+  APs and stations as heard over the air, probes for its SSIDs, and a
+  device the LAN also knows (with its over-the-air members only) all
+  travel; so do `--my-ssid` / `--my-bssid` (`own_net`) and the monitor
+  radios' addresses (`own_macs`).
+- **Never share what came through the managed (authenticated)
+  interface or the wire**: ARP, DHCP, mDNS, NBNS, DNS, HTTP, TLS, flows,
+  IP addresses, host names, the managed card's scan and station dump,
+  the managed card's own MAC, the host's own interfaces and the roster
+  as device rows. A row known only that way never travels.
+- **Fail closed.** A field whose provenance is unknown does not travel;
+  a new alert type is withheld until classified; a radio whose role
+  cannot be read is not named.
+- **Every export names its host** (`hostname`) and states the rule
+  (`share_rule`).
+- **The importer refuses what the rule forbids**, from any peer.
+
+Enforcement points (change them only with the owner): the allow-list
+and the device test in `web/src/web_fleetshare.c`
+(`web_fleet_share_alerts[]`, `web_fleet_share_dev()`,
+`web_fleet_share_refuses()`); the export's Monitor-scope device read and
+row writers in `web/src/web_fleet.c` (`xp_dev()`, `xp_ap()`,
+`xp_alert()`, `xp_verdict()`, `xp_header()`); the monitor-radio test
+`own_is_monitor()` / `web_fleet_read_own()`; the importer's
+`check_line()` / `put_line()` and the one-time `web_fleet_purge()`.
+Tests that must stay green and whose absence assertions were each seen
+red under a mutation: `web/tests/test_fleetshare.c` (every
+`sloth_alerts.def` row classified, the device test, the importer's rule
+shape by shape) and `web/tests/test_fleet.c`
+(`test_export_monitor_only`, `test_read_own`,
+`test_ingest_refuses_forbidden`, `test_purge_once`,
+`test_purge_v2_repulls`). A change that makes one of them pass by
+weakening it breaks the rule.
+
 ## Hard "don't"s
 
 - Don't run destructive git ops (`reset --hard`, `push --force`, branch
@@ -259,7 +463,8 @@ overwritten. Full mechanism: `docs/wiki/wiki-maintenance.md`.
 - Don't add new files at repo root; everything has a home (`src/`,
   `tests/`, `docs/`, `include/`, and `web/` for slothweb — owner ruling
   2026-10-19 on #102; its spec is `docs/web-ui-spec.md`).
-- Don't stage `wifi-sigint/`, `sloth`, or `sloth_test`.
+- Don't stage `wifi-sigint/`, `sloth`, `sloth-wifi`, `sloth-rf`, or
+  `sloth_test`.
 - Don't reintroduce coloured row backgrounds (deliberately removed).
 - Don't bypass git hooks (`--no-verify` etc.) unless explicitly asked.
 - Don't push directly to a branch other than `main` without asking.
@@ -273,7 +478,8 @@ overwritten. Full mechanism: `docs/wiki/wiki-maintenance.md`.
    if the view needs a snapshot; prefer an accessor on the module.
 3. Add the data type / log entry struct.
 4. Create `src/views/<name>.c` + `.h` with `view_<name>_draw` and
-   `view_<name>_key`. Add the `.c` to `CORE_COMMON_SRCS` once.
+   `view_<name>_key`. Add the `.c` once to its source group (`CORE_BASE_SRCS`, or
+   `GNSS_SRCS` / `RF_SRCS` for a view of those families).
 5. If the view has any *view-local* action bound to a letter that the
    global switch already uses, add a claim in `src/view_route.c ::
    view_claims_key()` and cover it in `tests/test_state.c` (#13).
@@ -294,7 +500,9 @@ overwritten. Full mechanism: `docs/wiki/wiki-maintenance.md`.
    `rules_enterprise.c`, `rules_mle.c`) that calls `fire(...)`; build its
    key with the `akey_*` builder (#112), never `snprintf` of a remote
    string.
-3. Add its row to `src/alerts/rules_table.c` — the table order is the
+3. Add its row to `src/alerts/rules_table.c` (an RF-side rule goes in
+   `src/alerts/rules_table_rf.c` instead, and a new RF symbol family
+   goes on the Makefile's `WIFI_FORBID_DEF_PATTERNS`) — the table order is the
    run order, and `test_rule_order_dependencies` pins the pairs that
    matter.
 4. If the alert has a known target IP, pass `match_ip` + `match_port`

@@ -87,9 +87,19 @@ static int is_recipe(const char *line) { return line[0] == '\t'; }
 
 static int invokes_cc(const char *line) { return strstr(line, "$(CC)") != NULL; }
 
+/* $(CONTRACT_CFLAGS) is the third sanctioned set (#185 item 4): the
+ * contract artifact's libsloth-wire.a is compiled with fixed flags on
+ * purpose, because a sanitizer or hardening flag of this tree's build
+ * would become a link requirement of every consumer in another
+ * repository. It still takes EXTRA_CFLAGS' warning flags, so -Werror
+ * reaches it (the Makefile's CONTRACT_CFLAGS). */
 static int carries_cflags(const char *line) {
     return strstr(line, "$(CFLAGS)") != NULL ||
-           strstr(line, "$(TEST_CFLAGS)") != NULL;
+           strstr(line, "$(TEST_CFLAGS)") != NULL ||
+           /* only the one recipe that hands them to tools/contract.sh:
+            * a binary built with them would carry no hardening flag */
+           (strstr(line, "$(CONTRACT_CFLAGS)") != NULL &&
+            strstr(line, "tools/contract.sh") != NULL);
 }
 
 
@@ -511,7 +521,12 @@ static void test_replay_targets_diff_a_committed_golden(void) {
     char *mk = slurp_makefile();
     ASSERT(mk != NULL);
     if (!mk) return;
-    ASSERT(strstr(mk, "\nreplay-check: replay-run\n") != NULL);
+    /* replay-run first; since #213 sloth-rf too, whose refusals the
+     * target compares with sloth-wifi's; since #216 the `sloth`
+     * symlink as well, which must answer as sloth-wifi does. */
+    ASSERT(strstr(mk, "\nreplay-check: replay-run $(RF_TARGET)\n") != NULL);
+    ASSERT(strstr(mk, "\t@sh tests/replay/rf_refusals.sh ./$(TARGET) ./$(RF_TARGET) ./$(TARGET_ALIAS)\n") != NULL);
+    ASSERT(strstr(mk, "\nreplay-run: $(TARGET) $(TARGET_ALIAS) $(REPLAY_GEN)\n") != NULL);
     ASSERT(strstr(mk, "diff -u $(REPLAY_GOLDEN) $(REPLAY_RUN)/norm.jsonl") != NULL);
     ASSERT(strstr(mk, "\nreplay-golden: replay-run\n") != NULL);
     ASSERT(strstr(mk, "$(REPLAY_GEN) $(REPLAY_RUN)\n") != NULL);

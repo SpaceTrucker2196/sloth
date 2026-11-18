@@ -7,8 +7,13 @@ type: reference
 # What sloth does
 
 **Summary**: sloth is a terminal-based **passive** network monitor for
-Linux, C99, single binary. It reads what is already on the wire and in
-the air and surfaces it through <!-- count:views -->36<!-- /count --> views and <!-- count:rules -->90<!-- /count --> alert rules. It never
+Linux, C99. It reads what is already on the wire and in
+the air and surfaces it through <!-- count:views -->37<!-- /count --> views and <!-- count:rules -->100<!-- /count --> alert rules. Since the cutover
+(#216, [ADR 0010](adr/0010-wifi-rf-daemons.md)) the sensor is two
+daemons: **`sloth-wifi`** (IP, 802.11, BLE and every view; `sloth` is a
+symlink to it), which raises <!-- count:rules-wifi -->95<!-- /count --> of the alert kinds, and the
+headless **`sloth-rf`** (ADS-B, APRS, rtl_433, Victron, the GNSS
+records), which raises <!-- count:rules-rf -->6<!-- /count -->; one kind is both's. It never
 injects a frame onto a network it monitors; everything else that uses
 the network is opt-in and announced (`MISSION.md` §2). This page is the one-screen map of everything it does; each row links to the
 page that covers it in full.
@@ -16,7 +21,7 @@ page that covers it in full.
 **Sources**: `MISSION.md`, `CLAUDE.md`, `src/main.c`, `include/sloth.h`,
 all `docs/views/*.md`.
 
-**Last updated**: 2026-10-15.
+**Last updated**: 2026-11-15 (#216: two daemons, which binary has which views and alert kinds; the ADS-B view is gone); 2026-11-07 (the sensor-family views — BLE `[*]`, GNSS `[#]`, ADS-B `[^]` — were missing from the view groups); 2026-10-15.
 
 ---
 
@@ -44,9 +49,9 @@ NTP, ICMP, and the 802.11 frame classes ([[how-wifi-works]] §2). It reads
 every layer; it writes to none. See [[platform-vtable]] for the kernel
 seam and [[architecture]] for the code tree.
 
-## What it shows (<!-- count:views -->36<!-- /count --> views)
+## What it shows (<!-- count:views -->37<!-- /count --> views)
 
-Grouped three ways. Full keybinding map: [[views-catalog]].
+Grouped four ways. Full keybinding map: [[views-catalog]].
 
 - **Observation** — straight from the wire/kernel: Interfaces, Connections,
   WiFi, Packets, Processes, Stats, Probe, ARP, mDNS, NBNS, DHCP, SSDP,
@@ -54,10 +59,24 @@ Grouped three ways. Full keybinding map: [[views-catalog]].
 - **Synthesis** — derived: Alerts, Devices, Dashboard, OSI stack, Twins,
   KARMA, Rogue RADIUS, FragAttacks, Research, Help.
 - **WiFi SIGINT** — PNL, EAPOL, Seqnum, Assoc. See [[wifi-sigint]].
+- **Sensor families** — what a receiver the operator already runs
+  reports, never a radio sloth drives: BLE `[*]` ([[ble]]), GNSS `[#]`
+  ([[gnss]]).
+
+All of them are `sloth-wifi`'s. `sloth-rf` has no terminal: what it
+reads (ADS-B, APRS, rtl_433, Victron: [[adsb]], [[aprs]], [[rtl433]],
+[[victron]]) is shown in [[slothweb]]. The ADS-B view `[^]` that the
+one binary had until #216 is gone.
 
 The **Dashboard** `[o]` tiles seven bands into one screen; see [[dashboard]].
 
-## What it decides (<!-- count:rules -->90<!-- /count --> alert rules)
+## What it decides (<!-- count:rules -->100<!-- /count --> alert rules)
+
+Which daemon decides what: `sloth-wifi` raises <!-- count:rules-wifi -->95<!-- /count --> of the kinds
+(everything from the capture, the monitor radio and BLE, the host's
+under-voltage, and a source of its own going down); `sloth-rf` raises
+<!-- count:rules-rf -->6<!-- /count --> (the four `GNSS_*`, `ADSB_EMERGENCY`, and a source of its own
+going down). The list and its numbers are one for both.
 
 One rule per `ALERT_TYPE_*`, each with a cited basis (a CVE, CERT
 advisory, MITRE technique, IEEE clause, or paper — the repo enforces the

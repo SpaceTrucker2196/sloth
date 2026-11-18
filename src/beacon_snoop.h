@@ -381,4 +381,20 @@ void beacon_clear(void);
  * gains APs slowly; an mdk-style flood spikes this hard. Thread-safe. */
 int  beacon_recent_new_bssids(time_t now, int window_s);
 
+/* The state of the forgotten-BSSID memory (beacon_snoop.c, "BSSIDs the
+ * table has forgotten"), read under the table's lock, for sensor
+ * health (src/sys_status.c). The memory goes quiet when it overflows:
+ * from then on an entry it does not know is stamped UNSURE, and
+ * EVIL_TWIN's late-arrival signal says nothing, until the memory again
+ * reaches back BEACON_RECALL_TRUST_S. Nothing else says so; this does. */
+typedef struct {
+    int       slots;        /* ring slots in use, superseded ones included */
+    int       max;          /* BEACON_RECALL_MAX */
+    int       overflowed;   /* a live memory was overwritten since the start or the last clear */
+    long long reach_s;      /* how far back it reaches, seconds; -1 to the start (no overflow) */
+    int       quiet;        /* the late-arrival signal is off because of it, now */
+    long long quiet_s;      /* seconds until it is on again; 0 when not quiet */
+} beacon_recall_stat_t;
+void beacon_recall_stat(beacon_recall_stat_t *out, uint64_t now_ms);
+
 #endif /* BEACON_SNOOP_H */

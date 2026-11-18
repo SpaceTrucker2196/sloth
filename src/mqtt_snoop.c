@@ -5,8 +5,23 @@
 #include "mqtt_snoop.h"
 #include "sloth_clock.h"
 #include "stab.h"
+#include "flood_window.h"
+#include "tune.h"
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* Same shape as ssh_snoop.c's ssh_row_t (#202, #203), with two rings
+ * because MQTT_BROKER_BRUTE has two independent trip paths: CONNECTs
+ * (connection cadence) and refused CONNACKs (the broker saying "wrong
+ * credentials"). One ring holding both would let a burst of one count
+ * toward the other's threshold. Both stay out of mqtt_flow_t, which is
+ * copied wholesale into sloth_state_t; mqtt_snoop_snapshot() exports
+ * only the two ints the rule reads. */
+typedef struct {
+    mqtt_flow_t    pub;
+    flood_window_t conn_win;   /* CONNECTs   -> pub.brute_connects */
+    flood_window_t fail_win;   /* bad CONNACK -> pub.brute_fails   */
+} mqtt_row_t;
 
 /* Bounded table (#110): STAB_OLDEST, so a spray of new keys churns
  * the table and is tallied, but can never make it allocate or refuse.
@@ -15,10 +30,11 @@ static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
  * STAB_OLDEST. */
 typedef struct { const char *src_ip, *dst_ip; } mqtt_key_t;
 static int key_eq(const void *row, const void *key) {
-    const mqtt_flow_t *e = row; const mqtt_key_t *k = key;
-    return strcmp(e->src_ip, k->src_ip) == 0 && strcmp(e->dst_ip, k->dst_ip) == 0;
+    const mqtt_row_t *e = row; const mqtt_key_t *k = key;
+    return strcmp(e->pub.src_ip, k->src_ip) == 0 &&
+           strcmp(e->pub.dst_ip, k->dst_ip) == 0;
 }
-STAB_DECL(g_tbl, mqtt_flow_t, MAX_MQTT_FLOWS, last_seen, STAB_OLDEST,
+STAB_DECL(g_tbl, mqtt_row_t, MAX_MQTT_FLOWS, pub.last_seen, STAB_OLDEST,
           SH_EVICT_MQTT_FLOW, NULL, key_eq);
 
 /* MQTT Control Packet types (high nibble of byte 0). */
@@ -215,11 +231,14 @@ int mqtt_snoop_observe(const char *src_ip, uint16_t src_port,
         }
     }
 
-    time_t now = sloth_wall();
+    time_t   now    = sloth_wall();
+    uint64_t now_ms = sloth_mono_ms();
+    uint32_t win_ms = (uint32_t)tune_val(TUNE_MQTT_BRUTE_WINDOW_S) * 1000u;
     pthread_mutex_lock(&g_mu);
     mqtt_key_t key = { client_ip, broker_ip };
     int created;
-    mqtt_flow_t *e = stab_get(&g_tbl, &key, now, &created);
+    mqtt_row_t *r = stab_get(&g_tbl, &key, now, &created);
+    mqtt_flow_t *e = &r->pub;
     if (created) {
         snprintf(e->src_ip, sizeof(e->src_ip), "%s", client_ip);
         snprintf(e->dst_ip, sizeof(e->dst_ip), "%s", broker_ip);
@@ -230,13 +249,21 @@ int mqtt_snoop_observe(const char *src_ip, uint16_t src_port,
     switch (type) {
     case MQTT_CONNECT:
         e->connect_count++;
+        /* #203: the windowed count MQTT_BROKER_BRUTE reads; the
+         * lifetime connect_count above never decays. */
+        flood_window_note(&r->conn_win, now_ms,
+                          (int)tune_val(TUNE_MQTT_BRUTE_CONNECTS), win_ms);
         if (proto_level_out > 0) e->proto_level = proto_level_out;
         if (username[0])
             snprintf(e->last_username, sizeof(e->last_username),
                      "%s", username);
         break;
     case MQTT_CONNACK:
-        if (connack_fail) e->connack_fail_count++;
+        if (connack_fail) {
+            e->connack_fail_count++;
+            flood_window_note(&r->fail_win, now_ms,
+                              (int)tune_val(TUNE_MQTT_BRUTE_FAILS), win_ms);
+        }
         break;
     case MQTT_SUBSCRIBE:
         e->subscribe_count++;
@@ -251,8 +278,19 @@ int mqtt_snoop_observe(const char *src_ip, uint16_t src_port,
 }
 
 void mqtt_snoop_snapshot(sloth_state_t *s) {
+    static mqtt_row_t tmp[MAX_MQTT_FLOWS];   /* static: off the caller's stack */
+    uint64_t now_ms = sloth_mono_ms();
+    uint32_t win_ms = (uint32_t)tune_val(TUNE_MQTT_BRUTE_WINDOW_S) * 1000u;
     pthread_mutex_lock(&g_mu);
-    s->mqtt_flow_count = stab_snapshot(&g_tbl, s->mqtt_flows, MAX_MQTT_FLOWS);
+    int n = stab_snapshot(&g_tbl, tmp, MAX_MQTT_FLOWS);
+    s->mqtt_flow_count = n;
+    for (int i = 0; i < n; i++) {
+        s->mqtt_flows[i] = tmp[i].pub;
+        s->mqtt_flows[i].brute_connects =
+            flood_window_count(&tmp[i].conn_win, now_ms, win_ms);
+        s->mqtt_flows[i].brute_fails =
+            flood_window_count(&tmp[i].fail_win, now_ms, win_ms);
+    }
     pthread_mutex_unlock(&g_mu);
 }
 

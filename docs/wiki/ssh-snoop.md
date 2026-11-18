@@ -13,7 +13,8 @@ only field a passive observer can read. Sloth's first SSH pass
 is narrow: match the server banner ("SSH-2.0-..." or
 "SSH-1.99-..."), aggregate per (client_ip, server_ip), and fire
 `SSH_BRUTE_FORCE` when one client establishes ≥10 banner
-exchanges with one server inside the active aggregation window.
+exchanges with one server inside the sliding `ssh.brute_window_s`
+window (60 s default; #202).
 
 The encrypted auth attempts themselves are not visible. They
 don't have to be — brute-force is a TCP-shape signal (many
@@ -59,17 +60,30 @@ SSH_BRUTE_FORCE: 203.0.113.5->10.0.0.10: 47 SSH banners
 | Field | Value |
 |-------|-------|
 | Severity | CRIT |
-| Threshold | `banner_count ≥ 10` per (client_ip, server_ip) |
+| Threshold | ≥10 banners inside a sliding 60 s window (`ssh.brute_force` / `ssh.brute_window_s`), per (client_ip, server_ip) |
 | Dedup key | `ssh-brute:<client>-><server>` |
 | `match_ip` | `src_ip` (the attacking client) |
 | `match_port` | 22 |
 
 Why 10: a normal user might re-connect a handful of times in a
 session after VPN blips or sleep/wake. Ten distinct banner
-exchanges to the same server inside the active window is
-unambiguous brute-force shape. fail2ban's default ban threshold
-is 5 with a wider window; we're a bit higher to stay
-surprise-free for noisy laptops behind NAT.
+exchanges to the same server inside the window is unambiguous
+brute-force shape. fail2ban's default ban threshold is 5 with a
+wider window; we're a bit higher to stay surprise-free for noisy
+laptops behind NAT.
+
+The `ssh_flow` record's `banner_count` is a **lifetime** tally
+kept for operator context ("how much SSH has this pair ever
+done") — it never decays and the rule does not read it. Before
+#202 the rule thresholded `banner_count` directly, so a routine
+pair that ever crossed 10 banners over its whole life re-fired
+the alert on every tick forever, with no way for the sensor to
+tell a sweep from a handful of ordinary reconnects spread over
+weeks; one reference host logged 131,014 fires against 10 real
+`Accepted publickey` logins. `ssh.brute_force` / `ssh.brute_window_s`
+are both `--tune` knobs; the window's ring holds at most 32
+recent banners (`FLOOD_WIN_CAP`), which is also the threshold's
+upper bound.
 
 ## What's normal
 
@@ -82,8 +96,10 @@ surprise-free for noisy laptops behind NAT.
 
 ## What's suspicious
 
-- `banner_count ≥ 10` from one source to one server — fires
-  the alert.
+- ≥10 banners inside the 60 s window from one source to one
+  server — fires the alert. The alert resolves on its own once
+  the pair goes quiet past the window, with no eviction or
+  restart needed.
 - High flow count from one source to many servers — a
   sweep-style scan trying SSH on every reachable host. Not
   currently a dedicated alert; the `ssh_flow` records expose

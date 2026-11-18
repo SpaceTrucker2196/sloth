@@ -14,9 +14,13 @@
  * not feed is fed 0 (web_baseline_zero_missing()). An hour slothweb did
  * not observe is not fed at all: fewer than WEB_ANOM_COVER_MIN of its
  * minutes had the socket connected and a record within
- * WEB_ANOM_A10_SILENCE_S, or slothweb was not running for all of it. A
- * minute it did not observe is not scored: neither a hit nor a quiet
- * minute for any episode.
+ * WEB_ANOM_A10_SILENCE_S. With a store, the minutes observed are kept
+ * there (slothweb.db v11), so an hour split by a slothweb restart is
+ * judged on what both runs observed, and fed from both runs' minute
+ * rows (web_anomaly.c, "coverage across restarts"); without one, an
+ * hour that began before this run is not fed. A minute it did not
+ * observe is not scored: neither a hit nor a quiet minute for any
+ * episode.
  *
  * The rules, and exactly what each measures:
  *
@@ -243,7 +247,10 @@ enum { WEB_EP_FREE = 0, WEB_EP_BUILDING, WEB_EP_OPEN, WEB_EP_CLOSED };
 /* The largest one episode can render to (web_anomaly_json): every byte
  * of the evidence and the key at WEB_JW_EXPAND, the rest fixed. */
 #define WEB_ANOM_EP_JSON_MAX \
-    ((WEB_ANOM_EVIDENCE_MAX + WEB_KEY_MAX) * WEB_JW_EXPAND + 320)
+    ((WEB_ANOM_EVIDENCE_MAX + WEB_KEY_MAX) * WEB_JW_EXPAND + 352)
+/* The id an anomaly's triage and links are filed under (web_frrs.h):
+ * "a" and sixteen hex digits. */
+#define WEB_ANOM_TID_MAX        17
 
 typedef struct {
     long long id;
@@ -264,6 +271,7 @@ typedef struct {
     unsigned long opened, closed, dropped, evicted_closed;
     unsigned long candidates_dropped, rows_dropped, late_rows;
     unsigned long hours_fed, hours_unobserved, minutes_unobserved;
+    unsigned long hours_merged;    /* fed from the runs' minute rows (v11) */
     unsigned long mad_queries, mad_skipped, a9_queries, a9_errors;
     unsigned long fanout_evictions, reported_evicted, known_evictions;
     unsigned long persist_errors;
@@ -319,6 +327,12 @@ void web_anomaly_attach(web_anomaly_t *a, web_tsdb_t *t);
  * 0, or -1 (the store refused a read; the engine starts empty). */
 int  web_anomaly_restore(web_anomaly_t *a, long long now_s);
 
+/* Write the coverage of every completed minute not yet in the store:
+ * at a clean exit, after web_tsdb_stop() (the store thread is gone, so
+ * this is the only writer). The step writes it at every minute
+ * boundary, so a run killed instead loses the minute in progress. */
+void web_anomaly_save_cover(web_anomaly_t *a);
+
 /* One episode as web_anomaly_restore() takes it from the store, with
  * the same checks (a bad id, time, state, kind or metric is dropped;
  * scores are clamped to 0..100). For the tests, which can hand it
@@ -345,6 +359,32 @@ int         web_anomaly_kind_find(const char *kind);
  * smaller than that. */
 size_t web_anomaly_json(web_anomaly_t *a, long long now_s, long long since,
                         int kind, char *out, size_t cap);
+/* The episodes a capture scope holds (web_scope.h): A1 by its metric and
+ * key, A2 Monitor (a probe, PNL or association), A3 and A4 where the
+ * MAC has presence of the scope's own in ru (they score every source's,
+ * and say so), A5-A9 Local, A10 every scope. sc NULL is Hybrid. */
+size_t web_anomaly_json_scoped(web_anomaly_t *a, long long now_s,
+                               long long since, int kind,
+                               const web_scope_ctx_t *sc, web_rollup_t *ru,
+                               char *out, size_t cap);
+int    web_anomaly_ep_tag(const web_anom_ep_t *e, const web_scope_ctx_t *sc,
+                          web_rollup_t *ru);
+
+/* The triage id of an anomaly: "a" and the FNV-1a 64 of its rule's
+ * name, its metric's name and its key. It names the finding, every
+ * episode of that (rule, metric, key), as an alert's triage names every
+ * incident of its key (web_alertdb.h); it is the same after a restart
+ * and a re-detection, where an episode's own id is not (next_id starts
+ * again at 1 once every saved episode has aged out). Every input is
+ * already in the episode's JSON, so the hash discloses nothing; it is
+ * not collision-proof against a chosen key, which is why the triage
+ * store keeps the three beside the id and refuses a mismatch
+ * (web_relate.c). */
+void   web_anomaly_tid(int rule, int metric, const char *key,
+                       char out[WEB_ANOM_TID_MAX + 1]);
+/* The episode of that id to show: an open one, else the closed one seen
+ * last. 1 with *out, 0 when the engine holds none. */
+int    web_anomaly_tid_find(web_anomaly_t *a, const char *tid, web_anom_ep_t *out);
 
 /* One episode as JSON (the SSE "anomaly" event's data). */
 void   web_anomaly_ep_json(web_jw_t *w, const web_anom_ep_t *e);
@@ -367,6 +407,16 @@ int    web_anomaly_open_count(web_anomaly_t *a);
 int    web_anomaly_device_z(web_anomaly_t *a, const char *key, long long now_s,
                             double *z);
 int    web_anomaly_key_count(web_anomaly_t *a, const char *key, int kind);
+/* The same under a capture scope (sc NULL or Hybrid: as above): z over
+ * the scope's own metrics only (none: 0), and the episodes whose tag
+ * (web_anomaly_ep_tag()) the scope passes. */
+int    web_anomaly_device_z_scoped(web_anomaly_t *a, const char *key,
+                                   long long now_s, int scope, double *z);
+int    web_anomaly_key_count_scoped(web_anomaly_t *a, const char *key, int kind,
+                                    const web_scope_ctx_t *sc, web_rollup_t *ru);
+/* The open episodes the scope passes (the open-anomalies tile). */
+int    web_anomaly_open_count_scoped(web_anomaly_t *a, const web_scope_ctx_t *sc,
+                                     web_rollup_t *ru);
 int    web_anomaly_key_list(web_anomaly_t *a, const char *key,
                             web_anom_ep_t *out, int max);
 

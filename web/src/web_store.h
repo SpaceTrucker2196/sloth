@@ -41,10 +41,21 @@
  * file is stamped v0 first and takes the same path, so the chain from
  * v0 runs on every first start.
  *
- * Writes come only from the store thread (web_tsdb.c), batched, never
- * from the HTTP thread; queries come only from the HTTP thread, over a
- * second, read-only connection, with every parameter bound. WAL lets
- * the two run side by side.
+ * Writes to the time series and the analysis state come only from the
+ * store thread (web_tsdb.c), batched, never from the HTTP thread;
+ * queries come only from the HTTP thread, over a second, read-only
+ * connection, with every parameter bound. WAL lets the two run side by
+ * side. The one exception since v6 is the operator's own state (the
+ * triage and TACDB tables, since v9 the anomaly subjects and the links
+ * between findings, since v10 the notes (web_notes.h) and since v12
+ * the incidents (web_incident.h), web_frrs.h):
+ * the HTTP thread writes those
+ * over a third, read-write connection of its own, one short transaction
+ * per request, serialised against the store thread by SQLite's lock and
+ * a busy timeout; the two never share a connection or a statement.
+ * Since v8 the fleet's pull thread (web_fleet.h) is a third writer on
+ * the same terms: a connection of its own, one transaction per pull,
+ * peer_sites and peer_sightings only.
  *
  * Built without WITH_SQLITE, every call is a stub: open fails with
  * "built without SQLite", and /api/series serves the in-memory fine
@@ -56,10 +67,12 @@
 #include <stddef.h>
 
 #include "web_baseline.h"
+#include "web_chmix.h"
+#include "web_ble.h"
 #include "web_rollup.h"
 
 /* The version this build writes. */
-#define WEB_STORE_SCHEMA   4
+#define WEB_STORE_SCHEMA   12
 #define WEB_STORE_ERR_MAX  320
 #define WEB_DEFAULT_STORE  "./slothweb.db"
 /* --web-max-mb: the ceiling on the store's used pages. */
@@ -80,7 +93,7 @@
 #define WEB_STORE_EXPIRE_STEPS  256
 #define WEB_STORE_VACUUM_PAGES  256
 
-#define WEB_STORE_AN_STMTS 18
+#define WEB_STORE_AN_STMTS 24
 
 struct sqlite3;
 struct sqlite3_stmt;
@@ -108,6 +121,15 @@ typedef struct {
                                              took over (a delete that
                                              had not reached the file) */
     long long     last_compact;           /* unix s, 0 never */
+    long long     mix_rows;               /* chmix rows (v5), counted as the
+                                             writer adds and drops them,
+                                             recounted at open and each
+                                             compaction */
+    unsigned long long mix_dropped_expired, mix_dropped_cap;
+    long long     ble_rows, ble_alert_rows;   /* the BLE tables (v7), recounted
+                                                 after every write and at open */
+    unsigned long long ble_dropped_expired, ble_dropped_cap;
+    unsigned long ble_batches;
     char          last_error[WEB_STORE_ERR_MAX];
 } web_store_stats_t;
 
@@ -137,6 +159,15 @@ int  web_store_available(void);
  * web_store_close() either way. */
 int  web_store_open(web_store_t *s, const char *path, char *err, size_t errsz);
 void web_store_close(web_store_t *s);
+
+/* A third connection to an open store, read-write, opened as the
+ * writer is (no-follow, DEFENSIVE, the side files' mode checked), with a
+ * busy timeout of WEB_STORE_AUX_BUSY_MS: the HTTP thread's, for the
+ * operator's own state (web_frrs.h), one short transaction per request.
+ * The caller closes it (sqlite3_close) before web_store_close(). 0, or
+ * -1 with err. */
+#define WEB_STORE_AUX_BUSY_MS 250
+int  web_store_open_aux(web_store_t *s, struct sqlite3 **out, char *err, size_t errsz);
 
 /* The rows, in one transaction. Their (series, t) may already be on
  * disk (a bucket closed early by an eviction or a shutdown, then
@@ -244,6 +275,16 @@ int  web_store_query(web_store_t *s, int tier, int metric, const char *key,
 int  web_store_keys(web_store_t *s, int tier, int metric, long long from,
                     long long to, char (*out)[WEB_KEY_MAX + 1], int max);
 
+/* The keys of metric holding a bucket in tier with from <= t < to, in
+ * byte order of the key, those after `after` (NULL: from the first), at
+ * most max into out (/api/series/all walks every key a page at a time,
+ * web_allkeys.h). One seek of the (metric, key) index and, a series, one
+ * of its tier's primary key: no scan of the window. Read-only
+ * connection, every value bound. Count, or -1. */
+int  web_store_keys_after(web_store_t *s, int tier, int metric, long long from,
+                          long long to, const char *after,
+                          char (*out)[WEB_KEY_MAX + 1], int max);
+
 void web_store_stats(web_store_t *s, web_store_stats_t *out);
 
 /* Rows in tier, counted now (tests and the recount). -1 on error. */
@@ -328,6 +369,35 @@ int  web_store_any_before(web_store_t *s, int metric, const char *key,
 int  web_store_hours_at(web_store_t *s, int metric, const char *key,
                         const long long *ts, int n, web_point_t *out);
 
+/* ── the hour coverage (v11) ───────────────────────────────────────────
+ *
+ * On the writer connection, from the store thread only, like the rest
+ * of the analysis state: which minutes of each hour slothweb observed,
+ * across its restarts (web_anomaly.c). A row is (hour start, mask, done):
+ * bit i of mask the hour's minute i, done once a run passed the hour. */
+#define WEB_STORE_COVER_ALL ((1ULL << 60) - 1)
+/* OR mask's bits into the hour's row (made if absent). 0, or -1. */
+int  web_store_cover_put(web_store_t *s, long long hour, unsigned long long mask);
+/* Mark the hour passed (the row made if absent). 0, or -1. */
+int  web_store_cover_done(web_store_t *s, long long hour);
+/* The hour's row: 1 found (mask and done set), 0 none (both 0), -1. */
+int  web_store_cover_get(web_store_t *s, long long hour, unsigned long long *mask,
+                         int *done);
+/* Up to max hours with from <= hour < to not yet passed, oldest first,
+ * into hours. How many, or -1. */
+int  web_store_cover_open(web_store_t *s, long long from, long long to,
+                          long long *hours, int max);
+/* Rows of hours before `before` deleted. 0, or -1. */
+int  web_store_cover_prune(web_store_t *s, long long before);
+/* Every minute row of every series with hour <= t < hour + 3600, to
+ * fn(ctx, metric, key, the row), in no set order: what the minute tier
+ * holds of the hour, every run's rows of it. Rows given, or -1 (then
+ * fn may have seen some). */
+typedef void (*web_store_minute_fn)(void *ctx, int metric, const char *key,
+                                    const web_point_t *pt);
+long long web_store_hour_minutes(web_store_t *s, long long hour,
+                                 web_store_minute_fn fn, void *ctx);
+
 /* ── the passive PTR cache (v4, #162) ──────────────────────────────────
  *
  * On the writer connection, like the analysis state. A row is an
@@ -358,6 +428,87 @@ int  web_store_presence(web_store_t *s, int tier, int metric, const char *key,
                         long long from, long long to, int ncell, int cell_s,
                         unsigned char *bits);
 
+/* ── the channel mix (v5) ───────────────────────────────────────────
+ *
+ * The closed minute and hour buckets of web_chmix.h, one row per named
+ * transmitter and one for the rest. Bounded three ways: minute rows are
+ * kept WEB_STORE_MIX_MINUTE_KEEP_S (the grid reads the minute tier for
+ * a window of at most three days, web_wifi.h) and hour rows the hour
+ * tier's 400 days, at every compaction; the table holds at most
+ * WEB_STORE_MIX_ROWS rows, the oldest minute rows and then the oldest
+ * hour rows dropped after any write that takes it past (counted in
+ * mix_dropped_cap); and under --web-max-mb its rows are the second
+ * class the ceiling drops, after the fine tier and before any keyed
+ * minute or hour row. */
+#define WEB_STORE_MIX_ROWS          524288
+#define WEB_STORE_MIX_MINUTE_KEEP_S (3LL * 86400)
+
+/* Write n closed minute or hour buckets (fine ones are skipped) in one
+ * transaction, merging a (tier, channel, t, tx) already there (a bucket
+ * closed early at a shutdown, then finished); then the row cap. 0, or
+ * -1 (counted, the reason kept). Store thread only. */
+int  web_store_mix_write(web_store_t *s, const web_mix_row_t *rows, size_t n);
+
+/* The chmix rows of tier with from <= t < to, oldest first, at most max,
+ * each to fn (nonzero stops); *more when max cut it. tx is a canonical
+ * MAC or "" for the rest. Read-only connection, every value bound.
+ * Rows, or -1. */
+typedef int (*web_store_mix_fn)(void *ctx, const char *chan, long long t,
+                                const char *tx, int kind, long long frames);
+int  web_store_mix_query(web_store_t *s, int tier, long long from, long long to,
+                         long long max, web_store_mix_fn fn, void *ctx,
+                         int *more);
+/* The same in one namespace of chmix's keys (2026-11-02): the WiFi
+ * view's channels (every key not starting "b:", which is what
+ * web_store_mix_query() reads) or the BLE view's class slugs ("b:*",
+ * web_bledev.h, kind WEB_TX_BLE). Each reads under its own max, so one
+ * view's rows never use up the other's read cap. */
+enum { WEB_MIX_NS_WIFI = 0, WEB_MIX_NS_BLE = 1 };
+int  web_store_mix_query_ns(web_store_t *s, int ns, int tier, long long from,
+                            long long to, long long max, web_store_mix_fn fn,
+                            void *ctx, int *more);
+/* chmix rows, counted now (tests). -1 on error. */
+long long web_store_mix_count(web_store_t *s);
+
+/* ── the BLE tables (v7) ────────────────────────────────────────────
+ *
+ * web_ble.h's advertiser rows and findings, as slothweb keeps them
+ * (sloth.db has no BLE table). ble_device is keyed (addr, addr_type,
+ * iface) as the in-memory table is; ble_alert by the finding's key
+ * hashed (never the key). The one peer-chosen text is the local name,
+ * stored in its display form as passive_ptr.name (v4) stores a
+ * peer-chosen name; it is never a key. Bounded: rows older than
+ * --web-retain-days go at every compaction (ble_dropped_expired); the
+ * tables hold at most WEB_STORE_BLE_ROWS and WEB_STORE_BLE_ALERT_ROWS
+ * rows, the oldest by last seen dropped after a write that passes
+ * that, an advertiser no flag marks (hid 0, no watch category) before
+ * any that is (ble_dropped_cap). They are in --web-max-mb's budget too:
+ * the ceiling takes the unflagged advertisers before any keyed history,
+ * the rest before the global series (web_store.c CEIL_STEP), so an
+ * address flood fills and trims its own rows and not the time series.
+ * The row cap is eight times the in-memory table, whose seed reads the
+ * newest WEB_BLE_DEVICES rows: a flood reaches it in minutes, and past
+ * it a row is one nothing reads back. */
+#define WEB_STORE_BLE_ROWS       (8 * WEB_BLE_DEVICES)
+#define WEB_STORE_BLE_ALERT_ROWS 4096
+
+/* Upsert n advertiser rows and na findings in one transaction (a row
+ * already there takes the new values; pdu_mask and hid are OR-ed, the
+ * earlier first_seen kept), then the row caps. 0, or -1 (counted, the
+ * reason kept). Store thread only. */
+int  web_store_ble_write(web_store_t *s, const web_store_bdev_t *rows, size_t n,
+                         const web_store_balert_t *alerts, size_t na);
+/* The cap most recently seen advertiser rows, each to fn; the findings
+ * still standing or changed since `since`, each to afn (at most
+ * WEB_BLE_ALERTS). Writer connection, before any thread starts. Rows
+ * given, or -1. */
+int  web_store_ble_load(web_store_t *s, int cap,
+                        void (*fn)(void *ctx, const web_store_bdev_t *r), void *ctx,
+                        long long since,
+                        void (*afn)(void *ctx, const web_store_balert_t *r), void *actx);
+/* ble_device and ble_alert rows, counted now (tests). -1 on error. */
+long long web_store_ble_count(web_store_t *s, int alerts);
+
 /* Test seams (web/tests/test_store.c); NULL and 0 in slothweb itself.
  * web_store_test_between_opens runs after the read-only identify and
  * before the read-write open, so a test can swap the file there as
@@ -370,6 +521,10 @@ int  web_store_presence(web_store_t *s, int tier, int metric, const char *key,
 extern void (*web_store_test_between_opens)(const char *path);
 extern int    web_store_test_no_defensive;
 extern void (*web_store_test_after_commit)(const char *path);
+/* web_store_test_mix_cap, when positive, stands in for
+ * WEB_STORE_MIX_ROWS, so a test can reach the cap without writing half
+ * a million rows. */
+extern long long web_store_test_mix_cap;
 
 /* The DDL of the version this build writes, and the step from version
  * from to from + 1 (NULL past the end). For the guardrail tests. */

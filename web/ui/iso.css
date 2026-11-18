@@ -1,0 +1,45 @@
+/* The isometric waterfalls' chrome (iso.js, #224): the hover tooltip
+ * of the WiFi and BLE Devices tabs, beside the pointer in the window's
+ * coordinates; the picture's colours are the palette's heat stops, read
+ * by the script at each draw. */
+.iso-tip { position: fixed; z-index: 20; max-width: 240px; padding: 4px 6px; font-size: 11px;
+  background: var(--panel); border: 1px solid var(--rule-hi); border-radius: var(--radius-sm);
+  pointer-events: none; white-space: pre-wrap; }
+.iso-tip .d-dim { color: var(--tui-dim); }
+canvas.wfall.iso { cursor: crosshair; }
+
+/* Identity colours on the isometric waterfalls (owner 2026-11-17: "color
+ * code finding by band channel and ssid ... easy to tell by color
+ * groupings"). Height still carries the value; colour says which.
+ * WiFi: each channel the page's one channel colour (palette.css --ch-*,
+ * web/tools/palette.c, through web/ui/chan.js; owner 2026-11-18), so a
+ * channel reads the same on the waterfall as in every list; the SSID
+ * colours are the page's --k-* palette. Neither is written here. BLE: a
+ * hue per device class, Trackers red-orange. Each is named beside its
+ * swatch in the legends and in the tooltip, never colour alone. Read by
+ * iso.js scheme() at each draw, so the theme toggle follows. Chosen at
+ * 3:1 or more on --panel (WCAG 1.4.11, a graphic) in both themes; not
+ * checked by palette.c, which reads theme.css only. */
+:root {
+  --iso-c-phone: #5b9bff; --iso-c-wear: #6fdc6f; --iso-c-tag: #ff6a3d; --iso-c-hid: #f2d240;
+  --iso-c-bcn: #40e0f0;   --iso-c-iot: #c07cff;  --iso-c-unk: #8a8a96;
+}
+:root[data-theme="light"] {
+  --iso-c-phone: #1f5fd6; --iso-c-wear: #2e8a2e; --iso-c-tag: #d03a10; --iso-c-hid: #8a7400;
+  --iso-c-bcn: #0a7f92;   --iso-c-iot: #8a3ad0;  --iso-c-unk: #6b6b76;
+}
+/* The legends under the canvases: a swatch then its name (a WiFi
+ * channel step's name then its channels' chips); an SSID chip a button
+ * that dims every other SSID until pressed again. */
+.iso-key { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; margin: 4px 0; font-size: 11px; }
+.iso-key .grp { display: inline-flex; flex-wrap: wrap; gap: 2px 8px; align-items: center; }
+.iso-key .grp > .nm { color: var(--ink); }
+.iso-key .it { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
+.iso-key .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.iso-key .sw.dfs { background-color: var(--muted); background-image: repeating-linear-gradient(90deg, transparent 0 3px, var(--panel) 3px 5px); }
+.iso-key button.chip { display: inline-flex; align-items: center; gap: 4px; font: inherit; color: var(--ink);
+  background: none; border: 1px solid var(--rule); border-radius: var(--radius-sm); padding: 1px 6px; cursor: pointer; }
+.iso-key button.chip[aria-pressed="true"] { border-color: var(--signal); }
+.iso-key .more { color: var(--muted); }
+/* A client chip's swatch is a diamond, as the client lane's marks are. */
+.iso-key .sw.dia { transform: rotate(45deg) scale(0.8); border-radius: 1px; }

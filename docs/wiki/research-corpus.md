@@ -3,7 +3,7 @@
 **Issue:** [#73](https://github.com/SpaceTrucker2196/sloth/issues/73) ·
 **Built by:** `make research-index` · **Guard:** `tests/test_research_corpus.c`
 
-**Last updated**: 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
+**Last updated**: 2026-11-16 (the gate compares `research.db` by content, since its header carries the SQLite version); 2026-11-11 (#192 I7: `research/adsb/multi-receiver-verification.md`, the basis of slothweb's fleet aircraft cross-check, no alert kind); 2026-11-09 (#187 S4: `research/papers/mbssid-per-bss-ie-variation.md` for `KARMA_AP`'s IE-fingerprint collapse — and a worked example of a document whose job is to say what its sources do *not* support); 2026-11-08 (#186: `research/adsb/emergency-squawks.md` for `ADSB_EMERGENCY`); 2026-11-03 (the four GNSS kinds landed: each document's `alert_kinds` uncommented); 2026-11-02 (four GNSS documents, kinds pending; the BLE device-class document, no alert kind); 2026-10-26 (the RSSI distance document, no alert kind); 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
 
 `agents/AGENTS.md` § Discipline says every detector names its basis. The
 citations exist — in issue bodies, wiki pages and the rule table — but
@@ -24,6 +24,13 @@ research/
   papers/bl0ck-2302.05899.md     academic sources
   bluetooth/ubertooth-link-types-and-core-clauses.md
                                  Bluetooth link types and Core Spec clauses
+  gnss/spoofing-detection.md     GNSS spoofing, jamming, time/position
+                                 integrity, ATT&CK mapping
+  adsb/emergency-squawks.md      ADS-B emergency codes and status, and
+                                 why the alert is flag only
+  adsb/multi-receiver-verification.md
+                                 ADS-B position claims checked against a
+                                 second receiver (the fleet cross-check)
   tools/                         tool documentation
 ```
 
@@ -77,6 +84,13 @@ artifact and it is deliberate: it is small, it is **byte-for-byte
 reproducible** (documents are visited in sorted path order, so repeated
 builds are identical — verified, not assumed), and committing it means
 the runtime query works from a fresh clone with no build step.
+
+Reproducible **with one SQLite**: the file header carries the version of
+the library that wrote it (bytes 96 to 99), so a rebuild on a host with
+another SQLite differs in those bytes and nowhere else. `make gate`
+therefore compares the rebuild with the committed file by content (a
+`.dump` of each) and keeps the committed bytes when the content is the
+same; a rebuild whose content differs still turns the gate red.
 
 Regenerate with `make research-index` after editing anything under
 `research/`. `.gitattributes` marks it binary so git does not attempt
@@ -398,6 +412,53 @@ HT214035, the PoC README, the SIG appearance and service numbers) and
 SIG member-UUID registry and what each candidate row still needs).
 Each states what it does not establish — chiefly, that no threshold in
 these rules has a cited basis.
+
+The RSSI distance data point (2026-10-26) cites its model in
+`research/papers/rssi-distance-estimation.md` — ITU-R P.1238-10 eq. (1)
+with its Table 2 coefficients and Table 4 shadow fading, P.1238-13's
+site-general fit, the Bluetooth TX Power Level AD type and the extended
+report's TX_Power, and two published measurements of how wrong RSSI
+ranging is indoors — with no `alert_kinds`, because no rule reads the
+estimate. See [[rf-distance]].
+
+The BLE Devices view's classes (2026-11-02) cite theirs in
+`research/bluetooth/ble-device-classes.md` — Celosia & Cunche 2020 and
+Martin et al. 2019 for the Apple Continuity types, the Eddystone
+specification, the SIG Appearance values and member-UUID assignments
+(Tile, CHIPOLO), Microsoft's MS-CDP beacon, Google Fast Pair, and the
+BLE spam tool's own Samsung packets — and say there why iBeacon,
+AltBeacon, Find My and SmartTag are left out. It has no `alert_kinds`:
+it backs slothweb's display classes (`web/src/web_bledev.c`), not a
+rule. See [[slothweb]].
+
+The GNSS observation layer's four detectors cite theirs (written ahead
+of the code on 2026-11-02), in `research/gnss/`:
+`spoofing-detection.md` (Psiaki & Humphreys 2016, Humphreys et al.
+2008, what a u-blox 7 lacks against the M8's `spoofDetState`),
+`jamming-detection.md` (DHS 2017, u-blox 7 MON-HW `jamInd` and what
+gpsd 3.27 passes through, FCC jammer enforcement, GPSJam's method),
+`time-and-position-integrity.md` (chrony `trust`/`maxchange`, the gpsd
+time HOWTO, the 2019 week rollover) and `attack-mapping.md` (Mobile
+T1464 for jamming; no technique for spoofing). The documents went in
+with their `alert_kinds` lines commented out, because the guard's first
+direction fails on a kind the enum lacks; the commit that added the four
+`X()` entries (2026-11-03, `src/alerts/rules_gnss.c`) uncommented them:
+`jamming-detection.md` cites `GNSS_JAMMING`, `spoofing-detection.md`
+`GNSS_SPOOF_SUSPECT`, `time-and-position-integrity.md` both jumps, and
+`attack-mapping.md` names the four in prose only. `GNSS_JAMMING` takes
+Mobile T1464 (owner ruling 2026-11-03) and the coverage guard holds it;
+the other three are on the cited-basis list in
+`test_uncitable_kinds_with_a_real_basis_are_still_cited`. See [[gnss]].
+
+`ADSB_EMERGENCY` (#186) cites `research/adsb/emergency-squawks.md`:
+SERA.13005 (EU 923/2012) for the meaning of 7500 / 7600 / 7700, readsb's
+`README-json.md` for the squawk and the DO-260B emergency/priority
+status as the decoder reports them, and Costin & Francillon (Black Hat
+USA 2012) and Schäfer, Lenders & Martinovic (ACNS 2013, the "False
+Alarm Attack") for why it is flag only. Each was read first-hand on
+2026-11-08; ICAO Doc 8168 / 4444, FAA AIM 4-1-20 and RTCA DO-260B were
+not, and the document says so. Empty technique, on the cited-basis
+list. See [[adsb]].
 
 ## What is not here yet
 - **Coverage.** 59 of 60 alert kinds have a document, and the sixtieth

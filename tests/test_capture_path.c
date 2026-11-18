@@ -7,6 +7,8 @@
 #include <pcap.h>            /* DLT_* — this binary links libpcap by design */
 #include <netinet/in.h>      /* IPPROTO_TCP */
 #include <net/if.h>          /* if_nametoindex: pin "lo" for the scope-poll case */
+#include <sys/stat.h>        /* mkdir: the fake /sys/class/net tree */
+#include <unistd.h>          /* rmdir */
 #include "runner.h"
 #include "sloth.h"
 #include "capture/capture.h"
@@ -28,11 +30,14 @@
 #include "dns_log.h"
 #include "captive_portal.h" /* a PTR name is not an address (#165) */
 #include "rf_quality.h"     /* bad-FCS policy pin (#123) */
+#include "rf_distance.h"    /* the 6 GHz distance case (2026-10-26) */
+#include "tune.h"
 #include "libver.h"         /* loaded-libpcap report (#142) */
 #include "capture/frame_edge.h" /* FRAME_CAPLEN_MAX (#141) */
 #include "http_log.h"       /* IP-layer cases reach the payload parsers (#132) */
 #include "kerb_snoop.h"
 #include "snmp_snoop.h"
+#include "probe_latency.h"   /* the monitor callback reaches it, with TSFT (#187 S3) */
 
 /* ── Real pcap_dispatch → on_packet path — issue #95 ─────────
  *
@@ -683,6 +688,146 @@ static void test_retarget_ignores_an_empty_name(void) {
     ASSERT_STR(g_s.probe_iface, "wlan1");
 }
 
+/* -- --monitor-iface: pin the monitor radio ----------------------
+ *
+ * Discovery takes the first type-803 netdev in readdir order; a second
+ * radio in monitor mode beside the sensor can win that. The pin opens
+ * exactly the named radio or nothing. Selection is driven over a fake
+ * /sys/class/net tree through probe_test_set_sysfs_net(), so no radio
+ * is needed; every name is one no host has, so the pcap_open_live()
+ * the selection leads to fails, and its "pcap(NAME)" error is what
+ * says which radio was chosen. MISSION section 2: nothing is opened. */
+
+static char g_fake_net[256];
+
+static void fake_netdev(const char *name, const char *type) {
+    char p[400];
+    snprintf(p, sizeof(p), "%s/%s", g_fake_net, name);
+    ASSERT_EQ(mkdir(p, 0700), 0);
+    if (!type) return;
+    snprintf(p, sizeof(p), "%s/%s/type", g_fake_net, name);
+    FILE *f = fopen(p, "w");
+    ASSERT(f != NULL);
+    if (f) { fprintf(f, "%s\n", type); fclose(f); }
+}
+
+/* The tree every case starts from: two radios in monitor mode and one
+ * Ethernet-typed netdev. */
+static void pin_setup(const char *pin) {
+    const char *tmp = getenv("TMPDIR");
+    snprintf(g_fake_net, sizeof(g_fake_net), "%s/sloth_pin_XXXXXX",
+             tmp && tmp[0] ? tmp : "/tmp");
+    ASSERT(mkdtemp(g_fake_net) != NULL);
+    fake_netdev("zzq_mon_a", "803");
+    fake_netdev("zzq_mon_b", "803");
+    fake_netdev("zzq_eth0", "1");
+    probe_test_set_sysfs_net(g_fake_net);
+    probe_set_monitor_pin(pin);
+    memset(&g_s, 0, sizeof(g_s));
+}
+
+static void pin_teardown(void) {
+    static const char *names[] = { "zzq_mon_a", "zzq_mon_b", "zzq_eth0",
+                                   "zzq_notype" };
+    char p[400];
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        snprintf(p, sizeof(p), "%s/%s/type", g_fake_net, names[i]);
+        (void)remove(p);
+        snprintf(p, sizeof(p), "%s/%s", g_fake_net, names[i]);
+        (void)rmdir(p);
+    }
+    (void)rmdir(g_fake_net);
+    probe_test_set_sysfs_net(NULL);
+    probe_set_monitor_pin(NULL);
+    probe_stop();
+}
+
+static void test_a_pinned_radio_is_chosen_over_any_other(void) {
+    /* Both radios are pinned in turn, so whichever readdir yields first,
+       one of the two would name the wrong radio if the pin were ignored
+       in favour of discovery. Seen to fail: with select_monitor_iface()
+       skipping the pin branch, one of the two comes back naming the
+       other radio. */
+    static const char *pins[] = { "zzq_mon_a", "zzq_mon_b" };
+    for (int i = 0; i < 2; i++) {
+        pin_setup(pins[i]);
+        ASSERT_STR(probe_monitor_pin(), pins[i]);
+        probe_open(&g_s);
+        char want[32];
+        snprintf(want, sizeof(want), "pcap(%s)", pins[i]);
+        ASSERT_EQ(strncmp(g_s.probe_err, want, strlen(want)), 0);
+        pin_teardown();
+    }
+}
+
+static void test_a_pinned_radio_not_in_monitor_mode_has_no_fallback(void) {
+    /* Two type-803 radios are present, so a fallback would have one to
+       open. Seen to fail: with the not-803 branch changed to fall
+       through to find_monitor_iface(), probe_err comes back
+       "pcap(zzq_mon_?): ..." and both assertions below go red. */
+    pin_setup("zzq_eth0");
+    probe_open(&g_s);
+    ASSERT_STR(g_s.probe_err,
+               "monitor iface zzq_eth0 is not in monitor mode (type 1)");
+    ASSERT(strstr(g_s.probe_err, "zzq_mon_") == NULL);
+    ASSERT_STR(g_s.probe_iface, "");
+    pin_teardown();
+}
+
+static void test_a_missing_pinned_radio_has_no_fallback(void) {
+    /* Seen to fail the same way: with the not-found branch falling
+       through to discovery, probe_err names a zzq_mon_ radio. */
+    pin_setup("zzq_gone");
+    probe_open(&g_s);
+    ASSERT_STR(g_s.probe_err, "monitor iface zzq_gone not found");
+    ASSERT(strstr(g_s.probe_err, "zzq_mon_") == NULL);
+    ASSERT_STR(g_s.probe_iface, "");
+    pin_teardown();
+}
+
+static void test_a_pinned_radio_with_no_type_is_refused(void) {
+    pin_setup("zzq_notype");
+    fake_netdev("zzq_notype", NULL);
+    probe_open(&g_s);
+    ASSERT_STR(g_s.probe_err, "monitor iface zzq_notype: type unreadable");
+    pin_teardown();
+}
+
+static void test_unpinned_discovery_is_unchanged(void) {
+    /* No pin: the first type-803 netdev, as before. The tree has two, so
+       either may come first; what is pinned is that one of them is
+       chosen and the Ethernet-typed netdev is not. */
+    pin_setup(NULL);
+    ASSERT_STR(probe_monitor_pin(), "");
+    probe_open(&g_s);
+    ASSERT_EQ(strncmp(g_s.probe_err, "pcap(zzq_mon_", 13), 0);
+    pin_teardown();
+
+    /* And with no radio in monitor mode, the discovery message. */
+    pin_setup(NULL);
+    probe_test_set_sysfs_net("/nonexistent/sloth_pin");
+    probe_open(&g_s);
+    ASSERT_STR(g_s.probe_err, "no monitor-mode iface found (need type 803)");
+    pin_teardown();
+}
+
+static void test_a_pinned_radio_refuses_a_retarget_elsewhere(void) {
+    pin_setup("zzq_mon_a");
+    snprintf(g_s.probe_iface, sizeof(g_s.probe_iface), "zzq_mon_a");
+    probe_set_iface(&g_s, NO_SUCH_IF);
+    ASSERT_STR(g_s.probe_err,
+               NO_SUCH_IF " refused: --monitor-iface pins zzq_mon_a");
+    ASSERT_STR(g_s.probe_iface, "zzq_mon_a");
+    pin_teardown();
+
+    /* Control: a retarget onto the pinned name itself is not refused by
+       the pin, so it reaches the open and fails there. */
+    pin_setup(NO_SUCH_IF);
+    probe_set_iface(&g_s, NO_SUCH_IF);
+    ASSERT_EQ(strncmp(g_s.probe_err, "pcap(", 5), 0);
+    pin_teardown();
+}
+
 /* ── Monitor dispatch seam — issue #92 ───────────────────────
  *
  * The 802.11 path had no test entry point at all: on_probe_frame() is
@@ -897,6 +1042,62 @@ static void test_a_short_assoc_response_records_the_grant(void) {
     assoc_clear();
 }
 
+/* The distance estimate takes the band from the radiotap frequency,
+ * not from the channel number (#149). 5975 MHz is 6 GHz channel 5; a
+ * bare 5 is 2.4 GHz (2432 MHz), so an estimate that inferred the band
+ * would land on the wrong radio, N and L(1 m). Probe request (client,
+ * assumed 15 dBm) and association response (AP, assumed 20 dBm), both
+ * at -50 dBm, N 3.0 (P.1238-10 has no 6 GHz row; the 5.2 GHz one):
+ *   L(1 m) = 20 log10 5975 - 28 = 47.527 dB
+ *   probe: 10 ^ ((15 + 50 - 47.527) / 30) = 3.82 m   (2.4 GHz: 7.99 m)
+ *   assoc: 10 ^ ((20 + 50 - 47.527) / 30) = 5.60 m
+ * Seen red with WIFI_BAND_UNKNOWN passed back at each rf_ctx_assumed()
+ * call in client_rssi_push() and assoc_observe(): radio 2.4 GHz. */
+static void test_a_6ghz_frame_is_estimated_at_its_own_frequency(void) {
+    tune_reset();
+    rf_calibration_reset();
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    assoc_clear();
+    uint8_t f[160];
+    fb_t b; fb_init(&b, f, sizeof f);
+    fb_rt_t rt; memset(&rt, 0, sizeof rt);
+    rt.has_channel = 1; rt.freq_mhz = 5975;
+    rt.has_signal = 1;  rt.dbm = -50;
+    fb_radiotap(&b, &rt);
+    static const uint8_t bc[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    fb_mgmt(&b, 4, 0, bc, SA_STA, bc, 0x0020, 0);    /* probe request */
+    fb_ssid(&b, "six-ghz-net");
+    ASSERT(fb_ok(&b));
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { b.len };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    probe_snapshot(&g_s);
+    ASSERT_EQ(g_s.probe_count, 1);
+    const probe_client_t *pc = &g_s.probe_clients[0];
+    ASSERT_EQ(pc->channel, 5);
+    ASSERT_EQ(pc->dist.valid, 1);
+    ASSERT_EQ(pc->dist.radio, RF_RADIO_WIFI_6G);
+    ASSERT_EQ(pc->dist.est_dm, 38);
+
+    uint8_t g[64];
+    fb_init(&b, g, sizeof g);
+    fb_radiotap(&b, &rt);
+    fb_mgmt(&b, 1, 0, SA_STA, SA_BSSID, SA_BSSID, 0x0010, 0);
+    fb_assoc_resp_fixed(&b, 0x0411, 0 /* success */, 0xc001);
+    ASSERT(fb_ok(&b));
+    const uint8_t *gs[1] = { g };
+    int gl[1] = { b.len };
+    ASSERT_EQ(probe_test_dispatch(&g_s, gs, gl, NULL, NULL, 1), 1);
+    assoc_snapshot(&g_s);
+    ASSERT_EQ(g_s.assoc_count, 1);
+    ASSERT_EQ(g_s.assocs[0].dist.valid, 1);
+    ASSERT_EQ(g_s.assocs[0].dist.radio, RF_RADIO_WIFI_6G);
+    ASSERT_EQ(g_s.assocs[0].dist.est_dm, 56);
+    assoc_clear();
+    probe_clear();
+}
+
 /* #126: the (re)association / probe-response SSID walk in
  * on_probe_frame() runs on the shared iterator. A response whose first
  * element (Supported Rates) claims 8 octets with 1 present is a stop
@@ -1061,6 +1262,63 @@ static void test_fcs_is_stripped_before_the_frame_is_recorded(void) {
     mon_frame_snapshot(&g_s);
     ASSERT_EQ((int)g_s.mon_frames[0].len, mpdu);
     probe_pnl_clear();
+}
+
+/* ── Probe-response latency through the real callback (#187 S3) ──
+ *
+ * A Probe Request (§9.3.3.10) and the Probe Response (§9.3.3.11) to it,
+ * each behind a radiotap header with CHANNEL and TSFT. The test
+ * savefile stamps record i at i * 1000 µs inside one second
+ * (capture_test_savefile()), so the pcap clock says 1000 µs and a figure
+ * of 2345 µs can only have come from radiotap. Without TSFT the same
+ * pair reads the pcap 1000 µs. Seen red with on_probe_frame() passing
+ * has_tsft = 0 (2345 became 1000, src PCAP). */
+static int plat_frame(uint8_t *f, int cap, int sub, uint64_t tsft) {
+    static const uint8_t sta[6] = { 0x02, 0x00, 0x5e, 0x51, 0x00, 0x01 };
+    static const uint8_t ap[6]  = { 0x02, 0x00, 0x5e, 0x51, 0x00, 0x02 };
+    static const uint8_t bc[6]  = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    fb_t b; fb_init(&b, f, cap);
+    fb_rt_t rt; memset(&rt, 0, sizeof rt);
+    rt.has_channel = 1; rt.freq_mhz = 2437;
+    rt.has_tsft = tsft != 0; rt.tsft_us = tsft;
+    fb_radiotap(&b, &rt);
+    if (sub == 4) {
+        fb_mgmt(&b, 4, 0, bc, sta, bc, 0x0100, 0);
+    } else {
+        fb_mgmt(&b, 5, 0, sta, ap, ap, 0x0200, 0);
+        fb_beacon_fixed(&b, 0, 100, 0x0001);
+    }
+    fb_ssid(&b, "plat-net");
+    ASSERT(fb_ok(&b));
+    return b.len;
+}
+
+static void test_probe_latency_reads_radiotap_tsft(void) {
+    static const uint8_t ap[6] = { 0x02, 0x00, 0x5e, 0x51, 0x00, 0x02 };
+    uint8_t q[96], r[96];
+    const uint8_t *fs[2] = { q, r };
+    int ls[2];
+    uint32_t ts[2] = { 1700000000u, 1700000000u };
+    probe_latency_row_t row;
+
+    probe_latency_reset();
+    ls[0] = plat_frame(q, (int)sizeof q, 4, 9000000);
+    ls[1] = plat_frame(r, (int)sizeof r, 5, 9002345);
+    memset(&g_s, 0, sizeof(g_s)); probe_clear();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 2), 2);
+    ASSERT_EQ(probe_latency_get(ap, &row), 1);
+    ASSERT_EQ(row.src, PLAT_SRC_TSFT);
+    ASSERT_EQ((int)row.kind[PLAT_KIND_DIRECTED].med_us, 2345);
+
+    probe_latency_reset();
+    ls[0] = plat_frame(q, (int)sizeof q, 4, 0);
+    ls[1] = plat_frame(r, (int)sizeof r, 5, 0);
+    memset(&g_s, 0, sizeof(g_s)); probe_clear();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 2), 2);
+    ASSERT_EQ(probe_latency_get(ap, &row), 1);
+    ASSERT_EQ(row.src, PLAT_SRC_PCAP);
+    ASSERT_EQ((int)row.kind[PLAT_KIND_DIRECTED].med_us, 1000);
+    probe_latency_reset();
 }
 
 /* ── DATAPAD on the IP side (#122) ───────────────────────────
@@ -1486,10 +1744,13 @@ static void evidence_setup(void);   /* with the #92 evidence cases below */
 static void test_bad_fcs_frames_still_feed_rf_quality_and_evidence(void) {
     /* Policy pinned, not changed. A frame the driver marked FCS-failed
        is untrustworthy content but real evidence about the channel, so
-       it still reaches rf_quality_observe() and the evidence ring. It
-       is also still parsed: whether a bad-FCS frame should feed the
-       per-type parsers at all is a deferred decision (#123), and this
-       test does not claim one either way. */
+       it still reaches rf_quality_observe() and the evidence ring.
+       Whether it should also feed a per-type content parser was a
+       deferred decision (#123); #178 answered no (see
+       test_bad_fcs_beacon_does_not_reach_beacon_table below), so this
+       probe request is not expected to reach probe_pnl/record_probe
+       either — it just is not asserted here, because this test's own
+       claim is the evidence-side behaviour, not the content side. */
     evidence_setup();
     rf_quality_clear();
     uint8_t f[160];
@@ -1515,6 +1776,48 @@ static void test_bad_fcs_frames_still_feed_rf_quality_and_evidence(void) {
     ASSERT_EQ(rf_quality_badfcs_pct(6, WIFI_BAND_2GHZ, (time_t)1600000000), 100);
     rf_quality_clear();
     evidence_ring_shutdown();
+}
+
+static void test_bad_fcs_beacon_does_not_reach_beacon_table(void) {
+    /* #178: a beacon radiotap marked FCS-failed must not reach
+       beacon_parse_frame(). A bit error in a weak frame can read as a
+       plausible SSID and get recorded as one the AP actually sent —
+       observed on the reference host as several short, mostly
+       non-printable "SSIDs" on one BSSID, heaviest on the weakest
+       signal, all sharing one last_seen. #123 priced this exact
+       question ("whether a bad-FCS frame should feed the per-type
+       parsers at all") and deferred it on purpose; this is where it is
+       answered.
+
+       Mutation-proved: removing the `fr.bad_fcs` early return in
+       on_probe_frame() (src/capture/probe.c) reddens the first half of
+       this test (the AP gets recorded, the counter stays put); the
+       inverse edit restores green. */
+    uint8_t f[160];
+    int fl = 0;
+    int n = rt_beacon(f, sizeof f, RT_F_FCS | RT_F_BADFCS, &fl);
+    ASSERT_GT(n, 0);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); beacon_clear();
+    uint64_t pf0 = sh_parse_fault_count(SH_PF_FCS_FAILED);
+    uint64_t m0  = mon_before();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    ASSERT(rt_find_ap() == NULL);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_FCS_FAILED) - pf0), 1);
+    /* Still evidence: the frame is counted before the content gate. */
+    ASSERT_EQ(mon_delta(m0), 1);
+
+    /* Control: same octets, BADFCS cleared — must parse normally. Without
+       this half, "not recorded" above could mean the beacon builder
+       produced a frame nothing can parse, bad-FCS or not. */
+    f[fl] = RT_F_FCS;
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); beacon_clear();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    const beacon_ap_t *ap = rt_find_ap();
+    ASSERT(ap != NULL);
+    if (ap) ASSERT_STR(ap->ssid, "rt-test-net");
 }
 
 static void test_monitor_seam_rejects_frames_below_the_guards(void) {
@@ -3556,6 +3859,59 @@ static int i165_v4_dns_resp(uint8_t *f, int cap, const uint8_t *msg, int n) {
     return fb_ok(&b) ? b.len : -1;
 }
 
+/* #169: a kit's portal page reaches the captive-portal ring through the
+ * real capture path, with its responder. fluxion's default lighttpd
+ * answer (research/tools/captive-portal-kits.md): RFC 9112 status line
+ * and fields, carried in one TCP segment from port 80 (RFC 9293 §3.1).
+ * The plain 302 is the control — the same path, no kit — and its
+ * zero count was seen red with capture.c's `if (kit)` made `if (1)`. */
+static const char I169_FLUXION[] =
+    "HTTP/1.1 307 Temporary Redirect\r\n"
+    "Location: http://captive.gateway.lan/\r\n"
+    "Content-Length: 0\r\n"
+    "\r\n";
+static const char I169_PLAIN[] =
+    "HTTP/1.1 302 Found\r\n"
+    "Location: http://login.hotel.example/\r\n"
+    "Content-Length: 0\r\n"
+    "\r\n";
+
+static int i169_v4_http_resp(uint8_t *f, int cap, const char *msg) {
+    const int n = (int)strlen(msg);
+    fb_t b; fb_init(&b, f, cap);
+    fb_eth(&b, I132_MAC_A, I132_MAC_B, 0x0800);
+    i132_ipv4(&b, 20 + 20 + n, 0, 6);
+    i132_tcp(&b, 80, 51000, 0, msg, n);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static void test_kit_page_reaches_the_portal_ring(void) {
+    uint8_t f[256];
+    int n = i169_v4_http_resp(f, sizeof f, I169_PLAIN);
+    ASSERT(n > 0);
+    cp_clear();
+    http_log_clear();
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_http_records(), 1);
+    ASSERT_EQ(cp_event_count(), 0);                /* control */
+
+    n = i169_v4_http_resp(f, sizeof f, I169_FLUXION);
+    ASSERT(n > 0);
+    cp_clear();
+    http_log_clear();
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(cp_event_count(), 1);
+    cp_snapshot(&g_s);
+    ASSERT_EQ(g_s.cp_events[0].kind, CP_KIND_KIT);
+    ASSERT_EQ(g_s.cp_events[0].kit, CP_KIT_FLUXION);
+    ASSERT_STR(g_s.cp_events[0].server, "192.168.1.10");
+    ASSERT_EQ(g_s.cp_events[0].server_port, 80);
+    ASSERT_STR(g_s.cp_events[0].src, "192.168.1.1");
+    ASSERT_STR(g_s.cp_events[0].evidence, "fluxion redirect");
+    cp_clear();
+    http_log_clear();
+}
+
 static void test_ptr_name_is_not_a_captive_portal_address(void) {
     uint8_t f[256];
     int n = i165_v4_dns_resp(f, sizeof f, I165_A_RESP, (int)sizeof I165_A_RESP);
@@ -3605,17 +3961,27 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_no_allow_list_admits_any_ifindex);
     RUN_TEST(test_scope_poll_reads_a_dead_worker_as_no_capture);
 
+    TEST_SUITE("capture path: --monitor-iface pins the radio");
+    RUN_TEST(test_a_pinned_radio_is_chosen_over_any_other);
+    RUN_TEST(test_a_pinned_radio_not_in_monitor_mode_has_no_fallback);
+    RUN_TEST(test_a_missing_pinned_radio_has_no_fallback);
+    RUN_TEST(test_a_pinned_radio_with_no_type_is_refused);
+    RUN_TEST(test_unpinned_discovery_is_unchanged);
+    RUN_TEST(test_a_pinned_radio_refuses_a_retarget_elsewhere);
+
     TEST_SUITE("monitor dispatch seam: real on_probe_frame (#92)");
     RUN_TEST(test_monitor_seam_admits_a_wellformed_frame);
     RUN_TEST(test_monitor_seam_counts_each_admitted_frame);
     RUN_TEST(test_probe_response_wsc_reaches_the_beacon_table);
     RUN_TEST(test_probe_request_pnl_survives_the_htc_bit);
     RUN_TEST(test_a_short_assoc_response_records_the_grant);
+    RUN_TEST(test_a_6ghz_frame_is_estimated_at_its_own_frequency);
     RUN_TEST(test_assoc_response_element_overrun_is_tallied);
     RUN_TEST(test_probe_request_element_overrun_is_tallied_per_walk);
     RUN_TEST(test_probe_request_ssid_33_is_clamped_to_32);
     RUN_TEST(test_assoc_response_ssid_33_is_clamped_to_32);
     RUN_TEST(test_fcs_is_stripped_before_the_frame_is_recorded);
+    RUN_TEST(test_probe_latency_reads_radiotap_tsft);
     RUN_TEST(test_radiotap_datapad_frame_reaches_the_ip_decoder);
     RUN_TEST(test_an_fcs_beacon_walks_no_phantom_element);
     RUN_TEST(test_a_datapad_eapol_m1_reaches_the_collector);
@@ -3625,6 +3991,7 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_a_caplen_above_origlen_is_refused_before_decode);
     RUN_TEST(test_a_caplen_past_the_snaplen_is_refused_at_both_edges);
     RUN_TEST(test_bad_fcs_frames_still_feed_rf_quality_and_evidence);
+    RUN_TEST(test_bad_fcs_beacon_does_not_reach_beacon_table);
     RUN_TEST(test_monitor_seam_rejects_frames_below_the_guards);
     RUN_TEST(test_monitor_seam_mixes_admitted_and_rejected);
     RUN_TEST(test_monitor_seam_carries_per_frame_timestamps);
@@ -3697,6 +4064,7 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_ipv4_zero_total_length_is_read_as_unstated);
     RUN_TEST(test_tcp_data_offset_is_honoured_once);
     RUN_TEST(test_ptr_name_is_not_a_captive_portal_address);
+    RUN_TEST(test_kit_page_reaches_the_portal_ring);
     RUN_TEST(test_ipv6_hop_by_hop_is_walked_to_udp);
     RUN_TEST(test_ipv6_routing_then_destination_options_are_walked);
     RUN_TEST(test_ipv6_ah_length_is_in_four_octet_units);

@@ -1,0 +1,16 @@
+/* Identity across the sites (fleetid.js, web_fleetid.h, #192 I2-I4, I8).
+ * Colours are the palette's tokens, so the light theme follows: a finding
+ * that applies in --sev-warn, one that does not in --muted. */
+.fid-row { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(150px, 1.2fr) minmax(240px, 2.4fr) minmax(150px, 1.2fr); gap: 0 8px; font-size: 12px; padding: 3px 0 3px 4px; border-bottom: 1px dotted var(--rule); min-width: 680px; }
+.fid-row.dhead { opacity: 0.7; }
+.fid-row.dim { opacity: 0.7; }
+.fid-row .fid-class { cursor: help; }
+.fid-leg { overflow-wrap: anywhere; }
+.fid-leg .fid-who { opacity: 0.7; }
+.fid-link { font: inherit; text-transform: none; letter-spacing: normal; color: var(--data); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; overflow-wrap: anywhere; }
+.fid-link:hover { color: var(--hover); }
+.fid-key { overflow-wrap: anywhere; }
+.fid-on { color: var(--sev-warn); cursor: help; }
+.fid-off { color: var(--muted); cursor: help; }
+.fid-ver { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(300px, 3fr); gap: 0 8px; font-size: 12px; padding: 3px 0 3px 4px; border-bottom: 1px dotted var(--rule); min-width: 480px; }
+.fid-ver.dhead { opacity: 0.7; }

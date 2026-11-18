@@ -17,6 +17,7 @@
 #include "sloth_clock.h"
 #include "tui.h"
 #include "views/ble.h"
+#include "tmp_dir.h"
 
 /*
  * BLE address-rotation hints — #156 item 2 (src/ble_rotation.h,
@@ -1296,10 +1297,10 @@ static void test_view_states_the_estimate_and_never_a_link(void) {
 
 /* ── Off means off ───────────────────────────────────────────────── */
 
-static char g_tmp[64];
+static char g_tmp[TEST_TMP_MAX];
 
 static void jsonl_fresh(void) {
-    snprintf(g_tmp, sizeof(g_tmp), "/tmp/sloth_blerot_XXXXXX");
+    snprintf(g_tmp, sizeof(g_tmp), "%s/sloth_blerot_XXXXXX", test_tmpdir());
     int fd = mkstemp(g_tmp);
     if (fd >= 0) close(fd);
     jsonl_close();

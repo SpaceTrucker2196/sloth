@@ -21,14 +21,20 @@ top=$(pwd)
 [ -f "$top/web/README.md" ] || { echo "quickstart_check: run from the top of the tree" >&2; exit 2; }
 command -v curl >/dev/null || { echo "quickstart_check: needs curl" >&2; exit 2; }
 
-base=$(mktemp -d "${TMPDIR:-/tmp}/slothweb-qs.XXXXXX")
+# Absolute, so the run below (which cds into it) works under a relative
+# TMPDIR too.
+base=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/slothweb-qs.XXXXXX")" && pwd)
 pids=""
 cleanup() {
     for p in $pids; do kill "$p" 2>/dev/null || true; done
     sleep 0.3
     rm -rf "$base"
 }
-trap cleanup EXIT INT TERM
+# An interrupt exits, which runs cleanup once through EXIT, rather than
+# carrying on against a removed tree.
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # The tree as git sees it, on disk now: tracked files with their
 # uncommitted edits, and new files git does not ignore. Nothing built.
@@ -87,7 +93,7 @@ if [ $ok -ne 1 ]; then
 fi
 page=$(curl -s -m 2 "http://127.0.0.1:$port/")
 case "$page" in
-*'<title>slothweb</title>'*) ;;
+*'<title>sloth mesh</title>'*) ;;
 *) echo "quickstart_check: / is not the page" >&2; exit 1 ;;
 esac
 flows=$(curl -s -m 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/api/flows/graph")

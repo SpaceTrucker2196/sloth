@@ -10,6 +10,7 @@
  * the type. */
 #include "reg_ie.h"
 #include "reg_6g.h"   /* beacon_ap_t embeds reg_6g_t too (#101 slice B) */
+#include "rf_track.h" /* the distance data point rows embed (2026-10-26) */
 
 /* The view and alert-type lists, each generated from its own .def
  * (#117). Re-included here so every file that took view_t or
@@ -18,7 +19,41 @@
 #include "sloth_view.h"
 #include "sloth_alert.h"
 
-#define SLOTH_VERSION "1.8.5"
+#define SLOTH_VERSION "1.8.7"
+
+/* The JSONL record stream's own contract version, reported as
+ * `jsonl_version` on every `sensor_health` line (ADR 0007, #185 item 3).
+ * Kept apart from SLOTH_VERSION deliberately: that one is this tree's
+ * semantic version, this one is what a consumer codes against, and they
+ * move for different reasons — a release that changes no record leaves
+ * this alone, and a record change between releases does not wait for a
+ * tag.
+ *
+ * MAJOR.MINOR.PATCH. The bump rule, in prose and with the reasoning, is
+ * docs/wiki/jsonl-schema.md "Versioning":
+ *   MINOR  a record type or a field was added, or an optional field
+ *          became present in a case where it was absent before —
+ *          additive, which is the only kind of change MISSION.md §4
+ *          item 3 permits here;
+ *   PATCH  an emitted value was corrected with no field added, renamed
+ *          or removed;
+ *   MAJOR  anything non-additive. That is an external-contract break,
+ *          so it is a stop-and-ask (agents/dark-factory.md §4.3) and
+ *          never a slice's own call; tests/test_jsonl.c pins the MAJOR
+ *          so a bump has to argue with a test.
+ *
+ * 2.0.0 (#216, owner sign-off 2026-11-15, ADR 0010) is the one MAJOR so
+ * far: the sensor became two daemons, and the decoders' records, their
+ * sensor_health blocks and source_status rows, the gnss_* records and
+ * ADSB_EMERGENCY / GNSS_* left sloth-wifi's stream for sloth-rf's. Both
+ * daemons report this one value. The table of what moved is
+ * docs/wiki/jsonl-schema.md "1.x to 2.0.0".
+ *
+ * 1.0.0 is where the DECLARED contract starts, not a claim about the
+ * stream's history — the records predate the field by many releases. A
+ * `sensor_health` line with no `jsonl_version` is from a stream written
+ * before this version and says nothing more than that. */
+#define SLOTH_JSONL_VERSION "2.4.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
@@ -357,15 +392,27 @@ typedef struct {
  * the SSH handshake. SSH brute-force tools (hydra, medusa, ncrack)
  * open many connections per second; legitimate users open one and
  * stay connected. Tier 1 counts banners observed per (src_ip,
- * dst_ip) and fires SSH_BRUTE_FORCE when the count crosses the
- * threshold — without ever decrypting anything, because brute-force
- * is a TCP-shape signal, not a payload signal. */
+ * dst_ip); SSH_BRUTE_FORCE fires on `brute_count` — banners inside
+ * the sliding ssh.brute_window_s seconds, kept current by
+ * ssh_snoop.c's private flood_window_t ring — not on banner_count's
+ * lifetime total (#202: a lifetime count never decays, so a handful
+ * of ordinary reconnects over weeks eventually reads as a standing
+ * brute force that eviction is the only thing that ever clears). The
+ * ring itself stays private to ssh_snoop.c rather than living here:
+ * sloth_state_t is already multiple megabytes and is copied by value
+ * in several places, so this struct holds the one int the rule
+ * needs, not the 272-byte ring that produced it. banner_count stays
+ * a lifetime tally for operator context — "how much SSH has this
+ * pair ever done" — but no rule reads it. Never decrypts anything
+ * either way: brute-force is a TCP-shape signal, not a payload
+ * signal. */
 #define MAX_SSH_FLOWS 64
 
 typedef struct {
     char     src_ip[46];           /* client (initiator of TCP) */
     char     dst_ip[46];           /* server (the SSHd target)  */
-    int      banner_count;         /* TCP flows that reached banner */
+    int      banner_count;         /* lifetime; informational only */
+    int      brute_count;          /* banners inside ssh.brute_window_s (#202) */
     char     server_banner[80];    /* last banner string seen   */
     time_t   first_seen;
     time_t   last_seen;
@@ -383,8 +430,12 @@ typedef struct {
  * Tier 1 counts X.224 CR TPDUs per (client_ip, server_ip), keeps
  * the latest mstshash cookie value (the username the attacker is
  * guessing against), and bitmasks the requested protocols. That's
- * enough for the brute-force alert which catches xfreerdp-loop /
- * NLBrute / Crowbar without seeing the encrypted auth. */
+ * enough for the brute-force alert, which catches xfreerdp-loop /
+ * NLBrute / Crowbar off `brute_count` — CRs inside the sliding
+ * rdp.brute_window_s seconds, same mechanism and same reason as
+ * ssh_flow_t's brute_count above — not off connect_req_count's
+ * lifetime total (#202). connect_req_count remains a lifetime tally
+ * for operator context; no rule reads it. */
 #define MAX_RDP_FLOWS 64
 
 #define RDP_PROTO_RDP        0x01u   /* vanilla legacy RDP   */
@@ -395,7 +446,8 @@ typedef struct {
 typedef struct {
     char     src_ip[46];           /* client (TCP initiator) */
     char     dst_ip[46];           /* server (the RDP target) */
-    int      connect_req_count;    /* X.224 CR TPDUs observed */
+    int      connect_req_count;    /* lifetime; informational only */
+    int      brute_count;          /* CRs inside rdp.brute_window_s (#202) */
     char     last_cookie[64];      /* last mstshash username seen */
     uint8_t  proto_mask;           /* OR of RDP_PROTO_* observed  */
     time_t   first_seen;
@@ -417,7 +469,15 @@ typedef struct {
  * Set requests are tracked separately because they're rare in
  * monitoring traffic — almost every legitimate SNMP query is a
  * Get/GetNext/GetBulk. A Set with a guessed community is the
- * post-exploitation config-rewrite step. */
+ * post-exploitation config-rewrite step.
+ *
+ * SNMP_COMMUNITY_BRUTE fires on `brute_count` — community guesses not
+ * already in communities[] (past a full set, once per change of
+ * string) inside the sliding snmp.brute_window_s seconds, kept current by
+ * snmp_snoop.c's private flood_window_t ring — not on community_count's
+ * lifetime total (#203, the same bug as #202: a lifetime count never
+ * decays, so the rule re-fired every tick until eviction or restart).
+ * community_count stays as operator context; no rule reads it. */
 #define MAX_SNMP_FLOWS         48
 #define MAX_SNMP_COMMUNITIES    8
 #define SNMP_COMMUNITY_LEN     32
@@ -432,7 +492,8 @@ typedef struct {
     int      response_count;       /* GetResponse              */
     int      trap_count;           /* Trap (v1) / SNMPv2-Trap  */
     int      version;              /* 0=v1, 1=v2c, 3=v3        */
-    int      community_count;      /* unique communities seen  */
+    int      community_count;      /* lifetime unique; informational */
+    int      brute_count;          /* new communities in snmp.brute_window_s (#203) */
     char     communities[MAX_SNMP_COMMUNITIES][SNMP_COMMUNITY_LEN];
     char     last_community[SNMP_COMMUNITY_LEN];
     time_t   first_seen;
@@ -456,7 +517,13 @@ typedef struct {
  *   - CONNACK reason codes — code 4 in v3 / 0x86 in v5 = bad
  *     credentials. A high failure count is the explicit signal,
  *     even quieter than the connect-count threshold.
- *   - Protocol-level (3 / 4 / 5) for asset inventory. */
+ *   - Protocol-level (3 / 4 / 5) for asset inventory.
+ *
+ * MQTT_BROKER_BRUTE fires on `brute_connects` / `brute_fails` — CONNECTs
+ * and refused CONNACKs inside the sliding mqtt.brute_window_s seconds,
+ * each from its own private ring in mqtt_snoop.c — not on the lifetime
+ * connect_count / connack_fail_count, which never decay (#203, same bug
+ * as #202). The lifetime counts stay as operator context. */
 #define MAX_MQTT_FLOWS   32
 #define MQTT_USERNAME_LEN 32
 
@@ -465,6 +532,8 @@ typedef struct {
     char     dst_ip[46];           /* MQTT broker                    */
     int      connect_count;        /* CONNECT packets observed       */
     int      connack_fail_count;   /* bad-auth CONNACK responses     */
+    int      brute_connects;       /* CONNECTs in mqtt.brute_window_s (#203) */
+    int      brute_fails;          /* refused CONNACKs in the window (#203)  */
     int      subscribe_count;      /* SUBSCRIBE packets              */
     int      publish_count;        /* PUBLISH packets                */
     int      proto_level;          /* last seen: 3 / 4 / 5           */
@@ -752,13 +821,19 @@ typedef enum {
 /* ── Device risk signals (roadmap #16 phase 4) ─────
  * A bitmask of signals contributing to a device's risk bucket.
  * Each signal is either "observed / not observed"; the score is
- * derived from a weighted sum in device_risk_score(). */
+ * derived in device_risk_score(), where the four anonymity signals
+ * count once between them (#191). */
 #define DEV_RISK_RANDOM_MAC      (1 << 0)  /* locally-administered MAC */
 #define DEV_RISK_UNKNOWN_VENDOR  (1 << 1)  /* OUI not in the embedded table */
 #define DEV_RISK_NO_HOSTNAME     (1 << 2)  /* no DHCP/mDNS/NBNS resolution */
 #define DEV_RISK_PROBE_ONLY      (1 << 3)  /* probe frames, no association */
 #define DEV_RISK_CLEARTEXT_CRED  (1 << 4)  /* cred exposure attributed to us */
 #define DEV_RISK_ALERT_TAGGED    (1 << 5)  /* an alert's match_ip == our ip */
+/* Not a risk and worth no points: one of the host's own interfaces or a
+ * rostered device. Recorded in place of the anonymity signals. */
+#define DEV_RISK_SELF            (1 << 6)
+#define DEV_RISK_ANON_MASK       (DEV_RISK_RANDOM_MAC | DEV_RISK_UNKNOWN_VENDOR \
+                                  | DEV_RISK_NO_HOSTNAME | DEV_RISK_PROBE_ONLY)
 
 typedef enum {
     DEV_RISK_LOW  = 0,
@@ -807,6 +882,9 @@ typedef struct {
     int     cam_conflict;
     char    dhcp_prl[96];
     char    dhcp_vci[64];
+    /* Copied from the beacon or probe row signal_dbm came from, the same
+     * last-writer rule; invalid for a record with no monitor-mode row. */
+    rf_track_t dist;
 } device_t;
 
 /* Human-readable bucket name for the alerts view / JSONL. */
@@ -888,6 +966,30 @@ typedef enum {
 /* alert_type_t, ALERT_TYPE_COUNT, alert_technique() and alert_type_name()
  * live in sloth_alert.h, generated from sloth_alerts.def (#117). */
 
+/* ── Location stamp (2026-10-27, --location / --gps) ──────────
+ * Where the sensor was when a finding was made, as the sensor knew
+ * it: a fixed --location, or the newest GPS fix younger than
+ * gps.max_fix_age_s. src is LOC_SRC_NONE when nothing was known, and
+ * every consumer (JSONL, the --db alerts row, the manifest line, the
+ * views) then writes nothing — absence, not a zero at Null Island.
+ * WGS84 decimal degrees; alt_m above mean sea level; acc_m an
+ * ESTIMATE of horizontal error (HDOP x 5 m for NMEA, gpsd's eph where
+ * it gives one), never a guarantee. ts is the fix's wall time, or the
+ * stamp time for a fixed sensor. Plain fields, no module header:
+ * sloth.h is the shared header. src/gps.h owns the arbitration. */
+typedef enum { LOC_SRC_NONE = 0, LOC_SRC_FIXED, LOC_SRC_GPS } loc_src_t;
+
+typedef struct loc_stamp {
+    uint8_t src;        /* loc_src_t */
+    uint8_t has_alt;
+    uint8_t has_acc;
+    double  lat, lon;
+    double  alt_m;
+    double  acc_m;
+    time_t  ts;         /* GPS: wall time the position was received (not
+                         * the receiver's UTC); fixed: the stamp time */
+} loc_stamp_t;
+
 typedef struct {
     alert_type_t type;
     alert_sev_t  sev;
@@ -898,7 +1000,10 @@ typedef struct {
                                            * rule ticks, not incidents. Kept
                                            * because the TUI, the --db `alerts`
                                            * table and JSONL consumers read it. */
-    time_t       first_seen;              /* == first_detected */
+    /* The *finding's* first sighting: the key's earliest incident the
+     * engine's side table remembers (#112, every reopen since #170).
+     * The incident's own start is first_detected. */
+    time_t       first_seen;
     time_t       last_seen;               /* == last_evaluated */
     /* Optional pcap export criteria — set by rules that have a concrete
      * (ip[, port]) the alert is *about*. Empty for rules where the alert
@@ -1023,6 +1128,19 @@ typedef struct {
     char         sig_evidence[160];
     uint8_t      sig_validated;    /* 1 only for a capture-backed row */
 
+    /* Attack-hardware verdict (#151, src/attack_hw.h): hw_tier_t,
+     * sloth_tool_id_t and HW_SIG_* bits, rendered to the JSONL
+     * `hw_verdict` / `hw_signals` strings by hw_verdict_format() at
+     * emit time. Bytes, not strings, and in what was padding after
+     * sig_validated: sloth_state_t sits a few hundred bytes under the
+     * point where tests that return it by value overflow an 8 MB stack
+     * (72 bytes of strings x MAX_ALERTS crossed it). hw_tier 0 = no
+     * verdict, and both fields are then omitted. KARMA_AP is the only
+     * producer. Descriptive only: never moves sev or confidence. */
+    uint8_t      hw_tier;
+    uint8_t      hw_device;
+    uint8_t      hw_signals;
+
     /* ── Incident lifecycle (#98) ────────────────────────────
      * One *incident* is one continuous run of a dedup key: it opens on
      * the first fire, carries an `incident_id` through every
@@ -1053,6 +1171,13 @@ typedef struct {
      * bounded, so a key quiet for long enough under pressure starts
      * again at 0. */
     uint32_t     reopen_count;
+    /* Where the sensor was when this incident opened (2026-10-27):
+     * stamped once in fire_inv()'s new-incident branch from
+     * gps_location_current() and never refreshed, because the stamp is
+     * where the finding was MADE; a reopen is a new incident and gets a
+     * new stamp. src LOC_SRC_NONE on every rule when neither --location
+     * nor a fresh --gps fix exists, and the exports then omit it. */
+    loc_stamp_t  loc;
 } alert_t;
 
 /* ── ICMP log ───────────────────────────────────────────── */
@@ -1561,6 +1686,10 @@ typedef struct {
      * pick one and stick to it; pineapple-style rogue APs spoof
      * many SSIDs from a single radio (>=3 = strong KARMA signal). */
 #define MAX_AP_SSID_HISTORY 8
+/* beacon_ap_t.arrival (#188). */
+#define BEACON_ARRIVAL_NEW     0   /* not heard under this name before */
+#define BEACON_ARRIVAL_RETURN  1   /* dropped earlier under this name; back */
+#define BEACON_ARRIVAL_UNSURE  2   /* the memory cannot say (it overflowed) */
     char     ssid_history[MAX_AP_SSID_HISTORY][33];
     /* Per-SSID IE fingerprint (enc/cipher/akm/mfp + vendor-IE hash) at the
      * time each SSID was first seen. A legit multi-VAP AP varies these
@@ -1576,6 +1705,25 @@ typedef struct {
      * somewhere else must not rewrite where it came from. 0 = unknown
      * (an entry created with no channel). */
     int      first_seen_channel;
+    /* Is this entry's name on this address new to the session (#188)?
+     * first_seen is when the table first heard the BSSID since it last
+     * dropped it, by age (BEACON_AGE_SECS) or for room, so on its own
+     * it cannot tell an AP that came back from one that arrived. The
+     * table keeps a memory of what it has dropped
+     * (src/beacon_snoop.c, "BSSIDs the table has forgotten") and stamps
+     * the answer here when the entry is created and whenever it takes
+     * another SSID. Only twin_pair_late_arrival() reads it. first_seen
+     * itself is left alone: the observation floors of
+     * COUNTRY_ABSENT, TPC_ABSENT and WPA_DOWNGRADE and the DFS-masking
+     * CSA test all read it as "this entry has been watched since", and
+     * an entry that was dropped has been rebuilt from nothing.
+     * 0 is BEACON_ARRIVAL_NEW so a hand-built entry is an arrival.
+     * Sits in what was padding: sloth_state_t does not grow. */
+    uint8_t  arrival;
+    /* First heard while the new-BSSID rate was at a beacon flood
+     * (#194): the table does not remember it when it drops it, so a
+     * flood cannot fill the memory above. Padding, like `arrival`. */
+    uint8_t  flood_born;
     time_t   last_seen;
     int      frame_count;
     /* Evil-twin fingerprint surface. Populated incrementally:
@@ -1650,6 +1798,9 @@ typedef struct {
     uint64_t ev_ids[BEACON_EVIDENCE_IDS];
     uint8_t  ev_n, ev_head;
     uint64_t ssid_history_ev[MAX_AP_SSID_HISTORY];
+    /* Distance from signal strength, a data point (src/rf_distance.h):
+     * an estimate, never a location, and no rule reads it. */
+    rf_track_t dist;
 } beacon_ap_t;
 
 /* True when `ap` names `bssid` in its 802.11k Neighbor Report list. */
@@ -1691,6 +1842,8 @@ typedef struct {
     uint8_t  attack_in_progress;     /* set when chain rule tainted twin BSSID */
     uint8_t  attacker_oui;           /* twin OUI in Hak5 / Espressif tables */
     uint8_t  hash_mismatch;          /* vendor-IE hashes differ */
+    uint8_t  late_arrival;           /* the later half came well after the
+                                      * earlier and the scorer counted it (#188) */
     /* Do we actually know which half is the impostor? (#89)
      *
      * 1 only when something other than radio physics said so: an
@@ -1748,10 +1901,29 @@ typedef struct {
      * the union and the score it feeds. */
     int      pnl_best;
     int      pnl_jaccard_ppm; /* Jaccard(advertised, PNL-union) in parts-per-million */
-    int      ie_uniform;    /* 1 = identical IE fingerprint across all SSIDs (PineAP tell) */
+    int      ie_uniform;    /* 1 = identical IE fingerprint across all SSIDs
+                             * (karma_ie_collapsed(); narrower evidence than
+                             * "PineAP tell" — see that declaration) */
+    /* Distinct IE fingerprints behind ie_uniform, 0 when not all the
+     * advertised SSIDs have a known one (#187 S4). The [y] view's IE
+     * column prints it, so the operator sees 3-SSIDs-3-postures as the
+     * argument against a lure that it is, instead of a bare "-" that
+     * looks like an absent observation. Not persisted: the DB keeps the
+     * boolean, and this is derivable from the fingerprints. */
+    int      ie_fp_distinct;
     int      deauth_chain;  /* 1 = shared-victim deauth-then-lure (#90) */
+    /* Directed probe-response forgery (#187 S2): how many distinct
+     * SSIDs this BSSID answered a station's directed probe for while
+     * never beaconing them (karma_forged_ssids()), and to how many
+     * stations. A BSSID reaches the table on this alone, because the
+     * classic KARMA radio beacons one name and answers the rest, so it
+     * never crosses KARMA_SSID_THRESH. Not persisted: the DB keeps the
+     * score this feeds. */
+    int      forged;
+    int      forge_stations;
     /* composite: 1 + (pnl_best >= KARMA_PNL_CORROB_MIN ? 2 : 0)
-     *              + (ie_uniform ? 1 : 0) + (deauth_chain ? 3 : 0) */
+     *              + (ie_uniform ? 1 : 0) + (deauth_chain ? 3 : 0)
+     *              + (forged >= KARMA_FORGE_SSID_MIN ? 3 : 0) */
     int      score;
     char     top_ssid[33];  /* most recently advertised SSID */
     /* Tool attribution as the operator reads it — "ESP32 Marauder/med?
@@ -1761,6 +1933,40 @@ typedef struct {
     char     tool[48];
     time_t   last_seen;
 } karma_ap_t;
+
+/* Directed probe-response answers for SSIDs other than the BSSID's own
+ * current name (#187 S2), one row per answering BSSID, snapshotted by
+ * karma_forge_snapshot() from src/karma_detect.c. A row is raw
+ * observation: whether each SSID was ever *beaconed* by this BSSID is
+ * judged at rule time against the beacon table (karma_forged_ssids()),
+ * because the beacon history and this table are filled by different
+ * frames and either may arrive first. Bounded both ways, see
+ * karma_detect.h. */
+#define KARMA_FORGE_MAX_BSS   16
+#define KARMA_FORGE_MAX_SSIDS  8
+#define KARMA_FORGE_MAX_STA    8
+typedef struct {
+    uint8_t  bssid[6];
+    char     ssids[KARMA_FORGE_MAX_SSIDS][33];
+    time_t   ssid_last[KARMA_FORGE_MAX_SSIDS];
+    uint64_t ssid_ev[KARMA_FORGE_MAX_SSIDS];   /* newest answering frame, 0 none */
+    /* bit i = sta[i] received an answer naming this SSID */
+    uint8_t  ssid_sta_mask[KARMA_FORGE_MAX_SSIDS];
+    /* Wall time of the first and newest answer naming SSID k sent to
+     * sta[i], 0 = none (#187: the window an association by that station
+     * under that name is read against, karma_forge_captured()). */
+    time_t   ans_first[KARMA_FORGE_MAX_SSIDS][KARMA_FORGE_MAX_STA];
+    time_t   ans_last[KARMA_FORGE_MAX_SSIDS][KARMA_FORGE_MAX_STA];
+    int      n_ssids;
+    uint8_t  sta[KARMA_FORGE_MAX_STA][6];
+    int      n_sta;
+    int      dropped;      /* SSIDs or stations displaced by the bounds */
+    time_t   first_seen;
+    time_t   last_seen;
+} karma_forge_t;
+
+struct harvest_sta_s;     /* src/harvest_track.h (#172) */
+struct harvest_chain_s;
 
 /* ── Rogue-RADIUS / EAP method tracking (#31) ────────────────
  * One row per BSSID seen running an 802.1X EAP conversation. Records
@@ -1815,6 +2021,7 @@ typedef struct {
     uint32_t burst_span_ms;
     int      flood;       /* threshold met within PROBE_FLOOD_HOLD_SECS (decays) */
     time_t   flood_last;  /* wall time it was last met; 0 = never */
+    rf_track_t dist;      /* distance data point, src/rf_distance.h; P_tx always assumed */
 } probe_client_t;
 
 /* Probe-request flood (#88): at least PROBE_FLOOD_FRAMES requests from
@@ -2006,6 +2213,10 @@ typedef struct {
     time_t  first_seen;
     time_t  last_seen;
     int     frame_count;
+    /* Distance data point (src/rf_distance.h). Every source behind this
+     * row — (re)association response, EAPOL M3 — is a frame the AP sent,
+     * so this is the AP's distance from the sensor, not the client's. */
+    rf_track_t dist;
 } assoc_t;
 
 /* ── Association / reassociation REQUEST (#60) ─────────────
@@ -2103,6 +2314,11 @@ typedef enum {
     CP_KIND_DNS_SPOOF      = 1 << 1,  /* sentinel host -> RFC1918 / CGNAT */
     CP_KIND_DNS_UNEXPECTED = 1 << 2,  /* -> outside the known ranges      */
     CP_KIND_TLS_MITM       = 1 << 3,  /* sentinel SNI -> private address  */
+    /* A response on any host whose headers and body prefix match a
+     * named attack kit's default portal (#169). Not a sentinel check:
+     * the kit serves its page to every URL, so this one is keyed by
+     * the server that sent it (alert key `portalkit:`), not by host. */
+    CP_KIND_KIT            = 1 << 4,
 } cp_kind_t;
 
 #define CP_MAX_EVENTS 64
@@ -2111,7 +2327,13 @@ typedef struct {
     char     host[64];        /* the sentinel that was interfered with */
     char     src[46];         /* the client that probed                */
     char     evidence[80];    /* what was seen instead                 */
+    /* The responder (#169): the address that answered the probe or
+     * served the kit page, "" for a DNS-sourced event. It is what lets
+     * an alert carry match_ip for per-alert pcap export. */
+    char     server[46];
+    uint16_t server_port;
     uint8_t  kind;            /* cp_kind_t                             */
+    uint8_t  kit;             /* cp_kit_t (captive_portal.h), 0 = none */
     time_t   ts;
 } cp_event_t;
 
@@ -2532,6 +2754,12 @@ typedef struct {
     uint8_t  bssid[6];
     uint8_t  sta_mac[6];
     char     ssid[33];
+    /* Here rather than beside `channel`, so it fills the byte of padding
+     * after ssid and the struct stays the size it was: the record is
+     * held MAX_EAPOL_EVENTS times in sloth_state_t, which sits near the
+     * test stack's limit, and harvest_cluster_id below takes the four
+     * bytes this move freed. */
+    int8_t   signal_dbm;
     time_t   ts;
     int      msg_num;
     int      has_pmkid;
@@ -2543,8 +2771,17 @@ typedef struct {
     int      handshake_progress;
     int      replay_counter_ok;
     int      assoc_evidence;
-    int8_t   signal_dbm;
     int      channel;
+    /* The harvest tracker's row this message was counted in (#172), 0
+     * for none: the station row (PMKID_HARVEST's subject) for an M1 or
+     * M2 between a station and a BSSID it asked to associate with, or
+     * the BSSID's deauth-then-reconnect chain (HANDSHAKE_HARVEST's) for
+     * the M2 that completed a chained pair, which takes precedence.
+     * Non-zero is not a finding: every station that associates has a
+     * row. It is one when a harvest_station / harvest_chain record or
+     * a PMKID_HARVEST / HANDSHAKE_HARVEST detail names the same id.
+     * src/harvest_track.h. */
+    uint32_t harvest_cluster_id;
 } eapol_event_t;
 
 /* ── Packets ────────────────────────────────────────────── */
@@ -2586,6 +2823,9 @@ typedef struct {
 typedef enum {
     SENSOR_WIFI = 0, SENSOR_BLE, SENSOR_ZIGBEE, SENSOR_SDR,
     SENSOR_GPS, SENSOR_ADSB, SENSOR_MESHTASTIC, SENSOR_CAN,
+    SENSOR_APRS,              /* appended: the kind number is persisted */
+    SENSOR_RTL433,            /* appended: the kind number is persisted */
+    SENSOR_VICTRON,           /* appended: the kind number is persisted */
     SENSOR_KIND_COUNT
 } sensor_kind_t;
 typedef enum {
@@ -2740,6 +2980,11 @@ typedef struct {
     uint8_t  secondary_phy;    /* 0 none or unknown, 0x01 1M, 0x02 2M, 0x03 Coded (S=8), 0x04 Coded S=2 */
     uint8_t  adv_sid;          /* 0x00..0x0F, 0xFF none (every legacy PDU) */
     ble_identity_hint_t hint;  /* #156: internal only, all zero with the flag off */
+    /* TX_Power from the 0x0D report header (Core v6.0 Vol 4 Part E
+     * §7.7.65.13), last report that carried one; 0x7F never sets it. */
+    uint8_t  has_ext_tx_power;
+    int8_t   ext_tx_power;
+    rf_track_t dist;           /* distance data point, src/rf_distance.h */
 } ble_device_t;
 
 /* #156 item 2: the rotation-hint feature's aggregate state, copied by
@@ -2955,6 +3200,602 @@ typedef enum {
     BT_CAP_ERROR,       /* open or read failed, or the stream is corrupt */
     BT_CAP_STOPPED      /* sloth stopped the worker */
 } bt_cap_state_t;
+
+/* --location / --gps health (2026-10-27). One struct for both sources
+ * so the strip and sensor_health have one thing to read. `state`:
+ *   GPS_NONE        neither flag given (configured 0)
+ *   GPS_FIXED_ONLY  --location alone: the stamp is the fixed position
+ *   GPS_SEARCHING   a --gps source is open but has not produced a fix
+ *                   younger than gps.max_fix_age_s yet (or lost one and
+ *                   a --location fallback is not configured)
+ *   GPS_FIX         a fix younger than gps.max_fix_age_s is in hand
+ *   GPS_STALE       the newest fix is older than gps.max_fix_age_s;
+ *                   stamps fall back to --location, or to nothing
+ * fix_age_s is -1 before any fix. src names the source as the CLI gave
+ * it ("fixed", "nmea:/dev/ttyUSB0", "gpsd:127.0.0.1:2947"). err is the
+ * reader's last open/read failure, "" when none. The counters are the
+ * reader's lifetime tallies; sensor_health bands them. */
+typedef enum {
+    GPS_NONE = 0, GPS_FIXED_ONLY, GPS_SEARCHING, GPS_FIX, GPS_STALE
+} gps_state_t;
+
+typedef struct {
+    int      configured;       /* --location or --gps given */
+    int      has_gps;          /* a --gps reader exists */
+    int      has_fixed;        /* a --location was given */
+    int      state;            /* gps_state_t */
+    int      sats;             /* satellites in use, 0 unknown */
+    double   hdop;             /* 0 unknown */
+    int      fix_age_s;        /* -1 never */
+    int      quality;          /* GGA quality / gpsd mode of the newest fix */
+    char     src[48];
+    char     err[96];
+    uint64_t sentences;        /* NMEA sentences / gpsd objects parsed */
+    uint64_t bad_checksum;     /* NMEA checksum failures */
+    uint64_t parse_errors;     /* malformed lines, both sources */
+    uint64_t reconnects;       /* reopen / reconnect attempts after a loss */
+    /* GNSS observation (2026-11-02, docs/wiki/gnss.md): the sky and the
+     * receiver's clock, from gpsd's SKY / TPV. Exact figures; the
+     * sensor_health signature takes their bands only. */
+    int      sats_in_view;     /* SKY nSat, or the satellites[] count; 0 unknown */
+    int      sats_used;        /* SKY uSat; 0 unknown */
+    double   cn0_mean;         /* mean C/N0 of the satellites reporting one, dB-Hz; 0 none */
+    double   cn0_max;
+    int      has_time_off;
+    long long time_off_ms;     /* receiver time - host wall time at receipt */
+    int      time_off_band;    /* its band with hysteresis (gnss_fix_t), -1 unknown */
+    double   pdop, vdop;       /* 0 unknown */
+    int      status;           /* TPV status, -1 absent */
+    int      jam;              /* TPV jam (u-blox jamInd 0..255), -1 absent */
+    /* Where the sensor is (2026-11-06, for slothweb's Radar centre): the
+     * arbitrated stamp gps_location_current() gives this tick - a fresh
+     * GPS fix, else the --location, else none (has_loc 0). loc_src is a
+     * loc_src_t. sensor_health writes it when has_loc; its signature
+     * takes the 0.01 degree cell, never the figure. */
+    int      has_loc, loc_has_alt;
+    int      loc_src;
+    double   loc_lat, loc_lon, loc_alt_m;
+} gps_health_t;
+
+/* ── GNSS observation (2026-11-02) ──────────────────────────────────
+ * What the receiver sees, recorded like the Wi-Fi and BLE tables: one
+ * row per satellite in view (gnss_sat_t), the pass they came in
+ * (gnss_sky_t), and the newest TPV (gnss_fix_t). Copied under the gps
+ * module's lock into sloth_state_t once per poll (gps_health_poll), so
+ * views, exports and the later detectors read the copy, never the
+ * module. Fields are gpsd's (https://gpsd.gitlab.io/gpsd/gpsd_json.html):
+ * gnssid 0 GPS, 1 SBAS, 2 Galileo, 3 BeiDou, 4 IMES, 5 QZSS, 6 GLONASS,
+ * 7 NavIC; svid the PRN within its constellation; ss the C/N0 in
+ * dB-Hz; health 0 unknown, 1 OK, 2 unhealthy. */
+#define GNSS_MAX_SATS 48
+
+typedef struct {
+    int16_t prn;               /* always present */
+    int8_t  gnssid;            /* -1 absent (an NMEA-only gpsd) */
+    int16_t svid;              /* -1 absent */
+    int8_t  sigid;             /* -1 absent */
+    int8_t  health;            /* -1 absent */
+    int16_t el, az;            /* degrees (el may be negative: gpsd lists
+                                * birds below the horizon); has_el / has_az
+                                * 0 when absent, never a sentinel value */
+    int16_t cn0_x10;           /* C/N0 x 10; has_cn0 0 when absent */
+    uint8_t used, has_cn0, has_el, has_az;
+} gnss_sat_t;
+
+typedef struct {
+    int        valid;          /* a SKY with satellites has arrived */
+    time_t     ts;             /* wall at receipt */
+    uint64_t   mono_ms;        /* sloth_mono_ms() at receipt: what the
+                                * GNSS rules age the sky by */
+    int        nsat, usat;     /* SKY nSat / uSat; -1 absent */
+    int        n;              /* rows in sats[] */
+    int        overflow;       /* satellites past GNSS_MAX_SATS, not kept */
+    gnss_sat_t sats[GNSS_MAX_SATS];
+    double     hdop, vdop, pdop, gdop, tdop;   /* 0 absent */
+    double     cn0_mean, cn0_max, cn0_sd;      /* over the rows with a C/N0 */
+    int        cn0_n;
+    uint64_t   passes;         /* SKY objects with satellites, lifetime */
+} gnss_sky_t;
+
+typedef struct {
+    int       valid;           /* a TPV has arrived */
+    time_t    ts;              /* wall at receipt */
+    int       mode;            /* 0 unknown, 1 none, 2 2D, 3 3D */
+    int       status;          /* TPV status, -1 absent */
+    int       has_pos;
+    double    lat, lon;
+    int       has_alt;
+    double    alt_m;           /* MSL, else HAE */
+    int       has_eph, has_epv;
+    double    eph, epv;        /* metres */
+    int       has_speed, has_track, has_climb;
+    double    speed, track, climb;
+    int       has_eps;
+    double    eps;             /* speed error estimate, m/s (gpsd TPV eps) */
+    long long host_wall_ms;    /* the host's wall clock as the line was framed */
+    uint64_t  host_mono_ms;    /* and its monotonic clock, read in take_tpv():
+                                * the pair tells a host clock step from a
+                                * receiver one (rules_gnss.c GNSS_TIME_JUMP) */
+    int       has_rx_time;
+    long long rx_time_ms;      /* the receiver's "time", unix ms */
+    int       has_time_off;
+    long long time_off_ms;     /* rx_time_ms - host wall ms at receipt; coarse */
+    int       time_off_band;   /* the offset's band with hysteresis
+                                * (gps.c take_tpv), -1 unknown; what the
+                                * signatures sign, never time_off_ms */
+    int       leap;            /* leapseconds, -1 absent */
+    int       jam;             /* u-blox jamming indicator 0..255, -1 absent.
+                                * Sticky: gpsd attaches it only to the TPV
+                                * after a UBX-MON-HW poll, so the last value
+                                * holds for GNSS_JAM_HOLD_TPVS TPVs */
+    uint64_t  jam_tpv;         /* count of the TPV that last carried jam */
+    int       has_gst;
+    double    gst_rms, gst_major, gst_minor, gst_orient;
+    double    gst_lat_sd, gst_lon_sd, gst_alt_sd;
+    uint64_t  count;           /* TPVs, lifetime */
+} gnss_fix_t;
+
+/* The history the GNSS rules read (src/alerts/rules_gnss.c), kept by
+ * src/gps.c and copied by gps_health_poll() into the per-poll snapshot
+ * s->gnss_hist points at, so a rule reads the snapshot, never the module: the last GNSS_FIX_HIST
+ * positioned fixes (mode >= 2 with a position) and GNSS_SERIES_S
+ * one-second points of the sky's summary. Rings, oldest overwritten.
+ * Every point carries the host's monotonic clock at receipt: the rules'
+ * windows and the time-jump test run on it, never on wall time. */
+#define GNSS_FIX_HIST 64
+#define GNSS_SERIES_S 300
+typedef struct {
+    time_t    ts;              /* wall at receipt */
+    uint64_t  seq;             /* the TPV's count (gnss_fix_t.count) */
+    uint64_t  mono_ms;         /* host monotonic ms at receipt */
+    long long wall_ms;         /* host wall ms at receipt */
+    double    lat, lon, alt_m, eph;
+    int       mode, usat, has_alt, has_eph, has_time_off;
+    long long time_off_ms;
+    int       has_speed, has_eps, has_rx_time;
+    double    speed, eps;      /* m/s */
+    long long rx_time_ms;      /* the receiver's own time, unix ms */
+    int       leap;            /* leapseconds, -1 absent */
+    int       reacq;           /* the first positioned fix since sloth
+                                * started, since a TPV said no fix (mode
+                                * 0 or 1), or since the source was lost:
+                                * there is no fix before it to compare */
+} gnss_fix_pt_t;
+typedef struct {
+    time_t   ts;               /* wall second the point is for */
+    uint64_t mono_ms;          /* host monotonic ms of its newest TPV */
+    int16_t  cn0_med_x10;      /* median C/N0 x 10 of the tracked rows
+                                * (ss > 0), 0 when none is tracked: gpsd
+                                * lists untracked satellites at ss 0, and
+                                * a mean over them reads a satellite
+                                * lost to an obstruction as a collapse */
+    int16_t  jam;              /* -1 absent */
+    uint8_t  trk;              /* rows tracked (ss > 0) */
+    uint8_t  usat, nsat;
+    uint8_t  mode;             /* the TPV's mode: 0..1 no fix */
+} gnss_sec_pt_t;
+/* One gpsd TOFF (#182, 2026-11-12): the receiver's time against gpsd's
+ * clock as gpsd stamped them, and the host's clocks when sloth read it.
+ * GNSS_TIME_JUMP judges a step on consecutive TOFFs when gpsd sends
+ * them; gpsd does not send one per TPV (the reference site: 7 TOFF to
+ * 14 TPV in 5 s), so TOFFs are never paired with fixes. */
+#define GNSS_TOFF_HIST 64
+typedef struct {
+    uint64_t  seq;             /* TOFFs read, lifetime */
+    uint64_t  mono_ms;         /* host monotonic ms at sloth's read */
+    long long wall_ms;         /* host wall ms at sloth's read */
+    long long real_ms;         /* TOFF real: the receiver's time, unix ms */
+    long long off_ms;          /* TOFF real - clock, ms */
+    int       leap;            /* the newest TPV's leapseconds, -1 absent */
+    int       reacq;           /* the first TOFF since sloth started, since
+                                * a TPV said no fix, or since the source was
+                                * lost: nothing before it to step from */
+} gnss_toff_pt_t;
+typedef struct {
+    gnss_fix_pt_t fixes[GNSS_FIX_HIST];
+    int           fix_n, fix_head;     /* head: the next slot written */
+    gnss_sec_pt_t secs[GNSS_SERIES_S];
+    int           sec_n, sec_head;
+    gnss_toff_pt_t toffs[GNSS_TOFF_HIST];
+    int           toff_n, toff_head;
+} gnss_hist_t;
+
+/* ── ADS-B aircraft (#26, slice 1, 2026-11-05) ───────────────────────
+ * What a local, already-running Mode S / ADS-B decoder (readsb,
+ * dump1090-fa) lists in its aircraft.json, tailed by --adsb
+ * (docs/wiki/adsb.md). sloth never opens or tunes the SDR. One row per
+ * address the decoder reports: the decoder's own merge of everything it
+ * heard, sticky here (a key the newest document omits keeps the row's
+ * last value; a present key overwrites it). Fields per readsb's
+ * README-json.md; units as the decoder writes them (feet, knots,
+ * ft/min, degrees, dBFS). Kept by src/adsb.c under its lock and copied
+ * once per poll by adsb_health_poll(): s->adsb_rows / s->adsb_gone
+ * point at that copy, never at the module's table, and are pointers
+ * rather than arrays so sloth_state_t does not grow by the table. */
+#define ADSB_MAX_AIRCRAFT 256
+
+enum {
+    ADSB_EMERG_ABSENT = -1, ADSB_EMERG_NONE = 0, ADSB_EMERG_GENERAL,
+    ADSB_EMERG_LIFEGUARD, ADSB_EMERG_MINFUEL, ADSB_EMERG_NORDO,
+    ADSB_EMERG_UNLAWFUL, ADSB_EMERG_DOWNED, ADSB_EMERG_RESERVED
+};
+
+typedef struct {
+    uint32_t icao;             /* 24-bit address */
+    uint8_t  non_icao;         /* the decoder's hex had a leading '~':
+                                * a non-ICAO (e.g. TIS-B) address, a
+                                * different key space from icao */
+    uint8_t  on_ground;        /* alt_baro was "ground" */
+    uint8_t  has_alt_baro, has_alt_geom, has_gs, has_track;
+    uint8_t  has_baro_rate, has_geom_rate, has_pos, has_rssi;
+    uint8_t  has_seen, has_seen_pos, has_messages;
+    int8_t   emergency;        /* ADSB_EMERG_*; ABSENT never reported */
+    char     type[16];         /* "adsb_icao", "mode_s", "mlat", "tisb_other", ... */
+    char     flight[9];        /* callsign, trailing spaces trimmed; "" absent */
+    char     squawk[5];        /* 4 octal digits; "" absent */
+    char     category[3];      /* "A0".."D7"; "" absent */
+    int32_t  alt_baro;         /* ft (not meaningful while on_ground) */
+    int32_t  alt_geom;         /* ft, WGS84 ellipsoid */
+    int32_t  baro_rate, geom_rate;   /* ft/min */
+    double   gs;               /* kt */
+    double   track;            /* degrees true */
+    double   lat, lon;         /* only as a valid pair */
+    double   rssi;             /* dBFS */
+    double   seen, seen_pos;   /* s before the document's "now" */
+    uint64_t messages;
+    /* Kept by src/adsb.c, not parsed: */
+    time_t   first_seen;       /* wall, the first document that listed it */
+    time_t   last_seen;        /* wall, the decoder's last message: read - seen */
+    time_t   pos_ts;           /* wall of the position: read - seen_pos */
+    uint64_t last_mono_ms;     /* last_seen on the monotonic clock: the expiry runs on it */
+    int16_t  alt_band;         /* the held altitude band (adsb_alt_band) */
+    int16_t  cell_lat, cell_lon;   /* the held position cell, 0.1 degree */
+    uint8_t  has_cell;
+} adsb_aircraft_t;
+
+/* The --adsb source's health: the decoder's freshness by its own "now"
+ * (or the file's mtime when a document has none) advancing, measured on
+ * sloth's monotonic clock; the read and parse tallies. */
+typedef enum {
+    ADSB_NONE = 0, ADSB_WAITING, ADSB_LIVE, ADSB_STALE, ADSB_ERROR
+} adsb_state_t;
+
+typedef struct {
+    int      configured;
+    int      state;            /* adsb_state_t */
+    int      fresh_bucket;     /* -1 never, 0 within ADSB_STALE_S, 1 older */
+    int      age_s;            /* since the decoder's clock last advanced, -1 never */
+    char     src[48];          /* "file:/run/readsb/aircraft.json" */
+    char     err[96];          /* the last read or parse failure, "" none */
+    time_t   last_read;        /* wall of the last document parsed, 0 never */
+    double   decoder_now;      /* the newest document's "now", 0 absent */
+    uint64_t messages;         /* the decoder's lifetime Mode S message count */
+    uint64_t reads;            /* documents parsed */
+    uint64_t read_errors;      /* opens / reads that failed, oversize files */
+    uint64_t parse_errors;     /* documents refused as malformed */
+    uint64_t overflow;         /* aircraft refused for the ADSB_MAX_AIRCRAFT cap */
+    uint64_t bad_entries;      /* aircraft entries refused (no or bad hex) */
+    uint64_t expired;          /* rows retired after ADSB_EXPIRE_S unheard */
+    int      aircraft;         /* rows now */
+} adsb_health_t;
+
+/* ── APRS stations (#26 family, 2026-11-05) ──────────────────────────
+ * What a local, already-running Dire Wolf writes to its packet log
+ * (-L FILE, one CSV line per decoded packet), tailed by --aprs
+ * (docs/wiki/aprs.md). The channel is the region's (144.390 MHz in
+ * North America, 144.800 in IARU Region 1, ...: src/aprs.h's table,
+ * #204), which sloth derives from the GNSS fix and checks against the
+ * operator's --aprs-freq; the decoder's own setting is host config. sloth never opens, tunes or talks to
+ * the radio, the SDR or Dire Wolf, and uses no network: it reads a
+ * file. Field meanings and units are Dire Wolf's (User Guide, "Logging",
+ * and src/log.c, wb2osz/direwolf 1.7): speed knots, course degrees,
+ * altitude metres, lat/lon decimal degrees; the data type indicator
+ * and the two-byte symbol are APRS 1.0.1's (APRS101.pdf, ch. 5 and
+ * 20). Kept by src/aprs.c under its lock and copied once per poll by
+ * aprs_health_poll(): the pointers on sloth_state_t name that copy. */
+#define APRS_MAX_STATIONS 512
+#define APRS_PKT_RING     256    /* the newest packets, for the sinks */
+#define APRS_CALL_MAX     9      /* AX.25 call + "-SSID" */
+#define APRS_TEXT_MAX     64     /* system, status, telemetry, freq ... */
+#define APRS_COMMENT_MAX  128
+
+typedef struct {
+    uint64_t seq;              /* src/aprs.c's own count from 1: each
+                                * sink's cursor (jsonl.c, db.c) */
+    int      chan;             /* Dire Wolf's radio channel */
+    time_t   utime;            /* Dire Wolf's clock at decode (unix s) */
+    char     source[APRS_CALL_MAX + 1];
+    char     heard[APRS_CALL_MAX + 1];   /* heard direct: a digipeater, or
+                                          * the source itself; "" absent */
+    int      level;            /* audio level, -1 absent */
+    int      error;            /* Dire Wolf's "error" (bits fixed), -1 absent */
+    char     dti;              /* APRS data type indicator, '\0' absent */
+    char     name[APRS_CALL_MAX + 1];    /* object / item name, else the source */
+    char     symbol[3];        /* table + code, "" absent */
+    uint8_t  has_pos, has_speed, has_course, has_alt;
+    double   lat, lon;         /* only as a valid pair */
+    double   speed_kt, course, alt_m;
+    char     freq[16], offset[16], tone[16];   /* as Dire Wolf wrote them, checked */
+    char     system[APRS_TEXT_MAX + 1];  /* the sender's software / device */
+    char     status[APRS_TEXT_MAX + 1];  /* Mic-E status */
+    char     telemetry[APRS_TEXT_MAX + 1];
+    char     comment[APRS_COMMENT_MAX + 1];
+    /* Kept by src/aprs.c, not parsed: */
+    time_t   stn_first_seen;   /* the sending station's first_seen at this
+                                * packet (sloth.db's visit count) */
+} aprs_packet_t;
+
+typedef struct {
+    char     call[APRS_CALL_MAX + 1];    /* the key: the packet's source */
+    time_t   first_seen;       /* utime of its first packet this visit */
+    time_t   last_seen;        /* utime of its newest packet */
+    uint64_t last_mono_ms;     /* when that packet was read: the expiry */
+    uint32_t packets;          /* this visit */
+    char     via[APRS_CALL_MAX + 1];     /* the newest packet's heard, "" unknown */
+    uint8_t  last_direct;      /* the newest packet was heard direct */
+    uint8_t  heard_direct;     /* any packet this visit was */
+    int      level, best_level;          /* -1 unknown */
+    char     dti;
+    char     symbol[3];
+    uint8_t  has_pos, has_speed, has_course, has_alt;
+    double   lat, lon, speed_kt, course, alt_m;
+    time_t   pos_ts;           /* utime of the position */
+    char     system[APRS_TEXT_MAX + 1];
+    char     status[APRS_TEXT_MAX + 1];
+    char     comment[APRS_COMMENT_MAX + 1];
+    int32_t  cell_lat, cell_lon;         /* the held 0.01 degree cell */
+    uint8_t  has_cell;
+} aprs_station_t;
+
+/* The --aprs source's health. A quiet channel is not a fault: APRS can
+ * be silent for an hour, so the state says whether the file is there
+ * and readable, never whether anything was heard lately. A channel
+ * quiet for far longer than that is said separately, by `silent`
+ * (#204): the state stays live, because the file is fine; it is the
+ * receive chain upstream of it that is not. */
+typedef enum {
+    APRS_NONE = 0, APRS_WAITING, APRS_LIVE, APRS_ERROR
+} aprs_state_t;
+
+typedef struct {
+    int      configured;
+    int      state;            /* aprs_state_t */
+    int      missing;          /* the file is not there (yet) */
+    char     src[48];          /* "file:/var/lib/direwolf/aprs.log" */
+    char     err[96];          /* the last read failure, "" none */
+    time_t   last_read;        /* wall of the last good poll, 0 never */
+    time_t   last_packet;      /* utime of the newest packet, 0 none */
+    uint64_t bytes;            /* read from the file */
+    uint64_t lines;            /* complete non-blank lines, the header too */
+    uint64_t packets;          /* lines parsed into a packet */
+    uint64_t bad_lines;        /* refused: malformed, overlong, a bad call */
+    uint64_t overflow;         /* new stations refused for the cap */
+    uint64_t expired;          /* stations retired after APRS_EXPIRE_S */
+    uint64_t truncations;      /* the file shrank under the offset */
+    uint64_t rotations;        /* a new file at the path */
+    uint64_t read_errors;      /* opens / reads that failed */
+    int      stations;         /* rows now */
+    /* #204: the channel the sensor's position says, and what the
+     * operator says the decoder is on. Region and Hz only: the position
+     * they came from is s->gps's and is never copied here. */
+    int      region;           /* aprs_region_t (src/aprs.h) */
+    uint32_t region_hz;        /* its channel, 0 none */
+    uint32_t freq_hz;          /* --aprs-freq, 0 not declared */
+    int      freq_mismatch;    /* both known and on different channels */
+    /* No packet for silent_after_s while live. quiet_since is when the
+     * quiet began: the newest packet's utime, or the first good read
+     * of this run when that is later (the reader starts at the file's
+     * end, so a restart re-arms the clock); 0 before a read. */
+    int      silent;
+    int      silent_after_s;   /* 0 off */
+    time_t   quiet_since;
+} aprs_health_t;
+
+/* ── rtl_433 sub-GHz devices (#208, 2026-11-14) ──────────────────────
+ * What a local, already-running rtl_433 writes to its JSON event log
+ * (`-F json`, one JSON object per decode), tailed by --rtl433
+ * (docs/wiki/rtl433.md). sloth never opens, tunes, hops or runs the
+ * SDR, and uses no network: it reads a file, the same shape as --aprs
+ * and --adsb. Receive-only, as the decoder is.
+ *
+ * Field meanings and units are rtl_433's own, from the two documents
+ * src/rtl433.h cites: `docs/DATA_FORMAT.md` (the message, common-device
+ * and sensor data fields) and `src/r_api.c` (the `-M protocol` and
+ * `-M level` metadata). Kept by src/rtl433.c under its lock and copied
+ * once per poll by rtl433_health_poll(): the pointer on sloth_state_t
+ * names that copy. */
+#define RTL433_MAX_DEVICES 256
+#define RTL433_MODEL_MAX   32   /* DATA_FORMAT.md: "less than 32 characters" */
+#define RTL433_ID_MAX      16   /* DATA_FORMAT.md: "less than 16 characters" */
+#define RTL433_TYPE_MAX    16   /* type / subtype ("TPMS", a sensor function) */
+#define RTL433_MOD_MAX     8    /* r_api.c writes "ASK", "FSK" or "LoRa" */
+#define RTL433_MIC_MAX     12   /* "CRC", "CHECKSUM", "PARITY" */
+
+/* A temperature or pressure keeps the UNIT OF THE KEY it arrived under.
+ * DATA_FORMAT.md's rule is `<Type>_<Unit>` "in sensors native units
+ * insofar possible with no conversion", and rtl_433 converts only when
+ * asked (`-C si`), so converting here would publish a figure the
+ * decoder never wrote. The unit travels with the value instead. */
+typedef enum {
+    RTL433_TEMP_NONE = 0, RTL433_TEMP_C, RTL433_TEMP_F
+} rtl433_temp_unit_t;
+typedef enum {
+    RTL433_PRES_NONE = 0, RTL433_PRES_KPA, RTL433_PRES_HPA, RTL433_PRES_PSI
+} rtl433_pres_unit_t;
+
+/* The allow-listed content of one decoded line. Every field but model
+ * and id is optional; an absent one is absent, never 0. */
+typedef struct {
+    /* Identity (DATA_FORMAT.md, "Message Data"). model and id are the
+     * table's key, so a line without both is refused, not kept partly. */
+    char     model[RTL433_MODEL_MAX + 1];
+    char     id[RTL433_ID_MAX + 1];      /* as written; an integer id
+                                          * formatted without decimals */
+    char     type[RTL433_TYPE_MAX + 1];      /* "TPMS" today, "" absent */
+    char     subtype[RTL433_TYPE_MAX + 1];   /* function in a shared protocol */
+    char     channel[RTL433_ID_MAX + 1];     /* secondary id, as written */
+    char     mic[RTL433_MIC_MAX + 1];        /* the documented three only */
+    int      protocol;                       /* -M protocol, -1 absent */
+    /* -M level (r_api.c): one `freq` for an ASK or LoRa decode, `freq1`
+     * and `freq2` for FSK — the branches there are exclusive, so one
+     * field holds whichever single frequency the line carried. */
+    char     mod[RTL433_MOD_MAX + 1];        /* "ASK" / "FSK" / "LoRa" */
+    uint8_t  has_freq, has_freq2, has_rssi, has_snr, has_noise;
+    double   freq_mhz, freq2_mhz;            /* MHz */
+    double   rssi_db, snr_db, noise_db;      /* dB */
+    /* Decoded values, the documented common and sensor fields only
+     * (DATA_FORMAT.md). The per-model keys are NOT here: see
+     * src/rtl433.h for why one observation is not a type. */
+    uint8_t  has_battery, has_temp, has_humidity, has_pressure;
+    double   battery_ok;                     /* 0 empty .. 1 full */
+    double   temp;      uint8_t temp_unit;   /* rtl433_temp_unit_t */
+    double   humidity;                       /* % relative */
+    double   pressure;  uint8_t pres_unit;   /* rtl433_pres_unit_t */
+    /* Keys that are on no list: counted so the gap is measured, never
+     * stored. A value present but out of range leaves its field absent
+     * and is counted in bad_values, never clamped. */
+    uint16_t other_keys;
+    uint16_t bad_values;
+} rtl433_msg_t;
+
+/* One (model, id) row. first_seen / last_seen are the HOST's clock at
+ * the read, never the decoder's `time`: that field's format follows
+ * rtl_433's -M time options and its locale, and nothing in the file
+ * says which were used, so a row's clock would be unknowable. */
+typedef struct {
+    char     model[RTL433_MODEL_MAX + 1];    /* the key, with id */
+    char     id[RTL433_ID_MAX + 1];
+    time_t   first_seen;
+    time_t   last_seen;                      /* the eviction order */
+    uint32_t msgs;                           /* lines merged into this row */
+    uint64_t other_keys;                     /* summed over those lines */
+    /* The newest line's values, each absent until one carried it. */
+    char     type[RTL433_TYPE_MAX + 1];
+    char     subtype[RTL433_TYPE_MAX + 1];
+    char     channel[RTL433_ID_MAX + 1];
+    char     mic[RTL433_MIC_MAX + 1];
+    char     mod[RTL433_MOD_MAX + 1];
+    int      protocol;
+    uint8_t  has_freq, has_freq2, has_rssi, has_snr, has_noise;
+    double   freq_mhz, freq2_mhz, rssi_db, snr_db, noise_db;
+    uint8_t  has_battery, has_temp, has_humidity, has_pressure;
+    double   battery_ok;
+    double   temp;      uint8_t temp_unit;
+    double   humidity;
+    double   pressure;  uint8_t pres_unit;
+} rtl433_device_t;
+
+/* Why a line was refused. Each has its own counter, because "bad lines
+ * are climbing" and "the decoder is writing objects sloth cannot key"
+ * are different faults and the operator acts on them differently. */
+typedef enum {
+    RTL433_REJ_OVERSIZE = 0,   /* longer than RTL433_MAX_LINE */
+    RTL433_REJ_NOT_OBJECT,     /* not one JSON object, or trailing bytes */
+    RTL433_REJ_MALFORMED,      /* a JSON syntax error inside the object */
+    RTL433_REJ_NO_MODEL,       /* no usable `model` */
+    RTL433_REJ_NO_ID,          /* no usable `id` */
+    RTL433_REJ_COUNT
+} rtl433_reject_t;
+
+/* The --rtl433 source's health. A quiet band is not a fault: a street
+ * with no passing TPMS is silent for hours, so the state says whether
+ * the file is there and readable, never whether anything was heard. */
+typedef enum {
+    RTL433_NONE = 0, RTL433_WAITING, RTL433_LIVE, RTL433_ERROR
+} rtl433_state_t;
+
+typedef struct {
+    int      configured;
+    int      state;            /* rtl433_state_t */
+    int      missing;          /* the file is not there (yet) */
+    char     src[48];          /* "file:/var/lib/rtl_433/events.jsonl" */
+    char     err[96];          /* the last read failure, "" none */
+    time_t   last_read;        /* wall of the last good poll, 0 never */
+    time_t   last_msg;         /* wall of the newest accepted line, 0 none */
+    uint64_t bytes;            /* read from the file */
+    uint64_t lines;            /* complete non-blank lines */
+    uint64_t msgs;             /* lines parsed into a message */
+    uint64_t bad_lines;        /* refused: the sum of rej[] */
+    uint64_t rej[RTL433_REJ_COUNT];
+    uint64_t bad_values;       /* fields left absent for being out of range */
+    uint64_t other_keys;       /* allow-list misses across every line */
+    uint64_t evicted;          /* rows dropped from the device table */
+    uint64_t truncations;      /* the file shrank under the offset */
+    uint64_t rotations;        /* a new file at the path */
+    uint64_t read_errors;      /* opens / reads that failed */
+    int      devices;          /* rows now */
+} rtl433_health_t;
+
+/* ── Victron devices: --victron (2026-11-15) ─────────────────────────
+ *
+ * The JSONL file sloth-va writes (docs/wiki/victron.md), tailed by
+ * --victron. sloth decrypts nothing and connects to nothing: sloth-va
+ * did, under ADR 0011; this is its output, read as a file. One row per
+ * device address, the latest value of each allow-listed reading kept
+ * (sticky: a record without a value does not erase it). */
+#define VICTRON_MAX_DEVICES 16
+#define VICTRON_MAX_VALS    16
+/* sloth-va's cap on a session's service list (va_record_jsonl()). */
+#define VICTRON_SERVICES_MAX 400
+
+typedef struct {
+    char     name[24];         /* an allow-listed name, unit-suffixed */
+    double   v;
+} victron_val_t;
+
+typedef struct {
+    char     mac[18];          /* "c7:fe:23:b1:1c:5f" */
+    char     serial[24];       /* the owner's serial sloth-va mapped, "" none */
+    char     model[32];        /* sloth-va's model name, "" none */
+    char     record[24];       /* the Instant Readout record type, "" none */
+    char     session[24];      /* the newest GATT session's outcome, "" none */
+    char     services[VICTRON_SERVICES_MAX + 1];
+                               /* that session's service UUIDs, comma
+                                * separated, lower case; "" none (sloth-va
+                                * lists them only for no_supported_service) */
+    int      has_rssi;
+    int      rssi;
+    time_t   first_seen, last_seen;   /* host clock at the read */
+    time_t   last_readout, last_gatt; /* 0 never */
+    uint64_t readings;         /* records with at least one value */
+    uint64_t sessions;         /* gatt records */
+    int      vals_gatt;        /* the newest record WITH values was a GATT
+                                * session's (1) or a readout's (0) */
+    int      nvals;
+    victron_val_t vals[VICTRON_MAX_VALS];
+} victron_device_t;
+
+/* Why a line was refused; each its own counter. */
+typedef enum {
+    VICTRON_REJ_OVERSIZE = 0,  /* longer than VICTRON_MAX_LINE */
+    VICTRON_REJ_NOT_OBJECT,    /* not one JSON object, or trailing bytes */
+    VICTRON_REJ_MALFORMED,     /* a JSON syntax error */
+    VICTRON_REJ_NOT_VICTRON,   /* no "type":"victron", or an unknown source */
+    VICTRON_REJ_NO_MAC,        /* no usable address */
+    VICTRON_REJ_COUNT
+} victron_reject_t;
+
+/* The source's health. Quiet is not a fault: sloth-va writes nothing
+ * while the devices are out of range. */
+typedef enum {
+    VICTRON_NONE = 0, VICTRON_WAITING, VICTRON_LIVE, VICTRON_ERROR
+} victron_state_t;
+
+typedef struct {
+    int      configured;
+    int      state;            /* victron_state_t */
+    int      missing;          /* the file is not there (yet) */
+    char     src[48];          /* "file:/var/lib/sloth-va/victron.jsonl" */
+    char     err[96];          /* the last read failure, "" none */
+    time_t   last_read, last_rec;
+    uint64_t bytes, lines, records, bad_lines;
+    uint64_t rej[VICTRON_REJ_COUNT];
+    uint64_t bad_values;       /* values left absent for being out of range */
+    uint64_t other_keys;       /* value names not on the allow-list */
+    uint64_t table_full;       /* records for a 17th address, dropped */
+    uint64_t truncations, rotations, read_errors;
+    int      devices;
+} victron_health_t;
 
 typedef struct {
     int      configured;       /* --bt-capture given */
@@ -3187,6 +4028,11 @@ typedef struct {
     int  pkt_linktype;         /* pcap DLT link type (set by capture_start) */
     char pkt_export_msg[80];   /* last pcap export result shown in status */
     char pkt_iface[32];        /* pcap capture interface, "" if none */
+    int  monitor_only;         /* --monitor-only (#35): the monitor radio is on
+                                  the IP stream's allow-list; sensor_health
+                                  says so, with pkt_linktype, so a consumer
+                                  can tell IP heard off the air (slothweb's
+                                  capture scope) */
 
     int           proc_sel;    /* selected row in procs view */
     int           proc_detail; /* non-zero = detail panel open */
@@ -3304,6 +4150,21 @@ typedef struct {
     karma_ap_t     karma_aps[MAX_KARMA_APS];   /* KARMA/PineAP candidates (#30) */
     int            karma_count;
     int            karma_sel;
+    /* Directed-probe answers (#187 S2): karma_forge_snapshot() points
+     * this at its own per-poll copy, NULL before the first poll. A
+     * pointer, not the ~7 KB table, for the reason gnss_hist is one:
+     * tests return this struct by value, three deep, on an 8 MB stack
+     * (tests/test_state.c make_healthy_sensor_state), and an inline
+     * table of this size was measured to overflow it. */
+    const karma_forge_t *karma_forge;
+    int            karma_forge_count;
+    /* PMKID / handshake harvesting (#172): harvest_snapshot()'s per-poll
+     * copies (src/harvest_track.h), NULL before the first poll. Pointers
+     * for the reason karma_forge is one. */
+    const struct harvest_sta_s   *harvest_sta;
+    int                           harvest_sta_count;
+    const struct harvest_chain_s *harvest_chain;
+    int                           harvest_chain_count;
 
     /* Research-corpus coverage (#73 slice 3). */
     research_cov_t research_cov[MAX_RESEARCH_COV];
@@ -3425,6 +4286,58 @@ typedef struct {
     char             ble_detail_iface[24];
     /* Ubertooth capture stream (#144 slice 3): --bt-capture PATH. */
     bt_capture_health_t btcap;
+    /* Sensor position (2026-10-27): --location and --gps. Filled once
+     * per poll by gps_health_poll() from src/gps.c; exported by
+     * sensor_health (only while configured) and the iface health strip. */
+    gps_health_t     gps;
+    /* GNSS observation (2026-11-02): the sky and the newest fix, copied
+     * by gps_health_poll(); the [#] view's cursor and detail flag. */
+    gnss_sky_t       gnss_sky;
+    gnss_fix_t       gnss_fix;
+    /* The rings the GNSS rules read: gps_health_poll() points this at
+     * its own per-poll copy (taken under the gps lock), NULL before the
+     * first poll. A pointer rather than the 16 KB copy itself: the state
+     * is returned by value in tests whose stack it already nearly fills. */
+    const gnss_hist_t *gnss_hist;
+    int              gnss_sel;        /* row index into the C/N0-sorted table */
+    int              gnss_sel_key;    /* the selected satellite's identity
+                                       * (views/gnss.c gnss_sat_key), 0 none:
+                                       * the cursor follows the satellite,
+                                       * not the index, across a re-sort */
+    int              gnss_detail;
+    /* ADS-B (#26 slice 1, 2026-11-05): the --adsb source's health and
+     * the aircraft table, filled by adsb_health_poll(). The two row
+     * pointers name that poll's copy (NULL before the first poll);
+     * adsb_gone holds the rows retired by this poll's expiry, for the
+     * JSONL "gone" record. */
+    adsb_health_t    adsb;
+    const adsb_aircraft_t *adsb_rows;
+    int              adsb_count;
+    const adsb_aircraft_t *adsb_gone;
+    int              adsb_gone_count;
+    /* APRS (2026-11-05): the --aprs source's health, the station
+     * table, the stations retired by this poll, and the packet ring
+     * (oldest first; each sink writes the ones past its own cursor),
+     * filled by aprs_health_poll(); NULL before the first poll. */
+    aprs_health_t    aprs;
+    const aprs_station_t *aprs_rows;
+    int              aprs_count;
+    const aprs_station_t *aprs_gone;
+    int              aprs_gone_count;
+    const aprs_packet_t  *aprs_pkts;
+    int              aprs_pkt_count;
+    /* rtl_433 (#208, 2026-11-14): the --rtl433 source's health and the
+     * device table, filled by rtl433_health_poll(); NULL before the
+     * first poll. */
+    rtl433_health_t  rtl433;
+    const rtl433_device_t *rtl433_rows;
+    int              rtl433_count;
+    /* Victron (2026-11-15): the --victron file's health and the device
+     * table, filled by victron_health_poll(); NULL before the first
+     * poll. */
+    victron_health_t victron;
+    const victron_device_t *victron_rows;
+    int              victron_count;
     bredr_lap_t      bredr_laps[MAX_BREDR_LAPS];
     int              bredr_lap_count;
 
@@ -3679,6 +4592,24 @@ typedef struct {
      * kicks an nl80211 scan trigger when --allow-active permitted it
      * (#84). */
     int  (*set_channel)(const char *iface, int freq_mhz);
+    /* Host status and receiver inventory (src/sys_status.h): the text of
+     * one /proc or /sys attribute, and the entry names of one /sys
+     * directory. Read-only, no device node is ever opened, and nothing
+     * is written. sys_read returns the bytes read (at most cap) or -1
+     * when the file is not there; sys_list writes up to max names of
+     * name_sz bytes each into names (a flat max * name_sz buffer) and
+     * returns how many, or -1 when the directory is not there. NULL on a
+     * platform with neither tree: every reading is then absent. */
+    int  (*sys_read)(const char *path, char *buf, int cap);
+    int  (*sys_list)(const char *dir, char *names, int name_sz, int max);
+    /* The host's own link-layer addresses beyond the one per
+     * get_ifaces() row (#183): permanent addresses of interfaces that
+     * are using another, every Wi-Fi phy's address pool, and wireless
+     * devices with no netdev (a P2P device). Up to max unique unicast
+     * addresses into out; returns how many. Read-only. NULL where the
+     * platform has no such source: the get_ifaces() rows then are the
+     * whole self roster. */
+    int  (*get_self_macs)(uint8_t (*out)[6], int max);
 } platform_ops_t;
 
 extern platform_ops_t g_platform;

@@ -19,6 +19,7 @@
 #include "beacon_detect.h"
 #include "dga.h"
 #include "alert_key.h"
+#include "http_log.h"   /* http_entry_is_request() — the ring's halves (#197) */
 #include "rules.h"
 #include "engine_internal.h"
 
@@ -285,6 +286,10 @@ static const char *attack_path_match(const char *path) {
 void rule_attack_path(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->http_log_count; i++) {
         const http_log_entry_t *e = &s->http_log[i];
+        /* The path names who asked, so only the request half can be
+         * attributed: see http_entry_is_request() in src/http_log.h
+         * for what a response's src and path mean together (#197). */
+        if (!http_entry_is_request(e)) continue;
         const char *label = attack_path_match(e->path);
         if (!label) continue;
         char key[ALERT_KEY_LEN];
@@ -352,19 +357,82 @@ static const char *attack_tool_ua_match(const char *ua) {
     return NULL;
 }
 
+/* One fire per (src, tool) key per tick (#173). The rule walks the
+ * whole HTTP ring every tick, and it used to fire once per matching
+ * entry: a key's evaluations climbed by the number of that scanner's
+ * requests still in the ring, up to MAX_HTTP_LOG a tick (3.1e9 on two
+ * keys on the reference host). And because each entry named its own
+ * host, a scanner working several hosts switched the detail between
+ * entries inside one tick, so observations climbed with it.
+ *
+ * The key's entries are summarised instead: the target when there is
+ * one, otherwise how many hosts, and how many matching requests the
+ * ring holds, both through count_bucket(). The detail then moves when
+ * the scanner reaches a new host or its request count a new decade,
+ * not on every pass. The ring is newest first, so a group is fired
+ * from its newest entry and a match at a newer index means the group
+ * was fired already. */
 void rule_attack_tool_ua(const sloth_state_t *s, time_t now) {
-    for (int i = 0; i < s->http_log_count; i++) {
+    int n = s->http_log_count;
+    if (n > MAX_HTTP_LOG) n = MAX_HTTP_LOG;
+    /* The needle walk is the expensive part; one pass, then pointer
+     * compares (labels are table entries, so equal labels are equal
+     * pointers).
+     *
+     * Request half only, for the same reason as rule_attack_path():
+     * the tool is attributed to the endpoint that ran it. A response
+     * off the wire carries no User-Agent — parse_response never fills
+     * the field and pair_response copies only host and path — so this
+     * is explicit rather than load-bearing today, and it keeps the
+     * grouping loops below (which key on src) from ever counting a
+     * server's row as one of its client's requests (#197). */
+    const char *labels[MAX_HTTP_LOG];
+    for (int i = 0; i < n; i++)
+        labels[i] = http_entry_is_request(&s->http_log[i])
+                        ? attack_tool_ua_match(s->http_log[i].user_agent)
+                        : NULL;
+
+    for (int i = 0; i < n; i++) {
         const http_log_entry_t *e = &s->http_log[i];
-        const char *label = attack_tool_ua_match(e->user_agent);
+        const char *label = labels[i];
         if (!label) continue;
+        int fired = 0;
+        for (int j = 0; j < i && !fired; j++)
+            if (labels[j] == label &&
+                strcmp(s->http_log[j].src, e->src) == 0) fired = 1;
+        if (fired) continue;
+
+        unsigned long reqs = 0, hosts = 0;
+        for (int j = i; j < n; j++) {
+            const http_log_entry_t *o = &s->http_log[j];
+            if (labels[j] != label || strcmp(o->src, e->src) != 0) continue;
+            reqs++;
+            int seen = 0;
+            for (int k = i; k < j && !seen; k++)
+                if (labels[k] == label &&
+                    strcmp(s->http_log[k].src, e->src) == 0 &&
+                    strcmp(s->http_log[k].host, o->host) == 0) seen = 1;
+            if (!seen) hosts++;
+        }
+
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
+        char rb[24], hb[24];
         snprintf(key,    sizeof(key),    "ua:%s:%s", e->src, label);
-        snprintf(detail, sizeof(detail),
-                 "%.24s -> %.24s [%.16s]",
-                 e->src[0]  ? e->src  : "?",
-                 e->host[0] ? e->host : "?",
-                 label);
+        count_bucket(rb, reqs);
+        if (hosts == 1)
+            snprintf(detail, sizeof(detail),
+                     "%.24s -> %.24s [%.16s]: %s matching request%s in the"
+                     " HTTP ring",
+                     e->src[0]  ? e->src  : "?",
+                     e->host[0] ? e->host : "?",
+                     label, rb, reqs == 1 ? "" : "s");
+        else
+            snprintf(detail, sizeof(detail),
+                     "%.24s -> %s hosts [%.16s]: %s matching requests in the"
+                     " HTTP ring",
+                     e->src[0] ? e->src : "?", count_bucket(hb, hosts),
+                     label, rb);
         fire(ALERT_TYPE_ATTACK_TOOL_UA, ALERT_SEV_CRIT,
              "ATTACK_TOOL_UA", detail, key, e->src, 80, now);
     }
@@ -898,13 +966,20 @@ void rule_smb1_use(const sloth_state_t *s, time_t now) {
         char key[ALERT_KEY_LEN];
         snprintf(key, sizeof(key), "smb1:%.39s>%.39s:%u",
                  e->client_ip, e->server_ip, (unsigned)e->server_port);
-        char detail[ALERT_DETAIL_LEN];
+        /* The session's packet count moves with every SMB packet on
+         * the flow, so as a raw figure it made observations follow the
+         * tick rate for as long as the session was busy (#173); its
+         * decade is enough to tell one exchange from a bulk transfer,
+         * and the `smb_session` JSONL record keeps the exact figure. */
+        char detail[ALERT_DETAIL_LEN], cb[24];
+        count_bucket(cb, e->count > 0 ? (unsigned long)e->count : 0);
         snprintf(detail, sizeof(detail),
-                 "SMBv1 traffic %.39s -> %.39s:%u (count=%d). SMBv1 has been "
-                 "deprecated since 2017 (EternalBlue / WannaCry); the "
-                 "endpoint serving v1 should be patched or v1 disabled.",
+                 "SMBv1 traffic %.39s -> %.39s:%u (%s SMB packet%s). SMBv1"
+                 " has been deprecated since 2017 (EternalBlue / WannaCry);"
+                 " the endpoint serving v1 should be patched or v1"
+                 " disabled.",
                  e->client_ip, e->server_ip, (unsigned)e->server_port,
-                 e->count);
+                 cb, e->count == 1 ? "" : "s");
         fire(ALERT_TYPE_SMB1_USE, ALERT_SEV_CRIT,
              "SMB1_USE", detail, key, e->server_ip, e->server_port, now);
     }
@@ -1004,31 +1079,45 @@ void rule_bgp_notification_burst(const sloth_state_t *s, time_t now) {
 }
 
 /* SSH brute force: ten or more SSH banner exchanges between one
- * client and one server. SSH brute-force tools (hydra, medusa,
- * ncrack) open many TCP connections per second and complete the
- * banner exchange each time before testing creds; a legitimate
- * user opens one and stays. The signal is the *connection*
- * cadence, not the encrypted auth payload — which we never see.
+ * client and one server inside the sliding ssh.brute_window_s
+ * window. SSH brute-force tools (hydra, medusa, ncrack) open many
+ * TCP connections per second and complete the banner exchange each
+ * time before testing creds; a legitimate user opens one and stays.
+ * The signal is the *connection* cadence, not the encrypted auth
+ * payload — which we never see.
  *
  * Why 10: a normal user might re-connect a handful of times in a
  * session after network blips. Ten distinct banner exchanges to
- * the same server inside the active window is unambiguous
- * brute-force shape. fail2ban's default ban threshold is 5 with a
- * wider window; we're a bit higher to stay surprise-free. */
+ * the same server inside the window is unambiguous brute-force
+ * shape. fail2ban's default ban threshold is 5 with a wider window;
+ * we're a bit higher to stay surprise-free.
+ *
+ * #202: this used to threshold e->banner_count, a lifetime total
+ * that never decayed — once a routine pair crossed 10 banners ever,
+ * the rule re-fired every tick until the row was evicted or the
+ * process restarted (one reference host logged 131,014 fires on 10
+ * ordinary key-auth logins). e->brute_count is kept current by
+ * ssh_snoop_snapshot() every tick from a private sliding window
+ * (src/ssh_snoop.c) — "how many banners landed in the last
+ * ssh.brute_window_s seconds" — so it falls back under the threshold
+ * on its own, and the alert resolves the same way every other engine
+ * incident does, once the flow goes quiet, with no eviction or
+ * restart required. */
 #define SSH_BRUTE_FORCE_THRESHOLD ((int)tune_val(TUNE_SSH_BRUTE_FORCE))
 
 void rule_ssh_brute_force(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->ssh_flow_count; i++) {
         const ssh_flow_t *e = &s->ssh_flows[i];
-        if (e->banner_count < SSH_BRUTE_FORCE_THRESHOLD) continue;
+        if (e->brute_count < SSH_BRUTE_FORCE_THRESHOLD) continue;
 
         char key[ALERT_KEY_LEN];
         snprintf(key, sizeof(key), "ssh-brute:%.39s->%.39s",
                  e->src_ip, e->dst_ip);
         char detail[ALERT_DETAIL_LEN];
         snprintf(detail, sizeof(detail),
-                 "%s->%s: %d SSH banners (brute-force; %.30s)",
-                 e->src_ip, e->dst_ip, e->banner_count,
+                 "%s->%s: %d SSH banners in %ds (brute-force; %.30s)",
+                 e->src_ip, e->dst_ip, e->brute_count,
+                 (int)tune_val(TUNE_SSH_BRUTE_WINDOW_S),
                  e->server_banner[0] ? e->server_banner : "(none)");
         fire(ALERT_TYPE_SSH_BRUTE_FORCE, ALERT_SEV_CRIT,
              "SSH_BRUTE_FORCE", detail, key,
@@ -1036,32 +1125,37 @@ void rule_ssh_brute_force(const sloth_state_t *s, time_t now) {
     }
 }
 
-/* RDP brute force: ten or more X.224 Connection Requests from
- * one client to one server. xfreerdp-loop, NLBrute, and Crowbar
- * all open a fresh TCP connection per credential attempt and
- * complete the TPKT/X.224 negotiation each time. A legitimate
- * user opens one and stays. The signal is the connection
- * cadence; the encrypted CredSSP/TLS payload underneath stays
- * opaque and we never need it.
+/* RDP brute force: ten or more X.224 Connection Requests from one
+ * client to one server inside the sliding rdp.brute_window_s
+ * window. xfreerdp-loop, NLBrute, and Crowbar all open a fresh TCP
+ * connection per credential attempt and complete the TPKT/X.224
+ * negotiation each time. A legitimate user opens one and stays. The
+ * signal is the connection cadence; the encrypted CredSSP/TLS
+ * payload underneath stays opaque and we never need it.
  *
  * Why 10: matches the SSH threshold for the same reason —
  * generous enough for laptops behind NAT that re-connect a few
  * times after sleep/wake, well below what brute-force tools
- * produce in their first minute. */
+ * produce in their first minute.
+ *
+ * #202: same fix as SSH above — connect_req_count was a lifetime
+ * total with no window, so the rule re-fired forever once a routine
+ * pair crossed 10 connections ever. See rule_ssh_brute_force(). */
 #define RDP_BRUTE_FORCE_THRESHOLD ((int)tune_val(TUNE_RDP_BRUTE_FORCE))
 
 void rule_rdp_brute_force(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->rdp_flow_count; i++) {
         const rdp_flow_t *e = &s->rdp_flows[i];
-        if (e->connect_req_count < RDP_BRUTE_FORCE_THRESHOLD) continue;
+        if (e->brute_count < RDP_BRUTE_FORCE_THRESHOLD) continue;
 
         char key[ALERT_KEY_LEN];
         snprintf(key, sizeof(key), "rdp-brute:%.39s->%.39s",
                  e->src_ip, e->dst_ip);
         char detail[ALERT_DETAIL_LEN];
         snprintf(detail, sizeof(detail),
-                 "%s->%s: %d RDP CRs (brute-force; user=%.20s)",
-                 e->src_ip, e->dst_ip, e->connect_req_count,
+                 "%s->%s: %d RDP CRs in %ds (brute-force; user=%.20s)",
+                 e->src_ip, e->dst_ip, e->brute_count,
+                 (int)tune_val(TUNE_RDP_BRUTE_WINDOW_S),
                  e->last_cookie[0] ? e->last_cookie : "?");
         fire(ALERT_TYPE_RDP_BRUTE_FORCE, ALERT_SEV_CRIT,
              "RDP_BRUTE_FORCE", detail, key,
@@ -1081,21 +1175,30 @@ void rule_rdp_brute_force(const sloth_state_t *s, time_t now) {
  * agent it queries. Even an operator typing the wrong string a
  * couple times stays well below 5. metasploit's default list
  * starts with public/private/cisco/community/admin — five hits
- * trips immediately. */
+ * trips immediately.
+ *
+ * #203: this used to threshold e->community_count, a lifetime total
+ * that never decayed — the same bug #202 fixed for SSH/RDP. Once a
+ * pair had ever tried five communities the rule re-fired every tick
+ * until eviction or restart. e->brute_count is the count of new
+ * communities first seen inside the last snmp.brute_window_s seconds,
+ * kept current by snmp_snoop_snapshot() from a private ring
+ * (src/snmp_snoop.c), so the incident resolves once the sweep stops. */
 #define SNMP_COMMUNITY_BRUTE_THRESHOLD ((int)tune_val(TUNE_SNMP_COMMUNITY_BRUTE))
 
 void rule_snmp_community_brute(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->snmp_flow_count; i++) {
         const snmp_flow_t *e = &s->snmp_flows[i];
-        if (e->community_count < SNMP_COMMUNITY_BRUTE_THRESHOLD) continue;
+        if (e->brute_count < SNMP_COMMUNITY_BRUTE_THRESHOLD) continue;
 
         char key[ALERT_KEY_LEN];
         snprintf(key, sizeof(key), "snmp-brute:%.39s->%.39s",
                  e->src_ip, e->dst_ip);
         char detail[ALERT_DETAIL_LEN];
         snprintf(detail, sizeof(detail),
-                 "%s->%s: %d SNMP communities tried (last=%.16s)",
-                 e->src_ip, e->dst_ip, e->community_count,
+                 "%s->%s: %d SNMP communities tried in %ds (last=%.16s)",
+                 e->src_ip, e->dst_ip, e->brute_count,
+                 (int)tune_val(TUNE_SNMP_BRUTE_WINDOW_S),
                  e->last_community[0] ? e->last_community : "?");
         fire(ALERT_TYPE_SNMP_COMMUNITY_BRUTE, ALERT_SEV_CRIT,
              "SNMP_COMMUNITY_BRUTE", detail, key,
@@ -1114,15 +1217,24 @@ void rule_snmp_community_brute(const sloth_state_t *s, time_t now) {
  * Why 10 / 5: matches the SSH brute threshold for CONNECT count
  * (same connection-cadence reasoning) and a tighter 5 for explicit
  * CONNACK failures — the broker telling us "wrong" five times is
- * stronger evidence than just connection volume. */
+ * stronger evidence than just connection volume.
+ *
+ * #203: both paths used to threshold lifetime totals
+ * (connect_count / connack_fail_count) that never decayed, so a
+ * routine client that reconnected ten times ever stood as a CRIT
+ * forever — #202's bug. Each path now reads its own window,
+ * brute_connects / brute_fails, the CONNECTs and refused CONNACKs
+ * inside the last mqtt.brute_window_s seconds, kept by
+ * mqtt_snoop_snapshot() from two private rings (src/mqtt_snoop.c).
+ * Two rings, not one, so the either-path semantics are unchanged. */
 #define MQTT_BROKER_BRUTE_CONNECTS ((int)tune_val(TUNE_MQTT_BRUTE_CONNECTS))
 #define MQTT_BROKER_BRUTE_FAILS ((int)tune_val(TUNE_MQTT_BRUTE_FAILS))
 
 void rule_mqtt_broker_brute(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->mqtt_flow_count; i++) {
         const mqtt_flow_t *e = &s->mqtt_flows[i];
-        int trip = (e->connect_count      >= MQTT_BROKER_BRUTE_CONNECTS)
-                || (e->connack_fail_count >= MQTT_BROKER_BRUTE_FAILS);
+        int trip = (e->brute_connects >= MQTT_BROKER_BRUTE_CONNECTS)
+                || (e->brute_fails    >= MQTT_BROKER_BRUTE_FAILS);
         if (!trip) continue;
 
         char key[ALERT_KEY_LEN];
@@ -1130,9 +1242,10 @@ void rule_mqtt_broker_brute(const sloth_state_t *s, time_t now) {
                  e->src_ip, e->dst_ip);
         char detail[ALERT_DETAIL_LEN];
         snprintf(detail, sizeof(detail),
-                 "%s->%s: %d CONNECTs / %d fails (user=%.16s)",
+                 "%s->%s: %d CONNECTs / %d fails in %ds (user=%.16s)",
                  e->src_ip, e->dst_ip,
-                 e->connect_count, e->connack_fail_count,
+                 e->brute_connects, e->brute_fails,
+                 (int)tune_val(TUNE_MQTT_BRUTE_WINDOW_S),
                  e->last_username[0] ? e->last_username : "?");
         fire(ALERT_TYPE_MQTT_BROKER_BRUTE, ALERT_SEV_CRIT,
              "MQTT_BROKER_BRUTE", detail, key,
@@ -1141,14 +1254,39 @@ void rule_mqtt_broker_brute(const sloth_state_t *s, time_t now) {
 }
 
 /* DGA: any qname whose leftmost label trips the dga_is_suspicious
- * heuristic — high Shannon entropy + consonant clusters + digit
- * density. Dedup key is the qname so repeated lookups against the
- * same domain only ever produce one alert. */
+ * heuristic — since #222 a weighted score over five length-aware
+ * lexical signals, per `-`-separated piece (src/dga.c). Dedup key is
+ * the qname so repeated lookups only ever produce one alert.
+ *
+ * One fire per name per tick, naming the client that asked (#173). A
+ * name sits in the ring as its query and as its response, and `src`
+ * is the client on the first and the resolver on the second; firing
+ * once per entry alternated the detail between the two every tick,
+ * so observations followed evaluations (376e6 on 11 names on the
+ * reference host), and `match_ip` was whichever slot was newest when
+ * the incident opened, often the resolver. The newest *query* speaks
+ * for the name, so the detail moves when a client asks again, not on
+ * every pass; the resolver is named only when the ring holds nothing
+ * but responses for it. The ring is newest first, so an earlier index
+ * with the same name means the name was fired already. */
 void rule_dga_domain(const sloth_state_t *s, time_t now) {
-    for (int i = 0; i < s->dns_log_count; i++) {
+    int n = s->dns_log_count;
+    if (n > MAX_DNS_LOG) n = MAX_DNS_LOG;
+    for (int i = 0; i < n; i++) {
         const dns_log_entry_t *e = &s->dns_log[i];
         if (!e->qname[0]) continue;
+        int fired = 0;
+        for (int j = 0; j < i && !fired; j++)
+            if (strcmp(s->dns_log[j].qname, e->qname) == 0) fired = 1;
+        if (fired) continue;
         if (!dga_is_suspicious(e->qname)) continue;
+
+        /* The newest query for the name, if the ring still has one. */
+        const dns_log_entry_t *q = NULL;
+        for (int j = i; j < n && !q; j++)
+            if (!s->dns_log[j].is_resp &&
+                strcmp(s->dns_log[j].qname, e->qname) == 0)
+                q = &s->dns_log[j];
 
         /* The qname is chosen by whoever generated it — the point of a
          * DGA — so it is a remote component: readable prefix plus the
@@ -1159,12 +1297,20 @@ void rule_dga_domain(const sloth_state_t *s, time_t now) {
         akey_begin(&k, key, sizeof(key), "dga");
         akey_remote(&k, e->qname, 40);
         if (!akey_end(&k)[0]) continue;
-        snprintf(detail, sizeof(detail),
-                 "%.30s queried %.30s (entropy %.2f bits/char)",
-                 e->src[0] ? e->src : "?", e->qname,
-                 dga_label_entropy(e->qname));
+        const char *who = q ? q->src : e->src;
+        if (q)
+            snprintf(detail, sizeof(detail),
+                     "%.30s queried %.30s (entropy %.2f bits/char)",
+                     who[0] ? who : "?", e->qname,
+                     dga_label_entropy(e->qname));
+        else
+            snprintf(detail, sizeof(detail),
+                     "%.30s answered %.30s (entropy %.2f bits/char; the"
+                     " query is no longer in the DNS log)",
+                     who[0] ? who : "?", e->qname,
+                     dga_label_entropy(e->qname));
         fire(ALERT_TYPE_DGA_DOMAIN, ALERT_SEV_WARN,
-             "DGA_DOMAIN", detail, key, e->src, 53, now);
+             "DGA_DOMAIN", detail, key, who, 53, now);
     }
 }
 

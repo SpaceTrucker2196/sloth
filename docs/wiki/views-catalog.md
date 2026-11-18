@@ -12,10 +12,18 @@ type: reference
 bar, the help card, the draw dispatch and the view-select keys are all
 generated from — #117), `docs/views/README.md` and all `docs/views/*.md`.
 
-**Count**: `VIEW_COUNT` = **<!-- count:views -->36<!-- /count -->**. Every key below is a row of
+**Count**: `VIEW_COUNT` = **<!-- count:views -->37<!-- /count -->**. Every key below is a row of
 `include/sloth_views.def`; if the two disagree, the `.def` is right.
 
-**Last updated**: 2026-10-26 (#150 review: the clip counts wide glyphs as two cells, a cut row ends with `›`, Research's sources and the Interfaces health strip break onto rows instead of being cut); 2026-10-23 (#150: list views size their page from the cursor and clip table rows at the edge, banners above them wrap; Twins keeps Flags whole at 100 columns); 2026-10-21 (#144 slice 4: `*` BLE, the first punctuation view key); 2026-10-15 (#117 — keys and count now generated from `sloth_views.def`).
+**Which binary**: these are `sloth-wifi`'s views (`sloth` is a symlink
+to it, the same program). The second daemon, `sloth-rf`, has none: it is
+headless and slothweb is its interface ([ADR 0010](adr/0010-wifi-rf-daemons.md)).
+The ADS-B view (`^`) left with the decoders at the cutover (#216); it
+was the list's last row, so no other view's number or key moved, and
+`^` selects nothing. The aircraft table is slothweb's ADS-B tab
+([[adsb]]). The GNSS view (`#`) stays: `sloth-wifi` keeps the receiver.
+
+**Last updated**: 2026-11-15 (#216: the `^` ADS-B row removed; the views are `sloth-wifi`'s, `sloth-rf` has none); 2026-11-07 (the `^` ADS-B row: the `--adsb` decoder's aircraft table, observation only, distance and bearing only with a sensor position); 2026-11-02 (the `#` GNSS row: the `--gps` receiver's sky, observation only); 2026-11-01 (the `*` BLE row names slothweb's BLE tab, key `0`); 2026-10-26 (#150 review: the clip counts wide glyphs as two cells, a cut row ends with `›`, Research's sources and the Interfaces health strip break onto rows instead of being cut); 2026-10-23 (#150: list views size their page from the cursor and clip table rows at the edge, banners above them wrap; Twins keeps Flags whole at 100 columns); 2026-10-21 (#144 slice 4: `*` BLE, the first punctuation view key); 2026-10-15 (#117 — keys and count now generated from `sloth_views.def`).
 
 ---
 
@@ -30,7 +38,7 @@ generated from — #117), `docs/views/README.md` and all `docs/views/*.md`.
 | `5` | Processes   | [processes.md](../views/processes.md) | per-process socket inventory |
 | `6` | Stats       | [stats.md](../views/stats.md) | counters from `/proc/net/snmp` |
 | `7` | Probe       | [probe.md](../views/probe.md) | 802.11 probe-request sniffer |
-| `8` | ARP         | [arp.md](../views/arp.md) | kernel ARP table |
+| `8` | ARP         | [arp.md](../views/arp.md) | kernel neighbour table: ARP, and the IPv6 NDP cache since #176 |
 | `9` | mDNS        | [mdns.md](../views/mdns.md) | multicast DNS service announcements |
 | `0` | NBNS        | [nbns.md](../views/nbns.md) | NetBIOS name service / LLMNR |
 | `d` | DHCP        | [dhcp.md](../views/dhcp.md) | DHCP DISCOVER/OFFER/REQUEST/ACK |
@@ -57,7 +65,8 @@ generated from — #117), `docs/views/README.md` and all `docs/views/*.md`.
 | `y` | KARMA     | [karma.md](../views/karma.md) | KARMA / PineAP candidate table (#30) |
 | `z` | RADIUS    | [rogue-radius.md](../views/rogue-radius.md) | 802.1X EAP method / identity-leak table (#31, #38) — see [[enterprise-rogue]] |
 | `c` | FragAttacks | [fragattack.md](../views/fragattack.md) | per-BSSID FragAttacks counters (#75) — see [[fragattacks]] |
-| `*` | BLE | [ble.md](../views/ble.md) | BLE advertisers per sensor, HID / watchlist flags, `Enter` detail (#144 slice 4) — see [[ble]]. `*` because every letter and digit is taken |
+| `*` | BLE | [ble.md](../views/ble.md) | BLE advertisers per sensor, HID / watchlist flags, `Enter` detail (#144 slice 4) — see [[ble]]. `*` because every letter and digit is taken. In [[slothweb]] the same view is the BLE tab (key `0`), at parity |
+| `#` | GNSS | [gnss.md](../views/gnss.md) | the `--gps` receiver's sky: satellites in view with C/N0, elevation, azimuth, used and health, the DOPs and the receiver's clock against the host's; observation only, the detectors follow (2026-11-02) — see [[gnss]]. `#` because every letter and digit is taken. In [[slothweb]] the same view is the GNSS tab |
 | `f` | Research  | [research.md](../views/research.md) | the cited source behind each alert that fired (#73) — see [[research-corpus]] |
 | `?` | Help      | — | keybindings, version, and the embedded-data disclosures |
 

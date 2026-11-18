@@ -10,6 +10,7 @@
 #include "ble_watchlist.h"
 #include "sloth_clock.h"
 #include "stab.h"
+#include "rf_distance.h"
 
 /* Contract, allow-list and sources in ble_hci.h. Opcodes are
  * OGF << 10 | OCF, Core Specification v5.4 Vol 4 Part E §5.4.1; the
@@ -341,10 +342,20 @@ static void observe_locked(const ble_obs_t *o) {
     if (r->has_appearance)     { d->has_appearance = 1; d->appearance = r->appearance; }
     if (r->has_tx_power)       { d->has_tx_power = 1; d->tx_power = r->tx_power; }
     if (r->has_flags)          { d->has_flags = 1; d->flags = r->flags; }
+    if (r->ext && r->has_adv_tx_power) {
+        d->has_ext_tx_power = 1;
+        d->ext_tx_power     = r->adv_tx_power;
+    }
     if (r->has_rssi) {
         d->has_rssi = 1;
         d->rssi     = r->rssi;
         if (r->rssi > d->rssi_best) d->rssi_best = r->rssi;
+        /* The distance data point, after the power fields above so a
+         * report that announces its power is estimated with it. */
+        rf_ctx_t ctx;
+        rf_ctx_ble(&ctx, d->has_ext_tx_power, d->ext_tx_power,
+                   d->has_tx_power, d->tx_power);
+        rf_track_observe(&d->dist, r->rssi, o->ts, &ctx);
     }
     /* #144 slice 4: what the three BLE rules key on. */
     if (r->has_svc_data16) {

@@ -9,6 +9,7 @@
 #include "jsonl.h"
 #include "reg_obs.h"
 #include "views/beacon.h"
+#include "tmp_dir.h"
 
 /*
  * Regulatory readings for the operator — issue #101 slice B: the REG
@@ -309,26 +310,27 @@ static void test_list_reg_column_flexes_with_width(void) {
     ASSERT_SCREEN_HAS("US/O TPC17 PC3");
     ASSERT(list_row_on_one_line());
 
-    /* 145 columns leave 145 - 132 = 13 for REG: room for two tokens. */
-    draw_at(40, 145);
+    /* 159 columns leave 159 - 146 = 13 for REG: room for two tokens.
+     * (146: the row before REG gained the 14-cell distance column.) */
+    draw_at(40, 159);
     ASSERT_SCREEN_HAS("US/O TPC17");
     ASSERT_SCREEN_LACKS("PC3");
     ASSERT(list_row_on_one_line());
 
-    /* 136 is the narrowest that fits the 4-cell floor on one line. */
-    draw_at(40, 136);
+    /* 150 is the narrowest that fits the 4-cell floor on one line. */
+    draw_at(40, 150);
     ASSERT_SCREEN_HAS("US/O");
     ASSERT(list_row_on_one_line());
 
     /* Below it the column is dropped, not forced in: rows that fit
-     * without REG (129-135 columns) must not start wrapping because of
+     * without REG (143-149 columns) must not start wrapping because of
      * it. Seen to fail with the floor clamped up (REG drawn at 4 cells)
      * instead of dropped. */
-    draw_at(40, 135);
+    draw_at(40, 149);
     ASSERT_SCREEN_LACKS("US/O");
     ASSERT_SCREEN_LACKS("REG");
     ASSERT(list_row_on_one_line());
-    draw_at(40, 130);
+    draw_at(40, 144);
     ASSERT_SCREEN_LACKS("US/O");
     ASSERT(list_row_on_one_line());
 
@@ -490,10 +492,10 @@ static void test_detail_worst_case_does_not_wrap(void) {
 
 /* ── wifi_regulatory JSONL ───────────────────────────────── */
 
-static char g_path[] = "/tmp/sloth_regjsonl_XXXXXX";
+static char g_path[TEST_TMP_MAX];
 
 static void open_fresh(void) {
-    int fd = mkstemp(g_path);
+    int fd = mkstemp(test_tmp_tpl(g_path, sizeof(g_path), "sloth_regjsonl_XXXXXX"));
     if (fd >= 0) close(fd);
     jsonl_close();
     unlink(g_path);
@@ -721,4 +723,7 @@ void run_reg_obs_tests(void) {
     RUN_TEST(test_jsonl_change_only_on_claims);
     RUN_TEST(test_jsonl_malformed_counts_do_not_churn);
     RUN_TEST(test_jsonl_full_table_does_not_ping_pong);
+
+    jsonl_close();
+    unlink(g_path);
 }

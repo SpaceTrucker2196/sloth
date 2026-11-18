@@ -17,6 +17,7 @@
 #include "assoc_track.h"
 #include "action_snoop.h"
 #include "ctrl_frames.h"
+#include "db.h"
 #include "ownership.h"
 #include "rf_quality.h"
 #include "pm_forge.h"
@@ -33,6 +34,23 @@ SLOTH_STATIC_ASSERT(PM_FORGE_EVIDENCE_IDS <= ALERT_EVIDENCE_IDS,
                     pm_forge_cites_within_the_alert);
 SLOTH_STATIC_ASSERT(QUEUE_EVICT_EVIDENCE_IDS <= ALERT_EVIDENCE_IDS,
                     queue_evict_cites_within_the_alert);
+
+/* #183 item 2: a rule with no roster exoneration still evaluates when
+ * the MAC on one side of the finding turns out to be the sensor's own
+ * — a compromised sensor is still worth knowing about — but drops one
+ * severity step and says so in the detail, so the operator reads "the
+ * sensor" rather than "an attacker". One step only: CRIT->WARN->LOW,
+ * floor at LOW.
+ *
+ * The callers ask ownership_is_self_mac(), not ownership_is_own_device():
+ * the tag says "the sensor's own radio", which is false of a device on
+ * the operator's --known-mac roster, and in PM_FORGE and BLOCKACK_ATTACK
+ * the station named is the one being attacked. An attack on a laptop the
+ * operator wrote down is the finding at full severity, the same reason
+ * BTM_ABUSE and PEAP_NO_SERVER_CERT keep the two rosters apart. */
+static alert_sev_t sev_demote_one(alert_sev_t sev) {
+    return sev > ALERT_SEV_LOW ? (alert_sev_t)(sev - 1) : ALERT_SEV_LOW;
+}
 
 /* Deauth/disassoc flood (#88). Fires per (BSSID, victim) impact
  * aggregate while its sliding window is flooded: at least
@@ -356,6 +374,7 @@ void rule_blockack_attack(const sloth_state_t *s, time_t now) {
     if (bar_worst_offender(now, 300, &b) <= 0) return;
 
     int mine = ownership_is_my_bssid(b.bssid);
+    int self = ownership_is_self_mac(b.sta);
 
     /* Is the receiving side visibly struggling? rf_quality tracks the
      * retry ratio per channel; a stalled Block-Ack window shows up
@@ -374,13 +393,15 @@ void rule_blockack_attack(const sloth_state_t *s, time_t now) {
     snprintf(key, sizeof(key), "bl0ck:%.17s:%.17s:%u", rx, tx, b.tid);
     snprintf(detail, sizeof(detail),
              "Bl0ck: %.17s -> %.17s TID %u SSN jump %u, %u suspicious of "
-             "%u BARs%s%s",
+             "%u BARs%s%s%s",
              tx, rx, b.tid, b.last_jump, b.suspicious_bars, b.total_bars,
              degraded ? " (channel retrying hard)" : "",
-             mine ? " - YOUR network" : "");
+             mine ? " - YOUR network" : "",
+             self ? " - self (the sensor's own radio)" : "");
 
-    fire(ALERT_TYPE_BLOCKACK_ATTACK,
-         mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+    alert_sev_t sev = mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN;
+    if (self) sev = sev_demote_one(sev);
+    fire(ALERT_TYPE_BLOCKACK_ATTACK, sev,
          "BLOCKACK_ATK", detail, key, NULL, 0, now);
 }
 
@@ -846,6 +867,16 @@ void rule_probe_flood(const sloth_state_t *s, time_t now) {
  * exonerations that were missing: a correlated sibling address that *is*
  * associated, and the operator's own roster.
  *
+ * #183 adds the two the reference host needed. The host's own interface
+ * addresses are rostered automatically, because the first device this
+ * rule finds on a sensor sitting on the designated network is the
+ * sensor's own managed card doing a background scan. And an association
+ * this host *recorded* inside the corroboration window counts, not only
+ * one still live in the assoc table: the live row aged out 33 minutes
+ * before the sustained-probing corroboration escalated the finding, so
+ * the exoneration was being asked for an instant while the accusation
+ * was measured over ten minutes.
+ *
  * Deliberately NOT corroborated by a randomised MAC. Probe-request MAC
  * randomisation is default behaviour on current iOS and Android, so it
  * describes the phone population, not the adversary. */
@@ -893,6 +924,28 @@ static int correlated_sibling_is_associated(const sloth_state_t *s,
     return 0;
 }
 
+/* The same exoneration, from the record instead of the moment (#183).
+ *
+ * `sustained` is measured over recon.sustain_s, so the association that
+ * answers it has to be allowed the same window: on the reference host
+ * the card's association left the live table 33 minutes before the
+ * corroboration escalated the finding, and the rule then reported a
+ * radio that had been on the designated network throughout. A `--db`
+ * run has the row; without one this returns 0 and the rule behaves as
+ * it did before.
+ *
+ * Only the client's own address is looked up, not its correlated
+ * siblings: a sibling's persisted association would be a second
+ * inference on top of the correlation, and the live-sibling rule above
+ * is what the issue scoped. */
+static int assoc_recorded_within_window(const uint8_t mac[6], time_t now) {
+    time_t seen = db_sta_designated_assoc_last_seen(mac);
+    if (seen <= 0) return 0;
+    long age = (long)(now - seen);
+    if (age < 0) age = 0;          /* a stepped clock is not evidence */
+    return age <= RECON_SUSTAIN_S;
+}
+
 void rule_my_network_recon(const sloth_state_t *s, time_t now) {
     if (!ownership_any()) return;      /* nothing designated — no work */
     for (int i = 0; i < s->pnl_count; i++) {
@@ -910,9 +963,16 @@ void rule_my_network_recon(const sloth_state_t *s, time_t now) {
         if (!hit) continue;
         if (sta_is_associated_to_designated(s, p->mac))  continue;
         if (correlated_sibling_is_associated(s, p->mac)) continue;
-        /* The operator wrote this one down as theirs. That is the answer
-         * to "returning employee" and it outranks every inference. */
-        if (ownership_is_known_device(p->mac))           continue;
+        /* Ours: the operator wrote this one down, or it is one of the
+         * sensor's own interface addresses (#183). That is the answer to
+         * "returning employee" and it outranks every inference — and
+         * the sensor's own managed card is the first thing this rule
+         * finds on any host associated to the designated network, which
+         * is what the roster is for. */
+        if (ownership_is_own_device(p->mac))             continue;
+        /* ...and the association this host recorded inside the same
+         * window the corroboration is measured over (#183 item 3). */
+        if (assoc_recorded_within_window(p->mac, now))   continue;
 
         /* Corroborators. Both are positive observations; absence of
          * evidence is never one of them — an incomplete capture is the
@@ -977,7 +1037,17 @@ void rule_my_network_recon(const sloth_state_t *s, time_t now) {
  * Severity is WARN, not CRIT: a delivery van on a round, or a neighbour
  * with a short commute, produces this honestly. It is a lead, not a
  * conclusion, and the detail line carries the pass count and closest
- * approach so the operator can judge. */
+ * approach so the operator can judge.
+ *
+ * A device on the operator's --known-mac roster drops one step and is
+ * tagged "rostered device" (#183, owner ruling 2a): the subject here is
+ * the device doing the passing, and one the operator wrote down coming
+ * and going is the expected case, not a lead. That reasoning is this
+ * rule's alone. In PM_FORGE and BLOCKACK_ATTACK the station named is
+ * the one being attacked, so the roster must not soften them. "self"
+ * wins when an address is on both rosters: it is the narrower claim,
+ * and the two tags are one step each, never two. The tag and severity
+ * stay out of the key, so a device is one incident either way. */
 void rule_recurring_transit(const sloth_state_t *s, time_t now) {
     const long window = tune_val(TUNE_TRANSIT_WINDOW_SECS);
     const int  thresh = (int)tune_val(TUNE_TRANSIT_RECUR_THRESH);
@@ -993,15 +1063,21 @@ void rule_recurring_transit(const sloth_state_t *s, time_t now) {
 
         char mac_buf[20];
         mac_to_str(d->mac, mac_buf, sizeof(mac_buf));
+        int self = ownership_is_self_mac(d->mac);
+        int rostered = !self && ownership_is_known_device(d->mac);
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
         snprintf(key, sizeof(key), "transit:%s", mac_buf);
         long span = (long)(d->last_seen - d->pass_ts[0]);
         if (span < 0) span = 0;
         snprintf(detail, sizeof(detail),
-                 "%s passed %d times in %ldm (closest %ddBm) - circling",
-                 mac_buf, passes, span / 60, (int)d->best_rssi);
-        fire(ALERT_TYPE_RECURRING_TRANSIT, ALERT_SEV_WARN,
+                 "%s passed %d times in %ldm (closest %ddBm) - circling%s",
+                 mac_buf, passes, span / 60, (int)d->best_rssi,
+                 self ? " - self (the sensor's own radio)"
+                      : rostered ? " - rostered device" : "");
+        fire(ALERT_TYPE_RECURRING_TRANSIT,
+             (self || rostered) ? sev_demote_one(ALERT_SEV_WARN)
+                                : ALERT_SEV_WARN,
              "RECURRING_TRANSIT", detail, key, NULL, 0, now);
     }
 }
@@ -1031,7 +1107,12 @@ void rule_unknown_device(const sloth_state_t *s, time_t now) {
         int mine = ownership_is_my_bssid(a->bssid) ||
                    ownership_is_my_ssid(a->ssid);
         if (!mine) continue;
-        if (ownership_is_known_device(a->sta_mac)) continue;
+        /* The roster, plus the sensor's own addresses (#183): a host
+         * running sloth on its own network is associated to it, and
+         * "unknown device on my network" must not name the sensor. The
+         * *gate* above still counts only the operator's entries, so
+         * this rule stays inert until they roster something. */
+        if (ownership_is_own_device(a->sta_mac)) continue;
 
         char sta[20], bss[20];
         mac_to_str(a->sta_mac, sta, sizeof(sta));
@@ -1094,34 +1175,56 @@ void rule_rf_degraded(const sloth_state_t *s, time_t now) {
  * only that the two declarations disagree. Escalated to CRIT only
  * when the BSSID is operator-designated, per the issue's own
  * correlation rule and the wording discipline #90 established:
- * "pattern consistent with", never "attacker is". */
+ * "pattern consistent with", never "attacker is".
+ *
+ * Recency bound (#173), the one rule_queue_evict has had since #107:
+ * contradiction_count is a lifetime figure cleared only when the row
+ * leaves the 128-entry LRU, so one contradiction re-asserted the key
+ * every tick for as long as the station stayed in the table (141e6
+ * evaluations on 23 stations on the reference host). A contradiction
+ * older than PM_FORGE_REPORT_SECS is no longer reported; the incident
+ * resolves ALERT_RESOLVE_AFTER_S later, and a new contradiction opens
+ * the next one. The same 900 s as queue_evict.report_secs, because the
+ * two halves of one attack should age out together. Aged on when the
+ * contradiction arrived (host clock, as `now` is), not on the frame's
+ * capture stamp: against the capture stamp a --replay of an older
+ * savefile reported nothing at all. */
+#define PM_FORGE_REPORT_SECS 900
+
 void rule_pm_forge(const sloth_state_t *s, time_t now) {
     (void)s;
     pm_forge_t tbl[MAX_PM_FORGE_ENTRIES];
     int n = pm_forge_snapshot(tbl, MAX_PM_FORGE_ENTRIES);
     for (int i = 0; i < n; i++) {
         if (tbl[i].contradiction_count == 0) continue;
+        if (tbl[i].last_contradiction_arrival <= 0 ||
+            now - tbl[i].last_contradiction_arrival > PM_FORGE_REPORT_SECS)
+            continue;
 
         char bss[20], sta[20];
         mac_to_str(tbl[i].bssid, bss, sizeof(bss));
         mac_to_str(tbl[i].sta,   sta, sizeof(sta));
         int mine = ownership_is_my_bssid(tbl[i].bssid);
+        int self = ownership_is_self_mac(tbl[i].sta);
 
         char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
         snprintf(key, sizeof(key), "pmforge:%s", sta);
         snprintf(detail, sizeof(detail),
                  "%s at %s: PM=0 data contradicted a PM=1 sleep "
                  "declaration %d time(s) - pattern consistent with "
-                 "Framing Frames queue manipulation, CVE-2022-47522%s",
+                 "Framing Frames queue manipulation, CVE-2022-47522%s%s",
                  sta, bss, tbl[i].contradiction_count,
-                 mine ? " - YOUR network" : "");
+                 mine ? " - YOUR network" : "",
+                 self ? " - self (the sensor's own radio)" : "");
         /* Cites the frame pairs that formed the contradiction (#92):
          * a data frame has no flow sloth can export on for this — the
          * queue manipulation is the 802.11 header — so the evidence
          * ring is the only route back to the bytes. */
         uint64_t ev[PM_FORGE_EVIDENCE_IDS];
         int ev_n = pm_forge_evidence(&tbl[i], ev, PM_FORGE_EVIDENCE_IDS);
-        fire_ev(ALERT_TYPE_PM_FORGE, mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+        alert_sev_t sev = mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN;
+        if (self) sev = sev_demote_one(sev);
+        fire_ev(ALERT_TYPE_PM_FORGE, sev,
                 ev, ev_n, "PM_FORGE", detail, key, NULL, 0, now);
     }
 }
@@ -1264,6 +1367,34 @@ void rule_queue_evict(const sloth_state_t *s, time_t now) {
 #define MGMT_FUZZ_WARN ((int)tune_val(TUNE_MGMT_FUZZ_WARN))
 #define MGMT_FUZZ_CRIT ((int)tune_val(TUNE_MGMT_FUZZ_CRIT))
 
+/* The detail reports a rate, not the counters (#173). Each counter
+ * rises with every malformed frame, so a driver that puts one bad IE in
+ * every beacon moved the detail ten times a second until the uint16
+ * saturated, and observations followed the tick rate (501e6 on 403
+ * keys on the reference host). Which defects are present, and how many
+ * per hundred frames heard from the BSSID, in a band: that is what
+ * separates a fault in every frame from a few stray ones, and it holds
+ * still while the fault does. The exact counters stay on the `beacon`
+ * JSONL record (fuzz_*). The bands' edges sit away from the
+ * figures a steady fault produces (100 for one bad IE a frame, 200 for
+ * two), so a constant fault does not straddle one.
+ *
+ * The counters saturate at 0xffff (beacon_snoop.c) while frame_count
+ * keeps climbing, so past saturation the quotient falls with every
+ * frame: a fault in every beacon at 10 a second would read "10-49"
+ * after about 18 hours and "under 1" after a week, the stray-frame
+ * reading for the opposite case. Once any counter is saturated the
+ * rate is no longer measured and the detail says so instead, one
+ * change and then still. */
+#define MGMT_FUZZ_COUNTER_SAT 0xffffu
+
+static const char *mgmt_fuzz_rate_band(unsigned long per100) {
+    if (per100 >= 50) return "50 or more";
+    if (per100 >= 10) return "10-49";
+    if (per100 >= 1)  return "1-9";
+    return "under 1";
+}
+
 void rule_mgmt_fuzz(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
@@ -1277,11 +1408,39 @@ void rule_mgmt_fuzz(const sloth_state_t *s, time_t now) {
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
         snprintf(key, sizeof(key), "mgmtfuzz:%s", bssid);
-        snprintf(detail, sizeof(detail),
-                 "BSSID %s malformed IEs: %u overrun / %u oversize-SSID / "
-                 "%u truncated-RSN - 802.11 mgmt fuzzing",
-                 bssid, a->fuzz_ie_overruns, a->fuzz_oversize_ssid,
-                 a->fuzz_truncated_rsn);
+
+        char kinds[64];
+        int kn = 0;
+        kinds[0] = '\0';
+        if (a->fuzz_ie_overruns)
+            kn += snprintf(kinds + kn, sizeof(kinds) - (size_t)kn,
+                           "%sIE overrun", kn ? ", " : "");
+        if (a->fuzz_oversize_ssid)
+            kn += snprintf(kinds + kn, sizeof(kinds) - (size_t)kn,
+                           "%soversize SSID", kn ? ", " : "");
+        if (a->fuzz_truncated_rsn)
+            snprintf(kinds + kn, sizeof(kinds) - (size_t)kn,
+                     "%struncated RSN", kn ? ", " : "");
+        /* frame_count counts every frame the table took from this
+         * BSSID, the frames the counters were read from. */
+        unsigned long frames = a->frame_count > 0
+                             ? (unsigned long)a->frame_count : 1ul;
+        unsigned long per100 = (unsigned long)score * 100ul / frames;
+        int saturated = a->fuzz_ie_overruns   >= MGMT_FUZZ_COUNTER_SAT ||
+                        a->fuzz_oversize_ssid >= MGMT_FUZZ_COUNTER_SAT ||
+                        a->fuzz_truncated_rsn >= MGMT_FUZZ_COUNTER_SAT;
+        if (saturated)
+            snprintf(detail, sizeof(detail),
+                     "BSSID %s malformed IEs (%s): counters saturated,"
+                     " rate no longer measured - 802.11 mgmt fuzzing",
+                     bssid, kinds);
+        else {
+            const char *band = mgmt_fuzz_rate_band(per100);
+            snprintf(detail, sizeof(detail),
+                     "BSSID %s malformed IEs (%s): %s per 100 frames heard"
+                     " - 802.11 mgmt fuzzing",
+                     bssid, kinds, band);
+        }
         fire(ALERT_TYPE_MGMT_FUZZ,
              score >= MGMT_FUZZ_CRIT ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
              "MGMT_FUZZ", detail, key, NULL, 0, now);

@@ -243,6 +243,13 @@ counters never see them; without this a radio handing over only garbage
 reads as a quiet channel. Lifetime, shown only when non-zero, not in
 JSONL.
 
+`gps <state>` (2026-10-27) appears whenever `--location` or `--gps`
+is given, unlike the fault-only tokens around it, because the operator
+asked for a position and should see whether alerts are getting one:
+`gps fix 9sat`, `gps stale 45s`, `gps searching (using --location)`,
+`gps fixed`, with ` err <reason>` when the reader's last open, read or
+connect failed. See [location](../wiki/location.md).
+
 `retune-fail` is the lifetime `chan_retune_failures` from slice 1 above,
 followed by the reason for the most recent failure (`retune-fail 4
 EBUSY`): `EPERM` wants capabilities, `EBUSY` wants the radio's other

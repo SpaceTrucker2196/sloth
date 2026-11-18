@@ -17,6 +17,7 @@
 #include "tui.h"
 #include "tune.h"
 #include "views/ble.h"
+#include "tmp_dir.h"
 
 /*
  * The BLE detector lanes, the [*] BLE view and the ble_device /
@@ -909,6 +910,79 @@ static void test_watch_drops_count_groups_not_rows_past_the_cap(void) {
     sloth_clock_test_set(NULL, NULL);
 }
 
+/* Fill every group slot with BLE_FINDINGS_MAX distinct recent groups on
+ * BT_MONITOR_DEVICE; returns the next free row. */
+static int fill_watch_groups(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    int n = 0;
+    for (; n < BLE_FINDINGS_MAX; n++) {
+        ble_device_t *d = &g_s.ble_devices[n];
+        addr_n(d->addr, 0x800 + (unsigned)n);
+        d->addr_type = 1;
+        d->last_seen = g_wall - 1;
+        snprintf(d->sensor_iface, sizeof(d->sensor_iface), "%s", BT_MONITOR_DEVICE);
+        snprintf(d->watch_cat, sizeof(d->watch_cat), "cat%d", n);
+    }
+    return n;
+}
+
+static void put_watch_row(int n, unsigned a, const char *ifc,
+                          const char *cat, time_t last_seen) {
+    ble_device_t *d = &g_s.ble_devices[n];
+    addr_n(d->addr, a);
+    d->addr_type = 1;
+    d->last_seen = last_seen;
+    snprintf(d->sensor_iface, sizeof(d->sensor_iface), "%s", ifc);
+    snprintf(d->watch_cat, sizeof(d->watch_cat), "%s", cat);
+}
+
+/* The group is (iface, category), so one category on two sensors past
+ * the cap is two groups lost, not one. Rows: "late" on the monitor,
+ * then "late" on a second iface.
+ * Seen to fail: with the sensor_iface comparison dropped from the
+ * `seen` scan, dropped reads 1 (the second sensor's group taken for
+ * the first's). */
+static void test_watch_drops_split_one_category_by_sensor(void) {
+    pin_clocks();
+    int n = fill_watch_groups();
+    put_watch_row(n++, 0x900, BT_MONITOR_DEVICE, "late", g_wall - 1);
+    put_watch_row(n++, 0x901, "ubertooth1", "late", g_wall - 1);
+    g_s.ble_device_count = n;
+    static ble_finding_t f[BLE_FINDINGS_MAX];
+    int dropped = -1;
+    ASSERT_EQ(ble_findings_build(&g_s, g_wall, f, BLE_FINDINGS_MAX, &dropped),
+              BLE_FINDINGS_MAX);
+    ASSERT_EQ(dropped, 2);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* A stale row of a group does not stand in for it: a group with no
+ * recent row never took a slot and was never counted, so its first
+ * RECENT row past the cap is the one that counts. The stale row sits
+ * before the cap-filling rows, as an old advertiser's row would.
+ * Seen to fail: with the recency test dropped from the `seen` scan,
+ * dropped reads 0 (the stale row taken as the group already counted). */
+static void test_watch_drops_ignore_a_stale_row_of_the_group(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    put_watch_row(0, 0x700, BT_MONITOR_DEVICE, "late",
+                  g_wall - BLE_WATCH_RECENT_SECS - 5);
+    int n = 1;
+    for (int k = 0; k < BLE_FINDINGS_MAX; k++, n++) {
+        char cat[16];
+        snprintf(cat, sizeof(cat), "cat%d", k);
+        put_watch_row(n, 0x800 + (unsigned)k, BT_MONITOR_DEVICE, cat, g_wall - 1);
+    }
+    put_watch_row(n++, 0x900, BT_MONITOR_DEVICE, "late", g_wall - 1);
+    g_s.ble_device_count = n;
+    static ble_finding_t f[BLE_FINDINGS_MAX];
+    int dropped = -1;
+    ASSERT_EQ(ble_findings_build(&g_s, g_wall, f, BLE_FINDINGS_MAX, &dropped),
+              BLE_FINDINGS_MAX);
+    ASSERT_EQ(dropped, 1);
+    sloth_clock_test_set(NULL, NULL);
+}
+
 /* ── BLE_WATCHLIST ────────────────────────────────────────────────── */
 
 /* Test fixtures, not shipped rows (see the file comment). */
@@ -1034,10 +1108,13 @@ static void test_watchlist_match_heard_long_ago_does_not_fire(void) {
 
 /* ── JSONL ble_device / ble_alert ─────────────────────────────────── */
 
-static char g_tmp[64];
+/* src/jsonl.c BLE_JSONL_LIVE_S, which is file-local there. */
+#define BLE_TEST_LIVE_S 10
+
+static char g_tmp[TEST_TMP_MAX];
 
 static void jsonl_fresh(void) {
-    snprintf(g_tmp, sizeof(g_tmp), "/tmp/sloth_blerules_XXXXXX");
+    snprintf(g_tmp, sizeof(g_tmp), "%s/sloth_blerules_XXXXXX", test_tmpdir());
     int fd = mkstemp(g_tmp);
     if (fd >= 0) close(fd);
     jsonl_close();
@@ -1046,7 +1123,7 @@ static void jsonl_fresh(void) {
 }
 
 static char *jsonl_read(void) {
-    static char buf[32768];
+    static char buf[131072];   /* a mutation run writes a line a pass */
     FILE *fp = fopen(g_tmp, "r");
     size_t n = 0;
     if (fp) { n = fread(buf, 1, sizeof(buf) - 1, fp); fclose(fp); }
@@ -1151,7 +1228,16 @@ static void test_ble_alert_record_carries_the_flood_fields(void) {
  * shortened name, one UUID and TX power, and whose SCAN_RSP carries the
  * complete name, a different UUID and none, alternates every last-value
  * field on its row. Signing those fields wrote a record per snapshot.
- * Seen to fail with the name and uuid16 back in the signature. */
+ *
+ * Since the liveness slot (BLE_JSONL_LIVE_S) a row sloth keeps hearing
+ * is re-sent once a slot, so the claim is stated against a control: a
+ * steady advertiser heard on the same passes, whose fields never move,
+ * writes exactly as many records as the alternating one once both have
+ * settled. The alternating row may write the one extra its settling
+ * takes (ADV_IND alone, then the row once SCAN_RSP and the TX-power,
+ * UUID and name presence bits are all set) and nothing more. Seen to
+ * fail with the name and uuid16 back in the signature (40 records
+ * against the control's 4). */
 static void test_ble_device_alternating_fields_settle(void) {
     pin_clocks();
     memset(&g_s, 0, sizeof(g_s));
@@ -1164,19 +1250,72 @@ static void test_ble_device_alternating_fields_settle(void) {
     static const uint8_t rsp[] = { 0x04, 0x09, 'k', 'b', 'd',
                                    0x03, 0x03, 0x0A, 0x18 };
     const uint8_t a[6] = { 0x00, 0x1b, 0xdc, 0x01, 0x02, 0x05 };
+    const uint8_t c[6] = { 0x00, 0x1b, 0xdc, 0x01, 0x02, 0x06 };
     for (int i = 0; i < 40; i++) {
         ble_adv_report_t r;
         if (i & 1) make_report(&r, 0x04, 0, a, rsp, sizeof(rsp), -58);
         else       make_report(&r, 0x00, 0, a, adv, sizeof(adv), -57);
+        observe(&r, g_wall);
+        make_report(&r, 0x00, 0, c, adv, sizeof(adv), -57);
         observe(&r, g_wall);
         g_wall += 1;
         ble_snapshot(&g_s);
         jsonl_emit_ble_devices(&g_s);
     }
     char *out = jsonl_read();
-    /* ADV_IND alone, then the row once SCAN_RSP and the TX-power, UUID
-     * and name presence bits are all set: never one per report. */
-    ASSERT(count_str(out, "\"addr\":\"00:1b:dc:01:02:05\"") <= 2);
+    int alt = count_str(out, "\"addr\":\"00:1b:dc:01:02:05\"");
+    int ctl = count_str(out, "\"addr\":\"00:1b:dc:01:02:06\"");
+    if (alt > ctl + 1 || ctl != 40 / BLE_TEST_LIVE_S)
+        fprintf(stderr, "    alternating row %d records, control %d\n", alt, ctl);
+    ASSERT_EQ(ctl, 40 / BLE_TEST_LIVE_S);
+    ASSERT(alt >= ctl);
+    ASSERT(alt <= ctl + 1);
+    jsonl_done();
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* The liveness slot (2026-11-02): sixty passes a second apart, one row
+ * heard on every pass with its RSSI wandering inside one band and one
+ * best-RSSI bucket and adv_count climbing, and one row heard once and
+ * never again. The heard row writes once per BLE_JSONL_LIVE_S slot its
+ * last_seen enters, so a time series of it has a point every slot; the
+ * silent row writes its first record and nothing until the heartbeat.
+ * -58 .. -64 dBm is the room band (rf_distance.h, 3 to 10 m at P_tx
+ * 0 dBm) with more than RF_BAND_HYST_DB to either edge, so the
+ * distance band, which is signed, cannot move under the wander.
+ * pin_clocks()'s 1800000000 is a slot boundary.
+ * Seen red: with last_seen signed raw in place of the slot, the heard
+ * row writes 60; with the slot term removed, 1. */
+static void test_ble_device_heard_row_writes_once_a_slot(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    jsonl_fresh();
+    const uint8_t a[6] = { 0x00, 0x1b, 0xdc, 0x01, 0x03, 0x01 };
+    const uint8_t q[6] = { 0x00, 0x1b, 0xdc, 0x01, 0x03, 0x02 };
+    static const int wander[] = { -58, -61, -64, -60, -59, -63, -62 };
+    for (int i = 0; i < 60; i++) {
+        ble_adv_report_t r;
+        make_report(&r, 0x00, 0, a, AD_KEYBOARD, sizeof(AD_KEYBOARD),
+                    wander[i % (int)(sizeof(wander) / sizeof(wander[0]))]);
+        observe(&r, g_wall);
+        if (i == 0) {
+            make_report(&r, 0x00, 0, q, AD_KEYBOARD, sizeof(AD_KEYBOARD), -60);
+            observe(&r, g_wall);
+        }
+        ble_snapshot(&g_s);
+        jsonl_emit_ble_devices(&g_s);
+        g_wall += 1;
+    }
+    char *out = jsonl_read();
+    int heard = count_str(out, "\"addr\":\"00:1b:dc:01:03:01\"");
+    int quiet = count_str(out, "\"addr\":\"00:1b:dc:01:03:02\"");
+    if (heard != 60 / BLE_TEST_LIVE_S || quiet != 1)
+        fprintf(stderr, "    heard row %d records, silent row %d\n", heard, quiet);
+    ASSERT_EQ(heard, 60 / BLE_TEST_LIVE_S);
+    ASSERT_EQ(quiet, 1);
+    /* adv_count is written on every line, never signed: the last line
+     * carries the 51st report (the sixth slot's first). */
+    ASSERT(strstr(out, "\"adv_count\":51,") != NULL);
     jsonl_done();
     sloth_clock_test_set(NULL, NULL);
 }
@@ -1304,9 +1443,10 @@ static void test_view_populated_fits_100x33(void) {
     ASSERT(rows < 40);                    /* paged, not all 40 */
     ASSERT_SCREEN_HAS(">c2:00:00:00:09:05");
     ASSERT_SCREEN_HAS("bluetooth-monitor");
-    /* 100 columns leave the summary 32: the 33-character one is cut
-     * and says so. */
-    ASSERT_SCREEN_HAS("\"a-very-long-name-xx\" mfr 004c/~");
+    /* 100 columns leave the summary 24 beside the short distance cell
+     * (it was 32 before the cell): the 33-character one is cut and
+     * says so. */
+    ASSERT_SCREEN_HAS("\"a-very-long-name-xx\" m~");
     ASSERT_SCREEN_LACKS("mfr 004c/10");
     ASSERT_SCREEN_HAS(" T: P public R random");
     /* At 220 columns the same rows carry the whole name, uncut. */
@@ -1378,6 +1518,8 @@ void run_ble_rules_tests(void) {
     RUN_TEST(test_hid_rotation_first_window_is_per_sensor);
     RUN_TEST(test_dropped_counts_every_finding_past_the_cap);
     RUN_TEST(test_watch_drops_count_groups_not_rows_past_the_cap);
+    RUN_TEST(test_watch_drops_split_one_category_by_sensor);
+    RUN_TEST(test_watch_drops_ignore_a_stale_row_of_the_group);
     RUN_TEST(test_shipped_table_is_empty_and_never_fires);
     RUN_TEST(test_categories_route_from_the_in_test_table);
     RUN_TEST(test_a_row_without_a_source_is_refused);
@@ -1386,6 +1528,7 @@ void run_ble_rules_tests(void) {
     RUN_TEST(test_ble_device_record_is_change_only);
     RUN_TEST(test_ble_alert_record_carries_the_flood_fields);
     RUN_TEST(test_ble_device_alternating_fields_settle);
+    RUN_TEST(test_ble_device_heard_row_writes_once_a_slot);
     RUN_TEST(test_ble_device_alternating_pdus_settles);
     RUN_TEST(test_sustained_flood_is_few_ble_alert_records);
     RUN_TEST(test_view_empty_state);

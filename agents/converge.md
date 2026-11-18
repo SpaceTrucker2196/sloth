@@ -89,7 +89,7 @@ Run the dark-factory converge loop on GitHub issue #$ARGUMENTS.
    `make clean` first, then believe the error.
 5. **Self-review.** Diff against agents/AGENTS.md invariants and hard don'ts
    (VIEW_COUNT sync, no circular parser tests, no repo-root files, never
-   stage `wifi-sigint/`, `sloth`, or `sloth_test`).
+   stage `wifi-sigint/`, `sloth`, `sloth-wifi`, `sloth-rf`, or `sloth_test`).
 
    **Mutation-prove every assertion of absence.** A test that asserts
    something does *not* happen passes just as happily when it exercises
@@ -218,6 +218,15 @@ Run the dark-factory converge loop on GitHub issue #$ARGUMENTS.
 9. **Report.** Comment on the issue: what shipped, flagged decisions,
    risk score, metrics row.
 
-Escalate (stop, do not push) on: any MISSION.md conflict, any
+**Fleet sharing is monitor data only (owner hard rule, 2026-11-12).**
+Share what sloth heard in monitor mode. Never share what it learned
+through the joined network or the wire. An order that touches the fleet
+export, the importer or anything a peer receives obeys agents/AGENTS.md
+"Fleet sharing: monitor data only": every export names its host, and
+the tests named there stay green unweakened. An order that would relax
+it is not converged: escalate.
+
+Escalate (stop, do not push) on: any MISSION.md conflict, any change
+that relaxes the fleet monitor-only rule, any
 autonomy-contract §4.3 trigger, or three consecutive converge
 iterations with no progress.

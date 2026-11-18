@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-**Current release: `1.8.5`** — the value of `#define SLOTH_VERSION` in
+**Current release: `1.8.7`** — the value of `#define SLOTH_VERSION` in
 [`include/sloth.h`](include/sloth.h), which is the single source of
 truth for what a build calls itself. If this file and that `#define`
 ever disagree, the `#define` is right and this file is stale; please
@@ -14,7 +14,7 @@ no maintenance branches, no LTS line, and no backports. Concretely:
 | What | Status |
 |------|--------|
 | `main` | ✅ where every fix lands, security or otherwise |
-| the newest tag (`v1.8.5`) | ✅ supported — "supported" means the next fix ships in the next tag cut from `main` |
+| the newest tag (`v1.8.7`) | ✅ supported — "supported" means the next fix ships in the next tag cut from `main` |
 | every tag before the newest | ❌ archived at that commit; receives nothing |
 
 There is **no patch SLA and no support window** — this is a
@@ -79,7 +79,8 @@ record.
 - **Build provenance**: GitHub artifact attestation
   (`actions/attest-build-provenance`, pinned by commit SHA) on `v*`
   tags, in `.github/workflows/release-attest.yml`. Verify with
-  `gh attestation verify ./sloth --repo SpaceTrucker2196/sloth`.
+  `gh attestation verify ./sloth-wifi --repo SpaceTrucker2196/sloth`
+  (and `./sloth-rf`; `sloth` is a symlink to `sloth-wifi` since #216).
   Releases tagged before 2026-10-19 carry no attestation.
 
 The procedure is [`docs/wiki/release-checklist.md`](docs/wiki/release-checklist.md).

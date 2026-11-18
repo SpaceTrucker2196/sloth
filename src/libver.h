@@ -35,6 +35,12 @@ const char *libver_sqlite(void);
  * at n; returns what snprintf returned. */
 int libver_format(char *buf, size_t n);
 
+/* The same line with the libpcap word supplied (#213): a binary that
+ * links no libpcap (sloth-rf) passes "none" and so never references
+ * it. libver_pcap() and libver_format() are src/libver_pcap.c; this and
+ * everything below are src/libver.c. */
+int libver_format_libs(char *buf, size_t n, const char *pcap);
+
 /* 1 when a sqlite3_libversion_number() value meets the floor. */
 int libver_sqlite_floor_ok(int version_number);
 

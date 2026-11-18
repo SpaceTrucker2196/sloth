@@ -23,8 +23,65 @@ typedef struct {
     alert_rule_fn fn;
 } alert_rule_t;
 
-extern const alert_rule_t g_alert_rules[];
-extern const int          g_alert_rule_count;
+/* The per-alert pcap exporters, as the engine calls them (#213). Both
+ * write captured frames: src/alert_pcap.c the IP packets of a match_ip
+ * (--pcap-dir), src/evidence_export.c the 802.11 frames an alert cites
+ * (--collect-handshakes and --eapol-dir). They belong to the table and
+ * not to the engine so that a daemon with no capture links neither. */
+struct loc_stamp;
+typedef struct {
+    int (*ip_enabled)(void);
+    int (*ip_dump)(const sloth_state_t *s, const alert_t *a,
+                   char *out_path, int out_sz);
+    int (*ev_enabled)(void);
+    int (*ev_alert_name)(const char *incident_id, uint64_t event_id,
+                         const char *rule, char *out, size_t outsz);
+    int (*ev_pcap_unique)(const char *name, const uint64_t *ids, int n,
+                          int *skipped,
+                          const char *incident_id, const char *rule,
+                          const struct loc_stamp *loc,
+                          char *name_out, size_t name_outsz,
+                          char *err, size_t errsz);
+    int (*ev_path)(const char *name, char *out, size_t outsz);
+} alert_exporter_t;
+
+/* A rule table is data the application selects (#213), as its poll
+ * stage table is (src/poll.h): the rows in run order, the functions
+ * that drop the history those rows keep between ticks (alerts_clear()
+ * calls each), and the exporters, NULL for none.
+ *
+ *   g_alert_table_wifi   the capture's, the monitor radio's and
+ *                        BLE's rules, SENSOR_UNDERVOLT and
+ *                        SENSOR_SOURCE_DOWN - sloth-wifi    rules_table.c
+ *   g_alert_table_rf     the GNSS rules, ADSB_EMERGENCY and
+ *                        SENSOR_SOURCE_DOWN - sloth-rf      rules_table_rf.c
+ *
+ * They share one row, rule_sensor_source_down, which judges whichever
+ * source rows its daemon reports; tests/test_rf_rules.c holds that, and
+ * that the GNSS rules and ADSB_EMERGENCY are in the second only (#216).
+ * SENSOR_UNDERVOLT is in the first only: the host has one supply, and
+ * on a host running both daemons only the one with the capture reports
+ * it (owner ruling 2026-11-15, ADR 0010). */
+typedef struct {
+    const alert_rule_t        *rules;
+    int                        count;
+    void               (*const *forget)(void);
+    int                        forget_count;
+    const alert_exporter_t    *exporter;
+} alert_rule_table_t;
+
+extern const alert_rule_table_t g_alert_table_wifi;
+extern const alert_rule_table_t g_alert_table_rf;
+
+/* Select the table alerts_update() runs. Once, at start, before the
+ * first tick and on the thread that ticks; NULL selects none. */
+void alerts_set_table(const alert_rule_table_t *t);
+const alert_rule_table_t *alerts_table(void);
+
+/* The selected table's rows (src/alerts/engine.c): NULL and 0 until a
+ * table is selected. */
+extern const alert_rule_t *g_alert_rules;
+extern int                 g_alert_rule_count;
 
 /* src/alerts/rules_wired.c */
 void rule_port_scan(const sloth_state_t *s, time_t now);
@@ -102,6 +159,10 @@ void rule_sae_psk_split(const sloth_state_t *s, time_t now);
 void rule_sae_psk_regression(const sloth_state_t *s, time_t now);
 void rule_wpa_downgrade(const sloth_state_t *s, time_t now);
 void rule_karma_ap(const sloth_state_t *s, time_t now);
+void rule_karma_probe_forge(const sloth_state_t *s, time_t now);
+/* src/alerts/rules_harvest.c (#172) */
+void rule_pmkid_harvest(const sloth_state_t *s, time_t now);
+void rule_handshake_harvest(const sloth_state_t *s, time_t now);
 void rule_open_setup_ap(const sloth_state_t *s, time_t now);
 void rule_cam_setup_ssid(const sloth_state_t *s, time_t now);
 void rule_evil_twin(const sloth_state_t *s, time_t now);
@@ -126,4 +187,21 @@ void rule_mld_mac_collision(const sloth_state_t *s, time_t now);
 void rule_mle_cross_link_cipher_downgrade(const sloth_state_t *s, time_t now);
 void rule_mle_reconfig_no_mlo(const sloth_state_t *s, time_t now);
 void rule_mle_pr_beacon_diff(const sloth_state_t *s, time_t now);
+
+/* src/alerts/rules_gnss.c (2026-11-03): the --gps receiver's own inputs */
+void rule_gnss_jamming(const sloth_state_t *s, time_t now);
+void rule_gnss_spoof_suspect(const sloth_state_t *s, time_t now);
+void rule_gnss_time_jump(const sloth_state_t *s, time_t now);
+void rule_gnss_position_jump(const sloth_state_t *s, time_t now);
+
+/* src/alerts/rules_adsb.c (#186): the --adsb decoder's aircraft table */
+void rule_adsb_emergency(const sloth_state_t *s, time_t now);
+
+/* src/alerts/rules_sensor.c (2026-11-11): the sensor's own state, read
+ * off sys_status_get(). The spans are the rule file's to justify. */
+#define SENSOR_RECOVER_S        120   /* clear this long before `recovered` */
+#define SENSOR_SRC_DOWN_HOLD_S  10    /* `down` this long opens */
+#define SENSOR_SRC_STALE_S      300   /* not `ok` this long opens */
+void rule_sensor_undervolt(const sloth_state_t *s, time_t now);
+void rule_sensor_source_down(const sloth_state_t *s, time_t now);
 #endif

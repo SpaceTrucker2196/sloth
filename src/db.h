@@ -32,6 +32,8 @@
 #ifndef SLOTH_DB_H
 #define SLOTH_DB_H
 
+#include <stdio.h>
+
 #include "sloth.h"
 
 /* Schema version stamped into the meta table. db_open() refuses a file
@@ -80,8 +82,60 @@
  * was taken for a table that needed none, which is why it has no SQL
  * here. v3 -> v4 (#60/#62/#65, batched) adds pnl_clients.phy_confirmed,
  * beacon_aps.downgrade_flags/akm_bits and four rogue_radius nocert_*
- * columns. v4 -> v5 (#90) adds karma_candidates.pnl_best. */
-#define DB_SCHEMA_VERSION 7
+ * columns. v4 -> v5 (#90) adds karma_candidates.pnl_best.
+ *
+ * Bumped to 8 on 2026-10-26: alerts gained reopens, incident_id,
+ * incident_count and incident_first_seen (#170), the row becoming one
+ * per finding rather than one per incident. The v7 -> v8 step adds the
+ * four columns and touches no row; the duplicates an older build wrote stay until the
+ * operator runs --db-compact-alerts on a copy. */
+/* Bumped to 9 on 2026-10-27 (--location / --gps): alerts gained the
+ * location stamp (lat, lon, alt_m, acc_m, loc_src, loc_ts), all
+ * nullable, NULL meaning "not stamped". The v8 -> v9 step adds the six
+ * columns and touches no row. device_positions and sensor_positions
+ * are new tables and ride the unconditional schema. */
+/* Bumped to 10 on 2026-11-02 (GNSS observation, docs/wiki/gnss.md):
+ * gnss_fixes and gnss_sightings are new tables and ride the
+ * unconditional schema; the v9 -> v10 step is a stamp alone, as
+ * v2 -> v3 was. No existing table or value changes. */
+/* Bumped to 11 on 2026-11-03 (#175): alert_incidents is a new table,
+ * one row per incident beside the per-finding alerts row, and rides the
+ * unconditional schema; the v10 -> v11 step is a stamp alone. The
+ * alerts table is unchanged. */
+/* Bumped to 12 on 2026-11-05 (#26, docs/wiki/adsb.md): adsb_aircraft
+ * and adsb_sightings are new tables and ride the unconditional schema;
+ * the v11 -> v12 step is a stamp alone. No existing table changes. */
+/* Bumped to 13 on 2026-11-05 (docs/wiki/aprs.md): aprs_stations and
+ * aprs_packets are new tables and ride the unconditional schema; the
+ * v12 -> v13 step is a stamp alone. No existing table changes. */
+/* Bumped to 14 on 2026-11-15 (#207 slice 1): beacon_aps gains
+ * operating_width (sloth_ch_width_t: 0 unknown, else MHz, 8080 for
+ * 80+80), so a reader can draw a BSS's occupied bandwidth instead of
+ * assuming 20 MHz. The v13 -> v14 step is a single ALTER TABLE ADD
+ * COLUMN, default 0. No existing column or value changes. */
+/* Bumped to 15 on 2026-11-15 (docs/wiki/victron.md): victron_devices
+ * and victron_readings are new tables and ride the unconditional
+ * schema; the v14 -> v15 step is a stamp alone. No existing table
+ * changes. */
+/* Bumped to 16 on 2026-11-16 (docs/wiki/victron.md): victron_readings
+ * gains ac_voltage_v, ac_current_a and ac_apparent_va, the inverter
+ * record's AC output. The v15 -> v16 step is three ALTER TABLE ADD
+ * COLUMN, all nullable. No existing column or value changes. */
+#define DB_SCHEMA_VERSION 16
+
+/* The least time between two victron_readings rows of one device.
+ * sloth-va writes a readout every 30 s and a session every 300 s; one
+ * row a minute keeps a month of three devices near 130k rows. */
+#define DB_VICTRON_MIN_S 60
+
+/* The incidents kept per key in alert_incidents (#175), newest first
+ * by first_seen. A key evicted under pressure re-fires as a new
+ * incident every tick (#170's churn), so without a bound one key could
+ * write a row a tick; trimmed whenever the writer writes an incident of
+ * the key that the engine's hook reported (every new incident is one).
+ * slothweb's alert page reads at most
+ * WEB_ADB_INCIDENTS (2000) of them, so this is the tighter cap. */
+#define DB_INCIDENTS_PER_KEY 256
 
 /* How long a statement on sloth's connection waits out another
  * connection's lock before failing busy. A reader of the file (the
@@ -127,12 +181,34 @@ typedef struct {
 #define DB_DEFAULT_RETAIN_DAYS 30
 #define DB_DEFAULT_MAX_MB     512
 
+/* The RF side (#216, ADR 0010): the daemon that owns the receiver's and
+ * the decoders' tables (gnss_fixes, gnss_sightings, adsb_*, aprs_*,
+ * victron_*) registers this once at start (src/rf_side.c, sloth-rf).
+ * A daemon that registers none - sloth-wifi - writes none of them,
+ * whatever its state holds; device_positions and sensor_positions are
+ * not among them and both daemons write those. The two functions are
+ * src/adsb.c's, taken as data so that src/db.c names no decoder and
+ * sloth-wifi links none. The DDL is one for both stores regardless. */
+typedef struct {
+    uint64_t    (*adsb_row_sig)(const adsb_aircraft_t *a);
+    const char *(*adsb_emergency_name)(int e);
+} db_rf_side_t;
+
 #ifdef WITH_SQLITE
 
 /* Open (creating if needed) the database at `path` and apply the
- * schema. Returns 1 on success, 0 on failure (message on stderr).
- * A failure here is fatal to --db only; the caller decides. */
+ * schema. Returns 1 on success, 0 on failure (message on stderr, and
+ * in db_error()). A failure here is fatal to --db only; the caller
+ * decides. */
 int  db_open(const char *path);
+
+/* Why the last db_open() refused — never NULL, "" when none has. The
+ * counterpart of jsonl_error(), added for the same reason (#209): CI
+ * refused a freshly created mkstemp path twice, once through each
+ * function, and only jsonl_open() could say why. Set on every failing
+ * path out of db_open() and cleared at its entry, so it describes the
+ * most recent open attempt and nothing else. */
+const char *db_error(void);
 
 /* Flush and close. Safe when never opened. */
 void db_close(void);
@@ -152,6 +228,8 @@ int  db_is_defensive(void);
  *
  * `now` is passed rather than read so tests are deterministic. */
 void db_tick(const sloth_state_t *s, time_t now);
+
+void db_set_rf_side(const db_rf_side_t *rf);
 
 /* Seconds between write ticks (--db-interval-secs). 0 restores the
  * default. db_tick() itself is unconditional; the poll loop uses this
@@ -236,18 +314,71 @@ int db_count_new_since(db_new_kind_t kind, time_t since);
  * Returns the number written. */
 int db_akm_regressions(db_akm_regression_t *out, int max);
 
+/* ── persisted association evidence (#183 item 3) ────────────────────
+ *
+ * When `sta` was last recorded as associated to a network the operator
+ * designated as theirs, or 0 if never / no database open.
+ *
+ * The live `s->assocs[]` table is what sloth can see *now*; this is
+ * what it saw. MY_NETWORK_RECON needs the second one because its
+ * corroboration is measured over a window (recon.sustain_s) while its
+ * exoneration was reading an instant: on the reference host the
+ * association aged out of the live table 33 minutes before the
+ * sustained-probing corroboration escalated the finding to WARN, so
+ * the rule reported a card that had been on the network the whole time.
+ *
+ * Queried on demand rather than cached at db_tick, which is the
+ * opposite of db_akm_regressions() and for the opposite reason: a
+ * regression can only change at a tick, but this answer changes as rows
+ * age, and the caller reaches it only for a client that already
+ * survived every live exoneration — a handful of rows a poll, on
+ * idx_assocs_sta. */
+time_t db_sta_designated_assoc_last_seen(const uint8_t sta[6]);
+
 /* True when `now` is far enough past the last write for another tick.
  * Kept here rather than in main.c so the cadence is testable. */
 int  db_due(time_t now);
 
+/* --db-compact-alerts SRC DST (#170): write a copy of SRC to DST with
+ * the alerts table folded to one row per key (min first_seen, max
+ * last_seen, summed count, peak sev and that peak's detail, reopens =
+ * rows - 1), brought to this build's schema. SRC is opened immutable
+ * and nothing is written beside it, not even a -shm; a non-empty
+ * SRC-wal or SRC-journal (a sensor that was killed, not stopped)
+ * refuses the command, because a copy without it would be missing
+ * rows and a swap would have SQLite replay it onto the copy. DST, and
+ * DST-wal / -shm / -journal, must not exist; a failure removes the DST
+ * it created. Run as root, DST is handed to SRC's owner, which is the
+ * account a privilege-dropped sensor opens it as. Offline: refused
+ * while a --db is open. Returns 0 on success and prints the counts to
+ * stdout; -1 with the reason on stderr. `out` may be NULL. */
+typedef struct {
+    long long rows_before;   /* alerts rows in SRC */
+    long long rows_after;    /* alerts rows in DST */
+    long long keys;          /* distinct keys in SRC */
+    long long elapsed_ms;
+} db_compact_stats_t;
+int db_compact_alerts(const char *src, const char *dst,
+                      db_compact_stats_t *out);
+
 #else
 
+typedef struct {
+    long long rows_before, rows_after, keys, elapsed_ms;
+} db_compact_stats_t;
+static inline int db_compact_alerts(const char *s, const char *d,
+                                    db_compact_stats_t *o)
+       { (void)s; (void)d; (void)o; return -1; }
+
 static inline int  db_open(const char *path) { (void)path; return 0; }
+static inline const char *db_error(void)
+       { return "built without SQLite"; }
 static inline void db_close(void)            {}
 static inline int  db_is_open(void)          { return 0; }
 static inline int  db_is_defensive(void)     { return 0; }
 static inline void db_tick(const sloth_state_t *s, time_t now)
                                              { (void)s; (void)now; }
+static inline void db_set_rf_side(const db_rf_side_t *rf) { (void)rf; }
 static inline void db_set_interval(int secs) { (void)secs; }
 static inline int  db_interval(void)         { return 0; }
 static inline void db_set_retain_days(int d) { (void)d; }
@@ -258,6 +389,11 @@ static inline void db_maintain(time_t now)   { (void)now; }
 static inline long long db_size_bytes(void)  { return -1; }
 static inline int db_akm_regressions(db_akm_regression_t *o, int m)
        { (void)o; (void)m; return 0; }
+/* No file, no history: the freshness exoneration degrades to the live
+ * assoc table it was added beside, which is this build's only evidence
+ * either way. */
+static inline time_t db_sta_designated_assoc_last_seen(const uint8_t s[6])
+       { (void)s; return 0; }
 
 typedef enum {
     DB_NEW_DEVICE = 0,
@@ -299,6 +435,12 @@ const char *db_schema_meta_sql(void);
  * readable version to it). */
 int db_schema_version(void);
 
+/* Print the schema as one SQL script (#185 item 4, `--print-schema` in
+ * both daemons, the contract artifact's schema.sql): a comment naming
+ * DB_SCHEMA_VERSION, db_schema_sql(), and the INSERT of the meta row
+ * check_version() stamps a new file with. 0, or -1 on a write error. */
+int db_schema_print(FILE *out);
+
 /* v1 -> v2 (#53 retroactive): ALTER TABLE ADD COLUMN only. Exposed for
  * the same guardrail tests as db_schema_sql(). */
 const char *db_schema_migrate_v1_sql(void);
@@ -316,5 +458,38 @@ const char *db_schema_migrate_v4_sql(void);
 const char *db_schema_migrate_v5_sql(void);
 /* v6 -> v7 (#155): ALTER TABLE ... ADD COLUMN only, like v5 -> v6. */
 const char *db_schema_migrate_v6_sql(void);
+/* v7 -> v8 (#170): ALTER TABLE alerts ADD COLUMN only. */
+const char *db_schema_migrate_v7_sql(void);
+/* v8 -> v9 (2026-10-27): ALTER TABLE alerts ADD COLUMN only. */
+const char *db_schema_migrate_v8_sql(void);
+/* v9 -> v10 (2026-11-02): no ALTER — gnss_fixes and gnss_sightings are
+ * new tables and ride the unconditional schema. An empty statement
+ * list; the step still advances the stamp in db.c. */
+const char *db_schema_migrate_v9_sql(void);
+/* v10 -> v11 (#175): no ALTER — alert_incidents is a new table and
+ * rides the unconditional schema. An empty statement list. */
+const char *db_schema_migrate_v10_sql(void);
+/* v11 -> v12 (#26): no ALTER — adsb_aircraft and adsb_sightings are new
+ * tables and ride the unconditional schema. An empty statement list. */
+const char *db_schema_migrate_v11_sql(void);
+/* v12 -> v13 (APRS): no ALTER - aprs_stations and aprs_packets are new
+ * tables and ride the unconditional schema. An empty statement list. */
+const char *db_schema_migrate_v12_sql(void);
+/* v13 -> v14 (#207 slice 1): ALTER TABLE beacon_aps ADD COLUMN only. */
+const char *db_schema_migrate_v13_sql(void);
+/* v14 -> v15 (Victron): no ALTER - victron_devices and
+ * victron_readings are new tables and ride the unconditional schema. An
+ * empty statement list. */
+const char *db_schema_migrate_v14_sql(void);
+/* v15 -> v16 (Victron inverter): ALTER TABLE victron_readings ADD
+ * COLUMN only. */
+const char *db_schema_migrate_v15_sql(void);
+
+/* victron_readings' value column `i` (0 from voltage_v, in the writer's
+ * bind order), NULL past the last. From DB_VICTRON_FIRST_ENUM on, an enumeration
+ * stored as an integer. */
+#define DB_VICTRON_FIRST_ENUM 14
+#define DB_VICTRON_NCOLS      19
+const char *db_victron_col(int i);
 
 #endif /* SLOTH_DB_H */

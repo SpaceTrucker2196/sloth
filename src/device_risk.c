@@ -5,26 +5,36 @@
  *   - a bitmask of the signals that contributed
  *
  * Every signal is independently observable from the tables sloth
- * already maintains — no new capture surface. The score is a
- * transparent weighted sum so an operator can always answer "why
- * is this device HIGH?" by inspecting the bit pattern.
+ * already maintains — no new capture surface. An operator can always
+ * answer "why is this device HIGH?" by inspecting the bit pattern.
  *
- * Weights (points, summed → bucket):
- *   RANDOM_MAC     1   locally-administered MAC (bit 1 of octet 0)
- *   UNKNOWN_VENDOR 1   OUI not in the embedded table
- *   NO_HOSTNAME    1   no DHCP/mDNS/NBNS resolution
- *   PROBE_ONLY     1   probe frames observed, no association
- *   CLEARTEXT_CRED 3   we saw this device leak a credential
- *   ALERT_TAGGED   3   an active alert names this device's IP
+ * Two families (#191). The first four signals say only that the device
+ * is anonymous, and they are near-collinear: a randomised MAC has no
+ * OUI to resolve and almost never a hostname, and a phone walking past
+ * a passive sensor probes without associating. Summed, they put 97% of
+ * a field sensor's devices in HIGH, so together they are one point,
+ * and anonymity alone never passes MED:
+ *   RANDOM_MAC         locally-administered MAC (bit 1 of octet 0)
+ *   UNKNOWN_VENDOR     a registered OUI that is not in the embedded table
+ *   NO_HOSTNAME        no DHCP/mDNS/NBNS resolution
+ *   PROBE_ONLY         probe frames observed, no association
+ * The evidence signals are three points each:
+ *   CLEARTEXT_CRED     we saw this device leak a credential
+ *   ALERT_TAGGED       an active alert names this device's IP
  *
  * Bucket thresholds:
  *   0    → LOW
- *   1-2  → MED
- *   3-4  → HIGH
- *   5+   → CRIT */
+ *   1-2  → MED    (anonymous, no evidence)
+ *   3-4  → HIGH   (one evidence signal)
+ *   5+   → CRIT   (both)
+ *
+ * SELF is not a risk: one of the host's own interfaces, or a device on
+ * the operator's roster, is not anonymous, so it carries SELF in place
+ * of the first family and scores on evidence alone. */
 
 #include <string.h>
 #include "sloth.h"
+#include "ownership.h"
 
 static int mac_is_locally_administered(const uint8_t mac[6]) {
     /* Bit 1 of the first octet is the "locally administered" bit —
@@ -73,32 +83,40 @@ device_risk_level_t device_risk_score(const device_t *d,
     }
 
     int signals = 0;
-    int score   = 0;
 
-    if (mac_is_locally_administered(d->mac)) {
-        signals |= DEV_RISK_RANDOM_MAC;    score += 1;
+    /* The sensor's own adapter was HIGH in the field report: its
+     * background scans are heard while its association sits on another
+     * channel, which is PROBE_ONLY, on a card with no hostname. A
+     * device the host or the operator can name is not anonymous, so
+     * none of that family is recorded for it. The evidence signals
+     * still are: a rostered laptop leaking a password is the finding. */
+    if (ownership_is_own_device(d->mac)) {
+        signals |= DEV_RISK_SELF;
+    } else if (mac_is_locally_administered(d->mac)) {
+        signals |= DEV_RISK_RANDOM_MAC;
+    } else if (!d->vendor[0]) {
+        /* A randomised address has no OUI to be unknown. */
+        signals |= DEV_RISK_UNKNOWN_VENDOR;
     }
-    if (!d->vendor[0]) {
-        signals |= DEV_RISK_UNKNOWN_VENDOR; score += 1;
-    }
-    if (!d->hostname[0]) {
-        signals |= DEV_RISK_NO_HOSTNAME;   score += 1;
-    }
+    if (!(signals & DEV_RISK_SELF) && !d->hostname[0])
+        signals |= DEV_RISK_NO_HOSTNAME;
     /* Probe-only: we saw probe frames but never a beacon or STA row.
      * DEV_SRC_STA covers the "seen associated" case; DEV_SRC_BEACON
      * covers "seen advertising an AP" (also disqualifies as a client).
      * Passive-only observers (no assoc, no advert) is the signal. */
-    if ((d->sources & DEV_SRC_PROBE)
+    if (!(signals & DEV_RISK_SELF)
+        && (d->sources & DEV_SRC_PROBE)
         && !(d->sources & DEV_SRC_STA)
-        && !(d->sources & DEV_SRC_BEACON)) {
-        signals |= DEV_RISK_PROBE_ONLY;    score += 1;
-    }
-    if (device_has_cleartext_cred(d, s)) {
-        signals |= DEV_RISK_CLEARTEXT_CRED; score += 3;
-    }
-    if (device_has_active_alert(d, s)) {
-        signals |= DEV_RISK_ALERT_TAGGED;  score += 3;
-    }
+        && !(d->sources & DEV_SRC_BEACON))
+        signals |= DEV_RISK_PROBE_ONLY;
+    if (device_has_cleartext_cred(d, s))
+        signals |= DEV_RISK_CLEARTEXT_CRED;
+    if (device_has_active_alert(d, s))
+        signals |= DEV_RISK_ALERT_TAGGED;
+
+    int score = (signals & DEV_RISK_ANON_MASK) ? 1 : 0;
+    if (signals & DEV_RISK_CLEARTEXT_CRED) score += 3;
+    if (signals & DEV_RISK_ALERT_TAGGED)   score += 3;
 
     device_risk_level_t level;
     if      (score >= 5) level = DEV_RISK_CRIT;

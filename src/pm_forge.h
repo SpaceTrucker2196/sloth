@@ -62,6 +62,14 @@ typedef struct {
                                     * Null, within the AP's own beacon
                                     * interval, on a different TID */
     time_t   last_contradiction_ts;
+    /* Host clock when that contradiction was *processed* (sloth_wall()),
+     * not the frame's capture time above. rule_pm_forge's recency bound
+     * (#173) ages a finding against the alert pass's own clock, which is
+     * the host's; measured on the capture stamp, a --replay of a savefile
+     * more than PM_FORGE_REPORT_SECS old would have reported nothing.
+     * Table ageing runs on arrival everywhere else for the same reason
+     * (docs/wiki/replay-integration.md). */
+    time_t   last_contradiction_arrival;
     /* Event ID of the frame behind last_pm1_null_us, so a contradiction
      * found later can cite the sleep declaration as well as the frame
      * that broke it. 0 when the ring retained nothing for it. */

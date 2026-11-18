@@ -60,12 +60,102 @@ const web_metric_t web_metric_defs[WM_COUNT] = {
     [WM_FLOW_MQTT] = { "flow.mqtt", WEB_MK_COUNTER, WEB_KC_HOST, "ip",
                        "mqtt_flow connect+subscribe+publish delta, by src_ip",
                        "packets" },
+    [WM_DEV_PRESENT_MON] = { "dev.present.monitor", WEB_MK_PRESENCE, WEB_KC_DEV,
+                             "mac", "dev.present from the monitor radio's "
+                             "records (and BLE)", "0/1" },
+    [WM_DEV_PRESENT_LOC] = { "dev.present.local", WEB_MK_PRESENCE, WEB_KC_DEV,
+                             "mac", "dev.present from the host's own "
+                             "interfaces' records", "0/1" },
+    [WM_LIVE_DEVICES] = { "live.devices", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                          "the device count of the latest published pass "
+                          "(web_live_t)", "devices" },
+    [WM_LIVE_ALERTS_OPEN] = { "live.alerts_open", WEB_MK_GAUGE, WEB_KC_GLOBAL,
+                              "", "open incidents, low+warn+crit "
+                              "(web_live_t)", "incidents" },
+    [WM_LIVE_ANOMALIES_OPEN] = { "live.anomalies_open", WEB_MK_GAUGE,
+                                 WEB_KC_GLOBAL, "", "open anomaly episodes "
+                                 "(web_anomaly_open_count)", "episodes" },
+    [WM_RECORDS_RATE] = { "records.rate", WEB_MK_COUNTER, WEB_KC_RECTYPE,
+                          "rectype", "every decoded record, by its type",
+                          "records" },
+    [WM_RECORDS_TOTAL] = { "records.total", WEB_MK_COUNTER, WEB_KC_GLOBAL, "",
+                           "every decoded record records.rate counts, unkeyed",
+                           "records" },
+    [WM_SENSOR_DROPS] = { "sensor.drops", WEB_MK_COUNTER, WEB_KC_GLOBAL, "",
+                          "sensor_health capture_drop_delta + "
+                          "capture_ifdrop_delta + monitor_drop_delta + "
+                          "monitor_ifdrop_delta", "frames" },
+    [WM_BLE_DEVICES] = { "ble.devices", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                         "sensor_health ble_devices (sloth's advertiser rows)",
+                         "advertisers" },
+    [WM_BLE_ADV_REPORTS] = { "ble.adv_rate", WEB_MK_COUNTER, WEB_KC_GLOBAL, "",
+                             "sensor_health ble_adv_reports delta", "reports" },
+    [WM_RF_RSSI_STA] = { "rf.rssi.sta", WEB_MK_GAUGE, WEB_KC_DEV, "mac",
+                         "probe_client signal_dbm by mac, last_seen within 10 s "
+                         "(sloth's last-heard value, not calibrated)", "dBm" },
+    [WM_RF_RSSI_BSSID] = { "rf.rssi.bssid", WEB_MK_GAUGE, WEB_KC_DEV, "mac",
+                           "beacon and assoc signal_dbm by bssid (assoc's is the "
+                           "AP's frames), last_seen within 10 s (sloth's "
+                           "last-heard value, not calibrated)", "dBm" },
+    [WM_RF_RSSI_BLE] = { "rf.rssi.ble", WEB_MK_GAUGE, WEB_KC_BLE, "mac",
+                         "ble_device rssi by addr, has_rssi 1, last_seen within "
+                         "10 s (sloth's last-heard value, not calibrated)", "dBm" },
+    [WM_GNSS_SATS_USED] = { "gnss.sats_used", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                            "gnss_fix usat (satellites in the solution)", "satellites" },
+    [WM_GNSS_HDOP] = { "gnss.hdop", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                       "gnss_fix hdop", "dop" },
+    [WM_GNSS_TIME_OFF_MS] = { "gnss.time_off_ms", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                              "gnss_fix time_off_ms (receiver minus host clock; "
+                              "coarse, no PPS)", "ms" },
+    [WM_GNSS_CN0_MEAN] = { "gnss.cn0_mean", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                           "gnss_sky cn0_mean", "dB-Hz" },
+    [WM_BLE_CLASS_ADVERTISERS] = { "ble.class.advertisers", WEB_MK_GAUGE,
+                                   WEB_KC_BLECLASS, "bleclass",
+                                   "slothweb's ble_device rows heard in the last "
+                                   "20 s, distinct addresses per device class, "
+                                   "once a snapshot pass", "advertisers" },
+    [WM_BLE_CLASS_ADV] = { "ble.class.adv", WEB_MK_COUNTER, WEB_KC_BLECLASS,
+                           "bleclass", "ble_device adv_count delta per device "
+                           "class (sampled rows left out)", "reports" },
+    [WM_SYS_CPU] = { "sys.cpu", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                     "sys_status cpu_pct (the sensor host's busy share, all "
+                     "CPUs, iowait apart)", "%" },
+    [WM_SYS_MEM_USED] = { "sys.mem_used", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                          "sys_status mem_total_kb minus mem_avail_kb, as a "
+                          "share of the total", "%" },
+    [WM_SYS_RSS] = { "sys.rss", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                     "sys_status rss_kb (sloth's own resident set)", "kB" },
+    [WM_SYS_UNDERVOLT] = { "sys.undervolt", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                           "sys_status undervolt (0 or 1; a bucket's max says "
+                           "whether the alarm was set in it)", "0/1" },
+    [WM_SYS_TEMP] = { "sys.temp", WEB_MK_GAUGE, WEB_KC_SYS, "sys",
+                      "sys_sensor c by id (class temp); key \"hottest\" is "
+                      "sys_status temp_max_c", "C" },
+    [WM_SYS_VOLT] = { "sys.volt", WEB_MK_GAUGE, WEB_KC_SYS, "sys",
+                      "sys_sensor v by id (class volt and power)", "V" },
+    [WM_SRC_RATE] = { "source.rate", WEB_MK_GAUGE, WEB_KC_SYS, "sys",
+                      "source_status rate by name (the source's own unit per "
+                      "second)", "/s" },
+    [WM_SRC_UP] = { "source.up", WEB_MK_GAUGE, WEB_KC_SYS, "sys",
+                    "source_status state by name: 1 ok, 0 stale or down; not "
+                    "sampled while not_configured (a bucket's min says whether "
+                    "it was up throughout)", "0/1" },
+    [WM_SYS_DB_MB] = { "sys.db_mb", WEB_MK_GAUGE, WEB_KC_SYS, "sys",
+                       "slothweb's own stat() of sloth.db (key \"sloth\") and "
+                       "slothweb.db (key \"slothweb\"), the main file plus its "
+                       "-wal, when a sys_status arrives", "MB" },
 };
+
+int web_metric_is_rssi(int metric) {
+    return metric == WM_RF_RSSI_STA || metric == WM_RF_RSSI_BSSID ||
+           metric == WM_RF_RSSI_BLE;
+}
 
 static const int TIER_STEP[WEB_TIER_COUNT] = { WEB_FINE_S, WEB_MINUTE_S, WEB_HOUR_S };
 static const char *const TIER_NAME[WEB_TIER_COUNT] = { "fine", "minute", "hour" };
 static const char *const KC_NAME[WEB_KC_COUNT] = {
-    "global", "device", "host", "iface", "channel", "alert"
+    "global", "device", "host", "iface", "channel", "alert", "rectype", "sys",
+    "bleclass", "ble"
 };
 
 int web_metric_find(const char *name) {
@@ -380,12 +470,12 @@ int web_rollup_init(web_rollup_t *ru, int max_keys, int store_on,
     pthread_mutex_init(&ru->mu, NULL);
     const int caps[WEB_KC_COUNT] = {
         1, max_keys, max_keys / 2, WEB_IFACE_KEYS, WEB_CHANNEL_KEYS,
-        WEB_ALERT_KEYS
+        WEB_ALERT_KEYS, WEB_RECTYPE_KEYS, WEB_SYS_KEYS, WEB_BLECLASS_KEYS, max_keys
     };
     int bad = 0;
     size_t series_max = 0;
     for (int c = 0; c < WEB_KC_COUNT; c++) {
-        int churnable = c == WEB_KC_DEV || c == WEB_KC_HOST;
+        int churnable = c == WEB_KC_DEV || c == WEB_KC_HOST || c == WEB_KC_BLE;
         if (class_init(&ru->cls[c], caps[c], churnable) != 0) bad = 1;
         for (int m = 0; m < WM_COUNT; m++)
             if (web_metric_defs[m].kclass == c) series_max += (size_t)caps[c];
@@ -428,20 +518,31 @@ static long long bucket_of(long long now, int step) {
     return b;
 }
 
-void web_rollup_add(web_rollup_t *ru, int metric, const char *key, double v,
-                    long long now_s) {
-    if (metric < 0 || metric >= WM_COUNT || !key) return;
-    if (!isfinite(v)) return;
-    int clamped = 0;
-    if (v >  WEB_VALUE_MAX) { v =  WEB_VALUE_MAX; clamped = 1; }
-    if (v < -WEB_VALUE_MAX) { v = -WEB_VALUE_MAX; clamped = 1; }
+/* Shared by web_rollup_add() and web_rollup_queue_add(): metric and
+ * key must be valid and v finite (NULL return: drop it silently, as
+ * before). v is clamped to WEB_VALUE_MAX in place and *clamped set;
+ * a WEB_KC_GLOBAL metric's key is forced to "". */
+static const char *sample_prep(int metric, const char *key, double *v,
+                               int *clamped) {
+    *clamped = 0;
+    if (metric < 0 || metric >= WM_COUNT || !key) return NULL;
+    if (!isfinite(*v)) return NULL;
+    if (*v >  WEB_VALUE_MAX) { *v =  WEB_VALUE_MAX; *clamped = 1; }
+    if (*v < -WEB_VALUE_MAX) { *v = -WEB_VALUE_MAX; *clamped = 1; }
     const web_metric_t *md = &web_metric_defs[metric];
-    if (md->kclass == WEB_KC_GLOBAL) key = "";
-    else if (!key[0] || strlen(key) > WEB_KEY_MAX) return;
+    if (md->kclass == WEB_KC_GLOBAL) return "";
+    if (!key[0] || strlen(key) > WEB_KEY_MAX) return NULL;
+    return key;
+}
 
-    pthread_mutex_lock(&ru->mu);
+/* The bucket-mutating half of web_rollup_add(), shared with the
+ * alert queue's drain (close_where()): the caller holds ru->mu and
+ * key is already valid and canonical. */
+static void apply_sample_locked(web_rollup_t *ru, int metric, const char *key,
+                                double v, int clamped, long long now_s) {
     ru->samples++;
     if (clamped) ru->clamped++;
+    const web_metric_t *md = &web_metric_defs[metric];
     web_kclass_t *c = &ru->cls[md->kclass];
     web_rkey_t *k = key_get(ru, c, key, now_s);
     k->last_seen = now_s;
@@ -470,10 +571,50 @@ void web_rollup_add(web_rollup_t *ru, int metric, const char *key, double v,
         if (v > a->max) a->max = v;
         a->n++;
     }
+}
+
+void web_rollup_add(web_rollup_t *ru, int metric, const char *key, double v,
+                    long long now_s) {
+    int clamped;
+    const char *kk = sample_prep(metric, key, &v, &clamped);
+    if (!kk) return;
+    pthread_mutex_lock(&ru->mu);
+    apply_sample_locked(ru, metric, kk, v, clamped, now_s);
     pthread_mutex_unlock(&ru->mu);
 }
 
+void web_rollup_queue_add(web_rollup_t *ru, int metric, const char *key,
+                          double v, long long now_s) {
+    int clamped;
+    const char *kk = sample_prep(metric, key, &v, &clamped);
+    if (!kk) return;
+    pthread_mutex_lock(&ru->mu);
+    if (ru->alertq_n >= WEB_ALERTQ_CAP) {
+        ru->alertq_dropped++;
+    } else {
+        web_alertq_row_t *q = &ru->alertq[ru->alertq_n++];
+        q->metric = metric;
+        snprintf(q->key, sizeof(q->key), "%s", kk);
+        q->v = v;
+        q->clamped = clamped;
+        q->now_s = now_s;
+    }
+    pthread_mutex_unlock(&ru->mu);
+}
+
+/* Applies every queued alert sample, in queue order, then empties the
+ * queue. The caller holds ru->mu (close_where()'s only caller does
+ * the same). */
+static void drain_alertq_locked(web_rollup_t *ru) {
+    for (int i = 0; i < ru->alertq_n; i++) {
+        web_alertq_row_t *q = &ru->alertq[i];
+        apply_sample_locked(ru, q->metric, q->key, q->v, q->clamped, q->now_s);
+    }
+    ru->alertq_n = 0;
+}
+
 static void close_where(web_rollup_t *ru, long long now_s, int all) {
+    drain_alertq_locked(ru);
     for (int c = 0; c < WEB_KC_COUNT; c++) {
         web_kclass_t *cl = &ru->cls[c];
         for (int i = 0; i < cl->cap; i++) {
@@ -642,10 +783,83 @@ void web_rollup_presence(web_rollup_t *ru, int metric,
     free(hk);
 }
 
+/* One cell's merge of a bucket: the first sets it, the rest add. */
+static void trail_add(web_agg_t *c, long long t, double sum, double mn,
+                      double mx, unsigned long n) {
+    if (!n) return;
+    if (!c->n) { c->t = t; c->sum = sum; c->min = mn; c->max = mx; c->n = n; return; }
+    c->sum += sum;
+    if (mn < c->min) c->min = mn;
+    if (mx > c->max) c->max = mx;
+    c->n += n;
+}
+
+void web_rollup_trail(web_rollup_t *ru, int metric,
+                      const char (*keys)[WEB_KEY_MAX + 1], int n,
+                      long long from, long long until, int ncell, int cell_s,
+                      web_agg_t *out) {
+    if (!out || n <= 0 || ncell <= 0) return;
+    for (int i = 0; i < n * ncell; i++) {
+        memset(&out[i], 0, sizeof(out[i]));
+        out[i].t = -1;
+    }
+    if (!ru || metric < 0 || metric >= WM_COUNT || cell_s <= 0) return;
+    const web_metric_t *md = &web_metric_defs[metric];
+    long long to = from + (long long)ncell * cell_s;
+    if (until < to) to = until;
+    int hn = 1;
+    while (hn < n * 2) hn <<= 1;
+    uint32_t *hs = calloc((size_t)hn, sizeof(*hs));
+    int *hk = malloc((size_t)hn * sizeof(*hk));
+    if (!hs || !hk) { free(hs); free(hk); return; }
+    pthread_mutex_lock(&ru->mu);
+    web_kclass_t *c = &ru->cls[md->kclass];
+    int any = 0;
+    for (int k = 0; k < n; k++) {
+        int i = c->nhead ? key_find(c, keys[k]) : -1;
+        if (i < 0 || !c->k[i].sid[metric]) continue;
+        uint32_t sid = c->k[i].sid[metric];
+        unsigned h = (sid * 2654435761u) & (unsigned)(hn - 1);
+        while (hs[h]) h = (h + 1) & (unsigned)(hn - 1);
+        hs[h] = sid;
+        hk[h] = k;
+        any = 1;
+        const web_agg_t *a = &c->k[i].open[metric][WEB_TIER_FINE];
+        if (a->t >= from && a->t < to && a->n) {
+            long long cell = (a->t - from) / cell_s;
+            trail_add(&out[(size_t)k * (size_t)ncell + (size_t)cell],
+                      from + cell * cell_s, a->sum, a->min, a->max, a->n);
+        }
+    }
+    for (size_t j = 0; any && j < ru->ring_n; j++) {
+        const web_ring_row_t *r = &ru->ring[j];
+        if (r->t < from || r->t >= to || !r->sid || !r->n) continue;
+        unsigned h = (r->sid * 2654435761u) & (unsigned)(hn - 1);
+        while (hs[h] && hs[h] != r->sid) h = (h + 1) & (unsigned)(hn - 1);
+        if (!hs[h]) continue;
+        long long cell = (r->t - from) / cell_s;
+        trail_add(&out[(size_t)hk[h] * (size_t)ncell + (size_t)cell],
+                  from + cell * cell_s, r->sum, r->min, r->max, r->n);
+    }
+    pthread_mutex_unlock(&ru->mu);
+    free(hs);
+    free(hk);
+}
+
 static int cmp_key_desc(const void *a, const void *b) {
     const web_keyinfo_t *x = a, *y = b;
     if (x->last_seen != y->last_seen) return x->last_seen < y->last_seen ? 1 : -1;
     return strcmp(x->key, y->key);
+}
+
+int web_rollup_has(web_rollup_t *ru, int metric, const char *key) {
+    if (!ru || metric < 0 || metric >= WM_COUNT || !key) return 0;
+    pthread_mutex_lock(&ru->mu);
+    const web_kclass_t *c = &ru->cls[web_metric_defs[metric].kclass];
+    int i = c->nhead ? key_find(c, key) : -1;
+    int has = i >= 0 && c->k[i].used && c->k[i].sid[metric];
+    pthread_mutex_unlock(&ru->mu);
+    return has;
 }
 
 int web_rollup_keys(web_rollup_t *ru, int metric, web_keyinfo_t *out,
@@ -697,6 +911,7 @@ void web_rollup_stats(web_rollup_t *ru, web_rollup_stats_t *st) {
     st->clamped = ru->clamped;
     st->hw_evictions = ru->hw_evictions;
     st->samples = ru->samples;
+    st->alertq_dropped = ru->alertq_dropped;
     memcpy(st->rows_closed, ru->rows_closed, sizeof(st->rows_closed));
     pthread_mutex_unlock(&ru->mu);
 }

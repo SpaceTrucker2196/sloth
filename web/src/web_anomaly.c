@@ -225,6 +225,14 @@ struct web_anom_priv {
     long long   start_s, done_minute, final_hour;
     long long   cov_hour[COV_HOURS];
     unsigned char cov[COV_HOURS][60];
+    /* The coverage in the store (v11, cover_save()): the bits of each
+     * slot's hour written so far, and whether a store write failed
+     * while the slot's hour was open (its later minutes' rows may then
+     * be missing, so no more of its bits are written). */
+    unsigned long long cov_put[COV_HOURS];
+    unsigned char cov_taint[COV_HOURS];
+    unsigned long werr_seen;
+    long long   saved_upto;     /* the last minute cover_save() covered */
 
     kvtab_t     fan_ix;
     fan_t      *fan;
@@ -254,7 +262,8 @@ struct web_anom_priv {
     int         a4_n, a4_cap;
 
     kvtab_t     zl;             /* |z| now per device key, under a->mu */
-    double     *zv;
+    double     *zv;             /* three a key: every metric's, then the
+                                   Monitor and the Local metrics' (-1 none) */
 
     web_store_ptr_t *ptr_out;   /* the passive PTR rows to write */
 
@@ -365,7 +374,7 @@ int web_anomaly_init(web_anomaly_t *a, int cap, const web_anom_cfg_t *cfg) {
     p->sdb_new = calloc(WEB_ANOM_A2_SDB_NEW, sizeof(*p->sdb_new));
     p->a4_cap = mk;
     p->a4_keys = calloc((size_t)p->a4_cap, sizeof(*p->a4_keys));
-    p->zv = calloc((size_t)mk, sizeof(*p->zv));
+    p->zv = calloc((size_t)mk * 3, sizeof(*p->zv));
     p->ptr_out = calloc(256, sizeof(*p->ptr_out));
     if (!p->agg || !p->agg_head || !p->fan || !p->fan_del || !p->rep_new ||
         !p->cand || !p->ep_del || !p->ep_out || !p->firsts || !p->named ||
@@ -521,6 +530,8 @@ static unsigned char *cov_slot(struct web_anom_priv *p, long long minute,
         if (!make) return NULL;
         p->cov_hour[k] = hour;
         memset(p->cov[k], 0, sizeof(p->cov[k]));
+        p->cov_put[k] = 0;
+        p->cov_taint[k] = 0;
     }
     return &p->cov[k][(t % 3600) / 60];
 }
@@ -541,6 +552,138 @@ static int minutes_observed(web_anomaly_t *a, long long from_minute, int n) {
 
 static int hour_observed(web_anomaly_t *a, long long hour) {
     return minutes_observed(a, hour / 60, 60) >= (a->cfg.live ? WEB_ANOM_COVER_MIN : 1);
+}
+
+/* ── coverage across restarts (v11) ──────────────────────────────────── *
+ *
+ * Owner ruling 2026-11-11 (schedule the restart-loss fix). Coverage is
+ * held in memory and counts only minutes after this process started, so
+ * a slothweb restart cost the clock hour it started in and the hour the
+ * previous run stopped in. Now each run writes which minutes of the
+ * hour it observed to the store (anom_cover, one row an hour, the runs'
+ * bits ORed together) at every minute boundary and at a clean exit, and
+ * an hour that began before this run is judged on the union.
+ *
+ * The bits of minute m are written only after its rows are: the step
+ * that crosses into m+1 has flushed the rollup's queue (minute m's rows
+ * written to the minute tier) before this hook runs, on this same
+ * thread. So every persisted bit names a minute whose rows are in the
+ * store, and if a store write failed while an hour was open no more of
+ * its bits are written (cov_taint): it may then be judged short, never
+ * fed from rows that are missing. A run killed without a clean exit
+ * loses the minute in progress, at most 60 s plus one step; the bits of
+ * every completed minute are already in the store.
+ *
+ * The value fed for a split hour is rebuilt from the minute tier, not
+ * from the hour rows: a killed run never wrote its partial hour row,
+ * and this run's hour row holds only its own part. The minute tier
+ * holds every run's minute rows of the hour (sum, n, min and max of
+ * every sample, flushed at every minute boundary), so their sums are
+ * exactly the hour row an unbroken run would have closed, less only
+ * what was lost with a killed run's minute in progress: a presence
+ * metric's max over the hour, a counter's sum (and so its count over
+ * 60 minutes), a gauge's mean as sum over n. The within-hour spread is
+ * rebuilt from the same rows (one value a minute, as minute_pass()
+ * takes them). Nothing is reconstructed that the rows do not hold, and
+ * a store error drops the hour as before, unfed and not zero-filled. */
+
+static int cover_on(const web_anomaly_t *a) {
+    return a->cfg.live && a->cfg.store;
+}
+
+static int popcount60(unsigned long long m) {
+    int n = 0;
+    for (; m; m &= m - 1) n++;
+    return n;
+}
+
+/* This run's observed minutes of the hour, up to minute upto. */
+static unsigned long long own_mask(web_anomaly_t *a, long long hour, long long upto) {
+    unsigned long long m = 0;
+    for (int i = 0; i < 60 && hour / 60 + i <= upto; i++)
+        if (minute_observed(a, hour / 60 + i)) m |= 1ULL << i;
+    return m;
+}
+
+/* The completed minutes (up to upto) of the hours this run still holds,
+ * into the store when they add a bit. */
+static void cover_save(web_anomaly_t *a, long long upto) {
+    struct web_anom_priv *p = a->p;
+    if (!cover_on(a) || upto < 0) return;
+    web_store_stats_t ss;
+    web_store_stats(a->cfg.store, &ss);
+    int werr = ss.write_errors != p->werr_seen;
+    p->werr_seen = ss.write_errors;
+    unsigned long errors = 0;
+    for (int k = 0; k < COV_HOURS; k++) {
+        long long h = p->cov_hour[k];
+        if (h < 0 || h / 60 > upto) continue;
+        /* A failed write since the last save: the hours holding the
+         * minutes completed since then may lack those minutes' rows. */
+        if (werr && h / 60 + 59 > p->saved_upto) p->cov_taint[k] = 1;
+        if (p->cov_taint[k]) continue;
+        unsigned long long m = own_mask(a, h, upto);
+        if ((m & ~p->cov_put[k]) == 0) continue;
+        if (web_store_cover_put(a->cfg.store, h, m) == 0) p->cov_put[k] |= m;
+        else errors++;
+    }
+    p->saved_upto = upto;
+    if (errors) {
+        pthread_mutex_lock(&a->mu);
+        a->st.persist_errors += errors;
+        pthread_mutex_unlock(&a->mu);
+    }
+}
+
+static void merge_row(void *ctx, int metric, const char *key, const web_point_t *pt) {
+    web_anomaly_t *a = ctx;
+    struct web_anom_priv *p = a->p;
+    long long h = pt->t - pt->t % 3600;
+    web_qrow_t r;
+    memset(&r, 0, sizeof(r));
+    r.tier = WEB_TIER_HOUR;
+    r.metric = metric;
+    snprintf(r.key, sizeof(r.key), "%s", key);
+    r.t = h;
+    r.sum = pt->sum;
+    r.n = pt->n;
+    r.min = pt->min;
+    r.max = pt->max;
+    int bad = agg_put(p, &r) != 0;
+    if (acc_add(p, metric, r.key, pt->t, web_bl_value(metric, pt, 60)) != 0) bad = 1;
+    if (bad) {
+        pthread_mutex_lock(&a->mu);
+        a->st.rows_dropped++;
+        pthread_mutex_unlock(&a->mu);
+    }
+}
+
+static void release_hour(struct web_anom_priv *p, long long h) {
+    for (int i = 0; i < p->agg_alloc; i++)
+        if (p->agg[i].used && p->agg[i].t == h &&
+            (p->agg[i].tier == WEB_TIER_HOUR || p->agg[i].tier == TIER_ACC))
+            agg_release(p, i);
+}
+
+/* An hour that began before this run: 1 when the runs together observed
+ * WEB_ANOM_COVER_MIN of its minutes and its merged rows were rebuilt
+ * from the minute tier in place of this run's own, 0 when they did
+ * not, -1 when the store could not say (the hour is then dropped). */
+static int hour_merge(web_anomaly_t *a, long long h) {
+    struct web_anom_priv *p = a->p;
+    unsigned long long mask;
+    int done;
+    if (web_store_cover_get(a->cfg.store, h, &mask, &done) < 0) return -1;
+    if (popcount60(mask) < WEB_ANOM_COVER_MIN) return 0;
+    release_hour(p, h);
+    if (web_store_hour_minutes(a->cfg.store, h, merge_row, a) < 0) {
+        release_hour(p, h);
+        return -1;
+    }
+    pthread_mutex_lock(&a->mu);
+    a->st.hours_merged++;
+    pthread_mutex_unlock(&a->mu);
+    return 1;
 }
 
 /* The socket connected and a record within the silence limit, counted
@@ -691,7 +834,16 @@ static void z_note(web_anomaly_t *a, int metric, const char *key, long long t,
     pthread_mutex_lock(&a->mu);
     int made;
     int i = kv_get(&p->zl, 0, key, t, &made, NULL);
-    if (made || p->zl.e[i].t != t || fabs(z) > p->zv[i]) p->zv[i] = fabs(z);
+    double *v = &p->zv[(size_t)i * 3];
+    if (made || p->zl.e[i].t != t) v[0] = v[1] = v[2] = -1;
+    /* A device metric's scope is its own, not its key's (web_scope.h):
+     * dev.frames and wifi.deauth are the radio's, dev.present.local the
+     * host's, dev.present every source's (Hybrid's alone). */
+    int tag = web_scope_metric(metric);
+    double az = fabs(z);
+    if (az > v[0]) v[0] = az;
+    if ((tag & WEB_SC_M) && az > v[1]) v[1] = az;
+    if ((tag & WEB_SC_L) && az > v[2]) v[2] = az;
     p->zl.e[i].t = t;
     pthread_mutex_unlock(&a->mu);
 }
@@ -1410,7 +1562,8 @@ static int idx_push(struct web_anom_priv *p, int i) {
 
 static void collect_counter(void *ctx, int metric, const char *key) {
     struct web_anom_priv *p = ctx;
-    if (web_metric_defs[metric].kclass == WEB_KC_GLOBAL) return;
+    if (web_metric_defs[metric].kclass == WEB_KC_GLOBAL ||
+        web_metric_defs[metric].kclass == WEB_KC_BLECLASS) return;
     if (p->pairs_n == p->pairs_cap) {
         int nc = p->pairs_cap ? p->pairs_cap * 2 : 1024;
         pair_t *np = realloc(p->pairs, (size_t)nc * sizeof(*np));
@@ -1467,13 +1620,18 @@ static void minute_pass(web_anomaly_t *a, long long m, int latest,
             const web_metric_t *md = &web_metric_defs[g->metric];
             double v = web_bl_value(g->metric, &pt, 60);
             if (md->kind == WEB_MK_PRESENCE) {
-                if (v >= 0.5) {
+                /* A3 and A4 read every source's presence; the scoped
+                 * splits (dev.present.monitor, .local) are for the
+                 * views and would score each device three times. */
+                if (v >= 0.5 && g->metric == WM_DEV_PRESENT) {
                     a3_score(a, g->key, t);
                     if (a4_on && g->metric == WM_DEV_PRESENT) a4_check(a, g->key);
                 }
                 continue;
             }
-            if (md->kclass != WEB_KC_GLOBAL) a1_score(a, g->metric, g->key, t, v);
+            if (md->kclass != WEB_KC_GLOBAL && md->kclass != WEB_KC_BLECLASS &&
+                md->kclass != WEB_KC_SYS && !web_metric_is_rssi(g->metric))
+                a1_score(a, g->metric, g->key, t, v);
             if (a->cfg.store && is_flow(g->metric) && v > 0)
                 a9_check(a, g->metric, g->key, t);
             if (g->metric == WM_HOST_CONNS) fan_window(a, g->key, g->max, t);
@@ -1567,7 +1725,9 @@ static void persist_baseline(web_anomaly_t *a) {
 
 static void hour_pass(web_anomaly_t *a, long long h) {
     struct web_anom_priv *p = a->p;
-    int obs = hour_observed(a, h) && (!a->cfg.live || h >= p->start_s);
+    int obs;
+    if (!a->cfg.live || h >= p->start_s) obs = hour_observed(a, h);
+    else obs = cover_on(a) && hour_merge(a, h) > 0;
     p->idx_n = 0;
     for (int i = 0; i < p->agg_alloc; i++)
         if (p->agg[i].used && (p->agg[i].tier == WEB_TIER_HOUR ||
@@ -1590,6 +1750,30 @@ static void hour_pass(web_anomaly_t *a, long long h) {
     else     a->st.hours_unobserved++;
     pthread_mutex_unlock(&a->mu);
     persist_baseline(a);
+    if (cover_on(a)) {
+        /* Passed, so a later run does not pass it again; two days of
+         * rows are kept, a day more than the catch-up looks back. */
+        if (web_store_cover_done(a->cfg.store, h) != 0 ||
+            web_store_cover_prune(a->cfg.store, h - 2 * 86400) != 0) {
+            pthread_mutex_lock(&a->mu);
+            a->st.persist_errors++;
+            pthread_mutex_unlock(&a->mu);
+        }
+    }
+}
+
+/* The hours before this run's first that an earlier run observed and
+ * did not pass (it stopped before their end), oldest first: within a
+ * day, at most a day of them. */
+static void cover_catch_up(web_anomaly_t *a, long long h_now) {
+    long long hours[24];
+    int n = web_store_cover_open(a->cfg.store, h_now - 24 * 3600LL, h_now, hours, 24);
+    for (int i = 0; i < n; i++) hour_pass(a, hours[i]);
+}
+
+void web_anomaly_save_cover(web_anomaly_t *a) {
+    struct web_anom_priv *p = a->p;
+    if (p && p->start_s >= 0) cover_save(a, p->done_minute);
 }
 
 static void persist(web_anomaly_t *a) {
@@ -1751,6 +1935,13 @@ void web_anomaly_step(web_anomaly_t *a, long long now_s) {
         p->start_s = now_s;
         p->done_minute = m_now - 1;
         p->final_hour = h_now - 3600;
+        if (cover_on(a)) {
+            web_store_stats_t ss;
+            web_store_stats(a->cfg.store, &ss);
+            p->werr_seen = ss.write_errors;
+            p->saved_upto = p->done_minute;
+            cover_catch_up(a, h_now);
+        }
     }
     if (a->cfg.live) {
         int conn;
@@ -1774,6 +1965,10 @@ void web_anomaly_step(web_anomaly_t *a, long long now_s) {
         ran = 1;
     }
     if (m_now - 1 > p->done_minute) p->done_minute = m_now - 1;
+    /* Before the hour pass: an hour's last minute is in the store before
+     * the hour is judged, and a run killed after this loses no more
+     * than the minute in progress. */
+    if (ran) cover_save(a, p->done_minute);
     if (p->final_hour < h_now - 3600) {
         hour_pass(a, h_now - 3600);
         p->final_hour = h_now - 3600;
@@ -1915,8 +2110,37 @@ int web_anomaly_restore(web_anomaly_t *a, long long now_s) {
 
 /* ── readers ─────────────────────────────────────────────────────────── */
 
+void web_anomaly_tid(int rule, int metric, const char *key,
+                     char out[WEB_ANOM_TID_MAX + 1]) {
+    char s[WEB_KEY_MAX + 96];
+    snprintf(s, sizeof(s), "%s\x1f%s\x1f%s", web_anomaly_rule(rule),
+             metric >= 0 && metric < WM_COUNT ? web_metric_defs[metric].name : "",
+             key ? key : "");
+    out[0] = 'a';
+    web_ble_key_hash(s, out + 1);
+}
+
+int web_anomaly_tid_find(web_anomaly_t *a, const char *tid, web_anom_ep_t *out) {
+    int found = 0;
+    pthread_mutex_lock(&a->mu);
+    for (int i = 0; i < a->cap; i++) {
+        const web_anom_ep_t *e = &a->ep[i];
+        if (e->state != WEB_EP_OPEN && e->state != WEB_EP_CLOSED) continue;
+        char t[WEB_ANOM_TID_MAX + 1];
+        web_anomaly_tid(e->rule, e->metric, e->key, t);
+        if (strcmp(t, tid)) continue;
+        if (found && out->state == WEB_EP_OPEN) continue;
+        if (!found || e->state == WEB_EP_OPEN || e->last_seen > out->last_seen) *out = *e;
+        found = 1;
+    }
+    pthread_mutex_unlock(&a->mu);
+    return found;
+}
+
 void web_anomaly_ep_json(web_jw_t *w, const web_anom_ep_t *e) {
     static const char *const STATE[] = { "free", "building", "open", "closed" };
+    char tid[WEB_ANOM_TID_MAX + 1];
+    web_anomaly_tid(e->rule, e->metric, e->key, tid);
     web_jw_raw(w, "{\"id\":");          web_jw_int(w, e->id);
     web_jw_raw(w, ",\"rule\":\"");       web_jw_raw(w, web_anomaly_rule(e->rule));
     web_jw_raw(w, "\",\"kind\":\"");     web_jw_raw(w, web_anomaly_kind(e->rule));
@@ -1934,7 +2158,8 @@ void web_anomaly_ep_json(web_jw_t *w, const web_anom_ep_t *e) {
     web_jw_raw(w, ",\"evidence\":");     web_jw_str(w, e->evidence);
     web_jw_raw(w, ",\"first_seen\":");   web_jw_int(w, e->first_seen);
     web_jw_raw(w, ",\"last_seen\":");    web_jw_int(w, e->last_seen);
-    web_jw_raw(w, ",\"state\":\"");
+    web_jw_raw(w, ",\"tid\":\"");       web_jw_raw(w, tid);
+    web_jw_raw(w, "\",\"state\":\"");
     web_jw_raw(w, e->state >= 0 && e->state <= 3 ? STATE[e->state] : "?");
     web_jw_raw(w, "\",\"open\":");       web_jw_raw(w, e->state == WEB_EP_OPEN ? "true" : "false");
     web_jw_raw(w, "}");
@@ -1953,6 +2178,39 @@ static int cmp_listed(const void *x, const void *y) {
 
 size_t web_anomaly_json(web_anomaly_t *a, long long now_s, long long since,
                         int kind, char *out, size_t cap) {
+    return web_anomaly_json_scoped(a, now_s, since, kind, NULL, NULL, out, cap);
+}
+
+int web_anomaly_ep_tag(const web_anom_ep_t *e, const web_scope_ctx_t *sc,
+                       web_rollup_t *ru) {
+    switch (e->rule) {
+    case WEB_ANOM_A1_RATE:
+        return web_scope_metric_key(e->metric, e->key, sc);
+    case WEB_ANOM_A2_NEW:
+    case WEB_ANOM_A3_HOURS:
+    case WEB_ANOM_A4_VENDOR: {
+        /* Scored on every source's presence, or (A2) on a MAC new to
+         * sloth whichever way it was heard: a probe, an association, an
+         * ARP row (web_sdb_new_macs()). Shown where the MAC has presence
+         * of the scope's own; until it has any, Hybrid alone. A2's burst
+         * and A4's name no MAC: they are every scope's. */
+        if (!e->key[0]) return WEB_SC_META;
+        int tag = 0;
+        if (web_rollup_has(ru, WM_DEV_PRESENT_MON, e->key)) tag |= WEB_SC_M;
+        if (web_rollup_has(ru, WM_DEV_PRESENT_LOC, e->key)) tag |= WEB_SC_L;
+        return tag;
+    }
+    case WEB_ANOM_A10_SENSOR:
+        return WEB_SC_META;
+    default:                      /* A5-A9: names, fan-out, DNS, flows */
+        return web_scope_eff(WEB_SC_L | WEB_SC_IPCAP, sc ? sc->radio : 0);
+    }
+}
+
+size_t web_anomaly_json_scoped(web_anomaly_t *a, long long now_s,
+                               long long since, int kind,
+                               const web_scope_ctx_t *sc, web_rollup_t *ru,
+                               char *out, size_t cap) {
     if (cap < WEB_ANOM_EP_JSON_MAX + 128) return 0;
     web_anom_ep_t *list = malloc((size_t)a->cap * sizeof(*list));
     if (!list) return 0;
@@ -1966,6 +2224,13 @@ size_t web_anomaly_json(web_anomaly_t *a, long long now_s, long long since,
         list[n++] = *e;
     }
     pthread_mutex_unlock(&a->mu);
+    if (sc && sc->scope != WEB_SCOPE_HYBRID) {
+        int o = 0;
+        for (int i = 0; i < n; i++)
+            if (web_scope_pass(sc->scope, web_anomaly_ep_tag(&list[i], sc, ru)))
+                list[o++] = list[i];
+        n = o;
+    }
     qsort(list, (size_t)n, sizeof(*list), cmp_listed);
     web_jw_t w;
     web_jw_init(&w, out, cap);
@@ -2049,29 +2314,66 @@ void web_anomaly_stats(web_anomaly_t *a, web_anom_stats_t *out) {
 
 int web_anomaly_device_z(web_anomaly_t *a, const char *key, long long now_s,
                          double *z) {
+    return web_anomaly_device_z_scoped(a, key, now_s, WEB_SCOPE_HYBRID, z);
+}
+
+int web_anomaly_device_z_scoped(web_anomaly_t *a, const char *key,
+                                long long now_s, int scope, double *z) {
     struct web_anom_priv *p = a->p;
     int ok = 0;
+    int k = scope == WEB_SCOPE_MONITOR ? 1 : scope == WEB_SCOPE_LOCAL ? 2 : 0;
     pthread_mutex_lock(&a->mu);
     int i = kv_find(&p->zl, 0, key);
-    if (i >= 0 && now_s - p->zl.e[i].t <= WEB_ANOM_Z_FRESH_S) {
-        *z = p->zv[i];
+    if (i >= 0 && now_s - p->zl.e[i].t <= WEB_ANOM_Z_FRESH_S &&
+        p->zv[(size_t)i * 3 + k] >= 0) {
+        *z = p->zv[(size_t)i * 3 + k];
         ok = 1;
     }
     pthread_mutex_unlock(&a->mu);
     return ok;
 }
 
-int web_anomaly_key_count(web_anomaly_t *a, const char *key, int kind) {
-    int n = 0;
-    pthread_mutex_lock(&a->mu);
-    for (int i = 0; i < a->cap; i++) {
-        const web_anom_ep_t *e = &a->ep[i];
-        if ((e->state == WEB_EP_OPEN || e->state == WEB_EP_CLOSED) &&
-            !strcmp(e->key, key) && (kind < 0 || kind_index(e->rule) == kind))
-            n++;
+/* The episodes matching (key, kind, open_only), counted under sc: they
+ * are copied out a few at a time, because a tag can read the rollup
+ * (A2-A4's presence), and that is not done under a->mu. */
+static int count_scoped(web_anomaly_t *a, const char *key, int kind, int open_only,
+                        const web_scope_ctx_t *sc, web_rollup_t *ru) {
+    enum { CHUNK = 8 };
+    web_anom_ep_t buf[CHUNK];
+    int n = 0, at = 0;
+    for (;;) {
+        int got = 0;
+        pthread_mutex_lock(&a->mu);
+        for (; at < a->cap && got < CHUNK; at++) {
+            const web_anom_ep_t *e = &a->ep[at];
+            if (e->state != WEB_EP_OPEN && (open_only || e->state != WEB_EP_CLOSED))
+                continue;
+            if (key && strcmp(e->key, key)) continue;
+            if (kind >= 0 && kind_index(e->rule) != kind) continue;
+            buf[got++] = *e;
+        }
+        pthread_mutex_unlock(&a->mu);
+        for (int i = 0; i < got; i++)
+            if (!sc || sc->scope == WEB_SCOPE_HYBRID ||
+                web_scope_pass(sc->scope, web_anomaly_ep_tag(&buf[i], sc, ru)))
+                n++;
+        if (got < CHUNK) break;
     }
-    pthread_mutex_unlock(&a->mu);
     return n;
+}
+
+int web_anomaly_key_count(web_anomaly_t *a, const char *key, int kind) {
+    return count_scoped(a, key, kind, 0, NULL, NULL);
+}
+
+int web_anomaly_key_count_scoped(web_anomaly_t *a, const char *key, int kind,
+                                 const web_scope_ctx_t *sc, web_rollup_t *ru) {
+    return count_scoped(a, key, kind, 0, sc, ru);
+}
+
+int web_anomaly_open_count_scoped(web_anomaly_t *a, const web_scope_ctx_t *sc,
+                                  web_rollup_t *ru) {
+    return count_scoped(a, NULL, -1, 1, sc, ru);
 }
 
 int web_anomaly_key_list(web_anomaly_t *a, const char *key,

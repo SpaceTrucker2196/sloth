@@ -58,6 +58,24 @@ static void test_arp_draw_known_vendor(void) {
     ASSERT_LINE_HAS(y, "wlan0");
 }
 
+/* An IPv6 neighbour (#176) is drawn whole, and the address column
+ * widens to it so the MAC column still lines up for every row. Seen red
+ * with the column fixed at 15: the address ran into the MAC. */
+static void test_arp_draw_ipv6_widens_column(void) {
+    sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    inject_entry(&s, "192.168.1.1", "b8:27:eb:aa:bb:cc", "wlan1");
+    inject_entry(&s, "2001:db8:0:1::abcd:1234", "02:00:5e:00:53:01", "wlan1");
+    view_arp_draw(&s);
+    int y6 = runner_screen_find("2001:db8:0:1::abcd:1234  02:00:5e:00:53:01");
+    ASSERT(y6 >= 0);
+    /* The IPv4 row is padded to the same width: its MAC starts where
+     * the IPv6 row's does. */
+    int y4 = runner_screen_find("192.168.1.1              b8:27:eb:aa:bb:cc");
+    ASSERT(y4 >= 0);
+    ASSERT_LINE_HAS(y6, "wlan1");
+}
+
 /* ── Navigation tests ────────────────────────────────────── */
 
 static void test_arp_nav_down(void) {
@@ -122,6 +140,7 @@ void run_arp_tests(void) {
     RUN_TEST(test_arp_draw_empty);
     RUN_TEST(test_arp_draw_with_entries);
     RUN_TEST(test_arp_draw_known_vendor);
+    RUN_TEST(test_arp_draw_ipv6_widens_column);
 
     TEST_SUITE("ARP navigation");
     RUN_TEST(test_arp_nav_down);

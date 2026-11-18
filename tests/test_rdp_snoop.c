@@ -5,6 +5,7 @@
 #include "rdp_snoop.h"
 #include <stdio.h>
 #include "sensor_health.h"
+#include "sloth_clock.h"
 
 /* RDP X.224 Connection Request frames built from first principles
  * per RFC 1006 (TPKT) + X.224 (T.0) + MS-RDPBCGR §2.2.1.1.
@@ -231,6 +232,70 @@ static void test_rdp_table_full_evicts_oldest_and_tallies(void) {
     ASSERT_EQ(have_first, 0);
 }
 
+/* ── Brute-force window (#202) ──────────────────────────── */
+/* Same fix, same shape as test_window_holds_recent_banners_only() in
+ * test_ssh_snoop.c: connect_req_count stays a lifetime tally,
+ * RDP_BRUTE_FORCE reads the per-flow sliding window instead. */
+static uint64_t g_rsw_mono;
+static time_t   g_rsw_wall;
+static uint64_t rsw_mono(void) { return g_rsw_mono; }
+static time_t   rsw_wall(void) { return g_rsw_wall; }
+
+static void test_window_holds_recent_crs_only(void) {
+    rdp_snoop_clear();
+    uint8_t buf[64];
+    int n = build_minimal_cr(buf);
+    g_rsw_mono = 1000000; g_rsw_wall = 1700000000;
+    sloth_clock_test_set(rsw_mono, rsw_wall);
+
+    for (int i = 0; i < 5; i++) {
+        if (i > 0) { g_rsw_mono += 1000; g_rsw_wall += 1; }
+        rdp_snoop_observe("10.0.0.5", 49152, "10.0.0.10", 3389, buf, n);
+    }
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    rdp_snoop_snapshot(&s);
+    ASSERT_EQ(s.rdp_flow_count, 1);
+    ASSERT_EQ(s.rdp_flows[0].connect_req_count, 5);   /* lifetime */
+    ASSERT_EQ(s.rdp_flows[0].brute_count, 5);         /* default 60 s window */
+
+    /* Past the default 60 s window, with no further CR. */
+    g_rsw_mono += 70000; g_rsw_wall += 70;
+    rdp_snoop_snapshot(&s);
+    ASSERT_EQ(s.rdp_flows[0].brute_count, 0);
+    ASSERT_EQ(s.rdp_flows[0].connect_req_count, 5);   /* still not decayed */
+
+    rdp_snoop_observe("10.0.0.5", 49152, "10.0.0.10", 3389, buf, n);
+    rdp_snoop_snapshot(&s);
+    ASSERT_EQ(s.rdp_flows[0].brute_count, 1);
+    ASSERT_EQ(s.rdp_flows[0].connect_req_count, 6);
+
+    sloth_clock_test_set(NULL, NULL);
+    rdp_snoop_clear();
+}
+
+/* Same shape as test_window_ignores_widely_spaced_banners() in
+ * test_ssh_snoop.c. */
+static void test_window_ignores_widely_spaced_crs(void) {
+    rdp_snoop_clear();
+    uint8_t buf[64];
+    int n = build_minimal_cr(buf);
+    g_rsw_mono = 1000000; g_rsw_wall = 1700000000;
+    sloth_clock_test_set(rsw_mono, rsw_wall);
+
+    sloth_state_t s;
+    for (int i = 0; i < 12; i++) {
+        if (i > 0) { g_rsw_mono += 600000; g_rsw_wall += 600; }
+        rdp_snoop_observe("10.0.0.5", 49152, "10.0.0.10", 3389, buf, n);
+        memset(&s, 0, sizeof(s));
+        rdp_snoop_snapshot(&s);
+        ASSERT_EQ(s.rdp_flows[0].brute_count, 1);
+    }
+    ASSERT_EQ(s.rdp_flows[0].connect_req_count, 12);
+
+    sloth_clock_test_set(NULL, NULL);
+    rdp_snoop_clear();
+}
+
 void run_rdp_snoop_tests(void) {
     TEST_SUITE("rdp_snoop: X.224 Connection Request detection");
     RUN_TEST(test_detects_minimal_cr);
@@ -252,4 +317,8 @@ void run_rdp_snoop_tests(void) {
     RUN_TEST(test_truncated_rejected);
     RUN_TEST(test_non_rdp_payload_rejected);
     RUN_TEST(test_rdp_table_full_evicts_oldest_and_tallies);
+
+    TEST_SUITE("rdp_snoop: brute-force window (#202)");
+    RUN_TEST(test_window_holds_recent_crs_only);
+    RUN_TEST(test_window_ignores_widely_spaced_crs);
 }

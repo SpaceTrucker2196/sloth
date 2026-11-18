@@ -5,6 +5,8 @@
 #include <signal.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <time.h>
 #include <sys/resource.h>
 #include "evidence_manifest.h"
 #include "runner.h"
@@ -14,14 +16,16 @@
 #include "beacon_detect.h"
 #include "tune.h"
 #include "sloth_clock.h"
+#include "eapol_log.h"
+#include "tmp_dir.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
-static char tmp_dir[] = "/tmp/sloth_pcap_XXXXXX";
+static char tmp_dir[TEST_TMP_MAX];
 
 static void ensure_tmp_dir(void) {
     /* mkdtemp creates the directory and writes the final name back. */
-    char *d = mkdtemp(tmp_dir);
+    char *d = mkdtemp(test_tmp_tpl(tmp_dir, sizeof(tmp_dir), "sloth_pcap_XXXXXX"));
     (void)d;
     alert_pcap_set_dir(tmp_dir);
 }
@@ -151,7 +155,7 @@ static void test_dump_skips_alert_without_match_ip(void) {
  * when a CLEARTEXT_CREDS flow matches. They get the same private-dir /
  * private-file guarantee as the handshake export. */
 
-static char g_ap87[80];
+static char g_ap87[TEST_TMP_MAX];
 
 static int ap87_mode(const char *path) {
     struct stat st;
@@ -193,7 +197,7 @@ static void ap87_cleanup(void) {
 }
 
 static void ap87_setup(void) {
-    snprintf(g_ap87, sizeof(g_ap87), "/tmp/sloth_test_ap87_%d", (int)getpid());
+    snprintf(g_ap87, sizeof(g_ap87), "%s/sloth_test_ap87_%d", test_tmpdir(), (int)getpid());
     ap87_cleanup();
 }
 
@@ -714,6 +718,378 @@ static void test_dump_succeeds_on_a_healthy_filesystem_by_default(void) {
     ASSERT(file_exists(path));
 }
 
+/* ── Age sweep (#166) ────────────────────────────────────────────────
+ *
+ * Hand-built directory trees: empty files with names in the shape
+ * alert_pcap_dump() writes, their mtimes set with utimensat() relative
+ * to a wall clock pinned through the sloth_clock seam. The sweep reads
+ * only the name, the type and the mtime, so no pcap bytes are needed. */
+
+#define SW_DAY 86400
+static time_t sw_now = 1800000000;          /* 2027-01-15, pinned */
+static time_t sw_wall(void) { return sw_now; }
+
+static char sw_dir[TEST_TMP_MAX];
+
+/* A fresh private directory per test, so one test's leftovers cannot
+ * be another's "kept" file. */
+static void sw_setup(void) {
+    tune_reset();
+    sw_now = 1800000000;
+    sloth_clock_test_set(NULL, sw_wall);
+    snprintf(sw_dir, sizeof(sw_dir), "%s/sloth_sweep_XXXXXX", test_tmpdir());
+    ASSERT(mkdtemp(sw_dir) != NULL);
+    ASSERT_EQ(alert_pcap_set_dir(sw_dir), 0);
+}
+
+static void sw_path(const char *name, char *out, size_t n) {
+    snprintf(out, n, "%s/%s", sw_dir, name);
+}
+
+/* A regular file `age_secs` old by mtime, against the pinned clock. */
+static void sw_file(const char *name, long age_secs) {
+    char p[256]; sw_path(name, p, sizeof(p));
+    FILE *f = fopen(p, "w");
+    ASSERT(f != NULL);
+    if (!f) return;
+    fputs("x", f);
+    fclose(f);
+    struct timespec ts[2];
+    ts[0].tv_sec = ts[1].tv_sec = sw_now - age_secs;
+    ts[0].tv_nsec = ts[1].tv_nsec = 0;
+    ASSERT_EQ(utimensat(AT_FDCWD, p, ts, 0), 0);
+}
+
+static int sw_exists(const char *name) {
+    char p[256]; sw_path(name, p, sizeof(p));
+    struct stat st;
+    return lstat(p, &st) == 0;
+}
+
+/* Run steps until the pass completes; bounded so a regression that
+ * never finishes fails rather than hangs. Returns files removed. */
+static int sw_run_pass(int budget) {
+    int total = 0;
+    for (int i = 0; i < 10000; i++) {
+        int n = alert_pcap_sweep_step(budget);
+        if (n > 0) total += n;
+        if (!alert_pcap_sweep_in_progress()) break;
+    }
+    return total;
+}
+
+/* Remove everything left, including links and directories. */
+static void sw_teardown(void) {
+    alert_pcap_set_dir(NULL);
+    sloth_clock_test_set(NULL, NULL);
+    tune_reset();
+    DIR *d = opendir(sw_dir);
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL) {
+            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+            char p[256]; sw_path(e->d_name, p, sizeof(p));
+            if (unlink(p) != 0) rmdir(p);
+        }
+        closedir(d);
+    }
+    chmod(sw_dir, 0700);
+    rmdir(sw_dir);
+}
+
+static void test_sweep_name_shape(void) {
+    /* What alert_pcap_dump() writes: the stem, an optional _N suffix
+     * from sfile_fopen_unique(), an empty slug, and the manifest. */
+    ASSERT(alert_pcap_is_name("alert_20261026_120000_THREAT_IP.pcap"));
+    ASSERT(alert_pcap_is_name("alert_20261026_120000_THREAT_IP_2.pcap"));
+    ASSERT(alert_pcap_is_name("alert_20261026_120000_.pcap"));
+    ASSERT(alert_pcap_is_name("sloth-manifest-20261026T120000Z-1a2b.jsonl"));
+    /* Everything else is the operator's. */
+    ASSERT(!alert_pcap_is_name("capture.pcap"));
+    ASSERT(!alert_pcap_is_name("alert_.pcap"));
+    ASSERT(!alert_pcap_is_name("alert_2026102_120000_X.pcap"));
+    ASSERT(!alert_pcap_is_name("alert_20261026-120000_X.pcap"));
+    ASSERT(!alert_pcap_is_name("alert_20261026_120000_X.pcapng"));
+    ASSERT(!alert_pcap_is_name("alert_20261026_120000_a.b.pcap"));
+    ASSERT(!alert_pcap_is_name("alert_20261026_120000_X.pcap.tmp"));
+    ASSERT(!alert_pcap_is_name(".alert_20261026_120000_X.pcap"));
+    ASSERT(!alert_pcap_is_name("notes.txt"));
+    ASSERT(!alert_pcap_is_name("."));
+    ASSERT(!alert_pcap_is_name(".."));
+    ASSERT(!alert_pcap_is_name(""));
+    ASSERT(!alert_pcap_is_name(NULL));
+}
+
+static void test_sweep_default_is_the_ruling(void) {
+    /* Owner ruling 2026-10-26: two weeks. */
+    tune_reset();
+    ASSERT_EQ(alert_pcap_retain_days(), 14);
+    ASSERT_STR(tune_spec(TUNE_PCAP_RETAIN_DAYS)->name, "pcap.retain_days");
+    char err[160];
+    ASSERT_EQ(tune_set("pcap.retain_days=3650", err, sizeof(err)), 0);
+    ASSERT(tune_set("pcap.retain_days=3651", err, sizeof(err)) != 0);
+    ASSERT(tune_set("pcap.retain_days=-1", err, sizeof(err)) != 0);
+    ASSERT_EQ(alert_pcap_retain_days(), 3650);       /* previous stands */
+    tune_reset();
+}
+
+static void test_sweep_removes_old_keeps_young(void) {
+    sw_setup();
+    sw_file("alert_20261001_000000_OLD.pcap",   15 * SW_DAY);
+    sw_file("alert_20261001_000001_OLD_2.pcap", 30 * SW_DAY);
+    sw_file("sloth-manifest-20261001T000000Z-aa.jsonl", 15 * SW_DAY);
+    /* One second inside the window, and one at day 13: both kept. */
+    sw_file("alert_20261012_000000_EDGE.pcap", 14 * SW_DAY - 1);
+    sw_file("alert_20261013_000000_YOUNG.pcap", 13 * SW_DAY);
+    ASSERT_EQ(sw_run_pass(ALERT_PCAP_SWEEP_BUDGET), 3);
+    ASSERT(!sw_exists("alert_20261001_000000_OLD.pcap"));
+    ASSERT(!sw_exists("alert_20261001_000001_OLD_2.pcap"));
+    ASSERT(!sw_exists("sloth-manifest-20261001T000000Z-aa.jsonl"));
+    ASSERT(sw_exists("alert_20261012_000000_EDGE.pcap"));
+    ASSERT(sw_exists("alert_20261013_000000_YOUNG.pcap"));
+    ASSERT_EQ((long long)alert_pcap_swept(), 3);
+    ASSERT_EQ(alert_pcap_sweep_errors(), 0);
+    sw_teardown();
+}
+
+static void test_sweep_leaves_foreign_and_symlinked_files(void) {
+    sw_setup();
+    /* Old, but not names sloth writes. */
+    sw_file("capture.pcap", 400 * SW_DAY);
+    sw_file("notes.txt",    400 * SW_DAY);
+    sw_file("alert_20261001_000000_x.pcapng", 400 * SW_DAY);
+    /* A symlink at an artifact name, old by its own lstat mtime, to an
+     * old regular file. A sweep that followed the link would see an old
+     * regular file and unlink the name; one that did not check the type
+     * would unlink the link. Both must leave both. */
+    sw_file("target.bin", 400 * SW_DAY);
+    char lnk[256];
+    sw_path("alert_20260102_000000_LINK.pcap", lnk, sizeof(lnk));
+    ASSERT_EQ(symlink("target.bin", lnk), 0);
+    struct timespec ts[2];
+    ts[0].tv_sec = ts[1].tv_sec = sw_now - 400 * SW_DAY;
+    ts[0].tv_nsec = ts[1].tv_nsec = 0;
+    ASSERT_EQ(utimensat(AT_FDCWD, lnk, ts, AT_SYMLINK_NOFOLLOW), 0);
+    /* A directory at an artifact name. */
+    char sub[256]; sw_path("alert_20260103_000000_DIR.pcap", sub, sizeof(sub));
+    ASSERT_EQ(mkdir(sub, 0700), 0);
+
+    ASSERT_EQ(sw_run_pass(ALERT_PCAP_SWEEP_BUDGET), 0);
+    ASSERT(sw_exists("capture.pcap"));
+    ASSERT(sw_exists("notes.txt"));
+    ASSERT(sw_exists("alert_20261001_000000_x.pcapng"));
+    ASSERT(sw_exists("alert_20260102_000000_LINK.pcap"));
+    ASSERT(sw_exists("target.bin"));
+    ASSERT(sw_exists("alert_20260103_000000_DIR.pcap"));
+    /* Not silent: the link and the directory are each one error. */
+    ASSERT_EQ(alert_pcap_sweep_errors(), 2);
+    ASSERT(strstr(alert_pcap_sweep_error(), "not a regular file") != NULL);
+    ASSERT_EQ((long long)alert_pcap_swept(), 0);
+    sw_teardown();
+}
+
+static void test_sweep_pass_is_bounded_and_resumes(void) {
+    sw_setup();
+    char name[64];
+    for (int i = 0; i < 10; i++) {
+        snprintf(name, sizeof(name), "alert_20261001_0000%02d_B.pcap", i);
+        sw_file(name, 20 * SW_DAY);
+    }
+    /* 12 entries with "." and "..": a budget of 3 cannot finish them in
+     * one call, and must not remove more than 3 in any call. */
+    int first = alert_pcap_sweep_step(3);
+    ASSERT(first >= 0 && first <= 3);
+    ASSERT(alert_pcap_sweep_in_progress());
+    int calls = 1, total = first;
+    while (alert_pcap_sweep_in_progress() && calls < 100) {
+        int n = alert_pcap_sweep_step(3);
+        ASSERT(n >= 0 && n <= 3);
+        total += n;
+        calls++;
+    }
+    ASSERT_EQ(total, 10);
+    ASSERT(calls >= 4);                       /* ceil(12 / 3) */
+    ASSERT_EQ((long long)alert_pcap_swept(), 10);
+
+    /* The pass is over and the next is an hour away: a new old file
+     * waits for it. */
+    sw_file("alert_20261001_000100_LATE.pcap", 20 * SW_DAY);
+    ASSERT_EQ(alert_pcap_sweep_step(ALERT_PCAP_SWEEP_BUDGET), 0);
+    ASSERT(!alert_pcap_sweep_in_progress());
+    sw_now += ALERT_PCAP_SWEEP_INTERVAL_S - 1;
+    ASSERT_EQ(sw_run_pass(ALERT_PCAP_SWEEP_BUDGET), 0);
+    ASSERT(sw_exists("alert_20261001_000100_LATE.pcap"));
+    sw_now += 1;
+    ASSERT_EQ(sw_run_pass(ALERT_PCAP_SWEEP_BUDGET), 1);
+    ASSERT(!sw_exists("alert_20261001_000100_LATE.pcap"));
+    sw_teardown();
+}
+
+static void test_sweep_zero_keeps_forever(void) {
+    sw_setup();
+    char err[160];
+    ASSERT_EQ(tune_set("pcap.retain_days=0", err, sizeof(err)), 0);
+    sw_file("alert_20200101_000000_ANCIENT.pcap", 3000 * SW_DAY);
+    ASSERT_EQ(alert_pcap_maintain(), 0);
+    ASSERT(!alert_pcap_sweep_in_progress());
+    ASSERT(sw_exists("alert_20200101_000000_ANCIENT.pcap"));
+    ASSERT_EQ((long long)alert_pcap_swept(), 0);
+    sw_teardown();
+
+    /* A pass already open when the window closes stops deleting. Fifty
+     * old artifacts, so the one entry the opening step examines can
+     * remove at most one of them whatever readdir's order. */
+    sw_setup();
+    char name[64];
+    for (int i = 0; i < 50; i++) {
+        snprintf(name, sizeof(name), "alert_20200101_0000%02d_OPEN.pcap", i);
+        sw_file(name, 3000 * SW_DAY);
+    }
+    int first = alert_pcap_sweep_step(1);
+    ASSERT(first == 0 || first == 1);
+    ASSERT(alert_pcap_sweep_in_progress());
+    ASSERT_EQ(tune_set("pcap.retain_days=0", err, sizeof(err)), 0);
+    ASSERT_EQ(alert_pcap_sweep_step(ALERT_PCAP_SWEEP_BUDGET), 0);
+    ASSERT(!alert_pcap_sweep_in_progress());
+    ASSERT_EQ((long long)alert_pcap_swept(), first);
+    sw_teardown();
+}
+
+static void test_sweep_window_follows_the_knob(void) {
+    sw_setup();
+    char err[160];
+    ASSERT_EQ(tune_set("pcap.retain_days=1", err, sizeof(err)), 0);
+    sw_file("alert_20261001_000000_TWO.pcap", 2 * SW_DAY);
+    sw_file("alert_20261001_000000_HALF.pcap", SW_DAY / 2);
+    ASSERT_EQ(sw_run_pass(ALERT_PCAP_SWEEP_BUDGET), 1);
+    ASSERT(!sw_exists("alert_20261001_000000_TWO.pcap"));
+    ASSERT(sw_exists("alert_20261001_000000_HALF.pcap"));
+    sw_teardown();
+}
+
+static void test_sweep_counts_a_failed_delete(void) {
+    /* Root ignores directory write permission, so the refusal this
+     * relies on cannot be produced there. */
+    if (geteuid() == 0) return;
+    sw_setup();
+    sw_file("alert_20261001_000000_STUCK.pcap", 20 * SW_DAY);
+    ASSERT_EQ(chmod(sw_dir, 0500), 0);
+    ASSERT_EQ(sw_run_pass(ALERT_PCAP_SWEEP_BUDGET), 0);
+    ASSERT_EQ(chmod(sw_dir, 0700), 0);
+    ASSERT(sw_exists("alert_20261001_000000_STUCK.pcap"));
+    ASSERT_EQ(alert_pcap_sweep_errors(), 1);
+    ASSERT(strstr(alert_pcap_sweep_error(), "could not delete") != NULL);
+    ASSERT_EQ((long long)alert_pcap_swept(), 0);
+    /* A sweep error is not a lost write: storage_pcap_failures stays. */
+    ASSERT_EQ(alert_pcap_failures(), 0);
+    sw_teardown();
+}
+
+static void test_sweep_noop_without_a_directory(void) {
+    alert_pcap_set_dir(NULL);
+    ASSERT_EQ(alert_pcap_maintain(), 0);
+    ASSERT(!alert_pcap_sweep_in_progress());
+    ASSERT_EQ(alert_pcap_sweep_errors(), 0);
+}
+
+/* stderr into a file for the length of one call, so a test can read
+ * the line an operator would grep for. */
+static FILE *sw_err_file;
+static int   sw_err_saved = -1;
+static void sw_err_begin(void) {
+    fflush(stderr);
+    sw_err_file  = tmpfile();
+    sw_err_saved = dup(STDERR_FILENO);
+    ASSERT(sw_err_file != NULL && sw_err_saved >= 0);
+    if (sw_err_file) dup2(fileno(sw_err_file), STDERR_FILENO);
+}
+static void sw_err_end(char *out, size_t n) {
+    out[0] = '\0';
+    fflush(stderr);
+    if (sw_err_saved >= 0) {
+        dup2(sw_err_saved, STDERR_FILENO);
+        close(sw_err_saved);
+        sw_err_saved = -1;
+    }
+    if (!sw_err_file) return;
+    rewind(sw_err_file);
+    size_t got = fread(out, 1, n - 1, sw_err_file);
+    out[got] = '\0';
+    fclose(sw_err_file);
+    sw_err_file = NULL;
+}
+
+static void test_sweep_error_line_is_not_an_export_failure(void) {
+    /* README and retention.md read "export failed" as lost evidence; a
+     * sweep error loses none, so its stderr line must not say it. */
+    sw_setup();
+    sw_file("target.bin", 400 * SW_DAY);
+    char lnk[256];
+    sw_path("alert_20260102_000000_LINK.pcap", lnk, sizeof(lnk));
+    ASSERT_EQ(symlink("target.bin", lnk), 0);
+    char out[512];
+    sw_err_begin();
+    sw_run_pass(ALERT_PCAP_SWEEP_BUDGET);
+    sw_err_end(out, sizeof(out));
+    ASSERT_EQ(alert_pcap_sweep_errors(), 1);
+    ASSERT(strstr(out, "sloth: --pcap-dir retention sweep: ") != NULL);
+    ASSERT(strstr(out, "sensor_health.pcap_sweep_errors") != NULL);
+    ASSERT(strstr(out, "export failed") == NULL);
+    sw_teardown();
+}
+
+static uint64_t sw_mono_ms_now = 0;
+static uint64_t sw_mono(void) { return sw_mono_ms_now; }
+
+static void test_sweep_spares_files_written_before_a_clock_step(void) {
+    /* A sensor with no RTC boots on a 2001 clock and starts sloth. */
+    tune_reset();
+    sw_now = 1000000000;
+    sw_mono_ms_now = 5000;
+    sloth_clock_test_set(sw_mono, sw_wall);
+    snprintf(sw_dir, sizeof(sw_dir), "%s/sloth_sweep_XXXXXX", test_tmpdir());
+    ASSERT(mkdtemp(sw_dir) != NULL);
+    ASSERT_EQ(alert_pcap_set_dir(sw_dir), 0);
+    /* An alert pcap written on the stale clock, before NTP... */
+    sw_file("alert_20010909_014640_STALE.pcap", 0);
+    /* ...and one already older than the window when sloth started. */
+    sw_file("alert_20010801_000000_PREV.pcap", 30 * SW_DAY);
+    /* NTP steps the wall clock forward 25 years; a minute has passed. */
+    sw_mono_ms_now += 60 * 1000;
+    sw_now = 1800000000;
+    ASSERT_EQ(sw_run_pass(ALERT_PCAP_SWEEP_BUDGET), 1);
+    ASSERT(sw_exists("alert_20010909_014640_STALE.pcap"));
+    ASSERT(!sw_exists("alert_20010801_000000_PREV.pcap"));
+    /* Up a whole window by the monotonic clock: the file is now truly
+     * past it, and goes. */
+    sw_mono_ms_now += (uint64_t)14 * SW_DAY * 1000;
+    sw_now += 14 * SW_DAY;
+    ASSERT_EQ(sw_run_pass(ALERT_PCAP_SWEEP_BUDGET), 1);
+    ASSERT(!sw_exists("alert_20010909_014640_STALE.pcap"));
+    sw_teardown();
+}
+
+static void test_sweep_detects_a_shared_eapol_dir(void) {
+    /* eapol_sweep() expires every *.pcap in its directory on the
+     * handshake window; main() refuses one directory for both on this. */
+    sw_setup();
+    ASSERT(!alert_pcap_shares_eapol_dir());          /* no --eapol-dir */
+    eapol_set_collect_enabled(1);
+    char alias[TEST_TMP_MAX + 8];
+    snprintf(alias, sizeof(alias), "%s/.", sw_dir);  /* another spelling */
+    ASSERT_EQ(eapol_set_output_dir(alias), 0);
+    ASSERT(alert_pcap_shares_eapol_dir());
+    char other[TEST_TMP_MAX];
+    snprintf(other, sizeof(other), "%s/sloth_sweep_XXXXXX", test_tmpdir());
+    ASSERT(mkdtemp(other) != NULL);
+    ASSERT_EQ(eapol_set_output_dir(other), 0);
+    ASSERT(!alert_pcap_shares_eapol_dir());          /* same fs, not dir */
+    eapol_set_output_dir(NULL);
+    eapol_set_collect_enabled(0);
+    rmdir(other);
+    sw_teardown();
+}
+
 void run_alert_pcap_tests(void) {
     TEST_SUITE("alert_pcap dir gating");
     RUN_TEST(test_set_dir_enables_disables);
@@ -749,4 +1125,23 @@ void run_alert_pcap_tests(void) {
     RUN_TEST(test_dump_retries_after_transient_failure);
     RUN_TEST(test_write_failures_survive_reopen);
     RUN_TEST(test_dump_records_path_on_success);
+
+    TEST_SUITE("alert_pcap age sweep (#166)");
+    RUN_TEST(test_sweep_name_shape);
+    RUN_TEST(test_sweep_default_is_the_ruling);
+    RUN_TEST(test_sweep_removes_old_keeps_young);
+    RUN_TEST(test_sweep_leaves_foreign_and_symlinked_files);
+    RUN_TEST(test_sweep_pass_is_bounded_and_resumes);
+    RUN_TEST(test_sweep_zero_keeps_forever);
+    RUN_TEST(test_sweep_window_follows_the_knob);
+    RUN_TEST(test_sweep_counts_a_failed_delete);
+    RUN_TEST(test_sweep_noop_without_a_directory);
+    RUN_TEST(test_sweep_error_line_is_not_an_export_failure);
+    RUN_TEST(test_sweep_spares_files_written_before_a_clock_step);
+    RUN_TEST(test_sweep_detects_a_shared_eapol_dir);
+
+    /* The suite's capture directory: the dumps and the evidence
+     * manifests (#92 slice 3) the tests above wrote into it. */
+    alert_pcap_set_dir(NULL);
+    test_rm_tree(tmp_dir);
 }

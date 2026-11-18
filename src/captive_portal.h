@@ -60,9 +60,50 @@ int  cp_check_dns(const char *qname, const char *answer);
  * private address is a portal terminating the connection. */
 int  cp_check_tls(const char *sni, const char *dst_ip);
 
+/* ── Attack-kit portal fingerprints (#169) ──
+ *
+ * The default pages of four public evil-twin kits, matched on what the
+ * kit's own source puts in its first response: a status line, a
+ * header, a title, a stylesheet or form-action path. Every row needs
+ * two or more features, all present, so a single coincidental string
+ * — a "Plugin Manager" title on an ordinary site, a lighttpd banner —
+ * is never enough. Sources, by repository URL and commit, are in
+ * research/tools/captive-portal-kits.md.
+ *
+ * Matched on **one response segment as it arrived**: status line,
+ * headers and whatever body prefix shares that segment. Nothing is
+ * reassembled and nothing is kept — only the kit and scenario label
+ * leave this function, never the page, and never anything a client
+ * sent. A kit whose distinguishing bytes land past the first segment
+ * is missed, and that limit is stated rather than closed: the
+ * PortalAuth injection in particular is appended to a cloned page and
+ * reaches the first segment only when the cloned page is small. */
+typedef enum {
+    CP_KIT_NONE        = 0,
+    CP_KIT_WIFIPHISHER = 1,
+    CP_KIT_EVILPORTAL  = 2,   /* WiFi Pineapple Evil Portal default page */
+    CP_KIT_PORTALAUTH  = 3,   /* WiFi Pineapple PortalAuth injection set */
+    CP_KIT_AIRGEDDON   = 4,
+    CP_KIT_FLUXION     = 5,
+} cp_kit_t;
+
+/* Match one HTTP response segment (from "HTTP/1.x" on) against the kit
+ * table. Returns a cp_kit_t, 0 for no match; `label`, when non-NULL,
+ * receives the static "kit scenario" string of the matched row, or "". */
+int  cp_match_kit(const uint8_t *seg, int len, const char **label);
+
+/* Short name of a kit id ("wifiphisher"), "" for anything else. */
+const char *cp_kit_name(uint8_t kit);
+
 /* Record an event. `evidence` may be NULL. */
 void cp_record(uint8_t kind, const char *host, const char *src,
                const char *evidence, time_t now);
+
+/* Record an event with its responder and kit (#169). `server` may be
+ * NULL (a DNS-sourced event has no responder on the path). */
+void cp_record_ex(uint8_t kind, uint8_t kit, const char *host,
+                  const char *src, const char *server,
+                  uint16_t server_port, const char *evidence, time_t now);
 
 void cp_snapshot(sloth_state_t *s);
 int  cp_event_count(void);

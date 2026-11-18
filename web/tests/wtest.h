@@ -58,6 +58,7 @@ void run_baseline_tests(void);
 void run_ident_tests(void);
 void run_anomaly_tests(void);
 void run_replay_tests(void);
+void run_evidence_tests(void);
 void run_tui_colors_tests(void);
 void run_oui_tests(void);
 void run_query_tests(void);
@@ -70,5 +71,52 @@ void run_history_tests(void);
 void run_parity_tests(void);
 void run_flows_tests(void);
 void run_readme_tests(void);
+void run_chmix_tests(void);
+void run_tables_tests(void);
+void run_alertfmt_tests(void);
+void run_alertkb_tests(void);
+void run_vendorkb_tests(void);
+void run_alerts_tests(void);
+void run_loc_tests(void);
+void run_scope_tests(void);
+void run_prefs_tests(void);
+void run_glyph_tests(void);
+void run_rf_tests(void);
+void run_frrs_tests(void);
+void run_notes_tests(void);              /* tests/test_notes.c (2026-11-11) */
+void run_incident_tests(void);           /* tests/test_incident.c (#198) */
+void run_ble_tests(void);
+void run_gnss_tests(void);               /* tests/test_gnss.c (2026-11-02) */
+void run_sysstat_tests(void);            /* tests/test_sysstat.c (2026-11-11) */
+void run_own_tests(void);                /* tests/test_own.c (2026-11-11) */
+void run_lure_tests(void);               /* tests/test_lure.c (2026-11-12) */
+void run_webdf_tests(void);              /* tests/test_webdf.c (2026-11-17) */
+void run_adsb_tests(void);               /* tests/test_adsb.c (2026-11-05) */
+void run_spectrum_tests(void);           /* tests/test_spectrum.c (2026-11-13) */
+void run_iso_tests(void);                /* tests/test_iso.c (#224, 2026-11-16) */
+void run_chan_tests(void);               /* tests/test_chan.c (2026-11-18) */
+void run_camera_tests(void);             /* tests/test_camera.c (2026-11-15) */
+void run_aprs_tests(void);               /* tests/test_aprs.c (2026-11-05) */
+void run_rtl433_tests(void);             /* tests/test_rtl433.c (#208) */
+void run_victron_tests(void);            /* tests/test_victron.c */
+void run_twodaemon_tests(void);          /* tests/test_twodaemon.c (#214) */
+void run_radar_tests(void);              /* tests/test_radar.c (2026-11-06) */
+void run_allkeys_tests(void);            /* tests/test_allkeys.c (2026-11-11) */
+void run_ssidview_tests(void);           /* tests/test_ssidview.c (2026-11-11) */
+void run_probes_tests(void);             /* tests/test_probes.c (2026-11-11) */
+void run_rfhist_tests(void);             /* tests/test_rfhist.c (2026-11-05) */
+void run_bledev_tests(void);             /* tests/test_bledev.c (2026-11-02) */
+void run_btsig_tests(void);
+void run_bundle_tests(void);
+void run_chain_tests(void);              /* tests/test_chain.c (#171 V4) */
+void run_fleet_tests(void);              /* tests/test_fleet.c (#192 F1) */
+void run_subnotes_tests(void);           /* tests/test_subnotes.c (2026-11-11) */
+void run_mcp_tests(void);                /* tests/test_mcp.c (2026-11-11) */
+void run_locate_tests(void);             /* tests/test_locate.c (#192 I5) */
+void run_fleetgnss_tests(void);          /* tests/test_fleetgnss.c (#192 I6) */
+void run_fleetview_tests(void);          /* tests/test_fleetview.c (2026-11-11) */
+void run_fleetadsb_tests(void);          /* tests/test_fleetadsb.c (#192 I7) */
+void run_fleetid_tests(void);            /* tests/test_fleetid.c (#192 I2-I4, I8) */
+void run_fleetshare_tests(void);         /* tests/test_fleetshare.c (owner rule 2026-11-12) */
 
 #endif

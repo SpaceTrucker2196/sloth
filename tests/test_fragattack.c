@@ -6,6 +6,9 @@
 #include "dot11_data.h"
 #include "eapol_log.h"
 #include "sensor_health.h"
+#include "mle.h"
+#include "frame_build.h"
+#include "capture/probe.h"   /* the real on_probe_frame() under WITH_PCAP */
 
 /*
  * FragAttacks slice 1 — issue #75.
@@ -1583,6 +1586,397 @@ static void test_eapol_relay_needs_no_witnessed_association(void) {
 }
 
 
+/* ── #180: the AP is the BSSID or its AP MLD MAC ──────────────────────
+ *
+ * IEEE 802.11be multi-link operation: an AP MLD's affiliated APs each
+ * transmit under their own link address, which is the BSSID in addr2
+ * (downlink) / addr1 (uplink); the authenticator above them is the AP
+ * MLD, and its EAPOL travels under the MLD MAC Address the Basic
+ * Multi-Link element (§9.4.2.322) carries in every Beacon. So the AP's
+ * own M1 to its own client is FromDS with addr3 = SA = the MLD MAC, and
+ * the client's M2 is ToDS with addr3 = DA = the MLD MAC. Neither address
+ * is the BSSID, which is the whole of what FRAG_EAPOL_RELAY used to test.
+ *
+ * Addresses are from the IANA documentation block 00-00-5E-00-53-xx
+ * (RFC 7042 §2.1.2) for the link, with the derivation the reference
+ * host's Arcadyan AP used for its MLD: octet 0 gains bits 1 and 5
+ * (18 -> 3a there, 00 -> 22 here), octets 1-4 kept, octet 5 minus one. */
+
+static const uint8_t ML_BSS[6] = { 0x00, 0x00, 0x5e, 0x00, 0x53, 0x30 };
+static const uint8_t ML_MLD[6] = { 0x22, 0x00, 0x5e, 0x00, 0x53, 0x2f };
+static const uint8_t ML_STA[6] = { 0x46, 0x00, 0x5e, 0x00, 0x10, 0x63 };
+/* Locally administered, unicast, nothing in common with the link. */
+static const uint8_t ML_ODD[6] = { 0x06, 0x11, 0x22, 0x33, 0x44, 0x55 };
+
+static const frag_bss_t *ml_bss(void) {
+    int i = frag_find(ML_BSS);
+    return i >= 0 ? frag_bss_at(i) : NULL;
+}
+
+/* The AP MLD's own downlink EAPOL-Key: addr1 = STA, addr2 = link BSSID,
+ * addr3 = SA. */
+static int ml_down_eapol(uint8_t *f, const uint8_t *sa) {
+    return build(f, 0, 0, ML_STA, ML_BSS, sa, 0, 0x888E);
+}
+
+/* The client's uplink reply: ToDS, addr1 = link BSSID, addr2 = SA (the
+ * STA), addr3 = DA (§9.3.2.1 Table 9-26), then LLC/SNAP and the
+ * EtherType. */
+static int ml_up_eapol(uint8_t *f, const uint8_t *da) {
+    memset(f, 0, 128);
+    f[0] = (uint8_t)(2 << 2);
+    f[1] = FC1_TODS;
+    memcpy(f + 4,  ML_BSS, 6);
+    memcpy(f + 10, ML_STA, 6);
+    memcpy(f + 16, da,     6);
+    f[24] = 0xaa; f[25] = 0xaa; f[26] = 0x03;
+    f[30] = 0x88; f[31] = 0x8e;
+    return 36;
+}
+
+static void test_mlo_eapol_from_the_advertised_mld_is_silent(void) {
+    /* The test plan's first case: a beacon whose Basic MLE carries the
+     * MLD MAC, then the AP's M1 under it and the client's reply to it.
+     * Seen red with the FRAG_AP_MLD branch of ap_identity_locked()
+     * answering FRAG_AP_NO (the beacon row also bars the heuristic, so
+     * both frames counted as relays), and with the relay test put back
+     * to its pre-#180 BSSID-only form. */
+    frag_clear();
+    frag_note_beacon(ML_BSS, ML_MLD, 999);
+    uint8_t f[128];
+    int n = ml_down_eapol(f, ML_MLD);
+    frag_observe(f, n, 1000);
+    n = ml_up_eapol(f, ML_MLD);
+    frag_observe(f, n, 1001);
+    ASSERT(ml_bss() != NULL);
+    if (!ml_bss()) return;
+    ASSERT_EQ(ml_bss()->eapol_relay, 0u);
+    /* Cleared by what the AP said, not by the guess. */
+    ASSERT_EQ(ml_bss()->eapol_mld_sibling, 0u);
+    ASSERT_EQ(frag_ap_identity(ML_BSS, ML_MLD), FRAG_AP_MLD);
+}
+
+static void test_mlo_eapol_without_a_beacon_uses_the_sibling_heuristic(void) {
+    /* The second case: the same frames, no beacon decoded (a hopping
+     * radio that joined mid-handshake). Withheld, and counted apart.
+     * Seen red with mld_sibling() returning 0: eapol_relay 2,
+     * eapol_mld_sibling 0. */
+    frag_clear();
+    uint8_t f[128];
+    int n = ml_down_eapol(f, ML_MLD);
+    frag_observe(f, n, 1000);
+    n = ml_up_eapol(f, ML_MLD);
+    frag_observe(f, n, 1001);
+    ASSERT(ml_bss() != NULL);
+    if (!ml_bss()) return;
+    ASSERT_EQ(ml_bss()->eapol_relay, 0u);
+    ASSERT_EQ(ml_bss()->eapol_mld_sibling, 2u);
+    ASSERT_EQ(frag_ap_identity(ML_BSS, ML_MLD), FRAG_AP_MLD_SIBLING);
+}
+
+static void test_unrelated_la_source_still_fires(void) {
+    /* The mutation case: the CVE-2020-26139 shape is preserved. An
+     * unrelated locally administered SA is a relay with no beacon, with
+     * a beacon naming the MLD, and with a beacon naming none. */
+    uint8_t f[128];
+    for (int pass = 0; pass < 3; pass++) {
+        frag_clear();
+        if (pass == 1) frag_note_beacon(ML_BSS, ML_MLD, 999);
+        if (pass == 2) frag_note_beacon(ML_BSS, NULL, 999);
+        int n = ml_down_eapol(f, ML_ODD);
+        frag_observe(f, n, 1000);
+        ASSERT(ml_bss() != NULL);
+        if (!ml_bss()) return;
+        ASSERT_EQ(ml_bss()->eapol_relay, 1u);
+        ASSERT_EQ(ml_bss()->eapol_mld_sibling, 0u);
+        ASSERT_EQ(ml_bss()->last_sa[0], ML_ODD[0]);
+    }
+}
+
+static void test_a_beacon_bars_the_sibling_guess(void) {
+    /* Once the BSS has described itself the heuristic is off: a beacon
+     * with no MLE says it is not an AP MLD, one naming another MLD says
+     * which address is. A sibling-shaped SA is then a relay. Seen red
+     * with the beacon row consulted only when it names this address -
+     * the bar on the heuristic removed - which withheld both passes. */
+    static const uint8_t OTHER[6] = { 0x22, 0x00, 0x5e, 0x00, 0x53, 0x99 };
+    uint8_t f[128];
+    for (int pass = 0; pass < 2; pass++) {
+        frag_clear();
+        frag_note_beacon(ML_BSS, pass ? OTHER : NULL, 999);
+        int n = ml_down_eapol(f, ML_MLD);
+        frag_observe(f, n, 1000);
+        ASSERT(ml_bss() != NULL);
+        if (!ml_bss()) return;
+        ASSERT_EQ(ml_bss()->eapol_relay, 1u);
+        ASSERT_EQ(ml_bss()->eapol_mld_sibling, 0u);
+    }
+    /* The latest beacon is the one that counts: an AP that turns MLO on
+     * is believed from its next beacon. */
+    frag_clear();
+    frag_note_beacon(ML_BSS, NULL, 998);
+    frag_note_beacon(ML_BSS, ML_MLD, 999);
+    ASSERT_EQ(frag_ap_identity(ML_BSS, ML_MLD), FRAG_AP_MLD);
+    ASSERT_EQ(frag_ap_ident_count(), 1);
+}
+
+static void test_sibling_shape_is_narrow(void) {
+    /* Each condition of the heuristic, one octet at a time, with no
+     * beacon on file. Each FRAG_AP_NO row was seen red under the
+     * mutation that removes its condition from mld_sibling() - the
+     * group and U/L tests, the octet 1-4 compare, a +/-2 range - and
+     * the wrap row under a difference taken modulo 256. */
+    frag_clear();
+    uint8_t a[6];
+    ASSERT_EQ(frag_ap_identity(ML_BSS, ML_BSS), FRAG_AP_BSSID);
+    ASSERT_EQ(frag_ap_identity(ML_BSS, ML_MLD), FRAG_AP_MLD_SIBLING);
+
+    memcpy(a, ML_MLD, 6); a[5] = 0x31;               /* +1 */
+    ASSERT_EQ(frag_ap_identity(ML_BSS, a), FRAG_AP_MLD_SIBLING);
+    memcpy(a, ML_MLD, 6); a[5] = 0x30;               /* same octet 5 */
+    ASSERT_EQ(frag_ap_identity(ML_BSS, a), FRAG_AP_MLD_SIBLING);
+    memcpy(a, ML_MLD, 6); a[5] = 0x2e;               /* -2 */
+    ASSERT_EQ(frag_ap_identity(ML_BSS, a), FRAG_AP_NO);
+    memcpy(a, ML_MLD, 6); a[5] = 0x32;               /* +2 */
+    ASSERT_EQ(frag_ap_identity(ML_BSS, a), FRAG_AP_NO);
+    memcpy(a, ML_MLD, 6); a[0] = 0x20;               /* U/L clear */
+    ASSERT_EQ(frag_ap_identity(ML_BSS, a), FRAG_AP_NO);
+    memcpy(a, ML_MLD, 6); a[0] = 0x23;               /* group */
+    ASSERT_EQ(frag_ap_identity(ML_BSS, a), FRAG_AP_NO);
+    memcpy(a, ML_MLD, 6); a[1] = 0x01;               /* octet 1 */
+    ASSERT_EQ(frag_ap_identity(ML_BSS, a), FRAG_AP_NO);
+    memcpy(a, ML_MLD, 6); a[4] = 0x54;               /* octet 4 */
+    ASSERT_EQ(frag_ap_identity(ML_BSS, a), FRAG_AP_NO);
+    /* No wrap across 00/ff. */
+    static const uint8_t B00[6] = { 0x00, 0x00, 0x5e, 0x00, 0x53, 0x00 };
+    memcpy(a, ML_MLD, 6); a[5] = 0xff;
+    ASSERT_EQ(frag_ap_identity(B00, a), FRAG_AP_NO);
+    ASSERT_EQ(frag_ap_identity(NULL, a), FRAG_AP_NO);
+}
+
+static void test_ap_mld_identities_share_the_key_install_gate(void) {
+    /* FRAG_PLAINTEXT and FRAG_AMSDU_EAPOL's AP-identity question: their
+     * gate is "a Protected frame from this station on this BSS", and an
+     * AP MLD is one station under two source addresses. Encryption
+     * witnessed under the MLD MAC gates plaintext under the link
+     * address, and the reverse. Seen red with gate_identity() returning
+     * `sa` unchanged: every count below stayed 0. */
+    uint8_t f[160];
+    for (int dir = 0; dir < 2; dir++) {
+        const uint8_t *enc = dir ? ML_BSS : ML_MLD;
+        const uint8_t *pt  = dir ? ML_MLD : ML_BSS;
+        frag_clear();
+        frag_note_beacon(ML_BSS, ML_MLD, 999);
+        int n = build(f, 0, FC1_PROTECTED, ML_STA, ML_BSS, enc, 0, 0);
+        frag_observe(f, n, 1000);
+        n = build(f, 0, 0, ML_STA, ML_BSS, pt, 0, 0x0800);
+        frag_observe(f, n, 1001);
+        n = build_amsdu(f, ML_STA, ML_BSS, pt, 0x888E);
+        frag_observe(f, n, 1002);
+        ASSERT(ml_bss() != NULL);
+        if (!ml_bss()) return;
+        ASSERT_EQ(ml_bss()->plaintext_unicast, 1u);
+        ASSERT_EQ(ml_bss()->amsdu_eapol_spoof, 1u);
+    }
+}
+
+static void test_sibling_guess_never_opens_the_gate(void) {
+    /* The asymmetry: the heuristic may withhold FRAG_EAPOL_RELAY but may
+     * not merge two identities for the plaintext gate, which would put a
+     * CRIT on a guess. No beacon, encryption seen from the sibling-shaped
+     * address, plaintext from the BSSID: not counted. Seen red with
+     * gate_identity() also accepting FRAG_AP_MLD_SIBLING
+     * (plaintext_unicast 1, amsdu_eapol_spoof 1). */
+    frag_clear();
+    uint8_t f[160];
+    int n = build(f, 0, FC1_PROTECTED, ML_STA, ML_BSS, ML_MLD, 0, 0);
+    frag_observe(f, n, 1000);
+    n = build(f, 0, 0, ML_STA, ML_BSS, ML_BSS, 0, 0x0800);
+    frag_observe(f, n, 1001);
+    n = build_amsdu(f, ML_STA, ML_BSS, ML_BSS, 0x888E);
+    frag_observe(f, n, 1002);
+    ASSERT(ml_bss() != NULL);
+    if (!ml_bss()) return;
+    ASSERT_EQ(ml_bss()->plaintext_unicast, 0u);
+    ASSERT_EQ(ml_bss()->amsdu_eapol_spoof, 0u);
+    /* Control: the same plaintext under the address that WAS witnessed
+     * counts, so the zeros above are the gate and not a frame that never
+     * parsed. */
+    n = build(f, 0, 0, ML_STA, ML_BSS, ML_MLD, 0, 0x0800);
+    frag_observe(f, n, 1003);
+    ASSERT_EQ(ml_bss()->plaintext_unicast, 1u);
+}
+
+static void test_ap_ident_table_full_evicts_and_tallies(void) {
+    frag_clear();
+    uint64_t before = sh_evict_count(SH_EVICT_FRAG_AP_IDENT);
+    uint8_t b[6] = { 0x02, 0x00, 0x5e, 0x00, 0x00, 0x00 };
+    for (int i = 0; i < FRAG_MAX_AP_IDENT + 3; i++) {
+        b[4] = (uint8_t)(i >> 8); b[5] = (uint8_t)i;
+        frag_note_beacon(b, NULL, 1000 + i);
+    }
+    ASSERT_EQ(frag_ap_ident_count(), FRAG_MAX_AP_IDENT);
+    ASSERT_EQ((long long)(sh_evict_count(SH_EVICT_FRAG_AP_IDENT) - before), 3);
+    ASSERT_STR(sh_evict_name(SH_EVICT_FRAG_AP_IDENT), "frag_ap_ident");
+    /* A group BSSID is not an AP and makes no row. */
+    frag_clear();
+    frag_note_beacon(BCAST, NULL, 5000);
+    ASSERT_EQ(frag_ap_ident_count(), 0);
+}
+
+#ifdef WITH_PCAP
+/* ── The same, through on_probe_frame() ───────────────────────────────
+ *
+ * A Beacon (§9.3.3.2) with SSID, Supported Rates, DS Parameter Set and a
+ * Basic Multi-Link element (§9.4.2.322): ExtID 107, Multi-Link Control
+ * 0x0010 (Type 0 Basic, Link ID Info Present), Common Info Length 8
+ * (itself, MLD MAC, Link ID Info), the MLD MAC, Link ID 0. No Per-STA
+ * Profile: hostapd's beacon tail calls hostapd_eid_eht_ml_beacon() with
+ * no ML info, so a beacon names the MLD and not its links. */
+/* The Basic MLE is the last element, and it is 13 octets on the air:
+ * Element ID 255, Length, Element ID Extension 107, then the 10 below. */
+#define ML_BEACON_MLE_OCTETS 13
+
+static int ml_beacon_naming(uint8_t *buf, int cap, const uint8_t *mld_mac) {
+    static const uint8_t bc[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    static const uint8_t rates[4] = { 0x82, 0x84, 0x8b, 0x96 };
+    static const uint8_t ds[1] = { 36 };
+    uint8_t mle[10];
+    mle[0] = 0x10; mle[1] = 0x00;             /* Multi-Link Control */
+    mle[2] = 8;                                /* Common Info Length */
+    memcpy(mle + 3, mld_mac, 6);
+    mle[9] = 0x00;                             /* Link ID Info */
+    fb_t b; fb_init(&b, buf, cap);
+    fb_radiotap(&b, NULL);
+    fb_mgmt(&b, 8, 0, bc, ML_BSS, ML_BSS, 0x0010, 0);
+    fb_beacon_fixed(&b, 0, 100, 0x0011);      /* ESS, privacy */
+    fb_ssid(&b, "mlo-test-net");
+    fb_ie(&b, 1, rates, (int)sizeof rates);
+    fb_ie(&b, 3, ds, 1);
+    fb_ie_ext(&b, 107, mle, (int)sizeof mle);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static int ml_beacon(uint8_t *buf, int cap) {
+    return ml_beacon_naming(buf, cap, ML_MLD);
+}
+
+static int ml_wrap(uint8_t *buf, int cap, const uint8_t *frame, int n) {
+    fb_t b; fb_init(&b, buf, cap);
+    fb_radiotap(&b, NULL);
+    fb_bytes(&b, frame, n);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static sloth_state_t g_ml_s;
+
+static void test_beacon_mle_roster_never_names_the_bssid(void) {
+    /* Why the reference host's FRRS record for the alerting BSSID had
+     * ecs.mld_mac = null, and why this module keeps its own binding.
+     * The beacon's MLE reaches mle.c's roster - the MLD is known - but
+     * a Beacon's Basic MLE does not list the reporting AP's own address,
+     * so the BSSID is not one of the MLD's links and nothing that joins
+     * through that roster (mle_canonical(), FRRS's wifi_mld link list)
+     * connects the two. The probe-path binding does. Seen red with the
+     * frag_note_beacon() call removed from on_probe_frame():
+     * frag_ap_identity() fell back to FRAG_AP_MLD_SIBLING and
+     * eapol_mld_sibling went to 1. */
+    static uint8_t bcn[256], data[256], raw[128];
+    int bn = ml_beacon(bcn, sizeof bcn);
+    ASSERT_GT(bn, 0);
+    int rn = ml_down_eapol(raw, ML_MLD);
+    int dn = ml_wrap(data, sizeof data, raw, rn);
+    ASSERT_GT(dn, 0);
+    const uint8_t *fs[2] = { bcn, data };
+    int ls[2] = { bn, dn };
+
+    memset(&g_ml_s, 0, sizeof(g_ml_s));
+    probe_clear(); mle_clear(); frag_clear(); eapol_clear();
+    ASSERT_EQ(probe_test_dispatch(&g_ml_s, fs, ls, NULL, NULL, 2), 2);
+
+    uint8_t out[6];
+    ASSERT_EQ(mle_canonical(ML_MLD, out), 1);   /* the MLE was decoded */
+    ASSERT_EQ(mle_canonical(ML_BSS, out), 0);   /* ... and not bound */
+    ASSERT_EQ(frag_ap_identity(ML_BSS, ML_MLD), FRAG_AP_MLD);
+    ASSERT(ml_bss() != NULL);
+    if (ml_bss()) {
+        ASSERT_EQ(ml_bss()->eapol_relay, 0u);
+        ASSERT_EQ(ml_bss()->eapol_mld_sibling, 0u);
+    }
+    probe_clear(); mle_clear(); frag_clear(); eapol_clear();
+}
+
+/* Dispatch one beacon (caplen `bcap`, wire length `borig`) and then the
+ * AP MLD's downlink M1 under ML_MLD with no beacon-advertised binding to
+ * clear it. Returns the row, or NULL. */
+static const frag_bss_t *ml_beacon_then_sibling_m1(const uint8_t *bcn,
+                                                  int bcap, int borig) {
+    static uint8_t data[256], raw[128];
+    int rn = ml_down_eapol(raw, ML_MLD);
+    int dn = ml_wrap(data, sizeof data, raw, rn);
+    if (dn <= 0) return NULL;
+    const uint8_t *fs[2] = { bcn, data };
+    int ls[2] = { bcap, dn };
+    int os[2] = { borig, dn };
+    memset(&g_ml_s, 0, sizeof(g_ml_s));
+    probe_clear(); mle_clear(); frag_clear(); eapol_clear();
+    if (probe_test_dispatch(&g_ml_s, fs, ls, os, NULL, 2) != 2) return NULL;
+    return ml_bss();
+}
+
+static void test_a_beacon_that_could_not_show_an_mle_keeps_the_fallback(void) {
+    /* A beacon without an MLE bars the sibling heuristic because it says
+     * the BSS is not an AP MLD - but only if it could have shown one.
+     * (1) The MLE beacon snapped by the capture's snaplen just before
+     * its last element: what is left parses as a beacon with no MLE,
+     * and the wire length says the tail was lost. (2) A Basic MLE whose
+     * MLD MAC mle_parse() refuses (all zero): an MLE, just not a usable
+     * one. Neither may record "not an MLD", so the sibling-shaped M1 is
+     * withheld on the guess. Seen red with the beacon hook calling
+     * frag_note_beacon(bssid, NULL) for every MLE-less decode (both
+     * cases: eapol_relay 1, eapol_mld_sibling 0), with only its
+     * `!rsn.mle_body` test removed (case 2 red) and with only its
+     * caplen/origlen test removed (case 1 red). The control - the same
+     * snapped bytes with a wire length that matches, which is a real
+     * MLE-less beacon - must still bar the guess, so the zeros above are
+     * the length test and not a beacon that never decoded. */
+    static uint8_t bcn[256];
+    static const uint8_t ZERO[6] = { 0 };
+    int bn = ml_beacon(bcn, sizeof bcn);
+    ASSERT_GT(bn, ML_BEACON_MLE_OCTETS);
+    int cut = bn - ML_BEACON_MLE_OCTETS;
+
+    const frag_bss_t *r = ml_beacon_then_sibling_m1(bcn, cut, bn);
+    ASSERT(r != NULL);
+    if (r) {
+        ASSERT_EQ(r->eapol_relay, 0u);
+        ASSERT_EQ(r->eapol_mld_sibling, 1u);
+    }
+    ASSERT_EQ(frag_ap_ident_count(), 0);
+
+    bn = ml_beacon_naming(bcn, sizeof bcn, ZERO);
+    ASSERT_GT(bn, 0);
+    r = ml_beacon_then_sibling_m1(bcn, bn, bn);
+    ASSERT(r != NULL);
+    if (r) {
+        ASSERT_EQ(r->eapol_relay, 0u);
+        ASSERT_EQ(r->eapol_mld_sibling, 1u);
+    }
+    ASSERT_EQ(frag_ap_ident_count(), 0);
+
+    /* Control: complete and MLE-less. */
+    bn = ml_beacon(bcn, sizeof bcn);
+    r = ml_beacon_then_sibling_m1(bcn, cut, cut);
+    ASSERT(r != NULL);
+    if (r) {
+        ASSERT_EQ(r->eapol_relay, 1u);
+        ASSERT_EQ(r->eapol_mld_sibling, 0u);
+    }
+    ASSERT_EQ(frag_ap_ident_count(), 1);
+    probe_clear(); mle_clear(); frag_clear(); eapol_clear();
+}
+#endif
+
 /* ── #111: one lock, two threads ──────────────────────────────────── */
 
 static void test_bss_copy_is_the_row_and_rejects_out_of_range(void) {
@@ -1760,6 +2154,20 @@ void run_fragattack_tests(void) {
     RUN_TEST(test_eapol_relay_is_unicast_only);
     RUN_TEST(test_non_eapol_between_stations_is_ordinary);
     RUN_TEST(test_eapol_relay_needs_no_witnessed_association);
+
+    TEST_SUITE("fragattacks: the AP is the BSSID or its AP MLD (#180)");
+    RUN_TEST(test_mlo_eapol_from_the_advertised_mld_is_silent);
+    RUN_TEST(test_mlo_eapol_without_a_beacon_uses_the_sibling_heuristic);
+    RUN_TEST(test_unrelated_la_source_still_fires);
+    RUN_TEST(test_a_beacon_bars_the_sibling_guess);
+    RUN_TEST(test_sibling_shape_is_narrow);
+    RUN_TEST(test_ap_mld_identities_share_the_key_install_gate);
+    RUN_TEST(test_sibling_guess_never_opens_the_gate);
+    RUN_TEST(test_ap_ident_table_full_evicts_and_tallies);
+#ifdef WITH_PCAP
+    RUN_TEST(test_beacon_mle_roster_never_names_the_bssid);
+    RUN_TEST(test_a_beacon_that_could_not_show_an_mle_keeps_the_fallback);
+#endif
 
     TEST_SUITE("fragattacks: table behaviour (#75)");
     RUN_TEST(test_bsses_are_tracked_separately);

@@ -100,6 +100,27 @@ non-blocking and stateless.
 
 ## Recently landed
 
+### 2026-11-15 — #207 slice 1: beacon_aps.operating_width persisted
+**Commits**: `33f69cf`
+**Touched**: `src/db.{c,h}`, `src/db_schema.c`, `tests/test_db.c`,
+`web/src/web_slothdb.{c,h}`, `web/src/web_wifi.{c,h}`,
+`web/tests/{test_wifi,test_devices,test_routes}.c`,
+`docs/wiki/sqlite-schema.md`
+**Why**: #207 wants the Spectrum tab to draw each Wi-Fi BSS at its real
+occupied bandwidth. sloth has decoded that width (`operating_width`,
+HT/VHT/HE operation IEs, #66) since before this change but never wrote
+it to `sloth.db`, so every reader — `/api/wifi/aps` included — would
+have had nothing to draw from. Schema v13 -> v14, one additive
+`ALTER TABLE`, upgrade-only on conflict. `WEB_SDB_SCHEMA_MAX` had to
+move with it; the miss showed up as a `make web-test` segfault, caught
+by `test_schema_max_is_sloths` before push.
+**Follow-ups**: the Spectrum tab's actual overlay (BSS widths, BLE
+37/38/39 bars) is not built. BLE channel bars need care before they
+are: an HCI-sourced `ble_device` row carries no channel at all (every
+host-controller report is -1); only an Ubertooth-sourced row does, so
+a channel bar reflects Ubertooth receivers only and the legend must
+say so.
+
 ### 2026-10-20 — #149: RF-quality counters keyed by (channel, band)
 **Commits**: `ba01e61`
 **Touched**: `src/rf_quality.{c,h}`, `src/radiotap.{c,h}`,

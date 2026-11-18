@@ -50,6 +50,7 @@
 #include "views/research.h"
 #include "views/fragattack.h"
 #include "views/ble.h"
+#include "views/gnss.h"
 #include "coverage.h"
 #include "karma_detect.h"
 #include "eap_track.h"
@@ -76,6 +77,7 @@
 #include "ldap_snoop.h"
 #include "bgp_snoop.h"
 #include "ssh_snoop.h"
+#include "sys_status.h"
 #include "rdp_snoop.h"
 #include "snmp_snoop.h"
 #include "mqtt_snoop.h"
@@ -111,15 +113,17 @@
 #include "rf_quality.h"
 #include "presence.h"
 #include "tui_palette.h"
-#include <sys/select.h>
 #include "db.h"
 #include "discovery.h"
 #include "dns.h"
 #include "observe.h"
 #include "privdrop.h"
-#include <pwd.h>
 #include "scan.h"
 #include "capture/probe.h"     /* self-stubbing without WITH_PCAP */
+#include "capture/df_radio.h"  /* --df-iface: the direction-finding radios */
+#include "capture/mon_radio.h" /* --monitor-iface, repeated: more sensor radios */
+#include "mon_radios.h"
+#include "df.h"
 #ifdef WITH_PCAP
 #  include "evidence_ring.h"   /* raw 802.11 evidence ring (#92) */
 #endif
@@ -128,7 +132,13 @@
 #include "capture/replay.h"    /* --replay / --ticks (#119) */
 #include "capture/bt_monitor.h" /* --bt-monitor (#144 slice 2) */
 #include "capture/bt_capture.h" /* --bt-capture (#144 slice 3) */
+#include "capture/gps_reader.h" /* --gps (2026-10-27) */
+#include "gps.h"                 /* --location (2026-10-27) */
 #include "ble_hci.h"
+#include "capture_side.h"
+#include "daemon_start.h"
+#include "gnss_flags.h"
+#include "rf_moved.h"
 
 static sloth_state_t g_state;
 /* Written from on_signal(), so the type is the one C99 7.14.1.1 allows a
@@ -149,6 +159,33 @@ static int       g_hop_enabled = 0;
 
 static void on_signal(int sig) { (void)sig; g_quit = 1; }
 
+/* SIGUSR1 (#190): write the live posture report on the next tick. Same
+ * rule as g_quit: the handler only stores a flag, the main loop does
+ * the work. Installed whether or not a report path was given, so the
+ * signal's default action (terminate) can never take a sensor down. */
+static volatile sig_atomic_t g_report_now = 0;
+static void on_report_signal(int sig) { (void)sig; g_report_now = 1; }
+
+/* report.retain_days over the per-session files beside each report
+ * path (#190). A failure is announced and the run carries on: the
+ * records are the operator's to keep, and a sweep that could not run
+ * costs disk, not data. */
+static void prune_report_records(const char *md, const char *json) {
+    const char *paths[2] = { md, json };
+    unsigned days = (unsigned)tune_val(TUNE_REPORT_RETAIN_DAYS);
+    for (int k = 0; k < 2; k++) {
+        if (!paths[k]) continue;
+        char err[SFILE_ERR_MAX];
+        int n = posture_prune_records(paths[k], days, sloth_wall(),
+                                      err, sizeof(err));
+        if (n > 0)
+            fprintf(stderr, "sloth: report.retain_days=%u: removed %d "
+                            "session record(s) beside %s\n", days, n, paths[k]);
+        else if (n < 0)
+            fprintf(stderr, "sloth: report.retain_days sweep: %s\n", err);
+    }
+}
+
 #ifdef WITH_PCAP
 /* Advance the channel scheduler once per poll: attribute the packets seen
  * since the last tick to the current channel, then retune the monitor
@@ -165,25 +202,28 @@ static void chanhop_drive(sloth_state_t *s) {
     uint64_t mon_total = mon_frame_total();
     uint32_t delta = (uint32_t)(mon_total - last_total);
     last_total = mon_total;
+    /* With several sensor radios (src/mon_radios.h) that counter is all
+     * of theirs; this scheduler is radio 0's and is fed radio 0's. */
+    if (mon_radios_active()) delta = mon_hop_radio0_delta();
     /* Tick, retune, feed the ack back, publish: src/wifi_chanhop.c, so
      * the loop is testable through the fake platform (#91). */
     chanhop_service(&g_chanhop, s, now_ms, delta);
+    /* The other sensor radios' schedulers, each on its own share of the
+     * list; a radio lost since the last poll has its share dealt out
+     * again. sensor_health carries the result (mon_rK_*). */
+    (void)mon_hop_service(&g_chanhop, now_ms);
+#ifdef WITH_PCAP
+    /* The --df-iface radios follow the sensor radio's confirmed channel
+     * (src/capture/df_radio.h): a level is comparable only between
+     * radios that heard the same transmission. */
+    static int df_followed = 0;
+    if (df_radio_open_count() && s->chan_confirmed != df_followed) {
+        df_followed = s->chan_confirmed;
+        df_radio_follow(chanhop_current_freq(&g_chanhop));
+    }
+#endif
 }
 #endif
-
-/* Wait out a poll interval without touching the terminal (#50).
- * Mirrors tui_poll_key's wake behaviour so headless and interactive
- * runs have the same cadence — an alert wakes both early. */
-static void headless_wait(int timeout_ms, int wake_fd) {
-    struct timeval tv;
-    tv.tv_sec  = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    if (wake_fd < 0) { select(0, NULL, NULL, NULL, &tv); return; }
-    fd_set rfds;
-    FD_ZERO(&rfds);
-    FD_SET(wake_fd, &rfds);
-    select(wake_fd + 1, &rfds, NULL, NULL, &tv);
-}
 
 /* The research corpus (#73), NULL when --with-research was not given
  * or the corpus could not be opened. Passed explicitly to the one
@@ -191,8 +231,9 @@ static void headless_wait(int timeout_ms, int wake_fd) {
  * posture_render_md. */
 static rq_handle_t *g_research = NULL;
 
-/* One tick of the poll loop. The stages and their order are the phase
- * table in src/poll.c (#113); this only fills in what lives in the app
+/* One tick of the poll loop. The stages and their order are a phase
+ * table (#113) the application supplies (#212): g_poll_wifi in
+ * src/poll.c. This only fills in what lives in the app
  * rather than the core library. */
 static void poll_data(sloth_state_t *s) {
     poll_ctx_t ctx;
@@ -202,7 +243,7 @@ static void poll_data(sloth_state_t *s) {
 #ifdef WITH_PCAP
     ctx.chanhop   = chanhop_drive;
 #endif
-    poll_tick(s, &ctx);
+    poll_tick(&g_poll_wifi, s, &ctx);
 }
 
 static void handle_filter_input(sloth_state_t *s, int key) {
@@ -310,18 +351,22 @@ static void print_usage(const char *argv0) {
             "       [--no-discovery] [--out-format FORMAT]\n"
             "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
             "       [--bt-monitor] [--bt-capture PATH] [--ble-rotation-hints]\n"
+            "       [--location LAT,LON[,ALT]] [--gps SPEC] [--gps-allow-remote]\n"
+            "       [--gps-baud N]\n"
             "       [--user NAME] [--no-privdrop]\n"
             "       [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
             "       [--wps-pin-brute-cycles N] [--wps-lockout-cycles N]\n"
             "       [--wps-pbc-concurrent N]\n"
             "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
+            "       [--report-interval SECS] [--report-history]\n"
             "       [--my-ssid SSID] [--my-bssid BSSID]\n"
             "       [--inventory FILE] [--site TEXT]\n"
             "       [--known-mac MAC] [--known-macs FILE]\n"
-            "       [--headless] [--no-color] [--version]\n"
+            "       [--headless] [--no-color] [--version] [--print-schema]\n"
             "       [--with-research research.db]\n"
             "       [--db FILE] [--db-interval-secs N]\n"
+            "       [--db-compact-alerts SRC DST]\n"
             "       [--db-retain-days N] [--db-max-mb N]\n"
             "       [--replay FILE[,FILE]] [--ticks N]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
@@ -333,7 +378,10 @@ static void print_usage(const char *argv0) {
             "                     pcap file under DIR. CRIT only and once per\n"
             "                     finding per hour by default; --tune\n"
             "                     pcap.min_severity / pcap.key_cooldown_secs\n"
-            "                     widen it to a full capture\n"
+            "                     widen it to a full capture. Files sloth\n"
+            "                     wrote there are deleted after 14 days,\n"
+            "                     swept hourly; --tune pcap.retain_days=N,\n"
+            "                     0 keeps them forever\n"
             "  --eapol-dir DIR    append captured EAPOL PMKIDs / 4-way\n"
             "                     handshakes to DIR/eapol.22000 in hashcat\n"
             "                     mixed format (22000), AND write a\n"
@@ -544,6 +592,34 @@ static void print_usage(const char *argv0) {
             "                     refused. Counts are a sample of one channel\n"
             "                     (docs/wiki/ubertooth.md lists the allowed\n"
             "                     and forbidden tool flags).\n"
+            "  --location LAT,LON[,ALT]\n"
+            "                     the sensor's fixed position (WGS84 decimal\n"
+            "                     degrees, ALT metres above sea level). Every\n"
+            "                     new alert incident is stamped with it in the\n"
+            "                     JSONL log, --db and the evidence manifests.\n"
+            "                     A fresh --gps fix takes precedence.\n"
+            "  --gps SPEC         read the sensor's position from a receiver:\n"
+            "                       /dev/ttyXXX          NMEA 0183 (GGA/RMC/GSA)\n"
+            "                                            off a serial device,\n"
+            "                                            opened read-only before\n"
+            "                                            the privilege drop;\n"
+            "                                            nothing is written to it\n"
+            "                       gpsd://[HOST[:PORT]] gpsd's JSON stream over\n"
+            "                                            TCP, default\n"
+            "                                            127.0.0.1:2947; sloth\n"
+            "                                            sends one ?WATCH line\n"
+            "                     A fix older than gps.max_fix_age_s stamps\n"
+            "                     nothing (--location then stands in). Refused\n"
+            "                     with --replay. gpsd has no Unix data socket.\n"
+            "  --gps-allow-remote permit a gpsd:// HOST outside loopback.\n"
+            "                     --strict refuses a remote gpsd regardless.\n"
+            "  --gps-baud N       serial speed for --gps /dev/... (4800, 9600\n"
+            "                     (default), 19200, 38400, 57600, 115200).\n"
+            "  --adsb, --aprs, --aprs-freq, --aprs-silent-hours, --rtl433,\n"
+            "  --victron          not this daemon's: the SDR decoders are read\n"
+            "                     by sloth-rf (see sloth-rf --help). Refused\n"
+            "                     here with exit 2; sloth-migrate-rf moves\n"
+            "                     them out of /etc/default/sloth.\n"
             "  --ble-rotation-hints\n"
             "                     INTERNAL USE ONLY, off by default: link\n"
             "                     private BLE addresses that may be one\n"
@@ -563,6 +639,43 @@ static void print_usage(const char *argv0) {
             "                     cannot be enforced on the capture datalink,\n"
             "                     sloth exits non-zero rather than capture an\n"
             "                     unrestricted stream.\n"
+            "  --monitor-iface NAME\n"
+            "                     open exactly NAME as the 802.11 monitor\n"
+            "                     radio instead of the first type-803\n"
+            "                     interface discovery finds. If NAME is\n"
+            "                     missing or not in monitor mode, no\n"
+            "                     monitor capture runs: there is no\n"
+            "                     fallback. [m] cannot retarget away from\n"
+            "                     it. Not part of the --iface allow-list,\n"
+            "                     which does not reach the monitor radio.\n"
+            "                     Repeatable: each further NAME (up to 3)\n"
+            "                     is another sensor radio whose frames feed\n"
+            "                     the same detectors; a frame two radios\n"
+            "                     hear is counted once. Under --hop the\n"
+            "                     channel list is split between them. One\n"
+            "                     that is absent or not in monitor mode is\n"
+            "                     left out. Receive-only.\n"
+            "  --df-iface NAME[@METRES|@X,Y]\n"
+            "                     direction finding: also listen on NAME, a\n"
+            "                     second monitor-mode radio (repeatable, up\n"
+            "                     to 3). Only the transmitter address and\n"
+            "                     signal level of its frames are read, into\n"
+            "                     a per-radio table; no frame from it reaches\n"
+            "                     a detector, count or alert. @METRES is the\n"
+            "                     radio's place along a straight baseline;\n"
+            "                     @X,Y its place in two dimensions (metres\n"
+            "                     east, metres north), which with three\n"
+            "                     radios not on one line adds a compass\n"
+            "                     bearing for a transmitter close to them.\n"
+            "                     One command line uses one form.\n"
+            "                     Under --hop these radios are retuned with\n"
+            "                     the sensor radio; without it, park them on\n"
+            "                     its channel. Receive-only. Output: the\n"
+            "                     wifi_df and df_radio records.\n"
+            "  --df-origin METRES|X,Y\n"
+            "                     the sensor radio's own place, in the form\n"
+            "                     the --df-iface positions use (default 0,\n"
+            "                     or 0,0).\n"
             "  --no-discovery     suppress the mDNS advertisement of the data\n"
             "                     socket. By default, when --data-socket is bound\n"
             "                     to a routable (non-loopback) TCP address, sloth\n"
@@ -580,6 +693,13 @@ static void print_usage(const char *argv0) {
             "                     sloth exposes no query surface (MISSION 4).\n"
             "                     Independent of -o and --data-socket, which\n"
             "                     remain the wire format and are unchanged.\n"
+            "  --db-compact-alerts SRC DST\n"
+            "                     offline: copy the database SRC to DST with\n"
+            "                     the alerts table folded to one row per key\n"
+            "                     (duplicates an older build wrote, #170).\n"
+            "                     SRC is only read; DST must not exist. Prints\n"
+            "                     the row counts and exits. Swapping DST in\n"
+            "                     for SRC is left to the operator.\n"
             "  --db-interval-secs N\n"
             "                     seconds between database write ticks.\n"
             "                     Default 1. Raise it on slow storage.\n"
@@ -630,6 +750,9 @@ static void print_usage(const char *argv0) {
             "                     running — no use on a headless sensor.\n"
             "                     Lines 2-3 name the libpcap and sqlite\n"
             "                     actually loaded.\n"
+            "  --print-schema     print the --db schema (the DDL and\n"
+            "                     DB_SCHEMA_VERSION, as SQL) and exit.\n"
+            "                     Opens nothing; sloth-rf prints the same.\n"
             "  --with-research FILE\n"
             "                     load the research corpus for per-alert\n"
             "                     citations in --report. Additive: an\n"
@@ -679,6 +802,8 @@ static void print_usage(const char *argv0) {
             "                     on exit, write a passive AP-inventory snapshot\n"
             "                     (BSSID/SSID/security/channel/vendor) for repeat\n"
             "                     site assessments. No pcap — normalised text.\n"
+            "                     With --report-interval, also kept live as\n"
+            "                     FILE.live.txt (see below).\n"
             "  --baseline-in FILE on exit, diff the current AP inventory against a\n"
             "                     prior --snapshot-out file (new/gone/changed APs).\n"
             "  --site-label TEXT  operator label stamped into --snapshot-out.\n"
@@ -689,6 +814,23 @@ static void print_usage(const char *argv0) {
             "  --report-json FILE.json\n"
             "                     same rollup as --report, structured for\n"
             "                     machine consumption / SIEM diff.\n"
+            "  --report-interval SECS\n"
+            "                     also write the report every SECS seconds\n"
+            "                     while running (0..86400, default 0 = off),\n"
+            "                     to FILE.live.md / FILE.live.json beside the\n"
+            "                     --report paths, replaced whole by rename and\n"
+            "                     marked \"Session end: (running)\". SIGUSR1\n"
+            "                     writes it at once, with or without an\n"
+            "                     interval. Removed when the session signs\n"
+            "                     off; one left by a killed session is kept\n"
+            "                     as FILE.<UTC>.unclean.md, never replaced.\n"
+            "                     With --snapshot-out, also keeps\n"
+            "                     SNAP.live.txt the same way.\n"
+            "  --report-history   on exit, also keep this session's report as\n"
+            "                     FILE.<UTC session start>.md (and .json), so\n"
+            "                     a restart does not replace the last record.\n"
+            "                     Never overwritten; deleted after\n"
+            "                     --tune report.retain_days (default 90).\n"
             "  --check-manifest FILE\n"
             "                     read a locally-populated release manifest\n"
             "                     (JSON) and show \"update available\" in the\n"
@@ -712,8 +854,13 @@ static int tune_alias(const char *flag, tune_id_t id, const char *value) {
 }
 
 int main(int argc, char **argv) {
+    /* This is the daemon with the capture (#213): the whole rule table,
+     * the capture's source rows and the resolver's count go to the
+     * services sloth-rf shares, before anything can tick. */
+    capture_side_install();
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
+    signal(SIGUSR1, on_report_signal);
 
     const char *jsonl_path   = NULL;
     const char *pcap_dir     = NULL;
@@ -722,6 +869,8 @@ int main(int argc, char **argv) {
     const char *data_socket  = NULL;
     const char *report_md    = NULL;   /* --report      FILE.md   */
     const char *report_json  = NULL;   /* --report-json FILE.json */
+    unsigned    report_interval = 0;   /* --report-interval SECS (#190) */
+    int         report_history  = 0;   /* --report-history       (#190) */
     const char *check_manifest = NULL; /* --check-manifest FILE   */
     int         headless       = 0;    /* --headless           (#50) */
     const char *db_path        = NULL; /* --db FILE            (#42) */
@@ -738,9 +887,24 @@ int main(int argc, char **argv) {
     const char *allow_ifaces[MAX_IFACES];/* --iface NAME, repeatable (#35) */
     int         allow_iface_count = 0;
     int         monitor_only = 0;        /* --monitor-only (#35) */
+    const char *monitor_iface = NULL;    /* --monitor-iface NAME, the first */
+    /* Every --monitor-iface in order: [0] is radio 0 (monitor_iface
+     * above), the rest are further sensor radios (src/mon_radios.h). */
+    mon_cli_t   mon_cli;
+    memset(&mon_cli, 0, sizeof(mon_cli));
+    /* --df-iface NAME[@METRES|@X,Y], repeatable: the radios beside the
+     * sensor radio (src/df.h). --df-origin is the sensor radio's own
+     * place, on the baseline or in two dimensions. */
+    df_cli_t    df_cli;
+    memset(&df_cli, 0, sizeof(df_cli));
     int         bt_monitor   = 0;        /* --bt-monitor (#144 slice 2) */
     const char *bt_capture   = NULL;     /* --bt-capture PATH (#144 slice 3) */
     int         ble_rotation_hints = 0;  /* --ble-rotation-hints (#156) */
+    /* --location, --gps, --gps-allow-remote, --gps-baud (2026-10-27).
+     * The struct and what checks it are shared with sloth-rf (#213):
+     * src/gnss_flags.h. The decoder flags are sloth-rf's alone since
+     * the cutover (#216) and are refused below (src/rf_moved.h). */
+    gnss_flags_t gnss_flags = { NULL, NULL, 0, 0 };
     const char *replay_arg   = NULL;     /* --replay FILE[,FILE] (#119) */
     long        max_ticks    = 0;        /* --ticks N; 0 = run until quit */
     time_t      session_start = sloth_wall();
@@ -785,17 +949,13 @@ int main(int argc, char **argv) {
             if (i + 1 < argc && argv[i + 1][0] != '-') {
                 data_socket = argv[++i];
             } else {
-                char why[256];
-                int  ok = data_socket_default_dir_ok(DATA_SOCKET_DEFAULT_DIR,
-                                                     why, sizeof(why));
-                data_socket = data_socket_default_spec(ok);
-                if (!data_socket) {
-                    char msg[768];
-                    data_socket_default_refusal(why, geteuid(),
-                                                msg, sizeof(msg));
-                    fputs(msg, stderr);
-                    return 2;
-                }
+                /* The spec is the pure resolver's (never a literal here,
+                 * never TCP); the helper checks the directory and prints
+                 * the refusal, and is shared with sloth-rf (#213). */
+                data_socket = daemon_data_socket_default(
+                    DATA_SOCKET_DEFAULT_DIR, data_socket_default_spec(1),
+                    "sloth", DATA_SOCKET_TCP_EXAMPLE);
+                if (!data_socket) return 2;
             }
         } else if (!strcmp(argv[i], "--refresh-ms") && i + 1 < argc) {
             char *endp = NULL;
@@ -812,6 +972,19 @@ int main(int argc, char **argv) {
             report_md = argv[++i];
         } else if (!strcmp(argv[i], "--report-json") && i + 1 < argc) {
             report_json = argv[++i];
+        } else if (!strcmp(argv[i], "--report-interval") && i + 1 < argc) {
+            /* Strict, like --ticks: "5m" read as 5 would write sixty
+             * times as often as the operator asked for. */
+            char *end = NULL;
+            long v = strtol(argv[++i], &end, 10);
+            if (!end || *end || end == argv[i] || v < 0 || v > 86400) {
+                fprintf(stderr, "sloth: --report-interval %s: want 0..86400 "
+                                "seconds (0 = off)\n", argv[i]);
+                return 2;
+            }
+            report_interval = (unsigned)v;
+        } else if (!strcmp(argv[i], "--report-history")) {
+            report_history = 1;
         } else if (!strcmp(argv[i], "--check-manifest") && i + 1 < argc) {
             check_manifest = argv[++i];
         } else if (!strcmp(argv[i], "--iface") && i + 1 < argc) {
@@ -832,6 +1005,34 @@ int main(int argc, char **argv) {
                         MAX_IFACES);
                 return 2;
             }
+        } else if (!strcmp(argv[i], "--monitor-iface") && i + 1 < argc) {
+            /* Names the sensor radio; does not scope anything. Kept
+             * apart from --iface by the owner's 2026-10-04 ruling that
+             * the monitor stream stays outside the allow-list. */
+            char why[200];
+            if (!mon_cli_add(&mon_cli, argv[++i], why, sizeof(why))) {
+                fprintf(stderr, "%s\n", why);
+                return 2;
+            }
+            monitor_iface = mon_cli.name[0];
+        } else if (!strcmp(argv[i], "--df-iface") && i + 1 < argc) {
+            char why[200];
+            if (!df_cli_add(&df_cli, argv[++i], why, sizeof(why))) {
+                fprintf(stderr, "%s\n", why);
+                return 2;
+            }
+            if (bt_dev_is_raw_hci(df_cli.name[df_cli.n - 1])) {
+                fprintf(stderr, "sloth: --df-iface %s refused: a raw HCI "
+                                "device accepts injected packets\n",
+                        df_cli.name[df_cli.n - 1]);
+                return 2;
+            }
+        } else if (!strcmp(argv[i], "--df-origin") && i + 1 < argc) {
+            char why[200];
+            if (!df_cli_origin(&df_cli, argv[++i], why, sizeof(why))) {
+                fprintf(stderr, "%s\n", why);
+                return 2;
+            }
         } else if (!strcmp(argv[i], "--monitor-only")) {
             monitor_only = 1;
         } else if (!strcmp(argv[i], "--bt-monitor")) {
@@ -840,24 +1041,31 @@ int main(int argc, char **argv) {
             bt_capture = argv[++i];
         } else if (!strcmp(argv[i], "--ble-rotation-hints")) {
             ble_rotation_hints = 1;
+        } else if (!strcmp(argv[i], "--location") && i + 1 < argc) {
+            gnss_flags.location = argv[++i];
+        } else if (!strcmp(argv[i], "--gps") && i + 1 < argc) {
+            gnss_flags.gps = argv[++i];
+        } else if (rf_moved_flag(argv[i])) {
+            /* With or without its value: the flag is refused, not
+             * parsed, so a truncated command line gets the guidance
+             * and not the usage text. */
+            char moved[400];
+            rf_moved_message(argv[i], moved, sizeof(moved));
+            fprintf(stderr, "%s\n", moved);
+            return 2;
+        } else if (!strcmp(argv[i], "--gps-allow-remote")) {
+            gnss_flags.allow_remote = 1;
+        } else if (!strcmp(argv[i], "--gps-baud") && i + 1 < argc) {
+            if (gnss_flag_baud(argv[++i], &gnss_flags.baud) != 0) return 2;
         } else if (!strcmp(argv[i], "--hop")) {
             g_hop_enabled = 1;
         } else if (!strcmp(argv[i], "--tune-list")) {
             tune_print_list(stdout);
             return 0;
         } else if (!strcmp(argv[i], "--tune")) {
-            if (i + 1 >= argc) {
-                fprintf(stderr, "sloth: --tune needs name=value "
-                                "(see --tune-list)\n");
+            if (daemon_flag_tune(i + 1 < argc ? argv[i + 1] : NULL) != 0)
                 return 2;
-            }
-            char terr[160];
-            if (tune_set(argv[++i], terr, sizeof(terr)) != 0) {
-                /* A mistyped knob exits rather than running with the
-                 * default the operator thought they had changed (#82). */
-                fprintf(stderr, "sloth: --tune %s\n", terr);
-                return 2;
-            }
+            i++;
         } else if (!strcmp(argv[i], "--allow-active")) {
             allow_active = 1;
         } else if (!strcmp(argv[i], "--user") && i + 1 < argc) {
@@ -893,6 +1101,18 @@ int main(int argc, char **argv) {
             no_discovery = 1;
         } else if (!strcmp(argv[i], "--db") && i + 1 < argc) {
             db_path = argv[++i];
+        } else if (!strcmp(argv[i], "--db-compact-alerts") && i + 2 < argc) {
+            /* Offline and immediate, like --tune-list: it reads one file
+             * and writes another, and nothing else on the command line
+             * applies to it (#170). */
+#ifdef WITH_SQLITE
+            return db_compact_alerts(argv[i + 1], argv[i + 2], NULL) == 0
+                   ? 0 : 1;
+#else
+            fprintf(stderr, "sloth: --db-compact-alerts needs a build with"
+                    " SQLite (WITH_SQLITE=1)\n");
+            return 2;
+#endif
         } else if (!strcmp(argv[i], "--db-interval-secs") && i + 1 < argc) {
             /* atoi() before #120: "abc" read as 0, which db_set_* turned
              * into the default without a word. Now a startup error. */
@@ -938,20 +1158,18 @@ int main(int argc, char **argv) {
             printf("pcap: %s\n", libver_pcap());
             printf("sqlite: %s\n", libver_sqlite());
             return 0;
+        } else if (!strcmp(argv[i], "--print-schema")) {
+            /* The contract artifact's schema.sql (#185 item 4): the DDL
+             * as this binary would create it, so the published schema
+             * is what the daemon runs and not a copy of it. Opens no
+             * device, file or database, and needs no privilege. */
+            return db_schema_print(stdout) == 0 ? 0 : 1;
         } else if (!strcmp(argv[i], "--headless")) {
             headless = 1;
         } else if (!strcmp(argv[i], "--replay") && i + 1 < argc) {
             replay_arg = argv[++i];
         } else if (!strcmp(argv[i], "--ticks") && i + 1 < argc) {
-            /* Strict, like --tune: a batch job that ran forever because
-             * "3x" parsed as 0 would hang the CI step it was written for. */
-            char *end = NULL;
-            long v = strtol(argv[++i], &end, 10);
-            if (!end || *end || end == argv[i] || v < 1 || v > 1000000) {
-                fprintf(stderr, "sloth: --ticks %s: want 1..1000000\n", argv[i]);
-                return 2;
-            }
-            max_ticks = v;
+            if (daemon_flag_ticks(argv[++i], &max_ticks) != 0) return 2;
         } else if (!strcmp(argv[i], "--no-color") ||
                    !strcmp(argv[i], "--no-colour")) {
             tui_set_color(0);
@@ -1026,6 +1244,22 @@ int main(int argc, char **argv) {
      * offline-crackable material, and a sloth that starts anyway reads as
      * "the export is happening". Failing loudly at argv time is also the
      * only version an init unit or a script can notice. */
+    /* The two #190 flags qualify --report / --report-json. Given alone
+     * they would do nothing, and a sensor the operator believes is
+     * keeping reports while it keeps none is the failure to refuse. */
+    if (report_history && !report_md && !report_json) {
+        fprintf(stderr, "sloth: --report-history needs --report or "
+                        "--report-json: there is no report to write\n");
+        return 2;
+    }
+    /* --report-interval also keeps a live --snapshot-out, so a snapshot
+     * alone is something for it to write. */
+    if (report_interval && !report_md && !report_json && !snapshot_out) {
+        fprintf(stderr, "sloth: --report-interval needs --report, "
+                        "--report-json or --snapshot-out: there is no "
+                        "report to write\n");
+        return 2;
+    }
     if (eapol_dir && !collect_hs) {
         fprintf(stderr,
                 "sloth: --eapol-dir %s refused: PMKIDs and 4-way handshakes "
@@ -1057,8 +1291,54 @@ int main(int argc, char **argv) {
         return 2;
     }
 #endif
+    /* The receiver's flags: --location and --gps for shape and scope
+     * (the receiver is opened just before the privilege drop). Shared
+     * with sloth-rf, so the two refuse alike (#213). */
+    if (gnss_flags_check(&gnss_flags, strict_lock, replay_arg != NULL) != 0)
+        return 2;
+
     char replay_paths[REPLAY_MAX_FILES][REPLAY_PATH_MAX];
     int  replay_count = 0;
+    /* Further sensor radios against the rest of the command line: a
+     * replay, a build with no capture, a radio also given to
+     * --df-iface. One line, exit 2, before anything opens. */
+    {
+        const char *dfp[DF_MAX_RADIOS - 1];
+        char why[200];
+        /* --df-iface positions in one form (src/df.h). */
+        if (!df_cli_check(&df_cli, why, sizeof(why))) {
+            fprintf(stderr, "%s\n", why);
+            return 2;
+        }
+        for (int k = 0; k < df_cli.n; k++) dfp[k] = df_cli.name[k];
+#ifdef WITH_PCAP
+        const int have_pcap = 1;
+#else
+        const int have_pcap = 0;
+#endif
+        if (!mon_cli_check(&mon_cli, dfp, df_cli.n, replay_arg != NULL,
+                           have_pcap, why, sizeof(why))) {
+            fprintf(stderr, "%s\n", why);
+            return 2;
+        }
+    }
+#ifndef WITH_PCAP
+    if (df_cli.n || df_cli.origin_set) {
+        fprintf(stderr, "sloth: --df-iface needs a build with libpcap "
+                        "(this one is WITH_PCAP=0)\n");
+        return 2;
+    }
+    if (monitor_iface) {
+        fprintf(stderr, "sloth: --monitor-iface needs a build with libpcap "
+                        "(this one is WITH_PCAP=0)\n");
+        return 2;
+    }
+#endif
+    if (replay_arg && (df_cli.n || df_cli.origin_set)) {
+        fprintf(stderr, "sloth: --df-iface names live radios; it cannot be "
+                        "combined with --replay\n");
+        return 2;
+    }
     if (replay_arg) {
 #ifndef WITH_PCAP
         fprintf(stderr, "sloth: --replay needs a build with libpcap "
@@ -1073,11 +1353,12 @@ int main(int argc, char **argv) {
                     replay_arg, REPLAY_MAX_FILES);
             return 2;
         }
-        if (allow_iface_count || monitor_only || g_hop_enabled || bt_monitor ||
-            bt_capture) {
+        if (allow_iface_count || monitor_only || monitor_iface ||
+            g_hop_enabled || bt_monitor || bt_capture) {
             fprintf(stderr, "sloth: --replay reads savefiles, not "
-                            "interfaces: --iface, --monitor-only, --hop, "
-                            "--bt-monitor and --bt-capture do not apply\n");
+                            "interfaces: --iface, --monitor-only, "
+                            "--monitor-iface, --hop, --bt-monitor and "
+                            "--bt-capture do not apply\n");
             return 2;
         }
         /* --allow-active would send PTR queries for addresses read out of
@@ -1136,23 +1417,7 @@ int main(int argc, char **argv) {
                         "strict observation for this run\n");
         return prof.exit_code;
     case OBSERVE_PROFILE_REFUSE_ROUTABLE_SOCKET_UNDER_STRICT:
-        /* #84, owner ruling 2026-10-06. The loopback default
-         * (tcp:127.0.0.1:8765) and a unix: path keep working, because
-         * neither leaves the host and README has published bare
-         * `--strict --data-socket` as usable.
-         *
-         * --data-socket-allow-remote does not override this: that flag
-         * is how an operator says "expose this to the LAN", --strict is
-         * how they say "not on this run", and a lock another flag can
-         * override is not a lock. */
-        fprintf(stderr,
-                "sloth: --strict refuses a routable --data-socket (%s).\n"
-                "       A routable listener transmits to whoever connects, "
-                "which is what\n"
-                "       --strict declines for this run. Bind loopback "
-                "(tcp:127.0.0.1:PORT)\n"
-                "       or a unix: path, or drop --strict.\n",
-                data_socket);
+        daemon_strict_socket_refusal(data_socket);
         return prof.exit_code;
     case OBSERVE_PROFILE_OK:
         break;
@@ -1184,35 +1449,13 @@ int main(int argc, char **argv) {
      * Applied below, between the capture opens (which need the
      * privilege) and the sinks (which must be created as the account
      * the run will live as). */
-    privdrop_req_t pd_req;
-    memset(&pd_req, 0, sizeof(pd_req));
-    privdrop_probe(&pd_req);
-    pd_req.hop          = g_hop_enabled;
-    pd_req.allow_active = prof.active_allowed;
-    pd_req.no_privdrop  = no_privdrop;
-    pd_req.user_given   = privdrop_user != NULL;
-    if (!privdrop_user) privdrop_user = PRIVDROP_DEFAULT_USER;
-    {
-        /* The reentrant form: nothing is threaded yet, but nothing here
-         * should depend on that staying true. A lookup error (not just
-         * "no such account") reads as unresolved, which refuses an
-         * explicit --user and announces the default case. */
-        static char pwbuf[16384];
-        struct passwd pwd, *pw = NULL;
-        if (getpwnam_r(privdrop_user, &pwd, pwbuf, sizeof(pwbuf), &pw) != 0)
-            pw = NULL;
-        if (pw) {
-            pd_req.user_resolved = 1;
-            pd_req.uid           = pw->pw_uid;
-            pd_req.gid           = pw->pw_gid;
-        }
-    }
+    privdrop_req_t  pd_req;
     privdrop_plan_t pd_plan;
-    privdrop_resolve(&pd_req, &pd_plan);
-    if (pd_plan.exit_code != 0) {
-        fprintf(stderr, "sloth: %s (--user %s)\n", pd_plan.reason,
-                privdrop_user);
-        return pd_plan.exit_code;
+    {
+        int pd_rc = daemon_privdrop_plan(&privdrop_user, no_privdrop,
+                                         g_hop_enabled, prof.active_allowed,
+                                         &pd_req, &pd_plan);
+        if (pd_rc != 0) return pd_rc;
     }
 
     memset(&g_state, 0, sizeof(g_state));
@@ -1269,7 +1512,112 @@ int main(int argc, char **argv) {
         }
     } else {
         capture_open(&g_state);
+        probe_set_monitor_pin(monitor_iface);
         probe_open(&g_state);
+        /* MISSION section 2: say what was opened. A pinned radio that is
+         * missing or not in monitor mode is not replaced by discovery;
+         * the run continues without 802.11, as it does when discovery
+         * finds nothing, and sensor_health carries probe_err. */
+        if (monitor_iface) {
+            if (g_state.probe_iface[0])
+                fprintf(stderr, "sloth: --monitor-iface: 802.11 monitor "
+                                "capture opened on %s (receive-only; "
+                                "discovery skipped)\n", g_state.probe_iface);
+            else
+                fprintf(stderr, "sloth: --monitor-iface: %s; no monitor "
+                                "capture, no fallback to another radio\n",
+                        g_state.probe_err);
+        }
+        /* Further --monitor-iface radios (src/mon_radios.h): sensor
+         * radios like the first, opened here for the reason it is. Each
+         * is announced; one that is absent or not in monitor mode is
+         * left out and the run continues. With no radio 0 there is no
+         * 802.11 path for them to feed (its health and its place in
+         * every record are radio 0's), so none is opened. */
+        if (mon_cli.n > 1 && !g_state.probe_iface[0]) {
+            fprintf(stderr, "sloth: --monitor-iface: the first radio is not "
+                            "open, so no further sensor radio was opened\n");
+        } else if (mon_cli.n > 1) {
+            mon_radios_reset();
+            mon_radios_add(g_state.probe_iface);
+            mon_radios_set_state(0, MON_RADIO_OPEN, "");
+            for (int k = 1; k < mon_cli.n; k++) {
+                char why[96];
+                int idx = mon_radios_add(mon_cli.name[k]);
+                if (idx < 0) continue;      /* the CLI refused a repeat */
+                if (mon_radio_open(idx, mon_cli.name[k], why, sizeof(why))) {
+                    fprintf(stderr, "sloth: --monitor-iface: sensor radio %d "
+                                    "opened on %s beside %s (receive-only; a "
+                                    "frame both hear is counted once)\n",
+                            idx, mon_cli.name[k], g_state.probe_iface);
+                } else {
+                    mon_radios_set_state(idx, MON_RADIO_NAMED, why);
+                    fprintf(stderr, "sloth: --monitor-iface: %s; that radio "
+                                    "is not used\n", why);
+                }
+            }
+            if (g_hop_enabled) {
+                int sharing = mon_hop_setup(&g_chanhop);
+                fprintf(stderr, "sloth: --hop: the channel list is split "
+                                "between %d sensor radio%s, each on its own "
+                                "channels\n", sharing, sharing == 1 ? "" : "s");
+            } else {
+                fprintf(stderr, "sloth: --monitor-iface without --hop: "
+                                "nothing retunes the sensor radios; each "
+                                "listens where it was parked\n");
+            }
+        }
+        /* --df-iface (src/df.h): opened here for the reason the sensor
+         * radio is, the capability the drop below gives up. Announced
+         * radio by radio (MISSION section 2); one that cannot be opened
+         * is left out and the run continues, and with no sensor radio
+         * there is nothing to compare against, so none is opened. */
+        if (df_cli.n && !g_state.probe_iface[0]) {
+            fprintf(stderr, "sloth: --df-iface: no sensor radio is open, so "
+                            "no direction-finding radio was opened\n");
+        } else if (df_cli.n) {
+            df_pos_form_t form = df_cli_form(&df_cli);
+            df_reset();
+            /* The sensor radio is radio 0; with any position given and
+             * no --df-origin it sits at 0 m, or at 0,0. */
+            if (form == DF_POS_XY)
+                df_radio_add_xy(g_state.probe_iface, df_cli.origin.a, df_cli.origin.b);
+            else
+                df_radio_add(g_state.probe_iface, form == DF_POS_LINE, df_cli.origin.a);
+            for (int k = 0; k < df_cli.n; k++) {
+                const char *n = df_cli.name[k];
+                const df_pos_t *p = &df_cli.pos[k];
+                char why[96];
+                if (!strcmp(n, g_state.probe_iface)) {
+                    fprintf(stderr, "sloth: --df-iface %s is the sensor radio; "
+                                    "left out\n", n);
+                    continue;
+                }
+                int idx = p->form == DF_POS_XY ? df_radio_add_xy(n, p->a, p->b)
+                                               : df_radio_add(n, p->form == DF_POS_LINE, p->a);
+                if (idx < 0) {
+                    fprintf(stderr, "sloth: --df-iface %s given twice; left "
+                                    "out\n", n);
+                    continue;
+                }
+                if (df_radio_open(idx, n, why, sizeof(why)))
+                    fprintf(stderr, "sloth: --df-iface: %s opened beside %s "
+                                    "(receive-only; signal levels only, no "
+                                    "frame from it reaches a detector)\n",
+                            n, g_state.probe_iface);
+                else
+                    fprintf(stderr, "sloth: --df-iface: %s; that radio is "
+                                    "not used\n", why);
+            }
+            if (!g_hop_enabled && df_radio_open_count())
+                fprintf(stderr, "sloth: --df-iface without --hop: nothing "
+                                "retunes these radios; park them on the "
+                                "sensor radio's channel\n");
+            if (form == DF_POS_XY && !df_array_has_bearing())
+                fprintf(stderr, "sloth: --df-iface: X,Y positions need three "
+                                "radios that are not on one line; no bearing "
+                                "will be given\n");
+        }
         /* #144 slice 2: beside the IP handle and for the same reason —
          * binding the monitor channel needs CAP_NET_RAW, which the drop
          * below gives up. Opt-in, and a failure is announced and the run
@@ -1312,6 +1660,8 @@ int main(int argc, char **argv) {
     /* probe_iface is set synchronously by probe_open(). */
     if (monitor_only && g_state.probe_iface[0])
         iface_allow_add(&g_state, g_state.probe_iface);
+    /* Reported in sensor_health beside the IP stream's link type. */
+    g_state.monitor_only = monitor_only && g_state.probe_iface[0];
     {
         /* #57 tests the datalink end state, not the routes to it (an
          * older libpcap refusing SLL2, the open_live fallback, ...).
@@ -1342,6 +1692,19 @@ int main(int argc, char **argv) {
             fprintf(stderr, "sloth: %s\n", capture_scope_reason(v));
     }
 
+    /* --gps: the receiver, before the drop (src/gnss_flags.h says why
+     * a serial device has to be opened on this side of it). */
+    if (gnss_flags_open(&gnss_flags) != 0) {
+#ifdef WITH_PCAP
+        probe_stop();
+        capture_stop();
+        bt_monitor_stop();
+        bt_capture_stop();
+#endif
+        g_platform.cleanup();
+        return 2;
+    }
+
     /* #140: drop here — every handle that needs CAP_NET_RAW is open,
      * the scope is sealed, and no thread exists yet (capset and
      * no_new_privs are per-thread, so a worker started earlier would
@@ -1350,25 +1713,16 @@ int main(int argc, char **argv) {
      * sink after it is opened as the account the run lives as, so
      * secure_file's ownership check holds against that account. A
      * failed step fails closed: half-dropped is not a state to run in. */
-    {
-        char pd_err[160];
-        if (privdrop_apply(&pd_plan, pd_err, sizeof(pd_err)) != 0) {
-            fprintf(stderr, "sloth: privilege drop failed: %s — refusing "
-                            "to run (--no-privdrop to keep privileges)\n",
-                    pd_err);
+    if (daemon_privdrop_apply(&pd_req, &pd_plan, privdrop_user) != 0) {
 #ifdef WITH_PCAP
-            probe_stop();
-            capture_stop();
-            bt_monitor_stop();
-            bt_capture_stop();
+        probe_stop();
+        capture_stop();
+        bt_monitor_stop();
+        bt_capture_stop();
 #endif
-            g_platform.cleanup();
-            return 2;
-        }
-        char pd_msg[320];
-        privdrop_describe(&pd_req, &pd_plan, privdrop_user, pd_msg,
-                          sizeof(pd_msg));
-        if (pd_msg[0]) fprintf(stderr, "%s\n", pd_msg);
+        gps_reader_stop();
+        g_platform.cleanup();
+        return 2;
     }
     dns_init();
 
@@ -1390,6 +1744,36 @@ int main(int argc, char **argv) {
         fprintf(stderr, "sloth: --eapol-dir %s\n", eapol_export_error());
         return 1;
     }
+    /* Both pinned before either sweeps (#166): eapol_sweep() expires
+     * every *.pcap and manifest in its directory on the handshake window,
+     * so one directory for both would delete alert pcaps on that window
+     * whatever pcap.retain_days says — 0 included. Compared by dev/ino of
+     * the pinned descriptors, so a second spelling of the path is caught
+     * too, and refused before anything is swept. */
+    if (alert_pcap_shares_eapol_dir()) {
+        fprintf(stderr,
+                "sloth: --pcap-dir %s and --eapol-dir %s are the same "
+                "directory: the handshake sweep would expire alert pcaps on "
+                "its own window. Give each its own directory.\n",
+                pcap_dir, eapol_dir);
+        return 2;
+    }
+    if (pcap_dir) {
+        /* The first bounded step of the startup pass (#166); the poll
+         * loop finishes it. Started here, not left to the first tick, so
+         * a sensor restarted more often than hourly still ages files out,
+         * and said here so the window being applied is on record. */
+        alert_pcap_maintain();
+        if (alert_pcap_retain_days() > 0)
+            fprintf(stderr,
+                    "sloth: --pcap-dir %s — alert pcaps kept %d day(s), "
+                    "swept hourly\n", pcap_dir, alert_pcap_retain_days());
+        else
+            fprintf(stderr,
+                    "sloth: --pcap-dir %s — retention disabled "
+                    "(pcap.retain_days=0): alert pcaps are kept until you "
+                    "delete them\n", pcap_dir);
+    }
     if (eapol_dir) {
         /* Sweep once here, then daily from the poll loop. At startup
          * because a sensor that is restarted more often than once a day
@@ -1406,50 +1790,16 @@ int main(int argc, char **argv) {
                     "retention disabled (--handshake-retention 0): artifacts "
                     "are kept until you delete them\n", eapol_dir);
     }
-    if (jsonl_path) {
-        if (!jsonl_open(jsonl_path)) {
-            fprintf(stderr, "sloth: could not open jsonl output %s\n",
-                    jsonl_error());
-            return 1;
-        }
-    }
-    if (db_path) {
-        if (!db_open(db_path)) {
-            /* Diagnostic already printed. A DB the operator explicitly
-             * asked for and which cannot be opened is a startup error,
-             * not something to silently continue without. */
-            return 1;
-        }
-        fprintf(stderr,
-                "sloth: db %s (schema v%d, every %ds, retain %dd, max %dMiB)\n",
-                db_path, DB_SCHEMA_VERSION, db_interval(),
-                db_retain_days(), db_max_mb());
-        /* Record the visit so a later run can answer "what is new since
-         * last time" (#56). --site-label already carries the operator's
-         * name for the site, so reuse it rather than inventing one. */
-        db_session_begin(site_label, session_start);
-        if (db_previous_session_end() > 0)
-            fprintf(stderr, "sloth: previous visit ended %ld\n",
-                    (long)db_previous_session_end());
-    }
+    if (jsonl_path && daemon_open_jsonl(jsonl_path) != 0) return 1;
+    /* sys_status reports the filesystem its output lands on: the
+     * database's, else the JSONL file's. */
+    sys_status_set_disk_path(db_path ? db_path : jsonl_path, db_path ? "db" : "jsonl");
+    if (db_path && daemon_open_db(db_path, site_label, session_start) != 0)
+        return 1;
     if (data_socket) {
-        if (data_socket_init_ex(data_socket, ds_allow_remote) != 0) {
-            /* error already printed by data_socket_init_ex */
+        if (daemon_open_data_socket(data_socket, ds_allow_remote,
+                                    DATA_SOCKET_DEFAULT_SPEC) != 0)
             return 1;
-        }
-        fprintf(stderr, "sloth: data-socket listening on %s\n", data_socket);
-        /* #135: a loopback TCP listener authenticates nobody — every
-         * local account can connect to 127.0.0.1 (CWE-306) — where a
-         * unix: path is created 0600 and the kernel vouches for the
-         * peer's uid. Announced, not changed: the bare-flag default
-         * above is #136's ruling, and MISSION §2 asks that an exposure
-         * be said out loud rather than silently inherited. */
-        if (strncmp(data_socket, "tcp:", 4) == 0 &&
-            data_socket_spec_is_remote(data_socket) == 0)
-            fprintf(stderr,
-                    "sloth: data-socket %s is readable by every local account; "
-                    "prefer unix:/run/sloth/sloth.sock (0600, kernel-checked peer)\n",
-                    data_socket);
         /* #29: advertise the socket over mDNS so the sloth-ios client can
          * discover it by name — but only when it's bound to a routable
          * address (loopback/unix publish nothing) and the operator hasn't
@@ -1548,9 +1898,12 @@ int main(int argc, char **argv) {
         }
     }
     probe_run();
+    mon_radio_run();
+    df_radio_run();
     bt_monitor_run();
     bt_capture_run();   /* after the drop: opens as the run's account */
 #endif
+    gps_reader_run();   /* after the drop: gpsd is dialled from here */
     event_wake_init();
     updater_init(check_manifest);
     if (headless) {
@@ -1566,6 +1919,19 @@ int main(int argc, char **argv) {
     } else {
         tui_init();
     }
+
+    /* Live posture report (#190). Inert with no report path; with one
+     * and interval 0 it writes only on SIGUSR1. */
+    posture_live_t live_report;
+    posture_live_init(&live_report, report_md, report_json, report_interval,
+                      session_start, g_research);
+    if (snapshot_out)
+        posture_live_snapshot(&live_report, snapshot_out, site_label);
+    /* Per-session files past report.retain_days (#190). Only on a run
+     * using the flags that create them, so a one-shot --report user's
+     * directory is never swept. */
+    int report_prune = report_interval || report_history;
+    if (report_prune) prune_report_records(report_md, report_json);
 
     int  first_poll = 1;
     long ticks_done = 0;
@@ -1592,10 +1958,25 @@ int main(int argc, char **argv) {
          * comparison on every poll until the window rolls over; a no-op
          * entirely when nothing is being collected. */
         eapol_maintain(sloth_wall());
+        /* Hourly age sweep over --pcap-dir (#166), one bounded step per
+         * tick so a directory of millions of files cannot stall the loop.
+         * A no-op without --pcap-dir or with pcap.retain_days=0. */
+        alert_pcap_maintain();
         /* Version check-in — cheap-when-idle; only re-reads the
          * manifest on mtime change or after UPDATER_CHECK_INTERVAL_S. */
         updater_tick(sloth_wall());
         updater_snapshot(&g_state);
+        /* Live posture report (#190): due by interval, or asked for by
+         * SIGUSR1. On the main thread after poll_data, where the views
+         * read the same state. A failed write is counted and announced
+         * once (sfile_fail) and the loop carries on: an export problem
+         * never stops capture. The flag is cleared before the write, so
+         * a signal arriving during it asks for one more. */
+        {
+            int now_req = g_report_now != 0;
+            if (now_req) g_report_now = 0;
+            (void)posture_live_tick(&live_report, &g_state, now_req);
+        }
         /* --ticks (#119): the last tick still emits and draws; only the
          * wait after it is skipped, since nothing follows to wait for. */
         int last_tick = max_ticks > 0 && ++ticks_done >= max_ticks;
@@ -1604,7 +1985,7 @@ int main(int argc, char **argv) {
             /* No draw, no key read, no termios. Just wait out the poll
              * interval — honouring the wake fd so an alert still shortens
              * the cycle exactly as it does interactively. */
-            headless_wait(g_state.poll_ms, event_wake_fd());
+            daemon_wait(g_state.poll_ms, event_wake_fd());
             event_wake_drain();
         } else {
             tui_draw(&g_state);
@@ -1616,7 +1997,10 @@ int main(int argc, char **argv) {
     }
 
     if (!headless) tui_cleanup();
+    gps_reader_stop();
 #ifdef WITH_PCAP
+    df_radio_stop();
+    mon_radio_stop();   /* before the ring goes: these threads write it too */
     probe_stop();
     capture_stop();
     bt_monitor_stop();
@@ -1628,8 +2012,9 @@ int main(int argc, char **argv) {
 
     /* Posture reports (roadmap #16 phase 5): rollup of alerts by
      * ATT&CK technique, cleartext exposures, and high-risk devices.
-     * Written once at shutdown so the artifact represents a signed-off
-     * session record — not a partial mid-run snapshot. */
+     * Written here at shutdown so the artifact represents a signed-off
+     * session record; the mid-run copies are the separate live files
+     * (#190, posture_live_tick() above). */
     /* Reports name exposed credentials and high-risk devices: written
      * 0600, and an existing report must already be private — it is
      * validated before truncation, so a refused one is left as it was
@@ -1640,10 +2025,14 @@ int main(int argc, char **argv) {
                                err, sizeof(err));
         if (fp) {
             posture_render_md(fp, &g_state, session_start, g_research);
-            if (sfile_fclose(fp, report_md, err, sizeof(err)) == 0)
+            if (sfile_fclose(fp, report_md, err, sizeof(err)) == 0) {
                 fprintf(stderr, "sloth: posture report -> %s\n", report_md);
-            else
+                /* Signed off: the live file is superseded (#190). Kept
+                 * when this write failed, as the session's only word. */
+                posture_live_retire(&live_report, 0);
+            } else {
                 fprintf(stderr, "sloth: --report %s\n", err);
+            }
         } else {
             fprintf(stderr, "sloth: could not open --report %s "
                             "(report skipped)\n", err);
@@ -1655,15 +2044,43 @@ int main(int argc, char **argv) {
                                err, sizeof(err));
         if (fp) {
             posture_render_json(fp, &g_state, session_start);
-            if (sfile_fclose(fp, report_json, err, sizeof(err)) == 0)
+            if (sfile_fclose(fp, report_json, err, sizeof(err)) == 0) {
                 fprintf(stderr, "sloth: posture-json -> %s\n", report_json);
-            else
+                posture_live_retire(&live_report, 1);
+            } else {
                 fprintf(stderr, "sloth: --report-json %s\n", err);
+            }
         } else {
             fprintf(stderr, "sloth: could not open --report-json %s "
                             "(report skipped)\n", err);
         }
     }
+    /* --report-history (#190): the write above replaces the file the
+     * previous session left, so on a service every restart lost a
+     * record. This keeps one more copy per session under a name built
+     * from the session start, created O_EXCL so no later run can
+     * replace it. Independent of the write above: a refused report.md
+     * does not cost the session its record. */
+    if (report_history) {
+        const char *paths[2] = { report_md, report_json };
+        for (int k = 0; k < 2; k++) {
+            if (!paths[k]) continue;
+            char name[POSTURE_PATH_MAX], err[SFILE_ERR_MAX];
+            if (posture_session_record(paths[k], k, &g_state, session_start,
+                                       g_research, name, sizeof(name),
+                                       err, sizeof(err)) == 0) {
+                fprintf(stderr, "sloth: session record -> %s\n", name);
+                posture_live_retire(&live_report, k);
+            } else
+                fprintf(stderr, "sloth: --report-history %s "
+                                "(record skipped)\n", err);
+        }
+    }
+    /* Again on the way out: a sensor that runs for months between
+     * restarts would otherwise only age records out at its next start.
+     * This session's own record was just written (mtime now), so it is
+     * never inside a window of a day or more. */
+    if (report_prune) prune_report_records(report_md, report_json);
 
     /* Site snapshot export/import (#27) — passive AP inventory, no pcap. */
     if (baseline_in) {
@@ -1679,10 +2096,12 @@ int main(int argc, char **argv) {
      * carries the path, so it is not printed twice. */
     if (snapshot_out) {
         if (wifi_snapshot_write(&g_state, snapshot_out, site_label,
-                                (long)sloth_wall()) == 0)
+                                (long)sloth_wall()) == 0) {
             fprintf(stderr, "sloth: site snapshot -> %s (%d APs)\n",
                     snapshot_out, g_state.beacon_count);
-        else
+            /* Superseded, as the live report is by its signed-off one. */
+            posture_live_retire_snapshot(&live_report);
+        } else
             fprintf(stderr, "sloth: could not write snapshot %s\n",
                     wifi_snapshot_error());
     }

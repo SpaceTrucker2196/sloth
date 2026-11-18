@@ -6,6 +6,7 @@
 #include "runner.h"
 #include "evidence_ring.h"
 #include "sensor_health.h"
+#include "tmp_dir.h"
 
 /* ── Bounded raw 802.11 evidence ring — issue #92 ─────────────
  *
@@ -104,7 +105,8 @@ static int write_tmp(const char *path, const char *text) {
 }
 
 static void test_meminfo_memtotal_is_parsed(void) {
-    const char *p = "/tmp/sloth_test_meminfo_ok";
+    char p[TEST_TMP_MAX];
+    test_tmp_path(p, sizeof(p), "sloth_test_meminfo_ok");
     ASSERT(write_tmp(p,
         "MemTotal:        1048576 kB\n"
         "MemFree:          123456 kB\n"
@@ -118,7 +120,8 @@ static void test_meminfo_memtotal_is_parsed(void) {
 static void test_meminfo_ignores_a_prefix_lookalike(void) {
     /* "MemTotalFoo:" and "SwapTotal:" must not be read as MemTotal, and
        a MemTotal that is not first must still be found. */
-    const char *p = "/tmp/sloth_test_meminfo_lookalike";
+    char p[TEST_TMP_MAX];
+    test_tmp_path(p, sizeof(p), "sloth_test_meminfo_lookalike");
     ASSERT(write_tmp(p,
         "MemTotalFoo:     64 kB\n"
         "SwapTotal:       64 kB\n"
@@ -136,7 +139,8 @@ static void test_meminfo_unreadable_or_malformed_falls_back_to_the_floor(void) {
     ASSERT_EQ((long long)evidence_budget_from_meminfo(NULL),
               (long long)EVIDENCE_BUDGET_FLOOR);
 
-    const char *p = "/tmp/sloth_test_meminfo_bad";
+    char p[TEST_TMP_MAX];
+    test_tmp_path(p, sizeof(p), "sloth_test_meminfo_bad");
     ASSERT(write_tmp(p, "MemFree: 123 kB\nnot a meminfo file at all\n"));
     ASSERT_EQ((long long)evidence_budget_from_meminfo(p),
               (long long)EVIDENCE_BUDGET_FLOOR);

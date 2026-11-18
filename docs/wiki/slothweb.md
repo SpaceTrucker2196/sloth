@@ -3,10 +3,7 @@
 The browser dashboard's server, a separate binary under `web/`. This
 page tracks what has shipped; the design is
 [`docs/web-ui-spec.md`](../../docs/web-ui-spec.md), whose rulings table
-overrides its body. The visual system its graphics should follow is
-[`docs/web-viz-spec.md`](../../docs/web-viz-spec.md): a review of
-every view and a Tufte-derived glyph set, draft as of 2026-10-26, not
-yet built.
+overrides its body.
 
 **Summary**: slothweb is at M6 (#164), the last milestone of #102, on
 top of M5 (#163), M4 (#162), M3 (#161), M2 (#160), M1 (#159), M0 (#158)
@@ -36,12 +33,20 @@ read-only (`--sloth-db`; `SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW`,
 an immutable open where that is what makes no side file, a column
 allow-list enforced by an authorizer), compiles the §9.1 device query
 language to one prepared statement with bound parameters, builds the
-full IEEE vendor table at build time from CSVs the developer fetches
-(never committed; without them, sloth's own table and A4 off), shows
+full IEEE vendor table at build time from the registry CSVs committed
+in `web/data/` since the 2026-10-26 ruling (the generated table is
+never committed; a `WEB_OUI_DIR` without them gives sloth's own table
+and A4 off), shows
 passive names only (active reverse DNS is cut), adds rule A4 and a
 durable A2 from `devices.first_seen`, and serves `/api/devices`,
 `/api/device/{mac}` and `/api/lookup` behind the Devices view, the
-device drawer and the Lookup view. M3 keeps 168 local hour-of-week baseline cells
+device drawer and the Lookup view. A device's risk level is scored from
+`devices.risk_signals` on every read, in every scope, with sloth's
+formula (#191: the anonymity bits one point as a family, a cleartext
+credential and an alert three each, nothing for anonymity on a self
+device, bit 64); the stored `devices.risk_level` is never read, so rows
+an older sloth stored HIGH for three anonymity bits read MED without a
+rewrite ([[capture-scope]] has the score and its SQL). M3 keeps 168 local hour-of-week baseline cells
 per (metric, key) with the MAD ratio, runs nine of §6's ten anomaly
 rules (A4 moves to M4 with the OUI table) as episodes on the buckets
 that just closed, keeps both in `slothweb.db` (schema v3) across
@@ -95,10 +100,52 @@ on an absolute budget.
 `src/jsonl.c` (`jsonl_emit_devices()`, `jsonl_emit_state_snapshots()`),
 `src/db.c` and `src/secure_file.c` (the open and migration rules M2
 re-implements), `src/top_hosts.c` (what `conn_count` counts),
-`src/probe_pnl.c` (what `mac_random` is), issues #102, #157, #158,
-#159, #160, #161, #162, #163 and #164.
+`src/probe_pnl.c` (what `mac_random` is),
+`packaging/systemd/slothweb.service`, `packaging/default/slothweb`,
+`packaging/bin/sloth-migrate-sensor`, `tests/test_unit_file.c`, issues
+#102, #153, #157, #158, #159, #160, #161, #162, #163, #164 and #168;
+and for the Alerts page, `web/src/web_alerts.c`, `web/src/web_alertdb.c`,
+`web/src/web_alertfmt.c`, `web/tools/alertkb.c`, `src/alerts/` (the
+detail formats audited), `include/sloth_alerts.def`,
+`docs/views/alerts.md`, `research/` and [[alert-remediation]]; and for
+the vendor research section, `web/data/vendors/*.md`,
+`web/tools/vendorkb.c`, `web/src/web_vendorkb.h`,
+`web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
+[[vendor-research]].
 
-**Last updated**: 2026-10-26 (the visual-system spec `docs/web-viz-spec.md` linked, draft, nothing built; the restyle's review: the alert-hot override, every monitor-radio record on the monitor rows, closed anomaly cards at full contrast, the spec's §8.1 amended; 2026-10-23 the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
+**Last updated**: 2026-11-18 (one WiFi channel palette, `--ch-*` written and checked in `web/tools/palette.c` and mapped by `web/ui/chan.js`, a chip wherever a channel is shown and the isometric waterfall moved onto it; the greenbar, `web/ui/greenbar.css`; § The restyle, § M5's WiFi); 2026-11-17 (the WiFi waterfall's clients lane and client highlight, `clients` on `/api/wifi/channels?mix=1`; the highlight fade 70 percent transparent; § M5's WiFi); 2026-11-17 (the isometric WiFi and BLE Devices waterfalls coloured by identity: band hue, channel shade and SSID on WiFi, class hue on BLE, with keys; `web/ui/iso.css` `--iso-*`; § M5's WiFi and BLE Devices); 2026-11-17 (the WiFi view's direction-finding card, `web/src/web_df.c`, `web/ui/df.js`, `GET /api/df`: § Direction finding); 2026-11-17 (#218: `alerts.fired` counts an alert
+either daemon raises, not sloth's stream alone; an "alert" record from
+either stream now queues a sample (`web_rollup_queue_add()`) instead of
+adding one directly, so `SENSOR_SOURCE_DOWN` -- the one type both can
+fire -- never gets two writers on one series; the queue drains on the
+tsdb thread's once-a-second tick, same as closing due buckets;
+`/api/health` `alertq_dropped`; § Two daemons, "Alerts" and "Not in
+#214"); 2026-11-16 (#224: the WiFi channel waterfall and the BLE Devices tab's two panels drawn isometrically by default, as the Spectrum tab draws its sweep, through `web/ui/iso.js` (`window.SlothIso`), which now holds the Spectrum tab's projection, back-to-front row painter, hit test and offscreen copy; an `isometric` checkbox per tab, kept per browser as `wifi.iso` / `bledev.iso`, brings back the flat grids; hover names the cell in a tooltip, a click or the arrow keys pick it for the list; no data, route or API change; § M5's WiFi and BLE Devices); 2026-11-16 (the page's title and header read "sloth mesh", the dashboard's repo name under #184; the binary, unit and database keep the name slothweb); 2026-11-15 (#216 review: `rf_stream.reading` names the stream's own `MAJOR`; the ADS-B and APRS stores clear their block on a blockless `sensor_health`; `/api/gnss` carries `rf_stream` and the GNSS tab gives the reason; the rtl_433 and Victron state lines name sloth-rf's flag), 2026-11-15 (#216, the cutover: the RF stream's state, "rf_stream" on `/api/health` and on the four RF tabs' answers; a 2.x `sloth-wifi` on `--socket` with no `--rf-socket` says the RF daemon's stream is not configured; 1.x and 2.x streams are both read and named), 2026-11-15 (#214 review: an alert both daemons raise is one incident; an RF alert's list row, page, triage subject and bundle are sloth-rf.db's and never sloth.db's finding of the same key, its page gives no `d` id; every incident list holds both states; the sensor tile says sloth-rf's word in every scope; `alerts.fired` is sloth's stream's alone, said under "Not in #214"), 2026-11-15 (#214: one slothweb, two daemons. `--rf-socket` and `--rf-db` read sloth-rf beside sloth: a second ingest thread and stream state, each consumer with one writer (`web_ingest.h`'s table), a wrong-daemon guard on `sensor_health`'s `daemon`, the RF history and the fleet's aircraft and GNSS incidents from sloth-rf.db, sloth-rf's alerts on the same pages, `/api/health` `daemons` and `rf_db`, `/api/sys` `host_from` and a third store, the tick's `rf`; without the flags nothing changes; § Two daemons), 2026-11-15 (the Victron tab: `GET /api/victron` (the owner's Victron devices from sloth's `victron_device` records, kept in memory, each with its age and a `stale` mark past 360 s, 660 s for a GATT-only device) and `GET /api/victron/history?mac=&metric=&hours=` (one value of one device from sloth.db v15's `victron_readings`, at most 240 buckets of mean/min/max), `web_victron.c`, `web/ui/victron.js`; per-device cards and a chart per key metric; Monitor scope; not in the fleet; `WEB_SDB_SCHEMA_MAX` 15; [[victron]]), 2026-11-15 (the Spectrum tab's ranges: `GET /api/spectrum?range=last3|1h|5h|12h|24h`, one row per run from `sloth-sdrsweep`'s `history/`, max-pooled to stay near 2 MB, bad records skipped and counted; a range selector kept per browser; rows placed by time with gaps marked; the Run button refused within 120 s of the last run whatever the helper's cooldown; [[sdr-sweep]]), 2026-11-15 (the Camera tab: `GET /api/camera.jpg`, `--camera-dir`, `web_camera.c`, `web/ui/camera.js`; the still is a capture helper's `latest.jpg`, read only), 2026-11-14 (#208: the rtl_433 tab, `GET /api/rtl433`, `web_rtl433.c`, `web/ui/rtl433.js`; Monitor scope; [[rtl433]]), 2026-11-13 (the Spectrum tab: `GET /api/spectrum`, `POST /api/spectrum/run`, `--spectrum-dir`, `--spectrum-request`, `web_spectrum.c`, `web/ui/spectrum.js`; the sweep is `sloth-sdrsweep`'s, [[sdr-sweep]]; the write gate admits that one path without a store and refuses it to an agent), 2026-11-13 (the Radar: fleet areas as traced polygons, devices at their most probable point, hollow when unlocated, Wi-Fi hues `--rw-0..4` by MAC), 2026-11-12 (#187: one BSSID's KARMA detail, `/api/lures/bssid` and `web/ui/karma.js`, from the lures card and the device drawer: its `karma_suspect` row over time, its `KARMA_AP` / `KARMA_PROBE_FORGE` incidents, the `hw_verdict` and the beacon's `probe_lat` (JSONL 1.6.0, now kept by the decoder beside `loc`); `slothweb-mcp`'s `sloth_lures` and `sloth_lure_bssid`), 2026-11-12 (#187, #172: the WiFi view's "lures and key harvesting" card from sloth's `karma_suspect`, `harvest_station` and `harvest_chain` records (JSONL 1.3.0), `/api/lures`, `web_lure.c`; the details of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN` shown), 2026-11-12 (#198: many alerts triaged as one: `POST /api/frrs/triage/bulk` (100 ids at one token), incidents (`POST /api/frrs/incident`, `GET /api/frrs/incidents`, members by id or by a standing filter that auto-joins new alerts, the incident's state read by its members unless one has its own later verdict), `/api/alerts`'s `incident=`, slothweb.db v12 with its migration, the Alerts page's incidents panel, selection and bulk verdict (`web/ui/incident.js`), five `slothweb-mcp` tools; [[slothweb-mcp]]); 2026-11-12 (the stores' size, owner: "track sloth db usage in the host and trends window ... the records tile with long term graph showing the limit for storage": sloth.db and slothweb.db on disk (main file plus `-wal`, `stat()` only) against sloth's `db.max_mb` (from `sensor_health`'s `db_max_mb`, JSONL 1.7.0, or an older sloth's `tuned` list) and `--web-max-mb`; `/api/sys`'s `storage`; the `sys.db_mb` series keyed `sloth` / `slothweb`; a tile per store and a `storage` trend row on Sensor health, and a line and a 30 d G1 on the Overview's records/s tile, each drawn on 0 to the limit with the limit as a rule (glyph.js G1's `limit`); 80 % `near`, 95 % `full`, 0 no limit), 2026-11-12 (#187, #172: the WiFi view's "lures and key harvesting" card from sloth's `karma_suspect`, `harvest_station` and `harvest_chain` records (JSONL 1.3.0), `/api/lures`, `web_lure.c`; the details of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN` shown), 2026-11-12 (#198: many alerts triaged as one: `POST /api/frrs/triage/bulk` (100 ids at one token), incidents (`POST /api/frrs/incident`, `GET /api/frrs/incidents`, members by id or by a standing filter that auto-joins new alerts, the incident's state read by its members unless one has its own later verdict), `/api/alerts`'s `incident=`, slothweb.db v12 with its migration, the Alerts page's incidents panel, selection and bulk verdict (`web/ui/incident.js`), five `slothweb-mcp` tools; [[slothweb-mcp]]); reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
+set: <!-- count:vendors -->276<!-- /count --> entries, most of the
+reference host's vendors covered and the rest pending, `COVERAGE.md`); 2026-10-27 (sensor location: the alert page's "where the sensor was", the drawer's scatter, `/api/positions` with GeoJSON and GPX, the stream decoder keeping sloth's `loc` object, sloth.db v9 read; [[location]]); 2026-10-27 (an alert's proof: `--pcap-dir`, the capture decoded and hash-checked, the assessment and bibliography, the drawer's rows as tap targets); 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (the vendor
+research section under the drawer's and Lookup's OUI card, one cited Markdown file per OUI holder
+in `web/data/vendors/` compiled in at build time, `{found:false}` and
+"no research yet" for a vendor without one, [[vendor-research]]; the
+glyph layer, slice V0 of `docs/web-visual-spec.md`, below; kept
+settings: every control a viewer
+can change kept per browser under `slothweb.v1.*`, each table's widths
+and sort among them, the address still winning, a reset per table and
+one for everything, and its review: a link's filters and scope applied
+but not kept, `show all` clearing, the kind chip on its own list only,
+no other build's keys touched; the capture scope's review: the host's
+ARP table, leases and scan entries stay Local, scoped anomaly counts, z
+and open-anomalies tile, the Records view's scoped counts, the WiFi
+view's Local half from `/api/wifi/local`, [[capture-scope]]),
+2026-10-26 (the capture scope: Monitor, Hybrid and Local
+in the top bar, [[capture-scope]]), 2026-10-26 (the Alerts page on the current tree: its
+titles and details in the display form beside the gate, its lists
+sortable and resizable, its incident totals tested, the drawer's
+slices newest first; the Alerts page's review: one row per key
+from the stream too, slothweb's own incident handle in place of sloth's
+invertible `incident_id`, the filters inside the bounded reads, History
+and the drawer counting past the scan, one count on the list and the
+alert's page, a short "what it is"; before it the Alerts page, an
+alert's page, the Overview's tiles as links; earlier the same day #153 third review: signal syscalls denied, `ReadOnlyPaths=-`; #168: the date on a freshness line that is not today's; #153: `slothweb.service` and `--with-slothweb`; #168: sloth.db freshness on the DB-backed views; the channel mix's review: assoc out of the mix, late transmitters tracked exactly, alert text and blank lookalikes escaped, addresses sorted by number on the server; the History strip on a large sloth.db: its own 1500 ms budget, per-cell counts by sloth's new first_seen indexes or a last_seen-bounded read without them, a 60 s cache per file state, a timeout that names its read; the IEEE registry CSVs committed in `web/data/` by owner ruling, `make update-oui`, the generator's multi-file hang fixed; #170: `/api/history/alerts` and the deauth episodes overlap a range from the latest incident's start; the restyle's review: the alert-hot override, every monitor-radio record on the monitor rows, closed anomaly cards at full contrast, the spec's §8.1 amended; 2026-10-23 the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
 
 ---
 
@@ -117,6 +164,13 @@ slothweb still never injects anything onto a monitored segment, never
 resolves a name (its bind address included) and never writes to
 `sloth.db`.
 
+Since #214 it can sit beside two daemons (ADR 0010,
+[[architecture-rf-split]]): `sloth` on `--socket` and `--sloth-db`,
+`sloth-rf` on `--rf-socket` and `--rf-db`, both read-only, neither
+written. Without the two new flags it is the consumer of one sloth it
+always was, and every route answers what it answered before
+(§ Two daemons).
+
 ## Milestones
 
 | Slice | Issue | State |
@@ -129,6 +183,7 @@ resolves a name (its bind address included) and never writes to
 | M4: sloth.db read-only, query language, OUI table, passive names, A4, durable A2, Devices, drawer, Lookup | #162 | shipped (active reverse DNS cut by the rulings) |
 | M5: WiFi and History views, sessions and new-since, SQL box behind `--web-allow-sql` | #163 | shipped (three of the eight recipes are refused: two read a withheld column, one `dbstat`) |
 | M6: Flows view, polish, README security section, screenshots | #164 | shipped (`mqtt_flows` not read; Kerberos' preauth counts off the allow-list) |
+| F0-F4: alert triage, the FRRS emitter record, the TACDB tab (owner request 2026-10-27) | - | shipped 2026-11-01; F5 (the vendor KB's certification data, the compiled assessment table) waits on the other sessions' files |
 
 ## W0: the access boundary before any route
 
@@ -244,8 +299,9 @@ generated file is never committed, and the embedder is C99 built with
 the same compiler, so the build gains no tool.
 
 The policy is `default-src 'none'` with `script-src` and `style-src`
-naming the SHA-256 of the page's one `<script>` and one `<style>`, and
-`connect-src 'self'` for the health read and the stream. A browser
+naming the SHA-256 of the page's one `<script>` and one `<style>`, `img-src data:` for the two inline PNGs (the sloth in the header, the
+favicon: bytes in the page, never a fetch), and `connect-src 'self'`
+for the health read and the stream. A browser
 therefore refuses any fetch the page did not already make, and an
 injected inline block would not run either. `'unsafe-inline'` is never
 used.
@@ -260,7 +316,9 @@ with `If-None-Match`, answered `304` until a rebuild changes the page.
 JSON with `service`, `milestone`, `uptime_s`, `sse_clients` and
 `tick_seq`, plus `socket`, `last_record_age_s`, `db`, `db_schema` and
 `db_rows`, which are `"none"` or `null` until M1 and M4 have something
-to report. `Cache-Control: no-store`.
+to report, and `hostname` (the machine slothweb runs on, from
+`gethostname()`, or `null`), which the page header shows after "sloth · web"
+so two sites' pages cannot be mistaken for each other. `Cache-Control: no-store`.
 
 ### `/events`
 
@@ -299,6 +357,11 @@ refuses a non-loopback `tcp:` address; without it one is announced.
 reconnects, closes, the current back-off, the last error (slothweb's own
 words), bytes, lines, decode errors by reason and sloth's `socket_gap`
 markers.
+
+With `--rf-socket` a second thread of the same kind reads sloth-rf's
+stream into a second `web_live_t`, with the same back-off; a socket
+that is not there is retried, not an error, so one unit file serves a
+host with sloth-rf and a host without (§ Two daemons).
 
 ### Untrusted input
 
@@ -349,6 +412,11 @@ and heals as incidents update or resolve. `sensor_health` is change-only
 with a 300 s heartbeat; its state is `ok`, `degraded` (a handle open
 behind a stopped thread, or the launch scope not enforced, #85/#91),
 `not_observing`, `stale` after 330 s without one, or `unknown`.
+sloth-rf's `sensor_health` (with `--rf-socket`) is kept in its own
+state and never touches these: its word is `ok`, `stale` or `unknown`
+(it has no capture to be degraded), and its open incidents are counted
+and listed with sloth's, each stream's reconnect clearing only its own
+(§ Two daemons).
 
 ### The page
 
@@ -389,8 +457,10 @@ Bucketing uses slothweb's clock, never a record's `ts`.
 
 10 s for 24 h, 1 min for `--web-retain-days` (30), 1 h for 400 days,
 each bucket with sum, count, min and max. Keys are bounded per class:
-`--web-max-keys` device MACs (512) and half that many host IPs, least
-recently seen out first, evictions counted on `/api/health`;
+`--web-max-keys` device MACs (512), half that many host IPs and, since
+#177, as many BLE advertiser addresses in a class of their own
+(`rf.rssi.ble`), least recently seen out first, evictions counted on
+`/api/health`;
 interfaces (32), channels (64) and alert types (128) each have a class
 sized from sloth's own bounds; global metrics are always kept. Those
 three come from catalogues no peer can churn, so their keys count as
@@ -466,6 +536,56 @@ paging. Every parameter is validated first: known names only, each
 once, percent-decoded to printable ASCII, the key through the metric's
 canonicaliser, the range non-empty, at most a day ahead and no longer
 than the tier keeps. `/api/keys` and `/api/metrics` feed the pickers.
+**Every key on the one graph (2026-11-11, owner request and ruling).**
+The graph draws one key and the other keys are small multiples. The
+`keys: one` button in the graph's label row turns to `keys: all` (kept
+per browser as `act.allkeys`; one key stays the default), and the graph
+then draws every key of the metric, one line a key on one shared
+y-scale, each in the key's hash colour: `src/ip_color.c`'s hash of the
+key through the page's `ipColorIndex()`, the same `--k-0..7` that key
+has as an address or a device swatch, so it is the same on every load
+and in every view. Eight colours repeat past eight keys, so the legend
+under the graph is ranked and numbered (latest value, largest first,
+and it says so), the top five lines carry their rank and key at their
+right end, and hovering or focusing an entry or a line draws it last in
+its colour with every other line grey (`--faint`, a step above the
+`--rule` it first was: 2.84:1 on the dark `--bg` against 1.65:1); a click (or Enter) picks a key
+and holds that until the same entry, `show every key` or Esc. A picked
+key gets its band; with every key shown there is none, and the caption
+says why. A device's entry opens its drawer. A presence metric has no
+line, so its keys are stacked strips, a row a key in the same order and
+colours. "Every key" is every key (owner ruling of 2026-11-11, "lift
+the cap"): the keys the rollup holds and the keys the store holds a
+bucket of in the window, so an evicted key is still drawn; not the key
+picker's 256, which the picker keeps (a picked key it does not hold is
+said in the caption). The page reads them a page at a time and draws
+what has arrived, the caption saying `loading 3968 of 8212 keys`; a
+change of metric, scope or window drops the read and leaving the view
+stops it. What bounds it is said, never silent: the graph holds 8,192
+keys (`--web-max-keys`' maximum; `8192 of 8212 keys, the first by key
+(the graph holds 8192)`) and a read stops at 60 s. Past 256 keys the
+256 largest are lines and the rest are drawn as the range they span in
+each cell, because a line costs its length in pixels and 8,192 of them
+painted in 88 ms; the caption says `lines for the 256 largest, the
+other 7936 as their range a cell`, and picking or hovering any key
+draws its line. The legend keeps 200 entries in the page at once
+(`show 200 more`) under a filter box on the key's text. The data is
+`/api/series/all` (`web/src/web_allkeys.c`): each key's buckets merged
+into at most 480 cells, fewer once there are many keys (64 at 8,192; a
+gauge's mean, a counter's sum, presence's any; the caption names the
+cell), keys in byte order, at most 128 to an answer and fewer when the
+answer is full or has run 100 ms, `more` and `next` for the rest,
+`total` on the first. Measured (`test_allkeys.c`, against the 250 ms
+request budget): the fullest answer 15 ms from memory and 32 to 37 ms
+from the store; 8,192 keys walked from the store in 64 answers and 89
+to 100 ms, the slowest 5 ms; from a full fine ring in 3.8 to 4.0 s, the
+slowest 71 to 100 ms. In headless Chrome: 8,192 keys read and drawn in 0.7 s
+over 65 requests, the first 128 on the graph inside 142 ms; the graph
+paints in 4 to 5 ms at 8,192 keys, 6 to 7 at 4,096 and 23 to 28 at
+1,024 and at 256 (the same 256 lines of 480 cells). This is the one place a line is not one ink (R1 of
+`docs/web-visual-spec.md`, set aside for this mode by the ruling at its
+head). `web/ui/allkeys.js`, `web/README.md` "Every key on one graph".
+
 The Activity view draws the selected series as a line on Canvas 2D,
 over its M3 baseline band where there is one and its per-bucket min..max
 band where not, with a small multiple per key (the loudest top left)
@@ -569,7 +689,8 @@ The full account is in
   restarting beside slothweb never meets `SQLITE_BUSY_RECOVERY`. A
   VFS that never creates a named file covers a sloth closing between
   the choice and the read. `query_only`, `DEFENSIVE`, a 100 ms busy
-  timeout and a progress budget (250 ms a request) mean a slow read is
+  timeout and a progress budget (250 ms a request, 1500 ms for the
+  History strip, which counts every row in its range) mean a slow read is
   slothweb's `503`, never sloth's stall; sloth's own `db_open()` waits
   out another reader's lock for 1 s (`DB_BUSY_MS`). A hot rollback
   journal is an error that sloth clears, not "not a sloth.db". Schema
@@ -590,8 +711,23 @@ The full account is in
   escaped; fuzzed by `fuzz_web_query`.
 - **Vendor table** (§9.2): MA-L, MA-M, MA-S and IAB from
   `web/data/*.csv`, generated into `build/web/`; most specific block
-  first; local and group bits always reported. No CSV: sloth's 117
-  entries, said so on `/api/health` and the Lookup card.
+  first; local and group bits always reported. Since the 2026-10-26
+  owner ruling (reversing 2026-10-21's) the four CSVs are committed:
+  Debian's `ieee-data` 20260625, 39,627 MA-L, 6,451 MA-M and 11,639
+  MA-S/IAB assignments, their origin and SHA-256 in
+  `web/data/SOURCE.md`, refreshed by hand with `make update-oui`
+  (`/usr/share/ieee-data`, else the IEEE; never a build or CI step). So
+  the default build has the full table and A4 is on; the binary grows
+  from 0.5 MB to 3.3 MB, the build time barely moves (7 to 8 s clean).
+  A `WEB_OUI_DIR` without CSVs: sloth's 117 entries, said so on
+  `/api/health` and the Lookup card; CI builds and tests that fallback.
+  The same day fixed a hang in the generator: each CSV had its own
+  4,096-slot name index that rehashed every earlier name, so after
+  `oui.csv` the second file never finished; one index for the build,
+  sized for its names, now. The demo's MACs are all locally
+  administered, so on the demo no device gets an IEEE vendor and A4
+  never fires; the table shows through Lookup on a globally
+  administered MAC, or on real traffic.
 - **Passive names** (§9.3 minus the active half): sloth.db's and the
   stream's DHCP, mDNS and NBNS names, sloth's hostname, and a passive
   PTR cache (`slothweb.db` v4, `passive_ptr`, 4,096 addresses). The
@@ -609,6 +745,25 @@ The full account is in
   strip, the week heatmap, the episodes) opened from a row or an
   anomaly card, and Lookup. `textContent` only; no request off the
   page's own server.
+- **Vendor research (2026-10-27).** The drawer's last block (since
+  2026-11-11, owner request: it was under the OUI card, above the
+  names; `#dr-vendor`, after the FRRS record) and under the OUI card on
+  the Lookup card: what `web/data/vendors/` documents about the
+  block's holder (kind, country, parent, founded, device classes,
+  products found carrying it, radios, documented silicon, FCC grantee
+  codes, randomisation, security notes, summary, numbered sources),
+  each field with a confidence word and every claim with a `[n]`,
+  compiled in by `web/tools/vendorkb.c`; `"vendor_research"` on both
+  routes, `{found:false}` and "no research yet for <name>" for a
+  vendor without a file. Sources as plain text lines, never links.
+  <!-- count:vendors -->276<!-- /count --> entries today, covering most
+  of the reference host's vendor names; the rest are pending because
+  nothing public ties them to a company (`web/data/vendors/COVERAGE.md`
+  lists both and carries the totals, held to the lists by the test). A
+  registrant that is a separate company in an entry's group (an
+  affiliate) finds the entry marked as another company's, its country,
+  parent and founded left unknown. [[vendor-research]] has the format,
+  the coverage and the rules the build enforces.
 
 ## M5: WiFi, History and the SQL box
 
@@ -624,15 +779,122 @@ In short:
   `/api/wifi/aps`: `beacon_aps` through the M4 allow-list, AKM bits
   decoded to suite names (`src/rsn_ie.c`'s), downgrade flags by name
   (`WPA_DG_*`), MFP, SSID history and count, KARMA score; an SSID count
-  above 1 in `--sev-warn`. `/api/wifi/deauth`: frames per bssid with
+  above 1 in `--sev-warn`. Since v5 of slothweb.db each cell of the
+  grid is also a stacked bar of the five busiest transmitters on the
+  channel in it (`/api/wifi/channels?mix=1`, from the frame counts of
+  `beacon` and `probe_client`, a station's on the channel of its latest
+  probe; `assoc` counts both ends' frames and is left out; APs in their
+  SSID's colour, clients in their MAC's), with a heat strip per row for
+  its busyness and the five listed on hover, tap or the arrow keys.
+  Since #224 (2026-11-16) the panel is drawn isometrically by default
+  with `web/ui/iso.js`, the Spectrum tab's projection and row painter:
+  the channels across in the band order above, each band named under
+  its channels, the time cells receding up and to the right with the
+  newest in front, each column's height and heat its cell on one scale
+  for every channel, 0 to the window's largest cell (the stacked
+  grid's heat scale; G3's per-channel tops would make the heights
+  incomparable). Hover names the channel, the cell's time and value in
+  a tooltip; a click, a tap or the arrow keys (left and right a
+  channel, up older, down newer) pick the cell for the list of its
+  five. The `isometric` checkbox (kept as `wifi.iso`, `false` when
+  flat) brings back the flat panel below, with its own arrow keys.
+  Since 2026-11-17 (owner: "on the spectrum displays for wifi and
+  bluetooth I want you to color code finding by band channel and
+  ssid") colour on the isometric panel says which and the height how
+  much: each channel is its colour from the page's one channel palette
+  (since 2026-11-18, below under the restyle: 2.4 GHz cool, 5 GHz warm,
+  6 GHz violet, the same colour as in every list) on a strip under the
+  channel names and each column's top edge, a band's name in its first
+  channel's; the key groups the channels, as chips, under their band's
+  802.11 structure in words (2.4 GHz: 1, 6 and 11 against the
+  overlapping rest; 5 GHz: UNII-1 to 48, UNII-2A 52 to 64, UNII-2C 100
+  to 144, UNII-3 149 to 165, by channel number, the two DFS sub-bands
+  dashed on the strip, and "other" for the rest (68 to 96, UNII-2B, in
+  no US plan; 169 and up, UNII-4); 6 GHz: the preferred scanning
+  channels, ch % 16 == 5, against the rest); a column's body is the cell's five busiest transmitters
+  stacked by share as the stacked grid draws them, an AP in its SSID's
+  colour (`--k-*`, the same on every tab and both bands), a client in
+  its MAC's, the rest and a cell with no transmitter detail in the
+  channel's colour. A key under the canvas names every step and the
+  window's SSIDs (busiest first, a dozen, then "+N more"); pressing an
+  SSID fades every other one to 70 percent transparent (owner,
+  2026-11-17: "when highlighting an ssid on the water fall make all the
+  others 70 percent transparent"; `ISO_FADE`, 0.3 of the colour kept)
+  until pressed again (nothing kept). The tooltip adds the channel's
+  step in words; no label was dropped (`test_iso.c` counts the grid's
+  text calls). Colours: the channels' `--ch-*` (`web/tools/palette.c`,
+  through `web/ui/chan.js`), both themes; `web/ui/iso.css` holds BLE's.
+  Since 2026-11-17 (owner: "the spectrum should show where the clients
+  sit in the spectrum highlighting their channel") a clients lane runs
+  under the band strip: a diamond under each channel the window's
+  clients were named on, sized by how many against the busiest channel,
+  the count beside it where it fits and the lane named "clients" at
+  left; it is coloured as the busiest of them, by its AP's SSID (the
+  same `--k-*` colour as that AP's segments, so a network's clients
+  group with its APs) or, with no AP known, by its MAC. A tick at the
+  foot of a column marks a cell that named a client. The key gains a
+  Clients group (the busiest dozen, then "+N more"): vendor, the MAC's
+  last three octets, "randomised" for a locally administered MAC and
+  "→ SSID" for its AP, all text. Pressing one traces its channels'
+  floors in their channel colours, puts a bar on the cells it was named in
+  and fades every other cell by the same 70 percent; pressing it again
+  clears it. An SSID and a client are not highlighted together: pressing
+  either drops the other. The tooltip adds the clients named in the
+  cell and, with one picked, its frames there. What a count can say:
+  a client is a station whose probe requests sloth reported (data
+  frames are not in the mix), on the channel of its latest probe, and
+  the mix names five transmitters a bucket, so a client is seen only in
+  a bucket where it was one of the five: every count is a floor, and a
+  client that never made a bucket's five is not listed. The answer:
+  `/api/wifi/channels?mix=1`'s rows gain `clients` (per cell, the
+  distinct clients named; `null` where the cell is) and the answer a
+  `clients` list (busiest first, at most 64 in 16 KB: `id`, `vendor`,
+  `laa`, `frames`, `first`/`last` bucket bounds, `chans` as
+  `[key, frames, hex]` with the hex a bit a cell, first cell the high
+  bit, `chans_more` past 8 channels, `tx` its index in `tx` or `null`,
+  and `assoc`: sloth.db's newest `assocs` row, else the stream's newest
+  `assoc` record (`web_chmix_assoc()`, in memory only), with the AP's
+  SSID named as its own `tx` entry is), `clients_total`,
+  `clients_more`, `clients_cell_cut` (a cell past 32) and
+  `clients_db_cut` (sloth.db's budget spent before every client's AP
+  was read; the rest from the stream). Tests: `web/tests/test_chmix.c`
+  (`test_mix_route_clients*`), `web/tests/test_iso.c`
+  (`test_client_lane_pinned`).
+  Every SSID, and every alert title and detail (sloth writes the SSID
+  into them as it came), is sent in a display form (`\xNN` for any
+  octet that is not printable UTF-8, Default_Ignorable code points and
+  blank lookalikes included, flagged "non-printable"), coloured over its
+  octets as the TUI colours it. Every table on the page sorts by a
+  column (in place, by the column's type; server-paged ones through the
+  route's checked `sort` word and `dir=asc|desc`, addresses by number on
+  the server too) and resizes by its header's edge
+  (drag, arrows, double-click to fit), widths and sort kept per table
+  in the browser with a `reset columns` control ([Kept
+  settings](#kept-settings-2026-10-27)).
+  `/api/wifi/deauth`: frames per bssid with
   DEAUTH_FLOOD episodes matched on the predicate-only alert key. Probe
   clients from `/api/series` over the M3 band.
 - **History** (§8.10). `/api/history/overview` (the 30 d strip: devices
-  first seen and alerts begun per cell, sessions as markers),
+  first seen and alerts begun per cell, sessions as markers; counted per
+  cell over sloth's `idx_<t>_first_seen`, or without it bucketed from
+  the rows in range, found by `last_seen` when most of the table is
+  older; cached 60 s per sloth.db state, the `-wal`'s included; a
+  timeout names the read, the rows it had counted and how it was
+  reading them (`plan`); 1500 ms is 6–12 times the snapshot's idle
+  desktop scan, 1.3–5 times a loaded one — see [[sqlite-schema]] and
+  `web/README.md`),
   `/api/history/devices` (who was here: `[first_seen, last_seen]`
   overlapping the range, presence over the range and nothing past it,
   from the hour tier as well for a range older than
-  `--web-retain-days`), `/api/history/alerts`
+  `--web-retain-days`), `/api/history/alerts` (an alert row is a
+  finding since sloth's schema v8, #170: it matches a range from its
+  latest incident's start, `incident_first_seen`, not from the
+  finding's `first_seen`, so a range inside the quiet gap between two
+  incidents does not list it; since v11, #175, a key with rows in
+  `alert_incidents` is read from those, so its `sev`, `count`,
+  `first_seen` and `incidents` are the incidents' in the range — a key
+  CRIT once and LOW since reads LOW in a range holding only the LOW
+  one — and an earlier incident in the range lists it at all)
   and `/api/history/flows` (no key, detail, cookie or username;
   `mqtt_flows` not read), `/api/sessions` and `/api/sessions/new`:
   `--report`'s new APs, devices and probe clients since the previous
@@ -695,8 +957,8 @@ The full account is in
   `window.history`: a local `history()` once hid the global and the
   call failed silently), and a memory-only build's pages saying it
   cannot read sloth.db.
-- **The README** (`web/README.md`): prerequisites, build (with the
-  optional IEEE CSV fetch), the demo, running beside sloth (the socket
+- **The README** (`web/README.md`): prerequisites, build (the committed
+  IEEE CSVs and `make update-oui`), the demo, running beside sloth (the socket
   and its permissions, `--sloth-db`, `--store`), opening the page; a
   troubleshooting table of every start-up message, scraped from the
   source by `test_readme.c` so an undocumented one fails the suite; and
@@ -758,6 +1020,1987 @@ and the contrast table, is `web/README.md`'s Design section.
   until it reads at 4.5:1 on both the light `--bg` and `--panel`.
   Canvases read their colours from the custom properties and are
   redrawn on a toggle.
+- **WiFi channels** (owner 2026-11-18: "a consistent color palette for
+  wifi channels both 2.4 and 5ghz that's used throughout the app when
+  device or ssid is shown. use cool colors for 2.4 ghz and warm colors
+  for 5ghz"). One colour per 20 MHz channel, written for both themes in
+  `web/tools/palette.c` (`CHAN[]`) and emitted as `--ch-N` (2.4 GHz 1
+  to 14 cool, 5 GHz 36 to 177 warm) and `--ch6-0..3` (6 GHz, a violet
+  family of four steps); a channel in no table is `--muted`.
+  `web/ui/chan.js` (`window.SlothChan`) is the only mapping. A channel
+  shows as a chip, its number on its colour, wherever an AP, station,
+  device or SSID is shown with one (the AP table, the card's scan, the
+  device drawer's associations, the fleet's lines, the SSID drawer, the
+  direction-finding emitters, the waterfall's cell, key and canvases);
+  SSID names keep their hash colour. The build fails on a fill under
+  3:1 on `--bg`, `--panel` or a stripe, on the chip's ink under 4.5:1,
+  and on CIEDE2000 floors in either theme: sorted neighbours 20, 1, 6
+  and 11 25, any two 2.4 GHz 7, any two 5 GHz 4 (28 warm hues on
+  cream cannot all stand further apart; the number tells them apart), 6
+  GHz steps 8, bands and `--muted` 10. `web/README.md`'s Design section
+  has the table.
+- **Greenbar** (owner 2026-11-18: "like greenbar paper make an
+  alternating pattern in lists where the alternate bar color is the
+  background but 8% lighter"). `web/ui/greenbar.css`: every list's and
+  table's even data rows take their surface 8% toward white, in the
+  light theme 8% toward black (the cream has nowhere lighter to go);
+  a monitor row alternates on `--mon-bg`; hover, selection and monitor
+  grounds win (the rules weigh nothing, `:where()`); the virtualised
+  device table marks its rows by index. On a stripe, the light theme's
+  data colours read about 3.8 to 4.5:1 and a few dark ones about 4.0
+  to 4.5:1 (`make web-contrast` lists them).
+
+## Deployment and freshness (#153, #168)
+
+- **The unit.** `packaging/systemd/slothweb.service` runs slothweb as
+  `sloth`, the sensor's own account (its state dir is `0700 sloth`,
+  its socket `0600 sloth`), with both capability sets empty,
+  `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome=yes`,
+  `/var/lib/sloth` in `ReadOnlyPaths=` (with `-`, so a host whose sensor
+  never started still runs it), `RestrictAddressFamilies=AF_UNIX
+  AF_INET AF_INET6`, the signal syscalls denied (the shared uid could
+  otherwise stop or kill the sensor; [[deployment]] §6 states the
+  tradeoff) and its own `StateDirectory=slothweb`. `ExecStart`
+  fixes `--socket unix:/run/sloth/sloth.sock`, `--sloth-db
+  /var/lib/sloth/sloth.db` and `--store /var/lib/slothweb/slothweb.db`;
+  `/etc/default/slothweb` adds the bind (loopback when empty; the
+  Tailscale recipe with `--web-allow-remote` and a single `/32` is in
+  the file, commented, with placeholder addresses). `make install`
+  places the binary, `make install-service` the unit and, no-clobber,
+  the defaults. `sloth-migrate-sensor --with-slothweb` installs, starts
+  and verifies it after the sensor ([[deployment]] §4.3, §6).
+- **The live file, read in place.** As `sloth`, beside a running
+  sensor, slothweb opens `sloth.db` as a WAL reader (`readonly_shm=1`)
+  and makes no file beside it; `test_same_uid_reader_beside_a_writing_sloth`
+  holds that with the directory made `0500` and `sloth.db`, its `-wal`
+  and `-shm` `0400` for the reads (the read-only mount, by mode) and a
+  writer of the same uid committing between them. It does not pin
+  `readonly_shm` itself: with the `-shm` unwritable SQLite reads it
+  read-only either way, as under the real mount;
+  `test_crashed_sloth_restarts_beside_a_reader` does.
+- **How old the database is.** `/api/health` carries `sloth_db_mtime`
+  (the file's, or for a WAL reader the newer of the file's and its
+  `-wal`'s) and `sloth_db_age_s`, and `sloth_db_stale` (older than
+  `sloth_db_stale_after_s`, 600 s, while the stream is current). The
+  Devices, WiFi access-point, Flows, History and Lookup views each say
+  `database as of HH:MM` (the date in front when it is not today's),
+  in the warning colour with the age when
+  stale. A `--sloth-db` copy replaced by `rename(2)` is read from the
+  next request; `web/README.md` gives the checkpoint-safe refresh
+  (`sqlite3 ... ".backup"`, then a rename).
+- **Two daemons.** A unit that passes `--rf-socket
+  unix:/run/sloth-rf/sloth-rf.sock` and `--rf-db
+  /var/lib/sloth-rf/sloth-rf.db` (packaging is #215) runs the same on a
+  host with sloth-rf and on one without: the socket is retried and the
+  missing file reported, as the first pair are. `/api/health` `rf_db`
+  carries sloth-rf.db's `mtime`, `age_s` and `stale`, by the rule
+  above against sloth-rf's own stream.
+
+## Two daemons (#214, 2026-11-15)
+
+ADR 0010 splits the sensor into `sloth-wifi` (Wi-Fi, IP, BLE; `sloth`
+is a symlink to it, and "sloth" below is that daemon) and `sloth-rf`
+(GNSS records, ADS-B, APRS, rtl_433, Victron), each with a data socket
+and a database of its own. Since the cutover (#216, JSONL 2.0.0)
+`sloth-wifi` no longer reads the decoders at all, so the second source
+is the only source of the RF tabs: § The RF stream's state, below. slothweb's whole pipeline assumed one of
+each ([[architecture-rf-split]] §6). #214 gives it the second, behind
+two flags that default to absent: `--rf-socket SPEC` and `--rf-db PATH`
+(`web_config.c`; parsed and refused as `--socket` and `--sloth-db` are,
+and refused when either names what its counterpart or `--store`
+names).
+
+**One writer per consumer.** A second `web_ingest_t` reads sloth-rf's
+stream into a second `web_live_t`. `web_feed_t` has a role, and
+`split_line()` (`web_ingest.c`) routes by it:
+
+| Consumer | sloth's stream | sloth-rf's stream |
+|---|---|---|
+| its own `web_live_t` | every record | every record |
+| `web_metrics`, `web_frrs`, `web_ble`, `web_lure`, `web_chain` | every record but the RF-owned ones | never |
+| `web_adsb`, `web_aprs`, `web_rtl433`, `web_victron` | never | their records and `sensor_health` |
+| `web_gnss`: sky, fixes, satellites | never | `gnss_*` |
+| `web_gnss`: health block and position | `sensor_health`, into the fallback slots | `sensor_health`, into the served slots |
+| `web_sysstat` | `web_sys_record_from(WIFI)` | `web_sys_record_from(RF)` |
+| the rollup | through `web_metrics_record()` | `web_metrics_rf_sample()` |
+
+An RF-owned record is a `gnss_*`, `adsb_*`, `aprs_*`, `rtl433_*` or
+`victron_*` record, or a `source_status` row of `adsb`, `aprs`,
+`rtl433` or `victron`. On sloth's socket it is counted by the live
+state and applied nowhere. That is what removes the hazards the
+inventory names: sloth's `sensor_health`, which has no rtl_433 block,
+can no longer reach `web_rtl433.c`'s `sh_apply()`, which clears the tab
+on such a record; a `sloth` that still has its RF flags (an unsplit
+1.x sensor; a 2.x `sloth-wifi` refuses them)
+cannot double a series or a row. That is the records. An alert both
+daemons raise is a separate matter, under **Alerts** below.
+
+`web_metrics_t` has no lock and stays one thread's. sloth-rf's stream
+never reaches `web_metrics_record()`; the series its records feed (the
+four `gnss.*`, `source.*` for its rows, and `sys.*` on a host where it
+reports the host) are added straight to the rollup, which has its own
+mutex. The two threads never add to one series directly: a bucket
+closes when a sample of a later bucket arrives, so two clocks a
+microsecond apart at a bucket's edge could close it twice, and that is
+why `records.rate` and `records.total` stay sloth's stream's alone
+rather than counting both. Every consumer both threads call
+(`web_gnss`, `web_sysstat`, the rollup) already took its own mutex on
+every call; no lock was added.
+
+`alerts.fired` is the one series this does not hold for (#218): either
+daemon can fire `SENSOR_SOURCE_DOWN`, so an "alert" record from either
+stream calls `web_rollup_queue_add()`, not `web_rollup_add()`. The
+sample waits in a small fixed queue (`WEB_ALERTQ_CAP` rows, under the
+rollup's own mutex) instead of touching the bucket; `web_rollup_close_due()`
+and `web_rollup_close_all()` -- the tsdb thread's alone, once a second
+-- drain it in queue order before closing anything due. So
+`alerts.fired` still has one writer, the tsdb thread, for every key;
+neither ingest thread ever calls the bucket-mutating code for this
+metric. A full queue drops the new row and counts it
+(`alertq_dropped`, `/api/health`), the same shape as the rollup's other
+bounded queues.
+
+**GNSS.** Both daemons report the receiver's health and `loc_*`
+(ADR 0010, ruled 2026-11-15); only sloth-rf writes `gnss_fix`,
+`gnss_sky` and `gnss_sat`. With `--rf-socket`, sloth-rf's stream is
+`web_gnss_record()`'s only caller, and sloth's `sensor_health` goes to
+`web_gnss_record_fallback()`, which keeps its position and health block
+apart. `/api/gnss`'s `sensor` and `loc`, the Radar's centre and the
+fleet's site read sloth-rf's when it has given one and sloth's
+otherwise. The precedence is fixed, so nothing flaps between two
+writers; the fallback is why a host with a GPS on `sloth` and no
+sloth-rf (the unit passes both flags everywhere) keeps its Radar
+centre. Simply taking everything from the RF stream would have blanked
+that host's position.
+
+**The host status.** `sys_status`, `sys_sensor` and `receiver_hw` are
+sloth's once sloth has sent a `sys_status`, and sloth-rf's until then,
+so a host that runs sloth-rf alone still shows its CPU and
+temperatures and a host with both never has the batch written by two.
+The `gnss` source row, which both report, is sloth-rf's once it has
+reported one that is configured. Each daemon's `db_max_mb` is its own
+store's limit.
+
+**The wrong daemon.** `sensor_health` carries `daemon`. With
+`--rf-socket`, one that says `rf` on `--socket`, or does not say `rf`
+on `--rf-socket`, is counted (`wrong_health`), applied to nothing, and
+so is every record after it on that connection (`wrong_records`) until
+a right one or a reconnect. It is a second guard behind the routing,
+and best effort by design: a daemon does not replay its state to a new
+client, but the client count is in `sensor_health`'s change signature
+(`socket_clients`, `src/jsonl.c`), so a connect brings one on the
+daemon's next tick, and the records ahead of it pass the routing table
+like any others. A client that leaves in the tick this one joins leaves
+the count unchanged, and the guard then waits for the heartbeat. Without
+`--rf-socket` there is no guard: a host that runs sloth-rf alone and
+points `--socket` at it works as it did.
+
+**The second database.** `web_m4_t.sdb_rf` and `web_fleet_src_t.rf`
+carry a second read-only `web_slothdb_t`. `web_m4_rfdb()` and
+`web_fleet_src_rfdb()` answer "where are the RF tables": `--rf-db`
+when given, else `--sloth-db`, exactly as before. Read through it:
+`web_rfhist.c`, `web_aprshist.c`, `web_victron.c`'s history,
+`web_fleetview.c`'s "held here" for the aircraft inventory,
+`web_fleetadsb.c`, `web_fleetgnss.c`, and in `web_fleet.c`'s export the
+GNSS incidents, the receiver's coverage and the aircraft, on a
+connection and a budget of their own. The export's device, AP and
+alert lines are sloth.db's; sloth-rf.db's `devices` and `alerts`
+tables are never read by it ([[fleet]]). A `--rf-db` that is missing is
+a `503` on those routes, never a read of the other file. The SQL box
+is `--sloth-db`'s only.
+
+**Alerts.** sloth-rf's alert lifecycle records are tracked in its own
+`web_live_t`. `web_live_set_peer()` hands that state to sloth's, and
+`web_live_incidents()`, `web_live_incident()` and the open counts
+(`web_live_summary()`, `/api/live`, the tick) then read both, so
+`/api/alerts`, an alert's page by its handle, the ADS-B tab's
+emergency rows, triage and the Overview show a `GNSS_*` or
+`ADSB_EMERGENCY` raised by sloth-rf beside sloth's. Two states' `seq`
+counters say nothing of each other, so the merged list orders by
+`last_ts`. Every caller sizes its list `WEB_LIVE_INC_ALL` (both
+states' open and closed), so a busy sensor's list still agrees with
+the open counts.
+
+*One occurrence, two daemons.* Both daemons read the one gpsd and both
+run `rule_sensor_source_down` (so `srcdown:gnss` can open in both),
+and an unsplit 1.x `sloth` that still has its RF flags runs the
+`GNSS_*` and `ADSB_EMERGENCY` rules too, with the same keys. (A 2.x
+`sloth-wifi` runs neither; #216.) An incident of sloth-rf's whose key sloth holds
+too, over a span that meets it (`WEB_LIVE_SAME_SLACK_S`, 5 s, for the
+two daemons' ticks), is that one occurrence: `peer_dup()` leaves it out
+of the list and the open counts, and sloth's stands for it. It is
+still found by its own handle. The same key over spans that do not
+meet is two incidents.
+
+*Two databases, one key space each.* With `--rf-db`, an incident
+sloth-rf raised is sloth-rf.db's (`web_alert_rf_apart()`), and
+sloth.db's rows of the same key (what sloth recorded before the split)
+are another finding:
+
+- its `/api/alerts` row reads `count` and `incidents` from sloth-rf.db,
+  on a second connection opened only for such a row, so the list and
+  the page show the same figures; a missing or refused `--rf-db` leaves
+  the stream's figures;
+- it never stands for, and never hides, sloth.db's finding of that key:
+  the key is not in the database read's exclusions, the two are two
+  rows, and a `d` page is not given sloth-rf's live incident;
+- its page reads `--rf-db` and says so: `"db_file":"sloth-rf.db"`,
+  `"db_id":null` and `"id":null` on every run. A `d<rowid>` id is a
+  sloth.db rowid everywhere (`web_alert_locate()`,
+  `frrs_resolve_alert()`), so sloth-rf.db's rowids are never given as
+  one;
+- its triage subject is the stream's (`s<handle>`), never a sloth.db
+  finding resolved by the key. Such a verdict lasts as long as the
+  handle does (until slothweb restarts or the incident leaves the
+  closed ring), like any stream-only alert's;
+- the evidence bundle carries `rf_db` (state, schema, mode, mtime, age,
+  `stale`) beside `sloth_db` whenever `--rf-db` is given.
+
+Without `--rf-db` there is the one database and none of this applies.
+
+Not merged, and a slice of its own: the findings in sloth-rf.db's
+`alerts` table that are no longer in the stream state (the database
+rows of `/api/alerts`, `/api/history`, and the export's `alert` lines),
+and with them a lasting triage subject for a sloth-rf.db finding. The
+export's `gnss_event` lines do carry the GNSS incidents from
+sloth-rf.db.
+
+**Health.** `/api/health`: `daemons` (two objects, each the socket's
+members, `sensor`, `health_age_s`, `health_ts`, `jsonl_version`,
+`daemon`, `wrong_daemon`, `wrong_health`, `wrong_records`) with
+`--rf-socket`, `rf_db` with `--rf-db`. `/api/sys`: `host_from`,
+`not_owned`, and a `storage` row keyed `sloth-rf` (`WEB_SYS_DB_RF`,
+series `sys.db_mb` key `sloth-rf`). The tick: `rf`. The page: a block
+per daemon and one for sloth-rf.db at the foot of the health view
+(`daemonRows()`, `rfDbRows()` in `app.js`), the sensor tile's
+`ok · rf ok` (`rfKpi()`), sloth-rf.db among the store tiles and trends
+(`syshealth.js`). The tile says both words in every scope: `/api/live`
+has no `rf` and a scoped tick's tiles are not used, so both of
+`kpis()`'s callers pass the latest tick's (`lastRf`). Its colour is the
+worse of the two: bad when either word is neither `ok` nor `unknown`.
+None of it exists without the flags.
+
+**Not in #214.** sloth-rf's records are not on the ticker, in
+`/api/live`'s type counts or in `records.rate` / `records.total`; `/api/positions` reads sloth.db's
+`sensor_positions`; the alert history's merge above. `/api/health`'s
+`rf_db.stale` needs `--rf-socket` to ever be true.
+
+**`alerts.fired` counts both daemons, since #218.** An alert either
+daemon raises queues a sample (`web_rollup_queue_add()`, above)
+instead of adding one directly, so a type both can fire (`SENSOR_SOURCE_DOWN`
+always, the GNSS types and `ADSB_EMERGENCY` from a 1.x sensor) never
+gets two writers on one series. Before #218 an RF alert was listed and
+counted open but added no sample at all; now every alert type samples,
+with no attribution to which daemon raised it (the series counts
+occurrences of the type, not the source).
+
+Tests: `web/tests/test_twodaemon.c` (the routing by role with every
+consumer set on both feeds, the five tabs byte for byte with one
+stream or two, the guard, the precedences, the answers with and
+without the flags, the RF history's file, one occurrence from both
+daemons, the two databases' findings of one key, an RF alert's ids,
+triage subject and bundle), `test_ingest.c` (two
+listeners, two threads, a third reading; an absent RF socket that
+appears), `test_config.c`, `test_fleet.c`
+(`test_export_reads_rf_db`), `wt_world.h`'s optional `w_rf_up()`.
+
+
+### The RF stream's state (#216, 2026-11-15)
+
+Since JSONL 2.0.0 `sloth-wifi`'s stream has no ADS-B, APRS, rtl_433 or
+Victron record, no block for them in `sensor_health` and no
+`source_status` row: they are sloth-rf's, on `--rf-socket`
+([[jsonl-schema]] § 1.x to 2.0.0). A slothweb started with a 2.x
+`sloth-wifi` on `--socket` and no `--rf-socket` would show four empty
+tabs with "no decoder", which is true of that stream and tells the
+operator nothing. So slothweb works out which case it is in, from the
+role of `--socket`'s state and the last `sensor_health` on it
+(`web_live_rf_stream()`, `web_live.c`), and says it:
+
+| `state` | When | What the RF tabs are |
+|---|---|---|
+| `rf_socket` | `--rf-socket` is given | sloth-rf's stream's, and nothing on `--socket` feeds them (above) |
+| `sensor_stream` | one socket, and its `sensor_health` says `1.x` or carries no version (before 1.0.0) | the sensor's own stream's, as before: an unsplit, older sensor, whose stream has the decoders' records and blocks |
+| `rf_daemon_on_socket` | one socket, and its `sensor_health` says `"daemon":"rf"` | sloth-rf's, read on `--socket` (a host with only SDRs) |
+| `not_configured` | one socket, a `2.x` stream that is not sloth-rf's | **empty, because the RF daemon's stream is not configured** |
+| `unknown` | one socket, no `sensor_health` on it yet | not known yet; never `not_configured` |
+
+The version is read, not assumed: a `1.x` and a `2.x` stream are both
+accepted (and one from before the version field), and the answer says
+which (`"reading"`: `"1.x"`, `"2.x"`, `"before 1.0.0"`), with the
+stream's own `sensor_jsonl_version` and `sensor_daemon` beside it. The
+`MAJOR` is parsed as a number (`1.10.0` is `1.x`). `reading` is the
+stream's own `MAJOR`, never rounded to one this build knows: a `3.0.0`
+reads `"3.x"` and a `0.9.0` `"0.x"` (until #216's review both were
+reported as `2.x` and `1.x`). The state is still decided the same way
+(`MAJOR` 2 or later is a split stream), and the health view marks any
+reading other than `1.x`, `2.x` or `before 1.0.0` as a `MAJOR` this
+slothweb does not know (`rfstream.js` `readingText()`), since what it
+shows of such a stream may be wrong.
+
+**A block does not outlive the stream that carried it.** Each of the
+four stores clears its `sensor_health` block when a `sensor_health`
+arrives without it (`sh_apply()` in `web_adsb.c`, `web_aprs.c`,
+`web_rtl433.c`, `web_victron.c`). The ADS-B and APRS stores used to
+keep the last block instead, so an unsplit 1.x sensor upgraded to
+`sloth-wifi` under a slothweb that stayed up left those two tabs
+reading "decoder live" for ever, and the page, which gives the
+`not_configured` reason only when there is no block, never gave it
+(`web/tests/test_twodaemon.c ::
+test_1x_then_2x_drops_the_decoder_blocks`). With two sockets only
+sloth-rf's `sensor_health` reaches the stores, so sloth-wifi's
+blockless record clears nothing.
+
+**The GNSS tab carries the same member.** `/api/gnss` ends with
+`rf_stream` as the four RF answers do (`/api/gnss/fixes` does not; the
+page takes it from `/api/gnss`). The receiver's health is in
+sloth-wifi's `sensor_health`, so against a 2.x `sloth-wifi` with
+`--gps` and no `--rf-socket` the tab's header draws; `gnss_fix`,
+`gnss_sky` and `gnss_sat` are sloth-rf's alone, so the fix history,
+the sky and the table are empty, and the fix note gives the
+`not_configured` reason instead of "no gnss_fix records yet". `web_lure.c`'s own
+version check (JSONL 1.3.0 for the lure records) is `>=` on the parsed
+triple and takes `2.x` as it took `1.x`; `/api/lures` reports the
+version it read.
+
+Where it is served: `/api/health` carries `"rf_stream":{"state",
+"reading","sensor_jsonl_version","sensor_daemon","rf_socket"}`
+whenever there is a data socket, and `/api/adsb`, `/api/aprs`,
+`/api/rtl433` and `/api/victron` carry the same object as the **last**
+member of a 200 answer that is this sensor's own
+(`rf_stream_member()`, `web_routes.c`). The out-of-scope answer (Local
+scope) does not get it: that answer is the scope's and says nothing
+about a stream. `/api/gnss` does not get it either: the receiver's
+health and position are `sloth-wifi`'s too, so that tab is not empty
+for this reason.
+
+On the page, one module words it (`web/ui/rfstream.js`,
+`window.SlothRfStream`, no DOM of its own): each of the four tabs asks
+`text(j, "ADS-B")` and, when the state is `not_configured`, shows
+"RF daemon not configured: this slothweb reads sloth-wifi's stream
+(JSONL 2.0.0), which has carried no ADS-B records since the sloth-wifi
+/ sloth-rf split (JSONL 2.0.0). They are sloth-rf's: start slothweb
+with --rf-socket (and --rf-db) pointing at it" in place of "no
+decoder"; the health view adds an "RF daemon" block with
+`sourceText()`'s line for every state, the not-configured one in the
+warning colour, and which contract `--socket` is. Every string goes in
+through `textContent` or `el()`.
+
+The shipped `slothweb.service` passes `--rf-socket` and `--rf-db`, so
+an installed host is `rf_socket`; `not_configured` is what a slothweb
+started by hand against only the Wi-Fi daemon sees.
+
+Tests (`web/tests/test_twodaemon.c`): a 2.x Wi-Fi stream alone says
+`not_configured` on each RF tab and in `/api/health`, as the last
+member, and `unknown` before any `sensor_health`; a 1.x stream alone
+(and one with no version) still fills the RF tabs and says
+`sensor_stream`; a 2.x Wi-Fi stream with an RF stream fills them from
+the RF stream and says `rf_socket`, a decoy on the Wi-Fi socket
+listed nowhere; sloth-rf alone on `--socket`; the page's functions
+whole. The absences were each seen red (the version threshold, the
+1.x case, the out-of-scope answer, the decoys).
+
+
+## The Alerts page and an alert's page (2026-10-26)
+
+Owner requests 2026-10-23..26: the `6 Alerts` tab was a placeholder.
+It is now the Alerts page: the stream's open incidents first (the
+open-alerts tile counts exactly these), then the recently resolved ones
+and sloth.db's rows, one row per alert key from both sources (sloth.db's
+rows of a key grouped, about 114 a key on the owner's pre-v8 host,
+#170; the stream's incidents of a key shown as its open one, else its
+newest closed one), each with the key's incidents and count, the same
+two the alert's page shows, filtered by state, severity, type and a
+search word.
+`/api/alerts` and `/api/alert` are GET only and validated whole.
+
+Any alert, wherever it is listed (the Alerts page, the Overview's
+latest alerts, History's alerts in the range, the device drawer), opens
+its own page: what it is (the rule table's trigger in one sentence,
+the whole entry folded under "details", severity, ATT&CK),
+why it matters (every research corpus document that cites the type),
+how to investigate and fix it ([[alert-remediation]], written for all
+90 types), the evidence (severity history, counts, first and last seen,
+whether sloth saved a pcap, the detail text), every incident of its key
+as runs, and the device it names. On a sloth.db v11 file (#175) the runs
+are built from `alert_incidents`, each run its incidents' own peak and
+count (`"history":{"source":"incidents"}`; `"rows"` for a key with no
+incident rows, whose single v8 row makes one run of the finding's peak
+and sum), and `/api/alert` adds `db_incident`: one incident's own
+`first_seen`, `last_seen`, `sev`, `peak_sev`, `count`, `observations`,
+`closed_at` and `reason` — the stream incident the page opened on,
+matched by sloth's id as a predicate (`"which":"opened"`), else the
+key's newest (`"latest"`); `null` without such rows. The page's `sev`
+and `count` stay the finding's. The figures are data for the page's
+header, whose layout is #179's. The first three are extracted at
+build time by `web/tools/alertkb.c` from the files themselves, never
+copied, and `web/tests/test_alertkb.c` holds every type to having them.
+
+**What the alert did leads, count trails (#179, 2026-11-03).** For a
+per-tick rule `count` is how long the condition stood, about four a
+second: three EVIL_TWIN bundles copied on the reference host read
+44.8M, 44.9M and 39M against `observations` of 1, 1839 and 1839, and
+the operator read them as attack intensity. The page's header now reads,
+under the type, severity and technique: the detail changes
+(`observations`), the times opened (`incidents`), first and last seen
+and the span, the rule's `confidence` and its verdict phrase
+(`rule_reason`), and `count` last, labelled evaluations, with a tooltip.
+`/api/alert` writes its members in that order, so the copy-JSON
+bundle's `alert.page` does too; nothing is renamed, since the names are
+contract. `rule_reason` is EVIL_TWIN's or KARMA_AP's own phrase ("vendor
+OUI differs", "candidate, uncorroborated", "attack-in-progress", ...),
+matched at ingest against a table of the rule's literals in the text
+after the detail's last quote (every remote string those rules write is
+a quoted SSID), so the word served is the table's, never the detail's
+bytes, and it is shown where the detail is withheld; a test holds every
+word to a literal in `src/alerts/rules_twin.c`. Both fields are the
+stream's: sloth.db keeps neither. The Alerts page sorts its open rows
+by severity, then observations, then the newest change, never by count,
+shows a changes column ahead of incidents and the evals column, and
+draws a row at or under 20% confidence muted (owner ruling
+2026-11-03: `<= 20`, so the 20% "vendor OUI differs"-only EVIL_TWIN
+rows are muted) (display only), never a CRIT
+one: EVIL_TWIN keeps CRIT on a hard signal however far context lowers
+the percent (an uninventoried BSSID with a copied OUI and a forged
+802.11k claim reads 5%), and muting it would make that claim the
+lever the rule refuses it.
+
+M4's rules hold. `alerts.key` stays predicate-only: the reads
+group by it and match on it, a list row is named by an opaque
+`d<rowid>` or `s<handle>`, and a stream incident's key is kept in
+memory as a bound predicate, never rendered. sloth's `incident_id` is
+not served either: FNV-1a64 over the key, the creation time and a small
+counter, it inverts to the key's unsalted hash, and from there a
+dictionary recovers a `CLEARTEXT_CRED` username. slothweb names an
+incident by its own handle (a startup nonce and a counter), in the
+list, the alert's page, its links and `/api/live`'s `alert_id`. And credential material
+stays off the page: an alert's detail is shown only for the 50 types
+whose every detail format `web/tests/test_alertfmt.c` audits from
+`src/alerts/` on every run to carry numbers, addresses, ports,
+channels and network names only; the stream's detail of any other type
+is not kept, and sloth.db's is read through `web_detail_ok(type)` inside
+SQLite.
+
+The lists are bounded: each reads at most 20,000 rows that its filters
+match, newest first through `idx_alerts_last_seen`, the filters inside
+the bounded read so an old row of a rare type or address is reached by
+asking for it, and says when it stopped there and how far back it got.
+A filter that matches little walks the window under the 250 ms budget;
+on the owner's uncompacted 868k-row file a rare type over the full
+400-day window is past it (a 503 that says so), the default views are
+inside it, and `--db-compact-alerts` (#170) makes every one a few
+milliseconds. History's alerts in the range collapse by key the same
+way, each listed key counted over all of its rows in the range through
+the primary key, with the scan's bound reported; the drawer's alerts
+naming a device walk the table newest first a slice at a time, the
+device test inside the read, until the budget, and say how far back
+they got when it stopped them.
+
+Every Overview tile is a link (keyboard and focus included) to the view
+of what it counts: throughput to Activity's per-interface rx and tx and
+top hosts, devices to the Devices view under `pass:latest` (the latest
+pass's MACs, a new query term), open alerts to the Alerts page's open
+rows, open anomalies to every open episode, records/s to the records by
+type, sensor health to a health view (capture, monitor, the stream,
+sloth.db and its freshness), each with its filter named and a way back.
+A test asserts each count on the demo's own data.
+
+## Copy JSON: the analysis bundle (2026-10-27)
+
+Owner request 2026-10-27: a **copy JSON** button (and **download
+.json**) on every detail view (the device drawer, an alert's page, the
+Lookup card, the BLE drawer, a TACDB platform) that captures the view's
+data as one JSON document to paste into Claude for analysis.
+`/api/bundle?kind=device|alert|lookup|ble|platform&id=` answers it. The
+bundle splices the detail routes' own answers in verbatim rather than
+re-rendering them, so it carries exactly what the page shows and
+nothing it withholds (alert key, `incident_id`, unaudited detail,
+credential columns); around them an envelope (schema, time, server and
+time zone, sensor health, sloth.db, the capture scope in effect and
+what it excludes, a `withheld` list), optional sections, a glossary, a
+suggested prompt and the limits applied. The sections are routes'
+bytes as well: `frrs` is the FRRS record as `/api/frrs/report` (a
+device, a BLE address) or `/api/frrs/report/alert` answers it, an
+alert's `triage` is `/api/frrs/history`, and `vendor_research`,
+`assessment` and `evidence` (the capture files listed with their
+hashes, never a pcap's bytes) are lifted whole out of the drawer's and
+the alert page's own answers; `location` is a device's
+`/api/positions?mac=` answer (where the sensor was when it heard it,
+and its track) and an alert's page `loc` stamp. What no build has yet
+(a COMINT report, signal history) reads `{"available": false, "reason": ...}`,
+as does a section whose route did not answer (`no_store` without
+slothweb.db; under Local a BLE address's record is `withheld` with its
+drawer). `server.slothweb.build_version` is the sloth source
+tree slothweb was built from; slothweb has no version of its own. The
+ticker records a bundle lists are matched on their address members
+(`mac`, `ip`, `src`, `dst`, ...), never on the 80-byte line, which a
+long name can cut so that `192.0.2.123` reads `192.0.2.12`.
+512 KB hard cap, optional sections dropped first. The
+copy works on plain http (a hidden textarea and `execCommand`) where
+`navigator.clipboard` does not exist. Detail in
+[`web/README.md`](../../web/README.md#copy-json-the-analysis-bundle).
+
+## Sensor location (2026-10-27)
+
+sloth's `--location` / `--gps` stamp ([[location]]) reaches the page in
+two places. An alert's page gains a "where the sensor was" section
+(`#loc-alert`): the coordinates, the accuracy estimate, the altitude,
+the source and the time sloth received the fix, and a copy button. The device drawer
+gains a scatter (`#loc-drawer`) of where the **sensor** was each time
+it heard the device, coloured by RSSI, with the sensor's track, drawn
+on a local projection with no map tiles, and GeoJSON / GPX exports.
+Both come from `web/ui/location.js` (`window.SlothLocation`), one hook
+per view, so the rest of the page is unchanged. Server side:
+`web/src/web_loc.c` (the stamp, range-checked, from the stream's `loc`
+object or sloth.db v9's alerts columns) and `web/src/web_positions.c`
+(`/api/positions`, at most 200 samples an answer so the widest
+rendering fits the 64 KiB response; a cut answer says so in every
+format — JSON and GeoJSON `"more":true`, GPX `truncated` in its
+metadata). slothweb reads schema v1..v9;
+`device_positions`, `sensor_positions` and the six stamp columns are on
+the allow-list. Details: `web/README.md` *Sensor location*.
+
+## Capture scope (2026-10-26)
+
+Owner request: a Monitor | Hybrid | Local switch in the top bar that
+filters every view by where and how the data was captured. Hybrid is
+everything, as before; Monitor is the passive monitor radio (and the
+BLE receivers, passive radio too) with nothing from the connected Wi-Fi
+or Ethernet; Local is the host's own interfaces, the managed card's own
+scans included, never the passive radio. sloth's records carry no
+capture path, so `web/src/web_scope.c` places each by what it is, in
+one table the tests hold to the files it classifies; every `/api` route
+takes `scope=`, the server counts, pages and filters, and the page
+keeps the scope's records on its ticker. A device seen both ways is in
+both scopes with each scope's own fields; under Local the WiFi view is
+the managed card's own scan and link (`/api/wifi/local`, sloth.db's
+`wifi_aps` and `wifi_stas`) with the radio's panels not drawn, the Flows
+are empty under Monitor saying why; the SQL box is unscoped. sloth's
+`sensor_health` gained `capture_linktype`, so the stream's IP-capture
+records can count as Monitor's while the IP capture is itself a radio
+(the host's own ARP table, leases, scan entries and socket table, with
+the top hosts, THREAT_IP and BEACONING read from it, never do), and
+`monitor_only`, reported but not used to tag (an `any` handle's
+allow-list can hold wired interfaces too). An `/api` answer without
+`scope=` is as before; `/events` records gained `sc` (and a device
+row's Monitor line, `text_m`). The whole of it, view by view:
+[[capture-scope]]. `web/tests/test_scope.c` asks every route under
+each scope against one fixture with a MAC seen both ways, each absence
+seen red under a named mutation.
+
+## Kept settings (2026-10-27)
+
+Owner request: "the web interfaces columns should remember sorting and
+sizeing the whole UI should keep settings between launches where it is
+changeable". Every control a viewer can change is kept per browser in
+`localStorage`, one JSON value per setting under one versioned
+namespace, `slothweb.v1.<name>`; no server state and no endpoint. The
+view (a tab's), theme, scope, sensitivity, each table's column widths
+and sort (by the table's id, through the one `DataTable()`), the
+ticker's pause, the collapsed chrome, the Anomalies chip and mode, the
+Activity metric and each metric's key, and every view's filters,
+windows, sorts and search boxes, the SQL box's draft included. An
+address that names a view, a filter or a scope wins, and a filter it
+or scope it sets is not kept, so a link reproduces what it names: an
+Alerts address naming any filter sets the others, the search and the
+window included, to their defaults; a kept filter never raises a
+drill-down bar, and the bar's `show all` clears the kept filters; the
+Anomalies kind chip narrows its own list, never the Overview's top
+five or the tile's drill-down. The kept values are what the bare
+address and a tab click open on. A kept width for a
+column a table no longer has is ignored, one under the column's floor
+is drawn at it; a kept sort on a column that is gone or no longer sorts
+is left off. Blocked or cleared storage is the defaults, never an
+error. The keys of the build before (`slothweb.theme`,
+`slothweb.scope`, `slothweb.sensitivity`, `slothweb.cols.<table>`) are
+moved into `v1` on the first load, and no other key is touched (a
+later build's `slothweb.v2.*` survives this one, and its reset). Each table keeps its `reset
+columns`; `reset settings` in the footer forgets everything and loads
+the bare address again. What is deliberately not kept (the History
+range, the Records type pick, the drawer, the recipe picker) and why,
+setting by setting: [`web/README.md`](../../web/README.md#kept-settings).
+`web/tests/test_prefs.c` holds it by the page's text, and fails on a new
+form control (any attribute order) or ARIA toggle that is neither kept
+nor listed as not kept; the behaviour
+(sort and resize, relaunch, still there; reset; storage that throws)
+was driven in headless Chromium.
+
+## The glyph layer (2026-10-27)
+
+[`docs/web-visual-spec.md`](../web-visual-spec.md) specifies the
+glyph set for the page's data graphics, and the rules every glyph and
+panel follows; its rulings table of 2026-10-26 overrides its body.
+Slice V0 builds the first three of them — **G1** the band sparkline, **G5** the binary presence
+strip, **G6** the bullet and count bar — and writes the rules down in
+[`web/README.md`](../../web/README.md#the-glyph-layer): R1 to R12, the
+caption grammar (R9: source, window, tier, scale, n), the three empty
+states (R5: `no data`, `warming`, a gap, which never look alike) and
+the honest-window rule (R4: data covering less than a tenth of the
+window shrinks the window to the data and says `6 min of 24 h`). It
+adds no data: no new series, no changed route payload.
+
+Each glyph is a pure function from data and a size to a list of marks
+(`[kind, x, y, w, h, token]`, CSS pixels and a colour *token*, never a
+colour) plus a painter that draws the list. That split is what makes
+the page's canvas code testable: `web/tests/test_glyph.c` ports the
+geometry into C line for line and pins the JS verbatim out of the
+served page, so a change on either side fails `make web-test` — the
+mechanism `test_tui_colors.c` already uses for the TUI's colours, and
+the one the owner chose (ruling 2 of 2026-10-26) so the suite stays
+free of node. `web/tools/palette.c`'s generator is the other shape in
+this tree and does not fit: a palette is static data a tool can emit,
+a glyph's geometry is a function of data the page only has at run time.
+
+Two rulings of 2026-10-26 shape G1. Ruling 1 keeps **TUI parity for
+the sparkline's ink**: R1's "one ink" holds for every glyph except
+G1's line, which grades by level exactly as
+`src/views/dashboard_primitives.c :: draw_sparkline_at()` does, with
+out of band still said by the band and by the last-value dot. Ruling 3
+keeps G2's −67 dBm reference line, captioned as a field rule of thumb
+(G2 is slice V2). R12 is why each of the three names its character-cell
+form in the README: a glyph with no TUI form is not added.
+
+Finding F5 lands with it: the status strip holds the network's facts
+(`devs alerts anomalies rec/s`, with the scope control and the page's
+own live dot) and the footer holds every fact about slothweb
+(`sock db store tick up clients`), one row each and never mixed. The
+strip's `sensor` pill is gone — it was the footer's `sock` under
+another name. `web/tests/test_routes.c ::
+test_the_strip_and_the_footer_are_split` holds the two rows apart by
+element id.
+
+### Slice V1 (#171, 2026-11-03)
+
+The MVP's second half: after it every number on the Overview has its
+comparison. The series landed first (379ac49: `live.devices`,
+`live.alerts_open`, `live.anomalies_open`, `records.rate`,
+`sensor.drops`); this slice adds `records.total`, the same records
+unkeyed, so the records/s tile is one read rather than one per type,
+and draws them.
+
+- **Tiles (F1, ruling 5).** Urgency first: open alerts, open
+  anomalies, sensor health, throughput, devices, records/s, then BLE
+  advertisers. Each has the 24 h G1 of its series over the band for
+  each bucket's hour, and under it G1's words: `band lo to hi` (or
+  `warming`) and `↑ ↓ →` since the previous bucket. The number is still
+  `/api/live`'s. `web/ui/facts.js` owns the six series and paints the
+  tiles, the strip's 40 px G1s after `devs ble alerts anomalies rec/s`,
+  and the footer's `drops` (§6.9) with its last bucket's count beside
+  it, its words naming the bucket (`drops per 10 s`); the throughput
+  tile stays app.js's.
+  The V1 series are Hybrid's, so under Monitor or Local their glyphs
+  are the `no data` dash and the words name the scope that holds them.
+- **Anomaly cards (F13).** G1 of the metric that fired over its band,
+  the episode's window shaded in `--signal` at 12 percent, a caption;
+  `series unavailable` in the glyph's place when the read fails. A
+  window over an hour reads the minute tier when there is a store, and
+  a card keeps its y-range across the Overview's minute (R11).
+- **Hour of week (F3).** The grid is G4 in `glyph.js` now: a warming
+  cell plain `--rule` with no hatch (R8), the caption `warming: n of
+  168 cells` with the ramp's top and n. The warming meaning is that
+  word count (R10). G4 has no TUI form yet; the grid predates the
+  glyph layer, so R12 is owed, not met.
+  **Owner ruling, 2026-11-11** ("it always only has one tile
+  highlighted"). As V1 built it, a grid with every cell warming drew
+  only the now outline; a cell gets one sample a week and needs three,
+  so every map of a new store, and of any device under three weeks
+  old, was one outlined tile on an empty canvas. Now all 168 cells are
+  always drawn, and a warming cell with a sample (1 <= n < 3) is
+  provisional: a `--tui-dim` bar on its `--rule` tile, 1 px for a
+  value of 0 so far, a quarter, a half or three quarters of the tile
+  for a value in the first, second or last third of the provisional
+  scale (0 to 1 for the drawer's shares, 0 to the largest sampled mean
+  for the Overview's rate). The heat ramp stays a fed cell's alone and
+  the bar never fills its tile, so the two cannot be confused in any
+  grey. A never-sampled cell is the bare tile; no baseline at all is
+  R5's dash and `no data`. The caption reads `..., provisional bar in
+  thirds of 0 to 1, n=120, warming: 168 of 168 cells, fed: 0,
+  provisional: 96 (under 3 weeks), not yet observed: 72`.
+  **What starves a cell** (read out of `web_anomaly.c` for the same
+  ruling; the restart part changed since, below): an hour is fed only
+  if slothweb observed it (45 of its 60 minutes with the socket
+  connected and a record inside 60 s). A sloth restart with slothweb
+  left up costs its minutes, not its hour, unless over 15 minutes of
+  the hour are lost. **A slothweb restart** (owner ruling 2026-11-11,
+  "schedule the restart-loss fix as its own slice") no longer costs the
+  clock hour it starts in or the hour it stopped in: each run writes
+  which minutes of the hour it observed to slothweb.db v11's
+  `anom_cover` at every minute boundary (after that minute's rows are
+  in the minute tier), and an hour that began before the run is judged
+  on every run's minutes together and fed from every run's minute rows
+  (a presence metric's max, a counter's sum, a gauge's sum over n, the
+  within-hour spread from the same rows). A run killed without a clean
+  exit loses only the minute in progress; a clean exit loses the same
+  partial minute. So a restart costs its hour only when the outage,
+  plus the two partial minutes at its ends and the hour's other
+  unobserved minutes, takes the hour below 45: for an hour otherwise
+  fully observed, an outage of up to 13 minutes loses nothing, and one
+  across the hour boundary loses nothing while both hours keep 45. As
+  the heat-map builder's figure, cells lost a week to N restarts at
+  random hours are `1 - (1 - p/168)^N`, p the hours one restart costs:
+  before, p = 1 (about 4.1, 22.2 and 63.3 percent for N = 7, 42, 168);
+  now p = 0 for a quick restart of a host whose hours are otherwise
+  observed (0, 0 and 0 percent), and p = (L + 30) / 60 for an outage of
+  L minutes between 15 and 30 (L = 20: 3.4, 18.8 and 56.6 percent). A
+  restart at the same hour every day no longer starves that hour's
+  seven cells unless it is that long. Without a store (memory only, or
+  a build without SQLite) the old rule stands: an hour that began
+  before the run is not fed.
+- **Small multiples (F6).** One shared y-scale by default, its top in
+  the caption, a `scale: own` toggle kept in the browser (each cell then
+  prints its top), sorted by |z| when a key has a baseline and by value
+  otherwise, the caption naming which.
+
+Not in V1: one-ink sparklines (F7, overruled by ruling 1), F4's hover
+notes, the Records panel's per-type G1 (§6.1), G4's TUI form.
+
+### Slice V2 (#171, 2026-11-03)
+
+The RF half: how near an emitter is, and whether it is coming closer,
+as a glyph beside every signal number.
+
+- **The series (§7).** `ap.rssi` and `sta.rssi` are the `rf.rssi.bssid`
+  and `rf.rssi.sta` gauges that already fed the FRRS Report: the same
+  quantity, so no new metric and no slothweb.db step. The spec's assoc
+  and `wifi_sta` sources for `sta.rssi` are the AP's signal, so they
+  are not in it. Each `/api/devices` and `/api/wifi/aps` row, the
+  drawer's `/api/device/{mac}` and the Lookup card's `/api/lookup`
+  carry an `"rf"` member (`web/src/web_rf.h`): 60 minute means of the
+  fine buckets in memory, the whisker at the last value (the beacon's
+  own 60 s range when that beacon is in the last value's minute, else
+  that minute's samples), and sloth's band and
+  trend. Under Local it is null.
+- **Agreeing with the distance estimate.** G2 fits no slope and draws
+  no distance of its own. Its number is bold when sloth's
+  `est_dist_trend` says `approaching`, and after it come sloth's band
+  and trend glyph as the TUI's distance cell prints them (`room ↘`),
+  read from the latest beacon or probe_client record in the FRRS
+  ledger and passed on only as one of sloth's words. Each table's
+  caption counts `n approaching (sloth's estimate)`.
+- **G2 (F9, F20).** In the Devices and AP tables' `dBm` column at 72 by
+  14 px, on the fixed −95 to −20 dBm scale, with the −67 dBm rule
+  (ruling 3: a field rule of thumb, not a standard); every row draws
+  the same hour so the rows compare. At full width in the drawer and at
+  the end of the Lookup card, with three time labels and R9's caption;
+  there R4's shrink applies, and an empty trail is its caption.
+- **New (F15).** A `--signal` dot before the swatch of a row first seen
+  in the last 24 h, counted in the caption; G5's first-seen mark on the
+  strip.
+- **G6 (F17).** Bullets on risk (sloth's levels, tick at HIGH), karma
+  (`karma_candidates.score`, the TUI's 1 to 7 `[y]` score, tick at 3,
+  the least a PNL- or deauth-corroborated candidate scores) and
+  the anomaly score (tick at 60 for A1, cards and table); bars on the
+  Devices anom and Flows total columns, each on its column's largest
+  value. The card's rounded score bar is gone (R8).
+
+Not in V2: G2's TUI half (the Devices Enter signal trail on the fixed
+scale), the Flows counts column, G4's small form on the Lookup card, G2
+on the managed card's tables (another receiver, no series) and on the
+WiFi Clients panel (V3, below).
+
+### Slice V3 (#171, 2026-11-03)
+
+The air picture: the WiFi view is four panels, top to bottom, as
+`docs/web-visual-spec.md` §6.3 lays it out, and History's strip says
+how many.
+
+- **Channels: G3 (F8).** One horizon strip per channel seen in the
+  last 30 days, two bands laid over one another. The scale is the
+  server's, never the busiest cell in view: `/api/wifi/channels` rows
+  carry `"scale"` — `absolute` with the channel's own largest over 30
+  days (the fine ring's day without a store), or `z`, with a `"z"` per
+  cell, for `ctrl_total` against its hour-of-week baseline, scored as
+  A1 scores a minute. On a z strip the second band begins at the
+  slider's k and is the panel's only colour (`--heat-2`), so the strip
+  is flat while the channel is normal. Nothing observed, observed and
+  quiet, and warming are three different marks (R5). The `channels`
+  control keeps the stacked grid of 2026-10-26 one choice away.
+- **The drill-in (ruling: both).** A picked column is drawn beside the
+  strips as each channel's five busiest transmitters, stacked in their
+  TUI colours, and the list under the panel names the picked cell's.
+- **Emitters.** The AP table nearest first by default, the SSID count
+  a row of `▪`.
+- **Chains.** The deauth frames as a G7 rug (since V4, of the bssids
+  with one stage; G8 draws the rest), one lane per bssid with a frame
+  or a flood in the window, on one scale, flood
+  episodes underlined in `--sev-crit`; no deauth collapses the panel
+  to `0 deauth in the window` (F16).
+- **Clients.** The probe-client chart over its band (hidden when it has
+  no points, F16), and the probing clients last seen in the window,
+  nearest first, each with G2 and G5.
+
+`web/ui/air.js` draws the strips, the drill-in and the deauth rug. Each
+strip prints its own top beside its key (R3), and when the channels
+were observed for less than a tenth of the window every strip draws
+only those columns and the caption says `6 min of 1 h` (R4).
+- **History (F12).** The 30 d strip is G7: a lane for devices first
+  seen and one for alerts begun, each tick its cell's count on one
+  scale for both, the tallest in the caption; survey sessions full
+  height.
+
+Not in V3: the probe-flood rug (the page has no alert type table to key
+`alerts.fired` by), per-severity ticks on History's alert lane, and
+G3's and G7's TUI forms (R12).
+
+### Slice V4 (#171, 2026-11-03)
+
+The projection layer's last two pieces: where in an attack chain a
+BSSID is (F14), and who talks to whom in one scan (F11).
+
+- **G8, the chain timeline.** Four 18 px lanes on one time axis in the
+  order the chain runs, `deauth`, `twin`, `assoc`, `karma`, each lane's
+  axis drawn whether or not it has anything, so the stage not yet seen
+  is an empty lane. Deauth frames and associations are ticks on one
+  scale; each DEAUTH_FLOOD, EVIL_TWIN and KARMA_AP incident a bar from
+  its first to its last observation in the severity it reached, its
+  word in the lane's label (`twin CRIT 70%`); under the lanes the links
+  sloth made, in words: `tainted ↑ 5 s` (a deauth flood on the other
+  half within 5 s, sloth's `attack_in_progress`) and `attributed ↑`.
+- **`/api/wifi/chain`.** The deauth rows, or one `bssid=`, each with
+  the EVIL_TWIN and KARMA_AP rows sloth.db holds whose key names the
+  BSSID (a predicate, never read out), the associations to it per cell
+  (the station never read), and the links. A key is matched at its
+  BSSID fields, never as a substring; an association is a stage only
+  on a BSSID with a twin or karma row. sloth.db keeps no link G8 can
+  draw (`twin_episodes` latches the taint with no time, and has no
+  attribution or confidence; the attack-chain alert's key names the
+  SSID and its detail is withheld), so the links are the stream's
+  `twin_episode`, kept in memory by
+  `web/src/web_chain.c` (64 pairs, evicted and counted), and the
+  answer says since when. No new series and no slothweb.db step.
+- **Where.** The WiFi chains panel draws one G8 per bssid with more
+  than one stage and leaves the rest to the G7 rug, collapsing to its
+  caption with none; the alert page, in an `attack chain` section
+  above the device, draws the chain of the BSSID its key names
+  (`/api/alert`'s `device.bssid`, a `beacon_aps` BSSID matched as a
+  predicate), around the alert's span; the drawer draws it for a BSSID
+  with more than one stage in the last 24 h.
+- **The Flows matrix (ruling 4: matrix first).** `/api/flows/graph?
+  form=matrix`: every endpoint of the pairs read, sources and
+  destinations each in address order with their /24 or /64 group, the
+  cells merged by pair. The page draws a row per source and a column
+  per destination, a rule where the subnet changes, each cell G6's
+  count bar on one scale behind its count, its protocols as letters
+  (`S` `R` `M` `N` `B`), SMB1 in the critical colour; the chord is the
+  `draw` control's second choice (kept). `web/ui/flowmx.js`.
+
+Not in V4: G8's TUI form (R12), the matrix's TUI layout, a BSSID with
+no deauth key as a candidate on the WiFi panel (its alert page and
+drawer still draw it), the probe-flood rug.
+
+### The presence strip by the sun (owner ruling 2026-11-11)
+
+"color the 24 hour presence based on night sunrise day sunset": a
+present cell of G5 is no longer one ink. It takes `--sun-night`,
+`--sun-rise`, `--sun-day` or `--sun-set` by the sun's elevation **at
+the sensor** at the cell's midpoint: night under -6 degrees (past civil
+twilight), day over +6, and between them sunrise while the elevation
+rises across the cell and sunset while it falls. Polar day, polar
+night and a night that stays twilight need no case of their own. This
+is R1's second exception, for G5 only.
+
+- **The sun.** `web/ui/sun.js` (`SlothSun`): NOAA's low-precision solar
+  position, pure arithmetic on the page, no request and no library.
+  Within three minutes of the U.S. Naval Observatory's rise, set,
+  transit and civil twilight at five places (`web/tests/test_glyph.c`,
+  which ports it and pins it as served).
+- **The position** is the sensor's and nobody else's: `/api/gnss`'s
+  newest 2D or 3D fix, else its `loc` (the last fix, or `--location`),
+  asked at load and every five minutes, the last valid one held for
+  every strip on the page. No new route. The page never asks the
+  browser where it is and never reads its zone to guess.
+- **No position, or a cell over an hour** (History's ranges past six
+  days): every present cell is `--tui-normal` as before, and the words
+  beside the strip say `no sensor position: presence in one ink` or
+  `cells over 1 h: presence in one ink`.
+- **Where.** Devices, the drawer, the Lookup card, the WiFi clients,
+  History, the alert page and the BLE drawer (quarter hours). The three
+  tables draw G5's ruler in the presence column's header, built until
+  now and drawn nowhere: midnight ticks, now, and under them the day's
+  phases as a band, night 1 px, sunrise and sunset 2, day 3, so a
+  phase is a height as well as a colour. Each strip's words name the
+  phases and when each begins (`night, sunrise 06:40, day 07:40, ...`).
+- **Sensor time (the second ruling of 2026-11-11).** The ruler's
+  midnight ticks and the words' sunrise and sunset times are in the
+  sensor's zone, not the viewer's, so the ticks and the sun's band
+  agree; every other time on the page stays the viewer's clock, and
+  each table's line and the ruler's title say so (`midnight ticks in
+  sensor time (slothweb's host), UTC-7; every other time on the page
+  is your clock`). The zone is `utc_offset_s`, a number the server
+  reports beside the strips (`/api/devices` and `/api/history/devices`
+  gained it; `/api/device/{mac}` had it in `week`): slothweb's own
+  host's offset, taken as the sensor's, so a slothweb reading a copied
+  sloth.db elsewhere shows that machine's zone, which is why the words
+  name the host. One offset, the one at the window's end, serves the
+  whole ruler: a range over a day that crosses a summer-time change
+  has its earlier ticks an hour out, and the line says `the offset at
+  the range's end throughout`. No offset from the server: the viewer's
+  clock, said as `your clock (the server gave no sensor offset)`. No
+  zone name is read and the browser's zone database is not asked.
+- **The colours** are written in `web/ui/theme.css` for both themes,
+  night the least contrast of the four and day `--tui-normal` itself;
+  `web/tools/palette.c` fails the build if one is under 3:1 on `--bg`
+  or `--panel`, or within 20 (CIEDE2000) of another or of `--signal`,
+  `--heat-2` or `--faint`, the other marks on the strip.
+
+Not in it: the TUI's 24-cell form is not coloured (R12 owed for the
+phase); the bundle's `presence` carries bits and no phase.
+
+**Sources**: `docs/web-visual-spec.md` (§2 F1-F20, §5, §8, §10),
+`web/ui/sun.js`, `web/ui/theme.css`,
+`web/ui/glyph.js`, `web/ui/facts.js`, `web/ui/rf.js`, `web/ui/air.js`,
+`web/ui/chain.js`, `web/ui/flowmx.js`,
+`web/src/web_rf.c`, `web/src/web_wifi.c`, `web/src/web_chain.c`,
+`web/src/web_flows.c`, `web/tests/test_glyph.c`, `web/tests/test_rf.c`,
+`web/tests/test_chain.c`, `web/tests/test_flows.c`, `web/README.md` (Design),
+`src/rf_distance.h` (the band and trend G2 agrees with),
+`src/views/dashboard_primitives.c` (`draw_sparkline_at()`),
+`web/tests/test_tui_colors.c` (the pinning mechanism),
+`web/tools/palette.c` (the generator shape, for contrast).
+
+### The S-meter (2026-11-11)
+
+Owner rulings of 2026-11-11 (the header of `docs/web-visual-spec.md`):
+"make all signal graphs a s-meter style bar", "yes add S+ numbers for
+wifi", "make the s-meter appropriate for the band". G2's range
+sparkline (slice V2, above) is replaced wherever the page draws a
+signal's strength; `glyph.g2()` stays in `web/ui/glyph.js` with its
+tests and has no caller.
+
+- **The glyph.** `glyph.sm()`: nine segments S1 to S9, 6 dB apart, then
+  `+10` and `+20`, lit up to the latest reading (`--tui-normal`, and
+  `--heat-3` past S9), an unlit segment a 2 px `--rule` line, a wider
+  gap at S9, and two `--ink` peak-hold ticks at the window's least and
+  greatest reading. No reading is the dash; one reading the run alone.
+- **The scale.** A display scale, not the IARU reference, which would
+  pin 802.11 past S9. One table, `SM_BANDS`, by the band the signal was
+  heard on (this amends the spec's R3):
+
+| Band | Middle used | S9 | S1 | Top of the face | Reasoning |
+|---|---|---|---|---|---|
+| 2.4 GHz (and BLE) | 2442 MHz | -47 dBm | -95 dBm | -20 dBm | S1 is the floor of the range R3 gave every RSSI glyph, eight 6 dB units under S9; the top is that range's top |
+| 5 GHz | 5500 MHz | -54 dBm | -102 dBm | -27 dBm | 20 log10(5500 / 2442) = 7.05 dB more free-space path loss than 2.4 GHz, so the whole scale is 7 dB lower |
+| 6 GHz | 6535 MHz | -56 dBm | -104 dBm | -29 dBm | 20 log10(6535 / 2442) = 8.55 dB, rounded to 9 |
+| unknown | - | the 2.4 GHz row | | | a reading whose row names no band reads on the 2.4 GHz row and its label says `band unknown: 2.4 GHz scale`; a band is never guessed |
+
+- **The reading.** Beside every dBm meter, with the dBm kept: `S1` to
+  `S9`, `S9+10`, `S9+20`, stepped as the face is. Each table's caption
+  draws the face once with every band's S9.
+- **The band.** From the row's record, never the vendor: the `"rf"`
+  member's new `radio` (`web/src/web_rf.c`: the latest beacon's or
+  probe_client's channel in `ap_band_label()`'s words, 6 GHz by a
+  beacon's `channel_source`), else an AP row's channel number, and the
+  BEI's band for the emitter report. BLE is 2.4 GHz.
+- **Where.** The Devices, AP and probing-clients dBm columns, the
+  drawer and the Lookup card (`web/ui/rf.js`); the emitter report's
+  RSSI as character cells (`web/ui/frrs.js`); the BLE drawer
+  (`web/ui/bledev.js`). On their own units, with no S labels: the GPS
+  Sat table's signal cell over 0 to 50 dB-Hz, which also took the C/N0
+  trail column's place (`web/ui/gnss.js`), and the ADS-B table's signal
+  cell over -50 to 0 dBFS (`web/ui/adsb.js`).
+- **Not changed.** The BLE waterfall, the satellite history plot, the
+  Radar and sky marks and the map's dots grade signal by colour over
+  time or place and are not level meters. The TUI draws no S-meter yet
+  (R12 owed).
+
+Sources: `web/ui/glyph.js` (`sm`, `smDbm`, `smBand`, `SM_BANDS`),
+`web/ui/rf.js`, `web/src/web_rf.h`, `web/tests/test_glyph.c`
+(`test_sm_*`), `web/tests/test_rf.c`, `web/README.md` (The S-meter).
+
+## The owner's fleet (2026-11-10)
+
+#192 slice F1, under ADR 0008: the owner's own slothwebs share what
+their sensors have seen, pulled over the tailnet ([[fleet]] has the
+whole of it). Each serves `/api/fleet/export?since=EPOCH`, a read-only
+JSON Lines answer on the existing listener (so to the `--web-allow`
+list only): the site's label, position and receiver summary, then the
+devices, APs, probe lists, BLE advertisers, alert summaries and triage
+verdicts changed since `since`, each kind bounded and flagged when cut.
+Its member names are one list, `web_fleet_members[]`, held to
+`web_secret.h`, and its `sloth.db` rows come through M4's column
+allow-list, so no credential, username, alert key or detail, EAPOL row
+or RADIUS identity travels. `--peer NAME=http://100.A.B.C:PORT`
+(repeatable, at most 8; an address outside `100.64.0.0/10` refused
+unless `--peer-allow-outside-tailnet`, which is announced; `--strict`
+refuses it) pulls each peer every `--peer-interval-secs` (default 60)
+on a thread and a store connection of its own, checks each answer whole
+(10 MB at most, every line decoded and every member listed, the end
+line's counts), and upserts it into slothweb.db v8's `peer_sites` and
+`peer_sightings` (first and last seen widened; 20,000 sightings and 90
+days a peer). `/api/health` gains `fleet` (the export, each peer's last
+good pull and last refusal) and `/api/fleet/peers` reads what each peer
+reported. Tests: `web/tests/test_fleet.c`; the v7 -> v8 step in
+`web/tests/test_store.c`.
+
+F2 (2026-11-11) adds the **Fleet** tab, after TACDB (`web/ui/fleet.js`,
+`web/ui/fleet.css`): the sites on an SVG map (equirectangular, fitted
+to the sites, north up, no tiles, nothing fetched but this server) with
+the great-circle distance on the line between each pair; a health card
+per peer (last good pull and attempt, last refusal, clock skew at the
+last good pull, rows held by kind, backfill running or complete); and
+"seen at more than one site", the Wi-Fi devices, BLE advertisers, APs
+or probed SSIDs (one kept `kind` select) a peer sent that this site
+holds too, each site's first-to-last-seen bar on one shared time axis,
+this site's triage verdict at the address (else a peer's), the key a
+link to the device drawer. Empty states for no `--peer` and for no
+overlap. It reads `/api/fleet/overview` and `/api/fleet/shared`
+([[fleet]]). The pull now backfills a kind cut at its cap a page at a
+time, the state kept in slothweb.db's `meta` (no schema step).
+
+I5 (2026-11-11, #192) locates on that map the emitters two or more
+sites heard, from each site's signal strength by sloth's own model
+(`src/rf_model.h`, now linked by slothweb too): each candidate a
+translucent circle of its radius, the key on hover or tap, the picked
+row's range circles dashed, a metre scale, and a "located emitters"
+table (each site's range and band, the nearer site by dB, two circles
+or least squares, "coarse" when the band is wider than the baseline).
+It reads `/api/fleet/locate`; the overview carries each receiver's
+calibration from another site's own radio ([[fleet]] "Locating
+emitters").
+
+The Radar tab draws the same answers (2026-11-11, owner request: "when
+multiple sloths exist on the network use that for better location in
+the radar view. just make light transparent overlays for best guesses
+of the area the signal may be coming from"): each located emitter as a
+light translucent area on the dome's ground, through the dome's own log
+projection: a least-squares fix's disc; else where every site's
+one-sigma range band overlaps; else, when one site is nearer beyond the
+difference's sigma, a fainter wash over its side; else nothing. One
+`--data` fill per area with the alpha shared out so overlaps read
+darker, under every mark; the other sites as hollow squares; hover,
+or tap with nothing picked, for the key, form and band (with something
+picked a tap off the marks clears it, areas or not); a device dot and
+its area linked; a **fleet areas** button kept as `radar.fleet` only
+when off and hidden with no peer in `/api/health`'s `fleet.peers`,
+which is read once; nothing fetched with no peer or the button off. `web/ui/radar.js`, `web/tests/test_radar.c`
+(`test_radar_fleet_js`); `web/README.md` "Radar" has the rules.
+
+Since 2026-11-13 (owner request: "instead of on the n/s axis in the
+radar use the data to plot the most probably point location. color
+code the wifi points and light transparent polygons for the shape of
+the estimated location polygon") each area is an explicit polygon (a
+fix's disc; a band overlap or side traced by marching squares from a
+grid of the region, holes kept, filled even-odd) and the Wi-Fi and BLE
+devices have left the north axis: a device with an area is a solid
+mark at its most probable point (the fix's centre, the server's
+candidate when inside the region, else the likeliest grid sample under
+one Gaussian a site), one without is hollow at its distance at an
+angle from its address's hash (only its distance is an estimate; a BLE
+one on its own faint ring, a Wi-Fi one with none since 2026-11-17). A
+Wi-Fi mark and its polygon share one of five hues (`--rw-0..4`) by a
+hash of the MAC, an owner ruling over the visual spec's R10 for this
+view; `web/tools/palette.c` holds the hues apart. Display only: nothing
+new is fetched or shared.
+
+## Triage and the FRRS record (2026-11-01)
+
+The owner asked (2026-10-27) for triage buttons on every alert record
+(*false*, *noise*, *incident*, *follow recommended*) and for the
+information gathered in the shape of COMINT's Frequency Resource Record:
+BEI, SCS, EC/S and TACDB, with the seven COMINT disclosures folded in as
+a Report. The specification, the field-by-field mapping onto what sloth
+records and the owner's open questions (Q1-Q16, each with the default
+this build took) are [`docs/web-frrs-spec.md`](../web-frrs-spec.md);
+the routes with their request and response shapes are
+[`web/README.md`](../../web/README.md#triage-and-the-frrs-record).
+
+- **Triage** is operator state in slothweb.db (schema v6, an additive
+  step with its migration test on a v5 file and the failure that leaves
+  it unchanged): one row per decision, appended, the state of an
+  alert its newest row; a click that changes nothing adds no row. No
+  bound refuses an operator's change: past 64 rows an alert's history
+  folds (its first row and its newest kept, the folded counted and
+  shown), imported rows hold at most 8 of it, and at 20,000 rows the
+  oldest superseded rows fold, imported ones first; a clear is always
+  taken, and the tile warns near the cap. Every alert row on every view carries the chip
+  and the buttons; triaged-out rows (`false`, `noise`, `known`) are dimmed, never
+  hidden, and the open-alerts tile keeps its count and says how many of
+  it are triaged out. `/api/alerts?triage=` filters and counts; without
+  it the answer is as before. Triage never reaches sloth.
+- **A note over its bound is refused where the operator sees it (#181,
+  2026-11-03).** The bound is 240 bytes of UTF-8; the field's
+  `maxlength` is 240 too, but a browser counts UTF-16 units, so 121
+  accented letters fit the field and not the server, and on 1.8.5 seven
+  triages with notes of roughly 230 and 330 characters were refused while
+  the page looked done. (That accounts for the 230s, not the 330: no
+  note over 240 characters can be typed into the field, so that one was
+  set by script, which `maxlength` does not bind, or posted directly.
+  The page now measures what it is about to send, whatever set it.)
+  The refusal now carries the bytes sent and the bound
+  (`"length":242,"limit":240`, never the text), the page says
+  "note too long: N of M bytes" beside the buttons, counts the note in
+  bytes as it is typed, sends no note over the bound, marks a change
+  pending until the server answers, reads the panel again after a
+  refusal, and draws the history from the server's rows only.
+- **Known** (owner request 2026-11-03: "a Green tag for known or a
+  sigint term for known good traffic"): a fourth verdict, the button
+  `known`, drawn green. Known good — expected traffic from a friendly
+  or neutral emitter (the FRRS/EW affiliation sense: friend, or neutral
+  per MIL-STD-2525's green); triaged out like false/noise, never an
+  incident. Stored as state 4 after `incident`, so 0-3 keep their
+  values; no schema step, because nothing in slothweb.db rejects 4 (no
+  `CHECK` on the column, the word validated against the state table,
+  anything outside it read as untriaged; an older build shows a known
+  alert untriaged). No assessment recommends it.
+- **Follow recommended** reads the research assessment's front matter
+  (`--web-assessments DIR`, `<TYPE>.md`, until it closes;
+  `slothweb.service` passes the copy `make install` puts in
+  `share/sloth/alert-assessments`): *noise* only where
+  `false_positive_risk` is `high` **and** `noise_verdict` `noisy` or
+  `very noisy` (eight types), because `noise_verdict` says how the rule
+  counts, not whether an alert is real (FRAG_PLAINTEXT is "very noisy"
+  at a `low` false-positive risk); below that bar the button says "no
+  automatic triage" and does nothing. The assessments judge a rule,
+  not an alert: `false_positive_risk: high` (ARP_SPOOF carries it) never
+  marks an alert *false*, and `severity_assessment` never makes one an
+  *incident*; both are shown beside the buttons as advice (Q3). The
+  compiled table the assessments' own generator will write replaces the
+  reader.
+- **The record** (BEI, SCS, EC/S, TACDB, Report) is built only from what
+  sloth already records: sloth.db through the column allow-list (now
+  holding the parametric columns too), the stream's latest records per
+  emitter in a bounded in-memory ledger, and slothweb's own baselines
+  and episodes. Every field names its source; absent is *not observed*.
+  It says, every time, that a single passive sensor has no location
+  axis and that sloth decrypts nothing. The Report's signal item plots
+  RSSI against time (Q7, owner ruling 2026-11-02 "Keep, bounded"): three
+  gauges, `rf.rssi.sta` (probe requests), `rf.rssi.bssid` (beacons and
+  the AP's association frames) and `rf.rssi.ble` (advertisements), each
+  the signal sloth last heard as a record reports it, sampled only while
+  the record's `last_seen` is fresh. They sit in the existing tiers (the
+  minute tier's 30 days, `--web-retain-days`), the Wi-Fi pair in the
+  device class's keys and `rf.rssi.ble` in the BLE class's (#177), each
+  under `--web-max-keys` with its eviction, Monitor's scope, and
+  are not scored for anomalies. The record carries the last 24 h in 48
+  half-hour cells with min and max, drawn on the alert page and in the
+  drawer as the TUI's sparkline glyphs in its heat ramp; "no samples"
+  when there are none. A receiver's own figure, not a calibrated
+  measurement, and the record says so.
+- **The TACDB tab**: units with subordinate units, platforms by
+  nomenclature, each with its emitters (each opening its EC/S and
+  Report), suggestions from sloth's own correlations (sequence-counter
+  trails, Multi-Link affiliation, adjacent BSSIDs on one channel, a
+  station both the host's card and the air heard) confirmed or
+  dismissed by the operator, export and import as JSON Lines. A
+  delete is reversible and keeps its row, so deleted rows count toward
+  a bound twice each cap. The export carries live rows, parents first;
+  the import refuses a file without its header first and its `end`
+  line last (a file cut short merges nothing), merges whole or not at
+  all in one prepared transaction (1,000 triage lines at most, `413`
+  beyond), never merges two platforms on a name alone, never puts an
+  older decision over a later one, and records the file's `by` and
+  `peer` as claims beside the importer. Its check runs the merge and
+  rolls it back, so it reports what the merge would. Operator data:
+  a platform spans every capture scope, and each emitter row says which
+  scopes heard it.
+
+**The write surface.** slothweb was GET and HEAD only by the
+2026-10-21 ruling; the owner's request reverses that for its own state
+and nothing else. Seven paths take POST (the seventh, `/api/frrs/relate`,
+since 2026-11-11): JSON with a checked
+`Content-Type`, `Content-Length` bounded (4 KiB, the import 8 MiB) and
+refused before the body is read, an `Origin` that must equal the
+`Host` (slothweb sets no cookie, so Origin is the whole cross-site
+defence), a token bucket per peer, every member validated whole and an
+over-long value refused rather than cut. The allow list stays the trust
+boundary: there is no login, and a row's "by" is the peer's address
+and a typed name. `--web-read-only` removes the seven routes and restores
+the surface byte for byte. The UI is its own module
+(`web/ui/frrs.js`, `window.SlothFrrs`) reached from `app.js` through
+seven one-line guarded hook points, so the parallel slices changing
+`app.js` merge around it.
+
+### Anomaly triage and links (2026-11-11)
+
+Owner request: "add ability to add triage notes like we have on alerts
+for anomalies. allow them to be related where possible". Built as one
+mechanism, not a second: an anomaly's decisions are rows of the same
+`triage` table, written by the same `POST /api/frrs/triage` behind the
+same header checks, with the same five states, 240-byte note, history
+of 64 folding past it and shared 20,000-row cap. The routes and shapes
+are in
+[`web/README.md`](../../web/README.md#anomaly-triage-and-links); the
+model is `docs/web-frrs-spec.md` §15.
+
+- **What an anomaly's id names.** `tid` in every episode's JSON: `a`
+  and the FNV-1a 64 of the rule's name, the metric's name and the key.
+  It is the finding, every episode of it, as an alert's subject is
+  every incident of its key; the episode's own `id` restarts and names
+  nothing durable. Each row records the episode it was written on, and
+  a state decided on an earlier episode than the one held now is shown
+  as **carried**, never as if it had been said of this one; saying it
+  again makes it this episode's. A triaged-out state dims the card
+  either way, the mark kept on it (owner ruling 2026-11-11); a carried
+  incident never dims. The store keeps the rule, metric and
+  key beside the id (`anom_subject`), so a note outlives the day the
+  engine keeps an episode, and so an id that hashes to another
+  anomaly's is refused (`409 id_collision`) instead of joined. No
+  assessment judges an anomaly rule: nothing is recommended.
+- **Links** are the operator's: an anomaly to an alert, another
+  anomaly, a device or a BLE advertiser (`addr/type`, as the TACDB
+  names one; a rotated address reads "no longer held"), or an alert to
+  a device or a BLE advertiser; never alert to alert or device to
+  device. Stored in `relation` with each end's kind, id
+  and a label of slothweb's own words; listed from both ends
+  (`/api/frrs/related`), removable from either, at most 32 a finding.
+  Both ends must exist when the link is made. An end that has since
+  left sloth.db or the engine is listed with `"held":false` and its
+  kept label ("no longer held" on the page), and can still be removed.
+- **Candidates** are offered, never stored: findings on the same MAC
+  or the same IP address whose spans overlap or lie within 600 s (the
+  longest look-back of any anomaly rule), worded as that and nothing
+  more ("same device, within 10 minutes"; "possibly related, not
+  established: … a passive sensor corroborates, it does not confirm").
+  One press accepts one. The read is one sloth.db connection under the
+  request's 250 ms budget and at most 32 of sloth.db's alerts.
+- **slothweb.db v9** (v8 is the fleet's, which reached main first):
+  `anom_subject`, `relation` and its two indexes, an additive step with
+  its migration test on a v8 file holding the fleet's rows and the
+  failure that leaves it unchanged. `triage` itself is untouched.
+- **The page**: `web/ui/notes.js` (`SlothNotes`), one hook in `card()`,
+  one in the Anomalies table's rows, one each in the device drawer, the
+  BLE drawer and the alert page, one `init`; the anomaly's
+  panel is a `<dialog>`; every value by `textContent`.
+- **Export**: the evidence bundle's `alert.related` and
+  `device.related`; the TACDB JSON Lines export stays alerts-only.
+
+### Notes on devices and the rest (2026-11-11)
+
+The plain note for what is not a finding (owner request 2026-11-11);
+an alert's or an anomaly's note stays its triage note, above.
+`web/README.md` "Notes on devices and the rest" is the reference.
+
+- **Subjects**: `device` (a MAC), `ble` (`addr/type`), `ssid` (the
+  base64url of its octets, never the display form), `gnss`
+  (`gnssid.prn`), `aircraft` (an ICAO address), `aprs` (a callsign).
+  Each id is validated whole to its kind's format, and a note is added
+  only to a subject slothweb holds now. Not included: flows, hosts
+  with no MAC, fleet sightings, TACDB units and platforms (the README
+  says why for each).
+- **A note** is text (240 bytes, the triage note's rules), who, from
+  where, when and `via` (`manual`, or `agent` for a write
+  [[slothweb-mcp]] made). Append-only: `retract` writes a row and the
+  note stays listed, struck. An agent takes back only notes an agent
+  wrote (`403 not_agent_note`, owner ruling 2026-11-11), as it removes
+  only links an agent made; the page takes back any.
+- **Bounds**: 64 rows a subject, 20,000 in all; only retracted notes
+  fold; a new note with nothing left to fold is `507 notes_full`.
+- **Routes**: `GET /api/frrs/notes`, `GET /api/frrs/notes/marks` (which
+  of up to 24 ids have a standing note, for a table's page of rows),
+  `POST /api/frrs/note` through the triage write's gate, the eighth
+  write path; `/api/glossary`, the bundle's glossary alone.
+- **slothweb.db v10**: the `note` table and its index, and `via` on
+  `relation` (the chain's one `ADD COLUMN`, with a default), with its
+  migration test on a v9 file and the failure that leaves it unchanged.
+- **The page**: `web/ui/subnotes.js` (`SlothSubNotes`): the notes and
+  an add-note form in the device, BLE and SSID drawers and the
+  satellite, aircraft and station panels; a `note N` mark on a table
+  row whose subject has one; the `agent` mark on anything an agent
+  wrote, a triage state and a link included.
+- **Export**: the evidence bundle's `device.notes` and `ble.notes`,
+  with a glossary entry.
+- **Writes by an agent**: `--web-agent-secret PATH` and the
+  `X-Slothweb-Agent` header ([[slothweb-mcp]] section 4,
+  `web/src/web_agent.c`): a write that proves the run's secret, from
+  loopback and with no `Origin`, is recorded `via: agent`; one
+  without the header is the browser's as before and can never be; a
+  wrong secret is `403`. Triage, notes and links only.
+
+**Sources**: `docs/web-frrs-spec.md`, `web/src/web_frrs.c`,
+`web/src/web_frrs_report.c`, `web/src/web_frrs_tacdb.c`,
+`web/src/web_relate.c`, `web/src/web_notes.c`, `web/ui/frrs.js`,
+`web/ui/notes.js`, `web/ui/subnotes.js`, `web/tests/test_frrs.c`,
+`web/tests/test_notes.c`, `web/tests/test_subnotes.c`, the owner's
+requests of 2026-10-27 and 2026-11-11.
+**Last updated**: 2026-11-11 (plain notes on devices and the rest, slothweb.db v10); 2026-11-11 (anomaly triage and links, slothweb.db v9); 2026-11-03 (#181: a note over its bound refused with the bytes sent and the bound, said beside the buttons, counted as typed, no row before the server confirms); 2026-11-02 (the Report's RSSI against time: `rf.rssi.*`, Q7 answered); 2026-11-02 (second review: history and the table's
+cap fold instead of refusing, no row for an unchanged write, noise
+recommended only for a high false-positive risk and a noisy count, the
+import prepared once and bounded at 1,000 triage lines, imported `by`
+and `peer` as claims, the check running the merge, bidirectional
+controls refused, the body deadline scaled to its length, the installed
+assessments passed by the unit); 2026-11-02 (review fixes: the
+recommendation read against the assessments' real vocabulary, the
+import's header and end checks and its transaction, the bounds on
+deleted rows and imported triage, the suggestion rules as §7 states
+them); 2026-11-01.
+### Incidents and bulk triage (2026-11-12)
+
+Many alerts triaged as one (#198). `web/README.md` "Incidents and bulk
+triage" and `web/src/web_incident.h` are the reference.
+
+- **Bulk**: `POST /api/frrs/triage/bulk` sets one state, note and name
+  on up to 100 alert or anomaly ids at the token cost of one POST, each
+  id written exactly as `/api/frrs/triage` writes one and reported in
+  `results`, so one failing id never hides the others.
+- **Incidents**: a title and a decided state over alerts by id and
+  standing filters (type, address, first_seen window); a new alert a
+  filter takes joins by itself until the incident is closed, marked
+  `auto`. A member reads as the incident's state unless it has its own
+  decision at or after the incident's; clearing its own row returns it
+  to the incident. Append-only: a close and a removal are rows.
+- **Where**: a member's triage answers carry `"incident"`; nothing else
+  changes for an alert in no incident. `/api/alerts?incident=none|any|N`.
+- **Page**: the Alerts page groups the list (only the alerts in no
+  incident) under an incidents panel, one row per incident, opened to
+  its filters and its alerts; a selection box on each row, a bulk
+  verdict, a new incident from the selection or from the list's type or
+  address; the alert page links to its incident.
+- **Agent**: five `slothweb-mcp` tools ([[slothweb-mcp]]); an agent
+  closes only an agent's incident and removes only an agent's member.
+- **Store**: slothweb.db v12, `incident` and `incident_member`.
+
+## An alert's proof: its capture, assessment and bibliography (2026-10-27)
+
+Owner requests of 2026-10-27: "show the full packet capture in alerts
+at the bottom as well", and the device drawer's alert rows tapped for
+"full verbose details of the alert, include bibliography, when possible
+prove the alert with evidence". The alert's page gains a last section,
+drawn by its own module (`web/ui/evidence.js`, one hook in
+`alertPage()` and one in `openDrawer()`, so the slices editing
+`app.js` in parallel merge beside it):
+
+- **Observed against threshold**: the incident's count, observations
+  and span (labelled for what they are: `count` is evaluations, one per
+  poll while the condition stands, and `observations` follows it once
+  the detail moves, so neither counts frames or requests), the `name=value` numerals of an audited detail, beside the
+  thresholds the type's assessment states; with no capture, why not,
+  in sloth's own terms (no `--pcap-dir`; an L2-only rule, which the
+  `--pcap-dir` export can never hold; under `pcap.min_severity`, CRIT
+  by default; inside `pcap.key_cooldown_secs`; swept by
+  `pcap.retain_days`). So "none saved" does not read as "nothing
+  happened".
+- **The assessment and its bibliography**: each
+  `docs/wiki/alert-assessments/<TYPE>.md`, built in at compile time by
+  `web/tools/alertasm.c` (lookup `web/src/web_alertasm.h`), front
+  matter (its `count_semantics` and `noise_verdict` as written),
+  sections and Bibliography entries as text. 72 of the 90 types have
+  one; for the others the page says "no assessment yet". The build
+  stops on a stem that is not an alert type or a `[n]` with no
+  Bibliography entry.
+- **The packet capture**, last: with `slothweb --pcap-dir DIR` (the
+  sensor's own, read in place), every file the alert has, found through
+  sloth's manifests ([[pcap-export]] §5, §6) by `incident_id`, the
+  record's `pcap_path`, or, labelled, rule and time; its SHA-256
+  recomputed over the bytes read (`hash verified`, `HASH MISMATCH`,
+  `no manifest entry`); every frame decoded with its fields and hex
+  dump, 24 a page, a filter, and the file downloadable. 802.11 frames
+  are read with sloth's own parsers linked from `src/`
+  (`radiotap.c`, `dot11_frame.c`, `dot11_ie.c`, `wifi_freq.c`,
+  `dns_wire.c`, `netstr.c`; the first `src/` code in the slothweb
+  binary, leaf files that include no `sloth.h`), with the IEEE Std
+  802.11-2020 subtype, reason (Table 9-49) and status (Table 9-50)
+  names; Ethernet, SLL and SLL2 by slothweb's bounded summary decoder.
+  The sensor keeps 64 bytes of a packet, so a decode stops where the
+  bytes do and every such frame says `truncated at snaplen 64`; a
+  record cut short of its file's snaplen says `N of M bytes captured`
+  instead, since the snaplen did not cut it. When more than one
+  manifest line names a file, any line whose hash and size match
+  verifies it (a later-stamped line cannot outvote it), and lines that
+  disagree are said as `conflicting manifest lines (N)`. A name whose
+  file is a symlink, a FIFO or anything not regular is listed as
+  `unreadable: not a regular file` and cannot be opened.
+- **The drawer's alert rows** carry a `›`, are 44 px tall on a touch
+  screen, and a tap opens the alert's page and closes the drawer, which
+  at phone width covers it. Checked at 360 px under touch emulation by
+  `web/tools/tap_check.py` (by hand: it needs Chromium).
+
+Never served: a handshake pcap or `eapol.22000`, which can share an
+`--eapol-dir` and are crackable material: their names pass neither
+alert-pcap grammar, their manifest sinks are not indexed, and a request
+never names a file (the routes take an index into the alert's own
+list).
+
+Withheld unless asked for: an **evidence pcap**
+(`<incident_id>-<event>-<RULE>[-N].pcap` in the `--eapol-dir`) is raw
+802.11 frames from sloth's evidence ring, which notes every monitor
+frame, so an EAPOL-relay or A-MSDU-EAPOL incident's file can hold
+EAPOL/PMKID handshake material, the reason sloth writes it only under
+`--collect-handshakes` ([[pcap-export]] §4). slothweb lists it with
+`withheld: may hold EAPOL/PMKID handshake material` and neither decodes
+nor serves it (`403 withheld_evidence_pcap`) unless started with
+`--web-serve-evidence-pcap`, announced on stderr. With
+`--web-allow-remote` the bare flag is refused (exit 2);
+`--web-serve-evidence-pcap=remote` serves the files to remote peers
+too, announced as such. The demo writes a made-up `--pcap-dir` for its SMB1 and deauth
+incidents (`slothweb-demo pcaps DIR`, in the quick start).
+
+**Sources**: owner requests 2026-10-27; `web/src/web_evidence.h`,
+`web_pcap.h`, `web_pcapdir.h`, `web_alertasm.h`, `web_dot11_names.h`,
+`web/ui/evidence.js`, `web/tests/test_evidence.c`,
+`tests/fuzz/fuzz_web_pcap.c`; `src/alert_pcap.c`,
+`src/evidence_export.c`, `src/evidence_manifest.c`; IETF
+draft-ietf-opsawg-pcap; tcpdump.org link-layer types; radiotap.org;
+IEEE Std 802.11-2020 Tables 9-1, 9-26, 9-49, 9-50.
+**Last updated**: 2026-10-27.
+
+## The BLE view (2026-11-02)
+
+Owner request: "add bluetooth to the web ui". The reference host's
+sensor runs with `--bt-monitor` and `sloth-ble-scan` holding a passive
+scan, so the stream carries `ble_device` and `ble_alert` records and
+`sensor_health` the `btmon_*` / `ble_*` / `btcap_*` members; sloth's
+TUI has the `[*]` view ([[ble]]). sloth.db has no BLE table, so
+slothweb keeps BLE itself: `web/src/web_ble.h` holds 1024 advertisers
+(one row per advertiser **as one sensor heard it**, keyed address,
+address type and sensor, as sloth keys them: the host controller and an
+Ubertooth hearing the same address are two rows whose counts are never
+summed), 128 findings (standing until the `alert.resolve` of the same
+key, or quiet for two heartbeats), the latest `sensor_health`'s
+Bluetooth block, and per row the last sixteen `(ts, adv_count)` points
+for an advertising rate and a 96-bit strip of the quarter hours of the
+last day it was heard in; and persists the rows in slothweb.db **v7**
+(`ble_device`, `ble_alert`, their indexes, an additive migration from
+the triage slice's v6 with its two tests on a v6 file holding triage
+rows) so a restart keeps the history. The rate
+is kept in the module rather than as a per-address series in the
+rollup: that class is 512 keys shared with the Wi-Fi tables, and a
+resident random-address device is a new key every fifteen minutes.
+Two global series do enter the rollup, `ble.devices` and
+`ble.adv_rate`, from `sensor_health`, both Monitor's. Since the owner's
+Q7 ruling (2026-11-02) one per-address series does too, `rf.rssi.ble`,
+for the FRRS Report's signal against time. It sat in the shared device
+class first, as the ruling asked ("capped by its existing key limits"),
+where a stream of rotating addresses pushed out the quiet keys first,
+BLE and Wi-Fi alike; since #177 (2026-11-03) it has a class of its own,
+`ble`, at the same `--web-max-keys` N, so an advertiser evicts only
+the least recently seen advertiser and a quiet Wi-Fi key's signal
+history is never the one that goes; each eviction is counted on
+`/api/health` (`key_evictions.ble`). The advertising rate stays in
+the module.
+
+The tab (key `0`) is the TUI view at parity: the same columns with the
+TUI's own cell strings (`type_ch`, `count_cell`, `age_cell`, the HWS
+flags, `summary_cell`, `rf_dist_cell`'s full form), every column
+sortable and resizable through the one `DataTable()`, a row one colour
+(`--tui-bright` for a HID or watchlisted advertiser, `--tui-normal`
+otherwise: no swatch, no hash hue, no RSSI heat, no monitor ground),
+the header line, the rotation-hints block (verbatim; the estimate is
+not on the stream, only the hint count as a decade band, and the block
+says so), the empty state and the legend, all dim as the TUI draws
+them; plus the columns the TUI lacks: the address in words (`random
+static`, `random RPA`, `random NRPA`, ...), the Bluetooth SIG's names
+from its assigned numbers, the best RSSI, the rate, first heard, the
+PDUs heard and the watch category, each with a server sort word. A click opens a drawer in the TUI detail's order and
+wording, then the PDUs heard, the PHYs and SID, the stamps, a 24 h
+presence strip (G5, quarter hours, stored with the row), the rate (a
+G1), and the `hid_oui` findings naming the address. The findings
+table lists `ble_alert` standing first; the same incidents are on the
+Alerts page as `alert.*` records, typed and Monitor's. The Health view
+gains a `bluetooth` block, the sensor tile's sub-line the `btmon`
+stream, the Overview a `ble advertisers` tile (count, HID / watchlisted
+/ standing, a G1 of `ble.devices`), the strip a `ble` pill. Under Local the view is empty and says
+why; `/api/ble`, `/api/ble/alerts` and `/api/ble/{addr}` answer
+`out_of_scope` there ([[capture-scope]]) and `/api/live`'s `ble` member
+is `null`.
+
+**BLE Devices** (owner request 2026-11-02: "show a waterfall similar to
+wifi for bluetooth devices"; "visualize in the best way to convey ble in
+a similar style"). The tab reads `BLE Devices` and the GNSS tab `GPS
+Sat`, ids, views and keys unchanged. Above the table: a header strip
+(advertisers in the last 60 s, trackers among them, the nearest, reports
+per second) and two panels in the WiFi view's idiom (`web/ui/bledev.js`,
+`web/src/web_bledev.c`). Channels would say nothing: an HCI advertising
+report carries none, so every host-controller row is channel -1. **Who
+is around** (`/api/ble/classes`) is a device class x time grid, each
+cell the class's five busiest advertisers by advertising reports as
+stacked bands (a named device in its name's hash colour, else its
+address's) and grey for the rest, the WiFi channel mix's engine on a
+second instance keyed by class slug, its rows in slothweb.db's `chmix`
+as kind 3 under `b:` keys (no schema step: v7 still; each view reads its
+own namespace), with `ble.class.advertisers` and `ble.class.adv` as the
+heat fallback. Seven classes, first match wins: Trackers (a watch
+category, Appearance Tag or Keyring, a Tile or CHIPOLO UUID by the SIG
+registry), Input (sloth's HID bits), Beacons (Eddystone), Wearables &
+audio (Apple Proximity Pairing and Magic Switch, Fast Pair service data,
+Samsung's buds and watch packets, worn, audio and health Appearances),
+Phones & computers (Apple AirDrop, Handoff, Instant Hotspot, Nearby
+Action and Info, MS-CDP, Phone and Computer Appearances), Vehicles &
+IoT (HomeKit, fixed, home, vehicle and industrial Appearances), Unknown;
+sources in `research/bluetooth/ble-device-classes.md`, iBeacon,
+AltBeacon, Find My and SmartTag left out there with the reason, and
+Trackers always a row because an empty one is information. **How
+close** (`/api/ble/proximity`) is one row per advertiser heard in the
+window (12, 24 or 48; trackers first, then signal less
+announced power), each
+cell its mean `rf.rssi.ble` graded hot-is-near by sloth's own distance
+bands for an advertiser announcing no power (-39.75, -53.11, -67.75 and
+-81.11 dBm at 1, 3, 10 and 30 m), with what the grade is not and that
+rotating addresses are not linked said under it. The drawer gains the
+address's signal over the window in the grade's colours, its class and,
+for an Ubertooth row, the LL channels it was heard on. Review fixes
+(2026-11-02): the BLE `adv_count` high-water marks are a table of their
+own, so a flood of random addresses cannot evict the Wi-Fi and flow
+counters' marks; every tracker in the window is read before the newest
+of the rest; each row is graded at its own announced power (the new
+`ble_device` `ext_tx_power`, else TX Power Level, else 0 dBm) and
+nearest ranks by signal less it; with no BLE sensor the strip says so
+and the panels are hidden, and an Ubertooth alone is said to be
+uncredited; the drawer's BLE lines are cleared on each open and redrawn
+on a theme change; a name opens the drawer on a click only; phone-width
+class labels fall back to glyphs. sloth's side:
+`ble_device` is re-sent once a 10 s slot while the advertiser is heard
+([[jsonl-schema]]), so both panels have a point a fine bucket rather
+than one per 300 s heartbeat. Tests: `web/tests/test_bledev.c` (each
+rule, the order, the slugs, the page's copies, the grade against
+`src/rf_distance.*`, the class mix fed from records, the gauge, both
+routes from memory and the store, the namespaces sharing `chmix`, a v7
+file reopening as one; each absence seen red under a named mutation),
+`tests/test_ble_rules.c` (the slot over sixty passes).
+
+Since #224 (2026-11-16) both panels are drawn isometrically by default
+(`web/ui/iso.js`, the Spectrum tab's projection and row painter): the
+classes, or the advertisers in the table's order, across; the time
+cells receding up and to the right, the newest in front; a column's
+height and heat the class's cell in the cells select (0 to the window's
+largest cell) or the advertiser's mean signal (-110 to -30 dBm, taller
+and hotter stronger; the distance band at the row's own power is in the
+tooltip and the list). Hover names the row, time and value (for a class,
+its busiest advertiser and its share of the reports); a click or the
+arrow keys (left and right across, up older, down newer) pick the cell
+for the list under the panel. One `isometric` checkbox for the tab
+(`bledev.iso`) draws both flat as above; each canvas's spoken label
+follows the mode.
+
+Since 2026-11-17 (owner: "color code finding by band channel and ssid
+... easy to tell by color groupings") BLE, with no channel and no SSID,
+is grouped by class: each class its own hue (Phones & computers blue,
+Wearables & audio green, Trackers red-orange, Input yellow, Beacons
+cyan, Vehicles & IoT violet, Unknown grey; `web/ui/iso.css`
+`--iso-c-*`, both themes) on the column's floor strip and top edge. The
+class panel stacks a cell's busiest advertisers by share as shade steps
+of the class's hue, the rest darkest; the proximity panel groups the
+advertisers by class (each class in the table's order, the class named
+under its span; the picked advertiser stays picked across the reorder),
+each in its class's hue at one of four shades a hash of its address
+picks. A class key sits under each panel; the height is unchanged and
+no label was dropped.
+
+**Anonymous advertising** (2026-11-03). An LE Extended Advertising
+Report with Address_Type 0xFF carries no AdvA; sloth zeroes the address,
+so one row per sensor holds every anonymous advertiser that sensor hears
+([[ble]]). Until now those rows were in `ble.class.advertisers` and in
+neither `ble.class.adv` nor the class mix, so a class row's advertiser
+count and its drawn bands disagreed. Now anonymous advertising is
+Unknown's, whatever its row's fields would read as, and its three
+numbers sit in that one row: its reports are one entry
+(`{id: "anonymous", kind: "anon", class: "b:unk"}`; in the mix and
+`chmix` kind 4 with the zero address, which no advertiser's entry can
+carry, since an address reaches the mix only through `web_key_mac()`,
+which refuses all zeros, and the kind is in every key besides), and it
+counts as one advertiser there. Not per record, because the row's
+fields are no one advertiser's: sloth keeps the first manufacturer pair
+the row heard for good, ORs in HID bits and only ever sets a watch
+category ([[ble]]: "an anonymous row's AD fields are the least
+trustworthy on the table"), so the first anonymous advertiser a sensor
+hears would fix the class of every anonymous report after it, and one
+keyboard Appearance would move all later ones to Input for good.
+`web_ble_class_of_rec()` and `web_ble_dev_class()` both answer Unknown
+for `addr_type` 255, so the gauge, the reports and the band cannot
+part when the fields change. That includes an anonymous row sloth's watchlist marked
+(`watch_category` set): it stays in Unknown, not Trackers, because the
+mark may belong to any one of the advertisers sharing the row; the
+table and the drawer show the row's watch category as before. The
+anonymous advertiser is counted by its own flag, not by its zeroed
+address, so a real row whose AdvA is literally all zeros (an Ubertooth
+copies AdvA as heard) is a second advertiser, not merged with it. Under
+a read cut (256 rows read) the header's `advertisers` is the rows read
+plus anonymous advertising, so it can read 257 with `advertisers_more`
+set. A named advertiser whose fields change
+class still can: its earlier bands stay in the row it left, so in the
+bucket where it moves it can be drawn in both rows while the gauge, a
+snapshot, counts it in one. The band is `--muted`, the cell's list says
+"anonymous" and it opens no drawer. **Where it is not**: the proximity panel. With no address
+there is no `rf.rssi.ble` series to key, and the one row per sensor
+carries whichever anonymous advertiser was heard last, so a line of it
+would be several devices' signals drawn as one. It has no row there and
+is never the strip's nearest, and it is skipped before the 256-address
+read cap, so a cut still reads 256 advertisers and the note's "of the
+256 read" is true; the answer's `anonymous_heard` and the panel's note
+say when some was left out, and the class panel counts it.
+A b801ab7 slothweb reading a newer slothweb.db skips kind 4 (its reader
+keeps kind 3), so on a downgrade those reports are missing from the
+minute and hour cells rather than drawn as an address; no schema step.
+Tests: `test_anonymous_counts_agree` (built from the one anonymous row
+sloth can send: the host stream's, its mfr pair kept, the class change
+from an OR-ed HID bit), `test_anonymous_routes` (the page's `isAnon()`
+word held to the one the answer serves), the anonymous row under a cut
+in `test_proximity_keeps_old_trackers`, and the kind-4 rows in
+`test_chmix_ble_kind` and `test_store_shares_chmix`
+(`web/tests/test_bledev.c`), each seen red under a named mutation.
+
+**A1 and the 10 s slot: measured, no code change** (2026-11-03). The
+slot made `ble_device` about 30 times as frequent, and
+`records.rate{ble_device}` (a counter keyed by record type) is A1-scored.
+It does not fire on that step on the reference host, and the arithmetic
+is in the baseline code itself (`web/src/web_baseline.c`
+`feed_cell()`, `web_baseline_score()`, `web_bl_cell_sd()`):
+
+- `records.rate` first shipped in 379ac49 (authored 2026-11-02 14:10
+  UTC, 08:10 CST); the host's first slothweb start after that was 08:15
+  CST, and the sensor with the slot started at 22:52 CST the same day
+  (the journal's unit starts). Under 15 hours of a 168-hour week: no
+  hour-of-week cell of the series holds more than one pre-step sample.
+- A cell is an EWMA with alpha = 1 - 2^(-1/4) = 0.1591; its first
+  sample sets the mean with var 0; it scores z = 0 while n < 3
+  (`WEB_BL_WARM_N`); a minute is scored before its hour is fed.
+- One pre-step sample m0, then the new rate r m0 each week, d = (r - 1)
+  m0: week 1 is scored at n = 1 and week 2 at n = 2, both warming. After
+  week 2's feed the cell's residual is (1 - alpha)^2 d and its variance
+  alpha (1 - alpha)^2 (2 - alpha) d^2, so week 3's first scored minute
+  has z <= (1 - alpha) / sqrt(alpha (2 - alpha)) = 0.841 / 0.541 = 1.55,
+  for any r; the within-hour term only adds to the spread, and each
+  later week is lower. `WEB_ANOM_Z_THRESHOLD` is 3, for three minutes
+  running: a steady minute cannot reach it, and a noisy one would need
+  1.66 times the new mean three minutes in a row.
+- Measured through `web_baseline.c` itself (a scratch driver, not
+  committed) at r = 30: z peaks at 1.48, 1.54, 1.55 and 1.55 for m0 of
+  0.5, 4, 40 and 400 records a minute.
+
+What would fire: two pre-step samples cap z at sqrt((1 - alpha) /
+alpha) = 2.30, still quiet, but three or more fire A1 on the first
+post-step week (measured z 14.5 to 290 over the same m0). So an install
+that had learned `records.rate{ble_device}` for three weeks before
+taking b801ab7's sensor would see one A1 episode on `ble_device`; none
+can exist, because the metric and the slot shipped 14 hours apart. A
+later change of a record's feed shape on an install with a learned
+series is not handled by any rule today: that is a follow-up (a feed
+generation slothweb can read from `sensor_health`, or a rebaseline on a
+release boundary), not a gap this step opened.
+
+The SIG's company identifiers, 16-bit service UUIDs and appearance
+values are committed as CSVs under `web/data/btsig/` with a
+`SOURCE.md` (URLs, the date and SHA-256 of the YAML fetched once during
+development, the licence note) and compiled in by
+`web/tools/btsig_gen.c`, as the IEEE registry is; `make update-btsig
+SRC=DIR` converts the YAML found in a given directory and never
+fetches (the ab5fcb2 ruling). Every string off the stream is hostile
+and treated as the Wi-Fi tables treat theirs: the local name in its
+display form (`web_ssid.h`) with the non-printable marker, the sensor
+and PDU words, kinds, families and distance words only from sloth's
+closed vocabularies (else `other`, counted), the watch category only
+as sloth's slug, the finding's key kept for the resolve join and never
+rendered. Full description, the parity table and the v7 schema:
+[`web/README.md`](../../web/README.md#ble). Tests:
+`web/tests/test_ble.c` (hand-built records, every route under each
+scope, the metrics, the store round trip and seed, each absence seen
+red under a named mutation), `web/tests/test_btsig.c` (the committed
+CSVs to `SOURCE.md`'s hashes, the lookups), the v5 migration pair in
+`test_store.c`, the vocabularies held to `src/` as text in
+`test_parity.c`.
+
+Where the stream does not carry the TUI's number, the web says what it
+shows. The header's `BLE advertisers: N` is sloth's own table
+(`sensor_health` `ble_devices`, the TUI's `s->ble_device_count`), with
+the rows slothweb keeps beside it (they outlive sloth's evictions and
+restarts); the rotation block counts the same live figure. The TUI's
+`flood keys` is the flood detector's tracked windows, which no record
+carries, so the web shows `standing floods: N`, the `adv_flood`
+findings standing, under that name. `ble.devices` is sampled while
+either source is configured (an Ubertooth alone counts in sloth's
+table), `ble.adv_rate` only with the host stream, whose reports it
+counts. A finding seeded after a restart carries every field the live
+one rendered (`ble_alert` keeps eight integer columns and a flood's
+citation line in `detail`, inside v7, which had not shipped), and a
+resolve on its live key resolves the stored row in place. The BLE
+tables are inside `--web-max-mb`: the ceiling drops the advertisers no
+flag marks right after the channel mix and before any keyed history,
+the HID and watchlisted ones and the findings after the keyed history,
+so an address flood trims its own rows and not the Wi-Fi and host
+series; the row cap is 8,192 (eight times the in-memory table), the
+flagged rows last. A failed write leaves its batch dirty for the next
+flush. Tests on the store side: `test_ble.c`'s failed-write and
+row-cap cases, `test_store.c`'s
+`test_ceiling_takes_ble_rows_before_history`.
+
+**Sources**: `src/views/ble.c`, `src/jsonl.c` (the three emitters),
+`src/rf_distance.c`, `src/ble_detect.c`, `web/src/web_ble.h`,
+`web/src/web_store.c` (v7), `web/data/btsig/SOURCE.md`,
+`research/papers/rssi-distance-estimation.md`.
+**Last updated**: 2026-11-02.
+
+## An SSID's detail (2026-11-11)
+
+Owner request: "on the wifi tab we should be able to select any ssid
+and get a detail view just like we do for a client". `web/README.md`'s
+"An SSID's detail" has the route and the drawer in full; what matters
+for a reader of the design:
+
+- **One function, one hook.** Every SSID the page writes already went
+  through `ssidSpan()` (app.js), so making that span a link
+  (`SlothSsid.link()`, `web/ui/ssid.js`) made every name selectable at
+  once: the AP table and its SSID history, the card's scan, the device
+  drawer's last SSID, PNL and associations, the Devices column,
+  History. Two places needed a line of their own: the `(hidden)` word
+  (`ssidHidden()`), and the channel mix's list, whose row is already a
+  button, so the detail is a second, small button beside it.
+- **An SSID is octets.** It travels as `ssid=` the base64url of its
+  octets (`-` for none), computed by the page from the display form
+  (`web_ssid.h`), which reads back to one octet string only. The server
+  accepts one spelling an octet string, binds it and compares with `=`:
+  never a LIKE pattern, never statement text. Empty, not UTF-8, 32
+  octets and `%`/`_` names are each tested.
+- **Read-only, the existing allow-list.** `/api/wifi/ssid` reads
+  `beacon_aps`, `beacon_ap_ssids`, `karma_candidates`, `assocs`,
+  `pnl_ssids` and `alerts` through the M4 reader; no column was added,
+  nothing is written, nothing is kept in slothweb.db. Twin links come
+  from the stream (`web_chain.h`), since sloth.db's `twin_episodes` is
+  not on the list.
+- **The alert walk is bounded by work.** Finding the alerts whose key
+  names one of an SSID's BSSIDs is an `instr()` per key per BSSID with
+  no index to help. A clock bound was tried and failed on the suite's
+  large file, whose 30,000 recent alerts all sit in one two-week
+  stretch: three empty slices predicted nothing about the fourth. The
+  bound is now a row count fixed before the walk (320,000 / (8 +
+  BSSIDs), the newest), and the answer says how far back it reached.
+- **Designated.** Since JSONL 1.2.0 sloth writes its `--my-ssid` and
+  `--my-bssid` rosters as the `ownership` record ([[jsonl-schema]]);
+  slothweb keeps the newest in memory (`web/src/web_own.c`) and the
+  drawer says `yes` (one of the N networks sloth designates), `no`, or,
+  with no record received, `not known: sloth has not reported its
+  designated networks`: never a guess. A BSSID on `--my-bssid` is marked
+  `yours` in the drawer's list.
+- **Scope.** Monitor's and Hybrid's; `out_of_scope` under Local, as the
+  WiFi view's radio panels are.
+
+**Sources**: `web/src/web_ssidview.h`, `web/src/web_ssid.h`,
+`src/alert_key.c`, `src/db_schema.c`, `web/tests/test_ssidview.c`.
+**Last updated**: 2026-11-11.
+
+## The Probes tab (2026-11-11)
+
+Owner request: "a separate probes tab that shows clients searching for
+ssid's. associating these with clients or other devices where possible
+keep track of ssid's and look for devices probing for the same ssids".
+`web/README.md`'s "Probes" has the routes, the caps and the table of
+what sloth records; the design, for a reader deciding whether to trust
+a row:
+
+- **No new store.** Everything is read from sloth.db
+  (`probe_clients`, `pnl_clients`, `pnl_ssids`, `assocs`,
+  `seqnum_correlations`, `devices`, `beacon_aps`) through the M4
+  reader's existing allow-list. "Keeping track" of SSIDs is therefore
+  whatever sloth.db retains: it survives a restart of slothweb or of
+  sloth, and the window (24 h, 7 d, 30 d, all) is in every caption.
+- **A wildcard probe is not an SSID.** sloth's PNL table drops it
+  (`src/probe_pnl.c`), and the reads refuse an empty name as well. sloth
+  keeps no wildcard count; the view shows `frames` (all probe requests,
+  `probe_clients.frame_count`) and `directed` (`pnl_clients.probe_count`)
+  as the two separate counters they are and does not subtract them.
+- **Tied to, with a basis.** A devices row for the same MAC; an
+  association seen for it; sloth's sequence-number correlation with
+  another MAC. The last is drawn as "may be one radio with", its basis
+  in the tooltip (gap, milliseconds, frames), in the repo's hypothesis
+  wording: a passive sensor corroborates, never confirms. sloth.db's
+  table has no confidence column (the stream's record does), so none is
+  shown.
+- **The similarity.** `w(s) = ln(N / df(s))`, `sim(A,B)` the weight of
+  the shared names over the weight of either's, and a pair ranked only
+  on at least `min` (default 2) shared *uncommon* names, uncommon being
+  asked for by 2 to U stations, `U = N / 20` within 2..16. A name every
+  phone asks for weighs nothing and makes no candidate. The formula and
+  both hand-worked figures are pinned in `test_probes.c`.
+- **Groups** are connected components over pairs sharing at least
+  `min` uncommon names: a station is in a group when it is linked to
+  one other member, not necessarily to all. The caption says so.
+- **Wording.** "probe for the same networks", never an owner. Shared
+  names mean shared places or a shared configuration: a household, an
+  office, a conference.
+- **Bounded.** One ordered pass or indexed reads only, each under the
+  request's 250 ms; the caps are constants in `web_probes.h`, and an
+  answer that met one says N of M. Measured on 200,000 `pnl_ssids` rows
+  in `test_probes.c`.
+- **Scope.** The monitor radio's: empty under Local, saying why.
+- **Privacy.** A probed-SSID list can identify a home or a workplace.
+  The page shows what sloth.db already stores to the peers already
+  admitted and adds no export; the bundle is unchanged.
+
+**Sources**: `web/src/web_probes.h`, `src/probe_pnl.c`,
+`src/capture/probe.c`, `src/seqnum_track.c`, `src/db_schema.c`,
+`web/tests/test_probes.c`.
+**Last updated**: 2026-11-11.
+
+## Sensor health: the host and the inventory (2026-11-11)
+
+Owner request: "in sensor health make sure you list all the sdr radios
+gps etc, also include system status for voltage and internal temps cpu
+usage. include graphs on this page showing status and any trends".
+
+The `#health` view now leads with three panels fed by sloth's
+`sys_status`, `sys_sensor`, `source_status` and `receiver_hw` records
+([[jsonl-schema]], JSONL 1.1.0):
+
+- **Sources and receivers**: every source sloth can read, configured or
+  not, with its state as a mark and a word, its endpoint, the receiver
+  it runs on, when it last delivered and its rate; and every receiver
+  attached to the host (SDRs, GNSS receivers, serial bridges, Wi-Fi
+  adapters, Bluetooth controllers). A source is tied to a receiver only
+  where sysfs ties them; an SDR owned by readsb or Dire Wolf is listed
+  as attached and not credited to the decoder's TCP endpoint. No serial
+  number is read or shown.
+- **The sensor host**: CPU, load, memory, sloth's RSS, disk, uptime,
+  each temperature and voltage, the under-voltage alarm. A reading the
+  host does not have is said (`not reported by this host`), never 0.
+- **Trends**: G1 over the hour-of-week band per figure and G5 strips
+  for a source's up/down and the alarm, over a window of 1 h to 30 d,
+  each with a trend word by a stated rule (thirds' medians against the
+  series' own robust spread; `warming` on too few samples).
+
+`web/src/web_sysstat.c` keeps the newest batch in memory and answers
+`/api/sys`; `web/ui/syshealth.js` is the page's module (two hooks in
+`app.js`). The history is eight new metrics in the existing series
+tiers (`sys.cpu`, `sys.mem_used`, `sys.rss`, `sys.undervolt`,
+`sys.temp`, `sys.volt`, `source.rate`, `source.up`), the keyed four in
+a new key class `sys` (64 keys), stored by metric name in the store's
+existing tables: **slothweb.db's version does not change**. None is
+scored by the anomaly engine. With no live stream (a copied sloth.db)
+the panels say there is nothing to show: sloth.db holds none of this.
+The full description is `web/README.md`, *Sensor health*.
+
+**Designated networks (JSONL 1.2.0).** Owner ruling: "export your
+designated networks from the sensor". The `ownership` record carries
+sloth's `--my-ssid` / `--my-bssid` rosters and the known-device roster's
+count; `web/src/web_own.c` keeps the newest (ingested beside the host
+status, every scope's) and answers yes, no or not known. The SSID
+drawer's `designated` (with `designated_count`) and its BSSIDs', the
+Probes view's `/api/probes/ssids` rows (`designated`, the answer's
+`designated_count`; a `yours` mark on a designated network being asked
+for, the case an operator most wants to see) and the WiFi AP table's
+rows (by BSSID or SSID) use it. With no record every one is `null` and
+the pages say it is not known.
+
+**The beacon memory (JSONL 1.2.0).** Owner ruling: "report memory
+overflow in sensor health". One line under the sources table says
+whether `EVIL_TWIN`'s late-arrival signal is working: `evil-twin
+late-arrival: on (beacon memory N of 4096)`, or `quiet until <time>:
+the beacon memory overflowed (...)` once sloth's memory of dropped
+BSSIDs has overwritten one and does not yet reach back a day. The time
+is the sensor's own clock (its batch's `ts` plus the time it said was
+left), shown in the browser's zone. `/api/sys` carries it as
+`beacon_recall` (`slots`, `max`, `overflowed`, `reach_s`, `quiet`,
+`quiet_s`, `quiet_until`), `null` from a sloth older than 1.2.0; a
+member out of range, or quiet without an overflow, drops the block and
+keeps the rest of the batch.
+
+## Direction finding (2026-11-17)
+
+The WiFi view's **direction finding** card shows [[direction-finding]]'s
+two records, `df_radio` and `wifi_df` (JSONL 2.2.0), which sloth-wifi
+writes only when run with `--df-iface`. slothweb keeps the newest record
+per key (`web/src/web_df.c`, fed from sloth-wifi's feed beside the
+lures): 4 radios and 512 transmitters, sloth's own table sizes. sloth's
+table recycles its rows and these records have no `gone` form, so a new
+transmitter takes a free row, then the row written longest ago
+(`evicted` counts the ones that were still fresh). A row not refreshed
+for 660 s is left out of answers and counted `stale`.
+
+`GET /api/df` (no parameter) answers `radios` in radio order and
+`emitters`, `lean` before `weak` and the widest margin first, at most
+128 with `held` saying how many were fresh. What is kept of a `wifi_df`
+is its scalars (`best_radio`, `best_iface`, `margin_db`, `along_m`,
+`bearing_deg` and `bearing_err_deg` (JSONL 2.4.0, the card's bearing
+column, `NW 315° ±30°`; a radio's `x_m`, `y_m` likewise),
+`quality`, `heard_by`, `channel`, `last_seen`); the `rssi` and `level`
+arrays are not, since the stream decoder checks a nested array and skips
+it. A record with a malformed or out-of-bound member is refused whole
+and counted (`rejected`): a radio index past the table, a role that is
+not `sensor` or `df`, radio 0 not the sensor, an interface name sloth
+would not take, a negative margin, a bearing that is not one of the
+eight compass points or an error that is not 15, 30 or 45, one of that
+pair without the other or beside `along_m`, half an east/north place or
+one beside `pos_m`.
+
+`reported` tells "off" from "not known" as the lures card does: `true`
+from a 2.2.0 stream (no radios then means sloth runs without
+`--df-iface`, or its 300 s heartbeat has not come since slothweb
+connected), `false` before it, `null` before any `sensor_health`. The
+card (`web/ui/df.js`, `window.SlothDf`) loads the route when the WiFi
+view shows and every 10 s while it is visible, textContent only. Its
+footer says what the card is not: a bearing, a side of the line, a
+distance, or anything at all between radios with unlike antennas.
+Monitor's and Hybrid's; `/api/df` answers `out_of_scope` under Local.
+In memory only: nothing is stored, no series, no MCP tool, no fleet
+export. Tests: `web/tests/test_webdf.c`.
+
+## Lures and key harvesting (2026-11-12)
+
+#187 and #172 left the KARMA and key-harvest evidence in the TUI and
+the alerts: an alert said a rule fired, nothing said what it counted.
+sloth now writes the rules' tables to the stream (JSONL 1.3.0,
+[[jsonl-schema]] *Credential lures*): `karma_suspect` per `[y]` row,
+`harvest_station` per station that left an M1 unanswered,
+`harvest_chain` per BSSID whose claimed deauths were followed by a
+victim's fresh handshake. Change-only, with a `gone` record when a row
+leaves sloth's table; counts only (no victim address, no forged-name
+list).
+
+slothweb keeps the newest record per key (`web/src/web_lure.c`, fed
+from the ingest beside the host status), bounded at sloth's table sizes
+(64, 32, 16), and answers `/api/lures`; a record with a malformed or
+out-of-range member is refused whole and counted. A row not refreshed
+for 11 minutes (two heartbeats and a minute: a sloth that stopped, or
+restarted without it) is left out of the answer and counted as
+`stale`. Because sloth writes nothing while its tables are empty, the
+answer also carries `reported`, from `sensor_health`'s
+`jsonl_version`: `true` from 1.3.0 (an empty card is "none"), `false`
+before it ("this sloth does not report these"), `null` before any
+sensor_health ("not known").
+
+The card (`web/ui/lure.js`) sits on the WiFi view between the access
+points and the chains: three tables of the counts, the state sentence
+above them, polled every 15 s while the view shows. Counts, not a
+verdict: whether a row crossed its rule's (possibly tuned) threshold is
+the alert's. The monitor radio's, so hidden under Local with the rest of
+the view; `/api/lures` answers `out_of_scope` there. Every string is
+`textContent`; the SSID and tool name are the air's.
+
+The detail audit (`web/src/web_alertfmt.c`) now lists `PMKID_HARVEST`,
+`HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`. The
+two sensor rules bind every `%s` to a plain variable the audit can
+follow (`rules_sensor.c`: `sname`, `more`, and the source rule's
+buffer renamed `msg`, since `o->detail` shares the buffer's name).
+`KARMA_PROBE_FORGE` joined the list on 2026-11-12 (#187): its rule
+formatted `fan_note`, a name the audit's banned word "note" refuses, and
+was withheld until `rules_twin.c` renamed it `fan`. Its other `%s`
+arguments are the BSSID, a captured station's MAC (`sta`) and literals.
+
+### One BSSID's KARMA detail (2026-11-12, #187)
+
+The card's BSSIDs, and the device drawer of a BSSID the stream holds
+lure evidence for, open a drawer (`web/ui/karma.js`) from
+`/api/lures/bssid?bssid=` (`web_lure_bssid_route()` in
+`web/src/web_lure.c`). It shows what sloth sent and nothing inferred:
+
+- **the row over time**: each `karma_suspect` record whose counts or
+  strings moved is a change; a heartbeat repeating the newest only
+  stretches it (`ts` to `ts_last`), as sloth's own change-only
+  signature leaves times out. The newest 16 changes per BSSID for 64
+  BSSIDs (sloth's `MAX_KARMA_APS`), the least recently written given up
+  first. They outlive sloth's `gone`, so the drawer says when the row
+  left; a row back after it starts a new change.
+- **the alerts**: the stream's open and recently closed `KARMA_AP` and
+  `KARMA_PROBE_FORGE` incidents whose key is exactly `karma:<bssid>` or
+  `karmaforge:<bssid>` (`akey_mac()`'s and `karma_alert_key()`'s
+  shapes), by slothweb's handle, the alert page's id; each row carries
+  its triage through `alertLink()`. sloth.db's older rows are on the
+  Alerts page, not here.
+- **the hardware verdict**: `hw_verdict` / `hw_signals` (#151) as the
+  newest `KARMA_AP` record carries them; a record without them is "no
+  verdict now". Only sloth's words are kept (`suspected-` or
+  `corroborated-` then `[a-z0-9-]`, signals `[a-z+]`, 47 octets);
+  anything else is refused whole and counted.
+- **the probe-response latency**: the `beacon` record's `probe_lat`
+  (JSONL 1.6.0, #187 S3). The decoder (`web/src/web_jsonl.c`) keeps
+  that object's scalars as `probe_lat.<member>`, the second name on its
+  allow-list beside `loc`; the longer prefix is checked against the
+  line's remaining length before each member, so the record's text
+  still cannot outgrow the line (`WEB_JL_ELONG` past it). None of the
+  member names holds a word `web_secret.h` withholds. 256 BSSIDs,
+  least recently written given up first; a beacon without the member
+  drops what was held. sloth uses it in no verdict and the page says so.
+
+Monitor's and Hybrid's, `out_of_scope` under Local, as `/api/lures`. A
+row only another sloth host heard (grey, `remote`) carries no lure
+data: its AP table cell and its drawer line read `-`.
 
 ## Tests
 
@@ -841,7 +3084,9 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 | sloth.db opened read-only, the test asserting it | `test_open_flags`, `test_reading_changes_nothing`, `test_live_wal_reader`, `test_wal_without_shm`, `test_refusals`, `test_older_schema` |
 | no credential or secret column servable | `test_allow_list_against_the_guardrail`, `test_authorizer_denies`, `test_device_drawer` (no user name in the answer) |
 | the query language, bounded, one bound statement, fuzzed | `test_query.c`, `test_query_terms`, `tests/fuzz/fuzz_web_query.c` |
-| OUI table generated, never committed, build without it | `test_oui.c`, `test_builtin_table`; the `web/data/` and CSV ignore rules |
+| OUI table generated, never committed, build without it | `test_oui.c`, `test_builtin_table` (the default build `ieee`, an empty `WEB_OUI_DIR` `sloth`); `/build/` keeps the generated table out of git |
+| the committed registry (2026-10-26) | `test_committed_registry_matches_source`, `test_committed_registry_builds_in_time`, `test_second_file_after_many_names`, `test_update_oui_is_never_automatic` |
+| vendor research under the OUI card (2026-10-27) | `test_vendorkb.c`: every entry complete, cited and named for an exact registry `Organization Name`, its affiliates too; the lookup folding spelling and flagging an affiliate; `"vendor_research"` on the drawer and Lookup, without the entry's country, parent and founded for an affiliate, `{found:false}` without a file; the page drawing it as text; the generator refusing each defect (`test_generator_refuses_each_defect`); `COVERAGE.md`'s Have and Pending lists together the reference host's list, every Have name finding its entry and the count line equal to the lists (`test_coverage_matches_reference_and_entries`) |
 | passive names, PTR cache, v4 migration | `test_ptr.c`, `test_v3_file_is_migrated`, `test_v3_failed_step_leaves_file_unchanged`, `test_passive_ptr_rows`, `test_newer_file_refused` |
 | A4 and the durable A2 | `test_a4_unknown_vendor`, `test_a4_off_without_the_ieee_table`, `test_a4_burst_is_one_episode`, `test_a2_durable_first_seen`, `test_device_z_now` |
 | routes, strict validation, presence, drawer, Lookup, page | `test_devices.c` |
@@ -856,6 +3101,7 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 | behind `--web-allow-sql`, default off; `--strict`; the remote warning | `test_off_by_default`, `test_web_allow_sql_flag` |
 | 5 s, 10,000 rows, bounded output, one at a time | `test_limits`, `test_one_at_a_time` |
 | WiFi: waterfall, AP table, deauth timeline | `test_wifi.c`, `test_parity.c` |
+| The isometric waterfall (Spectrum, WiFi, BLE Devices; #224) | `test_iso.c` |
 | History: strip, who was here, sessions, new since | `test_history.c` |
 
 #164 (M6) maps as follows.
@@ -865,7 +3111,8 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 | a stranger with the README can run it in five minutes | `make web-quickstart-check` (`web/tools/quickstart_check.sh`: the README's quick start, read out of the README and run in a temporary copy of the tree; `/api/health` connected with sloth.db open, `/` the page) |
 | every start-up message documented | `test_every_start_message_is_documented` (`test_readme.c`) |
 | the security section's points; the screenshots present and small | `test_security_section`, `test_screenshots` |
-| Flows: tabs, SMB1, withheld columns, validation, paging, the chord's fold | `test_flows.c` |
+| Flows: tabs, SMB1, withheld columns, validation, paging, the chord's fold, the matrix form (#171 V4) | `test_flows.c` |
+| An alert's proof: pcap reader and decoders on hand-built frames, the name gate, the manifest index, hash verified and mismatched, the routes, the download, the assessment generator's build stops | `test_evidence.c`; `tests/fuzz/fuzz_web_pcap.c` |
 
 The restyle maps as follows.
 
@@ -883,12 +3130,46 @@ except the store's owner rule, held by code reading only.
 The suite runs clean under ASan/UBSan and TSan, and `make cppcheck`
 covers `web/`.
 
+## Camera tab
+
+A still from a camera, refreshed every 5 s while the tab is open
+(owner request, 2026-11-15). slothweb never drives the camera: a
+separate capture helper, under its own account, writes `latest.jpg`
+(replaced atomically) into `--camera-dir` (default
+`/var/lib/sloth-camera`), and `GET /api/camera.jpg` serves it as
+`image/jpeg` with `X-Sloth-Captured` (mtime, Unix s) and `X-Sloth-Age`
+(s). 404 `no_image` when there is none; 503 `invalid` for anything
+that is not a regular file of at most 8 MB starting with a JPEG SOI and
+ending with an EOI; links are not followed; POST is 405. The page loads
+no subresource: `web/ui/camera.js` fetches the JPEG, decodes it with
+`createImageBitmap()` and draws it on a canvas, so the page audit's
+bans (`<img`, `url(`, `.src =`) and `img-src data:` stay as they are.
+
+On Beta-Site the helper is `sloth-camera.service`
+(`/usr/local/sbin/sloth-camera-gopro`, a site script, not shipped):
+a GoPro MAX2 on USB (CDC NCM network, camera at `172.2X.1YZ.51`,
+Open GoPro HTTP API) streams its preview as MPEG-TS/HEVC to UDP 8554;
+ffmpeg writes each keyframe. Each keyframe, not an `fps` filter: the
+preview's timestamps advance about 10x slower than the wall clock.
+
 ## Related pages
 
 - [[data-socket-exposure]] — the remote-bind guard this copies.
+- [[direction-finding]] — what `--df-iface` reports and what it cannot say; the WiFi view's card.
 - [[jsonl-schema]] — the stream M1 consumes.
 - [[sqlite-schema]] — sloth's database, which M4 reads read-only and
   M2's store never touches; its migration rule is the one
   `slothweb.db` follows; its query recipes are the SQL box's (M5).
+- [[alert-remediation]] — the investigate-and-fix steps an alert's page shows.
+- [[sdr-sweep]] — the Spectrum tab's sweep helper and its two routes and the ranges (`?range=`).
+- [[rtl433]] — the rtl_433 tab and `/api/rtl433`.
+- [[victron]] — the Victron tab, `/api/victron` and `/api/victron/history`.
+- [[alerts]] — the engine and the rules the Alerts page lists.
+- [[capture-scope]] — the Monitor / Hybrid / Local switch and how each datum is placed.
+- [[ble]] — the Bluetooth host source whose `ble_device` / `ble_alert`
+  records and `sensor_health` members the BLE view shows.
 - [[cli-reference]] — sloth's own flags; slothweb's are in
-  [`web/README.md`](../../web/README.md).
+  [`web/README.md`](../../web/README.md), the triage slice's
+  `--web-read-only` and `--web-assessments` among them
+  (`tests/test_docs_consistency.c` holds that page to sloth's own
+  `src/main.c`, so slothweb's flags cannot be tabled there).

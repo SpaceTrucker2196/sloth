@@ -11,10 +11,20 @@
 #include <string.h>
 #include <time.h>
 
+#include <unistd.h>
+
+#include "web_agent.h"
 #include "web_anomaly.h"
 #include "web_baseline.h"
+#include "web_ble.h"
+#include "web_btsig.h"
+#include "web_bledev.h"
+#include "web_chmix.h"
 #include "web_config.h"
 #include "web_devices.h"
+#include "web_frrs.h"
+#include "web_fleet.h"
+#include "web_chain.h"
 #include "web_ident.h"
 #include "web_ingest.h"
 #include "web_live.h"
@@ -23,6 +33,8 @@
 #include "web_ptr.h"
 #include "web_rollup.h"
 #include "web_server.h"
+#include "web_camera.h"
+#include "web_spectrum.h"
 #include "web_slothdb.h"
 #include "web_sqlbox.h"
 #include "web_store.h"
@@ -31,6 +43,11 @@
 static web_server_t  g_srv;   /* ~2.3 MB: static, not on the stack */
 static web_live_t    g_live;
 static web_ingest_t  g_ingest;
+/* sloth-rf (#214): its own stream state, ingest thread and database
+ * reader, used only with --rf-socket / --rf-db. */
+static web_live_t    g_live_rf;
+static web_ingest_t  g_ingest_rf;
+static web_slothdb_t g_sdb_rf;
 static web_rollup_t  g_rollup;
 static web_metrics_t g_metrics;
 static web_store_t   g_store;
@@ -42,6 +59,28 @@ static web_ptr_t      g_ptr;
 static web_slothdb_t  g_sdb;
 static web_m4_t       g_m4;
 static web_sqlbox_t   g_sql;
+static web_chmix_t    g_chmix;
+static web_chmix_t    g_blemix;
+static web_frrs_t     g_frrs;
+static web_ble_t      g_ble;
+static web_gnss_t     g_gnss;
+static web_adsb_t     g_adsb;
+static web_aprs_t     g_aprs;
+static web_rtl433_t   g_rtl433;
+static web_victron_t  g_victron;
+static web_spectrum_t g_spectrum;
+static web_camera_t g_camera;
+static web_sys_t      g_sys;
+static web_lure_t     g_lure;
+static web_df_t       g_df;
+static web_chain_t    g_chain;
+static web_fleet_t    g_fleet;
+
+/* The store's BLE rows into the in-memory tables, before any thread
+ * starts (the restore runs on the store's writer connection). */
+static void seed_dev(void *ctx, const web_store_bdev_t *r) { web_ble_seed(ctx, r); }
+static void seed_alert(void *ctx, const web_store_balert_t *r) { web_ble_seed_alert(ctx, r); }
+static web_pcapdir_t  g_pcap;
 
 static void on_signal(int sig) {
     (void)sig;
@@ -95,8 +134,12 @@ int main(int argc, char **argv) {
     acfg.oui = web_oui_builtin();
     acfg.sdb = cfg.sloth_db[0] ? &g_sdb : NULL;
     acfg.ptr = &g_ptr;
-    web_sdb_fns_t fns = { acfg.oui, &g_anomaly, &g_ptr };
+    web_sdb_fns_t fns = { acfg.oui, &g_anomaly, &g_ptr, &g_live };
     web_slothdb_init(&g_sdb, cfg.sloth_db, &fns);
+    /* sloth-rf's database (--rf-db): the same reader on another file,
+     * read-only like the first, and like it absent or refused is not
+     * fatal. "" leaves it unconfigured and the RF tables on sloth.db. */
+    web_slothdb_init(&g_sdb_rf, cfg.rf_db, &fns);
     if (web_rollup_init(&g_rollup, cfg.max_keys,
                         have_store ? 1 : WEB_ROLLUP_Q_LONG, err,
                         sizeof(err)) != 0 ||
@@ -107,7 +150,19 @@ int main(int argc, char **argv) {
                           web_baseline_cap_for(cfg.max_keys)) != 0 ||
         web_ident_init(&g_ident, cfg.max_keys, cfg.max_keys / 2) != 0 ||
         web_ptr_init(&g_ptr, WEB_PTR_CAP) != 0 ||
-        web_anomaly_init(&g_anomaly, WEB_ANOM_CAP, &acfg) != 0) {
+        web_anomaly_init(&g_anomaly, WEB_ANOM_CAP, &acfg) != 0 ||
+        web_chmix_init(&g_chmix, have_store) != 0 ||
+        web_chmix_init_sized(&g_blemix, have_store, WEB_BLEDEV_RING) != 0 ||
+        web_ble_init(&g_ble, have_store) != 0 ||
+        web_gnss_init(&g_gnss) != 0 ||
+        web_adsb_init(&g_adsb) != 0 ||
+        web_aprs_init(&g_aprs) != 0 ||
+        web_rtl433_init(&g_rtl433) != 0 ||
+        web_victron_init(&g_victron) != 0 ||
+        web_sys_init(&g_sys) != 0 ||
+        web_lure_init(&g_lure) != 0 ||
+        web_df_init(&g_df) != 0 ||
+        web_chain_init(&g_chain) != 0) {
         fprintf(stderr, "slothweb: time series: out of memory\n");
         return 1;
     }
@@ -117,15 +172,120 @@ int main(int argc, char **argv) {
         fprintf(stderr, "slothweb: store: the saved baselines or anomaly "
                         "episodes could not all be read; starting from what "
                         "was\n");
+    int ble_seeded = 0;
+    if (have_store) {
+        ble_seeded = web_store_ble_load(&g_store, WEB_BLE_DEVICES, seed_dev, &g_ble,
+                                        (long long)time(NULL) - WEB_BLE_RESOLVED_S,
+                                        seed_alert, &g_ble);
+        if (ble_seeded < 0)
+            fprintf(stderr, "slothweb: store: the saved BLE advertisers could not "
+                            "all be read; starting from what was\n");
+    }
     web_metrics_set_ident(&g_metrics, &g_ident);
+    web_metrics_set_mix(&g_metrics, &g_chmix);
+    web_metrics_set_blemix(&g_metrics, &g_blemix);
+    web_metrics_set_ble(&g_metrics, &g_ble);
+    /* The two stores' size (web_sysstat.h): sloth.db as configured,
+     * slothweb.db only when it opened, with its --web-max-mb. */
+    web_sys_set_dbs(&g_sys, cfg.sloth_db, have_store ? cfg.store_path : "", cfg.max_mb);
+    web_sys_set_rf_db(&g_sys, cfg.rf_db);
+    if (cfg.rf_sock.kind) web_sys_set_split(&g_sys);
+    web_metrics_set_sys(&g_metrics, &g_sys);
+    web_metrics_set_live(&g_metrics, &g_live);
+    web_metrics_set_anomaly(&g_metrics, &g_anomaly);
+    web_tsdb_set_mix(&g_tsdb, &g_chmix);
+    web_tsdb_set_blemix(&g_tsdb, &g_blemix);
+    web_tsdb_set_ble(&g_tsdb, &g_ble);
     web_ident_set_ptr(&g_ident, &g_ptr);
     g_m4.sdb = cfg.sloth_db[0] ? &g_sdb : NULL;
+    g_m4.sdb_rf = cfg.rf_db[0] ? &g_sdb_rf : NULL;
     g_m4.oui = acfg.oui;
     g_m4.ptr = &g_ptr;
     g_m4.ident = &g_ident;
     g_m4.anomaly = &g_anomaly;
     g_m4.tsdb = &g_tsdb;
+    {
+        const char *dirs[WEB_PCAP_DIRS];
+        for (int i = 0; i < cfg.npcap_dir; i++) dirs[i] = cfg.pcap_dir[i];
+        if (web_pcapdir_init(&g_pcap, dirs, cfg.npcap_dir) != 0) {
+            fprintf(stderr, "slothweb: --pcap-dir: out of memory\n");
+            return 1;
+        }
+        g_pcap.serve_evidence = cfg.serve_evidence_pcap != 0;
+        g_m4.pcap = &g_pcap;
+    }
     web_anomaly_attach(&g_anomaly, &g_tsdb);
+    /* Triage and the TACDB (web_frrs.h): the operator's state in the
+     * store, written over the HTTP thread's own connection; without a
+     * store every write is 503 no_store and the record still reads. */
+    if (web_frrs_init(&g_frrs, have_store ? &g_store : NULL, cfg.assess_dir,
+                      !cfg.read_only, err, sizeof(err)) != 0) {
+        fprintf(stderr, "slothweb: triage: %s\n", err);
+        web_frrs_destroy(&g_frrs);
+        web_store_close(&g_store);
+        web_server_close(&g_srv);
+        return 1;
+    }
+    g_m4.frrs = &g_frrs;
+    g_m4.chain = &g_chain;
+    /* The agent's path (web_agent.h): only when asked for, a secret of
+     * this run's alone, in a file only this user reads (and, with
+     * --web-agent-group, that group's members). */
+    if (cfg.agent_secret_path[0]) {
+        char secret[WEB_AGENT_SECRET_LEN + 1];
+        gid_t agid;
+        if ((cfg.agent_group[0] &&
+             web_agent_group_resolve(cfg.agent_group, &agid, err, sizeof(err)) != 0) ||
+            web_agent_secret_make(cfg.agent_secret_path, cfg.agent_group[0] ? &agid : NULL,
+                                  secret, err, sizeof(err)) != 0) {
+            fprintf(stderr, "slothweb: %s\n", err);
+            web_frrs_destroy(&g_frrs);
+            web_store_close(&g_store);
+            web_server_close(&g_srv);
+            return 1;
+        }
+        web_frrs_set_agent(&g_frrs, secret);
+        fprintf(stderr, "slothweb: agent writes: a loopback POST carrying the secret in %s "
+                        "(%s%s) writes triage, notes and links, recorded via agent%s\n",
+                cfg.agent_secret_path, cfg.agent_group[0] ? "0640, group " : "0600",
+                cfg.agent_group,
+                cfg.read_only ? " (none now: --web-read-only)" : "");
+    }
+    /* The owner's fleet (web_fleet.h): the export is served whatever
+     * the flags say (it is a read, to the allow list); a pull only to
+     * the peers --peer names, on a thread and a store connection of its
+     * own. */
+    web_fleet_init(&g_fleet, cfg.peer, cfg.npeer, cfg.peer_interval_s, cfg.peer_outside,
+                   have_store ? &g_store : NULL);
+    /* This host's own radios (#192 I5): its monitor radios named to a
+     * peer that asks with own=1 (never the managed card: the monitor-only
+     * rule, owner 2026-11-12), the transmitters at a known position that
+     * calibrate a peer's receiver. Read from /sys here, again every
+     * 10 min (#196). */
+    web_fleet_read_own(&g_fleet, NULL);
+    /* GNSS across the sites (#192 I6): this host's receiver, sampled by
+     * the pull thread beside each peer's. */
+    g_fleet.gnss = &g_gnss;
+    g_fleet.gnss_region_m = cfg.peer_gnss_region_km * 1000.0;
+    /* This site's own networks (#192 I2, I3): named to a peer that asks
+     * with ident=1 (they travel under the monitor-only rule, owner
+     * 2026-11-12; web_fleetshare.h), and the fleet's identity findings'
+     * baseline. */
+    g_fleet.mine = cfg.mine;
+    g_m4.fleet = &g_fleet;
+    /* A note on a satellite, an aircraft or a station is checked
+     * against the panel that holds it (web_notes.h). */
+    g_m4.gnss = &g_gnss;
+    g_m4.adsb = &g_adsb;
+    g_m4.aprs = &g_aprs;
+    /* The Spectrum tab reads sloth-sdrsweep's directory and can create
+     * one request file (web_spectrum.h); it never drives the radio. */
+    web_spectrum_init(&g_spectrum, cfg.spectrum_dir, cfg.spectrum_request);
+    g_m4.spectrum = &g_spectrum;
+    /* The Camera tab reads the capture helper's latest.jpg
+     * (web_camera.h); it never drives the camera. */
+    web_camera_init(&g_camera, cfg.camera_dir);
+    g_m4.camera = &g_camera;
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -138,6 +298,17 @@ int main(int argc, char **argv) {
     char spec[160];
     web_sockspec_format(&cfg.sock, spec, sizeof(spec));
     web_live_init(&g_live, spec);
+    /* Two daemons (#214): with --rf-socket each stream has a state of
+     * its own, and the alert routes and the open counts read sloth-rf's
+     * incidents through sloth's (web_live_set_peer()). */
+    char rf_spec[160] = "";
+    if (cfg.rf_sock.kind) {
+        web_sockspec_format(&cfg.rf_sock, rf_spec, sizeof(rf_spec));
+        web_live_init(&g_live_rf, rf_spec);
+        web_live_set_role(&g_live, WEB_LIVE_WIFI);
+        web_live_set_role(&g_live_rf, WEB_LIVE_RF);
+        web_live_set_peer(&g_live, &g_live_rf);
+    }
     web_server_set_live(&g_srv, &g_live);
     web_server_set_tsdb(&g_srv, &g_tsdb);
     web_server_set_anomaly(&g_srv, &g_anomaly);
@@ -154,15 +325,71 @@ int main(int argc, char **argv) {
         return 1;
     }
     web_server_set_sqlbox(&g_srv, &g_sql);
+    web_server_set_ble(&g_srv, &g_ble);
+    web_server_set_gnss(&g_srv, &g_gnss);
+    web_server_set_adsb(&g_srv, &g_adsb);
+    web_server_set_aprs(&g_srv, &g_aprs);
+    web_server_set_rtl433(&g_srv, &g_rtl433);
+    web_server_set_victron(&g_srv, &g_victron);
+    web_server_set_sys(&g_srv, &g_sys);
+    web_server_set_lure(&g_srv, &g_lure);
+    web_server_set_df(&g_srv, &g_df);
     web_ingest_set_metrics(&g_ingest, &g_metrics);
+    web_ingest_set_frrs(&g_ingest, &g_frrs);
+    web_ingest_set_ble(&g_ingest, &g_ble);
+    web_ingest_set_gnss(&g_ingest, &g_gnss);
+    if (!cfg.rf_sock.kind) {
+        web_ingest_set_adsb(&g_ingest, &g_adsb);
+        web_ingest_set_aprs(&g_ingest, &g_aprs);
+        web_ingest_set_rtl433(&g_ingest, &g_rtl433);
+        web_ingest_set_victron(&g_ingest, &g_victron);
+    } else {
+        /* The routing table in web_ingest.h: sloth's stream feeds the
+         * Wi-Fi consumers and, of the GNSS panel, only the fallback
+         * health and position; sloth-rf's feeds the five RF panels and
+         * its own rows of the host status, and never the metrics (one
+         * thread's alone), the triage ledger, BLE, the lures or the
+         * links. Its series go to the rollup, which has its own lock. */
+        web_ingest_set_role(&g_ingest, WEB_FEED_WIFI);
+        web_ingest_set_role(&g_ingest_rf, WEB_FEED_RF);
+        web_ingest_set_gnss(&g_ingest_rf, &g_gnss);
+        web_ingest_set_adsb(&g_ingest_rf, &g_adsb);
+        web_ingest_set_aprs(&g_ingest_rf, &g_aprs);
+        web_ingest_set_rtl433(&g_ingest_rf, &g_rtl433);
+        web_ingest_set_victron(&g_ingest_rf, &g_victron);
+        web_ingest_set_sys(&g_ingest_rf, &g_sys);
+        web_ingest_set_rf_rollup(&g_ingest_rf, &g_rollup);
+    }
+    web_ingest_set_sys(&g_ingest, &g_sys);
+    web_ingest_set_lure(&g_ingest, &g_lure);
+    web_ingest_set_df(&g_ingest, &g_df);
+    /* The designated networks the SSID, Probes and WiFi routes mark. */
+    web_own_bind(&g_sys.own);
+    web_ingest_set_chain(&g_ingest, &g_chain);
+    if (web_fleet_start(&g_fleet, err, sizeof(err)) != 0) {
+        fprintf(stderr, "slothweb: fleet: %s\n", err);
+        web_fleet_destroy(&g_fleet);
+        web_server_close(&g_srv);
+        web_frrs_destroy(&g_frrs);
+        web_store_close(&g_store);
+        return 1;
+    }
     if (web_tsdb_start(&g_tsdb, err, sizeof(err)) != 0 ||
         web_ingest_start(&g_ingest, &cfg.sock, cfg.sock_backoff_min_ms,
                          cfg.sock_backoff_max_ms, &g_live,
-                         err, sizeof(err)) != 0) {
+                         err, sizeof(err)) != 0 ||
+        (cfg.rf_sock.kind &&
+         web_ingest_start(&g_ingest_rf, &cfg.rf_sock, cfg.sock_backoff_min_ms,
+                          cfg.sock_backoff_max_ms, &g_live_rf,
+                          err, sizeof(err)) != 0)) {
         fprintf(stderr, "slothweb: %s\n", err);
+        web_fleet_destroy(&g_fleet);
+        web_ingest_stop(&g_ingest);
         web_tsdb_stop(&g_tsdb);
         web_server_close(&g_srv);
         web_live_destroy(&g_live);
+        if (cfg.rf_sock.kind) web_live_destroy(&g_live_rf);
+        web_frrs_destroy(&g_frrs);
         web_store_close(&g_store);
         return 1;
     }
@@ -175,7 +402,12 @@ int main(int argc, char **argv) {
                     "/api/metrics, /api/baseline, /api/anomalies, "
                     "/api/devices, /api/device/MAC, /api/lookup, "
                     "/api/wifi/*, /api/history/*, /api/sessions, /api/flows, "
-                    "/api/flows/graph%s, /events)\n",
+                    "/api/flows/graph, /api/frrs/*, /api/ble, /api/ble/alerts, "
+                    "/api/ble/ADDR, /api/alerts, /api/alert, /api/pcap, "
+                    "/api/pcap/frames, /api/fleet/export, /api/fleet/peers, "
+                    "/api/fleet/overview, /api/fleet/shared, /api/fleet/locate, "
+                    "/api/fleet/gnss, /api/fleet/aircraft, /api/fleet/findings%s, "
+                    "/events)\n",
             where, cfg.allow_sql ? ", /api/query, /api/recipes" : "");
     if (cfg.allow_sql)
         fprintf(stderr, "slothweb: SQL box on (--web-allow-sql): one "
@@ -186,8 +418,8 @@ int main(int argc, char **argv) {
     fprintf(stderr, "slothweb: vendor table: %s (%u MA-L, %u MA-M, %u MA-S)%s\n",
             ot->source, ot->counts[WEB_OUI_MAL], ot->counts[WEB_OUI_MAM],
             ot->counts[WEB_OUI_MAS],
-            web_oui_full(ot) ? "" : "; A4 off: build with the IEEE CSVs in "
-                                   "web/data/ for it (web/README.md)");
+            web_oui_full(ot) ? "" : "; A4 off: built without the IEEE CSVs "
+                                   "in web/data/ (web/data/SOURCE.md)");
     if (cfg.sloth_db[0]) {
         int st = web_slothdb_check(&g_sdb, (long long)time(NULL));
         web_sdb_stats_t ss;
@@ -206,8 +438,59 @@ int main(int argc, char **argv) {
                         "drawer's sloth.db record are off; Lookup answers from "
                         "the stream and the vendor table\n");
     }
+    if (cfg.rf_db[0]) {
+        int st = web_slothdb_check(&g_sdb_rf, (long long)time(NULL));
+        web_sdb_stats_t ss;
+        web_slothdb_stats(&g_sdb_rf, &ss);
+        if (st == WEB_SDB_OPEN)
+            fprintf(stderr, "slothweb: sloth-rf.db %s: schema v%d, read-only (%s); "
+                            "the GNSS, ADS-B, APRS and Victron history is read "
+                            "from it\n", cfg.rf_db, ss.schema, ss.mode);
+        else
+            fprintf(stderr, "slothweb: sloth-rf.db %s: %s (%s); the GNSS, ADS-B, "
+                            "APRS and Victron history waits for it, retried on "
+                            "every request\n", cfg.rf_db,
+                    web_slothdb_state_word(st), ss.err);
+    }
+    for (int i = 0; i < cfg.npcap_dir; i++)
+        fprintf(stderr, "slothweb: alert pcaps from %s (read-only, opened per "
+                        "request; sloth's alert pcap names only, never a "
+                        "handshake pcap or eapol.22000; evidence pcaps %s)\n",
+                cfg.pcap_dir[i], cfg.serve_evidence_pcap ? "served"
+                                                         : "listed and withheld");
+    if (!cfg.npcap_dir)
+        fprintf(stderr, "slothweb: no --pcap-dir: the alert page's packet "
+                        "capture is off\n");
     fprintf(stderr, "slothweb: reading %s (read-only; reconnects on its "
                     "own)\n", spec);
+    if (cfg.rf_sock.kind)
+        fprintf(stderr, "slothweb: reading sloth-rf at %s (read-only; reconnects "
+                        "on its own): GNSS, ADS-B, APRS, rtl_433 and Victron "
+                        "come from this stream only\n", rf_spec);
+    if (cfg.read_only)
+        fprintf(stderr, "slothweb: --web-read-only: no write route; every POST "
+                        "is 405\n");
+    else
+        fprintf(stderr, "slothweb: triage and TACDB writes %s: POST, same-origin, "
+                        "to %s only; the allow list is the only gate\n",
+                have_store ? "on" : "off (no store)",
+                have_store ? cfg.store_path : "slothweb's store");
+    fprintf(stderr, "slothweb: follow recommended: %s%s%s\n",
+            g_frrs.assess_dir[0] ? "assessments from " : cfg.assess_dir[0] ? cfg.assess_dir
+                                                       : "no --web-assessments",
+            g_frrs.assess_dir[0] ? g_frrs.assess_dir : cfg.assess_dir[0] ? ": no such directory"
+                                                     : "",
+            g_frrs.assess_dir[0] ? "" : ", no recommendation yet");
+    const web_btsig_tab_t *bt = web_btsig_builtin();
+    char restored[96];
+    web_ble_restored(&g_ble, restored, sizeof(restored));
+    fprintf(stderr, "slothweb: BLE: %s restored from the store; "
+                    "assigned numbers: %s (%zu companies, %zu services, %zu "
+                    "appearances)%s\n", restored, bt->source, bt->ncompany,
+            bt->nservice, bt->nappearance,
+            strcmp(bt->source, "sig") ? "; names off: built without the SIG CSVs "
+                                        "in web/data/btsig/ (web/data/btsig/SOURCE.md)"
+                                      : "");
     if (have_store) {
         fprintf(stderr, "slothweb: time series in %s (10 s for 24 h, 1 min "
                         "for %d d, 1 h for 400 d; ceiling %d MB)\n",
@@ -226,10 +509,28 @@ int main(int argc, char **argv) {
                         "table), A9 needs the store\n");
     }
 
+    if (!cfg.npeer)
+        fprintf(stderr, "slothweb: fleet: /api/fleet/export served to the allow "
+                        "list; no --peer, nothing pulled\n");
+    if (cfg.mine.nssid || cfg.mine.nbssid)
+        fprintf(stderr, "slothweb: fleet: this site's own networks (%d SSID%s, %d BSSID%s, "
+                        "--my-ssid/--my-bssid) named in /api/fleet/export to the allow "
+                        "list for ident=1\n", cfg.mine.nssid, cfg.mine.nssid == 1 ? "" : "s",
+                cfg.mine.nbssid, cfg.mine.nbssid == 1 ? "" : "s");
+    for (int i = 0; i < cfg.npeer; i++)
+        fprintf(stderr, "slothweb: fleet: pulling %s from %s/api/fleet/export every "
+                        "%d s into %s%s\n", cfg.peer[i].name, cfg.peer[i].url,
+                cfg.peer_interval_s, cfg.store_path,
+                web_fleet_in_tailnet(cfg.peer[i].addr) ? " (tailnet)"
+                                                       : " (outside the tailnet, forced)");
+
     rc = web_server_run(&g_srv);
+    web_fleet_stop(&g_fleet);
     web_sqlbox_stop(&g_sql);
     web_ingest_stop(&g_ingest);
+    web_ingest_stop(&g_ingest_rf);
     web_tsdb_stop(&g_tsdb);
+    web_anomaly_save_cover(&g_anomaly);
 
     web_stats_t st;
     web_server_stats(&g_srv, &st);
@@ -240,14 +541,33 @@ int main(int argc, char **argv) {
     web_server_close(&g_srv);
     web_sqlbox_destroy(&g_sql);
     web_live_destroy(&g_live);
+    if (cfg.rf_sock.kind) web_live_destroy(&g_live_rf);
     web_tsdb_destroy(&g_tsdb);
     web_metrics_destroy(&g_metrics);
+    web_chmix_destroy(&g_chmix);
+    web_chmix_destroy(&g_blemix);
+    web_ble_destroy(&g_ble);
+    /* The run is over and so is its secret. */
+    if (cfg.agent_secret_path[0]) unlink(cfg.agent_secret_path);
+    web_gnss_destroy(&g_gnss);
+    web_adsb_destroy(&g_adsb);
+    web_aprs_destroy(&g_aprs);
+    web_rtl433_destroy(&g_rtl433);
+    web_victron_destroy(&g_victron);
+    web_sys_destroy(&g_sys);
+    web_lure_destroy(&g_lure);
+    web_df_destroy(&g_df);
+    web_chain_destroy(&g_chain);
     web_rollup_destroy(&g_rollup);
     web_anomaly_destroy(&g_anomaly);
     web_baseline_destroy(&g_baseline);
     web_ident_destroy(&g_ident);
     web_ptr_destroy(&g_ptr);
     web_slothdb_destroy(&g_sdb);
+    web_slothdb_destroy(&g_sdb_rf);
+    web_fleet_destroy(&g_fleet);
+    web_frrs_destroy(&g_frrs);
+    web_pcapdir_destroy(&g_pcap);
     web_store_close(&g_store);
     return rc == 0 ? 0 : 1;
 }

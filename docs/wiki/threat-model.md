@@ -21,7 +21,7 @@ whether it is closed today, and the Track X slice that owns it.
 `decode_ipv4`), `src/capture/probe.c` (`on_probe_frame`),
 `src/secure_file.c`, `src/privdrop.c`, `src/discovery.c`, `src/eapol_log.c`,
 `src/alert_pcap.c`, `src/db.c`, `research/query.c`, `src/data_socket.c`,
-`src/netstr.c`, `src/tui.c` (`tui_printf`), `src/jsonl.c` (`json_escape`), `src/formatter.c` (`cef_escape_field`,
+`src/netstr.c`, `src/tui.c` (`tui_printf`), `src/jsonl_core.c` (`jsonl_escape`, `json_escape` to the emitters), `src/formatter.c` (`cef_escape_field`,
 `cef_escape_ext`, `syslog_sd_escape`), `src/inventory.c`, `src/posture.c`,
 `src/wifi_snapshot.c`, `src/views/dashboard_bands.c`,
 `packaging/systemd/sloth-sensor.service`, `Makefile`,

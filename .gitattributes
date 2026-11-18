@@ -3,3 +3,8 @@
 # on it — both of which would corrupt the file rather than merely make
 # the diff unreadable.
 research.db binary
+
+# The IEEE registry CSVs (web/data/SOURCE.md) are kept byte for byte as
+# published, so their SHA-256 in SOURCE.md holds on every checkout: no
+# end-of-line conversion (a refresh is still reviewed as a line diff).
+web/data/*.csv -text

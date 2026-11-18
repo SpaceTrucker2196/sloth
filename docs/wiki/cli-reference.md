@@ -1,6 +1,6 @@
 ---
 name: cli-reference
-description: Complete command, flag, argument, keybinding and environment reference for the sloth binary — the authoritative CLI page
+description: Complete command, flag, argument, keybinding and environment reference for the two sensor daemons, sloth-wifi (alias sloth) and sloth-rf, and for slothweb — the authoritative CLI page
 type: reference
 ---
 
@@ -8,7 +8,13 @@ type: reference
 
 **Summary**: Every command-line flag, its argument, default, and effect;
 every runtime keybinding; the tab-bar status badges; the environment
-variables; and exit codes.
+variables; and exit codes. Two sensor binaries since the cutover (#216,
+[ADR 0010](adr/0010-wifi-rf-daemons.md)): **`sloth-wifi`** (IP, 802.11,
+BLE; `sloth` is a symlink to it and is the same program) and
+**`sloth-rf`** (ADS-B, APRS, rtl_433, Victron, the GNSS records). Every
+section down to "Exit codes" is `sloth-wifi`'s; `sloth-rf` has its own
+section after it. Where this page says `sloth` it means `sloth-wifi`
+under either name.
 Source of truth is `print_usage()` and the argv loop in `src/main.c`, and
 `include/sloth_views.def` / `handle_key()` for the keys. If this page and the
 binary disagree, the binary is right — and this page is out of sync, which
@@ -20,21 +26,28 @@ red suite, and so is the reverse. The flag *descriptions* are not gated —
 only that each flag and key is here.
 
 **Sources**: `src/main.c` (`print_usage`, `main` argv loop, `handle_key`),
+`src/rf/rf_args.c` and `src/rf/main.c` (sloth-rf), `src/gnss_flags.c`,
+`src/daemon_start.c` (the flag checks both daemons call),
+`src/rf_flags.c` (the decoder flags' checks, sloth-rf's),
+`src/rf_moved.c` (sloth-wifi's refusal of them),
+`tests/replay/rf_refusals.sh`,
 `include/sloth_views.def` (expanded by `src/view_labels.c`),
 `include/sloth.h`; `src/persist_health.c`
 (`persist_badge`), `src/tui.c` (`draw_tabbar`, both front ends) and
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
-
----
+**Last updated**: 2026-11-17 (`--df-iface NAME@X,Y`, `--df-origin X,Y`: [[direction-finding]] § Radios off the line), 2026-11-16 (`--monitor-iface` is repeatable: each further one, up to three, is another sensor radio, [[multi-radio-sensing]]), 2026-11-16 (`--df-iface`, `--df-origin`: [[direction-finding]]), 2026-11-16 (#185 item 4: `--print-schema` in both daemons, the `--db` DDL and `DB_SCHEMA_VERSION` as SQL, which `make contract` publishes as `schema.sql`), 2026-11-15 (#216, the cutover: the Wi-Fi binary is `sloth-wifi` with `sloth` a symlink to it; it refuses `--adsb`, `--aprs`, `--aprs-freq`, `--aprs-silent-hours`, `--rtl433` and `--victron` with exit 2 and one line naming `sloth-rf` and `sloth-migrate-rf`; the six rows moved to the sloth-rf table; the `^` ADS-B view key is gone), 2026-11-15 (#214: slothweb's `--rf-socket SPEC` and `--rf-db PATH`, sloth-rf's socket and database read beside sloth's; no sensor flag changed), 2026-11-15 ([[victron]]: sloth-rf's `source_status` gains the `victron` row, five not four; no flag changed), 2026-11-15 (#213, owner ruling: sloth-rf no longer takes `--jsonl`; its JSONL flag is `-o` / `--out` only, so both daemons take the same flags); 2026-11-15 (#213 review: sloth-rf's JSONL flag is documented as `-o` / `--out`, `sloth`'s spelling, with `--jsonl` as its own extra one; the bare `--data-socket` remedy names no port, since 8765 is `sloth`'s); 2026-11-15 (#213: the `sloth-rf` section, the second daemon's flags, `--victron` among them; the receiver's and decoders' flag checks are one copy both mains call); 2026-11-15 (`--victron SPEC`: tail the JSONL the `sloth-va` helper writes, the owner's Victron readings; file-only, sloth connects to nothing); 2026-11-14 (`--rtl433 SPEC`, #208: tail the JSON event log a local rtl_433 already writes, as a passive sub-GHz sensor; file-only, no SDR and no network); 2026-11-13 (`--aprs-freq HZ` and `--aprs-silent-hours N`, #204: the decoder's declared frequency against the GNSS-derived region, and the silent-decoder threshold); 2026-11-12 (`--monitor-iface NAME` pins the monitor radio); 2026-11-12 (`--gps gpsd://`: the one line sent is `?WATCH={"enable":true,"json":true,"pps":true}`, #182; `report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); 2026-11-12 (`karma.forge_assoc_s`, #187); 2026-11-12 (`report.retain_days`; `--report-interval` also keeps `snapshot.live.txt` and is accepted with only `--snapshot-out`; `--report-history` records are pruned, #190); ---
 
 ## Synopsis
 
 ```
-sloth [output] [handshakes] [stream] [wifi] [bluetooth] [correlation] [db]
-      [inventory] [posture] [replay] [runtime] [--help] [--version]
+sloth-wifi [output] [handshakes] [stream] [wifi] [bluetooth] [location]
+           [correlation] [db] [inventory] [posture] [replay] [runtime]
+           [--help] [--version] [--print-schema]
+sloth      ...    the same program: a symlink to sloth-wifi (build tree
+                  and /usr/local/bin), kept with no end date
+sloth-rf   [decoders] [receiver] [output] [db] [stream] [runtime]   (see "sloth-rf")
 ```
 
 Run as root (or with `CAP_NET_ADMIN` + `CAP_NET_RAW`) for capture. A
@@ -51,12 +64,14 @@ single mode driven by flags.
 |------|-----|---------|--------|
 | `-o`, `--out` | `FILE` | off | Append a JSONL forensic log of all observed events. Created `0600`; an existing file must be private, owned by you, not a symlink. → [[jsonl-schema]] |
 | `--out-format` | `FORMAT` | `jsonl` | Format for `-o` **and** `--data-socket`. One of `jsonl`, `cef` (ArcSight CEF), `syslog` (RFC 5424, PRI 134). |
-| `--pcap-dir` | `DIR` | off | On a critical alert with a known flow, write the matching packets to a fresh pcap under `DIR`. Dir `0700`, files `0600`. → [[pcap-export]] |
+| `--pcap-dir` | `DIR` | off | On a critical alert with a known flow, write the matching packets to a fresh pcap under `DIR`. Dir `0700`, files `0600`. Files sloth wrote there are deleted once older than `pcap.retain_days` (default **14**, `0` = keep forever), swept at startup and hourly in bounded steps (#166). Must not be the same directory as `--eapol-dir` (checked by dev/ino; exits `2`). → [[pcap-export]], [[retention]] §2d |
 | `--eapol-dir` | `DIR` | off | Append captured PMKIDs / 4-way handshakes to `DIR/eapol.22000` (hashcat 22000) **and** a per-handshake `DIR/<bssid>_<sta>.pcap`. **Crackable material** — strict perms, refused not repaired. **Requires `--collect-handshakes`**: without it this flag exits `2` and no directory is created. → [[wifi-sigint]] |
 | `--collect-handshakes` | — | **off** | Opt in to writing crackable material to disk. A PMKID or a paired M1+M2 supports offline password guessing, so exporting one is a separate decision from observing one. Gates the `.22000` lines, the per-handshake pcaps and (#92) the per-alert **evidence** pcaps — the raw 802.11 frames a deauth-flood alert cites, written to `--eapol-dir` as `<incident_id>-<event_id>-<RULE>.pcap` under `pcap.min_severity` and `pcap.key_cooldown_secs` — **only**: detection, alerting, the `[e]` view and the JSONL/DB records are unaffected. The flag is named for handshakes but also gates that frame-level evidence, because a raw frame carries the same EAPOL/PMKID material (owner ruling 2026-10-08); `--pcap-dir` alone never writes 802.11 frames. sloth never cracks anything itself (MISSION §2.2). → [[retention]] |
 | `--handshake-retention` | `DAYS` | `7` | Age-out window for the artifacts above. Swept at startup and once a day while running; artifacts last written before the window are deleted. `0` = keep forever. Alias for `--tune handshake.retention_days` (#120). Whole-file granularity by mtime, so `eapol.22000` goes only once nothing has been appended for the whole window. A failed delete is counted and shown in the `[e]` header, never silent. → [[retention]] |
 | `--report` | `FILE.md` | off | On exit, write a Markdown posture report (alerts by severity + MITRE technique, cleartext creds, high-risk devices). → [[posture-report]] |
 | `--report-json` | `FILE.json` | off | Same rollup, structured for SIEM diff. |
+| `--report-interval` | `SECS` | `0` (off) | Also write the report **while running**, every `SECS` seconds (`0..86400`; anything else exits `2`), to a *live* file beside each report path: `report.md` → `report.live.md`, `report.json` → `report.live.json` (#190). The live file is the same rollup with `Session end: (running)` and an `As of` stamp (JSON: `"session_end": null`, `"running": true`, `"as_of"`), so it cannot be read as a signed-off record. It is rendered to a hidden temporary (`.report.live.md.tmp`, `0600`, `O_EXCL`), synced, and renamed over the live name, so a reader sees the previous complete report or the new one. A failed write leaves the previous live file as it was and no temporary, is announced once on stderr (`live report export failed: …`), and is retried at the next interval; it never stops the sensor. **`SIGUSR1`** writes the live report at once, with or without an interval (`systemctl kill -s USR1 sloth-sensor`). The live file is removed when the session's shutdown report is written. One found by a later session (at its first live write, or at its shutdown if it wrote none) was left by a session that never signed off (OOM kill, power loss): it is kept as `report.<UTC mtime>.unclean.md` (`_2`…`_99` if taken) before the name is reused or removed, and if it cannot be kept it is left where it is and the live write is refused rather than replace it. With `--snapshot-out FILE`, the same interval and `SIGUSR1` also keep `FILE.live.txt` (`snapshot.txt` → `snapshot.live.txt`), written the same way, marked `# session<TAB>running`, removed when the shutdown snapshot is written; it never touches the `--snapshot-out` file, so a `--baseline-in` naming that file still moves only at a clean stop. A live snapshot left by a killed session is replaced, not kept: it is an inventory, not a record. The shutdown `--report` and `--snapshot-out` writes are unchanged. Refused (exit 2) without `--report`, `--report-json` or `--snapshot-out`. → [[posture-report]] |
+| `--report-history` | — | off | On exit, also keep this session's report as `report.<UTC session start>.md` (and `.json`), e.g. `report.20261109T101500Z.md`, beside the `--report` path (#190). Created `0600` with `O_EXCL`; a name already taken gets `_2`…`_99`, so no run can replace an earlier session's record. Written whether or not the plain `--report` write succeeded. Deleted once last modified `report.retain_days` (default **90**, `0` = keep forever) or more days ago, with the `.unclean` files, at start and at shutdown, on a run using `--report-interval` or `--report-history`; only names of exactly that shape, regular files owned by sloth's user, nothing followed. Refused (exit 2) without `--report` or `--report-json`. |
 
 ### Stream — the read-only data socket
 
@@ -72,8 +87,11 @@ single mode driven by flags.
 |------|-----|---------|--------|
 | `--iface` | `NAME` | all | Restrict the stream to `NAME` (repeatable, max `MAX_IFACES`). Logical only — OS iface state untouched. |
 | `--monitor-only` | — | off | Restrict capture to the auto-discovered monitor interface. **Fail-closed**: exits non-zero if none found or it can't be enforced. |
+| `--monitor-iface` | `NAME` | discovery | Open exactly `NAME` as the 802.11 monitor radio instead of the first type-803 (`ARPHRD_IEEE80211_RADIOTAP`) netdev in `/sys/class/net` readdir order, which a second radio in monitor mode on the same host can win. If `NAME` is missing or its `type` is not 803 there is **no fallback** to discovery: the run continues without 802.11 capture, one stderr line says so, and `sensor_health.monitor_err` carries `monitor iface NAME not found` or `… is not in monitor mode (type N)`. When it opens, one stderr line names it. The `[m]` retarget refuses any other interface (`X refused: --monitor-iface pins NAME`). **Repeatable** ([[multi-radio-sensing]]): the first names this radio, radio 0; each further `--monitor-iface`, at most three, opens another **sensor radio** whose frames reach the same parsers, detectors, tables and alerts. A frame two radios hear is delivered once (`mon_rK_dup_dropped` in `sensor_health` counts the copies); under `--hop` the channel list is dealt out between the radios so they sit on different channels; without `--hop` nothing retunes them. A further radio that is absent or not type 803 at start is named on stderr and left out, and one that leaves the bus mid-run stops alone and is not reopened. Each name 1..15 characters, no `/`; a raw HCI device `bluetoothN` and `--replay` are refused (exit 2), as are a `WITH_PCAP=0` build, a name given twice, a fifth radio, and a further radio that is also a `--df-iface` radio. **Not `--iface`**: the allow-list scopes the IP stream and, by the owner's 2026-10-04 ruling, does not reach the monitor radio; this flag names the radio and scopes nothing. With `--monitor-only` the pinned radio is the one the stream is restricted to. The shipped unit passes `--monitor-iface ${SLOTH_IFACE}` ([[deployment]]). |
+| `--df-iface` | `NAME[@METRES\|@X,Y]` | off | Direction finding: also listen on `NAME`, a second monitor-mode radio, prepared by the operator like the sensor radio. Repeatable, up to 3. Only the transmitter address and signal level of its frames are read, into a per-radio table; no frame from it reaches a parser, detector, count or alert. `@METRES` (within ±1000) is the radio's place along a straight baseline; `@X,Y` its place in two dimensions (metres east, metres north, each within ±1000), which with three or more radios not on one line adds a compass bearing to `wifi_df` for a transmitter close to them. One command line uses one form. Under `--hop` these radios are retuned with the sensor radio; without it nothing retunes them and a stderr line says to park them on its channel. A radio that cannot be opened is announced and left out; with no sensor radio none is opened. Receive-only. **Exit `2`** on a malformed spec, positions in both forms, a raw HCI device, a fourth radio, with `--replay`, or in a `WITH_PCAP=0` build. Output: the `wifi_df` and `df_radio` records. → [[direction-finding]] |
+| `--df-origin` | `METRES\|X,Y` | `0` or `0,0` | The sensor radio's own place, in the form the `--df-iface` positions use. |
 | `--hop` | — | off | Passive channel-hopping: retune sloth's own monitor interface across a 2.4/5 GHz list, dwelling on activity. A kernel-state write on sloth's own radio; allowed under `--strict` (owner ruling 2026-09-30, #84). Needs monitor mode + `CAP_NET_ADMIN`. No frame transmitted. → [[monitor-mode]] |
-| `--tune NAME=VALUE` | name=value | — | Move one knob in the registry — a detector threshold, one of the three storage floors, one of the two per-alert-pcap export policy knobs (#96), or one of the two data-socket hygiene knobs (#135). **`socket.max_per_peer`** (default 4, 1..16) caps how many of the data socket's 16 client slots one peer may hold at once — a uid on `unix:` (`SO_PEERCRED`), an address on `tcp:`, and one shared capped bucket for any peer the kernel cannot identify; over the cap the connection is closed at accept and counted in `sensor_health.socket_peer_refused`. **`socket.idle_secs`** (default 900 = three JSONL heartbeats, 0 = never) closes a client that has made no progress for that long whatever its queue holds; the old 30 s stall rule only ran while bytes were queued. See [[data-socket-exposure]] §4.1. **`pcap.min_severity`** defaults to `2` (CRIT only), which is what `--help` has always claimed and the export never checked; `0` keeps every alert carrying a `match_ip`, the pre-#96 behaviour. **`pcap.key_cooldown_secs`** defaults to `3600`: the same alert key exports at most once an hour, because an alert evicted from the engine and re-fired is the same finding, not new evidence. `0` disables it. Together those two are the "full capture" escape — set both to 0 and nothing is filtered. `storage.min_free_pct` defaults to **5 and is ON**: sloth refuses a new `--pcap-dir` write when free inodes or free bytes fall under that share of the filesystem. `storage.min_free_mb` and `storage.min_free_inodes` are absolute overrides, `0` = none. The default is relative because an absolute one cannot suit two filesystems of different size — the floor that protects a 30M-inode host would refuse every write on a small one. Set `storage.min_free_pct=0` and leave the others at 0 for the pre-guard behaviour. See [[retention]]. **Repeatable.** An unknown name, a non-integer, or a value outside the knob's range **exits 2** — a threshold the operator believes they set but did not is worse than no knob, so a bad `--tune` never falls back to the default. Any knob off its default is reported in `sensor_health` (`tuned`, `tuned_count`) and as a fault-only `tuned N/M` token on the Interfaces health strip, so a detuned sensor and a quiet segment do not read alike (#82). Since #120 the registry also holds the detector thresholds that were still compile-time `#define`s — `scan.port_thresh`, `deauth.flood_thresh`/`flood_window_s`, `beacon.flood_*`, `auth.flood_*`, `assoc.flood_*`, `probe.flood_frames`/`flood_window_s`, `btm.abuse_*`, `saq.flood_*`, `rts.flood_rate`/`flood_sustain_s`, `bd.*` (beaconing; the two ratios as whole percent; `bd.max_findings`, added by #148, caps open findings rather than setting a threshold), `queue_evict.*`, `transit.*`, `presence.*`, `seqnum.corr_seq_window`/`corr_dt_max_s` — each defaulting to the value it had as a `#define`; where a count lives in a fixed ring, the knob's upper bound is the ring size, so a threshold cannot be raised past what the detector can hold. The table below lists them. |
+| `--tune NAME=VALUE` | name=value | — | Move one knob in the registry — a detector threshold, one of the three storage floors, one of the two per-alert-pcap export policy knobs (#96), or one of the two data-socket hygiene knobs (#135). **`socket.max_per_peer`** (default 4, 1..16) caps how many of the data socket's 16 client slots one peer may hold at once — a uid on `unix:` (`SO_PEERCRED`), an address on `tcp:`, and one shared capped bucket for any peer the kernel cannot identify; over the cap the connection is closed at accept and counted in `sensor_health.socket_peer_refused`. **`socket.idle_secs`** (default 900 = three JSONL heartbeats, 0 = never) closes a client that has made no progress for that long whatever its queue holds; the old 30 s stall rule only ran while bytes were queued. See [[data-socket-exposure]] §4.1. **`pcap.min_severity`** defaults to `2` (CRIT only), which is what `--help` has always claimed and the export never checked; `0` keeps every alert carrying a `match_ip`, the pre-#96 behaviour. **`pcap.key_cooldown_secs`** defaults to `3600`: the same alert key exports at most once an hour, because an alert evicted from the engine and re-fired is the same finding, not new evidence. `0` disables it. Together those two are the "full capture" escape — set both to 0 and nothing is filtered. **`pcap.retain_days`** (default `14`, `0..3650`, owner ruling 2026-10-26 on #166) is how long an alert pcap is kept in `--pcap-dir`; `0` keeps them forever. Only names sloth writes are deleted, regular files only, nothing followed; `sensor_health` reports `pcap_retain_days`, `pcap_swept` and `pcap_sweep_errors`. See [[retention]] §2d. `storage.min_free_pct` defaults to **5 and is ON**: sloth refuses a new `--pcap-dir` write when free inodes or free bytes fall under that share of the filesystem. `storage.min_free_mb` and `storage.min_free_inodes` are absolute overrides, `0` = none. The default is relative because an absolute one cannot suit two filesystems of different size — the floor that protects a 30M-inode host would refuse every write on a small one. Set `storage.min_free_pct=0` and leave the others at 0 for the pre-guard behaviour. See [[retention]]. **Repeatable.** An unknown name, a non-integer, or a value outside the knob's range **exits 2** — a threshold the operator believes they set but did not is worse than no knob, so a bad `--tune` never falls back to the default. Any knob off its default is reported in `sensor_health` (`tuned`, `tuned_count`) and as a fault-only `tuned N/M` token on the Interfaces health strip, so a detuned sensor and a quiet segment do not read alike (#82). Since #120 the registry also holds the detector thresholds that were still compile-time `#define`s — `scan.port_thresh`, `deauth.flood_thresh`/`flood_window_s`, `beacon.flood_*`, `auth.flood_*`, `assoc.flood_*`, `probe.flood_frames`/`flood_window_s`, `btm.abuse_*`, `saq.flood_*`, `rts.flood_rate`/`flood_sustain_s`, `bd.*` (beaconing; the two ratios as whole percent; `bd.max_findings`, added by #148, caps open findings rather than setting a threshold), `queue_evict.*`, `transit.*`, `presence.*`, `seqnum.corr_seq_window`/`corr_dt_max_s` — each defaulting to the value it had as a `#define`; where a count lives in a fixed ring, the knob's upper bound is the ring size, so a threshold cannot be raised past what the detector can hold. The table below lists them. |
 | `--tune-list` | — | — | Print every knob with its default, current value and unit, then exit 0. The registry is the contract: adding a tunable adds a row there, not a new flag — which is why the storage floors are knobs and not `--min-free-mb`. |
 | `--allow-active` | — | off | Opt in to the two active behaviours: (1) reverse-DNS PTR queries on cache miss; (2) nl80211 **passive** scan triggers (no SSID list, no probe transmitted). Prints one stderr line naming what it enabled; never silent. |
 | `--strict` | — | off | Lock: refuses any later attempt to enable active behaviour this run (`--strict --allow-active` exits non-zero). Suppresses the mDNS advert. **Refuses a routable `--data-socket` (exit 2), even with `--data-socket-allow-remote`** — loopback and `unix:` are unaffected (#84, 2026-10-06). Does **not** refuse `--hop`. Records operator intent where `ps(1)`/audit can see it. |
@@ -120,6 +138,12 @@ Defaults are the shipped values; ranges are inclusive and a value outside one ex
 |------|---------|-------|---------|
 | `camera.join_fresh_secs` | 3600 | 900..604800 | seconds a LAN camera row (WS-Discovery, mDNS, SSDP, RTSP) stays joinable to the device record holding its IP; older rows are trail history only. Longer holds a quiet ONVIF camera's class; shorter narrows the window in which a reused DHCP lease carries it to another host. See [[camera-detection]] |
 
+#### Knob added by #190 (report retention)
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `report.retain_days` | 90 | 0..3650 | days a per-session report record (`report.<UTC>.md`, `report.<UTC>.unclean.md`, `_N` variants, and the `.json` ones) is kept beside `--report`; `0` = forever. Swept at start and shutdown, only with `--report-interval` or `--report-history`. Retention, not a detector threshold; off its default it still counts in `tuned`. See [[posture-report]] |
+
 #### Knobs added by #144 slice 4 (BLE detectors)
 
 None of these has a cited basis for where legitimate traffic stops. The
@@ -137,6 +161,91 @@ is not a knob.
 | `ble.flood_rate` | 10 | 1..10000 | gate 2: advertisements per second on that key, counted over the whole window (a window in progress is never extrapolated upward) |
 | `ble.hid_rotate_addrs` | 3 | 2..256 | `BLE_HID_UNEXPECTED` rotation form: new random addresses advertising a HID appearance on one sensor inside the window |
 | `ble.hid_rotate_window_s` | 900 | 60..86400 | seconds in the `BLE_HID_UNEXPECTED` rotation window; the form cannot fire on a sensor until that sensor's first advertisement is more than one window old (per sensor: a `--bt-capture` started later has its own first window) |
+
+#### Knobs added 2026-10-26 (RSSI distance data point)
+
+Model coefficients and a calibration distance for [[rf-distance]], not
+detector thresholds: no alert rule reads the estimate. `N` values are
+ITU-R P.1238-10 Table 2's residential column, ×10 because the registry
+is integer-only; the bounds bracket its corridor (~18) and its worst
+rows (~44).
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `rf.path_loss_n_2g` | 28 | 16..60 | distance power loss coefficient N ×10 for 2.4 GHz Wi-Fi **and BLE** |
+| `rf.path_loss_n_5g` | 30 | 16..60 | N ×10 for 5 GHz |
+| `rf.path_loss_n_6g` | 30 | 16..60 | N ×10 for 6 GHz (P.1238 has no row; the 5 GHz value) |
+| `rf.median_k` | 8 | 1..16 | RSSI samples the distance median takes (the newest, within 60 s) |
+| `rf.ref_dist_dm` | 0 | 0..1000 | decimetres from the sensor to the `--my-bssid` AP; non-zero turns on calibration from that AP's measured path loss, per Wi-Fi band, bounded ±20 dB, never applied to BLE. 0 = no calibration |
+| `rf.rx_gain_db_wifi` | 0 | -20..30 | receive antenna gain, dBi, of the Wi-Fi monitor radio (2026-11-06): subtracted from every RSSI before the distance is solved; 9 dB moves an estimate out ×2.1 at N 2.8. A `--my-bssid` calibration in force supersedes it (its offset already holds the gain) |
+| `rf.rx_gain_db_ble` | 0 | -20..30 | the same for the BLE receiver |
+
+#### Knobs added 2026-10-27 (sensor position, `--gps`)
+
+Sampling and freshness for the position stamp; no rule reads the position stamp. `GNSS_POSITION_JUMP` and `GNSS_SPOOF_SUSPECT` read the receiver's fix history instead: see the `gnss.*` knobs below. → [[location]]
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `gps.min_move_m` | 5 | 0..100000 | metres the GPS fix must move before a device's position sample (and the sensor's track) is taken again |
+| `gps.sample_s` | 60 | 1..86400 | at rest: the sensor's track interval, the least gap before a device's RSSI band change is sampled, and /10 of a device's keep-alive interval ([[location]]) |
+| `gps.max_fix_age_s` | 30 | 1..3600 | a GPS fix older than this stamps nothing; `--location`, when given, stands in |
+
+#### Knobs added 2026-11-03 (the GNSS rules)
+
+Thresholds of the four `--gps` rules ([[alerts]] § The GNSS receiver, `src/alerts/rules_gnss.c`). Each default is argued from `research/gnss/`; where the research says no published threshold exists, the default is the conservative one and the row says so. Every window runs on the monotonic clock. → [[gnss]]
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `gnss.jam_cn0_drop_db` | 10 | 1..60 | `GNSS_JAMMING`: dB the median C/N0 of the tracked satellites (ss > 0) must fall, newest point against the 60 s before the window. "No read source puts a number on 'simultaneous' or on the drop; any value is a judgement" (`research/gnss/jamming-detection.md`): 10 dB is the bottom of the nominal "~ 37 to 45dB-Hz" band down to the 27 dB-Hz Kriezis et al. define as signal loss |
+| `gnss.jam_window_s` | 10 | 2..120 | seconds the collapse must happen within: the research's "within one or two epochs", stretched over gpsd's SKY cadence. A sky falling over minutes stays inside its own baseline |
+| `gnss.jam_ind` | 128 | 1..255 | u-blox `jamInd` (TPV `jam`, CW only) at or above which the indicator path counts. The vendor: "It is necessary to run the receiver in the application and then calibrate the 'not jammed' case" — no published level, so the top half of the scale, erring quiet |
+| `gnss.jam_hold_s` | 30 | 2..299 | seconds `jamInd` must hold there: gpsd attaches `jam` about one TPV in four (MON-HW "every 4" epochs), so one report cannot fire |
+| `gnss.spoof_cn0_high_db` | 53 | 30..99 | `GNSS_SPOOF_SUSPECT` heuristic 1: dB-Hz at or above which a used satellite counts. Kriezis et al.'s F9P + ANN-MB spoofing threshold, 8 dB over the nominal band's top; "Neither number transfers to a u-blox 7 with an unknown antenna" (`research/gnss/spoofing-detection.md`), so conservative, not calibrated |
+| `gnss.spoof_high_sats` | 4 | 1..48 | used satellites that must be that high at once: four is what a spoofer must supply to steer a fix |
+| `gnss.spoof_cn0_mean_db` | 45 | 20..99 | heuristic 2: the used set's mean C/N0 must be at least this (the nominal band's top), which keeps the indoor case — uniform but weak — out |
+| `gnss.spoof_cn0_sd_db` | 1 | 1..20 | heuristic 2: the spread must be under this. "No peer-reviewed source read for this document states a uniformity (low-spread) threshold" — 1 dB is below what a sky across elevations shows |
+| `gnss.spoof_min_sats` | 6 | 3..48 | heuristic 2: used satellites with a C/N0 the spread is taken over ("Few satellites (spread undefined)") |
+| `gnss.spoof_window_s` | 300 | 10..3600 | seconds in which two heuristics must both have been seen; spans a jam-then-reacquire sequence (DHS 2017 advises delaying reacquisition "for many minutes or hours") |
+| `gnss.time_jump_ms` | 1000 | 200..3600000 | `GNSS_TIME_JUMP` (and heuristic 3): ms the receiver's time must step against the host's monotonic clock between fixes. The gpsd time HOWTO: the in-band delay "may be stable to 10 mSec for hours and then jump by 200mSec", so 200 ms is the floor, and "anything below roughly a second is noise on its own terms" (`research/gnss/time-and-position-integrity.md`) |
+| `gnss.pos_jump_k` | 3 | 1..100 | `GNSS_POSITION_JUMP` (and heuristic 3): the multiplier on eph₁ + eph₂ in the bound `(speed + eps) × Δt + k × (eph₁ + eph₂)`. "Because the confidence level of eph is unknown, a multiplier on it is a judgement, not a cited value": 3 covers eph read as one sigma to three sigma per fix |
+
+Threshold of the `--adsb` rule ([[alerts]] § ADS-B, `src/alerts/rules_adsb.c`; basis `research/adsb/emergency-squawks.md`). The rule and the twelve `gnss.*` rule knobs above are read by `sloth-rf` only since the cutover (#216); the registry is one, so `sloth-wifi --tune-list` still prints them and `--tune` still accepts them, to no effect there.
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `adsb.emerg_hold_s` | 10 | 2..59 | `ADSB_EMERGENCY`: seconds an aircraft's emergency squawk (7500 / 7600 / 7700) or status must hold, measured on its own messages (the row's `last_mono_ms`), before LOW becomes WARN. No source read gives a figure for how long a decode error or a code dialled through in passing lasts; 10 s is a judgement - ten of readsb's one-second documents. Below 60 because the table retires an aircraft unheard for 60 s |
+
+#### Knob added 2026-11-11 (`EVIL_TWIN` late arrival, #188)
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `twin.late_arrival_s` | 120 | 30..86400 | `EVIL_TWIN`: seconds the later-heard half of a same-SSID pair must be first heard after the earlier half before `+late-arrival` (+20 confidence, only on a pair with a locally administered half) counts, and the wait after the sensor was last moving (GNSS, 1 m/s or more) before any arrival counts. 120 is five worst passes of the default 11-channel hop list (22 s each); the floor keeps it above one such pass and above the 10 s in which one device's two radios are first heard. An AP that drops out and returns is not an arrival whatever this is set to ([[alerts]], `docs/wiki/alert-assessments/EVIL_TWIN.md`) |
+
+#### Knob added 2026-11-12 (`EVIL_TWIN` faint half, #188)
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `twin.crit_min_beacons` | 5 | 1..1000 | `EVIL_TWIN`: beacons the beacon table must have heard from each half of a same-security pair before a row resting only on soft signals may be CRIT; fewer, or a strongest reading at or under -92 dBm, is `+faint` and WARN. Five is five passes of the hop list for an AP in steady earshot (a dwell is 100 ms or more, APs beacon every 102.4 ms), under two minutes at the default list's worst 22 s. Hard signals are not gated ([[alerts]], `docs/wiki/alert-assessments/EVIL_TWIN.md`) |
+
+#### Knobs added 2026-11-11 (`KARMA_PROBE_FORGE`, #187 S2)
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `karma.forge_ssids` | 2 | 2..8 | `KARMA_PROBE_FORGE`: distinct SSIDs one BSSID must have answered stations' directed probes for, without ever beaconing them, before the rule fires. 2 is the smallest count one BSS cannot produce by being itself (its own name, hidden or not, is never counted); the ceiling is the per-BSSID answer set, so a value the table cannot hold is refused. The basis (Dai Zovi & Macaulay 2005, airbase-ng `-P`) describes the mechanism, not a count, so the number is sloth's judgement ([[alerts]], `src/karma_detect.h`) |
+| `karma.forge_window_s` | 600 | 10..86400 | `KARMA_PROBE_FORGE`: seconds an answered SSID stays on its BSSID's forge row. Long enough to see two passing phones' preferred networks answered by one radio when unassociated phones probe a few times a minute; a judgement, not a cited value |
+| `karma.forge_assoc_s` | 60 | 5..600 | `KARMA_PROBE_FORGE` CRIT (#187, 2026-11-12): seconds after the newest forged answer to a station in which that station's association request to the BSSID, under the forged name, still counts as the lure having worked (the BSSID must also have granted it, and the request must be no earlier than the first forged answer). A station that took the bait joins within seconds of the probe exchange; a judgement, not a cited value. The ceiling is the forge window's default |
+
+#### Knobs added 2026-11-11 (`PMKID_HARVEST`, `HANDSHAKE_HARVEST`, #172)
+
+None of these numbers comes from a source: hcxdumptool's README and Steube's 2018 post describe the mechanism, not counts or timing (`research/tools/hcxdumptool.md`, `research/papers/steube-2018-pmkid.md`). Each is argued in `src/harvest_track.h`.
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `harvest.window_s` | 900 | 600..86400 | Both rules: seconds a soliciting station's targets, and a BSSID's harvest victims, stay counted. Long enough to hold three targets reached one every five minutes, the slow harvest the flood rules miss; the floor stays above `harvest.reconnect_s`'s ceiling |
+| `harvest.min_bssids` | 3 | 2..16 | `PMKID_HARVEST`: distinct BSSIDs that answered one station's association request with an M1 the station left without an M2 (and, for CRIT, that carried a PMKID). The ceiling is the per-station target table |
+| `harvest.unanswered_pct` | 50 | 1..100 | `PMKID_HARVEST`: share of a station's M1-answering BSSIDs that must be unanswered. A roaming phone sits near 0, a harvester at 100 |
+| `harvest.deauth_min` | 2 | 1..1000 | `HANDSHAKE_HARVEST`: distinct deauth/disassoc frames claimed from the BSSID to a station (or broadcast) before its fresh M1/M2 counts. Under `DEAUTH_FLOOD`'s 5 on purpose; one is an AP doing its job |
+| `harvest.reconnect_s` | 30 | 1..600 | `HANDSHAKE_HARVEST`: seconds from the last such frame to the fresh M1/M2 pair |
 
 `--refresh-ms` is deliberately not a knob: it is UI cadence, not a detector or retention decision.
 
@@ -163,7 +272,7 @@ init, so the audience is journald / `--headless`. →
 
 | Flag | Argument | Default | Effect |
 |---|---|---|---|
-| `--bt-monitor` | — | off | Also open libpcap's `bluetooth-monitor` device (Linux HCI monitor channel, DLT 254) and decode an allow-list of it: controller announcements (NEW_INDEX), LE Advertising Reports and LE Extended Advertising Reports (every report of each), and the host's own scan, advertise and connect commands. **Receive-only**: the kernel gives the monitor socket no transmit path, and sloth sends no HCI or MGMT command — the operator starts a *passive* scan with their own stack ([[ble]]). Opened before the privilege drop beside the IP handle (binding the channel needs `CAP_NET_RAW`); a failure to open is announced on stderr and in `sensor_health.btmon_err`, and the run continues. Registers sensor kind `ble`. Nothing read off the channel is written verbatim anywhere — link keys and LTKs cross it. Refused (exit 2) with `--replay` and in a `WITH_PCAP=0` build. |
+| `--bt-monitor` | — | off | Also open libpcap's `bluetooth-monitor` device (Linux HCI monitor channel, DLT 254) and decode an allow-list of it: controller announcements (NEW_INDEX), LE Advertising Reports and LE Extended Advertising Reports (every report of each), and the host's own scan, advertise and connect commands. **Receive-only**: the kernel gives the monitor socket no transmit path, and sloth sends no HCI or MGMT command — the operator starts a *passive* scan with their own stack, or with `sloth-ble-scan.service` ([[ble]], [[deployment]] §7). Opened before the privilege drop beside the IP handle (binding the channel needs `CAP_NET_RAW`); a failure to open is announced on stderr and in `sensor_health.btmon_err`, and the run continues. Registers sensor kind `ble`. Nothing read off the channel is written verbatim anywhere — link keys and LTKs cross it. Refused (exit 2) with `--replay` and in a `WITH_PCAP=0` build. |
 | `--bt-capture` | `PATH` | off | Read an Ubertooth capture the operator produces: a **classic pcap** file or FIFO written by `ubertooth-btle -q` (link type 256, BLE LL with pseudo-header), `ubertooth-btle -c` (192, PPI around 251) or `ubertooth-rx -q` (255, BR/EDR baseband). **sloth never drives the dongle** — no libubertooth, no USB request, no child process; the operator runs the tool, with the receive-only flags [[ubertooth]] lists. `PATH` is checked with `stat()` at startup (missing, a directory, a device node or a socket exits 2) and opened **once**, on its own worker after the privilege drop, so a FIFO with no writer yet never holds startup and is never reopened; the account sloth runs as must be able to read it. Any other link type, and pcapng, is refused with a message in `sensor_health.btcap_err`. A regular file is read to its end; a FIFO until its writer closes it (`btcap_state` `eof`). Advertisers land in the BLE device table as `sensor_iface` `ubertooth`, a separate row from the same address heard by `--bt-monitor`; BR/EDR is kept as LAP only. **Counts are a sample of one channel** (`btcap_sampling`). Registers a second sensor of kind `ble`. Refused (exit 2) with `--replay` and in a `WITH_PCAP=0` build. |
 | `--ble-rotation-hints` | — | off | **Internal use only** (owner ruling 2026-10-23, #156). Link private BLE addresses (resolvable or non-resolvable, by Address[47:46]; never static, public or resolved-identity addresses) that may be one advertiser rotating: a documented token carried across the change (MS-CDP Salt + Device_Hash; Apple Handoff, unverified; Fast Pair account data with an unchanged salt), or a clean seam and the same advertising shape alone. Used only to de-duplicate the `[*]` view's total, an estimate line over the recent window only (a link lasts while both addresses are in the seam table). **No detector reads a hint**: tokens are attacker-supplied, so `BLE_HID_UNEXPECTED` counts addresses with the flag on exactly as with it off. **No link is shown per row, no JSONL field names a link or a token, nothing reaches the database**: what leaves the process is three `sensor_health` decade bands (`"0"`, `"1-9"`, ...), `ble_rot_hints`, `ble_rot_poisoned` and `ble_rot_seam_evictions`, present only while the flag is on and in no change-only signature. Tokens are held only as SipHash-2-4 digests under a key drawn from `getrandom()` per run, never written; tables are bounded (64 recent addresses per sensor and adapter) and expire without frames. Timing-only links carry their caveat on the estimate line. **Silent on an HCI adapter whose scan filters duplicates** (`Filter_Duplicates` on, or no scan enable seen): use `hcitool lescan --passive --duplicates` as [[ble]]'s procedure says. Without the flag nothing is allocated and no field appears; `make replay-check` holds the output to the golden from before the feature. **Ignored, with a stderr notice, without `--bt-monitor` or `--bt-capture`** (so also under `--replay`, which takes neither) — chosen over a refusal because the flag adds no output a run without a BLE source could miss. A hint corroborates; it does not confirm, and identifies no device or person ([[ble]]). |
 
@@ -182,6 +291,43 @@ page-scanning before then is not in it until `ble_own_tx_baseline`
 reads `1` (power-cycle the adapter with sloth running). `ble_scan_mode` is `unknown` until a
 scan-parameter command has actually been seen — start sloth before the
 scan, or restart the scan, to have it recorded. → [[ble]]
+
+### Location — where the sensor is (2026-10-27)
+
+Both opt-in; neither is a network the sensor monitors, and neither puts
+a frame on one. Each is announced on stderr at startup. → [[location]]
+
+`sloth-wifi` keeps the receiver (owner ruling 2026-11-15): the position
+stamp on alerts and devices, `device_positions`, `sensor_positions`,
+the twin rules' motion suppression, the `[#]` view, the `gnss` row of
+`source_status` and `sensor_health`'s `gps_*`, `gnss_*` and `loc_*`
+members. It does not write the `gnss_fix` / `gnss_sky` / `gnss_sat`
+records or the `gnss_fixes` / `gnss_sightings` tables and runs no
+`GNSS_*` rule: those are `sloth-rf`'s, from its own copy of the same
+reader. A serial receiver opens once, so a host that gives `--gps` to
+both daemons uses gpsd.
+
+| Flag | Arg | Default | Effect |
+|------|-----|---------|--------|
+| `--location` | `LAT,LON[,ALT]` | off | The sensor's fixed position, WGS84 decimal degrees and metres above mean sea level (`51.50074,-0.12469,12`). Every new alert incident is stamped with it: the JSONL `alert` / `alert.*` records' `loc` object, the `--db` alerts row's `lat`/`lon`/`alt_m`/`loc_src`/`loc_ts`, the evidence manifests' `loc`. A latitude outside -90..90, a longitude outside -180..180, an altitude outside -1000..20000 or anything that is not a decimal number exits 2. Allowed with `--replay` (the files were captured somewhere; say where). |
+| `--gps` | `SPEC` | off | Read the sensor's position from a receiver. `SPEC` is `/dev/ttyXXX` — NMEA 0183 GGA, RMC and GSA off a serial device, checksum verified, opened read-only (`O_RDONLY`; sloth never writes a byte to the receiver) **before** the privilege drop, because the drop clears supplementary groups and the device is usually group `dialout`, and read on a worker after it — or `gpsd://[HOST[:PORT]]`, gpsd's JSON stream over TCP (default `127.0.0.1:2947`), dialled after the drop; sloth sends gpsd exactly one line, `?WATCH={"enable":true,"json":true,"pps":true}` (`"pps"` since 2026-11-12, #182: gpsd then also sends `TOFF`, which `GNSS_TIME_JUMP` judges on, [[gnss]]), then only reads. There is no `gpsd://PATH`: gpsd has no Unix-socket data transport (its `-F` socket takes device add/remove commands only). A fix younger than `gps.max_fix_age_s` stamps as `loc_src` `gps` and wins over `--location`; an older one, or a receiver reporting no fix, stamps nothing (or the `--location` value). Fix quality 6 (dead reckoning), 7 (manual) and 8 (simulation) never stamp. With `--db`, a moving sensor also records `device_positions` and `sensor_positions`. `sensor_health` carries `gps_*`; the interface view's health strip carries `gps <state>`. Refused (exit 2) with `--replay`, for a malformed SPEC, a host name (numeric addresses only: no resolver), a device that cannot be opened, and a non-loopback gpsd without `--gps-allow-remote`. |
+| `--gps-allow-remote` | — | off | Permit `--gps gpsd://HOST` outside 127.0.0.0/8 and `::1`. The stream is unauthenticated and unencrypted. `--strict` refuses a remote gpsd regardless: a lock another flag can override is not a lock. Ignored, with a notice, without `--gps`. |
+| `--gps-baud` | `N` | 9600 | Serial speed for `--gps /dev/...`: 4800, 9600, 19200, 38400, 57600 or 115200. Anything else, or the flag with a gpsd SPEC or without `--gps`, exits 2. |
+
+### Refused — the SDR decoders' flags (#216)
+
+| Flag | Effect |
+|------|--------|
+| `--adsb`, `--aprs`, `--aprs-freq`, `--aprs-silent-hours`, `--rtl433`, `--victron` | **Exit `2`**, with or without a value, before anything is opened, printing one line: `sloth-wifi: --adsb is sloth-rf's flag since the split (JSONL 2.0.0): this daemon reads no SDR decoder. Run 'sloth-migrate-rf --apply' to move it from /etc/default/sloth to /etc/default/sloth-rf, then start sloth-rf (docs/wiki/deployment.md section 11.4)` (the flag named is the one given; `src/rf_moved.c`). |
+
+Until the cutover the one binary took these six. They are `sloth-rf`'s
+(§ sloth-rf, below), and `sloth-wifi` links none of the decoders: the
+`Makefile`'s `check_wifi_no_rf` fails the link if a decoder symbol is
+in it. A refusal and not "unknown argument", because a sensor whose
+`/etc/default/sloth` still names one must say what to do, not print a
+usage text into the journal; [[deployment]] §11.4 is the upgrade.
+`tests/test_rf_moved.c` holds the line and `tests/replay/rf_refusals.sh`
+the exit code, on the linked binary and on the `sloth` symlink.
 
 ### Privilege — dropping root after capture opens
 
@@ -263,6 +409,7 @@ would be measuring something the protocol does not do.
 | `--db` | `FILE` | off | Persist entity state to SQLite. Bounded by fixed tables, not uptime (upsert per entity, not append per tick). Read with `sqlite3`; sloth exposes no query surface. → [[sqlite-schema]] |
 | `--db-interval-secs` | `N` | `1` | Seconds between DB write ticks. Raise on slow storage. |
 | `--db-retain-days` | `N` | `30` | Age-out window for observation rows. Tiered: entities keep 3×, alerts/credential exposures keep 12×. → [[retention]] |
+| `--db-compact-alerts` | `SRC DST` | — | Offline, then exits: write a copy of the database `SRC` to `DST` with `alerts` folded to one row per key (the duplicates a pre-#170 build wrote per evict-and-refire). `SRC` is opened immutable and nothing is written to it or beside it; a non-empty `SRC-wal` or `SRC-journal` (a sensor killed, not stopped) is refused until checkpointed. `DST` (and its `-wal`/`-shm`/`-journal`) must not exist; run as root, `DST` is handed to `SRC`'s owner. Prints the row counts and the time; exit 0, or 1 with the reason. Built without SQLite: exit 2. Swapping `DST` in is the operator's decision: sensor stopped, `SRC-wal`/`-shm` absent.  → [[sqlite-schema]] *Compacting an older file* |
 | `--db-max-mb` | `N` | `512` | Size target (MiB), a pruning trigger not a hard cap. `0` = unlimited. Oldest observation rows go first; entity/alert/credential rows never dropped. |
 
 The three `--db-*` flags are aliases for `db.interval_secs`, `db.retain_days` and `db.max_mb` in the `--tune` registry (#120). Until then they were read with `atoi()`: `--db-retain-days abc` became 0, which silently meant "default", and `--db-max-mb 5x` became 5. Each is now validated like `--tune` — a non-integer or an out-of-range value exits 2 naming the knob — and a moved value appears in `sensor_health.tuned`. `--db-interval-secs 0` and `--db-retain-days 0`, which used to fall back to the default, are now refused (ranges start at 1); `--db-max-mb 0` still means unlimited.
@@ -273,9 +420,9 @@ The three `--db-*` flags are aliases for `db.interval_secs`, `db.retain_days` an
 |------|-----|---------|--------|
 | `--inventory` | `FILE` | off | Load approved-inventory JSON (which BSSIDs are authorised for which SSID, #89). The only evil-twin trust input not from the air. All-or-nothing: a malformed file exits. → [[inventory]] |
 | `--site` | `TEXT` | off | Operator label for this sensor's location; part of the evil-twin dedup key. Overrides the inventory file's `site`. Config only — never derived from RF. |
-| `--my-ssid` | `SSID` | off | Designate your own network (repeatable, max 16). Label only; unlocks `MY_NET_RECON`. |
-| `--my-bssid` | `BSSID` | off | Designate your own AP (repeatable, max 16). Floods at it escalate WARN→CRIT; never named the impostor half of a twin. |
-| `--known-mac` | `MAC` | off | Add a MAC to the known-device roster (repeatable, max 512). |
+| `--my-ssid` | `SSID` | off | Designate your own network (repeatable, max 16). Label only; unlocks `MY_NET_RECON`. Exported on the stream as the `ownership` record (JSONL 1.2.0), which slothweb uses to mark the network "yours". |
+| `--my-bssid` | `BSSID` | off | Designate your own AP (repeatable, max 16). Floods at it escalate WARN→CRIT; never named the impostor half of a twin. Exported on the `ownership` record like `--my-ssid`; the `--known-mac` roster travels there as a count only. |
+| `--known-mac` | `MAC` | off | Add a MAC to the known-device roster (repeatable, max 512). The host's **own** interface addresses need no flag: every MAC the `iface` records carry - Ethernet, the managed card, the monitor radio - is rostered automatically and exonerates the same way (#183), and on Linux so are each interface's permanent address, each Wi-Fi phy's address pool and wireless devices with no netdev such as a P2P device ([[alerts]], "The sensor's own addresses"). |
 | `--known-macs` | `FILE` | off | Load a roster (one MAC/line, `#` comments). With a roster **and** a `--my-ssid`/`--my-bssid`, an associated device not on the roster raises `UNKNOWN_DEVICE`. A bad line is echoed as at most 48 bytes with C0/DEL shown as `?` (#137). |
 
 ### Posture — snapshots & research
@@ -300,7 +447,7 @@ per-frame detectors behave as live. → [[replay-integration]]
 
 | Flag | Arg | Default | Effect |
 |------|-----|---------|--------|
-| `--replay` | `FILE[,FILE]` | off | Read up to 8 savefiles instead of opening any interface. Routed by datalink the way the live handles split: Ethernet (1), Linux cooked v1/v2 (113/276) → the IP path; radiotap (127) → the 802.11 monitor path; Bluetooth Linux monitor (254, a tcpdump/Wireshark capture of `bluetooth-monitor`) → the Bluetooth host source, reported as `btmon_iface: replay`; anything else is refused at startup, before a sink opens. Each record keeps its own capture time and wire length in what is exported; detection windows use arrival time (see above). Decoded synchronously before the first tick. **No host state is read**: interfaces, sockets, ARP, DHCP and the Wi-Fi scan come back empty, so the output describes the files and not the machine. `sensor_health` reports `capture_iface`/`monitor_iface` as `replay`. Refused (exit 2) with `--iface`, `--monitor-only`, `--hop`, `--bt-monitor` or `--bt-capture`, which name live capture, and with `--allow-active`, which would resolve addresses read from the files, and in a `WITH_PCAP=0` build. An unreadable, undecodable or damaged file exits 1 — a replay that stopped part-way is not reported as a replay of the file. |
+| `--replay` | `FILE[,FILE]` | off | Read up to 8 savefiles instead of opening any interface. Routed by datalink the way the live handles split: Ethernet (1), Linux cooked v1/v2 (113/276) → the IP path; radiotap (127) → the 802.11 monitor path; Bluetooth Linux monitor (254, a tcpdump/Wireshark capture of `bluetooth-monitor`) → the Bluetooth host source, reported as `btmon_iface: replay`; anything else is refused at startup, before a sink opens. Each record keeps its own capture time and wire length in what is exported; detection windows use arrival time (see above). Decoded synchronously before the first tick. **No host state is read**: interfaces, sockets, ARP, DHCP and the Wi-Fi scan come back empty, so the output describes the files and not the machine. `sensor_health` reports `capture_iface`/`monitor_iface` as `replay`. Refused (exit 2) with `--iface`, `--monitor-only`, `--monitor-iface`, `--hop`, `--bt-monitor` or `--bt-capture`, which name live capture, and with `--allow-active`, which would resolve addresses read from the files, and in a `WITH_PCAP=0` build. An unreadable, undecodable or damaged file exits 1 — a replay that stopped part-way is not reported as a replay of the file. |
 | `--ticks` | `N` | off (run until quit) | Exit `0` after `N` poll ticks, `1..1000000`; anything else exits 2. The last tick still emits; only the wait after it is skipped. With `--replay --headless` this makes a batch job: replay, tick, flush the sinks and reports, exit. |
 
 ### Runtime & meta
@@ -311,6 +458,7 @@ per-frame detectors behave as live. → [[replay-integration]]
 | `--headless` | — | off | Draw nothing, never touch the terminal (no clears, no escape sequences, no raw-mode termios). For appliance/systemd. Capture, alerting and every sink run normally. |
 | `--no-color`, `--no-colour` | — | color on | Suppress colour escapes, keep drawing. Also honoured via `NO_COLOR` env. |
 | `--version`, `-V` | — | — | Print version to stdout and exit `0`. Line 1 is `sloth <SLOTH_VERSION>`, unchanged for scripts that read it alone; lines 2–3 (#142) are `pcap: <pcap_lib_version()>` and `sqlite: <sqlite3_libversion()>` — the libraries the dynamic linker **loaded**, `none` in a build without one. → [[release-checklist]] |
+| `--print-schema` | — | — | Print the `--db` schema as one SQL script to stdout and exit `0` (#185 item 4): a comment naming `DB_SCHEMA_VERSION`, the DDL of `src/db_schema.c` (`db_schema_sql()`), and the `INSERT` of the `meta` row `schema_version` that a new file is stamped with. Loading it into an empty database gives the tables, indexes and version row `--db` would create; the PRAGMAs a daemon also sets (`auto_vacuum`, `journal_mode=WAL`, `synchronous`, `foreign_keys`) are storage settings and are named in the comment, not emitted. Opens no device, file or database and needs no privilege. The same text in a `WITH_SQLITE=0` build, and byte for byte the same as `sloth-rf --print-schema` (`make contract-check`). It is the contract artifact's `schema.sql` ([[contract]]). |
 | `--help`, `-h` | — | — | Print usage and exit `0`. |
 
 ## Keybindings (runtime TUI)
@@ -328,10 +476,13 @@ per-frame detectors behave as live. → [[replay-integration]]
 | `7` Probe | `k` PNL | `o` Dashboard | `?` Help |
 | `8` ARP | `e` EAPOL | `m` Channel | |
 | `9` mDNS | `j` Seqnum | `w` Assoc | `*` BLE |
-| `0` NBNS | | | |
+| `0` NBNS | | | `#` GNSS |
 
-`*` is BLE because every letter and digit already selects a view or is
-a global (`b` is Beacons). Full map with descriptions: [[views-catalog]].
+`*` is BLE and `#` is GNSS because every letter and digit already
+selects a view or is a global (`b` is Beacons). `^` selected the ADS-B
+view until the cutover (#216); the aircraft table is `sloth-rf`'s, which
+is headless, and is read in slothweb, so the key selects nothing now.
+Full map with descriptions: [[views-catalog]].
 
 ### Global keys
 
@@ -356,6 +507,7 @@ a global (`b` is Beacons). Full map with descriptions: [[views-catalog]].
 | `Enter` | (Interfaces / Packets) open detail panel; (Devices) open the device detail — camera signal trail, ONVIF scopes, mDNS, SSDP `SERVER`, RTSP exposure; `Enter` / `Esc` returns ([[camera-detection]]); (BLE) open every decoded field of the selected advertiser, `Enter` / `Esc` returns ([[ble]]) |
 | `f` | (Conns / Packets) cycle filter |
 | `s` | (Conns) cycle sort |
+| `g` | (EAPOL) show the selected row's harvest cluster alone, with a one-line summary; again for every row. Claimed over the global Devices switch (#172, `docs/views/eapol.md`) |
 
 A view can *claim* a key the global switch also uses; see
 `src/view_route.c` and the "add a view" checklist in `AGENTS.md`.
@@ -410,8 +562,8 @@ prefer whichever suits their consumer:
   failed: <reason>`, behind a `reported` latch (`src/secure_file.c`);
 - `storage_failures` plus the per-sink `storage_jsonl_failures` /
   `storage_pcap_failures` / `storage_eapol_failures` on every
-  `sensor_health` record, and `pcap_write_failures` on an alert record
-  (`src/jsonl.c`);
+  `sensor_health` record (`src/jsonl.c`, `src/jsonl_core.c`), and
+  `pcap_write_failures` on an alert record (`src/jsonl_core.c`);
 - `pcap_dir_free_mb` and `pcap_dir_free_inodes` on `sensor_health`,
   which is the only one that says anything *before* a write fails.
 
@@ -432,9 +584,198 @@ only a configured `storage.*` floor refuses anything in advance. See
 
 | Code | Meaning |
 |------|---------|
-| `0` | Clean exit (incl. `--version`, `--help`, and the end of a `--ticks N` run). |
+| `0` | Clean exit (incl. `--version`, `--print-schema`, `--help`, and the end of a `--ticks N` run). |
 | `1` | A `--replay` file that cannot be opened, is not a savefile, has a datalink with no route, or is damaged part-way (#119). |
-| `2` | Bad argument, or a fail-closed refusal (`--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--strict` with a routable `--data-socket`, `--eapol-dir` without `--collect-handshakes`, a `--handshake-retention` value outside `0..36500`, a `--correlate-retain`/`--db-*`/`--wps-*` value that is not an integer inside its knob's range (#120), a `--user` naming no account or needing root it does not have, `--user` with `--no-privdrop`, a privilege drop that failed or did not read back, `--iface` naming a raw HCI device `bluetoothN`, `--bt-monitor` with `--replay` or in a `WITH_PCAP=0` build). |
+| `2` | Bad argument, or a fail-closed refusal (one of the six decoder flags, which are `sloth-rf`'s since #216: § Refused; `--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--strict` with a routable `--data-socket`, `--eapol-dir` without `--collect-handshakes`, `--pcap-dir` and `--eapol-dir` naming one directory (#166), a `--handshake-retention` value outside `0..36500`, a `--correlate-retain`/`--db-*`/`--wps-*` value that is not an integer inside its knob's range (#120), a `--user` naming no account or needing root it does not have, `--user` with `--no-privdrop`, a privilege drop that failed or did not read back, `--iface` naming a raw HCI device `bluetoothN`, a `--monitor-iface` naming a radio twice, given more than four times, not an interface name, naming `bluetoothN`, with `--replay` or in a `WITH_PCAP=0` build, or naming a further radio that `--df-iface` also names, `--bt-monitor` with `--replay` or in a `WITH_PCAP=0` build, a `--location` outside its ranges, a malformed `--gps` SPEC, `--gps` with `--replay`, a `--gps` device that cannot be opened, a non-loopback gpsd without `--gps-allow-remote` or under `--strict`, a `--gps-baud` outside its list, a malformed or unsupported `--adsb` SPEC (a non-loopback `sbs://` or `beast://` host), `--adsb` with `--replay`, a malformed `--aprs` SPEC, `--aprs` with `--replay`, a malformed `--rtl433` SPEC, `--rtl433` with `--replay`, a malformed `--victron` SPEC, `--victron` with `--replay`). |
+
+## sloth-rf
+
+`sloth-rf` is the RF half of the sensor as a daemon of its own (#213,
+[ADR 0010](adr/0010-wifi-rf-daemons.md), [[architecture-rf-split]]): it
+reads a GNSS receiver, the files or loopback sockets that readsb,
+Dire Wolf and rtl_433 write and the file `sloth-va` writes, and makes the JSONL records, database rows
+and alerts for them. Since the cutover (#216) it is the only daemon
+that does: `sloth-wifi` refuses the six decoder flags. It opens no radio, tunes
+no SDR and transmits nothing (`MISSION.md` §2); the one line it writes
+to a peer is gpsd's `?WATCH`, announced. It has no terminal interface:
+slothweb is its interface: `slothweb --rf-socket SPEC --rf-db PATH`
+reads it beside `sloth` (#214, § slothweb).
+
+It is built by a plain `make` beside `sloth-wifi`, installed by `make
+install` and run by `sloth-rf.service` ([[deployment]] §11). Both
+daemons take `--gps`, so the two must not be pointed at one serial GPS
+(a serial device opens once; both can read gpsd).
+
+Every flag `sloth-rf` shares with `sloth-wifi` (the receiver's, `-o`,
+`--db`, `--data-socket`, `--strict`, `--tune`, `--user`,
+`--no-privdrop`, `--ticks`) is read and refused by the same function
+(`src/gnss_flags.c`, `src/daemon_start.c`), so the meaning, the refusal
+text and the exit code are those of the `sloth-wifi` rows above. The
+messages say `sloth:` in both daemons, the decoder flags' included
+(`src/rf_flags.c`): it is the prefix every shared module already
+prints, and it is what makes the shared refusals the same bytes.
+`make replay-check` runs both binaries on the command lines both
+refuse and compares stderr, runs the six decoder flags through both
+(`sloth-wifi` refuses each, `sloth-rf` takes each), and holds `sloth`
+to being a symlink that answers as `sloth-wifi` does
+(`tests/replay/rf_refusals.sh`); `--jsonl` both refuse as an unknown
+argument.
+
+| Flag | Arg | Default | Effect |
+|------|-----|---------|--------|
+| `--adsb` | `SPEC` | off | Read a local, already-running ADS-B decoder (readsb, dump1090-fa) ([[adsb]]). `SPEC` is an absolute path or `file:///path` to its `aircraft.json`, or `sbs://[HOST[:PORT]]` for its SBS / BaseStation TCP output, or `beast://[HOST[:PORT]]` for its Beast binary output. **File**: opened afresh about once a second (`ADSB_POLL_MS`; the decoder replaces it by rename), read-only, by a worker started after the privilege drop; a regular file of at most 2 MiB, else counted as a read error; no network. **`sbs://`** (2026-11-09): `HOST` a numeric loopback address (`127.0.0.0/8` or `[::1]`), default `127.0.0.1:30003` (readsb's SBS port); a TCP client started after the privilege drop that **never writes a byte to the socket**, announced on stderr; a refused connect or a closed session is a read error, retried after 2 s (doubling to 30 s while the connect keeps failing); lines over 512 bytes and malformed lines are parse errors, not fatal; `live` while any line, readsb's 60 s heartbeat included, arrived in the last 130 s. Under `sloth-sensor.service` it needs `AF_INET` (`AF_INET6` for `[::1]`) added to `RestrictAddressFamilies=` by a drop-in. **`beast://`** (2026-11-09): the same rules, default `127.0.0.1:30005` (readsb's `--net-bo-port`); sloth frames the stream and decodes the Mode S frames itself (CRC-24 with no bit correction; DF17/18 only intact; DF4/5/20/21 only for an address a clean DF17 or DF11 confirmed in the last 60 s; CPR from an even/odd pair within 10 s, then locally against the aircraft's own last fix); garbage, unknown frame types and cut frames are parse errors, CRC failures `bad`, never fatal; `live` while any frame, readsb's 60 s Mode A/C heartbeat included, arrived in the last 130 s. sloth never opens or tunes the SDR. A missing file or an unreachable port is not a refusal: the `adsb` sensor and `sensor_health`'s `adsb_state` read `error` until it appears. Emits `adsb_aircraft` (change-only) and `adsb_*` in `sensor_health`. Refused (exit 2) with `--replay`, for a relative path, a directory path, `file://HOST/`, any other scheme, an `sbs://` or `beast://` host that is a name or not loopback, or a port outside 1..65535. |
+| `--aprs` | `SPEC` | off | Tail the packet log a local, already-running Dire Wolf APRS decoder writes (`direwolf -L FILE`, one CSV line per decoded packet; [[aprs]]). `SPEC` is an absolute path or `file:///path`. Checked about once a second (`APRS_POLL_MS`) by a worker started after the privilege drop, read-only: the first look starts at the file's end (its history is not replayed; sloth.db already holds what an earlier run read), a file that appears later or a new file at the path (rotation) is read from its start, a file that shrank (logrotate `copytruncate`) from 0; at most 256 KiB a poll, lines over 1024 bytes counted bad. sloth never touches the radio, the SDR or Dire Wolf and uses no network. A missing file is a state, not a refusal (`aprs_state` `waiting`; Dire Wolf creates the file with its first packet); an unreadable one reads `error`. Emits `aprs_packet` (one per packet), `aprs_station` (change-only) and `aprs_*` in `sensor_health`; with `--db`, `aprs_stations` and `aprs_packets`. Refused (exit 2) with `--replay`, for a relative path, a directory path, `file://HOST/` and any other scheme. |
+| `--aprs-freq` | `HZ` | not declared | The frequency the Dire Wolf decoder is **configured** for, in Hz, `144000000`..`148000000` (#204; [[aprs]] § The channel). On the reference host that is `APRS_FREQ` in `/etc/default/aprs`, not `rx_fm`'s reported hardware tune, which sits fs/4 above it (about 144.894 MHz for 144.390) and is normal. sloth compares it with the APRS channel of the region its GNSS position falls in and sets `aprs_freq_mismatch` 1 in `sensor_health` when they are more than 6.25 kHz apart; it never changes the decoder. Decimal Hz only (`144.39` is refused). Needs `--aprs` (exit 2 without it, or out of range). |
+| `--aprs-silent-hours` | `N` | `6` | Report the decoder **silent** (`aprs_silent` 1 in `sensor_health`, a notice on slothweb's APRS tab) when its log is readable (`aprs_state` `live`) but no packet arrived for `N` hours, counted from the newest packet or this run's first read, whichever is later. `0` turns it off; `1`..`168`. Six hours is six times the quiet hour the state already tolerates and catches a dead receive chain the same day ([[aprs]] § Silent). Needs `--aprs`. |
+| `--rtl433` | `SPEC` | off | Tail the JSON event log a local, already-running `rtl_433` writes (`rtl_433 -F json`, one JSON object per decode; [[rtl433]]). `SPEC` is an absolute path or `file:///path`. Checked about once a second (`RTL433_POLL_MS`) by a worker started after the privilege drop, read-only: the first look starts at the file's end (its history is not replayed), a file that appears later or a new file at the path (rotation) is read from its start, a file that shrank (logrotate `copytruncate`) from 0; at most 256 KiB a poll, lines over 1024 bytes counted bad. **sloth never opens, tunes, hops or runs the SDR** - `rtl_433` owns it - and uses no network. A missing file is a state, not a refusal (`rtl433_state` `waiting`; `rtl_433` creates the file with its first decode); an unreadable one, or anything that is not a regular file, reads `error`. Each line is keyed `(model, id)` into a table of 256 rows that drops the least recently heard on full (`evict_rtl433`); a line that is not one JSON object, or that carries no usable `model` or `id`, is a bad line with its own `rtl433_rej_*` counter. Emits `rtl433_device` (change-only) and `rtl433_*` in `sensor_health`. Refused (exit 2) with `--replay`, for a relative path, a directory path, `file://HOST/` and any other scheme. |
+| `--victron` | `SPEC` | off | Tail the JSONL the `sloth-va` helper appends to (`/var/lib/sloth-va/victron.jsonl`; [[victron]]): the owner's Victron readings, decrypted Instant Readout (`source` `readout`) and GATT sessions (`gatt`). `SPEC` is an absolute path or `file:///path`. The same tail as `--rtl433` (once a second, from the end at startup, rotation and truncation followed, at most 64 KiB a poll, lines over 2048 bytes bad). **sloth only reads the file**: sloth-va is the separate component that connects to the devices ([ADR 0011](adr/0011-sloth-va-transmits.md)); sloth opens no Bluetooth socket for this and decrypts nothing. A missing file is `waiting`. One row per device address, at most 16 (a 17th is counted, `victron_table_full`, never evicting); values only from an allow-list with bounds, out of range absent (`victron_bad_values`), other names counted (`victron_other_keys`); the device's own name (`label`) is not kept. Emits `victron_device` (change-only, values banded) and `victron_*` in `sensor_health`. Refused (exit 2) with `--replay` and for a malformed SPEC. |
+| `--gps` | `SPEC` | off | As `sloth`'s ([[gnss]], [[location]]). Here it also feeds the `gnss_fix` / `gnss_sky` / `gnss_sat` records and the four `GNSS_*` rules, which are sloth-rf's after cutover. A serial device is opened before the privilege drop, as in `sloth`. |
+| `--gps-allow-remote` | — | off | As `sloth`'s. `--strict` refuses a remote gpsd regardless. |
+| `--gps-baud` | `N` | 9600 | As `sloth`'s. |
+| `--location` | `LAT,LON[,ALT]` | off | As `sloth`'s. Stamps this daemon's alerts and gives the APRS region check a position without a receiver. |
+| `-o`, `--out` | `FILE` | off | As `sloth`'s: append the JSONL record stream to `FILE`. Created 0600; an existing file must be private and the run's own. There is no `--jsonl` spelling: it is `unknown argument`, exit 2, in both daemons. |
+| `--db` | `FILE` | off | A SQLite database with sloth's own DDL and `DB_SCHEMA_VERSION` ([[sqlite-schema]]). The `gnss_*`, `adsb_*`, `aprs_*`, `sensors`, `alerts` / `alert_incidents`, `sessions` and `sensor_positions` tables fill; every capture table (`devices`, `device_positions`, `beacon_aps`, …) stays empty, because no stage of this daemon builds a device. The `--db-*` alias flags are not taken: use `--tune db.max_mb=N`, `db.retain_days=N`, `db.interval_secs=N`. |
+| `--site-label` | `TEXT` | — | Label for the `--db` session row. |
+| `--data-socket` | `[SPEC]` | off | As `sloth`'s, with its own default: bare, it is `unix:/run/sloth-rf/sloth-rf.sock`, refused (exit 2, with the remedy naming `RuntimeDirectory=sloth-rf`) when `/run/sloth-rf` is absent or not owned by root or this user. The remedy's explicit transport is `tcp:127.0.0.1:PORT`, a port of its own: 8765 is `sloth`'s. Never TCP by default, and never advertised over mDNS. |
+| `--data-socket-allow-remote` | — | off | As `sloth`'s. |
+| `--strict` | — | off | Refuses a remote gpsd and a routable `--data-socket`, as in `sloth`. The rest of what `--strict` locks in `sloth` (the resolver, the scan trigger) does not exist here. |
+| `--tune` | `NAME=VALUE` | — | As `sloth`'s; the registry is shared, so `--tune-list` prints every knob, of which this daemon reads the `gps.*`, `gnss.*`, `adsb.*`, `db.*` and `socket.*` ones. |
+| `--tune-list` | — | — | Print every knob, then exit 0. |
+| `--user` | `NAME` | `sloth` | As `sloth`'s. Nothing here keeps a capability after the drop. |
+| `--no-privdrop` | — | off | As `sloth`'s. |
+| `--ticks` | `N` | run until a signal | Exit 0 after `N` poll ticks. |
+| `--version`, `-V` | — | — | `sloth-rf <version>` and the loaded sqlite. No `pcap:` line: it loads no libpcap. |
+| `--print-schema` | — | — | As `sloth-wifi`'s, and the same bytes: both daemons' databases are created from one DDL (`src/db_schema.c`) at one `DB_SCHEMA_VERSION`. Exit 0. |
+| `--help`, `-h` | — | — | Usage, on stderr; exit 0. |
+
+The six decoder rows were written when the one binary took those
+flags and are unchanged: where a row says `sloth` reads, sends or
+refuses something, the daemon is `sloth-rf`.
+
+Anything else is `unknown argument:` and exit 2, including every flag
+of `sloth-wifi`'s capture (`--iface`, `--hop`, `--allow-active`,
+`--bt-monitor`, `--replay`, `--pcap-dir`, `--headless`, …): a daemon
+that accepted `--hop` and did nothing would read as one that can retune
+a radio.
+
+What it writes, and how that differs from `sloth`'s stream:
+
+- **Records**: `gnss_fix`, `gnss_sky`, `gnss_sat`, `adsb_aircraft`,
+  `aprs_packet`, `aprs_station`, `rtl433_device`, `victron_device`
+  (with `--victron`), `sensor`, `alert` and the `alert.*` lifecycle,
+  `sys_status`, `sys_sensor`, `receiver_hw`, `source_status` and
+  `sensor_health`. The first eight are this daemon's alone since JSONL
+  2.0.0: `sloth-wifi`, given the same inputs, writes none of them
+  (`tests/test_rf_loop.c`).
+- **`sensor_health`** says `"daemon":"rf"` and carries the process,
+  receiver and decoder blocks only ([[jsonl-schema]]).
+- **`source_status`** has five rows (`gnss`, `adsb`, `aprs`, `rtl433`,
+  `victron`); `sloth-wifi`'s has five too (`capture`, `monitor`,
+  `btmon`, `btcap`, `gnss`). `gnss` is in both, and the other four of
+  each are in that daemon's stream only. `sys_status`'s `sources`
+  counts the daemon's own.
+- **Alerts**: `GNSS_JAMMING`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`,
+  `GNSS_SPOOF_SUSPECT`, `ADSB_EMERGENCY` and `SENSOR_SOURCE_DOWN` for
+  its five sources. Not `SENSOR_UNDERVOLT` (owner ruling 2026-11-15:
+  the host has one supply and the daemon with the capture reports it).
+- **Signals**: SIGINT and SIGTERM stop it cleanly (readers, then the
+  sinks, in `sloth`'s order). SIGUSR1 is ignored; `sloth` writes its
+  report on it and this daemon has none.
+
+Exit codes are `sloth-wifi`'s: `0` clean (and `--help`, `--version`,
+`--print-schema`, `--tune-list`, the end of `--ticks N`), `1` a sink that could not be
+opened, `2` a bad argument or a fail-closed refusal.
+
+## slothweb
+
+slothweb, the browser dashboard, is a separate binary with its own
+flags, listed with every start-up message in `web/README.md`
+("Command line", "Troubleshooting"). Since 2026-10-27 it takes
+`--pcap-dir DIR` (repeatable once): the sensor's `--pcap-dir` (and,
+optionally, its `--eapol-dir`), read-only, for the alert page's packet
+capture ([[pcap-export]] §6, [[slothweb]]). An evidence pcap from the
+`--eapol-dir` may hold EAPOL/PMKID handshake material, so it is listed
+but withheld unless slothweb also gets `--web-serve-evidence-pcap`
+(announced on stderr); with `--web-allow-remote` that flag exits `2`
+unless given as `--web-serve-evidence-pcap=remote` (2026-11-02).
+Since 2026-11-10 (#192 F1, [[fleet]]) slothweb serves
+`/api/fleet/export` to its allow list and, with `--peer NAME=URL`
+(repeatable, at most 8, a tailnet `100.64.0.0/10` address unless
+`--peer-allow-outside-tailnet`, which is announced), pulls the
+operator's other slothwebs every `--peer-interval-secs` (default 60)
+into its own store; a peer outside the tailnet, or any under
+`--strict`, exits `2`. Since 2026-11-11 (#192 I6) `--peer-gnss-region-km N`
+(1..20000, default 50) is how far apart two sites may be for a GNSS
+event seen at both within 120 s to be called regional; a value outside
+the range exits `2`.
+Since 2026-11-15 (#214, [ADR 0010](adr/0010-wifi-rf-daemons.md))
+`--rf-socket SPEC` and `--rf-db PATH` name sloth-rf's data socket and
+database, read beside `--socket` and `--sloth-db` and never written.
+Neither has a default: without them slothweb reads one stream and one
+database, as before. With `--rf-socket` the GNSS, ADS-B, APRS, rtl_433
+and Victron tabs are fed from sloth-rf's stream only; with `--rf-db`
+their history and the fleet's aircraft and GNSS incidents are read
+from its file. A socket or a file that is not there is retried or
+reported, not fatal. `--strict` refuses a non-loopback `--rf-socket`;
+`--rf-socket` naming `--socket`'s socket (its default included), or
+`--rf-db` naming `--sloth-db`'s or `--store`'s file, exits `2`. The SQL
+box stays on `--sloth-db` ([[slothweb]] § Two daemons).
+Since 2026-11-11 `--web-agent-secret PATH` lets an agent on the same
+machine write through `slothweb-mcp`: slothweb writes a per-run secret
+to `PATH` (`0600`, replaced every start, removed at exit; a path
+holding anything but its own private file exits `1`), and a loopback
+POST carrying it may write triage, notes and links, recorded `via:
+agent` ([[slothweb-mcp]] section 4). `--web-agent-group NAME` (needs
+`--web-agent-secret`) writes it `0640` in group `NAME` instead, so
+`slothweb-mcp` can run as a member of `NAME` with no sudo rule;
+slothweb's own user must be a member too, and an unknown group or one
+it cannot give exits `1` ([[slothweb-mcp]] section 7).
+
+### slothweb-mcp
+
+`make web-mcp` builds `slothweb-mcp`, an MCP server (stdio,
+newline-delimited JSON-RPC) that is a client of slothweb's HTTP API
+on loopback ([[slothweb-mcp]]). Not in `all`, `web` or the install.
+
+Its flags, in prose because this page's tables are `sloth`'s own flags
+(a test holds every table row to `src/main.c`):
+
+- **`--url URL`**: slothweb's address, `http://` and a literal IPv4 or
+  `[IPv6]` address with an optional port; default
+  `http://127.0.0.1:8770`. No name is resolved. Not loopback: exit `2`
+  unless `--allow-remote`.
+- **`--allow-remote`**: read a slothweb on another host (in the clear:
+  slothweb has no TLS). Writes still fail: the agent secret is taken
+  from loopback peers only.
+- **`--from-loopback`**: connect from `127.0.0.1` (`::1` for a V6
+  address), for a slothweb bound to this host's own address (a
+  Tailscale `--web-bind`): slothweb then sees a loopback peer and takes
+  the agent secret. A loopback source reaches this host only, so a
+  non-loopback `--url` needs no `--allow-remote` with it.
+- **`--agent NAME`**: the name writes are recorded under, 1..32 bytes
+  of UTF-8 with no control characters (exit `2` otherwise). Without it
+  the write tools refuse.
+- **`--secret-file PATH`**: the file `slothweb --web-agent-secret PATH`
+  wrote; read at each write; must be `0600` and the running user's own,
+  or `0640` in a group the running user is in (`slothweb
+  --web-agent-group`). Without it the write tools refuse; a file the
+  user may not open is `secret_no_access`, "check group membership".
+- **`--read-only`**: no write tools: not listed, not callable.
+- **`--help`**, **`-h`**: usage, on stderr.
+
+An unknown or incomplete argument exits `2`.
+Since 2026-11-11 (#192 I2, I3) slothweb takes `--my-ssid SSID` and
+`--my-bssid MAC` too (repeatable, at most 16 of each, as sloth), the same values as
+sloth's flags of those names, which `sloth.db` and the stream do not
+carry: this site's own networks, named to a peer that asks with
+`ident=1` (they travel under the owner's monitor-only rule, ADR 0009)
+and the baseline of the fleet's identity findings
+(`/api/fleet/findings`). An SSID of 0 or more than 32 octets or with a
+control character, a BSSID that is not six hex octets, or a seventeenth of
+either exits `2`; any given is announced on stderr. Set both: slothweb
+does not read sloth's flags, so a network named to one and not the other
+is the sensor's own to sloth and a stranger's to the fleet, or the
+reverse.
 
 ## Build variants (Makefile)
 
@@ -459,7 +800,39 @@ make bench           # time seqnum correlation + PNL union at full table
                      #   occupancy, -O2 (#91; BENCH_ITERS=n, figures in [[ring-buffers]])
 make deploy-test     # packaging/bin/sloth-migrate-sensor against a scratch root
                      #   with stub systemctl etc.; unprivileged (#153, [[deployment]] §4)
+make install         # sloth, slothweb (`make web` first), the monitor-mode helper,
+                     #   sloth-ble-scan and research.db under $(PREFIX) (#139, #153)
+make install-service # sloth-sensor.service, slothweb.service, sloth-ble-scan.service
+                     #   (installed, not enabled), the sysusers fragment,
+                     #   /etc/default/sloth and /etc/default/slothweb (each only if absent)
 ```
+
+`make` on Linux also builds `sloth-ble-scan`, the operator's
+passive-scan helper for `--bt-monitor` ([[ble]], [[deployment]] §7). It
+is not part of `sloth` and sloth never runs it:
+
+```sh
+sloth-ble-scan [--delay SECS] [hciN]  # take hciN's HCI user channel and hold a PASSIVE
+                                      #   LE scan until SIGTERM/SIGINT/SIGHUP (default hci0;
+                                      #   --delay 0..60 waits before taking the channel)
+sloth-ble-scan --down [hciN]          # bring hciN down (HCIDEVDOWN), so the channel can be taken
+```
+
+Needs `CAP_NET_ADMIN`. A bind refused with `ENODEV` (hciN not
+registered yet) or `EBUSY` (still in setup, or bluetoothd holding it) is
+retried once a second for up to 30 s, then fails; `--down` on an
+unregistered hciN succeeds with nothing to do. `hciN` is one argument:
+an empty one is a usage error, not hci0. Exit 0 stopped by a signal, 1
+failure (the channel could not be taken, a refused command, the
+controller went away, a Hardware Error five times in a minute), 2
+usage.
+
+`packaging/bin/sloth-migrate-sensor` takes `--dry-run`,
+`--data-socket-unix` (move an old unit's `tcp:` data socket to
+`unix:/run/sloth/sloth.sock`; without it a `tcp:` socket is refused) and
+`--with-slothweb` (install, start and verify `slothweb.service` after the
+sensor verifies); exit 0, 1 (rolled back), 2 (refused), 3 (sensor done,
+slothweb rolled back). [[deployment]] §4.2-§4.4.
 
 All six build variants must be warning-clean; CI enforces `-Werror`
 across the matrix (`AGENTS.md` Discipline).

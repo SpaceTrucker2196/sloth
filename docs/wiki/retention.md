@@ -12,17 +12,22 @@ an **investigative tradeoff**, not a deletion guarantee: it is not a
 "30-day deletion" promise, it is not a hard disk cap, and row deletion is
 not secure erasure. Separately, the one artifact class that is
 offline-crackable — EAPOL / PMKID exports — is opt-in behind
-`--collect-handshakes` and swept on a 7-day default window (§2c). JSONL,
-pcap and report artifacts still have no retention at all.
+`--collect-handshakes` and swept on a 7-day default window (§2c), and
+per-alert pcaps in `--pcap-dir` are swept on a 14-day default window
+(§2d, #166). JSONL and report artifacts still have no retention at all.
 
 **Sources**: `src/db.c` (`db_maintain`, `prune_tier`,
 `prune_oldest_observations`, `db_size_bytes`), `src/db.h`
 (`DB_DEFAULT_RETAIN_DAYS`, `DB_DEFAULT_MAX_MB`), `src/db_schema.c`,
 `tests/test_db.c`, issue #96; `src/secure_file.c` for §4.1 (#87);
 `src/eapol_log.c` (`eapol_sweep`, `eapol_maintain`), `include/eapol_log.h`
-(`EAPOL_DEFAULT_RETENTION_DAYS`), `tests/test_eapol_log.c` for §2c (#87).
+(`EAPOL_DEFAULT_RETENTION_DAYS`), `tests/test_eapol_log.c` for §2c (#87);
+`src/alert_pcap.c` (`alert_pcap_sweep_step`, `alert_pcap_maintain`,
+`alert_pcap_is_name`, `alert_pcap_shares_eapol_dir`), `src/alert_pcap.h`
+(`ALERT_PCAP_DEFAULT_RETAIN_DAYS`), `tests/test_alert_pcap.c` for §2d
+(#166).
 
-**Last updated**: 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
+**Last updated**: 2026-11-03 (#175 — `alert_incidents` on the finding tier, and its per-key bound of `DB_INCIDENTS_PER_KEY` incidents). 2026-10-26 (#166 — the `--pcap-dir` age sweep, §2d; owner ruling: two weeks; review: one directory for both sinks refused, the stale-clock guard, the sweep's own stderr line). Previously 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
 
 ---
 
@@ -37,10 +42,11 @@ If you need one paragraph for a risk register:
 > deletion deadline, a guaranteed size ceiling, or a secure wipe.
 > Handshake exports — the only offline-crackable artifact class — are not
 > written at all unless `--collect-handshakes` is given, and are deleted
-> on a 7-day default window swept at startup and daily. Every other
-> artifact sloth can write — JSONL, pcap, reports — has no retention
-> mechanism whatsoever and grows without bound until the operator
-> removes it.
+> on a 7-day default window swept at startup and daily. Per-alert
+> pcaps in `--pcap-dir` are deleted on a 14-day default window swept at
+> startup and hourly. Every other artifact sloth can write — JSONL,
+> reports, manual exports — has no retention mechanism whatsoever and
+> grows without bound until the operator removes it.
 
 ## 2. What `--db` retention does
 
@@ -55,10 +61,18 @@ there is nothing to retain.
 |------|--------|-------:|---------------|
 | observation | **1×** (30 d) | 14 | `bgp_sessions`, `ssh_flows`, `rdp_flows`, `snmp_flows`, `mqtt_flows`, `ldap_events`, `kerb_events`, `smb_sessions`, `deauth_events`, `seqnum_correlations`, `twin_episodes`, `eapol_events`, `scan_entries`, `scan_entry_ports` |
 | entity | **3×** (90 d) | 21 | `devices`, `pnl_clients`, `pnl_ssids`, `probe_clients`, `beacon_aps`, `beacon_ap_ssids`, `ssid_akm_history`, `wifi_aps`, `wifi_stas`, `assocs`, `assoc_reqs`, `wifi_merged`, `arp`, `dhcp_leases`, `top_hosts`, `mdns_services`, `nbns_names`, `ssdp_devices`, `ndp_ras`, `ndp_ra_prefixes`, `sensors` |
-| finding | **12×** (360 d) | 5 | `alerts`, `cleartext_creds`, `karma_candidates`, `rogue_radius`, `btm_requests` |
+| finding | **12×** (360 d) | 6 | `alerts`, `alert_incidents`, `cleartext_creds`, `karma_candidates`, `rogue_radius`, `btm_requests` |
 
 The ordering is the point: *what fired* outlives *who was here*, which
 outlives *the individual observations that established it*.
+
+`alert_incidents` (schema v11, #175) has one more bound besides its
+tier: a key keeps its newest `DB_INCIDENTS_PER_KEY` (256) incidents,
+the oldest trimmed as the writer records a new one, because a key
+evicted under pressure re-fires as a new incident every tick. That trim
+removes per-incident detail only: the key's `alerts` row, which holds
+the finding across every incident, is not touched by it
+([[sqlite-schema]], *Per-incident rows*).
 
 `--db-retain-days 0` does **not** disable retention. Since #120 it is
 refused at startup (exit 2): the flag is an alias for the
@@ -169,6 +183,108 @@ is. Turning collection off stops new material; it does not clean up old
 material. Delete it yourself, or restart with the flags and let the
 startup sweep do it.
 
+## 2d. Per-alert pcaps: the age sweep (#166)
+
+Owner ruling 2026-10-26: **keep alert pcaps for two weeks.** The
+four questions #166 put were answered as: yes, there is a default; 14
+days; by age; and the sweep deletes. It runs **beside** the storage
+floors (§6, `storage.min_free_*`), which are unchanged — a floor refuses
+a write inside a burst, the sweep ages files out over weeks, and neither
+replaces the other.
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `--tune pcap.retain_days=N` | `14` | Delete alert pcaps whose mtime is more than `N` days old. Range `0..3650`; `0` = keep forever (the pre-#166 behaviour). A value outside the range exits `2`. |
+
+`0` disables rather than being refused because it is the meaning `0`
+already has on `handshake.retention_days`, the one other age sweep, and
+because "keep everything" is an operator decision this registry has
+always allowed for evidence (`pcap.min_severity=0`,
+`pcap.key_cooldown_secs=0`). A disabled sweep is reported: startup
+prints `retention disabled`, and `sensor_health` carries
+`pcap_retain_days: 0`.
+
+**What is swept.** Only names `alert_pcap_dump()` writes, inside the
+directory `--pcap-dir` pinned at startup: `alert_YYYYMMDD_HHMMSS_<slug>.pcap`
+and its `_N` same-second variants (the slug is `[A-Za-z0-9_]`), plus the
+`sloth-manifest-*.jsonl` hashed manifest (#92 slice 3), whose mtime is
+its newest line so it goes only once every file it lists could have.
+Anything else — a `capture.pcap` you dropped in, a `.pcapng`, a dotted
+file — is the operator's and is not touched. The matcher is
+`alert_pcap_is_name()`, pinned by `test_sweep_name_shape`.
+
+**Nothing is followed.** Each entry is `fstatat(..., AT_SYMLINK_NOFOLLOW)`-ed
+relative to the pinned directory descriptor and removed with
+`unlinkat()` relative to it, so a rename or symlink swap of the path
+cannot redirect a deletion. Only regular files are removed. A symlink,
+directory or FIFO at an artifact name is left exactly as it is and
+counted as a sweep error — in a 0700 directory only sloth writes, it is
+either operator error or someone steering the sweep.
+
+**When it runs, and how much at once.** A pass starts at startup and
+then at most once per `ALERT_PCAP_SWEEP_INTERVAL_S` (1 h). Each poll
+tick examines at most `ALERT_PCAP_SWEEP_BUDGET` (1024) directory
+entries and the next tick resumes where it stopped, so a directory of
+millions of files — the measured failure was ~16M — cannot stall the
+poll loop; at the default 250 ms refresh that is ~4,000 entries a second,
+so 16M entries clear in about an hour, against a measured worst
+production rate of ~14 files/s. A
+pass applies one cutoff, fixed when it started. The next interval is
+counted from a pass's start, so a pass longer than an hour is followed
+by the next one immediately.
+
+**Counted, never silent.** `sensor_health` carries `pcap_retain_days`,
+`pcap_swept` (files removed) and `pcap_sweep_errors` (unreadable
+directory, failed stat, non-regular file at an artifact name, failed
+unlink) whenever `--pcap-dir` is set; the change-only signature takes
+their decade bands, not the counts, so a sweep clearing a backlog writes
+a handful of lines, not one per tick ([[jsonl-schema]]). The first
+error is also one stderr line, `sloth: --pcap-dir retention sweep: …`
+— deliberately not the `… export failed` wording the write path uses,
+so a grep for lost evidence does not match it. A sweep error is **not** a write
+failure: it does not move `storage_pcap_failures` or the `!persist`
+badge, because no evidence was lost.
+
+**Evidence pcaps in `--eapol-dir` are covered — by the other sweep.**
+The #92 per-alert *evidence* pcaps (`<incident_id>-<event_id>-<RULE>.pcap`,
+raw 802.11 frames) are written into `--eapol-dir`, not `--pcap-dir`,
+and `eapol_sweep()` already expires every `*.pcap`, the manifest and
+`.<name>.tmp` partials there (§2c). They are therefore aged on
+**`handshake.retention_days` (7 days)**, not on `pcap.retain_days`: the
+frames carry EAPOL/PMKID material, and the owner ruling of 2026-10-08
+put them under the crackable-material policy on purpose.
+
+**One directory for both is refused.** Because `eapol_sweep()` takes
+every `*.pcap` and manifest in its directory, `--pcap-dir` and
+`--eapol-dir` naming the same directory would put the alert pcaps on
+the 7-day handshake window whatever `pcap.retain_days` says — `0`
+included, while startup printed "kept until you delete them". sloth
+pins both, compares the pinned descriptors by dev/ino (so `DIR` and
+`DIR/.` are the same) and exits `2` before either sweep runs
+(`alert_pcap_shares_eapol_dir()`, `test_sweep_detects_a_shared_eapol_dir`).
+Refusal rather than teaching `eapol_sweep()` to skip alert names,
+because the two sinks also write manifests of the same shape and one
+directory cannot keep them apart.
+
+**Age is the wall clock, with one guard.** A file's age is its mtime
+against `sloth_wall()`. A sensor with no RTC that starts on a stale
+clock stamps its alert pcaps in the past, and once NTP steps the clock
+forward they would read as older than the window and go on the next
+pass. So until the process has been up one whole window by the
+monotonic clock, a file whose mtime is at or after the wall time sloth
+started at is not deleted. On a clock that was right all along those
+files are younger than the uptime and would be kept anyway, so the
+guard changes nothing there (`test_sweep_spares_files_written_before_a_clock_step`).
+What it cannot cover: files written on a stale clock by an *earlier*
+run are judged by their stamps alone at the next start, and a start on
+a stale clock spares the previous run's files until the window of
+uptime has passed. The handshake sweep (§2c) has no such guard on
+purpose — for crackable material, expiring early is the safer failure.
+
+**Same known limit as §2c.** Retention is process-local: a run without
+`--pcap-dir` does not know where an earlier run's files are and sweeps
+nothing.
+
 ## 3. What the size guard actually does
 
 `--db-max-mb N` (default **512**, `DB_DEFAULT_MAX_MB`; `0` = unlimited)
@@ -242,16 +358,18 @@ stating for a risk register:
 
 ## 4. What retention does *not* cover
 
-Apart from the handshake exports in §2c, nothing outside the SQLite file
-is managed. These grow until the operator deletes them:
+Apart from the handshake exports in §2c and the alert pcaps in §2d,
+nothing outside the SQLite file is managed. These grow until the
+operator deletes them:
 
 | Artifact | Flag | Retention |
 |----------|------|-----------|
 | JSONL forensic log | `-o FILE` | **none** — append-only, no rotation, no size cap. A `-o` run writes on the order of tens of GB/day |
-| Per-alert pcaps | `--pcap-dir DIR` | **none** — one file per alert flow, kept forever |
+| Per-alert pcaps | `--pcap-dir DIR` | **14 days** by default (`pcap.retain_days`, `0` = forever) — see §2d |
 | EAPOL / PMKID export | `--eapol-dir DIR` + `--collect-handshakes` | **7 days** by default — see §2c. The one managed artifact outside the database, because it is the one that is offline-crackable |
 | Per-handshake pcaps | `--eapol-dir DIR` + `--collect-handshakes` | **7 days** by default (§2c) |
 | Posture reports | `--report`, `--report-json` | **none** — overwritten per run at the path you name, never aged |
+| Live, per-session and unclean reports (#190) | `--report-interval`, `--report-history` | **none** — `report.live.*` is replaced in place; `report.<UTC>.*` and `report.<UTC>.unclean.*` accumulate, one small file per session per format, never pruned |
 | Packets-view manual export | `w` key | **none** |
 | Wi-Fi AP snapshot | `--snapshot-out FILE` | **none** — overwritten per run at the path you name |
 | SQLite WAL / SHM | `--db` | not measured by the size guard; checkpointed by SQLite, not by sloth |
@@ -259,8 +377,9 @@ is managed. These grow until the operator deletes them:
 
 If your data-handling policy needs those bounded, bound them outside
 sloth — logrotate, a tmpfiles.d rule, a systemd timer. Apart from the
-crackable material in §2c, sloth deliberately ships no deletion logic for
-artifacts the operator asked for by name.
+crackable material in §2c and the alert pcaps in §2d (an owner ruling,
+not an engineering default), sloth deliberately ships no deletion logic
+for artifacts the operator asked for by name.
 
 ### 4.1 File permissions on those artifacts (current behaviour)
 
@@ -345,7 +464,7 @@ Recorded here rather than implied away:
 
 - **A failing sink is visible on every view, dashboard included.**
   `persist_health_poll()` (`src/persist_health.c`, polled once per tick
-  from `src/main.c`) snapshots the three sinks' lifetime write-failure
+  in `src/poll.c`'s `health_capture` stage) snapshots the three sinks' lifetime write-failure
   counts, and `persist_badge()` renders `!persist jsonl:N pcap:N
   eapol:N` — failing sinks only — on the tab bar at full alert heat in
   both front ends (`draw_tabbar` in `src/tui.c`, ncurses and ANSI).
@@ -425,17 +544,15 @@ Recorded here rather than implied away:
   (`src/secure_file.c`) increments that sink's counter and prints one
   stderr line behind a `reported` latch, and the next write is
   attempted anyway: the JSONL sink `clearerr()`s the stream on purpose
-  ("keep trying: a full disk may drain", `src/jsonl.c`), while
+  ("keep trying: a full disk may drain", `src/jsonl_core.c`), while
   per-alert pcap and EAPOL exports open a fresh file per export
   (`src/alert_pcap.c`, `src/eapol_log.c`). Counters rise, the badge
   grows, and the sink keeps trying at full rate — nothing throttles,
   degrades or stops.
 
-  Nothing deletes an alert pcap either. `eapol_sweep()` ages handshake
-  exports out because #87 gave crackable material a stated short
-  default; alert pcaps have no such policy to inherit, and the retention
-  window for forensic evidence is an owner decision rather than an
-  engineering one. Remaining work on issue #96.
+  Alert pcaps are now aged out: owner ruling 2026-10-26 on #166 set a
+  two-week window, swept hourly (§2d). The sweep bounds the directory
+  over weeks; within a burst the floors above are still the only guard.
 - **The size guard measures the wrong number for a disk budget** — the
   main database file only, excluding `-wal`/`-shm` — and gives up for
   the hour after 64 pruning rounds (§3).

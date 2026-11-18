@@ -1,0 +1,174 @@
+# slothweb.service — the read-only web UI over the sensor (#153, #168).
+#
+# Installed by `sudo make install-service` to /etc/systemd/system, beside
+# sloth-sensor.service; the binary is placed by `sudo make install`.
+# `sloth-migrate-sensor --with-slothweb` installs, starts and verifies it
+# after the sensor itself verifies. Recipe and the reason for every key:
+# docs/wiki/deployment.md §6.
+#
+# Why it runs as sloth: the sensor's state is /var/lib/sloth, 0700 sloth,
+# and its data socket /run/sloth/sloth.sock is 0600 sloth (src/
+# data_socket.c, SO_PEERCRED). slothweb reads both, so it is the same
+# account, not a second one granted access to them. It holds no
+# capability: it binds a port above 1024 and never captures.
+#
+# What the shared uid still allows, and why it is accepted: a process of
+# the same uid may signal the sensor, and a compromised slothweb could
+# SIGSTOP or SIGKILL it and end capture. The signal syscalls are denied
+# below (slothweb signals nothing, not even itself); ptrace is already
+# refused, because the sensor keeps a capability in its permitted set;
+# and the read-only mounts keep it from writing sloth.db or /run/sloth.
+# The lasting fix is a slothweb account in group sloth, with the socket
+# 0660 and a group-readable view of sloth.db (deployment.md §6).
+
+[Unit]
+Description=slothweb read-only web UI for the sloth sensor
+Documentation=https://github.com/SpaceTrucker2196/sloth/wiki/slothweb
+Documentation=https://github.com/SpaceTrucker2196/sloth/wiki/deployment
+# The stream and sloth.db are the sensor's. Wants=, not Requires=: a
+# sensor restart (or its radio going away) must not take the UI down,
+# which keeps serving the history and says the stream is retrying.
+After=sloth-sensor.service
+Wants=sloth-sensor.service
+# The RF daemon the same way (#215, ADR 0010): ordered after it and
+# wanting it, never Requires=. As for the sensor, Wants= starts
+# sloth-rf.service whenever this unit starts, wherever that unit is
+# installed, enabled or not: `systemctl enable sloth-rf` only adds a
+# start at boot of its own, and `systemctl mask sloth-rf` is what keeps
+# it off. Wants= on a unit that is not installed is ignored, and make
+# installs sloth-rf.service only beside its binary, so this unit starts
+# unchanged on a host with no sloth-rf; a stop or a crash of sloth-rf
+# leaves the UI up.
+After=sloth-rf.service
+Wants=sloth-rf.service
+
+[Service]
+Type=simple
+User=sloth
+Group=sloth
+
+# Site configuration: /etc/default/slothweb. Environment= gives the
+# default (no extra flags: loopback, 127.0.0.1:8770); the file, when
+# present, overrides it. `make install-service` never replaces an
+# existing copy.
+Environment=SLOTHWEB_ARGS=
+EnvironmentFile=-/etc/default/slothweb
+
+# /var/lib/slothweb (0700) holds slothweb.db, the time series and the
+# baselines: slothweb's own file, never sloth.db.
+StateDirectory=slothweb
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/slothweb
+UMask=0077
+
+# /run/slothweb holds the agent secret when /etc/default/slothweb asks
+# for one (--web-agent-secret /run/slothweb/agent.secret --web-agent-group
+# NAME; docs/wiki/slothweb-mcp.md §7). The state directory is 0700, so
+# the operator's user could not reach a file in it whatever the file's
+# own mode; this one is 0711: anyone may pass through to a name they
+# already know, nobody else may list it or create in it, and the file's
+# own mode (0640, the group) is the boundary. Empty without the flag.
+# Removed at every stop, so a killed slothweb leaves no secret behind.
+RuntimeDirectory=slothweb
+RuntimeDirectoryMode=0711
+
+# The paths are this deployment's, fixed here because the sandbox
+# below admits no others: the sensor's unix socket, the sensor's db read
+# in place (WAL reader, web/src/web_slothdb.h: no side file is ever made
+# beside it), slothweb's own store; and the research assessments `make
+# install` puts under share/sloth, read-only data "follow recommended"
+# reads (absent there: "no recommendation yet"). $SLOTHWEB_ARGS carries
+# the bind and the allowed peers (packaging/default/slothweb).
+#
+# --rf-socket and --rf-db (#214) are sloth-rf's socket and database,
+# fixed here for the same reason. Assumed of slothweb, from #214 ("the
+# same checks as --socket / --sloth-db"): a socket that is not there is
+# retried, and a database that is not there is reported missing, as the
+# Wi-Fi sensor's are, so slothweb starts and serves on a host where
+# sloth-rf is not installed or not running. With --rf-socket given, the
+# ADS-B, APRS, rtl_433 and GNSS pages are fed from sloth-rf alone
+# (#214), so a host whose decoders are still on the Wi-Fi sensor's
+# command line moves them with sloth-migrate-rf in the same sitting as
+# this unit is installed (docs/wiki/deployment.md §11.4).
+#
+# A slothweb that does not know one of the flags below exits on it. So
+# `make install` refuses a ./slothweb that lacks one, and `make
+# install-service` refuses to put this file beside an installed
+# slothweb that lacks one: the two are replaced together or not at all.
+ExecStart=/usr/local/bin/slothweb \
+    --socket unix:/run/sloth/sloth.sock \
+    --sloth-db /var/lib/sloth/sloth.db \
+    --rf-socket unix:/run/sloth-rf/sloth-rf.sock \
+    --rf-db /var/lib/sloth-rf/sloth-rf.db \
+    --store /var/lib/slothweb/slothweb.db \
+    --web-assessments /usr/local/share/sloth/alert-assessments \
+    $SLOTHWEB_ARGS
+
+# ── Privilege ────────────────────────────────────────────────────────────
+# None at all: both sets empty, so nothing can be gained by exec either.
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=true
+
+# ── Filesystem ───────────────────────────────────────────────────────────
+# Everything read-only but the state directory. /var/lib/sloth is
+# read-only already under strict; ReadOnlyPaths= says so explicitly, so a
+# later ReadWritePaths= cannot widen it by accident. The '-': on a host
+# where the sensor has never started the directory is not there yet, and
+# without it the namespace setup fails (226/NAMESPACE) instead of
+# slothweb starting and saying sloth.db is missing.
+# /var/lib/sloth-rf the same, with the same '-': it does not exist until
+# sloth-rf.service has started once.
+ProtectSystem=strict
+ReadOnlyPaths=-/var/lib/sloth
+ReadOnlyPaths=-/var/lib/sloth-rf
+ProtectHome=yes
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+
+# ── Kernel surface ───────────────────────────────────────────────────────
+# AF_UNIX for the data socket; AF_INET and AF_INET6 because it serves
+# HTTP. No netlink, no packet sockets.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# No signal to any process: the shared uid (above) would let slothweb
+# stop or kill the sensor. tgkill goes too, since tgkill(pid, pid, sig)
+# reaches any process; it costs only a self-signal slothweb never sends
+# (its shutdown is a write to a pipe; abort() still ends the process).
+SystemCallFilter=~kill tkill tgkill rt_sigqueueinfo rt_tgsigqueueinfo pidfd_send_signal
+# fchown back from ~@privileged (@chown is in it): --web-agent-group gives
+# the secret file its group. Unprivileged, it can only give a file this
+# user owns a group this user is in; it was EPERM under the line above.
+SystemCallFilter=fchown fchown32
+SystemCallErrorNumber=EPERM
+
+# ── Resources ────────────────────────────────────────────────────────────
+# The store is capped on disk (--web-max-mb, 256 MB by default); memory
+# is the rings, the page cache of two SQLite files and the HTTP buffers.
+MemoryMax=512M
+MemoryHigh=384M
+TasksMax=32
+
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=slothweb
+
+[Install]
+WantedBy=multi-user.target

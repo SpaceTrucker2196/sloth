@@ -206,6 +206,10 @@ static void test_usage_and_unknown(void) {
     WT_HAS(p.out, "--web-allow-remote");
     WT_HAS(p.out, "/api/health");
     WT_HAS(p.out, "/events");
+    /* The BLE view's three routes in the Routes paragraph. Seen red with
+     * the line naming them taken out of web_usage(). */
+    WT_HAS(p.out, " /api/ble,\n");
+    WT_HAS(p.out, "/api/ble/alerts, /api/ble/ADDR (the BLE view)");
     WT_HAS(p.out, "405");
     WT_LACKS(p.out, "serves no routes");
     done(&p);
@@ -442,7 +446,245 @@ static void test_web_allow_sql_flag(void) {
     done(&p);
 }
 
+/* --web-serve-evidence-pcap: an evidence pcap can hold EAPOL/PMKID
+ * material, so it is withheld by default, announced when served, and
+ * refused with --web-allow-remote unless given as =remote. The refusal
+ * seen red with its condition in web_config_check() replaced by 0; the
+ * announcement with its block removed from web_config_announce(); the
+ * remote line's absence with its condition replaced by 1. */
+static void test_serve_evidence_pcap_flag(void) {
+    parsed_t p;
+    parse(&p, NULL);
+    WT_EQ(p.cfg.serve_evidence_pcap, 0);
+    WT_LACKS(p.ann, "evidence");
+    done(&p);
+    static const char *const local[] = { "--web-serve-evidence-pcap", NULL };
+    parse(&p, local);
+    WT_EQ(p.rc, 0);
+    WT_EQ(p.cfg.serve_evidence_pcap, 1);
+    WT_HAS(p.ann, "WARNING: --web-serve-evidence-pcap: evidence pcaps");
+    WT_HAS(p.ann, "EAPOL/PMKID handshake material");
+    WT_LACKS(p.ann, "=remote with --web-allow-remote");
+    done(&p);
+    static const char *const refused[] = { "--web-allow-remote", "--web-serve-evidence-pcap",
+                                           NULL };
+    parse(&p, refused);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--web-serve-evidence-pcap with --web-allow-remote");
+    WT_HAS(p.err, "EAPOL/PMKID handshake material");
+    WT_HAS(p.err, "--web-serve-evidence-pcap=remote");
+    done(&p);
+    static const char *const remote[] = { "--web-allow-remote", "--web-serve-evidence-pcap=remote",
+                                          NULL };
+    parse(&p, remote);
+    WT_EQ(p.rc, 0);
+    WT_EQ(p.cfg.serve_evidence_pcap, 2);
+    WT_HAS(p.ann, "WARNING: --web-serve-evidence-pcap: evidence pcaps");
+    WT_HAS(p.ann, "=remote with --web-allow-remote: every peer");
+    done(&p);
+    static const char *const bogus[] = { "--web-serve-evidence-pcap=yes", NULL };
+    parse(&p, bogus);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "unknown option --web-serve-evidence-pcap=yes");
+    done(&p);
+}
+
+/* --web-agent-group names the secret file's group, so it needs the
+ * file: alone it is refused (exit 2), with --web-agent-secret it is
+ * kept for main.c to resolve. Seen red with web_config_check()'s test
+ * for it taken out (rc 0 alone). */
+static void test_agent_group_flag(void) {
+    parsed_t p;
+    static const char *const alone[] = { "--web-agent-group", "slothweb-agent", NULL };
+    parse(&p, alone);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--web-agent-group needs --web-agent-secret");
+    done(&p);
+    static const char *const both[] = { "--web-agent-secret", "/run/slothweb/agent.secret",
+                                        "--web-agent-group", "slothweb-agent", NULL };
+    parse(&p, both);
+    WT_EQ(p.rc, 0);
+    WT_ASSERT(!strcmp(p.cfg.agent_group, "slothweb-agent"));
+    done(&p);
+    static const char *const empty[] = { "--web-agent-secret", "/x", "--web-agent-group", "", NULL };
+    parse(&p, empty);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--web-agent-group: empty or too long a name");
+    done(&p);
+    static const char *const none[] = { "--web-agent-secret", "/x", "--web-agent-group", NULL };
+    parse(&p, none);
+    WT_EQ(p.rc, -1);
+    done(&p);
+    parse(&p, NULL);
+    WT_EQ(p.cfg.agent_group[0], 0);
+    done(&p);
+}
+
+/* --rf-socket and --rf-db (#214): sloth-rf's socket and database, read
+ * as --socket and --sloth-db are and refused as they are. Neither has a
+ * default: without them the configuration is what it was (no second
+ * stream, no second database). Each refusal seen red with its condition
+ * in web_config_check() replaced by 0: the strict one, the same-socket
+ * one (both the given pair and the default --socket), the two same-file
+ * ones. */
+static void test_rf_flags(void) {
+    parsed_t p;
+    parse(&p, NULL);
+    WT_EQ(p.rc, 0);
+    WT_EQ(p.cfg.rf_sock.kind, 0);
+    WT_EQ(p.cfg.rf_db[0], '\0');
+    done(&p);
+
+    static const char *const ok[] = { "--rf-socket", "unix:/run/sloth-rf/sloth-rf.sock", NULL };
+    parse(&p, ok);
+    WT_EQ(p.rc, 0);
+    WT_EQ(p.cfg.rf_sock.kind, WEB_SOCKSPEC_UNIX);
+    WT_ASSERT(!strcmp(p.cfg.rf_sock.path, "/run/sloth-rf/sloth-rf.sock"));
+    /* --socket keeps its default beside it. */
+    WT_ASSERT(!strcmp(p.cfg.sock.path, "/run/sloth/sloth.sock"));
+    WT_ASSERT(p.ann && p.ann[0] == '\0');
+    done(&p);
+
+    static const char *const loop[] = { "--rf-socket", "tcp:[::1]:8766", NULL };
+    parse(&p, loop);
+    WT_EQ(p.rc, 0);
+    WT_EQ(p.cfg.rf_sock.kind, WEB_SOCKSPEC_TCP);
+    WT_EQ(p.cfg.rf_sock.port, 8766);
+    done(&p);
+
+    static const char *const remote[] = { "--rf-socket", "tcp:192.168.1.5:8766", NULL };
+    parse(&p, remote);
+    WT_EQ(p.rc, 0);
+    WT_HAS(p.ann, "WARNING: reading sloth-rf's data stream from tcp:192.168.1.5:8766");
+    done(&p);
+
+    static const char *const strict[] = { "--strict", "--rf-socket",
+                                          "tcp:192.168.1.5:8766", NULL };
+    parse(&p, strict);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--strict refuses a non-loopback --rf-socket (tcp:192.168.1.5:8766)");
+    done(&p);
+    static const char *const strict_ok[] = { "--strict", "--rf-socket", "unix:/tmp/rf.sock",
+                                             NULL };
+    parse(&p, strict_ok);
+    WT_EQ(p.rc, 0);
+    done(&p);
+
+    /* The message names the flag that was wrong, not --socket. */
+    static const char *const name[] = { "--rf-socket", "tcp:localhost:8766", NULL };
+    parse(&p, name);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--rf-socket tcp:localhost:8766: not a literal IPv4 address "
+                  "(names are not resolved)");
+    WT_LACKS(p.err, "--socket ");
+    done(&p);
+    static const char *const form[] = { "--rf-socket", "/run/sloth-rf/sloth-rf.sock", NULL };
+    parse(&p, form);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--rf-socket /run/sloth-rf/sloth-rf.sock: want unix:PATH or tcp:ADDR:PORT");
+    done(&p);
+    static const char *const bare[] = { "--rf-socket", NULL };
+    parse(&p, bare);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--rf-socket needs an argument");
+    done(&p);
+
+    /* One socket under both flags: given, and --socket's default. */
+    static const char *const same[] = { "--socket", "unix:/tmp/one.sock", "--rf-socket",
+                                        "unix:/tmp/one.sock", NULL };
+    parse(&p, same);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--rf-socket and --socket name the same socket (unix:/tmp/one.sock)");
+    done(&p);
+    static const char *const same_def[] = { "--rf-socket", "unix:/run/sloth/sloth.sock", NULL };
+    parse(&p, same_def);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--rf-socket and --socket name the same socket (unix:/run/sloth/sloth.sock)");
+    done(&p);
+    static const char *const same_tcp[] = { "--socket", "tcp:127.0.0.1:8765", "--rf-socket",
+                                            "tcp:127.0.0.1:8765", NULL };
+    parse(&p, same_tcp);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "name the same socket (tcp:127.0.0.1:8765)");
+    done(&p);
+    static const char *const port_apart[] = { "--socket", "tcp:127.0.0.1:8765", "--rf-socket",
+                                              "tcp:127.0.0.1:8766", NULL };
+    parse(&p, port_apart);
+    WT_EQ(p.rc, 0);
+    done(&p);
+
+    /* --rf-db, as --sloth-db. */
+    static const char *const db[] = { "--rf-db", "/var/lib/sloth-rf/sloth-rf.db", NULL };
+    parse(&p, db);
+    if (web_slothdb_available()) {
+        WT_EQ(p.rc, 0);
+        WT_ASSERT(!strcmp(p.cfg.rf_db, "/var/lib/sloth-rf/sloth-rf.db"));
+        WT_EQ(p.cfg.sloth_db[0], '\0');
+    } else {
+        WT_EQ(p.rc, -1);
+        WT_HAS(p.err, "--rf-db needs SQLite; this slothweb was built with WITH_SQLITE=0");
+        WT_EQ(p.cfg.rf_db[0], '\0');
+    }
+    done(&p);
+    static const char *const empty[] = { "--rf-db", "", NULL };
+    parse(&p, empty);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--rf-db: empty or too long a path");
+    done(&p);
+    static char longp[sizeof(((web_config_t *)0)->rf_db)];
+    memset(longp, 'a', sizeof(longp) - 16);
+    longp[0] = '/';
+    longp[sizeof(longp) - 16] = '\0';
+    const char *const toolong[] = { "--rf-db", longp, NULL };
+    parse(&p, toolong);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--rf-db: empty or too long a path");
+    done(&p);
+    static const char *const nodb[] = { "--rf-db", NULL };
+    parse(&p, nodb);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--rf-db needs an argument");
+    done(&p);
+
+    if (web_slothdb_available() && web_store_available()) {
+        static const char *const store[] = { "--rf-db", "/tmp/x/one.db", "--store",
+                                             "/tmp/x/one.db", NULL };
+        parse(&p, store);
+        WT_EQ(p.rc, -1);
+        WT_HAS(p.err, "--rf-db and --store name the same file (/tmp/x/one.db)");
+        done(&p);
+        static const char *const sdb[] = { "--rf-db", "/tmp/x/one.db", "--sloth-db",
+                                           "/tmp/x/one.db", NULL };
+        parse(&p, sdb);
+        WT_EQ(p.rc, -1);
+        WT_HAS(p.err, "--rf-db and --sloth-db name the same file (/tmp/x/one.db)");
+        done(&p);
+        static const char *const apart[] = { "--rf-db", "/tmp/x/rf.db", "--sloth-db",
+                                             "/tmp/x/one.db", "--store", "/tmp/x/web.db", NULL };
+        parse(&p, apart);
+        WT_EQ(p.rc, 0);
+        done(&p);
+        /* The SQL box is --sloth-db's, and --rf-db does not stand in. */
+        static const char *const sql[] = { "--rf-db", "/tmp/x/rf.db", "--web-allow-sql", NULL };
+        parse(&p, sql);
+        WT_EQ(p.rc, -1);
+        WT_HAS(p.err, "--web-allow-sql needs --sloth-db PATH");
+        done(&p);
+    }
+
+    static const char *const help[] = { "--help", NULL };
+    parse(&p, help);
+    WT_EQ(p.rc, 1);
+    WT_HAS(p.out, "[--rf-socket SPEC] [--rf-db PATH]");
+    WT_HAS(p.out, "  --rf-socket SPEC      sloth-rf's data socket, read beside --socket");
+    WT_HAS(p.out, "  --rf-db PATH          sloth-rf's database (sloth-rf --db), opened");
+    WT_HAS(p.out, "The SQL box stays on --sloth-db.");
+    done(&p);
+}
+
 void run_config_tests(void) {
+    WT_RUN(test_serve_evidence_pcap_flag);
+    WT_RUN(test_agent_group_flag);
     WT_RUN(test_web_allow_sql_flag);
     WT_RUN(test_ceiling_below_minimum_refused);
     WT_RUN(test_socket_flag);
@@ -456,4 +698,5 @@ void run_config_tests(void) {
     WT_RUN(test_bind_parse_rejects);
     WT_RUN(test_usage_and_unknown);
     WT_RUN(test_allow_list_capacity);
+    WT_RUN(test_rf_flags);
 }

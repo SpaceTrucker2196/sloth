@@ -14,14 +14,36 @@
 #include "wifi_assess.h"
 #include "tool_fingerprint.h"
 #include "jsonl.h"
-#include "alert_pcap.h"
-#include "evidence_export.h"
 #include "secure_file.h"   /* SFILE_ERR_MAX */
 #include "wired_attach.h"
 #include "event_wake.h"
 #include "sloth_clock.h"
 #include "rules.h"
 #include "engine_internal.h"
+#include "evidence_export.h"   /* EVX_REFUSED only: the exporter is the table's */
+#include "gps.h"
+
+/* The table this process runs (#213). The application selects it once,
+ * before the first tick: sloth-wifi its table (g_alert_table_wifi,
+ * src/alerts/rules_table.c), sloth-rf the RF one (g_alert_table_rf,
+ * src/alerts/rules_table_rf.c). The engine names neither, so linking it
+ * does not link a rule file: a table brings its own rows, the per-rule
+ * history its rows keep, and the pcap exporters. Until one is selected
+ * there are no rows and the engine only ages what it holds.
+ *
+ * g_alert_rules / g_alert_rule_count are the selected table's rows, the
+ * names alerts_update() and tests/test_alert_rules.c have always read. */
+static const alert_rule_table_t *g_table;
+const alert_rule_t *g_alert_rules;
+int                 g_alert_rule_count;
+
+void alerts_set_table(const alert_rule_table_t *t) {
+    g_table            = t;
+    g_alert_rules      = t ? t->rules : NULL;
+    g_alert_rule_count = t ? t->count : 0;
+}
+
+const alert_rule_table_t *alerts_table(void) { return g_table; }
 
 /* Engine state: deduped alert ring.
  *
@@ -94,12 +116,24 @@ static uint64_t alert_age_ms(uint64_t now_ms, uint64_t then_ms) {
     return now_ms > then_ms ? now_ms - then_ms : 0;
 }
 
+/* The incident lifecycle hook (#175, src/alerts.h). */
+static alerts_incident_hook_fn g_incident_hook;
+
+void alerts_set_incident_hook(alerts_incident_hook_fn fn) {
+    g_incident_hook = fn;
+}
+
+static void incident_hook(const alert_t *a, time_t now, const char *reason) {
+    if (g_incident_hook) g_incident_hook(a, now, reason);
+}
+
 /* Close an incident: one resolve, once. `reason` is why. */
 static void alert_resolve(alert_t *a, time_t now, const char *reason) {
     if (a->resolved || !a->incident_id[0]) return;
     a->resolved = 1;
     a->event_seq++;
     jsonl_emit_alert_event(a, "alert.resolve", now, -1, reason);
+    incident_hook(a, now, reason ? reason : "");
 }
 
 /* ── Tainted-BSSID tracker (evil-twin Phase 4) ────────────── */
@@ -224,9 +258,17 @@ static int find_by_key(const char *key, uint64_t h) {
  *   - first_seen, half of the `--db` alerts table's primary key. A key
  *     evicted under pressure and re-fired a tick later is the same
  *     finding, and minting a new first_seen gave it a new row per
- *     eviction. Restored only when the previous incident was closed by
- *     eviction: a key whose evidence went quiet for the full resolve
- *     period and then came back IS a new episode, and keeps its own.
+ *     eviction. Restored on every reopen since #170, whatever closed the
+ *     previous incident: first_seen is when the *finding* was first
+ *     seen, and the incident's own start is first_detected. #112
+ *     restored it after an eviction only, on the reasoning that a key
+ *     quiet for the resolve period and back is a new episode - which it
+ *     is, as an incident, and still is (new incident_id, alert.create).
+ *     As a row it was not: of the 12,317 rows the owner's sensor wrote
+ *     from 2026-10-22 to 10-26, 9,704 were a known key back after a gap
+ *     longer than the resolve period, each its own row. The db writer continues the key's newest row even
+ *     when this table has forgotten the key (LRU, restart), so this is
+ *     the in-memory half of the same rule, not its only guarantee.
  *   - how many incidents the key has had (`reopen_count`), which a
  *     consumer otherwise has to reconstruct by joining create events.
  *
@@ -252,7 +294,6 @@ typedef struct {
     char     last_incident_id[ALERT_INCIDENT_ID_LEN];
     time_t   last_first_seen;
     uint32_t reopen_count;
-    uint8_t  evicted;               /* last incident closed by eviction */
     uint64_t touch;                 /* LRU stamp */
 } alert_side_t;
 
@@ -377,11 +418,9 @@ static int evict_oldest(time_t now) {
          * the caller's contract (it indexes the result) if that ever
          * stops being true. */
         if (slot < 0) slot = 0;
-        alert_resolve(&engine[slot], now, "evicted");
         /* The finding did not end; the engine ran out of room. A
          * re-fire of this key restores its first_seen (side table). */
-        alert_side_t *sd = side_find(engine[slot].key, engine_hash[slot]);
-        if (sd) sd->evicted = 1;
+        alert_resolve(&engine[slot], now, "evicted");
     }
     /* Counted whichever class was picked: a resolved incident dropped
      * early is still an observation the consumer will not see again
@@ -442,6 +481,24 @@ static void stamp_evidence(alert_t *a, const uint64_t *ev_ids, int ev_n) {
     a->evidence_id_count = (uint8_t)ev_n;
 }
 
+static uint8_t g_hw_tier, g_hw_device, g_hw_signals;
+
+void fire_stage_hw_verdict(int tier, int device, int signals) {
+    g_hw_tier    = (uint8_t)tier;
+    g_hw_device  = (uint8_t)device;
+    g_hw_signals = (uint8_t)signals;
+}
+
+/* Refreshed on every evaluation, like stamp_signature(): a pairing can
+ * appear or age out inside one incident. Consumes the stage so a later
+ * fire from any other rule cannot inherit it. */
+static void stamp_hw_verdict(alert_t *a) {
+    a->hw_tier    = g_hw_tier;
+    a->hw_device  = g_hw_device;
+    a->hw_signals = g_hw_signals;
+    g_hw_tier = g_hw_device = g_hw_signals = 0;
+}
+
 void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
               const char *inv_hash, int ap_class, int wired,
               const sloth_tool_sig_t *tool_row,
@@ -453,7 +510,10 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
     /* An empty key is a builder overflow (alert_key.h) that the rule
      * did not check. Every such fire would share one incident, which is
      * the merge the builder exists to prevent — drop it instead. */
-    if (!key || !key[0]) return;
+    if (!key || !key[0]) {
+        g_hw_tier = g_hw_device = g_hw_signals = 0;
+        return;
+    }
     uint64_t mono = sloth_mono_ms();
     uint64_t sig  = alert_detail_sig(detail);
     /* Looked up as it will be stored. Before #112 an over-long key was
@@ -506,6 +566,7 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
          * evidence to a signature it no longer satisfies. The tool
          * note in `detail` moves with it, so the change is emitted. */
         stamp_signature(a, tool_row);
+        stamp_hw_verdict(a);
         stamp_evidence(a, ev_ids, ev_n);
 
         if (sev != prev) {
@@ -518,6 +579,7 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
                                    sev > prev ? "alert.escalate"
                                               : "alert.update",
                                    now, (int)prev, NULL);
+            incident_hook(a, now, NULL);
             if (sev > prev) event_wake_signal();
         } else if (sig != a->detail_sig &&
                    alert_age_ms(mono, a->last_event_ms) >= ALERT_UPDATE_MIN_MS) {
@@ -570,26 +632,32 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
     a->ap_class     = (uint8_t)ap_class;
     a->wired_attach = (uint8_t)wired;
     stamp_signature(a, tool_row);
+    stamp_hw_verdict(a);
     stamp_evidence(a, ev_ids, ev_n);
     if (match_ip && match_ip[0])
         snprintf(a->match_ip, sizeof(a->match_ip), "%s", match_ip);
     a->match_port = match_port;
     snprintf(a->technique, sizeof(a->technique), "%s", alert_technique(type));
     incident_id_make(a, now);
+    /* Where the sensor was as this incident opened (2026-10-27): once,
+     * here, never on re-evaluation, because the stamp records where the
+     * finding was MADE. A reopen comes back through this branch and is
+     * stamped afresh. LOC_SRC_NONE when neither --location nor a fix
+     * younger than gps.max_fix_age_s exists; every export then omits it. */
+    gps_location_current(&a->loc, now);
     a->event_seq = 1;
     /* Hand back what belongs to the key, before alert.create goes out
      * so the opening record already carries it. */
     alert_side_t *sd = side_get(a->key, kh);
     if (sd) {
         if (sd->last_incident_id[0]) sd->reopen_count++;
-        if (sd->evicted && sd->last_first_seen) a->first_seen = sd->last_first_seen;
+        if (sd->last_first_seen) a->first_seen = sd->last_first_seen;
         a->reopen_count        = sd->reopen_count;
         a->pcap_write_failures = sd->pcap_write_failures;
         snprintf(a->pcap_path, sizeof(a->pcap_path), "%s", sd->pcap_path);
         snprintf(sd->last_incident_id, sizeof(sd->last_incident_id), "%s",
                  a->incident_id);
         sd->last_first_seen = a->first_seen;
-        sd->evicted         = 0;
     }
     /* New alert keys are interesting enough to log AND to break the
      * TUI's blocking wait so the dashboard updates immediately
@@ -601,6 +669,7 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
      * `incident_id`; `alert.create` opens the lifecycle stream (#98). */
     jsonl_emit_alert(a);
     jsonl_emit_alert_event(a, "alert.create", now, -1, NULL);
+    incident_hook(a, now, NULL);
     event_wake_signal();
 }
 
@@ -723,6 +792,21 @@ const char *alert_type_name(alert_type_t type) {
     return alert_names[type];
 }
 
+/* The label of alert_t.ap_class. Here, beside the other names of an
+ * alert's own members, and not with twin_classify() in rules_twin.c,
+ * since #213: the alert record prints it (src/jsonl_core.c), and a
+ * daemon that writes alert records must not need the twin rules for a
+ * four-word table. */
+const char *twin_class_label(twin_class_t c) {
+    switch (c) {
+    case TWIN_CLASS_IMPERSONATOR: return "impostor";
+    case TWIN_CLASS_NEIGHBOR:     return "neighbor";
+    case TWIN_CLASS_DECLARED:     return "declared";
+    case TWIN_CLASS_UNKNOWN:
+    default:                      return "?";
+    }
+}
+
 /* ── Snapshot ────────────────────────────────────────────── */
 
 /* Copy engine into s->alerts newest-first. */
@@ -775,18 +859,20 @@ static int dump_alert_evidence(const alert_t *a, char *path, size_t pathsz) {
     const char *rule = alert_type_name(a->type);
     static const char pfx[] = "ALERT_TYPE_";
     if (strncmp(rule, pfx, sizeof(pfx) - 1) == 0) rule += sizeof(pfx) - 1;
-    if (evidence_export_alert_name(a->incident_id, a->evidence_ids[0],
-                                   rule,
-                                   name, sizeof(name)) != 0)
+    const alert_exporter_t *x = g_table->exporter;
+    if (x->ev_alert_name(a->incident_id, a->evidence_ids[0],
+                         rule,
+                         name, sizeof(name)) != 0)
         return -1;
     int n = a->evidence_id_count;
     if (n > ALERT_EVIDENCE_IDS) n = ALERT_EVIDENCE_IDS;
     char used[sizeof(name) + 8];
-    int written = evidence_export_pcap_unique(name, a->evidence_ids, n,
-                                              NULL, a->incident_id, rule,
-                                              used, sizeof(used),
-                                              err, sizeof(err));
-    if (written > 0 && evidence_export_path(used, path, pathsz) != 0)
+    int written = x->ev_pcap_unique(name, a->evidence_ids, n,
+                                    NULL, a->incident_id, rule,
+                                    &a->loc,
+                                    used, sizeof(used),
+                                    err, sizeof(err));
+    if (written > 0 && x->ev_path(used, path, pathsz) != 0)
         snprintf(path, pathsz, "%s", used);
     return written;
 }
@@ -855,8 +941,13 @@ static int pcap_cooldown_active(const alert_side_t *sd, time_t now, int secs) {
 }
 
 static void dump_new_alert_pcaps(const sloth_state_t *s, time_t now) {
-    const int ip_on = alert_pcap_enabled();
-    const int ev_on = evidence_export_enabled();
+    /* The exporters are the table's (#213): both write captured frames,
+     * so a table with no capture behind it names none and nothing here
+     * runs. dump_alert_evidence() is reached only past this line. */
+    const alert_exporter_t *x = g_table ? g_table->exporter : NULL;
+    if (!x) return;
+    const int ip_on = x->ip_enabled();
+    const int ev_on = x->ev_enabled();
     if (!ip_on && !ev_on) return;
     const int min_sev = (int)tune_val(TUNE_PCAP_MIN_SEVERITY);
     const int cool    = (int)tune_val(TUNE_PCAP_KEY_COOLDOWN_SECS);
@@ -878,9 +969,9 @@ static void dump_new_alert_pcaps(const sloth_state_t *s, time_t now) {
         }
         int written = ev
             ? dump_alert_evidence(a, a->pcap_path, sizeof(a->pcap_path))
-            : alert_pcap_dump(s, a, a->pcap_path, sizeof(a->pcap_path));
+            : x->ip_dump(s, a, a->pcap_path, sizeof(a->pcap_path));
         if (ev && written == 0 && ip_on && a->match_ip[0])
-            written = alert_pcap_dump(s, a, a->pcap_path, sizeof(a->pcap_path));
+            written = x->ip_dump(s, a, a->pcap_path, sizeof(a->pcap_path));
         if (written < 0) {
             a->pcap_write_failures++;
             a->pcap_path[0] = '\0';
@@ -927,11 +1018,14 @@ void alerts_update(sloth_state_t *s) {
     /* Evidence clock — the #88 seam, so the whole engine can be driven
      * deterministically from tests without sleeping. */
     time_t now = sloth_wall();
-    /* Derive posture before any rule reads it (#62). */
+    /* Derive posture before any rule reads it (#62). Unconditional: a
+     * pass over s->beacon_aps that writes s alone (src/wifi_assess.c
+     * calls nothing), so in a daemon with no radio it walks an empty
+     * table. */
     wifi_downgrade_update(s);
-    /* Every rule, in src/alerts/rules_table.c's order. That order is
+    /* Every rule of the selected table, in its order. That order is
      * load-bearing (JSONL order within a tick, the twin taint, the
-     * posture above) and the table says why (#118). */
+     * posture above) and src/alerts/rules_table.c says why (#118). */
     for (int i = 0; i < g_alert_rule_count; i++)
         g_alert_rules[i].fn(s, now);
     expire_incidents(now, sloth_mono_ms());
@@ -961,6 +1055,8 @@ void alerts_clear(void) {
     g_side_clock = 0;
     /* Reset per-rule history too so tests (and the user pressing 'c')
      * get a fully clean slate. */
-    rules_wired_forget();
+    if (g_table)
+        for (int i = 0; i < g_table->forget_count; i++)
+            g_table->forget[i]();
     evil_twin_taint_clear();
 }

@@ -134,6 +134,32 @@ static void test_multiple_fields_in_bit_order(void) {
     ASSERT_EQ((int)rt.signal_dbm, -67);
 }
 
+/* TSFT (#187 S3): u64 little-endian, microseconds of the receiver's
+ * TSF at the MPDU's first bit (radiotap.org TSFT). Octets chosen so a
+ * byte-order slip or a 32-bit truncation reads a different value. */
+static void test_tsft_value_is_read(void) {
+    uint8_t body[8] = { 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01 };
+    uint8_t buf[64];
+    int len = rt_build(buf, 1u << RT_BIT_TSFT, body, 8);
+    radiotap_info_t rt;
+    ASSERT_EQ(radiotap_parse(buf, len, &rt), 1);
+    ASSERT_EQ(rt.has_tsft, 1);
+    ASSERT(rt.tsft_us == 0x0102030405060708ULL);
+}
+
+/* Present bit set, header ends inside the field: accepted (the partial
+ * header rule) but no TSFT is claimed. Seen red with the length check
+ * in front of the read removed. */
+static void test_tsft_truncated_is_absent(void) {
+    uint8_t body[4] = { 1, 2, 3, 4 };
+    uint8_t buf[64];
+    int len = rt_build(buf, 1u << RT_BIT_TSFT, body, 4);
+    radiotap_info_t rt;
+    ASSERT_EQ(radiotap_parse(buf, len, &rt), 1);
+    ASSERT_EQ(rt.has_tsft, 0);
+    ASSERT(rt.tsft_us == 0);
+}
+
 /* TSFT is 8-byte aligned, which shifts everything after it. Getting
  * the padding wrong silently misreads every later field. */
 static void test_tsft_alignment_shifts_later_fields(void) {
@@ -174,6 +200,35 @@ static void test_extended_present_bitmap_is_skipped_correctly(void) {
     ASSERT_EQ(radiotap_parse(buf, len, &rt), 1);
     ASSERT_EQ((int)rt.signal_dbm, -71);   /* was -100 before the fix */
     ASSERT_EQ(rt.has_signal, 1);
+}
+
+/* TSFT after one extended word (the shape mac80211 emits with more
+ * than one present word): the bitmaps end at offset 12, so TSFT is
+ * padded to 16 and the signal byte follows at 24. Octets chosen so a
+ * TSFT read at 12 (no pad) gives a different value and moves the
+ * signal. Review of #187 S3. */
+static void test_tsft_after_extended_bitmap_is_aligned(void) {
+    uint8_t buf[64];
+    memset(buf, 0, sizeof buf);
+    uint32_t w0 = (1u << RT_BIT_EXT) | (1u << RT_BIT_TSFT) |
+                  (1u << RT_BIT_DBM_ANTSIGNAL);
+    int len = 8 + 4 + 4 + 8 + 1;
+    buf[2] = (uint8_t)len;
+    buf[4] = (uint8_t)(w0 & 0xff);
+    buf[5] = (uint8_t)((w0 >> 8) & 0xff);
+    buf[6] = (uint8_t)((w0 >> 16) & 0xff);
+    buf[7] = (uint8_t)((w0 >> 24) & 0xff);
+    /* word1 = 0 at 8..11; pad 12..15 set non-zero so a missing pad is
+     * read into the value. */
+    buf[12] = 0xee; buf[13] = 0xee; buf[14] = 0xee; buf[15] = 0xee;
+    for (int i = 0; i < 8; i++) buf[16 + i] = (uint8_t)(0x11 * (i + 1));
+    buf[24] = (uint8_t)(int8_t)-58;
+
+    radiotap_info_t rt;
+    ASSERT_EQ(radiotap_parse(buf, len, &rt), 1);
+    ASSERT_EQ(rt.has_tsft, 1);
+    ASSERT(rt.tsft_us == 0x8877665544332211ULL);
+    ASSERT_EQ((int)rt.signal_dbm, -58);
 }
 
 /* Two chained extended words. */
@@ -313,6 +368,8 @@ static void test_freq_to_band_unmapped_is_unknown(void) {
 void run_radiotap_tests(void) {
     TEST_SUITE("radiotap: field decoding");
     RUN_TEST(test_signal_only);
+    RUN_TEST(test_tsft_value_is_read);
+    RUN_TEST(test_tsft_truncated_is_absent);
     RUN_TEST(test_channel_maps_frequency);
     RUN_TEST(test_flags_bad_fcs);
     RUN_TEST(test_flags_fcs_and_datapad);
@@ -323,6 +380,7 @@ void run_radiotap_tests(void) {
     TEST_SUITE("radiotap: extended present bitmaps");
     RUN_TEST(test_extended_present_bitmap_is_skipped_correctly);
     RUN_TEST(test_two_extended_bitmaps);
+    RUN_TEST(test_tsft_after_extended_bitmap_is_aligned);
     RUN_TEST(test_truncated_extended_bitmap_rejected);
 
     TEST_SUITE("radiotap: malformed input");

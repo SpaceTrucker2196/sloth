@@ -52,6 +52,8 @@ typedef struct {
     int    datapad;      /* 1 iff RT_F_DATAPAD: 802.11 header padded to 4 */
     int    has_flags;
     int    hdr_len;      /* radiotap header length, for skipping to 802.11 */
+    int      has_tsft;   /* 1 iff the TSFT field was present and whole */
+    uint64_t tsft_us;    /* receiver TSF at the MPDU's first bit, µs; 0 when absent */
 } radiotap_info_t;
 
 /* Decode `buf` (at least `len` bytes). Returns 1 on a well-formed

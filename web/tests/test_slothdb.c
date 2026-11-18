@@ -21,6 +21,7 @@
  *     seen:<24h returns exactly the right rows, and a MAC from an MA-S
  *     block resolves where sloth's own table misses. */
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,8 +62,9 @@ void run_slothdb_tests(void) {
 #else
 
 #include <sqlite3.h>
+#include "wt_tmp.h"
 
-static char g_dir[64];
+static char g_dir[TEST_TMP_MAX];
 static oui_build_t g_oui;
 
 static void path_in(char *out, size_t sz, const char *name) {
@@ -80,7 +82,7 @@ static void rm_db(const char *p) {
 static web_slothdb_t S;
 
 static void sdb_up(const char *path) {
-    web_sdb_fns_t f = { &g_oui.tab, NULL, NULL };
+    web_sdb_fns_t f = { &g_oui.tab, NULL, NULL, NULL };
     web_slothdb_init(&S, path, &f);
 }
 
@@ -148,8 +150,12 @@ static void test_open_flags(void) {
     WT_ASSERT(sqlite3_exec(c.db, "DELETE FROM devices", NULL, NULL, NULL) != SQLITE_OK);
     WT_EQ(c.schema, db_schema_version());
     WT_EQ(c.feats, (unsigned)(WEB_QF_PNL | WEB_QF_DHCP | WEB_QF_MDNS | WEB_QF_NBNS |
-                              WEB_QF_ALERTS | WEB_QF_ARP));
-    WT_EQ(c.opt, (unsigned)(WEB_SDB_OPT_CLASS | WEB_SDB_OPT_VCI));
+                              WEB_QF_ALERTS | WEB_QF_ARP | WEB_QF_PROBE |
+                              WEB_QF_BEACON | WEB_QF_ASSOC | WEB_QF_PNLC |
+                              WEB_QF_STA | WEB_QF_CAMSIG));
+    WT_EQ(c.opt, (unsigned)(WEB_SDB_OPT_CLASS | WEB_SDB_OPT_VCI |
+                              WEB_SDB_OPT_INC | WEB_SDB_OPT_LOC |
+                              WEB_SDB_OPT_POS | WEB_SDB_OPT_INCROWS));
     web_slothdb_close(&c);
     web_slothdb_destroy(&S);
     rm_db(p);
@@ -258,6 +264,136 @@ static void test_live_wal_reader(void) {
     web_slothdb_destroy(&S);
     sqlite3_close(sloth);
     rm_db(p);
+}
+
+/* ── the deployment's reader (#153): same uid, sloth writing ───────── */
+
+static void mtime_at(const char *p, long long t) {
+    struct timespec ts[2];
+    ts[0].tv_sec = (time_t)t; ts[0].tv_nsec = 0;
+    ts[1] = ts[0];
+    WT_EQ(utimensat(AT_FDCWD, p, ts, 0), 0);
+}
+
+/* #168: the age the health check reports is the data's. A WAL reader
+ * reads sloth's -wal, where commits sit until a checkpoint, so its data
+ * is as new as the -wal; an immutable or rollback read is the main file
+ * alone. Seen red with the "wal" branch removed (the first assertion). */
+static void test_data_mtime(void) {
+    char p[128], w[160], l[160];
+    path_in(p, sizeof(p), "mt.db");
+    snprintf(w, sizeof(w), "%s-wal", p);
+    path_in(l, sizeof(l), "mt-link.db");
+    FILE *f = fopen(p, "w");
+    WT_ASSERT(f != NULL);
+    if (f) fclose(f);
+    f = fopen(w, "w");
+    WT_ASSERT(f != NULL);
+    if (f) fclose(f);
+    mtime_at(p, 1792620000);
+    mtime_at(w, 1792627000);
+    WT_EQ(web_slothdb_data_mtime(p, "wal"), 1792627000);
+    WT_EQ(web_slothdb_data_mtime(p, "immutable"), 1792620000);
+    WT_EQ(web_slothdb_data_mtime(p, "rollback"), 1792620000);
+    /* A -wal older than the file (a checkpoint after its last write). */
+    mtime_at(w, 1792610000);
+    WT_EQ(web_slothdb_data_mtime(p, "wal"), 1792620000);
+    WT_EQ(symlink("mt.db", l), 0);
+    WT_EQ(web_slothdb_data_mtime(l, "wal"), 0);
+    WT_EQ(web_slothdb_data_mtime(g_dir, "wal"), 0);
+    unlink(l);
+    rm_db(p);
+    WT_EQ(web_slothdb_data_mtime(p, "rollback"), 0);
+}
+
+/* The deployment the hardened units make: sloth.db in a 0700 directory
+ * of the account both run as, files 0600 (UMask=0077), and slothweb
+ * given the directory read-only (ReadOnlyPaths=-/var/lib/sloth). The
+ * mount is modelled by mode: for the reads the directory is made 0500
+ * and sloth.db, its -wal and its -shm 0400, so a reader could neither
+ * make a file beside sloth.db nor open one of them for writing, while
+ * "sloth" (a connection of the same uid, its descriptors already open
+ * read-write) keeps committing between them. Each read is a WAL reader
+ * that sees the commit before it, and the health check's age follows
+ * the -wal.
+ *
+ * What this does not pin: readonly_shm itself. With the -shm unwritable
+ * SQLite falls back to a read-only -shm whether the URI asks or not, as
+ * it does under the real read-only mount, so dropping readonly_shm
+ * stays green here; test_crashed_sloth_restarts_beside_a_reader, whose
+ * -shm is writable, is the test that goes red for it. The listing
+ * staying as it was is held by the open's choice (both side files
+ * exist, so nothing is created) and is not claimed for a single
+ * mutation; the reads themselves fail with the immutable condition
+ * forced on (they miss the uncheckpointed rows), seen red. */
+static void test_same_uid_reader_beside_a_writing_sloth(void) {
+    char d[128], p[160], w[176], m[176], l0[512], l1[512];
+    path_in(d, sizeof(d), "varlibsloth");
+    mode_t um = umask(077);
+    WT_EQ(mkdir(d, 0700), 0);
+    snprintf(p, sizeof(p), "%s/sloth.db", d);
+    snprintf(w, sizeof(w), "%s-wal", p);
+    snprintf(m, sizeof(m), "%s-shm", p);
+    WT_EQ(sdb_make(p, db_schema_version(), 1), 0);
+    WT_EQ(sdb_seed(p), 0);
+    sqlite3 *sloth = NULL;
+    WT_EQ(sqlite3_open(p, &sloth), SQLITE_OK);
+    WT_EQ(sqlite3_exec(sloth, "PRAGMA wal_autocheckpoint=0;"
+                              "INSERT INTO devices (mac,first_seen,last_seen) VALUES"
+                              " ('02:00:00:00:01:00',1792620000,1792627000);",
+                       NULL, NULL, NULL), SQLITE_OK);
+    umask(um);
+    struct stat st;
+    WT_EQ(stat(p, &st), 0);
+    WT_EQ((int)(st.st_mode & 0777), 0600);
+    WT_EQ(stat(w, &st), 0);
+    WT_EQ((int)(st.st_mode & 0777), 0600);
+    WT_EQ(stat(m, &st), 0);
+    WT_EQ((int)(st.st_mode & 0777), 0600);
+    sdb_listing(d, l0, sizeof(l0));
+    WT_EQ(chmod(p, 0400), 0);
+    WT_EQ(chmod(w, 0400), 0);
+    WT_EQ(chmod(m, 0400), 0);
+    WT_EQ(chmod(d, 0500), 0);
+
+    sdb_up(p);
+    char err[WEB_SDB_ERR_MAX], out[512], mac[32], ins[192];
+    for (int i = 1; i <= 3; i++) {
+        snprintf(mac, sizeof(mac), "02:00:00:00:01:%02x", i);
+        snprintf(ins, sizeof(ins), "INSERT INTO devices (mac,first_seen,last_seen)"
+                 " VALUES ('%s',1792620000,%d)", mac, 1792627000 + i);
+        WT_EQ(sqlite3_exec(sloth, ins, NULL, NULL, NULL), SQLITE_OK);
+        web_sdb_conn_t c;
+        int rc = web_slothdb_open(&S, &c, 500, SDB_NOW, err, sizeof(err));
+        if (rc != 0) fprintf(stderr, "    open: %s\n", err);
+        WT_EQ(rc, 0);
+        if (rc == 0) {
+            WT_EQ(web_slothdb_test_immutable, 0);
+            char q[48];
+            snprintf(q, sizeof(q), "mac:%s", mac);
+            WT_EQ(run_q(&c, q, WEB_QS_LAST, out, sizeof(out)), 1);
+        }
+        web_slothdb_close(&c);
+    }
+    mtime_at(p, 1792620000);
+    mtime_at(w, 1792627000);
+    WT_EQ(web_slothdb_check(&S, SDB_NOW), WEB_SDB_OPEN);
+    web_sdb_stats_t ss;
+    web_slothdb_stats(&S, &ss);
+    WT_ASSERT(!strcmp(ss.mode, "wal"));
+    WT_EQ(ss.mtime, 1792627000);
+    WT_EQ(ss.rows, 13);
+    web_slothdb_destroy(&S);
+    sdb_listing(d, l1, sizeof(l1));
+    if (strcmp(l0, l1)) fprintf(stderr, "    before: %s\n    after:  %s\n", l0, l1);
+    WT_ASSERT(!strcmp(l0, l1));
+    WT_EQ(chmod(d, 0700), 0);
+    WT_EQ(chmod(p, 0600), 0);
+    WT_EQ(chmod(w, 0600), 0);
+    WT_EQ(chmod(m, 0600), 0);
+    sqlite3_close(sloth);
+    rm_db(p);
+    rmdir(d);
 }
 
 /* A -wal left with no -shm (a crash that lost only the -shm): no sloth
@@ -943,6 +1079,12 @@ static void test_authorizer_denies(void) {
         "SELECT title FROM alerts WHERE instr(key,'alice') > 0",
         "SELECT * FROM devices",
         "SELECT dhcp_prl FROM devices",
+        /* Off the list since #191: the level is scored from
+         * risk_signals, and the stored one (an older formula's, on a
+         * row sloth never rewrites) cannot be read back. Seen red with
+         * { "devices", "risk_level" } on web_sdb_allow[] again. */
+        "SELECT risk_level FROM devices",
+        "SELECT mac FROM devices ORDER BY risk_level DESC",
         "SELECT last_identity FROM rogue_radius",
         "SELECT mac FROM devices WHERE mac IN (SELECT username FROM cleartext_creds)",
         "PRAGMA table_info(cleartext_creds)",
@@ -1105,6 +1247,9 @@ static int take_item(void *ctx, const web_sdb_item_t *it) {
     return 0;
 }
 
+/* web_sdb_alerts()'s reach: the tests' tables are read whole (0). */
+static long long reached;
+
 /* The drawer's and Lookup's reads, and A2's. An empty MAC names no
  * alert: seen red with the alerts statement's ?1 <> '' guard removed
  * (instr(key, '') matched every row). */
@@ -1142,11 +1287,11 @@ static void test_reads(void) {
     memset(&it, 0, sizeof(it));
     WT_EQ(web_sdb_names(&c, "10.0.1.5", 8, take_item, &it), 4);
     memset(&it, 0, sizeof(it));
-    WT_EQ(web_sdb_alerts(&c, "00:11:22:33:44:55", "10.0.1.5", 8, take_item, &it), 1);
+    WT_EQ(web_sdb_alerts(&c, "00:11:22:33:44:55", "10.0.1.5", 8, take_item, &it, &reached), 1);
     WT_ASSERT(!strcmp(it.a[0], "FTP login in cleartext"));
     WT_EQ(it.n3[0], 3);
     memset(&it, 0, sizeof(it));
-    WT_EQ(web_sdb_alerts(&c, "", "", 8, take_item, &it), 0);   /* "" names nothing */
+    WT_EQ(web_sdb_alerts(&c, "", "", 8, take_item, &it, &reached), 0);   /* "" names nothing */
     /* A2: the earliest first_seen of any table. */
     long long fs = 0;
     WT_EQ(web_sdb_first_seen(&c, "00:11:22:33:44:55", &fs), 1);
@@ -1266,8 +1411,8 @@ static void test_no_result_column_carries_the_alert_key(void) {
     }
     WT_ASSERT(rows >= 9);
     items_t it = { 0 };
-    WT_EQ(web_sdb_alerts(&c, "00:11:22:33:44:55", "10.0.1.5", 8, take_item, &it), 1);
-    WT_EQ(web_sdb_alerts(&c, "00:03:93:00:00:03", "", 8, take_item, &it), 1);
+    WT_EQ(web_sdb_alerts(&c, "00:11:22:33:44:55", "10.0.1.5", 8, take_item, &it, &reached), 1);
+    WT_EQ(web_sdb_alerts(&c, "00:03:93:00:00:03", "", 8, take_item, &it, &reached), 1);
     for (int i = 0; i < it.n; i++) {
         WT_ASSERT(!strstr(it.a[i], "alice") && !strstr(it.b[i], "alice"));
         WT_ASSERT(!strstr(it.a[i], "cred:") && !strstr(it.a[i], "evil_twin"));
@@ -1279,7 +1424,7 @@ static void test_no_result_column_carries_the_alert_key(void) {
 }
 
 void run_slothdb_tests(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-sdb-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-sdb-XXXXXX", test_tmpdir());
     if (!mkdtemp(g_dir)) { WT_ASSERT(!"mkdtemp"); return; }
     WT_EQ(sdb_oui(&g_oui, g_dir), 0);
     WT_EQ(web_slothdb_available(), 1);
@@ -1287,6 +1432,8 @@ void run_slothdb_tests(void) {
     WT_RUN(test_open_flags);
     WT_RUN(test_reading_changes_nothing);
     WT_RUN(test_live_wal_reader);
+    WT_RUN(test_data_mtime);
+    WT_RUN(test_same_uid_reader_beside_a_writing_sloth);
     WT_RUN(test_wal_without_shm);
     WT_RUN(test_crashed_sloth_restarts_beside_a_reader);
     WT_RUN(test_sloth_closes_inside_the_open);

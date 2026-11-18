@@ -1,0 +1,25 @@
+# Functions a shipped header declares and libsloth-wire.a does not
+# define (#185 item 4 review). tests/contract/check.sh compares this
+# list with what the unpacked archive actually has, both ways: a new
+# entry (a header gaining a prototype the archive cannot link) and a
+# stale one (the gap closed) each turn contract-check red. Lines are
+# "header function", sorted with LC_ALL=C. docs/wiki/contract.md
+# ("Gaps") says why each header is shipped anyway:
+#   sensor_health.h shipped whole for the one hook the archive calls
+#                   (sh_parse_fault_note, defined by the consumer).
+sensor_health.h sh_evict_count
+sensor_health.h sh_evict_is_flow_ring
+sensor_health.h sh_evict_name
+sensor_health.h sh_evict_note
+sensor_health.h sh_evict_reset
+sensor_health.h sh_evict_total
+sensor_health.h sh_evict_total_tables
+sensor_health.h sh_mem_parse_status
+sensor_health.h sh_mem_sample
+sensor_health.h sh_parse_fault_count
+sensor_health.h sh_parse_fault_is_wired
+sensor_health.h sh_parse_fault_name
+sensor_health.h sh_parse_fault_note
+sensor_health.h sh_parse_fault_reset
+sensor_health.h sh_parse_fault_total
+sensor_health.h sh_set_resolver_calls_fn

@@ -8,15 +8,22 @@ plus OUI vendor lookup.
 ARP ([RFC 826](https://www.rfc-editor.org/rfc/rfc826)) maps IPv4
 addresses to Ethernet MACs on a local segment. It's chatty,
 unauthenticated, and completely trusts whoever answers — making it
-the foundation of one of the oldest attacks in the book.
+the foundation of one of the oldest attacks in the book. IPv6 has no
+ARP: Neighbour Discovery ([RFC 4861](https://www.rfc-editor.org/rfc/rfc4861)
+§7) does the same job with ICMPv6, and trusts its answers the same way.
 
-Sloth doesn't capture ARP packets directly; instead it reads the
-kernel's resolved ARP table (`/proc/net/arp`), so what you see here
-is what your host *currently believes* about its neighbours.
+Sloth doesn't capture ARP or NDP packets for this view; instead it
+reads the kernel's resolved neighbour tables — `/proc/net/arp` for
+IPv4 and, since #176, the IPv6 neighbour cache over rtnetlink
+(`RTM_GETNEIGH`, what `ip -6 neigh` prints; `src/platform/linux_neigh.c`)
+— so what you see here is what your host *currently believes* about
+its neighbours, in either family. Unresolved rows (`INCOMPLETE`,
+`FAILED`) are skipped in both.
 
 ## What sloth captures
 
-Per entry: IP, MAC (6 bytes), interface, vendor (from the embedded
+Per entry: IP (IPv4 or IPv6; the column widens to the longest address
+in the table), MAC (6 bytes), interface, vendor (from the embedded
 OUI table in [`src/oui.c`](../../src/oui.c)).
 
 ## View

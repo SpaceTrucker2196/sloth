@@ -292,6 +292,24 @@ static void test_uncitable_kinds_with_a_real_basis_are_still_cited(void) {
          * member-UUID registry and each row's own source are what it
          * detects from (research/bluetooth/ble-watchlist-categories.md). */
         "ALERT_TYPE_BLE_WATCHLIST",
+        /* 2026-11-03, the GNSS rules. No technique in any ATT&CK matrix
+         * names GNSS spoofing, and a time or position step comes from
+         * faults (leap second, week rollover, cold start) as well as
+         * attacks; Psiaki & Humphreys 2016, Humphreys et al. 2008, chrony
+         * and the gpsd time HOWTO are what they detect from
+         * (research/gnss/attack-mapping.md). GNSS_JAMMING is not here:
+         * it takes Mobile T1464 and the coverage guard holds it. */
+        "ALERT_TYPE_GNSS_SPOOF_SUSPECT",
+        "ALERT_TYPE_GNSS_TIME_JUMP",
+        "ALERT_TYPE_GNSS_POSITION_JUMP",
+        /* #186. An aircraft squawking 7500/7600/7700 or reporting a
+         * DO-260B emergency status is a third party declaring its own
+         * state, not an adversary's step, and a forged one cannot be
+         * told from a real one by one receiver. SERA.13005, readsb's
+         * README-json.md, Costin & Francillon 2012 and Schafer et al.
+         * 2013 are what it detects from
+         * (research/adsb/emergency-squawks.md). */
+        "ALERT_TYPE_ADSB_EMERGENCY",
     };
     sqlite3 *db = open_corpus();
     ASSERT(db != NULL);
@@ -330,6 +348,8 @@ static void test_own_state_kinds_are_named(void) {
     static const char *const kinds[] = {
         "ALERT_TYPE_NO_MONITOR_MODE",
         "ALERT_TYPE_BT_OWN_TRANSMIT",   /* #144 slice 2 */
+        "ALERT_TYPE_SENSOR_UNDERVOLT",  /* 2026-11-11, rules_sensor.c */
+        "ALERT_TYPE_SENSOR_SOURCE_DOWN",/* 2026-11-11, rules_sensor.c */
     };
     for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
         int found = 0;

@@ -138,9 +138,9 @@ const char *tool_name(sloth_tool_id_t id) {
 
 const char *tool_confidence_name(sloth_tool_conf_t c) {
     switch (c) {
-    case TOOL_CONF_LOW:  return "low";
-    case TOOL_CONF_MED:  return "med";
-    case TOOL_CONF_HIGH: return "high";
+    case TOOL_CONF_LOW:
+    case TOOL_CONF_MED:
+    case TOOL_CONF_HIGH: return "suspected";   /* one input, see the .h */
     case TOOL_CONF_NONE: break;
     }
     return "";
@@ -187,8 +187,17 @@ void tool_attribution_format(char *buf, size_t n,
      * view's unconfirmed-retune indicator (#91); the word after it is
      * there because a lone "?" is easy to read past, and an operator
      * acting on an identification nobody has captured is the exact
-     * mistake #90 names. */
-    snprintf(buf, n, "%.20s/%s%s", lbl, tool_confidence_name(conf),
+     * mistake #90 names.
+     *
+     * No confidence word (#151, owner decision 2026-11-12). It was
+     * "/low", "/med" or "/high", a second vocabulary beside the
+     * verdict's; mapped onto the tiers, every value is "suspected"
+     * (tool_confidence_name()), so it would print one constant and cost
+     * the [y] row the cells its "? provisional" marker needs at 100
+     * columns. The tier is stated once, by the verdict
+     * (" hw:suspected-<device>" in the KARMA_AP detail). */
+    (void)conf;
+    snprintf(buf, n, "%.20s%s", lbl,
              row->unverified ? "? provisional" : "");
 }
 

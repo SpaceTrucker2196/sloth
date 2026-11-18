@@ -25,11 +25,21 @@ default run originates no network traffic at all. Both of those are opt-in behin
 `--allow-active`, which announces itself on stderr; optional telemetry (`-o file.jsonl`,
 `--data-socket`) carries observations to a consumer you configured, over a path you
 configured, never to the segment being watched. It observes what your host already
-sees and turns it into **<!-- count:views -->36<!-- /count --> live views** and **<!-- count:rules -->90<!-- /count --> passive
+sees and turns it into **<!-- count:views -->37<!-- /count --> live views** and **<!-- count:rules -->100<!-- /count --> passive
 alert rules**, an embedded
 WiFi-SIGINT toolkit (PNL aggregation, RSN/cipher/MFP inventory, EAPOL/PMKID
 capture, hidden-SSID reveal, scored seqnum correlation across MAC rotations),
 and an optional JSONL forensic log.
+
+The sensor is **two daemons** from this one tree ([ADR 0010](docs/wiki/adr/0010-wifi-rf-daemons.md)):
+**`sloth-wifi`** — everything above: the IP capture, the 802.11 monitor radio, BLE and
+the terminal; `sloth` is a symlink to it, the same program under its old name — and
+**`sloth-rf`**, a headless daemon that reads the SDR decoders an operator already runs
+(ADS-B, APRS, rtl_433, Victron) and writes the GNSS records. Both are passive; neither
+needs the other. The views are `sloth-wifi`'s. Of the alert kinds, `sloth-wifi` raises
+<!-- count:rules-wifi -->95<!-- /count --> and `sloth-rf`
+<!-- count:rules-rf -->6<!-- /count --> (one, `SENSOR_SOURCE_DOWN`, is both's). slothweb
+reads both.
 
 📖 **Per-view deep dives live under [`docs/views/`](docs/views/)** — each
 file explains the protocol, shows a text mockup, and lists what to watch
@@ -107,6 +117,7 @@ GitHub automatically; start at [`docs/wiki/index.md`](docs/wiki/index.md).
 | [**RADIUS**](docs/views/rogue-radius.md) | 802.1X EAP method inventory and identity leaks — the hostapd-wpe / eaphammer surface (#31, #38) |
 | [**FragAttacks**](docs/views/fragattack.md) | Per-BSSID counters for the FragAttacks rules (CVE-2020-24586/24587/24588, CVE-2020-261xx) (#75) |
 | [**BLE**](docs/views/ble.md) `[*]`        | One row per BLE advertiser per sensor, with the HID / watchlist flags the BLE_* rules read and an `Enter` detail (#144) |
+| [**GNSS**](docs/views/gnss.md) `[#]`      | The `--gps` receiver's sky: one row per satellite in view with its C/N0, elevation, azimuth, used and health flags, over the fix, the DOPs and the receiver's clock against the host's; observation only (2026-11-02) |
 | [**Research**](docs/views/research.md)   | The cited source behind each alert that actually fired — CVE, advisory, IEEE clause or paper (#73) |
 | [**Channel**](docs/views/channel.md)     | Per-channel 802.11 activity histogram: APs beaconing and STAs associated on each channel |
 | **Help** `[?]`                            | Keybindings, running version, and the embedded-data disclosures |
@@ -124,7 +135,7 @@ GitHub automatically; start at [`docs/wiki/index.md`](docs/wiki/index.md).
 
 - **`sloth -o FILE`** — append a JSONL line for every DNS/TLS/QUIC/HTTP/NTP/ICMP record, every newly-fired alert, and every alert-incident lifecycle event (create / update / escalate / resolve, #98). See [JSONL schema](#jsonl-schema) below.
 - **`sloth --data-socket [SPEC]`** — same JSONL records, served over a **read-only stream socket** (`unix:/path` or `tcp:HOST:PORT`) for live consumers. Bare `--data-socket` with no SPEC defaults to `unix:/run/sloth/sloth.sock` (#136); if `/run/sloth` is absent or not owned by root or sloth's user, sloth exits 2 and prints the remedy (`RuntimeDirectory=sloth`, or `install -d -m 0750 -o <uid> /run/sloth`) rather than falling back to TCP. Loopback TCP is still available, but only when typed: `--data-socket tcp:127.0.0.1:8765`. `tail -f`-style with no filesystem polling. Read-only by design — nothing flows back from the wire (see [MISSION.md §4](MISSION.md)). Read-only is a statement about *commands*, not data: the stream carries no authentication and no encryption, so **reachability is the access control**. A `unix:` socket is created **0600**, which makes the kernel's peer-credential check the authentication — no keys, nothing to rotate or expire — and is the recommended deployment. Binding any address outside `127.0.0.0/8` (including the `0.0.0.0` wildcard) is **refused** unless `--data-socket-allow-remote` is also passed, and prints a warning naming the exposed address. To reach the socket from another host, tunnel it instead: `ssh -L 8765:127.0.0.1:8765 user@sensor`, [`examples/stunnel/`](examples/stunnel/), or push outbound with [`examples/forwarder/`](examples/forwarder/). Full trust boundary in [`docs/wiki/data-socket-exposure.md`](docs/wiki/data-socket-exposure.md). Multi-client (up to 16). Backpressure is per-client and whole-record: a slow consumer gets a bounded queue (512 KiB), never a glued or truncated line; on overflow whole records are dropped and a `socket_gap` record reports how many, and a consumer that accepts nothing for 30 s is disconnected. Healthy clients are unaffected. Full schema and consumer notes in [`docs/wiki/jsonl-schema.md`](docs/wiki/jsonl-schema.md). When the socket is bound to a **routable** address, sloth advertises it over mDNS (`_sloth._tcp`) so the sloth-ios client can discover it by name — via an Avahi service file (sloth transmits nothing; `avahi-daemon` announces). Loopback/UNIX sockets never advertise; disable entirely with `--no-discovery`. `--strict` refuses the routable listener outright, so it never gets as far as advertising (see [`--strict`](#strict-observation-default)). A routable socket is one of the opt-in, network-using services [MISSION.md §2](MISSION.md) rule 1 permits: it transmits to whoever connects, never onto the segment being watched.
-- **`sloth --pcap-dir DIR`** — when a rule fires with a known flow identifier (THREAT_IP, BEACONING, PORT_SCAN, NXDOMAIN_BURST, THREAT_DOMAIN), the matching packets are written to a per-alert pcap file under `DIR`.
+- **`sloth --pcap-dir DIR`** — when a rule fires with a known flow identifier (THREAT_IP, BEACONING, PORT_SCAN, NXDOMAIN_BURST, THREAT_DOMAIN), the matching packets are written to a per-alert pcap file under `DIR`. **These are deleted after two weeks**: files sloth wrote there older than `--tune pcap.retain_days` (default **14**, `0` = keep forever) are swept at startup and hourly (#166) — copy out anything you need to keep longer, or set `pcap.retain_days=0` before upgrading. `--pcap-dir` and `--eapol-dir` must be different directories (the handshake sweep would expire alert pcaps on its own 7-day window); naming one for both exits `2`. Details: [`docs/wiki/retention.md`](docs/wiki/retention.md) §2d.
 - **`sloth --collect-handshakes --eapol-dir DIR`** — append each captured PMKID and 4-way handshake to `DIR/eapol.22000` in [hashcat mixed format](https://hashcat.net/wiki/doku.php?id=cracking_wpawpa2). Crack directly with `hashcat -m 22000 eapol.22000 wordlist.txt`. Sloth also writes a per-handshake `DIR/<bssid>_<sta>.pcap` (raw 802.11, DLT 105) so each capture can be replayed through `aircrack-ng -w wordlist.txt -e <SSID> <file>.pcap` or opened in Wireshark. **This is crackable material** — see below.
 
 **Crackable material is opt-in, and expires (#87).** A PMKID or a paired M1+M2 supports offline password guessing by anyone who gets a copy, so writing one is a separate decision from observing one:
@@ -132,7 +143,7 @@ GitHub automatically; start at [`docs/wiki/index.md`](docs/wiki/index.md).
 - **`--collect-handshakes`** — **off by default**. Required before any `.22000` line or handshake pcap is written. `--eapol-dir` on its own exits `2` rather than starting a run that silently writes nothing, and no export directory is created. The gate covers *writing only*: with it off, the EAPOL-Key parser, the M1..M4 state machine, the replay-counter pairing verdict, the PTK-generation counter the FragAttacks rule reads, M3 association evidence, the `[e]` view and the JSONL / `--db` `eapol_events` records all behave exactly as before. sloth never cracks anything itself ([MISSION.md §2](MISSION.md), rule 2).
 - **`--handshake-retention DAYS`** — default **7**, `0` = keep forever. Swept once at startup and once a day while running: artifacts under `--eapol-dir` last written before the window are deleted. Only the names sloth writes (`eapol.22000`, `<bssid>_<sta>.pcap`, `.*.tmp` partials) — a file of your own in that directory is never touched. Symlinks are never followed, and a failed delete is counted and shown in the `[e]` header rather than swallowed. Granularity is the whole file by mtime, so `eapol.22000` goes only once nothing has been appended for the whole window — the 22000 format has no per-line timestamp. Details: [`docs/wiki/retention.md`](docs/wiki/retention.md).
 
-**File permissions (#87).** Everything sloth writes can hold captured traffic, and the `--eapol-dir` files are offline-crackable. So, independent of the umask: directories sloth creates (`--eapol-dir`, `--pcap-dir`) are **0700**, and every file (`eapol.22000`, handshake and alert pcaps, `-o`, the `--db` file and its `-wal`/`-shm`, `--report`/`--report-json`, the Packets-view `w` export) is **0600**. A path that already exists is *validated, never repaired*: it must be owned by sloth's effective uid, carry no group/other bits, and not be a symlink (files: a single link). Otherwise sloth refuses it with a reason and exits at startup — it will not `chmod` a path you gave it, and will not write into a shared directory like `/tmp` itself (`--pcap-dir /tmp` is refused; `--eapol-dir /tmp/sloth-eapol` is fine). A file left `0644` by an older build needs a one-time `chmod 600`. Write failures (full disk, refused file) are reported: one `sloth: … export failed` line on stderr, a count in the EAPOL view for the handshake export, and partial files are removed or rolled back. Details: [`docs/views/eapol.md`](docs/views/eapol.md#export-handling-87), [`docs/wiki/pcap-export.md`](docs/wiki/pcap-export.md#permissions-and-failures-87).
+**File permissions (#87).** Everything sloth writes can hold captured traffic, and the `--eapol-dir` files are offline-crackable. So, independent of the umask: directories sloth creates (`--eapol-dir`, `--pcap-dir`) are **0700**, and every file (`eapol.22000`, handshake and alert pcaps, `-o`, the `--db` file and its `-wal`/`-shm`, `--report`/`--report-json`, the Packets-view `w` export) is **0600**. A path that already exists is *validated, never repaired*: it must be owned by sloth's effective uid, carry no group/other bits, and not be a symlink (files: a single link). Otherwise sloth refuses it with a reason and exits at startup — it will not `chmod` a path you gave it, and will not write into a shared directory like `/tmp` itself (`--pcap-dir /tmp` is refused; `--eapol-dir /tmp/sloth-eapol` is fine). A file left `0644` by an older build needs a one-time `chmod 600`. Write failures (full disk, refused file) are reported: one `sloth: … export failed` line on stderr (a `--pcap-dir` retention-sweep error is a different line, `sloth: --pcap-dir retention sweep: …`, and loses no evidence), a count in the EAPOL view for the handshake export, and partial files are removed or rolled back. Details: [`docs/views/eapol.md`](docs/views/eapol.md#export-handling-87), [`docs/wiki/pcap-export.md`](docs/wiki/pcap-export.md#permissions-and-failures-87).
 
 ### Strict observation (default)
 
@@ -193,7 +204,7 @@ The in-TUI `[n]` names/numeric toggle now gates resolution as well as display: w
 
   `--db-max-mb N` (default 512, 0 = unlimited) is a **pruning trigger, not a cap**. On breach the oldest observation rows go first, in bounded rounds — **entity, alert and credential rows are never dropped by this guard**. A sensor that fills its disk should lose telemetry, not the findings the disk was being kept for. The file is therefore allowed to exceed the target: if pruning every eligible row leaves it over, that is reported once and accepted, because the alternative is discarding evidence to satisfy a number. The guard also measures only the main database file, not its `-wal`/`-shm` sidecars.
 
-  **This is an investigative tradeoff, not a deletion promise.** Outside the database, only the handshake exports are retained (7 days by default, see `--handshake-retention` above) — `-o` JSONL, `--pcap-dir` and `--report` outputs grow until you remove them — and row deletion is logical, not secure erasure. Full behaviour and the artifact classes it does and does not cover: [`docs/wiki/retention.md`](docs/wiki/retention.md).
+  **This is an investigative tradeoff, not a deletion promise.** Outside the database, two artifact classes are retained: the handshake exports (7 days by default, see `--handshake-retention` above) and the alert pcaps in `--pcap-dir`, **deleted after `pcap.retain_days`** (14 days by default, `0` = keep forever; [`retention.md`](docs/wiki/retention.md) §2d) — `-o` JSONL and `--report` outputs grow until you remove them — and row deletion is logical, not secure erasure. Full behaviour and the artifact classes it does and does not cover: [`docs/wiki/retention.md`](docs/wiki/retention.md).
 
   Schema-level guardrails from [MISSION.md §2](MISSION.md) are enforced by the test suite: no password column on credential exposures, no PMKID / nonce / MIC columns anywhere — crackable material stays in the `--eapol-dir` file the operator explicitly asked for.
 
@@ -310,6 +321,8 @@ make test                     # the whole suite (no root, no terminal, no networ
 make mutate                   # mutation-test the suite itself (verify the verifier)
 ```
 
+`make` builds the two sensor daemons and their helpers: `sloth-wifi`, the monitor, with `sloth` beside it as a symlink to it (so `./sloth ...` below and every script that names it still run the same program); `sloth-rf`, the RF half of the sensor as a headless daemon of its own (ADS-B, APRS, rtl_433, Victron and the GNSS records from decoders that are already running; no capture, no radio, nothing transmitted; [flags](docs/wiki/cli-reference.md#sloth-rf), [ADR 0010](docs/wiki/adr/0010-wifi-rf-daemons.md)); and on Linux the operator helpers `sloth-ble-scan`, `sloth-va` and, where SoapySDR is installed, `sloth-sdrsweep`. `sloth-wifi` refuses the decoder flags (`--adsb`, `--aprs`, `--aprs-freq`, `--aprs-silent-hours`, `--rtl433`, `--victron`) with exit 2 and a line naming `sloth-rf`; a host upgrading from one binary moves them with `sloth-migrate-rf` ([deployment §11.4](docs/wiki/deployment.md)). `make test` builds `sloth_test`.
+
 Requires `libpcap-dev` and `libncursesw-dev` for the full build. The test build needs neither. The mutate target is opt-in and offline — see [`docs/wiki/mutation-testing.md`](docs/wiki/mutation-testing.md).
 
 ## Keybindings
@@ -357,7 +370,7 @@ Use `[?]` inside sloth for an up-to-date reference card.
 
 ## Alerts
 
-**<!-- count:rules -->90<!-- /count --> rules** feed `VIEW_ALERTS` — one per `ALERT_TYPE_*` row in [`include/sloth_alerts.def`](include/sloth_alerts.def), each with a row in [`docs/views/alerts.md`](docs/views/alerts.md). New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98).
+**<!-- count:rules -->100<!-- /count --> rules** feed `VIEW_ALERTS` — one per `ALERT_TYPE_*` row in [`include/sloth_alerts.def`](include/sloth_alerts.def), each with a row in [`docs/views/alerts.md`](docs/views/alerts.md). Every rule has a cited assessment in [`docs/wiki/alert-assessments/`](docs/wiki/alert-assessments/README.md). The list is one for both daemons, and each runs its own part: `sloth-wifi` raises <!-- count:rules-wifi -->95<!-- /count --> of the kinds and feeds `VIEW_ALERTS`; `sloth-rf` raises <!-- count:rules-rf -->6<!-- /count --> — the four that watch the `--gps` receiver (`GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, [`docs/wiki/gnss.md`](docs/wiki/gnss.md)), the one that flags an `--adsb` aircraft declaring an emergency, flag only (`ADSB_EMERGENCY`, [`docs/wiki/adsb.md`](docs/wiki/adsb.md)), and `SENSOR_SOURCE_DOWN` for its own sources, which `sloth-wifi` raises for its own too. `sloth-rf` has no terminal: its alerts are read in slothweb. With `--db`, every incident of a finding is its own `alert_incidents` row (schema v11). New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98).
 
 Six of them, as a sample of the shape:
 
@@ -401,9 +414,23 @@ when the evidence does. Full field tables in
 `slothweb` is an optional browser dashboard that runs beside sloth on
 the same host: it reads the data socket and, read-only, `sloth.db`, and
 serves one page on `http://127.0.0.1:8770/` (loopback only by default,
-GET and HEAD only, no external requests). Overview, Activity with
-hour-of-week baselines, anomaly episodes, Devices, WiFi, Flows with a
-chord diagram, History and Lookup.
+GET and HEAD only, no external requests; triage writes only behind the
+allow list). Overview tiles and strip facts each drawn against their
+own hour-of-week band; Activity and anomaly episodes; Devices and WiFi
+with per-device signal ranges in sloth's own distance bands, an
+isometric channel waterfall (flat: horizon strips and the channel mix);
+**BLE Devices** (who is around by device class, how close by signal,
+both isometric by default, a signal chart per device); **GPS
+Sat** (satellites in view, sky plot, fix history); Flows as a matrix
+(chord diagram second); History with an event rug; Lookup; and an alert
+page that leads with detail changes, incidents and confidence, draws
+the attack chain, shows the evidence and capture, the cited assessment,
+and triage buttons (false, noise, incident, the green **known** for
+expected traffic, follow recommended). With `--peer NAME=URL` it pulls
+the operator's other slothwebs over the tailnet into its own store,
+off by default and announced, and its **Fleet** tab maps the sites,
+shows each peer's health and lists what was seen at more than one site
+on a shared timeline ([`docs/wiki/fleet.md`](docs/wiki/fleet.md)).
 
 ![slothweb Overview on synthetic data](docs/assets/slothweb/overview.png)
 
@@ -504,6 +531,67 @@ this gives you low-latency triage.
 
 ## Architecture
 
+How the pieces connect at run time: three receive-only inputs, the sensor, and slothweb, which reads the sensor's stream and its `sloth.db` (read-only) and keeps its own store. Every arrow is a read or a local hand-off; nothing here transmits onto a monitored network (`MISSION.md` §2).
+
+```mermaid
+flowchart LR
+  subgraph air["On the air and on the wire (receive only, MISSION §2)"]
+    wifi(("802.11<br/>monitor radio"))
+    net(("Host interfaces<br/>Ethernet / managed Wi-Fi"))
+    ble(("Bluetooth LE<br/>advertisements"))
+  end
+
+  subgraph host["Sensor host (systemd units in packaging/systemd/)"]
+    scan["sloth-ble-scan<br/>passive LE scan holder<br/>src/ble_scan/"]
+    subgraph sloth["sloth — sloth-sensor.service, user sloth"]
+      probe["802.11 capture<br/>src/capture/probe.c"]
+      cap["IP capture<br/>src/capture/capture.c"]
+      btmon["HCI monitor<br/>src/capture/bt_monitor.c"]
+      plat["/proc · netlink · nl80211<br/>src/platform/"]
+      state["state + decoders<br/>include/sloth.h, src/*_snoop.c"]
+      rules["alert rules<br/>src/alerts/rules_*.c"]
+      engine["incident engine<br/>src/alerts/engine.c"]
+      tui["TUI views<br/>src/tui.c, src/views/"]
+      jsonl["JSONL records<br/>src/jsonl.c"]
+      sock["data socket<br/>unix:/run/sloth/sloth.sock"]
+      db[("sloth.db<br/>src/db.c")]
+      pcap[("alert pcaps +<br/>evidence manifests")]
+    end
+    subgraph web["slothweb — slothweb.service, user sloth, read-only on sloth.db"]
+      ingest["stream ingest + live state<br/>web/src/web_ingest.c, web_live.c"]
+      sdb["sloth.db reader<br/>web/src/web_slothdb.c"]
+      analytics["rollups · anomalies · BLE<br/>web_rollup, web_anomaly, web_ble"]
+      kb["compiled knowledge<br/>alert assessments, vendor research,<br/>IEEE OUI, Bluetooth SIG"]
+      frrs["triage · FRRS · TACDB<br/>web/src/web_frrs*.c"]
+      store[("slothweb.db<br/>series, baselines, BLE,<br/>triage, TACDB")]
+      routes["HTTP API + page<br/>web/src/web_routes.c, web/ui/"]
+    end
+  end
+
+  research[("research corpus<br/>research/, research.db")]
+  browser(("Browser on the<br/>allow list (Tailscale)"))
+
+  wifi --> probe
+  net --> cap
+  net --> plat
+  ble --> scan
+  scan -. "HCI user channel" .-> btmon
+  probe & cap & btmon & plat --> state
+  state --> rules --> engine
+  engine --> pcap
+  state --> tui
+  state & engine --> jsonl --> sock
+  state & engine --> db
+  research -. "--with-research" .-> engine
+  sock --> ingest --> analytics --> store
+  db --> sdb
+  ingest & sdb & analytics & kb & frrs --> routes
+  frrs <--> store
+  routes <--> browser
+```
+
+The full walk-through is [docs/wiki/architecture.md](docs/wiki/architecture.md).
+
 The codebase is built around a **platform vtable** (`platform_ops_t` in `include/sloth.h`):
 
 ```c
@@ -551,7 +639,8 @@ Packet decode runs in a dedicated pcap thread. The eight log modules each have a
 include/sloth.h            shared types: state, packet, conn, alert, device, ...
 include/sloth_views.def    the view list; enum, labels, keys and dispatch expand from it
 include/sloth_alerts.def   the alert-type list; enum, names and ATT&CK techniques expand from it
-src/main.c                 CLI, signal handlers, main loop
+src/main.c                 sloth-wifi (alias sloth): CLI, signal handlers, main loop
+src/rf/                    sloth-rf: its CLI, headless loop and file-only platform
 src/tui.c                  ncurses / ANSI rendering, key polling
 src/platform/linux*.c      Linux backends (rtnetlink, nl80211, /proc, INET_DIAG)
 src/capture/capture.c      libpcap thread; per-protocol parser dispatch
@@ -612,6 +701,8 @@ the top.
 ## Status
 
 Code: ~48.6k lines of C99 across 147 `.c` files (285 counting headers). Tests: `make test` plus a `make mutate` harness. Reference Python consumer + 3-sink SIEM forwarder under [`examples/`](examples/). License: [Sloth Source-Available License 1.0](LICENSE) (free for individual non-commercial use; private modifications are allowed but modified versions may not be distributed; contact jeff@river.io for commercial, enterprise, or other licensing).
+
+Hardware: the three-sector passive antenna fixture (Rev N) build guide is [`docs/wiki/antenna-fixture-rev-n.md`](docs/wiki/antenna-fixture-rev-n.md), its design files under [`docs/hardware/antenna/`](docs/hardware/antenna/README.md).
 
 Sloth was built as a passive monitor. It will not fuzz, attack, or attempt to deauth or de-associate anything, and it puts no frame of its own on the air. The one thing it can be asked to do that resembles scanning is `--allow-active`'s kernel scan trigger — a passive, SSID-less nl80211 scan on your own radio, off unless you ask for it. If active reconnaissance is what you need, use a different tool.
 

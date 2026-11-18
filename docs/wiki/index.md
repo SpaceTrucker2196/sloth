@@ -27,15 +27,38 @@ the Wi-Fi it watches:
 
 - [[sloth]] — what sloth is, what it explicitly never does.
 - [[architecture]] — code-tree layout and the seams between layers.
+- [[architecture-split]] — the measured coupling between the sensor, the
+  dashboard and the intelligence tables: every reference out of `web/`
+  and every intelligence table in `src/`, with #184's contract table
+  C1–C10 filled in and the places the grep disagrees with it.
+- [ADRs 0001–0010](adr/README.md) — the architecture decision records for
+  the three-repository programme (#184), one per decision, with the gaps
+  that still need an owner ruling marked in place; 0009 is the owner's
+  monitor-only rule for fleet sharing (2026-11-12); 0010 splits the
+  sensor into the `sloth-wifi` and `sloth-rf` daemons (#211).
+- [[architecture-rf-split]] — the measured coupling between the Wi-Fi
+  monitor and the SDR and GNSS modules (ADS-B, APRS, rtl_433, GNSS) in
+  today's one process, slothweb's one-socket and one-database
+  assumptions, the packaging, the slices #211–#217 and the places the
+  tree and #211 disagree.
+- [[contract]] — the sensor's contract artifact (`make contract`,
+  #185 item 4): `libsloth-wire`, `schema.sql`, the JSONL contract, the
+  palette, the alert knowledge bundle and the golden fixtures in one
+  reproducible tar on `sloth`'s releases, how to verify it, and the
+  decisions behind it.
+- [[pack-schema]] — the intel pack manifest, file set and immutability
+  rule, v1 draft.
 - [[threat-model]] — assets A1–A5, adversaries ADV-1..4, trust
   boundaries TB-1..7, and the finding → boundary map every security
   issue cites by ID.
-- [[views-catalog]] — keybinding-to-view map for all <!-- count:views -->36<!-- /count --> views.
+- [[views-catalog]] — keybinding-to-view map for all <!-- count:views -->37<!-- /count --> views (`sloth-wifi`'s; `sloth-rf` is headless).
 - [[dashboard]] — the seven-band composite view.
 
 ## Engines
 
-- [[alerts]] — alert engine internals and the <!-- count:rules -->90<!-- /count --> rules.
+- [[alerts]] — alert engine internals and the <!-- count:rules -->100<!-- /count --> rules, and which daemon raises which (`sloth-wifi` <!-- count:rules-wifi -->95<!-- /count --> of the kinds, `sloth-rf` <!-- count:rules-rf -->6<!-- /count -->).
+- [[alert-remediation]] — how to investigate and fix every alert type, each step grounded in the research corpus; shown on slothweb's alert detail page.
+- [Alert assessments](alert-assessments/README.md) — one cited research assessment per alert type (the types not yet assessed are listed on that page): what the rule checks (file:line), how its count accumulates, the evidence that proves or refutes a firing, benign causes, severity and false-positive judgements, a noise verdict against reference-host firing data, and a bibliography; the material for the alert detail page.
 - [[beacon-detection]] — periodicity detector for C2 / implants.
 - [[threat-intel]] — embedded IOC matcher (synthetic demo data, not a feed).
 - [[retention]] — what `--db` actually deletes, and what nothing deletes.
@@ -55,6 +78,17 @@ the Wi-Fi it watches:
 - [[wifi-sigint-guide]] — plain-language guide to passive RF inference and its limits, with every radio emission of a current iPhone and Android phone (sourced, 117 references).
 - [[non-ip-sensors]] — passive RF / non-IP sensor-family roadmap (#26).
 - [[ble]] — the Bluetooth host source: `--bt-monitor` over the HCI monitor channel, the passive-scan procedure, what is refused and never written (#144).
+- [[multi-radio-sensing]] — `--monitor-iface` repeated: up to four sensor radios feeding one set of detectors; a frame two radios hear is delivered once (identity, the 5 ms window and what it costs for control frames); the hop list dealt out so the radios sit on different channels; a radio lost mid-run; the `mon_rK_*` members of `sensor_health`.
+- [[direction-finding]] — `--df-iface`: extra monitor radios that feed only a per-transmitter, per-radio signal-level table; which radio hears a transmitter loudest, by how much, and a point along a baseline; what a row of independent radios cannot say (side, range, bearing); the `wifi_df` and `df_radio` records.
+- [[rf-distance]] — the RSSI distance data point: an estimate from signal strength (ITU-R P.1238 log-distance), bands and trend, announced vs assumed transmit power, calibration, and why it is not a location.
+- [[antenna-fixture-rev-n]] — the three-sector passive antenna fixture (Rev N): print, assemble, mount on a 1-1/2 NPT PVC mast, foil the reflectors, validate passively with sloth, maintain; how three sectors reach a sloth that drives one monitor radio (2026-11-02).
+- [[gnss]] — what the `--gps` receiver sees: satellites in view with C/N0, the DOPs, the receiver's clock against the host's; the `[#]` view, the `gnss_fix` / `gnss_sky` / `gnss_sat` records, schema v10, slothweb's GNSS tab; observation only, the detectors' hooks named (2026-11-02).
+- [[adsb]] — ADS-B aircraft: `--adsb` tails the `aircraft.json` a local readsb / dump1090-fa already writes (no SDR control, no network); the aircraft table, freshness and 60 s expiry, the `adsb` sensor, `sensor_health`'s `adsb_*`, the change-only `adsb_aircraft` record with its altitude bands and position cells (#26 slice 1, 2026-11-05); the flag-only `ADSB_EMERGENCY` alert (#186, 2026-11-08).
+- [[sdr-sweep]] — the SDR sweep: `sloth-sdrsweep`, a separate receive-only helper, sweeps a receiver the operator dedicated over 0.5-2000 MHz for about a minute (SoapySDR, the RSPdx-R2) and writes a max-hold waterfall and a labelled peak list; slothweb's Spectrum tab draws it isometrically and asks for a run through a path unit; why it is consistent with MISSION §2.
+- [[aprs]] — APRS stations: `--aprs` tails the packet log a local Dire Wolf already writes (on the region's APRS channel, derived from the GNSS position and checked against `--aprs-freq`; no radio control, no network); the silent-decoder check; the CSV parser, the station table and its one-hour expiry, the `aprs` sensor, `sensor_health`'s `aprs_*`, the `aprs_packet` and change-only `aprs_station` records, sloth.db v13 and slothweb's APRS tab.
+- [[rtl433]] — rtl_433 sub-GHz devices: `--rtl433` tails the JSON event log a local rtl_433 already writes (TPMS, weather stations, remotes, door and PIR sensors on the ISM bands; no SDR control, no network); the line parser and its allow-list, the bounded `(model, id)` device table and its eviction tally, the `rtl433` sensor, `sensor_health`'s `rtl433_*` and the change-only `rtl433_device` record.
+- [[victron]] — Victron devices: `sloth-va`, a separate helper (ADR 0011, the first sloth-family component that transmits), decrypts the owner's Victron Instant Readout advertisements with the owner's keys under a passive scan and holds short scheduled GATT sessions (connect, pair with the PIN, read, disconnect) with the owner's listed devices only; the per-device support table, the secret files, the record it appends to `/var/lib/sloth-va/victron.jsonl`.
+- [[location]] — where the sensor is: `--location` for a fixed sensor, `--gps` for an NMEA serial receiver or loopback gpsd; the stamp on alerts and on captures' manifests, device position samples, GeoJSON / GPX export (2026-10-27).
 - [[ubertooth]] — the over-the-air Bluetooth source: `--bt-capture` reading an Ubertooth's pcap file or FIFO, the allowed and forbidden tools and flags, jam mode and DISABLE_TX firmware (#144 slice 3).
 - [[mac-randomisation]] — the 802.11 seqnum deanonymisation primitive.
 - [[evil-twin-reproducer]] — scapy snippets for live-testing each
@@ -69,9 +103,15 @@ the Wi-Fi it watches:
   what `DFS_MASKING` reads its DFS set from.
 - [[research-corpus]] — the machine-readable side of the cite-sources
   habit (#73): one document per source, FTS5-indexed, guarded.
+- [[vendor-research]] — slothweb's "vendor research" section under the
+  OUI card: one cited Markdown file per OUI holder in
+  `web/data/vendors/`, compiled in at build time, every claim with a
+  source and a confidence; the file format and the rules the build
+  enforces.
 - [[captive-portal]] — connectivity-check interception (#69): the
   rogue portal that answers your OS's probe, and the three
-  independent signals that catch it.
+  independent signals that catch it; graded by network context and
+  extended with evil-twin kit page fingerprints in #169.
 - [[fragattacks]] — the Vanhoef 2021 family (#75): eight of the twelve
   CVEs shipped across seven detectors, why the A-MSDU detector as
   usually described cannot work, why the gate is per-station and
@@ -81,8 +121,10 @@ the Wi-Fi it watches:
   table, and explains why that is the honest state.
 - [[attack-hardware-fingerprints]] — #77's stack measurements (IE-order
   hash, TBTT jitter, WPS/WSC vendor strings) and their zero-reading
-  rules on `[b]`; plus the capture-gated remainder, written up ready to
-  refile.
+  rules on `[b]`; #151's stack table (empty, capture-gated), Pineapple
+  setup-AP pairing and `suspected`/`corroborated` verdict on
+  `KARMA_AP`; #187 S3's probe-response latency (measured, no
+  verdict); and what still waits on captures.
 - [[enterprise-rogue]] — the two halves of the WPA-Enterprise problem:
   `ROGUE_RADIUS` (#31, the AP) and `PEAP_NO_SERVER_CERT` (#65,
   CVE-2023-52160, your own fleet).
@@ -134,12 +176,31 @@ the Wi-Fi it watches:
   the Overview; M2 to M5 the time series, baselines and anomalies,
   Devices, WiFi, History and the SQL box; M6 (#164) the Flows view and
   the five-minute README (`web/README.md`) with its troubleshooting
-  table and security section.
+  table and security section; alert triage, the FRRS emitter record
+  and the TACDB tab, its spec [`docs/web-frrs-spec.md`](../web-frrs-spec.md).
+- [[slothweb-mcp]] — the MCP server an agent on the sensor's own
+  machine uses to read slothweb and to write triage, notes and links:
+  its 27 tools and the route each maps to, the per-run agent secret
+  behind `via: agent`, the untrusted-data rules, and how to register
+  it (an OpenClaw example).
+- [[fleet]] — the owner's own sensors sharing over the tailnet (#192,
+  ADR 0008): slothweb's `/api/fleet/export`, the `--peer` pull into
+  slothweb.db v8 (`peer_sites`, `peer_sightings`), what never travels,
+  and the cross-site inferences built on it: emitters located (I5), GNSS
+  regional or local (I6), aircraft cross-checked (I7) and the identity
+  findings (I2, I3, I4, I8).
+- [[capture-scope]] — slothweb's Monitor / Hybrid / Local switch: what
+  the passive monitor radio heard, what the host's own interfaces
+  carried, or both; how each record, alert, metric, interface and
+  device is placed, and what a device seen both ways shows in each.
 - [[deployment]] — `make install` + `make install-service` (#139): the
   shipped hardened unit, why it runs as `sloth` and not root, what each
   sandbox key costs, and `sloth-migrate-sensor` (#153), the dry-run-first,
-  checksum-verified, self-rolling-back migration off a build-tree unit.
-- [[sqlite-schema]] — the `--db` retained artifact: 38-table schema,
+  checksum-verified, self-rolling-back migration off a build-tree unit,
+  with the owner-ruled `tcp:` to unix socket move (`--data-socket-unix`)
+  and `slothweb.service` (`--with-slothweb`).
+- [[sqlite-schema]] — the `--db` retained artifact: 46-table schema
+  (v11), findings and their per-incident rows (`alert_incidents`, #175),
   retention tiers, MISSION §2 guardrails, query recipes.
 - [[ring-buffers]] — bounded-history pattern shared by every per-protocol log file.
 

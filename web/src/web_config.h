@@ -6,7 +6,9 @@
 #include <stdio.h>
 
 #include "web_acl.h"
+#include "web_fleet.h"
 #include "web_ingest.h"
+#include "web_pcapdir.h"
 #include "web_rollup.h"
 #include "web_store.h"
 
@@ -48,8 +50,56 @@ typedef struct {
     int      retain_days;          /* --web-retain-days */
     /* M4 (#162): sloth.db, read-only. "" when not given. */
     char     sloth_db[4096];       /* --sloth-db */
+    /* The second daemon (#214, ADR 0010): sloth-rf's data socket and
+     * its database, read as --socket and --sloth-db are. Neither has a
+     * default: without --rf-socket there is one stream, as before the
+     * split, and without --rf-db the RF tables are read from
+     * --sloth-db. rf_sock.kind 0: not given. */
+    web_sockspec_t rf_sock;        /* --rf-socket */
+    char     rf_db[4096];          /* --rf-db */
     /* M5 (#163): the SQL box (web_sqlbox.h). Off unless given. */
     int      allow_sql;            /* --web-allow-sql */
+    /* Triage and the TACDB (docs/web-frrs-spec.md): --web-read-only
+     * removes the write surface whole (every POST 405, as before it
+     * existed); --web-assessments is where "follow recommended" reads
+     * <TYPE>.md's front matter, "" unset. */
+    int      read_only;            /* --web-read-only */
+    char     assess_dir[4096];     /* --web-assessments */
+    /* Where the run's agent secret is written (web_agent.h); "" not
+     * given: no agent path. */
+    char     agent_secret_path[4096];   /* --web-agent-secret */
+    /* The group the secret file is given, 0640 (web_agent.h); "" none:
+     * 0600. Needs --web-agent-secret. */
+    char     agent_group[256];          /* --web-agent-group */
+    /* The alert page's packet capture (web_pcapdir.h): the sensor's
+     * --pcap-dir and, optionally, its --eapol-dir. None by default. */
+    char     pcap_dir[WEB_PCAP_DIRS][4096];   /* --pcap-dir, repeatable */
+    int      npcap_dir;
+    /* --web-serve-evidence-pcap: 0 withheld (default), 1 served to the
+     * peers a loopback-only slothweb admits, 2 ("=remote") served to
+     * remote peers too. An evidence pcap can hold EAPOL/PMKID material
+     * (web_pcapdir.h). */
+    int      serve_evidence_pcap;
+    /* The owner's fleet (web_fleet.h, ADR 0008): the peers pulled,
+     * none by default; how often; and whether an address outside the
+     * tailnet (100.64.0.0/10) may be named. */
+    web_fleet_peer_cfg_t peer[WEB_FLEET_PEERS];   /* --peer, repeatable */
+    int      npeer;
+    int      peer_interval_s;      /* --peer-interval-secs */
+    int      peer_outside;         /* --peer-allow-outside-tailnet */
+    int      peer_gnss_region_km;  /* --peer-gnss-region-km (#192 I6) */
+    /* This site's own networks (#192 I2, I3): --my-ssid, --my-bssid,
+     * repeatable, the words sloth uses; none by default. */
+    web_fleet_mine_t mine;
+    /* The Spectrum tab (web_spectrum.h): sloth-sdrsweep's state
+     * directory, read, and the request file slothweb creates. Defaults
+     * WEB_SPECTRUM_DIR and WEB_SPECTRUM_REQUEST, the installed units'
+     * paths. */
+    char     spectrum_dir[1024];      /* --spectrum-dir */
+    char     spectrum_request[1024];  /* --spectrum-request */
+    /* The Camera tab (web_camera.h): the capture helper's state
+     * directory, read only. Default WEB_CAMERA_DIR. */
+    char     camera_dir[1024];        /* --camera-dir */
 } web_config_t;
 
 void web_config_defaults(web_config_t *c);
@@ -68,7 +118,11 @@ int  web_parse_bind(const char *s, int *family, uint8_t addr[16],
  *     authentication; sloth's own --strict refuses to serve one);
  *   - with a store, a --web-max-mb below web_config_store_min_mb();
  *   - --web-allow-sql under strict, or without --sloth-db (the box has
- *     nothing else to read).
+ *     nothing else to read);
+ *   - --web-serve-evidence-pcap with --web-allow-remote, unless given
+ *     as --web-serve-evidence-pcap=remote.
+ *   - a --peer outside 100.64.0.0/10 without
+ *     --peer-allow-outside-tailnet, and any --peer under strict.
  * Pure: no output, no socket. 0, or -1 with the refusal in err. */
 int  web_config_check(const web_config_t *c, char *err, size_t errsz);
 
@@ -88,8 +142,11 @@ int  web_config_parse(web_config_t *c, int argc, char **argv,
 /* Print the stderr announcement every authorised remote exposure gets:
  * one for a non-loopback bind, one per non-loopback allow entry, one
  * for a --socket read from another host, and one for the SQL box served
- * to remote peers (--web-allow-sql with --web-allow-remote). Prints
- * nothing for a loopback-only configuration. */
+ * to remote peers (--web-allow-sql with --web-allow-remote); and, for
+ * any configuration, one when evidence pcaps are served
+ * (--web-serve-evidence-pcap), naming remote peers when they get them;
+ * one for each peer outside the tailnet (--peer-allow-outside-tailnet).
+ * Prints nothing for a loopback-only configuration without that flag. */
 void web_config_announce(const web_config_t *c, FILE *err);
 
 /* "127.0.0.1:8770" / "[::1]:8770". */

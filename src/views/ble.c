@@ -10,6 +10,7 @@
 #include "ble_flood.h"
 #include "ble_rotation.h"
 #include "views/ble.h"
+#include "rf_distance.h"
 
 /* [*] BLE — #144 slice 4.
  *
@@ -91,16 +92,22 @@ static void flags_cell(const ble_device_t *d, char out[4]) {
 
 /* ── column plan ───────────────────────────────────────────
  *
- * Fixed: marker, address, type, RSSI, adv count, age, flags. Flexing:
+ * Fixed: marker, address, type, RSSI, adv count, age, flags; the
+ * distance cell between RSSI and adv count is full or short. Flexing:
  * the sensor iface and the summary share what is left, so 100 columns
  * gets a row that does not wrap and a wide terminal gets whole names. */
 #define BLE_FIXED (1 + 17 + 2 + 1 + 2 + 4 + 2 + 6 + 2 + 4 + 2 + 3 + 2)
 
-typedef struct { int iface, summary; } ble_plan_t;
+typedef struct { int iface, summary, dist; } ble_plan_t;
 
 static ble_plan_t plan_cols(int cols) {
     ble_plan_t p;
-    int avail = cols - 1 - BLE_FIXED;     /* never the last column */
+    /* The distance cell (and its separator) comes out of the flexing
+     * share: its full form once the iface and a 24-cell summary still
+     * fit beside it, the short form otherwise - 100 columns get that. */
+    int base = cols - 1 - BLE_FIXED;
+    p.dist = base - 2 - RF_CELL_FULL >= 17 + 2 + 24 ? RF_CELL_FULL : RF_CELL_SHORT;
+    int avail = base - 2 - p.dist;        /* never the last column */
     if (avail < 20) avail = 20;
     /* The iface takes its whole name (17 for "bluetooth-monitor") while
      * the summary keeps at least 24; past that the summary has it all. */
@@ -177,10 +184,16 @@ static void draw_detail(const sloth_state_t *s) {
         kv("HID", v);
     }
     if (d->has_tx_power) { snprintf(v, sizeof(v), "%d dBm", (int)d->tx_power); kv("TX power", v); }
+    if (d->has_ext_tx_power) {
+        snprintf(v, sizeof(v), "%d dBm (extended report header)", (int)d->ext_tx_power);
+        kv("TX power (hdr)", v);
+    }
     if (d->has_flags)    { snprintf(v, sizeof(v), "0x%02x", d->flags); kv("AD flags", v); }
     if (d->has_rssi) {
         snprintf(v, sizeof(v), "%d dBm (best %d)", (int)d->rssi, (int)d->rssi_best);
         kv("RSSI", v);
+        rf_dist_describe(&d->dist, v, sizeof(v));
+        kv("distance (est)", v);
     }
     snprintf(v, sizeof(v), "%llu", (unsigned long long)d->adv_count);
     kv("advertisements", v);
@@ -252,9 +265,10 @@ void view_ble_draw(const sloth_state_t *s) {
     ble_plan_t w = plan_cols(ble_cols());
     tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
-    TPRINT(" %-17s  %c  %-*s  %4s  %6s  %4s  %-3s  %s\n",
-           "ADDRESS", 'T', w.iface, "SENSOR", "RSSI", "ADV", "AGE", "HWS",
-           "ADVERTISES");
+    TPRINT(" %-17s  %c  %-*s  %4s  %-*s  %6s  %4s  %-3s  %s\n",
+           "ADDRESS", 'T', w.iface, "SENSOR", "RSSI", w.dist,
+           w.dist >= RF_CELL_FULL ? "DIST (EST)" : "~DIST", "ADV", "AGE",
+           "HWS", "ADVERTISES");
     tui_normal();
 
     int page = view_page_budget(BLE_LEGEND_ROWS, BLE_PAGE);
@@ -271,6 +285,8 @@ void view_ble_draw(const sloth_state_t *s) {
     for (int i = top; i < end; i++) {
         const ble_device_t *d = &s->ble_devices[i];
         char addr[18], rssi[6], adv[24], age[24], fl[4], sum[256], ifc[32];
+        char dist[48];
+        rf_dist_cell(&d->dist, dist, sizeof(dist), w.dist);
         snprintf(addr, sizeof(addr), "%02x:%02x:%02x:%02x:%02x:%02x",
                  d->addr[0], d->addr[1], d->addr[2], d->addr[3],
                  d->addr[4], d->addr[5]);
@@ -287,13 +303,13 @@ void view_ble_draw(const sloth_state_t *s) {
             sum[w.summary > 1 ? w.summary : 1] = '\0';
         }
         if (i == sel) tui_sel(); else if (d->hid || d->watch_cat[0]) tui_bright(); else tui_normal();
-        TPRINT("%c%-17s  %c  %-*s  %4s  %6s  %4s  %-3s  %s\n",
+        TPRINT("%c%-17s  %c  %-*s  %4s  %s  %6s  %4s  %-3s  %s\n",
                i == sel ? '>' : ' ', addr, type_ch(d->addr_type), w.iface,
-               ifc, rssi, adv, age, fl, sum);
+               ifc, rssi, dist, adv, age, fl, sum);
         tui_normal();
     }
     tui_dim();
-    TPRINT(" T: P public R random p/r resolved   H HID  W watchlist  ~ one-channel sample\n");
+    TPRINT(" T: P public R random p/r resolved  H HID  W watchlist  ~ sample  DIST: signal-strength estimate\n");
     tui_normal();
 }
 

@@ -10,7 +10,6 @@
 #include <sqlite3.h>
 #endif
 #include "sensor_health.h"
-#include "dns.h"
 
 /* Table-overflow tally — contract and rationale in sensor_health.h.
  *
@@ -142,6 +141,9 @@ const char *sh_evict_name(sh_evict_t kind) {
     case SH_EVICT_BLE_DEVICE:    return "ble_device";
     case SH_EVICT_BREDR_LAP:     return "bredr_lap";
     case SH_EVICT_BLE_FLOOD:     return "ble_flood";
+    case SH_EVICT_FRAG_AP_IDENT: return "frag_ap_ident";
+    case SH_EVICT_PROBE_LATENCY: return "probe_latency";
+    case SH_EVICT_RTL433:        return "rtl433";
     case SH_EVICT_KIND_COUNT:  break;
     }
     return "";
@@ -197,6 +199,7 @@ const char *sh_parse_fault_name(sh_parse_fault_t kind) {
     case SH_PF_DNS_NAME_BAD:  return "dns_name_bad";
     case SH_PF_TLS_MALFORMED: return "tls_malformed";
     case SH_PF_FRAME_EDGE:    return "frame_edge";
+    case SH_PF_FCS_FAILED:    return "fcs_failed";
     case SH_PF_KIND_COUNT:    break;
     }
     return "";
@@ -212,6 +215,7 @@ int sh_parse_fault_is_wired(sh_parse_fault_t kind) {
     case SH_PF_IP_TRUNCATED:
     case SH_PF_IP_FRAGMENT:
     case SH_PF_FRAME_EDGE:
+    case SH_PF_FCS_FAILED:
         return 1;
     default:
         return 0;
@@ -289,6 +293,13 @@ static long long count_fds(void) {
     return n > 0 ? n - 1 : 0;
 }
 
+/* Where the resolver's lifetime call count comes from (#213). The
+ * resolver is src/dns.c, the one module in the tree that can put a
+ * query on the wire, so this file does not name it: the daemon that
+ * has a resolver hands its counter over (src/capture_side.c), and one
+ * that has none reports -1, "not measured". */
+static long long (*g_resolver_calls)(void);
+
 void sh_mem_sample(sh_mem_t *out) {
     memset(out, 0, sizeof(*out));
     sample_status(out);
@@ -311,7 +322,9 @@ void sh_mem_sample(sh_mem_t *out) {
     out->malloc_kb = -1;
 #endif
     out->fd_count = count_fds();
-    dns_resolver_stats_t ds;
-    dns_resolver_stats(&ds);
-    out->resolver_calls = (long long)ds.getnameinfo_calls;
+    out->resolver_calls = g_resolver_calls ? g_resolver_calls() : -1;
+}
+
+void sh_set_resolver_calls_fn(long long (*fn)(void)) {
+    g_resolver_calls = fn;
 }

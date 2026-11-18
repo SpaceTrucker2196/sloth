@@ -23,6 +23,7 @@
 #include "web_store.h"
 #include "web_tsdb.h"
 #include "wtest.h"
+#include "wt_tmp.h"
 
 static const long long T = 1792627200;   /* a whole hour, unix seconds */
 
@@ -289,11 +290,14 @@ static void test_routes(void) {
     WT_EQ(r.status, 200);
     WT_HAS(out, "\"store\":\"memory\",\"store_path\":null,");
     WT_HAS(out, "\"series_key_caps\":{\"global\":1,\"device\":64,\"host\":32,"
-                "\"iface\":32,\"channel\":64,\"alert\":128}");
+                "\"iface\":32,\"channel\":64,\"alert\":128,\"rectype\":80,\"sys\":64,"
+                "\"bleclass\":8,\"ble\":64}");
     WT_HAS(out, "\"key_evictions\":{\"global\":0,\"device\":0,\"host\":0,"
-                "\"iface\":0,\"channel\":0,\"alert\":0}");
+                "\"iface\":0,\"channel\":0,\"alert\":0,\"rectype\":0,\"sys\":0,"
+                "\"bleclass\":0,\"ble\":0}");
     WT_HAS(out, "\"key_returns\":{\"global\":0,\"device\":0,\"host\":0,"
-                "\"iface\":0,\"channel\":0,\"alert\":0}");
+                "\"iface\":0,\"channel\":0,\"alert\":0,\"rectype\":0,\"sys\":0,"
+                "\"bleclass\":0,\"ble\":0}");
     WT_HAS(out, "\"queue_rows\":0,\"queue_cap\":0,");
     WT_HAS(out, "\"queue_dropped\":0,\"churn_dropped\":0,");
     /* The ceiling's raised passes and the analysis state's measured size
@@ -306,7 +310,8 @@ static void test_routes(void) {
 #ifdef WITH_SQLITE
 /* The answer's worst case fits: 900 points, every number at its widest. */
 static void test_worst_case_fits(void) {
-    char dir[64] = "/tmp/slothweb-series-XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "slothweb-series-XXXXXX");
     WT_ASSERT(mkdtemp(dir) != NULL);
     char p[128], err[512];
     snprintf(p, sizeof(p), "%s/w.db", dir);
@@ -369,7 +374,8 @@ static int count_points(const char *b, long long *oldest, long long *newest) {
  * returned bucket; the page below it is the store's 900. Seen red with
  * the merge loop's cap raised to 2 * max (1800 points came back). */
 static void test_merged_answer_capped(void) {
-    char dir[64] = "/tmp/slothweb-merge-XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "slothweb-merge-XXXXXX");
     WT_ASSERT(mkdtemp(dir) != NULL);
     char p[128], err[512], e2[64], why[48];
     snprintf(p, sizeof(p), "%s/m.db", dir);
@@ -442,7 +448,8 @@ static void test_merged_answer_capped(void) {
  * the next flush is nine seconds off. Seen red with the high-water
  * clause taken out of web_tsdb_step() (19,744 rows still queued). */
 static void test_queue_high_water_flushes_early(void) {
-    char dir[64] = "/tmp/slothweb-high-XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "slothweb-high-XXXXXX");
     WT_ASSERT(mkdtemp(dir) != NULL);
     char p[128], err[512], e2[64];
     snprintf(p, sizeof(p), "%s/h.db", dir);
@@ -478,13 +485,19 @@ static size_t sample_all_keys(long long now) {
     for (int m = 0; m < WM_COUNT; m++) {
         int kc = web_metric_defs[m].kclass;
         int cap = kc == WEB_KC_GLOBAL ? 1 : kc == WEB_KC_DEV ? WEB_MAX_KEYS_MAX
+                : kc == WEB_KC_BLE ? WEB_MAX_KEYS_MAX
                 : kc == WEB_KC_HOST ? WEB_MAX_KEYS_MAX / 2
                 : kc == WEB_KC_IFACE ? WEB_IFACE_KEYS
-                : kc == WEB_KC_CHANNEL ? WEB_CHANNEL_KEYS : WEB_ALERT_KEYS;
+                : kc == WEB_KC_CHANNEL ? WEB_CHANNEL_KEYS
+                : kc == WEB_KC_RECTYPE ? WEB_RECTYPE_KEYS
+                : kc == WEB_KC_SYS ? WEB_SYS_KEYS
+                : kc == WEB_KC_BLECLASS ? WEB_BLECLASS_KEYS : WEB_ALERT_KEYS;
         for (int i = 0; i < cap; i++) {
             switch (kc) {
             case WEB_KC_GLOBAL:  k[0] = '\0'; break;
             case WEB_KC_DEV:     snprintf(k, sizeof(k), "02:00:00:00:%02x:%02x",
+                                          i >> 8, i & 0xff); break;
+            case WEB_KC_BLE:     snprintf(k, sizeof(k), "c6:00:00:00:%02x:%02x",
                                           i >> 8, i & 0xff); break;
             case WEB_KC_HOST:    snprintf(k, sizeof(k), "10.0.%d.%d", i >> 8,
                                           i & 0xff); break;
@@ -508,7 +521,8 @@ static size_t sample_all_keys(long long now) {
  * removed from web_tsdb_flush_all(): queue_dropped 74,050, and the
  * fine tier 296,200 rows of 370,250 (every series' open one lost). */
 static void test_flush_all_writes_backlog_first(void) {
-    char dir[64] = "/tmp/slothweb-fall-XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "slothweb-fall-XXXXXX");
     WT_ASSERT(mkdtemp(dir) != NULL);
     char p[128], err[512], e2[64];
     snprintf(p, sizeof(p), "%s/f.db", dir);
@@ -559,11 +573,22 @@ static void test_flush_all_writes_backlog_first(void) {
  * pinned clock. Per pass: 15 connections, 2 interfaces, 20 top hosts,
  * 30 devices, 10 probe clients (frame_count rising), 3 channels, one
  * DNS query from one of 5 hosts in turn, and sensor_health. That is
- * 117 series that each get a sample in every 10 s bucket. */
+ * 117 series that each get a sample in every 10 s bucket, and the 40 of
+ * the capture-scope presence split (web_scope.h): the 30 ARP devices'
+ * dev.present.local and the 10 probe clients' dev.present.monitor. 157,
+ * plus, since docs/web-visual-spec.md V1: records.rate, one series per
+ * distinct "type" the pass actually writes -- connections, iface,
+ * top_host, device, dns, probe_client, channel_summary, sensor_health,
+ * 8 of them (not 9: "iface" is one type under two names, lo and eth0) --
+ * and sensor.drops, one global series fed by every sensor_health line.
+ * 157 + 8 + 1 = 166; and since the owner's Q7 ruling of 2026-11-02,
+ * the 10 probe clients' rf.rssi.sta (each row's last_seen is its ts):
+ * 176; and since V1's records/s tile, records.total, one global series
+ * fed by every line: 177, still under 5 MB. */
 static long long g_now;
 static long long pinned(void *ctx) { (void)ctx; return g_now; }
 
-#define ACC_SERIES 117
+#define ACC_SERIES 177
 
 static size_t pass(char *b, size_t cap, long long t, int k) {
     size_t o = 0;
@@ -610,7 +635,8 @@ static web_feed_t g_feed;
 static web_live_t g_live;
 
 static void test_acceptance_one_hour(void) {
-    char dir[64] = "/tmp/slothweb-hour-XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "slothweb-hour-XXXXXX");
     WT_ASSERT(mkdtemp(dir) != NULL);
     char p[128], wal[160], shm[160], err[512];
     snprintf(p, sizeof(p), "%s/slothweb.db", dir);
@@ -808,7 +834,8 @@ static long long locked_clock(void *ctx) {
 }
 
 static void test_store_thread(void) {
-    char dir[64] = "/tmp/slothweb-thread-XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "slothweb-thread-XXXXXX");
     WT_ASSERT(mkdtemp(dir) != NULL);
     char p[128], s2[160], err[512], e2[64];
     snprintf(p, sizeof(p), "%s/t.db", dir);

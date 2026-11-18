@@ -63,6 +63,7 @@ void jsonl_emit_twin_episodes(const sloth_state_t *s);
 void jsonl_emit_ifaces        (const sloth_state_t *s);
 void jsonl_emit_sensors       (const sloth_state_t *s);
 void jsonl_emit_wifi_merged   (const sloth_state_t *s);
+void jsonl_emit_wifi_df       (const sloth_state_t *s);
 void jsonl_emit_arp           (const sloth_state_t *s);
 void jsonl_emit_dhcp_leases   (const sloth_state_t *s);
 void jsonl_emit_wifi_aps      (const sloth_state_t *s);
@@ -105,6 +106,30 @@ void jsonl_emit_mqtt_flows    (const sloth_state_t *s);
 /* #144 slice 4: BLE advertisers and the BLE findings, change-only. */
 void jsonl_emit_ble_devices   (const sloth_state_t *s);
 void jsonl_emit_ble_alerts    (const sloth_state_t *s);
+/* GNSS observation (2026-11-02): gnss_fix, gnss_sky and one gnss_sat per
+ * satellite in view, change-only on src/gps.c's banded signatures; a
+ * no-op without a --gps reader. */
+void jsonl_emit_gnss          (const sloth_state_t *s);
+/* ADS-B (#26 slice 1): one adsb_aircraft per aircraft the --adsb decoder
+ * lists, change-only on src/adsb.h's held bands, and one "gone" record
+ * per row retired this poll; a no-op without --adsb. */
+void jsonl_emit_adsb          (const sloth_state_t *s);
+/* APRS (2026-11-05): one aprs_packet per packet Dire Wolf decoded (each
+ * once, off src/aprs.c's ring), and one aprs_station per station,
+ * change-only on aprs_station_sig() plus "gone"; a no-op without
+ * --aprs. */
+void jsonl_emit_aprs          (const sloth_state_t *s);
+
+/* rtl_433 (#208): one rtl433_device per (model, id) row the --rtl433
+ * event log fed, change-only on rtl433_device_sig() plus the
+ * heartbeat; no "gone" record, because the table retires nothing by
+ * age. A no-op without --rtl433. */
+void jsonl_emit_rtl433        (const sloth_state_t *s);
+
+/* Victron (--victron): one victron_device per address row of sloth-va's
+ * file, change-only on victron_device_sig() plus the heartbeat. A no-op
+ * without --victron. */
+void jsonl_emit_victron       (const sloth_state_t *s);
 
 /* Sensor self-report (#91 slice 3). Unlike every emitter above this is a
  * SINGLETON, not one line per table row: "healthy with no detections"
@@ -123,11 +148,52 @@ void jsonl_emit_ble_alerts    (const sloth_state_t *s);
  * counters deliberately are not. */
 void jsonl_emit_sensor_health (const sloth_state_t *s);
 
+/* The operator's designated networks (src/ownership.h), JSONL 1.2.0:
+ * `ownership`, change-only on the shared snapshot cache, so written on
+ * the first tick, on any change and on the 300 s heartbeat. A consumer
+ * that connects late has it within one heartbeat. */
+void jsonl_emit_ownership(void);
+
+/* The KARMA and key-harvest evidence tables (#187, #172), JSONL 1.3.0:
+ * `karma_suspect`, `harvest_station`, `harvest_chain`, change-only per
+ * row, and a `"state":"gone"` record when a row leaves its table.
+ * jsonl_lures_reset() forgets the rows written (tests). */
+void jsonl_emit_lures(const sloth_state_t *s);
+void jsonl_lures_reset(void);
+/* Forget which aprs_packet was last written (src/jsonl_rf.c). */
+void jsonl_aprs_reset(void);
+
+/* One flat record built from a field list, for a module that shapes
+ * its own records (src/sys_status.c: sys_status, sys_sensor,
+ * source_status, receiver_hw). Strings go through the same escaping as
+ * every other record's; JSONL_F_FIXED is written with `dp` decimals and
+ * no locale. A no-op with no sink open. */
+enum { JSONL_F_STR = 0, JSONL_F_INT, JSONL_F_FIXED };
+typedef struct {
+    const char *key;
+    int         kind;      /* JSONL_F_* */
+    const char *s;
+    long long   i;
+    double      d;
+    int         dp;
+} jsonl_field_t;
+void jsonl_emit_fields(const char *type, time_t ts, const jsonl_field_t *f, int n);
+
 /* Umbrella — calls every per-view snapshot emitter. Driven once per
  * poll from main.c after the underlying tables have been refreshed.
  * Connections and twin_episode are emitted separately because they
  * predate this set; this function is purely additive. */
 void jsonl_emit_state_snapshots(sloth_state_t *s);
+
+/* sloth-rf's tick (#213, src/jsonl_rf.c): the sensor registry, the GNSS,
+ * ADS-B, APRS and rtl_433 records, the host status and its source rows,
+ * and jsonl_emit_sensor_health_rf() last. The same emitters `sloth`
+ * runs for those records, so the two daemons write them alike. */
+void jsonl_emit_state_rf(sloth_state_t *s);
+/* sloth-rf's sensor_health: the blocks a daemon with no capture writes,
+ * and "daemon":"rf". `sloth`'s is jsonl_emit_sensor_health(), with
+ * "daemon":"wifi". */
+void jsonl_emit_sensor_health_rf(const sloth_state_t *s);
 
 /* Clear the change-only emission cache (issue #42) so the next snapshot
  * re-emits a full baseline. Called on sink (re)open; exposed for tests. */

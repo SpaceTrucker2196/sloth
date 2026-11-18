@@ -20,10 +20,13 @@
  * here, at the position its dependencies need; the end is the right
  * answer when it has none. */
 #include "rules.h"
+#include "engine_internal.h"
+#include "alert_pcap.h"
+#include "evidence_export.h"
 
 #define R(fn) { #fn, fn }
 
-const alert_rule_t g_alert_rules[] = {
+static const alert_rule_t wifi_rules[] = {
     R(rule_port_scan),
     R(rule_deauth_flood),
     R(rule_nxdomain_burst),
@@ -45,6 +48,7 @@ const alert_rule_t g_alert_rules[] = {
     R(rule_evil_twin_proximity),
     R(rule_evil_twin_attack_chain),
     R(rule_karma_ap),
+    R(rule_karma_probe_forge),
     R(rule_open_setup_ap),
     R(rule_cam_setup_ssid),
     R(rule_cam_setup_oui),
@@ -74,6 +78,8 @@ const alert_rule_t g_alert_rules[] = {
     R(rule_beacon_flood),
     R(rule_auth_flood),
     R(rule_assoc_flood),
+    R(rule_pmkid_harvest),
+    R(rule_handshake_harvest),
     R(rule_btm_abuse),
     R(rule_wpa_downgrade),
     R(rule_tpc_absent_high_band),
@@ -107,9 +113,46 @@ const alert_rule_t g_alert_rules[] = {
     R(rule_country_absent),
     R(rule_dfs_masking),
     R(rule_cam_rtsp_unauth),
+    /* No GNSS rule and no ADSB_EMERGENCY since the cutover (#216, ADR
+     * 0010): those five rows are sloth-rf's alone
+     * (src/alerts/rules_table_rf.c), and they sat here, in that table's
+     * order, between rule_cam_rtsp_unauth and the sensor's own pair.
+     * This daemon still links the receiver, for the location stamp and
+     * the twin rules' motion suppression; it does not judge it. */
+    /* The sensor's own state; read only sys_status_get(), and depend on
+     * no other rule. */
+    R(rule_sensor_undervolt),
+    R(rule_sensor_source_down),
 };
 
 #undef R
 
-const int g_alert_rule_count =
-    (int)(sizeof(g_alert_rules) / sizeof(g_alert_rules[0]));
+/* What alerts_clear() drops beside the engine's own state: the history
+ * these rows keep between ticks. Order is the one the engine always
+ * called them in; none reads another's. */
+static void (*const wifi_forget[])(void) = {
+    rules_wired_forget,
+    rules_twin_forget,
+    rules_sensor_forget,
+};
+
+/* The two per-alert pcap exporters (src/alerts/rules.h says why they are
+ * the table's). */
+static const alert_exporter_t wifi_exporter = {
+    alert_pcap_enabled,
+    alert_pcap_dump,
+    evidence_export_enabled,
+    evidence_export_alert_name,
+    evidence_export_pcap_unique,
+    evidence_export_path,
+};
+
+/* The table sloth-wifi selects (src/capture_side.c), and the test
+ * binary with it. */
+const alert_rule_table_t g_alert_table_wifi = {
+    wifi_rules,
+    (int)(sizeof(wifi_rules) / sizeof(wifi_rules[0])),
+    wifi_forget,
+    (int)(sizeof(wifi_forget) / sizeof(wifi_forget[0])),
+    &wifi_exporter,
+};

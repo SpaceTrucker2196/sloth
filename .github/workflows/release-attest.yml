@@ -1,9 +1,25 @@
 name: Release attestation
 
 # Build provenance for tagged releases (#142, owner approved 2026-10-15).
-# On a v* tag: build sloth the way it ships, write SHA256SUMS, and attest
-# the binary with actions/attest-build-provenance so a downloader can run
-# `gh attestation verify ./sloth --repo SpaceTrucker2196/sloth`.
+# On a v* tag: build the two daemons the way they ship, write SHA256SUMS,
+# and attest both with actions/attest-build-provenance so a downloader
+# can run `gh attestation verify ./sloth-wifi --repo
+# SpaceTrucker2196/sloth` (and the same for ./sloth-rf).
+#
+# Since the cutover (#216) the Wi-Fi daemon is sloth-wifi and `sloth` in
+# the build tree is a symlink to it, so the subjects are the two regular
+# files by their own names: a checksum line or an attestation under the
+# alias would name a file nobody installs, and sloth-rf, the only binary
+# with the SDR decoders, had neither.
+#
+# The contract artifact (#185 item 4, docs/wiki/contract.md): `make
+# contract` builds dist/sloth-contract-<version>.tar, reproducibly, and
+# its checksum file; the tar is attested with the binaries and both are
+# attached to the tag's GitHub release (owner ruling on #184 §5 item 4:
+# the artifact lives on sloth's releases). A release that does not exist
+# yet is created as a draft, so the owner's notes and the publish step
+# (which mirror-release.yml follows) stay the owner's. That upload is why
+# this job's token may write contents.
 #
 # What this does NOT do: sign the tag. Tag signing needs the owner's key,
 # which CI does not hold; it stays the manual `git tag -s` step in
@@ -20,7 +36,7 @@ jobs:
   attest:
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      contents: write       # attach the contract artifact to the release
       id-token: write       # OIDC token for the Sigstore-backed attestation
       attestations: write
     steps:
@@ -29,11 +45,41 @@ jobs:
           persist-credentials: false
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
+      # The tar is named from SLOTH_VERSION and uploaded to the tag's
+      # release: a tag pushed without the version bump would otherwise
+      # carry the previous version's contract and nothing would fail.
+      - name: Tag matches SLOTH_VERSION
+        run: |
+          v=$(sed -n 's/^#define SLOTH_VERSION "\(.*\)"$/\1/p' include/sloth.h)
+          [ "v$v" = "$GITHUB_REF_NAME" ] ||
+            { echo "tag $GITHUB_REF_NAME is not v$v (include/sloth.h SLOTH_VERSION)" >&2; exit 1; }
+      # Contract first, then Build: `make contract` builds sloth-wifi with
+      # the tree's plain flags, and the -Werror Build after it relinks
+      # both daemons, so the binaries checksummed and attested below are
+      # the Build step's. The tar in dist/ is not touched by Build, and
+      # its library has fixed flags (CONTRACT_CFLAGS), so it is the bytes
+      # a local plain `make contract` of the tag gives.
+      - name: Contract artifact
+        run: make contract && cat dist/sloth-contract-*.SHA256SUMS
       - name: Build
         run: make EXTRA_CFLAGS=-Werror
       - name: SHA256SUMS
-        run: sha256sum sloth > SHA256SUMS && cat SHA256SUMS
+        run: sha256sum sloth-wifi sloth-rf > SHA256SUMS && cat SHA256SUMS
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
-          subject-path: sloth
+          subject-path: |
+            sloth-wifi
+            sloth-rf
+            dist/sloth-contract-*.tar
+      - name: Attach the contract artifact to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft \
+              --title "sloth $GITHUB_REF_NAME" \
+              --notes "Draft created by release-attest.yml to carry the contract artifact; notes to follow."
+          gh release upload "$GITHUB_REF_NAME" --clobber \
+            dist/sloth-contract-*.tar dist/sloth-contract-*.SHA256SUMS

@@ -24,7 +24,11 @@
 
 #include "sha256.h"
 
-#define PAGE_MAX (1024 * 1024)
+/* The working buffer for one file and for the page with everything
+ * inlined: a bound on the generator, not on what slothweb serves (the
+ * page is a static array). 1 MB until 2026-11-12, when the views of the
+ * other sloth hosts' rows took the inlined page past it (1.04 MB). */
+#define PAGE_MAX (2 * 1024 * 1024)
 
 static char *slurp(const char *dir, const char *name, size_t *len) {
     char path[4096];
@@ -171,7 +175,7 @@ int main(int argc, char **argv) {
     fprintf(o, "\\\"\";\n");
     fprintf(o, "const char web_page_csp[] =\n"
                "    \"default-src 'none'; script-src 'sha256-%s'; \"\n"
-               "    \"style-src 'sha256-%s'; connect-src 'self'; \"\n"
+               "    \"style-src 'sha256-%s'; img-src data:; connect-src 'self'; \"\n"
                "    \"base-uri 'none'; form-action 'none'; frame-ancestors 'none'\";\n",
             script_h, style_h);
     if (fclose(o) != 0) return 1;

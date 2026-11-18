@@ -206,6 +206,13 @@ session against one steer from its start.
 Request without B2 set cannot force anything, and a load-balancing
 controller emits exactly those all day.
 
+**Not from the candidate's own device** (#188). An AP band-steering a
+client to its other radio sends exactly this frame, and a field gateway
+went CRIT for moving clients between its own `:e6` and `:e7`. A steer
+whose steering BSSID is within two bytes of the candidate it names is
+skipped: no marker, no escalation. A steer at the same candidate from
+any other address still counts.
+
 ## What #76 proposed that was already built
 
 Worth recording, because the issue was filed from a stale grep and the

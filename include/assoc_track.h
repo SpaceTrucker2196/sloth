@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "sloth.h"
 #include "dot11_frame.h"
+#include "wifi_freq.h"
 
 /* Client↔AP association tracker.
  *
@@ -20,9 +21,12 @@
  * we only record successful associations, so the view answers
  * "who is on this WiFi network right now?" reliably. */
 
+/* `band` is the radio's band for the frame (WIFI_BAND_UNKNOWN when
+ * the caller has no radiotap frequency); it feeds the distance
+ * estimate only, which on 6 GHz cannot be read from `channel`. */
 void assoc_observe(const uint8_t bssid[6], const uint8_t sta[6],
                     const char *ssid, int source,
-                    int8_t signal, int channel);
+                    int8_t signal, int channel, wifi_band_t band);
 
 /* Disassoc / deauth fired by either side — drop the entry if present. */
 void assoc_forget(const uint8_t bssid[6], const uint8_t sta[6]);

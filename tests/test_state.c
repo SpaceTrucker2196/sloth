@@ -45,6 +45,8 @@ void test_view_tab_cycles_forward(void) {
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_RESEARCH);
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_FRAGATTACK);
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_BLE);
+    v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_GNSS);
+    /* VIEW_ADSB stood here, last, until the cutover (#216). */
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_IFACE);   /* wraps */
 }
 
@@ -66,6 +68,14 @@ void test_view_for_key_selects(void) {
     /* #144 slice 4: the first punctuation view key, because every letter
      * and digit was taken. Pinned so a later row cannot quietly take it. */
     ASSERT_EQ(view_for_key('*'), VIEW_BLE);
+    ASSERT_EQ(view_for_key('#'), VIEW_GNSS);
+    /* '^' selected the ADS-B view (#186) until the cutover (#216):
+     * the aircraft table is sloth-rf's and is read in slothweb, so the
+     * key selects nothing here. Seen red with the X(ADSB, ...) row put
+     * back in include/sloth_views.def. */
+    ASSERT_EQ(view_for_key('^'), -1);
+    ASSERT_EQ((int)VIEW_COUNT, 37);
+    ASSERT_EQ((int)VIEW_GNSS, (int)VIEW_COUNT - 1);
     /* Not view keys: the handler's own globals, the Tab cycle, the
      * arrow codes views navigate with, and the NUL tui_poll_key()
      * returns for "no key". */
@@ -870,6 +880,16 @@ void test_view_claims_dashboard_tab(void) {
     ASSERT_EQ(view_claims_key(VIEW_DASH, 's'), 0);
 }
 
+/* The EAPOL view's [g] groups one harvest cluster (#172); without the
+ * claim the global Devices switch would take the key. Seen red with
+ * the VIEW_EAPOL case removed from view_claims_key(), then restored. */
+void test_view_claims_eapol_group_key(void) {
+    ASSERT(view_claims_key(VIEW_EAPOL, 'g'));
+    ASSERT(view_claims_key(VIEW_EAPOL, 'G'));
+    ASSERT_EQ(view_claims_key(VIEW_EAPOL, 'd'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_DEVICES, 'g'), 0);
+}
+
 void test_view_claims_no_claim_defaults(void) {
     /* A view without an entry in the table doesn't claim anything —
      * the global switch still owns every letter for it. */
@@ -903,6 +923,7 @@ void run_state_tests(void) {
     RUN_TEST(test_view_claims_packets_local_keys);
     RUN_TEST(test_view_claims_stats_reset_key);
     RUN_TEST(test_view_claims_dashboard_tab);
+    RUN_TEST(test_view_claims_eapol_group_key);
     RUN_TEST(test_view_claims_no_claim_defaults);
     RUN_TEST(test_view_claims_non_shadow_keys_unclaimed);
 

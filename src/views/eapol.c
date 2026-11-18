@@ -5,12 +5,52 @@
 #include "sloth_clock.h"
 #include "tui.h"
 #include "eapol_log.h"
+#include "harvest_track.h"
 #include "views/eapol.h"
 
 /* VIEW_EAPOL — surfaces captured EAPOL-Key frames and the
  * 4-way handshake state machine. Each row is one frame; rows with
  * has_pmkid=1 or handshake_complete=1 are the SIGINT prizes (offline
- * crackable). The view is newest-first. */
+ * crackable). The view is newest-first.
+ *
+ * The `clust` column is the harvest tracker's cluster the frame was
+ * counted in (#172, eapol_event_t.harvest_cluster_id), heat-coloured
+ * while that cluster is a finding: a station row with an M1 left
+ * unanswered, or a deauth-then-reconnect chain. [g] on a row with a
+ * cluster shows that cluster's rows alone under a one-line summary;
+ * [g] again shows every row. The group is view-local display state, so
+ * it lives here and not in sloth_state_t. */
+
+static uint32_t g_group;     /* 0 = every row */
+
+uint32_t view_eapol_group(void) { return g_group; }
+void     view_eapol_group_reset(void) { g_group = 0; }
+
+/* Is cluster `id` a finding in this poll's harvest tables? */
+static int cluster_is_finding(const sloth_state_t *s, uint32_t id) {
+    const harvest_sta_t *h = harvest_find_sta_cluster(s, id);
+    if (h && h->unanswered > 0) return 1;
+    return harvest_find_chain_cluster(s, id) != NULL;
+}
+
+static int row_shown(const eapol_event_t *e) {
+    return g_group == 0 || e->harvest_cluster_id == g_group;
+}
+
+static uint32_t beacon_akm(const sloth_state_t *s, const uint8_t bssid[6]) {
+    for (int i = 0; i < s->beacon_count; i++)
+        if (memcmp(s->beacon_aps[i].bssid, bssid, 6) == 0)
+            return s->beacon_aps[i].akm_bits;
+    return 0;
+}
+
+static void fmt_span(long secs, char *buf, int sz) {
+    if (secs < 0) secs = 0;
+    if      (secs <   60) snprintf(buf, sz, "%lds", secs);
+    else if (secs < 3600) snprintf(buf, sz, "%ldm%02lds", secs / 60, secs % 60);
+    else                  snprintf(buf, sz, "%ldh%02ldm", secs / 3600,
+                                   (secs % 3600) / 60);
+}
 
 static void fmt_mac(const uint8_t *m, char *buf, int sz) {
     snprintf(buf, sz, "%02x:%02x:%02x:%02x:%02x:%02x",
@@ -41,7 +81,7 @@ void view_eapol_draw(const sloth_state_t *s) {
     tui_dim();    TPRINT(" / ");
     if (hs_complete > 0) { tui_heat(1.0); TPRINT("%d full handshake", hs_complete); }
     else                 { tui_dim();      TPRINT("0 full handshake"); }
-    tui_dim();    TPRINT(")  [up/dn] navigate  [c] clear\n");
+    tui_dim();    TPRINT(")  [up/dn] navigate  [g] group cluster  [c] clear\n");
     if (s->eapol_export_failures > 0) {
         tui_heat(1.0);
         TPRINT(" --eapol-dir export failing (%d): %s\n",
@@ -49,12 +89,95 @@ void view_eapol_draw(const sloth_state_t *s) {
         tui_normal();
     }
 
+    /* The selected frame's AP posture (#172): an AP heard handing the
+     * PMKID KDE to a station in M1 hands it to a harvester too. */
+    if (s->eapol_count > 0 && s->eapol_sel >= 0 &&
+        s->eapol_sel < s->eapol_count) {
+        const eapol_event_t *e = &s->eapol_events[s->eapol_sel];
+        int hp = harvest_posture_psk(e->bssid, beacon_akm(s, e->bssid));
+        if (hp >= 0) {
+            char b[20];
+            fmt_mac(e->bssid, b, sizeof(b));
+            if (hp == 1) {
+                tui_heat(0.7);
+                TPRINT(" AP %s: harvest-friendly - sends the PMKID KDE in "
+                       "M1 to any station that associates, PSK AKM\n", b);
+            } else {
+                tui_dim();
+                TPRINT(" AP %s: sends the PMKID KDE in M1; no PSK AKM on "
+                       "its beacon, so not a passphrase target\n", b);
+            }
+            tui_normal();
+        }
+    }
+
+    /* [g]: the cluster's one-line summary, from its rows in the ring. */
+    if (g_group) {
+        uint8_t stas[MAX_EAPOL_EVENTS][6], bss[MAX_EAPOL_EVENTS][6];
+        int n_sta = 0, n_bss = 0, pmk = 0, rows = 0;
+        time_t t0 = 0, t1 = 0;
+        for (int i = 0; i < s->eapol_count; i++) {
+            const eapol_event_t *e = &s->eapol_events[i];
+            if (e->harvest_cluster_id != g_group) continue;
+            rows++;
+            if (e->has_pmkid && e->msg_num == 1) pmk++;
+            if (!t0 || e->ts < t0) t0 = e->ts;
+            if (e->ts > t1) t1 = e->ts;
+            int k;
+            for (k = 0; k < n_sta; k++)
+                if (!memcmp(stas[k], e->sta_mac, 6)) break;
+            if (k == n_sta) memcpy(stas[n_sta++], e->sta_mac, 6);
+            for (k = 0; k < n_bss; k++)
+                if (!memcmp(bss[k], e->bssid, 6)) break;
+            if (k == n_bss) memcpy(bss[n_bss++], e->bssid, 6);
+        }
+        tui_bright();
+        TPRINT(" cluster #%u", (unsigned)g_group);
+        tui_normal();
+        if (rows == 0) {
+            TPRINT(": no rows left in the ring  [g] all rows\n");
+        } else {
+            char who[20], span[48];
+            fmt_span((long)(t1 - t0), span, sizeof(span));
+            if (n_sta == 1) {
+                fmt_mac(stas[0], who, sizeof(who));
+                TPRINT(": STA %s, %d BSSID%s", who, n_bss,
+                       n_bss == 1 ? "" : "s");
+            } else {
+                fmt_mac(bss[0], who, sizeof(who));
+                TPRINT(": %d stations, %d BSSID%s%s%s", n_sta, n_bss,
+                       n_bss == 1 ? "" : "s", n_bss == 1 ? " " : "",
+                       n_bss == 1 ? who : "");
+            }
+            TPRINT(", %d PMKID, %s, %d rows", pmk, span, rows);
+            const harvest_sta_t   *h = harvest_find_sta_cluster(s, g_group);
+            const harvest_chain_t *c = harvest_find_chain_cluster(s, g_group);
+            if (h && h->unanswered > 0) {
+                tui_heat(1.0);
+                TPRINT(" - %d of %d M1s unanswered", h->unanswered,
+                       h->m1_bssids);
+            } else if (c) {
+                tui_heat(1.0);
+                TPRINT(" - %d victims after %d deauths", c->victims,
+                       c->deauth_frames);
+            }
+            if ((h && h->qevict > 0) || (c && c->qevict > 0)) {
+                tui_heat(1.0);
+                TPRINT(" - QUEUE_EVICT on the same pair");
+            }
+            tui_dim();
+            TPRINT("  [g] all rows\n");
+        }
+        tui_normal();
+    }
+
     tui_dim();
-    TPRINT(" %-8s  %-3s  %-17s  %-20s  %-17s  %3s  %4s  %s\n",
-           "age", "msg", "BSSID", "SSID", "STA", "ch", "sig", "notes");
-    TPRINT(" %-8s  %-3s  %-17s  %-20s  %-17s  %3s  %4s  %s\n",
+    TPRINT(" %-8s  %-3s  %-17s  %-20s  %-17s  %3s  %4s  %-6s  %s\n",
+           "age", "msg", "BSSID", "SSID", "STA", "ch", "sig", "clust", "notes");
+    TPRINT(" %-8s  %-3s  %-17s  %-20s  %-17s  %3s  %4s  %-6s  %s\n",
            "--------", "---", "-----------------", "--------------------",
-           "-----------------", "---", "----", "----------------------");
+           "-----------------", "---", "----", "------",
+           "----------------------");
     tui_normal();
 
     if (s->eapol_count == 0) {
@@ -80,6 +203,7 @@ void view_eapol_draw(const sloth_state_t *s) {
 
     for (int i = 0; i < s->eapol_count; i++) {
         const eapol_event_t *e = &s->eapol_events[i];
+        if (!row_shown(e)) continue;
         char bssid_buf[20], sta_buf[20], age_buf[8];
         fmt_mac(e->bssid,   bssid_buf, sizeof(bssid_buf));
         fmt_mac(e->sta_mac, sta_buf,   sizeof(sta_buf));
@@ -116,6 +240,15 @@ void view_eapol_draw(const sloth_state_t *s) {
         else                   tui_normal();
         TPRINT("  %-17s", sta_buf);
         tui_dim();    TPRINT("  %3d  %4d  ", e->channel, e->signal_dbm);
+        if (e->harvest_cluster_id) {
+            char cl[12];
+            snprintf(cl, sizeof(cl), "#%u", (unsigned)e->harvest_cluster_id);
+            if (cluster_is_finding(s, e->harvest_cluster_id)) tui_heat(1.0);
+            TPRINT("%-6s  ", cl);
+            tui_dim();
+        } else {
+            TPRINT("%-6s  ", "-");
+        }
 
         if (e->has_pmkid && e->handshake_complete) {
             tui_heat(1.0); TPRINT("PMKID + full handshake");
@@ -141,16 +274,27 @@ void view_eapol_draw(const sloth_state_t *s) {
 void view_eapol_key(sloth_state_t *s, int key) {
     switch (key) {
     case SLOTH_KEY_UP:
-        if (s->eapol_sel > 0) s->eapol_sel--;
+        /* Grouped, the cursor moves between the cluster's rows only. */
+        for (int i = s->eapol_sel - 1; i >= 0; i--)
+            if (row_shown(&s->eapol_events[i])) { s->eapol_sel = i; break; }
         break;
     case SLOTH_KEY_DOWN:
-        if (s->eapol_count > 0 && s->eapol_sel < s->eapol_count - 1)
-            s->eapol_sel++;
+        for (int i = s->eapol_sel + 1; i < s->eapol_count; i++)
+            if (row_shown(&s->eapol_events[i])) { s->eapol_sel = i; break; }
+        break;
+    case 'g': case 'G':
+        if (g_group) {
+            g_group = 0;
+        } else if (s->eapol_sel >= 0 && s->eapol_sel < s->eapol_count) {
+            /* A row the tracker counted nowhere has no cluster to show. */
+            g_group = s->eapol_events[s->eapol_sel].harvest_cluster_id;
+        }
         break;
     case 'c': case 'C':
         eapol_clear();
         s->eapol_count = 0;
         s->eapol_sel   = 0;
+        g_group        = 0;
         break;
     default:
         break;

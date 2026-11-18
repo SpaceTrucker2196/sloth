@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
+#include "attack_hw.h"
 #include "runner.h"
 #include "tui.h"
 #include "jsonl.h"
@@ -16,6 +17,7 @@
 #include "wifi_assess.h"
 #include "sloth.h"
 #include "alerts.h"
+#include "http_log.h"
 #include "sensor_health.h"
 #include "views/alerts.h"
 #include "beacon_snoop.h"
@@ -35,7 +37,9 @@
 #include "ctrl_frames.h"
 #include "tune.h"
 #include "dns_log.h"
+#include "http_log.h"
 #include "threat_intel.h"
+#include "tmp_dir.h"
 
 /* Helpers — build state with the exact preconditions a rule needs. */
 
@@ -629,8 +633,8 @@ static void add_beacon(sloth_state_t *s, const char *ssid,
 static void test_evil_twin_open_plus_wpa2_fires(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x01};
-    uint8_t b[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x02};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0xdd,0xee,0x01};
+    uint8_t b[6] = {0xa8,0xbb,0xcc,0xdd,0xee,0x02};
     add_beacon(&s, "Cafe-Free", a, "OPEN");
     add_beacon(&s, "Cafe-Free", b, "WPA2");
     alerts_update(&s);
@@ -644,8 +648,8 @@ static void test_evil_twin_two_wpa2_no_fire(void) {
      * security across BSSIDs. No alert. */
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x01};
-    uint8_t b[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x02};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0xdd,0xee,0x01};
+    uint8_t b[6] = {0xa8,0xbb,0xcc,0xdd,0xee,0x02};
     add_beacon(&s, "Office", a, "WPA2");
     add_beacon(&s, "Office", b, "WPA2");
     alerts_update(&s);
@@ -657,8 +661,8 @@ static void test_evil_twin_two_open_no_fire(void) {
      * mismatch against. No alert. */
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x01};
-    uint8_t b[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x02};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0xdd,0xee,0x01};
+    uint8_t b[6] = {0xa8,0xbb,0xcc,0xdd,0xee,0x02};
     add_beacon(&s, "Airport-Free", a, "OPEN");
     add_beacon(&s, "Airport-Free", b, "OPEN");
     alerts_update(&s);
@@ -670,8 +674,8 @@ static void test_evil_twin_different_ssids_no_fire(void) {
      * twin. */
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x01};
-    uint8_t b[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x02};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0xdd,0xee,0x01};
+    uint8_t b[6] = {0xa8,0xbb,0xcc,0xdd,0xee,0x02};
     add_beacon(&s, "Open-Net", a, "OPEN");
     add_beacon(&s, "Locked",   b, "WPA2");
     alerts_update(&s);
@@ -687,7 +691,7 @@ static void test_evil_twin_detail_contains_bssids_and_ssid(void) {
     /* Distinctive byte patterns so a wrong index would render a
      * visibly-different string. */
     uint8_t a[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
-    uint8_t b[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0xff};
+    uint8_t b[6] = {0xa8,0xbb,0xcc,0xdd,0xee,0xff};
     add_beacon(&s, "TwinNet", a, "OPEN");
     add_beacon(&s, "TwinNet", b, "WPA2");
     alerts_update(&s);
@@ -696,12 +700,12 @@ static void test_evil_twin_detail_contains_bssids_and_ssid(void) {
     const char *d = s.alerts[idx].detail;
     ASSERT(strstr(d, "TwinNet")           != NULL);
     ASSERT(strstr(d, "11:22:33:44:55:66") != NULL);
-    ASSERT(strstr(d, "aa:bb:cc:dd:ee:ff") != NULL);
+    ASSERT(strstr(d, "a8:bb:cc:dd:ee:ff") != NULL);
     /* Dedup key is the canonical pair key (#89) — rule id, ordered
      * BSSID pair, site, security profile. Stable across the (a,b) /
      * (b,a) iteration ordering. */
     ASSERT(strstr(s.alerts[idx].key, "twin:11:22:33:44:55:66:"
-                                     "aa:bb:cc:dd:ee:ff::") != NULL);
+                                     "a8:bb:cc:dd:ee:ff::") != NULL);
 }
 
 /* Same SSID + same cipher + DIFFERENT vendor OUI — fires the new
@@ -711,7 +715,7 @@ static void test_evil_twin_detail_contains_bssids_and_ssid(void) {
 static void test_evil_twin_same_cipher_diff_oui_fires_warn(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};  /* OUI = aa:bb:cc */
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};  /* OUI = a8:bb:cc */
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};  /* OUI = 11:22:33 */
     add_beacon(&s, "Cafe-Net", a, "WPA2");
     add_beacon(&s, "Cafe-Net", b, "WPA2");
@@ -720,9 +724,9 @@ static void test_evil_twin_same_cipher_diff_oui_fires_warn(void) {
     ASSERT(idx >= 0);
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
     ASSERT(strstr(s.alerts[idx].key, "twin-fp:11:22:33:44:55:66:"
-                                     "aa:bb:cc:01:02:03::WPA2/WPA2") != NULL);
+                                     "a8:bb:cc:01:02:03::WPA2/WPA2") != NULL);
     ASSERT(strstr(s.alerts[idx].detail, "Cafe-Net") != NULL);
-    ASSERT(strstr(s.alerts[idx].detail, "aa:bb:cc:01:02:03") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "a8:bb:cc:01:02:03") != NULL);
     ASSERT(strstr(s.alerts[idx].detail, "11:22:33:44:55:66") != NULL);
 }
 
@@ -762,7 +766,7 @@ static void add_neighbor(sloth_state_t *s, const uint8_t ap_bssid[6],
 static void test_evil_twin_mutual_neighbors_demote_not_erase(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t router[6]   = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t router[6]   = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t extender[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "CorpWiFi", router,   "WPA2");
     add_beacon(&s, "CorpWiFi", extender, "WPA2");
@@ -798,7 +802,7 @@ static void test_evil_twin_mutual_neighbors_demote_not_erase(void) {
 static void test_evil_twin_one_way_neighbor_does_not_erase(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t router[6]   = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t router[6]   = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t extender[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "CorpWiFi", router,   "WPA2");
     add_beacon(&s, "CorpWiFi", extender, "WPA2");
@@ -823,7 +827,7 @@ static void test_evil_twin_one_way_neighbor_does_not_erase(void) {
 static void test_evil_twin_spoofed_neighbor_cannot_demote_hard_signal(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t real[6]  = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t real[6]  = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t rogue[6] = {0x00,0x13,0x37,0x44,0x55,0x66};   /* Hak5 OUI */
     add_beacon(&s, "CorpWiFi", real,  "WPA2");
     add_beacon(&s, "CorpWiFi", rogue, "WPA2");
@@ -844,7 +848,7 @@ static void test_evil_twin_spoofed_neighbor_cannot_demote_hard_signal(void) {
 static void test_evil_twin_unrelated_neighbors_still_fires(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t router[6]   = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t router[6]   = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t rogue[6]    = {0x11,0x22,0x33,0x44,0x55,0x66};
     uint8_t elsewhere[6]= {0x99,0x88,0x77,0x66,0x55,0x44};
     add_beacon(&s, "CorpWiFi", router, "WPA2");
@@ -856,7 +860,7 @@ static void test_evil_twin_unrelated_neighbors_still_fires(void) {
     int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
     ASSERT(idx >= 0);
     ASSERT(strstr(s.alerts[idx].key, "twin-fp:11:22:33:44:55:66:"
-                                     "aa:bb:cc:01:02:03::WPA2/WPA2") != NULL);
+                                     "a8:bb:cc:01:02:03::WPA2/WPA2") != NULL);
 }
 
 /* No 802.11k at all — the budget-extender case. Missing neighbour info
@@ -865,7 +869,7 @@ static void test_evil_twin_unrelated_neighbors_still_fires(void) {
 static void test_evil_twin_no_neighbor_reports_still_fires(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "CorpWiFi", a, "WPA2");
     add_beacon(&s, "CorpWiFi", b, "WPA2");
@@ -883,7 +887,7 @@ static void test_evil_twin_no_neighbor_reports_still_fires(void) {
 static void test_evil_twin_neighbors_do_not_excuse_open_clone(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t strong[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t strong[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t open_ap[6]= {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "CorpWiFi", open_ap, "OPEN");
     add_beacon(&s, "CorpWiFi", strong,  "WPA2");
@@ -952,9 +956,9 @@ static const char *INV_CORP =
     "{\"version\":\"2026-09-25.1\",\"site\":\"hq-3f\","
     "\"networks\":[{\"ssid\":\"CorpWiFi\","
     "\"security_profile\":\"wpa2-enterprise\","
-    "\"bssids\":[\"aa:bb:cc:00:11:22\",\"11:22:33:44:55:66\"]}]}";
+    "\"bssids\":[\"a8:bb:cc:00:11:22\",\"11:22:33:44:55:66\"]}]}";
 
-static char inv_tmp[] = "/tmp/sloth_alert_inv_XXXXXX";
+static char inv_tmp[TEST_TMP_MAX];
 static int  inv_tmp_made;
 
 /* Load `body` as the active inventory. Returns 1 on success. */
@@ -962,7 +966,7 @@ static int use_inventory(const char *body) {
     inventory_clear();
     ownership_clear();
     if (!inv_tmp_made) {
-        int fd = mkstemp(inv_tmp);
+        int fd = mkstemp(test_tmp_tpl(inv_tmp, sizeof(inv_tmp), "sloth_alert_inv_XXXXXX"));
         if (fd >= 0) close(fd);
         inv_tmp_made = 1;
     }
@@ -985,8 +989,8 @@ static void no_inventory(void) {
  * not one of mine", and it is a hard signal because a human asserted
  * it out-of-band rather than an AP beaconing it. */
 static void test_inventory_same_oui_clone_fires(void) {
-    uint8_t real[6]  = {0xaa,0xbb,0xcc,0x00,0x11,0x22};   /* in the file */
-    uint8_t clone[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x77};   /* same OUI, not */
+    uint8_t real[6]  = {0xa8,0xbb,0xcc,0x00,0x11,0x22};   /* in the file */
+    uint8_t clone[6] = {0xa8,0xbb,0xcc,0x00,0x11,0x77};   /* same OUI, not */
 
     /* Without an inventory: silent, exactly as slice 1 left it. */
     no_inventory();
@@ -1016,8 +1020,8 @@ static void test_inventory_same_oui_clone_fires(void) {
  * hard signal, so the unauthenticated claim cannot demote it — it only
  * costs confidence, which is what a claim is actually worth. */
 static void test_inventory_mismatch_survives_spoofed_neighbour(void) {
-    uint8_t real[6]  = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
-    uint8_t clone[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x77};
+    uint8_t real[6]  = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t clone[6] = {0xa8,0xbb,0xcc,0x00,0x11,0x77};
 
     ASSERT_EQ(use_inventory(INV_CORP), 1);
     alerts_clear();
@@ -1043,7 +1047,7 @@ static void test_inventory_mismatch_survives_spoofed_neighbour(void) {
  * CRIT on their own — the operator's own statement is what withdraws
  * them, and nothing observed over the air can do the same. */
 static void test_inventory_approved_mixed_vendor_is_silent(void) {
-    uint8_t ruckus[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t ruckus[6] = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
     uint8_t aruba[6]  = {0x11,0x22,0x33,0x44,0x55,0x66};
 
     /* Without an inventory this pair is a CRIT — slice 1, unchanged. */
@@ -1077,7 +1081,7 @@ static void test_inventory_approved_mixed_vendor_is_silent(void) {
  * spot, so a network the operator never declared keeps its slice-1
  * heuristics exactly. */
 static void test_inventory_silence_about_an_ssid_is_not_approval(void) {
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
 
     ASSERT_EQ(use_inventory(INV_CORP), 1);   /* declares CorpWiFi only */
@@ -1102,7 +1106,7 @@ static void test_no_inventory_keeps_slice1_behaviour(void) {
     no_inventory();
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "CorpWiFi", a, "WPA2");
     add_beacon(&s, "CorpWiFi", b, "WPA2");
@@ -1116,7 +1120,7 @@ static void test_no_inventory_keeps_slice1_behaviour(void) {
     /* The pair key still carries an empty site — the shape does not
      * change when the field is unset. */
     ASSERT(strstr(s.alerts[idx].key, "twin-fp:11:22:33:44:55:66:"
-                                     "aa:bb:cc:01:02:03::WPA2/WPA2") != NULL);
+                                     "a8:bb:cc:01:02:03::WPA2/WPA2") != NULL);
     /* The weak/strong branch is unchanged too. */
     alerts_clear();
     sloth_state_t t; seed_state(&t);
@@ -1134,10 +1138,10 @@ static void test_no_inventory_keeps_slice1_behaviour(void) {
  * `version` is a label that two different files may both claim. Only
  * alerts that actually consulted the inventory carry it. */
 static void test_inventory_hash_stamped_on_consulting_alerts(void) {
-    uint8_t real[6]  = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
-    uint8_t clone[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x77};
+    uint8_t real[6]  = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t clone[6] = {0xa8,0xbb,0xcc,0x00,0x11,0x77};
     uint8_t other_a[6] = {0x99,0x88,0x77,0x01,0x02,0x03};
-    uint8_t other_b[6] = {0x66,0x55,0x44,0x01,0x02,0x03};
+    uint8_t other_b[6] = {0x64,0x55,0x44,0x01,0x02,0x03};
 
     ASSERT_EQ(use_inventory(INV_CORP), 1);
     /* The field is exactly the hash buffer's width — the test that
@@ -1178,7 +1182,7 @@ static void test_inventory_hash_stamped_on_consulting_alerts(void) {
      * would claim the inventory backed findings it never touched. */
     alerts_clear();
     sloth_state_t t; seed_state(&t);
-    seed_arp(&t, "10.0.0.1", 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01);
+    seed_arp(&t, "10.0.0.1", 0xa8, 0xbb, 0xcc, 0xdd, 0xee, 0x01);
     alerts_update(&t);
     t.arp_count = 0;                 /* second poll, same IP, new MAC */
     /* Unicast on purpose — rule_arp_spoof skips an entry whose first
@@ -1196,7 +1200,7 @@ static void test_inventory_hash_stamped_on_consulting_alerts(void) {
  * configuration, that key is stable for as long as the sensor sits
  * where the operator said it does. */
 static void test_site_lands_in_the_pair_key(void) {
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
 
     /* From the file. */
@@ -1209,7 +1213,7 @@ static void test_site_lands_in_the_pair_key(void) {
     int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
     ASSERT(idx >= 0);
     ASSERT(strstr(s.alerts[idx].key, "twin-fp:11:22:33:44:55:66:"
-                                     "aa:bb:cc:01:02:03:hq-3f:WPA2/WPA2")
+                                     "a8:bb:cc:01:02:03:hq-3f:WPA2/WPA2")
            != NULL);
 
     /* ...and --site wins over it. */
@@ -1222,7 +1226,7 @@ static void test_site_lands_in_the_pair_key(void) {
     int jdx = find_alert(&t, ALERT_TYPE_EVIL_TWIN);
     ASSERT(jdx >= 0);
     ASSERT(strstr(t.alerts[jdx].key, "twin-fp:11:22:33:44:55:66:"
-                                     "aa:bb:cc:01:02:03:dc-1:WPA2/WPA2")
+                                     "a8:bb:cc:01:02:03:dc-1:WPA2/WPA2")
            != NULL);
     no_inventory();
 }
@@ -1234,7 +1238,7 @@ static void test_site_lands_in_the_pair_key(void) {
  * inventory answers "whose radio is that", never "is that
  * configuration safe". */
 static void test_inventory_approved_weak_pair_demotes_not_silences(void) {
-    uint8_t strong[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t strong[6] = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
     uint8_t open_ap[6]= {0x11,0x22,0x33,0x44,0x55,0x66};
 
     ASSERT_EQ(use_inventory(INV_CORP), 1);   /* lists both */
@@ -1265,7 +1269,7 @@ static void test_inventory_approved_weak_pair_demotes_not_silences(void) {
  * set, so designating a radio the file has not caught up with silences
  * the pair instead of adding a second way to accuse it. */
 static void test_my_bssid_flag_unions_into_the_anchor(void) {
-    uint8_t declared[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t declared[6] = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
     uint8_t new_ap[6]   = {0x99,0x88,0x77,0x66,0x55,0x44};
 
     ASSERT_EQ(use_inventory(INV_CORP), 1);
@@ -1301,7 +1305,7 @@ static void test_my_bssid_flag_unions_into_the_anchor(void) {
  * because the reader who sees "impostor" with no attachment field will
  * fill the gap themselves — usually with "rogue on our LAN". */
 static void test_twin_alert_carries_class_and_unknown_wired(void) {
-    uint8_t declared[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t declared[6] = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
     uint8_t rogue[6]    = {0x99,0x88,0x77,0x66,0x55,0x44};
 
     wired_attach_clear();
@@ -1330,7 +1334,7 @@ static void test_twin_alert_carries_class_and_unknown_wired(void) {
  * class is UNKNOWN rather than a label guessed from RF. Nothing an
  * operator already sees may disappear behind a new classification. */
 static void test_twin_alert_without_inventory_is_unchanged(void) {
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
     uint8_t b[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
 
     wired_attach_clear();
@@ -1357,7 +1361,7 @@ static void test_twin_alert_without_inventory_is_unchanged(void) {
  * is the answer to the *noise* half of this issue — and it is a label,
  * not a mute. The alert still fires at the same severity. */
 static void test_twin_alert_outside_estate_is_neighbor_not_silenced(void) {
-    uint8_t a[6] = {0x02,0x22,0x33,0x44,0x55,0x66};
+    uint8_t a[6] = {0x00,0x22,0x33,0x44,0x55,0x66};
     uint8_t b[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
 
     wired_attach_clear();
@@ -1381,7 +1385,7 @@ static void test_twin_alert_outside_estate_is_neighbor_not_silenced(void) {
  * impersonation. It is still reported (slice 2's demote-don't-silence),
  * now with the class saying why it was demoted. */
 static void test_weak_strong_approved_pair_is_declared_class(void) {
-    uint8_t strong[6]  = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t strong[6]  = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
     uint8_t open_ap[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
 
     wired_attach_clear();
@@ -1426,7 +1430,7 @@ static void test_weak_strong_approved_pair_is_declared_class(void) {
  * all unchanged — only the categorical label is withheld, which is the
  * direction this issue asks the detector to err in. */
 static void test_weak_strong_without_inventory_class_stays_unknown(void) {
-    uint8_t strong[6]  = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t strong[6]  = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
     uint8_t open_ap[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
 
     wired_attach_clear();
@@ -1457,7 +1461,7 @@ static wired_attach_t alert_wire_says_attached(const uint8_t bssid[6],
  * end to end — and the only route by which `wired=yes` can ever
  * appear. */
 static void test_twin_alert_correlator_supplies_wired_state(void) {
-    uint8_t declared[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t declared[6] = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
     uint8_t rogue[6]    = {0x99,0x88,0x77,0x66,0x55,0x44};
 
     wired_attach_clear();
@@ -1490,7 +1494,7 @@ static void test_non_pair_rules_carry_no_pair_axes(void) {
     no_inventory();
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    seed_arp(&s, "10.0.0.1", 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01);
+    seed_arp(&s, "10.0.0.1", 0xa8, 0xbb, 0xcc, 0xdd, 0xee, 0x01);
     /* 0x12, not 0x11: the low bit of the first octet is the I/G bit, and
      * rule_arp_spoof correctly ignores a group-addressed sender. */
     seed_arp(&s, "10.0.0.1", 0x12, 0x22, 0x33, 0x44, 0x55, 0x02);
@@ -1811,6 +1815,218 @@ static void test_my_net_recon_clamps_ssid_count(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON), -1);
 }
 
+/* ── the sensor accuses its own card (#183) ───────────────
+ *
+ * Reference host, 2026-11-03: the managed Wi-Fi card's background scan
+ * probes for the SSID it is associated to, on another channel, and the
+ * rule read that as 330 WARN incidents of reconnaissance against the
+ * operator. Every input was correct — a wpa_supplicant scan cadence
+ * satisfies "sustained probing" on its own — and the host already knew
+ * the address was its own, from the iface records it polls every tick. */
+
+/* One iface row, as st_platform_net hands them to the roster. */
+static void recon_self_iface(sloth_state_t *s, const uint8_t mac[6],
+                             const char *name, iface_mode_t mode) {
+    iface_stat_t *f = &s->ifaces[s->iface_count++];
+    memset(f, 0, sizeof(*f));
+    snprintf(f->name, sizeof(f->name), "%s", name);
+    memcpy(f->mac, mac, 6);
+    f->mode = mode;
+    ownership_self_sync_ifaces(s->ifaces, s->iface_count);
+}
+
+/* The issue's first fixture: an iface record naming MAC X, then 25
+ * directed probes from X for the designated SSID over 700 s — past
+ * recon.sustain_s (600) and recon.sustain_probes (20), so the
+ * corroborated WARN branch is what would fire. Mutation-proved by
+ * removing the roster consultation in rule_my_network_recon, which
+ * reddens this with a WARN; see the #183 commit body. */
+static void test_my_net_recon_self_iface_mac_no_fire(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CeilingCatHD");
+    sloth_state_t s; seed_state(&s);
+    uint8_t own[6] = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    recon_self_iface(&s, own, "wlan0", IFACE_MODE_WIFI);
+    add_pnl(&s, own, "CeilingCatHD");
+    time_t now = time(NULL);
+    s.pnl_clients[0].first_seen  = now - 700;
+    s.pnl_clients[0].last_seen   = now;
+    s.pnl_clients[0].probe_count = 25;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON), -1);
+}
+
+/* The monitor radio's own address is on the same host and reaches the
+ * air through the same rules, so it is rostered too — the issue says
+ * "all of them, not only the managed Wi-Fi card". */
+static void test_my_net_recon_self_monitor_radio_no_fire(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CeilingCatHD");
+    sloth_state_t s; seed_state(&s);
+    uint8_t mon[6] = {0x00,0xc0,0xca,0xbb,0x51,0x82};
+    recon_self_iface(&s, mon, "alfa0", IFACE_MODE_MONITOR);
+    add_pnl(&s, mon, "CeilingCatHD");
+    s.pnl_clients[0].probe_count = 25;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON), -1);
+}
+
+/* The roster must stay an identity check and not a blanket silence: a
+ * stranger probing the same SSID on a host that rostered itself is
+ * still reported. Without this, the test above would pass just as
+ * happily if the rule had stopped firing altogether. */
+static void test_my_net_recon_stranger_still_fires_beside_self(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CeilingCatHD");
+    sloth_state_t s; seed_state(&s);
+    uint8_t own[6]      = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    uint8_t stranger[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+    recon_self_iface(&s, own, "wlan0", IFACE_MODE_WIFI);
+    add_pnl(&s, own, "CeilingCatHD");
+    add_pnl(&s, stranger, "CeilingCatHD");
+    s.pnl_clients[1].first_seen  = time(NULL) - 700;
+    s.pnl_clients[1].last_seen   = time(NULL);
+    s.pnl_clients[1].probe_count = 25;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "99:88:77:66:55:44") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "24:41:8c:30:97:a1") == NULL);
+    /* One finding, not two: the self row must not have minted a key. */
+    int n = 0;
+    for (int i = 0; i < s.alert_count; i++)
+        if (s.alerts[i].type == ALERT_TYPE_MY_NETWORK_RECON) n++;
+    ASSERT_EQ(n, 1);
+}
+
+/* The randomised-sibling case from the issue's test plan, on a self
+ * address: the card scans with a locally administered MAC while its
+ * real one is associated, and the exoneration that catches it is the
+ * existing seqnum-sibling rule — not the self roster, which holds only
+ * the addresses the iface records name. This passes before #183 too;
+ * it is here so the roster work cannot quietly break that path, and it
+ * is the one case the roster alone does not cover. */
+static void test_my_net_recon_self_randomised_sibling_still_exonerated(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CeilingCatHD");
+    sloth_state_t s; seed_state(&s);
+    uint8_t own[6]    = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    uint8_t random[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    uint8_t bssid[6]  = {0x28,0x25,0x5f,0x19,0x0e,0x18};
+    recon_self_iface(&s, own, "wlan0", IFACE_MODE_WIFI);
+    add_pnl(&s, random, "CeilingCatHD");
+    s.pnl_clients[0].mac_random  = 1;
+    s.pnl_clients[0].first_seen  = time(NULL) - 700;
+    s.pnl_clients[0].last_seen   = time(NULL);
+    s.pnl_clients[0].probe_count = 25;
+    add_assoc_entry(&s, own, bssid, "CeilingCatHD");
+    seqnum_correlation_t *c =
+        &s.seqnum_correlations[s.seqnum_correlation_count++];
+    memset(c, 0, sizeof(*c));
+    memcpy(c->mac_a, random, 6);
+    memcpy(c->mac_b, own,    6);
+    c->mac_a_random = 1;
+    c->gap = 2; c->fwd_gap = 2; c->confidence = 70;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON), -1);
+}
+
+/* ── exoneration freshness (#183 item 3) ──────────────────
+ *
+ * The reference host's association was last seen 1793728967 and the
+ * escalation came 33 minutes later: the live assoc row had aged out
+ * while the scan probes kept the PNL row alive, so the corroboration
+ * outran the evidence that answered it. A persisted association inside
+ * the same window the corroboration is measured over is the same fact,
+ * recorded. */
+
+#ifdef WITH_SQLITE
+/* A fixed clock, so the window boundary is exact rather than a race
+ * with the host's second hand. */
+#define RECON_DB_NOW ((time_t)1793730000)
+static time_t recon_db_wall(void) { return RECON_DB_NOW; }
+
+/* Persist one association for `sta` at `when`, through the real writer. */
+static void recon_db_assoc(const uint8_t sta[6], const uint8_t bssid[6],
+                           const char *ssid, time_t when) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    assoc_t *a = &s.assocs[s.assoc_count++];
+    memcpy(a->sta_mac, sta, 6);
+    memcpy(a->bssid,   bssid, 6);
+    snprintf(a->ssid, sizeof(a->ssid), "%s", ssid);
+    a->source     = ASSOC_SRC_EAPOL;
+    a->first_seen = when;
+    a->last_seen  = when;
+    db_tick(&s, when);
+}
+
+/* Seed a database holding one association for `sta` at `assoc_ts`, then
+ * run the rule on a state whose live assoc table is empty and whose PNL
+ * row is corroborated. Returns the alert index (-1 = exonerated). */
+static int recon_db_case(time_t assoc_ts) {
+    uint8_t sta[6]   = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    uint8_t bssid[6] = {0x28,0x25,0x5f,0x19,0x0e,0x18};
+    char path[TEST_TMP_MAX];
+    test_tmp_path(path, sizeof(path), "sloth_reconassoc_XXXXXX");
+    int fd = mkstemp(path);
+    if (fd >= 0) close(fd);
+    unlink(path);
+    db_close();
+    ASSERT_EQ(db_open(path), 1);
+    recon_db_assoc(sta, bssid, "CeilingCatHD", assoc_ts);
+
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CeilingCatHD");
+    sloth_clock_test_set(NULL, recon_db_wall);
+    sloth_state_t s; seed_state(&s);
+    add_pnl(&s, sta, "CeilingCatHD");
+    s.pnl_clients[0].first_seen  = RECON_DB_NOW - 700;
+    s.pnl_clients[0].last_seen   = RECON_DB_NOW;
+    s.pnl_clients[0].probe_count = 25;
+    /* Nothing in the live table: this is the aged-out case. */
+    ASSERT_EQ(s.assoc_count, 0);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON);
+    sloth_clock_test_set(NULL, NULL);
+    db_close();
+    unlink(path);
+    return idx;
+}
+
+/* Inside recon.sustain_s (600 s): the association is as fresh as the
+ * probing the rule is about to call corroborated, so it exonerates. */
+static void test_my_net_recon_db_assoc_within_window_no_fire(void) {
+    ASSERT_EQ(recon_db_case(RECON_DB_NOW - 300), -1);
+}
+
+/* Older than the window: a device that was on the network last week and
+ * is probing for it now is exactly the "returning device" lead this
+ * rule exists to report, so the stale row must not exonerate it. */
+static void test_my_net_recon_db_assoc_older_than_window_fires(void) {
+    int idx = recon_db_case(RECON_DB_NOW - 7 * 86400);
+    ASSERT(idx >= 0);
+}
+#endif /* WITH_SQLITE */
+
+/* With no database there is no persisted association to consult, and
+ * the rule must behave exactly as it did before #183 rather than
+ * exonerate on a failed query. */
+static void test_my_net_recon_without_a_database_still_fires(void) {
+    db_close();
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CeilingCatHD");
+    sloth_state_t s; seed_state(&s);
+    uint8_t sta[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+    add_pnl(&s, sta, "CeilingCatHD");
+    s.pnl_clients[0].first_seen  = time(NULL) - 700;
+    s.pnl_clients[0].last_seen   = time(NULL);
+    s.pnl_clients[0].probe_count = 25;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON);
+    ASSERT(idx >= 0);
+    if (idx >= 0) ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+}
+
 /* ── flood severity scoping (#52) ───────────────────────── */
 
 static void test_deauth_flood_on_my_bssid_escalates_crit(void) {
@@ -1883,6 +2099,234 @@ static void test_recurring_transit_fires_at_threshold(void) {
     ASSERT(strstr(s.alerts[idx].detail, "02:aa:bb:cc:dd:01") != NULL);
     ASSERT(strstr(s.alerts[idx].detail, "circling") != NULL);
     ASSERT(strstr(s.alerts[idx].key, "transit:02:aa:bb:cc:dd:01") != NULL);
+}
+
+/* #183 item 2: the "device" circling is the sensor's own radio. Still
+ * reported — demoted from WARN to LOW and tagged "self" — rather than
+ * read as a stranger passing by repeatedly. */
+static void test_recurring_transit_self_device_demoted_and_tagged(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    ASSERT(ownership_self_add(mac));
+    seed_transit(&s, mac, TRANSIT_RECUR_THRESH, time(NULL));
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_LOW);
+        ASSERT(strstr(s.alerts[idx].detail, "self") != NULL);
+        /* A self address is not on the operator's roster. Seen red with
+         * `rostered` asking ownership_is_own_device() and tested ahead
+         * of `self` in the tag. */
+        ASSERT(strstr(s.alerts[idx].detail, "rostered device") == NULL);
+    }
+    ownership_clear();
+}
+
+static int count_transit_alerts(const sloth_state_t *s) {
+    int n = 0;
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == ALERT_TYPE_RECURRING_TRANSIT) n++;
+    return n;
+}
+
+/* #183, owner ruling 2a: a device on the operator's --known-mac roster
+ * passing repeatedly is one step lower, WARN to LOW, and says "rostered
+ * device". It is not the sensor, so it is never called "self": seen red
+ * (tagged "self (the sensor's own radio)") with `self` asking
+ * ownership_is_own_device(). */
+static void test_recurring_transit_rostered_device_demoted_and_tagged(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x24,0x41,0x8c,0x30,0x97,0xb1};
+    ASSERT(ownership_add_known_mac("24:41:8c:30:97:b1"));
+    seed_transit(&s, mac, TRANSIT_RECUR_THRESH, time(NULL));
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_LOW);
+        ASSERT(strstr(s.alerts[idx].detail, "rostered device") != NULL);
+        ASSERT(strstr(s.alerts[idx].detail, "self") == NULL);
+        ASSERT_STR(s.alerts[idx].key, "transit:24:41:8c:30:97:b1");
+    }
+    ownership_clear();
+}
+
+/* The roster names one device, not every device: with somebody else on
+ * it, the same passes from an address nobody wrote down are WARN and
+ * carry no tag. Seen red (LOW, tagged) with `rostered` set from
+ * ownership_known_count() instead of the address's own lookup, and the
+ * "self" absence with `self` set the same way. */
+static void test_recurring_transit_unrostered_device_stays_warn(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0x02};
+    ASSERT(ownership_add_known_mac("24:41:8c:30:97:b1"));
+    seed_transit(&s, mac, TRANSIT_RECUR_THRESH, time(NULL));
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+        ASSERT(strstr(s.alerts[idx].detail, "rostered device") == NULL);
+        ASSERT(strstr(s.alerts[idx].detail, "self") == NULL);
+    }
+    ownership_clear();
+}
+
+/* An address on both rosters is the sensor's: "self" is the narrower
+ * claim and wins, and the two tags never appear together. Seen red
+ * ("rostered device", no "self") with the tag testing `rostered` first
+ * and `rostered` no longer excluding a self address. */
+static void test_recurring_transit_both_rosters_is_self(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    ASSERT(ownership_self_add(mac));
+    ASSERT(ownership_add_known_mac("24:41:8c:30:97:a1"));
+    seed_transit(&s, mac, TRANSIT_RECUR_THRESH, time(NULL));
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_LOW);
+        ASSERT(strstr(s.alerts[idx].detail, "self") != NULL);
+        ASSERT(strstr(s.alerts[idx].detail, "rostered device") == NULL);
+    }
+    ownership_clear();
+}
+
+/* The tag and the demotion are not part of the incident's identity: a
+ * device evaluated untagged at WARN and then, once rostered, tagged at
+ * LOW is the same key and the same incident, not a second one beside
+ * the first. (A running sloth cannot gain a --known-mac entry; the
+ * self roster can grow, and the engine path is the same.) Seen red
+ * (two alerts) with the key built as "transit:<mac>:r" when rostered. */
+static void test_recurring_transit_tag_does_not_split_the_incident(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x24,0x41,0x8c,0x30,0x97,0xb1};
+    seed_transit(&s, mac, TRANSIT_RECUR_THRESH, time(NULL));
+    alerts_update(&s);
+    ASSERT_EQ(count_transit_alerts(&s), 1);
+    int idx = find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT);
+    ASSERT(idx >= 0);
+    if (idx >= 0) ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+
+    ASSERT(ownership_add_known_mac("24:41:8c:30:97:b1"));
+    alerts_update(&s);
+    ASSERT_EQ(count_transit_alerts(&s), 1);
+    idx = find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_LOW);
+        ASSERT_STR(s.alerts[idx].key, "transit:24:41:8c:30:97:b1");
+        ASSERT_EQ((int)s.alerts[idx].evaluations, 2);
+        ASSERT(strstr(s.alerts[idx].detail, "rostered device") != NULL);
+    }
+    ownership_clear();
+}
+
+/* ── Block-Ack paralysis — Bl0ck (#70) ─────────────────────
+ *
+ * No test drove rule_blockack_attack() through alerts_update() before
+ * #183 item 2 touched it — tests/test_ctrl_frames.c's BAR tests stop at
+ * bar_worst_offender(). Added here, baseline alongside the self case.
+ *
+ * Real time(NULL) for the BAR timestamps, not small literals: alerts_
+ * update() reads the host wall clock for its own `now`, and
+ * bar_worst_offender()'s 300s window is measured against that — unlike
+ * pm_forge_observe()'s now_sec/now_usec, which stamp the frame pair's
+ * own capture-relative proximity, not the wall-clock age the PM_FORGE
+ * rule checks separately. */
+static int build_bar_frame(uint8_t *f, const uint8_t ra[6],
+                           const uint8_t ta[6], int tid, uint16_t ssn) {
+    memset(f, 0, 20);
+    f[0] = (uint8_t)((CTRL_SUB_BLOCKACK_REQ << 4) | (1 << 2));
+    memcpy(f + 4,  ra, 6);
+    memcpy(f + 10, ta, 6);
+    uint16_t ctl = (uint16_t)(tid << 12);
+    f[16] = (uint8_t)(ctl & 0xff);
+    f[17] = (uint8_t)(ctl >> 8);
+    uint16_t ssc = (uint16_t)(ssn << 4);
+    f[18] = (uint8_t)(ssc & 0xff);
+    f[19] = (uint8_t)(ssc >> 8);
+    return 20;
+}
+
+static void test_blockack_attack_fires_warn_without_ownership(void) {
+    alerts_clear(); ownership_clear(); ctrl_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x02,0x11,0x22,0x33,0x44,0x55};
+    static const uint8_t sta[6]   = {0x02,0xaa,0xbb,0xcc,0xdd,0x01};
+    time_t base = time(NULL);
+    uint8_t f[20];
+    ctrl_observe(f, build_bar_frame(f, bssid, sta, 3, 2000), 6, base);
+    ctrl_observe(f, build_bar_frame(f, bssid, sta, 3,
+                 (uint16_t)(2000 + BAR_SUSPICIOUS_JUMP + 1)), 6, base + 1);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_BLOCKACK_ATTACK);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT(strstr(s.alerts[i].detail, "self") == NULL);
+    }
+    ctrl_clear(); ownership_clear();
+}
+
+/* #183 item 2: the station whose Block-Ack window is being paralysed
+ * is the sensor's own radio. Demoted one step, WARN to LOW, tagged
+ * "self" rather than read as an attack on a third party. */
+static void test_blockack_attack_self_device_demoted_and_tagged(void) {
+    alerts_clear(); ownership_clear(); ctrl_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x02,0x11,0x22,0x33,0x44,0x66};
+    static const uint8_t sta[6]   = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    ASSERT(ownership_self_add(sta));
+    time_t base = time(NULL);
+    uint8_t f[20];
+    ctrl_observe(f, build_bar_frame(f, bssid, sta, 3, 3000), 6, base);
+    ctrl_observe(f, build_bar_frame(f, bssid, sta, 3,
+                 (uint16_t)(3000 + BAR_SUSPICIOUS_JUMP + 1)), 6, base + 1);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_BLOCKACK_ATTACK);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_LOW);
+        ASSERT(strstr(s.alerts[i].detail, "self") != NULL);
+    }
+    ctrl_clear(); ownership_clear();
+}
+
+/* The station whose window is being paralysed is on the operator's
+ * roster, not one of the sensor's interfaces: an attack on a device the
+ * operator named stays WARN and is not called "self". Seen red with the
+ * rule asking ownership_is_own_device(). Nor does the roster soften it
+ * the way it does RECURRING_TRANSIT (#183 ruling 2a is that rule's
+ * alone): seen red (LOW, "rostered device") with the transit rule's
+ * roster demotion and tag copied into rule_blockack_attack(). */
+static void test_blockack_attack_rostered_device_is_not_self(void) {
+    alerts_clear(); ownership_clear(); ctrl_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x02,0x11,0x22,0x33,0x44,0x77};
+    static const uint8_t sta[6]   = {0x24,0x41,0x8c,0x30,0x97,0xb1};
+    ASSERT(ownership_add_known_mac("24:41:8c:30:97:b1"));
+    time_t base = time(NULL);
+    uint8_t f[20];
+    ctrl_observe(f, build_bar_frame(f, bssid, sta, 3, 1000), 6, base);
+    ctrl_observe(f, build_bar_frame(f, bssid, sta, 3,
+                 (uint16_t)(1000 + BAR_SUSPICIOUS_JUMP + 1)), 6, base + 1);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_BLOCKACK_ATTACK);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT(strstr(s.alerts[i].detail, "self") == NULL);
+        ASSERT(strstr(s.alerts[i].detail, "rostered device") == NULL);
+    }
+    ctrl_clear(); ownership_clear();
 }
 
 /* Two passes is a round trip — going somewhere and coming back is what
@@ -2013,6 +2457,33 @@ static void test_designation_without_roster_is_inert(void) {
     ownership_clear();
 }
 
+/* The sensor is on the network it is watching, and "unknown device on
+ * my network" must not name the host running the detector (#183). The
+ * roster the operator supplied is still what switches the rule on, so
+ * this case needs one. */
+static void test_unknown_device_self_iface_no_fire(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CeilingCatHD");
+    ownership_add_known_mac("02:00:00:00:00:01");
+    sloth_state_t s; seed_state(&s);
+    uint8_t own[6]   = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    uint8_t bssid[6] = {0x28,0x25,0x5f,0x19,0x0e,0x18};
+    recon_self_iface(&s, own, "wlan0", IFACE_MODE_WIFI);
+    add_assoc_entry(&s, own, bssid, "CeilingCatHD");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_UNKNOWN_DEVICE), -1);
+    /* Still an identity check: a stranger on the same network is
+     * reported, so the roster has not silenced the rule. */
+    uint8_t stranger[6] = {0x02,0x00,0x00,0x00,0x00,0x99};
+    add_assoc_entry(&s, stranger, bssid, "CeilingCatHD");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_UNKNOWN_DEVICE);
+    ASSERT(idx >= 0);
+    if (idx >= 0)
+        ASSERT(strstr(s.alerts[idx].detail, "02:00:00:00:00:99") != NULL);
+    ownership_clear();
+}
+
 /* Neither configured — the default for every existing deployment. */
 static void test_unconfigured_is_inert(void) {
     alerts_clear(); ownership_clear();
@@ -2120,8 +2591,8 @@ static void test_rf_degraded_no_channels_no_fire(void) {
 static void test_evil_twin_same_cipher_same_oui_no_fire(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
-    uint8_t b[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x02};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t b[6] = {0xa8,0xbb,0xcc,0x00,0x00,0x02};
     add_beacon(&s, "Office", a, "WPA2");
     add_beacon(&s, "Office", b, "WPA2");
     alerts_update(&s);
@@ -2135,12 +2606,19 @@ static void test_evil_twin_same_cipher_same_oui_no_fire(void) {
  * first three bytes to the target's vendor prefix — a one-line config
  * change on every rogue-AP tool that ships — was skipped before any
  * other evidence was looked at. Differing vendor-IE fingerprints on a
- * same-OUI pair is a firmware-level contradiction and now fires. */
+ * same-OUI pair is a firmware-level contradiction and now fires.
+ *
+ * At WARN since #188, where it used to be CRIT at 20 %: a soft signal
+ * needs TWIN_CRIT_MIN_CONF to be critical, and a mismatch the same-OUI
+ * deduction has already discounted does not have it. What #89 fixed is
+ * that the pair is reported at all, and that still holds. Mutation
+ * (2026-11-11): with the confidence gate in rule_evil_twin removed the
+ * severity assertion below went red (CRIT). */
 static void test_evil_twin_same_oui_clone_with_ie_mismatch_fires(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t real[6]  = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
-    uint8_t clone[6] = {0xaa,0xbb,0xcc,0x99,0x99,0x99};  /* copied OUI */
+    uint8_t real[6]  = {0xa8,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t clone[6] = {0xa8,0xbb,0xcc,0x99,0x99,0x99};  /* copied OUI */
     add_beacon(&s, "Office", real,  "WPA2");
     add_beacon(&s, "Office", clone, "WPA2");
     s.beacon_aps[0].fp.vendor_ies_hash = 0x1111u;
@@ -2148,7 +2626,8 @@ static void test_evil_twin_same_oui_clone_with_ie_mismatch_fires(void) {
     alerts_update(&s);
     int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
     ASSERT(idx >= 0);
-    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(s.alerts[idx].confidence < TWIN_CRIT_MIN_CONF);
     /* Positive evidence minus the same-OUI context deduction. */
     ASSERT_EQ(s.alerts[idx].confidence, TWIN_W_IE_HASH - TWIN_C_SAME_OUI);
 }
@@ -2177,8 +2656,11 @@ static void test_evil_twin_same_oui_attacker_tool_fires_crit(void) {
 static void test_evil_twin_confidence_is_independent_of_severity(void) {
     /* CRIT on a hard signal, no deductions — high confidence. */
     alerts_clear();
-    sloth_state_t s; seed_state(&s);
-    uint8_t legit[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    /* static: three ~2.8 MB states in one frame sat within 40 KB of the
+     * 8 MB main-thread stack, and alert_t's location stamp (2026-10-27)
+     * tipped it over. seed_state() zeroes each before use. */
+    static sloth_state_t s; seed_state(&s);
+    uint8_t legit[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t hak5[6]  = {0x00,0x13,0x37,0x44,0x55,0x66};
     add_beacon(&s, "Net", legit, "WPA2");
     add_beacon(&s, "Net", hak5,  "WPA2");
@@ -2188,16 +2670,18 @@ static void test_evil_twin_confidence_is_independent_of_severity(void) {
     ASSERT_EQ((int)s.alerts[hi].sev, (int)ALERT_SEV_CRIT);
     int crit_conf = s.alerts[hi].confidence;
 
-    /* CRIT on a soft signal against a same-OUI pair — same severity,
-     * much lower confidence. */
+    /* CRIT on the same hard signal with every deduction against it —
+     * same severity, much lower confidence. (Until #188 this half was a
+     * soft-signal CRIT at 20 %; those are WARN now, so the low-
+     * confidence CRIT has to be a hard one, which the gate exempts.) */
     alerts_clear();
-    sloth_state_t t; seed_state(&t);
-    uint8_t p[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
-    uint8_t q[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x02};
+    static sloth_state_t t; seed_state(&t);
+    uint8_t p[6] = {0x00,0x13,0x37,0x00,0x00,0x01};   /* Hak5, both */
+    uint8_t q[6] = {0x00,0x13,0x37,0x00,0x00,0x02};
     add_beacon(&t, "Net", p, "WPA2");
     add_beacon(&t, "Net", q, "WPA2");
-    t.beacon_aps[0].fp.vendor_ies_hash = 0x1111u;
-    t.beacon_aps[1].fp.vendor_ies_hash = 0x2222u;
+    add_neighbor(&t, p, q);
+    add_neighbor(&t, q, p);
     alerts_update(&t);
     int lo = find_alert(&t, ALERT_TYPE_EVIL_TWIN);
     ASSERT(lo >= 0);
@@ -2206,13 +2690,13 @@ static void test_evil_twin_confidence_is_independent_of_severity(void) {
 
     /* And the axes genuinely cross: a WARN that is *more likely true*
      * than that CRIT is. Cross-vendor with contradicting vendor IEs
-     * earns more positive evidence than the same-OUI clone above, and
-     * the mutual 802.11k claim demotes the severity to WARN without
-     * dragging confidence below it. A single ranked scale could not
-     * represent this pair of findings. */
+     * earns positive evidence the mutual 802.11k claim cannot wholly
+     * cancel, and the claim demotes the severity to WARN without
+     * dragging confidence below the CRIT above. A single ranked scale
+     * could not represent this pair of findings. */
     alerts_clear();
-    sloth_state_t u; seed_state(&u);
-    uint8_t x[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    static sloth_state_t u; seed_state(&u);
+    uint8_t x[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t y[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&u, "Net", x, "WPA2");
     add_beacon(&u, "Net", y, "WPA2");
@@ -2233,7 +2717,7 @@ static void test_evil_twin_confidence_is_independent_of_severity(void) {
 static void test_evil_twin_reports_suspected_with_clamped_confidence(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", a, "WPA2");
     add_beacon(&s, "Cafe-Net", b, "WPA2");
@@ -2250,7 +2734,7 @@ static void test_evil_twin_reports_suspected_with_clamped_confidence(void) {
 static void test_evil_twin_confidence_floors_not_zeroes(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t router[6]   = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t router[6]   = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t extender[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "CorpWiFi", router,   "WPA2");
     add_beacon(&s, "CorpWiFi", extender, "WPA2");
@@ -2270,7 +2754,7 @@ static void test_evil_twin_confidence_floors_not_zeroes(void) {
 static void test_evil_twin_open_impersonation_high_confidence(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t strong[6]  = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t strong[6]  = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t open_ap[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "CorpWiFi", open_ap, "OPEN");
     add_beacon(&s, "CorpWiFi", strong,  "WPA2");
@@ -2287,14 +2771,14 @@ static void test_evil_twin_open_impersonation_high_confidence(void) {
  * is built, so which AP sloth heard first cannot split one finding into
  * two incidents. */
 static void test_alert_pair_key_is_order_independent(void) {
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     char k1[ALERT_KEY_LEN], k2[ALERT_KEY_LEN];
     alert_pair_key(k1, sizeof(k1), "twin-fp", a, b, TWIN_SITE_UNSET, "WPA2/WPA2");
     alert_pair_key(k2, sizeof(k2), "twin-fp", b, a, TWIN_SITE_UNSET, "WPA2/WPA2");
     ASSERT_STR(k1, k2);
     /* Lower BSSID first, regardless of argument order. */
-    ASSERT_STR(k1, "twin-fp:11:22:33:44:55:66:aa:bb:cc:01:02:03::WPA2/WPA2");
+    ASSERT_STR(k1, "twin-fp:11:22:33:44:55:66:a8:bb:cc:01:02:03::WPA2/WPA2");
 }
 
 /* Rule id, site and security profile are all part of the identity: the
@@ -2303,7 +2787,7 @@ static void test_alert_pair_key_is_order_independent(void) {
  * is no inventory yet and it is never derived from observed RF. */
 static void test_alert_pair_key_separates_rule_site_and_profile(void) {
     uint8_t a[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
-    uint8_t b[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t b[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     char base[ALERT_KEY_LEN], other_rule[ALERT_KEY_LEN];
     char other_site[ALERT_KEY_LEN], other_prof[ALERT_KEY_LEN];
     alert_pair_key(base,       sizeof(base),       "twin",    a, b, TWIN_SITE_UNSET, "OPEN/WPA2");
@@ -2325,7 +2809,7 @@ static void test_alert_pair_key_separates_rule_site_and_profile(void) {
 static void test_evil_twin_two_same_security_pairs_one_ssid_both_survive(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t v1[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t v1[6] = {0xa8,0xbb,0xcc,0x00,0x00,0x01};
     uint8_t v2[6] = {0x11,0x22,0x33,0x00,0x00,0x01};
     uint8_t v3[6] = {0x99,0x88,0x77,0x00,0x00,0x01};
     add_beacon(&s, "CorpWiFi", v1, "WPA2");
@@ -2351,7 +2835,7 @@ static void test_evil_twin_two_same_security_pairs_one_ssid_both_survive(void) {
 static void test_evil_twin_two_weak_clones_one_ssid_both_survive(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t good[6]  = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t good[6]  = {0xa8,0xbb,0xcc,0x00,0x00,0x01};
     uint8_t rogue1[6] = {0x11,0x22,0x33,0x00,0x00,0x01};
     uint8_t rogue2[6] = {0x99,0x88,0x77,0x00,0x00,0x01};
     add_beacon(&s, "CorpWiFi", good,   "WPA2");
@@ -2369,7 +2853,7 @@ static void test_evil_twin_two_weak_clones_one_ssid_both_survive(void) {
 static void test_evil_twin_rule_emits_canonical_pair_key(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     /* Insert the higher BSSID first — the key must not depend on it. */
     add_beacon(&s, "Cafe-Net", a, "WPA2");
@@ -2388,7 +2872,7 @@ static void test_evil_twin_rule_emits_canonical_pair_key(void) {
 static void test_twin_evidence_score_exposes_signals(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", a, "WPA2");
     add_beacon(&s, "Cafe-Net", b, "WPA2");
@@ -2415,8 +2899,8 @@ static void test_twin_evidence_score_exposes_signals(void) {
      * reports what was seen rather than being left undefined. */
     alerts_clear();
     sloth_state_t t; seed_state(&t);
-    uint8_t p[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
-    uint8_t q[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x02};
+    uint8_t p[6] = {0xa8,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t q[6] = {0xa8,0xbb,0xcc,0x00,0x00,0x02};
     add_beacon(&t, "Office", p, "WPA2");
     add_beacon(&t, "Office", q, "WPA2");
     twin_evidence_t ev2;
@@ -2436,7 +2920,7 @@ static void test_twin_evidence_score_exposes_signals(void) {
  * `twin_episodes` primary key. */
 static void test_twin_pair_order_is_deterministic(void) {
     sloth_state_t s; seed_state(&s);
-    uint8_t hi[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t hi[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t lo[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "N", hi, "WPA2");
     add_beacon(&s, "N", lo, "WPA2");
@@ -2457,7 +2941,7 @@ static void test_twin_pair_order_is_deterministic(void) {
 static void test_evil_twin_diff_cipher_same_ssid_no_fire(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x00,0x00,0x01};
     uint8_t b[6] = {0x11,0x22,0x33,0x00,0x00,0x02};
     add_beacon(&s, "Mixed", a, "WPA2");
     add_beacon(&s, "Mixed", b, "WPA3");
@@ -2472,7 +2956,7 @@ static void test_evil_twin_diff_cipher_same_ssid_no_fire(void) {
 static void test_evil_twin_same_open_diff_oui_no_fire(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x00,0x00,0x01};
     uint8_t b[6] = {0x11,0x22,0x33,0x00,0x00,0x02};
     add_beacon(&s, "Airport-Wifi", a, "OPEN");
     add_beacon(&s, "Airport-Wifi", b, "OPEN");
@@ -2488,7 +2972,7 @@ static void test_evil_twin_same_open_diff_oui_no_fire(void) {
 static void test_evil_twin_open_plus_wpa2_diff_oui_still_crit(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x00,0x00,0x01};
     uint8_t b[6] = {0x11,0x22,0x33,0x00,0x00,0x02};
     add_beacon(&s, "Cafe-Free", a, "OPEN");
     add_beacon(&s, "Cafe-Free", b, "WPA2");
@@ -2513,7 +2997,7 @@ static void test_evil_twin_same_cipher_diff_oui_pair_dedups(void) {
     sloth_state_t s; seed_state(&s);
     /* Insert B before A this time; key must still be "twin-fp:<ssid>". */
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     add_beacon(&s, "Cafe-Net", b, "WPA2");
     add_beacon(&s, "Cafe-Net", a, "WPA2");
     alerts_update(&s);
@@ -2532,7 +3016,7 @@ static void test_evil_twin_same_cipher_diff_oui_pair_dedups(void) {
 static void test_evil_twin_vendor_hash_mismatch_escalates_crit(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", a, "WPA2");
     add_beacon(&s, "Cafe-Net", b, "WPA2");
@@ -2551,7 +3035,7 @@ static void test_evil_twin_vendor_hash_mismatch_escalates_crit(void) {
 static void test_evil_twin_vendor_hash_match_stays_warn(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", a, "WPA2");
     add_beacon(&s, "Cafe-Net", b, "WPA2");
@@ -2568,7 +3052,7 @@ static void test_evil_twin_vendor_hash_match_stays_warn(void) {
 static void test_evil_twin_vendor_hash_zero_no_escalate(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", a, "WPA2");
     add_beacon(&s, "Cafe-Net", b, "WPA2");
@@ -2585,7 +3069,7 @@ static void test_evil_twin_vendor_hash_zero_no_escalate(void) {
 static void test_evil_twin_hak5_oui_escalates_crit(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t legit[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t legit[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t hak5[6]  = {0x00,0x13,0x37,0x44,0x55,0x66};  /* Hak5 OUI */
     add_beacon(&s, "Cafe-Net", legit, "WPA2");
     add_beacon(&s, "Cafe-Net", hak5,  "WPA2");
@@ -2601,7 +3085,7 @@ static void test_evil_twin_hak5_oui_escalates_crit(void) {
 static void test_evil_twin_espressif_oui_escalates_crit(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t legit[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t legit[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t esp[6]   = {0x24,0x0a,0xc4,0x44,0x55,0x66};  /* Espressif OUI */
     add_beacon(&s, "Cafe-Net", legit, "WPA2");
     add_beacon(&s, "Cafe-Net", esp,   "WPA2");
@@ -2618,7 +3102,7 @@ static void test_evil_twin_diff_oui_no_signals_stays_warn(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
     /* Neither OUI is in any attacker table; both hashes match. */
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Mesh", a, "WPA2");
     add_beacon(&s, "Mesh", b, "WPA2");
@@ -2630,33 +3114,54 @@ static void test_evil_twin_diff_oui_no_signals_stays_warn(void) {
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
 }
 
-/* ── Evil-twin Phase 3: RSSI-step proximity ─────────────────── */
+/* ── Evil-twin Phase 3: RSSI-step proximity ───────────────────
+ *
+ * Since #189 the swing is reported only for a BSSID that has a twin
+ * candidate, so the threshold tests below seed a pair: a second
+ * transmitter under the same name with a different globally
+ * administered OUI, which rule_evil_twin reports at WARN. */
+
+static const uint8_t PROX_REAL[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
+static const uint8_t PROX_ROGUE[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+
+/* Index 0 is the original, index 1 the candidate copy. */
+static void prox_pair(sloth_state_t *s, const char *ssid) {
+    add_beacon(s, ssid, PROX_REAL,  "WPA2");
+    add_beacon(s, ssid, PROX_ROGUE, "WPA2");
+}
+
+static int prox_count(const sloth_state_t *s) {
+    int n = 0;
+    for (int k = 0; k < s->alert_count; k++)
+        if (s->alerts[k].type == ALERT_TYPE_EVIL_TWIN_PROXIMITY) n++;
+    return n;
+}
 
 /* 15 dBm delta fires WARN — boundary of the threshold. */
 static void test_evil_twin_proximity_fires_at_threshold(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
-    add_beacon(&s, "Roving", bssid, "WPA2");
-    s.beacon_aps[0].rssi_min_60s = -80;
-    s.beacon_aps[0].rssi_max_60s = -65;   /* swing = 15 */
+    prox_pair(&s, "Roving");
+    s.beacon_aps[1].rssi_min_60s = -80;
+    s.beacon_aps[1].rssi_max_60s = -65;   /* swing = 15 */
     alerts_update(&s);
     int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY);
     ASSERT(idx >= 0);
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
-    ASSERT(strstr(s.alerts[idx].detail, "aa:bb:cc:01:02:03") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "3c:52:a1:01:02:03") != NULL);
     ASSERT(strstr(s.alerts[idx].detail, "15 dBm") != NULL);
-    ASSERT(strstr(s.alerts[idx].key, "twin-prox:aa:bb:cc:01:02:03") != NULL);
+    ASSERT(strstr(s.alerts[idx].key, "twin-prox:3c:52:a1:01:02:03") != NULL);
+    /* The corroborated row is there to be read beside it. */
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN) >= 0);
 }
 
 /* 14 dBm delta — one below threshold — no fire. */
 static void test_evil_twin_proximity_below_threshold_no_fire(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
-    add_beacon(&s, "Stable", bssid, "WPA2");
-    s.beacon_aps[0].rssi_min_60s = -79;
-    s.beacon_aps[0].rssi_max_60s = -65;   /* swing = 14 */
+    prox_pair(&s, "Stable");
+    s.beacon_aps[1].rssi_min_60s = -79;
+    s.beacon_aps[1].rssi_max_60s = -65;   /* swing = 14 */
     alerts_update(&s);
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
 }
@@ -2666,10 +3171,9 @@ static void test_evil_twin_proximity_below_threshold_no_fire(void) {
 static void test_evil_twin_proximity_large_swing_fires(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t bssid[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
-    add_beacon(&s, "Pineapple-Mimic", bssid, "WPA2");
-    s.beacon_aps[0].rssi_min_60s = -85;
-    s.beacon_aps[0].rssi_max_60s = -50;   /* swing = 35 */
+    prox_pair(&s, "Pineapple-Mimic");
+    s.beacon_aps[1].rssi_min_60s = -85;
+    s.beacon_aps[1].rssi_max_60s = -50;   /* swing = 35 */
     alerts_update(&s);
     int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY);
     ASSERT(idx >= 0);
@@ -2682,10 +3186,9 @@ static void test_evil_twin_proximity_large_swing_fires(void) {
 static void test_evil_twin_proximity_unseen_min_no_fire(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
-    add_beacon(&s, "Bootstrap", bssid, "WPA2");
-    s.beacon_aps[0].rssi_min_60s = 0;      /* sentinel: unseen */
-    s.beacon_aps[0].rssi_max_60s = -50;
+    prox_pair(&s, "Bootstrap");
+    s.beacon_aps[1].rssi_min_60s = 0;      /* sentinel: unseen */
+    s.beacon_aps[1].rssi_max_60s = -50;
     alerts_update(&s);
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
 }
@@ -2694,30 +3197,353 @@ static void test_evil_twin_proximity_unseen_min_no_fire(void) {
 static void test_evil_twin_proximity_unseen_max_no_fire(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
-    add_beacon(&s, "Bootstrap", bssid, "WPA2");
-    s.beacon_aps[0].rssi_min_60s = -90;
-    s.beacon_aps[0].rssi_max_60s = 0;
+    prox_pair(&s, "Bootstrap");
+    s.beacon_aps[1].rssi_min_60s = -90;
+    s.beacon_aps[1].rssi_max_60s = 0;
     alerts_update(&s);
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
 }
 
-/* Per-BSSID dedup — two distinct APs both swinging produce two alerts. */
+/* Per-BSSID dedup — both halves of a pair swinging produce two alerts,
+ * one key each. Either half qualifies: an unattributed pair has no
+ * accused side to prefer. */
 static void test_evil_twin_proximity_per_bssid(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
-    uint8_t b[6] = {0x11,0x22,0x33,0x00,0x00,0x02};
-    add_beacon(&s, "A", a, "WPA2");
-    add_beacon(&s, "B", b, "WPA2");
+    prox_pair(&s, "A");
     s.beacon_aps[0].rssi_min_60s = -80; s.beacon_aps[0].rssi_max_60s = -60;
     s.beacon_aps[1].rssi_min_60s = -85; s.beacon_aps[1].rssi_max_60s = -60;
     alerts_update(&s);
-    int count = 0;
-    for (int k = 0; k < s.alert_count; k++) {
-        if (s.alerts[k].type == ALERT_TYPE_EVIL_TWIN_PROXIMITY) count++;
+    ASSERT_EQ(prox_count(&s), 2);
+}
+
+/* #189, the headline: 254 of the 300 BSSIDs that fired on a field
+ * sensor had no twin. A lone BSSID with a 30 dBm swing is a path that
+ * changed, and says nothing about impersonation.
+ *
+ * Three shapes of "no twin": nothing else in the table, another network
+ * entirely, and the same network's own second BSSID with no evidence
+ * against it (same globally administered OUI, nothing else), which is
+ * what a legitimate multi-AP deployment looks like.
+ *
+ * Mutation (2026-11-11): with the twin_has_candidate() check removed
+ * from rule_evil_twin_proximity all three assertions went red. */
+static void test_evil_twin_proximity_lone_bssid_no_fire(void) {
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "Printer", PROX_ROGUE, "WPA2");
+    s.beacon_aps[0].rssi_min_60s = -80;
+    s.beacon_aps[0].rssi_max_60s = -50;   /* swing = 30 */
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+
+    alerts_clear();
+    add_beacon(&s, "SomeoneElse", PROX_REAL, "WPA2");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+
+    alerts_clear();
+    static sloth_state_t t; seed_state(&t);
+    uint8_t ap1[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+    uint8_t ap2[6] = {0x3c,0x52,0xa1,0x0a,0x0b,0x0c};
+    add_beacon(&t, "Office", ap1, "WPA2");
+    add_beacon(&t, "Office", ap2, "WPA2");
+    t.beacon_aps[0].rssi_min_60s = -80;
+    t.beacon_aps[0].rssi_max_60s = -50;
+    alerts_update(&t);
+    ASSERT_EQ(find_alert(&t, ALERT_TYPE_EVIL_TWIN), -1);
+    ASSERT_EQ(find_alert(&t, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+}
+
+/* The other branch of the pair definition: an OPEN copy beside a
+ * protected original is a candidate too, from either side. */
+static void test_evil_twin_proximity_fires_on_a_weak_strong_pair(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", PROX_REAL,  "WPA2");
+    add_beacon(&s, "CorpWiFi", PROX_ROGUE, "OPEN");
+    s.beacon_aps[1].rssi_min_60s = -80;
+    s.beacon_aps[1].rssi_max_60s = -50;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].key, "twin-prox:3c:52:a1:01:02:03") != NULL);
+}
+
+/* One device's 2.4 and 5 GHz radios are not a twin pair (#188), so
+ * neither radio has a candidate and a swing on one is not reported.
+ * The steer from an unrelated address is what would make them a pair
+ * if the sibling test were absent; without it the U/L and band rules
+ * already leave this pair evidence-free and the test would prove
+ * nothing about siblings.
+ *
+ * Mutation (2026-11-11): twin_pair_is_sibling() returning 0; the
+ * assertion below went red. The control after it moves the second
+ * radio's first sighting a minute later, where it is a pair again. */
+static void test_evil_twin_proximity_sibling_radio_is_no_candidate(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t r24[6]  = {0x28,0x25,0x5f,0x10,0x20,0x14};
+    uint8_t r5[6]   = {0x28,0x25,0x5f,0x10,0x20,0x1c};
+    uint8_t mesh[6] = {0x64,0x67,0x72,0x01,0x02,0x03};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "HomeNet", r24, "WPA2");
+    add_beacon(&s, "HomeNet", r5,  "WPA2");
+    s.beacon_aps[0].channel = 6;   s.beacon_aps[0].first_seen = t0;
+    s.beacon_aps[1].channel = 157; s.beacon_aps[1].first_seen = t0 + 2;
+    s.beacon_aps[1].rssi_min_60s = -80;
+    s.beacon_aps[1].rssi_max_60s = -50;
+    btm_steer_t *st = &s.btm_steers[s.btm_steer_count++];
+    memset(st, 0, sizeof(*st));
+    memcpy(st->bssid, mesh, 6);
+    st->req_count = 1;
+    st->imminent_count = 3;
+    memcpy(st->candidates[0], r5, 6);
+    st->candidate_count = 1;
+    st->first_seen = st->last_seen = time(NULL);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+
+    alerts_clear();
+    s.beacon_aps[1].first_seen = t0 + 60;
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+}
+
+/* A swing anchored at the noise floor. -100 → -80 is the typical lone
+ * row of the issue: an AP at the edge of earshot whose weakest beacon
+ * happened to decode, not a transmitter that came 20 dB closer. On a
+ * real twin pair it is still not reported.
+ *
+ * Mutation (2026-11-11): the TWIN_PROX_FLOOR_DBM check removed; the
+ * first two assertions went red. The third is the boundary from the
+ * other side: one dBm above the floor fires. */
+static void test_evil_twin_proximity_noise_floor_swing_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    prox_pair(&s, "Edge");
+    s.beacon_aps[1].rssi_min_60s = -100;
+    s.beacon_aps[1].rssi_max_60s = -80;   /* swing = 20 */
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+
+    alerts_clear();
+    s.beacon_aps[1].rssi_min_60s = -92;   /* at the floor: still out */
+    s.beacon_aps[1].rssi_max_60s = -60;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+
+    alerts_clear();
+    s.beacon_aps[1].rssi_min_60s = -91;
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+}
+
+/* One positioned fix in the per-poll GNSS history, hand-built: the ring
+ * the GNSS rules read through s->gnss_hist. */
+static void prox_gnss_fix(gnss_hist_t *h, time_t ts, int has_speed,
+                          double speed_mps) {
+    memset(h, 0, sizeof(*h));
+    h->fixes[0].ts        = ts;
+    h->fixes[0].mode      = 3;
+    h->fixes[0].has_speed = has_speed;
+    h->fixes[0].speed     = speed_mps;
+    h->fix_n    = 1;
+    h->fix_head = 1;
+}
+
+/* A sensor that is itself moving swings every AP it passes, twin or
+ * not, so a swing measured while it moved corroborates nothing. Read
+ * from the fix history over the same 60 s the RSSI window covers.
+ *
+ * Mutation (2026-11-11): the twin_sensor_moving() check removed; the
+ * first assertion went red. The three after it are the cases that must
+ * NOT suppress: a parked sensor's jitter, a drive that ended before the
+ * window began, and a fix that carries no speed at all. */
+static void test_evil_twin_proximity_quiet_while_the_sensor_moves(void) {
+    time_t now = time(NULL);
+    static gnss_hist_t h;
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    prox_pair(&s, "Roadside");
+    s.beacon_aps[1].rssi_min_60s = -80;
+    s.beacon_aps[1].rssi_max_60s = -50;
+    prox_gnss_fix(&h, now - 5, 1, 12.0);          /* about 43 km/h */
+    s.gnss_hist = &h;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+    /* The pair itself is not withheld: only its corroborator is. */
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN) >= 0);
+
+    alerts_clear();
+    prox_gnss_fix(&h, now - 5, 1, 0.3);           /* parked, jitter */
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+
+    alerts_clear();
+    prox_gnss_fix(&h, now - 300, 1, 12.0);        /* stopped long ago */
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+
+    alerts_clear();
+    prox_gnss_fix(&h, now - 5, 0, 12.0);          /* no speed reported */
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+}
+
+/* The edges of "the sensor moved during the window". The test above
+ * uses 12 m/s and 0.3 m/s, 5 s and 300 s, and one fix in the ring, so a
+ * threshold of 10 m/s, a 200 s window and a walk that read only the
+ * oldest fix all passed it.
+ *
+ * Mutations (2026-11-11), each red here only: `speed <
+ * TWIN_PROX_MOVING_MPS` made `<=` and the constant raised to 10 (the
+ * 1.0 m/s row); the age bound raised from RSSI_WIN_SECS to 200 (the
+ * 62 s row); the `ts > now` test dropped (the future fix); the ring
+ * walk cut to its oldest entry (the three-fix ring).
+ *
+ * The ages are 58 and 62, not 60 and 61: the rule reads the clock
+ * after this function does, and a second may pass between the two. */
+static void test_evil_twin_proximity_moving_boundaries(void) {
+    time_t now = time(NULL);
+    static gnss_hist_t h;
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    prox_pair(&s, "Roadside");
+    s.beacon_aps[1].rssi_min_60s = -80;
+    s.beacon_aps[1].rssi_max_60s = -50;
+    s.gnss_hist = &h;
+
+    prox_gnss_fix(&h, now - 5, 1, 1.0);           /* at the threshold */
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+
+    alerts_clear();
+    prox_gnss_fix(&h, now - 5, 1, 0.99);          /* just under it */
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+
+    alerts_clear();
+    prox_gnss_fix(&h, now - 58, 1, 12.0);         /* inside the window */
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+
+    alerts_clear();
+    prox_gnss_fix(&h, now - 62, 1, 12.0);         /* just outside it */
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+
+    /* A fix stamped after "now" is a clock that stepped, not a drive in
+     * this window; it suppresses nothing. */
+    alerts_clear();
+    prox_gnss_fix(&h, now + 3600, 1, 12.0);
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+
+    /* Any fix in the window counts, not the oldest or the newest: the
+     * sensor stood, drove, and stood again inside one minute. */
+    alerts_clear();
+    memset(&h, 0, sizeof(h));
+    for (int i = 0; i < 3; i++) {
+        h.fixes[i].ts        = now - 30 + 10 * i;
+        h.fixes[i].mode      = 3;
+        h.fixes[i].has_speed = 1;
+        h.fixes[i].speed     = i == 1 ? 12.0 : 0.0;
     }
-    ASSERT_EQ(count, 2);
+    h.fix_n = h.fix_head = 3;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+}
+
+/* Two OPEN BSSIDs under one name are not a pair rule_evil_twin reports
+ * (multi-vendor public hotspots; there is no secret to defend), so a
+ * swing on one of them has nothing to corroborate.
+ *
+ * Mutation (2026-11-11): the OPEN test dropped from
+ * twin_pair_is_candidate; the proximity assertion went red. */
+static void test_evil_twin_proximity_open_pair_is_no_candidate(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "Airport-Free", PROX_REAL,  "OPEN");
+    add_beacon(&s, "Airport-Free", PROX_ROGUE, "OPEN");
+    s.beacon_aps[1].rssi_min_60s = -80;
+    s.beacon_aps[1].rssi_max_60s = -50;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+}
+
+/* An attributed pair reports the swing of its accused half only (#189,
+ * 2026-11-12): the impostor getting louder corroborates the EVIL_TWIN
+ * row; the original getting louder is a client walking past it.
+ *
+ * Attributed two ways the ladder knows: an attacker-tool OUI, and the
+ * chain's taint. Then the real half of the first pair joins a second,
+ * unattributed pair under the same name, and its swing counts again:
+ * twin_has_candidate asks every pair, not the first.
+ *
+ * Mutation (2026-11-12): the twin_choose_sides() test removed from
+ * twin_has_candidate; the first two blocks counted 2 rows each. With
+ * `return 0` for `continue` on an attributed real half, the third block
+ * lost its row. */
+static void test_evil_twin_proximity_only_the_accused_half(void) {
+    uint8_t real[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t esp[6]  = {0x24,0x0a,0xc4,0x44,0x55,0x66};   /* Espressif */
+    uint8_t copy[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+    uint8_t third[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    char want[40];
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", real, "WPA2");
+    add_beacon(&s, "CorpWiFi", esp,  "WPA2");
+    for (int k = 0; k < 2; k++) {
+        s.beacon_aps[k].rssi_min_60s = -80;
+        s.beacon_aps[k].rssi_max_60s = -55;
+    }
+    alerts_update(&s);
+    ASSERT_EQ(prox_count(&s), 1);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY);
+    ASSERT(idx >= 0);
+    if (idx >= 0)
+        ASSERT(strstr(s.alerts[idx].key, "twin-prox:24:0a:c4:44:55:66") != NULL);
+
+    /* The taint, on a pair with no tool OUI: the copy is accused. */
+    alerts_clear();
+    static sloth_state_t t; seed_state(&t);
+    add_beacon(&t, "CorpWiFi", real, "WPA2");
+    add_beacon(&t, "CorpWiFi", copy, "WPA2");
+    for (int k = 0; k < 2; k++) {
+        t.beacon_aps[k].rssi_min_60s = -80;
+        t.beacon_aps[k].rssi_max_60s = -55;
+    }
+    alerts_update(&t);
+    ASSERT_EQ(prox_count(&t), 2);       /* unattributed: either half */
+    alerts_clear();
+    evil_twin_taint_mark_for_test(copy);
+    alerts_update(&t);
+    ASSERT_EQ(prox_count(&t), 1);
+    idx = find_alert(&t, ALERT_TYPE_EVIL_TWIN_PROXIMITY);
+    snprintf(want, sizeof(want), "twin-prox:3c:52:a1:01:02:03");
+    ASSERT(idx >= 0 && strstr(t.alerts[idx].key, want) != NULL);
+    evil_twin_taint_clear();
+
+    /* The real half of the Espressif pair is also half of an
+     * unattributed one (two vendors, one band, different vendor IEs). */
+    alerts_clear();
+    add_beacon(&s, "CorpWiFi", third, "WPA2");
+    s.beacon_aps[0].fp.vendor_ies_hash = 0x1111u;
+    s.beacon_aps[2].fp.vendor_ies_hash = 0x2222u;
+    alerts_update(&s);
+    snprintf(want, sizeof(want), "twin-prox:a8:bb:cc:01:02:03");
+    int found = 0;
+    for (int k = 0; k < s.alert_count; k++)
+        if (s.alerts[k].type == ALERT_TYPE_EVIL_TWIN_PROXIMITY &&
+            strstr(s.alerts[k].key, want) != NULL) found = 1;
+    ASSERT_EQ(found, 1);
 }
 
 /* ── Evil-twin Phase 4: attack-chain correlation ──────────── */
@@ -2728,7 +3554,7 @@ static void test_evil_twin_proximity_per_bssid(void) {
 static void test_evil_twin_attack_chain_fires_crit(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t real[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t real[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t twin[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", real, "WPA2");
     add_beacon(&s, "Cafe-Net", twin, "WPA2");
@@ -2746,7 +3572,7 @@ static void test_evil_twin_attack_chain_fires_crit(void) {
         found_chain = 1;
         ASSERT_EQ((int)s.alerts[k].sev, (int)ALERT_SEV_CRIT);
         ASSERT(strstr(s.alerts[k].detail, "attack-in-progress") != NULL);
-        ASSERT(strstr(s.alerts[k].detail, "real=aa:bb:cc:01:02:03") != NULL);
+        ASSERT(strstr(s.alerts[k].detail, "real=a8:bb:cc:01:02:03") != NULL);
         ASSERT(strstr(s.alerts[k].detail, "twin=11:22:33:44:55:66") != NULL);
         break;
     }
@@ -2762,7 +3588,7 @@ static void test_evil_twin_attack_chain_fires_crit(void) {
 static void test_evil_twin_attack_chain_stale_deauth_no_fire(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t real[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t real[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t twin[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", real, "WPA2");
     add_beacon(&s, "Cafe-Net", twin, "WPA2");
@@ -2784,7 +3610,7 @@ static void test_evil_twin_attack_chain_stale_deauth_no_fire(void) {
 static void test_evil_twin_attack_chain_no_twin_no_fire(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t solo[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t solo[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     add_beacon(&s, "Solo-Net", solo, "WPA2");
     uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
     add_deauth_flood_full(&s, client, solo, 7, 20);
@@ -2802,7 +3628,7 @@ static void test_evil_twin_attack_chain_no_twin_no_fire(void) {
 static void test_evil_twin_attack_chain_no_flood_no_fire(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t real[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t real[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t twin[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", real, "WPA2");
     add_beacon(&s, "Cafe-Net", twin, "WPA2");
@@ -2823,7 +3649,7 @@ static void test_evil_twin_attack_chain_no_flood_no_fire(void) {
 static void test_evil_twin_attack_chain_reverse_direction(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t real[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t real[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t twin[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", real, "WPA2");
     add_beacon(&s, "Cafe-Net", twin, "WPA2");
@@ -2846,7 +3672,7 @@ static void test_evil_twin_attack_chain_reverse_direction(void) {
 static void test_evil_twin_taint_clear_drops_entries(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t real[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t real[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t twin[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", real, "WPA2");
     add_beacon(&s, "Cafe-Net", twin, "WPA2");
@@ -2891,7 +3717,7 @@ static void test_taint_ttl_honours_test_clock(void) {
      * made by alerts_update() at WALL0 ages identically. */
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t real[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t real[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t twin[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&s, "Cafe-Net", real, "WPA2");
     add_beacon(&s, "Cafe-Net", twin, "WPA2");
@@ -3014,7 +3840,7 @@ static void test_e2e_full_attack_chain(void) {
     sloth_state_t s; seed_state(&s);
 
     /* Phase 1/2: twin pair, diff OUI, distinct vendor-IE hashes. */
-    uint8_t real[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t real[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t twin[6] = {0x00,0x13,0x37,0x44,0x55,0x66};  /* Hak5 OUI bonus */
     add_beacon(&s, "Cafe-Net", real, "WPA2");
     add_beacon(&s, "Cafe-Net", twin, "WPA2");
@@ -3084,7 +3910,7 @@ static void test_e2e_full_attack_chain(void) {
 static void test_e2e_clean_baseline_no_alerts(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t solo[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t solo[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     add_beacon(&s, "Home-Wifi", solo, "WPA2");
     s.beacon_aps[0].signal_dbm = -55;
     alerts_update(&s);
@@ -3460,6 +4286,104 @@ static void test_attack_path_normal_no_fire(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_ATTACK_PATH), -1);
 }
 
+/* #197: a paired response carries its request's host and path with src
+ * = the server, and the rule used to fire it as path:<server>:<label>.
+ * The pair goes through the production path — request parser, ring,
+ * flow pairing, response parser, snapshot — so the response row has
+ * exactly what capture.c gives it. Bytes are RFC 9112 messages: a
+ * request-line (§3) and a status-line (§4), each with field lines (§5)
+ * and the empty line that ends them. */
+#define AP_CLI "192.168.1.242"
+#define AP_SRV "192.168.1.245"
+
+static const char AP_REQ[] =
+    "GET /uir//etc/passwd HTTP/1.1\r\n"
+    "Host: 192.168.1.245\r\n"
+    "User-Agent: Mozilla/5.0\r\n"
+    "\r\n";
+static const char AP_RESP[] =
+    "HTTP/1.1 404 Not Found\r\n"
+    "Content-Length: 0\r\n"
+    "\r\n";
+
+/* Records the request (unless resp_only) and its response the way
+ * try_http() does, then snapshots the ring into s. Returns whether the
+ * response was paired. */
+static int ap_wire(sloth_state_t *s, int resp_only) {
+    http_log_clear();
+    http_log_entry_t rq, rs;
+    if (http_log_parse((const uint8_t *)AP_REQ, (int)strlen(AP_REQ),
+                       AP_CLI, &rq) != 1) return -1;
+    snprintf(rq.dst, sizeof(rq.dst), "%s", AP_SRV);
+    rq.src_port = 50123; rq.dst_port = 80;
+    if (!resp_only) http_log_record(&rq);
+    if (http_log_parse_response((const uint8_t *)AP_RESP, (int)strlen(AP_RESP),
+                                AP_SRV, &rs) != 1) return -2;
+    snprintf(rs.dst, sizeof(rs.dst), "%s", AP_CLI);
+    rs.src_port = 80; rs.dst_port = 50123;
+    int paired = http_log_pair_response(&rs);
+    if (resp_only) {
+        /* No request reached the ring, so the flow table never saw
+         * one: give the response the path by hand — the case is a
+         * response row that names the exploit path with no request
+         * beside it, which is what eviction of the request leaves. */
+        snprintf(rs.host, sizeof(rs.host), "%s", AP_SRV);
+        snprintf(rs.path, sizeof(rs.path), "%s", "/uir//etc/passwd");
+    }
+    http_log_record(&rs);
+    http_log_snapshot(s);
+    return paired;
+}
+
+static void test_attack_path_pair_fires_once_on_client(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT_EQ(ap_wire(&s, 0), 1);
+    ASSERT_EQ(s.http_log_count, 2);
+    /* The precondition the bug needs: the response row names the path
+     * and is sourced from the server. */
+    int resp = s.http_log[0].is_response ? 0 : 1;
+    ASSERT(s.http_log[resp].is_response);
+    ASSERT(strcmp(s.http_log[resp].src, AP_SRV) == 0);
+    ASSERT(strcmp(s.http_log[resp].path, "/uir//etc/passwd") == 0);
+    alerts_update(&s);
+    int nap = 0;
+    for (int k = 0; k < s.alert_count; k++)
+        if (s.alerts[k].type == ALERT_TYPE_ATTACK_PATH) nap++;
+    ASSERT_EQ(nap, 1);
+    int i = find_alert(&s, ALERT_TYPE_ATTACK_PATH);
+    ASSERT(i >= 0);
+    ASSERT(strcmp(s.alerts[i].key, "path:" AP_CLI ":etc/passwd") == 0);
+    ASSERT(strcmp(s.alerts[i].match_ip, AP_CLI) == 0);
+    for (int k = 0; k < s.alert_count; k++)
+        ASSERT(strstr(s.alerts[k].key, "path:" AP_SRV ":") == NULL);
+    http_log_clear();
+}
+
+static void test_attack_path_response_only_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT_EQ(ap_wire(&s, 1), 0);
+    ASSERT_EQ(s.http_log_count, 1);
+    ASSERT(s.http_log[0].is_response);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ATTACK_PATH), -1);
+    http_log_clear();
+}
+
+/* The same guard on ATTACK_TOOL_UA: a response row with a tool's name
+ * where a User-Agent would be (the parser keeps none today; this is the
+ * row a future one would make) never keys the server as the tool. */
+static void test_attack_tool_ua_response_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_http(&s, AP_SRV, AP_SRV, "sqlmap/1.7");
+    s.http_log[0].is_response = 1;
+    s.http_log[0].status = 200;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ATTACK_TOOL_UA), -1);
+}
+
 static void test_attack_tool_ua_sqlmap_fires(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
@@ -3488,6 +4412,139 @@ static void test_attack_tool_ua_normal_browser_no_fire(void) {
              "curl/8.4.0");
     alerts_update(&s);
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_ATTACK_TOOL_UA), -1);
+}
+
+/* ── #197: a response is not an attacker ─────────────────────
+ *
+ * s->http_log carries both halves of a conversation, and
+ * http_log_pair_response() copies the *request's* host and path onto
+ * the response so a consumer knows what was answered. The response's
+ * src is the server. So a rule that keys a path on e->src for every
+ * ring entry fires a second CRIT naming the victim as its own
+ * attacker, and points match_ip — and with it --pcap-dir export and
+ * the device's ALERT_TAGGED risk bit — at the victim.
+ *
+ * Both halves go through the production parsers, the real flow
+ * pairing and http_log_snapshot(), from bytes in RFC 9112 message
+ * syntax (§3 request-line, §4 status-line, §5 field lines, §6 body).
+ * A hand-filled entry with is_response set would not prove that
+ * pairing is what carries the path across, and the pairing is the
+ * whole mechanism — so ap_seed_pair() asserts the misattributed entry
+ * is really in the snapshot before any rule looks at it. Without that
+ * precondition an "it does not fire" assertion is green for the
+ * wrong reason. */
+#define AP_CLI "192.168.1.242"
+#define AP_SRV "192.168.1.245"
+
+static const char AP_REQ_PASSWD[] =
+    "GET /uir//etc/passwd HTTP/1.1\r\n"
+    "Host: 192.168.1.245\r\n"
+    "User-Agent: Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/115.0\r\n"
+    "Accept: */*\r\n"
+    "\r\n";
+static const char AP_RESP_404[] =
+    "HTTP/1.1 404 Not Found\r\n"
+    "Server: nginx\r\n"
+    "Content-Type: text/html\r\n"
+    "Content-Length: 9\r\n"
+    "\r\n"
+    "not here\n";
+
+/* One request/response pair on one flow, into s->http_log.
+ *
+ * `ua`, when non-NULL, is written over the parsed User-Agent of
+ * **both** halves. On the request that is just a header value the
+ * fixture chooses. On the response it is a field the wire cannot
+ * produce today — http_log_parse_response() never fills user_agent
+ * and http_log_pair_response() copies only host and path — and it is
+ * written deliberately, because it is the only way a test can see
+ * rule_attack_tool_ua()'s direction check at all. The alternative is
+ * a guard no test can distinguish from its own absence, which is the
+ * thing agents/AGENTS.md says not to claim coverage for. What the
+ * fixture models is the contract — "src and user_agent describe the
+ * same endpoint only on a request" — not an observed frame. */
+static void ap_seed_pair(sloth_state_t *s, const char *ua) {
+    http_log_clear();
+    http_log_entry_t rq, rs;
+
+    ASSERT(http_log_parse((const uint8_t *)AP_REQ_PASSWD,
+                          (int)strlen(AP_REQ_PASSWD), AP_CLI, &rq));
+    snprintf(rq.dst, sizeof(rq.dst), "%s", AP_SRV);
+    rq.src_port = 50123; rq.dst_port = 80;
+    if (ua) snprintf(rq.user_agent, sizeof(rq.user_agent), "%s", ua);
+    http_log_record(&rq);
+
+    ASSERT(http_log_parse_response((const uint8_t *)AP_RESP_404,
+                                   (int)strlen(AP_RESP_404), AP_SRV, &rs));
+    snprintf(rs.dst, sizeof(rs.dst), "%s", AP_CLI);
+    rs.src_port = 80; rs.dst_port = 50123;
+    /* The pairing is the precondition, not a detail: it is what puts
+     * the client's path on a server-sourced entry. */
+    ASSERT(http_log_pair_response(&rs));
+    if (ua) snprintf(rs.user_agent, sizeof(rs.user_agent), "%s", ua);
+    http_log_record(&rs);
+
+    http_log_snapshot(s);
+    /* Newest first, so index 0 is the response. */
+    ASSERT_EQ(s->http_log_count, 2);
+    ASSERT_EQ(s->http_log[0].is_response, 1);
+    ASSERT_STR(s->http_log[0].src,  AP_SRV);
+    ASSERT_STR(s->http_log[0].path, "/uir//etc/passwd");
+    ASSERT_EQ(s->http_log[1].is_response, 0);
+    ASSERT_STR(s->http_log[1].src,  AP_CLI);
+    ASSERT_STR(s->http_log[1].path, "/uir//etc/passwd");
+}
+
+static int ap_count_type(const sloth_state_t *s, alert_type_t ty) {
+    int n = 0;
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == ty) n++;
+    return n;
+}
+
+/* The issue's acceptance criterion: one pair, one key, and the key
+ * names the client. */
+static void test_attack_path_response_is_not_an_attacker(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    ap_seed_pair(&s, NULL);
+    alerts_update(&s);
+
+    ASSERT_EQ(ap_count_type(&s, ALERT_TYPE_ATTACK_PATH), 1);
+    int idx = find_alert(&s, ALERT_TYPE_ATTACK_PATH);
+    ASSERT(idx >= 0);
+    if (idx < 0) return;
+    ASSERT_STR(s.alerts[idx].key, "path:" AP_CLI ":etc/passwd");
+    /* match_ip is what --pcap-dir and ALERT_TAGGED follow. */
+    ASSERT_STR(s.alerts[idx].match_ip, AP_CLI);
+    for (int i = 0; i < s.alert_count; i++)
+        if (s.alerts[i].type == ALERT_TYPE_ATTACK_PATH)
+            ASSERT(strstr(s.alerts[i].key, AP_SRV) == NULL);
+}
+
+/* The sibling rule on the same ring. The claim is the same one and a
+ * different rule: the tool belongs to the endpoint that ran it, so a
+ * server-sourced entry carrying the request's fields must not become a
+ * second key. See ap_seed_pair() for why the response half of this
+ * fixture carries a User-Agent the wire would not give it, and what
+ * that does and does not model. Mutation that reddens this and
+ * nothing else: drop the http_entry_is_request() test from the label
+ * pass in rule_attack_tool_ua(). */
+static void test_attack_tool_ua_response_is_not_an_attacker(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    ap_seed_pair(&s, "sqlmap/1.7.5#stable (http://sqlmap.org)");
+    alerts_update(&s);
+
+    ASSERT_EQ(ap_count_type(&s, ALERT_TYPE_ATTACK_TOOL_UA), 1);
+    int idx = find_alert(&s, ALERT_TYPE_ATTACK_TOOL_UA);
+    ASSERT(idx >= 0);
+    if (idx < 0) return;
+    ASSERT_STR(s.alerts[idx].match_ip, AP_CLI);
+    ASSERT(strstr(s.alerts[idx].key, AP_CLI) != NULL);
+    for (int i = 0; i < s.alert_count; i++)
+        if (s.alerts[i].type == ALERT_TYPE_ATTACK_TOOL_UA)
+            ASSERT(strstr(s.alerts[i].key, AP_SRV) == NULL);
 }
 
 /* ── Probe flood ─────────────────────────────────────────── */
@@ -3636,6 +4693,115 @@ static void test_karma_three_ssids_fires(void) {
     ASSERT(strstr(s.alerts[idx].detail, "uncorroborated") != NULL);
 }
 
+static void test_karma_pineapple_pairing_is_context_only(void) {
+    /* #151: a Pineapple setup AP beside a KARMA candidate is named in
+     * the detail and the verdict fields, and moves neither severity nor
+     * confidence. Run once without the setup AP and once with it. */
+    uint8_t lure[6]  = {0x02,0x11,0x22,0x33,0x00,0x01};
+    uint8_t setup[6] = {0x02,0x11,0x22,0x33,0x1a,0x2b};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_karma_ap(&s, lure, ssids, 3);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    if (idx < 0) return;
+    int sev0 = (int)s.alerts[idx].sev, conf0 = s.alerts[idx].confidence;
+    ASSERT_EQ((int)s.alerts[idx].hw_tier, (int)HW_TIER_NONE);
+    ASSERT(strstr(s.alerts[idx].detail, "hw:") == NULL);
+
+    alerts_clear();
+    seed_state(&s);
+    seed_karma_ap(&s, lure, ssids, 3);
+    const char *one[] = { "Pineapple_1A2B" };
+    seed_karma_ap(&s, setup, one, 1);
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    if (idx < 0) return;
+    ASSERT_EQ((int)s.alerts[idx].sev, sev0);
+    ASSERT_EQ((int)s.alerts[idx].confidence, conf0);
+    ASSERT(strstr(s.alerts[idx].detail,
+                  " +setup-AP Pineapple_1A2B@02:11:22:33:1a:2b") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "hw:suspected-pineapple-mk7") != NULL);
+    ASSERT_EQ((int)s.alerts[idx].hw_tier, (int)HW_TIER_SUSPECTED);
+    ASSERT_EQ((int)s.alerts[idx].hw_device, (int)SLOTH_TOOL_PINEAPPLE_MK7);
+    ASSERT_EQ((int)s.alerts[idx].hw_signals, (int)HW_SIG_PAIR);
+    /* The stage is consumed by the KARMA fire: the next fire from any
+     * other source must not inherit it. Seen red with the clear in
+     * stamp_hw_verdict() removed. */
+    alerts_fire_for_test(ALERT_TYPE_PORT_SCAN, ALERT_SEV_WARN,
+                         "hw151:inherit", "d", NULL, 0);
+    alerts_update(&s);
+    int ps = -1;
+    for (int i = 0; i < s.alert_count; i++)
+        if (!strcmp(s.alerts[i].key, "hw151:inherit")) ps = i;
+    ASSERT(ps >= 0);
+    if (ps >= 0) ASSERT_EQ((int)s.alerts[ps].hw_tier, (int)HW_TIER_NONE);
+}
+
+/* #151, owner decision 2026-11-12: a `corroborated` verdict makes
+ * KARMA_AP CRIT; `suspected` stays context. No shipped input is
+ * capture-backed, so the verdict is reached with a synthetic
+ * capture-backed stack row put in front of the matcher through
+ * hw_stack_test_table(). Stack row (backed) + setup-AP pairing is two
+ * classes: corroborated, CRIT, confidence unchanged. The stack row
+ * alone is one class: suspected, WARN. Seen red with `|| hw_corrob`
+ * removed from rule_karma_ap()'s gate (the first case), and with the
+ * gate widened to `hwv.tier >= HW_TIER_SUSPECTED` (the second, and the
+ * pairing test above), each then restored. */
+static void test_karma_corroborated_verdict_is_crit(void) {
+    static const hw_stack_row_t rows[] = {
+        { 0x5eed1510u, 9, SLOTH_TOOL_PINEAPPLE_MK7, "synthetic PineAP stack",
+          "test only, synthetic capture-backed row",
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "test-151" },
+    };
+    ASSERT(hw_stack_row_valid(&rows[0]));
+    uint8_t lure[6]  = {0x02,0x11,0x22,0x33,0x00,0x01};
+    uint8_t setup[6] = {0x02,0x11,0x22,0x33,0x1a,0x2b};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    hw_stack_test_table(rows, 1);
+
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_karma_ap(&s, lure, ssids, 3);
+    s.beacon_aps[0].fp.ie_order_hash  = 0x5eed1510u;
+    s.beacon_aps[0].fp.ie_order_count = 9;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    int conf0 = idx >= 0 ? s.alerts[idx].confidence : -1;
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].hw_tier, (int)HW_TIER_SUSPECTED);
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+        ASSERT(strstr(s.alerts[idx].detail, "hw:suspected-pineapple-mk7")
+               != NULL);
+    }
+
+    alerts_clear();
+    seed_state(&s);
+    seed_karma_ap(&s, lure, ssids, 3);
+    s.beacon_aps[0].fp.ie_order_hash  = 0x5eed1510u;
+    s.beacon_aps[0].fp.ie_order_count = 9;
+    const char *one[] = { "Pineapple_1A2B" };
+    seed_karma_ap(&s, setup, one, 1);
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].hw_tier, (int)HW_TIER_CORROBORATED);
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+        ASSERT_EQ(s.alerts[idx].confidence, conf0);
+        ASSERT(strstr(s.alerts[idx].detail,
+                      "hw:corroborated-pineapple-mk7") != NULL);
+        ASSERT(strstr(s.alerts[idx].detail, "uncorroborated") == NULL);
+    }
+    hw_stack_test_table(NULL, 0);
+}
+
 static void test_karma_names_the_tool_from_fingerprint_flags(void) {
     /* The signature table's one row keys on ap_fingerprint_t flags, and
      * nothing else in the suite proves those reach the matcher. Without
@@ -3658,12 +4824,12 @@ static void test_karma_names_the_tool_from_fingerprint_flags(void) {
          * so rather than let a confidence label speak for it (#90).
          * With nothing else corroborating, an UNVERIFIED guess alone
          * must not escalate severity either. */
-        ASSERT(strstr(s.alerts[idx].detail, "Marauder/med?") != NULL);
+        ASSERT(strstr(s.alerts[idx].detail, "Marauder?") != NULL);
         ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
         /* The "?" alone is easy to read past — the word is there too,
          * and the provenance travels as fields, not only prose (#90). */
         ASSERT(strstr(s.alerts[idx].detail,
-                      "[ESP32 Marauder/med? provisional]") != NULL);
+                      "[ESP32 Marauder? provisional]") != NULL);
         ASSERT_STR(s.alerts[idx].sig_id, "esp32-marauder-01");
         ASSERT_STR(s.alerts[idx].sig_version, "research-2026-09-04");
         ASSERT_EQ((int)s.alerts[idx].sig_validated, 0);
@@ -3865,6 +5031,129 @@ static void test_karma_confidence_keys_on_the_corroborated_station(void) {
     /* And the overlap weight is NOT paid — the bare threshold weight is
        all the confidence there is. Asserted as the exact value so the
        mutation that adds 25 for a union hit cannot pass. */
+    ASSERT_EQ((int)s.alerts[i].confidence, KARMA_W_SSID_THRESH);
+}
+
+/* ── IE-fingerprint collapse (#187 S4) ──────────────────────
+ *
+ * The signal the KARMA_AP rule was missing: across the SSIDs one BSSID
+ * advertises, how many distinct IE fingerprints came back. It pays a
+ * small confidence weight and never moves severity — see
+ * KARMA_W_IE_COLLAPSE for why it is deliberately in the informational
+ * tier. Every existing fixture here leaves ssid_history_fp[] zero, so
+ * none of them is affected, which is also the third case below. */
+
+static void test_karma_ie_collapse_pays_confidence_not_severity(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    seed_karma_ap(&s, bssid, ssids, 3);
+    /* Three unrelated names, one security posture behind all of them. */
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count - 1];
+    for (int i = 0; i < 3; i++) b->ssid_history_fp[i] = 0x5a5a5a5au;
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    /* The exact value, so a mutation that files this weight under a
+       different one, or pays it twice, cannot pass. */
+    ASSERT_EQ((int)s.alerts[i].confidence,
+              KARMA_W_SSID_THRESH + KARMA_W_IE_COLLAPSE);
+    ASSERT(strstr(s.alerts[i].detail, ", 1 IE fingerprint") != NULL);
+    /* Still a WARN. Nothing ties this pattern to this radio: a BSS
+       renamed over a long session shows exactly one posture too, so a
+       collapse that escalated would make the commonest benign cause of
+       a multi-SSID BSSID read as a confirmed lure. Seen to fail with
+       `|| ie_collapse` added to the severity condition in
+       rule_karma_ap(), which reddens this line alone. */
+    ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[i].detail, "uncorroborated") != NULL);
+}
+
+static void test_karma_ie_variety_lowers_confidence(void) {
+    /* The converse reading, and the sharper one (#187, owner decision
+       2026-11-12): a BSSID whose advertised SSIDs carry genuinely
+       different postures is doing something a single PineAP-style
+       radio, which answers every name with one IE set, does not. It
+       costs KARMA_W_IE_VARIETY (15) confidence and is named in the
+       detail. A station corroborates here so the number sits clear of
+       KARMA_CONF_MIN's clamp: 20 + 25 - 15 = 30, exact, so a mutation
+       that drops the subtraction (45) or pays the collapse instead (55)
+       reddens. Seen red with `confidence -= KARMA_W_IE_VARIETY` removed
+       from rule_karma_ap(), then restored. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "corp", "corp-guest", "corp-iot" };
+    seed_karma_ap(&s, bssid, ssids, 3);
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count - 1];
+    b->ssid_history_fp[0] = 0x11111111u;
+    b->ssid_history_fp[1] = 0x22222222u;
+    b->ssid_history_fp[2] = 0x33333333u;
+    pnl_client_t *cli = &s.pnl_clients[s.pnl_count++];
+    memset(cli, 0, sizeof(*cli));
+    cli->mac[0] = 0x02; cli->mac[5] = 0x10;
+    snprintf(cli->ssids[0], 33, "corp");
+    snprintf(cli->ssids[1], 33, "corp-guest");
+    cli->ssid_count = 2;
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    ASSERT_EQ((int)s.alerts[i].confidence,
+              KARMA_W_SSID_THRESH + KARMA_W_PNL_OVERLAP - KARMA_W_IE_VARIETY);
+    ASSERT(strstr(s.alerts[i].detail, ", 3 IE fingerprints +IE variety")
+           != NULL);
+    /* Confidence only: the corroborating station still makes it CRIT. */
+    ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+}
+
+static void test_karma_uniform_ies_cost_no_confidence(void) {
+    /* The same corroborated candidate with one posture behind every
+       name: no variety, no subtraction, no marker. Seen red with the
+       variety test widened to `ie_fps >= 1`, then restored. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "corp", "corp-guest", "corp-iot" };
+    seed_karma_ap(&s, bssid, ssids, 3);
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count - 1];
+    for (int k = 0; k < 3; k++) b->ssid_history_fp[k] = 0x5a5a5a5au;
+    pnl_client_t *cli = &s.pnl_clients[s.pnl_count++];
+    memset(cli, 0, sizeof(*cli));
+    cli->mac[0] = 0x02; cli->mac[5] = 0x10;
+    snprintf(cli->ssids[0], 33, "corp");
+    snprintf(cli->ssids[1], 33, "corp-guest");
+    cli->ssid_count = 2;
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    ASSERT_EQ((int)s.alerts[i].confidence,
+              KARMA_W_SSID_THRESH + KARMA_W_PNL_OVERLAP + KARMA_W_IE_COLLAPSE);
+    ASSERT(strstr(s.alerts[i].detail, "IE variety") == NULL);
+}
+
+static void test_karma_unknown_fingerprints_state_nothing(void) {
+    /* An AP whose fingerprints were never recorded must produce no IE
+       clause at all. "0 IE fingerprints" would read as an observation
+       about the AP rather than about sloth's coverage, and a bare "1"
+       from counting only the known entries would be the invented
+       collapse karma_ie_distinct_fp() refuses. Seen to fail with the
+       `else if (ie_fps > 1)` branch in rule_karma_ap() changed to
+       `else`, which appends ", 0 IE fingerprints" here. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    seed_karma_ap(&s, bssid, ssids, 3);   /* ssid_history_fp[] left 0 */
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    ASSERT(strstr(s.alerts[i].detail, "IE fingerprint") == NULL);
+    ASSERT(strstr(s.alerts[i].detail, "IE variety") == NULL);
     ASSERT_EQ((int)s.alerts[i].confidence, KARMA_W_SSID_THRESH);
 }
 
@@ -4086,7 +5375,7 @@ static void test_ssid_confusion_open_weak_side_defers_to_twin(void) {
      * the downgrade rule requires the weak side to still be protected. */
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t legit[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t legit[6] = {0xa8,0xbb,0xcc,0x00,0x00,0x01};
     uint8_t spoof[6] = {0xde,0xad,0xbe,0x00,0x00,0x02};
     add_beacon_rsn(&s, "CORP", legit, "WPA3", "GCMP", 2);
     add_beacon_rsn(&s, "CORP", spoof, "OPEN", "",     0);
@@ -4572,6 +5861,15 @@ static void test_bgp_notification_burst_per_peer_pair(void) {
 
 /* ── SSH brute force ────────────────────────────────────── */
 
+/* #202: rule_ssh_brute_force() reads e->brute_count — banners inside
+ * the sliding ssh.brute_window_s window, kept current by
+ * ssh_snoop_snapshot() from a private ring (src/ssh_snoop.c) — not
+ * the lifetime banner_count. The real windowing arithmetic (a spread
+ * sweep staying low, a burst crossing threshold, an idle flow decaying
+ * back down) is exercised against that ring directly in
+ * tests/test_ssh_snoop.c; here brute_count is seeded alongside
+ * banner_count so these threshold-mapping tests keep exercising the
+ * same shape they always did. */
 static void seed_ssh_flow(sloth_state_t *s, const char *src_ip,
                            const char *dst_ip, int banner_count) {
     if (s->ssh_flow_count >= MAX_SSH_FLOWS) return;
@@ -4582,7 +5880,35 @@ static void seed_ssh_flow(sloth_state_t *s, const char *src_ip,
     snprintf(e->server_banner, sizeof(e->server_banner),
              "SSH-2.0-OpenSSH_8.9");
     e->banner_count = banner_count;
+    e->brute_count  = banner_count;
     e->last_seen    = time(NULL);
+}
+
+/* Once the window has decayed (ssh_snoop_snapshot() would report a
+ * lower brute_count on the next tick, per test_ssh_snoop.c), the rule
+ * must stop re-asserting the incident — `evaluations` (bumped once
+ * per fire() call, #98) must not move on a tick where brute_count is
+ * back under threshold. Pre-#202 the rule read the lifetime
+ * banner_count, which cannot fall while the row exists, so it fired
+ * on literally every tick forever (one reference host: 131,014 fires
+ * on 10 real logins). */
+static void test_ssh_brute_force_idle_flow_stops(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_ssh_flow(&s, "10.0.0.5", "10.0.0.10", 10);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_SSH_BRUTE_FORCE);
+    ASSERT(idx >= 0);
+    if (idx < 0) return;
+    uint32_t evals_before = s.alerts[idx].evaluations;
+
+    /* No new banners landed; the flow's window has aged out. */
+    s.ssh_flows[0].brute_count = 0;
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_SSH_BRUTE_FORCE);
+    ASSERT(idx >= 0);
+    if (idx >= 0)
+        ASSERT_EQ((int)s.alerts[idx].evaluations, (int)evals_before);
 }
 
 static void test_ssh_brute_force_fires_at_threshold(void) {
@@ -4622,6 +5948,8 @@ static void test_ssh_brute_force_per_pair(void) {
 
 /* ── RDP brute force ────────────────────────────────────── */
 
+/* #202: same fix as SSH above — e->brute_count mirrors
+ * connect_req_count here for the same reason. */
 static void seed_rdp_flow(sloth_state_t *s, const char *src_ip,
                            const char *dst_ip, int cr_count,
                            const char *cookie) {
@@ -4633,7 +5961,27 @@ static void seed_rdp_flow(sloth_state_t *s, const char *src_ip,
     if (cookie) snprintf(e->last_cookie, sizeof(e->last_cookie),
                           "%s", cookie);
     e->connect_req_count = cr_count;
+    e->brute_count       = cr_count;
     e->last_seen         = time(NULL);
+}
+
+/* Same shape as SSH's sibling test above. */
+static void test_rdp_brute_force_idle_flow_stops(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_rdp_flow(&s, "203.0.113.7", "10.0.0.20", 10, "administrator");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RDP_BRUTE_FORCE);
+    ASSERT(idx >= 0);
+    if (idx < 0) return;
+    uint32_t evals_before = s.alerts[idx].evaluations;
+
+    s.rdp_flows[0].brute_count = 0;
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_RDP_BRUTE_FORCE);
+    ASSERT(idx >= 0);
+    if (idx >= 0)
+        ASSERT_EQ((int)s.alerts[idx].evaluations, (int)evals_before);
 }
 
 static void test_rdp_brute_force_fires_at_threshold(void) {
@@ -4684,6 +6032,12 @@ static void test_rdp_brute_force_no_cookie(void) {
 
 /* ── SNMP community brute force ─────────────────────────── */
 
+/* #203: same fix as SSH/RDP (#202) — rule_snmp_community_brute()
+ * reads e->brute_count, new communities inside the sliding
+ * snmp.brute_window_s window (kept by snmp_snoop_snapshot(), exercised
+ * against the real ring in tests/test_snmp_snoop.c), not the lifetime
+ * community_count. Seeded alongside it here so these threshold tests
+ * keep their shape. */
 static void seed_snmp_flow(sloth_state_t *s, const char *src_ip,
                             const char *dst_ip, int community_count,
                             const char *last_comm) {
@@ -4693,9 +6047,33 @@ static void seed_snmp_flow(sloth_state_t *s, const char *src_ip,
     snprintf(e->src_ip, sizeof(e->src_ip), "%s", src_ip);
     snprintf(e->dst_ip, sizeof(e->dst_ip), "%s", dst_ip);
     e->community_count = community_count;
+    e->brute_count     = community_count;
     if (last_comm) snprintf(e->last_community, sizeof(e->last_community),
                              "%s", last_comm);
     e->last_seen = time(NULL);
+}
+
+/* Once the window has decayed, the rule must stop re-asserting the
+ * incident: `evaluations` holds flat on a tick where brute_count is
+ * back under threshold while the lifetime community_count still reads
+ * 5. Seen red with the rule reverted to `e->community_count <
+ * SNMP_COMMUNITY_BRUTE_THRESHOLD` (evaluations 1 -> 2). */
+static void test_snmp_community_brute_idle_flow_stops(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_snmp_flow(&s, "10.0.0.5", "10.0.0.10", 5, "private");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_SNMP_COMMUNITY_BRUTE);
+    ASSERT(idx >= 0);
+    if (idx < 0) return;
+    uint32_t evals_before = s.alerts[idx].evaluations;
+
+    s.snmp_flows[0].brute_count = 0;   /* window aged out */
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_SNMP_COMMUNITY_BRUTE);
+    ASSERT(idx >= 0);
+    if (idx >= 0)
+        ASSERT_EQ((int)s.alerts[idx].evaluations, (int)evals_before);
 }
 
 static void test_snmp_community_brute_fires_at_threshold(void) {
@@ -4735,6 +6113,10 @@ static void test_snmp_community_brute_per_pair(void) {
 
 /* ── MQTT broker brute force ────────────────────────────── */
 
+/* #203: the rule reads brute_connects / brute_fails, each from its own
+ * window in mqtt_snoop.c (tests/test_mqtt_snoop.c drives the rings),
+ * not the lifetime connect_count / connack_fail_count. Seeded alongside
+ * them here so the threshold tests keep their shape. */
 static void seed_mqtt_flow(sloth_state_t *s, const char *src_ip,
                             const char *dst_ip, int connect_count,
                             int fail_count, const char *user) {
@@ -4745,11 +6127,41 @@ static void seed_mqtt_flow(sloth_state_t *s, const char *src_ip,
     snprintf(e->dst_ip, sizeof(e->dst_ip), "%s", dst_ip);
     e->connect_count      = connect_count;
     e->connack_fail_count = fail_count;
+    e->brute_connects     = connect_count;
+    e->brute_fails        = fail_count;
     e->proto_level        = 4;
     if (user) snprintf(e->last_username, sizeof(e->last_username),
                         "%s", user);
     e->last_seen = time(NULL);
 }
+
+/* Fire on one path, age that path's window out, and the rule must not
+ * re-assert the incident (`evaluations` flat). One test per path, so
+ * each half of the trip condition is pinned on its own: seen red with
+ * `e->connect_count >= MQTT_BROKER_BRUTE_CONNECTS` restored (connect
+ * test, evaluations 1 -> 2) and, separately, with
+ * `e->connack_fail_count >= MQTT_BROKER_BRUTE_FAILS` restored (fail
+ * test, same). */
+static void mqtt_idle_path_stops(int connects, int fails) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_mqtt_flow(&s, "10.0.0.5", "10.0.0.10", connects, fails, "admin");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MQTT_BROKER_BRUTE);
+    ASSERT(idx >= 0);
+    if (idx < 0) return;
+    uint32_t evals_before = s.alerts[idx].evaluations;
+
+    s.mqtt_flows[0].brute_connects = 0;   /* windows aged out */
+    s.mqtt_flows[0].brute_fails    = 0;
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_MQTT_BROKER_BRUTE);
+    ASSERT(idx >= 0);
+    if (idx >= 0)
+        ASSERT_EQ((int)s.alerts[idx].evaluations, (int)evals_before);
+}
+static void test_mqtt_brute_idle_connects_stop(void) { mqtt_idle_path_stops(10, 0); }
+static void test_mqtt_brute_idle_fails_stop(void)    { mqtt_idle_path_stops(0, 5); }
 
 static void test_mqtt_brute_fires_at_connect_threshold(void) {
     alerts_clear();
@@ -4930,6 +6342,42 @@ static void test_view_detail_first_seen_is_not_last_seen(void) {
 
     ASSERT(strstr(buf, line1) != NULL);
     ASSERT(strstr(buf, line2) != NULL);
+}
+
+/* first_seen is the finding's and survives every reopen (#170), so a
+ * span measured from it covers the quiet gaps between incidents. The
+ * detail pane times "sustained" from this incident's start
+ * (first_detected) and shows the finding's start and its reopens
+ * apart. Seen red with span_s back on a->first_seen ("sustained over
+ * 176400s"). */
+static void test_view_detail_times_the_incident_not_the_finding(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    alert_t *a = &s.alerts[0];
+    a->sev = ALERT_SEV_WARN;
+    snprintf(a->title, sizeof(a->title), "reopened");
+    a->first_seen     = (time_t)1700000000;
+    a->first_detected = a->first_seen + 2 * 86400;
+    a->last_seen      = a->first_detected + 3600;
+    a->reopen_count   = 2;
+    a->count = 3;
+    s.alert_count  = 1;
+    s.alert_sel    = 0;
+    s.alert_detail = 1;
+
+    char want[32], line[64];
+    struct tm tm;
+    ASSERT(localtime_r(&a->first_detected, &tm) != NULL);
+    strftime(want, sizeof(want), "%Y-%m-%d %H:%M:%S", &tm);
+    snprintf(line, sizeof(line), "Incident:   %s", want);
+
+    static char buf[16384];
+    tui_test_erase();
+    view_alerts_draw(&s);
+    tui_test_screen(buf, sizeof(buf));
+    ASSERT(strstr(buf, line) != NULL);
+    ASSERT(strstr(buf, "(reopened 2 times)") != NULL);
+    ASSERT(strstr(buf, "(sustained over 3600s)") != NULL);
 }
 
 static void test_view_key_nav(void) {
@@ -6244,6 +7692,57 @@ static void test_frag_quiet_on_an_open_network(void) {
     frag_clear();
 }
 
+/* #180: FRAG_EAPOL_RELAY on an 802.11be AP MLD. The AP's own M1 has its
+ * MLD MAC as SA (addr3), the link BSSID as addr2. FA_MLD is FA_LINK's
+ * vendor-style sibling (octet 0 gains bits 1 and 5, octet 5 minus one);
+ * FA_LINK is the link address. */
+static const uint8_t FA_LINK[6] = { 0x00, 0x00, 0x5e, 0x00, 0x53, 0x30 };
+static const uint8_t FA_MLD[6]  = { 0x22, 0x00, 0x5e, 0x00, 0x53, 0x2f };
+
+static void test_frag_eapol_relay_quiet_on_an_ap_mld(void) {
+    /* With the beacon's MLD on file, and without any beacon (the
+     * sibling heuristic). Seen red pass by pass: the beacon-MLD branch
+     * answering FRAG_AP_NO fires pass 0, mld_sibling() answering 0
+     * fires pass 1, and the pre-#180 BSSID-only test fires both. */
+    for (int pass = 0; pass < 2; pass++) {
+        alerts_clear();
+        frag_clear();
+        if (pass == 0) frag_note_beacon(FA_LINK, FA_MLD, 999);
+        uint8_t f[128];
+        int n = frag_frame(f, 0, FA_STA, FA_LINK, FA_MLD, 0, 0x888E);
+        frag_observe(f, n, 1000);
+        sloth_state_t s; seed_state(&s);
+        alerts_update(&s);
+        ASSERT_EQ(find_alert(&s, ALERT_TYPE_FRAG_EAPOL_RELAY), -1);
+    }
+    frag_clear();
+}
+
+static void test_frag_eapol_relay_names_the_sibling_guess(void) {
+    /* A real relay on a BSS where the heuristic also withheld a frame:
+     * the alert fires, and its detail says a guess was made. Seen red
+     * with frag_sibling_note() returning "" unconditionally. */
+    alerts_clear();
+    frag_clear();
+    static const uint8_t ODD[6] = { 0x06, 0x11, 0x22, 0x33, 0x44, 0x55 };
+    uint8_t f[128];
+    int n = frag_frame(f, 0, FA_STA, FA_LINK, FA_MLD, 0, 0x888E);
+    frag_observe(f, n, 1000);
+    n = frag_frame(f, 0, FA_STA, FA_LINK, ODD, 0, 0x888E);
+    frag_observe(f, n, 1001);
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_FRAG_EAPOL_RELAY);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT(strstr(s.alerts[i].detail, "1 EAPOL frame forwarded") != NULL);
+        ASSERT(strstr(s.alerts[i].detail,
+                      "; 1 more withheld as the AP MLD (mld-sibling heuristic)")
+               != NULL);
+    }
+    frag_clear();
+}
+
 /* ── SAE/PSK split (#74 Detector B, concurrent half) ─────── */
 
 /* add_beacon() sets no AKM bits, so the split rule needs a variant that
@@ -6454,7 +7953,8 @@ static void test_sae_psk_regression_fires(void) {
     /* The first alert rule that reads from the database. It cannot be
      * driven from sloth_state_t at all: the evidence is what this BSSID
      * looked like yesterday. */
-    char path[] = "/tmp/sloth_akmreg_XXXXXX";
+    char path[TEST_TMP_MAX];
+    test_tmp_path(path, sizeof(path), "sloth_akmreg_XXXXXX");
     int fd = mkstemp(path);
     if (fd >= 0) close(fd);
     unlink(path);
@@ -6625,7 +8125,7 @@ static void test_twin_marked_when_btm_steered_at_it(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
     uint8_t legit[6] = {0x00,0x11,0x22,0,0,1};
-    uint8_t rogue[6] = {0xaa,0xbb,0xcc,0,0,2};
+    uint8_t rogue[6] = {0xa8,0xbb,0xcc,0,0,2};
     add_beacon(&s, "Corp", legit, "WPA2");
     add_beacon(&s, "Corp", rogue, "WPA2");
     seed_steer(&s, legit, rogue, 3);
@@ -6653,7 +8153,7 @@ static void test_twin_unmarked_without_a_matching_candidate(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
     uint8_t legit[6]  = {0x00,0x11,0x22,0,0,1};
-    uint8_t rogue[6]  = {0xaa,0xbb,0xcc,0,0,2};
+    uint8_t rogue[6]  = {0xa8,0xbb,0xcc,0,0,2};
     uint8_t other[6]  = {0x00,0x11,0x22,0,0,9};
     add_beacon(&s, "Corp", legit, "WPA2");
     add_beacon(&s, "Corp", rogue, "WPA2");
@@ -6671,7 +8171,7 @@ static void test_twin_unmarked_for_non_imminent_steers(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
     uint8_t legit[6] = {0x00,0x11,0x22,0,0,1};
-    uint8_t rogue[6] = {0xaa,0xbb,0xcc,0,0,2};
+    uint8_t rogue[6] = {0xa8,0xbb,0xcc,0,0,2};
     add_beacon(&s, "Corp", legit, "WPA2");
     add_beacon(&s, "Corp", rogue, "WPA2");
     seed_steer(&s, legit, rogue, 0);          /* no imminent bit */
@@ -6688,7 +8188,7 @@ static void test_twin_steer_window_expires(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
     uint8_t legit[6] = {0x00,0x11,0x22,0,0,1};
-    uint8_t rogue[6] = {0xaa,0xbb,0xcc,0,0,2};
+    uint8_t rogue[6] = {0xa8,0xbb,0xcc,0,0,2};
     add_beacon(&s, "Corp", legit, "WPA2");
     add_beacon(&s, "Corp", rogue, "WPA2");
     seed_steer(&s, legit, rogue, 3);
@@ -6705,7 +8205,7 @@ static void test_weak_strong_twin_also_names_the_steerer(void) {
      * pushing clients at the rogue, not just that a rogue exists. */
     alerts_clear();
     sloth_state_t s; seed_state(&s);
-    uint8_t weak[6]   = {0xaa,0xbb,0xcc,0,0,2};
+    uint8_t weak[6]   = {0xa8,0xbb,0xcc,0,0,2};
     uint8_t strong[6] = {0x00,0x11,0x22,0,0,1};
     add_beacon(&s, "Cafe", weak,   "OPEN");
     add_beacon(&s, "Cafe", strong, "WPA2");
@@ -6716,6 +8216,1613 @@ static void test_weak_strong_twin_also_names_the_steerer(void) {
     if (i >= 0) {
         ASSERT(strstr(s.alerts[i].detail, "+btm-steered by 00:11:22") != NULL);
         ASSERT_EQ(s.alerts[i].sev, ALERT_SEV_CRIT);
+    }
+}
+
+/* ── One device is not a twin pair (#188) ────────────────────
+ *
+ * A field sensor's CRIT twin rows for a week were all one box's own
+ * radios. Each test below seeds the shape the issue names and holds one
+ * guard alone responsible for the silence, because the guards overlap:
+ * a dual-band pair inside the first-seen window is excused by the
+ * sibling test AND by the band rule AND by the confidence gate, and a
+ * test that leans on all three proves none of them. The mutation run
+ * against each is named in its comment (all 2026-11-11).
+ *
+ * The states are static for the reason given at
+ * test_evil_twin_confidence_is_independent_of_severity: three of them
+ * do not fit one stack frame. seed_state() zeroes each before use. */
+
+/* Shape a seeded AP as one radio of a pair: where it is and when the
+ * table first heard it. add_beacon() leaves first_seen 0 ("unknown"),
+ * which the sibling test never accepts. */
+static void twin_radio(sloth_state_t *s, int idx, int channel,
+                       time_t first_seen, uint32_t vendor_ies_hash) {
+    s->beacon_aps[idx].channel            = channel;
+    s->beacon_aps[idx].first_seen         = first_seen;
+    s->beacon_aps[idx].fp.vendor_ies_hash = vendor_ies_hash;
+}
+
+/* The residential router of the issue: adjacent addresses, channel 6
+ * and channel 157, heard two seconds apart, different vendor IEs.
+ *
+ * The first block is the field shape. Its silence is over-determined
+ * (sibling test, band rule), so it went red only with BOTH removed:
+ * twin_pair_is_sibling() returning 0 and `same_band` forced to 1 gave a
+ * WARN at 20 %.
+ *
+ * The second block isolates the sibling test: a steer from an unrelated
+ * address aimed at one radio is hard evidence on any real pair, and it
+ * is the one signal neither the band rule, the U/L bit nor the
+ * confidence gate can excuse. With twin_pair_is_sibling() returning 0
+ * and nothing else changed, that block went red (CRIT, class=impostor). */
+static void test_twin_dual_band_radios_of_one_device_are_silent(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t r24[6] = {0x28,0x25,0x5f,0x10,0x20,0x14};
+    uint8_t r5[6]  = {0x28,0x25,0x5f,0x10,0x20,0x1c};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "HomeNet", r24, "WPA2");
+    add_beacon(&s, "HomeNet", r5,  "WPA2");
+    twin_radio(&s, 0,   6, t0,     0x1111u);
+    twin_radio(&s, 1, 157, t0 + 2, 0x2222u);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+
+    twin_evidence_t ev;
+    ASSERT_EQ(twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1],
+                                  time(NULL), &ev), 0);
+    ASSERT_EQ(ev.sibling, 1);
+    ASSERT_EQ(ev.positive, 0);
+    ASSERT_EQ(ev.hashes_differ, 0);
+    ASSERT_EQ(ev.same_oui, 0);      /* cleared: no pair to describe */
+
+    alerts_clear();
+    static sloth_state_t t; seed_state(&t);
+    uint8_t mesh[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+    add_beacon(&t, "HomeNet", r24, "WPA2");
+    add_beacon(&t, "HomeNet", r5,  "WPA2");
+    twin_radio(&t, 0,   6, t0,     0x1111u);
+    twin_radio(&t, 1, 157, t0 + 2, 0x2222u);
+    seed_steer(&t, mesh, r5, 3);
+    alerts_update(&t);
+    ASSERT_EQ(find_alert(&t, ALERT_TYPE_EVIL_TWIN), -1);
+
+    /* The window is a bound, not a formality: the same two radios first
+     * heard a minute apart are not excused by the sibling test, so the
+     * steer counts again. (This is the half that fails if the window
+     * check is dropped and everything near and cross-band is a sibling.) */
+    alerts_clear();
+    static sloth_state_t u; seed_state(&u);
+    add_beacon(&u, "HomeNet", r24, "WPA2");
+    add_beacon(&u, "HomeNet", r5,  "WPA2");
+    twin_radio(&u, 0,   6, t0,      0x1111u);
+    twin_radio(&u, 1, 157, t0 + 60, 0x2222u);
+    seed_steer(&u, mesh, r5, 3);
+    alerts_update(&u);
+    int idx = find_alert(&u, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)u.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+/* The band rule alone. The same router heard ten minutes apart, as a
+ * moving sensor does when 2.4 GHz carries further than 5 GHz: outside
+ * the sibling window, so only "a vendor-IE hash is compared within one
+ * band" keeps it quiet.
+ *
+ * Mutation: `same_band` forced to 1 in twin_evidence_score; the
+ * no-alert assertion and hashes_differ == 0 both went red. */
+static void test_twin_vendor_ie_hash_is_not_compared_across_bands(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t r24[6] = {0x28,0x25,0x5f,0x10,0x20,0x14};
+    uint8_t r5[6]  = {0x28,0x25,0x5f,0x10,0x20,0x1c};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "HomeNet", r24, "WPA2");
+    add_beacon(&s, "HomeNet", r5,  "WPA2");
+    twin_radio(&s, 0,   6, t0,       0x1111u);
+    twin_radio(&s, 1, 157, t0 + 600, 0x2222u);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+
+    twin_evidence_t ev;
+    twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1],
+                        time(NULL), &ev);
+    ASSERT_EQ(ev.sibling, 0);
+    ASSERT_EQ(ev.hashes_differ, 0);
+
+    /* Same band, same hashes: the signal is still there to be had. */
+    twin_radio(&s, 1, 11, t0 + 600, 0x2222u);
+    twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1],
+                        time(NULL), &ev);
+    ASSERT_EQ(ev.hashes_differ, 1);
+
+    /* An unknown band is "cannot say", which is not "same". */
+    twin_radio(&s, 1, 0, t0 + 600, 0x2222u);
+    twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1],
+                        time(NULL), &ev);
+    ASSERT_EQ(ev.hashes_differ, 0);
+}
+
+/* The vehicle hotspot of the issue: both addresses locally
+ * administered, the second band's derived by complementing octets 1-2
+ * (0x47 ^ 0xff = 0xb8, 0x43 ^ 0xff = 0xbc). Three differing leading
+ * bytes used to be read as a second vendor and earn TWIN_W_DIFF_OUI.
+ *
+ * Seeded outside the sibling window so the U/L-bit check stands alone.
+ * Mutation: bssid_is_laa() returning 0; diff_oui == 0 and the no-alert
+ * assertion went red (WARN at 20 %, "vendor OUI differs"). */
+static void test_twin_locally_administered_bssids_have_no_oui(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t g24[6] = {0x02,0x47,0x43,0x5a,0x10,0x01};
+    uint8_t g5[6]  = {0x02,0xb8,0xbc,0x5a,0x10,0x01};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CHEVROLET1234", g24, "WPA2");
+    add_beacon(&s, "CHEVROLET1234", g5,  "WPA2");
+    twin_radio(&s, 0,   6, t0,       0x1111u);
+    twin_radio(&s, 1, 149, t0 + 600, 0x2222u);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+
+    twin_evidence_t ev;
+    ASSERT_EQ(twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1],
+                                  time(NULL), &ev), 0);
+    ASSERT_EQ(ev.sibling, 0);
+    ASSERT_EQ(ev.diff_oui, 0);
+    ASSERT_EQ(ev.same_oui, 0);
+    ASSERT_EQ(ev.positive, 0);
+    ASSERT_EQ(ev.context, 0);
+
+    /* One locally administered half is enough: there is still only one
+     * OUI, and nothing to compare it with. */
+    uint8_t global[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+    memcpy(s.beacon_aps[1].bssid, global, 6);
+    twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1],
+                        time(NULL), &ev);
+    ASSERT_EQ(ev.diff_oui, 0);
+    ASSERT_EQ(ev.same_oui, 0);
+
+    /* And on ONE band, where the vendor-IE mismatch does count, the
+     * pair is reported but cannot be critical: 35 with no OUI to add is
+     * under TWIN_CRIT_MIN_CONF. Went red (CRIT) with the confidence
+     * gate in rule_evil_twin removed.
+     *
+     * A minute apart, not the ten this block had until ruling 3b: at
+     * ten minutes the second half is a late arrival and the pair is
+     * CRIT at 55 (test_twin_late_arrival_lifts_a_locally_administered_
+     * rogue). With the gap left at 600 s these two assertions were the
+     * ones that went red when the signal was added, which is the
+     * "WARN before" half of that test. */
+    alerts_clear();
+    static sloth_state_t t; seed_state(&t);
+    add_beacon(&t, "CHEVROLET1234", g24, "WPA2");
+    add_beacon(&t, "CHEVROLET1234", g5,  "WPA2");
+    twin_radio(&t, 0, 6,  t0,      0x1111u);
+    twin_radio(&t, 1, 11, t0 + 60, 0x2222u);
+    alerts_update(&t);
+    int idx = find_alert(&t, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)t.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ(t.alerts[idx].confidence, TWIN_W_IE_HASH);
+    ASSERT(strstr(t.alerts[idx].detail, "same-vendor-OUI") == NULL);
+}
+
+/* The gateway of the issue: :e7 tells a client to move to :e6 under
+ * Disassociation Imminent. That is band steering, and it was scored as
+ * the #76 chain: +25, hard, CRIT at 10 %, class=impostor.
+ *
+ * Both radios on one band with no first_seen, so the sibling test
+ * cannot be what excuses them. Mutation: the sibling-address check in
+ * btm_steered_to() removed; steered == 0, hard == 0 and the no-alert
+ * assertion went red (CRIT). */
+static void test_twin_self_steer_is_not_a_hard_signal(void) {
+    uint8_t e6[6] = {0x64,0x67,0x72,0x10,0x20,0xe6};
+    uint8_t e7[6] = {0x64,0x67,0x72,0x10,0x20,0xe7};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "HomeGW", e6, "WPA2");
+    add_beacon(&s, "HomeGW", e7, "WPA2");
+    seed_steer(&s, e7, e6, 3);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+
+    twin_evidence_t ev;
+    ASSERT_EQ(twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1],
+                                  time(NULL), &ev), 0);
+    ASSERT_EQ(ev.steered, 0);
+    ASSERT_EQ(ev.self_steer, 1);
+    ASSERT_EQ(ev.hard, 0);
+    ASSERT_EQ((int)twin_classify(&ev), (int)TWIN_CLASS_UNKNOWN);
+
+    /* A second row from somewhere else naming the same radio is still a
+     * steer at the pair: the device's own row must not shadow it. */
+    uint8_t other[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+    seed_steer(&s, other, e6, 3);
+    twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1],
+                        time(NULL), &ev);
+    ASSERT_EQ(ev.steered, 1);
+    ASSERT_EQ(ev.hard, 1);
+}
+
+/* What all of the above must not cost: a second transmitter, a
+ * different globally administered OUI, the same band, contradicting
+ * vendor IEs. 20 + 35 clears TWIN_CRIT_MIN_CONF and nothing deducts.
+ *
+ * Heard a minute after the network it copies, and then an hour
+ * after: the same row both times. Two globally administered addresses
+ * are scored on their OUIs, and the late arrival is kept for the pair
+ * that has none to compare (owner ruling on review; this block pinned
+ * 75 and the marker before it).
+ *
+ * Mutation (2026-11-11): the locally-administered test dropped from
+ * the late-arrival block in twin_evidence_score; the second block read
+ * 75 with the marker. */
+static void test_twin_second_transmitter_same_band_is_still_crit(void) {
+    time_t now = time(NULL);
+    uint8_t real[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t rogue[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", real,  "WPA2");
+    add_beacon(&s, "CorpWiFi", rogue, "WPA2");
+    twin_radio(&s, 0, 6, now - 3600, 0x1111u);
+    twin_radio(&s, 1, 6, now - 3540, 0x2222u);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ(s.alerts[idx].confidence, TWIN_W_DIFF_OUI + TWIN_W_IE_HASH);
+    ASSERT(s.alerts[idx].confidence >= TWIN_CRIT_MIN_CONF);
+    ASSERT(strstr(s.alerts[idx].detail,
+                  "vendor-IE fingerprint differs") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "late-arrival") == NULL);
+
+    alerts_clear();
+    twin_radio(&s, 1, 6, now - 30, 0x2222u);
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ(s.alerts[idx].confidence, 20 + 35);
+    ASSERT(strstr(s.alerts[idx].detail, "late-arrival") == NULL);
+    twin_evidence_t evg;
+    twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1], now, &evg);
+    ASSERT_EQ(evg.late_arrival, 0);
+
+    /* Address distance is not an alibi on its own. A copy two bytes
+     * from its victim on the victim's own band, and one on another band
+     * that turned up an hour late, are both still pairs. */
+    twin_evidence_t ev;
+    uint8_t near[6] = {0x00,0x11,0x22,0x33,0x44,0x99};
+    memcpy(s.beacon_aps[1].bssid, near, 6);
+    twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1], now, &ev);
+    ASSERT_EQ(ev.sibling, 0);
+    s.beacon_aps[1].channel = 36;
+    twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1], now, &ev);
+    ASSERT_EQ(ev.sibling, 0);
+    s.beacon_aps[1].first_seen = s.beacon_aps[0].first_seen + 3;
+    twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1], now, &ev);
+    ASSERT_EQ(ev.sibling, 1);
+}
+
+/* The inventory outranks the sibling test, as it outranks everything
+ * observed: a BSSID the operator left out of a declared SSID is
+ * reported even when it looks exactly like the approved radio's other
+ * band. */
+static void test_twin_sibling_does_not_excuse_an_inventory_mismatch(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t declared[6] = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t beside[6]   = {0xa8,0xbb,0xcc,0x00,0x11,0x23};
+
+    ASSERT_EQ(use_inventory(INV_CORP), 1);
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", declared, "WPA2");
+    add_beacon(&s, "CorpWiFi", beside,   "WPA2");
+    twin_radio(&s, 0,  6, t0,     0);
+    twin_radio(&s, 1, 36, t0 + 1, 0);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "not in inventory") != NULL);
+    no_inventory();
+}
+
+/* The edges of the sibling test, read straight off the scorer. The
+ * tests above sit well inside each bound (gaps of 2 s and 60 s, one
+ * differing byte, both bands known), so a window of 59 s, a byte limit
+ * of 1 or 3, and "unknown band counts as another band" all passed them.
+ *
+ * Mutations (2026-11-11), each red here and nowhere else in the #188
+ * suite: `gap <= TWIN_SIBLING_WINDOW_S` made `<` (the +10 s rows);
+ * TWIN_SIBLING_WINDOW_S 59 (the +11 s rows); TWIN_SIBLING_MAX_DIFF_BYTES
+ * 1 (the complemented pair) and 3 (the three-byte pair); the UNKNOWN
+ * band test dropped from twin_pair_is_sibling (channel 0); the
+ * first_seen == 0 test dropped (both unset); the CH_SRC_HE_6GHZ line
+ * dropped from twin_ap_band (2.4 GHz ch 1 beside 6 GHz ch 1). */
+static int sib_of(const sloth_state_t *s) {
+    twin_evidence_t ev;
+    twin_evidence_score(s, &s->beacon_aps[0], &s->beacon_aps[1],
+                        time(NULL), &ev);
+    return ev.sibling;
+}
+
+static void test_twin_sibling_test_boundaries(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t r24[6] = {0x28,0x25,0x5f,0x10,0x20,0x14};
+    uint8_t r5[6]  = {0x28,0x25,0x5f,0x10,0x20,0x1c};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "HomeNet", r24, "WPA2");
+    add_beacon(&s, "HomeNet", r5,  "WPA2");
+
+    /* The window is inclusive at 10 s and closed at 11, whichever
+     * radio was heard first. Literals, not TWIN_SIBLING_WINDOW_S: the
+     * figure is the issue's 1-3 s observation times three, every second
+     * added to it is a second a copy on another band can arrive in and
+     * be taken for the original's own radio, and a test written in
+     * terms of the constant follows it wherever it is moved. */
+    twin_radio(&s, 0,   6, t0, 0);
+    twin_radio(&s, 1, 157, t0 + 10, 0);
+    ASSERT_EQ(sib_of(&s), 1);
+    twin_radio(&s, 1, 157, t0 + 11, 0);
+    ASSERT_EQ(sib_of(&s), 0);
+    twin_radio(&s, 0,   6, t0 + 10, 0);
+    twin_radio(&s, 1, 157, t0, 0);
+    ASSERT_EQ(sib_of(&s), 1);
+    twin_radio(&s, 0,   6, t0 + 11, 0);
+    ASSERT_EQ(sib_of(&s), 0);
+
+    /* One band is two transmitters, however close the addresses and
+     * the first sightings. */
+    twin_radio(&s, 0,  6, t0,     0);
+    twin_radio(&s, 1, 11, t0 + 2, 0);
+    ASSERT_EQ(sib_of(&s), 0);
+
+    /* "Cannot say" is not "another band": channel 0 on either half, or
+     * on both. */
+    twin_radio(&s, 1, 0, t0 + 2, 0);
+    ASSERT_EQ(sib_of(&s), 0);
+    twin_radio(&s, 0, 0, t0, 0);
+    ASSERT_EQ(sib_of(&s), 0);
+
+    /* Nor is an unset first_seen "the same moment": two entries that
+     * never recorded one are zero seconds apart by subtraction. */
+    twin_radio(&s, 0,   6, 0, 0);
+    twin_radio(&s, 1, 157, 0, 0);
+    ASSERT_EQ(sib_of(&s), 0);
+    twin_radio(&s, 1, 157, t0, 0);
+    ASSERT_EQ(sib_of(&s), 0);
+
+    /* 6 GHz is a band of its own, known only from the HE 6 GHz
+     * Operation Information source: channel 1 there and channel 1 on
+     * 2.4 GHz are one number and two bands. */
+    twin_radio(&s, 0, 1, t0,     0);
+    twin_radio(&s, 1, 1, t0 + 2, 0);
+    ASSERT_EQ(sib_of(&s), 0);
+    s.beacon_aps[1].channel_source = CH_SRC_HE_6GHZ;
+    ASSERT_EQ(sib_of(&s), 1);
+    s.beacon_aps[1].channel_source = CH_SRC_UNKNOWN;
+
+    /* Address distance: the vehicle hotspot's complemented octets 1-2
+     * are two differing bytes and inside the limit; one more is not. */
+    uint8_t g24[6]  = {0x02,0x47,0x43,0x5a,0x10,0x01};
+    uint8_t g5[6]   = {0x02,0xb8,0xbc,0x5a,0x10,0x01};
+    uint8_t far3[6] = {0x02,0xb8,0xbc,0x5b,0x10,0x01};
+    memcpy(s.beacon_aps[0].bssid, g24, 6);
+    memcpy(s.beacon_aps[1].bssid, g5,  6);
+    twin_radio(&s, 0,   6, t0,     0x1111u);
+    twin_radio(&s, 1, 149, t0 + 2, 0x2222u);
+    ASSERT_EQ(sib_of(&s), 1);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+    memcpy(s.beacon_aps[1].bssid, far3, 6);
+    ASSERT_EQ(sib_of(&s), 0);
+}
+
+/* ── The copy arrives after the original (#188, ruling 3b) ────
+ *
+ * Masking the U/L bit left a rogue on a locally administered address
+ * at WARN 35 % with a same-band vendor-IE mismatch and nothing else to
+ * add. `late_arrival` is the cross-device signal the issue names for
+ * it. Hand-seeded beacon rows; gaps are literals, not the constant,
+ * for the reason given at test_twin_sibling_test_boundaries.
+ *
+ * add_beacon() stamps last_seen = now, so the earlier half has been
+ * heard since the later one appeared unless a test says otherwise. */
+
+static int late_of(const sloth_state_t *s, time_t now) {
+    twin_evidence_t ev;
+    twin_evidence_score(s, &s->beacon_aps[0], &s->beacon_aps[1], now, &ev);
+    return ev.late_arrival;
+}
+
+/* The regression the ruling closes: an original on a vendor's address,
+ * a copy on a locally administered one, one band, different vendor
+ * IEs, the copy first heard ten minutes after the original.
+ *
+ * Before the signal existed this shape was WARN at 35 %: the two
+ * assertions of test_twin_locally_administered_bssids_have_no_oui that
+ * pinned it (then seeded 600 s apart) went red, CRIT and 55, when the
+ * weight was added, and with the `ev.positive += TWIN_W_LATE_ARRIVAL`
+ * block removed the first block here is WARN 35 again.
+ *
+ * Mutations (2026-11-11), each red here:
+ *   - that block removed: CRIT, 55 and the marker (first block);
+ *   - TWIN_W_LATE_ARRIVAL 14: CRIT (35 + 14 is under the gate), and 15
+ *     stays CRIT, so the floor of the weight is pinned at 15;
+ *   - the locally-administered test made `&&` (both halves): CRIT, 55
+ *     and the marker, since the original here is on a vendor's address;
+ *   - the `!a->first_seen || !b->first_seen` test dropped from
+ *     twin_pair_late_arrival: both unset-first_seen rows (CRIT);
+ *   - `late->first_seen - early->first_seen < N` made `<=`: the 120 s
+ *     row; the default raised to 121: the 120 s row; lowered to 119:
+ *     the 119 s row. */
+static void test_twin_late_arrival_lifts_a_locally_administered_rogue(void) {
+    time_t now = time(NULL);
+    time_t t0  = now - 1200;
+    uint8_t real[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t rogue[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", real,  "WPA2");
+    add_beacon(&s, "CorpWiFi", rogue, "WPA2");
+    twin_radio(&s, 0, 6, t0,       0x1111u);
+    twin_radio(&s, 1, 6, t0 + 600, 0x2222u);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ(s.alerts[idx].confidence, 35 + 20);
+    ASSERT(strstr(s.alerts[idx].detail,
+                  "vendor-IE fingerprint differs") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, " +late-arrival") != NULL);
+    /* No OUI was read to get here. */
+    ASSERT(strstr(s.alerts[idx].detail, "OUI") == NULL);
+
+    twin_evidence_t ev;
+    ASSERT_EQ(twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1],
+                                  now, &ev), 1);
+    ASSERT_EQ(ev.late_arrival, 1);
+    ASSERT_EQ(ev.diff_oui, 0);
+    ASSERT_EQ(ev.same_oui, 0);
+    ASSERT_EQ(ev.hard, 0);          /* soft: a neighbour claim demotes it */
+    ASSERT_EQ(ev.positive, 55);
+    /* Whichever half the caller names first. */
+    ASSERT_EQ(twin_evidence_score(&s, &s.beacon_aps[1], &s.beacon_aps[0],
+                                  now, &ev), 1);
+    ASSERT_EQ(ev.late_arrival, 1);
+
+    /* The same two radios heard a minute apart: a sensor start, or the
+     * hopper reaching the second one late. Still a pair, still under
+     * the gate. */
+    alerts_clear();
+    twin_radio(&s, 1, 6, t0 + 60, 0x2222u);
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ(s.alerts[idx].confidence, 35);
+    ASSERT(strstr(s.alerts[idx].detail, "late-arrival") == NULL);
+
+    /* The edge: 120 s counts, 119 does not, whichever half was first. */
+    twin_radio(&s, 1, 6, t0 + 119, 0x2222u);
+    ASSERT_EQ(late_of(&s, now), 0);
+    twin_radio(&s, 1, 6, t0 + 120, 0x2222u);
+    ASSERT_EQ(late_of(&s, now), 1);
+    twin_radio(&s, 0, 6, t0 + 120, 0x1111u);
+    twin_radio(&s, 1, 6, t0,       0x2222u);
+    ASSERT_EQ(late_of(&s, now), 1);
+    twin_radio(&s, 0, 6, t0 + 119, 0x1111u);
+    ASSERT_EQ(late_of(&s, now), 0);
+
+    /* An unset first_seen is "cannot say", on either half: by
+     * subtraction it is a gap of fifty years. */
+    alerts_clear();
+    twin_radio(&s, 0, 6, 0,        0x1111u);
+    twin_radio(&s, 1, 6, t0 + 600, 0x2222u);
+    ASSERT_EQ(late_of(&s, now), 0);
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    alerts_clear();
+    twin_radio(&s, 0, 6, t0, 0x1111u);
+    twin_radio(&s, 1, 6, 0,  0x2222u);
+    ASSERT_EQ(late_of(&s, now), 0);
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+
+    /* The knob moves the edge and nothing else. */
+    ASSERT_EQ(tune_set_id(TUNE_TWIN_LATE_ARRIVAL_S, 300), 1);
+    twin_radio(&s, 0, 6, t0,       0x1111u);
+    twin_radio(&s, 1, 6, t0 + 299, 0x2222u);
+    ASSERT_EQ(late_of(&s, now), 0);
+    twin_radio(&s, 1, 6, t0 + 300, 0x2222u);
+    ASSERT_EQ(late_of(&s, now), 1);
+    tune_reset();
+    twin_radio(&s, 1, 6, t0 + 299, 0x2222u);
+    ASSERT_EQ(late_of(&s, now), 1);
+}
+
+/* Legitimate late arrivals: a mesh node powered on an hour after the
+ * first, the same vendor, the same band, different vendor IEs (another
+ * model). It is the 20 % WARN it was before the signal existed, inside
+ * slothweb's 20 % mute, with no marker: the late arrival is for a pair
+ * with a locally administered half (owner ruling on review; this block
+ * pinned 40 % and the marker before it). So is a two-vendor pair with
+ * nothing but its OUIs, heard an hour apart: 20 %.
+ *
+ * And a late arrival is not evidence on its own. A guest network's
+ * locally administered BSSID with nothing else to show is no row at
+ * all, as it was before: the signal corroborates a pair and never
+ * nominates one.
+ *
+ * Mutations (2026-11-11): the locally-administered test dropped from
+ * the late-arrival block in twin_evidence_score (the first block read
+ * 40 % with the marker, the OUI-only block 40 %); the `ev.positive > 0
+ * &&` guard dropped (the last block raised a WARN at 20 %). */
+static void test_twin_late_arrival_does_not_lift_a_same_vendor_mesh(void) {
+    time_t now = time(NULL);
+    uint8_t node1[6] = {0xe8,0x9c,0x25,0x10,0x20,0x30};
+    uint8_t node2[6] = {0xe8,0x9c,0x25,0x77,0x41,0x9c};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "HomeMesh", node1, "WPA2");
+    add_beacon(&s, "HomeMesh", node2, "WPA2");
+    twin_radio(&s, 0, 11, now - 7200, 0x1111u);
+    twin_radio(&s, 1, 11, now - 3600, 0x2222u);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ(s.alerts[idx].confidence, 35 - 15);
+    ASSERT(strstr(s.alerts[idx].detail, "late-arrival") == NULL);
+    ASSERT(strstr(s.alerts[idx].detail, " +same-vendor-OUI") != NULL);
+    twin_evidence_t ev;
+    ASSERT_EQ(twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1],
+                                  now, &ev), 1);
+    ASSERT_EQ(ev.late_arrival, 0);
+
+    /* Two vendors, the same vendor IEs, an hour apart: the OUI-only
+     * row, at the 20 % it has always been. */
+    alerts_clear();
+    uint8_t other[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+    memcpy(s.beacon_aps[1].bssid, other, 6);
+    twin_radio(&s, 1, 11, now - 3600, 0x1111u);
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ(s.alerts[idx].confidence, 20);
+    ASSERT(strstr(s.alerts[idx].detail, "late-arrival") == NULL);
+
+    /* Nor where there is no OUI to deduct: a guest network's locally
+     * administered BSSID on a second node, an hour later, on another
+     * band. It was silent before the signal and it is silent now. */
+    alerts_clear();
+    uint8_t guest[6] = {0xea,0x9c,0x25,0x77,0x41,0x9d};
+    memcpy(s.beacon_aps[1].bssid, guest, 6);
+    twin_radio(&s, 1, 36, now - 3600, 0x2222u);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+    ASSERT_EQ(late_of(&s, now), 0);
+}
+
+/* "Later" has to mean both were on the air at once. The table forgets
+ * an AP BEACON_AGE_SECS (300) after it was last heard, so a sensor
+ * driven past two APs of one carrier SSID a few minutes apart holds
+ * both with a gap of minutes, and the first was never heard again.
+ * The earlier half must have been heard at or after the later half's
+ * first_seen.
+ *
+ * Mutations (2026-11-11): the `early->last_seen < late->first_seen`
+ * test dropped (the first and last rows read 1); made `<=` (the "same
+ * second" row read 0). */
+static void test_twin_late_arrival_needs_both_on_the_air(void) {
+    time_t now = time(NULL);
+    time_t t0  = now - 1200;
+    uint8_t real[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t rogue[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", real,  "WPA2");
+    add_beacon(&s, "CorpWiFi", rogue, "WPA2");
+    twin_radio(&s, 0, 6, t0,       0x1111u);
+    twin_radio(&s, 1, 6, t0 + 600, 0x2222u);
+
+    s.beacon_aps[0].last_seen = t0 + 599;       /* gone before the copy */
+    ASSERT_EQ(late_of(&s, now), 0);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ(s.alerts[idx].confidence, 35);
+
+    s.beacon_aps[0].last_seen = t0 + 600;       /* the same second */
+    ASSERT_EQ(late_of(&s, now), 1);
+
+    /* The later half's own last_seen is not the question, and neither
+     * is which slot holds the earlier one. */
+    twin_radio(&s, 0, 6, t0 + 600, 0x1111u);
+    twin_radio(&s, 1, 6, t0,       0x2222u);
+    s.beacon_aps[0].last_seen = now;
+    s.beacon_aps[1].last_seen = t0 + 599;
+    ASSERT_EQ(late_of(&s, now), 0);
+}
+
+/* A moving sensor hears things in the order of its route. The later
+ * half must have been first heard at least the wait after the sensor
+ * was last known to be moving, and that has to be remembered: the
+ * fix history is a minute deep and the pair's gap stands for hours.
+ *
+ * The decision, stated: a late arrival heard while the sensor moves
+ * does not count, and neither does one heard in the wait after it
+ * stops (parking is a sensor start). No GNSS, or no speed in the fix,
+ * is "not known to be moving" and suppresses nothing, as in #189.
+ *
+ * `now` is passed to the scorer by hand so the sensor can stop, wait
+ * and listen without the test sleeping.
+ *
+ * Mutations (2026-11-11), each red here:
+ *   - the `g_twin_moved_at &&` clause dropped from
+ *     twin_pair_late_arrival: the "while it moves" and "after it
+ *     parked" rows read 1;
+ *   - the memory replaced by a look at the current fix
+ *     (twin_note_motion() assigning 0 when the sensor is not moving):
+ *     the "after it parked" rows;
+ *   - its comparison made `<=`: the +120 s row; the wait read as 121:
+ *     the +120 s row; as 119: the +119 s row;
+ *   - twin_note_motion() removed from rule_evil_twin: the "drive with
+ *     no pair in earshot" row;
+ *   - rules_twin_forget() removed from alerts_clear(): the row after
+ *     "Clearing the engine". */
+static void test_twin_late_arrival_is_not_read_off_a_moving_sensor(void) {
+    time_t T = time(NULL);
+    uint8_t real[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t rogue[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+    static gnss_hist_t h;
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", real,  "WPA2");
+    add_beacon(&s, "CorpWiFi", rogue, "WPA2");
+    twin_radio(&s, 0, 6, T - 1200, 0x1111u);
+    twin_radio(&s, 1, 6, T - 600,  0x2222u);
+    s.beacon_aps[0].last_seen = T + 100000;     /* heard throughout */
+    s.gnss_hist = &h;
+
+    memset(&h, 0, sizeof(h));                   /* GNSS, but no fix yet */
+    ASSERT_EQ(late_of(&s, T), 1);
+
+    prox_gnss_fix(&h, T - 5, 0, 12.0);          /* a fix with no speed */
+    ASSERT_EQ(late_of(&s, T), 1);
+    prox_gnss_fix(&h, T - 5, 1, 0.3);           /* parked, jitter */
+    ASSERT_EQ(late_of(&s, T), 1);
+
+    prox_gnss_fix(&h, T - 5, 1, 12.0);          /* while it moves */
+    ASSERT_EQ(late_of(&s, T), 0);
+
+    /* After it parked: ten minutes on, the moving fix long out of the
+     * window, and the gap it drove through is still not evidence. */
+    ASSERT_EQ(late_of(&s, T + 600), 0);
+    memset(&h, 0, sizeof(h));
+    ASSERT_EQ(late_of(&s, T + 600), 0);
+
+    /* A copy that turns up once the sensor has stood still for the
+     * wait counts; a second sooner does not. */
+    twin_radio(&s, 1, 6, T + 119, 0x2222u);
+    ASSERT_EQ(late_of(&s, T + 600), 0);
+    twin_radio(&s, 1, 6, T + 120, 0x2222u);
+    ASSERT_EQ(late_of(&s, T + 600), 1);
+
+    /* Clearing the engine forgets the drive with the rest of the rule
+     * history. */
+    twin_radio(&s, 1, 6, T - 600, 0x2222u);
+    ASSERT_EQ(late_of(&s, T + 600), 0);
+    alerts_clear();
+    ASSERT_EQ(late_of(&s, T + 600), 1);
+
+    /* A drive with no pair in earshot is still a drive: the rule notes
+     * it every tick, not only when the scorer has a pair to score. */
+    alerts_clear();
+    static sloth_state_t empty; seed_state(&empty);
+    prox_gnss_fix(&h, T - 5, 1, 12.0);
+    empty.gnss_hist = &h;
+    alerts_update(&empty);
+    memset(&h, 0, sizeof(h));
+    ASSERT_EQ(late_of(&s, T + 600), 0);
+
+    alerts_clear();
+    ASSERT_EQ(late_of(&s, T + 600), 1);
+}
+
+/* An AP that drops out and comes back is not a late arrival (#188,
+ * owner ruling on the reviewer's finding). The table rebuilds an entry
+ * it dropped under a new first_seen, so the later half must carry a
+ * name new to the session on its address (beacon_ap_t.arrival, stamped
+ * by the table: tests/test_beacon_snoop.c, test_recall_*). A return
+ * does not count, and neither does an entry the table's memory can no
+ * longer vouch for. The earlier half's stamp is not the question: a
+ * re-insert there only shortens the gap.
+ *
+ * Mutations (2026-11-11), each red here: the arrival clause dropped
+ * from twin_pair_late_arrival (the three 0 rows, and the alert went
+ * CRIT at 55); `!= BEACON_ARRIVAL_NEW` made `== BEACON_ARRIVAL_RETURN`
+ * (the UNSURE row); the clause reading the earlier half's stamp
+ * instead (every row after the first). */
+static void test_twin_late_arrival_needs_a_name_new_to_the_session(void) {
+    time_t now = time(NULL);
+    time_t t0  = now - 1200;
+    uint8_t real[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t rogue[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", real,  "WPA2");
+    add_beacon(&s, "CorpWiFi", rogue, "WPA2");
+    twin_radio(&s, 0, 6, t0,       0x1111u);
+    twin_radio(&s, 1, 6, t0 + 600, 0x2222u);
+    ASSERT_EQ(late_of(&s, now), 1);             /* never heard before */
+
+    s.beacon_aps[1].arrival = BEACON_ARRIVAL_RETURN;
+    ASSERT_EQ(late_of(&s, now), 0);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ(s.alerts[idx].confidence, 35);
+    ASSERT(strstr(s.alerts[idx].detail, "late-arrival") == NULL);
+
+    s.beacon_aps[1].arrival = BEACON_ARRIVAL_UNSURE;
+    ASSERT_EQ(late_of(&s, now), 0);
+
+    /* Whichever slot holds the later half. */
+    twin_radio(&s, 0, 6, t0 + 600, 0x1111u);
+    twin_radio(&s, 1, 6, t0,       0x2222u);
+    s.beacon_aps[1].last_seen = now;
+    s.beacon_aps[1].arrival   = BEACON_ARRIVAL_NEW;
+    s.beacon_aps[0].arrival   = BEACON_ARRIVAL_RETURN;
+    ASSERT_EQ(late_of(&s, now), 0);
+
+    /* The earlier half having come back is not the question. */
+    s.beacon_aps[0].arrival = BEACON_ARRIVAL_NEW;
+    s.beacon_aps[1].arrival = BEACON_ARRIVAL_RETURN;
+    ASSERT_EQ(late_of(&s, now), 1);
+}
+
+/* The field shape, end to end through the real table: two routers,
+ * one on a vendor's address and one on a locally administered one, one
+ * band, different vendor IEs. The second falls silent for longer than
+ * the table keeps an entry and comes back ten minutes after the first
+ * was first heard. It was CRIT at 55 % on that; it is the WARN at 35 %
+ * it was before the signal existed.
+ *
+ * And the true positive beside it: the same original, and a BSSID the
+ * session has never heard, appearing at the same moment. CRIT, 55.
+ *
+ * The issue's pair was under a carrier SSID ("Spectrum Mobile"). Since
+ * 2026-11-12 that name is context of its own and would decide both
+ * blocks (test_twin_carrier_ssid_is_context), so this test, which is
+ * about the arrival stamp, uses a name of no carrier's. The copy is
+ * heard on the beacons a soft CRIT needs (`twin.crit_min_beacons`); on
+ * one it is `faint`.
+ *
+ * The clocks are stubbed so the table can age without the test
+ * sleeping. Channel and vendor-IE hash are set on the snapshot, as
+ * every twin test here does: what is under test is first_seen,
+ * last_seen and the arrival stamp, which the table wrote.
+ *
+ * Mutation (2026-11-11): recall_note_dropped() removed from the
+ * age-out in beacon_snapshot(); the first block went CRIT at 55 with
+ * the marker. */
+static time_t   g_tw_wall;
+static uint64_t g_tw_mono;
+static time_t   tw_wall(void) { return g_tw_wall; }
+static uint64_t tw_mono(void) { return g_tw_mono; }
+static void tw_tick(int secs) {
+    g_tw_wall += secs;
+    g_tw_mono += (uint64_t)secs * 1000u;
+}
+static int tw_slot(const sloth_state_t *s, const uint8_t bssid[6]) {
+    for (int i = 0; i < s->beacon_count; i++)
+        if (memcmp(s->beacon_aps[i].bssid, bssid, 6) == 0) return i;
+    return -1;
+}
+
+static void test_twin_an_ap_that_returns_is_not_a_late_arrival(void) {
+    uint8_t r1[6]    = {0x80,0xd0,0x4a,0x10,0x20,0x30};
+    uint8_t r2[6]    = {0xe2,0xdb,0xd1,0x40,0x50,0x60};
+    uint8_t rogue[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+    static sloth_state_t s;
+
+    for (int pass = 0; pass < 2; pass++) {
+        const uint8_t *second = pass == 0 ? r2 : rogue;
+        alerts_clear(); beacon_clear();
+        sloth_clock_test_set(tw_mono, tw_wall);
+        g_tw_wall = 1700000000;
+        g_tw_mono = 5000000;
+
+        beacon_record(r1, "Riverside", -60, 6, "WPA2", 100, NULL);
+        if (pass == 0) {
+            tw_tick(5);
+            beacon_record(r2, "Riverside", -88, 6, "WPA2", 100, NULL);
+        }
+        /* The first router is heard throughout; the second is not. */
+        for (int k = 0; k < 6; k++) {
+            tw_tick(100);
+            /* Two frames a step: a steadily heard original, 50 s a
+             * frame, inside TWIN_STEADY_FRAME_S (#227). */
+            for (int f = 0; f < 2; f++)
+                beacon_record(r1, "Riverside", -60, 6, "WPA2", 100, NULL);
+            seed_state(&s);
+            beacon_snapshot(&s);
+        }
+        ASSERT_EQ(s.beacon_count, 1);           /* r2 aged out, if it was there */
+
+        for (int k = 0; k < TWIN_CRIT_MIN_BEACONS_DEFAULT; k++)
+            beacon_record(second, "Riverside", -88, 6, "WPA2", 100, NULL);
+        tw_tick(1);
+        beacon_record(r1, "Riverside", -60, 6, "WPA2", 100, NULL);
+        seed_state(&s);
+        beacon_snapshot(&s);
+        ASSERT_EQ(s.beacon_count, 2);
+        int i1 = tw_slot(&s, r1), i2 = tw_slot(&s, second);
+        ASSERT(i1 >= 0 && i2 >= 0);
+        if (i1 < 0 || i2 < 0) break;
+        s.beacon_aps[i1].fp.vendor_ies_hash = 0x1111u;
+        s.beacon_aps[i2].fp.vendor_ies_hash = 0x2222u;
+        /* Ten minutes after the first was first heard. */
+        ASSERT_EQ((long long)(s.beacon_aps[i2].first_seen -
+                              s.beacon_aps[i1].first_seen),
+                  pass == 0 ? 605 : 600);
+
+        alerts_update(&s);
+        int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+        ASSERT(idx >= 0);
+        if (idx < 0) break;
+        if (pass == 0) {
+            ASSERT_EQ((int)s.beacon_aps[i2].arrival, BEACON_ARRIVAL_RETURN);
+            ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+            ASSERT_EQ(s.alerts[idx].confidence, 35);
+            ASSERT(strstr(s.alerts[idx].detail, "late-arrival") == NULL);
+        } else {
+            ASSERT_EQ((int)s.beacon_aps[i2].arrival, BEACON_ARRIVAL_NEW);
+            ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+            ASSERT_EQ(s.alerts[idx].confidence, 55);
+            ASSERT(strstr(s.alerts[idx].detail, " +late-arrival") != NULL);
+        }
+    }
+    sloth_clock_test_set(NULL, NULL);
+    alerts_clear(); beacon_clear();
+}
+
+/* The longest details the same-security branch writes: a 16-octet
+ * SSID and every phrase that can stand together (inventory mismatch,
+ * neighbour claim, a steer, the class note, and either the same-OUI
+ * note or the late arrival). The two exclude each other since the late
+ * arrival was restricted to a pair with a locally administered half:
+ * same-OUI needs two globally administered addresses. Each has to
+ * arrive whole, since the class note is last and is what a cut would
+ * take. 264 with the same-OUI note and 261 with the late arrival;
+ * `wired=yes` in place of `wired=?` is two more, and ALERT_DETAIL_LEN
+ * is 320.
+ *
+ * The evidence note is 63 characters at its longest now and would fit
+ * the 64 bytes it had before " +late-arrival"; it is left at 80, and
+ * the mutation this test once named (note[80] put back to 64) no
+ * longer turns anything red. With note[60] both blocks lost the end
+ * of "(unverified)" and went red. */
+static void test_twin_detail_fits_with_every_phrase(void) {
+    static const char *INV_LONG =
+        "{\"version\":\"2026-09-25.1\",\"site\":\"hq-3f\","
+        "\"networks\":[{\"ssid\":\"SixteenOctetSSID\","
+        "\"security_profile\":\"wpa2-enterprise\","
+        "\"bssids\":[\"a8:bb:cc:00:11:22\"]}]}";
+    time_t t0 = time(NULL) - 1200;
+    uint8_t ok[6]      = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t bad[6]     = {0xa8,0xbb,0xcc,0x77,0x41,0x9c};
+    uint8_t steerer[6] = {0x5c,0x11,0x22,0x33,0x44,0x55};
+
+    ASSERT_EQ(use_inventory(INV_LONG), 1);
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "SixteenOctetSSID", ok,  "WPA2");
+    add_beacon(&s, "SixteenOctetSSID", bad, "WPA2");
+    twin_radio(&s, 0, 6, t0,       0x1111u);
+    twin_radio(&s, 1, 6, t0 + 600, 0x2222u);
+    add_neighbor(&s, ok, bad);
+    seed_steer(&s, steerer, bad, 1);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        const char *d = s.alerts[idx].detail;
+        size_t n = strlen(d);
+        ASSERT_EQ((long long)n, 264);
+        ASSERT(n + 2 < ALERT_DETAIL_LEN);
+        ASSERT(strstr(d, "'SixteenOctetSSID' on ") == d);
+        ASSERT(strstr(d, " - BSSID not in the approved inventory"
+                         " +not in inventory +same-vendor-OUI"
+                         " +802.11k claim (unverified)"
+                         " +btm-steered by 5c:11:22:33:44:55") != NULL);
+        ASSERT(n >= 25 &&
+               strcmp(d + n - 25, " [class=impostor wired=?]") == 0);
+    }
+
+    /* The same row with the unapproved half on a locally administered
+     * address: no OUI note, and the late arrival in its place. */
+    alerts_clear();
+    uint8_t local[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+    static sloth_state_t u; seed_state(&u);
+    add_beacon(&u, "SixteenOctetSSID", ok,    "WPA2");
+    add_beacon(&u, "SixteenOctetSSID", local, "WPA2");
+    twin_radio(&u, 0, 6, t0,       0x1111u);
+    twin_radio(&u, 1, 6, t0 + 600, 0x2222u);
+    add_neighbor(&u, ok, local);
+    seed_steer(&u, steerer, local, 1);
+    alerts_update(&u);
+    idx = find_alert(&u, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        const char *d = u.alerts[idx].detail;
+        size_t n = strlen(d);
+        ASSERT_EQ((long long)n, 261);
+        ASSERT(strstr(d, " - BSSID not in the approved inventory"
+                         " +not in inventory +late-arrival"
+                         " +802.11k claim (unverified)"
+                         " +btm-steered by 5c:11:22:33:44:55") != NULL);
+        ASSERT(n >= 25 &&
+               strcmp(d + n - 25, " [class=impostor wired=?]") == 0);
+    }
+    no_inventory();
+
+    /* The first row again under a carrier SSID, with the unapproved half
+     * barely heard (2026-11-12): both notes besides every other. A
+     * carrier name is at most 15 octets, so this is the longest detail
+     * that can occur, 284; a 16-octet name could not carry the carrier
+     * note, and the 285 that rules_twin.c allows for is that bound. */
+    static const char *INV_CARRIER =
+        "{\"version\":\"2026-09-25.1\",\"site\":\"hq-3f\","
+        "\"networks\":[{\"ssid\":\"Spectrum Mobile\","
+        "\"security_profile\":\"wpa2-enterprise\","
+        "\"bssids\":[\"a8:bb:cc:00:11:22\"]}]}";
+    ASSERT_EQ(use_inventory(INV_CARRIER), 1);
+    alerts_clear();
+    static sloth_state_t w; seed_state(&w);
+    add_beacon(&w, "Spectrum Mobile", ok,  "WPA2");
+    add_beacon(&w, "Spectrum Mobile", bad, "WPA2");
+    twin_radio(&w, 0, 6, t0,       0x1111u);
+    twin_radio(&w, 1, 6, t0 + 600, 0x2222u);
+    w.beacon_aps[1].signal_dbm = -100;
+    add_neighbor(&w, ok, bad);
+    seed_steer(&w, steerer, bad, 1);
+    alerts_update(&w);
+    idx = find_alert(&w, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        const char *d = w.alerts[idx].detail;
+        size_t n = strlen(d);
+        ASSERT_EQ((long long)n, 284);
+        ASSERT_EQ((int)w.alerts[idx].sev, (int)ALERT_SEV_CRIT);   /* hard */
+        ASSERT(strstr(d, " - BSSID not in the approved inventory"
+                         " +not in inventory +same-vendor-OUI"
+                         " +carrier SSID +faint"
+                         " +802.11k claim (unverified)"
+                         " +btm-steered by 5c:11:22:33:44:55") != NULL);
+        ASSERT(n >= 25 &&
+               strcmp(d + n - 25, " [class=impostor wired=?]") == 0);
+    }
+    no_inventory();
+
+    /* And as two mesh nodes' guest VAPs (#227): both halves locally
+     * administered, so no same-OUI note, the late arrival and the mesh
+     * note in its place, 7 longer: 291 under a 15-octet carrier name,
+     * and the 292 rules_twin.c allows for under a 16-octet one. */
+    static const char *INV_MESH =
+        "{\"version\":\"2026-09-25.1\",\"site\":\"hq-3f\","
+        "\"networks\":[{\"ssid\":\"Spectrum Mobile\","
+        "\"security_profile\":\"wpa2-enterprise\","
+        "\"bssids\":[\"aa:bb:cc:00:11:22\"]}]}";
+    uint8_t g_ok[6]  = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t g_bad[6] = {0xaa,0xbb,0xcc,0x00,0x41,0x9c};
+    uint8_t m_ok[6]  = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t m_bad[6] = {0xa8,0xbb,0xcc,0x00,0x41,0x9c};
+    ASSERT_EQ(use_inventory(INV_MESH), 1);
+    alerts_clear();
+    static sloth_state_t m; seed_state(&m);
+    add_beacon(&m, "Spectrum Mobile", g_ok,  "WPA2");
+    add_beacon(&m, "Spectrum Mobile", g_bad, "WPA2");
+    add_beacon(&m, "Mesh-Main", m_ok,  "WPA2");
+    add_beacon(&m, "Mesh-Main", m_bad, "WPA2");
+    twin_radio(&m, 0, 6, t0,       0x1111u);
+    twin_radio(&m, 1, 6, t0 + 600, 0x2222u);
+    m.beacon_aps[1].signal_dbm = -100;
+    add_neighbor(&m, g_ok, g_bad);
+    seed_steer(&m, steerer, g_bad, 1);
+    alerts_update(&m);
+    idx = find_alert(&m, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        const char *d = m.alerts[idx].detail;
+        size_t n = strlen(d);
+        ASSERT_EQ((long long)n, 291);
+        ASSERT(n + 2 < ALERT_DETAIL_LEN);
+        ASSERT_EQ((int)m.alerts[idx].sev, (int)ALERT_SEV_CRIT);   /* hard */
+        ASSERT(strstr(d, " - BSSID not in the approved inventory"
+                         " +not in inventory +late-arrival"
+                         " +carrier SSID +mesh VAP +faint"
+                         " +802.11k claim (unverified)"
+                         " +btm-steered by 5c:11:22:33:44:55") != NULL);
+        ASSERT(n >= 25 &&
+               strcmp(d + n - 25, " [class=impostor wired=?]") == 0);
+    }
+    no_inventory();
+}
+
+/* ── The chain rule asks the same question (#188, ruling 4a) ──
+ *
+ * rule_evil_twin_attack_chain names "the other half" of a flooded
+ * BSSID as the rogue at CRIT and taints it. It compared the first
+ * three bytes of any two addresses and had no sibling test, so a
+ * deauth flood against one radio of a dual-band device named the
+ * device's other radio. It now takes its pair from
+ * twin_evidence_score(), keeping one rule of its own: two globally
+ * administered addresses with one OUI are the deployment's next AP.
+ *
+ * The four chain tests further up (a8:bb:cc against 11:22:33, both
+ * globally administered, one band, no first_seen) are the true
+ * positive and pass unchanged; no fixture there needed correcting. */
+
+static int chain_alert(const sloth_state_t *s) {
+    for (int k = 0; k < s->alert_count; k++)
+        if (s->alerts[k].type == ALERT_TYPE_EVIL_TWIN &&
+            strstr(s->alerts[k].key, "twin-chain:") != NULL)
+            return k;
+    return -1;
+}
+
+/* A deauth flood whose threshold was last met this second. */
+static void chain_flood(sloth_state_t *s, const uint8_t bssid[6]) {
+    uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
+    add_deauth_flood_full(s, client, bssid, 7, 20);
+    s->deauth_victims[s->deauth_victim_count - 1].flood_last = time(NULL);
+}
+
+/* A flood against one radio of a dual-band device does not make the
+ * other radio a rogue, and does not taint it.
+ *
+ * First a pair the old rule let through on its OUI test: adjacent
+ * addresses in two neighbouring vendor blocks, 2.4 and 5 GHz, heard two
+ * seconds apart. Then the vehicle hotspot of the issue (02:24:a5 and
+ * 02:49:a5, locally administered), inside the sibling window and ten
+ * minutes outside it, where only "a locally administered address has
+ * no OUI" is left to keep it quiet.
+ *
+ * Mutations (2026-11-11), each red here:
+ *   - the twin_evidence_score() test removed from the chain rule: all
+ *     three no-alert blocks (a chain CRIT, and the other radio tainted);
+ *   - the sibling test off (ev.sibling forced to 0 in the scorer): the
+ *     first block only. The hotspot inside the window is excused twice,
+ *     by the sibling test and by the U/L bit, and stayed quiet;
+ *   - bssid_is_laa() returning 0: the third block only (the hotspot's
+ *     bytes read as two vendors again; inside the window the sibling
+ *     test still excuses it), and block 1 of the next test;
+ *   - the rule as it was before 4a (one unconditional three-byte
+ *     compare, no scorer): all three blocks.
+ * The control at the end is the sibling window being a bound: the first
+ * pair heard a minute apart is two transmitters and is named. */
+static void test_twin_chain_does_not_name_a_devices_own_radio(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t r24[6] = {0x28,0x25,0x5f,0x10,0x20,0x14};
+    uint8_t r5[6]  = {0x28,0x25,0x60,0x10,0x20,0x1c};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "HomeNet", r24, "WPA2");
+    add_beacon(&s, "HomeNet", r5,  "WPA2");
+    twin_radio(&s, 0,   6, t0,     0x1111u);
+    twin_radio(&s, 1, 157, t0 + 2, 0x2222u);
+    chain_flood(&s, r24);
+    alerts_update(&s);
+    ASSERT_EQ(chain_alert(&s), -1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(r5), 0);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(r24), 0);
+    /* The flood itself is still reported. */
+    ASSERT(find_alert(&s, ALERT_TYPE_DEAUTH_FLOOD) >= 0);
+
+    uint8_t g24[6] = {0x02,0x24,0xa5,0x5a,0x10,0x01};
+    uint8_t g5[6]  = {0x02,0x49,0xa5,0x5a,0x10,0x01};
+    alerts_clear();
+    static sloth_state_t g; seed_state(&g);
+    add_beacon(&g, "CHEVROLET1234", g24, "WPA2");
+    add_beacon(&g, "CHEVROLET1234", g5,  "WPA2");
+    twin_radio(&g, 0,   6, t0,     0x1111u);
+    twin_radio(&g, 1, 149, t0 + 2, 0x2222u);
+    chain_flood(&g, g5);                    /* the other direction too */
+    alerts_update(&g);
+    ASSERT_EQ(chain_alert(&g), -1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(g24), 0);
+
+    alerts_clear();
+    twin_radio(&g, 1, 149, t0 + 600, 0x2222u);
+    alerts_update(&g);
+    ASSERT_EQ(chain_alert(&g), -1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(g24), 0);
+    ASSERT_EQ(find_alert(&g, ALERT_TYPE_EVIL_TWIN), -1);
+
+    alerts_clear();
+    twin_radio(&s, 1, 157, t0 + 60, 0x2222u);
+    alerts_update(&s);
+    int k = chain_alert(&s);
+    ASSERT(k >= 0);
+    if (k >= 0) ASSERT_EQ((int)s.alerts[k].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(r5), 1);
+}
+
+/* A locally administered half: its first three bytes neither admit the
+ * pair nor excuse it, and the detail says nothing about a vendor.
+ *
+ * Block 1: two locally administered addresses that share their first
+ * three bytes, three bytes apart, one band, different vendor IEs. The
+ * old rule skipped this pair as "same OUI"; it is a second transmitter
+ * with evidence of its own and is named.
+ * Block 2: the same two with the same vendor IEs. No evidence, so no
+ * name, however the addresses read.
+ * Block 3: an original on a vendor's address, the copy on a locally
+ * administered one, different vendor IEs: named, the copy tainted, and
+ * the tainted half is a proximity candidate like any other pair's
+ * (the #189 rule and this one now agree on what a pair is).
+ * Block 4: two globally administered addresses with one OUI, a mesh
+ * whose nodes differ in their vendor IEs. The scorer reports that pair
+ * at WARN; under a flood it is still not named, as before 4a.
+ * Block 5: two radios the inventory approves both of are not each
+ * other's rogue, which the old rule did not know.
+ *
+ * Mutations (2026-11-11), each red here:
+ *   - the U/L test dropped from the OUI skip (any equal three bytes
+ *     skip): block 1 (no chain alert);
+ *   - the twin_evidence_score() test removed: block 2 (a chain CRIT)
+ *     and block 5 (a chain CRIT, the approved AP tainted);
+ *   - the same-OUI skip removed: block 4 (a chain CRIT). */
+static void test_twin_chain_reads_no_oui_from_a_local_address(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t v1[6] = {0x1a,0x48,0xca,0x90,0x00,0x01};
+    uint8_t v2[6] = {0x1a,0x48,0xca,0xf3,0x22,0x07};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "VW-Hotspot", v1, "WPA2");
+    add_beacon(&s, "VW-Hotspot", v2, "WPA2");
+    twin_radio(&s, 0,  6, t0,      0x1111u);
+    twin_radio(&s, 1, 11, t0 + 60, 0x2222u);
+    chain_flood(&s, v1);
+    alerts_update(&s);
+    int k = chain_alert(&s);
+    ASSERT(k >= 0);
+    if (k >= 0) {
+        ASSERT_EQ((int)s.alerts[k].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[k].detail,
+                      "real=1a:48:ca:90:00:01 twin=1a:48:ca:f3:22:07") != NULL);
+        ASSERT(strstr(s.alerts[k].detail, "OUI") == NULL);
+        ASSERT(strstr(s.alerts[k].detail, "vendor") == NULL);
+    }
+    ASSERT_EQ(evil_twin_bssid_is_tainted(v2), 1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(v1), 0);
+
+    alerts_clear();
+    twin_radio(&s, 1, 11, t0 + 60, 0x1111u);
+    alerts_update(&s);
+    ASSERT_EQ(chain_alert(&s), -1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(v2), 0);
+
+    uint8_t real[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t rogue[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+    alerts_clear();
+    static sloth_state_t u; seed_state(&u);
+    add_beacon(&u, "CorpWiFi", real,  "WPA2");
+    add_beacon(&u, "CorpWiFi", rogue, "WPA2");
+    twin_radio(&u, 0, 6, t0,      0x1111u);
+    twin_radio(&u, 1, 6, t0 + 60, 0x2222u);
+    u.beacon_aps[1].rssi_min_60s = -80;
+    u.beacon_aps[1].rssi_max_60s = -60;
+    chain_flood(&u, real);
+    alerts_update(&u);
+    k = chain_alert(&u);
+    ASSERT(k >= 0);
+    if (k >= 0) ASSERT_EQ((int)u.alerts[k].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(rogue), 1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(real), 0);
+    ASSERT(find_alert(&u, ALERT_TYPE_EVIL_TWIN_PROXIMITY) >= 0);
+
+    uint8_t node1[6] = {0xe8,0x9c,0x25,0x10,0x20,0x30};
+    uint8_t node2[6] = {0xe8,0x9c,0x25,0x77,0x41,0x9c};
+    alerts_clear();
+    static sloth_state_t m; seed_state(&m);
+    add_beacon(&m, "HomeMesh", node1, "WPA2");
+    add_beacon(&m, "HomeMesh", node2, "WPA2");
+    twin_radio(&m, 0, 11, t0,      0x1111u);
+    twin_radio(&m, 1, 11, t0 + 60, 0x2222u);
+    chain_flood(&m, node1);
+    alerts_update(&m);
+    ASSERT_EQ(chain_alert(&m), -1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(node2), 0);
+    /* The pair is still the scorer's WARN: the skip is the chain's. */
+    ASSERT(find_alert(&m, ALERT_TYPE_EVIL_TWIN) >= 0);
+
+    uint8_t ruckus[6] = {0xa8,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t aruba[6]  = {0x11,0x22,0x33,0x44,0x55,0x66};
+    ASSERT_EQ(use_inventory(INV_CORP), 1);
+    alerts_clear();
+    static sloth_state_t v; seed_state(&v);
+    add_beacon(&v, "CorpWiFi", ruckus, "WPA2");
+    add_beacon(&v, "CorpWiFi", aruba,  "WPA2");
+    chain_flood(&v, ruckus);
+    alerts_update(&v);
+    ASSERT_EQ(chain_alert(&v), -1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(aruba), 0);
+    no_inventory();
+    /* Without the file the same two radios are the true positive. */
+    alerts_clear();
+    alerts_update(&v);
+    ASSERT(chain_alert(&v) >= 0);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(aruba), 1);
+}
+
+/* #194, announce ahead, end to end through the real table: the copy
+ * sends one beacon under the victim's name early, on 5 GHz, falls
+ * silent past BEACON_AGE_SECS, and starts on the victim's band with
+ * other vendor IEs ten minutes after the victim was first heard. It
+ * was a return, WARN at 35 %; it is an arrival, CRIT at 55. Beside
+ * it, the same announcement on the band it starts on: still a return
+ * (the residual the assessment states).
+ *
+ * Mutation (2026-11-12): the band test removed from recall_arrival();
+ * the first block read RETURN, WARN at 35. */
+static void test_twin_an_announcement_as_another_radio_is_no_alibi(void) {
+    uint8_t r1[6]    = {0x80,0xd0,0x4a,0x10,0x20,0x30};
+    uint8_t rogue[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+    static sloth_state_t s;
+    static beacon_rsn_t rr, rc;
+    memset(&rr, 0, sizeof(rr));
+    memset(&rc, 0, sizeof(rc));
+    rr.fp.vendor_ies_hash = 0x1111u;
+    rc.fp.vendor_ies_hash = 0x2222u;
+
+    for (int pass = 0; pass < 2; pass++) {
+        int announce_ch = pass == 0 ? 36 : 6;
+        alerts_clear(); beacon_clear();
+        sloth_clock_test_set(tw_mono, tw_wall);
+        g_tw_wall = 1700000000;
+        g_tw_mono = 5000000;
+
+        beacon_record(r1, "Riverside", -60, 6, "WPA2", 100, &rr);
+        tw_tick(5);
+        beacon_record(rogue, "Riverside", -70, announce_ch, "WPA2", 100, &rc);
+        for (int k = 0; k < 6; k++) {
+            tw_tick(100);
+            /* Two frames a step: a steadily heard original, 50 s a
+             * frame, inside TWIN_STEADY_FRAME_S (#227). */
+            for (int f = 0; f < 2; f++)
+                beacon_record(r1, "Riverside", -60, 6, "WPA2", 100, &rr);
+            seed_state(&s);
+            beacon_snapshot(&s);
+        }
+        ASSERT_EQ(s.beacon_count, 1);
+
+        for (int k = 0; k < TWIN_CRIT_MIN_BEACONS_DEFAULT; k++)
+            beacon_record(rogue, "Riverside", -60, 6, "WPA2", 100, &rc);
+        tw_tick(1);
+        beacon_record(r1, "Riverside", -60, 6, "WPA2", 100, &rr);
+        seed_state(&s);
+        beacon_snapshot(&s);
+        int i1 = tw_slot(&s, r1), i2 = tw_slot(&s, rogue);
+        ASSERT(i1 >= 0 && i2 >= 0);
+        if (i1 < 0 || i2 < 0) break;
+
+        alerts_update(&s);
+        int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+        ASSERT(idx >= 0);
+        if (idx < 0) break;
+        if (pass == 0) {
+            ASSERT_EQ((int)s.beacon_aps[i2].arrival, BEACON_ARRIVAL_NEW);
+            ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+            ASSERT_EQ(s.alerts[idx].confidence, 55);
+            ASSERT(strstr(s.alerts[idx].detail, " +late-arrival") != NULL);
+        } else {
+            ASSERT_EQ((int)s.beacon_aps[i2].arrival, BEACON_ARRIVAL_RETURN);
+            ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+            ASSERT_EQ(s.alerts[idx].confidence, 35);
+        }
+    }
+    sloth_clock_test_set(NULL, NULL);
+    alerts_clear(); beacon_clear();
+}
+
+/* ── The issue's field pairs, end to end (#188, 2026-11-12) ────
+ *
+ * Every representative pair #188 names, benign and real, through
+ * alerts_update, with the worst EVIL_TWIN row (the pair rule's; the
+ * chain is checked on its own key) each one leaves. The halves are
+ * well heard unless the case is about being barely heard: -60 dBm and
+ * 50 beacons, which no gate here reads as faint. */
+
+/* The worst pair row's severity, -1 for none; its confidence in *conf. */
+static int twin_worst(const sloth_state_t *s, int *conf) {
+    int worst = -1;
+    *conf = -1;
+    for (int k = 0; k < s->alert_count; k++) {
+        if (s->alerts[k].type != ALERT_TYPE_EVIL_TWIN) continue;
+        if (strstr(s->alerts[k].key, "twin-chain:") != NULL) continue;
+        if ((int)s->alerts[k].sev > worst) {
+            worst = (int)s->alerts[k].sev;
+            *conf = s->alerts[k].confidence;
+        }
+    }
+    return worst;
+}
+
+typedef struct {
+    const char *what, *ssid;
+    uint8_t a[6], b[6];
+    int ch_a, ch_b;
+    int gap_s;            /* b first heard this long after a */
+    uint32_t hash_a, hash_b;
+    int sig_b, frames_b;  /* a is always well heard */
+    int self_steer;       /* b steers a client to a, under B2 */
+    int want_sev;         /* -1 none, else the worst row's severity */
+    int want_conf;        /* -1 any */
+} twin_case_t;
+
+static const twin_case_t TWIN_CASES[] = {
+    /* Benign: one device's radios. */
+    { "residential router A, 2.4/5 GHz", "HomeNet",
+      {0x28,0x25,0x5f,0x10,0x20,0x14}, {0x28,0x25,0x5f,0x10,0x20,0x1c},
+      6, 157, 2, 0x1111u, 0x2222u, -60, 50, 0, -1, -1 },
+    { "residential router B, :ef -> :f0 carry", "HomeNet",
+      {0xc8,0xc7,0x50,0x12,0x34,0xef}, {0xc8,0xc7,0x50,0x12,0x35,0xf0},
+      1, 36, 1, 0x1111u, 0x2222u, -60, 50, 0, -1, -1 },
+    { "GM hotspot, complemented octets 1-2", "CHEVROLET1234",
+      {0x02,0x47,0x43,0xa1,0xb2,0xc3}, {0x02,0xb8,0xbc,0xa1,0xb2,0xc3},
+      6, 149, 1, 0x1111u, 0x2222u, -60, 50, 0, -1, -1 },
+    { "GM hotspot, flipped nibble", "myChevrolet",
+      {0x02,0x24,0xa5,0xa1,0xb2,0xc3}, {0x02,0x49,0xa5,0xa1,0xb2,0xc3},
+      2, 44, 3, 0x1111u, 0x2222u, -60, 50, 0, -1, -1 },
+    { "VW hotspot", "VW_WLAN",
+      {0x1a,0x48,0xca,0x91,0x22,0x33}, {0x1a,0x48,0xca,0xf1,0x22,0x33},
+      6, 40, 2, 0x1111u, 0x2222u, -60, 50, 0, -1, -1 },
+    { "T-Mobile gateway band-steering itself", "TMOBILE-1234",
+      {0x64,0x67,0x72,0x10,0x20,0xe6}, {0x64,0x67,0x72,0x10,0x20,0xe7},
+      6, 6, 0, 0x1111u, 0x1111u, -60, 50, 1, -1, -1 },
+    /* Benign: two devices meant to be there. */
+    { "same-OUI mesh nodes, one channel", "ASUS-Mesh",
+      {0xe8,0x9c,0x25,0x01,0x02,0x03}, {0xe8,0x9c,0x25,0x0a,0x0b,0x0c},
+      11, 11, 600, 0x1111u, 0x2222u, -60, 50, 0,
+      ALERT_SEV_WARN, TWIN_W_IE_HASH - TWIN_C_SAME_OUI },
+    { "carrier offload SSID, two customers' routers", "Spectrum Mobile",
+      {0x80,0xd0,0x4a,0x10,0x20,0x30}, {0xe2,0xdb,0xd1,0x40,0x50,0x60},
+      6, 6, 600, 0x1111u, 0x2222u, -60, 50, 0,
+      ALERT_SEV_WARN,
+      TWIN_W_IE_HASH + TWIN_W_LATE_ARRIVAL - TWIN_C_CARRIER_SSID },
+    { "ISP pair at -100 dBm, two beacons", "MyISP-Home",
+      {0x00,0x11,0x22,0x33,0x44,0x55}, {0x3c,0x52,0xa1,0x01,0x02,0x03},
+      6, 6, 600, 0x1111u, 0x2222u, -100, 2, 0,
+      ALERT_SEV_WARN, TWIN_W_DIFF_OUI + TWIN_W_IE_HASH },
+    /* Real: a second transmitter. */
+    { "two vendors, one band, different vendor IEs", "CorpWiFi",
+      {0x00,0x11,0x22,0x33,0x44,0x55}, {0x3c,0x52,0xa1,0x01,0x02,0x03},
+      6, 6, 600, 0x1111u, 0x2222u, -60, 50, 0,
+      ALERT_SEV_CRIT, TWIN_W_DIFF_OUI + TWIN_W_IE_HASH },
+    { "locally administered copy, late, different vendor IEs", "CorpWiFi",
+      {0x00,0x11,0x22,0x33,0x44,0x55}, {0x02,0x9a,0x3c,0x71,0x5e,0x08},
+      6, 6, 600, 0x1111u, 0x2222u, -60, 50, 0,
+      ALERT_SEV_CRIT, TWIN_W_IE_HASH + TWIN_W_LATE_ARRIVAL },
+    { "attacker-tool OUI, barely heard", "CorpWiFi",
+      {0xa8,0xbb,0xcc,0x01,0x02,0x03}, {0x24,0x0a,0xc4,0x44,0x55,0x66},
+      6, 6, 600, 0x1111u, 0x1111u, -100, 1, 0, ALERT_SEV_CRIT, -1 },
+    { "attacker-tool OUI under a carrier SSID", "xfinitywifi",
+      {0xa8,0xbb,0xcc,0x01,0x02,0x03}, {0x24,0x0a,0xc4,0x44,0x55,0x66},
+      6, 6, 600, 0x1111u, 0x1111u, -60, 50, 0, ALERT_SEV_CRIT, -1 },
+};
+
+/* Mutations (2026-11-12), each red here and nowhere else in this test:
+ *   - the carrier context weight dropped from twin_evidence_score: the
+ *     carrier row read CRIT at 55;
+ *   - `|| ev.faint` dropped from the CRIT gate: the -100 dBm row read
+ *     CRIT at 55.
+ * The six one-device rows are #188's first change and were already
+ * pinned one by one; they are here so the issue's list reads whole. */
+static void test_twin_issue_188_field_pairs_classify(void) {
+    time_t t0 = time(NULL) - 3600;
+    static sloth_state_t s;
+    for (size_t c = 0; c < sizeof(TWIN_CASES) / sizeof(TWIN_CASES[0]); c++) {
+        const twin_case_t *tc = &TWIN_CASES[c];
+        alerts_clear();
+        seed_state(&s);
+        add_beacon(&s, tc->ssid, tc->a, "WPA2");
+        add_beacon(&s, tc->ssid, tc->b, "WPA2");
+        twin_radio(&s, 0, tc->ch_a, t0,             tc->hash_a);
+        twin_radio(&s, 1, tc->ch_b, t0 + tc->gap_s, tc->hash_b);
+        /* One frame a second over the hour: the earlier half heard
+         * steadily, as a late arrival needs (#227). */
+        s.beacon_aps[0].frame_count = 3600;
+        s.beacon_aps[1].frame_count = tc->frames_b;
+        s.beacon_aps[1].signal_dbm  = (int8_t)tc->sig_b;
+        if (tc->self_steer) seed_steer(&s, tc->b, tc->a, 3);
+        alerts_update(&s);
+        int conf = -1;
+        int sev = twin_worst(&s, &conf);
+        if (sev != tc->want_sev ||
+            (tc->want_conf >= 0 && conf != tc->want_conf))
+            fprintf(stderr, "    %s: sev %d conf %d, want %d / %d\n",
+                    tc->what, sev, conf, tc->want_sev, tc->want_conf);
+        ASSERT_EQ(sev, tc->want_sev);
+        if (tc->want_conf >= 0) ASSERT_EQ(conf, tc->want_conf);
+    }
+
+    /* The deauth-then-twin chain, the issue's other real shape: CRIT on
+     * its own key, the copy named and tainted. */
+    alerts_clear();
+    seed_state(&s);
+    uint8_t real[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t twin[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "Cafe-Net", real, "WPA2");
+    add_beacon(&s, "Cafe-Net", twin, "WPA2");
+    s.beacon_aps[0].frame_count = s.beacon_aps[1].frame_count = 50;
+    chain_flood(&s, real);
+    alerts_update(&s);
+    int k = chain_alert(&s);
+    ASSERT(k >= 0);
+    if (k >= 0) ASSERT_EQ((int)s.alerts[k].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(twin), 1);
+    evil_twin_taint_clear();
+}
+
+/* `carrier_ssid`: exact names, case folded, context and nothing else.
+ *
+ * Mutation (2026-11-12): twin_ssid_is_carrier() as a case-sensitive
+ * prefix match (strncmp); the "spectrum mobile", "Spectrum Mobile 5G"
+ * and "XFINITY-Den" rows went red. With the TWIN_C_CARRIER_SSID line
+ * dropped from the scorer, every carrier row went red. */
+static void test_twin_carrier_ssid_is_context(void) {
+    uint8_t a[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t b[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+    static const struct { const char *ssid; int carrier; } N[] = {
+        { "Spectrum Mobile",    1 },
+        { "spectrum mobile",    1 },
+        { "XFINITY",            1 },
+        { "attwifi",            1 },
+        { "Spectrum Mobile 5G", 0 },
+        { "XFINITY-Den",        0 },
+        { "Starbucks WiFi",     0 },
+        { "HomeNet",            0 },
+    };
+    time_t now = time(NULL);
+    static sloth_state_t s;
+    for (size_t i = 0; i < sizeof(N) / sizeof(N[0]); i++) {
+        alerts_clear();
+        seed_state(&s);
+        add_beacon(&s, N[i].ssid, a, "WPA2");
+        add_beacon(&s, N[i].ssid, b, "WPA2");
+        twin_radio(&s, 0, 6, now - 3600, 0x1111u);
+        twin_radio(&s, 1, 6, now - 3000, 0x2222u);
+        twin_evidence_t ev;
+        ASSERT_EQ(twin_evidence_score(&s, &s.beacon_aps[0], &s.beacon_aps[1],
+                                      now, &ev), 1);
+        if (ev.carrier_ssid != N[i].carrier)
+            fprintf(stderr, "    '%s': carrier %d\n", N[i].ssid, ev.carrier_ssid);
+        ASSERT_EQ(ev.carrier_ssid, N[i].carrier);
+        ASSERT_EQ(ev.context, N[i].carrier ? TWIN_C_CARRIER_SSID : 0);
+        /* Context: the pair is still a candidate and the row still
+         * stands, at WARN under a carrier name and CRIT otherwise. */
+        alerts_update(&s);
+        int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+        ASSERT(idx >= 0);
+        if (idx < 0) continue;
+        ASSERT_EQ((int)s.alerts[idx].sev,
+                  N[i].carrier ? (int)ALERT_SEV_WARN : (int)ALERT_SEV_CRIT);
+        ASSERT_EQ(strstr(s.alerts[idx].detail, " +carrier SSID") != NULL,
+                  N[i].carrier);
+    }
+
+    /* A hard signal is not answered by the name: a steer at the pair
+     * from an unrelated address carries a carrier-SSID row to CRIT. */
+    alerts_clear();
+    seed_state(&s);
+    uint8_t steerer[6] = {0x5c,0x11,0x22,0x33,0x44,0x55};
+    add_beacon(&s, "Spectrum Mobile", a, "WPA2");
+    add_beacon(&s, "Spectrum Mobile", b, "WPA2");
+    seed_steer(&s, steerer, b, 3);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    if (idx >= 0) ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+/* `faint`: the bounds of "barely heard", and that it moves no weight.
+ *
+ * Mutations (2026-11-12): `<` for `<=` against TWIN_PROX_FLOOR_DBM; the
+ * -92 assertion went red. `<=` for `<` against the beacon floor; the
+ * exactly-at-the-floor and the knob-at-1 assertions went red, and so did
+ * test_twin_an_ap_that_returns_is_not_a_late_arrival, whose copy is
+ * heard on exactly that many. With twin_ap_faint() reading signal_dbm
+ * before rssi_max_60s the window-peak assertion went red. */
+static void test_twin_faint_bounds(void) {
+    uint8_t a[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t b[6] = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+    time_t now = time(NULL);
+    static sloth_state_t s;
+    seed_state(&s);
+    add_beacon(&s, "CorpWiFi", a, "WPA2");
+    add_beacon(&s, "CorpWiFi", b, "WPA2");
+    twin_radio(&s, 0, 6, now - 3600, 0x1111u);
+    twin_radio(&s, 1, 6, now - 3000, 0x2222u);
+    beacon_ap_t *bb = &s.beacon_aps[1];
+    twin_evidence_t ev;
+#define FAINT() (twin_evidence_score(&s, &s.beacon_aps[0], bb, now, &ev), \
+                 ev.faint)
+
+    bb->frame_count = 50;
+    bb->signal_dbm = -92;  ASSERT_EQ(FAINT(), 1);
+    bb->signal_dbm = -91;  ASSERT_EQ(FAINT(), 0);
+    ASSERT_EQ(ev.confidence, TWIN_W_DIFF_OUI + TWIN_W_IE_HASH);
+    bb->signal_dbm = -100; ASSERT_EQ(FAINT(), 1);
+    ASSERT_EQ(ev.confidence, TWIN_W_DIFF_OUI + TWIN_W_IE_HASH);  /* no weight */
+    /* The window's peak is the reading, not the newest beacon. */
+    bb->rssi_min_60s = -100; bb->rssi_max_60s = -80;
+    ASSERT_EQ(FAINT(), 0);
+    bb->rssi_min_60s = bb->rssi_max_60s = 0;
+    bb->signal_dbm = 0;    ASSERT_EQ(FAINT(), 0);   /* unseen */
+    bb->signal_dbm = -60;
+
+    bb->frame_count = TWIN_CRIT_MIN_BEACONS_DEFAULT - 1; ASSERT_EQ(FAINT(), 1);
+    bb->frame_count = TWIN_CRIT_MIN_BEACONS_DEFAULT;     ASSERT_EQ(FAINT(), 0);
+    bb->frame_count = 0;                                 ASSERT_EQ(FAINT(), 0);
+    /* Either half. */
+    bb->frame_count = 50;
+    s.beacon_aps[0].frame_count = 1;                     ASSERT_EQ(FAINT(), 1);
+    s.beacon_aps[0].frame_count = 50;
+
+    /* The knob. */
+    ASSERT_EQ(tune_set_id(TUNE_TWIN_CRIT_MIN_BEACONS, 1), 1);
+    bb->frame_count = 1;                                 ASSERT_EQ(FAINT(), 0);
+    ASSERT_EQ(tune_set_id(TUNE_TWIN_CRIT_MIN_BEACONS, 100), 1);
+    bb->frame_count = 99;                                ASSERT_EQ(FAINT(), 1);
+    tune_reset();
+#undef FAINT
+
+    /* On the row: WARN at the same confidence, and named. */
+    alerts_clear();
+    bb->frame_count = 2;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+        ASSERT_EQ(s.alerts[idx].confidence, TWIN_W_DIFF_OUI + TWIN_W_IE_HASH);
+        ASSERT(strstr(s.alerts[idx].detail, " +faint") != NULL);
+    }
+    alerts_clear();
+    bb->frame_count = 50;
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[idx].detail, "faint") == NULL);
     }
 }
 
@@ -7282,7 +10389,10 @@ static int fair_count(const sloth_state_t *s, alert_type_t t) {
 static void fair_flood_scans(int keys, void (*extra)(sloth_state_t *)) {
     int made = 0;
     while (made < keys) {
-        sloth_state_t f; seed_state(&f);
+        /* static: inlined into a caller that holds two states of its
+         * own, three ~2.8 MB frames outgrew the 8 MB stack once alert_t
+         * gained the location stamp (2026-10-27). */
+        static sloth_state_t f; seed_state(&f);
         if (extra) extra(&f);
         for (int i = 0; i < MAX_SCAN_ENTRIES && made < keys; i++, made++) {
             char ip[32];
@@ -8573,6 +11683,98 @@ static void test_pm_forge_quiet_with_no_contradiction(void) {
     pm_forge_clear(); beacon_clear();
 }
 
+/* #183 item 2: the contradicting station is the sensor's own radio.
+ * Still evaluated (a compromised sensor is worth knowing about), but
+ * demoted one step from WARN to LOW and tagged "self" rather than
+ * silenced or left reading as a third-party attacker. */
+static void test_pm_forge_self_device_demoted_and_tagged(void) {
+    alerts_clear(); ownership_clear(); pm_forge_clear(); beacon_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x88};
+    static const uint8_t sta[6]   = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    beacon_record(bssid, "Net", -50, 6, "WPA2", 100, NULL);
+    ASSERT(ownership_self_add(sta));
+
+    uint8_t f[32]; int len;
+    len = pmforge_frame(f, 0xC, 1, bssid, sta, 0);
+    pm_forge_observe(f, len, 4000, 0);
+    len = pmforge_frame(f, 0x8, 0, bssid, sta, 5);
+    pm_forge_observe(f, len, 4000, 50000);
+
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_PM_FORGE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_LOW);
+        ASSERT(strstr(s.alerts[i].detail, "self") != NULL);
+    }
+    pm_forge_clear(); beacon_clear(); ownership_clear();
+}
+
+/* Same contradiction, but the BSSID is also operator-designated: mine
+ * escalates WARN to CRIT, self then demotes one step to WARN — the two
+ * effects compose rather than one masking the other. */
+static void test_pm_forge_self_device_on_my_bssid_is_warn_not_crit(void) {
+    alerts_clear(); ownership_clear(); pm_forge_clear(); beacon_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x99};
+    static const uint8_t sta[6]   = {0x24,0x41,0x8c,0x30,0x97,0xa2};
+    beacon_record(bssid, "Net", -50, 6, "WPA2", 100, NULL);
+    ASSERT(ownership_add_bssid("00:11:22:33:44:99"));
+    ASSERT(ownership_self_add(sta));
+
+    uint8_t f[32]; int len;
+    len = pmforge_frame(f, 0xC, 1, bssid, sta, 0);
+    pm_forge_observe(f, len, 5000, 0);
+    len = pmforge_frame(f, 0x8, 0, bssid, sta, 5);
+    pm_forge_observe(f, len, 5000, 50000);
+
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_PM_FORGE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT(strstr(s.alerts[i].detail, "self") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "YOUR network") != NULL);
+    }
+    pm_forge_clear(); beacon_clear(); ownership_clear();
+}
+
+/* The framed station is on the operator's --known-mac roster and the
+ * BSSID is designated: the operator's own laptop under a Framing Frames
+ * attack on the operator's own network. That is the CRIT the rule is
+ * for, so the roster neither demotes it nor tags it "self"; only one of
+ * the sensor's own interface addresses does. Seen red (WARN, tagged)
+ * with the rule asking ownership_is_own_device(). RECURRING_TRANSIT's
+ * roster demotion (#183 ruling 2a) is not extended here either: seen
+ * red (WARN, "rostered device") with it copied into rule_pm_forge(). */
+static void test_pm_forge_rostered_device_is_not_self(void) {
+    alerts_clear(); ownership_clear(); pm_forge_clear(); beacon_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0xaa};
+    static const uint8_t sta[6]   = {0x24,0x41,0x8c,0x30,0x97,0xb1};
+    beacon_record(bssid, "Net", -50, 6, "WPA2", 100, NULL);
+    ASSERT(ownership_add_bssid("00:11:22:33:44:aa"));
+    ASSERT(ownership_add_known_mac("24:41:8c:30:97:b1"));
+
+    uint8_t f[32]; int len;
+    len = pmforge_frame(f, 0xC, 1, bssid, sta, 0);
+    pm_forge_observe(f, len, 6000, 0);
+    len = pmforge_frame(f, 0x8, 0, bssid, sta, 5);
+    pm_forge_observe(f, len, 6000, 50000);
+
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_PM_FORGE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "self") == NULL);
+        ASSERT(strstr(s.alerts[i].detail, "rostered device") == NULL);
+        ASSERT(strstr(s.alerts[i].detail, "YOUR network") != NULL);
+    }
+    pm_forge_clear(); beacon_clear(); ownership_clear();
+}
+
 /* ── Queued-frame release — Framing Frames CVE-2022-47522 (#107 shape B) ── */
 
 /* AP -> STA data frame: ToDS=0, FromDS=1, addr1=DA addr2=BSSID
@@ -9239,9 +12441,9 @@ static void test_twin_chain_key_distinguishes_long_prefix_pair(void) {
     sloth_state_t s; seed_state(&s);
     char n1[33], n2[33];
     long_ssid_pair(n1, n2);
-    uint8_t real1[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t real1[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t twin1[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
-    uint8_t real2[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x04};
+    uint8_t real2[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x04};
     uint8_t twin2[6] = {0x11,0x22,0x33,0x44,0x55,0x67};
     add_beacon(&s, n1, real1, "WPA2");
     add_beacon(&s, n1, twin1, "WPA2");
@@ -9336,7 +12538,7 @@ static time_t   g_lc_wall;
 static uint64_t lc_mono(void) { return g_lc_mono; }
 static time_t   lc_wall(void) { return g_lc_wall; }
 
-static char lc_path[] = "/tmp/sloth_lifecycle_XXXXXX";
+static char lc_path[TEST_TMP_MAX];
 
 /* Fresh sink + frozen clocks. Wall starts at a fixed epoch so record
  * timestamps are reproducible. */
@@ -9346,7 +12548,7 @@ static void lc_begin(void) {
      * test's stream, not this one. */
     jsonl_close();
     alerts_clear();
-    int fd = mkstemp(lc_path);
+    int fd = mkstemp(test_tmp_tpl(lc_path, sizeof(lc_path), "sloth_lifecycle_XXXXXX"));
     if (fd >= 0) close(fd);
     unlink(lc_path);              /* jsonl_open recreates it 0600 (#87) */
     ASSERT(jsonl_open(lc_path));
@@ -9640,17 +12842,23 @@ static void test_lifecycle_update_is_throttled_not_per_poll(void) {
     lc_seed_fuzz(&s, b, 3);
     alerts_update(&s);
 
-    /* 30 polls, evidence changing each time, all inside one floor. */
+    /* 30 polls, evidence changing each time, all inside one floor.
+     * The defect kind alternates rather than the score: since #173 the
+     * MGMT_FUZZ detail reports which kinds are present and a rate band,
+     * not the raw counters, so a score of 3 and of 4 render alike. */
     for (int i = 0; i < 30; i++) {
         lc_advance(1);
-        lc_seed_fuzz(&s, b, 3 + (i % 2));   /* detail flips, sev stays WARN */
+        seed_state(&s);                      /* detail flips, sev stays WARN */
+        if (i % 2) add_fuzz_beacon(&s, b, 0, 3, 0);
+        else       add_fuzz_beacon(&s, b, 3, 0, 0);
         alerts_update(&s);
     }
     ASSERT_EQ(lc_count("\"type\":\"alert.update\""), 0);
 
     /* Past the floor, exactly one update carries the current evidence. */
     lc_advance(ALERT_UPDATE_MIN_S);
-    lc_seed_fuzz(&s, b, 4);
+    seed_state(&s);
+    add_fuzz_beacon(&s, b, 0, 3, 0);
     alerts_update(&s);
     ASSERT_EQ(lc_count("\"type\":\"alert.update\""), 1);
     ASSERT_EQ(lc_count("\"type\":\"alert.escalate\""), 0);
@@ -10511,16 +13719,21 @@ void run_alerts_tests(void) {
     RUN_TEST(test_bgp_notification_burst_fires_at_threshold);
     RUN_TEST(test_bgp_notification_burst_below_threshold_no_fire);
     RUN_TEST(test_bgp_notification_burst_per_peer_pair);
+    RUN_TEST(test_ssh_brute_force_idle_flow_stops);
     RUN_TEST(test_ssh_brute_force_fires_at_threshold);
     RUN_TEST(test_ssh_brute_force_below_threshold_no_fire);
     RUN_TEST(test_ssh_brute_force_per_pair);
+    RUN_TEST(test_rdp_brute_force_idle_flow_stops);
     RUN_TEST(test_rdp_brute_force_fires_at_threshold);
     RUN_TEST(test_rdp_brute_force_below_threshold_no_fire);
     RUN_TEST(test_rdp_brute_force_per_pair);
     RUN_TEST(test_rdp_brute_force_no_cookie);
+    RUN_TEST(test_snmp_community_brute_idle_flow_stops);
     RUN_TEST(test_snmp_community_brute_fires_at_threshold);
     RUN_TEST(test_snmp_community_brute_below_threshold_no_fire);
     RUN_TEST(test_snmp_community_brute_per_pair);
+    RUN_TEST(test_mqtt_brute_idle_connects_stop);
+    RUN_TEST(test_mqtt_brute_idle_fails_stop);
     RUN_TEST(test_mqtt_brute_fires_at_connect_threshold);
     RUN_TEST(test_mqtt_brute_fires_at_fail_threshold);
     RUN_TEST(test_mqtt_brute_below_both_thresholds_no_fire);
@@ -10591,15 +13804,34 @@ void run_alerts_tests(void) {
     RUN_TEST(test_my_net_recon_no_designation_no_fire);
     RUN_TEST(test_my_net_recon_matches_any_pnl_slot);
     RUN_TEST(test_my_net_recon_clamps_ssid_count);
+    RUN_TEST(test_my_net_recon_self_iface_mac_no_fire);
+    RUN_TEST(test_my_net_recon_self_monitor_radio_no_fire);
+    RUN_TEST(test_my_net_recon_stranger_still_fires_beside_self);
+    RUN_TEST(test_my_net_recon_self_randomised_sibling_still_exonerated);
+#ifdef WITH_SQLITE
+    RUN_TEST(test_my_net_recon_db_assoc_within_window_no_fire);
+    RUN_TEST(test_my_net_recon_db_assoc_older_than_window_fires);
+#endif
+    RUN_TEST(test_my_net_recon_without_a_database_still_fires);
     RUN_TEST(test_deauth_flood_on_my_bssid_escalates_crit);
     RUN_TEST(test_deauth_flood_elsewhere_stays_warn);
     RUN_TEST(test_deauth_flood_no_designation_stays_warn);
 
     TEST_SUITE("alerts: recurring transit (#54)");
     RUN_TEST(test_recurring_transit_fires_at_threshold);
+    RUN_TEST(test_recurring_transit_self_device_demoted_and_tagged);
+    RUN_TEST(test_recurring_transit_rostered_device_demoted_and_tagged);
+    RUN_TEST(test_recurring_transit_unrostered_device_stays_warn);
+    RUN_TEST(test_recurring_transit_both_rosters_is_self);
+    RUN_TEST(test_recurring_transit_tag_does_not_split_the_incident);
     RUN_TEST(test_two_passes_do_not_fire);
     RUN_TEST(test_stale_passes_do_not_fire);
     RUN_TEST(test_no_transits_no_fire);
+
+    TEST_SUITE("alerts: Block-Ack paralysis / Bl0ck (#70)");
+    RUN_TEST(test_blockack_attack_fires_warn_without_ownership);
+    RUN_TEST(test_blockack_attack_self_device_demoted_and_tagged);
+    RUN_TEST(test_blockack_attack_rostered_device_is_not_self);
 
     TEST_SUITE("alerts: unknown device on my network (#55)");
     RUN_TEST(test_unknown_device_on_my_network_fires);
@@ -10608,6 +13840,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_unknown_device_matches_by_designated_bssid);
     RUN_TEST(test_roster_without_designation_is_inert);
     RUN_TEST(test_designation_without_roster_is_inert);
+    RUN_TEST(test_unknown_device_self_iface_no_fire);
     RUN_TEST(test_unconfigured_is_inert);
     RUN_TEST(test_unknown_device_notes_randomised_mac);
 
@@ -10633,6 +13866,14 @@ void run_alerts_tests(void) {
     RUN_TEST(test_evil_twin_proximity_unseen_min_no_fire);
     RUN_TEST(test_evil_twin_proximity_unseen_max_no_fire);
     RUN_TEST(test_evil_twin_proximity_per_bssid);
+    RUN_TEST(test_evil_twin_proximity_lone_bssid_no_fire);
+    RUN_TEST(test_evil_twin_proximity_fires_on_a_weak_strong_pair);
+    RUN_TEST(test_evil_twin_proximity_sibling_radio_is_no_candidate);
+    RUN_TEST(test_evil_twin_proximity_noise_floor_swing_no_fire);
+    RUN_TEST(test_evil_twin_proximity_quiet_while_the_sensor_moves);
+    RUN_TEST(test_evil_twin_proximity_moving_boundaries);
+    RUN_TEST(test_evil_twin_proximity_open_pair_is_no_candidate);
+    RUN_TEST(test_evil_twin_proximity_only_the_accused_half);
     RUN_TEST(test_evil_twin_attack_chain_fires_crit);
     RUN_TEST(test_evil_twin_attack_chain_stale_deauth_no_fire);
     RUN_TEST(test_evil_twin_attack_chain_no_twin_no_fire);
@@ -10644,6 +13885,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_e2e_full_attack_chain);
     RUN_TEST(test_e2e_clean_baseline_no_alerts);
     RUN_TEST(test_karma_three_ssids_fires);
+    RUN_TEST(test_karma_pineapple_pairing_is_context_only);
+    RUN_TEST(test_karma_corroborated_verdict_is_crit);
     RUN_TEST(test_karma_names_the_tool_from_fingerprint_flags);
     RUN_TEST(test_karma_two_ssids_no_fire);
     RUN_TEST(test_karma_one_ssid_no_fire);
@@ -10651,6 +13894,10 @@ void run_alerts_tests(void) {
     RUN_TEST(test_karma_single_pnl_hit_is_uncorroborated);
     RUN_TEST(test_karma_pnl_hits_spread_across_clients_no_escalation);
     RUN_TEST(test_karma_confidence_keys_on_the_corroborated_station);
+    RUN_TEST(test_karma_ie_collapse_pays_confidence_not_severity);
+    RUN_TEST(test_karma_ie_variety_lowers_confidence);
+    RUN_TEST(test_karma_uniform_ies_cost_no_confidence);
+    RUN_TEST(test_karma_unknown_fingerprints_state_nothing);
     RUN_TEST(test_karma_detail_names_the_corroborating_station);
     RUN_TEST(test_karma_alert_key_is_the_shared_one);
     RUN_TEST(test_karma_unrelated_deauth_flood_no_chain);
@@ -10688,11 +13935,16 @@ void run_alerts_tests(void) {
     RUN_TEST(test_attack_tool_ua_sqlmap_fires);
     RUN_TEST(test_attack_tool_ua_nmap_case_insensitive);
     RUN_TEST(test_attack_tool_ua_normal_browser_no_fire);
+    RUN_TEST(test_attack_path_response_is_not_an_attacker);
+    RUN_TEST(test_attack_tool_ua_response_is_not_an_attacker);
     RUN_TEST(test_attack_path_traversal_fires);
     RUN_TEST(test_attack_path_sqli_fires);
     RUN_TEST(test_attack_path_log4shell_fires);
     RUN_TEST(test_attack_path_xss_fires);
     RUN_TEST(test_attack_path_normal_no_fire);
+    RUN_TEST(test_attack_path_pair_fires_once_on_client);
+    RUN_TEST(test_attack_path_response_only_no_fire);
+    RUN_TEST(test_attack_tool_ua_response_no_fire);
     RUN_TEST(test_weak_tls_tls10_fires);
     RUN_TEST(test_weak_tls_sslv3_fires);
     RUN_TEST(test_weak_tls_tls13_no_fire);
@@ -10718,6 +13970,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_view_draw_empty);
     RUN_TEST(test_view_draw_populated);
     RUN_TEST(test_view_detail_first_seen_is_not_last_seen);
+    RUN_TEST(test_view_detail_times_the_incident_not_the_finding);
     RUN_TEST(test_view_key_nav);
     RUN_TEST(test_view_key_clear);
 
@@ -10731,6 +13984,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_frag_mixkey_silent_without_a_rekey);
     RUN_TEST(test_frag_pn_gap_and_eapol_relay_fire);
     RUN_TEST(test_frag_quiet_on_an_open_network);
+    RUN_TEST(test_frag_eapol_relay_quiet_on_an_ap_mld);
+    RUN_TEST(test_frag_eapol_relay_names_the_sibling_guess);
 
     TEST_SUITE("alerts: SAE/PSK split (#74)");
     RUN_TEST(test_sae_psk_split_fires);
@@ -10759,6 +14014,28 @@ void run_alerts_tests(void) {
     RUN_TEST(test_twin_steer_window_expires);
     RUN_TEST(test_cleartext_cred_ipv6_distinct_users_not_coalesced);
     RUN_TEST(test_weak_strong_twin_also_names_the_steerer);
+
+    TEST_SUITE("alerts: one device is not a twin pair (#188)");
+    RUN_TEST(test_twin_dual_band_radios_of_one_device_are_silent);
+    RUN_TEST(test_twin_vendor_ie_hash_is_not_compared_across_bands);
+    RUN_TEST(test_twin_locally_administered_bssids_have_no_oui);
+    RUN_TEST(test_twin_self_steer_is_not_a_hard_signal);
+    RUN_TEST(test_twin_second_transmitter_same_band_is_still_crit);
+    RUN_TEST(test_twin_sibling_does_not_excuse_an_inventory_mismatch);
+    RUN_TEST(test_twin_sibling_test_boundaries);
+    RUN_TEST(test_twin_late_arrival_lifts_a_locally_administered_rogue);
+    RUN_TEST(test_twin_late_arrival_does_not_lift_a_same_vendor_mesh);
+    RUN_TEST(test_twin_late_arrival_needs_both_on_the_air);
+    RUN_TEST(test_twin_late_arrival_is_not_read_off_a_moving_sensor);
+    RUN_TEST(test_twin_late_arrival_needs_a_name_new_to_the_session);
+    RUN_TEST(test_twin_an_ap_that_returns_is_not_a_late_arrival);
+    RUN_TEST(test_twin_detail_fits_with_every_phrase);
+    RUN_TEST(test_twin_chain_does_not_name_a_devices_own_radio);
+    RUN_TEST(test_twin_chain_reads_no_oui_from_a_local_address);
+    RUN_TEST(test_twin_an_announcement_as_another_radio_is_no_alibi);
+    RUN_TEST(test_twin_issue_188_field_pairs_classify);
+    RUN_TEST(test_twin_carrier_ssid_is_context);
+    RUN_TEST(test_twin_faint_bounds);
 
     TEST_SUITE("alerts: open device-onboarding SoftAP (#80)");
     RUN_TEST(test_open_setup_ap_fires);
@@ -10854,6 +14131,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_pm_forge_fires_warn_without_ownership);
     RUN_TEST(test_pm_forge_escalates_to_crit_on_my_bssid);
     RUN_TEST(test_pm_forge_quiet_with_no_contradiction);
+    RUN_TEST(test_pm_forge_self_device_demoted_and_tagged);
+    RUN_TEST(test_pm_forge_self_device_on_my_bssid_is_warn_not_crit);
+    RUN_TEST(test_pm_forge_rostered_device_is_not_self);
 
     TEST_SUITE("alerts: queued-frame release (#107 shape B)");
     RUN_TEST(test_queue_evict_ages_out_of_the_report_window);
@@ -10942,4 +14222,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_recurring_transit_threshold_is_tunable);
     RUN_TEST(test_recurring_transit_window_is_tunable);
     RUN_TEST(test_queue_evict_report_window_is_tunable);
+
+    /* The inventory file the threat-intel tests share. */
+    if (inv_tmp_made) { unlink(inv_tmp); inv_tmp_made = 0; inv_tmp[0] = '\0'; }
 }

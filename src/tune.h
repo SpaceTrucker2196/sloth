@@ -50,6 +50,8 @@ typedef enum {
     TUNE_EVIL_TWIN_PROXIMITY_DBM,
     TUNE_DEAUTH_TWIN_WIN_SECS,
     TUNE_TWIN_STEER_WINDOW_S,
+    TUNE_TWIN_LATE_ARRIVAL_S,
+    TUNE_TWIN_CRIT_MIN_BEACONS,
     TUNE_RECON_SUSTAIN_S,
     TUNE_RECON_SUSTAIN_PROBES,
     TUNE_KERB_PREAUTH_BURST,
@@ -57,9 +59,17 @@ typedef enum {
     TUNE_BGP_NOTIFICATION_BURST,
     TUNE_SSH_BRUTE_FORCE,
     TUNE_RDP_BRUTE_FORCE,
+    /* #202: the sliding window ssh.brute_force / rdp.brute_force count
+     * inside, in seconds. See src/flood_window.h. */
+    TUNE_SSH_BRUTE_WINDOW_S,
+    TUNE_RDP_BRUTE_WINDOW_S,
     TUNE_SNMP_COMMUNITY_BRUTE,
     TUNE_MQTT_BRUTE_CONNECTS,
     TUNE_MQTT_BRUTE_FAILS,
+    /* #203: the sliding window snmp.community_brute and
+     * mqtt.brute_connects / mqtt.brute_fails count inside, in seconds. */
+    TUNE_SNMP_BRUTE_WINDOW_S,
+    TUNE_MQTT_BRUTE_WINDOW_S,
     /* #82's own three, folded in 2026-10-05. They shipped first as
      * --wps-pin-brute-cycles / --wps-lockout-cycles /
      * --wps-pbc-concurrent in d652502, which answered the same owner
@@ -79,6 +89,8 @@ typedef enum {
     /* Per-alert pcap export policy (#96). See the rows in tune.c. */
     TUNE_PCAP_MIN_SEVERITY,
     TUNE_PCAP_KEY_COOLDOWN_SECS,
+    /* #166: the age window of the --pcap-dir sweep (src/alert_pcap.h). */
+    TUNE_PCAP_RETAIN_DAYS,
     /* Data-socket hygiene (#135): per-peer slot cap and idle timeout.
        Neither is a detector threshold. See the rows in tune.c. */
     TUNE_SOCKET_MAX_PER_PEER,
@@ -148,6 +160,60 @@ typedef enum {
     TUNE_BLE_FLOOD_RATE,
     TUNE_BLE_HID_ROTATE_ADDRS,
     TUNE_BLE_HID_ROTATE_WINDOW_S,
+    /* 2026-10-26: the RSSI distance data point (src/rf_distance.h).
+       Model coefficients and a calibration distance, not detector
+       thresholds - no rule reads the estimate. */
+    TUNE_RF_PATH_LOSS_N_2G,
+    TUNE_RF_PATH_LOSS_N_5G,
+    TUNE_RF_PATH_LOSS_N_6G,
+    TUNE_RF_MEDIAN_K,
+    TUNE_RF_REF_DIST_DM,
+    /* 2026-11-06: the receive antenna's gain, dB, per receiver. */
+    TUNE_RF_RX_GAIN_DB_WIFI,
+    TUNE_RF_RX_GAIN_DB_BLE,
+    /* 2026-10-27: --location / --gps (src/gps.h). Sampling and
+       freshness knobs for the position stamp, not detector thresholds:
+       no rule reads a position. */
+    TUNE_GPS_MIN_MOVE_M,
+    TUNE_GPS_SAMPLE_S,
+    TUNE_GPS_MAX_FIX_AGE_S,
+    /* 2026-11-03: the four GNSS rules (src/alerts/rules_gnss.c). Each
+       default is argued from research/gnss/ in the rule's comment and
+       in docs/wiki/cli-reference.md; where the research says no
+       published threshold exists the default is the conservative one
+       and the comment says so. */
+    TUNE_GNSS_JAM_CN0_DROP_DB,
+    TUNE_GNSS_JAM_WINDOW_S,
+    TUNE_GNSS_JAM_IND,
+    TUNE_GNSS_JAM_HOLD_S,
+    TUNE_GNSS_SPOOF_CN0_HIGH_DB,
+    TUNE_GNSS_SPOOF_HIGH_SATS,
+    TUNE_GNSS_SPOOF_CN0_MEAN_DB,
+    TUNE_GNSS_SPOOF_CN0_SD_DB,
+    TUNE_GNSS_SPOOF_MIN_SATS,
+    TUNE_GNSS_SPOOF_WINDOW_S,
+    TUNE_GNSS_TIME_JUMP_MS,
+    TUNE_GNSS_POS_JUMP_K,
+    /* #186: ADSB_EMERGENCY (src/alerts/rules_adsb.c). How long the
+       aircraft's emergency condition must hold, by its own messages,
+       before LOW becomes WARN. */
+    TUNE_ADSB_EMERG_HOLD_S,
+    /* #187 S2: KARMA_PROBE_FORGE's count and window. See
+       src/karma_detect.h. */
+    TUNE_KARMA_FORGE_SSIDS,
+    TUNE_KARMA_FORGE_WINDOW_S,
+    /* #187, 2026-11-12: the association window that makes it CRIT. */
+    TUNE_KARMA_FORGE_ASSOC_S,
+    /* #172: PMKID_HARVEST and HANDSHAKE_HARVEST. Each default is argued
+       in src/harvest_track.h; none comes from a source. */
+    TUNE_HARVEST_WINDOW_S,
+    TUNE_HARVEST_MIN_BSSIDS,
+    TUNE_HARVEST_UNANSWERED_PCT,
+    TUNE_HARVEST_DEAUTH_MIN,
+    TUNE_HARVEST_RECONNECT_S,
+    /* #190: age window for the per-session report files. Retention, not
+       a detector threshold — see the row in tune.c. */
+    TUNE_REPORT_RETAIN_DAYS,
     TUNE_COUNT
 } tune_id_t;
 

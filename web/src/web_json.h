@@ -28,6 +28,11 @@ typedef struct {
 
 void web_jw_init(web_jw_t *w, char *buf, size_t cap);
 void web_jw_raw(web_jw_t *w, const char *s);
+/* n raw bytes, unescaped. For the output of our own writers only (the
+ * bundle splices a route's rendered body, web_bundle.c): never a stream
+ * string, which goes through web_jw_str(). test_json.c pins the one
+ * caller. */
+void web_jw_rawn(web_jw_t *w, const char *s, size_t n);
 void web_jw_str(web_jw_t *w, const char *s);          /* "..." escaped */
 void web_jw_strn(web_jw_t *w, const char *s, size_t n);
 void web_jw_int(web_jw_t *w, long long v);
@@ -43,5 +48,10 @@ void web_utf8_copy(char *out, size_t max, const char *s);
  * in *cp; 0 when p does not start one. Shared with the stream decoder,
  * so the reader and the writer agree on what valid means. */
 size_t web_utf8_seq(const unsigned char *p, size_t n, unsigned *cp);
+
+/* Seconds east of UTC at unix t, from the calendar fields alone
+ * (tm_gmtoff is not C99). Shared by the week and baseline answers and
+ * the bundle's envelope. */
+long long web_utc_offset(long long t);
 
 #endif

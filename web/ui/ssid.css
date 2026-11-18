@@ -1,0 +1,12 @@
+/* One SSID's detail (web/ui/ssid.js): every SSID the page writes is a
+ * link to it, drawn as the text it was with a dotted rule under it, so a
+ * table of names does not turn into a table of buttons. */
+.ssidgo { cursor: pointer; text-decoration: underline dotted var(--rule); text-underline-offset: 3px; }
+.ssidgo:hover, .ssidgo:focus-visible { text-decoration-color: currentColor; }
+button.ssidmore { margin-left: 6px; }
+/* A MAC inside a list that opens its drawer: a button that reads as the
+ * address it is. */
+button.lk { background: transparent; border: 0; border-radius: 0; padding: 0 2px; font: inherit; font-size: 12px; letter-spacing: 0; text-transform: none; color: inherit; cursor: pointer; text-decoration: underline dotted var(--rule); text-underline-offset: 3px; }
+button.lk:hover, button.lk:focus-visible { background: var(--tint); text-decoration-color: currentColor; }
+.lst.slst li { flex-wrap: wrap; align-items: baseline; gap: 2px var(--gap); padding: 2px 0; }
+#sdrawer .label .sub { margin-left: 2px; }

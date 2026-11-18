@@ -1,0 +1,6 @@
+/* Where the sensor was (sloth --location / --gps): the alert page's
+ * section and the drawer's scatter (location.js). Colours are the
+ * palette's: heat for RSSI, as the TUI grades signal. */
+.loc-line { font-variant-numeric: tabular-nums; }
+.loc-line button { margin-left: 1ch; }
+.loc-map { display: block; max-width: 100%; }

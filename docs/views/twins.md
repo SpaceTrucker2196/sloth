@@ -19,16 +19,30 @@ or the EAPOL log.
 Per episode: SSID, the two BSSIDs, shared encryption, a confidence
 percentage, last observed RSSI on each side, the RSSI swing in the last
 60 s, the pair's class and wired-attachment state (#89 slice 3, below),
-and four flags:
+and five flags:
 
 - **attack_in_progress** — the chain rule has tainted the twin BSSID
   (a `DEAUTH_FLOOD` against the real half met its threshold within the
-  last 5 s).
+  last 5 s). Since #188 the chain takes its pair from the same scorer
+  as this view, so a flood against one radio of a dual-band device
+  does not flag the device's other radio.
 - **attacker_oui** — the twin's OUI matches the Hak5 (Pineapple /
   Alfa) or Espressif (ESP32 / ESP8266) tables in
   `src/wifi_oui_attacker.c`.
 - **hash_mismatch** — the two APs' vendor-IE fingerprint hashes (FNV-1a
-  over non-Microsoft tag-221 IEs) disagree.
+  over non-Microsoft tag-221 IEs) disagree. Compared only when both are
+  on the same band (#188): one AP's 2.4 and 5 GHz radios differ here by
+  design, and such a pair — addresses at most 2 bytes apart, different
+  bands, first heard within 10 s — is one device and not an episode.
+- **late_arrival** (`>`, #188) — the later-heard half was first heard at
+  least `twin.late_arrival_s` (120 s) after the earlier one, the earlier
+  one has been heard again since, the sensor has been at rest that long,
+  its SSID is new on its BSSID this session (an AP the beacon table
+  dropped and heard again is a return), the earlier one was heard
+  steadily (at least one frame a minute over its entry, #227),
+  and the scorer counted it (+20). Set only on a pair with other
+  positive evidence and a locally administered half; it is the alert's
+  `+late-arrival`.
 - **unattributed** (`?`) — nothing has established which half is the
   impostor. The two BSSID columns are the pair in canonical byte order,
   not an accusation.
@@ -128,7 +142,7 @@ intact.
  ------------------  -----------------  -----------------  ------  ----  --------  -----  -----  ------  ----
  CorpWiFi            aa:bb:cc:01:02:03  11:22:33:44:55:66  WPA2    60%   impostor  ?      18dB   !*#     3s
  Cafe-Net            11:22:33:44:55:66  99:88:77:66:55:44  WPA2    5%    neighbor  ?      -      ?       9s
- flags: ! attack-in-progress  * attacker OUI  # vendor-IE hash mismatch
+ flags: ! attack-in-progress  * attacker OUI  # vendor-IE hash mismatch  > late arrival
         ? sides unattributed - candidate pair, neither half accused
  class: impostor over-the-air impersonation  neighbor outside the declared
         estate  declared both halves in the approved inventory  ? no inventory
@@ -140,7 +154,7 @@ The mockup is the full layout, 114 columns and wider. Below that the
 table gives up width from the left of Flags rather than clip it (#150):
 `Last` is dropped first, then SSID narrows from 18 to as few as 12, so
 at the 100-column minimum SSID is 14 wide and `Last` is gone, but a
-`!*#?` row still shows all four marks. Flags is the column the legend
+`!*#>?` row still shows all five marks. Flags is the column the legend
 explains, and a `?` cut off at the edge would read as an accusation.
 
 The `Class` column is bright only on `impostor`. A `neighbor` or
@@ -163,6 +177,35 @@ sorted higher.
 The columns are headed "BSSID A / B" rather than "Real / Twin" for the
 same reason. The old headings stated a verdict on every row, including
 the rows where sloth had none.
+
+### The chain lanes (#195)
+
+Under the table, the selected pair's attack chain as G8's TUI form
+(`docs/web-visual-spec.md` §5 G8): one 24-cell lane per stage in the
+order the chain runs, on one time axis from the earliest stage (at
+least ten minutes, at most a day) to now.
+
+```
+ ── chain of the selected pair, by stage ──
+  deauth LOW   ──────────▌▌▌▌▌▌▌▌▌▌▌▌▌▌
+  twin CRIT    ────────────●━━━━━━━━━━●
+  assoc        ──────────────────●─────
+  karma WARN   ────────────────●━━━●───
+               22:03              22:13  10 min, 1 assoc
+  links: deauth taint, attack in progress; impostor attributed
+```
+
+An EVIL_TWIN or KARMA_AP incident is `━` from its open to its last
+observation, `●` at an end inside the window, in the severity it
+reached, which the lane's label also says. The alert's key is matched
+at its BSSID fields only (`twin:` / `twin-fp:` pair keys, `karma:`),
+never as a substring, the way slothweb's `/api/wifi/chain` reads it, so
+an SSID or the text across a pair's two halves never joins a chain.
+Deauth streams addressed to either BSSID are `▌` across their span and
+associations to either `●` at their first frame, in the normal ink, with
+the DEAUTH_FLOOD severity as the deauth lane's word. The links sloth
+made (the deauth taint, the attribution) are words on the last line.
+The lanes take seven rows, which the table's page budget leaves for them.
 
 ## What's normal
 
@@ -199,8 +242,9 @@ the rows where sloth had none.
   vendor-IE-driven attack surfaces.
 - **High RSSI swing on the twin** — a rogue being switched on / moved
   closer mid-capture (Pineapple in a backpack, ESP32 booting). Phase 3
-  fires `EVIL_TWIN_PROXIMITY` independently when the swing crosses
-  15 dBm.
+  fires `EVIL_TWIN_PROXIMITY` when the swing crosses 15 dBm on a BSSID
+  that is half of a candidate pair (#189), its minimum is above
+  -92 dBm, and the sensor is not itself moving.
 
 ## See also
 

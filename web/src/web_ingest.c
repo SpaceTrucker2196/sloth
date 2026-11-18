@@ -14,20 +14,30 @@
 #include <unistd.h>
 
 #include "web_acl.h"
+#include "web_frrs.h"
+#include "web_chain.h"
+#include "web_ble.h"
+#include "web_adsb.h"
+#include "web_aprs.h"
+#include "web_rtl433.h"
+#include "web_victron.h"
+#include "web_lure.h"
+#include "web_df.h"
+#include "web_sysstat.h"
+#include "web_gnss.h"
 #include "web_metrics.h"
 
 /* ── --socket ────────────────────────────────────────────────────────── */
 
-int web_sockspec_parse(const char *s, web_sockspec_t *out,
-                       char *err, size_t errsz) {
+int web_sockspec_parse_flag(const char *flag, const char *s, web_sockspec_t *out,
+                            char *err, size_t errsz) {
     memset(out, 0, sizeof(*out));
     if (!s) s = "";
     if (!strncmp(s, "unix:", 5)) {
         const char *p = s + 5;
         size_t n = strlen(p);
         if (n == 0 || n > WEB_SOCK_PATH_MAX) {
-            snprintf(err, errsz, "--socket %s: the path must be 1..%d bytes",
-                     s, WEB_SOCK_PATH_MAX);
+            snprintf(err, errsz, "%s %s: the path must be 1..%d bytes", flag, s, WEB_SOCK_PATH_MAX);
             return -1;
         }
         out->kind = WEB_SOCKSPEC_UNIX;
@@ -35,7 +45,7 @@ int web_sockspec_parse(const char *s, web_sockspec_t *out,
         return 0;
     }
     if (strncmp(s, "tcp:", 4)) {
-        snprintf(err, errsz, "--socket %s: want unix:PATH or tcp:ADDR:PORT", s);
+        snprintf(err, errsz, "%s %s: want unix:PATH or tcp:ADDR:PORT", flag, s);
         return -1;
     }
     const char *h = s + 4, *colon;
@@ -45,7 +55,7 @@ int web_sockspec_parse(const char *s, web_sockspec_t *out,
     if (v6) {
         const char *rb = strchr(h, ']');
         if (!rb || rb[1] != ':') {
-            snprintf(err, errsz, "--socket %s: want tcp:[V6]:PORT", s);
+            snprintf(err, errsz, "%s %s: want tcp:[V6]:PORT", flag, s);
             return -1;
         }
         hl = (size_t)(rb - h - 1);
@@ -55,22 +65,22 @@ int web_sockspec_parse(const char *s, web_sockspec_t *out,
     } else {
         colon = strchr(h, ':');
         if (!colon || strchr(colon + 1, ':')) {
-            snprintf(err, errsz, "--socket %s: want tcp:A.B.C.D:PORT or "
-                                 "tcp:[V6]:PORT", s);
+            snprintf(err, errsz, "%s %s: want tcp:A.B.C.D:PORT or "
+                                 "tcp:[V6]:PORT", flag, s);
             return -1;
         }
         hl = (size_t)(colon - h);
         if (hl < sizeof(host)) memcpy(host, h, hl);
     }
     if (hl == 0 || hl >= sizeof(host)) {
-        snprintf(err, errsz, "--socket %s: bad address", s);
+        snprintf(err, errsz, "%s %s: bad address", flag, s);
         return -1;
     }
     host[hl] = '\0';
     /* inet_pton, never getaddrinfo: slothweb resolves nothing. */
     if (inet_pton(v6 ? AF_INET6 : AF_INET, host, out->addr) != 1) {
-        snprintf(err, errsz, "--socket %s: not a literal %s address "
-                             "(names are not resolved)", s, v6 ? "IPv6" : "IPv4");
+        snprintf(err, errsz, "%s %s: not a literal %s address "
+                             "(names are not resolved)", flag, s, v6 ? "IPv6" : "IPv4");
         return -1;
     }
     const char *pp = colon + 1;
@@ -80,13 +90,25 @@ int web_sockspec_parse(const char *s, web_sockspec_t *out,
         if (pp[i] < '0' || pp[i] > '9') bad = 1;
     long port = bad ? -1 : strtol(pp, NULL, 10);
     if (port <= 0 || port > 65535) {
-        snprintf(err, errsz, "--socket %s: bad port", s);
+        snprintf(err, errsz, "%s %s: bad port", flag, s);
         return -1;
     }
     out->kind = WEB_SOCKSPEC_TCP;
     out->family = v6 ? AF_INET6 : AF_INET;
     out->port = (uint16_t)port;
     return 0;
+}
+
+int web_sockspec_parse(const char *s, web_sockspec_t *out,
+                       char *err, size_t errsz) {
+    return web_sockspec_parse_flag("--socket", s, out, err, errsz);
+}
+
+int web_sockspec_same(const web_sockspec_t *a, const web_sockspec_t *b) {
+    if (!a->kind || a->kind != b->kind) return 0;
+    if (a->kind == WEB_SOCKSPEC_UNIX) return !strcmp(a->path, b->path);
+    return a->family == b->family && a->port == b->port &&
+           !memcmp(a->addr, b->addr, a->family == AF_INET6 ? 16 : 4);
 }
 
 void web_sockspec_format(const web_sockspec_t *sp, char *buf, size_t sz) {
@@ -117,6 +139,66 @@ int web_backoff_next(int cur, int min_ms, int max_ms) {
 void web_feed_reset(web_feed_t *f) {
     f->len = 0;
     f->discarding = 0;
+    f->wrong = 0;
+}
+
+int web_feed_rf_type(const char *t) {
+    return t && (!strncmp(t, "gnss_", 5) || !strncmp(t, "adsb_", 5) ||
+                 !strncmp(t, "aprs_", 5) || !strncmp(t, "rtl433_", 7) ||
+                 !strncmp(t, "victron_", 8));
+}
+
+/* The wrong-daemon guard (web_ingest.h): 1 when the record is not to be
+ * applied, already counted. */
+static int wrong_daemon(web_feed_t *f, web_live_t *l, const char *t, long long now_ms) {
+    if (!strcmp(t, "sensor_health")) {
+        const char *d = web_jl_str(&f->rec, "daemon");
+        int rf = d && !strcmp(d, "rf");
+        f->wrong = f->role == WEB_FEED_RF ? !rf : rf;
+        if (f->wrong) {
+            web_live_wrong_daemon(l, d, now_ms);
+            return 1;
+        }
+        return 0;
+    }
+    if (f->wrong) web_live_wrong_record(l, now_ms);
+    return f->wrong;
+}
+
+/* One decoded record of one of two streams (the table in web_ingest.h). */
+static void split_line(web_feed_t *f, web_live_t *l, long long now_ms) {
+    const char *t = web_jl_str(&f->rec, "type");
+    if (!t) return;
+    if (wrong_daemon(f, l, t, now_ms)) return;
+    web_live_apply(l, &f->rec, now_ms);
+    int rf_type = web_feed_rf_type(t);
+    int health = !strcmp(t, "sensor_health");
+    if (f->role == WEB_FEED_RF) {
+        if (rf_type || health) {
+            if (f->gnss) web_gnss_record(f->gnss, &f->rec, now_ms);
+            if (f->adsb) web_adsb_record(f->adsb, &f->rec, now_ms);
+            if (f->aprs) web_aprs_record(f->aprs, &f->rec, now_ms);
+            if (f->rtl433) web_rtl433_record(f->rtl433, &f->rec, now_ms);
+            if (f->victron) web_victron_record(f->victron, &f->rec, now_ms);
+        }
+        int applied = web_sys_record_from(f->sys, WEB_SYS_FROM_RF, &f->rec, now_ms);
+        if (f->rf_ru)
+            web_metrics_rf_sample(f->rf_ru, f->sys, &f->rec, applied,
+                                  f->rf_clock ? f->rf_clock(f->rf_clock_ctx)
+                                              : (long long)time(NULL));
+        return;
+    }
+    if (rf_type) return;
+    /* A source row of one of sloth-rf's sources is refused here, and
+     * then feeds no series either. */
+    if (!web_sys_record_from(f->sys, WEB_SYS_FROM_WIFI, &f->rec, now_ms)) return;
+    if (f->metrics) web_metrics_record(f->metrics, &f->rec);
+    if (f->frrs) web_frrs_record(f->frrs, &f->rec);
+    if (f->ble) web_ble_record(f->ble, &f->rec, now_ms);
+    if (health && f->gnss) web_gnss_record_fallback(f->gnss, &f->rec, now_ms);
+    if (f->lure) web_lure_record(f->lure, &f->rec, now_ms);
+    if (f->df) web_df_record(f->df, &f->rec, now_ms);
+    if (f->chain) web_chain_record(f->chain, &f->rec);
 }
 
 static void one_line(web_feed_t *f, web_live_t *l, long long now_ms) {
@@ -124,9 +206,22 @@ static void one_line(web_feed_t *f, web_live_t *l, long long now_ms) {
     size_t n = f->len;
     if (n == 0 || (n == 1 && f->line[0] == '\r')) return;
     int e = web_jl_parse(f->line, n, &f->rec);
-    if (e == WEB_JL_OK) {
+    if (e == WEB_JL_OK && f->role != WEB_FEED_ONLY) {
+        split_line(f, l, now_ms);
+    } else if (e == WEB_JL_OK) {
         web_live_apply(l, &f->rec, now_ms);
         if (f->metrics) web_metrics_record(f->metrics, &f->rec);
+        if (f->frrs) web_frrs_record(f->frrs, &f->rec);
+        if (f->ble) web_ble_record(f->ble, &f->rec, now_ms);
+        if (f->gnss) web_gnss_record(f->gnss, &f->rec, now_ms);
+        if (f->adsb) web_adsb_record(f->adsb, &f->rec, now_ms);
+        if (f->aprs) web_aprs_record(f->aprs, &f->rec, now_ms);
+        if (f->rtl433) web_rtl433_record(f->rtl433, &f->rec, now_ms);
+        if (f->victron) web_victron_record(f->victron, &f->rec, now_ms);
+        if (f->sys) web_sys_record(f->sys, &f->rec, now_ms);
+        if (f->lure) web_lure_record(f->lure, &f->rec, now_ms);
+        if (f->df) web_df_record(f->df, &f->rec, now_ms);
+        if (f->chain) web_chain_record(f->chain, &f->rec);
     } else {
         web_live_decode_error(l, e, now_ms);
         if (f->metrics) web_metrics_taint(f->metrics);
@@ -352,8 +447,60 @@ int web_ingest_start(web_ingest_t *g, const web_sockspec_t *spec,
     return 0;
 }
 
+void web_ingest_set_role(web_ingest_t *g, int role) {
+    g->feed.role = role;
+}
+
+void web_ingest_set_rf_rollup(web_ingest_t *g, web_rollup_t *ru) {
+    g->feed.rf_ru = ru;
+}
+
 void web_ingest_set_metrics(web_ingest_t *g, struct web_metrics *m) {
     g->feed.metrics = m;
+}
+
+void web_ingest_set_frrs(web_ingest_t *g, struct web_frrs *f) {
+    g->feed.frrs = f;
+}
+
+void web_ingest_set_ble(web_ingest_t *g, struct web_ble *b) {
+    g->feed.ble = b;
+}
+
+void web_ingest_set_gnss(web_ingest_t *g, struct web_gnss *n) {
+    g->feed.gnss = n;
+}
+
+void web_ingest_set_adsb(web_ingest_t *g, struct web_adsb *a) {
+    g->feed.adsb = a;
+}
+
+void web_ingest_set_aprs(web_ingest_t *g, struct web_aprs *a) {
+    g->feed.aprs = a;
+}
+
+void web_ingest_set_rtl433(web_ingest_t *g, struct web_rtl433 *a) {
+    g->feed.rtl433 = a;
+}
+
+void web_ingest_set_victron(web_ingest_t *g, struct web_victron *a) {
+    g->feed.victron = a;
+}
+
+void web_ingest_set_sys(web_ingest_t *g, struct web_sys *y) {
+    g->feed.sys = y;
+}
+
+void web_ingest_set_lure(web_ingest_t *g, struct web_lure *l) {
+    g->feed.lure = l;
+}
+
+void web_ingest_set_df(web_ingest_t *g, struct web_df *d) {
+    g->feed.df = d;
+}
+
+void web_ingest_set_chain(web_ingest_t *g, struct web_chain *c) {
+    g->feed.chain = c;
 }
 
 void web_ingest_stop(web_ingest_t *g) {

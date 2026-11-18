@@ -22,6 +22,7 @@
 #include "bytes.h"
 #include "sensor_health.h"
 #include "tune.h"
+#include "harvest_track.h"
 
 /* ── Storage ─────────────────────────────────────────────── */
 
@@ -264,6 +265,7 @@ typedef struct {
     evm_sink_t  sink[MF_OWED_MAX];
     const char *incident_id[MF_OWED_MAX];
     const char *rule[MF_OWED_MAX];
+    const loc_stamp_t *loc[MF_OWED_MAX];
 } mf_owed_t;
 
 /* Caller holds g_mu, so g_out_fd is the pinned directory the file was
@@ -273,7 +275,8 @@ typedef struct {
  * and leaves the file it describes alone. `incident_id` and `rule` must
  * outlive manifest_settle(). */
 static void manifest_note(mf_owed_t *q, const char *name, evm_sink_t sink,
-                          const char *incident_id, const char *rule) {
+                          const char *incident_id, const char *rule,
+                          const loc_stamp_t *loc) {
     if (g_out_fd < 0) return;
     char err[SFILE_ERR_MAX];
     if (q->n >= MF_OWED_MAX) {
@@ -293,6 +296,7 @@ static void manifest_note(mf_owed_t *q, const char *name, evm_sink_t sink,
     q->sink[q->n] = sink;
     q->incident_id[q->n] = incident_id;
     q->rule[q->n] = rule;
+    q->loc[q->n] = loc;
     q->n++;
 }
 
@@ -302,7 +306,8 @@ static void manifest_note(mf_owed_t *q, const char *name, evm_sink_t sink,
 static void manifest_settle(mf_owed_t *q) {
     for (int i = 0; i < q->n; i++) {
         char err[SFILE_ERR_MAX];
-        evm_meta_t m = { q->sink[i], q->incident_id[i], q->rule[i] };
+        evm_meta_t m = { q->sink[i], q->incident_id[i], q->rule[i],
+                         q->loc[i] };
         if (evidence_manifest_record_pinned(&q->pin[i], &m,
                                             err, sizeof(err)) != 0) {
             pthread_mutex_lock(&g_mu);
@@ -389,7 +394,7 @@ static void append_22000_line_for_bssid(const char *line,
      * statement a hash of it can make (#92 slice 3). A failed append was
      * rolled back above and gets no line. */
     if (!bad) manifest_note(owed, "eapol.22000", EVM_SINK_HASHCAT_22000,
-                            NULL, NULL);
+                            NULL, NULL, NULL);
 }
 
 /* ── Per-handshake pcap writer ───────────────────────────── */
@@ -461,7 +466,7 @@ static void write_handshake_pcap(const pending_t *p, mf_owed_t *owed) {
      * not frames in the order they were heard. Replace-latest (#145
      * default) means a later line for the same name supersedes this one,
      * and the earlier hash then names bytes no longer on disk. */
-    manifest_note(owed, name, EVM_SINK_HANDSHAKE_PCAP, NULL, NULL);
+    manifest_note(owed, name, EVM_SINK_HANDSHAKE_PCAP, NULL, NULL, NULL);
 }
 
 /* ── EAPOL-Key parser ────────────────────────────────────── */
@@ -701,6 +706,8 @@ int eapol_observe_frame(const dot11_frame_t *f,
 
     pending_t *p = pending_get(bssid, sta, now);
     p->last_seen = now;
+    /* An M2 that establishes this attempt's pair, once (#172). */
+    int fresh_pair = 0;
     attempt_expire(p, now);
 
     /* A new M1 starts a new attempt. Only a verbatim retransmission —
@@ -768,6 +775,7 @@ int eapol_observe_frame(const dot11_frame_t *f,
          * MIC was computed over a different exchange — it can never
          * crack, and it was never evidence of anything. */
         if (p->has_m1 && rc_eq(p->m1_rc, rc)) {
+            fresh_pair    = !p->paired;
             p->paired     = 1;
             p->rc_checked = 1;
             if (p->progress < 2) p->progress = 2;
@@ -835,12 +843,22 @@ int eapol_observe_frame(const dot11_frame_t *f,
      * record passed it. The M1/M3/M4 branches set it above where it has
      * a meaning; on an M1 nothing has been compared yet. */
     ev.handshake_progress = p->progress;
+
+    /* The harvest tracker (#172) counts what this classification
+     * found; it changes nothing here but the record's cluster id, which
+     * is why it runs before the event is pushed. A message that
+     * travelled the wrong way returned above and is not counted. Its
+     * lock is a leaf. */
+    ev.harvest_cluster_id =
+        harvest_note_eapol(bssid, sta, msg, msg == 1 && has_pmkid,
+                           fresh_pair, f->event_id);
     push_event(&ev);
 
     if (ev.assoc_evidence)
         assoc_observe(ev.bssid, ev.sta_mac,
                       ev.ssid[0] ? ev.ssid : NULL,
-                      ASSOC_SRC_EAPOL, signal, channel);
+                      ASSOC_SRC_EAPOL, signal, channel,
+                      (wifi_band_t)f->band);
 
     /* PMKID is single-frame — emit a hashcat-22000 PMKID line
      * immediately if we have a known ESSID for this BSSID.
@@ -972,6 +990,22 @@ int eapol_set_output_dir(const char *dir) {
     return rc;
 }
 
+void eapol_export_clear(void) {
+    pthread_mutex_lock(&g_mu);
+    if (g_out_fd >= 0) { close(g_out_fd); g_out_fd = -1; }
+    g_out_dir[0] = '\0';
+    sfile_fail_reset(&g_fail);
+    g_last_sweep = 0;
+    pthread_mutex_unlock(&g_mu);
+}
+
+int eapol_export_dir_stat(struct stat *out) {
+    pthread_mutex_lock(&g_mu);
+    int rc = (g_out_fd >= 0 && fstat(g_out_fd, out) == 0) ? 0 : -1;
+    pthread_mutex_unlock(&g_mu);
+    return rc;
+}
+
 /* ── Gated export-directory access for other modules (#92) ─────────── */
 
 /* Create a file in the --collect-handshakes export directory, through
@@ -1027,6 +1061,7 @@ static int bare_name(const char *n) {
 
 int eapol_export_commit(const char *tmp, const char *name,
                         const char *incident_id, const char *rule,
+                        const loc_stamp_t *loc,
                         char *err, size_t errsz) {
     if (!bare_name(tmp) || !bare_name(name)) {
         if (err && errsz) snprintf(err, errsz, "not a bare file name");
@@ -1059,7 +1094,8 @@ int eapol_export_commit(const char *tmp, const char *name,
          * unlisted; hashed after it, so the capture thread is not
          * waiting on g_mu while this file is read and the manifest
          * fsync'ed. */
-        manifest_note(&owed, name, EVM_SINK_EVIDENCE_PCAP, incident_id, rule);
+        manifest_note(&owed, name, EVM_SINK_EVIDENCE_PCAP, incident_id, rule,
+                      loc);
     }
     pthread_mutex_unlock(&g_mu);
     manifest_settle(&owed);

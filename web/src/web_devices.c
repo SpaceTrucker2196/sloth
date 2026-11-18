@@ -1,4 +1,7 @@
 #include "web_devices.h"
+#include "web_rf.h"
+
+#include "web_live.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -10,6 +13,8 @@
 #include "web_history.h"
 #include "web_metrics.h"
 #include "web_query.h"
+#include "web_ssid.h"
+#include "web_vendorkb.h"
 
 /* ── parameters ──────────────────────────────────────────────────────── */
 
@@ -145,18 +150,33 @@ static long long strip_from(long long now_s) {
  * from from, nothing at or past to: the store's minute tier, and its
  * hour tier too when hour is set (cells of whole hours, so an hour row
  * belongs to one cell), then what the ring and the open buckets hold. */
+/* The presence a scope shows (web_scope.h): every source's under
+ * Hybrid, the scope's own split otherwise. */
+static int scope_of(const web_m4_t *m) {
+    return m && m->sc ? m->sc->scope : WEB_SCOPE_HYBRID;
+}
+
+static int presence_metric(const web_m4_t *m) {
+    switch (scope_of(m)) {
+    case WEB_SCOPE_MONITOR: return WM_DEV_PRESENT_MON;
+    case WEB_SCOPE_LOCAL:   return WM_DEV_PRESENT_LOC;
+    default:                return WM_DEV_PRESENT;
+    }
+}
+
 static void strips_at(const web_m4_t *m, const char (*macs)[WEB_KEY_MAX + 1],
                       int n, long long from, long long to, int ncell,
                       int cell_s, int hour, unsigned char *bits) {
     memset(bits, 0, (size_t)n * (WEB_DEV_CELLS / 8));
     if (!m->tsdb) return;
+    int pm = presence_metric(m);
     if (m->tsdb->store && m->tsdb->store->rd)
         for (int i = 0; i < n; i++)
             for (int t = WEB_TIER_MINUTE; t <= (hour ? WEB_TIER_HOUR : WEB_TIER_MINUTE); t++)
-                web_store_presence(m->tsdb->store, t, WM_DEV_PRESENT, macs[i],
+                web_store_presence(m->tsdb->store, t, pm, macs[i],
                                    from, to, ncell, cell_s,
                                    bits + (size_t)i * (WEB_DEV_CELLS / 8));
-    web_rollup_presence(m->tsdb->ru, WM_DEV_PRESENT, macs, n, from, to,
+    web_rollup_presence(m->tsdb->ru, pm, macs, n, from, to,
                         ncell, cell_s, bits);
 }
 
@@ -165,6 +185,13 @@ static void strips(const web_m4_t *m, const char (*macs)[WEB_KEY_MAX + 1],
     long long from = strip_from(now_s);
     strips_at(m, macs, n, from, from + (long long)WEB_DEV_CELLS * WEB_DEV_CELL_S,
               WEB_DEV_CELLS, WEB_DEV_CELL_S, 0, bits);
+}
+
+long long web_dev_strip_from(long long now_s) { return strip_from(now_s); }
+
+void web_dev_strips(const web_m4_t *m, const char (*macs)[WEB_KEY_MAX + 1],
+                    int n, long long now_s, unsigned char *bits) {
+    strips(m, macs, n, now_s, bits);
 }
 
 static const char *vendor_table(const web_m4_t *m) {
@@ -200,9 +227,13 @@ static const char *best_name(const web_m4_t *m, const web_sdb_dev_t *d,
     return NULL;
 }
 
-/* One device row (§8.6). At most WEB_DEV_ROW_MAX bytes. */
+/* One device row (§8.6). At most WEB_DEV_ROW_MAX bytes. rf, when not
+ * NULL, is the row's G2 trail (web_rf.h), written as its "rf" member;
+ * NULL leaves the member out (History's rows, a record inside a larger
+ * answer that carries its own). */
 static void dev_json(web_jw_t *w, const web_m4_t *m, const web_sdb_dev_t *d,
-                     const unsigned char *bits, long long now_s) {
+                     const unsigned char *bits, const web_rf_trail_t *rf,
+                     long long now_s) {
     uint8_t mac[6];
     web_oui_hit_t hit;
     memset(&hit, 0, sizeof(hit));
@@ -221,7 +252,7 @@ static void dev_json(web_jw_t *w, const web_m4_t *m, const web_sdb_dev_t *d,
     const char *name = best_name(m, d, now_s, nbuf, &glyph);
     web_jw_raw(w, ",\"name\":");     jw_text_or_null(w, name);
     web_jw_raw(w, ",\"name_src\":"); jw_text_or_null(w, glyph);
-    web_jw_raw(w, ",\"ssid\":");     jw_text_or_null(w, d->ssid);
+    web_jw_raw(w, ",\"ssid\":");     web_jw_ssid(w, d->ssid);
     web_jw_raw(w, ",\"signal\":");
     if (d->has_signal) web_jw_int(w, d->signal_dbm); else web_jw_raw(w, "null");
     web_jw_raw(w, ",\"sources\":");  web_jw_int(w, d->sources & 0xffff);
@@ -233,12 +264,17 @@ static void dev_json(web_jw_t *w, const web_m4_t *m, const web_sdb_dev_t *d,
     web_jw_raw(w, ",\"last_seen\":");  web_jw_int(w, d->last_seen);
     double z;
     web_jw_raw(w, ",\"z\":");
-    if (m->anomaly && web_anomaly_device_z(m->anomaly, d->mac, now_s, &z))
+    /* Under a scope (web_scope.h), the |z| of its own metrics and the
+     * episodes it shows, as the drawer lists them. */
+    if (m->anomaly && web_anomaly_device_z_scoped(m->anomaly, d->mac, now_s,
+                                                  scope_of(m), &z))
         jw_real1(w, z);
     else
         web_jw_raw(w, "null");
     web_jw_raw(w, ",\"anomalies\":");
-    web_jw_int(w, m->anomaly ? web_anomaly_key_count(m->anomaly, d->mac, -1) : 0);
+    web_jw_int(w, m->anomaly ? web_anomaly_key_count_scoped(m->anomaly, d->mac, -1,
+                                   scope_of(m) ? m->sc : NULL,
+                                   m->tsdb ? m->tsdb->ru : NULL) : 0);
     web_jw_raw(w, ",\"presence\":");
     if (bits) {
         char hx[WEB_DEV_CELLS / 4 + 1];
@@ -247,7 +283,34 @@ static void dev_json(web_jw_t *w, const web_m4_t *m, const web_sdb_dev_t *d,
     } else {
         web_jw_raw(w, "null");
     }
+    if (rf) web_rf_json(w, rf, m->frrs, d->mac, now_s);
+    web_jw_ssid_meta(w, "ssid", d->ssid);
     web_jw_raw(w, "}");
+}
+
+/* G2's trails for the rows' MACs (web_rf.h): the AP's series first for
+ * a row sloth calls an AP. NULL when memory is short. */
+static web_rf_trail_t *rf_rows(const web_m4_t *m, const char (*macs)[WEB_KEY_MAX + 1],
+                               const web_sdb_dev_t *rows, int n, long long now_s) {
+    web_rf_trail_t *t = calloc((size_t)(n ? n : 1), sizeof(*t));
+    int *ap = calloc((size_t)(n ? n : 1), sizeof(*ap));
+    if (!t || !ap) { free(t); free(ap); return NULL; }
+    for (int i = 0; i < n; i++) ap[i] = rows[i].is_ap != 0;
+    web_rf_trails(m->tsdb ? m->tsdb->ru : NULL, m->sc, macs, ap, n, now_s, t);
+    free(ap);
+    return t;
+}
+
+/* The presence strip and G2's trail of one MAC, as top-level members of
+ * /api/device and /api/lookup (the drawer's and the card's). */
+static void rf_member(web_jw_t *w, const web_m4_t *m, const char *mac, int is_ap,
+                      long long now_s) {
+    char macs[1][WEB_KEY_MAX + 1];
+    snprintf(macs[0], sizeof(macs[0]), "%s", mac);
+    web_rf_trail_t t;
+    web_rf_trails(m->tsdb ? m->tsdb->ru : NULL, m->sc,
+                  (const char (*)[WEB_KEY_MAX + 1])macs, &is_ap, 1, now_s, &t);
+    web_rf_json(w, &t, m->frrs, mac, now_s);
 }
 
 /* ── /api/devices ────────────────────────────────────────────────────── */
@@ -280,15 +343,18 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
         return answer_error(503, "no_sloth_db",
                             "start slothweb with --sloth-db PATH (a WITH_SQLITE build)",
                             body, cap, len, status);
-    dparam_t ps[4] = {
+    dparam_t ps[5] = {
         { "q", WEB_Q_LEN, 1, "", 0 }, { "sort", 8, 0, "", 0 },
         { "limit", 8, 0, "", 0 }, { "offset", 8, 0, "", 0 },
+        { "dir", 8, 0, "", 0 },
     };
-    if (dparams(query, ps, 4, err, sizeof(err)) != 0)
+    if (dparams(query, ps, 5, err, sizeof(err)) != 0)
         return answer_error(400, err, NULL, body, cap, len, status);
-    int sort = WEB_QS_LAST;
+    int sort = WEB_QS_LAST, dir = WEB_SORT_DEFAULT;
     if (ps[1].seen && (sort = web_query_sort_find(ps[1].val)) < 0)
         return answer_error(400, "bad_sort", NULL, body, cap, len, status);
+    if (ps[4].seen && (dir = web_sort_dir_find(ps[4].val)) < 0)
+        return answer_error(400, "bad_dir", NULL, body, cap, len, status);
     long long limit = WEB_DEV_LIMIT, offset = 0;
     if (ps[2].seen && (decimal(ps[2].val, WEB_DEV_LIMIT_MAX, &limit) != 0 ||
                        limit < 1))
@@ -313,9 +379,12 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
         free(c.rows);
         return sdb_unavailable(m, body, cap, len, status, oerr);
     }
+    conn.scope = scope_of(m);
+    conn.sc = m->sc;
+    conn.ru = m->tsdb ? m->tsdb->ru : NULL;
     const char *fail_why = "error";
-    int got = web_sdb_devices(&conn, q, sort, limit + 1, offset, collect, &c,
-                              &fail_why);
+    int got = web_sdb_devices(&conn, q, WEB_SORT_PACK(sort, dir), limit + 1,
+                              offset, collect, &c, &fail_why);
     int schema = conn.schema;
     web_slothdb_close(&conn);      /* before any rendering: no held read */
     free(q);
@@ -332,12 +401,15 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
     for (int i = 0; i < show; i++)
         snprintf(macs[i], sizeof(macs[i]), "%s", c.rows[i].mac);
     strips(m, (const char (*)[WEB_KEY_MAX + 1])macs, show, now_s, bits);
+    web_rf_trail_t *rf = rf_rows(m, (const char (*)[WEB_KEY_MAX + 1])macs, c.rows, show, now_s);
+    if (!rf) { free(macs); free(bits); free(c.rows); return -1; }
 
     web_jw_t w;
     web_jw_init(&w, body, cap);
     web_jw_raw(&w, "{\"now\":");     web_jw_int(&w, now_s);
     web_jw_raw(&w, ",\"q\":");       web_jw_str(&w, ps[0].val);
-    static const char *const SORT[] = { "last", "first", "mac", "risk" };
+    static const char *const SORT[WEB_QS_COUNT] = { "last", "first", "mac",
+        "risk", "vendor", "ip", "ssid", "signal", "sources" };
     web_jw_raw(&w, ",\"sort\":");    web_jw_str(&w, SORT[sort]);
     web_jw_raw(&w, ",\"limit\":");   web_jw_int(&w, limit);
     web_jw_raw(&w, ",\"offset\":");  web_jw_int(&w, offset);
@@ -345,20 +417,42 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
     web_jw_raw(&w, ",\"vendor_table\":"); web_jw_str(&w, vendor_table(m));
     web_jw_raw(&w, ",\"presence_from\":"); web_jw_int(&w, strip_from(now_s));
     web_jw_raw(&w, ",\"presence_cell_s\":"); web_jw_int(&w, WEB_DEV_CELL_S);
+    /* The host's UTC offset now, which the page takes as the sensor's zone
+     * for the strip's ruler and words (as week.utc_offset_s is). */
+    web_jw_raw(&w, ",\"utc_offset_s\":"); web_jw_int(&w, web_utc_offset(now_s));
+    /* pass:latest's set (the devices tile's): its size, which a page
+     * compares with the rows sloth.db holds of it. */
+    web_jw_raw(&w, ",\"pass_size\":");
+    if (m->sdb && m->sdb->fns.live) {
+        int pm = 0;
+        /* Under a scope, the pass's devices of that scope (the devices
+         * tile's count). */
+        int sc = scope_of(m);
+        web_jw_int(&w, sc ? web_live_pass_count(m->sdb->fns.live,
+                                                sc == WEB_SCOPE_MONITOR ? WEB_SC_M
+                                                                        : WEB_SC_L)
+                          : web_live_pass_size(m->sdb->fns.live, &pm));
+    } else {
+        web_jw_raw(&w, "null");
+    }
     web_jw_raw(&w, ",\"rows\":[");
     int shown = 0;
     for (int i = 0; i < show; i++) {
         /* Room for this row and the tail, or stop here with "more". */
         if (w.len + WEB_DEV_ROW_MAX + 96 > cap) break;
         if (i) web_jw_raw(&w, ",");
-        dev_json(&w, m, &c.rows[i], bits + (size_t)i * (WEB_DEV_CELLS / 8), now_s);
+        dev_json(&w, m, &c.rows[i], bits + (size_t)i * (WEB_DEV_CELLS / 8), &rf[i], now_s);
         shown++;
     }
+    free(rf);
     int more = shown < c.n;
     web_jw_raw(&w, "],\"count\":");   web_jw_int(&w, shown);
     web_jw_raw(&w, ",\"more\":");     web_jw_raw(&w, more ? "true" : "false");
     web_jw_raw(&w, ",\"next_offset\":");
     if (more) web_jw_int(&w, offset + shown); else web_jw_raw(&w, "null");
+    /* Only when asked for: an answer without dir is as it always was. */
+    if (dir != WEB_SORT_DEFAULT)
+        web_jw_raw(&w, dir == WEB_SORT_ASC ? ",\"dir\":\"asc\"" : ",\"dir\":\"desc\"");
     web_jw_raw(&w, "}\n");
     free(macs);
     free(bits);
@@ -407,6 +501,9 @@ int web_history_devices_route(const web_m4_t *m, const char *query,
         free(c.rows);
         return sdb_unavailable(m, body, cap, len, status, oerr);
     }
+    conn.scope = scope_of(m);
+    conn.sc = m->sc;
+    conn.ru = m->tsdb ? m->tsdb->ru : NULL;
     int got = web_sdb_devices_between(&conn, from, to, limit + 1, offset,
                                       collect, &c);
     int to_out = conn.timed_out, schema = conn.schema;
@@ -456,12 +553,15 @@ int web_history_devices_route(const web_m4_t *m, const char *query,
     web_jw_raw(&w, ",\"presence_cell_s\":"); web_jw_int(&w, cell);
     web_jw_raw(&w, ",\"presence_cells\":"); web_jw_int(&w, ncell);
     web_jw_raw(&w, ",\"presence_tier\":"); web_jw_str(&w, hour ? "hour" : "minute");
+    /* The host's UTC offset at the range's end: one offset for the whole
+     * strip's ruler, which the page says when the range is over a day. */
+    web_jw_raw(&w, ",\"utc_offset_s\":"); web_jw_int(&w, web_utc_offset(to));
     web_jw_raw(&w, ",\"rows\":[");
     int shown = 0;
     for (int i = 0; i < show; i++) {
         if (w.len + WEB_DEV_ROW_MAX + 96 > cap) break;
         if (i) web_jw_raw(&w, ",");
-        dev_json(&w, m, &c.rows[i], bits + (size_t)i * (WEB_DEV_CELLS / 8), now_s);
+        dev_json(&w, m, &c.rows[i], bits + (size_t)i * (WEB_DEV_CELLS / 8), NULL, now_s);
         shown++;
     }
     int more = shown < c.n;
@@ -503,16 +603,18 @@ static int emit_item(void *ctx, const web_sdb_item_t *it) {
     if (e->n++) web_jw_raw(w, ",");
     switch (e->kind) {
     case EK_SSID:
-        web_jw_raw(w, "{\"ssid\":"); web_jw_str(w, it->a);
+        web_jw_raw(w, "{\"ssid\":"); web_jw_ssid(w, it->a);
+        web_jw_ssid_meta(w, "ssid", it->a);
         break;
     case EK_ASSOC:
         web_jw_raw(w, "{\"bssid\":"); web_jw_str(w, it->a);
-        web_jw_raw(w, ",\"ssid\":");  jw_text_or_null(w, it->b);
+        web_jw_raw(w, ",\"ssid\":");  web_jw_ssid(w, it->b);
         web_jw_raw(w, ",\"source\":"); web_jw_int(w, it->n1 & 0xffff);
         web_jw_raw(w, ",\"channel\":"); web_jw_int(w, it->n2 & 0xffff);
         web_jw_raw(w, ",\"signal\":");
         if (it->has_n3) web_jw_int(w, it->n3 < -200 ? -200 : it->n3 > 50 ? 50 : it->n3);
         else web_jw_raw(w, "null");
+        web_jw_ssid_meta(w, "ssid", it->b);
         break;
     case EK_ADDR:
         web_jw_raw(w, "{\"addr\":"); web_jw_str(w, it->a);
@@ -523,10 +625,21 @@ static int emit_item(void *ctx, const web_sdb_item_t *it) {
         web_jw_raw(w, ",\"where\":\"sloth.db\"");
         break;
     default:
-        web_jw_raw(w, "{\"title\":"); web_jw_str(w, it->a);
+        /* An SSID in a title as it came: the display form (web_ssid.h). */
+        web_jw_raw(w, "{\"title\":"); web_jw_text(w, it->a);
         web_jw_raw(w, ",\"type\":");  web_jw_int(w, it->n1 & 0xffff);
         web_jw_raw(w, ",\"sev\":");   web_jw_int(w, it->n2 < 0 ? 0 : it->n2 > 3 ? 3 : it->n2);
         web_jw_raw(w, ",\"count\":"); web_jw_int(w, it->has_n3 && it->n3 > 0 ? it->n3 : 0);
+        /* The key's rows collapsed into one, and the opaque id of the
+         * alert detail page (web_alerts.h): never the key. */
+        web_jw_raw(w, ",\"incidents\":"); web_jw_int(w, it->rows > 0 ? it->rows : 1);
+        if (it->rid > 0) {
+            char id[32];
+            snprintf(id, sizeof(id), "d%lld", it->rid);
+            web_jw_raw(w, ",\"id\":"); web_jw_str(w, id);
+        } else {
+            web_jw_raw(w, ",\"id\":null");
+        }
         break;
     }
     web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, it->first_seen);
@@ -593,11 +706,77 @@ static void names_member(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *c,
     web_jw_raw(w, "]");
 }
 
+static void jw_list(web_jw_t *w, const char *key, const char *const *v, int n) {
+    web_jw_raw(w, ",\"");
+    web_jw_raw(w, key);
+    web_jw_raw(w, "\":[");
+    for (int i = 0; i < n; i++) {
+        if (i) web_jw_raw(w, ",");
+        web_jw_str(w, v[i]);
+    }
+    web_jw_raw(w, "]");
+}
+
+/* The vendor research section (web_vendorkb.h) for the OUI's holder:
+ * the entry web/data/vendors/ has for the name, every field as text
+ * with its [n] marks and the sources as plain records, or
+ * {"found":false} for a vendor with no file yet (the page then says
+ * "no research yet for <name>") and for no vendor at all. Every value
+ * is a string through web_jw_str(): a source title or a summary is
+ * never markup in the bytes we send. A vendor found through one of the
+ * entry's affiliates is a different company from the one the entry
+ * describes: "affiliate" says so, and its country, parent and founded
+ * go out as "unknown" (with country's confidence) so no reader of the
+ * JSON takes the entry's for the registrant's. */
+static void research_member(web_jw_t *w, const char *vendor) {
+    int aff = 0;
+    const web_vkb_t *e = vendor ? web_vendorkb_lookup(vendor, &aff) : NULL;
+    web_jw_raw(w, ",\"vendor_research\":{\"found\":");
+    if (!e) { web_jw_raw(w, "false}"); return; }
+    web_jw_raw(w, "true,\"file\":");  web_jw_str(w, e->file);
+    web_jw_raw(w, ",\"name\":");       web_jw_str(w, e->name);
+    jw_list(w, "aliases", e->aliases, e->naliases);
+    jw_list(w, "affiliates", e->affiliates, e->naffiliates);
+    web_jw_raw(w, aff ? ",\"affiliate\":true" : ",\"affiliate\":false");
+    web_jw_raw(w, ",\"kind\":");       web_jw_str(w, e->kind);
+    web_jw_raw(w, ",\"country\":");    web_jw_str(w, aff ? "unknown" : e->country);
+    web_jw_raw(w, ",\"parent\":");     web_jw_str(w, aff ? "unknown" : e->parent);
+    web_jw_raw(w, ",\"founded\":");    web_jw_str(w, aff ? "unknown" : e->founded);
+    jw_list(w, "device_classes", e->device_classes, e->ndevice_classes);
+    jw_list(w, "found_in", e->found_in, e->nfound_in);
+    jw_list(w, "radios", e->radios, e->nradios);
+    jw_list(w, "silicon", e->silicon, e->nsilicon);
+    jw_list(w, "fcc_grantee", e->fcc_grantee, e->nfcc_grantee);
+    web_jw_raw(w, ",\"randomization\":"); web_jw_str(w, e->randomization);
+    jw_list(w, "security_notes", e->security_notes, e->nsecurity_notes);
+    web_jw_raw(w, ",\"confidence\":{\"country\":"); web_jw_str(w, aff ? "unknown" : e->conf_country);
+    web_jw_raw(w, ",\"silicon\":");       web_jw_str(w, e->conf_silicon);
+    web_jw_raw(w, ",\"radios\":");        web_jw_str(w, e->conf_radios);
+    web_jw_raw(w, ",\"found_in\":");      web_jw_str(w, e->conf_found_in);
+    web_jw_raw(w, ",\"randomization\":"); web_jw_str(w, e->conf_randomization);
+    web_jw_raw(w, "},\"summary\":");      web_jw_str(w, e->summary);
+    web_jw_raw(w, ",\"sources\":[");
+    for (int i = 0; i < e->nsources; i++) {
+        web_jw_raw(w, i ? ",{\"n\":" : "{\"n\":");
+        web_jw_int(w, i + 1);
+        web_jw_raw(w, ",\"title\":");    web_jw_str(w, e->sources[i].title);
+        web_jw_raw(w, ",\"url\":");      web_jw_str(w, e->sources[i].url);
+        web_jw_raw(w, ",\"accessed\":"); web_jw_str(w, e->sources[i].accessed);
+        web_jw_raw(w, "}");
+    }
+    web_jw_raw(w, "],\"researched\":"); web_jw_str(w, e->researched);
+    web_jw_raw(w, "}");
+}
+
 static void oui_member(web_jw_t *w, const web_m4_t *m, const char *mac) {
     uint8_t b[6];
     web_oui_hit_t hit;
     web_jw_raw(w, ",\"oui\":");
-    if (web_oui_mac_bytes(mac, b) != 0) { web_jw_raw(w, "null"); return; }
+    if (web_oui_mac_bytes(mac, b) != 0) {
+        web_jw_raw(w, "null");
+        research_member(w, NULL);
+        return;
+    }
     web_oui_lookup(m->oui, b, &hit);
     static const char *const REG[] = { "MA-L", "MA-M", "MA-S" };
     web_jw_raw(w, "{\"found\":");     web_jw_raw(w, hit.found ? "true" : "false");
@@ -613,17 +792,7 @@ static void oui_member(web_jw_t *w, const web_m4_t *m, const char *mac) {
     web_jw_raw(w, ",\"table\":");     web_jw_str(w, vendor_table(m));
     web_jw_raw(w, ",\"full\":");      web_jw_raw(w, web_oui_full(m->oui) ? "true" : "false");
     web_jw_raw(w, "}");
-}
-
-/* Seconds east of UTC at t (tm_gmtoff is not C99), as web_series.c. */
-static long long utc_offset(long long t) {
-    time_t tt = (time_t)t;
-    struct tm lt, gt;
-    if (!localtime_r(&tt, &lt) || !gmtime_r(&tt, &gt)) return 0;
-    long long d = lt.tm_yday - gt.tm_yday;
-    if (lt.tm_year != gt.tm_year) d = lt.tm_year > gt.tm_year ? 1 : -1;
-    return ((d * 24 + (lt.tm_hour - gt.tm_hour)) * 60 +
-            (lt.tm_min - gt.tm_min)) * 60 + (lt.tm_sec - gt.tm_sec);
+    research_member(w, hit.found ? hit.name : NULL);
 }
 
 /* The 168 hour-of-week cells of dev.present for mac, [share, n] each
@@ -632,12 +801,12 @@ static void week_member(web_jw_t *w, const web_m4_t *m, const char *mac,
                         long long now_s) {
     web_jw_raw(w, ",\"week\":{\"now_cell\":");
     web_jw_int(w, web_bl_cell_index(now_s - now_s % 3600));
-    web_jw_raw(w, ",\"utc_offset_s\":"); web_jw_int(w, utc_offset(now_s));
+    web_jw_raw(w, ",\"utc_offset_s\":"); web_jw_int(w, web_utc_offset(now_s));
     web_jw_raw(w, ",\"warm_n\":");       web_jw_int(w, WEB_BL_WARM_N);
     web_jw_raw(w, ",\"cells\":");
     web_baseline_t *bl = m->anomaly ? m->anomaly->cfg.bl : NULL;
     web_bl_cell_t *cells = bl ? malloc(WEB_BL_CELLS * sizeof(*cells)) : NULL;
-    if (!cells || web_baseline_cells(bl, WM_DEV_PRESENT, mac, cells) != 0) {
+    if (!cells || web_baseline_cells(bl, presence_metric(m), mac, cells) != 0) {
         web_jw_raw(w, "null}");
         free(cells);
         return;
@@ -657,7 +826,7 @@ static void week_member(web_jw_t *w, const web_m4_t *m, const char *mac,
     free(cells);
 }
 
-static int canon_mac(const char *in, char *out) {
+int web_dev_canon_mac(const char *in, char *out) {
     char t[24];
     size_t n = strlen(in);
     if (n != 17) return -1;
@@ -690,7 +859,7 @@ int web_device_route(const web_m4_t *m, const char *path_mac,
     }
     raw[o] = '\0';
     char mac[WEB_KEY_MAX + 1];
-    if (canon_mac(raw, mac) != 0)
+    if (web_dev_canon_mac(raw, mac) != 0)
         return answer_error(400, "bad_mac", NULL, body, cap, len, status);
 
     web_sdb_conn_t conn;
@@ -700,12 +869,25 @@ int web_device_route(const web_m4_t *m, const char *path_mac,
                   web_slothdb_open(m->sdb, &conn, WEB_SDB_HTTP_MS, now_s, oerr,
                                    sizeof(oerr)) == 0;
     web_sdb_dev_t d;
+    /* Under a capture scope (web_scope.h) the record is the scope's
+     * columns, or absent when the scope never heard the MAC; the lists
+     * are each in their own scope only (PNL SSIDs and associations are
+     * the monitor radio's, ARP bindings and the names behind an address
+     * the host's own interfaces'), and so is the stream's binding. */
+    int scope = scope_of(m);
+    int mon = scope == WEB_SCOPE_MONITOR, loc = scope == WEB_SCOPE_LOCAL;
+    if (have_db) {
+        conn.scope = scope;
+        conn.sc = m->sc;
+        conn.ru = m->tsdb ? m->tsdb->ru : NULL;
+    }
     int found = have_db ? web_sdb_device(&conn, mac, &d) : 0;
     if (found < 0) found = 0;
     char sip[WEB_KEY_MAX + 1] = "";
     web_id_name_t sdhcp;
+    memset(&sdhcp, 0, sizeof(sdhcp));
     long long sfs = -1;
-    if (m->ident) web_ident_mac_info(m->ident, mac, now_s, sip, &sdhcp, &sfs);
+    if (m->ident && !mon) web_ident_mac_info(m->ident, mac, now_s, sip, &sdhcp, &sfs);
     const char *ip = found && d.ip[0] ? d.ip : sip;
 
     web_jw_t w;
@@ -723,7 +905,7 @@ int web_device_route(const web_m4_t *m, const char *path_mac,
     oui_member(&w, m, mac);
     web_jw_raw(&w, ",\"record\":");
     if (found) {
-        dev_json(&w, m, &d, NULL, now_s);
+        dev_json(&w, m, &d, NULL, NULL, now_s);
         web_jw_raw(&w, ",\"detail\":{\"hostname\":");
         jw_text_or_null(&w, d.hostname);
         web_jw_raw(&w, ",\"device_class\":");
@@ -741,17 +923,24 @@ int web_device_route(const web_m4_t *m, const char *path_mac,
     web_jw_raw(&w, ",\"hostname\":");       jw_text_or_null(&w, sdhcp.name);
     web_jw_raw(&w, "}");
     names_member(&w, m, have_db ? &conn : NULL, ip, now_s);
-    sdb_list(&w, "ssids", have_db ? &conn : NULL, EK_SSID, DEV_SSIDS,
+    sdb_list(&w, "ssids", have_db && !loc ? &conn : NULL, EK_SSID, DEV_SSIDS,
              web_sdb_ssids, mac);
-    sdb_list(&w, "assocs", have_db ? &conn : NULL, EK_ASSOC, DEV_ASSOCS,
+    sdb_list(&w, "assocs", have_db && !loc ? &conn : NULL, EK_ASSOC, DEV_ASSOCS,
              web_sdb_assocs, mac);
-    sdb_list(&w, "ips", have_db ? &conn : NULL, EK_ADDR, DEV_IPS,
+    sdb_list(&w, "ips", have_db && !mon ? &conn : NULL, EK_ADDR, DEV_IPS,
              web_sdb_arp_mac, mac);
     web_jw_raw(&w, ",\"alerts\":[");
     emit_t ea = { &w, 0, DEV_ALERTS, EK_ALERT, NULL };
-    int ga = have_db ? web_sdb_alerts(&conn, mac, ip, DEV_ALERTS + 1, emit_item, &ea) : 0;
+    long long reached = 0;
+    int ga = have_db ? web_sdb_alerts(&conn, mac, ip, DEV_ALERTS + 1, emit_item, &ea,
+                                      &reached) : 0;
     web_jw_raw(&w, "],\"alerts_more\":");
     web_jw_raw(&w, ga > DEV_ALERTS ? "true" : "false");
+    /* How far back sloth.db's alerts were read, when the request's
+     * budget stopped the walk before the table's end: null when it read
+     * them all (or could not read them). */
+    web_jw_raw(&w, ",\"alerts_reached\":");
+    if (ga >= 0 && reached > 0) web_jw_int(&w, reached); else web_jw_raw(&w, "null");
     web_slothdb_close(&conn);
 
     unsigned char bits[WEB_DEV_CELLS / 8];
@@ -762,17 +951,28 @@ int web_device_route(const web_m4_t *m, const char *path_mac,
     web_dev_presence_hex(bits, hx);
     web_jw_raw(&w, ",\"presence\":");      web_jw_str(&w, hx);
     web_jw_raw(&w, ",\"presence_from\":"); web_jw_int(&w, strip_from(now_s));
+    rf_member(&w, m, mac, found && d.is_ap, now_s);
     week_member(&w, m, mac, now_s);
     web_jw_raw(&w, ",\"anomalies\":[");
     if (m->anomaly) {
         web_anom_ep_t eps[DEV_ANOMS];
         int ne = web_anomaly_key_list(m->anomaly, mac, eps, DEV_ANOMS);
-        for (int i = 0; i < ne; i++) {
-            if (i) web_jw_raw(&w, ",");
+        for (int i = 0, k = 0; i < ne; i++) {
+            if (scope && !web_scope_pass(scope, web_anomaly_ep_tag(
+                    &eps[i], m->sc, m->tsdb ? m->tsdb->ru : NULL)))
+                continue;
+            if (k++) web_jw_raw(&w, ",");
             web_anomaly_ep_json(&w, &eps[i]);
         }
     }
-    web_jw_raw(&w, "]}\n");
+    web_jw_raw(&w, "]");
+    if (scope) {
+        /* Whether the scope heard this MAC at all: the page says so
+         * rather than show an empty record as if it had. */
+        web_jw_raw(&w, ",\"in_scope\":");
+        web_jw_raw(&w, found ? "true" : "false");
+    }
+    web_jw_raw(&w, "}\n");
     if (w.overflow) return -1;
     *len = w.len;
     *status = 200;
@@ -794,7 +994,7 @@ int web_lookup_route(const web_m4_t *m, const char *query, long long now_s,
         return answer_error(400, err, NULL, body, cap, len, status);
     if (!ps[0].seen) return answer_error(400, "missing_q", NULL, body, cap, len, status);
     char key[WEB_KEY_MAX + 1];
-    int is_mac = canon_mac(ps[0].val, key) == 0;
+    int is_mac = web_dev_canon_mac(ps[0].val, key) == 0;
     if (!is_mac && web_key_ip(ps[0].val, key) != 0)
         return answer_error(400, "bad_lookup", NULL, body, cap, len, status);
 
@@ -817,25 +1017,35 @@ int web_lookup_route(const web_m4_t *m, const char *query, long long now_s,
                    ? web_slothdb_state_word(sst.state) : "none");
     web_jw_raw(&w, ",\"active\":false");   /* there is no active lookup */
 
+    /* Under Monitor (web_scope.h) there are no addresses: an IP, its ARP
+     * MACs and the names behind it are all the host's own interfaces'.
+     * The device record is the scope's (web_sdb_device()). */
+    int scope = scope_of(m), mon = scope == WEB_SCOPE_MONITOR;
+    if (have_db) {
+        conn.scope = scope;
+        conn.sc = m->sc;
+        conn.ru = m->tsdb ? m->tsdb->ru : NULL;
+    }
     char mac[WEB_KEY_MAX + 1] = "", ip[WEB_KEY_MAX + 1] = "";
     if (is_mac) {
         snprintf(mac, sizeof(mac), "%s", key);
         oui_member(&w, m, mac);
-        sdb_list(&w, "ips", have_db ? &conn : NULL, EK_ADDR, DEV_IPS,
+        sdb_list(&w, "ips", have_db && !mon ? &conn : NULL, EK_ADDR, DEV_IPS,
                  web_sdb_arp_mac, mac);
     } else {
-        snprintf(ip, sizeof(ip), "%s", key);
+        if (!mon) snprintf(ip, sizeof(ip), "%s", key);
         web_jw_raw(&w, ",\"oui\":null");
-        sdb_list(&w, "macs", have_db ? &conn : NULL, EK_ADDR, DEV_IPS,
+        research_member(&w, NULL);
+        sdb_list(&w, "macs", have_db && !mon ? &conn : NULL, EK_ADDR, DEV_IPS,
                  web_sdb_arp_ip, ip);
     }
     /* The device: by MAC, or the IP's ARP MAC (sloth.db's, else the
      * stream's binding). */
     web_sdb_dev_t d;
     int found = 0;
-    if (!is_mac && have_db)
+    if (!is_mac && have_db && !mon)
         web_sdb_arp_ip(&conn, ip, 1, first_addr, mac);
-    if (!is_mac && !mac[0]) {
+    if (!is_mac && !mac[0] && !mon) {
         web_id_name_t nm[WEB_ID_SRC_COUNT];
         char smac[WEB_KEY_MAX + 1] = "";
         if (m->ident) web_ident_ip_info(m->ident, ip, now_s, smac, nm);
@@ -843,7 +1053,7 @@ int web_lookup_route(const web_m4_t *m, const char *query, long long now_s,
     }
     if (have_db && mac[0]) found = web_sdb_device(&conn, mac, &d) == 1;
     if (is_mac && found && d.ip[0]) snprintf(ip, sizeof(ip), "%s", d.ip);
-    if (is_mac && !ip[0] && m->ident) {
+    if (is_mac && !ip[0] && m->ident && !mon) {
         web_id_name_t dh;
         long long fs;
         web_ident_mac_info(m->ident, mac, now_s, ip, &dh, &fs);
@@ -851,7 +1061,22 @@ int web_lookup_route(const web_m4_t *m, const char *query, long long now_s,
     names_member(&w, m, have_db ? &conn : NULL, ip, now_s);
     web_slothdb_close(&conn);
     web_jw_raw(&w, ",\"device\":");
-    if (found) dev_json(&w, m, &d, NULL, now_s); else web_jw_raw(&w, "null");
+    if (found) dev_json(&w, m, &d, NULL, NULL, now_s); else web_jw_raw(&w, "null");
+    /* F20: the card ends with the drawer's presence strip and G2, for
+     * the MAC looked up or the IP's. */
+    if (mac[0]) {
+        unsigned char bits[WEB_DEV_CELLS / 8];
+        char macs[1][WEB_KEY_MAX + 1];
+        snprintf(macs[0], sizeof(macs[0]), "%s", mac);
+        strips(m, (const char (*)[WEB_KEY_MAX + 1])macs, 1, now_s, bits);
+        char hx[WEB_DEV_CELLS / 4 + 1];
+        web_dev_presence_hex(bits, hx);
+        web_jw_raw(&w, ",\"mac\":");           web_jw_str(&w, mac);
+        web_jw_raw(&w, ",\"presence\":");      web_jw_str(&w, hx);
+        web_jw_raw(&w, ",\"presence_from\":"); web_jw_int(&w, strip_from(now_s));
+        rf_member(&w, m, mac, found && d.is_ap, now_s);
+    }
+    if (mon && !is_mac) web_jw_raw(&w, ",\"ip_in_scope\":false");
     web_jw_raw(&w, "}\n");
     if (w.overflow) return -1;
     *len = w.len;
@@ -860,6 +1085,15 @@ int web_lookup_route(const web_m4_t *m, const char *query, long long now_s,
 }
 
 /* ── health ──────────────────────────────────────────────────────────── */
+
+int web_m4_db_age(const web_m4_t *m, long long now_s, long long *age_s) {
+    if (!m || !m->sdb || !m->sdb->configured) return 0;
+    web_sdb_stats_t st;
+    web_slothdb_stats(m->sdb, &st);
+    if (st.state != WEB_SDB_OPEN || st.mtime <= 0) return 0;
+    *age_s = now_s > st.mtime ? now_s - st.mtime : 0;
+    return 1;
+}
 
 void web_m4_health(const web_m4_t *m, long long now_s, web_jw_t *w) {
     web_jw_raw(w, ",\"db\":");
@@ -878,6 +1112,14 @@ void web_m4_health(const web_m4_t *m, long long now_s, web_jw_t *w) {
         web_jw_raw(w, ",\"db_path\":");
         web_jw_strn(w, m->sdb->path, strnlen(m->sdb->path, 256));
         web_jw_raw(w, ",\"db_mode\":"); jw_text_or_null(w, st.mode);
+        /* #168: what the DB-backed views are as of. */
+        web_jw_raw(w, ",\"sloth_db_mtime\":");
+        if (st.state == WEB_SDB_OPEN && st.mtime > 0) web_jw_int(w, st.mtime);
+        else web_jw_raw(w, "null");
+        web_jw_raw(w, ",\"sloth_db_age_s\":");
+        if (st.state == WEB_SDB_OPEN && st.mtime > 0)
+            web_jw_int(w, now_s > st.mtime ? now_s - st.mtime : 0);
+        else web_jw_raw(w, "null");
         web_jw_raw(w, ",\"db_error\":"); jw_text_or_null(w, st.err);
         web_jw_raw(w, ",\"db_opens\":"); web_jw_int(w, (long long)st.opens);
         web_jw_raw(w, ",\"db_timeouts\":"); web_jw_int(w, (long long)st.timeouts);

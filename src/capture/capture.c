@@ -474,28 +474,6 @@ const char *capture_scope_reason(capture_scope_t v) {
     return "";
 }
 
-/* Run flag (#95). Contract in capture.h. */
-int capture_run_flag_get(capture_run_flag_t *f) {
-    pthread_mutex_lock(&f->mu);
-    int v = f->v;
-    pthread_mutex_unlock(&f->mu);
-    return v;
-}
-
-void capture_run_flag_set(capture_run_flag_t *f, int v) {
-    pthread_mutex_lock(&f->mu);
-    f->v = v;
-    pthread_mutex_unlock(&f->mu);
-}
-
-int capture_run_flag_take(capture_run_flag_t *f) {
-    pthread_mutex_lock(&f->mu);
-    int v = f->v;
-    f->v = 0;
-    pthread_mutex_unlock(&f->mu);
-    return v;
-}
-
 #ifdef WITH_PCAP
 
 #include <stdio.h>
@@ -602,7 +580,18 @@ static void try_http(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
             char ev[80];
             snprintf(ev, sizeof(ev), "HTTP %u, %d body bytes",
                      entry.status, entry.resp_body_len);
-            cp_record((uint8_t)cp, entry.host, pkt->dst, ev, sloth_wall());
+            cp_record_ex((uint8_t)cp, 0, entry.host, pkt->dst, pkt->src,
+                         pkt->src_port, ev, sloth_wall());
+        }
+        /* A named kit's default portal page, on any host (#169). Read
+         * from the segment as it arrived; only the kit's label is
+         * kept, never the page. */
+        {
+            const char *kl = "";
+            int kit = cp_match_kit(pay, pay_len, &kl);
+            if (kit)
+                cp_record_ex(CP_KIND_KIT, (uint8_t)kit, entry.host, pkt->dst,
+                             pkt->src, pkt->src_port, kl, sloth_wall());
         }
         snprintf(pkt->info, sizeof(pkt->info), "HTTP %u %.40s",
                  entry.status, entry.host[0] ? entry.host : "");
@@ -663,8 +652,8 @@ static void try_sni(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
      * a rogue that chunks its HTTP answer still has to do this. */
     {
         int cp = cp_check_tls(entry.host, pkt->dst);
-        if (cp) cp_record((uint8_t)cp, entry.host, pkt->src, pkt->dst,
-                          sloth_wall());
+        if (cp) cp_record_ex((uint8_t)cp, 0, entry.host, pkt->src,
+                             pkt->dst, pkt->dst_port, pkt->dst, sloth_wall());
     }
     snprintf(pkt->info, sizeof(pkt->info), "%s %.46s",
              entry.tls_ver, entry.host[0] ? entry.host : pkt->dst);
@@ -1499,16 +1488,20 @@ void capture_open(sloth_state_t *s) {
      * just becomes a no-op on those datalinks. */
     g_handle = pcap_create("any", errbuf);
     if (g_handle) {
-        pcap_set_snaplen(g_handle, 65535);
-        pcap_set_promisc(g_handle, 1);
-        pcap_set_timeout(g_handle, 100);
-        if (capture_activate_failed(pcap_activate(g_handle))) {
+        /* A setter refused before activation leaves a handle configured
+         * other than asked; the open_live path below is the fallback. */
+        if (pcap_set_snaplen(g_handle, 65535) != 0 ||
+            pcap_set_promisc(g_handle, 1) != 0 ||
+            pcap_set_timeout(g_handle, 100) != 0 ||
+            capture_activate_failed(pcap_activate(g_handle))) {
             pcap_close(g_handle);
             g_handle = NULL;
         } else {
-            /* Try to switch to SLL2; ignore errors (older libpcap
-             * doesn't know the DLT, some kernels reject it). */
-            (void)pcap_set_datalink(g_handle, MY_DLT_LINUX_SLL2);
+            /* SLL2 may be refused (older libpcap doesn't know the DLT,
+             * some kernels reject it): the handle stays on the DLT it
+             * activated with and the per-iface filter is a no-op. */
+            int sll2 = pcap_set_datalink(g_handle, MY_DLT_LINUX_SLL2);
+            (void)sll2;
             snprintf(s->pkt_iface, sizeof(s->pkt_iface), "any");
         }
     }
@@ -1592,9 +1585,13 @@ int capture_set_filter(const char *expr, char *errbuf, int errsz) {
             snprintf(errbuf, errsz, "%s", pcap_geterr(g_handle));
         return -1;
     }
-    pcap_setfilter(g_handle, &fp);
+    /* A refused filter used to be reported as applied, leaving the
+     * operator believing a capture was narrowed that was not. */
+    int rc = pcap_setfilter(g_handle, &fp);
+    if (rc != 0 && errbuf && errsz > 0)
+        snprintf(errbuf, errsz, "%s", pcap_geterr(g_handle));
     pcap_freecode(&fp);
-    return 0;
+    return rc != 0 ? -1 : 0;
 }
 
 #endif /* WITH_PCAP */

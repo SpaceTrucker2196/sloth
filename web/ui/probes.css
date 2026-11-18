@@ -1,0 +1,12 @@
+/* The Probes view (web/ui/probes.js). A station's row wraps: the names
+ * it asked for are the point, and there can be sixteen of them. */
+.prrow, .prsrow { font-size: 12px; border-bottom: 1px dotted var(--rule); align-items: baseline; }
+.prrow { cursor: pointer; }
+.prrow:hover, .prrow.hl { background: var(--tint); }
+.prrow > span, .prsrow > span { min-width: 0; overflow-wrap: anywhere; }
+.prrow > canvas { display: block; width: 144px; height: 12px; align-self: center; }
+.prhead { font-size: 12px; margin: 0 0 4px; }
+.prgrp { font-size: 12px; border-top: 1px dotted var(--rule); padding: 4px 0; }
+.prgrp:first-child { border-top: 0; }
+.prmacs { display: flex; flex-wrap: wrap; gap: 2px var(--gap); margin: 2px 0; }
+.dt .prrow .prss, .dt .prrow .prtie, .dt .prsrow > span { white-space: normal; }

@@ -5,83 +5,216 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
-<title>slothweb</title>
+<title>sloth mesh</title>
+<link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,
+@include icon-32.b64
+">
 <style>
 @include palette.css
 @include theme.css
 @include page.css
+@include frrs.css
+@include notes.css
+@include incident.css
+@include subnotes.css
+@include location.css
+@include gnss.css
+@include adsb.css
+@include aprs.css
+@include spectrum.css
+@include iso.css
+@include victron.css
+@include camera.css
+@include bledev.css
+@include radar.css
+@include allkeys.css
+@include ssid.css
+@include probes.css
+@include syshealth.css
+@include fleet.css
+@include fleetid.css
+@include chan.css
+@include greenbar.css
 </style>
 <script>
 @include palette.js
+@include chan.js
+@include sun.js
+@include glyph.js
+@include facts.js
+@include allkeys.js
+@include rf.js
+@include air.js
+@include chain.js
+@include flowmx.js
+@include frrs.js
+@include evidence.js
+@include bundle.js
+@include notes.js
+@include subnotes.js
+@include incident.js
+@include rfstream.js
+@include iso.js
 @include app.js
+@include location.js
+@include gnss.js
+@include ppi.js
+@include adsb.js
+@include aprs.js
+@include rtl433.js
+@include victron.js
+@include spectrum.js
+@include camera.js
+@include bledev.js
+@include radar.js
+@include ssid.js
+@include probes.js
+@include lure.js
+@include karma.js
+@include df.js
+@include syshealth.js
+@include fleet.js
+@include fleetid.js
 </script>
 </head>
 <body>
 <div class="app" id="app">
   <header class="topbar">
    <div class="in">
-    <div class="brand">sloth<span class="sep"> &#183; </span>web <small><span id="milestone">M6</span></small><span class="cur" aria-hidden="true"></span></div>
+    <div class="brand"><img class="icon" alt="" width="22" height="22" src="data:image/png;base64,
+@include icon-64.b64
+">sloth<span class="sep"> &#183; </span>mesh <small><span id="hostname"></span></small><span class="cur" aria-hidden="true"></span></div>
     <nav aria-label="views"><ol class="views">
       <li><button type="button" class="on" id="nav-overview" aria-current="page"><span class="k">1</span>Overview</button></li>
       <li><button type="button" class="go" id="nav-activity"><span class="k">2</span>Activity</button></li>
       <li><button type="button" class="go" id="nav-devices"><span class="k">3</span>Devices</button></li>
       <li><button type="button" class="go" id="nav-anomalies"><span class="k">4</span>Anomalies</button></li>
       <li><button type="button" class="go" id="nav-wifi"><span class="k">5</span>WiFi</button></li>
-      <li class="off" title="not built: the Overview lists the latest alerts"><span class="k">6</span>Alerts</li>
+      <li><button type="button" class="go" id="nav-alerts"><span class="k">6</span>Alerts</button></li>
       <li><button type="button" class="go" id="nav-flows"><span class="k">7</span>Flows</button></li>
       <li><button type="button" class="go" id="nav-history"><span class="k">8</span>History</button></li>
       <li><button type="button" class="go" id="nav-lookup"><span class="k">9</span>Lookup</button></li>
+      <li><button type="button" class="go" id="nav-ble"><span class="k">0</span>BLE Devices</button></li>
+      <li><button type="button" class="go" id="nav-probes">Probes</button></li>
+      <li><button type="button" class="go" id="nav-gnss">GPS Sat</button></li>
+      <li><button type="button" class="go" id="nav-adsb">ADS-B</button></li>
+      <li><button type="button" class="go" id="nav-aprs">APRS</button></li>
+      <li><button type="button" class="go" id="nav-radar">Radar</button></li>
+      <li><button type="button" class="go" id="nav-tacdb">TACDB</button></li>
+      <li><button type="button" class="go" id="nav-fleet">Fleet</button></li>
+      <li><button type="button" class="go" id="nav-spectrum">Spectrum</button></li>
+      <li><button type="button" class="go" id="nav-rtl433">rtl_433</button></li>
+      <li><button type="button" class="go" id="nav-victron">Victron</button></li>
+      <li><button type="button" class="go" id="nav-camera">Camera</button></li>
     </ol></nav>
+    <div class="scope">
+      <div class="scope-g" id="scope" role="radiogroup" aria-label="capture scope: what the views show, by how it was captured">
+        <button type="button" role="radio" class="sc-m" id="sc-monitor" aria-checked="false" tabindex="-1" title="the passive monitor radio (and BLE) only">Monitor</button>
+        <button type="button" role="radio" class="sc-h" id="sc-hybrid" aria-checked="true" tabindex="0" title="everything sloth captured">Hybrid</button>
+        <button type="button" role="radio" class="sc-l" id="sc-local" aria-checked="false" tabindex="-1" title="the host's own Ethernet and Wi-Fi interfaces only">Local</button>
+      </div>
+      <button type="button" class="sc-q" id="scope-info" aria-expanded="false" aria-controls="scope-legend" aria-label="what each capture scope holds" title="what each scope holds">?</button>
+    </div>
     <button type="button" class="themetoggle" id="theme" title="switch to the light theme">light theme</button>
    </div>
   </header>
+  <section class="scope-legend" id="scope-legend" aria-label="what each capture scope holds" hidden>
+    <div class="label">capture scope <button type="button" id="scope-legend-close">close</button></div>
+    <dl>
+      <dt class="sc-h">Hybrid</dt>
+      <dd>everything sloth captured, as before the switch: the default.</dd>
+      <dt class="sc-m">Monitor</dt>
+      <dd>only what the passive monitor-mode radio heard over the air (beacons, probes, associations, EAPOL, deauths, the channel mix, the 802.11 detectors) and the BLE receivers (<code>--bt-monitor</code>, <code>--bt-capture</code>), which are passive radio too. Nothing the connected Wi-Fi or Ethernet carried: no IP, ARP, DHCP, DNS, mDNS, NBNS, flows or top hosts. Monitor rows keep the monitor radio's dark-grey ground.</dd>
+      <dt class="sc-l">Local</dt>
+      <dd>only what the host's own connected interfaces carried: Ethernet and the associated Wi-Fi card in managed mode (the IP capture, ARP, DHCP, DNS, mDNS, NBNS, flows, <code>/proc</code>, the interfaces' throughput), and that card's own station dump and scans (Wi-Fi through the local network, not passive). Never the monitor radio.</dd>
+    </dl>
+    <ul class="sub">
+      <li>A device seen both ways appears in both scopes, and in each shows only the fields that scope captured: under Monitor no address, hostname or DHCP, mDNS or NBNS name; under Local no SSID, AP bit or probe signal. Its signal, first and last seen and risk are the scope's own (sloth's risk score over the scope's signals).</li>
+      <li>An alert is in the scope of its rule's input, whatever file the rule is in (CAPTIVE_PORTAL reads DNS, HTTP and TLS: Local). sloth's own-state alerts (NO_MONITOR_MODE, BT_OWN_TRANSMIT) appear in every scope.</li>
+      <li>While sloth says its IP capture is itself a monitor radio (a radiotap link type, or the capture interface is the monitor interface), the stream's IP records count as Monitor's; a banner says so. sloth.db's rows carry no capture path, so its IP tables stay Local.</li>
+      <li>An anomaly is in the scope of what it scored: A2 Monitor, A5-A9 Local, A1 by its metric and key, A3 and A4 (scored on every source's presence) where the device has presence of the scope's own; A10 every scope.</li>
+      <li>The SQL box is unscoped: it runs the raw sloth.db statement it is given, whatever the switch says.</li>
+    </ul>
+  </section>
+  <!-- F5: the strip is the network's facts only. Every fact about
+       slothweb itself (sock, db, store, tick, up, clients) is in the
+       footer, one row each, never mixed. The dot is the page's own
+       liveness, which is what aria-label="status" names. -->
   <div class="strip" aria-label="status">
     <span class="dot wait" id="dot">&#9679; <span id="conn">connecting</span></span>
     <span class="pills">
-    <span>sensor <b id="s-sock">-</b></span>
-    <span>devs <b id="s-devs">-</b></span>
-    <span>alerts <b id="s-alerts">-</b></span>
-    <span>anomalies <b id="s-anoms">-</b></span>
-    <span>rec/s <b id="s-rate">-</b></span>
-    <span>tick <b id="seq">-</b></span>
-    <span>up <b id="up">-</b></span>
-    <span>clients <b id="clients">-</b></span>
+    <span>scope <b id="s-scope">hybrid</b></span>
+    <span>devs <b id="s-devs">-</b><canvas class="sg" id="s-devs-g" aria-label="devices, 24 h"></canvas></span>
+    <span title="BLE advertisers slothweb holds, from sloth's ble_device records (Monitor's; - under Local or with no Bluetooth source)">ble <b id="s-ble">-</b><canvas class="sg" id="s-ble-g" aria-label="BLE advertisers, 24 h"></canvas></span>
+    <span>alerts <b id="s-alerts">-</b><canvas class="sg" id="s-alerts-g" aria-label="open alerts, 24 h"></canvas></span>
+    <span>anomalies <b id="s-anoms">-</b><canvas class="sg" id="s-anoms-g" aria-label="open anomalies, 24 h"></canvas></span>
+    <span>rec/s <b id="s-rate">-</b><canvas class="sg" id="s-rate-g" aria-label="records per second, 24 h"></canvas></span>
     </span>
   </div>
+  <div class="scopebar" id="scopebar" role="status" hidden><span id="scopebar-t"></span> <button type="button" id="scopebar-legend">what each scope holds</button></div>
   <main>
    <div id="v-overview">
     <section class="kpis" aria-label="overview">
-      <div class="tile hud">
+      <!-- Urgency first (owner ruling 5 of 2026-10-26): open alerts,
+           open anomalies, sensor health, throughput, devices, records;
+           then BLE. Each tile's G1 is the 24 h series behind its number
+           over the band for its hour (F1), and the line under it is
+           G1's words: that band, and the direction since the last
+           bucket (web/ui/facts.js; the throughput tile's, app.js). What
+           a tile's number is, in words, is its hover note (the tile's
+           title, F4); a line under the glyph is a state, never prose. -->
+      <a class="tile hud" id="t-alerts" href="#alerts?state=open" title="open alerts by severity: crit / warn / low, since this page connected">
+        <div class="label">open alerts</div>
+        <div class="kpi"><span class="sev2" id="k-crit">-</span> <span class="sev1" id="k-warn">-</span> <span class="sev0" id="k-low">-</span></div>
+        <canvas class="spark" id="k-alerts-spark" aria-label="open alerts, 24 h, over their baseline band"></canvas>
+        <div class="sub gw" id="k-alerts-w">-</div>
+        <div class="sub tri-tile" id="k-alerts-triaged" hidden></div>
+      </a>
+      <a class="tile hud" id="t-anoms" href="#anomalies?state=open" title="slothweb's own anomalies, rules A1-A3, A5-A10">
+        <div class="label">open anomalies</div>
+        <div class="kpi" id="k-anoms">-</div>
+        <canvas class="spark" id="k-anoms-spark" aria-label="open anomalies, 24 h, over their baseline band"></canvas>
+        <div class="sub gw" id="k-anoms-w">-</div>
+        <div class="sub" id="k-anoms-sub"></div>
+      </a>
+      <a class="tile hud" id="t-sensor" href="#health">
+        <div class="label">sensor health</div>
+        <div class="kpi" id="k-sensor">-</div>
+        <canvas class="spark" id="k-sensor-spark" aria-label="the sensor's dropped frames, 24 h, over their baseline band"></canvas>
+        <div class="sub gw" id="k-sensor-w">-</div>
+        <div class="sub" id="k-sensor-sub">-</div>
+      </a>
+      <a class="tile hud" id="t-tp" href="#activity?focus=throughput" title="rx, 24 h, band = mean &#177; k sd">
         <div class="label">throughput <span id="k-tp-key"></span></div>
         <div class="kpi" id="k-tp">-</div>
         <canvas class="spark" id="k-tp-spark" aria-label="throughput, 24 h, over its baseline band"></canvas>
-        <div class="sub" id="k-tp-sub">rx, 24 h, band = mean &#177; k sd</div>
-      </div>
-      <div class="tile hud">
-        <div class="label">open anomalies</div>
-        <div class="kpi" id="k-anoms">-</div>
-        <div class="sub" id="k-anoms-sub">rules A1-A3, A5-A10</div>
-      </div>
-      <div class="tile hud">
+        <div class="sub gw" id="k-tp-w">-</div>
+      </a>
+      <a class="tile hud" id="t-devs" href="#devices?q=pass:latest" title="devices in sloth's latest pass">
         <div class="label">devices</div>
         <div class="kpi" id="k-devs">-</div>
+        <canvas class="spark" id="k-devs-spark" aria-label="devices, 24 h, over their baseline band"></canvas>
+        <div class="sub gw" id="k-devs-w">-</div>
         <div class="sub" id="k-devs-sub">waiting for a device pass</div>
-      </div>
-      <div class="tile hud">
-        <div class="label">open alerts</div>
-        <div class="kpi"><span class="sev2" id="k-crit">-</span> <span class="sev1" id="k-warn">-</span> <span class="sev0" id="k-low">-</span></div>
-        <div class="sub">crit / warn / low, since connect</div>
-      </div>
-      <div class="tile hud">
+      </a>
+      <a class="tile hud" id="t-rate" href="#records">
         <div class="label">records/s</div>
         <div class="kpi" id="k-rate">-</div>
+        <canvas class="spark" id="k-rate-spark" aria-label="records per second, 24 h, over their baseline band"></canvas>
+        <div class="sub gw" id="k-rate-w">-</div>
         <div class="sub" id="k-rate-sub">-</div>
-      </div>
-      <div class="tile hud">
-        <div class="label">sensor health</div>
-        <div class="kpi" id="k-sensor">-</div>
-        <div class="sub" id="k-sensor-sub">-</div>
-      </div>
+        <span class="k-db" id="k-db" title="sloth.db and slothweb.db on disk (the file and its WAL) against their limits; the glyph is sloth.db over 30 d, the rule its db.max_mb. Opens the storage trends on Sensor health">
+          <span class="sub" id="k-db-sub">-</span>
+          <canvas class="spark k-db-spark" id="k-db-spark" aria-label="sloth.db's size on disk, 30 d, with its limit"></canvas>
+        </span>
+      </a>
+      <a class="tile hud" id="t-ble" href="#ble">
+        <div class="label">ble advertisers</div>
+        <div class="kpi" id="k-ble">-</div>
+        <canvas class="spark" id="k-ble-spark" aria-label="sloth's BLE advertiser count, 24 h"></canvas>
+        <div class="sub gw" id="k-ble-w">-</div>
+        <div class="sub" id="k-ble-sub">no Bluetooth source yet</div>
+      </a>
     </section>
     <section class="panel controls" aria-label="sensitivity">
       <label>sensitivity <input type="range" id="sens" min="1.5" max="4" step="0.5" value="2"></label>
@@ -96,7 +229,7 @@
       <div class="panel">
         <div class="label">hour of week <span class="sub" id="o-heat-note"></span></div>
         <canvas class="heat" id="o-heat" aria-label="hour-of-week heatmap, Monday first, the current hour outlined"></canvas>
-        <div class="sub">grey hatched: warming (fewer than 3 weeks); outlined: now</div>
+        <div class="sub">plain grey: warming (fewer than 3 weeks), counted in the caption; outlined: now</div>
       </div>
     </section>
     <section class="row2">
@@ -105,16 +238,22 @@
         <div class="cards" id="o-anoms"></div>
       </div>
       <div class="panel">
-        <div class="label">latest alerts</div>
-        <ol class="alerts" id="alerts"></ol>
+        <div class="label">latest alerts <span class="dt-tools" id="alerts-tools"></span></div>
+        <div class="hscroll" id="alerts-box"><div class="alrow dhead" id="alerts-head"></div>
+        <ol class="alerts" id="alerts"></ol></div>
       </div>
     </section>
     <section class="panel">
-      <div class="label">records <button type="button" id="pause">pause</button> <span class="sub" id="tick-note"></span></div>
-      <ol class="ticker" id="ticker"></ol>
+      <div class="label">records <button type="button" id="pause">pause</button> <span class="sub" id="tick-note"></span> <span class="dt-tools" id="ticker-tools"></span></div>
+      <!-- records.rate by type, a G1 each for the busiest (§6.1, #195; web/ui/facts.js) -->
+      <div class="rc-types" id="ticker-types"></div>
+      <div class="sub" id="ticker-types-note"></div>
+      <div class="hscroll" id="ticker-box"><div class="tkrow dhead" id="ticker-head"></div>
+      <ol class="ticker" id="ticker"></ol></div>
     </section>
    </div>
    <div id="v-anomalies" hidden>
+    <div class="filterbar" id="n-filter" hidden><span id="n-filter-t"></span> <a href="#anomalies" id="n-all">show all</a> <a href="#overview">back to the overview</a></div>
     <section class="panel controls" aria-label="anomaly filters">
       <span class="chips" id="n-chips"></span>
       <label>closed in <select id="n-win">
@@ -122,14 +261,18 @@
         <option value="21600">6 h</option>
         <option value="86400">24 h</option>
       </select></label>
+      <button type="button" id="n-mode" aria-pressed="false">table</button>
       <span class="sub" id="n-note"></span>
     </section>
     <section class="panel">
       <div class="label">open first, then closed <span class="sub" id="n-count"></span></div>
       <div class="cards" id="n-cards"></div>
+      <div class="hscroll" id="n-tbox" hidden><div class="anrow dhead" id="n-head"></div><div id="n-rows"></div></div>
+      <div class="dt-tools" id="n-tools" hidden></div>
     </section>
    </div>
    <div id="v-devices" hidden>
+    <div class="filterbar" id="d-filter" hidden><span id="d-filter-t"></span> <a href="#devices" id="d-all">show all</a> <a href="#overview">back to the overview</a></div>
     <section class="panel controls" aria-label="device search">
       <label>search <input type="search" id="d-q" maxlength="256" spellcheck="false" autocomplete="off" placeholder="vendor:apple random:yes seen:&lt;24h"></label>
       <label>sort <select id="d-sort">
@@ -138,20 +281,21 @@
         <option value="mac">mac</option>
         <option value="risk">risk</option>
       </select></label>
+      <label hidden>sites <select id="d-sites" aria-label="this site or all sloth hosts"><option value="all" selected>All sites</option><option value="here">This site</option></select></label>
       <span class="sub" id="d-note"></span>
+      <span class="sub dbage" id="d-dbage"></span>
     </section>
     <section class="panel">
-      <div class="label">devices <span class="sub" id="d-count"></span></div>
-      <div class="hscroll">
-      <div class="drow dhead" aria-hidden="true">
-        <span class="c-mac">mac</span><span class="c-ven">vendor</span><span class="c-ip">ip</span><span class="c-nm">name</span><span class="c-ss">ssid</span><span class="c-sig">dBm</span><span class="c-src">src</span><span class="c-rk">risk</span><span class="c-fs">first</span><span class="c-ls">last</span><span class="c-z">z</span><span class="c-an">anom</span><span class="c-pr">24 h presence</span>
-      </div>
+      <div class="label">devices <span class="sub" id="d-count"></span> <span class="dt-tools" id="d-tools"></span></div>
+      <div class="sub" id="d-sun"></div>
+      <div class="hscroll" id="d-box">
+      <div class="drow dhead" id="d-head"></div>
       <div class="vscroll" id="d-scroll" tabindex="0" aria-label="devices table">
         <div class="vspace" id="d-space"></div>
         <div class="vrows" id="d-rows"></div>
       </div>
       </div>
-      <div class="sub">src: A arp, D dhcp, P probe, B beacon, S station; name: D dhcp, m mdns, N nbns, h sloth's hostname, p PTR seen on the wire; ~ a randomised (locally administered) mac. Click a row for everything known.</div>
+      <div class="sub">src: A arp, D dhcp, P probe, B beacon, S station; name: D dhcp, m mdns, N nbns, h sloth's hostname, p PTR seen on the wire; ~ a randomised (locally administered) mac. Click a row for everything known. A column header sorts (the server picks the rows, by mac, vendor, ip, ssid, dBm, src, risk, first or last); drag, arrow or double-click its right edge to resize. The dBm column is an S-meter: the lit run is the last reading, the number beside it its S reading and dBm. <span class="smkey"></span></div>
     </section>
    </div>
    <div id="v-lookup" hidden>
@@ -159,14 +303,319 @@
       <label>mac or ip <input type="search" id="l-q" maxlength="45" spellcheck="false" autocomplete="off" placeholder="b8:27:eb:12:34:56 or 192.168.1.20"></label>
       <button type="button" id="l-go">look up</button>
       <span class="sub" id="l-note">passive only: the vendor table and names already seen; nothing is sent</span>
+      <span class="sub dbage" id="l-dbage"></span>
     </section>
     <section class="panel">
       <div class="label">card <span class="sub" id="l-src"></span></div>
       <div id="l-card"></div>
     </section>
    </div>
+   <div id="v-ble" hidden>
+    <section class="panel scope-empty" id="b-scope-empty"><div class="label">BLE</div><p id="b-scope-reason">Nothing here under Local. BLE advertisers are the passive Bluetooth receivers' (<code>--bt-monitor</code>, <code>--bt-capture</code>); the host's own interfaces carried none. Switch to Monitor or Hybrid to see them.</p></section>
+    <section class="panel controls" aria-label="ble search">
+      <label>search <input type="search" id="b-q" maxlength="63" spellcheck="false" autocomplete="off" placeholder="02:de:00 or a name or a category"></label>
+      <label>sort <select id="b-sort">
+        <option value="last" selected>last heard</option>
+        <option value="first">first heard</option>
+        <option value="rssi">rssi</option>
+        <option value="dist">distance</option>
+        <option value="adv">advertisements</option>
+        <option value="addr">address</option>
+        <option value="name">name</option>
+        <option value="kind">address kind</option>
+        <option value="best">best rssi</option>
+        <option value="rate">adv/s</option>
+        <option value="mfr">company</option>
+        <option value="watch">watch category</option>
+      </select></label>
+      <label hidden>sites <select id="b-sites" aria-label="this site or all sloth hosts"><option value="all" selected>All sites</option><option value="here">This site</option></select></label>
+      <span class="sub" id="b-note">sloth's ble_device records, kept by slothweb (slothweb.db; sloth.db has no BLE table); nothing is sent, and sloth never scans, connects or reads GATT: the operator's stack runs the scan</span>
+    </section>
+    <section class="panel controls" aria-label="ble waterfall controls">
+      <label title="both waterfalls drawn isometrically, as the Spectrum tab draws its sweep; off: the flat grids"><input type="checkbox" id="bledev-iso" checked> isometric</label>
+      <label>cells <select id="bledev-metric">
+        <option value="advertisers" selected>advertisers per class</option>
+        <option value="adv">advertising reports</option>
+      </select></label>
+      <label>window <select id="bledev-win">
+        <option value="3600" selected>1 h</option>
+        <option value="21600">6 h</option>
+        <option value="86400">24 h</option>
+        <option value="604800">7 d</option>
+        <option value="2592000">30 d</option>
+      </select></label>
+      <label>devices <select id="bledev-n">
+        <option value="12">12</option>
+        <option value="24" selected>24</option>
+        <option value="48">48</option>
+      </select></label>
+      <span class="sub" id="bledev-note">from slothweb.db's ble.class.* and rf.rssi.ble series, its class mix and its BLE tables; nothing is sent</span>
+    </section>
+    <section class="panel">
+      <div class="bleline" id="bledev-now" aria-label="ble now"></div>
+      <div class="label">who is around: device class x time <span class="sub" id="bledev-classes-note"></span> <span class="sub" id="bledev-mix-note"></span></div>
+      <canvas class="wfall bledev-classes" id="bledev-classes" aria-label="device classes by time: each cell the class's five busiest advertisers as stacked bands; arrow keys pick a cell, the list below names it" aria-describedby="bledev-detail"></canvas>
+      <div class="sub">rows: device classes, decided from what each advertisement carries (web/README.md, BLE Devices: the rules and their sources), Trackers always shown. A cell: its five busiest advertisers by advertising reports, each band its share (a named device in its name's colour, else its address's), grey the rest, and anonymous advertising (an extended advertisement with no address) one neutral band labelled anonymous in Unknown, with no drawer to open: sloth holds every anonymous advertiser a sensor hears as one row, so its fields class none of them; the strip at a row's left: its busyness in the cells select, the heat ramp against the busiest row; a dimmed heat cell: no advertiser detail held for it. With --bt-capture alone (an Ubertooth) every report is a one-channel sample, which the mix and the report count do not credit: every cell is then a dimmed advertiser count, the note says so, and "advertising reports" stays empty. Trackers are a watch category, an Appearance Tag or Keyring, or a UUID the SIG assigns to Tile or CHIPOLO: the shipped watchlist is empty and the Find My and SmartTag shapes are unverified, so an empty row is not "no trackers here". A report is one HCI advertising report (one a scan when the controller filters duplicates), not one frame on the air.</div>
+      <div class="sub" id="bledev-iso-sub">isometric: the classes across, the time cells receding up and to the right, the newest in front, a column's height its cell in the cells select on one scale, 0 to the window's largest; in the panel below, the advertisers across and each column its mean signal from -110 to -30 dBm, taller is stronger. Point at a column for its row, time and value; click, tap or arrow to it (left and right across, up older, down newer) for the list under the panel. Untick isometric for the flat grids, whose rows and cells this text's neighbours describe. Colour says which class, the height how much: each class its own hue (Phones & computers blue, Wearables & audio green, Trackers red-orange, Input yellow, Beacons cyan, Vehicles & IoT violet, Unknown grey), named in the key under each panel; in this panel a column's body is the class's busiest advertisers stacked by share as shade steps of its hue, the rest darkest; in the panel below the advertisers are grouped by class, the class named under its span, each advertiser in its class's hue at one of four shades its address picks, so neighbours stay apart.</div>
+      <div class="iso-key" id="bledev-cls-key" role="group" aria-label="colour key: device classes"></div>
+      <div class="iso-tip" id="bledev-iso-tip" role="tooltip" hidden></div>
+      <div class="mixd" id="bledev-detail" aria-live="polite"></div>
+    </section>
+    <section class="panel">
+      <div class="label">how close: advertiser x time <span class="sub" id="bledev-prox-note"></span></div>
+      <canvas class="wfall bledev-prox" id="bledev-prox" aria-label="advertisers by time: each cell the mean signal, hotter is nearer; arrow keys pick a cell, the list below names it; a click on a name opens the advertiser" aria-describedby="bledev-pdetail"></canvas>
+      <div class="bledev-legend" id="bledev-prox-legend"></div>
+      <div class="iso-key" id="bledev-prox-key" role="group" aria-label="colour key: device classes"></div>
+      <div class="sub" id="bledev-foot">rows: the advertisers heard in the window (at most 256 read: every tracker, then the newest), trackers first, then the nearest by signal less announced power, then the most reports; blank: not heard. A cell is the mean of rf.rssi.ble in it, graded by the distance band sloth's estimator gives that signal (N 2.8 at 2440 MHz) at the row's own announced power, the extended header's TxPower or else its TX Power Level, and 0 dBm when it announces none; the legend's edges are the 0 dBm ones. A tuned path-loss exponent and the band's hysteresis and hold can still put sloth's own band (the table's dist column) elsewhere. Signal strength is not a location. A rotating random address is its own row: rotations are not linked. Anonymous advertising has no row: with no address there is no signal series to key, and sloth holds every anonymous advertiser a sensor hears as one row, so its signal would be several devices'; the class panel counts it.</div>
+      <div class="mixd" id="bledev-pdetail" aria-live="polite"></div>
+    </section>
+    <section class="panel">
+      <div class="bleline" id="b-head-line" aria-label="ble advertisers"></div>
+      <div class="bleline d-dim" id="b-rot" hidden></div>
+      <div class="bleline d-dim" id="b-empty" hidden></div>
+      <div class="label">advertisers <span class="sub" id="b-count"></span> <span class="dt-tools" id="b-tools"></span></div>
+      <div class="hscroll" id="b-box"><div class="blerow dhead" id="b-thead"></div><div id="b-rows"></div></div>
+      <button type="button" id="b-more" hidden>more</button>
+      <div class="bleline d-dim" id="b-legend">T: P public R random p/r resolved  H HID  W watchlist  ~ sample  DIST: signal-strength estimate</div>
+      <div class="sub">one row per advertiser as one sensor heard it (the host controller and an Ubertooth hearing the same address are two rows; their counts are never summed). A row is bright for a HID or watchlisted advertiser, as the TUI's [*] view draws it. dist (est) is sloth's own estimate from signal strength (research/papers/rssi-distance-estimation.md: walls and reflections dominate; it is not a location). Click a row for every decoded field; a column header sorts (the server picks the rows), drag its right edge to resize.</div>
+    </section>
+    <section class="panel">
+      <div class="label">ble alerts <span class="sub" id="b-al-count"></span> <span class="dt-tools" id="b-al-tools"></span></div>
+      <div class="hscroll" id="b-al-box"><div class="blarow dhead" id="b-al-head"></div><div id="b-al-rows"></div></div>
+      <div class="sub">sloth's ble_alert findings (BLE_ADV_FLOOD, BLE_HID_UNEXPECTED, BLE_WATCHLIST), standing until the alert.resolve of the same key; resolved ones listed for a day. The same incidents are on the Alerts page as alert records.</div>
+    </section>
+   </div>
+   <div id="v-gnss" hidden>
+    <section class="panel">
+      <div class="gnssline" id="gnss-head" aria-label="gnss receiver"></div>
+      <div class="gnssline d-dim" id="gnss-head2"></div>
+      <div class="gnssline d-dim" id="gnss-empty" hidden></div>
+      <span class="sub" id="gnss-note">sloth's gnss_fix, gnss_sky and gnss_sat records off the --gps receiver, kept by slothweb in memory (sloth.db's gnss_fixes and gnss_sightings hold the history). The receiver is the host's own, so this panel is every scope's. Receive-only: sloth sends gpsd one ?WATCH line and writes nothing to a serial device. Observation only: no row here is a finding.</span>
+    </section>
+    <section class="panel">
+      <div class="label">satellites in view <span class="sub" id="gnss-count"></span> <span class="dt-tools" id="gnss-tools"></span></div>
+      <div class="hscroll" id="gnss-box"><div class="gnssrow dhead" id="gnss-thead"></div><div id="gnss-rows"></div></div>
+      <div class="sub">one row per satellite as the receiver lists it, sorted by C/N0 (the TUI's [#] order); a column header sorts, drag its right edge to resize. Bright rows are in the solution, dim rows unhealthy, as the TUI draws them; the C/N0 number is heat-graded over 50 dB-Hz with the TUI's thresholds; the signal cell is a meter of ten 5 dB-Hz segments over 0..50 dB-Hz (C/N0 is dB-Hz, not dBm, so it has no S-units), lit to the row's C/N0 now, its two ticks the least and greatest of the row's last records (change-only: a record per band change or 300 s heartbeat). Click a row for its figures.</div>
+    </section>
+    <section class="panel gnss-two">
+      <div>
+        <div class="label">sky <span class="sub">azimuth around, elevation inward; north up</span>
+          <label class="sub">trails <select id="gnss-trail-hours"><option value="1">1 h</option><option value="3">3 h</option><option value="6" selected>6 h</option><option value="12">12 h</option><option value="24">24 h</option></select></label></div>
+        <canvas id="gnss-sky" width="320" height="320" aria-label="satellite positions by azimuth and elevation, with each satellite's trail over the window"></canvas>
+        <div class="sub" id="gnss-trail-note"></div>
+      </div>
+      <div>
+        <div class="label">fix history <span class="sub" id="gnss-fix-note"></span></div>
+        <canvas id="gnss-fixstrip" class="heat" aria-label="fix mode, satellites used, HDOP and clock offset over the kept gnss_fix records"></canvas>
+        <div class="sub" id="gnss-fix-legend"></div>
+      </div>
+    </section>
+    <section class="panel" id="gnss-detail" hidden>
+      <div class="label">satellite <span class="sub" id="gnss-detail-name"></span> <button type="button" id="gnss-detail-close">close</button></div>
+      <dl class="gnss-kv" id="gnss-detail-kv"></dl>
+      <!-- Plain notes on the satellite (web/ui/subnotes.js). -->
+      <div class="subnotes" id="subnotes-gnss" hidden>
+        <div class="label">notes <span class="sub" id="subnotes-gnss-note"></span></div>
+        <ol class="lst" id="subnotes-gnss-list"></ol>
+        <div class="controls tri-form notes-form">
+          <label>note <input type="text" id="subnotes-gnss-text" maxlength="240" spellcheck="false" autocomplete="off" placeholder="what you know about it"> <span class="sub" id="subnotes-gnss-n"></span></label>
+          <button type="button" id="subnotes-gnss-add">add note</button>
+        </div>
+        <div class="sub tri-msg" id="subnotes-gnss-msg"></div>
+      </div>
+    </section>
+    <section class="panel" id="gnss-hist" hidden>
+      <div class="label">satellite history <span class="sub" id="gnss-hist-name"></span> <button type="button" id="gnss-hist-close">close</button></div>
+      <canvas id="gnss-hist-plot" class="heat" aria-label="the satellite's C/N0 and elevation over the window"></canvas>
+      <div class="sub" id="gnss-hist-note"></div>
+    </section>
+    <section class="panel">
+      <div class="label">satellites seen <span class="sub" id="gnss-seen-count"></span> <span class="dt-tools" id="gnss-seen-tools"></span>
+        <label class="sub">window <select id="gnss-seen-days"><option value="1">24 h</option><option value="7">7 days</option><option value="30">30 days</option></select></label></div>
+      <div class="hscroll" id="gnss-seen-box"><div class="histrow dhead" id="gnss-seen-thead"></div><div id="gnss-seen-rows"></div></div>
+      <div class="sub" id="gnss-seen-note">every satellite the receiver listed in the window, from sloth.db's gnss_sightings (one row per satellite per banded change or 300 s heartbeat, kept as long as sloth's --db retention keeps observations). Click a row, or a satellite above, for its C/N0 and elevation over the window.</div>
+    </section>
+   </div>
+   <div id="v-adsb" hidden>
+    <section class="panel scope-empty" id="adsb-scope-empty"><div class="label">ADS-B</div><p>Nothing here under Local. Aircraft are the ADS-B decoder's (<code>--adsb</code>), a passive radio; the host's own interfaces carried none. Switch to Monitor or Hybrid to see them.</p></section>
+    <section class="panel">
+      <div class="adsbline" id="adsb-head" aria-label="ads-b decoder"></div>
+      <div class="adsbline d-dim" id="adsb-head2"></div>
+      <div class="adsbline d-dim" id="adsb-empty" hidden></div>
+      <span class="sub" id="adsb-note">sloth's adsb_aircraft records off the --adsb decoder's aircraft.json, kept by slothweb in memory. A row's figures are as of its last record, which sloth writes on a change of altitude band (1,000 ft low, 4,000 ft high), 0.1&deg; position cell, squawk, emergency, callsign or category, or the 300 s heartbeat: not the decoder's every second. Receive-only: sloth reads a file and never touches the SDR. Observation only: no row here is a finding.</span>
+    </section>
+    <section class="panel">
+      <div class="label">aircraft <span class="sub" id="adsb-count"></span> <span class="dt-tools" id="adsb-tools"></span> <label class="sub" hidden>sites <select id="adsb-sites" aria-label="this site or all sloth hosts"><option value="all" selected>All sites</option><option value="here">This site</option></select></label></div>
+      <div class="hscroll" id="adsb-box"><div class="adsbrow dhead" id="adsb-thead"></div><div id="adsb-rows"></div></div>
+      <div class="sub">one row per address the decoder lists; an emergency first, then live before gone, the most recently heard first. A column header sorts, drag its right edge to resize. Bright rows have a position, dim rows are gone (kept 10 minutes); altitude is heat-graded over 45,000 ft and RSSI over -50..0 dBFS; the signal cell is a meter of ten 5 dB segments over the same -50..0 dBFS (the decoder's level against its own full scale, not dBm, so it has no S-units). The emergency status and the reserved squawks 7500 / 7600 / 7700 show in the peak colour as the decoder reports them. Click a row for its figures. With All sites, a grey row is an aircraft only another sloth host heard, its host named beside the address and only what that host sent (no state, rate, signal meter or alert); "+name" marks one this decoder lists that another host also heard.</div>
+    </section>
+    <section class="panel">
+      <div class="label">positions <span class="sub" id="adsb-plot-note"></span> <label class="sub">range <select id="adsb-range"><option value="0" selected>auto</option><option value="5">5 NM</option><option value="10">10 NM</option><option value="20">20 NM</option><option value="40">40 NM</option><option value="60">60 NM</option><option value="100">100 NM</option><option value="150">150 NM</option><option value="250">250 NM</option></select></label></div>
+      <canvas id="adsb-plot" class="heat" aria-label="aircraft positions on a radar scope centred on this sensor, north up"></canvas>
+      <div class="sub">a radar scope centred on this sensor (its gps fix, else its last fix, else --location; with none, fitted to the aircraft), north up, no map: each aircraft at its true bearing and distance from the sensor, five range rings in nautical miles (auto: the smallest range holding 80% of this decoder's live aircraft; one beyond it sits on the rim with its distance), the sweep re-lighting each target as it passes (still under reduced motion). A ▲ points along the aircraft's track, coloured by altitude over 45,000 ft (dim on the ground); the line ahead of it is where it would be in one minute at its ground speed; the dots behind are its kept positions in their altitude colours. The data block is callsign (else address), then altitude in hundreds of feet with ↑ or ↓ when climbing or descending faster than 300 ft/min, and ground speed in knots; an emergency or a 7500 / 7600 / 7700 squawk adds a line and a ring in the peak colour. Click a target to select it; the selected one is amber with its track as a line and its recorded track as dots. An aircraft only another sloth host heard is a grey hollow ▲ named by its host.</div>
+    </section>
+    <section class="panel" id="adsb-detail" hidden>
+      <div class="label">aircraft <span class="sub" id="adsb-detail-name"></span> <button type="button" id="adsb-detail-close">close</button></div>
+      <dl class="adsb-kv" id="adsb-detail-kv"></dl>
+      <!-- Plain notes on the aircraft (web/ui/subnotes.js). -->
+      <div class="subnotes" id="subnotes-adsb" hidden>
+        <div class="label">notes <span class="sub" id="subnotes-adsb-note"></span></div>
+        <ol class="lst" id="subnotes-adsb-list"></ol>
+        <div class="controls tri-form notes-form">
+          <label>note <input type="text" id="subnotes-adsb-text" maxlength="240" spellcheck="false" autocomplete="off" placeholder="what you know about it"> <span class="sub" id="subnotes-adsb-n"></span></label>
+          <button type="button" id="subnotes-adsb-add">add note</button>
+        </div>
+        <div class="sub tri-msg" id="subnotes-adsb-msg"></div>
+      </div>
+      <div class="label">history <span class="sub" id="adsb-hist-note"></span></div>
+      <dl class="adsb-kv" id="adsb-hist-kv"></dl>
+      <canvas id="adsb-prof" class="heat" aria-label="the aircraft's altitude over its recorded sightings"></canvas>
+      <div class="sub">altitude over the aircraft's recorded sightings in the window (sloth.db's adsb_sightings: one per altitude band, position cell, squawk, emergency, callsign or category change, or the 300 s heartbeat); its whole recorded track is drawn on the positions plot above.</div>
+    </section>
+    <section class="panel">
+      <div class="label">aircraft seen <span class="sub" id="adsb-seen-count"></span> <span class="dt-tools" id="adsb-seen-tools"></span>
+        <label class="sub">window <select id="adsb-seen-days"><option value="1">24 h</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="365">a year</option></select></label>
+        <label class="sub">search <input type="search" id="adsb-seen-q" maxlength="8" spellcheck="false" autocomplete="off" placeholder="hex or callsign"></label></div>
+      <div class="hscroll" id="adsb-seen-box"><div class="histrow dhead" id="adsb-seen-thead"></div><div id="adsb-seen-rows"></div></div>
+      <div><button type="button" id="adsb-seen-more" hidden>more</button></div>
+      <div class="sub" id="adsb-seen-note">every aircraft address the decoder listed in the window, from sloth.db's adsb_aircraft (one row per address, kept as long as sloth's --db retention keeps entities): first and last seen, visits (each time it came back after expiring), recorded sightings, the callsign, squawk and category last heard, the altitude range, top ground speed and strongest signal, and whether it ever reported an emergency. Click a row for its history.</div>
+    </section>
+   </div>
+   <div id="v-aprs" hidden>
+    <section class="panel scope-empty" id="aprs-scope-empty"><div class="label">APRS</div><p>Nothing here under Local. APRS stations are the Dire Wolf decoder's (<code>--aprs</code>), a passive radio; the host's own interfaces carried none. Switch to Monitor or Hybrid to see them.</p></section>
+    <section class="panel">
+      <div class="aprsline" id="aprs-head" aria-label="aprs decoder"></div>
+      <div class="aprsline d-dim" id="aprs-head2"></div>
+      <div class="aprsline aprs-notice" id="aprs-notice" role="status" hidden></div>
+      <div class="aprsline d-dim" id="aprs-empty" hidden></div>
+      <span class="sub" id="aprs-note">sloth's aprs_packet and aprs_station records off the --aprs Dire Wolf packet log (on the APRS channel of the region sloth's GNSS position is in, or the frequency the operator declared with --aprs-freq; the line above names it), kept by slothweb in memory: each station's last heard, via, level, comment and position follow its packets. Receive-only: sloth reads a file and never touches the radio or Dire Wolf. Positions are what each station broadcast, unverified (APRS authenticates nothing). Observation only: no row here is a finding.</span>
+    </section>
+    <section class="panel">
+      <div class="label">stations <span class="sub" id="aprs-count"></span> <span class="dt-tools" id="aprs-tools"></span></div>
+      <div class="hscroll" id="aprs-box"><div class="aprsrow dhead" id="aprs-thead"></div><div id="aprs-rows"></div></div>
+      <div class="sub">one row per source callsign heard; live before gone, the most recently heard first. A column header sorts, drag its right edge to resize. Bright rows have a position, dim rows are gone (unheard an hour; kept 30 minutes). VIA is the station heard on the air: the source itself (direct) or the digipeater that repeated it. LEVEL is Dire Wolf's audio level, heat-graded over 0..100. Click a row for its figures, its recent packets and its history.</div>
+    </section>
+    <section class="panel">
+      <div class="label">positions <span class="sub" id="aprs-plot-note"></span> <label class="sub">range <select id="aprs-range"><option value="0" selected>auto</option><option value="2">2 km</option><option value="5">5 km</option><option value="10">10 km</option><option value="25">25 km</option><option value="50">50 km</option><option value="100">100 km</option><option value="250">250 km</option><option value="500">500 km</option></select></label></div>
+      <canvas id="aprs-plot" class="heat" aria-label="aprs station positions on a radar scope centred on this sensor, north up"></canvas>
+      <div class="sub">a radar scope centred on this sensor (its gps fix, else its last fix, else --location; with none, fitted to the stations), north up, no map: each station at its true bearing and distance from the sensor on its last reported position, five range rings (auto: the smallest range holding 80% of the live stations; a station beyond it sits on the rim with its distance), the sweep re-lighting each blip as it passes (still under reduced motion). A solid blip was heard direct, a hollow one via a digipeater; the line from a moving blip is where it would be in 5 minutes at its reported course and speed; the data block is callsign, course and speed, altitude. Click a blip to select it; the selected one is amber, with its track (solid: this session; dots: sloth.db). Positions are what each station broadcast, unverified.</div>
+    </section>
+    <section class="panel" id="aprs-detail" hidden>
+      <div class="label">station <span class="sub" id="aprs-detail-name"></span> <button type="button" id="aprs-detail-close">close</button></div>
+      <dl class="aprs-kv" id="aprs-detail-kv"></dl>
+      <!-- Plain notes on the APRS station (web/ui/subnotes.js). -->
+      <div class="subnotes" id="subnotes-aprs" hidden>
+        <div class="label">notes <span class="sub" id="subnotes-aprs-note"></span></div>
+        <ol class="lst" id="subnotes-aprs-list"></ol>
+        <div class="controls tri-form notes-form">
+          <label>note <input type="text" id="subnotes-aprs-text" maxlength="240" spellcheck="false" autocomplete="off" placeholder="what you know about it"> <span class="sub" id="subnotes-aprs-n"></span></label>
+          <button type="button" id="subnotes-aprs-add">add note</button>
+        </div>
+        <div class="sub tri-msg" id="subnotes-aprs-msg"></div>
+      </div>
+      <div class="label">recent packets <span class="sub" id="aprs-recent-note"></span></div>
+      <div class="hscroll"><div id="aprs-recent"></div></div>
+      <div class="label">history <span class="sub" id="aprs-hist-note"></span></div>
+      <dl class="aprs-kv" id="aprs-hist-kv"></dl>
+      <div class="hscroll"><div id="aprs-hist-pkts"></div></div>
+      <div class="sub">the station's packets in the window from sloth.db's aprs_packets (one row per packet, oldest first, the newest 400 at most); its recorded positions are drawn dashed on the plot above.</div>
+    </section>
+    <section class="panel">
+      <div class="label">stations seen <span class="sub" id="aprs-seen-count"></span> <span class="dt-tools" id="aprs-seen-tools"></span>
+        <label class="sub">window <select id="aprs-seen-days"><option value="1">24 h</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="365">a year</option></select></label>
+        <label class="sub">search <input type="search" id="aprs-seen-q" maxlength="9" spellcheck="false" autocomplete="off" placeholder="callsign"></label></div>
+      <div class="hscroll" id="aprs-seen-box"><div class="histrow dhead" id="aprs-seen-thead"></div><div id="aprs-seen-rows"></div></div>
+      <div><button type="button" id="aprs-seen-more" hidden>more</button></div>
+      <div class="sub" id="aprs-seen-note">every source callsign heard in the window, from sloth.db's aprs_stations (one row per call, kept as long as sloth's --db retention keeps entities): first and last heard, visits (each time it came back after an hour unheard), packets, whether it was ever heard direct, the best level, the last via, position, symbol and comment. Click a row for its history.</div>
+    </section>
+   </div>
+   <div id="v-camera" hidden>
+    <section class="panel">
+      <div class="label">camera <span class="sub" id="cam-meta" role="status"></span></div>
+      <span class="sub" id="cam-err" role="alert"></span>
+      <canvas id="cam-img" role="img" aria-label="the camera's latest still" hidden></canvas>
+      <span class="sub">the latest still a separate capture helper wrote (latest.jpg in slothweb's --camera-dir); refreshed every 5 s while this tab is open. slothweb only reads the file, it never drives the camera.</span>
+    </section>
+   </div>
+   <div id="v-spectrum" hidden>
+    <section class="panel">
+      <div class="label">spectrum <span class="sub" id="spec-meta"></span></div>
+      <div class="specline" id="spec-head" role="status" aria-label="sweep helper status"></div>
+      <div class="spec-tools">
+        <button type="button" id="spec-run" disabled aria-describedby="spec-run-note">Run 1-min sweep</button>
+        <span class="sub" id="spec-msg" role="status"></span>
+        <span class="sub" id="spec-err" role="alert"></span>
+      </div>
+      <span class="sub" id="spec-run-note">sloth-sdrsweep, a separate receive-only helper, sweeps the receiver the operator dedicated (antenna: <span id="spec-antenna">the configured antenna</span>) from 0.5 to 2000 MHz for about a minute; each whole sweep is one row. Running it takes the receiver for that minute: a decoder that shares it pauses ~1 min (APRS, where it is the one sharing). One run at a time, and none within the cooldown (at least 2 minutes) after the last; with the operator's 5-minute timer enabled the receiver is taken about a minute in every five. slothweb only asks: the request carries no setting, the helper reads the operator's /etc/default/sloth-sdrsweep. Bands far from the antenna's design look weak or empty.</span>
+    </section>
+    <section class="panel">
+      <div class="spec-tools">
+        <span id="spec-range" role="group" aria-label="time range"></span>
+        <span id="spec-zoom" role="group" aria-label="zoom presets"></span>
+        <label><input type="checkbox" id="spec-log" checked> log frequency axis</label>
+        <label>label the <select id="spec-topn" aria-label="how many peaks to label"><option value="6">6</option><option value="12" selected>12</option><option value="24">24</option><option value="48">48</option></select> strongest peaks</label>
+      </div>
+      <div class="spec-wrap">
+        <canvas id="spec-plot" aria-label="isometric waterfall of the chosen range: frequency across, older runs receding up and to the right, height and colour the max-hold level in dBFS; the peak list below holds the same peaks as text" aria-describedby="spec-plot-note"></canvas>
+        <div class="spec-tip" id="spec-tip" role="tooltip" hidden></div>
+      </div>
+      <div class="sub" id="spec-plot-note">each row is one run's max-hold per 100 kHz (pooled to wider bins in the long ranges so the page stays small), the newest in front; in 1 h to 24 h the rows sit at their time, a hatched stretch marked on the time axis is where runs are missing. Until runs are recorded, last 3 scans shows the latest run's own sweeps. Runs are recorded every 5 minutes when the operator enables sloth-sdrsweep-auto.timer. Drag across the plot to zoom, double-click for the full span. The strip under the axis is the US frequency allocation table (47 CFR 2.106), simplified, for orientation only. A label marked ? sits on a multiple of the receiver's 24 MHz clock (a guess, dashed); one marked int matched a spur the receiver shows with no antenna (dim). Hover for the level, its SNR over that row's floor and the band.</div>
+    </section>
+    <section class="panel">
+      <div class="label">peaks <span class="sub" id="spec-peaks-count"></span></div>
+      <div class="hscroll" id="spec-peaks"></div>
+      <div class="sub">found at the FFT's full resolution (about 1 kHz) across the whole run: a frame-averaged level 6 dB over its step's floor on average, or a max-hold 16 dB over it in any row; neighbours within 50 kHz are one peak. SNR in dB over the step's median floor; dBFS with a full-scale tone at 0; ROWS the sweeps it was seen in. Observation only: no row here is a finding.</div>
+    </section>
+   </div>
+   <div id="v-radar" hidden>
+    <section class="panel radar-stage" id="radar-stage">
+      <canvas id="radar-dome" aria-label="half-dome of every radio heard: satellites by azimuth and elevation, aircraft and APRS stations by bearing, elevation and log range, Wi-Fi and BLE as rings per distance band"></canvas>
+      <div class="radar-ov radar-tl">
+        <div class="radarline" id="radar-head" aria-label="radar: the sensor and what is placed around it"></div>
+        <div class="radar-btns"><span class="sub" id="radar-cam"></span>
+          <button type="button" id="radar-north">north up</button>
+          <button type="button" id="radar-top">plan</button>
+          <button type="button" id="radar-zin">+</button>
+          <button type="button" id="radar-zout">-</button>
+          <button type="button" id="radar-reset">reset view</button>
+          <button type="button" id="radar-full">full screen</button>
+          <button type="button" id="radar-fleet" hidden>fleet areas on</button>
+          <label class="sub">APRS for <select id="radar-aprs-win"><option value="900">15 min</option><option value="3600" selected>1 h</option><option value="10800">3 h</option><option value="21600">6 h</option><option value="86400">24 h</option></select></label></div>
+        <details class="radar-about"><summary>about this view</summary><span class="sub" id="radar-note">every radio sloth hears on one half-dome centred on the sensor: GNSS satellites at their azimuth and elevation on the rim, aircraft (ADS-B) and APRS stations at their true bearing and elevation angle with the range compressed (log scale, 0.3 m at the centre to 300 km at the rim), and Wi-Fi and BLE emitters, which a single passive sensor has no bearing for, by distance: one fainter ring per distance band (Wi-Fi solid, BLE dashed, counted), and the 50 most recently heard of each (&#9632; Wi-Fi station, &#9670; access point, &#9679; BLE). A device another sloth also heard is solid at the most probable point of its fleet area (below); one only this sensor heard is hollow, at its distance at an arbitrary angle from its address (a BLE one on its own faint ring; a Wi-Fi one has none, direction finding on the WiFi view is where its direction is read): only its distance is an estimate. Each Wi-Fi device has a hue from its address, shared by its mark and its area. A moving aircraft or APRS station has a tick along its heading, longer the faster it goes; a Wi-Fi or BLE label's arrow is sloth's trend. The centre is the GPS fix, else <code>--location</code>, else the header says so. Drag to turn and tilt, wheel or + and - to zoom, 0 resets, n north up, t plan view; click or tap a mark or a ring for its figures and a way into its own tab. With another sloth on the network (<code>--peer</code>), each emitter two or more sites heard is drawn as a light translucent polygon where it may be, from <code>/api/fleet/locate</code>: where every site's one-sigma range band overlaps, a least-squares fix's disc with three or more sites, or, when the bands do not meet and one site is clearly nearer, a fainter wash over that site's side; overlaps read darker, the other sites are hollow squares, hover an area, or tap it with nothing picked, for its figures, and <b>fleet areas</b> hides them. No map tiles and nothing fetched from anywhere but this server. Observation only: no mark here is a finding.</span></details>
+      </div>
+      <div class="radar-ov radar-tr" id="radar-side" hidden>
+        <div class="label">picked <span class="sub" id="radar-side-name"></span> <button type="button" id="radar-side-close">close</button></div>
+        <dl class="radar-kv" id="radar-side-kv"></dl>
+        <div id="radar-side-list"></div>
+        <div><button type="button" id="radar-open" hidden></button></div>
+      </div>
+      <div class="sub radar-ov radar-bl" id="radar-cap"></div>
+    </section>
+   </div>
    <div id="v-wifi" hidden>
+    <section class="panel scope-empty" id="w-scope-empty"><div class="label">WiFi</div><p>Under Local this view is the managed Wi-Fi card's own: its scan and its link, below, Wi-Fi through the host's own network. The passive monitor radio's beacons, probes, associations, deauths and channel mix are not Local's, so they are not drawn; switch to Monitor or Hybrid to see them.</p></section>
+    <section class="panel card-local">
+      <div class="label">the card's link <span class="sub" id="w-sta-count"></span> <span class="dt-tools" id="w-sta-tools"></span></div>
+      <div class="hscroll" id="w-sta-box">
+      <div class="dhead" id="w-sta-head"></div>
+      <div id="w-sta"></div>
+      </div>
+      <div class="sub">the managed card's nl80211 station dump (sloth.db wifi_stas): the AP it is associated with, as the card reports it; nothing is sent</div>
+    </section>
+    <section class="panel card-local">
+      <div class="label">the card's scan <span class="sub" id="w-scan-count"></span> <span class="dt-tools" id="w-scan-tools"></span></div>
+      <div class="hscroll" id="w-scan-box">
+      <div class="dhead" id="w-scan-head"></div>
+      <div id="w-scan"></div>
+      </div>
+      <div class="sub">the access points the managed card's own scan found (sloth.db wifi_aps), newest first; status: the BSS the card is on now</div>
+    </section>
     <section class="panel controls" aria-label="wifi controls">
+      <label title="the channel waterfall drawn isometrically, as the Spectrum tab draws its sweep; off: the flat grid below"><input type="checkbox" id="w-iso" checked> isometric</label>
+      <label>channels <select id="w-grid">
+        <option value="horizon" selected>against normal (horizon)</option>
+        <option value="mix">who transmits (stacked)</option>
+      </select></label>
       <label>cells <select id="w-metric">
         <option value="ap_count" selected>APs per channel</option>
         <option value="ctrl_total">control frames</option>
@@ -180,38 +629,382 @@
       </select></label>
       <span class="sub" id="w-note">from slothweb.db's wifi.* series and sloth.db's beacon_aps; nothing is sent</span>
     </section>
+    <!-- The air picture (docs/web-visual-spec.md §6.3, #171 V3), four
+         panels top to bottom: channels, emitters, chains, clients. -->
     <section class="panel">
-      <div class="label">channel x time <span class="sub" id="w-heat-note"></span></div>
-      <canvas class="wfall" id="w-heat" aria-label="channels by time: 2.4, 5 and 6 GHz grouped, a rule between bands"></canvas>
-      <div class="sub">rows: channels, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), a rule between bands; colour: the heat ramp against the busiest cell in view</div>
+      <div class="label">channels <span class="sub" id="w-heat-note"></span> <span class="sub" id="w-mix-note"></span></div>
+      <div class="g3wrap" id="w-g3wrap">
+      <canvas class="wfall" id="w-heat" aria-label="channels by time: one horizon strip per channel against its own scale, or each cell the top five transmitters as stacked bands; 2.4, 5 and 6 GHz grouped; arrow keys pick a cell, the list below names it" aria-describedby="w-mix"></canvas>
+      <canvas class="g3drill" id="w-drill" aria-label="the picked column: each channel's five busiest transmitters, stacked by their share of its frames"></canvas>
+      </div>
+      <div class="iso-tip" id="w-iso-tip" role="tooltip" hidden></div>
+      <div class="iso-key" id="w-iso-key" role="group" aria-label="colour key: bands, channels and SSIDs" hidden></div>
+      <div class="sub" id="w-iso-sub" hidden>isometric: the channels across, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), each band named under its channels; the time cells receding up and to the right, the newest in front; a column's height its cell in the metric above, on one scale for every channel, 0 to the window's largest cell (the level axis at left). Point at a column for its channel, time and value; click or tap it, or arrow to it (left and right: channels, up: older, down: newer), and the list below names the cell's five busiest transmitters. Untick isometric for the horizon strips or the stacked grid. Colour says which, the height how much: each channel is its own colour, the same as in every list on the page (2.4 GHz cool, 5 GHz warm, 6 GHz violet), on the strip under the channel names and each column's top edge, a band's name in its first channel's; the key groups the channels under their band's structure (2.4 GHz: 1, 6 and 11 and the overlapping rest; 5 GHz: UNII-1, UNII-2A, UNII-2C and UNII-3, the two DFS sub-bands dashed on the strip, and "other" for the rest (UNII-2B, UNII-4); 6 GHz: the preferred scanning channels and the rest); a column's body is its cell's five busiest transmitters stacked by share, an AP in its SSID's colour (the same on every tab), a client in its MAC's, the rest and a cell with no transmitter detail in the channel's colour. The key under the picture names each step and its channels; press an SSID there to fade every other one to 70 percent transparent, again to show all. The clients lane under the channel names: a diamond under each channel the window's clients were heard on, larger for more of them, their number beside it where it fits, in the colour of the busiest one's network's SSID (its MAC's when sloth knows no AP for it), and a tick at the foot of each column whose cell named a client. A client is a station probing on that channel (sloth reports its probe requests, not its data frames), and it is named only in a bucket where it was one of the five busiest transmitters, so a count is at least that many. The key's Clients group names the busiest (vendor, the MAC's last three octets, randomised for a locally administered MAC, and its network); press one to trace its channels in their colours, outline the cells it was named in and fade every other cell to 70 percent transparent, again to show all. An SSID and a client are not highlighted together: pressing one drops the other.</div>
+      <div class="sub" id="w-hz-sub">rows: every channel seen in 30 days, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), a rule between bands. A strip is two bands laid over one another, the lighter its first half, the darker its second: APs per channel from 0 to the channel's own 30 d largest; control frames as z against the channel's hour-of-week baseline ("z" after the key), the second band above the sensitivity's sd and in the heat colour, flat while the channel is normal (a channel with no baseline yet: from 0 to its own 30 d busiest, per minute). A grey cell: warming, a line along the foot: observed and quiet, nothing: not observed, a mark along the top: past the scale. Point at, tap or arrow to a column: beside the strips, that column's five busiest transmitters on each channel, stacked in their TUI colours; the list below names the picked cell's.</div>
+      <div class="sub" id="w-mx-sub" hidden>rows: channels, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), a rule between bands. A cell: its five busiest transmitters, each band its share of the cell's frames (an AP in its SSID's colour, a client in its MAC's, as the TUI colours them; a client's probes all on the channel of its latest one, which carries no band, so a 6 GHz client reads as the 2.4 or 5 GHz channel of that number), grey the rest, on the monitor radio's ground; the strip at a row's left: its busyness in the metric above, the heat ramp against the busiest row; a dimmed heat cell: no transmitter detail held for it. Point at, tap or arrow to a cell.</div>
+      <div class="mixd" id="w-mix" aria-live="polite"></div>
     </section>
     <section class="panel">
-      <div class="label">access points <span class="sub" id="w-aps-count"></span></div>
+      <div class="label">emitters: access points <span class="sub" id="w-aps-count"></span> <span class="sub dbage" id="w-dbage"></span> <span class="dt-tools" id="w-aps-tools"></span></div>
       <div class="controls"><label>sort <select id="w-sort">
-        <option value="last" selected>last seen</option>
+        <option value="signal" selected>signal (near first)</option>
+        <option value="last">last seen</option>
         <option value="ssids">ssid count</option>
         <option value="karma">karma score</option>
         <option value="bssid">bssid</option>
-      </select></label></div>
-      <div class="hscroll">
-      <div class="aprow dhead" aria-hidden="true"><span>bssid</span><span>ssid</span><span>ch</span><span>dBm</span><span>enc / akm</span><span>mfp</span><span>downgrade</span><span>karma</span><span>last</span></div>
+      </select></label> <label hidden>sites <select id="w-sites" aria-label="this site or all sloth hosts"><option value="all" selected>All sites</option><option value="here">This site</option></select></label></div>
+      <div class="hscroll" id="w-aps-box">
+      <div class="aprow dhead" id="w-aps-head"></div>
       <div id="w-aps"></div>
       </div>
-      <div class="sub">an ssid count above 1 (KARMA, multi-VAP) is in the warning colour with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers</div>
+      <div class="sub">an SSID anywhere on the page is selectable: a click, or Enter on it, opens its detail (its access points, the clients on it and asking for it, its presence, alerts and twin and karma findings). Nearest first by default (sloth.db's last signal); a square after the SSID for each SSID the BSSID has beaconed, in the warning colour above one (KARMA, multi-VAP), with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers. The dBm column is an S-meter: the lit run is the last reading, the number beside it its S reading and dBm. <span class="smkey"></span></div>
+    </section>
+    <!-- KARMA and key harvesting (web/ui/lure.js, #187 / #172): the
+         counts sloth's rules read, from the stream. -->
+    <section class="panel" id="w-lure">
+      <div class="label">lures and key harvesting</div>
+      <div class="sub" id="w-lure-state" aria-live="polite"></div>
+      <div class="hscroll"><table class="qt" id="w-lure-karma" aria-label="KARMA suspects: beacon fan-out, or answers to directed probes for names never beaconed" hidden></table></div>
+      <div class="hscroll"><table class="qt" id="w-lure-sta" aria-label="stations whose association requests drew M1s they left unanswered" hidden></table></div>
+      <div class="hscroll"><table class="qt" id="w-lure-chain" aria-label="BSSIDs whose claimed deauths were followed by a victim's fresh handshake" hidden></table></div>
+      <div class="sub">from sloth's stream (JSONL 1.3.0: karma_suspect, harvest_station, harvest_chain), the tables its rules read, as they stand now; nothing is sent. A KARMA row's BSSID opens its detail (its row over time, its alerts, the hardware verdict, the probe-response latency). KARMA: ssids the BSSID beaconed, postures the distinct security postures behind them (one for several names: the IE collapse, weak evidence), forged the names it answered a station's directed probe for and never beaconed, to stations how many stations those answers went to, pnl the most of its names one station asks for, lure chain a station deauthed elsewhere and lured here, score the [y] view's. Stations: BSSIDs asked to associate, how many answered with an M1, the M1s left with no M2, those carrying a PMKID KDE, and the BSSIDs it did answer. Chains: stations knocked off and captured reconnecting through a fresh M1/M2, and the deauths before them. Counts, not a verdict: whether a row crossed its rule's threshold is the alert's (KARMA_AP, KARMA_PROBE_FORGE, PMKID_HARVEST, HANDSHAKE_HARVEST in the Alerts view).</div>
+    </section>
+    <!-- Direction finding across monitor radios (web/ui/df.js,
+         docs/wiki/direction-finding.md): which radio hears a
+         transmitter loudest, from the stream. -->
+    <section class="panel" id="w-df">
+      <div class="label">direction finding</div>
+      <div class="sub" id="w-df-state" aria-live="polite"></div>
+      <div class="hscroll"><table class="qt" id="w-df-radios" aria-label="the monitor radios direction finding compares: the sensor radio and each --df-iface radio" hidden></table></div>
+      <div class="hscroll"><table class="qt" id="w-df-em" aria-label="transmitters two or more radios hear: the loudest radio, its margin over the quietest, and the compass point the levels lean toward when one can be given" hidden></table></div>
+      <div class="sub">from sloth's stream (JSONL 2.2.0: df_radio, wifi_df; the bearing and east/north positions 2.4.0), sloth-wifi run with --df-iface; nothing is sent. Radios: position its place on the baseline, or east and north of the operator's origin, when one was given, frames noted the transmitter frames it fed the comparison, reads vs sensor how much louder than the sensor radio it reads the same transmitters (measured from the air and taken off before comparing), retunes refused the channel changes the kernel turned down while following the sensor radio. Transmitters: loudest at the radio hearing it loudest, margin loudest less quietest, quality lean at 6 dB or more and weak under it (the radios agree: far away, or between them), bearing the compass point the levels lean toward from the middle of the radios, with how far a 3 dB error on one radio moves it, given only when three or more radios are placed east and north, all of them hear the transmitter and it is close to them (most rows have none), along baseline the power-weighted point between radios placed on a line, the widest margins first. What this is not: a fix, an angle of arrival, or a distance; radios with unlike antennas give leans that mean nothing; a transmitter far away compared with the spacing reads weak, which is the answer. A data point, not a verdict: no alert reads it.</div>
+    </section>
+    <section class="panel">
+      <div class="label">chains <span class="sub" id="w-ch-note"></span></div>
+      <div id="w-chains" hidden></div>
+      <div class="sub" id="w-ch-sub">a bssid with more than one stage of an attack in the window, its chain: a lane per stage in the order the chain runs, deauth frames and associations to it as ticks on one scale, each EVIL_TWIN, KARMA_AP and DEAUTH_FLOOD incident from sloth.db's alerts a bar from its first to its last observation in the severity it reached (its word beside the lane), a dot where it began and where it closed; under the lanes, the links sloth made (the twin tainted by a deauth flood on the other half within 5 s, the pair attributed), from the stream's twin_episode since slothweb started. Every bssid with a deauth key in the window is a candidate, and every bssid sloth.db holds an EVIL_TWIN or KARMA_AP row for in it, after them; a station associating counts as a stage only on a bssid with an EVIL_TWIN or KARMA_AP incident (on any other AP it is a client joining); a bssid with one stage is a lane of the rug below.</div>
+      <div class="label">deauth, one stage <span class="sub" id="w-da-note"></span></div>
+      <canvas class="rug" id="w-deauth" aria-label="deauthentication frames per bssid, one lane each on one scale, flood episodes underlined"></canvas>
+      <div class="sub">a lane per bssid: deauth frames per cell, the tallest of any lane at the lane's height; underlined in the critical colour: DEAUTH_FLOOD episodes from sloth.db's alerts.</div>
+      <div class="label">probe floods <span class="sub" id="w-pf-note"></span></div>
+      <canvas class="rug" id="w-pflood" aria-label="PROBE_FLOOD findings, a lane per severity, ticks where each began, underlined to its last sighting" hidden></canvas>
+      <div class="sub">a lane per severity: PROBE_FLOOD findings (the Alerts page's rows, sloth.db's and the stream's), a tick where each was first seen, its height the findings begun in the cell on one scale, underlined from its first to its last sighting.</div>
+    </section>
+    <section class="panel">
+      <div class="label">clients <span class="sub" id="w-pc-note"></span></div>
+      <canvas class="chart" id="w-probe" aria-label="probe clients over time, over their baseline band"></canvas>
+      <div class="label">probing in the window <span class="sub" id="w-cl-count"></span> <span class="dt-tools" id="w-cl-tools"></span></div>
+      <div class="sub" id="w-cl-sun"></div>
+      <div class="hscroll" id="w-cl-box">
+      <div class="dhead" id="w-cl-head"></div>
+      <div id="w-cl"></div>
+      </div>
+      <div class="sub">sloth.db's devices with a probe_clients row last seen in the window, nearest first: the dBm column with sloth's own distance words, and the 24 h presence; click a row for its drawer. The dBm column is an S-meter: the lit run is the last reading, the number beside it its S reading and dBm. <span class="smkey"></span>. The networks each asks for, and who asks for the same ones: <button type="button" class="dt-reset" id="w-probes-go">the Probes tab</button></div>
+    </section>
+   </div>
+   <!-- The rtl_433 tab (web/ui/rtl433.js, #208): the devices a local
+        rtl_433 decodes, from the stream. -->
+   <div id="v-rtl433" hidden>
+    <section class="panel" id="r4">
+      <div class="label">rtl_433 devices</div>
+      <div class="sub" id="r4-state" aria-live="polite"></div>
+      <div class="hscroll"><table class="qt" id="r4-rows" aria-label="the devices the rtl_433 decoder heard: model, id, type, decodes, first and last heard, frequency, signal and readings" hidden></table></div>
+      <div class="sub">sloth's rtl433_device records off the --rtl433 event log a local rtl_433 writes (433.92 MHz on the reference site: car tyre-pressure sensors, weather stations, remotes, door and motion sensors), kept by slothweb in memory: one row per decoder model and device id, dropped here 11 minutes after sloth last reported it (sloth reports every device it keeps at least every 5 minutes). sloth writes a device again when its RSSI moves 3 dB, its frequency a whole MHz or a reading a whole unit, so the figures are the last ones written, not the last decode. Temperatures and pressures are in the unit the sensor sent, never converted. Receive-only: sloth reads a file and never touches the SDR or rtl_433. Anything in range can transmit what a decoder accepts, and a tyre sensor's id follows its car: observation only, no row is a finding, and none of it is shared with other sloths.</div>
+    </section>
+   </div>
+   <!-- The Victron tab (web/ui/victron.js): the owner's Victron devices
+        off sloth-va's file, live from the stream, history from sloth.db. -->
+   <div id="v-victron" hidden>
+    <section class="panel" id="vc">
+      <div class="label">Victron devices</div>
+      <div class="sub" id="vc-state" aria-live="polite"></div>
+      <div class="vc-tools"><label>history <select id="vc-hours">
+        <option value="6">6 h</option>
+        <option value="24" selected>24 h</option>
+        <option value="168">7 d</option>
+        <option value="720">30 d</option>
+      </select></label></div>
+      <div id="vc-cards"></div>
+      <div class="sub">sloth's victron_device records off the --victron file sloth-va writes, kept by slothweb in memory, one card per device address; the charts are sloth.db's victron_readings (at most one row a minute per device), each bucket's mean as the line over its min..max. sloth writes a device again when a value moves a band (0.1 V, 1 A, 1 Ah, 1 %, 10 W, 1 C, 10 min) or every 5 minutes, so a live card can be up to 5 minutes old; past 6 minutes (11 for a device heard only through GATT sessions) it is marked STALE and its figures shown in the stale colour. Values are the last one of each kind sloth-va reported, from its Instant Readout decode or a GATT session (the card says which delivered the newest). sloth reads a file and connects to nothing; sloth-va transmits for the GATT sessions (ADR 0011). None of it is shared with other sloths.</div>
+    </section>
+   </div>
+   <div id="v-probes" hidden>
+    <section class="panel scope-empty" id="pr-scope-empty"><div class="label">Probes</div><p>Nothing here under Local. Probe requests are the passive monitor radio's; the host's own interfaces carried none. Switch to Monitor or Hybrid to see them.</p></section>
+    <section class="panel controls" aria-label="probes controls">
+      <label>window <select id="pr-days">
+        <option value="1">24 h</option>
+        <option value="7">7 d</option>
+        <option value="30" selected>30 d</option>
+        <option value="0">all sloth.db retains</option>
+      </select></label>
+      <label>shared uncommon networks, at least <select id="pr-min">
+        <option value="1">1</option>
+        <option value="2" selected>2</option>
+        <option value="3">3</option>
+        <option value="4">4</option>
+      </select></label>
+      <label hidden>sites <select id="pr-sites" aria-label="this site or all sloth hosts"><option value="all" selected>All sites</option><option value="here">This site</option></select></label>
+      <span class="sub" id="pr-note">from sloth.db's probe_clients, pnl_clients, pnl_ssids, assocs and seqnum_correlations: what sloth retains, across restarts; nothing is sent. A list of the networks a device asks for can name a home or a workplace: this view shows what sloth.db already holds and exports nothing of its own.</span>
+    </section>
+    <section class="panel">
+      <div class="label">clients heard probing <span class="dt-tools" id="pr-cl-tools"></span></div>
+      <div class="controls"><label>order <select id="pr-cl-sort">
+        <option value="last" selected>last heard</option>
+        <option value="first">first heard</option>
+        <option value="ssids">networks asked for</option>
+        <option value="frames">frames</option>
+        <option value="signal">signal (near first)</option>
+        <option value="mac">address</option>
+      </select></label> <button type="button" class="dt-reset" id="pr-cl-more" hidden>more</button></div>
+      <div class="hscroll" id="pr-cl-box">
+      <div class="dhead" id="pr-cl-head"></div>
+      <div id="pr-cl"></div>
+      </div>
+      <div class="sub" id="pr-cl-cap"></div>
+      <div class="sub">a row: a station heard sending probe requests, the networks it asked for by name (each opens that SSID's detail), how many, its frames, signal and 24 h presence, and what sloth already ties it to: a devices row for the same MAC, an association seen for it, or sloth's sequence-number correlation with another MAC (a hypothesis about one radio, which a passive sensor corroborates and never confirms). A wildcard probe names no network and is never listed as one. Click a row, or Enter on it, for the stations probing for the same networks.</div>
+    </section>
+    <section class="panel">
+      <div class="label">probing for the same networks</div>
+      <div id="pr-sh"></div>
+      <div class="sub" id="pr-sh-cap"></div>
+      <div class="sub">the picked station's networks, each with how many stations ask for it and the weight that gives it (a network everyone asks for weighs nothing), then the other stations sharing its uncommon ones, the most similar first. Two stations probing for the same networks have been in the same places or share a configuration; it does not say whose they are.</div>
+    </section>
+    <section class="panel">
+      <div class="label">networks searched for <span class="dt-tools" id="pr-ss-tools"></span></div>
+      <div class="controls"><label>order <select id="pr-ss-sort">
+        <option value="clients" selected>stations asking</option>
+        <option value="last">last asked for</option>
+        <option value="first">first asked for</option>
+        <option value="ssid">name</option>
+      </select></label></div>
+      <div class="hscroll" id="pr-ss-box">
+      <div class="dhead" id="pr-ss-head"></div>
+      <div id="pr-ss"></div>
+      </div>
+      <div class="sub" id="pr-ss-cap"></div>
+    </section>
+    <section class="panel">
+      <div class="label">groups</div>
+      <div id="pr-gr"></div>
+      <div class="sub" id="pr-gr-cap"></div>
+    </section>
+   </div>
+   <div id="v-alerts" hidden>
+    <div class="filterbar" id="al-filter" hidden><span id="al-filter-t"></span> <a href="#alerts" id="al-all">show all</a> <a href="#overview">back to the overview</a></div>
+    <section class="panel controls" aria-label="alert filters">
+      <label>state <select id="al-state">
+        <option value="all" selected>open, then closed</option>
+        <option value="open">open</option>
+        <option value="closed">closed</option>
+      </select></label>
+      <label>severity <select id="al-sev">
+        <option value="" selected>any</option>
+        <option value="crit">crit</option>
+        <option value="warn,crit">warn and crit</option>
+        <option value="warn">warn</option>
+        <option value="low">low</option>
+      </select></label>
+      <label>type <select id="al-type"><option value="" selected>any</option></select></label>
+      <label>search <input type="search" id="al-q" maxlength="63" spellcheck="false" autocomplete="off" placeholder="192.0.2.10 or SMB1"></label>
+      <label>triage <select id="al-triage">
+        <option value="any" selected>any</option>
+        <option value="untriaged">untriaged</option>
+        <option value="triaged">triaged</option>
+        <option value="out">triaged out (false, noise or known)</option>
+        <option value="false">false</option>
+        <option value="noise">noise</option>
+        <option value="incident">incident</option>
+        <option value="known">known (known good)</option>
+      </select></label>
+      <label>window <select id="al-win">
+        <option value="86400">24 h</option>
+        <option value="604800" selected>7 d</option>
+        <option value="2592000">30 d</option>
+        <option value="34560000">400 d</option>
+      </select></label>
+      <span class="sub" id="al-note"></span>
+    </section>
+    <!-- Incidents, the selection and the bulk verdict (web/ui/incident.js, #198). -->
+    <section class="panel" id="inc-panel" hidden>
+      <div class="label">incidents <span class="sub" id="inc-count"></span>
+        <label class="sub"><input type="checkbox" id="inc-group" checked> group the list by incident</label>
+        <label class="sub"><input type="checkbox" id="inc-closed"> closed ones too</label></div>
+      <div id="inc-rows"></div>
+      <div class="inc-bar tri-form" id="inc-bar">
+        <span class="sub" id="inc-sel-n"></span>
+        <button type="button" id="inc-sel-all">select all shown</button>
+        <button type="button" id="inc-sel-none">clear the selection</button>
+        <span class="inc-bulk">verdict on the selection
+          <button type="button" class="tri-b sev1" id="inc-bulk-false">false</button>
+          <button type="button" class="tri-b sev0" id="inc-bulk-noise">noise</button>
+          <button type="button" class="tri-b sev2" id="inc-bulk-incident">incident</button>
+          <button type="button" class="tri-b tri-known" id="inc-bulk-known">known</button></span>
+        <label>note <input type="text" id="inc-note" maxlength="240" spellcheck="false" autocomplete="off" placeholder="optional, kept with each row"></label>
+      </div>
+      <div class="inc-bar tri-form">
+        <label>new incident <input type="text" id="inc-title" maxlength="96" spellcheck="false" autocomplete="off" placeholder="title, e.g. own test campaign"></label>
+        <label>state <select id="inc-state">
+          <option value="false">false</option>
+          <option value="noise">noise</option>
+          <option value="incident">incident</option>
+          <option value="known" selected>known (known good)</option>
+        </select></label>
+        <button type="button" id="inc-new-sel">from the selection</button>
+        <button type="button" id="inc-new-filter">from the list's type or address</button>
+      </div>
+      <div class="sub" id="inc-msg" role="status"></div>
+      <div class="sub">An incident is one verdict over many alerts: those added by id, and those its filter (a type, an address, when they began) takes, new ones included until it is closed ("auto" on the chip: began after the filter). An alert with its own later verdict keeps it. Grouped, the list below shows only the alerts in no incident. Kept in slothweb's store, never sent to sloth; a close or a removal is a new row.</div>
+    </section>
+    <section class="panel">
+      <div class="label">open first, then closed <span class="sub" id="al-count"></span> <span class="dt-tools" id="al-tools"></span></div>
+      <div class="hscroll" id="al-box"><div class="alprow dhead" id="al-head"></div>
+        <div id="al-rows"></div>
+      </div>
+      <button type="button" id="al-more" hidden>more</button>
+      <div class="sub">open: from the live stream; closed: the stream's resolved incidents and sloth.db's rows, every row of one alert key collapsed into one with its count of incidents. Click a row for what it is, why it matters and how to fix it.</div>
+    </section>
+   </div>
+   <div id="v-alert" hidden>
+    <div class="filterbar"><span id="ad-head"></span> <a href="#alerts" id="ad-back">back to the alerts</a> <a href="#overview">the overview</a></div>
+    <section class="panel">
+      <div class="label">alert <span class="sub" id="ad-note"></span></div>
+      <div class="adtitle" id="ad-title"></div>
+      <div id="ad-facts"></div>
+    </section>
+    <section class="panel" id="frrs-alert-triage" hidden aria-label="triage">
+      <div class="label">triage <span class="sub" id="frrs-tri-note"></span></div>
+      <div id="frrs-tri-cur"></div>
+      <div class="tri-btns tri-always" id="frrs-tri-btns"></div>
+      <div class="controls tri-form">
+        <label>note <input type="text" id="frrs-note" maxlength="240" spellcheck="false" autocomplete="off" placeholder="optional, kept with the change"> <span class="sub" id="frrs-note-n"></span></label>
+        <label>by <input type="text" id="frrs-by" maxlength="32" spellcheck="false" autocomplete="off" placeholder="your name (kept in this browser)"></label>
+      </div>
+      <div class="sub" id="frrs-tri-rec"></div>
+      <div class="label">every change, newest first <span class="sub" id="frrs-hist-note"></span> <span class="dt-tools" id="frrs-hist-tools"></span></div>
+      <div class="hscroll" id="frrs-hist-box"><div class="frhrow dhead" id="frrs-hist-head"></div>
+      <ol class="lst" id="frrs-hist"></ol></div>
+    </section>
+    <!-- The alert's links to anomalies and devices, and the candidates (web/ui/notes.js). -->
+    <section class="panel" id="notes-alert" hidden aria-label="linked anomalies and devices">
+      <div id="notes-alert-list"></div>
+      <div class="controls tri-form notes-form">
+        <label>link to <input type="text" id="notes-alert-to" maxlength="47" spellcheck="false" autocomplete="off" placeholder="an anomaly id, a MAC or a BLE address/type"></label>
+        <button type="button" id="notes-alert-add">link</button>
+      </div>
     </section>
     <section class="row2">
-      <div class="panel">
-        <div class="label">deauth timeline <span class="sub" id="w-da-note"></span></div>
-        <canvas class="chart" id="w-deauth" aria-label="deauthentication frames per bssid, flood episodes marked"></canvas>
-        <div class="sub">bars: deauth frames per bssid per cell; red behind them: DEAUTH_FLOOD episodes from sloth.db's alerts</div>
+      <div class="panel" id="ad-what">
+        <div class="label">what it is</div>
+        <div id="ad-what-b"></div>
       </div>
-      <div class="panel">
-        <div class="label">probe clients <span class="sub" id="w-pc-note"></span></div>
-        <canvas class="chart" id="w-probe" aria-label="probe clients over time, over their baseline band"></canvas>
+      <div class="panel" id="ad-why">
+        <div class="label">why it matters</div>
+        <div id="ad-why-b"></div>
       </div>
+    </section>
+    <section class="panel" id="ad-fix">
+      <div class="label">how to investigate and fix <span class="sub">docs/wiki/alert-remediation.md, built in</span></div>
+      <div id="ad-fix-b"></div>
+    </section>
+    <section class="row2">
+      <div class="panel" id="ad-evidence">
+        <div class="label">evidence</div>
+        <div id="ad-evidence-b"></div>
+      </div>
+      <div class="panel" id="ad-history">
+        <div class="label">history of this alert <span class="sub" id="ad-history-note"></span> <span class="dt-tools" id="ad-history-tools"></span></div>
+        <div class="hscroll" id="ad-history-box"><div class="arnrow dhead" id="ad-history-head"></div>
+        <ol class="alerts" id="ad-history-b"></ol></div>
+      </div>
+    </section>
+    <!-- G8 (docs/web-visual-spec.md F14, #171 V4): the chain of the
+         BSSID the alert names, web/ui/chain.js. -->
+    <section class="panel" id="ad-chain" hidden aria-label="the attack chain">
+      <div class="label">attack chain <span class="sub" id="ad-chain-note"></span></div>
+      <canvas class="chain" id="ad-chain-c" aria-label="the attack chain on the bssid this alert names: deauth, twin, association and karma lanes on one time axis"></canvas>
+      <div class="sub">the bssid this alert names, from a quarter of an hour before it began to five minutes after it was last seen: a lane per stage in the order the chain runs (deauth frames and DEAUTH_FLOOD, EVIL_TWIN, associations to it, KARMA_AP), each incident a bar in the severity it reached; under the lanes the links sloth made (a deauth taint, an attribution), from the stream</div>
+    </section>
+    <section class="panel" id="ad-device">
+      <div class="label">the device <span class="sub" id="ad-device-note"></span></div>
+      <div id="ad-device-b"></div>
+      <div class="label">24 h presence, 10 min cells <span class="sub" id="ad-sun"></span></div>
+      <canvas class="strip" id="ad-strip" aria-label="the device's presence over the last 24 hours"></canvas>
+      <div class="label">its other alerts <span class="dt-tools" id="ad-dev-alerts-tools"></span></div>
+      <div class="hscroll" id="ad-dev-alerts-box"><div class="adarow dhead" id="ad-dev-alerts-head"></div>
+      <ol class="alerts" id="ad-dev-alerts"></ol></div>
+      <div class="label">its anomalies</div>
+      <div class="cards" id="ad-dev-anoms"></div>
+    </section>
+    <div id="frrs-alert"></div>
+    <section class="panel" id="loc-alert" hidden aria-label="where the sensor was"></section>
+    <!-- The proof (web/ui/evidence.js): the alert page's last section,
+         the packet capture last in it. Another slice's section for this
+         page goes above it, never below. -->
+    <section class="panel" id="ev-alert" aria-label="the alert's proof: evidence, assessment and packet capture">
+      <div class="label">proof: observed against threshold</div>
+      <div id="ev-proof"></div>
+      <div class="label">assessment and bibliography <span class="sub" id="ev-asm-note"></span></div>
+      <div id="ev-asm"></div>
+      <div class="label">packet capture <span class="sub" id="ev-cap-note"></span></div>
+      <div id="ev-caps"></div>
+      <div class="ev-hash" id="ev-hash"></div>
+      <div class="ev-tools"><input type="search" id="ev-filter" maxlength="63" placeholder="filter the frames shown" aria-label="filter the frames shown"> <button type="button" id="ev-dl" hidden>download the pcap</button> <span class="dt-tools" id="ev-frames-tools"></span></div>
+      <div class="hscroll" id="ev-frames-box"><div class="evfrow dhead" id="ev-frames-head"></div>
+      <div class="ev-frames" id="ev-frames"></div></div>
+      <button type="button" id="ev-more" hidden>next frames</button>
+      <div class="sub">sloth's --pcap-dir files keep 64 bytes of each packet: a decode stops where the bytes do, and says so. 802.11 headers are read by sloth's own parsers (src/radiotap.c, src/dot11_frame.c, src/dot11_ie.c); the IP layers by slothweb's summary decoder. Click a frame (or Enter on it) for its fields and bytes; a column's header sorts the frames held, its edge resizes it, and both are kept in this browser.</div>
+    </section>
+   </div>
+   <div id="v-records" hidden>
+    <div class="filterbar"><span id="rc-filter-t">records by type, over the five seconds the records/s tile counts</span> <a href="#overview">back to the overview</a></div>
+    <section class="panel">
+      <div class="label">records by type <span class="sub" id="rc-note"></span> <span class="dt-tools" id="rc-tools"></span></div>
+      <div class="hscroll" id="rc-box"><div class="rcrow dhead" id="rc-head"></div>
+        <div id="rc-rows"></div>
+      </div>
+      <div class="sub">click a type to show only its records below</div>
+    </section>
+    <section class="panel">
+      <div class="label">records <span class="sub" id="rc-tick-note"></span> <span class="dt-tools" id="rc-ttools"></span></div>
+      <div class="hscroll" id="rc-tbox"><div class="tkrow dhead" id="rc-thead"></div>
+      <ol class="ticker" id="rc-ticker"></ol></div>
+    </section>
+   </div>
+   <div id="v-health" hidden>
+    <div class="filterbar"><span>sensor health: sources, receivers, the host, capture, monitor, stream, sloth.db</span> <a href="#overview">back to the overview</a></div>
+    <section class="panel" aria-label="sources and receivers">
+      <div class="label">sources <span class="sub" id="sy-note"></span> <span class="dt-tools" id="sy-src-tools"></span></div>
+      <p class="sub" id="sy-empty" hidden></p>
+      <div class="hscroll" id="sy-src-box"><div class="syrow dhead" id="sy-src-thead"></div><div id="sy-src-rows"></div></div>
+      <div class="sub" id="sy-src-cap"></div>
+      <div class="sub" id="sy-recall"></div>
+      <div class="label sy-second">attached receivers <span class="dt-tools" id="sy-hw-tools"></span></div>
+      <div class="hscroll" id="sy-hw-box"><div class="syrow dhead" id="sy-hw-thead"></div><div id="sy-hw-rows"></div></div>
+      <div class="sub" id="sy-hw-cap"></div>
+    </section>
+    <section class="panel" aria-label="the sensor host">
+      <div class="label">the sensor host</div>
+      <div class="kpis" id="sy-tiles"></div>
+      <div class="sub" id="sy-sys-cap"></div>
+    </section>
+    <section class="panel" aria-label="trends">
+      <div class="label">trends <label class="sub">window <select id="sy-win">
+        <option value="3600">1 h</option>
+        <option value="21600">6 h</option>
+        <option value="86400" selected>24 h</option>
+        <option value="604800">7 d</option>
+        <option value="2592000">30 d</option>
+      </select></label></div>
+      <div id="sy-trends"></div>
+      <div class="sub" id="sy-trend-cap"></div>
+    </section>
+    <section class="panel">
+      <div class="label">health <span class="sub" id="hl-note"></span></div>
+      <div id="hl-rows"></div>
     </section>
    </div>
    <div id="v-flows" hidden>
+    <section class="panel scope-empty" id="f-scope-empty"><div class="label">Flows</div><p>Nothing here under Monitor. The flows (SSH, RDP, SMB, SNMP, LDAP, Kerberos, BGP) are the IP capture's, on the host's own interfaces; sloth.db keeps no capture path, so its flow tables count as Local even when sloth captured IP off the air. Switch to Local or Hybrid to see them.</p></section>
     <section class="panel controls" aria-label="flow controls">
       <label>window <select id="f-win">
         <option value="3600">1 h</option>
@@ -225,19 +1018,29 @@
         <option value="src">source</option>
       </select></label>
       <label>ip <input type="search" id="f-ip" maxlength="45" spellcheck="false" autocomplete="off" placeholder="192.0.2.10"></label>
+      <label>draw <select id="f-mode">
+        <option value="matrix" selected>who talks to whom (matrix)</option>
+        <option value="chord">chord</option>
+      </select></label>
       <span class="sub" id="f-note">sloth.db's protocol tables, read-only</span>
+      <span class="sub dbage" id="f-dbage"></span>
     </section>
     <section class="panel">
       <div class="label">source &#8594; destination, by protocol <span class="sub" id="f-fold"></span></div>
-      <canvas class="chord" id="f-chord" aria-label="chord diagram: the busiest source to destination pairs, coloured by protocol; the fold note above says what was left out"></canvas>
-      <div class="legend" id="f-legend"></div>
-      <div class="sub">each line runs from a source to a destination (the arrowhead), its width by its count, its colour by protocol and named in the legend; red: an SMB1 session. ldap and kerb record a source only and are not drawn. Click an address to filter the table by it.</div>
+      <!-- The matrix first, the chord second (owner ruling 4 of
+           2026-10-26; docs/web-visual-spec.md F11, #171 V4). -->
+      <div class="hscroll" id="f-mx-box"><canvas class="fmx" id="f-matrix" aria-label="source by destination matrix: a row per source, a column per destination, both in address order with subnets grouped; each cell the pair's count as a bar and a number, its protocols as letters"></canvas></div>
+      <div class="sub" id="f-mx-note"></div>
+      <div class="sub" id="f-mx-sub">a row per source, a column per destination, both in address order, a line where the subnet (/24, /64) changes; a cell: the pair's count as a bar on one scale and as a number, its protocols as letters in the corner (S ssh, R rdp, M smb, N snmp, B bgp); red: an SMB1 session. ldap and kerb record a source only and are not drawn. Click an address or a cell to filter the table by it.</div>
+      <canvas class="chord" id="f-chord" hidden aria-label="chord diagram: the busiest source to destination pairs, coloured by protocol; the fold note above says what was left out"></canvas>
+      <div class="legend" id="f-legend" hidden></div>
+      <div class="sub" id="f-ch-sub" hidden>each line runs from a source to a destination (the arrowhead), its width by its count, its colour by protocol and named in the legend; red: an SMB1 session. ldap and kerb record a source only and are not drawn. Click an address to filter the table by it.</div>
     </section>
     <section class="panel">
-      <div class="label">flows <span class="sub" id="f-count"></span></div>
+      <div class="label">flows <span class="sub" id="f-count"></span> <span class="dt-tools" id="f-tools"></span></div>
       <div class="chips" id="f-tabs" role="tablist" aria-label="protocol tables"></div>
-      <div class="hscroll">
-        <div class="frow dhead" id="f-head" aria-hidden="true"></div>
+      <div class="hscroll" id="f-box">
+        <div class="frow dhead" id="f-head"></div>
         <div id="f-rows"></div>
       </div>
       <button type="button" id="f-more" hidden>more</button>
@@ -246,9 +1049,10 @@
    </div>
    <div id="v-history" hidden>
     <section class="panel">
-      <div class="label">the last 30 days <span class="sub" id="h-range"></span></div>
+      <div class="label">the last 30 days <span class="sub" id="h-range"></span> <span class="sub dbage" id="h-dbage"></span></div>
       <canvas class="ovw" id="h-strip" aria-label="30 days: devices first seen and alerts begun; drag to pick a range"></canvas>
-      <div class="sub">drag to pick a range; top: devices first seen, bottom: alerts begun; white ticks: survey sessions, one click each for what was new</div>
+      <div class="sub" id="h-strip-note"></div>
+      <div class="sub">drag to pick a range; upper lane: devices first seen, lower: alerts begun, each tick as tall as its cell's count on the one scale; full-height ticks: survey sessions, one click each for what was new</div>
       <div class="chips" id="h-sessions"></div>
     </section>
     <section class="panel">
@@ -256,13 +1060,15 @@
       <div id="h-new"></div>
     </section>
     <section class="panel">
-      <div class="label">who was here <span class="sub" id="h-dev-count"></span></div>
-      <div class="hscroll"><div id="h-devs"></div></div>
+      <div class="label">who was here <span class="sub" id="h-dev-count"></span> <span class="dt-tools" id="h-devs-tools"></span></div>
+      <div class="sub" id="h-sun"></div>
+      <div class="hscroll" id="h-devs-box"><div class="hrow dhead" id="h-devs-head"></div><div id="h-devs"></div></div>
     </section>
     <section class="row2">
       <div class="panel">
-        <div class="label">alerts in the range <span class="sub" id="h-al-count"></span></div>
-        <ol class="alerts" id="h-alerts"></ol>
+        <div class="label">alerts in the range <span class="sub" id="h-al-count"></span> <span class="dt-tools" id="h-alerts-tools"></span></div>
+        <div class="hscroll" id="h-alerts-box"><div class="halrow dhead" id="h-alerts-head"></div>
+        <ol class="alerts" id="h-alerts"></ol></div>
       </div>
       <div class="panel">
         <div class="label">anomalies in the range</div>
@@ -270,11 +1076,12 @@
       </div>
     </section>
     <section class="panel">
-      <div class="label">flows in the range</div>
-      <ol class="alerts" id="h-flows"></ol>
+      <div class="label">flows in the range <span class="dt-tools" id="h-flows-tools"></span></div>
+      <div class="hscroll" id="h-flows-box"><div class="hflrow dhead" id="h-flows-head"></div>
+      <ol class="alerts" id="h-flows"></ol></div>
     </section>
     <section class="panel" id="h-sql" hidden>
-      <div class="label">sql over sloth.db, read-only <span class="sub" id="q-note"></span></div>
+      <div class="label">sql over sloth.db, read-only <span class="scopechip unscoped">unscoped: raw sloth.db</span> <span class="sub" id="q-note"></span></div>
       <div class="controls"><label>recipe <select id="q-recipe"></select></label>
       <button type="button" id="q-run">run</button></div>
       <textarea id="q-sql" rows="6" spellcheck="false" autocomplete="off" aria-label="one SELECT or WITH statement"></textarea>
@@ -282,7 +1089,165 @@
       <div class="qout" id="q-out"></div>
     </section>
    </div>
+   <div id="v-fleet" hidden>
+    <section class="panel">
+      <div class="label">sites <span class="sub" id="fleet-head"></span></div>
+      <div class="sub" id="fleet-empty" hidden>no peer: this slothweb pulls no other sensor. Start it with <code>--peer NAME=URL</code> for each of your other sensors, URL that sensor's slothweb at its tailnet address, and let each admit the other with <code>--web-allow</code> (docs/wiki/fleet.md). Nothing is shared by default.</div>
+      <svg id="fleet-map" viewBox="0 0 600 300" role="img" aria-label="the sites on an equirectangular map fitted to them, north up, with the distance between each pair, the emitters located from two or more sites' signal strength, and a metre scale"><g id="fleet-map-g"></g></svg>
+      <div class="sub" id="fleet-map-note"></div>
+      <div class="label">located emitters <span class="sub" id="fleet-loc-note"></span></div>
+      <div class="hscroll"><div class="fleet-loc dhead"><span>key</span><span>range from each site, m (band)</span><span>nearer</span><span>method</span></div>
+      <div id="fleet-loc-rows"></div></div>
+    </section>
+    <section class="panel">
+      <div class="label">GNSS across the sites <span class="sub" id="fleet-gnss-note"></span></div>
+      <div class="fleet-cards" id="fleet-gnss-sites"></div>
+      <div class="label">baseline</div>
+      <div id="fleet-gnss-base"></div>
+      <div class="label">events</div>
+      <div class="hscroll"><div class="fleet-gev dhead"><span>when</span><span>site</span><span>event</span><span>verdict</span><span>the other sites</span></div>
+      <div id="fleet-gnss-rows"></div></div>
+      <div class="sub">each site's receiver as its export last said; the baseline is the distance between two static sites now against the distance between their reference positions (each the median of a week of fixes), bounded by 3 x (eph + eph); an event is regional when a site within the region shows the same class within the window, local when the sites there were seen observing through the window and showed nothing (seen at one site only while the others watched; it does not say where a source is), undetermined when none was, or before a pull of each after the window closed. Fleet findings, not sloth alerts.</div>
+    </section>
+    <section class="panel">
+      <div class="label">aircraft across the sites <span class="sub" id="fleet-ac-note"></span></div>
+      <div class="fleet-cards" id="fleet-ac-sites"></div>
+      <div class="hscroll"><div class="fleet-ac dhead"><span>aircraft</span><span>reported</span><span>heard at</span><span>verdict</span><span>the other receivers</span></div>
+      <div id="fleet-ac-rows"></div></div>
+      <div class="sub">each receiver as its export last said, and its demonstrated coverage: each 30-degree sector's reach over a day (the median of its hourly farthest decoded position), from its own position, north up, clockwise, scaled to the farthest single decode. An aircraft is confirmed when two receivers heard it at overlapping times; unconfirmed when its reported position lies within 0.8 of another receiver's reach in that sector and of the radio horizon from its ground, and that receiver, answering and hearing other aircraft throughout, did not hear it (a spoof suspect, or a shadowed receiver); out of coverage when the position is beyond that; undetermined otherwise, and always while the fleet has one receiver. Fleet findings, not sloth alerts.</div>
+    </section>
+    <section class="panel">
+      <div class="label">identity across the sites <span class="sub" id="fid-note"></span></div>
+      <div class="sub" id="fid-config" hidden></div>
+      <div class="hscroll"><div class="fid-row dhead"><span>finding</span><span>subject</span><span>each site's part</span><span>applies</span></div>
+      <div id="fid-rows"></div></div>
+      <div class="label">verdicts at the other sites</div>
+      <div class="hscroll"><div class="fid-ver dhead"><span>address</span><span>each site's verdict</span></div>
+      <div id="fid-ver-rows"></div></div>
+      <div class="sub">I2: a client at one site probing for a network another site names as its own (--my-ssid), someone who has been there; a randomised probe address is left out, and a client triaged known at any site is exonerated. I3: a site's own BSSID, or its own SSID from a BSSID it does not name, heard at a site its network cannot reach, and one BSSID heard at two sites further apart than both reach together within 10 minutes: a clone or a lure. I4: one beacon fingerprint (IE order and vendor IEs) on an AP an evil-twin or KARMA alert names at two sites, in the order of their first attack. I8: one address triaged known at one site and incident at another. Reach is an AP at 20 dBm heard down to the weakest AP signal the site holds less 20 dB; at sites within it the checks that need distance do not apply. Each basis on hover. A peer's verdict is shown here and never written into this site's triage. Fleet findings, not sloth alerts.</div>
+    </section>
+    <section class="panel">
+      <div class="label">peers</div>
+      <div class="fleet-cards" id="fleet-cards"></div>
+      <div class="sub">each peer's last good pull and attempt (this slothweb's clock), its last refusal, its clock less this one's at the last good pull, the rows held from it by kind, and whether a kind cut at its cap is still being fetched a page a pull (backfill)</div>
+    </section>
+    <section class="panel">
+      <div class="label">seen at more than one site <span class="sub" id="fleet-shared-note"></span>
+        <label class="sub">kind <select id="fleet-kind"><option value="wifi" selected>Wi-Fi devices</option><option value="ble">BLE advertisers</option><option value="ap">access points</option><option value="probe">probed SSIDs</option></select></label></div>
+      <div class="hscroll"><div class="fleet-row dhead"><span>key</span><span>label</span><span>verdict</span><span>first to last seen, per site</span></div>
+      <div id="fleet-shared-rows"></div></div>
+      <div class="sub" id="fleet-axis"></div>
+      <div class="sub">a key a peer sent that this site's sloth.db (or, for BLE, slothweb's own table) holds too, each site's first and last seen on one time axis; a verdict is this site's triage of a finding at that address, else the newest a peer sent. A random MAC that rotates is a new key at each site. Observation only: no row here is a finding.</div>
+    </section>
+   </div>
+   <div id="v-tacdb" hidden>
+    <div class="filterbar"><span id="tc-note">operator data: not captured, not scoped; the evidence under each emitter is</span> <span class="sub" id="tc-counts"></span></div>
+    <section class="row2">
+      <div class="panel" aria-label="units">
+        <div class="label">units and subordinate units <span class="sub" id="tc-u-note"></span> <span class="dt-tools" id="tc-units-tools"></span></div>
+        <div class="hscroll" id="tc-units-box"><div class="tcurow dhead" id="tc-units-head"></div>
+        <div id="tc-units"></div></div>
+        <div class="controls tc-form" id="tc-u-form">
+          <label>name <input type="text" id="tc-u-name" maxlength="64" spellcheck="false" autocomplete="off" placeholder="home, office, car"></label>
+          <label>kind <select id="tc-u-kind">
+            <option value="site" selected>site</option>
+            <option value="area">area</option>
+            <option value="room">room</option>
+            <option value="vehicle">vehicle</option>
+            <option value="person">person</option>
+            <option value="other">other</option>
+          </select></label>
+          <label>under <select id="tc-u-parent"><option value="" selected>(top level)</option></select></label>
+          <button type="button" id="tc-u-add">new unit</button>
+          <button type="button" id="tc-u-edit">rename / move the selected</button>
+          <button type="button" id="tc-u-del">delete / restore the selected</button>
+        </div>
+        <div class="sub" id="tc-u-msg"></div>
+      </div>
+      <div class="panel" aria-label="suggestions">
+        <div class="label">suggested from sloth's correlations <span class="sub" id="tc-s-note"></span> <span class="dt-tools" id="tc-sug-tools"></span></div>
+        <div class="hscroll" id="tc-sug-box"><div class="tcsrow dhead" id="tc-sug-head"></div>
+        <div id="tc-sug"></div></div>
+        <div class="sub">each says "may be one platform", never "is the same device": a hypothesis about radios, never an identification of a person (docs/wiki/mac-randomisation.md)</div>
+        <div class="sub" id="tc-s-msg"></div>
+      </div>
+    </section>
+    <section class="panel" aria-label="platforms">
+      <div class="label">platforms, by nomenclature <span class="sub" id="tc-p-note"></span> <span class="dt-tools" id="tc-plat-tools"></span></div>
+      <div class="controls">
+        <label>search <input type="search" id="tc-q" maxlength="63" spellcheck="false" autocomplete="off" placeholder="nomenclature, vendor or address"></label>
+        <span class="sub" id="tc-unit-sel"></span>
+      </div>
+      <div class="hscroll" id="tc-plat-box"><div class="tcprow dhead" id="tc-plat-head"></div>
+      <div id="tc-plat"></div></div>
+      <div class="controls tc-form" id="tc-p-form">
+        <label>nomenclature <input type="text" id="tc-p-nom" maxlength="64" spellcheck="false" autocomplete="off" placeholder="work laptop"></label>
+        <label>class <select id="tc-p-class">
+          <option value="unknown" selected>unknown</option>
+          <option value="phone">phone</option>
+          <option value="laptop">laptop</option>
+          <option value="ap">ap</option>
+          <option value="iot">iot</option>
+          <option value="camera">camera</option>
+          <option value="wearable">wearable</option>
+          <option value="vehicle">vehicle</option>
+          <option value="infrastructure">infrastructure</option>
+          <option value="other">other</option>
+        </select></label>
+        <label>unit <select id="tc-p-unit"><option value="" selected>(unfiled)</option></select></label>
+        <button type="button" id="tc-p-add">new platform</button>
+      </div>
+      <div class="sub" id="tc-p-msg"></div>
+      <div class="controls tc-form">
+        <button type="button" id="tc-export">export (JSON Lines)</button>
+        <label>import <input type="file" id="tc-imp-file" accept=".jsonl,.json,application/json"></label>
+        <button type="button" id="tc-imp-check">check the file</button>
+        <button type="button" id="tc-imp-merge">merge it</button>
+        <span class="sub" id="tc-imp-msg"></span>
+      </div>
+    </section>
+    <section class="panel" id="tc-platform" hidden aria-label="the platform">
+      <div class="label">platform <b id="tc-pv-title"></b> <span class="sub" id="tc-pv-note"></span> <span id="bundle-btn-tacdb"></span> <span class="dt-tools" id="tc-em-tools"></span></div>
+      <div id="tc-pv-kv"></div>
+      <div class="label">equipment complement</div>
+      <div class="hscroll" id="tc-em-box"><div class="tcerow dhead" id="tc-em-head"></div>
+      <div id="tc-em"></div></div>
+      <div class="controls tc-form" id="tc-pv-form">
+        <label>rename <input type="text" id="tc-pv-nom" maxlength="64" spellcheck="false" autocomplete="off"></label>
+        <label>file under <select id="tc-pv-unit"><option value="" selected>(unfiled)</option></select></label>
+        <button type="button" id="tc-pv-save">save</button>
+        <button type="button" id="tc-pv-del">delete / restore</button>
+      </div>
+      <div class="controls tc-form" id="tc-e-form">
+        <label>emitter <select id="tc-e-kind">
+          <option value="sta" selected>Wi-Fi station</option>
+          <option value="bssid">BSSID</option>
+          <option value="ble">BLE (addr/type)</option>
+        </select></label>
+        <label>address <input type="text" id="tc-e-addr" maxlength="19" spellcheck="false" autocomplete="off" placeholder="aa:bb:cc:dd:ee:ff or /1 for BLE"></label>
+        <label>role <select id="tc-e-role">
+          <option value="primary" selected>primary</option>
+          <option value="mld-link">mld-link</option>
+          <option value="rotation">rotation</option>
+          <option value="vap">vap</option>
+          <option value="other">other</option>
+        </select></label>
+        <label>label <input type="text" id="tc-e-label" maxlength="32" spellcheck="false" autocomplete="off"></label>
+        <button type="button" id="tc-e-add">add to the platform</button>
+      </div>
+      <div class="sub" id="tc-pv-msg"></div>
+      <div id="tc-pv-detail"></div>
+      <div class="sub">no location axis &#183; sloth decrypts nothing</div>
+    </section>
+   </div>
    <div id="v-activity" hidden>
+    <div class="filterbar" id="a-focus-bar" hidden><span id="a-focus-t"></span> <a href="#activity">every metric</a> <a href="#overview">back to the overview</a></div>
+    <section class="panel" id="a-focus" hidden aria-label="throughput by interface">
+      <div class="label">throughput by interface, 24 h <span class="sub" id="a-focus-note"></span></div>
+      <div id="a-ifaces"></div>
+      <div class="label">top hosts, last hour <span class="sub" id="a-hosts-note"></span></div>
+      <div class="multi" id="a-hosts"></div>
+    </section>
     <section class="panel controls" aria-label="activity controls">
       <label>metric <select id="a-metric"></select></label>
       <label>key <select id="a-key"></select></label>
@@ -297,36 +1262,181 @@
       <span class="sub" id="a-note"></span>
     </section>
     <section class="panel">
-      <div class="label"><span id="a-title">-</span> <span class="sub" id="a-src"></span></div>
+      <div class="label"><span id="a-title">-</span> <button type="button" class="dt-reset" id="ak-mode" aria-pressed="false" title="one: the picked key over its baseline band; all: every key of the metric on this graph, one colour a key, on one shared scale, with a legend">keys: one</button> <span class="sub" id="a-src"></span></div>
       <canvas class="chart" id="a-chart" height="240" aria-label="band chart"></canvas>
       <div class="sub" id="a-hover">bucket value over its baseline band (mean &#177; k sd for its hour of the week)</div>
+      <div id="ak-box" hidden>
+        <canvas class="chart" id="ak-chart" aria-label="every key of the metric on one scale, one colour a key; the legend below lists them"></canvas>
+        <div class="sub" id="ak-hover"></div>
+        <div class="ak-head"><input type="search" id="ak-filter" maxlength="63" spellcheck="false" autocomplete="off" placeholder="filter the keys listed" aria-label="filter the keys listed" hidden> <span class="sub" id="ak-rule"></span> <button type="button" class="dt-reset" id="ak-all" hidden>show every key</button></div>
+        <div class="ak-legend" id="ak-legend" role="list" aria-label="every key drawn, its colour and its latest value"></div>
+        <button type="button" class="dt-reset" id="ak-more" hidden>show more</button>
+      </div>
     </section>
     <section class="panel">
-      <div class="label">every key, last hour at 10 s <span class="sub" id="a-multi-note"></span></div>
+      <div class="label">every key, last hour at 10 s <button type="button" class="dt-reset" id="a-scale" aria-pressed="false" title="shared: every cell on one y-scale, its top in the caption; own: each cell on its own, its top in the cell">scale: shared</button> <span class="sub" id="a-multi-note"></span></div>
       <div class="multi" id="a-multi"></div>
     </section>
    </div>
   </main>
   <aside class="drawer" id="drawer" hidden aria-label="device">
-    <div class="dr-hd">
+    <div class="dr-hd" id="dr-hd">
       <span class="sw" id="dr-sw"></span>
       <b id="dr-mac">-</b>
       <span class="sub" id="dr-note"></span>
       <button type="button" id="dr-close">close</button>
     </div>
     <div id="dr-body"></div>
-    <div class="label">24 h presence, 10 min cells</div>
+    <div class="label">24 h presence, 10 min cells <span class="sub" id="dr-sun"></span></div>
     <canvas class="strip" id="dr-strip" aria-label="presence over the last 24 hours"></canvas>
+    <div id="dr-rf"></div>
+    <!-- The BSSID's KARMA evidence, a line and its detail (web/ui/karma.js). -->
+    <div class="sub" id="dr-karma" hidden></div>
+    <div id="dr-chain" hidden>
+      <div class="label">attack chain, 24 h <span class="sub" id="dr-chain-note"></span></div>
+      <canvas class="chain" id="dr-chain-c" aria-label="the attack chain on this bssid over the last 24 hours"></canvas>
+    </div>
     <div class="label">hour of week presence <span class="sub" id="dr-week-note"></span></div>
     <canvas class="heat" id="dr-week" aria-label="share of weeks present by local hour, Monday first"></canvas>
     <div class="label">anomalies</div>
     <div class="cards" id="dr-anoms"></div>
+    <div id="notes-drawer" hidden>
+      <div id="notes-drawer-list"></div>
+      <div class="controls tri-form notes-form">
+        <label>link to <input type="text" id="notes-dev-to" maxlength="47" spellcheck="false" autocomplete="off" placeholder="an alert id (d12) or an anomaly id"></label>
+        <button type="button" id="notes-dev-add">link</button>
+      </div>
+    </div>
+    <!-- Plain notes on the device (web/ui/subnotes.js). -->
+    <div class="subnotes" id="subnotes-dev" hidden>
+      <div class="label">notes <span class="sub" id="subnotes-dev-note"></span></div>
+      <ol class="lst" id="subnotes-dev-list"></ol>
+      <div class="controls tri-form notes-form">
+        <label>note <input type="text" id="subnotes-dev-text" maxlength="240" spellcheck="false" autocomplete="off" placeholder="what you know about it"> <span class="sub" id="subnotes-dev-n"></span></label>
+        <button type="button" id="subnotes-dev-add">add note</button>
+      </div>
+      <div class="sub tri-msg" id="subnotes-dev-msg"></div>
+    </div>
+    <div id="frrs-drawer"></div>
+    <div id="loc-drawer" hidden></div>
+    <div id="dr-vendor"></div>
   </aside>
-  <footer class="foot" aria-label="sources">
+  <!-- An anomaly's triage, notes and links (web/ui/notes.js): the same
+       states, note bound and write route as an alert's triage panel. -->
+  <dialog class="notes" id="notes-dlg" aria-label="anomaly triage">
+    <div class="dr-hd">
+      <span class="d-dim">anomaly triage</span>
+      <b id="notes-title" class="d-normal">-</b>
+      <button type="button" id="notes-close">close</button>
+    </div>
+    <div class="sub" id="notes-desc"></div>
+    <div id="notes-cur"></div>
+    <div class="tri-btns tri-always" id="notes-btns"></div>
+    <div class="controls tri-form">
+      <label>note <input type="text" id="notes-note" maxlength="240" spellcheck="false" autocomplete="off" placeholder="optional, kept with the change or the link"> <span class="sub" id="notes-note-n"></span></label>
+    </div>
+    <div class="sub tri-msg" id="notes-msg"></div>
+    <div class="label">every change, newest first <span class="sub" id="notes-hist-note"></span></div>
+    <ol class="lst" id="notes-hist"></ol>
+    <div class="label">linked by the operator</div>
+    <div class="sub" id="notes-rel-note"></div>
+    <ol class="lst" id="notes-links"></ol>
+    <div class="label">possibly related</div>
+    <ol class="lst" id="notes-sugg"></ol>
+    <div class="controls tri-form">
+      <label>link to <input type="text" id="notes-to" maxlength="47" spellcheck="false" autocomplete="off" placeholder="an alert id (d12), an anomaly id, a MAC or a BLE address/type"></label>
+      <button type="button" id="notes-add">link</button>
+    </div>
+  </dialog>
+  <aside class="drawer" id="bdrawer" hidden aria-label="ble advertiser">
+    <div class="dr-hd">
+      <span class="d-dim">BLE advertiser</span>
+      <b id="bdr-addr" class="d-normal">-</b>
+      <span class="sub" id="bdr-note"></span>
+      <span id="bundle-btn-ble"></span>
+      <button type="button" id="bdr-close">close</button>
+    </div>
+    <div id="bdr-body"></div>
+    <div class="label">24 h presence, 15 min cells <span class="sub" id="bdr-strip-note"></span></div>
+    <canvas class="strip" id="bdr-strip" aria-label="this row's presence over the last 24 hours"></canvas>
+    <div class="sub" id="bdr-sun"></div>
+    <div class="label">advertising rate <span class="sub" id="bdr-rate-note"></span></div>
+    <canvas class="spark" id="bdr-rate" aria-label="advertisements per second between this row's records"></canvas>
+    <div class="label">signal over the waterfall's window <span class="sub" id="bledev-rssi-note"></span></div>
+    <canvas class="spark bledev-rssi" id="bledev-rssi" role="img" aria-label="this address's signal strength as an S-meter: the last sample, and the window's least and greatest"></canvas>
+    <div class="sub" id="bledev-class"></div>
+    <div class="sub" id="bledev-chans" hidden></div>
+    <div class="label">ble alerts naming it</div>
+    <div id="bdr-alerts"></div>
+    <div id="notes-bdrawer" hidden>
+      <div id="notes-bdrawer-list"></div>
+      <div class="controls tri-form notes-form">
+        <label>link to <input type="text" id="notes-ble-to" maxlength="47" spellcheck="false" autocomplete="off" placeholder="an alert id (d12) or an anomaly id"></label>
+        <button type="button" id="notes-ble-add">link</button>
+      </div>
+    </div>
+    <!-- Plain notes on the BLE advertiser (web/ui/subnotes.js). -->
+    <div class="subnotes" id="subnotes-ble" hidden>
+      <div class="label">notes <span class="sub" id="subnotes-ble-note"></span></div>
+      <ol class="lst" id="subnotes-ble-list"></ol>
+      <div class="controls tri-form notes-form">
+        <label>note <input type="text" id="subnotes-ble-text" maxlength="240" spellcheck="false" autocomplete="off" placeholder="what you know about it"> <span class="sub" id="subnotes-ble-n"></span></label>
+        <button type="button" id="subnotes-ble-add">add note</button>
+      </div>
+      <div class="sub tri-msg" id="subnotes-ble-msg"></div>
+    </div>
+  </aside>
+  <aside class="drawer" id="sdrawer" hidden aria-label="ssid">
+    <div class="dr-hd">
+      <span class="d-dim">SSID</span>
+      <b id="sdr-name">-</b>
+      <span class="sub" id="sdr-note"></span>
+      <button type="button" id="sdr-close">close</button>
+    </div>
+    <div id="sdr-body"></div>
+    <div class="label">24 h presence, 10 min cells</div>
+    <canvas class="strip" id="sdr-strip" aria-label="presence of this SSID's access points over the last 24 hours"></canvas>
+    <div class="sub" id="sdr-strip-note"></div>
+    <div id="sdr-lists"></div>
+    <!-- Plain notes on the SSID (web/ui/subnotes.js). -->
+    <div class="subnotes" id="subnotes-ssid" hidden>
+      <div class="label">notes <span class="sub" id="subnotes-ssid-note"></span></div>
+      <ol class="lst" id="subnotes-ssid-list"></ol>
+      <div class="controls tri-form notes-form">
+        <label>note <input type="text" id="subnotes-ssid-text" maxlength="240" spellcheck="false" autocomplete="off" placeholder="what you know about it"> <span class="sub" id="subnotes-ssid-n"></span></label>
+        <button type="button" id="subnotes-ssid-add">add note</button>
+      </div>
+      <div class="sub tri-msg" id="subnotes-ssid-msg"></div>
+    </div>
+  </aside>
+  <!-- One BSSID's KARMA detail (web/ui/karma.js, #187): what sloth's
+       stream holds for it, /api/lures/bssid. -->
+  <aside class="drawer" id="kdrawer" hidden aria-label="karma detail">
+    <div class="dr-hd">
+      <span class="d-dim">KARMA</span>
+      <span class="sw" id="kdr-sw"></span>
+      <b id="kdr-bssid" class="d-normal">-</b>
+      <span class="sub" id="kdr-note" aria-live="polite"></span>
+      <button type="button" id="kdr-close">close</button>
+    </div>
+    <div id="kdr-body"></div>
+    <div class="label">alerts naming it</div>
+    <ol class="lst" id="kdr-alerts"></ol>
+    <div class="sub" id="kdr-alerts-note"></div>
+    <div class="label">its row over time <span class="sub" id="kdr-hist-note"></span></div>
+    <div class="hscroll"><table class="qt" id="kdr-hist" aria-label="each change of this BSSID's karma_suspect row: when, and the counts sloth sent" hidden></table></div>
+    <div class="sub">from sloth's stream, as it sent it; nothing is sent. Each change of the row is kept from the first record that said it (from) to the newest that repeated it (to); the newest 16, from this connection. Alerts: KARMA_AP and KARMA_PROBE_FORGE incidents whose key names this BSSID, open and recently closed; each opens its alert page with its triage. Hardware: the attack-hardware verdict on the newest KARMA_AP record (suspected or corroborated, and the signal classes behind it). Probe response: the time from a station's probe request to this BSSID's response, as its beacon record carries it (JSONL 1.6.0); an observation sloth uses in no verdict, with no threshold. Counts, not a verdict: whether a count crossed a threshold is the alert's.</div>
+  </aside>
+  <footer class="foot" aria-label="slothweb">
     <span>sock <b id="sock">-</b></span>
     <span>db <b id="db">-</b></span>
     <span>store <b id="store">-</b></span>
+    <span>tick <b id="seq">-</b></span>
+    <span>up <b id="up">-</b></span>
+    <span>clients <b id="clients">-</b></span>
+    <span title="sensor.drops: sensor_health's libpcap and NIC drop deltas, the number the last bucket's and the glyph 24 h (Hybrid's series)">drops <b id="f-drops">-</b><canvas class="sg" id="f-drops-g" aria-label="the sensor's dropped frames, 24 h"></canvas></span>
     <span class="sub">passive: this page asks its own server and nothing else</span>
+    <button type="button" class="dt-reset" id="prefs-reset" title="forget every setting this browser keeps for this page: the view, the theme, the scope, the filters, each table's columns and sort">reset settings</button>
   </footer>
 </div>
 </body>

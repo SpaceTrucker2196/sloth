@@ -36,6 +36,8 @@
 #include "engine_internal.h"
 #include "ev_cite.h"
 #include "sloth_compat.h"
+#include "wifi_freq.h"
+#include "twin_field.h"   /* #193 field data, read-only hooks */
 
 /* ── Frame citations (#92 slice 4) ────────────────────────────
  *
@@ -88,20 +90,273 @@ static int twin_pair_evidence(const beacon_ap_t *first,
  * Request without B2 set cannot force anything, and a load-balancing
  * controller emits exactly those all day.
  *
+ * Not a steer from the candidate's own device (#188). An AP moving a
+ * client to its other radio names that radio as the destination under
+ * Disassociation Imminent, which is this marker's exact shape, and a
+ * field gateway went CRIT `class=impostor` for band-steering between
+ * its own :e6 and :e7. The steering BSSID being a sibling address of
+ * the candidate it names is the tell; such a row sets *self (may be
+ * NULL) and is otherwise skipped. An attacker who forges the real AP's
+ * BSSID as the steerer still names a rogue at some other address, so
+ * the chain this marker exists for is untouched unless the rogue also
+ * sits within two bytes of its victim, and then the pair is scored on
+ * what else it shows.
+ *
  * Returns the steering AP's index in s->btm_steers[], or -1. */
 #define TWIN_STEER_WINDOW_S ((int)tune_val(TUNE_TWIN_STEER_WINDOW_S))
 
+static int bssid_diff_bytes(const uint8_t a[6], const uint8_t b[6]) {
+    int n = 0;
+    for (int i = 0; i < 6; i++) if (a[i] != b[i]) n++;
+    return n;
+}
+
 static int btm_steered_to(const sloth_state_t *s, const uint8_t bssid[6],
-                          time_t now) {
+                          time_t now, int *self) {
     for (int i = 0; i < s->btm_steer_count; i++) {
         const btm_steer_t *st = &s->btm_steers[i];
         if (st->imminent_count <= 0) continue;
         if (st->last_seen && now - st->last_seen > TWIN_STEER_WINDOW_S)
             continue;
-        for (int c = 0; c < st->candidate_count && c < MAX_AP_NEIGHBORS; c++)
-            if (memcmp(st->candidates[c], bssid, 6) == 0) return i;
+        for (int c = 0; c < st->candidate_count && c < MAX_AP_NEIGHBORS; c++) {
+            if (memcmp(st->candidates[c], bssid, 6) != 0) continue;
+            if (bssid_diff_bytes(st->bssid, bssid) <=
+                TWIN_SIBLING_MAX_DIFF_BYTES) {
+                if (self) *self = 1;
+                break;      /* this row is the device's own; try the next */
+            }
+            return i;
+        }
     }
     return -1;
+}
+
+/* A steer from another device at either half, `a` first. */
+static int twin_pair_steer(const sloth_state_t *s, const beacon_ap_t *a,
+                           const beacon_ap_t *b, time_t now, int *self) {
+    int i = btm_steered_to(s, a->bssid, now, self);
+    return i >= 0 ? i : btm_steered_to(s, b->bssid, now, self);
+}
+
+/* ── One device or two (#188) ──────────────────────────────────
+ * Why each of these exists, and the constants: src/alerts.h. */
+
+/* 6 GHz only on the HE 6 GHz Operation Information source, the
+ * ap_band_label() rule: the number alone collides with both other
+ * bands. UNKNOWN is an answer, and every caller treats it as "cannot
+ * say", never as "same" or "different". */
+static wifi_band_t twin_ap_band(const beacon_ap_t *ap) {
+    if (ap->channel <= 0) return WIFI_BAND_UNKNOWN;
+    if (ap->channel_source == CH_SRC_HE_6GHZ) return WIFI_BAND_6GHZ;
+    return wifi_freq_infer_band(ap->channel);
+}
+
+/* IEEE 802-2014 clause 8.2.2: the U/L bit. A locally administered
+ * address was not assigned from a vendor's block, so its first three
+ * octets are not an OUI. */
+static int bssid_is_laa(const uint8_t bssid[6]) {
+    return (bssid[0] & 0x02) != 0;
+}
+
+/* The 2.4 and 5 GHz (or 6 GHz) radios of one box. All three conditions
+ * are needed: address distance alone is how one vendor numbers a whole
+ * mesh, a band split alone is any two APs, and the window alone is
+ * everything in range at sensor start. An unset first_seen is "cannot
+ * say" as well, so a hand-built or restored entry is never a sibling. */
+static int twin_pair_is_sibling(const beacon_ap_t *a, const beacon_ap_t *b) {
+    if (bssid_diff_bytes(a->bssid, b->bssid) > TWIN_SIBLING_MAX_DIFF_BYTES)
+        return 0;
+    wifi_band_t ba = twin_ap_band(a), bb = twin_ap_band(b);
+    if (ba == WIFI_BAND_UNKNOWN || bb == WIFI_BAND_UNKNOWN || ba == bb)
+        return 0;
+    if (!a->first_seen || !b->first_seen) return 0;
+    time_t gap = a->first_seen > b->first_seen ? a->first_seen - b->first_seen
+                                               : b->first_seen - a->first_seen;
+    return gap <= TWIN_SIBLING_WINDOW_S;
+}
+
+/* ── Two devices that are meant to be there (#188, 2026-11-12) ─
+ * Why each exists: src/alerts.h. */
+#define TWIN_CRIT_MIN_BEACONS ((int)tune_val(TUNE_TWIN_CRIT_MIN_BEACONS))
+
+static int ascii_ieq(const char *a, const char *b);
+
+/* Carrier offload and roaming SSIDs: every subscriber's gateway
+ * broadcasts the name, so two vendors under it are two customers.
+ * "Spectrum Mobile" is the issue's field pair (two customers'
+ * Spectrum routers); the rest are the carrier rows of
+ * g_open_hotspot_ssids below, the names OPEN_SETUP_AP already treats as
+ * shared by design. Venue hotspots and guest networks are not here: one
+ * operator runs each, which is what a twin of one copies. Exact, case
+ * folded: a per-site suffix makes a name somebody's own network. */
+static const char *const g_carrier_ssids[] = {
+    "Spectrum Mobile",
+    "SpectrumWiFi",
+    "xfinitywifi",
+    "XFINITY",
+    "CableWiFi",
+    "CoxWiFi",
+    "Cox Mobile",
+    "optimumwifi",
+    "attwifi",
+};
+
+static int twin_ssid_is_carrier(const char *ssid) {
+    for (size_t i = 0; i < sizeof(g_carrier_ssids) / sizeof(g_carrier_ssids[0]);
+         i++)
+        if (ascii_ieq(ssid, g_carrier_ssids[i])) return 1;
+    return 0;
+}
+
+/* Heard at the decode margin, or on too few beacons to have been read
+ * twice. The strongest reading in the RSSI window, or the newest when
+ * the window has aged out; 0 in either is "unseen" and so is a
+ * frame_count of 0, which only a hand-built entry has (the table
+ * starts every entry at 1). */
+static int twin_ap_faint(const beacon_ap_t *ap) {
+    int peak = ap->rssi_max_60s ? ap->rssi_max_60s : ap->signal_dbm;
+    if (peak && peak <= TWIN_PROX_FLOOR_DBM) return 1;
+    return ap->frame_count > 0 && ap->frame_count < TWIN_CRIT_MIN_BEACONS;
+}
+
+/* A mesh node's guest VAP (#227): `vap` is locally administered and a
+ * globally administered BSSID with first octet `want0` and its low
+ * five octets is on its channel under another non-empty SSID. That
+ * address is unique in the table, so this is the parent or NULL. */
+static const beacon_ap_t *twin_mesh_parent(const sloth_state_t *s,
+                                           const beacon_ap_t *vap,
+                                           uint8_t want0) {
+    if (!bssid_is_laa(vap->bssid) || vap->channel <= 0) return NULL;
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *p = &s->beacon_aps[i];
+        if (p == vap || bssid_is_laa(p->bssid)) continue;
+        if (p->bssid[0] != want0) continue;
+        if (memcmp(p->bssid + 1, vap->bssid + 1, 5) != 0) continue;
+        if (p->channel != vap->channel) continue;
+        if (!p->ssid[0] || strcmp(p->ssid, vap->ssid) == 0) continue;
+        return p;
+    }
+    return NULL;
+}
+
+/* Both halves guest VAPs of two nodes of one mesh: each has a parent,
+ * the two parents share their first four octets and carry one main
+ * SSID, and they are two radios, not one. The parents' octets 1-5 are
+ * their VAPs', so that is the halves' octets 1-3 alike and 1-5 not,
+ * plus one first octet both parents carry. Every first octet a GA
+ * address in the table carries is tried, so a third address that
+ * happens to match one half's low five octets cannot hide the real
+ * parent.
+ *
+ * Two radios, because one parent is not a mesh: a copy of a single
+ * AP's guest VAP on another locally administered first octet (9a:..
+ * beside the real 9e:..) finds that AP's main network as the parent of
+ * both halves, and would otherwise be deducted for a shape it brought
+ * nothing to. One main SSID, because two GA addresses of one box
+ * under two SSIDs (a main and an IoT VAP, say) are not two nodes
+ * either, and a copy placed on the second one's low octets would ride
+ * them. Why the shape at all: src/alerts.h. */
+static int twin_pair_mesh_vap(const sloth_state_t *s, const beacon_ap_t *a,
+                              const beacon_ap_t *b) {
+    if (!s || !bssid_is_laa(a->bssid) || !bssid_is_laa(b->bssid)) return 0;
+    if (memcmp(a->bssid + 1, b->bssid + 1, 3) != 0) return 0;
+    if (memcmp(a->bssid + 1, b->bssid + 1, 5) == 0) return 0;
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *p = &s->beacon_aps[i];
+        /* Only an address that could be a's parent names a first
+         * octet worth asking about: one table pass per candidate, not
+         * per GA entry. */
+        if (bssid_is_laa(p->bssid) ||
+            memcmp(p->bssid + 1, a->bssid + 1, 5) != 0) continue;
+        const beacon_ap_t *pa = twin_mesh_parent(s, a, p->bssid[0]);
+        if (!pa) continue;
+        const beacon_ap_t *pb = twin_mesh_parent(s, b, p->bssid[0]);
+        if (pb && strcmp(pa->ssid, pb->ssid) == 0) return 1;
+    }
+    return 0;
+}
+
+/* ── The copy arrives after the original (#188, ruling 3b) ────
+ * The conditions and why each exists: src/alerts.h. */
+#define TWIN_LATE_ARRIVAL_S ((time_t)tune_val(TUNE_TWIN_LATE_ARRIVAL_S))
+
+/* Heard at least once every TWIN_STEADY_FRAME_S of the entry's life
+ * (#227). A frame_count of 0 is a hand-built entry: "cannot say", as
+ * in twin_ap_faint(). */
+static int twin_ap_steady(const beacon_ap_t *ap) {
+    if (ap->frame_count <= 0) return 1;
+    long long span = (long long)(ap->last_seen - ap->first_seen);
+    return (long long)ap->frame_count * TWIN_STEADY_FRAME_S >= span;
+}
+
+static int twin_sensor_moving(const sloth_state_t *s, time_t now);
+
+/* When the sensor was last known to be moving, 0 for never. Kept here
+ * because the fix history is 64 fixes deep and the question is asked
+ * for as long as the pair stands: a sensor that drove in, heard one AP
+ * at the gate and its mesh partner seven minutes later, then parked,
+ * holds that seven-minute gap for hours after the last moving fix has
+ * left the ring. twin_sensor_moving() looks RSSI_WIN_SECS back, so this
+ * trails the last moving fix by up to that much, which only lengthens
+ * the wait. Main-loop state like the rest of the scorer; alerts_clear()
+ * forgets it with the other rule history, so an operator who clears
+ * inside the wait after parking gets the gaps back early. */
+static time_t g_twin_moved_at;
+
+void rules_twin_forget(void) { g_twin_moved_at = 0; }
+
+static void twin_note_motion(const sloth_state_t *s, time_t now) {
+    if (s && twin_sensor_moving(s, now)) g_twin_moved_at = now;
+}
+
+/* Wall-clock differences, like the sibling window: first_seen and
+ * last_seen are evidence stamps and the table keeps no monotonic one.
+ * A step of the host clock between the two first sightings is
+ * therefore read as a gap (a host with no RTC corrected by NTP after
+ * sloth started): stamps already written do not move with the clock.
+ * Not guarded; the EVIL_TWIN assessment lists it. */
+static int twin_pair_late_arrival(const beacon_ap_t *a, const beacon_ap_t *b) {
+    if (!a->first_seen || !b->first_seen) return 0;
+    const beacon_ap_t *early = a->first_seen <= b->first_seen ? a : b;
+    const beacon_ap_t *late  = early == a ? b : a;
+    if (late->first_seen - early->first_seen < TWIN_LATE_ARRIVAL_S) return 0;
+    if (early->last_seen < late->first_seen) return 0;
+    /* An original heard only now and then makes everything later look
+     * late (#227); the gap is then sloth's, not the transmitter's. */
+    if (!twin_ap_steady(early)) return 0;
+    /* first_seen is the entry's, and the table rebuilds an entry it
+     * dropped: an AP that fell silent for BEACON_AGE_SECS, or lost its
+     * slot in a full table, comes back with a new one. Only a name
+     * this address has not carried before in the session is an arrival
+     * (beacon_ap_t.arrival); a return is not, and neither is an entry
+     * the table's memory can no longer vouch for. */
+    if (late->arrival != BEACON_ARRIVAL_NEW) return 0;
+    if (g_twin_moved_at &&
+        late->first_seen - g_twin_moved_at < TWIN_LATE_ARRIVAL_S)
+        return 0;
+    return 1;
+}
+
+/* #193 field data (twin_field.h). Reads the predicates above and
+ * writes nothing: the chain rule's verdict never depends on it. */
+int twin_late_laa_copy(const beacon_ap_t *orig, const beacon_ap_t *copy,
+                       unsigned *excl) {
+    if (excl) *excl = 0;
+    if (!orig || !copy || orig == copy) return 0;
+    if (!orig->ssid[0] || strcmp(orig->ssid, copy->ssid) != 0) return 0;
+    if (memcmp(orig->bssid, copy->bssid, 6) == 0) return 0;
+    if (!bssid_is_laa(copy->bssid)) return 0;
+    if (!orig->first_seen || copy->first_seen <= orig->first_seen) return 0;
+    if (!twin_pair_late_arrival(orig, copy)) return 0;
+    if (excl) {
+        if (twin_ssid_is_carrier(orig->ssid))
+            *excl |= TWIN_FIELD_EXCL_CARRIER;
+        if (twin_ap_faint(orig) || twin_ap_faint(copy))
+            *excl |= TWIN_FIELD_EXCL_FAINT;
+        if (twin_pair_is_sibling(orig, copy))
+            *excl |= TWIN_FIELD_EXCL_SIBLING;
+    }
+    return 1;
 }
 
 int btm_candidate_is_twin(const sloth_state_t *s,
@@ -187,16 +442,6 @@ twin_class_t twin_classify(const twin_evidence_t *ev) {
     return TWIN_CLASS_UNKNOWN;
 }
 
-const char *twin_class_label(twin_class_t c) {
-    switch (c) {
-    case TWIN_CLASS_IMPERSONATOR: return "impostor";
-    case TWIN_CLASS_NEIGHBOR:     return "neighbor";
-    case TWIN_CLASS_DECLARED:     return "declared";
-    case TWIN_CLASS_UNKNOWN:
-    default:                      return "?";
-    }
-}
-
 void alert_pair_key(char *out, size_t n, const char *rule_id,
                     const uint8_t bssid_a[6], const uint8_t bssid_b[6],
                     const char *site, const char *security_profile) {
@@ -239,21 +484,34 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
     memset(&ev, 0, sizeof(ev));
     if (!a || !b) { if (out) *out = ev; return 0; }
 
-    ev.diff_oui = memcmp(a->bssid, b->bssid, 3) != 0;
-    ev.same_oui = !ev.diff_oui;
+    twin_note_motion(s, now);
+    ev.sibling = twin_pair_is_sibling(a, b);
+
+    /* Two OUIs are comparable only when both are OUIs (#188). With a
+     * locally administered half neither flag is set: "different vendor"
+     * and "same vendor" are equally unfounded. */
+    if (!bssid_is_laa(a->bssid) && !bssid_is_laa(b->bssid)) {
+        ev.diff_oui = memcmp(a->bssid, b->bssid, 3) != 0;
+        ev.same_oui = !ev.diff_oui;
+    }
 
     /* Both sides emitted a usable vendor hash and they disagree →
      * firmware mismatch. Works on a same-OUI pair too, which is the
      * point: a clone that copied the OUI cannot also reproduce the
-     * victim's vendor IEs byte for byte. */
-    ev.hashes_differ = a->fp.vendor_ies_hash && b->fp.vendor_ies_hash &&
+     * victim's vendor IEs byte for byte. Within one band only (#188):
+     * a box's 2.4 and 5 GHz beacons carry different vendor IEs by
+     * design, so across bands the mismatch is true of nearly every
+     * dual-band AP and of no clone in particular. */
+    wifi_band_t band_a = twin_ap_band(a);
+    int same_band = band_a != WIFI_BAND_UNKNOWN && band_a == twin_ap_band(b);
+    ev.hashes_differ = same_band &&
+                       a->fp.vendor_ies_hash && b->fp.vendor_ies_hash &&
                        a->fp.vendor_ies_hash != b->fp.vendor_ies_hash;
 
     ev.attacker_oui = oui_is_hak5     (a->fp.oui) || oui_is_hak5     (b->fp.oui) ||
                       oui_is_espressif(a->fp.oui) || oui_is_espressif(b->fp.oui);
 
-    if (s) ev.steered = btm_steered_to(s, a->bssid, now) >= 0 ||
-                        btm_steered_to(s, b->bssid, now) >= 0;
+    if (s) ev.steered = twin_pair_steer(s, a, b, now, &ev.self_steer) >= 0;
 
     ev.nbr_claim = ap_infrastructure_peers(a, b);
 
@@ -271,6 +529,21 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
      * declared estate" from "nothing declared" (#89 slice 3). */
     ev.inv_consulted = inventory_loaded();
 
+    /* One device heard on two bands is not a pair, so nothing observed
+     * about it is evidence about a pair: the flags are cleared rather
+     * than left set with no weight, or the detail and the Twins view
+     * would go on describing a relationship the score has just denied.
+     * `inv_mismatch` is the exception and falls through to be scored as
+     * before. An operator who declared the SSID and left this BSSID
+     * out has said something no address arithmetic can answer. */
+    if (ev.sibling && !ev.inv_mismatch) {
+        ev.diff_oui = ev.same_oui = ev.hashes_differ = 0;
+        ev.attacker_oui = ev.steered = ev.nbr_claim = 0;
+        ev.confidence = TWIN_CONF_MIN;
+        if (out) *out = ev;
+        return 0;
+    }
+
     if (ev.diff_oui)      ev.positive += TWIN_W_DIFF_OUI;
     if (ev.hashes_differ) ev.positive += TWIN_W_IE_HASH;
     if (ev.attacker_oui) { ev.positive += TWIN_W_ATTACKER_OUI; ev.hard = 1; }
@@ -280,9 +553,30 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
      * an OUI; it cannot edit the file. This is what keeps a spoofed
      * neighbour claim from erasing an inventory mismatch. */
     if (ev.inv_mismatch) { ev.positive += TWIN_W_INV_MISMATCH; ev.hard = 1; }
+    /* Last, and only on a pair that is already one: it corroborates and
+     * never nominates (alerts.h). Below the sibling return, so one
+     * device's radios are never asked. And only where a half is locally
+     * administered, which is the case it was asked for: two globally
+     * administered addresses have their OUIs to be compared on. */
+    if (ev.positive > 0 &&
+        (bssid_is_laa(a->bssid) || bssid_is_laa(b->bssid)) &&
+        twin_pair_late_arrival(a, b)) {
+        ev.late_arrival = 1;
+        ev.positive += TWIN_W_LATE_ARRIVAL;
+    }
 
     if (ev.nbr_claim) ev.context += TWIN_C_NBR_CLAIM;
     if (ev.same_oui)  ev.context += TWIN_C_SAME_OUI;
+    /* Below the sibling return, like everything observed: one device's
+     * radios are no pair to explain. Both halves carry the one SSID. */
+    ev.carrier_ssid = twin_ssid_is_carrier(a->ssid);
+    if (ev.carrier_ssid) ev.context += TWIN_C_CARRIER_SSID;
+    /* Context like the carrier SSID: it never touches `hard`, so an
+     * attacker-tool OUI, a steer or an inventory mismatch still carries
+     * the row to CRIT. */
+    ev.mesh_vap = twin_pair_mesh_vap(s, a, b);
+    if (ev.mesh_vap) ev.context += TWIN_C_MESH_VAP;
+    ev.faint = twin_ap_faint(a) || twin_ap_faint(b);
 
     ev.confidence = clamp_conf(ev.positive - ev.context);
     if (out) *out = ev;
@@ -302,14 +596,23 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
     return ev.positive > 0;
 }
 
-/* One short, bounded phrase per context signal. ALERT_DETAIL_LEN is 256
- * and the SSID + two BSSIDs + cipher already take ~60 of it. The BTM
+/* One short, bounded phrase per context signal. ALERT_DETAIL_LEN is 320
+ * and the longest EVIL_TWIN detail is 292 (the same-OUI phrase needs
+ * two globally administered halves, the late-arrival one a locally
+ * administered half and the mesh-VAP one two, so same-OUI appears with
+ * neither, and late-arrival with mesh VAP is the longer pair by 7;
+ * test_twin_detail_fits_with_every_phrase). The BTM
  * steer is not here: it gets its own note naming the steering AP, which
- * is the actionable half. */
+ * is the actionable half. The longest note is 91. */
+#define TWIN_NOTE_LEN 112
 static void twin_evidence_note(char *out, size_t n, const twin_evidence_t *ev) {
-    snprintf(out, n, "%s%s%s",
+    snprintf(out, n, "%s%s%s%s%s%s%s",
              ev->inv_mismatch ? " +not in inventory"           : "",
+             ev->late_arrival ? " +late-arrival"               : "",
              ev->same_oui     ? " +same-vendor-OUI"            : "",
+             ev->carrier_ssid ? " +carrier SSID"               : "",
+             ev->mesh_vap     ? " +mesh VAP"                   : "",
+             ev->faint        ? " +faint"                      : "",
              ev->nbr_claim    ? " +802.11k claim (unverified)" : "");
 }
 
@@ -345,7 +648,104 @@ static void twin_pair_axes_note(char *out, size_t n, twin_class_t cls,
 }
 
 
-/* Captive-portal interception (#69).
+/* What sloth knows about the network a portal event happened on (#169).
+ *
+ * Per event, never per tick: the grade is a claim about *this* client's
+ * network, so each route has to tie the event to a BSS first. An
+ * escalation borrowed from some other station heard in the same window
+ * would make a hotel guest's LOW read as CRIT "on your own network".
+ *
+ *   monitor table  the event's client IP resolved to a MAC through the
+ *                  sensor's neighbour (ARP) table, and that MAC seen
+ *                  associated over the air. The newest association
+ *                  wins: a station that roamed is on the BSS it joined
+ *                  last.
+ *   station link   the sensor's own association, used only when the
+ *                  client or the responder is a neighbour on a Wi-Fi
+ *                  station interface, i.e. the event happened on the
+ *                  link the sensor is attached through.
+ *
+ * Neither route resolves the sensor's own probes when the answer comes
+ * from a public address: sloth holds no list of its own addresses, and
+ * such an event stays ungraded rather than being guessed into CRIT. */
+typedef struct {
+    char bss[20];      /* the client's BSS when resolved, "" otherwise */
+    int  on_twin;      /* that BSS, or the sensor's link, is an evil twin */
+    int  own_net;      /* ... or is a --my-ssid / --my-bssid network */
+} cp_ctx_t;
+
+/* The ARP row for `ip`, or NULL. */
+static const arp_entry_t *cp_neigh(const sloth_state_t *s, const char *ip) {
+    if (!ip || !ip[0]) return NULL;
+    for (int i = 0; i < s->arp_count && i < MAX_ARP_ENTRIES; i++)
+        if (strcmp(s->arp_entries[i].ip, ip) == 0) return &s->arp_entries[i];
+    return NULL;
+}
+
+/* Is `ip` a neighbour on a Wi-Fi station-mode interface? */
+static int cp_on_wifi_link(const sloth_state_t *s, const char *ip) {
+    const arp_entry_t *n = cp_neigh(s, ip);
+    if (!n || !n->iface[0]) return 0;
+    for (int i = 0; i < s->iface_count && i < MAX_IFACES; i++)
+        if (strcmp(s->ifaces[i].name, n->iface) == 0)
+            return s->ifaces[i].mode == IFACE_MODE_WIFI;
+    return 0;
+}
+
+static void cp_context(const sloth_state_t *s, const cp_event_t *e,
+                       cp_ctx_t *c) {
+    static const uint8_t zero[6];
+    memset(c, 0, sizeof(*c));
+
+    const arp_entry_t *n = cp_neigh(s, e->src);
+    if (n && memcmp(n->mac, zero, 6) != 0) {
+        const assoc_t *best = NULL;
+        for (int i = 0; i < s->assoc_count && i < MAX_ASSOC_ENTRIES; i++) {
+            const assoc_t *a = &s->assocs[i];
+            if (memcmp(a->sta_mac, n->mac, 6) != 0) continue;
+            if (!best || a->last_seen > best->last_seen) best = a;
+        }
+        if (best) {
+            mac_to_str(best->bssid, c->bss, sizeof(c->bss));
+            if (btm_candidate_is_twin(s, best->bssid)) c->on_twin = 1;
+            if (ownership_is_my_bssid(best->bssid) ||
+                (best->ssid[0] && ownership_is_my_ssid(best->ssid)))
+                c->own_net = 1;
+            return;
+        }
+    }
+
+    if (!cp_on_wifi_link(s, e->src) && !cp_on_wifi_link(s, e->server))
+        return;
+    for (int i = 0; i < s->ap_count && i < MAX_WIFI_APS; i++) {
+        const wifi_ap_t *ap = &s->aps[i];
+        if (ap->status != WIFI_STATUS_ASSOC) continue;
+        uint8_t mac[6];
+        int have_mac = ownership_parse_mac(ap->bssid, mac);
+        if (have_mac && btm_candidate_is_twin(s, mac)) c->on_twin = 1;
+        if ((have_mac && ownership_is_my_bssid(mac)) ||
+            (ap->ssid[0] && ownership_is_my_ssid(ap->ssid)))
+            c->own_net = 1;
+        if (have_mac)
+            snprintf(c->bss, sizeof(c->bss), "%.17s", ap->bssid);
+        break;
+    }
+}
+
+/* Did the same client receive a named kit's page in the window? */
+static const cp_event_t *cp_kit_for(const sloth_state_t *s,
+                                    const char *client, time_t now) {
+    if (!client || !client[0]) return NULL;
+    for (int i = 0; i < s->cp_event_count; i++) {
+        const cp_event_t *k = &s->cp_events[i];
+        if (k->kind != CP_KIND_KIT || !k->kit) continue;
+        if (k->ts && now - k->ts > 600) continue;
+        if (strcmp(k->src, client) == 0) return k;
+    }
+    return NULL;
+}
+
+/* Captive-portal interception (#69), graded since #169.
  *
  * Every modern OS probes a fixed URL to decide whether it is behind a
  * captive portal, and expects a published, byte-exact answer. That
@@ -354,40 +754,81 @@ static void twin_pair_axes_note(char *out, size_t n, twin_class_t cls,
  * answers with something else, and the victim's OS obligingly opens a
  * browser at the attacker's page.
  *
- * This is not a heuristic. The expected answer is documented and fixed,
- * so anything else on that host and path is an interception. The only
- * hard part is knowing whether the whole answer was seen, which is what
- * #71's body_complete is for.
+ * Whether the answer is the published one is not a heuristic. Whether
+ * that means an *attack* is: a hotel, airport or guest-Wi-Fi portal
+ * answers the check in exactly the same way, because answering it is
+ * what a captive portal is for, and a local DNS filter does the same to
+ * the DNS signal. #69 shipped every interception as CRIT, which made a
+ * hotel lobby read as the worst finding sloth has. #169 grades it:
  *
- * One alert type with a kind bitfield rather than the seven types the
- * issue proposes, following ALERT_TYPE_WPA_DOWNGRADE: seven types for
- * one detector would put seven rows in the rule table for what an
- * operator reads as a single finding, and the dedup key already
- * separates them per host. Flagged as a §4.2 departure. */
+ *   LOW   the answer was wrong, and nothing else is known. This is the
+ *         hotel and the coffee shop, and the attacker on an open AP
+ *         looks identical on the wire — the detail says so.
+ *   CRIT  the same answer on a network the operator declared their own
+ *         (--my-ssid / --my-bssid: their own network has no portal),
+ *         or from a BSS that is a live evil-twin finding, or to a
+ *         client that was served a named kit's page (below).
+ *
+ * DNS_UNEXPECTED is weaker than the rest (CDN ranges change) and sits
+ * one step lower at both ends: LOW alone, WARN in the same contexts.
+ *
+ * One alert type with a kind bitfield rather than the seven types #69
+ * proposed, following ALERT_TYPE_WPA_DOWNGRADE: seven rows in the rule
+ * table for what an operator reads as a single finding, and the dedup
+ * key already separates them per host.
+ *
+ * ── Kit pages (#169) ──
+ *
+ * A named evil-twin kit's default portal page is the same finding taken
+ * one step further — T1557.004 says it in so many words: a user who
+ * joins the impostor "may be directed to a fake login page or captive
+ * portal webpage to capture the victim's credentials". It rides this type rather than a new one
+ * (#169 proposed CNA_HIJACK; the triage on the issue argued against two
+ * kinds for one finding, and this follows it), with its own key prefix
+ * because it is keyed by kit and responder, not by probed host: one kit
+ * on one server is one finding however many clients and hosts it
+ * answers, since the kit serves its page to every URL.
+ *
+ * Always CRIT. Unlike a wrong connectivity-check answer, no innocent
+ * network serves wifiphisher's firmware-upgrade page; the benign
+ * trigger is someone running the kit on purpose — a lab, a training, an
+ * authorised test — and the operator should know that is happening in
+ * range either way. Nothing from the page is kept beyond the matched
+ * row's label, and nothing a client sent is read. */
+static void cp_fire_kit(const cp_event_t *e, time_t now) {
+    char key[ALERT_KEY_LEN];
+    char detail[ALERT_DETAIL_LEN];
+    akey_t k;
+    akey_begin(&k, key, sizeof(key), "portalkit");
+    akey_u(&k, e->kit);
+    akey_ip(&k, e->server[0] ? e->server : "?");
+    if (!akey_end(&k)[0]) return;
+    snprintf(detail, sizeof(detail),
+             "%.46s served the %.40s page to %.46s%s%.40s - %s",
+             e->server[0] ? e->server : "?",
+             e->evidence[0] ? e->evidence : cp_kit_name(e->kit),
+             e->src[0] ? e->src : "?",
+             e->host[0] ? " for " : "", e->host,
+             cp_kind_label(e->kind));
+    fire(ALERT_TYPE_CAPTIVE_PORTAL, ALERT_SEV_CRIT, "CAPTIVE_PORTAL", detail,
+         key, e->server[0] ? e->server : NULL, e->server_port, now);
+}
+
 void rule_captive_portal(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->cp_event_count; i++) {
         const cp_event_t *e = &s->cp_events[i];
         if (!e->kind) continue;
         /* Events are a rolling ring; only recent ones are findings. */
         if (e->ts && now - e->ts > 600) continue;
-
-        /* Which BSSID is the client on? A portal is hosted by whatever
-         * the client associated to, and naming it turns "someone
-         * intercepted this" into "that AP intercepted this". */
-        char bss[20] = "";
-        int  on_twin = 0;
-        for (int a = 0; a < s->assoc_count; a++) {
-            if (!s->assocs[a].sta_mac[0] && !s->assocs[a].sta_mac[5]) continue;
-            /* The association table is keyed by MAC and the portal
-             * event by IP, so this only resolves when a single client
-             * is associated — enough to name the AP in the common
-             * single-client-under-test case, and silent otherwise
-             * rather than guessing. */
-            if (s->assoc_count != 1) break;
-            mac_to_str(s->assocs[a].bssid, bss, sizeof(bss));
-            on_twin = btm_candidate_is_twin(s, s->assocs[a].bssid);
-            break;
+        if (e->kind == CP_KIND_KIT) {
+            if (e->kit) cp_fire_kit(e, now);
+            continue;
         }
+
+        cp_ctx_t ctx;
+        cp_context(s, e, &ctx);
+        const cp_event_t *kit = cp_kit_for(s, e->src, now);
+        int escalated = ctx.own_net || ctx.on_twin || kit != NULL;
 
         /* host came off the wire (#112): a remote component, so two
          * hosts sharing a 30-byte prefix are no longer one finding. */
@@ -398,6 +839,20 @@ void rule_captive_portal(const sloth_state_t *s, time_t now) {
         akey_remote(&k, e->host, 40);
         akey_u(&k, e->kind);
         if (!akey_end(&k)[0]) continue;
+
+        char why[96];
+        if (ctx.own_net)
+            snprintf(why, sizeof(why), " - on your own network%s%s",
+                     ctx.bss[0] ? " " : "", ctx.bss);
+        else if (ctx.on_twin)
+            snprintf(why, sizeof(why), " - AP %s is a known evil twin",
+                     ctx.bss[0] ? ctx.bss : "?");
+        else if (kit)
+            snprintf(why, sizeof(why), " - client was served %s",
+                     cp_kit_name(kit->kit));
+        else
+            snprintf(why, sizeof(why),
+                     " - legitimate captive portals do this too");
         snprintf(detail, sizeof(detail),
                  "%.30s intercepted for %.15s - %s%s%s%s%s",
                  e->host, e->src[0] ? e->src : "?",
@@ -405,17 +860,15 @@ void rule_captive_portal(const sloth_state_t *s, time_t now) {
                  e->evidence[0] ? " (" : "",
                  e->evidence[0] ? e->evidence : "",
                  e->evidence[0] ? ")" : "",
-                 on_twin ? " - AP is a known evil twin" : "");
+                 why);
 
-        /* DNS_UNEXPECTED is the soft one: these operators' addressing
-         * changes, and being wrong about a CDN range must not produce a
-         * CRIT. Everything else is unambiguous — a sentinel resolving
-         * into private space or answering with the wrong bytes is not
-         * something that happens by accident. */
-        alert_sev_t sev = (e->kind == CP_KIND_DNS_UNEXPECTED)
-                          ? ALERT_SEV_WARN : ALERT_SEV_CRIT;
-        fire(ALERT_TYPE_CAPTIVE_PORTAL, sev,
-             "CAPTIVE_PORTAL", detail, key, NULL, 0, now);
+        alert_sev_t sev;
+        if (e->kind == CP_KIND_DNS_UNEXPECTED)
+            sev = escalated ? ALERT_SEV_WARN : ALERT_SEV_LOW;
+        else
+            sev = escalated ? ALERT_SEV_CRIT : ALERT_SEV_LOW;
+        fire(ALERT_TYPE_CAPTIVE_PORTAL, sev, "CAPTIVE_PORTAL", detail, key,
+             e->server[0] ? e->server : NULL, e->server_port, now);
     }
 }
 
@@ -435,7 +888,7 @@ void rule_fragattack(const sloth_state_t *s, time_t now) {
         if (!frag_bss_copy(i, &row)) continue;
         const frag_bss_t *b = &row;
 
-        char bss[20], sa[20], da[20];
+        char bss[20], sa[20], da[20], sib[96];
         mac_to_str(b->bssid,   bss, sizeof(bss));
         mac_to_str(b->last_sa, sa,  sizeof(sa));
         mac_to_str(b->last_da, da,  sizeof(da));
@@ -443,12 +896,22 @@ void rule_fragattack(const sloth_state_t *s, time_t now) {
         char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
 
         if (b->plaintext_unicast > 0) {
+            /* Neither the frame count nor the row's last pair goes into
+             * this detail raw (#173). The count moves with every
+             * plaintext frame, and last_sa/last_da are the row's newest
+             * offender of *any* FragAttacks kind, so a PN-gap or cache
+             * hit on the same BSS rewrote this alert's detail too; with
+             * the engine's change-only emission either made observations
+             * follow the tick rate while the row stayed resident. The
+             * count goes in by decade; the pair, which belongs to the
+             * row and not to this kind, stays on the [c] view. */
+            char cb[24];
             snprintf(key, sizeof(key), "fragplain:%.17s", bss);
+            count_bucket(cb, b->plaintext_unicast);
             snprintf(detail, sizeof(detail),
-                     "%u unprotected data frame%s on %.17s after key install"
-                     " - last %.17s -> %.17s (CVE-2020-26140/-26143)",
-                     b->plaintext_unicast,
-                     b->plaintext_unicast == 1 ? "" : "s", bss, sa, da);
+                     "%s unprotected data frame%s on %.17s after key install"
+                     " (CVE-2020-26140/-26143)",
+                     cb, b->plaintext_unicast == 1 ? "" : "s", bss);
             /* CRIT on the first one. This is not a threshold detector:
              * a station whose encrypted traffic we have already seen
              * has no legitimate reason to send one plaintext non-EAPOL
@@ -483,12 +946,13 @@ void rule_fragattack(const sloth_state_t *s, time_t now) {
 
         if (b->eapol_relay > 0) {
             snprintf(key, sizeof(key), "fragrelay:%.17s", bss);
+            frag_sibling_note(b, sib, sizeof(sib));
             snprintf(detail, sizeof(detail),
                      "%u EAPOL frame%s forwarded between stations on %.17s"
                      " - last %.17s -> %.17s, neither is the AP"
-                     " (CVE-2020-26139)",
+                     " (CVE-2020-26139)%s",
                      b->eapol_relay, b->eapol_relay == 1 ? "" : "s",
-                     bss, sa, da);
+                     bss, sa, da, sib);
             fire(ALERT_TYPE_FRAG_EAPOL_RELAY, ALERT_SEV_CRIT,
                  "FRAG_EAPOL_RELAY", detail, key, NULL, 0, now);
         }
@@ -694,6 +1158,21 @@ void rule_sae_psk_regression(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* How long the posture has stood, as a band (#173). The detail used to
+ * carry the exact seconds, which change every second: under the
+ * engine's change-only emission that made every standing key an
+ * `alert.update` a minute and an observation a tick for the life of
+ * the AP (672e6 on 794 keys on the reference host). A band moves three
+ * times in a day and then never; first_seen is on the beacon row for
+ * anyone who wants the figure. The first band is the rule's own
+ * WPA_DOWNGRADE_MIN_OBSERVED_S floor. */
+static const char *wpa_downgrade_age_band(long secs) {
+    if (secs >= 86400) return "1d+";
+    if (secs >= 3600)  return "1h+";
+    if (secs >= 300)   return "5m+";
+    return "30s+";
+}
+
 void rule_wpa_downgrade(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
@@ -741,10 +1220,10 @@ void rule_wpa_downgrade(const sloth_state_t *s, time_t now) {
             char detail[ALERT_DETAIL_LEN];
             snprintf(key, sizeof(key), "wpadg:%.17s:%u", bss, kind);
             snprintf(detail, sizeof(detail),
-                     "%.17s \"%.20s\" posture=%s (observed %lds)%s%s",
+                     "%.17s \"%.20s\" posture=%s (observed %s)%s%s",
                      bss, a->ssid[0] ? a->ssid : "<hidden>",
                      wifi_downgrade_label(kind),
-                     (long)(now - a->first_seen),
+                     wpa_downgrade_age_band((long)(now - a->first_seen)),
                      exercised ? " - a client took the weak lane" : "",
                      mine ? " - YOUR network" : "");
             fire(ALERT_TYPE_WPA_DOWNGRADE,
@@ -807,6 +1286,14 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
         int pnl_best   = karma_pnl_client_hits(s, a, pnl_sta);
         int pnl_corrob = pnl_best >= KARMA_PNL_CORROB_MIN;
         int deauth     = karma_deauth_lure_victim(s, a, now, NULL);
+        /* Shared with the [y] view so one BSSID cannot be described two
+         * ways (#187 S4). Reported in both directions: variety is the
+         * reading that actually argues against a single spoofing radio,
+         * so it is worth printing, and a signal that only ever appears
+         * when it incriminates teaches the operator nothing about the
+         * times it did not. */
+        int ie_fps      = karma_ie_distinct_fp(a);
+        int ie_collapse = karma_ie_collapsed(a);
 
         /* Has a PMKID been harvested from this BSSID (#68)? Unlike a
          * tool's beacon quirks, this is a *protocol* observable — an AP
@@ -827,8 +1314,17 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
         int tool_unverified = tool_row && tool_row->unverified;
         int tool_verified   = tool_row && !tool_row->unverified;
 
+        /* #151: in the detail and JSONL, and since the owner's
+         * 2026-11-12 decision a `corroborated` verdict is CRIT. Never
+         * confidence. `suspected` stays context only: one input naming
+         * a device is a lead, not a tie to this candidate. */
+        hw_verdict_t hwv;
+        char hw_note[80];   /* longest form is 74 */
+        hw_karma_context(s, a, tool_row, now, &hwv, hw_note, sizeof(hw_note));
+        int hw_corrob = hwv.tier == HW_TIER_CORROBORATED;
         alert_sev_t sev = ALERT_SEV_WARN;
-        if (pnl_corrob || deauth || tool_verified) sev = ALERT_SEV_CRIT;
+        if (pnl_corrob || deauth || tool_verified || hw_corrob)
+            sev = ALERT_SEV_CRIT;
 
         int confidence = KARMA_W_SSID_THRESH;
         /* Confidence keys on the same measure as severity. Paying the
@@ -837,6 +1333,16 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
          * being narrowed to avoid. */
         if (pnl_corrob) confidence += KARMA_W_PNL_OVERLAP;
         if (deauth)     confidence += KARMA_W_DEAUTH_VICTIM;
+        /* Confidence only, never severity: the benign rename case
+         * collapses the same way, so this cannot be what turns a
+         * candidate into a finding. See KARMA_W_IE_COLLAPSE. */
+        if (ie_collapse) confidence += KARMA_W_IE_COLLAPSE;
+        /* The converse (#187, 2026-11-12): variety argues against one
+         * spoofing radio. karma_ie_distinct_fp() answers 0 for an
+         * incompletely fingerprinted set, so "unknown" never reads as
+         * variety. */
+        int ie_variety = ie_fps >= 2;
+        if (ie_variety) confidence -= KARMA_W_IE_VARIETY;
         if (tool_row)
             confidence += tool_unverified ? KARMA_W_TOOL_UNVERIF
                                           : KARMA_W_TOOL_VERIFIED;
@@ -847,6 +1353,7 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
         char pnl_note[64]   = "";
+        char ie_note[32]    = "";
         char chain_note[24] = "";
         char tool_note[56]  = "";
         char pmkid_note[16] = "";
@@ -861,6 +1368,14 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
         else if (overlap > 0)
             snprintf(pnl_note, sizeof(pnl_note),
                      ", %d in client PNLs", overlap);
+        /* Singular is the collapse; a plural count is the AP arguing its
+         * own case. Nothing is printed when the fingerprints are not all
+         * known, because "0 IE fingerprints" would read as a finding. */
+        if (ie_collapse)
+            snprintf(ie_note, sizeof(ie_note), ", 1 IE fingerprint");
+        else if (ie_variety)
+            snprintf(ie_note, sizeof(ie_note), ", %d IE fingerprints",
+                     ie_fps);
         if (deauth)
             snprintf(chain_note, sizeof(chain_note),
                      " +deauth-then-lure");
@@ -879,9 +1394,11 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
          * cannot drift — see karma_alert_key(). */
         karma_alert_key(a->bssid, key, sizeof(key));
         snprintf(detail, sizeof(detail),
-                 "KARMA BSSID %s: %d SSIDs%s%s%s%s, conf %d%%%s",
-                 bssid_str, a->ssid_history_n, pnl_note, chain_note,
-                 pmkid_note, tool_note, confidence,
+                 "KARMA BSSID %s: %d SSIDs%s%s%s%s%s%s%s, conf %d%%%s",
+                 bssid_str, a->ssid_history_n, ie_note,
+                 /* Named where it lowers the number (#187). */
+                 ie_variety ? " +IE variety" : "", pnl_note,
+                 chain_note, pmkid_note, tool_note, hw_note, confidence,
                  sev == ALERT_SEV_WARN ? " - candidate, uncorroborated" : "");
         /* The newest frame carrying each distinct SSID (#92 slice 4):
          * the finding is that set, so one frame per SSID is its
@@ -891,6 +1408,7 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
         int hn = a->ssid_history_n < MAX_AP_SSID_HISTORY
                ? a->ssid_history_n : MAX_AP_SSID_HISTORY;
         ev_cite_merge(evid, &ev_n, ALERT_EVIDENCE_IDS, a->ssid_history_ev, hn);
+        fire_stage_hw_verdict(hwv.tier, hwv.device, hwv.signals);
         fire_inv(ALERT_TYPE_KARMA_AP, sev, confidence, NULL,
                  TWIN_CLASS_UNKNOWN, WIRED_ATTACH_UNKNOWN, tool_row,
                  evid, ev_n,
@@ -1182,6 +1700,9 @@ static int enc_is_strong(const char *enc) {
 }
 
 void rule_evil_twin(const sloth_state_t *s, time_t now) {
+    /* Every tick, pair or no pair: the scorer only runs when two APs
+     * share a name, and a drive with none in earshot still happened. */
+    twin_note_motion(s, now);
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
         if (!a->ssid[0]) continue;      /* hidden -> can't correlate */
@@ -1207,8 +1728,7 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
                  * the operator learns which radio is pushing clients
                  * at the rogue, not just that a rogue exists. */
                 char steer_note[40] = "";
-                int steer = btm_steered_to(s, a->bssid, now);
-                if (steer < 0) steer = btm_steered_to(s, b->bssid, now);
+                int steer = twin_pair_steer(s, a, b, now, NULL);
                 if (steer >= 0) {
                     char steerer[20];
                     mac_to_str(s->btm_steers[steer].bssid, steerer,
@@ -1236,7 +1756,7 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
                 twin_evidence_score(s, a, b, now, &ev);
                 int conf = clamp_conf(TWIN_W_WEAK_CLONE + ev.positive -
                                       ev.context);
-                char note[64];
+                char note[TWIN_NOTE_LEN];
                 twin_evidence_note(note, sizeof(note), &ev);
 
                 /* Both radios declared by the operator (#89 slice 2).
@@ -1325,10 +1845,11 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
             alert_sev_t sev = ALERT_SEV_WARN;
             const char *reason = ev.diff_oui ? "vendor OUI differs"
                                              : "same vendor OUI";
-            /* Both sides emitted a usable vendor hash and they disagree
-             * → firmware mismatch. Legit dual-vendor co-located mesh is
-             * vanishingly rare; raise to CRIT. Soft: forgeable in
-             * principle, so a neighbour claim may demote it below. */
+            /* Both sides emitted a usable vendor hash, on one band, and
+             * they disagree → firmware mismatch. A candidate for CRIT,
+             * not CRIT yet: it is soft, so a neighbour claim may demote
+             * it and the confidence gate below decides whether it
+             * stands (#188). */
             if (ev.hashes_differ) {
                 sev    = ALERT_SEV_CRIT;
                 reason = "vendor-IE fingerprint differs";
@@ -1358,9 +1879,7 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
              * well as annotates. That escalation is the whole value of
              * the chain, delivered without a separate alert. */
             char steer_note[40] = "";
-            int steer_a = btm_steered_to(s, a->bssid, now);
-            int steer_b = btm_steered_to(s, b->bssid, now);
-            int steer = steer_a >= 0 ? steer_a : steer_b;
+            int steer = twin_pair_steer(s, a, b, now, NULL);
             if (steer >= 0) {
                 char steerer[20];
                 mac_to_str(s->btm_steers[steer].bssid, steerer,
@@ -1378,9 +1897,28 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
             if (ev.nbr_claim && !ev.hard && sev > ALERT_SEV_WARN)
                 sev = ALERT_SEV_WARN;
 
+            /* CRIT needs the confidence to carry it (#188): a field
+             * sensor reported a week of CRIT rows at 10-20 %, every one
+             * of them one device's own radios. Hard signals are exempt
+             * for the reason the neighbour claim above cannot touch
+             * them. With today's weights a vendor-IE mismatch clears
+             * the bar with one cross-device signal beside it: a
+             * different globally administered OUI, or the copy having
+             * arrived after the original (+late-arrival), which is the
+             * only one a locally administered address can show.
+             *
+             * And both halves have to have been heard in earnest
+             * (`faint`, 2026-11-12): the issue's last benign CRIT was
+             * two vendors at -100 dBm, one or two beacons each. A
+             * carrier SSID needs no test here; its context deduction
+             * already leaves every soft sum under the bar. */
+            if (!ev.hard && sev > ALERT_SEV_WARN &&
+                (ev.confidence < TWIN_CRIT_MIN_CONF || ev.faint))
+                sev = ALERT_SEV_WARN;
+
             char key[ALERT_KEY_LEN];
             char detail[ALERT_DETAIL_LEN];
-            char note[64];
+            char note[TWIN_NOTE_LEN];
             /* Canonical pair key (#89). `twin-fp` stays the rule id so
              * the CRIT `twin` key for the same pair still coexists, but
              * the identity is now the ordered BSSID pair rather than the
@@ -1536,17 +2074,112 @@ void rule_ssid_confusion(const sloth_state_t *s, time_t now) {
     }
 }
 
-/* Evil-twin proximity — Phase 3. A single BSSID whose RSSI jumps
- * ≥15 dBm within the 60s sliding window (no roam — same BSSID, same
- * channel) is a strong tell for either (a) an attacker AP moving
- * closer/being switched on nearby, or (b) signal-level deception. We
- * fire at WARN: it's noisy on its own (mobile devices roaming past
- * the sniffer also cause big swings), but combined with a twin-fp
- * alert it's a strong attack-in-progress signal that Phase 4 will
- * correlate. */
+/* Evil-twin proximity — Phase 3. A BSSID that is half of a twin
+ * candidate pair and whose RSSI moved ≥15 dBm inside the 60 s sliding
+ * window (no roam — same BSSID, same channel): the suspected copy being
+ * switched on nearby or carried closer. WARN, and a corroborator for
+ * the EVIL_TWIN row on the same pair, never a finding of its own.
+ *
+ * It used to fire on the swing alone. On a field sensor 254 of the 300
+ * BSSIDs that fired in a week had no same-SSID twin at all (#189):
+ * printers, cameras and vehicle hotspots drifting between -100 and
+ * -80 dBm. A swing measured at sloth's own antenna says the path
+ * changed, and nothing about impersonation, so three things now have
+ * to hold before it is reported.
+ *
+ *   1. The BSSID has a twin candidate, by the definition rule_evil_twin
+ *      itself uses (twin_pair_is_candidate), and is not the half that
+ *      pair clears. When the attribution ladder (twin_choose_sides: the
+ *      inventory, --my-bssid, a chain taint, an attacker-tool OUI) has
+ *      named an impostor, only the impostor qualifies (2026-11-12, the
+ *      issue's "preferably the accused half"): the operator's own AP
+ *      getting louder is a client walking past it, and a row naming it
+ *      would point at the wrong radio. An unattributed pair has no
+ *      accused half, so either qualifies there, which is also what the
+ *      ident export calls TWIN_UNATTRIBUTED (#192).
+ *   2. The low end of the swing is above TWIN_PROX_FLOOR_DBM.
+ *   3. The sensor has not itself moved during the window. */
 #define EVIL_TWIN_PROXIMITY_DBM ((int)tune_val(TUNE_EVIL_TWIN_PROXIMITY_DBM))
 
+/* A swing has to start from a reading that means something. Thermal
+ * noise in a 20 MHz channel is -101 dBm (kTB, -174 dBm/Hz + 73 dB) and
+ * a typical receiver adds 6-7 dB, so its floor is about -95 dBm; a
+ * beacon at the lowest rates needs a few dB above that to decode at
+ * all. At -92 or below, whether a given beacon is received is decided
+ * by fading, and "min" is the weakest one that happened to get through
+ * rather than a level the AP sat at. -92 is the issue's figure and it
+ * is where that margin runs out. A window whose minimum is at or under
+ * it is "barely heard", not "came closer". TWIN_PROX_FLOOR_DBM itself
+ * is in src/alerts.h since 2026-11-12: the scorer's `faint` reads it. */
+
+/* Sensor speed, in m/s, from which every AP's RSSI is expected to
+ * swing. Twice the 0.5 m/s under which src/gps.c's own speed band calls
+ * a receiver stationary, so position jitter on a parked sensor does not
+ * flap the rule, and under walking pace (about 1.4 m/s), because a
+ * sensor carried past an AP changes its path loss as surely as one
+ * driven past. */
+#define TWIN_PROX_MOVING_MPS 1.0
+
+/* Did the sensor move while the RSSI window was filling? Read from the
+ * per-poll GNSS fix history (s->gnss_hist, the snapshot the GNSS rules
+ * read), not from the newest fix alone: the window is 60 s long, so a
+ * car that stopped ten seconds ago still holds the swing it drove
+ * through. No GNSS, no speed in the fix, or no fix inside the window
+ * is "not known to be moving" and suppresses nothing. */
+static int twin_sensor_moving(const sloth_state_t *s, time_t now) {
+    const gnss_hist_t *h = s->gnss_hist;
+    if (!h) return 0;
+    for (int i = 0; i < h->fix_n && i < GNSS_FIX_HIST; i++) {
+        const gnss_fix_pt_t *f =
+            &h->fixes[(h->fix_head - h->fix_n + i + 2 * GNSS_FIX_HIST) %
+                      GNSS_FIX_HIST];
+        if (!f->has_speed || f->speed < TWIN_PROX_MOVING_MPS) continue;
+        if (f->ts > now || now - f->ts > RSSI_WIN_SECS) continue;
+        return 1;
+    }
+    return 0;
+}
+
+/* Would rule_evil_twin report this pair? Its two branches, as one
+ * predicate: a weak/strong split under one SSID, or the same non-OPEN
+ * security with positive evidence. The second goes through
+ * twin_evidence_score, so one device's radios on two bands (#188) are
+ * not a candidate here either.
+ *
+ * Every pair rule_evil_twin_attack_chain names is one of these since
+ * ruling 4a: it has the same security, is not OPEN, and passed the same
+ * scorer. Before, a chain pair with a locally administered half was
+ * admitted on its first three bytes and was not a candidate here. */
+static int twin_pair_is_candidate(const sloth_state_t *s, const beacon_ap_t *a,
+                                  const beacon_ap_t *b, time_t now) {
+    if (!a->ssid[0] || strcmp(a->ssid, b->ssid) != 0) return 0;
+    if (memcmp(a->bssid, b->bssid, 6) == 0) return 0;
+    if ((enc_is_weak(a->enc) && enc_is_strong(b->enc)) ||
+        (enc_is_weak(b->enc) && enc_is_strong(a->enc)))
+        return 1;
+    if (!a->enc[0] || strcmp(a->enc, "OPEN") == 0) return 0;
+    if (strcmp(a->enc, b->enc) != 0) return 0;
+    return twin_evidence_score(s, a, b, now, NULL);
+}
+
+/* Half `i` of some candidate pair that the ladder did not clear. A
+ * real half of one pair can still be the unattributed half of another,
+ * so every pair is asked, not the first. */
+static int twin_has_candidate(const sloth_state_t *s, int i, time_t now) {
+    const beacon_ap_t *a = &s->beacon_aps[i];
+    for (int j = 0; j < s->beacon_count; j++) {
+        if (j == i) continue;
+        const beacon_ap_t *b = &s->beacon_aps[j];
+        if (!twin_pair_is_candidate(s, a, b, now)) continue;
+        const beacon_ap_t *real = NULL, *twin = NULL;
+        if (twin_choose_sides(a, b, &real, &twin) && twin != a) continue;
+        return 1;
+    }
+    return 0;
+}
+
 void rule_evil_twin_proximity(const sloth_state_t *s, time_t now) {
+    if (twin_sensor_moving(s, now)) return;
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
         /* 0 in either bound means "no signal yet" — the ring hasn't
@@ -1554,6 +2187,10 @@ void rule_evil_twin_proximity(const sloth_state_t *s, time_t now) {
         if (a->rssi_min_60s == 0 || a->rssi_max_60s == 0) continue;
         int delta = a->rssi_max_60s - a->rssi_min_60s;
         if (delta < EVIL_TWIN_PROXIMITY_DBM) continue;
+        if (a->rssi_min_60s <= TWIN_PROX_FLOOR_DBM) continue;
+        /* Last: the pair walk is the expensive test, and few BSSIDs
+         * reach it. */
+        if (!twin_has_candidate(s, i, now)) continue;
 
         char bssid[20];
         fmt_bssid(bssid, a->bssid);
@@ -1580,10 +2217,36 @@ void rule_evil_twin_proximity(const sloth_state_t *s, time_t now) {
  * Same-cipher pair criteria mirror the WARN branch in rule_evil_twin.
  * We deliberately re-derive them rather than tracking pairs separately
  * — the cost is one extra O(n²) walk per poll over MAX_BEACON_APS=256,
- * which is fine at ≈1 Hz. */
+ * which is fine at ≈1 Hz.
+ *
+ * Which second BSSID is "the other half" (#188, ruling 4a). The flood
+ * is real either way; what this rule adds is a name for the rogue and a
+ * taint on it, and until 4a it gave both to a vehicle hotspot's own
+ * 5 GHz radio, because 02:24:a5 and 02:49:a5 read as two vendors, and
+ * to any dual-band AP whose two radios sit in adjacent OUI blocks.
+ *
+ * So the pair is one twin_evidence_score() calls a candidate: the same
+ * question rule_evil_twin, the Twins view and the proximity rule ask,
+ * answered by the same code. That brings the sibling test (one device's
+ * radios are not a pair), the U/L bit (a locally administered half has
+ * no OUI, so its first three bytes neither admit the pair nor excuse
+ * it, and it needs evidence of its own), and the inventory (two radios
+ * the operator declared are not each other's rogue; one left out of a
+ * declared SSID is reported even beside its sibling).
+ *
+ * One thing is kept from before: two globally administered addresses
+ * with the same OUI are the deployment's own next AP and are skipped,
+ * whatever the scorer makes of their vendor IEs. Under a flood, a mesh
+ * whose nodes differ there would otherwise have a node named the rogue.
+ *
+ * The cost, stated in the assessment: a copy on a locally administered
+ * address that shows no evidence of its own is not named, and the
+ * flood is then DEAUTH_FLOOD's row alone. */
 #define DEAUTH_TWIN_WIN_SECS ((int)tune_val(TUNE_DEAUTH_TWIN_WIN_SECS))
 
 void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
+    /* #193 field data: counts only, nothing below reads them. */
+    twin_field_begin(s, now);
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
         if (!a->ssid[0]) continue;
@@ -1599,16 +2262,31 @@ void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
             break;
         }
         if (!flood) continue;
-        /* Find a same-SSID + same-cipher + diff-OUI sibling — that's
+        /* Find the same-SSID + same-cipher second transmitter — that's
          * the rogue half. Loop covers both i<j and j<i so a deauth
          * targeting either AP picks up its twin partner. */
+        int fired = 0, shape = 0;
+        unsigned shape_excl = 0;
         for (int j = 0; j < s->beacon_count; j++) {
             if (i == j) continue;
             const beacon_ap_t *b = &s->beacon_aps[j];
             if (strcmp(a->ssid, b->ssid) != 0) continue;
             if (memcmp(a->bssid, b->bssid, 6) == 0) continue;
             if (strcmp(a->enc, b->enc) != 0) continue;
-            if (memcmp(a->bssid, b->bssid, 3) == 0) continue;
+            if (!bssid_is_laa(a->bssid) && !bssid_is_laa(b->bssid) &&
+                memcmp(a->bssid, b->bssid, 3) == 0)
+                continue;
+            twin_evidence_t ev;
+            if (!twin_evidence_score(s, a, b, now, &ev)) {
+                /* #193: the pair this rule leaves unnamed, observed. */
+                unsigned x = 0;
+                if (!shape && !ev.inv_approved && twin_field_enabled() &&
+                    twin_late_laa_copy(a, b, &x)) {
+                    shape = 1;
+                    shape_excl = x;
+                }
+                continue;
+            }
 
             taint_mark(b->bssid, now);
 
@@ -1643,7 +2321,97 @@ void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
                           flood->evidence_ids + skip, dn - skip);
             fire_ev(ALERT_TYPE_EVIL_TWIN, ALERT_SEV_CRIT, evid, ev_n,
                     "EVIL_TWIN", detail, key, NULL, 0, now);
+            fired = 1;
             break;
         }
+        twin_field_flood(a->bssid, fired, shape, shape_excl);
+    }
+}
+
+/* ── KARMA_PROBE_FORGE: directed probe-response forgery (#187 S2) ──
+ *
+ * One BSSID answering stations' directed probe requests for SSIDs it
+ * has never beaconed. KARMA as Dai Zovi & Macaulay built it in 2005 —
+ * "a special access point that responded to any Probe Request" — and
+ * airbase-ng -P, which "causes the fake access point to respond to all
+ * probes regardless of the ESSIDs specified"
+ * (research/papers/daizovi-macaulay-2005-karma.md,
+ * research/tools/airbase-ng.md). The capture side and the
+ * counting are in src/karma_detect.c; the count is shared with the [y]
+ * view's FRG column through karma_forged_ssids().
+ *
+ * A separate kind rather than evidence on KARMA_AP, because KARMA_AP's
+ * candidate set is the beacon fan-out (ssid_history_n >=
+ * KARMA_SSID_THRESH) and the radio this catches beacons one name: as
+ * evidence on KARMA_AP it would only ever be read for BSSIDs that are
+ * already candidates, which is exactly the population that does not
+ * need it. The issue's joint rule lands here instead, as context.
+ *
+ * Severity (owner decision on #187, 2026-11-12). WARN at
+ * karma.forge_ssids (default 2) never-beaconed names answered, for as
+ * long as the radio only forges answers: to one station or to several,
+ * and with or without the same BSSID beacon-fanning past
+ * KARMA_SSID_THRESH (the issue's S1 + S2). Those are reported in the
+ * detail and are bait offered. CRIT when a station was captured:
+ * karma_forge_captured(), a station that received a forged answer for
+ * a name, asked this BSSID to associate under that name within
+ * karma.forge_assoc_s, and was granted. The issue's S3 (response
+ * latency) is not built: no primary source for its threshold was found
+ * (docs/views/karma.md). Its S4 (IE collapse) does not escalate here
+ * either, for the reason KARMA_AP gives: a renamed BSS collapses the
+ * same way a lure does. */
+void rule_karma_probe_forge(const sloth_state_t *s, time_t now) {
+    for (int i = 0; s->karma_forge && i < s->karma_forge_count; i++) {
+        const karma_forge_t *r = &s->karma_forge[i];
+        int stations = 0;
+        uint64_t evid[ALERT_EVIDENCE_IDS];
+        int ev_n = 0;
+        int forged = karma_forged_ssids(s, r, &stations, evid,
+                                        ALERT_EVIDENCE_IDS, &ev_n);
+        if (forged < KARMA_FORGE_SSID_MIN) continue;
+
+        /* karma_forged_ssids() answered, so the beacon row exists. */
+        int beaconed = 0;
+        for (int b = 0; b < s->beacon_count; b++)
+            if (memcmp(s->beacon_aps[b].bssid, r->bssid, 6) == 0) {
+                beaconed = s->beacon_aps[b].ssid_history_n;
+                break;
+            }
+        int fanout = beaconed >= KARMA_SSID_THRESH;
+        uint8_t victim[6];
+        int captured = karma_forge_captured(s, r, victim);
+        alert_sev_t sev = captured ? ALERT_SEV_CRIT : ALERT_SEV_WARN;
+
+        char bssid_str[20], sta[20];
+        snprintf(bssid_str, sizeof(bssid_str),
+                 "%02x:%02x:%02x:%02x:%02x:%02x",
+                 r->bssid[0], r->bssid[1], r->bssid[2],
+                 r->bssid[3], r->bssid[4], r->bssid[5]);
+        snprintf(sta, sizeof(sta), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 victim[0], victim[1], victim[2],
+                 victim[3], victim[4], victim[5]);
+        /* "fan", not "fan_note": slothweb's detail audit refuses any
+         * field named for free text, "note" included, and withheld this
+         * kind's detail for it. */
+        const char *fan  = fanout ? " +beacon fan-out" : "";
+        const char *tail = captured ? ""
+                         : (stations < 2 && !fanout)
+                         ? " - one station, uncorroborated"
+                         : " - forging only, no station associated";
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(detail, sizeof(detail),
+                 "KARMA forge BSSID %s: answered directed probes for %d "
+                 "SSIDs it never beaconed (beacons %d), to %d stations%s"
+                 "%s%s%s",
+                 bssid_str, forged, beaconed, stations, fan,
+                 captured ? " +captured " : "", captured ? sta : "", tail);
+
+        char key[ALERT_KEY_LEN];
+        akey_t k;
+        akey_begin(&k, key, sizeof(key), "karmaforge");
+        akey_mac(&k, r->bssid);
+        if (!akey_end(&k)[0]) continue;
+        fire_ev(ALERT_TYPE_KARMA_PROBE_FORGE, sev, evid, ev_n,
+                "KARMA_PROBE_FORGE", detail, key, NULL, 0, now);
     }
 }

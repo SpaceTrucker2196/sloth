@@ -140,6 +140,19 @@ typedef enum {
     /* #144 slice 4: the advertising-flood windows. STAB_OLDEST for the
      * same reason as the advertiser table: the keys are the air's. */
     SH_EVICT_BLE_FLOOD,     /* src/ble_flood.c — least-recently-heard flood-window key dropped */
+    /* #180: the per-BSSID AP-identity table the FragAttacks rules ask
+     * "is this address the AP?" of. Appended. */
+    SH_EVICT_FRAG_AP_IDENT, /* src/fragattack.c — least-recently-beaconing BSSID's AP MLD binding dropped */
+    /* #187 S3 export (JSONL 1.6.0): the probe-response latency tables.
+     * One kind for both: a live, unanswered Probe Request overwritten
+     * in the 64-slot pending ring, and the oldest of 128 BSSID rows
+     * dropped. probe_latency_counters() keeps the split. Appended. */
+    SH_EVICT_PROBE_LATENCY, /* src/probe_latency.c — live unanswered request overwritten, or oldest BSSID row dropped */
+    /* #208 (JSONL 1.8.0): the rtl_433 sub-GHz device table. Appended.
+     * STAB_OLDEST for the same reason as the BLE advertiser table: a
+     * (model, id) pair is whatever a transmitter puts on the air, so
+     * the key space is the band's and not sloth's. */
+    SH_EVICT_RTL433,        /* src/rtl433.c — least-recently-heard (model, id) device dropped */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 
@@ -184,7 +197,8 @@ uint64_t sh_evict_total_tables(void);
  * "frag_session", "frag_assoc", "frag_mpdu", "ndp_ra", "rogue_radius",
  * "ssdp_device", "onvif_device", "smtp_flow", "eapol_pending",
  * "deauth_obs", "deauth_victim", "rtsp_exchange", "rtsp_stream",
- * "lan_role", "ble_device".
+ * "lan_role", "ble_device", "bredr_lap", "ble_flood", "frag_ap_ident",
+ * "probe_latency", "rtl433".
  * Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 
@@ -227,6 +241,7 @@ typedef enum {
     SH_PF_DNS_NAME_BAD,     /* reserved for #131 (DNS name reader once) — not yet wired */
     SH_PF_TLS_MALFORMED,    /* reserved for #131 (TLS parser under test) — not yet wired */
     SH_PF_FRAME_EDGE,       /* src/capture/frame_edge.c — a pcap record header refused at the edge (#141) */
+    SH_PF_FCS_FAILED,       /* src/capture/probe.c — radiotap's BADFCS bit was set; frame content not parsed (#178) */
     SH_PF_KIND_COUNT
 } sh_parse_fault_t;
 
@@ -241,7 +256,8 @@ uint64_t sh_parse_fault_total(void);
 /* Stable lower-case name, part of the `sensor_health` JSONL contract
  * (`parse_fault_<name>`): "radiotap_bad", "dot11_runt", "ie_overrun",
  * "rsn_malformed", "mle_malformed", "ip_truncated", "ip_fragment",
- * "dns_name_bad", "tls_malformed", "frame_edge". Unknown kinds return "". */
+ * "dns_name_bad", "tls_malformed", "frame_edge", "fcs_failed". Unknown
+ * kinds return "". */
 const char *sh_parse_fault_name(sh_parse_fault_t kind);
 
 /* 1 when some parser in this build calls sh_parse_fault_note() for the
@@ -289,6 +305,11 @@ typedef struct {
 
 /* Fill *out from this process. Never fails; unmeasurable fields are -1. */
 void sh_mem_sample(sh_mem_t *out);
+
+/* The source of sh_mem_t.resolver_calls (#213): the count comes from
+ * the daemon that has a resolver, registered once at start
+ * (src/capture_side.c). Unregistered, the field reads -1. */
+void sh_set_resolver_calls_fn(long long (*fn)(void));
 
 /* Pull VmRSS / VmHWM (kB) out of /proc/self/status text. Split out so
  * the parse is tested against hand-built text rather than whatever the

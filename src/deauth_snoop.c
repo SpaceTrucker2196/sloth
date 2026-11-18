@@ -8,6 +8,7 @@
 #include "dot11_frame.h"
 #include "tune.h"
 #include "stab.h"
+#include "harvest_track.h"
 
 /* deauth.flood_thresh / deauth.flood_window_s (#120). Read per frame:
  * tune_val() is an array index. */
@@ -256,7 +257,12 @@ void deauth_record(const deauth_frame_t *f)
     if (flood_window_note(&o->win, now_ms, THRESH, WIN_MS))
         e->flood_last = wall;
 
-    vic_t *v = vic_get(f->bssid, victim_of(f->src, f->dst, f->bssid), now_ms, wall);
+    const uint8_t *victim = victim_of(f->src, f->dst, f->bssid);
+    /* A distinct frame, past the duplicate bail above, to the harvest
+     * tracker (#172), which keeps only those claimed from the AP. Its
+     * lock is a leaf. */
+    harvest_note_deauth(f->bssid, f->src, victim, f->event_id);
+    vic_t *v = vic_get(f->bssid, victim, now_ms, wall);
     v->v.frames++;
     if (f->protected_) v->v.protected_count++;
     /* A protected or truncated frame says nothing about the reason; it

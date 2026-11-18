@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include "harvest_track.h"
 #include "assoc_track.h"
 #include "sloth_clock.h"
 #include "probe_pnl.h"
@@ -11,6 +12,7 @@
 #include "dot11_frame.h"
 #include "bytes.h"
 #include "ev_cite.h"
+#include "rf_distance.h"
 
 static assoc_t         g_tbl[MAX_ASSOC_ENTRIES];
 static int             g_n   = 0;
@@ -188,6 +190,12 @@ void assoc_request_observe(const assoc_req_t *req, int8_t signal, int channel) {
      * STA — the rate is the signal there, independent of whether the
      * ask changed. */
     flood_record(req->bssid, req->sta, now, req->event_id);
+
+    /* The request that opens a station's row in the harvest tracker
+     * (#172): it is what proves the station was audible, so a later M1
+     * left without an M2 means one never sent. Before any assoc_track
+     * lock, for the reason probe_pnl is called here. */
+    harvest_note_assoc_req(req->sta, req->bssid);
 
     /* Corroborate the client's PHY tier in the PNL (#60). Done here,
      * before any assoc_track lock is taken, so the two modules never
@@ -416,7 +424,7 @@ static int source_rank(int s) {
 
 void assoc_observe(const uint8_t bssid[6], const uint8_t sta[6],
                     const char *ssid, int source,
-                    int8_t signal, int channel)
+                    int8_t signal, int channel, wifi_band_t band)
 {
     if (!bssid || !sta) return;
     /* Reject broadcast / null / multicast addresses on either side
@@ -457,6 +465,19 @@ void assoc_observe(const uint8_t bssid[6], const uint8_t sta[6],
     g_tbl[idx].frame_count++;
     g_tbl[idx].signal_dbm = signal;
     if (channel > 0) g_tbl[idx].channel = channel;
+    {
+        /* Every caller hands over a frame the AP sent, so the estimate
+         * is the AP's, at the assumed AP power: the response carries no
+         * TPC Report, and the beacon table's is behind another lock.
+         * The band is the frame's own, from radiotap: 6 GHz channel 5
+         * is 5975 MHz, not 2432. A frame that names no channel keeps
+         * the row's, and its band says nothing about that channel. */
+        rf_ctx_t ctx;
+        rf_ctx_assumed(&ctx, g_tbl[idx].channel,
+                       channel > 0 ? band : WIFI_BAND_UNKNOWN,
+                       RF_PTX_AP_ASSUMED);
+        rf_track_observe(&g_tbl[idx].dist, signal, now, &ctx);
+    }
     if (source_rank(source) > source_rank(g_tbl[idx].source))
         g_tbl[idx].source = source;
     /* Fill SSID if we don't have it yet — prefer the caller-supplied

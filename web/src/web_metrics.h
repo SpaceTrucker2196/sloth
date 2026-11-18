@@ -67,23 +67,51 @@ typedef struct {
     unsigned long long touched;
 } web_hw_t;
 
+/* One bounded high-water table and its evicted-id filter. */
+typedef struct {
+    web_hw_t     *rows;
+    int          *head;
+    int           n, cap, nhead;
+    unsigned char gone[2][WEB_HW_GONE_BITS / 8];
+    int           gone_cur;              /* the generation taking ids */
+    unsigned      gone_n;                /* ids it has taken */
+} web_hwtab_t;
+
+/* The BLE advertisers' adv_count marks are a table of their own. One
+ * id per (address, addr_type, sensor) means a remote transmitter
+ * cycling random addresses (a BLE spam tool, the case BLE_ADV_FLOOD
+ * exists for) mints ids at its own rate; in the shared table that
+ * would evict the Wi-Fi and flow rows between their records and have
+ * them count whole totals again. Here a flood only churns BLE's own
+ * marks. sloth holds 256 rows a BLE table (src/ble_hci.c), one table a
+ * sensor, and an address can be heard as two addr_types: 2048 holds
+ * every row of several sensors at once. */
+#define WEB_BLE_HW_ROWS 2048
+
 typedef long long (*web_clock_fn)(void *ctx);
 
 struct web_ident;
+struct web_chmix;
+struct web_live_s;
+struct web_anomaly;
+struct web_ble;
+struct web_sys;
 
 typedef struct web_metrics {
     web_rollup_t *ru;
     struct web_ident *ident;     /* M3: names for the anomaly rules, or NULL */
+    struct web_chmix *mix;       /* the WiFi view's channel mix, or NULL */
+    struct web_live_s  *live;    /* live.devices / live.alerts_open, or NULL */
+    struct web_anomaly *anomaly; /* live.anomalies_open, or NULL */
+    struct web_chmix *blemix;    /* the BLE view's class mix, or NULL */
+    struct web_ble   *ble;       /* ble.class.advertisers' rows, or NULL */
+    struct web_sys   *sys;       /* sys.db_mb's stores (web_sysstat.h), or NULL */
     web_clock_fn  clock;
     void         *clock_ctx;
 
-    web_hw_t     *hw;
-    int          *hw_head;
-    int           hw_n, hw_cap, hw_nhead;
+    web_hwtab_t   hw;                    /* every running total but BLE's */
+    web_hwtab_t   blehw;                 /* ble_device adv_count */
     unsigned long long touch;
-    unsigned char hw_gone[2][WEB_HW_GONE_BITS / 8];
-    int           hw_gone_cur;           /* the generation taking ids */
-    unsigned      hw_gone_n;             /* ids it has taken */
 
     int       have_first_ts;
     long long first_ts;
@@ -106,6 +134,28 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r);
 /* Also hand every record to the identity tables (web_ident.h), on the
  * same clock. Call before the ingest thread starts. */
 void web_metrics_set_ident(web_metrics_t *m, struct web_ident *id);
+/* Also hand the per-transmitter frame counts of beacon, probe_client
+ * and assoc records to the channel mix (web_chmix.h), and each beacon's
+ * SSID as its AP's name. Call before the ingest thread starts. */
+void web_metrics_set_mix(web_metrics_t *m, struct web_chmix *mix);
+/* docs/web-visual-spec.md §7: sample live.devices and live.alerts_open
+ * from live's latest published pass at every snapshot batch start.
+ * Call before the ingest thread starts. */
+void web_metrics_set_live(web_metrics_t *m, struct web_live_s *live);
+/* Sample live.anomalies_open the same way, from the open episode count.
+ * Call before the ingest thread starts. */
+void web_metrics_set_anomaly(web_metrics_t *m, struct web_anomaly *anomaly);
+/* The BLE Devices view (web_bledev.h): each ble_device record's
+ * adv_count delta to the class mix (kind WEB_TX_BLE, keyed by class
+ * slug; anonymous advertising's, addr_type 255, as Unknown's one
+ * WEB_TX_BLE_ANON entry) and to ble.class.adv; once a snapshot pass,
+ * the distinct addresses of each class the BLE tables heard in the
+ * last two fine buckets, anonymous rows one in Unknown, to
+ * ble.class.advertisers. Either may be NULL. */
+void web_metrics_set_blemix(web_metrics_t *m, struct web_chmix *mix);
+void web_metrics_set_ble(web_metrics_t *m, struct web_ble *ble);
+/* The stores sys.db_mb measures (web_sysstat.h), sampled on sys_status. */
+void web_metrics_set_sys(web_metrics_t *m, struct web_sys *sys);
 
 /* Key canonicalisers; out holds WEB_KEY_MAX + 1. 0, or -1 when s is not
  * one. Also what /api/series checks its key parameter with. */
@@ -117,8 +167,33 @@ int  web_key_channel(long long ch, const char *band, char *out);
 /* A channel key as /api/series takes it: "N" or "6gN". */
 int  web_key_channel_text(const char *s, char *out);
 int  web_key_alert_type(long long ty, char *out);
+/* A record type as records.rate keys it: 1..32 bytes of
+ * [a-z0-9_.], the charset web_live.c's type_ok() already validates a
+ * record's "type" field against. */
+int  web_key_rectype(const char *s, char *out);
 /* The canonical key for metric from the text s, by its key kind; "" for
  * a global metric (s must then be empty). */
 int  web_key_canon(int metric, const char *s, char *out);
+
+/* Two daemons (#214): the series the RF daemon's records feed, from
+ * its own ingest thread. web_metrics_record() is one thread's alone (a
+ * web_metrics_t has no lock: its high-water marks, batch state and
+ * taint are that thread's), so the RF stream is never handed to it.
+ * This touches no web_metrics_t at all, only the rollup, which has its
+ * own mutex and takes samples from any thread: the four GNSS series off
+ * gnss_fix and gnss_sky, and, when sysstat applied the record
+ * (sys_applied, web_sys_record_from()), the host and source series and
+ * sys.db_mb. now_s is the caller's clock in unix seconds.
+ *
+ * Only series the other thread never adds to. A rollup bucket closes
+ * when a sample of a later one arrives, so two threads whose clocks
+ * read a microsecond apart across a bucket's edge could close one
+ * bucket twice. The routing (web_ingest.h) gives each of these series
+ * one stream; records.rate and records.total, which both streams'
+ * records would count, therefore stay the first stream's and are not
+ * sampled here. */
+struct web_sys;
+void web_metrics_rf_sample(web_rollup_t *ru, struct web_sys *sys, const web_jrec_t *r,
+                           int sys_applied, long long now_s);
 
 #endif

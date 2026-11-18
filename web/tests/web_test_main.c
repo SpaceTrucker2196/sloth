@@ -1,46 +1,169 @@
 #include <signal.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
+#include <unistd.h>
 
+#include "web_slothdb.h"
 #include "wtest.h"
+#include "wt_tmp.h"
 
 int wt_pass, wt_fail;
 
+/* The run directory (wt_tmp.h): every temporary path a suite makes lands
+ * here, and what is left after the last suite fails the run. Removed at
+ * exit only by the process that made it, so a fork child that leaves
+ * through exit() cannot take it from the parent still testing.
+ * SLOTH_TEST_KEEP_TMP=1 keeps it. */
+static char  g_run_dir[TEST_TMP_MAX];
+static pid_t g_run_owner;
+static int   g_run_keep;
+
+/* A run directory that cannot be removed fails the run, even one whose
+ * suites all passed: _exit() from an atexit handler sets the status. */
+static void run_dir_cleanup(void) {
+    if (getpid() == g_run_owner &&
+        tmp_run_dir_close(g_run_dir, "slothweb_test") != 0) {
+        /* _exit() skips stdio's flush: the summary line would be lost
+         * on a pipe in exactly the run that fails for this. */
+        fflush(NULL);
+        _exit(1);
+    }
+}
+
+/* Ctrl-C, or a TERM from make or timeout(1), skips atexit(): remove the
+ * tree here, then die of the same signal so the caller sees it. */
+static void run_dir_on_signal(int sig) {
+    if (getpid() == g_run_owner && !g_run_keep)
+        tmp_run_dir_signal_rm(g_run_dir);
+    raise(sig);
+}
+
+/* WT_ONLY=alerts runs the suites whose name holds it: a developer's
+ * shortcut, never how the gate runs. */
+static int wanted(const char *name) {
+    const char *only = getenv("WT_ONLY");
+    return !only || !*only || strstr(name, only) != NULL;
+}
+#define SUITE(fn) do { if (wanted(#fn)) fn(); } while (0)
+
+/* The sanitizers slow slothweb's own code several-fold (SQLite is the
+ * system library and is not instrumented); ThreadSanitizer most. A read
+ * that fits its budget in a plain build then missed it on a busy host
+ * and answered 503 (test_alerts.c's 30,000-row lists, 3 to 6 failures in
+ * some web TSan runs on 2026-11-01), so the budgets are scaled here and
+ * only here. */
+#if defined(__SANITIZE_THREAD__)
+#define WT_BUDGET_SCALE 8
+#elif defined(__SANITIZE_ADDRESS__)
+#define WT_BUDGET_SCALE 4
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define WT_BUDGET_SCALE 8
+#elif __has_feature(address_sanitizer)
+#define WT_BUDGET_SCALE 4
+#endif
+#endif
+#ifndef WT_BUDGET_SCALE
+#define WT_BUDGET_SCALE 1
+#endif
+
 int main(void) {
     signal(SIGPIPE, SIG_IGN);
+#ifdef WITH_SQLITE
+    web_sdb_test_budget_scale = WT_BUDGET_SCALE;
+#endif
     /* The baselines index the local hour of the week: the suite pins the
      * zone, as it pins the clock, so a cell is the same on every host. */
     setenv("TZ", "UTC0", 1);
     tzset();
-    run_acl_tests();
-    run_config_tests();
-    run_http_tests();
-    run_routes_tests();
-    run_tui_colors_tests();
-    run_server_tests();
-    run_json_tests();
-    run_jsonl_tests();
-    run_live_tests();
-    run_ingest_tests();
-    run_rollup_tests();
-    run_metrics_tests();
-    run_store_tests();
-    run_series_tests();
-    run_baseline_tests();
-    run_ident_tests();
-    run_anomaly_tests();
-    run_replay_tests();
-    run_oui_tests();
-    run_query_tests();
-    run_ptr_tests();
-    run_slothdb_tests();
-    run_devices_tests();
-    run_parity_tests();
-    run_wifi_tests();
-    run_history_tests();
-    run_flows_tests();
-    run_readme_tests();
-    run_sqlbox_tests();
+    if (tmp_run_dir_open(g_run_dir, sizeof(g_run_dir), "slothweb_test",
+                         "slothweb_test") != 0)
+        return 2;
+    g_run_owner = getpid();
+    g_run_keep  = tmp_run_dir_keep();
+    atexit(run_dir_cleanup);
+    tmp_run_dir_trap_signals(run_dir_on_signal);
+    SUITE(run_acl_tests);
+    SUITE(run_config_tests);
+    SUITE(run_http_tests);
+    SUITE(run_routes_tests);
+    SUITE(run_tui_colors_tests);
+    SUITE(run_server_tests);
+    SUITE(run_json_tests);
+    SUITE(run_jsonl_tests);
+    SUITE(run_live_tests);
+    SUITE(run_ingest_tests);
+    SUITE(run_rollup_tests);
+    SUITE(run_metrics_tests);
+    SUITE(run_store_tests);
+    SUITE(run_series_tests);
+    SUITE(run_baseline_tests);
+    SUITE(run_ident_tests);
+    SUITE(run_anomaly_tests);
+    SUITE(run_replay_tests);
+    SUITE(run_oui_tests);
+    SUITE(run_query_tests);
+    SUITE(run_ptr_tests);
+    SUITE(run_slothdb_tests);
+    SUITE(run_devices_tests);
+    SUITE(run_parity_tests);
+    SUITE(run_wifi_tests);
+    SUITE(run_chain_tests);
+    SUITE(run_chmix_tests);
+    SUITE(run_tables_tests);
+    SUITE(run_history_tests);
+    SUITE(run_flows_tests);
+    SUITE(run_readme_tests);
+    SUITE(run_alertfmt_tests);
+    SUITE(run_alertkb_tests);
+    SUITE(run_vendorkb_tests);
+    SUITE(run_alerts_tests);
+    SUITE(run_loc_tests);
+    SUITE(run_sqlbox_tests);
+    SUITE(run_scope_tests);
+    SUITE(run_prefs_tests);
+    SUITE(run_glyph_tests);
+    SUITE(run_rf_tests);
+    SUITE(run_frrs_tests);
+    SUITE(run_notes_tests);
+    SUITE(run_incident_tests);
+    SUITE(run_subnotes_tests);
+    SUITE(run_mcp_tests);
+    SUITE(run_ble_tests);
+    SUITE(run_gnss_tests);
+    SUITE(run_sysstat_tests);
+    SUITE(run_own_tests);
+    SUITE(run_lure_tests);
+    SUITE(run_webdf_tests);
+    SUITE(run_adsb_tests);
+    SUITE(run_aprs_tests);
+    SUITE(run_rtl433_tests);
+    SUITE(run_victron_tests);
+    SUITE(run_twodaemon_tests);
+    SUITE(run_spectrum_tests);
+    SUITE(run_iso_tests);
+    SUITE(run_chan_tests);
+    SUITE(run_camera_tests);
+    SUITE(run_radar_tests);
+    SUITE(run_allkeys_tests);
+    SUITE(run_ssidview_tests);
+    SUITE(run_probes_tests);
+    SUITE(run_rfhist_tests);
+    SUITE(run_bledev_tests);
+    SUITE(run_btsig_tests);
+    SUITE(run_evidence_tests);
+    SUITE(run_bundle_tests);
+    SUITE(run_fleet_tests);
+    SUITE(run_locate_tests);
+    SUITE(run_fleetgnss_tests);
+    SUITE(run_fleetview_tests);
+    SUITE(run_fleetadsb_tests);
+    SUITE(run_fleetid_tests);
+    SUITE(run_fleetshare_tests);
+    /* The leak guard, under WT_ONLY too: a path still here is one a
+     * suite made and did not remove. */
+    if (tmp_run_dir_check(g_run_dir, "slothweb_test") != 0) wt_fail++;
     printf("slothweb tests: %d passed, %d failed\n", wt_pass, wt_fail);
     return wt_fail ? 1 : 0;
 }

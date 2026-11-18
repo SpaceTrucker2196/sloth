@@ -20,6 +20,7 @@
 #include "manifest_check.h"
 #include "sha256.h"
 #include <fcntl.h>
+#include "tmp_dir.h"
 
 /* ── The per-session hashed manifest (#92 slice 3) ──────────────────
  *
@@ -40,7 +41,7 @@
  * and frames are hand-built byte arrays; nothing is read from a
  * capture. */
 
-static char   g_dir[64];
+static char   g_dir[TEST_TMP_MAX];
 static time_t g_wall = 1700000000;           /* 2023-11-14T22:13:20Z */
 static time_t   em_wall(void) { return g_wall; }
 static uint64_t em_mono(void) { return (uint64_t)g_wall * 1000u; }
@@ -61,7 +62,7 @@ static void rm_dir(const char *dir) {
 }
 
 static void setup(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/sloth_manifest_XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/sloth_manifest_XXXXXX", test_tmpdir());
     ASSERT(mkdtemp(g_dir) != NULL);
     g_wall = 1700000000;
     sloth_clock_test_set(em_mono, em_wall);
@@ -474,7 +475,7 @@ static void test_evidence_pcap_gets_a_true_line(void) {
     char used[160], err[SFILE_ERR_MAX];
     ASSERT_EQ(evidence_export_pcap_unique("fedcba9876543210-1-DEAUTH_FLOOD.pcap",
                                           ids, 3, NULL,
-                                          "fedcba9876543210", "DEAUTH_FLOOD",
+                                          "fedcba9876543210", "DEAUTH_FLOOD", NULL,
                                           used, sizeof(used),
                                           err, sizeof(err)), 3);
     static mf_line_t l[4];
@@ -540,7 +541,7 @@ static void test_one_directory_one_manifest(void) {
     ASSERT_EQ(dump_one("THREAT_IP", p, sizeof(p)), 2);
     uint64_t ids[1];
     seed_ring(ids, 1);
-    ASSERT_EQ(evidence_export_pcap_unique("e.pcap", ids, 1, NULL, NULL, NULL,
+    ASSERT_EQ(evidence_export_pcap_unique("e.pcap", ids, 1, NULL, NULL, NULL, NULL,
                                           used, sizeof(used),
                                           err, sizeof(err)), 1);
     ASSERT_EQ(mf_count(g_dir, NULL, 0), 1);
@@ -555,15 +556,15 @@ static void test_one_directory_one_manifest(void) {
 /* Two directories, two manifests, each naming only its own files. */
 static void test_each_directory_lists_its_own_files(void) {
     setup();
-    char edir[64];
-    snprintf(edir, sizeof(edir), "/tmp/sloth_manifest_e_XXXXXX");
+    char edir[TEST_TMP_MAX];
+    snprintf(edir, sizeof(edir), "%s/sloth_manifest_e_XXXXXX", test_tmpdir());
     ASSERT(mkdtemp(edir) != NULL);
     open_eapol(edir);
     char p[512], used[160], err[SFILE_ERR_MAX];
     ASSERT_EQ(dump_one("THREAT_IP", p, sizeof(p)), 2);
     uint64_t ids[1];
     seed_ring(ids, 1);
-    ASSERT_EQ(evidence_export_pcap_unique("e.pcap", ids, 1, NULL, NULL, NULL,
+    ASSERT_EQ(evidence_export_pcap_unique("e.pcap", ids, 1, NULL, NULL, NULL, NULL,
                                           used, sizeof(used),
                                           err, sizeof(err)), 1);
     static mf_line_t l[4];
@@ -611,7 +612,7 @@ static void test_sweep_expires_the_manifest_and_a_new_one_starts(void) {
 static void test_record_refuses_non_files(void) {
     setup();
     char err[SFILE_ERR_MAX];
-    evm_meta_t m = { EVM_SINK_ALERT_PCAP, NULL, NULL };
+    evm_meta_t m = { EVM_SINK_ALERT_PCAP, NULL, NULL, NULL };
     ASSERT_EQ(evidence_manifest_record(-1, "x", &m, err, sizeof(err)), -1);
     char sub[200];
     snprintf(sub, sizeof(sub), "%s/sub", g_dir);
@@ -638,6 +639,59 @@ static void test_record_refuses_non_files(void) {
     ASSERT_EQ(mf_count(g_dir, NULL, 0), 0);
     if (dfd >= 0) close(dfd);
     rmdir(sub);
+    teardown();
+}
+
+/* 2026-10-27: a classic pcap has no field for where it was captured, so
+ * the manifest line carries the alert's location stamp as a `loc`
+ * object, and a line for an unstamped file carries none. Seen red with
+ * the `locj[0] &&` guard in evidence_manifest_record_pinned() removed
+ * (the second line gains `,` and an empty key, and stops parsing). */
+static void test_record_carries_location_stamp(void) {
+    setup();
+    char err[SFILE_ERR_MAX];
+    int dfd = sfile_private_dir(g_dir, err, sizeof(err));
+    ASSERT(dfd >= 0);
+    const char *names[2] = { "a.pcap", "b.pcap" };
+    for (int i = 0; i < 2; i++) {
+        char p[400];
+        snprintf(p, sizeof(p), "%s/%s", g_dir, names[i]);
+        FILE *fp = fopen(p, "wb");
+        ASSERT(fp != NULL);
+        if (fp) { fputs("bytes", fp); fclose(fp); }
+    }
+    loc_stamp_t l;
+    memset(&l, 0, sizeof(l));
+    l.src = LOC_SRC_GPS;
+    l.lat = -33.8688; l.lon = 151.2093;
+    l.has_acc = 1; l.acc_m = 6.5;
+    l.ts = 1699999990;
+    evm_meta_t m = { EVM_SINK_ALERT_PCAP, "0123456789abcdef", "PORT_SCAN", &l };
+    ASSERT_EQ(evidence_manifest_record(dfd, "a.pcap", &m, err, sizeof(err)), 0);
+    evm_meta_t m2 = { EVM_SINK_ALERT_PCAP, "0123456789abcdee", "PORT_SCAN", NULL };
+    ASSERT_EQ(evidence_manifest_record(dfd, "b.pcap", &m2, err, sizeof(err)), 0);
+
+    static mf_line_t ln[4];
+    int bad = -1;
+    ASSERT_EQ(mf_read_dir(g_dir, ln, 4, &bad), 2);
+    ASSERT_EQ(bad, 0);                       /* both lines are JSON */
+    char mname[200], mpath[600];
+    ASSERT_EQ(mf_count(g_dir, mname, sizeof(mname)), 1);
+    snprintf(mpath, sizeof(mpath), "%s/%s", g_dir, mname);
+    FILE *fp = fopen(mpath, "r");
+    ASSERT(fp != NULL);
+    char line[2][2048] = { "", "" };
+    if (fp) {
+        for (int i = 0; i < 2; i++)
+            if (!fgets(line[i], sizeof(line[i]), fp)) line[i][0] = '\0';
+        fclose(fp);
+    }
+    ASSERT(strstr(line[0], ",\"rule\":\"PORT_SCAN\",\"loc\":{\"lat\":-33.8688000,"
+                           "\"lon\":151.2093000,\"acc_m\":6.5,\"src\":\"gps\","
+                           "\"ts\":1699999990},\"reconstructed\"") != NULL);
+    ASSERT(strstr(line[1], "\"b.pcap\"") != NULL);
+    ASSERT(strstr(line[1], "\"loc\"") == NULL);
+    if (dfd >= 0) close(dfd);
     teardown();
 }
 
@@ -746,7 +800,7 @@ static void test_pin_holds_the_committed_bytes(void) {
     f = fopen(path, "ab");                    /* the next append */
     ASSERT(f != NULL);
     if (f) { fwrite(more, 1, sizeof(more) - 1, f); fclose(f); }
-    evm_meta_t m = { EVM_SINK_HASHCAT_22000, NULL, NULL };
+    evm_meta_t m = { EVM_SINK_HASHCAT_22000, NULL, NULL, NULL };
     ASSERT_EQ(evidence_manifest_record_pinned(&pin, &m, err, sizeof(err)), 0);
     ASSERT_EQ(pin.fd, -1);                    /* consumed */
     ASSERT_EQ(pin.dirfd, -1);
@@ -913,6 +967,7 @@ void run_evidence_manifest_tests(void) {
     RUN_TEST(test_each_directory_lists_its_own_files);
     RUN_TEST(test_sweep_expires_the_manifest_and_a_new_one_starts);
     RUN_TEST(test_record_refuses_non_files);
+    RUN_TEST(test_record_carries_location_stamp);
     RUN_TEST(test_stuck_fragment_abandons_the_manifest);
     RUN_TEST(test_fsync_failure_spends_its_seq);
     RUN_TEST(test_pin_holds_the_committed_bytes);

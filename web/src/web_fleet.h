@@ -1,0 +1,503 @@
+/* The owner's own fleet (#192 F1; docs/wiki/adr/0008-own-fleet.md,
+ * docs/wiki/fleet.md): each slothweb serves what its sensor has seen
+ * to the peers its allow list admits, and pulls the same from the peers
+ * it is told to, into its own slothweb.db. The sensor and sloth.db are
+ * untouched; slothweb still never writes sloth.db.
+ *
+ * The export. GET /api/fleet/export?since=EPOCH, read-only, on the
+ * existing listener, so only to the addresses --web-allow already
+ * admits. JSON Lines, one flat object per line, so the puller reads it
+ * with the stream's own strict decoder (web_jsonl.h) and nothing new:
+ *
+ *   {"type":"fleet_export",...}  the version, the site (label, the
+ *                                sensor's position and its age), the
+ *                                build, the window
+ *   {"type":"gnss",...}          the receiver's summary
+ *   {"type":"wifi"|"ble"|"ap"|"probe"|"alert"|"verdict",...}
+ *                                the rows changed since `since`, newest
+ *                                first, each kind at most its cap
+ *   {"type":"fleet_end",...}     the count of each kind, a truncated_<kind>
+ *                                flag for each, and "complete":true
+ *
+ * With adsb=1 (#192 I7, web_fleetadsb.h) the whole export also carries
+ * this site's ADS-B receiver and its demonstrated coverage (adsb_rx) and
+ * the aircraft it heard (aircraft lines), counted on the end line.
+ *
+ * Monitor data only (owner hard rule, 2026-11-12; web_fleetshare.h,
+ * docs/wiki/adr/0009-fleet-monitor-only.md). The rule is provenance:
+ * what this site heard in monitor mode travels ("anything that is thru
+ * monitor mode is game"), what it learned through the joined network
+ * or the wire never does. Devices are read in the Monitor scope
+ * (web_scope.h: no address, no name, the radio's own first and last
+ * seen and signal), so a device the LAN also knows travels with what
+ * the radio heard of it alone, and one only the LAN or the managed
+ * card's station dump knows is withheld; so are the host's own radios
+ * and the roster (DEV_RISK_SELF). Every AP the radio heard beacon and
+ * every probe travels, the joined network's included. An alert or a
+ * verdict travels only for a type on the allow-list, with no IP
+ * address. The header names this host (hostname) and the rule
+ * (share_rule, "monitor_only/2"); the importer refuses what the rule
+ * forbids from any peer, and the rows only a sender can judge (wifi,
+ * ap, probe) from an answer that does not state a rule.
+ *
+ * With own=1 (#192 I5) the header also names this site's monitor radios
+ * (own_macs), the transmitters at a known position that calibrate a
+ * peer's receiver (web_locate.h); never the managed card (this host's
+ * station on the joined network) or a radio whose role is not known
+ * (web_fleet_read_own()). Only asked for, so an older importer never
+ * meets the member.
+ *
+ * With ident=1 (#192 I2-I4, I8, web_fleetid.h) the whole export also
+ * names this site's own networks (own_net lines, counted on the end
+ * line), and each ap line carries the attacker-fingerprint material
+ * slothweb holds for it: the beacon's IE-order and vendor-IE hashes and
+ * WPS strings from the stream's ledger, and the AP-impersonation alerts
+ * sloth.db holds naming that BSSID as a transmitter. A page asked with
+ * ident=1 carries the ap members too. Only asked for, so an older
+ * importer never meets a member it does not know.
+ *
+ * Every member of every line is named in web_fleet_members[] and in no
+ * other place: the writer emits those names only, the reader refuses a
+ * line holding any other, and the suite holds each name to
+ * web_sdb_is_secret() (web_secret.h). The sloth.db rows come through
+ * the M4 reader and its column allow-list (web_slothdb.h), so no
+ * credential column, no alert key, no alert detail and no EAPOL table
+ * can be read, whatever a later edit to this file says; an alert travels
+ * as its type, title, severity, count, times and a fingerprint of its
+ * type and title. Every line is held to the importer's own checks before
+ * it is sent: a row the importer would refuse (a value a sensor stored
+ * outside its ranges) is left out and its kind marked truncated, since
+ * one such line refuses the whole answer at every pull.
+ *
+ * The pull. --peer NAME=URL (at most WEB_FLEET_PEERS), every
+ * --peer-interval-secs (default 60), on a thread of its own: a plain
+ * HTTP/1.1 GET over TCP to http://A.B.C.D[:PORT] (literal IPv4 only,
+ * nothing is resolved), a connect deadline and one read deadline for the
+ * whole answer, no transfer coding, the response held
+ * to WEB_FLEET_RESP_MAX and refused whole past it. The address must be
+ * in 100.64.0.0/10 (the tailnet: WireGuard binds it to a node key)
+ * unless --peer-allow-outside-tailnet is given, which is announced.
+ * Incremental: `since` is the peer's own clock at its last good answer
+ * less WEB_FLEET_OVERLAP_S. A response is checked whole (every line
+ * decoded, every member known, every value in range, the end line's
+ * counts matching) before one row is written; a refused response writes
+ * no sighting.
+ *
+ * The backfill (F2). `since` advances, so rows a kind's cap cut from an
+ * answer would never be asked for again. The pull asks with next=1, and
+ * the end line then carries next_<kind>, a cursor after the last row
+ * sent, for each pageable kind (wifi, ap, alert, verdict) that was cut.
+ * The puller keeps (the cut answer's since, the cursor) per kind
+ * (web_fleet_bf_t, in slothweb.db's meta table in the same transaction
+ * as the rows) and after each good pull asks for up to
+ * WEB_FLEET_PAGES_PER_PULL pages, GET
+ * /api/fleet/export?since=FLOOR&kind=K&after=CURSOR, each the next cap's
+ * worth in the reader's own order (keyset on last_seen and the key, so a
+ * row updated meanwhile moves out of the range to the incremental pull
+ * and none is skipped), until a page is not cut. A probe list rides its
+ * client's wifi row; the BLE table never holds more than its cap.
+ *
+ * The store (slothweb.db v8, web_store.h): peer_sites, one row per
+ * peer, and peer_sightings, one row per (peer, kind, key), first_seen
+ * and last_seen widened by every pull. The pull thread writes over a
+ * connection of its own (web_store_open_aux()); the HTTP thread reads
+ * over the store's read-only one. Bounded: at most WEB_FLEET_ROWS_PER_PEER
+ * sightings a peer, the least recently seen dropped first, and none
+ * older than WEB_FLEET_KEEP_S by the peer's clock. */
+#ifndef SLOTHWEB_FLEET_H
+#define SLOTHWEB_FLEET_H
+
+#include <pthread.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "web_json.h"
+#include "web_store.h"
+
+#define WEB_FLEET_EXPORT_VERSION 1
+#define WEB_FLEET_PEERS          8
+#define WEB_FLEET_NAME_MAX       32
+#define WEB_FLEET_URL_MAX        64
+#define WEB_FLEET_INTERVAL_DEF   60
+#define WEB_FLEET_INTERVAL_MIN   10
+#define WEB_FLEET_INTERVAL_MAX   3600
+#define WEB_FLEET_OVERLAP_S      120
+#define WEB_FLEET_ERR_MAX        159
+
+/* Per-kind row caps of one export. */
+#define WEB_FLEET_CAP_WIFI       2000
+#define WEB_FLEET_CAP_BLE        1024
+#define WEB_FLEET_CAP_AP         1000
+#define WEB_FLEET_CAP_PROBE      4000
+#define WEB_FLEET_CAP_ALERT      1000
+#define WEB_FLEET_CAP_VERDICT    1000
+/* A page cursor (web_fleet_cursor_ok()): "<last_seen>~<tok>", tok the
+ * last row's key in its reader's order (a MAC or BSSID as sloth.db holds
+ * it, an alert's rowid, a triage row's id), at most these bytes. */
+#define WEB_FLEET_TOK_MAX        24
+#define WEB_FLEET_CUR_MAX        40
+/* SSIDs a client's probe list contributes at most. */
+#define WEB_FLEET_PNL_PER        32
+/* The export's own bound (a row that would pass it is not written and
+ * its kind is marked truncated), and the puller's, a little wider: a
+ * well-formed export never reaches it, so a response that does is not
+ * one, and is refused rather than cut. */
+#define WEB_FLEET_EXPORT_MAX     (8u << 20)
+#define WEB_FLEET_RESP_MAX       (10u << 20)
+#define WEB_FLEET_HDR_MAX        16384
+/* A decoded string member of an imported row, at most (bytes). */
+#define WEB_FLEET_STR_MAX        255
+#define WEB_FLEET_CONNECT_MS     5000
+#define WEB_FLEET_READ_MS        30000
+#define WEB_FLEET_BUSY_MS        5000
+#define WEB_FLEET_ROWS_PER_PEER  20000
+/* Backfill pages of one kind a pull at most (web_fleet_bf_t). */
+#define WEB_FLEET_PAGES_PER_PULL 4
+/* A peer whose export refused next=1 (an F1 build) is pulled without it
+ * for this long before it is asked with it again. */
+#define WEB_FLEET_NONEXT_S       3600
+#define WEB_FLEET_KEEP_S         (90LL * 86400)
+/* A site's own radios (#192 I5): at most this many MACs a site names,
+ * each "aa:bb:cc:dd:ee:ff" and its NUL. An older peer's export refuses
+ * own=1; it is then asked without it for WEB_FLEET_NOOWN_S. */
+#define WEB_FLEET_OWN_MAX        8
+#define WEB_FLEET_MAC_SZ         18
+#define WEB_FLEET_NOOWN_S        3600
+/* The own radios are read again this often (#196). */
+#define WEB_FLEET_OWN_REREAD_S   600
+/* The receiver's GNSS incidents (#192 I6, web_fleetgnss.h), asked for
+ * with gnss=1: at most this many gnss_event lines, the newest of the last
+ * week. An older export refuses gnss=1; it is then asked without it for
+ * WEB_FLEET_NOGNSS_S. */
+#define WEB_FLEET_CAP_GNSSEV     256
+#define WEB_FLEET_NOGNSS_S       3600
+/* The identity findings' export (#192 I2-I4, I8, web_fleetid.h), asked
+ * for with ident=1: this site's own networks (own_net lines) and each
+ * AP row's attacker-fingerprint members. An older export refuses
+ * ident=1; it is then asked without it for WEB_FLEET_NOIDENT_S. */
+#define WEB_FLEET_NOIDENT_S      3600
+/* A peer's own networks (own_net rows) are dropped once its newest
+ * answer to ident=1 is this old by its own clock, and not counted once
+ * that answer is this old by this site's (#196): a peer that stops
+ * offering ident, or stops answering, no longer names them for ever. */
+#define WEB_FLEET_OWN_STALE_S    86400
+/* This site's own networks (--my-ssid, --my-bssid on slothweb, as on
+ * sloth): at most WEB_FLEET_MINE_MAX of each, an SSID of 1..32 octets. */
+#define WEB_FLEET_MINE_MAX       16
+#define WEB_FLEET_SSID_MAX       32
+/* A site's host name in its export's header (owner rule 2026-11-12):
+ * 1..WEB_FLEET_HOST_MAX of [A-Za-z0-9._-]. */
+#define WEB_FLEET_HOST_MAX       253
+
+enum { WEB_FK_WIFI = 0, WEB_FK_BLE, WEB_FK_AP, WEB_FK_PROBE, WEB_FK_ALERT,
+       WEB_FK_VERDICT, WEB_FK_COUNT };
+
+/* The kind's word ("wifi", ...), the line type and peer_sightings.kind. */
+const char *web_fleet_kind_word(int k);
+/* 1 for a kind the export pages (wifi, ap, alert, verdict): a cut there
+ * carries a next_<kind> cursor. A probe list rides its client's wifi
+ * row; the BLE table is never larger than its cap. */
+int  web_fleet_kind_pages(int k);
+/* Is s a cursor: 1..12 digits, '~', 0..WEB_FLEET_TOK_MAX of
+ * [0-9A-Za-z:]? */
+int  web_fleet_cursor_ok(const char *s);
+
+/* The members each line type may carry, NULL-ended per type, the type
+ * name first in each row. web_fleet_members_of() answers NULL for a
+ * type that is not one. */
+extern const char *const *const web_fleet_members[];
+extern const size_t web_fleet_members_n;
+const char *const *web_fleet_members_of(const char *type);
+
+typedef struct {
+    char      name[WEB_FLEET_NAME_MAX + 1];
+    char      url[WEB_FLEET_URL_MAX + 1];
+    uint8_t   addr[4];
+    uint16_t  port;
+} web_fleet_peer_cfg_t;
+
+/* "NAME=http://A.B.C.D[:PORT][/]". NAME is 1..32 of [A-Za-z0-9._-];
+ * the address a literal IPv4 (no name is ever resolved), the port
+ * 1..65535 (80 when absent, as for any http URL). Syntax only: the
+ * tailnet rule is web_fleet_check_peer(). 0, or -1 with err. */
+int  web_fleet_parse_peer(const char *spec, web_fleet_peer_cfg_t *out,
+                          char *err, size_t errsz);
+/* 1 when a is in 100.64.0.0/10. */
+int  web_fleet_in_tailnet(const uint8_t a[4]);
+/* The tailnet rule: 0, or -1 with err when the address is outside it
+ * and allow_outside is 0. */
+int  web_fleet_check_peer(const web_fleet_peer_cfg_t *p, int allow_outside,
+                          char *err, size_t errsz);
+
+/* A kind's backfill (F2): the rows a cut answer left behind, from
+ * floor (the cut answer's since) to the cursor, fetched a page a pull
+ * until a page is not cut. Kept in slothweb.db's meta table while it
+ * runs, so a restart resumes it.
+ *
+ * A whole export cut again while a backfill runs (#196) leaves a new
+ * gap, from its own since to its cut, above the one being paged. The
+ * segment being paged is suspended with its cursor (old[], the newest
+ * last) and the new gap paged first; when a gap's page is not cut, the
+ * newest suspended segment resumes where it stopped. Each pull's own gap
+ * is therefore finished before older work and no page is spent twice on
+ * the same rows, so a peer cut at every pull still reaches its oldest
+ * rows as long as one pull's gap takes fewer pages than a pull fetches.
+ * At most WEB_FLEET_BF_SEGS are suspended; past that the new gap is
+ * merged into the segment being paged (the older floor, the new
+ * cursor), which re-reads that segment's paged rows and loses none. */
+#define WEB_FLEET_BF_SEGS        4
+typedef struct {
+    long long floor;
+    char      cur[WEB_FLEET_CUR_MAX + 1];
+} web_fleet_seg_t;
+typedef struct {
+    int       active;
+    long long floor;
+    char      cur[WEB_FLEET_CUR_MAX + 1];
+    int       nold;
+    web_fleet_seg_t old[WEB_FLEET_BF_SEGS];
+} web_fleet_bf_t;
+
+typedef struct {
+    web_fleet_peer_cfg_t cfg;
+    long long last_attempt, last_ok;       /* unix s, 0 never */
+    long long remote_ts;                   /* the peer's clock at its last
+                                              good answer, 0 none */
+    long long rows_last;
+    unsigned long pulls, failures;
+    unsigned long pages, page_failures;    /* backfill pages fetched, refused */
+    long long rtt_ms;                      /* the last good pull's round trip,
+                                              ms (-1 none, #196) */
+    long long no_next_until;               /* an F1 peer: plain pulls until then */
+    long long no_own_until;                /* an F2 peer: no own=1 until then */
+    long long no_gnss_until;               /* an I5 peer: no gnss=1 until then */
+    long long no_adsb_until;               /* an I6 peer: no adsb=1 until then */
+    long long no_ident_until;              /* an I7 peer: no ident=1 until then */
+    /* Lines the monitor-only rule refused (owner, 2026-11-12;
+     * web_fleetshare.h): in the last good answer, and since the start. */
+    long long refused_last;
+    unsigned long refused_total;
+    /* The peer's own radios, as its last full answer named them (own=1;
+     * memory only: the next pull after a restart names them again). */
+    int       nown;
+    long long own_at;                      /* 0: never named */
+    char      own[WEB_FLEET_OWN_MAX][WEB_FLEET_MAC_SZ];
+    web_fleet_bf_t bf[WEB_FK_COUNT];
+    char      last_error[WEB_FLEET_ERR_MAX + 1];
+} web_fleet_peer_t;
+
+
+struct sqlite3;
+struct web_gnss;
+struct web_fg;
+struct web_chain;
+
+/* A site's own networks (#192 I2, I3): the SSIDs and BSSIDs its
+ * operator names with --my-ssid and --my-bssid, each SSID 1..32 octets
+ * with no control character, each BSSID canonical. */
+typedef struct {
+    int  nssid, nbssid;
+    char ssid[WEB_FLEET_MINE_MAX][WEB_FLEET_SSID_MAX + 1];
+    char bssid[WEB_FLEET_MINE_MAX][WEB_FLEET_MAC_SZ];
+} web_fleet_mine_t;
+
+/* An SSID --my-ssid takes: 1..32 octets, none a control character. */
+int  web_fleet_ssid_ok(const char *s);
+/* A host name the header carries: 1..WEB_FLEET_HOST_MAX of [A-Za-z0-9._-]. */
+int  web_fleet_host_ok(const char *s);
+
+typedef struct web_fleet {
+    pthread_mutex_t   mu;                  /* guards peer[] and the counts */
+    pthread_cond_t    cv;
+    pthread_t         th;
+    int               started, stop;
+    web_fleet_peer_t  peer[WEB_FLEET_PEERS];
+    int               npeer;
+    int               interval_s;
+    int               allow_outside;
+    web_store_t *store;               /* NULL: no store, nothing pulled */
+    struct sqlite3   *wr;                  /* the pull thread's own */
+    /* This site's own radios (web_fleet_read_own() at start, re-read by
+     * web_fleet_own_tick(); #196): under web_fleet.c's own lock, so read
+     * them with web_fleet_own_get(), never directly. own_csv is handed
+     * to the export as the src's own_csv, which copies it under the lock. */
+    int               nown, own_read;
+    long long         own_read_at;
+    char              own_sysfs[192];
+    char              own[WEB_FLEET_OWN_MAX][WEB_FLEET_MAC_SZ];
+    char              own_csv[WEB_FLEET_OWN_MAX * WEB_FLEET_MAC_SZ];
+    /* The monitor radios among them (own=1's own_macs; owner rule
+     * 2026-11-12: never the managed card), the same size as own_csv. */
+    char              own_mon_csv[WEB_FLEET_OWN_MAX * WEB_FLEET_MAC_SZ];
+    /* This site's own networks (#192 I2, I3; set before start, read
+     * without the lock after that). */
+    web_fleet_mine_t  mine;
+    /* GNSS across the sites (#192 I6, web_fleetgnss.h): this site's
+     * receiver (set before start; NULL none), the region a peer must be
+     * within to make an event regional (--peer-gnss-region-km), and the
+     * samples, under mu (NULL when it could not be allocated). */
+    struct web_gnss  *gnss;
+    double            gnss_region_m;
+    struct web_fg    *fg;
+    /* Test seams, the defaults otherwise. */
+    int               connect_ms, read_ms;
+    size_t            resp_max;
+    int               pages_per_pull;
+} web_fleet_t;
+
+/* "a,b,c": 0..WEB_FLEET_OWN_MAX canonical unicast MACs into own, *n
+ * set; -1 for anything else. */
+int  web_fleet_own_parse(const char *csv, char own[][WEB_FLEET_MAC_SZ], int *n);
+/* This host's own radios: the address of each physical interface under
+ * SYSFS/class/net (sysfs NULL: /sys), every entry looked at, sorted by
+ * interface name, at most WEB_FLEET_OWN_MAX, into f->own and f->own_csv,
+ * and the monitor radios among them into f->own_mon_csv: an interface
+ * whose class/net/<if>/type is an 802.11 monitor link type (801..803),
+ * an address no other interface holds; a managed card, a wired port or
+ * an interface whose type cannot be read is not one. The path is kept
+ * for the re-reads. A read of the host's own files,
+ * nothing on a network. The count. */
+int  web_fleet_read_own(web_fleet_t *f, const char *sysfs);
+/* Read the list again when WEB_FLEET_OWN_REREAD_S have passed since the
+ * last read (the first call after web_fleet_read_own() only notes now):
+ * the pull thread's, once a round; the export's too, so a slothweb with
+ * no --peer keeps it current. */
+void web_fleet_own_tick(web_fleet_t *f, long long now_s);
+/* A copy of the list under its lock; the count. */
+int  web_fleet_own_get(web_fleet_t *f, char own[][WEB_FLEET_MAC_SZ]);
+
+/* Set up (no thread, no connection). peers may be NULL with n 0. */
+void web_fleet_init(web_fleet_t *f, const web_fleet_peer_cfg_t *peers, int n,
+                    int interval_s, int allow_outside, web_store_t *store);
+/* Open the pull thread's connection and read back each peer's last
+ * good pull from peer_sites; then start the thread when there is a
+ * peer. 0, or -1 with err. */
+int  web_fleet_start(web_fleet_t *f, char *err, size_t errsz);
+void web_fleet_stop(web_fleet_t *f);
+/* Read back each peer's last good pull from peer_sites and each kind's
+ * backfill from meta, over the pull thread's connection (f->wr):
+ * web_fleet_start()'s first step, and the tests' restart. */
+void web_fleet_load(web_fleet_t *f);
+void web_fleet_destroy(web_fleet_t *f);
+
+/* The monitor-only rule's purge of what an earlier build stored (owner,
+ * 2026-11-12; web_fleetshare.h): once, at start. A store no build of
+ * the rule purged: every peer's alert and verdict rows the rule refuses
+ * and its wifi, ap and probe rows (from exports that did not filter
+ * them). Every store: each peer's clock (remote_ts) and wifi, ap, alert
+ * and verdict backfill reset, so the next pull asks again from the
+ * start for what the provenance rule ("monitor_only/2") now lets travel
+ * (own_net, the joined network as heard over the air). Nothing the rule
+ * allows is deleted. In one transaction, marked done in meta
+ * "fleet.rule.monitor_only.v2". */
+typedef struct {
+    long long alert, verdict, rows, meta, sites;
+    int       first;                 /* the store had no purge before */
+} web_fleet_purge_t;
+/* Over f->wr when open, else a connection of its own. 0 purged, 1
+ * already done before, -1 failed (nothing changed). Logged to stderr
+ * with its counts when it purged. */
+int  web_fleet_purge(web_fleet_t *f, long long now_s, web_fleet_purge_t *out);
+
+/* One pull of peer i, now (the thread's step; the tests call it
+ * directly). 0 stored, -1 refused or failed (the reason in the peer's
+ * last_error). */
+int  web_fleet_pull_one(web_fleet_t *f, int i, long long now_s);
+
+/* Validate a whole export body and, when write is set and it passes,
+ * store it as peer i's answer in one transaction. 0, or -1 with err.
+ * *rows gets the data lines, *remote_ts the header's generated. */
+int  web_fleet_ingest(web_fleet_t *f, int i, const char *body, size_t len,
+                      long long now_s, int write, long long *rows,
+                      long long *remote_ts, char *err, size_t errsz);
+
+/* This site's receiver sample for the GNSS comparison and the save of
+ * every site's coverage and reference to meta (web_fleetgnss.h): the
+ * pull thread's, once a round after the peers; the tests call it. */
+void web_fleet_gnss_tick(web_fleet_t *f, long long now_s);
+
+/* /api/health's "fleet" member. */
+void web_fleet_health_json(web_fleet_t *f, web_jw_t *w, long long now_s);
+
+/* /api/fleet/peers: peer_sites and each peer's sightings by kind, into
+ * body. 0 with *len, *status set; -1 when it did not fit. */
+int  web_fleet_peers_route(web_fleet_t *f, const char *query, long long now_s,
+                           char *body, size_t cap, size_t *len, int *status);
+
+struct web_slothdb;
+struct web_ble;
+struct web_gnss;
+struct web_frrs;
+struct web_adsb;
+
+/* What the export reads; any may be NULL (its lines are then absent,
+ * and the header says why for sloth.db). */
+typedef struct {
+    struct web_slothdb *sdb;
+    struct web_ble     *ble;
+    struct web_gnss    *gnss;
+    struct web_frrs    *frrs;
+    const char         *own_csv;   /* this site's radios (own=1), may be NULL */
+    struct web_adsb    *adsb;      /* the receiver's summary (adsb=1, #192 I7) */
+    const web_fleet_mine_t *mine;  /* this site's own networks (ident=1), may be NULL */
+    /* The stream's twin attribution (web_chain.h): which half of an
+     * EVIL_TWIN pair is the impostor, for ident=1's attacks; may be NULL. */
+    struct web_chain   *chain;
+    /* This site's monitor radios (own=1's own_macs), may be NULL: none
+     * named. own_csv's other radios are never named (owner rule
+     * 2026-11-12). */
+    const char         *own_mon_csv;
+    /* sloth-rf's database (--rf-db, #214), may be NULL: the GNSS
+     * incidents and the aircraft are then read from sdb, as before the
+     * split. What travels is the same either way: the same readers, the
+     * same writers and the same allow-list (ADR 0009); only the file
+     * the rows sit in differs. Last, so the initialisers that name the
+     * members above in order stand. */
+    struct web_slothdb *rf;
+} web_fleet_src_t;
+
+/* Where the export and the fleet's ADS-B and GNSS views read the RF
+ * tables: src->rf when it is configured, else src->sdb. */
+struct web_slothdb *web_fleet_src_rfdb(const web_fleet_src_t *src);
+
+/* /api/fleet/export: a heap body the caller frees, in *body. 0 with
+ * *status (200, 400 or 503), -1 out of memory. */
+int  web_fleet_export_route(const web_fleet_src_t *src, const char *query,
+                            long long now_s, char **body, size_t *len,
+                            int *status);
+
+/* ── the Fleet tab (F2) ── */
+
+/* The shared list's rows: the default and the most a request may ask
+ * for; the peer rows it scans for keys, newest first; its body's bound. */
+#define WEB_FLEET_SHARED_DEF   50
+#define WEB_FLEET_SHARED_MAX   200
+#define WEB_FLEET_SHARED_SCAN  5000
+#define WEB_FLEET_SHARED_BODY  (1u << 20)
+
+/* The great-circle distance between two positions, metres (haversine on
+ * the IUGG mean radius, 6,371,008.8 m). */
+double web_fleet_dist_m(double lat1, double lon1, double lat2, double lon2);
+
+/* GET /api/fleet/overview: this site (its label, the position the export
+ * sends, sloth.db's state) and each peer from peer_sites and its live
+ * state (position; last good pull and attempt, last refusal; clock skew,
+ * the peer's clock at its last good answer less this one's then; the
+ * rows by kind; each kind's backfill), and the distance between every
+ * pair of sites with a position. Into body; 0 with *len and *status, -1
+ * when it did not fit. A site is the whole sensor, whatever the scope. */
+int  web_fleet_overview_route(web_fleet_t *f, const web_fleet_src_t *src, const char *query,
+                              long long now_s, char *body, size_t cap, size_t *len,
+                              int *status);
+/* GET /api/fleet/shared?kind=wifi|ble|ap|probe&limit=N: the keys of the
+ * kind a peer sent that this site holds too (sloth.db through the M4
+ * reader, read-only; a BLE address from slothweb's own table), each
+ * site's first and last seen and signal, the newest activity at any
+ * site first, at most limit (50, 1..200). The newest
+ * WEB_FLEET_SHARED_SCAN peer rows are looked at, the local reads within
+ * the overview budget; "partial" says either stopped short. A heap body
+ * the caller frees; 0 with *status, -1 out of memory. */
+int  web_fleet_shared_route(web_fleet_t *f, const web_fleet_src_t *src, const char *query,
+                            long long now_s, char **body, size_t *len, int *status);
+
+#endif

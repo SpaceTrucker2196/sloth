@@ -3,10 +3,12 @@
  * DDL (sdb_gen.c), the test's own OUI table, slothweb's store, rollup,
  * anomaly engine, identity tables and passive PTR cache, on the pinned
  * clock SDB_NOW. */
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "sdb_gen.h"
@@ -124,7 +126,7 @@ static void test_page_carries_the_m4_views(void) {
         WT_ASSERT(strstr(p, want) || strstr(p, alt));
     }
     WT_HAS(p, "var VIEWS = [\"overview\", \"activity\", \"devices\", \"anomalies\", \"wifi\", \"flows\", \"history\",\n"
-              "               \"lookup\"];");
+              "               \"lookup\", \"tacdb\", \"ble\", \"gnss\", \"adsb\", \"aprs\", \"radar\", \"fleet\"];");
     WT_HAS(p, "var p = \"/api/devices?limit=\" + DEV_PAGE + \"&offset=\" + offset +\n"
               "            \"&sort=\" + encodeURIComponent(sort);");
     WT_HAS(p, "if (q !== \"\") p += \"&q=\" + encodeURIComponent(q);");
@@ -141,12 +143,53 @@ static void test_page_carries_the_m4_views(void) {
     /* No active lookup anywhere on the page (the 2026-10-21 ruling). */
     WT_LACKS(p, "ACTIVE QUERY");
     WT_LACKS(p, "active-rdns");
-    WT_HAS(p, "<span id=\"milestone\">M6</span>");
+    WT_HAS(p, "<span id=\"hostname\"></span>");
+    WT_HAS(p, "set(\"hostname\", h.hostname || \"\");");
+    WT_LACKS(p, "<span id=\"milestone\">");
+}
+
+
+/* #168: every DB-backed view (Devices, WiFi's AP table, Flows, History,
+ * Lookup) carries the freshness line, and the page fills it from
+ * /api/health, in the warning style when the server says stale. Seen
+ * red with h-dbage renamed in index.html, with the stale class dropped
+ * from dbAge() in app.js, and with the .dbage.stale rule removed from
+ * page.css. */
+static void test_page_shows_db_freshness(void) {
+    const char *p = (const char *)web_page;
+    static const char *const ids[] = {
+        "d-dbage", "w-dbage", "f-dbage", "h-dbage", "l-dbage",
+    };
+    for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        char want[96];
+        snprintf(want, sizeof(want), "<span class=\"sub dbage\" id=\"%s\"></span>", ids[i]);
+        WT_HAS(p, want);
+    }
+    WT_HAS(p, "var DB_VIEWS = [\"devices\", \"wifi\", \"flows\", \"history\", \"lookup\", \"tacdb\"];");
+    WT_HAS(p, "var DB_AGE_IDS = [\"d-dbage\", \"w-dbage\", \"f-dbage\", \"h-dbage\", \"l-dbage\"];");
+    WT_HAS(p, "var t = \"database as of \" + dbWhen(h.sloth_db_mtime);");
+    /* The date when it is not today's (a days-old snapshot with the
+     * stream down is not "stale" and must not read as today). Seen red
+     * with the date line removed from dbWhen(). */
+    WT_HAS(p, "if (d.toDateString() === now.toDateString()) return t;\n"
+              "    return d.getFullYear() + \"-\" + two(d.getMonth() + 1) + \"-\" + two(d.getDate()) + \" \" + t;");
+    WT_HAS(p, "if (h.sloth_db_stale === true)\n"
+              "      t += \" - stale: \" + dur(h.sloth_db_age_s) + \" old while the live stream is current; these rows are as old as it is\";");
+    WT_HAS(p, "e.className = stale ? \"sub dbage stale\" : \"sub dbage\";");
+    WT_HAS(p, ".dbage.stale { color: var(--sev-warn); font-weight: bold; }");
+    /* Filled at load, on showing a DB-backed view, and every 30 s while
+     * one is shown. */
+    WT_HAS(p, "      dbAge(h);\n");
+    WT_HAS(p, "if (DB_VIEWS.indexOf(v) >= 0) dbFresh();");
+    WT_HAS(p, "setInterval(function () { if (DB_VIEWS.indexOf(view) >= 0) dbFresh(); }, 30000);");
 }
 
 #ifdef WITH_SQLITE
 
-static char g_dir[64];
+#include <sqlite3.h>
+#include "wt_tmp.h"
+
+static char g_dir[TEST_TMP_MAX];
 static oui_build_t g_oui;
 static web_slothdb_t g_sdb;
 static web_store_t g_store;
@@ -167,7 +210,7 @@ static void feed(const char *line, long long now) {
 }
 
 static void up(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-dev-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-dev-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(g_dir) != NULL);
     WT_EQ(sdb_oui(&g_oui, g_dir), 0);
     snprintf(g_db, sizeof(g_db), "%s/sloth.db", g_dir);
@@ -191,7 +234,7 @@ static void up(void) {
     c.oui = &g_oui.tab;
     c.ptr = &g_ptr;
     WT_EQ(web_anomaly_init(&g_an, 64, &c), 0);
-    web_sdb_fns_t f = { &g_oui.tab, &g_an, &g_ptr };
+    web_sdb_fns_t f = { &g_oui.tab, &g_an, &g_ptr, NULL };
     web_slothdb_init(&g_sdb, g_db, &f);
     g_m4.sdb = &g_sdb;
     g_m4.oui = &g_oui.tab;
@@ -256,6 +299,10 @@ static void test_devices_acceptance(void) {
     WT_EQ(route(&H, "/api/devices", "q=vendor:apple+random:yes+seen:<24h", 0), 200);
     macs_of(body_of(g_out), macs, sizeof(macs));
     WT_ASSERT(!strcmp(macs, "da:a1:19:00:00:01 f2:11:22:00:00:06"));
+    /* The host's offset beside the strip (the suite pins TZ to UTC): the
+     * page's ruler and sun words are in it. Seen red with the member
+     * taken out of the route. */
+    WT_HAS(body_of(g_out), "\"presence_cell_s\":600,\"utc_offset_s\":0,");
     WT_HAS(g_out, "Content-Type: application/json\r\n");
     WT_HAS(g_out, "Cache-Control: no-store\r\n");
     /* HEAD: the headers, no body. */
@@ -484,6 +531,41 @@ static void test_drawer_presence_week_anomalies(void) {
     WT_ASSERT(!strcmp(macs, mac));
 }
 
+/* G2 (web_rf.h, #171 V2): a device row carries its signal trail, the
+ * drawer and the Lookup card the same at the top level with the card's
+ * presence strip (F20); under Local, which shows nothing of the monitor
+ * radio, "rf" is null. The Local absence was seen red with
+ * web_rf_trails()'s scope guard taken out, and the card's strip with
+ * its member left out of the lookup route. */
+static void test_rows_carry_g2(void) {
+    const char *mac = "da:a1:19:00:00:01";
+    web_rollup_add(&g_ru, WM_RF_RSSI_STA, mac, -71, SDB_NOW - 130);
+    web_rollup_add(&g_ru, WM_RF_RSSI_STA, mac, -64, SDB_NOW - 70);
+    web_rollup_add(&g_ru, WM_RF_RSSI_STA, mac, -60, SDB_NOW - 5);
+    WT_EQ(route(&H, "/api/devices", "q=mac:da:a1:19:00:00:01", 0), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "\"rf\":{\"metric\":\"rf.rssi.sta\",");
+    /* Minutes 56 to 58 of the hour; the one now is in has nothing yet. */
+    WT_HAS(b, ",-71,-64,-60,null],\"n\":3,\"whisker\":[-60,-60],\"whisker_src\":\"samples\",");
+    WT_EQ(route(&H, "/api/device/da:a1:19:00:00:01", "", 0), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"presence_from\":");
+    WT_HAS(b, ",-71,-64,-60,null],\"n\":3,");
+    WT_EQ(route(&H, "/api/lookup", "q=da:a1:19:00:00:01", 0), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"mac\":\"da:a1:19:00:00:01\",\"presence\":\"");
+    WT_HAS(b, ",-71,-64,-60,null],\"n\":3,");
+    /* An IP with no MAC behind it has neither. */
+    WT_EQ(route(&H, "/api/lookup", "q=10.0.1.11", 0), 200);
+    WT_LACKS(body_of(g_out), "\"presence\":");
+    WT_LACKS(body_of(g_out), "\"rf\":");
+    WT_EQ(route(&H, "/api/devices", "q=mac:da:a1:19:00:00:01&scope=local", 0), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "{\"mac\":\"da:a1:19:00:00:01\"");
+    WT_HAS(b, "\"rf\":null");
+    WT_LACKS(b, "rf.rssi.sta");
+}
+
 /* The Lookup card (§8.11, without the active part, ever): a MAC from an
  * MA-S block resolves to its holder where sloth's own 117-entry table
  * has nothing (spec §12, M4), with its block, registry and bits; an IP
@@ -538,13 +620,97 @@ static void test_health_members(void) {
     WT_EQ(route(&H, "/api/health", "", 0), 200);
     const char *b = body_of(g_out);
     WT_HAS(b, "\"milestone\":\"M6\"");
-    WT_HAS(b, "\"db\":\"open\",\"db_schema\":7,\"db_rows\":9,\"db_path\":");
+    WT_HAS(b, "\"db\":\"open\",\"db_schema\":16,\"db_rows\":9,\"db_path\":");
     WT_HAS(b, "\"db_mode\":\"immutable\"");
-    WT_HAS(b, "\"db_supported\":[1,7]");
+    WT_HAS(b, "\"db_supported\":[1,16]");
     WT_HAS(b, "\"vendor_table\":\"ieee\",\"vendor_counts\":{\"ma_l\":3,"
               "\"ma_m\":0,\"ma_s\":1}");
     WT_HAS(b, "\"a4\":\"on\"");
     WT_HAS(b, "\"passive_ptr\":{\"entries\":1,\"cap\":16,\"seen\":1,\"stored\":1,");
+}
+
+/* #168: what the DB-backed views are as of, and when the page calls
+ * that stale. g_db is a WAL file closed cleanly, read immutable, so its
+ * own mtime is the data's. Stale needs both halves: older than
+ * WEB_SDB_STALE_S, and a stream that is current. The two "false" cases
+ * with an old file (no stream, a stream gone quiet) were seen red with
+ * the stream condition dropped from web_sdb_is_stale(); the boundary
+ * (600 s, false) with its ">" made ">=". */
+static void db_mtime_at(long long t) {
+    struct timespec ts[2];
+    ts[0].tv_sec = (time_t)t; ts[0].tv_nsec = 0;
+    ts[1] = ts[0];
+    WT_EQ(utimensat(AT_FDCWD, g_db, ts, 0), 0);
+}
+
+static void health_has(const char *want) {
+    WT_EQ(route(&H, "/api/health", "", 0), 200);
+    const char *b = body_of(g_out);
+    if (!strstr(b, want)) fprintf(stderr, "    want %s in\n    %s\n", want, b);
+    WT_HAS(b, want);
+}
+
+static void test_health_db_freshness(void) {
+    WT_EQ(web_sdb_is_stale(601, 1), 1);
+    WT_EQ(web_sdb_is_stale(600, 1), 0);
+    WT_EQ(web_sdb_is_stale(86400, 0), 0);
+    WT_EQ(web_sdb_is_stale(-1, 1), 0);
+
+    db_mtime_at(SDB_NOW - 700);
+    /* No data socket: the age is said, but it is not "stale". */
+    health_has("\"db_mode\":\"immutable\",\"sloth_db_mtime\":1792626500,"
+               "\"sloth_db_age_s\":700,");
+    health_has("\"sloth_db_stale_after_s\":600,\"sloth_db_stale\":false");
+
+    web_live_t lv;
+    web_live_init(&lv, "unix:/run/sloth/sloth.sock");
+    H.live = &lv;
+    H.now_ms = 1000000;
+    web_live_sock_connected(&lv, H.now_ms - 5000);
+    static web_jrec_t r;
+    static const char rec[] = "{\"type\":\"heartbeat\",\"ts\":1792627190}";
+    WT_EQ(web_jl_parse(rec, strlen(rec), &r), WEB_JL_OK);
+    web_live_apply(&lv, &r, H.now_ms - 2000);
+    health_has("\"sloth_db_stale\":true");
+
+    /* The stream gone quiet as well: that is the socket's message. */
+    H.now_ms += (WEB_SDB_STREAM_CURRENT_S + 1) * 1000LL;
+    health_has("\"sloth_db_stale\":false");
+    H.now_ms -= (WEB_SDB_STREAM_CURRENT_S + 1) * 1000LL;
+
+    db_mtime_at(SDB_NOW - WEB_SDB_STALE_S);
+    health_has("\"sloth_db_age_s\":600,");
+    health_has("\"sloth_db_stale\":false");
+    db_mtime_at(SDB_NOW - WEB_SDB_STALE_S - 1);
+    health_has("\"sloth_db_stale\":true");
+    db_mtime_at(SDB_NOW - 30);
+    health_has("\"sloth_db_age_s\":30,");
+    health_has("\"sloth_db_stale\":false");
+    /* A clock behind the file's: 0, not negative. */
+    db_mtime_at(SDB_NOW + 100);
+    health_has("\"sloth_db_mtime\":1792627300,\"sloth_db_age_s\":0,");
+
+    H.live = NULL;
+    H.now_ms = 0;
+    web_live_destroy(&lv);
+}
+
+/* A file that is not open has no age, and says so with null. */
+static void test_health_db_freshness_unknown(void) {
+    web_slothdb_t s;
+    web_m4_t m = g_m4;
+    char p[192];
+    snprintf(p, sizeof(p), "%s/absent.db", g_dir);
+    web_slothdb_init(&s, p, NULL);
+    m.sdb = &s;
+    web_health_t h = H;
+    h.m4 = &m;
+    WT_EQ(route(&h, "/api/health", "", 0), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "\"db\":\"missing\"");
+    WT_HAS(b, "\"sloth_db_mtime\":null,\"sloth_db_age_s\":null");
+    WT_HAS(b, "\"sloth_db_stale\":null");
+    web_slothdb_destroy(&s);
 }
 
 /* The worst case: rows whose every text member is at its cut length and
@@ -569,7 +735,7 @@ static void test_devices_worst_case_fits(void) {
                               i ? "," : "", i / 256, i % 256, lt, lt, lt, 1000 + i);
     WT_EQ(sdb_exec(p, sql), 0);
     web_slothdb_t s;
-    web_sdb_fns_t f = { &g_oui.tab, &g_an, &g_ptr };
+    web_sdb_fns_t f = { &g_oui.tab, &g_an, &g_ptr, NULL };
     web_slothdb_init(&s, p, &f);
     web_m4_t m = g_m4;
     m.sdb = &s;
@@ -604,9 +770,55 @@ static void test_page_fetch_shapes(void) {
         WT_EQ(route(&H, q[i][0], q[i][1], 0), 200);
 }
 
+/* A device sloth saw by MAC alone has ip '' in sloth.db, and so can an
+ * mDNS host, an NBNS name or a lease whose address it never learned.
+ * '' = '' is true in SQL, so a join on the address named every such
+ * device after the newest such record (the reference host showed one
+ * laptop's mDNS name on 32,000 devices). Run last: it adds rows. Seen
+ * red with NULLIF(d.ip,'') put back to d.ip in the row's mDNS and DHCP
+ * names, in has:name and in a name: search. The drawer's names were
+ * never at risk: its caller skips an empty address. */
+static void test_empty_ip_names_nothing(void) {
+    sqlite3 *h = NULL;
+    WT_EQ(sqlite3_open(g_db, &h), SQLITE_OK);
+    char sql[1024];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO devices (mac,ip,hostname,vendor,last_ssid,is_ap,signal_dbm,"
+        "probe_count,sources,risk_signals,risk_level,first_seen,last_seen) VALUES"
+        " ('da:a1:19:00:00:0f','',NULL,'Apple',NULL,0,-60,0,16,0,0,%lld,%lld);"
+        "INSERT INTO mdns_services (instance,service,host,ip,port,first_seen,last_seen)"
+        " VALUES ('Laptop._companion-link._tcp.local','_companion-link._tcp',"
+        "'laptop-mdns.local','',0,%lld,%lld);"
+        "INSERT INTO nbns_names (name,suffix,ip,first_seen,last_seen) VALUES"
+        " ('LAPTOPNBNS',0,'',%lld,%lld);"
+        "INSERT INTO dhcp_leases (ip,hostname,expire,first_seen,last_seen) VALUES"
+        " ('','laptop-dhcp',0,%lld,%lld);",
+        (long long)SDB_NOW - 60, (long long)SDB_NOW - 10,
+        (long long)SDB_NOW - 60, (long long)SDB_NOW - 5,
+        (long long)SDB_NOW - 60, (long long)SDB_NOW - 5,
+        (long long)SDB_NOW - 60, (long long)SDB_NOW - 5);
+    WT_EQ(sqlite3_exec(h, sql, NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    static const char *const nm[] = { "laptop-mdns", "LAPTOPNBNS", "laptop-dhcp",
+                                      "Laptop._companion" };
+    WT_EQ(route(&H, "/api/devices", "q=mac:da:a1:19:00:00:0f", 0), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "\"mac\":\"da:a1:19:00:00:0f\"");
+    WT_HAS(b, "\"name\":null,\"name_src\":null");
+    for (size_t i = 0; i < sizeof(nm) / sizeof(nm[0]); i++) WT_LACKS(b, nm[i]);
+    WT_EQ(route(&H, "/api/device/da:a1:19:00:00:0f", "", 0), 200);
+    for (size_t i = 0; i < sizeof(nm) / sizeof(nm[0]); i++) WT_LACKS(g_out, nm[i]);
+    /* Nor does a search by those names or for a named device find it. */
+    WT_EQ(route(&H, "/api/devices", "q=name:laptop", 0), 200);
+    WT_LACKS(body_of(g_out), "\"mac\":\"da:a1:19:00:00:0f\"");
+    WT_EQ(route(&H, "/api/devices", "q=mac:da:a1:19:00:00:0f%20has:name", 0), 200);
+    WT_HAS(body_of(g_out), "\"rows\":[],\"count\":0");
+}
+
 void run_devices_tests(void) {
     WT_RUN(test_without_sloth_db);
     WT_RUN(test_page_carries_the_m4_views);
+    WT_RUN(test_page_shows_db_freshness);
     up();
     WT_RUN(test_page_fetch_shapes);
     WT_RUN(test_devices_acceptance);
@@ -616,9 +828,13 @@ void run_devices_tests(void) {
     WT_RUN(test_devices_db_states);
     WT_RUN(test_device_drawer);
     WT_RUN(test_drawer_presence_week_anomalies);
+    WT_RUN(test_rows_carry_g2);
     WT_RUN(test_lookup);
     WT_RUN(test_health_members);
+    WT_RUN(test_health_db_freshness);
+    WT_RUN(test_health_db_freshness_unknown);
     WT_RUN(test_devices_worst_case_fits);
+    WT_RUN(test_empty_ip_names_nothing);
     down();
 }
 
@@ -627,6 +843,7 @@ void run_devices_tests(void) {
 void run_devices_tests(void) {
     WT_RUN(test_without_sloth_db);
     WT_RUN(test_page_carries_the_m4_views);
+    WT_RUN(test_page_shows_db_freshness);
 }
 
 #endif

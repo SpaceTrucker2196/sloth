@@ -11,6 +11,7 @@
 #include "ownership.h"
 #include "sloth_clock.h"
 #include "wifi_baseline.h"
+#include "tmp_dir.h"
 
 /*
  * COUNTRY_ABSENT and DFS_MASKING — issue #101 slice A.
@@ -236,7 +237,7 @@ static void test_country_absent_one_alert_per_bssid(void) {
 }
 
 /* Whole JSONL stream so far, for the change-only emission case. */
-static char g_jpath[] = "/tmp/sloth_regrules_XXXXXX";
+static char g_jpath[TEST_TMP_MAX];
 
 static int jsonl_count(const char *needle) {
     static char buf[65536];
@@ -263,7 +264,7 @@ static void test_country_absent_detail_is_still_across_ticks(void) {
      * alert.update assertions below both failed. */
     jsonl_close();
     begin();
-    int fd = mkstemp(g_jpath);
+    int fd = mkstemp(test_tmp_tpl(g_jpath, sizeof(g_jpath), "sloth_regrules_XXXXXX"));
     if (fd >= 0) close(fd);
     unlink(g_jpath);
     ASSERT(jsonl_open(g_jpath));

@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "web_json.h"
+#include "web_scope.h"
 
 /* In web_anomaly_kind_find()'s order: test_query.c holds the two lists
  * to each other. */
@@ -31,7 +32,7 @@ static const struct { const char *p; int kind; } PREFIX[] = {
     { "random", WEB_QT_RANDOM }, { "seen", WEB_QT_SEEN },
     { "first", WEB_QT_FIRST }, { "risk", WEB_QT_RISK }, { "z", WEB_QT_Z },
     { "src", WEB_QT_SRC }, { "has", WEB_QT_HAS },
-    { "anomaly", WEB_QT_ANOMALY }, { NULL, 0 }
+    { "anomaly", WEB_QT_ANOMALY }, { "pass", WEB_QT_PASS }, { NULL, 0 }
 };
 
 static int fail(char *err, size_t errsz, const char *why) {
@@ -225,6 +226,11 @@ static int value(web_qterm_t *t, const char *v, long long now_s, char *err,
     case WEB_QT_ANOMALY:
         t->num = word_index(web_query_anomaly_kinds, v);
         return t->num >= 0 ? 0 : fail(err, errsz, "bad_anomaly");
+    case WEB_QT_PASS:
+        /* The one pass slothweb keeps: sloth's latest. */
+        if (strcmp(v, "latest")) return fail(err, errsz, "bad_pass");
+        t->num = 0;
+        return 0;
     default:
         return fail(err, errsz, "bad_text");
     }
@@ -284,8 +290,15 @@ int web_query_parse(const char *q, long long now_s, web_query_t *out,
 }
 
 int web_query_sort_find(const char *s) {
-    static const char *const SORTS[] = { "last", "first", "mac", "risk", NULL };
+    static const char *const SORTS[] = { "last", "first", "mac", "risk",
+        "vendor", "ip", "ssid", "signal", "sources", NULL };
     return s ? word_index(SORTS, s) : -1;
+}
+
+int web_sort_dir_find(const char *s) {
+    if (s && !strcmp(s, "asc")) return WEB_SORT_ASC;
+    if (s && !strcmp(s, "desc")) return WEB_SORT_DESC;
+    return -1;
 }
 
 /* ── the statement ───────────────────────────────────────────────────── */
@@ -357,14 +370,281 @@ static const char *op_text(int op) {
     }
 }
 
-static void names_exist(sb_t *b, unsigned f, int n) {
+/* ── the capture scope's columns (web_scope.h) ─────────────────────── *
+ *
+ * Under Hybrid every column but the risk level is the devices row's
+ * own. Under Monitor or Local a device
+ * row is a member when the scope's own tables hold its MAC, or its
+ * sources (the latest tick's only: sloth's upsert replaces them) have
+ * the scope's bits; and each column is the scope's: the address, the
+ * hostname and the names behind the address are Local's, the last SSID
+ * and the AP bit Monitor's, the signal the scope's own table's
+ * (probe_clients, then beacon_aps; wifi_stas), first and last seen over
+ * the scope's tables (the row's own when they hold none), the sources
+ * and risk signals masked to the scope's bits and the risk level scored
+ * again from those (risk_case()). Hybrid scores its level from the
+ * row's signals too and never reads the stored one. Every
+ * mask is built from web_scope.h's WEB_SRC_*, WEB_CAM_* and
+ * web_scope_risk_mask(), the ones web_scope_device() and the tests use.
+ * Each fragment is constant text of this file's, chosen by the scope and
+ * by which tables the file has. */
+
+#define BIGT "9000000000000000000"
+
+typedef struct {
+    int  scope;
+    char ip[64], host[64], ssid[64], is_ap[32], sources[192], rsig[192];
+    char risk[4096], signal[512], first[1536], last[1536], member[1536];
+    /* The FROM clause's joins after "FROM devices d" ("" none). */
+    char join[256];
+    unsigned f;
+} dcols_t;
+
+static void cat(char *dst, size_t cap, const char *s) {
+    size_t n = strlen(dst), k = strlen(s);
+    if (n + k + 1 > cap) return;      /* sized for the longest; never cut */
+    memcpy(dst + n, s, k + 1);
+}
+
+/* The risk level from signals S, of which the scope sees `mask`:
+ * web_scope_risk_level() itself, tabulated over the 128 signal values
+ * into a string of level digits that S indexes, so the SQL cannot score
+ * differently from the C and S is evaluated once. Summing the weights
+ * in SQL and bucketing the sum in a CASE names the sum three times; on
+ * 900,000 devices the risk sort then took four times what sorting the
+ * stored column did, against under twice for this. A NULL S is NULL,
+ * which the row reads as 0. */
+static void risk_case(char *out, size_t cap, const char *s, long long mask) {
+    char lut[WEB_RISK_ALL + 2];
+    for (int v = 0; v <= WEB_RISK_ALL; v++)
+        lut[v] = (char)('0' + web_scope_risk_level(v & mask));
+    lut[WEB_RISK_ALL + 1] = '\0';
+    snprintf(out, cap, "CAST(substr('%s', (%s & %d) + 1, 1) AS INTEGER)", lut, s,
+             WEB_RISK_ALL);
+}
+
+static void dcols(unsigned f, int scope, dcols_t *c) {
+    memset(c, 0, sizeof(*c));
+    c->scope = scope;
+    c->f = f;
+    if (scope == 1) {                    /* WEB_SCOPE_MONITOR */
+        snprintf(c->ip, sizeof(c->ip), "NULL");
+        snprintf(c->host, sizeof(c->host), "NULL");
+        snprintf(c->ssid, sizeof(c->ssid), "d.last_ssid");
+        snprintf(c->is_ap, sizeof(c->is_ap), "d.is_ap");
+        /* The camera bit only when a camera signal is the radio's (a
+         * setup SSID, a setup OUI on a beacon), as web_sdb_device()
+         * gates the camera columns; without cam_signals, not at all. */
+        if (f & WEB_QF_CAMSIG)
+            snprintf(c->sources, sizeof(c->sources),
+                     "((d.sources & %d) | CASE WHEN (d.cam_signals & %d) <> 0"
+                     " THEN %d ELSE 0 END)", WEB_SRC_MONITOR, WEB_CAM_MONITOR,
+                     WEB_SRC_CAMERA);
+        else
+            snprintf(c->sources, sizeof(c->sources), "(d.sources & %d)", WEB_SRC_MONITOR);
+        /* PROBE_ONLY recomputed over the radio's sources: sloth clears
+         * its bit for a device in the managed card's station dump (STA,
+         * Local's), which Monitor does not see. Not on a SELF device:
+         * the sensor writes no anonymity bit beside SELF (#191), and
+         * the host's own card scanning is not a passer-by. */
+        snprintf(c->rsig, sizeof(c->rsig),
+                 "((d.risk_signals & %lld) | CASE WHEN (d.sources & 16) <> 0 AND"
+                 " (d.sources & 8) = 0 AND (d.risk_signals & %d) = 0 THEN %d ELSE 0 END)",
+                 web_scope_risk_mask(WEB_SCOPE_MONITOR) & ~(long long)WEB_RISK_MONITOR,
+                 WEB_RISK_SELF, WEB_RISK_MONITOR);
+        risk_case(c->risk, sizeof(c->risk), c->rsig, web_scope_risk_mask(WEB_SCOPE_MONITOR));
+        snprintf(c->signal, sizeof(c->signal), "COALESCE(%s, %s)",
+                 (f & WEB_QF_PROBE)
+                     ? "(SELECT p.signal_dbm FROM probe_clients p WHERE p.mac = d.mac)"
+                     : "NULL",
+                 (f & WEB_QF_BEACON)
+                     ? "(SELECT b.signal_dbm FROM beacon_aps b WHERE b.bssid = d.mac)"
+                     : "NULL");
+        /* min()/max() of two or more arguments are the scalar ones. */
+        static const char *const FS[4] = {
+            "(SELECT p.first_seen FROM probe_clients p WHERE p.mac = d.mac)",
+            "(SELECT b.first_seen FROM beacon_aps b WHERE b.bssid = d.mac)",
+            "(SELECT min(s.first_seen) FROM assocs s WHERE s.sta_mac = d.mac"
+            " OR s.bssid = d.mac)",
+            "(SELECT c.first_seen FROM pnl_clients c WHERE c.mac = d.mac)",
+        };
+        static const char *const LS[4] = {
+            "(SELECT p.last_seen FROM probe_clients p WHERE p.mac = d.mac)",
+            "(SELECT b.last_seen FROM beacon_aps b WHERE b.bssid = d.mac)",
+            "(SELECT max(s.last_seen) FROM assocs s WHERE s.sta_mac = d.mac"
+            " OR s.bssid = d.mac)",
+            "(SELECT c.last_seen FROM pnl_clients c WHERE c.mac = d.mac)",
+        };
+        static const char *const EX[4] = {
+            "EXISTS (SELECT 1 FROM probe_clients p WHERE p.mac = d.mac)",
+            "EXISTS (SELECT 1 FROM beacon_aps b WHERE b.bssid = d.mac)",
+            "EXISTS (SELECT 1 FROM assocs s WHERE s.sta_mac = d.mac OR s.bssid = d.mac)",
+            "EXISTS (SELECT 1 FROM pnl_clients c WHERE c.mac = d.mac)",
+        };
+        const unsigned FT[4] = { WEB_QF_PROBE, WEB_QF_BEACON, WEB_QF_ASSOC, WEB_QF_PNLC };
+        cat(c->first, sizeof(c->first), "COALESCE(NULLIF(min(" BIGT ", " BIGT);
+        cat(c->last, sizeof(c->last), "COALESCE(NULLIF(max(-1, -1");
+        char t[64];
+        snprintf(t, sizeof(t), "((d.sources & %d) <> 0", WEB_SRC_MONITOR);
+        cat(c->member, sizeof(c->member), t);
+        for (int i = 0; i < 4; i++) {
+            if (!(f & FT[i])) continue;
+            cat(c->first, sizeof(c->first), ", COALESCE(");
+            cat(c->first, sizeof(c->first), FS[i]);
+            cat(c->first, sizeof(c->first), ", " BIGT ")");
+            cat(c->last, sizeof(c->last), ", COALESCE(");
+            cat(c->last, sizeof(c->last), LS[i]);
+            cat(c->last, sizeof(c->last), ", -1)");
+            cat(c->member, sizeof(c->member), " OR ");
+            cat(c->member, sizeof(c->member), EX[i]);
+        }
+        if (f & WEB_QF_CAMSIG) {
+            snprintf(t, sizeof(t), " OR (d.cam_signals & %d) <> 0", WEB_CAM_MONITOR);
+            cat(c->member, sizeof(c->member), t);
+        }
+        cat(c->first, sizeof(c->first), "), " BIGT "), d.first_seen)");
+        cat(c->last, sizeof(c->last), "), -1), d.last_seen)");
+        cat(c->member, sizeof(c->member), ")");
+    } else if (scope == 2) {             /* WEB_SCOPE_LOCAL */
+        snprintf(c->ip, sizeof(c->ip), "d.ip");
+        snprintf(c->host, sizeof(c->host), "d.hostname");
+        snprintf(c->ssid, sizeof(c->ssid), "NULL");
+        snprintf(c->is_ap, sizeof(c->is_ap), "0");
+        if (f & WEB_QF_CAMSIG)
+            snprintf(c->sources, sizeof(c->sources),
+                     "((d.sources & %d) | CASE WHEN (d.cam_signals & %d) <> 0"
+                     " THEN %d ELSE 0 END)", WEB_SRC_LOCAL, WEB_CAM_LOCAL,
+                     WEB_SRC_CAMERA);
+        else
+            snprintf(c->sources, sizeof(c->sources), "(d.sources & %d)", WEB_SRC_LOCAL);
+        snprintf(c->rsig, sizeof(c->rsig), "(d.risk_signals & %lld)",
+                 web_scope_risk_mask(WEB_SCOPE_LOCAL));
+        risk_case(c->risk, sizeof(c->risk), "d.risk_signals",
+                  web_scope_risk_mask(WEB_SCOPE_LOCAL));
+        snprintf(c->signal, sizeof(c->signal), "%s",
+                 (f & WEB_QF_STA)
+                     ? "(SELECT w.signal_dbm FROM wifi_stas w WHERE w.mac = d.mac)"
+                     : "NULL");
+        /* ARP once per statement, not once per device: arp is keyed
+         * (ip, mac) and nothing indexes mac, so a correlated subquery
+         * scanned the table for every row (7.2 s for 32,840 devices and
+         * 5,000 ARP rows). The grouped derived table is read once and
+         * joined by an automatic index. */
+        if (f & WEB_QF_ARP)
+            snprintf(c->join, sizeof(c->join),
+                     " LEFT JOIN (SELECT a.mac AS mac, min(a.first_seen) AS f,"
+                     " max(a.last_seen) AS l FROM arp a GROUP BY a.mac) am"
+                     " ON am.mac = d.mac");
+        static const char *const FS[3] = {
+            "am.f",
+            "(SELECT w.first_seen FROM wifi_stas w WHERE w.mac = d.mac)",
+            "(SELECT min(l.first_seen) FROM dhcp_leases l WHERE l.ip = d.ip)",
+        };
+        static const char *const LS[3] = {
+            "am.l",
+            "(SELECT w.last_seen FROM wifi_stas w WHERE w.mac = d.mac)",
+            "(SELECT max(l.last_seen) FROM dhcp_leases l WHERE l.ip = d.ip)",
+        };
+        static const char *const EX[3] = {
+            "am.mac IS NOT NULL",
+            "EXISTS (SELECT 1 FROM wifi_stas w WHERE w.mac = d.mac)",
+            NULL,
+        };
+        const unsigned FT[3] = { WEB_QF_ARP, WEB_QF_STA, WEB_QF_DHCP };
+        cat(c->first, sizeof(c->first), "COALESCE(NULLIF(min(" BIGT ", " BIGT);
+        cat(c->last, sizeof(c->last), "COALESCE(NULLIF(max(-1, -1");
+        char t[64];
+        snprintf(t, sizeof(t), "((d.sources & %d) <> 0", WEB_SRC_LOCAL);
+        cat(c->member, sizeof(c->member), t);
+        cat(c->member, sizeof(c->member), " OR COALESCE(d.ip,'') <> ''");
+        for (int i = 0; i < 3; i++) {
+            if (!(f & FT[i])) continue;
+            cat(c->first, sizeof(c->first), ", COALESCE(");
+            cat(c->first, sizeof(c->first), FS[i]);
+            cat(c->first, sizeof(c->first), ", " BIGT ")");
+            cat(c->last, sizeof(c->last), ", COALESCE(");
+            cat(c->last, sizeof(c->last), LS[i]);
+            cat(c->last, sizeof(c->last), ", -1)");
+            if (EX[i]) {
+                cat(c->member, sizeof(c->member), " OR ");
+                cat(c->member, sizeof(c->member), EX[i]);
+            }
+        }
+        if (f & WEB_QF_CAMSIG) {
+            snprintf(t, sizeof(t), " OR (d.cam_signals & %d) <> 0", WEB_CAM_LOCAL);
+            cat(c->member, sizeof(c->member), t);
+        }
+        cat(c->first, sizeof(c->first), "), " BIGT "), d.first_seen)");
+        cat(c->last, sizeof(c->last), "), -1), d.last_seen)");
+        cat(c->member, sizeof(c->member), ")");
+    } else {
+        snprintf(c->ip, sizeof(c->ip), "d.ip");
+        snprintf(c->host, sizeof(c->host), "d.hostname");
+        snprintf(c->ssid, sizeof(c->ssid), "d.last_ssid");
+        snprintf(c->is_ap, sizeof(c->is_ap), "d.is_ap");
+        snprintf(c->sources, sizeof(c->sources), "d.sources");
+        snprintf(c->rsig, sizeof(c->rsig), "d.risk_signals");
+        /* Not d.risk_level: the stored level is whatever formula the
+         * sensor had when it last saw the device, and most rows are
+         * never seen again (#191). No index covered it, so the sort
+         * read every row before as well. */
+        risk_case(c->risk, sizeof(c->risk), "d.risk_signals",
+                  web_scope_risk_mask(WEB_SCOPE_HYBRID));
+        snprintf(c->signal, sizeof(c->signal), "d.signal_dbm");
+        snprintf(c->first, sizeof(c->first), "d.first_seen");
+        snprintf(c->last, sizeof(c->last), "d.last_seen");
+    }
+}
+
+/* `COALESCE(<expr>,'')`, as the Hybrid text has it for a column. */
+static void co(sb_t *b, const char *expr) {
+    sb_put(b, "COALESCE(");
+    sb_put(b, expr);
+    sb_put(b, ",'')");
+}
+
+static void like_co(sb_t *b, const char *expr, int n) {
+    char t[96];
+    snprintf(t, sizeof(t), "COALESCE(%s,'')", expr);
+    like(b, t, n);
+}
+
+/* The alert types a scope holds, as constant integers of our own table
+ * (web_scope.h), for has:alert. Empty under Hybrid. */
+static void alert_types_in(sb_t *b, const dcols_t *c, const char *col) {
+    if (!c->scope) return;
+    int ty[128];
+    int n = web_scope_alert_types(c->scope, 0, ty, 128);
+    sb_put(b, " AND ");
+    sb_put(b, col);
+    sb_put(b, " IN (-1");
+    for (int i = 0; i < n; i++) {
+        char t[16];
+        snprintf(t, sizeof(t), ",%d", ty[i]);
+        sb_put(b, t);
+    }
+    sb_put(b, ")");
+}
+
+/* Only an address can carry a name from these tables, and most of a
+ * large sloth.db's devices have none: testing it first spares each such
+ * row a scan of the unindexed name tables (0.43 s to 0.02 s on the
+ * reference host's 32,000 devices). */
+static void names_exist(sb_t *b, const dcols_t *c, int n) {
+    unsigned f = c->f;
+    /* The names behind the address are Local's. */
+    if (c->scope == 1) {
+        sb_put(b, " OR 0");
+        return;
+    }
+    sb_put(b, " OR (COALESCE(d.ip,'') <> '' AND (0");
     if (f & WEB_QF_DHCP) {
-        sb_put(b, " OR EXISTS (SELECT 1 FROM dhcp_leases l WHERE l.ip = d.ip AND ");
+        sb_put(b, " OR EXISTS (SELECT 1 FROM dhcp_leases l WHERE l.ip = NULLIF(d.ip, '') AND ");
         like(b, "COALESCE(l.hostname,'')", n);
         sb_put(b, ")");
     }
     if (f & WEB_QF_MDNS) {
-        sb_put(b, " OR EXISTS (SELECT 1 FROM mdns_services m WHERE m.ip = d.ip AND (");
+        sb_put(b, " OR EXISTS (SELECT 1 FROM mdns_services m WHERE m.ip = NULLIF(d.ip, '') AND (");
         like(b, "COALESCE(m.host,'')", n);
         sb_put(b, " OR ");
         like(b, "COALESCE(m.instance,'')", n);
@@ -373,32 +653,35 @@ static void names_exist(sb_t *b, unsigned f, int n) {
     if (f & WEB_QF_NBNS) {
         /* The unique names (suffix 0 workstation, 32 server), as the
          * row shows: a group registration (WORKGROUP<1E>) names no host. */
-        sb_put(b, " OR EXISTS (SELECT 1 FROM nbns_names b WHERE b.ip = d.ip AND"
+        sb_put(b, " OR EXISTS (SELECT 1 FROM nbns_names b WHERE b.ip = NULLIF(d.ip, '') AND"
                " b.suffix IN (0, 32) AND ");
         like(b, "b.name", n);
         sb_put(b, ")");
     }
     sb_put(b, " OR ");
     like(b, "COALESCE(web_ptr(d.ip),'')", n);
+    sb_put(b, "))");
 }
 
-static void term(sb_t *b, const web_qterm_t *t, unsigned f, web_qsql_t *o) {
+static void term(sb_t *b, const web_qterm_t *t, const dcols_t *c, web_qsql_t *o) {
     int n;
+    unsigned f = c->f;
+    int mon = c->scope == 1, loc = c->scope == 2;
     switch (t->kind) {
     case WEB_QT_FREE:
         n = bind_like(o, t->text, 0);
         sb_put(b, "(");
         like(b, "d.mac", n);
         sb_put(b, " OR ");
-        like(b, "COALESCE(d.ip,'')", n);
+        like_co(b, c->ip, n);
         sb_put(b, " OR ");
-        like(b, "COALESCE(d.hostname,'')", n);
+        like_co(b, c->host, n);
         sb_put(b, " OR ");
         like(b, "COALESCE(d.vendor,'')", n);
         sb_put(b, " OR ");
         like(b, "COALESCE(web_vendor(d.mac),'')", n);
         sb_put(b, " OR ");
-        like(b, "COALESCE(d.last_ssid,'')", n);
+        like_co(b, c->ssid, n);
         sb_put(b, ")");
         break;
     case WEB_QT_VENDOR:
@@ -418,8 +701,8 @@ static void term(sb_t *b, const web_qterm_t *t, unsigned f, web_qsql_t *o) {
     case WEB_QT_IP:
         n = bind_like(o, t->text, 1);
         sb_put(b, "(");
-        like(b, "COALESCE(d.ip,'')", n);
-        if (f & WEB_QF_ARP) {
+        like_co(b, c->ip, n);
+        if ((f & WEB_QF_ARP) && !mon) {
             sb_put(b, " OR EXISTS (SELECT 1 FROM arp a WHERE a.mac = d.mac AND ");
             like(b, "a.ip", n);
             sb_put(b, ")");
@@ -429,8 +712,8 @@ static void term(sb_t *b, const web_qterm_t *t, unsigned f, web_qsql_t *o) {
     case WEB_QT_SSID:
         n = bind_like(o, t->text, 0);
         sb_put(b, "(");
-        like(b, "COALESCE(d.last_ssid,'')", n);
-        if (f & WEB_QF_PNL) {
+        like_co(b, c->ssid, n);
+        if ((f & WEB_QF_PNL) && !loc) {
             sb_put(b, " OR EXISTS (SELECT 1 FROM pnl_ssids s WHERE s.mac = d.mac AND ");
             like(b, "s.ssid", n);
             sb_put(b, ")");
@@ -440,8 +723,8 @@ static void term(sb_t *b, const web_qterm_t *t, unsigned f, web_qsql_t *o) {
     case WEB_QT_NAME:
         n = bind_like(o, t->text, 0);
         sb_put(b, "(");
-        like(b, "COALESCE(d.hostname,'')", n);
-        names_exist(b, f, n);
+        like_co(b, c->host, n);
+        names_exist(b, c, n);
         sb_put(b, ")");
         break;
     case WEB_QT_RANDOM:
@@ -449,7 +732,7 @@ static void term(sb_t *b, const web_qterm_t *t, unsigned f, web_qsql_t *o) {
         if (!t->num) { sb_put(b, LA); sb_put(b, ")"); }
         break;
     case WEB_QT_SEEN: case WEB_QT_FIRST: {
-        const char *col = t->kind == WEB_QT_SEEN ? "d.last_seen" : "d.first_seen";
+        const char *col = t->kind == WEB_QT_SEEN ? c->last : c->first;
         sb_put(b, "(");
         sb_put(b, col);
         if (t->op == WEB_QOP_EQ) {
@@ -467,7 +750,8 @@ static void term(sb_t *b, const web_qterm_t *t, unsigned f, web_qsql_t *o) {
         break;
     }
     case WEB_QT_RISK:
-        sb_put(b, "(d.risk_level");
+        sb_put(b, "(");
+        sb_put(b, c->risk);
         sb_put(b, op_text(t->op));
         param(b, bind_int(o, t->num));
         sb_put(b, ")");
@@ -479,45 +763,66 @@ static void term(sb_t *b, const web_qterm_t *t, unsigned f, web_qsql_t *o) {
         sb_put(b, ")");
         break;
     case WEB_QT_SRC:
-        sb_put(b, "((d.sources & ");
+        sb_put(b, "((");
+        sb_put(b, c->sources);
+        sb_put(b, " & ");
         param(b, bind_int(o, t->num));
         sb_put(b, ") <> 0)");
         break;
     case WEB_QT_HAS:
         switch (t->num) {
         case WEB_HAS_PNL:
-            sb_put(b, (f & WEB_QF_PNL)
+            sb_put(b, (f & WEB_QF_PNL) && !loc
                    ? "EXISTS (SELECT 1 FROM pnl_ssids s WHERE s.mac = d.mac)"
                    : "(0)");
             break;
         case WEB_HAS_ALERT:
-            sb_put(b, (f & WEB_QF_ALERTS)
-                   ? "EXISTS (SELECT 1 FROM alerts a WHERE (COALESCE(d.ip,'') <> ''"
-                     " AND a.match_ip = d.ip) OR instr(a.key, d.mac) > 0)"
-                   : "(0)");
+            if (!(f & WEB_QF_ALERTS)) { sb_put(b, "(0)"); break; }
+            if (!c->scope) {
+                sb_put(b, "EXISTS (SELECT 1 FROM alerts a WHERE (COALESCE(d.ip,'') <> ''"
+                          " AND a.match_ip = d.ip) OR instr(a.key, d.mac) > 0)");
+                break;
+            }
+            /* The scope's own alert types; an address is Local's. */
+            sb_put(b, "EXISTS (SELECT 1 FROM alerts a WHERE (");
+            if (!mon) sb_put(b, "(COALESCE(d.ip,'') <> '' AND a.match_ip = d.ip) OR ");
+            sb_put(b, "instr(a.key, d.mac) > 0)");
+            alert_types_in(b, c, "a.type");
+            sb_put(b, ")");
             break;
         case WEB_HAS_ANOMALY:
             sb_put(b, "(web_anoms(d.mac,-1) > 0)");
             break;
         case WEB_HAS_NAME:
-            sb_put(b, "(COALESCE(d.hostname,'') <> ''");
-            if (f & WEB_QF_DHCP)
-                sb_put(b, " OR EXISTS (SELECT 1 FROM dhcp_leases l WHERE l.ip = d.ip"
-                       " AND COALESCE(l.hostname,'') <> '')");
-            if (f & WEB_QF_MDNS)
-                sb_put(b, " OR EXISTS (SELECT 1 FROM mdns_services m WHERE m.ip = d.ip"
-                       " AND COALESCE(m.host,'') <> '')");
-            if (f & WEB_QF_NBNS)
-                sb_put(b, " OR EXISTS (SELECT 1 FROM nbns_names b WHERE b.ip = d.ip"
-                       " AND b.suffix IN (0, 32))");
-            sb_put(b, " OR web_ptr(d.ip) IS NOT NULL)");
+            sb_put(b, "(");
+            co(b, c->host);
+            sb_put(b, " <> ''");
+            if (!mon) {
+                /* The address first, as in names_exist(). */
+                sb_put(b, " OR (COALESCE(d.ip,'') <> '' AND (0");
+                if (f & WEB_QF_DHCP)
+                    sb_put(b, " OR EXISTS (SELECT 1 FROM dhcp_leases l WHERE l.ip = NULLIF(d.ip, '')"
+                           " AND COALESCE(l.hostname,'') <> '')");
+                if (f & WEB_QF_MDNS)
+                    sb_put(b, " OR EXISTS (SELECT 1 FROM mdns_services m WHERE m.ip = NULLIF(d.ip, '')"
+                           " AND COALESCE(m.host,'') <> '')");
+                if (f & WEB_QF_NBNS)
+                    sb_put(b, " OR EXISTS (SELECT 1 FROM nbns_names b WHERE b.ip = NULLIF(d.ip, '')"
+                           " AND b.suffix IN (0, 32))");
+                sb_put(b, " OR web_ptr(d.ip) IS NOT NULL))");
+            }
+            sb_put(b, ")");
             break;
         case WEB_HAS_IP:
-            sb_put(b, "(COALESCE(d.ip,'') <> '')");
+            sb_put(b, "(");
+            co(b, c->ip);
+            sb_put(b, " <> '')");
             break;
         default:
-            sb_put(b, "(COALESCE(d.last_ssid,'') <> ''");
-            if (f & WEB_QF_PNL)
+            sb_put(b, "(");
+            co(b, c->ssid);
+            sb_put(b, " <> ''");
+            if ((f & WEB_QF_PNL) && !loc)
                 sb_put(b, " OR EXISTS (SELECT 1 FROM pnl_ssids s WHERE s.mac = d.mac)");
             sb_put(b, ")");
             break;
@@ -528,54 +833,194 @@ static void term(sb_t *b, const web_qterm_t *t, unsigned f, web_qsql_t *o) {
         param(b, bind_int(o, t->num));
         sb_put(b, ") > 0)");
         break;
+    case WEB_QT_PASS:
+        if (!c->scope) {
+            sb_put(b, "(web_inpass(d.mac) = 1)");
+        } else {
+            /* In the pass, and a row of the scope's in it. */
+            sb_put(b, mon ? "(web_inpass(d.mac, 1) = 1)" : "(web_inpass(d.mac, 2) = 1)");
+        }
+        break;
     default:
         sb_put(b, "(0)");
         break;
     }
 }
 
-int web_query_row_select(unsigned f, const char *extra, char *out,
-                         size_t cap) {
+static int row_select(const dcols_t *c, const char *extra, char *out, size_t cap) {
     sb_t b = { out, cap, 0, 0 };
+    unsigned f = c->f;
     out[0] = '\0';
-    sb_put(&b, "SELECT d.mac, d.ip, d.hostname, d.vendor, d.last_ssid,"
-            " d.signal_dbm, d.sources, d.risk_signals, d.risk_level,"
-            " d.first_seen, d.last_seen, d.is_ap, ");
-    sb_put(&b, (f & WEB_QF_DHCP)
-            ? "(SELECT l.hostname FROM dhcp_leases l WHERE l.ip = d.ip AND"
+    if (!c->scope) {
+        sb_put(&b, "SELECT d.mac, d.ip, d.hostname, d.vendor, d.last_ssid,"
+                " d.signal_dbm, d.sources, d.risk_signals, ");
+        sb_put(&b, c->risk);
+        /* Named for the ORDER BY, as the scoped list's is. */
+        sb_put(&b, " AS s_risk, d.first_seen, d.last_seen, d.is_ap, ");
+    } else {
+        /* Named, so the ORDER BY says each once (SQLite resolves a
+         * result column's alias inside an ORDER BY expression). */
+        sb_put(&b, "SELECT d.mac, ");
+        sb_put(&b, c->ip);
+        sb_put(&b, " AS s_ip, ");
+        sb_put(&b, c->host);
+        sb_put(&b, " AS s_host, d.vendor, ");
+        sb_put(&b, c->ssid);
+        sb_put(&b, " AS s_ssid, ");
+        sb_put(&b, c->signal);
+        sb_put(&b, " AS s_signal, ");
+        sb_put(&b, c->sources);
+        sb_put(&b, " AS s_sources, ");
+        sb_put(&b, c->rsig);
+        sb_put(&b, " AS s_rsig, ");
+        sb_put(&b, c->risk);
+        sb_put(&b, " AS s_risk, ");
+        sb_put(&b, c->first);
+        sb_put(&b, " AS s_first, ");
+        sb_put(&b, c->last);
+        sb_put(&b, " AS s_last, ");
+        sb_put(&b, c->is_ap);
+        sb_put(&b, " AS s_is_ap, ");
+    }
+    /* The names behind the address are Local's: Monitor has none. */
+    int names = c->scope != 1;
+    sb_put(&b, (f & WEB_QF_DHCP) && names
+            ? "(SELECT l.hostname FROM dhcp_leases l WHERE l.ip = NULLIF(d.ip, '') AND"
               " COALESCE(l.hostname,'') <> '' ORDER BY l.last_seen DESC LIMIT 1), "
             : "NULL, ");
-    sb_put(&b, (f & WEB_QF_MDNS)
-            ? "(SELECT m.host FROM mdns_services m WHERE m.ip = d.ip AND"
+    sb_put(&b, (f & WEB_QF_MDNS) && names
+            ? "(SELECT m.host FROM mdns_services m WHERE m.ip = NULLIF(d.ip, '') AND"
               " COALESCE(m.host,'') <> '' ORDER BY m.last_seen DESC LIMIT 1), "
             : "NULL, ");
-    sb_put(&b, (f & WEB_QF_NBNS)
-            ? "(SELECT b.name FROM nbns_names b WHERE b.ip = d.ip AND"
+    sb_put(&b, (f & WEB_QF_NBNS) && names
+            ? "(SELECT b.name FROM nbns_names b WHERE b.ip = NULLIF(d.ip, '') AND"
               " b.suffix IN (0, 32) ORDER BY b.last_seen DESC LIMIT 1)"
             : "NULL");
     if (extra) { sb_put(&b, ", "); sb_put(&b, extra); }
     sb_put(&b, " FROM devices d");
+    sb_put(&b, c->join);
     return b.over ? -1 : 0;
+}
+
+int web_query_row_select(unsigned f, const char *extra, char *out,
+                         size_t cap) {
+    return web_query_row_select_scoped(f, 0, extra, out, cap);
+}
+
+int web_query_row_select_scoped(unsigned f, int scope, const char *extra,
+                                char *out, size_t cap) {
+    dcols_t *c = malloc(sizeof(*c));
+    if (!c) return -1;
+    dcols(f, scope, c);
+    int rc = row_select(c, extra, out, cap);
+    free(c);
+    return rc;
+}
+
+int web_query_member(unsigned f, int scope, char *out, size_t cap) {
+    out[0] = '\0';
+    if (!scope) return 0;
+    dcols_t *c = malloc(sizeof(*c));
+    if (!c) return -1;
+    dcols(f, scope, c);
+    int rc = strlen(c->member) + 1 > cap ? -1 : 0;
+    if (!rc) memcpy(out, c->member, strlen(c->member) + 1);
+    free(c);
+    return rc;
 }
 
 int web_query_compile(const web_query_t *q, unsigned feats, int sort,
                       long long limit, long long offset, web_qsql_t *out) {
+    return web_query_compile_scoped(q, feats, 0, sort, limit, offset, out);
+}
+
+int web_query_compile_scoped(const web_query_t *q, unsigned feats, int scope,
+                             int sort, long long limit, long long offset,
+                             web_qsql_t *out) {
     static const char *const ORDER[WEB_QS_COUNT] = {
         " ORDER BY d.last_seen DESC, d.mac",
         " ORDER BY d.first_seen DESC, d.mac",
         " ORDER BY d.mac",
-        " ORDER BY d.risk_level DESC, d.last_seen DESC, d.mac",
+        " ORDER BY s_risk DESC, d.last_seen DESC, d.mac",
+        " ORDER BY d.vendor IS NULL, d.vendor, d.mac",
+        " ORDER BY web_ipkey(d.ip) IS NULL, web_ipkey(d.ip), d.ip, d.mac",
+        " ORDER BY d.last_ssid IS NULL, d.last_ssid, d.mac",
+        " ORDER BY d.signal_dbm IS NULL, d.signal_dbm DESC, d.mac",
+        " ORDER BY d.sources DESC, d.last_seen DESC, d.mac",
     };
+    /* With a direction: the sort's column, empty last, then the MAC.
+     * An address sorts by its numeric key (web_slothdb.c fn_ipkey()),
+     * as the page compares addresses, not as text. The risk level has
+     * no empty (risk_signals is NOT NULL, and the row reads a NULL as
+     * 0), so its key goes without the "IS NULL" term: that term is the
+     * scored expression a second time for every row, and on 900,000
+     * devices it took the directed risk sort from 150 ms to 241 of the
+     * 250 ms read budget (#191). */
+    static const char *const KEY[WEB_QS_COUNT] = {
+        "d.last_seen", "d.first_seen", "d.mac", "s_risk", "d.vendor",
+        "web_ipkey(d.ip)", "d.last_ssid", "d.signal_dbm", "d.sources",
+    };
+    int dir = WEB_SORT_DIR(sort);
+    sort = WEB_SORT_KEY(sort);
     memset(out, 0, sizeof(*out));
-    if (web_query_row_select(feats, NULL, out->sql, sizeof(out->sql)) != 0)
-        return -1;
+    dcols_t *c = malloc(sizeof(*c));
+    if (!c) return -1;
+    dcols(feats, scope, c);
+    if (row_select(c, NULL, out->sql, sizeof(out->sql)) != 0) { free(c); return -1; }
     sb_t b = { out->sql, sizeof(out->sql), strlen(out->sql), 0 };
     sb_put(&b, " WHERE 1");
+    if (scope) {
+        sb_put(&b, " AND ");
+        sb_put(&b, c->member);
+    }
     for (int i = 0; i < q->n && i < WEB_Q_TERMS; i++) {
         sb_put(&b, q->t[i].neg ? " AND NOT " : " AND ");
-        term(&b, &q->t[i], feats, out);
+        term(&b, &q->t[i], c, out);
     }
-    sb_put(&b, ORDER[sort >= 0 && sort < WEB_QS_COUNT ? sort : WEB_QS_LAST]);
+    if (sort < 0 || sort >= WEB_QS_COUNT) sort = WEB_QS_LAST;
+    if (scope) {
+        /* The scope's columns by their aliases (the SELECT list above),
+         * in the Hybrid orders' shapes. */
+        static const char *const SORD[WEB_QS_COUNT] = {
+            " ORDER BY s_last DESC, d.mac",
+            " ORDER BY s_first DESC, d.mac",
+            " ORDER BY d.mac",
+            " ORDER BY s_risk DESC, s_last DESC, d.mac",
+            " ORDER BY d.vendor IS NULL, d.vendor, d.mac",
+            " ORDER BY web_ipkey(s_ip) IS NULL, web_ipkey(s_ip), s_ip, d.mac",
+            " ORDER BY s_ssid IS NULL, s_ssid, d.mac",
+            " ORDER BY s_signal IS NULL, s_signal DESC, d.mac",
+            " ORDER BY s_sources DESC, s_last DESC, d.mac",
+        };
+        if (dir == WEB_SORT_ASC || dir == WEB_SORT_DESC) {
+            static const char *const SKEY[WEB_QS_COUNT] = {
+                "s_last", "s_first", "d.mac", "s_risk", "d.vendor",
+                "web_ipkey(s_ip)", "s_ssid", "s_signal", "s_sources",
+            };
+            sb_put(&b, " ORDER BY ");
+            if (sort != WEB_QS_RISK) {
+                sb_put(&b, SKEY[sort]);
+                sb_put(&b, " IS NULL, ");
+            }
+            sb_put(&b, SKEY[sort]);
+            sb_put(&b, dir == WEB_SORT_ASC ? " ASC" : " DESC");
+            if (sort != WEB_QS_MAC) sb_put(&b, ", d.mac");
+        } else {
+            sb_put(&b, SORD[sort]);
+        }
+    } else if (dir == WEB_SORT_ASC || dir == WEB_SORT_DESC) {
+        sb_put(&b, " ORDER BY ");
+        if (sort != WEB_QS_RISK) {
+            sb_put(&b, KEY[sort]);
+            sb_put(&b, " IS NULL, ");
+        }
+        sb_put(&b, KEY[sort]);
+        sb_put(&b, dir == WEB_SORT_ASC ? " ASC" : " DESC");
+        if (sort != WEB_QS_MAC) sb_put(&b, ", d.mac");
+    } else {
+        sb_put(&b, ORDER[sort]);
+    }
+    free(c);
     sb_put(&b, " LIMIT ");
     param(&b, bind_int(out, limit));
     sb_put(&b, " OFFSET ");

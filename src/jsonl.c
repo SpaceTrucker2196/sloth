@@ -1,16 +1,24 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 #include <pthread.h>
 #include "jsonl.h"
+#include "jsonl_internal.h"
+#include "gps.h"
+#include "position_track.h"
 #include "sloth_clock.h"
 #include "netstr.h"
 #include "tune.h"
 #include "capture/probe.h"
+#include "capture/df_radio.h"
+#include "mon_radios.h"
+#include "df.h"
 #include "alerts.h"
+#include "attack_hw.h"
 #include "wired_attach.h"
 #include "secure_file.h"
 #include "beacon_snoop.h"
@@ -21,6 +29,9 @@
 #include "formatter.h"
 #include "views/procs.h"
 #include "sensor_health.h"
+#include "ownership.h"
+#include "harvest_track.h"    /* harvest_station, harvest_chain (JSONL 1.3.0) */
+#include "sys_status.h"
 #include "ble_hci.h"        /* Bluetooth host source names (#144 slice 2) */
 #include "bt_stream.h"      /* Ubertooth stream state names (#144 slice 3) */
 #include "ble_detect.h"     /* ble_alert findings (#144 slice 4) */
@@ -32,298 +43,24 @@
 #include "eapol_log.h"
 #include "reg_obs.h"           /* wifi_regulatory (#101 slice B) */
 #include "camera_join.h"       /* device_class_label() (#106 round 2) */
+#include "rf_distance.h"       /* est_dist_* (2026-10-26) */
+#include "probe_latency.h"     /* beacon.probe_lat (JSONL 1.6.0, #187 S3) */
+#include "alerts/twin_field.h" /* sensor_health twin193_* (JSONL 1.7.0, #193) */
+#include "db.h"                /* sensor_health db_max_mb (JSONL 1.7.0) */
 
-static FILE           *g_fp;
-/* Open refusal reason and write-failure count (#87), under g_mu. */
-static sfile_fail_t    g_fail;
-static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
-
-/* True if either the file sink or the data-socket sink has a consumer.
- * Used by every jsonl_emit_* to skip the format work when nobody is
- * listening — running sloth without -o and without --data-socket should
- * not pay for JSON encoding it'll never deliver. */
-static int any_sink(void) {
-    return g_fp != NULL || data_socket_has_clients();
-}
-
-/* ── Change-only snapshot emission (issue #42) ───────────────
- * The entity-snapshot emitters (pnl_client, seqnum_client, …) run every
- * poll (~1 Hz) and re-serialise every row whether or not anything
- * changed. For a mostly idle population that is pure duplication — in
- * production ~45 % of log volume was unchanged seqnum_client / pnl_client
- * rows. Each row is reduced to a 64-bit signature of its semantic payload
- * (identity + observation fields, never the envelope ts) and looked up in
- * a small direct-mapped cache keyed by the row's natural identity. A row
- * is written only when it is new, its signature changed, or
- * JSONL_HEARTBEAT_SECS have elapsed since it was last emitted — so
- * long-lived idle entities still refresh periodically and windowed
- * consumers ("who was here 2–4 AM?") keep working.
- *
- * The cache is a pure optimisation: a collision can only cause an extra
- * emit, never a wrongful suppression, because a slot is consulted only
- * when its stored identity matches exactly. An extra emit is harmless
- * once; it is not harmless every tick. A direct-mapped table made two
- * live keys sharing a slot evict each other on every poll and both
- * re-emit forever (#101 review: 256 random BSSIDs gave ~64 extra lines
- * a tick). So the table is set-associative: a key hashes to a set of
- * JSONL_DEDUP_WAYS slots, a miss takes a free way or else the way least
- * recently looked up, and the table is sized well past every keyed
- * emitter combined (MAX_PNL_CLIENTS + MAX_SEQNUM_CLIENTS +
- * MAX_BEACON_APS + sensor_health = 641 keys over 4096 slots), so a set
- * holding more live keys than it has ways is not a load the sensor
- * reaches in practice. */
-#define JSONL_HEARTBEAT_SECS 300
-#define JSONL_DEDUP_WAYS     8
-#define JSONL_DEDUP_SETS     512
-#define JSONL_DEDUP_SLOTS    (JSONL_DEDUP_WAYS * JSONL_DEDUP_SETS)
-#define JSONL_DEDUP_KEYLEN   16
-#define FNV64_OFFSET         0xcbf29ce484222325ULL
-#define FNV64_PRIME          0x100000001b3ULL
-
-typedef struct {
-    uint64_t sig;
-    time_t   emit_ts;
-    time_t   seen_ts;    /* last lookup: the eviction order */
-    uint8_t  key[JSONL_DEDUP_KEYLEN];
-    uint8_t  keylen;
-    uint8_t  kind;
-    uint8_t  used;
-} jsonl_dedup_slot_t;
-
-static jsonl_dedup_slot_t g_dedup[JSONL_DEDUP_SLOTS];
-
-/* Snapshot event "kinds" — one per deduped emitter. */
-enum { JD_PNL = 1, JD_SEQNUM, JD_SENSOR_HEALTH, JD_WIFI_REG,
-       JD_BLE_DEVICE, JD_BLE_ALERT };
-
-static uint64_t fnv1a(const void *data, size_t n, uint64_t h) {
-    const unsigned char *p = (const unsigned char *)data;
-    for (size_t i = 0; i < n; i++) { h ^= p[i]; h *= FNV64_PRIME; }
-    return h;
-}
-
-/* Clear the change cache so the next snapshot re-emits a full baseline.
- * Called when a sink is (re)opened and available to tests. */
-void jsonl_dedup_reset(void) {
-    memset(g_dedup, 0, sizeof(g_dedup));
-}
-
-/* Returns 1 if a row of this (kind,key) carrying signature `sig` should be
- * emitted now (new / changed / heartbeat elapsed), 0 to suppress an
- * unchanged duplicate. Records the decision. */
-static int jsonl_changed(uint8_t kind, const void *key, size_t keylen,
-                         uint64_t sig, time_t now) {
-    if (keylen > JSONL_DEDUP_KEYLEN) keylen = JSONL_DEDUP_KEYLEN;
-    uint64_t h = fnv1a(key, keylen, fnv1a(&kind, 1, FNV64_OFFSET));
-    jsonl_dedup_slot_t *set =
-        &g_dedup[(size_t)(h % JSONL_DEDUP_SETS) * JSONL_DEDUP_WAYS];
-    jsonl_dedup_slot_t *sl = NULL, *victim = NULL;
-    for (int w = 0; w < JSONL_DEDUP_WAYS; w++) {
-        jsonl_dedup_slot_t *c = &set[w];
-        if (c->used && c->kind == kind && c->keylen == (uint8_t)keylen
-            && memcmp(c->key, key, keylen) == 0) { sl = c; break; }
-        if (!victim || (victim->used && (!c->used || c->seen_ts < victim->seen_ts)))
-            victim = c;
-    }
-    if (sl) {
-        sl->seen_ts = now;
-        if (sl->sig == sig && (now - sl->emit_ts) < JSONL_HEARTBEAT_SECS)
-            return 0;
-    } else {
-        sl = victim;
-        sl->used   = 1;
-        sl->kind   = kind;
-        sl->keylen = (uint8_t)keylen;
-        memcpy(sl->key, key, keylen);
-        sl->seen_ts = now;
-    }
-    sl->sig     = sig;
-    sl->emit_ts = now;
-    return 1;
-}
-
-int jsonl_open(const char *path) {
-    if (!path || !path[0]) return 0;
-    pthread_mutex_lock(&g_mu);
-    if (g_fp) { fclose(g_fp); g_fp = NULL; }
-    sfile_fail_reset(&g_fail);
-    /* Append: the forensic log accumulates across runs. Created 0600;
-     * an existing file must already be private (#87). */
-    g_fp = sfile_fopen(AT_FDCWD, path, SFILE_APPEND,
-                       g_fail.last, sizeof(g_fail.last));
-    int ok = g_fp != NULL;
-    pthread_mutex_unlock(&g_mu);
-    if (ok) jsonl_dedup_reset();   /* fresh sink → full baseline snapshot */
-    return ok;
-}
-
-const char *jsonl_error(void) { return g_fail.last; }
-
-int jsonl_write_failures(void) {
-    pthread_mutex_lock(&g_mu);
-    int n = g_fail.failures;
-    pthread_mutex_unlock(&g_mu);
-    return n;
-}
-
-void jsonl_close(void) {
-    pthread_mutex_lock(&g_mu);
-    if (g_fp) { fclose(g_fp); g_fp = NULL; }
-    pthread_mutex_unlock(&g_mu);
-}
-
-int jsonl_is_open(void) {
-    pthread_mutex_lock(&g_mu);
-    int ok = g_fp != NULL;
-    pthread_mutex_unlock(&g_mu);
-    return ok;
-}
-
-/* Bounded append into `buf` (size `sz`) at *off. snprintf returns the
- * length it *would* have written, so a bare `off += snprintf(...)`
- * lets `off` pass the end; `sz - off` then wraps to a huge size_t and
- * the next write lands out of bounds. A hostile AP reaches that with
- * escape-heavy SSIDs. Clamp so *off never exceeds sz - 1 — the output
- * truncates, memory stays in bounds. Every builder write goes here. */
-static void appendf(char *buf, int sz, int *off, const char *fmt, ...)
-    __attribute__((format(printf, 4, 5)));
-static void appendf(char *buf, int sz, int *off, const char *fmt, ...) {
-    if (sz <= 0) return;
-    if (*off < 0) *off = 0;
-    if (*off >= sz - 1) { *off = sz - 1; buf[*off] = '\0'; return; }
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vsnprintf(buf + *off, (size_t)(sz - *off), fmt, ap);
-    va_end(ap);
-    if (n < 0) { buf[*off] = '\0'; return; }
-    *off += n;
-    if (*off > sz - 1) *off = sz - 1;
-}
-
-/* Append RFC 8259-compatible escaping of `s` into `out` (size `sz`),
- * advancing *off. Truncates silently. Used by all emitters. */
-/* JSON string body (RFC 8259 §7). Output is always valid UTF-8 (#138):
- * the input is decoded per RFC 3629 (netstr_utf8_decode), and
- *   - each octet that does not start a well-formed sequence → \ufffd;
- *   - C0, DEL and C1 (U+0000..U+001F, U+007F..U+009F) → \u00XX — C1 is
- *     legal raw in JSON, but U+009B is CSI to a terminal that tails the
- *     log, so it leaves here as six ASCII octets;
- *   - U+2028 / U+2029 → \u2028 / \u2029 (raw, they end a line in
- *     JavaScript and some log viewers).
- * Every string that parsed before parses to the same value now; what
- * changes is that invalid input no longer reaches the consumer raw.
- * Worst case is still 6 output octets per input octet. */
-static void json_escape(const char *s, char *out, int sz, int *off) {
-    if (!s) s = "";
-    if (*off > sz - 1) *off = sz - 1;
-    const uint8_t *p = (const uint8_t *)s;
-    size_t left = strlen(s);
-    while (left > 0 && *off + 6 < sz) {
-        uint32_t cp = 0;
-        int len = netstr_utf8_decode(p, left, &cp);
-        if (len == 0) {
-            appendf(out, sz, off, "\\ufffd");
-            p++; left--;
-            continue;
-        }
-        switch (cp) {
-            case '"':  out[(*off)++] = '\\'; out[(*off)++] = '"';  break;
-            case '\\': out[(*off)++] = '\\'; out[(*off)++] = '\\'; break;
-            case '\n': out[(*off)++] = '\\'; out[(*off)++] = 'n';  break;
-            case '\r': out[(*off)++] = '\\'; out[(*off)++] = 'r';  break;
-            case '\t': out[(*off)++] = '\\'; out[(*off)++] = 't';  break;
-            default:
-                if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f)
-                    || cp == 0x2028 || cp == 0x2029) {
-                    appendf(out, sz, off, "\\u%04x", (unsigned)cp);
-                } else {
-                    memcpy(out + *off, p, (size_t)len);
-                    *off += len;
-                }
-        }
-        p += len; left -= (size_t)len;
-    }
-    out[*off] = '\0';
-}
-
-/* Output buffer for the CEF/syslog transform. Sized for the richest
- * record (a worst-case LINEBUF line, defined below) re-escaped by the
- * CEF/syslog rules, plus the framing a syslog header + SD-element can
- * add. */
-#define EMIT_XFORM_MAX 16384
-
-/* Helper: write a complete record to every active sink — the
- * configured file (if any) and every connected data-socket client.
- * `line` is always JSONL (that's what the builders produce); we
- * translate to CEF / syslog at this single chokepoint when the
- * operator picked one of those formats via --out-format.
- *
- * Broadcast to the data socket happens outside the file mutex;
- * data_socket has its own lock. */
-static void emit_line(const char *line) {
-    char xform[EMIT_XFORM_MAX];
-    const char *to_emit = line;
-    if (formatter_get() != OUT_FMT_JSONL) {
-        int n = formatter_transform(line, xform, (int)sizeof(xform));
-        if (n < 0) return;   /* malformed input — silently drop */
-        to_emit = xform;
-    }
-    pthread_mutex_lock(&g_mu);
-    if (g_fp) {
-        int bad = fputs(to_emit, g_fp) == EOF ||
-                  fputc('\n', g_fp)    == EOF ||
-                  fflush(g_fp)         != 0;
-        if (bad || ferror(g_fp)) {
-            char err[SFILE_ERR_MAX];
-            snprintf(err, sizeof(err), "-o: write failed: %s", strerror(errno));
-            sfile_fail(&g_fail, "jsonl", err);
-            clearerr(g_fp);   /* keep trying: a full disk may drain */
-        }
-    }
-    pthread_mutex_unlock(&g_mu);
-    data_socket_emit(to_emit);
-}
-
-/* ── builder helpers ─────────────────────────────────────── */
-
-/* Sized for the hostile worst case, not the typical one. Beacon and
- * PNL records carry attacker-chosen SSID / WPS strings that
- * json_escape can expand 6x (\u00XX): a beacon with every string
- * field full runs ~4.5 KiB, a PNL client with 16 probed SSIDs ~3.4
- * KiB. At the old 2048 a hostile AP overflowed the buffer. appendf
- * keeps any future overrun in bounds; this keeps it from truncating. */
-#define LINEBUF 8192
-
-static void kv_str(char *buf, int sz, int *off, const char *key, const char *val) {
-    appendf(buf, sz, off, ",\"%s\":\"", key);
-    json_escape(val, buf, sz, off);
-    appendf(buf, sz, off, "\"");
-}
-
-static void kv_int(char *buf, int sz, int *off, const char *key, long long val) {
-    appendf(buf, sz, off, ",\"%s\":%lld", key, val);
-}
-
-static void kv_double(char *buf, int sz, int *off, const char *key, double val) {
-    appendf(buf, sz, off, ",\"%s\":%.2f", key, val);
-}
-
-static void kv_mac(char *buf, int sz, int *off, const char *key,
-                   const uint8_t mac[6]) {
-    char m[20];
-    snprintf(m, sizeof(m), "%02x:%02x:%02x:%02x:%02x:%02x",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    kv_str(buf, sz, off, key, m);
-}
-
-static void start_obj(char *buf, int sz, int *off, const char *type, time_t ts) {
-    *off = 0;
-    appendf(buf, sz, off, "{\"type\":\"%s\",\"ts\":%lld", type, (long long)ts);
-}
-
-static void end_obj(char *buf, int sz, int *off) {
-    if (*off < sz - 1) buf[(*off)++] = '}';
-    buf[*off] = '\0';
+/* The RSSI distance data point (src/rf_distance.h), additive on the
+ * records that already carry the RSSI it came from. All four fields are
+ * omitted when the row has no estimate — an absent est_dist_m means
+ * "no estimate", never 0 m. Metres leave quantised (rf_quantise_m): an
+ * estimate of a third party's proximity is not exported finer than it
+ * can honestly be known, and is never put in a change-only signature —
+ * the band and the trend are (see jsonl_emit_ble_devices). */
+static void emit_dist(char *buf, int *off, const rf_track_t *t) {
+    if (!t || !t->valid) return;
+    kv_double(buf, LINEBUF, off, "est_dist_m", rf_quantise_m(t->est_dm / 10.0));
+    kv_str(buf, LINEBUF, off, "est_dist_band",  rf_band_name(t->band));
+    kv_str(buf, LINEBUF, off, "est_dist_trend", rf_trend_name(t->trend));
+    kv_str(buf, LINEBUF, off, "est_ptx_source", rf_ptx_source_name(t->ptx_source));
 }
 
 /* ── emitters ────────────────────────────────────────────── */
@@ -425,190 +162,6 @@ void jsonl_emit_icmp(const icmp_log_entry_t *e) {
     emit_line(buf);
 }
 
-/* The two AP-pair axes (#89 slice 3), additive per
- * docs/wiki/jsonl-schema.md and shared by the legacy `alert` record and
- * the `alert.*` lifecycle stream so a consumer never has to read both
- * families to get them.
- *
- * `ap_class` is omitted when UNKNOWN and on every rule that is not
- * about an AP pair — same rule as `confidence` and `inventory`, and for
- * the same reason: a field present on all 61 rules would assert
- * something about the 60 that never classified anything.
- *
- * `wired_attachment` is omitted when UNKNOWN, which today is always,
- * because nothing in-tree can see the wire. **Absence means "not
- * established", never "not attached"** — the schema doc says so
- * explicitly, and it is the one inference a consumer must not draw from
- * a missing field here. The `EVIL_TWIN` detail string carries a literal
- * `wired=?` for the human reading the alert. */
-static void emit_pair_axes(char *buf, int *off, const alert_t *a) {
-    if (a->ap_class != (uint8_t)TWIN_CLASS_UNKNOWN)
-        kv_str(buf, LINEBUF, off, "ap_class",
-               twin_class_label((twin_class_t)a->ap_class));
-    if (a->wired_attach != (uint8_t)WIRED_ATTACH_UNKNOWN)
-        kv_str(buf, LINEBUF, off, "wired_attachment",
-               wired_attach_label((wired_attach_t)a->wired_attach));
-}
-
-/* Tool-signature provenance (#90), additive, shared by both record
- * families for the same reason as the pair axes above.
- *
- * All four are omitted when no signature matched — present only on
- * findings a signature shaped, same rule as `inventory`. When present,
- * `validated` is always emitted, and as a JSON boolean rather than the
- * 0/1 ints elsewhere in the schema: it is the one field a consumer must
- * not read past, the issue asks for `validated: bool` by name, and a
- * `false` literal survives a naive `if record["validated"]` either way.
- * formatter.c's scanner already accepts true/false. */
-static void emit_signature(char *buf, int *off, const alert_t *a) {
-    if (!a->sig_id[0]) return;
-    kv_str(buf, LINEBUF, off, "signature_id", a->sig_id);
-    kv_str(buf, LINEBUF, off, "signature_version", a->sig_version);
-    appendf(buf, LINEBUF, off, ",\"validated\":%s",
-            a->sig_validated ? "true" : "false");
-    kv_str(buf, LINEBUF, off, "signature_evidence", a->sig_evidence);
-}
-
-/* Evidence-ring citations (#92), additive, shared by both record
- * families for the same reason as the signature fields above. Indexed
- * keys rather than a JSON array, matching the existing convention for a
- * small bounded list (jsonl_emit_btm_steers' candidate_N, jsonl_emit_mlds'
- * link_N_mac) so every record this file emits stays a flat object.
- *
- * Named `evidence_id_N` rather than reusing `event_id` — the lifecycle
- * event's own `event_id` field is a different, unrelated string
- * (`<incident_id>-<seq>`), and the two must not collide in one object.
- *
- * Omitted entirely when the detector cited nothing — most rules have
- * no frames to cite (docs/wiki/pcap-export.md lists the ones that do),
- * and a record with `evidence_count` but no ids (or the reverse) would
- * be a claim half made. */
-static void emit_evidence(char *buf, int *off, const alert_t *a) {
-    if (!a->evidence_id_count) return;
-    kv_int(buf, LINEBUF, off, "evidence_count", a->evidence_id_count);
-    for (int i = 0; i < a->evidence_id_count && i < ALERT_EVIDENCE_IDS; i++) {
-        char key[24];
-        snprintf(key, sizeof(key), "evidence_id_%d", i);
-        kv_int(buf, LINEBUF, off, key, (long long)a->evidence_ids[i]);
-    }
-}
-
-void jsonl_emit_alert(const alert_t *a) {
-    if (!any_sink() || !a) return;
-    char  buf[LINEBUF]; int off = 0;
-    start_obj(buf, LINEBUF, &off, "alert", a->last_seen);
-    kv_str(buf, LINEBUF, &off, "title",  a->title);
-    kv_str(buf, LINEBUF, &off, "detail", a->detail);
-    kv_str(buf, LINEBUF, &off, "key",    a->key);
-    kv_int(buf, LINEBUF, &off, "sev",   (int)a->sev);
-    kv_int(buf, LINEBUF, &off, "ty",    (int)a->type);
-    kv_int(buf, LINEBUF, &off, "count", a->count);
-    /* MITRE ATT&CK technique — omitted when empty so consumers don't
-     * see a spurious "technique": "" for host-posture alerts like
-     * NO_MONITOR_MODE. Schema is additive per docs/wiki/jsonl-schema.md. */
-    if (a->technique[0])
-        kv_str(buf, LINEBUF, &off, "technique", a->technique);
-    /* Severity and confidence are separate axes (#89): `sev` is how bad
-     * the finding is if true, `confidence` is how likely it is to be
-     * true. Omitted when the rule reported none — most rules assert a
-     * condition they observed directly and have nothing to qualify, and
-     * emitting 0 would read as "certainly false". Additive per
-     * docs/wiki/jsonl-schema.md. */
-    if (a->confidence)
-        kv_int(buf, LINEBUF, &off, "confidence", (int)a->confidence);
-    /* Content hash of the approved inventory this finding consulted
-     * (#89 slice 2), so a record in an archive names the exact file
-     * that produced it — the human-readable `version` label cannot,
-     * because two files may both claim one. Omitted when the rule
-     * consulted no inventory: stamping every record would assert the
-     * anchor backed findings it never touched. Additive per
-     * docs/wiki/jsonl-schema.md. */
-    if (a->inventory[0])
-        kv_str(buf, LINEBUF, &off, "inventory", a->inventory);
-    emit_pair_axes(buf, &off, a);
-    emit_signature(buf, &off, a);
-    emit_evidence(buf, &off, a);
-    /* Join key into the lifecycle stream (#98), additive. A consumer
-     * that only knows `alert` sees exactly the record it always saw
-     * plus one field it can ignore. */
-    if (a->incident_id[0])
-        kv_str(buf, LINEBUF, &off, "incident_id", a->incident_id);
-    end_obj(buf, LINEBUF, &off);
-    emit_line(buf);
-}
-
-void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
-                            int prev_sev, const char *reason) {
-    if (!any_sink() || !a || !event) return;
-    char  buf[LINEBUF]; int off = 0;
-    char  event_id[ALERT_EVENT_ID_LEN];
-    snprintf(event_id, sizeof(event_id), "%s-%04u",
-             a->incident_id, a->event_seq % 10000u);
-
-    start_obj(buf, LINEBUF, &off, event, ts);
-    kv_str(buf, LINEBUF, &off, "event_id",    event_id);
-    kv_str(buf, LINEBUF, &off, "incident_id", a->incident_id);
-    kv_str(buf, LINEBUF, &off, "key",         a->key);
-    kv_str(buf, LINEBUF, &off, "title",       a->title);
-    kv_str(buf, LINEBUF, &off, "detail",      a->detail);
-    kv_int(buf, LINEBUF, &off, "sev",   (int)a->sev);
-    kv_int(buf, LINEBUF, &off, "ty",    (int)a->type);
-    if (prev_sev >= 0)
-        kv_int(buf, LINEBUF, &off, "prev_sev", prev_sev);
-    kv_int(buf, LINEBUF, &off, "observations", a->observations);
-    kv_int(buf, LINEBUF, &off, "evaluations",  a->evaluations);
-    /* Same number as the legacy record's `count`, carried so a
-     * lifecycle-only consumer never has to read both families. */
-    kv_int(buf, LINEBUF, &off, "count",        a->count);
-    /* Earlier incidents on this key (#112), additive and omitted at 0
-     * like every other counter here. Bounded by the engine's LRU side
-     * table, so it is a count of what sloth remembers, not a lifetime
-     * total — see alert_t.reopen_count. */
-    if (a->reopen_count)
-        kv_int(buf, LINEBUF, &off, "reopen_count", (long long)a->reopen_count);
-    kv_int(buf, LINEBUF, &off, "first_detected", (long long)a->first_detected);
-    kv_int(buf, LINEBUF, &off, "last_evaluated", (long long)a->last_evaluated);
-    kv_int(buf, LINEBUF, &off, "first_observed", (long long)a->first_observed);
-    kv_int(buf, LINEBUF, &off, "last_observed",  (long long)a->last_observed);
-    if (a->technique[0])
-        kv_str(buf, LINEBUF, &off, "technique", a->technique);
-    /* Same separate axis as the legacy record (#89) — a consumer paging
-     * on severity can weight by how sure sloth is without a second
-     * lookup. */
-    if (a->confidence)
-        kv_int(buf, LINEBUF, &off, "confidence", (int)a->confidence);
-    /* Same field as the legacy record (#89 slice 2) — a lifecycle-only
-     * consumer never has to read both families. */
-    if (a->inventory[0])
-        kv_str(buf, LINEBUF, &off, "inventory", a->inventory);
-    emit_pair_axes(buf, &off, a);
-    emit_signature(buf, &off, a);
-    emit_evidence(buf, &off, a);
-    if (a->match_ip[0]) {
-        kv_str(buf, LINEBUF, &off, "match_ip", a->match_ip);
-        kv_int(buf, LINEBUF, &off, "match_port", (int)a->match_port);
-    }
-    if (a->match_ip[0] || a->evidence_id_count) {
-        /* Per-export outcome (#92) — meaningful only for an alert one of
-         * the two exporters can run for: a match_ip (alert_pcap_dump(),
-         * --pcap-dir) or cited evidence-ring frames (the evidence export,
-         * --collect-handshakes + --eapol-dir, slice 1). pcap_path omitted
-         * until export actually writes a file; pcap_write_failures
-         * omitted at 0 so a clean export doesn't grow the line for
-         * nothing. Same two keys for both exporters, so a consumer has
-         * one place to look for an incident's frames. */
-        if (a->pcap_path[0])
-            kv_str(buf, LINEBUF, &off, "pcap_path", a->pcap_path);
-        if (a->pcap_write_failures)
-            kv_int(buf, LINEBUF, &off, "pcap_write_failures",
-                   a->pcap_write_failures);
-    }
-    if (reason && reason[0])
-        kv_str(buf, LINEBUF, &off, "reason", reason);
-    end_obj(buf, LINEBUF, &off);
-    emit_line(buf);
-}
-
 void jsonl_emit_cleartext_cred(const cleartext_cred_t *r) {
     /* Never emit a password field, even NULL/empty. That's the whole
      * point of this event class — the exposure fact, not the secret. */
@@ -671,6 +224,9 @@ void jsonl_emit_twin_episodes(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "attack_in_progress",  e->attack_in_progress ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "attacker_oui",        e->attacker_oui       ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "hash_mismatch",       e->hash_mismatch      ? 1 : 0);
+        /* Additive (#188): the scorer counted the later half's arrival
+         * as evidence. Absent from a record an older build wrote. */
+        kv_int(buf, LINEBUF, &off, "late_arrival",        e->late_arrival       ? 1 : 0);
         /* Additive (#89). `attributed` 0 means `real_bssid`/`twin_bssid`
          * hold the pair in canonical BSSID order and nothing has
          * established which half is the impostor — a consumer must not
@@ -897,9 +453,36 @@ void jsonl_emit_devices(const sloth_state_t *s) {
             kv_str(buf, LINEBUF, &off, "dhcp_prl",     e->dhcp_prl);
             kv_str(buf, LINEBUF, &off, "dhcp_vci",     e->dhcp_vci);
         }
+        emit_dist(buf, &off, &e->dist);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
+}
+
+/* beacon.probe_lat (JSONL 1.6.0, #187 S3): this BSSID's probe-response
+ * latency, the nearest-rank figures over its last PLAT_SAMPLES pairs per
+ * kind (probe_latency.h). Absent until a pair was recorded, so a consumer
+ * can tell "not measured" from a figure. An observation only: no cited
+ * threshold exists and nothing in sloth reads it for a verdict.
+ *
+ * Change-only emission: `beacon` has no change-only signature — it is
+ * written on every pass — so these raw microseconds sign nothing. Should
+ * the record gain one, they stay out of it (agents/AGENTS.md): a median
+ * moves on nearly every new pair. */
+static void emit_probe_lat(char *buf, int *off, const uint8_t bssid[6]) {
+    probe_latency_row_t pl;
+    if (!probe_latency_get(bssid, &pl) || pl.src == PLAT_SRC_NONE) return;
+    const plat_stats_t *d = &pl.kind[PLAT_KIND_DIRECTED];
+    const plat_stats_t *w = &pl.kind[PLAT_KIND_WILDCARD];
+    if (d->n == 0 && w->n == 0) return;
+    appendf(buf, LINEBUF, off,
+            ",\"probe_lat\":{\"src\":\"%s\",\"n_dir\":%u,\"med_dir_us\":%u,"
+            "\"p10_dir_us\":%u,\"p90_dir_us\":%u,\"min_dir_us\":%u,"
+            "\"n_wild\":%u,\"med_wild_us\":%u}",
+            pl.src == PLAT_SRC_TSFT ? "tsft" : "pcap",
+            (unsigned)d->n, (unsigned)d->med_us, (unsigned)d->p10_us,
+            (unsigned)d->p90_us, (unsigned)d->min_us,
+            (unsigned)w->n, (unsigned)w->med_us);
 }
 
 void jsonl_emit_beacons(const sloth_state_t *s) {
@@ -979,6 +562,7 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "tbtt_jitter_resets",  (long long)e->tbtt.resets);
         kv_int(buf, LINEBUF, &off, "rssi_min_60s", e->rssi_min_60s);
         kv_int(buf, LINEBUF, &off, "rssi_max_60s", e->rssi_max_60s);
+        emit_dist(buf, &off, &e->dist);
         /* QBSS Load — AP self-reported occupancy (omitted when the IE
          * was absent so consumers can tell "no data" from "0"). */
         if (e->has_qbss) {
@@ -1013,6 +597,21 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
                             k ? "," : "", nb, n->channel, n->phy_type);
         }
         appendf(buf, LINEBUF, &off, "]");
+        /* Additive (JSONL 1.6.0, #187 S3), last so every earlier field
+         * keeps its position. */
+        emit_probe_lat(buf, &off, e->bssid);
+        /* Additive (JSONL 1.7.0, #172): the harvest-friendly posture,
+         * present only once this BSSID was heard handing out the PMKID
+         * KDE in an M1 — 1 with a PSK-family AKM on its beacon (the
+         * value is attackable offline, Steube 2018), 0 without one (SAE
+         * or 802.1X: the KDE is there but the PMK is not the
+         * passphrase's). Absent means not observed, never "no". The
+         * name avoids slothweb's credential words (web_secret.c). */
+        {
+            int hp = harvest_posture_psk(e->bssid, e->akm_bits);
+            if (hp >= 0)
+                kv_int(buf, LINEBUF, &off, "harvest_posture", hp);
+        }
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -1204,6 +803,7 @@ void jsonl_emit_probe_clients(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "flood_last",    (long long)e->flood_last);
         kv_int(buf, LINEBUF, &off, "burst_frames",  (long long)e->burst_frames);
         kv_int(buf, LINEBUF, &off, "burst_span_ms", (long long)e->burst_span_ms);
+        emit_dist(buf, &off, &e->dist);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -1512,6 +1112,11 @@ void jsonl_emit_cp_events(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "kind",     e->kind);
         kv_str(buf, LINEBUF, &off, "kind_label", cp_kind_label(e->kind));
         kv_str(buf, LINEBUF, &off, "evidence", e->evidence);
+        /* #169: who answered, so a consumer can join the event to the
+         * flow, and which named kit's page it was ("" for none). */
+        kv_str(buf, LINEBUF, &off, "server",   e->server);
+        kv_int(buf, LINEBUF, &off, "server_port", e->server_port);
+        kv_str(buf, LINEBUF, &off, "kit",      cp_kit_name(e->kit));
         kv_int(buf, LINEBUF, &off, "ts",       (long long)e->ts);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
@@ -1535,6 +1140,8 @@ void jsonl_emit_assocs(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "first_seen",  (long long)e->first_seen);
         kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
         kv_int(buf, LINEBUF, &off, "frame_count", (long long)e->frame_count);
+        /* The AP's distance: every frame behind an assoc row is the AP's. */
+        emit_dist(buf, &off, &e->dist);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -1566,6 +1173,13 @@ void jsonl_emit_eapol_events(const sloth_state_t *s) {
                                                  e->assoc_evidence ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "signal_dbm", e->signal_dbm);
         kv_int(buf, LINEBUF, &off, "channel",    e->channel);
+        /* Additive (JSONL 1.7.0, #172): the harvest tracker's row this
+         * message was counted in, 0 for none. Joins the frame to the
+         * harvest_station / harvest_chain record and the alert detail
+         * that name the same cluster; non-zero alone is not a finding
+         * (eapol_event_t.harvest_cluster_id). */
+        kv_int(buf, LINEBUF, &off, "harvest_cluster_id",
+                                                 (long long)e->harvest_cluster_id);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -1933,25 +1547,6 @@ void jsonl_emit_mqtt_flows(const sloth_state_t *s) {
     }
 }
 
-void jsonl_emit_sensors(const sloth_state_t *s) {
-    if (!any_sink() || !s) return;
-    time_t now = sloth_wall();
-    for (int i = 0; i < s->sensor_count; i++) {
-        const sensor_t *sn = &s->sensors[i];
-        char buf[LINEBUF]; int off = 0;
-        start_obj(buf, LINEBUF, &off, "sensor", now);
-        kv_str(buf, LINEBUF, &off, "kind",       sensor_kind_name(sn->kind));
-        kv_str(buf, LINEBUF, &off, "state",      sensor_state_name(sn->state));
-        kv_str(buf, LINEBUF, &off, "name",       sn->name);
-        kv_str(buf, LINEBUF, &off, "iface",      sn->iface);
-        kv_int(buf, LINEBUF, &off, "observed",   (long long)sn->observed);
-        kv_int(buf, LINEBUF, &off, "first_seen", (long long)sn->first_seen);
-        kv_int(buf, LINEBUF, &off, "last_seen",  (long long)sn->last_seen);
-        end_obj(buf, LINEBUF, &off);
-        emit_line(buf);
-    }
-}
-
 /* Multi-radio merged 802.11 world model (#21). One line per observed
  * entity, carrying observer metadata: how many radios saw it, which ones
  * (bitmask), the strongest signal heard and which radio heard it. */
@@ -1972,6 +1567,104 @@ void jsonl_emit_wifi_merged(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "observations",(long long)e->observations);
         kv_int(buf, LINEBUF, &off, "first_seen",  (long long)e->first_seen);
         kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+/* Direction finding (src/df.h, --df-iface). `df_radio`: one line per
+ * radio, change-only on whether it is open, running, hearing anything
+ * and has refused a retune - never the frame count, which moves every
+ * tick. `wifi_df`: one line per transmitter two or more radios hold a
+ * fresh level for, change-only on which radio is loudest, the quality
+ * word, the margin in 3 dB bands, the baseline point in 0.25 m bands
+ * and the bearing (already one of eight points, held with hysteresis:
+ * src/df.h) with its error; the levels themselves ride the line and do
+ * not sign it. */
+#define DF_EMIT_MAX 128
+void jsonl_emit_wifi_df(const sloth_state_t *s) {
+    if (!any_sink() || !s || !df_active()) return;
+    time_t now = sloth_wall();
+    int nr = df_radio_count();
+    df_radio_t radios[DF_MAX_RADIOS];
+    for (int i = 0; i < nr; i++) {
+        df_radio_health_t h;
+        memset(&h, 0, sizeof(h));
+        if (!df_radio_get(i, &radios[i])) { nr = i; break; }
+        /* Radio 0 is the sensor radio (probe.c); the others are
+         * df_radio.c's, one place down in its table. */
+        int aux = i > 0 && df_radio_health(i - 1, &h);
+        uint64_t sig = FNV64_OFFSET;
+        int st[5] = { i == 0 || h.open, i == 0 || h.running,
+                      radios[i].frames > 0, h.retune_failures > 0,
+                      radios[i].calibrated ? (int)floor(radios[i].bias_db / 3.0 + 0.5)
+                                           : 1 << 30 };
+        sig = fnv1a(st, sizeof(st), sig);
+        uint8_t key[2] = { (uint8_t)i, 0 };
+        if (!jsonl_changed(JD_DF_RADIO, key, sizeof(key), sig, now)) continue;
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "df_radio", now);
+        kv_int(buf, LINEBUF, &off, "radio", i);
+        kv_str(buf, LINEBUF, &off, "iface", radios[i].iface);
+        kv_str(buf, LINEBUF, &off, "role", i == 0 ? "sensor" : "df");
+        if (radios[i].has_pos) kv_double(buf, LINEBUF, &off, "pos_m", radios[i].pos_m);
+        if (radios[i].has_xy) {
+            kv_double(buf, LINEBUF, &off, "x_m", radios[i].x_m);
+            kv_double(buf, LINEBUF, &off, "y_m", radios[i].y_m);
+        }
+        kv_int(buf, LINEBUF, &off, "open", st[0]);
+        kv_int(buf, LINEBUF, &off, "running", st[1]);
+        kv_int(buf, LINEBUF, &off, "noted", (long long)radios[i].frames);
+        if (i > 0 && radios[i].calibrated)
+            kv_double(buf, LINEBUF, &off, "bias_db", radios[i].bias_db);
+        if (aux) {
+            kv_int(buf, LINEBUF, &off, "frames", (long long)h.frames);
+            kv_int(buf, LINEBUF, &off, "rejects", (long long)h.rejects);
+            kv_int(buf, LINEBUF, &off, "retune_failures", (long long)h.retune_failures);
+        }
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+    static df_est_t est[DF_EMIT_MAX];
+    int n = df_snapshot(est, DF_EMIT_MAX, now);
+    for (int i = 0; i < n; i++) {
+        const df_est_t *e = &est[i];
+        int mask = 0;
+        for (int r = 0; r < nr; r++) if (e->has[r]) mask |= 1 << r;
+        int st[7] = { (int)e->quality, e->best_radio, mask,
+                      (int)(e->margin_db / 3.0),
+                      e->has_along ? (int)floor(e->along_m / 0.25 + 0.5) : 1 << 30,
+                      e->has_bearing ? e->bearing_deg : -1,
+                      e->has_bearing ? e->bearing_err_deg : -1 };
+        uint64_t sig = fnv1a(st, sizeof(st), FNV64_OFFSET);
+        if (!jsonl_changed(JD_WIFI_DF, e->mac, 6, sig, now)) continue;
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "wifi_df", now);
+        kv_mac(buf, LINEBUF, &off, "mac", e->mac);
+        kv_int(buf, LINEBUF, &off, "channel", e->channel);
+        kv_int(buf, LINEBUF, &off, "heard_by", e->heard_by);
+        kv_str(buf, LINEBUF, &off, "quality", df_quality_name(e->quality));
+        kv_int(buf, LINEBUF, &off, "best_radio", e->best_radio);
+        if (e->best_radio >= 0 && e->best_radio < nr)
+            kv_str(buf, LINEBUF, &off, "best_iface", radios[e->best_radio].iface);
+        kv_double(buf, LINEBUF, &off, "margin_db", e->margin_db);
+        if (e->has_along) kv_double(buf, LINEBUF, &off, "along_m", e->along_m);
+        if (e->has_bearing) {
+            kv_int(buf, LINEBUF, &off, "bearing_deg", e->bearing_deg);
+            kv_int(buf, LINEBUF, &off, "bearing_err_deg", e->bearing_err_deg);
+        }
+        appendf(buf, LINEBUF, &off, ",\"rssi\":[");
+        for (int r = 0; r < nr; r++) {
+            if (e->has[r]) appendf(buf, LINEBUF, &off, "%s%.1f", r ? "," : "", e->rssi[r]);
+            else           appendf(buf, LINEBUF, &off, "%snull", r ? "," : "");
+        }
+        appendf(buf, LINEBUF, &off, "],\"level\":[");
+        for (int r = 0; r < nr; r++) {
+            if (e->has[r]) appendf(buf, LINEBUF, &off, "%s%.1f", r ? "," : "", e->level[r]);
+            else           appendf(buf, LINEBUF, &off, "%snull", r ? "," : "");
+        }
+        appendf(buf, LINEBUF, &off, "]");
+        kv_int(buf, LINEBUF, &off, "last_seen", (long long)e->last_seen);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -2050,6 +1743,15 @@ static const char *count_band(uint64_t n) {
     if (n < 100)   return "10-99";
     if (n < 1000)  return "100-999";
     return "1000+";
+}
+
+/* A count as its decade, 0 for none and 1 for 1-9 up to 7 for a
+ * million and more: the shape a monotonic tally enters the change-only
+ * signature in. A crossing is news; the next file swept is not. */
+static int decade_band(unsigned long long n) {
+    int b = 0;
+    while (n > 0 && b < 7) { b++; n /= 10; }
+    return b;
 }
 
 void jsonl_emit_sensor_health(const sloth_state_t *s) {
@@ -2133,10 +1835,44 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
          * so a link committing never writes a line at that moment (the
          * moment would tell a consumer which address pair it was). */
         int      ble_rot_on;
+        /* #166, the --pcap-dir age sweep: decade bands of the removed
+         * and error tallies, never the counts. A sweep clearing a
+         * backlog removes up to a budget's worth of files per tick, so
+         * the raw count would sign a new line on every one of them. -1
+         * without --pcap-dir. */
+        int      pcap_swept_band, pcap_sweep_err_band;
+        /* What the IP stream is: its pcap link type while it is open
+         * (-1 otherwise) and --monitor-only. Both discrete and set at
+         * start; a change is a reopen, which is news. */
+        int      cap_linktype, monitor_only;
+        /* The receiver and the position: the block both daemons write
+         * (#213), signed on states and bands only. src/jsonl_internal.h
+         * has the fields and why each is one. The decoders' half
+         * (jsonl_sh_rf_sig_t) is sloth-rf's alone since JSONL 2.0.0. */
+        jsonl_sh_gnss_sig_t gnss;
+        /* --db's size ceiling (JSONL 1.7.0): a tune knob, so it moves
+         * only when the operator moves it. */
+        int      db_max_mb;
+        /* Several sensor radios (JSONL 2.3.0, src/mon_radios.h): how
+         * many, each one's state, whether its share of the hop list is
+         * empty, whether a retune of it has ever failed or ever been
+         * acknowledged, and its duplicate tally as a decade. Never the
+         * frame counts, the frequency or the channel, which move every
+         * tick or every dwell; never the raw duplicate count, which
+         * moves with every frame two radios hear. */
+        int      mon_extra;
+        int      mon_state[MON_RADIO_MAX], mon_hops[MON_RADIO_MAX];
+        int      mon_retune_fail_any[MON_RADIO_MAX];
+        int      mon_ever_confirmed[MON_RADIO_MAX];
+        int      mon_dup_band[MON_RADIO_MAX];
+        int      mon_dd_evicted_any;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
     sig.cap_run     = s->cap_health.running;
+    const int cap_linktype = s->cap_health.open ? s->pkt_linktype : -1;
+    sig.cap_linktype = cap_linktype;
+    sig.monitor_only = s->monitor_only != 0;
     sig.cap_exit    = s->cap_health.exit_reason;
     sig.mon_open    = s->mon_health.open;
     sig.mon_run     = s->mon_health.running;
@@ -2194,7 +1930,23 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.scope_gen   = s->scope_health.generation;
     sig.scope_dropped = capture_out_of_scope_dropped();
     sig.tuned         = tune_non_default();
+    const int db_cap_mb = db_is_open() ? db_max_mb() : -1;
+    sig.db_max_mb     = db_cap_mb;
     sig.mon_bad_clock = mon_bad_clock_total();
+    const int   mon_extra = mon_radios_extra();
+    mon_radio_t mon_r[MON_RADIO_MAX];
+    memset(mon_r, 0, sizeof(mon_r));
+    sig.mon_extra = mon_extra;
+    for (int k = 0; mon_extra && k < MON_RADIO_MAX; k++) {
+        if (!mon_radios_get(k, &mon_r[k])) continue;
+        sig.mon_state[k]           = (int)mon_r[k].state;
+        sig.mon_hops[k]            = mon_r[k].hop_channels > 0;
+        sig.mon_retune_fail_any[k] = mon_r[k].retune_failures > 0;
+        sig.mon_ever_confirmed[k]  = mon_r[k].chan_confirmed != 0;
+        sig.mon_dup_band[k]        = decade_band(mon_r[k].dup_dropped);
+    }
+    const unsigned long long mon_dd_evicted = mon_dedup_evicted();
+    sig.mon_dd_evicted_any = mon_dd_evicted > 0;
     /* The STATE, never the raw seconds. stale_secs ticks up every
      * second, so putting it in the change-only signature would make
      * this record emit once a second forever — turning a
@@ -2237,6 +1989,11 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.btcap_drop_any      = s->btcap.drop > 0;
     sig.btcap_truncated_any = s->btcap.truncated > 0;
     sig.ble_rot_on           = s->ble_rot.enabled != 0;
+    jsonl_sh_gnss_sig(s, &sig.gnss);
+    const int pcap_on = alert_pcap_enabled();
+    sig.pcap_swept_band     = pcap_on ? decade_band(alert_pcap_swept()) : -1;
+    sig.pcap_sweep_err_band = pcap_on
+        ? decade_band((unsigned long long)alert_pcap_sweep_errors()) : -1;
 
     /* Singleton: one fixed key, so the slot is this record's alone. */
     static const char health_key[] = "sensor";
@@ -2247,6 +2004,13 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     char buf[LINEBUF]; int off = 0;
     start_obj(buf, LINEBUF, &off, "sensor_health", now);
     kv_str(buf, LINEBUF, &off, "capture_iface",        s->pkt_iface);
+    /* The IP stream's pcap DLT (1 Ethernet, 113/276 Linux cooked, 127
+     * radiotap: IP decoded from 802.11 data frames heard on the air,
+     * #72), -1 while it is not open; and --monitor-only, the monitor
+     * radio on its allow-list. Raw facts: a consumer (slothweb's
+     * capture scope) decides what counts as heard off the air. */
+    kv_int(buf, LINEBUF, &off, "capture_linktype",     cap_linktype);
+    kv_int(buf, LINEBUF, &off, "monitor_only",         s->monitor_only ? 1 : 0);
     kv_str(buf, LINEBUF, &off, "monitor_iface",        s->probe_iface);
     kv_str(buf, LINEBUF, &off, "monitor_err",          s->probe_err);
     /* #92: frames whose capture timestamp was <= 0. Nothing is
@@ -2293,14 +2057,42 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
            (long long)s->hop_dwell.completed);
     health_kv(buf, &off, "capture", &s->cap_health);
     health_kv(buf, &off, "monitor", &s->mon_health);
-    kv_int(buf, LINEBUF, &off, "evictions", (long long)evict_total);
-    for (int k = 0; k < SH_EVICT_KIND_COUNT; k++) {
-        char key[40];
-        snprintf(key, sizeof(key), "evict_%s", sh_evict_name((sh_evict_t)k));
-        kv_int(buf, LINEBUF, &off, key,
-               (long long)sh_evict_count((sh_evict_t)k));
+    /* Several sensor radios (JSONL 2.3.0, src/mon_radios.h).
+     * mon_extra_radios is how many --monitor-iface radios were named
+     * beside the first; 0 is the one-radio run and the mon_rK_* members
+     * are then absent. With any, K = 0 is the first radio (monitor_iface
+     * above) and each named radio has its block whether or not it could
+     * be opened: state "not_open" with the reason in mon_rK_err is the
+     * record of one that could not. mon_rK_chan is the channel its last
+     * retune confirmed (0: not hopping, or none yet) and mon_rK_freq
+     * the frequency of the last frame it received, which is where the
+     * radio is whether or not sloth tuned it. */
+    kv_int(buf, LINEBUF, &off, "mon_extra_radios", mon_extra);
+    if (mon_extra) {
+        kv_int(buf, LINEBUF, &off, "mon_dup_dropped",
+               (long long)mon_radios_dup_total());
+        kv_int(buf, LINEBUF, &off, "mon_dedup_evicted", (long long)mon_dd_evicted);
     }
-    kv_int(buf, LINEBUF, &off, "storage_failures",       storage_fail);
+    for (int k = 0; mon_extra && k <= mon_extra && k < MON_RADIO_MAX; k++) {
+        const mon_radio_t *r = &mon_r[k];
+        char key[40];
+#define MON_KEY(name) (snprintf(key, sizeof(key), "mon_r%d_" name, k), key)
+        kv_str(buf, LINEBUF, &off, MON_KEY("iface"), r->iface);
+        kv_str(buf, LINEBUF, &off, MON_KEY("state"), mon_radio_state_name(r->state));
+        kv_str(buf, LINEBUF, &off, MON_KEY("err"),   r->err);
+        kv_int(buf, LINEBUF, &off, MON_KEY("freq"),  r->freq_mhz);
+        kv_int(buf, LINEBUF, &off, MON_KEY("chan"),
+               k == 0 ? s->chan_confirmed : r->chan_confirmed);
+        kv_int(buf, LINEBUF, &off, MON_KEY("hop_channels"),
+               k == 0 ? s->hop_activity.channels : r->hop_channels);
+        kv_int(buf, LINEBUF, &off, MON_KEY("frames"), (long long)r->frames);
+        kv_int(buf, LINEBUF, &off, MON_KEY("dup_dropped"),
+               (long long)r->dup_dropped);
+        kv_int(buf, LINEBUF, &off, MON_KEY("retune_failures"),
+               k == 0 ? s->chan_retune_failures : r->retune_failures);
+#undef MON_KEY
+    }
+    jsonl_sh_evictions(buf, &off, evict_total, storage_fail);
     /* Headroom of the --pcap-dir filesystem (#96). The free figures are
      * emitted raw because a consumer wants the number; the signature
      * above carries only the band, for the firehose reason stated there.
@@ -2333,71 +2125,13 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
            (long long)s->scope_health.generation);
     kv_int(buf, LINEBUF, &off, "scope_dropped",
            (long long)capture_out_of_scope_dropped());
-    /* A raised threshold can silence a detector, so a consumer must be
-     * able to tell a quiet sensor from a detuned one (#82). Count plus
-     * the knobs themselves: the count alone would not say which rule
-     * went quiet. Empty string on a default run. */
-    kv_int(buf, LINEBUF, &off, "tuned_count", (long long)tune_non_default());
-    {
-        char tbuf[256];
-        tune_format_non_default(tbuf, sizeof(tbuf));
-        kv_str(buf, LINEBUF, &off, "tuned", tbuf);
-    }
-    /* Data-socket hygiene (#135). Appended, so every earlier field keeps
-     * its name and position. `socket_peer_refused` climbing is one peer
-     * trying to take more than socket.max_per_peer slots — a consumer
-     * misconfigured to reconnect without closing, or a local account
-     * crowding the listener; `socket_clients` is the live occupancy of
-     * the 16 slots, 0 when no --data-socket is configured. */
-    kv_int(buf, LINEBUF, &off, "socket_peer_refused", (long long)socket_refused);
-    kv_int(buf, LINEBUF, &off, "socket_clients",      socket_clients);
-    /* Parse faults (#126). Appended, so every earlier field keeps its
-     * name and position. Deliberately absent from `sig` above: under a
-     * beacon-spam or mode-m fuzz run these climb on every frame, so
-     * signing over them would turn this record into the per-tick
-     * firehose the signature exists to prevent. They ride the 300 s
-     * heartbeat and any other transition's line, the way `ps_recv` and
-     * the flow-ring evictions do. A sibling tally, not more `evict_*`
-     * fields: `evictions` is published as the exact sum of that
-     * breakout and must stay so. */
-    kv_int(buf, LINEBUF, &off, "parse_faults",
-           (long long)sh_parse_fault_total());
-    for (int k = 0; k < SH_PF_KIND_COUNT; k++) {
-        char key[48];
-        snprintf(key, sizeof(key), "parse_fault_%s",
-                 sh_parse_fault_name((sh_parse_fault_t)k));
-        kv_int(buf, LINEBUF, &off, key,
-               (long long)sh_parse_fault_count((sh_parse_fault_t)k));
-    }
-    /* Process memory (#121). Appended after the parse-fault breakout, so
-     * every earlier field keeps its name and position. Sampled HERE —
-     * after jsonl_changed() has already decided this line goes out — so
-     * the figures cannot reach `sig` by accident and a suppressed tick
-     * pays for no /proc read. They are the definition of a value that
-     * moves without news: rss and malloc drift on every tick of a
-     * healthy sensor, fd_count steps on each socket client, so signing
-     * over any of them would emit this record once a second. A leak
-     * shows as a slope across heartbeats, which is what a 300 s cadence
-     * is enough to see. -1 is "not measured" (sensor_health.h). */
-    sh_mem_t mem;
-    sh_mem_sample(&mem);
-    kv_int(buf, LINEBUF, &off, "rss_kb",            mem.rss_kb);
-    kv_int(buf, LINEBUF, &off, "rss_hwm_kb",        mem.rss_hwm_kb);
-    kv_int(buf, LINEBUF, &off, "sqlite_mem_kb",     mem.sqlite_mem_kb);
-    kv_int(buf, LINEBUF, &off, "sqlite_mem_hwm_kb", mem.sqlite_mem_hwm_kb);
-    kv_int(buf, LINEBUF, &off, "malloc_kb",         mem.malloc_kb);
-    kv_int(buf, LINEBUF, &off, "fd_count",          mem.fd_count);
-    kv_int(buf, LINEBUF, &off, "resolver_calls",    mem.resolver_calls);
-    /* Loaded parser libraries (#142). Appended, so every earlier field
-     * keeps its name and position. Outside `sig` on purpose: it is
-     * fixed for the life of the process, so it could never be the
-     * change worth a line — it rides every line instead, which is what
-     * lets a consumer match any one record against a libpcap or sqlite
-     * advisory without a second source. */
+    /* The process's own figures: tuned knobs, the data socket, parse
+     * faults, memory and the loaded libraries. One block, shared with
+     * sloth-rf's record (#213). */
     {
         char lbuf[192];
         libver_format(lbuf, sizeof(lbuf));
-        kv_str(buf, LINEBUF, &off, "libs", lbuf);
+        jsonl_sh_process(buf, &off, socket_refused, socket_clients, lbuf);
     }
     /* Bluetooth host source (#144 slice 2). Appended, so every earlier
      * field keeps its name and position. Counters and decoded state
@@ -2505,6 +2239,303 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         kv_str(buf, LINEBUF, &off, "ble_rot_poisoned",       count_band(r->poisoned));
         kv_str(buf, LINEBUF, &off, "ble_rot_seam_evictions", count_band(r->seam_evictions));
     }
+    /* #166: the --pcap-dir age sweep, ONLY while --pcap-dir is set, so
+     * a run without it writes exactly what it wrote before. The exact
+     * counts ride every line; the signature above carries their decade.
+     * pcap_retain_days 0 is "kept forever" (pcap.retain_days=0), which is
+     * why the window is here and not only in `tuned`: a consumer needs
+     * to see the sweep is off, not infer it from a missing knob.
+     * Appended. */
+    if (pcap_on) {
+        kv_int(buf, LINEBUF, &off, "pcap_retain_days",  alert_pcap_retain_days());
+        kv_int(buf, LINEBUF, &off, "pcap_swept",        (long long)alert_pcap_swept());
+        kv_int(buf, LINEBUF, &off, "pcap_sweep_errors", alert_pcap_sweep_errors());
+    }
+    /* The receiver and position block, written only with --location
+     * or --gps and shared with sloth-rf's record (#213). The adsb_*
+     * and aprs_* blocks stood after it until JSONL 2.0.0 (#216); they
+     * are in sloth-rf's sensor_health only. */
+    jsonl_sh_gps(buf, &off, s);
+    /* #193 field data (JSONL 1.7.0, src/alerts/twin_field.h): how often
+     * a deauth flood met a late locally administered same-SSID copy the
+     * chain rule left unnamed, with its denominators. Appended after the
+     * flag-gated blocks and before jsonl_version, which stays last
+     * (test_jsonl.c pins it). Outside `sig`: lifetime counts that ride
+     * the heartbeat, the way the parse faults do; nothing waits on
+     * them. Integers only. */
+    {
+        twin_field_counts_t tf;
+        twin_field_counts(&tf);
+        kv_int(buf, LINEBUF, &off, "twin193_since",    (long long)tf.since);
+        kv_int(buf, LINEBUF, &off, "twin193_floods",   (long long)tf.floods);
+        kv_int(buf, LINEBUF, &off, "twin193_floods_chain",
+               (long long)tf.floods_chain);
+        kv_int(buf, LINEBUF, &off, "twin193_named",    (long long)tf.named);
+        kv_int(buf, LINEBUF, &off, "twin193_late_laa", (long long)tf.late_laa);
+        kv_int(buf, LINEBUF, &off, "twin193_coincide", (long long)tf.coincide);
+        kv_int(buf, LINEBUF, &off, "twin193_excl_carrier",
+               (long long)tf.excl_carrier);
+        kv_int(buf, LINEBUF, &off, "twin193_excl_faint",
+               (long long)tf.excl_faint);
+        kv_int(buf, LINEBUF, &off, "twin193_excl_sibling",
+               (long long)tf.excl_sibling);
+        kv_int(buf, LINEBUF, &off, "twin193_excl_any", (long long)tf.excl_any);
+    }
+    /* The APRS region, rtl_433 and Victron blocks stood here until
+     * JSONL 2.0.0 (#216): sloth-rf's sensor_health only. */
+    /* "daemon", then db_max_mb and jsonl_version, which stay last. */
+    jsonl_sh_tail(buf, &off, "wifi", db_cap_mb);
+    end_obj(buf, LINEBUF, &off);
+    emit_line(buf);
+}
+
+/* ── credential-lure findings (JSONL 1.3.0, #187 / #172) ─────────────
+ *
+ * The evidence tables behind KARMA_AP / KARMA_PROBE_FORGE (s->karma_aps,
+ * karma_update()) and PMKID_HARVEST / HANDSHAKE_HARVEST
+ * (s->harvest_sta, s->harvest_chain, harvest_snapshot()), one record per
+ * row, so a consumer can show what the rules judged and not only that
+ * they fired: the alert record says "this BSSID, CRIT"; these say "it
+ * answered for 3 names it never beaconed, to 2 stations".
+ *
+ *   karma_suspect    one per [y] row: a BSSID beacon-fanning past
+ *                    karma.ssid_thresh, or answering directed probes
+ *                    for names it never beaconed. The [y] view's columns.
+ *   harvest_station  one per soliciting station with at least one M1
+ *                    left unanswered. A station whose every M1 drew an
+ *                    M2 is a station joining its network, and the table
+ *                    holds a row for every station that asked anything;
+ *                    it is not written.
+ *   harvest_chain    one per BSSID whose claimed deauths were followed
+ *                    by a victim's fresh M1/M2 (every row of the table).
+ *
+ * Counts only. A victim's address, the stations a forging BSSID
+ * answered and the SSIDs it answered for stay in the TUI and the alert
+ * evidence; the record says how many. Member names avoid the credential
+ * words slothweb's readers hold every name to (web/src/web_secret.c):
+ * `unanswered_kde` for the M1s that carried the PMKID KDE, `disconnects`
+ * for the deauthentication and disassociation frames, `lure_chain` for
+ * the deauth-then-lure flag.
+ *
+ * Change-only on the shared cache, signed on every count and string and
+ * never on a timestamp, so a row writes when its evidence moves and on
+ * the 300 s heartbeat. A row that leaves its table (aged out, evicted,
+ * or a station whose unanswered M1s aged to none) is written once more
+ * as `"state":"gone"` with its key alone, so a consumer drops it rather
+ * than holding it until its own timeout. Every other row says
+ * `"state":"live"`. */
+enum { LURE_KARMA, LURE_STA, LURE_CHAIN, LURE_KINDS };
+#define LURE_PREV_MAX MAX_KARMA_APS
+static uint8_t g_lure_prev[LURE_KINDS][LURE_PREV_MAX][6];
+static int     g_lure_prev_n[LURE_KINDS];
+
+static const char *const LURE_TYPE[LURE_KINDS] = {
+    "karma_suspect", "harvest_station", "harvest_chain" };
+static const char *const LURE_KEYM[LURE_KINDS] = { "bssid", "sta", "bssid" };
+static const uint8_t LURE_JD[LURE_KINDS] = {
+    JD_KARMA_SUSPECT, JD_HARVEST_STA, JD_HARVEST_CHAIN };
+
+static int lure_has(const uint8_t (*keys)[6], int n, const uint8_t k[6]) {
+    for (int i = 0; i < n; i++)
+        if (!memcmp(keys[i], k, 6)) return 1;
+    return 0;
+}
+
+/* The rows of `kind` now (cur, n) against those written last pass:
+ * each one missing now goes out as gone, and cur becomes the
+ * remembered set. The cache slot is re-signed with 0, which no live
+ * row carries, so a row that returns with the same counts is written
+ * again. */
+static void lure_retire(int kind, const uint8_t (*cur)[6], int n, time_t now) {
+    char buf[256]; int off = 0;
+    for (int i = 0; i < g_lure_prev_n[kind]; i++) {
+        const uint8_t *k = g_lure_prev[kind][i];
+        if (lure_has(cur, n, k)) continue;
+        (void)jsonl_changed(LURE_JD[kind], k, 6, 0, now);
+        start_obj(buf, (int)sizeof(buf), &off, LURE_TYPE[kind], now);
+        kv_mac(buf, (int)sizeof(buf), &off, LURE_KEYM[kind], k);
+        kv_str(buf, (int)sizeof(buf), &off, "state", "gone");
+        end_obj(buf, (int)sizeof(buf), &off);
+        emit_line(buf);
+    }
+    if (n > 0) memcpy(g_lure_prev[kind], cur, (size_t)n * 6);
+    g_lure_prev_n[kind] = n;
+}
+
+static uint64_t sig_int(uint64_t h, long long v) { return fnv1a(&v, sizeof(v), h); }
+static uint64_t sig_str(uint64_t h, const char *v) { return fnv1a(v, strlen(v) + 1, h); }
+
+void jsonl_emit_lures(const sloth_state_t *s) {
+    if (!s || !any_sink()) return;
+    time_t now = sloth_wall();
+    char buf[LINEBUF]; int off = 0;
+    uint8_t cur[LURE_PREV_MAX][6];
+    int n = 0;
+
+    for (int i = 0; i < s->karma_count && n < LURE_PREV_MAX; i++) {
+        const karma_ap_t *k = &s->karma_aps[i];
+        memcpy(cur[n++], k->bssid, 6);
+        uint64_t sig = sig_int(FNV64_OFFSET, k->ssid_count);
+        sig = sig_int(sig, k->ie_fp_distinct);
+        sig = sig_int(sig, k->ie_uniform);
+        sig = sig_int(sig, k->forged);
+        sig = sig_int(sig, k->forge_stations);
+        sig = sig_int(sig, k->pnl_best);
+        sig = sig_int(sig, k->deauth_chain);
+        sig = sig_int(sig, k->score);
+        sig = sig_str(sig, k->top_ssid);
+        sig = sig_str(sig, k->tool);
+        if (sig == 0) sig = 1;              /* 0 is a retired row's */
+        if (!jsonl_changed(JD_KARMA_SUSPECT, k->bssid, 6, sig, now)) continue;
+        start_obj(buf, LINEBUF, &off, "karma_suspect", now);
+        kv_mac(buf, LINEBUF, &off, "bssid", k->bssid);
+        kv_str(buf, LINEBUF, &off, "state", "live");
+        kv_int(buf, LINEBUF, &off, "ssids", k->ssid_count);
+        kv_int(buf, LINEBUF, &off, "ie_postures", k->ie_fp_distinct);
+        kv_int(buf, LINEBUF, &off, "ie_collapsed", k->ie_uniform ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "forged", k->forged);
+        kv_int(buf, LINEBUF, &off, "forge_stations", k->forge_stations);
+        kv_int(buf, LINEBUF, &off, "pnl_best", k->pnl_best);
+        kv_int(buf, LINEBUF, &off, "lure_chain", k->deauth_chain ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "score", k->score);
+        kv_str(buf, LINEBUF, &off, "top_ssid", k->top_ssid);
+        kv_str(buf, LINEBUF, &off, "tool", k->tool);
+        kv_int(buf, LINEBUF, &off, "last_seen", (long long)k->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+    lure_retire(LURE_KARMA, (const uint8_t (*)[6])cur, n, now);
+
+    n = 0;
+    for (int i = 0; s->harvest_sta && i < s->harvest_sta_count; i++) {
+        const harvest_sta_t *h = &s->harvest_sta[i];
+        if (h->unanswered < 1 || n >= LURE_PREV_MAX) continue;
+        memcpy(cur[n++], h->sta, 6);
+        uint64_t sig = sig_int(FNV64_OFFSET, h->solicited);
+        sig = sig_int(sig, h->m1_bssids);
+        sig = sig_int(sig, h->unanswered);
+        sig = sig_int(sig, h->pmkid_unanswered);
+        sig = sig_int(sig, h->answered);
+        sig = sig_int(sig, h->dropped);
+        sig = sig_int(sig, (long long)h->cluster_id);
+        sig = sig_int(sig, h->qevict);
+        if (sig == 0) sig = 1;
+        if (!jsonl_changed(JD_HARVEST_STA, h->sta, 6, sig, now)) continue;
+        start_obj(buf, LINEBUF, &off, "harvest_station", now);
+        kv_mac(buf, LINEBUF, &off, "sta", h->sta);
+        kv_str(buf, LINEBUF, &off, "state", "live");
+        kv_int(buf, LINEBUF, &off, "asked", h->solicited);
+        kv_int(buf, LINEBUF, &off, "m1_bssids", h->m1_bssids);
+        kv_int(buf, LINEBUF, &off, "unanswered", h->unanswered);
+        kv_int(buf, LINEBUF, &off, "unanswered_kde", h->pmkid_unanswered);
+        kv_int(buf, LINEBUF, &off, "answered", h->answered);
+        kv_int(buf, LINEBUF, &off, "dropped", h->dropped);
+        kv_int(buf, LINEBUF, &off, "first_seen", (long long)h->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen", (long long)h->last_seen);
+        /* Additive (JSONL 1.7.0): the row's cluster, the id its eapol
+         * records and its alert detail carry, and how many of its
+         * (BSSID, station) pairs had a QUEUE_EVICT release inside the
+         * window. A count, as the rest of the record. */
+        kv_int(buf, LINEBUF, &off, "cluster_id", (long long)h->cluster_id);
+        kv_int(buf, LINEBUF, &off, "qevict", h->qevict);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+    lure_retire(LURE_STA, (const uint8_t (*)[6])cur, n, now);
+
+    n = 0;
+    for (int i = 0; s->harvest_chain && i < s->harvest_chain_count &&
+                    n < LURE_PREV_MAX; i++) {
+        const harvest_chain_t *c = &s->harvest_chain[i];
+        memcpy(cur[n++], c->bssid, 6);
+        uint64_t sig = sig_int(FNV64_OFFSET, c->victims);
+        sig = sig_int(sig, c->deauth_frames);
+        sig = sig_int(sig, c->dropped);
+        sig = sig_int(sig, (long long)c->cluster_id);
+        sig = sig_int(sig, c->qevict);
+        if (sig == 0) sig = 1;
+        if (!jsonl_changed(JD_HARVEST_CHAIN, c->bssid, 6, sig, now)) continue;
+        start_obj(buf, LINEBUF, &off, "harvest_chain", now);
+        kv_mac(buf, LINEBUF, &off, "bssid", c->bssid);
+        kv_str(buf, LINEBUF, &off, "state", "live");
+        kv_int(buf, LINEBUF, &off, "victims", c->victims);
+        kv_int(buf, LINEBUF, &off, "disconnects", c->deauth_frames);
+        kv_int(buf, LINEBUF, &off, "dropped", c->dropped);
+        kv_int(buf, LINEBUF, &off, "first_seen", (long long)c->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen", (long long)c->last_seen);
+        /* Additive (JSONL 1.7.0), as harvest_station's: a victim count,
+         * never the victim's address. */
+        kv_int(buf, LINEBUF, &off, "cluster_id", (long long)c->cluster_id);
+        kv_int(buf, LINEBUF, &off, "qevict", c->qevict);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+    lure_retire(LURE_CHAIN, (const uint8_t (*)[6])cur, n, now);
+}
+
+void jsonl_lures_reset(void) {
+    memset(g_lure_prev, 0, sizeof(g_lure_prev));
+    memset(g_lure_prev_n, 0, sizeof(g_lure_prev_n));
+}
+
+/* ── ownership (2026-11-11) ─────────────────────────────────────────
+ *
+ * The operator's designated networks, so a consumer (slothweb's SSID
+ * drawer, its Probes and WiFi views) can mark them: until this record
+ * the rosters were in neither sloth.db nor the stream, and slothweb
+ * could only say it did not know.
+ *
+ * Flat, one member per designation (`ssid_0` .. `ssid_15`, `bssid_0`
+ * .. `bssid_15`) beside their counts, rather than an array: slothweb's
+ * decoder keeps top-level scalars only, and the bounds are sloth's own
+ * (MAX_MY_SSIDS, MAX_MY_BSSIDS). An SSID goes through the same escaping
+ * as every string (json_escape: a control byte as \u00YY, an octet
+ * that is not UTF-8 as \ufffd), the operator's text as given, which is
+ * exactly what ownership_is_my_ssid() compares against: a designation
+ * with a control byte in it matches no stored SSID (those hold '?'),
+ * here or in a consumer that compares as sloth does.
+ *
+ * The known-device roster travels as a count. Its MACs are the
+ * operator's own devices, a list a stream that is forwarded to a SIEM
+ * or bundled for a colleague has no need to carry; what a consumer can
+ * use is whether the roster gates UNKNOWN_DEVICE (non-zero) or not.
+ * The sensor's own addresses (the self roster) are not here either:
+ * they are the host's interfaces, already in the `iface` records.
+ *
+ * Change-only, keyed as a singleton. The rosters are fixed for the life
+ * of the process today (flags only; no reload, no SIGHUP handler), so
+ * in practice it is the first tick and then a heartbeat every 300 s;
+ * the signature is there so a future reload is a line at once. */
+void jsonl_emit_ownership(void) {
+    if (!any_sink()) return;
+    time_t now = sloth_wall();
+    const int ns = ownership_ssid_count(), nb = ownership_bssid_count();
+    const int nk = ownership_known_count();
+    uint64_t sig = fnv1a(&ns, sizeof(ns), FNV64_OFFSET);
+    sig = fnv1a(&nb, sizeof(nb), sig);
+    sig = fnv1a(&nk, sizeof(nk), sig);
+    for (int i = 0; i < ns; i++) {
+        const char *x = ownership_ssid_at(i);
+        sig = fnv1a(x, strlen(x) + 1, sig);   /* the NUL: "ab","c" is not "a","bc" */
+    }
+    for (int i = 0; i < nb; i++) sig = fnv1a(ownership_bssid_at(i), 6, sig);
+    static const char own_key[] = "ownership";
+    if (!jsonl_changed(JD_OWNERSHIP, own_key, sizeof(own_key) - 1, sig, now)) return;
+
+    char buf[LINEBUF]; int off = 0;
+    char key[24];
+    start_obj(buf, LINEBUF, &off, "ownership", now);
+    kv_int(buf, LINEBUF, &off, "ssids", ns);
+    for (int i = 0; i < ns; i++) {
+        snprintf(key, sizeof(key), "ssid_%d", i);
+        kv_str(buf, LINEBUF, &off, key, ownership_ssid_at(i));
+    }
+    kv_int(buf, LINEBUF, &off, "bssids", nb);
+    for (int i = 0; i < nb; i++) {
+        snprintf(key, sizeof(key), "bssid_%d", i);
+        kv_mac(buf, LINEBUF, &off, key, ownership_bssid_at(i));
+    }
+    kv_int(buf, LINEBUF, &off, "known_macs", nk);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }
@@ -2512,10 +2543,12 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
 /* ── BLE (#144 slice 4) ─────────────────────────────────────────────
  *
  * ble_device: one record per advertiser row, change-only. The
- * signature holds the row's discrete facts and its RSSI quantised to
- * 10 dB; adv_count, the timestamps and the LL channel (an Ubertooth
- * row hops between 37, 38 and 39) are written but never signed, so an
- * advertiser that keeps advertising is a heartbeat, not a firehose.
+ * signature holds the row's discrete facts, its best RSSI quantised to
+ * 10 dB, and the BLE_JSONL_LIVE_S slot its last_seen falls in;
+ * adv_count, the timestamps and the LL channel (an Ubertooth row hops
+ * between 37, 38 and 39) are written but never signed. So an
+ * advertiser sloth keeps hearing writes one record per slot, a quiet
+ * one rides the heartbeat, and neither is a firehose (below).
  *
  * ble_alert: one record per finding ble_findings_build() returns — the
  * same list the three BLE rules fire from — with its structured fields.
@@ -2532,6 +2565,25 @@ static unsigned log2_bucket(uint64_t v) {
 static int rssi_bucket(int has, int rssi) {
     return has ? (rssi + 200) / 10 : -1;
 }
+
+/* The ble_device liveness slot (2026-11-02, slothweb's BLE waterfall).
+ * The beacon record goes out on every pass (jsonl_emit_beacons(), at
+ * POLL_MS); ble_device was change-only on facts that settle, so a
+ * steady advertiser reached a consumer once per JSONL_HEARTBEAT_SECS
+ * and a time series of it was one point in five minutes. The same
+ * mechanism as beacon - the row is re-sent while sloth keeps hearing
+ * it - bounded to one record per slot of this many seconds: the
+ * signature folds last_seen / BLE_JSONL_LIVE_S, a quantised term and
+ * never the raw counter (agents/AGENTS.md, change-only emission). A
+ * heard row's frame-clock last_seen crosses a slot boundary every
+ * BLE_JSONL_LIVE_S seconds; a silent row's last_seen is frozen, so it
+ * writes nothing until the heartbeat. Ten seconds is slothweb's fine
+ * bucket (web_rollup.h WEB_FINE_S), the finest cell anything draws.
+ * Worst case MAX_BLE_DEVICES rows heard at once is 25.6 lines/s,
+ * against beacon's MAX_BEACON_APS x 4 a second at the default 250 ms
+ * pass. The frame clock, not sloth_wall(): a replay and a test stay
+ * deterministic. */
+#define BLE_JSONL_LIVE_S 10
 
 void jsonl_emit_ble_devices(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
@@ -2564,16 +2616,28 @@ void jsonl_emit_ble_devices(const sloth_state_t *s) {
          * when an EXT_ADV or EXT_SCAN_RSP PDU is heard, which sets that
          * PDU's pdu_mask bit, so a change in it is already a change in
          * pdu_mask. */
-        uint8_t b[17] = { d->addr_type, d->sensor_kind, d->sampled,
+        /* The distance enters as its band only, held by a noise-sized
+         * margin and a hold (src/rf_distance.h), never as metres: a
+         * moving figure here would write the record on every snapshot.
+         * The trend is written but not signed. It is a slope over a
+         * few medians, and under ordinary RSSI noise it entered and
+         * left approaching / leaving for a stationary advertiser
+         * several times a minute (tests/test_rf_distance.c's
+         * seeded-noise hour: ~260 records with it signed); a change in
+         * it reaches a consumer on the next record. */
+        uint8_t b[18] = { d->addr_type, d->sensor_kind, d->sampled,
                           d->pdu_mask, d->has_name, d->has_uuid16,
                           d->has_mfr, d->has_mfr_sub, d->mfr_sub,
                           d->has_svc_data, d->has_appearance, d->hid,
                           d->has_tx_power, d->has_flags,
                           (uint8_t)rssi_bucket(d->has_rssi, d->rssi_best),
                           (uint8_t)(d->watch_cat[0] != '\0'),
-                          (uint8_t)(d->adapter & 0xff) };
+                          (uint8_t)(d->adapter & 0xff),
+                          d->dist.valid ? d->dist.band : 0 };
         h = fnv1a(b, sizeof(b), h);
         h = fnv1a(&d->mfr_id, sizeof(d->mfr_id), h);
+        uint32_t live = (uint32_t)(d->last_seen / BLE_JSONL_LIVE_S);
+        h = fnv1a(&live, sizeof(live), h);
         if (!jsonl_changed(JD_BLE_DEVICE, key, sizeof(key), h, now)) continue;
 
         char buf[LINEBUF]; int off = 0;
@@ -2599,6 +2663,8 @@ void jsonl_emit_ble_devices(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "hid", d->hid);
         kv_int(buf, LINEBUF, &off, "tx_power",
                d->has_tx_power ? d->tx_power : -128);
+        kv_int(buf, LINEBUF, &off, "ext_tx_power",
+               d->has_ext_tx_power ? d->ext_tx_power : -128);
         kv_int(buf, LINEBUF, &off, "flags", d->has_flags ? d->flags : -1);
         kv_int(buf, LINEBUF, &off, "has_rssi", d->has_rssi);
         kv_int(buf, LINEBUF, &off, "rssi", d->has_rssi ? d->rssi : 0);
@@ -2611,6 +2677,7 @@ void jsonl_emit_ble_devices(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "adv_sid", d->adv_sid == 0xFF ? -1 : d->adv_sid);
         kv_int(buf, LINEBUF, &off, "first_seen", (long long)d->first_seen);
         kv_int(buf, LINEBUF, &off, "last_seen", (long long)d->last_seen);
+        emit_dist(buf, &off, &d->dist);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -2709,6 +2776,13 @@ void jsonl_emit_ble_alerts(const sloth_state_t *s) {
     }
 }
 
+/* What sloth-wifi writes each tick: every record of the capture, the
+ * monitor radio and BLE. The sink, the primitives, the alert records
+ * and the blocks sensor_health shares are src/jsonl_core.c; the GNSS,
+ * ADS-B, APRS, rtl_433 and Victron records are src/jsonl_rf.c, which
+ * has the list sloth-rf writes (jsonl_emit_state_rf(), #213) and which
+ * this daemon does not link (#216). This file is the capture's records
+ * and needs the capture to link. */
 void jsonl_emit_state_snapshots(sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
@@ -2716,6 +2790,7 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_ifaces            (s);
     jsonl_emit_sensors           (s);
     jsonl_emit_wifi_merged       (s);
+    jsonl_emit_wifi_df           (s);
     jsonl_emit_arp               (s);
     jsonl_emit_dhcp_leases       (s);
     jsonl_emit_wifi_aps          (s);
@@ -2756,6 +2831,18 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_mqtt_flows        (s);
     jsonl_emit_ble_devices       (s);   /* #144 slice 4 */
     jsonl_emit_ble_alerts        (s);
+    /* No gnss_fix / gnss_sky / gnss_sat, adsb_aircraft, aprs_station /
+     * aprs_packet, rtl433_device or victron_device since JSONL 2.0.0
+     * (#216, ADR 0010): those records are sloth-rf's
+     * (jsonl_emit_state_rf()). The receiver's health stays in this
+     * daemon's sensor_health, below. */
+    /* The host's status and the source inventory (src/sys_status.h):
+     * a batch on its own cadence, nothing on most ticks. */
+    sys_status_emit              (s);
+    /* The operator's designated networks: change-only, a heartbeat. */
+    jsonl_emit_ownership         ();
+    /* The KARMA and key-harvest evidence tables (JSONL 1.3.0). */
+    jsonl_emit_lures             (s);
     /* Last: the sensor's self-report about this tick, after every
      * observation in it has been emitted (#91 slice 3). */
     jsonl_emit_sensor_health     (s);

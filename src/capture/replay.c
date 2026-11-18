@@ -59,6 +59,11 @@ void replay_platform_install(void) {
     g_platform.init              = rp_nop;
     g_platform.cleanup           = rp_nop;
     g_platform.set_channel       = rp_no_channel;
+    /* A replay describes a savefile, not the machine it runs on: no
+     * host status and no attached receivers (src/sys_status.h reads
+     * NULL as a host with neither /proc nor /sys). */
+    g_platform.sys_read          = NULL;
+    g_platform.sys_list          = NULL;
 }
 
 #ifdef WITH_PCAP

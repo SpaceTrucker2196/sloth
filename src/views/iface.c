@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
+#include "gps.h"
 #include "sloth.h"
 #include "tui.h"
 #include "views/view_page.h"
@@ -522,6 +523,22 @@ void iface_fmt_health_strip(const sloth_state_t *s, char *buf, int sz) {
     if (s->mon_health.open && s->mon_health.stale_secs > IFACE_STALE_SECS)
         strip_addf(buf, sz, &off, "  monitor stale %ds",
                    s->mon_health.stale_secs);
+    /* --location / --gps (2026-10-27). Opt-in, so the state is shown
+     * whenever one is given — the operator asked for a position and
+     * should see whether alerts are getting one. Detail only on fault:
+     * a stale fix's age, the reader's error. */
+    if (s->gps.configured) {
+        const gps_health_t *g = &s->gps;
+        strip_addf(buf, sz, &off, "  gps %s", gps_state_name(g->state));
+        if (g->state == GPS_FIX && g->sats > 0)
+            strip_addf(buf, sz, &off, " %dsat", g->sats);
+        if (g->state == GPS_STALE && g->fix_age_s >= 0)
+            strip_addf(buf, sz, &off, " %ds", g->fix_age_s);
+        if (g->has_gps && g->has_fixed && g->state != GPS_FIX)
+            strip_addf(buf, sz, &off, " (using --location)");
+        if (g->err[0])
+            strip_addf(buf, sz, &off, " err %.60s", g->err);
+    }
 }
 
 /* SSID of the network the managed radio is joined to ("" = none).

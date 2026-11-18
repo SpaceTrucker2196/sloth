@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #ifdef WITH_SQLITE
 #include <sqlite3.h>
@@ -31,13 +32,14 @@
 #include "web_oui.h"
 #include "web_slothdb.h"
 #include "wtest.h"
+#include "wt_tmp.h"
 
 #define HOUR 3600LL
 #define WEEK (168LL * HOUR)
 #define THU0 1792627200LL                 /* Thursday 2026-10-22 00:00 UTC */
 #define T0   (THU0 + 14 * HOUR)           /* "now": Thursday 14:00 */
 
-static char g_dir[64];
+static char g_dir[TEST_TMP_MAX];
 static web_store_t    st;
 static int            have_st;
 static web_baseline_t bl;
@@ -59,7 +61,7 @@ static void engine(void) {
 /* store: open a slothweb.db (in an SQLite build); live: NULL counts
  * every minute as observed. */
 static void fx(int store, web_live_t *live) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-anomaly-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-anomaly-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(g_dir) != NULL);
     have_st = 0;
     if (store && web_store_available()) {
@@ -196,6 +198,54 @@ static void test_a1_fires_on_sustained_burst(void) {
     web_anom_ep_t *e = ep(WEB_ANOM_A1_RATE, "10.0.0.5");
     WT_ASSERT(e->state == WEB_EP_OPEN && e->hit_streak == 3);
     WT_EQ(e->first_seen, T0 + 60);
+    fx_done();
+}
+
+/* A signal strength is not a rate: the same sustained jump on an
+ * rf.rssi.* gauge (a station walking up to the sensor) opens nothing,
+ * not even a builder (docs/web-frrs-spec.md Q7: kept for the Report,
+ * no rule asked for over it). Seen red with the minute pass's
+ * web_metric_is_rssi() test taken out. */
+static void test_a1_scores_no_rssi(void) {
+    fx(0, NULL);
+    static const double M70[] = { -70, -70, -70 };
+    seed(WM_RF_RSSI_STA, "02:00:00:00:00:51", T0, M70, 3);
+    seed(WM_HOST_CONNS, "10.0.0.5", T0, FIVE3, 3);
+    step(T0);
+    for (int i = 0; i < 3; i++) {
+        long long t = T0 + i * 60;
+        gauge(WM_RF_RSSI_STA, "02:00:00:00:00:51", t, -20);
+        gauge(WM_HOST_CONNS, "10.0.0.5", t, 500);
+        step(t + 60);
+    }
+    WT_ASSERT(ep(WEB_ANOM_A1_RATE, "02:00:00:00:00:51")->state == WEB_EP_FREE);
+    /* The control: the same minutes on host.conns do open. */
+    WT_ASSERT(ep(WEB_ANOM_A1_RATE, "10.0.0.5")->state == WEB_EP_OPEN);
+    fx_done();
+}
+
+/* The sensor host's own readings are not network behaviour: the same
+ * sustained jump on a "sys" class gauge (a board warming up, a source's
+ * rate) opens nothing (web_sysstat.h: no rule was asked for over them).
+ * Seen red with the minute pass's WEB_KC_SYS test taken out. */
+static void test_a1_scores_no_sys(void) {
+    fx(0, NULL);
+    static const double C45[] = { 45, 45, 45 };
+    seed(WM_SYS_TEMP, "thermal_zone0", T0, C45, 3);
+    seed(WM_SRC_RATE, "monitor", T0, FIVE3, 3);
+    seed(WM_HOST_CONNS, "10.0.0.5", T0, FIVE3, 3);
+    step(T0);
+    for (int i = 0; i < 3; i++) {
+        long long t = T0 + i * 60;
+        gauge(WM_SYS_TEMP, "thermal_zone0", t, 95);
+        gauge(WM_SRC_RATE, "monitor", t, 500);
+        gauge(WM_HOST_CONNS, "10.0.0.5", t, 500);
+        step(t + 60);
+    }
+    WT_ASSERT(ep(WEB_ANOM_A1_RATE, "thermal_zone0")->state == WEB_EP_FREE);
+    WT_ASSERT(ep(WEB_ANOM_A1_RATE, "monitor")->state == WEB_EP_FREE);
+    /* The control: the same minutes on host.conns do open. */
+    WT_ASSERT(ep(WEB_ANOM_A1_RATE, "10.0.0.5")->state == WEB_EP_OPEN);
     fx_done();
 }
 
@@ -1850,6 +1900,16 @@ static void test_device_z_now(void) {
     WT_EQ(web_anomaly_device_z(&an, "10.0.0.5", T0 + 60, &z), 0);
     WT_EQ(web_anomaly_device_z(&an, "00:11:22:33:44:55",
                                T0 + 60 + WEB_ANOM_Z_FRESH_S + 61, &z), 0);
+    /* Under a capture scope, the scope's own metrics only: dev.frames is
+     * the monitor radio's, so Monitor has the z and Local none. Seen red
+     * with z_note() keeping every metric's z in the scoped slots. */
+    WT_EQ(web_anomaly_device_z_scoped(&an, "00:11:22:33:44:55", T0 + 60,
+                                      WEB_SCOPE_MONITOR, &z), 1);
+    WT_ASSERT(z > 3);
+    WT_EQ(web_anomaly_device_z_scoped(&an, "00:11:22:33:44:55", T0 + 60,
+                                      WEB_SCOPE_LOCAL, &z), 0);
+    WT_EQ(web_anomaly_device_z_scoped(&an, "00:11:22:33:44:55", T0 + 60,
+                                      WEB_SCOPE_HYBRID, &z), 1);
     fx_done();
 }
 
@@ -1925,8 +1985,321 @@ static void test_a2_durable_first_seen(void) {
 }
 #endif
 
+#ifdef WITH_SQLITE
+static int popcount_ull(unsigned long long m) {
+    int n = 0;
+    for (; m; m &= m - 1) n++;
+    return n;
+}
+
+/* ── a slothweb restart inside an hour (v11) ─────────────────────────── *
+ *
+ * Each run here is an engine over the same store, stepped once at the
+ * start of each minute with a record just in, so that minute is
+ * observed, and given each minute's rows as web_tsdb gives them: written
+ * to the minute tier, then to the rows hook, then the step that crosses
+ * the boundary. A restart is the engine and baseline destroyed and made
+ * again from the store with a later first step; "killed" is that with no
+ * web_anomaly_save_cover(). The baseline's own cells are what is
+ * checked. */
+
+#define RS_X "02:00:00:00:00:0a"     /* present in the first run's part */
+#define RS_Y "02:00:00:00:00:0b"     /* present in the second run's part */
+#define RS_Z "02:00:00:00:00:0c"     /* has a baseline, absent all hour */
+#define RS_C "10.0.0.8"              /* a counter, dns.queries */
+
+static web_live_t rs_live;
+static web_feed_t rs_feed;
+
+static void rs_up(void) {
+    web_live_init(&rs_live, "unix:/test/sloth.sock");
+    web_live_sock_connected(&rs_live, 0);
+    web_feed_reset(&rs_feed);
+    fx(1, &rs_live);
+}
+
+static void rs_down(void) {
+    fx_done();
+    web_live_destroy(&rs_live);
+}
+
+/* A step at t with a record just in: the minute of t observed. */
+static void rs_tick(long long t) {
+    static const char rec[] = "{\"type\":\"device\",\"count\":1}\n";
+    g_mono = (t - THU0) * 1000;
+    web_feed_bytes(&rs_feed, &rs_live, rec, strlen(rec), g_mono);
+    step(t);
+}
+
+/* One minute row, as web_tsdb hands it on: the store first, then the
+ * engine. 0, or -1 when the store refused it (the engine has it still,
+ * as the real flush gives a batch to the hook whatever the write did). */
+static int rs_row(int tier, int metric, const char *key, long long t, double sum,
+                  unsigned long n, double max) {
+    web_qrow_t r;
+    memset(&r, 0, sizeof(r));
+    r.tier = tier;
+    r.metric = metric;
+    snprintf(r.key, sizeof(r.key), "%s", key);
+    r.t = t;
+    r.sum = sum;
+    r.n = n;
+    r.min = n ? sum / (double)n : 0;
+    r.max = max;
+    int rc = web_store_write(&st, &r, 1);
+    web_anomaly_rows(&an, &r, 1);
+    return rc;
+}
+
+/* Minutes [from, to) of hour h for one run: X present in [xf, xt), Y in
+ * [yf, yt), the counter at cv a minute; then the step that crosses each
+ * minute's end. The run's first step (at h + from * 60) is the caller's. */
+static int rs_minutes(long long h, int from, int to, int xf, int xt, int yf, int yt,
+                      double cv) {
+    int refused = 0;
+    for (int i = from; i < to; i++) {
+        long long t = h + i * 60;
+        if (i >= xf && i < xt) refused |= rs_row(WEB_TIER_MINUTE, WM_DEV_PRESENT, RS_X, t, 6, 6, 1);
+        if (i >= yf && i < yt) refused |= rs_row(WEB_TIER_MINUTE, WM_DEV_PRESENT, RS_Y, t, 6, 6, 1);
+        refused |= rs_row(WEB_TIER_MINUTE, WM_DNS_QUERIES, RS_C, t, cv, 1, cv);
+        rs_tick(t + 60);
+    }
+    return refused;
+}
+
+static int rs_cell(int metric, const char *key, long long h, double *mean) {
+    web_bl_cell_t c[WEB_BL_CELLS];
+    if (web_baseline_cells(&bl, metric, key, c) != 0) return -1;
+    const web_bl_cell_t *k = &c[web_bl_cell_index(h)];
+    if (mean) *mean = k->mean;
+    return k->n;
+}
+
+static unsigned long long rs_mask(long long h, int *done) {
+    unsigned long long m = 0;
+    int d = 0;
+    WT_ASSERT(web_store_cover_get(&st, h, &m, &d) >= 0);
+    if (done) *done = d;
+    return m;
+}
+
+/* Z has a week of history in this cell, so a fed hour zero-fills it. */
+static void rs_seed(long long h) {
+    web_baseline_feed(&bl, WM_DEV_PRESENT, RS_Z, h - WEEK, 1.0, 1);
+}
+
+static void rs_restart(long long first) {
+    restart(first);
+    rs_seed(T0);       /* the baseline restored already holds it; a dup is skipped */
+    rs_tick(first);
+}
+
+/* A restart at :30 of an otherwise observed hour loses nothing: the
+ * runs' 30 + 30 minutes are one observed hour, fed once, from both
+ * runs' rows. X (present only before the restart) and Y (only after)
+ * are each present for the hour; Z, absent from both parts, is
+ * zero-filled; the counter is its whole hour, 30 x 2 + 30 x 4 = 180, so
+ * 3 a minute, not the second run's 120 (2 a minute) its own hour row
+ * carries. Seen red: with hour_pass() judging an hour that began
+ * before the run unobserved, as before (X and the counter never fed,
+ * Z's n 1); with hour_merge() keeping the run's own rows instead of
+ * rebuilding them (X never fed, the counter's mean not 3); with
+ * cover_save()'s call in the step taken out (the mask 0, nothing
+ * fed). */
+static void test_restart_mid_hour_is_one_hour(void) {
+    if (!web_store_available()) return;
+    rs_up();
+    rs_seed(T0);
+    rs_tick(T0);
+    WT_EQ(rs_minutes(T0, 0, 30, 0, 10, 99, 99, 2), 0);
+    rs_restart(T0 + 30 * 60);              /* killed at :30, back at :30 */
+    WT_EQ(rs_minutes(T0, 30, 59, 99, 99, 50, 60, 4), 0);
+    /* The run's own hour row, closed with the hour: its part only. */
+    WT_EQ(rs_row(WEB_TIER_MINUTE, WM_DEV_PRESENT, RS_Y, T0 + 59 * 60, 6, 6, 1), 0);
+    WT_EQ(rs_row(WEB_TIER_MINUTE, WM_DNS_QUERIES, RS_C, T0 + 59 * 60, 4, 1, 4), 0);
+    rs_row(WEB_TIER_HOUR, WM_DNS_QUERIES, RS_C, T0, 120, 30, 4);
+    rs_row(WEB_TIER_HOUR, WM_DEV_PRESENT, RS_Y, T0, 60, 60, 1);
+    rs_tick(T0 + HOUR);
+    int done = 0;
+    WT_EQ(rs_mask(T0, &done), WEB_STORE_COVER_ALL);
+    WT_EQ(done, 1);
+    double m = -1;
+    WT_EQ(rs_cell(WM_DEV_PRESENT, RS_X, T0, &m), 1);
+    WT_ASSERT(fabs(m - 1.0) < 1e-6);
+    WT_EQ(rs_cell(WM_DEV_PRESENT, RS_Y, T0, &m), 1);
+    WT_ASSERT(fabs(m - 1.0) < 1e-6);
+    WT_EQ(rs_cell(WM_DEV_PRESENT, RS_Z, T0, &m), 2);
+    WT_EQ(rs_cell(WM_DNS_QUERIES, RS_C, T0, &m), 1);
+    WT_ASSERT(fabs(m - 3.0) < 1e-6);
+    WT_EQ(an.st.hours_merged, 1);
+    WT_EQ(an.st.hours_fed, 1);
+    rs_down();
+}
+
+/* A counter is fed across a restart only when both parts' rows are in
+ * the store. Here the first run's minute writes fail from :10 on (a
+ * trigger refuses them, as a full disk would): its bits stop at :09,
+ * 10 + 30 minutes is under 45, and nothing is fed, Z not zero-filled
+ * either. Seen red with cover_save()'s taint taken out (the first run's
+ * 30 bits written, and the hour fed with only 10 of its first 30
+ * minutes' counter rows: the counter and X fed, Z zero-filled). */
+static void test_restart_counter_needs_both_parts(void) {
+    if (!web_store_available()) return;
+    rs_up();
+    rs_seed(T0);
+    rs_tick(T0);
+    char sql[256];
+    snprintf(sql, sizeof(sql), "CREATE TRIGGER rs_full BEFORE INSERT ON minute WHEN NEW.t >= %lld"
+             " BEGIN SELECT RAISE(ABORT, 'full'); END;", T0 + 600);
+    an_raw_exec(sql);
+    WT_EQ(rs_minutes(T0, 0, 30, 0, 10, 99, 99, 2), -1);
+    an_raw_exec("DROP TRIGGER rs_full;");
+    WT_EQ(rs_mask(T0, NULL), (1ULL << 10) - 1);
+    rs_restart(T0 + 30 * 60);
+    WT_EQ(rs_minutes(T0, 30, 60, 99, 99, 50, 60, 4), 0);
+    WT_EQ(rs_cell(WM_DNS_QUERIES, RS_C, T0, NULL), -1);
+    WT_EQ(rs_cell(WM_DEV_PRESENT, RS_X, T0, NULL), -1);
+    WT_EQ(rs_cell(WM_DEV_PRESENT, RS_Z, T0, NULL), 1);
+    WT_EQ(an.st.hours_merged, 0);
+    WT_EQ(an.st.hours_unobserved, 1);
+    rs_down();
+}
+
+/* 20 minutes, a gap, 20 minutes: 40 observed across the restart, under
+ * 45, so nothing is fed and nothing zero-filled. Seen red with
+ * hour_merge()'s WEB_ANOM_COVER_MIN test made `< 1` (fed: the counter
+ * and X fed, Z 2). */
+static void test_restart_under_cover_feeds_nothing(void) {
+    if (!web_store_available()) return;
+    rs_up();
+    rs_seed(T0);
+    rs_tick(T0);
+    WT_EQ(rs_minutes(T0, 0, 20, 0, 10, 99, 99, 2), 0);
+    rs_restart(T0 + 40 * 60);
+    WT_EQ(rs_minutes(T0, 40, 60, 99, 99, 50, 60, 4), 0);
+    int done = 0;
+    WT_EQ(popcount_ull(rs_mask(T0, &done)), 40);
+    WT_EQ(done, 1);
+    WT_EQ(rs_cell(WM_DNS_QUERIES, RS_C, T0, NULL), -1);
+    WT_EQ(rs_cell(WM_DEV_PRESENT, RS_Z, T0, NULL), 1);
+    WT_EQ(an.st.hours_unobserved, 1);
+    rs_down();
+}
+
+/* A run killed 45 s into minute :30 loses that minute and no other:
+ * every completed minute's bit is in the store when it dies (written at
+ * each minute boundary, after the minute's rows), and the next run
+ * starting at :31 brings the hour to 59 observed minutes. A clean exit
+ * writes nothing more (the minute in progress is not complete). Seen
+ * red with the step's cover_save() call taken out (bits 0, after the
+ * kill and in the final mask's first half). */
+static void test_killed_run_loses_only_the_minute_in_progress(void) {
+    if (!web_store_available()) return;
+    rs_up();
+    rs_tick(T0);
+    WT_EQ(rs_minutes(T0, 0, 30, 0, 30, 99, 99, 2), 0);
+    WT_EQ(rs_mask(T0, NULL), (1ULL << 30) - 1);   /* :00 to :29, at :30 */
+    rs_row(WEB_TIER_MINUTE, WM_DNS_QUERIES, RS_C, T0 + 30 * 60, 1, 1, 1);
+    g_mono += 45000;                               /* :30:45, then killed */
+    rs_restart(T0 + 31 * 60);
+    WT_EQ(rs_minutes(T0, 31, 60, 99, 99, 31, 60, 2), 0);
+    WT_EQ(rs_mask(T0, NULL), WEB_STORE_COVER_ALL & ~(1ULL << 30));
+    WT_EQ(rs_cell(WM_DEV_PRESENT, RS_X, T0, NULL), 1);
+    WT_EQ(rs_cell(WM_DEV_PRESENT, RS_Y, T0, NULL), 1);
+    double m = -1;
+    WT_EQ(rs_cell(WM_DNS_QUERIES, RS_C, T0, &m), 1);
+    /* 59 minutes at 2 and the killed run's minute row, flushed before
+     * the minute ended (1): 119 over the hour. */
+    WT_ASSERT(fabs(m - 119.0 / 60.0) < 1e-6);
+    /* The clean-exit write adds no bit for a minute not complete. */
+    web_anomaly_save_cover(&an);
+    WT_EQ(rs_mask(T0 + HOUR, NULL), 0);
+    rs_down();
+}
+
+/* A restart across an hour boundary: the first run is killed at 14:50,
+ * the next starts at 15:05. 14:00 had 50 observed minutes and was never
+ * passed; the new run passes it at its first step, from the store.
+ * 15:00 has the new run's 55 and is fed at its end. Both hours reach 45
+ * and both are fed: nothing lost. Seen red with cover_catch_up() not
+ * called (14:00 never fed, not marked done) and with hour_pass()
+ * judging an hour that began before the run as before (neither fed). */
+static void test_restart_across_the_hour_feeds_both(void) {
+    if (!web_store_available()) return;
+    rs_up();
+    rs_tick(T0);
+    WT_EQ(rs_minutes(T0, 0, 50, 0, 50, 99, 99, 2), 0);
+    rs_restart(T0 + HOUR + 5 * 60);
+    WT_EQ(rs_cell(WM_DEV_PRESENT, RS_X, T0, NULL), 1);
+    double m = -1;
+    WT_EQ(rs_cell(WM_DNS_QUERIES, RS_C, T0, &m), 1);
+    WT_ASSERT(fabs(m - 100.0 / 60.0) < 1e-6);
+    int done = 0;
+    rs_mask(T0, &done);
+    WT_EQ(done, 1);
+    WT_EQ(rs_minutes(T0 + HOUR, 5, 60, 99, 99, 5, 60, 3), 0);
+    WT_EQ(rs_cell(WM_DEV_PRESENT, RS_Y, T0 + HOUR, NULL), 1);
+    WT_EQ(rs_cell(WM_DNS_QUERIES, RS_C, T0 + HOUR, &m), 1);
+    WT_ASSERT(fabs(m - 165.0 / 60.0) < 1e-6);
+    WT_EQ(an.st.hours_merged, 2);
+    /* Passed once: a third run starting now passes neither again. */
+    unsigned long fed = an.st.hours_fed;
+    rs_restart(T0 + 2 * HOUR + 60);
+    WT_EQ(an.st.hours_fed + an.st.hours_unobserved, 0);
+    WT_EQ(fed, 2);
+    rs_down();
+}
+
+/* What the merge costs the store thread, measured: an hour of 2,050
+ * series, 60 minute rows each (123,000 rows), rebuilt at the hour pass. It runs
+ * on the store thread over the writer connection, never on a request,
+ * and reads under WAL, so a request's reader is not blocked by it; the
+ * figure is printed, not held to a bound. */
+static void test_restart_merge_cost(void) {
+    if (!web_store_available()) return;
+    rs_up();
+    rs_tick(T0);
+    WT_EQ(rs_minutes(T0, 0, 30, 0, 30, 99, 99, 2), 0);
+    enum { KEYS = 2048 };
+    static web_qrow_t rows[KEYS];
+    for (int i = 0; i < 60; i++) {
+        for (int k = 0; k < KEYS; k++) {
+            memset(&rows[k], 0, sizeof(rows[k]));
+            rows[k].tier = WEB_TIER_MINUTE;
+            rows[k].metric = WM_HOST_CONNS;
+            snprintf(rows[k].key, sizeof(rows[k].key), "10.1.%d.%d", k / 256, k % 256);
+            rows[k].t = T0 + i * 60;
+            rows[k].sum = rows[k].min = rows[k].max = 3;
+            rows[k].n = 1;
+        }
+        WT_EQ(web_store_write(&st, rows, KEYS), 0);
+    }
+    rs_restart(T0 + 30 * 60);
+    WT_EQ(rs_minutes(T0, 30, 59, 99, 99, 99, 99, 2), 0);
+    struct timespec a0, a1;
+    clock_gettime(CLOCK_MONOTONIC, &a0);
+    rs_tick(T0 + HOUR);
+    clock_gettime(CLOCK_MONOTONIC, &a1);
+    double ms = (a1.tv_sec - a0.tv_sec) * 1e3 + (a1.tv_nsec - a0.tv_nsec) / 1e6;
+    printf("  merged hour pass, %d series x 60 minute rows: %.1f ms on the store thread\n",
+           KEYS + 2, ms);
+    WT_EQ(an.st.hours_merged, 1);
+    WT_ASSERT(rs_cell(WM_HOST_CONNS, "10.1.7.255", T0, NULL) >= 0 ||
+              an.st.rows_dropped > 0);
+    /* One coverage write, timed the same way. */
+    clock_gettime(CLOCK_MONOTONIC, &a0);
+    WT_EQ(web_store_cover_put(&st, T0 + 5 * HOUR, 1), 0);
+    clock_gettime(CLOCK_MONOTONIC, &a1);
+    ms = (a1.tv_sec - a0.tv_sec) * 1e3 + (a1.tv_nsec - a0.tv_nsec) / 1e6;
+    printf("  one coverage write: %.3f ms\n", ms);
+    rs_down();
+}
+#endif
+
 void run_anomaly_tests(void) {
     WT_RUN(test_a1_fires_on_sustained_burst);
+    WT_RUN(test_a1_scores_no_rssi);
+    WT_RUN(test_a1_scores_no_sys);
     WT_RUN(test_a1_two_minutes_never_open);
     WT_RUN(test_a1_gauge_gap_breaks_streak);
     WT_RUN(test_a1_quiet_jitter_fires_nothing);
@@ -1993,5 +2366,11 @@ void run_anomaly_tests(void) {
     WT_RUN(test_device_z_now);
 #ifdef WITH_SQLITE
     WT_RUN(test_a2_durable_first_seen);
+    WT_RUN(test_restart_mid_hour_is_one_hour);
+    WT_RUN(test_restart_counter_needs_both_parts);
+    WT_RUN(test_restart_under_cover_feeds_nothing);
+    WT_RUN(test_killed_run_loses_only_the_minute_in_progress);
+    WT_RUN(test_restart_across_the_hour_feeds_both);
+    WT_RUN(test_restart_merge_cost);
 #endif
 }

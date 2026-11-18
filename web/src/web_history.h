@@ -8,7 +8,10 @@
  *       1..WEB_HIST_COLS_MAX, default WEB_HIST_COLS) the devices first
  *       seen in it and the alert episodes begun in it, and the survey
  *       sessions that overlap the range as markers. from and to default
- *       to the last 30 days; the range is at most 400 days.
+ *       to the last 30 days; the range is at most 400 days. Read
+ *       under WEB_SDB_OVERVIEW_MS, not WEB_SDB_HTTP_MS, and cached per
+ *       sloth.db state (web_slothdb.h); a failure's 503 adds "query",
+ *       "rows_read" and "budget_ms".
  *   /api/history/devices?from=&to=&limit=&offset=
  *       who was here: the devices whose [first_seen, last_seen]
  *       overlaps [from, to] (sqlite-schema.md's recipe), as /api/devices
@@ -93,6 +96,10 @@ int web_hist_open(const web_m4_t *m, web_sdb_conn_t *c, long long now_s,
                   char *body, size_t cap, size_t *len, int *status);
 int web_hist_read_failed(web_sdb_conn_t *c, char *body, size_t cap,
                          size_t *len, int *status);
+
+/* Test seam: nonzero spends the overview's budget once sloth.db is
+ * open, so its first long statement times out. */
+extern int web_hist_test_expire;
 
 /* In web_devices.c. */
 int web_history_devices_route(const web_m4_t *m, const char *query,

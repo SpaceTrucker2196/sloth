@@ -16,10 +16,210 @@
 #include "ev_cite.h"
 #include "mle.h"       /* MLE_TYPE_BASIC */
 #include "wifi_freq.h"
+#include "rf_distance.h"
+#include "tune.h"
 
 static beacon_ap_t     g_aps[MAX_BEACON_APS];
 static int             g_count = 0;
 static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
+
+/* ── BSSIDs the table has forgotten (#188) ─────────────────────
+ *
+ * The table drops an entry BEACON_AGE_SECS after it was last heard, or
+ * sooner when it is full, and the same AP heard again is inserted as if
+ * for the first time. EVIL_TWIN's late-arrival signal reads that insert
+ * as "the copy arrived after the original", so a router at the edge of
+ * range that fell silent for five minutes lifted a pair to CRIT. This
+ * is what lets an insert be told from a return.
+ *
+ * Shape: a ring of (BSSID, the SSID it carried when dropped, the
+ * radio's band, enc and vendor-IE hash then, monotonic time it was
+ * dropped), newest last, all under g_mu. Static,
+ * so nothing is allocated on the frame path; the scan is linear and
+ * runs when an entry is dropped, created or renamed, never per beacon
+ * of a settled AP.
+ *
+ * Keyed on the name as well as the address. The question the signal
+ * asks is whether this SSID has been heard from this BSSID before, and
+ * a BSSID-only memory would let a transmitter make itself "known" by
+ * beaconing any name once, five minutes ahead. With the name in the
+ * key it has to have sent the name it is copying, and that earlier
+ * moment was judged as the arrival it was. The name itself is kept and
+ * compared, not a digest of it: the transmitter chooses its SSID, and a
+ * second name with the same 32-bit FNV-1a as the one it means to copy
+ * takes seconds to find, which made the alibi above available again
+ * under a name that copies nothing. An entry dropped while its
+ * SSID was still hidden is not remembered: there is no name to key.
+ *
+ * Capacity 4096: sixteen times the table, 64 bytes each, 256 KiB. For
+ * the session, with no age-out, as ruled: a neighbour's router that
+ * was last heard on Monday is not an arrival on Thursday. What bounds
+ * it is the ring. When it is full the oldest memory is overwritten,
+ * and from then on "not found" no longer means "never heard": a BSSID
+ * dropped before the overwritten one would read as new. So an entry
+ * the memory does not know is stamped UNSURE, which the scorer treats
+ * as no arrival, until the memory again reaches back
+ * BEACON_RECALL_TRUST_S. A day: past that an AP that returns is
+ * counted as new, which is also what "new in 24 h" means elsewhere.
+ * That is the quiet failure, and it has a cost that is stated in the
+ * EVIL_TWIN assessment: a site that forgets more than 4096 BSSIDs a
+ * day, or a beacon flood of random addresses, turns the signal off.
+ *
+ * It replaces the time-window guard a full table had (evict_age_s1):
+ * an entry dropped for room is remembered like one dropped for age, so
+ * its re-insert is known exactly, and a BSSID never heard before that
+ * arrives at a full table is still an arrival.
+ *
+ * Two ways round it, and what closes each (#194, 2026-11-12):
+ *
+ * Announce ahead. One beacon carrying the SSID to be copied, sent when
+ * its own arrival is not judged as one or judged on nothing (another
+ * band, another security, no or other vendor IEs), then silence for
+ * BEACON_AGE_SECS, made the real start a return. So a memory also
+ * keeps what the radio looked like: its band, its `enc` and its
+ * vendor-IE hash. A return is a return only as the same radio; one
+ * that comes back on another band, under another security, or with
+ * other vendor IEs, is an arrival. An unknown value on the returning
+ * side (band of channel 0, no vendor IEs yet) cannot say "different"
+ * and is not; an unknown value in the memory is different from any
+ * known one, so an announcement on channel 0 or with no vendor IEs
+ * vouches for nothing. What is left: an announcement as the same radio
+ * at a moment the gap does not count (inside twin.late_arrival_s of
+ * the original's first sighting, while the sensor moves). Not closed:
+ * the edge-of-range AP heard once is the same beacon, and a minimum
+ * presence before a memory counts would cost that AP, which is the
+ * case the memory exists for, and only lengthen the announcement.
+ *
+ * Beacon flood. About 4,400 beacons from random addresses overflowed
+ * the ring and turned the signal off for a day. An entry first heard
+ * while the new-BSSID rate is at a flood (BEACON_FLOOD's own test:
+ * beacon.flood_thresh new BSSIDs inside beacon.flood_window_s) is not
+ * remembered when dropped (`flood_born`). The first
+ * BEACON_RECALL_SETTLE_S after the table was empty are exempt, up to a
+ * table's worth of entries (MAX_BEACON_APS): every AP in range is first
+ * heard in one hop pass at sensor start (22 s at worst at the default
+ * dwell), which is a burst at any density and no flood, and a flood
+ * started then can leave no more memories than the table holds. What remains is a flood kept
+ * under the threshold: at the defaults, 4096 distinct names at under
+ * 40 new BSSIDs in 10 s, about 17 minutes, which BEACON_FLOOD does not
+ * report. Cost: an AP first heard during a flood, or in a burst after
+ * the settle (driving into a dense street), is an arrival when it
+ * returns; on a moving sensor the twin scorer ignores arrivals until
+ * twin.late_arrival_s after it stops. */
+#define BEACON_RECALL_MAX      4096
+#define BEACON_RECALL_TRUST_S  86400
+#define BEACON_RECALL_SETTLE_S 60
+
+typedef struct {
+    uint8_t  bssid[6];
+    uint8_t  used;          /* 0: superseded by a later memory of the pair */
+    uint8_t  band;          /* wifi_band_t; 0 unknown */
+    char     ssid[33];      /* as beacon_ap_t.ssid: 32 octets and a NUL */
+    char     enc[10];       /* as beacon_ap_t.enc */
+    uint32_t vendor_ies_hash;   /* 0 unknown */
+    uint64_t dropped_ms;    /* monotonic */
+} beacon_recall_t;
+
+static beacon_recall_t g_recall[BEACON_RECALL_MAX];
+static int             g_recall_n;      /* slots in use, holes included */
+static int             g_recall_head;   /* next slot written */
+static int             g_recall_lost;   /* a live memory was overwritten */
+static uint64_t        g_recall_reach_ms;   /* ... dropped at this time */
+static time_t          g_listen_since;  /* wall; first insert into an empty table */
+static int             g_listen_new;    /* entries created since then */
+
+/* The band as the twin scorer reads it (twin_ap_band()): 6 GHz only on
+ * the HE 6 GHz Operation Information source. */
+static uint8_t recall_band(const beacon_ap_t *ap) {
+    if (ap->channel <= 0) return WIFI_BAND_UNKNOWN;
+    if (ap->channel_source == CH_SRC_HE_6GHZ) return WIFI_BAND_6GHZ;
+    return (uint8_t)wifi_freq_infer_band(ap->channel);
+}
+
+/* The address first: it differs in nearly every slot, so the name is
+ * compared about once a scan. 32 octets, as much as the table holds. */
+static beacon_recall_t *recall_find(const uint8_t bssid[6], const char *ssid) {
+    for (int k = 0; k < g_recall_n; k++) {
+        beacon_recall_t *r = &g_recall[(g_recall_head - 1 - k +
+                                        2 * BEACON_RECALL_MAX) %
+                                       BEACON_RECALL_MAX];
+        if (r->used && memcmp(r->bssid, bssid, 6) == 0 &&
+            strncmp(r->ssid, ssid, 32) == 0)
+            return r;
+    }
+    return NULL;
+}
+
+/* The table is dropping `ap`. Caller holds g_mu. */
+static void recall_note_dropped(const beacon_ap_t *ap, uint64_t now_ms) {
+    if (!ap->ssid[0]) return;
+    /* Born in a flood: the flood is what would fill the ring. An older
+     * memory of the pair, from before the flood, is left standing. */
+    if (ap->flood_born) return;
+    beacon_recall_t *old = recall_find(ap->bssid, ap->ssid);
+    if (old) old->used = 0;     /* one memory per pair, the newest */
+    beacon_recall_t *r = &g_recall[g_recall_head];
+    if (g_recall_n == BEACON_RECALL_MAX) {
+        if (r->used) {
+            g_recall_lost     = 1;
+            g_recall_reach_ms = r->dropped_ms;
+        }
+    } else {
+        g_recall_n++;
+    }
+    memcpy(r->bssid, ap->bssid, 6);
+    r->used       = 1;
+    r->band       = recall_band(ap);
+    snprintf(r->ssid, sizeof(r->ssid), "%.32s", ap->ssid);
+    snprintf(r->enc, sizeof(r->enc), "%.9s", ap->enc);
+    r->vendor_ies_hash = ap->fp.vendor_ies_hash;
+    r->dropped_ms = now_ms;
+    g_recall_head = (g_recall_head + 1) % BEACON_RECALL_MAX;
+}
+
+/* What beacon_ap_t.arrival should say for `ap`'s name on its address
+ * now. Read after the entry's band, enc and vendor-IE hash are set. */
+static uint8_t recall_arrival(const beacon_ap_t *ap, uint64_t now_ms) {
+    /* An empty name finds nothing: a hidden entry is never remembered. */
+    const beacon_recall_t *r = recall_find(ap->bssid, ap->ssid);
+    if (r) {
+        uint8_t band = recall_band(ap);
+        if (band != WIFI_BAND_UNKNOWN && band != r->band)
+            return BEACON_ARRIVAL_NEW;
+        if (strncmp(ap->enc, r->enc, sizeof(r->enc)) != 0)
+            return BEACON_ARRIVAL_NEW;
+        if (ap->fp.vendor_ies_hash &&
+            ap->fp.vendor_ies_hash != r->vendor_ies_hash)
+            return BEACON_ARRIVAL_NEW;
+        return BEACON_ARRIVAL_RETURN;
+    }
+    if (g_recall_lost &&
+        now_ms - g_recall_reach_ms < (uint64_t)BEACON_RECALL_TRUST_S * 1000u)
+        return BEACON_ARRIVAL_UNSURE;
+    return BEACON_ARRIVAL_NEW;
+}
+
+/* Contract in beacon_snoop.h. The same test recall_arrival() makes, so
+ * `quiet` is exactly "an unknown entry would be stamped UNSURE now". */
+void beacon_recall_stat(beacon_recall_stat_t *out, uint64_t now_ms) {
+    pthread_mutex_lock(&g_mu);
+    out->slots      = g_recall_n;
+    out->max        = BEACON_RECALL_MAX;
+    out->overflowed = g_recall_lost;
+    out->reach_s    = -1;
+    out->quiet      = 0;
+    out->quiet_s    = 0;
+    if (g_recall_lost) {
+        uint64_t back = now_ms >= g_recall_reach_ms ? now_ms - g_recall_reach_ms : 0;
+        uint64_t trust = (uint64_t)BEACON_RECALL_TRUST_S * 1000u;
+        out->reach_s = (long long)(back / 1000u);
+        if (back < trust) {
+            out->quiet   = 1;
+            out->quiet_s = (long long)((trust - back + 999u) / 1000u);
+        }
+    }
+    pthread_mutex_unlock(&g_mu);
+}
 
 /* Ring of timestamps of recently first-seen BSSIDs — the beacon-flood
  * signal (roadmap B4). Written under g_mu from beacon_record's new-entry
@@ -31,6 +231,15 @@ static time_t   g_new_bssid_ts[BEACON_NEW_TS_RING];
  * new BSSID, so the flood's citation is a frame its count included. */
 static uint64_t g_new_bssid_ev[BEACON_NEW_TS_RING];
 static int      g_new_bssid_head;
+
+/* The flood count, BEACON_FLOOD's and the memory's (#194). Caller
+ * holds g_mu. */
+static int new_bssids_locked(time_t now, int window_s) {
+    int n = 0;
+    for (int i = 0; i < BEACON_NEW_TS_RING; i++)
+        if (g_new_bssid_ts[i] && now - g_new_bssid_ts[i] <= window_s) n++;
+    return n;
+}
 
 /* Caller must hold g_mu. */
 static void note_new_bssid(time_t now, uint64_t event_id) {
@@ -99,10 +308,8 @@ int beacon_ap_evidence(const beacon_ap_t *ap, uint64_t *out, int max) {
 }
 
 int beacon_recent_new_bssids(time_t now, int window_s) {
-    int n = 0;
     pthread_mutex_lock(&g_mu);
-    for (int i = 0; i < BEACON_NEW_TS_RING; i++)
-        if (g_new_bssid_ts[i] && now - g_new_bssid_ts[i] <= window_s) n++;
+    int n = new_bssids_locked(now, window_s);
     pthread_mutex_unlock(&g_mu);
     return n;
 }
@@ -882,6 +1089,18 @@ static void rssi_ring_push(beacon_ap_t *ap, int8_t signal, time_t now) {
     ap->rssi_max_60s = init ? hi : 0;
 }
 
+/* The distance data point (src/rf_distance.h), after the frame's
+ * regulatory elements are merged so a TPC Report in this very beacon is
+ * the power the estimate uses. 6 GHz only on the HE 6 GHz Operation
+ * Information source, the ap_band_label() rule. */
+static void dist_note(beacon_ap_t *ap, int8_t signal, time_t now) {
+    rf_ctx_t c;
+    rf_ctx_ap(&c, &ap->reg, ap->channel,
+              ap->channel_source == CH_SRC_HE_6GHZ ? WIFI_BAND_6GHZ
+                                                   : WIFI_BAND_UNKNOWN);
+    rf_track_observe(&ap->dist, signal, now, &c);
+}
+
 /* ── Beacon TBTT jitter (#77) ─────────────────────────────────
  *
  * See ap_beacon_timing_t in sloth.h for the derivation. In short: the
@@ -1114,6 +1333,10 @@ void beacon_record_ev(const uint8_t *bssid, const char *ssid,
             g_aps[i].frame_count++;
             ev_cite_push(g_aps[i].ev_ids, BEACON_EVIDENCE_IDS,
                          &g_aps[i].ev_n, &g_aps[i].ev_head, event_id);
+            /* A name this entry did not have a beacon ago is judged
+             * as a name, not waved through on the entry's age; below,
+             * once this beacon's band and vendor IEs are on the entry. */
+            int renamed = ssid[0] && strncmp(g_aps[i].ssid, ssid, 32) != 0;
             if (ssid[0]) {
                 strncpy(g_aps[i].ssid, ssid, 32);
                 /* Track distinct SSIDs per BSSID for KARMA/Pineapple
@@ -1259,6 +1482,9 @@ void beacon_record_ev(const uint8_t *bssid, const char *ssid,
                  * carried a timestamp. NOP on the managed-mode path. */
                 tbtt_push(&g_aps[i].tbtt, rsn);
             }
+            if (renamed)
+                g_aps[i].arrival = recall_arrival(&g_aps[i], sloth_mono_ms());
+            dist_note(&g_aps[i], signal, now);
             pthread_mutex_unlock(&g_mu);
             return;
         }
@@ -1275,9 +1501,23 @@ void beacon_record_ev(const uint8_t *bssid, const char *ssid,
             }
         }
         sh_evict_note(SH_EVICT_BEACON_AP);   /* #91 wave 6 */
+        recall_note_dropped(&g_aps[slot], sloth_mono_ms());
     }
 
     note_new_bssid(now, event_id);   /* beacon-flood rate signal (roadmap B4) */
+    /* Heard first inside a flood (#194): not remembered when dropped.
+     * Contract above, "BSSIDs the table has forgotten". */
+    if (!g_listen_since || g_count == 1) {
+        g_listen_since = now;
+        g_listen_new   = 0;
+    }
+    g_listen_new++;
+    int settled = now - g_listen_since >= BEACON_RECALL_SETTLE_S ||
+                  g_listen_new > MAX_BEACON_APS;
+    int flood_born = settled &&
+                     new_bssids_locked(now,
+                         (int)tune_val(TUNE_BEACON_FLOOD_WINDOW_S)) >=
+                     (int)tune_val(TUNE_BEACON_FLOOD_THRESH);
     memset(&g_aps[slot], 0, sizeof(g_aps[slot]));
     memcpy(g_aps[slot].bssid, bssid, 6);
     strncpy(g_aps[slot].ssid,  ssid, 32);
@@ -1286,6 +1526,7 @@ void beacon_record_ev(const uint8_t *bssid, const char *ssid,
     g_aps[slot].channel    = channel;
     g_aps[slot].beacon_ms  = beacon_ms;
     g_aps[slot].first_seen = now;
+    g_aps[slot].flood_born = (uint8_t)flood_born;
     g_aps[slot].first_seen_channel = channel;   /* #101: never updated */
     g_aps[slot].last_seen  = now;
     g_aps[slot].frame_count = 1;
@@ -1382,7 +1623,10 @@ void beacon_record_ev(const uint8_t *bssid, const char *ssid,
         g_aps[slot].fp.flags |= AP_FP_FLAG_HAK5_OUI;
     if (oui_is_espressif(g_aps[slot].fp.oui))
         g_aps[slot].fp.flags |= AP_FP_FLAG_ESPRESSIF_OUI;
+    /* Last: the memory compares the radio as well as the name. */
+    g_aps[slot].arrival = recall_arrival(&g_aps[slot], sloth_mono_ms());
     rssi_ring_push(&g_aps[slot], signal, now);
+    dist_note(&g_aps[slot], signal, now);
 
     pthread_mutex_unlock(&g_mu);
 }
@@ -1442,6 +1686,9 @@ void beacon_reveal_hidden_ssid(const uint8_t *bssid, const char *ssid)
         if (g_aps[i].ssid[0]) break;     /* already known — leave alone */
         snprintf(g_aps[i].ssid, sizeof(g_aps[i].ssid), "%s", ssid);
         g_aps[i].revealed = 1;
+        /* Its name is known only now, so only now can it be asked
+         * whether that name has been here before (#188). */
+        g_aps[i].arrival = recall_arrival(&g_aps[i], sloth_mono_ms());
         break;
     }
     pthread_mutex_unlock(&g_mu);
@@ -1503,11 +1750,14 @@ void beacon_snapshot(sloth_state_t *s)
 
     /* age out stale entries in-place */
     int i = 0;
+    uint64_t now_ms = sloth_mono_ms();
     while (i < g_count) {
-        if (now - g_aps[i].last_seen > BEACON_AGE_SECS)
+        if (now - g_aps[i].last_seen > BEACON_AGE_SECS) {
+            recall_note_dropped(&g_aps[i], now_ms);
             g_aps[i] = g_aps[--g_count];
-        else
+        } else {
             i++;
+        }
     }
 
     /* sort by signal strength, strongest first */
@@ -1525,6 +1775,12 @@ void beacon_clear(void)
 {
     pthread_mutex_lock(&g_mu);
     g_count = 0;
+    /* The operator clearing the table starts the session's memory over
+     * with it: everything in earshot is then re-inserted together. */
+    g_recall_n = g_recall_head = g_recall_lost = 0;
+    g_recall_reach_ms = 0;
+    g_listen_since = 0;
+    g_listen_new   = 0;
     memset(g_new_bssid_ts, 0, sizeof(g_new_bssid_ts));
     memset(g_new_bssid_ev, 0, sizeof(g_new_bssid_ev));
     g_new_bssid_head = 0;

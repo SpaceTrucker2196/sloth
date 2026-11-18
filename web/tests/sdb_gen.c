@@ -31,6 +31,26 @@ int sdb_exec(const char *path, const char *sql) {
 
 /* The columns each later version added (src/db_schema.c's migration
  * steps), dropped again for an older file's shape. */
+static const char DROP_V13[] =
+    "DROP TABLE aprs_packets; DROP TABLE aprs_stations;";
+static const char DROP_V12[] =
+    "DROP TABLE adsb_sightings; DROP TABLE adsb_aircraft;";
+static const char DROP_V11[] =
+    "DROP TABLE alert_incidents;";
+static const char DROP_V9[] =
+    "ALTER TABLE alerts DROP COLUMN lat;"
+    "ALTER TABLE alerts DROP COLUMN lon;"
+    "ALTER TABLE alerts DROP COLUMN alt_m;"
+    "ALTER TABLE alerts DROP COLUMN acc_m;"
+    "ALTER TABLE alerts DROP COLUMN loc_src;"
+    "ALTER TABLE alerts DROP COLUMN loc_ts;"
+    "DROP TABLE device_positions;"
+    "DROP TABLE sensor_positions;";
+static const char DROP_V8[] =
+    "ALTER TABLE alerts DROP COLUMN reopens;"
+    "ALTER TABLE alerts DROP COLUMN incident_id;"
+    "ALTER TABLE alerts DROP COLUMN incident_count;"
+    "ALTER TABLE alerts DROP COLUMN incident_first_seen;";
 static const char DROP_V7[] =
     "ALTER TABLE devices DROP COLUMN cam_score;"
     "ALTER TABLE devices DROP COLUMN cam_evidence;"
@@ -55,6 +75,11 @@ int sdb_make(const char *path, int version, int wal) {
     if (wal) rc = sqlite3_exec(h, "PRAGMA journal_mode=WAL", NULL, NULL, NULL);
     if (rc == SQLITE_OK) rc = sqlite3_exec(h, db_schema_meta_sql(), NULL, NULL, NULL);
     if (rc == SQLITE_OK) rc = sqlite3_exec(h, db_schema_sql(), NULL, NULL, NULL);
+    if (rc == SQLITE_OK && version < 13) rc = sqlite3_exec(h, DROP_V13, NULL, NULL, NULL);
+    if (rc == SQLITE_OK && version < 12) rc = sqlite3_exec(h, DROP_V12, NULL, NULL, NULL);
+    if (rc == SQLITE_OK && version < 11) rc = sqlite3_exec(h, DROP_V11, NULL, NULL, NULL);
+    if (rc == SQLITE_OK && version < 9) rc = sqlite3_exec(h, DROP_V9, NULL, NULL, NULL);
+    if (rc == SQLITE_OK && version < 8) rc = sqlite3_exec(h, DROP_V8, NULL, NULL, NULL);
     if (rc == SQLITE_OK && version < 7) rc = sqlite3_exec(h, DROP_V7, NULL, NULL, NULL);
     if (rc == SQLITE_OK && version < 6) rc = sqlite3_exec(h, DROP_V6, NULL, NULL, NULL);
     if (rc == SQLITE_OK) rc = sqlite3_exec(h, stamp, NULL, NULL, NULL);
@@ -92,7 +117,7 @@ int sdb_seed(const char *path) {
         " ('00:03:93:00:00:03','10.0.1.13','macbook','Apple',NULL,0,NULL,0,3,0,0,%lld,%lld),"
         " ('da:a1:19:00:00:04',NULL,NULL,'Samsung',NULL,0,-60,2,16,1,1,%lld,%lld),"
         " ('3e:00:00:00:00:05',NULL,NULL,NULL,NULL,0,NULL,0,16,1,0,%lld,%lld),"
-        " ('f2:11:22:00:00:06','10.0.1.16',NULL,'Apple Inc','CorpWiFi',0,-55,5,16,1,2,%lld,%lld),"
+        " ('f2:11:22:00:00:06','10.0.1.16',NULL,'Apple Inc','CorpWiFi',0,-55,5,16,17,2,%lld,%lld),"
         " ('da:a1:19:00:00:07',NULL,NULL,'apple',NULL,0,NULL,0,16,1,0,%lld,%lld),"
         " ('70:b3:d5:f2:a1:23','10.0.1.18',NULL,NULL,NULL,0,NULL,0,1,2,1,%lld,%lld),"
         " ('00:11:22:33:44:55','10.0.1.5','<b>nas</b>','Generic',NULL,0,NULL,0,7,0,0,%lld,%lld);"

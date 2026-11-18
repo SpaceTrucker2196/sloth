@@ -18,7 +18,21 @@ each is a typed producer of observations copied into `sloth_state_t`, exactly
 like the 802.11 path. Until the sensor seam exists, treat everything here as
 design, not implementation.
 
-**Last updated**: 2026-10-14.
+**Last updated**: 2026-11-15 (#216, the cutover: which daemon reads which family); 2026-11-09 (ADS-B: `--adsb beast://`, [[adsb]]); 2026-11-09 (ADS-B: `--adsb sbs://`, [[adsb]]); 2026-11-08 (ADS-B: the flag-only `ADSB_EMERGENCY` alert, #186, [[adsb]]); 2026-11-07 (ADS-B: the `[^]` TUI view and the `adsb` health token, [[adsb]]); 2026-11-05 (APRS shipped: `--aprs` off Dire Wolf's packet log, JSONL, sloth.db v13 and slothweb's APRS tab, [[aprs]]); 2026-11-05 (ADS-B in slothweb: the ADS-B tab, [[adsb]]); 2026-11-05 (ADS-B slice 1 shipped: the `--adsb` feed, the aircraft table and the `adsb_aircraft` record, [[adsb]]); 2026-11-02 (the GPS family is shipped: [[location]] for the position, [[gnss]] for the sky; the sketch below replaced by what exists); 2026-10-14.
+
+**Which daemon reads which family (since the cutover, #216,
+[ADR 0010](adr/0010-wifi-rf-daemons.md)).** The sensor is two daemons,
+and the families below divide between them by what they need:
+`sloth-wifi` (alias `sloth`) reads **BLE** (the HCI monitor channel and
+an Ubertooth capture) beside the IP capture and the 802.11 radio;
+`sloth-rf` reads the **SDR decoders** (ADS-B, APRS, rtl_433) and
+**Victron** (sloth-va's file), and Meshtastic is planned for it; the
+**GNSS** receiver is linked into both ([[gnss]]). `sloth-wifi` refuses
+`--adsb`, `--aprs`, `--aprs-freq`, `--aprs-silent-hours`, `--rtl433`
+and `--victron`. The passive filter and the seven questions below
+apply to both daemons unchanged: neither opens, tunes or drives a
+radio it does not already listen through, and `sloth-rf` links no
+capture at all.
 
 ---
 
@@ -108,27 +122,82 @@ Ordered roughly by how cleanly they fit the passive filter (easiest first).
   bundling a full SDR stack (sloth *consumes* a decoder's output).
 - **Test**: sample decoder-JSON lines.
 
-### GPS / location context
-- **Observe**: the operator's own position/time from a local GPS (gpsd) — used
-  to *stamp* other observations with where/when they were seen, not as a
-  target. Enables geo-tagged site snapshots (#27) and wardrive-style maps.
-- **Hardware**: any gpsd-served receiver.
-- **State**: a single `gps_fix_t` (lat, lon, alt, fix quality, sat count, ts)
-  on the state, plus optional per-observation location stamping.
-- **View**: a status line; lat/lon in the snapshot header.
-- **JSONL**: a `gps` field on existing records, or a `gps_fix` record.
-- **Out of scope**: tracking third parties; this is *self*-location only.
-- **Test**: crafted gpsd JSON / NMEA sentences.
+### GPS / GNSS — shipped
+- **Observe**: the operator's own position and time from a local
+  receiver (`--gps gpsd://` or `--gps /dev/tty…`), used to *stamp*
+  findings with where the sensor was ([[location]], 2026-10-27), and the
+  receiver's own sky — satellites in view with C/N0, elevation, azimuth,
+  used and health, the DOPs, the receiver's clock against the host's
+  ([[gnss]], 2026-11-02). Self-location and the sensor's own antenna
+  only; nothing about a third party.
+- **Hardware**: any gpsd-served receiver (the reference host: a USB
+  u-blox 7 under gpsd), or an NMEA 0183 serial device for the position.
+- **State**: `gps_health_t` and the `loc_stamp_t` arbitration in
+  `src/gps.c`; `gnss_sky_t` / `gnss_fix_t` on `sloth_state_t`.
+- **View**: the `gps` token in the Interfaces health strip, the location
+  line in an alert's detail, and the `[#]` GNSS view.
+- **JSONL**: `loc` on stamped alerts, the `gps_*` and `gnss_*` members of
+  `sensor_health`, `gnss_fix` / `gnss_sky` / `gnss_sat`, and the `sensor`
+  record of kind `gps`.
+- **Out of scope**: tracking third parties; writing to the receiver
+  (sloth sends gpsd one `?WATCH` line and a serial device nothing).
+- **Test**: hand-built gpsd JSON and NMEA sentences
+  (`tests/test_gps.c`); no fixtures.
 
-### ADS-B aircraft
+### ADS-B aircraft — slice 1 shipped
 - **Observe**: decoded Mode-S / ADS-B messages from a local decoder
-  (dump1090): ICAO address, callsign, altitude, position, velocity.
-- **Hardware**: an RTL-SDR on 1090 MHz feeding dump1090, whose feed sloth tails.
-- **State**: `adsb_aircraft_t` keyed by ICAO.
-- **View**: an aircraft table.
-- **JSONL**: `adsb_aircraft`.
-- **Out of scope**: transmitting, interrogating (that's active radar).
-- **Test**: sample dump1090 SBS/JSON lines.
+  (readsb / dump1090-fa): address (ICAO, or `~` non-ICAO / TIS-B),
+  callsign, squawk, emergency, category, altitude, position, velocity,
+  RSSI.
+- **Hardware**: an RTL-SDR on 1090 MHz feeding readsb or dump1090-fa,
+  whose `aircraft.json` sloth re-reads (`--adsb PATH`), or whose SBS /
+  BaseStation output it reads on a loopback TCP port (`--adsb sbs://`,
+  read-only: sloth sends nothing on the socket), or whose Beast binary
+  output it reads the same way and decodes itself (`--adsb beast://`:
+  CRC, ghost suppression, CPR). sloth never opens or tunes the SDR.
+- **State**: `adsb_aircraft_t` keyed by address, `adsb_health_t`
+  (`include/sloth.h`, `src/adsb.c`).
+- **View**: the `[^]` ADS-B TUI view (aircraft table, distance and
+  bearing only with a sensor position, 2026-11-07) and slothweb's ADS-B
+  tab (aircraft table, position plot, 2026-11-05).
+- **JSONL**: `adsb_aircraft`, change-only on held altitude bands and
+  position cells; `adsb_*` in `sensor_health`; the `sensor` record of
+  kind `adsb`.
+- **Out of scope**: transmitting, interrogating (that's active radar),
+  driving the SDR, writing to the decoder, correcting bit errors. A
+  non-loopback SBS or Beast source is refused as not loopback.
+- **Test**: hand-written `aircraft.json` documents from readsb's
+  README-json.md and SBS lines from readsb's `modesSendSBSOutput()`
+  (`tests/test_adsb.c`), Beast frames built field by field plus the
+  published examples of *The 1090 Megahertz Riddle*
+  (`tests/test_adsb_beast.c`), three fuzz harnesses; no captures.
+- **Status**: slice 1 (2026-11-05) is the core — feed, state, JSONL;
+  slothweb and `--db` followed the same day, the `[^]` TUI view and the
+  `adsb` health token on 2026-11-07, the flag-only `ADSB_EMERGENCY`
+  alert (#186, `research/adsb/emergency-squawks.md`) and the
+  `packaging/` note on running beside readsb on 2026-11-08, `sbs://`
+  and `beast://` input on 2026-11-09. See [[adsb]].
+
+### APRS (the region's 2 m channel, 144.390 MHz in North America) — shipped
+- **Observe**: APRS packets a local Dire Wolf decoded (position, status,
+  message, object, telemetry reports): source and heard-via callsigns,
+  audio level, data type, symbol, position, speed, course, altitude,
+  comment, status, the sender's system.
+- **Hardware**: any receiver Dire Wolf demodulates (an SDR through
+  `rx_fm`, or a radio's audio); sloth reads Dire Wolf's `-L` log
+  (`--aprs PATH`) and never touches the radio or Dire Wolf.
+- **State**: `aprs_station_t` keyed by source callsign, a ring of
+  `aprs_packet_t`, `aprs_health_t` (`include/sloth.h`, `src/aprs.c`).
+- **View**: slothweb's APRS tab (stations, position plot, history); no
+  TUI view.
+- **JSONL**: `aprs_packet` (one per packet), `aprs_station`
+  (change-only), `aprs_*` in `sensor_health`, the `sensor` kind `aprs`;
+  sloth.db v13 `aprs_stations` / `aprs_packets`.
+- **Out of scope**: transmitting, igating, APRS-IS, talking to Dire
+  Wolf over KISS / AGW.
+- **Test**: hand-written log lines in Dire Wolf's shape with invented
+  calls (`tests/test_aprs.c`), a fuzz harness; no captures.
+- **Status**: shipped 2026-11-05. See [[aprs]].
 
 ### Meshtastic / LoRa
 - **Observe**: packet metadata from a local Meshtastic node in a
@@ -169,3 +238,5 @@ Ordered roughly by how cleanly they fit the passive filter (easiest first).
 - [[architecture]] — where the platform/sensor seam lives.
 - [[wifi-sigint]] — the 802.11 family whose patterns these mirror.
 - [[jsonl-schema]] — the record-type contract new families extend.
+- [[adsb]] — the ADS-B family's first slice.
+- [[aprs]] — the APRS family, off Dire Wolf's packet log.

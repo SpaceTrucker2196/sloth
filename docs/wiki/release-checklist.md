@@ -14,7 +14,10 @@ is attested by `.github/workflows/release-attest.yml` on every `v*` tag
 (it also writes `SHA256SUMS`), and CI's `sbom` job produces a CycloneDX
 SBOM artifact on every push; `make sbom` remains the offline fallback.
 Verify a release binary with
-`gh attestation verify ./sloth --repo SpaceTrucker2196/sloth`.
+`gh attestation verify ./sloth-wifi --repo SpaceTrucker2196/sloth`
+(and `./sloth-rf`). Since the cutover (#216) the release's binaries are
+`sloth-wifi` and `sloth-rf`; `sloth` is a symlink to `sloth-wifi` that
+`make` and `make install` create, not a file a release carries.
 Rolling back to the previous tag, and what on-disk state survives it,
 is section 5.
 
@@ -23,9 +26,10 @@ is section 5.
 (`SLOTH_VERSION`), `tests/test_version.c`, `tests/test_libver.c`,
 `tests/test_ci_pins.c`, `SECURITY.md`, `RELEASE_v*.md`, `src/db.c`
 (`check_version`), `src/db.h`, `packaging/systemd/sloth-sensor.service`,
-`.github/workflows/release-attest.yml`, issues #95, #142.
+`.github/workflows/release-attest.yml`, `tools/contract.sh`,
+`tests/contract/check.sh`, issues #95, #142, #185.
 
-**Last updated**: 2026-10-19 (#95 rollback, #142 CI half)
+**Last updated**: 2026-11-16 (#185 review: step 9 publishes the workflow's draft rather than creating a second release; the job checks the tag against `SLOTH_VERSION`), 2026-11-16 (#185 item 4: the contract artifact, built, attested and attached by the release workflow; steps 6a and 10), 2026-10-19 (#95 rollback, #142 CI half)
 
 ---
 
@@ -63,7 +67,13 @@ is section 5.
    that host's libraries; `sloth --version` and the `libs` field of
    every `sensor_health` record report what was actually loaded
    ([[jsonl-schema]]).
-7. **Checksums**: `sha256sum sloth sloth-<version>.cdx.json >
+6a. **Contract artifact** ([[contract]]): `make contract-check` on the
+   clean tree must end `contract-check: green`; it builds
+   `dist/sloth-contract-<version>.tar` twice and compares. The release
+   workflow builds it again from the tag and attaches it, so nothing
+   from this step is uploaded by hand; it is here so a broken artifact
+   is found before the tag rather than in the workflow's log.
+7. **Checksums**: `sha256sum sloth-wifi sloth-rf sloth-<version>.cdx.json >
    SHA256SUMS`, and paste the file's contents into
    `RELEASE_v<version>.md` under a `## SHA256SUMS` heading, so the
    checksums travel with the notes rather than only beside the binary.
@@ -87,16 +97,40 @@ is section 5.
 ## 4. After the tag
 
 9. **Publish the GitHub release** for the tag with the notes from step
-   2 and attach `sloth`, the SBOM and `SHA256SUMS`. Publishing triggers
+   2 and attach `sloth-wifi`, `sloth-rf`, the SBOM and `SHA256SUMS`. Publishing triggers
    `mirror-release.yml`, which mirrors the tag and release.
+   Step 8's push starts `release-attest.yml`, which (since #185 item 4)
+   creates the tag's release as a **draft** carrying the contract tar
+   when no release exists yet. Check first with `gh release view
+   v<version>`: if that draft exists, fill and publish *it* (`gh release
+   upload v<version> sloth-wifi sloth-rf <sbom> SHA256SUMS`, then `gh
+   release edit v<version> --notes-file <notes> --draft=false`); do not
+   create a second release, or the contract stays on an unpublished
+   draft and the mirror never carries it. If no release exists yet,
+   creating it before the job reaches its upload is also safe: the job
+   then attaches the contract to that release instead of making a draft.
+   Either way, confirm the contract tar is on the published release.
 10. **Provenance.** `.github/workflows/release-attest.yml` (landed in
-    `9131b8e`, #142) builds `sloth`, writes `SHA256SUMS` and attests the
-    binary with `actions/attest-build-provenance` on every `v*` tag push;
+    `9131b8e`, #142) builds `sloth-wifi` and `sloth-rf`, writes
+    `SHA256SUMS` and attests both with `actions/attest-build-provenance` on every `v*` tag push;
     CI's `sbom` job produces the CycloneDX SBOM with `anchore/sbom-action`
     on every push. Both are pinned by full commit SHA. No tag has been
     pushed since it landed, so no released version carries an
     attestation yet; the first will be the tag after v1.8.4. Verify with
-    `gh attestation verify sloth --repo SpaceTrucker2196/sloth`.
+    `gh attestation verify sloth-wifi --repo SpaceTrucker2196/sloth`
+    (and `sloth-rf`). The two-subject form has not run yet either: it
+    was written at the cutover (#216 review) and its first run is that
+    tag's, so read that run's log before publishing.
+    Since #185 item 4 the same job also runs `make contract`, attests
+    `dist/sloth-contract-<version>.tar` beside the binaries, and attaches
+    the tar and `sloth-contract-<version>.SHA256SUMS` to the tag's
+    release, creating it as a **draft** when step 9 has not happened
+    yet (so the notes and the publish stay the owner's; the checksum
+    file is named for the tar so it never replaces the `SHA256SUMS`
+    attached in step 9). The job's token may therefore write contents.
+    This has not run yet: its first run is the next tag's. Verify with
+    `gh attestation verify sloth-contract-<version>.tar --repo
+    SpaceTrucker2196/sloth`.
 
 ## 5. Rolling back to the previous tag
 
@@ -118,6 +152,10 @@ gh release download v<prev> --repo SpaceTrucker2196/sloth \
 sha256sum -c --ignore-missing SHA256SUMS
 gh attestation verify ./sloth --repo SpaceTrucker2196/sloth
 ```
+
+That is the form for a previous tag from before the cutover (#216),
+whose one binary is `sloth`. For a previous tag at or after it, the
+patterns and the subjects are `sloth-wifi` and `sloth-rf`.
 
 Compare `SHA256SUMS` with the copy pasted into `RELEASE_v<prev>.md`
 (step 7) as well: the release asset and the notes are two places an
@@ -147,7 +185,7 @@ unit.
 
 | State | Survives? | Why, and what to do |
 |---|---|---|
-| `--db` file (`/var/lib/sloth/sloth.db` in the shipped unit) | **No, if the schema version changed** | `db_open()` refuses any file whose `meta.schema_version` is not exactly the build's `DB_SCHEMA_VERSION` ("db schema vN, this build writes vM — use a separate file") and `main()` exits 1 rather than running without the DB. The exception is forward and additive: this tree writes v7 and migrates a v5 or v6 file in place, one step at a time, by adding the `devices` camera columns (v5 -> v6, #106 round 2) and the classifier and DHCP option columns (v6 -> v7, #155; [[sqlite-schema]]). There is no downgrade: once a v7 build has opened a file, a v5 or v6 build refuses it. v1.8.4 writes v4 (the v5 bump is `6031b30`, #90) and a v4 file is refused, not migrated. Under the shipped unit's `Restart=always` the refused start loops until `StartLimitBurst` stops it. **Move the file aside** (`sloth.db`, `sloth.db-wal`, `sloth.db-shm` together) before starting the old binary; it starts a fresh file. Keep the moved one: rolling forward again reads it, and the file the old binary wrote in the meantime will in turn be refused by the newer one. Check before and after with `sqlite3 sloth.db "SELECT value FROM meta WHERE key='schema_version'"` and the `DB_SCHEMA_VERSION` line of each tree's `src/db.h`. |
+| `--db` file (`/var/lib/sloth/sloth.db` in the shipped unit) | **No, if the schema version changed** | `db_open()` refuses any file whose `meta.schema_version` is not exactly the build's `DB_SCHEMA_VERSION` ("db schema vN, this build writes vM — use a separate file") and `main()` exits 1 rather than running without the DB. The exception is forward and additive: this tree writes v8 and migrates any v1..v7 file in place, one step at a time (#154), the latest steps adding the `devices` camera columns (v5 -> v6, #106 round 2), the classifier and DHCP option columns (v6 -> v7, #155) and the `alerts` reopen columns (v7 -> v8, #170; [[sqlite-schema]]). There is no downgrade: once a v8 build has opened a file, an older build refuses it. v1.8.4 writes v4 (the v5 bump is `6031b30`, #90). A v8 build leaves the duplicate `alerts` rows an older build wrote; `--db-compact-alerts SRC DST` folds them into a copy, run by hand. Under the shipped unit's `Restart=always` the refused start loops until `StartLimitBurst` stops it. **Move the file aside** (`sloth.db`, `sloth.db-wal`, `sloth.db-shm` together) before starting the old binary; it starts a fresh file. Keep the moved one: rolling forward again reads it, and the file the old binary wrote in the meantime will in turn be refused by the newer one. Check before and after with `sqlite3 sloth.db "SELECT value FROM meta WHERE key='schema_version'"` and the `DB_SCHEMA_VERSION` line of each tree's `src/db.h`. |
 | JSONL output (`-o FILE`, `--data-socket`) | **Yes, mixed** | The file is opened append-only, so the old binary keeps appending to it. The schema is additive (fields are added, never renamed or removed — [[jsonl-schema]]), so the old build's records are a subset of the new build's shape for the same type; record types introduced after the old tag simply stop appearing. No record names the sloth version that wrote it, so a consumer that needs to know where the boundary is should rotate the file at the rollback, or note the time. A consumer that relies on a field newer than the old tag sees it go missing. |
 | `--snapshot-out` / `--baseline-in` file | Yes | Same tab-separated line format at v1.8.4 and this tree (only the header-label handling changed). |
 | `--with-research` database | Yes | Carries no version stamp; the ingest that builds it is unchanged between v1.8.4 and this tree. |
@@ -168,6 +206,7 @@ a downgrade on a sensor. The next rollback that happens should replace
 | every workflow action pinned to a 40-hex commit | `tests/test_ci_pins.c` (#95) |
 | no `-latest` runner image | classifier in `tests/test_ci_pins.c`; the tree-wide assertion follows the workflow change (#142) |
 | `SLOTH_VERSION` orders after every shipped tag | `tests/test_version.c` |
+| the contract artifact is reproducible, complete and consumable alone | `make contract-check` in CI's `replay` job and `make gate` (#185) |
 | signed tag | the owner, by hand (step 8) |
 
 libpcap has no runtime floor on purpose: `src/capture/capture.c`
@@ -185,3 +224,4 @@ and shipping every upstream CVE fix in two parsers it did not write.
 - [[deployment]] — `make install` and the shipped unit.
 - [[jsonl-schema]] — the `sensor_health.libs` field.
 - [[threat-model]] — the supply-chain threats this answers.
+- [[contract]] — the contract artifact the workflow attaches.

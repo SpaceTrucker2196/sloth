@@ -9,7 +9,9 @@ probes, and WiFi-station state into a single record.
 in-memory device table by upserting one row per MAC across five
 sources:
 
-1. **ARP** — kernel ARP table → IP + MAC + interface.
+1. **ARP** — kernel neighbour table → IP + MAC + interface. IPv4 from
+   `/proc/net/arp`, IPv6 from the NDP cache (#176); a device keeps one
+   address, the IPv4 over any IPv6 and a global IPv6 over a link-local.
 2. **DHCP** — assigned IP and hostname (bridged to MAC via the
    matching ARP entry).
 3. **Beacons** — 802.11 beacons identify access points by BSSID
@@ -192,32 +194,81 @@ against its neighbours. No credential appears anywhere on this screen:
 sloth never stores one (the `cleartext_creds` guardrail), and
 default-credential matching is struck by owner ruling (#145).
 
+#### Signal and hour of week (#195)
+
+Two of the slothweb glyphs have their character-cell forms here
+(`docs/web-visual-spec.md` §5 G2 and G4, rule R12). A record with a
+monitor-mode reading carries the S-meter after its first lines, on the
+scale of the band its distance estimate was made for (S9 = -47 dBm at
+2.4 GHz and BLE, -54 at 5 GHz, -56 at 6 GHz; 6 dB an S-unit, then +10
+and +20 over S9), and the window's least and greatest reading in words,
+from the raw samples the distance estimate holds. A record with no band
+reads on the 2.4 GHz row and says so. Last in the detail, the 7 by 24
+hour-of-week grid (Monday first, local time): `▪` at four heat levels
+by the share of the watched hours the device was seen in, against the
+grid's largest share; `·` an hour watched with the device absent; blank
+an hour this run has not watched. The TUI keeps no baseline across
+restarts (`src/dev_how.c`), so the grid is this run's and the caption
+says so. It is drawn whole or not at all, so on a short screen it is
+the block counted on the last line, not the camera evidence above it.
+At 80 by 24, from `tests/test_tui_glyph.c`:
+
+```
+ ── DEVICE DETAIL ──  [Enter/Esc] back
+  MAC 02:00:00:00:00:42   IP -   OUI vendor ?   Src -------
+  Class    -
+  Signals  - - - - - -
+  Signal   ███████▁▁ ▁▁  S7      -61 dBm  5 GHz scale
+           range S6 -70 to S8 -58 dBm over the last 3 samples
+ ── HOUR OF WEEK (this run, local time) ──
+       0     6     12    18
+  Mon
+  Tue                       ▪
+  Wed
+  ...
+  seen in 1 of 1 hours watched; max 100% of an hour's watches; blank not watched, · absent; ...
+```
+
 ## Risk bucket
 
 The `Risk` column shows a bucket derived from independently observable
-signals — no ML, no black box. Bucket = weighted sum of signals:
+signals — no ML, no black box. The signals fall in two families (#191).
 
-| Signal | Weight | Meaning |
-|--------|-------:|---------|
-| `RANDOM_MAC`     | 1 | Locally-administered bit set (Apple/Android privacy MAC, monlib randomization) |
-| `UNKNOWN_VENDOR` | 1 | OUI not in the embedded table |
-| `NO_HOSTNAME`    | 1 | No DHCP/mDNS/NBNS hostname resolution |
-| `PROBE_ONLY`     | 1 | Probe frames observed, no beacon/STA association |
-| `CLEARTEXT_CRED` | 3 | This device leaked a credential in the clear (see `[v]` Alerts, `CLEARTEXT_CRED`) |
-| `ALERT_TAGGED`   | 3 | An active alert names this device's IP as its target |
+Four of them say only that the device is **anonymous**, and they are
+near-collinear: a randomised MAC has no OUI and almost never a hostname,
+and a phone passing a passive sensor probes without associating. They
+used to be one point each, which put 97% of a field sensor's devices in
+`HIGH`; they are now **one point between them**, however many are set,
+so anonymity alone is never more than `MED`. The two **evidence**
+signals are three points each.
+
+| Bit | Signal | Points | Meaning |
+|----:|--------|-------:|---------|
+|  1 | `RANDOM_MAC`     | 1 for the family | Locally-administered bit set (Apple/Android privacy MAC, monlib randomization) |
+|  2 | `UNKNOWN_VENDOR` | 〃 | A registered (not locally-administered) OUI that is not in the embedded table. Never set together with `RANDOM_MAC`: a randomised address has no OUI to be unknown |
+|  4 | `NO_HOSTNAME`    | 〃 | No DHCP/mDNS/NBNS hostname resolution |
+|  8 | `PROBE_ONLY`     | 〃 | Probe frames observed, no beacon/STA association |
+| 16 | `CLEARTEXT_CRED` | 3 | This device leaked a credential in the clear (see `[v]` Alerts, `CLEARTEXT_CRED`) |
+| 32 | `ALERT_TAGGED`   | 3 | An active alert names this device's IP as its target |
+| 64 | `SELF`           | 0 | One of the sensor's own interface addresses (#183) or a device on the operator's `--known-mac` roster. Not a risk: it is recorded **in place of** the four anonymity signals, which are never set beside it. The evidence signals still score |
 
 Score → bucket:
 
-| Score | Bucket | Colour |
-|-------|--------|--------|
-| 0     | LOW    | dim |
-| 1–2   | MED    | phosphor-heat 0.4 |
-| 3–4   | HIGH   | phosphor-heat 0.7 |
-| 5+    | CRIT   | phosphor-heat 1.0 |
+| Score | Bucket | Reached by | Colour |
+|-------|--------|------------|--------|
+| 0     | LOW    | nothing, or `SELF` alone | dim |
+| 1–2   | MED    | anonymity only | phosphor-heat 0.4 |
+| 3–4   | HIGH   | one evidence signal, anonymous or not | phosphor-heat 0.7 |
+| 5+    | CRIT   | both evidence signals | phosphor-heat 1.0 |
+
+The sensor's own adapter is the case `SELF` exists for: its background
+scans are heard while its association sits on another channel, so it
+read as probe-only with no hostname and was `HIGH` on its own host.
 
 The signal bitmask is exported in the JSONL `risk_signals` field so
 external consumers can reproduce the score and show a per-signal
-breakdown.
+breakdown. A consumer that summed bits 1-8 individually must fold them
+to one point, and must treat bit 64 as zero points.
 
 ## What's normal
 
@@ -259,6 +310,23 @@ breakdown.
   default router, so either the evidence is crossed (two hosts behind
   one IP inside the join window, a spoofed answer) or the box is both,
   which is worth knowing too. Read both lists in the detail.
+
+## Distance estimate (2026-10-26)
+
+A `Dist (est)` column (short `~m` form from 108 columns, full from
+122) and a `Distance` line on the detail page, copied from the beacon
+or probe row the record's signal came from. An **estimate from signal strength**: walls and reflections dominate,
+and it is not a location. The median of the row's last 8 RSSI samples
+goes through ITU-R P.1238's indoor log-distance model; the cell reads
+`~27m bldg ↘` — metres, band (`imm` < 1 m, `near` 1–3, `room` 3–10,
+`bldg` 10–30, `far` > 30) and trend (↘ approaching, → steady, ↗
+leaving, blank until enough samples); `-` is no estimate (an RSSI of 0
+is no sample, never 1 m). The typical indoor error is a factor of two,
+five when a body or a wall is in the way. No alert rule reads it. Model,
+sources and knobs: `docs/wiki/rf-distance.md`.
+
+At 100 columns the column is not drawn: the name column keeps its 15
+cells, and the detail page still carries the estimate.
 
 ## See also
 

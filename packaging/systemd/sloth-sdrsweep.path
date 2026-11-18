@@ -1,0 +1,22 @@
+# sloth-sdrsweep.path — start one sweep when slothweb asks.
+#
+# slothweb's POST /api/spectrum/run creates /run/slothweb/sdrsweep.request
+# (its own runtime directory; nothing else can write there but root) and
+# answers 202. This unit starts sloth-sdrsweep.service, which removes the
+# file before it runs. The file's content is never read.
+#
+# Installed by `sudo make install-service`, never enabled by it: until
+# the operator runs `systemctl enable --now sloth-sdrsweep.path`, the
+# Spectrum tab's button queues a request nothing acts on, and the tab
+# says so (docs/wiki/deployment.md, "SDR sweep").
+
+[Unit]
+Description=sloth SDR sweep request from slothweb
+Documentation=https://github.com/SpaceTrucker2196/sloth/wiki/sdr-sweep
+
+[Path]
+PathExists=/run/slothweb/sdrsweep.request
+Unit=sloth-sdrsweep.service
+
+[Install]
+WantedBy=paths.target

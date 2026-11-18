@@ -1,0 +1,56 @@
+# /etc/default/slothweb — site configuration for slothweb.service (#153).
+#
+# Read by systemd as an EnvironmentFile: KEY=value, one per line, no
+# shell expansion and no quoting. `make install-service` installs this
+# file only when there is none, so an edited copy is never replaced.
+#
+# The unit fixes the paths (--socket unix:/run/sloth/sloth.sock,
+# --sloth-db /var/lib/sloth/sloth.db, --store /var/lib/slothweb/
+# slothweb.db, and sloth-rf's --rf-socket unix:/run/sloth-rf/
+# sloth-rf.sock and --rf-db /var/lib/sloth-rf/sloth-rf.db); the sandbox
+# admits no others, so they do not go here.
+#
+# Empty, slothweb listens on 127.0.0.1:8770 and admits loopback peers
+# only. Reach it from another machine with an SSH tunnel:
+#   ssh -L 8770:127.0.0.1:8770 sensor-host
+#
+# Binding a Tailscale address instead. Every flag is needed, and each is
+# refused on its own: a non-loopback --web-bind needs --web-allow-remote,
+# and --web-allow-remote admits no peer you did not name. Name exactly
+# one viewer, as a /32. The addresses below are placeholders from the
+# Tailscale range, not any real host; use `tailscale ip -4` on the
+# sensor for the bind and on the viewer for the --web-allow.
+#
+#   --web-bind 100.64.0.10:8770     this host's own Tailscale address
+#   --web-allow-remote              authorise the non-loopback bind
+#   --web-allow 100.64.0.20/32      the one machine that may view it
+#
+# Loopback stays admitted whatever the bind, and a connection the host
+# makes to its own address from 127.0.0.1 is a loopback peer: that is
+# how `sloth-migrate-sensor --with-slothweb` reads /api/health on the
+# bound address without a second --web-allow entry
+# (curl --interface 127.0.0.1 http://100.64.0.10:8770/api/health).
+#
+# Do not add `tailscale serve` or a funnel in front of it.
+#
+# The alert page's packet capture (web/README.md "An alert's proof"):
+# the sensor's --pcap-dir, read in place. /var/lib/sloth is already
+# read-only in the unit's sandbox, so nothing else needs widening. Only
+# files named as sloth names alert pcaps are opened, never a handshake
+# pcap or eapol.22000. An evidence pcap from the sensor's --eapol-dir
+# is listed but withheld (it may hold EAPOL/PMKID handshake material)
+# unless --web-serve-evidence-pcap is added; with --web-allow-remote
+# that is refused unless spelled --web-serve-evidence-pcap=remote.
+#   --pcap-dir /var/lib/sloth/pcap
+#
+# An agent on this machine writing triage, notes and links through
+# slothweb-mcp (docs/wiki/slothweb-mcp.md §7): the run's secret in the
+# unit's /run/slothweb, 0640 in a group holding sloth and the operator's
+# own user (create the group and add both first; slothweb refuses to
+# start if the group does not exist or sloth is not in it).
+#   --web-agent-secret /run/slothweb/agent.secret --web-agent-group slothweb-agent
+#
+# Example:
+#   SLOTHWEB_ARGS=--web-bind 100.64.0.10:8770 --web-allow-remote --web-allow 100.64.0.20/32
+#   SLOTHWEB_ARGS=--pcap-dir /var/lib/sloth/pcap
+SLOTHWEB_ARGS=

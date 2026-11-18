@@ -1,6 +1,7 @@
 #ifndef FRAGATTACK_H
 #define FRAGATTACK_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <time.h>
 #include "sloth.h"
@@ -155,6 +156,10 @@
 #define FRAG_MAX_SESSIONS 128
 #define FRAG_MAX_ASSOC_EVT 128
 #define FRAG_MAX_MPDUS     256
+/* BSSIDs whose beacon told this module who the AP is (#180). Larger
+ * than FRAG_MAX_BSS because every beaconing AP in range lands here, not
+ * only the ones carrying data on a channel sloth dwelt on. */
+#define FRAG_MAX_AP_IDENT  128
 
 /* How long a recorded MPDU stays comparable. The attacker replays
  * promptly — the victim's fragment cache and replay window are what
@@ -231,6 +236,15 @@ typedef struct {
      * say so. */
     uint32_t eapol_relay;
 
+    /* #180: EAPOL frames that would have counted as eapol_relay above
+     * but for the mld-sibling heuristic — the AP-side address was not
+     * the BSSID and no beacon from this BSSID had been decoded, but it
+     * has the shape vendors derive an AP MLD MAC with (see
+     * frag_ap_identity()). Not a finding; kept so a reader can see the
+     * detector withheld something on a guess, and named in the
+     * FRAG_EAPOL_RELAY detail when that alert fires. */
+    uint32_t eapol_mld_sibling;
+
     /* The most recent offender, for the alert line. Kept rather than a
      * list because the alert names one example and the JSONL row and
      * per-alert pcap carry the rest. */
@@ -253,6 +267,68 @@ void frag_observe_frame(const dot11_frame_t *f, time_t now);
  * for the same testability reason as frag_observe. */
 void frag_note_association(const uint8_t bssid[6], const uint8_t sta[6],
                            time_t now);
+
+/* ── Who the AP is (#180) ──
+ *
+ * FRAG_EAPOL_RELAY asked "is this address the AP?" as "is it the
+ * BSSID?", and the plaintext rules' key-install gate filed the AP under
+ * whichever source address a frame carried. On an 802.11be AP MLD both
+ * go wrong: the authenticator's EAPOL address is the AP MLD MAC, the
+ * over-the-air BSSID (addr2 downlink, addr1 uplink) the per-link
+ * address. On the reference host every M1/M3 an Arcadyan Wi-Fi 7 AP
+ * sent its own client read as CVE-2020-26139.
+ *
+ * Record what one decoded Beacon says about its BSS: `mld_mac` is the
+ * MLD MAC Address of the Basic Multi-Link element mle_parse() read from
+ * it, or NULL when the beacon carried none. A BSSID beaconing WITHOUT an
+ * MLE is recorded too, because that is evidence as well (the caller
+ * passes NULL only for a beacon that could have shown one: captured
+ * whole, and carrying no Basic MLE at all, not one mle_parse()
+ * refused): an AP
+ * affiliated with an AP MLD carries a Basic MLE in every Beacon
+ * (hostapd's ieee802_11_build_ap_params() appends
+ * hostapd_eid_eht_ml_beacon() to every beacon tail whenever mld_ap is
+ * set; src/ap/beacon.c, read 2026-11-03 through the AOSP mirror), so
+ * one that did not is not an MLD, and the fallback heuristic is not
+ * allowed to guess otherwise for it. Called from the beacon branch of
+ * on_probe_frame(); `now` passed for the same testability reason as
+ * frag_observe(). */
+void frag_note_beacon(const uint8_t bssid[6], const uint8_t *mld_mac,
+                      time_t now);
+
+/* Is `addr` the AP of `bssid`? Exposed for the tests; the rules use the
+ * same function under the module lock.
+ *
+ *   FRAG_AP_BSSID        it is the BSSID.
+ *   FRAG_AP_MLD          a beacon from this BSSID advertised it as the
+ *                        AP MLD MAC.
+ *   FRAG_AP_MLD_SIBLING  no beacon from this BSSID has been decoded,
+ *                        and the address is unicast, locally
+ *                        administered, equal to the BSSID in octets 1-4
+ *                        and within +/-1 of it in octet 5: the usual
+ *                        vendor derivation of an AP MLD MAC from its
+ *                        first link address (the reference host's
+ *                        Arcadyan AP: octet 0 gained bits 1 and 5,
+ *                        octet 5 lost one). A guess, so it may only
+ *                        ever withhold a finding, never create one.
+ *   FRAG_AP_NO           none of these. */
+typedef enum {
+    FRAG_AP_NO = 0,
+    FRAG_AP_BSSID,
+    FRAG_AP_MLD,
+    FRAG_AP_MLD_SIBLING
+} frag_ap_ident_t;
+frag_ap_ident_t frag_ap_identity(const uint8_t bssid[6], const uint8_t addr[6]);
+
+/* The FRAG_EAPOL_RELAY detail's suffix: "" when the sibling heuristic
+ * withheld nothing on this BSS, else "; N more withheld as the AP MLD
+ * (mld-sibling heuristic)", so a reader of a real relay on an AP MLD
+ * whose beacon sloth never decoded sees that a guess was made. Written
+ * into `buf` and returned. */
+const char      *frag_sibling_note(const frag_bss_t *b, char *buf, size_t n);
+
+/* Test introspection: BSSIDs with a recorded beacon. */
+int              frag_ap_ident_count(void);
 
 /* ── Threading (#111) ──
  *

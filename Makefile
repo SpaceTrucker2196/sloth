@@ -24,13 +24,44 @@ WITH_SQLITE  ?= 1
 #              list beside it (the inline fuzz lists rotted and failed CI on
 #              2026-10-14).
 #
-# A new module goes in CORE_COMMON_SRCS (or a feature group below) once,
-# and `make`, `make test` and `make fuzz` all pick it up.
-CORE_COMMON_SRCS = \
+# A new module goes in exactly one list, once, and `make`, `make test`
+# and `make fuzz` all pick it up. Which list (#212, for the sloth-wifi /
+# sloth-rf split of #211, ADR 0010):
+#
+#   RF_SRCS         only ADS-B, APRS, rtl_433 or Victron (and, later,
+#                   Meshtastic): a decoder, its reader thread, its rules,
+#                   its poll stages, its records and source rows. sloth-rf
+#                   owns them; sloth-wifi links none of them since the
+#                   cutover (#216), and check_wifi_no_rf holds its link
+#                   to that.
+#   GNSS_SRCS       only the --gps / --location receiver: the parsers, the
+#                   reader, the position track, the GNSS rules and view,
+#                   its poll stages. Both daemons link the reader; the
+#                   view is sloth-wifi's alone and the rules sloth-rf's
+#                   alone (rule_gnss_* is on check_wifi_no_rf's list).
+#   CORE_BASE_SRCS  everything else that is built in every configuration:
+#                   the Wi-Fi, wired and BLE modules and the services both
+#                   daemons share (the alert engine, JSONL, the clock, the
+#                   run flag, the poll runner). When in doubt, here.
+#   a feature group below (PCAP_CORE_SRCS, SQLITE_CORE_SRCS, the Linux
+#                   lists) if a WITH_* flag or the platform gates it.
+#
+# The test for RF_SRCS and GNSS_SRCS is the include graph, not the topic:
+# a file belongs there only if nothing in CORE_BASE_SRCS would have to
+# move with it. src/sys_status.c reads every source and stays in the
+# base; so does src/alerts/rules_sensor.c.
+#
+# CORE_COMMON_SRCS is the union of the three and is what every consumer
+# below reads. It all goes into one archive, and each binary's linker
+# takes the members something it links references: sloth-wifi and
+# sloth-rf differ by what their own objects name, not by a second list.
+CORE_BASE_SRCS = \
        src/view_route.c    \
        src/worker_thread.c \
        src/view_labels.c   \
        src/tui_palette.c   \
+       src/tui_glyph.c     \
+       src/dev_how.c       \
        src/ownership.c     \
        src/inventory.c     \
        src/wired_attach.c  \
@@ -39,6 +70,8 @@ CORE_COMMON_SRCS = \
        src/radiotap.c      \
        src/wifi_freq.c     \
        src/rf_quality.c    \
+       src/rf_model.c      \
+       src/rf_distance.c   \
        src/db_schema.c     \
        src/history.c       \
        src/bandwidth.c     \
@@ -54,6 +87,7 @@ CORE_COMMON_SRCS = \
        src/posture.c       \
        src/version.c       \
        src/libver.c        \
+       src/libver_pcap.c   \
        src/updater.c       \
        src/oui.c           \
        src/services.c      \
@@ -112,6 +146,10 @@ CORE_COMMON_SRCS = \
        src/dga.c             \
        src/wifi_oui_attacker.c \
        src/wifi_chanhop.c    \
+       src/df.c              \
+       src/capture/df_radio.c \
+       src/mon_radios.c      \
+       src/capture/mon_radio.c \
        src/auth_track.c      \
        src/action_snoop.c    \
        src/ctrl_frames.c     \
@@ -122,12 +160,16 @@ CORE_COMMON_SRCS = \
        src/netstr.c          \
        src/mle.c             \
        src/tool_fingerprint.c \
+       src/attack_hw.c       \
        src/captive_portal.c  \
        src/wifi_snapshot.c   \
        src/wifi_assess.c     \
        src/wifi_baseline.c   \
        src/sensors.c         \
        src/sensor_health.c   \
+       src/sys_status.c      \
+       src/sys_status_capture.c \
+       src/capture_side.c    \
        src/stab.c            \
        src/persist_health.c  \
        src/wps_track.c       \
@@ -137,6 +179,8 @@ CORE_COMMON_SRCS = \
        src/twins.c           \
        src/views/twins.c     \
        src/karma_detect.c    \
+       src/probe_latency.c   \
+       src/harvest_track.c   \
        src/views/karma.c     \
        src/views/rogue_radius.c \
        src/alerts/engine.c   \
@@ -146,7 +190,9 @@ CORE_COMMON_SRCS = \
        src/alerts/rules_wired.c \
        src/alerts/rules_wifi_mgmt.c \
        src/alerts/rules_twin.c \
+       src/alerts/twin_field.c \
        src/alerts/rules_camera.c \
+       src/alerts/rules_harvest.c \
        src/tune.c src/fs_capacity.c            \
        src/views/alerts.c    \
        src/md5.c             \
@@ -155,6 +201,7 @@ CORE_COMMON_SRCS = \
        src/views/devices.c   \
        src/beacon_detect.c   \
        src/jsonl.c           \
+       src/jsonl_core.c      \
        src/formatter.c       \
        src/data_socket.c     \
        src/discovery.c       \
@@ -189,47 +236,107 @@ CORE_COMMON_SRCS = \
 # are compiled and linked in every configuration — main.c calls
 # capture_dlt_has_ifindex() to report inactive scoping even in a build
 # with no capture at all (#46, #57).
-CORE_COMMON_SRCS += src/capture/capture.c
+CORE_BASE_SRCS += src/capture/capture.c
 # The pcap-edge gate (#141) is libpcap-free so the test and fuzz builds
 # link it whatever WITH_PCAP says; both capture callbacks call it first.
-CORE_COMMON_SRCS += src/capture/frame_edge.c
+CORE_BASE_SRCS += src/capture/frame_edge.c
 # --replay (#119). Same split as capture.c: the route table, the list
 # parser and the empty platform are pure and built everywhere; the
 # savefile reader sits inside WITH_PCAP.
-CORE_COMMON_SRCS += src/capture/replay.c
-CORE_COMMON_SRCS += src/fragattack.c
-CORE_COMMON_SRCS += src/views/research.c
-CORE_COMMON_SRCS += src/views/fragattack.c
-CORE_COMMON_SRCS += research/coverage.c
-CORE_COMMON_SRCS += src/pcap_format.c src/pcap_write.c
-CORE_COMMON_SRCS += src/evidence_ring.c src/evidence_export.c
-CORE_COMMON_SRCS += src/evidence_manifest.c
-CORE_COMMON_SRCS += src/geo.c
+CORE_BASE_SRCS += src/capture/replay.c
+CORE_BASE_SRCS += src/fragattack.c
+CORE_BASE_SRCS += src/views/research.c
+CORE_BASE_SRCS += src/views/fragattack.c
+CORE_BASE_SRCS += research/coverage.c
+CORE_BASE_SRCS += src/pcap_format.c src/pcap_write.c
+CORE_BASE_SRCS += src/evidence_ring.c src/evidence_export.c
+CORE_BASE_SRCS += src/evidence_manifest.c
+CORE_BASE_SRCS += src/geo.c
 # #101 slice A: the compiled-in 5 GHz channel table and the rules that read it.
-CORE_COMMON_SRCS += src/reg_table.c src/alerts/rules_regulatory.c
-CORE_COMMON_SRCS += src/ble_snoop.c
+CORE_BASE_SRCS += src/reg_table.c src/alerts/rules_regulatory.c
+CORE_BASE_SRCS += src/ble_snoop.c
 # #144 slice 2: the HCI monitor decoder and the own-transmission rule are
 # pure; the libpcap worker that feeds them is in PCAP_CORE_SRCS.
-CORE_COMMON_SRCS += src/ble_hci.c src/alerts/rules_ble.c
+CORE_BASE_SRCS += src/ble_hci.c src/alerts/rules_ble.c
+CORE_BASE_SRCS += src/alerts/rules_sensor.c
 # #144 slice 3: the Ubertooth stream's framer and its two link-layer
 # parsers are pure; the reader that feeds them is in PCAP_CORE_SRCS.
-CORE_COMMON_SRCS += src/btle_ll.c src/bredr_bb.c src/bt_stream.c
+CORE_BASE_SRCS += src/btle_ll.c src/bredr_bb.c src/bt_stream.c
 # #144 slice 4: the flood windows, the watchlist matcher (shipped empty),
 # the three BLE detector lanes and the [*] BLE view. All pure.
-CORE_COMMON_SRCS += src/ble_flood.c src/ble_watchlist.c src/ble_detect.c
+CORE_BASE_SRCS += src/ble_flood.c src/ble_watchlist.c src/ble_detect.c
 # #156 item 2: address-rotation hints, off unless --ble-rotation-hints, and
 # the keyed hash their digests use. Pure.
-CORE_COMMON_SRCS += src/ble_rotation.c src/siphash.c
-CORE_COMMON_SRCS += src/views/ble.c
-CORE_COMMON_SRCS += src/scan.c
-CORE_COMMON_SRCS += src/alert_key.c
-CORE_COMMON_SRCS += src/camera_vendor.c
-CORE_COMMON_SRCS += src/camera_join.c
+CORE_BASE_SRCS += src/ble_rotation.c src/siphash.c
+CORE_BASE_SRCS += src/views/ble.c
+CORE_BASE_SRCS += src/scan.c
+CORE_BASE_SRCS += src/alert_key.c
+CORE_BASE_SRCS += src/camera_vendor.c
+CORE_BASE_SRCS += src/camera_join.c
 # #155: router-role observations (DHCP server, DNS responder) the camera
 # classifier vetoes a mixed-vendor OUI from.
-CORE_COMMON_SRCS += src/lan_role.c
-CORE_COMMON_SRCS += src/privdrop.c
-CORE_COMMON_SRCS += src/poll.c
+CORE_BASE_SRCS += src/lan_role.c
+CORE_BASE_SRCS += src/privdrop.c
+# The poll table (#113, #212): the Wi-Fi stages and `sloth`'s table, then
+# the runner and the stages every table shares. The GNSS and RF stages
+# are in their groups below.
+CORE_BASE_SRCS += src/poll.c src/poll_core.c
+# The worker run flag (#95), out of capture.c since #212 so a reader
+# thread does not need the capture module to have a stop flag.
+CORE_BASE_SRCS += src/run_flag.c
+# #213: the start-up steps both daemons take alike (--tune, the
+# privilege drop, the three sinks), out of src/main.c.
+CORE_BASE_SRCS += src/daemon_start.c
+# #216: the six decoder flags sloth-wifi refuses, and the line it says.
+CORE_BASE_SRCS += src/rf_moved.c
+
+# ── The GNSS group (#212) ───────────────────────────────────────────────────
+# --location / --gps (2026-10-27): the parsers and the arbitration state
+# are pure; the reader opens a serial device or a gpsd TCP stream and
+# needs neither libpcap nor SQLite, so it is common too.
+GNSS_SRCS  = src/gps.c src/capture/gps_reader.c src/position_track.c
+GNSS_SRCS += src/alerts/rules_gnss.c
+# GNSS observation (2026-11-02): the [#] view over the --gps receiver's sky.
+GNSS_SRCS += src/views/gnss.c
+GNSS_SRCS += src/poll_gnss.c
+# #213: the --location / --gps flags' checks, out of src/main.c so both
+# daemons' mains call one copy.
+GNSS_SRCS += src/gnss_flags.c
+
+# ── The RF group (#212) ─────────────────────────────────────────────────────
+# --adsb (#26 slice 1, 2026-11-05): the aircraft.json parser and table are
+# pure; the reader re-reads a local file and needs neither libpcap nor
+# SQLite.
+RF_SRCS  = src/adsb.c src/adsb_beast.c src/capture/adsb_reader.c
+# #186: ADSB_EMERGENCY, read off the ADS-B table.
+RF_SRCS += src/alerts/rules_adsb.c
+# --aprs (2026-11-05): Dire Wolf's packet-log parser and the station
+# table are pure; the reader tails a local file and needs neither
+# libpcap nor SQLite.
+RF_SRCS += src/aprs.c src/capture/aprs_reader.c
+# --rtl433 (#208, 2026-11-14): rtl_433's JSON event-log parser and the
+# device table are pure; the reader tails a local file and needs neither
+# libpcap nor SQLite.
+RF_SRCS += src/rtl433.c src/capture/rtl433_reader.c
+# --victron (2026-11-15): sloth-va's JSONL (docs/wiki/victron.md). The
+# parser and table are pure; the reader tails a local file. Not sloth-va:
+# nothing under src/va/ is named here (tests/test_va.c).
+RF_SRCS += src/victron.c src/capture/victron_reader.c
+# The RF poll stages and the table sloth-rf passes (#212, #213).
+RF_SRCS += src/poll_rf.c
+# #213: the receiver's and the decoders' JSONL records, out of
+# src/jsonl.c so a daemon with no capture links them, and the rule table
+# sloth-rf selects.
+RF_SRCS += src/jsonl_rf.c src/alerts/rules_table_rf.c
+# #213: the decoder flags' checks, out of src/main.c for the same reason.
+RF_SRCS += src/rf_flags.c
+# #216: the four decoder source rows, out of src/sys_status.c, and the
+# one call that hands sloth-rf's side to the shared services.
+RF_SRCS += src/sys_status_rf.c src/rf_side.c
+
+# The union every consumer reads. Order is base, GNSS, RF; nothing
+# depends on it (the objects go into an archive).
+CORE_COMMON_SRCS = $(CORE_BASE_SRCS) $(GNSS_SRCS) $(RF_SRCS)
 
 # Feature-gated core sources, grouped by the flag that gates them.
 # CORE_SRCS_ALL is their union with the common list: the test and fuzz
@@ -243,14 +350,16 @@ CORE_COMMON_SRCS += src/poll.c
 LINUX_PLATFORM_SRCS = src/platform/linux_parse.c   \
                       src/platform/linux_pid.c     \
                       src/platform/linux_dhcp.c    \
-                      src/platform/linux_tcpdiag.c
+                      src/platform/linux_tcpdiag.c \
+                      src/platform/linux_neigh.c   \
+                      src/platform/linux_self.c
 LINUX_WIFI_SRCS     = src/platform/linux_wifi.c
 
 # probe.c exists only with WITH_PCAP: without it probe.h's inline stubs
 # stand in. The evidence ring and its exporter (#92) used to sit here
 # too, on the grounds that only on_probe_frame() fills the ring. Since
 # #92 slice 1 the alert engine calls the exporter, and the engine is in
-# every build — so both are in CORE_COMMON_SRCS now. In a no-pcap build
+# every build — so both are in CORE_BASE_SRCS now. In a no-pcap build
 # the ring is never initialised (main.c calls evidence_ring_init_default()
 # only under WITH_PCAP), so it holds no arena and costs code, not memory.
 PCAP_CORE_SRCS      = src/capture/probe.c src/capture/bt_monitor.c \
@@ -386,13 +495,19 @@ CORE_LIB  = $(OBJDIR)/libsloth_core.a
 APP_OBJS  = $(APP_SRCS:%.c=$(OBJDIR)/%.o)
 CORE_OBJS = $(CORE_SRCS:%.c=$(OBJDIR)/%.o)
 OBJS      = $(APP_OBJS) $(CORE_LIB)
-TARGET    = sloth
+# The Wi-Fi daemon (#216, ADR 0010). It was `sloth` until the cutover
+# and still answers to that name: `sloth` is a symlink to it, in the
+# build tree (below) and beside it where `make install` puts it, with no
+# end date (owner ruling 2026-11-15). One program under two names:
+# nothing in it reads argv[0] to decide what it is.
+TARGET       = sloth-wifi
+TARGET_ALIAS = sloth
 
 # The shipped binary is relinked when the config or link command changes,
 # not only when an object is newer: going back to a config whose objects
 # predate the current `sloth` would otherwise leave the other config's
 # binary in place and call it up to date.
-LINK_STAMP = build/sloth.link
+LINK_STAMP = build/sloth-wifi.link
 
 # Rewrite the stamp only when what it records differs, so its mtime moves
 # exactly when the recorded text does. STAMP is set per target below.
@@ -404,7 +519,7 @@ $(LINK_STAMP):      STAMP = $(OBJDIR) $(CC) $(CFLAGS) $(LDFLAGS)
 
 .PHONY: all clean install embedded check-deps sbom
 
-all: check-deps $(TARGET)
+all: check-deps $(TARGET) $(TARGET_ALIAS)
 
 # ── Dependency floors (#142) ────────────────────────────────────────────────
 # The minimum library versions, checked before compiling rather than
@@ -477,12 +592,309 @@ sbom:
 # member is pulled in only to satisfy a reference already seen.
 $(TARGET): $(OBJS) $(LINK_STAMP)
 	$(CC) $(CFLAGS) -o $@ $(filter-out $(LINK_STAMP),$^) $(LDFLAGS)
+	$(check_no_hci_builder)
+	$(check_wifi_no_rf)
+
+# ./sloth, so `./sloth --headless ...` and every script that names it
+# keep working in a build tree. A relative symlink, remade whenever it is
+# not one pointing at $(TARGET): a tree built before the cutover has a
+# regular file called sloth here, the old binary, and leaving that in
+# place would run pre-split code under the old name. Order-only on the
+# binary, so the link is not remade when the binary is relinked; the
+# recipe always runs and does nothing when the link is already right.
+.PHONY: FORCE_ALIAS
+FORCE_ALIAS:
+$(TARGET_ALIAS): FORCE_ALIAS | $(TARGET)
+	@[ "$$(readlink $@ 2>/dev/null)" = "$(TARGET)" ] || { ln -sfn $(TARGET) $@ && echo "ln -sfn $(TARGET) $@"; }
+
+# MISSION.md §2: sloth sends no HCI command, so sloth-ble-scan's builder
+# (src/ble_scan/, every symbol `bles_`) must never be in it. Checked on
+# the linked binary, in every configuration that links one: a Makefile
+# text scan cannot see `CORE_COMMON_SRCS += $$(BLE_SCAN_SRCS)` or a
+# source that includes the header, and an archive member nothing calls
+# is not linked anyway, so what matters is what `nm` finds. The source
+# scan beside it catches an include before any call exists. A failure
+# deletes the binary, so the next `make` cannot call it up to date.
+define check_no_hci_builder
+	@syms=$$(nm $@) || { echo "$@: nm failed; cannot check for the HCI builder" >&2; rm -f $@; exit 1; }; \
+	 bad=$$(printf '%s\n' "$$syms" | awk '$$NF ~ /^_?bles_/ { print $$NF }' | head -n 3 | tr '\n' ' '); \
+	 [ -z "$$bad" ] || { echo "$@: links sloth-ble-scan's HCI builder ($$bad); MISSION.md §2: sloth sends no HCI command" >&2; rm -f $@; exit 1; }; \
+	 inc=$$(grep -lE 'ble_scan_cmd|ble_scan/' $(APP_SRCS) $(RF_APP_SRCS) $(CORE_SRCS) /dev/null); \
+	 [ -z "$$inc" ] || { echo "$@: $$inc names sloth-ble-scan's builder; MISSION.md §2: sloth sends no HCI command" >&2; rm -f $@; exit 1; }
+endef
 
 $(OBJDIR)/%.o: %.c $(OBJDIR)/.flags
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -MMD -MP -Iinclude -Isrc -Iresearch -c -o $@ $<
 
 $(CORE_LIB): $(CORE_OBJS) $(OBJDIR)/.members
+
+# ── sloth-ble-scan ─────────────────────────────────────────────────────────
+# The operator's passive-scan helper for --bt-monitor (docs/wiki/ble.md):
+# holds a PASSIVE LE scan on hciN through the HCI user channel. A separate
+# binary on purpose, like sloth-monitor-up: sloth sends no HCI command
+# (MISSION.md §2), so nothing under src/ble_scan/ is in any list `sloth`
+# links, and tests/test_ble_scan.c checks that it stays out. Linux only
+# (AF_BLUETOOTH); in `all` there so every matrix config compiles it under
+# -Werror. Rebuilt when the config's flag stamp moves, like an object,
+# so a warm tree cannot hand -Werror a binary it never compiled.
+BLE_SCAN_SRCS = src/ble_scan/main.c src/ble_scan/ble_scan_cmd.c src/sloth_clock.c
+BLE_SCAN_HDRS = src/ble_scan/ble_scan_cmd.h src/sloth_clock.h
+ifeq ($(UNAME),Linux)
+    BLE_SCAN_BIN = sloth-ble-scan
+endif
+
+sloth-ble-scan: $(BLE_SCAN_SRCS) $(BLE_SCAN_HDRS) $(OBJDIR)/.flags
+	$(CC) $(CFLAGS) -iquote src -o $@ $(BLE_SCAN_SRCS) $(filter -pie -Wl%,$(LDFLAGS))
+
+# ── sloth-sdrsweep ─────────────────────────────────────────────────────────
+# The SDR sweep helper behind slothweb's Spectrum tab
+# (docs/wiki/sdr-sweep.md): tunes a receiver the operator dedicated
+# across its range for a minute and writes /var/lib/sloth-sdrsweep. A
+# separate binary on purpose, like sloth-ble-scan: sloth and slothweb
+# never drive a radio and link no SoapySDR, so nothing under
+# src/sdrsweep/ is in a list either is built from, and
+# tests/test_sdrsweep.c checks that it stays out. Its pure half
+# (sdrsweep_dsp.c) is linked into sloth_test through TEST_ONLY_SRCS.
+#
+# Built when pkg-config finds SoapySDR (WITH_SOAPY=auto), so a host
+# without libsoapysdr-dev builds everything else as before; WITH_SOAPY=0
+# skips it, WITH_SOAPY=1 makes a missing SoapySDR an error. In `all`
+# when built, so every matrix config compiles it under -Werror where CI
+# installs the library. Rebuilt when the config's flag stamp moves.
+WITH_SOAPY ?= auto
+SDRSWEEP_SRCS = src/sdrsweep/main.c src/sdrsweep/sdrsweep_dsp.c src/sloth_clock.c
+SDRSWEEP_HDRS = src/sdrsweep/sdrsweep_dsp.h src/sloth_clock.h
+ifeq ($(WITH_SOAPY),auto)
+    override WITH_SOAPY := $(shell $(PKG_CONFIG) --exists SoapySDR 2>/dev/null && echo 1 || echo 0)
+endif
+ifeq ($(WITH_SOAPY),1)
+    SDRSWEEP_BIN    = sloth-sdrsweep
+    SOAPY_CFLAGS   := $(shell $(PKG_CONFIG) --cflags SoapySDR 2>/dev/null)
+    SOAPY_LIBS     := $(shell $(PKG_CONFIG) --libs SoapySDR 2>/dev/null || echo -lSoapySDR)
+endif
+
+sloth-sdrsweep: $(SDRSWEEP_SRCS) $(SDRSWEEP_HDRS) $(OBJDIR)/.flags
+	$(CC) $(CFLAGS) -iquote src $(SOAPY_CFLAGS) -o $@ $(SDRSWEEP_SRCS) \
+	      $(filter -pie -Wl%,$(LDFLAGS)) $(SOAPY_LIBS) -lm
+
+# ── sloth-va ───────────────────────────────────────────────────────────────
+# The Victron reader (docs/wiki/victron.md, ADR 0011): decodes the owner's
+# Victron Instant Readout advertisements and holds short GATT sessions
+# with them through BlueZ, appending JSONL that sloth reads with
+# --victron. It TRANSMITS (LE connections, pairing), so it is a separate
+# binary under its own account, like sloth-ble-scan: nothing under
+# src/va/ is in a list `sloth` or `slothweb` is built from, and
+# tests/test_va.c checks that it stays out. Its pure half (decode, AES,
+# parsers, record) is linked into sloth_test through TEST_ONLY_SRCS.
+#
+# Built when pkg-config finds libsystemd (sd-bus; WITH_SDBUS=auto);
+# WITH_SDBUS=0 skips it, WITH_SDBUS=1 makes a missing libsystemd an
+# error. Rebuilt when the config's flag stamp moves.
+WITH_SDBUS ?= auto
+VA_SRCS = src/va/main.c src/va/va_victron.c src/va/va_conf.c src/va/va_aes.c src/sloth_clock.c
+VA_HDRS = src/va/va_victron.h src/va/va_conf.h src/va/va_aes.h src/sloth_clock.h
+ifeq ($(UNAME),Linux)
+ifeq ($(WITH_SDBUS),auto)
+    override WITH_SDBUS := $(shell $(PKG_CONFIG) --exists libsystemd 2>/dev/null && echo 1 || echo 0)
+endif
+endif
+ifeq ($(WITH_SDBUS),1)
+    VA_BIN        = sloth-va
+    SDBUS_CFLAGS := $(shell $(PKG_CONFIG) --cflags libsystemd 2>/dev/null)
+    SDBUS_LIBS   := $(shell $(PKG_CONFIG) --libs libsystemd 2>/dev/null || echo -lsystemd)
+endif
+
+sloth-va: $(VA_SRCS) $(VA_HDRS) $(OBJDIR)/.flags
+	$(CC) $(CFLAGS) -iquote src $(SDBUS_CFLAGS) -o $@ $(VA_SRCS) \
+	      $(filter -pie -Wl%,$(LDFLAGS)) $(SDBUS_LIBS)
+# ── sloth-rf (#213, ADR 0010) ──────────────────────────────────────────────
+# The RF half of the sensor as a daemon of its own: the GNSS receiver and
+# the ADS-B, APRS and rtl_433 decoders' files, with the alert engine, the
+# JSONL writer and the database sloth-wifi uses for its own. Built
+# beside sloth-wifi by a plain `make` and installed by `make install`
+# (#215). Since the cutover (#216) it is the only daemon that links the
+# decoders: check_wifi_no_rf, below, holds sloth-wifi to that.
+#
+# Its three own sources are compiled like any object (per config, behind
+# the flag stamp), and everything else comes out of libsloth_core.a, so
+# only the members something references are linked. That is the whole
+# mechanism: there is no second source list to keep in step, and what
+# keeps the capture out is that nothing sloth-rf references leads to it.
+# check_rf_no_capture, below, holds the link to that.
+#
+# No -lpcap and no ncurses on its link line, whatever the config: it
+# references neither, and naming them would put them in DT_NEEDED.
+RF_APP_SRCS   = src/rf/main.c src/rf/rf_args.c src/rf/platform_rf.c
+RF_APP_OBJS   = $(RF_APP_SRCS:%.c=$(OBJDIR)/%.o)
+RF_TARGET     = sloth-rf
+RF_LINK_STAMP = build/sloth-rf.link
+RF_LDFLAGS    = $(filter-out -lpcap -lncursesw -lncurses,$(LDFLAGS))
+
+$(RF_LINK_STAMP): STAMP = $(OBJDIR) $(CC) $(CFLAGS) $(RF_LDFLAGS)
+
+$(RF_TARGET): $(RF_APP_OBJS) $(CORE_LIB) $(RF_LINK_STAMP)
+	$(CC) $(CFLAGS) -o $@ $(filter-out $(RF_LINK_STAMP),$^) $(RF_LDFLAGS)
+	$(check_no_hci_builder)
+	$(check_rf_no_capture)
+
+# MISSION.md §2 and ADR 0010: sloth-rf opens no radio and links no
+# capture. Checked on the linked binary, as check_no_hci_builder is and
+# for the same reason: what a Makefile list says is not what the linker
+# did, and one new call from a shared file (src/sys_status.c,
+# src/jsonl_core.c, src/db.c, src/alerts/engine.c, a rule file) into a
+# capture module would pull that module, and through it the rest, into
+# this binary without a line of this file changing. That is not
+# hypothetical: before #213 cut the seams, linking these same roots
+# pulled 159 archive members and libpcap; after, 49 and none (51 with
+# --victron's victron.o and victron_reader.o, which name no capture).
+#
+# Three lists, all explicit.
+#   RF_FORBID_IMPORTS: dynamic symbols it must not import. Any libpcap
+#     call; every resolver entry (getnameinfo is the one src/dns.c
+#     uses, the one module that can put a query on the wire; the
+#     forward calls are here so a second resolver cannot arrive by
+#     another name); ncurses, which a headless daemon has no use for;
+#     and the calls the netlink and raw-socket modules are made of
+#     (sendto, sendmsg, recv*, ioctl, if_nametoindex), none of which
+#     this daemon's own sockets use: it read()s them, and its one
+#     write to a peer is send() of gpsd's ?WATCH. A module the two
+#     lists below miss still trips here if it talks to the kernel.
+#   RF_FORBID_DEFS: sloth's own entry points, one or two per module
+#     that must stay out, chosen because nothing can use the module
+#     without them - the IP capture, the 802.11 monitor and its frame
+#     decoders, the Bluetooth HCI monitor and the Ubertooth stream, the
+#     savefile replay, the evidence ring and the two pcap exporters, the
+#     platform backend member by member (nl80211, rtnetlink, INET_DIAG,
+#     the neighbour, lease, pid and self-MAC readers; sloth-rf's own
+#     g_platform, src/rf/platform_rf.c, reads files and nothing else),
+#     the mDNS advertisement, the resolver and the terminal.
+#   RF_FORBID_DEF_PATTERNS: the same by family, so a member added to
+#     one later is held without a line here: every linux_* backend
+#     function, every dot11_* helper, every *_observe_frame and
+#     *_parse_frame decoder, the Bluetooth sources, the evidence and
+#     handshake stores, the advertisement, every view and the terminal.
+# The gate works per archive member: a name guards the member that
+# defines it. That is why the platform backend and the 802.11 decoders
+# are listed member by member and not by one name each (review of
+# #213: linux_tcpdiag.o, linux_neigh.o, discovery.o and seven frame
+# decoders define none of the names the first list had).
+#
+# What it does not claim: that no file about 802.11 is linked.
+# wifi_assess.o, attack_hw.o and wifi_oui_attacker.o are, as tables and
+# labels over state this daemon never fills
+# (docs/wiki/architecture-rf-split.md section 10). What is held out is
+# everything that opens, decodes or captures.
+#
+# A name on the second list that is renamed stops guarding, so
+# tests/test_rf_build.c holds every one of them to being defined in the
+# tree today, and every pattern to matching a definition it names.
+#
+# A failure deletes the binary, so the next `make` cannot call it up to
+# date.
+RF_FORBID_IMPORTS = pcap_[a-z_]+ getnameinfo getaddrinfo \
+                    gethostbyname[0-9a-z_]* gethostbyaddr[a-z_]* \
+                    (__)?res_[a-z]+ \
+                    sendto sendmsg sendmmsg \
+                    recv recvfrom recvmsg recvmmsg \
+                    __recv_chk __recvfrom_chk \
+                    ioctl if_nametoindex if_indextoname \
+                    initscr newterm
+RF_FORBID_DEFS    = capture_open capture_run capture_start \
+                    probe_open probe_run \
+                    bt_monitor_open bt_capture_run ble_mon_ingest \
+                    bt_stream_feed btle_ll_parse \
+                    replay_run \
+                    dot11_frame_decode radiotap_parse beacon_parse_frame \
+                    deauth_parse_frame eapol_observe_frame \
+                    action_observe_frame frag_observe_frame \
+                    ctrl_observe_frame karma_observe_frame \
+                    assoc_request_parse_frame pm_forge_observe_frame \
+                    mle_bss_observe_frame dot11_ie_find dot11_data_addrs \
+                    evidence_ring_init alert_pcap_dump \
+                    evidence_export_pcap_unique \
+                    linux_wifi_scan linux_wifi_set_channel \
+                    linux_wifi_get_stations \
+                    linux_get_ifaces linux_get_conns \
+                    linux_tcpdiag_fill linux_neigh6_fill linux_get_dhcp \
+                    linux_get_self_macs resolve_pids \
+                    discovery_publish \
+                    dns_init dns_resolve \
+                    tui_init
+RF_FORBID_DEF_PATTERNS = linux_[a-z0-9_]+ dot11_[a-z0-9_]+ \
+                    [a-z0-9_]+_observe_frame [a-z0-9_]+_parse_frame \
+                    bt_[a-z0-9_]+ ble_[a-z0-9_]+ btle_[a-z0-9_]+ \
+                    evidence_[a-z0-9_]+ eapol_[a-z0-9_]+ \
+                    discovery_[a-z0-9_]+ view_[a-z0-9_]+ tui_[a-z0-9_]+
+rf_empty :=
+rf_space := $(rf_empty) $(rf_empty)
+RF_FORBID_IMPORTS_RE = ^_?($(subst $(rf_space),|,$(strip $(RF_FORBID_IMPORTS))))$$
+RF_FORBID_DEFS_RE    = ^_?($(subst $(rf_space),|,$(strip $(RF_FORBID_DEFS) $(RF_FORBID_DEF_PATTERNS))))$$
+define check_rf_no_capture
+	@syms=$$(nm $@) || { echo "$@: nm failed; cannot check for the capture" >&2; rm -f $@; exit 1; }; \
+	 bad=$$(printf '%s\n' "$$syms" | awk 'NF == 2 && $$1 == "U" { sub(/@.*/, "", $$2); if ($$2 ~ /$(RF_FORBID_IMPORTS_RE)/) print $$2 }' | sort -u | head -n 4 | tr '\n' ' '); \
+	 [ -z "$$bad" ] || { echo "$@: imports $$bad- sloth-rf links no libpcap, no resolver, no terminal and no netlink or raw-socket call (MISSION.md §2, ADR 0010); a shared file has grown a call into a capture or platform module" >&2; rm -f $@; exit 1; }; \
+	 bad=$$(printf '%s\n' "$$syms" | awk 'NF == 3 && $$2 != "U" && $$3 ~ /$(RF_FORBID_DEFS_RE)/ { print $$3 }' | sort -u | head -n 4 | tr '\n' ' '); \
+	 [ -z "$$bad" ] || { echo "$@: links $$bad- sloth-rf links no capture, 802.11 frame decoder, Bluetooth source, platform backend (nl80211, rtnetlink, INET_DIAG), mDNS advertisement, resolver, view or terminal code (MISSION.md §2, ADR 0010); cut the dependency, do not shorten this list" >&2; rm -f $@; exit 1; }
+endef
+
+# The mirror for the other daemon (#216, ADR 0010): sloth-wifi reads no
+# SDR decoder. Until the cutover every RF file was linked into the one
+# binary; what keeps them out now is, as for sloth-rf, only that nothing
+# sloth-wifi references leads to them - so one new call from a shared
+# file (src/sys_status.c, src/db.c, src/jsonl.c, a view) into
+# src/adsb.c would put the decoder, its reader thread and its records
+# back without a line of this file changing. Checked on the linked
+# binary, file-local symbols included, by family:
+#   the decoders and their readers        adsb_* (the Beast decoder is
+#                                         adsb_beast_*) aprs_* rtl433_*
+#                                         victron_*
+#   their rules and the receiver's rules  rule_adsb_* rule_gnss_*
+#                                         rules_adsb_* rules_gnss_*
+#   their records and health blocks       jsonl_emit_{gnss,adsb,aprs,
+#                                         rtl433,victron}, jsonl_sh_{adsb,
+#                                         aprs,rtl433,victron,rf}*,
+#                                         jsonl_emit_state_rf,
+#                                         jsonl_emit_sensor_health_rf
+#   sloth-rf's stages, tables and side    poll_st_*_rf, g_poll_rf,
+#                                         g_alert_table_rf, rf_flags_*,
+#                                         rf_flag_*, rf_side_install,
+#                                         sys_status_rf_fill
+# It is a list of names, so it holds RF files out of the link and not
+# RF code in a shared file: src/db.c's writers for the gnss_*, adsb_*,
+# aprs_* and victron_* tables are in both daemons and are kept off in
+# sloth-wifi at run time (db_set_rf_side(), tests/test_rf_db.c).
+# The GNSS reader, the position track and the GNSS view are not on it:
+# sloth-wifi keeps them (owner ruling 2026-11-15). rf_moved_* is this
+# daemon's own refusal of the six flags and is not matched (the list
+# says rf_flag, not rf_). tests/test_rf_build.c holds every family to
+# matching a definition in the tree today, so a renamed module cannot
+# leave a pattern guarding nothing. A failure deletes the binary, so the
+# next `make` cannot call it up to date.
+WIFI_FORBID_DEF_PATTERNS = adsb_[a-z0-9_]+ aprs_[a-z0-9_]+ \
+                    rtl433_[a-z0-9_]+ victron_[a-z0-9_]+ \
+                    rule_adsb_[a-z0-9_]+ rule_gnss_[a-z0-9_]+ \
+                    rules_adsb_[a-z0-9_]+ rules_gnss_[a-z0-9_]+ \
+                    jsonl_emit_(gnss|adsb|aprs|rtl433|victron) \
+                    jsonl_sh_(adsb|aprs|rtl433|victron|rf)[a-z0-9_]* \
+                    jsonl_emit_state_rf jsonl_emit_sensor_health_rf \
+                    poll_st_[a-z0-9_]+_rf g_poll_rf g_alert_table_rf \
+                    rf_flags_[a-z0-9_]+ rf_flag_[a-z0-9_]+ rf_side_install \
+                    sys_status_rf_fill
+WIFI_FORBID_DEFS_RE = ^_?($(subst $(rf_space),|,$(strip $(WIFI_FORBID_DEF_PATTERNS))))$$
+define check_wifi_no_rf
+	@syms=$$(nm $@) || { echo "$@: nm failed; cannot check for the RF decoders" >&2; rm -f $@; exit 1; }; \
+	 bad=$$(printf '%s\n' "$$syms" | awk 'NF == 3 && $$2 != "U" && $$3 ~ /$(WIFI_FORBID_DEFS_RE)/ { print $$3 }' | sort -u | head -n 4 | tr '\n' ' '); \
+	 [ -z "$$bad" ] || { echo "$@: links $$bad- sloth-wifi links no ADS-B, APRS, rtl_433 or Victron decoder, none of their records or source rows, and no GNSS or ADS-B rule: those are sloth-rf's (ADR 0010, #216); cut the dependency, do not shorten this list" >&2; rm -f $@; exit 1; }
+endef
+
+all: $(RF_TARGET)
+
+# The helpers join `all` here, below their definitions: make expands a
+# rule's prerequisites when it reads the rule, so naming them on the
+# `all:` line above, before BLE_SCAN_BIN was set, added nothing, and
+# sloth-ble-scan was built only by `install` until 2026-11-13.
+all: $(BLE_SCAN_BIN) $(SDRSWEEP_BIN) $(VA_BIN)
 
 # Minimal build for embedded targets (no ncurses, no pcap, no sqlite)
 embedded:
@@ -499,7 +911,8 @@ docs-counts:
 
 # ── Research corpus (#73) ───────────────────────────────────────────────────
 # research.db is committed: it is small, deterministic (documents are
-# visited in sorted path order, so a rebuild is byte-identical), and
+# visited in sorted path order, so a rebuild with the same SQLite is
+# byte-identical; tools/gate.sh compares by content across versions), and
 # committing it means --with-research works from a fresh clone with no
 # build step. Regenerate after editing anything under research/.
 RESEARCH_SRCS = research/ingest/main.c research/ingest/research_ingest.c
@@ -528,9 +941,9 @@ research-mcp:
 
 # ── slothweb (#157, #158, #159, #160) ───────────────────────────────────────
 # The browser dashboard's server, docs/web-ui-spec.md. A separate binary
-# on purpose: nothing here is in `all` or `embedded`, no sloth source is
-# compiled into it, and nothing in src/ references web/ (spec §4.2). It
-# links libc and pthreads, and libsqlite3 when WITH_SQLITE=1 (M2's
+# on purpose: nothing here is in `all` or `embedded`, no sloth source but
+# the leaf parsers of WEB_CORE_SRCS is compiled into it, and nothing in
+# src/ references web/ (spec §4.2). It links libc and pthreads, and libsqlite3 when WITH_SQLITE=1 (M2's
 # slothweb.db), and nothing else.
 #
 # M0 serves one embedded page, /api/health and an /events stream behind
@@ -558,13 +971,17 @@ research-mcp:
 #
 # The vendor table (M4, #162) is generated the same way, by
 # web/tools/oui_gen.c into build/web/web_oui_table.c, from the IEEE
-# registry CSVs the developer has fetched into web/data/ (ignored by
-# version control; web/README.md says where they come from). Neither
-# the CSVs nor the table are ever committed. Without them the build
-# still succeeds: the generator reads sloth's own 123-entry table out
-# of src/oui.c as text and /api/health says "vendor_table":"sloth". The
-# table is regenerated when the CSV list or a CSV's checksum changes
-# (the stamp), not only when a CSV is newer than the table.
+# registry CSVs committed in web/data/ (owner ruling 2026-10-26;
+# web/data/SOURCE.md says where they come from and their hashes). The
+# generated table is build output and never committed. WEB_OUI_DIR
+# names another directory; one without the CSVs still builds: the
+# generator reads sloth's own 117-entry table out of src/oui.c as text
+# and /api/health says "vendor_table":"sloth". The table is regenerated
+# when the CSV list or a CSV's checksum changes (the stamp), not only
+# when a CSV is newer than the table. web-test is told which table the
+# build should have (WEB_OUI_EXPECT), so a default build that silently
+# fell back would fail test_builtin_table. `make update-oui` refreshes
+# web/data/ by hand (web/tools/update_oui.sh); nothing else runs it.
 #
 # The SQL box's recipes (M5, #163) are docs/wiki/sqlite-schema.md's
 # own, extracted by web/tools/recipes.c into build/web/web_recipes.c
@@ -574,9 +991,28 @@ research-mcp:
 # text, so that the sloth.db reader's tests build their sloth.db from
 # sloth's own DDL rather than a fixture or a copy, and src/rsn_ie.c, so
 # that the AKM names the WiFi view copies are held to sloth's own
-# (web/tests/test_parity.c); slothweb itself links no src/ file.
+# (web/tests/test_parity.c). slothweb itself links the leaf parsers in
+# WEB_CORE_SRCS and nothing that includes sloth.h: the alert page's
+# packet capture (web/src/web_pcap.c) reads an 802.11 frame's radiotap
+# and MAC header, its elements and a DNS name with sloth's own code, so
+# the page and the sensor cannot disagree about a frame. Each file there
+# includes only its own header and the leaf headers beside it; the one
+# call out of them, dot11_ie.c's sh_parse_fault_note(), is answered by
+# web/src/web_sh_stub.c (slothweb keeps no sensor-health counters). The
+# test binary links web/tools/demo.c as well, built -DSLOTHWEB_DEMO_LIB (no main), so
+# that the Overview tiles are held to their views on the demo's own data
+# (web/tests/test_alerts.c).
 WEB_MAIN        = web/src/main.c
 WEB_GEN_DIR     = build/web
+
+# The build-time generators (web/tools/*.c) are built with the current
+# CFLAGS and rebuilt when they change, so a sanitized make rebuilds them
+# under the sanitizers instead of reusing a plain-built binary: CI,
+# building from a clean tree, found a leak and a qsort(NULL) in one that
+# no local gate had run instrumented (ec058e5, aa8c9c9, 2026-11-02).
+$(WEB_GEN_DIR)/.flags: STAMP = $(CC) $(CFLAGS)
+$(WEB_GEN_DIR)/.flags: FORCE
+	$(write_stamp)
 WEB_EMBED       = $(WEB_GEN_DIR)/embed
 WEB_ASSETS_C    = $(WEB_GEN_DIR)/web_assets.c
 WEB_UI          = $(wildcard web/ui/*)
@@ -593,11 +1029,85 @@ WEB_RECIPES_MD  = docs/wiki/sqlite-schema.md
 WEB_RECIPESGEN  = $(WEB_GEN_DIR)/recipes
 WEB_RECIPES_SRCS = web/tools/recipes.c
 WEB_RECIPES_C   = $(WEB_GEN_DIR)/web_recipes.c
+# The alert knowledge table (owner request 2026-10-23..26): the rule
+# table, the wiki, the research corpus and the remediation page, read by
+# web/tools/alertkb.c into build/web/web_alertkb.c (never committed)
+# whenever any of them changes.
+WEB_AKB_INPUTS  = include/sloth_alerts.def docs/views/alerts.md docs/wiki/alerts.md \
+                  docs/wiki/alert-remediation.md
+WEB_AKB_CORPUS  = $(wildcard research/*.md research/*/*.md research/*/*/*.md)
+WEB_AKBGEN      = $(WEB_GEN_DIR)/alertkb
+WEB_AKBGEN_SRCS = web/tools/alertkb.c
+WEB_AKB_C       = $(WEB_GEN_DIR)/web_alertkb.c
+# The Bluetooth SIG assigned numbers (company identifiers, 16-bit
+# service UUIDs, appearance values) for the BLE view, the same shape as
+# the IEEE registry: web/tools/btsig_gen.c compiles the CSVs committed in
+# web/data/btsig/ (web/data/btsig/SOURCE.md) into
+# build/web/web_btsig_table.c, never committed; WEB_BTSIG_DIR elsewhere
+# builds an empty table ("none") and the page shows the numbers alone.
+# web/tools/update_btsig.sh refreshes the CSVs from a given directory of
+# the SIG's YAML and never fetches; nothing else runs it.
+WEB_BTSIG_DIR  ?= web/data/btsig
+WEB_BTSIG_CSVS  = $(wildcard $(WEB_BTSIG_DIR)/company_identifiers.csv \
+                             $(WEB_BTSIG_DIR)/service_uuids.csv \
+                             $(WEB_BTSIG_DIR)/appearance_values.csv)
+WEB_BTSIGGEN    = $(WEB_GEN_DIR)/btsig_gen
+# The IGS satellite metadata (2026-11-05, web/data/gnss/SOURCE.md):
+# web/tools/gnssmeta_gen.c compiles the committed SINEX file into
+# build/web/web_gnssmeta_table.c (never committed), the vehicle behind
+# each GNSS PRN (web/src/web_gnssmeta.h). WEB_GNSS_DIR elsewhere, or one
+# without the file, builds empty tables (the identifier alone).
+WEB_GNSS_DIR   ?= web/data/gnss
+WEB_GNSS_SNX    = $(wildcard $(WEB_GNSS_DIR)/igs_satellite_metadata.snx)
+WEB_GNSSGEN     = $(WEB_GEN_DIR)/gnssmeta_gen
+WEB_GNSSGEN_SRCS = web/tools/gnssmeta_gen.c
+WEB_GNSS_C      = $(WEB_GEN_DIR)/web_gnssmeta_table.c
+WEB_GNSS_STAMP  = $(WEB_GEN_DIR)/gnssmeta.inputs
+WEB_BTSIGGEN_SRCS = web/tools/btsig_gen.c
+WEB_BTSIG_C     = $(WEB_GEN_DIR)/web_btsig_table.c
+WEB_BTSIG_STAMP = $(WEB_GEN_DIR)/btsig.inputs
+WEB_BTSIG_ARGS  = $(if $(wildcard $(WEB_BTSIG_DIR)/company_identifiers.csv),--company $(WEB_BTSIG_DIR)/company_identifiers.csv,) \
+                  $(if $(wildcard $(WEB_BTSIG_DIR)/service_uuids.csv),--service $(WEB_BTSIG_DIR)/service_uuids.csv,) \
+                  $(if $(wildcard $(WEB_BTSIG_DIR)/appearance_values.csv),--appearance $(WEB_BTSIG_DIR)/appearance_values.csv,)
+# The vendor research table (owner request 2026-10-27): one Markdown
+# file per researched OUI holder under web/data/vendors/, read by
+# web/tools/vendorkb.c into build/web/web_vendorkb_table.c (never
+# committed) whenever one changes, or one is added or removed (the
+# stamp). A file with a dangling [n], a missing field or a name not its
+# file's slug fails the build naming the file; `make web-vendorkb`
+# runs just that check. The format: docs/wiki/vendor-research.md.
+WEB_VKB_DIR     = web/data/vendors
+WEB_VKB_MDS     = $(filter-out $(WEB_VKB_DIR)/COVERAGE.md,$(wildcard $(WEB_VKB_DIR)/*.md))
+WEB_VKBGEN      = $(WEB_GEN_DIR)/vendorkb
+WEB_VKBGEN_SRCS = web/tools/vendorkb.c
+WEB_VKB_C       = $(WEB_GEN_DIR)/web_vendorkb_table.c
+WEB_VKB_STAMP   = $(WEB_GEN_DIR)/vendorkb.inputs
+# The alert assessments (owner request 2026-10-27): each
+# docs/wiki/alert-assessments/<TYPE>.md, when the directory exists, read
+# by web/tools/alertasm.c into build/web/web_alertasm_table.c (never
+# committed). No directory, or an empty one, builds an empty table and
+# the page says "no assessment yet".
+WEB_ASM_DIR     = docs/wiki/alert-assessments
+WEB_ASM_MD      = $(wildcard $(WEB_ASM_DIR)/*.md)
+WEB_ASMGEN      = $(WEB_GEN_DIR)/alertasm
+WEB_ASMGEN_SRCS = web/tools/alertasm.c
+WEB_ASM_C       = $(WEB_GEN_DIR)/web_alertasm_table.c
+WEB_ASM_STAMP   = $(WEB_GEN_DIR)/alertasm.inputs
+# sloth's leaf parsers, linked into slothweb (see above).
+WEB_CORE_SRCS   = src/dot11_frame.c src/radiotap.c src/wifi_freq.c src/dns_wire.c \
+                  src/dot11_ie.c src/netstr.c src/rf_model.c
 WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C) \
-                  $(WEB_OUI_C) $(WEB_RECIPES_C)
-WEB_TEST_SRCS   = $(wildcard web/tests/*.c) web/tools/oui_csv.c src/db_schema.c \
+                  $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C) \
+                  $(WEB_GNSS_C)
+# slothweb has no version of its own: the bundle's envelope
+# (web/src/web_bundle.c) names the sloth tree it was built from as
+# build_version, read out of include/sloth.h here because web/ never
+# includes sloth.h (it links a few leaf sources from src/, not sloth's
+# state).
+WEB_VERSION_DEF = -DSLOTHWEB_BUILD_VERSION='"$(shell sed -n 's/^\#define SLOTH_VERSION "\(.*\)"/\1/p' include/sloth.h)"'
+WEB_TEST_SRCS   = $(wildcard web/tests/*.c) web/tools/oui_csv.c web/tools/demo.c src/db_schema.c \
                   src/rsn_ie.c src/ip_color.c src/tui_palette.c \
-                  src/tui.c src/netstr.c src/view_labels.c
+                  src/tui.c src/view_labels.c
 WEB_LDLIBS      = -lpthread -lm
 ifeq ($(WITH_SQLITE),1)
     WEB_SQL_DEFS = -DWITH_SQLITE
@@ -609,7 +1119,7 @@ ifeq ($(UNAME),Linux)
     WEB_LDFLAGS = -pie -Wl,-z,relro,-z,now
 endif
 
-$(WEB_EMBED): $(WEB_EMBED_SRCS) web/tools/sha256.h
+$(WEB_EMBED): $(WEB_EMBED_SRCS) web/tools/sha256.h $(WEB_GEN_DIR)/.flags
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) -Iweb/tools -o $@ $(WEB_EMBED_SRCS)
 
@@ -623,7 +1133,7 @@ WEB_PALGEN_SRCS = web/tools/palette.c src/tui_palette.c
 WEB_PAL_CSS     = $(WEB_GEN_DIR)/palette.css
 WEB_PAL_JS      = $(WEB_GEN_DIR)/palette.js
 
-$(WEB_PALGEN): $(WEB_PALGEN_SRCS) src/tui_palette.h src/tui.h src/ip_color.h
+$(WEB_PALGEN): $(WEB_PALGEN_SRCS) src/tui_palette.h src/tui.h src/ip_color.h $(WEB_GEN_DIR)/.flags
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) -Iinclude -Isrc -o $@ $(WEB_PALGEN_SRCS) -lm
 
@@ -644,7 +1154,7 @@ $(WEB_ASSETS_C): $(WEB_EMBED) $(WEB_UI) $(WEB_PAL_CSS) $(WEB_PAL_JS)
 	$(WEB_EMBED) web/ui index.html $@.tmp $(WEB_GEN_DIR)
 	mv $@.tmp $@
 
-$(WEB_OUIGEN): $(WEB_OUIGEN_SRCS) web/tools/oui_csv.h web/src/web_oui.h
+$(WEB_OUIGEN): $(WEB_OUIGEN_SRCS) web/tools/oui_csv.h web/src/web_oui.h $(WEB_GEN_DIR)/.flags
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) -Iweb/tools -Iweb/src -o $@ $(WEB_OUIGEN_SRCS)
 
@@ -656,7 +1166,33 @@ $(WEB_OUI_C): $(WEB_OUIGEN) $(WEB_OUI_STAMP) $(WEB_OUI_CSVS) src/oui.c
 	$(WEB_OUIGEN) $@.tmp src/oui.c $(WEB_OUI_CSVS)
 	mv $@.tmp $@
 
-$(WEB_RECIPESGEN): $(WEB_RECIPES_SRCS)
+$(WEB_BTSIGGEN): $(WEB_BTSIGGEN_SRCS) web/src/web_btsig.h $(WEB_GEN_DIR)/.flags
+	@mkdir -p $(WEB_GEN_DIR)
+	$(CC) $(CFLAGS) -Iweb/src -o $@ $(WEB_BTSIGGEN_SRCS)
+
+$(WEB_BTSIG_STAMP): STAMP = $(WEB_BTSIG_CSVS) $(if $(WEB_BTSIG_CSVS),$(shell cksum $(WEB_BTSIG_CSVS)))
+$(WEB_BTSIG_STAMP): FORCE
+	@mkdir -p $(WEB_GEN_DIR)
+	@[ -f $@ ] && [ "$$(cat $@)" = "$(STAMP)" ] || printf '%s\n' '$(STAMP)' > $@
+
+$(WEB_BTSIG_C): $(WEB_BTSIGGEN) $(WEB_BTSIG_STAMP) $(WEB_BTSIG_CSVS)
+	$(WEB_BTSIGGEN) $@.tmp $(WEB_BTSIG_ARGS)
+	mv $@.tmp $@
+
+$(WEB_GNSSGEN): $(WEB_GNSSGEN_SRCS) $(WEB_GEN_DIR)/.flags
+	@mkdir -p $(WEB_GEN_DIR)
+	$(CC) $(CFLAGS) -o $@ $(WEB_GNSSGEN_SRCS)
+
+$(WEB_GNSS_STAMP): STAMP = $(WEB_GNSS_SNX) $(if $(WEB_GNSS_SNX),$(shell cksum $(WEB_GNSS_SNX)))
+$(WEB_GNSS_STAMP): FORCE
+	@mkdir -p $(WEB_GEN_DIR)
+	@[ -f $@ ] && [ "$$(cat $@)" = "$(STAMP)" ] || printf '%s\n' '$(STAMP)' > $@
+
+$(WEB_GNSS_C): $(WEB_GNSSGEN) $(WEB_GNSS_STAMP) $(WEB_GNSS_SNX) web/src/web_gnssmeta.h
+	$(WEB_GNSSGEN) $@.tmp $(WEB_GNSS_SNX)
+	mv $@.tmp $@
+
+$(WEB_RECIPESGEN): $(WEB_RECIPES_SRCS) $(WEB_GEN_DIR)/.flags
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) -o $@ $(WEB_RECIPES_SRCS)
 
@@ -664,10 +1200,63 @@ $(WEB_RECIPES_C): $(WEB_RECIPESGEN) $(WEB_RECIPES_MD) web/src/web_recipes.h
 	$(WEB_RECIPESGEN) $(WEB_RECIPES_MD) $@.tmp
 	mv $@.tmp $@
 
-.PHONY: web web-test
-web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C)
-	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -o slothweb $(WEB_MAIN) \
-	      $(WEB_SRCS) $(WEB_LDFLAGS) $(WEB_LDLIBS)
+$(WEB_AKBGEN): $(WEB_AKBGEN_SRCS) $(WEB_GEN_DIR)/.flags
+	@mkdir -p $(WEB_GEN_DIR)
+	$(CC) $(CFLAGS) -o $@ $(WEB_AKBGEN_SRCS)
+
+$(WEB_AKB_C): $(WEB_AKBGEN) $(WEB_AKB_INPUTS) $(WEB_AKB_CORPUS) web/src/web_alertkb.h
+	$(WEB_AKBGEN) $@.tmp include/sloth_alerts.def docs/views/alerts.md \
+	    docs/wiki/alerts.md docs/wiki/alert-remediation.md research
+	mv $@.tmp $@
+
+$(WEB_VKBGEN): $(WEB_VKBGEN_SRCS) web/src/web_vendorkb.h $(WEB_GEN_DIR)/.flags
+	@mkdir -p $(WEB_GEN_DIR)
+	$(CC) $(CFLAGS) -Iweb/src -o $@ $(WEB_VKBGEN_SRCS)
+
+$(WEB_VKB_STAMP): STAMP = $(WEB_VKB_MDS)
+$(WEB_VKB_STAMP): FORCE
+	$(write_stamp)
+
+$(WEB_VKB_C): $(WEB_VKBGEN) $(WEB_VKB_STAMP) $(WEB_VKB_MDS)
+	$(WEB_VKBGEN) $@.tmp $(WEB_VKB_DIR)
+	mv $@.tmp $@
+
+.PHONY: web-vendorkb
+web-vendorkb: $(WEB_VKB_C)
+
+.PHONY: web web-test update-oui update-btsig
+$(WEB_ASMGEN): $(WEB_ASMGEN_SRCS) $(WEB_GEN_DIR)/.flags
+	@mkdir -p $(WEB_GEN_DIR)
+	$(CC) $(CFLAGS) -o $@ $(WEB_ASMGEN_SRCS)
+
+# Regenerated when a document is added or removed, not only when one is
+# newer than the table (the stamp, as the vendor table's).
+$(WEB_ASM_STAMP): STAMP = $(WEB_ASM_MD)
+$(WEB_ASM_STAMP): FORCE
+	$(write_stamp)
+
+$(WEB_ASM_C): $(WEB_ASMGEN) $(WEB_ASM_STAMP) $(WEB_ASM_MD) include/sloth_alerts.def \
+              web/src/web_alertasm.h
+	$(WEB_ASMGEN) $@.tmp include/sloth_alerts.def $(WEB_ASM_DIR)
+	mv $@.tmp $@
+
+web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C) $(WEB_GNSS_C)
+	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) $(WEB_VERSION_DEF) -Iweb/src -iquote src -o slothweb $(WEB_MAIN) \
+	      $(WEB_SRCS) $(WEB_CORE_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDFLAGS) $(WEB_LDLIBS)
+
+# slothweb-mcp (owner request 2026-11-11): an MCP server for an agent on
+# the same machine, a thin client of slothweb's HTTP API on loopback
+# (web/mcp/mcp.h, docs/wiki/slothweb-mcp.md). A separate binary on
+# purpose, as sloth-research-mcp is: slothweb itself never grows a
+# JSON-RPC surface, and this links nothing of slothweb's, no SQLite and
+# no sloth source: libc alone. Built on demand; not in `all`, `web` or
+# the install. Its dispatcher, JSON and HTTP halves are also linked
+# into slothweb_test, which runs them against the real routes.
+WEB_MCP_LIB_SRCS = web/mcp/mcp.c web/mcp/mcp_json.c web/mcp/mcp_http.c
+WEB_MCP_SRCS     = web/mcp/main.c $(WEB_MCP_LIB_SRCS)
+.PHONY: web-mcp
+web-mcp:
+	$(CC) $(CFLAGS) $(WEB_VERSION_DEF) -Iweb/mcp -o slothweb-mcp $(WEB_MCP_SRCS) $(WEB_LDFLAGS)
 
 # The demo data (M6, #164): build/web/slothweb-demo writes a synthetic
 # sloth.db from sloth's own DDL and serves a generated JSONL stream on a
@@ -676,11 +1265,11 @@ web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C)
 # administered MACs and example names only; it never touches a network.
 # The db half needs WITH_SQLITE.
 WEB_DEMO        = $(WEB_GEN_DIR)/slothweb-demo
-WEB_DEMO_SRCS   = web/tools/demo.c
+WEB_DEMO_SRCS   = web/tools/demo.c web/tools/sha256.c
 WEB_DEMO_DB_SRCS = src/db_schema.c
 .PHONY: web-demo web-quickstart-check
 web-demo: $(WEB_DEMO)
-$(WEB_DEMO): $(WEB_DEMO_SRCS) $(WEB_DEMO_DB_SRCS)
+$(WEB_DEMO): $(WEB_DEMO_SRCS) $(WEB_DEMO_DB_SRCS) $(WEB_GEN_DIR)/.flags
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iinclude -o $@ $(WEB_DEMO_SRCS) \
 	      $(if $(filter 1,$(WITH_SQLITE)),$(WEB_DEMO_DB_SRCS) -lsqlite3,) -lm
@@ -696,11 +1285,29 @@ web-quickstart-check:
 # only; no host file, no running sloth, no name lookup, no network beyond
 # 127.0.0.1 and ::1. The test links the embedder's
 # SHA-256 to recompute the page's CSP hashes; slothweb does not.
-web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C)
-	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -Iweb/tests -Iweb/tools \
-	      -Iinclude -iquote research -o slothweb_test \
-	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDLIBS)
-	./slothweb_test
+web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C) $(WEB_ASMGEN) $(WEB_GNSS_C)
+	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) $(WEB_VERSION_DEF) -DSLOTHWEB_DEMO_LIB -Iweb/src -Iweb/tests -Iweb/tools -Iweb/mcp \
+	      -Iinclude -iquote web/tools -iquote src -iquote research -DWEB_OUI_EXPECT='"$(if $(WEB_OUI_CSVS),ieee,sloth)"' \
+	      -DWEB_OUI_DATA='"$(WEB_OUI_DIR)"' \
+	      -DWEB_BTSIG_EXPECT='"$(if $(WEB_BTSIG_CSVS),sig,none)"' \
+	      -DWEB_BTSIG_DATA='"$(WEB_BTSIG_DIR)"' -DWEB_VKBGEN_BIN='"$(WEB_VKBGEN)"' \
+	      -DWEB_GNSS_EXPECT='"$(if $(WEB_GNSS_SNX),igs,none)"' \
+	      -DWEB_ASMGEN='"$(WEB_ASMGEN)"' -o slothweb_test \
+	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_MCP_LIB_SRCS) $(WEB_CORE_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDLIBS)
+	@$(call TEST_IN_TMPDIR,./slothweb_test)
+
+# Refresh web/data/ from /usr/share/ieee-data, or from the IEEE when that
+# is absent, and rewrite web/data/SOURCE.md's hashes. By hand only: no
+# build, test or CI step depends on it, so no build touches the network.
+update-oui:
+	sh web/tools/update_oui.sh web/data
+
+# Refresh web/data/btsig/ from a GIVEN directory of the Bluetooth SIG's
+# assigned-numbers YAML (make update-btsig SRC=DIR) and rewrite its
+# SOURCE.md's hashes. By hand only, never a fetch: no build, test or CI
+# step depends on it.
+update-btsig:
+	sh web/tools/update_btsig.sh web/data/btsig $(SRC)
 
 # ── Test build ───────────────────────────────────────────────────────────────
 # Built the way the program ships (#116): WITH_NCURSES and WITH_PCAP, the
@@ -723,6 +1330,7 @@ TEST_CFLAGS = -O0 -g -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE $(TEST_FEATURES)
 ifeq ($(UNAME),Linux)
     TEST_CFLAGS += -DPLATFORM_LINUX
 endif
+TEST_CFLAGS += -DTEST_TMP_DIR_MAX=$(TEST_TMP_DIR_MAX)
 TEST_CFLAGS += $(EXTRA_CFLAGS)
 TEST_SHIP_DEFS = -DWITH_NCURSES -DWITH_PCAP
 ifeq ($(UNAME),Darwin)
@@ -747,7 +1355,9 @@ endif
 # TEST_CFLAGS is not CFLAGS. TEST_INCS is the include set every test-build
 # translation unit has always been compiled with.
 TEST_SRCS        = $(wildcard tests/*.c)
-TEST_ONLY_SRCS   = src/reset_all.c \
+TEST_ONLY_SRCS   = src/reset_all.c src/ble_scan/ble_scan_cmd.c \
+                   src/sdrsweep/sdrsweep_dsp.c src/rf/rf_args.c \
+                   src/va/va_victron.c src/va/va_conf.c src/va/va_aes.c \
                    $(filter-out %/main.c research/query.c src/libver.c,$(RESEARCH_SRCS) $(MCP_SRCS))
 TEST_CORE_SRCS   = $(CORE_SRCS_ALL) src/tui.c $(TEST_ONLY_SRCS)
 TEST_INCS        = -Iinclude -Isrc -Itests -Iresearch/ingest -Iresearch -Iresearch/mcp
@@ -768,9 +1378,34 @@ $(TEST_CORE_LIB): $(TEST_CORE_OBJS) $(TEST_OBJDIR)/.members
 
 TEST_BIN = sloth_test
 
+# Temporary files (docs/wiki/architecture.md, "Temporary files"): each
+# runner makes a private run directory under $TMPDIR, points TMPDIR at
+# it, removes it at exit (and on SIGINT/SIGTERM/SIGHUP) and fails the run
+# on anything a test left in it. This outer directory is for the exits
+# the binary never sees - a sanitizer abort, a SIGSEGV, a SIGKILL - and
+# its trap removes it when the recipe shell itself is interrupted with
+# the binary (Ctrl-C reaches the whole process group). A second Ctrl-C
+# may make make SIGKILL the recipe, and nothing survives that.
+#
+# The runner falls back to /tmp when $TMPDIR plus "/slothweb_test.XXXXXX"
+# (21) is over TEST_TMP_DIR_MAX, which would put its directory outside
+# this one. So the outer base is $TMPDIR only when it leaves room for
+# "/sloth_mk.XXXXXX" (16) as well, else /tmp: the runner's directory is
+# always inside the outer one. TEST_TMP_DIR_MAX reaches the runners as
+# -D, so the two checks cannot drift. SLOTH_TEST_KEEP_TMP=1 keeps both.
+TEST_TMP_DIR_MAX = 56
+TEST_IN_TMPDIR = base=$${TMPDIR:-/tmp}; \
+	[ $$(printf %s "$$base" | wc -c) -le $$(( $(TEST_TMP_DIR_MAX) - 37 )) ] || base=/tmp; \
+	d=$$(mktemp -d "$$base/sloth_mk.XXXXXX") || exit 1; \
+	if [ -n "$$SLOTH_TEST_KEEP_TMP" ] && [ "$$SLOTH_TEST_KEEP_TMP" != 0 ]; \
+	then trap 'echo "kept $$d (SLOTH_TEST_KEEP_TMP)"' EXIT; \
+	else trap 'rm -rf "$$d"' EXIT; fi; \
+	trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP; \
+	echo "TMPDIR=$$d $(1)"; TMPDIR=$$d $(1); rc=$$?; exit $$rc
+
 .PHONY: test test-capture-path
 test: $(TEST_BIN)
-	./$(TEST_BIN)
+	@$(call TEST_IN_TMPDIR,./$(TEST_BIN))
 
 # The capture-path suite used to be its own binary, sloth_test_pcap,
 # because sloth_test had no WITH_PCAP. It is part of `make test` now
@@ -807,7 +1442,7 @@ $(OBJDIR)/bench/%: tests/bench/%.c $(BENCH_OBJS) $(CORE_LIB) $(OBJDIR)/.flags
 
 .PHONY: bench
 bench: $(BENCH_BINS)
-	@for b in $(BENCH_BINS); do ./$$b $(BENCH_ITERS) || exit 1; done
+	@$(call TEST_IN_TMPDIR,sh -c 'for b in $(BENCH_BINS); do ./$$b $(BENCH_ITERS) || exit 1; done')
 
 # ── Headless replay integration (#119) ──────────────────────────────────────
 # The one gate that runs the shipped `sloth` binary: main()'s argv
@@ -824,6 +1459,14 @@ bench: $(BENCH_BINS)
 # it. `make replay-golden` rewrites the golden from the current tree;
 # run it only when the diff `make replay-check` shows is the intended
 # one, and say so in the commit.
+#
+# replay-check also runs sloth-rf (#213) beside sloth-wifi on the
+# command lines both refuse - the receiver's flags, --tune, --ticks,
+# --strict with a routable --data-socket - and fails unless both exit 2
+# with the same words; on the six decoder flags, which sloth-wifi
+# refuses with its one guidance line and sloth-rf takes (#216); and on
+# `sloth`, which must be a symlink that answers as sloth-wifi does
+# (tests/replay/rf_refusals.sh).
 #
 # --refresh-ms 100 only shortens the wait between ticks. The normalised
 # output was checked identical at 100 and 1000 ms before this was set.
@@ -842,7 +1485,7 @@ $(REPLAY_GEN): $(REPLAY_GEN_SRCS) src/pcap_format.h tests/frame_build.h
 	$(CC) $(TEST_CFLAGS) $(TEST_INCS) -o $@ $(filter %.c,$^)
 
 .PHONY: replay-run replay-check replay-golden
-replay-run: $(TARGET) $(REPLAY_GEN)
+replay-run: $(TARGET) $(TARGET_ALIAS) $(REPLAY_GEN)
 	rm -rf $(REPLAY_RUN)
 	mkdir -p $(REPLAY_RUN)
 	$(REPLAY_GEN) $(REPLAY_RUN)
@@ -852,7 +1495,7 @@ replay-run: $(TARGET) $(REPLAY_GEN)
 	    --ticks $(REPLAY_TICKS) --refresh-ms 100
 	sh tests/replay/normalise.sh < $(REPLAY_RUN)/out.jsonl > $(REPLAY_RUN)/norm.jsonl
 
-replay-check: replay-run
+replay-check: replay-run $(RF_TARGET)
 	diff -u $(REPLAY_GOLDEN) $(REPLAY_RUN)/norm.jsonl
 	@./$(TARGET) --headless --replay /nonexistent.pcap --allow-active >/dev/null 2>&1; \
 	  rc=$$?; if [ $$rc -ne 2 ]; then \
@@ -866,9 +1509,19 @@ replay-check: replay-run
 	@./$(TARGET) --headless --replay /nonexistent.pcap --bt-capture /nonexistent >/dev/null 2>&1; \
 	  rc=$$?; if [ $$rc -ne 2 ]; then \
 	    echo "replay-check: --replay --bt-capture exited $$rc, want 2 (refused)" >&2; exit 1; fi
+	@./$(TARGET) --headless --replay /nonexistent.pcap --gps gpsd:// >/dev/null 2>&1; \
+	  rc=$$?; if [ $$rc -ne 2 ]; then \
+	    echo "replay-check: --replay --gps exited $$rc, want 2 (refused)" >&2; exit 1; fi
+	@./$(TARGET) --headless --ticks 1 --no-privdrop --gps gpsd://192.0.2.1 >/dev/null 2>&1; \
+	  rc=$$?; if [ $$rc -ne 2 ]; then \
+	    echo "replay-check: --gps to a remote gpsd exited $$rc, want 2 (refused)" >&2; exit 1; fi
+	@./$(TARGET) --headless --ticks 1 --no-privdrop --location 91,0 >/dev/null 2>&1; \
+	  rc=$$?; if [ $$rc -ne 2 ]; then \
+	    echo "replay-check: --location 91,0 exited $$rc, want 2 (refused)" >&2; exit 1; fi
 	@./$(TARGET) --headless --ticks 1 --no-privdrop --bt-capture $(REPLAY_RUN) >/dev/null 2>&1; \
 	  rc=$$?; if [ $$rc -ne 2 ]; then \
 	    echo "replay-check: --bt-capture DIR exited $$rc, want 2 (not a file or FIFO)" >&2; exit 1; fi
+	@sh tests/replay/rf_refusals.sh ./$(TARGET) ./$(RF_TARGET) ./$(TARGET_ALIAS)
 	@echo "replay-check: $$(wc -l < $(REPLAY_GOLDEN)) records match $(REPLAY_GOLDEN)"
 
 replay-golden: replay-run
@@ -1155,9 +1808,64 @@ cppcheck:
 	  --enable=warning,portability,performance,information \
 	  --error-exitcode=1 \
 	  --suppressions-list=tests/cppcheck.supp \
-	  $(CPPCHECK_DEFS) -Iinclude -Isrc -Iresearch -Iweb/src -Iweb/tests -Iweb/tools \
+	  $(CPPCHECK_DEFS) -Iinclude -Isrc -Iresearch -Iweb/src -Iweb/tests -Iweb/tools -Iweb/mcp \
 	  -i src/platform/bsd.c -i src/platform/win32.c -i src/platform/stub.c \
 	  src research web
+
+# ── Contract artifact (#185 item 4; #184 §2 C1-C5, C9) ─────────────────────
+# `make contract` builds dist/sloth-contract-<SLOTH_VERSION>.tar, what a
+# repository split off this one (sloth-mesh, sloth-comint) builds and
+# tests against instead of reaching into this tree: libsloth-wire.a
+# (exactly WEB_CORE_SRCS) with its headers and sloth-wire.pc, schema.sql
+# as `sloth-wifi --print-schema` prints it, jsonl-schema.md,
+# palette.json, the alert knowledge bundle, and the golden fixtures.
+# Reproducible: two builds of one commit with one toolchain are the same
+# bytes, and `make contract-check` builds twice and compares. Contents,
+# decisions and the release step: docs/wiki/contract.md. dist/ is not
+# committed; the release workflow attaches the tar to a v* tag.
+CONTRACT_VERSION   = $(shell sed -n 's/^\#define SLOTH_VERSION "\(.*\)"/\1/p' include/sloth.h)
+CONTRACT_TAR       = dist/sloth-contract-$(CONTRACT_VERSION).tar
+# The headers a consumer of WEB_CORE_SRCS needs: each public header and
+# the leaf headers they include, plus sensor_health.h for the one hook
+# the archive calls and does not define (sh_parse_fault_note()).
+# src/bytes.h is included by the .c files only and is not shipped.
+# sensor_health.h declares functions the archive does not define;
+# contract-check pins that list (tests/contract/declared-not-defined.txt,
+# docs/wiki/contract.md Gaps). dot11_frame.h takes dot11_data_status_t
+# from dot11_data_status.h, so dot11_data.h does not ship (#185).
+CONTRACT_WIRE_HDRS = src/dot11_frame.h src/dot11_data_status.h src/radiotap.h src/wifi_freq.h \
+                     src/dns_wire.h src/dot11_ie.h src/netstr.h src/rf_model.h \
+                     src/sensor_health.h
+# Fixed flags, not CFLAGS: a sanitizer or a hardening flag of this
+# tree's build would become a link requirement of every consumer.
+# -fPIC so the archive can go into a shared object; no -g, and the tree's
+# path mapped away, so the objects do not depend on where it was built.
+# EXTRA_CFLAGS contributes its warning flags (-Werror) only.
+CONTRACT_CFLAGS    = -O2 -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra -fPIC \
+                     -ffile-prefix-map=$(CURDIR)/= $(filter -W%,$(EXTRA_CFLAGS))
+CONTRACT_DB        = build/contract-tools/contract-db
+CONTRACT_DB_SRCS   = tools/contract_db.c
+
+$(CONTRACT_DB): $(CONTRACT_DB_SRCS)
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -o $@ $(CONTRACT_DB_SRCS) -lsqlite3
+
+.PHONY: contract contract-check
+contract: $(TARGET) $(WEB_PALGEN) $(CONTRACT_DB)
+	@[ "$(WITH_SQLITE)" = 1 ] || { echo "contract: needs WITH_SQLITE=1 (the golden sloth.db)" >&2; exit 1; }
+	CC='$(CC)' AR='$(AR)' CONTRACT_CFLAGS='$(CONTRACT_CFLAGS)' sh tools/contract.sh \
+	    '$(CONTRACT_VERSION)' ./$(TARGET) $(WEB_PALGEN) $(CONTRACT_DB) \
+	    '$(WEB_CORE_SRCS)' '$(CONTRACT_WIRE_HDRS)'
+
+# Unpack, verify, compile a consumer against the unpacked archive alone,
+# check the schema and the golden db, then build again and compare
+# (tests/contract/check.sh). The consumer is a test program and is
+# compiled with this tree's CFLAGS (and -Werror); the archive it links
+# was not. Needs pkg-config; no network, temporary files under
+# mktemp -d only.
+contract-check: contract $(RF_TARGET)
+	MAKE='$(MAKE)' CC='$(CC)' CFLAGS='$(CFLAGS)' sh tests/contract/check.sh $(CONTRACT_TAR) \
+	    ./$(TARGET) ./$(RF_TARGET) $(CONTRACT_DB)
 
 # ── Mutation testing ────────────────────────────────────────────────────────
 # Verifies the test suite itself: introduces small faults into src/ files,
@@ -1174,9 +1882,10 @@ mutate:
 # second rm sweeps objects the pre-#115 layout compiled beside their
 # sources, so a tree upgraded across that change does not keep them.
 clean:
-	rm -rf build
-	rm -f $(TARGET) $(TEST_BIN) $(NOFLAGS_BIN) research_ingest sloth-research-mcp
-	rm -f slothweb slothweb_test
+	rm -rf build dist
+	rm -f $(TARGET) $(TARGET_ALIAS) $(TEST_BIN) $(NOFLAGS_BIN) research_ingest sloth-research-mcp
+	rm -f slothweb slothweb_test slothweb-mcp sloth-ble-scan sloth-sdrsweep sloth-va
+	rm -f sloth-rf
 	rm -f sloth_test_pcap   # the pre-#116 capture-path binary
 	rm -f $(patsubst %.c,%.o,$(CORE_SRCS_ALL) $(APP_SRCS) $(TEST_ONLY_SRCS) $(wildcard tests/*.c))
 
@@ -1189,7 +1898,7 @@ clean:
 	@rm -f $@
 	$(AR) rcs $@ $(filter %.o,$^)
 
-STAMPS = $(LINK_STAMP) \
+STAMPS = $(LINK_STAMP) $(RF_LINK_STAMP) \
          $(foreach d,$(OBJDIR) $(TEST_OBJDIR) $(NOFLAGS_OBJDIR) $(FUZZ_OBJDIR) $(FUZZ_PCAP_OBJDIR),$(d)/.flags $(d)/.members)
 
 .PHONY: FORCE
@@ -1198,50 +1907,247 @@ $(STAMPS): FORCE
 
 # Header dependencies written by -MMD. Absent until the first compile,
 # which has to rebuild everything anyway.
--include $(wildcard $(patsubst %.o,%.d,$(APP_OBJS) $(CORE_OBJS) $(TEST_OBJS) $(TEST_CORE_OBJS) \
+-include $(wildcard $(patsubst %.o,%.d,$(APP_OBJS) $(RF_APP_OBJS) $(CORE_OBJS) $(TEST_OBJS) $(TEST_CORE_OBJS) \
                     $(NOFLAGS_OBJS) $(NOFLAGS_CORE_OBJS) $(FUZZ_CORE_OBJS) \
                     $(FUZZ_PCAP_CORE_OBJS)))
 
 # ── Install (#139) ───────────────────────────────────────────────────────────
-# `install` places what the binary and the shipped unit reference, all
+# `install` places what the binary and the shipped units reference, all
 # root-owned under $(PREFIX): the binary, the monitor-mode helper the unit
 # runs as ExecStartPre (sloth never sets monitor mode itself — MISSION §2),
-# and the research corpus for --with-research (0644: read-only data, opened
-# SQLITE_OPEN_READONLY, so ownership does not matter to secure_file.c).
+# the research corpus for --with-research (0644: read-only data, opened
+# SQLITE_OPEN_READONLY, so ownership does not matter to secure_file.c), and
+# slothweb, which slothweb.service runs (#153), with the per-type alert
+# assessments (docs/wiki/alert-assessments/<TYPE>.md, 0644 data) in
+# share/sloth/alert-assessments, the --web-assessments the unit passes
+# for "follow recommended". slothweb is not rebuilt
+# here: `web` is phony and would relink it as root inside the checkout,
+# so `make web` comes first, as the build user, and install refuses
+# without it, or when any of its inputs is newer than it: a pull
+# followed by `make` and `sudo make install` would otherwise install the
+# old slothweb beside the new unit and UI. sloth-ble-scan, the
+# passive-scan helper sloth-ble-scan.service runs, goes to sbin beside
+# sloth-monitor-up: both are operator tools that prepare a receiver, and
+# neither is ever started by sloth.
 # DESTDIR is honoured throughout so CI can stage into a scratch root and
 # `systemd-analyze verify` the result without touching the runner.
 #
 # `install-service` is separate because it writes outside $(PREFIX): the
 # unit, the sysusers fragment and the site defaults. The sloth account is
 # created by `systemd-sysusers`, never by make — a Makefile has no business
-# running useradd. The defaults file goes in with `install -b` so an edited
-# /etc/default/sloth survives as /etc/default/sloth~ rather than being
-# silently replaced. The unit is written for PREFIX=/usr/local; a different
-# prefix is substituted at install time so the text in packaging/ stays the
-# one tests/test_unit_file.c scans.
+# running useradd. The units and the sysusers fragment are the shipped
+# artefact and are replaced on every install: a site's changes to a unit
+# belong in a drop-in (`systemctl edit`), which make never touches. The
+# defaults files are the site's, not the artefact's, so each goes in only
+# where there is none (no-clobber): /etc/default/sloth holds SLOTH_ARGS,
+# /etc/default/slothweb the bind and allowed peers. `install -b` used to
+# put the shipped /etc/default/sloth over an edited one, keeping the edit
+# only as sloth~ — the next restart ran the sensor with the stock
+# arguments, which is a silent loss of the site's flags, not a backup.
+# A new default in packaging/default/ is the operator's to merge by hand.
+# sloth-ble-scan.service is installed like the other two units and is
+# never enabled here: it takes the controller away from bluetoothd, which
+# is the operator's decision (docs/wiki/deployment.md §7). It
+# has no defaults file; its one setting is a drop-in. The sensor's
+# AF_BLUETOOTH drop-in for --bt-monitor goes to share/sloth, inert: only
+# the operator, or sloth-migrate-sensor for a unit with the flag, puts
+# it in sloth-sensor.service.d/, because the family lets a compromised
+# sensor make hciN transmit.
+# sloth-rf (#215, ADR 0010) is installed when the tree has built one
+# (`[ ! -x sloth-rf ] ||`: the binary is #213's, and a tree without it
+# still installs), with sloth-migrate-rf beside the other operator tools
+# in sbin. sloth-rf.service is never enabled here, and goes in only
+# where `make install` has placed the binary it runs
+# (`[ ! -x $(DESTDIR)$(PREFIX)/bin/sloth-rf ] ||`): slothweb.service
+# Wants= it, and Wants= starts any unit that is installed, enabled or
+# not, so a unit with no binary behind it would fail 203/EXEC at every
+# start of slothweb and leave the host degraded. Its defaults file is
+# no-clobber like the others, and its AF_INET / serial drop-in goes to
+# share/sloth inert as the sensor's gps.conf does.
+# A unit and the binary it runs are one artefact in two files, put in
+# place by two targets, and slothweb exits on an option it does not
+# know. So neither target leaves the pair disagreeing: `install` refuses
+# a ./slothweb that lacks a flag slothweb.service passes (a tree whose
+# unit is ahead of its source; --rf-socket and --rf-db are #214's), and
+# `install-service` refuses, before it writes anything, when the
+# slothweb already installed lacks one (the unit replaced without `make
+# web && sudo make install`). $(WEB_UNIT_FLAGS) is every --flag on the
+# unit's ExecStart; the test is that the flag's text is in the binary.
+# The units are written for PREFIX=/usr/local; a different prefix is
+# substituted at install time so the text in packaging/ stays the one
+# tests/test_unit_file.c scans.
+# The sensor's unit and its binary are held the same way since the
+# cutover (#216 review): the unit names bin/sloth-wifi, a pre-cutover
+# host has only bin/sloth, and `install-service` run alone (or after a
+# `make install` that failed) would replace a unit that starts with one
+# that does not. It refuses, before it writes anything, when bin/sloth
+# is there and bin/sloth-wifi is not; with neither there is nothing
+# installed to disagree with (a staged tree, a first install).
+# Upgrade safety (#216). sloth-wifi refuses the six decoder flags, so a
+# host whose /etc/default/sloth still carries one has a sensor that will
+# not start after this build is installed. install-service never
+# rewrites that file (see above), so it says so instead, twice: before
+# the summary and as the last thing printed, where a scrolled terminal
+# still shows it. Only uncommented lines count; the shipped file names
+# the flags in its comments. Never fatal: the units are installed either
+# way, and the fix is the operator's one command.
+RF_MOVED_FLAGS_RE = --(adsb|aprs|aprs-freq|aprs-silent-hours|rtl433|victron)([[:space:]=]|$$)
+define warn_rf_flags_in_default
+f=$(DESTDIR)$(DEFAULTDIR)/sloth; \
+	 [ ! -f "$$f" ] || ! grep -v '^[[:space:]]*[#]' "$$f" | grep -Eq -e '$(RF_MOVED_FLAGS_RE)' || { \
+	   echo ""; \
+	   echo "  ************************************************************************"; \
+	   echo "  WARNING: $$f still passes an SDR decoder flag:"; \
+	   grep -v '^[[:space:]]*[#]' "$$f" | grep -Eo -e '$(RF_MOVED_FLAGS_RE)' | sed -e 's/[[:space:]=]$$//' | sort -u | sed 's/^/      /'; \
+	   echo "  sloth-wifi REFUSES these (exit 2): sloth-sensor.service WILL NOT START"; \
+	   echo "  with this file. They are sloth-rf's now. Before restarting the sensor:"; \
+	   echo "      sloth-migrate-rf            (dry run: shows what it would move)"; \
+	   echo "      sloth-migrate-rf --apply    (moves them to $(DEFAULTDIR)/sloth-rf)"; \
+	   echo "  then the commands it prints. docs/wiki/deployment.md section 11.4"; \
+	   echo "  ************************************************************************"; \
+	   echo ""; }
+endef
+
+# The same upgrade, the quiet half (#216 review). --gps is not one of
+# the six: sloth-wifi takes it (the position stamp and the receiver's
+# health are its own), so the sensor starts and the warning above has
+# nothing to say. But the four GNSS_* rules, the gnss_fix / gnss_sky /
+# gnss_sat records and the gnss_fixes / gnss_sightings tables are
+# sloth-rf's alone, so a host whose sensor has --gps and whose sloth-rf
+# has none stops raising and recording them, and nothing fails. Said
+# once, before the summary, as a note: uncommented lines only, and
+# --gps-baud is not --gps. Never fatal, and no file is edited.
+GPS_FLAG_RE = --gps([[:space:]=]|$$)
+define note_gps_without_rf
+f=$(DESTDIR)$(DEFAULTDIR)/sloth; r=$(DESTDIR)$(DEFAULTDIR)/sloth-rf; \
+	 [ ! -f "$$f" ] || ! grep -v '^[[:space:]]*[#]' "$$f" | grep -Eq -e '$(GPS_FLAG_RE)' || \
+	 { [ -f "$$r" ] && grep -v '^[[:space:]]*[#]' "$$r" | grep -Eq -e '$(GPS_FLAG_RE)'; } || { \
+	   echo ""; \
+	   echo "  NOTE: $$f passes --gps and $$r does not."; \
+	   echo "  sloth-wifi keeps the receiver for the position stamp and its health, and starts."; \
+	   echo "  It no longer raises GNSS_JAMMING, GNSS_SPOOF_SUSPECT, GNSS_TIME_JUMP or"; \
+	   echo "  GNSS_POSITION_JUMP and no longer writes gnss_fix / gnss_sky / gnss_sat or the"; \
+	   echo "  gnss_* tables: those are sloth-rf's now, and only with a --gps of its own."; \
+	   echo "  To keep them (the receiver must be on gpsd; a serial device opens once):"; \
+	   echo "      sloth-migrate-rf            (dry run: shows --gps and --location copied)"; \
+	   echo "      sloth-migrate-rf --apply    (copies them to $(DEFAULTDIR)/sloth-rf)"; \
+	   echo "  then the commands it prints. docs/wiki/deployment.md section 11.4"; \
+	   echo ""; }
+endef
+
 DESTDIR     ?=
 UNITDIR     ?= /etc/systemd/system
 SYSUSERSDIR ?= /usr/lib/sysusers.d
 DEFAULTDIR  ?= /etc/default
+WEB_UNIT_FLAGS = sed -n '/^ExecStart=/,/[^\\]$$/p' packaging/systemd/slothweb.service | grep -o -e '--[a-z][a-z0-9-]*'
 
-install: $(TARGET)
+# The Wi-Fi daemon is installed as sloth-wifi, and `sloth` beside it is
+# a relative symlink to it (#216; it stays, owner ruling 2026-11-15):
+# `ln -sfn` so a pre-cutover /usr/local/bin/sloth, a regular file and
+# the old binary, is replaced by the link and not left running under
+# the old name. Anything that executes or names /usr/local/bin/sloth
+# keeps working; sloth-sensor.service names sloth-wifi.
+install: $(TARGET) $(BLE_SCAN_BIN) $(SDRSWEEP_BIN) $(VA_BIN)
+	@[ -x slothweb ] || { echo "install: no ./slothweb; run 'make web' first (as yourself, not under sudo)" >&2; exit 1; }
+	@new=$$(find web/src web/ui web/tools web/data $(WEB_RECIPES_MD) Makefile -type f -newer slothweb 2>/dev/null | head -n 1); \
+	  [ -z "$$new" ] || { echo "install: ./slothweb is older than $$new; run 'make web' first (as yourself, not under sudo)" >&2; exit 1; }
+	@for f in $$($(WEB_UNIT_FLAGS)); do grep -aqF -e "$$f" slothweb || { \
+	    echo "install: ./slothweb does not know $$f, which packaging/systemd/slothweb.service passes; slothweb.service would not start. Nothing was installed (this tree's unit is ahead of its slothweb)" >&2; exit 1; }; done
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/sbin $(DESTDIR)$(PREFIX)/share/sloth
 	install -m 755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET)
+	ln -sfn $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET_ALIAS)
+	install -m 755 slothweb $(DESTDIR)$(PREFIX)/bin/slothweb
 	install -m 755 packaging/bin/sloth-monitor-up $(DESTDIR)$(PREFIX)/sbin/sloth-monitor-up
+	[ ! -x sloth-rf ] || install -m 755 sloth-rf $(DESTDIR)$(PREFIX)/bin/sloth-rf
+	install -m 755 packaging/bin/sloth-migrate-rf $(DESTDIR)$(PREFIX)/sbin/sloth-migrate-rf
+	[ -z "$(BLE_SCAN_BIN)" ] || install -m 755 sloth-ble-scan $(DESTDIR)$(PREFIX)/sbin/sloth-ble-scan
+	[ -z "$(SDRSWEEP_BIN)" ] || install -m 755 sloth-sdrsweep $(DESTDIR)$(PREFIX)/sbin/sloth-sdrsweep
+	[ -z "$(VA_BIN)" ] || install -m 755 sloth-va $(DESTDIR)$(PREFIX)/sbin/sloth-va
 	install -m 644 research.db $(DESTDIR)$(PREFIX)/share/sloth/research.db
+	install -d $(DESTDIR)$(PREFIX)/share/sloth/alert-assessments
+	install -m 644 $(filter-out %/README.md,$(wildcard docs/wiki/alert-assessments/*.md)) $(DESTDIR)$(PREFIX)/share/sloth/alert-assessments/
 
 .PHONY: install-service
 install-service:
+	@b=$(DESTDIR)$(PREFIX)/bin/slothweb; [ ! -e "$$b" ] || for f in $$($(WEB_UNIT_FLAGS)); do grep -aqF -e "$$f" "$$b" || { \
+	    echo "install-service: $$b does not know $$f, which the new slothweb.service passes; the web UI would not start. Nothing was installed: run 'make web' and 'sudo make install' from this tree first" >&2; exit 1; }; done
+	@d=$(DESTDIR)$(PREFIX)/bin; [ ! -e "$$d/$(TARGET_ALIAS)" ] && [ ! -L "$$d/$(TARGET_ALIAS)" ] || [ -x "$$d/$(TARGET)" ] || { \
+	    echo "install-service: $$d/$(TARGET_ALIAS) is installed and $$d/$(TARGET) is not: this is a pre-cutover install (#216), and the new sloth-sensor.service runs $$d/$(TARGET); the sensor would fail to start (203/EXEC) at its next restart. Nothing was installed: run 'sudo make install' from this tree first" >&2; exit 1; }
 	install -d $(DESTDIR)$(UNITDIR) $(DESTDIR)$(SYSUSERSDIR) $(DESTDIR)$(DEFAULTDIR)
 	sed -e 's|/usr/local/|$(PREFIX)/|g' packaging/systemd/sloth-sensor.service \
 	    > $(DESTDIR)$(UNITDIR)/sloth-sensor.service.tmp
 	install -m 644 $(DESTDIR)$(UNITDIR)/sloth-sensor.service.tmp $(DESTDIR)$(UNITDIR)/sloth-sensor.service
 	rm -f $(DESTDIR)$(UNITDIR)/sloth-sensor.service.tmp
 	install -m 644 packaging/systemd/sloth.sysusers.conf $(DESTDIR)$(SYSUSERSDIR)/sloth.conf
-	install -b -m 644 packaging/default/sloth $(DESTDIR)$(DEFAULTDIR)/sloth
-	@echo "installed unit, sysusers fragment and defaults; next:"
+	[ -e $(DESTDIR)$(DEFAULTDIR)/sloth ] || \
+	    install -m 644 packaging/default/sloth $(DESTDIR)$(DEFAULTDIR)/sloth
+	sed -e 's|/usr/local/|$(PREFIX)/|g' packaging/systemd/slothweb.service \
+	    > $(DESTDIR)$(UNITDIR)/slothweb.service.tmp
+	install -m 644 $(DESTDIR)$(UNITDIR)/slothweb.service.tmp $(DESTDIR)$(UNITDIR)/slothweb.service
+	rm -f $(DESTDIR)$(UNITDIR)/slothweb.service.tmp
+	sed -e 's|/usr/local/|$(PREFIX)/|g' packaging/systemd/sloth-ble-scan.service \
+	    > $(DESTDIR)$(UNITDIR)/sloth-ble-scan.service.tmp
+	install -m 644 $(DESTDIR)$(UNITDIR)/sloth-ble-scan.service.tmp $(DESTDIR)$(UNITDIR)/sloth-ble-scan.service
+	rm -f $(DESTDIR)$(UNITDIR)/sloth-ble-scan.service.tmp
+	sed -e 's|/usr/local/|$(PREFIX)/|g' packaging/systemd/sloth-sdrsweep.service \
+	    > $(DESTDIR)$(UNITDIR)/sloth-sdrsweep.service.tmp
+	install -m 644 $(DESTDIR)$(UNITDIR)/sloth-sdrsweep.service.tmp $(DESTDIR)$(UNITDIR)/sloth-sdrsweep.service
+	rm -f $(DESTDIR)$(UNITDIR)/sloth-sdrsweep.service.tmp
+	install -m 644 packaging/systemd/sloth-sdrsweep.path $(DESTDIR)$(UNITDIR)/sloth-sdrsweep.path
+	install -m 644 packaging/systemd/sloth-sdrsweep-auto.timer $(DESTDIR)$(UNITDIR)/sloth-sdrsweep-auto.timer
+	install -m 644 packaging/systemd/sloth-sdrsweep.sysusers.conf $(DESTDIR)$(SYSUSERSDIR)/sloth-sdrsweep.conf
+	[ -e $(DESTDIR)$(DEFAULTDIR)/sloth-sdrsweep ] || \
+	    install -m 644 packaging/default/sloth-sdrsweep $(DESTDIR)$(DEFAULTDIR)/sloth-sdrsweep
+	sed -e 's|/usr/local/|$(PREFIX)/|g' packaging/systemd/sloth-va.service \
+	    > $(DESTDIR)$(UNITDIR)/sloth-va.service.tmp
+	install -m 644 $(DESTDIR)$(UNITDIR)/sloth-va.service.tmp $(DESTDIR)$(UNITDIR)/sloth-va.service
+	rm -f $(DESTDIR)$(UNITDIR)/sloth-va.service.tmp
+	install -m 644 packaging/systemd/sloth-va.sysusers.conf $(DESTDIR)$(SYSUSERSDIR)/sloth-va.conf
+	[ -e $(DESTDIR)$(DEFAULTDIR)/sloth-va ] || \
+	    install -m 644 packaging/default/sloth-va $(DESTDIR)$(DEFAULTDIR)/sloth-va
+	install -D -m 644 packaging/systemd/sloth-sensor.service.d/bt-monitor.conf \
+	    $(DESTDIR)$(PREFIX)/share/sloth/sloth-sensor-bt-monitor.conf
+	install -D -m 644 packaging/systemd/sloth-sensor.service.d/gps.conf \
+	    $(DESTDIR)$(PREFIX)/share/sloth/sloth-sensor-gps.conf
+	[ -e $(DESTDIR)$(DEFAULTDIR)/slothweb ] || \
+	    install -m 644 packaging/default/slothweb $(DESTDIR)$(DEFAULTDIR)/slothweb
+	[ ! -x $(DESTDIR)$(PREFIX)/bin/sloth-rf ] || { \
+	    sed -e 's|/usr/local/|$(PREFIX)/|g' packaging/systemd/sloth-rf.service \
+	        > $(DESTDIR)$(UNITDIR)/sloth-rf.service.tmp && \
+	    install -m 644 $(DESTDIR)$(UNITDIR)/sloth-rf.service.tmp $(DESTDIR)$(UNITDIR)/sloth-rf.service && \
+	    rm -f $(DESTDIR)$(UNITDIR)/sloth-rf.service.tmp; }
+	[ -e $(DESTDIR)$(DEFAULTDIR)/sloth-rf ] || \
+	    install -m 644 packaging/default/sloth-rf $(DESTDIR)$(DEFAULTDIR)/sloth-rf
+	install -D -m 644 packaging/systemd/sloth-rf.service.d/gps.conf \
+	    $(DESTDIR)$(PREFIX)/share/sloth/sloth-rf-gps.conf
+	@$(warn_rf_flags_in_default)
+	@$(note_gps_without_rf)
+	@echo "installed units and sysusers fragment; /etc/default/sloth{,web} only where absent; next:"
 	@echo "  systemd-sysusers && systemctl daemon-reload && systemctl enable --now sloth-sensor"
+	@echo "  systemctl enable --now slothweb   (reads /etc/default/slothweb; loopback by default)"
+	@echo "  sloth-ble-scan.service is installed, not enabled; --bt-monitor's AF_BLUETOOTH drop-in"
+	@echo "  is at $(PREFIX)/share/sloth/sloth-sensor-bt-monitor.conf, not active: docs/wiki/deployment.md §7"
+	@echo "  --gps's device/AF_INET drop-in is at $(PREFIX)/share/sloth/sloth-sensor-gps.conf, inert"
+	@echo "  until edited and copied: docs/wiki/deployment.md §7.2"
+	@echo "  sloth-sdrsweep.{service,path} are installed, not enabled; the Spectrum tab's button"
+	@echo "  needs systemd-sysusers and 'systemctl enable --now sloth-sdrsweep.path':"
+	@echo "  docs/wiki/deployment.md, SDR sweep (a shared receiver needs a drop-in there)"
+	@echo "  sloth-sdrsweep-auto.timer (a sweep every 5 min, for the Spectrum ranges) is installed,"
+	@echo "  not enabled: 'systemctl enable --now sloth-sdrsweep-auto.timer'"
+	@echo "  sloth-va.service (Victron reader; TRANSMITS) is installed, not enabled; it needs"
+	@echo "  bluetoothd and its own controller: docs/wiki/deployment.md, Victron (sloth-va),"
+	@echo "  then 'systemd-sysusers && systemctl enable --now sloth-va'"
+	@[ -x $(DESTDIR)$(PREFIX)/bin/sloth-rf ] || \
+	    echo "  sloth-rf.service was NOT installed: no $(DESTDIR)$(PREFIX)/bin/sloth-rf ('sudo make install' first)"
+	@echo "  sloth-rf.service, where installed, is not enabled, but slothweb.service Wants= it: starting"
+	@echo "  slothweb starts sloth-rf ('systemctl mask sloth-rf' keeps it off). slothweb now reads sloth-rf's"
+	@echo "  socket and database for the ADS-B, APRS, rtl_433, Victron and GNSS pages. sloth-sensor.service"
+	@echo "  runs $(PREFIX)/bin/sloth-wifi, which REFUSES --adsb, --aprs, --aprs-freq, --aprs-silent-hours,"
+	@echo "  --rtl433 and --victron (exit 2): they are sloth-rf's. A host whose /etc/default/sloth has one"
+	@echo "  moves it before restarting the sensor: sloth-migrate-rf (dry run), then sloth-migrate-rf --apply"
+	@echo "  and the commands it prints: docs/wiki/deployment.md §11.4"
 	@echo "  (migration from a build-tree unit: docs/wiki/deployment.md)"
+	@$(warn_rf_flags_in_default)
 
 # ── Deploy tooling test (#153) ───────────────────────────────────────────────
 # packaging/bin/sloth-migrate-sensor against a scratch root with stub
@@ -1249,7 +2155,21 @@ install-service:
 # real service, reads nothing under /etc. Not a `make test` dependency
 # because it is shell, not the C suite; shellcheck runs when installed.
 DEPLOY_SCRIPTS = packaging/bin/sloth-migrate-sensor packaging/bin/sloth-monitor-up \
-                 tests/deploy/test_migrate_sensor.sh
+                 tests/deploy/test_migrate_sensor.sh \
+                 packaging/bin/sloth-migrate-rf tests/deploy/test_migrate_rf.sh \
+                 .github/scripts/wiki_sync.sh tests/deploy/test_wiki_sync.sh \
+                 tests/deploy/test_slothweb_unit.sh tools/gate.sh \
+                 tools/lab/lab_capture.sh tools/lab/expect.sh \
+                 tests/deploy/test_lab_tools.sh \
+                 tools/contract.sh tests/contract/check.sh
+
+# The whole build surface in one measured run (agents/AGENTS.md
+# "Discipline"); one run per tree, refuses a full TMPDIR, prints the
+# toolchain, cleans before each sanitized step. GATE_SQLITE345 and
+# GATE_SHELLCHECKS add the 3.45 and other-shellcheck steps.
+.PHONY: gate
+gate:
+	sh tools/gate.sh .
 
 .PHONY: deploy-test
 deploy-test:
@@ -1259,3 +2179,7 @@ deploy-test:
 	  echo "deploy-test: shellcheck not installed, skipping lint"; \
 	fi
 	sh tests/deploy/test_migrate_sensor.sh
+	sh tests/deploy/test_migrate_rf.sh
+	sh tests/deploy/test_wiki_sync.sh
+	sh tests/deploy/test_slothweb_unit.sh
+	sh tests/deploy/test_lab_tools.sh

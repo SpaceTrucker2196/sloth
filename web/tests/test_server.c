@@ -1114,7 +1114,53 @@ static void test_routes_405_for_writes_over_socket(void) {
     WT_EQ(st.sse_opened, 0);
 }
 
+/* /api/bundle's body is the route's own heap buffer (web_resp_t
+ * .body_owned), sent after the header exactly as a static body is and
+ * freed when the connection ends: it arrives whole, its Content-Length
+ * true, on a fresh connection each time (a leak would be LeakSanitizer's
+ * to catch over the two requests). Seen red with r.body (NULL) sent in
+ * place of the owned body. */
+static void test_owned_body_over_socket(void) {
+    web_config_t c;
+    base_cfg(&c, AF_INET);
+    running_t r;
+    WT_EQ(start(&r, &c), 0);
+    if (!r.s) return;
+    size_t cap = 600 * 1024;
+    char *out = malloc(cap);
+    WT_ASSERT(out != NULL);
+    if (!out) { web_stats_t st; stop(&r, &st); return; }
+    for (int k = 0; k < 2; k++) {
+        get(web_server_port(r.s), "/api/bundle?kind=device&id=02:00:00:00:00:12", "", out, cap);
+        WT_HAS(out, "HTTP/1.1 200 OK\r\n");
+        WT_HAS(out, "Content-Type: application/json\r\n");
+        WT_HAS(out, "Cache-Control: no-store\r\n");
+        const char *cl = strstr(out, "Content-Length: ");
+        const char *body = strstr(out, "\r\n\r\n");
+        WT_ASSERT(cl && body);
+        if (!cl || !body) continue;
+        body += 4;
+        WT_EQ(strlen(body), (size_t)atol(cl + 16));
+        WT_ASSERT(strlen(body) > 8192);   /* past the glossary and prompt */
+        WT_HAS(body, "{\"bundle_schema\":\"1.0.0\",\"kind\":\"device\",\"id\":\"02:00:00:00:00:12\",");
+        WT_HAS(body, "\"sloth_db\":{\"state\":\"none\"");
+        WT_ASSERT(strlen(body) >= 2 && !strcmp(body + strlen(body) - 2, "}\n"));
+    }
+    /* A HEAD is refused as /api/alert's is. */
+    static const char head[] =
+        "HEAD /api/bundle?kind=device&id=02:00:00:00:00:12 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+    exchange(AF_INET, web_server_port(r.s), head, sizeof(head) - 1, out, cap);
+    WT_HAS(out, "HTTP/1.1 405 Method Not Allowed\r\nAllow: GET\r\n");
+    free(out);
+    web_stats_t st;
+    stop(&r, &st);
+    WT_EQ(st.status_200, 2);
+    WT_EQ(st.status_405, 1);
+    WT_EQ(st.served, 3);
+}
+
 void run_server_tests(void) {
+    WT_RUN(test_owned_body_over_socket);
     WT_RUN(test_open_binds_loopback_by_default);
     WT_RUN(test_open_refuses_remote_bind);
     WT_RUN(test_get_head_404_over_socket);

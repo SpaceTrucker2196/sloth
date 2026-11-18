@@ -20,6 +20,7 @@
 #include "web_store.h"
 #include "wtest.h"
 #include "jsonl_ptr_fixture.h"
+#include "wt_tmp.h"
 
 #define T0 1792627200LL
 
@@ -203,8 +204,8 @@ static int passive_ptr_int(const char *path, const char *sql) {
 /* The store thread's side: persist on a minute boundary, then a fresh
  * cache restored from the file. */
 static void ptr_through_the_store(web_ptr_t *p) {
-    char dir[64], path[128], err[512], s[160];
-    snprintf(dir, sizeof(dir), "/tmp/slothweb-ptr-XXXXXX");
+    char dir[TEST_TMP_MAX], path[128], err[512], s[160];
+    snprintf(dir, sizeof(dir), "%s/slothweb-ptr-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(dir) != NULL);
     snprintf(path, sizeof(path), "%s/w.db", dir);
     web_store_t st;

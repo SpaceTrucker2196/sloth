@@ -309,6 +309,9 @@ typedef struct {
     int     has_flags;   uint8_t  flags;     /* bit 1, 1 octet            */
     int     has_channel; uint16_t freq_mhz;  /* bit 3, 2+2 octets, align 2 */
     int     has_signal;  int8_t   dbm;       /* bit 5, 1 octet            */
+    /* Bit 0, 8 octets, align 8 (radiotap.org TSFT). Last in the struct so
+     * the members above keep their places; first on the wire. */
+    int     has_tsft;    uint64_t tsft_us;
 } fb_rt_t;
 
 /* An 8-octet radiotap header plus the present fields in bit order with
@@ -318,6 +321,7 @@ typedef struct {
 static inline int fb_radiotap(fb_t *b, const fb_rt_t *rt) {
     int start = b->len;
     uint32_t present = 0;
+    if (rt && rt->has_tsft)    present |= 1u << 0;
     if (rt && rt->has_flags)   present |= 1u << 1;
     if (rt && rt->has_channel) present |= 1u << 3;
     if (rt && rt->has_signal)  present |= 1u << 5;
@@ -326,6 +330,10 @@ static inline int fb_radiotap(fb_t *b, const fb_rt_t *rt) {
     fb_le16(b, 0);               /* it_len, patched below */
     fb_le16(b, (uint16_t)(present & 0xffff));
     fb_le16(b, (uint16_t)(present >> 16));
+    if (rt && rt->has_tsft) {
+        while ((b->len - start) % 8) fb_u8(b, 0);
+        fb_le64(b, rt->tsft_us);
+    }
     if (rt && rt->has_flags) fb_u8(b, rt->flags);
     if (rt && rt->has_channel) {
         while ((b->len - start) % 2) fb_u8(b, 0);

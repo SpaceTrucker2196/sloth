@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 void web_jw_init(web_jw_t *w, char *buf, size_t cap) {
     w->buf = buf;
@@ -20,6 +21,7 @@ static void put(web_jw_t *w, const char *s, size_t n) {
 }
 
 void web_jw_raw(web_jw_t *w, const char *s) { put(w, s, strlen(s)); }
+void web_jw_rawn(web_jw_t *w, const char *s, size_t n) { put(w, s, n); }
 
 size_t web_utf8_seq(const unsigned char *p, size_t n, unsigned *cp) {
     if (n == 0) return 0;
@@ -107,4 +109,14 @@ void web_utf8_copy(char *out, size_t max, const char *s) {
     }
     memcpy(out, s, n);
     out[n] = '\0';
+}
+
+long long web_utc_offset(long long t) {
+    time_t tt = (time_t)t;
+    struct tm lt, gt;
+    if (!localtime_r(&tt, &lt) || !gmtime_r(&tt, &gt)) return 0;
+    long long d = lt.tm_yday - gt.tm_yday;
+    if (lt.tm_year != gt.tm_year) d = lt.tm_year > gt.tm_year ? 1 : -1;
+    return ((d * 24 + (lt.tm_hour - gt.tm_hour)) * 60 +
+            (lt.tm_min - gt.tm_min)) * 60 + (lt.tm_sec - gt.tm_sec);
 }

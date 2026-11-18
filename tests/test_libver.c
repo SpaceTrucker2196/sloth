@@ -8,6 +8,7 @@
 #include "libver.h"
 #include "db.h"
 #include "query.h"
+#include "tmp_dir.h"
 
 /*
  * Loaded-library versions and the runtime sqlite floor (#142).
@@ -59,7 +60,8 @@ static void test_real_library_is_what_is_compared(void) {
 }
 
 static void test_db_open_refuses_below_floor(void) {
-    char path[] = "/tmp/sloth_libver_db_XXXXXX";
+    char path[TEST_TMP_MAX];
+    test_tmp_path(path, sizeof(path), "sloth_libver_db_XXXXXX");
     int fd = mkstemp(path);
     ASSERT(fd >= 0);
     if (fd < 0) return;
@@ -80,7 +82,7 @@ static void test_db_open_refuses_below_floor(void) {
     db_close();
     libver_sqlite_override_for_test(0);
 
-    char side[64];
+    char side[TEST_TMP_MAX + 8];
     unlink(path);
     snprintf(side, sizeof(side), "%s-wal", path); unlink(side);
     snprintf(side, sizeof(side), "%s-shm", path); unlink(side);

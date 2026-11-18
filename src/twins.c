@@ -89,6 +89,7 @@ void twins_snapshot(sloth_state_t *s) {
                 ? 1 : 0;
             e->attacker_oui  = ev.attacker_oui  ? 1 : 0;
             e->hash_mismatch = ev.hashes_differ ? 1 : 0;
+            e->late_arrival  = ev.late_arrival  ? 1 : 0;
             /* What kind of AP this is, on the axis RF can speak to
              * (#89 slice 3). A label for the operator, never a gate —
              * the episode was already materialised above and no class

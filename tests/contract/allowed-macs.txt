@@ -1,0 +1,14 @@
+# MAC-shaped strings the contract's alert bundle may carry (#185 review,
+# finding 2). Every other MAC-shaped string in alerts/ fails
+# contract-check: a sensor's own addresses and the devices it heard stay
+# off a release asset. One address per line, lower case; say why.
+#
+# documentation placeholders
+00:11:22:33:44:55
+02:aa:bb:cc:dd:ee
+aa:bb:cc:dd:ee:ff
+# IEEE 802.1X PAE group address (IEEE 802.1X-2020 Table 11-1)
+01:80:c2:00:00:03
+# UNSW IoT Analytics, List_Of_Devices.txt: a public lab dataset
+50:c7:bf:00:56:39
+f4:f2:6d:93:51:f1

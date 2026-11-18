@@ -11,13 +11,19 @@
  * drift apart. */
 #include "sloth.h"
 #include "action_snoop.h"
+#include "alerts.h"
+#include "alert_pcap.h"
 #include "camera_join.h"
 #include "beacon_detect.h"
 #include "ble_detect.h"
 #include "ctrl_frames.h"
 #include "db.h"
 #include "eapol_log.h"
+#include "karma_detect.h"
+#include "posture.h"
+#include "harvest_track.h"
 #include "presence.h"
+#include "rf_distance.h"
 #include "queue_evict.h"
 #include "seqnum_track.h"
 #include "transit.h"
@@ -35,7 +41,10 @@
  * window. The upper bounds keep a value inside the int fields the
  * detectors store them in. */
 static const tune_spec_t g_specs[TUNE_COUNT] = {
-    { "karma.ssid_thresh",          3,   2,   64,     "distinct SSIDs from one BSSID" },
+    /* No higher than the beacon history holds (MAX_AP_SSID_HISTORY): a
+     * BSSID's ssid_history_n never passes it, so a larger threshold
+     * would switch KARMA_AP off without a word. */
+    { "karma.ssid_thresh",          3,   2,   MAX_AP_SSID_HISTORY, "distinct SSIDs from one BSSID" },
     { "dns.tunnel_label_thresh",    30,  8,   255,    "label bytes" },
     { "dns.tunnel_long_hits",       8,   2,   1000,   "long labels per host" },
     { "dns.tunnel_total_thresh",    15,  2,   1000,   "queries per host" },
@@ -48,16 +57,35 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "twin.proximity_dbm",         15,  1,   100,    "dBm gap between twins" },
     { "deauth.twin_window_s",       5,   1,   600,    "seconds" },
     { "twin.steer_window_s",        300, 10,  3600,   "seconds a BTM steer marks a twin" },
+    { "twin.late_arrival_s",        TWIN_LATE_ARRIVAL_DEFAULT_S, 30, 86400,
+                                                  "seconds after the original a twin counts as late" },
+    { "twin.crit_min_beacons",      TWIN_CRIT_MIN_BEACONS_DEFAULT, 1, 1000,
+                                                  "beacons from each half before a soft-signal twin may be CRIT" },
     { "recon.sustain_s",            600, 10,  86400,  "seconds of probing" },
     { "recon.sustain_probes",       20,  2,   10000,  "probes" },
     { "kerb.preauth_burst",         5,   2,   1000,   "pre-auth failures" },
     { "ldap.search_flood",          50,  2,   10000,  "searches" },
     { "bgp.notification_burst",     3,   2,   1000,   "NOTIFICATIONs" },
-    { "ssh.brute_force",            10,  2,   1000,   "attempts" },
-    { "rdp.brute_force",            10,  2,   1000,   "attempts" },
-    { "snmp.community_brute",       5,   2,   1000,   "communities tried" },
-    { "mqtt.brute_connects",        10,  2,   1000,   "CONNECTs" },
-    { "mqtt.brute_fails",           5,   2,   1000,   "refused CONNECTs" },
+    /* #202: windowed, like deauth/probe — the ring holds at most
+     * FLOOD_WIN_CAP recent events, so a threshold past it could never
+     * be reached and would silently disable the rule. 1000 was never
+     * reachable even before #202 (MAX_SSH_FLOWS/MAX_RDP_FLOWS churn
+     * long before one pair's lifetime count got there), so the lower
+     * bound is a correction, not a behaviour change for anyone who set
+     * one under 32. */
+    { "ssh.brute_force",            10,  2,   FLOOD_WIN_CAP, "attempts in the window" },
+    { "rdp.brute_force",            10,  2,   FLOOD_WIN_CAP, "attempts in the window" },
+    { "ssh.brute_window_s",         60,  5,   3600,   "seconds (sliding)" },
+    { "rdp.brute_window_s",         60,  5,   3600,   "seconds (sliding)" },
+    /* #203: windowed, same correction as ssh/rdp above — a threshold
+     * past FLOOD_WIN_CAP could never be reached. snmp.community_brute
+     * notes guesses the full 8-entry community set cannot hold too, so
+     * the whole 2..32 range is reachable. */
+    { "snmp.community_brute",       5,   2,   FLOOD_WIN_CAP, "communities tried in the window" },
+    { "mqtt.brute_connects",        10,  2,   FLOOD_WIN_CAP, "CONNECTs in the window" },
+    { "mqtt.brute_fails",           5,   2,   FLOOD_WIN_CAP, "refused CONNECTs in the window" },
+    { "snmp.brute_window_s",        60,  5,   3600,   "seconds (sliding)" },
+    { "mqtt.brute_window_s",        60,  5,   3600,   "seconds (sliding)" },
     /* lo is 1, not 2 like the counts above: these three inherit the
      * contract alerts_set_wps_* published in d652502, which rejects
      * "zero or less" and accepts 1. Widening a shipped CLI validation
@@ -118,6 +146,13 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
      * captures a day instead of 86,400. 0 disables it. */
     { "pcap.min_severity",          2,   0,   2,      "0=any alert, 1=WARN and up, 2=CRIT only" },
     { "pcap.key_cooldown_secs",     3600, 0, 86400,   "seconds before the same alert key exports again, 0 for none" },
+    /* #166, owner ruling 2026-10-26: alert pcaps are kept two weeks.
+     * Retention, not a detector threshold. 0 keeps them forever — the
+     * pre-#166 behaviour, and the same meaning 0 has on
+     * handshake.retention_days, so the two sweeps read alike. The cap is
+     * ten years: a window longer than that is "forever" said less
+     * clearly, and 0 already says it. */
+    { "pcap.retain_days",           ALERT_PCAP_DEFAULT_RETAIN_DAYS, 0, ALERT_PCAP_MAX_RETAIN_DAYS, "days alert pcaps in --pcap-dir are kept, 0 for forever" },
     /* Data-socket hygiene (#135). Neither is a detector threshold.
      *
      * max_per_peer bounds how many of the listener's 16 client slots one
@@ -240,6 +275,78 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "ble.flood_rate",             BLE_FLOOD_RATE, 1, 10000, "advertisements per second on that key, over the whole window" },
     { "ble.hid_rotate_addrs",       BLE_HID_ROTATE_ADDRS, 2, MAX_BLE_DEVICES, "new random addresses advertising a HID appearance on one sensor per window" },
     { "ble.hid_rotate_window_s",    BLE_HID_ROTATE_WINDOW_S, 60, 86400, "seconds in the BLE_HID_UNEXPECTED rotation window; also how long a sensor listens before the form can fire" },
+    /* RSSI distance (2026-10-26). N x 10 from ITU-R P.1238-10 Table 2
+     * (residential); the bounds bracket its corridor ~18 and its worst
+     * ~44 rows. ref_dist_dm 0 is "no calibration", which is why it alone
+     * among these may be 0. research/papers/rssi-distance-estimation.md. */
+    { "rf.path_loss_n_2g",          RF_N_2G_X10, RF_N_X10_LO, RF_N_X10_HI, "distance power loss coefficient N x10, 2.4 GHz Wi-Fi and BLE (ITU-R P.1238-10 residential 28)" },
+    { "rf.path_loss_n_5g",          RF_N_5G_X10, RF_N_X10_LO, RF_N_X10_HI, "N x10, 5 GHz (P.1238-10 5.2 GHz residential 30)" },
+    { "rf.path_loss_n_6g",          RF_N_6G_X10, RF_N_X10_LO, RF_N_X10_HI, "N x10, 6 GHz (no P.1238 row; the 5 GHz value)" },
+    { "rf.median_k",                RF_MEDIAN_K, 1, RF_RAW_MAX, "RSSI samples the distance median takes" },
+    { "rf.ref_dist_dm",             0, 0, RF_REF_DIST_DM_HI, "decimetres from the sensor to the --my-bssid AP for distance calibration, 0 for none" },
+    /* The receive antenna's gain (2026-11-06, owner: a 9 dBi antenna on
+     * the Wi-Fi monitor radio). The model's reference loss assumes 0 dBi
+     * at the receiver; a gain G raises every RSSI by G, which read raw
+     * puts the device 10^(G/10N) nearer. Subtracted before the distance
+     * is solved, unless a --my-bssid calibration is in force for the
+     * band (its measured offset already holds the gain). */
+    { "rf.rx_gain_db_wifi",         0, RF_RX_GAIN_DB_LO, RF_RX_GAIN_DB_HI, "receive antenna gain, dBi, of the Wi-Fi monitor radio; subtracted from RSSI before the distance estimate (a --my-bssid calibration supersedes it)" },
+    { "rf.rx_gain_db_ble",          0, RF_RX_GAIN_DB_LO, RF_RX_GAIN_DB_HI, "receive antenna gain, dBi, of the BLE receiver; subtracted from RSSI before the distance estimate" },
+    /* --location / --gps (2026-10-27, src/gps.h). A device position is
+     * sampled when the fix has moved min_move_m since the device's last
+     * sample or sample_s have elapsed; a fix older than max_fix_age_s
+     * stamps nothing (a fixed --location then stands in, if given). */
+    { "gps.min_move_m",             5, 0, 100000, "metres the GPS fix must move before a device position is sampled again" },
+    { "gps.sample_s",               60, 1, 86400, "at rest: sensor track interval; device keep-alive is 10x this" },
+    { "gps.max_fix_age_s",          30, 1, 3600, "seconds after which a GPS fix is stale and stamps nothing" },
+    /* The GNSS rules (2026-11-03, src/alerts/rules_gnss.c; bases in
+     * research/gnss/). The series the jamming rule reads holds 300 s and
+     * its baseline takes the 60 s before the window, so the window stops
+     * well short of that and the hold one point short. time_jump_ms cannot go under 200: the
+     * gpsd time HOWTO's in-band delay "may ... jump by 200mSec", so a
+     * smaller step is link wobble by the source's own account. */
+    { "gnss.jam_cn0_drop_db",       10, 1, 60, "dB the tracked satellites' median C/N0 must fall within gnss.jam_window_s, against the 60 s before it, for GNSS_JAMMING" },
+    { "gnss.jam_window_s",          10, 2, 120, "seconds the GNSS_JAMMING C/N0 collapse must happen within" },
+    { "gnss.jam_ind",               128, 1, 255, "u-blox jamInd (0..255, CW only, uncalibrated) at or above which the indicator path counts" },
+    { "gnss.jam_hold_s",            30, 2, 299, "seconds jamInd must hold at or above gnss.jam_ind for GNSS_JAMMING" },
+    { "gnss.spoof_cn0_high_db",     53, 30, 99, "dB-Hz at or above which a used satellite's C/N0 counts as too high (GNSS_SPOOF_SUSPECT heuristic 1)" },
+    { "gnss.spoof_high_sats",       4, 1, GNSS_MAX_SATS, "used satellites that must be that high at once (four is what a position fix needs)" },
+    { "gnss.spoof_cn0_mean_db",     45, 20, 99, "dB-Hz mean C/N0 over the used set above which a uniform set counts (heuristic 2)" },
+    { "gnss.spoof_cn0_sd_db",       1, 1, 20, "dB the C/N0 spread over the used set must stay under (heuristic 2)" },
+    { "gnss.spoof_min_sats",        6, 3, GNSS_MAX_SATS, "used satellites with a C/N0 the spread is taken over (heuristic 2)" },
+    { "gnss.spoof_window_s",        300, 10, 3600, "seconds in which two GNSS_SPOOF_SUSPECT heuristics must both have been seen" },
+    { "gnss.time_jump_ms",          1000, 200, 3600000, "ms the receiver's time must step against the host's monotonic clock between fixes for GNSS_TIME_JUMP" },
+    { "gnss.pos_jump_k",            3, 1, 100, "multiplier on the two fixes' eph in the GNSS_POSITION_JUMP bound" },
+    /* #186, src/alerts/rules_adsb.c. Below ADSB_EXPIRE_S (60): a hold
+     * the table cannot keep a row for could never be reached. */
+    { "adsb.emerg_hold_s",          10, 2, 59, "seconds an aircraft's emergency squawk or status must hold, by its own messages, before ADSB_EMERGENCY goes from LOW to WARN" },
+    /* #187 S2, KARMA_PROBE_FORGE (src/karma_detect.h argues both
+     * defaults). The count's ceiling is the per-row SSID set: a
+     * threshold above what a row can hold would never fire. */
+    { "karma.forge_ssids",          KARMA_FORGE_SSID_MIN_DEFAULT, 2, KARMA_FORGE_MAX_SSIDS, "distinct never-beaconed SSIDs one BSSID answered directed probes for" },
+    { "karma.forge_window_s",       KARMA_FORGE_WINDOW_DEFAULT_S, 10, 86400, "seconds an answered SSID stays on the forge row" },
+    /* #187, 2026-11-12. The ceiling is the default forge window: an
+     * association later than the row keeps its names is never read. */
+    { "karma.forge_assoc_s",        KARMA_FORGE_ASSOC_DEFAULT_S, 5, KARMA_FORGE_WINDOW_DEFAULT_S, "seconds after a forged probe answer in which the answered station's association under that name makes KARMA_PROBE_FORGE CRIT" },
+    /* #172 (src/harvest_track.h argues each default). The BSSID count's
+     * ceiling is the per-station target table, the deauth count's floor
+     * 1 (one frame is a legitimate setting, if a noisy one), and the
+     * window's floor is the reconnect window's ceiling so a chain is
+     * never aged out before it could complete. */
+    { "harvest.window_s",           HARVEST_WINDOW_DEFAULT_S, 600, 86400, "seconds a soliciting station's targets and a BSSID's harvest victims stay counted" },
+    { "harvest.min_bssids",         HARVEST_MIN_BSSIDS_DEFAULT, 2, HARVEST_MAX_TGT, "distinct BSSIDs that answered one station with an M1 it left unanswered" },
+    { "harvest.unanswered_pct",     HARVEST_UNANSWERED_PCT_DEFAULT, 1, 100, "percent of a station's M1-answering BSSIDs left without an M2" },
+    { "harvest.deauth_min",         HARVEST_DEAUTH_MIN_DEFAULT, 1, 1000, "distinct deauth/disassoc frames claimed from the BSSID before a fresh M1/M2" },
+    { "harvest.reconnect_s",        HARVEST_RECONNECT_DEFAULT_S, 1, 600, "seconds from the last such frame to the fresh M1/M2 pair" },
+    /* #190: report.<start>.md / report.<mtime>.unclean.md beside
+     * --report, the files --report-history and the live report's
+     * killed-session hand-off create. One small file per session, so
+     * the window is generous: a quarter of records. Swept at start and
+     * at shutdown, and only on a run using --report-interval or
+     * --report-history. 0 keeps them forever, the meaning 0 has on
+     * pcap.retain_days and handshake.retention_days; the cap is theirs
+     * (ten years). */
+    { "report.retain_days",         POSTURE_DEFAULT_RETAIN_DAYS, 0, 3650, "days per-session report records are kept beside --report, 0 for forever" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

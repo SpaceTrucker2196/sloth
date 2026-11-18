@@ -1,0 +1,7 @@
+# /etc/default/sloth-va — read by sloth-va.service.
+#
+# The Bluetooth controller sloth-va uses, by its address (stable across
+# reboots and replugs) or by hciN (probe order; can change). `bluetoothctl
+# list` shows each controller's address. It must not be the controller
+# sloth-ble-scan holds. Unset: hci0.
+#SLOTH_VA_ADAPTER=AA:BB:CC:DD:EE:FF

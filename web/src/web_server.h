@@ -30,6 +30,14 @@
 #include "web_live.h"
 #include "web_sqlbox.h"
 #include "web_tsdb.h"
+#include "web_adsb.h"
+#include "web_aprs.h"
+#include "web_rtl433.h"
+#include "web_victron.h"
+#include "web_sysstat.h"
+#include "web_lure.h"
+#include "web_df.h"
+#include "web_gnss.h"
 
 #define WEB_MAX_CONNS 32
 /* Event streams are long-lived, so they may not take every slot: the
@@ -46,6 +54,9 @@
 /* How long the listener is left unpolled after accept() runs out of
  * descriptors or memory. */
 #define WEB_ACCEPT_BACKOFF_MS 100
+/* A POST body's slowest acceptable rate, bytes per second: its deadline
+ * is the timeout plus its length at this rate (web_server.c). */
+#define WEB_BODY_MIN_BPS 16384
 /* Ticker records sent per tick, at most (spec §7.1: coalesced to 20 a
  * second). When more arrived, the newest are sent; the seq gap shows. */
 #define WEB_SSE_RECORDS_PER_TICK 20
@@ -64,6 +75,9 @@ typedef struct {
     unsigned long accept_paused; /* accept() out of fds/memory: back-off */
     unsigned long status_404, status_405, status_431, status_400;
     unsigned long status_200, status_304, status_503, status_421;
+    unsigned long status_413;     /* a POST body over its bound, unread */
+    unsigned long status_403;     /* a POST refused by the Origin rule */
+    unsigned long posts;          /* POST requests routed (body complete) */
     unsigned long sse_opened;     /* /events streams started */
     unsigned long sse_closed;     /* ended by the client */
     unsigned long sse_dropped;    /* ended by us: WEB_SSE_MAX_UNSENT behind */
@@ -83,7 +97,24 @@ typedef struct {
     char      out[WEB_SSE_MAX_UNSENT];
     const unsigned char *body;    /* static body sent after out */
     size_t    body_len, body_off;
+    unsigned char *body_owned;    /* body is this heap copy: freed at close */
     int       sql_hold;       /* body is the SQL box's: release at close */
+    /* A POST (docs/web-frrs-spec.md §5.3): the peer's address as the
+     * row records it, the body read so far and how much is promised.
+     * The body lands in post[] (WEB_POST_MAX), or, for the import route,
+     * in import_buf, made for the length promised (one import at a time:
+     * import_held, the server's import_conn) and freed when the slot
+     * closes. close_now: the 413 answer goes out and the socket closes
+     * at once, no linger, so an oversize body is never drained.
+     * body_free: body is the route's malloc'd answer (the export), freed
+     * when it is sent or the slot closes. */
+    char      peer[WEB_PEER_MAX];
+    char      post[WEB_POST_MAX];
+    size_t    post_len, post_want;
+    int       import_held;
+    char     *import_buf;
+    int       close_now;
+    int       body_free;
 } web_conn_t;
 
 typedef struct {
@@ -102,7 +133,17 @@ typedef struct {
     web_anomaly_t  *anomaly;  /* NULL: no anomaly engine; set before run */
     const web_m4_t *m4;       /* NULL: no Devices or Lookup; set before run */
     web_sqlbox_t   *sql;      /* NULL: no SQL box; set before run */
+    web_ble_t      *ble;      /* NULL: no BLE tables; set before run */
+    web_gnss_t     *gnss;     /* NULL: no GNSS panel; set before run */
+    web_adsb_t     *adsb;     /* NULL: no ADS-B panel; set before run */
+    web_aprs_t     *aprs;     /* NULL: no APRS panel; set before run */
+    web_rtl433_t   *rtl433;   /* NULL: no rtl_433 tab; set before run */
+    web_victron_t  *victron;  /* NULL: no Victron tab; set before run */
+    web_sys_t      *sys;      /* NULL: no host status; set before run */
+    web_lure_t     *lure;     /* NULL: no lure evidence; set before run */
+    web_df_t       *df;       /* NULL: no direction finding; set before run */
     int             sql_conn; /* the slot waiting on the box, or -1 */
+    int             import_conn;  /* the slot reading an import, or -1 */
     unsigned long long rec_sent;  /* newest ticker record broadcast */
     unsigned long long anom_sent; /* newest anomaly change broadcast */
     pthread_mutex_t mu;       /* guards stats only */
@@ -144,6 +185,26 @@ void     web_server_set_anomaly(web_server_t *s, web_anomaly_t *anomaly);
 void     web_server_set_m4(web_server_t *s, const web_m4_t *m4);
 /* Attach the SQL box (web_sqlbox.h), started. Same rule. */
 void     web_server_set_sqlbox(web_server_t *s, web_sqlbox_t *b);
+/* The BLE tables (web_ble.h) the routes answer from; NULL for none. */
+void     web_server_set_ble(web_server_t *s, web_ble_t *b);
+/* The GNSS panel (web_gnss.h) the routes answer from; NULL for none. */
+void     web_server_set_gnss(web_server_t *s, web_gnss_t *g);
+/* The ADS-B panel (web_adsb.h) the route answers from; NULL for none. */
+void     web_server_set_adsb(web_server_t *s, web_adsb_t *a);
+/* The APRS panel (web_aprs.h) the route answers from; NULL for none. */
+void     web_server_set_aprs(web_server_t *s, web_aprs_t *a);
+/* The rtl_433 devices (web_rtl433.h) the route answers from; NULL for none. */
+void     web_server_set_rtl433(web_server_t *s, web_rtl433_t *a);
+/* The Victron devices (web_victron.h) the route answers from; NULL for none. */
+void     web_server_set_victron(web_server_t *s, web_victron_t *a);
+/* The sensor's host status (web_sysstat.h) /api/sys answers from; NULL for none. */
+void     web_server_set_sys(web_server_t *s, web_sys_t *y);
+/* The KARMA and key-harvest evidence (web_lure.h) /api/lures answers
+ * from; NULL for none. */
+void     web_server_set_lure(web_server_t *s, web_lure_t *l);
+/* Direction finding across monitor radios (web_df.h) /api/df answers
+ * from; NULL for none. */
+void     web_server_set_df(web_server_t *s, web_df_t *d);
 
 void     web_server_stats(web_server_t *s, web_stats_t *out);
 uint16_t web_server_port(const web_server_t *s);

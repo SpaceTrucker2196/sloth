@@ -5,6 +5,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "sha256.h"
 #include "web_assets.h"
@@ -27,7 +28,7 @@ static void inm(web_req_t *rq, const char *v) {
     snprintf(rq->inm, sizeof(rq->inm), "%s", v);
 }
 
-static const web_health_t H = { 42, 2, 17, NULL, 0, NULL, 0, NULL, NULL, NULL };
+static const web_health_t H = { 42, 2, 17, NULL, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0 };
 
 /* Case-insensitive search over the first len bytes. */
 static const char *ci_find(const char *hay, size_t len, const char *needle) {
@@ -133,6 +134,9 @@ static void test_page_304_on_matching_validator(void) {
     WT_EQ(r.status, 200);
 }
 
+/* Defined with the CSP test below. */
+static int count(const char *needle);
+
 /* docs/web-ui-spec.md §12, M0 acceptance: no external request of any
  * kind. The page is checked as the bytes the server sends, not as the
  * web/ui/ sources, so an @include cannot smuggle anything past it.
@@ -155,23 +159,94 @@ static void test_page_makes_no_external_reference(void) {
         /* anything that makes the browser fetch a subresource */
         "<link", "<img", "<iframe", "<object", "<embed", "<base",
         "<source", "<video", "<audio", "<form",
-        " src=", " href=", "srcset", "@import", "url(", "@font-face",
+        " src=", "srcset", "@import", "url(", "@font-face",
         "importScripts", "new Worker", "sendBeacon", "XMLHttpRequest",
         "WebSocket", "<script ", "<style ",
     };
+    /* The two images are bytes in the page, not requests: the sloth
+     * in the header and the favicon, each a data: PNG the CSP admits
+     * with img-src data:. Exactly these forms and no other <img>,
+     * <link> or src=. Seen red with <img src="/icon.png"> added and
+     * with <link rel="stylesheet" href="x.css"> added. */
+    static const char *const inline_ok[] = {
+        "<img class=\"icon\" alt=\"\" width=\"22\" height=\"22\" src=\"data:image/png;base64,",
+        "<link rel=\"icon\" type=\"image/png\" sizes=\"32x32\" href=\"data:image/png;base64,",
+        " src=\"data:image/png;base64,",
+    };
     for (size_t i = 0; i < sizeof(banned) / sizeof(banned[0]); i++) {
-        const char *hit = ci_find(p, n, banned[i]);
-        if (hit)
-            fprintf(stderr, "    page contains \"%s\" at byte %zu\n",
-                    banned[i], (size_t)(hit - p));
-        WT_ASSERT(hit == NULL);
+        size_t bl = strlen(banned[i]);
+        if (!strcmp(banned[i], "url(")) {
+            /* "url(" has one sanctioned shape: the Blob URL the copy-JSON
+             * control (web/ui/bundle.js) hands the browser as a download,
+             * created and revoked, from which nothing is fetched. Every
+             * other "url(" is a CSS or script fetch and stays banned.
+             * Seen red with a "url(x.png)" added to page.css. */
+            int blob = 0, other = 0;
+            for (const char *h = ci_find(p, n, "url("); h; ) {
+                if (h - p >= 12 && (!memcmp(h - 12, "createObject", 12) ||
+                                    !memcmp(h - 12, "revokeObject", 12))) {
+                    blob++;
+                } else {
+                    other++;
+                    fprintf(stderr, "    page contains \"url(\" at byte %zu\n",
+                            (size_t)(h - p));
+                }
+                size_t at = (size_t)(h - p) + 4;
+                h = at < n ? ci_find(h + 4, n - at, "url(") : NULL;
+            }
+            WT_EQ(blob, 2);
+            WT_EQ(other, 0);
+            continue;
+        }
+        for (const char *hit = ci_find(p, n, banned[i]); hit; ) {
+            int ok = 0;
+            for (size_t k = 0; k < sizeof(inline_ok) / sizeof(inline_ok[0]); k++)
+                if (!strncmp(hit, inline_ok[k], strlen(inline_ok[k]))) ok = 1;
+            if (!ok)
+                fprintf(stderr, "    page contains \"%s\" at byte %zu\n",
+                        banned[i], (size_t)(hit - p));
+            WT_ASSERT(ok);
+            if (!ok) break;
+            size_t at = (size_t)(hit - p) + bl;
+            hit = at < n ? ci_find(hit + bl, n - at, banned[i]) : NULL;
+        }
     }
+    WT_EQ(count("<img"), 1);
+    WT_EQ(count("<link"), 1);
+    /* Each decodes to a PNG of the stated size: the IHDR of a 64x64 and
+     * a 32x32 image, base64 (the included files are base64 -w0 text). */
+    WT_HAS(p, "src=\"data:image/png;base64,\niVBORw0KGgoAAAANSUhEUgAAAEAAAABA");
+    WT_HAS(p, "href=\"data:image/png;base64,\niVBORw0KGgoAAAANSUhEUgAAACAAAAAg");
+    /* A link names a view of this page, a fragment, and fetches
+     * nothing: href="#..." and no other (the favicon's data: href is
+     * the one exception, bytes not a fetch). Seen red with a tile's
+     * href made "/api/live". */
+    int links = 0;
+    for (const char *h = ci_find(p, n, " href="); h; ) {
+        int frag = !strncmp(h, " href=\"#", 8) ||
+                   !strncmp(h, " href=\"data:image/png;base64,", 28);
+        if (!frag) fprintf(stderr, "    a link that is not a fragment at byte %zu\n", (size_t)(h - p));
+        WT_ASSERT(frag);
+        links++;
+        size_t at = (size_t)(h - p) + 6;
+        h = at < n ? ci_find(h + 6, n - at, " href=") : NULL;
+    }
+    WT_ASSERT(links >= 6);
 
     /* The two places the page does talk to the server: same-origin,
      * relative paths. */
     WT_HAS(p, "new EventSource(\"/events\")");
+    /* A page left closes its stream: one kept open by the browser's
+     * back/forward cache held a connection per reload, and at the fifth
+     * Chromium's six per host were gone and the new page's requests
+     * never left (measured; seen red with the close removed). */
+    WT_HAS(p, "  window.addEventListener(\"pagehide\", function () { if (es) { es.close(); es = null; } });");
+    WT_HAS(p, "    if (e.persisted && !es) { openEvents(); live(); }");
     WT_HAS(p, "fetch(\"/api/health\"");
-    WT_HAS(p, "fetch(\"/api/live\"");
+    /* /api/live through scoped(), which only ever adds "scope=" and one
+     * of three constant words to the same relative path. */
+    WT_HAS(p, "fetch(scoped(\"/api/live\")");
+    WT_HAS(p, "return path + (path.indexOf(\"?\") >= 0 ? \"&\" : \"?\") + \"scope=\" + SCOPE;");
 }
 
 /* #159: stream strings (hostnames, SSIDs, alert details) are shown as
@@ -190,6 +265,30 @@ static void test_page_renders_stream_values_as_text(void) {
     };
     for (size_t i = 0; i < sizeof(sinks) / sizeof(sinks[0]); i++) {
         const char *hit = ci_find(p, n, sinks[i]);
+        if (!strcmp(sinks[i], ".href =")) {
+            /* The one sanctioned sink: the copy-JSON control's download
+             * (web/ui/bundle.js) gives an anchor a Blob URL of the
+             * bundle's own bytes, on a line that says so; the download
+             * name is set as a property, never through setAttribute. No
+             * other ".href =" anywhere. Seen red with a second
+             * "a.href = u" added to bundle.js, and with the comment
+             * dropped from the sanctioned line. */
+            static const char line[] =
+                "    a.href = URL.createObjectURL(blob); /* sink: blob url, constant origin */\n";
+            int count = 0;
+            for (const char *h = hit; h; ) {
+                count++;
+                int ok = h - p >= 5 && (size_t)(n - (h - p) + 5) >= sizeof(line) - 1 &&
+                         !memcmp(h - 5, line, sizeof(line) - 1);
+                if (!ok) fprintf(stderr, "    page contains \".href =\" at byte %zu\n",
+                                 (size_t)(h - p));
+                WT_ASSERT(ok);
+                size_t at = (size_t)(h - p) + 7;
+                h = at < n ? ci_find(h + 7, n - at, ".href =") : NULL;
+            }
+            WT_EQ(count, 1);
+            continue;
+        }
         if (hit)
             fprintf(stderr, "    page contains \"%s\" at byte %zu\n",
                     sinks[i], (size_t)(hit - p));
@@ -350,6 +449,10 @@ static void test_csp_hashes_match_the_page(void) {
     WT_LACKS(csp, "*");
     WT_HAS(csp, "connect-src 'self'");
     WT_HAS(csp, "frame-ancestors 'none'");
+    /* Images: inline data: bytes only, never a fetch. Seen red with
+     * img-src dropped from the embedder's policy. */
+    WT_HAS(csp, "img-src data:;");
+    WT_LACKS(csp, "img-src 'self'");
 
     WT_EQ(count("<script"), 1);
     WT_EQ(count("</script>"), 1);
@@ -394,18 +497,24 @@ static void test_health_json(void) {
     WT_EQ(r.status, 200);
     WT_EQ(r.kind, WEB_R_ONESHOT);
     WT_ASSERT(r.body == NULL);
-    static const char body[] =
+    /* The host name is this machine's, so the exact answer is built
+     * with it (a host name needs no JSON escaping). */
+    char hn[256];
+    WT_EQ(gethostname(hn, sizeof(hn)), 0);
+    hn[sizeof(hn) - 1] = '\0';
+    char body[1024];
+    snprintf(body, sizeof(body),
         "{\"service\":\"slothweb\",\"milestone\":\"M6\",\"uptime_s\":42,"
         "\"socket\":\"none\",\"last_record_age_s\":null,"
         "\"db\":\"none\",\"db_schema\":null,\"db_rows\":null,"
-        "\"db_supported\":[1,7],\"sql\":false,"
+        "\"db_supported\":[1,16],\"sql\":false,"
         "\"store\":\"none\",\"anomaly\":null,\"sse_clients\":2,"
-        "\"tick_seq\":17}\n";
+        "\"tick_seq\":17,\"hostname\":\"%s\"}\n", hn);
     WT_HAS(out, "Content-Type: application/json\r\n");
     WT_HAS(out, "Cache-Control: no-store\r\n");
     WT_HAS(out, "Content-Security-Policy: default-src 'none'");
     char cl[64];
-    snprintf(cl, sizeof(cl), "Content-Length: %zu\r\n", sizeof(body) - 1);
+    snprintf(cl, sizeof(cl), "Content-Length: %zu\r\n", strlen(body));
     WT_HAS(out, cl);
     char *sep = strstr(out, "\r\n\r\n");
     WT_ASSERT(sep && !strcmp(sep + 4, body));
@@ -414,7 +523,7 @@ static void test_health_json(void) {
     web_resp_t hr;
     req(&rq, "/api/health", 1);
     WT_EQ(web_route(&rq, &H, 1, head, sizeof(head), &hr), 0);
-    WT_EQ(hr.out_len, r.out_len - (sizeof(body) - 1));
+    WT_EQ(hr.out_len, r.out_len - (strlen(body)));
     WT_ASSERT(!memcmp(head, out, hr.out_len));
 }
 
@@ -832,7 +941,7 @@ static void test_page_carries_the_m3_view(void) {
     }
     WT_HAS(p, "\"anomalies\"");               /* in the views it shows */
     WT_HAS(p, "\"/api/anomalies?since=\" + (now - win)");
-    WT_HAS(p, "p += \"&kind=\" + encodeURIComponent(N.kind)");
+    WT_HAS(p, "p += \"&kind=\" + encodeURIComponent(kind)");
     WT_HAS(p, "\"/api/baseline?metric=\" + encodeURIComponent(m)");
     WT_HAS(p, "p += \"&key=\" + encodeURIComponent(key)");
 
@@ -1006,7 +1115,44 @@ static void test_anomaly_event_and_tick(void) {
     eng_down(&e);
 }
 
+/* F5 (docs/web-visual-spec.md §2): the status strip holds the
+ * network's facts and the footer holds slothweb's own, one row each
+ * and never mixed, so a reader can tell a fact about the subject from
+ * a fact about the instrument. Seen red with `tick` left in the strip,
+ * and with `devs` moved into the footer. */
+static void test_the_strip_and_the_footer_are_split(void) {
+    const char *p = page();
+    const char *strip = strstr(p, "<div class=\"strip\" aria-label=\"status\">");
+    const char *foot = strstr(p, "<footer class=\"foot\"");
+    WT_ASSERT(strip && foot && strip < foot);
+    if (!strip || !foot) return;
+    char srow[2048], frow[2048];
+    size_t slen = (size_t)(strstr(strip, "</div>") - strip);
+    size_t flen = (size_t)(strstr(foot, "</footer>") - foot);
+    WT_ASSERT(slen < sizeof(srow) && flen < sizeof(frow));
+    if (slen >= sizeof(srow) || flen >= sizeof(frow)) return;
+    memcpy(srow, strip, slen); srow[slen] = '\0';
+    memcpy(frow, foot, flen); frow[flen] = '\0';
+    static const char *const net[] = { "s-devs", "s-alerts", "s-anoms", "s-rate" };
+    static const char *const own[] = { "sock", "db", "store", "seq", "up", "clients" };
+    for (size_t i = 0; i < sizeof(net) / sizeof(net[0]); i++) {
+        char want[32];
+        snprintf(want, sizeof(want), "id=\"%s\"", net[i]);
+        WT_HAS(srow, want);
+        WT_LACKS(frow, want);
+    }
+    for (size_t i = 0; i < sizeof(own) / sizeof(own[0]); i++) {
+        char want[32];
+        snprintf(want, sizeof(want), "id=\"%s\"", own[i]);
+        WT_HAS(frow, want);
+        WT_LACKS(srow, want);
+    }
+    /* The stream's state was in both; it is the footer's alone now. */
+    WT_LACKS(p, "s-sock");
+}
+
 void run_routes_tests(void) {
+    WT_RUN(test_the_strip_and_the_footer_are_split);
     WT_RUN(test_page_is_200_with_etag_and_csp);
     WT_RUN(test_page_304_on_matching_validator);
     WT_RUN(test_page_makes_no_external_reference);

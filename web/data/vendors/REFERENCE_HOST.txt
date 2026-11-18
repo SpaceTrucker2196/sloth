@@ -1,0 +1,169 @@
+# The reference host's vendors: every distinct IEEE Organization Name
+# its devices' MACs resolved to on 2026-10-27, exactly as the registry
+# spells it, one per line, sorted (names only: the device counts are
+# not kept in the repository). web/tests/test_vendorkb.c holds
+# COVERAGE.md's two lists to this one and every name to the registry;
+# a name may end in a space because the registry's does.
+Actiontec Electronics, Inc
+Alarm.com
+ALPSALPINE CO,.LTD
+AltoBeam Inc.
+Amazon Technologies Inc.
+AMPAK Technology, Inc.
+AMPAK Technology,Inc.
+Apple, Inc.
+Arcadyan Corporation
+Arlo Technology
+ASKEY COMPUTER CORP
+ASUSTek COMPUTER INC.
+AUMOVIO Systems, Inc.
+AzureWave Technology Inc.
+Balboa Instruments
+Barrot Technology Co.,LTD
+Beijing InHand Networking Technology Co.,Ltd.
+Beijing Unigroup Tsingteng Microsystem Co., LTD.
+Belkin International Inc.
+CANON INC.
+CHINA DRAGON TECHNOLOGY LIMITED
+China Dragon Technology Limited
+Chiun Mai Communication System, Inc
+CLOUD NETWORK TECHNOLOGY SINGAPORE PTE. LTD.
+Commscope
+COMPAL INFORMATION (KUNSHAN) CO., LTD. 
+D&M Holdings Inc.
+D-Link International
+Danlaw Inc
+Dialog Semiconductor
+Diffon Corporation
+DONGGUAN SOLUM ELECTRONICS CO.,LTD
+Dreamtech Co., Ltd
+DWnet Technologies(Suzhou) Corporation
+Earda Technologies co Ltd
+ecobee inc
+Epigram, Inc.
+Espressif Inc.
+ESSYS
+eSSys Co.,Ltd
+Ezurio, LLC
+FLEXTRONICS
+FLEXTRONICS TECHNOLOGIES MEXICO S DE RL DE CV
+FN-LINK TECHNOLOGY Ltd.
+Ford Motor Company
+Garmin International
+GE Lighting
+General Electric Consumer and Industrial
+Google, Inc.
+Gosuncn Technology Group Co., Ltd.
+Guangdong Huiwei High-tech Co., Ltd.
+Guangzhou Juan Optical and Electronical Tech Joint Stock Co., Ltd
+Guangzhou Shiyuan Electronic Technology Company Limited
+Hand Held Products Inc
+Hewlett Packard
+Hon Hai Precision Ind. Co.,Ltd.
+Hon Hai Precision Industry Co.,LTD
+HP Inc.
+Huaqin Telecom Technology Co.,Ltd
+Hui Zhou Gaoshengda Technology Co.,LTD
+HUMAX Co., Ltd.
+HUMAX NETWORKS
+HUNAN FN-LINK TECHNOLOGY LIMITED
+IEEE Registration Authority
+InPro Comm
+Inseego Wireless, Inc
+Intel Corporate
+iRobot Corporation 
+Jabil Circuit de Chihuahua
+LG Electronics
+LG Innotek
+Magneti Marelli Automotive Electronics (Guangzhou) Co. Ltd
+MAGNETI MARELLI SISTEMAS ELECTRONICOS MEXICO
+MediaTek Inc
+Microsoft
+Microsoft Corporation
+MITAC INTERNATIONAL CORP.
+MITSUMI ELECTRIC CO.,LTD.
+Motorola Mobility LLC, a Lenovo Company
+Murata Manufacturing Co., Ltd.
+Nest Labs Inc.
+NETGEAR
+Nexar Ltd.
+nFore Technology Co., Ltd.
+Nintendo Co.,Ltd
+Nokia Solutions and Networks GmbH & Co. KG
+Oculus VR, LLC
+Orbit Irrigation
+Panasonic Automotive Systems Co.,Ltd
+Panasonic Automotive Systems Company of America
+Pittasoft
+PRO-VISION, Inc.
+Qihoo  360  Technology Co.,Ltd
+Qingdao Intelligent&Precise Electronics Co.,Ltd.
+Qisda Corporation
+Quectel Wireless Solutions Co.,Ltd.
+REALTEK SEMICONDUCTOR CORP.
+Reliance Communications LLC
+Resideo
+Ring LLC
+Ring Solutions
+Rivet Networks
+Roku, Inc
+Ruijie Networks Co.,LTD
+Sagemcom Broadband SAS
+SAMJIN Co., Ltd.
+SAMSARA NETWORKS INC
+SAMSUNG ELECTRO MECHANICS CO., LTD.
+Samsung Electronics Co.,Ltd
+Seongji Industry Company
+Sercomm Corporation.
+SERCOMM PHILIPPINES INC
+SHENZHEN ALONG INVESTMENT CO.,LTD
+SHENZHEN BILIAN ELECTRONIC CO.，LTD
+Shenzhen Chengqian Information Technology Co., Ltd
+Shenzhen Four Seas Global Link Network Technology Co., Ltd.
+Shenzhen iComm Semiconductor CO.,LTD
+SHENZHEN MTC CO LTD
+Shenzhen Phaten Tech. LTD
+shenzhen trolink  Technology Co.,Ltd
+Shenzhen Trolink Technology CO, LTD
+Shenzhen Trolink Technology Co.,LTD
+Shenzhen V-Link Technology CO., LTD.
+Shinwa industries(China) ltd.
+Sierra Wireless, ULC
+Sigmastar Technology Ltd.
+SimpliSafe
+SJI Industry Company
+SJIT Co., Ltd.
+Sleep Number
+Smart Innovation LLC
+Sony Interactive Entertainment Inc.
+SparkLAN Communications, Inc.
+Spreadtrum Communications (Shanghai) Co., Ltd.
+SZ DJI TECHNOLOGY CO.,LTD
+TAIYO YUDEN CO.,LTD
+TechNexion Ltd.
+Tesla,Inc.
+Texas Instruments
+The Chamberlain Group, Inc
+Thomson Telecom Belgium
+TP-Link Systems Inc
+TP-Link Systems Inc.
+TP-LINK TECHNOLOGIES CO.,LTD.
+TPV Display Technology (Xiamen) Co.,Ltd.
+Tuya Smart Inc.
+u-blox AG
+Ubiquiti Inc
+Universal Global Scientific Industrial., Ltd
+Vantiva - Connected Home
+Vantiva Technologies Belgium
+Vantiva USA LLC
+Visteon Corporation
+Visteon Portuguesa, Ltd
+Vizio, Inc
+White Rodgers Division
+Wi-Fi Alliance
+Wingtech Mobile Communications Co.,Ltd
+WNC Corporation
+Wyze Labs Inc
+YAMAHA MOTOR CO.,LTD
+Zhuolian (Shenzhen) Communication Co., Ltd
+Zyxel Communications Corporation

@@ -11,14 +11,16 @@
  * also goes to the store's queue when a store is attached.
  *
  * Cardinality is bounded the way sloth bounds it (§5.2): keys are held
- * per class (device MACs, host IPs, interfaces, channels, alert types),
+ * per class (device MACs, host IPs, BLE addresses, interfaces, channels,
+ * alert types),
  * each class has a cap, and a new key in a full class evicts the one
  * seen least recently, after flushing its open buckets. Evictions are
  * counted per class and shown on /api/health. Global metrics have one
  * key, "", and are never evicted.
  *
- * Only the device and host classes can be churned by a peer: a MAC or
- * an IP is whatever a frame or a packet claims. Their keys are judged
+ * Only the device, host and BLE classes can be churned by a peer: a MAC,
+ * an IP or an advertiser's address is whatever a frame, a packet or an
+ * advertisement claims. Their keys are judged
  * on their whole life, not their sample count. Until a key's samples
  * span WEB_MINUTE_S (last_seen - first_seen >= 60 s) it is not
  * established: its fine buckets close and are written as usual, but
@@ -83,16 +85,31 @@
 #define WEB_DEFAULT_RETAIN_DAYS 30
 #define WEB_RETAIN_DAYS_MAX     400
 
-/* --web-max-keys N: N device keys and N/2 host keys (512 and 256 by
- * default, §5.2). Interfaces, channels and alert types have fixed caps
- * taken from sloth's own bounds: MAX_IFACES, MAX_CHAN_ENTRIES, and the
- * 90 ALERT_TYPE_* kinds with room for more. */
+/* --web-max-keys N: N device keys, N/2 host keys and N BLE addresses
+ * (512, 256 and 512 by default, §5.2). The BLE class is rf.rssi.ble's
+ * own (#177): a resident random-address advertiser is a new key every
+ * fifteen minutes, and in the device class that churn evicted the
+ * quiet Wi-Fi keys' signal history; held apart, it can only evict
+ * other advertisers. Interfaces, channels and alert types have fixed
+ * caps taken from sloth's own bounds: MAX_IFACES, MAX_CHAN_ENTRIES,
+ * and the 90 ALERT_TYPE_* kinds with room for more. */
 #define WEB_DEFAULT_MAX_KEYS 512
 #define WEB_MAX_KEYS_MIN     16
 #define WEB_MAX_KEYS_MAX     8192
 #define WEB_IFACE_KEYS       32
 #define WEB_CHANNEL_KEYS     64
 #define WEB_ALERT_KEYS       128
+/* The record types sloth's stream carries (web_live.h: WEB_LIVE_TYPES),
+ * with headroom: the set is sloth's own, not a peer's to grow. 80
+ * since JSONL 1.1.0 added four: web_scope.c lists 64 types and the
+ * alert lifecycle is five more, which the old 64 no longer held. */
+#define WEB_RECTYPE_KEYS     80
+/* The sensor's host status (web_sysstat.h): its temperature and
+ * voltage sensors (36 at most) and its sources (7), sloth's own
+ * bounded catalogue, with headroom. */
+#define WEB_SYS_KEYS         64
+/* The BLE view's device classes (web_bledev.h): seven, and a spare. */
+#define WEB_BLECLASS_KEYS    8
 /* The longest canonical key: an IPv6 address is at most 45 bytes. */
 #define WEB_KEY_MAX          47
 
@@ -115,7 +132,8 @@
 
 enum { WEB_TIER_FINE = 0, WEB_TIER_MINUTE, WEB_TIER_HOUR, WEB_TIER_COUNT };
 enum { WEB_KC_GLOBAL = 0, WEB_KC_DEV, WEB_KC_HOST, WEB_KC_IFACE, WEB_KC_CHANNEL,
-       WEB_KC_ALERT, WEB_KC_COUNT };
+       WEB_KC_ALERT, WEB_KC_RECTYPE, WEB_KC_SYS, WEB_KC_BLECLASS, WEB_KC_BLE,
+       WEB_KC_COUNT };
 enum { WEB_MK_GAUGE = 0, WEB_MK_COUNTER, WEB_MK_PRESENCE };
 
 /* §5.1, the metrics whose source records sloth emits today
@@ -131,6 +149,59 @@ enum {
     WM_WIFI_AP_COUNT, WM_WIFI_CTRL_TOTAL, WM_WIFI_DEAUTH, WM_WIFI_PROBE_CLIENTS,
     WM_CONNS_TOTAL,
     WM_FLOW_SSH, WM_FLOW_RDP, WM_FLOW_SMB, WM_FLOW_SNMP, WM_FLOW_MQTT,
+    /* dev.present split by capture scope (web_scope.h): the records
+     * the monitor radio heard, and the ones the host's own interfaces
+     * carried. dev.present stays every source's. */
+    WM_DEV_PRESENT_MON, WM_DEV_PRESENT_LOC,
+    /* docs/web-visual-spec.md §7: the Overview tiles' own comparison
+     * (F1), sampled once a pass at the next snapshot batch's first
+     * iface record, when the sampler is wired (web_metrics_set_live(),
+     * web_metrics_set_anomaly()); sensor.drops from every sensor_health
+     * tick regardless; records.rate from every record, keyed by type,
+     * and records.total from the same records, unkeyed: the records/s
+     * tile's own series (F1), which a sum of records.rate's keys on the
+     * page would be one request per type to read. */
+    WM_LIVE_DEVICES, WM_LIVE_ALERTS_OPEN, WM_LIVE_ANOMALIES_OPEN,
+    WM_RECORDS_RATE, WM_RECORDS_TOTAL, WM_SENSOR_DROPS,
+    /* The BLE receivers' two global series (web_ble.h): the advertiser
+     * table's size and the advertising-report rate, from sensor_health.
+     * Global, so never evicted; Monitor's (web_scope.c). */
+    WM_BLE_DEVICES, WM_BLE_ADV_REPORTS,
+    /* RSSI against time per emitter (docs/web-frrs-spec.md Q7, owner
+     * ruling 2026-11-02 "Keep, bounded"): a gauge of the signal sloth
+     * last heard from the emitter, as each record that carries one
+     * reports it, keyed by its MAC, one metric per emitter kind so a
+     * station, an AP and an advertiser never share a series. The Wi-Fi
+     * pair are device class: the key slot is the one dev.present already
+     * holds for the same MAC, and evicts as every device key does. The
+     * BLE one is the BLE class (#177), a cap of its own at the same N,
+     * so rotating advertiser addresses evict each other and never a
+     * Wi-Fi key. A sloth gauge, not a calibrated measurement
+     * (web_metrics.c says which records). */
+    WM_RF_RSSI_STA, WM_RF_RSSI_BSSID, WM_RF_RSSI_BLE,
+    /* The host's own GNSS receiver (web_gnss.h, 2026-11-02): global
+     * gauges from the change-only gnss_fix / gnss_sky records, so each
+     * series is as sparse as its record (a band change or the 300 s
+     * heartbeat). Every scope's, as sensor.drops is. */
+    WM_GNSS_SATS_USED, WM_GNSS_HDOP, WM_GNSS_TIME_OFF_MS, WM_GNSS_CN0_MEAN,
+    /* The BLE Devices view's class rows (web_bledev.h, 2026-11-02), keyed
+     * by class slug: the distinct advertisers of a class heard in the
+     * last two fine buckets, sampled once a snapshot pass (a gauge), and
+     * its advertising reports (a counter, the rows' adv_count deltas, a
+     * one-channel Ubertooth sample left out). Monitor's; not scored by
+     * the anomaly engine (a crowd walking in is not an anomaly). */
+    WM_BLE_CLASS_ADVERTISERS, WM_BLE_CLASS_ADV,
+    /* The sensor's host status and sources (web_sysstat.h, 2026-11-11),
+     * from sloth's sys_status, sys_sensor and source_status records,
+     * one sample a minute. Four global, four keyed by sensor or source
+     * in the "sys" class. sloth's own state, so every scope's; not
+     * scored by the anomaly engine. */
+    WM_SYS_CPU, WM_SYS_MEM_USED, WM_SYS_RSS, WM_SYS_UNDERVOLT,
+    WM_SYS_TEMP, WM_SYS_VOLT, WM_SRC_RATE, WM_SRC_UP,
+    /* The two SQLite stores' size on disk (web_sysstat.h, 2026-11-12),
+     * keyed "sloth" and "slothweb" in the "sys" class; sampled by
+     * slothweb itself (stat()) when a sys_status arrives. */
+    WM_SYS_DB_MB,
     WM_COUNT
 };
 
@@ -138,7 +209,7 @@ typedef struct {
     const char *name;      /* "iface.rx_rate" */
     int         kind;      /* WEB_MK_* */
     int         kclass;    /* WEB_KC_* */
-    const char *keykind;   /* "iface", "ip", "mac", "channel", "alert_type", "" */
+    const char *keykind;   /* "iface", "ip", "mac", "channel", "alert_type", "sys", "" */
     const char *source;    /* the record type(s) and member it comes from */
     const char *unit;
 } web_metric_t;
@@ -211,6 +282,22 @@ typedef struct {
     unsigned long ghost_hits;             /* returning keys given their life */
 } web_kclass_t;
 
+/* A sample queued for a metric more than one thread can write (#218:
+ * WM_ALERTS_FIRED, since either daemon can raise SENSOR_SOURCE_DOWN).
+ * It waits here, under the rollup's own mutex, for close_where() --
+ * called only from the tsdb thread's once-a-second tick -- to apply
+ * it, so the metric keeps the one-writer-per-series rule every other
+ * series already relies on. */
+typedef struct {
+    int       metric;
+    char      key[WEB_KEY_MAX + 1];
+    double    v;
+    int       clamped;
+    long long now_s;
+} web_alertq_row_t;
+
+#define WEB_ALERTQ_CAP 64
+
 typedef struct {
     pthread_mutex_t mu;
     web_kclass_t    cls[WEB_KC_COUNT];
@@ -228,6 +315,9 @@ typedef struct {
     unsigned long   clamped;
     unsigned long   hw_evictions;         /* web_metrics.c's high-water rows */
     unsigned long   rows_closed[WEB_TIER_COUNT];
+    web_alertq_row_t alertq[WEB_ALERTQ_CAP];
+    int             alertq_n;
+    unsigned long   alertq_dropped;
 } web_rollup_t;
 
 typedef struct {
@@ -239,6 +329,7 @@ typedef struct {
     unsigned long q_dropped, churn_dropped, clamped, hw_evictions;
     unsigned long long samples;
     unsigned long rows_closed[WEB_TIER_COUNT];
+    unsigned long alertq_dropped;
 } web_rollup_stats_t;
 
 /* A bucket handed to /api/series. */
@@ -263,6 +354,15 @@ void web_rollup_destroy(web_rollup_t *ru);
  * infinite v is ignored; a larger one is clamped to WEB_VALUE_MAX. */
 void web_rollup_add(web_rollup_t *ru, int metric, const char *key, double v,
                     long long now_s);
+
+/* Same validation as web_rollup_add(), but the sample is queued
+ * instead of applied: for a metric more than one thread can write
+ * (#218), so it keeps one writer. web_rollup_close_due() and
+ * web_rollup_close_all() apply every queued row, in queue order,
+ * before closing due buckets. A full queue drops the row and counts
+ * it (web_rollup_stats_t.alertq_dropped). */
+void web_rollup_queue_add(web_rollup_t *ru, int metric, const char *key,
+                          double v, long long now_s);
 
 /* Close every open bucket whose interval ended at or before now_s;
  * an unestablished key's minute and hour buckets stay open. */
@@ -303,15 +403,36 @@ void web_rollup_presence(web_rollup_t *ru, int metric,
                          long long from, long long until, int ncell,
                          int cell_s, unsigned char *bits);
 
+/* The trails of n keys of a gauge from what is in memory (the fine
+ * ring and the open bucket), for G2 (docs/web-visual-spec.md): for key
+ * k, out[k * ncell + i] is the merge (sum, n, min, max) of every fine
+ * bucket of the key's current series that starts in cell i of ncell
+ * cells of cell_s seconds from from, and before until; t is the cell's
+ * start, or -1 with n 0 where no bucket fell. One pass over the ring
+ * for all n keys, as web_rollup_presence() makes. What the ring has
+ * already overwritten is not there: the trail is memory's, not the
+ * store's. */
+void web_rollup_trail(web_rollup_t *ru, int metric,
+                      const char (*keys)[WEB_KEY_MAX + 1], int n,
+                      long long from, long long until, int ncell, int cell_s,
+                      web_agg_t *out);
+
 /* The keys holding a series of metric, most recently seen first, at
  * most max. *total gets how many there are. */
 int  web_rollup_keys(web_rollup_t *ru, int metric, web_keyinfo_t *out,
                      int max, int *total);
+/* Does key hold a series of metric now? */
+int  web_rollup_has(web_rollup_t *ru, int metric, const char *key);
 
 void web_rollup_stats(web_rollup_t *ru, web_rollup_stats_t *st);
 /* Rows waiting in the store queue. */
 size_t web_rollup_queued(web_rollup_t *ru);
 void web_rollup_note_hw_eviction(web_rollup_t *ru);
+
+/* Is metric one of the rf.rssi.* gauges? The anomaly engine scores no
+ * signal strength (web_anomaly.c's A1): a person walking past an AP is
+ * not an anomaly, and no rule was asked for over it. */
+int  web_metric_is_rssi(int metric);
 
 /* The value a bucket stands for: sum/n for a gauge, sum for a counter,
  * max for presence. */

@@ -1,0 +1,10 @@
+/* Plain notes on devices, advertisers, SSIDs, satellites, aircraft and
+ * stations (web/ui/subnotes.js). Its own file, as notes.css is. Only
+ * the page's tokens and the triage classes: no new colour. */
+.subnotes { margin-top: 8px; }
+.subnotes .notes-form input[type=text] { width: 40ch; max-width: 100%; }
+/* A row's mark and the word on anything an agent wrote: small, framed,
+ * in the page's rule colour, so it reads as a tag and not as data. */
+.subnotes-mark, .subnotes-agent { font-size: 10px; border: 1px solid var(--rule); padding: 0 3px; margin-left: 4px; white-space: nowrap; }
+.subnotes-agent { border-color: var(--brass-edge); }
+.subnotes-struck { text-decoration: line-through; }

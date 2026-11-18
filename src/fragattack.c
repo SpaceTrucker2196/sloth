@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <string.h>
 #include <pthread.h>
 
@@ -26,8 +27,8 @@
  * order is the lock table in docs/wiki/architecture.md (#95). */
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
-/* The five tables are stab_t since #110, every one STAB_OLDEST with its
- * own SH_EVICT_FRAG_* tally. stab's own mutex is NULL on all of them:
+/* The tables are stab_t since #110 (five then, g_ap since #180), every
+ * one STAB_OLDEST with its own SH_EVICT_FRAG_* tally. stab's own mutex is NULL on all of them:
  * g_mu above already serialises every get-and-update, and the row
  * pointers stab hands back are only safe to write under that lock
  * anyway (stab.h, "Locking"). Before this they were five copies of the
@@ -68,6 +69,130 @@ static int sta_key_eq(const void *row, const void *key) {
 
 STAB_DECL(g_sta, frag_sta_t, FRAG_MAX_STATIONS, last_seen, STAB_OLDEST,
           SH_EVICT_FRAG_STA, NULL, sta_key_eq);
+
+/* ── Who the AP is (#180) ─────────────────────────────────────────────
+ *
+ * What the last decoded Beacon from each BSSID said about its AP MLD.
+ * Its own table, not a field on g_bss: g_bss rows are created by data
+ * frames and are what VIEW_FRAGATTACK lists, and a beacon-created row
+ * would put every AP in range on that view and refresh last_seen on
+ * rows the LRU is meant to retire.
+ *
+ * Not mle.c's roster, which is what the issue first pointed at. That
+ * roster is keyed by MLD MAC and holds the affiliated addresses a Basic
+ * MLE's Per-STA Profiles list; a Beacon's Basic MLE names the MLD but
+ * not the reporting AP's own address, so the transmitting BSSID is never
+ * one of its links and mle_canonical(bssid) misses (pinned by
+ * test_beacon_mle_roster_never_names_the_bssid). That is also why the
+ * reference host's FRRS record for the alerting BSSID showed
+ * ecs.mld_mac = null: FRRS joins a BSSID to an MLD only through the
+ * wifi_mld record's link list. And the roster merges client MLDs from
+ * (Re)Association Requests, so trusting it here would let a forged
+ * request's MLE name any address as the AP and silence this detector.
+ * mle.c's per-BSSID table (#104 slice 6) does hold the binding, but has
+ * no lookup and is read only through mle_snapshot(). */
+typedef struct {
+    uint8_t bssid[6];
+    uint8_t mld[6];
+    int     has_mld;     /* 0: the beacon carried no usable Basic MLE */
+    time_t  last_seen;
+} frag_ap_t;
+
+static int ap_key_eq(const void *row, const void *key) {
+    return mac_eq(((const frag_ap_t *)row)->bssid, (const uint8_t *)key);
+}
+
+STAB_DECL(g_ap, frag_ap_t, FRAG_MAX_AP_IDENT, last_seen, STAB_OLDEST,
+          SH_EVICT_FRAG_AP_IDENT, NULL, ap_key_eq);
+
+/* The usual vendor derivation of an AP MLD MAC from its first link
+ * address: set the locally-administered bit in octet 0 (the Arcadyan
+ * on the reference host also changed bit 5: 18 -> 3a), keep octets
+ * 1-4, step octet 5 by at most one (24:30 -> 24:2f). No wrap across
+ * 00/ff: the observed derivation does not need it, and the narrower
+ * guess is the one that hides less. */
+static int mld_sibling(const uint8_t bssid[6], const uint8_t a[6]) {
+    if (a[0] & 0x01) return 0;               /* group: never an AP */
+    if (!(a[0] & 0x02)) return 0;            /* universally administered */
+    if (memcmp(a + 1, bssid + 1, 4) != 0) return 0;
+    int d = (int)a[5] - (int)bssid[5];
+    return d >= -1 && d <= 1;
+}
+
+/* Caller holds g_mu. */
+static frag_ap_ident_t ap_identity_locked(const uint8_t bssid[6],
+                                          const uint8_t a[6]) {
+    if (mac_eq(a, bssid)) return FRAG_AP_BSSID;
+    const frag_ap_t *r = stab_find(&g_ap, bssid);
+    if (r) {
+        /* The BSS has described itself: it is an AP MLD with this MLD
+         * MAC, or (no MLE) not an MLD at all. Either way there is
+         * nothing left to guess, and an address that only looks like a
+         * sibling is not the AP. */
+        return r->has_mld && mac_eq(a, r->mld) ? FRAG_AP_MLD : FRAG_AP_NO;
+    }
+    return mld_sibling(bssid, a) ? FRAG_AP_MLD_SIBLING : FRAG_AP_NO;
+}
+
+/* The identity the key-install gate files a station under. The AP's
+ * frames carry its BSSID as SA on some paths and its MLD MAC on others,
+ * so without this an AP MLD's witnessed encryption under one address
+ * would not gate its plaintext under the other. Only the identities the
+ * BSS itself advertised are merged: merging on the sibling heuristic
+ * could open the gate for a station that never installed a key, and a
+ * guess may withhold a CRIT but never create one. */
+static const uint8_t *gate_identity(const uint8_t bssid[6],
+                                    const uint8_t sa[6]) {
+    frag_ap_ident_t id = ap_identity_locked(bssid, sa);
+    return (id == FRAG_AP_BSSID || id == FRAG_AP_MLD) ? bssid : sa;
+}
+
+frag_ap_ident_t frag_ap_identity(const uint8_t bssid[6], const uint8_t addr[6]) {
+    if (!bssid || !addr) return FRAG_AP_NO;
+    pthread_mutex_lock(&g_mu);
+    frag_ap_ident_t id = ap_identity_locked(bssid, addr);
+    pthread_mutex_unlock(&g_mu);
+    return id;
+}
+
+void frag_note_beacon(const uint8_t bssid[6], const uint8_t *mld_mac,
+                      time_t now) {
+    if (!bssid || (bssid[0] & 0x01)) return;
+    pthread_mutex_lock(&g_mu);
+    int created;
+    frag_ap_t *r = stab_get(&g_ap, bssid, now, &created);
+    if (created) memcpy(r->bssid, bssid, 6);
+    /* Latest beacon wins. A forged beacon naming another MLD steers
+     * this for the address it names until the AP's next real beacon,
+     * about 100 ms later, overwrites it - so naming a relaying station
+     * as the "MLD" silences FRAG_EAPOL_RELAY for that station only if
+     * the forgery is timed in front of each relayed frame. Nothing
+     * compares one beacon's MLD MAC with the last beacon's from the
+     * same BSSID: MLE_PR_BEACON_DIFF compares a Probe Response with a
+     * Beacon, not two Beacons. A known, documented limit
+     * (docs/wiki/fragattacks.md), not a closed hole. */
+    r->has_mld = mld_mac && !(mld_mac[0] & 0x01);
+    if (r->has_mld) memcpy(r->mld, mld_mac, 6);
+    else            memset(r->mld, 0, 6);
+    r->last_seen = now;
+    pthread_mutex_unlock(&g_mu);
+}
+
+const char *frag_sibling_note(const frag_bss_t *b, char *buf, size_t n) {
+    if (!buf || n == 0) return "";
+    buf[0] = '\0';
+    if (b && b->eapol_mld_sibling > 0)
+        snprintf(buf, n, "; %u more withheld as the AP MLD"
+                         " (mld-sibling heuristic)", b->eapol_mld_sibling);
+    return buf;
+}
+
+int frag_ap_ident_count(void) {
+    pthread_mutex_lock(&g_mu);
+    int n = stab_count(&g_ap);
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
 
 /* ── Slice 2: fragment sessions + association timing ──────── */
 
@@ -528,14 +653,26 @@ static void observe_locked(const dot11_frame_t *f, time_t now) {
      * BSSID and both stations are peers, so every EAPOL frame would
      * match and mean nothing. Unicast only, for the same reason: a
      * group address can never equal the BSSID, so including broadcast
-     * would fire on a shape the CVE does not describe. */
+     * would fire on a shape the CVE does not describe.
+     *
+     * "The AP" is frag_ap_identity()'s answer, not "the BSSID" (#180):
+     * an AP MLD's authenticator sends and receives EAPOL under its MLD
+     * MAC, so its every M1-M4 on a Wi-Fi 7 link has neither address
+     * equal to the BSSID. A frame cleared only by the sibling heuristic
+     * is counted apart, never as a relay. */
     if ((f->to_ds || f->from_ds) && !dot11_is_group_addr(da) &&
-        !mac_eq(sa, bssid) && !mac_eq(da, bssid) &&
         first_frag_ethertype(f) == ETHERTYPE_EAPOL) {
-        b->eapol_relay++;
-        memcpy(b->last_sa, sa, 6);
-        memcpy(b->last_da, da, 6);
-        b->last_hit = now;
+        frag_ap_ident_t is = ap_identity_locked(bssid, sa);
+        frag_ap_ident_t id = ap_identity_locked(bssid, da);
+        if (is == FRAG_AP_NO && id == FRAG_AP_NO) {
+            b->eapol_relay++;
+            memcpy(b->last_sa, sa, 6);
+            memcpy(b->last_da, da, 6);
+            b->last_hit = now;
+        } else if (is != FRAG_AP_BSSID && is != FRAG_AP_MLD &&
+                   id != FRAG_AP_BSSID && id != FRAG_AP_MLD) {
+            b->eapol_mld_sibling++;
+        }
     }
 
     /* Session bookkeeping runs before the protected/plaintext branch
@@ -547,12 +684,15 @@ static void observe_locked(const dot11_frame_t *f, time_t now) {
                       protected_bit, pn, sc, now);
     }
 
+    /* The AP's two addresses are one station to the gate (#180). */
+    const uint8_t *gsa = gate_identity(bssid, sa);
+
     if (protected_bit) {
         b->protected_frames++;
         /* The transmitter is the one whose key install we witnessed.
          * For a downlink frame that is the AP, which is exactly right:
          * a later plaintext frame *from the AP* is the -26140 case. */
-        sta_mark_protected(bssid, sa, now);
+        sta_mark_protected(bssid, gsa, now);
         return;
     }
 
@@ -561,7 +701,7 @@ static void observe_locked(const dot11_frame_t *f, time_t now) {
      * station, an unprotected frame is an open network or a client
      * mid-association — the overwhelmingly common case, and not a
      * signal. */
-    if (!sta_known(bssid, sa)) return;
+    if (!sta_known(bssid, gsa)) return;
 
     if (dot11_is_group_addr(da)) {
         /* CVE-2020-26145. Broadcast reassembly is not permitted in a
@@ -706,5 +846,6 @@ void frag_clear(void) {
     stab_clear(&g_sess);
     stab_clear(&g_assoc_evt);
     stab_clear(&g_mpdu);
+    stab_clear(&g_ap);
     pthread_mutex_unlock(&g_mu);
 }
