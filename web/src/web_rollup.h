@@ -287,13 +287,23 @@ typedef struct {
  * It waits here, under the rollup's own mutex, for close_where() --
  * called only from the tsdb thread's once-a-second tick -- to apply
  * it, so the metric keeps the one-writer-per-series rule every other
- * series already relies on. */
+ * series already relies on.
+ *
+ * Samples for the same (metric, key, fine-tier bucket) coalesce into
+ * one row in place (#230): under a sustained alert stream, one row
+ * per alert record filled the queue and dropped the rest within a
+ * single tsdb tick, undercounting alerts.fired by orders of
+ * magnitude. sum/vmin/vmax/n/clamped_n mirror what a web_agg_t bucket
+ * itself tracks, so applying one merged row reproduces exactly what
+ * applying its n original samples one at a time would have. */
 typedef struct {
     int       metric;
     char      key[WEB_KEY_MAX + 1];
-    double    v;
-    int       clamped;
-    long long now_s;
+    long long bucket;      /* bucket_of(now_s, WEB_FINE_S): the merge key */
+    double    sum, vmin, vmax;
+    int       n;
+    int       clamped_n;
+    long long now_s;       /* latest merged sample's time */
 } web_alertq_row_t;
 
 #define WEB_ALERTQ_CAP 64

@@ -876,10 +876,16 @@ static void test_queue_add_defers_until_close(void) {
 }
 
 /* Applied in queue order, close_all() included: two samples of one
- * key, queued together, aggregate exactly as if web_rollup_add() had
- * been called twice in that order -- the drain must replay the queue,
- * not just the last row of it. Seen red by draining only alertq[0]
- * (off-by-one on the loop bound): n would be 1 and sum 3. */
+ * key in the same fine bucket aggregate exactly as if
+ * web_rollup_add() had been called twice in that order. Since #230
+ * they also coalesce into one queued row rather than two -- the
+ * aggregate is unaffected either way, because folding n samples into
+ * one row and applying it once reproduces applying them one at a
+ * time (apply_agg_locked()'s contract). Seen red by making
+ * web_rollup_queue_add() always append a new row instead of merging:
+ * sum and n are unchanged here (coalescing is invisible to the
+ * aggregate), but test_queue_add_coalesces_same_key_same_bucket below
+ * goes red, because its loop count then exceeds WEB_ALERTQ_CAP. */
 static void test_queue_add_order_preserved_through_drain(void) {
     fresh(64, 0);
     const long long T = 1792627200;
@@ -896,30 +902,109 @@ static void test_queue_add_order_preserved_through_drain(void) {
     web_rollup_destroy(&ru);
 }
 
-/* A full queue drops the new row and counts it, the same shape as
- * every other bounded queue here -- it never blocks or grows. Seen
- * red by sizing the ring one row short of WEB_ALERTQ_CAP (an
- * off-by-one: the (CAP-1)th push would also drop). */
-static void test_queue_add_drops_when_full_and_counts(void) {
+/* Order across *distinct* queued rows still replays correctly after
+ * #230's coalescing -- two different keys never merge, so the queue
+ * still holds two rows and the drain loop must walk both. Seen red by
+ * draining only alertq[0] (an off-by-one on the loop bound): key "b"
+ * would never be applied before close_all() and web_rollup_has()
+ * would read 0 for it. */
+static void test_queue_add_distinct_keys_both_applied(void) {
+    fresh(64, 0);
+    const long long T = 1792627200;
+    web_rollup_queue_add(&ru, WM_ALERTS_FIRED, "a", 3, T);
+    web_rollup_queue_add(&ru, WM_ALERTS_FIRED, "b", 5, T);
+    web_rollup_close_all(&ru);
+    web_point_t p[4];
+    WT_EQ(fine(WM_ALERTS_FIRED, "a", T, T + 10, 1, p, 4), 1);
+    WT_EQ(p[0].sum, 3);
+    WT_EQ(fine(WM_ALERTS_FIRED, "b", T, T + 10, 1, p, 4), 1);
+    WT_EQ(p[0].sum, 5);
+    web_rollup_destroy(&ru);
+}
+
+/* #230: a sustained stream of one alert type used to fill the queue
+ * after WEB_ALERTQ_CAP samples and drop (and undercount) the rest --
+ * observed on a live sensor at ~860 alerts/s dropped. Same key, same
+ * fine bucket, well past the cap: every sample folds into the one
+ * queued row instead, so nothing drops and the bucket's sum is exact.
+ * Seen red (alertq_dropped != 0, summed count != 10000) by reverting
+ * web_rollup_queue_add() to always append instead of searching for a
+ * row to merge into. */
+static void test_queue_add_coalesces_same_key_same_bucket(void) {
+    fresh(64, 0);
+    const long long T = 1792627200;
+    for (int i = 0; i < 10000; i++)
+        web_rollup_queue_add(&ru, WM_ALERTS_FIRED, "9", 1, T);
+    web_rollup_stats_t st;
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.alertq_dropped, 0);
+    WT_EQ(st.samples, 0);      /* still queued, not yet drained */
+    web_rollup_close_all(&ru);
+    web_point_t p[4];
+    WT_EQ(fine(WM_ALERTS_FIRED, "9", T, T + 10, 1, p, 4), 1);
+    WT_EQ(p[0].n, 10000);
+    WT_ASSERT(p[0].sum == 10000 && p[0].min == 1 && p[0].max == 1);
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.samples, 10000);
+    WT_EQ(st.alertq_dropped, 0);
+    web_rollup_destroy(&ru);
+}
+
+/* #230 secondary: more than WEB_ALERTQ_CAP *distinct* alert types
+ * firing inside one tsdb tick can still fill the queue even with
+ * coalescing (each key gets its own row). web_rollup_queue_add()
+ * drains the queue in place rather than dropping the overflow row,
+ * so every key is counted, none lost. Seen red (some high keys read
+ * 0 from web_rollup_has(), alertq_dropped != 0) by removing the
+ * "queue full -> drain_alertq_locked()" branch and restoring a bare
+ * drop-and-count. */
+static void test_queue_add_many_distinct_keys_drains_inline(void) {
     fresh(64, 0);
     const long long T = 1792627200;
     char k[16];
-    for (int i = 0; i < WEB_ALERTQ_CAP; i++) {
-        snprintf(k, sizeof(k), "%d", i % 90);
+    /* More than WEB_ALERTQ_CAP (64), comfortably under WEB_ALERT_KEYS
+     * (128) so the alert kclass itself never evicts a key -- this
+     * isolates the queue's own overflow handling from the unrelated
+     * per-class LRU cap. */
+    const int NUM = 100;
+    for (int i = 0; i < NUM; i++) {
+        snprintf(k, sizeof(k), "%d", i);
         web_rollup_queue_add(&ru, WM_ALERTS_FIRED, k, 1, T);
     }
     web_rollup_stats_t st;
     web_rollup_stats(&ru, &st);
     WT_EQ(st.alertq_dropped, 0);
-    web_rollup_queue_add(&ru, WM_ALERTS_FIRED, "1", 1, T);
-    web_rollup_stats(&ru, &st);
-    WT_EQ(st.alertq_dropped, 1);
     web_rollup_close_all(&ru);
+    for (int i = 0; i < NUM; i++) {
+        snprintf(k, sizeof(k), "%d", i);
+        WT_EQ(web_rollup_has(&ru, WM_ALERTS_FIRED, k), 1);
+    }
     web_rollup_stats(&ru, &st);
-    /* The dropped row never arrives, so samples is exactly the first
-     * WEB_ALERTQ_CAP pushes, not CAP + 1. */
-    WT_EQ(st.samples, WEB_ALERTQ_CAP);
-    WT_EQ(st.alertq_dropped, 1);
+    WT_EQ(st.alertq_dropped, 0);
+    WT_EQ(st.samples, NUM);
+    web_rollup_destroy(&ru);
+}
+
+/* #230: coalescing is keyed by fine bucket too, not just metric+key --
+ * two same-key samples either side of a WEB_FINE_S boundary, both
+ * still queued when close_all() drains them, must land in their own
+ * 10 s buckets rather than merge into whichever one now_s happens to
+ * land in last. Seen red (one bucket of n=2 instead of two of n=1
+ * each) by matching the merge on metric+key alone. */
+static void test_queue_add_bucket_boundary_kept_separate(void) {
+    fresh(64, 0);
+    const long long T = 1792627200;   /* a WEB_FINE_S-aligned second */
+    web_rollup_queue_add(&ru, WM_ALERTS_FIRED, "9", 1, T + 9);
+    web_rollup_queue_add(&ru, WM_ALERTS_FIRED, "9", 1, T + 10);
+    web_rollup_close_all(&ru);
+    web_point_t p[4];
+    /* fine() reads newest first (test_ring_query_merges_and_bounds). */
+    int n = fine(WM_ALERTS_FIRED, "9", T, T + 20, 1, p, 4);
+    WT_EQ(n, 2);
+    WT_EQ(p[0].t, T + 10);
+    WT_EQ(p[0].n, 1);
+    WT_EQ(p[1].t, T);
+    WT_EQ(p[1].n, 1);
     web_rollup_destroy(&ru);
 }
 
@@ -959,6 +1044,9 @@ void run_rollup_tests(void) {
     WT_RUN(test_queue_holds_max_keys_hour_and_shutdown);
     WT_RUN(test_queue_add_defers_until_close);
     WT_RUN(test_queue_add_order_preserved_through_drain);
-    WT_RUN(test_queue_add_drops_when_full_and_counts);
+    WT_RUN(test_queue_add_distinct_keys_both_applied);
+    WT_RUN(test_queue_add_coalesces_same_key_same_bucket);
+    WT_RUN(test_queue_add_many_distinct_keys_drains_inline);
+    WT_RUN(test_queue_add_bucket_boundary_kept_separate);
     WT_RUN(test_catalogue);
 }

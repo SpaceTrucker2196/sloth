@@ -535,13 +535,18 @@ static const char *sample_prep(int metric, const char *key, double *v,
     return key;
 }
 
-/* The bucket-mutating half of web_rollup_add(), shared with the
- * alert queue's drain (close_where()): the caller holds ru->mu and
- * key is already valid and canonical. */
-static void apply_sample_locked(web_rollup_t *ru, int metric, const char *key,
-                                double v, int clamped, long long now_s) {
-    ru->samples++;
-    if (clamped) ru->clamped++;
+/* The bucket-mutating half of web_rollup_add(), shared with the alert
+ * queue's drain (close_where()): the caller holds ru->mu and key is
+ * already valid and canonical. sum/vmin/vmax/n/clamped_n describe
+ * n>=1 original samples already folded together (n==1,
+ * vmin==vmax==sum is a single raw sample); applying the fold once
+ * reproduces what applying each of the n samples in turn would have,
+ * because a bucket's own sum/min/max/n fold the same way (#230). */
+static void apply_agg_locked(web_rollup_t *ru, int metric, const char *key,
+                             double sum, double vmin, double vmax, int n,
+                             int clamped_n, long long now_s) {
+    ru->samples += (unsigned long long)n;
+    ru->clamped += (unsigned long)clamped_n;
     const web_metric_t *md = &web_metric_defs[metric];
     web_kclass_t *c = &ru->cls[md->kclass];
     web_rkey_t *k = key_get(ru, c, key, now_s);
@@ -560,17 +565,22 @@ static void apply_sample_locked(web_rollup_t *ru, int metric, const char *key,
         if (a->t != b) {
             emit(ru, k, metric, t);
             a->t = b;
-            a->sum = v;
-            a->min = v;
-            a->max = v;
-            a->n = 1;
+            a->sum = sum;
+            a->min = vmin;
+            a->max = vmax;
+            a->n = n;
             continue;
         }
-        a->sum += v;
-        if (v < a->min) a->min = v;
-        if (v > a->max) a->max = v;
-        a->n++;
+        a->sum += sum;
+        if (vmin < a->min) a->min = vmin;
+        if (vmax > a->max) a->max = vmax;
+        a->n += n;
     }
+}
+
+static void apply_sample_locked(web_rollup_t *ru, int metric, const char *key,
+                                double v, int clamped, long long now_s) {
+    apply_agg_locked(ru, metric, key, v, v, v, 1, clamped ? 1 : 0, now_s);
 }
 
 void web_rollup_add(web_rollup_t *ru, int metric, const char *key, double v,
@@ -583,34 +593,57 @@ void web_rollup_add(web_rollup_t *ru, int metric, const char *key, double v,
     pthread_mutex_unlock(&ru->mu);
 }
 
+/* Applies every queued alert row, in queue order, then empties the
+ * queue. The caller holds ru->mu (close_where()'s only caller, and
+ * web_rollup_queue_add() when it needs to make room, do the same). */
+static void drain_alertq_locked(web_rollup_t *ru) {
+    for (int i = 0; i < ru->alertq_n; i++) {
+        web_alertq_row_t *q = &ru->alertq[i];
+        apply_agg_locked(ru, q->metric, q->key, q->sum, q->vmin, q->vmax,
+                         q->n, q->clamped_n, q->now_s);
+    }
+    ru->alertq_n = 0;
+}
+
 void web_rollup_queue_add(web_rollup_t *ru, int metric, const char *key,
                           double v, long long now_s) {
     int clamped;
     const char *kk = sample_prep(metric, key, &v, &clamped);
     if (!kk) return;
+    long long b = bucket_of(now_s, WEB_FINE_S);
     pthread_mutex_lock(&ru->mu);
-    if (ru->alertq_n >= WEB_ALERTQ_CAP) {
-        ru->alertq_dropped++;
-    } else {
-        web_alertq_row_t *q = &ru->alertq[ru->alertq_n++];
+    web_alertq_row_t *q = NULL;
+    for (int i = 0; i < ru->alertq_n; i++) {
+        web_alertq_row_t *r = &ru->alertq[i];
+        if (r->metric == metric && r->bucket == b && !strcmp(r->key, kk)) {
+            q = r;
+            break;
+        }
+    }
+    if (!q) {
+        /* Every distinct (metric, key, bucket) merges above, so a
+         * still-full queue means more than WEB_ALERTQ_CAP of them
+         * fired inside one tsdb tick -- rare, but drain what's
+         * already queued, under the same mutex close_where() would
+         * hold, rather than drop the new one (#230). */
+        if (ru->alertq_n >= WEB_ALERTQ_CAP) drain_alertq_locked(ru);
+        q = &ru->alertq[ru->alertq_n++];
         q->metric = metric;
         snprintf(q->key, sizeof(q->key), "%s", kk);
-        q->v = v;
-        q->clamped = clamped;
-        q->now_s = now_s;
+        q->bucket = b;
+        q->sum = 0;
+        q->vmin = v;
+        q->vmax = v;
+        q->n = 0;
+        q->clamped_n = 0;
     }
+    q->sum += v;
+    if (v < q->vmin) q->vmin = v;
+    if (v > q->vmax) q->vmax = v;
+    q->n++;
+    if (clamped) q->clamped_n++;
+    q->now_s = now_s;
     pthread_mutex_unlock(&ru->mu);
-}
-
-/* Applies every queued alert sample, in queue order, then empties the
- * queue. The caller holds ru->mu (close_where()'s only caller does
- * the same). */
-static void drain_alertq_locked(web_rollup_t *ru) {
-    for (int i = 0; i < ru->alertq_n; i++) {
-        web_alertq_row_t *q = &ru->alertq[i];
-        apply_sample_locked(ru, q->metric, q->key, q->v, q->clamped, q->now_s);
-    }
-    ru->alertq_n = 0;
 }
 
 static void close_where(web_rollup_t *ru, long long now_s, int all) {
