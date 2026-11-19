@@ -1422,8 +1422,11 @@ size_t web_live_json_scoped(web_live_t *l, const web_scope_ctx_t *sc,
     for (unsigned long long q = lo; hi && q <= hi; q++) {
         const web_live_rec_t *e = &l->ring[(q - 1) % WEB_LIVE_RING];
         if (scoped && !web_scope_pass(sc->scope, e->sc)) continue;
-        /* The joined network's rows, under Monitor (#234). */
-        if (e->own && sc->scope == WEB_SCOPE_MONITOR) continue;
+        /* The joined network's rows, under Monitor (#234). sc is NULL
+         * for the unscoped answer (web_live_json()): scoped says it is
+         * not. Dereferencing it here took slothweb down 30 times in two
+         * hours on Beta-Site, 2026-11-19. */
+        if (scoped && e->own && sc->scope == WEB_SCOPE_MONITOR) continue;
         if (nr++) web_jw_raw(&w, ",");
         web_jw_raw(&w, "{\"seq\":"); web_jw_int(&w, (long long)e->seq);
         web_jw_raw(&w, ",\"type\":"); web_jw_str(&w, e->type);

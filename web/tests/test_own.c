@@ -219,6 +219,14 @@ static void test_own_live(void) {
     WT_ASSERT(web_live_json_scoped(l, &sc, out, sizeof(out), t0 + 2) > 0);
     WT_HAS(out, "\"seq\":1,");
     WT_HAS(out, "\"seq\":2,");
+    /* No scope at all (web_live_json(), a NULL context): the joined
+     * network's rows are there and nothing is dereferenced. Without
+     * the "scoped &&" guard this call is the one that took the live
+     * slothweb down (SIGSEGV in web_live_json_scoped(), 2026-11-19);
+     * the test was not rerun against the unguarded line. */
+    WT_ASSERT(web_live_json(l, out, sizeof(out), t0 + 2) > 0);
+    WT_HAS(out, "\"seq\":1,");
+    WT_HAS(out, "\"seq\":2,");
     web_live_destroy(l);
     free(l);
     web_own_bind(NULL);
