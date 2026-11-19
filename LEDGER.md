@@ -397,3 +397,4 @@
 | 66814a7 | 2026-11-19T18:12:26Z | claude-fable-5-1, claude-opus-5-5 | 126 | 5895 | 5024113 | 19031 | 1.8675 | #233 Stage 3: contract grows for sloth-mesh; sloth-mesh carved and built (builder+reviewer workflow) |
 | 81cc44c | 2026-11-19T18:12:26Z | claude-fable-5-1, claude-fable-5-2, claude-opus-4-8, claude-opus-5, claude-opus-5-5, claude-sonnet-5-5 | 174092 | 9310793 | 8029100001 | 339975581 | 4386.8622 | backfill: subagent and workflow turns before 2026-11-19: ledger.py read only top-level transcripts until then |
 | 147bcd0 | 2026-11-19T20:44:28Z | claude-fable-5-1, claude-opus-5-5 | 394 | 136585 | 42375699 | 759526 | 15.2556 | slothweb: the larger time graphs as isometric waterfalls (builder+reviewer workflow) |
+| 10379fba | 2026-11-19T20:47:07Z | claude-opus-5-5 | 542 | 203126 | 62420557 | 634191 | 21.6223 | slothweb --post: sloth-ios sensor posts, /api/posts roster, only ble_contact tra |
