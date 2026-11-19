@@ -28,7 +28,7 @@ gen=${3:-build/intel/intel_gen}
 commit=${4:-}
 packs="attacker-ouis ble-watchlist camera-vendor oui-builtin surveillance-endpoints tool-fingerprints"
 
-[ -n "$pack" ] && [ -d "$pack" ] || { echo "update_intel: PACK must be a directory" >&2; exit 2; }
+if [ -z "$pack" ] || [ ! -d "$pack" ]; then echo "update_intel: PACK must be a directory" >&2; exit 2; fi
 [ -x "$gen" ] || { echo "update_intel: $gen not built" >&2; exit 2; }
 
 if [ -f "$pack/VERSION" ]; then
@@ -63,10 +63,12 @@ for p in $packs; do
     cp "$pack/$p/manifest.json" "$tmp/$p/"
     # The listed paths: flat names (intel_read.c refuses any other), so
     # a "path" member's value is the whole file name.
-    for f in $(sed -n 's/^[[:space:]]*"path":[[:space:]]*"\([A-Za-z0-9._+-]*\)".*/\1/p' "$pack/$p/manifest.json"); do
+    sed -n 's/^[[:space:]]*"path":[[:space:]]*"\([A-Za-z0-9._+-]*\)".*/\1/p' "$pack/$p/manifest.json" > "$tmp/$p.files"
+    while IFS= read -r f; do
         [ -f "$pack/$p/$f" ] || { echo "update_intel: $pack/$p/$f missing" >&2; exit 1; }
         cp "$pack/$p/$f" "$tmp/$p/"
-    done
+    done < "$tmp/$p.files"
+    rm -f "$tmp/$p.files"
 done
 
 "$gen" lock "$tmp" "$version" "$commit" "$(date -u +%Y-%m-%d)"
