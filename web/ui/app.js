@@ -3590,7 +3590,7 @@
     "(2.4 GHz cool, 5 GHz warm, 6 GHz violet; DFS channels dashed), the column's body its busiest transmitters " +
     "stacked in their SSIDs' colours, keyed by the card's scan table below, whose key buttons fade every other SSID; " +
     "under the channel names a clients lane, a diamond under each channel clients were heard on, sized by how many, " +
-    "in their network's colour; " +
+    "in their network's colour, a row's key in the clients table tracing one client's channels; " +
     "arrow keys pick a cell (left and right a channel, up older, down newer), the list below names it";
   function channelGrid() {
     var iso = WF.iso, hz = $("w-grid").value !== "mix";
@@ -3700,12 +3700,16 @@
     return by;
   }
   // The SSID picked, dropped once the window no longer holds it; the
-  // scan table drawn again so its keys say what is picked.
+  // scan table and the clients table drawn again so their keys say
+  // what is picked.
   function isoKey() {
     // Only a loaded mix can say the SSID left: a reload clears WF.mix
     // and the heat can land first.
     if (WF.hl !== null && WF.mix && !isoSsids().has(WF.hl)) WF.hl = null;
     if (SCOPE !== "monitor") cardScanDraw();
+    // The clients table's keys say what is traced (clientKeyCell()).
+    isoClient();
+    clientsDraw();
     return WF.hl;
   }
 
@@ -4261,16 +4265,83 @@
   function seenWord(s) { return s % 86400 ? Math.round(s / 3600) + "h" : Math.round(s / 86400) + "d"; }
   var DTWL = DataTable({ id: "wclients", label: "probing clients", box: $("w-cl-box"),
     head: $("w-cl-head"), reset: $("w-cl-tools"), redraw: function () { clientsDraw(); }, cols: [
+      { k: "key", label: "key", w: 4, min: 3, type: "none" },
       { k: "mac", label: "mac", w: 20, min: 8, type: "mac", val: av("mac") },
       { k: "ven", label: "vendor", w: 12, flex: true, type: "text", val: av("vendor") },
       { k: "sig", label: "dBm", px: 196, min: 3, type: "num", val: av("signal") },
       { k: "pr", label: "24 h presence", px: 146, ruler: true },
       { k: "ls", label: "last", w: 10, type: "time", val: av("last_seen") }
     ] });
+  // A row's key: the trace the waterfall's own key had as its Clients
+  // buttons until 2026-11-18 (owner: "move the client tracing to the
+  // clients table"). Pressed, the client's channels are traced in their
+  // colours, the cells it was named in outlined and every other cell
+  // faded, until pressed again; a client and an SSID are not
+  // highlighted together. Off for a client the window's mix does not
+  // name: it is named only where it was one of a cell's five busiest.
+  function clientKeyCell(d) {
+    var c = clientsOf().find(function (x) { return x.id === d.mac; }) || null;
+    var b = el("button", "chip scan-key");
+    b.type = "button";
+    var sw = el("span", "sw dia");
+    b.appendChild(sw);
+    if (!c || !WF.iso) {
+      b.disabled = true;
+      b.title = !WF.iso ? "the isometric waterfall's trace: tick isometric" :
+        "not among the transmitters the monitor radio named in the window";
+      return b;
+    }
+    var on = WF.pc === c.id;
+    sw.style.backgroundColor = clientColor(c);
+    b.ariaPressed = on ? "true" : "false";
+    b.title = (on ? "show every cell again" : "trace its channels on the waterfall, fade the rest") + "; " +
+      c.chans.map(function (ch) { return "ch " + ch[0] + " " + fmt(ch[1]); }).join(", ") + " frames";
+    b.ariaLabel = clientName(c) + ": " + b.title;
+    b.addEventListener("click", function (ev) {
+      // The row's own click opens the drawer.
+      ev.stopPropagation();
+      WF.pc = on ? null : c.id;
+      if (WF.pc !== null) WF.hl = null;
+      channelGrid();
+      // The table is drawn anew: the focus back on the same row's key.
+      var rows = $("w-cl").querySelectorAll(".dt-row[data-mac]");
+      for (var i = 0; i < rows.length; i++)
+        if (rows[i].dataset.mac === d.mac) { rows[i].firstChild.focus(); break; }
+    });
+    return b;
+  }
+  // The clients the waterfall names are seldom among the nearest
+  // probing ones (none of 21 on the reference site, 2026-11-18), and a
+  // key on a row that is not there traces nothing: each one the table
+  // lacks is asked for by its MAC (/api/devices, one at a time, at most
+  // CLX_MAX a window) and listed first, drawn as the others are.
+  var CLX_MAX = 24;
+  function clientsExtra() {
+    var gen = WF.gen;
+    if (!WF.mix || WF.clGen !== gen) return;
+    if (WF.clxGen !== gen) { WF.clxGen = gen; WF.clx = []; WF.clxAsked = new Set(); }
+    var have = new Set(WF.cl.map(function (d) { return d.mac; }));
+    var todo = clientsOf().filter(function (c) { return !have.has(c.id) && !WF.clxAsked.has(c.id); })
+      .slice(0, Math.max(0, CLX_MAX - WF.clxAsked.size));
+    todo.forEach(function (c) { WF.clxAsked.add(c.id); });
+    (function next(i) {
+      if (i >= todo.length || gen !== WF.gen) return;
+      getJSON("/api/devices?limit=1&q=" + encodeURIComponent(todo[i].id)).then(function (j) {
+        if (gen !== WF.gen) return;
+        var r = (j.rows || []).find(function (x) { return x.mac === todo[i].id; });
+        if (r) { WF.clx.push(r); clientsDraw(); }
+        next(i + 1);
+      }).catch(function () { next(i + 1); });
+    })(0);
+  }
   function clientsDraw() {
     var box = clear("w-cl");
-    DTWL.sort(WF.cl).forEach(function (d) {
+    var extra = WF.clxGen === WF.gen && WF.clx ? WF.clx : [];
+    DTWL.sort(extra.concat(WF.cl || [])).forEach(function (d) {
       var row = el("div", "clrow dt-row");
+      row.dataset.mac = String(d.mac);
+      if (WF.pc !== null && WF.iso) row.classList.toggle("scan-off", d.mac !== WF.pc);
+      row.appendChild(clientKeyCell(d));
       var mc = el("span", "");
       var nw = SlothRf.newMark(d.first_seen, WF.clFrom);
       if (nw) mc.appendChild(nw);
@@ -4290,13 +4361,14 @@
       box.appendChild(row);
       drawStrip(cv, d.presence, 144, glyph.firstCell(d.first_seen, WF.clFrom, 600, 144), WF.clFrom, 600);
     });
-    if (!WF.cl.length) box.appendChild(el("div", "sub", "no probing client last seen in the window"));
+    if (!WF.cl || !WF.cl.length) box.appendChild(el("div", "sub", "no probing client last seen in the window"));
   }
   function wifiClients(gen, r) {
     var q = "src:probe seen:<" + seenWord(r.win);
     getJSON("/api/devices?limit=" + CL_PAGE + "&sort=signal&q=" + encodeURIComponent(q)).then(function (j) {
       if (gen !== WF.gen) return;
       WF.cl = j.rows || [];
+      WF.clGen = gen;
       WF.clFrom = num(j.presence_from) ? j.presence_from : null;
       drawRuler(DTWL.ruler, WF.clFrom, WF.clFrom + 144 * 600, 144, j.utc_offset_s);
       sunNote($("w-cl-sun"), WF.clFrom, 600, 144, j.utc_offset_s, true);
@@ -4306,6 +4378,7 @@
         if (d.rf && d.rf.trend === "approaching") nnear++;
       });
       clientsDraw();
+      clientsExtra();
       set("w-cl-count", WF.cl.length + " shown, " + nnew + " new in 24 h, " + nnear +
           " approaching (sloth's estimate)" + (j.more ? ", the nearest " + WF.cl.length : ""));
     }).catch(function (e) {
@@ -4497,6 +4570,7 @@
       if (gen !== WF.gen) return;
       WF.mix = j;
       channelGrid();
+      clientsExtra();
     }).catch(function (e) {
       if (gen !== WF.gen) return;
       set("w-mix-note", "no transmitter detail: " + errText(e.message));

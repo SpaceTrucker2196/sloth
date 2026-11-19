@@ -613,13 +613,74 @@ static const char W_ISO_KEY[] =
         "    return by;\n"
         "  }\n"
         "  // The SSID picked, dropped once the window no longer holds it; the\n"
-        "  // scan table drawn again so its keys say what is picked.\n"
+        "  // scan table and the clients table drawn again so their keys say\n"
+        "  // what is picked.\n"
         "  function isoKey() {\n"
         "    // Only a loaded mix can say the SSID left: a reload clears WF.mix\n"
         "    // and the heat can land first.\n"
         "    if (WF.hl !== null && WF.mix && !isoSsids().has(WF.hl)) WF.hl = null;\n"
         "    if (SCOPE !== \"monitor\") cardScanDraw();\n"
+        "    // The clients table's keys say what is traced (clientKeyCell()).\n"
+        "    isoClient();\n"
+        "    clientsDraw();\n"
         "    return WF.hl;\n"
+        "  }";
+
+/* The client trace, on the clients table since the owner's "move the
+ * client tracing to the clients table" (2026-11-18): the key button
+ * whole, and the rows asked for so a named client has one. */
+static const char W_CLIENT_KEY[] =
+        "  function clientKeyCell(d) {\n"
+        "    var c = clientsOf().find(function (x) { return x.id === d.mac; }) || null;\n"
+        "    var b = el(\"button\", \"chip scan-key\");\n"
+        "    b.type = \"button\";\n"
+        "    var sw = el(\"span\", \"sw dia\");\n"
+        "    b.appendChild(sw);\n"
+        "    if (!c || !WF.iso) {\n"
+        "      b.disabled = true;\n"
+        "      b.title = !WF.iso ? \"the isometric waterfall's trace: tick isometric\" :\n"
+        "        \"not among the transmitters the monitor radio named in the window\";\n"
+        "      return b;\n"
+        "    }\n"
+        "    var on = WF.pc === c.id;\n"
+        "    sw.style.backgroundColor = clientColor(c);\n"
+        "    b.ariaPressed = on ? \"true\" : \"false\";\n"
+        "    b.title = (on ? \"show every cell again\" : \"trace its channels on the waterfall, fade the rest\") + \"; \" +\n"
+        "      c.chans.map(function (ch) { return \"ch \" + ch[0] + \" \" + fmt(ch[1]); }).join(\", \") + \" frames\";\n"
+        "    b.ariaLabel = clientName(c) + \": \" + b.title;\n"
+        "    b.addEventListener(\"click\", function (ev) {\n"
+        "      // The row's own click opens the drawer.\n"
+        "      ev.stopPropagation();\n"
+        "      WF.pc = on ? null : c.id;\n"
+        "      if (WF.pc !== null) WF.hl = null;\n"
+        "      channelGrid();\n"
+        "      // The table is drawn anew: the focus back on the same row's key.\n"
+        "      var rows = $(\"w-cl\").querySelectorAll(\".dt-row[data-mac]\");\n"
+        "      for (var i = 0; i < rows.length; i++)\n"
+        "        if (rows[i].dataset.mac === d.mac) { rows[i].firstChild.focus(); break; }\n"
+        "    });\n"
+        "    return b;\n"
+        "  }";
+
+static const char W_CLIENT_EXTRA[] =
+        "  var CLX_MAX = 24;\n"
+        "  function clientsExtra() {\n"
+        "    var gen = WF.gen;\n"
+        "    if (!WF.mix || WF.clGen !== gen) return;\n"
+        "    if (WF.clxGen !== gen) { WF.clxGen = gen; WF.clx = []; WF.clxAsked = new Set(); }\n"
+        "    var have = new Set(WF.cl.map(function (d) { return d.mac; }));\n"
+        "    var todo = clientsOf().filter(function (c) { return !have.has(c.id) && !WF.clxAsked.has(c.id); })\n"
+        "      .slice(0, Math.max(0, CLX_MAX - WF.clxAsked.size));\n"
+        "    todo.forEach(function (c) { WF.clxAsked.add(c.id); });\n"
+        "    (function next(i) {\n"
+        "      if (i >= todo.length || gen !== WF.gen) return;\n"
+        "      getJSON(\"/api/devices?limit=1&q=\" + encodeURIComponent(todo[i].id)).then(function (j) {\n"
+        "        if (gen !== WF.gen) return;\n"
+        "        var r = (j.rows || []).find(function (x) { return x.mac === todo[i].id; });\n"
+        "        if (r) { WF.clx.push(r); clientsDraw(); }\n"
+        "        next(i + 1);\n"
+        "      }).catch(function () { next(i + 1); });\n"
+        "    })(0);\n"
         "  }";
 
 static const char W_SCAN_KEY[] =
@@ -675,8 +736,8 @@ static const char W_SCAN_DRAW[] =
  * clients sit in the spectrum highlighting their channel"), whole: the
  * list read from the mix answer's "clients", a client's colour its AP's
  * SSID's (else its MAC's), its words, its cells from the hex, the lane,
- * and the pick; and the tooltip's line. The key's Clients buttons went
- * with the key (owner 2026-11-18); nothing sets a pick now. */
+ * and the pick; and the tooltip's line. The pick is set from the
+ * clients table's keys (clientKeyCell(), owner 2026-11-18). */
 static const char W_ISO_CLIENTS[] =
         "  // ── the client lane (owner 2026-11-17: \"the spectrum should show where\n"
         "  // the clients sit in the spectrum highlighting their channel\") ──\n"
@@ -1013,6 +1074,10 @@ static void test_identity_scheme_pinned(void) {
     /* The keys' containers, and each shown only isometric. */
     WT_LACKS(p, "w-iso-key");
     WT_HAS(p, W_SCAN_KEY);
+    WT_HAS(p, W_CLIENT_KEY);
+    WT_HAS(p, W_CLIENT_EXTRA);
+    WT_HAS(p, "    var extra = WF.clxGen === WF.gen && WF.clx ? WF.clx : [];\n"
+              "    DTWL.sort(extra.concat(WF.cl || [])).forEach(function (d) {");
     WT_HAS(p, W_SCAN_DRAW);
     WT_HAS(p, "      <div class=\"scan-band\">2.4 GHz <span class=\"sub\" id=\"w-scan-n24\"></span></div>\n"
               "      <div class=\"dhead\" id=\"w-scan-head\"></div>\n"
@@ -1139,6 +1204,7 @@ static void test_client_lane_pinned(void) {
     WT_HAS(p, "  var ISO_FADE = 0.3;\n");
     WT_LACKS(p, "  var ISO_FADE = 0.25;");
     WT_HAS(p, "      if (WF.hl !== null) WF.pc = null;");
+    WT_HAS(p, "      if (WF.pc !== null) WF.hl = null;");
     WT_HAS(p, "      lane: lane, pick: pick,");
     WT_HAS(p, "fade every other SSID to 70 percent transparent, again to show all.");
     char *b = slice("  // ── the client lane (owner 2026-11-17", "  // Hover: the column under the pointer");

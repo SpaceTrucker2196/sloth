@@ -51,6 +51,7 @@ canvas.wfall.iso { cursor: crosshair; }
 .scan-band { font-size: 11px; color: var(--ink); margin-top: 4px; }
 button.scan-key { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 14px; padding: 0; border-radius: var(--radius-sm); background: transparent; border: 1px solid var(--rule); cursor: pointer; }
 button.scan-key .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+button.scan-key .sw.dia { transform: rotate(45deg) scale(0.8); border-radius: 1px; }
 button.scan-key[aria-pressed="true"] { border-color: var(--signal); }
 button.scan-key:disabled { cursor: default; border-style: dotted; }
 .dt .dt-row.scan-off > span { opacity: 0.45; }

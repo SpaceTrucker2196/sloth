@@ -3596,8 +3596,15 @@ SSID in (`scanKeyCell()`), which fades every other SSID until pressed
 again and dims the table's other rows; a row whose SSID no transmitter
 in the window's mix carries has no colour and its button is off. The key
 that was under the canvas (the band steps, the SSID chips and the
-Clients buttons) is gone; the clients lane stays, and nothing picks one
-client now. The window control filters the card's scan, the card's link
+Clients buttons) is gone; the clients lane stays, and one client is
+traced from the clients table (owner, the same day: "move the client
+tracing to the clients table"): each row's first cell is a key button
+(`clientKeyCell()`) that traces the client's channels, outlines the
+cells it was named in and fades every other cell until pressed again.
+The clients the waterfall names are seldom among the nearest probing
+ones (none of 21 on the reference site), so each one the table lacks is
+asked for by its MAC (`/api/devices?limit=1&q=MAC`, one at a time, at
+most 24 a window) and listed first. The window control filters the card's scan, the card's link
 and the access-point table to rows last seen in the window; each count
 says how many were older. Under Monitor the card's panels are not shown,
 so there is no key there.
