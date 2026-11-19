@@ -16,6 +16,12 @@
 // label, or, with no label above, where the note was. The dialog shows
 // copies of the notes not hidden at the moment it opens: cloneNode of
 // the page's own markup, no markup sink, the copies' ids dropped.
+// The Overview's KPI tiles (owner 2026-11-19: "put the grey text behind
+// an info icon on the bottom of the tile"): every .sub line in a tile,
+// whatever its length and whether or not a script writes it, goes behind
+// one button in a row at the tile's foot; the dialog copies the lines as
+// they read when it opens, so it shows the live words, and leaves out a
+// line that is hidden, empty or still "-".
 (function () {
   "use strict";
   var MIN = 60;
@@ -24,6 +30,7 @@
 
   function isNote(e) {
     if (e.className !== "sub") return false;
+    if (e.closest(".kpis")) return false;
     if (e.closest(SKIP)) return false;
     return e.textContent.replace(/\s+/g, " ").trim().length >= MIN;
   }
@@ -75,12 +82,17 @@
     return c;
   }
 
+  function blank(e) {
+    var t = e.textContent.replace(/\s+/g, " ").trim();
+    return t === "" || t === "-";
+  }
+
   function open(title, notes) {
     var d = dialog(), i, n = 0;
     dlgTitle.textContent = title || "about this";
     dlgBody.textContent = "";
     for (i = 0; i < notes.length; i++) {
-      if (notes[i].hidden) continue;
+      if (notes[i].hidden || blank(notes[i])) continue;
       dlgBody.appendChild(copy(notes[i]));
       n++;
     }
@@ -104,7 +116,23 @@
     return b;
   }
 
+  // A KPI tile's grey lines behind one button at its foot.
+  function tiles() {
+    var ts = document.querySelectorAll(".kpis .tile"), i, j, subs, lab, foot;
+    for (i = 0; i < ts.length; i++) {
+      subs = ts[i].querySelectorAll(".sub");
+      if (!subs.length) continue;
+      for (j = 0; j < subs.length; j++) subs[j].classList.add("info-src");
+      lab = ts[i].querySelector(".label");
+      foot = document.createElement("div");
+      foot.className = "tile-foot";
+      foot.appendChild(button(lab ? labelText(lab) : "", Array.prototype.slice.call(subs)));
+      ts[i].appendChild(foot);
+    }
+  }
+
   function init() {
+    tiles();
     var all = document.querySelectorAll("main .sub"), i, e, lab, k, tools, title;
     var labs = [], sets = [];
     for (i = 0; i < all.length; i++) {

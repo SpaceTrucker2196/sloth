@@ -499,7 +499,12 @@ line or a control's label) is hidden where it stood and shown in a
 dialog from an `i` button, in the panel's label where there is one above
 the note, else where the note was. The notes stay in the document, so
 this file's quotations of them still describe the page; the short live
-lines beside a label (counts, scales, errors) stay visible.
+lines beside a label (counts, scales, errors) stay visible. The
+Overview's KPI tiles go further (owner, 2026-11-19: "put the grey text
+behind an info icon on the bottom of the tile"): every grey line in a
+tile, G1's words and the state lines included, is behind one `i` at the
+tile's foot, and the dialog copies them as they read when it opens
+(leaving out a hidden, empty or `-` line).
 
 The rest of this file describes each part in detail, milestone by
 milestone (W0, M0 to M6; tracker #102).
