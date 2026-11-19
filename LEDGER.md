@@ -393,3 +393,4 @@
 | d115df7 | 2026-11-19T03:28:36Z | claude-fable-5-1, claude-opus-5-5 | 198 | 34200 | 20009936 | 514415 | 10.6405 | #231 Stage 2: sloth consumes intel pack 1.0.1 (own generator, intel_pack on findings) + comint 1.0.1 eba181f |
 | d5c19bc | 2026-11-19T03:59:16Z | claude-fable-5-1, claude-opus-5-5 | 104 | 7417 | 6203862 | 133134 | 4.3220 | Fix red main: update_intel.sh shellcheck findings (#231) |
 | 36571a7f | 2026-11-19T13:45:28Z | claude-opus-5 | 438 | 93156 | 20026188 | 331556 | 15.6597 | slothweb: coalesce queued alerts.fired samples so a burst never drops (#230) |
+| af60d24 | 2026-11-19T16:42:31Z | claude-fable-5-1, claude-opus-5-5 | 242 | 49587 | 11053252 | 452284 | 8.7670 | slothweb WiFi: access points and direction finding in one panel, 24 h presence per AP |
