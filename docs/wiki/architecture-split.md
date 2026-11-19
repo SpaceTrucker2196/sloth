@@ -20,7 +20,7 @@ section naming every place the grep and #184 §2 disagree.
 `web/data/vendors/COVERAGE.md`, `packaging/systemd/`, issues #184 and
 #185, owner rulings on #184 of 2026-11-04.
 
-**Last updated**: 2026-11-18 (#231, Stage 2 done in sloth: the six tables of §3.1 are generated from the pinned pack snapshot in `intel/`, §3.4; the row counts §3.1 recorded as 117 and 1 are 118 and 2, counted from the compiled arrays), 2026-11-17 (#185 finding 1: `dot11_data.h` no longer ships), 2026-11-16 (#185 review: C3's declared-not-defined gap), 2026-11-16 (#185 item 4: `make contract` ships C2, C3, C4, C5 and C9 as one release artifact, [[contract]]; §5 items 1, 2 and 5 restated or resolved), 2026-11-10 (C1 shipped: `SLOTH_JSONL_VERSION` exists and
+**Last updated**: 2026-11-19 (#233, Stage 3: `sloth-mesh` created from this tree at `56d9c7f2`, the repository once named `sloth-dash` renamed; §3.5; §5 item 2 and §6 answered), 2026-11-18 (#231, Stage 2 done in sloth: the six tables of §3.1 are generated from the pinned pack snapshot in `intel/`, §3.4; the row counts §3.1 recorded as 117 and 1 are 118 and 2, counted from the compiled arrays), 2026-11-17 (#185 finding 1: `dot11_data.h` no longer ships), 2026-11-16 (#185 review: C3's declared-not-defined gap), 2026-11-16 (#185 item 4: `make contract` ships C2, C3, C4, C5 and C9 as one release artifact, [[contract]]; §5 items 1, 2 and 5 restated or resolved), 2026-11-10 (C1 shipped: `SLOTH_JSONL_VERSION` exists and
 `sensor_health` reports it, #185 item 3), 2026-11-05
 
 This page is a measurement, not a plan. It is Stage 0's first deliverable
@@ -355,6 +355,41 @@ on the same packs, the same holds; that check is not in CI.
 `k_oui` in `src/dot11_ie.c` (§3.2) did not move: it is not in #184's
 list and no pack carries it.
 
+### 3.5 Stage 3 (#233): sloth-mesh created at the carve SHA
+
+Done on 2026-11-19. The presentation repository is
+`SpaceTrucker2196/sloth-mesh` (private, PolyForm Noncommercial 1.0.0):
+the README-only `sloth-dash` repository renamed under the 2026-11-15 name
+ruling, so every `sloth-dash` above means `sloth-mesh`. Only the
+repository is new; the binary, the unit and the store keep their names
+(`slothweb`, `slothweb.service`, `slothweb.db`), and deployment does not
+change in this stage: W9FJC and beta-site keep building slothweb from
+this tree until Stage 5.
+
+`git filter-repo` carved it from a fresh clone at **`56d9c7f2`** with
+history: `web/src`, `web/tests`, `web/ui`, `web/tools` and `web/mcp`
+became `src/`, `tests/`, `ui/`, `tools/` and `mcp/`; `web/README.md` its
+README; the three `tests/fuzz/fuzz_web_*.c` harnesses `fuzz/`; with
+`docs/web-ui-spec.md`, `docs/web-visual-spec.md`,
+`docs/assets/slothweb/`, `packaging/systemd/slothweb.service` and
+`web/data/gnss/` (no pack carries the IGS metadata). `web/data/` else
+stayed here: it is sloth-comint's since Stage 1 and reaches sloth-mesh as
+a vendored pack snapshot. The merge onto the new repository's initial
+commit is an unrelated-histories merge, so nothing was force-pushed;
+its `CARVED_FROM` names the SHA and the path map.
+
+sloth-mesh builds against [[contract]] 1.8.7 from `b4f4eb96` (pinned by
+SHA-256 in its `contract.lock`) and sloth-comint pack 1.0.1 from
+`eba181f0`, and nothing of this tree: the contract grew additively for it
+(*parity/* in [[contract]]), and its OUI, BTSIG and vendor-KB tables are
+byte-identical to what `make web` built here at the carve. `web/` stays in
+this tree until Stage 4 and keeps building and testing as before; a
+commit to it after `56d9c7f2` is carried to sloth-mesh by its
+`tools/port_from_sloth.sh`. The checks of slothweb's suite that need this
+tree's source by design (the alert detail audit over `src/alerts/`, the
+TUI colour captures) run only here until Stage 4 moves them into sloth's
+own suite.
+
 ---
 
 ## 4. #184 §2's contract table, filled in
@@ -409,6 +444,10 @@ these changes the shape of the programme; each changes a stage's content.
    `tui_palette.c` / `tui.c` by `palette.json`; `rsn_ie.c`, `ip_color.c`
    and `view_labels.c` still have no answer, so the item stands for those
    three.
+   *Answered by #233 (2026-11-19):* `rsn_ie.c` and `ip_color.c` by the
+   contract's `parity/akm-names.tsv` and `parity/ip-color.tsv`;
+   `view_labels.c` was linked only so `tui.c` would link, and sloth-mesh
+   does not run the TUI ([[contract]] *parity/*).
 3. **C4 is two generators, not one.** The alert knowledge bundle has to
    satisfy `alertkb.c` and `alertasm.c`, and the assessments are the
    second one's only input besides the `.def`.
@@ -453,6 +492,8 @@ these changes the shape of the programme; each changes a stage's content.
   includes `tui.c`, which is the TUI. Narrowed by #185 item 4: the
   archive is `WEB_CORE_SRCS`, and three of the six are covered by other
   contract contents; `rsn_ie.c`, `ip_color.c` and `view_labels.c` remain.
+  Answered by #233: the archive stays `WEB_CORE_SRCS`; the rest is
+  `parity/` data (§3.5).
 - The fate of the three `tests/fuzz/fuzz_web_*.c` harnesses at Stage 4.
 
 ---
