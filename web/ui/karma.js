@@ -158,11 +158,13 @@
     S.gen++;
     if (S.back && S.back.focus && document.body.contains(S.back)) S.back.focus();
     S.back = null;
+    if (window.SlothDock) window.SlothDock.closed("karma");
   }
 
   function open(bssid) {
     if (!H || typeof bssid !== "string" || !MAC_RE.test(bssid)) return;
     var gen = ++S.gen;
+    if (window.SlothDock) window.SlothDock.opened("karma", [bssid], bssid);
     S.sel = bssid;
     if ($("kdrawer").hidden) S.back = document.activeElement;
     $("kdrawer").hidden = false;
@@ -229,14 +231,18 @@
   function init(h) {
     H = h;
     $("kdr-close").addEventListener("click", close);
-    document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
-    // An alert opened from here takes the screen: this drawer closes
-    // under it rather than cover it. A triage button in the row
-    // (frrs.js) opens nothing, so the drawer stays.
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && (!window.SlothDock || window.SlothDock.esc("karma"))) close();
+    });
+    // An alert opened from here takes the screen: beside the page the
+    // detail stays (dock.js); over it, the column folds. A triage
+    // button in the row (frrs.js) opens nothing.
     $("kdr-alerts").addEventListener("click", function (e) {
       var t = e.target, btn = false;
       while (t && t !== this && t.tagName !== "LI") { if (t.tagName === "BUTTON") btn = true; t = t.parentNode; }
-      if (!btn && t && t !== this && t.classList.contains("go")) { $("kdrawer").hidden = true; S.sel = null; S.gen++; }
+      if (btn || !t || t === this || !t.classList.contains("go")) return;
+      if (window.SlothDock) window.SlothDock["yield"]();
+      else { $("kdrawer").hidden = true; S.sel = null; S.gen++; }
     });
     function rescope() {
       if (!$("kdrawer").hidden && S.sel) { var s = S.sel; setTimeout(function () { open(s); }, 0); }

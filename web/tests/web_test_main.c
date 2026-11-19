@@ -146,6 +146,7 @@ int main(void) {
     SUITE(run_chan_tests);
     SUITE(run_info_tests);
     SUITE(run_wradar_tests);
+    SUITE(run_dock_tests);
     SUITE(run_camera_tests);
     SUITE(run_radar_tests);
     SUITE(run_allkeys_tests);

@@ -742,7 +742,10 @@ static void test_page_ssid_detail(void) {
              * drawer and the alert's page. */
             WT_HAS(m, "b.addEventListener(\"click\", function () { H.openDrawer(String(mac)); });");
             WT_HAS(m, "H.alertLink(row, a.id);");
-            WT_HAS(m, "document.addEventListener(\"keydown\", function (e) { if (e.key === \"Escape\") close(); });");
+            /* Esc closes it only when the focus is in it (dock.js). */
+            WT_HAS(m, "    document.addEventListener(\"keydown\", function (e) {\n"
+                      "      if (e.key === \"Escape\" && (!window.SlothDock || window.SlothDock.esc(\"ssid\"))) close();\n"
+                      "    });");
             free(m);
         }
     }

@@ -351,6 +351,9 @@ window.SlothEvidence = (function () {
       var t = e.target;
       while (t && t !== wrap && !(t.classList && t.classList.contains("go"))) t = t.parentNode;
       if (!t || t === wrap) return;
+      // Beside the page the detail stays (dock.js); over it, the
+      // column folds out of the alert page's way.
+      if (window.SlothDock) { window.SlothDock["yield"](); return; }
       var x = $("dr-close");
       if (x && !$("drawer").hidden) x.click();
     });

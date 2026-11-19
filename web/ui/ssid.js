@@ -104,6 +104,7 @@
     S.gen++;
     if (S.back && S.back.focus && document.body.contains(S.back)) S.back.focus();
     S.back = null;
+    if (window.SlothDock) window.SlothDock.closed("ssid");
   }
 
   function clear(id) {
@@ -296,6 +297,8 @@
   function open(disp) {
     if (!H) return;
     var gen = ++S.gen, p = param(disp);
+    if (window.SlothDock) window.SlothDock.opened("ssid", [disp === undefined ? null : disp],
+                                                  p === "-" ? "(hidden)" : String(disp));
     S.sel = disp === undefined ? null : disp;
     if ($("sdrawer").hidden) S.back = document.activeElement;
     $("sdrawer").hidden = false;
@@ -328,15 +331,19 @@
   function init(h) {
     H = h;
     $("sdr-close").addEventListener("click", close);
-    document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
-    // A device or an alert opened from here takes the screen: this
-    // drawer closes under it rather than cover it.
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && (!window.SlothDock || window.SlothDock.esc("ssid"))) close();
+    });
+    // A device or an alert opened from here takes the screen: beside
+    // the page the detail stays (dock.js); over it, the column folds.
     $("sdr-lists").addEventListener("click", function (e) {
       var t = e.target;
       while (t && t !== this && !(t.classList && (t.classList.contains("lk") ||
                                                   (t.tagName === "LI" && t.classList.contains("go")))))
         t = t.parentNode;
-      if (t && t !== this) { $("sdrawer").hidden = true; S.sel = undefined; S.gen++; }
+      if (!t || t === this) return;
+      if (window.SlothDock) window.SlothDock["yield"]();
+      else { $("sdrawer").hidden = true; S.sel = undefined; S.gen++; }
     });
     // The scope switch draws every open view again; this one too.
     function rescope() {

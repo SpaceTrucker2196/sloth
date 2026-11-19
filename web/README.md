@@ -206,7 +206,7 @@ ssh -L 8770:127.0.0.1:8770 user@sensor     # then open http://127.0.0.1:8770/ lo
 ```
 
 Keys: `1`..`9` switch views (`6` is the Alerts page), `/` searches
-devices, `[` hides the view list and the footer, `Esc` closes the device drawer; the
+devices, `[` hides the view list and the footer, `Esc` closes the detail the focus is in (the detail column, below); the
 view is also in the address (`#flows`, `#alerts?state=open`,
 `#alert?id=d42`), so a reload stays on it and Back returns from a
 drill-down. Every Overview tile is a link to the view of what it
@@ -489,6 +489,42 @@ Read this before exposing slothweb to anything but your own loopback.
   retention rules apply to the network you monitor.
 
 ## Reference
+
+**The detail column** (owner, 2026-11-19: "the UI has a column that is
+1/4 of the width for the same view ... a scroll view where when you
+click something that opens a detail view it creates a new row";
+`web/ui/dock.js`, `dock.css`): the device, BLE advertiser, SSID and
+KARMA details no longer slide over the page from the right. They open
+in a column a quarter of the page wide beside the views, under the top
+bar, whose list scrolls on its own. Each detail opened is a card in
+that list and stays until it is closed; **minimize** on a card folds it
+to one line (its kind, its name and a summary), a click on the line
+opens it again, **close** takes it off the list, and **close all**
+empties the list. The column's own **minimize** folds it to a rail at
+the page's edge, which names how many details are held; opening a
+detail unfolds it.
+
+One detail of each kind is open at a time: each kind still has its one
+element in the page (`#drawer`, `#bdrawer`, `#sdrawer`, `#kdrawer`),
+which `dock.js` moves into the card that is open, so opening a second
+device folds the first to a line. Any number are held as lines (24 at
+most; the oldest line goes for a newer card).
+
+Kept current: an open card is asked again by its own opener every 15 s
+and a line's summary (`/api/device/{mac}`, `/api/ble/{addr}`,
+`/api/wifi/ssid`, `/api/lures/bssid`) every 30 s, one request each 3 s
+at most, and neither while the tab is hidden or the column is folded. A
+card someone is typing in, or has text selected in, is not drawn again
+under them. The list and the column's fold are kept in this browser
+(`slothweb.v1.dock`); after a reload every card comes back as a line.
+
+`Esc` closes the card the focus is in, and no other. An alert opened
+from a card leaves the card where it is. Under 900 px the column lies
+over the page as the drawer did: `Esc` and anything that takes the
+screen fold it to a button in the corner, and with nothing open it is
+not shown. The GPS Sat, ADS-B and APRS views keep their in-page detail
+panels. Elsewhere in this file "the drawer" is a kind's detail, which
+is now a card of this column.
 
 **Info buttons** (owner, 2026-11-18: "move all source and description
 text that is usually in light grey to dialogs behind info buttons. the

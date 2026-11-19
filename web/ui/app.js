@@ -1752,7 +1752,13 @@
   if (prefGet("collapsed") === true) $("app").classList.add("collapsed");
 
   document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") { closeDrawer(); closeBleDrawer(); scopeLegend(false); return; }
+    // Esc closes the detail the focus is in (dock.js), not every one.
+    if (e.key === "Escape") {
+      if (!window.SlothDock || SlothDock.esc("device")) closeDrawer();
+      if (!window.SlothDock || SlothDock.esc("ble")) closeBleDrawer();
+      scopeLegend(false);
+      return;
+    }
     // A focused row or card opens as a click would.
     var t = e.target;
     if ((e.key === "Enter" || e.key === " ") && t && t.tabIndex === 0 && t.classList &&
@@ -3116,6 +3122,7 @@
     if (view === "devices") paint();
     if (DR.back && DR.back.focus && document.body.contains(DR.back)) DR.back.focus();
     DR.back = null;
+    if (window.SlothDock) SlothDock.closed("device");
   }
   $("dr-close").addEventListener("click", closeDrawer);
 
@@ -3262,6 +3269,7 @@
   function openDrawer(mac) {
     if (typeof mac !== "string" || !MAC_RE.test(mac)) return;
     var gen = ++DR.gen;
+    if (window.SlothDock) SlothDock.opened("device", [mac], mac);
     D.sel = mac;
     for (var i = 0; i < D.pool.length; i++) D.pool[i].k = -1;
     if (view === "devices") paint();
@@ -6493,6 +6501,7 @@
     if (view === "ble") { var box = clear("b-rows"); var now = Math.floor(Date.now() / 1000); B.rows.forEach(function (d) { box.appendChild(bleRow(d, now)); }); }
     if (BDR.back && BDR.back.focus && document.body.contains(BDR.back)) BDR.back.focus();
     BDR.back = null;
+    if (window.SlothDock) SlothDock.closed("ble");
   }
   $("bdr-close").addEventListener("click", closeBleDrawer);
   // The row's last day as G5's 96 quarter-hour cells ending now, oldest
@@ -6522,6 +6531,7 @@
   function openBleDrawer(addr, type, iface) {
     if (typeof addr !== "string" || !MAC_RE.test(addr)) return;
     var gen = ++BDR.gen;
+    if (window.SlothDock) SlothDock.opened("ble", [addr, type === undefined ? null : type, iface === undefined ? null : iface], addr);
     // type and iface null: a row only another sloth host heard, asked
     // for by its address alone.
     B.sel = { addr: addr, type: type, iface: iface, remote: type === null };
@@ -6832,6 +6842,24 @@
       });
     }).catch(function (e) { set("a-hosts-note", errText(e.message)); });
   }
+
+  // The detail column (web/ui/dock.js): the page's helpers and the four
+  // kinds of detail, each with its own element, opener and close.
+  if (window.SlothDock) SlothDock.init({ el: el, getJSON: getJSON, keyColor: keyColor,
+    shortStamp: shortStamp, prefGet: prefGet, prefSet: prefSet,
+    relayout: function () { if (view !== "lookup") show(view, VP); },
+    kinds: {
+      device: { aside: "drawer", closeBtn: "dr-close", word: "device", swatch: true,
+                open: function (a) { openDrawer(a[0]); }, close: closeDrawer },
+      ble: { aside: "bdrawer", closeBtn: "bdr-close", word: "ble", swatch: false,
+             open: function (a) { openBleDrawer(a[0], a[1], a[2]); }, close: closeBleDrawer },
+      ssid: { aside: "sdrawer", closeBtn: "sdr-close", word: "ssid", swatch: false,
+              open: function (a) { if (window.SlothSsid) SlothSsid.open(a[0] === null ? undefined : a[0]); },
+              close: function () { if (window.SlothSsid) SlothSsid.close(); } },
+      karma: { aside: "kdrawer", closeBtn: "kdr-close", word: "karma", swatch: true,
+               open: function (a) { if (window.SlothKarma) SlothKarma.open(a[0]); },
+               close: function () { if (window.SlothKarma) SlothKarma.close(); } }
+    } });
 
   // Triage and the FRRS record (web/ui/frrs.js): the page's helpers,
   // lent once.
