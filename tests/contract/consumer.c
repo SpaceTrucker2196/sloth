@@ -23,7 +23,7 @@
 
 /* The one call the archive makes out of itself: dot11_ie.c notes an
  * element walk that ran past its buffer. libsloth-wire does not define
- * it; its consumer does (slothweb's is web/src/web_sh_stub.c). Counted
+ * it; its consumer does (slothweb's is sloth-mesh's src/web_sh_stub.c). Counted
  * here so the check can see the archive really calls it. */
 static int g_overruns;
 void sh_parse_fault_note(sh_parse_fault_t kind) {

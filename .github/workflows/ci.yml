@@ -37,40 +37,6 @@ jobs:
       - name: Test
         run: make test
 
-      # slothweb (#157, #158): its own binary and suite under web/, not in
-      # `make` or `make embedded`. Built and tested with the workflow's
-      # -Werror like everything else, and again under each sanitizer job.
-      - name: Build and test slothweb
-        run: make web && make web-test
-
-      # The memory-only shape (#160): without SQLite slothweb has no store
-      # and /api/series serves the in-memory fine tier. Nothing else builds
-      # that variant, which is how #99 happened to sloth's WITH_WIFI=0.
-      - name: Build and test slothweb without SQLite
-        run: make web WITH_SQLITE=0 && make web-test WITH_SQLITE=0
-
-      # The vendor table (#162). The IEEE registry CSVs are committed in
-      # web/data/ (owner ruling 2026-10-26), so the steps above already
-      # build the full table under -Werror and web-test holds the default
-      # build to it; the two-row generated registry this step used to
-      # build is redundant. What nothing above builds is the fallback a
-      # tree without the CSVs takes: WEB_OUI_DIR at an empty directory,
-      # sloth's own table read as text out of build/intel/oui_builtin.inc
-      # (the rows src/oui.c compiles, from intel/oui-builtin), and web-test told to
-      # expect "sloth" rather than "ieee".
-      - name: Build and test slothweb on the fallback vendor table
-        run: |
-          d=$(mktemp -d)
-          make web WEB_OUI_DIR="$d" && make web-test WEB_OUI_DIR="$d"
-          grep -q '"sloth", {' build/web/web_oui_table.c
-
-      # The README's five-minute path (#164): the quick-start commands are
-      # read out of web/README.md and run literally in a copy of the tree
-      # against the synthetic demo, so a README that drifts from the build
-      # fails here rather than for the first person who follows it.
-      - name: Follow slothweb's README quick start
-        run: make web-demo && make web-quickstart-check
-
       # packaging/bin/sloth-migrate-sensor (#153) runs as root on the
       # owner's sensor and moves its evidence; its shell tests drive it
       # against a fake root with stub systemctl/sysusers, and shellcheck
@@ -162,9 +128,6 @@ jobs:
       - name: Test the capture path under ASan + UBSan
         run: make test-capture-path
 
-      - name: Test slothweb under ASan + UBSan
-        run: make web-test
-
       # The shipped binary, not only the suite (#95). Until the link rule
       # was fixed this step could not have existed: `$(TARGET)` linked with
       # `$(CC) -o $@ $^ $(LDFLAGS)`, no compiler flags, so every object
@@ -239,6 +202,60 @@ jobs:
       - name: Contract artifact
         run: make contract-check
 
+  # sloth-mesh against this commit's contract (#235, #184 Stage 4).
+  # slothweb left this tree for sloth-mesh, which builds against a pinned
+  # sloth contract (its contract.lock) and never reads sloth's source. A
+  # change here that breaks the contract would otherwise show up only
+  # when someone next vendors a tar into sloth-mesh, so this job builds
+  # the contract from this commit, vendors it into a checkout of
+  # sloth-mesh's main exactly as a developer would (`make
+  # update-contract`), and builds and tests slothweb against it.
+  #
+  # sloth-mesh is private: the checkout needs RIVER_IO_PAT, a read token.
+  # A fork, or a pull request from one, has no such secret, so the job
+  # says so with a notice and passes, and the public repository's PR CI
+  # stays green. The token reaches only the checkout step's `token:`
+  # input and is never echoed; the checkout does not persist it.
+  mesh-against-contract:
+    runs-on: ubuntu-24.04
+    env:
+      MESH_TOKEN: ${{ secrets.RIVER_IO_PAT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Skip without the sloth-mesh token
+        if: env.MESH_TOKEN == ''
+        run: echo "::notice title=mesh-against-contract skipped::RIVER_IO_PAT is not available (a fork, or a pull request from one); sloth-mesh is private, so it is not built against this commit's contract here."
+
+      - name: Install dependencies
+        if: env.MESH_TOKEN != ''
+        run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev pkg-config
+
+      - name: Build this commit's contract
+        if: env.MESH_TOKEN != ''
+        run: make contract
+
+      - name: Check out sloth-mesh
+        if: env.MESH_TOKEN != ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          repository: SpaceTrucker2196/sloth-mesh
+          token: ${{ secrets.RIVER_IO_PAT }}
+          path: sloth-mesh
+          persist-credentials: false
+
+      # The workflow's -Werror reaches slothweb's build as EXTRA_CFLAGS,
+      # as it does in sloth-mesh's own CI.
+      - name: Build and test sloth-mesh against it
+        if: env.MESH_TOKEN != ''
+        run: |
+          set -e
+          tar=$(ls dist/sloth-contract-*.tar)
+          cd sloth-mesh
+          make update-contract TAR="$GITHUB_WORKSPACE/$tar"
+          make
+          make test
+
   # ThreadSanitizer (#95). The evil-twin taint table (#95/6730997), the
   # RF-quality counters (#95/21d3c52) and the DNS caller-owned buffer
   # (#95/d28d19b) each shipped a concurrency test that only fails *by
@@ -272,9 +289,6 @@ jobs:
 
       - name: Test the capture path under ThreadSanitizer
         run: make test-capture-path
-
-      - name: Test slothweb under ThreadSanitizer
-        run: make web-test
 
   # Static analysis (#95): cppcheck over everything the default build and
   # the research tools compile. Fails on any finding not listed, with its

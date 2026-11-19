@@ -133,7 +133,7 @@ static int gen(const ir_snapshot_t *s, const ir_lock_t *l, const char *dir) {
 
     head(s, 3, "oui_builtin.csv", "g_oui", "src/oui.c");
     /* One row per line in this shape: slothweb's fallback vendor table
-     * reads this file as text (web/tools/oui_csv.c, oui_build_sloth()). */
+     * reads this file as text (sloth-mesh's tools/oui_csv.c, oui_build_sloth()). */
     for (int i = 0; i < s->n_oui; i++) {
         out("    { 0x%06lX, ", (unsigned long)s->oui[i].oui);
         cstr(s->oui[i].vendor);

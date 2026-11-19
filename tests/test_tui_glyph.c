@@ -15,7 +15,7 @@
 /*
  * The TUI forms of the glyph set (#195; docs/web-visual-spec.md §5,
  * R12). The pure functions in src/tui_glyph.c first, against the web's
- * numbers (web/ui/glyph.js smDbm() and the rest), then each view that
+ * numbers (sloth-mesh's ui/glyph.js smDbm() and the rest), then each view that
  * draws one, read back from the offscreen screen at 80 x 24.
  */
 

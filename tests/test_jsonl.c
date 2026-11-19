@@ -132,7 +132,7 @@ static void test_emit_dns_writes_fields(void) {
 
 /* #165: a PTR record carries its target in answer, whole up to 63
  * bytes. The line is pinned byte for byte, from
- * include/jsonl_ptr_fixture.h, because web/tests/test_ptr.c ::
+ * include/jsonl_ptr_fixture.h, because sloth-mesh's tests/test_ptr.c ::
  * test_sloth_ptr_record_lands_in_passive_ptr feeds the same line to
  * slothweb. Seen red (the name cut to 45
  * bytes) with answer put back to 46 bytes in sloth.h. */

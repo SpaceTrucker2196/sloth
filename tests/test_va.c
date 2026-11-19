@@ -37,7 +37,7 @@
  *   - test_diag_never_carries_the_line: VA_CE_PIN's reason text made a
  *     format ("PIN %s is not exactly 6 digits"), the shape a reason
  *     takes the moment someone wants it to quote the line;
- *   - test_helper_is_not_linked_into_sloth_or_slothweb:
+ *   - test_helper_is_not_linked_into_sloth:
  *     src/va/va_victron.c appended to CORE_COMMON_SRCS.
  */
 
@@ -615,16 +615,14 @@ static void test_names_and_macs(void) {
 
 /* ── boundaries ── */
 
-/* sloth and slothweb transmit nothing: src/va/ is named only by the
- * helper's own lists and the test build's, and nothing in web/src or
- * the core links its symbols. */
-static void test_helper_is_not_linked_into_sloth_or_slothweb(void) {
+/* sloth transmits nothing: src/va/ is named only by the helper's own
+ * lists and the test build's, and nothing in src/ names its symbols.
+ * (slothweb, which transmits nothing either, is sloth-mesh's since
+ * #235, and so is the check that it never includes the helper.) */
+static void test_helper_is_not_linked_into_sloth(void) {
     char *mk = slurp("Makefile");
     ASSERT(mk != NULL);
     if (!mk) return;
-    /* sd-bus is linked by the helper's rule alone. Before the walk
-     * below, which cuts `mk` into lines. */
-    ASSERT(strstr(mk, "WEB_LDLIBS      = -lpthread -lm\n") != NULL);
     int named = 0, ok = 1, prev_test_only = 0;
     for (char *l = mk; l && *l; ) {
         char *nl = strchr(l, '\n');
@@ -646,8 +644,8 @@ static void test_helper_is_not_linked_into_sloth_or_slothweb(void) {
     ASSERT(ok);
     ASSERT_GE(named, 3);
     free(mk);
-    static const char *const dirs[] = { "web/src", "src" };
-    for (size_t di = 0; di < 2; di++) {
+    static const char *const dirs[] = { "src" };
+    for (size_t di = 0; di < sizeof(dirs) / sizeof(dirs[0]); di++) {
         DIR *d = opendir(dirs[di]);
         ASSERT(d != NULL);
         if (!d) continue;
@@ -721,6 +719,6 @@ void run_va_tests(void) {
     RUN_TEST(test_helper_never_logs_a_secret);
     RUN_TEST(test_record_jsonl);
     RUN_TEST(test_names_and_macs);
-    RUN_TEST(test_helper_is_not_linked_into_sloth_or_slothweb);
+    RUN_TEST(test_helper_is_not_linked_into_sloth);
     RUN_TEST(test_unit);
 }

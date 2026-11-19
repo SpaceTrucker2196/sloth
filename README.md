@@ -414,42 +414,16 @@ when the evidence does. Full field tables in
 
 ## Browser dashboard (slothweb)
 
-`slothweb` is an optional browser dashboard that runs beside sloth on
-the same host: it reads the data socket and, read-only, `sloth.db`, and
-serves one page on `http://127.0.0.1:8770/` (loopback only by default,
-GET and HEAD only, no external requests; triage writes only behind the
-allow list). Overview tiles and strip facts each drawn against their
-own hour-of-week band; Activity and anomaly episodes; Devices and WiFi
-with per-device signal ranges in sloth's own distance bands, an
-isometric channel waterfall (flat: horizon strips and the channel mix);
-**BLE Devices** (who is around by device class, how close by signal,
-both isometric by default, a signal chart per device); **GPS
-Sat** (satellites in view, sky plot, fix history); Flows as a matrix
-(chord diagram second); History with an event rug; Lookup; and an alert
-page that leads with detail changes, incidents and confidence, draws
-the attack chain, shows the evidence and capture, the cited assessment,
-and triage buttons (false, noise, incident, the green **known** for
-expected traffic, follow recommended). With `--peer NAME=URL` it pulls
-the operator's other slothwebs over the tailnet into its own store,
-off by default and announced, and its **Fleet** tab maps the sites,
-shows each peer's health and lists what was seen at more than one site
-on a shared timeline ([`docs/wiki/fleet.md`](docs/wiki/fleet.md)).
-
-![slothweb Overview on synthetic data](docs/assets/slothweb/overview.png)
-
-```sh
-make web && sudo install -m 0755 slothweb /usr/local/bin/slothweb
-# beside sloth --data-socket --db ..., as the user sloth runs as:
-sudo -u sloth /usr/local/bin/slothweb --sloth-db /var/lib/sloth/sloth.db --store /var/lib/sloth/slothweb.db
-```
-
-Five minutes from a clean checkout, with a synthetic demo if there is
-no sensor, troubleshooting and the security model:
-[`web/README.md`](web/README.md). More screenshots there (all of
-synthetic data): [Flows](docs/assets/slothweb/flows.png),
-[Devices](docs/assets/slothweb/devices.png),
-[WiFi](docs/assets/slothweb/wifi.png),
-[History](docs/assets/slothweb/history.png).
+`slothweb`, the optional browser dashboard that runs beside sloth on the
+same host (it reads the data sockets and, read-only, `sloth.db` and
+`sloth-rf.db`, and serves one page on loopback by default), is not in
+this repository since #235: it lives in **sloth-mesh**, a private
+repository that builds against sloth's published contract (`make
+contract`, [`docs/wiki/contract.md`](docs/wiki/contract.md)) and installs
+with its own `make install` and `make install-service`. What it shows and
+how it is deployed beside the sensor:
+[`docs/wiki/slothweb.md`](docs/wiki/slothweb.md) and
+[`docs/wiki/deployment.md`](docs/wiki/deployment.md) §6.
 
 ## Streaming and SIEM forwarding
 
@@ -560,14 +534,14 @@ flowchart LR
       db[("sloth.db<br/>src/db.c")]
       pcap[("alert pcaps +<br/>evidence manifests")]
     end
-    subgraph web["slothweb — slothweb.service, user sloth, read-only on sloth.db"]
-      ingest["stream ingest + live state<br/>web/src/web_ingest.c, web_live.c"]
-      sdb["sloth.db reader<br/>web/src/web_slothdb.c"]
+    subgraph web["slothweb (sloth-mesh) — slothweb.service, user sloth, read-only on sloth.db"]
+      ingest["stream ingest + live state<br/>src/web_ingest.c, web_live.c"]
+      sdb["sloth.db reader<br/>src/web_slothdb.c"]
       analytics["rollups · anomalies · BLE<br/>web_rollup, web_anomaly, web_ble"]
       kb["compiled knowledge<br/>alert assessments, vendor research,<br/>IEEE OUI, Bluetooth SIG"]
-      frrs["triage · FRRS · TACDB<br/>web/src/web_frrs*.c"]
+      frrs["triage · FRRS · TACDB<br/>src/web_frrs*.c"]
       store[("slothweb.db<br/>series, baselines, BLE,<br/>triage, TACDB")]
-      routes["HTTP API + page<br/>web/src/web_routes.c, web/ui/"]
+      routes["HTTP API + page<br/>src/web_routes.c, ui/"]
     end
   end
 

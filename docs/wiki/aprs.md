@@ -467,7 +467,7 @@ when `sensor_health` does. Dire
 Wolf's receiver is a passive radio, so all of it is Monitor's and
 Hybrid's; under Local the routes check the query and answer
 `out_of_scope`. Full description in
-[`web/README.md`](../../web/README.md#aprs).
+sloth-mesh's `README.md`.
 
 **The Radar tab** (2026-11-06) draws APRS on its dome. Its entities are
 the stations (by source call) and, as entities of their own, the

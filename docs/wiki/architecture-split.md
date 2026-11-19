@@ -20,7 +20,7 @@ section naming every place the grep and #184 §2 disagree.
 `web/data/vendors/COVERAGE.md`, `packaging/systemd/`, issues #184 and
 #185, owner rulings on #184 of 2026-11-04.
 
-**Last updated**: 2026-11-19 (#233, Stage 3: `sloth-mesh` created from this tree at `56d9c7f2`, the repository once named `sloth-dash` renamed; §3.5; §5 item 2 and §6 answered), 2026-11-18 (#231, Stage 2 done in sloth: the six tables of §3.1 are generated from the pinned pack snapshot in `intel/`, §3.4; the row counts §3.1 recorded as 117 and 1 are 118 and 2, counted from the compiled arrays), 2026-11-17 (#185 finding 1: `dot11_data.h` no longer ships), 2026-11-16 (#185 review: C3's declared-not-defined gap), 2026-11-16 (#185 item 4: `make contract` ships C2, C3, C4, C5 and C9 as one release artifact, [[contract]]; §5 items 1, 2 and 5 restated or resolved), 2026-11-10 (C1 shipped: `SLOTH_JSONL_VERSION` exists and
+**Last updated**: 2026-11-19 (#235, Stage 4 done: `web/` removed from this tree, slothweb installs from sloth-mesh, CI builds sloth-mesh against every commit's contract; §3.6, §6), 2026-11-19 (#233, Stage 3: `sloth-mesh` created from this tree at `56d9c7f2`, the repository once named `sloth-dash` renamed; §3.5; §5 item 2 and §6 answered), 2026-11-18 (#231, Stage 2 done in sloth: the six tables of §3.1 are generated from the pinned pack snapshot in `intel/`, §3.4; the row counts §3.1 recorded as 117 and 1 are 118 and 2, counted from the compiled arrays), 2026-11-17 (#185 finding 1: `dot11_data.h` no longer ships), 2026-11-16 (#185 review: C3's declared-not-defined gap), 2026-11-16 (#185 item 4: `make contract` ships C2, C3, C4, C5 and C9 as one release artifact, [[contract]]; §5 items 1, 2 and 5 restated or resolved), 2026-11-10 (C1 shipped: `SLOTH_JSONL_VERSION` exists and
 `sensor_health` reports it, #185 item 3), 2026-11-05
 
 This page is a measurement, not a plan. It is Stage 0's first deliverable
@@ -390,6 +390,42 @@ tree's source by design (the alert detail audit over `src/alerts/`, the
 TUI colour captures) run only here until Stage 4 moves them into sloth's
 own suite.
 
+### 3.6 Stage 4 (#235): `web/` removed from this tree
+
+Done on 2026-11-19. `web/` is gone (`git rm -r`), with the Makefile's
+slothweb section and every `web*` target and `WEB_*` variable, the three
+`tests/fuzz/fuzz_web_*.c` harnesses (sloth-mesh's `fuzz/` since the
+carve), `packaging/systemd/slothweb.service`,
+`packaging/default/slothweb`, slothweb's half of `make install` and
+`make install-service`, and the web steps of `tools/gate.sh` and CI.
+
+- **Install.** slothweb installs from sloth-mesh: its `make install`
+  places the binary and its `make install-service` the unit and, only
+  where absent, `/etc/default/slothweb`, with the three refusals this
+  tree's targets had (no `./slothweb`, a stale one, a binary that lacks
+  a flag the unit passes); its `tests/deploy/test_install.sh` holds them
+  and the unit's keys that `tests/test_unit_file.c` held here. This
+  tree's `make install` still places the alert assessments the unit's
+  `--web-assessments` names (they are the corpus's, ADR 2).
+  `sloth-migrate-sensor --with-slothweb` reads the unit and the defaults
+  file from the sloth-mesh checkout `SLOTH_MESH_SRC` names.
+- **The contract.** Unchanged in content: the leaf parsers are
+  `CONTRACT_WIRE_SRCS` (the seven files `WEB_CORE_SRCS` named), and
+  `palette.json` is written by `tools/contract_palette.c`, the json half
+  of what was `web/tools/palette.c`, byte for byte the same output.
+- **CI.** The `mesh-against-contract` job builds this commit's contract,
+  vendors it into a checkout of sloth-mesh (`make update-contract`) and
+  runs its `make` and `make test`. It needs `RIVER_IO_PAT`; without it (a
+  fork) it says so in a notice and passes.
+- **Counts.** The `vendors` count marker went with the entry files: the
+  wiki pages that carried it state the number as of the cut.
+- **Not moved, open.** The checks sloth-mesh's `tests/SLOTH_SIDE.md`
+  assigns to "sloth's own suite after Stage 4" (the alert detail audit
+  over `src/alerts/`, the TUI colour captures, the monitor-row emitter
+  check) need a list or an expectation only sloth-mesh has; they did not
+  come into this tree with Stage 4 and are a follow-up (they ran in
+  `make web-test` until it).
+
 ---
 
 ## 4. #184 §2's contract table, filled in
@@ -495,6 +531,7 @@ these changes the shape of the programme; each changes a stage's content.
   Answered by #233: the archive stays `WEB_CORE_SRCS`; the rest is
   `parity/` data (§3.5).
 - The fate of the three `tests/fuzz/fuzz_web_*.c` harnesses at Stage 4.
+  Answered by #235: sloth-mesh's `fuzz/` since the carve; removed here.
 
 ---
 
@@ -503,7 +540,7 @@ these changes the shape of the programme; each changes a stage's content.
 - [[architecture]] — the system map these three boxes come from.
 - [[pack-schema]] — the v1 pack manifest and file set this inventory feeds.
 - [ADRs 0001–0007](adr/README.md) — the decisions #184 records.
-- [[slothweb]] — what the `web/` half is and does.
+- [[slothweb]] — what the `web/` half was and does (sloth-mesh's since #235).
 - [[sqlite-schema]] — `sloth.db`, C2's artifact.
 - [[jsonl-schema]] — the record stream, C1's artifact.
 - [[contract]] — the artifact `make contract` builds: C2–C5 and C9.

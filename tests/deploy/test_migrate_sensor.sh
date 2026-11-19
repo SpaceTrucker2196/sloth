@@ -29,6 +29,15 @@ TOOL=$REPO/packaging/bin/sloth-migrate-sensor
 # checks it stays POSIX.
 TOOL_SH=${TOOL_SH:-sh}
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/sloth-deploy-test.XXXXXX") || exit 1
+# --with-slothweb's unit and defaults file are sloth-mesh's since #235,
+# read from the checkout SLOTH_MESH_SRC names. A stand-in checkout with
+# the two files: the tool copies them, so their bytes are what is held.
+MESH=$SCRATCH/sloth-mesh
+mkdir -p "$MESH/packaging/systemd" "$MESH/packaging/default"
+printf '%s\n' '[Unit]' 'Description=slothweb (test stand-in)' '[Service]' 'User=sloth' \
+    'ExecStart=/usr/local/bin/slothweb --socket unix:/run/sloth/sloth.sock --sloth-db /var/lib/sloth/sloth.db $SLOTHWEB_ARGS' \
+    > "$MESH/packaging/systemd/slothweb.service"
+printf '%s\n' '# /etc/default/slothweb (test stand-in)' 'SLOTHWEB_ARGS=' > "$MESH/packaging/default/slothweb"
 # KEEP=1 leaves the scratch tree behind for inspection. An interrupt
 # exits (and so runs the EXIT trap) rather than resuming the cases with
 # the scratch tree already gone.
@@ -224,7 +233,7 @@ run() {   # run [args]; output to $W/out, status in $RC
     ROLLBACK_SETTLE_SECS=1 TMPDIR=$W \
     SYSTEMCTL=$STUB/systemctl SYSUSERS=$STUB/systemd-sysusers \
     GETENT=$STUB/getent CHOWN=$STUB/chown SOCAT=$STUB/socat \
-    CURL=$STUB/curl SS=$STUB/ss WEB_VERIFY_SECS=2 \
+    CURL=$STUB/curl SS=$STUB/ss WEB_VERIFY_SECS=2 SLOTH_MESH_SRC=${MESH_SRC-$MESH} \
     CP=${CP_CMD:-cp} \
     $TOOL_SH "$TOOL" "$@" > "$W/out" 2>&1 &
     TOOL_PID=$!
@@ -771,8 +780,8 @@ eval "$TCP_PREP"
 run --data-socket-unix --with-slothweb
 check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
 check 'cmp -s "$REPO/packaging/systemd/sloth-sensor.service" "$ROOT/$UNIT_REL"' "the sensor unit is not the hardened one"
-check 'cmp -s "$REPO/packaging/systemd/slothweb.service" "$ROOT/$WEB_REL"' "installed slothweb unit differs from packaging/"
-check 'cmp -s "$REPO/packaging/default/slothweb" "$ROOT/etc/default/slothweb"' "slothweb defaults not installed from packaging/"
+check 'cmp -s "$MESH/packaging/systemd/slothweb.service" "$ROOT/$WEB_REL"' "installed slothweb unit differs from sloth-mesh's packaging/"
+check 'cmp -s "$MESH/packaging/default/slothweb" "$ROOT/etc/default/slothweb"' "slothweb defaults not installed from sloth-mesh's packaging/"
 check '[ -e "$STATE/web_active" ] && [ -e "$STATE/web_enabled" ]' "slothweb not enabled and active"
 check 'grep -qx "curl -fsS --max-time 5 --interface 127.0.0.1 http://127.0.0.1:8770/api/health" "$LOG"' "health not asked on the loopback bind: $(grep ^curl "$LOG")"
 check 'grep -q "slothweb: slothweb.service runs as sloth; http://127.0.0.1:8770/api/health answers, sloth.db wal, stream connected" "$W/out"' "slothweb not verified: $(cat "$W/out")"
@@ -849,7 +858,7 @@ STAMP=T5 run --with-slothweb
 check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
 check 'cmp -s "$W/old.defaults" "$ROOT/etc/default/slothweb"' "the operator's slothweb defaults were replaced"
 check 'grep -qF "keeping $ROOT/etc/default/slothweb as it is (SLOTHWEB_ARGS=--web-bind 100.64.0.10:8770" "$W/out"' "keeping the defaults not said: $(cat "$W/out")"
-check 'cmp -s "$REPO/packaging/systemd/slothweb.service" "$ROOT/$WEB_REL"' "slothweb unit not installed on the rerun"
+check 'cmp -s "$MESH/packaging/systemd/slothweb.service" "$ROOT/$WEB_REL"' "slothweb unit not installed on the rerun"
 check 'cmp -s "$W/old.web" "$ROOT/$WEB_REL.bak-migrate-T5"' "the previous slothweb unit was not backed up"
 check 'grep -q "sloth.db immutable, stream connected" "$W/out"' "immutable not accepted: $(cat "$W/out")"
 
@@ -894,6 +903,26 @@ web_refusal fixed-path "gives --socket; slothweb.service fixes it"
 PREP='mkdir -p "$ROOT/etc/default" && echo "SLOTHWEB_ARGS=\"--web-bind 127.0.0.1:8770\"" > "$ROOT/etc/default/slothweb"'
 web_refusal quoted "has quoting, a variable or a specifier"
 PREP=''
+
+# No sloth-mesh checkout named (#235): refused in preflight, before the
+# sensor is touched, saying what to set. Seen red with the
+# SLOTH_MESH_SRC check taken out of web_preflight() (the refusal then
+# named an empty path and not what to set).
+CASE=web-refuse-no-mesh
+setup web-refuse-no-mesh
+h=$(tree_hash "$ROOT")
+MESH_SRC=''; run --with-slothweb; unset MESH_SRC
+check '[ "$RC" -eq 2 ]' "exit $RC, want 2: $(cat "$W/out")"
+check 'grep -qF -- "--with-slothweb needs SLOTH_MESH_SRC, a sloth-mesh checkout" "$W/out"' "the refusal does not name SLOTH_MESH_SRC: $(cat "$W/out")"
+check '[ "$(tree_hash "$ROOT")" = "$h" ]' "a refusal changed the scratch root"
+check '[ -z "$(mutating_calls)" ]' "a refusal made mutating calls: $(mutating_calls)"
+CASE=web-refuse-mesh-missing
+setup web-refuse-mesh-missing
+h=$(tree_hash "$ROOT")
+MESH_SRC=$SCRATCH/no-such-mesh; run --with-slothweb; unset MESH_SRC
+check '[ "$RC" -eq 2 ]' "exit $RC, want 2: $(cat "$W/out")"
+check 'grep -qF -- "missing $SCRATCH/no-such-mesh/packaging/systemd/slothweb.service (SLOTH_MESH_SRC=$SCRATCH/no-such-mesh)" "$W/out"' "the refusal does not name the missing unit: $(cat "$W/out")"
+check '[ "$(tree_hash "$ROOT")" = "$h" ]' "a refusal changed the scratch root"
 
 # The dry run comes before the hand-started slothweb is stopped
 # (deployment.md §4.4): a busy port is said, as the refusal the real run

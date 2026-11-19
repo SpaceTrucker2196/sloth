@@ -1300,7 +1300,7 @@ ui make non local devices and data show in a grey state". The WiFi
 Devices list, the WiFi view's AP table and the BLE advertisers show the
 other sloth hosts' rows beside this site's (`web/src/web_fleetview.c`,
 `/api/devices`, `/api/wifi/aps`, `/api/ble`; the API is in
-[`web/README.md`](../../web/README.md#fleet)).
+sloth-mesh's `README.md`).
 
 - A row this site holds stays its own row, every figure this site's; when
   another host reported the same key it gains a small `+name` (the host's

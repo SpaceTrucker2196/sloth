@@ -12,8 +12,9 @@
  * parent (a refusal check) makes a 01777 subdirectory of it rather than
  * writing into the host's /tmp.
  *
- * web/tests/wt_tmp.h is slothweb's copy: web/ includes nothing from
- * tests/, so the two suites can change independently. */
+ * sloth-mesh's tests/wt_tmp.h is slothweb's copy (it was web/tests/
+ * here until #235): it includes nothing from this tree, so the two
+ * suites change independently. */
 #ifndef SLOTH_TESTS_TMP_DIR_H
 #define SLOTH_TESTS_TMP_DIR_H
 

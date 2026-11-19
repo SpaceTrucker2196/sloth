@@ -7,7 +7,7 @@
  * colour with tg_tone_apply() (src/tui.c's tui_* calls), which is the
  * one place a glyph touches the palette.
  *
- * The web's functions are the reference (web/ui/glyph.js); a constant
+ * The web's functions are the reference (sloth-mesh's ui/glyph.js); a constant
  * that both sides carry says which one it copies. */
 #ifndef SLOTH_TUI_GLYPH_H
 #define SLOTH_TUI_GLYPH_H

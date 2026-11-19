@@ -15,7 +15,11 @@
 #                         /run/sloth/sloth.sock (owner ruling 2026-10-26
 #                         on #153). Without it a tcp: socket is refused.
 #   --with-slothweb       once the sensor verifies, install, start and
-#                         verify slothweb.service as well (step 6)
+#                         verify slothweb.service as well (step 6). The
+#                         unit and its defaults file are sloth-mesh's
+#                         since #235: SLOTH_MESH_SRC names that checkout
+#                         (its packaging/), and slothweb itself is put in
+#                         place by `sudo make install` there first.
 #
 # It performs the five steps of #153 in order, and is idempotent: a second
 # run against a migrated host only re-verifies it (and, with
@@ -93,13 +97,15 @@ DEFAULTS_TEMPLATE=${DEFAULTS_TEMPLATE:-$SLOTH_SRC/packaging/default/sloth}
 # the flag (docs/wiki/deployment.md §7).
 BT_DROPIN_TEMPLATE=${BT_DROPIN_TEMPLATE:-$SLOTH_SRC/packaging/systemd/sloth-sensor.service.d/bt-monitor.conf}
 BT_DROPIN=${BT_DROPIN:-$UNIT.d/bt-monitor.conf}
-# slothweb (--with-slothweb)
+# slothweb (--with-slothweb). Its unit and defaults file are sloth-mesh's
+# (#235): read from the checkout SLOTH_MESH_SRC names, never guessed.
+SLOTH_MESH_SRC=${SLOTH_MESH_SRC:-}
 WEB_UNIT_NAME=${WEB_UNIT_NAME:-slothweb.service}
 WEB_UNIT=${WEB_UNIT:-$ROOT/etc/systemd/system/$WEB_UNIT_NAME}
 WEB_DEFAULTS=${WEB_DEFAULTS:-$ROOT/etc/default/slothweb}
 WEB_BIN=${WEB_BIN:-$ROOT$PREFIX/bin/slothweb}
-WEB_UNIT_TEMPLATE=${WEB_UNIT_TEMPLATE:-$SLOTH_SRC/packaging/systemd/slothweb.service}
-WEB_DEFAULTS_TEMPLATE=${WEB_DEFAULTS_TEMPLATE:-$SLOTH_SRC/packaging/default/slothweb}
+WEB_UNIT_TEMPLATE=${WEB_UNIT_TEMPLATE:-${SLOTH_MESH_SRC:+$SLOTH_MESH_SRC/packaging/systemd/slothweb.service}}
+WEB_DEFAULTS_TEMPLATE=${WEB_DEFAULTS_TEMPLATE:-${SLOTH_MESH_SRC:+$SLOTH_MESH_SRC/packaging/default/slothweb}}
 # Host path of the old data dir (no ROOT); derived from the unit's --db.
 SRC_DATA=${SRC_DATA:-}
 # Must match BindsTo= in the unit, which systemd cannot take from a file;
@@ -525,10 +531,12 @@ web_state() {
 # refusal here is a refusal of the whole run.
 WEB_ARGS="" WEB_BIND="" WEB_URL="" WEB_SRC_IP="" WEB_PORT=""
 web_preflight() {
+    [ -n "$WEB_UNIT_TEMPLATE" ] && [ -n "$WEB_DEFAULTS_TEMPLATE" ] ||
+        refuse "--with-slothweb needs SLOTH_MESH_SRC, a sloth-mesh checkout: slothweb's unit and defaults file are sloth-mesh's since #235"
     for f in "$WEB_UNIT_TEMPLATE" "$WEB_DEFAULTS_TEMPLATE"; do
-        [ -f "$f" ] || refuse "missing $f (SLOTH_SRC=$SLOTH_SRC)"
+        [ -f "$f" ] || refuse "missing $f (SLOTH_MESH_SRC=$SLOTH_MESH_SRC)"
     done
-    [ -x "$WEB_BIN" ] || refuse "no executable $WEB_BIN; run 'sudo make install' first (it places slothweb as well)"
+    [ -x "$WEB_BIN" ] || refuse "no executable $WEB_BIN; run 'make' and 'sudo make install' in sloth-mesh first"
     command -v "$CURL" >/dev/null 2>&1 || refuse "command '$CURL' not found; --with-slothweb reads /api/health with it"
     if [ -d "$WEB_UNIT.d" ] && ! dir_empty "$WEB_UNIT.d"; then
         refuse "$WEB_UNIT.d/ holds drop-ins, which would also apply to the hardened slothweb unit; review and remove them first"

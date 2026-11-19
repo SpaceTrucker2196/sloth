@@ -3,9 +3,9 @@
 # Installed by `sudo make install-service` to /etc/systemd/system, beside
 # sloth-sensor.service, where `sudo make install` has placed the binary
 # (it does when the tree has built one), and never enabled by make.
-# Enabling is not the only thing that starts it: slothweb.service Wants=
-# this unit, so on a host that runs slothweb it starts whenever slothweb
-# does, with whatever /etc/default/sloth-rf holds (nothing, as shipped);
+# Enabling is not the only thing that starts it: slothweb.service (the
+# web UI, installed from sloth-mesh since #235) Wants= this unit, so on a
+# host that runs slothweb it starts whenever slothweb does, with whatever /etc/default/sloth-rf holds (nothing, as shipped);
 # `systemctl mask sloth-rf` keeps it off. Recipe, the reason for every
 # key and the migration of a host whose decoders are still read by the
 # Wi-Fi sensor: docs/wiki/deployment.md §11.
@@ -40,8 +40,8 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-# The sloth account, not one of its own: slothweb runs as sloth and
-# reads this daemon's 0600 socket (SO_PEERCRED) and its 0700 state
+# The sloth account, not one of its own: slothweb (sloth-mesh's) runs as
+# sloth and reads this daemon's 0600 socket (SO_PEERCRED) and its 0700 state
 # directory, exactly as it reads the Wi-Fi sensor's.
 User=sloth
 Group=sloth

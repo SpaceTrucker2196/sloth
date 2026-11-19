@@ -2,10 +2,7 @@
 # The whole build surface, in one run, in one tree (agents/AGENTS.md
 # "Discipline"): the six -Werror configs; sloth_test_noflags (-Werror,
 # link-only); make test and test-capture-path plain, under ASan+UBSan
-# and under TSan; make web-test plain, against
-# SQLite 3.45 when a build of it is given, without SQLite, with an empty
-# vendor table, under ASan and under TSan twice; the quickstart check;
-# deploy-test with every shellcheck given; replay-check; contract-check
+# and under TSan; deploy-test with every shellcheck given; replay-check; contract-check
 # (the release's contract artifact, built twice and compared, and read
 # from the unpacked tar alone); a one-second fuzz; cppcheck; and docs-counts and research-index leaving the tree
 # clean (research.db by content: its header carries the SQLite version). Each line is one measured result; CI runs the same matrix on
@@ -16,6 +13,8 @@
 #   env:   GATE_SQLITE345=<dir with libsqlite3.so of 3.45.x>
 #          GATE_SHELLCHECKS="<dir>:<dir>"  (bin dirs of other shellcheck
 #                                           versions; the PATH one always runs)
+# slothweb's steps (web-test in every shape, the quickstart check) left
+# with web/ for sloth-mesh at #235; its own tools/gate.sh runs them.
 #          GATE_LOG=<file>                 (default: build/gate.log)
 #
 # Lessons this script carries, each from a run that went wrong:
@@ -30,8 +29,8 @@
 #     versions in the log the next reader can tell a tool change from a
 #     code change (2026-10-26).
 #   - It runs `make clean` before every sanitized step. The build-time
-#     generators (web/tools/*.c) are built with the step's CFLAGS only
-#     when they are rebuilt; a generator left over from a plain build
+#     generators (then slothweb's, web/tools/*.c) are built with the
+#     step's CFLAGS only when they are rebuilt; a generator left over from a plain build
 #     never ran under the sanitizers locally, and CI, building from a
 #     clean tree, found a leak and a qsort(NULL) in one (2026-11-02).
 #   - It keeps every step's full log and prints the FAIL and sanitizer
@@ -71,7 +70,7 @@ step() {
     mkdir -p build
     "$@" > "$out" 2>&1
     rc=$?
-    line=$(grep -E 'assertions passed|slothweb tests:|deploy-test:|wiki-sync-test:|replay-check:|quickstart_check:' "$out" | tail -1)
+    line=$(grep -E 'assertions passed|deploy-test:|wiki-sync-test:|replay-check:' "$out" | tail -1)
     say "$name: rc=$rc ${line:-}"
     if [ "$rc" -ne 0 ] || printf '%s' "$line" | grep -qE '[1-9][0-9]* failed'; then
         grep -E '^ *FAIL|SUMMARY: (Address|Thread|Undefined|Leak)Sanitizer|runtime error|WARNING: ThreadSanitizer|error:' "$out" \
@@ -112,21 +111,6 @@ step "test-capture-path asan" make test-capture-path EXTRA_CFLAGS="$SAN"
 make -s clean > /dev/null 2>&1
 TSAN_OPTIONS=halt_on_error=1 step "test tsan" make test EXTRA_CFLAGS='-fsanitize=thread'
 
-make -s clean > /dev/null 2>&1
-step "web-test" make web-test EXTRA_CFLAGS=-Werror
-if [ -n "${GATE_SQLITE345:-}" ]; then
-    LD_LIBRARY_PATH=$GATE_SQLITE345 step "web-test sqlite-3.45" make web-test
-fi
-step "web-test WITH_SQLITE=0" make web-test WITH_SQLITE=0 EXTRA_CFLAGS=-Werror
-emptyoui=$(mktemp -d "$tmp/gate-oui.XXXXXX")
-step "web-test empty-oui" make web-test WEB_OUI_DIR="$emptyoui"
-rmdir "$emptyoui"
-step "web-quickstart-check" make web-quickstart-check
-make -s clean > /dev/null 2>&1
-step "web-test asan" make web-test EXTRA_CFLAGS="$SAN"
-make -s clean > /dev/null 2>&1
-TSAN_OPTIONS=halt_on_error=1 step "web-test tsan 1" make web-test EXTRA_CFLAGS='-fsanitize=thread'
-TSAN_OPTIONS=halt_on_error=1 step "web-test tsan 2" make web-test EXTRA_CFLAGS='-fsanitize=thread'
 
 step "deploy-test" make deploy-test
 if [ -n "${GATE_SHELLCHECKS:-}" ]; then

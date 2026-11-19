@@ -527,7 +527,7 @@ change-only, a row's altitude and position are as of its last record:
 within its band and cell, not the decoder's latest second. The SDR is a
 passive radio, so the records are Monitor's, as BLE's are; under Local
 the tab shows its scope note. Full description in
-[`web/README.md`](../../web/README.md#ads-b).
+sloth-mesh's `README.md`.
 
 Across the owner's sensors (#192 I7, [[fleet]] "Aircraft across the
 sites"), each slothweb exports its receiver's summary, its demonstrated

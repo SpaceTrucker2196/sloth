@@ -769,7 +769,7 @@ the ceiling drops the advertisers no flag marks before any keyed
 Wi-Fi or host history, and the HID and watchlisted ones only after it
 ([[slothweb]]). The web side's description, routes
 (`/api/ble`, `/api/ble/alerts`, `/api/ble/{addr}`) and parity table:
-[`web/README.md`](../../web/README.md#ble).
+sloth-mesh's `README.md`.
 
 Since 2026-11-02 the tab reads `BLE Devices` and has a waterfall above
 the table in the WiFi view's style: device classes by time (each cell
@@ -790,7 +790,7 @@ device, never a device or a person; a rotating random address is its
 own row and no rotation is linked. To give both panels a point a 10 s
 bucket, `ble_device` is now re-sent once a slot while the advertiser
 is heard ([[jsonl-schema]]). Description, routes, the class table and
-the grade: [`web/README.md`](../../web/README.md#ble).
+the grade: sloth-mesh's `README.md`.
 
 ## Not built yet
 

@@ -102,7 +102,7 @@ void rule_sensor_undervolt(const sloth_state_t *s, time_t now) {
         if (!first) first = r; else others++;
     }
     /* Each %s a plain variable, so slothweb's detail audit
-     * (web/tests/test_alertfmt.c) can follow it: sid and sname are the
+     * (sloth-mesh's tests/test_alertfmt.c) can follow it: sid and sname are the
      * host kernel's hwmon id and the driver's name for the input, never
      * a remote's text; more is one of three literals. */
     const char *sid = first ? first->id : "?";

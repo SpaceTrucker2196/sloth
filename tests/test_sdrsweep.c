@@ -33,7 +33,7 @@
  *     "internal");
  *   - test_helper_never_transmits: a SoapySDRDevice_writeStream call
  *     added to src/sdrsweep/main.c;
- *   - test_helper_is_not_linked_into_sloth_or_slothweb:
+ *   - test_helper_is_not_linked_into_sloth:
  *     src/sdrsweep/sdrsweep_dsp.c appended to CORE_COMMON_SRCS;
  *   - test_units_name_no_site_service: `Conflicts=aprs.service` added to
  *     packaging/systemd/sloth-sdrsweep.service.
@@ -495,15 +495,14 @@ static void test_helper_never_transmits(void) {
     free(s);
 }
 
-/* sloth and slothweb drive no radio: src/sdrsweep/ is named only by the
- * helper's own lists and the test build's, and nothing in web/src
- * includes it. */
-static void test_helper_is_not_linked_into_sloth_or_slothweb(void) {
+/* sloth drives no radio: src/sdrsweep/ is named only by the helper's
+ * own lists and the test build's. (slothweb, which also drives none, is
+ * sloth-mesh's since #235, and so is the check that it never includes
+ * the helper.) */
+static void test_helper_is_not_linked_into_sloth(void) {
     char *mk = slurp("Makefile");
     ASSERT(mk != NULL);
     if (!mk) return;
-    /* SoapySDR is linked by the helper's rule alone. */
-    ASSERT(strstr(mk, "WEB_LDLIBS      = -lpthread -lm\n") != NULL);
     int named = 0, ok = 1, prev_test_only = 0;
     for (char *l = mk; l && *l; ) {
         char *nl = strchr(l, '\n');
@@ -523,28 +522,6 @@ static void test_helper_is_not_linked_into_sloth_or_slothweb(void) {
     ASSERT(ok);
     ASSERT_GE(named, 3);
     free(mk);
-    DIR *d = opendir("web/src");
-    ASSERT(d != NULL);
-    if (!d) return;
-    struct dirent *e;
-    int clean = 1, seen = 0;
-    while ((e = readdir(d))) {
-        size_t n = strlen(e->d_name);
-        if (n < 3 || (strcmp(e->d_name + n - 2, ".c") && strcmp(e->d_name + n - 2, ".h"))) continue;
-        char path[300];
-        snprintf(path, sizeof(path), "web/src/%s", e->d_name);
-        char *s = slurp(path);
-        if (!s) continue;
-        seen++;
-        if (strstr(s, "sdrsweep_dsp") || strstr(s, "SoapySDR/")) {
-            fprintf(stderr, "    %s names the helper or SoapySDR\n", path);
-            clean = 0;
-        }
-        free(s);
-    }
-    closedir(d);
-    ASSERT(clean);
-    ASSERT_GT(seen, 10);
 }
 
 /* The units: a oneshot under its own account with no capability, the
@@ -765,7 +742,7 @@ void run_sdrsweep_tests(void) {
     RUN_TEST(test_json_document);
     RUN_TEST(test_parse_hand_written);
     RUN_TEST(test_helper_never_transmits);
-    RUN_TEST(test_helper_is_not_linked_into_sloth_or_slothweb);
+    RUN_TEST(test_helper_is_not_linked_into_sloth);
     RUN_TEST(test_units_name_no_site_service);
     RUN_TEST(test_hist_record);
     RUN_TEST(test_hist_prune);

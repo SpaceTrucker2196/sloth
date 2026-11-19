@@ -2389,7 +2389,7 @@ static void write_events(const sloth_state_t *s, time_t now) {
         sqlite3_stmt *st = g_st[ST_ALERT];
         /* first_seen <= last_seen is what slothweb's History count
          * leans on (it finds an episode begun after a time by its
-         * last_seen, web/src/web_slothdb.h). The engine stamps both
+         * last_seen, sloth-mesh's src/web_slothdb.h). The engine stamps both
          * from the unclamped wall clock, so across a backward clock
          * step an episode can arrive with last_seen before the row's
          * first_seen; it is stored as having ended where it began. */

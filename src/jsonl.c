@@ -2312,7 +2312,7 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
  * Counts only. A victim's address, the stations a forging BSSID
  * answered and the SSIDs it answered for stay in the TUI and the alert
  * evidence; the record says how many. Member names avoid the credential
- * words slothweb's readers hold every name to (web/src/web_secret.c):
+ * words slothweb's readers hold every name to (sloth-mesh's src/web_secret.c):
  * `unanswered_kde` for the M1s that carried the PMKID KDE, `disconnects`
  * for the deauthentication and disassociation frames, `lure_chain` for
  * the deauth-then-lure flag.

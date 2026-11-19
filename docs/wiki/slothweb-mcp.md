@@ -6,6 +6,12 @@ type: reference
 
 # slothweb-mcp: slothweb for an agent
 
+> **Where it lives.** slothweb-mcp is sloth-mesh's, with slothweb, since
+> #235 (Stage 4 of #184): `web/mcp/` below is sloth-mesh's `mcp/`, `make
+> web-mcp` its `make mcp`, and the other `web/` paths its `src/`,
+> `tests/` and `tools/`. This page is sloth's public description as of
+> that cut; sloth-mesh's `README.md` is the reference.
+
 **Summary**: `slothweb-mcp` is a small C program an MCP client (an
 OpenClaw agent, Claude Code) launches on the same machine as slothweb.
 It speaks newline-delimited JSON-RPC on stdin/stdout and is a thin
@@ -259,7 +265,7 @@ it at every stop, so a killed slothweb leaves no secret behind. The
 unit also gives `fchown` back to slothweb's system-call filter (it is
 in `@privileged`, which the unit denies; the denial made `fchown` fail
 with `EPERM` there, measured with `systemd-run --user` and the unit's
-own filter lines, `tests/deploy/test_slothweb_unit.sh`). Without the
+own filter lines, sloth-mesh's `tests/deploy/test_install.sh`). Without the
 flag the file is `0600` and only slothweb's own user can write through
 it, as a development tree run as the operator does. Section 7 has the
 steps.

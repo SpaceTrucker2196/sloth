@@ -55,7 +55,7 @@ mkdir -p "$stage/include/sloth-wire" "$stage/lib/pkgconfig" "$stage/schema" \
          "$stage/jsonl" "$stage/palette" "$stage/alerts" "$stage/fixtures" \
          "$stage/parity" "$work/obj" dist
 
-# ── libsloth-wire.a: exactly the sources slothweb links (WEB_CORE_SRCS) ──
+# ── libsloth-wire.a: exactly the sources slothweb links (CONTRACT_WIRE_SRCS) ──
 objs=
 for src in $wire_srcs; do
     obj=$work/obj/$(basename "$src" .c).o
@@ -96,7 +96,7 @@ cp docs/wiki/jsonl-schema.md "$stage/jsonl/jsonl-schema.md"
 
 # ── the alert knowledge bundle, at its tree paths under alerts/ ──
 # Paths are kept so each generator's arguments are the same paths with
-# a prefix (web/tools/alertkb.c, web/tools/alertasm.c).
+# a prefix (sloth-mesh's tools/alertkb.c, sloth-mesh's tools/alertasm.c).
 copy_tree() {   # copy_tree FILE... into alerts/, keeping the path
     for f in "$@"; do
         mkdir -p "$stage/alerts/$(dirname "$f")"

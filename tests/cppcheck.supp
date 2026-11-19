@@ -56,31 +56,16 @@ readdirCalled:src/platform/linux_dhcp.c
 # sys_io_list_dir() (the host status, 2026-11-11): a local opendir()
 # DIR*, closed in the same function.
 readdirCalled:src/sys_status.c
-# The alert knowledge generator walks research/ at build time and the
-# detail audit test reads src/alerts/, each a single-threaded program
-# with a local DIR* closed in the same function.
-readdirCalled:web/tools/alertkb.c
-# test_spectrum.c counts the files the sweep helper left: a single-
-# threaded test with a local opendir() DIR*, closed in the same function.
-readdirCalled:web/tests/test_spectrum.c
 # The sweep history (2026-11-15): sdrs_hist_prune() walks the history
 # directory with a local opendir() DIR*, and hist_window() one from
 # fdopendir() on its own dup of the directory fd; each is closed in the
 # same function.
 readdirCalled:src/sdrsweep/sdrsweep_dsp.c
-readdirCalled:web/src/web_spectrum.c
-readdirCalled:web/tools/alertasm.c
-readdirCalled:web/src/web_pcapdir.c
-# web_fleet_read_own() (#192 I5): one DIR of /sys/class/net, read once
-# at start before any thread.
-readdirCalled:web/src/web_fleet.c
-readdirCalled:web/tests/test_alertfmt.c
 # The test suites' temporary-file helpers (test_rm_tree, the leak
 # guard's walk): each recursion level opendir()s its own local DIR* and
 # closes it before returning; a test that calls them from a thread it
 # started walks a tree no other thread is reading.
 readdirCalled:tests/tmp_dir.h
-readdirCalled:web/tests/wt_tmp.h
 # The #87 retention sweep: sweep_locked() fdopendir()s a dup of the pinned
 # export directory descriptor into a local DIR* and closedir()s it before
 # returning. Reached only from the main thread (startup, then the poll
@@ -99,23 +84,6 @@ readdirCalled:src/alert_pcap.c
 # returning, on the main thread at start and at shutdown.
 readdirCalled:src/posture.c
 readdirCalled:research/ingest/main.c
-# #160's clean-WAL refusal test: dir_list() opendir()s its own temporary
-# directory into a local DIR* and closedir()s it before returning, on
-# the test's one thread.
-readdirCalled:web/tests/test_store.c
-# The bundle test's one-caller audit: test_rawn_has_one_caller()
-# opendir()s web/src into a local DIR* and closedir()s it before
-# returning, on the test's one thread.
-readdirCalled:web/tests/test_bundle.c
-# #162's sloth.db reader tests: sdb_listing() opendir()s the test's own
-# temporary directory into a local DIR* and closedir()s it before
-# returning, on the test's one thread.
-readdirCalled:web/tests/sdb_gen.c
-# The vendor research generator walks web/data/vendors/ at build time
-# (read_dir()) and test_vendorkb.c counts the same files: each a
-# single-threaded program with a local DIR* closed in the same function.
-readdirCalled:web/tools/vendorkb.c
-readdirCalled:web/tests/test_vendorkb.c
 
 # ── False positives, checked by hand ────────────────────────────────────
 # Bucket arrays filled field-by-field when a slot is claimed; the flagged

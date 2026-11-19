@@ -6,15 +6,23 @@ type: reference
 
 # Architecture
 
-**Summary**: How sloth's source is organised: header → CLI → platform vtable → capture pipeline → per-protocol parsers → state → views. The sensor is two daemons from one tree since the cutover (#216): `sloth-wifi` (the capture, the monitor radio, BLE and the terminal; `sloth` is a symlink to it) and `sloth-rf` (the SDR decoders and the GNSS records, headless).
+**Summary**: How sloth's source is organised: header → CLI → platform vtable → capture pipeline → per-protocol parsers → state → views. The sensor is two daemons from one tree since the cutover (#216): `sloth-wifi` (the capture, the monitor radio, BLE and the terminal; `sloth` is a symlink to it) and `sloth-rf` (the SDR decoders and the GNSS records, headless). The system is three repositories since #184's Stage 4 (#235): **sloth** (this one: the sensor, its rules, the research corpus and the contract), **sloth-mesh** (slothweb, private) and **sloth-comint** (the intelligence packs); [[architecture-split]] has the seams.
 
-**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `tests/tmp_dir.h`, `tests/test_tmp_dir.c`, `tests/main_test.c`, `web/tests/wt_tmp.h`, `web/tests/web_test_main.c`, `src/sloth_clock.h`, `src/poll.h`, `src/poll.c`, `src/poll_core.c`, `src/poll_gnss.c`, `src/poll_rf.c`, `src/run_flag.h`, `tests/test_poll.c`, `src/rf/main.c`, `src/rf/rf_args.c`, `src/rf/platform_rf.c`, `src/capture_side.h`, `src/rf_side.h`, `src/rf_moved.h`, `src/sys_status_rf.c`, `src/db.h`, `src/alerts/rules.h`, `src/alerts/rules_table_rf.c`, `src/jsonl_internal.h`, `src/sys_status.h`, `src/daemon_start.h`, `tests/test_rf_build.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `src/worker_thread.c`, `tests/test_worker_thread.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
+**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `tests/tmp_dir.h`, `tests/test_tmp_dir.c`, `tests/main_test.c`, `src/sloth_clock.h`, `src/poll.h`, `src/poll.c`, `src/poll_core.c`, `src/poll_gnss.c`, `src/poll_rf.c`, `src/run_flag.h`, `tests/test_poll.c`, `src/rf/main.c`, `src/rf/rf_args.c`, `src/rf/platform_rf.c`, `src/capture_side.h`, `src/rf_side.h`, `src/rf_moved.h`, `src/sys_status_rf.c`, `src/db.h`, `src/alerts/rules.h`, `src/alerts/rules_table_rf.c`, `src/jsonl_internal.h`, `src/sys_status.h`, `src/daemon_start.h`, `tests/test_rf_build.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `src/worker_thread.c`, `tests/test_worker_thread.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-11-16 (#209: the descriptor guard at every test-case boundary, the harness teardown behind it, and the two modules whose pinned directory nothing released); 2026-11-15 (#216, the cutover: `sloth-wifi` and `sloth-rf` in the system map, the threads and the build layout; the RF side as data, `check_wifi_no_rf`, two tables not three, the per-binary counts); 2026-11-15 (#213 review: the `nm` gate's lists as widened, by member and by family; 49 members, measured); 2026-11-15 (#213: `sloth-rf`, the second daemon; the capture side as data the shared services take; the `nm` gate on its link); 2026-11-15 (#212: source groups, the run flag's own file, the stage table as data); 2026-11-03 (#180: fragattack's sixth table, no new lock edge); 2026-11-02 (the system map: sensor, BLE scan helper, slothweb and its stores); 2026-10-27 (temporary files: the leak guard, interrupts and a long TMPDIR; #95, #118, #141, #132, #130, #109)
+**Last updated**: 2026-11-19 (#235: three repositories in the system map; slothweb is sloth-mesh's, built against the contract; the temporary-files section is sloth's suite's); 2026-11-16 (#209: the descriptor guard at every test-case boundary, the harness teardown behind it, and the two modules whose pinned directory nothing released); 2026-11-15 (#216, the cutover: `sloth-wifi` and `sloth-rf` in the system map, the threads and the build layout; the RF side as data, `check_wifi_no_rf`, two tables not three, the per-binary counts); 2026-11-15 (#213 review: the `nm` gate's lists as widened, by member and by family; 49 members, measured); 2026-11-15 (#213: `sloth-rf`, the second daemon; the capture side as data the shared services take; the `nm` gate on its link); 2026-11-15 (#212: source groups, the run flag's own file, the stage table as data); 2026-11-03 (#180: fragattack's sixth table, no new lock edge); 2026-11-02 (the system map: sensor, BLE scan helper, slothweb and its stores); 2026-10-27 (temporary files: the leak guard, interrupts and a long TMPDIR; #95, #118, #141, #132, #130, #109)
 
 ---
 
 ## System map
+
+Three repositories since #235 (Stage 4 of #184, [ADR 0001](adr/0001-three-repos.md)):
+
+| Repository | What it is | How it reaches the others |
+|---|---|---|
+| **sloth** (public, this tree) | the two daemons, the rules and incident engine, the TUI, JSONL, `sloth.db`, the research corpus and the alert assessments, the wire parsers | publishes the **contract** (`make contract`, [[contract]]): `libsloth-wire.a`, `schema.sql`, `palette.json`, the alert knowledge bundle, the golden fixtures, `parity/`; CI's `mesh-against-contract` builds sloth-mesh against every commit's |
+| **sloth-mesh** (private) | slothweb: the page, the HTTP API, `slothweb.db`, triage, FRRS, TACDB, the fleet, `slothweb-mcp`; its own `make install` / `make install-service` | builds against a pinned contract tar (`contract.lock`) and a pinned pack snapshot; never reads sloth's source |
+| **sloth-comint** | the intelligence packs (OUI registries, vendor research, Bluetooth SIG, attacker OUIs, camera vendors) | both other trees commit a pinned pack snapshot ([[pack-schema]]) |
 
 How the pieces connect at run time: the receive-only inputs, the sensor's two daemons, and slothweb, which reads each daemon's stream and database (read-only) and keeps its own store. Every arrow is a read or a local hand-off; nothing here transmits onto a monitored network (`MISSION.md` §2).
 
@@ -52,14 +60,14 @@ flowchart LR
       rfsock["data socket<br/>unix:/run/sloth-rf/sloth-rf.sock"]
       rfdb[("sloth-rf.db<br/>sloth's DDL, RF tables")]
     end
-    subgraph web["slothweb — slothweb.service, user sloth, read-only on both databases"]
-      ingest["two stream ingests + live states<br/>web/src/web_ingest.c, web_live.c"]
-      sdb["sloth.db and sloth-rf.db readers<br/>web/src/web_slothdb.c"]
+    subgraph web["slothweb (sloth-mesh) — slothweb.service, user sloth, read-only on both databases"]
+      ingest["two stream ingests + live states<br/>src/web_ingest.c, web_live.c"]
+      sdb["sloth.db and sloth-rf.db readers<br/>src/web_slothdb.c"]
       analytics["rollups · anomalies · BLE<br/>web_rollup, web_anomaly, web_ble"]
       kb["compiled knowledge<br/>alert assessments, vendor research,<br/>IEEE OUI, Bluetooth SIG"]
-      frrs["triage · FRRS · TACDB<br/>web/src/web_frrs*.c"]
+      frrs["triage · FRRS · TACDB<br/>src/web_frrs*.c"]
       store[("slothweb.db<br/>series, baselines, BLE,<br/>triage, TACDB")]
-      routes["HTTP API + page<br/>web/src/web_routes.c, web/ui/"]
+      routes["HTTP API + page<br/>src/web_routes.c, ui/"]
     end
   end
 
@@ -672,7 +680,7 @@ owner, not something this page decides.
 
 ### Temporary files
 
-`make test` and `make web-test` leave nothing behind in `$TMPDIR`
+`make test` (and, until #235 moved it to sloth-mesh, `make web-test`) leave nothing behind in `$TMPDIR`
 (`/tmp` when unset), and a test that does fails the run. Before
 2026-10-27 every test helper wrote under a hard-coded `/tmp/...`; on
 the development host 47,082 `/tmp/sloth_*` entries (2.8 GB) had piled

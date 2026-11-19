@@ -29,7 +29,8 @@ the Wi-Fi it watches:
 - [[architecture]] — code-tree layout and the seams between layers.
 - [[architecture-split]] — the measured coupling between the sensor, the
   dashboard and the intelligence tables: every reference out of `web/`
-  and every intelligence table in `src/`, with #184's contract table
+  (removed at Stage 4, #235; slothweb is sloth-mesh's) and every
+  intelligence table in `src/`, with #184's contract table
   C1–C10 filled in and the places the grep disagrees with it.
 - [ADRs 0001–0010](adr/README.md) — the architecture decision records for
   the three-repository programme (#184), one per decision, with the gaps
@@ -104,8 +105,8 @@ the Wi-Fi it watches:
 - [[research-corpus]] — the machine-readable side of the cite-sources
   habit (#73): one document per source, FTS5-indexed, guarded.
 - [[vendor-research]] — slothweb's "vendor research" section under the
-  OUI card: one cited Markdown file per OUI holder in
-  `web/data/vendors/`, compiled in at build time, every claim with a
+  OUI card: one cited Markdown file per OUI holder in the
+  sloth-comint `vendor-research` pack, compiled in at build time, every claim with a
   source and a confidence; the file format and the rules the build
   enforces.
 - [[captive-portal]] — connectivity-check interception (#69): the
@@ -169,13 +170,13 @@ the Wi-Fi it watches:
 - [[data-socket-exposure]] — who can read the data socket, the
   `unix:` trust boundary, the remote-bind guard, and the three
   supported ways to reach it from another host.
-- [[slothweb]] — the browser dashboard's separate server under `web/`
-  (#102): W0 (#157) is the loopback-default bind and the allowed-peer
+- [[slothweb]] — the browser dashboard's separate server, under `web/`
+  until #235 and sloth-mesh's (private) since (#102): W0 (#157) is the loopback-default bind and the allowed-peer
   list refused at accept(); M0 (#158) the page, `/api/health` and the
   `/events` stream; M1 (#159) the data-socket client, `/api/live` and
   the Overview; M2 to M5 the time series, baselines and anomalies,
   Devices, WiFi, History and the SQL box; M6 (#164) the Flows view and
-  the five-minute README (`web/README.md`) with its troubleshooting
+  the five-minute README (sloth-mesh's `README.md`) with its troubleshooting
   table and security section; alert triage, the FRRS emitter record
   and the TACDB tab, its spec [`docs/web-frrs-spec.md`](../web-frrs-spec.md).
 - [[slothweb-mcp]] — the MCP server an agent on the sensor's own

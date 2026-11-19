@@ -31,6 +31,18 @@ list: `src/db.c`'s RF table writers link into both and are off in
 `sloth-wifi` at run time). `sloth-wifi` refuses the decoder flags with
 exit 2 since #216; the stream is JSONL 2.4.0 (2.0.0 at the cutover). Test binary `sloth_test`.
 
+slothweb, the browser dashboard over both daemons, is not in this tree
+since #235 (Stage 4 of #184): it lives in **sloth-mesh**, a private
+repository with its own `agents/AGENTS.md`, suite, gate, CI and
+`make install` / `make install-service`. It builds against sloth's
+**contract** (`make contract`: `libsloth-wire.a`, `schema.sql`,
+`palette.json`, the alert knowledge bundle, the golden fixtures and
+`parity/`; `docs/wiki/contract.md`), never against this tree's source,
+and CI's `mesh-against-contract` job builds and tests sloth-mesh against
+every commit's contract. sloth is public and sloth-mesh is private:
+never copy sloth-mesh code into this tree. A change here that sloth-mesh
+needs to see goes into the contract, additively.
+
 ## Architecture
 
 - `include/sloth.h` — central header: shared structs, the `view_t` enum.
@@ -98,12 +110,10 @@ exit 2 since #216; the stream is JSONL 2.4.0 (2.0.0 at the cutover). Test binary
   `make test-capture-path` plain, under
   `EXTRA_CFLAGS="-Werror -fsanitize=address,undefined
   -fno-omit-frame-pointer -fno-sanitize-recover=all"` and under
-  `-fsanitize=thread`; `make web-test` plain, without SQLite, with an
-  empty vendor table, under ASan and under TSan twice (and against
-  SQLite 3.45 with `GATE_SQLITE345`, which is what CI's Ubuntu 24.04
-  has); `make web-quickstart-check`; `make deploy-test` (and with other
+  `-fsanitize=thread`; `make deploy-test` (and with other
   shellcheck versions via `GATE_SHELLCHECKS`; CI has 0.9); `make
-  replay-check`; `make fuzz FUZZ_SECONDS=1`; `make cppcheck`; and
+  replay-check`; `make contract-check`; `make fuzz FUZZ_SECONDS=1`;
+  `make cppcheck`; and
   `docs-counts` plus `research-index` leaving the tree clean. **Run the
   script, never a hand-picked subset:** the one time a slice's gate left
   `make fuzz` out, a fuzz harness that no longer linked reached CI
@@ -124,15 +134,13 @@ exit 2 since #216; the stream is JSONL 2.4.0 (2.0.0 at the cutover). Test binary
   configs); `make clean` before every sanitized step (a build-time
   generator left over from a plain build never ran instrumented
   locally; CI found a leak and a `qsort(NULL)` in one); keep every
-  step's log and print the FAIL lines under a red step. The generators
-  also depend on `$(WEB_GEN_DIR)/.flags` now, so a sanitized make
-  rebuilds them regardless.
+  step's log and print the FAIL lines under a red step.
 
   **When the owner says to skip local gates and lean on CI** (asked on
   2026-11-02 when four slices were gating at once on one machine), the
-  per-slice minimum is the build with `-Werror`, `make test`, `make
-  web-test`, `make web-test WITH_SQLITE=0`, `make cppcheck` and a clean
-  `docs-counts`; CI is the full matrix; one `make gate` on `main` at the
+  per-slice minimum is the build with `-Werror`, `make test`,
+  `make cppcheck` and a clean `docs-counts` (and `make contract` when
+  the slice touches what the contract carries); CI is the full matrix; one `make gate` on `main` at the
   end. Say which of the two you ran when you quote a result.
 
   **The host's toolchain can be newer than CI's.** CI's Ubuntu 24.04
@@ -144,14 +152,13 @@ exit 2 since #216; the stream is JSONL 2.4.0 (2.0.0 at the cutover). Test binary
   side is still real on that side; the car box will be the newer one.
 
 - **A test that measures wall-clock time against a real budget scales
-  it under the sanitizers.** slothweb's 250 ms read budget is right for
-  slothweb and wrong for a TSan build on a loaded host, where a correct
-  read answered 503 in some runs and not others (test_alerts.c,
-  2026-11-01). The seam is `web_sdb_test_budget_scale`
-  (1 in slothweb; 4 under ASan, 8 under TSan, set only by the test
-  runner), and a test's own time bound scales with it; a test that needs
-  a budget to expire uses one far below the scaled value. A timing
-  assertion with no sanitizer scale is a flake waiting for a busy
+  it under the sanitizers.** slothweb's 250 ms read budget was right
+  for slothweb and wrong for a TSan build on a loaded host, where a
+  correct read answered 503 in some runs and not others (2026-11-01;
+  the seam that fixed it is sloth-mesh's now). A test's own time bound
+  scales with the sanitizer (4 under ASan, 8 under TSan); a test that
+  needs a budget to expire uses one far below the scaled value. A
+  timing assertion with no sanitizer scale is a flake waiting for a busy
   machine, and a flake teaches people to rerun instead of read.
 - **Views and alert kinds are X-macro lists** since #117:
   `include/sloth_views.def` and `include/sloth_alerts.def` generate the
@@ -279,17 +286,15 @@ did, written down so it is the default next time:
   other's slice is on `main`, send the SHA the moment it lands; a push
   that lands under someone's gate costs them the whole gate again. A fix
   for a red `main` is the one exception, announced.
-- **One module file per slice** where the slices meet in the same page:
-  `web/ui/glyph.js`, `frrs.js`, `evidence.js`, `bundle.js`,
-  `location.js`, each with one namespace object, its own container ids,
-  and one call per view in `app.js`. Exchange the ids and the order of
-  the containers on a shared page before either builds; the merge is
-  then a line, not an afternoon.
+- **One module file per slice** where slices meet in the same file:
+  each with its own namespace and one call from the shared caller.
+  Agree the seams before either builds; the merge is then a line, not
+  an afternoon. (Learnt on slothweb's page, sloth-mesh's since #235.)
 - **Shared stores are sequenced, not merged.** Two slices that each bump
-  `slothweb.db`'s version become v6 then v7 in push order, each with its
-  migration and a test on the other's file; sloth.db's
-  `DB_SCHEMA_VERSION` the same. Say which store a slice touches when
-  you announce it.
+  sloth.db's `DB_SCHEMA_VERSION` become n then n+1 in push order, each
+  with its migration and a test on the other's file (slothweb.db is
+  sloth-mesh's, held the same way there). Say which store a slice
+  touches when you announce it.
 - **Hand work across the seam by lists, in writing.** The 208 vendors
   one session researched for the other travelled as a message with the
   exact format, path, file names and the registry-spelling pitfalls;
@@ -331,16 +336,17 @@ Integration traps that turned CI or the suite red after green slices:
 - **Assessments cite `rule_file` lines.** Any edit to
   `src/alerts/rules_*.c` shifts them; repoint each to its rule
   function's definition line before pushing (8caf61e).
-- **slothweb's detail audit (`web/tests/test_alertfmt.c`) only follows
-  plain variables** in an alert's detail `snprintf`. Bind helper results
-  (`count_bucket()`, band helpers) to a variable first and name it in
-  `web_alert_detail_audited[]`.
+- **slothweb's detail audit (sloth-mesh's `tests/test_alertfmt.c`) only
+  follows plain variables** in an alert's detail `snprintf` in
+  `src/alerts/`. Bind helper results (`count_bucket()`, band helpers) to
+  a variable first; sloth-mesh names it in `web_alert_detail_audited[]`.
 - **Doc `**Last updated**` lines conflict on every parallel merge.**
   Merge by keeping both entries, newest first.
 - **A red fuzz run on an unrelated commit is still a real bug.** CI's
-  30 s fuzz found a pre-existing over-read in `web_pcap.c` (c3a2bf7).
-- **Page tests that pin single JS lines miss mutations of the lines
-  around them; pin whole functions** (#171 V1 review).
+  30 s fuzz found a pre-existing over-read in slothweb's `web_pcap.c`
+  (c3a2bf7).
+- **Tests that pin single lines miss mutations of the lines around
+  them; pin whole functions** (#171 V1 review).
 
 ## Conventions
 
@@ -439,18 +445,22 @@ The rule is **provenance, not subject**:
   (`share_rule`).
 - **The importer refuses what the rule forbids**, from any peer.
 
-Enforcement points (change them only with the owner): the allow-list
-and the device test in `web/src/web_fleetshare.c`
+Enforcement points (change them only with the owner). They are
+slothweb's, so they live in **sloth-mesh** since #235 (its
+`agents/AGENTS.md` carries this rule word for word, and its paths are
+those below without the old `web/` prefix); the rule itself stays here
+and binds every repository: the allow-list
+and the device test in `src/web_fleetshare.c`
 (`web_fleet_share_alerts[]`, `web_fleet_share_dev()`,
 `web_fleet_share_refuses()`); the export's Monitor-scope device read and
-row writers in `web/src/web_fleet.c` (`xp_dev()`, `xp_ap()`,
+row writers in `src/web_fleet.c` (`xp_dev()`, `xp_ap()`,
 `xp_alert()`, `xp_verdict()`, `xp_header()`); the monitor-radio test
 `own_is_monitor()` / `web_fleet_read_own()`; the importer's
 `check_line()` / `put_line()` and the one-time `web_fleet_purge()`.
 Tests that must stay green and whose absence assertions were each seen
-red under a mutation: `web/tests/test_fleetshare.c` (every
+red under a mutation: `tests/test_fleetshare.c` (every
 `sloth_alerts.def` row classified, the device test, the importer's rule
-shape by shape) and `web/tests/test_fleet.c`
+shape by shape) and `tests/test_fleet.c`
 (`test_export_monitor_only`, `test_read_own`,
 `test_ingest_refuses_forbidden`, `test_purge_once`,
 `test_purge_v2_repulls`). A change that makes one of them pass by
@@ -461,8 +471,8 @@ weakening it breaks the rule.
 - Don't run destructive git ops (`reset --hard`, `push --force`, branch
   delete) without explicit user authorisation.
 - Don't add new files at repo root; everything has a home (`src/`,
-  `tests/`, `docs/`, `include/`, and `web/` for slothweb — owner ruling
-  2026-10-19 on #102; its spec is `docs/web-ui-spec.md`).
+  `tests/`, `docs/`, `include/`; slothweb, which had `web/` here by the
+  owner's ruling of 2026-10-19 on #102, is sloth-mesh's since #235).
 - Don't stage `wifi-sigint/`, `sloth`, `sloth-wifi`, `sloth-rf`, or
   `sloth_test`.
 - Don't reintroduce coloured row backgrounds (deliberately removed).

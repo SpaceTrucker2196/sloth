@@ -1,7 +1,18 @@
 # slothweb
 
-The browser dashboard's server, a separate binary under `web/`. This
-page tracks what has shipped; the design is
+> **Where it lives.** slothweb is not in this repository since #235
+> (Stage 4 of #184): it is **sloth-mesh**, a private repository that
+> builds against sloth's contract ([[contract]]) and installs with its
+> own `make install` and `make install-service` ([[deployment]] §6).
+> This page is sloth's public description of slothweb as of that cut;
+> sloth-mesh's `README.md` is the reference. A path below that starts
+> `web/` names the same file in sloth-mesh without that prefix
+> (`web/src/web_fleet.c` is its `src/web_fleet.c`), and `make web`,
+> `make web-test`, `make web-demo` and `make web-quickstart-check` are
+> its `make`, `make test`, `make demo` and `make quickstart-check`.
+
+The browser dashboard's server, a separate binary (under `web/` until
+#235). This page tracks what has shipped; the design is
 [`docs/web-ui-spec.md`](../../docs/web-ui-spec.md), whose rulings table
 overrides its body.
 
@@ -9,7 +20,7 @@ overrides its body.
 top of M5 (#163), M4 (#162), M3 (#161), M2 (#160), M1 (#159), M0 (#158)
 and W0 (#157). How to build and run it in five minutes, every start-up
 message with its remedy, and the security model are in
-[`web/README.md`](../../web/README.md). M6 adds the Flows view (sloth.db's
+sloth-mesh's `README.md`. M6 adds the Flows view (sloth.db's
 protocol tables, one tab each, through the M4 allow-list, SMB1 sessions
 in the critical colour, and a chord diagram of the busiest source to
 destination pairs with what was folded stated; `/api/flows` and
@@ -121,7 +132,7 @@ fire -- never gets two writers on one series; the queue drains on the
 tsdb thread's once-a-second tick, same as closing due buckets;
 `/api/health` `alertq_dropped`; § Two daemons, "Alerts" and "Not in
 #214"); 2026-11-16 (#224: the WiFi channel waterfall and the BLE Devices tab's two panels drawn isometrically by default, as the Spectrum tab draws its sweep, through `web/ui/iso.js` (`window.SlothIso`), which now holds the Spectrum tab's projection, back-to-front row painter, hit test and offscreen copy; an `isometric` checkbox per tab, kept per browser as `wifi.iso` / `bledev.iso`, brings back the flat grids; hover names the cell in a tooltip, a click or the arrow keys pick it for the list; no data, route or API change; § M5's WiFi and BLE Devices); 2026-11-16 (the page's title and header read "sloth mesh", the dashboard's repo name under #184; the binary, unit and database keep the name slothweb); 2026-11-15 (#216 review: `rf_stream.reading` names the stream's own `MAJOR`; the ADS-B and APRS stores clear their block on a blockless `sensor_health`; `/api/gnss` carries `rf_stream` and the GNSS tab gives the reason; the rtl_433 and Victron state lines name sloth-rf's flag), 2026-11-15 (#216, the cutover: the RF stream's state, "rf_stream" on `/api/health` and on the four RF tabs' answers; a 2.x `sloth-wifi` on `--socket` with no `--rf-socket` says the RF daemon's stream is not configured; 1.x and 2.x streams are both read and named), 2026-11-15 (#214 review: an alert both daemons raise is one incident; an RF alert's list row, page, triage subject and bundle are sloth-rf.db's and never sloth.db's finding of the same key, its page gives no `d` id; every incident list holds both states; the sensor tile says sloth-rf's word in every scope; `alerts.fired` is sloth's stream's alone, said under "Not in #214"), 2026-11-15 (#214: one slothweb, two daemons. `--rf-socket` and `--rf-db` read sloth-rf beside sloth: a second ingest thread and stream state, each consumer with one writer (`web_ingest.h`'s table), a wrong-daemon guard on `sensor_health`'s `daemon`, the RF history and the fleet's aircraft and GNSS incidents from sloth-rf.db, sloth-rf's alerts on the same pages, `/api/health` `daemons` and `rf_db`, `/api/sys` `host_from` and a third store, the tick's `rf`; without the flags nothing changes; § Two daemons), 2026-11-15 (the Victron tab: `GET /api/victron` (the owner's Victron devices from sloth's `victron_device` records, kept in memory, each with its age and a `stale` mark past 360 s, 660 s for a GATT-only device) and `GET /api/victron/history?mac=&metric=&hours=` (one value of one device from sloth.db v15's `victron_readings`, at most 240 buckets of mean/min/max), `web_victron.c`, `web/ui/victron.js`; per-device cards and a chart per key metric; Monitor scope; not in the fleet; `WEB_SDB_SCHEMA_MAX` 15; [[victron]]), 2026-11-15 (the Spectrum tab's ranges: `GET /api/spectrum?range=last3|1h|5h|12h|24h`, one row per run from `sloth-sdrsweep`'s `history/`, max-pooled to stay near 2 MB, bad records skipped and counted; a range selector kept per browser; rows placed by time with gaps marked; the Run button refused within 120 s of the last run whatever the helper's cooldown; [[sdr-sweep]]), 2026-11-15 (the Camera tab: `GET /api/camera.jpg`, `--camera-dir`, `web_camera.c`, `web/ui/camera.js`; the still is a capture helper's `latest.jpg`, read only), 2026-11-14 (#208: the rtl_433 tab, `GET /api/rtl433`, `web_rtl433.c`, `web/ui/rtl433.js`; Monitor scope; [[rtl433]]), 2026-11-13 (the Spectrum tab: `GET /api/spectrum`, `POST /api/spectrum/run`, `--spectrum-dir`, `--spectrum-request`, `web_spectrum.c`, `web/ui/spectrum.js`; the sweep is `sloth-sdrsweep`'s, [[sdr-sweep]]; the write gate admits that one path without a store and refuses it to an agent), 2026-11-13 (the Radar: fleet areas as traced polygons, devices at their most probable point, hollow when unlocated, Wi-Fi hues `--rw-0..4` by MAC), 2026-11-12 (#187: one BSSID's KARMA detail, `/api/lures/bssid` and `web/ui/karma.js`, from the lures card and the device drawer: its `karma_suspect` row over time, its `KARMA_AP` / `KARMA_PROBE_FORGE` incidents, the `hw_verdict` and the beacon's `probe_lat` (JSONL 1.6.0, now kept by the decoder beside `loc`); `slothweb-mcp`'s `sloth_lures` and `sloth_lure_bssid`), 2026-11-12 (#187, #172: the WiFi view's "lures and key harvesting" card from sloth's `karma_suspect`, `harvest_station` and `harvest_chain` records (JSONL 1.3.0), `/api/lures`, `web_lure.c`; the details of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN` shown), 2026-11-12 (#198: many alerts triaged as one: `POST /api/frrs/triage/bulk` (100 ids at one token), incidents (`POST /api/frrs/incident`, `GET /api/frrs/incidents`, members by id or by a standing filter that auto-joins new alerts, the incident's state read by its members unless one has its own later verdict), `/api/alerts`'s `incident=`, slothweb.db v12 with its migration, the Alerts page's incidents panel, selection and bulk verdict (`web/ui/incident.js`), five `slothweb-mcp` tools; [[slothweb-mcp]]); 2026-11-12 (the stores' size, owner: "track sloth db usage in the host and trends window ... the records tile with long term graph showing the limit for storage": sloth.db and slothweb.db on disk (main file plus `-wal`, `stat()` only) against sloth's `db.max_mb` (from `sensor_health`'s `db_max_mb`, JSONL 1.7.0, or an older sloth's `tuned` list) and `--web-max-mb`; `/api/sys`'s `storage`; the `sys.db_mb` series keyed `sloth` / `slothweb`; a tile per store and a `storage` trend row on Sensor health, and a line and a 30 d G1 on the Overview's records/s tile, each drawn on 0 to the limit with the limit as a rule (glyph.js G1's `limit`); 80 % `near`, 95 % `full`, 0 no limit), 2026-11-12 (#187, #172: the WiFi view's "lures and key harvesting" card from sloth's `karma_suspect`, `harvest_station` and `harvest_chain` records (JSONL 1.3.0), `/api/lures`, `web_lure.c`; the details of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN` shown), 2026-11-12 (#198: many alerts triaged as one: `POST /api/frrs/triage/bulk` (100 ids at one token), incidents (`POST /api/frrs/incident`, `GET /api/frrs/incidents`, members by id or by a standing filter that auto-joins new alerts, the incident's state read by its members unless one has its own later verdict), `/api/alerts`'s `incident=`, slothweb.db v12 with its migration, the Alerts page's incidents panel, selection and bulk verdict (`web/ui/incident.js`), five `slothweb-mcp` tools; [[slothweb-mcp]]); reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
-set: <!-- count:vendors -->276<!-- /count --> entries, most of the
+set: 276 entries, most of the
 reference host's vendors covered and the rest pending, `COVERAGE.md`); 2026-10-27 (sensor location: the alert page's "where the sensor was", the drawer's scatter, `/api/positions` with GeoJSON and GPX, the stream decoder keeping sloth's `loc` object, sloth.db v9 read; [[location]]); 2026-10-27 (an alert's proof: `--pcap-dir`, the capture decoded and hash-checked, the assessment and bibliography, the drawer's rows as tap targets); 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (the vendor
 research section under the drawer's and Lookup's OUI card, one cited Markdown file per OUI holder
 in `web/data/vendors/` compiled in at build time, `{found:false}` and
@@ -595,7 +606,7 @@ ratio toggle are not built yet.
 ## M3: baselines and anomalies
 
 The full account, with every departure from the spec's body and its
-reason, is in [`web/README.md`](../../web/README.md#baselines-and-anomalies-m3).
+reason, is in sloth-mesh's `README.md`.
 In short:
 
 - **Rows, not the store.** The engine reads every minute and hour bucket
@@ -676,7 +687,7 @@ In short:
 ## M4: devices and lookup
 
 The full account is in
-[`web/README.md`](../../web/README.md#devices-and-lookup-m4). In short:
+sloth-mesh's `README.md`. In short:
 
 - **sloth.db, read-only.** Every request (and A2's minute pass) opens
   its own connection with `SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW`
@@ -756,7 +767,7 @@ The full account is in
   compiled in by `web/tools/vendorkb.c`; `"vendor_research"` on both
   routes, `{found:false}` and "no research yet for <name>" for a
   vendor without a file. Sources as plain text lines, never links.
-  <!-- count:vendors -->276<!-- /count --> entries today, covering most
+  276 entries today, covering most
   of the reference host's vendor names; the rest are pending because
   nothing public ties them to a company (`web/data/vendors/COVERAGE.md`
   lists both and carries the totals, held to the lists by the test). A
@@ -768,7 +779,7 @@ The full account is in
 ## M5: WiFi, History and the SQL box
 
 The full account is in
-[`web/README.md`](../../web/README.md#wifi-history-and-the-sql-box-m5).
+sloth-mesh's `README.md`.
 In short:
 
 - **WiFi** (§8.8). `/api/wifi/channels`: a channel x time grid of
@@ -927,7 +938,7 @@ In short:
 ## M6: Flows, polish, the README
 
 The full account is in
-[`web/README.md`](../../web/README.md#flows-m6). In short:
+sloth-mesh's `README.md`. In short:
 
 - **Flows** (§8.9). `/api/flows?proto=` reads one of `ssh_flows`,
   `rdp_flows`, `smb_sessions`, `snmp_flows`, `ldap_events`,
@@ -1573,7 +1584,7 @@ long name can cut so that `192.0.2.123` reads `192.0.2.12`.
 512 KB hard cap, optional sections dropped first. The
 copy works on plain http (a hidden textarea and `execCommand`) where
 `navigator.clipboard` does not exist. Detail in
-[`web/README.md`](../../web/README.md#copy-json-the-analysis-bundle).
+sloth-mesh's `README.md`.
 
 ## Sensor location (2026-10-27)
 
@@ -1653,7 +1664,7 @@ later build's `slothweb.v2.*` survives this one, and its reset). Each table keep
 columns`; `reset settings` in the footer forgets everything and loads
 the bare address again. What is deliberately not kept (the History
 range, the Records type pick, the drawer, the recipe picker) and why,
-setting by setting: [`web/README.md`](../../web/README.md#kept-settings).
+setting by setting: sloth-mesh's `README.md`.
 `web/tests/test_prefs.c` holds it by the page's text, and fails on a new
 form control (any attribute order) or ARIA toggle that is neither kept
 nor listed as not kept; the behaviour
@@ -1667,7 +1678,7 @@ glyph set for the page's data graphics, and the rules every glyph and
 panel follows; its rulings table of 2026-10-26 overrides its body.
 Slice V0 builds the first three of them — **G1** the band sparkline, **G5** the binary presence
 strip, **G6** the bullet and count bar — and writes the rules down in
-[`web/README.md`](../../web/README.md#the-glyph-layer): R1 to R12, the
+sloth-mesh's `README.md`: R1 to R12, the
 caption grammar (R9: source, window, tier, scale, n), the three empty
 states (R5: `no data`, `warming`, a gap, which never look alike) and
 the honest-window rule (R4: data covering less than a tenth of the
@@ -2157,7 +2168,7 @@ a Report. The specification, the field-by-field mapping onto what sloth
 records and the owner's open questions (Q1-Q16, each with the default
 this build took) are [`docs/web-frrs-spec.md`](../web-frrs-spec.md);
 the routes with their request and response shapes are
-[`web/README.md`](../../web/README.md#triage-and-the-frrs-record).
+sloth-mesh's `README.md`.
 
 - **Triage** is operator state in slothweb.db (schema v6, an additive
   step with its migration test on a v5 file and the failure that leaves
@@ -2274,7 +2285,7 @@ mechanism, not a second: an anomaly's decisions are rows of the same
 same header checks, with the same five states, 240-byte note, history
 of 64 folding past it and shared 20,000-row cap. The routes and shapes
 are in
-[`web/README.md`](../../web/README.md#anomaly-triage-and-links); the
+sloth-mesh's `README.md`; the
 model is `docs/web-frrs-spec.md` §15.
 
 - **What an anomaly's id names.** `tid` in every episode's JSON: `a`
@@ -2735,7 +2746,7 @@ and PDU words, kinds, families and distance words only from sloth's
 closed vocabularies (else `other`, counted), the watch category only
 as sloth's slug, the finding's key kept for the resolve join and never
 rendered. Full description, the parity table and the v7 schema:
-[`web/README.md`](../../web/README.md#ble). Tests:
+sloth-mesh's `README.md`. Tests:
 `web/tests/test_ble.c` (hand-built records, every route under each
 scope, the metrics, the store round trip and seed, each absence seen
 red under a named mutation), `web/tests/test_btsig.c` (the committed
@@ -3243,7 +3254,7 @@ preview's timestamps advance about 10x slower than the wall clock.
 - [[ble]] — the Bluetooth host source whose `ble_device` / `ble_alert`
   records and `sensor_health` members the BLE view shows.
 - [[cli-reference]] — sloth's own flags; slothweb's are in
-  [`web/README.md`](../../web/README.md), the triage slice's
+  sloth-mesh's `README.md`, the triage slice's
   `--web-read-only` and `--web-assessments` among them
   (`tests/test_docs_consistency.c` holds that page to sloth's own
   `src/main.c`, so slothweb's flags cannot be tabled there).

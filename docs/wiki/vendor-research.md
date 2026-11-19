@@ -1,5 +1,12 @@
 # Vendor research: what slothweb knows about an OUI's holder
 
+> **Where it lives.** The entries are sloth-comint's `vendor-research`
+> pack and the generator and the page are sloth-mesh's since #235 (Stage
+> 4 of #184): `web/data/vendors/` below is the pack's directory, and
+> `web/tools/`, `web/src/`, `web/ui/` and `web/tests/` are sloth-mesh's
+> `tools/`, `src/`, `ui/` and `tests/`. This tree keeps the page; the
+> count below is as of that cut.
+
 **Summary**: slothweb's device drawer and Lookup card show, under the
 OUI card, a "vendor research" section: who the registrant of the block
 is, what a MAC in its blocks usually is, the silicon documented in its
@@ -25,13 +32,13 @@ separate companies the registry lists under their own names, every
 listed source cited and read, a source line ending at its date, the
 generator's refusals tested, the reference list without device
 counts); 2026-11-01 (the research set:
-<!-- count:vendors -->276<!-- /count --> entries, covering 160 of the
+276 entries, covering 160 of the
 reference host's 163 vendor names, three pending; before it, the
 pipeline and three sample entries; owner request of 2026-10-27).
 
 ## What is covered
 
-`web/data/vendors/` holds <!-- count:vendors -->276<!-- /count -->
+`web/data/vendors/` holds 276
 entries (`make docs-counts` keeps that number). They were written by two
 research sessions on 2026-10-27, each entry from the sources it cites,
 and each session re-fetched its entries' cited URLs to check the claims
@@ -269,8 +276,9 @@ matches `REFERENCE_HOST.txt` (its two lists together are exactly the
 reference names, each once and each a registry name), every name under
 Have finding the file it names, `(affiliate)` exactly when it reaches it
 as one, every name under Pending finding none, and its count line equal
-to the lists, so deleting an entry turns the test red. `tests/test_docs_consistency.c` holds every
-`count:vendors` marker to the number of entry files. Each
+to the lists, so deleting an entry turns the test red. `tests/test_docs_consistency.c` held every
+`count:vendors` marker to the number of entry files until #235 took the
+files out of this tree. Each
 absence assertion was seen red under a named mutation (in the test's
 comments) and the files restored byte for byte.
 

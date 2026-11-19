@@ -692,8 +692,8 @@ opened, `2` a bad argument or a fail-closed refusal.
 ## slothweb
 
 slothweb, the browser dashboard, is a separate binary with its own
-flags, listed with every start-up message in `web/README.md`
-("Command line", "Troubleshooting"). Since 2026-10-27 it takes
+flags, listed with every start-up message in sloth-mesh's `README.md`
+("Command line", "Troubleshooting"); it is sloth-mesh's since #235. Since 2026-10-27 it takes
 `--pcap-dir DIR` (repeatable once): the sensor's `--pcap-dir` (and,
 optionally, its `--eapol-dir`), read-only, for the alert page's packet
 capture ([[pcap-export]] §6, [[slothweb]]). An evidence pcap from the
@@ -741,9 +741,9 @@ it cannot give exits `1` ([[slothweb-mcp]] section 7).
 
 ### slothweb-mcp
 
-`make web-mcp` builds `slothweb-mcp`, an MCP server (stdio,
+sloth-mesh's `make mcp` builds `slothweb-mcp`, an MCP server (stdio,
 newline-delimited JSON-RPC) that is a client of slothweb's HTTP API
-on loopback ([[slothweb-mcp]]). Not in `all`, `web` or the install.
+on loopback ([[slothweb-mcp]]). Not in its `make` or its install.
 
 Its flags, in prose because this page's tables are `sloth`'s own flags
 (a test holds every table row to `src/main.c`):
@@ -808,11 +808,11 @@ make bench           # time seqnum correlation + PNL union at full table
                      #   occupancy, -O2 (#91; BENCH_ITERS=n, figures in [[ring-buffers]])
 make deploy-test     # packaging/bin/sloth-migrate-sensor against a scratch root
                      #   with stub systemctl etc.; unprivileged (#153, [[deployment]] §4)
-make install         # sloth, slothweb (`make web` first), the monitor-mode helper,
-                     #   sloth-ble-scan and research.db under $(PREFIX) (#139, #153)
-make install-service # sloth-sensor.service, slothweb.service, sloth-ble-scan.service
-                     #   (installed, not enabled), the sysusers fragment,
-                     #   /etc/default/sloth and /etc/default/slothweb (each only if absent)
+make install         # sloth, the monitor-mode helper, sloth-ble-scan, research.db and
+                     #   the alert assessments under $(PREFIX) (#139, #153)
+make install-service # sloth-sensor.service, sloth-ble-scan.service (installed, not
+                     #   enabled), the sysusers fragment, /etc/default/sloth (only if
+                     #   absent); slothweb's binary and unit install from sloth-mesh (#235)
 ```
 
 `make` on Linux also builds `sloth-ble-scan`, the operator's
