@@ -1466,6 +1466,7 @@
     if (v === "anomalies") anomalies();
     if (v === "overview") overview();
     if (v === "devices") devices();
+    if (v === "devices" && window.SlothDevWf) SlothDevWf.show();
     if (v === "wifi") wifi();
     if (v === "flows") flows();
     if (v === "history") historyView();
@@ -6901,6 +6902,8 @@
       return hit;
     },
     changed: function () { apDfAll(); } });
+  if (window.SlothDevWf) SlothDevWf.init({ getJSON: getJSON, errText: errText, fmt: fmt,
+                                           prefGet: prefGet, prefSet: prefSet });
   if (window.SlothWRadar) SlothWRadar.init({ getJSON: getJSON, errText: errText, openDrawer: openDrawer });
   // The rtl_433 tab (web/ui/rtl433.js): the page's helpers, lent once.
   if (window.SlothRtl433) SlothRtl433.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp });

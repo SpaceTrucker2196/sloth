@@ -507,6 +507,81 @@ static void test_aps_carry_presence(void) {
     WT_ASSERT(pr != NULL && (!next || pr < next));
 }
 
+/* /api/devices/arrivals's array name[i], or -2 for null, -3 for none. */
+static long long arr_at(const char *b, const char *name, int i) {
+    char k[32];
+    snprintf(k, sizeof(k), "\"%s\":[", name);
+    const char *q = strstr(b, k);
+    if (!q) return -3;
+    q += strlen(k);
+    for (int n = 0; n < i; n++) {
+        q = strchr(q, ',');
+        if (!q) return -3;
+        q++;
+    }
+    if (!strncmp(q, "null", 4)) return -2;
+    return strtoll(q, NULL, 10);
+}
+
+static void arr_put(const char *key, long long t) {
+    web_qrow_t q;
+    memset(&q, 0, sizeof(q));
+    q.tier = WEB_TIER_HOUR;
+    q.metric = WM_DEV_PRESENT;
+    snprintf(q.key, sizeof(q.key), "%s", key);
+    q.t = t;
+    q.sum = q.min = q.max = 1;
+    q.n = 1;
+    WT_EQ(web_store_write(&g_store, &q, 1), 0);
+}
+
+/* The Devices view's waterfall (owner 2026-11-19: "see when devices
+ * appear and reappear over time"): each hour's devices, as arrived
+ * (none in the 24 hours before), back (absent the hour before, present
+ * within the 24) and still (present the hour before). Measured as the
+ * change from the answer before these rows, so the other tests' presence
+ * does not count: x in hours 0 to 2 (arrived, then still twice), y in 0
+ * and 3 (arrived, back), w in the hour before the first shown and in 0
+ * (still: the extra day read before the window), v 20 hours before the
+ * window and in 1 (back). */
+static void test_arrivals_classes(void) {
+    WT_EQ(route(&H, "/api/devices/arrivals", "days=2", 0), 200);
+    static char before[1 << 16];
+    snprintf(before, sizeof(before), "%s", body_of(g_out));
+    long long start = SDB_NOW - 86400;
+    char want[96];
+    snprintf(want, sizeof(want), "\"days\":2,\"from\":%lld,\"cell_s\":3600,\"cells\":48,", start);
+    WT_HAS(before, want);
+    arr_put("da:a2:00:00:00:01", start);
+    arr_put("da:a2:00:00:00:01", start + 3600);
+    arr_put("da:a2:00:00:00:01", start + 7200);
+    arr_put("da:a2:00:00:00:02", start);
+    arr_put("da:a2:00:00:00:02", start + 3 * 3600);
+    arr_put("da:a2:00:00:00:03", start - 3600);
+    arr_put("da:a2:00:00:00:03", start);
+    arr_put("da:a2:00:00:00:04", start - 20 * 3600);
+    arr_put("da:a2:00:00:00:04", start + 3600);
+    WT_EQ(route(&H, "/api/devices/arrivals", "days=2", 0), 200);
+    const char *b = body_of(g_out);
+    static const char *const NM[4] = { "present", "arrived", "back", "still" };
+    static const long long D[4][5] = {
+        { 3, 2, 1, 1, 0 }, { 2, 0, 0, 0, 0 }, { 0, 1, 0, 1, 0 }, { 1, 1, 1, 0, 0 },
+    };
+    for (int a = 0; a < 4; a++)
+        for (int i = 0; i < 5; i++) {
+            long long x = arr_at(b, NM[a], i), y = arr_at(before, NM[a], i);
+            WT_ASSERT(x >= 0 && y >= 0);
+            if (x - y != D[a][i]) fprintf(stderr, "  %s[%d]: %lld, want %lld\n", NM[a], i, x - y, D[a][i]);
+            WT_EQ(x - y, D[a][i]);
+        }
+    /* The hours after now are null: the 26th shown cell is tomorrow's. */
+    WT_EQ(arr_at(b, "present", 24) >= 0, 1);
+    WT_EQ(arr_at(b, "present", 25), -2);
+    WT_EQ(route(&H, "/api/devices/arrivals", "days=0", 0), 400);
+    WT_EQ(route(&H, "/api/devices/arrivals", "days=31", 0), 400);
+    WT_EQ(route(&H, "/api/devices/arrivals", "x=1", 0), 400);
+}
+
 /* The drawer's strip and week, and its episodes: presence from the
  * store's minute tier and the in-memory ring, cells from the baseline,
  * an open episode keyed by the MAC. */
@@ -860,6 +935,7 @@ void run_devices_tests(void) {
     WT_RUN(test_device_drawer);
     WT_RUN(test_drawer_presence_week_anomalies);
     WT_RUN(test_aps_carry_presence);
+    WT_RUN(test_arrivals_classes);
     WT_RUN(test_rows_carry_g2);
     WT_RUN(test_lookup);
     WT_RUN(test_health_members);

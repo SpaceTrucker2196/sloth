@@ -1157,3 +1157,140 @@ void web_m4_health(const web_m4_t *m, long long now_s, web_jw_t *w) {
         web_jw_raw(w, "}");
     }
 }
+
+/* ── /api/devices/arrivals ───────────────────────────────────────────
+ *
+ * The Devices view's waterfall (owner 2026-11-19: "add a waterfall graph
+ * to the devices pages so we can see when devices appear and reappear
+ * over time"): for each hour of the last `days` local days, how many
+ * devices were present, split three ways by what each had done before:
+ * arrived (not present in any of the 24 hours before), back (absent the
+ * hour before but present within the 24) and still (present the hour
+ * before too). Presence is the strips' (the scope's metric, the store's
+ * minute and hour tiers, then what the ring holds), read for one more
+ * day before the first shown so its first hours are judged as the rest
+ * are. The keys: those the rollup holds a presence series for (the most
+ * recently heard first; on a fresh start the only ones), then the
+ * store's with a presence row in the range, at most WEB_DEV_ARR_KEYS
+ * ("more" when cut). */
+static long long arr_start(long long now_s, int days) {
+    long long off = web_utc_offset(now_s), lm = now_s + off;
+    lm -= ((lm % 86400) + 86400) % 86400;
+    return lm - off - (long long)(days - 1) * 86400;
+}
+
+static int arr_merge(char (*keys)[WEB_KEY_MAX + 1], int n, int cap,
+                     char (*add)[WEB_KEY_MAX + 1], int na) {
+    for (int i = 0; i < na && n < cap; i++) {
+        int dup = 0;
+        for (int k = 0; k < n && !dup; k++) dup = !strcmp(keys[k], add[i]);
+        if (!dup) memcpy(keys[n++], add[i], WEB_KEY_MAX + 1);
+    }
+    return n;
+}
+
+static void arr_array(web_jw_t *w, const char *name, const long long *v,
+                      int n, int shown) {
+    web_jw_raw(w, ",\"");
+    web_jw_raw(w, name);
+    web_jw_raw(w, "\":[");
+    for (int i = 0; i < n; i++) {
+        if (i) web_jw_raw(w, ",");
+        if (i < shown) web_jw_int(w, v[i]); else web_jw_raw(w, "null");
+    }
+    web_jw_raw(w, "]");
+}
+
+int web_devices_arrivals_route(const web_m4_t *m, const char *query,
+                               long long now_s, char *body, size_t cap,
+                               size_t *len, int *status) {
+    char err[64] = "";
+    dparam_t ps[1] = { { "days", 8, 0, "", 0 } };
+    if (dparams(query, ps, 1, err, sizeof(err)) != 0)
+        return answer_error(400, err, NULL, body, cap, len, status);
+    long long days = WEB_DEV_ARR_DAYS;
+    if (ps[0].seen && (decimal(ps[0].val, WEB_DEV_ARR_DAYS_MAX, &days) != 0 || days < 1))
+        return answer_error(400, "bad_days", NULL, body, cap, len, status);
+    WEB_M4_CHECKED(m, len, status);
+    if (!m || !m->tsdb || !m->tsdb->store || !m->tsdb->store->rd)
+        return answer_error(503, "no_store",
+                            "slothweb keeps presence in its store (--store PATH)",
+                            body, cap, len, status);
+    int nd = (int)days, shown_cells = nd * 24, nc = shown_cells + 24;
+    long long start = arr_start(now_s, nd), from = start - 86400;
+    long long to = from + (long long)nc * 3600;
+    int shown = (int)((now_s - start) / 3600) + 1;
+    if (shown > shown_cells) shown = shown_cells;
+    if (shown < 0) shown = 0;
+    int pm = presence_metric(m), stride = (nc + 7) / 8;
+    web_store_t *st = m->tsdb->store;
+
+    char (*keys)[WEB_KEY_MAX + 1] = calloc(WEB_DEV_ARR_KEYS + 1, WEB_KEY_MAX + 1);
+    char (*recent)[WEB_KEY_MAX + 1] = calloc(WEB_DEV_ARR_KEYS + 1, WEB_KEY_MAX + 1);
+    long long *cnt = calloc((size_t)shown_cells * 4, sizeof(long long));
+    if (!keys || !recent || !cnt) { free(keys); free(recent); free(cnt); return -1; }
+    int nk = 0, total = 0;
+    web_keyinfo_t *ki = calloc(WEB_DEV_ARR_KEYS + 1, sizeof(*ki));
+    if (!ki) { free(keys); free(recent); free(cnt); return -1; }
+    int nm = m->tsdb->ru ? web_rollup_keys(m->tsdb->ru, pm, ki, WEB_DEV_ARR_KEYS + 1, &total) : 0;
+    for (int i = 0; i < nm; i++) memcpy(keys[nk++], ki[i].key, WEB_KEY_MAX + 1);
+    free(ki);
+    int nr = web_store_keys(st, WEB_TIER_HOUR, pm, from, to, recent, WEB_DEV_ARR_KEYS + 1);
+    if (nr > 0) nk = arr_merge(keys, nk, WEB_DEV_ARR_KEYS + 1, recent, nr);
+    /* What the hour tier does not hold yet: the open hour's minutes. */
+    nr = web_store_keys(st, WEB_TIER_MINUTE, pm, now_s - 2 * 3600, now_s + 60,
+                        recent, WEB_DEV_ARR_KEYS + 1);
+    if (nr > 0) nk = arr_merge(keys, nk, WEB_DEV_ARR_KEYS + 1, recent, nr);
+    free(recent);
+    int more = nk > WEB_DEV_ARR_KEYS;
+    if (more) nk = WEB_DEV_ARR_KEYS;
+    unsigned char *bits = calloc((size_t)(nk ? nk : 1), (size_t)stride);
+    if (!bits) { free(keys); free(cnt); return -1; }
+    for (int i = 0; i < nk; i++)
+        for (int t = WEB_TIER_MINUTE; t <= WEB_TIER_HOUR; t++)
+            web_store_presence(st, t, pm, keys[i], from, to, nc, 3600,
+                               bits + (size_t)i * (size_t)stride);
+    web_rollup_presence(m->tsdb->ru, pm, (const char (*)[WEB_KEY_MAX + 1])keys,
+                        nk, from, to, nc, 3600, bits);
+    long long *present = cnt, *arrived = cnt + shown_cells,
+              *back = cnt + 2 * shown_cells, *still = cnt + 3 * shown_cells;
+    for (int i = 0; i < nk; i++) {
+        const unsigned char *b = bits + (size_t)i * (size_t)stride;
+        /* last: the latest cell before c the key was present in (-1). */
+        int last = -1;
+        for (int c = 0; c < nc; c++) {
+            if (!(b[c / 8] & (1u << (c % 8)))) continue;
+            int v = c - 24;
+            if (v >= 0) {
+                present[v]++;
+                if (last == c - 1) still[v]++;
+                else if (last >= 0 && c - last <= 24) back[v]++;
+                else arrived[v]++;
+            }
+            last = c;
+        }
+    }
+    free(bits);
+    free(keys);
+    web_jw_t w;
+    web_jw_init(&w, body, cap);
+    web_jw_raw(&w, "{\"now\":");          web_jw_int(&w, now_s);
+    web_jw_raw(&w, ",\"days\":");         web_jw_int(&w, nd);
+    web_jw_raw(&w, ",\"from\":");         web_jw_int(&w, start);
+    web_jw_raw(&w, ",\"cell_s\":3600");
+    web_jw_raw(&w, ",\"cells\":");        web_jw_int(&w, shown_cells);
+    web_jw_raw(&w, ",\"utc_offset_s\":"); web_jw_int(&w, web_utc_offset(now_s));
+    web_jw_raw(&w, ",\"metric\":");       web_jw_str(&w, web_metric_defs[pm].name);
+    web_jw_raw(&w, ",\"devices\":");      web_jw_int(&w, nk);
+    web_jw_raw(&w, ",\"more\":");         web_jw_raw(&w, more ? "true" : "false");
+    arr_array(&w, "present", present, shown_cells, shown);
+    arr_array(&w, "arrived", arrived, shown_cells, shown);
+    arr_array(&w, "back", back, shown_cells, shown);
+    arr_array(&w, "still", still, shown_cells, shown);
+    web_jw_raw(&w, "}\n");
+    free(cnt);
+    if (w.overflow) return -1;
+    *len = w.len;
+    *status = 200;
+    return 0;
+}

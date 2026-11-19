@@ -57,11 +57,15 @@ static void test_wradar_placement(void) {
               "    return { lat: ORIGIN.lat + m * Math.cos(a) / M_PER_DEG, lon: ORIGIN.lon + m * Math.sin(a) / M_PER_DEG };\n"
               "  }");
     /* Solid only with a bearing; the colour is the channel's. */
-    WT_HAS(a, "      var br = dfBearing(dv.mac), p = at(br === null ? addrAngle(dv.mac) : br, dv.m);");
+    WT_HAS(a, "      var br = dfBearing(dv.mac), az = br === null ? addrAngle(dv.mac) : br, p = at(az, dv.m);");
+    /* A cluster's blocks: the picked one kept, then the farthest first,
+     * the rest marks only. */
+    WT_HAS(a, "      if (clash && !o.picked) { o.lines = []; return; }");
+    WT_HAS(a, "    var rg = range(devs), tg = declutter(targets(devs, S.picked), rg);");
     WT_HAS(a, "      var col = ch !== null && window.SlothChan ? SlothChan.rgb(ch) : null;");
     WT_HAS(a, "      out.push({ id: String(dv.mac), lat: p.lat, lon: p.lon, color: col || \"#8a82a0\", fill: br !== null,");
     WT_HAS(a, "      if (!num(dv.m) || dv.m < 0) return;");
-    WT_HAS(a, "    var r = S.ppi.scope({ centre: ORIGIN, range: range(devs), unit: UNIT, targets: tg,");
+    WT_HAS(a, "    var r = S.ppi.scope({ centre: ORIGIN, range: rg, unit: UNIT, targets: tg,");
     WT_HAS(a, "  var ORIGIN = { lat: 0, lon: 0 };");
     WT_HAS(a, "    H.getJSON(\"/api/radar\").then(function (j) {");
     /* The sensor's position is never read, and nothing is markup. */

@@ -607,6 +607,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/series/all?metric=&tier=&from=&to=&cols=&after=` | `200` JSON, every key of one metric, each in at most `cols` cells, a page of keys to an answer ([below](#apiseriesall)); `400` / `503` as `/api/series` |
    | `GET /api/anomalies?since=&kind=` | `200` JSON, `Cache-Control: no-store`, open episodes and those closed since `since` (below); `400` for a parameter that does not pass; `503` with no anomaly engine |
    | `GET /api/baseline?metric=&key=` | `200` JSON, one series' 168 hour-of-week cells; `400` / `503` as above |
+   | `GET /api/devices/arrivals?days=` | `200` JSON, the Devices view's waterfall ([The Devices view](#the-devices-view-the-drawer-lookup)): for each hour of the last `days` local days (1 to 30, default 7), `present` (devices with slothweb's presence that hour, under the scope) and its split, `arrived` (none in the 24 hours before), `back` (absent the hour before, present within the 24) and `still` (present the hour before), oldest first, `null` for an hour still to come; `from` (the first day's local midnight), `cell_s` 3600, `cells`, `utc_offset_s`, `metric`, `devices` (keys counted, at most 4,096, the most recently heard first) and `more`; `400` for a bad `days` or any other parameter; `503` with no store |
    | `GET /api/devices?q=&sort=&dir=&limit=&offset=&fleet=` | `200` JSON, a page of sloth.db's devices (M4, below), with the peers' rows unless `fleet=0` ([Fleet](#fleet)); `400` for a parameter or a query term that does not pass; `503` with no `--sloth-db`, or sloth.db missing, refused, busy or past its budget |
    | `GET /api/device/{mac}` | `200` JSON, one device, with what each peer reported of it ([Fleet](#fleet)); `400` for a MAC that does not pass or any query but `fleet=` |
    | `GET /api/lookup?q=` | `200` JSON, the Lookup card for a MAC or an IP; `400` otherwise |
@@ -3552,6 +3553,16 @@ IP's through its ARP MAC, or the stream's binding), and for that MAC
 always: there is no active lookup.
 
 ### The Devices view, the drawer, Lookup
+
+Above the table, the **arrivals** waterfall (owner, 2026-11-19: "add a
+waterfall graph to the devices pages so we can see when devices appear
+and reappear over time"; `web/ui/devwf.js`, `GET
+/api/devices/arrivals`): the WiFi and BLE waterfalls' isometric grid
+with the 24 hours of the sensor's local day across and the last 1 to 30
+days receding (kept as `devwf.days`), today in front. A column's height
+is the devices present that hour; its body says what they had done
+before, bottom up: arrived (absent the 24 hours before: new, or back
+after a day or more), back (absent the hour before) and still here.
 
 `3` (or the top bar) opens Devices: the search box (§9.1; `/` focuses
 it from anywhere; the query is sent 300 ms after typing stops, or on

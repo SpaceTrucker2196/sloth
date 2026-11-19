@@ -62,19 +62,35 @@
     return (dv.kind === "ap" ? "\u25c6 " : "\u25a0 ") + id;
   }
   function metres(m) { return m < 10 ? m.toFixed(1) : String(Math.round(m)); }
+  // Which targets keep their data block: the picked one, then the
+  // farthest first, each only when no kept block sits within an eighth
+  // of the range of it (in metres on the scope), so a cluster near the
+  // centre is marks and one name and not a pile of overprinted text.
+  // The others keep their mark and their click.
+  function declutter(tg, rangeM) {
+    var near = rangeM / 8, kept = [];
+    var order = tg.slice().sort(function (a, b) { return (b.picked ? 1 : 0) - (a.picked ? 1 : 0) || b.m - a.m; });
+    order.forEach(function (o) {
+      var x = o.m * Math.sin(o.az * Math.PI / 180), y = o.m * Math.cos(o.az * Math.PI / 180);
+      var clash = kept.some(function (k) { return (k.x - x) * (k.x - x) + (k.y - y) * (k.y - y) < near * near; });
+      if (clash && !o.picked) { o.lines = []; return; }
+      kept.push({ x: x, y: y });
+    });
+    return tg;
+  }
   // The targets: each device with a distance, at its bearing (solid) or
   // at its arbitrary angle (hollow).
   function targets(devs, picked) {
     var out = [];
     (devs || []).forEach(function (dv) {
       if (!num(dv.m) || dv.m < 0) return;
-      var br = dfBearing(dv.mac), p = at(br === null ? addrAngle(dv.mac) : br, dv.m);
+      var br = dfBearing(dv.mac), az = br === null ? addrAngle(dv.mac) : br, p = at(az, dv.m);
       var ch = window.SlothChan ? SlothChan.of("mac", String(dv.mac)) : null;
       var col = ch !== null && window.SlothChan ? SlothChan.rgb(ch) : null;
       var gl = Object.prototype.hasOwnProperty.call(TREND_GLYPH, dv.trend) ? " " + TREND_GLYPH[dv.trend] : "";
       out.push({ id: String(dv.mac), lat: p.lat, lon: p.lon, color: col || "#8a82a0", fill: br !== null,
                  shape: "circle", lines: [label(dv), "~" + metres(dv.m) + " m" + gl + (br === null ? "" : " " + br + "\u00b0")],
-                 picked: picked === dv.mac, alpha: br === null ? 0.8 : 1 });
+                 picked: picked === dv.mac, alpha: br === null ? 0.8 : 1, m: dv.m, az: az });
     });
     return out;
   }
@@ -86,8 +102,9 @@
 
   function frame(t) {
     var devs = S.j && S.j.devs ? S.j.devs.wifi : null;
-    var tg = targets(devs, S.picked), nb = tg.filter(function (o) { return o.fill; }).length;
-    var r = S.ppi.scope({ centre: ORIGIN, range: range(devs), unit: UNIT, targets: tg,
+    var rg = range(devs), tg = declutter(targets(devs, S.picked), rg);
+    var nb = tg.filter(function (o) { return o.fill; }).length;
+    var r = S.ppi.scope({ centre: ORIGIN, range: rg, unit: UNIT, targets: tg,
                           empty: devs === null ? "no Wi-Fi table attached" : "no Wi-Fi device with a distance" }, t);
     if (r) note(tg.length + " device" + (tg.length === 1 ? "" : "s") + " with a distance, " + nb +
                 " with a direction-finding bearing; range " + r.range + " m, rings " + SlothPPI.fmt(r.range / 5) + " m" +
@@ -135,6 +152,6 @@
       if (S.timer) clearTimeout(S.timer);
       tick();
     },
-    addrAngle: addrAngle, at: at, targets: targets, dfBearing: dfBearing
+    addrAngle: addrAngle, at: at, targets: targets, declutter: declutter, dfBearing: dfBearing
   };
 })();

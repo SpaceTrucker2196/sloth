@@ -130,6 +130,16 @@ int web_device_route(const web_m4_t *m, const char *path_mac,
                      size_t cap, size_t *len, int *status);
 int web_lookup_route(const web_m4_t *m, const char *query, long long now_s,
                      char *body, size_t cap, size_t *len, int *status);
+/* /api/devices/arrivals?days=N (2026-11-19): devices present each hour
+ * of the last N local days (1 to WEB_DEV_ARR_DAYS_MAX, default
+ * WEB_DEV_ARR_DAYS), each hour's split into arrived (absent the 24 hours
+ * before), back (absent the hour before) and still; the Devices view's
+ * waterfall. web_devices.c. */
+#define WEB_DEV_ARR_DAYS      7
+#define WEB_DEV_ARR_DAYS_MAX  30
+#define WEB_DEV_ARR_KEYS      4096
+int web_devices_arrivals_route(const web_m4_t *m, const char *query, long long now_s,
+                               char *body, size_t cap, size_t *len, int *status);
 
 /* The M4 members of /api/health: the sloth.db reader, the vendor table,
  * the passive PTR cache, A4's state. */

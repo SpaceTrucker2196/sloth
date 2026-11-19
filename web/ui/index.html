@@ -78,6 +78,7 @@
 @include karma.js
 @include df.js
 @include wradar.js
+@include devwf.js
 @include syshealth.js
 @include fleet.js
 @include fleetid.js
@@ -291,6 +292,15 @@
       <label hidden>sites <select id="d-sites" aria-label="this site or all sloth hosts"><option value="all" selected>All sites</option><option value="here">This site</option></select></label>
       <span class="sub" id="d-note"></span>
       <span class="sub dbage" id="d-dbage"></span>
+    </section>
+    <!-- The Devices waterfall (web/ui/devwf.js, /api/devices/arrivals;
+         owner 2026-11-19). -->
+    <section class="panel" id="d-wf-panel">
+      <div class="label">arrivals: hour of day x day <span class="sub" id="d-wf-note"></span> <label class="sub">days <select id="d-wf-days"><option value="1">1</option><option value="3">3</option><option value="7" selected>7</option><option value="14">14</option><option value="30">30</option></select></label></div>
+      <canvas class="wfall iso d-wf" id="d-wf" aria-label="devices present each hour of the last days, isometric: the hours across, the days receding, today in front; each column split into devices that arrived, came back and stayed"></canvas>
+      <div class="iso-key" id="d-wf-key" role="group" aria-label="colour key: arrived, back, still here"></div>
+      <div class="iso-tip" id="d-wf-tip" role="tooltip" hidden></div>
+      <div class="sub">isometric, as the WiFi and BLE waterfalls: the 24 hours of the sensor's local day across, the days receding up and to the right, today in front; a column's height the devices present in that hour (slothweb's presence, the Devices table's 24 h strip, under the scope), on one scale, 0 to the window's busiest hour; an hour still to come is not drawn. A column's body says what its devices had done before, bottom up: arrived, not present in any of the 24 hours before (a device new to the sensor, or back after a day or more away); back, absent the hour before and present within the 24; still here, present the hour before too. So a wave of arrivals is people coming in, a band of back is devices that come and go, and the still-here floor is what stays. Point at a column for its hour and counts. At most the 4,096 most recently heard devices are counted, and the note says when that cut any.</div>
     </section>
     <section class="panel">
       <div class="label">devices <span class="sub" id="d-count"></span> <span class="dt-tools" id="d-tools"></span></div>
@@ -711,7 +721,7 @@
     <section class="panel" id="w-radar-panel">
       <div class="label">radar <span class="sub" id="w-radar-note"></span> <label class="sub">range <select id="w-radar-range"><option value="0" selected>auto</option><option value="5">5 m</option><option value="10">10 m</option><option value="20">20 m</option><option value="50">50 m</option><option value="100">100 m</option><option value="200">200 m</option><option value="500">500 m</option><option value="1000">1 km</option></select></label></div>
       <canvas id="w-radar" class="heat" aria-label="Wi-Fi devices on a radar scope centred on this sensor, north up, by sloth's distance estimate"></canvas>
-      <div class="sub">a radar scope centred on this sensor, north up, as the ADS-B and APRS positions panels draw it: the 50 Wi-Fi devices most recently heard with sloth's distance estimate (/api/radar), each on the ring of its distance, five range rings in metres (auto: the smallest range holding 80% of them; one beyond it sits on the rim with its distance). A single passive sensor has no bearing: a device direction finding gives one for (three or more radios placed east and north, all hearing it) sits at that bearing, solid, the degrees in its block; every other one is hollow at an arbitrary angle from its address, steady between reads, so only its distance is read. A mark is in its channel's colour, the same as in every list on this page (grey: no channel named for it). The block: &#9670; an access point or &#9632; a station, its SSID or the end of its address, then the distance and sloth's trend (&#8600; approaching, &#8594; steady, &#8599; leaving). Click a mark for its drawer. The Radar tab draws them beside the aircraft, APRS stations, satellites and BLE.</div>
+      <div class="sub">a radar scope centred on this sensor, north up, as the ADS-B and APRS positions panels draw it: the 50 Wi-Fi devices most recently heard with sloth's distance estimate (/api/radar), each on the ring of its distance, five range rings in metres (auto: the smallest range holding 80% of them; one beyond it sits on the rim with its distance). A single passive sensor has no bearing: a device direction finding gives one for (three or more radios placed east and north, all hearing it) sits at that bearing, solid, the degrees in its block; every other one is hollow at an arbitrary angle from its address, steady between reads, so only its distance is read. A mark is in its channel's colour, the same as in every list on this page (grey: no channel named for it). The block: &#9670; an access point or &#9632; a station, its SSID or the end of its address, then the distance and sloth's trend (&#8600; approaching, &#8594; steady, &#8599; leaving). Where marks crowd (within an eighth of the range of a named one), only the farthest, or the one picked, is named; the others are marks you can click. Click a mark for its drawer. The Radar tab draws them beside the aircraft, APRS stations, satellites and BLE.</div>
     </section>
     <section class="panel">
       <div class="label">chains <span class="sub" id="w-ch-note"></span></div>

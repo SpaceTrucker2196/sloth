@@ -7,6 +7,7 @@
   pointer-events: none; white-space: pre-wrap; }
 .iso-tip .d-dim { color: var(--tui-dim); }
 canvas.wfall.iso { cursor: crosshair; }
+canvas.wfall.d-wf { height: 300px; }
 
 /* Identity colours on the isometric waterfalls (owner 2026-11-17: "color
  * code finding by band channel and ssid ... easy to tell by color
