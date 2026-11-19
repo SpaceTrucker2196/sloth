@@ -9,6 +9,7 @@
 #include "web_fleet.h"
 #include "web_ingest.h"
 #include "web_pcapdir.h"
+#include "web_posts.h"
 #include "web_rollup.h"
 #include "web_store.h"
 
@@ -88,6 +89,11 @@ typedef struct {
     int      peer_interval_s;      /* --peer-interval-secs */
     int      peer_outside;         /* --peer-allow-outside-tailnet */
     int      peer_gnss_region_km;  /* --peer-gnss-region-km (#192 I6) */
+    /* sloth-ios sensor posts (web_posts.h, #205): read, none by
+     * default; whether an address outside the tailnet may be named. */
+    web_sockspec_t post[WEB_POSTS_MAX];   /* --post, repeatable */
+    int      npost;
+    int      post_outside;         /* --post-allow-outside-tailnet */
     /* This site's own networks (#192 I2, I3): --my-ssid, --my-bssid,
      * repeatable, the words sloth uses; none by default. */
     web_fleet_mine_t mine;
@@ -126,6 +132,8 @@ int  web_parse_bind(const char *s, int *family, uint8_t addr[16],
  *     as --web-serve-evidence-pcap=remote.
  *   - a --peer outside 100.64.0.0/10 without
  *     --peer-allow-outside-tailnet, and any --peer under strict.
+ *   - a --post outside the tailnet without --post-allow-outside-tailnet,
+ *     and any --post under strict (owner ruling 2026-11-19 on #205).
  * Pure: no output, no socket. 0, or -1 with the refusal in err. */
 int  web_config_check(const web_config_t *c, char *err, size_t errsz);
 
@@ -149,6 +157,7 @@ int  web_config_parse(web_config_t *c, int argc, char **argv,
  * any configuration, one when evidence pcaps are served
  * (--web-serve-evidence-pcap), naming remote peers when they get them;
  * one for each peer outside the tailnet (--peer-allow-outside-tailnet).
+ * one for each post outside the tailnet (--post-allow-outside-tailnet).
  * Prints nothing for a loopback-only configuration without that flag. */
 void web_config_announce(const web_config_t *c, FILE *err);
 

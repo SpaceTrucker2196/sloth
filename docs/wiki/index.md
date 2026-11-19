@@ -189,6 +189,10 @@ the Wi-Fi it watches:
   and the cross-site inferences built on it: emitters located (I5), GNSS
   regional or local (I6), aircraft cross-checked (I7) and the identity
   findings (I2, I3, I4, I8).
+- [[post-protocol]] — the sloth-ios sensor-post protocol, vendored at
+  `ver=1.0`: the one-way JSONL a phone serves, slothweb's `--post`
+  reader and `/api/posts` roster (#205), and which record types may
+  travel to a peer (only `ble_contact`).
 - [[capture-scope]] — slothweb's Monitor / Hybrid / Local switch: what
   the passive monitor radio heard, what the host's own interfaces
   carried, or both; how each record, alert, metric, interface and

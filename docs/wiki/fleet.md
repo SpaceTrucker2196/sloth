@@ -300,6 +300,12 @@ one host identity. Since `sloth-wifi` no longer raises `GNSS_*` or
 which is the case the sentence above describes: they travel as
 `gnss_event` lines, not yet as `alert` lines.
 
+**Sensor posts** (#205, owner rulings 2026-11-19, [[post-protocol]]):
+of a sloth-ios post's records only `ble_contact` (a passive BLE receive)
+may travel; `wifi_self`, `geo_fix`, `imu_sample`, `radio_scan` and
+`ios_post` stay on the slothweb that read them. None is exported yet;
+`web_post_type_travels()` is the rule the export will use.
+
 ## The transport
 
 The link is the operator's WireGuard tailnet (Tailscale): a `100.x`

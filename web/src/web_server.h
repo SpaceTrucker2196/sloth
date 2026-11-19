@@ -37,6 +37,7 @@
 #include "web_sysstat.h"
 #include "web_lure.h"
 #include "web_df.h"
+#include "web_posts.h"
 #include "web_gnss.h"
 
 #define WEB_MAX_CONNS 32
@@ -142,6 +143,7 @@ typedef struct {
     web_sys_t      *sys;      /* NULL: no host status; set before run */
     web_lure_t     *lure;     /* NULL: no lure evidence; set before run */
     web_df_t       *df;       /* NULL: no direction finding; set before run */
+    web_posts_t    *posts;    /* NULL: no sensor posts; set before run */
     int             sql_conn; /* the slot waiting on the box, or -1 */
     int             import_conn;  /* the slot reading an import, or -1 */
     unsigned long long rec_sent;  /* newest ticker record broadcast */
@@ -205,6 +207,8 @@ void     web_server_set_lure(web_server_t *s, web_lure_t *l);
 /* Direction finding across monitor radios (web_df.h) /api/df answers
  * from; NULL for none. */
 void     web_server_set_df(web_server_t *s, web_df_t *d);
+/* The sensor posts (web_posts.h) /api/posts answers from; NULL for none. */
+void     web_server_set_posts(web_server_t *s, web_posts_t *p);
 
 void     web_server_stats(web_server_t *s, web_stats_t *out);
 uint16_t web_server_port(const web_server_t *s);

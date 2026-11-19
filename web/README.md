@@ -274,12 +274,17 @@ thread fails; slothweb is not running after either.
 | `slothweb: --peer NAME: http://ADDR:PORT is outside the tailnet (100.64.0.0/10); refused without --peer-allow-outside-tailnet` | Use the peer's `100.x` tailnet address (`tailscale ip -4` on the peer). Only if the link is one you trust some other way, add `--peer-allow-outside-tailnet`; that is announced. |
 | `slothweb: --peer SPEC: that name or address is given twice` | One `--peer` per peer, each with its own name. |
 | `slothweb: --peer: at most N peers` | Eight peers at most. |
+| `slothweb: --post SPEC: want A.B.C.D:PORT or [V6]:PORT, a literal address (names are not resolved)` | The post's tailnet address (`100.x`, or `fd7a:115c:a1e0::/48`) and the port it serves on, e.g. `--post 100.101.102.103:7781`. A name is never resolved and there is no default port: the post's port is whatever the phone serves on. |
+| `slothweb: --post ADDR:PORT is outside the tailnet (100.64.0.0/10, fd7a:115c:a1e0::/48); refused without --post-allow-outside-tailnet` | Use the phone's tailnet address. For a post on the same LAN, add `--post-allow-outside-tailnet`; that is announced. |
+| `slothweb: --post SPEC: that post is given twice` | One `--post` per post. |
+| `slothweb: --post: at most N posts` | Eight posts at most. |
 | `slothweb: --peer-interval-secs V: want a whole number from N to N` | 10 to 3600 seconds; the default is 60. |
 | `slothweb: --peer-gnss-region-km V: want a whole number from 1 to N` | 1 to 20000 km; the default is 50. |
 | `slothweb: --my-ssid: at most N`, `--my-bssid: at most N` | At most 16 of each, as sloth: name the networks a peer could meet. |
 | `slothweb: --my-ssid: want 1 to N octets with no control character` | The SSID as sloth's `--my-ssid` takes it, 1 to 32 octets. |
 | `slothweb: --my-bssid V: want aa:bb:cc:dd:ee:ff` | A MAC address, six octets in hex separated by colons. |
 | `slothweb: --strict refuses --peer.` | Pulling a peer is a network service, which `--strict` refuses; drop one of the two. |
+| `slothweb: --strict refuses --post.` | Reading a post is slothweb dialling out, which `--strict` refuses (owner ruling 2026-11-19, #205); drop one of the two. |
 | `slothweb: --peer needs SQLite; this slothweb was built with WITH_SQLITE=0` | The pulled rows live in the store: rebuild with `make web`. |
 | `slothweb: --web-max-mb N is below what --web-max-keys N needs: the baselines and episodes can take about N MB and the ceiling keeps N MB of history beside them (a week of hour rows for each of N series).` | Use the `--web-max-mb` it names, or a lower `--web-max-keys`. |
 
@@ -293,6 +298,7 @@ thread fails; slothweb is not running after either.
 | `slothweb: WARNING: reading the data stream from SPEC, which is not loopback.` | The stream crosses a network unencrypted; read it on the sensor instead, or tunnel it. |
 | `slothweb: WARNING: reading sloth-rf's data stream from SPEC, which is not loopback.` | The same, for `--rf-socket`. |
 | `slothweb: WARNING: --peer NAME at URL is outside the tailnet (--peer-allow-outside-tailnet).` | The pull and the export it reads travel as plain HTTP over whatever path reaches that address; only that path protects them ([Fleet](#fleet)). |
+| `slothweb: WARNING: --post ADDR:PORT is outside the tailnet (--post-allow-outside-tailnet).` | The post's stream travels as plain TCP over whatever path reaches that address; only that path protects it ([Sensor posts](#sensor-posts)). |
 
 **Starting up** (exit 1 unless said):
 
@@ -315,6 +321,7 @@ thread fails; slothweb is not running after either.
 | `slothweb: store: the saved BLE advertisers could not all be read; starting from what was` | Runs on (no exit): the BLE view starts from the stream alone; the v7 tables are read again at the next start. |
 | `slothweb: time series: out of memory` | Lower `--web-max-keys`. |
 | `slothweb: --pcap-dir: out of memory` | The manifest index (4,096 entries, about 1.3 MB) could not be allocated; free memory and start again. |
+| `slothweb: posts: out of memory` | The readers' buffers (about 70 KB a post) could not be allocated; free memory and start again. |
 | `slothweb: SQL box: cannot start its thread`, `slothweb: pipe: ERR`, `slothweb: pthread_create failed` | Out of threads or descriptors: check `ulimit -u` and `ulimit -n`. |
 | `slothweb: fleet: ERR`: `--peer needs the store (slothweb.db), and there is none`, the store's own refusals for a third connection (`the store is not open`, `PATH: changed while it was being opened; refused`), `pthread_create failed` | The pull thread (a connection to the store of its own, [Fleet](#fleet)) could not start. Start again; exit 1. |
 
@@ -573,6 +580,8 @@ milestone (W0, M0 to M6; tracker #102).
 | `--peer-gnss-region-km N` | A GNSS event at two sites at most this far apart is regional ([Fleet](#fleet), #192 I6), 1..20000, default 50. A choice, not a sourced figure: how far a ground-level source reaches is not in the corpus. |
 | `--my-ssid SSID`, `--my-bssid MAC` | This site's own networks, the values its sloth is given with the same flags (repeatable, at most 16 of each, as sloth; [Fleet](#fleet), #192 I2, I3). Named in `/api/fleet/export` to a peer that asks with `ident=1` (they travel under the monitor-only rule, ADR 0009), and the baseline of the identity findings: a client elsewhere probing for them, this network's BSSID or SSID heard where it cannot reach. None by default; named on stderr at start. |
 | `--peer-allow-outside-tailnet` | Allow a `--peer` address outside `100.64.0.0/10` (a LAN peer, a loopback test). There is no TLS: the link you chose is the only protection, and each such peer is announced as a warning. |
+| `--post HOST:PORT` | Read one sloth-ios sensor post's stream ([Sensor posts](#sensor-posts), #205): a literal address in the tailnet and the port the post serves on. Repeatable, at most 8. Read only, never written to; the roster at `/api/posts`. Off by default; each post is named on stderr at start; `--strict` refuses it. |
+| `--post-allow-outside-tailnet` | Allow a `--post` address outside the tailnet (a post on the same LAN). Announced. |
 | `--spectrum-dir DIR` | `sloth-sdrsweep`'s state directory, read-only, for the Spectrum tab ([Spectrum](#spectrum)); default `/var/lib/sloth-sdrsweep`. Absolute. A directory that is not there is the tab's "not installed". |
 | `--spectrum-request PATH` | The empty file `POST /api/spectrum/run` creates, which `sloth-sdrsweep.path` watches ([Spectrum](#spectrum)); default `/run/slothweb/sdrsweep.request`, inside the unit's `RuntimeDirectory`. Absolute. |
 | `--spectrum-marks FILE` | The operator's own frequency marks for the Spectrum tab's amateur band charts, the local repeaters ([Spectrum](#spectrum)): a text file, one `MHz,name` line each, `#` a comment; read at each `GET /api/spectrum?marks=1`, never written. Absolute. Default: none. |
@@ -629,6 +638,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/pcap?id=&n=` | `200` the same file's bytes, `Content-Type: application/vnd.tcpdump.pcap`, `Content-Disposition: attachment; filename="<its name>"`, `X-Sloth-SHA256: verified`, `mismatch` or `no_manifest_entry` (the check of the bytes served), `Cache-Control: no-store`; the errors as above, as JSON |
    | `GET /api/bundle?kind=device\|alert\|lookup\|ble\|platform&id=` | `200` JSON, a detail view's whole answer for its "copy JSON" button ([Copy JSON: the analysis bundle](#copy-json-the-analysis-bundle)); `400` for a kind, an id or a parameter that does not pass; `404` and `503` as the route it splices (`not_found` for a BLE address no sensor heard, `no_such_platform`, `no_store`); `413` `bundle_too_large` |
    | `GET /api/df` | `200` JSON, the WiFi view's direction-finding card ([Direction finding](#direction-finding)): `radios` (sloth's `df_radio` rows in radio order: `radio`, `iface`, `role`, `pos_m` or `x_m` and `y_m` when given, `open`, `running`, `noted`, `bias_db` once measured, `frames`, `rejects`, `retune_failures` for a `df` radio), `emitters` (`wifi_df` rows, `lean` before `weak`, widest `margin_db` first, at most 128: `mac`, `channel`, `heard_by`, `quality`, `best_radio`, `best_iface`, `margin_db`, `along_m` when positions allow, `last_seen`), each row with `age_s`; `held` (fresh transmitters, shown or not), `reported` (`true` from a JSONL 2.2.0 stream, `false` before it, `null` before any `sensor_health`), `jsonl_version`, `stale` (rows not refreshed for 660 s, left out), `records`, `rejected`, `evicted`. Monitor's and Hybrid's; under Local `{"out_of_scope":true,...}`. No parameter: any is `400` |
+   | `GET /api/posts` | `200` JSON, the sensor posts ([Sensor posts](#sensor-posts)): `travels` (the post record types that may ever travel to a peer: `ble_contact`), and `posts`, one per `--post` in flag order: `endpoint`, `state` (`connected`, `connecting`, `waiting`), `attempts`, `connects`, `last_error`, `heard_age_s`, the post's own `ios_post` identity (`post`, `name`, `role`, `platform`, `app_ver`, `battery` 0..1, `charging`, `uptime_s`, each `null` until heard), `records` (a count of each of the six types), `other`, `foreign`, `decode_errors`, `lines`, `bytes`. Counts only: no record's contents. The same answer in every scope. |
    | `GET /api/lures` | `200` JSON, the WiFi view's KARMA and key-harvest card ([Lures and key harvesting](#lures-and-key-harvesting)): `karma` (sloth's `karma_suspect` rows, highest score first), `stations` (`harvest_station`, most unanswered M1s first), `chains` (`harvest_chain`, most victims first), each row's counts with `ts` and `age_s`; `reported` (`true` from a JSONL 1.3.0 stream, `false` before it, `null` before any `sensor_health`), `jsonl_version`, `stale` (rows not refreshed for 660 s, left out), `records`, `rejected`, `overflow`. Monitor's and Hybrid's; under Local `{"out_of_scope":true,...}`. No parameter: any is `400` |
    | `GET /api/lures/bssid?bssid=` | `200` JSON, one BSSID's KARMA detail ([Lures and key harvesting](#lures-and-key-harvesting)): `state` (`live`, `gone`, `stale` or `none`), `current` (its `karma_suspect` row as `/api/lures` gives it, or `null`), `gone_ts`, `history` (each change of the row, oldest first: `ts` the first record saying it, `ts_last` the newest repeating it, and the counts; the newest 16, `history_changes` how many there were), `hw` (`verdict` and `signals` from the newest `KARMA_AP` record, `null` members for none, `null` before one), `probe_lat` (the beacon's JSONL 1.6.0 member as sloth sent it, with `ts` and `age_s`, or `null`), `alerts` (the stream's open and recently closed `KARMA_AP` / `KARMA_PROBE_FORGE` incidents whose key names it at its field, by the alert page's `id`, at most 16, `alerts_more`), `alerts_held` (`false` with no data socket), `reported`, `jsonl_version`. `bssid` required (`xx:xx:xx:xx:xx:xx`, either case), the only parameter: `400` `missing_bssid`, `bad_bssid` or the parser's word. Monitor's and Hybrid's; under Local `{"out_of_scope":true,...}` |
    | `GET /api/sys` | `200` JSON, the Sensor health view's host status ([Sensor health](#sensor-health)): the newest `sys_status` (CPU, load, memory, uptime, sloth's RSS, the output filesystem, the hottest temperature, the under-voltage alarm; `null` for a figure the host does not have), its `sys_sensor` rows, every `source_status` (all of sloth's sources, configured or not) and every `receiver_hw` (the attached receivers), and `storage`, sloth.db's and slothweb.db's size on disk against their limits, measured on the request ([Sensor health](#sensor-health), *The stores*); `"seen":false` before the first batch or with no live stream; `"stale":true` past three of the sensor's own intervals. The same answer under every scope. No parameter: any is `400` |
@@ -6644,6 +6654,43 @@ colour (the fitted plot, with no sensor position: a grey ring); its detail lists
 The Radar dome asks `/api/adsb?fleet=0`: another host's aircraft has no
 bearing or elevation from this site.
 
+## Sensor posts
+
+A sensor post is a phone running sloth-ios that serves its own sensors
+as a one-way JSONL stream ([post-protocol](../docs/wiki/post-protocol.md),
+vendored from sloth-ios and pinned to `ver=1.0`). slothweb reads it, not
+sloth: the sensor stays silent (owner ruling 2026-11-13 on #205).
+
+```sh
+slothweb --post 100.101.102.103:7781
+```
+
+- **One reader per `--post`**, on its own thread: it connects, reads
+  newline-delimited records, and never writes to the socket. When the
+  post goes away (the app left the foreground, the phone left the
+  tailnet) it waits a back-off that doubles from 1 s to 30 s and dials
+  again.
+- **By address only.** A literal address, never a name, and no mDNS
+  browse (Bonjour does not cross the tailnet, and this slice has none).
+  The address must be in the tailnet (`100.64.0.0/10`,
+  `fd7a:115c:a1e0::/48`) unless `--post-allow-outside-tailnet`, which
+  is announced. `--strict` refuses any `--post`.
+- **The roster, not the records.** `/api/posts` gives each post's state,
+  its `ios_post` identity (name, role, platform, app version, battery,
+  charging, uptime) and a count of each record type: `ios_post`,
+  `ble_contact`, `imu_sample`, `wifi_self`, `geo_fix`, `radio_scan`.
+  No other record's contents are kept, so no position, movement or
+  joined network is held. A record without the envelope's `post`, or
+  naming another post than the connection's first record did, is
+  counted as `foreign` and dropped.
+- **What may travel to a peer** (owner rulings 2026-11-19 on #205, ADR
+  0009): `ble_contact` only, a passive BLE receive. `wifi_self` (the
+  phone's joined network), `geo_fix` and `imu_sample` (the operator's
+  own position and movement), `radio_scan` (the phone's ordinary Wi-Fi
+  scan) and `ios_post` stay on the slothweb that read them, and so does
+  any type the protocol does not name. No post record is in the fleet
+  export yet; `web_post_type_travels()` is the rule it will use.
+
 ## Capture scope
 
 Owner request 2026-10-26. The top bar's **Monitor | Hybrid | Local**
@@ -8079,6 +8126,8 @@ same list as code facts.
   WHOIS or GeoIP (the 2026-10-21 rulings). Every name slothweb shows was
   already on the wire.
 - No write to the data socket, ever: slothweb only reads it.
+- No write to a sensor post, ever (`--post`): the reader only reads, and
+  sends not even a shutdown. No mDNS browse: a post is named by address.
 - No request off the host from the page: no URL, no font, no script
   from anywhere but the page itself, enforced by the CSP above and
   checked by `test_routes.c`.

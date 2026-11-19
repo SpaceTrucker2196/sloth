@@ -174,6 +174,10 @@ void web_server_set_df(web_server_t *s, web_df_t *d) {
     s->df = d;
 }
 
+void web_server_set_posts(web_server_t *s, web_posts_t *p) {
+    s->posts = p;
+}
+
 void web_server_stop(web_server_t *s) {
     char b = 1;
     ssize_t r = write(s->wake[1], &b, 1);
@@ -265,6 +269,7 @@ static void health_now(web_server_t *s, web_health_t *h) {
     h->sys         = s->sys;
     h->lure        = s->lure;
     h->df          = s->df;
+    h->posts       = s->posts;
     h->sql         = s->sql;
     h->sc          = NULL;    /* web_route() sets a request's own */
 }

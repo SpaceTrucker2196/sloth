@@ -157,6 +157,22 @@ int web_config_check(const web_config_t *c, char *err, size_t errsz) {
             return -1;
         }
     }
+    /* The sensor posts (web_posts.h): reading one is slothweb dialling
+     * out, which strict refuses whole (owner ruling 2026-11-19 on #205);
+     * outside the tailnet only when forced, as for --peer. */
+    if (c->npost && c->strict) {
+        snprintf(err, errsz, "slothweb: --strict refuses --post.\n");
+        return -1;
+    }
+    for (int i = 0; i < c->npost; i++) {
+        if (web_post_in_tailnet(&c->post[i]) || c->post_outside) continue;
+        char sp[INET6_ADDRSTRLEN + 16];
+        web_sockspec_format(&c->post[i], sp, sizeof(sp));
+        snprintf(err, errsz, "slothweb: --post %s is outside the tailnet "
+                             "(100.64.0.0/10, fd7a:115c:a1e0::/48); refused "
+                             "without --post-allow-outside-tailnet\n", sp + 4);
+        return -1;
+    }
     /* A group for a secret file that is not written says nothing. */
     if (c->agent_group[0] && !c->agent_secret_path[0]) {
         snprintf(err, errsz, "slothweb: --web-agent-group needs --web-agent-secret\n");
@@ -323,6 +339,7 @@ void web_usage(FILE *out) {
         "                [--web-serve-evidence-pcap[=remote]]\n"
         "                [--peer NAME=URL]... [--peer-interval-secs N]\n"
         "                [--peer-allow-outside-tailnet]\n"
+        "                [--post HOST:PORT]... [--post-allow-outside-tailnet]\n"
         "                [--peer-gnss-region-km N] [--my-ssid SSID]...\n"
         "                [--my-bssid MAC]... [--spectrum-dir DIR]\n"
         "                [--spectrum-request PATH] [--spectrum-marks FILE]\n"
@@ -450,6 +467,15 @@ void web_usage(FILE *out) {
         "                        allow a --peer address outside\n"
         "                        100.64.0.0/10 (no TLS: only over a link\n"
         "                        you trust); announced on stderr.\n"
+        "  --post HOST:PORT      read a sloth-ios sensor post's stream\n"
+        "                        (repeatable, at most 8): a literal address\n"
+        "                        in the tailnet and the port the post serves\n"
+        "                        on. Read only, never written to; the\n"
+        "                        roster at /api/posts. Off by default;\n"
+        "                        each post announced; refused by --strict.\n"
+        "  --post-allow-outside-tailnet\n"
+        "                        allow a --post address outside the tailnet\n"
+        "                        (a post on the same LAN); announced.\n"
         "  --peer-gnss-region-km N  a GNSS event at two sites at most this\n"
         "                        far apart is regional (default 50,\n"
         "                        1..20000; docs/wiki/fleet.md).\n"
@@ -546,6 +572,29 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
                 return -1;
             }
             snprintf(c->assess_dir, sizeof(c->assess_dir), "%s", v);
+        } else if (!strcmp(a, "--post-allow-outside-tailnet")) {
+            c->post_outside = 1;
+        } else if (!strcmp(a, "--post")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (c->npost >= WEB_POSTS_MAX) {
+                fprintf(err, "slothweb: --post: at most %d posts\n", WEB_POSTS_MAX);
+                return -1;
+            }
+            web_sockspec_t ps;
+            if (web_post_parse(v, &ps, msg, sizeof(msg)) != 0) {
+                fprintf(err, "slothweb: --post %s: %s\n", v, msg);
+                return -1;
+            }
+            for (int k = 0; k < c->npost; k++)
+                if (web_sockspec_same(&c->post[k], &ps)) {
+                    fprintf(err, "slothweb: --post %s: that post is given twice\n", v);
+                    return -1;
+                }
+            c->post[c->npost++] = ps;
         } else if (!strcmp(a, "--peer-allow-outside-tailnet")) {
             c->peer_outside = 1;
         } else if (!strcmp(a, "--peer")) {
@@ -859,6 +908,16 @@ void web_config_announce(const web_config_t *c, FILE *err) {
                      "  The pull and the export it reads travel with no TLS; "
                      "only the link you chose protects them.\n",
                 c->peer[i].name, c->peer[i].url);
+    }
+    for (int i = 0; i < c->npost; i++) {
+        if (web_post_in_tailnet(&c->post[i])) continue;
+        char sp[INET6_ADDRSTRLEN + 16];
+        web_sockspec_format(&c->post[i], sp, sizeof(sp));
+        fprintf(err, "slothweb: WARNING: --post %s is outside the tailnet "
+                     "(--post-allow-outside-tailnet).\n"
+                     "  The post's stream travels with no TLS and no "
+                     "authentication; only the link you chose protects it.\n",
+                sp + 4);
     }
     if (c->sock.kind && !web_sockspec_is_local(&c->sock)) {
         char sp[INET6_ADDRSTRLEN + 16];

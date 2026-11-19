@@ -1148,6 +1148,37 @@ static int route_sys(const web_req_t *rq, const web_health_t *h,
     return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
+/* /api/posts (web_posts.h): the sloth-ios sensor posts --post names,
+ * their state and identity and a count of each record type. Counts and
+ * the post's own heartbeat only, no record's contents, so one answer in
+ * every scope. */
+static int route_posts(const web_req_t *rq, const web_health_t *h,
+                       char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+    } else if (h->posts) {
+        bl = web_posts_json(h->posts, h->now_ms, body, cap);
+    } else {
+        web_posts_t none;
+        if (web_posts_init(&none, NULL, 0) == 0) {
+            bl = web_posts_json(&none, h->now_ms, body, cap);
+            web_posts_destroy(&none);
+        }
+    }
+    if (bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
 /* /api/df (web_df.h): direction finding across monitor radios, the
  * radios and the transmitters sloth holds a lean for. The monitor
  * radios', so Monitor's and Hybrid's; under Local the query is checked,
@@ -2323,6 +2354,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_sys(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/df"))
             return route_df(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/posts"))
+            return route_posts(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/lures"))
             return route_lures(rq, h, 0, out, outsz, r);
         if (!strcmp(rq->path, "/api/lures/bssid"))

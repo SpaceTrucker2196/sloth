@@ -283,32 +283,31 @@ static int wait_stop(web_ingest_t *g, int ms) {
     }
 }
 
-/* Connect, bounded by connect_ms and the stop pipe. fd, or -1 with err
- * (and *stopped when a stop cut it short). */
-static int dial(web_ingest_t *g, char *err, size_t errsz, int *stopped) {
+int web_sock_dial(const web_sockspec_t *sp, int connect_ms, int stop_fd,
+                  char *err, size_t errsz, int *stopped) {
     struct sockaddr_storage ss;
     socklen_t sl;
     int family;
     memset(&ss, 0, sizeof(ss));
     *stopped = 0;
-    if (g->spec.kind == WEB_SOCKSPEC_UNIX) {
+    if (sp->kind == WEB_SOCKSPEC_UNIX) {
         struct sockaddr_un *u = (struct sockaddr_un *)&ss;
         u->sun_family = AF_UNIX;
-        memcpy(u->sun_path, g->spec.path, strlen(g->spec.path) + 1);
+        memcpy(u->sun_path, sp->path, strlen(sp->path) + 1);
         sl = (socklen_t)sizeof(*u);
         family = AF_UNIX;
-    } else if (g->spec.family == AF_INET6) {
+    } else if (sp->family == AF_INET6) {
         struct sockaddr_in6 *a = (struct sockaddr_in6 *)&ss;
         a->sin6_family = AF_INET6;
-        a->sin6_port = htons(g->spec.port);
-        memcpy(&a->sin6_addr, g->spec.addr, 16);
+        a->sin6_port = htons(sp->port);
+        memcpy(&a->sin6_addr, sp->addr, 16);
         sl = (socklen_t)sizeof(*a);
         family = AF_INET6;
     } else {
         struct sockaddr_in *a = (struct sockaddr_in *)&ss;
         a->sin_family = AF_INET;
-        a->sin_port = htons(g->spec.port);
-        memcpy(&a->sin_addr, g->spec.addr, 4);
+        a->sin_port = htons(sp->port);
+        memcpy(&a->sin_addr, sp->addr, 4);
         sl = (socklen_t)sizeof(*a);
         family = AF_INET;
     }
@@ -330,12 +329,12 @@ static int dial(web_ingest_t *g, char *err, size_t errsz, int *stopped) {
         close(fd);
         return -1;
     }
-    struct pollfd p[2] = { { fd, POLLOUT, 0 }, { g->stop[0], POLLIN, 0 } };
-    long long end = mono_ms() + g->connect_ms;
+    struct pollfd p[2] = { { fd, POLLOUT, 0 }, { stop_fd, POLLIN, 0 } };
+    long long end = mono_ms() + connect_ms;
     for (;;) {
         long long left = end - mono_ms();
         if (left <= 0) {
-            snprintf(err, errsz, "connect: timed out after %d ms", g->connect_ms);
+            snprintf(err, errsz, "connect: timed out after %d ms", connect_ms);
             close(fd);
             return -1;
         }
@@ -358,6 +357,10 @@ static int dial(web_ingest_t *g, char *err, size_t errsz, int *stopped) {
         return -1;
     }
     return fd;
+}
+
+static int dial(web_ingest_t *g, char *err, size_t errsz, int *stopped) {
+    return web_sock_dial(&g->spec, g->connect_ms, g->stop[0], err, errsz, stopped);
 }
 
 /* Read until the peer closes or a stop. Returns 1 on stop. *lines gets

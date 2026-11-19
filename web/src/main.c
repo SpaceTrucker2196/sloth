@@ -5,6 +5,7 @@
  * anomaly rules behind /api/baseline and /api/anomalies, the Devices
  * and Lookup routes over a read-only sloth.db, the WiFi and History
  * routes, and the SQL box behind --web-allow-sql. See web/README.md. */
+#include <netinet/in.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,6 +76,7 @@ static web_lure_t     g_lure;
 static web_df_t       g_df;
 static web_chain_t    g_chain;
 static web_fleet_t    g_fleet;
+static web_posts_t    g_posts;
 
 /* The store's BLE rows into the in-memory tables, before any thread
  * starts (the restore runs on the store's writer connection). */
@@ -335,6 +337,15 @@ int main(int argc, char **argv) {
     web_server_set_sys(&g_srv, &g_sys);
     web_server_set_lure(&g_srv, &g_lure);
     web_server_set_df(&g_srv, &g_df);
+    /* The sensor posts (web_posts.h, #205): one read-only reader per
+     * --post; none without the flag, and none under --strict
+     * (web_config_check()). */
+    if (web_posts_init(&g_posts, cfg.post, cfg.npost) != 0) {
+        fprintf(stderr, "slothweb: posts: out of memory\n");
+        web_server_close(&g_srv);
+        return 1;
+    }
+    web_server_set_posts(&g_srv, &g_posts);
     web_ingest_set_metrics(&g_ingest, &g_metrics);
     web_ingest_set_frrs(&g_ingest, &g_frrs);
     web_ingest_set_ble(&g_ingest, &g_ble);
@@ -382,8 +393,10 @@ int main(int argc, char **argv) {
         (cfg.rf_sock.kind &&
          web_ingest_start(&g_ingest_rf, &cfg.rf_sock, cfg.sock_backoff_min_ms,
                           cfg.sock_backoff_max_ms, &g_live_rf,
-                          err, sizeof(err)) != 0)) {
+                          err, sizeof(err)) != 0) ||
+        web_posts_start(&g_posts, err, sizeof(err)) != 0) {
         fprintf(stderr, "slothweb: %s\n", err);
+        web_posts_destroy(&g_posts);
         web_fleet_destroy(&g_fleet);
         web_ingest_stop(&g_ingest);
         web_tsdb_stop(&g_tsdb);
@@ -407,7 +420,7 @@ int main(int argc, char **argv) {
                     "/api/ble/ADDR, /api/alerts, /api/alert, /api/pcap, "
                     "/api/pcap/frames, /api/fleet/export, /api/fleet/peers, "
                     "/api/fleet/overview, /api/fleet/shared, /api/fleet/locate, "
-                    "/api/fleet/gnss, /api/fleet/aircraft, /api/fleet/findings%s, "
+                    "/api/fleet/gnss, /api/fleet/aircraft, /api/fleet/findings, /api/posts%s, "
                     "/events)\n",
             where, cfg.allow_sql ? ", /api/query, /api/recipes" : "");
     if (cfg.allow_sql)
@@ -525,8 +538,18 @@ int main(int argc, char **argv) {
                 web_fleet_in_tailnet(cfg.peer[i].addr) ? " (tailnet)"
                                                        : " (outside the tailnet, forced)");
 
+    for (int i = 0; i < cfg.npost; i++) {
+        char sp[INET6_ADDRSTRLEN + 16];
+        web_sockspec_format(&cfg.post[i], sp, sizeof(sp));
+        fprintf(stderr, "slothweb: reading post %s%s: read only, never written to; "
+                        "only ble_contact may ever travel to a peer (/api/posts)\n",
+                sp + 4, web_post_in_tailnet(&cfg.post[i]) ? " (tailnet)"
+                                                          : " (outside the tailnet, forced)");
+    }
+
     rc = web_server_run(&g_srv);
     web_fleet_stop(&g_fleet);
+    web_posts_stop(&g_posts);
     web_sqlbox_stop(&g_sql);
     web_ingest_stop(&g_ingest);
     web_ingest_stop(&g_ingest_rf);
@@ -567,6 +590,7 @@ int main(int argc, char **argv) {
     web_slothdb_destroy(&g_sdb);
     web_slothdb_destroy(&g_sdb_rf);
     web_fleet_destroy(&g_fleet);
+    web_posts_destroy(&g_posts);
     web_frrs_destroy(&g_frrs);
     web_pcapdir_destroy(&g_pcap);
     web_store_close(&g_store);

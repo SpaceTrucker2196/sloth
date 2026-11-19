@@ -711,6 +711,11 @@ into its own store; a peer outside the tailnet, or any under
 (1..20000, default 50) is how far apart two sites may be for a GNSS
 event seen at both within 120 s to be called regional; a value outside
 the range exits `2`.
+Since 2026-11-19 (#205, [[post-protocol]]) `--post HOST:PORT`
+(repeatable, at most 8, a tailnet address unless
+`--post-allow-outside-tailnet`, which is announced) reads a sloth-ios
+sensor post's one-way stream, never writing to it, into the roster at
+`/api/posts`; any `--post` under `--strict` exits `2`.
 Since 2026-11-15 (#214, [ADR 0010](adr/0010-wifi-rf-daemons.md))
 `--rf-socket SPEC` and `--rf-db PATH` name sloth-rf's data socket and
 database, read beside `--socket` and `--sloth-db` and never written.

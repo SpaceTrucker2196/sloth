@@ -53,6 +53,13 @@ void web_sockspec_format(const web_sockspec_t *sp, char *buf, size_t sz);
 /* A unix socket, or a tcp address on loopback. */
 int  web_sockspec_is_local(const web_sockspec_t *sp);
 
+/* Connect to sp without blocking past connect_ms, and give up when
+ * stop_fd turns readable. fd (non-blocking, close-on-exec), or -1 with
+ * err (and *stopped when the stop cut it short). Shared with the post
+ * readers (web_posts.h). */
+int  web_sock_dial(const web_sockspec_t *sp, int connect_ms, int stop_fd,
+                   char *err, size_t errsz, int *stopped);
+
 /* The next back-off: min when cur is 0, else twice cur, at most max. */
 int  web_backoff_next(int cur, int min_ms, int max_ms);
 
