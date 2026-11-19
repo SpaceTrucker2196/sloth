@@ -14,6 +14,7 @@
 #include "web_chmix.h"
 #include "web_chain.h"
 #include "web_own.h"
+#include "web_devices.h"
 
 /* ── names ───────────────────────────────────────────────────────────── */
 
@@ -1576,9 +1577,12 @@ static int emit_ssid(void *ctx, const web_sdb_item_t *it) {
     return 0;
 }
 
-/* rf: the row's G2 trail (web_rf.h), its "rf" member; NULL for none. */
+/* rf: the row's G2 trail (web_rf.h), its "rf" member; NULL for none.
+ * pres: the BSSID's 24 h presence strip (web_devices.h, the clients
+ * table's), "presence"; NULL writes null. */
 static void ap_json(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *c,
-                    const web_sdb_ap_t *a, const web_rf_trail_t *rf, long long now_s) {
+                    const web_sdb_ap_t *a, const web_rf_trail_t *rf,
+                    const unsigned char *pres, long long now_s) {
     web_jw_raw(w, "{\"bssid\":");    web_jw_str(w, a->bssid);
     web_jw_raw(w, ",\"ssid\":");     web_jw_ssid(w, a->ssid);
     web_jw_raw(w, ",\"signal\":");
@@ -1646,6 +1650,14 @@ static void ap_json(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *c,
         web_jw_raw(w, ",\"pnl_overlap\":");  web_jw_int(w, a->k_overlap);
         web_jw_raw(w, ",\"ie_uniform\":");   web_jw_raw(w, a->k_ie_uniform ? "true" : "false");
         web_jw_raw(w, "}");
+    }
+    web_jw_raw(w, ",\"presence\":");
+    if (pres) {
+        char hx[WEB_DEV_CELLS / 4 + 1];
+        web_dev_presence_hex(pres, hx);
+        web_jw_str(w, hx);
+    } else {
+        web_jw_raw(w, "null");
     }
     if (rf) web_rf_json(w, rf, m->frrs, a->bssid, now_s);
     web_jw_ssid_meta(w, "ssid", a->ssid);
@@ -1728,6 +1740,11 @@ int web_wifi_aps_route(const web_m4_t *m, const char *query, long long now_s,
     }
     web_rf_trails(m->tsdb ? m->tsdb->ru : NULL, m->sc,
                   (const char (*)[WEB_KEY_MAX + 1])macs, isap, show, now_s, rf);
+    /* The 24 h presence strip of each BSSID, as the clients table has
+     * (/api/devices): what the stream marked present, under the scope. */
+    unsigned char *pbits = calloc((size_t)(show ? show : 1), WEB_DEV_CELLS / 8);
+    if (pbits)
+        web_dev_strips(m, (const char (*)[WEB_KEY_MAX + 1])macs, show, now_s, pbits);
     free(macs);
     free(isap);
     web_jw_t w;
@@ -1737,15 +1754,19 @@ int web_wifi_aps_route(const web_m4_t *m, const char *query, long long now_s,
     web_jw_raw(&w, ",\"limit\":");   web_jw_int(&w, limit);
     web_jw_raw(&w, ",\"offset\":");  web_jw_int(&w, offset);
     web_jw_raw(&w, ",\"db_schema\":"); web_jw_int(&w, conn.schema);
+    web_jw_raw(&w, ",\"presence_from\":"); web_jw_int(&w, web_dev_strip_from(now_s));
+    web_jw_raw(&w, ",\"presence_cell_s\":"); web_jw_int(&w, WEB_DEV_CELL_S);
     web_jw_raw(&w, ",\"rows\":[");
     int shown = 0;
     for (int i = 0; i < show; i++) {
         if (w.len + WEB_WIFI_AP_ROW_MAX + 96 > cap) break;
         if (i) web_jw_raw(&w, ",");
-        ap_json(&w, m, &conn, &c.rows[i], &rf[i], now_s);
+        ap_json(&w, m, &conn, &c.rows[i], &rf[i],
+                pbits ? pbits + (size_t)i * (WEB_DEV_CELLS / 8) : NULL, now_s);
         shown++;
     }
     free(rf);
+    free(pbits);
     web_slothdb_close(&conn);
     int more = shown < c.n;
     web_jw_raw(&w, "],\"count\":");   web_jw_int(&w, shown);

@@ -476,6 +476,37 @@ static void test_device_drawer(void) {
     WT_EQ(route(&H, "/api/device/00:11:22:33:44:55", "x=1", 0), 400);
 }
 
+/* The WiFi view's access points table carries each BSSID's 24 h
+ * presence strip, read as the drawer's is (owner 2026-11-19: "a 24 hour
+ * bar like clients has"), and the strip's origin. */
+static void test_aps_carry_presence(void) {
+    const char *bs = "da:a1:19:00:00:a1";
+    long long from = SDB_NOW - SDB_NOW % 600 - 143 * 600;
+    char sql[256];
+    snprintf(sql, sizeof(sql), "INSERT INTO beacon_aps (bssid,ssid,channel,first_seen,last_seen)"
+             " VALUES ('%s','strip',6,%lld,%lld);", bs, SDB_NOW - 7200, SDB_NOW - 60);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    web_qrow_t q;
+    memset(&q, 0, sizeof(q));
+    q.tier = WEB_TIER_MINUTE;
+    q.metric = WM_DEV_PRESENT;
+    snprintf(q.key, sizeof(q.key), "%s", bs);
+    q.t = from + 600;
+    q.sum = q.min = q.max = 1;
+    q.n = 1;
+    WT_EQ(web_store_write(&g_store, &q, 1), 0);
+    WT_EQ(route(&H, "/api/wifi/aps", "limit=100", 0), 200);
+    const char *b = body_of(g_out);
+    char want[64];
+    snprintf(want, sizeof(want), "\"presence_from\":%lld,\"presence_cell_s\":600,", from);
+    WT_HAS(b, want);
+    const char *row = strstr(b, "\"bssid\":\"da:a1:19:00:00:a1\"");
+    WT_ASSERT(row != NULL);
+    const char *next = row ? strstr(row + 1, "\"bssid\":") : NULL;
+    const char *pr = row ? strstr(row, "\"presence\":\"400000000000000000000000000000000000\"") : NULL;
+    WT_ASSERT(pr != NULL && (!next || pr < next));
+}
+
 /* The drawer's strip and week, and its episodes: presence from the
  * store's minute tier and the in-memory ring, cells from the baseline,
  * an open episode keyed by the MAC. */
@@ -828,6 +859,7 @@ void run_devices_tests(void) {
     WT_RUN(test_devices_db_states);
     WT_RUN(test_device_drawer);
     WT_RUN(test_drawer_presence_week_anomalies);
+    WT_RUN(test_aps_carry_presence);
     WT_RUN(test_rows_carry_g2);
     WT_RUN(test_lookup);
     WT_RUN(test_health_members);

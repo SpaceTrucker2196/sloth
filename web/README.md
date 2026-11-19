@@ -1535,7 +1535,12 @@ The WiFi view's **direction finding** card (`web/ui/df.js`, `GET
 /api/df`, `web/src/web_df.c`) shows what `sloth-wifi --df-iface` reports
 (JSONL 2.2.0, `df_radio` and `wifi_df`; the bearing and the east/north
 positions are 2.4.0; the wiki's `direction-finding` page says what the
-numbers can and cannot mean). Two tables:
+numbers can and cannot mean). Since 2026-11-19 it is part of the
+access points panel (owner: "combine the data in the emitters access
+points and the direction finding"): an AP's loudest radio, margin and
+bearing are columns on its own row there, and the transmitters table
+below keeps the rest (stations, and APs outside the panel's window).
+Two tables:
 
 - **Radios**: the sensor radio and each `--df-iface` radio, its place on
   the baseline or east and north of the operator's origin when one was
@@ -3822,8 +3827,13 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   name (`include/sloth.h` `WPA_DG_*`: SAE/PSK transition, OWE
   transition, MFP optional, WPA1 alongside RSN), WPS, vendor, PHY, the
   SSID history from `beacon_ap_ssids` (8, newest first, its count, and
-  `ssids_more`) and the KARMA score from `karma_candidates` where the
-  AP is one. An SSID count above 1 is drawn in `--sev-warn` with its
+  `ssids_more`), the KARMA score from `karma_candidates` where the
+  AP is one, and `presence`, the BSSID's 24 h strip in 10 min cells
+  (the hex `/api/devices` gives a client, with `presence_from` and
+  `presence_cell_s` on the answer; `null` on a row only another sloth
+  host heard). The row's last three columns are direction finding's
+  (loudest at, margin, bearing) for that BSSID, from `GET /api/df`
+  ([Direction finding](#direction-finding)). An SSID count above 1 is drawn in `--sev-warn` with its
   history under the row. A page stops early, with `"more"`, before a row
   that might not fit (a row is at most 7,400 bytes; `test_wifi.c`
   builds the worst case, about 6,200).

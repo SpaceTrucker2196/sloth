@@ -424,7 +424,18 @@ static void test_webdf_page(void) {
     WT_HAS(p, "id=\"w-df-radios\"");
     WT_HAS(p, "id=\"w-df-em\"");
     WT_HAS(p, "if (v === \"wifi\" && window.SlothDf) SlothDf.show();");
-    WT_HAS(p, "if (window.SlothDf) SlothDf.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp });");
+    WT_HAS(p, "  if (window.SlothDf) SlothDf.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp,\n"
+              "    isAp: function (mac) {\n"
+              "      var hit = false;\n"
+              "      WF.apEls.forEach(function (row, b) { if (b.toLowerCase() === mac) hit = true; });\n"
+              "      return hit;\n"
+              "    },\n"
+              "    changed: function () { apDfAll(); } });");
+    /* An AP's figures ride its row in the access points table, and the
+     * transmitters table leaves out the APs that table shows. */
+    WT_HAS(p, "    of: function (mac) { return S.em.get(key(mac)) || null; },");
+    WT_HAS(p, "      return !(H && H.isAp && H.isAp(key(r.mac)));");
+    WT_HAS(p, "    var v = window.SlothDf ? SlothDf.apCells(SlothDf.of(bssid)) : [\"-\", \"-\", \"-\"];");
     WT_HAS(p, "H.getJSON(\"/api/df\")");
     WT_HAS(p,
         "  function stateText(j) {\n"

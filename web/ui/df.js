@@ -6,6 +6,12 @@
 //   SlothDf.show()    when the WiFi view shows: loads /api/df into the
 //                     w-df-* containers and keeps them current while
 //                     the view is visible
+//   SlothDf.of(mac)   the latest read's row for a transmitter, or null:
+//                     the access points table carries an AP's own
+//                     (loudest at, margin, bearing) on its row
+// h may also lend isAp(mac) (a BSSID the access points table shows, so
+// the transmitters table here leaves it out) and changed() (called after
+// each read, so that table refreshes its rows' figures).
 // Two tables: the radios (the sensor radio and each --df-iface one,
 // where it sits, on the baseline or east and north, and how much louder
 // than the sensor radio it reads), and the transmitters two or more of
@@ -21,7 +27,7 @@
   "use strict";
   var H = null;
   var POLL_MS = 10000;
-  var S = { gen: 0, timer: 0 };
+  var S = { gen: 0, timer: 0, em: new Map() };
 
   function $(id) { return document.getElementById(id); }
   function num(v) { return typeof v === "number" && isFinite(v); }
@@ -103,6 +109,14 @@
             stamp(r.last_seen)];
   }
 
+  // An AP row's three figures, from its transmitter row (null: "-").
+  function apCells(r) {
+    if (!r) return ["-", "-", "-"];
+    return [r.best_iface || (r.best_radio >= 0 ? "radio " + r.best_radio : "-"),
+            fixed(r.margin_db, 1, " dB") + (r.quality === "weak" ? " weak" : ""), bearingText(r)];
+  }
+  function key(mac) { return String(mac).toLowerCase(); }
+
   var RADIO_HEAD = ["radio", "interface", "role", "position", "state", "frames noted",
                     "reads vs sensor", "retunes refused"];
   var EM_HEAD = ["transmitter", "ch", "quality", "loudest at", "margin", "bearing", "along baseline",
@@ -132,8 +146,17 @@
   function draw(j) {
     var st = $("w-df-state");
     if (st) st.textContent = stateText(j);
+    S.em = new Map();
+    var em = (j && j.emitters) || [];
+    for (var i = 0; i < em.length; i++) S.em.set(key(em[i].mac), em[i]);
     table("w-df-radios", RADIO_HEAD, (j && j.radios) || [], radioCells);
-    table("w-df-em", EM_HEAD, (j && j.emitters) || [], emCells);
+    // An AP the access points table shows has its figures on its own
+    // row there; this table keeps the other transmitters (stations, and
+    // APs outside that table's window).
+    table("w-df-em", EM_HEAD, em.filter(function (r) {
+      return !(H && H.isAp && H.isAp(key(r.mac)));
+    }), emCells);
+    if (H && H.changed) H.changed();
   }
 
   function load() {
@@ -162,7 +185,8 @@
       if (S.timer) clearTimeout(S.timer);
       tick();
     },
+    of: function (mac) { return S.em.get(key(mac)) || null; },
     stateText: stateText, radioState: radioState, radioCells: radioCells, emCells: emCells,
-    placeText: placeText, bearingText: bearingText
+    apCells: apCells, placeText: placeText, bearingText: bearingText
   };
 })();

@@ -2517,15 +2517,15 @@ static void test_the_page_carries_the_sun(void) {
     WT_HAS(p, "  function drawStrip(w, ui, s, from, to) {");
     WT_HAS(p, "    glyph.paint(ui.c, glyph.g5(st.cells, { w: ui.c.clientWidth, h: ui.c.clientHeight, first: -1 }), H.tok);");
     WT_HAS(p, "          if (w.strip) n += drawStrip(w, ui, r[0], from, to) || 0;");
-    /* ... and there is no other: eight calls and the definition in
-     * app.js (the eighth clears a grey row another sloth host heard,
+    /* ... and there is no other: nine calls and the definition in
+     * app.js (the ninth the WiFi access points' 24 h strip; the eighth clears a grey row another sloth host heard,
      * which has no presence here), the SSID drawer's two and the Probes
      * rows' two (the second clears a grey station's strip the same way),
      * and syshealth.js's own definition and call. */
     WT_HAS(p, "    H.drawStrip(cv, null, CELLS, -1);\n    return row;");
     int calls = 0;
     for (const char *q = p; (q = strstr(q, "drawStrip(")) != NULL; q += 10) calls++;
-    WT_EQ(calls, 15);
+    WT_EQ(calls, 16);
     int g5s = 0;
     for (const char *q = p; (q = strstr(q, "glyph.g5(")) != NULL; q += 9) g5s++;
     WT_EQ(g5s, 3);    /* paintStrip()'s, the one presence painter; syshealth.js's state strip and the comment naming it */

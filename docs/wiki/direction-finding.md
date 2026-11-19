@@ -29,7 +29,7 @@ No alert rule reads either: this is a data point for an analyst.
 `tests/test_df.c`. Owner's request, 2026-11-16, for the beta-site row
 of Alfa adapters; 2026-11-17 for the same three in a triangle.
 
-**Last updated**: 2026-11-17 (radios off the line: `NAME@X,Y` and the bearing, JSONL 2.4.0), 2026-11-17 (slothweb's card and `/api/df`), 2026-11-16 (several sensor radios: what this table holds then, [[multi-radio-sensing]]), 2026-11-16 (new).
+**Last updated**: 2026-11-19 (the slothweb card inside the access points panel), 2026-11-17 (radios off the line: `NAME@X,Y` and the bearing, JSONL 2.4.0), 2026-11-17 (slothweb's card and `/api/df`), 2026-11-16 (several sensor radios: what this table holds then, [[multi-radio-sensing]]), 2026-11-16 (new).
 
 ## What it can say, and what it cannot
 
@@ -220,7 +220,8 @@ radio is registered. Field tables: [[jsonl-schema]].
   0.25 m bands and the bearing with its error, so a transmitter standing still writes a line when
   something about its direction changes and on the heartbeat.
 
-In slothweb: the WiFi view's direction-finding card and `GET /api/df`
+In slothweb: the WiFi view's direction-finding card (inside the access
+points panel since 2026-11-19, an AP's figures on its own row) and `GET /api/df`
 ([[slothweb]] § Direction finding, 2026-11-17), from the stream, the
 scalars only (not the `rssi` and `level` arrays), in memory; the card's
 bearing column and the radios' east/north places are the 2.4.0 members.

@@ -3467,7 +3467,7 @@
   // deauth timeline from /api/wifi/deauth, and probe clients from
   // /api/series with its baseline band. Channel keys, BSSIDs and SSIDs
   // are drawn with fillText or set with textContent, never as markup.
-  var WF = { gen: 0, heat: null, mix: null, rows: [], cur: null, apEls: new Map(), geo: null,
+  var WF = { gen: 0, heat: null, mix: null, rows: [], cur: null, apEls: new Map(), apStrips: [], apFrom: null, geo: null,
              g3max: {}, g3of: "", cl: [], clFrom: null, hl: null, pc: null,
              iso: true, ist: { off: null, dirty: true, geo: null, hover: null, o: null } };
   var AP_SORTS = { "signal": 1, "last": 1, "ssids": 1, "karma": 1, "bssid": 1 };
@@ -4117,13 +4117,31 @@
       { k: "ss", label: "ssid", w: 12, flex: true, type: "text", srv: "ssid", val: av("ssid") },
       { k: "ch", label: "ch", w: 4, min: 3, type: "num", srv: "channel", val: av("channel") },
       { k: "sig", label: "dBm", px: 196, min: 3, type: "num", srv: "signal", val: av("signal") },
+      { k: "pr", label: "24 h presence", px: 146, ruler: true },
       { k: "enc", label: "enc / akm", w: 20, type: "text", srv: "enc", val: av("enc") },
       { k: "mfp", label: "mfp", w: 12, type: "num", srv: "mfp", val: av("mfp") },
       { k: "dg", label: "downgrade", w: 16, type: "num", srv: "downgrade", val: av("downgrade") },
       { k: "km", label: "karma", px: 112, type: "num", srv: "karma",
         val: function (a) { return a.karma ? a.karma.score : null; } },
+      // Direction finding (df.js, /api/df): the AP's own transmitter row.
+      { k: "df", label: "loudest at", w: 10, type: "none" },
+      { k: "mg", label: "margin", w: 9, type: "none" },
+      { k: "br", label: "bearing", w: 12, type: "none" },
       { k: "ls", label: "last", w: 11, type: "time", srv: "last", val: av("last_seen") }
     ] });
+  // An AP row's direction-finding cells, filled from SlothDf's latest
+  // read: on drawing, and again after each read (SlothDf's changed()).
+  function apDfFill(row, bssid) {
+    var v = window.SlothDf ? SlothDf.apCells(SlothDf.of(bssid)) : ["-", "-", "-"];
+    var cs = row.querySelectorAll(".c-df");
+    for (var i = 0; i < cs.length && i < v.length; i++) {
+      cs[i].textContent = v[i];
+      cs[i].className = "c-df " + (v[i] === "-" ? "d-dim" : "d-normal");
+    }
+  }
+  function apDfAll() {
+    WF.apEls.forEach(function (row, bssid) { apDfFill(row, bssid); });
+  }
 
   function apRow(a) {
     // A row only another sloth host heard (fvMark()): grey, no hue.
@@ -4175,6 +4193,15 @@
     if (num(a.channel)) cc.appendChild(SlothChan.chip(a.channel, a.rf ? a.rf.radio : null));
     var sg = row.appendChild(el("span", "c-sig d-dim"));
     SlothRf.cell(sg, a.rf, num(a.signal) ? a.signal : null, a.channel);
+    // The 24 h presence, as the clients table's: another host's row has
+    // none here (null), a dash.
+    if (typeof a.presence === "string") {
+      var pc = row.appendChild(document.createElement("canvas"));
+      pc.ariaLabel = "presence over the last 24 hours";
+      WF.apStrips.push([pc, a]);
+    } else {
+      row.appendChild(el("span", "d-dim", "-"));
+    }
     row.appendChild(el("span", "c-enc d-normal", (a.enc === null ? "?" : a.enc) + " " +
                        (a.akm_names && a.akm_names.length ? a.akm_names.join(",") : "")));
     row.appendChild(el("span", "c-mfp d-normal", typeof a.mfp_word === "string" ? "mfp " + a.mfp_word : "-"));
@@ -4193,6 +4220,8 @@
     if (a.karma && !rem) SlothRf.bullet(km, a.karma.score, { max: 7, ranges: [3, 7], threshold: 3 },
                                         "karma " + a.karma.score, "warn");
     else km.appendChild(el("span", "d-dim", "-"));
+    for (var dk = 0; dk < 3; dk++) row.appendChild(el("span", "c-df d-dim", "-"));
+    if (!rem) apDfFill(row, String(a.bssid));
     row.appendChild(el("span", "c-ls d-dim", shortStamp(a.last_seen)));
     var box = el("div", "apbox");
     box.appendChild(row);
@@ -4227,6 +4256,9 @@
       var box = $("w-aps");
       while (box.firstChild) box.removeChild(box.firstChild);
       WF.apEls = new Map();
+      WF.apStrips = [];
+      WF.apFrom = num(j.presence_from) ? j.presence_from : null;
+      drawRuler(DTA.ruler, WF.apFrom, WF.apFrom + 144 * 600, 144, j.utc_offset_s);
       // F15: new is first seen in the last 24 h, the Devices view's
       // window; the caption counts it and sloth's approaching.
       WF.newFrom = num(j.now) ? j.now - 86400 : null;
@@ -4240,6 +4272,12 @@
         if (!inWindow(a.last_seen)) { nold++; return; }
         box.appendChild(apRow(a));
       });
+      // Strips drawn once their rows are in the page, so they have a size.
+      WF.apStrips.forEach(function (s) {
+        drawStrip(s[0], s[1].presence, 144, glyph.firstCell(s[1].first_seen, WF.apFrom, 600, 144), WF.apFrom, 600);
+      });
+      // The transmitters table leaves out the APs now shown here.
+      if (window.SlothDf) SlothDf.show();
       if (!j.rows || !j.rows.length) box.appendChild(el("div", "sub", "no beacon_aps rows"));
       else if (nold === j.rows.length) box.appendChild(el("div", "sub", "none last seen in the window"));
       var fs = fvSplit(j.rows || []);
@@ -6827,7 +6865,13 @@
   // The WiFi view's KARMA and key-harvest card (web/ui/lure.js): the page's helpers, lent once.
   if (window.SlothLure) SlothLure.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp });
   // The WiFi view's direction-finding card (web/ui/df.js): the page's helpers, lent once.
-  if (window.SlothDf) SlothDf.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp });
+  if (window.SlothDf) SlothDf.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp,
+    isAp: function (mac) {
+      var hit = false;
+      WF.apEls.forEach(function (row, b) { if (b.toLowerCase() === mac) hit = true; });
+      return hit;
+    },
+    changed: function () { apDfAll(); } });
   // The rtl_433 tab (web/ui/rtl433.js): the page's helpers, lent once.
   if (window.SlothRtl433) SlothRtl433.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp });
   // The Victron tab (web/ui/victron.js): the page's helpers, lent once.

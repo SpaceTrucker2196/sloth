@@ -303,6 +303,7 @@ canvas.smw { display: block; width: 100%; height: 18px; }
 .sw { display: inline-block; width: 8px; height: 8px; margin-right: 5px; vertical-align: middle; border-radius: 2px; }
 .aprow { display: grid; grid-template-columns: 19ch minmax(12ch, 1fr) 4ch 5ch 20ch 12ch 16ch 9ch 11ch; gap: 6px; align-items: center; font-size: 12px; white-space: nowrap; padding: 2px 0; border-bottom: 1px dotted var(--rule); }
 .aprow > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.aprow > canvas { display: block; width: 144px; height: 12px; }
 .aphist { padding-left: 21ch; }
 .hrow { display: grid; grid-template-columns: 21ch 16ch minmax(10ch, 1fr) 11ch 11ch 146px; gap: 6px; align-items: center; height: 22px; font-size: 12px; white-space: nowrap; cursor: pointer; border-bottom: 1px dotted var(--rule); }
 .hrow > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }

@@ -668,7 +668,7 @@
       <div class="sub">the managed card's nl80211 station dump (sloth.db wifi_stas): the AP it is associated with, as the card reports it; nothing is sent</div>
     </section>
     <section class="panel">
-      <div class="label">emitters: access points <span class="sub" id="w-aps-count"></span> <span class="sub dbage" id="w-dbage"></span> <span class="dt-tools" id="w-aps-tools"></span></div>
+      <div class="label">emitters: access points and direction finding <span class="sub" id="w-aps-count"></span> <span class="sub dbage" id="w-dbage"></span> <span class="dt-tools" id="w-aps-tools"></span></div>
       <div class="controls"><label>sort <select id="w-sort">
         <option value="signal" selected>signal (near first)</option>
         <option value="last">last seen</option>
@@ -680,7 +680,17 @@
       <div class="aprow dhead" id="w-aps-head"></div>
       <div id="w-aps"></div>
       </div>
-      <div class="sub">an SSID anywhere on the page is selectable: a click, or Enter on it, opens its detail (its access points, the clients on it and asking for it, its presence, alerts and twin and karma findings). Nearest first by default (sloth.db's last signal); a square after the SSID for each SSID the BSSID has beaconed, in the warning colour above one (KARMA, multi-VAP), with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers. The dBm column is an S-meter: the lit run is the last reading, the number beside it its S reading and dBm. <span class="smkey"></span></div>
+      <div class="sub">an SSID anywhere on the page is selectable: a click, or Enter on it, opens its detail (its access points, the clients on it and asking for it, its presence, alerts and twin and karma findings). Nearest first by default (sloth.db's last signal); a square after the SSID for each SSID the BSSID has beaconed, in the warning colour above one (KARMA, multi-VAP), with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers; 24 h presence: the BSSID heard in each 10 min cell, as the clients table has it; loudest at, margin and bearing: direction finding's figures for the AP (below), "-" where two or more radios have not heard it. The dBm column is an S-meter: the lit run is the last reading, the number beside it its S reading and dBm. <span class="smkey"></span></div>
+      <!-- Direction finding across monitor radios (web/ui/df.js,
+           docs/wiki/direction-finding.md), merged into this panel
+           2026-11-19 (owner): an AP's figures ride its row. -->
+      <div id="w-df">
+      <div class="label">direction finding</div>
+      <div class="sub" id="w-df-state" aria-live="polite"></div>
+      <div class="hscroll"><table class="qt" id="w-df-radios" aria-label="the monitor radios direction finding compares: the sensor radio and each --df-iface radio" hidden></table></div>
+      <div class="hscroll"><table class="qt" id="w-df-em" aria-label="transmitters two or more radios hear: the loudest radio, its margin over the quietest, and the compass point the levels lean toward when one can be given" hidden></table></div>
+      <div class="sub">An access point's own figures are on its row above: loudest at, margin and bearing, as this table defines them; the table here keeps the other transmitters two or more radios hear (stations, and access points outside the window above). From sloth's stream (JSONL 2.2.0: df_radio, wifi_df; the bearing and east/north positions 2.4.0), sloth-wifi run with --df-iface; nothing is sent. Radios: position its place on the baseline, or east and north of the operator's origin, when one was given, frames noted the transmitter frames it fed the comparison, reads vs sensor how much louder than the sensor radio it reads the same transmitters (measured from the air and taken off before comparing), retunes refused the channel changes the kernel turned down while following the sensor radio. Transmitters: loudest at the radio hearing it loudest, margin loudest less quietest, quality lean at 6 dB or more and weak under it (the radios agree: far away, or between them), bearing the compass point the levels lean toward from the middle of the radios, with how far a 3 dB error on one radio moves it, given only when three or more radios are placed east and north, all of them hear the transmitter and it is close to them (most rows have none), along baseline the power-weighted point between radios placed on a line, the widest margins first. What this is not: a fix, an angle of arrival, or a distance; radios with unlike antennas give leans that mean nothing; a transmitter far away compared with the spacing reads weak, which is the answer. A data point, not a verdict: no alert reads it.</div>
+      </div>
     </section>
     <!-- KARMA and key harvesting (web/ui/lure.js, #187 / #172): the
          counts sloth's rules read, from the stream. -->
@@ -691,16 +701,6 @@
       <div class="hscroll"><table class="qt" id="w-lure-sta" aria-label="stations whose association requests drew M1s they left unanswered" hidden></table></div>
       <div class="hscroll"><table class="qt" id="w-lure-chain" aria-label="BSSIDs whose claimed deauths were followed by a victim's fresh handshake" hidden></table></div>
       <div class="sub">from sloth's stream (JSONL 1.3.0: karma_suspect, harvest_station, harvest_chain), the tables its rules read, as they stand now; nothing is sent. A KARMA row's BSSID opens its detail (its row over time, its alerts, the hardware verdict, the probe-response latency). KARMA: ssids the BSSID beaconed, postures the distinct security postures behind them (one for several names: the IE collapse, weak evidence), forged the names it answered a station's directed probe for and never beaconed, to stations how many stations those answers went to, pnl the most of its names one station asks for, lure chain a station deauthed elsewhere and lured here, score the [y] view's. Stations: BSSIDs asked to associate, how many answered with an M1, the M1s left with no M2, those carrying a PMKID KDE, and the BSSIDs it did answer. Chains: stations knocked off and captured reconnecting through a fresh M1/M2, and the deauths before them. Counts, not a verdict: whether a row crossed its rule's threshold is the alert's (KARMA_AP, KARMA_PROBE_FORGE, PMKID_HARVEST, HANDSHAKE_HARVEST in the Alerts view).</div>
-    </section>
-    <!-- Direction finding across monitor radios (web/ui/df.js,
-         docs/wiki/direction-finding.md): which radio hears a
-         transmitter loudest, from the stream. -->
-    <section class="panel" id="w-df">
-      <div class="label">direction finding</div>
-      <div class="sub" id="w-df-state" aria-live="polite"></div>
-      <div class="hscroll"><table class="qt" id="w-df-radios" aria-label="the monitor radios direction finding compares: the sensor radio and each --df-iface radio" hidden></table></div>
-      <div class="hscroll"><table class="qt" id="w-df-em" aria-label="transmitters two or more radios hear: the loudest radio, its margin over the quietest, and the compass point the levels lean toward when one can be given" hidden></table></div>
-      <div class="sub">from sloth's stream (JSONL 2.2.0: df_radio, wifi_df; the bearing and east/north positions 2.4.0), sloth-wifi run with --df-iface; nothing is sent. Radios: position its place on the baseline, or east and north of the operator's origin, when one was given, frames noted the transmitter frames it fed the comparison, reads vs sensor how much louder than the sensor radio it reads the same transmitters (measured from the air and taken off before comparing), retunes refused the channel changes the kernel turned down while following the sensor radio. Transmitters: loudest at the radio hearing it loudest, margin loudest less quietest, quality lean at 6 dB or more and weak under it (the radios agree: far away, or between them), bearing the compass point the levels lean toward from the middle of the radios, with how far a 3 dB error on one radio moves it, given only when three or more radios are placed east and north, all of them hear the transmitter and it is close to them (most rows have none), along baseline the power-weighted point between radios placed on a line, the widest margins first. What this is not: a fix, an angle of arrival, or a distance; radios with unlike antennas give leans that mean nothing; a transmitter far away compared with the spacing reads weak, which is the answer. A data point, not a verdict: no alert reads it.</div>
     </section>
     <section class="panel">
       <div class="label">chains <span class="sub" id="w-ch-note"></span></div>
