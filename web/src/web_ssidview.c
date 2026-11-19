@@ -200,6 +200,22 @@ int web_ssid_route(const web_m4_t *m, const char *query, long long now_s,
     int octets = web_ssid_param(ps[0].val, ssid);
     if (octets < 0) return answer_error(400, "bad_ssid", NULL, body, cap, len, status);
     WEB_M4_CHECKED(m, len, status);
+    /* Under Monitor the joined network is not shown (#234, web_own.h):
+     * its SSID answers that, not an empty detail that reads as nothing
+     * heard. */
+    web_own_join_t own;
+    if (web_own_join_for(m->sc, &own) && web_own_join_ssid(&own, ssid, (size_t)octets)) {
+        web_jw_t w;
+        web_jw_init(&w, body, cap);
+        web_jw_raw(&w, "{\"out_of_scope\":true,\"own_network\":true,\"reason\":");
+        web_jw_str(&w, "the network the sensor's managed card is joined to; Monitor "
+                       "hides it, Hybrid shows it");
+        web_jw_raw(&w, "}\n");
+        if (w.overflow) return -1;
+        *len = w.len;
+        *status = 200;
+        return 0;
+    }
 
     web_sdb_conn_t conn;
     if (open_db(m, &conn, now_s, body, cap, len, status) != 0) return 0;

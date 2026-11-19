@@ -1159,6 +1159,8 @@
     // A record of another capture scope is passed over, its number
     // counted, so the backlog is not asked for again.
     if (!scopeKeeps(r.sc)) return;
+    // The managed card's joined network (#234): Hybrid only.
+    if (SCOPE === "monitor" && r.own) return;
     // Held and drawn as the scope's line; the rows start again with the
     // scope (setScope()).
     r = { seq: r.seq, type: r.type, ts: r.ts, text: recText(r), sc: r.sc };

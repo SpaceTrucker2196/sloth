@@ -1,4 +1,5 @@
 #include "web_radar.h"
+#include "web_own.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -37,6 +38,9 @@ typedef struct {
     int         total, estimated, none;
     rd_band_t   band[WEB_RADAR_BANDS];
     rd_recent_t recent;
+    /* Under Monitor the joined network (#234, web_own.h): its APs and
+     * clients are not drawn. NULL: none hidden. */
+    web_own_join_t *own;
 } rd_census_t;
 
 /* sloth's band words in src/rf_distance.h order, by index 0..4
@@ -141,6 +145,11 @@ static void ble_census(web_ble_t *b, rd_census_t *c) {
 
 static void wifi_row(const web_frrs_rf_row_t *r, void *ctx) {
     rd_census_t *c = ctx;
+    if (c->own && (web_own_join_mac(c->own, r->mac) ||
+                   (r->ssid && web_own_join_ssid(c->own, r->ssid, strlen(r->ssid))))) {
+        c->own->hidden++;
+        return;
+    }
     rd_dev_t d;
     memset(&d, 0, sizeof(d));
     snprintf(d.addr, sizeof(d.addr), "%s", r->mac);
@@ -231,7 +240,8 @@ static int answer_error(int status, const char *reason, char *body, size_t cap,
 }
 
 int web_radar_route(web_ble_t *b, web_frrs_t *f, const char *query, long long now_s,
-                    int none_here, char *body, size_t cap, size_t *len, int *status) {
+                    int none_here, const web_scope_ctx_t *sc,
+                    char *body, size_t cap, size_t *len, int *status) {
     /* No parameter of its own: every name is unknown. */
     web_param_t none[1] = { { "", "", 0 } };
     char err[48];
@@ -242,6 +252,8 @@ int web_radar_route(web_ble_t *b, web_frrs_t *f, const char *query, long long no
     static rd_census_t ble, wifi;      /* about 9 KB each: the one HTTP thread's */
     memset(&ble, 0, sizeof(ble));
     memset(&wifi, 0, sizeof(wifi));
+    web_own_join_t own;
+    if (web_own_join_for(sc, &own)) wifi.own = &own;
     if (b && b->dev) ble_census(b, &ble);
     if (f) web_frrs_rf_census(f, wifi_row, &wifi);
 

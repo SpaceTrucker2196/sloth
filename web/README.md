@@ -6704,6 +6704,18 @@ switch filters every view by how the data was captured
 | Monitor | what the passive monitor-mode radio heard over the air (beacons, probes, associations, EAPOL, deauths, the channel mix, the 802.11 detectors) and the BLE receivers (`--bt-monitor`, `--bt-capture`), which are receive-only radio too; nothing the connected Wi-Fi or Ethernet carried |
 | Local | what the host's own interfaces carried: the IP capture on Ethernet and the associated Wi-Fi card, ARP, DHCP, DNS, mDNS, NBNS, the flows, `/proc`, the interfaces' throughput, and the managed card's own station dump and scan (the WiFi view under Local, `/api/wifi/local`); never the monitor radio |
 
+**The joined network is Hybrid's** (#234, owner 2026-11-19). Under
+Monitor the network the sensor's managed card is joined to is left out
+of the inventory: its APs, their clients, the probes for it, its SSID's
+detail, its device rows, its radar marks and its live records. Which
+network is learned from the stream (the newest `wifi_sta` names the AP,
+`wifi_ap` and `beacon` its SSID and other BSSIDs, `assoc` and `eapol`
+its clients), so it follows the card; with no live stream nothing is
+hidden. Alerts about it stay (owner ruling). A list answer then carries
+`own_hidden`, the rows passed over; a page's `next_offset` counts them.
+[docs/wiki/capture-scope.md](../docs/wiki/capture-scope.md) has the
+list.
+
 sloth's records carry no capture path, so each datum is placed by what
 it is: its record type, its alert type (the rule's input, whatever file
 the rule is in), its metric, an interface's name (Monitor when sloth

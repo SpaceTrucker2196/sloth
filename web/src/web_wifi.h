@@ -133,6 +133,10 @@ typedef struct {
      * "clients_db_cut" (sloth.db's budget spent before every client's
      * association was read; the rest from the stream). */
     int               clients;
+    /* Under Monitor, the joined network (#234, web_own.h): its APs and
+     * clients are folded into "other", so the channel's load stays and
+     * no transmitter of it is named. NULL: none hidden. */
+    struct web_own_join_s *own;
 } web_mix_ops_t;
 /* Test seam: nonzero spends the mix answer's sloth.db budget once the
  * transmitter table is written (0 in slothweb). */

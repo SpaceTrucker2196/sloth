@@ -88,6 +88,10 @@ typedef struct {
      * would match it there. addr_m bit i: addr[i] is in text_m. */
     char      addr[WEB_LIVE_ADDRS][WEB_LIVE_IP_MAX + 1];
     unsigned  addr_m;
+    /* A Monitor record that named the managed card's joined network when
+     * it came (#234, web_own.h): left out under Monitor, shown in
+     * Hybrid. Never an alert. */
+    int       own;
 } web_live_rec_t;
 
 /* Does record r carry key (a canonical MAC or address) in one of its

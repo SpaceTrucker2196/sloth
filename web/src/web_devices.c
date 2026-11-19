@@ -2,6 +2,7 @@
 #include "web_rf.h"
 
 #include "web_live.h"
+#include "web_own.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -436,20 +437,30 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
         web_jw_raw(&w, "null");
     }
     web_jw_raw(&w, ",\"rows\":[");
-    int shown = 0;
+    /* Under Monitor the joined network's APs and clients are passed
+     * over (#234, web_own.h); next_offset counts the rows read. */
+    web_own_join_t own;
+    web_own_join_for(m->sc, &own);
+    int shown = 0, used = 0;
     for (int i = 0; i < show; i++) {
         /* Room for this row and the tail, or stop here with "more". */
         if (w.len + WEB_DEV_ROW_MAX + 96 > cap) break;
-        if (i) web_jw_raw(&w, ",");
+        used++;
+        if (web_own_join_mac(&own, c.rows[i].mac)) {
+            own.hidden++;
+            continue;
+        }
+        if (shown) web_jw_raw(&w, ",");
         dev_json(&w, m, &c.rows[i], bits + (size_t)i * (WEB_DEV_CELLS / 8), &rf[i], now_s);
         shown++;
     }
     free(rf);
-    int more = shown < c.n;
+    int more = used < c.n;
     web_jw_raw(&w, "],\"count\":");   web_jw_int(&w, shown);
     web_jw_raw(&w, ",\"more\":");     web_jw_raw(&w, more ? "true" : "false");
     web_jw_raw(&w, ",\"next_offset\":");
-    if (more) web_jw_int(&w, offset + shown); else web_jw_raw(&w, "null");
+    if (more) web_jw_int(&w, offset + used); else web_jw_raw(&w, "null");
+    web_own_join_jw(&w, &own);
     /* Only when asked for: an answer without dir is as it always was. */
     if (dir != WEB_SORT_DEFAULT)
         web_jw_raw(&w, dir == WEB_SORT_ASC ? ",\"dir\":\"asc\"" : ",\"dir\":\"desc\"");
@@ -1242,6 +1253,18 @@ int web_devices_arrivals_route(const web_m4_t *m, const char *query,
                         recent, WEB_DEV_ARR_KEYS + 1);
     if (nr > 0) nk = arr_merge(keys, nk, WEB_DEV_ARR_KEYS + 1, recent, nr);
     free(recent);
+    /* Under Monitor the joined network's APs and clients are not counted
+     * (#234, web_own.h). */
+    web_own_join_t own;
+    if (web_own_join_for(m->sc, &own)) {
+        int k = 0;
+        for (int i = 0; i < nk; i++) {
+            if (web_own_join_mac(&own, keys[i])) { own.hidden++; continue; }
+            if (k != i) memcpy(keys[k], keys[i], WEB_KEY_MAX + 1);
+            k++;
+        }
+        nk = k;
+    }
     int more = nk > WEB_DEV_ARR_KEYS;
     if (more) nk = WEB_DEV_ARR_KEYS;
     unsigned char *bits = calloc((size_t)(nk ? nk : 1), (size_t)stride);

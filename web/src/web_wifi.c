@@ -516,10 +516,19 @@ static void mix_put(magg_t *a, const char *chan, long long t,
     }
 }
 
+/* A transmitter of the joined network under Monitor (#234): its frames
+ * are the channel's, its name is not shown. */
+static int mix_own(const magg_t *a, const uint8_t mac[6]) {
+    if (!a->ops->own || !web_own_join_macb(a->ops->own, mac)) return 0;
+    a->ops->own->hidden++;
+    return 1;
+}
+
 static int mix_from_ring(void *ctx, const web_mix_row_t *r) {
     magg_t *a = ctx;
     for (int i = 0; i < r->n && i < WEB_CHMIX_TOP; i++)
-        mix_put(a, r->chan, r->t, r->tx[i].mac, r->tx[i].kind, r->tx[i].frames);
+        mix_put(a, r->chan, r->t, mix_own(a, r->tx[i].mac) ? NULL : r->tx[i].mac,
+                r->tx[i].kind, r->tx[i].frames);
     mix_put(a, r->chan, r->t, NULL, 0, r->other);
     return 0;
 }
@@ -533,7 +542,7 @@ static int mix_from_store(void *ctx, const char *chan, long long t,
     if (kind < 0 || kind > 7 || !(a->ops->kinds & (1u << kind)) ||
         web_mix_mac_bytes(tx, mac) != 0)
         return 0;
-    mix_put(a, chan, t, mac, kind, (unsigned long long)frames);
+    mix_put(a, chan, t, mix_own(a, mac) ? NULL : mac, kind, (unsigned long long)frames);
     return 0;
 }
 
@@ -960,6 +969,7 @@ int web_mix_answer(const web_m4_t *m, const web_grid_t *g, const web_mix_ops_t *
     web_jw_raw(&w, ",\"read_cut\":"); web_jw_raw(&w, read_more ? "true" : "false");
     if (clb) web_jw_raw(&w, clb);
     if (ops->tail) ops->tail(&w, ops->ctx);
+    web_own_join_jw(&w, ops->own);
     web_jw_raw(&w, "}\n");
     (void)nread;
     free(a->cl); free(clb);
@@ -1107,6 +1117,8 @@ int web_wifi_channels_route(const web_m4_t *m, const char *query,
         ops.row_extra = wifi_row_extra;
         ops.tx_json = wifi_tx_json;
         ops.clients = 1;
+        web_own_join_t own;
+        if (web_own_join_for(m->sc, &own)) ops.own = &own;
         return web_mix_answer(m, &mg, &ops, now_s, body, cap, len, status);
     }
     int metric = WM_WIFI_AP_COUNT;
@@ -1260,10 +1272,18 @@ int web_wifi_deauth_route(const web_m4_t *m, const char *query,
     web_jw_raw(&w, ",\"total_keys\":"); web_jw_int(&w, nk);
     web_jw_raw(&w, ",\"bssids\":[");
     int shown = 0;
+    /* Under Monitor the joined network's BSSIDs are passed over (#234);
+     * DEAUTH_FLOOD against them stays on the alerts. */
+    web_own_join_t own;
+    web_own_join_for(m->sc, &own);
     /* Each flood is at most 48 bytes. */
     size_t extra = (size_t)(WEB_WIFI_FLOODS + 1) * 48;
     for (int i = 0; i < nk && shown < WEB_WIFI_ROWS; i++) {
         if (w.len + row_max(&g, extra) + 64 > cap) break;
+        if (web_own_join_mac(&own, b.rows[i].key)) {
+            own.hidden++;
+            continue;
+        }
         double total;
         if (grid_row(m, metric, &g, b.rows[i].key, b.pts, b.sum, b.cnt,
                      &total) != 0)
@@ -1284,7 +1304,9 @@ int web_wifi_deauth_route(const web_m4_t *m, const char *query,
     }
     web_slothdb_close(&conn);
     web_jw_raw(&w, "],\"shown\":");  web_jw_int(&w, shown);
-    web_jw_raw(&w, ",\"more\":");    web_jw_raw(&w, shown < nk ? "true" : "false");
+    web_jw_raw(&w, ",\"more\":");
+    web_jw_raw(&w, shown + (long long)own.hidden < nk ? "true" : "false");
+    web_own_join_jw(&w, &own);
     web_jw_raw(&w, "}\n");
     gbuf_free(&b);
     if (w.overflow) return -1;
@@ -1757,10 +1779,22 @@ int web_wifi_aps_route(const web_m4_t *m, const char *query, long long now_s,
     web_jw_raw(&w, ",\"presence_from\":"); web_jw_int(&w, web_dev_strip_from(now_s));
     web_jw_raw(&w, ",\"presence_cell_s\":"); web_jw_int(&w, WEB_DEV_CELL_S);
     web_jw_raw(&w, ",\"rows\":[");
-    int shown = 0;
+    /* Under Monitor the joined network's APs are passed over (#234,
+     * web_own.h): a page then holds fewer rows than limit, and
+     * next_offset counts the rows read, so the next page starts after
+     * them. */
+    web_own_join_t own;
+    web_own_join_for(m->sc, &own);
+    int shown = 0, used = 0;
     for (int i = 0; i < show; i++) {
         if (w.len + WEB_WIFI_AP_ROW_MAX + 96 > cap) break;
-        if (i) web_jw_raw(&w, ",");
+        used++;
+        if (web_own_join_mac(&own, c.rows[i].bssid) ||
+            web_own_join_ssid(&own, c.rows[i].ssid, strlen(c.rows[i].ssid))) {
+            own.hidden++;
+            continue;
+        }
+        if (shown) web_jw_raw(&w, ",");
         ap_json(&w, m, &conn, &c.rows[i], &rf[i],
                 pbits ? pbits + (size_t)i * (WEB_DEV_CELLS / 8) : NULL, now_s);
         shown++;
@@ -1768,11 +1802,12 @@ int web_wifi_aps_route(const web_m4_t *m, const char *query, long long now_s,
     free(rf);
     free(pbits);
     web_slothdb_close(&conn);
-    int more = shown < c.n;
+    int more = used < c.n;
     web_jw_raw(&w, "],\"count\":");   web_jw_int(&w, shown);
     web_jw_raw(&w, ",\"more\":");     web_jw_raw(&w, more ? "true" : "false");
     web_jw_raw(&w, ",\"next_offset\":");
-    if (more) web_jw_int(&w, offset + shown); else web_jw_raw(&w, "null");
+    if (more) web_jw_int(&w, offset + used); else web_jw_raw(&w, "null");
+    web_own_join_jw(&w, &own);
     /* Only when asked for: an answer without dir is as it always was. */
     if (dir != WEB_SORT_DEFAULT)
         web_jw_raw(&w, dir == WEB_SORT_ASC ? ",\"dir\":\"asc\"" : ",\"dir\":\"desc\"");

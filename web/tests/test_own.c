@@ -7,11 +7,14 @@
  * Absence assertions, each seen red under the mutation named beside it
  * and restored. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "web_assets.h"
 #include "web_jsonl.h"
+#include "web_live.h"
 #include "web_own.h"
+#include "web_routes.h"
 #include "wtest.h"
 
 static web_own_t O;
@@ -20,6 +23,11 @@ static web_jrec_t R;
 static void feed(const char *line) {
     WT_EQ(web_jl_parse(line, strlen(line), &R), WEB_JL_OK);
     web_own_record(&O, &R, 1000);
+}
+
+static void feed_at(const char *line, long long ms) {
+    WT_EQ(web_jl_parse(line, strlen(line), &R), WEB_JL_OK);
+    web_own_record(&O, &R, ms);
 }
 
 static int inited;
@@ -163,12 +171,66 @@ static void test_own_page(void) {
     WT_LACKS(p, "in neither sloth.db nor the stream");
 }
 
+/* #234: a live record naming the joined network is kept out of the
+ * recent list under Monitor and marked "own" on the event stream (the
+ * page drops it there); Hybrid keeps it; an alert about the network is
+ * never marked (owner ruling 2026-11-19). Seen red with the ring's
+ * Monitor skip removed. */
+static void test_own_live(void) {
+    fresh();
+    web_live_t *l = calloc(1, sizeof(*l));
+    WT_ASSERT(l != NULL);
+    if (!l) return;
+    web_live_init(l, "unix:/x");
+    const long long t0 = 5000000;
+    feed_at("{\"type\":\"wifi_sta\",\"ts\":1,\"mac\":\"0a:00:00:00:00:01\"}", t0);
+    feed_at("{\"type\":\"wifi_ap\",\"ts\":1,\"bssid\":\"0a:00:00:00:00:01\",\"ssid\":\"HomeNet\"}", t0);
+    static const char *const L[] = {
+        "{\"type\":\"beacon\",\"ts\":2,\"bssid\":\"0a:00:00:00:00:01\",\"ssid\":\"HomeNet\"}",
+        "{\"type\":\"probe_client\",\"ts\":2,\"mac\":\"02:11:22:33:44:55\",\"ssid\":\"HomeNet\"}",
+        "{\"type\":\"beacon\",\"ts\":2,\"bssid\":\"0a:00:00:00:00:09\",\"ssid\":\"CafeFree\"}",
+        "{\"type\":\"alert\",\"ts\":2,\"ty\":5,\"sev\":2,\"key\":\"EVIL_TWIN:HomeNet\","
+        "\"bssid\":\"0a:00:00:00:00:01\",\"ssid\":\"HomeNet\",\"msg\":\"twin\"}",
+    };
+    for (size_t i = 0; i < sizeof(L) / sizeof(L[0]); i++) {
+        WT_EQ(web_jl_parse(L[i], strlen(L[i]), &R), WEB_JL_OK);
+        web_live_apply(l, &R, t0 + 1);
+    }
+    WT_EQ(l->ring[0].own, 1);
+    WT_EQ(l->ring[1].own, 1);
+    WT_EQ(l->ring[2].own, 0);
+    WT_EQ(l->ring[3].own, 0);
+    char ev[8192];
+    WT_ASSERT(web_sse_record(ev, sizeof(ev), &l->ring[0]) > 0);
+    WT_HAS(ev, "\"own\":true}");
+    WT_ASSERT(web_sse_record(ev, sizeof(ev), &l->ring[2]) > 0);
+    WT_LACKS(ev, "\"own\"");
+    static char out[1 << 18];
+    web_scope_ctx_t sc;
+    memset(&sc, 0, sizeof(sc));
+    sc.scope = WEB_SCOPE_MONITOR;
+    sc.given = 1;
+    WT_ASSERT(web_live_json_scoped(l, &sc, out, sizeof(out), t0 + 2) > 0);
+    WT_LACKS(out, "0a:00:00:00:00:01 ");
+    WT_LACKS(out, "\"seq\":1,");
+    WT_LACKS(out, "\"seq\":2,");
+    WT_HAS(out, "\"seq\":3,");
+    sc.scope = WEB_SCOPE_HYBRID;
+    WT_ASSERT(web_live_json_scoped(l, &sc, out, sizeof(out), t0 + 2) > 0);
+    WT_HAS(out, "\"seq\":1,");
+    WT_HAS(out, "\"seq\":2,");
+    web_live_destroy(l);
+    free(l);
+    web_own_bind(NULL);
+}
+
 void run_own_tests(void) {
     WT_RUN(test_own_not_known);
     WT_RUN(test_own_answers);
     WT_RUN(test_own_empty_roster);
     WT_RUN(test_own_malformed);
     WT_RUN(test_own_not_utf8);
+    WT_RUN(test_own_live);
     WT_RUN(test_own_page);
     web_own_bind(NULL);
     if (inited) web_own_destroy(&O);

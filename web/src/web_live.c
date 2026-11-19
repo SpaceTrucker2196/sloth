@@ -1,4 +1,5 @@
 #include "web_live.h"
+#include "web_own.h"
 #include "web_pcapdir.h"
 
 #include <stdio.h>
@@ -827,6 +828,17 @@ void web_live_apply(web_live_t *l, const web_jrec_t *r, long long now_ms) {
     const char *t = web_jl_str(r, "type");
     long long ts = web_jl_int(r, "ts", 0);
     if (!t) return;    /* the decoder refuses such a line; belt and braces */
+    /* Does it name the managed card's joined network (#234, web_own.h)?
+     * Read before the live lock, and never for an alert: alerts about
+     * the own network stay in Monitor (owner ruling 2026-11-19). */
+    int own = 0;
+    if (strcmp(t, "alert") && strcmp(t, "wifi_sta") && strcmp(t, "wifi_ap")) {
+        web_own_join_t *j = malloc(sizeof(*j));
+        if (j) {
+            own = web_own_join_at(j, now_ms) && web_own_join_rec(j, r);
+            free(j);
+        }
+    }
     pthread_mutex_lock(&l->mu);
     l->lines++;
     l->records++;
@@ -869,6 +881,7 @@ void web_live_apply(web_live_t *l, const web_jrec_t *r, long long now_ms) {
     e->seq = l->seq;
     e->ts = ts;
     e->sc = sc;
+    e->own = own && (sc & WEB_SC_M) && !is_alert;
     snprintf(e->type, sizeof(e->type), "%s", t);
     summarise(r, is_alert || !strcmp(t, "alert"), e->text, WEB_LIVE_TEXT_MAX);
     e->text_m[0] = '\0';
@@ -1409,6 +1422,8 @@ size_t web_live_json_scoped(web_live_t *l, const web_scope_ctx_t *sc,
     for (unsigned long long q = lo; hi && q <= hi; q++) {
         const web_live_rec_t *e = &l->ring[(q - 1) % WEB_LIVE_RING];
         if (scoped && !web_scope_pass(sc->scope, e->sc)) continue;
+        /* The joined network's rows, under Monitor (#234). */
+        if (e->own && sc->scope == WEB_SCOPE_MONITOR) continue;
         if (nr++) web_jw_raw(&w, ",");
         web_jw_raw(&w, "{\"seq\":"); web_jw_int(&w, (long long)e->seq);
         web_jw_raw(&w, ",\"type\":"); web_jw_str(&w, e->type);

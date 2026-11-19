@@ -15,11 +15,11 @@ row's a `text_m` line).
 **Sources**: `web/src/web_scope.h`, `web/src/web_scope.c`,
 `web/src/web_routes.c`, `web/src/web_live.c`, `web/src/web_query.c`,
 `web/src/web_slothdb.c`, `web/src/web_metrics.c`, `web/ui/app.js`,
-`web/tests/test_scope.c`, `src/jsonl.c` (`sensor_health`),
+`web/tests/test_scope.c`, `web/src/web_own.c` and `web/tests/test_own.c` (the joined network, #234), `src/jsonl.c` (`sensor_health`),
 `src/device_risk.c`, `include/sloth.h` (`DEV_SRC_*`, `CAM_SIG_*`),
 `include/sloth_alerts.def`, owner request 2026-10-26.
 
-**Last updated**: 2026-11-11 (the Probes view: Monitor's, empty under Local). 2026-11-11 (an SSID's detail: Monitor's, out of scope under Local). 2026-11-06 (the Radar tab under Local: satellites only, said in its header). 2026-11-03 (the four GNSS alerts in every scope, as their records are). 2026-11-01 (the BLE view: Monitor's and Hybrid's,
+**Last updated**: 2026-11-19 (#234: the joined network hidden under Monitor, shown in Hybrid; alerts kept). 2026-11-11 (the Probes view: Monitor's, empty under Local). 2026-11-11 (an SSID's detail: Monitor's, out of scope under Local). 2026-11-06 (the Radar tab under Local: satellites only, said in its header). 2026-11-03 (the four GNSS alerts in every scope, as their records are). 2026-11-01 (the BLE view: Monitor's and Hybrid's,
 `out_of_scope` under Local), 2026-10-27 (the verify pass: top hosts, `THREAT_IP`,
 `BEACONING` and `host.*` from the `/proc` socket table stay Local on a
 radio, `/api/metrics` counts a scope's own keys, Records and Health drop
@@ -176,6 +176,44 @@ The query language (`vendor:`, `ip:`, `ssid:`, `seen:`, `risk:`,
 `src:`, `has:`, `pass:latest`, sorts) runs over the scope's columns: an
 address term matches nothing under Monitor, an SSID term nothing under
 Local, `pass:latest` is the latest pass's devices of the scope.
+
+## The joined network: Hybrid only (#234)
+
+Owner request 2026-11-19: "when in monitor mode filter out everything
+for the network we are associated with ... only show devices, clients,
+aps etc when in hybrid mode". Under **Monitor** the network the sensor's
+managed card is joined to is left out of the inventory; **Hybrid** shows
+it as before; Local is unchanged.
+
+- **Which network.** The one the card is joined to now, learned from
+  the stream, never configured (`web/src/web_own.c`): the newest
+  `wifi_sta` names the AP (on a managed interface the station dump's
+  one station is the AP), `wifi_ap` and `beacon` give its SSID and every
+  BSSID that advertises it, and `assoc`, `eapol`, `wifi_assoc_req` and
+  `btm_request` give the clients of those BSSIDs. The `wifi_sta` is
+  Local provenance, read only to filter and never shown under Monitor.
+  A `wifi_sta` older than six minutes (sloth's records are change-only
+  with a five-minute heartbeat) is no longer a joined network, so the
+  filter follows the card to another network and lifts when it leaves.
+  A slothweb with no live stream (a copied sloth.db) knows no joined
+  network and hides nothing.
+- **What is hidden.** The AP table (`/api/wifi/aps`), the deauth
+  timeline's rows (`/api/wifi/deauth`), the channel mix's named
+  transmitters (`/api/wifi/channels?mix=1`: their frames stay in the
+  channel's `other`, so its load is unchanged), the Probes view's SSID
+  row and the clients of the network (`/api/probes/ssids`,
+  `/api/probes/clients`), the SSID's detail (`/api/wifi/ssid` answers
+  `out_of_scope` with `own_network: true`), the device rows
+  (`/api/devices`, `/api/devices/arrivals`), the WiFi radar's marks
+  (`/api/radar`), and the live record list (`/api/live` `recent`, and
+  the `/events` `record` event carries `"own":true`, which the page
+  drops under Monitor). Each list answer adds `own_hidden`, the rows it
+  passed over, only while a joined network is known; a paged list's
+  `next_offset` counts the rows read, so the next page starts after
+  them.
+- **What is not.** Alerts (owner ruling 2026-11-19 on #234: an attack on
+  the own network is the reason to watch it), so `EVIL_TWIN` on the
+  own SSID or `DEAUTH_FLOOD` against its AP still show under Monitor.
 
 ## Per view
 

@@ -294,6 +294,134 @@ static void test_probe_clients(void) {
     db_down();
 }
 
+static long long mono_now(void) {
+    struct timespec tp;
+    clock_gettime(CLOCK_MONOTONIC, &tp);
+    return (long long)tp.tv_sec * 1000 + tp.tv_nsec / 1000000;
+}
+
+static void own_feed(web_own_t *o, const char *line, long long ms) {
+    web_jrec_t *rec = malloc(sizeof(*rec));
+    WT_ASSERT(rec != NULL);
+    if (!rec) return;
+    WT_EQ(web_jl_parse(line, strlen(line), rec), WEB_JL_OK);
+    web_own_record(o, rec, ms);
+    free(rec);
+}
+
+/* #234: under Monitor the managed card's joined network is left out of
+ * the inventory (its APs, its clients, the probes for it, its SSID's
+ * detail, its device rows); Hybrid shows it all. The network is learned
+ * from the stream: wifi_sta names the AP, wifi_ap its SSID, a beacon the
+ * SSID's other BSSID, an assoc the client of that one.
+ *
+ * Seen red, each restored: web_own_join_for() not checking the scope
+ * (Hybrid lost the rows); the AP loop's next_offset back to offset +
+ * shown (the second page repeated a row). */
+static void test_joined_network_hidden(void) {
+    db_up(1);
+    WT_EQ(sdb_exec(g_db,
+        "INSERT INTO beacon_aps (bssid,ssid,signal_dbm,channel,first_seen,last_seen) VALUES"
+        " ('0a:00:00:00:00:01','HomeNet',-50,6,1,2), ('0a:00:00:00:00:02','HomeNet',-41,6,1,3),"
+        " ('0a:00:00:00:00:03','CafeFree',-60,11,1,4);"), 0);
+    static web_own_t own;
+    WT_EQ(web_own_init(&own), 0);
+    web_own_bind(&own);
+    long long now = mono_now();
+    /* Not joined yet: Monitor shows HomeNet like any other network. */
+    WT_EQ(route(&H, "/api/probes/ssids", "scope=monitor"), 200);
+    WT_HAS(body_of(g_out), "{\"ssid\":\"HomeNet\",");
+    WT_LACKS(body_of(g_out), "own_hidden");
+    own_feed(&own, "{\"type\":\"wifi_sta\",\"ts\":1,\"mac\":\"0A:00:00:00:00:01\","
+                   "\"signal_dbm\":-50}", now);
+    own_feed(&own, "{\"type\":\"wifi_ap\",\"ts\":1,\"bssid\":\"0a:00:00:00:00:01\","
+                   "\"ssid\":\"HomeNet\",\"signal_dbm\":-50,\"channel\":6}", now);
+    own_feed(&own, "{\"type\":\"beacon\",\"ts\":1,\"bssid\":\"0a:00:00:00:00:02\","
+                   "\"ssid\":\"HomeNet\",\"signal_dbm\":-41,\"channel\":6}", now);
+    own_feed(&own, "{\"type\":\"beacon\",\"ts\":1,\"bssid\":\"0a:00:00:00:00:03\","
+                   "\"ssid\":\"CafeFree\",\"signal_dbm\":-60,\"channel\":11}", now);
+    own_feed(&own, "{\"type\":\"assoc\",\"ts\":1,\"bssid\":\"0a:00:00:00:00:02\","
+                   "\"sta_mac\":\"da:a1:19:00:00:01\",\"ssid\":\"HomeNet\"}", now);
+
+    web_own_join_t j;
+    WT_EQ(web_own_join_at(&j, now), 1);
+    WT_EQ(j.nb, 2);
+    WT_EQ(j.nc, 1);
+    WT_EQ((int)j.ssid_len, 7);
+    WT_EQ(web_own_join_mac(&j, "0A:00:00:00:00:02"), 1);
+    WT_EQ(web_own_join_mac(&j, "0a:00:00:00:00:03"), 0);
+    WT_EQ(web_own_join_ssid(&j, "HomeNet", 7), 1);
+    WT_EQ(web_own_join_ssid(&j, "homenet", 7), 0);
+    /* Six minutes without a wifi_sta: no longer joined. */
+    WT_EQ(web_own_join_at(&j, now + WEB_OWN_JOIN_STALE_MS + 1), 0);
+    /* Only Monitor hides. */
+    web_scope_ctx_t sc;
+    memset(&sc, 0, sizeof(sc));
+    WT_EQ(web_own_join_for(NULL, &j), 0);
+    WT_EQ(web_own_join_for(&sc, &j), 0);
+    sc.scope = WEB_SCOPE_LOCAL;
+    WT_EQ(web_own_join_for(&sc, &j), 0);
+    sc.scope = WEB_SCOPE_MONITOR;
+    WT_EQ(web_own_join_for(&sc, &j), 1);
+
+    /* The probes for it, and its client. */
+    WT_EQ(route(&H, "/api/probes/ssids", "scope=monitor"), 200);
+    const char *b = body_of(g_out);
+    WT_LACKS(b, "{\"ssid\":\"HomeNet\",");
+    WT_HAS(b, "{\"ssid\":\"CafeFree\",");
+    WT_HAS(b, "\"own_hidden\":1}");
+    WT_EQ(route(&H, "/api/probes/ssids", ""), 200);
+    WT_HAS(body_of(g_out), "{\"ssid\":\"HomeNet\",");
+    WT_LACKS(body_of(g_out), "own_hidden");
+    WT_EQ(route(&H, "/api/probes/clients", "scope=monitor"), 200);
+    WT_LACKS(body_of(g_out), "\"mac\":\"da:a1:19:00:00:01\"");
+    WT_HAS(body_of(g_out), "\"own_hidden\":1}");
+    WT_EQ(route(&H, "/api/probes/clients", "scope=hybrid"), 200);
+    WT_HAS(body_of(g_out), "\"mac\":\"da:a1:19:00:00:01\"");
+
+    /* Its APs, a page at a time: the next page starts past the rows
+     * passed over. */
+    WT_EQ(route(&H, "/api/wifi/aps", "scope=monitor"), 200);
+    b = body_of(g_out);
+    WT_LACKS(b, "0a:00:00:00:00:01");
+    WT_LACKS(b, "0a:00:00:00:00:02");
+    WT_HAS(b, "\"bssid\":\"0a:00:00:00:00:03\"");
+    WT_HAS(b, "\"own_hidden\":2}");
+    WT_EQ(route(&H, "/api/wifi/aps", "scope=monitor&limit=2"), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"bssid\":\"0a:00:00:00:00:03\"");
+    WT_HAS(b, "\"count\":1,\"more\":true,\"next_offset\":2,\"own_hidden\":1}");
+    WT_EQ(route(&H, "/api/wifi/aps", ""), 200);
+    WT_HAS(body_of(g_out), "\"bssid\":\"0a:00:00:00:00:01\"");
+    WT_HAS(body_of(g_out), "\"bssid\":\"0a:00:00:00:00:02\"");
+
+    /* Its SSID's detail says so, rather than reading as nothing heard. */
+    WT_EQ(route(&H, "/api/wifi/ssid", "ssid=SG9tZU5ldA&scope=monitor"), 200);
+    WT_HAS(body_of(g_out), "\"out_of_scope\":true,\"own_network\":true,");
+    WT_LACKS(body_of(g_out), "0a:00:00:00:00:0");
+    WT_EQ(route(&H, "/api/wifi/ssid", "ssid=Q2FmZUZyZWU&scope=monitor"), 200);
+    WT_LACKS(body_of(g_out), "own_network");
+    WT_EQ(route(&H, "/api/wifi/ssid", "ssid=SG9tZU5ldA"), 200);
+    WT_LACKS(body_of(g_out), "own_network");
+
+    /* Its device rows. */
+    WT_EQ(route(&H, "/api/devices", "scope=monitor"), 200);
+    WT_LACKS(body_of(g_out), "\"mac\":\"da:a1:19:00:00:01\"");
+    WT_HAS(body_of(g_out), "\"own_hidden\":");
+    WT_EQ(route(&H, "/api/devices", ""), 200);
+    WT_HAS(body_of(g_out), "\"mac\":\"da:a1:19:00:00:01\"");
+
+    /* The card joins another network: HomeNet is shown again. */
+    own_feed(&own, "{\"type\":\"wifi_sta\",\"ts\":2,\"mac\":\"0a:00:00:00:00:03\"}", now + 1);
+    WT_EQ(route(&H, "/api/probes/ssids", "scope=monitor"), 200);
+    WT_HAS(body_of(g_out), "{\"ssid\":\"HomeNet\",");
+    WT_LACKS(body_of(g_out), "{\"ssid\":\"CafeFree\",");
+
+    web_own_bind(NULL);
+    web_own_destroy(&own);
+    db_down();
+}
+
 /* The similarity on a set worked by hand. Six stations, N = 6, U = 2:
  *   common  all six      df 6  w 0
  *   homeA   c1 c2        df 2  w ln 3 = 1.0986
@@ -713,6 +841,7 @@ void run_probes_tests(void) {
     WT_RUN(test_routes_without_sqlite);
 #else
     WT_RUN(test_probe_clients);
+    WT_RUN(test_joined_network_hidden);
     WT_RUN(test_shared_similarity);
     WT_RUN(test_large_file_inside_the_budget);
 #endif

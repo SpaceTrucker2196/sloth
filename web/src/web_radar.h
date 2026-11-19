@@ -44,6 +44,8 @@
 #ifndef SLOTHWEB_RADAR_H
 #define SLOTHWEB_RADAR_H
 
+#include "web_scope.h"
+
 #include <stddef.h>
 
 #include "web_ble.h"
@@ -57,9 +59,11 @@
 /* The body into body (cap bytes), *status set; 0, or -1 when even an
  * error did not fit. none_here (Local): the query is checked and a 200
  * of length 0 answered, for the router's out_of_scope body. b and f
- * may each be NULL. */
+ * may each be NULL. sc: the request's scope; under Monitor the managed
+ * card's joined network is not drawn (#234, web_own.h). */
 int    web_radar_route(web_ble_t *b, web_frrs_t *f, const char *query, long long now_s,
-                       int none_here, char *body, size_t cap, size_t *len, int *status);
+                       int none_here, const web_scope_ctx_t *sc,
+                       char *body, size_t cap, size_t *len, int *status);
 
 /* The Local answer's body: its length, 0 when it did not fit. */
 size_t web_radar_out_of_scope_json(char *body, size_t cap);

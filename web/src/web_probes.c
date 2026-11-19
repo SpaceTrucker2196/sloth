@@ -108,9 +108,20 @@ int web_probes_clients_route(const web_m4_t *m, const char *query, long long now
         return -1;
     }
     sqlite3_bind_int64(st, 1, since);
+    /* Under Monitor the joined network's clients are not rows (#234,
+     * web_own.h): neither shown nor counted. */
+    web_own_join_t own;
+    web_own_join_for(m->sc, &own);
     int nr = 0, rc;
     long long total = 0;
     while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        if (own.have) {
+            const unsigned char *mt = sqlite3_column_text(st, 0);
+            if (mt && web_own_join_mac(&own, (const char *)mt)) {
+                own.hidden++;
+                continue;
+            }
+        }
         if (total >= offset && nr < limit) {
             if (!cmac(st, 0, rows[nr].mac)) continue;
             nr++;
@@ -324,6 +335,7 @@ int web_probes_clients_route(const web_m4_t *m, const char *query, long long now
     web_jw_raw(&w, ",\"more\":");     jw_bool(&w, more);
     web_jw_raw(&w, ",\"next_offset\":");
     if (more) web_jw_int(&w, offset + shown); else web_jw_raw(&w, "null");
+    web_own_join_jw(&w, &own);
     web_jw_raw(&w, "}\n");
     if (w.overflow) return -1;
     *len = w.len;
@@ -404,9 +416,19 @@ int web_probes_ssids_route(const web_m4_t *m, const char *query, long long now_s
     web_jw_raw(&w, ",\"rows\":[");
     int shown = 0, rc;
     long long total = 0;
+    /* Under Monitor the joined network's SSID is not a row (#234). */
+    web_own_join_t own;
+    web_own_join_for(m->sc, &own);
     while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
-        if (total++ < offset || shown >= limit || w.len + PS_ROW_MAX + 256 > cap) continue;
         char s[WEB_SDB_TEXT_MAX + 1];
+        if (own.have) {
+            ctext(st, 0, s, WEB_SDB_TEXT_MAX);
+            if (web_own_join_ssid(&own, s, strlen(s))) {
+                own.hidden++;
+                continue;
+            }
+        }
+        if (total++ < offset || shown >= limit || w.len + PS_ROW_MAX + 256 > cap) continue;
         ctext(st, 0, s, WEB_SDB_TEXT_MAX);
         long long df = sqlite3_column_int64(st, 1), aps = 0, sig = 0;
         int has_sig = 0;
@@ -451,6 +473,7 @@ int web_probes_ssids_route(const web_m4_t *m, const char *query, long long now_s
     web_jw_raw(&w, ",\"more\":");     jw_bool(&w, more);
     web_jw_raw(&w, ",\"next_offset\":");
     if (more) web_jw_int(&w, offset + shown); else web_jw_raw(&w, "null");
+    web_own_join_jw(&w, &own);
     web_jw_raw(&w, "}\n");
     if (w.overflow) return -1;
     *len = w.len;

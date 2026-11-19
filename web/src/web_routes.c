@@ -1503,7 +1503,8 @@ static int route_radar(const web_req_t *rq, const web_health_t *h,
         bl = web_series_error_json("query_too_long", body, cap);
         rc = bl ? 0 : -1;
     } else {
-        rc = web_radar_route(h->ble, f, rq->query, h->wall_s, none_here, body, cap, &bl, &status);
+        rc = web_radar_route(h->ble, f, rq->query, h->wall_s, none_here, h->sc, body, cap,
+                             &bl, &status);
         if (rc == 0 && none_here && status == 200) bl = web_radar_out_of_scope_json(body, cap);
     }
     if (rc != 0 || bl == 0) {
@@ -2476,6 +2477,9 @@ size_t web_sse_record(char *out, size_t outsz, const web_live_rec_t *e) {
     /* Its capture-scope tag (web_scope.h): the page's ticker keeps the
      * records of the scope it shows. */
     web_jw_raw(&w, ",\"sc\":");   web_jw_int(&w, e->sc);
+    /* The joined network's rows (#234): the page leaves them out under
+     * Monitor. Only when set, so every other record is as it was. */
+    if (e->own) web_jw_raw(&w, ",\"own\":true");
     /* A device row's Monitor line (web_live_rec_t), which the page shows
      * in place of text under Monitor. The stream goes to every page
      * whatever its scope, so both lines travel; the scope is a view of
