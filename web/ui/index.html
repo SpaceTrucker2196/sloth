@@ -34,6 +34,7 @@
 @include fleet.css
 @include fleetid.css
 @include chan.css
+@include info.css
 @include greenbar.css
 </style>
 <script>
@@ -55,6 +56,7 @@
 @include incident.js
 @include rfstream.js
 @include iso.js
+@include info.js
 @include app.js
 @include location.js
 @include gnss.js
@@ -63,6 +65,7 @@
 @include aprs.js
 @include rtl433.js
 @include victron.js
+@include hambands.js
 @include spectrum.js
 @include camera.js
 @include bledev.js
@@ -562,6 +565,12 @@
       <div class="sub" id="spec-plot-note">each row is one run's max-hold per 100 kHz (pooled to wider bins in the long ranges so the page stays small), the newest in front; in 1 h to 24 h the rows sit at their time, a hatched stretch marked on the time axis is where runs are missing. Until runs are recorded, last 3 scans shows the latest run's own sweeps. Runs are recorded every 5 minutes when the operator enables sloth-sdrsweep-auto.timer. Drag across the plot to zoom, double-click for the full span. The strip under the axis is the US frequency allocation table (47 CFR 2.106), simplified, for orientation only. A label marked ? sits on a multiple of the receiver's 24 MHz clock (a guess, dashed); one marked int matched a spur the receiver shows with no antenna (dim). Hover for the level, its SNR over that row's floor and the band.</div>
     </section>
     <section class="panel">
+      <div class="label">amateur bands <span class="sub" id="ham-note"></span></div>
+      <div class="ham-key" id="ham-key"></div>
+      <div class="ham-grid" id="ham-grid"></div>
+      <div class="sub">one chart per United States amateur band inside the sweep: the band plan as coloured segments (the ARRL band plan and 47 CFR 97.301 and 97.305, simplified: for orientation, not a regulatory reference), the common frequencies as dotted marks (calling frequencies and digital-mode dial frequencies: conventions, which no rule sets), the operator's own marks in the signal colour (the local repeaters: one "MHz,name" line each in the file slothweb was given with --spectrum-marks), and what the newest sweep row heard: its max-hold per bin as bars between the floor and the band's highest level in dBFS, and its peaks as stems. The sweep's bins are 100 kHz or wider, so an HF band is a handful of bars; a mark is where a signal would be, never that one is there. Hover for the frequency, its segment and the marks near it; click a chart to zoom the waterfall to the band.</div>
+    </section>
+    <section class="panel">
       <div class="label">peaks <span class="sub" id="spec-peaks-count"></span></div>
       <div class="hscroll" id="spec-peaks"></div>
       <div class="sub">found at the FFT's full resolution (about 1 kHz) across the whole run: a frame-averaged level 6 dB over its step's floor on average, or a max-hold 16 dB over it in any row; neighbours within 50 kHz are one peak. SNR in dB over the step's median floor; dBFS with a full-scale tone at 0; ROWS the sweeps it was seen in. Observation only: no row here is a finding.</div>
@@ -599,22 +608,6 @@
    </div>
    <div id="v-wifi" hidden>
     <section class="panel scope-empty" id="w-scope-empty"><div class="label">WiFi</div><p>Under Local this view is the managed Wi-Fi card's own: its scan and its link, below, Wi-Fi through the host's own network. The passive monitor radio's beacons, probes, associations, deauths and channel mix are not Local's, so they are not drawn; switch to Monitor or Hybrid to see them.</p></section>
-    <section class="panel card-local">
-      <div class="label">the card's link <span class="sub" id="w-sta-count"></span> <span class="dt-tools" id="w-sta-tools"></span></div>
-      <div class="hscroll" id="w-sta-box">
-      <div class="dhead" id="w-sta-head"></div>
-      <div id="w-sta"></div>
-      </div>
-      <div class="sub">the managed card's nl80211 station dump (sloth.db wifi_stas): the AP it is associated with, as the card reports it; nothing is sent</div>
-    </section>
-    <section class="panel card-local">
-      <div class="label">the card's scan <span class="sub" id="w-scan-count"></span> <span class="dt-tools" id="w-scan-tools"></span></div>
-      <div class="hscroll" id="w-scan-box">
-      <div class="dhead" id="w-scan-head"></div>
-      <div id="w-scan"></div>
-      </div>
-      <div class="sub">the access points the managed card's own scan found (sloth.db wifi_aps), newest first; status: the BSS the card is on now</div>
-    </section>
     <section class="panel controls" aria-label="wifi controls">
       <label title="the channel waterfall drawn isometrically, as the Spectrum tab draws its sweep; off: the flat grid below"><input type="checkbox" id="w-iso" checked> isometric</label>
       <label>channels <select id="w-grid">
@@ -643,11 +636,36 @@
       <canvas class="g3drill" id="w-drill" aria-label="the picked column: each channel's five busiest transmitters, stacked by their share of its frames"></canvas>
       </div>
       <div class="iso-tip" id="w-iso-tip" role="tooltip" hidden></div>
-      <div class="iso-key" id="w-iso-key" role="group" aria-label="colour key: bands, channels and SSIDs" hidden></div>
-      <div class="sub" id="w-iso-sub" hidden>isometric: the channels across, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), each band named under its channels; the time cells receding up and to the right, the newest in front; a column's height its cell in the metric above, on one scale for every channel, 0 to the window's largest cell (the level axis at left). Point at a column for its channel, time and value; click or tap it, or arrow to it (left and right: channels, up: older, down: newer), and the list below names the cell's five busiest transmitters. Untick isometric for the horizon strips or the stacked grid. Colour says which, the height how much: each channel is its own colour, the same as in every list on the page (2.4 GHz cool, 5 GHz warm, 6 GHz violet), on the strip under the channel names and each column's top edge, a band's name in its first channel's; the key groups the channels under their band's structure (2.4 GHz: 1, 6 and 11 and the overlapping rest; 5 GHz: UNII-1, UNII-2A, UNII-2C and UNII-3, the two DFS sub-bands dashed on the strip, and "other" for the rest (UNII-2B, UNII-4); 6 GHz: the preferred scanning channels and the rest); a column's body is its cell's five busiest transmitters stacked by share, an AP in its SSID's colour (the same on every tab), a client in its MAC's, the rest and a cell with no transmitter detail in the channel's colour. The key under the picture names each step and its channels; press an SSID there to fade every other one to 70 percent transparent, again to show all. The clients lane under the channel names: a diamond under each channel the window's clients were heard on, larger for more of them, their number beside it where it fits, in the colour of the busiest one's network's SSID (its MAC's when sloth knows no AP for it), and a tick at the foot of each column whose cell named a client. A client is a station probing on that channel (sloth reports its probe requests, not its data frames), and it is named only in a bucket where it was one of the five busiest transmitters, so a count is at least that many. The key's Clients group names the busiest (vendor, the MAC's last three octets, randomised for a locally administered MAC, and its network); press one to trace its channels in their colours, outline the cells it was named in and fade every other cell to 70 percent transparent, again to show all. An SSID and a client are not highlighted together: pressing one drops the other.</div>
+      <div class="sub" id="w-iso-sub" hidden>isometric: the channels across, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), each band named under its channels; the time cells receding up and to the right, the newest in front; a column's height its cell in the metric above, on one scale for every channel, 0 to the window's largest cell (the level axis at left). Point at a column for its channel, time and value; click or tap it, or arrow to it (left and right: channels, up: older, down: newer), and the list below names the cell's five busiest transmitters. Untick isometric for the horizon strips or the stacked grid. Colour says which, the height how much: each channel is its own colour, the same as in every list on the page (2.4 GHz cool, 5 GHz warm, 6 GHz violet), on the strip under the channel names and each column's top edge, a band's name in its first channel's; the channels fall under their band's structure (2.4 GHz: 1, 6 and 11 and the overlapping rest; 5 GHz: UNII-1, UNII-2A, UNII-2C and UNII-3, the two DFS sub-bands dashed on the strip, and "other" for the rest (UNII-2B, UNII-4); 6 GHz: the preferred scanning channels and the rest); a column's body is its cell's five busiest transmitters stacked by share, an AP in its SSID's colour (the same on every tab), a client in its MAC's, the rest and a cell with no transmitter detail in the channel's colour. The card's scan table below is the key: press a row's key button to fade every other SSID to 70 percent transparent, again to show all. The clients lane under the channel names: a diamond under each channel the window's clients were heard on, larger for more of them, their number beside it where it fits, in the colour of the busiest one's network's SSID (its MAC's when sloth knows no AP for it), and a tick at the foot of each column whose cell named a client. A client is a station probing on that channel (sloth reports its probe requests, not its data frames), and it is named only in a bucket where it was one of the five busiest transmitters, so a count is at least that many.</div>
       <div class="sub" id="w-hz-sub">rows: every channel seen in 30 days, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), a rule between bands. A strip is two bands laid over one another, the lighter its first half, the darker its second: APs per channel from 0 to the channel's own 30 d largest; control frames as z against the channel's hour-of-week baseline ("z" after the key), the second band above the sensitivity's sd and in the heat colour, flat while the channel is normal (a channel with no baseline yet: from 0 to its own 30 d busiest, per minute). A grey cell: warming, a line along the foot: observed and quiet, nothing: not observed, a mark along the top: past the scale. Point at, tap or arrow to a column: beside the strips, that column's five busiest transmitters on each channel, stacked in their TUI colours; the list below names the picked cell's.</div>
       <div class="sub" id="w-mx-sub" hidden>rows: channels, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), a rule between bands. A cell: its five busiest transmitters, each band its share of the cell's frames (an AP in its SSID's colour, a client in its MAC's, as the TUI colours them; a client's probes all on the channel of its latest one, which carries no band, so a 6 GHz client reads as the 2.4 or 5 GHz channel of that number), grey the rest, on the monitor radio's ground; the strip at a row's left: its busyness in the metric above, the heat ramp against the busiest row; a dimmed heat cell: no transmitter detail held for it. Point at, tap or arrow to a cell.</div>
       <div class="mixd" id="w-mix" aria-live="polite"></div>
+    </section>
+    <section class="panel card-local">
+      <div class="label">the card's scan <span class="sub" id="w-scan-count"></span> <span class="dt-tools" id="w-scan-tools"></span></div>
+      <div class="hscroll" id="w-scan-box">
+      <div class="scan2">
+      <div class="scan-col">
+      <div class="scan-band">2.4 GHz <span class="sub" id="w-scan-n24"></span></div>
+      <div class="dhead" id="w-scan-head"></div>
+      <div id="w-scan"></div>
+      </div>
+      <div class="scan-col">
+      <div class="scan-band">5 and 6 GHz <span class="sub" id="w-scan-n5"></span></div>
+      <div class="dhead dt-row" id="w-scan-head5" aria-hidden="true"></div>
+      <div id="w-scan5"></div>
+      </div>
+      </div>
+      </div>
+      <div class="sub">the access points the managed card's own scan found (sloth.db wifi_aps), newest first, those last seen in the window the channels panel shows: 2.4 GHz (channels 1 to 14) at left, 5 and 6 GHz at right; status: the BSS the card is on now. This table is the isometric waterfall's key: a row's key button is the colour the waterfall stacks its SSID in, and fades every other SSID until pressed again; a row with no colour is an SSID no transmitter the monitor radio named in the window carries.</div>
+    </section>
+    <section class="panel card-local">
+      <div class="label">the card's link <span class="sub" id="w-sta-count"></span> <span class="dt-tools" id="w-sta-tools"></span></div>
+      <div class="hscroll" id="w-sta-box">
+      <div class="dhead" id="w-sta-head"></div>
+      <div id="w-sta"></div>
+      </div>
+      <div class="sub">the managed card's nl80211 station dump (sloth.db wifi_stas): the AP it is associated with, as the card reports it; nothing is sent</div>
     </section>
     <section class="panel">
       <div class="label">emitters: access points <span class="sub" id="w-aps-count"></span> <span class="sub dbage" id="w-dbage"></span> <span class="dt-tools" id="w-aps-tools"></span></div>

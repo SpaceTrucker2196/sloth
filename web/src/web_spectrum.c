@@ -14,8 +14,13 @@
 #include "web_jsonl.h"
 
 void web_spectrum_init(web_spectrum_t *sp, const char *dir, const char *request) {
+    sp->marks[0] = '\0';
     snprintf(sp->dir, sizeof(sp->dir), "%s", dir ? dir : WEB_SPECTRUM_DIR);
     snprintf(sp->request, sizeof(sp->request), "%s", request ? request : WEB_SPECTRUM_REQUEST);
+}
+
+void web_spectrum_set_marks(web_spectrum_t *sp, const char *path) {
+    snprintf(sp->marks, sizeof(sp->marks), "%s", path ? path : "");
 }
 
 /* ── the strict reader ── */
@@ -850,6 +855,94 @@ static void status_json(web_jw_t *w, const st_t *s, long long now_s) {
     }
 }
 
+/* ── the operator's marks ── */
+
+int web_spectrum_mark_line(const char *line, size_t n, long long *hz, char *name, size_t cap) {
+    size_t i = 0;
+    while (n && (line[n - 1] == '\r' || line[n - 1] == ' ' || line[n - 1] == '\t')) n--;
+    while (i < n && (line[i] == ' ' || line[i] == '\t')) i++;
+    if (i == n || line[i] == '#') return 0;
+    /* The frequency: digits, at most one point, at most six decimals,
+     * kept as an integer so no float rounds a channel. */
+    long long whole = 0, frac = 0;
+    int nd = 0, nf = 0, point = 0;
+    for (; i < n && line[i] != ','; i++) {
+        char ch = line[i];
+        if (ch == '.' && !point) { point = 1; continue; }
+        if (ch < '0' || ch > '9') return -1;
+        if (!point) {
+            if (++nd > 5) return -1;
+            whole = whole * 10 + (ch - '0');
+        } else {
+            if (++nf > 6) return -1;
+            frac = frac * 10 + (ch - '0');
+        }
+    }
+    if (!nd || (point && !nf) || i == n) return -1;
+    for (; nf < 6; nf++) frac *= 10;
+    long long f = whole * 1000000LL + frac;
+    if (f < 1000 || f > 30000000000LL) return -1;
+    i++;
+    while (i < n && (line[i] == ' ' || line[i] == '\t')) i++;
+    size_t len = n - i;
+    if (!len || len > WEB_SPECTRUM_MARK_NAME || len + 1 > cap) return -1;
+    for (size_t k = 0; k < len; k++)
+        if ((unsigned char)line[i + k] < 0x20 || (unsigned char)line[i + k] > 0x7e) return -1;
+    memcpy(name, line + i, len);
+    name[len] = '\0';
+    *hz = f;
+    return 1;
+}
+
+static int marks_json(const web_spectrum_t *sp, char **body, size_t *len) {
+    size_t cap = 256 + (size_t)WEB_SPECTRUM_MARKS_MAX * (64 + WEB_SPECTRUM_MARK_NAME * WEB_JW_EXPAND);
+    char *out = malloc(cap);
+    if (!out) return -1;
+    web_jw_t w;
+    web_jw_init(&w, out, cap);
+    web_jw_raw(&w, "{\"configured\":");
+    web_jw_raw(&w, sp->marks[0] ? "true" : "false");
+    web_jw_raw(&w, ",\"marks\":[");
+    int n = 0, skipped = 0;
+    const char *why = NULL;
+    if (sp->marks[0]) {
+        size_t tl = 0;
+        char *text = slurp(sp->marks, WEB_SPECTRUM_MARKS_MAX_BYTES, &tl, &why);
+        if (text) {
+            why = NULL;
+            for (size_t a = 0; a < tl; ) {
+                size_t b = a;
+                while (b < tl && text[b] != '\n') b++;
+                long long hz = 0;
+                char name[WEB_SPECTRUM_MARK_NAME + 1];
+                int rc = web_spectrum_mark_line(text + a, b - a, &hz, name, sizeof(name));
+                if (rc < 0 || (rc > 0 && n >= WEB_SPECTRUM_MARKS_MAX)) skipped++;
+                else if (rc > 0) {
+                    web_jw_raw(&w, n ? ",{\"f_hz\":" : "{\"f_hz\":");
+                    web_jw_int(&w, hz);
+                    web_jw_raw(&w, ",\"label\":");
+                    web_jw_str(&w, name);
+                    web_jw_raw(&w, "}");
+                    n++;
+                }
+                a = b + 1;
+            }
+            free(text);
+        }
+    }
+    web_jw_raw(&w, "],\"skipped\":");
+    web_jw_int(&w, skipped);
+    if (why) {
+        web_jw_raw(&w, ",\"error\":");
+        web_jw_str(&w, why);
+    }
+    web_jw_raw(&w, "}\n");
+    if (w.overflow) { free(out); return -1; }
+    *body = out;
+    *len = w.len;
+    return 0;
+}
+
 int web_spectrum_get(const web_spectrum_t *sp, const char *query, long long now_s,
                      int out_of_scope, char **body, size_t *len, int *status) {
     *body = NULL;
@@ -866,6 +959,9 @@ int web_spectrum_get(const web_spectrum_t *sp, const char *query, long long now_
         } else if (!strcmp(query, "status=1")) {
             status_only = 1;
             err = NULL;
+        } else if (!strcmp(query, "marks=1")) {
+            *status = 200;
+            return marks_json(sp, body, len);
         }
         if (err) {
             size_t el = strlen(err);

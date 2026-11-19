@@ -221,7 +221,6 @@ static const char CHANNEL_GRID[] =
         "    $(\"w-hz-sub\").hidden = iso || !hz;\n"
         "    $(\"w-mx-sub\").hidden = iso || hz;\n"
         "    $(\"w-iso-sub\").hidden = !iso;\n"
-        "    $(\"w-iso-key\").hidden = !iso;\n"
         "    if (!iso) { WF.ist.hover = null; $(\"w-iso-tip\").hidden = true; }\n"
         "    if (iso) { isoGrid(); return; }\n"
         "    if (hz) horizonGrid(); else mixGrid();\n"
@@ -592,23 +591,12 @@ static const char W_ISO_SEGS[] =
         "    return out.length ? out : [{ f: 1, color: base, alpha: rest }];\n"
         "  }";
 
+/* The waterfall's key is the card's scan table (owner 2026-11-18: "this
+ * table now becomes the key to the spectrum so move the selection
+ * behavior to it and remove the existing key under the spectrum"):
+ * what it keys on, the key button whole, and the table's two columns. */
 static const char W_ISO_KEY[] =
-        "  function isoKey() {\n"
-        "    var box = $(\"w-iso-key\");\n"
-        "    while (box.firstChild) box.removeChild(box.firstChild);\n"
-        "    [\"2.4\", \"5\", \"6\"].forEach(function (b) {\n"
-        "      var grp = box.appendChild(el(\"span\", \"grp\"));\n"
-        "      grp.appendChild(el(\"span\", \"nm\", BAND_WORD[b]));\n"
-        "      CHAN_STEP[b].forEach(function (w, i) {\n"
-        "        var it = grp.appendChild(el(\"span\", \"it\"));\n"
-        "        if (b === \"5\" && (i === 1 || i === 2)) it.appendChild(el(\"span\", \"sw dfs\"));\n"
-        "        it.appendChild(el(\"span\", \"\", w));\n"
-        "        WF.rows.forEach(function (r) {\n"
-        "          var sc = r.band === b ? chanShade(r.band, r.key) : null;\n"
-        "          if (sc && sc.step === i) it.appendChild(SlothChan.chip(r.key, r.band, r.key.replace(/^6g/, \"\")));\n"
-        "        });\n"
-        "      });\n"
-        "    });\n"
+        "  function isoSsids() {\n"
         "    var by = new Map();\n"
         "    ((WF.mix && WF.mix.channels) || []).forEach(function (r) {\n"
         "      (r.cells || []).forEach(function (m) {\n"
@@ -622,45 +610,73 @@ static const char W_ISO_KEY[] =
         "        }\n"
         "      });\n"
         "    });\n"
+        "    return by;\n"
+        "  }\n"
+        "  // The SSID picked, dropped once the window no longer holds it; the\n"
+        "  // scan table drawn again so its keys say what is picked.\n"
+        "  function isoKey() {\n"
         "    // Only a loaded mix can say the SSID left: a reload clears WF.mix\n"
         "    // and the heat can land first.\n"
-        "    if (WF.hl !== null && WF.mix && !by.has(WF.hl)) WF.hl = null;\n"
-        "    var list = Array.from(by.values()).sort(function (a, b) { return b.n - a.n || (a.ssid < b.ssid ? -1 : a.ssid > b.ssid ? 1 : 0); });\n"
-        "    if (list.length) {\n"
-        "      var grp = box.appendChild(el(\"span\", \"grp\"));\n"
-        "      grp.appendChild(el(\"span\", \"nm\", \"SSIDs\"));\n"
-        "      list.slice(0, ISO_SSIDS).forEach(function (o, i) {\n"
-        "        var b = grp.appendChild(el(\"button\", \"chip\"));\n"
-        "        b.type = \"button\";\n"
-        "        b.ariaPressed = WF.hl === o.ssid ? \"true\" : \"false\";\n"
-        "        b.title = WF.hl === o.ssid ? \"show every SSID again\" : \"fade every other SSID\";\n"
-        "        var sw = el(\"span\", \"sw\");\n"
-        "        sw.style.backgroundColor = txColor(o.t);\n"
-        "        b.appendChild(sw);\n"
-        "        // the swatch the stacks' colour it keys; the name its channel's\n"
-        "        // (SlothChan.mark(): the SSID's most recently heard AP's)\n"
-        "        b.appendChild(o.ssid === \"\" ? el(\"span\", \"\", \"(hidden)\") : SlothChan.mark(el(\"span\", \"\", o.ssid), \"ssid\", o.ssid));\n"
-        "        b.addEventListener(\"click\", function () {\n"
-        "          WF.hl = WF.hl === o.ssid ? null : o.ssid;\n"
-        "          // One highlight at a time: an SSID drops a picked client.\n"
-        "          if (WF.hl !== null) WF.pc = null;\n"
-        "          channelGrid();\n"
-        "          // The key is drawn anew: the focus back on the same chip.\n"
-        "          var again = $(\"w-iso-key\").querySelectorAll(\"button.chip\")[i];\n"
-        "          if (again) again.focus();\n"
-        "        });\n"
-        "      });\n"
-        "      if (list.length > ISO_SSIDS) grp.appendChild(el(\"span\", \"more\", \"+\" + (list.length - ISO_SSIDS) + \" more\"));\n"
-        "    }\n"
-        "    clientKey(box);\n"
+        "    if (WF.hl !== null && WF.mix && !isoSsids().has(WF.hl)) WF.hl = null;\n"
+        "    if (SCOPE !== \"monitor\") cardScanDraw();\n"
         "    return WF.hl;\n"
+        "  }";
+
+static const char W_SCAN_KEY[] =
+        "  function scanKeyCell(a, by) {\n"
+        "    var o = typeof a.ssid === \"string\" ? by.get(a.ssid) : null;\n"
+        "    var b = el(\"button\", \"chip scan-key\");\n"
+        "    b.type = \"button\";\n"
+        "    var sw = el(\"span\", \"sw\");\n"
+        "    b.appendChild(sw);\n"
+        "    if (!o || !WF.iso) {\n"
+        "      b.disabled = true;\n"
+        "      b.title = !WF.iso ? \"the isometric waterfall's key: tick isometric\" :\n"
+        "        \"not among the transmitters the monitor radio named in the window\";\n"
+        "      return b;\n"
+        "    }\n"
+        "    var on = WF.hl === a.ssid;\n"
+        "    sw.style.backgroundColor = txColor(o.t);\n"
+        "    b.ariaPressed = on ? \"true\" : \"false\";\n"
+        "    b.title = on ? \"show every SSID again\" : \"fade every other SSID on the waterfall\";\n"
+        "    b.ariaLabel = (a.ssid === \"\" ? \"(hidden)\" : a.ssid) + \": \" + b.title;\n"
+        "    b.addEventListener(\"click\", function () {\n"
+        "      WF.hl = on ? null : a.ssid;\n"
+        "      if (WF.hl !== null) WF.pc = null;\n"
+        "      var bssid = a.bssid;\n"
+        "      channelGrid();\n"
+        "      // The table is drawn anew: the focus back on the same row's key.\n"
+        "      var rows = $(\"w-scan-box\").querySelectorAll(\".dt-row[data-bssid]\");\n"
+        "      for (var i = 0; i < rows.length; i++)\n"
+        "        if (rows[i].dataset.bssid === bssid) { rows[i].firstChild.focus(); break; }\n"
+        "    });\n"
+        "    return b;\n"
+        "  }";
+
+static const char W_SCAN_DRAW[] =
+        "  function cardScanDraw() {\n"
+        "    var lo = clear(\"w-scan\"), hi = clear(\"w-scan5\"), by = isoSsids(), nlo = 0, nhi = 0, old = 0;\n"
+        "    var h5 = clear(\"w-scan-head5\");\n"
+        "    DTWC.cols.forEach(function (c) { h5.appendChild(el(\"span\", c.num ? \"n\" : \"\", c.label)); });\n"
+        "    DTWC.sort(WC.aps).forEach(function (a) {\n"
+        "      if (!inWindow(a.last_seen)) { old++; return; }\n"
+        "      // Channels 1 to 14 are 2.4 GHz; every other, and one unknown, right.\n"
+        "      if (num(a.channel) && a.channel >= 1 && a.channel <= 14) { lo.appendChild(scanRow(a, by)); nlo++; }\n"
+        "      else { hi.appendChild(scanRow(a, by)); nhi++; }\n"
+        "    });\n"
+        "    if (!nlo) lo.appendChild(el(\"div\", \"sub\", WC.aps.length ? \"none in the window\" : \"no wifi_aps rows\"));\n"
+        "    if (!nhi) hi.appendChild(el(\"div\", \"sub\", WC.aps.length ? \"none in the window\" : \"no wifi_aps rows\"));\n"
+        "    set(\"w-scan-n24\", nlo);\n"
+        "    set(\"w-scan-n5\", nhi);\n"
+        "    WC.scanOld = old;\n"
         "  }";
 
 /* The client lane (owner 2026-11-17: "the spectrum should show where the
  * clients sit in the spectrum highlighting their channel"), whole: the
  * list read from the mix answer's "clients", a client's colour its AP's
  * SSID's (else its MAC's), its words, its cells from the hex, the lane,
- * the pick and the key's Clients group; and the tooltip's line. */
+ * and the pick; and the tooltip's line. The key's Clients buttons went
+ * with the key (owner 2026-11-18); nothing sets a pick now. */
 static const char W_ISO_CLIENTS[] =
         "  // ── the client lane (owner 2026-11-17: \"the spectrum should show where\n"
         "  // the clients sit in the spectrum highlighting their channel\") ──\n"
@@ -671,7 +687,6 @@ static const char W_ISO_CLIENTS[] =
         "  // busiest, so a count is a floor and a quiet client may be missing.\n"
         "  // Its colour is its AP's SSID's, so a network's clients group with its\n"
         "  // APs; with no AP known, its MAC's, as txColor() colours a client.\n"
-        "  var ISO_CLIENTS = 12;\n"
         "  function clientsOf() {\n"
         "    var l = WF.mix && Array.isArray(WF.mix.clients) ? WF.mix.clients : [];\n"
         "    return l.filter(function (c) { return c && typeof c.id === \"string\" && Array.isArray(c.chans); });\n"
@@ -739,45 +754,6 @@ static const char W_ISO_CLIENTS[] =
         "      cells: cells, cellColor: col,\n"
         "      lit: function (k, i) { return clientIn(on[i], k); }\n"
         "    };\n"
-        "  }\n"
-        "  // The key's Clients group: the busiest ISO_CLIENTS, each a button that\n"
-        "  // traces its channels and fades every cell it was not named in, until\n"
-        "  // pressed again; a client and an SSID are not highlighted together.\n"
-        "  function clientKey(box) {\n"
-        "    var cls = clientsOf(), mx = WF.mix;\n"
-        "    if (!mx || !Array.isArray(mx.clients)) return;\n"
-        "    var grp = box.appendChild(el(\"span\", \"grp\"));\n"
-        "    grp.appendChild(el(\"span\", \"nm\", \"Clients\"));\n"
-        "    if (!cls.length) { grp.appendChild(el(\"span\", \"more\", \"none named in the window\")); return; }\n"
-        "    // A picked client the busiest no longer include keeps its chip, so\n"
-        "    // the pick can always be undone where it was made.\n"
-        "    var shown = cls.slice(0, ISO_CLIENTS);\n"
-        "    if (WF.pc !== null && !shown.some(function (c) { return c.id === WF.pc; }))\n"
-        "      shown = shown.concat(cls.filter(function (c) { return c.id === WF.pc; }));\n"
-        "    shown.forEach(function (c, i) {\n"
-        "      var on = WF.pc === c.id, b = grp.appendChild(el(\"button\", \"chip cl\"));\n"
-        "      b.type = \"button\";\n"
-        "      b.ariaPressed = on ? \"true\" : \"false\";\n"
-        "      b.title = (on ? \"show every cell again\" : \"trace its channels, fade the rest\") + \"; \" +\n"
-        "        c.chans.map(function (ch) { return \"ch \" + ch[0] + \" \" + fmt(ch[1]); }).join(\", \") + \" frames\";\n"
-        "      var sw = el(\"span\", \"sw dia\");\n"
-        "      sw.style.backgroundColor = clientColor(c);\n"
-        "      b.appendChild(sw);\n"
-        "      // the diamond its network's colour; the name the channel the\n"
-        "      // client was last heard on (SlothChan.mark()), else its busiest here\n"
-        "      b.appendChild(SlothChan.mark(el(\"span\", \"\", clientName(c)), \"mac\", c.id,\n"
-        "                                   c.chans.length && Array.isArray(c.chans[0]) ? c.chans[0][0] : null));\n"
-        "      b.addEventListener(\"click\", function () {\n"
-        "        WF.pc = on ? null : c.id;\n"
-        "        if (WF.pc !== null) WF.hl = null;\n"
-        "        channelGrid();\n"
-        "        var again = $(\"w-iso-key\").querySelectorAll(\"button.chip.cl\")[i];\n"
-        "        if (again) again.focus();\n"
-        "      });\n"
-        "    });\n"
-        "    var total = num(mx.clients_total) ? mx.clients_total : cls.length;\n"
-        "    if (total > shown.length)\n"
-        "      grp.appendChild(el(\"span\", \"more\", \"+\" + (total - shown.length) + \" more\"));\n"
         "  }";
 
 static const char W_ISO_TIP_CLIENTS[] =
@@ -915,7 +891,7 @@ static void test_spectrum_uses_iso(void) {
     WT_ASSERT(s != NULL);
     if (!s) return;
     WT_HAS(s, "  var ISO = window.SlothIso;\n  var rgbOf = ISO.rgbOf, theme = ISO.theme, css = ISO.css;");
-    WT_HAS(s, "    geo = ISO.layout({ W: W, Hh: Hh, n: n, L: 46, R: timed() ? 112 : 70, top: 70, bottom: 54, deep: timed() || n > 12 });");
+    WT_HAS(s, "    geo = ISO.layout({ W: W, Hh: Hh, n: n, L: 46, R: timed() ? 112 : 70, top: 70, bottom: CHART_TOP + CATS.length * LANE_H + 8, deep: timed() || n > 12 });");
     WT_HAS(s, "    ISO.rails(g, T, geo);");
     WT_HAS(s, "    ISO.paint(g, T, geo, {\n"
               "      cols: cols, depth: depthOf,\n"
@@ -925,7 +901,7 @@ static void test_spectrum_uses_iso(void) {
               "      },");
     WT_HAS(s, "var tip = $(\"spec-tip\"), idx = ISO.hit(geo, x, y);");
     /* The axes, the band strip and the peak labels stay the tab's. */
-    WT_HAS(s, "    bandStrip(g, T, L, base0 + 32, PW);\n    peakLabels(g, T, lr, span);");
+    WT_HAS(s, "    bandStrip(g, T, L, base0 + CHART_TOP - 8, PW);\n    peakLabels(g, T, lr, span);");
     static const char *const gone[] = {
         "function rowAt(", "function heatRGB(", "function rgbOf(", "function mix(",
         "var off = null", "order.sort(", "new Float32Array(", "pal.push(",
@@ -1035,7 +1011,13 @@ static void test_identity_scheme_pinned(void) {
     WT_HAS(p, "      out.push({ f: m[e + 1] / m[0], color: txColor(t), alpha: !off && (hl === null || ssidOf(t) === hl) ? 1 : ISO_FADE });");
     WT_HAS(p, "      [chanWord(chanShade(r.band, r.key)), true],");
     /* The keys' containers, and each shown only isometric. */
-    WT_HAS(p, "<div class=\"iso-key\" id=\"w-iso-key\" role=\"group\" aria-label=\"colour key: bands, channels and SSIDs\" hidden></div>");
+    WT_LACKS(p, "w-iso-key");
+    WT_HAS(p, W_SCAN_KEY);
+    WT_HAS(p, W_SCAN_DRAW);
+    WT_HAS(p, "      <div class=\"scan-band\">2.4 GHz <span class=\"sub\" id=\"w-scan-n24\"></span></div>\n"
+              "      <div class=\"dhead\" id=\"w-scan-head\"></div>\n"
+              "      <div id=\"w-scan\"></div>");
+    WT_HAS(p, "      <div class=\"scan-band\">5 and 6 GHz <span class=\"sub\" id=\"w-scan-n5\"></span></div>");
     WT_HAS(p, "<div class=\"iso-key\" id=\"bledev-cls-key\" role=\"group\" aria-label=\"colour key: device classes\"></div>");
     WT_HAS(p, "<div class=\"iso-key\" id=\"bledev-prox-key\" role=\"group\" aria-label=\"colour key: device classes\"></div>");
     WT_HAS(p, "    $(\"bledev-cls-key\").hidden = $(\"bledev-prox-key\").hidden = !S.iso || noSensor();");
@@ -1145,9 +1127,10 @@ static void test_paint_plain_path_unchanged(void) {
  * all the others 70 percent transparent", 2026-11-17) one constant that
  * the SSID chips and the client pick both use, an SSID and a client
  * never highlighted together, and every peer string (vendor, SSID,
- * BSSID) text: the block holds no markup sink. Seen red with
- * "innerHTML" added in a comment to clientKey(), with the SSID chip's
- * "WF.pc = null" removed, and with ISO_FADE set back to 0.25. */
+ * BSSID) text: the block holds no markup sink. Seen red (2026-11-17,
+ * while the key still had its Clients buttons) with "innerHTML" added
+ * in a comment, with the SSID chip's "WF.pc = null" removed, and with
+ * ISO_FADE set back to 0.25. */
 static void test_client_lane_pinned(void) {
     const char *p = page();
     WT_HAS(p, W_ISO_CLIENTS);
@@ -1155,10 +1138,9 @@ static void test_client_lane_pinned(void) {
     WT_HAS(p, "      [isoTipClients(r, at.k), true]\n    ].filter(function (l) { return l[0] !== \"\"; }), ev);");
     WT_HAS(p, "  var ISO_FADE = 0.3;\n");
     WT_LACKS(p, "  var ISO_FADE = 0.25;");
-    WT_HAS(p, "          if (WF.hl !== null) WF.pc = null;");
-    WT_HAS(p, "        if (WF.pc !== null) WF.hl = null;");
+    WT_HAS(p, "      if (WF.hl !== null) WF.pc = null;");
     WT_HAS(p, "      lane: lane, pick: pick,");
-    WT_HAS(p, "fade every other one to 70 percent transparent, again to show all.");
+    WT_HAS(p, "fade every other SSID to 70 percent transparent, again to show all.");
     char *b = slice("  // ── the client lane (owner 2026-11-17", "  // Hover: the column under the pointer");
     WT_ASSERT(b != NULL);
     if (b) {

@@ -247,6 +247,10 @@ SDRplay shared with APRS, 2026-11-15).
 - `--spectrum-dir DIR` (default `/var/lib/sloth-sdrsweep`) and
   `--spectrum-request PATH` (default `/run/slothweb/sdrsweep.request`,
   inside the unit's `RuntimeDirectory`), both absolute.
+- `--spectrum-marks FILE` (default none): the operator's own frequency
+  marks for the Spectrum tab's amateur band charts (the local
+  repeaters), one `MHz,name` line each; `GET /api/spectrum?marks=1`
+  answers them (`web/README.md`, Spectrum).
 - `GET /api/spectrum?range=R`, R one of `last3`, `1h`, `5h`, `12h`,
   `24h` (anything else 400 `unknown_range`): the status, then `"range"`,
   `"runs"`, `"skipped"`, and `"sweep"`: a document shaped like

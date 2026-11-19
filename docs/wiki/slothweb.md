@@ -113,7 +113,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-18 (every Wi-Fi MAC and SSID in its channel's colour, the channel from `GET /api/wifi/lastch`; the channel colours held at 4.5:1 as text on every list ground, both themes; the light theme's data and chrome text at 4.5:1 on the greenbar stripes; § The restyle), 2026-11-18 (the Radar's sources: a checkbox a source with its count, kept as `radar.src`, an excluded source neither drawn nor picked; the caption box removed, its notes the header's and the about text's), 2026-11-18 (health page: the `source_status` state `not_installed`, sloth-rf's trimmed decoder input, shown as `no SDR attached`, no up/down series), 2026-11-18 (one WiFi channel palette, `--ch-*` written and checked in `web/tools/palette.c` and mapped by `web/ui/chan.js`, a chip wherever a channel is shown and the isometric waterfall moved onto it; the greenbar, `web/ui/greenbar.css`; § The restyle, § M5's WiFi); 2026-11-17 (the WiFi waterfall's clients lane and client highlight, `clients` on `/api/wifi/channels?mix=1`; the highlight fade 70 percent transparent; § M5's WiFi); 2026-11-17 (the isometric WiFi and BLE Devices waterfalls coloured by identity: band hue, channel shade and SSID on WiFi, class hue on BLE, with keys; `web/ui/iso.css` `--iso-*`; § M5's WiFi and BLE Devices); 2026-11-17 (the WiFi view's direction-finding card, `web/src/web_df.c`, `web/ui/df.js`, `GET /api/df`: § Direction finding); 2026-11-17 (#218: `alerts.fired` counts an alert
+**Last updated**: 2026-11-18 (the views' source and description notes behind info buttons, `web/ui/info.js`; the Spectrum tab's allocation chart in service lanes and its amateur band charts with `--spectrum-marks`; the WiFi view opening on the channels panel, the card's scan in two columns as the waterfall's key, the window filtering the tables; `web/README.md` Reference, Spectrum and The WiFi view), 2026-11-18 (every Wi-Fi MAC and SSID in its channel's colour, the channel from `GET /api/wifi/lastch`; the channel colours held at 4.5:1 as text on every list ground, both themes; the light theme's data and chrome text at 4.5:1 on the greenbar stripes; § The restyle), 2026-11-18 (the Radar's sources: a checkbox a source with its count, kept as `radar.src`, an excluded source neither drawn nor picked; the caption box removed, its notes the header's and the about text's), 2026-11-18 (health page: the `source_status` state `not_installed`, sloth-rf's trimmed decoder input, shown as `no SDR attached`, no up/down series), 2026-11-18 (one WiFi channel palette, `--ch-*` written and checked in `web/tools/palette.c` and mapped by `web/ui/chan.js`, a chip wherever a channel is shown and the isometric waterfall moved onto it; the greenbar, `web/ui/greenbar.css`; § The restyle, § M5's WiFi); 2026-11-17 (the WiFi waterfall's clients lane and client highlight, `clients` on `/api/wifi/channels?mix=1`; the highlight fade 70 percent transparent; § M5's WiFi); 2026-11-17 (the isometric WiFi and BLE Devices waterfalls coloured by identity: band hue, channel shade and SSID on WiFi, class hue on BLE, with keys; `web/ui/iso.css` `--iso-*`; § M5's WiFi and BLE Devices); 2026-11-17 (the WiFi view's direction-finding card, `web/src/web_df.c`, `web/ui/df.js`, `GET /api/df`: § Direction finding); 2026-11-17 (#218: `alerts.fired` counts an alert
 either daemon raises, not sloth's stream alone; an "alert" record from
 either stream now queues a sample (`web_rollup_queue_add()`) instead of
 adding one directly, so `SENSOR_SOURCE_DOWN` -- the one type both can
@@ -815,9 +815,11 @@ In short:
   stacked by share as the stacked grid draws them, an AP in its SSID's
   colour (`--k-*`, the same on every tab and both bands), a client in
   its MAC's, the rest and a cell with no transmitter detail in the
-  channel's colour. A key under the canvas names every step and the
-  window's SSIDs (busiest first, a dozen, then "+N more"); pressing an
-  SSID fades every other one to 70 percent transparent (owner,
+  channel's colour. Until 2026-11-18 a key under the canvas named every
+  step and the window's SSIDs; since then the card's scan table is the
+  key (two columns, 2.4 GHz and 5 and 6 GHz; `web/README.md`, The WiFi
+  view): pressing a row's key button
+  fades every other SSID to 70 percent transparent (owner,
   2026-11-17: "when highlighting an ssid on the water fall make all the
   others 70 percent transparent"; `ISO_FADE`, 0.3 of the colour kept)
   until pressed again (nothing kept). The tooltip adds the channel's

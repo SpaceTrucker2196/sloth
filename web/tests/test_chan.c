@@ -175,8 +175,8 @@ static void test_sites(void) {
         /* the AP table, the card's scan */
                 "    var cc = row.appendChild(el(\"span\", \"c-ch d-normal\", num(a.channel) ? undefined : \"-\"));\n"
         "    if (num(a.channel)) cc.appendChild(SlothChan.chip(a.channel, a.rf ? a.rf.radio : null));",
-                "      var cc = row.appendChild(el(\"span\", \"n d-normal\", num(a.channel) ? undefined : String(a.channel)));\n"
-        "      if (num(a.channel)) cc.appendChild(SlothChan.chip(a.channel));",
+                "    var cc = row.appendChild(el(\"span\", \"n d-normal\", num(a.channel) ? undefined : String(a.channel)));\n"
+        "    if (num(a.channel)) cc.appendChild(SlothChan.chip(a.channel));",
         /* the stacked grid's and G3's row keys */
                 "      // The channel's colour (SlothChan) as a bar before its key.\n"
         "      g.fillStyle = SlothChan.rgb(r.key, r.band);\n"
@@ -204,10 +204,9 @@ static void test_sites(void) {
         "      }",
     };
     for (size_t i = 0; i < sizeof(site) / sizeof(site[0]); i++) WT_HAS(p, site[i]);
-    /* The waterfall's floor, tops, key and client trace (test_iso.c
+    /* The waterfall's floor, tops and client trace (test_iso.c
      * pins those functions whole); no list prints a bare channel. */
     WT_HAS(p, "    var rc = rows.map(function (r) { return SlothChan.rgb(r.key, r.band); }), gc = {};");
-    WT_HAS(p, "          if (sc && sc.step === i) it.appendChild(SlothChan.chip(r.key, r.band, r.key.replace(/^6g/, \"\")));");
     WT_LACKS(p, "\"ch \" + b.channel");
     WT_LACKS(p, "\", ch \" + a.channel");
     WT_LACKS(p, "num(x.channel) ? \"ch \" + x.channel");
@@ -433,10 +432,10 @@ static const char *const TEXT_SITES[] = {
         "                   : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np, false, a.channel, a.rf ? a.rf.radio : null));",
     /* app.js the WiFi clients panel */
         "      mc.appendChild(SlothChan.mark(el(\"span\", d.random ? \"rnd d-dim\" : \"d-dim\", (d.random ? \"~\" : \"\") + d.mac), \"mac\", String(d.mac)));",
-    /* app.js cardScanDraw() */
-        "      row.appendChild(macCell(a.bssid, a.channel));\n"
-        "      var ss = el(\"span\", \"\");\n"
-        "      ss.appendChild(a.ssid === null ? ssidHidden(\"(hidden)\") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np, false, a.channel));",
+    /* app.js scanRow() */
+        "    row.appendChild(macCell(a.bssid, a.channel));\n"
+        "    var ss = el(\"span\", \"\");\n"
+        "    ss.appendChild(a.ssid === null ? ssidHidden(\"(hidden)\") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np, false, a.channel));",
     /* app.js History's new rows */
         "            // a device's host name (or vendor). The BSSID or MAC in its\n"
         "            // channel's colour (SlothChan.mark()).\n"

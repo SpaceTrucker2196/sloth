@@ -97,6 +97,9 @@ typedef struct {
      * paths. */
     char     spectrum_dir[1024];      /* --spectrum-dir */
     char     spectrum_request[1024];  /* --spectrum-request */
+    /* The operator's frequency marks for the amateur band charts
+     * (web_spectrum.h): a text file, read at each request. "" none. */
+    char     spectrum_marks[1024];    /* --spectrum-marks */
     /* The Camera tab (web_camera.h): the capture helper's state
      * directory, read only. Default WEB_CAMERA_DIR. */
     char     camera_dir[1024];        /* --camera-dir */

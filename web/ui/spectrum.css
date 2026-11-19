@@ -10,7 +10,7 @@
 #spec-zoom, #spec-range { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .spec-wrap { position: relative; }
 /* The waterfall sets its own pixel size from this box (spectrum.js draw()). */
-#spec-plot { display: block; width: 100%; height: 460px; cursor: crosshair; }
+#spec-plot { display: block; width: 100%; height: 560px; cursor: crosshair; }
 .spec-tip { position: absolute; z-index: 2; max-width: 230px; padding: 4px 6px; font-size: 11px;
   background: var(--panel); border: 1px solid var(--rule-hi); border-radius: var(--radius-sm);
   pointer-events: none; }
@@ -22,3 +22,15 @@
  * own: both dimmed, the words in NOTE carry which. */
 .specrow.clk { color: var(--muted); }
 .specrow.int { color: var(--faint); text-decoration: line-through; }
+/* The amateur band charts (hambands.js): each canvas sets its own
+ * pixel size from its box. */
+.ham-key { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; margin: 4px 0 8px; }
+.ham-k { display: inline-flex; align-items: center; gap: 5px; }
+.ham-sw { width: 10px; height: 10px; border-radius: 2px; }
+.ham-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 12px 18px; }
+.ham-band { min-width: 0; }
+.ham-hd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 10px; font-size: 11px; color: var(--muted); }
+.ham-hd b { font-size: 13px; color: var(--ink); }
+.ham-hd .ham-st { margin-left: auto; color: var(--signal); }
+.ham-cv { display: block; width: 100%; height: 134px; cursor: pointer; }
+@media (max-width: 600px) { .ham-grid { grid-template-columns: 1fr; } }

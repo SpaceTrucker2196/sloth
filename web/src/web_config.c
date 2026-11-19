@@ -325,7 +325,8 @@ void web_usage(FILE *out) {
         "                [--peer-allow-outside-tailnet]\n"
         "                [--peer-gnss-region-km N] [--my-ssid SSID]...\n"
         "                [--my-bssid MAC]... [--spectrum-dir DIR]\n"
-        "                [--spectrum-request PATH] [--camera-dir DIR] [--help]\n"
+        "                [--spectrum-request PATH] [--spectrum-marks FILE]\n"
+        "                [--camera-dir DIR] [--help]\n"
         "\n"
         "  --socket SPEC         sloth's data socket to read: unix:PATH or\n"
         "                        tcp:A.B.C.D:PORT / tcp:[V6]:PORT, literal\n"
@@ -425,6 +426,11 @@ void web_usage(FILE *out) {
         "                        the empty file POST /api/spectrum/run\n"
         "                        creates for sloth-sdrsweep.path (default\n"
         "                        " WEB_SPECTRUM_REQUEST ").\n"
+        "  --spectrum-marks FILE the operator's own frequency marks for the\n"
+        "                        Spectrum tab's amateur band charts (the\n"
+        "                        local repeaters): a text file, one\n"
+        "                        \"MHz,name\" line each, '#' a comment; read\n"
+        "                        only, at each request. Default: none.\n"
         "  --camera-dir DIR      the camera helper's state directory, read\n"
         "                        only (default " WEB_CAMERA_DIR "): the\n"
         "                        Camera tab's latest.jpg.\n"
@@ -658,14 +664,16 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
                 return -1;
             }
             snprintf(c->rf_db, sizeof(c->rf_db), "%s", v);
-        } else if (!strcmp(a, "--spectrum-dir") || !strcmp(a, "--spectrum-request")) {
+        } else if (!strcmp(a, "--spectrum-dir") || !strcmp(a, "--spectrum-request") ||
+                   !strcmp(a, "--spectrum-marks")) {
             if (i + 1 >= argc) {
                 fprintf(err, "slothweb: %s needs an argument\n", a);
                 return -1;
             }
             const char *v = argv[++i];
             int dir = !strcmp(a, "--spectrum-dir");
-            char *dst = dir ? c->spectrum_dir : c->spectrum_request;
+            char *dst = dir ? c->spectrum_dir : !strcmp(a, "--spectrum-marks") ? c->spectrum_marks :
+                        c->spectrum_request;
             /* Absolute, so the unit's sandbox and the path unit can name
              * the same file; room left for "/latest.json". */
             if (v[0] != '/' || strlen(v) >= sizeof(c->spectrum_dir) - 32) {

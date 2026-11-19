@@ -1,0 +1,10 @@
+/* The page's source and description notes behind info buttons
+ * (web/ui/info.js). Only the page's tokens: no new colour. */
+.sub.info-src { display: none; }
+button.info-btn { flex: none; width: 16px; height: 16px; padding: 0; border-radius: 999px; font-size: 10px; line-height: 14px; letter-spacing: 0; text-transform: none; font-style: italic; font-weight: 600; color: var(--muted); text-align: center; }
+button.info-btn:hover { color: var(--hover); }
+dialog.info { width: min(640px, 100vw); max-height: 90vh; overflow: auto; background: var(--panel); color: inherit; border: 1px solid var(--brass-edge); padding: 16px; }
+dialog.info::backdrop { background: rgba(0, 0, 0, 0.55); }
+dialog.info .dr-hd { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.info-p { display: block; font-size: 12px; line-height: 1.5; color: var(--ink); overflow-wrap: anywhere; margin: 0 0 10px; }
+.info-p[hidden] { display: none; }

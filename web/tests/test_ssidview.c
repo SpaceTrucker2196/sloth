@@ -683,8 +683,8 @@ static void test_page_ssid_detail(void) {
     WT_HAS(p, "    if (!rem && window.SlothSubNotes && window.SlothSsid && a.ssid !== null)\n");
     WT_HAS(p, "        hist.appendChild(ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np, false, a.channel, "
               "a.rf ? a.rf.radio : null));");
-    WT_HAS(p, "      ss.appendChild(a.ssid === null ? ssidHidden(\"(hidden)\") : "
-              "ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np, false, a.channel));\n      row.appendChild(ss);");
+    WT_HAS(p, "    ss.appendChild(a.ssid === null ? ssidHidden(\"(hidden)\") : "
+              "ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np, false, a.channel));\n    row.appendChild(ss);");
     WT_HAS(p, ": ssidSpan(String(t.ssid), t.ssid_k, t.ssid_np, true));");
     WT_HAS(p, "      if (t.kind === \"ap\" && window.SlothSsid) SlothSsid.more(li, t.ssid === undefined "
               "? null : t.ssid);\n");

@@ -43,3 +43,15 @@ canvas.wfall.iso { cursor: crosshair; }
 .iso-key .more { color: var(--muted); }
 /* A client chip's swatch is a diamond, as the client lane's marks are. */
 .iso-key .sw.dia { transform: rotate(45deg) scale(0.8); border-radius: 1px; }
+/* The card's scan as the waterfall's key (app.js cardScanDraw()): two
+ * lists side by side, 2.4 GHz and 5 and 6 GHz, each row's first cell
+ * the key button. */
+.scan2 { display: grid; grid-template-columns: repeat(2, minmax(var(--dt-minw, 0px), 1fr)); gap: 0 22px; }
+.scan-col { min-width: 0; }
+.scan-band { font-size: 11px; color: var(--ink); margin-top: 4px; }
+button.scan-key { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 14px; padding: 0; border-radius: var(--radius-sm); background: transparent; border: 1px solid var(--rule); cursor: pointer; }
+button.scan-key .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+button.scan-key[aria-pressed="true"] { border-color: var(--signal); }
+button.scan-key:disabled { cursor: default; border-style: dotted; }
+.dt .dt-row.scan-off > span { opacity: 0.45; }
+@media (max-width: 1100px) { .scan2 { grid-template-columns: minmax(0, 1fr); } }

@@ -3587,10 +3587,10 @@
   var W_ISO_LABEL = "channels by time, isometric: the channels across, 2.4, 5 and 6 GHz grouped, the time cells " +
     "receding up and to the right with the newest in front, each column's height its cell's value on one scale; " +
     "colour says which: each channel its colour on the floor strip and each column's top, the same as in every list " +
-    "(2.4 GHz cool, 5 GHz warm, 6 GHz violet; the key groups them under 1, 6 and 11, the UNII sub-bands, DFS dashed, " +
-    "and 6 GHz PSC), the column's body its busiest transmitters stacked in their SSIDs' colours, named in the key below; " +
+    "(2.4 GHz cool, 5 GHz warm, 6 GHz violet; DFS channels dashed), the column's body its busiest transmitters " +
+    "stacked in their SSIDs' colours, keyed by the card's scan table below, whose key buttons fade every other SSID; " +
     "under the channel names a clients lane, a diamond under each channel clients were heard on, sized by how many, " +
-    "in their network's colour, the key's Clients buttons tracing one client's channels; " +
+    "in their network's colour; " +
     "arrow keys pick a cell (left and right a channel, up older, down newer), the list below names it";
   function channelGrid() {
     var iso = WF.iso, hz = $("w-grid").value !== "mix";
@@ -3602,7 +3602,6 @@
     $("w-hz-sub").hidden = iso || !hz;
     $("w-mx-sub").hidden = iso || hz;
     $("w-iso-sub").hidden = !iso;
-    $("w-iso-key").hidden = !iso;
     if (!iso) { WF.ist.hover = null; $("w-iso-tip").hidden = true; }
     if (iso) { isoGrid(); return; }
     if (hz) horizonGrid(); else mixGrid();
@@ -3680,30 +3679,11 @@
     if (num(m[1]) && m[1] > 0) out.push({ f: m[1] / m[0], color: base, alpha: rest });
     return out.length ? out : [{ f: 1, color: base, alpha: rest }];
   }
-  // The key under the isometric waterfall: the three bands with their
-  // steps named, each step followed by the window's channels in it as
-  // their chips (SlothChan, the lists' colours; a DFS step's dashed
-  // swatch the floor strip's dash), then the window's SSIDs, busiest
-  // first (a dozen, then how many more), each a button that fades every
-  // other SSID until pressed again. Every name is text (textContent).
-  // Returns the SSID picked, dropped once the window no longer holds it.
-  var ISO_SSIDS = 12;
-  function isoKey() {
-    var box = $("w-iso-key");
-    while (box.firstChild) box.removeChild(box.firstChild);
-    ["2.4", "5", "6"].forEach(function (b) {
-      var grp = box.appendChild(el("span", "grp"));
-      grp.appendChild(el("span", "nm", BAND_WORD[b]));
-      CHAN_STEP[b].forEach(function (w, i) {
-        var it = grp.appendChild(el("span", "it"));
-        if (b === "5" && (i === 1 || i === 2)) it.appendChild(el("span", "sw dfs"));
-        it.appendChild(el("span", "", w));
-        WF.rows.forEach(function (r) {
-          var sc = r.band === b ? chanShade(r.band, r.key) : null;
-          if (sc && sc.step === i) it.appendChild(SlothChan.chip(r.key, r.band, r.key.replace(/^6g/, "")));
-        });
-      });
-    });
+  // The isometric waterfall's key is the card's scan table
+  // (cardScanDraw(), owner 2026-11-18): this is what it keys on. The
+  // window's SSIDs from the mix, each with its frames and a transmitter
+  // that carries it (its colour, txColor()).
+  function isoSsids() {
     var by = new Map();
     ((WF.mix && WF.mix.channels) || []).forEach(function (r) {
       (r.cells || []).forEach(function (m) {
@@ -3717,37 +3697,15 @@
         }
       });
     });
+    return by;
+  }
+  // The SSID picked, dropped once the window no longer holds it; the
+  // scan table drawn again so its keys say what is picked.
+  function isoKey() {
     // Only a loaded mix can say the SSID left: a reload clears WF.mix
     // and the heat can land first.
-    if (WF.hl !== null && WF.mix && !by.has(WF.hl)) WF.hl = null;
-    var list = Array.from(by.values()).sort(function (a, b) { return b.n - a.n || (a.ssid < b.ssid ? -1 : a.ssid > b.ssid ? 1 : 0); });
-    if (list.length) {
-      var grp = box.appendChild(el("span", "grp"));
-      grp.appendChild(el("span", "nm", "SSIDs"));
-      list.slice(0, ISO_SSIDS).forEach(function (o, i) {
-        var b = grp.appendChild(el("button", "chip"));
-        b.type = "button";
-        b.ariaPressed = WF.hl === o.ssid ? "true" : "false";
-        b.title = WF.hl === o.ssid ? "show every SSID again" : "fade every other SSID";
-        var sw = el("span", "sw");
-        sw.style.backgroundColor = txColor(o.t);
-        b.appendChild(sw);
-        // the swatch the stacks' colour it keys; the name its channel's
-        // (SlothChan.mark(): the SSID's most recently heard AP's)
-        b.appendChild(o.ssid === "" ? el("span", "", "(hidden)") : SlothChan.mark(el("span", "", o.ssid), "ssid", o.ssid));
-        b.addEventListener("click", function () {
-          WF.hl = WF.hl === o.ssid ? null : o.ssid;
-          // One highlight at a time: an SSID drops a picked client.
-          if (WF.hl !== null) WF.pc = null;
-          channelGrid();
-          // The key is drawn anew: the focus back on the same chip.
-          var again = $("w-iso-key").querySelectorAll("button.chip")[i];
-          if (again) again.focus();
-        });
-      });
-      if (list.length > ISO_SSIDS) grp.appendChild(el("span", "more", "+" + (list.length - ISO_SSIDS) + " more"));
-    }
-    clientKey(box);
+    if (WF.hl !== null && WF.mix && !isoSsids().has(WF.hl)) WF.hl = null;
+    if (SCOPE !== "monitor") cardScanDraw();
     return WF.hl;
   }
 
@@ -3760,7 +3718,6 @@
   // busiest, so a count is a floor and a quiet client may be missing.
   // Its colour is its AP's SSID's, so a network's clients group with its
   // APs; with no AP known, its MAC's, as txColor() colours a client.
-  var ISO_CLIENTS = 12;
   function clientsOf() {
     var l = WF.mix && Array.isArray(WF.mix.clients) ? WF.mix.clients : [];
     return l.filter(function (c) { return c && typeof c.id === "string" && Array.isArray(c.chans); });
@@ -3829,46 +3786,6 @@
       lit: function (k, i) { return clientIn(on[i], k); }
     };
   }
-  // The key's Clients group: the busiest ISO_CLIENTS, each a button that
-  // traces its channels and fades every cell it was not named in, until
-  // pressed again; a client and an SSID are not highlighted together.
-  function clientKey(box) {
-    var cls = clientsOf(), mx = WF.mix;
-    if (!mx || !Array.isArray(mx.clients)) return;
-    var grp = box.appendChild(el("span", "grp"));
-    grp.appendChild(el("span", "nm", "Clients"));
-    if (!cls.length) { grp.appendChild(el("span", "more", "none named in the window")); return; }
-    // A picked client the busiest no longer include keeps its chip, so
-    // the pick can always be undone where it was made.
-    var shown = cls.slice(0, ISO_CLIENTS);
-    if (WF.pc !== null && !shown.some(function (c) { return c.id === WF.pc; }))
-      shown = shown.concat(cls.filter(function (c) { return c.id === WF.pc; }));
-    shown.forEach(function (c, i) {
-      var on = WF.pc === c.id, b = grp.appendChild(el("button", "chip cl"));
-      b.type = "button";
-      b.ariaPressed = on ? "true" : "false";
-      b.title = (on ? "show every cell again" : "trace its channels, fade the rest") + "; " +
-        c.chans.map(function (ch) { return "ch " + ch[0] + " " + fmt(ch[1]); }).join(", ") + " frames";
-      var sw = el("span", "sw dia");
-      sw.style.backgroundColor = clientColor(c);
-      b.appendChild(sw);
-      // the diamond its network's colour; the name the channel the
-      // client was last heard on (SlothChan.mark()), else its busiest here
-      b.appendChild(SlothChan.mark(el("span", "", clientName(c)), "mac", c.id,
-                                   c.chans.length && Array.isArray(c.chans[0]) ? c.chans[0][0] : null));
-      b.addEventListener("click", function () {
-        WF.pc = on ? null : c.id;
-        if (WF.pc !== null) WF.hl = null;
-        channelGrid();
-        var again = $("w-iso-key").querySelectorAll("button.chip.cl")[i];
-        if (again) again.focus();
-      });
-    });
-    var total = num(mx.clients_total) ? mx.clients_total : cls.length;
-    if (total > shown.length)
-      grp.appendChild(el("span", "more", "+" + (total - shown.length) + " more"));
-  }
-
   // Hover: the column under the pointer named in the tooltip, as the
   // Spectrum tab's; a click or tap picks its cell for the list below.
   function isoHover(ev) {
@@ -4314,10 +4231,15 @@
         if (glyph.isNew(a.first_seen, WF.newFrom)) nnew++;
         if (a.rf && a.rf.trend === "approaching") nnear++;
       });
-      DTA.sort(j.rows || [], !j.more).forEach(function (a) { box.appendChild(apRow(a)); });
+      var nold = 0;
+      DTA.sort(j.rows || [], !j.more).forEach(function (a) {
+        if (!inWindow(a.last_seen)) { nold++; return; }
+        box.appendChild(apRow(a));
+      });
       if (!j.rows || !j.rows.length) box.appendChild(el("div", "sub", "no beacon_aps rows"));
+      else if (nold === j.rows.length) box.appendChild(el("div", "sub", "none last seen in the window"));
       var fs = fvSplit(j.rows || []);
-      set("w-aps-count", fs.local + " shown, " + nnew + " new in 24 h, " + nnear +
+      set("w-aps-count", (nold ? (j.rows.length - nold) + " in the window, " + nold + " older, " : fs.local + " shown, ") + nnew + " new in 24 h, " + nnear +
           " approaching (sloth's estimate)" + (j.more ? ", more in sloth.db" : "") +
           (fs.remote ? "; " + fs.remote + " heard only by other sloth hosts, in grey" +
                        (j.fleet && j.fleet.remote_more ? " (the first " + fs.remote + ")" : "") : ""));
@@ -4419,6 +4341,7 @@
     ] });
   var DTWC = DataTable({ id: "cardscan", label: "the card's scan", box: $("w-scan-box"),
     head: $("w-scan-head"), reset: $("w-scan-tools"), redraw: cardScanDraw, cols: [
+      { k: "key", label: "key", w: 4, min: 3, type: "none" },
       { k: "bs", label: "bssid", w: 19, min: 8, type: "mac", val: av("bssid") },
       { k: "ss", label: "ssid", w: 14, flex: true, type: "text", val: av("ssid") },
       { k: "ch", label: "ch", w: 4, min: 3, num: true, type: "num", val: av("channel") },
@@ -4440,6 +4363,7 @@
   function cardStaDraw() {
     var box = clear("w-sta");
     DTWS.sort(WC.stas).forEach(function (a) {
+      if (!inWindow(a.last_seen)) return;
       var row = el("div", "dt-row");
       row.appendChild(macCell(a.mac));
       row.appendChild(el("span", "n d-dim", num(a.signal) ? String(a.signal) : "-"));
@@ -4453,24 +4377,84 @@
     });
     if (!WC.stas.length) box.appendChild(el("div", "sub", "no wifi_stas rows: the card is on no AP sloth has seen"));
   }
-  function cardScanDraw() {
-    var box = clear("w-scan");
-    DTWC.sort(WC.aps).forEach(function (a) {
-      var row = el("div", "dt-row");
-      row.appendChild(macCell(a.bssid, a.channel));
-      var ss = el("span", "");
-      ss.appendChild(a.ssid === null ? ssidHidden("(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np, false, a.channel));
-      row.appendChild(ss);
-      var cc = row.appendChild(el("span", "n d-normal", num(a.channel) ? undefined : String(a.channel)));
-      if (num(a.channel)) cc.appendChild(SlothChan.chip(a.channel));
-      row.appendChild(el("span", "n d-dim", num(a.signal) ? String(a.signal) : "-"));
-      row.appendChild(el("span", "d-normal", a.enc === null ? "?" : String(a.enc)));
-      row.appendChild(el("span", a.status === "associated" ? "d-normal" : "d-dim",
-                         a.status === null ? "-" : String(a.status).replace("_", " ")));
-      row.appendChild(el("span", "d-dim", shortStamp(a.last_seen)));
-      box.appendChild(row);
+  // The window the channels panel shows is the tables' too (owner
+  // 2026-11-18: "range for the spectrum also controls the tables"): a
+  // row last seen before it began is left out, and counted.
+  function inWindow(ts) {
+    var r = WF.win || wifiWindow();
+    return !num(ts) || ts >= r.from;
+  }
+  // The card's scan is the channel waterfall's key (owner 2026-11-18:
+  // "make the table with the scan 2 columns with 2.4 in column one and
+  // 5-6g in column 2. this table now becomes the key to the spectrum so
+  // move the selection behavior to it"): 2.4 GHz at left, 5 and 6 GHz
+  // at right, and each row's first cell a button in the colour the
+  // waterfall stacks its SSID in, which fades every other SSID until
+  // pressed again. A row whose SSID no transmitter in the window's mix
+  // carries has no colour there and its button is off. The header is
+  // the left column's; the right column's repeats its words.
+  function scanKeyCell(a, by) {
+    var o = typeof a.ssid === "string" ? by.get(a.ssid) : null;
+    var b = el("button", "chip scan-key");
+    b.type = "button";
+    var sw = el("span", "sw");
+    b.appendChild(sw);
+    if (!o || !WF.iso) {
+      b.disabled = true;
+      b.title = !WF.iso ? "the isometric waterfall's key: tick isometric" :
+        "not among the transmitters the monitor radio named in the window";
+      return b;
+    }
+    var on = WF.hl === a.ssid;
+    sw.style.backgroundColor = txColor(o.t);
+    b.ariaPressed = on ? "true" : "false";
+    b.title = on ? "show every SSID again" : "fade every other SSID on the waterfall";
+    b.ariaLabel = (a.ssid === "" ? "(hidden)" : a.ssid) + ": " + b.title;
+    b.addEventListener("click", function () {
+      WF.hl = on ? null : a.ssid;
+      if (WF.hl !== null) WF.pc = null;
+      var bssid = a.bssid;
+      channelGrid();
+      // The table is drawn anew: the focus back on the same row's key.
+      var rows = $("w-scan-box").querySelectorAll(".dt-row[data-bssid]");
+      for (var i = 0; i < rows.length; i++)
+        if (rows[i].dataset.bssid === bssid) { rows[i].firstChild.focus(); break; }
     });
-    if (!WC.aps.length) box.appendChild(el("div", "sub", "no wifi_aps rows"));
+    return b;
+  }
+  function scanRow(a, by) {
+    var row = el("div", "dt-row");
+    row.dataset.bssid = String(a.bssid);
+    if (WF.hl !== null && WF.iso) row.classList.toggle("scan-off", a.ssid !== WF.hl);
+    row.appendChild(scanKeyCell(a, by));
+    row.appendChild(macCell(a.bssid, a.channel));
+    var ss = el("span", "");
+    ss.appendChild(a.ssid === null ? ssidHidden("(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np, false, a.channel));
+    row.appendChild(ss);
+    var cc = row.appendChild(el("span", "n d-normal", num(a.channel) ? undefined : String(a.channel)));
+    if (num(a.channel)) cc.appendChild(SlothChan.chip(a.channel));
+    row.appendChild(el("span", "n d-dim", num(a.signal) ? String(a.signal) : "-"));
+    row.appendChild(el("span", "d-normal", a.enc === null ? "?" : String(a.enc)));
+    row.appendChild(el("span", a.status === "associated" ? "d-normal" : "d-dim",
+                       a.status === null ? "-" : String(a.status).replace("_", " ")));
+    row.appendChild(el("span", "d-dim", shortStamp(a.last_seen)));
+    return row;
+  }
+  function cardScanDraw() {
+    var lo = clear("w-scan"), hi = clear("w-scan5"), by = isoSsids(), nlo = 0, nhi = 0, old = 0;
+    var h5 = clear("w-scan-head5");
+    DTWC.cols.forEach(function (c) { h5.appendChild(el("span", c.num ? "n" : "", c.label)); });
+    DTWC.sort(WC.aps).forEach(function (a) {
+      if (!inWindow(a.last_seen)) { old++; return; }
+      // Channels 1 to 14 are 2.4 GHz; every other, and one unknown, right.
+      if (num(a.channel) && a.channel >= 1 && a.channel <= 14) { lo.appendChild(scanRow(a, by)); nlo++; }
+      else { hi.appendChild(scanRow(a, by)); nhi++; }
+    });
+    if (!nlo) lo.appendChild(el("div", "sub", WC.aps.length ? "none in the window" : "no wifi_aps rows"));
+    if (!nhi) hi.appendChild(el("div", "sub", WC.aps.length ? "none in the window" : "no wifi_aps rows"));
+    set("w-scan-n24", nlo);
+    set("w-scan-n5", nhi);
+    WC.scanOld = old;
   }
   function wifiCard(gen) {
     getJSON("/api/wifi/local").then(function (j) {
@@ -4480,11 +4464,13 @@
       cardStaDraw();
       cardScanDraw();
       set("w-sta-count", WC.stas.length + " shown" + (j.stas_more ? ", more in sloth.db" : ""));
-      set("w-scan-count", WC.aps.length + " shown" + (j.aps_more ? ", more in sloth.db" : ""));
+      set("w-scan-count", (WC.aps.length - (WC.scanOld || 0)) + " in the window" +
+          (WC.scanOld ? ", " + WC.scanOld + " older" : "") + (j.aps_more ? ", more in sloth.db" : ""));
     }).catch(function (e) {
       if (gen !== WF.gen) return;
       clear("w-sta");
       clear("w-scan");
+      clear("w-scan5");
       set("w-sta-count", errText(e.message));
       set("w-scan-count", errText(e.message));
     });

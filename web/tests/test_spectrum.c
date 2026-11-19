@@ -54,6 +54,7 @@
 #include "web_server.h"
 #include "web_spectrum.h"
 #include "wt_tmp.h"
+#include "web_assets.h"
 #include "wtest.h"
 
 static char g_out[1 << 20];
@@ -920,6 +921,119 @@ static void test_range_never_writes(void) {
     env_close();
 }
 
+/* ── the operator's marks (--spectrum-marks, ?marks=1) ── */
+
+static void test_mark_line(void) {
+    long long hz = 0;
+    char name[WEB_SPECTRUM_MARK_NAME + 1];
+#define LINE(t) web_spectrum_mark_line(t, strlen(t), &hz, name, sizeof(name))
+    WT_EQ(LINE("146.940,W0ABC -0.6 PL 100"), 1);
+    WT_ASSERT(hz == 146940000LL);
+    WT_ASSERT(!strcmp(name, "W0ABC -0.6 PL 100"));
+    /* No float rounds a channel: six decimals, to the hertz. */
+    WT_EQ(LINE("  7.074001 , FT8 \r"), -1);         /* a space before the comma is not a digit */
+    WT_EQ(LINE("7.074001, FT8 \r"), 1);
+    WT_ASSERT(hz == 7074001LL);
+    WT_ASSERT(!strcmp(name, "FT8"));
+    WT_EQ(LINE("1296,23 cm"), 1);
+    WT_ASSERT(hz == 1296000000LL);
+    /* Blank and comment lines are not marks and not errors. */
+    WT_EQ(LINE(""), 0);
+    WT_EQ(LINE("   \t"), 0);
+    WT_EQ(LINE("# 2 m repeaters"), 0);
+    /* Refused: no name, no frequency, a sign, an exponent, two points,
+     * seven decimals, out of range, a control byte, a name too long. */
+    WT_EQ(LINE("146.94"), -1);
+    WT_EQ(LINE("146.94,"), -1);
+    WT_EQ(LINE(",name"), -1);
+    WT_EQ(LINE("-146.94,x"), -1);
+    WT_EQ(LINE("1e3,x"), -1);
+    WT_EQ(LINE("1.2.3,x"), -1);
+    WT_EQ(LINE("146.,x"), -1);
+    WT_EQ(LINE("1.0000001,x"), -1);
+    WT_EQ(LINE("0.0001,x"), -1);
+    WT_EQ(LINE("30000.1,x"), -1);
+    WT_EQ(LINE("146.94,a\x01" "b"), -1);
+    WT_EQ(LINE("146.94,caf\xc3\xa9"), -1);
+    WT_EQ(LINE("146.94,0123456789012345678901234567890123456789012345678"), -1);
+    WT_EQ(LINE("146.94,012345678901234567890123456789012345678901234567"), 1);
+#undef LINE
+}
+
+static void test_marks_route(void) {
+    WT_EQ(env_open(1), 0);
+    /* No file named: an empty list that says so; every scope's. */
+    WT_EQ(get("/api/spectrum", "marks=1"), 200);
+    WT_HAS(g_out, "{\"configured\":false,\"marks\":[],\"skipped\":0}");
+    WT_EQ(get("/api/spectrum", "marks=2"), 400);
+    char path[TEST_TMP_MAX + 64];
+    snprintf(path, sizeof(path), "%s/marks.csv", E.state);
+    web_spectrum_set_marks(&E.sp, path);
+    /* Named and absent. */
+    WT_EQ(get("/api/spectrum", "marks=1"), 200);
+    WT_HAS(g_out, "\"configured\":true,\"marks\":[],\"skipped\":0,\"error\":\"absent\"");
+    /* Marks, a comment, a blank line, and two refused lines; a name's
+     * markup is written by the JSON writer, never spliced. */
+    put_file("marks.csv", "# local\n146.940,W0ABC -0.6\n\n444.1,<b>\"x\"\nbad line\n9e9,x\n");
+    WT_EQ(get("/api/spectrum", "marks=1"), 200);
+    WT_HAS(g_out, "\"marks\":[{\"f_hz\":146940000,\"label\":\"W0ABC -0.6\"},{\"f_hz\":444100000,\"label\":\"");
+    WT_HAS(g_out, "\"skipped\":2}");
+    WT_LACKS(g_out, "<b>");
+    WT_LACKS(g_out, "error");
+    /* A link is not followed: the file is the operator's, the path may
+     * not be. */
+    char target[TEST_TMP_MAX + 64], link[TEST_TMP_MAX + 64];
+    snprintf(target, sizeof(target), "%s/marks.csv", E.state);
+    snprintf(link, sizeof(link), "%s/link.csv", E.state);
+    WT_EQ(symlink(target, link), 0);
+    web_spectrum_set_marks(&E.sp, link);
+    WT_EQ(get("/api/spectrum", "marks=1"), 200);
+    WT_HAS(g_out, "\"marks\":[],\"skipped\":0,\"error\":\"unreadable\"");
+    /* Over the size limit: refused whole. */
+    web_spectrum_set_marks(&E.sp, path);
+    {
+        FILE *f = fopen(path, "w");
+        WT_ASSERT(f != NULL);
+        if (f) {
+            for (long k = 0; k < WEB_SPECTRUM_MARKS_MAX_BYTES / 10 + 2; k++) fputs("146.94,xx\n", f);
+            fclose(f);
+        }
+    }
+    WT_EQ(get("/api/spectrum", "marks=1"), 200);
+    WT_HAS(g_out, "\"error\":\"too_large\"");
+    /* At most WEB_SPECTRUM_MARKS_MAX marks; the rest counted. */
+    {
+        FILE *f = fopen(path, "w");
+        WT_ASSERT(f != NULL);
+        if (f) {
+            for (int k = 0; k < WEB_SPECTRUM_MARKS_MAX + 3; k++) fputs("146.94,x\n", f);
+            fclose(f);
+        }
+    }
+    WT_EQ(get("/api/spectrum", "marks=1"), 200);
+    WT_HAS(g_out, "\"skipped\":3}");
+    env_close();
+}
+
+/* The page's half: the allocation chart's lanes and the amateur band
+ * charts, their data shown as text only. */
+static void test_ham_page(void) {
+    const char *p = (const char *)web_page;
+    WT_HAS(p, "  var CATS = [[\"ham\", \"ham\", \"--br-9\"], [\"bc\", \"bcast\", \"--br-4\"], [\"air\", \"aero\", \"--br-0\"],");
+    WT_HAS(p, "[144, 148, \"2 m amateur\", \"ham\"]");
+    WT_HAS(p, "[902, 928, \"ISM 915\", \"ism\"], [902, 928, \"33 cm amateur\", \"ham\"]");
+    WT_HAS(p, "    fetch(\"/api/spectrum?marks=1\", { credentials: \"same-origin\", cache: \"no-store\" })");
+    WT_HAS(p, "        if (m[i] && num(m[i].f_hz) && typeof m[i].label === \"string\") out.push([m[i].f_hz / 1e6, m[i].label]);");
+    WT_HAS(p, "    [\"2 m\", 144.0, 148.0,");
+    WT_HAS(p, "[144.39, \"APRS\"]");
+    WT_HAS(p, "[146.52, \"FM calling\"]");
+    WT_HAS(p, "[14.074, \"FT8\"]");
+    WT_HAS(p, "<div class=\"ham-grid\" id=\"ham-grid\"></div>");
+    /* hambands.js before spectrum.js, which calls it. */
+    const char *ham = strstr(p, "window.SlothHam = {"), *spec = strstr(p, "window.SlothSpectrum = {");
+    WT_ASSERT(ham && spec && ham < spec);
+}
+
 void run_spectrum_tests(void) {
     WT_RUN(test_not_attached_and_not_installed);
     WT_RUN(test_idle_and_query);
@@ -941,4 +1055,7 @@ void run_spectrum_tests(void) {
     WT_RUN(test_b64_decode_strict);
     WT_RUN(test_run_floor);
     WT_RUN(test_range_never_writes);
+    WT_RUN(test_mark_line);
+    WT_RUN(test_marks_route);
+    WT_RUN(test_ham_page);
 }

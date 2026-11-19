@@ -62,46 +62,57 @@
   // ── US frequency allocations (47 CFR 2.106, simplified) ───────────
   // Names for orientation, not a regulatory reference: the table is the
   // United States', and this sensor may be elsewhere (#204 names the
-  // region only for APRS). [lo MHz, hi MHz, name]; narrower first wins
-  // when a frequency sits in two.
+  // region only for APRS). [lo MHz, hi MHz, name, service]; narrower
+  // first wins when a frequency sits in two. The service is the lane
+  // the allocation chart under the waterfall draws it in (CATS).
   var BANDS = [
-    [0.535, 1.705, "AM broadcast"], [1.8, 2.0, "160 m amateur"],
-    [2.495, 2.505, "WWV 2.5"], [3.5, 4.0, "80 m amateur"], [4.995, 5.005, "WWV 5"],
-    [5.3305, 5.4065, "60 m amateur"], [5.9, 6.2, "49 m SW broadcast"],
-    [7.0, 7.3, "40 m amateur"], [7.3, 7.45, "41 m SW broadcast"],
-    [9.4, 9.9, "31 m SW broadcast"], [9.995, 10.005, "WWV 10"], [10.1, 10.15, "30 m amateur"],
-    [11.6, 12.1, "25 m SW broadcast"], [13.553, 13.567, "ISM 13.56"],
-    [13.57, 13.87, "22 m SW broadcast"], [14.0, 14.35, "20 m amateur"],
-    [14.995, 15.005, "WWV 15"], [15.1, 15.8, "19 m SW broadcast"],
-    [17.48, 17.9, "16 m SW broadcast"], [18.068, 18.168, "17 m amateur"],
-    [19.995, 20.005, "WWV 20"], [21.0, 21.45, "15 m amateur"],
-    [21.45, 21.85, "13 m SW broadcast"], [24.89, 24.99, "12 m amateur"],
-    [25.67, 26.1, "11 m SW broadcast"], [26.965, 27.405, "CB"], [28.0, 29.7, "10 m amateur"],
-    [30, 50, "VHF low land mobile"], [50, 54, "6 m amateur"], [54, 72, "TV 2-4"],
-    [72, 76, "fixed/mobile, RC"], [76, 88, "TV 5-6"], [88, 108, "FM broadcast"],
-    [108, 118, "aero nav (VOR/ILS)"], [118, 137, "airband (AM voice)"],
-    [137, 138, "weather satellites"], [138, 144, "federal"], [144, 148, "2 m amateur"],
-    [148, 150.8, "federal"], [150.8, 174, "VHF land mobile"], [156, 162.025, "marine VHF"],
-    [162.4, 162.55, "NOAA weather radio"], [174, 216, "TV 7-13"], [216, 222, "fixed/mobile"],
-    [222, 225, "1.25 m amateur"], [225, 400, "UHF military air"],
-    [400, 406, "met aids, radiosondes"], [406, 406.1, "406 MHz distress beacons"],
-    [406.1, 420, "federal"], [420, 450, "70 cm amateur"], [450, 470, "UHF land mobile"],
-    [462.55, 462.725, "GMRS/FRS"], [467.55, 467.725, "GMRS/FRS"],
-    [470, 608, "TV 14-36"], [608, 614, "radio astronomy"], [614, 698, "600 MHz cellular"],
-    [698, 806, "700 MHz cellular, FirstNet"], [806, 824, "public safety, SMR"],
-    [824, 849, "850 cellular uplink"], [851, 869, "public safety, SMR"],
-    [869, 894, "850 cellular downlink"], [896, 901, "900 MHz SMR"],
-    [902, 928, "ISM 915, 33 cm amateur"], [929, 932, "paging"], [935, 940, "900 MHz SMR"],
-    [960, 1215, "aero radionav (DME/TACAN)"], [1029, 1031, "SSR interrogation 1030"],
-    [1087, 1093, "ADS-B / SSR reply 1090"], [1164, 1215, "GNSS L5/E5"],
-    [1215, 1240, "GNSS L2"], [1240, 1300, "23 cm amateur"], [1300, 1350, "long-range radar"],
-    [1350, 1400, "federal"], [1400, 1427, "radio astronomy (H line)"],
-    [1427, 1518, "L-band terrestrial"], [1525, 1559, "MSS downlink (Inmarsat)"],
-    [1559, 1610, "GNSS L1 (GPS, Galileo, GLONASS)"], [1610, 1626.5, "MSS (Iridium, Globalstar)"],
-    [1626.5, 1660.5, "MSS uplink"], [1670, 1675, "met satellites"],
-    [1675, 1710, "met satellites (GOES, HRPT)"], [1710, 1780, "AWS cellular uplink"],
-    [1850, 1915, "PCS cellular uplink"], [1930, 1995, "PCS cellular downlink"]
+    [0.535, 1.705, "AM broadcast", "bc"], [1.8, 2.0, "160 m amateur", "ham"],
+    [2.495, 2.505, "WWV 2.5", "sci"], [3.5, 4.0, "80 m amateur", "ham"], [4.995, 5.005, "WWV 5", "sci"],
+    [5.3305, 5.4065, "60 m amateur", "ham"], [5.9, 6.2, "49 m SW broadcast", "bc"],
+    [7.0, 7.3, "40 m amateur", "ham"], [7.3, 7.45, "41 m SW broadcast", "bc"],
+    [9.4, 9.9, "31 m SW broadcast", "bc"], [9.995, 10.005, "WWV 10", "sci"], [10.1, 10.15, "30 m amateur", "ham"],
+    [11.6, 12.1, "25 m SW broadcast", "bc"], [13.553, 13.567, "ISM 13.56", "ism"],
+    [13.57, 13.87, "22 m SW broadcast", "bc"], [14.0, 14.35, "20 m amateur", "ham"],
+    [14.995, 15.005, "WWV 15", "sci"], [15.1, 15.8, "19 m SW broadcast", "bc"],
+    [17.48, 17.9, "16 m SW broadcast", "bc"], [18.068, 18.168, "17 m amateur", "ham"],
+    [19.995, 20.005, "WWV 20", "sci"], [21.0, 21.45, "15 m amateur", "ham"],
+    [21.45, 21.85, "13 m SW broadcast", "bc"], [24.89, 24.99, "12 m amateur", "ham"],
+    [25.67, 26.1, "11 m SW broadcast", "bc"], [26.965, 27.405, "CB", "lm"], [28.0, 29.7, "10 m amateur", "ham"],
+    [30, 50, "VHF low land mobile", "lm"], [50, 54, "6 m amateur", "ham"], [54, 72, "TV 2-4", "bc"],
+    [72, 76, "fixed/mobile, RC", "lm"], [76, 88, "TV 5-6", "bc"], [88, 108, "FM broadcast", "bc"],
+    [108, 118, "aero nav (VOR/ILS)", "air"], [118, 137, "airband (AM voice)", "air"],
+    [137, 138, "weather satellites", "sat"], [138, 144, "federal", "gov"], [144, 148, "2 m amateur", "ham"],
+    [148, 150.8, "federal", "gov"], [150.8, 174, "VHF land mobile", "lm"], [156, 162.025, "marine VHF", "mar"],
+    [162.4, 162.55, "NOAA weather radio", "sci"], [174, 216, "TV 7-13", "bc"], [216, 222, "fixed/mobile", "lm"],
+    [222, 225, "1.25 m amateur", "ham"], [225, 400, "UHF military air", "air"],
+    [400, 406, "met aids, radiosondes", "sci"], [406, 406.1, "406 MHz distress beacons", "air"],
+    [406.1, 420, "federal", "gov"], [420, 450, "70 cm amateur", "ham"], [450, 470, "UHF land mobile", "lm"],
+    [462.55, 462.725, "GMRS/FRS", "lm"], [467.55, 467.725, "GMRS/FRS", "lm"],
+    [470, 608, "TV 14-36", "bc"], [608, 614, "radio astronomy", "sci"], [614, 698, "600 MHz cellular", "cell"],
+    [698, 806, "700 MHz cellular, FirstNet", "cell"], [806, 824, "public safety, SMR", "lm"],
+    [824, 849, "850 cellular uplink", "cell"], [851, 869, "public safety, SMR", "lm"],
+    [869, 894, "850 cellular downlink", "cell"], [896, 901, "900 MHz SMR", "lm"],
+    [902, 928, "ISM 915", "ism"], [902, 928, "33 cm amateur", "ham"], [929, 932, "paging", "lm"], [935, 940, "900 MHz SMR", "lm"],
+    [960, 1215, "aero radionav (DME/TACAN)", "air"], [1029, 1031, "SSR interrogation 1030", "air"],
+    [1087, 1093, "ADS-B / SSR reply 1090", "air"], [1164, 1215, "GNSS L5/E5", "sat"],
+    [1215, 1240, "GNSS L2", "sat"], [1240, 1300, "23 cm amateur", "ham"], [1300, 1350, "long-range radar", "gov"],
+    [1350, 1400, "federal", "gov"], [1400, 1427, "radio astronomy (H line)", "sci"],
+    [1427, 1518, "L-band terrestrial", "lm"], [1525, 1559, "MSS downlink (Inmarsat)", "sat"],
+    [1559, 1610, "GNSS L1 (GPS, Galileo, GLONASS)", "sat"], [1610, 1626.5, "MSS (Iridium, Globalstar)", "sat"],
+    [1626.5, 1660.5, "MSS uplink", "sat"], [1670, 1675, "met satellites", "sat"],
+    [1675, 1710, "met satellites (GOES, HRPT)", "sat"], [1710, 1780, "AWS cellular uplink", "cell"],
+    [1850, 1915, "PCS cellular uplink", "cell"], [1930, 1995, "PCS cellular downlink", "cell"]
   ];
+  // The allocation chart's lanes, top to bottom: [service, the lane's
+  // name at the left, its colour's token]. Amateur first: it is the
+  // lane the amateur band charts below open from. The colours are the
+  // palette's (--br-*), no new one.
+  var CATS = [["ham", "ham", "--br-9"], ["bc", "bcast", "--br-4"], ["air", "aero", "--br-0"],
+              ["mar", "marine", "--br-12"], ["lm", "mobile", "--br-2"], ["cell", "cell", "--br-15"],
+              ["sat", "sat", "--br-10"], ["ism", "ISM", "--br-1"], ["gov", "fed", "--br-6"],
+              ["sci", "sci", "--br-7"]];
+  var LANE_H = 11, CHART_TOP = 32;
+  function catOf(key) { for (var i = 0; i < CATS.length; i++) if (CATS[i][0] === key) return i; return -1; }
   function bandOf(hz) {
     var m = hz / 1e6, best = null;
     for (var i = 0; i < BANDS.length; i++) {
@@ -280,7 +291,7 @@
       return;
     }
     var n = rows.length;
-    geo = ISO.layout({ W: W, Hh: Hh, n: n, L: 46, R: timed() ? 112 : 70, top: 70, bottom: 54, deep: timed() || n > 12 });
+    geo = ISO.layout({ W: W, Hh: Hh, n: n, L: 46, R: timed() ? 112 : 70, top: 70, bottom: CHART_TOP + CATS.length * LANE_H + 8, deep: timed() || n > 12 });
     var L = geo.L, PW = geo.PW, DXT = geo.DXT, DYT = geo.DYT, base0 = geo.base0, RH = geo.RH;
     var lr = levelRange(), span = lr[1] - lr[0], i, k;
     geo.lr = lr;
@@ -368,27 +379,38 @@
       g.beginPath(); g.moveTo(tx, base0); g.lineTo(tx, base0 + 4); g.stroke();
       if (tx - lastX > 40) { g.fillText(tickText(tk[i]), tx, base0 + 15); lastX = tx; }
     }
-    g.textAlign = "right"; g.fillText("MHz", L + PW, base0 + 28);
-    bandStrip(g, T, L, base0 + 32, PW);
+    g.textAlign = "left"; g.fillText("MHz", L + PW + 6, base0 + 15);
+    bandStrip(g, T, L, base0 + CHART_TOP - 8, PW);
     peakLabels(g, T, lr, span);
   }
 
+  // The allocation chart: a lane per service, each allocation in view
+  // a block in its service's colour, named where the name fits; a
+  // narrower allocation inside a wider one of the same service (GMRS
+  // in UHF land mobile) is drawn over it, wider first.
   function bandStrip(g, T, x0, y, PW) {
-    var lanes = [[], []];
-    for (var i = 0; i < BANDS.length; i++) {
-      var b = BANDS[i], lo = b[0] * 1e6, hi = b[1] * 1e6;
-      if (hi < view.lo || lo > view.hi) continue;
+    var i, c, wide = [];
+    for (c = 0; c < CATS.length; c++) {
+      var ly0 = y + c * LANE_H;
+      g.fillStyle = cssVar(CATS[c][2], T.muted); g.textAlign = "right";
+      g.fillText(CATS[c][1], x0 - 4, ly0 + 8.5);
+      g.strokeStyle = T.rule;
+      g.beginPath(); g.moveTo(x0, ly0 + LANE_H - 0.5); g.lineTo(x0 + PW, ly0 + LANE_H - 0.5); g.stroke();
+    }
+    for (i = 0; i < BANDS.length; i++) wide.push(BANDS[i]);
+    wide.sort(function (p, q) { return (q[1] - q[0]) - (p[1] - p[0]); });
+    for (i = 0; i < wide.length; i++) {
+      var b = wide[i], lo = b[0] * 1e6, hi = b[1] * 1e6;
+      c = catOf(b[3]);
+      if (c < 0 || hi < view.lo || lo > view.hi) continue;
       var a = x0 + Math.max(0, fracOf(Math.max(lo, view.lo))) * PW;
       var z = x0 + Math.min(1, fracOf(Math.min(hi, view.hi))) * PW;
-      var lane = 0;
-      for (var j = 0; j < lanes[0].length; j++) if (lanes[0][j][0] < z && lanes[0][j][1] > a) lane = 1;
-      lanes[lane].push([a, z]);
-      var ly = y + lane * 11;
-      g.fillStyle = css(rgbOf(g, T.data), lane ? 0.10 : 0.16);
-      g.fillRect(a, ly, Math.max(1, z - a), 10);
-      g.strokeStyle = T.rule; g.strokeRect(a + 0.5, ly + 0.5, Math.max(1, z - a) - 1, 9);
+      var ly = y + c * LANE_H, bw = Math.max(1.5, z - a), col = cssVar(CATS[c][2], T.data);
+      g.fillStyle = css(T.bg, 1); g.fillRect(a, ly, bw, LANE_H - 1);
+      g.fillStyle = css(rgbOf(g, col), 0.38); g.fillRect(a, ly, bw, LANE_H - 1);
+      g.fillStyle = col; g.fillRect(a, ly, Math.min(bw, 1.5), LANE_H - 1);
       var label = b[2], w = g.measureText(label).width;
-      if (z - a > w + 4) { g.fillStyle = T.ink; g.textAlign = "left"; g.fillText(label, a + 2, ly + 8.5); }
+      if (bw > w + 6) { g.fillStyle = T.ink; g.textAlign = "left"; g.fillText(label, a + 4, ly + 8.5); }
     }
   }
 
@@ -624,6 +646,24 @@
     sweepMeta(fallback);
     draw();
     peakList();
+    ham();
+  }
+  // The amateur band charts (hambands.js): the newest row and its peaks.
+  function ham() {
+    if (!window.SlothHam) return;
+    var row = rows.length ? rows[rows.length - 1] : null;
+    window.SlothHam.draw({
+      doc: doc, row: row, peaks: doc && Array.isArray(doc.peaks) ? doc.peaks : [],
+      db: qDb, floor: row && num(row.floor) ? row.floor : null,
+      zoom: function (lo, hi) {
+        if (!doc) return;
+        view.lo = Math.max(doc.f_lo, lo); view.hi = Math.min(doc.f_hi, hi);
+        if (!(view.hi > view.lo)) { view.lo = doc.f_lo; view.hi = doc.f_hi; }
+        view.log = false; $("spec-log").checked = false;
+        preset(-1); invalidate(); draw(); peakList();
+        $("spec-plot").scrollIntoView({ block: "center" });
+      }
+    });
   }
   function poll(full) {
     var g = gen;
@@ -717,7 +757,7 @@
     cv.addEventListener("mouseup", onUp);
     cv.addEventListener("mouseleave", onLeave);
     cv.addEventListener("dblclick", function () { zoomTo(0); });
-    window.addEventListener("resize", function () { if (visible()) { invalidate(); draw(); } });
+    window.addEventListener("resize", function () { if (visible()) { invalidate(); draw(); ham(); } });
   }
 
   window.SlothSpectrum = {
@@ -729,6 +769,7 @@
       lastState = "";
       poll(true);
     },
-    redraw: function () { if (visible()) { invalidate(); draw(); } }
+    redraw: function () { if (visible()) { invalidate(); draw(); ham(); } },
+    BANDS: BANDS, CATS: CATS, bandOf: bandOf
   };
 })();

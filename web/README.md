@@ -490,6 +490,17 @@ Read this before exposing slothweb to anything but your own loopback.
 
 ## Reference
 
+**Info buttons** (owner, 2026-11-18: "move all source and description
+text that is usually in light grey to dialogs behind info buttons. the
+goal of this is a more efficient less cluttered display";
+`web/ui/info.js`): every static source or description note of a view (a
+`.sub` of 60 characters or more that is not a state, a count, an error
+line or a control's label) is hidden where it stood and shown in a
+dialog from an `i` button, in the panel's label where there is one above
+the note, else where the note was. The notes stay in the document, so
+this file's quotations of them still describe the page; the short live
+lines beside a label (counts, scales, errors) stay visible.
+
 The rest of this file describes each part in detail, milestone by
 milestone (W0, M0 to M6; tracker #102).
 
@@ -523,6 +534,7 @@ milestone (W0, M0 to M6; tracker #102).
 | `--peer-allow-outside-tailnet` | Allow a `--peer` address outside `100.64.0.0/10` (a LAN peer, a loopback test). There is no TLS: the link you chose is the only protection, and each such peer is announced as a warning. |
 | `--spectrum-dir DIR` | `sloth-sdrsweep`'s state directory, read-only, for the Spectrum tab ([Spectrum](#spectrum)); default `/var/lib/sloth-sdrsweep`. Absolute. A directory that is not there is the tab's "not installed". |
 | `--spectrum-request PATH` | The empty file `POST /api/spectrum/run` creates, which `sloth-sdrsweep.path` watches ([Spectrum](#spectrum)); default `/run/slothweb/sdrsweep.request`, inside the unit's `RuntimeDirectory`. Absolute. |
+| `--spectrum-marks FILE` | The operator's own frequency marks for the Spectrum tab's amateur band charts, the local repeaters ([Spectrum](#spectrum)): a text file, one `MHz,name` line each, `#` a comment; read at each `GET /api/spectrum?marks=1`, never written. Absolute. Default: none. |
 | `--help` | Usage. |
 
 Exit status: `0` after `SIGINT`/`SIGTERM`, `1` when the bind fails or
@@ -1465,9 +1477,15 @@ and older ones receding up and to the right, height and colour the
 max-hold level in dBFS (the palette's four heat stops, darkened toward
 the panel at the foot of each column so the rows read as a solid). Zoom
 presets (Full, HF 0.5-30, VHF 30-300, UHF 300-1000, L-band 1000-2000),
-a drag across the plot to zoom, a double-click for Full. Under it, a
-band-allocation strip (the US table, 47 CFR 2.106 simplified, for
-orientation: the sensor may be elsewhere). Above the ridges, labels on
+a drag across the plot to zoom, a double-click for Full. Under it, the
+allocation chart (owner, 2026-11-18: "expand the scale on the bottom of
+the spectrum map to show a full frequency chart and color code the
+bands. include the ham bands"): a lane per service (amateur, broadcast,
+aeronautical, marine, land mobile, cellular, satellite, ISM, federal,
+science), each allocation in view a block in its service's colour
+(`--br-*`, the palette's), named where the name fits; the table is the
+US one (47 CFR 2.106 simplified, for orientation: the sensor may be
+elsewhere). Above the ridges, labels on
 the N strongest peaks in view (frequency and band; a `clock harmonic?`
 dashed and marked `?`, an `internal` spur dim and marked `int`, the
 helper's own words in the list). Hovering names the frequency, the
@@ -1483,6 +1501,33 @@ slothweb's escaper and checks every number against RFC 8259's grammar
 (nesting at most eight deep), so nothing of the file reaches the answer
 unescaped; `status.json` is one flat object through the stream's own
 decoder. A GET never writes. Tests: `web/tests/test_spectrum.c`.
+
+**Amateur bands** (owner, 2026-11-18: "make spectrums for each ham band
+with common ham frequencies and local repeaters mapped";
+`web/ui/hambands.js`): under the waterfall, one chart per US amateur
+band inside the sweep (160 m to 23 cm, sixteen). Each draws the band
+plan as coloured segments (CW and data, phone, weak signal, beacons, FM
+simplex, repeater inputs and outputs, satellite, digital, ATV, mixed:
+the ARRL band plan and 47 CFR 97.301 and 97.305, simplified, for
+orientation and not a regulatory reference), the common frequencies as
+dotted marks (calling frequencies, FT8 and the other digital-mode dial
+frequencies, APRS, the ISS: conventions, which no rule sets), and what
+the newest sweep row heard: its max-hold per bin as bars and its peaks
+as stems. The sweep's bins are 100 kHz or wider, so an HF band is a
+handful of bars; a mark is where a signal would be, never that one is
+there. A click zooms the waterfall to the band; hover names the
+frequency, its segment and the marks near it.
+
+The local repeaters are the operator's: slothweb ships none, since a
+repeater list says where the sensor is. `--spectrum-marks FILE` names a
+text file of `MHz,name` lines (`146.940,W0ABC -0.6 PL 100`; `#` starts a
+comment), at most 64 KiB and 512 marks, a name printable ASCII of at
+most 48 bytes, a frequency a plain decimal from 0.001 to 30000 MHz.
+`GET /api/spectrum?marks=1` answers `configured`, `marks`
+(`f_hz`, `label`), `skipped` (lines refused) and, when the file could
+not be read, `error` (`absent`, `too_large`, `unreadable`); the file is
+read without following a link and every name is written again by
+`web_jw_str()`. The charts draw those marks in the signal colour.
 
 ## Direction finding
 
@@ -3536,6 +3581,26 @@ views' statements, no second opener. Acceptance (§12): the
 output; a write statement is refused.
 
 ### The WiFi view (§8.8)
+
+Since 2026-11-18 (owner: "on the wifi tab move the spectrum to the top";
+"make the table with the scan 2 columns with 2.4 in column one and 5-6g
+in column 2. this table now becomes the key to the spectrum so move the
+selection behavior to it and remove the existing key under the spectrum";
+"range for the spectrum also controls the tables") the view opens with
+the controls and the channels panel, then the card's scan, then the
+card's link. The card's scan is two lists side by side, 2.4 GHz
+(channels 1 to 14) and 5 and 6 GHz, under one header (the left list's;
+the right repeats its words), and it is the isometric waterfall's key:
+a row's first cell is a button in the colour the waterfall stacks its
+SSID in (`scanKeyCell()`), which fades every other SSID until pressed
+again and dims the table's other rows; a row whose SSID no transmitter
+in the window's mix carries has no colour and its button is off. The key
+that was under the canvas (the band steps, the SSID chips and the
+Clients buttons) is gone; the clients lane stays, and nothing picks one
+client now. The window control filters the card's scan, the card's link
+and the access-point table to rows last seen in the window; each count
+says how many were older. Under Monitor the card's panels are not shown,
+so there is no key there.
 
 ```
 GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90

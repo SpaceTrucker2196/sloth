@@ -281,6 +281,7 @@ int main(int argc, char **argv) {
     /* The Spectrum tab reads sloth-sdrsweep's directory and can create
      * one request file (web_spectrum.h); it never drives the radio. */
     web_spectrum_init(&g_spectrum, cfg.spectrum_dir, cfg.spectrum_request);
+    web_spectrum_set_marks(&g_spectrum, cfg.spectrum_marks);
     g_m4.spectrum = &g_spectrum;
     /* The Camera tab reads the capture helper's latest.jpg
      * (web_camera.h); it never drives the camera. */

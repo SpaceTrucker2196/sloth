@@ -20,6 +20,15 @@
  *                                the runs that started in the last R),
  *                                oldest first; null when none could be
  *                                read. 400 "unknown_range" for another R.
+ *   GET /api/spectrum?marks=1    the operator's marks for the amateur
+ *                                band charts: "configured" (a file was
+ *                                named with --spectrum-marks), "marks"
+ *                                [{"f_hz","label"}], "skipped" (lines
+ *                                refused), and "error" ("absent",
+ *                                "too_large", "unreadable") when the
+ *                                file could not be read. Every scope's:
+ *                                the file is the operator's, not a
+ *                                capture.
  *   POST /api/spectrum/run       ask for a run: creates the request
  *                                file (--spectrum-request), which
  *                                sloth-sdrsweep.path watches. 202, or
@@ -85,12 +94,30 @@
 #define WEB_SPECTRUM_HIST_CELLS 1500000LL
 #define WEB_SPECTRUM_BINS_MAX   200000
 
+/* The operator's marks file (--spectrum-marks): at most this many
+ * bytes and marks, a name of at most WEB_SPECTRUM_MARK_NAME bytes. */
+#define WEB_SPECTRUM_MARKS_MAX_BYTES (64L << 10)
+#define WEB_SPECTRUM_MARKS_MAX  512
+#define WEB_SPECTRUM_MARK_NAME  48
+
 typedef struct web_spectrum {
     char dir[1024];
     char request[1024];
+    char marks[1024];      /* --spectrum-marks; "" when none was given */
 } web_spectrum_t;
 
 void web_spectrum_init(web_spectrum_t *sp, const char *dir, const char *request);
+/* The operator's own frequency marks for the amateur band charts (the
+ * local repeaters): a text file, one "MHz,name" line each, '#' a
+ * comment. NULL or "": none. */
+void web_spectrum_set_marks(web_spectrum_t *sp, const char *path);
+
+/* One line of the marks file, without its newline: 1 and *hz, name[]
+ * for a mark, 0 for a blank or comment line, -1 for anything else (a
+ * frequency that is not a plain decimal from 0.001 to 30000 MHz, a
+ * missing, empty or over-long name, a byte that is not printable
+ * ASCII). */
+int  web_spectrum_mark_line(const char *line, size_t n, long long *hz, char *name, size_t cap);
 
 /* GET. *body is malloc'd (the caller frees it), *status 200 or 400 (an
  * unknown query). out_of_scope (the Local scope: a sweep is radio, not
