@@ -2,11 +2,19 @@
 #include <string.h>
 #include "ble_watchlist.h"
 
-/* Contract in ble_watchlist.h. The shipped table has no rows: there is
- * nothing here to point at, so the "table" is a NULL pointer and a zero
- * count rather than an empty array, which C99 does not have. */
-static const ble_wl_row_t *g_rows;
-static int                 g_n;
+/* Contract in ble_watchlist.h. The shipped rows are the intel pack's
+ * ble-watchlist (#231), and it ships none. C99 has no empty array, so
+ * the shipped table carries a terminator row that is never in force:
+ * PACK_N is the rows before it, and with zero the matcher's loop never
+ * reads the array at all. */
+static const ble_wl_row_t g_pack_rows[] = {
+#include "ble_watchlist.inc"
+    { NULL, 0, 0, 0, 0, 0, NULL }     /* terminator, never in force */
+};
+#define PACK_N ((int)(sizeof(g_pack_rows) / sizeof(g_pack_rows[0])) - 1)
+
+static const ble_wl_row_t *g_rows = g_pack_rows;
+static int                 g_n    = PACK_N;
 
 static int len_ok(const ble_wl_row_t *w, size_t len) {
     if (w->min_len >= 0 && len < (size_t)w->min_len) return 0;
@@ -62,6 +70,6 @@ int ble_watchlist_set_table(const ble_wl_row_t *rows, int n) {
 }
 
 void ble_watchlist_reset(void) {
-    g_rows = NULL;
-    g_n    = 0;
+    g_rows = g_pack_rows;
+    g_n    = PACK_N;
 }

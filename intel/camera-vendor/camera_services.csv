@@ -1,0 +1,4 @@
+service,label,camera_specific
+_axis-video,Axis video camera service (IANA axis-video),1
+_cctv,IP/CCTV security video service (IANA cctv),1
+_rtsp,RTSP stream service (IANA rtsp),0

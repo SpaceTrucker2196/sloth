@@ -1,7 +1,7 @@
 ---
 type: CAM_SSDP_DEVICE
 technique: ""
-rule_file: src/alerts/rules_camera.c:139 of rule_cam_ssdp_device()
+rule_file: src/alerts/rules_camera.c:140 of rule_cam_ssdp_device()
 count_semantics: one fire() per camera device per engine tick (POLL_MS 250 ms default = ~4 ticks/s, include/sloth.h:28, src/poll_core.c:32), where a device is the USN's UUID (or, with no UUID, the announcer IP). count == evaluations (src/alerts/engine.c:478-479): while the SSDP rows live in s->ssdp_devices the rule re-fires the device's key every alerts_update(), so count is ticks-held, not NOTIFY packets. A camera announcing several NOTIFYs (DigitalSecurityCamera:1 + rootdevice, or from two addresses) under one UUID is deliberately ONE alert - the lead row speaks and the rest are folded into one detail, so the detail signature stays still and does not churn alert.update every tick. observations stays low but is not pinned at 1: the detail carries the lead row's NTS (alive/byebye - a byebye NOTIFY is not "search" and still qualifies, overwriting the row's nts, src/ssdp_snoop.c:141) and the folded-row count, so a byebye or a newly folded row is a genuine observation, emitted as at most one alert.update per ALERT_UPDATE_MIN_S (60 s).
 severity_assessment: agree - WARN. A device naming itself a camera over SSDP is worth surfacing (surveillance/attack-surface exposure) but is the device's own claim, not an adversary step. WARN not CRIT is right.
 false_positive_risk: low for DigitalSecurityCamera:1 (the UPnP standard camera device type - the device naming itself a camera in the field that exists for it); medium for Basic:1 + vendor SERVER (a vendor-name token in a free-text header, matched case-insensitively; the detail says it is the device's own claim, not a registry check).

@@ -46,7 +46,7 @@ the Wi-Fi it watches:
   palette, the alert knowledge bundle and the golden fixtures in one
   reproducible tar on `sloth`'s releases, how to verify it, and the
   decisions behind it.
-- [[pack-schema]] — the intel pack manifest, file set and immutability
+- [[pack-schema]] — the intel pack manifest, file set and immutability; §6 sloth's consumer side (`intel/`, `make update-intel`, the `intel_pack` hash, #231)
   rule, v1 draft.
 - [[threat-model]] — assets A1–A5, adversaries ADV-1..4, trust
   boundaries TB-1..7, and the finding → boundary map every security

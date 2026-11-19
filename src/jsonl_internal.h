@@ -64,6 +64,8 @@ void     jsonl_kv_mac(char *buf, int sz, int *off, const char *key,
                       const uint8_t mac[6]);
 void     jsonl_start_obj(char *buf, int sz, int *off, const char *type, time_t ts);
 void     jsonl_end_obj(char *buf, int sz, int *off);
+/* ,"intel_pack":{"version":...,"hash":...} (#231), into a LINEBUF line. */
+void     jsonl_intel_pack(char *buf, int *off);
 
 #define any_sink    jsonl_any_sink
 #define fnv1a       jsonl_fnv1a

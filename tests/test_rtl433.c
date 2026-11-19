@@ -1174,8 +1174,9 @@ static void test_sensor_health_rtl433_block(void) {
                          "\"rtl433_read_errors\":0,\"rtl433_err\":\"\"") != NULL);
         ASSERT(strstr(b, "\"rtl433_state\":\"error\"") != NULL);
         ASSERT(strstr(b, "\"rtl433_err\":\"read: Input/output error\"") != NULL);
-        /* The block sits before the tail test_jsonl.c pins. */
-        ASSERT(strstr(b, "\"rtl433_err\":\"\",\"daemon\":\"rf\",\"db_max_mb\":") != NULL);
+        /* The block sits before the tail test_jsonl.c pins, which since
+         * JSONL 2.6.0 (#231) opens with the intel-pack snapshot. */
+        ASSERT(strstr(b, "\"rtl433_err\":\"\",\"intel_pack\":{\"version\":") != NULL);
     }
     unlink(g_jl);
     sloth_clock_test_set(NULL, NULL);

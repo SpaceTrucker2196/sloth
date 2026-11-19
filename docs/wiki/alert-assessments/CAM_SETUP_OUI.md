@@ -1,7 +1,7 @@
 ---
 type: CAM_SETUP_OUI
 technique: ""
-rule_file: src/alerts/rules_camera.c:223 of rule_cam_setup_oui()
+rule_file: src/alerts/rules_camera.c:225 of rule_cam_setup_oui()
 count_semantics: per poll tick (POLL_MS 250 ms) in which the matching BSSID is still in the beacon table; `count` is the engine's `evaluations` alias, not a frame or incident count. One incident per BSSID (`camoui:<mac>`); it re-asserts every tick for as long as the AP's last beacon is under BEACON_AGE_SECS (300 s) old, and resolves 300 s after the rule stops re-asserting it.
 severity_assessment: agree - WARN for an exposure (a camera-vendor box acting as an AP) that corroborates but cannot confirm a camera; CRIT would claim a device class the rule itself says it did not observe.
 false_positive_risk: medium - the registry assignment names the maker, never the product (a Hikvision NVR or an Arlo base station match as readily as a camera), and the `randomized-local` form rests on 22 free bits coinciding.

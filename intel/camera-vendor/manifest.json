@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "pack_name": "camera-vendor",
+  "pack_version": "1.0.1",
+  "tier": "table",
+  "country": null,
+  "build_time": "2026-11-16T00:00:00Z",
+  "notes": "rows moved from sloth at fa366881 (src/camera_vendor.c)",
+  "files": [
+    {
+      "path": "camera_server_brands.csv",
+      "sha256": "37bac41d661c7b10f85c34335ee7df31d08b2ad89167b12116931e98ced14a0a",
+      "bytes": 68,
+      "rows": 9,
+      "source_url": "https://github.com/SpaceTrucker2196/sloth/blob/fa366881644ad32160f5ca8e586af0fdedac00c4/src/camera_vendor.c",
+      "retrieved": "2026-11-16",
+      "licence": "rows written in sloth (SLOTH SOURCE-AVAILABLE LICENSE 1.0) by the owner of sloth and sloth-comint; sloth carries them under its own licence, sloth-comint publishes them under PolyForm Noncommercial 1.0.0",
+      "format": "csv-rows"
+    },
+    {
+      "path": "camera_services.csv",
+      "sha256": "d3eb3cd5c4c970bc98a13e7aabdbafb1501f96a485e9e89c894c713916d31dd2",
+      "bytes": 179,
+      "rows": 3,
+      "source_url": "https://github.com/SpaceTrucker2196/sloth/blob/fa366881644ad32160f5ca8e586af0fdedac00c4/src/camera_vendor.c",
+      "retrieved": "2026-11-16",
+      "licence": "rows written in sloth (SLOTH SOURCE-AVAILABLE LICENSE 1.0) by the owner of sloth and sloth-comint; sloth carries them under its own licence, sloth-comint publishes them under PolyForm Noncommercial 1.0.0",
+      "format": "csv-rows"
+    },
+    {
+      "path": "camera_setup_ssids.csv",
+      "sha256": "b81560970ccf8517a8f8527061fe5e76f2b31188334a85ad7865e79d0071dca2",
+      "bytes": 152,
+      "rows": 4,
+      "source_url": "https://github.com/SpaceTrucker2196/sloth/blob/fa366881644ad32160f5ca8e586af0fdedac00c4/src/camera_vendor.c",
+      "retrieved": "2026-11-16",
+      "licence": "rows written in sloth (SLOTH SOURCE-AVAILABLE LICENSE 1.0) by the owner of sloth and sloth-comint; sloth carries them under its own licence, sloth-comint publishes them under PolyForm Noncommercial 1.0.0",
+      "format": "csv-rows"
+    },
+    {
+      "path": "camera_vendors.csv",
+      "sha256": "e66d44aec4e07d3dd105a8c2154c86f57516bc30c1c3f2c141e2fd1cde7d9932",
+      "bytes": 21871,
+      "rows": 455,
+      "source_url": "https://github.com/SpaceTrucker2196/sloth/blob/fa366881644ad32160f5ca8e586af0fdedac00c4/src/camera_vendor.c",
+      "retrieved": "2026-11-16",
+      "licence": "rows written in sloth (SLOTH SOURCE-AVAILABLE LICENSE 1.0) by the owner of sloth and sloth-comint; sloth carries them under its own licence, sloth-comint publishes them under PolyForm Noncommercial 1.0.0",
+      "format": "csv-rows"
+    },
+    {
+      "path": "SOURCE.md",
+      "sha256": "3faf710bdb97b4e94326b1f55de56b4ed17bc2cf169824082a02b3878b3f3a15",
+      "bytes": 4248,
+      "source_url": "sloth-comint:packs/camera-vendor/SOURCE.md",
+      "retrieved": "2026-11-16",
+      "licence": "written by the owner of sloth and sloth-comint; sloth carries it under its own licence, sloth-comint publishes it under PolyForm Noncommercial 1.0.0",
+      "format": "md-document"
+    }
+  ]
+}

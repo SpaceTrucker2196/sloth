@@ -584,7 +584,7 @@ static void test_lookup(void) {
     /* The same MAC against sloth's own table: no vendor. */
     oui_build_t sl;
     oui_build_init(&sl);
-    WT_EQ(oui_build_sloth(&sl, "src/oui.c"), 0);
+    WT_EQ(oui_build_sloth(&sl, WEB_SLOTH_OUI), 0);
     WT_EQ(oui_build_finish(&sl, "sloth"), 0);
     web_m4_t m = g_m4;
     m.oui = &sl.tab;

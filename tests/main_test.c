@@ -197,6 +197,7 @@ void run_icmp_log_tests(void);
 void run_threat_intel_tests(void);
 void run_vendor_watchlist_tests(void);
 void run_camera_vendor_tests(void);     /* tests/test_camera_vendor.c (#106 slice A) */
+void run_intel_pack_tests(void);        /* tests/test_intel_pack.c (#231) */
 void run_alerts_tests(void);
 void run_cleartext_creds_tests(void);
 void run_pop3_snoop_tests(void);
@@ -417,6 +418,7 @@ int main(void) {
     run_threat_intel_tests();
     run_vendor_watchlist_tests();
     run_camera_vendor_tests();
+    run_intel_pack_tests();
     run_alerts_tests();
     run_cleartext_creds_tests();
     run_pop3_snoop_tests();

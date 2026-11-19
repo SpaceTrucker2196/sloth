@@ -10,6 +10,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "runner.h"
+#include "intel_pack.h"
 #include "sloth.h"
 #include "alerts.h"
 #include "alerts/twin_field.h"
@@ -329,9 +330,12 @@ static void test_sensor_health_carries_the_counts(void) {
              "\"twin193_named\":0,\"twin193_late_laa\":1,"
              "\"twin193_coincide\":1,\"twin193_excl_carrier\":0,"
              "\"twin193_excl_faint\":0,\"twin193_excl_sibling\":0,"
-             "\"twin193_excl_any\":0,\"daemon\":\"wifi\",\"db_max_mb\":-1,"
+             "\"twin193_excl_any\":0,"
+             "\"intel_pack\":{\"version\":\"%s\",\"hash\":\"%s\"},"
+             "\"daemon\":\"wifi\",\"db_max_mb\":-1,"
              "\"jsonl_version\":\"%s\"}\n",
-             (long long)c.since, SLOTH_JSONL_VERSION);
+             (long long)c.since, intel_pack_version(), intel_pack_hash(),
+             SLOTH_JSONL_VERSION);
     ASSERT(strstr(body, want) != NULL);
 }
 

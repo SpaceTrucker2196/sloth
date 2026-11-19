@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "pack_name": "oui-builtin",
+  "pack_version": "1.0.1",
+  "tier": "table",
+  "country": null,
+  "build_time": "2026-11-16T00:00:00Z",
+  "notes": "rows moved from sloth at fa366881 (src/oui.c)",
+  "files": [
+    {
+      "path": "oui_builtin.csv",
+      "sha256": "ed1ed44c548b3d4a343ac90c356a139a809f59cece4b6671d18d86156edead40",
+      "bytes": 1761,
+      "rows": 118,
+      "source_url": "https://github.com/SpaceTrucker2196/sloth/blob/fa366881644ad32160f5ca8e586af0fdedac00c4/src/oui.c",
+      "retrieved": "2026-11-16",
+      "licence": "rows written in sloth (SLOTH SOURCE-AVAILABLE LICENSE 1.0) by the owner of sloth and sloth-comint; sloth carries them under its own licence, sloth-comint publishes them under PolyForm Noncommercial 1.0.0",
+      "format": "csv-rows"
+    },
+    {
+      "path": "SOURCE.md",
+      "sha256": "29fc215cc9bced0dbbfec9da985cc3d1e4deb828b4b361d44519a60078e6cd04",
+      "bytes": 1490,
+      "source_url": "sloth-comint:packs/oui-builtin/SOURCE.md",
+      "retrieved": "2026-11-16",
+      "licence": "written by the owner of sloth and sloth-comint; sloth carries it under its own licence, sloth-comint publishes it under PolyForm Noncommercial 1.0.0",
+      "format": "md-document"
+    }
+  ]
+}

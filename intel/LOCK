@@ -1,0 +1,10 @@
+# The intel-pack snapshot this tree builds from (#231). Written by
+# `make update-intel` (tools/intel_gen lock); never edited by hand:
+# the build refuses a LOCK whose hash the packs do not hash to.
+# hash: SHA-256 over "<pack_name> <sha256 of its manifest.json>\n"
+# for each pack below, in this order (docs/wiki/pack-schema.md).
+pack_version: 1.0.1
+hash: 04f82069fb3ef588712a11f82df50b049444df1c1a9a30bce324f491e645721c
+comint_commit: eba181f0a1da55987cb370e18b50b5bf4d6afbd3
+date: 2026-11-19
+packs: attacker-ouis ble-watchlist camera-vendor oui-builtin surveillance-endpoints tool-fingerprints

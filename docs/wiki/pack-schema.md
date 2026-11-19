@@ -2,11 +2,11 @@
 
 **Summary**: The shape of a `sloth-comint` intelligence pack — the
 manifest's fields, the file set a v1 pack carries, and the rule that a
-published pack never changes. **This is a v1 draft for Stage 1 to build
-against, not an implemented format**: no pack exists, `sloth-comint`
-holds a README only, and nothing in this tree reads a manifest. Stage 1
-is free to correct it against what it finds; Stage 0's job was to write
-down a target precise enough to disagree with.
+published pack never changes. Written as the v1 draft Stage 1 built
+against; Stage 1 (sloth-comint) settled the open questions of §5 in its
+own copy of this format. Since #231 (Stage 2) sloth **reads** v1 packs:
+§6 is the consumer side, what sloth's own generator accepts and refuses
+and how the `intel_pack` hash it reports is computed.
 
 **Sources**: issue #184 §2 C6 and §3 Stage 1, decision 3 (recorded as
 [ADR 0003](adr/0003-intelligence-is-files.md)), owner rulings on #184 §5
@@ -18,7 +18,7 @@ of 2026-11-04; `web/data/SOURCE.md`, `web/data/btsig/SOURCE.md`,
 `src/tool_fingerprint.c`, `src/ble_watchlist.h`;
 `docs/wiki/architecture-split.md` §3 for the measured row counts.
 
-**Last updated**: 2026-11-05
+**Last updated**: 2026-11-18 (#231: §6, sloth's consumer side: `intel/`, `tools/intel_gen`, `intel/LOCK`, the snapshot hash `intel_pack` reports, `make update-intel`, `make intel-parity`), 2026-11-05
 
 ---
 
@@ -248,6 +248,92 @@ Named here so they are not mistaken for settled:
 - Whether `comint.db` is built from a pack or is the pack's source. #184
   §3 Stage 1 puts a `comint.db` DDL in `schema/` and a loader in
   `tools/`, which implies built from, but does not say it.
+
+---
+
+## 6. sloth's consumer side (#231)
+
+What sloth does with a pack since Stage 2. The generator is sloth's own
+(`tools/intel_gen.c`, `tools/intel_read.c`), written against this page;
+no generator code from sloth-comint is in this tree.
+
+**The snapshot.** `intel/` holds the six packs sloth consumes, each as a
+directory with its `manifest.json`, `SOURCE.md` and data files, exactly
+as published: `attacker-ouis`, `ble-watchlist`, `camera-vendor`,
+`oui-builtin`, `surveillance-endpoints`, `tool-fingerprints` (pack
+1.0.0). The dashboard's packs (`ieee-registry`, `btsig`,
+`vendor-research`) are not here. `intel/LOCK` has four `key: value`
+lines: `pack_version` (the bundle's version), `hash`, `comint_commit`
+(the sloth-comint commit the files were copied from) and `date`.
+
+**The snapshot hash** (`intel_pack.hash`): SHA-256 over the text made of
+one line per pack, in byte order of pack name, `<pack_name> <lowercase
+hex SHA-256 of its manifest.json>\n`. A manifest covers every file's
+hash, so this covers every byte of the six packs and nothing else. It is
+sloth's hash, not sloth-comint's `MANIFEST.json` hash: that one covers
+packs sloth does not carry. To check it by hand:
+
+```sh
+cd intel && for p in attacker-ouis ble-watchlist camera-vendor oui-builtin \
+  surveillance-endpoints tool-fingerprints; do
+  printf '%s %s\n' "$p" "$(sha256sum < $p/manifest.json | cut -d' ' -f1)"
+done | sha256sum
+```
+
+**What the build checks**, before a byte of data is parsed, and refuses
+the build on: an unknown `schema_version`; a field v1 does not define, a
+duplicate member, a non-integer number, a path that is not a flat
+pack-relative name; `tier` other than `table`; `pii: true`; a listed
+file whose length, SHA-256 or (for a CSV) row count differs from the
+manifest; a file in the pack directory the manifest does not list; a
+`pack_name` other than the directory's; and a LOCK whose `hash` the packs
+do not hash to. Then each `csv-rows` file is read per RFC 4180 against
+the exact header its C struct needs, and each value against the C type
+it lands in and the rule its table's code depends on: an OUI is six
+upper-case hex digits with neither the I/G nor the U/L bit;
+`oui_builtin.csv` is ascending and unique (`oui_lookup()` binary
+searches it); a flag is `0` or `1`; a tool row names a `SLOTH_TOOL_*`
+and `AP_FP_FLAG_*` this build defines, its `unverified` agrees with an
+`UNVERIFIED - ` evidence prefix, and `id`, `version` and `evidence` fit
+the alert fields they are copied into; a BLE row passes what
+`ble_watchlist_set_table()` would refuse. A table that would be an empty
+C array is refused, except the BLE watchlist, which ships none.
+
+**What it writes**: one initialiser file per array into `build/intel/`,
+the rows only (`oui_builtin.inc`, `attacker_hak5.inc`,
+`attacker_espressif.inc`, `camera_oui.inc`, `camera_server_brands.inc`,
+`camera_services.inc`, `camera_setup_ssids.inc`,
+`surveillance_endpoints.inc`, `tool_signatures.inc`,
+`ble_watchlist.inc`) and `intel_pack.inc` (the version and hash). Never
+committed, the same for every configuration; every compile waits on it.
+slothweb's no-CSV vendor fallback reads `oui_builtin.inc` as text.
+
+**`intel_pack` in the stream** ([[jsonl-schema]], 2.6.0): on every
+`sensor_health` of both daemons, and on an alert whose rule consulted
+one of the tables (the rule stages it for that fire,
+`fire_stage_intel()`): `EVIL_TWIN`, `EVIL_TWIN_PROXIMITY`, `KARMA_AP`,
+`CAM_SETUP_SSID`, `CAM_MDNS_SERVICE`, `CAM_SSDP_DEVICE`, `CAM_SETUP_OUI`,
+`SURV_CLOUD_SNI`, `SURV_DNS`, `BLE_WATCHLIST`, and `BLE_HID_UNEXPECTED`
+in its OUI form. It is build provenance, neither monitor nor
+joined-network data; the fleet export does not carry it (its alert row
+is read from `sloth.db`, which does not record it), and an importer
+refuses a line with it, as it refuses any member no export defines.
+
+**Refreshing.** `make update-intel PACK=<dir> [COMMIT=<sha>]`: `PACK` is
+sloth-comint's `packs/` or an unpacked `sloth-intel-pack-<ver>/`. It
+copies the six packs' listed files only, verifies and parses them, and
+rewrites `intel/LOCK`; a refusal leaves `intel/` as it was. The commit
+is `PACK`'s git `HEAD` when nothing under it is uncommitted, else
+`COMMIT=` is required. Nothing in the build, the tests or CI runs it,
+and it reaches no network. A refresh that changes rows also changes the
+constants `tests/test_intel_pack.c` pins (row counts, sample rows) in
+the same commit.
+
+**Parity.** `make intel-parity [PARITY_REF=<rev>] [PARITY_INC=<dir>]`
+compiles the six sources as they stood at `PARITY_REF` (default
+`1c207a0a`, the last commit with hand-kept rows) beside arrays built
+from the generated files and compares them element by element. Needs
+git; not in `make test`.
 
 ---
 

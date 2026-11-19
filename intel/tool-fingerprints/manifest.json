@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "pack_name": "tool-fingerprints",
+  "pack_version": "1.0.1",
+  "tier": "table",
+  "country": null,
+  "build_time": "2026-11-16T00:00:00Z",
+  "notes": "rows moved from sloth at fa366881 (src/tool_fingerprint.c)",
+  "files": [
+    {
+      "path": "tool_fingerprints.csv",
+      "sha256": "0eaaba888179a5391eb904f4490c81f5e8e57d2dd4ed499e380a10a5d21ecbe6",
+      "bytes": 648,
+      "rows": 2,
+      "source_url": "https://github.com/SpaceTrucker2196/sloth/blob/fa366881644ad32160f5ca8e586af0fdedac00c4/src/tool_fingerprint.c",
+      "retrieved": "2026-11-16",
+      "licence": "rows written in sloth (SLOTH SOURCE-AVAILABLE LICENSE 1.0) by the owner of sloth and sloth-comint; sloth carries them under its own licence, sloth-comint publishes them under PolyForm Noncommercial 1.0.0",
+      "format": "csv-rows"
+    },
+    {
+      "path": "SOURCE.md",
+      "sha256": "bc83827d3c6d995fd8dd0f9637c0a99315b89da17797b6c00c99e3281831146a",
+      "bytes": 2736,
+      "source_url": "sloth-comint:packs/tool-fingerprints/SOURCE.md",
+      "retrieved": "2026-11-16",
+      "licence": "written by the owner of sloth and sloth-comint; sloth carries it under its own licence, sloth-comint publishes it under PolyForm Noncommercial 1.0.0",
+      "format": "md-document"
+    }
+  ]
+}

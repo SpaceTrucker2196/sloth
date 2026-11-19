@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <sys/resource.h>
 #include "runner.h"
+#include "intel_pack.h"
 #include "sloth.h"
 #include "attack_hw.h"
 #include "jsonl.h"
@@ -642,6 +643,39 @@ static void test_emit_alert_omits_inventory_when_unconsulted(void) {
     char *body = slurp(tmp_path);
     ASSERT(body != NULL);
     ASSERT(!contains(body, "inventory"));
+    /* Nor the intel pack (#231): this rule read no table. Seen red with
+     * jsonl_intel_pack() called unconditionally in both emitters. */
+    ASSERT(!contains(body, "intel_pack"));
+}
+
+/* #231: an alert whose rule consulted an intel-pack table names the
+ * snapshot, version and hash together, on the legacy record and on the
+ * lifecycle event. */
+static void test_emit_alert_carries_intel_pack(void) {
+    open_fresh();
+    alert_t a; memset(&a, 0, sizeof(a));
+    a.last_seen  = 1700000004;
+    a.sev        = ALERT_SEV_WARN;
+    a.type       = ALERT_TYPE_SURV_DNS;
+    a.count      = 1;
+    a.event_seq  = 1;
+    a.intel_pack = 1;
+    snprintf(a.title,       sizeof(a.title),       "SURV_DNS");
+    snprintf(a.detail,      sizeof(a.detail),      "10.0.0.5 asked for x.evidence.com");
+    snprintf(a.key,         sizeof(a.key),         "surv-dns:axon:10.0.0.5");
+    snprintf(a.incident_id, sizeof(a.incident_id), "deadbeefdeadbeef");
+    jsonl_emit_alert(&a);
+    jsonl_emit_alert_event(&a, "alert.create", a.last_seen, -1, NULL);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    char want[160];
+    snprintf(want, sizeof(want), "\"intel_pack\":{\"version\":\"%s\",\"hash\":\"%s\"}",
+             intel_pack_version(), intel_pack_hash());
+    const char *first = strstr(body, want);
+    ASSERT(first != NULL);
+    if (first) ASSERT(strstr(first + 1, want) != NULL);   /* both records */
 }
 
 /* #90: tool-signature provenance as first-class fields. A KARMA_AP
@@ -1856,9 +1890,11 @@ static void test_emit_sensor_health_carries_loaded_libs(void) {
     /* The record's last field is now the Bluetooth block's last one. */
     const char *tail = strstr(body, "\"ble_index_records\":");
     ASSERT(tail != NULL);
-    const char *end = tail ? strstr(tail, "}") : NULL;
+    /* One line: the record closes, after the members that stay last
+     * (the intel_pack object's own '}' is not the record's). */
+    const char *end = tail ? strchr(tail, '\n') : NULL;
     ASSERT(end != NULL);
-    if (end) ASSERT_EQ(end[1], '\n');
+    if (end) ASSERT_EQ(end[-1], '}');
 }
 
 /* #185 item 3 / ADR 0007: the record stream's own contract version,
@@ -1896,6 +1932,15 @@ static void test_emit_sensor_health_reports_the_jsonl_contract_version(void) {
     if (!body) return;
     ASSERT(contains(body, want));
     ASSERT(contains(body, tail));
+    /* JSONL 2.6.0 (#231): the intel-pack snapshot, a constant like the
+     * version, ahead of the daemon / db_max_mb / jsonl_version tail. */
+    {
+        char ip[160];
+        snprintf(ip, sizeof(ip),
+                 "\"intel_pack\":{\"version\":\"%s\",\"hash\":\"%s\"},\"daemon\":\"wifi\"",
+                 intel_pack_version(), intel_pack_hash());
+        ASSERT(contains(body, ip));
+    }
 
     /* Same with the optional trailing block present: the receiver's,
      * the one flag-gated block this daemon still writes. Until JSONL
@@ -2984,6 +3029,7 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_alert_carries_confidence_when_reported);
     RUN_TEST(test_emit_alert_carries_inventory_hash);
     RUN_TEST(test_emit_alert_omits_inventory_when_unconsulted);
+    RUN_TEST(test_emit_alert_carries_intel_pack);
     RUN_TEST(test_emit_alert_carries_unverified_signature);
     RUN_TEST(test_emit_alert_carries_validated_signature);
     RUN_TEST(test_emit_alert_omits_signature_when_no_tool_matched);

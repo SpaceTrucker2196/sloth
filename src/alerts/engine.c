@@ -489,6 +489,20 @@ void fire_stage_hw_verdict(int tier, int device, int signals) {
     g_hw_signals = (uint8_t)signals;
 }
 
+/* The intel-pack stage (#231): set by a rule that consulted one of the
+ * pack's tables for the finding it is about to fire, consumed (and
+ * cleared) by that fire, like the hw verdict above. */
+static uint8_t g_intel_staged;
+
+void fire_stage_intel(void) {
+    g_intel_staged = 1;
+}
+
+static void stamp_intel(alert_t *a) {
+    a->intel_pack  = g_intel_staged;
+    g_intel_staged = 0;
+}
+
 /* Refreshed on every evaluation, like stamp_signature(): a pairing can
  * appear or age out inside one incident. Consumes the stage so a later
  * fire from any other rule cannot inherit it. */
@@ -512,6 +526,7 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
      * the merge the builder exists to prevent — drop it instead. */
     if (!key || !key[0]) {
         g_hw_tier = g_hw_device = g_hw_signals = 0;
+        g_intel_staged = 0;
         return;
     }
     uint64_t mono = sloth_mono_ms();
@@ -567,6 +582,7 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
          * note in `detail` moves with it, so the change is emitted. */
         stamp_signature(a, tool_row);
         stamp_hw_verdict(a);
+        stamp_intel(a);
         stamp_evidence(a, ev_ids, ev_n);
 
         if (sev != prev) {
@@ -633,6 +649,7 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
     a->wired_attach = (uint8_t)wired;
     stamp_signature(a, tool_row);
     stamp_hw_verdict(a);
+    stamp_intel(a);
     stamp_evidence(a, ev_ids, ev_n);
     if (match_ip && match_ip[0])
         snprintf(a->match_ip, sizeof(a->match_ip), "%s", match_ip);
@@ -1026,8 +1043,12 @@ void alerts_update(sloth_state_t *s) {
     /* Every rule of the selected table, in its order. That order is
      * load-bearing (JSONL order within a tick, the twin taint, the
      * posture above) and src/alerts/rules_table.c says why (#118). */
-    for (int i = 0; i < g_alert_rule_count; i++)
+    for (int i = 0; i < g_alert_rule_count; i++) {
         g_alert_rules[i].fn(s, now);
+        /* A stage a rule set and never fired on is its own; the next
+         * rule starts clean (#231). */
+        g_intel_staged = 0;
+    }
     expire_incidents(now, sloth_mono_ms());
     dump_new_alert_pcaps(s, now);
     snapshot(s);
@@ -1059,4 +1080,5 @@ void alerts_clear(void) {
         for (int i = 0; i < g_table->forget_count; i++)
             g_table->forget[i]();
     evil_twin_taint_clear();
+    g_intel_staged = 0;
 }

@@ -7,8 +7,9 @@
  * 2026-10-26, web/data/SOURCE.md). The generated
  * build/web/web_oui_table.c is build output, never committed. A build
  * with no CSV (WEB_OUI_DIR elsewhere) still succeeds: the generator then
- * reads sloth's own 117-entry table out of src/oui.c as text (no src/
- * file is compiled into slothweb) and says so, and with neither it
+ * reads sloth's own 118-entry table as text - the rows src/oui.c
+ * compiles, build/intel/oui_builtin.inc, generated from intel/oui-builtin
+ * since #231 (no src/ file is compiled into slothweb) - and says so, and with neither it
  * builds an empty table. web_oui_full() is what A4 and the Lookup card
  * ask: only a table built from the IEEE MA-L registry can say a vendor
  * is unknown.

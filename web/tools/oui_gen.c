@@ -7,8 +7,8 @@
  * web/data/SOURCE.md), the table is theirs ("ieee"), and a CSV that
  * does not parse fails the build: a malformed registry should not
  * quietly become a smaller table. With none (a WEB_OUI_DIR without
- * them), it is sloth's own 117-entry table read out of src/oui.c as
- * text ("sloth"), and if that is unreadable too, empty ("none"). Either
+ * them), it is sloth's own 118-entry table read as text out of the rows
+ * src/oui.c compiles (build/intel/oui_builtin.inc since #231) ("sloth"), and if that is unreadable too, empty ("none"). Either
  * way the build succeeds and /api/health says which. The generated C is
  * build output and never committed. */
 #include <stdio.h>

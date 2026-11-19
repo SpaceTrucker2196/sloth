@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "pack_name": "surveillance-endpoints",
+  "pack_version": "1.0.1",
+  "tier": "table",
+  "country": null,
+  "build_time": "2026-11-16T00:00:00Z",
+  "notes": "rows moved from sloth at fa366881 (src/vendor_watchlist.c)",
+  "files": [
+    {
+      "path": "surveillance_endpoints.csv",
+      "sha256": "b7102d7b5df7fecbdfa233312335adb58080304f76de769b25e3af59134f0d6b",
+      "bytes": 164,
+      "rows": 4,
+      "source_url": "https://github.com/SpaceTrucker2196/sloth/blob/fa366881644ad32160f5ca8e586af0fdedac00c4/src/vendor_watchlist.c",
+      "retrieved": "2026-11-16",
+      "licence": "rows written in sloth (SLOTH SOURCE-AVAILABLE LICENSE 1.0) by the owner of sloth and sloth-comint; sloth carries them under its own licence, sloth-comint publishes them under PolyForm Noncommercial 1.0.0",
+      "format": "csv-rows"
+    },
+    {
+      "path": "SOURCE.md",
+      "sha256": "41091e233293c6cd03e5147ebb083cb294ecc4280d4a791613d8db6a0cd47bb7",
+      "bytes": 2421,
+      "source_url": "sloth-comint:packs/surveillance-endpoints/SOURCE.md",
+      "retrieved": "2026-11-16",
+      "licence": "written by the owner of sloth and sloth-comint; sloth carries it under its own licence, sloth-comint publishes it under PolyForm Noncommercial 1.0.0",
+      "format": "md-document"
+    }
+  ]
+}

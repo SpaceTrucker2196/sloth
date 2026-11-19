@@ -63,6 +63,7 @@ void rule_cam_mdns_service(const sloth_state_t *s, time_t now) {
                  /* RTSP is a protocol, not a device class: said so in
                   * the row itself rather than left to the doc. */
                  specific ? "" : "; RTSP corroborates, not a device class");
+        fire_stage_intel();   /* the DNS-SD service table */
         fire(ALERT_TYPE_CAM_MDNS_SERVICE, ALERT_SEV_WARN,
              "CAM_MDNS_SERVICE", detail, key,
              e->ip[0] ? e->ip : NULL, e->port, now);
@@ -199,6 +200,7 @@ void rule_cam_ssdp_device(const sloth_state_t *s, time_t now) {
                      " in its SERVER header (%.80s, NOTIFY %.15s) - the"
                      " device's own claim, not a registry check%.47s",
                      d->ip, vend[i], d->server, d->nts, rows);
+        fire_stage_intel();   /* the SERVER brand table */
         fire(ALERT_TYPE_CAM_SSDP_DEVICE, ALERT_SEV_WARN,
              "CAM_SSDP_DEVICE", detail, key, d->ip, 0, now);
     }
@@ -254,6 +256,7 @@ void rule_cam_setup_oui(const sloth_state_t *s, time_t now) {
                  : local ? "; randomized-local: U/L bit set, matched with it"
                            " masked - not itself a registry assignment"
                  : "");
+        fire_stage_intel();   /* the camera-vendor OUI table */
         fire(ALERT_TYPE_CAM_SETUP_OUI, ALERT_SEV_WARN,
              "CAM_SETUP_OUI", detail, key, NULL, 0, now);
     }

@@ -739,6 +739,7 @@ void rule_surv_cloud_sni(const sloth_state_t *s, time_t now) {
          * obvious — the key names the local host and match_ip names the
          * remote one, so the two fields carry different ends of the
          * same conversation on purpose. */
+        fire_stage_intel();   /* the surveillance-endpoint table */
         fire(ALERT_TYPE_SURV_CLOUD_SNI, ALERT_SEV_WARN,
              "SURV_CLOUD_SNI", detail, key, e->dst, 443, now);
     }
@@ -832,6 +833,7 @@ void rule_surv_dns(const sloth_state_t *s, time_t now) {
         /* match_ip is the asking host and 53, the THREAT_DOMAIN shape:
          * a DNS query has no vendor endpoint to filter on, and the
          * per-alert pcap worth having is that host's DNS traffic. */
+        fire_stage_intel();   /* the surveillance-endpoint table */
         fire(ALERT_TYPE_SURV_DNS, ALERT_SEV_LOW,
              "SURV_DNS", detail, key, e->src, 53, now);
     }

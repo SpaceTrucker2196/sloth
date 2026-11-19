@@ -15,4 +15,7 @@ const char *oui_lookup_str(const char *bssid_str);
  * callers can style it without re-deriving the flag. */
 const char *oui_vendor_label(const uint8_t *mac, int *is_random);
 
+/* Rows in the builtin table (intel/oui-builtin, #231), for the tests. */
+int oui_builtin_count(void);
+
 #endif /* OUI_H */

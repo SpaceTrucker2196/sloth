@@ -1,0 +1,14 @@
+oui,family,note
+001337,hak5,Hak5 LLC
+00C0CA,hak5,Alfa Networks (commonly bundled by Hak5)
+240AC4,espressif,Espressif (ESP32 — most common)
+246F28,espressif,Espressif (ESP32 — secondary)
+24B2DE,espressif,Espressif (ESP32 — tertiary)
+30AEA4,espressif,Espressif (ESP8266)
+84F3EB,espressif,Espressif (ESP8266 — alt block)
+A020A6,espressif,Espressif (ESP-WROOM modules)
+A4CF12,espressif,Espressif (ESP32 — wide block)
+B4E62D,espressif,Espressif (ESP32 — newer)
+C44F33,espressif,Espressif (ESP32 — newer)
+ECFABC,espressif,Espressif (ESP32-C3)
+AC0BFB,espressif,Espressif (ESP32-S2 — Flipper devboard)

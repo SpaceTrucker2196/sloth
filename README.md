@@ -319,9 +319,12 @@ make WITH_NCURSES=0           # headless / embedded
 make embedded                 # shortcut: no ncurses, no pcap
 make test                     # the whole suite (no root, no terminal, no network)
 make mutate                   # mutation-test the suite itself (verify the verifier)
+make update-intel PACK=<dir>  # refresh intel/ from an intel-pack root (by hand; no network)
 ```
 
 `make` builds the two sensor daemons and their helpers: `sloth-wifi`, the monitor, with `sloth` beside it as a symlink to it (so `./sloth ...` below and every script that names it still run the same program); `sloth-rf`, the RF half of the sensor as a headless daemon of its own (ADS-B, APRS, rtl_433, Victron and the GNSS records from decoders that are already running; no capture, no radio, nothing transmitted; [flags](docs/wiki/cli-reference.md#sloth-rf), [ADR 0010](docs/wiki/adr/0010-wifi-rf-daemons.md)); and on Linux the operator helpers `sloth-ble-scan`, `sloth-va` and, where SoapySDR is installed, `sloth-sdrsweep`. `sloth-wifi` refuses the decoder flags (`--adsb`, `--aprs`, `--aprs-freq`, `--aprs-silent-hours`, `--rtl433`, `--victron`) with exit 2 and a line naming `sloth-rf`; a host upgrading from one binary moves them with `sloth-migrate-rf` ([deployment §11.4](docs/wiki/deployment.md)). `make test` builds `sloth_test`.
+
+The intelligence tables (the builtin OUI names, the attacker-tool OUIs, the camera-vendor tables, the surveillance endpoints, the tool signatures and the BLE watchlist) are generated at build time from the pinned intel-pack snapshot in `intel/`, verified against its manifests and `intel/LOCK` first; `make update-intel` is the only thing that changes it ([pack-schema §6](docs/wiki/pack-schema.md)).
 
 Requires `libpcap-dev` and `libncursesw-dev` for the full build. The test build needs neither. The mutate target is opt-in and offline — see [`docs/wiki/mutation-testing.md`](docs/wiki/mutation-testing.md).
 

@@ -109,13 +109,17 @@ static void test_daemon_is_wifi_from_sloth(void) {
     if (at) ASSERT_EQ(strlen(at), strlen(tail));       /* the record ends there */
     ASSERT_EQ(count(out, "\"daemon\":"), 1);
     ASSERT(strstr(out, "\"daemon\":\"rf\"") == NULL);
-    ASSERT(strstr(out, "\"twin193_excl_any\":0,\"daemon\":\"wifi\",") != NULL);
+    /* The last block, then the intel-pack snapshot (JSONL 2.6.0, #231),
+     * then the tail. */
+    ASSERT(strstr(out, "\"twin193_excl_any\":0,\"intel_pack\":{\"version\":") != NULL);
+    ASSERT(strstr(out, "\"},\"daemon\":\"wifi\",") != NULL);
     /* And with no decoder in the state, the same. */
     memset(&s, 0, sizeof(s));
     sink_open();
     jsonl_emit_sensor_health(&s);
     out = sink_read();
-    ASSERT(strstr(out, "\"twin193_excl_any\":0,\"daemon\":\"wifi\",\"db_max_mb\":-1,") != NULL);
+    ASSERT(strstr(out, "\"twin193_excl_any\":0,\"intel_pack\":{\"version\":") != NULL);
+    ASSERT(strstr(out, "\"},\"daemon\":\"wifi\",\"db_max_mb\":-1,") != NULL);
 }
 
 /* "rf" from sloth-rf, in the same place. (Seen red with the "rf"
@@ -135,7 +139,8 @@ static void test_daemon_is_rf_from_sloth_rf(void) {
     if (at) ASSERT_EQ(strlen(at), strlen(tail));
     ASSERT_EQ(count(out, "\"daemon\":"), 1);
     ASSERT(strstr(out, "\"daemon\":\"wifi\"") == NULL);
-    ASSERT(strstr(out, "\"rtl433_err\":\"\",\"daemon\":\"rf\",") != NULL);
+    ASSERT(strstr(out, "\"rtl433_err\":\"\",\"intel_pack\":{\"version\":") != NULL);
+    ASSERT(strstr(out, "\"},\"daemon\":\"rf\",") != NULL);   /* the pack, then the tail */
     ASSERT_EQ(strncmp(out, "{\"type\":\"sensor_health\",\"ts\":", 29), 0);
     ASSERT_EQ(count(out, "\n"), 1);
     capture_side_install();
@@ -430,7 +435,7 @@ static void test_rf_record_carries_victron(void) {
     out = sink_read();
     ASSERT(strstr(out, "\"rtl433_err\":\"\",\"victron_state\":\"live\","
                        "\"victron_src\":\"file:/run/test/victron.jsonl\",") != NULL);
-    ASSERT(strstr(out, "\"victron_err\":\"\",\"daemon\":\"rf\",") != NULL);
+    ASSERT(strstr(out, "\"victron_err\":\"\",\"intel_pack\":{\"version\":") != NULL);
     ASSERT_EQ(count(out, "\"type\":\"victron_device\""), 1);
     ASSERT(strstr(out, "\"src\":\"file:/run/test/victron.jsonl\","
                        "\"mac\":\"c7:fe:23:b1:1c:5f\",\"model\":\"BMV-712 Smart\",") != NULL);

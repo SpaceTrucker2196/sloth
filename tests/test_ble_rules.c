@@ -627,6 +627,8 @@ static void test_hid_from_espressif_public_address_fires(void) {
                    "blehid:oui:bluetooth-monitor:24:0a:c4:11:22:33");
         ASSERT(strstr(g_s.alerts[i].detail, "Espressif") != NULL);
         ASSERT(strstr(g_s.alerts[i].detail, "no pairing observed") != NULL);
+        /* The attacker OUI tables named it (#231). */
+        ASSERT_EQ(g_s.alerts[i].intel_pack, 1);
     }
     ASSERT_STR(alert_technique(ALERT_TYPE_BLE_HID_UNEXPECTED), "T1200");
     sloth_clock_test_set(NULL, NULL);
@@ -708,6 +710,9 @@ static void test_hid_rotating_across_random_addresses_fires(void) {
     if (i >= 0) {
         ASSERT_STR(g_s.alerts[i].key, "blehid:rotate:bluetooth-monitor");
         ASSERT(strstr(g_s.alerts[i].detail, "3 new random addresses") != NULL);
+        /* Same type, no table read: no intel_pack (#231). Seen red with
+         * fire_stage_intel() moved above the switch in fire_finding(). */
+        ASSERT_EQ(g_s.alerts[i].intel_pack, 0);
     }
     sloth_clock_test_set(NULL, NULL);
 }

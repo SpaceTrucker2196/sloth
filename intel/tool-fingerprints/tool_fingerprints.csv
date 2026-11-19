@@ -1,0 +1,3 @@
+tool,vendor_ie_hash,beacon_interval_ms,supported_rates,require_flags,forbid_flags,requires_karma_echo,requires_pmkid,unverified,human_label,evidence,id,version
+SLOTH_TOOL_ESP32_MARAUDER,0,102,0,AP_FP_FLAG_ESPRESSIF_OUI,AP_FP_FLAG_HT_PRESENT,1,0,1,ESP32 Marauder,"UNVERIFIED - values from issue #74 research, 2026-09-04; no capture. Replace with a rig capture + firmware version.",esp32-marauder-01,research-2026-09-04
+SLOTH_TOOL_PINEAPPLE_MK7,0,0,0,AP_FP_FLAG_HAK5_OUI,0,1,0,1,Pineapple MK7,"UNVERIFIED - OUI list from issue #74 research, 2026-09-04; no capture. Replace with a rig capture + firmware version.",pineapple-mk7-01,research-2026-09-04

@@ -109,6 +109,7 @@ static void fire_finding(const ble_finding_t *f, time_t now) {
                      ? " and " : "",
                  (f->hid & BLE_HID_SERVICE) ? "the HID service 0x1812" : "",
                  f->sensor_iface);
+        fire_stage_intel();   /* the attacker OUI tables named the address */
         fire(ALERT_TYPE_BLE_HID_UNEXPECTED, ALERT_SEV_WARN,
              "BLE_HID_UNEXPECTED", detail, f->key, NULL, 0, now);
         break;
@@ -130,6 +131,7 @@ static void fire_finding(const ble_finding_t *f, time_t now) {
                  "devices; a category, never an identity",
                  f->addrs, f->addrs == 1 ? "" : "es", f->category,
                  f->sensor_iface, (unsigned)f->window_s);
+        fire_stage_intel();   /* the BLE watchlist rows */
         fire(ALERT_TYPE_BLE_WATCHLIST, ALERT_SEV_WARN, "BLE_WATCHLIST",
              detail, f->key, NULL, 0, now);
         break;

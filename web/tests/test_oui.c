@@ -271,10 +271,11 @@ static void test_names_cleaned(void) {
     unlink(p);
 }
 
-/* No CSV: sloth's own table, read out of src/oui.c as text, every
- * initialiser line of it. */
+/* No CSV: sloth's own table, read as text out of the rows src/oui.c
+ * compiles (WEB_SLOTH_OUI: build/intel/oui_builtin.inc, generated from
+ * intel/oui-builtin since #231), every initialiser line of it. */
 static void test_sloth_fallback(void) {
-    FILE *f = fopen("src/oui.c", "rb");
+    FILE *f = fopen(WEB_SLOTH_OUI, "rb");
     WT_ASSERT(f != NULL);
     if (!f) return;
     static char buf[1 << 16];
@@ -286,7 +287,7 @@ static void test_sloth_fallback(void) {
     WT_ASSERT(lines > 100);
     oui_build_t b;
     oui_build_init(&b);
-    WT_EQ(oui_build_sloth(&b, "src/oui.c"), 0);
+    WT_EQ(oui_build_sloth(&b, WEB_SLOTH_OUI), 0);
     WT_EQ(oui_build_finish(&b, "sloth"), 0);
     WT_EQ((long long)b.n, lines);
     WT_ASSERT(!web_oui_full(&b.tab));

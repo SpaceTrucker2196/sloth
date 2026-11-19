@@ -139,3 +139,4 @@ doubleFree:src/sdrsweep/main.c
 # Band heights / panel widths start equal on purpose; each is a separate
 # layout knob so one can be tuned without touching the others.
 duplicateAssignExpression:src/views/dashboard.c
+readdirCalled:tools/intel_read.c

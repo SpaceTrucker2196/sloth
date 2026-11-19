@@ -20,7 +20,7 @@ section naming every place the grep and #184 §2 disagree.
 `web/data/vendors/COVERAGE.md`, `packaging/systemd/`, issues #184 and
 #185, owner rulings on #184 of 2026-11-04.
 
-**Last updated**: 2026-11-17 (#185 finding 1: `dot11_data.h` no longer ships), 2026-11-16 (#185 review: C3's declared-not-defined gap), 2026-11-16 (#185 item 4: `make contract` ships C2, C3, C4, C5 and C9 as one release artifact, [[contract]]; §5 items 1, 2 and 5 restated or resolved), 2026-11-10 (C1 shipped: `SLOTH_JSONL_VERSION` exists and
+**Last updated**: 2026-11-18 (#231, Stage 2 done in sloth: the six tables of §3.1 are generated from the pinned pack snapshot in `intel/`, §3.4; the row counts §3.1 recorded as 117 and 1 are 118 and 2, counted from the compiled arrays), 2026-11-17 (#185 finding 1: `dot11_data.h` no longer ships), 2026-11-16 (#185 review: C3's declared-not-defined gap), 2026-11-16 (#185 item 4: `make contract` ships C2, C3, C4, C5 and C9 as one release artifact, [[contract]]; §5 items 1, 2 and 5 restated or resolved), 2026-11-10 (C1 shipped: `SLOTH_JSONL_VERSION` exists and
 `sensor_health` reports it, #185 item 3), 2026-11-05
 
 This page is a measurement, not a plan. It is Stage 0's first deliverable
@@ -322,6 +322,38 @@ because this is the shape a pack has to carry (see [[pack-schema]]).
 Row counts are each `SOURCE.md`'s own, which is the count the committed
 file's hash is checked against by `web/tests/test_oui.c` and
 `web/tests/test_btsig.c`; the files carry one header line more.
+
+
+### 3.4 Stage 2 (#231): the §3.1 tables come from the pack
+
+Done in sloth on 2026-11-18. The rows of every table in §3.1 that exists
+are no longer kept by hand: `intel/` holds the six packs sloth consumes
+(`oui-builtin`, `attacker-ouis`, `camera-vendor`,
+`surveillance-endpoints`, `tool-fingerprints`, `ble-watchlist`) copied
+from sloth-comint pack 1.0.1 with their manifests and `SOURCE.md`, and
+`intel/LOCK` names the version, the snapshot hash and the comint commit.
+`tools/intel_gen.c` (sloth's own generator, written against
+[[pack-schema]]; nothing of comint's tooling is in this tree) verifies
+them and writes `build/intel/*.inc`, which the six sources `#include`.
+The lookups did not change. [[pack-schema]] § 6 has the consumer side.
+
+Two counts above were wrong when written and are measured now: `g_oui`
+has **118** rows, not 117, and `TOOL_SIGNATURES` **2** (`esp32-marauder-01`
+and `pineapple-mk7-01`) plus its terminator, not 1. Both are the arrays'
+own `sizeof` (`oui_builtin_count()`, `tool_signature_count()`, pinned by
+`tests/test_intel_pack.c`). The file:line column of §3.1 is the tree
+before #231; the rows now live in `intel/*/` and the arrays are a few
+lines each.
+
+Parity, the proof #184 asks for: `make intel-parity` compiles each of
+the six sources as they stood at `1c207a0a` (the parent of the change)
+beside an array built from the generated file, the same struct, and
+compares element by element and field by field, order included; every
+row identical. Run locally against sloth-comint's own `gen_sloth` output
+on the same packs, the same holds; that check is not in CI.
+
+`k_oui` in `src/dot11_ie.c` (§3.2) did not move: it is not in #184's
+list and no pack carries it.
 
 ---
 

@@ -20,8 +20,10 @@
  * becomes '?', and it is cut to WEB_OUI_NAME_MAX bytes on a code-point
  * boundary. The same (class, prefix) twice keeps the first.
  *
- * The fallback reads sloth's own table out of src/oui.c as text: every
- * "{ 0xHHHHHH, "Name" }" initialiser line. */
+ * The fallback reads sloth's own table as text: every
+ * "{ 0xHHHHHH, "Name" }" initialiser line of the rows src/oui.c compiles
+ * (build/intel/oui_builtin.inc since #231, which tools/intel_gen writes
+ * one row per line in exactly that shape). */
 #ifndef SLOTHWEB_OUI_CSV_H
 #define SLOTHWEB_OUI_CSV_H
 
@@ -54,7 +56,8 @@ void oui_build_free(oui_build_t *b);
 
 /* Add one registry CSV. 0, or -1 with b->err set. */
 int  oui_build_csv(oui_build_t *b, const char *path);
-/* Add sloth's src/oui.c table. 0 (n entries added), or -1. */
+/* Add sloth's own table (its initialiser rows as text). 0 (n entries
+ * added), or -1. */
 int  oui_build_sloth(oui_build_t *b, const char *path);
 /* Sort, drop duplicates and fill b->tab with source. 0, or -1. */
 int  oui_build_finish(oui_build_t *b, const char *source);

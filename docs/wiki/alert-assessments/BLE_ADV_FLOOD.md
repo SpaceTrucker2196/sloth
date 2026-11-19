@@ -1,7 +1,7 @@
 ---
 type: BLE_ADV_FLOOD
 technique: T1499
-rule_file: src/alerts/rules_ble.c:148 of rule_ble_adv_flood() (detail rendered by fire_finding(), src/alerts/rules_ble.c:74-99; gates in src/ble_detect.c:54-114)
+rule_file: src/alerts/rules_ble.c:150 of rule_ble_adv_flood() (detail rendered by fire_finding(), src/alerts/rules_ble.c:74-99; gates in src/ble_detect.c:54-114)
 count_semantics: per poll tick (POLL_MS 250 ms) in which one (sensor, Event_Type, payload family, id, subtype) key's current or previous tumbling window passes all three gates; one incident per key (`bleflood:<iface>:<adv_type>:<family>:<id>:<subtype>`). Not per advertisement: the window counts advertisements internally and the detail reports them, but the alert's `count` is evaluations.
 severity_assessment: agree - WARN; the cost is a pairing-notification nuisance and, pre-iOS 17.2, a lock-up, on nearby handsets. A CRIT is not warranted for a DoS of the pairing UI, and no gate's number has a cited basis, so the rule cannot carry a higher claim.
 false_positive_risk: medium - every listed key is also what genuine AirPods, Surface mice, Fast Pair headsets and Galaxy Buds send; the fresh-address gate is what separates a crowd from the tool, and its threshold (20 fresh addresses in 10 s at >=10 adv/s) is a judgement, stated as one.

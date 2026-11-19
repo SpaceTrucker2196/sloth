@@ -1847,7 +1847,7 @@ static void test_a4_off_without_the_ieee_table(void) {
     fx(0, NULL);
     oui_build_t sl;
     oui_build_init(&sl);
-    WT_EQ(oui_build_sloth(&sl, "src/oui.c"), 0);
+    WT_EQ(oui_build_sloth(&sl, WEB_SLOTH_OUI), 0);
     WT_EQ(oui_build_finish(&sl, "sloth"), 0);
     engine_m4(&sl.tab, NULL);
     WT_ASSERT(web_anomaly_a4_reason(&an) != NULL);

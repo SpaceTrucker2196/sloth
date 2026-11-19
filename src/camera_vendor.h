@@ -80,8 +80,12 @@ int cam_setup_ssid(const char *ssid, const char **label, const char **brand);
 int cam_ssdp_row(const char *type, const char *nts, const char *server,
                  int *dsc, const char **vendor);
 
-/* Table sizes, for the provenance tests. */
+/* Table sizes, for the provenance tests (the last three since #231,
+ * where tests/test_intel_pack.c pins every table's row count). */
 int cam_vendor_oui_count(void);
+int cam_server_brand_count(void);
+int cam_mdns_service_count(void);
+int cam_setup_ssid_count(void);
 void cam_vendor_oui_at(int i, uint8_t oui[3], const char **vendor,
                        const char **org);
 int cam_vendor_oui_mixed_at(int i);

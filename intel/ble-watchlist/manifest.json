@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "pack_name": "ble-watchlist",
+  "pack_version": "1.0.1",
+  "tier": "table",
+  "country": null,
+  "build_time": "2026-11-16T00:00:00Z",
+  "notes": "rows moved from sloth at fa366881 (src/ble_watchlist.h)",
+  "files": [
+    {
+      "path": "ble_watchlist.csv",
+      "sha256": "efc7332b4d4e1e3717c6faa55e47ca04c2d3e453f7c9798c889789563b92f138",
+      "bytes": 49,
+      "rows": 0,
+      "source_url": "https://github.com/SpaceTrucker2196/sloth/blob/fa366881644ad32160f5ca8e586af0fdedac00c4/src/ble_watchlist.h",
+      "retrieved": "2026-11-16",
+      "licence": "rows written in sloth (SLOTH SOURCE-AVAILABLE LICENSE 1.0) by the owner of sloth and sloth-comint; sloth carries them under its own licence, sloth-comint publishes them under PolyForm Noncommercial 1.0.0",
+      "format": "csv-rows"
+    },
+    {
+      "path": "SOURCE.md",
+      "sha256": "86458c4c0b642b6d1c6f882f29974fadb83a61761ab68448fa4e460de7fde955",
+      "bytes": 1581,
+      "source_url": "sloth-comint:packs/ble-watchlist/SOURCE.md",
+      "retrieved": "2026-11-16",
+      "licence": "written by the owner of sloth and sloth-comint; sloth carries it under its own licence, sloth-comint publishes it under PolyForm Noncommercial 1.0.0",
+      "format": "md-document"
+    }
+  ]
+}

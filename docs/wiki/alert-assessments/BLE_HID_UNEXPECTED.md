@@ -1,7 +1,7 @@
 ---
 type: BLE_HID_UNEXPECTED
 technique: T1200
-rule_file: src/alerts/rules_ble.c:152 of rule_ble_hid_unexpected() (detail in fire_finding(), src/alerts/rules_ble.c:100-125; forms in src/ble_detect.c:116-219)
+rule_file: src/alerts/rules_ble.c:154 of rule_ble_hid_unexpected() (detail in fire_finding(), src/alerts/rules_ble.c:100-125; forms in src/ble_detect.c:116-219)
 count_semantics: per poll tick (POLL_MS 250 ms) in which a form holds. Form (a), `blehid:oui:<iface>:<mac>`: one incident per public address in the attacker-helper OUI tables advertising HID, asserted for as long as that `ble_device_t` row exists (256-row STAB_OLDEST table, no time-based expiry). Form (b), `blehid:rotate:<iface>`: one incident per sensor while >= ble.hid_rotate_addrs random addresses with a HID appearance have first_seen inside the last ble.hid_rotate_window_s.
 severity_assessment: agree - WARN; both forms are a *precursor shape* of CVE-2023-45866 (a keyboard-class advertiser that should not be there), never an observation of pairing or injection, and the public PoC is BR/EDR, not LE.
 false_positive_risk: medium for (a) - Espressif silicon ships in legitimate keyboards and remotes; low-medium for (b) - several new BLE keyboards/remotes in 15 minutes is unusual but happens (a meeting room filling, a retail display), and the threshold has no cited basis.

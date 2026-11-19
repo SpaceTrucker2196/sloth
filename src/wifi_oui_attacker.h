@@ -15,4 +15,8 @@
 int oui_is_hak5     (const uint8_t oui[3]);  /* Pineapple / Bash Bunny / etc. */
 int oui_is_espressif(const uint8_t oui[3]);  /* ESP32 / ESP8266 rogue APs    */
 
+/* Rows per table (intel/attacker-ouis, #231), for the tests. */
+int oui_hak5_count(void);
+int oui_espressif_count(void);
+
 #endif /* WIFI_OUI_ATTACKER_H */

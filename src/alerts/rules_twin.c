@@ -1409,6 +1409,7 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
                ? a->ssid_history_n : MAX_AP_SSID_HISTORY;
         ev_cite_merge(evid, &ev_n, ALERT_EVIDENCE_IDS, a->ssid_history_ev, hn);
         fire_stage_hw_verdict(hwv.tier, hwv.device, hwv.signals);
+        fire_stage_intel();   /* the tool signatures and the Hak5 OUIs */
         fire_inv(ALERT_TYPE_KARMA_AP, sev, confidence, NULL,
                  TWIN_CLASS_UNKNOWN, WIRED_ATTACH_UNKNOWN, tool_row,
                  evid, ev_n,
@@ -1678,6 +1679,7 @@ void rule_cam_setup_ssid(const sloth_state_t *s, time_t now) {
                  " BSSID %s ch %d, %s"
                  " (provisioning state not observed)",
                  vendor, a->ssid, bssid_str, a->channel, encdesc);
+        fire_stage_intel();   /* the setup-SSID prefix table */
         fire(ALERT_TYPE_CAM_SETUP_SSID, ALERT_SEV_WARN,
              "CAM_SETUP_SSID", detail, key, NULL, 0, now);
     }
@@ -1789,6 +1791,7 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
                 /* The weak clone first: it is the half accused. */
                 uint64_t evid[ALERT_EVIDENCE_IDS];
                 int ev_n = twin_pair_evidence(a, b, evid);
+                fire_stage_intel();   /* the scorer read the attacker OUIs */
                 fire_inv(ALERT_TYPE_EVIL_TWIN, sev, conf,
                          inventory_hash(), (int)cls, (int)wired, NULL,
                          evid, ev_n,
@@ -1955,6 +1958,7 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
             }
             uint64_t evid[ALERT_EVIDENCE_IDS];
             int ev_n = twin_pair_evidence(cite1, cite2, evid);
+            fire_stage_intel();   /* the scorer read the attacker OUIs */
             fire_inv(ALERT_TYPE_EVIL_TWIN, sev, ev.confidence,
                      inventory_hash(), (int)cls, (int)wired, NULL,
                      evid, ev_n,
@@ -2201,6 +2205,7 @@ void rule_evil_twin_proximity(const sloth_state_t *s, time_t now) {
                  "%s '%.16s' RSSI swing %d dBm (%d → %d) in 60s",
                  bssid, a->ssid, delta,
                  (int)a->rssi_min_60s, (int)a->rssi_max_60s);
+        fire_stage_intel();   /* the candidate test read the attacker OUIs */
         fire(ALERT_TYPE_EVIL_TWIN_PROXIMITY, ALERT_SEV_WARN,
              "EVIL_TWIN_PROXIMITY", detail, key, NULL, 0, now);
     }
@@ -2319,6 +2324,7 @@ void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
             int skip = dn > room ? dn - room : 0;
             ev_cite_merge(evid, &ev_n, ALERT_EVIDENCE_IDS,
                           flood->evidence_ids + skip, dn - skip);
+            fire_stage_intel();   /* the scorer read the attacker OUIs */
             fire_ev(ALERT_TYPE_EVIL_TWIN, ALERT_SEV_CRIT, evid, ev_n,
                     "EVIL_TWIN", detail, key, NULL, 0, now);
             fired = 1;

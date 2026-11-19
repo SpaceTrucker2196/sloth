@@ -243,7 +243,10 @@ here rather than catastrophic.
    `ie_order_hash` too (#77): the signature struct has no field for it
    yet, but a capture that notes it now will not need repeating when
    one is added.
-3. **Add one row** to `TOOL_SIGNATURES`, with `evidence` naming the
+3. **Add one row** to `TOOL_SIGNATURES` — since #231 that means a row
+   in the intel pack's `tool-fingerprints/tool_fingerprints.csv`
+   (published by sloth-comint, brought here by `make update-intel`;
+   [[pack-schema]] §6), which the build turns into the array — with `evidence` naming the
    capture *and the tool version*. Signatures drift as tools update, and
    a row with no provenance cannot be re-checked when it stops matching.
    If it is not from a capture, set `unverified` **and** start the

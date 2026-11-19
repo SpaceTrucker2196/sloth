@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "pack_name": "attacker-ouis",
+  "pack_version": "1.0.1",
+  "tier": "table",
+  "country": null,
+  "build_time": "2026-11-16T00:00:00Z",
+  "notes": "rows moved from sloth at fa366881 (src/wifi_oui_attacker.c)",
+  "files": [
+    {
+      "path": "attacker_ouis.csv",
+      "sha256": "5485c58c17515eecad2fe8462b25d692538af1ba0ccbb62dd3c9dc616f4703fa",
+      "bytes": 610,
+      "rows": 13,
+      "source_url": "https://github.com/SpaceTrucker2196/sloth/blob/fa366881644ad32160f5ca8e586af0fdedac00c4/src/wifi_oui_attacker.c",
+      "retrieved": "2026-11-16",
+      "licence": "rows written in sloth (SLOTH SOURCE-AVAILABLE LICENSE 1.0) by the owner of sloth and sloth-comint; sloth carries them under its own licence, sloth-comint publishes them under PolyForm Noncommercial 1.0.0",
+      "format": "csv-rows"
+    },
+    {
+      "path": "SOURCE.md",
+      "sha256": "3eca5cb9b87fcbf7826b16ae9222b5a48619ec6cd8fb6c79dfac7a242ef305c4",
+      "bytes": 2542,
+      "source_url": "sloth-comint:packs/attacker-ouis/SOURCE.md",
+      "retrieved": "2026-11-16",
+      "licence": "written by the owner of sloth and sloth-comint; sloth carries it under its own licence, sloth-comint publishes it under PolyForm Noncommercial 1.0.0",
+      "format": "md-document"
+    }
+  ]
+}

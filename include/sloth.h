@@ -53,7 +53,7 @@
  * stream's history — the records predate the field by many releases. A
  * `sensor_health` line with no `jsonl_version` is from a stream written
  * before this version and says nothing more than that. */
-#define SLOTH_JSONL_VERSION "2.5.0"
+#define SLOTH_JSONL_VERSION "2.6.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
@@ -1140,6 +1140,19 @@ typedef struct {
     uint8_t      hw_tier;
     uint8_t      hw_device;
     uint8_t      hw_signals;
+
+    /* 1 when the rule consulted one of the intelligence-pack tables for
+     * this finding (#231, #184 C6): the attacker OUIs, the camera-vendor
+     * tables, the surveillance endpoints, the tool signatures or the BLE
+     * watchlist. The exports then carry `intel_pack`, the snapshot those
+     * tables were generated from (src/intel_pack.h); a byte here rather
+     * than the strings because the snapshot is one per binary. Set only
+     * by a rule that stages it (fire_stage_intel()) for the fire it
+     * makes, same rule as `inventory`: stamping every alert would claim
+     * a pack backed findings it never touched. Refreshed on every
+     * evaluation. A byte in what was padding, for the reason hw_tier
+     * gives. */
+    uint8_t      intel_pack;
 
     /* ── Incident lifecycle (#98) ────────────────────────────
      * One *incident* is one continuous run of a dedup key: it opens on

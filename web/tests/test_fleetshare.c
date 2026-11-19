@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "web_alertkb.h"
+#include "web_fleet.h"
 #include "web_fleetshare.h"
 #include "web_jsonl.h"
 #include "web_scope.h"
@@ -185,9 +186,49 @@ static void test_share_dev(void) {
     WT_EQ(web_fleet_share_dev(&d, (const char (*)[WEB_FLEET_MAC_SZ])self, 1), 1);
 }
 
+/* `intel_pack` (JSONL 2.6.0, #231) under the monitor-only rule. It is
+ * neither monitor data nor joined-network data: it names the build's
+ * intelligence-pack snapshot, a constant every sensor of one release
+ * shares. So the rule would let it travel - but the export's alert row
+ * is read from sloth.db, which does not record it, so this slice sends
+ * none, and fail-closed means an importer refuses a line carrying a
+ * member no export defines. Two halves: slothweb parses sloth's records
+ * with the object in them (the field is accepted), and no fleet line
+ * lists it (so a peer that sends it is refused whole). Seen red with
+ * "intel_pack" added to the alert line's members (web/src/web_fleet.c
+ * M_ALERT). */
+static void test_intel_pack_is_parsed_and_not_a_fleet_member(void) {
+    static const char *const lines[] = {
+        "{\"type\":\"alert\",\"ts\":1,\"title\":\"SURV_DNS\",\"ty\":81,"
+        "\"intel_pack\":{\"version\":\"1.0.0\",\"hash\":\"f27b877f623b8d32809b7b5b3f378921"
+        "416e6e67e046887d955c76ee9c606286\"},\"incident_id\":\"deadbeefdeadbeef\"}",
+        "{\"type\":\"sensor_health\",\"ts\":1,\"intel_pack\":{\"version\":\"1.0.0\","
+        "\"hash\":\"f27b877f623b8d32809b7b5b3f378921416e6e67e046887d955c76ee9c606286\"},"
+        "\"daemon\":\"wifi\",\"db_max_mb\":-1,\"jsonl_version\":\"2.6.0\"}",
+    };
+    static web_jrec_t r;
+    for (size_t i = 0; i < sizeof(lines) / sizeof(lines[0]); i++) {
+        WT_EQ(web_jl_parse(lines[i], strlen(lines[i]), &r), WEB_JL_OK);
+        const char *dv = web_jl_str(&r, "daemon");
+        if (i == 1) WT_ASSERT(dv != NULL && !strcmp(dv, "wifi"));
+    }
+    int seen = 0;
+    for (size_t i = 0; i < web_fleet_members_n; i++) {
+        const char *const *m = web_fleet_members[i];
+        for (int k = 1; m[k]; k++) {
+            seen++;
+            int is = !strncmp(m[k], "intel_pack", 10);
+            if (is) fprintf(stderr, "    %s.%s: intel_pack is not exported\n", m[0], m[k]);
+            WT_ASSERT(!is);
+        }
+    }
+    WT_ASSERT(seen > 50);
+}
+
 void run_fleetshare_tests(void) {
     WT_RUN(test_every_alert_type_is_classified);
     WT_RUN(test_refuses);
     WT_RUN(test_rule_words);
     WT_RUN(test_share_dev);
+    WT_RUN(test_intel_pack_is_parsed_and_not_a_fleet_member);
 }

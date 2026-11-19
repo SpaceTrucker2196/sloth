@@ -1,7 +1,7 @@
 ---
 type: BLE_WATCHLIST
 technique: ""
-rule_file: src/alerts/rules_ble.c:156 of rule_ble_watchlist() (detail in fire_finding(), src/alerts/rules_ble.c:126-135; grouping in src/ble_detect.c:221-277)
+rule_file: src/alerts/rules_ble.c:158 of rule_ble_watchlist() (detail in fire_finding(), src/alerts/rules_ble.c:126-135; grouping in src/ble_detect.c:221-277)
 count_semantics: per poll tick (POLL_MS 250 ms) in which at least one `ble_device_t` row with a non-empty `watch_cat` was heard in the last BLE_WATCH_RECENT_SECS (120 s); one incident per (category, sensor iface) (`blewl:<category>:<iface>`). The detail's address count is of addresses heard in the window - which rotate - so it is explicitly not a device count.
 severity_assessment: agree - WARN, provisionally; with the shipped table empty the rule cannot fire, and the deferred CRIT ("stalk-grade" category from a "non-resident" source) is correctly deferred because "non-resident" has no definition yet.
 false_positive_risk: not assessable - no row ships; for the candidate rows (finder tags) the structural risk is high by nature, because the same tag rides in its owner's own bag.

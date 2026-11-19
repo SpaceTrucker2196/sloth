@@ -21,6 +21,7 @@
 #include "data_socket.h"
 #include "formatter.h"
 #include "sensor_health.h"
+#include "intel_pack.h"
 
 /* The JSONL writer's core (#213): the sink, the change-only cache, the
  * line builders, and the records every daemon writes - alert, the
@@ -396,6 +397,18 @@ static void emit_loc(char *buf, int *off, const alert_t *a) {
         appendf(buf, LINEBUF, off, ",%s", lj);
 }
 
+/* The intel-pack snapshot (#231, #184 C6): which pack version and which
+ * exact bytes the tables a finding consulted were generated from. One
+ * object, version and hash together, so neither travels without the
+ * other. On sensor_health always; on an alert only when its rule
+ * consulted a table (alert_t.intel_pack), for the reason `inventory`
+ * is omitted when no inventory was read. Both values are build
+ * constants of a known alphabet (semver, lowercase hex). */
+void jsonl_intel_pack(char *buf, int *off) {
+    appendf(buf, LINEBUF, off, ",\"intel_pack\":{\"version\":\"%s\",\"hash\":\"%s\"}",
+            intel_pack_version(), intel_pack_hash());
+}
+
 void jsonl_emit_alert(const alert_t *a) {
     if (!any_sink() || !a) return;
     char  buf[LINEBUF]; int off = 0;
@@ -428,6 +441,8 @@ void jsonl_emit_alert(const alert_t *a) {
      * docs/wiki/jsonl-schema.md. */
     if (a->inventory[0])
         kv_str(buf, LINEBUF, &off, "inventory", a->inventory);
+    if (a->intel_pack)
+        jsonl_intel_pack(buf, &off);
     emit_pair_axes(buf, &off, a);
     emit_signature(buf, &off, a);
     emit_hw_verdict(buf, &off, a);
@@ -486,6 +501,8 @@ void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
      * consumer never has to read both families. */
     if (a->inventory[0])
         kv_str(buf, LINEBUF, &off, "inventory", a->inventory);
+    if (a->intel_pack)
+        jsonl_intel_pack(buf, &off);
     emit_pair_axes(buf, &off, a);
     emit_signature(buf, &off, a);
     emit_hw_verdict(buf, &off, a);
@@ -736,6 +753,11 @@ void jsonl_sh_tail(char *buf, int *off, const char *daemon, int db_cap_mb) {
      * to know whose it is without inferring it from which blocks are
      * there. Appended after the last block, ahead of the two members
      * that stay last. A constant, so outside `sig` like the version. */
+    /* The intel-pack snapshot the build's tables came from (JSONL 2.6.0,
+     * #231, additive): a constant, so outside `sig` like the version,
+     * and before the members that stay last. Both daemons write it:
+     * one tree, one snapshot. */
+    jsonl_intel_pack(buf, off);
     kv_str(buf, LINEBUF, off, "daemon", daemon);
     kv_int(buf, LINEBUF, off, "db_max_mb", db_cap_mb);
     kv_str(buf, LINEBUF, off, "jsonl_version", SLOTH_JSONL_VERSION);

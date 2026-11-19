@@ -30,6 +30,15 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
  * parameter so the fourteen other call sites stay untouched; the one
  * caller (rule_karma_ap) stages immediately before its fire_inv(). */
 void fire_stage_hw_verdict(int tier, int device, int signals);
+/* Stage "this finding consulted an intel-pack table" (#231) for the
+ * NEXT fire_inv() only (and so fire(), fire_conf(), fire_ev(), which
+ * reach it), which stamps alert_t.intel_pack and clears the stage. A
+ * rule calls it immediately before the fire whose finding rested on a
+ * lookup in src/oui.c, src/wifi_oui_attacker.c, src/camera_vendor.c,
+ * src/vendor_watchlist.c, src/tool_fingerprint.c or src/ble_watchlist.c
+ * - not for a finding of the same type that read none of them
+ * (BLE_HID_UNEXPECTED's address-rotation form). */
+void fire_stage_intel(void);
 void fire_conf(alert_type_t type, alert_sev_t sev, int confidence,
                const char *title, const char *detail,
                const char *key,

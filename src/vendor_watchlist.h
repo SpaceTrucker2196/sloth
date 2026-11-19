@@ -36,4 +36,7 @@ int vendor_watchlist_match_domain(const char *host,
                                   const char **vendor,
                                   const char **family);
 
+/* Rows in the table (intel/surveillance-endpoints, #231), for the tests. */
+int vendor_watchlist_count(void);
+
 #endif /* VENDOR_WATCHLIST_H */

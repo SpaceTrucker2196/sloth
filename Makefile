@@ -273,6 +273,9 @@ CORE_BASE_SRCS += src/scan.c
 CORE_BASE_SRCS += src/alert_key.c
 CORE_BASE_SRCS += src/camera_vendor.c
 CORE_BASE_SRCS += src/camera_join.c
+# #231: the intel-pack snapshot the tables were generated from, which
+# sensor_health and the consulting alerts report as `intel_pack`.
+CORE_BASE_SRCS += src/intel_pack.c
 # #155: router-role observations (DHCP server, DNS responder) the camera
 # classifier vetoes a mixed-vendor OUI from.
 CORE_BASE_SRCS += src/lan_role.c
@@ -479,6 +482,39 @@ endif
 # MAKEFLAGS like any other command-line variable.
 CFLAGS += $(EXTRA_CFLAGS)
 
+# ── Intelligence pack (#231, Stage 2 of #184) ──────────────────────────────
+# The rows of sloth's six intelligence tables (src/oui.c,
+# src/wifi_oui_attacker.c, src/camera_vendor.c, src/vendor_watchlist.c,
+# src/tool_fingerprint.c, src/ble_watchlist.c) are not kept by hand: they
+# are generated from the pinned pack snapshot in intel/ (six pack
+# directories, each with its manifest.json and SOURCE.md, and intel/LOCK
+# naming the pack version, the snapshot hash and the sloth-comint commit
+# it came from). tools/intel_gen, sloth's own generator written against
+# docs/wiki/pack-schema.md, verifies every pack against its manifest
+# (length, SHA-256, row count, no unlisted file, a known schema_version)
+# and LOCK against the packs, checks every value against the C type it
+# lands in, and writes one initialiser file per array into build/intel/;
+# the array definitions stay in src/ and #include them. Build output,
+# never committed, the same for every configuration: every object
+# directory's compile waits on it (order-only; -MMD then tracks which
+# objects include which file) and searches it ($(INTEL_INC)).
+# `make update-intel PACK=<dir>` refreshes intel/ from a pack root;
+# nothing else changes it, and nothing here reaches the network.
+INTEL_DIR      = intel
+INTEL_GEN_DIR  = build/intel
+INTEL_GEN      = $(INTEL_GEN_DIR)/intel_gen
+INTEL_GEN_SRCS = tools/intel_gen.c tools/intel_read.c src/sha256.c
+INTEL_GEN_HDRS = tools/intel_read.h src/sha256.h src/tool_fingerprint.h \
+                 src/ble_watchlist.h src/ble_snoop.h include/sloth.h
+INTEL_STAMP    = $(INTEL_GEN_DIR)/.generated
+INTEL_INC      = -I$(INTEL_GEN_DIR)
+# The pack directories too: a file deleted from one changes no other
+# file's time, only its directory's, and the generator must see it.
+INTEL_FILES    = $(INTEL_DIR)/LOCK $(wildcard $(INTEL_DIR)/*/*) \
+                 $(patsubst %/,%,$(wildcard $(INTEL_DIR)/*/))
+
+# The rules are below `all`, so that `all` stays the default goal.
+
 # ── Object directories (#115) ───────────────────────────────────────────────
 # One object directory per configuration, so a config switch never links
 # an object compiled under another one — the stale-object link failure
@@ -523,6 +559,50 @@ $(LINK_STAMP):      STAMP = $(OBJDIR) $(CC) $(CFLAGS) $(LDFLAGS)
 .PHONY: all clean install embedded check-deps sbom
 
 all: check-deps $(TARGET) $(TARGET_ALIAS)
+
+# ── Intelligence pack rules (#231; the variables and why are above) ──────
+$(INTEL_GEN_DIR)/.flags: STAMP = $(CC) $(CFLAGS)
+$(INTEL_GEN_DIR)/.flags: FORCE
+	$(write_stamp)
+
+$(INTEL_GEN): $(INTEL_GEN_SRCS) $(INTEL_GEN_HDRS) $(INTEL_GEN_DIR)/.flags
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -Iinclude -Isrc -Itools -o $@ $(INTEL_GEN_SRCS)
+
+# One run writes every file; each is rewritten only when its bytes
+# change, so a rebuilt generator recompiles nothing.
+$(INTEL_STAMP): $(INTEL_GEN) $(INTEL_FILES)
+	$(INTEL_GEN) gen $(INTEL_DIR) $(INTEL_GEN_DIR)
+	@touch $@
+
+# Refresh intel/ from a pack root (PACK=<dir>: sloth-comint's packs/, or
+# an unpacked sloth-intel-pack-<ver>/). Copies the six packs' listed
+# files only, verifies them, and rewrites intel/LOCK; on any refusal
+# intel/ is left as it was. The version comes from PACK/VERSION or
+# PACK/MANIFEST.json, the commit from PACK's git tree or COMMIT=<sha>.
+.PHONY: update-intel intel-parity
+update-intel: $(INTEL_GEN)
+	@[ -n "$(PACK)" ] || { echo "usage: make update-intel PACK=<dir> [COMMIT=<sha>]" >&2; exit 2; }
+	sh tools/update_intel.sh "$(PACK)" $(INTEL_DIR) $(INTEL_GEN) "$(COMMIT)"
+
+# The parity proof (#231): the generated tables against the hand-kept
+# rows the six sources held at PARITY_REF (the last commit before Stage 2
+# replaced them), element by element. Needs git; not part of `make test`.
+# PARITY_INC=<dir> runs it against another generator's output instead.
+PARITY_REF ?= 1c207a0a
+PARITY_INC ?= $(INTEL_GEN_DIR)
+PARITY_DIR  = build/intel-parity
+PARITY_TABLES = oui wifi_oui_attacker camera_vendor vendor_watchlist tool_fingerprint ble_watchlist
+PARITY_SRC    = tools/intel_parity.c
+intel-parity: $(INTEL_STAMP)
+	@rm -rf $(PARITY_DIR) && mkdir -p $(PARITY_DIR)/old
+	@for f in $(PARITY_TABLES); do \
+	  git show $(PARITY_REF):src/$$f.c > $(PARITY_DIR)/old/$$f.c || exit 1; done
+	@for t in OUI ATTACKER CAMERA WATCHLIST TOOL BLE MAIN; do \
+	  $(CC) $(CFLAGS) -DPARITY_$$t -I$(PARITY_DIR)/old -I$(PARITY_INC) -Iinclude -Isrc \
+	    -c -o $(PARITY_DIR)/$$t.o $(PARITY_SRC) || exit 1; done
+	$(CC) $(CFLAGS) -o $(PARITY_DIR)/intel_parity $(PARITY_DIR)/*.o
+	./$(PARITY_DIR)/intel_parity
 
 # ── Dependency floors (#142) ────────────────────────────────────────────────
 # The minimum library versions, checked before compiling rather than
@@ -626,9 +706,9 @@ define check_no_hci_builder
 	 [ -z "$$inc" ] || { echo "$@: $$inc names sloth-ble-scan's builder; MISSION.md §2: sloth sends no HCI command" >&2; rm -f $@; exit 1; }
 endef
 
-$(OBJDIR)/%.o: %.c $(OBJDIR)/.flags
+$(OBJDIR)/%.o: %.c $(OBJDIR)/.flags | $(INTEL_STAMP)
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -MMD -MP -Iinclude -Isrc -Iresearch -c -o $@ $<
+	$(CC) $(CFLAGS) -MMD -MP -Iinclude -Isrc -Iresearch $(INTEL_INC) -c -o $@ $<
 
 $(CORE_LIB): $(CORE_OBJS) $(OBJDIR)/.members
 
@@ -979,7 +1059,8 @@ research-mcp:
 # web/data/SOURCE.md says where they come from and their hashes). The
 # generated table is build output and never committed. WEB_OUI_DIR
 # names another directory; one without the CSVs still builds: the
-# generator reads sloth's own 117-entry table out of src/oui.c as text
+# generator reads sloth's own 118-entry table as text, the rows src/oui.c
+# compiles (build/intel/oui_builtin.inc, from intel/oui-builtin, #231),
 # and /api/health says "vendor_table":"sloth". The table is regenerated
 # when the CSV list or a CSV's checksum changes (the stamp), not only
 # when a CSV is newer than the table. web-test is told which table the
@@ -1028,6 +1109,9 @@ WEB_OUI_CSVS    = $(wildcard $(WEB_OUI_DIR)/oui.csv $(WEB_OUI_DIR)/mam.csv \
 WEB_OUIGEN      = $(WEB_GEN_DIR)/oui_gen
 WEB_OUIGEN_SRCS = web/tools/oui_gen.c web/tools/oui_csv.c
 WEB_OUI_C       = $(WEB_GEN_DIR)/web_oui_table.c
+# sloth's own table as text, for the no-CSV fallback: the rows src/oui.c
+# compiles, generated from intel/oui-builtin since #231.
+WEB_SLOTH_OUI   = $(INTEL_GEN_DIR)/oui_builtin.inc
 WEB_OUI_STAMP   = $(WEB_GEN_DIR)/oui.inputs
 WEB_RECIPES_MD  = docs/wiki/sqlite-schema.md
 WEB_RECIPESGEN  = $(WEB_GEN_DIR)/recipes
@@ -1166,8 +1250,8 @@ $(WEB_OUI_STAMP): STAMP = $(WEB_OUI_CSVS) $(if $(WEB_OUI_CSVS),$(shell cksum $(W
 $(WEB_OUI_STAMP): FORCE
 	$(write_stamp)
 
-$(WEB_OUI_C): $(WEB_OUIGEN) $(WEB_OUI_STAMP) $(WEB_OUI_CSVS) src/oui.c
-	$(WEB_OUIGEN) $@.tmp src/oui.c $(WEB_OUI_CSVS)
+$(WEB_OUI_C): $(WEB_OUIGEN) $(WEB_OUI_STAMP) $(WEB_OUI_CSVS) $(INTEL_STAMP)
+	$(WEB_OUIGEN) $@.tmp $(WEB_SLOTH_OUI) $(WEB_OUI_CSVS)
 	mv $@.tmp $@
 
 $(WEB_BTSIGGEN): $(WEB_BTSIGGEN_SRCS) web/src/web_btsig.h $(WEB_GEN_DIR)/.flags
@@ -1289,10 +1373,10 @@ web-quickstart-check:
 # only; no host file, no running sloth, no name lookup, no network beyond
 # 127.0.0.1 and ::1. The test links the embedder's
 # SHA-256 to recompute the page's CSP hashes; slothweb does not.
-web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C) $(WEB_ASMGEN) $(WEB_GNSS_C)
+web-test: $(INTEL_STAMP) $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C) $(WEB_ASMGEN) $(WEB_GNSS_C)
 	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) $(WEB_VERSION_DEF) -DSLOTHWEB_DEMO_LIB -Iweb/src -Iweb/tests -Iweb/tools -Iweb/mcp \
 	      -Iinclude -iquote web/tools -iquote src -iquote research -DWEB_OUI_EXPECT='"$(if $(WEB_OUI_CSVS),ieee,sloth)"' \
-	      -DWEB_OUI_DATA='"$(WEB_OUI_DIR)"' \
+	      -DWEB_OUI_DATA='"$(WEB_OUI_DIR)"' -DWEB_SLOTH_OUI='"$(WEB_SLOTH_OUI)"' \
 	      -DWEB_BTSIG_EXPECT='"$(if $(WEB_BTSIG_CSVS),sig,none)"' \
 	      -DWEB_BTSIG_DATA='"$(WEB_BTSIG_DIR)"' -DWEB_VKBGEN_BIN='"$(WEB_VKBGEN)"' \
 	      -DWEB_GNSS_EXPECT='"$(if $(WEB_GNSS_SNX),igs,none)"' \
@@ -1359,12 +1443,13 @@ endif
 # TEST_CFLAGS is not CFLAGS. TEST_INCS is the include set every test-build
 # translation unit has always been compiled with.
 TEST_SRCS        = $(wildcard tests/*.c)
-TEST_ONLY_SRCS   = src/reset_all.c src/ble_scan/ble_scan_cmd.c \
+TEST_ONLY_SRCS   = src/reset_all.c src/ble_scan/ble_scan_cmd.c tools/intel_read.c \
                    src/sdrsweep/sdrsweep_dsp.c src/rf/rf_args.c \
                    src/va/va_victron.c src/va/va_conf.c src/va/va_aes.c \
                    $(filter-out %/main.c research/query.c src/libver.c,$(RESEARCH_SRCS) $(MCP_SRCS))
 TEST_CORE_SRCS   = $(CORE_SRCS_ALL) src/tui.c $(TEST_ONLY_SRCS)
-TEST_INCS        = -Iinclude -Isrc -Itests -Iresearch/ingest -Iresearch -Iresearch/mcp
+TEST_INCS        = -Iinclude -Isrc -Itests -Iresearch/ingest -Iresearch -Iresearch/mcp \
+                   $(INTEL_INC)
 
 TEST_OBJDIR      = build/test
 TEST_CORE_LIB    = $(TEST_OBJDIR)/libsloth_core.a
@@ -1374,7 +1459,7 @@ TEST_CORE_OBJS   = $(TEST_CORE_SRCS:%.c=$(TEST_OBJDIR)/%.o)
 $(TEST_OBJDIR)/.flags:   STAMP = $(CC) $(TEST_CFLAGS) $(TEST_SHIP_DEFS) $(TEST_INCS)
 $(TEST_OBJDIR)/.members: STAMP = $(TEST_CORE_SRCS)
 
-$(TEST_OBJDIR)/%.o: %.c $(TEST_OBJDIR)/.flags
+$(TEST_OBJDIR)/%.o: %.c $(TEST_OBJDIR)/.flags | $(INTEL_STAMP)
 	@mkdir -p $(@D)
 	$(CC) $(TEST_CFLAGS) $(TEST_SHIP_DEFS) $(TEST_INCS) -MMD -MP -c -o $@ $<
 
@@ -1560,7 +1645,7 @@ NOFLAGS_BIN       = sloth_test_noflags
 $(NOFLAGS_OBJDIR)/.flags:   STAMP = $(CC) $(TEST_CFLAGS) $(TEST_INCS)
 $(NOFLAGS_OBJDIR)/.members: STAMP = $(NOFLAGS_CORE_SRCS)
 
-$(NOFLAGS_OBJDIR)/%.o: %.c $(NOFLAGS_OBJDIR)/.flags
+$(NOFLAGS_OBJDIR)/%.o: %.c $(NOFLAGS_OBJDIR)/.flags | $(INTEL_STAMP)
 	@mkdir -p $(@D)
 	$(CC) $(TEST_CFLAGS) $(TEST_INCS) -MMD -MP -c -o $@ $<
 
@@ -1651,7 +1736,7 @@ TEST_SUPPORT_SRCS = $(filter-out tests/main_test.c tests/test_%.c,$(wildcard tes
 FUZZ_CC      ?= clang
 FUZZ_SECONDS ?= 20
 FUZZ_FLAGS    = -g -O1 -fsanitize=fuzzer,address,undefined \
-                -Iinclude -Isrc -Itests/fuzz
+                -Iinclude -Isrc -Itests/fuzz $(INTEL_INC)
 FUZZ_PLATFORM_DEFS =
 ifeq ($(UNAME),Linux)
     FUZZ_PLATFORM_DEFS += -DPLATFORM_LINUX
@@ -1688,7 +1773,7 @@ fuzz-cc-check:
 
 $(FUZZ_OBJDIR)/.flags: | fuzz-cc-check
 
-$(FUZZ_OBJDIR)/%.o: %.c $(FUZZ_OBJDIR)/.flags
+$(FUZZ_OBJDIR)/%.o: %.c $(FUZZ_OBJDIR)/.flags | $(INTEL_STAMP)
 	@mkdir -p $(@D)
 	$(FUZZ_CC) $(FUZZ_FLAGS) $(FUZZ_DEFS) -MMD -MP -c -o $@ $<
 
@@ -1714,7 +1799,7 @@ $(FUZZ_PCAP_OBJDIR)/.members: STAMP = $(FUZZ_PCAP_CORE_SRCS)
 
 $(FUZZ_PCAP_OBJDIR)/.flags: | fuzz-cc-check
 
-$(FUZZ_PCAP_OBJDIR)/%.o: %.c $(FUZZ_PCAP_OBJDIR)/.flags
+$(FUZZ_PCAP_OBJDIR)/%.o: %.c $(FUZZ_PCAP_OBJDIR)/.flags | $(INTEL_STAMP)
 	@mkdir -p $(@D)
 	$(FUZZ_CC) $(FUZZ_FLAGS) $(FUZZ_DEFS) -DWITH_PCAP -MMD -MP -c -o $@ $<
 
@@ -1796,7 +1881,7 @@ CPPCHECK_DEFS = -D__linux__ -D__GNUC__ -D_DEFAULT_SOURCE -DPLATFORM_LINUX \
 CPPCHECK_CI_VERSION = Cppcheck 2.13.0
 
 .PHONY: cppcheck
-cppcheck:
+cppcheck: $(INTEL_STAMP)
 	@command -v cppcheck >/dev/null 2>&1 || { \
 	  echo "cppcheck not installed; need $(CPPCHECK_CI_VERSION) — see the" >&2; \
 	  echo "build recipe in the comment above this target in the Makefile." >&2; \
@@ -1813,8 +1898,9 @@ cppcheck:
 	  --error-exitcode=1 \
 	  --suppressions-list=tests/cppcheck.supp \
 	  $(CPPCHECK_DEFS) -Iinclude -Isrc -Iresearch -Iweb/src -Iweb/tests -Iweb/tools -Iweb/mcp \
+	  $(INTEL_INC) \
 	  -i src/platform/bsd.c -i src/platform/win32.c -i src/platform/stub.c \
-	  src research web
+	  src research web tools/intel_read.c tools/intel_gen.c
 
 # ── Contract artifact (#185 item 4; #184 §2 C1-C5, C9) ─────────────────────
 # `make contract` builds dist/sloth-contract-<SLOTH_VERSION>.tar, what a
@@ -2164,6 +2250,7 @@ DEPLOY_SCRIPTS = packaging/bin/sloth-migrate-sensor packaging/bin/sloth-monitor-
                  .github/scripts/wiki_sync.sh tests/deploy/test_wiki_sync.sh \
                  tests/deploy/test_slothweb_unit.sh tools/gate.sh \
                  tools/lab/lab_capture.sh tools/lab/expect.sh \
+                 tools/update_intel.sh \
                  tests/deploy/test_lab_tools.sh \
                  tools/contract.sh tests/contract/check.sh
 

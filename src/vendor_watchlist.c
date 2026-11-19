@@ -3,7 +3,8 @@
 #include <strings.h>
 #include "vendor_watchlist.h"
 
-/* See vendor_watchlist.h for why this is embedded and not a CSV.
+/* See vendor_watchlist.h for why this is compiled in rather than read
+ * at run time; the rows themselves come from the pinned intel pack.
  *
  * Deliberately short. #105's scope-extension comment lists two dozen
  * more vendors, all of them at "confidence: low" by the issue's own
@@ -29,41 +30,15 @@ static const struct {
     const char *vendor;
     const char *family;
 } kEndpoints[] = {
-    /* Axon's evidence-management cloud. The legacy domain: Axon's VR
-     * network-allowlist page instructs agencies to allowlist
-     * "vr.evidence.com/nlu" and "vr.evidence.com/g2p", and the Axon
-     * Cloud customer FAQ points at "status.evidence.com/status/network"
-     * as its own connectivity test. */
-    { "evidence.com",   "axon",          "evidence-cloud" },
-    /* The migration destination for the same platform. The Axon Cloud
-     * customer FAQ: "Access to Axon Evidence services will begin
-     * transitioning from evidence.com to a new address under
-     * axon.com", and tells agencies with allowlists, DNS filtering or
-     * proxies to permit axon.com before migration reaches them. Broad
-     * on purpose and broad in consequence: this is also Axon's
-     * marketing site, so a browser tab on axon.com fires the rule. The
-     * alert text says it cannot tell those apart rather than implying
-     * a device was found. */
-    { "axon.com",       "axon",          "evidence-cloud" },
-    /* Flock Safety's service domain — agency transparency portals live
-     * at transparency.flocksafety.com (published by Flock and linked
-     * from many municipal sites). Note what this does NOT detect: a
-     * Flock ALPR camera uplinks over cellular, so the camera's own
-     * traffic never crosses a monitored segment. A hit here is a host
-     * on this network using the platform, not a camera on it. */
-    { "flocksafety.com", "flock-safety", "alpr-cloud" },
-    /* Verkada's device-control plane. Verkada's "Camera Network
-     * Settings" page lists the endpoints its cameras need through a
-     * firewall, and every Verkada-operated FQDN in its per-region
-     * allowlists sits under control.verkada.com (api., relay., index.,
-     * firmware., update., *.vnetcap.) except the vconductor.* hosts
-     * under command.verkada.com. control., not the bare verkada.com:
-     * the page's coarse fallback rule is "*.verkada.com", but that
-     * also covers Verkada's marketing site, and a row that broad would
-     * repeat axon.com's known false-positive source on purpose. Verkada
-     * sells fixed cameras with LPR analytics, which is why #105's
-     * scope extension lists it. */
-    { "control.verkada.com", "verkada", "camera-cloud" },
+    /* intel/surveillance-endpoints/surveillance_endpoints.csv (#231);
+     * the per-row sources that stood here are that pack's SOURCE.md and
+     * research/papers/surveillance-vendor-endpoints.md. Two the alert
+     * text depends on: axon.com is also Axon's marketing site, so a
+     * browser tab fires the rule and the detail says it cannot tell
+     * them apart; a Flock ALPR camera uplinks over cellular, so a
+     * flocksafety.com hit is a host using the platform, never a camera
+     * on this network. */
+#include "surveillance_endpoints.inc"
 };
 
 /* Label-boundary suffix match, identical semantics to
@@ -91,4 +66,8 @@ int vendor_watchlist_match_domain(const char *host,
         return 1;
     }
     return 0;
+}
+
+int vendor_watchlist_count(void) {
+    return (int)(sizeof(kEndpoints) / sizeof(kEndpoints[0]));
 }

@@ -288,7 +288,7 @@ int oui_build_csv(oui_build_t *b, const char *path) {
     return rc;
 }
 
-/* ── sloth's src/oui.c ───────────────────────────────────────────────── */
+/* ── sloth's own table (build/intel/oui_builtin.inc, #231) ─────────── */
 
 int oui_build_sloth(oui_build_t *b, const char *path) {
     size_t len = 0;
