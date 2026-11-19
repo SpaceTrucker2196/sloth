@@ -225,5 +225,5 @@
   }
 
   window.SlothAir = { init: function (h) { H = h; }, horizon: horizon, drill: drill, rug: rug,
-                      floodRug: floodRug, ROW: ROW };
+                      floodRug: floodRug, busy: busy, ROW: ROW };
 })();

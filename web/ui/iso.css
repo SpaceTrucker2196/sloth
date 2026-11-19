@@ -57,3 +57,13 @@ button.scan-key[aria-pressed="true"] { border-color: var(--signal); }
 button.scan-key:disabled { cursor: default; border-style: dotted; }
 .dt .dt-row.scan-off > span { opacity: 0.45; }
 @media (max-width: 1100px) { .scan2 { grid-template-columns: minmax(0, 1fr); } }
+
+/* The larger time graphs drawn isometrically (isochart.js, owner
+ * 2026-11-19): the flat canvas out of the way while its panel's box is
+ * on; and while app.js hides the flat one for want of data, the
+ * isometric one and its key with it. */
+canvas.iso-off { display: none; }
+[hidden] + canvas.isoc, [hidden] + canvas.isoc + .iso-key { display: none; }
+canvas.wfall.isoc { height: 260px; }
+canvas.wfall.isoc.rug-iso { height: 200px; }
+canvas.wfall.isoc.week-iso { height: 210px; }

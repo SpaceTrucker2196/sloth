@@ -57,6 +57,7 @@
 @include incident.js
 @include rfstream.js
 @include iso.js
+@include isochart.js
 @include info.js
 @include dock.js
 @include app.js
@@ -231,8 +232,10 @@
     </section>
     <section class="row2">
       <div class="panel">
-        <div class="label">now vs normal <span class="sub" id="o-nvn-note"></span></div>
+        <div class="label">now vs normal <span class="sub" id="o-nvn-note"></span> <label class="sub" title="drawn isometrically, as the Spectrum tab draws its sweep: time folded into rows (equal slices of the window, the newest in front), each column coloured by where it sits against its band; off: the flat line over its band"><input type="checkbox" id="o-iso" checked> isometric</label></div>
         <canvas class="chart" id="o-nvn" aria-label="throughput against its baseline band"></canvas>
+        <canvas class="wfall iso isoc" id="o-nvn-iso" aria-label="throughput against its baseline band, isometric: the window in rows receding, the newest in front; each column coloured above, within or below its band" hidden></canvas>
+        <div class="iso-key" id="o-nvn-iso-key" role="group" aria-label="colour key: above its band, within it, below it, no band yet" hidden></div>
       </div>
       <div class="panel">
         <div class="label">hour of week <span class="sub" id="o-heat-note"></span></div>
@@ -727,16 +730,22 @@
       <div class="label">chains <span class="sub" id="w-ch-note"></span></div>
       <div id="w-chains" hidden></div>
       <div class="sub" id="w-ch-sub">a bssid with more than one stage of an attack in the window, its chain: a lane per stage in the order the chain runs, deauth frames and associations to it as ticks on one scale, each EVIL_TWIN, KARMA_AP and DEAUTH_FLOOD incident from sloth.db's alerts a bar from its first to its last observation in the severity it reached (its word beside the lane), a dot where it began and where it closed; under the lanes, the links sloth made (the twin tainted by a deauth flood on the other half within 5 s, the pair attributed), from the stream's twin_episode since slothweb started. Every bssid with a deauth key in the window is a candidate, and every bssid sloth.db holds an EVIL_TWIN or KARMA_AP row for in it, after them; a station associating counts as a stage only on a bssid with an EVIL_TWIN or KARMA_AP incident (on any other AP it is a client joining); a bssid with one stage is a lane of the rug below.</div>
-      <div class="label">deauth, one stage <span class="sub" id="w-da-note"></span></div>
+      <div class="label">deauth, one stage <span class="sub" id="w-da-note"></span> <label class="sub" title="the deauth and probe-flood rugs drawn isometrically: a column per lane (bssid, severity), the time cells receding, the newest in front; off: the flat rugs"><input type="checkbox" id="w-ch-iso" checked> isometric</label></div>
       <canvas class="rug" id="w-deauth" aria-label="deauthentication frames per bssid, one lane each on one scale, flood episodes underlined"></canvas>
+      <canvas class="wfall iso isoc" id="w-deauth-iso" aria-label="deauthentication frames, isometric: a column per bssid in its channel's colour, the time cells receding, the newest in front; cells in a flood episode in the critical colour" hidden></canvas>
+      <div class="iso-key" id="w-deauth-iso-key" role="group" aria-label="colour key: a bssid's channel, a flood episode" hidden></div>
       <div class="sub">a lane per bssid: deauth frames per cell, the tallest of any lane at the lane's height; underlined in the critical colour: DEAUTH_FLOOD episodes from sloth.db's alerts.</div>
       <div class="label">probe floods <span class="sub" id="w-pf-note"></span></div>
       <canvas class="rug" id="w-pflood" aria-label="PROBE_FLOOD findings, a lane per severity, ticks where each began, underlined to its last sighting" hidden></canvas>
+      <canvas class="wfall iso isoc rug-iso" id="w-pflood-iso" aria-label="PROBE_FLOOD findings, isometric: a column per severity in its colour, the time cells receding, the newest in front; a tick at a cell's foot while a finding is open" hidden></canvas>
+      <div class="iso-key" id="w-pflood-iso-key" role="group" aria-label="colour key: the severities" hidden></div>
       <div class="sub">a lane per severity: PROBE_FLOOD findings (the Alerts page's rows, sloth.db's and the stream's), a tick where each was first seen, its height the findings begun in the cell on one scale, underlined from its first to its last sighting.</div>
     </section>
     <section class="panel">
-      <div class="label">clients <span class="sub" id="w-pc-note"></span></div>
+      <div class="label">clients <span class="sub" id="w-pc-note"></span> <label class="sub" title="drawn isometrically: time folded into rows (the sensor's local days with the hours across for 7 d and 30 d, else equal slices of the window), the newest in front, each column coloured by where it sits against its band; off: the flat line over its band"><input type="checkbox" id="w-pc-iso" checked> isometric</label></div>
       <canvas class="chart" id="w-probe" aria-label="probe clients over time, over their baseline band"></canvas>
+      <canvas class="wfall iso isoc" id="w-probe-iso" aria-label="probe clients against their baseline band, isometric: the window in rows receding, the newest in front; each column coloured above, within or below its band" hidden></canvas>
+      <div class="iso-key" id="w-probe-iso-key" role="group" aria-label="colour key: above its band, within it, below it, no band yet" hidden></div>
       <div class="label">probing in the window <span class="sub" id="w-cl-count"></span> <span class="dt-tools" id="w-cl-tools"></span></div>
       <div class="sub" id="w-cl-sun"></div>
       <div class="hscroll" id="w-cl-box">
@@ -1306,11 +1315,14 @@
       <span class="sub" id="a-note"></span>
     </section>
     <section class="panel">
-      <div class="label"><span id="a-title">-</span> <button type="button" class="dt-reset" id="ak-mode" aria-pressed="false" title="one: the picked key over its baseline band; all: every key of the metric on this graph, one colour a key, on one shared scale, with a legend">keys: one</button> <span class="sub" id="a-src"></span></div>
+      <div class="label"><span id="a-title">-</span> <label class="sub" title="drawn isometrically: one key, time folded into rows (the sensor's local days with the hours across for 7 d or more, else equal slices of the window), each column coloured by where it sits against its band; every key, a column a key in its colour, the time cells receding; the newest in front; off: the flat graph"><input type="checkbox" id="a-iso" checked> isometric</label> <button type="button" class="dt-reset" id="ak-mode" aria-pressed="false" title="one: the picked key over its baseline band; all: every key of the metric on this graph, one colour a key, on one shared scale, with a legend">keys: one</button> <span class="sub" id="a-src"></span></div>
       <canvas class="chart" id="a-chart" height="240" aria-label="band chart"></canvas>
+      <canvas class="wfall iso isoc" id="a-chart-iso" aria-label="band chart, isometric: the window in rows receding, the newest in front; each column coloured above, within or below its band" hidden></canvas>
+      <div class="iso-key" id="a-chart-iso-key" role="group" aria-label="colour key: above its band, within it, below it, no band yet" hidden></div>
       <div class="sub" id="a-hover">bucket value over its baseline band (mean &#177; k sd for its hour of the week)</div>
       <div id="ak-box" hidden>
         <canvas class="chart" id="ak-chart" aria-label="every key of the metric on one scale, one colour a key; the legend below lists them"></canvas>
+        <canvas class="wfall iso isoc" id="ak-chart-iso" aria-label="every key of the metric, isometric: a column a key in its colour, the first 24 of the legend, on one scale, the time cells receding, the newest in front" hidden></canvas>
         <div class="sub" id="ak-hover"></div>
         <div class="ak-head"><input type="search" id="ak-filter" maxlength="63" spellcheck="false" autocomplete="off" placeholder="filter the keys listed" aria-label="filter the keys listed" hidden> <span class="sub" id="ak-rule"></span> <button type="button" class="dt-reset" id="ak-all" hidden>show every key</button></div>
         <div class="ak-legend" id="ak-legend" role="list" aria-label="every key drawn, its colour and its latest value"></div>
@@ -1354,8 +1366,10 @@
       <div class="label">attack chain, 24 h <span class="sub" id="dr-chain-note"></span></div>
       <canvas class="chain" id="dr-chain-c" aria-label="the attack chain on this bssid over the last 24 hours"></canvas>
     </div>
-    <div class="label">hour of week presence <span class="sub" id="dr-week-note"></span></div>
+    <div class="label">hour of week presence <span class="sub" id="dr-week-note"></span> <label class="sub" title="drawn isometrically: the 24 hours across, the weekdays receding, Monday at the back; height and heat the share of weeks present; off: the flat map"><input type="checkbox" id="dr-iso" checked> isometric</label></div>
     <canvas class="heat" id="dr-week" aria-label="share of weeks present by local hour, Monday first"></canvas>
+    <canvas class="wfall iso isoc week-iso" id="dr-week-iso" aria-label="share of weeks present by local hour, isometric: the hours across, the weekdays receding, Monday at the back, now outlined" hidden></canvas>
+    <div class="iso-key" id="dr-week-iso-key" role="group" aria-label="colour key: share of weeks, provisional, now" hidden></div>
     <div class="label">anomalies</div>
     <div class="cards" id="dr-anoms"></div>
     <div id="notes-drawer" hidden>
@@ -1485,6 +1499,9 @@
     <div class="hscroll"><table class="qt" id="kdr-hist" aria-label="each change of this BSSID's karma_suspect row: when, and the counts sloth sent" hidden></table></div>
     <div class="sub">from sloth's stream, as it sent it; nothing is sent. Each change of the row is kept from the first record that said it (from) to the newest that repeated it (to); the newest 16, from this connection. Alerts: KARMA_AP and KARMA_PROBE_FORGE incidents whose key names this BSSID, open and recently closed; each opens its alert page with its triage. Hardware: the attack-hardware verdict on the newest KARMA_AP record (suspected or corroborated, and the signal classes behind it). Probe response: the time from a station's probe request to this BSSID's response, as its beacon record carries it (JSONL 1.6.0); an observation sloth uses in no verdict, with no threshold. Counts, not a verdict: whether a count crossed a threshold is the alert's.</div>
   </aside>
+  <!-- The isometric charts' one tooltip (web/ui/isochart.js), outside
+       every view so a hidden one does not hide it. -->
+  <div class="iso-tip" id="isoc-tip" role="tooltip" hidden></div>
   <footer class="foot" aria-label="slothweb">
     <span>sock <b id="sock">-</b></span>
     <span>db <b id="db">-</b></span>

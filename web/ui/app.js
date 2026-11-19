@@ -2204,6 +2204,8 @@
                       color: theme().normal, band: bd, now: now,
                       axes: true, spark: false };
           draw($("o-nvn"), s.points, opt);
+          if (window.SlothIsoChart) SlothIsoChart.band("o-nvn", { pts: s.points, band: bd, from: gw.from, to: gw.to,
+            step: s.step, off: bl ? bl.utc_offset_s : null, unit: "B/s", now: now });
           // R9: source, window, tier, scale, n, then the state.
           set("o-nvn-note", glyph.caption({
             source: "iface.rx_rate " + O.key, window: "24 h", tier: tier,
@@ -2522,6 +2524,8 @@
       draw($("a-chart"), s.points, { from: gw.from, to: gw.to, step: s.step, kind: s.kind,
                                      color: theme().normal, axes: true, band: bd,
                                      now: now });
+      if (window.SlothIsoChart) SlothIsoChart.band("a-chart", { pts: s.points, band: bd, from: gw.from, to: gw.to,
+        step: s.step, off: r[1] ? r[1].utc_offset_s : null, unit: m.unit, now: now });
     }).catch(function (e) { set("a-src", "error: " + e.message); });
   }
 
@@ -3374,6 +3378,7 @@
       var ws = heatmap($("dr-week"), { cells: cells, warm_n: wk.warm_n, now_cell: wk.now_cell,
                                        share: true });
       set("dr-week-note", heatCaption("dev.present, share of weeks present", ws, ""));
+      if (window.SlothIsoChart) SlothIsoChart.week("dr-week", wk);
       var an = $("dr-anoms");
       while (an.firstChild) an.removeChild(an.firstChild);
       if (!j.anomalies || !j.anomalies.length) an.appendChild(el("div", "sub", "none"));
@@ -4642,6 +4647,7 @@
       var j = { from: cj.from, to: cj.to, col_s: cj.col_s, cols: cj.cols, tier: cj.tier, db: cj.db,
                 bssids: ch.singles };
       var rg = SlothAir.rug($("w-deauth"), j), nb = rg.busy;
+      if (window.SlothIsoChart) SlothIsoChart.deauth(j);
       var floods = 0;
       (j.bssids || []).forEach(function (b) { floods += (b.floods || []).length; });
       set("w-da-note", glyph.caption({
@@ -4662,6 +4668,7 @@
         if (gen !== WF.gen) return;
         var rows = aj.rows || [];
         var pf = SlothAir.floodRug($("w-pflood"), rows, r.from, r.to, 96);
+        if (window.SlothIsoChart) SlothIsoChart.pflood(rows, r.from, r.to, 96);
         set("w-pf-note", glyph.caption({
               source: "alerts PROBE_FLOOD, sloth.db " + aj.db + " and the stream",
               window: glyph.dur(r.to - r.from), tier: glyph.dur(Math.round((r.to - r.from) / 96)) + " cells",
@@ -4688,6 +4695,9 @@
       if (s.points.length) draw($("w-probe"), s.points, { from: pw.from, to: pw.to, step: s.step, kind: s.kind,
                                      color: theme().normal, axes: true, band: pbd,
                                      now: Math.floor(Date.now() / 1000) });
+      if (window.SlothIsoChart) SlothIsoChart.band("w-probe", s.points.length ? { pts: s.points, band: pbd,
+        from: pw.from, to: pw.to, step: s.step, off: bl ? bl.utc_offset_s : null, unit: "clients",
+        now: Math.floor(Date.now() / 1000) } : null);
       set("w-pc-note", glyph.caption({
             source: "wifi.probe_clients, " + s.source,
             window: glyph.dur(r.win), tier: tier,
@@ -6902,6 +6912,19 @@
       return hit;
     },
     changed: function () { apDfAll(); } });
+  // The larger time graphs drawn isometrically (web/ui/isochart.js,
+  // owner 2026-11-19): the page's helpers, lent once, and each panel's
+  // box, which draws its panel again when it changes.
+  if (window.SlothIsoChart) {
+    SlothIsoChart.init({ fmt: fmt, hhmmss: hhmmss, prefGet: prefGet, prefSet: prefSet });
+    SlothIsoChart.box("o-iso", "nvn.iso", ["o-nvn"], function () { if (view === "overview") overview(); });
+    SlothIsoChart.box("w-ch-iso", "wrug.iso", ["w-deauth", "w-pflood"], function () { if (view === "wifi") wifi(); });
+    SlothIsoChart.box("w-pc-iso", "wprobe.iso", ["w-probe"], function () { if (view === "wifi") wifi(); });
+    SlothIsoChart.box("a-iso", "act.iso", ["a-chart", "ak-chart"], function () { if (view === "activity") refresh(); });
+    SlothIsoChart.box("dr-iso", "drweek.iso", ["dr-week"], function () {
+      if (!$("drawer").hidden && D.sel) openDrawer(D.sel);
+    });
+  }
   if (window.SlothDevWf) SlothDevWf.init({ getJSON: getJSON, errText: errText, fmt: fmt,
                                            prefGet: prefGet, prefSet: prefSet });
   if (window.SlothWRadar) SlothWRadar.init({ getJSON: getJSON, errText: errText, openDrawer: openDrawer });

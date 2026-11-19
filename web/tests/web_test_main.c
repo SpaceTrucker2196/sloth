@@ -148,6 +148,7 @@ int main(void) {
     SUITE(run_wradar_tests);
     SUITE(run_dock_tests);
     SUITE(run_devwf_tests);
+    SUITE(run_isochart_tests);
     SUITE(run_camera_tests);
     SUITE(run_radar_tests);
     SUITE(run_allkeys_tests);

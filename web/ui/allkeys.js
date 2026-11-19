@@ -546,6 +546,12 @@
       S.shrunk = gw.shrunk ? gw.text : "";
     }
     paintMarks(cv, marks, H.tok);
+    // The same rows drawn isometrically (web/ui/isochart.js) when the
+    // panel's box is on; a column picked there is picked here.
+    if (window.SlothIsoChart)
+      SlothIsoChart.allkeys({ rows: S.rows, from: presence ? head.from : S.view.o.from,
+        to: presence ? head.to : S.view.o.to, cell: head.cell, presence: presence, pick: pi, unit: m.unit,
+        onPick: function (k) { pick(m, S.pick === k ? null : k); } });
     var cellWord = head.cell === head.step ? head.tier
       : head.tier + " in " + glyph.dur(head.cell) + " cells (" +
         (head.kind === "counter" ? "sum" : head.kind === "presence" ? "any" : "mean") + ")";

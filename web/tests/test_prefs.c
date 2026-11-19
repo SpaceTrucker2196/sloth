@@ -144,6 +144,10 @@ static const char *const KEPT_ELSEWHERE[] = {
     /* #224: isometric or flat, kept only when flat (wifi.iso, by app.js;
      * bledev.iso, by bledev.js through the lent prefGet/prefSet) */
     "w-iso", "bledev-iso",
+    /* 2026-11-19: the larger time graphs isometric or flat, each kept
+     * only when flat, by isochart.js's box() through the lent
+     * prefGet/prefSet: nvn.iso, wrug.iso, wprobe.iso, act.iso, drweek.iso */
+    "o-iso", "w-ch-iso", "w-pc-iso", "a-iso", "dr-iso",
     /* radar.src, by radar.js through the lent prefGet/prefSet: the
      * Radar's sources (2026-11-18), kept as the list of those off */
     "radar-src-sat", "radar-src-adsb", "radar-src-aprs", "radar-src-wifi", "radar-src-ble",
@@ -257,6 +261,8 @@ static void test_every_control_is_decided(void) {
     WT_HAS(p, "H.prefSet(\"frrs.tacdb.q\", $(\"tc-q\").value || null);");
     WT_HAS(p, "    prefSet(\"wifi.iso\", WF.iso ? null : false);");
     WT_HAS(p, "      H.prefSet(\"bledev.iso\", S.iso ? null : false);");
+    WT_HAS(p, "      H.prefSet(pref, on ? null : false);");
+    WT_HAS(p, "    var on = H.prefGet(pref) !== false;");
     WT_HAS(p, "    H.prefSet(\"radar.src\", off.length ? off : null);");
     /* A kept value only where the control can hold it. */
     WT_HAS(p, "for (var i = 0; i < c.options.length; i++) if (c.options[i].value === v) return true;");

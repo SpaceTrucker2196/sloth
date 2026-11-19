@@ -99,6 +99,7 @@ void run_info_tests(void);               /* tests/test_info.c (2026-11-18) */
 void run_wradar_tests(void);             /* tests/test_wradar.c (2026-11-19) */
 void run_dock_tests(void);               /* tests/test_dock.c (2026-11-19) */
 void run_devwf_tests(void);              /* tests/test_devwf.c (2026-11-19) */
+void run_isochart_tests(void);           /* tests/test_isochart.c (2026-11-19) */
 void run_camera_tests(void);             /* tests/test_camera.c (2026-11-15) */
 void run_aprs_tests(void);               /* tests/test_aprs.c (2026-11-05) */
 void run_rtl433_tests(void);             /* tests/test_rtl433.c (#208) */

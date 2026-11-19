@@ -3564,6 +3564,54 @@ is the devices present that hour; its body says what they had done
 before, bottom up: arrived (absent the 24 hours before: new, or back
 after a day or more), back (absent the hour before) and still here.
 
+### The larger time graphs, isometric (2026-11-19)
+
+The owner, 2026-11-19: "for the larger graphs in the ui when there is a
+time domain express that in the isometric waterfall graph format like
+we have for spectrum using color coding where appropriate", then "all
+4". Seven charts in four places are drawn by default through the same
+isometric grid as the Spectrum, WiFi, BLE Devices and arrivals
+waterfalls (`web/ui/iso.js`'s `SlothIso.grid`; the module is
+`web/ui/isochart.js`, `window.SlothIsoChart`). Each panel has an
+`isometric` checkbox, on by default, that puts back the flat drawing;
+it is kept per browser only when off (`nvn.iso`, `wprobe.iso`,
+`wrug.iso`, `act.iso`, `drweek.iso`). Pointing at a column names its
+cell, time and value in a tooltip. Nothing about the data, routes or
+API changes.
+
+- A series against its baseline band (the Overview's **now vs normal**,
+  the WiFi view's **clients**, the Activity view's band chart): time is
+  folded into rows, newest in front. For a window of 2 days or more the
+  rows are the sensor's local days with the 24 hours across. Under
+  that they are equal slices of the window: 15 for 3 h or less, else
+  24, each cut into as many cells as it holds steps, at most 60. A
+  window of under 60 steps is folded into rows of about 4 cells, at
+  most 8. A cell is the mean of its points. Its colour is where it sits
+  against the mean of their bands, named in a key under the picture:
+  above (`--heat-3`), within (`--tui-normal`), below (`--data`), no band
+  yet (`--heat-0`). A cell with a value is never drawn under a sliver,
+  so a zero still shows its colour. Now's cell carries a bar in
+  `--signal`. The tooltip gives the value, the band and the word.
+- Lanes against time: the lanes run across as columns and the time
+  cells recede, newest in front. The cells are folded to at most 48
+  rows. **Deauth, one stage**: a column per bssid the rug draws, in its
+  channel's colour, its frames under it as the clients lane's diamonds;
+  a row inside a DEAUTH_FLOOD episode is drawn in `--sev-crit` and
+  ticked at its foot. One checkbox covers it and **probe floods**: a
+  column per severity in its colour, the findings begun in the row,
+  ticked while one is open. **Every key** (`keys: all`): a column per
+  key, the legend's first 24 and the picked one, each in its `--k-N`
+  swatch colour, every other faded while one is picked; a click on a
+  column picks its key. The drawer's **hour of week presence**: the 24
+  hours across and the weekdays receding, Monday at the back. A fed
+  cell's height and heat are its share of weeks present. A provisional
+  cell is `--tui-dim`, a cell never observed is not drawn, and now's
+  cell is outlined.
+
+While app.js hides a flat chart for want of data, `iso.css` hides its
+isometric twin with it. Colours are the page's tokens, read at each
+draw.
+
 `3` (or the top bar) opens Devices: the search box (§9.1; `/` focuses
 it from anywhere; the query is sent 300 ms after typing stops, or on
 Enter), the sort, and the table: the first 512 rows of the answer,
@@ -8101,6 +8149,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_sysstat.c` | the Sensor health view's host status ([Sensor health](#sensor-health)): sloth's four records in the emitter's exact shape through `/api/sys` (a figure the host lacks `null`, a not-configured source listed, a batch replacing the last, the age on the monotonic clock, the same answer under every scope with one `scope` member), refusals and ranges on hostile lines, the worst-case answer inside the buffer, the eight series through `web_metrics_record()` (absent or out of range not sampled, an outage in a bucket's minimum), the `sys` key kind; the stores (2026-11-12): the size of fixture files of known size with and without a `-wal`, a missing file and a directory, sloth's limit from `sensor_health`'s `db_max_mb` (0 unlimited, -1 no database, hostile values refused) and an older sloth's `tuned` list (named, whole, cut, malformed), `--web-max-mb`, the bands, the `storage` member, and `sys.db_mb` at every tier and at most once a fine bucket; and the page's words as a C port of `syshealth.js`'s `trendOf()` and `stripOf()` with the JS pinned out of the served page. Each absence assertion seen red under a named mutation |
 | `test_bledev.c` | the BLE Devices waterfall ([BLE](#ble)): each class rule on hand-built fields (SIG Appearance values, Continuity types, the registry's UUIDs) and each left-out shape landing in Unknown, the first-match order and the table's match numbers, the slugs (never a channel key, the only `bleclass` keys), a class from a record line; the proximity edges against `src/rf_distance.h` and `.c` read in the test; the page's class table and grade pinned against the C ones, the panels inside `v-ble`, no `innerHTML` in the module; the mix engine taking kinds 3 and 4 (an advertiser, anonymous advertising) apart and refusing 5, a sized ring; the class mix fed from `ble_device` lines (a baseline, deltas, a reconnect, a row born while listening, a sampled row, one address on two sensors kept apart); the advertisers gauge once a pass, an address on two sensors once; the one anonymous row sloth can send (the host stream's, its first mfr pair kept, a keyboard's HID bit OR-ed in) credited to Unknown alone as one entry and one advertiser while its fields read Phones then Input, named rows and an Ubertooth's uncredited samples beside it, each class's advertisers, drawn transmitters, reports and drawn frames agreeing, no series under the zero address; the anonymous entry through both routes (one `anonymous` tx entry in `b:unk`, its kind word the one `bledev.js` tests, no proximity row, never nearest, `anonymous_heard`, the strip counting it once) and under a read cut (no slot taken: 256 read); five thousand fresh BLE addresses leaving a Wi-Fi row's high-water mark (and its true delta) in place; both routes from memory (display order, the tx entries named from the tables or by address alone, the strip's facts, every refusal), the proximity rows' order, means and window, a tracker heard before three hundred newer addresses still read and first, each row graded with its announced power (extended header, TX Power Level, else 0 dBm) and nearest by the margin; `now`'s sensor facts; both routes 503 `no_time_series` in either scope and the mix 503 `no_ble_mix`; Local `out_of_scope` with the query checked and a long query a 400; with SQLite the WiFi and BLE mixes in one `chmix` at the same tier and t, each namespace reading only its own, each route drawing only its own, a kind-4 anonymous row read back and drawn, and the file still v7. Each absence seen red under a named mutation |
 | `test_iso.c` | the isometric waterfall (#224, `web/ui/iso.js`): its projection, row painter, hit test, offscreen copy, pointer cell and tooltip pinned whole, one `window.SlothIso`, no markup or attribute sink in it; included before app.js, spectrum.js and bledev.js; Spectrum's `draw()` pinned whole and its old painter, hit test and offscreen copy gone from spectrum.js; the WiFi and BLE Devices `isometric` checkboxes checked in the markup, read as isometric unless kept `false`, the default kept as nothing, each tab's mode switch and column pick pinned whole, the arrow keys across and back; no inline handler on any tag in the page; the identity colours (2026-11-17): the scheme read from `iso.css`, the segment painter, the channel classifier, the WiFi column body and key, the BLE class hues, steps and grouping pinned whole, every `--iso-*` token written for both themes and a hue for every class in `CLASSES`, the grid's six text calls counted and pinned so no label goes, and `paint()`'s plain path the old one. Each absence seen red under a named mutation |
+| `test_isochart.c` | the larger time graphs drawn isometrically ([The larger time graphs, isometric](#the-larger-time-graphs-isometric-2026-11-19), `web/ui/isochart.js`): its pure half (where a value sits against its band, how a window folds into rows, the folding of points and lane cells, the probe-flood lanes, the key columns, a week cell's state) pinned whole, each picture's colouring lines, the box and its sync, the five `isometric` checkboxes checked in the markup, each canvas straight after its flat one and the CSS that hides it with a hidden flat one, each hook beside its flat drawing, the module after iso.js and before app.js, no second projection and no markup sink in it. Each absence seen red under a named mutation |
 | `test_radar.c` | the Radar tab ([Radar](#radar)): `/api/radar` from seeded `ble_device`, `beacon` and `probe_client` lines (every row in total, the banded rows nearest-RSSI first, a reading without an estimate in `none` and nowhere else, a word that is not sloth's no band, both halves `null` without their tables), the eight-per-band cap on twelve scrambled rows, rows without a reading sorting last, Monitor and Hybrid against Local's `out_of_scope` with the query checked, `400` for any parameter, the body under 8 KB with every BLE row held and under 10 KB with both censuses full, the name cut on a code-point boundary; the page: the tab between APRS and TACDB, the hook and init lines, every container id looked up, no `scoped-out` toggle and the comment saying why, no control in the view, the projection functions whole (`rn`, `geo`, `place`, `project`, `ringDist`) with no divide by depth, the painters whole, the ring dash and alpha, no gradient or shadow, the kept camera's three prefs validated and cleared, no kept selection, one `requestAnimationFrame`, the Local and estimate sentences verbatim, the centre rule, every fetch through the lent scoped `getJSON`, the three `select()` exports whole. Each absence seen red under a named mutation |
 | `test_allkeys.c` | the Activity graph's `keys: all`: `/api/series/all` (every parameter and reason word, the cell arithmetic, the answer's shape for a gauge, a counter, presence and a global metric, an empty cell absent, keys in byte order, 128 to an answer and `after` paging with no key twice, `total` on the first answer only, a full answer stopping whole, the scopes by metric and by key, the route's `400` and `503`), every key walked (300 where `/api/keys` lists 256, the oldest among them; the rollup's and the store's, a store key with no bucket in the window left out), an answer stopping at its time and still answering one key, the fullest answer and a walk of 8,192 keys from memory and from the store timed against the 250 ms request budget and printed; and `web/ui/allkeys.js`: its pure half ported to C line for line and pinned verbatim (the legend's order, the `N of M keys` and `loading N of M keys` words, the tier per window, the cells a key is read in, the legend's filter, the multi-key mark list: one token a key, the shared scale, gaps, dots under five points, the focus row last and the rest `--faint` (never `--rule`), the rows past 256 folded into one range a cell, the band only for a picked key, the top five end labels pushed apart, greyscale; the frame; the presence strips), the key colours pinned against `ip_color_index()`, and the other half by whole functions, with no `innerHTML`, no `setAttribute` and one `--signal`. Each absence seen red under a named mutation |
 | `test_ssidview.c` | an SSID's detail ([An SSID's detail](#an-ssids-detail)): the `ssid=` parameter both ways on the empty name, one that is not UTF-8, a zero-width space, 32 octets and two that look like SQL wildcards, and its refusals (one character, leftover bits, a NUL, padding, `+` and `/`, 33 octets); `/api/wifi/ssid` over a generated sloth.db: the BSSIDs now and once, KARMA, the stream's twin link, the associations by name and by BSSID, the askers, the strip, the alerts by BSSID and by the SSID's own key component; `Home%` and `Home_et` each their own; the hidden SSID; a name nothing beacons; Monitor's answer and Local's `out_of_scope`; 600,000 alerts with 40 BSSIDs, 5,000 associations and 50,000 askers inside the request's budget, the alert walk's reach printed; and the page's half, `octets()`, `param()`, `link()`, `more()`, `ssidSpan()` and `ssidHidden()` whole and each hook where the WiFi view writes a name. Each absence assertion seen red under the mutation its comment names |
