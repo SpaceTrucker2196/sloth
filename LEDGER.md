@@ -393,4 +393,4 @@
 | d115df7 | 2026-11-19T03:28:36Z | claude-fable-5-1, claude-opus-5-5 | 198 | 34200 | 20009936 | 514415 | 10.6405 | #231 Stage 2: sloth consumes intel pack 1.0.1 (own generator, intel_pack on findings) + comint 1.0.1 eba181f |
 | d5c19bc | 2026-11-19T03:59:16Z | claude-fable-5-1, claude-opus-5-5 | 104 | 7417 | 6203862 | 133134 | 4.3220 | Fix red main: update_intel.sh shellcheck findings (#231) |
 | 36571a7f | 2026-11-19T13:45:28Z | claude-opus-5 | 438 | 93156 | 20026188 | 331556 | 15.6597 | slothweb: coalesce queued alerts.fired samples so a burst never drops (#230) |
-| b3312ee | 2026-11-19T16:50:07Z | claude-fable-5-1, claude-opus-5-5 | 264 | 57093 | 13666988 | 468217 | 9.5674 | slothweb Overview: KPI tile grey lines behind an info button |
+| 4e7b3b4 | 2026-11-19T17:13:59Z | claude-fable-5-1, claude-opus-5-5 | 478 | 82779 | 24866127 | 652359 | 15.9104 | slothweb WiFi: radar scope of the Wi-Fi devices |
