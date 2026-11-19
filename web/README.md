@@ -3591,11 +3591,14 @@ API changes.
   above (`--heat-3`), within (`--tui-normal`), below (`--data`), no band
   yet (`--heat-0`). A cell with a value is never drawn under a sliver,
   so a zero still shows its colour. Now's cell carries a bar in
-  `--signal`. The tooltip gives the value, the band and the word.
+  `--signal`. The tooltip gives the value, the band and the word; for a
+  day-folded window its times are on the sensor's clock, as the
+  columns' hours are.
 - Lanes against time: the lanes run across as columns and the time
   cells recede, newest in front. The cells are folded to at most 48
   rows. **Deauth, one stage**: a column per bssid the rug draws, in its
-  channel's colour, its frames under it as the clients lane's diamonds;
+  channel's colour (`--tui-dim` for a channel not known, as the flat rug
+  writes its name), its frames under it as the clients lane's diamonds;
   a row inside a DEAUTH_FLOOD episode is drawn in `--sev-crit` and
   ticked at its foot. One checkbox covers it and **probe floods**: a
   column per severity in its colour, the findings begun in the row,

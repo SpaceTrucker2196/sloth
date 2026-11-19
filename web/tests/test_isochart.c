@@ -24,7 +24,11 @@
  * restored byte-identical from a copy: the sink scan with a comment
  * naming innerHTML added to isochart.js; the second projection scan
  * with a stub "function layout(" added to isochart.js; the order with
- * @include isochart.js moved before iso.js. */
+ * @include isochart.js moved before iso.js. Review (2026-11-19): the
+ * paint, insertAdjacentHTML and outerHTML scans, each red with a
+ * comment naming it put inside the module (one put after
+ * window.SlothIsoChart is outside what module() reads, and is caught
+ * only by the page-wide scans in test_alerts.c and test_bundle.c). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -169,6 +173,35 @@ static const char JS_LOCALOFF[] =
     "                                d.getMinutes(), d.getSeconds()) - Math.floor(t) * 1000) / 1000);\n"
     "  ";
 
+/* A day-folded picture's tooltip on the clock its columns are labelled
+ * in (the sensor's offset), not the browser's: review 2026-11-19. */
+static const char JS_HMAT[] =
+    "  function hmAt(t, off) {\n"
+    "    var d = new Date((t + off) * 1000);\n"
+    "    return pad2(d.getUTCHours()) + \":\" + pad2(d.getUTCMinutes());\n"
+    "  ";
+
+static const char JS_BANDTIP[] =
+    "    function when(t) { return sh.days ? dayWord(t, off) + \" \" + hmAt(t, off) : hm(t); }\n"
+    "    function till(t) { return sh.days ? hmAt(t, off) : hm(t); }\n";
+
+static const char JS_BANDTIPLINES[] =
+    "        return [[when(s) + \" to \" + till(s + sh.cell_s)],\n"
+    "                [H.fmt(x.v) + unit + (x.n > 1 ? \" (mean of \" + x.n + \")\" : \"\")],\n"
+    "                [x.b ? \"band \" + H.fmt(x.b[0]) + \" to \" + H.fmt(x.b[1]) + unit + \", mean \" + H.fmt(x.b[2])\n"
+    "                     : \"no band for this hour yet (warming)\", true],\n"
+    "                [STATES[w].label, true]];";
+
+static const char JS_DUR[] =
+    "  function dur(s) {\n"
+    "    s = Math.round(s);\n"
+    "    if (s < 60) return s + \"s\";\n"
+    "    var sec = s % 60;\n"
+    "    if (s < 3600) return Math.floor(s / 60) + \"m\" + (sec ? pad2(sec) + \"s\" : \"\");\n"
+    "    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);\n"
+    "    return h + \"h\" + (m || sec ? pad2(m) : \"\") + (sec ? \"m\" + pad2(sec) + \"s\" : \"\");\n"
+    "  }";
+
 static const char JS_SYNC[] =
     "  function sync(id) {\n"
     "    var p = chart(id), f = $(id), cv = $(id + \"-iso\"), k = $(id + \"-iso-key\");\n"
@@ -230,6 +263,8 @@ static void test_isochart_pure(void) {
     WT_HAS(m, JS_KEYCOLS);
     WT_HAS(m, JS_WEEKSTATE);
     WT_HAS(m, JS_LOCALOFF);
+    WT_HAS(m, JS_HMAT);
+    WT_HAS(m, JS_DUR);
     free(m);
 }
 
@@ -249,6 +284,10 @@ static void test_isochart_drawing(void) {
     WT_HAS(m, "            return weekState(x, warm) < 0 ? null : Math.max(num(x[0]) ? x[0] : 0, 0.03);");
     WT_HAS(m, "          segments: function (k, c) { return weekState(at(k, c), warm) === 1 ? [{ f: 1, color: dim }] : null; },");
     WT_HAS(m, "    SlothIso.grid(cv, p.st, o);");
+    WT_HAS(m, JS_BANDTIP);
+    WT_HAS(m, JS_BANDTIPLINES);
+    /* An unknown channel in the flat rug's own --tui-dim. */
+    WT_HAS(m, "        var crit = cssVar(\"--sev-crit\", \"#ff3f3f\"), dim = cssVar(\"--tui-dim\", \"#00875f\");");
     WT_HAS(m, JS_SYNC);
     WT_HAS(m, JS_BOX);
     /* One projection: iso.js's. */

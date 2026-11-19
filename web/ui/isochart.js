@@ -218,18 +218,27 @@
     var box = $("isoc-tip");
     if (box && window.SlothIso) SlothIso.tip(box, lines, ev || { clientX: 0, clientY: 0 });
   }
+  // A column's offset into its row, exact to the second: rounded to
+  // the minute, a row of 10 s cells read "+1m" three times over.
   function dur(s) {
     s = Math.round(s);
     if (s < 60) return s + "s";
-    if (s < 3600) return Math.round(s / 60) + "m";
-    var h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
-    return h + "h" + (m ? pad2(m) : "");
+    var sec = s % 60;
+    if (s < 3600) return Math.floor(s / 60) + "m" + (sec ? pad2(sec) + "s" : "");
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return h + "h" + (m || sec ? pad2(m) : "") + (sec ? "m" + pad2(sec) + "s" : "");
   }
   function dayWord(ts, off) {
     var d = new Date((ts + off) * 1000);
     return d.getUTCFullYear() + "-" + pad2(d.getUTCMonth() + 1) + "-" + pad2(d.getUTCDate());
   }
   function hm(t) { return H.hhmmss(t).slice(0, 5); }
+  // hh:mm at t on the clock of UTC offset off: a day-folded picture's
+  // columns are the sensor's hours, so its tooltip reads that clock too.
+  function hmAt(t, off) {
+    var d = new Date((t + off) * 1000);
+    return pad2(d.getUTCHours()) + ":" + pad2(d.getUTCMinutes());
+  }
   // This browser's offset from UTC at t, read off its own clock's
   // fields, as H.hhmmss() reads them.
   function localOff(t) {
@@ -253,7 +262,8 @@
     if (!(hi > lo)) hi = lo + 1;
     function at(k, c) { return k >= 0 && k < sh.n && c >= 0 && c < sh.cols ? cells[k * sh.cols + c] : null; }
     function t0(k, c) { return sh.from + k * sh.row_s + c * sh.cell_s; }
-    function when(t) { return sh.days ? dayWord(t, off) + " " + hm(t) : hm(t); }
+    function when(t) { return sh.days ? dayWord(t, off) + " " + hmAt(t, off) : hm(t); }
+    function till(t) { return sh.days ? hmAt(t, off) : hm(t); }
     p.d = {
       grid: function () {
         var cs = colors(), cols = [], now = null;
@@ -285,7 +295,7 @@
         var x = at(a.k, a.c);
         if (!x) return null;
         var s = t0(a.k, a.c), w = where(x.v, x.b);
-        return [[when(s) + " to " + hm(s + sh.cell_s)],
+        return [[when(s) + " to " + till(s + sh.cell_s)],
                 [H.fmt(x.v) + unit + (x.n > 1 ? " (mean of " + x.n + ")" : "")],
                 [x.b ? "band " + H.fmt(x.b[0]) + " to " + H.fmt(x.b[1]) + unit + ", mean " + H.fmt(x.b[2])
                      : "no band for this hour yet (warming)", true],
@@ -317,12 +327,13 @@
     var row_s = j.col_s * g;
     p.d = {
       grid: function () {
-        var crit = cssVar("--sev-crit", "#ff3f3f"), dim = cssVar("--tui-normal", "#2b8f74");
+        // An unknown channel in --tui-dim, as the flat rug writes its name.
+        var crit = cssVar("--sev-crit", "#ff3f3f"), dim = cssVar("--tui-dim", "#00875f");
         var cc = lanes.map(function (l) {
           var ch = window.SlothChan ? SlothChan.of("mac", l.bssid) : null;
           return ch !== null && ch !== undefined ? SlothChan.rgb(ch) : dim;
         });
-        key(id, [{ label: "a bssid's channel colour (dim: channel unknown)", color: dim },
+        key(id, [{ label: "each bssid in its channel's colour; this one: channel unknown", color: dim },
                  { label: "in a DEAUTH_FLOOD episode", color: crit }]);
         return {
           cols: lanes.map(function (l, c) { return { label: l.bssid, short: l.bssid.slice(-5), floor: { color: cc[c] }, cap: cc[c] }; }),
