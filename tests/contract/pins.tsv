@@ -1,0 +1,45 @@
+# Lines of sloth source sloth-mesh's tests hold slothweb to, carried as
+# the contract's parity/pins.tsv (tools/contract_parity.c pins). make
+# contract fails when one no longer holds here, so a change to these
+# words reaches the page as a contract change, not as silent drift. An
+# empty text pins that the file exists. TSV: \\, \t and \n escaped.
+path	text
+src/views/ble.c	case 0:  return 'P';
+src/views/ble.c	case 1:  return 'R';
+src/views/ble.c	case 2:  return 'p';
+src/views/ble.c	case 3:  return 'r';
+src/views/ble.c	default: return '?';
+src/views/ble.c	T: P public R random p/r resolved  H HID  W watchlist  ~ sample  DIST: signal-strength estimate
+src/views/ble.c	corroborates, does not confirm, and identifies no device 
+src/adsb.c	static const char *const k_emerg[] = {\n    "none", "general", "lifeguard", "minfuel", "nordo", "unlawful",\n    "downed", "reserved"\n};
+src/gps.c	case 0: return "GPS";
+src/gps.c	case 1: return "SBAS";
+src/gps.c	case 2: return "Galileo";
+src/gps.c	case 3: return "BeiDou";
+src/gps.c	case 4: return "IMES";
+src/gps.c	case 5: return "QZSS";
+src/gps.c	case 6: return "GLONASS";
+src/gps.c	case 7: return "NavIC";
+src/rf_distance.h	#define RF_BAND_IMMEDIATE_M  1.0\n
+src/rf_distance.h	#define RF_BAND_NEAR_M       3.0\n
+src/rf_distance.h	#define RF_BAND_ROOM_M      10.0\n
+src/rf_distance.h	#define RF_BAND_BUILDING_M  30.0\n
+src/rf_distance.c	    c->freq_mhz = 2440;\n
+src/rf_distance.c	    if (m < RF_BAND_IMMEDIATE_M) return RF_DIST_IMMEDIATE;\n
+src/rf_model.c	    return 20.0 * log10((double)freq_mhz) - 28.0;\n
+docs/wiki/index.md	[[alert-remediation]]
+docs/wiki/ble.md	
+docs/wiki/deployment.md	
+docs/wiki/jsonl-schema.md	
+src/views/ble.c	if (i == sel) tui_sel(); else if (d->hid || d->watch_cat[0]) tui_bright(); else tui_normal();
+src/views/ble.c	TPRINT(" BLE advertisers: ");
+src/views/ble.c	    if (hid) tui_heat(0.5); else tui_dim();
+src/views/ble.c	    if (wl) tui_heat(0.5); else tui_dim();
+src/views/ble.c	    tui_dim(); TPRINT("  flood keys: %d
+src/views/ble.c	TPRINT(" T: P public R random p/r resolved  H HID  W watchlist  ~ sample  DIST: signal-strength estimate\\n");
+src/views/ble.c	  (no advertisements decoded - start with --bt-monitor or\\n
+src/views/ble.c	   --bt-capture PATH; see docs/wiki/ble.md. sloth never scans,\\n
+src/views/ble.c	   connects or reads GATT: the operator's stack runs the scan.)\\n
+src/tui.c	    else if (frac < 0.40) attrset(COLOR_PAIR(CP_HEAT_MID));\n    else if (frac < 0.70) attrset(COLOR_PAIR(CP_HEAT_HI));\n
+src/tui.c	#define ALERT_HOT_CAP 256
+src/tui.h	#define ALERT_HOT_TTL_S 3600

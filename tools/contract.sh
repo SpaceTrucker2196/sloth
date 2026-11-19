@@ -5,7 +5,7 @@
 # and why each decision was made.
 #
 #   tools/contract.sh VERSION SLOTH_WIFI PALETTE_GEN CONTRACT_DB \
-#                     "WIRE_SRCS" "WIRE_HDRS"
+#                     "WIRE_SRCS" "WIRE_HDRS" CONTRACT_PARITY
 #
 # Environment: CC, AR, CONTRACT_CFLAGS (from the Makefile);
 # SOURCE_DATE_EPOCH (default: the HEAD commit's time).
@@ -23,8 +23,8 @@
 # with the tree's path mapped away.
 set -eu
 
-[ "$#" -eq 6 ] || { echo "usage: $0 VERSION SLOTH_WIFI PALETTE_GEN CONTRACT_DB WIRE_SRCS WIRE_HDRS" >&2; exit 2; }
-version=$1 wifi=$2 palgen=$3 cdb=$4 wire_srcs=$5 wire_hdrs=$6
+[ "$#" -eq 7 ] || { echo "usage: $0 VERSION SLOTH_WIFI PALETTE_GEN CONTRACT_DB WIRE_SRCS WIRE_HDRS CONTRACT_PARITY" >&2; exit 2; }
+version=$1 wifi=$2 palgen=$3 cdb=$4 wire_srcs=$5 wire_hdrs=$6 parity=$7
 : "${CC:=cc}" "${AR:=ar}" "${CONTRACT_CFLAGS:=-O2 -std=c99}"
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -53,7 +53,7 @@ stage=$work/stage/$name
 rm -rf "$work"
 mkdir -p "$stage/include/sloth-wire" "$stage/lib/pkgconfig" "$stage/schema" \
          "$stage/jsonl" "$stage/palette" "$stage/alerts" "$stage/fixtures" \
-         "$work/obj" dist
+         "$stage/parity" "$work/obj" dist
 
 # ── libsloth-wire.a: exactly the sources slothweb links (WEB_CORE_SRCS) ──
 objs=
@@ -86,6 +86,9 @@ EOF
 db_version=$(sed -n 's/^-- sloth database schema, DB_SCHEMA_VERSION \([0-9]*\) .*/\1/p' \
                  "$stage/schema/schema.sql")
 [ -n "$db_version" ] || { echo "contract: --print-schema named no DB_SCHEMA_VERSION" >&2; exit 1; }
+# The schema page whose recipes the SQL box offers (sloth-mesh's
+# tools/recipes.c reads its "## Recipes" fences), as in the tree.
+cp docs/wiki/sqlite-schema.md "$stage/schema/sqlite-schema.md"
 
 # ── the record contract and the palette ──
 cp docs/wiki/jsonl-schema.md "$stage/jsonl/jsonl-schema.md"
@@ -160,8 +163,27 @@ for r in $rf_rows; do
     }
 done
 
+# ── parity: the facts a consumer's tests hold its copies to (sloth#233) ──
+# Values compiled from the headers, rsn_akm_name() whole, the colour
+# hash on fixed keys, the string literals and pinned lines of the files
+# tests/contract/ names (a pin that no longer holds stops the build), and
+# the fire() sites of the rule files whose severities the dashboard's
+# rule table is held to. docs/wiki/contract.md, "parity/".
+"$parity" constants > "$stage/parity/constants.tsv"
+"$parity" akm > "$stage/parity/akm-names.tsv"
+"$parity" ipcolor > "$stage/parity/ip-color.tsv"
+"$parity" literals tests/contract/literals.txt > "$stage/parity/literals.tsv"
+"$parity" pins tests/contract/pins.tsv > "$stage/parity/pins.tsv"
+"$parity" fires src/alerts/rules_ble.c src/alerts/rules_camera.c src/alerts/rules_enterprise.c \
+    src/alerts/rules_gnss.c src/alerts/rules_mle.c src/alerts/rules_regulatory.c \
+    src/alerts/rules_twin.c src/alerts/rules_wifi_mgmt.c src/alerts/rules_wired.c \
+    > "$stage/parity/fire-sites.tsv"
+
 # ── golden fixtures ──
 cp tests/replay/golden.jsonl "$stage/fixtures/golden.jsonl"
+# The one dns record that links sloth's writer to a reader's passive PTR
+# cache (tests/test_jsonl.c emits it; a consumer feeds it).
+cp include/jsonl_ptr_fixture.h "$stage/fixtures/jsonl_ptr_fixture.h"
 "$cdb" build "$stage/fixtures/sloth.db" "$stage/schema/schema.sql"
 
 # ── MANIFEST.json and SHA256SUMS ──

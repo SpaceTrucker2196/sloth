@@ -2,7 +2,7 @@
 # make contract-check (#185 item 4): verify the contract artifact the
 # way a consumer in another repository would see it.
 #
-#   tests/contract/check.sh TAR SLOTH_WIFI SLOTH_RF CONTRACT_DB
+#   tests/contract/check.sh TAR SLOTH_WIFI SLOTH_RF CONTRACT_DB CONTRACT_PARITY
 #
 # 1. both daemons print the same --print-schema, and it is the shipped
 #    schema.sql;
@@ -15,7 +15,8 @@
 #    tests/contract/allowed-macs.txt and no home-directory path;
 #    palette.json is valid JSON with the tree's IP palette size;
 #    alert-daemons.tsv lists every kind in order and its per-daemon
-#    counts are the tree's count markers;
+#    counts are the tree's count markers; every parity/ file is what
+#    tools/contract_parity.c writes from the tree now, and has rows;
 # 3. tests/contract/consumer.c compiles and links against the unpacked
 #    headers, libsloth-wire.a and sloth-wire.pc alone, and decodes a
 #    hand-built radiotap + beacon; the functions the shipped headers
@@ -31,14 +32,15 @@
 # network. Each check prints one line; the first failure exits 1.
 set -eu
 
-[ "$#" -eq 4 ] || { echo "usage: $0 TAR SLOTH_WIFI SLOTH_RF CONTRACT_DB" >&2; exit 2; }
-tar=$1 wifi=$2 rf=$3 cdb=$4
+[ "$#" -eq 5 ] || { echo "usage: $0 TAR SLOTH_WIFI SLOTH_RF CONTRACT_DB CONTRACT_PARITY" >&2; exit 2; }
+tar=$1 wifi=$2 rf=$3 cdb=$4 parity=$5
 : "${MAKE:=make}" "${CC:=cc}" "${CFLAGS:=-O2}"
 
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 case $tar in /*) ;; *) tar=$root/$tar ;; esac
 case $cdb in /*) ;; *) cdb=$root/$cdb ;; esac
+case $parity in /*) ;; *) parity=$root/$parity ;; esac
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/sloth-contract.XXXXXX")
 # A signal exits (and the EXIT trap cleans up); a trap that only
@@ -106,7 +108,9 @@ ok "MANIFEST.json matches all $(wc -l < "$tmp/listed" | tr -d ' ') files and the
 # agrees with itself; a wrong file checksummed consistently passes them.
 same() { cmp -s "$root/$1" "$d/$2" || fail "$2 is not the tree's $1"; }
 same docs/wiki/jsonl-schema.md jsonl/jsonl-schema.md
+same docs/wiki/sqlite-schema.md schema/sqlite-schema.md
 same tests/replay/golden.jsonl fixtures/golden.jsonl
+same include/jsonl_ptr_fixture.h fixtures/jsonl_ptr_fixture.h
 for h in "$d"/include/sloth-wire/*.h; do
     h=${h##*/}
     same "src/$h" "include/sloth-wire/$h"
@@ -177,6 +181,29 @@ if [ "$nw" != "$(marker rules-wifi)" ] || [ "$nr" != "$(marker rules-rf)" ]; the
     fail "alert-daemons.tsv: sloth-wifi $nw, sloth-rf $nr; the tree's markers say $(marker rules-wifi), $(marker rules-rf)"
 fi
 ok "alert-daemons.tsv: $(wc -l < "$tmp/tsv" | tr -d ' ') kinds; sloth-wifi raises $nw, sloth-rf $nr"
+
+# parity/ (sloth#233): each file is what the tool writes from this tree
+# now (a pin that stopped holding fails the tool itself), and none is
+# empty past its header.
+for pf in constants akm-names ip-color literals pins fire-sites; do
+    case $pf in
+        constants) set -- constants ;;
+        akm-names) set -- akm ;;
+        ip-color)  set -- ipcolor ;;
+        literals)  set -- literals tests/contract/literals.txt ;;
+        pins)      set -- pins tests/contract/pins.tsv ;;
+        fire-sites)
+            set -- fires src/alerts/rules_ble.c src/alerts/rules_camera.c \
+                src/alerts/rules_enterprise.c src/alerts/rules_gnss.c src/alerts/rules_mle.c \
+                src/alerts/rules_regulatory.c src/alerts/rules_twin.c \
+                src/alerts/rules_wifi_mgmt.c src/alerts/rules_wired.c ;;
+    esac
+    (cd "$root" && "$parity" "$@") > "$tmp/parity.$pf" || fail "contract_parity $1 on the tree"
+    cmp -s "$tmp/parity.$pf" "$d/parity/$pf.tsv" || fail "parity/$pf.tsv is not what the tree gives now"
+    [ "$(grep -cv '^#' "$d/parity/$pf.tsv")" -ge 2 ] || fail "parity/$pf.tsv has no rows"
+done
+[ "$(grep -cv '^#' "$d/parity/akm-names.tsv")" = 257 ] || fail "parity/akm-names.tsv is not 256 suite types"
+ok "parity/: six files, each the tree's ($(grep -cv '^#' "$d/parity/pins.tsv") pin lines hold)"
 
 cmp -s "$tmp/wifi.sql" "$d/schema/schema.sql" || fail "schema.sql is not what sloth-wifi --print-schema prints"
 ok "schema.sql is the daemon's"

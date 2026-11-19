@@ -1,0 +1,15 @@
+# The sloth files whose string literals the contract carries as
+# parity/literals.tsv (tools/contract_parity.c literals): the words
+# sloth-mesh's tests hold slothweb's copies to. One per line: a path or
+# glob for whole files, or PATH<TAB>KEY<TAB>AFTER<TAB>FROM for the
+# literals of the first FROM after AFTER up to its "};", under KEY.
+# Adding a line is additive; removing one breaks a consumer test.
+src/ble_detect.c
+src/rf_distance.c
+src/ble_flood.c
+src/jsonl.c
+src/ble_hci.h
+src/bt_stream.h
+src/alerts/*.c
+tests/test_db.c	tests/test_db.c#forbidden	test_no_column_can_hold_secret_material(void)	forbidden[] = {
+src/db_schema.c	src/db_schema.c#VICTRON_COLS	static const char *const VICTRON_COLS[]	= {

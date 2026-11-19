@@ -22,7 +22,9 @@ attaches it to that tag's GitHub release.
 **Sources**: `Makefile` (contract section: `CONTRACT_*`, `contract`,
 `contract-check`, `WEB_CORE_SRCS`), `tools/contract.sh`,
 `tools/contract_db.c`, `tests/contract/check.sh`,
-`tests/contract/consumer.c`, `src/db_schema.c` (`db_schema_print()`),
+`tests/contract/consumer.c`, `tools/contract_parity.c`,
+`tests/contract/literals.txt`, `tests/contract/pins.tsv`,
+`src/db_schema.c` (`db_schema_print()`),
 `src/main.c` and `src/rf/rf_args.c` (`--print-schema`),
 `web/tools/palette.c` (`json` mode), `src/alerts/rules_table.c`,
 `src/alerts/rules_table_rf.c`, `.github/workflows/release-attest.yml`,
@@ -31,7 +33,7 @@ attaches it to that tag's GitHub release.
 [ADR 0004](adr/0004-libsloth-wire.md), [ADR 0007](adr/0007-versioning.md),
 issues #184 and #185.
 
-**Last updated**: 2026-11-17 (`dot11_data_status_t` in its own header; `dot11_data.h` no longer ships, *Gaps*), 2026-11-16 (no host data in the alert bundle: the assessments and research documents are redacted, and `make contract-check` refuses a MAC address outside `tests/contract/allowed-macs.txt` or a home-directory path), 2026-11-16 (#185 review: the checks now also cover the outer checksum, JSON validity, the copies against the tree, `palette.json`, `alert-daemons.tsv`, an empty golden database and the declared-but-undefined functions; *Gaps*; migrated databases; the release step's order and tag check), 2026-11-16 (#185 item 4: first version, contract format 1)
+**Last updated**: 2026-11-19 (sloth#233, Stage 3: additive paths for sloth-mesh, which may not read this tree: `schema/sqlite-schema.md`, `fixtures/jsonl_ptr_fixture.h` and `parity/`; `contract_format` stays 1; *parity/*; §5 item 2 of [[architecture-split]] answered), 2026-11-17 (`dot11_data_status_t` in its own header; `dot11_data.h` no longer ships, *Gaps*), 2026-11-16 (no host data in the alert bundle: the assessments and research documents are redacted, and `make contract-check` refuses a MAC address outside `tests/contract/allowed-macs.txt` or a home-directory path), 2026-11-16 (#185 review: the checks now also cover the outer checksum, JSON validity, the copies against the tree, `palette.json`, `alert-daemons.tsv`, an empty golden database and the declared-but-undefined functions; *Gaps*; migrated databases; the release step's order and tag check), 2026-11-16 (#185 item 4: first version, contract format 1)
 
 ---
 
@@ -51,6 +53,9 @@ One directory, `sloth-contract-<version>/`:
 | `alerts/alert-daemons.tsv` | which daemon raises each kind: `ty`, `kind`, `raised_by` (`sloth-wifi`, `sloth-rf` or `both`) | C4 |
 | `fixtures/golden.jsonl` | `tests/replay/golden.jsonl`, the replay golden | C9 |
 | `fixtures/sloth.db` | an empty database built from `schema.sql` | C9 |
+| `fixtures/jsonl_ptr_fixture.h` | `include/jsonl_ptr_fixture.h`: the one `dns` record that links sloth's writer to a reader's passive PTR cache | C9 |
+| `schema/sqlite-schema.md` | [[sqlite-schema]] as in the tree, whose recipes the dashboard's SQL box offers | C2 |
+| `parity/constants.tsv`, `parity/akm-names.tsv`, `parity/ip-color.tsv`, `parity/literals.tsv`, `parity/pins.tsv`, `parity/fire-sites.tsv` | the facts sloth-mesh's tests hold slothweb's copies to, written by `tools/contract_parity.c` (*parity/*, below) | C3, C5 |
 | `MANIFEST.json` | contract format, versions, commit, date, toolchain, and every other file's path, size and SHA-256 | — |
 | `SHA256SUMS` | `sha256sum -c` form, every file but itself | — |
 
@@ -134,6 +139,41 @@ written into `MANIFEST.json`. `tools/contract.sh` refuses to build when
 `git ls-files` fails or lists no assessment or no research document,
 rather than shipping a bundle without them.
 
+## parity/
+
+Added for Stage 3 (sloth#233). While slothweb lived here its suite held
+its copies of sloth's words and numbers to this tree directly: it linked
+`src/rsn_ie.c`, `src/ip_color.c`, `src/tui.c` and friends, included
+`include/sloth.h`, and read `src/jsonl.c`, `src/views/ble.c`,
+`src/alerts/*.c` and `tests/test_db.c` as text. sloth-mesh may not reach
+into this tree and no sloth source is copied into it, so the contract
+carries the answers instead, as data, each written by
+`tools/contract_parity.c` from the tree at `make contract` time:
+
+| File | What | Replaces |
+|---|---|---|
+| `constants.tsv` | `name value` for the `sloth.h` and `ip_color.h` macros and enumerators the page mirrors (`DEV_SRC_*`, `DEV_RISK_*`, `WPA_DG_*`, `CH_SRC_HE_6GHZ`, `MAX_BLE_DEVICES`, `BLE_DEV_NAME_MAX`, `IP_NUM_COLORS`, `IP_SRC_*`), compiled in, not parsed | `#include "sloth.h"` in the page's tests |
+| `akm-names.tsv` | `rsn_akm_name(t)` for all 256 `t` | linking `src/rsn_ie.c` |
+| `ip-color.tsv` | `ip_color_index(key)` on 799 fixed keys: the empty key, every single byte, the page tests' cases, 512 pseudo-random strings | linking `src/ip_color.c`; a port of the hash in the consumer is held to these |
+| `literals.tsv` | every C string literal, as written between the quotes, of the files `tests/contract/literals.txt` names (whole files, a glob, or one array: `tests/test_db.c`'s guardrail words, `src/db_schema.c`'s `VICTRON_COLS[]`) | reading those files for a quoted word |
+| `pins.tsv` | `tests/contract/pins.tsv`, each line's text found in its file first: `make contract` fails when a pin no longer holds, so a change to a word the page copies is a contract change, not silent drift. An empty text pins that the file exists | reading those files for a pinned line |
+| `fire-sites.tsv` | each `fire*(ALERT_TYPE_<kind>, <severity>, ...)` call of nine rule files, its severity argument as written | the dashboard's rule-severity test reading `src/alerts/` |
+
+`make contract-check` regenerates each from the tree and compares, so a
+`parity/` file that is not what the tree gives fails it (seen red with a
+literal of `src/jsonl.c` changed after the archive was built, and the
+tool itself with a pin's text changed). `ALERT_TYPE_*` needs no file:
+the consumer generates it from `alerts/include/sloth_alerts.def`, whose
+row is the persisted `ty`.
+
+What the archive still cannot answer, and so stays in sloth's suite until
+Stage 4 moves it into sloth's own tests: the alert detail audit
+(slothweb's `test_alertfmt.c` parses each rule function's `snprintf()`
+into the detail and holds its arguments to slothweb's audited names) and
+the TUI colour captures (`test_tui_colors.c` runs `src/tui.c` and
+compares the colour of every byte with the page's). Both read or run
+sloth source by design; a data form of either is open (sloth#233).
+
 ## Versioning
 
 Per [ADR 0007](adr/0007-versioning.md), each seam keeps its own version
@@ -164,11 +204,12 @@ with its reason.
 1. **The archive is exactly `WEB_CORE_SRCS`.** That is what slothweb
    links today, so "the page and the sensor link the same parsers" stays
    checkable as a list compare. The six test-only `src/` files of
-   [[architecture-split]] §5 item 2 are not in it; two of them are now
-   covered by other contents (`db_schema.c` by `schema.sql`,
-   `tui_palette.c` / `tui.c` by `palette.json`), and `rsn_ie.c`,
-   `ip_color.c` and `view_labels.c` remain without an answer (open,
-   below).
+   [[architecture-split]] §5 item 2 are not in it; they are covered by
+   other contents: `db_schema.c` by `schema.sql`, `tui_palette.c` /
+   `tui.c` by `palette.json`, and since sloth#233 `rsn_ie.c` and
+   `ip_color.c` by `parity/akm-names.tsv` and `parity/ip-color.tsv`;
+   `view_labels.c` was linked only so `src/tui.c` would link, and the
+   consumer no longer runs the TUI (*parity/*).
 2. **The fault hook is the consumer's.** `dot11_ie.c` calls
    `sh_parse_fault_note()` when an element walk overruns, and sloth
    defines it in `sensor_health.c`, which needs `sloth.h`. The archive

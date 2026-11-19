@@ -1900,7 +1900,7 @@ cppcheck: $(INTEL_STAMP)
 	  $(CPPCHECK_DEFS) -Iinclude -Isrc -Iresearch -Iweb/src -Iweb/tests -Iweb/tools -Iweb/mcp \
 	  $(INTEL_INC) \
 	  -i src/platform/bsd.c -i src/platform/win32.c -i src/platform/stub.c \
-	  src research web tools/intel_read.c tools/intel_gen.c
+	  src research web tools/intel_read.c tools/intel_gen.c tools/contract_parity.c
 
 # ── Contract artifact (#185 item 4; #184 §2 C1-C5, C9) ─────────────────────
 # `make contract` builds dist/sloth-contract-<SLOTH_VERSION>.tar, what a
@@ -1935,17 +1935,26 @@ CONTRACT_CFLAGS    = -O2 -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra -fPIC \
                      -ffile-prefix-map=$(CURDIR)/= $(filter -W%,$(EXTRA_CFLAGS))
 CONTRACT_DB        = build/contract-tools/contract-db
 CONTRACT_DB_SRCS   = tools/contract_db.c
+# parity/ (sloth#233): the facts sloth-mesh's tests hold slothweb's
+# copies to, compiled against this tree's headers and the two leaf
+# sources whose answers it records (tools/contract_parity.c).
+CONTRACT_PARITY      = build/contract-tools/contract-parity
+CONTRACT_PARITY_SRCS = tools/contract_parity.c src/ip_color.c src/rsn_ie.c
 
 $(CONTRACT_DB): $(CONTRACT_DB_SRCS)
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -o $@ $(CONTRACT_DB_SRCS) -lsqlite3
 
+$(CONTRACT_PARITY): $(CONTRACT_PARITY_SRCS) include/sloth.h src/ip_color.h src/rsn_ie.h | $(INTEL_STAMP)
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -Iinclude -Isrc $(INTEL_INC) -o $@ $(CONTRACT_PARITY_SRCS)
+
 .PHONY: contract contract-check
-contract: $(TARGET) $(WEB_PALGEN) $(CONTRACT_DB)
+contract: $(TARGET) $(WEB_PALGEN) $(CONTRACT_DB) $(CONTRACT_PARITY)
 	@[ "$(WITH_SQLITE)" = 1 ] || { echo "contract: needs WITH_SQLITE=1 (the golden sloth.db)" >&2; exit 1; }
 	CC='$(CC)' AR='$(AR)' CONTRACT_CFLAGS='$(CONTRACT_CFLAGS)' sh tools/contract.sh \
 	    '$(CONTRACT_VERSION)' ./$(TARGET) $(WEB_PALGEN) $(CONTRACT_DB) \
-	    '$(WEB_CORE_SRCS)' '$(CONTRACT_WIRE_HDRS)'
+	    '$(WEB_CORE_SRCS)' '$(CONTRACT_WIRE_HDRS)' $(CONTRACT_PARITY)
 
 # Unpack, verify, compile a consumer against the unpacked archive alone,
 # check the schema and the golden db, then build again and compare
@@ -1955,7 +1964,7 @@ contract: $(TARGET) $(WEB_PALGEN) $(CONTRACT_DB)
 # mktemp -d only.
 contract-check: contract $(RF_TARGET)
 	MAKE='$(MAKE)' CC='$(CC)' CFLAGS='$(CFLAGS)' sh tests/contract/check.sh $(CONTRACT_TAR) \
-	    ./$(TARGET) ./$(RF_TARGET) $(CONTRACT_DB)
+	    ./$(TARGET) ./$(RF_TARGET) $(CONTRACT_DB) $(CONTRACT_PARITY)
 
 # ── Mutation testing ────────────────────────────────────────────────────────
 # Verifies the test suite itself: introduces small faults into src/ files,
