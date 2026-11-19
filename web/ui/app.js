@@ -1023,7 +1023,7 @@
    "al-q", "al-win", "f-win", "f-sort", "f-ip", "f-mode", "ev-filter",
    "q-sql", "b-q", "b-sort", "bledev-win", "bledev-metric", "bledev-n",
    "gnss-seen-days", "adsb-seen-days", "adsb-seen-q", "adsb-range", "gnss-trail-hours",
-   "aprs-seen-days", "aprs-seen-q", "aprs-range", "radar-aprs-win", "fleet-kind"].forEach(keepCtl);
+   "aprs-seen-days", "aprs-seen-q", "aprs-range", "radar-aprs-win", "fleet-kind", "w-radar-range"].forEach(keepCtl);
   // Filled from the server's answer, so put back where it is filled.
   $("al-type").addEventListener("change", function () { ctlSave("al-type"); });
   // Each drill-down bar's "show all" (its href the bare view).
@@ -1493,6 +1493,7 @@
     if (v === "wifi" && window.SlothLure) SlothLure.show();
     // The direction-finding card (df.js, its own module): a no-op when not loaded.
     if (v === "wifi" && window.SlothDf) SlothDf.show();
+    if (v === "wifi" && window.SlothWRadar) SlothWRadar.show();
     // The Fleet view (fleet.js, its own module): a no-op when not loaded.
     if (v === "fleet" && window.SlothFleet) SlothFleet.show();
     // Identity across the sites (fleetid.js, its own module, #192 I2-I8).
@@ -6872,6 +6873,7 @@
       return hit;
     },
     changed: function () { apDfAll(); } });
+  if (window.SlothWRadar) SlothWRadar.init({ getJSON: getJSON, errText: errText, openDrawer: openDrawer });
   // The rtl_433 tab (web/ui/rtl433.js): the page's helpers, lent once.
   if (window.SlothRtl433) SlothRtl433.init({ getJSON: getJSON, errText: errText, shortStamp: shortStamp });
   // The Victron tab (web/ui/victron.js): the page's helpers, lent once.

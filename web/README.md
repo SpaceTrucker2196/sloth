@@ -1536,6 +1536,19 @@ read without following a link and every name is written again by
 
 ## Direction finding
 
+The WiFi view's **radar** (owner, 2026-11-19: "add a radar view to the
+wifi page like we have for ads-b and aprs"; `web/ui/wradar.js`) is the
+ADS-B and APRS scope (`web/ui/ppi.js`) over `GET /api/radar`'s Wi-Fi
+devices, the 50 most recently heard with sloth's distance estimate: each
+on the ring of its distance in metres (range `auto`, the smallest holding
+80% of them, or 5 m to 1 km, kept as `ctl.w-radar-range`), in its
+channel's colour (`web/ui/chan.js`). A device direction finding gives a
+bearing for sits at it, solid; every other one is hollow at an arbitrary
+angle from its address, steady between reads, since a single sensor
+reads a distance and no direction. The scope is centred on the sensor
+with or without a position: it never reads `/api/gnss`, as no mark
+depends on where the sensor is. A click opens the device's drawer.
+
 The WiFi view's **direction finding** card (`web/ui/df.js`, `GET
 /api/df`, `web/src/web_df.c`) shows what `sloth-wifi --df-iface` reports
 (JSONL 2.2.0, `df_radio` and `wifi_df`; the bearing and the east/north

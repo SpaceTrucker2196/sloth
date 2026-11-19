@@ -75,6 +75,7 @@
 @include lure.js
 @include karma.js
 @include df.js
+@include wradar.js
 @include syshealth.js
 @include fleet.js
 @include fleetid.js
@@ -701,6 +702,13 @@
       <div class="hscroll"><table class="qt" id="w-lure-sta" aria-label="stations whose association requests drew M1s they left unanswered" hidden></table></div>
       <div class="hscroll"><table class="qt" id="w-lure-chain" aria-label="BSSIDs whose claimed deauths were followed by a victim's fresh handshake" hidden></table></div>
       <div class="sub">from sloth's stream (JSONL 1.3.0: karma_suspect, harvest_station, harvest_chain), the tables its rules read, as they stand now; nothing is sent. A KARMA row's BSSID opens its detail (its row over time, its alerts, the hardware verdict, the probe-response latency). KARMA: ssids the BSSID beaconed, postures the distinct security postures behind them (one for several names: the IE collapse, weak evidence), forged the names it answered a station's directed probe for and never beaconed, to stations how many stations those answers went to, pnl the most of its names one station asks for, lure chain a station deauthed elsewhere and lured here, score the [y] view's. Stations: BSSIDs asked to associate, how many answered with an M1, the M1s left with no M2, those carrying a PMKID KDE, and the BSSIDs it did answer. Chains: stations knocked off and captured reconnecting through a fresh M1/M2, and the deauths before them. Counts, not a verdict: whether a row crossed its rule's threshold is the alert's (KARMA_AP, KARMA_PROBE_FORGE, PMKID_HARVEST, HANDSHAKE_HARVEST in the Alerts view).</div>
+    </section>
+    <!-- The WiFi radar (web/ui/wradar.js on ppi.js, the ADS-B and APRS
+         scope; owner 2026-11-19). -->
+    <section class="panel" id="w-radar-panel">
+      <div class="label">radar <span class="sub" id="w-radar-note"></span> <label class="sub">range <select id="w-radar-range"><option value="0" selected>auto</option><option value="5">5 m</option><option value="10">10 m</option><option value="20">20 m</option><option value="50">50 m</option><option value="100">100 m</option><option value="200">200 m</option><option value="500">500 m</option><option value="1000">1 km</option></select></label></div>
+      <canvas id="w-radar" class="heat" aria-label="Wi-Fi devices on a radar scope centred on this sensor, north up, by sloth's distance estimate"></canvas>
+      <div class="sub">a radar scope centred on this sensor, north up, as the ADS-B and APRS positions panels draw it: the 50 Wi-Fi devices most recently heard with sloth's distance estimate (/api/radar), each on the ring of its distance, five range rings in metres (auto: the smallest range holding 80% of them; one beyond it sits on the rim with its distance). A single passive sensor has no bearing: a device direction finding gives one for (three or more radios placed east and north, all hearing it) sits at that bearing, solid, the degrees in its block; every other one is hollow at an arbitrary angle from its address, steady between reads, so only its distance is read. A mark is in its channel's colour, the same as in every list on this page (grey: no channel named for it). The block: &#9670; an access point or &#9632; a station, its SSID or the end of its address, then the distance and sloth's trend (&#8600; approaching, &#8594; steady, &#8599; leaving). Click a mark for its drawer. The Radar tab draws them beside the aircraft, APRS stations, satellites and BLE.</div>
     </section>
     <section class="panel">
       <div class="label">chains <span class="sub" id="w-ch-note"></span></div>
