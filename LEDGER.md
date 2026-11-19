@@ -395,3 +395,4 @@
 | 36571a7f | 2026-11-19T13:45:28Z | claude-opus-5 | 438 | 93156 | 20026188 | 331556 | 15.6597 | slothweb: coalesce queued alerts.fired samples so a burst never drops (#230) |
 | c29fa60 | 2026-11-19T17:48:47Z | claude-fable-5-1, claude-opus-5-5 | 660 | 129835 | 48733516 | 745032 | 22.8102 | slothweb Devices arrivals waterfall; WiFi radar label declutter |
 | 66814a7 | 2026-11-19T18:12:26Z | claude-fable-5-1, claude-opus-5-5 | 126 | 5895 | 5024113 | 19031 | 1.8675 | #233 Stage 3: contract grows for sloth-mesh; sloth-mesh carved and built (builder+reviewer workflow) |
+| 81cc44c | 2026-11-19T18:12:26Z | claude-fable-5-1, claude-fable-5-2, claude-opus-4-8, claude-opus-5, claude-opus-5-5, claude-sonnet-5-5 | 174092 | 9310793 | 8029100001 | 339975581 | 4386.8622 | backfill: subagent and workflow turns before 2026-11-19: ledger.py read only top-level transcripts until then |
