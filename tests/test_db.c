@@ -1822,6 +1822,46 @@ static void test_random_purge_runs_in_bounded_batches(void) {
     unlink(db_path);
 }
 
+/* A pass still walking when the next maintenance comes continues from
+ * its cursor (#239 review). With a long db.interval_secs there are
+ * fewer ticks in an hour than batches in the table; restarting at the
+ * first rowid every hour would re-read the kept head and never reach
+ * the tail. Here the head is one batch of kept (universal) rows and
+ * the tail one batch of qualifying ones, with no tick between two
+ * maintenances. Seen red with the pass restarted unconditionally (the
+ * tail is untouched after the second maintenance). */
+static void test_random_purge_pass_survives_next_maintenance(void) {
+    fresh_db();
+    db_set_retain_days(30);
+    const long long old = NOW - 10 * DAY;
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    sqlite3_exec(h, "BEGIN", NULL, NULL, NULL);
+    for (int i = 0; i < 2 * DB_RANDOM_PURGE_SCAN; i++) {
+        char sql[200];
+        snprintf(sql, sizeof(sql),
+            "INSERT INTO devices (mac,first_seen,last_seen,sources)"
+            " VALUES ('%s:00:00:%02x:%02x',%lld,%lld,%d);",
+            i < DB_RANDOM_PURGE_SCAN ? "00:11:22" : "02:00:00",
+            (i >> 8) & 0xff, i & 0xff, old, old, DEV_SRC_PROBE);
+        sqlite3_exec(h, sql, NULL, NULL, NULL);
+    }
+    sqlite3_exec(h, "COMMIT", NULL, NULL, NULL);
+    sqlite3_close(h);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), 2 * DB_RANDOM_PURGE_SCAN);
+
+    db_maintain(NOW);                       /* the head: nothing qualifies */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), 2 * DB_RANDOM_PURGE_SCAN);
+    ASSERT_EQ(db_purge_random_pending(), 1);
+    db_maintain(NOW + 3600);                /* the tail, not the head again */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), DB_RANDOM_PURGE_SCAN);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices WHERE mac LIKE '02:%'"), 0);
+    ASSERT_EQ(q_int("SELECT SUM(count) FROM random_devices_daily"),
+              DB_RANDOM_PURGE_SCAN);
+    db_close();
+    unlink(db_path);
+}
+
 /* The rollup is never aged out and only ever added to: a row past every
  * tier stays, and a later pass adds to its day rather than replacing
  * it. Seen red with random_devices_daily added to TIER_FINDING, and
@@ -5842,6 +5882,7 @@ void run_db_tests(void) {
     RUN_TEST(test_random_purge_keeps_what_the_ruling_keeps);
     RUN_TEST(test_random_purge_repeat_knob);
     RUN_TEST(test_random_purge_runs_in_bounded_batches);
+    RUN_TEST(test_random_purge_pass_survives_next_maintenance);
     RUN_TEST(test_random_rollup_survives_and_accumulates);
     RUN_TEST(test_random_rows_the_entity_tier_drops_are_counted);
     RUN_TEST(test_maintenance_writes_planner_statistics);

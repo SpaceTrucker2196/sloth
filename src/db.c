@@ -2945,9 +2945,15 @@ void db_maintain(time_t now) {
     /* The random-address purge (#239): a new pass from the first rowid,
      * one batch now and one per tick after (db_tick) until it has
      * walked the table. A row whose grouping aged out since the last
-     * pass is read again, which is why each pass starts at the top. */
-    g_rd_cursor  = 0;
-    g_rd_pending = 1;
+     * pass is read again, which is why each pass starts at the top.
+     * A pass still walking when the next maintenance comes (more
+     * batches than ticks in an hour: a long db.interval_secs over a
+     * large table) continues from its cursor instead; restarting it
+     * would re-read the head every hour and never reach the tail. */
+    if (!g_rd_pending) {
+        g_rd_cursor  = 0;
+        g_rd_pending = 1;
+    }
     if (db_purge_random_step(now) < 0) return;
 
     /* Size ceiling. Only observation rows are eligible: a sensor that

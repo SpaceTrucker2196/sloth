@@ -137,7 +137,8 @@
  * random_devices_daily and deleted with the per-MAC rows that exist
  * only for it. The list of what groups a row is in src/db.c
  * (RD_SELECT_SQL) and docs/wiki/retention.md. It runs in passes: each
- * hourly db_maintain() starts one, and each batch examines at most
+ * hourly db_maintain() starts one (or continues one still walking), and
+ * each batch examines at most
  * DB_RANDOM_PURGE_SCAN devices rows by rowid, one batch per
  * maintenance call and per tick until the pass has walked the table,
  * so a large first purge never stalls a tick. */

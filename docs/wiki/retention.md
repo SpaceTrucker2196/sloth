@@ -27,7 +27,7 @@ per-alert pcaps in `--pcap-dir` are swept on a 14-day default window
 (`ALERT_PCAP_DEFAULT_RETAIN_DAYS`), `tests/test_alert_pcap.c` for §2d
 (#166).
 
-**Last updated**: 2026-11-20 (#239, owner ruling of that day — §2b, the random-address purge: a random address heard once is a count in `random_devices_daily` after 7 days, not a row; `retention.random_repeat_s`; §2.3 `random_devices_daily` is never pruned). 2026-11-03 (#175 — `alert_incidents` on the finding tier, and its per-key bound of `DB_INCIDENTS_PER_KEY` incidents). 2026-10-26 (#166 — the `--pcap-dir` age sweep, §2d; owner ruling: two weeks; review: one directory for both sinks refused, the stale-clock guard, the sweep's own stderr line). Previously 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
+**Last updated**: 2026-11-20 (#239 review — a pass continues across maintenance; observation-tier groupings expire with their tier). 2026-11-20 (#239, owner ruling of that day — §2b, the random-address purge: a random address heard once is a count in `random_devices_daily` after 7 days, not a row; `retention.random_repeat_s`; §2.3 `random_devices_daily` is never pruned). 2026-11-03 (#175 — `alert_incidents` on the finding tier, and its per-key bound of `DB_INCIDENTS_PER_KEY` incidents). 2026-10-26 (#166 — the `--pcap-dir` age sweep, §2d; owner ruling: two weeks; review: one directory for both sinks refused, the stale-clock guard, the sweep's own stderr line). Previously 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
 
 ---
 
@@ -186,8 +186,16 @@ and each tick after it one more, until the pass has walked the table.
 A tick therefore never waits on more than one batch, however large the
 first purge. On a copy of the W9FJC file (2026-11-20, NVMe) the first
 pass took 87 batches: 28 ms on average, the worst 246 ms, 2.5 s in
-all. A row whose grouping has aged out since the last pass is read
-again by the next one.
+all. A pass still walking when the next maintenance comes (fewer
+ticks in an hour than batches in the table, as with a long
+`db.interval_secs`) continues from where it stopped rather than
+restarting, so the tail of the table is always reached. A row whose
+grouping has aged out since the last pass is read again by the next
+one. Two of the groupings are observation-tier rows
+(`seqnum_correlations`, `eapol_events`, kept `db.retain_days`, default
+30): a random address held only by one of those is purged once that
+row ages out, when nothing in the file groups it any longer. On the
+W9FJC copy that was 2 rows.
 
 **Measured on that copy**, the first pass:
 
