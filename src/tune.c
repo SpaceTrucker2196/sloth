@@ -347,6 +347,12 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
      * pcap.retain_days and handshake.retention_days; the cap is theirs
      * (ten years). */
     { "report.retain_days",         POSTURE_DEFAULT_RETAIN_DAYS, 0, 3650, "days per-session report records are kept beside --report, 0 for forever" },
+    /* #239, owner ruling 2026-11-20: a locally administered address
+     * heard for no longer than this, past DB_RANDOM_PURGE_AGE_S and with
+     * nothing grouping it with an SSID, leaves `devices` for a count in
+     * random_devices_daily. 0 purges only the one-tick rows; the cap is
+     * a day, past which "did not repeat" stops meaning anything. */
+    { "retention.random_repeat_s",  DB_RANDOM_REPEAT_DEFAULT_S, 0, 86400, "seconds a random address may be heard for and still be purged from --db after 7 days" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

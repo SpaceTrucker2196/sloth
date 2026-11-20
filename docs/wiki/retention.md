@@ -16,9 +16,9 @@ offline-crackable — EAPOL / PMKID exports — is opt-in behind
 per-alert pcaps in `--pcap-dir` are swept on a 14-day default window
 (§2d, #166). JSONL and report artifacts still have no retention at all.
 
-**Sources**: `src/db.c` (`db_maintain`, `prune_tier`,
+**Sources**: `src/db.c` (`db_maintain`, `prune_tier`, `db_purge_random_step`, `rd_apply`,
 `prune_oldest_observations`, `db_size_bytes`), `src/db.h`
-(`DB_DEFAULT_RETAIN_DAYS`, `DB_DEFAULT_MAX_MB`), `src/db_schema.c`,
+(`DB_DEFAULT_RETAIN_DAYS`, `DB_DEFAULT_MAX_MB`, `DB_RANDOM_PURGE_AGE_S`, `DB_RANDOM_REPEAT_DEFAULT_S`, `DB_RANDOM_PURGE_SCAN`), `src/db_schema.c`, `src/tune.c` (`retention.random_repeat_s`),
 `tests/test_db.c`, issue #96; `src/secure_file.c` for §4.1 (#87);
 `src/eapol_log.c` (`eapol_sweep`, `eapol_maintain`), `include/eapol_log.h`
 (`EAPOL_DEFAULT_RETENTION_DAYS`), `tests/test_eapol_log.c` for §2c (#87);
@@ -27,7 +27,7 @@ per-alert pcaps in `--pcap-dir` are swept on a 14-day default window
 (`ALERT_PCAP_DEFAULT_RETAIN_DAYS`), `tests/test_alert_pcap.c` for §2d
 (#166).
 
-**Last updated**: 2026-11-03 (#175 — `alert_incidents` on the finding tier, and its per-key bound of `DB_INCIDENTS_PER_KEY` incidents). 2026-10-26 (#166 — the `--pcap-dir` age sweep, §2d; owner ruling: two weeks; review: one directory for both sinks refused, the stale-clock guard, the sweep's own stderr line). Previously 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
+**Last updated**: 2026-11-20 (#239, owner ruling of that day — §2b, the random-address purge: a random address heard once is a count in `random_devices_daily` after 7 days, not a row; `retention.random_repeat_s`; §2.3 `random_devices_daily` is never pruned). 2026-11-03 (#175 — `alert_incidents` on the finding tier, and its per-key bound of `DB_INCIDENTS_PER_KEY` incidents). 2026-10-26 (#166 — the `--pcap-dir` age sweep, §2d; owner ruling: two weeks; review: one directory for both sinks refused, the stale-clock guard, the sweep's own stderr line). Previously 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
 
 ---
 
@@ -40,6 +40,8 @@ If you need one paragraph for a risk register:
 > the database file grows past a configured size. Both run only while
 > sloth is running, at most once an hour. Neither is a guaranteed
 > deletion deadline, a guaranteed size ceiling, or a secure wipe.
+> A randomised device address heard once and tied to no network leaves
+> the device table after a week and survives only as a daily count.
 > Handshake exports — the only offline-crackable artifact class — are not
 > written at all unless `--collect-handshakes` is given, and are deleted
 > on a 7-day default window swept at startup and daily. Per-alert
@@ -114,12 +116,103 @@ Consequences, stated plainly:
   that has happened, retention has also stopped, and there is no
   further warning.
 
-### 2.3 Two tables are never pruned
+### 2.3 Three tables are never pruned
 
-The schema has 42 tables; the three tiers cover 40. `sessions` (one row
-per run, with `--site-label`) and `meta` (schema version) are in no
-tier and are **never** deleted by retention or by the size guard.
-`sessions` therefore grows by one row per sloth run, forever.
+`sessions` (one row per run, with `--site-label`), `meta` (schema
+version) and, since #239, `random_devices_daily` are in no tier and are
+**never** deleted by retention or by the size guard. `sessions`
+therefore grows by one row per sloth run, forever, and
+`random_devices_daily` by at most one row per UTC day and `sources`
+mask (§2b).
+
+## 2b. Random addresses that did not repeat (#239)
+
+**Owner ruling, 2026-11-20:** "yes unless the random repeats purge it
+after 7 days unless other means is used to group it with ssids. then
+after 7 days keep a random category that totals the random devices
+historically."
+
+Measured that day on copies of both reference sensors' files, about
+95% of `devices` rows were randomised addresses heard in one tick
+(W9FJC: 83,000 of 87,224; beta-site: 61,373 of 64,157). Such a row
+says only that some phone probed once. After a week it is kept as a
+count, not a row.
+
+**What is purged.** A `devices` row, when all of these hold:
+
+- its MAC is locally administered (the `0x02` bit of the first octet);
+- `last_seen` is more than 7 days ago (`DB_RANDOM_PURGE_AGE_S`);
+- it did not repeat: `last_seen - first_seen` is at most
+  `retention.random_repeat_s` seconds (`--tune`, default **600**,
+  range `0..86400`; 0 purges only rows heard in one tick);
+- nothing groups it with an SSID. The ruling's list: a non-empty SSID
+  for it in `pnl_ssids` (the PNL's SSID set; `pnl_clients` has no SSID
+  column) or `probe_clients`, any `assocs` row, any
+  `seqnum_correlations` row on either side. Added by the build, each a
+  tie to a network the ruling's list did not name: its own
+  `last_ssid`; `is_ap`, or any `sources` bit other than probe (a
+  beacon BSSID is an SSID's; ARP, DHCP, mDNS, station and camera rows
+  are the joined network's); any `assoc_reqs`, `btm_requests` or
+  `eapol_events` row; a `wifi_stas` or `arp` row. #229's grouping
+  across MAC rotation joins the list when it lands.
+
+The test is one statement, `RD_SELECT_SQL` in `src/db.c`.
+
+**What goes with it.** The rows that exist only for that address:
+`probe_clients`, `pnl_clients`, `pnl_ssids` (none with an SSID, or it
+would have been kept), `device_positions` and `wifi_merged`. Every
+other table naming a station MAC either groups it (and so kept it),
+belongs to another entity (`beacon_aps`, `wifi_aps`, `ndp_ras`), or is
+a finding or event with its own copy of the address and its own tier
+(`alerts`, `alert_incidents`, `deauth_events`). An alert about a purged
+address keeps its key and detail.
+
+**What is kept instead.** Before a row is deleted it is counted, in the
+same transaction, into `random_devices_daily`: one row per UTC day of
+the row's `first_seen` and `sources` mask, with `count`, the earliest
+`first_seen` and the latest `last_seen`. That table is additive and in
+no tier, so the total over a sensor's life survives its rows
+([[sqlite-schema]]). A random address that the **entity tier** drops
+first (a `db.retain_days` of 2 or less makes that tier shorter than the
+week) is counted the same way on its way out, so the total does not
+depend on the window. A repeating or grouped random address is not in
+the category and ages out with its tier, uncounted.
+
+**When, and how much at a time.** Each hourly `db_maintain()` starts a
+pass at the first rowid. A batch reads the next
+`DB_RANDOM_PURGE_SCAN` (1024) `devices` rows by rowid, counts and
+deletes the qualifying ones, and commits; maintenance takes one batch
+and each tick after it one more, until the pass has walked the table.
+A tick therefore never waits on more than one batch, however large the
+first purge. On a copy of the W9FJC file (2026-11-20, NVMe) the first
+pass took 87 batches: 28 ms on average, the worst 246 ms, 2.5 s in
+all. A row whose grouping has aged out since the last pass is read
+again by the next one.
+
+**Measured on that copy**, the first pass:
+
+| | before | after |
+|---|---:|---:|
+| `devices` | 87,224 | 42,229 |
+| `probe_clients` | 84,144 | 39,149 |
+| `device_positions` | 472,704 | 464,794 |
+| `pnl_clients`, `pnl_ssids`, `wifi_merged`, `alerts` | unchanged | unchanged |
+| `random_devices_daily` | — | 29 rows, 44,995 counted |
+
+44,995 rows purged; of the 71,653 random one-tick rows past the week,
+23,367 were kept by a PNL SSID (most of the rest of the gap) and 889 as
+beacon BSSIDs. The file stays 486 MiB: freed pages are reused, and
+returned to the filesystem only by the size guard's incremental vacuum
+(§3) or an offline `VACUUM`.
+
+**What this costs.** A random address that comes back after its row
+was purged is a new row with a new `first_seen`: "new since last
+survey" ([[posture-report]]) counts it as new, and a reader can no
+longer say it was heard before. The rules do not read the purged rows:
+`RECURRING_TRANSIT` (`transit_device_t`) and `UNKNOWN_DEVICE`
+(`s->assocs`, and only on a designated network) are computed from
+in-memory state, and `MY_NETWORK_RECON`'s persisted exoneration reads
+`assocs`, which keeps a row it names.
 
 ## 2c. Handshake exports: the opt-in and its sweep
 

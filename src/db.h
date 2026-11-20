@@ -121,7 +121,29 @@
  * gains ac_voltage_v, ac_current_a and ac_apparent_va, the inverter
  * record's AC output. The v15 -> v16 step is three ALTER TABLE ADD
  * COLUMN, all nullable. No existing column or value changes. */
-#define DB_SCHEMA_VERSION 16
+/* Bumped to 17 on 2026-11-20 (#239, owner ruling of that day):
+ * random_devices_daily is a new table, the count per UTC day and
+ * `sources` of the random addresses the retention step purges from
+ * `devices`. The v16 -> v17 step creates it (CREATE TABLE IF NOT
+ * EXISTS, the same DDL the unconditional schema carries) with the
+ * stamp in one transaction. No existing table or value changes. */
+#define DB_SCHEMA_VERSION 17
+
+/* The random-address purge (#239, owner ruling 2026-11-20). A devices
+ * row whose MAC is locally administered, last heard more than
+ * DB_RANDOM_PURGE_AGE_S ago, heard for no longer than the
+ * retention.random_repeat_s knob (default DB_RANDOM_REPEAT_DEFAULT_S)
+ * and grouped with no SSID by any other table is counted into
+ * random_devices_daily and deleted with the per-MAC rows that exist
+ * only for it. The list of what groups a row is in src/db.c
+ * (RD_SELECT_SQL) and docs/wiki/retention.md. It runs in passes: each
+ * hourly db_maintain() starts one, and each batch examines at most
+ * DB_RANDOM_PURGE_SCAN devices rows by rowid, one batch per
+ * maintenance call and per tick until the pass has walked the table,
+ * so a large first purge never stalls a tick. */
+#define DB_RANDOM_PURGE_AGE_S      (7 * 24 * 3600)
+#define DB_RANDOM_REPEAT_DEFAULT_S 600
+#define DB_RANDOM_PURGE_SCAN       1024
 
 /* The least time between two victron_readings rows of one device.
  * sloth-va writes a readout every 30 s and a session every 300 s; one
@@ -267,6 +289,17 @@ int  db_max_mb(void);
  * an hour; exposed so tests can drive it directly. No-op when closed. */
 void db_maintain(time_t now);
 
+/* One batch of the random-address purge pass (#239): the next
+ * DB_RANDOM_PURGE_SCAN devices rows by rowid, the qualifying ones
+ * counted into random_devices_daily and deleted in one transaction.
+ * Returns the devices rows purged (0 when none qualified or no pass is
+ * running), -1 on a database error (the sink is disabled, as any other
+ * write failure). db_tick() calls it while a pass is pending; exposed
+ * so tests can drive a pass to its end. */
+int  db_purge_random_step(time_t now);
+/* 1 while a pass started by db_maintain() has rows left to walk. */
+int  db_purge_random_pending(void);
+
 /* Database size in bytes (page_count * page_size), or -1 if closed. */
 long long db_size_bytes(void);
 
@@ -386,6 +419,8 @@ static inline int  db_retain_days(void)      { return 0; }
 static inline void db_set_max_mb(int mb)     { (void)mb; }
 static inline int  db_max_mb(void)           { return 0; }
 static inline void db_maintain(time_t now)   { (void)now; }
+static inline int  db_purge_random_step(time_t now) { (void)now; return 0; }
+static inline int  db_purge_random_pending(void) { return 0; }
 static inline long long db_size_bytes(void)  { return -1; }
 static inline int db_akm_regressions(db_akm_regression_t *o, int m)
        { (void)o; (void)m; return 0; }
@@ -484,6 +519,9 @@ const char *db_schema_migrate_v14_sql(void);
 /* v15 -> v16 (Victron inverter): ALTER TABLE victron_readings ADD
  * COLUMN only. */
 const char *db_schema_migrate_v15_sql(void);
+/* v16 -> v17 (#239): CREATE TABLE IF NOT EXISTS random_devices_daily,
+ * the same DDL the unconditional schema carries. */
+const char *db_schema_migrate_v16_sql(void);
 
 /* victron_readings' value column `i` (0 from voltage_v, in the writer's
  * bind order), NULL past the last. From DB_VICTRON_FIRST_ENUM on, an enumeration

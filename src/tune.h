@@ -214,6 +214,9 @@ typedef enum {
     /* #190: age window for the per-session report files. Retention, not
        a detector threshold — see the row in tune.c. */
     TUNE_REPORT_RETAIN_DAYS,
+    /* #239: the --db purge of random addresses that did not repeat.
+       Retention, not a detector threshold — see the row in tune.c. */
+    TUNE_RETENTION_RANDOM_REPEAT_S,
     TUNE_COUNT
 } tune_id_t;
 

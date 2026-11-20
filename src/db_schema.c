@@ -21,6 +21,24 @@
 
 #include "db.h"
 
+/* random_devices_daily (#239, schema v17). One row per UTC day (of the
+ * purged row's first_seen) and `sources` bitmask: how many random
+ * addresses the retention step purged from `devices`, the earliest
+ * first_seen and the latest last_seen among them. Only ever added to,
+ * never aged out (no retention tier names it), so a reader can total
+ * the random devices a sensor heard over its whole life after their
+ * rows are gone. Counts and times only: no address, no SSID. Shared
+ * by the unconditional schema and the v16 -> v17 step. */
+#define RANDOM_DEVICES_DAILY_DDL \
+    "CREATE TABLE IF NOT EXISTS random_devices_daily (" \
+    "  day        TEXT NOT NULL," \
+    "  sources    INTEGER NOT NULL," \
+    "  count      INTEGER NOT NULL DEFAULT 0," \
+    "  first_seen INTEGER NOT NULL," \
+    "  last_seen  INTEGER NOT NULL," \
+    "  PRIMARY KEY (day, sources)" \
+    ");\n"
+
 static const char SCHEMA_SQL[] =
     /* ── meta ────────────────────────────────────────────── */
     "CREATE TABLE IF NOT EXISTS meta ("
@@ -1030,7 +1048,9 @@ static const char SCHEMA_SQL[] =
     "  first_seen INTEGER NOT NULL,"
     "  last_seen  INTEGER NOT NULL,"
     "  PRIMARY KEY (kind, iface)"
-    ");\n";
+    ");\n"
+
+    RANDOM_DEVICES_DAILY_DDL;
 
 /* Applied before the version check — see db.h. */
 static const char META_SQL[] =
@@ -1201,6 +1221,13 @@ static const char MIGRATE_V15_SQL[] =
     "ALTER TABLE victron_readings ADD COLUMN ac_current_a REAL;\n"
     "ALTER TABLE victron_readings ADD COLUMN ac_apparent_va REAL;\n";
 
+/* v16 -> v17 (#239, 2026-11-20): random_devices_daily, the rollup the
+ * random-address purge counts into. Created here rather than left to
+ * the unconditional schema alone, so the table and the stamp land in
+ * the step's one transaction. Nothing is backfilled: no earlier build
+ * purged a row, so there is nothing to count. */
+static const char MIGRATE_V16_SQL[] = RANDOM_DEVICES_DAILY_DDL;
+
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
 int db_schema_version(void)            { return DB_SCHEMA_VERSION; }
@@ -1219,6 +1246,7 @@ const char *db_schema_migrate_v12_sql(void) { return MIGRATE_V12_SQL; }
 const char *db_schema_migrate_v13_sql(void) { return MIGRATE_V13_SQL; }
 const char *db_schema_migrate_v14_sql(void) { return MIGRATE_V14_SQL; }
 const char *db_schema_migrate_v15_sql(void) { return MIGRATE_V15_SQL; }
+const char *db_schema_migrate_v16_sql(void) { return MIGRATE_V16_SQL; }
 
 /* --print-schema (#185 item 4). The statements a new file gets, in the
  * order db_open() applies them, then the version row check_version()

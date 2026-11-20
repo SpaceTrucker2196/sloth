@@ -30,6 +30,7 @@
 #include "gps.h"
 #include "position_track.h"
 #include "rf_side.h"
+#include "tune.h"
 
 /* The current schema version as meta stores it: every "migrates to
  * current" test pins this, not a literal, so a bump moves one line. */
@@ -1504,11 +1505,14 @@ static void test_retention_tiers_age_out_in_order(void) {
      * 90 (entity) and inside 360 (finding). */
     long long old = NOW - 45 * DAY;
     char sql[1024];
+    /* A universal address: a random one heard once would be the
+     * random-address purge's after a week (#239), which is not the
+     * tier this test is about. */
     snprintf(sql, sizeof(sql),
         "INSERT INTO ssh_flows (src_ip,dst_ip,banner_count,first_seen,last_seen)"
         " VALUES ('10.0.0.1','10.0.0.2',5,%lld,%lld);"
         "INSERT INTO devices (mac,first_seen,last_seen)"
-        " VALUES ('02:00:00:00:00:01',%lld,%lld);"
+        " VALUES ('00:11:22:00:00:01',%lld,%lld);"
         "INSERT INTO alerts (key,first_seen,last_seen,type,sev,count)"
         " VALUES ('k1',%lld,%lld,0,2,1);",
         old, old, old, old, old, old);
@@ -1602,6 +1606,288 @@ static void test_child_tables_are_pruned_too(void) {
     db_maintain(NOW);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pnl_clients"), 0);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pnl_ssids"),   0);
+    db_close();
+    unlink(db_path);
+}
+
+/* ── the random-address purge (#239) ─────────────────────── */
+
+/* One devices row, written as the sink writes it (lowercase MAC). */
+static void rd_device(const char *mac, long long first, long long last,
+                      int sources, int is_ap, const char *last_ssid) {
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO devices (mac,first_seen,last_seen,sources,is_ap,last_ssid)"
+        " VALUES ('%s',%lld,%lld,%d,%d,'%s');",
+        mac, first, last, sources, is_ap, last_ssid);
+    insert_at(sql);
+}
+
+static long long rd_has(const char *mac) {
+    char q[160];
+    snprintf(q, sizeof(q), "SELECT COUNT(*) FROM devices WHERE mac='%s'", mac);
+    return q_int(q);
+}
+
+/* Drive a pass to its end, as db_maintain() and the ticks after it do. */
+static void rd_maintain_all(time_t now) {
+    db_maintain(now);
+    for (int i = 0; i < 1000 && db_purge_random_pending(); i++)
+        ASSERT(db_purge_random_step(now) >= 0);
+    ASSERT_EQ(db_purge_random_pending(), 0);
+}
+
+/* The ruling, case by case: each kept row is the one thing that
+ * differs from the purged row 02:...:01. Each kept row was seen
+ * purged (red) with its own condition deleted from RD_SELECT_SQL
+ * (src/db.c), is_ap and the `sources` test each alone; each of the
+ * purged row's own rows was seen to survive (red) with its one DELETE
+ * in RD_DELETE_SQL replaced by a no-op; the count was seen red with
+ * the devices DELETE replaced. */
+static void test_random_purge_keeps_what_the_ruling_keeps(void) {
+    fresh_db();
+    db_set_retain_days(30);
+    const long long old = NOW - 10 * DAY;   /* past the week, inside 90 d */
+    /* purged: random, one tick, heard nowhere else */
+    rd_device("02:00:00:00:00:01", old, old, DEV_SRC_PROBE, 0, "");
+    /* kept: it repeated, past retention.random_repeat_s (600) */
+    rd_device("02:00:00:00:00:02", old - 601, old, DEV_SRC_PROBE, 0, "");
+    /* purged: heard for exactly 600 s, which is not a repeat */
+    rd_device("02:00:00:00:00:03", old - 600, old, DEV_SRC_PROBE, 0, "");
+    /* kept: universal (IEEE-assigned) address */
+    rd_device("00:11:22:00:00:04", old, old, DEV_SRC_PROBE, 0, "");
+    /* kept: random but heard 6 days ago */
+    rd_device("0a:00:00:00:00:05", NOW - 6 * DAY, NOW - 6 * DAY,
+              DEV_SRC_PROBE, 0, "");
+    /* kept: grouped, each by one source */
+    rd_device("06:00:00:00:00:06", old, old, DEV_SRC_PROBE, 0, ""); /* pnl_ssids */
+    rd_device("06:00:00:00:00:07", old, old, DEV_SRC_PROBE, 0, ""); /* probe ssid */
+    rd_device("06:00:00:00:00:08", old, old, DEV_SRC_PROBE, 0, ""); /* assocs */
+    rd_device("06:00:00:00:00:09", old, old, DEV_SRC_PROBE, 0, ""); /* seq a */
+    rd_device("06:00:00:00:00:0a", old, old, DEV_SRC_PROBE, 0, ""); /* seq b */
+    rd_device("06:00:00:00:00:0b", old, old, DEV_SRC_PROBE, 0, "HomeNet");
+    rd_device("06:00:00:00:00:0c", old, old, DEV_SRC_BEACON, 0, "");
+    rd_device("06:00:00:00:00:0d", old, old, DEV_SRC_PROBE, 1, "");
+    rd_device("06:00:00:00:00:0e", old, old, DEV_SRC_PROBE, 0, ""); /* assoc_reqs */
+    rd_device("06:00:00:00:00:0f", old, old, DEV_SRC_PROBE, 0, ""); /* btm */
+    rd_device("06:00:00:00:00:10", old, old, DEV_SRC_PROBE, 0, ""); /* eapol */
+    rd_device("06:00:00:00:00:11", old, old, DEV_SRC_PROBE, 0, ""); /* wifi_stas */
+    rd_device("06:00:00:00:00:12", old, old, DEV_SRC_PROBE, 0, ""); /* arp */
+    rd_device("06:00:00:00:00:13", old, old, DEV_SRC_PROBE | DEV_SRC_ARP, 0, "");
+    char sql[4096];
+    snprintf(sql, sizeof(sql),
+        /* the purged row's own rows, every one of them goes with it */
+        "INSERT INTO probe_clients (mac,ssid,first_seen,last_seen)"
+        " VALUES ('02:00:00:00:00:01','',%lld,%lld);"
+        "INSERT INTO pnl_clients (mac,first_seen,last_seen)"
+        " VALUES ('02:00:00:00:00:01',%lld,%lld);"
+        /* not a row the sink writes (write_pnl skips an empty SSID),
+         * so the delete has something to show it ran */
+        "INSERT INTO pnl_ssids (mac,ssid,first_seen,last_seen)"
+        " VALUES ('02:00:00:00:00:01','',%lld,%lld);"
+        "INSERT INTO device_positions (mac,last_seen,lat,lon)"
+        " VALUES ('02:00:00:00:00:01',%lld,1.0,2.0);"
+        "INSERT INTO wifi_merged (entity,first_seen,last_seen)"
+        " VALUES ('02:00:00:00:00:01',%lld,%lld);"
+        /* the groupings */
+        "INSERT INTO pnl_ssids (mac,ssid,first_seen,last_seen)"
+        " VALUES ('06:00:00:00:00:06','Cafe',%lld,%lld);"
+        "INSERT INTO probe_clients (mac,ssid,first_seen,last_seen)"
+        " VALUES ('06:00:00:00:00:07','Cafe',%lld,%lld);"
+        "INSERT INTO assocs (bssid,sta_mac,first_seen,last_seen)"
+        " VALUES ('00:aa:bb:cc:dd:ee','06:00:00:00:00:08',%lld,%lld);"
+        "INSERT INTO seqnum_correlations (mac_a,mac_b,first_seen,last_seen)"
+        " VALUES ('06:00:00:00:00:09','00:00:00:00:00:99',%lld,%lld);"
+        "INSERT INTO seqnum_correlations (mac_a,mac_b,first_seen,last_seen)"
+        " VALUES ('00:00:00:00:00:98','06:00:00:00:00:0a',%lld,%lld);"
+        "INSERT INTO assoc_reqs (bssid,sta_mac,first_seen,last_seen)"
+        " VALUES ('00:aa:bb:cc:dd:ee','06:00:00:00:00:0e',%lld,%lld);"
+        "INSERT INTO btm_requests (bssid,sta_mac,first_seen,last_seen)"
+        " VALUES ('00:aa:bb:cc:dd:ee','06:00:00:00:00:0f',%lld,%lld);"
+        "INSERT INTO eapol_events (bssid,sta_mac,ts,msg_num,first_seen,last_seen)"
+        " VALUES ('00:aa:bb:cc:dd:ee','06:00:00:00:00:10',%lld,1,%lld,%lld);"
+        "INSERT INTO wifi_stas (mac,first_seen,last_seen)"
+        " VALUES ('06:00:00:00:00:11',%lld,%lld);"
+        "INSERT INTO arp (ip,mac,first_seen,last_seen)"
+        " VALUES ('10.0.0.9','06:00:00:00:00:12',%lld,%lld);",
+        old, old, old, old, old, old, old, old, old,
+        old, old, old, old, old, old, old, old, old, old,
+        old, old, old, old, old, old, old, old, old, old, old);
+    insert_at(sql);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), 19);
+
+    rd_maintain_all(NOW);
+
+    ASSERT_EQ(rd_has("02:00:00:00:00:01"), 0);
+    ASSERT_EQ(rd_has("02:00:00:00:00:03"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM probe_clients"
+                    " WHERE mac='02:00:00:00:00:01'"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pnl_clients"
+                    " WHERE mac='02:00:00:00:00:01'"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pnl_ssids"
+                    " WHERE mac='02:00:00:00:00:01'"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM device_positions"
+                    " WHERE mac='02:00:00:00:00:01'"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM wifi_merged"
+                    " WHERE entity='02:00:00:00:00:01'"), 0);
+
+    static const char *const kept[] = {
+        "02:00:00:00:00:02", "00:11:22:00:00:04", "0a:00:00:00:00:05",
+        "06:00:00:00:00:06", "06:00:00:00:00:07", "06:00:00:00:00:08",
+        "06:00:00:00:00:09", "06:00:00:00:00:0a", "06:00:00:00:00:0b",
+        "06:00:00:00:00:0c", "06:00:00:00:00:0d", "06:00:00:00:00:0e",
+        "06:00:00:00:00:0f", "06:00:00:00:00:10", "06:00:00:00:00:11",
+        "06:00:00:00:00:12", "06:00:00:00:00:13",
+    };
+    for (unsigned i = 0; i < sizeof(kept) / sizeof(kept[0]); i++) {
+        if (rd_has(kept[i]) != 1)
+            fprintf(stderr, "    purged, should be kept: %s\n", kept[i]);
+        ASSERT_EQ(rd_has(kept[i]), 1);
+    }
+    /* A grouped row keeps its own rows too. */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM probe_clients"
+                    " WHERE mac='06:00:00:00:00:07'"), 1);
+
+    /* Both purged rows are counted, on their first_seen's UTC day. */
+    char day[16], q[200];
+    time_t t0 = (time_t)old;
+    struct tm tm;
+    gmtime_r(&t0, &tm);
+    strftime(day, sizeof(day), "%Y-%m-%d", &tm);
+    ASSERT_EQ(q_int("SELECT COALESCE(SUM(count),0) FROM random_devices_daily"), 2);
+    snprintf(q, sizeof(q), "SELECT count FROM random_devices_daily"
+             " WHERE day='%s' AND sources=%d", day, DEV_SRC_PROBE);
+    ASSERT_EQ(q_int(q), 2);
+    ASSERT_EQ(q_int("SELECT MIN(first_seen) FROM random_devices_daily"), old - 600);
+    ASSERT_EQ(q_int("SELECT MAX(last_seen) FROM random_devices_daily"), old);
+    db_close();
+    unlink(db_path);
+}
+
+/* retention.random_repeat_s moves the line: at 0 a row heard for a
+ * minute is a repeat and stays. Seen red with ?2 bound to the default
+ * rather than the knob. */
+static void test_random_purge_repeat_knob(void) {
+    fresh_db();
+    db_set_retain_days(30);
+    const long long old = NOW - 10 * DAY;
+    rd_device("02:00:00:00:00:01", old - 60, old, DEV_SRC_PROBE, 0, "");
+    rd_device("02:00:00:00:00:02", old, old, DEV_SRC_PROBE, 0, "");
+    ASSERT_EQ(tune_set_id(TUNE_RETENTION_RANDOM_REPEAT_S, 0), 1);
+    rd_maintain_all(NOW);
+    ASSERT_EQ(rd_has("02:00:00:00:00:01"), 1);
+    ASSERT_EQ(rd_has("02:00:00:00:00:02"), 0);
+    tune_reset();
+    rd_maintain_all(NOW);
+    ASSERT_EQ(rd_has("02:00:00:00:00:01"), 0);
+    ASSERT_EQ(q_int("SELECT SUM(count) FROM random_devices_daily"), 2);
+    db_close();
+    unlink(db_path);
+}
+
+/* More qualifying rows than one batch examines: maintenance takes one
+ * batch, the ticks after it one each, and the whole table is walked.
+ * Seen red with db_tick()'s pending step removed (rows left after the
+ * ticks) and with the batch's LIMIT dropped (all gone in maintenance). */
+static void test_random_purge_runs_in_bounded_batches(void) {
+    fresh_db();
+    db_set_retain_days(30);
+    const long long old = NOW - 10 * DAY;
+    const int n = DB_RANDOM_PURGE_SCAN * 2 + 100;
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    sqlite3_exec(h, "BEGIN", NULL, NULL, NULL);
+    for (int i = 0; i < n; i++) {
+        char sql[200];
+        snprintf(sql, sizeof(sql),
+            "INSERT INTO devices (mac,first_seen,last_seen,sources)"
+            " VALUES ('02:00:00:00:%02x:%02x',%lld,%lld,%d);",
+            (i >> 8) & 0xff, i & 0xff, old, old, DEV_SRC_PROBE);
+        sqlite3_exec(h, sql, NULL, NULL, NULL);
+    }
+    sqlite3_exec(h, "COMMIT", NULL, NULL, NULL);
+    sqlite3_close(h);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), n);
+
+    db_maintain(NOW);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), n - DB_RANDOM_PURGE_SCAN);
+    ASSERT_EQ(db_purge_random_pending(), 1);
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    for (int t = 1; t <= 4; t++) db_tick(&s, (time_t)NOW + t);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), 0);
+    ASSERT_EQ(db_purge_random_pending(), 0);
+    ASSERT_EQ(q_int("SELECT SUM(count) FROM random_devices_daily"), n);
+    db_close();
+    unlink(db_path);
+}
+
+/* The rollup is never aged out and only ever added to: a row past every
+ * tier stays, and a later pass adds to its day rather than replacing
+ * it. Seen red with random_devices_daily added to TIER_FINDING, and
+ * with the upsert's `count + excluded.count` replaced by
+ * `excluded.count`. */
+static void test_random_rollup_survives_and_accumulates(void) {
+    fresh_db();
+    db_set_retain_days(30);
+    const long long old = NOW - 10 * DAY;
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO random_devices_daily (day,sources,count,first_seen,last_seen)"
+        " VALUES ('2015-01-01',16,7,%lld,%lld);",
+        NOW - 4000 * DAY, NOW - 4000 * DAY);
+    insert_at(sql);
+    rd_device("02:00:00:00:00:01", old, old, DEV_SRC_PROBE, 0, "");
+    rd_maintain_all(NOW);
+    rd_device("02:00:00:00:00:02", old + 5, old + 5, DEV_SRC_PROBE, 0, "");
+    rd_maintain_all(NOW + 3600);
+    ASSERT_EQ(q_int("SELECT count FROM random_devices_daily"
+                    " WHERE day='2015-01-01'"), 7);
+    ASSERT_EQ(q_int("SELECT SUM(count) FROM random_devices_daily"), 9);
+    ASSERT_EQ(q_int("SELECT MAX(count) FROM random_devices_daily"
+                    " WHERE day<>'2015-01-01'"), 2);
+    ASSERT_EQ(q_int("SELECT MAX(last_seen) FROM random_devices_daily"
+                    " WHERE day<>'2015-01-01'"), old + 5);
+    db_close();
+    unlink(db_path);
+}
+
+/* With a short db.retain_days the entity tier drops a random row
+ * before its week is out; it is counted on the way. Seen red with the
+ * rd_apply() call before the entity prune removed. */
+static void test_random_rows_the_entity_tier_drops_are_counted(void) {
+    fresh_db();
+    db_set_retain_days(1);                  /* entity tier: 3 days */
+    const long long old = NOW - 5 * DAY;
+    rd_device("02:00:00:00:00:01", old, old, DEV_SRC_PROBE, 0, "");
+    rd_device("02:00:00:00:00:02", old - 3600, old, DEV_SRC_PROBE, 0, "");
+    rd_maintain_all(NOW);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), 0);
+    ASSERT_EQ(q_int("SELECT SUM(count) FROM random_devices_daily"), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* Planner statistics (#239 step 1): maintenance leaves sqlite_stat1,
+ * which holds names and integer estimates only, and no sqlite_stat4
+ * samples (analysis_limit stops SQLite collecting them). Seen red with
+ * db_optimize() removed from db_maintain(). */
+static void test_maintenance_writes_planner_statistics(void) {
+    fresh_db();
+    db_set_retain_days(30);
+    rd_device("00:11:22:00:00:01", NOW - DAY, NOW - DAY, DEV_SRC_PROBE, 0, "");
+    insert_at("INSERT INTO pnl_ssids (mac,ssid,first_seen,last_seen)"
+              " VALUES ('00:11:22:00:00:01','SecretCafe',1,1);");
+    db_maintain(NOW);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master"
+                    " WHERE name='sqlite_stat1'"), 1);
+    ASSERT(q_int("SELECT COUNT(*) FROM sqlite_stat1") > 0);
+    /* every stat is digits and spaces: no value from any row */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_stat1"
+                    " WHERE stat GLOB '*[^0-9 ]*'"), 0);
+    if (q_int("SELECT COUNT(*) FROM sqlite_master"
+              " WHERE name='sqlite_stat4'") == 1)
+        ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_stat4"), 0);
     db_close();
     unlink(db_path);
 }
@@ -3972,6 +4258,75 @@ static void test_v15_migration_failure_leaves_file_unchanged(void) {
     unlink(db_path);
 }
 
+/* ── Schema v17: random_devices_daily (#239) ───────────────────── */
+
+/* A v16 file: a current file with random_devices_daily dropped and the
+ * stamp set to 16, exactly a v16 file's shape, since v16 -> v17 adds a
+ * table and touches no other. A device row rides along. */
+static void write_v16_file(void) {
+    fresh_db();
+    db_close();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "DROP TABLE random_devices_daily;"
+        "INSERT INTO devices (mac,first_seen,last_seen,sources)"
+        " VALUES ('02:00:00:00:00:01',1600000000,1600000000,16);"
+        "UPDATE meta SET value='16' WHERE key='schema_version';",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+}
+
+/* v16 -> v17: the table arrives empty and the device row reads as it
+ * was (opening never purges; only maintenance does). Seen to fail with
+ * the { 16, ... } step removed from g_steps[] (the static chain check
+ * refuses the build). */
+static void test_v16_file_migrates_additively(void) {
+    write_v16_file();
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    " AND name='random_devices_daily'"), 0);
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, DB_VER_STR);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('random_devices_daily')"
+                    " WHERE name IN ('day','sources','count','first_seen',"
+                    "'last_seen')"), 5);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM random_devices_daily"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices WHERE mac='02:00:00:00:00:01'"
+                    " AND first_seen=1600000000 AND sources=16"), 1);
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v16 file whose stamp cannot be written stays v16 without the table:
+ * the CREATE and the stamp are one transaction, and the unconditional
+ * schema that would create it too never runs on a refused open. Seen
+ * red with migrate_step()'s return ignored in migrate_from() (db_open
+ * returned 1 and the table appeared beside a v16 stamp). */
+static void test_v16_migration_failure_leaves_file_unchanged(void) {
+    write_v16_file();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TRIGGER refuse_v17 BEFORE UPDATE ON meta"
+        " WHEN NEW.key='schema_version' AND NEW.value='17'"
+        " BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[32];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "16");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    " AND name='random_devices_daily'"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), 1);
+    unlink(db_path);
+}
+
 /* Every victron_readings value column is a name on sloth's allow-list,
  * every allow-listed name has its column, and the table has exactly
  * those beside last_seen, mac, src and rssi. */
@@ -5397,6 +5752,8 @@ void run_db_tests(void) {
     RUN_TEST(test_v14_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_v15_file_migrates_additively);
     RUN_TEST(test_v15_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_v16_file_migrates_additively);
+    RUN_TEST(test_v16_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_victron_columns_match_the_allow_list);
     RUN_TEST(test_victron_tables_written);
     RUN_TEST(test_device_ip_joined_camera_columns_follow_latest);
@@ -5482,6 +5839,12 @@ void run_db_tests(void) {
     RUN_TEST(test_findings_age_out_eventually);
     RUN_TEST(test_retention_keeps_recent_rows);
     RUN_TEST(test_child_tables_are_pruned_too);
+    RUN_TEST(test_random_purge_keeps_what_the_ruling_keeps);
+    RUN_TEST(test_random_purge_repeat_knob);
+    RUN_TEST(test_random_purge_runs_in_bounded_batches);
+    RUN_TEST(test_random_rollup_survives_and_accumulates);
+    RUN_TEST(test_random_rows_the_entity_tier_drops_are_counted);
+    RUN_TEST(test_maintenance_writes_planner_statistics);
     RUN_TEST(test_retain_days_setter_defaults);
     RUN_TEST(test_ceiling_never_drops_findings);
     RUN_TEST(test_ceiling_zero_is_unlimited);

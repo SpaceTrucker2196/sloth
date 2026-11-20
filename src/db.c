@@ -77,6 +77,10 @@ static int open_fail(const char *fmt, ...) {
  * reaches sensor_health's `tuned`. The setters below are aliases. */
 static time_t   g_last_tick;
 static time_t   g_last_maint;
+/* The random-address purge pass (#239): the rowid it has walked to,
+ * and whether it has rows left to walk. */
+static sqlite3_int64 g_rd_cursor;
+static int           g_rd_pending;
 static int      g_over_ceiling_reported;
 static sqlite3_int64 g_session_id;        /* current survey session (#56) */
 static time_t        g_prev_session_end;  /* when the last visit ended */
@@ -1188,6 +1192,8 @@ static const db_step_t g_steps[] = {
     { 15, db_schema_migrate_v15_sql, TABLES_VICTRON_READINGS,
       "victron_readings gained ac_voltage_v, ac_current_a and"
       " ac_apparent_va" },
+    { 16, db_schema_migrate_v16_sql, TABLES_NONE,
+      "random_devices_daily created (#239)" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
@@ -1414,6 +1420,8 @@ int db_open(const char *path) {
     g_disabled   = 0;
     g_last_tick  = 0;
     g_last_maint = 0;
+    g_rd_cursor  = 0;
+    g_rd_pending = 0;
     g_session_id = 0;
     g_over_ceiling_reported = 0;
     g_inc_pend_n = 0;
@@ -1436,6 +1444,8 @@ void db_close(void) {
     g_disabled   = 0;
     g_last_tick  = 0;
     g_last_maint = 0;
+    g_rd_cursor  = 0;
+    g_rd_pending = 0;
     g_session_id = 0;
     g_prev_session_end = 0;
     g_over_ceiling_reported = 0;
@@ -2686,6 +2696,221 @@ static long long prune_oldest_observations(int batch) {
     return removed;
 }
 
+
+/* ── the random-address purge (#239) ────────────────────────
+ *
+ * Owner ruling 2026-11-20: a random address heard once and never again
+ * is about 95% of `devices` on both reference sensors, and is kept as a
+ * count instead of a row after a week. RD_SELECT_SQL is the whole test,
+ * in one place: it writes the qualifying rows of a rowid range into the
+ * connection's own temp.rd_batch (never the file), and the count and
+ * every delete after it read that list, so all of them act on exactly
+ * the rows the test chose, and the three list lookups below are built
+ * once a batch rather than once a statement.
+ *
+ * ?1 the last_seen cutoff, ?2 retention.random_repeat_s, ?3 / ?4 the
+ * rowid range (exclusive / inclusive).
+ *
+ * A row qualifies when:
+ *  - its MAC is locally administered (the 0x02 bit of the first octet:
+ *    the second hex digit is one of 2 3 6 7 a b e f; mac_str() writes
+ *    lowercase, the uppercase forms cover a hand-written row);
+ *  - it was last heard before the cutoff, and heard for no longer than
+ *    the knob (last_seen - first_seen);
+ *  - nothing groups it with an SSID. The ruling's list: a non-empty SSID
+ *    in pnl_ssids (pnl_clients' SSID set; pnl_clients itself has no
+ *    SSID column) or probe_clients, any assocs row, any
+ *    seqnum_correlations row on either side. Added here, each a tie to
+ *    a network that the ruling's list did not name: the row's own
+ *    last_ssid; an AP (is_ap, or any `sources` bit beside DEV_SRC_PROBE:
+ *    a beacon BSSID is an SSID's, and ARP / DHCP / mDNS / station /
+ *    camera rows are the joined network's); any assoc_reqs,
+ *    btm_requests or eapol_events row (a client that asked a BSS for an
+ *    association); a wifi_stas or arp row.
+ *
+ * The three lookups with no index on the column (seqnum_correlations'
+ * mac_b, eapol_events' sta_mac, arp's mac) are NOT IN over a list
+ * SQLite builds once for the statement; as correlated NOT EXISTS they
+ * were a scan per row, 2.5 s a batch on the reference sensor's file.
+ * Each column is NOT NULL, so NOT IN means what NOT EXISTS would. */
+typedef char rd_probe_bit_is_16[(DEV_SRC_PROBE == 16) ? 1 : -1];
+
+static const char RD_TEMP_SQL[] =
+    "CREATE TEMP TABLE IF NOT EXISTS rd_batch ("
+    "  rid INTEGER PRIMARY KEY, mac TEXT NOT NULL)";
+
+static const char RD_SELECT_SQL[] =
+    "INSERT INTO temp.rd_batch (rid, mac)"
+    " SELECT d.rowid, d.mac FROM devices d"
+    " WHERE d.rowid > ?3 AND d.rowid <= ?4"
+    " AND d.last_seen < ?1"
+    " AND d.last_seen - d.first_seen <= ?2"
+    " AND substr(d.mac,2,1) IN ('2','3','6','7','a','b','e','f',"
+    "                           'A','B','E','F')"
+    " AND d.is_ap = 0 AND (d.sources & ~16) = 0"
+    " AND COALESCE(d.last_ssid,'') = ''"
+    " AND NOT EXISTS (SELECT 1 FROM pnl_ssids x"
+    "                 WHERE x.mac = d.mac AND x.ssid <> '')"
+    " AND NOT EXISTS (SELECT 1 FROM probe_clients x"
+    "                 WHERE x.mac = d.mac AND COALESCE(x.ssid,'') <> '')"
+    " AND NOT EXISTS (SELECT 1 FROM assocs x WHERE x.sta_mac = d.mac)"
+    " AND NOT EXISTS (SELECT 1 FROM seqnum_correlations x"
+    "                 WHERE x.mac_a = d.mac)"
+    " AND d.mac NOT IN (SELECT mac_b FROM seqnum_correlations)"
+    " AND NOT EXISTS (SELECT 1 FROM assoc_reqs x WHERE x.sta_mac = d.mac)"
+    " AND NOT EXISTS (SELECT 1 FROM btm_requests x WHERE x.sta_mac = d.mac)"
+    " AND d.mac NOT IN (SELECT sta_mac FROM eapol_events)"
+    " AND NOT EXISTS (SELECT 1 FROM wifi_stas x WHERE x.mac = d.mac)"
+    " AND d.mac NOT IN (SELECT mac FROM arp)";
+
+/* The count, first: day (UTC) of the row's first_seen and its sources. */
+static const char RD_ROLLUP_SQL[] =
+    "INSERT INTO random_devices_daily"
+    " (day, sources, count, first_seen, last_seen)"
+    " SELECT strftime('%Y-%m-%d', d.first_seen, 'unixepoch'), d.sources,"
+    "        COUNT(*), MIN(d.first_seen), MAX(d.last_seen)"
+    " FROM devices d WHERE d.rowid IN (SELECT rid FROM temp.rd_batch)"
+    " GROUP BY 1, 2"
+    " ON CONFLICT(day, sources) DO UPDATE SET"
+    "  count      = count + excluded.count,"
+    "  first_seen = MIN(first_seen, excluded.first_seen),"
+    "  last_seen  = MAX(last_seen,  excluded.last_seen)";
+
+/* The rows that exist only for the purged address, then the address.
+ * Every table keyed by a station MAC was read (src/db_schema.c): these
+ * five hold a row of the device's own and nothing that groups it; the
+ * others either group it (and so kept it above), are another entity's
+ * (beacon_aps, wifi_aps, ndp_ras: an AP or router), or are findings and
+ * events that keep their own copy of the address and age out on their
+ * own tier (alerts, alert_incidents, deauth_events). */
+static const char *const RD_DELETE_SQL[] = {
+    "DELETE FROM probe_clients WHERE mac IN (SELECT mac FROM temp.rd_batch)",
+    "DELETE FROM pnl_ssids WHERE mac IN (SELECT mac FROM temp.rd_batch)",
+    "DELETE FROM pnl_clients WHERE mac IN (SELECT mac FROM temp.rd_batch)",
+    "DELETE FROM device_positions WHERE mac IN"
+    " (SELECT mac FROM temp.rd_batch)",
+    "DELETE FROM wifi_merged WHERE entity IN (SELECT mac FROM temp.rd_batch)",
+    "DELETE FROM devices WHERE rowid IN (SELECT rid FROM temp.rd_batch)",
+};
+
+/* Run one statement, binding whichever of the four parameters it
+ * names. 0 on error. */
+static int rd_exec(const char *sql, sqlite3_int64 cutoff, long repeat,
+                   sqlite3_int64 lo, sqlite3_int64 hi) {
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL) != SQLITE_OK) {
+        fprintf(stderr, "sloth: db random purge prepare failed: %s\n",
+                sqlite3_errmsg(g_db));
+        return 0;
+    }
+    if (sqlite3_bind_parameter_count(st) == 4) {
+        sqlite3_bind_int64(st, 1, cutoff);
+        sqlite3_bind_int64(st, 2, (sqlite3_int64)repeat);
+        sqlite3_bind_int64(st, 3, lo);
+        sqlite3_bind_int64(st, 4, hi);
+    }
+    int rc = sqlite3_step(st);
+    sqlite3_finalize(st);
+    if (rc != SQLITE_DONE) {
+        fprintf(stderr, "sloth: db random purge failed: %s\n",
+                sqlite3_errmsg(g_db));
+        return 0;
+    }
+    return 1;
+}
+
+/* Count the qualifying rows of the rowid range and, with `del`, delete
+ * them and their own rows. Inside the caller's transaction. Returns the
+ * devices rows deleted (0 without `del`), -1 on error. */
+static long long rd_apply(sqlite3_int64 cutoff, sqlite3_int64 lo,
+                          sqlite3_int64 hi, int del) {
+    long repeat = tune_val(TUNE_RETENTION_RANDOM_REPEAT_S);
+    if (!rd_exec(RD_TEMP_SQL, 0, 0, 0, 0) ||
+        !rd_exec("DELETE FROM temp.rd_batch", 0, 0, 0, 0) ||
+        !rd_exec(RD_SELECT_SQL, cutoff, repeat, lo, hi) ||
+        !rd_exec(RD_ROLLUP_SQL, 0, 0, 0, 0))
+        return -1;
+    long long n = 0;
+    if (del) {
+        for (int i = 0; i < NELEMS(RD_DELETE_SQL); i++) {
+            if (!rd_exec(RD_DELETE_SQL[i], 0, 0, 0, 0)) return -1;
+            n = sqlite3_changes(g_db);   /* the last statement's: devices */
+        }
+    }
+    if (!rd_exec("DELETE FROM temp.rd_batch", 0, 0, 0, 0)) return -1;
+    return n;
+}
+
+int db_purge_random_pending(void) { return db_is_open() && g_rd_pending; }
+
+int db_purge_random_step(time_t now) {
+    if (!db_is_open() || !g_rd_pending) return 0;
+
+    /* The batch's end: the DB_RANDOM_PURGE_SCAN-th rowid past the
+     * cursor, read from the rowid b-tree alone. None left ends the
+     * pass. A row's rowid never moves (ST_DEVICE upserts in place), so
+     * one pass reads each row once. */
+    sqlite3_stmt *st = NULL;
+    sqlite3_int64 hi = 0;
+    int have = 0;
+    if (sqlite3_prepare_v2(g_db,
+            "SELECT MAX(r) FROM (SELECT rowid AS r FROM devices"
+            " WHERE rowid > ?1 ORDER BY rowid LIMIT ?2)", -1, &st, NULL)
+            != SQLITE_OK) {
+        db_fail("random purge scan");
+        return -1;
+    }
+    sqlite3_bind_int64(st, 1, g_rd_cursor);
+    sqlite3_bind_int  (st, 2, DB_RANDOM_PURGE_SCAN);
+    if (sqlite3_step(st) == SQLITE_ROW &&
+        sqlite3_column_type(st, 0) != SQLITE_NULL) {
+        hi = sqlite3_column_int64(st, 0);
+        have = 1;
+    }
+    sqlite3_finalize(st);
+    if (!have) { g_rd_pending = 0; return 0; }
+
+    sqlite3_int64 cutoff = (sqlite3_int64)now - DB_RANDOM_PURGE_AGE_S;
+    if (!exec("BEGIN IMMEDIATE", "random purge begin")) {
+        db_fail("random purge begin");
+        return -1;
+    }
+    long long n = rd_apply(cutoff, g_rd_cursor, hi, 1);
+    if (n < 0) {
+        exec("ROLLBACK", "random purge rollback");
+        db_fail("random purge");
+        return -1;
+    }
+    if (!exec("COMMIT", "random purge commit")) {
+        exec("ROLLBACK", "random purge rollback");
+        db_fail("random purge commit");
+        return -1;
+    }
+    g_rd_cursor = hi;
+    return (int)n;
+}
+
+/* Planner statistics (#239 step 1). Outside any transaction, once per
+ * db_maintain(). analysis_limit bounds the read per index and, with it
+ * set, SQLite collects no sqlite_stat4 samples: sqlite_stat1 alone,
+ * which holds table and index names and integer row-count estimates,
+ * never a column value (docs/wiki/sqlite-schema.md). The 0x10000 bit
+ * (SQLite 3.46 on) makes optimize consider every table, so a file that
+ * has never been analysed gets its statistics; an older library ignores
+ * the bit and only analyses what this connection's queries flagged, so
+ * a file still without sqlite_stat1 afterwards gets one bounded
+ * ANALYZE. A failure costs the statistics, never the sink: the planner
+ * runs without them as it did before. */
+static void db_optimize(void) {
+    if (sqlite3_exec(g_db, "PRAGMA analysis_limit=400;"
+                           " PRAGMA optimize=0x10002;",
+                     NULL, NULL, NULL) != SQLITE_OK)
+        return;
+    if (scalar("SELECT COUNT(*) FROM sqlite_master"
+               " WHERE name='sqlite_stat1'") == 0)
+        (void)sqlite3_exec(g_db, "ANALYZE", NULL, NULL, NULL);
+}
+
 void db_maintain(time_t now) {
     if (!db_is_open()) return;
 
@@ -2697,7 +2922,18 @@ void db_maintain(time_t now) {
 
     if (!exec("BEGIN IMMEDIATE", "maint begin")) { db_fail("maint begin"); return; }
     prune_tier(TIER_OBSERVATION, NELEMS(TIER_OBSERVATION), obs_cutoff);
-    prune_tier(TIER_ENTITY,      NELEMS(TIER_ENTITY),      ent_cutoff);
+    /* A random address the entity tier is about to drop is counted
+     * first (#239), so random_devices_daily totals every one that would
+     * have qualified, including those a short db.retain_days ages out
+     * before the purge's week. Before the entity prune, which removes
+     * the grouping rows the test reads in the same pass. One statement
+     * over rows this prune deletes anyway, so it adds no unbounded
+     * work of its own. */
+    if (!g_disabled &&
+        rd_apply((sqlite3_int64)ent_cutoff, 0, INT64_MAX, 0) < 0)
+        db_fail("random rollup");
+    if (!g_disabled)
+        prune_tier(TIER_ENTITY, NELEMS(TIER_ENTITY), ent_cutoff);
     prune_tier(TIER_FINDING,     NELEMS(TIER_FINDING),     find_cutoff);
     if (g_disabled) { exec("ROLLBACK", "maint rollback"); return; }
     if (!exec("COMMIT", "maint commit")) {
@@ -2706,11 +2942,19 @@ void db_maintain(time_t now) {
         return;
     }
 
+    /* The random-address purge (#239): a new pass from the first rowid,
+     * one batch now and one per tick after (db_tick) until it has
+     * walked the table. A row whose grouping aged out since the last
+     * pass is read again, which is why each pass starts at the top. */
+    g_rd_cursor  = 0;
+    g_rd_pending = 1;
+    if (db_purge_random_step(now) < 0) return;
+
     /* Size ceiling. Only observation rows are eligible: a sensor that
      * fills its disk should lose telemetry, not the findings the disk
      * was being kept for. */
     const int max_mb = db_max_mb();
-    if (max_mb <= 0) { g_last_maint = now; return; }
+    if (max_mb <= 0) { db_optimize(); g_last_maint = now; return; }
     long long ceiling = (long long)max_mb * 1024 * 1024;
 
     for (int round = 0; round < 64; round++) {
@@ -2746,6 +2990,7 @@ void db_maintain(time_t now) {
             break;
         }
     }
+    db_optimize();
     g_last_maint = now;
 }
 
@@ -3010,9 +3255,11 @@ void db_tick(const sloth_state_t *s, time_t now) {
     refresh_akm_regressions();
 
     /* Hourly, after the write so a maintenance stall never delays the
-     * observation it was triggered by. */
+     * observation it was triggered by. A random-purge pass that
+     * maintenance started takes one bounded batch a tick (#239). */
     if (g_last_maint == 0) g_last_maint = now;
     else if (now - g_last_maint >= DB_MAINT_INTERVAL_S) db_maintain(now);
+    else if (g_rd_pending) (void)db_purge_random_step(now);
 }
 
 

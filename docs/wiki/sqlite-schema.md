@@ -1,6 +1,6 @@
 ---
 name: sqlite-schema
-description: The --db SQLite sink — why it exists, the schema and its v1 → v16 migration chain, findings and their per-incident rows, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
+description: The --db SQLite sink — why it exists, the schema and its v1 → v17 migration chain, findings and their per-incident rows, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
 type: reference
 ---
 
@@ -12,9 +12,9 @@ and findings, upserted per entity rather than appended per tick, so a
 month of operation costs megabytes instead of a terabyte.
 
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
-`tests/test_db.c`, issues #42, #56, #154 and #170.
+`tests/test_db.c`, issues #42, #56, #154, #170 and #239.
 
-**Last updated**: 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
+**Last updated**: 2026-11-20 (#239, owner ruling of that day: schema v17, `random_devices_daily`, the count per UTC day and `sources` of the random addresses the retention step purges from `devices` after a week, the v16 → v17 step and its two tests; planner statistics: `PRAGMA analysis_limit=400; PRAGMA optimize` in the hourly maintenance, and what `sqlite_stat1` holds, § Planner statistics); 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
 in the entity tier and `victron_readings` in the observation tier, at
 most one reading row a minute per device, the stamp-only v14 → v15 step
 and its two tests; slothweb's Victron tab charts `victron_readings`).
@@ -181,14 +181,14 @@ These are what make the file trustworthy rather than merely present.
 | One row per finding; `count` sums incidents, `reopens` counts them | `alerts` | A write continues the key's newest row, so evict-and-refire, a quiet-period reopen and a restart all advance one row (#170). See *Findings and incidents* below. |
 | One row per incident: span widens, `peak_sev`/`count`/`observations` only rise, a close once recorded stays; `sev` the latest | `alert_incidents` | Written each tick from the hook's queue and then from the snapshot, and by a full queue's own flush between ticks. Every column but `sev` comes out the same whatever the order; `sev` is the last write's, and the snapshot, the newest view, is written last (#175). See *Per-incident rows* below. |
 
-## Schema — 52 tables, v1 → v16
+## Schema — 53 tables, v1 → v17
 
-`meta` holds `schema_version`, currently **16**. `db_open()` checks it
+`meta` holds `schema_version`, currently **17**. `db_open()` checks it
 *before* applying the rest of the schema, so a mismatch produces the
 clear version message rather than whatever SQL error the schema happens
-to hit first. Since #154 the chain covers the full **v1 → v16**: any
+to hit first. Since #154 the chain covers the full **v1 → v17**: any
 file this build has ever written opens and migrates forward. Only a
-file from a *newer* build (`schema_version` above 16) is refused.
+file from a *newer* build (`schema_version` above 17) is refused.
 
 **v5** (#90): `karma_candidates.pnl_best`. **v6** (#106 round 2):
 `devices` gains `device_class`, `camera_vendor`, `camera_model`,
@@ -251,6 +251,35 @@ and on one whose stamp a trigger refuses
 (`test_v15_migration_failure_leaves_file_unchanged`: it stays v15 with
 none of the three). slothweb's `WEB_SDB_SCHEMA_MAX` moved to 16 with
 it; it reads the three as absent from a v15 file.
+
+**v17** (2026-11-20, #239): one new table, `random_devices_daily`,
+the rollup the random-address purge counts into ([[retention]] § 2b);
+no existing table or value changes.
+
+**The v16 → v17 migration.** `db_schema_migrate_v16_sql()` is the
+table's `CREATE TABLE IF NOT EXISTS`, the same DDL the unconditional
+schema carries (`RANDOM_DEVICES_DAILY_DDL` in `src/db_schema.c`), so
+the table and the stamp land in the step's one `BEGIN IMMEDIATE`
+transaction. Nothing is backfilled: no earlier build purged a row.
+Opening never purges; only the hourly maintenance does. Tested on a
+v16 file (a current file with the table dropped, the stamp set to 16
+and a device row; `test_v16_file_migrates_additively`: the table
+present and empty, the device row unchanged) and on one whose stamp a
+trigger refuses (`test_v16_migration_failure_leaves_file_unchanged`: it
+stays v16 without the table, its device row as it was). sloth-mesh pins
+the contract at 1.8.7, so its dashboard reads this table only after a
+contract bump on its side.
+
+**`random_devices_daily`** `(day TEXT, sources INTEGER, count,
+first_seen, last_seen, PRIMARY KEY (day, sources))`. `day` is the UTC
+date (`YYYY-MM-DD`) of a purged row's `first_seen`, `sources` its
+`DEV_SRC_*` mask (in practice 16, probe only: anything with another
+bit is kept, § 2b of [[retention]]). `count` is how many rows were
+purged into it, `first_seen` / `last_seen` the earliest and latest
+among them. An upsert adds to `count` and widens the two times; it is
+never rewritten or aged out (no tier names it). Counts and times only:
+no address and no SSID. On the W9FJC copy of 2026-11-20 the first
+pass counted 44,995 rows into 29 day rows.
 
 **`victron_devices` and `victron_readings`.** Written only with
 `--victron`, by `write_victron()`, from sloth's device table
@@ -600,6 +629,7 @@ Keyed by natural identity, bounded by the fixed arrays in `sloth.h`.
 | `mdns_services` / `nbns_names` / `ssdp_devices` | `instance` / `(name, suffix)` / `usn` | |
 | `ndp_ras` / `ndp_ra_prefixes` | `src_ip` / `(src_ip, prefix)` | |
 | `sensors` | `(kind, iface)` | passive sensor registry (#28) |
+| `random_devices_daily` | `(day, sources)` | not an entity: the count of random addresses purged from `devices` (#239), never aged out |
 
 ### Protocol flows — "what was happening"
 
@@ -930,6 +960,47 @@ delays the observation that triggered it — which also means it runs
 only while sloth is running, and the first pass is an hour after the
 first write. Age-out is `last_seen < cutoff`, so a row that keeps being
 refreshed never expires.
+
+**Random addresses (#239).** A locally administered address last heard
+more than 7 days ago, heard for no longer than
+`retention.random_repeat_s` (default 600 s) and grouped with no SSID
+is purged from `devices` (with its `probe_clients`, `pnl_clients`,
+`pnl_ssids`, `device_positions` and `wifi_merged` rows) and counted
+into `random_devices_daily`, in bounded batches. The full test and the
+batching are [[retention]] § 2b.
+
+### Planner statistics
+
+The hourly maintenance runs `PRAGMA analysis_limit=400; PRAGMA
+optimize=0x10002;` on sloth's connection, outside any transaction and
+after the retention and ceiling passes (`db_optimize()` in
+`src/db.c`); on a library older than 3.46, which ignores the 0x10000
+"every table" bit, a file still without `sqlite_stat1` afterwards gets
+one `ANALYZE` under the same limit. A failure there costs the
+statistics only: the sink keeps writing and the planner works without
+them, as before. Without `sqlite_stat1` SQLite picks between indexes on
+fixed assumptions.
+
+**What `sqlite_stat1` holds.** One row per index: `tbl` and `idx`, the
+table's and the index's names, and `stat`, integers (the row count, then
+the average rows per distinct key prefix). No value from any row. With
+`analysis_limit` set SQLite collects no `sqlite_stat4` samples (those
+would be index keys: MACs, SSIDs, IPs); measured on the W9FJC copy
+(Debian's library has `ENABLE_STAT4`): `sqlite_stat4` absent, 65
+`sqlite_stat1` rows. `tests/test_db.c ::
+test_maintenance_writes_planner_statistics` holds both: every `stat` is
+digits and spaces, and `sqlite_stat4` is absent or empty. The
+dashboard's SQL box refuses `sqlite_stat3` and `sqlite_stat4` regardless.
+
+**Cost, measured on a copy of the W9FJC file (2026-11-20, 486 MiB,
+87,224 devices, NVMe):** the first run, with no statistics, 49 ms; a
+run after it with nothing changed, under a millisecond. 65 rows, a few
+pages written. Not measured on the SD-card host (the live sensor is not
+touched for a measurement); the limit bounds the read per index to
+about 400 rows whatever the table size. The issue's measurement: on
+the same copy `ANALYZE` takes Hybrid's signal sort from 81 to 20 ms
+and does not fix the dashboard's Monitor-scope timeouts
+(sloth-mesh#13).
 
 > Retention is an **investigative tradeoff, not a deletion guarantee**,
 > it covers nothing outside this file, and row deletion is not secure
