@@ -10,12 +10,13 @@
 # it first, not instead.
 #
 #   usage: tools/gate.sh [tree]            (default: the current tree)
-#   env:   GATE_SQLITE345=<dir with libsqlite3.so of 3.45.x>
-#          GATE_SHELLCHECKS="<dir>:<dir>"  (bin dirs of other shellcheck
+#   env:   GATE_SHELLCHECKS="<dir>:<dir>"  (bin dirs of other shellcheck
 #                                           versions; the PATH one always runs)
-# slothweb's steps (web-test in every shape, the quickstart check) left
-# with web/ for sloth-mesh at #235; its own tools/gate.sh runs them.
 #          GATE_LOG=<file>                 (default: build/gate.log)
+#
+# slothweb's steps (web-test in every shape, against SQLite 3.45 with
+# GATE_SQLITE345, the quickstart check) left with web/ for sloth-mesh at
+# #235; its own tools/gate.sh runs them.
 #
 # Lessons this script carries, each from a run that went wrong:
 #   - It takes a lock on the tree (build/gate.lock). Two runs at once

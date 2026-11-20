@@ -215,28 +215,36 @@ jobs:
   # A fork, or a pull request from one, has no such secret, so the job
   # says so with a notice and passes, and the public repository's PR CI
   # stays green. The token reaches only the checkout step's `token:`
-  # input and is never echoed; the checkout does not persist it.
+  # input and is never echoed; the checkout does not persist it. Whether
+  # it is there is asked in one step whose env alone holds it, so the
+  # contract build and sloth-mesh's make and make test never see it.
   mesh-against-contract:
     runs-on: ubuntu-24.04
-    env:
-      MESH_TOKEN: ${{ secrets.RIVER_IO_PAT }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
-      - name: Skip without the sloth-mesh token
-        if: env.MESH_TOKEN == ''
-        run: echo "::notice title=mesh-against-contract skipped::RIVER_IO_PAT is not available (a fork, or a pull request from one); sloth-mesh is private, so it is not built against this commit's contract here."
+      - name: Is the sloth-mesh token there
+        id: mesh
+        env:
+          MESH_TOKEN: ${{ secrets.RIVER_IO_PAT }}
+        run: |
+          if [ -n "$MESH_TOKEN" ]; then
+            echo "token=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "token=no" >> "$GITHUB_OUTPUT"
+            echo "::notice title=mesh-against-contract skipped::RIVER_IO_PAT is not available (a fork, or a pull request from one); sloth-mesh is private, so it is not built against this commit's contract here."
+          fi
 
       - name: Install dependencies
-        if: env.MESH_TOKEN != ''
+        if: steps.mesh.outputs.token == 'yes'
         run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev pkg-config
 
       - name: Build this commit's contract
-        if: env.MESH_TOKEN != ''
+        if: steps.mesh.outputs.token == 'yes'
         run: make contract
 
       - name: Check out sloth-mesh
-        if: env.MESH_TOKEN != ''
+        if: steps.mesh.outputs.token == 'yes'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           repository: SpaceTrucker2196/sloth-mesh
@@ -247,7 +255,7 @@ jobs:
       # The workflow's -Werror reaches slothweb's build as EXTRA_CFLAGS,
       # as it does in sloth-mesh's own CI.
       - name: Build and test sloth-mesh against it
-        if: env.MESH_TOKEN != ''
+        if: steps.mesh.outputs.token == 'yes'
         run: |
           set -e
           tar=$(ls dist/sloth-contract-*.tar)

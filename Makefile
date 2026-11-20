@@ -1885,8 +1885,8 @@ DEPLOY_SCRIPTS = packaging/bin/sloth-migrate-sensor packaging/bin/sloth-monitor-
 
 # The whole build surface in one measured run (agents/AGENTS.md
 # "Discipline"); one run per tree, refuses a full TMPDIR, prints the
-# toolchain, cleans before each sanitized step. GATE_SQLITE345 and
-# GATE_SHELLCHECKS add the 3.45 and other-shellcheck steps.
+# toolchain, cleans before each sanitized step. GATE_SHELLCHECKS adds
+# the other-shellcheck steps.
 .PHONY: gate
 gate:
 	sh tools/gate.sh .

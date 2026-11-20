@@ -1,3 +1,8 @@
+> **Where it lives (#235).** slothweb left this tree for the private
+> sloth-mesh repository at Stage 4 of #184. This spec is kept here as the
+> design record; a `web/...` path below is sloth-mesh's path without the
+> `web/` prefix, and a `make web*` target is now one of sloth-mesh's.
+
 # sloth web UI: visual system specification
 
 **Working name:** the sloth glyph set

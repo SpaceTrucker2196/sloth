@@ -531,8 +531,9 @@ web_state() {
 # refusal here is a refusal of the whole run.
 WEB_ARGS="" WEB_BIND="" WEB_URL="" WEB_SRC_IP="" WEB_PORT=""
 web_preflight() {
-    [ -n "$WEB_UNIT_TEMPLATE" ] && [ -n "$WEB_DEFAULTS_TEMPLATE" ] ||
+    if [ -z "$WEB_UNIT_TEMPLATE" ] || [ -z "$WEB_DEFAULTS_TEMPLATE" ]; then
         refuse "--with-slothweb needs SLOTH_MESH_SRC, a sloth-mesh checkout: slothweb's unit and defaults file are sloth-mesh's since #235"
+    fi
     for f in "$WEB_UNIT_TEMPLATE" "$WEB_DEFAULTS_TEMPLATE"; do
         [ -f "$f" ] || refuse "missing $f (SLOTH_MESH_SRC=$SLOTH_MESH_SRC)"
     done

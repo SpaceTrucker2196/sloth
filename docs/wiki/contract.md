@@ -20,20 +20,20 @@ consumer would. On a `v*` tag the release workflow attests it and
 attaches it to that tag's GitHub release.
 
 **Sources**: `Makefile` (contract section: `CONTRACT_*`, `contract`,
-`contract-check`, `WEB_CORE_SRCS`), `tools/contract.sh`,
+`contract-check`, `CONTRACT_WIRE_SRCS`), `tools/contract.sh`,
 `tools/contract_db.c`, `tests/contract/check.sh`,
 `tests/contract/consumer.c`, `tools/contract_parity.c`,
 `tests/contract/literals.txt`, `tests/contract/pins.tsv`,
 `src/db_schema.c` (`db_schema_print()`),
 `src/main.c` and `src/rf/rf_args.c` (`--print-schema`),
-`web/tools/palette.c` (`json` mode), `src/alerts/rules_table.c`,
+`tools/contract_palette.c`, `src/alerts/rules_table.c`,
 `src/alerts/rules_table_rf.c`, `.github/workflows/release-attest.yml`,
 `.github/workflows/ci.yml` (`replay` job), `tools/gate.sh`,
 [ADR 0001](adr/0001-three-repos.md) (Rulings since),
 [ADR 0004](adr/0004-libsloth-wire.md), [ADR 0007](adr/0007-versioning.md),
 issues #184 and #185.
 
-**Last updated**: 2026-11-19 (sloth#233, Stage 3: additive paths for sloth-mesh, which may not read this tree: `schema/sqlite-schema.md`, `fixtures/jsonl_ptr_fixture.h` and `parity/`; `contract_format` stays 1; *parity/*; §5 item 2 of [[architecture-split]] answered), 2026-11-17 (`dot11_data_status_t` in its own header; `dot11_data.h` no longer ships, *Gaps*), 2026-11-16 (no host data in the alert bundle: the assessments and research documents are redacted, and `make contract-check` refuses a MAC address outside `tests/contract/allowed-macs.txt` or a home-directory path), 2026-11-16 (#185 review: the checks now also cover the outer checksum, JSON validity, the copies against the tree, `palette.json`, `alert-daemons.tsv`, an empty golden database and the declared-but-undefined functions; *Gaps*; migrated databases; the release step's order and tag check), 2026-11-16 (#185 item 4: first version, contract format 1)
+**Last updated**: 2026-11-19 (sloth#235, Stage 4: `web/` left this tree; the archive's source list is `CONTRACT_WIRE_SRCS`, the same seven files `WEB_CORE_SRCS` named, and `palette.json` is written by `tools/contract_palette.c`, the json half of what was `web/tools/palette.c`; the contents are unchanged), 2026-11-19 (sloth#233, Stage 3: additive paths for sloth-mesh, which may not read this tree: `schema/sqlite-schema.md`, `fixtures/jsonl_ptr_fixture.h` and `parity/`; `contract_format` stays 1; *parity/*; §5 item 2 of [[architecture-split]] answered), 2026-11-17 (`dot11_data_status_t` in its own header; `dot11_data.h` no longer ships, *Gaps*), 2026-11-16 (no host data in the alert bundle: the assessments and research documents are redacted, and `make contract-check` refuses a MAC address outside `tests/contract/allowed-macs.txt` or a home-directory path), 2026-11-16 (#185 review: the checks now also cover the outer checksum, JSON validity, the copies against the tree, `palette.json`, `alert-daemons.tsv`, an empty golden database and the declared-but-undefined functions; *Gaps*; migrated databases; the release step's order and tag check), 2026-11-16 (#185 item 4: first version, contract format 1)
 
 ---
 
@@ -43,12 +43,12 @@ One directory, `sloth-contract-<version>/`:
 
 | Path | What | Contract row |
 |---|---|---|
-| `lib/libsloth-wire.a` | the leaf parsers slothweb links, compiled from exactly `WEB_CORE_SRCS` (`dot11_frame.c`, `radiotap.c`, `wifi_freq.c`, `dns_wire.c`, `dot11_ie.c`, `netstr.c`, `rf_model.c`) | C3 |
+| `lib/libsloth-wire.a` | the leaf parsers slothweb links, compiled from exactly `CONTRACT_WIRE_SRCS` (`dot11_frame.c`, `radiotap.c`, `wifi_freq.c`, `dns_wire.c`, `dot11_ie.c`, `netstr.c`, `rf_model.c`) | C3 |
 | `include/sloth-wire/*.h` | each of those sources' public header, the leaf headers they include (`dot11_data_status.h`), and `sensor_health.h` for the one hook (below), which declares functions the archive does not define (*Gaps*) | C3 |
 | `lib/pkgconfig/sloth-wire.pc` | `pkg-config --cflags --libs sloth-wire`; relocatable through `${pcfiledir}`, so the unpacked directory can sit anywhere | C3 |
 | `schema/schema.sql` | `sloth-wifi --print-schema`: the DDL both daemons create a new `--db` with, and the `meta` row stamping `DB_SCHEMA_VERSION` (a migrated file differs in column order: *Gaps*) | C2 |
 | `jsonl/jsonl-schema.md` | [[jsonl-schema]] as in the tree at that commit (`SLOTH_JSONL_VERSION`) | C1 |
-| `palette/palette.json` | what `web/tools/palette.c` reads out of the TUI today, as data: each mirrored colour pair's xterm-256 index and hex, the monitor-row pair, the brand table and the Google letter sequence | C5 |
+| `palette/palette.json` | what `tools/contract_palette.c` reads out of the TUI, as data: each mirrored colour pair's xterm-256 index and hex, the monitor-row pair, the brand table and the Google letter sequence | C5 |
 | `alerts/include/sloth_alerts.def`, `alerts/docs/views/alerts.md`, `alerts/docs/wiki/alerts.md`, `alerts/docs/wiki/alert-remediation.md`, `alerts/docs/wiki/alert-assessments/*.md`, `alerts/research/**/*.md`, `alerts/research.db` | the alert knowledge bundle, at their tree paths under `alerts/` | C4 |
 | `alerts/alert-daemons.tsv` | which daemon raises each kind: `ty`, `kind`, `raised_by` (`sloth-wifi`, `sloth-rf` or `both`) | C4 |
 | `fixtures/golden.jsonl` | `tests/replay/golden.jsonl`, the replay golden | C9 |
@@ -201,9 +201,10 @@ on `sloth` ([ADR 0001](adr/0001-three-repos.md), Rulings since) and
 delegated the remaining contract choices. These are those choices, each
 with its reason.
 
-1. **The archive is exactly `WEB_CORE_SRCS`.** That is what slothweb
-   links today, so "the page and the sensor link the same parsers" stays
-   checkable as a list compare. The six test-only `src/` files of
+1. **The archive is exactly `CONTRACT_WIRE_SRCS`** (until sloth#235
+   `WEB_CORE_SRCS`, the same seven files). That is what slothweb links,
+   so "the page and the sensor link the same parsers" stays checkable
+   as a list compare. The six test-only `src/` files of
    [[architecture-split]] §5 item 2 are not in it; they are covered by
    other contents: `db_schema.c` by `schema.sql`, `tui_palette.c` /
    `tui.c` by `palette.json`, and since sloth#233 `rsn_ie.c` and
@@ -213,11 +214,11 @@ with its reason.
 2. **The fault hook is the consumer's.** `dot11_ie.c` calls
    `sh_parse_fault_note()` when an element walk overruns, and sloth
    defines it in `sensor_health.c`, which needs `sloth.h`. The archive
-   does not define it; the consumer does, as slothweb does today in
-   `web/src/web_sh_stub.c` and `tests/contract/consumer.c` does in the
+   does not define it; the consumer does, as slothweb does in
+   sloth-mesh's `src/web_sh_stub.c` and `tests/contract/consumer.c` does in the
    check. [ADR 0004](adr/0004-libsloth-wire.md) says the archive should
    define the seam rather than borrow it; a stub member inside the
-   archive would mean the archive is no longer `WEB_CORE_SRCS`, so this
+   archive would mean the archive is no longer `CONTRACT_WIRE_SRCS`, so this
    is recorded as the alternative chosen against. Its type and
    declaration come from the shipped `sensor_health.h`, sloth's whole
    header, which also declares functions the archive does not define:
@@ -261,7 +262,7 @@ with its reason.
    compares those first. `git_dirty` says when the tree had uncommitted
    changes; a release is built from a clean checkout of the tag.
 7. **The alert bundle keeps its tree paths** under `alerts/`, so each
-   generator's arguments (`web/tools/alertkb.c`, `web/tools/alertasm.c`)
+   generator's arguments (sloth-mesh's `tools/alertkb.c`, `tools/alertasm.c`)
    are the same paths with a prefix. Tracked files only (`git ls-files`),
    so a scratch file under `research/` never ships. The committed
    `research.db` is shipped as committed.
@@ -286,7 +287,7 @@ with its reason.
     contract *before* its `-Werror` build, so the daemons it checksums
     and attests are that build's and not a relink by `make contract`.
 11. **`palette.json` is the sensor's half only.** The light-theme
-    variants are computed against `web/ui/theme.css`, which belongs to
+    variants are computed against sloth-mesh's `ui/theme.css`, which belongs to
     the page, so they are not in it.
 
 ## Gaps
@@ -320,7 +321,7 @@ with its reason.
   because `dot11_frame.h` included it for `dot11_data_status_t`. The
   owner chose to split the enum into `dot11_data_status.h` rather than
   add `dot11_data.c` to the archive, so the archive stays exactly
-  `WEB_CORE_SRCS` and `dot11_data.h` no longer ships. The header set
+  `WEB_CORE_SRCS` (now `CONTRACT_WIRE_SRCS`) and `dot11_data.h` no longer ships. The header set
   changed while contract format 1 had no published release, so the
   format number stays 1.
 - **Migrated databases.** `schema.sql` is what a *new* file gets. A file
