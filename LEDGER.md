@@ -403,3 +403,4 @@
 | ea25309 | 2026-11-20T00:04:21Z | claude-opus-5-5 | 142 | 34155 | 11885738 | 627220 | 6.1969 | Review fixes for #235: shellcheck 0.9, CI token scope, stale contract names |
 | b0fd419 | 2026-11-20T03:25:55Z | claude-fable-5-1, claude-opus-5-5 | 838 | 225697 | 60553202 | 1148963 | 29.8369 | Install the three packages together and run each alone (#236) |
 | cd9e82d | 2026-11-20T03:53:21Z | claude-opus-5-5 | 144 | 37259 | 11702011 | 165474 | 3.9135 | Review fixes for #236: comint's full history in CI, only the three packages' units |
+| 9ba2d9d | 2026-11-20T05:59:42Z | claude-fable-5-1, claude-opus-5-5 | 1076 | 320704 | 126596851 | 1708658 | 44.3874 | sloth-mesh#4 learned facts (mesh c7ea796..0b2b0c5) + slothweb-mcp wiki counts; also mesh rtl_433 F/psi, WiFi layout, FAA db + daily refresh on W9FJC, table-parity and api-golden fixes |
