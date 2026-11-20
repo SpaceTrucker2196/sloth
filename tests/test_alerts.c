@@ -9518,6 +9518,44 @@ static void test_twin_weak_clone_heard_in_earnest_is_still_crit(void) {
     }
 }
 
+/* The malformed-IE excuse is WEP's alone. An OPEN label comes from a
+ * frame whose Privacy bit was clear, and an AP that runs an RSNA sets
+ * that bit (IEEE 802.11-2020 9.4.1.4), so a lost or cut-short RSN IE on
+ * a protected AP reads WEP, never OPEN: no malformation explains an
+ * OPEN half. Excusing it anyway handed the classic credential-harvesting
+ * clone a severity lever, because the counters are the transmitter's
+ * to set: one tag-48 element of length 3, or one element whose length
+ * runs past the frame, in an OPEN clone's beacons took it from CRIT to
+ * WARN at 30 %.
+ *
+ * Mutation: the `enc == WEP` condition dropped from
+ * twin_weak_enc_unread() (the code as #232 shipped it) - WARN, "IEs
+ * malformed", in both halves (2026-11-20). */
+static void test_twin_open_clone_cannot_buy_a_demotion_with_bad_ies(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t rogue[6]  = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+    uint8_t victim[6] = {0xa8,0xbb,0xcc,0x44,0x55,0x66};
+
+    for (int k = 0; k < 2; k++) {
+        alerts_clear();
+        static sloth_state_t s; seed_state(&s);
+        add_beacon(&s, "CorpWiFi", rogue,  "OPEN");
+        add_beacon(&s, "CorpWiFi", victim, "WPA2");
+        twin_radio(&s, 0, 6, t0 + 600, 0x1111u);
+        twin_radio(&s, 1, 6, t0,       0x2222u);
+        twin_heard(&s, 0, 3000);
+        twin_heard(&s, 1, 4000);
+        if (k == 0) s.beacon_aps[0].fuzz_truncated_rsn = 1;
+        else        s.beacon_aps[0].fuzz_ie_overruns   = 1;
+        alerts_update(&s);
+        int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+        ASSERT(idx >= 0);
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[idx].detail, "suspected impersonation") != NULL);
+        ASSERT(strstr(s.alerts[idx].detail, "IEs malformed") == NULL);
+    }
+}
+
 /* A hard signal is exempt from the two enc demotions, the same
  * exemption #188's confidence gate grants and for the same reason: a
  * gate an attacker can advertise its way under is a severity lever. A
@@ -14319,6 +14357,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_twin_weak_side_needs_the_beacon_floor);
     RUN_TEST(test_twin_weak_side_malformed_ies_are_not_crit);
     RUN_TEST(test_twin_weak_clone_heard_in_earnest_is_still_crit);
+    RUN_TEST(test_twin_open_clone_cannot_buy_a_demotion_with_bad_ies);
     RUN_TEST(test_twin_weak_hard_signal_survives_the_new_guards);
     RUN_TEST(test_twin_chain_does_not_name_a_devices_own_radio);
     RUN_TEST(test_twin_chain_reads_no_oui_from_a_local_address);

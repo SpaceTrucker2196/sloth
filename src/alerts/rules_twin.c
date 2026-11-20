@@ -246,12 +246,21 @@ static int twin_ap_faint(const beacon_ap_t *ap) {
  * The counters saturate at 0xffff and are per BSSID, not per frame, so
  * the malformed test is "has ever been malformed" — deliberately
  * strict, because the cost of being wrong here is a CRIT on somebody's
- * car. Returns which of the two, so the demoted row says why. */
+ * car. Returns which of the two, so the demoted row says why.
+ *
+ * The malformed test is WEP's alone. OPEN is read off a frame whose
+ * Privacy bit was clear, and an AP running an RSNA sets that bit
+ * (IEEE 802.11-2020 9.4.1.4), so a lost RSN IE on a protected AP reads
+ * WEP and never OPEN — no malformation explains an OPEN half. The
+ * counters are also the transmitter's to set, so excusing OPEN on them
+ * let a credential-harvesting clone buy its way to WARN with one
+ * cut-short tag-48 element. */
 #define TWIN_ENC_READ      0
 #define TWIN_ENC_MALFORMED 1
 #define TWIN_ENC_UNSEEN    2
 static int twin_weak_enc_unread(const beacon_ap_t *ap) {
-    if (ap->fuzz_truncated_rsn || ap->fuzz_ie_overruns)
+    if (strcmp(ap->enc, "WEP") == 0 &&
+        (ap->fuzz_truncated_rsn || ap->fuzz_ie_overruns))
         return TWIN_ENC_MALFORMED;
     if (twin_ap_few_beacons(ap)) return TWIN_ENC_UNSEEN;
     return TWIN_ENC_READ;

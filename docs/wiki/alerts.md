@@ -537,8 +537,13 @@ answer; what must not follow from it is a durable verdict:
 - **The branch reads the sibling test.** One box on two bands is not a
   pair on this branch either.
 - **The weak label must have been read cleanly.** No truncated RSN and
-  no IE overrun ever counted for that BSSID, and at least
-  `twin.crit_min_beacons` (5) beacons heard. `enc` being upgrade-only
+  no IE overrun ever counted for a `WEP` half, and at least
+  `twin.crit_min_beacons` (5) beacons heard for either weak label. The
+  malformed-IE excuse is `WEP`'s alone: `OPEN` is read off a frame whose
+  Privacy bit was clear, which a lost RSN IE on a protected AP never
+  produces (IEEE 802.11-2020 §9.4.1.4), and the counters are the
+  transmitter's to set — excusing `OPEN` let a clone buy WARN with one
+  cut-short RSN element. `enc` being upgrade-only
   is what makes the count mean "weak on every beacon the table has".
 
 All three **demote and relabel; none suppresses** — `dual-band
