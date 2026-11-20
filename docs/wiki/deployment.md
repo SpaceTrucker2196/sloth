@@ -39,7 +39,10 @@ and `packaging/default/slothweb`, `packaging/bin/sloth-migrate-sensor`,
 `packaging/systemd/sloth-rf.service`, `packaging/systemd/sloth-rf.service.d/gps.conf`, `packaging/default/sloth-rf`,
 `packaging/bin/sloth-migrate-rf`, `tests/deploy/test_migrate_rf.sh`, [ADR 0010](adr/0010-wifi-rf-daemons.md).
 
-**Last updated**: 2026-11-19 (#235: slothweb, `slothweb.service` and
+**Last updated**: 2026-11-19 (#236, Stage 5: §12, one host with three
+packages, one account, each running alone, `tests/deploy/test_three_repos.sh`
+and CI's `three-repos` job; §12.1 the migration note: nothing renamed,
+where each piece now comes from), 2026-11-19 (#235: slothweb, `slothweb.service` and
 `/etc/default/slothweb` install from sloth-mesh, whose `make install` and
 `make install-service` carry the refusals this tree's had; sloth's two
 targets no longer touch them; `--with-slothweb` needs `SLOTH_MESH_SRC`;
@@ -1968,6 +1971,92 @@ wording is only for a slothweb started without `--rf-socket`. That
 sloth-rf's socket is not connected is on the health view (the
 sloth-rf row under the two daemons) and nowhere on the RF tabs.
 
+## 12. One host, three packages (#236)
+
+Stage 5 of #184. A host may carry three packages, each from its own
+repository, each installed with that repository's `make install` (and
+`make install-service` for the two that have it), each honouring
+`DESTDIR` and `PREFIX`:
+
+| Package | Repository | Installs | Unit | Account |
+|---|---|---|---|---|
+| sloth, the sensor | `SpaceTrucker2196/sloth` (public) | `sloth-wifi` (and `sloth` beside it), `sloth-rf`, the helpers, the research corpus | `sloth-sensor.service`, `sloth-rf.service` and the helpers' units (§3, §7, §9 to §11) | `sloth`, `sloth.conf` |
+| slothweb, the dashboard | `SpaceTrucker2196/sloth-mesh` (private) | `slothweb` | `slothweb.service` (§6) | `sloth`, `slothweb.conf` |
+| sloth-comintd, the pack server | `SpaceTrucker2196/sloth-comint` (private) | `sloth-comintd`; its `comint.db` and pack tar are placed by hand under `/var/lib/sloth-comint` (its README, "Install") | `sloth-comintd.service` | `sloth`, `sloth-comint.conf` |
+
+- **One account.** The three `sysusers.d` fragments carry this tree's
+  line byte for byte (`u sloth - "sloth passive sensor" /var/lib/sloth
+  /usr/sbin/nologin`): whichever package `systemd-sysusers` meets first
+  creates the account, the same account, and the others' lines are
+  no-ops. A host with only the dashboard or only comint still has the
+  user its unit runs as. A fragment cannot depend on another, which is
+  why each carries the line rather than naming this one.
+- **No unit requires another.** `slothweb.service` orders `After=` and
+  `Wants=` the sensor and sloth-rf; `sloth-comintd.service` orders
+  against nothing. A stopped or absent sensor or comint never stops the
+  dashboard (ADR 0005).
+- **Each runs alone.** The sensor is exactly the CLI, TUI, JSONL and
+  `sloth.db` it always was. slothweb with no sensor keeps retrying its
+  socket (sensor state `unknown`; `not_observing` is the word for a
+  sensor that reports no capture handle open) and browses whatever
+  `sloth.db` it is given, a copy included. sloth-comintd serves
+  `/v1/health` and `/v1/pack` to any loopback client. slothweb without
+  sloth-comintd, or without `--comintd`, answers OUI lookups from its
+  compiled snapshot (`/api/health`: `"intel_source":"snapshot"`); with
+  `--comintd http://127.0.0.1:8780` in `/etc/default/slothweb` and the
+  daemon answering, it asks that first (`"intel_source":"comintd"`, the
+  pack's version and hash under `comintd.pack`). That client is
+  loopback only and bounded (150 ms an exchange, answers cached, 30 s
+  before a failed daemon is asked again): sloth-mesh's README,
+  "sloth-comintd".
+- **The test.** `tests/deploy/test_three_repos.sh SLOTH MESH COMINT`
+  clones the three checkouts at their HEADs, builds this tree's
+  contract and sloth-mesh against it, installs all three, runs
+  `systemd-analyze verify` over every installed unit, `systemd-sysusers`
+  over the fragments (exactly one `sloth` user and group), and the five
+  modes above with the binaries started directly on loopback and unix
+  sockets. CI's `three-repos` job runs it in a `debian:trixie` container
+  as root, into `/` (`THREE_REPOS_SYSTEM=1`); anywhere else it installs
+  into a scratch `DESTDIR` and skips, saying so, what needs privilege.
+
+### 12.1 Migrating an existing host
+
+A host installed before #235 has slothweb from this tree; one installed
+since has it from sloth-mesh. Either way **nothing is renamed**: the
+binary is `/usr/local/bin/slothweb`, the unit `slothweb.service`, its
+store `/var/lib/slothweb/slothweb.db` and its defaults
+`/etc/default/slothweb` (a rename is not ruled). The sensor's unit is
+`sloth-sensor.service` and `/usr/local/bin/sloth` stays a symlink to
+`sloth-wifi` (§3, #216). What changes is only where each piece comes
+from:
+
+1. **The sensor**, from this tree as before: `make`, `sudo make install
+   && sudo make install-service`. Nothing about slothweb is installed
+   here any more.
+2. **The dashboard**, from a sloth-mesh checkout: `make`, `sudo make
+   install && sudo make install-service`. That replaces the binary and
+   the unit (the unit is the shipped artefact; a site's changes belong
+   in a drop-in), adds `/usr/lib/sysusers.d/slothweb.conf` (the same
+   account line as `sloth.conf`, so `systemd-sysusers` changes nothing
+   on a host that has the account), and leaves `/etc/default/slothweb`
+   and `slothweb.db` as they are. `sudo systemd-sysusers && sudo
+   systemctl daemon-reload && sudo systemctl restart slothweb`.
+   `sloth-migrate-sensor --with-slothweb` reads the unit from the
+   checkout `SLOTH_MESH_SRC` names (§4.3).
+3. **sloth-comintd**, optional, from a sloth-comint checkout, only
+   with the owner's word on a live host (#236 leaves W9FJC and
+   beta-site as they are): `make && make db`, `sudo make install`, the
+   database and pack into `/var/lib/sloth-comint` (its README,
+   "Install"), `sudo systemd-sysusers && sudo systemctl enable --now
+   sloth-comintd`. Then, to have the dashboard ask it, add `--comintd
+   http://127.0.0.1:8780` to `SLOTHWEB_ARGS` in `/etc/default/slothweb`
+   and restart slothweb; `/api/health` says `"intel_source":"comintd"`
+   once it has answered. Without this step the dashboard is exactly
+   what it was.
+
+One deploy at a time on a live host (`agents/AGENTS.md`); the script in
+§12 is run on a clean image first.
+
 ## Related pages
 
 - [[architecture-rf-split]], [ADR 0010](adr/0010-wifi-rf-daemons.md) — §11: why the sensor is two daemons, and what each one owns
@@ -1985,3 +2074,4 @@ sloth-rf row under the two daemons) and nowhere on the RF tabs.
 - [[cli-reference]] — every flag in the `ExecStart`
 - [[location]] — `--location`, `--gps` and what §7.2's drop-in opens
 - [[slothweb]], sloth-mesh's `README.md` — the web UI `slothweb.service` runs, and the sloth.db freshness its DB-backed views show (#168)
+- [[architecture-split]] §3.7 — §12: Stage 5 of #184, the three packages on one host

@@ -20,7 +20,7 @@ section naming every place the grep and #184 §2 disagree.
 `web/data/vendors/COVERAGE.md`, `packaging/systemd/`, issues #184 and
 #185, owner rulings on #184 of 2026-11-04.
 
-**Last updated**: 2026-11-19 (#235, Stage 4 done: `web/` removed from this tree, slothweb installs from sloth-mesh, CI builds sloth-mesh against every commit's contract; §3.6, §6), 2026-11-19 (#233, Stage 3: `sloth-mesh` created from this tree at `56d9c7f2`, the repository once named `sloth-dash` renamed; §3.5; §5 item 2 and §6 answered), 2026-11-18 (#231, Stage 2 done in sloth: the six tables of §3.1 are generated from the pinned pack snapshot in `intel/`, §3.4; the row counts §3.1 recorded as 117 and 1 are 118 and 2, counted from the compiled arrays), 2026-11-17 (#185 finding 1: `dot11_data.h` no longer ships), 2026-11-16 (#185 review: C3's declared-not-defined gap), 2026-11-16 (#185 item 4: `make contract` ships C2, C3, C4, C5 and C9 as one release artifact, [[contract]]; §5 items 1, 2 and 5 restated or resolved), 2026-11-10 (C1 shipped: `SLOTH_JSONL_VERSION` exists and
+**Last updated**: 2026-11-19 (#236, Stage 5 builder: §3.7, one host with three packages, `--comintd` in slothweb, the degraded modes, the integration script and CI job), 2026-11-19 (#235, Stage 4 done: `web/` removed from this tree, slothweb installs from sloth-mesh, CI builds sloth-mesh against every commit's contract; §3.6, §6), 2026-11-19 (#233, Stage 3: `sloth-mesh` created from this tree at `56d9c7f2`, the repository once named `sloth-dash` renamed; §3.5; §5 item 2 and §6 answered), 2026-11-18 (#231, Stage 2 done in sloth: the six tables of §3.1 are generated from the pinned pack snapshot in `intel/`, §3.4; the row counts §3.1 recorded as 117 and 1 are 118 and 2, counted from the compiled arrays), 2026-11-17 (#185 finding 1: `dot11_data.h` no longer ships), 2026-11-16 (#185 review: C3's declared-not-defined gap), 2026-11-16 (#185 item 4: `make contract` ships C2, C3, C4, C5 and C9 as one release artifact, [[contract]]; §5 items 1, 2 and 5 restated or resolved), 2026-11-10 (C1 shipped: `SLOTH_JSONL_VERSION` exists and
 `sensor_health` reports it, #185 item 3), 2026-11-05
 
 This page is a measurement, not a plan. It is Stage 0's first deliverable
@@ -425,6 +425,45 @@ carve), `packaging/systemd/slothweb.service`,
   check) need a list or an expectation only sloth-mesh has; they did not
   come into this tree with Stage 4 and are a follow-up (they ran in
   `make web-test` until it).
+
+### 3.7 Stage 5 (#236): one host, three packages
+
+Builder done on 2026-11-19 (not yet pushed, reviewed or run in CI).
+
+- **Packaging.** Each repository installs with its own `make install`
+  (and `make install-service`), `DESTDIR` honoured. The three sysusers
+  fragments (`sloth.conf` here, sloth-mesh's `slothweb.conf`,
+  sloth-comint's `sloth-comint.conf`) carry one `sloth` line byte for
+  byte; the units order with `After=` / `Wants=` only. Nothing renamed:
+  `slothweb`, `slothweb.service`, `slothweb.db` keep their names.
+- **C10 used.** sloth-mesh's `--comintd http://127.0.0.1:8780` asks
+  sloth-comintd's `/v1/oui` for the drawer's and the Lookup card's OUI
+  answer and falls back to the compiled snapshot on any failure;
+  loopback only, 150 ms an exchange, answers cached by prefix, 30 s
+  before a failed daemon is asked again. `/api/health` reports
+  `intel_source` (`snapshot` | `comintd`) and the daemon's pack version
+  and hash. The bulk paths (lists, A4, FRRS, the fleet) stay on the
+  snapshot, and the vendor research card is the snapshot's, keyed by the
+  name that answered; `/v1/vendor` and `/v1/fingerprint` are not used
+  by the dashboard yet.
+- **Degraded modes**, each with a test where it lives: sensor alone
+  (this tree's `make replay-check`); dash alone and dash without comint
+  (sloth-mesh `tests/deploy/test_degraded.sh`, `tests/test_intel.c`);
+  comint alone (sloth-comint `tests/run_shell.sh`, `tests/test_server.c`);
+  dash with comint (sloth-mesh `tests/test_intel.c` against a fake, and
+  the real daemon in the integration script). One finding against #184's
+  text: dash alone shows sensor state `unknown`, not `not_observing`;
+  the latter is the word for a sensor that reports no capture handle.
+- **Integration.** `tests/deploy/test_three_repos.sh` and CI's
+  `three-repos` job (`debian:trixie`, the sloth-mesh and sloth-comint
+  checkouts with `RIVER_IO_PAT` behind the same yes/no step as
+  `mesh-against-contract`): build, install into `/`, `systemd-analyze
+  verify`, `systemd-sysusers` with one `sloth` account, the five modes.
+- **Migration note.** [[deployment]] §12.1.
+- **Not done here.** Deploying sloth-comintd on W9FJC or beta-site (the
+  owner's word), renaming slothweb, Stage 6, and #184's "copy the
+  appliance's `/etc/default/sloth` and `slothweb.db` through the
+  migration" (no appliance data enters CI).
 
 ---
 
