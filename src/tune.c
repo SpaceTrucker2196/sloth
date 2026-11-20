@@ -60,7 +60,7 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "twin.late_arrival_s",        TWIN_LATE_ARRIVAL_DEFAULT_S, 30, 86400,
                                                   "seconds after the original a twin counts as late" },
     { "twin.crit_min_beacons",      TWIN_CRIT_MIN_BEACONS_DEFAULT, 1, 1000,
-                                                  "beacons from each half before a soft-signal twin may be CRIT" },
+                                                  "beacons from a twin half before its reading may carry CRIT" },
     { "recon.sustain_s",            600, 10,  86400,  "seconds of probing" },
     { "recon.sustain_probes",       20,  2,   10000,  "probes" },
     { "kerb.preauth_burst",         5,   2,   1000,   "pre-auth failures" },

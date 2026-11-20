@@ -448,6 +448,134 @@ static void test_record_update_existing(void) {
     ASSERT_EQ(s.beacon_aps[0].frame_count, 2);
 }
 
+/* ── `enc` is upgrade-only within a record (#232) ──────────
+ *
+ * Before this, `enc` was written at slot creation and never again, so
+ * the first beacon decided it for the entry's life — and the first
+ * beacon is the one most likely to be wrong, because the Privacy-only
+ * "WEP" arm of beacon_parse_ies is what a lost or truncated RSN IE
+ * produces. The field case: one 5 GHz beacon at -86 dBm from a
+ * dual-band car hotspot's far radio, labelled WEP, never corrected, and
+ * EVIL_TWIN then read it as an OPEN/WEP clone of the hotspot's own WPA2
+ * SSID on the other band.
+ *
+ * Asserts presence (the label changes), so no mutation is owed; the
+ * reverse directions below are the absence claims and each was seen red
+ * with the rank test in beacon_record reduced to a plain `enc[0]`
+ * overwrite (2026-11-20). */
+static void test_record_enc_upgrades_from_a_privacy_only_guess(void) {
+    beacon_clear();
+    /* Beacon 1: Privacy set, no RSN IE that parsed. */
+    beacon_record(BSSID_A, "CarHotspot", -86, 149, "WEP",  102, NULL);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_STR(s.beacon_aps[0].enc, "WEP");
+
+    /* Beacon 2, same BSSID, RSN IE intact: the guess is replaced. */
+    beacon_record(BSSID_A, "CarHotspot", -70, 149, "WPA2", 102, NULL);
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    ASSERT_STR(s.beacon_aps[0].enc, "WPA2");
+    ASSERT_EQ(s.beacon_aps[0].frame_count, 2);
+
+    /* And on up: WPA2 -> WPA3 is still an upgrade. */
+    beacon_record(BSSID_A, "CarHotspot", -70, 149, "WPA3", 102, NULL);
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_STR(s.beacon_aps[0].enc, "WPA3");
+}
+
+/* The other direction never moves, which is the whole of "upgrade-only"
+ * and the reason a real downgrade on one BSSID is not visible in this
+ * field by design: that belongs in ssid_akm_history's timestamped
+ * per-AKM-set windows (src/db.c), which SAE_PSK_REGRESSION reads.
+ *
+ * A weaker parsed posture is one beacon that omitted an IE; a weaker
+ * *inferred* posture (OPEN, WEP) is one bit of a capability field. The
+ * second is refused outright — BEACON_ENC_RANK_PARSED — because a
+ * flipped Privacy bit would otherwise hide an OPEN finding behind a
+ * corrupted frame, and OPEN_SETUP_AP reads exactly that label. */
+static void test_record_enc_never_downgrades(void) {
+    beacon_clear();
+    beacon_record(BSSID_A, "Corp", -50, 6, "WPA3", 102, NULL);
+    beacon_record(BSSID_A, "Corp", -50, 6, "WPA2", 102, NULL);
+    beacon_record(BSSID_A, "Corp", -50, 6, "WPA",  102, NULL);
+    beacon_record(BSSID_A, "Corp", -50, 6, "WEP",  102, NULL);
+    beacon_record(BSSID_A, "Corp", -50, 6, "OPEN", 102, NULL);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_STR(s.beacon_aps[0].enc, "WPA3");
+
+    /* An OPEN entry is not talked into WEP by one Privacy bit — the
+     * two weak labels are never ranked against each other for a store,
+     * and an AP whose setup SSID is genuinely open stays OPEN. */
+    beacon_clear();
+    beacon_record(BSSID_B, "SharkNinja-Setup", -50, 6, "OPEN", 102, NULL);
+    beacon_record(BSSID_B, "SharkNinja-Setup", -50, 6, "WEP",  102, NULL);
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_STR(s.beacon_aps[0].enc, "OPEN");
+
+    /* ...but it is upgraded by a parsed one, which is the same bug in
+     * its other form: a first beacon whose RSN IE AND Privacy bit were
+     * both lost reads OPEN. */
+    beacon_record(BSSID_B, "SharkNinja-Setup", -50, 6, "WPA2", 102, NULL);
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_STR(s.beacon_aps[0].enc, "WPA2");
+}
+
+/* The one rank table the repo has, pinned: beacon_record keeps `enc`
+ * upgrade-only against it and rules_twin.c's rsn_downgrade_score ranks
+ * a pair with it, so a reordering here would move both at once. */
+static void test_enc_rank_order_is_pinned(void) {
+    ASSERT_EQ(beacon_enc_rank("WPA3"), 4);
+    ASSERT_EQ(beacon_enc_rank("WPA2"), 3);
+    ASSERT_EQ(beacon_enc_rank("WPA"),  2);
+    ASSERT_EQ(beacon_enc_rank("WEP"),  1);
+    ASSERT_EQ(beacon_enc_rank("OPEN"), 0);
+    /* Unknown and absent are both 0, the rank of "not protected as far
+     * as this frame showed" — never a value that could overwrite. */
+    ASSERT_EQ(beacon_enc_rank(""),     0);
+    ASSERT_EQ(beacon_enc_rank("wpa2"), 0);   /* exact labels only */
+    ASSERT_EQ(beacon_enc_rank(NULL),   0);
+    /* WPA is the weakest label that required an IE to parse. */
+    ASSERT_EQ(beacon_enc_rank("WPA"), BEACON_ENC_RANK_PARSED);
+}
+
+/* The issue's fourth fixture, as frame bytes: Privacy=1 with an RSN IE
+ * cut short. The parser answers "WEP" — honestly, per frame — and
+ * counts the truncation, and beacon_record carries both onto the entry,
+ * where twin_weak_enc_unread() is what reads the counter
+ * (tests/test_alerts.c). Hand-built per §9.4.2.24, no capture. */
+static void test_record_truncated_rsn_keeps_the_fuzz_count_with_the_wep_guess(void) {
+    /* Tag 48, length 3: inside Version and the Group Data Cipher
+     * selector, so the full decoder (tln >= 8) never runs. */
+    uint8_t f[BEACON_HDR_LEN + 2 + 4 + 2 + 3];
+    fill_hdr(f, BSSID_A, 102, 0x0010);          /* capability: Privacy */
+    int o = BEACON_HDR_LEN;
+    f[o++] = 0x00; f[o++] = 4; memcpy(f + o, "Hots", 4); o += 4;
+    f[o++] = 0x30; f[o++] = 3;                  /* RSN IE, truncated   */
+    f[o++] = 0x01; f[o++] = 0x00; f[o++] = 0x00;
+
+    char ssid[33]; uint8_t bssid[6]; int ch = 0; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -86, ssid, bssid,
+                           &ch, enc, &bms, &rsn), 1);
+    ASSERT_STR(enc, "WEP");
+    ASSERT_EQ(rsn.truncated_rsn, 1);
+
+    beacon_clear();
+    beacon_record(bssid, ssid, -86, 149, enc, bms, &rsn);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    ASSERT_STR(s.beacon_aps[0].enc, "WEP");
+    ASSERT_EQ((int)s.beacon_aps[0].fuzz_truncated_rsn, 1);
+    ASSERT_EQ(s.beacon_aps[0].frame_count, 1);
+}
+
 static void test_record_distinct_bssids(void) {
     beacon_clear();
     beacon_record(BSSID_A, "NetA", -50, 6,  "WPA2", 102, NULL);
@@ -4380,6 +4508,11 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_parse_truncated_ie);
     RUN_TEST(test_record_new_entry);
     RUN_TEST(test_record_update_existing);
+    /* #232 — `enc` is upgrade-only within a record. */
+    RUN_TEST(test_record_enc_upgrades_from_a_privacy_only_guess);
+    RUN_TEST(test_record_enc_never_downgrades);
+    RUN_TEST(test_enc_rank_order_is_pinned);
+    RUN_TEST(test_record_truncated_rsn_keeps_the_fuzz_count_with_the_wep_guess);
     RUN_TEST(test_find_ssid_hit_and_miss);
     RUN_TEST(test_record_distinct_bssids);
     RUN_TEST(test_snapshot_sorts_by_signal);

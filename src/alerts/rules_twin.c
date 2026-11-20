@@ -208,15 +208,53 @@ static int twin_ssid_is_carrier(const char *ssid) {
     return 0;
 }
 
+/* Heard on too few beacons for anything read off them to have been
+ * read twice. A frame_count of 0 is "unseen", which only a hand-built
+ * entry has (the table starts every entry at 1), so it is "cannot say"
+ * and not a shortfall.
+ *
+ * Its own function since #232, where the weak/strong branch needs the
+ * count without the RSSI half: there the question is not whether the
+ * pair is worth believing but whether one beacon's `enc` is. */
+static int twin_ap_few_beacons(const beacon_ap_t *ap) {
+    return ap->frame_count > 0 && ap->frame_count < TWIN_CRIT_MIN_BEACONS;
+}
+
 /* Heard at the decode margin, or on too few beacons to have been read
  * twice. The strongest reading in the RSSI window, or the newest when
- * the window has aged out; 0 in either is "unseen" and so is a
- * frame_count of 0, which only a hand-built entry has (the table
- * starts every entry at 1). */
+ * the window has aged out; 0 in either is "unseen", the convention
+ * twin_ap_few_beacons follows for its own input. */
 static int twin_ap_faint(const beacon_ap_t *ap) {
     int peak = ap->rssi_max_60s ? ap->rssi_max_60s : ap->signal_dbm;
     if (peak && peak <= TWIN_PROX_FLOOR_DBM) return 1;
-    return ap->frame_count > 0 && ap->frame_count < TWIN_CRIT_MIN_BEACONS;
+    return twin_ap_few_beacons(ap);
+}
+
+/* The weak half of a weak/strong pair carries a label sloth inferred,
+ * and this is whether the inference is worth a CRIT (#232).
+ *
+ * Two ways it is not. The table counted a malformed element in one of
+ * this BSSID's beacons — a truncated RSN IE is exactly what the
+ * Privacy-only "WEP" arm of beacon_parse_ies answers to, and an IE
+ * overrun means the element list stopped early, so an RSN IE after the
+ * stop was never reached. Or the label has not been read twice:
+ * `enc` is upgrade-only since #232, so a half that still reads weak
+ * was weak on every beacon the table has, and below
+ * `twin.crit_min_beacons` of them that is a handful of frames and no
+ * corroboration. The field case was one, at -86 dBm.
+ *
+ * The counters saturate at 0xffff and are per BSSID, not per frame, so
+ * the malformed test is "has ever been malformed" — deliberately
+ * strict, because the cost of being wrong here is a CRIT on somebody's
+ * car. Returns which of the two, so the demoted row says why. */
+#define TWIN_ENC_READ      0
+#define TWIN_ENC_MALFORMED 1
+#define TWIN_ENC_UNSEEN    2
+static int twin_weak_enc_unread(const beacon_ap_t *ap) {
+    if (ap->fuzz_truncated_rsn || ap->fuzz_ie_overruns)
+        return TWIN_ENC_MALFORMED;
+    if (twin_ap_few_beacons(ap)) return TWIN_ENC_UNSEEN;
+    return TWIN_ENC_READ;
 }
 
 /* A mesh node's guest VAP (#227): `vap` is locally administered and a
@@ -1775,6 +1813,55 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
                     sev     = ALERT_SEV_WARN;
                     verdict = "inventory-approved pair, weak/strong split";
                 }
+                /* #232. Three demotions this branch had none of, while
+                 * the same-security branch below has had the first two
+                 * since #188: it starts at 85 and went CRIT on anything
+                 * that reached it, which on a field sensor was three
+                 * CRIT rows at 85 % for two car hotspots and nothing
+                 * else in a day.
+                 *
+                 *   - one device, two bands. `ev.sibling` is already
+                 *     computed for every pair and is what makes
+                 *     twin_evidence_score return 0 below; this branch
+                 *     never asked. An adjacent locally administered
+                 *     BSSID on the opposite band under the same name is
+                 *     a dual-band box, and a weak label on one of its
+                 *     radios is a parse of that box, not a second
+                 *     transmitter;
+                 *   - the weak label itself was never read cleanly
+                 *     (twin_weak_enc_unread above).
+                 *
+                 * Demoted and relabelled, never withdrawn, on the
+                 * inventory-approved precedent directly above: if the
+                 * split is real it is a downgrade lane whoever owns the
+                 * radios, and sloth is not the judge of which. A `hard`
+                 * signal — an attacker-tool OUI, a BTM steer, an
+                 * inventory mismatch — is exempt from all three, the
+                 * same exemption the confidence gate below grants and
+                 * for the same reason: a gate an attacker can advertise
+                 * its way under is a severity lever.
+                 *
+                 * Confidence follows severity down, because unlike the
+                 * inventory case these are not "whose radio is it" but
+                 * "is the finding true at all" — see TWIN_C_WEAK_UNPROVEN. */
+                int unread = twin_weak_enc_unread(a);
+                if (ev.inv_approved) {
+                    /* Already relabelled above: the operator's written
+                     * statement outranks both observations, and this
+                     * row is a configuration report either way. */
+                } else if (!ev.hard && ev.sibling) {
+                    sev     = ALERT_SEV_WARN;
+                    verdict = "dual-band sibling, weak/strong split";
+                    conf    = clamp_conf(conf - TWIN_C_WEAK_UNPROVEN);
+                } else if (!ev.hard && unread == TWIN_ENC_MALFORMED) {
+                    sev     = ALERT_SEV_WARN;
+                    verdict = "weak side's IEs malformed, enc unread";
+                    conf    = clamp_conf(conf - TWIN_C_WEAK_UNPROVEN);
+                } else if (!ev.hard && unread == TWIN_ENC_UNSEEN) {
+                    sev     = ALERT_SEV_WARN;
+                    verdict = "single weak beacon, enc unconfirmed";
+                    conf    = clamp_conf(conf - TWIN_C_WEAK_UNPROVEN);
+                }
                 /* The two pair axes (#89 slice 3). `wired` is asked
                  * only of the half something has accused, and is
                  * UNKNOWN for every row until a correlator that can see
@@ -1990,14 +2077,12 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
  * so this rule scores the downgrade against the strongest posture in
  * the *current* beacon snapshot. Age/baseline gating is deferred. */
 
-/* WPA generation rank — higher is stronger. OPEN/unknown = 0. */
-static int wpa_gen_rank(const char *enc) {
-    if (strcmp(enc, "WPA3") == 0) return 4;
-    if (strcmp(enc, "WPA2") == 0) return 3;
-    if (strcmp(enc, "WPA")  == 0) return 2;
-    if (strcmp(enc, "WEP")  == 0) return 1;
-    return 0;
-}
+/* The WPA generation rank this rule scores on was a copy of the table
+ * beacon_record now keeps `enc` upgrade-only against (#232). Two
+ * tables ranking the same five labels for strength is the sibling
+ * drift this repo keeps finding, so there is one — beacon_enc_rank(),
+ * in beacon_snoop.c beside the code that writes the labels — and the
+ * two call sites below use it directly. */
 
 /* Downgrade score of `weak` relative to `strong` (same SSID). Positive
  * means `weak` is a security downgrade of `strong`. Weights follow the
@@ -2005,13 +2090,13 @@ static int wpa_gen_rank(const char *enc) {
 static int rsn_downgrade_score(const beacon_ap_t *strong,
                                const beacon_ap_t *weak) {
     int score = 0;
-    int gs = wpa_gen_rank(strong->enc);
-    int gw = wpa_gen_rank(weak->enc);
+    int gs = beacon_enc_rank(strong->enc);
+    int gw = beacon_enc_rank(weak->enc);
     /* Weak side must still be a protected WPA network. OPEN/WEP as the
      * weak side is rule_evil_twin's territory — and an unprotected AP
      * trivially has mfp=0 / no cipher, which would otherwise inflate the
      * MFP/cipher deltas below into a false SSID-confusion hit. */
-    if (gw < 2) return 0;
+    if (gw < BEACON_ENC_RANK_PARSED) return 0;
     /* Generational drop among protected networks (WPA3->WPA2 etc.). */
     if (gs > gw) score += 3;
     /* Management-frame-protection downgrade. */

@@ -967,7 +967,16 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
     if (rsn_out) rsn_out->reg6g = reg6g;
     if (reg_out) *reg_out = reg;
 
-    /* Determine encryption, strongest first */
+    /* Determine encryption, strongest first.
+     *
+     * The `privacy` arm is an inference from one bit of the capability
+     * field, taken only because no RSN (tag 48) or WPA1 vendor IE
+     * parsed in this frame — which is also what a truncated, crafted or
+     * weakly-received RSN IE leaves behind, so "WEP" here means
+     * "protected by something this frame did not let me read" at least
+     * as often as it means RC4. Per frame that is the honest answer and
+     * the fuzz counters record the doubt; what must not follow from it
+     * is a durable verdict, which is beacon_record's job (#232). */
     if (sae_found)
         strncpy(enc_out, "WPA3",  10);
     else if (rsn_found)
@@ -980,6 +989,15 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
         strncpy(enc_out, "OPEN",  10);
 
     return 1;
+}
+
+int beacon_enc_rank(const char *enc) {
+    if (!enc) return 0;
+    if (strcmp(enc, "WPA3") == 0) return 4;
+    if (strcmp(enc, "WPA2") == 0) return 3;
+    if (strcmp(enc, "WPA")  == 0) return 2;
+    if (strcmp(enc, "WEP")  == 0) return 1;
+    return 0;
 }
 
 /* The byte entry point stays for the tests and fuzz harnesses written
@@ -1329,6 +1347,31 @@ void beacon_record_ev(const uint8_t *bssid, const char *ssid,
             g_aps[i].channel    = channel;
             g_aps[i].beacon_ms  = beacon_ms;
             g_aps[i].last_seen  = now;
+            /* Encryption is upgrade-only within a record (#232), on the
+             * terms operating_width below already uses: an IE missing
+             * from one frame is not a configuration change. Before
+             * this, `enc` was written at slot creation and never again,
+             * so the first beacon decided it for the entry's life — and
+             * the first beacon is the one most likely to be wrong,
+             * because the Privacy-only "WEP" arm of beacon_parse_ies
+             * above is what a lost RSN IE produces. The field case was
+             * a single 5 GHz beacon at -86 dBm from a dual-band car
+             * hotspot's far radio: labelled WEP, never corrected, and
+             * EVIL_TWIN then read it as an OPEN/WEP clone of the
+             * hotspot's own WPA2 SSID on the other band and went CRIT.
+             *
+             * Only a label that needed an RSN or WPA IE to parse may
+             * replace a stored one, so OPEN never becomes WEP off one
+             * flipped capability bit (that would hide an OPEN finding
+             * behind a corrupted frame), and a weaker parsed posture
+             * never replaces a stronger one. A real downgrade on one
+             * BSSID is therefore not visible here by design; it is
+             * visible where it is durable and timestamped, in
+             * ssid_akm_history's per-AKM-set windows (src/db.c), which
+             * SAE_PSK_REGRESSION already reads. */
+            if (beacon_enc_rank(enc) >= BEACON_ENC_RANK_PARSED &&
+                beacon_enc_rank(enc) > beacon_enc_rank(g_aps[i].enc))
+                strncpy(g_aps[i].enc, enc, 9);
             rssi_ring_push(&g_aps[i], signal, now);
             g_aps[i].frame_count++;
             ev_cite_push(g_aps[i].ev_ids, BEACON_EVIDENCE_IDS,

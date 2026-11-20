@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-11-18 (`SENSOR_SOURCE_DOWN` skips a `not_installed` row, sloth-rf's decoder input trimmed at startup with no SDR on USB). 2026-11-17 (#227: `EVIL_TWIN` deducts 35 for two locally administered guest VAPs of one vendor's mesh, `+mesh VAP`, and counts a late arrival only against an original heard at least once a minute). 2026-11-15 (#216, the cutover: two rule tables, not a table and a subsequence of it; `sloth-wifi` raises <!-- count:rules-wifi -->95<!-- /count --> of the kinds and `sloth-rf` <!-- count:rules-rf -->6<!-- /count -->; the `GNSS_*` rules and `ADSB_EMERGENCY` are `sloth-rf`'s alone). 2026-11-12 (#193: field data on the twin-chain's unnamed locally administered copy, counted in `sensor_health` `twin193_*`; no alert changed). 2026-11-12 (#187, #151 owner decisions: `KARMA_PROBE_FORGE` CRIT only on a captured station; `KARMA_AP` IE variety -15 confidence and CRIT on a `corroborated` hardware verdict). 2026-11-12 (#194: `EVIL_TWIN`'s late-arrival memory compares the radio and ignores APs born in a beacon flood). 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#187, #172: the evidence behind `KARMA_AP`, `KARMA_PROBE_FORGE`, `PMKID_HARVEST` and `HANDSHAKE_HARVEST` on the stream as `karma_suspect`, `harvest_station`, `harvest_chain`, JSONL 1.3.0, and as slothweb's WiFi card; slothweb shows the detail of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`). **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
+**Last updated**: 2026-11-20 (#232: `EVIL_TWIN`'s weak/strong branch demotes a dual-band sibling, a malformed-IE weak half and a weak label read off fewer than `twin.crit_min_beacons` beacons; beacon-table `enc` is upgrade-only). 2026-11-18 (`SENSOR_SOURCE_DOWN` skips a `not_installed` row, sloth-rf's decoder input trimmed at startup with no SDR on USB). 2026-11-17 (#227: `EVIL_TWIN` deducts 35 for two locally administered guest VAPs of one vendor's mesh, `+mesh VAP`, and counts a late arrival only against an original heard at least once a minute). 2026-11-15 (#216, the cutover: two rule tables, not a table and a subsequence of it; `sloth-wifi` raises <!-- count:rules-wifi -->95<!-- /count --> of the kinds and `sloth-rf` <!-- count:rules-rf -->6<!-- /count -->; the `GNSS_*` rules and `ADSB_EMERGENCY` are `sloth-rf`'s alone). 2026-11-12 (#193: field data on the twin-chain's unnamed locally administered copy, counted in `sensor_health` `twin193_*`; no alert changed). 2026-11-12 (#187, #151 owner decisions: `KARMA_PROBE_FORGE` CRIT only on a captured station; `KARMA_AP` IE variety -15 confidence and CRIT on a `corroborated` hardware verdict). 2026-11-12 (#194: `EVIL_TWIN`'s late-arrival memory compares the radio and ignores APs born in a beacon flood). 2026-11-12 (#183: the self roster also takes permanent addresses, Wi-Fi phy address pools and netdev-less wireless devices; see "The sensor's own addresses"). 2026-11-12 (#187, #172: the evidence behind `KARMA_AP`, `KARMA_PROBE_FORGE`, `PMKID_HARVEST` and `HANDSHAKE_HARVEST` on the stream as `karma_suspect`, `harvest_station`, `harvest_chain`, JSONL 1.3.0, and as slothweb's WiFi card; slothweb shows the detail of `PMKID_HARVEST`, `HANDSHAKE_HARVEST`, `SENSOR_UNDERVOLT` and `SENSOR_SOURCE_DOWN`). **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
 
 ---
@@ -499,9 +499,63 @@ the weights in `src/alerts.h`) now asks before it weighs:
   half would have excused anyway (`twin193_excl_*`)
   (`src/alerts/twin_field.h`).
 
+Every question above is asked by the scorer, and until #232 the
+weak/strong branch asked none of them: it starts at
+`TWIN_W_WEAK_CLONE` (85) and does not gate on the scorer's return
+value, so a pair the scorer had already declined still went CRIT at
+85 %.
+
+### A weak label read off one beacon (#232, 2026-11-20)
+
+Three CRIT rows at 85 % in a day on the Beta-Site sensor, both pairs
+dual-band car hotspots: locally administered BSSIDs differing only in
+the last octet, one SSID, opposite bands. Each `WEP` side was a single
+far beacon — ch149, -86 dBm, `frame_count 1` — with the Privacy bit set
+and no RSN IE that parsed.
+
+That last clause is the whole defect. `WEP` is what
+`beacon_parse_ies()` writes when Privacy is set and neither an RSN nor
+a WPA1 IE could be read, so it is also what a truncated, crafted or
+weakly received RSN IE leaves behind. Per frame that is the honest
+answer; what must not follow from it is a durable verdict:
+
+- **`enc` is upgrade-only within a beacon-table entry.** It was written
+  at slot creation and never again (`beacon_record_ev()`,
+  `src/beacon_snoop.c`), so the first beacon decided it for the
+  entry's life — and the first beacon is the one most likely to be
+  wrong. A later beacon whose RSN or WPA IE parses now replaces a
+  Privacy-only guess. A weaker *parsed* posture never replaces a
+  stronger one, on the terms `operating_width` beside it already uses;
+  a weaker *inferred* one (OPEN, WEP) is refused outright, so one
+  flipped capability bit cannot hide an OPEN finding from
+  `OPEN_SETUP_AP`. One rank table serves both this and
+  `rule_ssid_confusion`'s downgrade score (`beacon_enc_rank()`).
+  A real downgrade on one BSSID is therefore not visible in this
+  field by design — it is visible where it is durable and timestamped,
+  in `ssid_akm_history`'s per-AKM-set windows, which
+  `SAE_PSK_REGRESSION` reads.
+- **The branch reads the sibling test.** One box on two bands is not a
+  pair on this branch either.
+- **The weak label must have been read cleanly.** No truncated RSN and
+  no IE overrun ever counted for that BSSID, and at least
+  `twin.crit_min_beacons` (5) beacons heard. `enc` being upgrade-only
+  is what makes the count mean "weak on every beacon the table has".
+
+All three **demote and relabel; none suppresses** — `dual-band
+sibling, weak/strong split`, `weak side's IEs malformed, enc unread`,
+`single weak beacon, enc unconfirmed` — each taking
+`TWIN_C_WEAK_UNPROVEN` (65) off the confidence, which puts a bare
+weak/strong pair at the 20 % mute line and no further. The
+inventory-approved demotion already in this branch is the precedent: if
+the split is real it is a downgrade lane whoever owns the radios. A
+`frame_count` of 0 is the table's "unseen" and so "cannot say", never a
+shortfall.
+
 Hard signals (attacker-tool OUI, a BTM steer from another device, an
 inventory mismatch, the deauth-then-twin chain) are untouched by every
-one of these. `EVIL_TWIN_PROXIMITY` (#189) is reported only for a BSSID
+one of these, #232's included — for one device's two radios the only
+hard signal reachable at all is the inventory mismatch, since the
+sibling return clears the rest. `EVIL_TWIN_PROXIMITY` (#189) is reported only for a BSSID
 in such a pair, with its swing's minimum above -92 dBm and the sensor
 not moving, and since 2026-11-12, on a pair the attribution ladder has
 attributed, only for the accused half. Per-pair outcomes and costs:

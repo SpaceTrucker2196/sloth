@@ -331,6 +331,16 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
 /* As TWIN_C_CARRIER_SSID and for the same reason: 35 + 20 - 35 = 20,
  * the mute line, and a lone vendor-IE mismatch to the floor. */
 #define TWIN_C_MESH_VAP      35   /* guest VAPs of one vendor's mesh (#227) */
+/* The weak/strong branch's own deduction (#232), applied where the
+ * branch demotes itself: one dual-band device read as a pair, or a weak
+ * `enc` label that was never read cleanly. 65 takes
+ * TWIN_W_WEAK_CLONE's 85 to 20, the mute line TWIN_C_CARRIER_SSID and
+ * TWIN_C_MESH_VAP already aim at — the row stays and is readable, it is
+ * not a CRIT, and it is not an exoneration. It is a separate number
+ * from those two because it comes off a different base: the weak branch
+ * does not run twin_evidence_score's sum, it starts at
+ * TWIN_W_WEAK_CLONE and adds to it. */
+#define TWIN_C_WEAK_UNPROVEN 65
 #define TWIN_CONF_MIN         5
 #define TWIN_CONF_MAX        95
 /* The least confidence a soft-signal CRIT may carry (#188). 50 is the

@@ -9273,6 +9273,289 @@ static void test_twin_detail_fits_with_every_phrase(void) {
     no_inventory();
 }
 
+/* ── The weak/strong branch's own guards (#232) ────────────
+ *
+ * The field report: three CRIT rows at 85 % in a day on the Beta-Site
+ * sensor, every one a "WEP" BSS built from a single far beacon that had
+ * the Privacy bit set and no RSN IE that parsed, beside the WPA2 radio
+ * of the same dual-band car hotspot on the other band. The branch
+ * started at TWIN_W_WEAK_CLONE and went CRIT on anything that reached
+ * it: no beacon floor, no fuzz-counter check, and none of #188's
+ * sibling context, which the same-security branch below has had since
+ * 2026-11-12.
+ *
+ * As with the #188 block above, each test holds ONE guard responsible,
+ * because they overlap on the field shape. The mutation run against
+ * each is named in its comment (all 2026-11-20).
+ *
+ * `twin_heard` is what makes the beacon floor reachable at all:
+ * add_beacon() leaves frame_count 0, which is the table's "unseen" and
+ * so "cannot say", never a shortfall — the convention twin_ap_faint
+ * already followed and the reason the ~40 older weak/strong tests in
+ * this file are untouched by the floor. */
+static void twin_heard(sloth_state_t *s, int idx, int frames) {
+    s->beacon_aps[idx].frame_count = frames;
+}
+
+/* The field shape, end to end: a locally administered 5 GHz BSSID one
+ * octet from its 2.4 GHz sibling, same SSID, heard once at -86 dBm and
+ * labelled WEP, next to the sibling's steady WPA2.
+ *
+ * Over-determined on purpose — this is the row the issue was filed on,
+ * and the sibling test, the beacon floor and (once the counters are
+ * seeded) the malformed-IE test each excuse it alone. It went red with
+ * ALL THREE demotions deleted from rule_evil_twin (CRIT at 85 %,
+ * "suspected impersonation"), which is the claim it makes: not that any
+ * one guard holds, but that this row is no longer CRIT. The three
+ * blocks below isolate the guards. */
+static void test_twin_weak_single_beacon_band_sibling_is_not_crit(void) {
+    time_t t0 = time(NULL) - 900;
+    /* Locally administered, differing only in the last octet, as the
+     * two bands of one car hotspot number themselves. */
+    uint8_t r5[6]  = {0xc2,0x4a,0x19,0x7b,0x0d,0x80};
+    uint8_t r24[6] = {0xc2,0x4a,0x19,0x7b,0x0d,0x81};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CarHotspot", r5,  "WEP");    /* Privacy-only, one frame */
+    add_beacon(&s, "CarHotspot", r24, "WPA2");
+    twin_radio(&s, 0, 149, t0 + 2, 0x1111u);
+    twin_radio(&s, 1,   4, t0,     0x2222u);
+    s.beacon_aps[0].signal_dbm = -86;
+    twin_heard(&s, 0, 1);
+    twin_heard(&s, 1, 4000);
+    alerts_update(&s);
+
+    /* Not withdrawn — the split is still reported, on the
+     * inventory-approved precedent. Demoted, relabelled, and at the
+     * 20 % mute line rather than 85 %. */
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ(s.alerts[idx].confidence, 20);
+    ASSERT(strstr(s.alerts[idx].detail, "suspected impersonation") == NULL);
+}
+
+/* The sibling test alone. Both halves heard in earnest and clean, so
+ * the beacon floor and the malformed-IE test have nothing to say; the
+ * only thing left is "that is one box on two bands".
+ *
+ * Mutation: twin_pair_is_sibling() returning 0 — CRIT at 85 %,
+ * "suspected impersonation". */
+static void test_twin_weak_band_sibling_alone_is_not_crit(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t r5[6]  = {0xc2,0x4a,0x19,0x7b,0x0d,0x80};
+    uint8_t r24[6] = {0xc2,0x4a,0x19,0x7b,0x0d,0x81};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CarHotspot", r5,  "WEP");
+    add_beacon(&s, "CarHotspot", r24, "WPA2");
+    twin_radio(&s, 0, 149, t0 + 2, 0x1111u);
+    twin_radio(&s, 1,   4, t0,     0x2222u);
+    twin_heard(&s, 0, 4000);      /* heard all session, enc never upgraded */
+    twin_heard(&s, 1, 4000);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ(s.alerts[idx].confidence, 20);
+    ASSERT(strstr(s.alerts[idx].detail, "dual-band sibling") != NULL);
+
+    /* The sibling test is a bound, not a formality: the same two
+     * addresses on ONE band are two transmitters as far as address
+     * arithmetic can tell, so the row is CRIT again. This half is what
+     * fails if the band condition is dropped and everything adjacent
+     * becomes a sibling. */
+    alerts_clear();
+    static sloth_state_t t; seed_state(&t);
+    add_beacon(&t, "CarHotspot", r5,  "WEP");
+    add_beacon(&t, "CarHotspot", r24, "WPA2");
+    twin_radio(&t, 0, 149, t0 + 2, 0x1111u);
+    twin_radio(&t, 1, 153, t0,     0x2222u);
+    twin_heard(&t, 0, 4000);
+    twin_heard(&t, 1, 4000);
+    alerts_update(&t);
+    int jdx = find_alert(&t, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(jdx >= 0);
+    ASSERT_EQ((int)t.alerts[jdx].sev, (int)ALERT_SEV_CRIT);
+}
+
+/* The beacon floor alone. Two unrelated vendors, one band, so no
+ * sibling and no band excuse — the weak side has simply not been heard
+ * often enough for its label to have been read twice.
+ *
+ * Mutation: `unread == TWIN_ENC_UNSEEN` forced to 0 in rule_evil_twin —
+ * CRIT at 85 %. A second, narrower one that models the threshold rather
+ * than the call site: `<` to `<=` in twin_ap_few_beacons leaves this
+ * test green and reddens the boundary half below, which is the point of
+ * having both halves. */
+static void test_twin_weak_side_needs_the_beacon_floor(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t weak[6]   = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+    uint8_t strong[6] = {0xa8,0xbb,0xcc,0x44,0x55,0x66};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "Office", weak,   "WEP");
+    add_beacon(&s, "Office", strong, "WPA2");
+    twin_radio(&s, 0, 6, t0 + 600, 0x1111u);   /* same band, no sibling */
+    twin_radio(&s, 1, 6, t0,       0x2222u);
+    twin_heard(&s, 0, (int)tune_val(TUNE_TWIN_CRIT_MIN_BEACONS) - 1);
+    twin_heard(&s, 1, 4000);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    /* 30, not the sibling tests' 20: two vendors on one band bring
+     * TWIN_W_DIFF_OUI and a vendor-IE mismatch, so the base is
+     * clamp(85 + 20 + 35) = 95 and the deduction is off that. The
+     * figure the deduction aims at is the 20 a bare weak/strong pair
+     * lands on; a pair that also disagrees about its vendor stays above
+     * it, which is the right order. */
+    ASSERT_EQ(s.alerts[idx].confidence, 95 - TWIN_C_WEAK_UNPROVEN);
+    ASSERT(strstr(s.alerts[idx].detail, "single weak beacon") != NULL);
+
+    /* One more beacon and the label has been read: CRIT, at the
+     * undeducted 95. The floor is `twin.crit_min_beacons`, the knob
+     * #188 added, not a second number — so this pair of halves also
+     * pins which knob is read. */
+    alerts_clear();
+    static sloth_state_t t; seed_state(&t);
+    add_beacon(&t, "Office", weak,   "WEP");
+    add_beacon(&t, "Office", strong, "WPA2");
+    twin_radio(&t, 0, 6, t0 + 600, 0x1111u);
+    twin_radio(&t, 1, 6, t0,       0x2222u);
+    twin_heard(&t, 0, (int)tune_val(TUNE_TWIN_CRIT_MIN_BEACONS));
+    twin_heard(&t, 1, 4000);
+    alerts_update(&t);
+    int jdx = find_alert(&t, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(jdx >= 0);
+    ASSERT_EQ((int)t.alerts[jdx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ(t.alerts[jdx].confidence, 95);
+}
+
+/* The malformed-IE test alone. The weak side is heard in earnest, on
+ * its own band and its own vendor's address — but one of its beacons
+ * carried an RSN IE cut short, which is precisely what the Privacy-only
+ * "WEP" arm of beacon_parse_ies answers to. The whole accusation rests
+ * on a label read off a frame sloth could not finish parsing.
+ *
+ * Mutation: the `fuzz_truncated_rsn || fuzz_ie_overruns` test dropped
+ * from twin_weak_enc_unread() — CRIT at 85 % in both halves. */
+static void test_twin_weak_side_malformed_ies_are_not_crit(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t weak[6]   = {0x3c,0x52,0xa1,0x01,0x02,0x03};
+    uint8_t strong[6] = {0xa8,0xbb,0xcc,0x44,0x55,0x66};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "Office", weak,   "WEP");
+    add_beacon(&s, "Office", strong, "WPA2");
+    twin_radio(&s, 0, 6, t0 + 600, 0x1111u);
+    twin_radio(&s, 1, 6, t0,       0x2222u);
+    twin_heard(&s, 0, 4000);
+    twin_heard(&s, 1, 4000);
+    s.beacon_aps[0].fuzz_truncated_rsn = 1;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    /* Two vendors on one band, so the base is 95 — see the arithmetic
+     * at test_twin_weak_side_needs_the_beacon_floor. */
+    ASSERT_EQ(s.alerts[idx].confidence, 95 - TWIN_C_WEAK_UNPROVEN);
+    ASSERT(strstr(s.alerts[idx].detail, "IEs malformed") != NULL);
+
+    /* An IE overrun says the same thing a different way: the element
+     * list stopped early, so an RSN IE after the stop was never
+     * reached. Same verdict. */
+    alerts_clear();
+    static sloth_state_t t; seed_state(&t);
+    add_beacon(&t, "Office", weak,   "WEP");
+    add_beacon(&t, "Office", strong, "WPA2");
+    twin_radio(&t, 0, 6, t0 + 600, 0x1111u);
+    twin_radio(&t, 1, 6, t0,       0x2222u);
+    twin_heard(&t, 0, 4000);
+    twin_heard(&t, 1, 4000);
+    t.beacon_aps[0].fuzz_ie_overruns = 1;
+    alerts_update(&t);
+    int jdx = find_alert(&t, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(jdx >= 0);
+    ASSERT_EQ((int)t.alerts[jdx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(t.alerts[jdx].detail, "IEs malformed") != NULL);
+}
+
+/* The regression guard the issue asks for, and the reason the three
+ * guards above are demotions and not suppressors: the real case must
+ * still be CRIT. An unrelated vendor's BSSID, on its own band, heard
+ * steadily on clean beacons, advertising OPEN or WEP under a protected
+ * SSID is the classic credential-harvesting clone and nothing here
+ * excuses it.
+ *
+ * No mutation: this asserts presence, not absence. It is the half that
+ * fails if any of the three guards is written as `continue` instead of
+ * a demotion, or if the beacon floor is read off the wrong half. */
+static void test_twin_weak_clone_heard_in_earnest_is_still_crit(void) {
+    time_t t0 = time(NULL) - 900;
+    uint8_t strong[6] = {0xa8,0xbb,0xcc,0x44,0x55,0x66};
+    const char *weak_encs[2] = { "OPEN", "WEP" };
+
+    for (int k = 0; k < 2; k++) {
+        uint8_t rogue[6] = {0x3c,0x52,0xa1,0x01,0x02,(uint8_t)(0x10 + k)};
+        alerts_clear();
+        static sloth_state_t s; seed_state(&s);
+        add_beacon(&s, "CorpWiFi", rogue,  weak_encs[k]);
+        add_beacon(&s, "CorpWiFi", strong, "WPA2");
+        twin_radio(&s, 0, 6, t0 + 600, 0x1111u);
+        twin_radio(&s, 1, 6, t0,       0x2222u);
+        twin_heard(&s, 0, 3000);
+        twin_heard(&s, 1, 4000);
+        alerts_update(&s);
+        int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+        ASSERT(idx >= 0);
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[idx].detail, "suspected impersonation") != NULL);
+    }
+}
+
+/* A hard signal is exempt from the two enc demotions, the same
+ * exemption #188's confidence gate grants and for the same reason: a
+ * gate an attacker can advertise its way under is a severity lever. A
+ * Pineapple that beacons a WEP clone once, on malformed IEs, is still a
+ * Pineapple.
+ *
+ * Not a sibling pair, and it could not usefully be one: the sibling
+ * return in twin_evidence_score clears attacker_oui and never sets
+ * `hard`, so for one device's two radios the only hard signal reachable
+ * at all is an inventory mismatch. The exemption that does work on this
+ * branch is the one over the two enc tests, and this is it.
+ *
+ * Mutation: `!ev.hard &&` deleted from the two enc demotion arms — WARN
+ * at 20 %, and the row stops naming the pair as an impersonation. */
+static void test_twin_weak_hard_signal_survives_the_new_guards(void) {
+    time_t t0 = time(NULL) - 900;
+    /* Hak5's 00:13:37 vanity OUI, so ev.attacker_oui and ev.hard are
+     * set. Same band and three differing leading octets, so neither the
+     * sibling test nor the band rule is in play. */
+    uint8_t rogue[6]  = {0x00,0x13,0x37,0x7b,0x0d,0x80};
+    uint8_t victim[6] = {0xa8,0xbb,0xcc,0x44,0x55,0x66};
+
+    alerts_clear();
+    static sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", rogue,  "WEP");
+    add_beacon(&s, "CorpWiFi", victim, "WPA2");
+    twin_radio(&s, 0, 6, t0 + 600, 0x1111u);
+    twin_radio(&s, 1, 6, t0,       0x2222u);
+    twin_heard(&s, 0, 1);                      /* one beacon */
+    s.beacon_aps[0].fuzz_truncated_rsn = 1;    /* and it was malformed */
+    twin_heard(&s, 1, 4000);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "suspected impersonation") != NULL);
+}
+
 /* ── The chain rule asks the same question (#188, ruling 4a) ──
  *
  * rule_evil_twin_attack_chain names "the other half" of a flooded
@@ -14030,6 +14313,13 @@ void run_alerts_tests(void) {
     RUN_TEST(test_twin_late_arrival_needs_a_name_new_to_the_session);
     RUN_TEST(test_twin_an_ap_that_returns_is_not_a_late_arrival);
     RUN_TEST(test_twin_detail_fits_with_every_phrase);
+    /* #232 — the weak/strong branch's own guards. */
+    RUN_TEST(test_twin_weak_single_beacon_band_sibling_is_not_crit);
+    RUN_TEST(test_twin_weak_band_sibling_alone_is_not_crit);
+    RUN_TEST(test_twin_weak_side_needs_the_beacon_floor);
+    RUN_TEST(test_twin_weak_side_malformed_ies_are_not_crit);
+    RUN_TEST(test_twin_weak_clone_heard_in_earnest_is_still_crit);
+    RUN_TEST(test_twin_weak_hard_signal_survives_the_new_guards);
     RUN_TEST(test_twin_chain_does_not_name_a_devices_own_radio);
     RUN_TEST(test_twin_chain_reads_no_oui_from_a_local_address);
     RUN_TEST(test_twin_an_announcement_as_another_radio_is_no_alibi);

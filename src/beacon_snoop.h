@@ -218,6 +218,19 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
                      char ssid_out[33], int *channel_out, char enc_out[10],
                      beacon_rsn_t *rsn_out, reg_ie_t *reg_out);
 
+/* Strength order of the labels beacon_parse_ies writes into `enc_out`:
+ * OPEN and anything unrecognised 0, WEP 1, WPA 2, WPA2 3, WPA3 4.
+ *
+ * One table, because two callers compare these labels for strength and
+ * must not drift: beacon_record keeps `enc` upgrade-only against it
+ * (#232), and the RSN-downgrade rule ranks a pair with it. Ranks 2 and
+ * above are the labels that required an RSN or WPA IE to parse; 0 and 1
+ * are both inferences from the capability field's Privacy bit alone,
+ * which is why BEACON_ENC_RANK_PARSED exists and the two weak labels
+ * are never ranked against each other for a store. */
+#define BEACON_ENC_RANK_PARSED 2
+int beacon_enc_rank(const char *enc);
+
 /* Parse a raw 802.11 beacon frame (after radiotap, starting at FC byte).
    Extracts SSID, BSSID, channel, encryption mode, beacon interval, and
    (if rsn_out != NULL) the RSN inventory.

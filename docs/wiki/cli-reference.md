@@ -225,7 +225,7 @@ Threshold of the `--adsb` rule ([[alerts]] § ADS-B, `src/alerts/rules_adsb.c`; 
 
 | Knob | Default | Range | Meaning |
 |------|---------|-------|---------|
-| `twin.crit_min_beacons` | 5 | 1..1000 | `EVIL_TWIN`: beacons the beacon table must have heard from each half of a same-security pair before a row resting only on soft signals may be CRIT; fewer, or a strongest reading at or under -92 dBm, is `+faint` and WARN. Five is five passes of the hop list for an AP in steady earshot (a dwell is 100 ms or more, APs beacon every 102.4 ms), under two minutes at the default list's worst 22 s. Hard signals are not gated ([[alerts]], `docs/wiki/alert-assessments/EVIL_TWIN.md`) |
+| `twin.crit_min_beacons` | 5 | 1..1000 | `EVIL_TWIN`: beacons the beacon table must have heard from a twin half before a reading taken off that half may carry CRIT. On a **same-security** pair, from each half, before a row resting only on soft signals may be CRIT; fewer, or a strongest reading at or under -92 dBm, is `+faint` and WARN. On the **weak/strong** branch since #232, from the weak half, before its `OPEN`/`WEP` label may be CRIT — that label is what sloth writes when the Privacy bit is set and no RSN or WPA IE parsed, so below the floor it has not been read twice and the row is WARN `single weak beacon, enc unconfirmed` at -65 confidence (a truncated RSN IE or an IE overrun ever counted for that BSSID is WARN at the same deduction whatever the count). Five is five passes of the hop list for an AP in steady earshot (a dwell is 100 ms or more, APs beacon every 102.4 ms), under two minutes at the default list's worst 22 s. Hard signals are not gated ([[alerts]], `docs/wiki/alert-assessments/EVIL_TWIN.md`) |
 
 #### Knobs added 2026-11-11 (`KARMA_PROBE_FORGE`, #187 S2)
 
