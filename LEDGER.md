@@ -405,3 +405,4 @@
 | cd9e82d | 2026-11-20T03:53:21Z | claude-opus-5-5 | 144 | 37259 | 11702011 | 165474 | 3.9135 | Review fixes for #236: comint's full history in CI, only the three packages' units |
 | 9ba2d9d | 2026-11-20T05:59:42Z | claude-fable-5-1, claude-opus-5-5 | 1076 | 320704 | 126596851 | 1708658 | 44.3874 | sloth-mesh#4 learned facts (mesh c7ea796..0b2b0c5) + slothweb-mcp wiki counts; also mesh rtl_433 F/psi, WiFi layout, FAA db + daily refresh on W9FJC, table-parity and api-golden fixes |
 | 878b338b | 2026-11-20T12:42:32Z | claude-opus-5 | 484 | 161078 | 50924428 | 618212 | 35.6737 | #232 — EVIL_TWIN: no CRIT on a weak enc label read off one beacon |
+| 7f27f3e | 2026-11-20T17:05:57Z | claude-fable-5-1, claude-opus-5-5 | 666 | 170987 | 50512383 | 1395488 | 25.6849 | #232 review: EVIL_TWIN malformed-IE demotion WEP-only |
