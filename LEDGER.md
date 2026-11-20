@@ -401,3 +401,4 @@
 | 9c3c030b | 2026-11-19T21:12:21Z | claude-opus-5-5 | 110 | 25918 | 18824582 | 57281 | 4.7420 | slothweb: Monitor hides the managed card's joined network, alerts kept (#234); w |
 | 5ed2915 | 2026-11-19T23:38:17Z | claude-fable-5-1, claude-opus-5-5 | 570 | 130888 | 58461723 | 1286125 | 26.1644 | Remove web/: slothweb builds and installs from sloth-mesh (#235) |
 | ea25309 | 2026-11-20T00:04:21Z | claude-opus-5-5 | 142 | 34155 | 11885738 | 627220 | 6.1969 | Review fixes for #235: shellcheck 0.9, CI token scope, stale contract names |
+| b0fd419 | 2026-11-20T03:25:55Z | claude-fable-5-1, claude-opus-5-5 | 838 | 225697 | 60553202 | 1148963 | 29.8369 | Install the three packages together and run each alone (#236) |
