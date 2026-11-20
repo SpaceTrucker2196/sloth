@@ -1873,6 +1873,9 @@ install-service:
 # systemctl / systemd-sysusers / chown / socat: unprivileged, touches no
 # real service, reads nothing under /etc. Not a `make test` dependency
 # because it is shell, not the C suite; shellcheck runs when installed.
+# tests/deploy/test_three_repos.sh is linted here and run by CI's
+# three-repos job, not here: it needs sloth-mesh and sloth-comint
+# checkouts beside this one (#236; docs/wiki/deployment.md §12).
 DEPLOY_SCRIPTS = packaging/bin/sloth-migrate-sensor packaging/bin/sloth-monitor-up \
                  tests/deploy/test_migrate_sensor.sh \
                  packaging/bin/sloth-migrate-rf tests/deploy/test_migrate_rf.sh \
@@ -1881,7 +1884,8 @@ DEPLOY_SCRIPTS = packaging/bin/sloth-migrate-sensor packaging/bin/sloth-monitor-
                  tools/lab/lab_capture.sh tools/lab/expect.sh \
                  tools/update_intel.sh \
                  tests/deploy/test_lab_tools.sh \
-                 tools/contract.sh tests/contract/check.sh
+                 tools/contract.sh tests/contract/check.sh \
+                 tests/deploy/test_three_repos.sh
 
 # The whole build surface in one measured run (agents/AGENTS.md
 # "Discipline"); one run per tree, refuses a full TMPDIR, prints the

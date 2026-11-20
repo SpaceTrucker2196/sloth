@@ -264,6 +264,86 @@ jobs:
           make
           make test
 
+  # One host, three packages (#236, #184 Stage 5). sloth, sloth-mesh and
+  # sloth-comint built from their checkouts in a Debian 13 container, as
+  # root: sloth's contract, sloth-mesh against it, sloth-comint; each
+  # one's `make install` (and `make install-service`) into the
+  # container's own /; `systemd-analyze verify` over every installed
+  # unit; `systemd-sysusers` and exactly one `sloth` account from the
+  # three byte-identical fragments; then the five degraded modes with
+  # the binaries started directly on loopback and unix sockets (no
+  # systemd runs in the container). tests/deploy/test_three_repos.sh is
+  # the whole of it and runs the same way on a developer's machine,
+  # into a scratch DESTDIR.
+  #
+  # sloth-mesh and sloth-comint are private: their checkouts need
+  # RIVER_IO_PAT, gated exactly as mesh-against-contract gates it. One
+  # step reads the secret and writes yes or no; only the two checkouts'
+  # `token:` inputs see it, neither persists it, and a fork passes with
+  # a notice. git comes first: actions/checkout falls back to a tarball
+  # without one, and the script clones each checkout at its HEAD.
+  three-repos:
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    steps:
+      - name: Is the sloth-mesh token there
+        id: mesh
+        env:
+          MESH_TOKEN: ${{ secrets.RIVER_IO_PAT }}
+        run: |
+          if [ -n "$MESH_TOKEN" ]; then
+            echo "token=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "token=no" >> "$GITHUB_OUTPUT"
+            echo "::notice title=three-repos skipped::RIVER_IO_PAT is not available (a fork, or a pull request from one); sloth-mesh and sloth-comint are private, so the three are not installed together here."
+          fi
+
+      # libsoapysdr-dev and libsystemd-dev: sloth-sdrsweep and sloth-va
+      # are built, so the units install-service puts in place have their
+      # binaries and verify can hold them. systemd: systemd-analyze and
+      # systemd-sysusers (nothing starts it). util-linux's setpriv runs
+      # the modes as sloth.
+      - name: Install dependencies
+        if: steps.mesh.outputs.token == 'yes'
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential pkg-config git \
+            ca-certificates curl python3 systemd util-linux \
+            libncurses-dev libpcap-dev libsqlite3-dev libsoapysdr-dev libsystemd-dev
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        if: steps.mesh.outputs.token == 'yes'
+        with:
+          path: sloth
+          persist-credentials: false
+
+      - name: Check out sloth-mesh
+        if: steps.mesh.outputs.token == 'yes'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          repository: SpaceTrucker2196/sloth-mesh
+          token: ${{ secrets.RIVER_IO_PAT }}
+          path: sloth-mesh
+          persist-credentials: false
+
+      - name: Check out sloth-comint
+        if: steps.mesh.outputs.token == 'yes'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          repository: SpaceTrucker2196/sloth-comint
+          token: ${{ secrets.RIVER_IO_PAT }}
+          path: sloth-comint
+          persist-credentials: false
+
+      # The checkouts are owned by the runner's uid, the container runs
+      # as root: git refuses to read them until they are marked safe.
+      # The workflow's -Werror reaches every build as EXTRA_CFLAGS.
+      - name: Build, install and run the three
+        if: steps.mesh.outputs.token == 'yes'
+        run: |
+          git config --global --add safe.directory '*'
+          THREE_REPOS_SYSTEM=1 sh sloth/tests/deploy/test_three_repos.sh sloth sloth-mesh sloth-comint
+
   # ThreadSanitizer (#95). The evil-twin taint table (#95/6730997), the
   # RF-quality counters (#95/21d3c52) and the DNS caller-owned buffer
   # (#95/d28d19b) each shipped a concurrency test that only fails *by
