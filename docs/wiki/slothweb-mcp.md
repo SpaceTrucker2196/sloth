@@ -15,8 +15,8 @@ type: reference
 **Summary**: `slothweb-mcp` is a small C program an MCP client (an
 OpenClaw agent, Claude Code) launches on the same machine as slothweb.
 It speaks newline-delimited JSON-RPC on stdin/stdout and is a thin
-client of slothweb's HTTP API on loopback: 25 read tools, each one GET
-of an existing route, and 9 write tools, each one POST to one of five
+client of slothweb's HTTP API on loopback: 26 read tools, each one GET
+of an existing route, and 14 write tools, each one POST to one of six
 existing write routes. It holds no database handle, opens no file but
 the agent secret its arguments name, and can do nothing slothweb's
 routes cannot. slothweb's own validation decides every write. A write
@@ -31,7 +31,7 @@ or from another writer is data in a named field, never an instruction.
 `web_frrs_route()`), `web/src/web_notes.h`, `web/tests/test_mcp.c`,
 `research/mcp/` (the precedent), the owner's request of 2026-11-11.
 
-**Last updated**: 2026-11-12 (#187: `sloth_lures` and `sloth_lure_bssid`, the KARMA and key-harvest tables and one BSSID's KARMA detail; 25 read tools, 34 tools); 2026-11-12 (#198: `sloth_triage_bulk`, `sloth_incident_add`, `sloth_incident_member`, `sloth_incident_close` and `sloth_incident_list`; an agent closes only an agent's incident, `403 not_agent_incident`, and removes only an agent's member, `403 not_agent_member`; 32 tools); 2026-11-11 (`--from-loopback` for a slothweb on the
+**Last updated**: 2026-11-19 (sloth-mesh#4: learned facts. `sloth_set_device_info`, `sloth_set_aircraft_info`, `sloth_set_source_info`, `sloth_set_vendor` and `sloth_clear_fact` POST to `/api/fact`; `sloth_get_facts` reads `/api/facts`. Allow-listed fields per kind (device, ap, aircraft, aprs, rtl433, vendor), each row recorded as `agent:<name>` or `operator`, an agent never overriding the operator (`403 operator_fact`), never shared with the fleet; 26 read tools, 40 tools. slothweb now lives in the private sloth-mesh repo, whose README documents the tools); 2026-11-12 (#187: `sloth_lures` and `sloth_lure_bssid`, the KARMA and key-harvest tables and one BSSID's KARMA detail; 25 read tools, 34 tools); 2026-11-12 (#198: `sloth_triage_bulk`, `sloth_incident_add`, `sloth_incident_member`, `sloth_incident_close` and `sloth_incident_list`; an agent closes only an agent's incident, `403 not_agent_incident`, and removes only an agent's member, `403 not_agent_member`; 32 tools); 2026-11-11 (`--from-loopback` for a slothweb on the
 host's Tailscale address, and an agent on another host through ssh,
 section 7); 2026-11-11 (an agent takes back only agents' notes,
 owner ruling: `403 not_agent_note`, as links); 2026-11-11 (the secret readable through a group,
@@ -372,7 +372,7 @@ sudo install -m 755 slothweb-mcp /usr/local/bin/slothweb-mcp
 
 ```sh
 openclaw mcp set slothweb '{"command":"/usr/local/bin/slothweb-mcp","args":["--read-only"]}'
-openclaw mcp probe          # lists the 25 read tools
+openclaw mcp probe          # lists the 26 read tools
 ```
 
 **With writes** (owner ruling 2026-11-11: the secret is read through a
@@ -404,7 +404,7 @@ id -nG | tr ' ' '\n' | grep -x slothweb-agent
 head -c 0 /run/slothweb/agent.secret && echo readable
 # 5. Register it as the operator's own user: no sudo, no -u.
 openclaw mcp set slothweb '{"command":"/usr/local/bin/slothweb-mcp","args":["--agent","claw-triage","--secret-file","/run/slothweb/agent.secret"]}'
-openclaw mcp probe          # lists 34 tools
+openclaw mcp probe          # lists 40 tools
 ```
 
 If `/etc/default/slothweb` already sets `SLOTHWEB_ARGS`, add both flags
