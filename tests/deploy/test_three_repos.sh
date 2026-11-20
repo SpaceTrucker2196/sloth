@@ -176,8 +176,10 @@ done
 # ── The units ───────────────────────────────────────────────────────────
 # Every unit the three installed, as the path an operator would name.
 units=
-for f in "$root"/etc/systemd/system/*.service "$root"/etc/systemd/system/*.path \
-         "$root"/etc/systemd/system/*.timer "$root"/usr/lib/systemd/system/sloth-comintd.service; do
+# Only the three packages' (every one is named sloth*): in / the image's
+# own units sit beside them and are not what is verified here.
+for f in "$root"/etc/systemd/system/sloth*.service "$root"/etc/systemd/system/sloth*.path \
+         "$root"/etc/systemd/system/sloth*.timer "$root"/usr/lib/systemd/system/sloth-comintd.service; do
     [ -f "$f" ] && units="$units ${f#"$root"}"
 done
 for u in sloth-sensor.service slothweb.service sloth-comintd.service; do

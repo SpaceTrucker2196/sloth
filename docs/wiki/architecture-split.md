@@ -20,7 +20,7 @@ section naming every place the grep and #184 §2 disagree.
 `web/data/vendors/COVERAGE.md`, `packaging/systemd/`, issues #184 and
 #185, owner rulings on #184 of 2026-11-04.
 
-**Last updated**: 2026-11-19 (#236, Stage 5 builder: §3.7, one host with three packages, `--comintd` in slothweb, the degraded modes, the integration script and CI job), 2026-11-19 (#235, Stage 4 done: `web/` removed from this tree, slothweb installs from sloth-mesh, CI builds sloth-mesh against every commit's contract; §3.6, §6), 2026-11-19 (#233, Stage 3: `sloth-mesh` created from this tree at `56d9c7f2`, the repository once named `sloth-dash` renamed; §3.5; §5 item 2 and §6 answered), 2026-11-18 (#231, Stage 2 done in sloth: the six tables of §3.1 are generated from the pinned pack snapshot in `intel/`, §3.4; the row counts §3.1 recorded as 117 and 1 are 118 and 2, counted from the compiled arrays), 2026-11-17 (#185 finding 1: `dot11_data.h` no longer ships), 2026-11-16 (#185 review: C3's declared-not-defined gap), 2026-11-16 (#185 item 4: `make contract` ships C2, C3, C4, C5 and C9 as one release artifact, [[contract]]; §5 items 1, 2 and 5 restated or resolved), 2026-11-10 (C1 shipped: `SLOTH_JSONL_VERSION` exists and
+**Last updated**: 2026-11-19 (#236 review: §3.7 status and the reader fix), 2026-11-19 (#236, Stage 5 builder: §3.7, one host with three packages, `--comintd` in slothweb, the degraded modes, the integration script and CI job), 2026-11-19 (#235, Stage 4 done: `web/` removed from this tree, slothweb installs from sloth-mesh, CI builds sloth-mesh against every commit's contract; §3.6, §6), 2026-11-19 (#233, Stage 3: `sloth-mesh` created from this tree at `56d9c7f2`, the repository once named `sloth-dash` renamed; §3.5; §5 item 2 and §6 answered), 2026-11-18 (#231, Stage 2 done in sloth: the six tables of §3.1 are generated from the pinned pack snapshot in `intel/`, §3.4; the row counts §3.1 recorded as 117 and 1 are 118 and 2, counted from the compiled arrays), 2026-11-17 (#185 finding 1: `dot11_data.h` no longer ships), 2026-11-16 (#185 review: C3's declared-not-defined gap), 2026-11-16 (#185 item 4: `make contract` ships C2, C3, C4, C5 and C9 as one release artifact, [[contract]]; §5 items 1, 2 and 5 restated or resolved), 2026-11-10 (C1 shipped: `SLOTH_JSONL_VERSION` exists and
 `sensor_health` reports it, #185 item 3), 2026-11-05
 
 This page is a measurement, not a plan. It is Stage 0's first deliverable
@@ -428,7 +428,13 @@ carve), `packaging/systemd/slothweb.service`,
 
 ### 3.7 Stage 5 (#236): one host, three packages
 
-Builder done on 2026-11-19 (not yet pushed, reviewed or run in CI).
+Built and reviewed on 2026-11-19 (not yet pushed or run in CI). The
+review found one memory-safety bug and fixed it in sloth-mesh: a body
+from whatever answers on the `--comintd` port could push slothweb's JSON
+reader past its 4 KB text buffer (a full buffer, then an empty string);
+a string with no room for its NUL is now refused, with a boundary test.
+It also made CI fetch sloth-comint's whole history (its pack is dated by
+`git log`) and limited the units verified to the three packages'.
 
 - **Packaging.** Each repository installs with its own `make install`
   (and `make install-service`), `DESTDIR` honoured. The three sysusers
