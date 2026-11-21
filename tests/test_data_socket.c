@@ -1871,6 +1871,97 @@ static void test_idle_zero_disables_the_rule(void) {
     tune_reset();
 }
 
+/* stderr into a file for the length of a few calls, so a test can read
+ * the line an operator would grep for (test_alert_pcap.c's pattern). */
+static FILE *ds_err_file;
+static int   ds_err_saved = -1;
+static void ds_err_begin(void) {
+    fflush(stderr);
+    ds_err_file  = tmpfile();
+    ds_err_saved = dup(STDERR_FILENO);
+    ASSERT(ds_err_file != NULL && ds_err_saved >= 0);
+    if (ds_err_file) dup2(fileno(ds_err_file), STDERR_FILENO);
+}
+static void ds_err_end(char *out, size_t n) {
+    out[0] = '\0';
+    fflush(stderr);
+    if (ds_err_saved >= 0) {
+        dup2(ds_err_saved, STDERR_FILENO);
+        close(ds_err_saved);
+        ds_err_saved = -1;
+    }
+    if (!ds_err_file) return;
+    rewind(ds_err_file);
+    size_t got = fread(out, 1, n - 1, ds_err_file);
+    out[got] = '\0';
+    fclose(ds_err_file);
+    ds_err_file = NULL;
+}
+
+/* sloth#240: a client the sensor closes by a rule gets one line saying
+ * which rule, for how long nothing moved, how long it was connected,
+ * what it was sent and what was still queued; a client fed all the time
+ * gets none. The idle line: a record a second for 900 s (11 bytes
+ * each), then nothing for 900 s. The stall line: a record the kernel never takes, 30 s.
+ * Seen red with each close_note() call taken out (no line), and with
+ * `c->sent += (unsigned long long)n;` taken out ("0 bytes sent"). */
+static void test_rule_closes_say_why(void) {
+    char err[2048];
+    tune_reset();
+    io_reset();
+    data_socket_test_set_clock_fn(io_clock);
+    data_socket_test_set_send_fn(io_send);
+    io_now = 1000;
+    int c = ds_open_one();
+    ASSERT(c >= 0);
+    ds_err_begin();
+    /* A client fed every second for 900 s, and reading it all, is
+     * never closed and never named. */
+    char sink[4096];
+    for (int s = 1; s <= 900; s++) {
+        io_now = 1000 + s;
+        data_socket_emit("{\"beat\":1}");
+        data_socket_tick();
+        while (recv(c, sink, sizeof(sink), MSG_DONTWAIT) > 0) {}
+    }
+    ASSERT_EQ(data_socket_has_clients(), 1);
+    io_now = 1900 + 899;
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 1);
+    io_now = 1900 + 900;
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 0);
+    ds_err_end(err, sizeof(err));
+    ASSERT(strstr(err, "data-socket: closed a client of ") == err);
+    ASSERT(strstr(err, ": idle (socket.idle_secs), no progress for 900 s (limit 900 s); "
+                       "connected 1800 s, 9900 bytes sent, 0 records dropped, "
+                       "0 bytes still queued; ") != NULL);
+    ASSERT(strstr(err, " closed this way since start\n") != NULL);
+    ASSERT(strchr(err, '\n') == err + strlen(err) - 1);       /* one line */
+    ds_close_one(c);
+
+    io_reset();
+    data_socket_test_set_clock_fn(io_clock);
+    data_socket_test_set_send_fn(io_send);
+    io_now = 5000;
+    c = ds_open_one();
+    ASSERT(c >= 0);
+    ds_err_begin();
+    io_budget = 0;
+    data_socket_emit("{\"stuck\":1}");
+    io_now = 5000 + DATA_SOCKET_STALL_SECS;
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 0);
+    ds_err_end(err, sizeof(err));
+    ASSERT(strstr(err, ": stalled (the kernel took none of its queue), no progress for 30 s "
+                       "(limit 30 s); connected 30 s, 0 bytes sent, 0 records dropped, "
+                       "12 bytes still queued; ") != NULL);
+    ds_close_one(c);
+    data_socket_test_set_send_fn(NULL);
+    data_socket_test_set_clock_fn(NULL);
+    tune_reset();
+}
+
 /* The two new sensor_health fields are present, additive, and read the
  * live values: one client connected, and the refusal total this process
  * has accumulated so far. */
@@ -2098,6 +2189,7 @@ void run_data_socket_tests(void) {
     RUN_TEST(test_idle_client_is_closed_with_nothing_queued);
     RUN_TEST(test_idle_clock_restarts_on_delivery);
     RUN_TEST(test_idle_zero_disables_the_rule);
+    RUN_TEST(test_rule_closes_say_why);
     RUN_TEST(test_sensor_health_carries_socket_fields);
 
     TEST_SUITE("data socket (bare-flag default, #136)");

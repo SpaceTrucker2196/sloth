@@ -17,7 +17,7 @@ carry the stream off-host without putting it on the wire yourself.
 `src/tune.c`, `src/jsonl.c`, `src/discovery.c`, `src/secure_file.c`,
 `packaging/`.
 
-**Last updated**: 2026-10-19.
+**Last updated**: 2026-11-20 (#240: a rule-based close writes one line saying why, § 4.1), 2026-10-19.
 
 ---
 
@@ -251,6 +251,25 @@ offered a record at least every 300 s and never reaches it; one that has
 seen nothing for three beats is not a consumer any more. A client
 dropped this way that reconnects receives the full baseline again
 (#47), so the cost of a false positive is one reconnect, not lost data.
+
+**Each rule-based close says why** (#240). When the idle rule or the
+stall rule closes a client, sloth writes one line to stderr (the
+journal, under systemd):
+
+```
+data-socket: closed a client of uid 984: idle (socket.idle_secs), no progress for 900 s (limit 900 s); connected 1800 s, 9900 bytes sent, 0 records dropped, 0 bytes still queued; 1 closed this way since start
+```
+
+The reason (`idle (socket.idle_secs)` or `stalled (the kernel took none
+of its queue)`), how long the progress mark had not moved, the rule's
+limit, how long the client was connected, the bytes the kernel took
+from it, the records dropped for it and what was still queued, and how
+many clients that rule has closed since start. A client that hangs up,
+or a send that fails, is the peer's doing and writes nothing. #240
+reported a client reading ~4 000 lines/s closed after ~900 s; a reader at
+~5 000 lines/s on a sensor at this version ran 1 500 s without being
+closed, so whether a rule closed it is open, and this line is what
+answers it the next time.
 
 **What this does not do.** It authenticates nobody — a peer under the
 cap on loopback TCP is still any local account. And a per-peer cap is

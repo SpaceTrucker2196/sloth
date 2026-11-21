@@ -67,6 +67,8 @@ typedef struct {
     unsigned long long gap;           /* dropped since the last marker */
     unsigned long long dropped;       /* dropped over the connection */
     time_t             progress;      /* last time bytes moved, or queued */
+    time_t             opened;        /* module clock at accept */
+    unsigned long long sent;          /* bytes the kernel took */
     ds_peer_t          peer;          /* slot-cap identity, fixed at accept */
 } ds_client_t;
 
@@ -75,6 +77,8 @@ static ds_client_t     g_clients[MAX_CLIENTS];
 static int             g_client_n  = 0;
 static unsigned long long g_dropped_total = 0;
 static unsigned long long g_peer_refused_total = 0;
+static unsigned long long g_closed_idle_total  = 0;
+static unsigned long long g_closed_stall_total = 0;
 static time_t          g_refuse_warn_at = 0;  /* module clock of the last line */
 static int             g_refuse_warned  = 0;  /* 0 until the first one */
 static char            g_unix_path[256];     /* for cleanup unlink */
@@ -283,6 +287,26 @@ static void refuse_warn(const ds_peer_t *p, long cap, time_t now) {
             "data-socket: refused a connection from %s: it already holds %ld "
             "client slots (socket.max_per_peer); %llu refused since start\n",
             who, cap, g_peer_refused_total);
+}
+
+/* A client the sensor closes on its own decision (the idle or the stall
+ * rule) gets one line naming why, its peer, how long it was connected,
+ * what it was sent and what was still queued (sloth#240: a busy client
+ * was reported closed after ~900 s and nothing on the sensor's side
+ * said whether a rule did it). A client that hangs up, or a send error,
+ * is the peer's doing and says nothing. A rule can close a given client
+ * once, so the lines are as many as the closes. */
+static void close_note(const ds_client_t *c, const char *why, long limit,
+                       time_t now, unsigned long long total) {
+    char who[48];
+    peer_describe(&c->peer, who, sizeof(who));
+    fprintf(stderr,
+            "data-socket: closed a client of %s: %s, no progress for %lld s "
+            "(limit %ld s); connected %lld s, %llu bytes sent, %llu records "
+            "dropped, %zu bytes still queued; %llu closed this way since start\n",
+            who, why, (long long)(now - c->progress), limit,
+            (long long)(now - c->opened), c->sent, c->dropped,
+            c->len - c->off, total);
 }
 
 static int set_nonblock_real(int fd) {
@@ -668,6 +692,7 @@ static int flush_client(int i, time_t now) {
         if (n > 0) {                 /* short writes just loop; errno is
                                       * meaningless on a positive return */
             c->off += (size_t)n;
+            c->sent += (unsigned long long)n;
             c->progress = now;
             continue;
         }
@@ -778,6 +803,7 @@ void data_socket_tick(void) {
         memset(&g_clients[g_client_n], 0, sizeof(g_clients[0]));
         g_clients[g_client_n].fd       = c;
         g_clients[g_client_n].progress = now;
+        g_clients[g_client_n].opened   = now;
         g_clients[g_client_n].peer     = peer;
         g_client_n++;
         accepted++;
@@ -802,10 +828,15 @@ void data_socket_tick(void) {
         if (flush_client(i, now) < 0) continue;
         ds_client_t *c = &g_clients[i];
         if (c->off < c->len && now - c->progress >= DATA_SOCKET_STALL_SECS) {
+            g_closed_stall_total++;
+            close_note(c, "stalled (the kernel took none of its queue)",
+                       DATA_SOCKET_STALL_SECS, now, g_closed_stall_total);
             drop_client(i);
             continue;
         }
         if (idle > 0 && now - c->progress >= idle) {
+            g_closed_idle_total++;
+            close_note(c, "idle (socket.idle_secs)", idle, now, g_closed_idle_total);
             drop_client(i);
             continue;
         }
