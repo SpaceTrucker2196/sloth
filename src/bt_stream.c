@@ -116,6 +116,11 @@ static void ble_record_locked(int dlt, const uint8_t *rec, size_t len,
     btle_verdict_t v = dlt == BTLE_DLT_LL_PHDR
         ? btle_phdr_record_parse(rec, len, &p)
         : btle_ppi_record_parse(rec, len, &p);
+    /* A failed CRC is the record's only bucket, whatever else is wrong
+     * with it: the octets that say what else is wrong are the suspects. */
+    if (p.crc == BTLE_CRC_BAD) { g_h.crc_bad++; return; }
+    if (p.crc == BTLE_CRC_OK)        g_h.crc_ok++;
+    if (p.crc == BTLE_CRC_UNCHECKED) g_h.crc_unchecked++;
     if (v != BTLE_V_MALFORMED && p.truncated) g_h.truncated++;
     switch (v) {
     case BTLE_V_ADV: {
@@ -135,6 +140,7 @@ static void ble_record_locked(int dlt, const uint8_t *rec, size_t len,
     case BTLE_V_DATA:        g_h.data_pdus++;   break;
     case BTLE_V_OTHER:       g_h.other++;       break;
     case BTLE_V_MALFORMED:
+    case BTLE_V_CRC_BAD:     /* p.crc said so above; not reached */
     default:                 g_h.drop++;        break;
     }
 }

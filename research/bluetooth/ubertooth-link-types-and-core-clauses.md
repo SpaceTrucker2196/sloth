@@ -2,7 +2,7 @@
 source_url: https://www.tcpdump.org/linktypes.html
 retrieved: 2026-10-21
 topics: [bluetooth, ble, bredr, ubertooth, link-layer, pcap, linktype, passive]
-citation: tcpdump.org link-layer header types 256 BLUETOOTH_LE_LL_WITH_PHDR, 251 BLUETOOTH_LE_LL, 192 PPI, 255 BLUETOOTH_BREDR_BB; Bluetooth Core Specification v5.4 Vol 6 Part B §1.4.1, §2.1, §2.1.2, §2.3 and Vol 2 Part B §1.2.1, §6.3.3.1; Ubertooth repository (firmware/README, firmware/common.mk, firmware/bluetooth_rxtx/bluetooth_rxtx.c, host/libubertooth/src/ubertooth_interface.h), release 2020-12-R1
+citation: tcpdump.org link-layer header types 256 BLUETOOTH_LE_LL_WITH_PHDR, 251 BLUETOOTH_LE_LL, 192 PPI, 255 BLUETOOTH_BREDR_BB; Bluetooth Core Specification v5.4 Vol 6 Part B §1.4.1, §2.1, §2.1.2, §2.3, §3.1.1 and Vol 2 Part B §1.2.1, §6.3.3.1; Ubertooth repository (firmware/README, firmware/common.mk, firmware/bluetooth_rxtx/bluetooth_rxtx.c, host/libubertooth/src/ubertooth_interface.h), release 2020-12-R1; libbtbb 2020-12-R1 lib/src/pcap.c; BlueZ unit/test-crc.c (CRC-24 vectors, https://github.com/bluez/bluez/blob/master/unit/test-crc.c, retrieved 2026-11-20)
 ---
 # Ubertooth capture link types and the Core Specification clauses read
 
@@ -25,7 +25,8 @@ rules on it are #144 slice 4.
   offenses valid, 0x0040 channel aliased, 0x0380 PDU type, 0x0400 CRC
   checked, 0x0800 CRC passed, 0x3000 PDU-type dependent, 0xC000 PHY.
   `src/btle_ll.c` reads the channel, the two validity bits and the
-  signal; it ignores the CRC bits by design (see below).
+  signal; it ignores the CRC flag bits and checks the CRC itself
+  (§3.1.1 below).
 - **251 `LINKTYPE_BLUETOOTH_LE_LL`**: the same LE packet with no
   pseudo-header. Reached here only inside PPI.
 - **192 `LINKTYPE_PPI`**: version (0), flags, header length (LE16,
@@ -80,6 +81,22 @@ is a different container and is refused.
 - **§2.3.3.1 CONNECT_IND LLData.** AA (4), CRCInit (3), WinSize (1),
   WinOffset (2), Interval (2), Latency (2), Timeout (2), ChM (5), and a
   last octet packing Hop (5 bits, low) and SCA (3 bits, high).
+- **§3.1.1 CRC generation.** 24 bits over the PDU (header and payload,
+  not the Access Address), polynomial x^24+x^10+x^9+x^6+x^4+x^3+x+1.
+  The LFSR is preset with CRCInit, its least significant bit in
+  position 0; 0x555555 on the advertising physical channel, the
+  CONNECT_IND's CRCInit on a connection. PDU bits are processed in the
+  order transmitted, least significant bit of each octet first. The CRC
+  is transmitted from position 23 to position 0, so the first CRC octet
+  on the air holds positions 23..16 with position 23 in its least
+  significant bit. `btle_crc24_air()` is that; `btle_ll_parse()` checks
+  it on the advertising Access Address when all 3 octets were delivered
+  and returns `BTLE_V_CRC_BAD`, decoding nothing, on a mismatch.
+  Published vectors: BlueZ `unit/test-crc.c` gives nine whole packets
+  with their CRC octets (advertising ADV_IND, SCAN_REQ, SCAN_RSP,
+  CONNECT_IND, and two data-channel PDUs under that CONNECT_IND's
+  CRCInit 0x161DBE); its SCAN_REQ's CRC 6e f4 6f is also the worked
+  example in the Ubertooth firmware's `btle_calc_crc()` comment.
 
 The AD structures inside AdvData are walked by the slice-1 decoder,
 `ble_ad_parse()` (Vol 3 Part C §11), over the trusted octets only.
@@ -103,7 +120,17 @@ The AD structures inside AdvData are walked by the slice-1 decoder,
   at most 50 octets of a packet, from its Access Address, reach the
   host. `BTLE_PAYLOAD_TRUST_MAX` (44) is that minus the Access Address
   and PDU header. A longer claim is truncated silently by the hardware
-  path, so sloth bounds the trusted length by it and makes no CRC claim.
+  path, so sloth bounds the trusted length by it, and checks a CRC only
+  when its 3 octets end inside those 50.
+- **No CRC check in `-n`.** `ubertooth-btle` applies `-v` (CRC verify)
+  only when run without `-n`/`-f`/`-p`; the firmware's `-n` path
+  (`firmware/bluetooth_rxtx/le_phy.c`) never reads `le.crc_verify`; and
+  libbtbb's `lell_pcap_append_packet()` (DLT 256) sets
+  `LE_DEWHITENED | LE_AA_OFFENSES_VALID` and the signal flags, never
+  CRC-checked or CRC-passed, writing `length + 4 + 2 + 3` octets (AA,
+  header, payload, CRC). `lell_pcap_append_ppi_packet()` (DLT 192)
+  copies the same octets after its PPI header. So the CRC arrives and
+  nobody upstream has checked it.
 - **Jam mode.** `firmware/bluetooth_rxtx/bluetooth_rxtx.c` holds
   `jam_mode` as one firmware global, set by the `UBERTOOTH_JAM_MODE`
   vendor request from any host client and reset to `JAM_NONE` by

@@ -22,13 +22,16 @@ which are forbidden. sloth cannot check either from the capture.
 `src/jsonl.c` (`btcap_*`), `src/main.c`; `MISSION.md` §1–§2;
 `research/bluetooth/ubertooth-link-types-and-core-clauses.md`;
 tcpdump.org link types 256, 251, 192, 255; Bluetooth Core Specification
-v5.4 Vol 6 Part B §1.4.1, §2.1, §2.3 and Vol 2 Part B §1.2.1, §6.3.3;
+v5.4 Vol 6 Part B §1.4.1, §2.1, §2.3, §3.1.1 and Vol 2 Part B §1.2.1, §6.3.3;
+BlueZ `unit/test-crc.c` (the published CRC vectors the tests check);
+libbtbb 2020-12-R1 `lib/src/pcap.c` and the Ubertooth firmware's
+`firmware/bluetooth_rxtx/le_phy.c` (what `-n` does not check);
 the Ubertooth repository (`firmware/README`, `firmware/common.mk`,
 `firmware/bluetooth_rxtx/bluetooth_rxtx.c`,
 `host/libubertooth/src/ubertooth_interface.h`, the `ubertooth-btle`,
 `ubertooth-rx` and `ubertooth-util` usage text); #144.
 
-**Last updated**: 2026-10-21 (#144 slice 4: the rules, view and records read this stream; #144 slice 3).
+**Last updated**: 2026-11-20 (#144: sloth checks the BLE CRC itself and drops an advertising packet that fails it — `btcap_crc_bad`, `btcap_crc_ok`, `btcap_crc_unchecked`, JSONL 2.7.0; owner decision 2026-11-20), 2026-10-21 (#144 slice 4: the rules, view and records read this stream; #144 slice 3).
 
 ---
 
@@ -73,7 +76,7 @@ Any other link type — DLT 254 (the host monitor channel, which is
 skipped and counted as a drop with the stream kept in step; a length
 over 262144 cannot be a record and ends the stream as `error`.
 
-### BLE: trusted length, no CRC claim
+### BLE: trusted length, and the CRC sloth checks
 
 The PDU header's Length octet is what the transmitter claims. An
 Ubertooth delivers at most 50 octets of a packet from its Access Address
@@ -88,9 +91,54 @@ Access Address and header). A claim past it is counted in
   keeps only its addresses;
 - the AD structures are walked only inside it, so a name whose structure
   crosses the line is dropped, not completed;
-- **no CRC is claimed.** sloth never checks the 3-octet CRC and ignores
-  the producer's CRC-checked/passed flags: past the trusted length the
-  octets a CRC covers are not there.
+- a record cut off before its 3 CRC octets has no CRC to check: it is
+  decoded under the rules above and counted in `btcap_crc_unchecked`.
+
+**The CRC.** `ubertooth-btle -n -q` (2020-12-R1 tools and firmware)
+never checks the CRC: `-v` is applied only without `-n`/`-f`/`-p`, the
+firmware's `-n` path (`le_phy.c`) never reads its CRC-verify setting,
+and libbtbb's pcap writer sets neither CRC-checked nor CRC-passed. It
+does write the CRC: each record is Access Address, header, payload and
+the 3 CRC octets. Unchecked, a bit error in an AdvA became a new
+advertiser — Beta-Site's rows filled with near-duplicate public
+addresses heard once each (04:4b:ed:ae:a3:7f, 00:4b:e5:aa:a3:7f,
+04:4b:ec:ce:bb:7f). So since 2026-11-20 (owner decision) **sloth
+checks it**. A packet on the advertising Access Address whose CRC
+octets are all inside the record and inside the Ubertooth's 50 octets
+gets the CRC-24 of Core Specification v5.4 Vol 6 Part B §3.1.1 computed
+over its header and payload (polynomial x^24+x^10+x^9+x^6+x^4+x^3+x+1,
+the LFSR preset with the advertising CRCInit 0x555555, bit 0 in position
+0; PDU bits in least significant bit first; the CRC sent from position
+23 down, each octet least significant bit first), compared with the 3
+octets as they sit on the air:
+
+- a mismatch is dropped **before anything is decoded from it** — no
+  advertiser row, no SCAN_REQ or CONNECT_IND count — and counted in
+  `btcap_crc_bad` alone, not also in `btcap_drop`, so each record still
+  lands in exactly one bucket of `btcap_recv`. A record that fails the
+  CRC and would also have been malformed is `btcap_crc_bad`: the octets
+  that say it is malformed are the suspect ones;
+- a match is decoded as before and counted in `btcap_crc_ok` beside its
+  bucket. `btcap_crc_ok` is there to be the denominator:
+  `btcap_crc_bad / (btcap_crc_bad + btcap_crc_ok)` is how much of what
+  the dongle hears arrives bit-errored, which says more about its
+  placement and antenna than either count alone;
+- every legacy advertising PDU (Length at most 37) fits in 50 octets
+  with its CRC, so on a whole record the check always runs. A Length
+  whose CRC would end past octet 50 cannot have been delivered with it
+  and is `btcap_crc_unchecked`, whatever the record holds there;
+- data-channel PDUs (follow mode, any other Access Address) are not
+  checked — their CRCInit is per connection — and still never decoded.
+  BR/EDR (DLT 255) is unchanged.
+
+DLT 192 (`ubertooth-btle -c`) is checked the same way: libbtbb's PPI
+writer copies the same AA + header + payload + CRC after its PPI
+header. The producer's CRC-checked/passed flags are still ignored —
+sloth's own check is the one that counts. The routine is tested
+against BlueZ's published vectors (an ADV_IND, a SCAN_REQ, a SCAN_RSP,
+a CONNECT_IND and a data-channel PDU under that CONNECT_IND's CRCInit)
+and against the clause's LFSR written position by position
+(`tests/test_ubertooth.c`).
 
 Decoded (Core Specification v5.4 Vol 6 Part B §2.3): ADV_IND,
 ADV_DIRECT_IND, ADV_NONCONN_IND, ADV_SCAN_IND and SCAN_RSP into the
@@ -242,10 +290,11 @@ usage text differs, the usage text wins and this table needs updating.
 `btcap_iface` (`ubertooth`, or `""` without `--bt-capture`),
 `btcap_state`, `btcap_err`, `btcap_dlt`, `btcap_refused_dlt`,
 `btcap_sampling`, `btcap_stale_secs`, `btcap_recv`, `btcap_drop`,
-`btcap_truncated`, the PDU counters and `btcap_bredr_laps`; meanings in
-[[jsonl-schema]]. The change-only signature carries the state, the link
-type, the freshness bucket and none/some bands for drops and
-truncation, never the raw counters. A second sensor of kind `ble`,
+`btcap_truncated`, the PDU counters, `btcap_bredr_laps` and (JSONL
+2.7.0) `btcap_crc_bad`, `btcap_crc_ok`, `btcap_crc_unchecked`; meanings
+in [[jsonl-schema]]. The change-only signature carries the state, the
+link type, the freshness bucket and none/some bands for drops,
+truncation and failed CRCs, never the raw counters. A second sensor of kind `ble`,
 iface `ubertooth`, is registered beside the host source's.
 
 ## Not built here

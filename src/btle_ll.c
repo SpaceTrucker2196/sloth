@@ -20,6 +20,36 @@ int btle_rf_to_index(int rf) {
     return rf < 12 ? rf - 1 : rf - 2;
 }
 
+/* §3.1.1. The register is held with bit i = LFSR position i. Each PDU
+ * bit, least significant first, is XORed with position 23; the result
+ * enters position 0 and is XORed into the positions after the
+ * polynomial's x, x^3, x^4, x^6, x^9 and x^10 terms as the register
+ * shifts up (x^24+x^10+x^9+x^6+x^4+x^3+x+1, taps 0x00065B). */
+#define CRC24_TAPS 0x00065Bu
+
+static uint8_t rev8(uint32_t v) {
+    uint8_t r = 0;
+    for (int i = 0; i < 8; i++) if (v & (1u << i)) r |= (uint8_t)(0x80u >> i);
+    return r;
+}
+
+void btle_crc24_air(uint32_t crc_init, const uint8_t *pdu, size_t n,
+                    uint8_t out[BTLE_CRC_LEN]) {
+    uint32_t r = crc_init & 0xFFFFFFu;
+    for (size_t i = 0; i < n; i++) {
+        for (int b = 0; b < 8; b++) {
+            uint32_t fb = ((r >> 23) ^ ((uint32_t)pdu[i] >> b)) & 1u;
+            r = (r << 1) & 0xFFFFFFu;
+            if (fb) r ^= CRC24_TAPS;
+        }
+    }
+    /* Out from position 23 down, and each octet goes on the air least
+     * significant bit first: the first octet's bit 0 is position 23. */
+    out[0] = rev8(r >> 16);
+    out[1] = rev8(r >> 8);
+    out[2] = rev8(r);
+}
+
 /* The Length range §2.3 gives each legacy advertising PDU type; -1 for
  * a type whose payload is not a fixed legacy shape. */
 static int len_ok(uint8_t type, uint8_t len) {
@@ -51,6 +81,26 @@ btle_verdict_t btle_ll_parse(const uint8_t *pkt, size_t len, btle_pkt_t *out) {
     out->txadd       = (h0 >> 6) & 1;
     out->rxadd       = (h0 >> 7) & 1;
     out->len_claimed = pkt[5];
+
+    /* The CRC is checked when all 3 of its octets are in the record and
+     * inside what an Ubertooth delivers; octets past its 50 are not the
+     * packet's. A bit error anywhere in header or payload — the Length
+     * included, which moves where the CRC is read from — fails here,
+     * before any field is taken from the packet. */
+    size_t seen = len < UBT_LE_PACKET_MAX ? len : UBT_LE_PACKET_MAX;
+    size_t crc_at = BTLE_AA_LEN + BTLE_PDU_HDR_LEN + (size_t)out->len_claimed;
+    if (crc_at + BTLE_CRC_LEN <= seen) {
+        uint8_t want[BTLE_CRC_LEN];
+        btle_crc24_air(BTLE_ADV_CRC_INIT, pkt + BTLE_AA_LEN,
+                       BTLE_PDU_HDR_LEN + (size_t)out->len_claimed, want);
+        if (memcmp(want, pkt + crc_at, BTLE_CRC_LEN) != 0) {
+            out->crc = BTLE_CRC_BAD;
+            return BTLE_V_CRC_BAD;
+        }
+        out->crc = BTLE_CRC_OK;
+    } else {
+        out->crc = BTLE_CRC_UNCHECKED;
+    }
 
     /* Trusted: the claim, bounded by what the record holds and by what
      * an Ubertooth can have delivered at all. */

@@ -14,10 +14,20 @@
  * past `size` faults here. After each parse the trusted-length contract
  * is checked: never more than claimed, never past the Ubertooth limit,
  * AdvData inside the record, and the report built from it terminates
- * its name. */
+ * its name; a packet whose CRC failed (JSONL 2.7.0) yields nothing. */
 static void check(const uint8_t *buf, size_t size, const btle_pkt_t *p,
                   btle_verdict_t v) {
     if (v == BTLE_V_MALFORMED) return;
+    /* A failed CRC decodes nothing, and only the advertising Access
+     * Address is ever checked. */
+    if (v == BTLE_V_CRC_BAD) {
+        if (p->crc != BTLE_CRC_BAD || p->aa != BTLE_ADV_AA) abort();
+        if (p->has_adva || p->has_peer || p->has_conn || p->data ||
+            p->len_trusted) abort();
+        return;
+    }
+    if (p->crc == BTLE_CRC_BAD) abort();
+    if ((p->crc != BTLE_CRC_NONE) != (p->aa == BTLE_ADV_AA)) abort();
     if (p->len_trusted > p->len_claimed) abort();
     if (p->len_trusted > BTLE_PAYLOAD_TRUST_MAX) abort();
     if (p->truncated != (p->len_trusted < p->len_claimed) &&

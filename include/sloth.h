@@ -53,7 +53,7 @@
  * stream's history — the records predate the field by many releases. A
  * `sensor_health` line with no `jsonl_version` is from a stream written
  * before this version and says nothing more than that. */
-#define SLOTH_JSONL_VERSION "2.6.0"
+#define SLOTH_JSONL_VERSION "2.7.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
@@ -3820,10 +3820,14 @@ typedef struct {
      * Ubertooth hears ONE of that many RF channels at a time, so every
      * count below is a sample of that one channel. */
     int      channels_of;
-    /* Records. Each lands in exactly one of drop, adv, scan_req,
-     * connect_ind, ext_adv, data_pdus, other, bredr, which sum to recv.
-     * truncated overlaps them: a record decoded only up to its trusted
-     * length is counted in its own bucket and here. */
+    /* Records. Each lands in exactly one of drop, crc_bad, adv,
+     * scan_req, connect_ind, ext_adv, data_pdus, other, bredr, which sum
+     * to recv. truncated overlaps them: a record decoded only up to its
+     * trusted length is counted in its own bucket and here. crc_ok and
+     * crc_unchecked overlap them too: every record on the advertising
+     * Access Address is in exactly one of crc_bad, crc_ok and
+     * crc_unchecked, so crc_bad / (crc_bad + crc_ok) is the share of
+     * checked advertising packets that arrived bit-errored. */
     uint64_t recv;             /* records framed out of the stream */
     uint64_t drop;             /* refused at the edge, malformed, or over the record cap */
     uint64_t truncated;        /* PDU length claimed past the trusted length */
@@ -3835,6 +3839,9 @@ typedef struct {
     uint64_t other;            /* AUX_CONNECT_RSP and reserved advertising PDU types */
     uint64_t bredr;            /* DLT 255 packets */
     uint64_t bredr_iac;        /* of those, an inquiry access code: someone inquiring */
+    uint64_t crc_bad;          /* advertising AA, CRC present and wrong: dropped undecoded */
+    uint64_t crc_ok;           /* advertising AA, CRC present and right */
+    uint64_t crc_unchecked;    /* advertising AA, record ends before its CRC */
     time_t   last_frame_ts;    /* frame clock of the newest record, 0 = none */
     time_t   last_frame_wall;  /* arrival clock of it, 0 = none */
     int      stale_secs;       /* since a record last arrived, -1 = never */

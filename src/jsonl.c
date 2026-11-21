@@ -1827,10 +1827,10 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         int      ble_ext_evicted_any;
         /* #144 slice 3, the Ubertooth stream: its state, the link type
          * taken or refused, the freshness bucket, and none/some bands
-         * for drops and truncation. recv and the PDU counters move with
-         * every record and stay out. */
+         * for drops, truncation and (2.7.0) failed CRCs. recv, the PDU
+         * and the CRC counters move with every record and stay out. */
         int      btcap_state, btcap_dlt, btcap_refused_dlt, btcap_stale_state;
-        int      btcap_drop_any, btcap_truncated_any;
+        int      btcap_drop_any, btcap_truncated_any, btcap_crc_bad_any;
         /* #156, --ble-rotation-hints: on/off only. Its counts stay out,
          * so a link committing never writes a line at that moment (the
          * moment would tell a consumer which address pair it was). */
@@ -1988,6 +1988,7 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.btcap_stale_state   = stale_state(s->btcap.stale_secs);
     sig.btcap_drop_any      = s->btcap.drop > 0;
     sig.btcap_truncated_any = s->btcap.truncated > 0;
+    sig.btcap_crc_bad_any   = s->btcap.crc_bad > 0;
     sig.ble_rot_on           = s->ble_rot.enabled != 0;
     jsonl_sh_gnss_sig(s, &sig.gnss);
     const int pcap_on = alert_pcap_enabled();
@@ -2225,6 +2226,10 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "btcap_bredr",       (long long)c->bredr);
         kv_int(buf, LINEBUF, &off, "btcap_bredr_iac",   (long long)c->bredr_iac);
         kv_int(buf, LINEBUF, &off, "btcap_bredr_laps",  s->bredr_lap_count);
+        /* JSONL 2.7.0: the BLE CRC sloth checks itself, appended. */
+        kv_int(buf, LINEBUF, &off, "btcap_crc_bad",     (long long)c->crc_bad);
+        kv_int(buf, LINEBUF, &off, "btcap_crc_ok",      (long long)c->crc_ok);
+        kv_int(buf, LINEBUF, &off, "btcap_crc_unchecked", (long long)c->crc_unchecked);
     }
     /* #156: BLE address-rotation hints, ONLY while --ble-rotation-hints
      * is on, so a run without it writes exactly what it wrote before.

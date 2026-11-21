@@ -40,6 +40,9 @@
  *   LE packet, Core Spec v5.4 Vol 6 Part B §2.1, §2.3:
  *     AA(4 LE, 0x8E89BED6 on advertising) header(2: type b0-3, ChSel b5,
  *     TxAdd b6, RxAdd b7; Length) payload CRC(3)
+ *   CRC, Core Spec v5.4 Vol 6 Part B §3.1.1: spec_crc24() below, the
+ *     LFSR of the clause's figure position by position, proven against
+ *     BlueZ's published vectors (test_crc24_published_vectors).
  *
  *   DLT 255 LINKTYPE_BLUETOOTH_BREDR_BB (tcpdump.org), LE:
  *     0 rf_channel  1 signal  2 noise  3 ac_offenses  4 transport/rate
@@ -69,7 +72,35 @@ static void put32be(uint8_t *b, uint32_t v) {
     b[2] = (uint8_t)(v >> 8);  b[3] = (uint8_t)v;
 }
 
-/* LE packet: AA, header, payload. No CRC octets unless `crc`. */
+/* Vol 6 Part B §3.1.1, written as the clause draws it and kept apart
+ * from src/btle_ll.c's packed form: 24 one-bit positions, position 0
+ * preset with CRCInit's least significant bit; each PDU bit, least
+ * significant bit of each octet first, is XORed with position 23, and
+ * that feedback enters position 0 and is XORed into the positions after
+ * the x, x^3, x^4, x^6, x^9 and x^10 terms of
+ * x^24+x^10+x^9+x^6+x^4+x^3+x+1 as the register shifts. The CRC is sent
+ * from position 23 down to 0, and like every field it goes on the air
+ * least significant bit of each octet first. */
+static void spec_crc24(uint32_t init, const uint8_t *pdu, size_t n, uint8_t out[3]) {
+    uint8_t pos[24];
+    for (int i = 0; i < 24; i++) pos[i] = (uint8_t)((init >> i) & 1u);
+    for (size_t k = 0; k < n * 8; k++) {
+        uint8_t fb = (uint8_t)(pos[23] ^ ((pdu[k / 8] >> (k % 8)) & 1u));
+        for (int i = 23; i > 0; i--) {
+            pos[i] = pos[i - 1];
+            if (i == 1 || i == 3 || i == 4 || i == 6 || i == 9 || i == 10)
+                pos[i] ^= fb;
+        }
+        pos[0] = fb;
+    }
+    out[0] = out[1] = out[2] = 0;
+    for (int k = 0; k < 24; k++)                 /* k-th bit on the air */
+        out[k / 8] |= (uint8_t)(pos[23 - k] << (k % 8));
+}
+
+/* LE packet: AA, header, payload. No CRC octets unless `crc`; on the
+ * advertising AA they are the right ones (spec_crc24 from 0x555555),
+ * on any other AA a fixed filler, since nothing checks those. */
 static int le_pkt(uint8_t *b, uint32_t aa, uint8_t type, int txadd, int rxadd,
                   uint8_t len_field, const uint8_t *payload, int plen, int crc) {
     put32(b, aa);
@@ -77,7 +108,12 @@ static int le_pkt(uint8_t *b, uint32_t aa, uint8_t type, int txadd, int rxadd,
     b[5] = len_field;
     if (plen) memcpy(b + 6, payload, (size_t)plen);
     int n = 6 + plen;
-    if (crc) { b[n] = 0xAA; b[n + 1] = 0xBB; b[n + 2] = 0xCC; n += 3; }
+    if (crc && aa == BTLE_ADV_AA) {
+        spec_crc24(BTLE_ADV_CRC_INIT, b + 4, (size_t)(2 + plen), b + n);
+        n += 3;
+    } else if (crc) {
+        b[n] = 0xAA; b[n + 1] = 0xBB; b[n + 2] = 0xCC; n += 3;
+    }
     return n;
 }
 
@@ -433,6 +469,224 @@ static void test_data_channel_and_other_pdus_are_not_decoded(void) {
     ASSERT_EQ((int)btle_ll_parse(b, (size_t)n, &p), (int)BTLE_V_OTHER);
 }
 
+
+/* ── CRC (Vol 6 Part B §3.1.1) ─────────────────────────────────── */
+
+/* Published vectors: whole LE packets, Access Address to CRC, from
+ * BlueZ's unit/test-crc.c (https://github.com/bluez/bluez, file
+ * unit/test-crc.c; Intel, 2011), which checks its own CRC-24 against
+ * them. Kept as data only. Advertising: an ADV_IND (packet_1), a
+ * SCAN_REQ (packet_5; the same 6e f4 6f the Ubertooth firmware's
+ * btle_calc_crc() comment gives), a SCAN_RSP (packet_6) and a
+ * CONNECT_IND (packet_7). Data channel: an empty PDU (packet_8) on the
+ * connection packet_7 sets up, CRCInit 0x161DBE from its LLData. Both
+ * src/btle_ll.c and this file's spec_crc24() must give the CRC octets
+ * each packet carries, so neither is tested against itself. */
+static const uint8_t BZ_ADV_IND[] = {
+    0xd6, 0xbe, 0x89, 0x8e, 0x00, 0x17, 0x7e, 0x01,
+    0x00, 0xd0, 0x22, 0x00, 0x02, 0x01, 0x06, 0x03,
+    0x02, 0x0d, 0x18, 0x06, 0xff, 0x6b, 0x00, 0x03,
+    0x16, 0x52, 0x02, 0x0a, 0x00, 0xf4, 0x09, 0x92,
+};
+static const uint8_t BZ_SCAN_REQ[] = {
+    0xd6, 0xbe, 0x89, 0x8e, 0x03, 0x0c, 0x46, 0x1c,
+    0xda, 0x72, 0x02, 0x00, 0x7e, 0x01, 0x00, 0xd0,
+    0x22, 0x00, 0x6e, 0xf4, 0x6f,
+};
+static const uint8_t BZ_SCAN_RSP[] = {
+    0xd6, 0xbe, 0x89, 0x8e, 0x04, 0x17, 0x7e, 0x01,
+    0x00, 0xd0, 0x22, 0x00, 0x10, 0x09, 0x50, 0x6f,
+    0x6c, 0x61, 0x72, 0x20, 0x48, 0x37, 0x20, 0x30,
+    0x30, 0x30, 0x31, 0x37, 0x45, 0x0f, 0x8a, 0x65,
+};
+static const uint8_t BZ_CONNECT_IND[] = {
+    0xd6, 0xbe, 0x89, 0x8e, 0x05, 0x22, 0x46, 0x1c,
+    0xda, 0x72, 0x02, 0x00, 0x7e, 0x01, 0x00, 0xd0,
+    0x22, 0x00, 0x96, 0x83, 0x9a, 0xaf, 0xbe, 0x1d,
+    0x16, 0x03, 0x05, 0x00, 0x36, 0x00, 0x00, 0x00,
+    0x2a, 0x00, 0xff, 0xff, 0xff, 0xff, 0x1f, 0xa5,
+    0x77, 0x2d, 0x95,
+};
+static const uint8_t BZ_DATA_EMPTY[] = {
+    0x96, 0x83, 0x9a, 0xaf, 0x01, 0x00, 0xc7, 0x15, 0x4d,
+};
+
+static void check_vector(const uint8_t *pkt, size_t n, uint32_t init) {
+    uint8_t got[3], ref[3];
+    btle_crc24_air(init, pkt + 4, n - 7, got);
+    spec_crc24(init, pkt + 4, n - 7, ref);
+    ASSERT(memcmp(got, pkt + n - 3, 3) == 0);
+    ASSERT(memcmp(ref, pkt + n - 3, 3) == 0);
+}
+
+/* Seen to fail, each alone: btle_crc24_air() with its octets left
+ * unreversed (out[0] = r >> 16); with the register shifting the other
+ * way (feedback into position 23, as a reversed-register routine fed
+ * an unreversed CRCInit); with the tap mask 0x00065B written 0x0005DB. */
+static void test_crc24_published_vectors(void) {
+    check_vector(BZ_ADV_IND, sizeof(BZ_ADV_IND), BTLE_ADV_CRC_INIT);
+    check_vector(BZ_SCAN_REQ, sizeof(BZ_SCAN_REQ), BTLE_ADV_CRC_INIT);
+    check_vector(BZ_SCAN_RSP, sizeof(BZ_SCAN_RSP), BTLE_ADV_CRC_INIT);
+    check_vector(BZ_CONNECT_IND, sizeof(BZ_CONNECT_IND), BTLE_ADV_CRC_INIT);
+    /* The CONNECT_IND's CRCInit, LSO first at LLData offset 4. */
+    btle_pkt_t p;
+    ASSERT_EQ((int)btle_ll_parse(BZ_CONNECT_IND, sizeof(BZ_CONNECT_IND), &p),
+              (int)BTLE_V_CONNECT_IND);
+    ASSERT_EQ(p.conn.crc_init, 0x161DBEu);
+    check_vector(BZ_DATA_EMPTY, sizeof(BZ_DATA_EMPTY), p.conn.crc_init);
+    /* And each advertising vector passes the parser's check. */
+    ASSERT_EQ((int)btle_ll_parse(BZ_ADV_IND, sizeof(BZ_ADV_IND), &p), (int)BTLE_V_ADV);
+    ASSERT_EQ(p.crc, BTLE_CRC_OK);
+    ASSERT_EQ((int)btle_ll_parse(BZ_SCAN_REQ, sizeof(BZ_SCAN_REQ), &p), (int)BTLE_V_SCAN_REQ);
+    ASSERT_EQ(p.crc, BTLE_CRC_OK);
+    ASSERT_EQ((int)btle_ll_parse(BZ_SCAN_RSP, sizeof(BZ_SCAN_RSP), &p), (int)BTLE_V_ADV);
+    ASSERT_EQ(p.crc, BTLE_CRC_OK);
+    ASSERT(p.data != NULL);
+    ASSERT_EQ(p.crc, BTLE_CRC_OK);
+    /* The data-channel one is not checked: its CRCInit is the
+     * connection's, which the parser is not given. */
+    ASSERT_EQ((int)btle_ll_parse(BZ_DATA_EMPTY, sizeof(BZ_DATA_EMPTY), &p), (int)BTLE_V_DATA);
+    ASSERT_EQ(p.crc, BTLE_CRC_NONE);
+}
+
+/* Packets built here (le_pkt, spec_crc24) on every PDU shape and
+ * length agree with the routine the parser uses, one octet of payload
+ * at a time from 0 to 41 octets. */
+static void test_crc24_agrees_with_the_clause_at_every_length(void) {
+    uint8_t pdu[2 + 41], a[3], r[3];
+    for (int i = 0; i < (int)sizeof(pdu); i++) pdu[i] = (uint8_t)(i * 37 + 11);
+    for (size_t n = 0; n <= sizeof(pdu); n++) {
+        btle_crc24_air(BTLE_ADV_CRC_INIT, pdu, n, a);
+        spec_crc24(BTLE_ADV_CRC_INIT, pdu, n, r);
+        ASSERT(memcmp(a, r, 3) == 0);
+    }
+    /* No PDU: the CRC of nothing is CRCInit itself, sent from position
+     * 23 down: 0x555555 is 0101... from bit 23, so each octet on the
+     * air, LSB first, reads 0,1,0,1,... = 0xAA. */
+    btle_crc24_air(BTLE_ADV_CRC_INIT, pdu, 0, a);
+    ASSERT_EQ(a[0], 0xAA);
+    ASSERT_EQ(a[1], 0xAA);
+    ASSERT_EQ(a[2], 0xAA);
+}
+
+/* A bit error anywhere in header, payload or CRC: nothing decoded.
+ * Seen to fail: with the memcmp() test in btle_ll_parse() made to pass
+ * every packet, each flipped packet below decodes its AdvA. */
+static void test_bad_crc_is_refused_before_decoding(void) {
+    uint8_t pl[40], b[64];
+    int pn = adv_payload(pl);
+    int n = le_pkt(b, BTLE_ADV_AA, BTLE_ADV_IND, 1, 0, (uint8_t)pn, pl, pn, 1);
+    btle_pkt_t p;
+    ASSERT_EQ((int)btle_ll_parse(b, (size_t)n, &p), (int)BTLE_V_ADV);
+    ASSERT_EQ(p.crc, BTLE_CRC_OK);
+    /* Every bit from the header's first to the CRC's last, one at a
+     * time; the Access Address is not covered (§3.1.1) and a flip there
+     * is a data-channel packet. */
+    int refused = 0, decoded = 0;
+    for (int k = 4 * 8; k < n * 8; k++) {
+        b[k / 8] ^= (uint8_t)(1u << (k % 8));
+        btle_verdict_t v = btle_ll_parse(b, (size_t)n, &p);
+        if (v == BTLE_V_CRC_BAD && p.crc == BTLE_CRC_BAD && !p.has_adva &&
+            !p.has_peer && !p.data && !p.len_trusted) refused++;
+        if (p.has_adva) decoded++;
+        b[k / 8] ^= (uint8_t)(1u << (k % 8));
+    }
+    /* A flip in the Length octet moves where the CRC is read from. The
+     * Length is 0x0F; flipping bit 4, 5, 6 or 7 claims 31, 47, 79 or
+     * 143 octets, past this 24-octet record, so those four leave the
+     * CRC unchecked and fall to the trusted-length rules: 31 is a
+     * truncated ADV_IND whose AdvA is inside the record (decoded, as
+     * before this check), the other three are malformed. Bits 0..3
+     * claim 14, 13, 11 or 7 and are refused like every other flip. */
+    ASSERT_EQ(n, 24);
+    ASSERT_EQ(refused, (n - 4) * 8 - 4);
+    ASSERT_EQ(decoded, 1);
+}
+
+/* What reaches the device table: a CRC-failed ADV_IND is no row and no
+ * PDU count, lands in crc_bad alone (not drop), and a good one is a row.
+ * Seen to fail: with `if (p.crc == BTLE_CRC_BAD)` removed from
+ * ble_record_locked(), crc_bad reads 0 and drop 1; with the memcmp()
+ * test in btle_ll_parse() passing everything, the bit-errored AdvA
+ * becomes a second row. */
+static void test_bad_crc_record_is_counted_not_seen(void) {
+    ble_clear();
+    bt_stream_clear();
+    bt_stream_configure();
+    uint8_t b[80];
+    int n = rec_adv_ind(b, 0, -60, BTLE_PHDR_SIGNAL_VALID);
+    bt_stream_record(256, b, (size_t)n, TS, 1);                 /* good */
+    b[BTLE_PHDR_LEN + 6 + 1] ^= 0x04;                           /* AdvA bit */
+    bt_stream_record(256, b, (size_t)n, TS, 1);                 /* bad */
+    b[BTLE_PHDR_LEN + 6 + 1] ^= 0x04;
+    b[n - 1] ^= 0x80;                                           /* CRC bit */
+    bt_stream_record(256, b, (size_t)n, TS, 1);                 /* bad */
+    b[n - 1] ^= 0x80;
+    /* The same packet in a record that stops before its CRC: decoded,
+     * unchecked. */
+    bt_stream_record(256, b, (size_t)n - 3, TS, 1);
+    /* RF channel 50 is no channel, and the CRC is bad too: the CRC
+     * bucket, as the octets that say anything are suspect. */
+    b[0] = 50; b[n - 2] ^= 0x01;
+    bt_stream_record(256, b, (size_t)n, TS, 1);
+    bt_stream_snapshot(&g_s);
+    ble_snapshot(&g_s);
+    const bt_capture_health_t *c = &g_s.btcap;
+    ASSERT_EQ((int)c->recv, 5);
+    ASSERT_EQ((int)c->crc_bad, 3);
+    ASSERT_EQ((int)c->crc_ok, 1);
+    ASSERT_EQ((int)c->crc_unchecked, 1);
+    ASSERT_EQ((int)c->adv, 2);
+    ASSERT_EQ((int)c->drop, 0);
+    ASSERT_EQ((int)c->truncated, 0);
+    ASSERT_EQ(g_s.ble_device_count, 1);
+    /* The row holds the address as displayed, C1:22:33:44:55:66; the
+     * bit-errored copy was C1:22:33:44:51:66. */
+    static const uint8_t shown[6] = { 0xC1, 0x22, 0x33, 0x44, 0x55, 0x66 };
+    if (g_s.ble_device_count == 1)
+        ASSERT(memcmp(g_s.ble_devices[0].addr, shown, 6) == 0);
+    ble_clear();
+    bt_stream_clear();
+}
+
+/* The Ubertooth's 50 octets bound the check: CRC octets the record
+ * carries past them are not the packet's, so they are not checked.
+ * Here a Length of 42 puts a correct CRC at octets 48..50 of a
+ * 51-octet record. Seen to fail: with `seen` set to `len` (the cap
+ * dropped) in btle_ll_parse(), crc reads OK. */
+static void test_crc_past_the_capture_limit_is_unchecked(void) {
+    uint8_t pl[42], b[6 + 42 + 3];
+    memset(pl, 0x33, sizeof(pl));
+    int n = le_pkt(b, BTLE_ADV_AA, BTLE_ADV_EXT_IND, 0, 0, 42, pl, 42, 1);
+    ASSERT_EQ(n, 51);
+    btle_pkt_t p;
+    ASSERT_EQ((int)btle_ll_parse(b, (size_t)n, &p), (int)BTLE_V_EXT_ADV);
+    ASSERT_EQ(p.crc, BTLE_CRC_UNCHECKED);
+    /* Length 41 ends the CRC at octet 50 exactly: checked. */
+    n = le_pkt(b, BTLE_ADV_AA, BTLE_ADV_EXT_IND, 0, 0, 41, pl, 41, 1);
+    ASSERT_EQ(n, 50);
+    ASSERT_EQ((int)btle_ll_parse(b, (size_t)n, &p), (int)BTLE_V_EXT_ADV);
+    ASSERT_EQ(p.crc, BTLE_CRC_OK);
+    b[n - 1] ^= 1;
+    ASSERT_EQ((int)btle_ll_parse(b, (size_t)n, &p), (int)BTLE_V_CRC_BAD);
+}
+
+/* PPI around 251 carries the CRC octets too (libbtbb
+ * lell_pcap_append_ppi_packet: AA + header + payload + CRC), so the
+ * same check holds. Seen to fail with the memcmp() test passing all. */
+static void test_ppi_record_crc_is_checked(void) {
+    uint8_t pl[40], b[80];
+    int pn = adv_payload(pl);
+    b[0] = 0; b[1] = 0; put16(b + 2, 8); put32(b + 4, BTLE_DLT_LL);
+    int n = 8 + le_pkt(b + 8, BTLE_ADV_AA, BTLE_ADV_IND, 1, 0, (uint8_t)pn, pl, pn, 1);
+    btle_pkt_t p;
+    ASSERT_EQ((int)btle_ppi_record_parse(b, (size_t)n, &p), (int)BTLE_V_ADV);
+    ASSERT_EQ(p.crc, BTLE_CRC_OK);
+    b[8 + 6 + 3] ^= 0x10;
+    ASSERT_EQ((int)btle_ppi_record_parse(b, (size_t)n, &p), (int)BTLE_V_CRC_BAD);
+    ASSERT_EQ(p.has_adva, 0);
+}
+
 static void test_ppi_wrapped_le_ll_decodes_without_channel(void) {
     uint8_t pl[40], b[80];
     int pn = adv_payload(pl);
@@ -735,9 +989,12 @@ static void test_stream_records_pass_the_edge_gate(void) {
     ASSERT_EQ((int)sh_parse_fault_count(SH_PF_FRAME_EDGE), 2);
 }
 
-/* Every record lands in exactly one bucket, and they sum to recv.
- * Seen to fail: counting an AdvA-less advertisement as `adv` instead of
- * a drop turns the adv and drop assertions red. */
+/* Every record lands in exactly one bucket, and they sum to recv; every
+ * record on the advertising Access Address is in exactly one of the
+ * three CRC counts. Seen to fail: counting an AdvA-less advertisement
+ * as `adv` instead of a drop turns the adv and drop assertions red;
+ * counting a failed CRC in drop as well as crc_bad turns the drop and
+ * sum assertions red. */
 static void test_stream_buckets_sum_to_recv(void) {
     bt_stream_configure();
     uint8_t pl[40], b[80];
@@ -752,12 +1009,20 @@ static void test_stream_buckets_sum_to_recv(void) {
     bt_stream_record(256, b, (size_t)(h + le_pkt(b + h, BTLE_ADV_AA, BTLE_AUX_CONNECT_RSP, 0, 0, 14, pl, 14, 0)), TS, 1);
     bt_stream_record(256, b, (size_t)(h + le_pkt(b + h, BTLE_ADV_AA, BTLE_ADV_IND, 0, 0, 3, pl, 3, 0)), TS, 1);
     bt_stream_record(256, b, (size_t)(h + le_pkt(b + h, BTLE_ADV_AA, BTLE_ADV_IND, 0, 0, 30, pl, 2, 0)), TS, 1);
+    int k = h + le_pkt(b + h, BTLE_ADV_AA, BTLE_SCAN_REQ, 0, 0, 12, pl, 12, 1);
+    b[k - 1] ^= 0x01;                                    /* failed CRC */
+    bt_stream_record(256, b, (size_t)k, TS, 1);
     bt_stream_record(255, b, 4, TS, 1);
     bt_stream_record(77, b, 30, TS, 1);
     bt_stream_snapshot(&g_s);
     const bt_capture_health_t *c = &g_s.btcap;
-    ASSERT_EQ((int)c->recv, 9);
+    ASSERT_EQ((int)c->recv, 10);
     ASSERT_EQ((int)c->scan_req, 1);
+    ASSERT_EQ((int)c->crc_bad, 1);
+    ASSERT_EQ((int)c->crc_ok, 1);        /* the first SCAN_REQ */
+    /* CONNECT_IND, ADV_EXT_IND, AUX_CONNECT_RSP and the two ADV_INDs:
+     * none carries its CRC octets. The data-channel one is in none. */
+    ASSERT_EQ((int)c->crc_unchecked, 5);
     ASSERT_EQ((int)c->connect_ind, 1);
     ASSERT_EQ((int)c->ext_adv, 1);
     ASSERT_EQ((int)c->data_pdus, 1);
@@ -767,8 +1032,9 @@ static void test_stream_buckets_sum_to_recv(void) {
      * short BR/EDR header and the unknown link type. */
     ASSERT_EQ((int)c->drop, 4);
     ASSERT_EQ((int)c->truncated, 1);
-    ASSERT_EQ((int)(c->drop + c->adv + c->scan_req + c->connect_ind +
-                    c->ext_adv + c->data_pdus + c->other + c->bredr),
+    ASSERT_EQ((int)(c->drop + c->crc_bad + c->adv + c->scan_req +
+                    c->connect_ind + c->ext_adv + c->data_pdus + c->other +
+                    c->bredr),
               (int)c->recv);
 }
 
@@ -1038,6 +1304,53 @@ static void test_sensor_health_carries_the_stream_bucketed(void) {
     }
     unlink(g_tmp);
     sloth_clock_test_set(NULL, NULL);
+}
+
+/* JSONL 2.7.0: the CRC counters ride the line, and only the first
+ * failed CRC is a line of its own. Seen to fail: with
+ * `sig.btcap_crc_bad_any` set from the raw crc_bad count, the second
+ * bad record writes a third line; with it removed from the signature,
+ * the first bad record writes none (one line). */
+static void test_sensor_health_carries_the_crc_counts_bucketed(void) {
+    g_wall = 1800000000;
+    sloth_clock_test_set(NULL, pinned_wall);
+    ASSERT(open_tmp_jsonl());
+    memset(&g_s, 0, sizeof(g_s));
+    bt_stream_clear();
+    bt_stream_configure();
+    bt_stream_init(&g_st);
+    uint8_t r[64];
+    int rn = rec_adv_ind(r, 0, -70, BTLE_PHDR_SIGNAL_VALID);
+    int n = file_hdr(g_file, BTLE_DLT_LL_PHDR);
+    n += file_rec(g_file + n, TS, r, (uint32_t)rn, (uint32_t)rn);
+    bt_stream_feed(&g_st, g_file, (size_t)n, g_wall);
+    snap_emit();                                            /* 1 */
+    r[rn - 2] ^= 0x20;                                      /* CRC bit */
+    n = file_rec(g_file, TS + 1, r, (uint32_t)rn, (uint32_t)rn);
+    bt_stream_feed(&g_st, g_file, (size_t)n, g_wall);
+    snap_emit();                                            /* 2: first bad CRC */
+    bt_stream_feed(&g_st, g_file, (size_t)n, g_wall);
+    snap_emit();                                            /* suppressed */
+    n = file_rec(g_file, TS + 2, r, (uint32_t)rn - 3, (uint32_t)rn);
+    bt_stream_feed(&g_st, g_file, (size_t)n, g_wall);
+    snap_emit();                                            /* suppressed: unchecked */
+    jsonl_close();
+    char *b = slurp_tmp();
+    ASSERT(b != NULL);
+    if (b) {
+        ASSERT_EQ(count_lines(b), 2);
+        ASSERT(strstr(b, "\"btcap_crc_bad\":0,\"btcap_crc_ok\":1,"
+                         "\"btcap_crc_unchecked\":0") != NULL);
+        ASSERT(strstr(b, "\"btcap_crc_bad\":1,\"btcap_crc_ok\":1,"
+                         "\"btcap_crc_unchecked\":0") != NULL);
+        /* Appended after the LAP count, the old block unchanged. */
+        ASSERT(strstr(b, "\"btcap_bredr_laps\":0,\"btcap_crc_bad\":") != NULL);
+        ASSERT(strstr(b, "\"btcap_drop\":0,") != NULL);
+        ASSERT(strstr(b, "\"btcap_drop\":1,") == NULL);
+    }
+    unlink(g_tmp);
+    sloth_clock_test_set(NULL, NULL);
+    bt_stream_clear();
 }
 
 static void test_sensor_health_names_a_refused_link_type(void) {
@@ -1380,6 +1693,12 @@ void run_ubertooth_tests(void) {
     RUN_TEST(test_truncated_two_address_pdus_read_only_trusted_fields);
     RUN_TEST(test_ubertooth_capture_limit_bounds_the_trusted_length);
     RUN_TEST(test_data_channel_and_other_pdus_are_not_decoded);
+    RUN_TEST(test_crc24_published_vectors);
+    RUN_TEST(test_crc24_agrees_with_the_clause_at_every_length);
+    RUN_TEST(test_bad_crc_is_refused_before_decoding);
+    RUN_TEST(test_bad_crc_record_is_counted_not_seen);
+    RUN_TEST(test_crc_past_the_capture_limit_is_unchecked);
+    RUN_TEST(test_ppi_record_crc_is_checked);
     RUN_TEST(test_ppi_wrapped_le_ll_decodes_without_channel);
     RUN_TEST(test_bredr_header_decodes_lap_and_labels_reference_uap);
     RUN_TEST(test_bredr_reference_uap_ignored_without_its_flag);
@@ -1399,6 +1718,7 @@ void run_ubertooth_tests(void) {
     RUN_TEST(test_lap_table_evicts_and_tallies);
     RUN_TEST(test_state_names);
     RUN_TEST(test_sensor_health_carries_the_stream_bucketed);
+    RUN_TEST(test_sensor_health_carries_the_crc_counts_bucketed);
     RUN_TEST(test_sensor_health_names_a_refused_link_type);
 #ifdef WITH_PCAP
     RUN_TEST(test_configure_refuses_missing_and_wrong_types);

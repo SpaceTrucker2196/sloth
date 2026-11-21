@@ -34,10 +34,22 @@
  * rest without saying so, and the record itself may be shorter still.
  * So the payload trusted is the smallest of the three, and a record
  * whose claim runs past it is marked `truncated`. Nothing is read past
- * the trusted length: no field, no AD structure, and no CRC — sloth
- * never checks the CRC and never reports one as valid, and ignores the
- * producer's CRC flags, because the octets a CRC covers past the
- * trusted length are not there to have been checked by anyone. */
+ * the trusted length: no field and no AD structure.
+ *
+ * ── CRC ──
+ *
+ * ubertooth-btle -n (2020-12-R1 tools and firmware) never checks the
+ * CRC: its firmware's -n path does not read le.crc_verify, and libbtbb's
+ * pcap writers set neither CRC-checked nor CRC-passed. They do write the
+ * 3 CRC octets after the payload. So sloth checks it (owner decision
+ * 2026-11-20): a packet on the advertising Access Address whose CRC
+ * octets all lie inside both the record and the Ubertooth's 50 octets is
+ * checked against the CRC-24 of §3.1.1 over header + payload with the
+ * advertising CRCInit 0x555555, and a mismatch is BTLE_V_CRC_BAD with
+ * nothing decoded from it. A record that ends before its CRC octets is
+ * decoded under the trusted-length rules and marked BTLE_CRC_UNCHECKED.
+ * Data-channel PDUs are not checked: their CRCInit is per connection.
+ * The producer's CRC flags are still ignored. */
 
 #define BTLE_DLT_LL_PHDR   256
 #define BTLE_DLT_LL        251
@@ -47,6 +59,8 @@
 #define BTLE_AA_LEN        4
 #define BTLE_PDU_HDR_LEN   2
 #define BTLE_ADV_AA        0x8E89BED6u   /* Vol 6 Part B §2.1.2 */
+#define BTLE_CRC_LEN       3
+#define BTLE_ADV_CRC_INIT  0x555555u     /* Vol 6 Part B §3.1.1 */
 /* Octets of an LE packet, from the Access Address, that an Ubertooth
  * delivers per packet: its 50-octet DMA buffer. */
 #define UBT_LE_PACKET_MAX  50
@@ -71,8 +85,18 @@ typedef enum {
     BTLE_V_CONNECT_IND,
     BTLE_V_EXT_ADV,        /* ADV_EXT_IND: counted, not decoded */
     BTLE_V_DATA,           /* not the advertising Access Address: not decoded */
-    BTLE_V_OTHER           /* AUX_CONNECT_RSP, reserved types */
+    BTLE_V_OTHER,          /* AUX_CONNECT_RSP, reserved types */
+    BTLE_V_CRC_BAD         /* advertising AA, CRC present and wrong: not decoded */
 } btle_verdict_t;
+
+/* What became of an advertising packet's CRC. NONE for anything not
+ * on the advertising Access Address (or too short to say). */
+enum {
+    BTLE_CRC_NONE = 0,
+    BTLE_CRC_UNCHECKED,    /* the record ends before its CRC octets */
+    BTLE_CRC_OK,
+    BTLE_CRC_BAD
+};
 
 /* CONNECT_IND LLData, Vol 6 Part B §2.3.3.1. */
 typedef struct {
@@ -101,6 +125,7 @@ typedef struct {
     uint8_t  len_claimed;      /* PDU header Length */
     uint8_t  len_trusted;      /* payload octets read: <= claimed */
     uint8_t  truncated;        /* len_trusted < len_claimed */
+    uint8_t  crc;              /* BTLE_CRC_* */
     uint8_t  has_adva;
     uint8_t  adva[6];          /* as transmitted, LSO first */
     uint8_t  has_peer;         /* TargetA (DIRECT), ScanA (SCAN_REQ), InitA (CONNECT_IND) */
@@ -115,6 +140,16 @@ typedef struct {
  * RF 0 → 37, RF 12 → 38, RF 39 → 39, the rest are data channels 0..36
  * in frequency order. -1 outside 0..39. */
 int btle_rf_to_index(int rf);
+
+/* The CRC-24 of Vol 6 Part B §3.1.1 over `n` octets of PDU (header and
+ * payload), from `crc_init` (24 bits, as the CONNECT_IND field or
+ * 0x555555), written to `out` as the 3 octets appear on the air after
+ * the payload: LFSR position 0 holds CRCInit bit 0, PDU bits enter
+ * least significant first, and the CRC goes out from position 23 down,
+ * each octet least significant bit first, so out[0] bit 0 is position
+ * 23. */
+void btle_crc24_air(uint32_t crc_init, const uint8_t *pdu, size_t n,
+                    uint8_t out[BTLE_CRC_LEN]);
 
 /* Decode an LE packet (from the Access Address) of `len` octets.
  * Fills *out (zeroed first) and returns the verdict. */
