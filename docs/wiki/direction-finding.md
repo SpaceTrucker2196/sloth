@@ -236,3 +236,4 @@ Not in
 - [[rf-distance]] — distance from one radio's level, the same caution
 - [[jsonl-schema]] — `df_radio`, `wifi_df`
 - [[cli-reference]] — `--df-iface`, `--df-origin`
+- [[collection-cycle]] — open work: location estimates and the siting check refreshed per hour/week across more than one sensor, sloth-mesh #19.

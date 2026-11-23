@@ -672,3 +672,4 @@ Recorded here rather than implied away:
 - [[pcap-export]] — per-alert pcap files and their permissions.
 - [[log]] — the JSONL stream.
 - [[posture-report]] — `--report` output.
+- [[collection-cycle]] — when each sweep and maintenance step runs, beside the other cycles.

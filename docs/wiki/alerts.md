@@ -1370,3 +1370,4 @@ the rule fires on an unfamiliar IP.
 - [[beacon-detection]] — periodicity math.
 - [[pcap-export]] — `--pcap-dir` mechanics.
 - [[attack-map]] — protocol → threat table.
+- [[collection-cycle]] § 2.2 — the finding lifecycle (preliminary, confirmed, withdrawn, expired), proposed in #245.

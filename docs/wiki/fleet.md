@@ -1399,3 +1399,4 @@ page.
 - [[mac-randomisation]] — why I2 leaves a randomised probe address out.
 - [[data-socket-exposure]] — the other network surface and its rules.
 - [[threat-model]]
+- [[collection-cycle]] — open work: siting check and handoff records across more than one sensor, sloth-mesh #19.
