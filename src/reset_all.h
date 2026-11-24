@@ -120,6 +120,7 @@
     X(cov_live_reset) \
     X(cov_iv_reset) \
     X(cov_iv_capture_reset) \
+    X(cov_tl_reset) \
     X(tls_log_clear) \
     X(top_hosts_clear) \
     X(transit_clear) \

@@ -141,6 +141,9 @@ static const struct { cov_status_t st; cov_reason_t why; } gap_order[] = {
     { COV_BLIND,  COV_R_NO_DB },        { COV_BLIND,  COV_R_BAND },
     { COV_PARTLY, COV_R_SOURCE_STALE }, { COV_PARTLY, COV_R_SUPPRESSED },
     { COV_PARTLY, COV_R_FIXED_CHANNEL },{ COV_PARTLY, COV_R_HOP },
+    /* A finding's word (#246) that no rule status carries: listed so the
+     * assertion below still holds every reason, its group always empty. */
+    { COV_PARTLY, COV_R_DROPS },
 };
 SLOTH_STATIC_ASSERT(sizeof(gap_order) / sizeof(*gap_order) == COV_R_COUNT - 1,
                     gap_order_lists_every_reason);

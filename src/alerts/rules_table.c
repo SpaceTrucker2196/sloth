@@ -23,6 +23,7 @@
 #include "engine_internal.h"
 #include "alert_pcap.h"
 #include "evidence_export.h"
+#include "alert_quality_capture.h"
 
 #define R(fn) { #fn, fn }
 
@@ -158,4 +159,5 @@ const alert_rule_table_t g_alert_table_wifi = {
     wifi_forget,
     (int)(sizeof(wifi_forget) / sizeof(wifi_forget[0])),
     &wifi_exporter,
+    aq_capture_evidence,
 };

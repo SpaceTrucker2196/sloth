@@ -264,6 +264,12 @@ CORE_BASE_SRCS += src/rule_coverage_capture.c
 # module) and the capture side's sampler (named by poll.c's wifi table
 # and probe.c only).
 CORE_BASE_SRCS += src/cov_interval.c src/cov_interval_capture.c
+# Quality fields on each finding (#246): the judgement and the dwell
+# and drop history (alert_quality.c, cov_timeline.c; no capture symbol,
+# engine.c and jsonl_core.c name the first), and the reader of the cited
+# frames (alert_quality_capture.c, named by the wifi rule table only, so
+# sloth-rf's link pulls neither it nor the evidence ring).
+CORE_BASE_SRCS += src/alert_quality.c src/cov_timeline.c src/alert_quality_capture.c
 # sloth --preflight (#247): the pure checks and the read-only gatherer,
 # named by src/main.c only, so sloth-rf's link pulls neither.
 CORE_BASE_SRCS += src/preflight.c src/preflight_gather.c

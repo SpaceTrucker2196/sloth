@@ -36,6 +36,15 @@ int posture_render_json(FILE *out, const sloth_state_t *s, time_t session_start)
 void posture_coverage_md  (FILE *out, const sloth_state_t *s);
 void posture_coverage_json(FILE *out, const sloth_state_t *s);
 
+/* The "Finding quality" section (#246, src/posture_coverage.c): one line
+ * per alert, its severity, title (with "(partial: WORD)" when partial;
+ * the alert's title field is never changed), incident id and
+ * alert_quality_line(). Nothing with no alerts. The JSON one is the
+ * member `  "findings": [...]`, a comma and a newline, written before
+ * `coverage`. */
+void posture_findings_md  (FILE *out, const sloth_state_t *s);
+void posture_findings_json(FILE *out, const sloth_state_t *s);
+
 /* ── Reports while the session runs, and one record per session (#190) ──
  *
  * The shutdown write above is the signed-off record and is unchanged.

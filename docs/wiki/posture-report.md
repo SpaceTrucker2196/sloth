@@ -81,11 +81,26 @@ announced as written.
   visit; the status is about the sensor, not the site). Before the
   first status sample, and on a `--replay` run, it reads `Not assessed:`
   with the reason and no count. [[coverage-assessment]] § 8.
+- **Finding quality** (#246), after Collection coverage, only when
+  there are alerts: one line per finding, its severity, its title (with
+  `(partial: WORD)` when partial; the alert's `title` field itself
+  never changes), its incident id, and the four quality fields on one
+  line, `complete partial (hop), latency 1700 ms, corroboration 1
+  radio, source ok`, parts not known left out; `not assessed` when none
+  is known (a `--replay`). [[coverage-assessment]] § 9.
+
+### The JSON report's `findings` member
+
+Before `coverage` (#246): `[{"incident_id","title","sev"[,"complete"]
+[,"complete_why"][,"latency_ms"][,"corroboration"][,"src_state"]}]`,
+one object per alert, the quality keys as the stream writes them and
+absent on the same rules ([[jsonl-schema]], `alert`). `[]` with no
+alerts.
 
 ### The JSON report's `coverage` member
 
-The last member of the object, after `risky_devices`; every earlier
-key keeps its place.
+The last member of the object, after `risky_devices` and `findings`;
+every earlier key keeps its place.
 
 | Key | Content |
 |-----|---------|

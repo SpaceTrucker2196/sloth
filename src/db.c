@@ -36,6 +36,7 @@
 #include "sloth_clock.h"
 #include "tune.h"
 #include "cov_interval.h"
+#include "alert_quality.h"
 
 /* Maintenance is hourly: pruning is a scan over every table, and the
  * thing it defends against (a disk filling over days) does not move
@@ -845,8 +846,9 @@ static const char *const SQL[ST_COUNT] = {
  * is the last to set it. */
 [ST_INCIDENT] =
     "INSERT INTO alert_incidents (key,incident_id,type,first_seen,last_seen,"
-    "sev,peak_sev,count,observations,closed_at,reason)"
-    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
+    "sev,peak_sev,count,observations,closed_at,reason,"
+    "complete,complete_why,latency_ms,corroboration,src_state)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)"
     " ON CONFLICT(key,incident_id) DO UPDATE SET"
     "  first_seen=MIN(alert_incidents.first_seen,excluded.first_seen),"
     "  last_seen=MAX(alert_incidents.last_seen,excluded.last_seen),"
@@ -855,7 +857,22 @@ static const char *const SQL[ST_COUNT] = {
     "  count=MAX(alert_incidents.count,excluded.count),"
     "  observations=MAX(alert_incidents.observations,excluded.observations),"
     "  closed_at=COALESCE(alert_incidents.closed_at,excluded.closed_at),"
-    "  reason=COALESCE(alert_incidents.reason,excluded.reason)",
+    "  reason=COALESCE(alert_incidents.reason,excluded.reason),"
+    /* The quality fields (#246) keep the same order-free property: a
+     * partial stays partial with the word it was first written with,
+     * the latency is set once, the radios only rise, and src_state is
+     * the latest known, like sev. A NULL never clears a value. */
+    "  complete=CASE WHEN alert_incidents.complete='partial'"
+    "    THEN alert_incidents.complete"
+    "    ELSE COALESCE(excluded.complete,alert_incidents.complete) END,"
+    "  complete_why=CASE WHEN alert_incidents.complete='partial'"
+    "    THEN alert_incidents.complete_why"
+    "    ELSE COALESCE(excluded.complete_why,alert_incidents.complete_why) END,"
+    "  latency_ms=COALESCE(alert_incidents.latency_ms,excluded.latency_ms),"
+    "  corroboration=COALESCE(MAX(alert_incidents.corroboration,"
+    "    excluded.corroboration),alert_incidents.corroboration,"
+    "    excluded.corroboration),"
+    "  src_state=COALESCE(excluded.src_state,alert_incidents.src_state)",
 /* The per-key bound (DB_INCIDENTS_PER_KEY): every incident of the key
  * but its newest ?2, newest by start and then by insertion. Both walk
  * idx_alert_incidents_key, so the cost is the key's rows, never the
@@ -1046,6 +1063,7 @@ typedef struct {
     long long count, obs;
     time_t    first, last, closed;   /* closed 0: not closed yet */
     char      reason[24];
+    alert_quality_t q;               /* #246, as of the newest hook call */
 } db_inc_pend_t;
 
 static db_inc_pend_t g_inc_pend[DB_INC_PENDING];
@@ -1054,7 +1072,8 @@ static int           g_inc_pend_n;
 static void bind_incident(sqlite3_stmt *st, const char *key, const char *id,
                           int type, time_t first, time_t last, int sev,
                           int peak, long long count, long long obs,
-                          time_t closed, const char *reason) {
+                          time_t closed, const char *reason,
+                          const alert_quality_t *q) {
     /* first_seen <= last_seen, as write_events() keeps it for alerts. */
     if (last < first) last = first;
     bind_txt(st, 1, key);
@@ -1071,6 +1090,18 @@ static void bind_incident(sqlite3_stmt *st, const char *key, const char *id,
         sqlite3_bind_int64(st, 10, (sqlite3_int64)closed);
         if (reason && reason[0]) bind_txt(st, 11, reason);
     }
+    /* ?12..?16 (#246) stay NULL for what is not known, as the stream
+     * omits them. */
+    if (q) {
+        if (q->complete) {
+            bind_txt(st, 12, aq_complete_name(q->complete));
+            if (q->complete == AQ_COMPLETE_PARTIAL)
+                bind_txt(st, 13, cov_reason_name((cov_reason_t)q->complete_why));
+        }
+        if (q->has_latency) sqlite3_bind_int64(st, 14, (sqlite3_int64)q->latency_ms);
+        if (q->radio_mask)  sqlite3_bind_int(st, 15, aq_corroboration(q));
+        if (q->src_state)   bind_txt(st, 16, aq_src_name(q->src_state));
+    }
 }
 
 /* Write the queue, each incident then its key's bound. Inside the
@@ -1080,7 +1111,7 @@ static void write_incident_queue(void) {
         const db_inc_pend_t *p = &g_inc_pend[i];
         bind_incident(g_st[ST_INCIDENT], p->key, p->id, p->type, p->first,
                       p->last, p->sev, p->peak, p->count, p->obs, p->closed,
-                      p->reason);
+                      p->reason, &p->q);
         step_reset(ST_INCIDENT);
         /* Only an incident the hook saw can be one the file did not
          * have, so this is where a key can pass its bound. */
@@ -1133,6 +1164,7 @@ static void db_incident_hook(const alert_t *a, time_t now, const char *reason) {
     p->first = a->first_detected ? a->first_detected
              : a->first_seen ? a->first_seen : now;
     p->last  = a->last_seen ? a->last_seen : now;
+    p->q     = a->quality;
     if (reason) {
         p->closed = now;
         snprintf(p->reason, sizeof(p->reason), "%s", reason);
@@ -1168,6 +1200,7 @@ static const char *const TABLES_DEVICES[]  = { "devices", NULL };
 static const char *const TABLES_ALERTS[]   = { "alerts", NULL };
 static const char *const TABLES_BEACON_APS[] = { "beacon_aps", NULL };
 static const char *const TABLES_VICTRON_READINGS[] = { "victron_readings", NULL };
+static const char *const TABLES_ALERT_INCIDENTS[] = { "alert_incidents", NULL };
 
 static const db_step_t g_steps[] = {
     { 1, db_schema_migrate_v1_sql, TABLES_PROBE_CLIENTS,
@@ -1211,6 +1244,9 @@ static const db_step_t g_steps[] = {
       "random_devices_daily created (#239)" },
     { 17, db_schema_migrate_v17_sql, TABLES_NONE,
       "coverage_intervals created (#242)" },
+    { 18, db_schema_migrate_v18_sql, TABLES_ALERT_INCIDENTS,
+      "alert_incidents gained complete, complete_why, latency_ms,"
+      " corroboration and src_state (#246)" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
@@ -2513,7 +2549,7 @@ static void write_events(const sloth_state_t *s, time_t now) {
                           : a->first_seen ? a->first_seen : now,
                       a->last_seen ? a->last_seen : now, (int)a->sev,
                       (int)a->sev, a->count, (long long)a->observations, 0,
-                      NULL);
+                      NULL, &a->quality);
         step_reset(ST_INCIDENT);
     }
 

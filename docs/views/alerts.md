@@ -364,6 +364,21 @@ gps.max_fix_age_s)` when neither source had one as it opened. The
 stamp is taken once and not refreshed while the incident stays open.
 See [location](../wiki/location.md).
 
+**Quality** (#246). Enter's detail panel carries one line on how the
+finding's evidence was observed, and a partial finding says so on its
+title line:
+
+```
+  WARN  EVIL_TWIN (partial: hop)
+  ...
+  Quality:    complete partial (hop), latency 1700 ms, corroboration 1 radio, source ok
+```
+
+Parts not known are left out; `(not assessed)` when none is (a
+`--replay`). The tag is the panel's: the alert's title, in the stream
+and in sloth.db, stays the rule name. What each field means:
+[coverage-assessment](../wiki/coverage-assessment.md) § 9.
+
 ## Keybindings
 
 `↑`/`↓` navigate. `c` clears all alerts and their pcap-dumped state

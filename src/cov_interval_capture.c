@@ -2,6 +2,8 @@
 #include "cov_interval_capture.h"
 #include "mon_radios.h"
 #include "capture/probe.h"
+#include "cov_timeline.h"
+#include "sloth_clock.h"
 
 /* The capture side of the per-interval coverage record (#242 item 2).
  * Contract: cov_interval_capture.h. Main thread only. */
@@ -148,6 +150,11 @@ void cov_iv_capture_poll(const sloth_state_t *s, time_t wall, uint64_t mono_ms) 
         g.started = 0;
         return;
     }
+    /* The monitor handle's drop total each tick (#246): a finding whose
+     * cited frames span a tick in which it rose was not seen whole
+     * (src/cov_timeline.h). Only while pcap_stats() is answering. */
+    if (stats_ok(&s->mon_health))
+        cov_tl_drops_note(sloth_wall_ms(), s->mon_health.ps_drop + s->mon_health.ps_ifdrop);
     if (!g.started) {
         sample_radios(s, mono_ms, 0, 0);
         take_baselines(s);

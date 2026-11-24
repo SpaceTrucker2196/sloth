@@ -8,6 +8,7 @@
 #include "views/view_page.h"
 #include "views/alerts.h"
 #include "../alerts.h"
+#include "alert_quality.h"
 #include "filter.h"
 #include "geo.h"
 #include "ip_owner.h"
@@ -101,7 +102,12 @@ static void draw_alert_detail(const sloth_state_t *s) {
     /* Title bar coloured to match the cross-panel CP_ALERT_HOT_* tier
      * so the operator sees the same hue here as on the flagged IP. */
     tui_heat(sev_heat(a->sev));
-    TPRINT("  %s  %s\n", sev_label(a->sev), a->title);
+    /* A partial finding says so in its title line (#246). Here, where a
+     * person reads it, and never in a->title: that is the rule name, the
+     * finding's identity in the stream and in sloth.db. */
+    char qtag[48];
+    TPRINT("  %s  %s%s\n", sev_label(a->sev), a->title,
+           alert_quality_title_tag(&a->quality, qtag, sizeof(qtag)));
 
     tui_dim();   TPRINT("  Key:        "); tui_normal(); TPRINT("%s\n", a->key);
     tui_dim();   TPRINT("  Hits:       "); tui_bright(); TPRINT("%d\n", a->count);
@@ -147,6 +153,16 @@ static void draw_alert_detail(const sloth_state_t *s) {
     if (a->technique[0]) {
         tui_dim();   TPRINT("  ATT&CK:     "); tui_bright();
         TPRINT("%s\n", a->technique);
+    }
+    /* How the evidence was observed (#246), on one line: complete,
+     * latency, corroboration, source. Absent parts are left out, and a
+     * finding nothing was assessed for (a --replay) says so. */
+    char ql[160];
+    tui_dim();   TPRINT("  Quality:    ");
+    if (alert_quality_line(&a->quality, ql, sizeof(ql)) > 0) {
+        tui_normal(); TPRINT("%s\n", ql);
+    } else {
+        TPRINT("(not assessed)\n");
     }
     /* Where the sensor was as this incident opened (--location / --gps,
      * 2026-10-27). Shown whenever either flag is given, so an unstamped

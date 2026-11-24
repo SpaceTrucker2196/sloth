@@ -1,6 +1,8 @@
 #include "wifi_chanhop.h"
 #include <errno.h>
 #include <string.h>
+#include "cov_timeline.h"
+#include "sloth_clock.h"
 
 /* Safe default channel list: the three non-overlapping 2.4 GHz channels
  * plus the common UNII-1 / UNII-3 5 GHz channels. Deliberately conservative
@@ -329,6 +331,9 @@ void chanhop_service(chanhop_t *h, sloth_state_t *s, uint64_t now_ms,
     if (!h || !s) return;
     int requested = 0, err = 0;
     if (chanhop_step(h, s->probe_iface, now_ms, mon_frames, &requested, &err)) {
+        /* Radio 0's dwell history (#246, src/cov_timeline.h): where it
+         * sat, from when, on the clock frame capture times are on. */
+        if (!err) cov_tl_hop_note(0, chanhop_current_freq(h), sloth_wall_ms());
         chanhop_record_retune_err(requested, err, &s->chan_requested,
                                   &s->chan_confirmed, &s->chan_retune_failures,
                                   &s->chan_retune_last_errno);

@@ -48,4 +48,7 @@ const alert_rule_table_t g_alert_table_rf = {
     rf_forget,
     (int)(sizeof(rf_forget) / sizeof(rf_forget[0])),
     NULL,
+    /* No evidence ring either: a finding here carries complete and
+     * src_state, never latency or corroboration (#246). */
+    NULL,
 };

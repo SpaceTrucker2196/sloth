@@ -130,6 +130,9 @@ static int render_md(FILE *out, const sloth_state_t *s,
     /* What the alerts above could and could not have seen (#242 item
      * 3): beside the summary, so an empty table is read against it. */
     posture_coverage_md(out, s);
+    /* Each finding's quality fields on one line (#246), read beside the
+     * coverage above. */
+    posture_findings_md(out, s);
 
     /* Cleartext credential exposures */
     if (s->cleartext_cred_count > 0) {
@@ -559,6 +562,8 @@ static int render_json(FILE *out, const sloth_state_t *s,
     /* Appended after every member that existed before it (#242 item 3),
      * so a consumer reading the earlier keys in order is unaffected. */
     fprintf(out, "],\n");
+    /* #246: before `coverage`, which stays the last member. */
+    posture_findings_json(out, s);
     posture_coverage_json(out, s);
     fprintf(out, "}\n");
     return 1;

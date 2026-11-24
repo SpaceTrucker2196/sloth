@@ -193,6 +193,15 @@ uint64_t evidence_ring_note(const uint8_t *frame,
                             uint32_t cap_len, uint32_t orig_len,
                             time_t ts_sec, long ts_usec,
                             uint16_t freq_mhz, int8_t signal_dbm) {
+    return evidence_ring_note_radio(frame, cap_len, orig_len, ts_sec, ts_usec,
+                                    freq_mhz, signal_dbm, 0);
+}
+
+uint64_t evidence_ring_note_radio(const uint8_t *frame,
+                                  uint32_t cap_len, uint32_t orig_len,
+                                  time_t ts_sec, long ts_usec,
+                                  uint16_t freq_mhz, int8_t signal_dbm,
+                                  int radio) {
     if (!frame || cap_len == 0) return 0;
 
     pthread_mutex_lock(&g_mu);
@@ -226,6 +235,7 @@ uint64_t evidence_ring_note(const uint8_t *frame,
     sl->rec.cap_len        = (uint32_t)store;
     sl->rec.freq_mhz       = freq_mhz;
     sl->rec.signal_dbm     = signal_dbm;
+    sl->rec.radio          = (uint8_t)(radio >= 0 && radio < 256 ? radio : 0);
     /* Short of what libpcap handed over (this ring's own cap bit) OR
      * short of the length the capture reports (the kernel snapped it).
      * Either way the record is not provably the whole frame; the flag

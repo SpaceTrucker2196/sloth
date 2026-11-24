@@ -17,6 +17,7 @@
 #include <pthread.h>
 
 #include "runner.h"
+#include "alert_quality.h"
 #include "sloth.h"
 #include "db.h"
 #include "presence.h"
@@ -3812,7 +3813,8 @@ static void test_v10_file_migrates_additively(void) {
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
                     " AND name IN ('idx_alert_incidents_key',"
                     "'idx_alert_incidents_last_seen')"), 2);
-    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alert_incidents')"), 11);
+    /* Eleven from v11, five more from v19 (#246). */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alert_incidents')"), 16);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"), 0);
     db_close();
     ASSERT_EQ(db_open(db_path), 1);
@@ -4156,6 +4158,18 @@ static void test_v13_migration_failure_leaves_file_unchanged(void) {
     unlink(db_path);
 }
 
+/* A current file's alert_incidents put back at its pre-v19 shape (#246):
+ * the five quality columns dropped, since the unconditional schema
+ * writes them and the v18 -> v19 ALTER would meet a duplicate column.
+ * Every fixture of a version before 19 that starts from a current file
+ * runs it. */
+#define PRE_V19_INCIDENTS_SQL \
+    "ALTER TABLE alert_incidents DROP COLUMN complete;" \
+    "ALTER TABLE alert_incidents DROP COLUMN complete_why;" \
+    "ALTER TABLE alert_incidents DROP COLUMN latency_ms;" \
+    "ALTER TABLE alert_incidents DROP COLUMN corroboration;" \
+    "ALTER TABLE alert_incidents DROP COLUMN src_state;"
+
 /* ── Schema v15: the Victron tables ────────────────────────────── */
 
 /* A v14 file: a current file with the two Victron tables (and their
@@ -4169,6 +4183,7 @@ static void write_v14_file(void) {
     ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
     ASSERT_EQ(sqlite3_exec(h,
         "DROP TABLE victron_devices; DROP TABLE victron_readings;"
+        PRE_V19_INCIDENTS_SQL
         "INSERT INTO alerts (key,type,sev,title,count,first_seen,last_seen)"
         " VALUES ('v14-key',1,1,'v14-row',7,1600000000,1600000100);"
         "UPDATE meta SET value='14' WHERE key='schema_version';",
@@ -4241,6 +4256,7 @@ static void write_v15_file(void) {
     ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
     ASSERT_EQ(sqlite3_exec(h,
         "DROP TABLE victron_readings;"
+        PRE_V19_INCIDENTS_SQL
         "CREATE TABLE victron_readings (last_seen INTEGER NOT NULL,"
         " mac TEXT NOT NULL, src TEXT NOT NULL, rssi INTEGER,"
         " voltage_v REAL, aux_voltage_v REAL, mid_voltage_v REAL,"
@@ -4315,6 +4331,7 @@ static void write_v16_file(void) {
     ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
     ASSERT_EQ(sqlite3_exec(h,
         "DROP TABLE random_devices_daily;"
+        PRE_V19_INCIDENTS_SQL
         "INSERT INTO devices (mac,first_seen,last_seen,sources)"
         " VALUES ('02:00:00:00:00:01',1600000000,1600000000,16);"
         "UPDATE meta SET value='16' WHERE key='schema_version';",
@@ -4386,6 +4403,7 @@ static void write_v17_file(void) {
     ASSERT_EQ(sqlite3_exec(h,
         "DROP INDEX idx_coverage_intervals_last_seen;"
         "DROP TABLE coverage_intervals;"
+        PRE_V19_INCIDENTS_SQL
         "INSERT INTO devices (mac,first_seen,last_seen,sources)"
         " VALUES ('00:11:22:00:00:01',1600000000,1600000100,16);"
         "INSERT INTO random_devices_daily (day,sources,count,first_seen,last_seen)"
@@ -4454,6 +4472,91 @@ static void test_v17_migration_failure_leaves_file_unchanged(void) {
                     "'idx_coverage_intervals_last_seen')"), 0);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), 1);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM random_devices_daily"), 1);
+    unlink(db_path);
+}
+
+/* ── Schema v19: alert_incidents' quality columns (#246) ─────────── */
+
+#define V19_COLS_IN \
+    " WHERE name IN ('complete','complete_why','latency_ms'," \
+    "'corroboration','src_state')"
+
+/* A v18 file: a current file whose alert_incidents is put back at its
+ * v18 shape, exactly a v18 file, since v18 -> v19 touches no other
+ * table. One incident row, closed, rides along. */
+static void write_v18_file(void) {
+    fresh_db();
+    db_close();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        PRE_V19_INCIDENTS_SQL
+        "INSERT INTO alert_incidents (key,incident_id,type,first_seen,"
+        "last_seen,sev,peak_sev,count,observations,closed_at,reason)"
+        " VALUES ('v18-key','00000000000000b1',18,1600000000,1600000100,"
+        "1,2,40,3,1600000400,'expired');"
+        "UPDATE meta SET value='18' WHERE key='schema_version';",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+}
+
+/* v18 -> v19: the five columns are added, NULL on the incident that was
+ * there (it was never assessed, and NULL says so), and its own values
+ * read as they were. The { 18, ... } step removed from g_steps[], the
+ * static chain check refuses the build; with MIGRATE_V18_SQL emptied
+ * db_open() fails here (seen red): the unconditional schema's CREATE
+ * TABLE IF NOT EXISTS adds no column to a table that exists, and the
+ * incident upsert names the five. */
+static void test_v18_file_migrates_additively(void) {
+    write_v18_file();
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alert_incidents')"
+                    V19_COLS_IN), 0);
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, DB_VER_STR);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alert_incidents')"
+                    V19_COLS_IN), 5);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents WHERE key='v18-key'"
+                    " AND complete IS NULL AND complete_why IS NULL"
+                    " AND latency_ms IS NULL AND corroboration IS NULL"
+                    " AND src_state IS NULL"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents WHERE key='v18-key'"
+                    " AND incident_id='00000000000000b1' AND type=18"
+                    " AND first_seen=1600000000 AND last_seen=1600000100"
+                    " AND sev=1 AND peak_sev=2 AND count=40 AND observations=3"
+                    " AND closed_at=1600000400 AND reason='expired'"), 1);
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v18 file whose stamp cannot be written stays v18 with none of the
+ * five columns: the ALTERs and the stamp are one transaction. Seen red
+ * with migrate_step() running the step's SQL before its BEGIN IMMEDIATE
+ * (the columns stayed beside a v18 stamp). Not red with migrate_step()'s
+ * return ignored in migrate_from(), as the v16 and v17 tests are: the
+ * rolled-back ALTERs leave the incident upsert naming columns the file
+ * lacks, so db_open() fails at the statements all the same. */
+static void test_v18_migration_failure_leaves_file_unchanged(void) {
+    write_v18_file();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TRIGGER refuse_v19 BEFORE UPDATE ON meta"
+        " WHEN NEW.key='schema_version' AND NEW.value='19'"
+        " BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[32];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "18");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alert_incidents')"
+                    V19_COLS_IN), 0);
+    ASSERT_EQ(q_int("SELECT count FROM alert_incidents WHERE key='v18-key'"), 40);
     unlink(db_path);
 }
 
@@ -4824,6 +4927,88 @@ static void test_incident_peak_between_ticks_is_kept(void) {
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"), 1);
     ASSERT_EQ(q_int("SELECT peak_sev FROM alert_incidents"), ALERT_SEV_CRIT);
     ASSERT_EQ(q_int("SELECT sev FROM alert_incidents"), ALERT_SEV_LOW);
+    sloth_clock_test_set(NULL, NULL);
+    alerts_clear();
+    db_close();
+    unlink(db_path);
+}
+
+/* The quality columns (#246): NULL while nothing is known, the values
+ * as the engine stamped them, and the upsert as order-free as the rest
+ * of the row: a partial stays partial with its first word, the latency
+ * is set once, corroboration only rises, and a NULL never clears a
+ * value. Each write is the tick's snapshot of a hand-built incident.
+ * Seen red with ST_INCIDENT's complete taking excluded.complete (the
+ * fourth write's 'full' replaced 'partial'), with bind_incident()'s
+ * quality binds removed (every column NULL), and with latency_ms bound
+ * whatever has_latency says (0 on the first write, not NULL). */
+static void set_inc_q(alert_t *a, int complete, int why, int mask,
+                      int has_lat, uint32_t lat, int src) {
+    a->quality.complete     = (uint8_t)complete;
+    a->quality.complete_why = (uint8_t)why;
+    a->quality.radio_mask   = (uint8_t)mask;
+    a->quality.has_latency  = (uint8_t)has_lat;
+    a->quality.latency_ms   = lat;
+    a->quality.src_state    = (uint8_t)src;
+}
+
+static void test_incident_quality_columns(void) {
+    alerts_clear();
+    fresh_db();
+    ch_clock();
+    memset(&g_ch, 0, sizeof(g_ch));
+    alert_t *a = &g_ch.alerts[0];
+    g_ch.alert_count = 1;
+    a->type  = ALERT_TYPE_EVIL_TWIN;
+    a->sev   = ALERT_SEV_WARN;
+    a->count = 1;
+    snprintf(a->key, sizeof(a->key), "%s", INC_KEY);
+    snprintf(a->incident_id, sizeof(a->incident_id), "00000000000000c1");
+    snprintf(a->title, sizeof(a->title), "EVIL_TWIN");
+    a->first_seen = a->last_seen = a->first_detected = g_ch_wall;
+
+    db_tick(&g_ch, g_ch_wall);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents WHERE complete IS NULL"
+                    " AND complete_why IS NULL AND latency_ms IS NULL"
+                    " AND corroboration IS NULL AND src_state IS NULL"), 1);
+
+    set_inc_q(a, AQ_COMPLETE_FULL, COV_R_NONE, 0x1, 1, 1500, AQ_SRC_OK);
+    ch_advance(1); a->last_seen = g_ch_wall;
+    db_tick(&g_ch, g_ch_wall);
+    char v[32];
+    q_text("SELECT complete FROM alert_incidents", v, sizeof(v));
+    ASSERT_STR(v, "full");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents WHERE complete_why IS NULL"), 1);
+    ASSERT_EQ(inc_q("latency_ms", 0), 1500);
+    ASSERT_EQ(inc_q("corroboration", 0), 1);
+    q_text("SELECT src_state FROM alert_incidents", v, sizeof(v));
+    ASSERT_STR(v, "ok");
+
+    set_inc_q(a, AQ_COMPLETE_PARTIAL, COV_R_HOP, 0x3, 1, 9999, AQ_SRC_STALE);
+    ch_advance(1); a->last_seen = g_ch_wall;
+    db_tick(&g_ch, g_ch_wall);
+    q_text("SELECT complete FROM alert_incidents", v, sizeof(v));
+    ASSERT_STR(v, "partial");
+    q_text("SELECT complete_why FROM alert_incidents", v, sizeof(v));
+    ASSERT_STR(v, "hop");
+    ASSERT_EQ(inc_q("latency_ms", 0), 1500);           /* set once */
+    ASSERT_EQ(inc_q("corroboration", 0), 2);
+    q_text("SELECT src_state FROM alert_incidents", v, sizeof(v));
+    ASSERT_STR(v, "stale");
+
+    /* An older view of the same incident arriving last. */
+    set_inc_q(a, AQ_COMPLETE_FULL, COV_R_NONE, 0x1, 0, 0, AQ_SRC_NONE);
+    ch_advance(1); a->last_seen = g_ch_wall;
+    db_tick(&g_ch, g_ch_wall);
+    q_text("SELECT complete FROM alert_incidents", v, sizeof(v));
+    ASSERT_STR(v, "partial");
+    q_text("SELECT complete_why FROM alert_incidents", v, sizeof(v));
+    ASSERT_STR(v, "hop");
+    ASSERT_EQ(inc_q("latency_ms", 0), 1500);
+    ASSERT_EQ(inc_q("corroboration", 0), 2);
+    q_text("SELECT src_state FROM alert_incidents", v, sizeof(v));
+    ASSERT_STR(v, "stale");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"), 1);
     sloth_clock_test_set(NULL, NULL);
     alerts_clear();
     db_close();
@@ -5891,6 +6076,7 @@ void run_db_tests(void) {
     RUN_TEST(test_v10_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_incident_rows_keep_each_incidents_figures);
     RUN_TEST(test_incident_peak_between_ticks_is_kept);
+    RUN_TEST(test_incident_quality_columns);
     RUN_TEST(test_incident_evicted_between_ticks_is_recorded);
     RUN_TEST(test_incident_rows_bounded_per_key);
     RUN_TEST(test_incident_close_is_flushed_on_db_close);
@@ -5909,6 +6095,8 @@ void run_db_tests(void) {
     RUN_TEST(test_v16_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_v17_file_migrates_additively);
     RUN_TEST(test_v17_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_v18_file_migrates_additively);
+    RUN_TEST(test_v18_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_coverage_intervals_age_with_observations);
     RUN_TEST(test_victron_columns_match_the_allow_list);
     RUN_TEST(test_victron_tables_written);

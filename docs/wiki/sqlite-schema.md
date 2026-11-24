@@ -1,6 +1,6 @@
 ---
 name: sqlite-schema
-description: The --db SQLite sink — why it exists, the schema and its v1 → v18 migration chain, findings and their per-incident rows, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
+description: The --db SQLite sink — why it exists, the schema and its v1 → v19 migration chain, findings and their per-incident rows, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
 type: reference
 ---
 
@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42, #56, #154, #170 and #239.
 
-**Last updated**: 2026-11-23 (#242 item 2 review: v18 and slothweb's `WEB_SDB_SCHEMA_MAX`, still 17 in sloth-mesh, so the current slothweb refuses a v18 file whole; the deploy order; `radio_ms` and the overflowed channels), 2026-11-23 (#242 item 2: schema v18, `coverage_intervals`, one row per minute of what the monitor radios did, the `coverage_interval` record's figures, on the observation tier; the v17 → v18 step and its two tests); 2026-11-20 (#239, owner ruling of that day: schema v17, `random_devices_daily`, the count per UTC day and `sources` of the random addresses the retention step purges from `devices` after a week, the v16 → v17 step and its two tests; planner statistics: `PRAGMA analysis_limit=400; PRAGMA optimize` in the hourly maintenance, and what `sqlite_stat1` holds, § Planner statistics); 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
+**Last updated**: 2026-11-23 (#246: schema v19, the quality columns of `alert_incidents`, `complete`, `complete_why`, `latency_ms`, `corroboration` and `src_state`, their order-free upsert; the v18 → v19 step and its two tests), 2026-11-23 (#242 item 2 review: v18 and slothweb's `WEB_SDB_SCHEMA_MAX`, still 17 in sloth-mesh, so the current slothweb refuses a v18 file whole; the deploy order; `radio_ms` and the overflowed channels), 2026-11-23 (#242 item 2: schema v18, `coverage_intervals`, one row per minute of what the monitor radios did, the `coverage_interval` record's figures, on the observation tier; the v17 → v18 step and its two tests); 2026-11-20 (#239, owner ruling of that day: schema v17, `random_devices_daily`, the count per UTC day and `sources` of the random addresses the retention step purges from `devices` after a week, the v16 → v17 step and its two tests; planner statistics: `PRAGMA analysis_limit=400; PRAGMA optimize` in the hourly maintenance, and what `sqlite_stat1` holds, § Planner statistics); 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
 in the entity tier and `victron_readings` in the observation tier, at
 most one reading row a minute per device, the stamp-only v14 → v15 step
 and its two tests; slothweb's Victron tab charts `victron_readings`).
@@ -181,14 +181,14 @@ These are what make the file trustworthy rather than merely present.
 | One row per finding; `count` sums incidents, `reopens` counts them | `alerts` | A write continues the key's newest row, so evict-and-refire, a quiet-period reopen and a restart all advance one row (#170). See *Findings and incidents* below. |
 | One row per incident: span widens, `peak_sev`/`count`/`observations` only rise, a close once recorded stays; `sev` the latest | `alert_incidents` | Written each tick from the hook's queue and then from the snapshot, and by a full queue's own flush between ticks. Every column but `sev` comes out the same whatever the order; `sev` is the last write's, and the snapshot, the newest view, is written last (#175). See *Per-incident rows* below. |
 
-## Schema — 54 tables, v1 → v18
+## Schema — 54 tables, v1 → v19
 
-`meta` holds `schema_version`, currently **18**. `db_open()` checks it
+`meta` holds `schema_version`, currently **19**. `db_open()` checks it
 *before* applying the rest of the schema, so a mismatch produces the
 clear version message rather than whatever SQL error the schema happens
-to hit first. Since #154 the chain covers the full **v1 → v18**: any
+to hit first. Since #154 the chain covers the full **v1 → v19**: any
 file this build has ever written opens and migrates forward. Only a
-file from a *newer* build (`schema_version` above 18) is refused.
+file from a *newer* build (`schema_version` above 19) is refused.
 
 **v5** (#90): `karma_candidates.pnl_best`. **v6** (#106 round 2):
 `devices` gains `device_class`, `camera_vendor`, `camera_model`,
@@ -299,6 +299,29 @@ table and index present, the table empty, both rows unchanged) and on
 one whose stamp a trigger refuses
 (`test_v17_migration_failure_leaves_file_unchanged`: it stays v17
 without the table or the index, both rows as they were).
+
+**v19** (2026-11-23, #246, [[coverage-assessment]] § 9): five nullable
+columns on `alert_incidents`, the quality fields of each incident:
+`complete`, `complete_why`, `latency_ms`, `corroboration`,
+`src_state` (*Per-incident rows* below). No other table or value
+changes. Not additive for slothweb either, for the reason v18 gives:
+sloth-mesh's `WEB_SDB_SCHEMA_MAX` has to reach 19, with a contract
+re-pin, and be installed before this sloth is. Its alert page reads
+`alert_incidents` by named column, so the new columns break no query.
+
+**The v18 → v19 migration.** `db_schema_migrate_v18_sql()` is five
+`ALTER TABLE alert_incidents ADD COLUMN`, in the step's one `BEGIN
+IMMEDIATE` transaction with the stamp; the step runs only where
+`alert_incidents` exists (a file older than v11 gets the table, columns
+and all, from the unconditional schema). An existing row keeps NULL in
+all five: nothing assessed it. Tested on a v18 file (a current file
+with the five columns dropped, the stamp set to 18, one closed incident;
+`test_v18_file_migrates_additively`: the five present, NULL on that
+row, its eleven values as they were) and on one whose stamp a trigger
+refuses (`test_v18_migration_failure_leaves_file_unchanged`: it stays
+v18 without the columns). Every older-version fixture that starts from
+a current file drops the five first (`PRE_V19_INCIDENTS_SQL` in
+`tests/test_db.c`), since the ALTER would meet a duplicate column.
 
 **`coverage_intervals`** `(start, last_seen, dur_ms, radio_ms, ms_24,
 ms_5, ms_5dfs, ms_6, ms_unknown, f_beacon, f_probe, f_auth, f_assoc,
@@ -792,6 +815,10 @@ read it).
 | `count` | its evaluations (the engine's `count`), MAX |
 | `observations` | its evidence changes (the engine's `observations`, [[jsonl-schema]]), MAX |
 | `closed_at`, `reason` | its `alert.resolve`: the wall time and the reason (`expired`, `evicted`, `cleared` or a rule's own). NULL while open, and NULL for an incident whose close the file never saw (a sensor stopped mid-incident) |
+| `complete`, `complete_why` | v19 (#246, [[coverage-assessment]] § 9): `full` or `partial`, and beside `partial` its word (`source_down`, `source_stale`, `suppressed`, `drops`, `hop`). Once `partial`, the row stays `partial` with the word first written. NULL while not assessed (a `--replay`, an incident an earlier build wrote) |
+| `latency_ms` | v19: the oldest cited frame to the incident's opening, ms; the first value written is kept. NULL when unknown, never 0 |
+| `corroboration` | v19: the monitor radios that delivered a cited frame, the highest written. NULL with no cited frame held |
+| `src_state` | v19: `ok`, `stale` or `down`, the rule's input at the last write that knew it; a NULL does not clear it |
 
 No `detail` column: the finding's evidence is on the `alerts` row.
 

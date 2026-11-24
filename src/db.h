@@ -134,7 +134,13 @@
  * The v17 -> v18 step creates it and its index (the same DDL the
  * unconditional schema carries) with the stamp in one transaction. No
  * existing table or value changes. */
-#define DB_SCHEMA_VERSION 18
+/* Bumped to 19 on 2026-11-23 (#246): alert_incidents gains the quality
+ * fields of each incident (src/alert_quality.h): complete,
+ * complete_why, latency_ms, corroboration and src_state. The v18 -> v19
+ * step is five ALTER TABLE ADD COLUMN, all nullable: an incident an
+ * earlier build recorded was not assessed, and NULL says so. No
+ * existing column or value changes. */
+#define DB_SCHEMA_VERSION 19
 
 /* The random-address purge (#239, owner ruling 2026-11-20). A devices
  * row whose MAC is locally administered, last heard more than
@@ -557,6 +563,9 @@ const char *db_schema_migrate_v16_sql(void);
  * coverage_intervals and its index, the same DDL the unconditional
  * schema carries. */
 const char *db_schema_migrate_v17_sql(void);
+/* v18 -> v19 (#246): ALTER TABLE alert_incidents ADD COLUMN only, the
+ * five quality columns, nullable. */
+const char *db_schema_migrate_v18_sql(void);
 
 /* victron_readings' value column `i` (0 from voltage_v, in the writer's
  * bind order), NULL past the last. From DB_VICTRON_FIRST_ENUM on, an enumeration

@@ -150,6 +150,12 @@ typedef enum {
     COV_R_FIXED_CHANNEL,  /* partly: the radios are not retuned */
     COV_R_HOP,            /* partly: off the channel for part of the evidence */
     COV_R_SUPPRESSED,     /* partly: SENSOR_SUPPRESSED is open on its evidence */
+    /* A finding's word only (#246, src/alert_quality.h): the monitor
+     * handle dropped frames inside the window of the frames a finding
+     * cites. cov_rule_status() never returns it; a rule's status has
+     * SENSOR_SUPPRESSED's drop signal (`suppressed`) for the same loss
+     * at the rule level. */
+    COV_R_DROPS,
     COV_R_COUNT
 } cov_reason_t;
 

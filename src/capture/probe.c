@@ -620,12 +620,14 @@ static void on_radio_frame(int radio, const struct pcap_pkthdr *hdr,
      * fields get it as an argument below — deauth_record() through
      * df.event_id, beacon_record_ev(), auth_observe_ev() and
      * queue_evict_note_session_change_ev(). */
-    const uint64_t ev = evidence_ring_note(
+    /* The radio that brought it rides along (#246): a finding's
+     * corroboration is the count of radios its cited frames came from. */
+    const uint64_t ev = evidence_ring_note_radio(
                              fv.data, (uint32_t)fv.caplen, fv.origlen,
                              fts, (long)fv.ts_usec,
                              (uint16_t)(rt.freq_mhz > 0 && rt.freq_mhz <= 0xFFFF
                                         ? rt.freq_mhz : 0),
-                             signal);
+                             signal, radio);
     fr.event_id = ev;
     fr.band     = (int)band;
 

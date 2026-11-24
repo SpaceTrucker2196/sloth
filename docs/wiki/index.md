@@ -65,7 +65,7 @@ the Wi-Fi it watches:
 - [[retention]] — what `--db` actually deletes, and what nothing deletes.
 - [[collection-cycle]] — how sloth processes data over time, cycle by cycle, and which steps are proposed.
 - [[preflight]] — `sloth --preflight`: check a command line's interfaces, clock, storage, intel pack, sources, host, passive contract and expected rule statuses before a session, starting nothing; exit 0 ready, 1 warnings, 2 not ready (#247).
-- [[coverage-assessment]] — which alert rules can fire in the present configuration: the per-rule input declaration and the observable / partly / blind status (#242; in the stream as `rule_status` and `coverage` since JSONL 2.8.0, and what the radios did each minute as `coverage_interval` and the `coverage_intervals` table since JSONL 2.9.0 / schema v18).
+- [[coverage-assessment]] — which alert rules can fire in the present configuration: the per-rule input declaration and the observable / partly / blind status (#242; in the stream as `rule_status` and `coverage` since JSONL 2.8.0, and what the radios did each minute as `coverage_interval` and the `coverage_intervals` table since JSONL 2.9.0 / schema v18; each finding's quality fields, complete, latency, corroboration and source state, since JSONL 2.10.0 / schema v19, § 9).
 - [[inventory]] — the approved-inventory trust anchor (#89): the only
   evil-twin trust input that does not arrive over the air, its JSON
   format, how it merges with `--my-ssid`/`--my-bssid`, and why `site`

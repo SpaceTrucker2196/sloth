@@ -53,7 +53,7 @@
  * stream's history — the records predate the field by many releases. A
  * `sensor_health` line with no `jsonl_version` is from a stream written
  * before this version and says nothing more than that. */
-#define SLOTH_JSONL_VERSION "2.9.0"
+#define SLOTH_JSONL_VERSION "2.10.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
@@ -990,6 +990,34 @@ typedef struct loc_stamp {
                          * the receiver's UTC); fixed: the stamp time */
 } loc_stamp_t;
 
+/* Quality fields on a finding (#246; src/alert_quality.h computes them,
+ * docs/wiki/coverage-assessment.md § 9 is the reference). Evidence
+ * about how the finding was observed, never an input to it: no rule
+ * reads these, and they move neither when a rule fires nor its sev,
+ * key, title or detail. Every field's zero is "not known", and the
+ * exports then omit it, so a hand-built alert_t says nothing.
+ *
+ *   complete      AQ_COMPLETE_* (0 not assessed, 1 full, 2 partial)
+ *   complete_why  the cov_reason_t word of a partial finding
+ *   src_state     AQ_SRC_* (0 not known, 1 ok, 2 stale, 3 down): the
+ *                 rule's input source at the last evaluation
+ *   radio_mask    bit k: monitor radio k delivered a frame the incident
+ *                 cited; the export writes the count (corroboration)
+ *   has_latency   1 when latency_ms holds a measurement
+ *   latency_ms    the oldest cited frame's capture time to the
+ *                 incident's opening, in ms
+ *
+ * Plain bytes for the reason `inventory` gives: sloth.h includes no
+ * module header from src/. */
+typedef struct {
+    uint8_t  complete;
+    uint8_t  complete_why;
+    uint8_t  src_state;
+    uint8_t  radio_mask;
+    uint8_t  has_latency;
+    uint32_t latency_ms;
+} alert_quality_t;
+
 typedef struct {
     alert_type_t type;
     alert_sev_t  sev;
@@ -1191,6 +1219,12 @@ typedef struct {
      * new stamp. src LOC_SRC_NONE on every rule when neither --location
      * nor a fresh --gps fix exists, and the exports then omit it. */
     loc_stamp_t  loc;
+    /* How this incident's evidence was observed (#246): see
+     * alert_quality_t above. Recomputed on each evaluation in
+     * fire_inv() before any record goes out, except that `complete`
+     * once partial stays partial with its first reason, the radios
+     * accumulate, and the latency is taken once, as the incident opens. */
+    alert_quality_t quality;
 } alert_t;
 
 /* ── ICMP log ───────────────────────────────────────────── */

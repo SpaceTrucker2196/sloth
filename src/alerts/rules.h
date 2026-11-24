@@ -3,6 +3,7 @@
 
 #include <time.h>
 #include "sloth.h"
+#include "alert_quality.h"
 
 /* The ordered rule table (#118).
  *
@@ -68,6 +69,11 @@ typedef struct {
     void               (*const *forget)(void);
     int                        forget_count;
     const alert_exporter_t    *exporter;
+    /* What an incident's cited frames say, for its quality fields
+     * (#246, src/alert_quality.h): the table's for the reason the
+     * exporters are, the evidence ring being capture code. NULL for
+     * none, and a finding then carries no latency or corroboration. */
+    aq_evidence_fn             evidence;
 } alert_rule_table_t;
 
 extern const alert_rule_table_t g_alert_table_wifi;

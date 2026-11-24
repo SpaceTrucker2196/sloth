@@ -1235,7 +1235,9 @@ static void test_coverage_not_assessed_before_a_sample(void) {
     const char *rd = strstr(js, "\"risky_devices\": [");
     const char *cv = strstr(js, "\"coverage\": {");
     ASSERT(rd && cv && rd < cv);
-    ASSERT(contains(js, "\"risky_devices\": [],\n  \"coverage\": {"));
+    /* `findings` (#246) sits between them, `coverage` still last. */
+    ASSERT(contains(js, "\"risky_devices\": [],\n  \"findings\": [],\n"
+                        "  \"coverage\": {"));
     ASSERT(contains(js, "]}\n}\n"));
     cov_end();
 }

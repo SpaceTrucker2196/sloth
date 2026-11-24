@@ -671,6 +671,7 @@ static const alert_rule_t k_r231_rules[] = {
 };
 static const alert_rule_table_t k_r231_table = {
     k_r231_rules, (int)(sizeof(k_r231_rules) / sizeof(k_r231_rules[0])), NULL, 0, NULL,
+    NULL,
 };
 
 TEST_STATE(g_r231);

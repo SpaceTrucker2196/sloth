@@ -106,7 +106,7 @@ const char *cov_reason_name(cov_reason_t r) {
         [COV_R_NO_ROSTER] = "no_roster", [COV_R_NO_DB] = "no_db",
         [COV_R_BAND] = "band", [COV_R_SOURCE_STALE] = "source_stale",
         [COV_R_FIXED_CHANNEL] = "fixed_channel", [COV_R_HOP] = "hop",
-        [COV_R_SUPPRESSED] = "suppressed",
+        [COV_R_SUPPRESSED] = "suppressed", [COV_R_DROPS] = "drops",
     };
     return (int)r >= 0 && r < COV_R_COUNT ? n[r] : "";
 }

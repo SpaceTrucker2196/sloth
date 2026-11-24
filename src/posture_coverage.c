@@ -21,6 +21,7 @@
 #include "rule_coverage_live.h"
 #include "cov_interval.h"
 #include "jsonl_internal.h"
+#include "alert_quality.h"
 
 static void cov_iso(char out[32], time_t t) {
     struct tm tm_buf;
@@ -237,4 +238,70 @@ void posture_coverage_json(FILE *out, const sloth_state_t *s) {
         json_str(out, cov_limits[i]);
     }
     fprintf(out, "]}\n");
+}
+
+/* ── Finding quality (#246) ─────────────────────────────────────── */
+
+static const char *sev_word(alert_sev_t sev) {
+    switch (sev) {
+    case ALERT_SEV_CRIT: return "CRIT";
+    case ALERT_SEV_WARN: return "WARN";
+    case ALERT_SEV_LOW:  return "LOW";
+    default:             return "?";
+    }
+}
+
+/* The incident's figure in the report: the incident id when it has one
+ * (16 hex characters, nothing an operator's input can shape), else "-". */
+static const char *inc_id(const alert_t *a) {
+    return a->incident_id[0] ? a->incident_id : "-";
+}
+
+void posture_findings_md(FILE *out, const sloth_state_t *s) {
+    if (!out || !s || s->alert_count <= 0) return;
+    fprintf(out, "## Finding quality\n\n");
+    fprintf(out, "How each finding's evidence was observed: complete or "
+                 "partial and why, latency, the radios that delivered "
+                 "it, the rule's source (docs/wiki/coverage-assessment.md "
+                 "§ 9). A partial finding is still a finding; the sensor "
+                 "says it saw part of the window.\n\n");
+    for (int i = 0; i < s->alert_count && i < MAX_ALERTS; i++) {
+        const alert_t *a = &s->alerts[i];
+        char tag[48], line[160];
+        alert_quality_title_tag(&a->quality, tag, sizeof(tag));
+        if (alert_quality_line(&a->quality, line, sizeof(line)) <= 0)
+            snprintf(line, sizeof(line), "not assessed");
+        fprintf(out, "- **%s** `%s`%s, incident `%s`: %s\n", sev_word(a->sev),
+                a->title, tag, inc_id(a), line);
+    }
+    fprintf(out, "\n");
+}
+
+void posture_findings_json(FILE *out, const sloth_state_t *s) {
+    if (!out || !s) return;
+    fprintf(out, "  \"findings\": [");
+    for (int i = 0; i < s->alert_count && i < MAX_ALERTS; i++) {
+        const alert_t *a = &s->alerts[i];
+        const alert_quality_t *q = &a->quality;
+        fprintf(out, "%s{\"incident_id\":", i ? "," : "");
+        json_str(out, a->incident_id);
+        fprintf(out, ",\"title\":");
+        json_str(out, a->title);
+        fprintf(out, ",\"sev\":%d", (int)a->sev);
+        /* The stream's keys, each absent while not known. */
+        if (q->complete) {
+            fprintf(out, ",\"complete\":\"%s\"", aq_complete_name(q->complete));
+            if (q->complete == AQ_COMPLETE_PARTIAL)
+                fprintf(out, ",\"complete_why\":\"%s\"",
+                        cov_reason_name((cov_reason_t)q->complete_why));
+        }
+        if (q->has_latency)
+            fprintf(out, ",\"latency_ms\":%lu", (unsigned long)q->latency_ms);
+        if (q->radio_mask)
+            fprintf(out, ",\"corroboration\":%d", aq_corroboration(q));
+        if (q->src_state)
+            fprintf(out, ",\"src_state\":\"%s\"", aq_src_name(q->src_state));
+        fprintf(out, "}");
+    }
+    fprintf(out, "],\n");
 }

@@ -13,6 +13,7 @@
 #include "rule_coverage_live.h"
 #include "cov_interval.h"
 #include "cov_interval_capture.h"
+#include "cov_timeline.h"
 #include "assoc_track.h"
 #include "gps.h"
 #include "position_track.h"

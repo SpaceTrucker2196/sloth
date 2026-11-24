@@ -9,6 +9,8 @@
 
 #include "sloth.h"
 #include "ble_hci.h"
+#include "cov_timeline.h"
+#include "sloth_clock.h"
 
 /* ── Registry ─────────────────────────────────────────────── */
 
@@ -264,6 +266,10 @@ static int deal(chanhop_t *h0) {
         int n = 0;
         if ((m >> k) & 1u) n = chanhop_split(h, &g_full, radios, share++);
         else if (k > 0)    memset(h, 0, sizeof(*h));
+        /* A radio dealt out stops dwelling anywhere (#246): its last
+         * dwell must not go on covering its channel. */
+        if (k > 0 && ((g_dealt >> k) & 1u) && !((m >> k) & 1u))
+            cov_tl_hop_note(k, 0, sloth_wall_ms());
         pthread_mutex_lock(&g_mu);
         if (k < g_n) {
             g_r[k].hop_channels = n;
@@ -320,6 +326,9 @@ int mon_hop_service(chanhop_t *h0, uint64_t now_ms) {
         int requested = 0, err = 0;
         if (!chanhop_step(&g_hop[k], iface, now_ms, delta, &requested, &err))
             continue;
+        /* Radio k's dwell history (#246), as chanhop_service() keeps
+         * radio 0's. */
+        if (!err) cov_tl_hop_note(k, chanhop_current_freq(&g_hop[k]), sloth_wall_ms());
         pthread_mutex_lock(&g_mu);
         chanhop_record_retune_err(requested, err, &g_r[k].chan_requested,
                                   &g_r[k].chan_confirmed,

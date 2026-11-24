@@ -676,6 +676,20 @@ static const char SCHEMA_SQL[] =
     "  observations INTEGER NOT NULL DEFAULT 0,"
     "  closed_at    INTEGER,"
     "  reason       TEXT,"
+    /* Schema v19 (#246, src/alert_quality.h): how the incident's
+     * evidence was observed. `complete` 'full' or 'partial' and, beside
+     * 'partial', `complete_why` (a cov_reason_t word); `latency_ms` the
+     * oldest cited frame to the incident's opening; `corroboration` the
+     * monitor radios that delivered a cited frame; `src_state` 'ok',
+     * 'stale' or 'down', the rule's input at the last write. Each NULL
+     * while not known, never 0 or ''. Listed last and in
+     * MIGRATE_V18_SQL's order, so a migrated v18 file and a fresh v19
+     * file have the same column order. */
+    "  complete      TEXT,"
+    "  complete_why  TEXT,"
+    "  latency_ms    INTEGER,"
+    "  corroboration INTEGER,"
+    "  src_state     TEXT,"
     "  PRIMARY KEY (key, incident_id)"
     ");\n"
     /* A key's incidents in order (the alert page, the per-key bound)
@@ -1277,6 +1291,17 @@ static const char MIGRATE_V16_SQL[] = RANDOM_DEVICES_DAILY_DDL;
  * backfilled: no earlier build measured an interval. */
 static const char MIGRATE_V17_SQL[] = COVERAGE_INTERVALS_DDL;
 
+/* v18 -> v19 (#246, 2026-11-23): the quality fields of each incident,
+ * five nullable columns on alert_incidents. An existing row keeps NULL
+ * in all five: it was written before anything assessed it, which is
+ * what NULL says. Nothing is backfilled. */
+static const char MIGRATE_V18_SQL[] =
+    "ALTER TABLE alert_incidents ADD COLUMN complete TEXT;\n"
+    "ALTER TABLE alert_incidents ADD COLUMN complete_why TEXT;\n"
+    "ALTER TABLE alert_incidents ADD COLUMN latency_ms INTEGER;\n"
+    "ALTER TABLE alert_incidents ADD COLUMN corroboration INTEGER;\n"
+    "ALTER TABLE alert_incidents ADD COLUMN src_state TEXT;\n";
+
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
 int db_schema_version(void)            { return DB_SCHEMA_VERSION; }
@@ -1297,6 +1322,7 @@ const char *db_schema_migrate_v14_sql(void) { return MIGRATE_V14_SQL; }
 const char *db_schema_migrate_v15_sql(void) { return MIGRATE_V15_SQL; }
 const char *db_schema_migrate_v16_sql(void) { return MIGRATE_V16_SQL; }
 const char *db_schema_migrate_v17_sql(void) { return MIGRATE_V17_SQL; }
+const char *db_schema_migrate_v18_sql(void) { return MIGRATE_V18_SQL; }
 
 /* --print-schema (#185 item 4). The statements a new file gets, in the
  * order db_open() applies them, then the version row check_version()

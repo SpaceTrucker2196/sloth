@@ -103,6 +103,10 @@ typedef struct {
     uint16_t freq_mhz;    /* radiotap channel frequency, 0 if absent */
     int8_t   signal_dbm;  /* radiotap antenna signal */
     uint8_t  truncated;   /* 1 = cap_len is short of the whole frame */
+    /* The sensor radio that delivered it (src/mon_radios.h; 0 is the
+     * --monitor-iface radio, and every frame of a one-radio run or a
+     * --replay). A finding's corroboration counts these (#246). */
+    uint8_t  radio;
 } evidence_rec_t;
 
 /* ~1 % of `mem_total_kb`, clamped to [FLOOR, CEIL]. A zero or absurd
@@ -148,6 +152,14 @@ uint64_t evidence_ring_note(const uint8_t *frame,
                             uint32_t cap_len, uint32_t orig_len,
                             time_t ts_sec, long ts_usec,
                             uint16_t freq_mhz, int8_t signal_dbm);
+
+/* The same, naming the sensor radio that delivered the frame (#246).
+ * evidence_ring_note() is this with radio 0. */
+uint64_t evidence_ring_note_radio(const uint8_t *frame,
+                                  uint32_t cap_len, uint32_t orig_len,
+                                  time_t ts_sec, long ts_usec,
+                                  uint16_t freq_mhz, int8_t signal_dbm,
+                                  int radio);
 
 /* Look a record up by event ID — no IP match, no flow, no time window.
  * This is the retrieval path the alert engine is meant to use.

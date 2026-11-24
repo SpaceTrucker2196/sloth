@@ -23,6 +23,7 @@
 #include "formatter.h"
 #include "sensor_health.h"
 #include "intel_pack.h"
+#include "alert_quality.h"
 
 /* The JSONL writer's core (#213): the sink, the change-only cache, the
  * line builders, and the records every daemon writes - alert, the
@@ -410,6 +411,27 @@ void jsonl_intel_pack(char *buf, int *off) {
             intel_pack_version(), intel_pack_hash());
 }
 
+/* The finding's quality fields (#246, src/alert_quality.h), on `alert`
+ * and every `alert.*` record, each omitted while it is not known: an
+ * unassessed finding has no `complete`, a finding that cites no frame
+ * the evidence ring still holds no `latency_ms` and no `corroboration`.
+ * `complete_why` only beside `partial`. Words from fixed tables. */
+static void emit_quality(char *buf, int *off, const alert_t *a) {
+    const alert_quality_t *q = &a->quality;
+    if (q->complete) {
+        kv_str(buf, LINEBUF, off, "complete", aq_complete_name(q->complete));
+        if (q->complete == AQ_COMPLETE_PARTIAL)
+            kv_str(buf, LINEBUF, off, "complete_why",
+                   cov_reason_name((cov_reason_t)q->complete_why));
+    }
+    if (q->has_latency)
+        kv_int(buf, LINEBUF, off, "latency_ms", (long long)q->latency_ms);
+    if (q->radio_mask)
+        kv_int(buf, LINEBUF, off, "corroboration", aq_corroboration(q));
+    if (q->src_state)
+        kv_str(buf, LINEBUF, off, "src_state", aq_src_name(q->src_state));
+}
+
 void jsonl_emit_alert(const alert_t *a) {
     if (!any_sink() || !a) return;
     char  buf[LINEBUF]; int off = 0;
@@ -448,6 +470,7 @@ void jsonl_emit_alert(const alert_t *a) {
     emit_signature(buf, &off, a);
     emit_hw_verdict(buf, &off, a);
     emit_evidence(buf, &off, a);
+    emit_quality(buf, &off, a);
     /* Join key into the lifecycle stream (#98), additive. A consumer
      * that only knows `alert` sees exactly the record it always saw
      * plus one field it can ignore. */
@@ -508,6 +531,7 @@ void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
     emit_signature(buf, &off, a);
     emit_hw_verdict(buf, &off, a);
     emit_evidence(buf, &off, a);
+    emit_quality(buf, &off, a);
     if (a->match_ip[0]) {
         kv_str(buf, LINEBUF, &off, "match_ip", a->match_ip);
         kv_int(buf, LINEBUF, &off, "match_port", (int)a->match_port);

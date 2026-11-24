@@ -513,6 +513,16 @@ static void stamp_hw_verdict(alert_t *a) {
     g_hw_tier = g_hw_device = g_hw_signals = 0;
 }
 
+/* The quality fields (#246, src/alert_quality.h), after the citations
+ * they read and before any record goes out, for the reason the stamps
+ * above give. Every evaluation, so the lifecycle events carry the
+ * current values; `opening` takes the latency. Evidence only: nothing
+ * here reads or changes sev, key, title or detail. */
+static void stamp_quality(alert_t *a, int opening) {
+    alert_quality_stamp(a, opening, sloth_wall_ms(),
+                        g_table ? g_table->evidence : NULL);
+}
+
 void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
               const char *inv_hash, int ap_class, int wired,
               const sloth_tool_sig_t *tool_row,
@@ -584,6 +594,7 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
         stamp_hw_verdict(a);
         stamp_intel(a);
         stamp_evidence(a, ev_ids, ev_n);
+        stamp_quality(a, 0);
 
         if (sev != prev) {
             /* Severity is what a consumer pages on — never throttled,
@@ -651,6 +662,7 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
     stamp_hw_verdict(a);
     stamp_intel(a);
     stamp_evidence(a, ev_ids, ev_n);
+    stamp_quality(a, 1);
     if (match_ip && match_ip[0])
         snprintf(a->match_ip, sizeof(a->match_ip), "%s", match_ip);
     a->match_port = match_port;
