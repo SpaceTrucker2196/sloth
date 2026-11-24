@@ -68,6 +68,7 @@ static void begin(void) {
     sh_evict_reset();
     tune_reset();
     alerts_clear();
+    rules_sensor_reset();
     memset(&g_s, 0, sizeof(g_s));
     g_created = g_resolved = 0;
     g_reason[0] = '\0';
@@ -312,7 +313,11 @@ static void test_evict_absences(void) {
 }
 
 /* The device table is every source's: its loss suppresses the IP
- * rules as well as the 802.11 ones. */
+ * rules as well as the 802.11 ones, and not BLE's. No BLE source is up
+ * here, so BLE_ADV_FLOOD reads blind / no_source whatever the scope and
+ * its status cannot show the BLE bit; the scope itself is asserted. Seen
+ * red with SH_EVICT_DEVICE's scope or-ed with 1u << COV_IN_BLE_ADV in
+ * evict_scope(). */
 static void test_evict_device_table_reaches_both_inputs(void) {
     begin();
     monitor_up();
@@ -324,7 +329,10 @@ static void test_evict_device_table_reaches_both_inputs(void) {
     ASSERT(open_of("suppressed:evict") != NULL);
     ASSERT(status_is(ALERT_TYPE_EVIL_TWIN, COV_PARTLY, COV_R_SUPPRESSED));
     ASSERT(status_is(ALERT_TYPE_THREAT_DOMAIN, COV_PARTLY, COV_R_SUPPRESSED));
-    ASSERT(reason_of(ALERT_TYPE_BLE_ADV_FLOOD) != COV_R_SUPPRESSED);
+    unsigned in = 0, fr = 0;
+    rules_sensor_suppressed(&in, &fr);
+    ASSERT_EQ(in, (1u << COV_IN_DOT11) | (1u << COV_IN_IP));
+    ASSERT_EQ(fr, 0u);
     end();
 }
 
@@ -453,6 +461,48 @@ static void test_silent_channel(void) {
     end();
 }
 
+/* The operator's `c` (alerts_clear()) mid-episode: the incident closes
+ * `cleared`, and the channel stays one this run has heard, so while it
+ * is still silent the signal opens again after the full run of
+ * intervals, not before. The reopen seen red with suppressed_forget()
+ * zeroing the heard channels; the two intervals' absence seen red with
+ * it keeping each channel's run. */
+static void test_silent_survives_a_clear(void) {
+    begin();
+    monitor_up();
+    rates(100, 0, 0, 0);
+    tick();
+    const uint64_t all[3] = { 40, 90, 30 }, six_quiet[3] = { 40, 0, 30 };
+    interval(k_24, all, 3);
+    for (int i = 0; i < 3; i++) interval(k_24, six_quiet, 3);
+    ASSERT(open_of("suppressed:silent") != NULL);
+    ASSERT_EQ(g_created, 1);
+    alerts_clear();
+    ASSERT_EQ(g_resolved, 1);
+    ASSERT_STR(g_reason, "cleared");
+    interval(k_24, six_quiet, 3);
+    interval(k_24, six_quiet, 3);
+    ASSERT(open_of(NULL) == NULL);
+    interval(k_24, six_quiet, 3);
+    ASSERT(open_of("suppressed:silent") != NULL);
+    ASSERT_EQ(g_created, 2);
+    tick();
+    ASSERT(status_is(ALERT_TYPE_EVIL_TWIN, COV_PARTLY, COV_R_SUPPRESSED));
+    end();
+
+    /* A new run (rules_sensor_reset(), the test registry's) starts from
+     * nothing: 2437 heard before it is not heard after. Seen red with
+     * rules_sensor_reset() calling suppressed_forget() instead. */
+    begin();
+    monitor_up();
+    tick();
+    interval(k_24, all, 3);
+    rules_sensor_reset();
+    for (int i = 0; i < 5; i++) interval(k_24, six_quiet, 3);
+    ASSERT(open_of(NULL) == NULL);
+    end();
+}
+
 /* What is not a suppressed channel. Each case seen red under its own
  * mutation of judge_silent_iv():
  *   always empty        `c->heard` dropped from the run's condition;
@@ -556,6 +606,7 @@ void run_sensor_suppressed_tests(void) {
     RUN_TEST(test_capture_drops);
     RUN_TEST(test_drop_absences);
     RUN_TEST(test_silent_channel);
+    RUN_TEST(test_silent_survives_a_clear);
     RUN_TEST(test_silent_absences);
     RUN_TEST(test_replay_never_raises_it);
     RUN_TEST(test_signals_are_separate_incidents);

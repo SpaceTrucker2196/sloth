@@ -1,10 +1,10 @@
 ---
 type: SENSOR_SUPPRESSED
 technique: ""
-rule_file: src/alerts/rules_sensor.c:556 rule_sensor_suppressed()
+rule_file: src/alerts/rules_sensor.c:577 rule_sensor_suppressed()
 count_semantics: per rule evaluation - one fire() per alerts_update() tick per signal whose last one-minute window was over its threshold. Three keys, one per signal (`suppressed:evict`, `suppressed:drop`, `suppressed:silent`); the detail names the worst table, the handle or the channel and the threshold passed, never the minute's own count, so `observations` moves only when what is named changes.
 severity_assessment: agree - WARN. The sensor is still hearing and is losing a share of what it hears; a whole domain gone is SENSOR_SOURCE_DOWN's CRIT. No source gives a loss rate past which the sensor should be called blind.
-false_positive_risk: medium - each threshold is set well above the reference sensor's measured baseline (2026-11-23), not from a source. A segment far busier than Beta-Site's can evict past 600 a minute without anyone attacking it, and a channel whose only transmitters switch off reads as silent; both are the rule saying what it measures, and both still cost the rules evidence.
+false_positive_risk: medium, unmeasured for silent - the eviction and drop thresholds are set well above the reference sensor's measured baseline (2026-11-23), not from a source; the silent-channel run of 3 has no baseline at all (the look's hop_silent_channels 0 counts never-heard channels, which the signal excludes), and a sparse channel heard once early in the run beside a busy one in its band can raise it on a quiet site. A segment far busier than Beta-Site's can evict past 600 a minute without anyone attacking it, and a channel whose only transmitters switch off reads as silent; both are the rule saying what it measures, and both still cost the rules evidence.
 noise_verdict: not measured - written 2026-11-23 with the rule; the baseline is one 115 s look at the live stream, no firing data yet.
 prevalence: not an adversary technique - a state of the sensor's own collection. Its causes include a beacon or probe spray (mdk4, a Flipper or ESP32 spammer), a deauth or RTS flood, a host too slow for the link, and a jammer on one channel; the rule does not tell them apart.
 tuning: --tune suppress.evict_per_min (600), suppress.drop_pct (1), suppress.drop_min (100), suppress.silent_intervals (3)

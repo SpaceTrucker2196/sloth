@@ -10,7 +10,7 @@ by `web/tools/alertkb.c`, never copied by hand).
 step's basis; each section names its own), `docs/wiki/alerts.md` and
 `docs/views/alerts.md` (what each rule fires on).
 
-**Last updated**: 2026-11-23 (#242 item 4: SENSOR_SUPPRESSED). 2026-11-11 (SENSOR_UNDERVOLT, SENSOR_SOURCE_DOWN). 2026-11-11 (#172: PMKID_HARVEST, HANDSHAKE_HARVEST). 2026-11-11 (#187 S2: KARMA_PROBE_FORGE). 2026-11-08 (#186: ADSB_EMERGENCY). 2026-11-03 (#173: FRAG_PLAINTEXT reads the station pair from the view; PM_FORGE's 900 s report window). 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
+**Last updated**: 2026-11-23 (#242 item 4 review: SENSOR_SUPPRESSED on the own-state list). 2026-11-23 (#242 item 4: SENSOR_SUPPRESSED). 2026-11-11 (SENSOR_UNDERVOLT, SENSOR_SOURCE_DOWN). 2026-11-11 (#172: PMKID_HARVEST, HANDSHAKE_HARVEST). 2026-11-11 (#187 S2: KARMA_PROBE_FORGE). 2026-11-08 (#186: ADSB_EMERGENCY). 2026-11-03 (#173: FRAG_PLAINTEXT reads the station pair from the view; PM_FORGE's 900 s report window). 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
 remove" steps made conditional on the premises, as the rest are;
 review: WEAK_TLS aimed at the client
 that offered the old version; every on-device step conditional on the
@@ -42,7 +42,7 @@ Each section has the same four parts:
   `web/tests/test_alertkb.c` fails the build's tests if a section cites
   a document that does not, or a type has no section. The
   own-operational-state types (`NO_MONITOR_MODE`, `BT_OWN_TRANSMIT`,
-  `SENSOR_UNDERVOLT`, `SENSOR_SOURCE_DOWN`) have no corpus document by
+  `SENSOR_UNDERVOLT`, `SENSOR_SOURCE_DOWN`, `SENSOR_SUPPRESSED`) have no corpus document by
   design (`agents/AGENTS.md`, *Detectors cite their sources*) and cite
   sloth's own pages instead.
 

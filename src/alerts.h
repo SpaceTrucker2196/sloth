@@ -633,12 +633,16 @@ int alerts_wps_pbc_concurrent(void);
  * live stream: the busiest synthesis table, frag_sta, evicted 0.70/s
  * (42 a minute; ble_device 0.14/s, ble_flood 0.03/s, every other table
  * 0); both capture handles dropped nothing (capture 3.08M received,
- * monitor 439k, ps_drop and ps_ifdrop 0 lifetime); the hopper reported
- * no silent channel of its 11 (hop_silent_channels 0, about 170 frames
- * a visit). */
+ * monitor 439k, ps_drop and ps_ifdrop 0 lifetime). The silent-channel
+ * run has NO measured baseline: hop_silent_channels (0 then) counts
+ * channels never heard in the run, the population the signal excludes,
+ * and the look was shorter than two intervals. How often a channel
+ * heard once goes quiet for three minutes beside a busy one on a quiet
+ * site is unknown until coverage_interval records from a deployed build
+ * are read (docs/wiki/coverage-assessment.md section 7). */
 #define SUPPRESS_EVICT_PER_MIN_DEFAULT   600  /* one table; ~14x frag_sta's 42 */
 #define SUPPRESS_DROP_PCT_DEFAULT          1  /* of received, over a minute; measured 0 */
 #define SUPPRESS_DROP_MIN_DEFAULT        100  /* drops in that minute, at least */
-#define SUPPRESS_SILENT_INTERVALS_DEFAULT  3  /* consecutive coverage intervals */
+#define SUPPRESS_SILENT_INTERVALS_DEFAULT  3  /* consecutive coverage intervals; unmeasured */
 
 #endif /* ALERTS_H */

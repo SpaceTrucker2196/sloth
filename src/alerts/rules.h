@@ -213,4 +213,8 @@ void rule_sensor_suppressed(const sloth_state_t *s, time_t now);
  * 1u << cov_input_t of each input a signal suppresses, `frames` the
  * COV_F_* classes of an evicting 802.11 table. 0 and 0 with none open. */
 void rules_sensor_suppressed(unsigned *inputs, unsigned *frames);
+/* Everything rules_sensor.c keeps, the channels SENSOR_SUPPRESSED has
+ * heard this run included, which alerts_clear() keeps (the test
+ * registry's, src/reset_all.h: a new run starts from nothing). */
+void rules_sensor_reset(void);
 #endif

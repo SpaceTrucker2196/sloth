@@ -27,6 +27,7 @@
     X(adsb_reset) \
     X(aprs_reset) \
     X(alerts_clear) \
+    X(rules_sensor_reset) \
     X(alert_pcap_clear) \
     X(assoc_clear) \
     X(assoc_flood_clear) \

@@ -12,7 +12,7 @@ type: reference
 
 **Sources**: `include/sloth_alert_inputs.def`; `src/rule_coverage.h`, `src/rule_coverage.c`; `src/rule_coverage_live.c`, `src/rule_coverage_capture.c`; `src/cov_interval.h`, `src/cov_interval.c`, `src/cov_interval_capture.c`, `src/wifi_chanhop.c` (`chanhop_slot_time_ms`), `src/capture/probe.c` (`mon_frame_class_totals`); `tests/test_rule_coverage.c`, `tests/test_rule_coverage_live.c`, `tests/test_cov_interval.c`; [[jsonl-schema]]; issue #242 (parent #241); US Army FM 2-0 (2004) 4-48, 4-51, 8-34; [[collection-cycle]].
 
-**Last updated**: 2026-11-23 (item 4: § 7, `SENSOR_SUPPRESSED` and the reason `suppressed`), 2026-11-23 (item 2 review: the v18 deploy order; overflowed channel time stays in the band totals; the sampler's clock), 2026-11-23 (item 2: § 6, the per-interval coverage record), 2026-11-23
+**Last updated**: 2026-11-23 (item 4 review: § 7 says the silent-channel default has no measured baseline, and what an operator's clear keeps; the kind counts follow the build), 2026-11-23 (item 4: § 7, `SENSOR_SUPPRESSED` and the reason `suppressed`), 2026-11-23 (item 2 review: the v18 deploy order; overflowed channel time stays in the band totals; the sampler's clock), 2026-11-23 (item 2: § 6, the per-interval coverage record), 2026-11-23
 
 ---
 
@@ -81,7 +81,7 @@ Two cases from the tests:
 
 ## 4. What a running daemon writes
 
-Each tick, after the source rows ([[jsonl-schema]] `source_status`) are derived, the daemon builds the environment and the status of each kind **it** raises: 95 in sloth-wifi, 6 in sloth-rf.
+Each tick, after the source rows ([[jsonl-schema]] `source_status`) are derived, the daemon builds the environment and the status of each kind **it** raises: <!-- count:rules-wifi -->96<!-- /count --> in sloth-wifi, <!-- count:rules-rf -->6<!-- /count --> in sloth-rf.
 
 | Part of the environment | Where it comes from |
 |---|---|
@@ -97,7 +97,7 @@ Output ([[jsonl-schema]] has the fields):
 - `coverage`, one summary record: the three counts and the radio figures.
 - `rules_observable`, `rules_partly`, `rules_blind` on `sensor_health`.
 
-One hopping radio on the default list with no IP capture, no BLE and nothing designated gives 23 observable, 37 partly and 35 blind of sloth-wifi's 95.
+One hopping radio on the default list with no IP capture, no BLE and nothing designated gives 24 observable, 37 partly and 35 blind of sloth-wifi's <!-- count:rules-wifi -->96<!-- /count --> (`tests/test_rule_coverage_live.c`; the 24th is `SENSOR_SUPPRESSED`, which needs nothing more).
 
 **A `--replay` run is not assessed.** It reads files: its source rows read `down` because no device is open, while every frame of the file reaches the rules. No status is kept and none of the three outputs is written.
 
@@ -136,7 +136,7 @@ The status says which rules can fire. The record says what the sensor did in the
 | capture drops | `suppressed:drop` | a handle (the monitor radio's or `--iface`'s) dropped `ps_drop + ps_ifdrop` of at least `suppress.drop_pct` percent of its `ps_recv`, and at least `suppress.drop_min` frames | 1 %, 100 |
 | a silent channel | `suppressed:silent` | from the `coverage_interval` records (§ 6): a channel visited with no frame for `suppress.silent_intervals` intervals in a row, while another visited channel of its band heard frames in each, after it heard frames earlier in the run. Always empty, the whole band quiet, or not visited: not this signal | 3 |
 
-**Thresholds.** No source gives any of them. Each is set well above what the reference sensor (Beta-Site) does, measured on its live stream for 115 s on 2026-11-23 (`sensor_health`, differenced): the busiest synthesis table, `frag_sta`, evicted 0.70 a second (42 a minute; `ble_device` 0.14, `ble_flood` 0.03, every other table 0); `evidence_frame` 143 a second, which is why it is not judged; neither handle had dropped a frame in its lifetime (capture 3.08 M received, monitor 439 k); the hopper reported no silent channel of its 11, at about 170 frames a visit. The baseline is written beside the defaults in `src/alerts.h`; each is a `--tune` knob ([[cli-reference]]).
+**Thresholds.** No source gives any of them. Each is set well above what the reference sensor (Beta-Site) does, measured on its live stream for 115 s on 2026-11-23 (`sensor_health`, differenced): the busiest synthesis table, `frag_sta`, evicted 0.70 a second (42 a minute; `ble_device` 0.14, `ble_flood` 0.03, every other table 0); `evidence_frame` 143 a second, which is why it is not judged; neither handle had dropped a frame in its lifetime (capture 3.08 M received, monitor 439 k). **The silent-channel run of 3 has no measured baseline.** The one figure the look had, the hopper's `hop_silent_channels` 0, counts channels visited and never heard in the whole run, which is the population this signal leaves out; it says nothing about a channel heard once going quiet for three minutes while its band is heard. The look was also shorter than two intervals, and the reference sensor runs a build without the `coverage_interval` record. One frame at any time in the run makes a channel eligible, so a sparse channel (one scanning phone's probe early on, then nobody) beside a busy one in its band can raise it on a quiet site; how often that happens is unknown until hours of `coverage_interval` records from a deployed build are read. The baseline is written beside the defaults in `src/alerts.h`; each is a `--tune` knob ([[cli-reference]]).
 
 **Lifecycle.** A signal opens at the end of the first minute over its threshold, is re-asserted every tick until a minute ends under it, and closes with the reason `recovered` once it has been under for 120 s without a break (`SENSOR_RECOVER_S`, the hold `SENSOR_SOURCE_DOWN` uses). The detail names the worst table, the handle or the channel, and the threshold passed, never the minute's own count. Nothing is judged on a `--replay`.
 
@@ -147,6 +147,8 @@ The status says which rules can fire. The record says what the sensor did in the
 - **a silent channel**: every 802.11 kind.
 
 The status follows the incident one tick late: the health stage that derives it runs before the rules.
+
+**An operator's clear.** `alerts_clear()` (the `c` key in the Alerts view) ends the incidents (`cleared`) and restarts the windows and each channel's run, and keeps which channels this run has heard: that is what the radio observed, not alert history. A channel still silent opens a new incident after `suppress.silent_intervals` more intervals; were the heard set dropped, a channel jammed before the clear could not raise the signal again in that run.
 
 Tests: `tests/test_sensor_suppressed.c` (a thousand hand-built probe requests through the monitor callback fill the probe-client, probe-latency and sequence-number tables and raise it; recovery; drops; a silent channel; the absences, each seen red under a mutation), `tests/test_rule_coverage.c :: test_suppressed`, `tests/test_rule_coverage_live.c :: test_suppressed_reaches_the_statuses`.
 

@@ -21,7 +21,7 @@ page that covers it in full.
 **Sources**: `MISSION.md`, `CLAUDE.md`, `src/main.c`, `include/sloth.h`,
 all `docs/views/*.md`.
 
-**Last updated**: 2026-11-15 (#216: two daemons, which binary has which views and alert kinds; the ADS-B view is gone); 2026-11-07 (the sensor-family views — BLE `[*]`, GNSS `[#]`, ADS-B `[^]` — were missing from the view groups); 2026-10-15.
+**Last updated**: 2026-11-23 (#242 item 4: `sloth-wifi` also raises `SENSOR_SUPPRESSED`, the sensor losing what its sources still deliver); 2026-11-15 (#216: two daemons, which binary has which views and alert kinds; the ADS-B view is gone); 2026-11-07 (the sensor-family views — BLE `[*]`, GNSS `[#]`, ADS-B `[^]` — were missing from the view groups); 2026-10-15.
 
 ---
 
@@ -74,7 +74,8 @@ The **Dashboard** `[o]` tiles seven bands into one screen; see [[dashboard]].
 
 Which daemon decides what: `sloth-wifi` raises <!-- count:rules-wifi -->96<!-- /count --> of the kinds
 (everything from the capture, the monitor radio and BLE, the host's
-under-voltage, and a source of its own going down); `sloth-rf` raises
+under-voltage, a source of its own going down, and the sensor losing
+what its sources still deliver); `sloth-rf` raises
 <!-- count:rules-rf -->6<!-- /count --> (the four `GNSS_*`, `ADSB_EMERGENCY`, and a source of its own
 going down). The list and its numbers are one for both.
 

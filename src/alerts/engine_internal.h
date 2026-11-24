@@ -85,7 +85,8 @@ void rules_gnss_forget(void);
 void rules_adsb_forget(void);
 /* rules_twin.c: when the sensor was last known to be moving (#188). */
 void rules_twin_forget(void);
-/* rules_sensor.c: the under-voltage and source holds. */
+/* rules_sensor.c: the under-voltage, source and suppression holds;
+ * the channels SENSOR_SUPPRESSED has heard stay (rules_sensor_reset()). */
 void rules_sensor_forget(void);
 
 /* Formatting helpers every rule file uses. static inline rather than

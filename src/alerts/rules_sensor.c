@@ -312,7 +312,28 @@ static struct {
     sensor_hold_t hold[SUP_N];
 } g_supp;
 
-static void suppressed_forget(void) { memset(&g_supp, 0, sizeof(g_supp)); }
+/* alerts_clear() (the operator's `c` among its callers): the incidents,
+ * the windows and each channel's run go, and which channels this run
+ * has heard stays. That is a record of what the radio observed, not of
+ * an alert: dropping it would leave a channel jammed before the `c`
+ * unable to raise the signal again for the rest of the run, since only a
+ * minute with frames sets it. A still-silent channel opens a new
+ * incident after suppress.silent_intervals more intervals, as a source
+ * still down does after its hold. */
+static void suppressed_forget(void) {
+    sup_chan_t keep[COV_IV_CHAN_MAX];
+    const int n = g_supp.nchan;
+    memcpy(keep, g_supp.chan, sizeof(keep));
+    memset(&g_supp, 0, sizeof(g_supp));
+    for (int t = 0; t < n; t++) keep[t].run = 0;
+    memcpy(g_supp.chan, keep, sizeof(keep));
+    g_supp.nchan = n;
+}
+
+void rules_sensor_reset(void) {
+    memset(&g_sensor, 0, sizeof(g_sensor));
+    memset(&g_supp, 0, sizeof(g_supp));
+}
 
 /* What a table's loss suppresses: an input (1u << cov_input_t) and,
  * for an 802.11 table, the frame classes its rows are built from
@@ -554,7 +575,7 @@ static int replaying(const sloth_state_t *s) {
 }
 
 void rule_sensor_suppressed(const sloth_state_t *s, time_t now) {
-    if (replaying(s)) { suppressed_forget(); return; }
+    if (replaying(s)) { memset(&g_supp, 0, sizeof(g_supp)); return; }
     const uint64_t mono = sloth_mono_ms();
     if (!g_supp.started) {
         take_window(s, mono);
