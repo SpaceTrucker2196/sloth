@@ -259,6 +259,16 @@ void sys_status_rf_fill(const sloth_state_t *s, sys_source_t *src,
 const sys_snapshot_t *sys_status_get(void);
 void sys_status_reset(void);
 
+/* For sloth --preflight (src/preflight.h, #247), which asks the same
+ * questions before a run starts: the guarded readers (sys_path_ok(),
+ * regular files under /proc and /sys only, through g_platform) and the
+ * temperature and voltage samplers, into a caller's snapshot - `sn`'s
+ * temp, ntemp, hottest, volt, nvolt, has_undervolt and undervolt; the
+ * module's own snapshot and bands are not touched. */
+int  sys_status_read(const char *path, char *buf, int cap);
+int  sys_status_list(const char *dir, char names[][SYS_NAME_MAX], int max);
+void sys_status_sample_host(sys_snapshot_t *sn);
+
 /* ── Parsers, exposed for tests. Each returns 0 on success and -1 with
  * its outputs untouched-or-zero on anything else; none reads past len. */
 

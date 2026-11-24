@@ -15,5 +15,10 @@
 
 const char *intel_pack_version(void);
 const char *intel_pack_hash(void);
+/* intel/LOCK's `date` (YYYY-MM-DD), the day the snapshot was taken.
+ * sloth --preflight reports the pack's age from it, and since no build
+ * date is compiled in (the build is reproducible) it is also the newest
+ * date the binary carries: a clock before it is wrong (#247). */
+const char *intel_pack_date(void);
 
 #endif /* SLOTH_INTEL_PACK_H */

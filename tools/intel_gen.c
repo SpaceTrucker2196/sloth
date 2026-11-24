@@ -227,6 +227,9 @@ static int gen(const ir_snapshot_t *s, const ir_lock_t *l, const char *dir) {
     out(" * `intel_pack` reports it (src/intel_pack.h). */\n");
     out("#define SLOTH_INTEL_PACK_VERSION \"%s\"\n", l->pack_version);
     out("#define SLOTH_INTEL_PACK_HASH \"%s\"\n", s->hash);
+    /* LOCK's date, the day the snapshot was taken: the pack's age, and
+     * the newest date the binary carries (sloth --preflight, #247). */
+    out("#define SLOTH_INTEL_PACK_DATE \"%s\"\n", l->date);
     rc |= write_if_changed(dir, "intel_pack.inc");
     return rc ? -1 : 0;
 }

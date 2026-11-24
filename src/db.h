@@ -402,7 +402,29 @@ typedef struct {
 int db_compact_alerts(const char *src, const char *dst,
                       db_compact_stats_t *out);
 
+/* sloth --preflight (#247): the schema version of the file at `path`,
+ * changing nothing. It is opened the way --db-compact-alerts reads its
+ * source, `immutable=1` and read-only, so SQLite takes no lock and
+ * creates no -wal or -shm beside it (a plain READONLY open of a
+ * WAL-mode file creates both), and nothing is migrated. 0 with
+ * *version the meta row's schema_version (-1 when the table has no
+ * row); -1 with the reason in err when it does not open or is not a
+ * sloth database. The caller stats the path first and does not call
+ * this for a missing file. Under immutable=1 a -wal that still holds
+ * frames is not read: the version is the main file's. */
+int db_probe_version(const char *path, int *version, char *err, size_t errsz);
+/* The oldest schema version db_open() migrates forward. */
+int db_migrates_from(void);
+
 #else
+
+static inline int db_probe_version(const char *p, int *v, char *err, size_t n) {
+    (void)p;
+    if (v) *v = -1;
+    if (err && n) snprintf(err, n, "built without SQLite");
+    return -1;
+}
+static inline int db_migrates_from(void) { return 0; }
 
 typedef struct {
     long long rows_before, rows_after, keys, elapsed_ms;

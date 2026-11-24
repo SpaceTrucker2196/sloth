@@ -55,6 +55,19 @@ int linux_wifi_parse_wdev_macs(const void *buf, size_t len, int family,
                                uint8_t (*out)[6], int max, int n, int *done);
 int linux_wifi_get_wdev_macs(uint8_t (*out)[6], int max, int n);
 
+/* Two read-only GETs for sloth --preflight (#247): NL80211_CMD_GET_REG
+   (the regulatory domain's two-letter code) and NL80211_CMD_GET_WIPHY
+   for one phy, not a dump (the modes it supports, as a mask of
+   1 << NL80211_IFTYPE_*). Neither changes kernel state; each opens one
+   generic-netlink socket, sends the GET and reads one reply. 1 read,
+   0 the reply carried no such attribute, a negative errno otherwise
+   (-EOPNOTSUPP without nl80211 or without WITH_WIFI). The parsers are
+   pure and take the resolved nl80211 family id. */
+int linux_wifi_get_reg(char alpha2[3]);
+int linux_wifi_phy_iftypes(int phy_index, unsigned *mask);
+int linux_wifi_parse_reg(const void *buf, size_t len, int family, char alpha2[3]);
+int linux_wifi_parse_iftypes(const void *buf, size_t len, int family, unsigned *mask);
+
 /* Decode the reply to an NLM_F_ACK request: 0 for an ACK, the kernel's
    negative errno for a refusal, -EIO for anything that is not a
    well-formed NLMSG_ERROR. Pure, so the errno plumbing is testable with

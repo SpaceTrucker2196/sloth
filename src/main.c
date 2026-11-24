@@ -78,6 +78,7 @@
 #include "bgp_snoop.h"
 #include "ssh_snoop.h"
 #include "sys_status.h"
+#include "preflight.h"
 #include "rdp_snoop.h"
 #include "snmp_snoop.h"
 #include "mqtt_snoop.h"
@@ -370,6 +371,7 @@ static void print_usage(const char *argv0) {
             "       [--db-compact-alerts SRC DST]\n"
             "       [--db-retain-days N] [--db-max-mb N]\n"
             "       [--replay FILE[,FILE]] [--ticks N]\n"
+            "       [--preflight [--json]]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created 0600 if it doesn't\n"
             "                     exist; an existing FILE must already be\n"
@@ -754,6 +756,19 @@ static void print_usage(const char *argv0) {
             "  --print-schema     print the --db schema (the DDL and\n"
             "                     DB_SCHEMA_VERSION, as SQL) and exit.\n"
             "                     Opens nothing; sloth-rf prints the same.\n"
+            "  --preflight        check this command line's set-up and exit,\n"
+            "                     starting nothing: interfaces and monitor\n"
+            "                     mode, regulatory domain, clock and --gps,\n"
+            "                     storage and the --db schema (read-only),\n"
+            "                     intel pack age, sources, under-voltage,\n"
+            "                     temperature, the passive contract, output,\n"
+            "                     and the rule statuses it would have. One\n"
+            "                     line per item. Exit 0 ready, 1 ready with\n"
+            "                     warnings, 2 not ready. Opens no capture,\n"
+            "                     retunes nothing, writes no file, binds no\n"
+            "                     socket. See docs/wiki/preflight.md.\n"
+            "  --json             with --preflight: the same as one JSON\n"
+            "                     object on stdout.\n"
             "  --with-research FILE\n"
             "                     load the research corpus for per-alert\n"
             "                     citations in --report. Additive: an\n"
@@ -911,6 +926,8 @@ int main(int argc, char **argv) {
     gnss_flags_t gnss_flags = { NULL, NULL, 0, 0 };
     const char *replay_arg   = NULL;     /* --replay FILE[,FILE] (#119) */
     long        max_ticks    = 0;        /* --ticks N; 0 = run until quit */
+    int         preflight    = 0;        /* --preflight (#247) */
+    int         preflight_json = 0;      /* --json, with --preflight */
     time_t      session_start = sloth_wall();
     /* The wall stamp above is evidence (the DB session row, the posture
      * report header). The baseline settle delay below is a duration and
@@ -1168,6 +1185,10 @@ int main(int argc, char **argv) {
              * is what the daemon runs and not a copy of it. Opens no
              * device, file or database, and needs no privilege. */
             return db_schema_print(stdout) == 0 ? 0 : 1;
+        } else if (!strcmp(argv[i], "--preflight")) {
+            preflight = 1;
+        } else if (!strcmp(argv[i], "--json")) {
+            preflight_json = 1;
         } else if (!strcmp(argv[i], "--headless")) {
             headless = 1;
         } else if (!strcmp(argv[i], "--replay") && i + 1 < argc) {
@@ -1251,6 +1272,11 @@ int main(int argc, char **argv) {
     /* The two #190 flags qualify --report / --report-json. Given alone
      * they would do nothing, and a sensor the operator believes is
      * keeping reports while it keeps none is the failure to refuse. */
+    if (preflight_json && !preflight) {
+        fprintf(stderr, "sloth: --json qualifies --preflight: there is no "
+                        "preflight to print\n");
+        return 2;
+    }
     if (report_history && !report_md && !report_json) {
         fprintf(stderr, "sloth: --report-history needs --report or "
                         "--report-json: there is no report to write\n");
@@ -1463,6 +1489,59 @@ int main(int argc, char **argv) {
                                          g_hop_enabled, prof.active_allowed,
                                          &pd_req, &pd_plan);
         if (pd_rc != 0) return pd_rc;
+    }
+
+    /* --preflight (#247): every whole-command-line check above has run,
+     * so a refused combination has exited 2 already; nothing has been
+     * opened, no thread exists and no sink is created. The preflight
+     * reads what the run would use, prints one page and exits. */
+    if (preflight) {
+        static pf_config_t pf;
+        memset(&pf, 0, sizeof(pf));
+        for (int i = 0; i < allow_iface_count && i < PF_MAX_NAMED; i++)
+            pf.iface[pf.n_iface++] = allow_ifaces[i];
+        for (int i = 0; i < mon_cli.n && i < PF_MAX_NAMED; i++)
+            pf.mon[pf.n_mon++] = mon_cli.name[i];
+        for (int i = 0; i < df_cli.n && i < PF_MAX_NAMED; i++)
+            pf.df[pf.n_df++] = df_cli.name[i];
+        pf.monitor_only = monitor_only;
+        pf.hop          = g_hop_enabled;
+        pf.allow_active = prof.active_allowed;
+        pf.strict       = strict_lock;
+        if (g_hop_enabled)
+            for (int i = 0; i < g_chanhop.count && pf.n_hop < PF_MAX_HOP; i++)
+                pf.hop_mhz[pf.n_hop++] = g_chanhop.slots[i].freq_mhz;
+        pf.bt_monitor   = bt_monitor;
+        pf.bt_capture   = bt_capture;
+        pf.gps          = gnss_flags.gps;
+        pf.gps_allow_remote = gnss_flags.allow_remote;
+        pf.location     = gnss_flags.location;
+        for (int i = 0; i < replay_count && i < PF_MAX_REPLAY; i++)
+            pf.replay[pf.n_replay++] = replay_paths[i];
+        pf.baseline_in  = baseline_in;
+        pf.db           = db_path;
+        pf.jsonl        = jsonl_path;
+        pf.pcap_dir     = pcap_dir;
+        pf.eapol_dir    = eapol_dir;
+        pf.report_md    = report_md;
+        pf.report_json  = report_json;
+        pf.snapshot_out = snapshot_out;
+        pf.data_socket  = data_socket;
+        pf.data_socket_remote = data_socket && ds_allow_remote &&
+                                data_socket_spec_is_remote(data_socket) == 1;
+        pf.db_max_mb    = db_max_mb();
+        if (ownership_any())             pf.config |= COV_N_OWN_NET;
+        if (ownership_known_count() > 0) pf.config |= COV_N_ROSTER;
+#ifdef WITH_PCAP
+        pf.have_pcap = 1;
+#endif
+#ifdef WITH_WIFI
+        pf.have_wifi = 1;
+#endif
+#ifdef WITH_SQLITE
+        pf.have_sqlite = 1;
+#endif
+        return preflight_main(&pf, preflight_json, stdout);
     }
 
     memset(&g_state, 0, sizeof(g_state));

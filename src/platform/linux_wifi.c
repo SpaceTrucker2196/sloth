@@ -763,5 +763,136 @@ int linux_wifi_get_wdev_macs(uint8_t (*out)[6], int max, int n) {
     return n;
 }
 
+/* ── Two read-only GETs for --preflight (#247) ───────────── */
+
+/* The kernel's refusal in an NLMSG_ERROR, -EIO when it is malformed. */
+static int nl_err_of(const struct nlmsghdr *nlh) {
+    if (nlh->nlmsg_len < NLMSG_HDRLEN + sizeof(struct nlmsgerr)) return -EIO;
+    const struct nlmsgerr *e = (const struct nlmsgerr *)NLMSG_DATA(nlh);
+    return e->error < 0 ? e->error : -EIO;
+}
+
+/* The first nl80211 message of `cmd` in buf: its attributes and their
+ * length, or NULL; *err gets a kernel refusal when one comes first. */
+static struct nlattr *nl_find_cmd(const void *buf, size_t len, int family,
+                                  int cmd, int *arem, int *err) {
+    const struct nlmsghdr *nlh = (const struct nlmsghdr *)buf;
+    int rem = len > 0x7fffffff ? 0x7fffffff : (int)len;
+    *err = 0;
+    for (; NLMSG_OK(nlh, rem); nlh = NLMSG_NEXT(nlh, rem)) {
+        if (nlh->nlmsg_type == NLMSG_ERROR) { *err = nl_err_of(nlh); return NULL; }
+        if (nlh->nlmsg_type == NLMSG_DONE) return NULL;
+        if ((int)nlh->nlmsg_type != family) continue;
+        if (nlh->nlmsg_len < NLMSG_HDRLEN + GENL_HDRLEN) continue;
+        const struct genlmsghdr *gh = (const struct genlmsghdr *)NLMSG_DATA(nlh);
+        if (gh->cmd != cmd) continue;
+        *arem = (int)nlh->nlmsg_len - NLMSG_HDRLEN - GENL_HDRLEN;
+        return (struct nlattr *)((char *)gh + GENL_HDRLEN);
+    }
+    return NULL;
+}
+
+int linux_wifi_parse_reg(const void *buf, size_t len, int family, char alpha2[3]) {
+    int rem = 0, err = 0;
+    if (!buf || !alpha2) return -EIO;
+    alpha2[0] = '\0';
+    struct nlattr *a = nl_find_cmd(buf, len, family, NL80211_CMD_GET_REG, &rem, &err);
+    if (!a) return err ? err : 0;
+    for (; na_ok(a, rem); a = na_next(a, &rem)) {
+        if (NA_TYPE(a) != NL80211_ATTR_REG_ALPHA2) continue;
+        const char *s = (const char *)NA_DATA(a);
+        int n = (int)a->nla_len - (int)NA_HDRLEN;
+        /* Two printable characters: "US", "00" (world), "99" (built
+         * from the device's own rules). Anything else is not a code. */
+        if (n < 2 || s[0] < 0x21 || s[0] > 0x7e || s[1] < 0x21 || s[1] > 0x7e)
+            return 0;
+        alpha2[0] = s[0];
+        alpha2[1] = s[1];
+        alpha2[2] = '\0';
+        return 1;
+    }
+    return 0;
+}
+
+int linux_wifi_parse_iftypes(const void *buf, size_t len, int family, unsigned *mask) {
+    int rem = 0, err = 0;
+    if (!buf || !mask) return -EIO;
+    *mask = 0;
+    struct nlattr *a = nl_find_cmd(buf, len, family, NL80211_CMD_NEW_WIPHY, &rem, &err);
+    if (!a) return err ? err : 0;
+    for (; na_ok(a, rem); a = na_next(a, &rem)) {
+        if (NA_TYPE(a) != NL80211_ATTR_SUPPORTED_IFTYPES) continue;
+        /* Nested: one flag attribute per mode, its type the mode. */
+        int irem = (int)a->nla_len - (int)NA_HDRLEN;
+        struct nlattr *t = (struct nlattr *)NA_DATA(a);
+        for (; na_ok(t, irem); t = na_next(t, &irem))
+            if (NA_TYPE(t) > 0 && NA_TYPE(t) < 32) *mask |= 1u << NA_TYPE(t);
+        return 1;
+    }
+    return 0;
+}
+
+/* One GET (never a dump, never NLM_F_ACK) and its one reply into rbuf.
+ * The request carries no attribute but the wiphy index when `wiphy` is
+ * not negative. Bytes received, or a negative errno. */
+static long nl_get_once(int cmd, long wiphy, uint8_t *rbuf, size_t rsz, int *family) {
+    int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_GENERIC);
+    if (fd < 0) return -errno;
+    *family = get_nl80211_id(fd);
+    if (*family < 0) { close(fd); return -EOPNOTSUPP; }
+    struct timeval tv = { 0, 300000 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    uint8_t sbuf[NLMSG_HDRLEN + GENL_HDRLEN + 8];
+    memset(sbuf, 0, sizeof(sbuf));
+    struct nlmsghdr   *nlh = (struct nlmsghdr *)sbuf;
+    struct genlmsghdr *gh  = (struct genlmsghdr *)NLMSG_DATA(nlh);
+    size_t msz = NLMSG_HDRLEN + GENL_HDRLEN;
+    if (wiphy >= 0) {
+        struct nlattr *na = (struct nlattr *)((char *)gh + GENL_HDRLEN);
+        na->nla_type = NL80211_ATTR_WIPHY;
+        na->nla_len  = (uint16_t)(NA_HDRLEN + 4);
+        uint32_t v = (uint32_t)wiphy;
+        memcpy(NA_DATA(na), &v, 4);
+        msz += 8;
+    }
+    nlh->nlmsg_len   = (uint32_t)msz;
+    nlh->nlmsg_type  = (uint16_t)*family;
+    nlh->nlmsg_flags = NLM_F_REQUEST;
+    nlh->nlmsg_seq   = 5;
+    gh->cmd          = (uint8_t)cmd;
+    gh->version      = 1;
+
+    struct sockaddr_nl sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.nl_family = AF_NETLINK;
+    if (sendto(fd, sbuf, msz, 0, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+        int e = errno;
+        close(fd);
+        return -e;
+    }
+    ssize_t r = recv(fd, rbuf, rsz, 0);
+    int e = errno;
+    close(fd);
+    return r < 0 ? -e : (long)r;
+}
+
+int linux_wifi_get_reg(char alpha2[3]) {
+    static uint8_t rbuf[8192];
+    int family = -1;
+    long r = nl_get_once(NL80211_CMD_GET_REG, -1, rbuf, sizeof(rbuf), &family);
+    if (r < 0) return (int)r;
+    return linux_wifi_parse_reg(rbuf, (size_t)r, family, alpha2);
+}
+
+int linux_wifi_phy_iftypes(int phy_index, unsigned *mask) {
+    static uint8_t rbuf[32768];
+    int family = -1;
+    if (phy_index < 0) return -EINVAL;
+    long r = nl_get_once(NL80211_CMD_GET_WIPHY, phy_index, rbuf, sizeof(rbuf), &family);
+    if (r < 0) return (int)r;
+    return linux_wifi_parse_iftypes(rbuf, (size_t)r, family, mask);
+}
+
 #endif /* WITH_WIFI */
 #endif /* PLATFORM_LINUX */

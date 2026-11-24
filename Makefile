@@ -264,6 +264,9 @@ CORE_BASE_SRCS += src/rule_coverage_capture.c
 # module) and the capture side's sampler (named by poll.c's wifi table
 # and probe.c only).
 CORE_BASE_SRCS += src/cov_interval.c src/cov_interval_capture.c
+# sloth --preflight (#247): the pure checks and the read-only gatherer,
+# named by src/main.c only, so sloth-rf's link pulls neither.
+CORE_BASE_SRCS += src/preflight.c src/preflight_gather.c
 CORE_BASE_SRCS += src/ble_snoop.c
 # #144 slice 2: the HCI monitor decoder and the own-transmission rule are
 # pure; the libpcap worker that feeds them is in PCAP_CORE_SRCS.

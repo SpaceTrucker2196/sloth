@@ -148,6 +148,15 @@ int linux_wifi_get_wdev_macs(uint8_t (*out)[6], int max, int n) {
     (void)out; (void)max;
     return n;             /* rtnetlink and sysfs still name every netdev */
 }
+int linux_wifi_get_reg(char alpha2[3]) {
+    if (alpha2) alpha2[0] = '\0';
+    return -EOPNOTSUPP;
+}
+int linux_wifi_phy_iftypes(int phy_index, unsigned *mask) {
+    (void)phy_index;
+    if (mask) *mask = 0;
+    return -EOPNOTSUPP;
+}
 #endif
 
 /* ── Neighbour table ───────────────────────────────────── */

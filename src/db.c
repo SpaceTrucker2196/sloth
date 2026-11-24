@@ -3595,4 +3595,48 @@ int db_compact_alerts(const char *src, const char *dst,
     return 0;
 }
 
+int db_migrates_from(void) { return DB_MIGRATES_FROM; }
+
+int db_probe_version(const char *path, int *version, char *err, size_t errsz) {
+    if (version) *version = -1;
+    if (err && errsz) err[0] = '\0';
+    if (!path || !path[0]) {
+        if (err && errsz) snprintf(err, errsz, "empty path");
+        return -1;
+    }
+    char floor_err[96];
+    if (libver_sqlite_refuse(floor_err, sizeof(floor_err)) != 0) {
+        if (err && errsz) snprintf(err, errsz, "%s", floor_err);
+        return -1;
+    }
+    char uri[8192];
+    if (!compact_src_uri(path, uri, sizeof(uri))) {
+        if (err && errsz) snprintf(err, errsz, "path too long");
+        return -1;
+    }
+    sqlite3 *h = NULL;
+    if (sqlite3_open_v2(uri, &h, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW |
+                        SQLITE_OPEN_URI, NULL) != SQLITE_OK) {
+        if (err && errsz) snprintf(err, errsz, "%s", h ? sqlite3_errmsg(h) : "cannot open");
+        sqlite3_close(h);
+        return -1;
+    }
+    int defensive = -1, rc = -1;
+    sqlite3_db_config(h, SQLITE_DBCONFIG_DEFENSIVE, 1, &defensive);
+    long long has = scalar_on(h, "SELECT COUNT(*) FROM sqlite_master"
+                              " WHERE type='table' AND name='meta'");
+    if (has < 0) {
+        if (err && errsz) snprintf(err, errsz, "%s", sqlite3_errmsg(h));
+    } else if (has == 0) {
+        if (err && errsz) snprintf(err, errsz, "no meta table: not a sloth database");
+    } else {
+        long long ver = scalar_on(h, "SELECT CAST(value AS INTEGER) FROM meta"
+                                  " WHERE key='schema_version'");
+        if (version) *version = ver > 0 && ver < 1000000 ? (int)ver : -1;
+        rc = 0;
+    }
+    sqlite3_close(h);
+    return rc;
+}
+
 #endif /* WITH_SQLITE */

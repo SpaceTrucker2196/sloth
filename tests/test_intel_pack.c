@@ -107,6 +107,11 @@ static void test_lock_names_the_snapshot_the_build_reports(void) {
     ASSERT_EQ((int)strlen(intel_pack_hash()), INTEL_PACK_HASH_LEN);
     ASSERT_STR(intel_pack_version(), ver);
     ASSERT(ir_semver_ok(intel_pack_version()));
+    /* The snapshot's date, compiled in for sloth --preflight (#247). */
+    char date[16];
+    lock_get(lock, "date", date, sizeof(date));
+    ASSERT_EQ((int)strlen(date), 10);
+    ASSERT_STR(intel_pack_date(), date);
     char commit[64];
     lock_get(lock, "comint_commit", commit, sizeof(commit));
     ASSERT_EQ((int)strlen(commit), 40);

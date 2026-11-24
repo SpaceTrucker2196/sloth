@@ -1325,6 +1325,22 @@ static void test_usage_report_names_collection_coverage(void) {
     ASSERT(has_ci(b, "coverage"));
 }
 
+/* --preflight (#247): the help names the three exit codes, says what it
+ * does not do, and points at the page; --json says what it qualifies.
+ * docs/wiki/cli-reference.md and docs/wiki/preflight.md carry the same
+ * codes, and test_preflight.c holds pf_exit_code() to them. */
+static void test_usage_preflight_names_exit_codes(void) {
+    char b[4096];
+    ASSERT_EQ(usage_option_block("--preflight", b, sizeof(b)), 1);
+    ASSERT(has_ci(b, "Exit 0 ready"));
+    ASSERT(has_ci(b, "1 ready with warnings"));
+    ASSERT(has_ci(b, "2 not ready"));
+    ASSERT(has_ci(b, "writes no file"));
+    ASSERT(has_ci(b, "preflight.md"));
+    ASSERT_EQ(usage_option_block("--json", b, sizeof(b)), 1);
+    ASSERT(has_ci(b, "--preflight"));
+}
+
 static void test_usage_adsb_names_both_refused_schemes(void) {
     char *rf = slurp("src/rf/rf_args.c");
     ASSERT(rf != NULL);
@@ -2841,6 +2857,7 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_usage_strict_claims_no_total_coverage);
     RUN_TEST(test_usage_adsb_names_both_refused_schemes);
     RUN_TEST(test_usage_report_names_collection_coverage);
+    RUN_TEST(test_usage_preflight_names_exit_codes);
     RUN_TEST(test_set_channel_comments_claim_no_total);
     TEST_SUITE("wiki + rule-table integrity (#103)");
     RUN_TEST(test_wiki_link_scanner_skips_code);

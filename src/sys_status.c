@@ -669,6 +669,26 @@ static void sample_power(sys_snapshot_t *sn) {
     }
 }
 
+int sys_status_read(const char *path, char *buf, int cap) {
+    return sys_rd(path, buf, cap);
+}
+
+int sys_status_list(const char *dir, char names[][SYS_NAME_MAX], int max) {
+    return sys_ls(dir, names, max);
+}
+
+void sys_status_sample_host(sys_snapshot_t *sn) {
+    if (!sn) return;
+    sn->ntemp = sn->nvolt = 0;
+    sn->has_undervolt = sn->undervolt = 0;
+    sample_thermal_zones(sn);
+    sample_hwmon(sn);
+    sn->hottest = -1;
+    for (int i = 0; i < sn->ntemp; i++)
+        if (sn->hottest < 0 || sn->temp[i].val > sn->temp[sn->hottest].val)
+            sn->hottest = i;
+}
+
 static void sample_system(void) {
     sys_snapshot_t *sn = &g.snap;
     char b[4096];
@@ -698,15 +718,9 @@ static void sample_system(void) {
         sh_mem_parse_status(b, n, &sn->rss_kb, &hwm);
     }
 
-    sn->ntemp = sn->nvolt = sn->npower = 0;
-    sn->has_undervolt = sn->undervolt = 0;
-    sample_thermal_zones(sn);
-    sample_hwmon(sn);
+    sn->npower = 0;
+    sys_status_sample_host(sn);
     sample_power(sn);
-    sn->hottest = -1;
-    for (int i = 0; i < sn->ntemp; i++)
-        if (sn->hottest < 0 || sn->temp[i].val > sn->temp[sn->hottest].val)
-            sn->hottest = i;
 
     /* The forgotten-BSSID memory is the monitor radio's; without a
      * capture side there is none to sample and the batch omits it. */
