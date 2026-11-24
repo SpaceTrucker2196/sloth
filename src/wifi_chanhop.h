@@ -57,6 +57,12 @@ typedef struct {
      * start-of-next span as measured_total_ms. The open dwell is not in
      * it; chanhop_slot_time_ms() adds it. Never decays. */
     uint64_t dwell_ms;
+    /* Cue (#248, src/chancue.h): monotonic ms until which a finding
+     * holds this channel's dwell at CHANHOP_CUE_MULT times its normal
+     * plan; 0 or past, not cued. Written by chanhop_set_cue() only,
+     * every poll, from the cue table, so a re-dealt share (which
+     * resets the slots) is cued again on the next poll. */
+    uint64_t cue_until_ms;
 } chanhop_slot_t;
 
 typedef struct {
@@ -88,7 +94,17 @@ typedef struct {
     uint64_t dwells_completed;
     uint64_t planned_total_ms;
     uint64_t measured_total_ms;
+    /* Cued dwells (#248): whether the open dwell was planned under a
+     * cue, and lifetime the completed cued dwells and their measured
+     * time, for the dwell accounting a test and the record read. */
+    int      dwell_cued;
+    uint64_t cued_dwells;
+    uint64_t cued_total_ms;
 } chanhop_t;
+
+/* A cued channel's dwell is this many times its normal plan (owner
+ * ruling on #248, 2026-11-23: "4x the normal dwell"). */
+#define CHANHOP_CUE_MULT 4
 
 /* Map a BAND-QUALIFIED 802.11 channel to its center frequency in MHz
  * (0 if the pair names no channel). This is the form that can express
@@ -174,6 +190,42 @@ void chanhop_dwell(const chanhop_t *h, chanhop_dwell_t *out);
  * these). 0 out of range, on an empty scheduler, and for every slot
  * before the first acknowledged retune. Pure. */
 uint64_t chanhop_slot_time_ms(const chanhop_t *h, int i, uint64_t now_ms);
+
+/* ── Cued dwell (#248) ──
+ *
+ * A cue lengthens one channel's dwell; it never adds a channel, drops
+ * one or changes the rotation order, so every channel is still visited
+ * once a rotation. The budget rule that keeps the rest covered: on one
+ * scheduler, the cued channels' planned dwells together (each
+ * CHANHOP_CUE_MULT x its normal plan) never exceed the uncued channels'
+ * normal plans together, so cues take at most half of this radio's
+ * time and every uncued channel keeps at least half the share it would
+ * have with no cue at all (its own dwell is unchanged; the rotation is
+ * at most twice as long). chancue_request() refuses a cue that would
+ * break it; chanhop_confirm_retune() also clamps a cued plan to what is
+ * left of the budget at the moment it is planned, so a channel whose
+ * activity moved since the cue was admitted cannot push past it. */
+
+/* Slot i's normal planned dwell (no cue): the #22 activity plan. 0 out
+ * of range. Pure. */
+uint32_t chanhop_slot_plan_ms(const chanhop_t *h, int i);
+
+/* The slot whose centre frequency is mhz, or -1. */
+int chanhop_find_freq(const chanhop_t *h, int mhz);
+
+/* Whether slot i is cued at now_ms. */
+int chanhop_slot_cued(const chanhop_t *h, int i, uint64_t now_ms);
+
+/* 1 when cueing slot i too (beside the slots cued at now_ms) keeps the
+ * budget rule above; 0 when it would not, or i is out of range. A slot
+ * already cued is counted once. Pure. */
+int chanhop_cue_fits(const chanhop_t *h, int i, uint64_t now_ms);
+
+/* Set (until_ms > now_ms) or clear (0) slot i's cue. Setting the cue of
+ * the channel the radio is on now lengthens the open dwell to the cued
+ * plan, measured from when that dwell began; clearing it lets the open
+ * dwell run to its planned end. No-op out of range. */
+void chanhop_set_cue(chanhop_t *h, int i, uint64_t until_ms, uint64_t now_ms);
 
 /* Advance the dwell clock. Returns 1 when the caller should retune the
  * radio to chanhop_target_freq() (first call, the dwell elapsed, or a

@@ -106,6 +106,14 @@ issue.
    §4.3). Consolidates the carve-outs of 2026-07-04 (#22), 2026-07-05
    (#29) and the `--allow-active` behaviour of #84.)*
 
+   *(A longer dwell that follows a finding is inside this rule, not a new
+   exception: `--cue` lets six fixed 802.11 findings hold the `--hop`
+   scheduler on the channel they were heard on, which retunes only
+   sloth's own receiver, as the #22 carve-out does, and puts nothing on
+   the segment. Off by default, announced, refused under `--strict`.
+   Recorded under the operator's explicit authorisation of 2026-11-23,
+   #248.)*
+
 2. **No active key recovery.** Sloth never runs a passphrase against a
    captured handshake. It never calls `hashcat`, `aircrack-ng`, John,
    or any cracking library. It never decrypts a frame it captured. It

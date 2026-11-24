@@ -169,6 +169,9 @@ int  mon_hop_plan_mhz(int *mhz, int max);
  * the schedulers are: the per-interval coverage record (#242) reads its
  * slots' time and frames after mon_hop_service(). */
 const chanhop_t *mon_hop_sched(int radio);
+/* The same, writable: the cue table (#248, src/chancue.h) marks a cued
+ * channel on whichever radio's share holds it. Main thread only. */
+chanhop_t *mon_hop_sched_rw(int radio);
 
 /* ── Command line ── */
 

@@ -13,6 +13,8 @@
 #include "rule_coverage_live.h"
 #include "tune.h"
 #include "alerts/rules.h"
+#include "wifi_chanhop.h"
+#include "chancue.h"
 #ifdef WITH_PCAP
 #include "capture/probe.h"
 #include "frame_build.h"
@@ -559,6 +561,75 @@ static void test_silent_absences(void) {
     end();
 }
 
+/* ── cue refusals (#248) ──────────────────────────────────────────── */
+
+/* The issue's acceptance, through the real policy: false triggers on 10
+ * of the 11 default channels in one minute. Two cues fit the radio's
+ * half; eight are refused at the share limit, past
+ * suppress.cue_refused_per_min (5): one incident, every 802.11 rule
+ * `partly` / `suppressed`, the wired rules not. Recovered after the
+ * hold once a minute passes under. */
+static void test_cue_refusals_raise_it(void) {
+    static const int ch[] = { 1, 6, 11, 36, 40, 44, 48, 149, 153, 157, 161 };
+    begin();
+    monitor_up();
+    capture_up();
+    g_s.cue.on = 1;
+    tick();
+    chanhop_t h;
+    chanhop_init(&h, ch, 11);
+    chancue_t c;
+    chancue_init(&c);
+    chanhop_t *sched[1] = { &h };
+    for (int i = 1; i < 11; i++)
+        (void)chancue_request(&c, sched, 1, ALERT_TYPE_EVIL_TWIN,
+                              chanhop_freq(ch[i]), "f", g_mono);
+    ASSERT_EQ((int)c.refused_limit, 8);
+    g_s.cue.refused_limit = c.refused_limit;
+    ticks(60);
+    const alert_t *a = open_of("suppressed:cue");
+    ASSERT(a != NULL);
+    if (a) {
+        ASSERT_EQ(a->sev, ALERT_SEV_WARN);
+        ASSERT(strstr(a->detail, "--cue refused 5 or more cues at its limits in a minute") != NULL);
+    }
+    tick();
+    ASSERT(status_is(ALERT_TYPE_EVIL_TWIN, COV_PARTLY, COV_R_SUPPRESSED));
+    ASSERT(status_is(ALERT_TYPE_DEAUTH_FLOOD, COV_PARTLY, COV_R_SUPPRESSED));
+    ASSERT(status_is(ALERT_TYPE_THREAT_DOMAIN, COV_OBSERVABLE, COV_R_NONE));
+    ticks(58 + SENSOR_RECOVER_S);
+    ASSERT(open_of("suppressed:cue") != NULL);
+    tick();
+    ASSERT(open_of("suppressed:cue") == NULL);
+    ASSERT_STR(g_reason, "recovered");
+    end();
+}
+
+/* Under the threshold, refusals that are no limit, and a run without
+ * --cue: no incident. 4 seen red with `n >= thr` made `n > 0`; the
+ * non-limit refusals seen red with judge_cue() reading s->cue.refused;
+ * the --cue-off run seen red with the s->cue.on test removed. */
+static void test_cue_absences(void) {
+    begin();
+    monitor_up();
+    g_s.cue.on = 1;
+    tick();
+    g_s.cue.refused_limit = 4;
+    ticks(61);
+    ASSERT(open_of(NULL) == NULL);
+
+    g_s.cue.refused += 500;                   /* no_channel, not_hopped */
+    ticks(61);
+    ASSERT(open_of(NULL) == NULL);
+
+    g_s.cue.on = 0;
+    g_s.cue.refused_limit += 500;
+    ticks(61);
+    ASSERT(open_of(NULL) == NULL);
+    ASSERT_EQ(g_created, 0);
+    end();
+}
+
 /* ── a replay ─────────────────────────────────────────────────────── */
 
 /* A --replay fills tables at file speed: nothing is judged. Seen red
@@ -608,6 +679,8 @@ void run_sensor_suppressed_tests(void) {
     RUN_TEST(test_silent_channel);
     RUN_TEST(test_silent_survives_a_clear);
     RUN_TEST(test_silent_absences);
+    RUN_TEST(test_cue_refusals_raise_it);
+    RUN_TEST(test_cue_absences);
     RUN_TEST(test_replay_never_raises_it);
     RUN_TEST(test_signals_are_separate_incidents);
 }

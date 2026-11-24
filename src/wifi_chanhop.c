@@ -32,6 +32,26 @@ static uint32_t dwell_for(const chanhop_t *h, uint32_t activity) {
     return (uint32_t)d;
 }
 
+/* Slot t's cued plan at now_ms: CHANHOP_CUE_MULT x its normal plan,
+ * clamped to what the budget rule (wifi_chanhop.h) leaves once every
+ * other cued slot has its own cued plan, and never shorter than its
+ * normal plan. */
+static uint32_t cued_plan(const chanhop_t *h, int t, uint64_t now_ms) {
+    uint64_t d = dwell_for(h, h->slots[t].activity);
+    uint64_t uncued = 0, other_cued = 0;
+    for (int j = 0; j < h->count; j++) {
+        if (j == t) continue;
+        uint64_t dj = dwell_for(h, h->slots[j].activity);
+        if (h->slots[j].cue_until_ms > now_ms) other_cued += CHANHOP_CUE_MULT * dj;
+        else                                   uncued += dj;
+    }
+    uint64_t want = CHANHOP_CUE_MULT * d;
+    uint64_t budget = uncued > other_cued ? uncued - other_cued : 0;
+    uint64_t p = want < budget ? want : budget;
+    if (p < d) p = d;
+    return (uint32_t)p;
+}
+
 /* Reset to defaults with no slots. Split out so the bare-number and
  * band-qualified initialisers cannot drift in what they zero. */
 static void chanhop_reset(chanhop_t *h) {
@@ -146,6 +166,10 @@ void chanhop_confirm_retune(chanhop_t *h, int ok, uint64_t now_ms) {
         h->measured_total_ms += measured;
         h->dwells_completed++;
         h->slots[h->cur].dwell_ms += measured;
+        if (h->dwell_cued) {
+            h->cued_dwells++;
+            h->cued_total_ms += measured;
+        }
         if (measured > h->dwell_planned_ms) {
             uint32_t over = measured - h->dwell_planned_ms;
             if (over > h->worst_overshoot_ms) h->worst_overshoot_ms = over;
@@ -156,9 +180,55 @@ void chanhop_confirm_retune(chanhop_t *h, int ok, uint64_t now_ms) {
     h->tuned = 1;
     h->next  = (t + 1) % h->count;
     h->slots[t].visits++;
-    h->dwell_planned_ms = dwell_for(h, h->slots[t].activity);
+    h->dwell_cued       = h->slots[t].cue_until_ms > now_ms;
+    h->dwell_planned_ms = h->dwell_cued ? cued_plan(h, t, now_ms)
+                                        : dwell_for(h, h->slots[t].activity);
     h->dwell_began_ms   = now_ms;
     h->dwell_until_ms   = now_ms + h->dwell_planned_ms;
+}
+
+uint32_t chanhop_slot_plan_ms(const chanhop_t *h, int i) {
+    if (!h || i < 0 || i >= h->count) return 0;
+    return dwell_for(h, h->slots[i].activity);
+}
+
+int chanhop_find_freq(const chanhop_t *h, int mhz) {
+    if (!h || mhz <= 0) return -1;
+    for (int i = 0; i < h->count; i++)
+        if (h->slots[i].freq_mhz == mhz) return i;
+    return -1;
+}
+
+int chanhop_slot_cued(const chanhop_t *h, int i, uint64_t now_ms) {
+    if (!h || i < 0 || i >= h->count) return 0;
+    return h->slots[i].cue_until_ms > now_ms;
+}
+
+int chanhop_cue_fits(const chanhop_t *h, int i, uint64_t now_ms) {
+    if (!h || i < 0 || i >= h->count) return 0;
+    uint64_t cued = 0, uncued = 0;
+    for (int j = 0; j < h->count; j++) {
+        uint64_t dj = dwell_for(h, h->slots[j].activity);
+        if (j == i || h->slots[j].cue_until_ms > now_ms)
+            cued += CHANHOP_CUE_MULT * dj;
+        else
+            uncued += dj;
+    }
+    return cued <= uncued;
+}
+
+void chanhop_set_cue(chanhop_t *h, int i, uint64_t until_ms, uint64_t now_ms) {
+    if (!h || i < 0 || i >= h->count) return;
+    h->slots[i].cue_until_ms = until_ms > now_ms ? until_ms : 0;
+    /* The radio is on the channel now: the dwell under way becomes the
+     * cued one, from when it began, instead of waiting a rotation. */
+    if (!h->slots[i].cue_until_ms || !h->tuned || i != h->cur || h->dwell_cued)
+        return;
+    uint32_t p = cued_plan(h, i, now_ms);
+    if (p <= h->dwell_planned_ms) return;
+    h->dwell_cued       = 1;
+    h->dwell_planned_ms = p;
+    h->dwell_until_ms   = h->dwell_began_ms + p;
 }
 
 void chanhop_dwell(const chanhop_t *h, chanhop_dwell_t *out) {

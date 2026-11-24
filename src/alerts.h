@@ -650,5 +650,11 @@ int alerts_wps_pbc_concurrent(void);
 #define SUPPRESS_DROP_PCT_DEFAULT          1  /* of received, over a minute; measured 0 */
 #define SUPPRESS_DROP_MIN_DEFAULT        100  /* drops in that minute, at least */
 #define SUPPRESS_SILENT_INTERVALS_DEFAULT  3  /* consecutive coverage intervals; unmeasured */
+/* The fourth signal (#248): --cue refusals at a limit in one minute.
+ * Unmeasured - --cue is new. With 11 channels on one radio the share
+ * limit admits two cues at once, so a third finding in a busy minute is
+ * one refusal; five is past what two or three coincident real findings
+ * make and well under a trigger flood, which refuses one per finding. */
+#define SUPPRESS_CUE_REFUSED_PER_MIN_DEFAULT 5
 
 #endif /* ALERTS_H */

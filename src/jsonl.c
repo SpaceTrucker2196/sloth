@@ -1869,6 +1869,11 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         int      mon_ever_confirmed[MON_RADIO_MAX];
         int      mon_dup_band[MON_RADIO_MAX];
         int      mon_dd_evicted_any;
+        /* --cue (JSONL 2.13.0, #248): on, the cues running now (0..4),
+         * and decades of the started and refused tallies - never the
+         * counts, which a flood of false triggers would move every
+         * tick. */
+        int      cue_on, cue_active, cue_started_band, cue_refused_band;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -1958,6 +1963,10 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
      * fresh, stale past the threshold. Only a crossing is news. */
     sig.cap_stale_state = stale_state(s->cap_health.stale_secs);
     sig.mon_stale_state = stale_state(s->mon_health.stale_secs);
+    sig.cue_on           = s->cue.on != 0;
+    sig.cue_active       = s->cue.on ? s->cue.active : 0;
+    sig.cue_started_band = s->cue.on ? decade_band(s->cue.started) : 0;
+    sig.cue_refused_band = s->cue.on ? decade_band(s->cue.refused) : 0;
     /* #96. -1 when no --pcap-dir is configured or the probe failed —
      * stable values, so not a source of churn. */
     fs_capacity_t pcap_cap;
@@ -2059,6 +2068,17 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
            s->hop_dwell.worst_overshoot_ms);
     kv_int(buf, LINEBUF, &off, "hop_dwells_completed",
            (long long)s->hop_dwell.completed);
+    /* Passive cueing (JSONL 2.13.0, #248): present only under --cue.
+     * cue_refused counts every refusal, cue_refused_limit those at a
+     * limit (the SENSOR_SUPPRESSED input), cue_cued_ms radio 0's
+     * measured time in cued dwells. */
+    if (s->cue.on) {
+        kv_int(buf, LINEBUF, &off, "cue_active",        s->cue.active);
+        kv_int(buf, LINEBUF, &off, "cue_started",       (long long)s->cue.started);
+        kv_int(buf, LINEBUF, &off, "cue_refused",       (long long)s->cue.refused);
+        kv_int(buf, LINEBUF, &off, "cue_refused_limit", (long long)s->cue.refused_limit);
+        kv_int(buf, LINEBUF, &off, "cue_cued_ms",       (long long)s->cue.cued_ms);
+    }
     health_kv(buf, &off, "capture", &s->cap_health);
     health_kv(buf, &off, "monitor", &s->mon_health);
     /* Several sensor radios (JSONL 2.3.0, src/mon_radios.h).

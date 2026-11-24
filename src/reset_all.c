@@ -11,6 +11,7 @@
 #include "alert_pcap.h"
 #include "alerts.h"
 #include "rule_coverage_live.h"
+#include "cue_live.h"
 #include "cov_interval.h"
 #include "cov_interval_capture.h"
 #include "cov_timeline.h"

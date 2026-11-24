@@ -29,7 +29,7 @@ own sensor radios. This is not [[direction-finding]], whose
 (`--monitor-iface`, `chanhop_drive()`), `src/poll.c`, `src/jsonl.c`
 (`sensor_health`), `tests/test_mon_radios.c`.
 
-**Last updated**: 2026-11-16 (new; JSONL `2.3.0`)
+**Last updated**: 2026-11-24 (#248: which radio serves a `--cue` cue, and why three radios on the default list refuse them), 2026-11-16 (new; JSONL `2.3.0`)
 
 ## Running it
 
@@ -202,6 +202,13 @@ radios a frame's channel must come from the frame:
 
 No detector reads the hop state: a frame's channel always came from its
 radiotap header.
+
+**Passive cueing** (`--cue`, #248, [[passive-cueing]]): a cue is served
+by the radio whose share holds the cued channel (`mon_hop_sched_rw()`),
+and its 50 % limit is that radio's. Shares of 4 or fewer equal channels
+cannot take one channel at 4x inside half the radio, so with the default
+11 channels over three radios every cue is refused `share_cap`; after a
+re-deal the next poll cues the channel wherever it now sits.
 
 ## Losing a radio
 

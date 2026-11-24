@@ -227,7 +227,7 @@ void rule_sensor_source_down(const sloth_state_t *s, time_t now) {
  *
  * #242 item 4. SENSOR_SOURCE_DOWN says a source stopped delivering;
  * this says one is delivering and the sensor is still losing what it
- * delivers, so a quiet alert list there is not a quiet site. Three
+ * delivers, so a quiet alert list there is not a quiet site. Four
  * signals, each its own incident (key `suppressed:<signal>`), WARN:
  *
  *   evict   a synthesis table (src/sensor_health.h) evicted at least
@@ -253,6 +253,10 @@ void rule_sensor_source_down(const sloth_state_t *s, time_t now) {
  *           with nobody on it, not a suppressed one; a whole band gone
  *           quiet at once is not this signal either (nothing to compare
  *           with).
+ *   cue     (#248) under --cue, the passive cueing of src/chancue.h
+ *           refused at least suppress.cue_refused_per_min cues at a
+ *           limit (active, rate or share) in one minute. Not the
+ *           refusals that are no limit (no channel, not hopped).
  *
  * The minute is COV_IV_MS, the coverage record's: one figure per
  * signal per minute, compared with a per-minute threshold. A signal
@@ -267,7 +271,8 @@ void rule_sensor_source_down(const sloth_state_t *s, time_t now) {
  * the thresholds; src/alerts.h gives the baseline each sits above.
  *
  * Own operational state (the first exemption form). A beacon spray, a
- * deauth flood or a jammer can drive any of the three, and so can a
+ * deauth flood or a jammer can drive any of the first three, a
+ * trigger flood the fourth, and so can a
  * busy segment, a slow SD card or an AP switched off; the rule names
  * the signal and does not guess which.
  *
@@ -279,9 +284,9 @@ void rule_sensor_source_down(const sloth_state_t *s, time_t now) {
  * suppresses to the coverage environment, and the rules that read that
  * evidence report `partly`, `suppressed` (src/rule_coverage.h). */
 
-enum { SUP_EVICT = 0, SUP_DROP, SUP_SILENT, SUP_N };
+enum { SUP_EVICT = 0, SUP_DROP, SUP_SILENT, SUP_CUE, SUP_N };
 static const char *const sup_key[SUP_N] = {
-    "suppressed:evict", "suppressed:drop", "suppressed:silent",
+    "suppressed:evict", "suppressed:drop", "suppressed:silent", "suppressed:cue",
 };
 
 typedef struct {
@@ -297,6 +302,7 @@ static struct {
     uint64_t      evict[SH_EVICT_KIND_COUNT];
     int           mon_ok, cap_ok;
     uint64_t      mon_recv, mon_lost, cap_recv, cap_lost;
+    uint64_t      cue_limit;      /* s->cue.refused_limit at the window's start */
     uint32_t      iv_seq;
     int           nchan;
     sup_chan_t    chan[COV_IV_CHAN_MAX];
@@ -396,6 +402,7 @@ static void take_window(const sloth_state_t *s, uint64_t mono) {
     g_supp.cap_ok   = s->pkt_iface[0] && handle_ok(&s->cap_health);
     g_supp.cap_recv = s->cap_health.ps_recv;
     g_supp.cap_lost = s->cap_health.ps_drop + s->cap_health.ps_ifdrop;
+    g_supp.cue_limit = s->cue.refused_limit;
 }
 
 static uint64_t delta(uint64_t now, uint64_t then) { return now >= then ? now - then : 0; }
@@ -447,6 +454,17 @@ static void judge_drop(const sloth_state_t *s) {
     }
     g_supp.dr_mon = mon;
     g_supp.dr_cap = cap;
+}
+
+/* --cue's refusals at a limit over the minute (#248). A cue refused is
+ * a finding whose channel the radio could not be held on, and false
+ * triggers are how an attacker would try to hold it: every 802.11 kind
+ * loses airtime either way. Under the threshold, or without --cue, not
+ * over. */
+static void judge_cue(const sloth_state_t *s) {
+    uint64_t n = s->cue.on ? delta(s->cue.refused_limit, g_supp.cue_limit) : 0;
+    g_supp.cond[SUP_CUE] = n >= (uint64_t)tune_val(TUNE_SUPPRESS_CUE_REFUSED_PER_MIN);
+    if (g_supp.cond[SUP_CUE]) g_supp.inputs[SUP_CUE] |= 1u << COV_IN_DOT11;
 }
 
 /* A newly closed coverage interval: merge its channels by frequency,
@@ -550,6 +568,13 @@ static void fire_suppressed(const sloth_state_t *s, int sig, time_t now) {
                  "received in a minute%s: frames are lost before any parser "
                  "sees them - a flood, or a host too slow for the link",
                  handle, iface, pct, more);
+    } else if (sig == SUP_CUE) {
+        long thr = tune_val(TUNE_SUPPRESS_CUE_REFUSED_PER_MIN);
+        snprintf(detail, sizeof(detail),
+                 "--cue refused %ld or more cues at its limits in a minute: "
+                 "findings arrive faster than the radio may be held on their "
+                 "channels - false triggers aimed at the hop plan, or more "
+                 "real findings than the limits allow", thr);
     } else {
         int mhz = g_supp.si_mhz;
         const char *band = cov_ivb_name(g_supp.si_ivb);
@@ -585,6 +610,7 @@ void rule_sensor_suppressed(const sloth_state_t *s, time_t now) {
     if (held_ms(mono, g_supp.win_start) >= (uint64_t)COV_IV_MS) {
         judge_evict();
         judge_drop(s);
+        judge_cue(s);
         take_window(s, mono);
     }
     judge_silent();

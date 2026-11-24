@@ -223,6 +223,8 @@ typedef enum {
     TUNE_SUPPRESS_DROP_PCT,
     TUNE_SUPPRESS_DROP_MIN,
     TUNE_SUPPRESS_SILENT_INTERVALS,
+    /* #248: the fourth signal, cue refusals at a limit. Unmeasured. */
+    TUNE_SUPPRESS_CUE_REFUSED_PER_MIN,
     TUNE_COUNT
 } tune_id_t;
 

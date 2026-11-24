@@ -362,6 +362,9 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "suppress.drop_pct",          SUPPRESS_DROP_PCT_DEFAULT, 1, 100, "percent of a capture handle's received frames dropped (ps_drop + ps_ifdrop) in one minute for SENSOR_SUPPRESSED" },
     { "suppress.drop_min",          SUPPRESS_DROP_MIN_DEFAULT, 1, 10000000, "drops a handle must also have in that minute" },
     { "suppress.silent_intervals",  SUPPRESS_SILENT_INTERVALS_DEFAULT, 2, 60, "consecutive coverage intervals a visited channel that was heard before hears nothing while its band is heard" },
+    /* #248: --cue refusals at a limit (active, rate, share) in one
+     * minute. No baseline: --cue is new; see src/alerts.h. */
+    { "suppress.cue_refused_per_min", SUPPRESS_CUE_REFUSED_PER_MIN_DEFAULT, 1, 100000, "--cue refusals at a limit (active, rate or share) in one minute for SENSOR_SUPPRESSED" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

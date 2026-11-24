@@ -301,6 +301,12 @@ const chanhop_t *mon_hop_sched(int radio) {
     return g_hop[radio].count ? &g_hop[radio] : NULL;
 }
 
+chanhop_t *mon_hop_sched_rw(int radio) {
+    if (radio < 1 || radio >= MON_RADIO_MAX || !((g_dealt >> radio) & 1u))
+        return NULL;
+    return g_hop[radio].count ? &g_hop[radio] : NULL;
+}
+
 uint32_t mon_hop_radio0_delta(void) {
     pthread_mutex_lock(&g_mu);
     uint64_t f = g_n ? g_r[0].frames : 0;

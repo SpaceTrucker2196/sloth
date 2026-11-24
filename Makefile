@@ -280,6 +280,10 @@ CORE_BASE_SRCS += src/preflight.c src/preflight_gather.c
 # sloth --handoff and --interference-report (#250): sloth.db read-only
 # (src/site_db.c), the packet and the report.
 CORE_BASE_SRCS += src/site_db.c src/handoff.c src/interference.c
+# Passive cueing (#248): the policy (chancue.c, pure) and sloth-wifi's
+# side (cue_live.c), named by src/main.c's hop stage only, so sloth-rf's
+# link pulls neither.
+CORE_BASE_SRCS += src/chancue.c src/cue_live.c
 # sloth --verify (#251): the reader of the -o hash chain and of the
 # evidence manifests, named by src/main.c only; the writer,
 # src/jsonl_chain.c, is with jsonl_core.c above.

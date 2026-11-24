@@ -77,12 +77,19 @@ void observe_resolve_profile(const observe_profile_req_t *req,
     out->active_allowed   = 0;
     out->resolver_enabled = 0;
     out->hop_enabled      = req->hop ? 1 : 0;
+    out->cue_enabled      = 0;
 
     /* A command line carrying both flags states two incompatible
      * intents. Refused either way round because the request carries no
      * ordering to prefer one by. */
     if (req->strict && req->allow_active) {
         out->refusal   = OBSERVE_PROFILE_REFUSE_ACTIVE_UNDER_STRICT;
+        out->exit_code = 2;
+        return;
+    }
+
+    if (req->strict && req->cue) {
+        out->refusal   = OBSERVE_PROFILE_REFUSE_CUE_UNDER_STRICT;
         out->exit_code = 2;
         return;
     }
@@ -101,4 +108,5 @@ void observe_resolve_profile(const observe_profile_req_t *req,
         out->active_allowed   = 1;
         out->resolver_enabled = 1;
     }
+    out->cue_enabled = req->cue && req->hop;
 }

@@ -256,6 +256,7 @@ void run_wifi_oui_attacker_tests(void);
 void run_data_socket_tests(void);
 void run_osi_tests(void);
 void run_chanhop_tests(void);
+void run_chancue_tests(void);       /* tests/test_chancue.c (#248) */
 void run_auth_track_tests(void);
 void run_action_snoop_tests(void);
 void run_ctrl_frames_tests(void);
@@ -485,6 +486,7 @@ int main(void) {
     run_data_socket_tests();
     run_osi_tests();
     run_chanhop_tests();
+    run_chancue_tests();
     run_auth_track_tests();
     run_action_snoop_tests();
     run_ctrl_frames_tests();

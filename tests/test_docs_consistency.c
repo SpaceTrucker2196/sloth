@@ -1325,6 +1325,30 @@ static void test_usage_report_names_collection_coverage(void) {
     ASSERT(has_ci(b, "coverage"));
 }
 
+/* --cue (#248): the help names the six kinds, the 4x / 120 s dwell,
+ * each limit, the SENSOR_SUPPRESSED feed, the --hop and --strict rules
+ * and that nothing is transmitted - what the owner's rulings of
+ * 2026-11-23 require the operator to be told. --strict names the
+ * refusal. Seen red with "8 per 10 min" dropped from the help. */
+static void test_usage_cue_names_kinds_and_limits(void) {
+    char b[4096];
+    ASSERT_EQ(usage_option_block("--cue", b, sizeof(b)), 1);
+    static const char *const want[] = {
+        "EVIL_TWIN", "KARMA_AP", "KARMA_PROBE_FORGE", "DEAUTH_FLOOD",
+        "PMKID_HARVEST", "HANDSHAKE_HARVEST", "4x", "120 s",
+        "At most 4 cues at once", "8 per 10 min", "50%%", "refused and counted",
+        "SENSOR_SUPPRESSED", "needs --hop", "refused under --strict",
+        "nothing is transmitted", "no cue leaves the sensor", "Off by default",
+        "passive-cueing.md",
+    };
+    for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+        if (!has_ci(b, want[i])) fprintf(stderr, "    --cue help lacks: %s\n", want[i]);
+        ASSERT(has_ci(b, want[i]));
+    }
+    ASSERT_EQ(usage_option_block("--strict", b, sizeof(b)), 1);
+    ASSERT(has_ci(b, "refuses --cue (exit 2)"));
+}
+
 /* --preflight (#247): the help names the three exit codes, says what it
  * does not do, and points at the page; --json says what it qualifies.
  * docs/wiki/cli-reference.md and docs/wiki/preflight.md carry the same
@@ -2857,6 +2881,7 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_usage_strict_claims_no_total_coverage);
     RUN_TEST(test_usage_adsb_names_both_refused_schemes);
     RUN_TEST(test_usage_report_names_collection_coverage);
+    RUN_TEST(test_usage_cue_names_kinds_and_limits);
     RUN_TEST(test_usage_preflight_names_exit_codes);
     RUN_TEST(test_set_channel_comments_claim_no_total);
     TEST_SUITE("wiki + rule-table integrity (#103)");

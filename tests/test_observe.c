@@ -296,6 +296,33 @@ static void test_profile_allow_active_refusal_beats_the_socket_one(void) {
     ASSERT_EQ(2, p.exit_code);
 }
 
+/* --cue (#248, owner ruling 2026-11-23): refused under --strict, exit
+ * 2, either order; enabled only with --hop; off by default. Seen red
+ * with the strict clause removed (refusal OK, cue_enabled 1). */
+static void test_profile_strict_refuses_cue(void) {
+    observe_profile_t p = resolve((observe_profile_req_t){
+        .strict = 1, .hop = 1, .cue = 1 });
+    ASSERT_EQ(OBSERVE_PROFILE_REFUSE_CUE_UNDER_STRICT, p.refusal);
+    ASSERT_EQ(2, p.exit_code);
+    ASSERT_EQ(0, p.cue_enabled);
+    /* --strict --allow-active --cue names the first contradiction. */
+    p = resolve((observe_profile_req_t){ .strict = 1, .allow_active = 1, .cue = 1 });
+    ASSERT_EQ(OBSERVE_PROFILE_REFUSE_ACTIVE_UNDER_STRICT, p.refusal);
+}
+
+/* Seen red with cue_enabled = req->cue (no --hop test). */
+static void test_profile_cue_needs_hop(void) {
+    observe_profile_t p = resolve((observe_profile_req_t){ .hop = 1, .cue = 1 });
+    ASSERT_EQ(OBSERVE_PROFILE_OK, p.refusal);
+    ASSERT_EQ(1, p.cue_enabled);
+    p = resolve((observe_profile_req_t){ .cue = 1 });
+    ASSERT_EQ(OBSERVE_PROFILE_OK, p.refusal);
+    ASSERT_EQ(0, p.exit_code);
+    ASSERT_EQ(0, p.cue_enabled);
+    p = resolve((observe_profile_req_t){ .hop = 1 });
+    ASSERT_EQ(0, p.cue_enabled);
+}
+
 static void test_profile_null_arguments_are_safe(void) {
     observe_profile_t p;
     observe_profile_req_t req = { .strict = 1 };
@@ -336,5 +363,7 @@ void run_observe_tests(void) {
     RUN_TEST(test_profile_strict_permits_a_local_or_unparseable_socket);
     RUN_TEST(test_profile_socket_check_is_gated_on_the_flag);
     RUN_TEST(test_profile_allow_active_refusal_beats_the_socket_one);
+    RUN_TEST(test_profile_strict_refuses_cue);
+    RUN_TEST(test_profile_cue_needs_hop);
     RUN_TEST(test_profile_null_arguments_are_safe);
 }

@@ -53,7 +53,7 @@
  * stream's history — the records predate the field by many releases. A
  * `sensor_health` line with no `jsonl_version` is from a stream written
  * before this version and says nothing more than that. */
-#define SLOTH_JSONL_VERSION "2.12.0"
+#define SLOTH_JSONL_VERSION "2.13.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
@@ -4274,6 +4274,19 @@ typedef struct {
         uint32_t mean_planned_ms;
         uint32_t mean_measured_ms;
     } hop_dwell;
+    /* Passive cueing (#248, src/chancue.h, src/cue_live.c): on is 1
+     * under --cue; active the cues running now; started and refused
+     * lifetime; refused_limit the refusals at a limit (active, rate,
+     * share), the count SENSOR_SUPPRESSED's `suppressed:cue` signal
+     * reads; cued_ms radio 0's measured time in cued dwells. */
+    struct {
+        int      on;
+        int      active;
+        uint64_t started;
+        uint64_t refused;
+        uint64_t refused_limit;
+        uint64_t cued_ms;
+    } cue;
     /* Requested vs confirmed monitor-radio channel (#91 slice 1):
      * chanhop_drive() used to call set_channel() without consuming its
      * return code, so the UI showed the intended channel even when the

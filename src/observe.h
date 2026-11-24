@@ -103,7 +103,11 @@ int  observe_strict_refuses_socket(int strict_locked, int spec_is_remote);
 typedef enum {
     OBSERVE_PROFILE_OK = 0,
     OBSERVE_PROFILE_REFUSE_ACTIVE_UNDER_STRICT,
-    OBSERVE_PROFILE_REFUSE_ROUTABLE_SOCKET_UNDER_STRICT
+    OBSERVE_PROFILE_REFUSE_ROUTABLE_SOCKET_UNDER_STRICT,
+    /* --strict --cue (#248, owner ruling 2026-11-23): a finding steering
+     * the receiver's plan is behaviour the operator opts into, and the
+     * lock says no behaviour is opted into this run. Appended. */
+    OBSERVE_PROFILE_REFUSE_CUE_UNDER_STRICT
 } observe_profile_refusal_t;
 
 typedef struct {
@@ -118,6 +122,7 @@ typedef struct {
        have_data_socket is set, so a stale value cannot reach the
        decision. */
     int socket_is_remote;
+    int cue;               /* --cue (#248)                    */
 } observe_profile_req_t;
 
 typedef struct {
@@ -127,6 +132,10 @@ typedef struct {
     int active_allowed;                /* -> observe_set_active_...(1) */
     int resolver_enabled;              /* -> dns_resolver_set_...(1)   */
     int hop_enabled;                   /* --hop survives the profile   */
+    /* --cue survives: given, not refused, and --hop on. --cue without
+     * --hop has no scheduler to steer; main() says it is ignored, as it
+     * says of --monitor-iface radios with nothing to retune them. */
+    int cue_enabled;
 } observe_profile_t;
 
 /* Resolve the profile. A NULL req or a NULL out is a no-op.
@@ -138,6 +147,9 @@ typedef struct {
  * routable-socket one, deliberately: the flag pair contradicts the
  * operator's stated intent and is the better thing to name, while the
  * socket is a configuration consequence. Both exit 2.
+ *
+ * --strict --cue is refused after --strict --allow-active and before
+ * the socket: like the first it is two stated intents that contradict.
  *
  * hop_enabled is req->hop unconditionally. --strict does not refuse
  * --hop; that is the owner's ruling of 2026-09-30 on #84 ("--hop

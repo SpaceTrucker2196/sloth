@@ -9,6 +9,8 @@
 #include "sloth_clock.h"
 #include "tui.h"
 #include "wifi_chanhop.h"
+#include "chancue.h"       /* --cue (#248): the limits it announces */
+#include "cue_live.h"
 #include "wifi_snapshot.h"
 #include "wifi_baseline.h"
 #include "sensors.h"
@@ -162,6 +164,7 @@ static volatile sig_atomic_t g_quit = 0;
  * flag at all. See src/platform/linux_wifi.h. */
 static chanhop_t g_chanhop;
 static int       g_hop_enabled = 0;
+static int       g_cue_asked   = 0;   /* --cue (#248) */
 
 static void on_signal(int sig) { (void)sig; g_quit = 1; }
 
@@ -211,6 +214,9 @@ static void chanhop_drive(sloth_state_t *s) {
     /* With several sensor radios (src/mon_radios.h) that counter is all
      * of theirs; this scheduler is radio 0's and is fed radio 0's. */
     if (mon_radios_active()) delta = mon_hop_radio0_delta();
+    /* --cue (#248): this poll's new findings lengthen their channels'
+     * dwell before the schedulers tick. No platform call of its own. */
+    cue_live_step(s, &g_chanhop, now_ms);
     /* Tick, retune, feed the ack back, publish: src/wifi_chanhop.c, so
      * the loop is testable through the fake platform (#91). */
     chanhop_service(&g_chanhop, s, now_ms, delta);
@@ -355,7 +361,7 @@ static void print_usage(const char *argv0) {
             "       [--collect-handshakes] [--handshake-retention DAYS]\n"
             "       [--data-socket SPEC] [--data-socket-allow-remote]\n"
             "       [--no-discovery] [--out-format FORMAT]\n"
-            "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
+            "       [--refresh-ms N] [--hop] [--cue] [--strict] [--allow-active]\n"
             "       [--bt-monitor] [--bt-capture PATH] [--ble-rotation-hints]\n"
             "       [--location LAT,LON[,ALT]] [--gps SPEC] [--gps-allow-remote]\n"
             "       [--gps-baud N]\n"
@@ -492,6 +498,19 @@ static void print_usage(const char *argv0) {
             "                     run and does NOT refuse --hop (owner ruling,\n"
             "                     2026-09-30). Needs monitor mode +\n"
             "                     CAP_NET_ADMIN (Linux). No frame is transmitted.\n"
+            "  --cue              passive cueing (needs --hop; ignored without\n"
+            "                     it, refused under --strict). A new EVIL_TWIN,\n"
+            "                     KARMA_AP, KARMA_PROBE_FORGE, DEAUTH_FLOOD,\n"
+            "                     PMKID_HARVEST or HANDSHAKE_HARVEST finding\n"
+            "                     makes the hop scheduler dwell 4x longer on the\n"
+            "                     channel it was heard on, for 120 s. At most 4\n"
+            "                     cues at once and 8 per 10 min; cues take at\n"
+            "                     most 50%% of a radio's time and every other\n"
+            "                     channel is still visited. A cue over a limit is\n"
+            "                     refused and counted (SENSOR_SUPPRESSED). Only\n"
+            "                     sloth's own receiver is retuned; nothing is\n"
+            "                     transmitted and no cue leaves the sensor.\n"
+            "                     Off by default. docs/wiki/passive-cueing.md.\n"
             "  --strict           near-no-op: strict observation is already the\n"
             "                     default. What it adds is a LOCK — any later\n"
             "                     attempt to enable active behaviour in this run\n"
@@ -503,7 +522,9 @@ static void print_usage(const char *argv0) {
             "                     --data-socket-allow-remote; loopback and unix:\n"
             "                     still work). It does NOT refuse --hop, which\n"
             "                     still retunes the monitor interface, and it\n"
-            "                     does not change promiscuous mode.\n"
+            "                     does not change promiscuous mode. It refuses\n"
+            "                     --cue (exit 2), which lets a finding change\n"
+            "                     the channel plan.\n"
             "                     Worth passing because it puts the operator's\n"
             "                     intent where ps(1) and an audit log can see it.\n"
             "  --tune NAME=VALUE  move one detector threshold. Repeatable.\n"
@@ -1128,6 +1149,8 @@ int main(int argc, char **argv) {
             if (gnss_flag_baud(argv[++i], &gnss_flags.baud) != 0) return 2;
         } else if (!strcmp(argv[i], "--hop")) {
             g_hop_enabled = 1;
+        } else if (!strcmp(argv[i], "--cue")) {
+            g_cue_asked = 1;
         } else if (!strcmp(argv[i], "--tune-list")) {
             tune_print_list(stdout);
             return 0;
@@ -1549,6 +1572,7 @@ int main(int argc, char **argv) {
         .strict           = strict_lock,
         .allow_active     = allow_active,
         .hop              = g_hop_enabled,
+        .cue              = g_cue_asked,
         .have_data_socket = data_socket != NULL,
         .socket_is_remote = data_socket
                                 ? data_socket_spec_is_remote(data_socket)
@@ -1567,6 +1591,11 @@ int main(int argc, char **argv) {
         return prof.exit_code;
     case OBSERVE_PROFILE_REFUSE_ROUTABLE_SOCKET_UNDER_STRICT:
         daemon_strict_socket_refusal(data_socket);
+        return prof.exit_code;
+    case OBSERVE_PROFILE_REFUSE_CUE_UNDER_STRICT:
+        fprintf(stderr, "sloth: --cue refused: --strict locks the run's "
+                        "behaviour, and --cue lets a finding change the "
+                        "channel plan; drop one of the two\n");
         return prof.exit_code;
     case OBSERVE_PROFILE_OK:
         break;
@@ -1592,6 +1621,36 @@ int main(int argc, char **argv) {
                         "everything else stays passive\n");
     }
     g_hop_enabled = prof.hop_enabled;
+    /* --cue (#248, owner rulings 2026-11-23). Off by default; announced
+     * with what it enables, the kinds and the limits before anything can
+     * be cued. Without --hop there is no scheduler to steer, so it is
+     * ignored with a notice, as --monitor-iface radios are left where
+     * they were parked without --hop. Not announced under --preflight
+     * or --handoff, which start nothing. */
+    if (g_cue_asked && !offline_cmd) {
+#ifdef WITH_PCAP
+        if (!prof.cue_enabled) {
+            fprintf(stderr, "sloth: --cue ignored: it lengthens the --hop "
+                            "scheduler's dwell, and --hop is not on\n");
+        } else {
+            cue_live_enable(1);
+            fprintf(stderr, "sloth: --cue enabled passive cueing: a new "
+                            "EVIL_TWIN, KARMA_AP, KARMA_PROBE_FORGE, "
+                            "DEAUTH_FLOOD, PMKID_HARVEST or HANDSHAKE_HARVEST "
+                            "finding holds sloth's own monitor radio %dx "
+                            "longer on the channel it was heard on for %u s; "
+                            "at most %d cues at once and %d per %u min, cues "
+                            "at most 50%% of a radio's time, every other "
+                            "channel still visited; receive-only, nothing "
+                            "transmitted, no cue leaves this sensor\n",
+                    CHANHOP_CUE_MULT, CUE_DURATION_MS / 1000u, CUE_MAX_ACTIVE,
+                    CUE_RATE_MAX, CUE_RATE_WINDOW_MS / 60000u);
+        }
+#else
+        fprintf(stderr, "sloth: --cue ignored: this build has no libpcap "
+                        "(WITH_PCAP=0), so nothing hops\n");
+#endif
+    }
 
     if (g_hop_enabled) chanhop_init_default(&g_chanhop);
     /* The per-interval coverage record reads radio 0's dwell from this
