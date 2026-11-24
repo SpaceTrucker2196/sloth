@@ -359,29 +359,63 @@ static void test_cue_served_by_the_holding_radio(void) {
     ASSERT_EQ(chanhop_slot_cued(&only, chanhop_find_freq(&only, mhz_of(6)), 11), 1);
     ASSERT_EQ(c.cue[0].radio, 0);
 
-    /* The limit is per radio: the default 11 channels dealt among three
-     * radios leave shares of 4, 4 and 3, where one channel at 4x would
-     * take 4/7 or 4/6 of its radio with no other cue running - refused
-     * `share_small`, the layout's and not load's, so not a limit and no
-     * input to SENSOR_SUPPRESSED (#248 review). Seen red with the
-     * structural check removed (share_cap, eleven limit refusals). */
+    /* The cap is over all radios (owner ruling of 2026-11-24): the
+     * default 11 channels dealt among three radios leave shares of 4, 4
+     * and 3. One cue on a radio of 4 takes 4/7 of it, on the radio of 3
+     * 4/6; the first two radios' cues fit (8/7 of the 3/2 the radios
+     * allow), the third radio's would make 1.81 and is refused
+     * share_cap, a limit. A second cue on a radio of 4 breaks its floor
+     * (2 x 2 > 2) and is refused share_cap too. Seen red under the
+     * per-radio cap restored (share_small on the first). */
     chanhop_t def, r0, r1, r2;
     chanhop_init(&def, k_def, N_DEF);
     chanhop_split(&r0, &def, 3, 0);
     chanhop_split(&r1, &def, 3, 1);
     chanhop_split(&r2, &def, 3, 2);
-    ASSERT_EQ(r0.count + r1.count + r2.count, N_DEF);
+    ASSERT_EQ(r0.count, 4);
+    ASSERT_EQ(r1.count, 4);
+    ASSERT_EQ(r2.count, 3);
     chancue_t c3;
     chancue_init(&c3);
     chanhop_t *three[3] = { &r0, &r1, &r2 };
-    for (int i = 0; i < N_DEF; i++)
-        ASSERT_EQ(chancue_request(&c3, three, 3, ALERT_TYPE_EVIL_TWIN,
-                                  mhz_of(k_def[i]), "t", 1), CUE_REFUSE_SHARE_SMALL);
-    ASSERT_EQ((int)c3.refused, N_DEF);
-    ASSERT_EQ((int)c3.refused_limit, 0);
+    ASSERT_EQ(chancue_request(&c3, three, 3, ALERT_TYPE_EVIL_TWIN,
+                              r0.slots[0].freq_mhz, "t0", 1), CUE_STARTED);
+    ASSERT_EQ(chancue_request(&c3, three, 3, ALERT_TYPE_EVIL_TWIN,
+                              r1.slots[0].freq_mhz, "t1", 1), CUE_STARTED);
+    ASSERT_EQ(chancue_request(&c3, three, 3, ALERT_TYPE_EVIL_TWIN,
+                              r2.slots[0].freq_mhz, "t2", 1), CUE_REFUSE_SHARE);
+    ASSERT_EQ(chancue_request(&c3, three, 3, ALERT_TYPE_EVIL_TWIN,
+                              r0.slots[1].freq_mhz, "t3", 1), CUE_REFUSE_SHARE);
+    ASSERT_EQ((int)c3.started, 2);
+    ASSERT_EQ((int)c3.refused_limit, 2);
+    /* The parts handed to the clamp: the two cued radios keep their
+     * 4/7 and more, the three together within half their time. */
+    ASSERT(r0.cue_cap_pm >= 571 && r1.cue_cap_pm >= 571);
+    ASSERT(r0.cue_cap_pm + r1.cue_cap_pm + r2.cue_cap_pm <= 1500);
+
+    /* A layout too small for any cue: six channels over three radios,
+     * two each - one at 4x would make its rotation three times as long
+     * (6 against 2), past the floor whatever else runs. share_small,
+     * the layout's and not load's, so not a limit and no input to
+     * SENSOR_SUPPRESSED (#248 review). Seen red with the structural
+     * check removed (share_cap, six limit refusals). */
+    static const int k6[] = { 1, 6, 11, 36, 40, 44 };
+    chanhop_t six, s0, s1, s2;
+    chanhop_init(&six, k6, 6);
+    chanhop_split(&s0, &six, 3, 0);
+    chanhop_split(&s1, &six, 3, 1);
+    chanhop_split(&s2, &six, 3, 2);
+    chancue_t c6;
+    chancue_init(&c6);
+    chanhop_t *three6[3] = { &s0, &s1, &s2 };
+    for (int i = 0; i < 6; i++)
+        ASSERT_EQ(chancue_request(&c6, three6, 3, ALERT_TYPE_EVIL_TWIN,
+                                  mhz_of(k6[i]), "t", 1), CUE_REFUSE_SHARE_SMALL);
+    ASSERT_EQ((int)c6.refused, 6);
+    ASSERT_EQ((int)c6.refused_limit, 0);
     ASSERT_EQ(chancue_is_limit(CUE_REFUSE_SHARE_SMALL), 0);
     ASSERT_STR(chancue_reason_name(CUE_REFUSE_SHARE_SMALL), "share_small");
-    ASSERT_EQ(c3.ev[0].reason, CUE_REFUSE_SHARE_SMALL);
+    ASSERT_EQ(c6.ev[0].reason, CUE_REFUSE_SHARE_SMALL);
     /* One radio with room for one cue alone: a second that does not fit
      * beside it is the limit, share_cap, counted. */
     chanhop_t five;
@@ -395,6 +429,54 @@ static void test_cue_served_by_the_holding_radio(void) {
     ASSERT_EQ(chancue_request(&c5, one5, 1, ALERT_TYPE_EVIL_TWIN, mhz_of(6), "v", 1),
               CUE_REFUSE_SHARE);
     ASSERT_EQ((int)c5.refused_limit, 1);
+}
+
+/* The cap over all radios and each radio's floor, measured by the
+ * schedulers' own dwell accounting: three radios on the default 11
+ * channels (4/4/3), a finding on every channel at once, two minutes.
+ * The cued channels together take at most half of the three radios'
+ * time, and every uncued channel keeps at least half the share it
+ * would have with no cue. Seen red with share_out() handing every
+ * radio 999 and cap_ok() always 1 (cued time past half). */
+static void test_cap_is_over_all_radios(void) {
+    chanhop_t def, r[3];
+    chanhop_init(&def, k_def, N_DEF);
+    for (int k = 0; k < 3; k++) chanhop_split(&r[k], &def, 3, k);
+    chanhop_t *sched[3] = { &r[0], &r[1], &r[2] };
+    chancue_t c;
+    chancue_init(&c);
+    int started = 0;
+    for (int i = 0; i < N_DEF; i++)
+        started += chancue_request(&c, sched, 3, ALERT_TYPE_DEAUTH_FLOOD,
+                                   mhz_of(k_def[i]), "a", 0) == CUE_STARTED;
+    ASSERT_EQ(started, 2);
+    const uint64_t end = CUE_DURATION_MS - 10;
+    for (uint64_t t = 0; t < end; t += 10) {
+        chancue_tick(&c, sched, 3, t);
+        for (int k = 0; k < 3; k++) {
+            char ifn[8];
+            snprintf(ifn, sizeof(ifn), "mon%d", k);
+            chanhop_step(&r[k], ifn, t, 0, NULL, NULL);
+        }
+    }
+    uint64_t all = 0, cued = 0;
+    for (int k = 0; k < 3; k++) {
+        uint64_t radio = total_ms(&r[k], end);
+        all += radio;
+        for (int i = 0; i < r[k].count; i++) {
+            uint64_t ms = chanhop_slot_time_ms(&r[k], i, end);
+            if (chanhop_slot_cued(&r[k], i, end)) { cued += ms; continue; }
+            /* Normal share at equal dwell is radio / count; at least
+             * half of it, less one dwell for where the window cuts. */
+            ASSERT_GT(ms * 2 * (uint64_t)r[k].count + 2 * 250u * r[k].count, radio);
+        }
+    }
+    /* The two cued radios take 4/7 each at full plans, 38 % of the
+     * three radios' time; held to each radio's own half (the per-radio
+     * rule) they would get 3/6, 33 %. Seen red with share_out() never
+     * called. */
+    ASSERT_GT(cued * 100, all * 36);
+    ASSERT(cued * 2 <= all + 3 * 1000u);   /* half, within one dwell a radio */
 }
 
 /* ── the live side ───────────────────────────────────────────────── */
@@ -761,7 +843,10 @@ static void test_cue_is_receive_only(void) {
     ASSERT_GT(g_trip_set, 100);
     ASSERT_EQ(g_trip_bad_iface, 0);
     ASSERT_EQ(g_trip_other, 0);
-    ASSERT_EQ((int)g_s.cue.started, 3);         /* one on each radio */
+    /* Shares of 9, 8 and 8 at equal dwell: under the all-radios cap
+     * (2026-11-24) four cues fit - two on one radio - and the active
+     * cap (CUE_MAX_ACTIVE) stops the rest. */
+    ASSERT_EQ((int)g_s.cue.started, CUE_MAX_ACTIVE);
     ASSERT_EQ(g_s.cue.active, 0);               /* all ended */
     live_end();
 }
@@ -778,6 +863,7 @@ void run_chancue_tests(void) {
     RUN_TEST(test_rate_cap);
     RUN_TEST(test_not_limits);
     RUN_TEST(test_cue_served_by_the_holding_radio);
+    RUN_TEST(test_cap_is_over_all_radios);
     RUN_TEST(test_finding_channel);
     RUN_TEST(test_twin_lengthens_its_channel);
     RUN_TEST(test_cue_records);

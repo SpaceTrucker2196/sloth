@@ -2050,7 +2050,7 @@ carry those, and `incident_id` joins the two.
 | `channel`, `freq_mhz`, `band` | the channel the finding was heard on: the radiotap frequency of the first frame it cites in the evidence ring, its channel number and its band (`2.4`, `5`, `5dfs`, `6`; `unknown` and 0 when the finding names none) |
 | `duration_s` | `started`: the planned hold, 120; `ended`: the seconds it was held; `refused`: 0 |
 | `radio` | `started` / `ended`: the sensor radio whose share of the `--hop` list holds the channel (0 is `--monitor-iface`'s first) |
-| `reason` | `refused` only: `active_cap` (four running), `rate_cap` (eight started in ten minutes), `share_cap` (the radio's cued dwells would pass its uncued ones), `no_channel` (no cited frame with a frequency), `not_hopped` (no radio's rotation holds the channel), `share_small` (the holding radio's share could hold no cue even with none running: fewer than five channels at equal dwell, as three radios on the default list leave). The first three are the limits `SENSOR_SUPPRESSED` counts |
+| `reason` | `refused` only: `active_cap` (four running), `rate_cap` (eight started in ten minutes), `share_cap` (the cues would pass half the sensor radios' time together, or the holding radio's rotation would pass twice its length), `no_channel` (no cited frame with a frequency), `not_hopped` (no radio's rotation holds the channel), `share_small` (the holding radio's share could hold no cue even with none running anywhere: two channels or fewer, or a single radio of fewer than five at equal dwell). The first three are the limits `SENSOR_SUPPRESSED` counts |
 | `incident_id` | the finding's incident, as on its `alert.*` records |
 
 The dwell itself is measured where it always was: the `coverage_interval`

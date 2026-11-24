@@ -86,6 +86,61 @@ static cue_result_t refuse(chancue_t *c, cue_result_t r, alert_type_t ty,
     return r;
 }
 
+/* The sensor radios the cap is taken over: the schedulers that hold a
+ * share. A radio with none (lost, or fixed on a channel) is no part of
+ * the cueable time. */
+static int radios_n(chanhop_t *const *sched, int nsched) {
+    int n = 0;
+    for (int k = 0; sched && k < nsched && k < CUE_SCHED_MAX; k++)
+        n += sched[k] && sched[k]->count > 0;
+    return n;
+}
+
+/* The all-radios cap (owner ruling of 2026-11-24): the cued share of
+ * each radio at full plans, summed, at most half the radios. Radio
+ * `radio` also counts slot `slot` cued (-1: none); with_cued 0 counts
+ * that slot alone, as if nothing else were cued. A little slack for
+ * the division, so an exact half on one radio (4 x 2 against 8) is
+ * admitted as the single-radio integer rule admits it. */
+static int cap_ok(chanhop_t *const *sched, int nsched, int radio, int slot,
+                  int with_cued, uint64_t now_ms) {
+    double sum = 0.0;
+    for (int k = 0; sched && k < nsched && k < CUE_SCHED_MAX; k++) {
+        if (!sched[k] || sched[k]->count <= 0) continue;
+        uint64_t c, u;
+        chanhop_cue_load(sched[k], k == radio ? slot : -1, with_cued, now_ms, &c, &u);
+        sum += chanhop_cue_share(c, u);
+    }
+    return sum <= (double)radios_n(sched, nsched) / 2.0 + 1e-9;
+}
+
+/* Hand each scheduler its part of the cap for the clamp in
+ * wifi_chanhop.c cued_plan(): its own cued share at full plans plus an
+ * equal part of what the radios together leave below half of their
+ * time, in thousandths, rounded down. The parts sum to at most half
+ * the radios, so the clamp keeps the cap however activity moves after
+ * a cue is admitted; on one radio the part is always 500. */
+static void share_out(chanhop_t *const *sched, int nsched, uint64_t now_ms) {
+    int n = radios_n(sched, nsched);
+    if (n <= 0) return;
+    double f[CUE_SCHED_MAX] = { 0 }, sum = 0.0;
+    for (int k = 0; k < nsched && k < CUE_SCHED_MAX; k++) {
+        if (!sched[k] || sched[k]->count <= 0) continue;
+        uint64_t c, u;
+        chanhop_cue_load(sched[k], -1, 1, now_ms, &c, &u);
+        f[k] = chanhop_cue_share(c, u);
+        sum += f[k];
+    }
+    double slack = ((double)n / 2.0 - sum) / (double)n;
+    for (int k = 0; k < nsched && k < CUE_SCHED_MAX; k++) {
+        if (!sched[k]) continue;
+        double a = n == 1 ? 0.5 : f[k] + slack;
+        if (a < 0.0) a = 0.0;
+        if (a > 0.999) a = 0.999;
+        sched[k]->cue_cap_pm = (uint32_t)(a * 1000.0 + 1e-9);
+    }
+}
+
 int chancue_active(const chancue_t *c) {
     int n = 0;
     for (int i = 0; c && i < CUE_MAX_ACTIVE; i++) n += c->cue[i].used;
@@ -110,15 +165,20 @@ cue_result_t chancue_request(chancue_t *c, chanhop_t *const *sched, int nsched,
     for (int i = 0; i < CUE_MAX_ACTIVE; i++)
         if (c->cue[i].used && c->cue[i].freq_mhz == freq_mhz) return CUE_ABSORBED;
 
-    /* A share too short for one cue even with none running (fewer than
-     * five channels at equal dwell: 4x one against the rest) refuses
-     * every cue whatever the load. That is the radio layout, not airtime
-     * taken, so it is no limit and no SENSOR_SUPPRESSED input (#248
-     * review: three radios on the default 11 channels raised
-     * suppressed:cue on five ordinary findings a minute). Checked before
-     * the caps so it is never counted as one of them. */
-    if (!chanhop_cue_fits_alone(sched[radio], slot))
-        return refuse(c, CUE_REFUSE_SHARE_SMALL, ty, freq_mhz, incident_id, now_ms);
+    /* A share that could hold this cue with nothing else cued anywhere
+     * fails neither rule for any load, so a refusal here is the radio
+     * layout, not airtime taken: no limit and no SENSOR_SUPPRESSED input
+     * (#248 review). Under the all-radios cap of 2026-11-24 it is a
+     * radio holding two channels or fewer, or a single radio of fewer
+     * than five at equal dwell. Checked before the caps so it is never
+     * counted as one of them. */
+    {
+        uint64_t cu, un;
+        chanhop_cue_load(sched[radio], slot, 0, now_ms, &cu, &un);
+        if (!chanhop_cue_floor_ok(cu, un) ||
+            !cap_ok(sched, nsched, radio, slot, 0, now_ms))
+            return refuse(c, CUE_REFUSE_SHARE_SMALL, ty, freq_mhz, incident_id, now_ms);
+    }
 
     if (chancue_active(c) >= CUE_MAX_ACTIVE)
         return refuse(c, CUE_REFUSE_ACTIVE, ty, freq_mhz, incident_id, now_ms);
@@ -129,8 +189,13 @@ cue_result_t chancue_request(chancue_t *c, chanhop_t *const *sched, int nsched,
     if (recent >= CUE_RATE_MAX)
         return refuse(c, CUE_REFUSE_RATE, ty, freq_mhz, incident_id, now_ms);
 
-    if (!chanhop_cue_fits(sched[radio], slot, now_ms))
-        return refuse(c, CUE_REFUSE_SHARE, ty, freq_mhz, incident_id, now_ms);
+    {
+        uint64_t cu, un;
+        chanhop_cue_load(sched[radio], slot, 1, now_ms, &cu, &un);
+        if (!chanhop_cue_floor_ok(cu, un) ||
+            !cap_ok(sched, nsched, radio, slot, 1, now_ms))
+            return refuse(c, CUE_REFUSE_SHARE, ty, freq_mhz, incident_id, now_ms);
+    }
 
     cue_t *q = NULL;
     for (int i = 0; i < CUE_MAX_ACTIVE && !q; i++)
@@ -152,6 +217,11 @@ cue_result_t chancue_request(chancue_t *c, chanhop_t *const *sched, int nsched,
     c->starts[c->start_head] = now_ms ? now_ms : 1;
     c->start_head = (c->start_head + 1) % CUE_RATE_MAX;
     c->started++;
+    /* Mark the slot, hand out the cap's parts with it counted, then set
+     * it again so a dwell under way on it is planned with its part. */
+    sched[radio]->slots[slot].cue_until_ms = q->until_ms;
+    share_out(sched, nsched, now_ms);
+    sched[radio]->slots[slot].cue_until_ms = 0;
     chanhop_set_cue(sched[radio], slot, q->until_ms, now_ms);
 
     cue_event_t e;
@@ -187,6 +257,7 @@ void chancue_tick(chancue_t *c, chanhop_t *const *sched, int nsched, uint64_t no
                 chanhop_set_cue(h, s, until, now_ms);
         }
     }
+    share_out(sched, nsched, now_ms);
 }
 
 int chancue_drain(chancue_t *c, cue_event_t *out, int max) {

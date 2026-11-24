@@ -33,20 +33,29 @@ static uint32_t dwell_for(const chanhop_t *h, uint32_t activity) {
 }
 
 /* Slot t's cued plan at now_ms: CHANHOP_CUE_MULT x its normal plan,
- * clamped to what the budget rule (wifi_chanhop.h) leaves once every
- * other cued slot has its own cued plan, and never shorter than its
- * normal plan. */
+ * clamped to what the cap and the floor (wifi_chanhop.h, "Cued dwell")
+ * leave once every other cued slot has its own cued plan, and never
+ * shorter than its normal plan. With cue_cap_pm at 500 the cap is
+ * "cued plans <= uncued plans", the single-radio rule; the floor is
+ * "cued plans <= 2 x cued normal plans + uncued plans". */
 static uint32_t cued_plan(const chanhop_t *h, int t, uint64_t now_ms) {
     uint64_t d = dwell_for(h, h->slots[t].activity);
-    uint64_t uncued = 0, other_cued = 0;
+    uint64_t uncued = 0, other_n = 0;
     for (int j = 0; j < h->count; j++) {
         if (j == t) continue;
         uint64_t dj = dwell_for(h, h->slots[j].activity);
-        if (h->slots[j].cue_until_ms > now_ms) other_cued += CHANHOP_CUE_MULT * dj;
+        if (h->slots[j].cue_until_ms > now_ms) other_n += dj;
         else                                   uncued += dj;
     }
+    uint64_t other_cued = CHANHOP_CUE_MULT * other_n;
+    uint64_t total = 2 * (other_n + d) + uncued;                 /* floor */
+    uint32_t pm = h->cue_cap_pm;
+    if (pm < 1000) {                                              /* cap */
+        uint64_t cap = uncued * pm / (1000u - pm);
+        if (cap < total) total = cap;
+    }
     uint64_t want = CHANHOP_CUE_MULT * d;
-    uint64_t budget = uncued > other_cued ? uncued - other_cued : 0;
+    uint64_t budget = total > other_cued ? total - other_cued : 0;
     uint64_t p = want < budget ? want : budget;
     if (p < d) p = d;
     return (uint32_t)p;
@@ -66,6 +75,7 @@ static void chanhop_reset(chanhop_t *h) {
     h->max_dwell_ms  = 2000;
     h->ms_per_obs    = 8;
     h->pending       = -1;
+    h->cue_cap_pm    = 500;
 }
 
 /* The one slot-filling path (#167). Both initialisers come through here
@@ -215,6 +225,29 @@ int chanhop_cue_fits(const chanhop_t *h, int i, uint64_t now_ms) {
             uncued += dj;
     }
     return cued <= uncued;
+}
+
+void chanhop_cue_load(const chanhop_t *h, int extra, int with_cued, uint64_t now_ms,
+                      uint64_t *cued, uint64_t *uncued) {
+    uint64_t c = 0, u = 0;
+    for (int j = 0; h && j < h->count; j++) {
+        uint64_t dj = dwell_for(h, h->slots[j].activity);
+        if (j == extra || (with_cued && h->slots[j].cue_until_ms > now_ms)) c += dj;
+        else                                                               u += dj;
+    }
+    if (cued) *cued = c;
+    if (uncued) *uncued = u;
+}
+
+double chanhop_cue_share(uint64_t cued, uint64_t uncued) {
+    if (!cued) return 0.0;
+    double c = (double)CHANHOP_CUE_MULT * (double)cued;
+    return c / (c + (double)uncued);
+}
+
+int chanhop_cue_floor_ok(uint64_t cued, uint64_t uncued) {
+    /* cued plans + uncued <= 2 x (cued + uncued), cued plans = MULT x cued */
+    return (CHANHOP_CUE_MULT - 2) * cued <= uncued;
 }
 
 int chanhop_cue_fits_alone(const chanhop_t *h, int i) {

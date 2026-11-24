@@ -622,26 +622,26 @@ static void test_cue_absences(void) {
     ticks(61);
     ASSERT(open_of(NULL) == NULL);
 
-    /* Three radios on the default 11 channels (shares 4/4/3), every
-     * finding refused by the real policy (#248 review): share_small,
-     * no limit. Seen red with share_small counted as a limit. */
+    /* Three radios on six channels (shares 2/2/2), every finding
+     * refused by the real policy (#248 review): share_small, no limit.
+     * Seen red with share_small counted as a limit. */
     {
-        static const int ch[] = { 1, 6, 11, 36, 40, 44, 48, 149, 153, 157, 161 };
+        static const int ch[] = { 1, 6, 11, 36, 40, 44 };
         chanhop_t def, r0, r1, r2;
-        chanhop_init(&def, ch, 11);
+        chanhop_init(&def, ch, 6);
         chanhop_split(&r0, &def, 3, 0);
         chanhop_split(&r1, &def, 3, 1);
         chanhop_split(&r2, &def, 3, 2);
         chanhop_t *three[3] = { &r0, &r1, &r2 };
         chancue_t c;
         chancue_init(&c);
-        for (int i = 0; i < 11; i++)
+        for (int i = 0; i < 6; i++)
             (void)chancue_request(&c, three, 3, ALERT_TYPE_DEAUTH_FLOOD,
                                   chanhop_freq(ch[i]), "s", g_mono);
         g_s.cue.refused += c.refused;
         g_s.cue.refused_limit += c.refused_limit;
         ticks(61);
-        ASSERT_EQ((int)c.refused, 11);
+        ASSERT_EQ((int)c.refused, 6);
         ASSERT(open_of(NULL) == NULL);
     }
 

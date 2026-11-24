@@ -27,11 +27,12 @@
  * the limit refusals feed SENSOR_SUPPRESSED (`suppressed:cue`), because
  * an attacker can make false triggers to hold the radio on one channel:
  *
- *   share   on the radio that holds the channel, the cued channels'
- *           planned dwells together may not exceed the uncued channels'
- *           (src/wifi_chanhop.h, "Cued dwell"): cues take at most 50 %
- *           of that radio's time, and every other channel keeps at
- *           least half of its normal share - never zero.
+ *   share   the cap and the floor (src/wifi_chanhop.h, "Cued dwell";
+ *           owner ruling of 2026-11-24): cues take at most 50 % of the
+ *           sensor radios' time together, and on the radio that holds
+ *           the channel the rotation with its cues is at most twice as
+ *           long, so every other channel keeps at least half of its
+ *           normal share - never zero.
  *   active  at most CUE_MAX_ACTIVE cues at once, over all radios.
  *   rate    at most CUE_RATE_MAX cues started in any CUE_RATE_WINDOW_MS.
  *
@@ -39,8 +40,8 @@
  * finding names no channel (its evidence carries no radiotap frequency,
  * or the ring no longer holds it), its channel is in no radio's
  * rotation, or the holding radio's share is too short to take a cue
- * even with none running (the layout, not load: three radios on the
- * default 11 channels). A finding on a channel already cued is absorbed: no new
+ * even with none running anywhere (the layout, not load: a radio of two
+ * channels or fewer). A finding on a channel already cued is absorbed: no new
  * cue, no record, the running cue's end unchanged.
  *
  * Pure: no platform call, no clock, no I/O. The caller passes the

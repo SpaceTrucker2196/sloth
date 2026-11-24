@@ -508,8 +508,9 @@ static void print_usage(const char *argv0) {
             "                     makes the hop scheduler dwell 4x longer on the\n"
             "                     channel it was heard on, for 120 s. At most 4\n"
             "                     cues at once and 8 per 10 min; cues take at\n"
-            "                     most 50%% of a radio's time and every other\n"
-            "                     channel is still visited. A cue over a limit is\n"
+            "                     most 50%% of the radios' time together, and\n"
+            "                     every other channel keeps at least half its\n"
+            "                     share and is still visited. A cue over a limit is\n"
             "                     refused and counted (SENSOR_SUPPRESSED). Only\n"
             "                     sloth's own receiver is retuned; nothing is\n"
             "                     transmitted and no cue leaves the sensor.\n"
@@ -1643,8 +1644,9 @@ int main(int argc, char **argv) {
                             "finding holds sloth's own monitor radio %dx "
                             "longer on the channel it was heard on for %u s; "
                             "at most %d cues at once and %d per %u min, cues "
-                            "at most 50%% of a radio's time, every other "
-                            "channel still visited; receive-only, nothing "
+                            "at most 50%% of the radios' time together, every "
+                            "other channel at least half its share; "
+                            "receive-only, nothing "
                             "transmitted, no cue leaves this sensor\n",
                     CHANHOP_CUE_MULT, CUE_DURATION_MS / 1000u, CUE_MAX_ACTIVE,
                     CUE_RATE_MAX, CUE_RATE_WINDOW_MS / 60000u);

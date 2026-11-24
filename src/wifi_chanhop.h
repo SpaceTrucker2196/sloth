@@ -102,6 +102,13 @@ typedef struct {
     int      dwell_cued;
     uint64_t cued_dwells;
     uint64_t cued_total_ms;
+    /* The most of this radio's time its cued dwells may take, in
+     * thousandths (#248, owner ruling of 2026-11-24: the 50 % is over
+     * all sensor radios together). 500 on reset, which is the whole cap
+     * for a single radio; src/chancue.c sets it every poll from the
+     * other radios' cues so the radios' shares together stay within
+     * half of their time. Read by the cued-plan clamp only. */
+    uint32_t cue_cap_pm;
 } chanhop_t;
 
 /* A cued channel's dwell is this many times its normal plan (owner
@@ -197,16 +204,38 @@ uint64_t chanhop_slot_time_ms(const chanhop_t *h, int i, uint64_t now_ms);
  *
  * A cue lengthens one channel's dwell; it never adds a channel, drops
  * one or changes the rotation order, so every channel is still visited
- * once a rotation. The budget rule that keeps the rest covered: on one
- * scheduler, the cued channels' planned dwells together (each
- * CHANHOP_CUE_MULT x its normal plan) never exceed the uncued channels'
- * normal plans together, so cues take at most half of this radio's
- * time and every uncued channel keeps at least half the share it would
- * have with no cue at all (its own dwell is unchanged; the rotation is
- * at most twice as long). chancue_request() refuses a cue that would
- * break it; chanhop_confirm_retune() also clamps a cued plan to what is
- * left of the budget at the moment it is planned, so a channel whose
- * activity moved since the cue was admitted cannot push past it. */
+ * once a rotation. Two rules keep the rest covered (owner rulings of
+ * 2026-11-23 and 2026-11-24, docs/wiki/passive-cueing.md):
+ *
+ *   cap    the cued dwells of all sensor radios together take at most
+ *          half of those radios' time. src/chancue.c holds it over the
+ *          radios at admission and hands each scheduler its part as
+ *          cue_cap_pm every poll; on a single radio the part is the
+ *          whole 50 %.
+ *   floor  on each radio, the rotation with its cues is at most twice
+ *          as long as without (cued plans + uncued plans <= 2 x the
+ *          normal plans of all its channels), so every uncued channel
+ *          keeps at least half the share it would have with no cue -
+ *          never zero.
+ *
+ * chancue_request() refuses a cue that would break either;
+ * chanhop_confirm_retune() also clamps a cued plan to what both leave
+ * at the moment it is planned, so a channel whose activity moved since
+ * the cue was admitted cannot push past them. */
+
+/* This radio's normal-plan load (#22 activity plans, no cue applied):
+ * *cued the plans of the slots cued at now_ms (when with_cued) plus
+ * slot extra (when 0 <= extra < count), *uncued the rest. Pure. */
+void chanhop_cue_load(const chanhop_t *h, int extra, int with_cued, uint64_t now_ms,
+                      uint64_t *cued, uint64_t *uncued);
+
+/* The share of a radio's time its cued channels take at full
+ * CHANHOP_CUE_MULT plans, for a normal-plan load (cued, uncued) as
+ * chanhop_cue_load() gives it: 0 with none cued. Pure. */
+double chanhop_cue_share(uint64_t cued, uint64_t uncued);
+
+/* The floor rule above for a normal-plan load: 1 when it holds. Pure. */
+int chanhop_cue_floor_ok(uint64_t cued, uint64_t uncued);
 
 /* Slot i's normal planned dwell (no cue): the #22 activity plan. 0 out
  * of range. Pure. */
@@ -218,14 +247,15 @@ int chanhop_find_freq(const chanhop_t *h, int mhz);
 /* Whether slot i is cued at now_ms. */
 int chanhop_slot_cued(const chanhop_t *h, int i, uint64_t now_ms);
 
-/* 1 when cueing slot i too (beside the slots cued at now_ms) keeps the
- * budget rule above; 0 when it would not, or i is out of range. A slot
- * already cued is counted once. Pure. */
+/* The single-radio form of the rules above, cap and floor on this
+ * scheduler alone (cued plans <= uncued plans): 1 when cueing slot i
+ * too (beside the slots cued at now_ms) keeps it; 0 when it would not,
+ * or i is out of range. A slot already cued is counted once. Pure.
+ * src/chancue.c applies the all-radios form; tests use this one. */
 int chanhop_cue_fits(const chanhop_t *h, int i, uint64_t now_ms);
 
-/* 1 when slot i alone, with no other slot cued, keeps the budget rule:
- * 0 means this share can hold no cue at its current plan whatever the
- * load (chancue_request()'s `share_small`). Pure. */
+/* 1 when slot i alone, with no other slot cued, keeps the single-radio
+ * form above. Pure. */
 int chanhop_cue_fits_alone(const chanhop_t *h, int i);
 
 /* Set (until_ms > now_ms) or clear (0) slot i's cue. Setting the cue of
