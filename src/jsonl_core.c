@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include "jsonl.h"
 #include "jsonl_internal.h"
+#include "rule_coverage_live.h"
 #include "gps.h"
 #include "position_track.h"
 #include "sloth_clock.h"
@@ -757,6 +758,17 @@ void jsonl_sh_tail(char *buf, int *off, const char *daemon, int db_cap_mb) {
      * #231, additive): a constant, so outside `sig` like the version,
      * and before the members that stay last. Both daemons write it:
      * one tree, one snapshot. */
+    /* How many of this daemon's rules can fire (JSONL 2.8.0, #242,
+     * additive): the counts of the `coverage` record, which is what
+     * announces a change; here they ride the heartbeat, outside `sig`.
+     * Absent until the first derivation, never zero for "not derived". */
+    if (cov_live_valid()) {
+        int ob = 0, pa = 0, bl = 0;
+        cov_live_counts(&ob, &pa, &bl);
+        kv_int(buf, LINEBUF, off, "rules_observable", ob);
+        kv_int(buf, LINEBUF, off, "rules_partly", pa);
+        kv_int(buf, LINEBUF, off, "rules_blind", bl);
+    }
     jsonl_intel_pack(buf, off);
     kv_str(buf, LINEBUF, off, "daemon", daemon);
     kv_int(buf, LINEBUF, off, "db_max_mb", db_cap_mb);

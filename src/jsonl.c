@@ -32,6 +32,7 @@
 #include "ownership.h"
 #include "harvest_track.h"    /* harvest_station, harvest_chain (JSONL 1.3.0) */
 #include "sys_status.h"
+#include "rule_coverage_live.h"
 #include "ble_hci.h"        /* Bluetooth host source names (#144 slice 2) */
 #include "bt_stream.h"      /* Ubertooth stream state names (#144 slice 3) */
 #include "ble_detect.h"     /* ble_alert findings (#144 slice 4) */
@@ -2844,6 +2845,8 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     /* The host's status and the source inventory (src/sys_status.h):
      * a batch on its own cadence, nothing on most ticks. */
     sys_status_emit              (s);
+    /* Which rules can fire (#242, JSONL 2.8.0): rows on change. */
+    cov_live_emit                ();
     /* The operator's designated networks: change-only, a heartbeat. */
     jsonl_emit_ownership         ();
     /* The KARMA and key-harvest evidence tables (JSONL 1.3.0). */

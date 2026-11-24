@@ -2,6 +2,7 @@
 #include "poll.h"
 #include "sloth_clock.h"
 #include "sys_status.h"
+#include "rule_coverage_live.h"
 #include "alerts.h"
 #include "db.h"
 
@@ -26,6 +27,8 @@ void poll_st_health_host(sloth_state_t *s, const poll_ctx_t *ctx) {
      * the per-source polls, whose state it reads - every table places
      * this stage behind its health_* stages. */
     sys_status_poll(s, ctx->wall, ctx->mono_ms);
+    /* Which rules can fire (#242): from the rows just derived. */
+    cov_live_poll(s);
 }
 
 /* ── ALERTS ───────────────────────────────────────────────── */

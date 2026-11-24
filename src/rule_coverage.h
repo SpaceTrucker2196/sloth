@@ -93,6 +93,15 @@ typedef struct {
 /* The declaration of `t`; NULL out of range. */
 const cov_inputs_t *cov_inputs(alert_type_t t);
 
+/* Which daemon's rule table raises `t` (ADR 0010): sloth-rf's has the
+ * kinds that read the GNSS receiver or the ADS-B decoder, and
+ * SENSOR_SOURCE_DOWN; sloth-wifi's has every kind that is not one of
+ * the first group, SENSOR_SOURCE_DOWN included. The same split as the
+ * contract's alert-daemons.tsv, which is generated from the two tables;
+ * tests/test_rule_coverage.c holds this function to those tables. */
+typedef enum { COV_DAEMON_WIFI = 0, COV_DAEMON_RF } cov_daemon_t;
+int cov_daemon_raises(cov_daemon_t d, alert_type_t t);
+
 /* What the sensor has of one input. */
 typedef enum {
     COV_AV_NONE = 0,    /* not configured, or not this daemon's */

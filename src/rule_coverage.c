@@ -19,6 +19,14 @@ const cov_inputs_t *cov_inputs(alert_type_t t) {
     return &cov_table[t];
 }
 
+int cov_daemon_raises(cov_daemon_t d, alert_type_t t) {
+    const cov_inputs_t *in = cov_inputs(t);
+    if (!in) return 0;
+    int rf_input = in->input == COV_IN_GNSS || in->input == COV_IN_ADSB;
+    if (d == COV_DAEMON_RF) return rf_input || t == ALERT_TYPE_SENSOR_SOURCE_DOWN;
+    return !rf_input;
+}
+
 cov_status_t cov_rule_status(alert_type_t t, const cov_env_t *env,
                              cov_reason_t *why) {
     cov_reason_t r = COV_R_NONE;

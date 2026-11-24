@@ -224,6 +224,7 @@ static void test_rf_stream_is_only_its_own(void) {
         "gnss_fix", "gnss_sky", "gnss_sat", "adsb_aircraft", "aprs_packet",
         "aprs_station", "rtl433_device", "victron_device", "sensor", "sensor_health",
         "sys_status", "sys_sensor", "source_status", "receiver_hw",
+        "rule_status", "coverage",
         "alert", "alert.create", "alert.update", "alert.escalate",
         "alert.resolve",
     };

@@ -10,6 +10,7 @@
 #include "rf_trim.h"
 #include "alert_pcap.h"
 #include "alerts.h"
+#include "rule_coverage_live.h"
 #include "assoc_track.h"
 #include "gps.h"
 #include "position_track.h"

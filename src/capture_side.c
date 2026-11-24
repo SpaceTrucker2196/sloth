@@ -5,6 +5,7 @@
 #include "dns.h"
 #include "sensor_health.h"
 #include "sys_status.h"
+#include "rule_coverage_live.h"
 
 static long long resolver_calls(void) {
     dns_resolver_stats_t ds;
@@ -21,6 +22,7 @@ void capture_side_install(void) {
     alerts_set_table(&g_alert_table_wifi);
     sys_status_set_capture_side(&g_sys_capture_side);
     sh_set_resolver_calls_fn(resolver_calls);
+    cov_live_set_side(COV_DAEMON_WIFI, cov_capture_fill);
     /* This daemon has no decoder (#216): no RF source row and none of
      * the receiver's or the decoders' tables. Nothing registers either
      * in sloth-wifi, so these two lines change nothing there; they are

@@ -157,6 +157,25 @@ static void test_rf_daemon_kinds(void) {
     ASSERT_EQ(n, (int)(sizeof(rf) / sizeof(*rf)));
 }
 
+static void test_daemon_split(void) {
+    /* The counts docs-counts prints from the two rule tables: 95 kinds
+     * in sloth-wifi's, 6 in sloth-rf's, SENSOR_SOURCE_DOWN in both. */
+    int wifi = 0, rf = 0, both = 0;
+    for (int t = 0; t < ALERT_TYPE_COUNT; t++) {
+        int w = cov_daemon_raises(COV_DAEMON_WIFI, (alert_type_t)t);
+        int r = cov_daemon_raises(COV_DAEMON_RF, (alert_type_t)t);
+        ASSERT(w || r);
+        wifi += w; rf += r;
+        if (w && r) { both++; ASSERT_EQ(t, (int)ALERT_TYPE_SENSOR_SOURCE_DOWN); }
+    }
+    ASSERT_EQ(wifi, 95);
+    ASSERT_EQ(rf, 6);
+    ASSERT_EQ(both, 1);
+    /* The host has one supply; the daemon with the capture reports it. */
+    ASSERT_EQ(cov_daemon_raises(COV_DAEMON_RF, ALERT_TYPE_SENSOR_UNDERVOLT), 0);
+    ASSERT_EQ(cov_daemon_raises(COV_DAEMON_WIFI, ALERT_TYPE_COUNT), 0);
+}
+
 static void test_full_sensor_sees_everything(void) {
     cov_env_t e = env_full();
     for (int t = 0; t < ALERT_TYPE_COUNT; t++) {
@@ -396,6 +415,7 @@ void run_rule_coverage_tests(void) {
     RUN_TEST(test_input_census);
     RUN_TEST(test_named_declarations);
     RUN_TEST(test_rf_daemon_kinds);
+    RUN_TEST(test_daemon_split);
     RUN_TEST(test_full_sensor_sees_everything);
     RUN_TEST(test_no_monitor_radio_blinds_every_wifi_rule);
     RUN_TEST(test_hop_makes_an_exchange_partly);

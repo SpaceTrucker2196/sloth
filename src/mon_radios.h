@@ -161,6 +161,9 @@ int  mon_hop_service(chanhop_t *h0, uint64_t now_ms);
  * fed when other radios are registered (mon_frame_total() counts every
  * radio's). */
 uint32_t mon_hop_radio0_delta(void);
+/* The centre frequencies of the whole --hop list, as mon_hop_setup()
+ * was given it (before the deal); the count written, 0 with no list. */
+int  mon_hop_plan_mhz(int *mhz, int max);
 
 /* ── Command line ── */
 

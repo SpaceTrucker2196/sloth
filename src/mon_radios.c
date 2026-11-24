@@ -281,6 +281,14 @@ int mon_hop_setup(chanhop_t *h0) {
     return deal(h0);
 }
 
+int mon_hop_plan_mhz(int *mhz, int max) {
+    if (!mhz || max <= 0) return 0;
+    int n = 0;
+    for (int i = 0; i < g_full.count && n < max; i++)
+        mhz[n++] = g_full.slots[i].freq_mhz;
+    return n;
+}
+
 uint32_t mon_hop_radio0_delta(void) {
     pthread_mutex_lock(&g_mu);
     uint64_t f = g_n ? g_r[0].frames : 0;
