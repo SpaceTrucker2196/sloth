@@ -337,7 +337,9 @@ static void test_gaps_short_screen_keeps_the_traffic(void) {
     stats_33_fill();
     ASSERT_EQ(tui_init_offscreen(33, 100), 0);
     tui_test_erase();
-    move(2, 0);
+#ifdef WITH_NCURSES
+    move(2, 0);   /* under the tab bar; sloth_test_noflags has no curses */
+#endif
     view_stats_draw(&g_gs);
     int ob = 0, pa = 0, bl = 0;
     cov_live_counts(&ob, &pa, &bl);
@@ -365,7 +367,9 @@ static void test_gaps_short_screen_keeps_the_traffic(void) {
     /* With the rows to spare, the whole list. */
     ASSERT_EQ(tui_init_offscreen(80, 100), 0);
     tui_test_erase();
-    move(2, 0);
+#ifdef WITH_NCURSES
+    move(2, 0);   /* under the tab bar; sloth_test_noflags has no curses */
+#endif
     view_stats_draw(&g_gs);
     ASSERT_SCREEN_HAS("  dot11: DEAUTH_FLOOD");
     ASSERT_SCREEN_HAS("  Observable means");

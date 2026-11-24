@@ -148,11 +148,15 @@ static int find_key(const char *prefix) {
     return -1;
 }
 
+/* Only the capture-path tests below use it (sloth_test_noflags builds
+ * without WITH_PCAP and -Werror rejects an unused static). */
+#ifdef WITH_PCAP
 static int find_type(alert_type_t t) {
     for (int i = 0; i < g_s.alert_count; i++)
         if (g_s.alerts[i].type == t && !g_s.alerts[i].resolved) return i;
     return -1;
 }
+#endif
 
 /* ── the judge ─────────────────────────────────────────────────────── */
 
