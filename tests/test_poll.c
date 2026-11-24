@@ -352,6 +352,7 @@ static void test_wifi_table_is_the_order_sloth_always_ran(void) {
         { "devices_hosts",     PH_POST     },
         { "positions",         PH_POST     },
         { "chanhop",           PH_POST     },
+        { "coverage_iv",       PH_POST     },
         { "jsonl",             PH_EMIT     },
         { "db",                PH_DURABLE  },
     };

@@ -878,7 +878,7 @@ static void test_sensor_health_with_one_radio(void) {
     ASSERT(strstr(g_body, "\"mon_extra_radios\":0") != NULL);
     ASSERT(strstr(g_body, "mon_r0_") == NULL);
     ASSERT(strstr(g_body, "mon_dup_dropped") == NULL);
-    ASSERT(strstr(g_body, "\"jsonl_version\":\"2.8.0\"") != NULL);
+    ASSERT(strstr(g_body, "\"jsonl_version\":\"2.9.0\"") != NULL);
 }
 
 /* Three radios, one of which could not be opened: each has its block,

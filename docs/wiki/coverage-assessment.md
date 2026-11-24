@@ -8,11 +8,11 @@ type: reference
 
 **Summary**: a quiet site and a blind sensor give the same empty alert list. Each alert kind now declares what it reads (`include/sloth_alert_inputs.def`), and `cov_rule_status()` (`src/rule_coverage.c`) derives from that and from what the sensor has one of three statuses: `observable`, `partly`, `blind`, with one reason word. This page is the reference for the declaration and the derivation. It is receive-only: nothing here transmits or retunes a radio.
 
-**Status**: slices 1 and 2 of #242, 2026-11-23. Built: the declaration for all <!-- count:rules -->100<!-- /count --> kinds, the derivation, and the output in the stream: both daemons derive the status each tick and write `rule_status` and `coverage` records and three counts on `sensor_health` (JSONL 2.8.0, § 4). **Not built yet**: a `--report` section, a view, the per-interval coverage record (time on each channel, frames by type, capture drops) with its `sloth.db` table, and `SENSOR_SUPPRESSED`. sloth-mesh does not read the new records yet.
+**Status**: slices 1 and 2 of #242 and item 2, 2026-11-23. Built: the declaration for all <!-- count:rules -->100<!-- /count --> kinds, the derivation, and the output in the stream: both daemons derive the status each tick and write `rule_status` and `coverage` records and three counts on `sensor_health` (JSONL 2.8.0, § 4); and the per-interval coverage record, sloth-wifi's `coverage_interval` once a minute and a `coverage_intervals` row in sloth.db (JSONL 2.9.0, schema v18, § 6). **Not built yet**: a `--report` section, a view, and `SENSOR_SUPPRESSED`. sloth-mesh does not read the new records yet.
 
-**Sources**: `include/sloth_alert_inputs.def`; `src/rule_coverage.h`, `src/rule_coverage.c`; `src/rule_coverage_live.c`, `src/rule_coverage_capture.c`; `tests/test_rule_coverage.c`, `tests/test_rule_coverage_live.c`; [[jsonl-schema]]; issue #242 (parent #241); US Army FM 2-0 (2004) 4-48, 4-51, 8-34; [[collection-cycle]].
+**Sources**: `include/sloth_alert_inputs.def`; `src/rule_coverage.h`, `src/rule_coverage.c`; `src/rule_coverage_live.c`, `src/rule_coverage_capture.c`; `src/cov_interval.h`, `src/cov_interval.c`, `src/cov_interval_capture.c`, `src/wifi_chanhop.c` (`chanhop_slot_time_ms`), `src/capture/probe.c` (`mon_frame_class_totals`); `tests/test_rule_coverage.c`, `tests/test_rule_coverage_live.c`, `tests/test_cov_interval.c`; [[jsonl-schema]]; issue #242 (parent #241); US Army FM 2-0 (2004) 4-48, 4-51, 8-34; [[collection-cycle]].
 
-**Last updated**: 2026-11-23
+**Last updated**: 2026-11-23 (item 2: § 6, the per-interval coverage record), 2026-11-23
 
 ---
 
@@ -102,12 +102,28 @@ One hopping radio on the default list with no IP capture, no BLE and nothing des
 
 ## 5. Limits
 
-- **`observable` means: on the channels the radios visit.** A transmitter on a channel in no radio's plan is not heard, and the status does not say so. Only the band is checked. The channel list and the time on each belong to the coverage record, which is not built.
+- **`observable` means: on the channels the radios visit.** A transmitter on a channel in no radio's plan is not heard, and the status does not say so. Only the band is checked. The channel list and the time on each are in the coverage record (§ 6).
 - **The status is about the sensor, not the site.** `observable` with no finding is "looked and found nothing". It is not "nothing is there".
 - **The declaration is written by hand** from the rule functions. A test holds its form, its order and the number of kinds on each input; it cannot prove that a row matches its rule. A change to a rule's inputs changes its row in the same commit.
 - **`source_stale` follows the source row**: 60 s with nothing received. On a quiet BLE or GNSS source that can be the site and not a fault; the word says only that nothing arrived.
-- **Frame classes are declared and not yet used.** The derivation reads the input, the band, the shape and the needs. `FRAMES` is for the coverage record ("no frame of this class was received").
+- **Frame classes are declared and not used by the derivation.** The derivation reads the input, the band, the shape and the needs. The coverage record (§ 6) counts the frames of each class a minute; a status that reads "no frame of this class was received" is not built.
 - `fixed_channel` is reported for every 802.11 rule when the radios do not hop, also on a site whose own access points are all on that channel.
+
+## 6. The per-interval coverage record
+
+The status says which rules can fire. The record says what the sensor did in the last minute, so that "nothing fired" can be read against "this is what was looked at": the time each monitor radio spent on each channel and the frames it heard there, the share of radio time in each band, the frames received by class, the capture drops, and the sources up or down at the end. sloth-wifi writes it; sloth-rf has no radio and writes none. Field reference: [[jsonl-schema]] (`coverage_interval`); the table: [[sqlite-schema]] (`coverage_intervals`).
+
+**Cadence.** One record per 60 s interval (`COV_IV_MS`), on the monotonic clock from the first poll. A measurement, not a change feed: it is written whatever it holds, and has no signature, because a minute with the same figures as the last is still a minute that was watched. It is not a tunable: a share or a count is compared across sensors and across time, and that needs one length. A partial interval at shutdown is not written.
+
+**Time on a channel.** Under `--hop` it is the hop scheduler's own dwell accounting: each slot keeps the measured length of its closed dwells (start of dwell to start of the next, so the poll loop's servicing delay is inside it, as in `hop_dwell_measured_ms`), and the open dwell is added at the sample. A refused retune leaves the time with the channel the radio stayed on. The interval's figure is the difference of two such readings; after a re-deal (a radio lost) the scheduler starts again and the slot is read from zero. A radio that is not retuned has the whole time it ran on the frequency of its newest frame, `unknown` before one. Radio 0 counts while its worker runs, a further radio while its reader is alive; a radio that is down is not radio time. On Beta-Site on 2026-11-23 (one radio, 11 channels) the mean planned dwell was 861 ms and the measured one 998 ms, so one record holds about 60 dwells, five or six per channel.
+
+**Frames by class.** The classes are the `COV_F_*` of § 2 (beacon and probe response, probe request, authentication, (re)association, deauthentication and disassociation, action, control, data, EAPOL), then `other` and `fcs_bad`. The monitor path counts them where it records every frame (`mon_frame_record()` in `src/capture/probe.c`), after the cross-radio de-duplication, under the lock that tally already takes, so the count costs an increment and no lock of its own, and the classes sum to the frames received. A frame radiotap marked FCS-failed is `fcs_bad`, not the type its damaged octets state. EAPOL is a data frame whose LLC/SNAP EtherType is 0x888E (the EAPOL EtherType of IEEE 802.1X); a Protected data frame is `data`, its body being ciphertext that sloth does not read. A capture interface that is itself in monitor mode is decoded for IP only, and its frames are not in these counts.
+
+**Drops.** The interval's difference of the capture handle's and radio 0's `pcap_stats()` totals. A handle not open with a sample at both ends is not measured, and the member is absent. The further `--monitor-iface` radios take no `pcap_stats()` sample, so their drops are not measured.
+
+**A `--replay` run writes no record.** The file's frames arrive as fast as it reads, so a minute of host time holds an arbitrary slice of the file, and there is no radio to dwell. `tests/replay/golden.jsonl` is therefore unchanged by this record.
+
+**Kept** on the observation tier of [[retention]]: a row qualifies a minute of observations and expires with them (30 days by default), and the size ceiling may take it.
 
 ## Related pages
 

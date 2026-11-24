@@ -1,6 +1,6 @@
 ---
 name: sqlite-schema
-description: The --db SQLite sink — why it exists, the schema and its v1 → v17 migration chain, findings and their per-incident rows, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
+description: The --db SQLite sink — why it exists, the schema and its v1 → v18 migration chain, findings and their per-incident rows, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
 type: reference
 ---
 
@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42, #56, #154, #170 and #239.
 
-**Last updated**: 2026-11-20 (#239, owner ruling of that day: schema v17, `random_devices_daily`, the count per UTC day and `sources` of the random addresses the retention step purges from `devices` after a week, the v16 → v17 step and its two tests; planner statistics: `PRAGMA analysis_limit=400; PRAGMA optimize` in the hourly maintenance, and what `sqlite_stat1` holds, § Planner statistics); 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
+**Last updated**: 2026-11-23 (#242 item 2: schema v18, `coverage_intervals`, one row per minute of what the monitor radios did, the `coverage_interval` record's figures, on the observation tier; the v17 → v18 step and its two tests); 2026-11-20 (#239, owner ruling of that day: schema v17, `random_devices_daily`, the count per UTC day and `sources` of the random addresses the retention step purges from `devices` after a week, the v16 → v17 step and its two tests; planner statistics: `PRAGMA analysis_limit=400; PRAGMA optimize` in the hourly maintenance, and what `sqlite_stat1` holds, § Planner statistics); 2026-11-16 ([[victron]]: schema v16, `victron_readings` gains `ac_voltage_v`, `ac_current_a` and `ac_apparent_va`, the inverter record's AC output; the three-ALTER v15 → v16 step and its two tests); 2026-11-15 (#216, the cutover: which daemon writes which table; no schema change, `DB_SCHEMA_VERSION` stays 15 in both files); 2026-11-15 ([[victron]]: schema v15, `victron_devices`
 in the entity tier and `victron_readings` in the observation tier, at
 most one reading row a minute per device, the stamp-only v14 → v15 step
 and its two tests; slothweb's Victron tab charts `victron_readings`).
@@ -181,14 +181,14 @@ These are what make the file trustworthy rather than merely present.
 | One row per finding; `count` sums incidents, `reopens` counts them | `alerts` | A write continues the key's newest row, so evict-and-refire, a quiet-period reopen and a restart all advance one row (#170). See *Findings and incidents* below. |
 | One row per incident: span widens, `peak_sev`/`count`/`observations` only rise, a close once recorded stays; `sev` the latest | `alert_incidents` | Written each tick from the hook's queue and then from the snapshot, and by a full queue's own flush between ticks. Every column but `sev` comes out the same whatever the order; `sev` is the last write's, and the snapshot, the newest view, is written last (#175). See *Per-incident rows* below. |
 
-## Schema — 53 tables, v1 → v17
+## Schema — 54 tables, v1 → v18
 
-`meta` holds `schema_version`, currently **17**. `db_open()` checks it
+`meta` holds `schema_version`, currently **18**. `db_open()` checks it
 *before* applying the rest of the schema, so a mismatch produces the
 clear version message rather than whatever SQL error the schema happens
-to hit first. Since #154 the chain covers the full **v1 → v17**: any
+to hit first. Since #154 the chain covers the full **v1 → v18**: any
 file this build has ever written opens and migrates forward. Only a
-file from a *newer* build (`schema_version` above 17) is refused.
+file from a *newer* build (`schema_version` above 18) is refused.
 
 **v5** (#90): `karma_candidates.pnl_best`. **v6** (#106 round 2):
 `devices` gains `device_class`, `camera_vendor`, `camera_model`,
@@ -269,6 +269,42 @@ trigger refuses (`test_v16_migration_failure_leaves_file_unchanged`: it
 stays v16 without the table, its device row as it was). sloth-mesh pins
 the contract at 1.8.7, so its dashboard reads this table only after a
 contract bump on its side.
+
+**v18** (2026-11-23, #242 item 2, [[coverage-assessment]] § 6): one
+new table, `coverage_intervals`, with an index on `last_seen`; no
+existing table or value changes.
+
+**The v17 → v18 migration.** `db_schema_migrate_v17_sql()` is the
+table's and the index's `CREATE ... IF NOT EXISTS`, the same DDL the
+unconditional schema carries (`COVERAGE_INTERVALS_DDL` in
+`src/db_schema.c`), so both and the stamp land in the step's one
+`BEGIN IMMEDIATE` transaction. Nothing is backfilled: no earlier build
+measured an interval. Tested on a v17 file (a current file with the
+table and index dropped, the stamp set to 17, a device row and a
+`random_devices_daily` row; `test_v17_file_migrates_additively`: the
+table and index present, the table empty, both rows unchanged) and on
+one whose stamp a trigger refuses
+(`test_v17_migration_failure_leaves_file_unchanged`: it stays v17
+without the table or the index, both rows as they were).
+
+**`coverage_intervals`** `(start, last_seen, dur_ms, radio_ms, ms_24,
+ms_5, ms_5dfs, ms_6, ms_unknown, f_beacon, f_probe, f_auth, f_assoc,
+f_deauth, f_action, f_ctrl, f_data, f_eapol, f_other, f_fcs_bad,
+cap_drop, cap_ifdrop, mon_drop, mon_ifdrop, chan_overflow, chans TEXT,
+sources TEXT)`. One row per closed 60 s interval, written by sloth-wifi
+only (`write_coverage_intervals()`, from the ring of closed intervals
+in `src/cov_interval.c`, so a `--db-interval-secs` longer than a minute
+loses none of the last eight). `start` / `last_seen` are the interval's
+two ends (wall clock), `dur_ms` its length on the monotonic clock,
+`radio_ms` the monitor radios' time and `ms_*` that time by band
+(`5dfs`: channels 52-64 and 100-144; `unknown`: a fixed radio that has
+heard nothing). `f_*` are the frames received by class, summing to the
+frames the monitor path recorded. The four drop columns are NULL when
+the handle was not measured at both ends, never 0 for that. `chans` and
+`sources` are the record's two arrays as JSON text, exactly as the
+`coverage_interval` line writes them ([[jsonl-schema]]), so
+`json_each()` reads them. Counts, channels and states only: no
+address, no SSID. Not written in a `--replay` run. Observation tier.
 
 **`random_devices_daily`** `(day TEXT, sources INTEGER, count,
 first_seen, last_seen, PRIMARY KEY (day, sources))`. `day` is the UTC
@@ -928,7 +964,7 @@ rows. Entities keep **3×**, findings keep **12×**.
 
 | Tier | Window | Contents |
 |---|---|---|
-| observation | 1× | protocol flows, deauths, twins, EAPOL, scans, seqnum correlations, `device_positions`, `sensor_positions`, `gnss_fixes`, `gnss_sightings`, `adsb_sightings`, `aprs_packets`, `victron_readings` |
+| observation | 1× | protocol flows, deauths, twins, EAPOL, scans, seqnum correlations, `device_positions`, `sensor_positions`, `gnss_fixes`, `gnss_sightings`, `adsb_sightings`, `aprs_packets`, `victron_readings`, `coverage_intervals` |
 | entity | 3× | devices, PNL, beacons, assocs, ARP, leases, discovery, sensors, `adsb_aircraft`, `aprs_stations`, `victron_devices` |
 | finding | 12× | `alerts`, `alert_incidents`, `cleartext_creds`, `karma_candidates`, `rogue_radius`, `btm_requests` |
 

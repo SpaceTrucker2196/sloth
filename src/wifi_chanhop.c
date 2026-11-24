@@ -143,6 +143,7 @@ void chanhop_confirm_retune(chanhop_t *h, int ok, uint64_t now_ms) {
         h->planned_total_ms += h->dwell_planned_ms;
         h->measured_total_ms += measured;
         h->dwells_completed++;
+        h->slots[h->cur].dwell_ms += measured;
         if (measured > h->dwell_planned_ms) {
             uint32_t over = measured - h->dwell_planned_ms;
             if (over > h->worst_overshoot_ms) h->worst_overshoot_ms = over;
@@ -172,6 +173,13 @@ void chanhop_dwell(const chanhop_t *h, chanhop_dwell_t *out) {
         out->mean_measured_ms =
             (uint32_t)(h->measured_total_ms / h->dwells_completed);
     }
+}
+
+uint64_t chanhop_slot_time_ms(const chanhop_t *h, int i, uint64_t now_ms) {
+    if (!h || i < 0 || i >= h->count || !h->tuned) return 0;
+    uint64_t t = h->slots[i].dwell_ms;
+    if (i == h->cur && now_ms > h->dwell_began_ms) t += now_ms - h->dwell_began_ms;
+    return t;
 }
 
 void chanhop_activity(const chanhop_t *h, chanhop_activity_t *out) {

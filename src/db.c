@@ -35,6 +35,7 @@
 #include "secure_file.h"
 #include "sloth_clock.h"
 #include "tune.h"
+#include "cov_interval.h"
 
 /* Maintenance is hourly: pruning is a scan over every table, and the
  * thing it defends against (a disk filling over days) does not move
@@ -84,6 +85,7 @@ static int           g_rd_pending;
 static int      g_over_ceiling_reported;
 static sqlite3_int64 g_session_id;        /* current survey session (#56) */
 static time_t        g_prev_session_end;  /* when the last visit ended */
+static uint32_t      g_cov_written;       /* coverage interval last written (#242) */
 
 /* ── retention tiers ─────────────────────────────────────
  *
@@ -110,6 +112,10 @@ static const char *const TIER_OBSERVATION[] = {
     "aprs_packets",
     /* Victron (schema v15): a device's values, one row a minute at most. */
     "victron_readings",
+    /* Coverage (#242, schema v18): what the radios did, one row a
+     * minute. A row says how a past minute was watched; it is worth as
+     * much as the observations it qualifies and expires with them. */
+    "coverage_intervals",
 };
 
 /* 3x — the inventory. "Which devices were on this network in March"
@@ -179,6 +185,7 @@ enum {
     ST_ADSB_AC, ST_ADSB_SIGHT,
     ST_APRS_STN, ST_APRS_PKT,
     ST_VICTRON_DEV, ST_VICTRON_READ,
+    ST_COV_IV,
     ST_COUNT
 };
 
@@ -695,6 +702,14 @@ static const char *const SQL[ST_COUNT] = {
 [ST_DEV_POS] =
     "INSERT OR IGNORE INTO device_positions (mac,last_seen,lat,lon,acc_m,rssi)"
     " VALUES (?1,?2,?3,?4,?5,?6)",
+/* #242 item 2: one row per closed coverage interval. */
+[ST_COV_IV] =
+    "INSERT INTO coverage_intervals (start,last_seen,dur_ms,radio_ms,"
+    "ms_24,ms_5,ms_5dfs,ms_6,ms_unknown,"
+    "f_beacon,f_probe,f_auth,f_assoc,f_deauth,f_action,f_ctrl,f_data,f_eapol,"
+    "f_other,f_fcs_bad,cap_drop,cap_ifdrop,mon_drop,mon_ifdrop,chan_overflow,"
+    "chans,sources) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,"
+    "?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27)",
 [ST_SENSOR_POS] =
     "INSERT OR IGNORE INTO sensor_positions (last_seen,lat,lon,alt_m,acc_m,"
     "loc_src,sats,hdop) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
@@ -1194,6 +1209,8 @@ static const db_step_t g_steps[] = {
       " ac_apparent_va" },
     { 16, db_schema_migrate_v16_sql, TABLES_NONE,
       "random_devices_daily created (#239)" },
+    { 17, db_schema_migrate_v17_sql, TABLES_NONE,
+      "coverage_intervals created (#242)" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
@@ -1338,6 +1355,8 @@ int db_open(const char *path) {
      * writes the current sky whole. */
     memset(&g_gnss_fix_mem, 0, sizeof(g_gnss_fix_mem));
     memset(g_gnss_sat_mem, 0, sizeof(g_gnss_sat_mem));
+    /* A new file is written every interval the ring still holds. */
+    g_cov_written = 0;
     memset(g_adsb_mem, 0, sizeof(g_adsb_mem));
     g_aprs_seq = 0;
     memset(g_victron_mem, 0, sizeof(g_victron_mem));
@@ -2043,6 +2062,50 @@ static sqlite3_int64 alert_row_first_seen(const char *key,
  * rows, and a key that is evicted and re-fires, goes quiet and comes
  * back, or outlives a restart is still that one row (#170):
  * docs/wiki/sqlite-schema.md has the incident semantics. */
+/* #242 item 2: every coverage interval closed since the last write that
+ * the ring still holds (the ring outlasts the longest write interval an
+ * operator is likely to set; one older than that is lost here and was
+ * still written to the stream). A restarted interval count (a reset in
+ * the tests) starts the memory again. */
+static void write_coverage_intervals(void) {
+    uint32_t seq = cov_iv_seq();
+    if (seq < g_cov_written) g_cov_written = 0;
+    uint32_t from = g_cov_written + 1;
+    if (seq >= COV_IV_RING && from + COV_IV_RING <= seq) from = seq - COV_IV_RING + 1;
+    for (uint32_t q = from; q <= seq; q++) {
+        static cov_iv_t iv;
+        static char chans[4096], srcs[1024];
+        if (!cov_iv_get(q, &iv)) continue;
+        sqlite3_stmt *st = g_st[ST_COV_IV];
+        int k = 1;
+        sqlite3_bind_int64(st, k++, (sqlite3_int64)iv.start);
+        sqlite3_bind_int64(st, k++, (sqlite3_int64)iv.end);
+        sqlite3_bind_int64(st, k++, (sqlite3_int64)iv.dur_ms);
+        sqlite3_bind_int64(st, k++, (sqlite3_int64)iv.radio_ms);
+        for (int b = 0; b < COV_IVB_N; b++)
+            sqlite3_bind_int64(st, k++, (sqlite3_int64)iv.band_ms[b]);
+        for (int c = 0; c < COV_FC_N; c++)
+            sqlite3_bind_int64(st, k++, (sqlite3_int64)iv.frames[c]);
+        if (iv.has_cap) {
+            sqlite3_bind_int64(st, k, (sqlite3_int64)iv.cap_drop);
+            sqlite3_bind_int64(st, k + 1, (sqlite3_int64)iv.cap_ifdrop);
+        }
+        k += 2;
+        if (iv.has_mon) {
+            sqlite3_bind_int64(st, k, (sqlite3_int64)iv.mon_drop);
+            sqlite3_bind_int64(st, k + 1, (sqlite3_int64)iv.mon_ifdrop);
+        }
+        k += 2;
+        sqlite3_bind_int(st, k++, iv.chan_overflow);
+        cov_iv_chans_json(&iv, chans, (int)sizeof(chans));
+        cov_iv_srcs_json(&iv, srcs, (int)sizeof(srcs));
+        bind_txt(st, k++, chans);
+        bind_txt(st, k++, srcs);
+        step_reset(ST_COV_IV);
+    }
+    g_cov_written = seq;
+}
+
 /* --gps (2026-10-27): drain src/position_track.c's queues. INSERT OR
  * IGNORE: the key is (mac, last_seen) / last_seen and a sample is one observation, so
  * a duplicate is the same fact. */
@@ -3234,6 +3297,7 @@ void db_tick(const sloth_state_t *s, time_t now) {
     write_events         (s, now);
     write_detector_evidence(s, now);
     write_positions      ();
+    write_coverage_intervals();
     /* gnss_fixes / gnss_sightings and the decoders' tables are
      * sloth-rf's alone since the cutover (#216, ADR 0010). sloth-wifi
      * holds a receiver's fix and sky too (it links the same reader, for

@@ -1,7 +1,9 @@
 #ifndef CAPTURE_PROBE_H
 #define CAPTURE_PROBE_H
 
+#include <string.h>
 #include "sloth.h"
+#include "cov_interval.h"   /* COV_FC_N */
 
 #ifdef WITH_PCAP
 
@@ -34,6 +36,15 @@ void mon_frame_snapshot(sloth_state_t *s);
 /* Cumulative count of 802.11 frames ever seen by the monitor capture —
    the observation count for the Wi-Fi sensor (#28). */
 uint64_t mon_frame_total(void);
+
+/* The same frames by coverage class (#242 item 2, cov_interval.h's
+   COV_FC_*), lifetime: out[] has COV_FC_N entries and they sum to
+   mon_frame_total(). */
+void mon_frame_class_totals(uint64_t out[COV_FC_N]);
+
+/* The frequency of radio 0's newest frame in MHz, 0 before the first:
+   where a radio that is not retuned is listening. */
+int mon_radio0_freq_mhz(void);
 
 /* Frames whose capture timestamp was <= 0 — the epoch or before it,
    which no live kernel produces (#92). Nothing is substituted when it
@@ -123,6 +134,9 @@ static inline void probe_stop(void)                                     {}
 static inline void probe_snapshot(sloth_state_t *s)                     { (void)s; }
 static inline void mon_frame_snapshot(sloth_state_t *s)                 { (void)s; }
 static inline uint64_t mon_frame_total(void)                            { return 0; }
+static inline void mon_frame_class_totals(uint64_t out[COV_FC_N])
+    { if (out) memset(out, 0, sizeof(uint64_t) * COV_FC_N); }
+static inline int mon_radio0_freq_mhz(void)                             { return 0; }
 static inline uint64_t mon_bad_clock_total(void)                        { return 0; }
 static inline uint64_t mon_radiotap_reject_total(void)                  { return 0; }
 static inline void probe_clear(void)                                    {}

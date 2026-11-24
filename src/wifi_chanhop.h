@@ -52,6 +52,11 @@ typedef struct {
      * there — so without this a channel the driver always rejects
      * would simply never appear to have been tried. */
     uint32_t refusals;
+    /* Time on this channel (#242): the measured length of every dwell
+     * on it that has closed, lifetime, the same start-of-dwell to
+     * start-of-next span as measured_total_ms. The open dwell is not in
+     * it; chanhop_slot_time_ms() adds it. Never decays. */
+    uint64_t dwell_ms;
 } chanhop_slot_t;
 
 typedef struct {
@@ -162,6 +167,13 @@ typedef struct {
 } chanhop_dwell_t;
 
 void chanhop_dwell(const chanhop_t *h, chanhop_dwell_t *out);
+
+/* Slot i's lifetime time on its channel in ms at now_ms: its closed
+ * dwells plus, when it is the channel the radio is on, the open dwell
+ * so far (#242's per-interval coverage record differences two of
+ * these). 0 out of range, on an empty scheduler, and for every slot
+ * before the first acknowledged retune. Pure. */
+uint64_t chanhop_slot_time_ms(const chanhop_t *h, int i, uint64_t now_ms);
 
 /* Advance the dwell clock. Returns 1 when the caller should retune the
  * radio to chanhop_target_freq() (first call, the dwell elapsed, or a

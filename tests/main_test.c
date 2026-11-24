@@ -169,6 +169,7 @@ void run_reg_ie_tests(void);
 void run_reg_table_tests(void);
 void run_rule_coverage_tests(void);
 void run_rule_coverage_live_tests(void);
+void run_cov_interval_tests(void);
 void run_reg_rules_tests(void);
 void run_reg_6g_tests(void);              /* tests/test_reg_6g.c (#101 slice B) */
 void run_reg_obs_tests(void);             /* tests/test_reg_obs.c (#101 slice B) */
@@ -406,6 +407,7 @@ int main(void) {
     run_reg_table_tests();
     run_rule_coverage_tests();
     run_rule_coverage_live_tests();
+    run_cov_interval_tests();
     run_reg_rules_tests();
     run_reg_6g_tests();
     run_reg_obs_tests();

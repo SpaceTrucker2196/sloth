@@ -63,6 +63,7 @@
 #include "presence.h"
 #include "rf_distance.h"
 #include "ownership.h"
+#include "cov_interval_capture.h"
 
 /* The Wi-Fi, wired and BLE stage bodies, and the table that uses
  * them: g_poll_wifi, what sloth-wifi runs. The runner and
@@ -400,6 +401,13 @@ static void st_chanhop(sloth_state_t *s, const poll_ctx_t *ctx) {
     if (ctx->chanhop) ctx->chanhop(s);
 }
 
+/* The per-interval coverage record (#242 item 2): after the hop stage,
+ * so a retune this tick has closed its dwell, and before the emit and
+ * the database stages that write a closed interval. */
+static void st_coverage_iv(sloth_state_t *s, const poll_ctx_t *ctx) {
+    cov_iv_capture_poll(s, ctx->wall, ctx->mono_ms);
+}
+
 /* ── EMIT ─────────────────────────────────────────────────── */
 
 /* sloth-wifi's EMIT stage, here since #213: it writes the capture's records
@@ -461,6 +469,7 @@ static const poll_stage_t wifi_stages[] = {
     { "devices_hosts",     PH_POST,     st_devices_hosts     },
     { "positions",         PH_POST,     poll_st_positions    },
     { "chanhop",           PH_POST,     st_chanhop           },
+    { "coverage_iv",       PH_POST,     st_coverage_iv       },
 
     { "jsonl",             PH_EMIT,     poll_st_jsonl        },
 

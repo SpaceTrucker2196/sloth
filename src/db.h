@@ -127,7 +127,14 @@
  * `devices`. The v16 -> v17 step creates it (CREATE TABLE IF NOT
  * EXISTS, the same DDL the unconditional schema carries) with the
  * stamp in one transaction. No existing table or value changes. */
-#define DB_SCHEMA_VERSION 17
+/* Bumped to 18 on 2026-11-23 (#242 item 2): coverage_intervals is a
+ * new table, one row per minute of what the monitor radios did (time
+ * by channel and band, frames by class, capture drops, the sources at
+ * the interval's end; src/cov_interval.h), on the observation tier.
+ * The v17 -> v18 step creates it and its index (the same DDL the
+ * unconditional schema carries) with the stamp in one transaction. No
+ * existing table or value changes. */
+#define DB_SCHEMA_VERSION 18
 
 /* The random-address purge (#239, owner ruling 2026-11-20). A devices
  * row whose MAC is locally administered, last heard more than
@@ -523,6 +530,10 @@ const char *db_schema_migrate_v15_sql(void);
 /* v16 -> v17 (#239): CREATE TABLE IF NOT EXISTS random_devices_daily,
  * the same DDL the unconditional schema carries. */
 const char *db_schema_migrate_v16_sql(void);
+/* v17 -> v18 (#242 item 2): CREATE TABLE IF NOT EXISTS
+ * coverage_intervals and its index, the same DDL the unconditional
+ * schema carries. */
+const char *db_schema_migrate_v17_sql(void);
 
 /* victron_readings' value column `i` (0 from voltage_v, in the writer's
  * bind order), NULL past the last. From DB_VICTRON_FIRST_ENUM on, an enumeration

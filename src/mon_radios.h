@@ -164,6 +164,11 @@ uint32_t mon_hop_radio0_delta(void);
 /* The centre frequencies of the whole --hop list, as mon_hop_setup()
  * was given it (before the deal); the count written, 0 with no list. */
 int  mon_hop_plan_mhz(int *mhz, int max);
+/* Radio k's scheduler (k >= 1) while it holds a share of the list,
+ * NULL otherwise (radio 0's is the caller's own). Main thread only, as
+ * the schedulers are: the per-interval coverage record (#242) reads its
+ * slots' time and frames after mon_hop_service(). */
+const chanhop_t *mon_hop_sched(int radio);
 
 /* ── Command line ── */
 

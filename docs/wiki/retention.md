@@ -27,7 +27,7 @@ per-alert pcaps in `--pcap-dir` are swept on a 14-day default window
 (`ALERT_PCAP_DEFAULT_RETAIN_DAYS`), `tests/test_alert_pcap.c` for §2d
 (#166).
 
-**Last updated**: 2026-11-20 (#239 review — a pass continues across maintenance; observation-tier groupings expire with their tier). 2026-11-20 (#239, owner ruling of that day — §2b, the random-address purge: a random address heard once is a count in `random_devices_daily` after 7 days, not a row; `retention.random_repeat_s`; §2.3 `random_devices_daily` is never pruned). 2026-11-03 (#175 — `alert_incidents` on the finding tier, and its per-key bound of `DB_INCIDENTS_PER_KEY` incidents). 2026-10-26 (#166 — the `--pcap-dir` age sweep, §2d; owner ruling: two weeks; review: one directory for both sinks refused, the stale-clock guard, the sweep's own stderr line). Previously 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
+**Last updated**: 2026-11-23 (#242 item 2 — `coverage_intervals` on the observation tier, the size ceiling may take it). 2026-11-20 (#239 review — a pass continues across maintenance; observation-tier groupings expire with their tier). 2026-11-20 (#239, owner ruling of that day — §2b, the random-address purge: a random address heard once is a count in `random_devices_daily` after 7 days, not a row; `retention.random_repeat_s`; §2.3 `random_devices_daily` is never pruned). 2026-11-03 (#175 — `alert_incidents` on the finding tier, and its per-key bound of `DB_INCIDENTS_PER_KEY` incidents). 2026-10-26 (#166 — the `--pcap-dir` age sweep, §2d; owner ruling: two weeks; review: one directory for both sinks refused, the stale-clock guard, the sweep's own stderr line). Previously 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
 
 ---
 
@@ -67,6 +67,13 @@ there is nothing to retain.
 
 The ordering is the point: *what fired* outlives *who was here*, which
 outlives *the individual observations that established it*.
+
+`coverage_intervals` (schema v18, #242 item 2) is on the observation
+tier: one row a minute of what the monitor radios did (time per channel
+and band, frames by class, drops, sources; [[coverage-assessment]] § 6),
+about 43,000 rows in a 30-day window. A row qualifies the observations
+of its minute and is worth no more than they are, so it expires with
+them, and the size ceiling may take it like any other observation row.
 
 `alert_incidents` (schema v11, #175) has one more bound besides its
 tier: a key keeps its newest `DB_INCIDENTS_PER_KEY` (256) incidents,

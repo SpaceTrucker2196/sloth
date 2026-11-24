@@ -258,6 +258,11 @@ CORE_BASE_SRCS += src/reg_table.c src/alerts/rules_regulatory.c
 CORE_BASE_SRCS += src/rule_coverage.c src/rule_coverage_live.c
 # The capture side's filler: named by capture_side.c only.
 CORE_BASE_SRCS += src/rule_coverage_capture.c
+# The per-interval coverage record (#242 item 2): the record and its
+# writers (cov_interval.c, which db.c reads and which names no capture
+# module) and the capture side's sampler (named by poll.c's wifi table
+# and probe.c only).
+CORE_BASE_SRCS += src/cov_interval.c src/cov_interval_capture.c
 CORE_BASE_SRCS += src/ble_snoop.c
 # #144 slice 2: the HCI monitor decoder and the own-transmission rule are
 # pure; the libpcap worker that feeds them is in PCAP_CORE_SRCS.

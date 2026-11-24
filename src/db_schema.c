@@ -39,6 +39,47 @@
     "  PRIMARY KEY (day, sources)" \
     ");\n"
 
+/* coverage_intervals (#242 item 2, schema v18). One row per closed
+ * coverage interval (src/cov_interval.h), the `coverage_interval`
+ * record's figures: when, how long, the radio time by band, the frames
+ * by class, the drops (NULL: not measured) and, as the record writes
+ * them, the per-channel list and the sources at the end. last_seen is
+ * the interval's end, the column the observation tier ages rows out
+ * by. Counts and states only: no address, no SSID. Shared by the
+ * unconditional schema and the v17 -> v18 step. */
+#define COVERAGE_INTERVALS_DDL \
+    "CREATE TABLE IF NOT EXISTS coverage_intervals (" \
+    "  start       INTEGER NOT NULL," \
+    "  last_seen   INTEGER NOT NULL," \
+    "  dur_ms      INTEGER NOT NULL," \
+    "  radio_ms    INTEGER NOT NULL DEFAULT 0," \
+    "  ms_24       INTEGER NOT NULL DEFAULT 0," \
+    "  ms_5        INTEGER NOT NULL DEFAULT 0," \
+    "  ms_5dfs     INTEGER NOT NULL DEFAULT 0," \
+    "  ms_6        INTEGER NOT NULL DEFAULT 0," \
+    "  ms_unknown  INTEGER NOT NULL DEFAULT 0," \
+    "  f_beacon    INTEGER NOT NULL DEFAULT 0," \
+    "  f_probe     INTEGER NOT NULL DEFAULT 0," \
+    "  f_auth      INTEGER NOT NULL DEFAULT 0," \
+    "  f_assoc     INTEGER NOT NULL DEFAULT 0," \
+    "  f_deauth    INTEGER NOT NULL DEFAULT 0," \
+    "  f_action    INTEGER NOT NULL DEFAULT 0," \
+    "  f_ctrl      INTEGER NOT NULL DEFAULT 0," \
+    "  f_data      INTEGER NOT NULL DEFAULT 0," \
+    "  f_eapol     INTEGER NOT NULL DEFAULT 0," \
+    "  f_other     INTEGER NOT NULL DEFAULT 0," \
+    "  f_fcs_bad   INTEGER NOT NULL DEFAULT 0," \
+    "  cap_drop    INTEGER," \
+    "  cap_ifdrop  INTEGER," \
+    "  mon_drop    INTEGER," \
+    "  mon_ifdrop  INTEGER," \
+    "  chan_overflow INTEGER NOT NULL DEFAULT 0," \
+    "  chans       TEXT NOT NULL DEFAULT '[]'," \
+    "  sources     TEXT NOT NULL DEFAULT '[]'" \
+    ");\n" \
+    "CREATE INDEX IF NOT EXISTS idx_coverage_intervals_last_seen" \
+    "  ON coverage_intervals(last_seen);\n"
+
 static const char SCHEMA_SQL[] =
     /* ── meta ────────────────────────────────────────────── */
     "CREATE TABLE IF NOT EXISTS meta ("
@@ -1050,7 +1091,9 @@ static const char SCHEMA_SQL[] =
     "  PRIMARY KEY (kind, iface)"
     ");\n"
 
-    RANDOM_DEVICES_DAILY_DDL;
+    RANDOM_DEVICES_DAILY_DDL
+
+    COVERAGE_INTERVALS_DDL;
 
 /* Applied before the version check — see db.h. */
 static const char META_SQL[] =
@@ -1228,6 +1271,12 @@ static const char MIGRATE_V15_SQL[] =
  * purged a row, so there is nothing to count. */
 static const char MIGRATE_V16_SQL[] = RANDOM_DEVICES_DAILY_DDL;
 
+/* v17 -> v18 (#242 item 2, 2026-11-23): coverage_intervals, the
+ * per-minute coverage record. Created here, with its index, so the
+ * table and the stamp land in the step's one transaction. Nothing is
+ * backfilled: no earlier build measured an interval. */
+static const char MIGRATE_V17_SQL[] = COVERAGE_INTERVALS_DDL;
+
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
 int db_schema_version(void)            { return DB_SCHEMA_VERSION; }
@@ -1247,6 +1296,7 @@ const char *db_schema_migrate_v13_sql(void) { return MIGRATE_V13_SQL; }
 const char *db_schema_migrate_v14_sql(void) { return MIGRATE_V14_SQL; }
 const char *db_schema_migrate_v15_sql(void) { return MIGRATE_V15_SQL; }
 const char *db_schema_migrate_v16_sql(void) { return MIGRATE_V16_SQL; }
+const char *db_schema_migrate_v17_sql(void) { return MIGRATE_V17_SQL; }
 
 /* --print-schema (#185 item 4). The statements a new file gets, in the
  * order db_open() applies them, then the version row check_version()

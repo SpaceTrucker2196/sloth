@@ -30,6 +30,7 @@
 #include "karma_detect.h"         /* directed probe-response forgery (#187 S2) */
 #include "probe_latency.h"        /* probe-response latency, observation only (#187 S3) */
 #include "eapol_log.h"
+#include "cov_interval_capture.h"   /* frame classes (#242 item 2) */
 #include "fragattack.h"
 #include "pm_forge.h"
 #include "queue_evict.h"
@@ -66,6 +67,13 @@ static uint64_t        g_radiotap_rejects; /* radiotap_parse() refused (#123) */
 static time_t          g_last_frame_ts;   /* the frame's own clock */
 static time_t          g_last_frame_wall; /* host clock at arrival, 0 = never */
 static pthread_mutex_t g_frame_mu = PTHREAD_MUTEX_INITIALIZER;
+/* Frames by coverage class (#242 item 2), lifetime, under g_frame_mu
+ * with the tally they partition: mon_frame_record() takes the lock
+ * already, so the count costs an increment and no lock of its own.
+ * Radio 0's newest frequency beside them, for a radio that is not
+ * retuned (the coverage record's channel for it). */
+static uint64_t        g_frame_class[COV_FC_N];
+static int             g_radio0_freq;
 
 uint64_t mon_bad_clock_total(void) {
     pthread_mutex_lock(&g_frame_mu);
@@ -79,6 +87,20 @@ uint64_t mon_radiotap_reject_total(void) {
     uint64_t t = g_radiotap_rejects;
     pthread_mutex_unlock(&g_frame_mu);
     return t;
+}
+
+void mon_frame_class_totals(uint64_t out[COV_FC_N]) {
+    if (!out) return;
+    pthread_mutex_lock(&g_frame_mu);
+    memcpy(out, g_frame_class, sizeof(g_frame_class));
+    pthread_mutex_unlock(&g_frame_mu);
+}
+
+int mon_radio0_freq_mhz(void) {
+    pthread_mutex_lock(&g_frame_mu);
+    int f = g_radio0_freq;
+    pthread_mutex_unlock(&g_frame_mu);
+    return f;
 }
 
 uint64_t mon_frame_total(void) {
@@ -115,8 +137,10 @@ static const char *frame_label(uint8_t type, uint8_t sub) {
  * thread). a1/a2 may be NULL for short frames. */
 static void mon_frame_record(uint8_t type, uint8_t sub,
                              const uint8_t *a1, const uint8_t *a2,
-                             uint16_t len, int8_t signal, time_t ts) {
+                             uint16_t len, int8_t signal, time_t ts,
+                             int cov_class) {
     pthread_mutex_lock(&g_frame_mu);
+    if (cov_class >= 0 && cov_class < COV_FC_N) g_frame_class[cov_class]++;
     mon_frame_t *f = &g_frames[g_frame_head];
     f->ts         = ts;
     f->signal_dbm = signal;
@@ -537,8 +561,13 @@ static void on_radio_frame(int radio, const struct pcap_pkthdr *hdr,
     /* Log every frame for the monitor packets band, before the per-type
      * dispatch. The view hands out addr2 only where the frame has one —
      * ACK/CTS carry addr1 only, so it is NULL there whatever follows. */
+    /* Its coverage class (#242) rides the same lock as the tally: one
+     * class per recorded frame, so the classes sum to the frames. A
+     * frame radiotap marked FCS-failed is counted as that, not by a
+     * type its damaged octets may misstate. */
     mon_frame_record(type, sub, fr.a1, fr.a2,
-                     (uint16_t)dot11_len, signal, fts);
+                     (uint16_t)dot11_len, signal, fts,
+                     cov_frame_class(&fr, rt.bad_fcs));
 
     /* Freshness for this stream (#91). Recorded here, with the frame
      * tally, so it counts exactly the frames that cleared the framing
@@ -558,6 +587,7 @@ static void on_radio_frame(int radio, const struct pcap_pkthdr *hdr,
         pthread_mutex_lock(&g_frame_mu);
         g_last_frame_ts   = fts;
         g_last_frame_wall = sloth_wall();
+        if (rt.freq_mhz > 0) g_radio0_freq = rt.freq_mhz;
         pthread_mutex_unlock(&g_frame_mu);
     }
 
@@ -1009,6 +1039,7 @@ void probe_test_reset_freshness(void) {
     pthread_mutex_lock(&g_frame_mu);
     g_last_frame_ts   = 0;
     g_last_frame_wall = 0;
+    g_radio0_freq     = 0;
     pthread_mutex_unlock(&g_frame_mu);
 }
 

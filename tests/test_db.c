@@ -213,7 +213,12 @@ static void test_schema_tables_have_seen_columns(void) {
                                           /* victron_readings (v15): one
                                            * write of a device's values
                                            * per row, a sample. */
-                                          "victron_readings (" };
+                                          "victron_readings (",
+                                          /* coverage_intervals (#242,
+                                           * v18): one closed minute per
+                                           * row, its span start to
+                                           * last_seen, a sample. */
+                                          "coverage_intervals (" };
 
     int tables = 0, entities = 0, with_both = 0;
     for (const char *p = strstr(sql, "CREATE TABLE"); p;
@@ -4367,6 +4372,114 @@ static void test_v16_migration_failure_leaves_file_unchanged(void) {
     unlink(db_path);
 }
 
+/* ── Schema v18: coverage_intervals (#242 item 2) ──────────────── */
+
+/* A v17 file: a current file with coverage_intervals and its index
+ * dropped and the stamp set to 17, exactly a v17 file's shape, since
+ * v17 -> v18 adds a table and touches no other. A device row and a
+ * random_devices_daily row ride along. */
+static void write_v17_file(void) {
+    fresh_db();
+    db_close();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "DROP INDEX idx_coverage_intervals_last_seen;"
+        "DROP TABLE coverage_intervals;"
+        "INSERT INTO devices (mac,first_seen,last_seen,sources)"
+        " VALUES ('00:11:22:00:00:01',1600000000,1600000100,16);"
+        "INSERT INTO random_devices_daily (day,sources,count,first_seen,last_seen)"
+        " VALUES ('2020-09-13',16,3,1600000000,1600000100);"
+        "UPDATE meta SET value='17' WHERE key='schema_version';",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+}
+
+/* v17 -> v18: the table and its index arrive empty, and the rows that
+ * were there read as they were. The { 17, ... } step removed from
+ * g_steps[], the static chain check refuses the build. With
+ * MIGRATE_V17_SQL emptied this test still passes: the unconditional
+ * schema creates the table after the stamp. The step's SQL is what
+ * puts the table inside the step's transaction, and that is what the
+ * failure test below holds. */
+static void test_v17_file_migrates_additively(void) {
+    write_v17_file();
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    " AND name='coverage_intervals'"), 0);
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, DB_VER_STR);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('coverage_intervals')"
+                    " WHERE name IN ('start','last_seen','dur_ms','radio_ms',"
+                    "'ms_24','ms_5','ms_5dfs','ms_6','ms_unknown','f_beacon',"
+                    "'f_eapol','f_fcs_bad','cap_drop','mon_ifdrop','chans',"
+                    "'sources','chan_overflow')"), 17);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
+                    " AND name='idx_coverage_intervals_last_seen'"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM coverage_intervals"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices WHERE mac='00:11:22:00:00:01'"
+                    " AND first_seen=1600000000 AND last_seen=1600000100"
+                    " AND sources=16"), 1);
+    ASSERT_EQ(q_int("SELECT count FROM random_devices_daily"
+                    " WHERE day='2020-09-13'"), 3);
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v17 file whose stamp cannot be written stays v17 without the table:
+ * the CREATE and the stamp are one transaction, and the unconditional
+ * schema that would create it too never runs on a refused open. Seen
+ * red with migrate_step()'s return ignored in migrate_from() (db_open
+ * returned 1 and the table appeared beside a v17 stamp). */
+static void test_v17_migration_failure_leaves_file_unchanged(void) {
+    write_v17_file();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TRIGGER refuse_v18 BEFORE UPDATE ON meta"
+        " WHEN NEW.key='schema_version' AND NEW.value='18'"
+        " BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[32];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "17");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE"
+                    " name IN ('coverage_intervals',"
+                    "'idx_coverage_intervals_last_seen')"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM random_devices_daily"), 1);
+    unlink(db_path);
+}
+
+/* coverage_intervals is on the observation tier: past the window it
+ * goes with the other observation rows, and the size ceiling may take
+ * it. Seen red with "coverage_intervals" taken out of TIER_OBSERVATION
+ * (the old row stayed). */
+static void test_coverage_intervals_age_with_observations(void) {
+    fresh_db();
+    db_set_retain_days(30);
+    long long old = NOW - 45 * DAY, recent = NOW - 2 * DAY;
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO coverage_intervals (start,last_seen,dur_ms)"
+        " VALUES (%lld,%lld,60000);"
+        "INSERT INTO coverage_intervals (start,last_seen,dur_ms)"
+        " VALUES (%lld,%lld,60000);",
+        old - 60, old, recent - 60, recent);
+    insert_at(sql);
+    db_maintain(NOW);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM coverage_intervals"), 1);
+    ASSERT_EQ(q_int("SELECT last_seen FROM coverage_intervals"), recent);
+    db_close();
+    unlink(db_path);
+}
+
 /* Every victron_readings value column is a name on sloth's allow-list,
  * every allow-listed name has its column, and the table has exactly
  * those beside last_seen, mac, src and rssi. */
@@ -5794,6 +5907,9 @@ void run_db_tests(void) {
     RUN_TEST(test_v15_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_v16_file_migrates_additively);
     RUN_TEST(test_v16_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_v17_file_migrates_additively);
+    RUN_TEST(test_v17_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_coverage_intervals_age_with_observations);
     RUN_TEST(test_victron_columns_match_the_allow_list);
     RUN_TEST(test_victron_tables_written);
     RUN_TEST(test_device_ip_joined_camera_columns_follow_latest);

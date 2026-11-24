@@ -139,6 +139,7 @@
 #include "daemon_start.h"
 #include "gnss_flags.h"
 #include "rf_moved.h"
+#include "cov_interval_capture.h"
 
 static sloth_state_t g_state;
 /* Written from on_signal(), so the type is the one C99 7.14.1.1 allows a
@@ -1442,6 +1443,9 @@ int main(int argc, char **argv) {
     g_hop_enabled = prof.hop_enabled;
 
     if (g_hop_enabled) chanhop_init_default(&g_chanhop);
+    /* The per-interval coverage record reads radio 0's dwell from this
+     * scheduler (#242 item 2); without --hop the radio is not retuned. */
+    cov_iv_capture_set_hop0(g_hop_enabled ? &g_chanhop : NULL);
 
     /* Privilege plan (#140, owner ruling 2026-10-15: "only use root
      * when necessary"). Decided here, before anything opens, so a
