@@ -52,8 +52,13 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     bt_stream_snapshot(&g_s);
     ble_snapshot(&g_s);
     const bt_capture_health_t *c = &g_s.btcap;
-    if (c->drop + c->adv + c->scan_req + c->connect_ind + c->ext_adv +
+    /* crc_bad is its own bucket since JSONL 2.7.0 (fb1c4425): a record
+     * on the advertising Access Address whose CRC is wrong is counted
+     * there and nowhere else, so the sum without it fell short of recv
+     * for any such input. */
+    if (c->drop + c->crc_bad + c->adv + c->scan_req + c->connect_ind + c->ext_adv +
         c->data_pdus + c->other + c->bredr != c->recv) abort();
+    if (c->crc_bad + c->crc_ok + c->crc_unchecked > c->recv) abort();
     if (c->truncated > c->recv) abort();
     if (c->bredr_iac > c->bredr) abort();
     if (strnlen(c->err, sizeof(c->err)) >= sizeof(c->err)) abort();
