@@ -96,7 +96,9 @@ typedef struct {
     uint64_t measured_total_ms;
     /* Cued dwells (#248): whether the open dwell was planned under a
      * cue, and lifetime the completed cued dwells and their measured
-     * time, for the dwell accounting a test and the record read. */
+     * time, for the dwell accounting a test and the record read. A
+     * re-deal resets the scheduler; src/mon_radios.c deal() carries
+     * radio 0's two totals over, so they stay lifetime. */
     int      dwell_cued;
     uint64_t cued_dwells;
     uint64_t cued_total_ms;
@@ -220,6 +222,11 @@ int chanhop_slot_cued(const chanhop_t *h, int i, uint64_t now_ms);
  * budget rule above; 0 when it would not, or i is out of range. A slot
  * already cued is counted once. Pure. */
 int chanhop_cue_fits(const chanhop_t *h, int i, uint64_t now_ms);
+
+/* 1 when slot i alone, with no other slot cued, keeps the budget rule:
+ * 0 means this share can hold no cue at its current plan whatever the
+ * load (chancue_request()'s `share_small`). Pure. */
+int chanhop_cue_fits_alone(const chanhop_t *h, int i);
 
 /* Set (until_ms > now_ms) or clear (0) slot i's cue. Setting the cue of
  * the channel the radio is on now lengthens the open dwell to the cued

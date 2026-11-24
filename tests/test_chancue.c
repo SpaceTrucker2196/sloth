@@ -361,7 +361,10 @@ static void test_cue_served_by_the_holding_radio(void) {
 
     /* The limit is per radio: the default 11 channels dealt among three
      * radios leave shares of 4, 4 and 3, where one channel at 4x would
-     * take 4/7 or 4/6 of its radio - refused, counted. */
+     * take 4/7 or 4/6 of its radio with no other cue running - refused
+     * `share_small`, the layout's and not load's, so not a limit and no
+     * input to SENSOR_SUPPRESSED (#248 review). Seen red with the
+     * structural check removed (share_cap, eleven limit refusals). */
     chanhop_t def, r0, r1, r2;
     chanhop_init(&def, k_def, N_DEF);
     chanhop_split(&r0, &def, 3, 0);
@@ -373,7 +376,25 @@ static void test_cue_served_by_the_holding_radio(void) {
     chanhop_t *three[3] = { &r0, &r1, &r2 };
     for (int i = 0; i < N_DEF; i++)
         ASSERT_EQ(chancue_request(&c3, three, 3, ALERT_TYPE_EVIL_TWIN,
-                                  mhz_of(k_def[i]), "t", 1), CUE_REFUSE_SHARE);
+                                  mhz_of(k_def[i]), "t", 1), CUE_REFUSE_SHARE_SMALL);
+    ASSERT_EQ((int)c3.refused, N_DEF);
+    ASSERT_EQ((int)c3.refused_limit, 0);
+    ASSERT_EQ(chancue_is_limit(CUE_REFUSE_SHARE_SMALL), 0);
+    ASSERT_STR(chancue_reason_name(CUE_REFUSE_SHARE_SMALL), "share_small");
+    ASSERT_EQ(c3.ev[0].reason, CUE_REFUSE_SHARE_SMALL);
+    /* One radio with room for one cue alone: a second that does not fit
+     * beside it is the limit, share_cap, counted. */
+    chanhop_t five;
+    static const int k5[] = { 1, 6, 11, 36, 40 };
+    chanhop_init(&five, k5, 5);
+    chancue_t c5;
+    chancue_init(&c5);
+    chanhop_t *one5[1] = { &five };
+    ASSERT_EQ(chancue_request(&c5, one5, 1, ALERT_TYPE_EVIL_TWIN, mhz_of(1), "u", 1),
+              CUE_STARTED);
+    ASSERT_EQ(chancue_request(&c5, one5, 1, ALERT_TYPE_EVIL_TWIN, mhz_of(6), "v", 1),
+              CUE_REFUSE_SHARE);
+    ASSERT_EQ((int)c5.refused_limit, 1);
 }
 
 /* ── the live side ───────────────────────────────────────────────── */
@@ -544,6 +565,120 @@ static void test_cue_records(void) {
     live_end();
 }
 
+/* An incident asks once while it stays open, however many other
+ * incidents open and close meanwhile: 200 channel-less findings pass
+ * through one slot while a twin stays open, and the twin is never
+ * offered again (#248 review). Seen red with the old 128-entry ring of
+ * seen ids (started 2, the twin re-offered once its id left the ring). */
+static void test_incident_offered_once_under_churn(void) {
+    live_begin();
+    cue_live_enable(1);
+    chanhop_t h;
+    chanhop_init(&h, k_def, N_DEF);
+    live_poll(&h, 0);
+    finding(ALERT_TYPE_EVIL_TWIN, "xxxx0001", mhz_of(6));
+    live_poll(&h, 10);
+    ASSERT_EQ((int)g_s.cue.started, 1);
+    uint64_t t = CUE_DURATION_MS + 100;
+    live_poll(&h, t);
+    ASSERT_EQ(g_s.cue.active, 0);
+    for (int i = 0; i < 200; i++) {
+        char id[ALERT_INCIDENT_ID_LEN];
+        snprintf(id, sizeof(id), "f%07d", i);
+        g_s.alert_count = 1;
+        finding(ALERT_TYPE_DEAUTH_FLOOD, id, 0);
+        live_poll(&h, t += 10);
+    }
+    g_s.alert_count = 1;
+    live_poll(&h, t += 10);
+    ASSERT_EQ((int)g_s.cue.started, 1);
+    ASSERT_EQ((int)g_s.cue.refused, 200);
+    ASSERT_EQ((int)g_s.cue.refused_limit, 0);
+    ASSERT_EQ(g_s.cue.active, 0);
+    live_end();
+}
+
+/* Every event of one poll reaches the stream: 40 distinct refusals and
+ * a start in the same poll are 41 records, the start among them (#248
+ * review). Seen red with the events drained once after all requests
+ * (the queue of 32 full, the start dropped). */
+static void test_no_event_lost_in_a_burst(void) {
+    static const int off[] = { 2, 3, 4, 5, 7, 8, 9, 10, 12, 13, 52, 56, 60, 64,
+                               100, 104, 108, 112, 116, 120, 124, 128, 132,
+                               136, 140, 144, 165 };
+    static const alert_type_t kinds[] = { ALERT_TYPE_KARMA_AP,
+                                          ALERT_TYPE_PMKID_HARVEST };
+    const int noff = (int)(sizeof(off) / sizeof(off[0]));
+    live_begin();
+    cue_live_enable(1);
+    sink_open();
+    chanhop_t h;
+    chanhop_init(&h, k_def, N_DEF);
+    live_poll(&h, 0);
+    for (int i = 0; i < 40; i++) {
+        char id[ALERT_INCIDENT_ID_LEN];
+        snprintf(id, sizeof(id), "b%07d", i);
+        finding(kinds[i / noff], id, mhz_of(off[i % noff]));
+    }
+    finding(ALERT_TYPE_EVIL_TWIN, "last0001", mhz_of(6));
+    live_poll(&h, 10);
+    const char *b = sink_read();
+    ASSERT_EQ(count_of(b, "\"state\":\"refused\""), 40);
+    ASSERT_EQ(count_of(b, "\"state\":\"started\""), 1);
+    ASSERT(strstr(b, "last0001") != NULL);
+    live_end();
+}
+
+/* cue_cued_ms is lifetime: a re-deal of the shares (a sensor radio
+ * lost) resets radio 0's scheduler, not the count (#248 review). Seen
+ * red with deal() not carrying radio 0's cued totals over (the count
+ * fell to 0 at the re-deal). */
+static void test_cued_ms_survives_a_redeal(void) {
+    live_begin();
+    cue_live_enable(1);
+    mon_radios_add("mon0");
+    mon_radios_add("mon1");
+    mon_radios_set_state(0, MON_RADIO_RUNNING, "");
+    mon_radios_set_state(1, MON_RADIO_RUNNING, "");
+    chanhop_t h;
+    chanhop_init(&h, k_long, N_LONG);
+    ASSERT_EQ(mon_hop_setup(&h), 2);
+    finding(ALERT_TYPE_EVIL_TWIN, "rdl00001", mhz_of(1));   /* radio 0's */
+    uint64_t prev = 0, t = 0;
+    for (; t < 30000; t += 10) {
+        live_poll(&h, t);
+        ASSERT_GE(g_s.cue.cued_ms, prev);
+        prev = g_s.cue.cued_ms;
+    }
+    ASSERT_GT(prev, 0);
+    mon_radios_set_state(1, MON_RADIO_LOST, "gone");
+    for (; t < 60000; t += 10) {
+        live_poll(&h, t);
+        ASSERT_GE(g_s.cue.cued_ms, prev);
+        prev = g_s.cue.cued_ms;
+    }
+    ASSERT_EQ(h.count, N_LONG);                  /* re-dealt: all on radio 0 */
+    live_end();
+}
+
+/* With --cue on, sensor_health carries the cue_* members even while no
+ * monitor interface runs the scheduler (cue_live_step() never called):
+ * main.c's chanhop_drive() publishes before its probe_iface guard
+ * (#248 review). */
+static void test_cue_fields_without_a_monitor(void) {
+    live_begin();
+    g_s.probe_iface[0] = '\0';
+    cue_live_enable(1);
+    sink_open();
+    cue_live_publish(&g_s);
+    ASSERT_EQ(g_s.cue.on, 1);
+    jsonl_emit_sensor_health(&g_s);
+    const char *b = sink_read();
+    ASSERT(strstr(b, "\"cue_active\":0,\"cue_started\":0,\"cue_refused\":0,"
+                     "\"cue_refused_limit\":0,\"cue_cued_ms\":0") != NULL);
+    live_end();
+}
+
 /* Without --cue: no request, no record, no cue_* field. Seen red with
  * the g.on test in cue_live_step() removed. */
 static void test_off_by_default(void) {
@@ -647,5 +782,9 @@ void run_chancue_tests(void) {
     RUN_TEST(test_twin_lengthens_its_channel);
     RUN_TEST(test_cue_records);
     RUN_TEST(test_off_by_default);
+    RUN_TEST(test_incident_offered_once_under_churn);
+    RUN_TEST(test_no_event_lost_in_a_burst);
+    RUN_TEST(test_cued_ms_survives_a_redeal);
+    RUN_TEST(test_cue_fields_without_a_monitor);
     RUN_TEST(test_cue_is_receive_only);
 }

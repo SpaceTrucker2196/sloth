@@ -11,14 +11,18 @@
 #include "rule_coverage_live.h"
 #include "sloth_clock.h"
 
-/* Incidents already considered: an incident asks once, as it opens. */
-#define CUE_SEEN_MAX 128
-
+/* The open cueing incidents already offered: an incident asks once, as
+ * it opens. Rebuilt every step from the incidents s->alerts still holds
+ * open, so an id leaves only when its incident has resolved or been
+ * evicted - and an incident id is never reused (a reopen is a new id) -
+ * and the set never holds more than s->alerts can (#248 review: a
+ * 128-entry ring let an incident still open be offered again once 128
+ * newer ones had passed through). */
 static struct {
     int       on;
     chancue_t c;
-    char      seen[CUE_SEEN_MAX][ALERT_INCIDENT_ID_LEN];
-    int       seen_head;
+    char      seen[MAX_ALERTS][ALERT_INCIDENT_ID_LEN];
+    int       nseen;
 } g;
 
 void cue_live_enable(int on) { g.on = on ? 1 : 0; }
@@ -39,15 +43,10 @@ int cue_live_finding_mhz(const alert_t *a) {
     return 0;
 }
 
-/* 1 the first time an incident is offered, 0 after. */
-static int first_sight(const char *id) {
-    if (!id[0]) return 0;
-    for (int i = 0; i < CUE_SEEN_MAX; i++)
-        if (!strcmp(g.seen[i], id)) return 0;
-    memcpy(g.seen[g.seen_head], id, ALERT_INCIDENT_ID_LEN);
-    g.seen[g.seen_head][ALERT_INCIDENT_ID_LEN - 1] = '\0';
-    g.seen_head = (g.seen_head + 1) % CUE_SEEN_MAX;
-    return 1;
+static int was_seen(const char *id) {
+    for (int i = 0; i < g.nseen; i++)
+        if (!strcmp(g.seen[i], id)) return 1;
+    return 0;
 }
 
 /* The `cue` record (JSONL 2.13.0): no address, no SSID - the alert
@@ -77,6 +76,15 @@ static void emit(const cue_event_t *e) {
     jsonl_emit_fields("cue", sloth_wall(), f, n);
 }
 
+static void flush(void) {
+    cue_event_t ev[CUE_EVENTS_MAX];
+    int n = chancue_drain(&g.c, ev, CUE_EVENTS_MAX);
+    for (int i = 0; i < n; i++) emit(&ev[i]);
+}
+
+/* The next seen set, built while the current one is read. */
+static char g_keep[MAX_ALERTS][ALERT_INCIDENT_ID_LEN];
+
 void cue_live_step(sloth_state_t *s, chanhop_t *h0, uint64_t now_ms) {
     if (!s) return;
     s->cue.on = g.on;
@@ -88,23 +96,42 @@ void cue_live_step(sloth_state_t *s, chanhop_t *h0, uint64_t now_ms) {
         sched[k] = k < MON_RADIO_MAX ? mon_hop_sched_rw(k) : NULL;
 
     /* End what is due first, so a cue that ran out frees its place for
-     * a finding of this same poll. */
+     * a finding of this same poll. The events are written as they are
+     * made, after the tick and after each request: one request makes at
+     * most one event and a tick at most CUE_MAX_ACTIVE, so the queue of
+     * CUE_EVENTS_MAX never fills however many incidents open in one
+     * poll (#248 review: a burst after a monitor outage used to push a
+     * `started` past the queue, leaving its `ended` unmatched). */
     chancue_tick(&g.c, sched, CUE_SCHED_MAX, now_ms);
-    for (int i = 0; i < s->alert_count; i++) {
+    flush();
+
+    int nkeep = 0;
+    for (int i = 0; i < s->alert_count && i < MAX_ALERTS; i++) {
         const alert_t *a = &s->alerts[i];
-        if (a->resolved || !chancue_kind_cues(a->type)) continue;
-        if (!first_sight(a->incident_id)) continue;
+        if (a->resolved || !a->incident_id[0] || !chancue_kind_cues(a->type))
+            continue;
+        int seen = was_seen(a->incident_id);
+        memcpy(g_keep[nkeep], a->incident_id, ALERT_INCIDENT_ID_LEN);
+        g_keep[nkeep][ALERT_INCIDENT_ID_LEN - 1] = '\0';
+        nkeep++;
+        if (seen) continue;
         (void)chancue_request(&g.c, sched, CUE_SCHED_MAX, a->type,
                               cue_live_finding_mhz(a), a->incident_id, now_ms);
+        flush();
     }
+    memcpy(g.seen, g_keep, (size_t)nkeep * sizeof(g.seen[0]));
+    g.nseen = nkeep;
 
-    cue_event_t ev[CUE_EVENTS_MAX];
-    int n = chancue_drain(&g.c, ev, CUE_EVENTS_MAX);
-    for (int i = 0; i < n; i++) emit(&ev[i]);
+    s->cue.cued_ms = h0 ? h0->cued_total_ms : 0;
+    cue_live_publish(s);
+}
 
+void cue_live_publish(sloth_state_t *s) {
+    if (!s) return;
+    s->cue.on = g.on;
+    if (!g.on) return;
     s->cue.active        = chancue_active(&g.c);
     s->cue.started       = g.c.started;
     s->cue.refused       = g.c.refused;
     s->cue.refused_limit = g.c.refused_limit;
-    s->cue.cued_ms       = h0 ? h0->cued_total_ms : 0;
 }

@@ -36,4 +36,10 @@ int  cue_live_finding_mhz(const alert_t *a);
  * platform op: the retune that follows is chanhop_service()'s. */
 void cue_live_step(sloth_state_t *s, chanhop_t *h0, uint64_t now_ms);
 
+/* Fill s->cue from the cue table without stepping it: main.c's
+ * chanhop_drive() calls it before its probe_iface guard, so under --cue
+ * sensor_health carries the cue_* members (zeros) while no monitor
+ * interface runs the scheduler too. cue_live_step() ends with it. */
+void cue_live_publish(sloth_state_t *s);
+
 #endif

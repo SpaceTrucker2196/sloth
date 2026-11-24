@@ -201,6 +201,9 @@ static void prune_report_records(const char *md, const char *json) {
  * interface if the dwell has elapsed. */
 static void chanhop_drive(sloth_state_t *s) {
     static uint64_t last_total = 0;
+    /* --cue (#248 review): sensor_health carries the cue_* members
+     * whenever --cue is on, with no monitor interface to hop too. */
+    cue_live_publish(s);
     if (!g_hop_enabled || s->probe_iface[0] == '\0') return;
     uint64_t now_ms = sloth_mono_ms();
     /* #91: the monitor radio's own frame counter, not s->pkt_total.

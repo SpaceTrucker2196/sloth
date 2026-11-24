@@ -35,10 +35,12 @@
  *   active  at most CUE_MAX_ACTIVE cues at once, over all radios.
  *   rate    at most CUE_RATE_MAX cues started in any CUE_RATE_WINDOW_MS.
  *
- * Two refusals are not limits and do not feed SENSOR_SUPPRESSED: the
+ * Three refusals are not limits and do not feed SENSOR_SUPPRESSED: the
  * finding names no channel (its evidence carries no radiotap frequency,
- * or the ring no longer holds it), or its channel is in no radio's
- * rotation. A finding on a channel already cued is absorbed: no new
+ * or the ring no longer holds it), its channel is in no radio's
+ * rotation, or the holding radio's share is too short to take a cue
+ * even with none running (the layout, not load: three radios on the
+ * default 11 channels). A finding on a channel already cued is absorbed: no new
  * cue, no record, the running cue's end unchanged.
  *
  * Pure: no platform call, no clock, no I/O. The caller passes the
@@ -64,11 +66,14 @@ typedef enum {
     CUE_REFUSE_NOT_HOPPED,   /* refused: no radio's rotation holds it */
     CUE_REFUSE_ACTIVE,       /* refused, limit: CUE_MAX_ACTIVE running */
     CUE_REFUSE_RATE,         /* refused, limit: CUE_RATE_MAX in the window */
-    CUE_REFUSE_SHARE         /* refused, limit: past the radio's 50 % */
+    CUE_REFUSE_SHARE,        /* refused, limit: past the radio's 50 % */
+    CUE_REFUSE_SHARE_SMALL   /* refused: the radio's share could hold no
+                              * cue even with none running (#248 review) */
 } cue_result_t;
 
 /* The refusal word of the `cue` record: "no_channel", "not_hopped",
- * "active_cap", "rate_cap", "share_cap"; "" for anything else. */
+ * "active_cap", "rate_cap", "share_cap", "share_small"; "" for anything
+ * else. */
 const char *chancue_reason_name(cue_result_t r);
 /* 1 for the three limit refusals, the ones SENSOR_SUPPRESSED counts. */
 int chancue_is_limit(cue_result_t r);

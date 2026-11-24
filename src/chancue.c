@@ -13,6 +13,7 @@ const char *chancue_reason_name(cue_result_t r) {
     case CUE_REFUSE_ACTIVE:     return "active_cap";
     case CUE_REFUSE_RATE:       return "rate_cap";
     case CUE_REFUSE_SHARE:      return "share_cap";
+    case CUE_REFUSE_SHARE_SMALL: return "share_small";
     case CUE_STARTED: case CUE_NOT_CUEING: case CUE_ABSORBED: break;
     }
     return "";
@@ -108,6 +109,16 @@ cue_result_t chancue_request(chancue_t *c, chanhop_t *const *sched, int nsched,
 
     for (int i = 0; i < CUE_MAX_ACTIVE; i++)
         if (c->cue[i].used && c->cue[i].freq_mhz == freq_mhz) return CUE_ABSORBED;
+
+    /* A share too short for one cue even with none running (fewer than
+     * five channels at equal dwell: 4x one against the rest) refuses
+     * every cue whatever the load. That is the radio layout, not airtime
+     * taken, so it is no limit and no SENSOR_SUPPRESSED input (#248
+     * review: three radios on the default 11 channels raised
+     * suppressed:cue on five ordinary findings a minute). Checked before
+     * the caps so it is never counted as one of them. */
+    if (!chanhop_cue_fits_alone(sched[radio], slot))
+        return refuse(c, CUE_REFUSE_SHARE_SMALL, ty, freq_mhz, incident_id, now_ms);
 
     if (chancue_active(c) >= CUE_MAX_ACTIVE)
         return refuse(c, CUE_REFUSE_ACTIVE, ty, freq_mhz, incident_id, now_ms);

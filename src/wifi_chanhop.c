@@ -217,6 +217,17 @@ int chanhop_cue_fits(const chanhop_t *h, int i, uint64_t now_ms) {
     return cued <= uncued;
 }
 
+int chanhop_cue_fits_alone(const chanhop_t *h, int i) {
+    if (!h || i < 0 || i >= h->count) return 0;
+    uint64_t cued = 0, uncued = 0;
+    for (int j = 0; j < h->count; j++) {
+        uint64_t dj = dwell_for(h, h->slots[j].activity);
+        if (j == i) cued = CHANHOP_CUE_MULT * dj;
+        else        uncued += dj;
+    }
+    return cued <= uncued;
+}
+
 void chanhop_set_cue(chanhop_t *h, int i, uint64_t until_ms, uint64_t now_ms) {
     if (!h || i < 0 || i >= h->count) return;
     h->slots[i].cue_until_ms = until_ms > now_ms ? until_ms : 0;

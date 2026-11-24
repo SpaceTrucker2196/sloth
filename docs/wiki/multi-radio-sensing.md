@@ -29,7 +29,7 @@ own sensor radios. This is not [[direction-finding]], whose
 (`--monitor-iface`, `chanhop_drive()`), `src/poll.c`, `src/jsonl.c`
 (`sensor_health`), `tests/test_mon_radios.c`.
 
-**Last updated**: 2026-11-24 (#248: which radio serves a `--cue` cue, and why three radios on the default list refuse them), 2026-11-16 (new; JSONL `2.3.0`)
+**Last updated**: 2026-11-24 (#248 review: such refusals are `share_small`, not a limit), 2026-11-24 (#248: which radio serves a `--cue` cue, and why three radios on the default list refuse them), 2026-11-16 (new; JSONL `2.3.0`)
 
 ## Running it
 
@@ -207,7 +207,8 @@ radiotap header.
 by the radio whose share holds the cued channel (`mon_hop_sched_rw()`),
 and its 50 % limit is that radio's. Shares of 4 or fewer equal channels
 cannot take one channel at 4x inside half the radio, so with the default
-11 channels over three radios every cue is refused `share_cap`; after a
+11 channels over three radios every cue is refused `share_small`, which
+is not a limit and does not feed `suppressed:cue` (#248 review); after a
 re-deal the next poll cues the channel wherever it now sits.
 
 ## Losing a radio

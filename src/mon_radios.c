@@ -264,8 +264,15 @@ static int deal(chanhop_t *h0) {
     for (int k = 0; k < MON_RADIO_MAX; k++) {
         chanhop_t *h = k == 0 ? h0 : &g_hop[k];
         int n = 0;
+        /* Radio 0's cued totals are lifetime (sensor_health
+         * cue_cued_ms, #248 review); chanhop_split() resets them. */
+        uint64_t cued_dwells = h->cued_dwells, cued_ms = h->cued_total_ms;
         if ((m >> k) & 1u) n = chanhop_split(h, &g_full, radios, share++);
         else if (k > 0)    memset(h, 0, sizeof(*h));
+        if (k == 0) {
+            h->cued_dwells   = cued_dwells;
+            h->cued_total_ms = cued_ms;
+        }
         /* A radio dealt out stops dwelling anywhere (#246): its last
          * dwell must not go on covering its channel. */
         if (k > 0 && ((g_dealt >> k) & 1u) && !((m >> k) & 1u))
