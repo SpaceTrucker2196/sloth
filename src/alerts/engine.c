@@ -14,6 +14,7 @@
 #include "wifi_assess.h"
 #include "tool_fingerprint.h"
 #include "jsonl.h"
+#include "jsonl_chain.h"
 #include "secure_file.h"   /* SFILE_ERR_MAX */
 #include "wired_attach.h"
 #include "event_wake.h"
@@ -291,6 +292,7 @@ typedef struct {
     time_t   last_pcap_export;      /* wall time of the last real file; 0 = none */
     int      pcap_write_failures;
     char     pcap_path[ALERT_PCAP_PATH_LEN];
+    char     pcap_sha256[65];       /* #251: with pcap_path, under --jsonl-chain */
     char     last_incident_id[ALERT_INCIDENT_ID_LEN];
     time_t   last_first_seen;
     uint32_t reopen_count;
@@ -310,6 +312,22 @@ static alert_side_t *side_find(const char *key, uint64_t h) {
         }
     }
     return NULL;
+}
+
+int alerts_pcap_sha256(const alert_t *a, char out[65]) {
+    out[0] = '\0';
+    if (!a || !a->pcap_path[0]) return -1;
+    /* Not side_find(): a read for a record must not move the LRU. */
+    const uint64_t h = key_hash(a->key);
+    for (int i = 0; i < g_side_n; i++) {
+        const alert_side_t *sd = &g_side[i];
+        if (sd->key_hash != h || strcmp(sd->key, a->key) != 0) continue;
+        if (!sd->pcap_sha256[0] || strcmp(sd->pcap_path, a->pcap_path) != 0)
+            return -1;
+        memcpy(out, sd->pcap_sha256, 65);
+        return 0;
+    }
+    return -1;
 }
 
 static alert_side_t *side_get(const char *key, uint64_t h) {
@@ -1018,6 +1036,20 @@ static void dump_new_alert_pcaps(const sloth_state_t *s, time_t now) {
             if (sd) {
                 sd->last_pcap_export = now;
                 snprintf(sd->pcap_path, sizeof(sd->pcap_path), "%s", a->pcap_path);
+                /* #251: under --jsonl-chain the alert records that name
+                 * the capture carry its SHA-256, so the chain covers the
+                 * capture and not only its name. Read back from the path
+                 * just written, as the manifest reads its file back; a
+                 * path that cannot be read (a bare name that did not
+                 * fit) gets no hash rather than a guess. Off, nothing is
+                 * read and nothing is emitted. Kept here, beside the
+                 * path, and not on alert_t: sloth_state_t holds 128 of
+                 * those, and the suite builds several states on the
+                 * stack. */
+                sd->pcap_sha256[0] = '\0';
+                if (jsonl_chain_enabled() &&
+                    jc_sha256_file(sd->pcap_path, sd->pcap_sha256) != 0)
+                    sd->pcap_sha256[0] = '\0';
             }
         }
     }

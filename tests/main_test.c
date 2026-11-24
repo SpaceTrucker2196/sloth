@@ -222,6 +222,7 @@ void run_pcap_format_tests(void);
 void run_evidence_export_tests(void);
 void run_evidence_alert_tests(void);
 void run_evidence_manifest_tests(void);
+void run_jsonl_chain_tests(void);        /* tests/test_jsonl_chain.c (#251) */
 void run_sha256_tests(void);
 void run_devices_tests(void);
 void run_camera_join_tests(void);        /* tests/test_camera_join.c (#106 round 2) */
@@ -449,6 +450,7 @@ int main(void) {
     run_evidence_export_tests();
     run_evidence_alert_tests();
     run_evidence_manifest_tests();
+    run_jsonl_chain_tests();
     run_sha256_tests();
     run_devices_tests();
     run_camera_join_tests();

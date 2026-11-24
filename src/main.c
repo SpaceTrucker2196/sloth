@@ -143,6 +143,7 @@
 #include "cov_interval_capture.h"
 #include "handoff.h"
 #include "interference.h"
+#include "jsonl_chain.h"
 #include "site_db.h"
 
 static sloth_state_t g_state;
@@ -376,10 +377,22 @@ static void print_usage(const char *argv0) {
             "       [--replay FILE[,FILE]] [--ticks N]\n"
             "       [--preflight [--json]] [--handoff DIR]\n"
             "       [--interference-report FILE [--from T] [--to T]]\n"
+            "       [--jsonl-chain N] [--verify PATH]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created 0600 if it doesn't\n"
             "                     exist; an existing FILE must already be\n"
             "                     private and owned by you, never a symlink)\n"
+            "  --jsonl-chain N    with -o: a hash chain over the file, one\n"
+            "                     chain record (SHA-256 of the block and of\n"
+            "                     the previous chain record) after every N\n"
+            "                     records, 1..100000; alert records name\n"
+            "                     their capture's pcap_sha256. Off by default,\n"
+            "                     and the file is then unchanged. JSONL only.\n"
+            "                     See docs/wiki/record-integrity.md.\n"
+            "  --verify PATH      check a chained JSONL file, or an evidence\n"
+            "                     directory's manifests, and exit: the first\n"
+            "                     break, the head. Exit 0 intact, 1 a break,\n"
+            "                     2 cannot verify.\n"
             "  --pcap-dir DIR     when a critical alert fires with a known\n"
             "                     flow, write the matching packets to a fresh\n"
             "                     pcap file under DIR. CRIT only and once per\n"
@@ -958,6 +971,8 @@ int main(int argc, char **argv) {
     int         preflight_json = 0;      /* --json, with --preflight */
     const char *handoff_dir  = NULL;     /* --handoff DIR (#250) */
     const char *ifr_out      = NULL;     /* --interference-report FILE (#250) */
+    const char *verify_path  = NULL;     /* --verify PATH (#251) */
+    unsigned    jsonl_chain  = 0;        /* --jsonl-chain N (#251), 0 off */
     const char *ifr_from_arg = NULL;     /* --from T */
     const char *ifr_to_arg   = NULL;     /* --to T */
     const char *inventory_path = NULL;   /* --inventory FILE, for --handoff */
@@ -1224,6 +1239,14 @@ int main(int argc, char **argv) {
             preflight_json = 1;
         } else if (!strcmp(argv[i], "--handoff") && i + 1 < argc) {
             handoff_dir = argv[++i];
+        } else if (!strcmp(argv[i], "--verify") && i + 1 < argc) {
+            verify_path = argv[++i];
+        } else if (!strcmp(argv[i], "--jsonl-chain") && i + 1 < argc) {
+            char cerr[96];
+            if (jc_parse_block(argv[++i], &jsonl_chain, cerr, sizeof(cerr)) != 0) {
+                fprintf(stderr, "sloth: %s\n", cerr);
+                return 2;
+            }
         } else if (!strcmp(argv[i], "--interference-report") && i + 1 < argc) {
             ifr_out = argv[++i];
         } else if (!strcmp(argv[i], "--from") && i + 1 < argc) {
@@ -1321,10 +1344,27 @@ int main(int argc, char **argv) {
     }
     /* The offline commands (#250): one at a time, each with what it
      * reads. --from and --to bound the interference report alone. */
-    if ((preflight != 0) + (handoff_dir != NULL) + (ifr_out != NULL) > 1) {
-        fprintf(stderr, "sloth: --preflight, --handoff and "
+    if ((preflight != 0) + (handoff_dir != NULL) + (ifr_out != NULL) +
+        (verify_path != NULL) > 1) {
+        fprintf(stderr, "sloth: --preflight, --handoff, --verify and "
                         "--interference-report are separate commands: "
                         "give one\n");
+        return 2;
+    }
+    /* --verify (#251) reads the one path it names and writes nothing. */
+    if (verify_path) return jc_verify_main(verify_path, stdout);
+    /* The chain is over the -o file's JSONL lines: without -o there is
+     * nothing to chain, and a CEF or syslog line is not what --verify
+     * reads. Both refused rather than a run that keeps no chain while
+     * the operator believes it does. */
+    if (jsonl_chain && !jsonl_path) {
+        fprintf(stderr, "sloth: --jsonl-chain chains the -o file: name one "
+                        "with -o\n");
+        return 2;
+    }
+    if (jsonl_chain && formatter_get() != OUT_FMT_JSONL) {
+        fprintf(stderr, "sloth: --jsonl-chain chains JSONL: --out-format "
+                        "cef and syslog are not chained\n");
         return 2;
     }
     if ((ifr_from_arg || ifr_to_arg) && !ifr_out) {
@@ -1613,6 +1653,8 @@ int main(int argc, char **argv) {
         pf.data_socket_remote = data_socket && ds_allow_remote &&
                                 data_socket_spec_is_remote(data_socket) == 1;
         pf.db_max_mb    = db_max_mb();
+        pf.pcap_retain_days  = (int)tune_val(TUNE_PCAP_RETAIN_DAYS);
+        pf.eapol_retain_days = (int)tune_val(TUNE_HANDSHAKE_RETENTION_DAYS);
         if (ownership_any())             pf.config |= COV_N_OWN_NET;
         if (ownership_known_count() > 0) pf.config |= COV_N_ROSTER;
 #ifdef WITH_PCAP
@@ -1976,6 +2018,7 @@ int main(int argc, char **argv) {
                     "retention disabled (--handshake-retention 0): artifacts "
                     "are kept until you delete them\n", eapol_dir);
     }
+    jsonl_chain_set(jsonl_chain);
     if (jsonl_path && daemon_open_jsonl(jsonl_path) != 0) return 1;
     /* sys_status reports the filesystem its output lands on: the
      * database's, else the JSONL file's. */

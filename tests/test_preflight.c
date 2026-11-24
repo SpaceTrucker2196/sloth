@@ -1214,6 +1214,93 @@ static void test_json_is_utf8(void) {
     ASSERT(strstr(j, "/tmp/\\ufffd\\ufffd\\ufffd-\xc3\xa9-\\ufffd\\ufffd\\ufffd") != NULL);
 }
 
+/* ── #251: evidence kept on a disk with no dm-crypt ─────────────── */
+
+/* The sysfs walk, against the fake /sys: LVM over LUKS is found through
+ * slaves/, a plain partition is "none", no /sys/dev/block entry is
+ * "cannot tell". Seen red with the CRYPT- prefix test inverted and with
+ * the slaves walk removed (the LVM case then read 0). */
+static void test_block_crypt_detection(void) {
+    fake_net_reset();
+    char what[48];
+    /* 254:1 is LVM; its slave dm-0 is the LUKS mapping. */
+    fake_sys_put("/sys/dev/block/254:1/dev", "254:1\n");
+    fake_sys_put("/sys/dev/block/254:1/dm/uuid", "LVM-abc123\n");
+    fake_sys_put("/sys/dev/block/254:1/slaves/dm-0/dev", "254:0\n");
+    fake_sys_put("/sys/class/block/dm-0/dm/uuid",
+                 "CRYPT-LUKS2-0123456789abcdef-sdcrypt\n");
+    fake_sys_put("/sys/class/block/dm-0/dm/name", "sdcrypt\n");
+    fake_sys_put("/sys/class/block/dm-0/slaves/mmcblk0p2/dev", "179:2\n");
+    ASSERT_EQ(pf_block_crypt(254, 1, what, sizeof(what)), 1);
+    ASSERT_STR(what, "dm-crypt sdcrypt");
+    /* The partition alone. */
+    fake_sys_put("/sys/dev/block/179:2/dev", "179:2\n");
+    fake_sys_put("/sys/dev/block/179:2/partition", "2\n");
+    ASSERT_EQ(pf_block_crypt(179, 2, what, sizeof(what)), 0);
+    ASSERT_STR(what, "");
+    /* LVM over a plain partition. */
+    fake_sys_put("/sys/dev/block/254:3/dev", "254:3\n");
+    fake_sys_put("/sys/dev/block/254:3/dm/uuid", "LVM-def\n");
+    fake_sys_put("/sys/dev/block/254:3/slaves/sda1/dev", "8:1\n");
+    fake_sys_put("/sys/class/block/sda1/dev", "8:1\n");
+    ASSERT_EQ(pf_block_crypt(254, 3, what, sizeof(what)), 0);
+    /* tmpfs, btrfs: no block device. */
+    ASSERT_EQ(pf_block_crypt(0, 42, what, sizeof(what)), -1);
+    fake_net_reset();
+}
+
+static void at_rest(int crypt, int days) {
+    base();
+    g_c.pcap_dir = "/var/lib/sloth/pcap";
+    g_c.pcap_retain_days = days;
+    g_f.n_path = 1;
+    pf_path_t *p = &g_f.path[0];
+    p->what = "pcap-dir";
+    p->path = g_c.pcap_dir;
+    snprintf(p->dir, sizeof(p->dir), "%s", g_c.pcap_dir);
+    p->dir_ok = 1;
+    p->writable = 1;
+    p->has_fs = 1;
+    p->free_bytes = p->total_bytes = 1ull << 34;
+    p->crypt = crypt;
+    snprintf(p->crypt_dev, sizeof(p->crypt_dev), crypt > 0 ? "254:1 (dm-crypt x)" : "179:2");
+    pf_check_storage(&g_c, &g_f, &g_r);
+}
+
+/* The levels at the edge. Seen red with `>` made `>=` (7 warned) and
+ * with the forever case dropped (0 read ok). */
+static void test_at_rest_levels(void) {
+    at_rest(0, 7);
+    ASSERT_EQ(level("storage", "pcap-dir-at-rest"), PF_OK);
+    at_rest(0, 8);
+    ASSERT_EQ(level("storage", "pcap-dir-at-rest"), PF_WARN);
+    ASSERT(says("storage", "pcap-dir-at-rest", "no dm-crypt"));
+    ASSERT(says("storage", "pcap-dir-at-rest", "fscrypt"));
+    at_rest(0, 0);
+    ASSERT_EQ(level("storage", "pcap-dir-at-rest"), PF_WARN);
+    ASSERT(says("storage", "pcap-dir-at-rest", "kept until removed"));
+    at_rest(1, 0);
+    ASSERT_EQ(level("storage", "pcap-dir-at-rest"), PF_OK);
+    at_rest(-1, 30);
+    ASSERT_EQ(level("storage", "pcap-dir-at-rest"), PF_NOT_CHECKED);
+    ASSERT_EQ(pf_exit_code(&g_r), 0);
+    /* Not a line for an output that is not an evidence directory. */
+    at_rest(0, 30);
+    g_f.path[0].what = "db";
+    memset(&g_r, 0, sizeof(g_r));
+    pf_check_storage(&g_c, &g_f, &g_r);
+    ASSERT(line("storage", "pcap-dir-at-rest") == NULL);
+    ASSERT(line("storage", "eapol-dir-at-rest") == NULL);
+    /* --eapol-dir reads its own knob. */
+    at_rest(0, 30);
+    g_f.path[0].what = "eapol-dir";
+    g_c.eapol_retain_days = 7;
+    memset(&g_r, 0, sizeof(g_r));
+    pf_check_storage(&g_c, &g_f, &g_r);
+    ASSERT_EQ(level("storage", "eapol-dir-at-rest"), PF_OK);
+    ASSERT(says("storage", "eapol-dir-at-rest", "handshake.retention_days"));
+}
+
 void run_preflight_tests(void) {
     TEST_SUITE("sloth --preflight (#247)");
     RUN_TEST(test_clean_host_is_ready);
@@ -1239,6 +1326,8 @@ void run_preflight_tests(void) {
     RUN_TEST(test_storage_paths_the_run_refuses);
     RUN_TEST(test_db_version_row_without_a_version);
     RUN_TEST(test_json_is_utf8);
+    RUN_TEST(test_block_crypt_detection);
+    RUN_TEST(test_at_rest_levels);
 #ifdef PLATFORM_LINUX
     RUN_TEST(test_nl80211_parsers);
 #endif

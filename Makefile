@@ -203,6 +203,7 @@ CORE_BASE_SRCS = \
        src/beacon_detect.c   \
        src/jsonl.c           \
        src/jsonl_core.c      \
+       src/jsonl_chain.c     \
        src/formatter.c       \
        src/data_socket.c     \
        src/discovery.c       \
@@ -279,6 +280,10 @@ CORE_BASE_SRCS += src/preflight.c src/preflight_gather.c
 # sloth --handoff and --interference-report (#250): sloth.db read-only
 # (src/site_db.c), the packet and the report.
 CORE_BASE_SRCS += src/site_db.c src/handoff.c src/interference.c
+# sloth --verify (#251): the reader of the -o hash chain and of the
+# evidence manifests, named by src/main.c only; the writer,
+# src/jsonl_chain.c, is with jsonl_core.c above.
+CORE_BASE_SRCS += src/jsonl_verify.c
 CORE_BASE_SRCS += src/ble_snoop.c
 # #144 slice 2: the HCI monitor decoder and the own-transmission rule are
 # pure; the libpcap worker that feeds them is in PCAP_CORE_SRCS.
@@ -1238,6 +1243,29 @@ replay-run: $(TARGET) $(TARGET_ALIAS) $(REPLAY_GEN)
 
 replay-check: replay-run $(RF_TARGET)
 	diff -u $(REPLAY_GOLDEN) $(REPLAY_RUN)/norm.jsonl
+	@# #251: the same replay under --jsonl-chain verifies, and with its
+	@# chain records taken out is the run above, line for line: the
+	@# chain adds records and changes none.
+	@rm -f $(REPLAY_RUN)/chain.jsonl $(REPLAY_RUN)/chain.db
+	@./$(TARGET) --headless \
+	    --replay $(REPLAY_RUN)/wired.pcap,$(REPLAY_RUN)/monitor.pcap,$(REPLAY_RUN)/bt.pcap \
+	    -o $(REPLAY_RUN)/chain.jsonl --db $(REPLAY_RUN)/chain.db --jsonl-chain 7 \
+	    --ticks $(REPLAY_TICKS) --refresh-ms 100 >/dev/null 2>&1 || \
+	  { echo "replay-check: the --jsonl-chain replay failed" >&2; exit 1; }
+	@./$(TARGET) --verify $(REPLAY_RUN)/chain.jsonl >$(REPLAY_RUN)/chain.verify || \
+	  { cat $(REPLAY_RUN)/chain.verify >&2; echo "replay-check: --verify on the chained replay did not pass" >&2; exit 1; }
+	@grep -v '^{"type":"chain",' $(REPLAY_RUN)/chain.jsonl | sh tests/replay/normalise.sh > $(REPLAY_RUN)/chain_norm.jsonl
+	@diff -u $(REPLAY_RUN)/norm.jsonl $(REPLAY_RUN)/chain_norm.jsonl || \
+	  { echo "replay-check: --jsonl-chain changed a record other than its own" >&2; exit 1; }
+	@./$(TARGET) --headless --ticks 1 --jsonl-chain 7 >/dev/null 2>&1; \
+	  rc=$$?; if [ $$rc -ne 2 ]; then \
+	    echo "replay-check: --jsonl-chain without -o exited $$rc, want 2 (refused)" >&2; exit 1; fi
+	@./$(TARGET) --headless --ticks 1 -o $(REPLAY_RUN)/cef.out --out-format cef --jsonl-chain 7 >/dev/null 2>&1; \
+	  rc=$$?; if [ $$rc -ne 2 ]; then \
+	    echo "replay-check: --jsonl-chain with --out-format cef exited $$rc, want 2 (refused)" >&2; exit 1; fi
+	@./$(RF_TARGET) --ticks 1 --jsonl-chain 7 >/dev/null 2>&1; \
+	  rc=$$?; if [ $$rc -ne 2 ]; then \
+	    echo "replay-check: sloth-rf --jsonl-chain without -o exited $$rc, want 2 (refused)" >&2; exit 1; fi
 	@./$(TARGET) --headless --replay /nonexistent.pcap --allow-active >/dev/null 2>&1; \
 	  rc=$$?; if [ $$rc -ne 2 ]; then \
 	    echo "replay-check: --replay --allow-active exited $$rc, want 2 (refused)" >&2; exit 1; fi

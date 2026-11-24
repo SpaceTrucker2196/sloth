@@ -27,6 +27,7 @@ typedef struct {
     gnss_flags_t gnss;            /* --location --gps --gps-allow-remote --gps-baud */
     rf_flags_t   rf;              /* --adsb --aprs --aprs-freq --aprs-silent-hours --rtl433 --victron */
     int          no_sdr_trim;     /* --no-sdr-trim (src/rf_trim.h) */
+    unsigned     jsonl_chain;     /* --jsonl-chain N (#251), 0 off */
 } rf_args_t;
 
 /* Read argv into `a`. Returns -1 to go on, or the exit code: 0 after

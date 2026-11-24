@@ -101,6 +101,9 @@ typedef struct {
     const char *data_socket;
     int         data_socket_remote;      /* routable, allowed */
     int         db_max_mb;               /* db.max_mb, 0 none */
+    /* #251: how long the evidence captures are kept, days, 0 forever
+     * (pcap.retain_days, handshake.retention_days). */
+    int         pcap_retain_days, eapol_retain_days;
     /* The operator's configuration the rules need (COV_N_*). */
     unsigned    config;
     /* The build. */
@@ -138,6 +141,11 @@ typedef struct {
     char        why[200];
     int         foreign;
     long        owner_uid;
+    /* #251, for --pcap-dir and --eapol-dir: whether `dir`'s filesystem
+     * sits on dm-crypt (pf_block_crypt()): 1 yes, 0 a block device with
+     * no dm-crypt under it, -1 cannot tell (not checked: other paths). */
+    int         crypt;
+    char        crypt_dev[48];       /* "254:1 (dm-crypt sdcrypt)", "179:2" */
 } pf_path_t;
 
 typedef struct {
@@ -221,6 +229,19 @@ typedef struct {
 } pf_ops_t;
 const pf_ops_t *preflight_default_ops(void);
 
+/* Disk encryption under a filesystem (#251 part 2), read through
+ * sys_status's guarded readers, so no root and the fake platform in
+ * tests: /sys/dev/block/MAJ:MIN is the block device st_dev names; a
+ * device-mapper node there has dm/uuid, "CRYPT-..." for dm-crypt (LUKS
+ * and plain), and its slaves/ are walked (LVM on LUKS is an LVM node
+ * over a CRYPT one). 1 dm-crypt found, `what` its name; 0 a block
+ * device and nothing under it is dm-crypt; -1 cannot tell: no
+ * /sys/dev/block entry (tmpfs, btrfs, ZFS, overlayfs and NFS report a
+ * device number that is not a block device) or a layer unreadable.
+ * What 0 does not exclude: fscrypt (per-directory, ext4/f2fs) and a
+ * self-encrypting drive, neither of which this reads. */
+int pf_block_crypt(unsigned maj, unsigned min, char *what, size_t whatsz);
+
 /* Gather. Reads only; see the header comment. */
 void preflight_gather(const pf_config_t *cfg, const pf_ops_t *ops,
                       pf_facts_t *facts);
@@ -262,5 +283,9 @@ long pf_date_days(const char *ymd);
  * in src/preflight.c. */
 #define PF_INTEL_MAX_AGE_DAYS 90
 #define PF_GPSD_TIMEOUT_MS    1500
+/* Days an evidence capture may be kept on a disk with no dm-crypt under
+ * it before --preflight warns (#251): handshake.retention_days'
+ * default, the shortest window sloth ships for anything it keeps. */
+#define PF_PLAIN_RETAIN_DAYS  7
 
 #endif /* SLOTH_PREFLIGHT_H */

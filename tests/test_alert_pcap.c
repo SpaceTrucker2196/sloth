@@ -18,6 +18,8 @@
 #include "sloth_clock.h"
 #include "eapol_log.h"
 #include "tmp_dir.h"
+#include "jsonl.h"
+#include "sha256.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -1090,6 +1092,76 @@ static void test_sweep_detects_a_shared_eapol_dir(void) {
     sw_teardown();
 }
 
+/* #251: the alert that names its capture carries the capture's SHA-256
+ * under --jsonl-chain, and nothing new without it. The hash here is
+ * taken over the file as stdio reads it, not through jc_sha256_file(). */
+static void test_pcap_sha256_only_under_the_chain(void) {
+    for (int chain = 0; chain <= 1; chain++) {
+        ap87_setup();
+        ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
+        alerts_clear();
+        jsonl_chain_set(chain ? 5u : 0u);
+        sloth_state_t s; memset(&s, 0, sizeof(s));
+        conn_t *c = &s.conns[s.conn_count++];
+        snprintf(c->local_addr,  sizeof(c->local_addr),  "192.168.1.5");
+        snprintf(c->remote_addr, sizeof(c->remote_addr), "192.0.2.66");
+        c->local_port  = 33445;
+        c->remote_port = 443;
+        c->proto       = PROTO_TCP;
+        seed_packet(&s, "192.168.1.5", "192.0.2.66", 33445, 443, 1700000000);
+        alerts_update(&s);
+        int idx = find_threat_ip(&s);
+        ASSERT(idx >= 0);
+        if (idx >= 0) {
+            const alert_t *a = &s.alerts[idx];
+            ASSERT(a->pcap_path[0] != '\0');
+            char got[65];
+            int rc = alerts_pcap_sha256(a, got);
+            if (!chain) {
+                ASSERT_EQ(rc, -1);
+                ASSERT_STR(got, "");
+            } else {
+                ASSERT_EQ(rc, 0);
+                static uint8_t buf[1 << 16];
+                FILE *f = fopen(a->pcap_path, "rb");
+                ASSERT(f != NULL);
+                size_t n = f ? fread(buf, 1, sizeof(buf), f) : 0;
+                if (f) fclose(f);
+                ASSERT(n > 24);                 /* a pcap header and a record */
+                char want[65];
+                sha256_hex(buf, n, want);
+                ASSERT_STR(got, want);
+            }
+            /* And the record says it: an alert.update written for this
+             * incident carries pcap_sha256 beside pcap_path, and only
+             * under the chain. */
+            char jp[TEST_TMP_MAX + 32];
+            snprintf(jp, sizeof(jp), "%s.jsonl", g_ap87);
+            ASSERT_EQ(jsonl_open(jp), 1);
+            jsonl_emit_alert_event(a, "alert.update", 1700000001, -1, NULL);
+            jsonl_close();
+            static char line[16384];
+            FILE *jf = fopen(jp, "r");
+            ASSERT(jf != NULL);
+            line[0] = '\0';
+            if (jf) {
+                while (fgets(line, sizeof(line), jf))
+                    if (strstr(line, "\"alert.update\"")) break;
+                fclose(jf);
+            }
+            unlink(jp);
+            ASSERT(strstr(line, "\"pcap_path\":") != NULL);
+            char kv[100];
+            snprintf(kv, sizeof(kv), "\"pcap_sha256\":\"%s\"", got);
+            if (chain) ASSERT(strstr(line, kv) != NULL);
+            else       ASSERT(strstr(line, "pcap_sha256") == NULL);
+        }
+        jsonl_chain_set(0);
+        alerts_clear();
+        ap87_cleanup();
+    }
+}
+
 void run_alert_pcap_tests(void) {
     TEST_SUITE("alert_pcap dir gating");
     RUN_TEST(test_set_dir_enables_disables);
@@ -1125,6 +1197,7 @@ void run_alert_pcap_tests(void) {
     RUN_TEST(test_dump_retries_after_transient_failure);
     RUN_TEST(test_write_failures_survive_reopen);
     RUN_TEST(test_dump_records_path_on_success);
+    RUN_TEST(test_pcap_sha256_only_under_the_chain);
 
     TEST_SUITE("alert_pcap age sweep (#166)");
     RUN_TEST(test_sweep_name_shape);

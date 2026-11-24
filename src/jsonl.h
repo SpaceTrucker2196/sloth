@@ -20,6 +20,16 @@ int  jsonl_write_failures(void);
 void jsonl_close (void);
 int  jsonl_is_open(void);
 
+/* The hash chain over the -o file (#251, src/jsonl_chain.h): a chain
+ * record after every n records, 0 off (the default). Set before
+ * jsonl_open(), which starts a segment. jsonl_chain_head() seals the
+ * pending block and gives the head (the last chain record's seq and
+ * the SHA-256 of its line); 0 when the chain is off or no file is
+ * open. */
+void jsonl_chain_set(unsigned n);
+int  jsonl_chain_enabled(void);
+int  jsonl_chain_head(unsigned long long *seq, char hex[65]);
+
 /* Per-type emitters. Each writes one JSON object terminated by '\n'. */
 void jsonl_emit_dns  (const dns_log_entry_t  *e);
 void jsonl_emit_tls  (const tls_log_entry_t  *e);

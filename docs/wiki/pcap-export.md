@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/packets.md`, `docs/views/alerts.md`, `docs/views/eapol.md`, `src/evidence_ring.h`, `src/evidence_export.h`, `src/evidence_manifest.h`, FIPS 180-4 (SHA-256).
 
-**Last updated**: 2026-11-02 (§6: evidence pcaps withheld by slothweb unless `--web-serve-evidence-pcap`; a file named by several manifest lines verified by any line that matches, a disagreement said; `truncated at snaplen` only when the snaplen cut the record). Earlier 2026-11-02 (§6: the download carries `X-Sloth-SHA256`, the check of the bytes it serves). Earlier 2026-10-27 (§6: slothweb reads the manifests back, joins by `incident_id`, verifies the SHA-256, never opens a handshake sink's file). Earlier 2026-10-27 (the manifest line's `loc`: a classic pcap has no location field, so where an alert's capture was made is on its line, [[location]]). Earlier 2026-10-26 (#166: `--pcap-dir` files and manifest are swept after `pcap.retain_days`, noted in §1 too; one directory for `--pcap-dir` and `--eapol-dir` is refused). Earlier 2026-10-20 (#92 slice 3 review: EAPOL sinks hash after releasing their lock, measured cost; a manifest whose rollback fails is abandoned for `-N`; §5). Earlier 2026-10-20 (#92 slice 3: the hashed per-session manifest, §5; the per-alert and `w` pcaps declare snaplen 64, the depth the wired ring actually keeps). Earlier 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
+**Last updated**: 2026-11-24 (#251: §5, `sloth --verify DIR` reads the manifests; `pcap_sha256` on the chained alert record). Earlier 2026-11-02 (§6: evidence pcaps withheld by slothweb unless `--web-serve-evidence-pcap`; a file named by several manifest lines verified by any line that matches, a disagreement said; `truncated at snaplen` only when the snaplen cut the record). Earlier 2026-11-02 (§6: the download carries `X-Sloth-SHA256`, the check of the bytes it serves). Earlier 2026-10-27 (§6: slothweb reads the manifests back, joins by `incident_id`, verifies the SHA-256, never opens a handshake sink's file). Earlier 2026-10-27 (the manifest line's `loc`: a classic pcap has no location field, so where an alert's capture was made is on its line, [[location]]). Earlier 2026-10-26 (#166: `--pcap-dir` files and manifest are swept after `pcap.retain_days`, noted in §1 too; one directory for `--pcap-dir` and `--eapol-dir` is refused). Earlier 2026-10-20 (#92 slice 3 review: EAPOL sinks hash after releasing their lock, measured cost; a manifest whose rollback fails is abandoned for `-N`; §5). Earlier 2026-10-20 (#92 slice 3: the hashed per-session manifest, §5; the per-alert and `w` pcaps declare snaplen 64, the depth the wired ring actually keeps). Earlier 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
 
 ---
 
@@ -351,6 +351,12 @@ working directory and is not in any manifest.
   session (`seq` restarts at 1 there): the fragment stays as the old
   file's tail, which a reader drops like a crash tail, instead of
   gluing itself to the next good line.
+- **Checked by `sloth --verify DIR`** (#251, [[record-integrity]]):
+  every manifest's `seq` without a gap and each listed file against its
+  lines (any matching line will do, as for a replaced handshake pcap);
+  missing and unlisted files reported, not breaks. The manifests are
+  not chained; under `--jsonl-chain` the alert record's `pcap_sha256`
+  ties a capture to the chained JSONL file.
 - **Failures are counted, never blocking.** A manifest that cannot be
   created, hashed or appended is counted as a write failure of the sink
   whose directory it is — `storage_pcap_failures` or

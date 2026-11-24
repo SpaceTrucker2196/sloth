@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -253,6 +254,53 @@ static void gather_netdevs(const pf_config_t *c, const pf_ops_t *ops, pf_facts_t
     }
 }
 
+/* ── Disk encryption (#251) ────────────────────────────────────── */
+
+#define PF_CRYPT_DEPTH 8     /* dm stacks are two or three deep */
+
+static int crypt_walk(const char *base, int depth, char *what, size_t whatsz) {
+    if (depth > PF_CRYPT_DEPTH) return -1;
+    char p[SYS_NAME_MAX + 64], b[160];
+    snprintf(p, sizeof(p), "%s/dm/uuid", base);
+    int k = sys_status_read(p, b, (int)sizeof(b) - 1);
+    if (k > 0) {
+        b[k] = '\0';
+        if (strncmp(b, "CRYPT-", 6) == 0) {
+            char nm[64];
+            snprintf(p, sizeof(p), "%s/dm/name", base);
+            int m = sys_status_read(p, b, (int)sizeof(b) - 1);
+            if (m > 0) sys_clean_str(b, m, nm, (int)sizeof(nm));
+            else snprintf(nm, sizeof(nm), "?");
+            snprintf(what, whatsz, "dm-crypt %s", nm);
+            return 1;
+        }
+    }
+    snprintf(p, sizeof(p), "%s/slaves", base);
+    char names[16][SYS_NAME_MAX];
+    int n = sys_status_list(p, names, 16);
+    if (n <= 0) return 0;          /* a disk or a partition: the bottom */
+    int unknown = n >= 16;
+    for (int i = 0; i < n && i < 16; i++) {
+        char sub[SYS_NAME_MAX + 32];
+        snprintf(sub, sizeof(sub), "/sys/class/block/%.*s", SYS_NAME_MAX - 1, names[i]);
+        int r = crypt_walk(sub, depth + 1, what, whatsz);
+        if (r == 1) return 1;
+        if (r < 0) unknown = 1;
+    }
+    return unknown ? -1 : 0;
+}
+
+int pf_block_crypt(unsigned maj, unsigned min, char *what, size_t whatsz) {
+    char base[64], p[96], b[32];
+    if (what && whatsz) what[0] = '\0';
+    char ignore[8];
+    if (!what || !whatsz) { what = ignore; whatsz = sizeof(ignore); }
+    snprintf(base, sizeof(base), "/sys/dev/block/%u:%u", maj, min);
+    snprintf(p, sizeof(p), "%s/dev", base);
+    if (sys_status_read(p, b, (int)sizeof(b)) <= 0) return -1;
+    return crypt_walk(base, 0, what, whatsz);
+}
+
 static void dir_of(const char *path, char *out, size_t n) {
     const char *slash = strrchr(path, '/');
     if (!slash) snprintf(out, n, ".");
@@ -293,6 +341,14 @@ static void add_path(pf_facts_t *f, const char *what, const char *path, int is_d
     }
     p->dir_ok = S_ISDIR(sb.st_mode);
     if (!p->dir_ok) return;
+    p->crypt = -1;
+    if (is_dir) {
+        unsigned ma = major(sb.st_dev), mi = minor(sb.st_dev);
+        char what[40];
+        p->crypt = pf_block_crypt(ma, mi, what, sizeof(what));
+        snprintf(p->crypt_dev, sizeof(p->crypt_dev), "%u:%u%s%s%s", ma, mi,
+                 what[0] ? " (" : "", what, what[0] ? ")" : "");
+    }
     p->writable = access(p->dir, W_OK | X_OK) == 0;
     int fd = open(p->dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (fd < 0) return;

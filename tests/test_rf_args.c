@@ -330,7 +330,13 @@ static void test_sinks_and_account(void) {
     ASSERT_EQ(strncmp(g_text, "unknown argument: --jsonl\nusage: sloth-rf ", 42), 0);
     ASSERT(g_a.jsonl_path == NULL);
     ASSERT_EQ(RUN("--help"), 0);
-    ASSERT(strstr(g_text, "--jsonl") == NULL);
+    /* "--jsonl" as a flag of its own; --jsonl-chain (#251) is another. */
+    {
+        int alias = 0;
+        for (const char *p = g_text; (p = strstr(p, "--jsonl")) != NULL; p += 7)
+            if (p[7] != '-') alias = 1;
+        ASSERT(!alias);
+    }
     ASSERT_EQ(RUN("-o", "/nonexistent/b.jsonl"), -1);
     ASSERT_STR(g_a.jsonl_path, "/nonexistent/b.jsonl");
     ASSERT_EQ(RUN("--out", "/nonexistent/c.jsonl"), -1);

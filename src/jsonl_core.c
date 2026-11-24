@@ -24,6 +24,7 @@
 #include "sensor_health.h"
 #include "intel_pack.h"
 #include "alert_quality.h"
+#include "jsonl_chain.h"
 
 /* The JSONL writer's core (#213): the sink, the change-only cache, the
  * line builders, and the records every daemon writes - alert, the
@@ -134,16 +135,78 @@ int jsonl_changed(uint8_t kind, const void *key, size_t keylen,
     return 1;
 }
 
+/* The hash chain over the file sink (#251, src/jsonl_chain.h). Off
+ * (0) unless jsonl_chain_set() ran before jsonl_open(); with it off no
+ * byte of the file differs from a build without it. Under g_mu. */
+static unsigned    g_chain_n;
+static jc_writer_t g_chain;
+
+void jsonl_chain_set(unsigned n) {
+    pthread_mutex_lock(&g_mu);
+    g_chain_n = n;
+    pthread_mutex_unlock(&g_mu);
+}
+
+int jsonl_chain_enabled(void) {
+    pthread_mutex_lock(&g_mu);
+    int on = g_chain_n != 0;
+    pthread_mutex_unlock(&g_mu);
+    return on;
+}
+
+/* One line to the file, counted as a write failure like any record.
+ * Caller holds g_mu and has checked g_fp. */
+static void file_line_locked(const char *s) {
+    int bad = fputs(s, g_fp) == EOF ||
+              fputc('\n', g_fp) == EOF ||
+              fflush(g_fp)      != 0;
+    if (bad || ferror(g_fp)) {
+        char err[SFILE_ERR_MAX];
+        snprintf(err, sizeof(err), "-o: write failed: %s", strerror(errno));
+        sfile_fail(&g_fail, "jsonl", err);
+        clearerr(g_fp);   /* keep trying: a full disk may drain */
+    }
+}
+
+/* Close the pending block into a chain record. A failed write is a
+ * break --verify reports at that block, which is what it is. */
+static void chain_seal_locked(void) {
+    if (!g_fp || !g_chain.n) return;
+    char rec[JC_RECORD_MAX];
+    if (jc_writer_seal(&g_chain, sloth_wall(), rec, sizeof(rec)) > 0)
+        file_line_locked(rec);
+}
+
+int jsonl_chain_head(unsigned long long *seq, char hex[65]) {
+    pthread_mutex_lock(&g_mu);
+    chain_seal_locked();
+    int on = g_fp != NULL && g_chain.n != 0 && g_chain.seq != 0;
+    if (on) {
+        if (seq) *seq = (unsigned long long)g_chain.seq;
+        if (hex) memcpy(hex, g_chain.prev, 65);
+    }
+    pthread_mutex_unlock(&g_mu);
+    return on;
+}
+
 int jsonl_open(const char *path) {
     if (!path || !path[0]) return 0;
     pthread_mutex_lock(&g_mu);
-    if (g_fp) { fclose(g_fp); g_fp = NULL; }
+    if (g_fp) { chain_seal_locked(); fclose(g_fp); g_fp = NULL; }
     sfile_fail_reset(&g_fail);
     /* Append: the forensic log accumulates across runs. Created 0600;
      * an existing file must already be private (#87). */
     g_fp = sfile_fopen(AT_FDCWD, path, SFILE_APPEND,
                        g_fail.last, sizeof(g_fail.last));
     int ok = g_fp != NULL;
+    jc_writer_init(&g_chain, g_chain_n);
+    if (ok && g_chain_n) {
+        /* A new segment before any record of this run: the file is not
+         * read back, so nothing of an earlier run is claimed. */
+        char rec[JC_RECORD_MAX];
+        if (jc_writer_genesis(&g_chain, sloth_wall(), rec, sizeof(rec)) > 0)
+            file_line_locked(rec);
+    }
     pthread_mutex_unlock(&g_mu);
     if (ok) jsonl_dedup_reset();   /* fresh sink → full baseline snapshot */
     return ok;
@@ -160,7 +223,7 @@ int jsonl_write_failures(void) {
 
 void jsonl_close(void) {
     pthread_mutex_lock(&g_mu);
-    if (g_fp) { fclose(g_fp); g_fp = NULL; }
+    if (g_fp) { chain_seal_locked(); fclose(g_fp); g_fp = NULL; }
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -260,14 +323,12 @@ void jsonl_emit_line(const char *line) {
     }
     pthread_mutex_lock(&g_mu);
     if (g_fp) {
-        int bad = fputs(to_emit, g_fp) == EOF ||
-                  fputc('\n', g_fp)    == EOF ||
-                  fflush(g_fp)         != 0;
-        if (bad || ferror(g_fp)) {
-            char err[SFILE_ERR_MAX];
-            snprintf(err, sizeof(err), "-o: write failed: %s", strerror(errno));
-            sfile_fail(&g_fail, "jsonl", err);
-            clearerr(g_fp);   /* keep trying: a full disk may drain */
+        file_line_locked(to_emit);
+        /* The bytes handed to the file, '\n' included, so the block
+         * hash is over what a verifier reads back. */
+        if (g_chain.n) {
+            (void)jc_writer_add(&g_chain, to_emit, strlen(to_emit));
+            if (jc_writer_add(&g_chain, "\n", 1)) chain_seal_locked();
         }
     }
     pthread_mutex_unlock(&g_mu);
@@ -547,6 +608,12 @@ void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
          * one place to look for an incident's frames. */
         if (a->pcap_path[0])
             kv_str(buf, LINEBUF, &off, "pcap_path", a->pcap_path);
+        /* #251, additive: only under --jsonl-chain (the engine keeps no
+         * hash otherwise), so a record without the chain is byte for
+         * byte what it was. */
+        char psha[65];
+        if (alerts_pcap_sha256(a, psha) == 0)
+            kv_str(buf, LINEBUF, &off, "pcap_sha256", psha);
         if (a->pcap_write_failures)
             kv_int(buf, LINEBUF, &off, "pcap_write_failures",
                    a->pcap_write_failures);

@@ -9,6 +9,7 @@
 #include "libver.h"
 #include "observe.h"
 #include "tune.h"
+#include "jsonl_chain.h"
 
 /* src/rf/rf_args.h. */
 
@@ -19,7 +20,7 @@ void rf_usage(FILE *fp, const char *argv0) {
             "       [--no-sdr-trim]\n"
             "       [--gps SPEC] [--gps-allow-remote] [--gps-baud N]\n"
             "       [--location LAT,LON[,ALT]]\n"
-            "       [-o FILE] [--db FILE] [--site-label TEXT]\n"
+            "       [-o FILE [--jsonl-chain N]] [--db FILE] [--site-label TEXT]\n"
             "       [--data-socket [SPEC]] [--data-socket-allow-remote]\n"
             "       [--strict] [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--user NAME] [--no-privdrop] [--ticks N]\n"
@@ -90,6 +91,9 @@ void rf_usage(FILE *fp, const char *argv0) {
             "  -o, --out FILE     append the JSONL record stream to FILE\n"
             "                     (created 0600; an existing FILE must be\n"
             "                     private and yours, never a symlink).\n"
+            "  --jsonl-chain N    a hash chain over the -o file, as sloth's\n"
+            "                     (docs/wiki/record-integrity.md); sloth\n"
+            "                     --verify FILE checks it.\n"
             "  --db FILE          persist to a SQLite database with sloth's\n"
             "                     own schema. The GNSS, ADS-B and APRS\n"
             "                     tables, the alerts and the sensor's own\n"
@@ -135,7 +139,7 @@ void rf_usage(FILE *fp, const char *argv0) {
 int rf_args_parse(int argc, char **argv, rf_args_t *a) {
     static const rf_args_t zero = {
         NULL, NULL, NULL, 0, 0, NULL, NULL, 0, 0,
-        { NULL, NULL, 0, 0 }, RF_FLAGS_INIT, 0
+        { NULL, NULL, 0, 0 }, RF_FLAGS_INIT, 0, 0
     };
     *a = zero;
     for (int i = 1; i < argc; i++) {
@@ -149,6 +153,12 @@ int rf_args_parse(int argc, char **argv, rf_args_t *a) {
          * line written for one is read the same way by the other. */
         if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && has) {
             a->jsonl_path = argv[++i];
+        } else if (!strcmp(argv[i], "--jsonl-chain") && has) {
+            char cerr[96];
+            if (jc_parse_block(argv[++i], &a->jsonl_chain, cerr, sizeof(cerr)) != 0) {
+                fprintf(stderr, "sloth-rf: %s\n", cerr);
+                return 2;
+            }
         } else if (!strcmp(argv[i], "--db") && has) {
             a->db_path = argv[++i];
         } else if (!strcmp(argv[i], "--data-socket")) {
@@ -233,6 +243,11 @@ int rf_args_check(const rf_args_t *a) {
      * takes a --replay here: this daemon has no such flag. */
     if (gnss_flags_check(&a->gnss, a->strict, 0) != 0) return 2;
     if (rf_flags_check(&a->rf, 0) != 0) return 2;
+    if (a->jsonl_chain && !a->jsonl_path) {
+        fprintf(stderr, "sloth-rf: --jsonl-chain chains the -o file: name one "
+                        "with -o\n");
+        return 2;
+    }
 
     /* --strict's hold on the data socket, through the resolver sloth
      * uses (src/observe.h), so the two cannot rule differently on one

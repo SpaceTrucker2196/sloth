@@ -297,6 +297,49 @@ void pf_check_clock(const pf_config_t *c, const pf_facts_t *f, pf_result_t *r) {
 
 #define MIB (1024ull * 1024ull)
 
+/* #251 part 2, point 4: evidence captures kept past PF_PLAIN_RETAIN_DAYS
+ * on a disk with no dm-crypt under it are what a finder of a lost
+ * sensor reads (docs/wiki/sensor-compromise.md). A warning, not a
+ * failure: it is the operator's call, and 0 ("no dm-crypt") does not
+ * exclude fscrypt or a self-encrypting drive, which the line says. */
+static void check_at_rest(const pf_config_t *c, const pf_facts_t *f, pf_result_t *r) {
+    for (int i = 0; i < f->n_path; i++) {
+        const pf_path_t *p = &f->path[i];
+        int days;
+        const char *knob, *item;
+        if (!strcmp(p->what, "pcap-dir")) {
+            days = c->pcap_retain_days; knob = "pcap.retain_days"; item = "pcap-dir-at-rest";
+        } else if (!strcmp(p->what, "eapol-dir")) {
+            days = c->eapol_retain_days; knob = "handshake.retention_days";
+            item = "eapol-dir-at-rest";
+        } else {
+            continue;
+        }
+        if (p->denied || !p->dir_ok) continue;   /* the storage line says why */
+        char kept[48];
+        if (days <= 0) snprintf(kept, sizeof(kept), "kept until removed (%s=0)", knob);
+        else snprintf(kept, sizeof(kept), "kept %d days (%s)", days, knob);
+        const int long_kept = days <= 0 || days > PF_PLAIN_RETAIN_DAYS;
+        if (p->crypt > 0)
+            add(r, "storage", item, PF_OK, "%s: %s; on %s", p->path, kept, p->crypt_dev);
+        else if (p->crypt < 0)
+            add(r, "storage", item, PF_NOT_CHECKED, "%s: %s; whether %s is encrypted "
+                "is not known: device %s is not a block device /sys traces (tmpfs, "
+                "btrfs, ZFS, overlayfs, NFS) or a layer could not be read",
+                p->path, kept, p->dir, p->crypt_dev);
+        else if (long_kept)
+            add(r, "storage", item, PF_WARN, "%s: %s on device %s, with no dm-crypt "
+                "under it: whoever holds a lost sensor reads every capture. Keep %d "
+                "days or fewer, or move it to an encrypted volume "
+                "(docs/wiki/sensor-compromise.md). fscrypt and a self-encrypting "
+                "drive are not seen here", p->path, kept, p->crypt_dev,
+                PF_PLAIN_RETAIN_DAYS);
+        else
+            add(r, "storage", item, PF_OK, "%s: %s, within %d, on device %s with no "
+                "dm-crypt under it", p->path, kept, PF_PLAIN_RETAIN_DAYS, p->crypt_dev);
+    }
+}
+
 void pf_check_storage(const pf_config_t *c, const pf_facts_t *f, pf_result_t *r) {
     if (f->n_path == 0)
         add(r, "storage", "", PF_NA, "no output path on the command line");
@@ -345,6 +388,7 @@ void pf_check_storage(const pf_config_t *c, const pf_facts_t *f, pf_result_t *r)
         add(r, "storage", "pcap-eapol", PF_FAIL, "--pcap-dir %s and --eapol-dir %s "
             "are the same directory: the handshake sweep would expire alert pcaps, "
             "so sloth exits 2", c->pcap_dir, c->eapol_dir);
+    check_at_rest(c, f, r);
     if (!c->db) return;
     if (!c->have_sqlite) {
         add(r, "storage", "db-schema", PF_FAIL, "built without SQLite: --db cannot open");

@@ -126,6 +126,7 @@ int main(int argc, char **argv) {
         return 2;
     }
 
+    jsonl_chain_set(a.jsonl_chain);
     if (a.jsonl_path && daemon_open_jsonl(a.jsonl_path) != 0) return 1;
     /* sys_status reports the filesystem the output lands on: the
      * database's, else the JSONL file's. */

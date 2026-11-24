@@ -11,6 +11,12 @@ void alerts_update(sloth_state_t *s);
 /* Drop all known alerts (clears engine state, not just the snapshot). */
 void alerts_clear(void);
 
+/* The SHA-256 (lowercase hex) of the capture a->pcap_path names, read
+ * back after the export wrote it, kept only while --jsonl-chain is on
+ * (#251): 0 with out filled, -1 (out "") when there is none for that
+ * path. For the alert records' pcap_sha256. */
+int alerts_pcap_sha256(const alert_t *a, char out[65]);
+
 /* Incident lifecycle hook (#175). Called by the engine, on the thread
  * that runs alerts_update() / alerts_clear(), as an incident opens and
  * each time its severity moves (`reason` NULL both times), and as it
