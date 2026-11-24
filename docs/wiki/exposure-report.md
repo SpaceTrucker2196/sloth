@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: issue #243 (from #241 item 6); FM 2-0 (2004) 1-30 (a commander lists the information to protect) and 1-111 (counterintelligence finds how an observer could collect it); `include/sloth_exposure.def` (the table); `src/exposure.c`; `docs/wiki/alert-remediation.md` (each line's fix); `tests/test_exposure.c`.
 
-**Last updated**: 2026-11-24 (#243: first version)
+**Last updated**: 2026-11-24 (#243 review: § 2 and § 6, a twin beaconing a designated SSID is not the site once BSSIDs are designated, a raw SSID is matched only where `SAE_PSK_REGRESSION` writes it, a camera is tied by its alert's `match_ip`; § 3's example is the test's sensor, not Beta-Site; § 4, the evidence fallback), 2026-11-24 (#243: first version)
 
 ## 1. The groups
 
@@ -34,8 +34,8 @@ The report is about the operator's site, not the neighbourhood. A site is named 
 With a designation, each finding is tied to it by its kind's `SCOPE` column, read from the alert's dedup key (the components `src/alert_key.h` builds, so an address is a whole component and a prefix never matches):
 
 - **OWN**: the rule fires only about a designated network (`MY_NETWORK_RECON`, `TPC_ABSENT_HIGH_BAND`). Always in scope.
-- **AIR** (heard over the air): in scope when an address in the key is a designated BSSID, a rostered device, or a BSSID the beacon table has beaconing a designated SSID; or when the key names a designated SSID, raw or as `akey_remote()` writes it (matched by the hash of the whole SSID, so a long or sanitised name still matches).
-- **LAN** (the IP capture): in scope when an address in the key is a rostered device's address (its `device` row's IP), or when the managed link is associated to a designated network, since what the IP capture then sees is that network's. A wired sensor's LAN findings are in scope through the roster only.
+- **AIR** (heard over the air): in scope when an address in the key is a designated BSSID, a rostered device, or (only while no BSSID is designated) a BSSID the beacon table has beaconing a designated SSID; or when the key names a designated SSID as `akey_remote()` writes it (matched by the hash of the whole SSID, so a long or sanitised name still matches), or raw where `SAE_PSK_REGRESSION`'s `saereg:<ssid>:<bssid>` key puts it (that component only, so a short SSID never matches a kind digit, a key word or a MAC octet). With BSSIDs designated, a key that names an address is decided by the address alone: anyone can beacon the name, so a twin's `SSID_CONFUSION` or `OPEN_SETUP_AP` stays outside.
+- **LAN** (the IP capture): in scope when an address in the key, or the alert's `match_ip` (the address its pcap export filters on), is a rostered device's address (its `device` row's IP), or when the managed link is associated to a designated network, since what the IP capture then sees is that network's. The camera kinds key a UUID (`CAM_WS_DISCOVERY`), a USN (`CAM_SSDP_DEVICE`) or an instance name (`CAM_MDNS_SERVICE`) when the device gives one and carry its address in `match_ip`. A wired sensor's LAN findings are in scope through the roster only.
 
 A finding of a grouped kind that cannot be tied to the designation is counted (`outside`) and not described.
 
@@ -52,7 +52,7 @@ Every group carries the coverage status of its kinds ([[coverage-assessment]] §
 | `not_assessed` | `Nothing found; coverage not assessed: <why>.` (before the first status sample, or a `--replay`) |
 | `needs_designation` | the section's one paragraph naming the flags |
 
-So an empty group is never silent: "nothing found" always comes with whether the rules could have found anything. Example, a sensor with one hopping radio, no IP capture and a roster of seven devices but no designated network (Beta-Site's set-up on 2026-11-24): group 1 reads `Not observable: no_own_net.` and group 4 `Not observable: no_source.`.
+So an empty group is never silent: "nothing found" always comes with whether the rules could have found anything. Example, a sensor with one hopping radio, no IP capture and a roster but no designated network (the sensor `tests/test_exposure.c :: test_nothing_found_states_coverage` builds): group 1 reads `Not observable: no_own_net.` and group 4 `Not observable: no_source.`. Beta-Site on 2026-11-24 has IP capture: its stream's `rule_status` rows read the four group-4 kinds `observable`, so its group 4 reads `Nothing found, rules observable.` while group 1 reads `Not observable: no_own_net.`.
 
 ## 4. In the report
 
@@ -62,7 +62,7 @@ So an empty group is never silent: "nothing found" always comes with whether the
 - `OPEN_SETUP_AP`: 1 finding, evidence 4, first `2027-01-15T08:00:00Z`, last `2027-01-15T08:05:00Z`. Fix: If the device is the operator's: finish setting it up so it leaves the open SoftAP, or power it off.
 ```
 
-The finding count is incidents (distinct alert keys) in scope; the evidence count is their `observations` summed; first and last seen are the earliest and newest sighting. The fix is the first **Fix** step of the kind's section of [[alert-remediation]], compiled in from `include/sloth_exposure.def`: `tests/test_exposure.c :: test_remedy_is_the_pages_first_fix_step` reads the page and fails, printing the page's current text, when the two differ. The section names kinds only, not the addresses or user names behind them; the report's own "Cleartext credential exposures" table is where those are.
+The finding count is incidents (distinct alert keys) in scope; the evidence count is their `observations` summed (a finding with none recorded counts its `count`, at least 1); first and last seen are the earliest and newest sighting. The fix is the first **Fix** step of the kind's section of [[alert-remediation]], compiled in from `include/sloth_exposure.def`: `tests/test_exposure.c :: test_remedy_is_the_pages_first_fix_step` reads the page and fails, printing the page's current text, when the two differ. The section names kinds only, not the addresses or user names behind them; the report's own "Cleartext credential exposures" table is where those are.
 
 **`--report-json`**: the member `exposure`, after `risky_devices` and before `findings` (`coverage` stays last): `{"designated":false,"needs":[...]}`, or `{"designated":true,"ssids","bssids","rostered","groups":[...]}` with, per group, `group`, `title`, `state`, `findings`, `evidence`, `outside`, `assessed`, `rules`, the coverage counts and `why` when assessed, and `lines` (`kind`, `findings`, `evidence`, `first_seen`, `last_seen`, `remedy`).
 
@@ -84,7 +84,9 @@ A future fleet view of the exposure report would need the owner's ruling on whic
 
 ## 6. Limits
 
-- The scope test reads the alert key. A rule whose key names neither an address nor an SSID (`CAM_MDNS_SERVICE` keys the service instance) is in scope only through the designated managed link.
+- The scope test reads the alert key and `match_ip`. A LAN finding with no address in either (`CAM_MDNS_SERVICE` before the instance's address is seen) is in scope only through the designated managed link.
+- With no BSSID designated, the tie through a BSSID beaconing a designated SSID stands, and a twin or spoofing AP that beacons the name is then taken for the site: designate the BSSIDs with `--my-bssid` to close it. A key that names the SSID and no address (`SAE_PSK_SPLIT`) is the SSID's whichever BSSID is involved.
+- A designated SSID containing `:` is matched by the hash only, so `SAE_PSK_REGRESSION`'s raw key, which cannot be split back into the SSID, does not tie it; its BSSID still can.
 - `MLE_CROSS_LINK_CIPHER_DOWNGRADE` keys the MLD address, which is matched against the designated BSSIDs and the beacon table; an MLD address that is no BSSID is in scope only when it is designated itself.
 - The groups are a judgement about what each finding discloses; § 1 says why for each, and the table and that list change together.
 - Not built: a dashboard page (a separate issue in sloth-mesh once the record exists), a TUI view, and the PNL of rostered devices as a line of its own: group 1 has the designated-network probes `MY_NETWORK_RECON` reports, and a rostered device's own probe list is not yet a finding.

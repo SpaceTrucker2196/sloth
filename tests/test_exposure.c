@@ -17,6 +17,7 @@
 #include "db.h"
 #include "posture.h"
 #include "exposure.h"
+#include "alerts.h"
 
 /*
  * What this site reveals (#243): the kind-to-group table
@@ -384,7 +385,35 @@ static void test_scope_air(void) {
     /* The same BSSID beaconing another SSID is not. */
     snprintf(b->ssid, sizeof(b->ssid), "OtherNet");
     ASSERT(!exp_in_scope(&g_s, a));
+    /* Once the operator names their BSSIDs, another BSSID beaconing the
+     * designated SSID (a twin) does not make its findings the site's:
+     * anyone can beacon a name. Seen red with mac_is_site()'s
+     * ownership_bssid_count() test removed. */
+    snprintf(b->ssid, sizeof(b->ssid), "HomeNet");
+    ASSERT(ownership_add_bssid("02:66:77:88:99:aa"));
+    ASSERT(!exp_in_scope(&g_s, a));
+    /* Nor does a key naming both the designated SSID and the twin's
+     * BSSID (SAE_PSK_REGRESSION's raw form, SSID_CONFUSION's hashed
+     * one): the address decides. Seen red with exp_in_scope()'s
+     * mac_seen test removed. */
+    alert_t *rg = seed(ALERT_TYPE_SAE_PSK_REGRESSION,
+                       "saereg:HomeNet:02:11:22:33:44:55", 1, 1, 1);
+    ASSERT(!exp_in_scope(&g_s, rg));
+    char ck[ALERT_KEY_LEN];
+    akey_t ak;
+    akey_begin(&ak, ck, sizeof(ck), "ssidconf");
+    akey_remote(&ak, "HomeNet", 32);
+    akey_mac(&ak, SETUP_BSS);
+    akey_end(&ak);
+    alert_t *cf = seed(ALERT_TYPE_SSID_CONFUSION, ck, 1, 1, 1);
+    ASSERT(!exp_in_scope(&g_s, cf));
+    /* The designated BSSID's own finding still is. */
+    ASSERT(ownership_add_bssid("02:11:22:33:44:55"));
+    ASSERT(exp_in_scope(&g_s, rg));
+    ASSERT(exp_in_scope(&g_s, cf));
     ownership_clear();
+    g_s.alert_count = 0;
+    g_s.beacon_count = 0;
 
     /* A rostered station: RECURRING_TRANSIT's transit:<mac>. */
     alert_t *tr = seed(ALERT_TYPE_RECURRING_TRANSIT, "transit:02:00:5e:10:00:01", 3, 1, 2);
@@ -426,7 +455,45 @@ static void test_scope_ssid_in_key(void) {
     ASSERT(!exp_in_scope(&g_s, r));
     ASSERT(ownership_add_ssid("HomeNet"));
     ASSERT(exp_in_scope(&g_s, r));
+
+    /* A raw SSID that only contains the name as a component: an
+     * impostor's "x:HomeNet" is not HomeNet. */
+    ownership_clear();
+    g_s.alert_count = 0;
+    alert_t *im = seed(ALERT_TYPE_SAE_PSK_REGRESSION, "saereg:x:HomeNet:02:66:77:88:99:aa", 1, 1, 1);
+    ASSERT(ownership_add_ssid("HomeNet"));
+    ASSERT(!exp_in_scope(&g_s, im));
+
+    /* A short designated SSID equal to another component of the key
+     * (WPA_DOWNGRADE's kind digit, a key prefix word, a MAC octet) is
+     * not the key naming it. Each seen red with key_raw_ssid_is()
+     * replaced by the old has_token(key, ssid). */
+    static const struct { alert_type_t t; const char *key, *ssid; } wrong[] = {
+        { ALERT_TYPE_WPA_DOWNGRADE,     "wpadg:02:66:77:88:99:aa:1", "1" },
+        { ALERT_TYPE_WPA_DOWNGRADE,     "wpadg:02:66:77:88:99:aa:8", "8" },
+        { ALERT_TYPE_RECURRING_TRANSIT, "transit:02:66:77:88:99:aa", "transit" },
+        { ALERT_TYPE_RECURRING_TRANSIT, "transit:02:66:77:88:99:aa", "02" },
+        { ALERT_TYPE_COUNTRY_ABSENT,    "countryabsent:02:66:77:88:99:aa", "aa" },
+        { ALERT_TYPE_SAE_PSK_REGRESSION, "saereg:Cafe:02:66:77:88:99:aa", "66" },
+    };
+    for (size_t i = 0; i < sizeof(wrong) / sizeof(wrong[0]); i++) {
+        ownership_clear();
+        g_s.alert_count = 0;
+        alert_t *w = seed(wrong[i].t, wrong[i].key, 1, 1, 1);
+        ASSERT(ownership_add_ssid(wrong[i].ssid));
+        ASSERT(!exp_in_scope(&g_s, w));
+    }
     end();
+}
+
+/* key_raw_ssid_is() reads SAE_PSK_REGRESSION's key by its shape; the
+ * shape is the rule's, so a change there must come here too. */
+static void test_raw_ssid_key_shape_is_the_rules(void) {
+    char *src = slurp_file("src/alerts/rules_twin.c");
+    ASSERT(src != NULL);
+    if (!src) return;
+    ASSERT(contains(src, "\"saereg:%.40s:%.17s\", r->ssid, r->bssid"));
+    free(src);
 }
 
 static void test_scope_lan(void) {
@@ -477,6 +544,25 @@ static void test_scope_lan(void) {
     ASSERT(!exp_in_scope(&g_s, m));
     ASSERT(ownership_add_bssid("02:11:22:33:44:55"));
     ASSERT(exp_in_scope(&g_s, m));
+    ownership_clear();
+    g_s.ap_count = 0;
+
+    /* A camera keyed by its UUID (CAM_WS_DISCOVERY) or USN
+     * (CAM_SSDP_DEVICE) carries its address in match_ip only: a
+     * rostered camera is the site's through it. Seen red with
+     * names_rostered_ip()'s match_ip test removed. */
+    g_s.alert_count = 0;
+    alert_t *w = seed(ALERT_TYPE_CAM_WS_DISCOVERY,
+                      "cam-wsd:urn:uuid:4509a7c0-3b13-11e6-ac61-9e71128cae77", 1, 1, 1);
+    snprintf(w->match_ip, sizeof(w->match_ip), "192.0.2.10");
+    ASSERT(ownership_add_ssid("HomeNet"));
+    ASSERT(!exp_in_scope(&g_s, w));
+    ASSERT(ownership_add_known_mac("02:00:5e:10:00:01"));
+    snprintf(g_s.devices[0].ip, sizeof(g_s.devices[0].ip), "192.0.2.10");
+    ASSERT(exp_in_scope(&g_s, w));
+    /* Another rostered address is not this camera's. */
+    snprintf(g_s.devices[0].ip, sizeof(g_s.devices[0].ip), "192.0.2.1");
+    ASSERT(!exp_in_scope(&g_s, w));
     end();
 }
 
@@ -607,6 +693,94 @@ static void test_setup_ap_and_cleartext_cred(void) {
     ASSERT(contains(j, "\"lines\":[{\"kind\":\"CLEARTEXT_CRED\",\"findings\":1,"
                        "\"evidence\":3,"));
     ASSERT_EQ(count_of(j, "\"group\":"), EXP_G_COUNT - 1);
+    end();
+}
+
+/* The same acceptance case with the rules firing: the beacon, the
+ * credential and the camera announcement seeded as their parsers would
+ * leave them and alerts_update() run, so the scope test is held to the
+ * keys and match_ip the rules write, not to a copy of their format.
+ * Seen red with rule_open_setup_ap()'s key writing the BSSID with '-'
+ * separators (test_setup_ap_and_cleartext_cred stayed green), and with
+ * names_rostered_ip()'s match_ip test removed (the camera group read
+ * none_*). An upper-case BSSID or an extra component does not change
+ * scope: each_mac() reads either. */
+static void test_rules_fire_into_the_report(void) {
+    begin();
+    one_hopping_radio();
+    ip_capture_up();
+    tick();
+    alerts_clear();
+    ASSERT(ownership_add_bssid("02:11:22:33:44:55"));
+    roster_laptop("192.0.2.10");
+    device_t *cam = &g_s.devices[g_s.device_count++];
+    memset(cam, 0, sizeof(*cam));
+    static const uint8_t CAM_MAC[6] = { 0x02, 0x00, 0x5e, 0x10, 0x00, 0x02 };
+    memcpy(cam->mac, CAM_MAC, 6);
+    snprintf(cam->ip, sizeof(cam->ip), "192.0.2.20");
+    ASSERT(ownership_add_known_mac("02:00:5e:10:00:02"));
+
+    static const uint8_t *const bss[2] = { SETUP_BSS, NEIGH_BSS };
+    for (int i = 0; i < 2; i++) {
+        beacon_ap_t *b = &g_s.beacon_aps[g_s.beacon_count++];
+        memset(b, 0, sizeof(*b));
+        snprintf(b->ssid, sizeof(b->ssid), "SETUP-A1B%d", i);
+        memcpy(b->bssid, bss[i], 6);
+        snprintf(b->enc, sizeof(b->enc), "OPEN");
+        b->channel = 6;
+        b->signal_dbm = -55;
+        b->last_seen = g_wall;
+        memcpy(b->fp.oui, bss[i], 3);
+    }
+    static const char *const src[2] = { "192.0.2.10", "192.0.2.99" };
+    static const char *const user[2] = { "alice", "bob" };
+    for (int i = 0; i < 2; i++) {
+        cleartext_cred_t *c = &g_s.cleartext_creds[g_s.cleartext_cred_count++];
+        memset(c, 0, sizeof(*c));
+        snprintf(c->src, sizeof(c->src), "%s", src[i]);
+        snprintf(c->dst, sizeof(c->dst), "198.51.100.5");
+        snprintf(c->protocol, sizeof(c->protocol), "FTP");
+        snprintf(c->username, sizeof(c->username), "%s", user[i]);
+        c->dst_port = 21;
+    }
+    /* The rostered camera announces itself with a UUID, the usual ONVIF
+     * case: its key has no address. */
+    onvif_device_t *o = &g_s.onvif_devices[g_s.onvif_count++];
+    memset(o, 0, sizeof(*o));
+    snprintf(o->ip, sizeof(o->ip), "192.0.2.20");
+    snprintf(o->uuid, sizeof(o->uuid), "urn:uuid:4509a7c0-3b13-11e6-ac61-9e71128cae77");
+    snprintf(o->kind, sizeof(o->kind), "Hello");
+    o->is_camera = 1;
+    o->last_seen = g_wall;
+
+    alerts_update(&g_s);
+    int setup = 0, cred = 0, wsd = 0;
+    for (int i = 0; i < g_s.alert_count; i++) {
+        setup += g_s.alerts[i].type == ALERT_TYPE_OPEN_SETUP_AP;
+        cred  += g_s.alerts[i].type == ALERT_TYPE_CLEARTEXT_CRED;
+        wsd   += g_s.alerts[i].type == ALERT_TYPE_CAM_WS_DISCOVERY;
+    }
+    ASSERT_EQ(setup, 2);
+    ASSERT_EQ(cred, 2);
+    ASSERT_EQ(wsd, 1);
+
+    exp_group_sum_t sum[EXP_G_COUNT];
+    exp_summarise(&g_s, sum);
+    ASSERT_EQ((int)sum[EXP_G_SETUP].state, (int)EXP_ST_FOUND);
+    ASSERT_EQ(sum[EXP_G_SETUP].findings, 1);
+    ASSERT_EQ(sum[EXP_G_SETUP].outside, 1);
+    ASSERT_EQ((int)sum[EXP_G_CREDS].state, (int)EXP_ST_FOUND);
+    ASSERT_EQ(sum[EXP_G_CREDS].findings, 1);
+    ASSERT_EQ(sum[EXP_G_CREDS].outside, 1);
+    ASSERT_EQ((int)sum[EXP_G_ANNOUNCE].state, (int)EXP_ST_FOUND);
+    ASSERT_EQ(sum[EXP_G_ANNOUNCE].findings, 1);
+    ASSERT_EQ(sum[EXP_G_ANNOUNCE].outside, 0);
+    const char *m = md();
+    ASSERT(contains(section(m, EXP_G_SETUP), "- `OPEN_SETUP_AP`: 1 finding,"));
+    ASSERT(contains(section(m, EXP_G_CREDS), "- `CLEARTEXT_CRED`: 1 finding,"));
+    ASSERT(contains(section(m, EXP_G_ANNOUNCE), "- `CAM_WS_DISCOVERY`: 1 finding,"));
+    alerts_clear();
+    g_s.alert_count = 0;
     end();
 }
 
@@ -793,9 +967,11 @@ void run_exposure_tests(void) {
     RUN_TEST(test_remedy_is_the_pages_first_fix_step);
     RUN_TEST(test_scope_air);
     RUN_TEST(test_scope_ssid_in_key);
+    RUN_TEST(test_raw_ssid_key_shape_is_the_rules);
     RUN_TEST(test_scope_lan);
     RUN_TEST(test_undesignated_site_names_the_flags);
     RUN_TEST(test_setup_ap_and_cleartext_cred);
+    RUN_TEST(test_rules_fire_into_the_report);
     RUN_TEST(test_nothing_found_states_coverage);
     RUN_TEST(test_not_assessed_before_a_sample);
     RUN_TEST(test_record);

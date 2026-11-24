@@ -23,12 +23,14 @@
  *           exposure report is limited to (exp_scope_t):
  *             OWN   the rule fires only about a designated network
  *             AIR   heard over the air: in scope when an address in the
- *                   key is a designated BSSID, a rostered device or a
- *                   BSSID beaconing a designated SSID, or the key names
- *                   a designated SSID
+ *                   key is a designated BSSID, a rostered device or (with
+ *                   no BSSID designated) a BSSID beaconing a designated
+ *                   SSID, or the key names a designated SSID (with
+ *                   BSSIDs designated, only a key naming no address)
  *             LAN   from the IP capture: in scope when an address in the
- *                   key is a rostered device's, or the managed link is
- *                   associated to a designated network
+ *                   key or the alert's match_ip is a rostered device's,
+ *                   or the managed link is associated to a designated
+ *                   network
  *             NA    for GROUP NONE
  *   REMEDY  the first Fix step of the kind's section of
  *           docs/wiki/alert-remediation.md, its lines joined with one

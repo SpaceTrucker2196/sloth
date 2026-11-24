@@ -91,9 +91,9 @@ static int ends_token(char c) {
 }
 
 /* Every "aa:bb:cc:dd:ee:ff" in the key, each passed to `fn`; 1 at the
- * first for which it answers 1. */
+ * first for which it answers 1. `*seen` is set when the key holds one. */
 static int each_mac(const char *key, int (*fn)(const sloth_state_t *, const uint8_t[6]),
-                    const sloth_state_t *s) {
+                    const sloth_state_t *s, int *seen) {
     size_t n = strlen(key);
     for (size_t i = 0; i + 17 <= n; i++) {
         const char *p = key + i;
@@ -106,7 +106,9 @@ static int each_mac(const char *key, int (*fn)(const sloth_state_t *, const uint
         memcpy(buf, p, 17);
         buf[17] = '\0';
         uint8_t mac[6];
-        if (ownership_parse_mac(buf, mac) && fn(s, mac)) return 1;
+        if (!ownership_parse_mac(buf, mac)) continue;
+        *seen = 1;
+        if (fn(s, mac)) return 1;
     }
     return 0;
 }
@@ -122,7 +124,12 @@ static int has_token(const char *key, const char *needle) {
 
 static int mac_is_site(const sloth_state_t *s, const uint8_t mac[6]) {
     if (ownership_is_my_bssid(mac) || ownership_is_known_device(mac)) return 1;
-    /* A BSSID beaconing a designated SSID. */
+    /* A BSSID beaconing a designated SSID, only while no BSSID is
+     * designated: anyone can beacon the name, so once the operator has
+     * named their BSSIDs a twin's beacon must not make its findings the
+     * site's. Without them the tie stands, a limit exposure-report.md
+     * § 6 states. */
+    if (ownership_bssid_count() > 0) return 0;
     for (int i = 0; i < s->beacon_count && i < MAX_BEACON_APS; i++) {
         const beacon_ap_t *b = &s->beacon_aps[i];
         if (memcmp(b->bssid, mac, 6) == 0 && ownership_is_my_ssid(b->ssid)) return 1;
@@ -130,14 +137,30 @@ static int mac_is_site(const sloth_state_t *s, const uint8_t mac[6]) {
     return 0;
 }
 
-/* A designated SSID in the key: raw (a key built with "%.40s") or as
- * akey_remote() writes it, whose last component is a hash of the whole
- * string, so a long or sanitised SSID still matches. */
+/* The raw SSID of SAE_PSK_REGRESSION's "saereg:%.40s:%.17s" key
+ * (rules_twin.c), the one grouped AIR kind that writes it raw: the
+ * component right after the prefix of that kind's key only, so a short
+ * SSID ("1", "transit", "02") never matches another rule's kind digit,
+ * prefix or MAC octet. A raw SSID with a ':' splits into components and
+ * cannot be told apart; such a designated SSID is matched by hash only. */
+static int key_raw_ssid_is(const char *key, const char *ssid) {
+    if (strncmp(key, "saereg:", 7) != 0) return 0;
+    const char *p = strchr(key, ':');
+    if (!p) return 0;
+    p++;
+    size_t nl = strlen(ssid);
+    if (nl > 40) nl = 40;
+    return strncmp(p, ssid, nl) == 0 && ends_token(p[nl]);
+}
+
+/* A designated SSID in the key: raw (above) or as akey_remote() writes
+ * it, whose last component is a 16-digit hash of the whole string, so a
+ * long or sanitised SSID still matches and nothing else has its shape. */
 static int key_names_my_ssid(const char *key) {
     for (int i = 0; i < ownership_ssid_count(); i++) {
         const char *ssid = ownership_ssid_at(i);
         if (!ssid || !ssid[0]) continue;
-        if (!strchr(ssid, ':') && has_token(key, ssid)) return 1;
+        if (!strchr(ssid, ':') && key_raw_ssid_is(key, ssid)) return 1;
         char buf[ALERT_KEY_LEN];
         akey_t k;
         akey_begin(&k, buf, sizeof(buf), "x");
@@ -162,11 +185,15 @@ static int lan_is_designated(const sloth_state_t *s) {
     return 0;
 }
 
-static int key_names_rostered_ip(const sloth_state_t *s, const char *key) {
+/* A rostered device's address in the key, or as the alert's match_ip:
+ * CAM_WS_DISCOVERY, CAM_SSDP_DEVICE and CAM_MDNS_SERVICE key a UUID, USN
+ * or instance name when the device gave one and carry its address only
+ * in match_ip (fire()'s pcap criteria). */
+static int names_rostered_ip(const sloth_state_t *s, const alert_t *a) {
     for (int i = 0; i < s->device_count && i < MAX_DEVICES; i++) {
         const device_t *d = &s->devices[i];
         if (!d->ip[0] || !ownership_is_known_device(d->mac)) continue;
-        if (has_token(key, d->ip)) return 1;
+        if (has_token(a->key, d->ip) || strcmp(a->match_ip, d->ip) == 0) return 1;
     }
     return 0;
 }
@@ -176,10 +203,17 @@ int exp_in_scope(const sloth_state_t *s, const alert_t *a) {
     switch (exp_scope_of(a->type)) {
     case EXP_S_OWN:
         return 1;
-    case EXP_S_AIR:
-        return each_mac(a->key, mac_is_site, s) || key_names_my_ssid(a->key);
+    case EXP_S_AIR: {
+        int mac_seen = 0;
+        if (each_mac(a->key, mac_is_site, s, &mac_seen)) return 1;
+        /* With BSSIDs designated, a key that names an address is decided
+         * by the address: the SSID is whatever the transmitter beacons,
+         * so a twin's SSID_CONFUSION or SAE_PSK_REGRESSION stays outside. */
+        if (mac_seen && ownership_bssid_count() > 0) return 0;
+        return key_names_my_ssid(a->key);
+    }
     case EXP_S_LAN:
-        return lan_is_designated(s) || key_names_rostered_ip(s, a->key);
+        return lan_is_designated(s) || names_rostered_ip(s, a);
     default:
         return 0;
     }
