@@ -10,7 +10,7 @@ by `web/tools/alertkb.c`, never copied by hand).
 step's basis; each section names its own), `docs/wiki/alerts.md` and
 `docs/views/alerts.md` (what each rule fires on).
 
-**Last updated**: 2026-11-23 (#242 item 4 review: SENSOR_SUPPRESSED on the own-state list). 2026-11-23 (#242 item 4: SENSOR_SUPPRESSED). 2026-11-11 (SENSOR_UNDERVOLT, SENSOR_SOURCE_DOWN). 2026-11-11 (#172: PMKID_HARVEST, HANDSHAKE_HARVEST). 2026-11-11 (#187 S2: KARMA_PROBE_FORGE). 2026-11-08 (#186: ADSB_EMERGENCY). 2026-11-03 (#173: FRAG_PLAINTEXT reads the station pair from the view; PM_FORGE's 900 s report window). 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
+**Last updated**: 2026-11-24 (SENSOR_SUPPRESSED cites pages the sloth contract ships, `alerts.md` and `jsonl-schema.md`, so sloth-mesh's knowledge base can hold it to them; [[coverage-assessment]] stays the reference). 2026-11-23 (#242 item 4 review: SENSOR_SUPPRESSED on the own-state list). 2026-11-23 (#242 item 4: SENSOR_SUPPRESSED). 2026-11-11 (SENSOR_UNDERVOLT, SENSOR_SOURCE_DOWN). 2026-11-11 (#172: PMKID_HARVEST, HANDSHAKE_HARVEST). 2026-11-11 (#187 S2: KARMA_PROBE_FORGE). 2026-11-08 (#186: ADSB_EMERGENCY). 2026-11-03 (#173: FRAG_PLAINTEXT reads the station pair from the view; PM_FORGE's 900 s report window). 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
 remove" steps made conditional on the premises, as the rest are;
 review: WEAK_TLS aimed at the client
 that offered the old version; every on-device step conditional on the
@@ -2126,7 +2126,7 @@ Sources: `docs/wiki/alerts.md`, `docs/wiki/jsonl-schema.md`
 
 **Vendor fix:** not applicable; this is the sensor's own state.
 
-Sources: `docs/wiki/alerts.md`, `docs/wiki/coverage-assessment.md`
+Sources: `docs/wiki/alerts.md`, `docs/wiki/jsonl-schema.md`
 ## Related pages
 
 - [[alerts]] — the engine and the rules
