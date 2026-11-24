@@ -276,6 +276,9 @@ CORE_BASE_SRCS += src/alert_quality.c src/cov_timeline.c src/alert_quality_captu
 # sloth --preflight (#247): the pure checks and the read-only gatherer,
 # named by src/main.c only, so sloth-rf's link pulls neither.
 CORE_BASE_SRCS += src/preflight.c src/preflight_gather.c
+# sloth --handoff and --interference-report (#250): sloth.db read-only
+# (src/site_db.c), the packet and the report.
+CORE_BASE_SRCS += src/site_db.c src/handoff.c src/interference.c
 CORE_BASE_SRCS += src/ble_snoop.c
 # #144 slice 2: the HCI monitor decoder and the own-transmission rule are
 # pure; the libpcap worker that feeds them is in PCAP_CORE_SRCS.
@@ -1261,6 +1264,7 @@ replay-check: replay-run $(RF_TARGET)
 	    echo "replay-check: --bt-capture DIR exited $$rc, want 2 (not a file or FIFO)" >&2; exit 1; fi
 	@sh tests/replay/rf_refusals.sh ./$(TARGET) ./$(RF_TARGET) ./$(TARGET_ALIAS)
 	@sh tests/replay/preflight_cli.sh ./$(TARGET) $(REPLAY_RUN)/preflight
+	@sh tests/replay/handoff_cli.sh ./$(TARGET) $(REPLAY_RUN)
 	@echo "replay-check: $$(wc -l < $(REPLAY_GOLDEN)) records match $(REPLAY_GOLDEN)"
 
 replay-golden: replay-run

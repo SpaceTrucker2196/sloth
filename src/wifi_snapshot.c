@@ -142,16 +142,29 @@ static void emit(FILE *f, const sloth_state_t *s, const char *label,
 
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
-        /* 32 octets at four bytes per \xHH, plus the NUL. */
-        char bss[20], ssid[32 * 4 + 1], enc[16], akm[32], vendor[32];
+        char bss[20];
         bssid_str(a->bssid, bss, sizeof(bss));
-        field_escape(a->ssid, ssid, sizeof(ssid));
-        safe_field(a->enc,    enc,    sizeof(enc));
-        safe_field(a->akm,    akm,    sizeof(akm));
-        safe_field(a->vendor, vendor, sizeof(vendor));
-        fprintf(f, "%s\t%s\t%s\t%d\t%s\t%d\t%s\n",
-                bss, ssid, enc, a->channel, akm, a->mfp, vendor);
+        wifi_snapshot_row(f, bss, a->ssid, a->enc, a->channel, a->akm,
+                          a->mfp, a->vendor);
     }
+}
+
+void wifi_snapshot_escape(const char *in, char *out, size_t cap) {
+    field_escape(in, out, cap);
+}
+
+void wifi_snapshot_row(FILE *f, const char *bssid, const char *ssid,
+                       const char *enc, int channel, const char *akm,
+                       int mfp, const char *vendor) {
+    /* 32 octets at four bytes per \xHH, plus the NUL. */
+    char bss[20], ss[32 * 4 + 1], en[16], ak[32], ve[32];
+    safe_field(bssid,  bss, sizeof(bss));
+    field_escape(ssid, ss, sizeof(ss));
+    safe_field(enc,    en, sizeof(en));
+    safe_field(akm,    ak, sizeof(ak));
+    safe_field(vendor, ve, sizeof(ve));
+    fprintf(f, "%s\t%s\t%s\t%d\t%s\t%d\t%s\n",
+            bss, ss, en, channel, ak, mfp, ve);
 }
 
 int wifi_snapshot_write(const sloth_state_t *s, const char *path,

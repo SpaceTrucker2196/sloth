@@ -197,6 +197,11 @@ int ownership_bssid_count(void);
  * BSSIDs, and the known-device roster as a count only. */
 const char    *ownership_ssid_at(int i);
 const uint8_t *ownership_bssid_at(int i);
+/* The i-th roster entry (--known-mac, --known-macs), NULL out of range.
+ * For the handoff packet (src/handoff.c, #250) alone: a local file for
+ * the site's next operator, who needs the roster to run the sensor as
+ * it was run. The stream and the fleet carry the roster as a count. */
+const uint8_t *ownership_known_at(int i);
 
 /* Drop all designations — tests only. */
 void ownership_clear(void);

@@ -141,6 +141,9 @@
 #include "gnss_flags.h"
 #include "rf_moved.h"
 #include "cov_interval_capture.h"
+#include "handoff.h"
+#include "interference.h"
+#include "site_db.h"
 
 static sloth_state_t g_state;
 /* Written from on_signal(), so the type is the one C99 7.14.1.1 allows a
@@ -371,7 +374,8 @@ static void print_usage(const char *argv0) {
             "       [--db-compact-alerts SRC DST]\n"
             "       [--db-retain-days N] [--db-max-mb N]\n"
             "       [--replay FILE[,FILE]] [--ticks N]\n"
-            "       [--preflight [--json]]\n"
+            "       [--preflight [--json]] [--handoff DIR]\n"
+            "       [--interference-report FILE [--from T] [--to T]]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created 0600 if it doesn't\n"
             "                     exist; an existing FILE must already be\n"
@@ -769,6 +773,24 @@ static void print_usage(const char *argv0) {
             "                     socket. See docs/wiki/preflight.md.\n"
             "  --json             with --preflight: the same as one JSON\n"
             "                     object on stdout.\n"
+            "  --handoff DIR      write a site handoff packet into DIR (new,\n"
+            "                     or empty) and exit, starting nothing:\n"
+            "                     config, --preflight, designations and\n"
+            "                     roster, the --baseline-in file, a site\n"
+            "                     snapshot, open and 30 days of closed\n"
+            "                     findings and interference from --db (read-\n"
+            "                     only), README.txt. Files 0600; no user\n"
+            "                     name or cookie sloth.db holds. Exit 0\n"
+            "                     written, 2 not. See docs/wiki/handoff.md.\n"
+            "  --interference-report FILE\n"
+            "                     write one Markdown section per RF_DEGRADED,\n"
+            "                     RTS_FLOOD or GNSS_JAMMING episode in --db\n"
+            "                     (read-only) to FILE (- for stdout) and\n"
+            "                     exit: times, channel, retry ratio, control\n"
+            "                     frames, radio time on the channel, APs.\n"
+            "                     Exit 0 written, 2 not.\n"
+            "  --from T, --to T   bound --interference-report: epoch seconds\n"
+            "                     or UTC YYYY-MM-DD[THH:MM[:SS]][Z].\n"
             "  --with-research FILE\n"
             "                     load the research corpus for per-alert\n"
             "                     citations in --report. Additive: an\n"
@@ -933,6 +955,11 @@ int main(int argc, char **argv) {
     long        max_ticks    = 0;        /* --ticks N; 0 = run until quit */
     int         preflight    = 0;        /* --preflight (#247) */
     int         preflight_json = 0;      /* --json, with --preflight */
+    const char *handoff_dir  = NULL;     /* --handoff DIR (#250) */
+    const char *ifr_out      = NULL;     /* --interference-report FILE (#250) */
+    const char *ifr_from_arg = NULL;     /* --from T */
+    const char *ifr_to_arg   = NULL;     /* --to T */
+    const char *inventory_path = NULL;   /* --inventory FILE, for --handoff */
     time_t      session_start = sloth_wall();
     /* The wall stamp above is evidence (the DB session row, the posture
      * report header). The baseline settle delay below is a duration and
@@ -1194,6 +1221,14 @@ int main(int argc, char **argv) {
             preflight = 1;
         } else if (!strcmp(argv[i], "--json")) {
             preflight_json = 1;
+        } else if (!strcmp(argv[i], "--handoff") && i + 1 < argc) {
+            handoff_dir = argv[++i];
+        } else if (!strcmp(argv[i], "--interference-report") && i + 1 < argc) {
+            ifr_out = argv[++i];
+        } else if (!strcmp(argv[i], "--from") && i + 1 < argc) {
+            ifr_from_arg = argv[++i];
+        } else if (!strcmp(argv[i], "--to") && i + 1 < argc) {
+            ifr_to_arg = argv[++i];
         } else if (!strcmp(argv[i], "--headless")) {
             headless = 1;
         } else if (!strcmp(argv[i], "--replay") && i + 1 < argc) {
@@ -1217,6 +1252,7 @@ int main(int argc, char **argv) {
              * load would read every one of their own radios as a
              * rogue — or miss the one that is (#89 slice 2). */
             char inv_err[INV_ERR_MAX];
+            inventory_path = argv[i + 1];
             if (!inventory_load(argv[++i], inv_err, sizeof(inv_err))) {
                 fprintf(stderr, "sloth: inventory %s\n", inv_err);
                 return 2;
@@ -1281,6 +1317,40 @@ int main(int argc, char **argv) {
         fprintf(stderr, "sloth: --json qualifies --preflight: there is no "
                         "preflight to print\n");
         return 2;
+    }
+    /* The offline commands (#250): one at a time, each with what it
+     * reads. --from and --to bound the interference report alone. */
+    if ((preflight != 0) + (handoff_dir != NULL) + (ifr_out != NULL) > 1) {
+        fprintf(stderr, "sloth: --preflight, --handoff and "
+                        "--interference-report are separate commands: "
+                        "give one\n");
+        return 2;
+    }
+    if ((ifr_from_arg || ifr_to_arg) && !ifr_out) {
+        fprintf(stderr, "sloth: --from and --to bound --interference-report: "
+                        "there is no report to bound\n");
+        return 2;
+    }
+    if (ifr_out) {
+        time_t ifr_from = 0, ifr_to = 0;
+        if ((ifr_from_arg && site_db_parse_time(ifr_from_arg, &ifr_from) != 0) ||
+            (ifr_to_arg && site_db_parse_time(ifr_to_arg, &ifr_to) != 0)) {
+            fprintf(stderr, "sloth: --from / --to: a time is epoch seconds or "
+                            "UTC YYYY-MM-DD[THH:MM[:SS]][Z]\n");
+            return 2;
+        }
+        if (ifr_from_arg && ifr_to_arg && ifr_to < ifr_from) {
+            fprintf(stderr, "sloth: --to is before --from\n");
+            return 2;
+        }
+        if (!db_path) {
+            fprintf(stderr, "sloth: --interference-report reads sloth.db: "
+                            "name it with --db\n");
+            return 2;
+        }
+        /* Reads sloth.db and writes one file; it opens nothing else and
+         * starts nothing, so no capture-side check below concerns it. */
+        return interference_main(db_path, ifr_out, ifr_from, ifr_to, stderr);
     }
     if (report_history && !report_md && !report_json) {
         fprintf(stderr, "sloth: --report-history needs --report or "
@@ -1503,8 +1573,9 @@ int main(int argc, char **argv) {
     /* --preflight (#247): every whole-command-line check above has run,
      * so a refused combination has exited 2 already; nothing has been
      * opened, no thread exists and no sink is created. The preflight
-     * reads what the run would use, prints one page and exits. */
-    if (preflight) {
+     * reads what the run would use, prints one page and exits.
+     * --handoff (#250) carries the same preflight in its packet. */
+    if (preflight || handoff_dir) {
         static pf_config_t pf;
         memset(&pf, 0, sizeof(pf));
         for (int i = 0; i < allow_iface_count && i < PF_MAX_IFACE; i++)
@@ -1550,6 +1621,23 @@ int main(int argc, char **argv) {
 #ifdef WITH_SQLITE
         pf.have_sqlite = 1;
 #endif
+        if (handoff_dir) {
+            handoff_cfg_t hc;
+            memset(&hc, 0, sizeof(hc));
+            hc.out_dir      = handoff_dir;
+            hc.argc         = argc;
+            hc.argv         = argv;
+            hc.db           = db_path;
+            hc.baseline_in  = baseline_in;
+            hc.snapshot_out = snapshot_out;
+            hc.inventory    = inventory_path;
+            hc.site_label   = site_label;
+            hc.location     = gnss_flags.location;
+            hc.df           = &df_cli;
+            hc.pf           = &pf;
+            hc.now          = sloth_wall();
+            return handoff_write(&hc, stderr);
+        }
         return preflight_main(&pf, preflight_json, stdout);
     }
 

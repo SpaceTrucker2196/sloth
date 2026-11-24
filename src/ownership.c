@@ -204,6 +204,10 @@ int ownership_is_known_device(const uint8_t mac[6]) {
 
 int ownership_known_count(void) { return g_known_n; }
 
+const uint8_t *ownership_known_at(int i) {
+    return i >= 0 && i < g_known_n ? g_known[i] : NULL;
+}
+
 /* ── the sensor's own addresses (#183) ─────────────────────── */
 
 int ownership_self_add(const uint8_t mac[6]) {

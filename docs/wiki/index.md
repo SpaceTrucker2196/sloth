@@ -65,6 +65,7 @@ the Wi-Fi it watches:
 - [[retention]] — what `--db` actually deletes, and what nothing deletes.
 - [[collection-cycle]] — how sloth processes data over time, cycle by cycle, and which steps are proposed.
 - [[preflight]] — `sloth --preflight`: check a command line's interfaces, clock, storage, intel pack, sources, host, passive contract and expected rule statuses before a session, starting nothing; exit 0 ready, 1 warnings, 2 not ready (#247).
+- [[handoff]] — `sloth --handoff DIR`: the site handoff packet (config, preflight, designations, snapshot, findings, interference, README), and `sloth --interference-report`: one section per `RF_DEGRADED`, `RTS_FLOOD` or `GNSS_JAMMING` episode; both read sloth.db read-only and withhold credential user names (#250).
 - [[exposure-report]] — what the operator's designated site reveals to an outside observer, grouped by what it learns, each group with its rules' coverage status; a `--report` / `--report-json` section and the `exposure_summary` record (JSONL 2.11.0, #243).
 - [[coverage-assessment]] — which alert rules can fire in the present configuration: the per-rule input declaration and the observable / partly / blind status (#242; in the stream as `rule_status` and `coverage` since JSONL 2.8.0, and what the radios did each minute as `coverage_interval` and the `coverage_intervals` table since JSONL 2.9.0 / schema v18; each finding's quality fields, complete, latency, corroboration and source state, since JSONL 2.10.0 / schema v19, § 9).
 - [[inventory]] — the approved-inventory trust anchor (#89): the only

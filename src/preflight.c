@@ -795,6 +795,8 @@ static void jstr(FILE *out, const char *s) {
     fputc('"', out);
 }
 
+void pf_json_str(FILE *out, const char *s) { jstr(out, s); }
+
 void pf_print_json(const pf_result_t *r, FILE *out) {
     int code = pf_exit_code(r);
     fprintf(out, "{\"preflight\":{\"daemon\":\"sloth-wifi\",\"version\":");

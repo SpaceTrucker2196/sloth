@@ -171,6 +171,7 @@ void run_rule_coverage_tests(void);
 void run_exposure_tests(void);
 void run_rule_coverage_live_tests(void);
 void run_preflight_tests(void);         /* tests/test_preflight.c (#247) */
+void run_handoff_tests(void);           /* tests/test_handoff.c (#250) */
 void run_cov_interval_tests(void);
 void run_reg_rules_tests(void);
 void run_reg_6g_tests(void);              /* tests/test_reg_6g.c (#101 slice B) */
@@ -413,6 +414,7 @@ int main(void) {
     run_rule_coverage_live_tests();
     run_exposure_tests();
     run_preflight_tests();
+    run_handoff_tests();
     run_cov_interval_tests();
     run_reg_rules_tests();
     run_reg_6g_tests();

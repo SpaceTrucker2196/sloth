@@ -423,6 +423,13 @@ int db_probe_version(const char *path, int *version, char *err, size_t errsz);
 /* The oldest schema version db_open() migrates forward. */
 int db_migrates_from(void);
 
+/* "file:" + `path` percent-encoded, read-only, for sqlite3_open_v2()
+ * with SQLITE_OPEN_URI: "?mode=ro&immutable=1" when `immutable` (no
+ * lock, no -wal or -shm read or created), else "?mode=ro" (a WAL
+ * file's -wal is read, as any reader reads it). 1, or 0 when it does
+ * not fit in `n`. The offline exports (src/site_db.h, #250) use both. */
+int db_file_uri(const char *path, int immutable, char *uri, size_t n);
+
 #else
 
 static inline int db_probe_version(const char *p, int *v, char *err, size_t n) {

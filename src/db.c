@@ -3457,6 +3457,10 @@ static void unlink_dst(const char *dst) {
  * authority ("file:///..."), so a path that itself starts "//" is not
  * read as a host name. 1 on success, 0 if it does not fit. */
 static int compact_src_uri(const char *path, char *uri, size_t n) {
+    return db_file_uri(path, 1, uri, n);
+}
+
+int db_file_uri(const char *path, int immutable, char *uri, size_t n) {
     static const char hex[] = "0123456789ABCDEF";
     size_t o = (size_t)snprintf(uri, n, "file:%s", path[0] == '/' ? "//" : "");
     for (const unsigned char *c = (const unsigned char *)path; *c; c++) {
@@ -3466,7 +3470,8 @@ static int compact_src_uri(const char *path, char *uri, size_t n) {
         if (plain) uri[o++] = (char)*c;
         else { uri[o++] = '%'; uri[o++] = hex[*c >> 4]; uri[o++] = hex[*c & 15]; }
     }
-    int w = snprintf(uri + o, n - o, "?mode=ro&immutable=1");
+    int w = snprintf(uri + o, n - o, immutable ? "?mode=ro&immutable=1"
+                                               : "?mode=ro");
     return w > 0 && (size_t)w < n - o;
 }
 

@@ -42,4 +42,14 @@ int wifi_snapshot_write_live(const sloth_state_t *s, const char *live,
 int wifi_snapshot_diff(const sloth_state_t *s, const char *baseline_path,
                        FILE *out);
 
+/* The file's escaping of one SSID or label (lossless: `\\` `\t` `\n`
+ * `\r`, `\xHH` for other control bytes, a lone "-" as `\x2d`), and one
+ * data row in the column order of the header. Shared with the handoff
+ * packet (src/handoff.c, #250), which writes the same file from
+ * sloth.db so that --baseline-in reads it as it reads this writer's. */
+void wifi_snapshot_escape(const char *in, char *out, size_t cap);
+void wifi_snapshot_row(FILE *f, const char *bssid, const char *ssid,
+                       const char *enc, int channel, const char *akm,
+                       int mfp, const char *vendor);
+
 #endif /* WIFI_SNAPSHOT_H */

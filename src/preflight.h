@@ -247,6 +247,11 @@ int pf_exit_code(const pf_result_t *r);
 void pf_print_text(const pf_result_t *r, FILE *out);
 void pf_print_json(const pf_result_t *r, FILE *out);
 
+/* One JSON string (RFC 8259 section 7) as the JSON page writes it: a
+ * byte that does not start well-formed UTF-8 is U+FFFD. Shared with the
+ * handoff packet's config.json (src/handoff.c). */
+void pf_json_str(FILE *out, const char *s);
+
 /* Gather with the default ops, check, print; returns the exit code. */
 int preflight_main(const pf_config_t *cfg, int json, FILE *out);
 
